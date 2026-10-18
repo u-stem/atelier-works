@@ -27,6 +27,7 @@ import {
 import {
   buildDependabotPrompt,
   type DependabotPromptInput,
+  type DependabotPromptPackage,
   effectiveUnverifiedInputs,
   IMPACT_SCHEMA,
   type UnverifiedInputName,
@@ -35,6 +36,7 @@ import {
   decideImpactOutcome,
   type ImpactAssessment,
   type ImpactOutcome,
+  MAX_GROUP_TARGETS,
   parseImpactAssessment,
 } from "../lib/dependabot_support.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
@@ -122,9 +124,57 @@ export type DependabotAssessResult =
 // ---- 判定に渡す評価 ----
 
 /**
+ * 複数のパッケージを調べた出力が、すべての名前を挙げていないときに、人に回す根拠として足す固定の文。
+ * 名前は含めない。出力の形に依らず、結論を人に回すだけの印である。
+ */
+export const UNNAMED_PACKAGES_ESCALATION =
+  "the assessment does not name every updated package";
+
+/** パッケージ名の一部になりうる文字。名前の前後にこれが続く箇所は、その名前を挙げたと数えない。 */
+const NAME_CHARACTER = /[a-z0-9._~/@-]/;
+
+/** `text`が`name`を、より長い名前の一部としてでなく含むか。`react`は`react-dom`と`@types/react`に一致させない。 */
+function namesPackage(text: string, name: string): boolean {
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(name, from);
+    if (at === -1) return false;
+    const before = at === 0 ? "" : text.charAt(at - 1);
+    const after = text.charAt(at + name.length);
+    if (!NAME_CHARACTER.test(before) && !NAME_CHARACTER.test(after)) {
+      return true;
+    }
+    from = at + 1;
+  }
+}
+
+/**
+ * 対象が2つ以上のとき、Claudeの出力が全対象の名前を挙げているかを調べ、挙げていなければ人に回す根拠を返す。
+ * `evidence`、`supplyChainConcerns`、`unverified`の全体で数える。機械の根拠(`machineConcerns`など)は数えない。
+ * 名前を挙げるだけで通りうるので、網羅の補助であり、防御には数えない。
+ * 対象が1つのときは、プロンプトが名前を求めないので、調べない。
+ */
+export function coverageEscalationsOf(result: {
+  readonly input: DependabotAssessInput;
+  readonly claudeAssessment: ImpactAssessment;
+}): string[] {
+  const { targets } = result.input;
+  if (targets.length < 2) return [];
+  const claude = result.claudeAssessment;
+  const text = [
+    claude.evidence,
+    ...claude.supplyChainConcerns,
+    ...claude.unverified,
+  ].join("\n");
+  return targets.every((target) => namesPackage(text, target.name))
+    ? []
+    : [UNNAMED_PACKAGES_ESCALATION];
+}
+
+/**
  * 結論を出すために`decideImpactOutcome`へ渡す評価を返す。後段は直接使わず、`decideAssessedOutcome`を使う。
- * Claudeの評価に、人に回す根拠(`escalationsOf`)を足す。
- * 機械の懸念は`supplyChainConcerns`に、それ以外の根拠(未確認の入力)は`unverified`に入れる。
+ * Claudeの評価に、人に回す根拠(`escalationsOf`と`coverageEscalationsOf`)を足す。
+ * 機械の懸念は`supplyChainConcerns`に、それ以外の根拠(未確認の入力、名前の欠け)は`unverified`に入れる。
  * 根拠が1件でもあれば、Claudeが懸念も未確認も無いと答えていても、結論は人に回る。
  * Claudeの出力で根拠を減らすことはない。
  */
@@ -145,6 +195,7 @@ export function impactForDecision(result: {
     unverified: [
       ...claude.unverified,
       ...escalations.filter((item) => !machine.has(item)),
+      ...coverageEscalationsOf(result),
     ],
   };
 }
@@ -201,34 +252,43 @@ function fail(what: string): never {
   throw new Error(`dependabot_assess: ${what}`);
 }
 
-/** `promptInput`を読み直す。`unverifiedInputs`には`effectiveUnverifiedInputs`をかけ直す。 */
-function readPromptInput(raw: unknown): DependabotPromptInput {
-  if (!isRecord(raw)) fail("promptInput is not an object");
-  const {
-    packageName,
-    fromVersion,
-    toVersion,
-    prTitle,
-    prBody,
-    changelog,
-    manifestDiff,
-    lockfileSummary,
-    registryMetadata,
-    unverifiedInputs,
-  } = raw;
+/** `promptInput.packages`の1要素を読み直す。 */
+function readPromptPackage(raw: unknown): DependabotPromptPackage {
+  if (!isRecord(raw)) fail("promptInput has a non-object package");
+  const { name, from, to, changelog, registryMetadata } = raw;
   if (
-    typeof packageName !== "string" ||
-    typeof fromVersion !== "string" ||
-    typeof toVersion !== "string" ||
-    typeof prTitle !== "string" ||
-    typeof prBody !== "string" ||
+    typeof name !== "string" ||
+    typeof from !== "string" ||
+    typeof to !== "string" ||
     typeof changelog !== "string" ||
-    typeof manifestDiff !== "string" ||
-    typeof lockfileSummary !== "string" ||
     typeof registryMetadata !== "string"
   ) {
     fail("promptInput has a non-string field");
   }
+  return { name, from, to, changelog, registryMetadata };
+}
+
+/** `promptInput`を読み直す。`unverifiedInputs`には`effectiveUnverifiedInputs`をかけ直す。 */
+function readPromptInput(raw: unknown): DependabotPromptInput {
+  if (!isRecord(raw)) fail("promptInput is not an object");
+  const {
+    packages,
+    prTitle,
+    prBody,
+    manifestDiff,
+    lockfileSummary,
+    unverifiedInputs,
+  } = raw;
+  if (!Array.isArray(packages)) fail("promptInput has no packages");
+  if (
+    typeof prTitle !== "string" ||
+    typeof prBody !== "string" ||
+    typeof manifestDiff !== "string" ||
+    typeof lockfileSummary !== "string"
+  ) {
+    fail("promptInput has a non-string field");
+  }
+  const readPackages = packages.map(readPromptPackage);
   if (
     !Array.isArray(unverifiedInputs) ||
     !unverifiedInputs.every(isUnverifiedInputName)
@@ -236,18 +296,40 @@ function readPromptInput(raw: unknown): DependabotPromptInput {
     fail("promptInput has an unknown unverified input");
   }
   const draft: DependabotPromptInput = {
-    packageName,
-    fromVersion,
-    toVersion,
+    packages: readPackages,
     prTitle,
     prBody,
-    changelog,
     manifestDiff,
     lockfileSummary,
-    registryMetadata,
     unverifiedInputs: [...unverifiedInputs],
   };
   return { ...draft, unverifiedInputs: effectiveUnverifiedInputs(draft) };
+}
+
+/** `targets`を読み直す。件数は1からMAX_GROUP_TARGETSで、名前は重ならない。 */
+function readTargets(raw: unknown): DependabotAssessInput["targets"] {
+  if (!Array.isArray(raw)) fail("assess input has no targets");
+  if (raw.length < 1 || raw.length > MAX_GROUP_TARGETS) {
+    fail("assess input has an invalid number of targets");
+  }
+  const targets = raw.map((item) => {
+    if (!isRecord(item)) fail("assess input has an invalid target");
+    const { name, from, to } = item;
+    if (
+      typeof name !== "string" ||
+      typeof from !== "string" ||
+      typeof to !== "string" ||
+      !PLAIN_VERSION.test(from) ||
+      !PLAIN_VERSION.test(to)
+    ) {
+      fail("assess input target does not match the prompt input");
+    }
+    return { name, from, to };
+  });
+  if (new Set(targets.map((target) => target.name)).size !== targets.length) {
+    fail("assess input has a duplicate target");
+  }
+  return targets;
 }
 
 /**
@@ -271,7 +353,6 @@ export function readAssessInput(
     mergeBaseSha,
     repoDir,
     worktreeDir,
-    target,
     machineConcerns,
   } = raw;
   if (raw.workItemId !== workItemId)
@@ -294,18 +375,20 @@ export function readAssessInput(
   ) {
     fail("assess input worktree dir does not match the head");
   }
-  if (!isRecord(target)) fail("assess input has no target");
-  const { name, from, to } = target;
+  const targets = readTargets(raw.targets);
   const promptInput = readPromptInput(raw.promptInput);
+  // 対象と調査に渡す入力は、同じパッケージを同じ順で指す。
   if (
-    typeof name !== "string" ||
-    typeof from !== "string" ||
-    typeof to !== "string" ||
-    !PLAIN_VERSION.test(from) ||
-    !PLAIN_VERSION.test(to) ||
-    name !== promptInput.packageName ||
-    from !== promptInput.fromVersion ||
-    to !== promptInput.toVersion
+    promptInput.packages.length !== targets.length ||
+    targets.some((target, index) => {
+      const pkg = promptInput.packages[index];
+      return (
+        pkg === undefined ||
+        target.name !== pkg.name ||
+        target.from !== pkg.from ||
+        target.to !== pkg.to
+      );
+    })
   ) {
     fail("assess input target does not match the prompt input");
   }
@@ -323,7 +406,7 @@ export function readAssessInput(
     mergeBaseSha,
     repoDir,
     worktreeDir,
-    target: { name, from, to },
+    targets,
     promptInput,
     machineConcerns: [...machineConcerns],
   };

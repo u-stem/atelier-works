@@ -32,15 +32,18 @@ import {
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
 import {
+  coverageEscalationsOf,
   DEPENDABOT_ASSESS_STAGE,
   type DependabotAssessConfig,
   type DependabotAssessDeps,
+  type DependabotAssessed,
   type DependabotAssessResult,
   decideAssessedOutcome,
   impactForDecision,
   parseDependabotAssessResult,
   readPrepareResult,
   runDependabotAssess,
+  UNNAMED_PACKAGES_ESCALATION,
 } from "../../f/factory/steps/dependabot_assess.ts";
 import {
   type DependabotAssessInput,
@@ -58,22 +61,57 @@ const WORKTREE_DIR = "/workspaces/acme/widgets/dependabot-12-aaaaaaa";
 const POINTER = "gitdir: /workspaces/acme/widgets/main/.git/worktrees/x\n";
 const NONCE = "nonce-0001";
 
-function promptInput(
-  overrides: Partial<DependabotPromptInput> = {},
-): DependabotPromptInput {
+/** 先頭のパッケージの欄は、`packages`を作り直さずに上書きできる。 */
+type PromptOverrides = Partial<DependabotPromptInput> & {
+  readonly changelog?: string;
+  readonly registryMetadata?: string;
+  readonly toVersion?: string;
+};
+
+function promptInput(overrides: PromptOverrides = {}): DependabotPromptInput {
+  const { changelog, registryMetadata, toVersion, ...rest } = overrides;
   return {
-    packageName: "left-pad",
-    fromVersion: "1.3.0",
-    toVersion: "1.3.1",
+    packages: [
+      {
+        name: "left-pad",
+        from: "1.3.0",
+        to: toVersion ?? "1.3.1",
+        changelog: changelog ?? "## 1.3.1\n- fix",
+        registryMetadata:
+          registryMetadata ??
+          "before maintainers: alice\nafter maintainers: alice",
+      },
+    ],
     prTitle: "Bump left-pad from 1.3.0 to 1.3.1",
     prBody: "Bumps left-pad.",
-    changelog: "## 1.3.1\n- fix",
     manifestDiff: "package.json: left-pad 1.3.0 -> 1.3.1",
     lockfileSummary: "bun.lock: left-pad 1.3.0 -> 1.3.1",
-    registryMetadata: "before maintainers: alice\nafter maintainers: alice",
     unverifiedInputs: [],
-    ...overrides,
+    ...rest,
   };
+}
+
+const RIGHT_PACKAGE = {
+  name: "right-pad",
+  from: "2.0.0",
+  to: "2.0.1",
+  changelog: "## 2.0.1\n- fix",
+  registryMetadata: "before maintainers: bob\nafter maintainers: bob",
+};
+
+/** left-padとright-padが同時に更新される、影響調査の入力。 */
+function groupAssessInput(
+  overrides: Partial<DependabotAssessInput> = {},
+): DependabotAssessInput {
+  const base = promptInput();
+  return assessInput({
+    targets: [
+      { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+      { name: "right-pad", from: "2.0.0", to: "2.0.1" },
+    ],
+    promptInput: { ...base, packages: [...base.packages, RIGHT_PACKAGE] },
+    ...overrides,
+  });
 }
 
 function assessInput(
@@ -90,7 +128,7 @@ function assessInput(
     mergeBaseSha: MERGE_BASE,
     repoDir: REPO_DIR,
     worktreeDir: WORKTREE_DIR,
-    target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+    targets: [{ name: "left-pad", from: "1.3.0", to: "1.3.1" }],
     promptInput: promptInput(),
     machineConcerns: [],
     ...overrides,
@@ -110,6 +148,34 @@ function proceeding(
       workItemId: WORK_ITEM_ID,
       assess: assessInput(overrides),
       ...outer,
+    }),
+  );
+}
+
+/** ステップ間のJSONを通した、2つのパッケージを調べる準備ステップの結果。 */
+function proceedingGroup(
+  overrides: Partial<DependabotAssessInput> = {},
+): unknown {
+  return JSON.parse(
+    JSON.stringify({
+      proceed: true,
+      terminalStatus: null,
+      reason: null,
+      workItemId: WORK_ITEM_ID,
+      assess: groupAssessInput(overrides),
+    }),
+  );
+}
+
+/** 任意の成果物を載せた、進む形の準備ステップの結果。ステップ間のJSONを通す。 */
+function preparedFrom(assess: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify({
+      proceed: true,
+      terminalStatus: null,
+      reason: null,
+      workItemId: WORK_ITEM_ID,
+      assess,
     }),
   );
 }
@@ -450,18 +516,22 @@ describe("readPrepareResult", () => {
     ],
     [
       "a target name that differs from the prompt",
-      proceeding({ target: { name: "right-pad", from: "1.3.0", to: "1.3.1" } }),
+      proceeding({
+        targets: [{ name: "right-pad", from: "1.3.0", to: "1.3.1" }],
+      }),
       "assess input target does not match the prompt input",
     ],
     [
       "a target version that differs from the prompt",
-      proceeding({ target: { name: "left-pad", from: "1.3.0", to: "1.4.0" } }),
+      proceeding({
+        targets: [{ name: "left-pad", from: "1.3.0", to: "1.4.0" }],
+      }),
       "assess input target does not match the prompt input",
     ],
     [
       "a target version that is not x.y.z",
       proceeding({
-        target: { name: "left-pad", from: "1.3.0", to: "1.3.1-rc" },
+        targets: [{ name: "left-pad", from: "1.3.0", to: "1.3.1-rc" }],
         promptInput: promptInput({ toVersion: "1.3.1-rc" }),
       }),
       "assess input target does not match the prompt input",
@@ -507,6 +577,149 @@ describe("readPrepareResult", () => {
       "a stopped result that carries an assess input",
       stoppedResult({ assess: assessInput() }),
       "stopped prepare result carries an assess input",
+    ],
+  ])("throws on %s", (_label, raw, message) => {
+    expect(() => readPrepareResult(raw, WORK_ITEM_ID)).toThrow(message);
+  });
+
+  test("reads a group of two packages", () => {
+    const read = readPrepareResult(proceedingGroup(), WORK_ITEM_ID);
+
+    expect(read.kind === "proceed" ? read.input.targets : []).toEqual([
+      { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+      { name: "right-pad", from: "2.0.0", to: "2.0.1" },
+    ]);
+  });
+
+  test("keeps the order of the packages in the prompt input", () => {
+    const read = readPrepareResult(proceedingGroup(), WORK_ITEM_ID);
+
+    expect(
+      read.kind === "proceed"
+        ? read.input.promptInput.packages.map((pkg) => pkg.name)
+        : [],
+    ).toEqual(["left-pad", "right-pad"]);
+  });
+
+  test("re-applies effectiveUnverifiedInputs to a blank registry metadata of the second package", () => {
+    const base = promptInput();
+    const raw = proceedingGroup({
+      promptInput: {
+        ...base,
+        packages: [
+          ...base.packages,
+          { ...RIGHT_PACKAGE, registryMetadata: " " },
+        ],
+      },
+    });
+
+    const read = readPrepareResult(raw, WORK_ITEM_ID);
+
+    expect(
+      read.kind === "proceed" ? read.input.promptInput.unverifiedInputs : [],
+    ).toEqual(["registry metadata"]);
+  });
+
+  test.each<[string, unknown, string]>([
+    [
+      "the old single target form",
+      preparedFrom({
+        ...assessInput(),
+        targets: undefined,
+        target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+      }),
+      "assess input has no targets",
+    ],
+    [
+      "no targets",
+      proceeding({ targets: [] }),
+      "assess input has an invalid number of targets",
+    ],
+    [
+      "four targets",
+      proceedingGroup({
+        targets: [
+          { name: "a-pad", from: "1.0.0", to: "1.0.1" },
+          { name: "b-pad", from: "1.0.0", to: "1.0.1" },
+          { name: "c-pad", from: "1.0.0", to: "1.0.1" },
+          { name: "d-pad", from: "1.0.0", to: "1.0.1" },
+        ],
+        promptInput: {
+          ...promptInput(),
+          packages: ["a-pad", "b-pad", "c-pad", "d-pad"].map((name) => ({
+            ...RIGHT_PACKAGE,
+            name,
+            from: "1.0.0",
+            to: "1.0.1",
+          })),
+        },
+      }),
+      "assess input has an invalid number of targets",
+    ],
+    [
+      "a duplicate target",
+      proceedingGroup({
+        targets: [
+          { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+          { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+        ],
+        promptInput: {
+          ...promptInput(),
+          packages: [...promptInput().packages, ...promptInput().packages],
+        },
+      }),
+      "assess input has a duplicate target",
+    ],
+    [
+      "targets in another order than the prompt packages",
+      proceedingGroup({
+        targets: [
+          { name: "right-pad", from: "2.0.0", to: "2.0.1" },
+          { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+        ],
+      }),
+      "assess input target does not match the prompt input",
+    ],
+    [
+      "more targets than prompt packages",
+      proceedingGroup({ promptInput: promptInput() }),
+      "assess input target does not match the prompt input",
+    ],
+    [
+      "more prompt packages than targets",
+      proceeding({ promptInput: groupAssessInput().promptInput }),
+      "assess input target does not match the prompt input",
+    ],
+    [
+      "a second target version that is not x.y.z",
+      proceedingGroup({
+        targets: [
+          { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+          { name: "right-pad", from: "2.0.0", to: "2.0.1-rc" },
+        ],
+      }),
+      "assess input target does not match the prompt input",
+    ],
+    [
+      "a prompt input without packages",
+      preparedFrom({
+        ...assessInput(),
+        promptInput: { ...promptInput(), packages: undefined },
+      }),
+      "promptInput has no packages",
+    ],
+    [
+      "a non-string field in the second package",
+      proceedingGroup({
+        promptInput: {
+          ...promptInput(),
+          packages: [
+            ...promptInput().packages,
+            { ...RIGHT_PACKAGE, changelog: JSON.parse("1") },
+          ],
+        },
+      }),
+      "promptInput has a non-string field",
     ],
   ])("throws on %s", (_label, raw, message) => {
     expect(() => readPrepareResult(raw, WORK_ITEM_ID)).toThrow(message);
@@ -1196,6 +1409,237 @@ describe("impactForDecision", () => {
     const value = assessed({}, assessment({ impact: "impact" }));
 
     expect(impactForDecision(value).impact).toBe("impact");
+  });
+});
+
+// ---- グループの評価の網羅 ----
+
+/** 名前だけが違う対象を並べた、影響調査の結果。 */
+function assessedNamed(
+  names: readonly string[],
+  output: ImpactAssessment,
+  machineConcerns: string[] = [],
+): { input: DependabotAssessInput; claudeAssessment: ImpactAssessment } {
+  const packages = names.map((name) => ({
+    ...RIGHT_PACKAGE,
+    name,
+    from: "1.0.0",
+    to: "1.0.1",
+  }));
+  return {
+    input: assessInput({
+      targets: names.map((name) => ({ name, from: "1.0.0", to: "1.0.1" })),
+      promptInput: { ...promptInput(), packages },
+      machineConcerns,
+    }),
+    claudeAssessment: output,
+  };
+}
+
+const NAMES_BOTH = assessment({
+  evidence: "left-padとright-padの使用箇所を確認した",
+});
+
+describe("impactForDecision for a group of packages", () => {
+  test("adds nothing when the evidence names every package", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: NAMES_BOTH,
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([]);
+  });
+
+  test("hands a clean assessment to a human when a package name is missing", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({ evidence: "left-padを確認した" }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("adds one escalation when no package is named", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({ evidence: "確認した" }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("keeps the unverified items of claude before the escalation", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "left-padを確認した",
+        unverified: ["usage in console"],
+      }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      "usage in console",
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("counts a name in the supply chain concerns", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "left-padを確認した",
+        supplyChainConcerns: ["right-padの公開者が変わった"],
+      }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([]);
+  });
+
+  test("counts a name in the unverified items", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "left-padを確認した",
+        unverified: ["right-padのコンソール側の使用箇所"],
+      }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      "right-padのコンソール側の使用箇所",
+    ]);
+  });
+
+  test("does not count a name that only a machine concern carries", () => {
+    const value = {
+      input: groupAssessInput({
+        machineConcerns: ["package right-pad: repository changed"],
+      }),
+      claudeAssessment: assessment({ evidence: "left-padを確認した" }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("counts a name in backticks", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "`left-pad` と `right-pad` を確認した",
+      }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([]);
+  });
+
+  test("does not count a name that is part of a longer name", () => {
+    const value = assessedNamed(
+      ["react", "react-dom"],
+      assessment({ evidence: "react-domを確認した" }),
+    );
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("does not count a name inside a scoped name", () => {
+    const value = assessedNamed(
+      ["@types/react", "react"],
+      assessment({ evidence: "@types/reactを確認した" }),
+    );
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("counts both names of an overlapping pair when both appear alone", () => {
+    const value = assessedNamed(
+      ["react", "react-dom"],
+      assessment({ evidence: "reactとreact-domを確認した" }),
+    );
+
+    expect(impactForDecision(value).unverified).toEqual([]);
+  });
+
+  test("does not count a name that follows a name character", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "xleft-padとright-padを確認した",
+      }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("does not count a file name that starts with the name", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({
+        evidence: "left-pad.jsとright-padを確認した",
+      }),
+    };
+
+    expect(impactForDecision(value).unverified).toEqual([
+      UNNAMED_PACKAGES_ESCALATION,
+    ]);
+  });
+
+  test("does not ask a single package to be named", () => {
+    const value = assessed({}, assessment({ evidence: "確認した" }));
+
+    expect(impactForDecision(value).unverified).toEqual([]);
+  });
+
+  test("hands the group to a human when a name is missing", () => {
+    const result: DependabotAssessed = {
+      kind: "assessed",
+      workItemId: WORK_ITEM_ID,
+      input: groupAssessInput(),
+      claudeAssessment: assessment({ evidence: "left-padを確認した" }),
+      agentRunId: 1,
+    };
+
+    expect(decideAssessedOutcome(result).outcome).toBe("needs_human");
+  });
+
+  test("merges the group when every name is present and nothing else remains", () => {
+    const result: DependabotAssessed = {
+      kind: "assessed",
+      workItemId: WORK_ITEM_ID,
+      input: groupAssessInput(),
+      claudeAssessment: NAMES_BOTH,
+      agentRunId: 1,
+    };
+
+    expect(decideAssessedOutcome(result).outcome).toBe("merge");
+  });
+
+  test("lists the escalation among the reasons for a human", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: assessment({ evidence: "left-padを確認した" }),
+    };
+
+    expect(coverageEscalationsOf(value)).toEqual([UNNAMED_PACKAGES_ESCALATION]);
+  });
+
+  test("lists no escalation when every name is present", () => {
+    const value = {
+      input: groupAssessInput(),
+      claudeAssessment: NAMES_BOTH,
+    };
+
+    expect(coverageEscalationsOf(value)).toEqual([]);
   });
 });
 

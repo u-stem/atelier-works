@@ -35,7 +35,9 @@ import {
   sanitizeUntrustedProse,
 } from "./lib/dependabot_flow_support.ts";
 import {
-  evaluateGate,
+  evaluateGateGroup,
+  type GateCommon,
+  type GateTargetFacts,
   isPublishedLongEnough,
 } from "./lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
@@ -249,6 +251,8 @@ export type PollDependabotContext = {
   readonly instanceName: string;
   readonly viewerLogin: string;
   readonly minPublishedDays: number;
+  /** `dependabot_group_enabled`。偽なら、2つ以上のパッケージが変わるPRをゲートが止める。 */
+  readonly allowGroups: boolean;
   readonly retentionDays: number;
   /** このPRの終端でない作業項目。 */
   readonly activeForPr: readonly Pick<WorkItem, "kind">[];
@@ -328,6 +332,34 @@ function errorMessage(err: unknown): string {
 }
 
 /**
+ * 公開の日数が足りない対象のうち、最も遅く足りる時刻(公開日+最小日数、ミリ秒)を返す。
+ * 全対象が足りるときと、足りない対象の公開日が読めないときは`null`を返し、間引きの間隔に任せる。
+ * ゲートは読めない公開日を止めるので、後者は通常起きない。読める日付だけで時刻を決めて確認を遅らせないための備えである。
+ */
+function nextPublishCheckAtMs(
+  targets: readonly Pick<GateTargetFacts, "publishedAtIso">[],
+  common: Pick<GateCommon, "nowMs" | "minPublishedDays">,
+): number | null {
+  let latest: number | null = null;
+  for (const { publishedAtIso } of targets) {
+    if (
+      isPublishedLongEnough(
+        publishedAtIso,
+        common.nowMs,
+        common.minPublishedDays,
+      )
+    ) {
+      continue;
+    }
+    const publishedMs = Date.parse(publishedAtIso);
+    if (!Number.isFinite(publishedMs)) return null;
+    const checkAtMs = publishedMs + common.minPublishedDays * DAY_MS;
+    latest = latest === null ? checkAtMs : Math.max(latest, checkAtMs);
+  }
+  return latest;
+}
+
+/**
  * dependabotのPR1件を評価し、フローを起動するか、人に回すか、待つかを決めて実行する。
  * 手順は次のとおり。
  * 1. 同じPRに終端でないpr_reviewかpr_fixがあれば、何もしない。人が頼んだ作業を先にする。
@@ -338,7 +370,7 @@ function errorMessage(err: unknown): string {
  * 4. 待っているheadは、次に確かめる時刻まで評価しない。
  * 5. PRを作ってから保持期間に近いほど時間がたっていれば、処理済みの記録が消えたかもしれないので、人に回す。
  * 6. 同じheadでフローが待ちで止まった回数が上限に達していれば人に回し、直後なら起動を見送る。
- * 7. フローの準備と同じ収集(`collectGateInput`)とゲート(`evaluateGate`)で評価する。
+ * 7. フローの準備と同じ収集(`collectGateInput`)とゲート(`evaluateGateGroup`)で評価する。
  *    通ればフローを起動し、止まれば人に回し、待ちなら作業項目を作らない。
  *    マージできない(競合)は、dependabotがrebaseで直しうるので待ちとして扱う。
  *    待ちの起点(PRを作った時刻と、そのheadで初めて待ちを見た時刻の遅い方)から上限を超えたら、人に回す。
@@ -535,21 +567,21 @@ export async function processDependabotPr(
     );
   }
 
-  const gate = evaluateGate(result.input);
+  const gate = evaluateGateGroup(
+    result.common,
+    result.targets,
+    ctx.allowGroups,
+  );
   if (!gate.ok) {
     if (gate.kind === "needs_human") {
       return gate.notMergeable
         ? waitOrEscalate(gate.reason, null)
         : escalate(dependabotReason("gate", gate.reason));
     }
-    const { publishedAtIso, nowMs, minPublishedDays } = result.input;
-    const publishedMs = Date.parse(publishedAtIso);
-    const publishCheckAtMs =
-      !isPublishedLongEnough(publishedAtIso, nowMs, minPublishedDays) &&
-      Number.isFinite(publishedMs)
-        ? publishedMs + minPublishedDays * DAY_MS
-        : null;
-    return waitOrEscalate(gate.reason, publishCheckAtMs);
+    return waitOrEscalate(
+      gate.reason,
+      nextPublishCheckAtMs(result.targets, result.common),
+    );
   }
 
   const stop = await ownerStop();
@@ -974,6 +1006,7 @@ export async function pollDependabot(
           instanceName: config.instance_name,
           viewerLogin: session.viewerLogin,
           minPublishedDays: config.dependabot_min_published_days,
+          allowGroups: config.dependabot_group_enabled,
           retentionDays: config.retention_work_items_days,
           activeForPr: activeByPr.get(key) ?? [],
           waits: previous.heads,

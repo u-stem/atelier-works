@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type {
+  GateCommon,
   GateInput,
+  GateResult,
+  GateTargetFacts,
   ImpactAssessment,
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
@@ -11,9 +14,11 @@ import {
   classifyUpdate,
   decideImpactOutcome,
   evaluateGate,
+  evaluateGateGroup,
   GITHUB_ACTIONS_APP_ID,
   isPublishedLongEnough,
   lockfileIntegrity,
+  MAX_GROUP_TARGETS,
   parseImpactAssessment,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
@@ -707,6 +712,232 @@ describe("checkPackageJsonDiff", () => {
     expect(checkPackageJsonDiff(MANIFEST_BEFORE, "{ nope", TARGET).ok).toBe(
       false,
     );
+  });
+});
+
+// ---- 同時に更新される対象(coTargets)のある差分の検査 ----
+
+const INTEGRITY_C = `sha512-${"C".repeat(86)}==`;
+const OTHER_TARGET = { name: "other", to: "2.0.1" };
+const CO_TARGETS = [OTHER_TARGET];
+
+const GROUP_BEFORE = lockText({ "left-pad": "1.3.0", other: "2.0.0" }, [
+  { key: "left-pad", id: "left-pad@1.3.0" },
+  { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+]);
+
+// 2つ目の対象(other)のエントリだけを差し替えられる、更新後のロックファイル。
+function groupAfter(
+  other: Partial<LockEntry> = {},
+  otherSpec = "2.0.1",
+): string {
+  return lockText({ "left-pad": "1.3.1", other: otherSpec }, [
+    { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+    { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C, ...other },
+  ]);
+}
+
+const GROUP_AFTER = groupAfter();
+
+function reasonOf(verdict: { ok: boolean; reason?: string }): string {
+  return verdict.ok ? "" : (verdict.reason ?? "");
+}
+
+describe("checkLockfileDiff with co-targets", () => {
+  test("accepts the update of a co-target together with the target", () => {
+    expect(
+      checkLockfileDiff(GROUP_BEFORE, GROUP_AFTER, TARGET, CO_TARGETS),
+    ).toEqual({ ok: true });
+  });
+
+  test("rejects the same change when the co-target is not declared", () => {
+    expect(checkLockfileDiff(GROUP_BEFORE, GROUP_AFTER, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a co-target entry that resolved to a version other than its target version", () => {
+    const after = groupAfter({ id: "other@2.0.2" });
+
+    expect(
+      reasonOf(checkLockfileDiff(GROUP_BEFORE, after, TARGET, CO_TARGETS)),
+    ).toBe("other: a co-target resolved to 2.0.2, expected 2.0.1");
+  });
+
+  test("rejects a package that is neither the target nor a co-target", () => {
+    const before = lockText({ "left-pad": "1.3.0", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+      { key: "tool", id: "tool@3.0.0", integrity: INTEGRITY_B },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1", other: "2.0.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+      { key: "tool", id: "tool@3.0.1", integrity: INTEGRITY_C },
+    ]);
+
+    expect(checkLockfileDiff(before, after, TARGET, CO_TARGETS).ok).toBe(false);
+  });
+
+  test("rejects an entry whose name changed to a co-target with a matching version", () => {
+    // 前後で名前が違うエントリは、更新後の名前と版が共同の対象に当たっても通さない。
+    const after = lockText({ "left-pad": "1.3.0", other: "2.0.0" }, [
+      { key: "left-pad", id: "other@1.3.1", integrity: INTEGRITY_C },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+    ]);
+
+    expect(
+      checkLockfileDiff(GROUP_BEFORE, after, TARGET, [
+        { name: "other", to: "1.3.1" },
+      ]).ok,
+    ).toBe(false);
+  });
+
+  test("rejects an entry whose name changed from a co-target to the target", () => {
+    const after = lockText({ "left-pad": "1.3.1", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "left-pad@1.3.1", integrity: INTEGRITY_C },
+    ]);
+
+    expect(
+      checkLockfileDiff(GROUP_BEFORE, after, TARGET, [
+        { name: "other", to: "1.3.1" },
+      ]).ok,
+    ).toBe(false);
+  });
+
+  test("still requires the target entry to change when only a co-target changed", () => {
+    const after = lockText({ "left-pad": "1.3.0", other: "2.0.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+    ]);
+
+    expect(
+      reasonOf(checkLockfileDiff(GROUP_BEFORE, after, TARGET, CO_TARGETS)),
+    ).toBe("target was not updated in the lockfile");
+  });
+
+  test("rejects a workspace specifier of a co-target that does not point at its target version", () => {
+    const after = lockText({ "left-pad": "1.3.1", other: "9.9.9" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+    ]);
+
+    expect(checkLockfileDiff(GROUP_BEFORE, after, TARGET, CO_TARGETS).ok).toBe(
+      false,
+    );
+  });
+
+  test("rejects a co-target that was removed from the workspace specifiers", () => {
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+    ]);
+
+    expect(checkLockfileDiff(GROUP_BEFORE, after, TARGET, CO_TARGETS).ok).toBe(
+      false,
+    );
+  });
+
+  test("rejects a package added next to the co-target", () => {
+    const after = lockText({ "left-pad": "1.3.1", other: "2.0.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+      { key: "extra", id: "extra@1.0.0", integrity: INTEGRITY_C },
+    ]);
+
+    expect(checkLockfileDiff(GROUP_BEFORE, after, TARGET, CO_TARGETS).ok).toBe(
+      false,
+    );
+  });
+});
+
+describe("checkPackageJsonDiff with co-targets", () => {
+  test("accepts the update of the target and a co-target", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.1" },
+    });
+
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET, CO_TARGETS),
+    ).toEqual({ ok: true });
+  });
+
+  test("accepts a manifest that changes only a co-target when the target is transitive", () => {
+    const before = manifest({ dependencies: { other: "2.0.0" } });
+    const after = manifest({ dependencies: { other: "2.0.1" } });
+
+    expect(checkPackageJsonDiff(before, after, TARGET, CO_TARGETS)).toEqual({
+      ok: true,
+    });
+  });
+
+  test("accepts a manifest that leaves the target specifier alone and changes a co-target", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.0", other: "2.0.1" },
+    });
+
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET, CO_TARGETS),
+    ).toEqual({ ok: true });
+  });
+
+  test("rejects a manifest where neither the target nor a co-target changed", () => {
+    expect(
+      reasonOf(
+        checkPackageJsonDiff(
+          MANIFEST_BEFORE,
+          MANIFEST_BEFORE,
+          TARGET,
+          CO_TARGETS,
+        ),
+      ),
+    ).toBe("target was not updated in package.json");
+  });
+
+  test("rejects a co-target specifier that does not point at its target version", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "3.0.0" },
+    });
+
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET, CO_TARGETS).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a target specifier that does not point at the target version even when a co-target changed", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.9.9", other: "2.0.1" },
+    });
+
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET, CO_TARGETS).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a co-target that was removed from the manifest", () => {
+    const after = manifest({ dependencies: { "left-pad": "1.3.1" } });
+
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET, CO_TARGETS).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a change to a dependency that is neither the target nor a co-target", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.1" },
+      devDependencies: { tool: "3.0.1" },
+    });
+
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET, CO_TARGETS).ok,
+    ).toBe(false);
+  });
+
+  test("rejects the update of a co-target when it is not declared", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.1" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
   });
 });
 
@@ -1652,6 +1883,531 @@ describe("evaluateGate", () => {
     const result = evaluateGate(validInput({ update: "major" }));
 
     expect(result.ok ? "" : result.reason).toContain("major");
+  });
+});
+
+// ---- evaluateGateGroup ----
+
+const GROUP_MANIFEST_AFTER = manifest({
+  dependencies: { "left-pad": "1.3.1", other: "2.0.1" },
+});
+
+function groupFilesFor(
+  paths: readonly string[],
+  lockAfter: string = GROUP_AFTER,
+): GateInput["files"] {
+  return paths.map((path) =>
+    path.endsWith("package.json")
+      ? { path, before: MANIFEST_BEFORE, after: GROUP_MANIFEST_AFTER }
+      : { path, before: GROUP_BEFORE, after: lockAfter },
+  );
+}
+
+function groupCommon(overrides: Partial<GateCommon> = {}): GateCommon {
+  const changedPaths = overrides.changedPaths ?? ["package.json", "bun.lock"];
+  return {
+    authorLogin: "dependabot[bot]",
+    authorType: "Bot",
+    headRepoFullName: "owner/repo",
+    baseRepoFullName: "owner/repo",
+    checks: passingChecks(),
+    requiredChecks: REQUIRED_CHECKS,
+    update: "patch",
+    changedPaths,
+    files: groupFilesFor(changedPaths),
+    mergeable: true,
+    nowMs: NOW_MS,
+    minPublishedDays: 7,
+    commits: [DEPENDABOT_COMMIT],
+    ...overrides,
+  };
+}
+
+function leftPadFacts(
+  overrides: Partial<GateTargetFacts> = {},
+): GateTargetFacts {
+  return {
+    target: TARGET,
+    registry: registryOf(INTEGRITY_B),
+    installScripts: { before: {}, after: {} },
+    publishedAtIso: "2026-10-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function otherFacts(overrides: Partial<GateTargetFacts> = {}): GateTargetFacts {
+  return {
+    target: OTHER_TARGET,
+    registry: {
+      name: OTHER_TARGET.name,
+      version: OTHER_TARGET.to,
+      integrity: INTEGRITY_C,
+    },
+    installScripts: { before: {}, after: {} },
+    publishedAtIso: "2026-10-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function splitInput(input: GateInput): {
+  common: GateCommon;
+  facts: GateTargetFacts;
+} {
+  const { target, registry, installScripts, publishedAtIso, ...common } = input;
+  return {
+    common,
+    facts: { target, registry, installScripts, publishedAtIso },
+  };
+}
+
+function verdictOfResult(result: GateResult): string {
+  return result.ok ? "ok" : result.kind;
+}
+
+function reasonOfResult(result: GateResult): string {
+  return result.ok ? "" : result.reason;
+}
+
+const RECENT = "2026-10-18T00:00:00.000Z";
+
+describe("MAX_GROUP_TARGETS", () => {
+  test("is three", () => {
+    expect(MAX_GROUP_TARGETS).toBe(3);
+  });
+});
+
+describe("evaluateGateGroup", () => {
+  test("passes when every target passes", () => {
+    expect(
+      evaluateGateGroup(groupCommon(), [leftPadFacts(), otherFacts()], true),
+    ).toEqual({ ok: true });
+  });
+
+  test("gives the same result as evaluateGate for a single target", () => {
+    const { common, facts } = splitInput(validInput());
+
+    expect(evaluateGateGroup(common, [facts], false)).toEqual(
+      evaluateGate(validInput()),
+    );
+  });
+
+  test("keeps the reason of evaluateGate for a single target without a prefix", () => {
+    const input = validInput({ authorLogin: "mallory" });
+    const { common, facts } = splitInput(input);
+
+    expect(reasonOfResult(evaluateGateGroup(common, [facts], false))).toBe(
+      reasonOfResult(evaluateGate(input)),
+    );
+  });
+
+  test("evaluates with the common facts even when a target carries extra fields", () => {
+    const withExtra = { ...leftPadFacts(), authorLogin: "mallory" };
+
+    expect(
+      evaluateGateGroup(groupCommon(), [withExtra, otherFacts()], true),
+    ).toEqual({ ok: true });
+  });
+
+  test("needs a human when there is no target", () => {
+    expect(verdictOfResult(evaluateGateGroup(groupCommon(), [], true))).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when a target name appears twice", () => {
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon(),
+          [leftPadFacts(), leftPadFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("stops two targets with the grouping reason when groups are not allowed", () => {
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(groupCommon(), [leftPadFacts(), otherFacts()], false),
+      ),
+    ).toBe("more than one package changed: left-pad, other");
+  });
+
+  test("stops more targets than the limit", () => {
+    const extra = (name: string) =>
+      leftPadFacts({ target: { name, to: "1.0.0" } });
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(
+          groupCommon(),
+          [leftPadFacts(), otherFacts(), extra("x"), extra("y")],
+          true,
+        ),
+      ),
+    ).toBe("too many packages changed: 4");
+  });
+
+  test("stops when a later target resolves from a non-default registry", () => {
+    const after = groupAfter({ registry: "https://registry.example" });
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(
+          groupCommon({
+            files: groupFilesFor(["package.json", "bun.lock"], after),
+          }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe(
+      "package other: bun.lock diff rejected: other: target is resolved from a non-default registry",
+    );
+  });
+
+  test("stops when a later target has no sha512 integrity in the lockfile", () => {
+    const after = groupAfter({ integrity: "not-an-integrity" });
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(
+          groupCommon({
+            files: groupFilesFor(["package.json", "bun.lock"], after),
+          }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe(
+      "package other: bun.lock diff rejected: other: target has no sha512 integrity",
+    );
+  });
+
+  test("stops when the registry integrity of a later target differs from the lockfile", () => {
+    const facts = otherFacts({
+      registry: { name: "other", version: "2.0.1", integrity: INTEGRITY_A },
+    });
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(groupCommon(), [leftPadFacts(), facts], true),
+      ),
+    ).toContain(
+      "package other: integrity in bun.lock differs from the registry",
+    );
+  });
+
+  test("stops when a later target jumps a major version", () => {
+    const after = groupAfter({ id: "other@3.0.0" }, "3.0.0");
+    const manifestAfter = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "3.0.0" },
+    });
+    const files: GateInput["files"] = [
+      { path: "package.json", before: MANIFEST_BEFORE, after: manifestAfter },
+      { path: "bun.lock", before: GROUP_BEFORE, after },
+    ];
+    const facts = otherFacts({
+      target: { name: "other", to: "3.0.0" },
+      registry: { name: "other", version: "3.0.0", integrity: INTEGRITY_C },
+    });
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(
+          groupCommon({ files }),
+          [leftPadFacts(), facts],
+          true,
+        ),
+      ),
+    ).toBe(
+      "package other: bun.lock diff rejected: other: target jumped from 2.0.0 to 3.0.0 (major)",
+    );
+  });
+
+  test("stops when a later target adds an install script", () => {
+    const facts = otherFacts({
+      installScripts: { before: {}, after: { postinstall: "x" } },
+    });
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(groupCommon(), [leftPadFacts(), facts], true),
+      ),
+    ).toBe("package other: the target adds or changes the postinstall script");
+  });
+
+  test("stops when a co-target resolved to a version other than its target version", () => {
+    const after = groupAfter({ id: "other@2.0.2" });
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({
+            files: groupFilesFor(["package.json", "bun.lock"], after),
+          }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("stops when a package other than the targets changed", () => {
+    const before = lockText({ "left-pad": "1.3.0", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+      { key: "tool", id: "tool@3.0.0", integrity: INTEGRITY_B },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1", other: "2.0.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+      { key: "tool", id: "tool@3.0.1", integrity: INTEGRITY_C },
+    ]);
+    const files: GateInput["files"] = [
+      {
+        path: "package.json",
+        before: MANIFEST_BEFORE,
+        after: GROUP_MANIFEST_AFTER,
+      },
+      { path: "bun.lock", before, after },
+    ];
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({ files }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("passes a direct dependency updated together with a transitive one", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "dep", id: "dep@4.0.0", integrity: INTEGRITY_B },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "dep", id: "dep@4.0.1", integrity: INTEGRITY_C },
+    ]);
+    const files: GateInput["files"] = [
+      {
+        path: "package.json",
+        before: MANIFEST_BEFORE,
+        after: manifest({
+          dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+        }),
+      },
+      { path: "bun.lock", before, after },
+    ];
+    const dep = otherFacts({
+      target: { name: "dep", to: "4.0.1" },
+      registry: { name: "dep", version: "4.0.1", integrity: INTEGRITY_C },
+    });
+
+    expect(
+      evaluateGateGroup(groupCommon({ files }), [dep, leftPadFacts()], true),
+    ).toEqual({ ok: true });
+  });
+
+  test("stops when different packages are updated in the root and in console", () => {
+    const rootLock = AFTER_OK;
+    const consoleLock = lockText({ "left-pad": "1.3.0", other: "2.0.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "other", id: "other@2.0.1", integrity: INTEGRITY_C },
+    ]);
+    const files: GateInput["files"] = [
+      {
+        path: "package.json",
+        before: MANIFEST_BEFORE,
+        after: manifest({
+          dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+        }),
+      },
+      { path: "bun.lock", before: BEFORE, after: rootLock },
+      {
+        path: "console/package.json",
+        before: MANIFEST_BEFORE,
+        after: manifest({
+          dependencies: { "left-pad": "1.3.0", other: "2.0.1" },
+        }),
+      },
+      { path: "console/bun.lock", before: BEFORE, after: consoleLock },
+    ];
+    const changedPaths = files.map((file) => file.path);
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({ changedPaths, files }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("stops when the manifest points at the new version but the lockfile keeps the old one", () => {
+    const files: GateInput["files"] = [
+      {
+        path: "package.json",
+        before: MANIFEST_BEFORE,
+        after: GROUP_MANIFEST_AFTER,
+      },
+      { path: "bun.lock", before: BEFORE, after: AFTER_OK },
+    ];
+
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(
+          groupCommon({ files }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe(
+      "package other: bun.lock diff rejected: target was not updated in the lockfile",
+    );
+  });
+
+  test("stops at a protected path", () => {
+    const changedPaths = [
+      "package.json",
+      "bun.lock",
+      ".github/workflows/ci.yml",
+    ];
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({ changedPaths }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("stops at a path outside the allowed set", () => {
+    const changedPaths = ["package.json", "bun.lock", "docs/notes.md"];
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({ changedPaths }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("prefixes every reason with the package name when there are several targets", () => {
+    expect(
+      reasonOfResult(
+        evaluateGateGroup(
+          groupCommon({ authorLogin: "mallory" }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe(
+      "package left-pad: author is not dependabot[bot]: mallory (Bot); package other: author is not dependabot[bot]: mallory (Bot)",
+    );
+  });
+
+  test("stops when a required check failed", () => {
+    const checks = passingChecks().map((check) =>
+      check.name === "check" ? { ...check, conclusion: "failure" } : check,
+    );
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({ checks }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human rather than a wait when one target waits and another stops", () => {
+    const stopping = otherFacts({
+      registry: { name: "other", version: "2.0.1", integrity: INTEGRITY_A },
+    });
+
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon(),
+          [leftPadFacts({ publishedAtIso: RECENT }), stopping],
+          true,
+        ),
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("waits when one target was published less than the minimum days ago", () => {
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon(),
+          [leftPadFacts(), otherFacts({ publishedAtIso: RECENT })],
+          true,
+        ),
+      ),
+    ).toBe("wait");
+  });
+
+  test("waits while mergeability has not been computed", () => {
+    expect(
+      verdictOfResult(
+        evaluateGateGroup(
+          groupCommon({ mergeable: null }),
+          [leftPadFacts(), otherFacts()],
+          true,
+        ),
+      ),
+    ).toBe("wait");
+  });
+
+  test("marks a group that is not mergeable as not mergeable", () => {
+    expect(
+      evaluateGateGroup(
+        groupCommon({ mergeable: false }),
+        [leftPadFacts(), otherFacts()],
+        true,
+      ),
+    ).toMatchObject({ kind: "needs_human", notMergeable: true });
+  });
+
+  test("does not mark a group as not mergeable when another stop exists", () => {
+    expect(
+      evaluateGateGroup(
+        groupCommon({ mergeable: false, authorLogin: "mallory" }),
+        [leftPadFacts(), otherFacts()],
+        true,
+      ),
+    ).toMatchObject({ kind: "needs_human", notMergeable: false });
+  });
+});
+
+describe("evaluateGate and co-targets", () => {
+  test("ignores co-targets that are passed at runtime", () => {
+    const result = evaluateGate({
+      ...validInput({
+        files: groupFilesFor(["package.json", "bun.lock"]),
+      }),
+      // @ts-expect-error coTargets is not part of GateInput
+      coTargets: CO_TARGETS,
+    });
+
+    expect(result.ok).toBe(false);
   });
 });
 

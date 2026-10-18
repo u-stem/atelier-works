@@ -3,7 +3,7 @@ import {
   buildCollectDeps,
   type CollectDeps,
   collectGateInput,
-  deriveTarget,
+  deriveTargets,
   LOCKFILE_PATHS,
   NOT_OPEN,
 } from "../../f/factory/lib/dependabot_collect.ts";
@@ -16,7 +16,8 @@ import {
   RegistryUnavailableError,
 } from "../../f/factory/lib/dependabot_registry.ts";
 import {
-  evaluateGate,
+  evaluateGateGroup,
+  type GateInput,
   GITHUB_ACTIONS_APP_ID,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
@@ -84,6 +85,18 @@ const LOCK_AFTER = lockText({ "left-pad": "1.3.1", other: "2.0.0" }, [
   OTHER,
 ]);
 
+// left-padとotherの両方が上がる、グループの更新後のロックファイル。
+const GROUP_AFTER = lockText({ "left-pad": "1.3.1", other: "2.0.1" }, [
+  { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+  { key: "other", id: "other@2.0.1", integrity: INTEGRITY_B },
+]);
+
+const GROUP_MANIFEST_AFTER = `${JSON.stringify(
+  { name: "fixture", dependencies: { "left-pad": "1.3.1", other: "2.0.1" } },
+  null,
+  2,
+)}\n`;
+
 const MANIFEST_BEFORE = `${JSON.stringify(
   { name: "fixture", dependencies: { "left-pad": "1.3.0", other: "2.0.0" } },
   null,
@@ -104,9 +117,17 @@ function lockFile(
   return { path, before, after };
 }
 
-// ---- deriveTarget ----
+// ---- deriveTargets ----
 
-describe("deriveTarget", () => {
+// グループを許さない既定の導出。
+const deriveTarget = (files: GateInput["files"]) => deriveTargets(files, false);
+
+// 一度に読む対象が1つのときの結果から、その対象を取り出す。
+function onlyTarget(result: ReturnType<typeof deriveTargets>) {
+  return result.kind === "ok" ? result.targets[0] : undefined;
+}
+
+describe("deriveTargets", () => {
   test("derives the target of a direct dependency update", () => {
     const result = deriveTarget([
       { path: "package.json", before: MANIFEST_BEFORE, after: MANIFEST_AFTER },
@@ -115,9 +136,9 @@ describe("deriveTarget", () => {
 
     expect(result).toEqual({
       kind: "ok",
-      target: { name: "left-pad", to: "1.3.1" },
-      from: "1.3.0",
-      update: "patch",
+      targets: [
+        { name: "left-pad", to: "1.3.1", from: "1.3.0", update: "patch" },
+      ],
     });
   });
 
@@ -156,9 +177,9 @@ describe("deriveTarget", () => {
 
     expect(deriveTarget([lockFile(before, after)])).toEqual({
       kind: "ok",
-      target: { name: "left-pad", to: "1.3.1" },
-      from: "1.3.0",
-      update: "patch",
+      targets: [
+        { name: "left-pad", to: "1.3.1", from: "1.3.0", update: "patch" },
+      ],
     });
   });
 
@@ -174,7 +195,7 @@ describe("deriveTarget", () => {
 
     const result = deriveTarget([lockFile(before, after)]);
 
-    expect(result.kind === "ok" ? result.update : null).toBe("minor");
+    expect(onlyTarget(result)?.update).toBe("minor");
   });
 
   test("reports major when a copy of the target jumps a major version", () => {
@@ -189,7 +210,7 @@ describe("deriveTarget", () => {
 
     const result = deriveTarget([lockFile(before, after)]);
 
-    expect(result.kind === "ok" ? result.update : null).toBe("major");
+    expect(onlyTarget(result)?.update).toBe("major");
   });
 
   test("reports unknown for a version that cannot be classified", () => {
@@ -200,7 +221,7 @@ describe("deriveTarget", () => {
 
     const result = deriveTarget([lockFile(LOCK_BEFORE, after)]);
 
-    expect(result.kind === "ok" ? result.update : null).toBe("unknown");
+    expect(onlyTarget(result)?.update).toBe("unknown");
   });
 
   test("accepts the same update in both lockfiles", () => {
@@ -358,6 +379,183 @@ describe("deriveTarget", () => {
   });
 });
 
+// ---- deriveTargets (グループ) ----
+
+const deriveGroup = (files: GateInput["files"]) => deriveTargets(files, true);
+
+// 名前ごとに1.0.0から1.0.1へ上がるロックファイルの前後。
+function bumpedLocks(names: readonly string[]): {
+  before: string;
+  after: string;
+} {
+  return {
+    before: lockText(
+      {},
+      names.map((name) => ({ key: name, id: `${name}@1.0.0` })),
+    ),
+    after: lockText(
+      {},
+      names.map((name) => ({
+        key: name,
+        id: `${name}@1.0.1`,
+        integrity: INTEGRITY_B,
+      })),
+    ),
+  };
+}
+
+describe("deriveTargets for a group", () => {
+  test("derives both packages when groups are allowed", () => {
+    const result = deriveGroup([lockFile(LOCK_BEFORE, GROUP_AFTER)]);
+
+    expect(result).toEqual({
+      kind: "ok",
+      targets: [
+        { name: "left-pad", to: "1.3.1", from: "1.3.0", update: "patch" },
+        { name: "other", to: "2.0.1", from: "2.0.0", update: "patch" },
+      ],
+    });
+  });
+
+  test("orders the targets by name whatever the order of the entries", () => {
+    const { before, after } = bumpedLocks(["zeta", "alpha"]);
+
+    const result = deriveGroup([lockFile(before, after)]);
+
+    expect(
+      result.kind === "ok" ? result.targets.map((t) => t.name) : null,
+    ).toEqual(["alpha", "zeta"]);
+  });
+
+  test("keeps the update kind of each package", () => {
+    const after = lockText({ "left-pad": "1.3.1", other: "2.1.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.1.0", integrity: INTEGRITY_B },
+    ]);
+
+    const result = deriveGroup([lockFile(LOCK_BEFORE, after)]);
+
+    expect(
+      result.kind === "ok" ? result.targets.map((t) => t.update) : null,
+    ).toEqual(["patch", "minor"]);
+  });
+
+  test("accepts as many packages as the limit", () => {
+    const { before, after } = bumpedLocks(["a", "b", "c"]);
+
+    const result = deriveGroup([lockFile(before, after)]);
+
+    expect(result.kind === "ok" ? result.targets.length : null).toBe(3);
+  });
+
+  test("stops more packages than the limit", () => {
+    const { before, after } = bumpedLocks(["a", "b", "c", "d"]);
+
+    expect(deriveGroup([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "too many packages changed: 4",
+    });
+  });
+
+  test("reports the grouping reason for more packages than the limit when groups are not allowed", () => {
+    const { before, after } = bumpedLocks(["a", "b", "c", "d"]);
+
+    expect(deriveTarget([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "more than one package changed: a, b, c, d",
+    });
+  });
+
+  test("reports the grouping reason before looking at top-level entries when groups are not allowed", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/other", id: "other@2.0.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/other", id: "other@2.0.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(deriveTarget([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "more than one package changed: left-pad, other",
+    });
+  });
+
+  test("needs a human when one package of a group has no top-level entry", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/other", id: "other@2.0.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/other", id: "other@2.0.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(deriveGroup([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "the target has no top-level entry in bun.lock: other",
+    });
+  });
+
+  test("needs a human when the lockfiles resolve a package of a group differently", () => {
+    const other = lockText({ "left-pad": "1.3.1", other: "2.0.2" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.2", integrity: INTEGRITY_B },
+    ]);
+
+    expect(
+      deriveGroup([
+        lockFile(LOCK_BEFORE, GROUP_AFTER),
+        lockFile(LOCK_BEFORE, other, "console/bun.lock"),
+      ]),
+    ).toEqual({
+      kind: "needs_human",
+      reason: "the lockfiles resolve the target differently",
+    });
+  });
+
+  test("keeps the grouping reason for an entry whose name changed when groups are not allowed", () => {
+    const before = lockText({}, [{ key: "x", id: "a@1.0.0" }]);
+    const after = lockText({}, [
+      { key: "x", id: "b@1.0.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(deriveTarget([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "more than one package changed: a, b",
+    });
+  });
+
+  test("needs a human for an entry whose name changed when groups are allowed", () => {
+    const before = lockText({}, [{ key: "x", id: "a@1.0.0" }]);
+    const after = lockText({}, [
+      { key: "x", id: "b@1.0.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(deriveGroup([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "a package entry changed its name: x",
+    });
+  });
+
+  test("needs a human for a renamed entry whose new version equals the version of another target", () => {
+    const before = lockText({}, [
+      { key: "a", id: "a@1.0.0" },
+      { key: "b", id: "b@1.0.0" },
+    ]);
+    const after = lockText({}, [
+      { key: "a", id: "b@1.0.1", integrity: INTEGRITY_B },
+      { key: "b", id: "b@1.0.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(deriveGroup([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "a package entry changed its name: a",
+    });
+  });
+});
+
 // ---- collectGateInput ----
 
 const HEAD = "a".repeat(40);
@@ -421,7 +619,9 @@ type Setup = {
   changed?: { filename: string; previousFilename?: string | null }[];
   contents?: Record<string, { before: string | null; after: string | null }>;
   commits?: PrCommit[];
-  registry?: () => Promise<RegistryFacts>;
+  registry?: (name: string, from: string, to: string) => Promise<RegistryFacts>;
+  /** グループの更新を許すか。既定は偽。 */
+  allowGroups?: boolean;
   compare?: () => Promise<{
     mergeBaseSha: string;
     files: {
@@ -446,6 +646,8 @@ type Calls = {
   files: { path: string; ref: string }[];
   checks: string[];
   registry: { name: string; from: string; to: string }[];
+  /** registryの読み取りが同時に走った最大の数。 */
+  registryMaxInFlight: number;
 };
 
 function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
@@ -456,7 +658,9 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
     files: [],
     checks: [],
     registry: [],
+    registryMaxInFlight: 0,
   };
+  let registryInFlight = 0;
   const prs = options.prs ?? [pullRequest(), pullRequest()];
   const contents = options.contents ?? {
     "package.json": { before: MANIFEST_BEFORE, after: MANIFEST_AFTER },
@@ -515,29 +719,66 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
     },
     getRegistryFacts: async (name, from, to) => {
       calls.registry.push({ name, from, to });
-      if (options.registry !== undefined) return options.registry();
-      return facts();
+      registryInFlight += 1;
+      calls.registryMaxInFlight = Math.max(
+        calls.registryMaxInFlight,
+        registryInFlight,
+      );
+      try {
+        // 同時に走るなら、別の読み取りに譲る間に重なって数えられる。
+        await Promise.resolve();
+        if (options.registry !== undefined) {
+          return await options.registry(name, from, to);
+        }
+        return facts({ name, version: to });
+      } finally {
+        registryInFlight -= 1;
+      }
     },
     now: () => NOW,
     minPublishedDays: 7,
     expectedBaseRef: "main",
+    allowGroups: options.allowGroups ?? false,
   };
   return { deps, calls };
 }
 
-async function readyInput(options: Setup = {}) {
+type Ready = Extract<
+  Awaited<ReturnType<typeof collectGateInput>>,
+  { kind: "ready" }
+>;
+
+async function readyResult(options: Setup = {}): Promise<Ready> {
   const result = await collectGateInput(setup(options).deps, PR_REF);
   if (result.kind !== "ready") {
     throw new Error(`expected ready, got ${JSON.stringify(result)}`);
   }
-  return result.input;
+  return result;
 }
+
+// 対象が1つの収集の結果を、1つのゲートの入力として読む。
+async function readyInput(options: Setup = {}): Promise<GateInput> {
+  const result = await readyResult(options);
+  const [first] = result.targets;
+  if (first === undefined) throw new Error("no target in the result");
+  return { ...result.common, ...first };
+}
+
+const GROUP_SETUP: Setup = {
+  allowGroups: true,
+  contents: {
+    "package.json": { before: MANIFEST_BEFORE, after: GROUP_MANIFEST_AFTER },
+    "bun.lock": { before: LOCK_BEFORE, after: GROUP_AFTER },
+  },
+};
 
 describe("collectGateInput", () => {
   test("builds an input that the gate accepts", async () => {
-    const input = await readyInput();
+    const result = await readyResult();
 
-    expect(evaluateGate(input)).toEqual({ ok: true });
+    expect(evaluateGateGroup(result.common, result.targets, false)).toEqual({
+      ok: true,
+    });
   });
 
   test("returns the head sha and the merge base sha it fixed", async () => {
@@ -562,9 +803,11 @@ describe("collectGateInput", () => {
       PR_REF,
     );
 
-    expect(result.kind === "ready" ? result.repositoryBefore : undefined).toBe(
-      "github:old-owner/left-pad",
-    );
+    expect(
+      result.kind === "ready"
+        ? result.packages[0]?.repositoryBefore
+        : undefined,
+    ).toBe("github:old-owner/left-pad");
   });
 
   test("returns the repository of the to version as repositoryAfter", async () => {
@@ -579,9 +822,9 @@ describe("collectGateInput", () => {
       PR_REF,
     );
 
-    expect(result.kind === "ready" ? result.repositoryAfter : undefined).toBe(
-      "github:new-owner/left-pad",
-    );
+    expect(
+      result.kind === "ready" ? result.packages[0]?.repositoryAfter : undefined,
+    ).toBe("github:new-owner/left-pad");
   });
 
   test("returns null for a repository the registry could not give", async () => {
@@ -593,9 +836,9 @@ describe("collectGateInput", () => {
       PR_REF,
     );
 
-    expect(result.kind === "ready" ? result.repositoryAfter : undefined).toBe(
-      null,
-    );
+    expect(
+      result.kind === "ready" ? result.packages[0]?.repositoryAfter : undefined,
+    ).toBe(null);
   });
 
   test("derives the target and the update kind from the lockfile", async () => {
@@ -633,7 +876,9 @@ describe("collectGateInput", () => {
   test("returns the version before the update", async () => {
     const result = await collectGateInput(setup().deps, PR_REF);
 
-    expect(result.kind === "ready" ? result.from : null).toBe("1.3.0");
+    expect(result.kind === "ready" ? result.packages[0]?.from : null).toBe(
+      "1.3.0",
+    );
   });
 
   test("returns the registry metadata for the impact assessment", async () => {
@@ -644,15 +889,17 @@ describe("collectGateInput", () => {
       PR_REF,
     );
 
-    expect(result.kind === "ready" ? result.registryMetadata : null).toBe(
-      "package: left-pad",
-    );
+    expect(
+      result.kind === "ready" ? result.packages[0]?.registryMetadata : null,
+    ).toBe("package: left-pad");
   });
 
   test("has no unverified inputs when the registry metadata is complete", async () => {
     const result = await collectGateInput(setup().deps, PR_REF);
 
-    expect(result).toMatchObject({ kind: "ready", unverifiedInputs: [] });
+    expect(result.kind === "ready" ? result.packages[0] : null).toMatchObject({
+      unverifiedInputs: [],
+    });
   });
 
   test("marks the registry metadata as unverified when an item is missing", async () => {
@@ -663,8 +910,7 @@ describe("collectGateInput", () => {
       PR_REF,
     );
 
-    expect(result).toMatchObject({
-      kind: "ready",
+    expect(result.kind === "ready" ? result.packages[0] : null).toMatchObject({
       unverifiedInputs: ["registry metadata"],
     });
   });
@@ -1167,6 +1413,157 @@ describe("collectGateInput", () => {
     expect(calls.registry).toEqual([]);
   });
 
+  test("reads the registry for every target of a group in name order", async () => {
+    const { deps, calls } = setup(GROUP_SETUP);
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.registry).toEqual([
+      { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+      { name: "other", from: "2.0.0", to: "2.0.1" },
+    ]);
+  });
+
+  test("reads the registry one target at a time", async () => {
+    const { deps, calls } = setup(GROUP_SETUP);
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.registryMaxInFlight).toBe(1);
+  });
+
+  test("does not ask the registry about a group when groups are not allowed", async () => {
+    const { deps, calls } = setup({ ...GROUP_SETUP, allowGroups: false });
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.registry).toEqual([]);
+  });
+
+  test("stops a group with the grouping reason when groups are not allowed", async () => {
+    const result = await collectGateInput(
+      setup({ ...GROUP_SETUP, allowGroups: false }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "more than one package changed: left-pad, other",
+    });
+  });
+
+  test("returns the facts of every target of a group", async () => {
+    const result = await readyResult(GROUP_SETUP);
+
+    expect(result.targets.map((t) => [t.target, t.registry])).toEqual([
+      [
+        { name: "left-pad", to: "1.3.1" },
+        { name: "left-pad", version: "1.3.1", integrity: INTEGRITY_B },
+      ],
+      [
+        { name: "other", to: "2.0.1" },
+        { name: "other", version: "2.0.1", integrity: INTEGRITY_B },
+      ],
+    ]);
+  });
+
+  test("returns the facts for the impact assessment of every package of a group", async () => {
+    const result = await readyResult({
+      ...GROUP_SETUP,
+      registry: async (name, _from, to) =>
+        facts({
+          name,
+          version: to,
+          registryMetadata: `package: ${name}`,
+          missing: name === "other" ? ["after publisher"] : [],
+        }),
+    });
+
+    expect(
+      result.packages.map((p) => [
+        p.name,
+        p.from,
+        p.registryMetadata,
+        p.unverifiedInputs,
+      ]),
+    ).toEqual([
+      ["left-pad", "1.3.0", "package: left-pad", []],
+      ["other", "2.0.0", "package: other", ["registry metadata"]],
+    ]);
+  });
+
+  test("builds a group input that the group gate accepts", async () => {
+    const result = await readyResult(GROUP_SETUP);
+
+    expect(evaluateGateGroup(result.common, result.targets, true)).toEqual({
+      ok: true,
+    });
+  });
+
+  test("reports the heaviest update of a group as the common update", async () => {
+    const after = lockText({ "left-pad": "1.3.1", other: "2.1.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.1.0", integrity: INTEGRITY_B },
+    ]);
+    const result = await readyResult({
+      ...GROUP_SETUP,
+      contents: { "bun.lock": { before: LOCK_BEFORE, after } },
+      changed: [{ filename: "bun.lock" }],
+    });
+
+    expect(result.common.update).toBe("minor");
+  });
+
+  test("stops more packages than the limit", async () => {
+    const { before, after } = bumpedLocks(["a", "b", "c", "d"]);
+
+    const result = await collectGateInput(
+      setup({
+        allowGroups: true,
+        contents: { "bun.lock": { before, after } },
+        changed: [{ filename: "bun.lock" }],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "too many packages changed: 4",
+    });
+  });
+
+  test("waits when the registry is unavailable for the second target of a group", async () => {
+    const result = await collectGateInput(
+      setup({
+        ...GROUP_SETUP,
+        registry: async (name, _from, to) => {
+          if (name === "other") {
+            throw new RegistryUnavailableError("down", new Error("boom"));
+          }
+          return facts({ name, version: to });
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
+  test("needs a human when the registry rejects the second target of a group", async () => {
+    const result = await collectGateInput(
+      setup({
+        ...GROUP_SETUP,
+        registry: async (name, _from, to) => {
+          if (name === "other") throw new RegistryHttpError(404);
+          return facts({ name, version: to });
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("needs_human");
+  });
+
   test("waits when the registry is unavailable", async () => {
     const result = await collectGateInput(
       setup({
@@ -1394,6 +1791,7 @@ function depsWith(
   overrides: {
     run?: GhClient["run"];
     days?: number;
+    group?: boolean;
     fetchImpl?: FetchLike;
     now?: () => number;
   } = {},
@@ -1406,7 +1804,10 @@ function depsWith(
   };
   return buildCollectDeps({
     client,
-    config: { dependabot_min_published_days: overrides.days ?? 7 },
+    config: {
+      dependabot_min_published_days: overrides.days ?? 7,
+      dependabot_group_enabled: overrides.group ?? false,
+    },
     fetchImpl: overrides.fetchImpl ?? neverFetch(),
     now: overrides.now ?? (() => NOW),
   });
@@ -1480,6 +1881,14 @@ describe("buildCollectDeps", () => {
 
   test("passes minPublishedDays from the config", () => {
     expect(depsWith({ days: 11 }).minPublishedDays).toBe(11);
+  });
+
+  test("allows groups when the config enables them", () => {
+    expect(depsWith({ group: true }).allowGroups).toBe(true);
+  });
+
+  test("does not allow groups when the config disables them", () => {
+    expect(depsWith({ group: false }).allowGroups).toBe(false);
   });
 
   test("expects main as the base branch", () => {

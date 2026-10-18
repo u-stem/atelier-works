@@ -1363,6 +1363,24 @@ describe("dependabot settings", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("defaults dependabot_group_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_group_enabled).toBe(false);
+  });
+
+  test("passes through an explicit dependabot_group_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_group_enabled: true,
+    });
+    expect(config.dependabot_group_enabled).toBe(true);
+  });
+
+  test("throws when dependabot_group_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_group_enabled: "true" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("passes through an explicit dependabot_min_published_days", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,

@@ -3,6 +3,7 @@
 // 影響調査のプロンプトに渡す要約、時間設定、通知の理由の語彙を置く。
 // 判定は安全側に倒す。解釈できない入力は、通すのではなく止める。
 
+import type { DependabotPromptInput } from "./dependabot_prompt.ts";
 import {
   DEPENDENCY_FIELDS,
   detail,
@@ -721,11 +722,40 @@ function takeBytes(text: string, maxBytes: number): string {
 }
 
 /**
- * 変更履歴から、影響調査のプロンプトに渡す抜粋を作る。
+ * 変更履歴から、影響調査のプロンプトに渡す抜粋を作り、その抜粋が元の区間を削ったかを返す。
  * 空なら空文字を返す。`maxBytes`以内ならそのまま返す。
  * 超えるときは、`toVersion`を含む見出しの行から、`fromVersion`を含む見出しの手前までを優先する。
  * `toVersion`の見出しが無ければ先頭から切る。`fromVersion`の見出しが無ければ末尾までを対象にする。
  * バイト数で切るときは、UTF-8の文字を割らない。
+ * `truncated`は、抜粋が欲しい区間の全体を含まないとき真になる。
+ * 区間が`maxBytes`に収まるなら、全文を返さなくても偽である。
+ * 更新先の版の見出しが無く先頭から切ったとき、区間を`maxBytes`に収められなかったときは真である。
+ */
+export function excerptChangelog(
+  text: string,
+  fromVersion: string,
+  toVersion: string,
+  maxBytes: number = DEFAULT_CHANGELOG_MAX_BYTES,
+): { text: string; truncated: boolean } {
+  if (text.trim() === "") return { text: "", truncated: false };
+  if (maxBytes < 1) return { text: "", truncated: true };
+  if (new TextEncoder().encode(text).length <= maxBytes) {
+    return { text, truncated: false };
+  }
+  const lines = text.split("\n");
+  const start = findHeading(lines, toVersion, 0);
+  if (start === -1) return { text: takeBytes(text, maxBytes), truncated: true };
+  const end = findHeading(lines, fromVersion, start + 1);
+  const section = lines
+    .slice(start, end === -1 ? lines.length : end)
+    .join("\n");
+  const kept = takeBytes(section, maxBytes);
+  return { text: kept, truncated: kept.length !== section.length };
+}
+
+/**
+ * 変更履歴から、影響調査のプロンプトに渡す抜粋を作る(`excerptChangelog`の本文)。
+ * 抜粋が区間を削ったかを知る必要があるときは、`excerptChangelog`を使う。
  */
 export function buildChangelogExcerpt(
   text: string,
@@ -733,14 +763,62 @@ export function buildChangelogExcerpt(
   toVersion: string,
   maxBytes: number = DEFAULT_CHANGELOG_MAX_BYTES,
 ): string {
-  if (text.trim() === "" || maxBytes < 1) return "";
-  if (new TextEncoder().encode(text).length <= maxBytes) return text;
-  const lines = text.split("\n");
-  const start = findHeading(lines, toVersion, 0);
-  if (start === -1) return takeBytes(text, maxBytes);
-  const end = findHeading(lines, fromVersion, start + 1);
-  const section = lines.slice(start, end === -1 ? lines.length : end);
-  return takeBytes(section.join("\n"), maxBytes);
+  return excerptChangelog(text, fromVersion, toVersion, maxBytes).text;
+}
+
+/**
+ * 無害化した文章か要約が、切り詰められた印で終わっているかを返す。
+ * 印は、`sanitizeUntrustedProse`の切り詰め(`UNTRUSTED_PROSE_TRUNCATION_MARK`)と、
+ * 要約の組み立てが行を落としたときの印である。
+ * 入力の角括弧は無害化でエスケープされ、要約の印は改行を含むので、入力の文面が印を作ることはない。
+ * 呼び出し側は、印のある入力を未確認にする。欠けた部分に懸念が含まれうるため。
+ */
+export function hasTruncationMark(text: string): boolean {
+  return (
+    text.endsWith(UNTRUSTED_PROSE_TRUNCATION_MARK) ||
+    text.endsWith(SUMMARY_TRUNCATION_MARK)
+  );
+}
+
+/**
+ * 影響調査のプロンプトに入れる文字数の上限。
+ * 対象が3つ増えても、モデルの文脈に収まる大きさに保つため。
+ * 無害化は1文字を最大14文字に広げるので、単独の更新でも極端な入力は超えうる。超えたら人に回す。
+ */
+export const MAX_PROMPT_CHARS = 400_000;
+
+/** プロンプトに入る外部由来の文字列の長さの合計。 */
+function promptInputChars(input: DependabotPromptInput): number {
+  const packageChars = input.packages.reduce(
+    (sum, pkg) =>
+      sum +
+      pkg.name.length +
+      pkg.from.length +
+      pkg.to.length +
+      pkg.changelog.length +
+      pkg.registryMetadata.length,
+    0,
+  );
+  return (
+    packageChars +
+    input.prTitle.length +
+    input.prBody.length +
+    input.manifestDiff.length +
+    input.lockfileSummary.length
+  );
+}
+
+/**
+ * 影響調査のプロンプトの入力が、`MAX_PROMPT_CHARS`に収まるかを調べる。
+ * 全パッケージの文字列の合計で比べる。収まらなければ、人に回す理由を返す。
+ */
+export function checkPromptSize(input: DependabotPromptInput): CheckResult {
+  const size = promptInputChars(input);
+  return size <= MAX_PROMPT_CHARS
+    ? OK
+    : stop(
+        `the prompt input is too large: ${String(size)} characters, over ${String(MAX_PROMPT_CHARS)}`,
+      );
 }
 
 /**

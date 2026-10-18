@@ -251,17 +251,24 @@ export const DEPENDENCY_FIELDS: readonly string[] = [
   "peerDependencies",
 ];
 
-/** 依存の表から対象の指定を除き、残りが変わっていないかを比べられる形にする。 */
-function withoutTarget(
+/** 更新される1つのパッケージの名前と、更新後の版。 */
+type Member = { name: string; to: string };
+
+/**
+ * 依存の表から更新対象の指定を除き、残りが変わっていないかを比べられる形にする。
+ * `names`には、対象と、同じPRで同時に更新される対象(coTargets)の名前を渡す。
+ */
+function withoutMembers(
   container: Record<string, unknown>,
-  name: string,
+  names: ReadonlySet<string>,
 ): Record<string, unknown> {
   const copy: Record<string, unknown> = { ...container };
   for (const field of DEPENDENCY_FIELDS) {
     const deps = copy[field];
     if (isRecord(deps)) {
-      const { [name]: _removed, ...rest } = deps;
-      copy[field] = rest;
+      copy[field] = Object.fromEntries(
+        Object.entries(deps).filter(([name]) => !names.has(name)),
+      );
     }
   }
   return copy;
@@ -280,42 +287,46 @@ function specifierPointsAt(specifier: unknown, version: string): boolean {
 function dependencyFieldProblem(
   before: unknown,
   after: unknown,
-  target: { name: string; to: string },
+  members: readonly Member[],
 ): string | null {
   if (!isRecord(before) || !isRecord(after)) {
     return JSON.stringify(before) === JSON.stringify(after)
       ? null
       : "dependency list changed";
   }
-  const hadTarget = Object.hasOwn(before, target.name);
-  if (hadTarget !== Object.hasOwn(after, target.name)) {
-    return "target was added or removed";
+  for (const member of members) {
+    if (
+      Object.hasOwn(before, member.name) !== Object.hasOwn(after, member.name)
+    ) {
+      return "target was added or removed";
+    }
   }
+  const names = new Set(members.map((member) => member.name));
   const rest = (deps: Record<string, unknown>) =>
-    JSON.stringify(
-      Object.entries(deps).filter(([name]) => name !== target.name),
-    );
+    JSON.stringify(Object.entries(deps).filter(([name]) => !names.has(name)));
   if (rest(before) !== rest(after)) return "dependencies changed";
-  if (hadTarget) {
-    const beforeSpec = before[target.name];
-    const afterSpec = after[target.name];
-    if (beforeSpec !== afterSpec && !specifierPointsAt(afterSpec, target.to)) {
-      return `target specifier does not point at ${detail(target.to)}`;
+  for (const member of members) {
+    if (!Object.hasOwn(before, member.name)) continue;
+    const beforeSpec = before[member.name];
+    const afterSpec = after[member.name];
+    if (beforeSpec !== afterSpec && !specifierPointsAt(afterSpec, member.to)) {
+      return `target specifier does not point at ${detail(member.to)}`;
     }
   }
   return null;
 }
 
 /**
- * ロックファイルのworkspacesを比べ、対象の依存の指定以外が変わっていれば理由を返す。
- * 対象の指定は、前と同じ欄にあり、変えるなら新しい版を指していることを求める。
+ * ロックファイルのworkspacesを比べ、更新対象の依存の指定以外が変わっていれば理由を返す。
+ * 更新対象は、`target`と、同じPRで同時に更新される`coTargets`である。
+ * 各対象の指定は、前と同じ欄にあり、変えるなら、その対象の新しい版を指していることを求める。
  * 作業場所のキーは`Object.keys`で比べる。`__proto__`は`JSON.parse`が持ち主のキーとして作るので、
  * 値を組み立て直さずに比べて、足された作業場所を見逃さない。
  */
 function workspacesProblem(
   before: unknown,
   after: unknown,
-  target: { name: string; to: string },
+  members: readonly Member[],
 ): string | null {
   if (!isRecord(before) || !isRecord(after)) {
     return JSON.stringify(before) === JSON.stringify(after)
@@ -342,7 +353,7 @@ function workspacesProblem(
       );
     if (others(b) !== others(a)) return "workspace settings changed";
     for (const field of DEPENDENCY_FIELDS) {
-      const problem = dependencyFieldProblem(b[field], a[field], target);
+      const problem = dependencyFieldProblem(b[field], a[field], members);
       if (problem !== null) return `${field}: ${problem}`;
     }
   }
@@ -382,16 +393,73 @@ function checkTargetEntry(
 }
 
 /**
+ * 変わった1つのエントリを検査する。問題があれば理由を、無ければ`null`を返す。
+ * `isTarget`は、通ったエントリが`target`のものかを示す。
+ * - 前後で名前が違うエントリは、更新前と更新後のどちらの名前が対象に当たっても通さない。
+ *   名前の差し替え(aliasなど)で、検査する対象と違うパッケージの取得物を入れられるため。
+ * - `target`のエントリは、版、更新幅、レジストリ、整合性まで検査する。
+ * - `coTargets`のエントリは、更新後の版がその対象の更新後の版であることだけを求める。
+ *   中身の検査は、その対象を`target`にした評価が、同じ差分に対して行う。
+ */
+function checkChangedEntry(
+  before: unknown,
+  after: unknown,
+  target: Member,
+  coTargets: readonly Member[],
+): { problem: string | null; isTarget: boolean } {
+  const b = entryIdentity(before);
+  const a = entryIdentity(after);
+  if (b === null || a === null) {
+    return { problem: "a package entry is malformed", isTarget: false };
+  }
+  if (a.name !== b.name) {
+    return {
+      problem: "a package other than the target changed",
+      isTarget: false,
+    };
+  }
+  if (a.name === target.name) {
+    return { problem: checkTargetEntry(before, after, target), isTarget: true };
+  }
+  const coTarget = coTargets.find((candidate) => candidate.name === a.name);
+  if (coTarget === undefined) {
+    return {
+      problem: "a package other than the target changed",
+      isTarget: false,
+    };
+  }
+  return {
+    problem:
+      a.version === coTarget.to
+        ? null
+        : `a co-target resolved to ${detail(a.version)}, expected ${detail(coTarget.to)}`,
+    isTarget: false,
+  };
+}
+
+/**
  * dependabotがロックファイルに加えた変更が、対象の版の更新だけかを調べる。
  * 対象以外のパッケージの増減と変更、レジストリの変更、版が変わらない整合性の変更、
  * 対象のpatchとminor以外の更新は、依存の差し替えに使えるので`ok: false`にする。
  * `before`と`after`は、bun.lockのテキストである。解釈できないとき、
  * 重複したキーがあるときは`ok: false`にする。
+ *
+ * `coTargets`は、同じPRで同時に更新される、`target`以外の対象である(グループの更新)。
+ * 空なら、`target`だけの更新を検査する。空でないときも、緩めるのは、
+ * coTargetのエントリを「更新後の版がその対象の版か」だけで通すことに限る。
+ * 緩めても安全なのは、次の前提が崩れないときだけである。前提を変えるときは、この論証を見直す。
+ * - 変わったエントリは、すべて「更新前と更新後の名前が同じで、その名前が対象のちょうど1つ」に当たる。
+ *   名前が変わるエントリ、キーの追加と削除、エントリ以外のキーの変更は、どの評価でも止める。
+ * - coTargetのエントリの中身(版の幅、レジストリ、整合性)は、そのcoTargetを`target`にした評価が、
+ *   単独の更新と同じ強さで検査する。呼び出し側は、全対象についてこの関数を呼ぶ。
+ * - 変わらないエントリは、キーごとの比較で飛ばすので、baseと同じ内容のままである。
+ * - 変更されたすべてのロックファイルで`target`のエントリが変わっていることを、緩めずに求める。
  */
 export function checkLockfileDiff(
   before: string,
   after: string,
   target: { name: string; to: string },
+  coTargets: readonly { name: string; to: string }[] = [],
 ): LockfileVerdict {
   const a = parseJsonObject(before, true);
   const b = parseJsonObject(after, true);
@@ -412,11 +480,10 @@ export function checkLockfileDiff(
   if (otherKeys(a.value) !== otherKeys(b.value)) {
     return { ok: false, reason: "lockfile settings changed" };
   }
-  const workspaces = workspacesProblem(
-    a.value.workspaces,
-    b.value.workspaces,
+  const workspaces = workspacesProblem(a.value.workspaces, b.value.workspaces, [
     target,
-  );
+    ...coTargets,
+  ]);
   if (workspaces !== null) return { ok: false, reason: workspaces };
 
   const keys = new Set([...Object.keys(aPackages), ...Object.keys(bPackages)]);
@@ -431,11 +498,16 @@ export function checkLockfileDiff(
     const beforeEntry = aPackages[key];
     const afterEntry = bPackages[key];
     if (JSON.stringify(beforeEntry) === JSON.stringify(afterEntry)) continue;
-    const problem = checkTargetEntry(beforeEntry, afterEntry, target);
+    const { problem, isTarget } = checkChangedEntry(
+      beforeEntry,
+      afterEntry,
+      target,
+      coTargets,
+    );
     if (problem !== null) {
       return { ok: false, reason: `${detail(key)}: ${problem}` };
     }
-    targetUpdated = true;
+    if (isTarget) targetUpdated = true;
   }
   if (!targetUpdated) {
     return { ok: false, reason: "target was not updated in the lockfile" };
@@ -494,20 +566,31 @@ export type PackageJsonVerdict = { ok: true } | { ok: false; reason: string };
  * 対象の指定の変更だけを許す。scripts、trustedDependencies、overrides、resolutions、
  * patchedDependencies、binを含む、ほかのキーと依存の増減と変更は`ok: false`にする。
  * 解釈できないとき、重複したキーがあるときも`ok: false`にする。
+ *
+ * `coTargets`は、同じPRで同時に更新される、`target`以外の対象である(グループの更新)。
+ * 空なら、`target`だけの更新を検査する。
+ * 更新対象のどの指定も、増減は許さず、変えるなら、その対象の更新後の版を指すことを求める。
+ * 緩めるのは「更新されたこと」の条件だけで、`target`か`coTargets`のどれかの指定が変わっていればよい。
+ * 推移的な依存はマニフェストに現れないので、`target`の指定が無いか変わらないマニフェストも通す。
+ * `target`のエントリがロックファイルで更新されていることは、ロックファイルの検査が、
+ * 変更されたすべてのロックファイルで求める。
  */
 export function checkPackageJsonDiff(
   before: string,
   after: string,
   target: { name: string; to: string },
+  coTargets: readonly { name: string; to: string }[] = [],
 ): PackageJsonVerdict {
   const a = parseJsonObject(before, false);
   const b = parseJsonObject(after, false);
   if (!a.ok) return { ok: false, reason: `before: ${a.reason}` };
   if (!b.ok) return { ok: false, reason: `after: ${b.reason}` };
 
+  const members = [target, ...coTargets];
+  const names = new Set(members.map((member) => member.name));
   if (
-    JSON.stringify(withoutTarget(a.value, target.name)) !==
-    JSON.stringify(withoutTarget(b.value, target.name))
+    JSON.stringify(withoutMembers(a.value, names)) !==
+    JSON.stringify(withoutMembers(b.value, names))
   ) {
     return {
       ok: false,
@@ -515,32 +598,34 @@ export function checkPackageJsonDiff(
     };
   }
 
-  let targetUpdated = false;
+  let updated = false;
   for (const field of DEPENDENCY_FIELDS) {
     const beforeDeps = a.value[field];
     const afterDeps = b.value[field];
     if (!isRecord(beforeDeps) || !isRecord(afterDeps)) continue;
-    const hadBefore = Object.hasOwn(beforeDeps, target.name);
-    const hasAfter = Object.hasOwn(afterDeps, target.name);
-    if (hadBefore !== hasAfter) {
-      return {
-        ok: false,
-        reason: `target was added or removed in ${field}`,
-      };
+    for (const member of members) {
+      const hadBefore = Object.hasOwn(beforeDeps, member.name);
+      const hasAfter = Object.hasOwn(afterDeps, member.name);
+      if (hadBefore !== hasAfter) {
+        return {
+          ok: false,
+          reason: `target was added or removed in ${field}`,
+        };
+      }
+      if (!hadBefore) continue;
+      const beforeSpec = beforeDeps[member.name];
+      const afterSpec = afterDeps[member.name];
+      if (beforeSpec === afterSpec) continue;
+      if (!specifierPointsAt(afterSpec, member.to)) {
+        return {
+          ok: false,
+          reason: `target specifier in ${field} does not point at ${detail(member.to)}`,
+        };
+      }
+      updated = true;
     }
-    if (!hadBefore) continue;
-    const beforeSpec = beforeDeps[target.name];
-    const afterSpec = afterDeps[target.name];
-    if (beforeSpec === afterSpec) continue;
-    if (!specifierPointsAt(afterSpec, target.to)) {
-      return {
-        ok: false,
-        reason: `target specifier in ${field} does not point at ${detail(target.to)}`,
-      };
-    }
-    targetUpdated = true;
   }
-  if (!targetUpdated) {
+  if (!updated) {
     return { ok: false, reason: "target was not updated in package.json" };
   }
   return { ok: true };
@@ -628,6 +713,13 @@ function wait(reason: string): GateResult {
 }
 
 /**
+ * 内部の評価の入力。`GateInput`に、同じPRで同時に更新される他の対象(`coTargets`)を足す。
+ * 外から渡せると、検査を通すべき対象を呼び出し側が選べてしまうので、exportしない。
+ * `evaluateGateGroup`が、同じ共通の事実から、全対象についてこの形を組み立てる。
+ */
+type GateEvaluation = GateInput & { coTargets: readonly Member[] };
+
+/**
  * 変更されたパスのうち、保護パスか許可外のものの理由を返す。無ければ`null`。
  * 許可リストだけで足りるが、保護パスは理由の文言を分けるために先に判定する。
  */
@@ -656,8 +748,8 @@ const MANIFEST_LOCKFILES: readonly { manifest: string; lockfile: string }[] = [
  * マニフェストが変わったときは、同じディレクトリのロックファイルも変わっていることを求める。
  * ロックファイルだけが変わるとき(推移的な依存だけの更新)は、ロックファイルの検査だけで通す。
  */
-function fileProblem(input: GateInput): string | null {
-  const { changedPaths, files, target } = input;
+function fileProblem(input: GateEvaluation): string | null {
+  const { changedPaths, files, target, coTargets } = input;
   for (const path of changedPaths) {
     const matches = files.filter((file) => file.path === path);
     if (matches.length === 0) {
@@ -682,8 +774,8 @@ function fileProblem(input: GateInput): string | null {
       (pair) => pair.manifest === path,
     );
     const verdict = isManifest
-      ? checkPackageJsonDiff(file.before, file.after, target)
-      : checkLockfileDiff(file.before, file.after, target);
+      ? checkPackageJsonDiff(file.before, file.after, target, coTargets)
+      : checkLockfileDiff(file.before, file.after, target, coTargets);
     if (!verdict.ok) {
       return `${detail(path)} diff rejected: ${escapeReasonSeparator(verdict.reason)}`;
     }
@@ -833,6 +925,10 @@ function checkProblem(input: GateInput): GateResult | null {
  * 理由に埋め込むファイルやGitHub由来の文字列は、切り詰めて区切りを除いてある。
  */
 export function evaluateGate(input: GateInput): GateResult {
+  return evaluateWithCoTargets({ ...input, coTargets: [] });
+}
+
+function evaluateWithCoTargets(input: GateEvaluation): GateResult {
   if (input.headRepoFullName !== input.baseRepoFullName) {
     return stop("pull request comes from a fork");
   }
@@ -894,6 +990,104 @@ export function evaluateGate(input: GateInput): GateResult {
     );
   }
   return checks ?? { ok: true };
+}
+
+/**
+ * 1つのPRで同時に更新を認める対象の上限。
+ * 影響調査のプロンプトと、registryの取得の大きさが、対象の数で増えるため。
+ */
+export const MAX_GROUP_TARGETS = 3;
+
+/** 対象に依らない、PRの事実。 */
+export type GateCommon = Omit<
+  GateInput,
+  "target" | "registry" | "installScripts" | "publishedAtIso"
+>;
+
+/** 対象ごとに違う事実。`registry`の名前と版は、`target`に一致することが求められる。 */
+export type GateTargetFacts = Pick<
+  GateInput,
+  "target" | "registry" | "installScripts" | "publishedAtIso"
+>;
+
+const MAX_LISTED_TARGETS = 5;
+
+type NeedsHuman = Extract<GateResult, { kind: "needs_human" }>;
+
+/**
+ * 1つのPRで複数のパッケージが更新されるとき(グループの更新)に、自動でmergeしてよいかを判定する。
+ * 対象ごとに`GateInput`を組み立て、他の対象を`coTargets`にして`evaluateGate`と同じ検査を通す。
+ * 共通の事実は`common`の1つから作るので、対象ごとに食い違う入力は作れない。
+ * 各対象は、その名前を`target`にした評価で、版、更新幅、レジストリ、整合性、
+ * インストール時のスクリプトまで、単独の更新と同じ強さで検査される。
+ *
+ * 対象が空のとき、名前が重複するとき、2つ以上で`allowGroups`が偽のとき、
+ * `MAX_GROUP_TARGETS`を超えるときは止める。
+ * 1つでも止める結論があれば止め、無ければ1つでも待つ結論があれば待つ。全て通れば通す。
+ * 対象が2つ以上のときだけ、理由の先頭に`package <名前>: `を付ける。
+ * `notMergeable`は、止める結論のすべてが、マージできないことだけが理由のときに真にする。
+ */
+export function evaluateGateGroup(
+  common: GateCommon,
+  targets: readonly GateTargetFacts[],
+  allowGroups: boolean,
+): GateResult {
+  if (targets.length === 0) return stop("no target package");
+  const names = targets.map((facts) => facts.target.name);
+  if (new Set(names).size !== names.length) {
+    return stop(
+      `a target package appears more than once: ${detail(names.join(", "))}`,
+    );
+  }
+  if (targets.length >= 2 && !allowGroups) {
+    const listed = names.slice(0, MAX_LISTED_TARGETS).join(", ");
+    return stop(`more than one package changed: ${detail(listed)}`);
+  }
+  if (targets.length > MAX_GROUP_TARGETS) {
+    return stop(`too many packages changed: ${targets.length}`);
+  }
+
+  const stops: { name: string; result: NeedsHuman }[] = [];
+  const waits: { name: string; reason: string }[] = [];
+  for (const [index, facts] of targets.entries()) {
+    const coTargets = targets
+      .filter((_, other) => other !== index)
+      .map((other) => other.target);
+    const result = evaluateWithCoTargets({
+      ...common,
+      // 対象の値が余分な項目を持っても共通の事実を上書きできないよう、1つずつ取り出す
+      target: facts.target,
+      registry: facts.registry,
+      installScripts: facts.installScripts,
+      publishedAtIso: facts.publishedAtIso,
+      coTargets,
+    });
+    if (result.ok) continue;
+    const name = facts.target.name;
+    if (result.kind === "needs_human") stops.push({ name, result });
+    else waits.push({ name, reason: result.reason });
+  }
+
+  const label = (name: string, reason: string) =>
+    targets.length > 1 ? `package ${detail(name)}: ${reason}` : reason;
+  if (stops.length > 0) {
+    return {
+      ok: false,
+      kind: "needs_human",
+      reason: stops
+        .map(({ name, result }) => label(name, result.reason))
+        .join("; "),
+      notMergeable: stops.every(({ result }) => result.notMergeable),
+    };
+  }
+  if (waits.length > 0) {
+    return {
+      ok: false,
+      kind: "wait",
+      reason: waits.map(({ name, reason }) => label(name, reason)).join("; "),
+    };
+  }
+  return { ok: true };
 }
 
 // ---- 影響の評価 ----
