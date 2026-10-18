@@ -5,6 +5,9 @@
 // (Issueはassignee、PRはトリガーラベルの消費。どちらも取り直して確かめる)。
 // 1つのインスタンス内での重複実行は、スケジュールの`no_flow_overlap: true`で防ぐ。
 //
+// トリガーラベル付きのIssueは、設定`gh_source_poll_issues`が`db`で収集が有効なときは収集の表から見つけ、
+// 記録が古い所有者だけ検索に戻す。表の候補は、`getIssue`で開いていることとトリガーラベルを確かめてから使う。
+//
 // 判断(どのIssueを取得・見送るか、進行中の作業項目をどうするか)は
 // `./lib/poll_support.ts`の純粋関数にあり、このファイルは入出力をつなぐだけ。
 // 1件の失敗では例外を投げない(`recordFailureSafe`を参照)。
@@ -31,6 +34,7 @@ import {
   listActive,
   listExpiredPendingApprovalRequests,
   nextCycleForIssue,
+  readGhOwnerOpenIssues,
   recordFailure,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveUnresolvedNoticesByPrefix,
@@ -40,6 +44,10 @@ import {
 } from "./lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import { openFactoryClone } from "./lib/factory_clone.ts";
+import {
+  effectiveGhSource,
+  ghDetailStaleAfterMs,
+} from "./lib/gh_collect_read.ts";
 import {
   ClaimOwnershipUnknownError,
   claimIssue,
@@ -57,7 +65,7 @@ import {
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
-import { issueKey } from "./lib/poll_source.ts";
+import { discoverIssues, issueKey } from "./lib/poll_source.ts";
 import {
   actionableCancelNote,
   type ClosedTargetInfo,
@@ -1357,15 +1365,27 @@ async function expirePendingApprovals(
 
 /**
  * 設定`gh_source_poll_issues`と収集の設定から、この回の読み取り元を決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 設定を戻し忘れても処理が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
  */
 export function resolveIssueSource(
-  _config: Pick<
+  config: Pick<
     FactoryConfig,
     "gh_source_poll_issues" | "gh_collect_enabled" | "gh_collect_detail_enabled"
   >,
-  _log: Logger,
+  log: Logger,
 ): GhSource {
-  return "search";
+  const source = effectiveGhSource(config.gh_source_poll_issues, config);
+  if (config.gh_source_poll_issues === "db" && source === "search") {
+    log.warn(
+      "gh_source_poll_issues is db but the collection is not fully enabled, so the round searches",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return source;
 }
 
 // ---------------------------------------------------------------------------
@@ -1379,6 +1399,11 @@ export async function main(): Promise<{
   actionable_cancelled: number;
   expired: number;
   failed: number;
+  issue_source: GhSource;
+  fallback_searches: number;
+  fallback_reasons: Readonly<Record<string, number>>;
+  table_candidates: number;
+  table_dropped: number;
 }> {
   const log = logger("poll_issues");
   const config = await loadConfig(() =>
@@ -1411,7 +1436,6 @@ export async function main(): Promise<{
     ),
   );
 
-  const rawCandidates: IssueSearchItem[] = [];
   const verified = await filterVerifiedOwners(config.owners, {
     getAccountId: (name) => getAccountId(client, name),
     recordFailure: (step, err) => recordFailureSafe(step, err, log),
@@ -1420,21 +1444,31 @@ export async function main(): Promise<{
   failed += verified.failed;
   // 照合を通ったオーナーだけを対象にする。
   const scope = { ...config, owners: verified.owners };
-  for (const owner of verified.owners) {
-    try {
-      const found = await searchIssues(client, {
-        owner: owner.name,
-        ownerKind: owner.kind,
-        label: config.trigger_label,
-      });
-      rawCandidates.push(...found);
-    } catch (err) {
-      failed += 1;
-      await recordFailureSafe(`search_issues:${owner.name}`, err, log);
-    }
-  }
+  const source = resolveIssueSource(config, log);
+  const discovered = await discoverIssues(
+    {
+      source,
+      owners: verified.owners,
+      scope,
+      triggerLabel: config.trigger_label,
+      staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
+      log,
+    },
+    {
+      searchIssues: (owner) =>
+        searchIssues(client, {
+          owner: owner.name,
+          ownerKind: owner.kind,
+          label: config.trigger_label,
+        }),
+      readOwnerIssues: (owner) => readGhOwnerOpenIssues(owner),
+      getIssue: (owner, repo, number) => getIssue(client, owner, repo, number),
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    },
+  );
+  failed += discovered.failed;
 
-  const allowed = filterByRepoAllowlist(rawCandidates, scope);
+  const allowed = filterByRepoAllowlist(discovered.items, scope);
   const candidates = await buildIssueCandidates(
     client,
     allowed,
@@ -1515,5 +1549,10 @@ export async function main(): Promise<{
     actionable_cancelled: actionable.cancelled,
     expired,
     failed,
+    issue_source: source,
+    fallback_searches: discovered.stats.fallback_searches,
+    fallback_reasons: discovered.stats.fallback_reasons,
+    table_candidates: discovered.stats.table_candidates,
+    table_dropped: discovered.stats.table_dropped,
   };
 }
