@@ -85,7 +85,7 @@ import {
   runPrConflictWatchIfEnabled,
 } from "./lib/pr_conflict_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
-import type { FactoryConfig, WorkItemStatus } from "./lib/types.ts";
+import type { FactoryConfig, GhSource, WorkItemStatus } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 
 /** 起動の依存が呼ぶ読み取り。テストで差し替える。 */
@@ -244,6 +244,21 @@ async function recordFailureSafe(
       error: maskSecrets(String(recordErr)),
     });
   }
+}
+
+/**
+ * 設定`gh_source_pr_conflict_watch`と収集の設定から、この回の読み取り元を決める。
+ */
+export function resolveConflictSource(
+  _config: Pick<
+    FactoryConfig,
+    | "gh_source_pr_conflict_watch"
+    | "gh_collect_enabled"
+    | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): GhSource {
+  return "search";
 }
 
 export async function main(): Promise<PrConflictWatchResult> {
