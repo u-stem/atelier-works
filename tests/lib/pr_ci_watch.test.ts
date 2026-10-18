@@ -6175,6 +6175,394 @@ describe("discovery from the table of a repository scope", () => {
   });
 });
 
+describe("the candidates from the table of the collection", () => {
+  /** 番号の範囲の行が、新しいほど番号が大きい順に更新された表。 */
+  function manyRows(from: number, to: number): GhPullRequest[] {
+    const rows: GhPullRequest[] = [];
+    for (let number = from; number < to; number += 1) {
+      rows.push(ghPrRow(number, { updated_at: minutesBefore(1000 - number) }));
+    }
+    return rows;
+  }
+
+  function manyPrs(from: number, to: number): Record<string, PullRequest> {
+    const prs: Record<string, PullRequest> = {};
+    for (let number = from; number < to; number += 1) {
+      prs[`acme/widgets#${String(number)}`] = humanPr({ number });
+    }
+    return prs;
+  }
+
+  function recorded(from: number, to: number): Record<number, PrCiCheck[]> {
+    const rows: Record<number, PrCiCheck[]> = {};
+    for (let number = from; number < to; number += 1) {
+      rows[number] = [
+        humanRow({ id: number, pr_number: number, state: "failed" }),
+      ];
+    }
+    return rows;
+  }
+
+  function nullAuthor(number: number, minutes: number): GhPullRequest {
+    return ghPrRow(number, {
+      author_login: null,
+      author_type: null,
+      author_id: null,
+      updated_at: minutesBefore(minutes),
+    });
+  }
+
+  test("reads the candidates whose author is known before the ones whose author is unknown", async () => {
+    const h = harness(
+      dbSetup(
+        ownerTable([
+          ghPrRow(40, { updated_at: minutesBefore(60) }),
+          nullAuthor(41, 1),
+          ghPrRow(42, { updated_at: minutesBefore(120) }),
+        ]),
+        {},
+        {
+          prs: {
+            "acme/widgets#40": humanPr({ number: 40 }),
+            "acme/widgets#41": humanPr({ number: 41 }),
+            "acme/widgets#42": humanPr({ number: 42 }),
+          },
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([
+      "acme/widgets#40",
+      "acme/widgets#42",
+      "acme/widgets#41",
+    ]);
+  });
+
+  test("mixes the candidates of the table and the search in the order of the update time", async () => {
+    const newest = NOW.getTime() - 60_000;
+    const h = harness({
+      human: {
+        source: "db",
+        scopes: [ACME_SCOPE, BETA_SCOPE],
+        ownerTables: {
+          acme: ownerTable([ghPrRow(40, { updated_at: minutesBefore(60) })]),
+          beta: ownerTable([], staleRepos()),
+        },
+        found: { alice: [hit(50, "widgets", newest, "beta")] },
+      },
+      prs: {
+        [HUMAN_KEY]: humanPr(),
+        "beta/widgets#50": humanPr({ number: 50 }),
+      },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual(["beta/widgets#50", HUMAN_KEY]);
+  });
+
+  test("applies the read limit to the candidates of the table", async () => {
+    const h = harness(
+      dbSetup(
+        ownerTable(manyRows(100, 170)),
+        {},
+        {
+          prs: manyPrs(100, 170),
+          rowsForPr: recorded(100, 170),
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toHaveLength(HUMAN_PR_READ_LIMIT);
+  });
+
+  test("applies the record limit to the candidates of the table", async () => {
+    const h = harness(
+      dbSetup(ownerTable(manyRows(100, 130)), {}, { prs: manyPrs(100, 130) }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toHaveLength(HUMAN_PR_LIMIT);
+  });
+
+  test("does not read a candidate of a repository that is not allowed now", async () => {
+    const h = harness(
+      dbSetup(
+        ownerTable(
+          [ghPrRow(40), ghPrRow(41, { repo: "secret" })],
+          [ghRepoRow(), ghRepoRow("secret")],
+        ),
+        {},
+        {
+          allowed: (_owner, repo) => repo !== "secret",
+          prs: {
+            [HUMAN_KEY]: humanPr(),
+            "acme/secret#41": humanPr({ number: 41 }),
+          },
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([HUMAN_KEY]);
+  });
+
+  test("leaves a candidate out when a tracked work item points at the pull request in another case", async () => {
+    const h = harness(
+      dbSetup(
+        ownerTable([ghPrRow(40)]),
+        {},
+        {
+          items: [item({ prUrl: "https://github.com/Acme/Widgets/pull/40" })],
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not record a candidate without an author when the author read from GitHub is not allowed", async () => {
+    const h = harness(
+      dbSetup(
+        ownerTable([nullAuthor(40, 60)]),
+        {},
+        {
+          prs: {
+            [HUMAN_KEY]: humanPr({ authorLogin: "mallory", authorId: 5 }),
+          },
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  describe("a candidate whose pull request belongs to another repository", () => {
+    function movedSetup(): Setup {
+      return dbSetup(
+        ownerTable([ghPrRow(40)]),
+        {},
+        {
+          prs: {
+            [HUMAN_KEY]: humanPr({
+              headRepoFullName: "acme/gadgets",
+              baseRepoFullName: "Acme/Gadgets",
+            }),
+          },
+        },
+      );
+    }
+
+    test("is not recorded", async () => {
+      const h = harness(movedSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.recorded).toEqual([]);
+    });
+
+    test("is logged with the repository and the number", async () => {
+      const h = harness(movedSetup());
+      await runPrCiWatch(h.deps);
+      expect(
+        h.logs.find(
+          (line) =>
+            line.message ===
+            "pr ci skipped a table candidate that belongs to another repository",
+        )?.fields,
+      ).toEqual({ repo: "acme/widgets", pr: 40 });
+    });
+
+    test("is not a failure", async () => {
+      const h = harness(movedSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.failures).toEqual([]);
+    });
+
+    test("is not checked when the candidate comes from the search", async () => {
+      const h = harness(
+        humanSetup({
+          human: { found: { alice: [hit(40)] } },
+          prs: {
+            [HUMAN_KEY]: humanPr({
+              headRepoFullName: "acme/gadgets",
+              baseRepoFullName: "acme/gadgets",
+            }),
+          },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.recorded).toHaveLength(1);
+    });
+  });
+
+  describe("a candidate that GitHub says is not found", () => {
+    function missingSetup(): Setup {
+      return dbSetup(
+        ownerTable([ghPrRow(40)]),
+        {},
+        {
+          prs: { [HUMAN_KEY]: deniedError(404) },
+        },
+      );
+    }
+
+    test("does not add the notice of a repository that cannot be read", async () => {
+      const h = harness(missingSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.notices).toEqual([]);
+    });
+
+    test("is logged with the repository and the number", async () => {
+      const h = harness(missingSetup());
+      await runPrCiWatch(h.deps);
+      expect(
+        h.logs.find(
+          (line) =>
+            line.message ===
+            "pr ci skipped a table candidate that could not be read",
+        )?.fields,
+      ).toEqual({ repo: "acme/widgets", pr: 40 });
+    });
+
+    test("is not a failure", async () => {
+      const h = harness(missingSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.failures).toEqual([]);
+    });
+
+    test("goes on to the next candidate", async () => {
+      const h = harness(
+        dbSetup(
+          ownerTable([ghPrRow(40), ghPrRow(41)]),
+          {},
+          {
+            prs: {
+              [HUMAN_KEY]: deniedError(404),
+              "acme/widgets#41": humanPr({ number: 41 }),
+            },
+          },
+        ),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.recorded.map((record) => record.pr_number)).toEqual([41]);
+    });
+
+    test("still adds the notice when the candidate comes from the search", async () => {
+      const h = harness(
+        humanSetup({
+          human: { found: { alice: [hit(40)] } },
+          prs: { [HUMAN_KEY]: deniedError(404) },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.notices.map((notice) => notice.kind)).toEqual([
+        PR_CI_CHECK_DENIED_KIND,
+      ]);
+    });
+
+    test("still treats a 403 of a table candidate as a permission error", async () => {
+      const h = harness(
+        dbSetup(
+          ownerTable([ghPrRow(40)]),
+          {},
+          {
+            prs: { [HUMAN_KEY]: deniedError(403) },
+          },
+        ),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.notices.map((notice) => notice.kind)).toEqual([
+        PR_CI_CHECK_DENIED_KIND,
+      ]);
+    });
+  });
+
+  describe("the number of the candidates of the table", () => {
+    function countOf(result: PrCiWatchResult): number {
+      return result.human_table_candidates;
+    }
+
+    test("counts the candidates whose author is known and leaves out the ones whose author is unknown", async () => {
+      const h = harness(
+        dbSetup(
+          ownerTable([ghPrRow(40), ghPrRow(41), nullAuthor(42, 60)]),
+          {},
+          {
+            prs: {
+              [HUMAN_KEY]: humanPr(),
+              "acme/widgets#41": humanPr({ number: 41 }),
+              "acme/widgets#42": humanPr({ number: 42 }),
+            },
+          },
+        ),
+      );
+      expect(countOf(await runPrCiWatch(h.deps))).toBe(2);
+    });
+
+    test("counts a candidate that a tracked work item points at", async () => {
+      const h = harness(
+        dbSetup(
+          ownerTable([ghPrRow(40)]),
+          {},
+          {
+            items: [item({ prUrl: PR_PAGE.replace("/12", "/40") })],
+          },
+        ),
+      );
+      expect(countOf(await runPrCiWatch(h.deps))).toBe(1);
+    });
+
+    test("counts the candidates before the read limit", async () => {
+      const h = harness(
+        dbSetup(
+          ownerTable(manyRows(100, 170)),
+          {},
+          {
+            prs: manyPrs(100, 170),
+            rowsForPr: recorded(100, 170),
+          },
+        ),
+      );
+      expect(countOf(await runPrCiWatch(h.deps))).toBe(70);
+    });
+
+    test("counts a pull request that two scopes return only once", async () => {
+      const widgetsScope: OpenAuthoredPrsScope = {
+        kind: "repo",
+        owner: "acme",
+        repo: "widgets",
+      };
+      const h = harness(
+        humanSetup({
+          human: {
+            source: "db",
+            scopes: [ACME_SCOPE, widgetsScope],
+            ownerTables: { acme: ownerTable([ghPrRow(40)]) },
+            repoTables: {
+              "acme/widgets": repoTable(
+                {
+                  repo_id: GH_REPO_ID,
+                  allowed: true,
+                  archived: false,
+                  gone: false,
+                  last_collected_at: minutesBefore(5),
+                  truncated: false,
+                  detail_failed: false,
+                },
+                [ghPrRow(40)],
+              ),
+            },
+            found: {},
+          },
+        }),
+      );
+      expect(countOf(await runPrCiWatch(h.deps))).toBe(1);
+    });
+
+    test("does not count a pull request that the search returns", async () => {
+      const h = harness(
+        dbSetup(ownerTable([], staleRepos()), { found: { alice: [hit(40)] } }),
+      );
+      expect(countOf(await runPrCiWatch(h.deps))).toBe(0);
+    });
+  });
+});
+
 describe("the result of the human discovery", () => {
   function humanFields(result: PrCiWatchResult) {
     return {
@@ -6186,7 +6574,7 @@ describe("the result of the human discovery", () => {
     };
   }
 
-  const NO_HUMAN_FIELDS = {
+  const NO_HUMAN_FIELDS: ReturnType<typeof humanFields> = {
     human_source: "search",
     human_fallback_searches: 0,
     human_fallback_reasons: {},
