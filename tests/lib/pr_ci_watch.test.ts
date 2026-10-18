@@ -61,6 +61,7 @@ import {
   NO_CI_RECHECK_INTERVAL_MS,
   PR_CI_CHECK_DENIED_KIND,
   PR_CI_RESOLVED_BY,
+  PR_CI_WATCH_IDLE_RESULT,
   type PrCiClaimDeps,
   type PrCiWatchDeps,
   type PrCiWatchResult,
@@ -73,6 +74,9 @@ import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts"
 import type {
   FactoryOwner,
   GhOwnerOpenPrSnapshot,
+  GhOwnerRepoFreshnessRow,
+  GhPullRequest,
+  GhRepoFreshnessRow,
   GhRepoOpenPrSnapshot,
   GhSource,
   NoticeRecord,
@@ -5698,6 +5702,476 @@ describe("the read of the pull requests by the human discovery", () => {
     });
     await discovery?.getPr("acme", "widgets", 7);
     expect(reads).toEqual([7]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 収集の表から読む人のPRの発見
+// ---------------------------------------------------------------------------
+
+const GH_REPO_ID = 4242;
+
+/** `gh_repos`の行。5分前に取り終えた、使えるリポジトリ。 */
+function ghRepoRow(
+  repo = "widgets",
+  overrides: Partial<GhOwnerRepoFreshnessRow> = {},
+): GhOwnerRepoFreshnessRow {
+  return {
+    repo,
+    repo_id: GH_REPO_ID,
+    allowed: true,
+    archived: false,
+    gone: false,
+    last_collected_at: minutesBefore(5),
+    truncated: false,
+    detail_failed: false,
+    ...overrides,
+  };
+}
+
+/** `gh_pull_requests`の行。許可された作者`alice`が、普通のブランチから開いたPR。 */
+function ghPrRow(
+  number: number,
+  overrides: Partial<GhPullRequest> = {},
+): GhPullRequest {
+  return {
+    id: number,
+    owner: "acme",
+    repo: "widgets",
+    repo_id: GH_REPO_ID,
+    number,
+    state: "open",
+    head_sha: SHA_A,
+    head_ref: "feature/x",
+    base_ref: "main",
+    is_draft: false,
+    is_cross_repository: false,
+    auto_merge_enabled: false,
+    author_login: "alice",
+    author_type: "User",
+    author_id: 11,
+    mergeable: null,
+    has_review_label: false,
+    has_fix_label: false,
+    review_requested_user_ids: [],
+    assignee_ids: [],
+    team_review_requested: false,
+    created_at: minutesBefore(600),
+    updated_at: minutesBefore(60),
+    written_at: minutesBefore(5),
+    usable: true,
+    ...overrides,
+  };
+}
+
+function ownerTable(
+  prs: GhPullRequest[],
+  repos: GhOwnerRepoFreshnessRow[] = [ghRepoRow()],
+): GhOwnerOpenPrSnapshot {
+  return { db_now: NOW, repos, prs };
+}
+
+function repoTable(
+  repo: GhRepoFreshnessRow | null,
+  prs: GhPullRequest[],
+): GhRepoOpenPrSnapshot {
+  return { db_now: NOW, repo, prs };
+}
+
+/** 15分の閾値を超えて古い記録。 */
+function staleRepos(): GhOwnerRepoFreshnessRow[] {
+  return [ghRepoRow("widgets", { last_collected_at: minutesBefore(60) })];
+}
+
+const TOOLS_KEY = "other/tools#300";
+
+/** 別の所有者のリポジトリ`other/tools`の人のPR。 */
+function toolsPr(): PullRequest {
+  return humanPr({
+    number: 300,
+    headRepoFullName: "other/tools",
+    baseRepoFullName: "other/tools",
+  });
+}
+
+const TOOLS_SCOPE: OpenAuthoredPrsScope = {
+  kind: "repo",
+  owner: "other",
+  repo: "tools",
+};
+
+const BETA_SCOPE: OpenAuthoredPrsScope = {
+  kind: "owner",
+  owner: "beta",
+  ownerKind: "user",
+};
+
+const ACME_SCOPE: OpenAuthoredPrsScope = {
+  kind: "owner",
+  owner: "acme",
+  ownerKind: "user",
+};
+
+/** 表のPRだけが見つかる設定。検索の結果は空にする。 */
+function dbSetup(
+  table: GhOwnerOpenPrSnapshot | Error,
+  human: HumanSetup = {},
+  overrides: Setup = {},
+): Setup {
+  return humanSetup({
+    human: {
+      source: "db",
+      ownerTables: { acme: table },
+      found: {},
+      ...human,
+    },
+    ...overrides,
+  });
+}
+
+describe("discovery from the table of the collection", () => {
+  test("does not search a scope whose records are fresh", async () => {
+    const h = harness(dbSetup(ownerTable([ghPrRow(40)])));
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toEqual([]);
+  });
+
+  test("records a pull request that only the table has", async () => {
+    const h = harness(dbSetup(ownerTable([ghPrRow(40)])));
+    await runPrCiWatch(h.deps);
+    expect(h.recorded.map((record) => record.pr_number)).toEqual([40]);
+  });
+
+  test("reads the rows of the owner by its name", async () => {
+    const h = harness(dbSetup(ownerTable([ghPrRow(40)])));
+    await runPrCiWatch(h.deps);
+    expect(h.tableReads).toEqual(["acme"]);
+  });
+
+  test("searches every author of a scope whose records are too old", async () => {
+    const h = harness(dbSetup(ownerTable([ghPrRow(40)], staleRepos())));
+    await runPrCiWatch(h.deps);
+    expect(h.searches.map((search) => search.author)).toEqual([
+      "factory-bot",
+      "alice",
+    ]);
+  });
+
+  test("counts the scope that went back to the search", async () => {
+    const h = harness(dbSetup(ownerTable([], staleRepos())));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_fallback_searches).toBe(1);
+  });
+
+  test("counts the reason why the table could not be used", async () => {
+    const h = harness(dbSetup(ownerTable([], staleRepos())));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_fallback_reasons).toEqual({ too_old: 1 });
+  });
+
+  test("goes back to the search when a repository that the config names has no record", async () => {
+    const h = harness(
+      dbSetup(ownerTable([ghPrRow(40)]), { required: { acme: ["secret"] } }),
+    );
+    const result = await runPrCiWatch(h.deps);
+    expect({
+      searches: h.searches.length,
+      reasons: result.human_fallback_reasons,
+    }).toEqual({ searches: 2, reasons: { no_record: 1 } });
+  });
+
+  test("goes back to the search when a repository that the config names is gone", async () => {
+    const gone = ghRepoRow("secret", {
+      repo_id: null,
+      allowed: false,
+      gone: true,
+      last_collected_at: null,
+    });
+    const h = harness(
+      dbSetup(ownerTable([ghPrRow(40)], [ghRepoRow(), gone]), {
+        required: { acme: ["secret"] },
+      }),
+    );
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_fallback_reasons).toEqual({ unusable: 1 });
+  });
+
+  test("leaves an archived repository that the config does not name out of the judgement", async () => {
+    const archived = ghRepoRow("tools", { archived: true });
+    const h = harness(
+      dbSetup(
+        ownerTable(
+          [ghPrRow(40), ghPrRow(50, { repo: "tools" })],
+          [ghRepoRow(), archived],
+        ),
+        {},
+        {
+          prs: {
+            [HUMAN_KEY]: humanPr(),
+            "acme/tools#50": humanPr({
+              number: 50,
+              headRepoFullName: "acme/tools",
+              baseRepoFullName: "acme/tools",
+            }),
+          },
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([HUMAN_KEY]);
+  });
+
+  test("records the failure to read the owner rows", async () => {
+    const h = harness(dbSetup(new Error("boom")));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["read_gh_owner_prs:acme"]);
+  });
+
+  test("searches a scope whose rows could not be read", async () => {
+    const h = harness(dbSetup(new Error("boom")));
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toHaveLength(2);
+  });
+
+  test("counts a scope whose rows could not be read as read_failed", async () => {
+    const h = harness(dbSetup(new Error("boom")));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_fallback_reasons).toEqual({ read_failed: 1 });
+  });
+
+  test("does not record a failure for records that are too old", async () => {
+    const h = harness(dbSetup(ownerTable([], staleRepos())));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([]);
+  });
+
+  test("treats a rejected author of the search that went back like the search round", async () => {
+    const h = harness(
+      dbSetup(ownerTable([], staleRepos()), {
+        found: {
+          "factory-bot": new GitHubHttpError("Validation Failed", 422),
+          alice: [hit(40)],
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect({ failures: h.failures, recorded: h.recorded.length }).toEqual({
+      failures: [],
+      recorded: 1,
+    });
+  });
+
+  test("stops the remaining searches after the rate limit and goes on to read the tables", async () => {
+    const h = harness({
+      human: {
+        source: "db",
+        scopes: [ACME_SCOPE, BETA_SCOPE],
+        ownerTables: {
+          acme: ownerTable([], staleRepos()),
+          beta: ownerTable([ghPrRow(50, { owner: "beta" })]),
+        },
+        found: { "factory-bot": rateLimitError() },
+      },
+      prs: { "beta/widgets#50": humanPr({ number: 50 }) },
+    });
+    await runPrCiWatch(h.deps);
+    expect({
+      searches: h.searches.length,
+      recorded: h.recorded.map(
+        (record) => `${record.owner}#${String(record.pr_number)}`,
+      ),
+    }).toEqual({ searches: 1, recorded: ["beta#50"] });
+  });
+
+  describe("after the rate limit of the search", () => {
+    function twoStaleScopes(): Setup {
+      return {
+        human: {
+          source: "db",
+          scopes: [ACME_SCOPE, BETA_SCOPE],
+          ownerTables: {
+            acme: ownerTable([], staleRepos()),
+            beta: ownerTable([], staleRepos()),
+          },
+          found: { "factory-bot": rateLimitError() },
+        },
+      };
+    }
+
+    test("counts the scope that the search skipped only under search_rate_limited", async () => {
+      const h = harness(twoStaleScopes());
+      const result = await runPrCiWatch(h.deps);
+      expect(result.human_fallback_reasons).toEqual({
+        too_old: 1,
+        search_rate_limited: 1,
+      });
+    });
+
+    test("does not count the scope that the search skipped as a search", async () => {
+      const h = harness(twoStaleScopes());
+      const result = await runPrCiWatch(h.deps);
+      expect(result.human_fallback_searches).toBe(1);
+    });
+  });
+
+  describe("the time budget", () => {
+    function slowTables(): Setup {
+      return {
+        human: {
+          source: "db",
+          scopes: [ACME_SCOPE, BETA_SCOPE],
+          ownerTables: { acme: ownerTable([]), beta: ownerTable([]) },
+          tableReadTakesMs: HUMAN_DISCOVERY_BUDGET_MS,
+          found: {},
+        },
+      };
+    }
+
+    test("does not start reading the next scope", async () => {
+      const h = harness(slowTables());
+      await runPrCiWatch(h.deps);
+      expect(h.tableReads).toEqual(["acme"]);
+    });
+
+    test("counts the scope that was not read only under out_of_time", async () => {
+      const h = harness(slowTables());
+      const result = await runPrCiWatch(h.deps);
+      expect({
+        reasons: result.human_fallback_reasons,
+        searches: result.human_fallback_searches,
+      }).toEqual({ reasons: { out_of_time: 1 }, searches: 0 });
+    });
+
+    test("does not search the scope that was not read", async () => {
+      const h = harness(slowTables());
+      await runPrCiWatch(h.deps);
+      expect(h.searches).toEqual([]);
+    });
+  });
+
+  test("uses the threshold of the dependency", async () => {
+    const old = [
+      ghRepoRow("widgets", { last_collected_at: minutesBefore(20) }),
+    ];
+    const h = harness(
+      dbSetup(ownerTable([ghPrRow(40)], old), { staleAfterMs: 30 * 60_000 }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toEqual([]);
+  });
+
+  test("does not leave the reasons of one run in the next", async () => {
+    const first = harness(dbSetup(ownerTable([], staleRepos())));
+    await runPrCiWatch(first.deps);
+    const second = harness(humanSetup());
+    const result = await runPrCiWatch(second.deps);
+    expect(result.human_fallback_reasons).toEqual({});
+  });
+
+  test("does not write the reasons into the shared idle result", async () => {
+    const h = harness(dbSetup(ownerTable([], staleRepos())));
+    await runPrCiWatch(h.deps);
+    expect(PR_CI_WATCH_IDLE_RESULT.human_fallback_reasons).toEqual({});
+  });
+
+  test("reports the source of the round", async () => {
+    const h = harness(dbSetup(ownerTable([ghPrRow(40)])));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_source).toBe("db");
+  });
+});
+
+describe("discovery from the table of a repository scope", () => {
+  const FRESH_TOOLS: GhRepoFreshnessRow = {
+    repo_id: 77,
+    allowed: true,
+    archived: false,
+    gone: false,
+    last_collected_at: minutesBefore(5),
+    truncated: false,
+    detail_failed: false,
+  };
+
+  function toolsRow(number = 300): GhPullRequest {
+    return ghPrRow(number, { owner: "other", repo: "tools", repo_id: 77 });
+  }
+
+  function repoSetup(
+    table: GhRepoOpenPrSnapshot | Error,
+    human: HumanSetup = {},
+  ): Setup {
+    return {
+      human: {
+        source: "db",
+        scopes: [TOOLS_SCOPE],
+        repoTables: { "other/tools": table },
+        found: {},
+        ...human,
+      },
+      prs: { [TOOLS_KEY]: toolsPr() },
+    };
+  }
+
+  test("does not search a repository whose records are fresh", async () => {
+    const h = harness(repoSetup(repoTable(FRESH_TOOLS, [toolsRow()])));
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toEqual([]);
+  });
+
+  test("records a pull request from the rows of the repository", async () => {
+    const h = harness(repoSetup(repoTable(FRESH_TOOLS, [toolsRow()])));
+    await runPrCiWatch(h.deps);
+    expect(h.recorded.map((record) => record.pr_number)).toEqual([300]);
+  });
+
+  test("reads the rows of the repository by its name", async () => {
+    const h = harness(repoSetup(repoTable(FRESH_TOOLS, [toolsRow()])));
+    await runPrCiWatch(h.deps);
+    expect(h.tableReads).toEqual(["other/tools"]);
+  });
+
+  test("goes back to the search of the repository when it has no record", async () => {
+    const h = harness(repoSetup(repoTable(null, [])));
+    await runPrCiWatch(h.deps);
+    expect(h.searches.map((search) => search.scope)).toEqual([
+      TOOLS_SCOPE,
+      TOOLS_SCOPE,
+    ]);
+  });
+
+  test("counts the repository that went back to the search", async () => {
+    const h = harness(repoSetup(repoTable(null, [])));
+    const result = await runPrCiWatch(h.deps);
+    expect({
+      searches: result.human_fallback_searches,
+      reasons: result.human_fallback_reasons,
+    }).toEqual({ searches: 1, reasons: { no_record: 1 } });
+  });
+
+  test("records the failure to read the rows of the repository", async () => {
+    const h = harness(repoSetup(new Error("boom")));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["read_gh_repo_prs:other/tools"]);
+  });
+
+  test("searches a repository whose rows could not be read", async () => {
+    const h = harness(repoSetup(new Error("boom")));
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toHaveLength(2);
+  });
+
+  test("goes back to the search when the repository is archived", async () => {
+    const archived = { ...FRESH_TOOLS, archived: true };
+    const h = harness(repoSetup(repoTable(archived, [])));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_fallback_reasons).toEqual({ unusable: 1 });
+  });
+
+  test("goes back to the search when the records of the repository are too old", async () => {
+    const old = { ...FRESH_TOOLS, last_collected_at: minutesBefore(60) };
+    const h = harness(repoSetup(repoTable(old, [])));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_fallback_reasons).toEqual({ too_old: 1 });
   });
 });
 
