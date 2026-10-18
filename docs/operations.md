@@ -1808,22 +1808,28 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、読み
    対象のリポジトリが許可され、archiveされておらず、`gone`でなく、`age`が閾値の内にあることを見る。
    満たさないリポジトリは、`db`にしても毎周回REST一覧に戻る。
 2. 表で見つかるリポジトリの集合を、検索の結果と照らし合わせる。
-   次の条件のPRを持つリポジトリを、表と検索のそれぞれから集める。
-   - PATのアカウントが作った、開いているPRである。
-   - 下書きでなく、forkでなく、Factoryのブランチである。
-   2つの集合を`cmp -s`で比べ、`same`と`different`のどちらになったかだけを見る。
+   表の側は、コードが候補に選ぶ条件と同じ条件で集める。
+   対象は、記録の数値IDが合い、使ってよい開いた行である。
+   リポジトリの記録は、閾値の内にあり、archive済みでも一覧から消えてもいない。
+   PRは、下書きでなく、forkでなく、Factoryのブランチである。
+   作者は、空か、PATのアカウントである。
+   PATのアカウントの数値IDは、`gh api user --jq .id`で読む。
+   閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`で、次のSQLの`interval`に書く。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT DISTINCT repo FROM factory.gh_pull_requests WHERE state = 'open' AND usable AND NOT is_draft AND NOT is_cross_repository AND head_ref LIKE 'factory/issue-%' AND lower(author_login) = lower('<PATのアカウント>') AND owner = '<owner>' ORDER BY repo"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT DISTINCT p.repo FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.state = 'open' AND p.usable AND NOT p.is_draft AND NOT p.is_cross_repository AND p.head_ref ~ '^factory/issue-[1-9][0-9]*-wi-[1-9][0-9]*\$' AND (p.author_login IS NULL OR (lower(p.author_login) = lower('<PATのアカウント>') AND (p.author_id IS NULL OR p.author_id = <PATの数値ID>))) AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY p.repo"
    ```
 
+   検索の側は、検索APIが返すリポジトリを集める。
+
    ```bash
-   gh api -X GET search/issues -f q='is:pr is:open draft:false author:<PATのアカウント> user:<owner>' -f per_page=100 --jq '.items[].repository_url' | sed 's|.*/repos/||' | sort -u
+   gh api -X GET search/issues -f q='is:pr is:open draft:false author:<PATのアカウント> user:<owner>' -f per_page=100 --jq '.items[].repository_url' | sed 's|.*/repos/[^/]*/||' | tr 'A-Z' 'a-z' | sort -u
    ```
 
    検索の範囲は、所有者が組織なら`org:<owner>`にする。
-   検索の出力は、`<owner>/`を除いて小文字にしてから比べる。
-   `different`なら、収集の周回の遅れ(5分以内)か、archive済みのリポジトリで説明できるかを確かめ、数分後に読み直す。
+   2つの出力をファイルに保存し、`cmp -s`で比べて、`same`と`different`のどちらになったかだけを見る。
+   作者が空の行は表の側にだけ入る。差が出たら、作者が空の行の数を先に確かめる。
+   それ以外の差は、収集の周回の遅れ(5分以内)か、archive済みのリポジトリで説明できるかを確かめ、数分後に読み直す。
    `repo_allowlist`が空の構成では、検索が返すリポジトリのうち`gh_repos`に行の無いものの数も数える。1以上なら、`db`にしない。
 3. `gh_source_pr_conflict_watch`を`db`に切り替える。
    書き換えの前に、リソースの値を取得して控えを取る。
