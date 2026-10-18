@@ -1443,6 +1443,14 @@ describe("dependabot settings", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("throws when a dependabot_other_repos entry ends with .git", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      dependabot_other_repos: ["acme/widgets.git"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when a dependabot_other_repos entry has a space", () => {
     const raw = {
       ...LEGACY_RAW_CONFIG,
