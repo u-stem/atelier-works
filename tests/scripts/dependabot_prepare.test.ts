@@ -22,6 +22,7 @@ import {
   DEPENDABOT_INSTALL_TIMEOUT_MS,
   DEPENDABOT_REASON_PREFIX,
   dependabotReason,
+  OTHER_REPO_UNSUPPORTED_REASON,
   POST_INSTALL_STATUS_ARGV,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { UnverifiedInputName } from "../../f/factory/lib/dependabot_prompt.ts";
@@ -389,6 +390,7 @@ const INPUT: DependabotPrepareInput = {
   },
   dependabotEnabled: true,
   groupEnabled: false,
+  repoPolicy: "primary",
   instanceName: "test",
 };
 
@@ -626,6 +628,66 @@ describe("runDependabotPrepare: work item", () => {
   test("does not notify when the feature is off", async () => {
     const { h } = await prepare({}, { ...INPUT, dependabotEnabled: false });
     expect(h.notifications).toEqual([]);
+  });
+});
+
+// ---- 他のリポジトリ ----
+
+const OTHER_INPUT: DependabotPrepareInput = { ...INPUT, repoPolicy: "other" };
+const OTHER_NOTE = dependabotReason("prepare", OTHER_REPO_UNSUPPORTED_REASON);
+
+describe("runDependabotPrepare: another repository", () => {
+  test("hands the work item to a person after the gate passes", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.statusUpdates).toEqual([{ to: "needs_human", note: OTHER_NOTE }]);
+  });
+
+  test("collects before it stops", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.calls).toContain("collect");
+  });
+
+  test("does not clone the repository", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.calls).not.toContain("createWorktree");
+  });
+
+  test("does not run the install", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.calls).not.toContain("install");
+  });
+
+  test("does not check the repository owner", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.calls).not.toContain("ensureRepoOwner");
+  });
+
+  test("does not run any command", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.gitCalls).toEqual([]);
+  });
+
+  test("notifies a person once", async () => {
+    const { h } = await prepare({}, OTHER_INPUT);
+    expect(h.notifications).toHaveLength(1);
+  });
+
+  test("does not proceed to the assessment", async () => {
+    const { result } = await prepare({}, OTHER_INPUT);
+    expect(result.proceed).toBe(false);
+  });
+
+  test("reports the collect reason when the collect stops first", async () => {
+    const { h } = await prepare(
+      { collect: async () => ({ kind: "needs_human", reason: "x" }) },
+      OTHER_INPUT,
+    );
+    expect(h.statusUpdates[0]?.note).toBe(dependabotReason("collect", "x"));
+  });
+
+  test("does not clone a repository that is off", async () => {
+    const { h } = await prepare({}, { ...INPUT, repoPolicy: "off" });
+    expect(h.calls).not.toContain("createWorktree");
   });
 });
 
@@ -1984,6 +2046,8 @@ describe("collectDepsFor", () => {
         config: {
           dependabot_min_published_days: 7,
           dependabot_group_enabled: false,
+          dependabot_other_repos: [],
+          factory_repo: "https://github.com/acme/factory",
         },
         now: () => NOW_MS,
       },
@@ -2001,6 +2065,8 @@ describe("collectDepsFor", () => {
       config: {
         dependabot_min_published_days: 7,
         dependabot_group_enabled: true,
+        dependabot_other_repos: [],
+        factory_repo: "https://github.com/acme/factory",
       },
       now: () => NOW_MS,
     });
@@ -2023,6 +2089,8 @@ function fakeCollectDeps(getPr: CollectDeps["getPr"]): CollectDeps {
     minPublishedDays: 7,
     expectedBaseRef: "main",
     allowGroups: false,
+    repoPolicy: () => "primary",
+    listBranchRules: unused,
   };
 }
 
