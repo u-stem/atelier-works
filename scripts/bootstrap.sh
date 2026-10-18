@@ -844,7 +844,7 @@ fi
 
 # --- 手順13: ローカルのsyncの状態をpushする ------------------------------------
 # 凍結中のスケジュールを上書きしないよう、除外を作るラッパーを通す。
-# ラッパーが`wmill`のinstall scriptを止める環境変数を付けて実行する。
+# ラッパーは、`wmill sync push`にだけinstall scriptを止める環境変数を付けて実行する。
 # 凍結の変数がまだ無い初回は、一覧で無いと確かめたうえで凍結なしとして進む。
 run_in_repo bun ./scripts/freeze.ts push >&2
 log "sync push complete"

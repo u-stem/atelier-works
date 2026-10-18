@@ -155,4 +155,5 @@ mise run freeze:reset
 このラッパーが除外を作って`wmill sync push`を実行する。
 `scripts/bootstrap.sh`の全手順のモード(`mise run bootstrap`)も、同じラッパーを通してpushする。
 凍結の変数がまだ無い初回は、一覧で無いと確かめられたときだけ、凍結なしとして進む。
-変数を読めないとき、壊れているときは、bootstrapもpushの手順で止まる。
+変数を読めないとき、壊れているとき、`wmill.yaml`の除外が欠けているときは、bootstrapもpushの手順で止まる。
+止まった後の回復は「失敗の回復」と同じである。

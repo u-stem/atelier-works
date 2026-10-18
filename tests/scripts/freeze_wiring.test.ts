@@ -81,7 +81,10 @@ describe("tasks that ask a human to confirm", () => {
 describe("scripts/bootstrap.sh full mode", () => {
   async function commandLines(): Promise<string[]> {
     const text = await Bun.file("scripts/bootstrap.sh").text();
-    return text.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    return text
+      .replaceAll("\\\n", " ")
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"));
   }
 
   test("does not call wmill sync push directly", async () => {
