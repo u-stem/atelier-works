@@ -19,6 +19,7 @@ import {
   listRecentGhCollectRuns,
   markGhOwnerRowsUnusable,
   markGhRepoDetailIncomplete,
+  readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
   replaceGhRepoSnapshot,
@@ -1508,6 +1509,150 @@ describe("readGhOwnerOpenPullRequests", () => {
       },
     ]);
     await expect(readGhOwnerOpenPullRequests("acme", sql)).rejects.toThrow();
+  });
+});
+
+describe("readGhOwnerOpenIssues", () => {
+  const read = (
+    rows: SqlRow[] = [
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repos: [OWNER_REPO_ROW],
+        issues: [],
+      },
+    ],
+  ) => createFakeSqlClient([rows]);
+
+  test("reads the repository rows, the open rows and the database time in one statement", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("acme", sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("asks the database for the time in the same statement", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("acme", sql);
+    expect(calls[0]?.text).toContain("now() AS db_now");
+  });
+
+  test("reads only open rows", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("acme", sql);
+    expect(calls[0]?.text).toContain("state = 'open'");
+  });
+
+  test("selects the defined columns of the issue table", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("acme", sql);
+    expect(cteColumns(calls[0]?.text ?? "", "issue", "gh_issues")).toEqual([
+      ...GH_ISSUES_COLUMNS,
+    ]);
+  });
+
+  test("selects the freshness columns and the name of the repository table", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("acme", sql);
+    expect(cteColumns(calls[0]?.text ?? "", "r", "gh_repos")).toEqual([
+      "repo",
+      "repo_id",
+      "allowed",
+      "archived",
+      "gone",
+      "last_collected_at",
+      "truncated",
+      "detail_failed",
+    ]);
+  });
+
+  test("returns empty repositories and rows when the owner has none", async () => {
+    const { sql } = read([
+      { db_now: "2026-10-17T03:05:00+00:00", repos: [], issues: [] },
+    ]);
+    const snapshot = await readGhOwnerOpenIssues("acme", sql);
+    expect([snapshot.repos, snapshot.issues]).toEqual([[], []]);
+  });
+
+  test("parses the database time", async () => {
+    const { sql } = read();
+    const snapshot = await readGhOwnerOpenIssues("acme", sql);
+    expect(snapshot.db_now).toEqual(new Date("2026-10-17T03:05:00.000Z"));
+  });
+
+  test("parses the repository rows with their names", async () => {
+    const { sql } = read();
+    const snapshot = await readGhOwnerOpenIssues("acme", sql);
+    expect(snapshot.repos).toEqual([
+      {
+        repo: "widgets",
+        repo_id: 2002,
+        allowed: true,
+        archived: false,
+        gone: false,
+        last_collected_at: new Date("2026-10-17T03:00:00.000Z"),
+        truncated: false,
+        detail_failed: false,
+      },
+    ]);
+  });
+
+  test("parses an issue row", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repos: [OWNER_REPO_ROW],
+        issues: [ISSUE_ROW],
+      },
+    ]);
+    const snapshot = await readGhOwnerOpenIssues("acme", sql);
+    expect(snapshot.issues.map((row) => row.number)).toEqual([3]);
+  });
+
+  test("lowercases the owner before querying", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("Acme", sql);
+    expect([...new Set(calls[0]?.values)]).toEqual(["acme"]);
+  });
+
+  test("rejects an invalid owner, without querying", async () => {
+    const { sql, calls } = read();
+    await readGhOwnerOpenIssues("a b", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a repository name that is not a GitHub name", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repos: [{ ...OWNER_REPO_ROW, repo: "wid gets" }],
+        issues: [],
+      },
+    ]);
+    await expect(readGhOwnerOpenIssues("acme", sql)).rejects.toThrow();
+  });
+
+  test("rejects an issue row that fails the stored value checks, without echoing it", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repos: [OWNER_REPO_ROW],
+        issues: [{ ...ISSUE_ROW, author_login: "github_pat_SECRET wid gets" }],
+      },
+    ]);
+    const error = await readGhOwnerOpenIssues("acme", sql).catch(
+      (e: unknown) => e,
+    );
+    expect(String(error)).not.toContain("github_pat_SECRET");
+  });
+
+  test("rejects an issue row that is not an object", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repos: [OWNER_REPO_ROW],
+        issues: ["3"],
+      },
+    ]);
+    await expect(readGhOwnerOpenIssues("acme", sql)).rejects.toThrow();
   });
 });
 

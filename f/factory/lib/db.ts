@@ -72,6 +72,7 @@ import {
   type GhCollectRunOutcome,
   type GhCollectStage,
   type GhIssue,
+  type GhOwnerOpenIssueSnapshot,
   type GhOwnerOpenPrSnapshot,
   type GhPullRequest,
   type GhRepo,
@@ -7385,6 +7386,16 @@ export async function readGhOwnerOpenPullRequests(
       toGhPullRequest(toRow(item, "prs")),
     ),
   };
+}
+
+/**
+ * 1人の所有者の`gh_repos`の全行、開いているIssueの全行、DBの`now()`を、1つの文で読む。
+ */
+export async function readGhOwnerOpenIssues(
+  _owner: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhOwnerOpenIssueSnapshot> {
+  return { db_now: new Date(0), repos: [], issues: [] };
 }
 
 /**

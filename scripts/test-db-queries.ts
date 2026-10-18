@@ -84,6 +84,7 @@ import {
   markPrCiNotified,
   markPrConflictNotified,
   type NewWorkerSample,
+  readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
   recordDeployment,
@@ -8094,6 +8095,34 @@ check(
   ghWOtherOwnerSnapshot.repos.length === 0 &&
     ghWOtherOwnerSnapshot.prs.length === 0,
   ghWOtherOwnerSnapshot,
+);
+
+// readGhOwnerOpenIssues: 1つの文で、所有者の全リポジトリの行、開いているIssueの行、DBの時刻を読む。
+const ghWOwnerIssueSnapshot = await readGhOwnerOpenIssues("Qdbghw", sql);
+check(
+  "readGhOwnerOpenIssues: reads every repository row of the owner, only open rows and the database time",
+  ghWOwnerIssueSnapshot.db_now instanceof Date &&
+    ghWOwnerIssueSnapshot.repos.some(
+      (row) => row.repo === "alpha" && row.repo_id === 21,
+    ) &&
+    ghWOwnerIssueSnapshot.repos.some(
+      (row) => row.repo === "beta" && row.repo_id === 22,
+    ) &&
+    ghWOwnerIssueSnapshot.issues.length > 0 &&
+    ghWOwnerIssueSnapshot.issues.every(
+      (row) => row.state === "open" && row.owner === "qdbghw",
+    ),
+  ghWOwnerIssueSnapshot,
+);
+const ghWOtherOwnerIssueSnapshot = await readGhOwnerOpenIssues(
+  "no-such-owner",
+  sql,
+);
+check(
+  "readGhOwnerOpenIssues: an owner without rows has no repositories and no rows",
+  ghWOtherOwnerIssueSnapshot.repos.length === 0 &&
+    ghWOtherOwnerIssueSnapshot.issues.length === 0,
+  ghWOtherOwnerIssueSnapshot,
 );
 
 // markGhOwnerRowsUnusable: 開いている行だけを使用不可にする。
