@@ -713,8 +713,8 @@ describe("the differences that are accepted", () => {
   });
 });
 
-describe("a stale table row does not become a false labeler denial", () => {
-  test("drops a row whose label was removed, so that no labeler is read", async () => {
+describe("a table row whose trigger label was removed", () => {
+  test("yields no item", async () => {
     const { result } = await run({
       snapshots: { acme: freshAcme(3) },
       issues: { "acme/widgets#3": restIssue(3, { labels: [] }) },
