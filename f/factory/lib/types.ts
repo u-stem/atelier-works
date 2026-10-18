@@ -1531,7 +1531,7 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
 export type ReviewPostMode = "comment_only" | "gated";
 
 /**
- * `gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_issues`の値。下流のscriptが候補を列挙する元で、
+ * `gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_issues`、`gh_source_poll_prs`の値。下流のscriptが候補を列挙する元で、
  * `search`は検索API、`db`は収集が書いた表を指す。
  */
 export type GhSource = "search" | "db";
@@ -1777,6 +1777,11 @@ export type FactoryConfig = {
    * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。
    */
   gh_source_poll_issues: GhSource;
+  /**
+   * `poll_prs`がラベル、レビューの依頼、assigneeのPRを見つける元。既定は`search`。
+   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。
+   */
+  gh_source_poll_prs: GhSource;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。
