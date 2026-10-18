@@ -99,6 +99,7 @@ function listWorkTree(root: string): Map<string, boolean> {
  *   作業ツリーの内容のハッシュを`HEAD`のtreeと照合するので、`skip-worktree`や`.gitignore`では隠せない。
  * - `HEAD`が`origin/main`の先端の祖先(同じを含む)である。
  * 確かめられないときは、通さない側に倒す。
+ * 通したときは、検査に使った`HEAD`のshaを返す。検査とは別に解決し直すと、その間に`HEAD`が動きうるため。
  */
 export async function checkCodeOrigin(
   input: CodeOriginInput,
@@ -173,5 +174,5 @@ export async function checkCodeOrigin(
   const ancestor = await run(isAncestorArgs(headSha, tipSha));
   if (ancestor.code === 1) return failure("HEAD is not in origin/main");
   if (ancestor.code !== 0) return failure("git merge-base failed");
-  return { ok: true, head: "" };
+  return { ok: true, head: headSha };
 }

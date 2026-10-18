@@ -65,15 +65,21 @@ export type ApproveGit = PlanGit & {
   ): Promise<DiffPatch>;
 };
 
-/** 標準出力に上限のあるgitの実行。上限を超えたらプロセスを止めて`truncated`にする。 */
+/**
+ * 標準出力に上限のあるgitの実行。上限を超えたらプロセスを止めて`truncated`にする。
+ * 止めたときは終了コードも標準出力も無い。
+ */
 export type LimitedGitRunner = (
   args: string[],
   maxBytes: number,
-) => Promise<{
-  readonly code: number;
-  readonly stdout: string;
-  readonly truncated: boolean;
-}>;
+) => Promise<
+  | {
+      readonly truncated: false;
+      readonly code: number;
+      readonly stdout: string;
+    }
+  | { readonly truncated: true }
+>;
 
 export type PagerIo = {
   print(line: string): void;
