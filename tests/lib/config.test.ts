@@ -1401,6 +1401,56 @@ describe("dependabot settings", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("defaults dependabot_other_repos to an empty list when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_other_repos).toEqual([]);
+  });
+
+  test("passes through an explicit dependabot_other_repos", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_other_repos: ["acme/widgets"],
+    });
+    expect(config.dependabot_other_repos).toEqual(["acme/widgets"]);
+  });
+
+  test("throws when dependabot_other_repos is not an array of strings", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      dependabot_other_repos: "acme/widgets",
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when a dependabot_other_repos entry is a url", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      dependabot_other_repos: ["https://github.com/acme/widgets"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when a dependabot_other_repos entry has no repository part", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_other_repos: ["acme"] };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when a dependabot_other_repos entry has an extra path segment", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      dependabot_other_repos: ["acme/widgets/x"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when a dependabot_other_repos entry has a space", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      dependabot_other_repos: ["acme/wid gets"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("passes through an explicit dependabot_min_published_days", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
