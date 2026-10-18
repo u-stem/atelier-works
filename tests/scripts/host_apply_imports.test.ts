@@ -685,11 +685,102 @@ describe("the value importers of held_lock", () => {
   });
 });
 
-/** コメントを除く。説明文の中の名前を数えず、行末のコメントに隠れた名前も見逃さないため。 */
+/**
+ * コメントを除く。説明文の中の名前を数えず、行末のコメントに隠れた名前も見逃さないため。
+ * 文字列とテンプレートは字句として読み分ける。文字列の中の`//`や`/*`をコメントの始まりと誤認すると、
+ * 後ろの本物のコードを隠せるため。`maskStrings`が真なら、文字列の中身を空にする。
+ * テンプレートの置換の中のコードは、どちらでも残す。
+ * 正規表現リテラルは読み分けない。中に引用符を含む正規表現を書くと、読み違える。
+ */
+function scanCode(source: string, maskStrings: boolean): string {
+  let out = "";
+  let i = 0;
+  const n = source.length;
+
+  const readString = (quote: string): void => {
+    out += quote;
+    i += 1;
+    while (i < n) {
+      const c = source[i] ?? "";
+      if (c === "\\") {
+        if (!maskStrings) out += c + (source[i + 1] ?? "");
+        i += 2;
+      } else if (c === quote) {
+        out += quote;
+        i += 1;
+        return;
+      } else if (c === "\n") {
+        return;
+      } else {
+        if (!maskStrings) out += c;
+        i += 1;
+      }
+    }
+  };
+
+  const readTemplate = (): void => {
+    out += "`";
+    i += 1;
+    while (i < n) {
+      const c = source[i] ?? "";
+      if (c === "\\") {
+        if (!maskStrings) out += c + (source[i + 1] ?? "");
+        i += 2;
+      } else if (c === "`") {
+        out += "`";
+        i += 1;
+        return;
+      } else if (c === "$" && source[i + 1] === "{") {
+        out += INTERP;
+        i += 2;
+        readCode(true);
+        out += "}";
+      } else {
+        if (!maskStrings) out += c;
+        i += 1;
+      }
+    }
+  };
+
+  const readCode = (inInterpolation: boolean): void => {
+    let depth = 0;
+    while (i < n) {
+      const c = source[i] ?? "";
+      const next = source[i + 1];
+      if (c === "/" && next === "/") {
+        while (i < n && source[i] !== "\n") i += 1;
+      } else if (c === "/" && next === "*") {
+        const end = source.indexOf("*/", i + 2);
+        i = end < 0 ? n : end + 2;
+        out += " ";
+      } else if (c === "'" || c === '"') {
+        readString(c);
+      } else if (c === "`") {
+        readTemplate();
+      } else if (inInterpolation && c === "}" && depth === 0) {
+        i += 1;
+        return;
+      } else {
+        if (inInterpolation && c === "{") depth += 1;
+        if (inInterpolation && c === "}") depth -= 1;
+        out += c;
+        i += 1;
+      }
+    }
+  };
+
+  readCode(false);
+  return out;
+}
+
+/** コメントを除く。文字列の中身は残す。 */
 function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|\s)\/\/.*$/gm, "$1");
+  return scanCode(source, false);
+}
+
+/** コメントを除き、文字列の中身も空にする。文字列の外にある字句だけを調べるときに使う。 */
+function codeOutsideStrings(source: string): string {
+  return scanCode(source, true);
 }
 
 /** テンプレートリテラルの置換の開き。例の中に書くと、リンターが文字列の中の書き損じと誤認するため、分けて書く。 */
@@ -716,10 +807,12 @@ const PROCESS_MEMBERS = [
  * `name`はファイル名で、`spawn_runner.ts`と入口だけが許される形がある。
  */
 function lexicalViolations(source: string, name: string): string[] {
+  // 文字列を残した版はimportの指定子を読むために、空にした版は字句の形を調べるために使う。
   const code = stripComments(source);
+  const bare = codeOutsideStrings(source);
   const found: string[] = [];
-  for (const match of code.matchAll(/\bBun\b/g)) {
-    const rest = code.slice((match.index ?? 0) + 3);
+  for (const match of bare.matchAll(/\bBun\b/g)) {
+    const rest = bare.slice((match.index ?? 0) + 3);
     const allowed =
       /^\.(?:YAML|TOML)\b/.test(rest) ||
       (name === RUNNER_NAME && /^\.spawn\s*\(/.test(rest));
@@ -748,11 +841,17 @@ function lexicalViolations(source: string, name: string): string[] {
     ["require(", /\brequire\s*\(/],
     ["import.meta.env", /\bimport\.meta\.env\b/],
     ["bare process", /\bprocess\b(?!\s*\.)/],
+    ["global", /\bglobal\b/],
+    ["self", /\bself\b/],
+    [".constructor", /\.\s*constructor\b/],
+    // 識別子のユニコードエスケープは、字句の検査をすり抜ける名前を作れる。文字列の中の`\u`は数えない。
+    ["\\u outside a string", /\\u/],
   ];
   for (const [label, pattern] of patterns) {
-    if (pattern.test(code)) found.push(label);
+    if (pattern.test(bare)) found.push(label);
   }
-  for (const match of code.matchAll(/\bprocess\s*\.\s*(\w+)/g)) {
+  if (/\[\s*["'`]\s*constructor/.test(code)) found.push('["constructor"]');
+  for (const match of bare.matchAll(/\bprocess\s*\.\s*(\w+)/g)) {
     const member = match[1] ?? "";
     const allowed =
       PROCESS_MEMBERS.includes(member) ||
