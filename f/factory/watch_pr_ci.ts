@@ -61,6 +61,8 @@ import {
   listPrOpenIssueWorkItems,
   listUnnotifiedFailedPrCiChecks,
   markPrCiNotified,
+  readGhOwnerOpenPullRequests,
+  readGhRepoOpenPullRequests,
   recordFailure,
   recordPrCiCheck,
   releaseConfigMisfitHolds,
@@ -73,6 +75,10 @@ import {
   updateStatusIfCurrent,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import {
+  effectiveGhSource,
+  ghDetailStaleAfterMs,
+} from "./lib/gh_collect_read.ts";
 import {
   type GhClient,
   getAccountId,
@@ -105,7 +111,7 @@ import {
   TRACKED_PR_LIMIT,
 } from "./lib/pr_ci_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
-import type { FactoryConfig } from "./lib/types.ts";
+import type { FactoryConfig, GhSource } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import { ciRoundTimeoutMisfit } from "./steps/pr_workflow_support.ts";
 
@@ -239,6 +245,39 @@ async function recordFailureSafe(
   }
 }
 
+/**
+ * 設定`gh_source_pr_ci_watch`と収集の設定から、人のPRの候補を見つける元を決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 設定を戻し忘れても監視が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
+ * 人のPRの発見が無効(`pr_ci_watch_human_prs`が偽)の間は発見を行わないので、警告も出さない。
+ */
+export function resolvePrCiHumanSource(
+  config: Pick<
+    FactoryConfig,
+    | "gh_source_pr_ci_watch"
+    | "gh_collect_enabled"
+    | "gh_collect_detail_enabled"
+    | "pr_ci_watch_human_prs"
+  >,
+  log: Logger,
+): GhSource {
+  const source = effectiveGhSource(config.gh_source_pr_ci_watch, config);
+  if (
+    config.pr_ci_watch_human_prs &&
+    config.gh_source_pr_ci_watch === "db" &&
+    source === "search"
+  ) {
+    log.warn(
+      "gh_source_pr_ci_watch is db but the collection is not fully enabled, so the round searches",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return source;
+}
+
 export async function main(): Promise<PrCiWatchResult> {
   const log = logger("watch_pr_ci");
   const config = await loadConfig(() =>
@@ -284,6 +323,10 @@ export async function main(): Promise<PrCiWatchResult> {
       ? undefined
       : await buildHumanDiscovery({
           config,
+          source: resolvePrCiHumanSource(config, log),
+          staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
+          readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
+          readRepoPrs: (owner, repo) => readGhRepoOpenPullRequests(owner, repo),
           verifiedOwners,
           getViewer: () => getViewer(client),
           getPr: (owner, repo, number) =>

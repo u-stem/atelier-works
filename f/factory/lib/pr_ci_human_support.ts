@@ -7,7 +7,7 @@ import type { PullRequest } from "./github.ts";
 import { isAllowedLabeler, type LabelerPolicy } from "./poll_support.ts";
 import type { PrCiNotifyPolicy } from "./pr_ci_notify.ts";
 import type { PullRequestRef } from "./pr_ci_support.ts";
-import { parseImplementBranchWorkItemId } from "./types.ts";
+import { type GhPullRequest, parseImplementBranchWorkItemId } from "./types.ts";
 
 /** PRを区別する鍵。リポジトリ名は小文字にする。追跡対象のPRの集合の照合に使う。 */
 export function pullRequestKey(ref: PullRequestRef): string {
@@ -77,6 +77,51 @@ export function isHumanPrCandidate(input: {
   }
   if (parseImplementBranchWorkItemId(pr.headRef) !== null) return false;
   return !trackedPrKeys.has(pullRequestKey(ref));
+}
+
+/** 収集の表の行から作る、人のPRの候補。 */
+export type HumanPrCandidate = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+  readonly updatedAtMs: number;
+  /** 作者の分からない行。並びで末尾に回す。 */
+  readonly authorUnknown: boolean;
+};
+
+/**
+ * 表の行から、人のPRの候補を作る。入力は、使ってよい行(鮮度と`usable`を確かめた行)に限る。
+ * 開いていて下書きでない行のうち、次のどちらかを選ぶ。
+ * - 作者の種別が`User`で、ログイン名(大文字小文字を区別しない)が`authors`に入る行。
+ * - 作者が分からない行(ログイン名か種別が空)。候補を広げる側に扱い、RESTの作者で確かめる。
+ * forkとFactoryの形のブランチでは絞らない。検索も絞らず、読み直した値で`isHumanPrCandidate`が除くためである。
+ */
+export function humanPrCandidatesFromRows(
+  rows: readonly GhPullRequest[],
+  authors: readonly string[],
+): HumanPrCandidate[] {
+  const listed = new Set(authors.map((login) => login.toLowerCase()));
+  const candidates: HumanPrCandidate[] = [];
+  for (const row of rows) {
+    if (row.state !== "open" || row.is_draft) continue;
+    const authorUnknown = row.author_login === null || row.author_type === null;
+    if (
+      !authorUnknown &&
+      !(
+        row.author_type === "User" && listed.has(row.author_login.toLowerCase())
+      )
+    ) {
+      continue;
+    }
+    candidates.push({
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      updatedAtMs: row.updated_at.getTime(),
+      authorUnknown,
+    });
+  }
+  return candidates;
 }
 
 /**

@@ -804,6 +804,26 @@ describe("gh_source_poll_prs", () => {
   });
 });
 
+describe("gh_source_pr_ci_watch", () => {
+  test("defaults gh_source_pr_ci_watch to search when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.gh_source_pr_ci_watch).toBe("search");
+  });
+
+  test("accepts gh_source_pr_ci_watch db", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      gh_source_pr_ci_watch: "db",
+    });
+    expect(config.gh_source_pr_ci_watch).toBe("db");
+  });
+
+  test("throws when gh_source_pr_ci_watch is neither search nor db", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, gh_source_pr_ci_watch: "both" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("pr_ci_watch_human_prs", () => {
   test("defaults pr_ci_watch_human_prs to false when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

@@ -10,8 +10,10 @@ import {
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
   judgeGhRepoFreshness,
+  requiredRepos,
   usableGhDetailRows,
   usableGhPullRequests,
+  usableTableRows,
 } from "../../f/factory/lib/gh_collect_read.ts";
 import type {
   GhIssue,
@@ -673,5 +675,101 @@ describe("judgeGhOwnerCoverage with required repositories", () => {
     expect(judgeGhOwnerCoverage("acme", judged, () => true)).toEqual({
       kind: "fresh",
     });
+  });
+});
+
+describe("requiredRepos", () => {
+  const SCOPE = {
+    factory_repo: "https://github.com/Acme/Factory.git",
+    repo_allowlist: [
+      "https://github.com/acme/Widgets",
+      "https://github.com/other/tools",
+    ],
+  };
+
+  test("lists the factory repository and the allowlist entries of the owner in lower case", () => {
+    expect([...requiredRepos(SCOPE, "acme")].sort()).toEqual([
+      "factory",
+      "widgets",
+    ]);
+  });
+
+  test("leaves out the entries of other owners", () => {
+    expect([...requiredRepos(SCOPE, "other")]).toEqual(["tools"]);
+  });
+
+  test("compares the owner without regard to case", () => {
+    expect([...requiredRepos(SCOPE, "ACME")].sort()).toEqual([
+      "factory",
+      "widgets",
+    ]);
+  });
+
+  test("skips an entry that cannot be read", () => {
+    const scope = { ...SCOPE, repo_allowlist: ["not a url"] };
+    expect([...requiredRepos(scope, "acme")]).toEqual(["factory"]);
+  });
+});
+
+describe("usableTableRows", () => {
+  function judgedOf(
+    repos: readonly GhOwnerRepoFreshnessRow[],
+    prs: readonly GhPullRequest[],
+  ) {
+    return judgeGhOwnerRepos("acme", snapshot(repos, prs), STALE_AFTER_MS);
+  }
+
+  test("orders the rows by repository and then by number", () => {
+    const judged = judgedOf(
+      [ownerRepoRow("widgets"), ownerRepoRow("gadgets")],
+      [
+        prRow({ id: 1, repo: "widgets", number: 2 }),
+        prRow({ id: 2, repo: "gadgets", number: 9 }),
+        prRow({ id: 3, repo: "widgets", number: 1 }),
+      ],
+    );
+    expect(
+      usableTableRows("acme", judged, () => true).map(
+        (row) => `${row.repo}#${String(row.number)}`,
+      ),
+    ).toEqual(["gadgets#9", "widgets#1", "widgets#2"]);
+  });
+
+  test("leaves out the rows of a repository that is not allowed now", () => {
+    const judged = judgedOf(
+      [ownerRepoRow("widgets"), ownerRepoRow("secret")],
+      [prRow({ repo: "widgets" }), prRow({ id: 2, repo: "secret" })],
+    );
+    expect(
+      usableTableRows("acme", judged, (_owner, repo) => repo !== "secret").map(
+        (row) => row.repo,
+      ),
+    ).toEqual(["widgets"]);
+  });
+
+  test("leaves out the rows of an archived repository", () => {
+    const judged = judgedOf(
+      [ownerRepoRow("widgets", { archived: true })],
+      [prRow()],
+    );
+    expect(usableTableRows("acme", judged, () => true)).toEqual([]);
+  });
+
+  test("leaves out the rows of a repository that is gone", () => {
+    const judged = judgedOf(
+      [ownerRepoRow("widgets", { gone: true })],
+      [prRow()],
+    );
+    expect(usableTableRows("acme", judged, () => true)).toEqual([]);
+  });
+
+  test("leaves out a row that is not usable", () => {
+    const judged = judgedOf(
+      [ownerRepoRow("widgets")],
+      [prRow({ id: 1, number: 1 }), prRow({ id: 2, number: 2, usable: false })],
+    );
+    expect(
+      usableTableRows("acme", judged, () => true).map((row) => row.number),
+    ).toEqual([1]);
   });
 });

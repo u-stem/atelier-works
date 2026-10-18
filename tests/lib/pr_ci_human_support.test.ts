@@ -3,6 +3,7 @@ import type { PrCiCheck } from "../../f/factory/lib/db.ts";
 import { labelerPolicyFor } from "../../f/factory/lib/poll_support.ts";
 import {
   humanPrAuthors,
+  humanPrCandidatesFromRows,
   isAllowedPrAuthor,
   isHumanPrCandidate,
   notifyPolicyFor,
@@ -12,6 +13,7 @@ import {
   decideDeferredNotice,
   type PrCiNotifyPolicy,
 } from "../../f/factory/lib/pr_ci_notify.ts";
+import type { GhPullRequest } from "../../f/factory/lib/types.ts";
 
 const POLICY = labelerPolicyFor("factory-bot", {
   allowed_labeler_logins: ["Alice", "bob"],
@@ -262,5 +264,110 @@ describe("the notice of a failed human row", () => {
       now: NOW,
     });
     expect(decision).toEqual({ kind: "wait" });
+  });
+});
+
+describe("humanPrCandidatesFromRows", () => {
+  const AUTHORS = ["factory-bot", "alice"];
+
+  function ghRow(overrides: Partial<GhPullRequest> = {}): GhPullRequest {
+    return {
+      id: 1,
+      owner: "acme",
+      repo: "widgets",
+      repo_id: 4242,
+      number: 40,
+      state: "open",
+      head_sha: "a".repeat(40),
+      head_ref: "feature/x",
+      base_ref: "main",
+      is_draft: false,
+      is_cross_repository: false,
+      auto_merge_enabled: false,
+      author_login: "alice",
+      author_type: "User",
+      author_id: 11,
+      mergeable: null,
+      has_review_label: false,
+      has_fix_label: false,
+      review_requested_user_ids: [],
+      assignee_ids: [],
+      team_review_requested: false,
+      created_at: new Date("2026-10-10T00:00:00.000Z"),
+      updated_at: new Date("2026-10-11T00:00:00.000Z"),
+      written_at: new Date("2026-10-11T00:00:00.000Z"),
+      usable: true,
+      ...overrides,
+    };
+  }
+
+  test("does not select a draft row", () => {
+    const rows = [ghRow({ is_draft: true })];
+    expect(humanPrCandidatesFromRows(rows, AUTHORS)).toEqual([]);
+  });
+
+  test("does not select a row that is not open", () => {
+    const rows = [ghRow({ state: "closed" })];
+    expect(humanPrCandidatesFromRows(rows, AUTHORS)).toEqual([]);
+  });
+
+  test("does not select a row whose author is not in the list", () => {
+    const rows = [ghRow({ author_login: "mallory" })];
+    expect(humanPrCandidatesFromRows(rows, AUTHORS)).toEqual([]);
+  });
+
+  test("does not select a row whose author type is Bot", () => {
+    const rows = [ghRow({ author_type: "Bot" })];
+    expect(humanPrCandidatesFromRows(rows, AUTHORS)).toEqual([]);
+  });
+
+  test("selects a row without an author as a candidate whose author is unknown", () => {
+    const rows = [ghRow({ author_login: null, author_type: null })];
+    expect(humanPrCandidatesFromRows(rows, AUTHORS)).toEqual([
+      {
+        owner: "acme",
+        repo: "widgets",
+        number: 40,
+        updatedAtMs: Date.parse("2026-10-11T00:00:00.000Z"),
+        authorUnknown: true,
+      },
+    ]);
+  });
+
+  test("selects a row with a login but without a type as a candidate whose author is unknown", () => {
+    const rows = [ghRow({ author_login: "mallory", author_type: null })];
+    expect(
+      humanPrCandidatesFromRows(rows, AUTHORS).map(
+        (found) => found.authorUnknown,
+      ),
+    ).toEqual([true]);
+  });
+
+  test("compares the login of the author without regard to case", () => {
+    const rows = [ghRow({ author_login: "Alice" })];
+    expect(
+      humanPrCandidatesFromRows(rows, AUTHORS).map(
+        (found) => found.authorUnknown,
+      ),
+    ).toEqual([false]);
+  });
+
+  test("turns the update time of the row into milliseconds", () => {
+    const rows = [ghRow({ updated_at: new Date("2026-10-12T01:02:03.000Z") })];
+    expect(
+      humanPrCandidatesFromRows(rows, AUTHORS).map(
+        (found) => found.updatedAtMs,
+      ),
+    ).toEqual([Date.parse("2026-10-12T01:02:03.000Z")]);
+  });
+
+  test("selects the row of a fork and the row of a factory-shaped branch like the search does", () => {
+    const rows = [
+      ghRow({ number: 41, is_cross_repository: true }),
+      ghRow({ number: 42, head_ref: "factory/issue-7-wi-90" }),
+    ];
+    expect(
+      humanPrCandidatesFromRows(rows, AUTHORS).map((found) => found.number),
+    ).toEqual([41, 42]);
   });
 });
