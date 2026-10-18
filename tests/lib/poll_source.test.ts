@@ -2,11 +2,18 @@
 // 表の候補をRESTで確かめ直すこと、使えない所有者を検索に戻すこと、検索の経路と同じ項目になることを確かめる。
 
 import { describe, expect, test } from "bun:test";
-import type { Issue, IssueSearchItem } from "../../f/factory/lib/github.ts";
+import type {
+  Issue,
+  IssueSearchItem,
+  PrSearchItem,
+  PullRequest,
+  Viewer,
+} from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   classifyPollPrRow,
   confirmTableIssue,
+  confirmTablePr,
   discoverIssues,
   issueKey,
 } from "../../f/factory/lib/poll_source.ts";
@@ -895,5 +902,160 @@ describe("classifyPollPrRow", () => {
         VIEWER_ID,
       ),
     ).toBe("team");
+  });
+});
+
+const REVIEW_LABEL = "factory:review";
+const FIX_LABEL = "factory:fix";
+const PR_LABELS = { reviewLabel: REVIEW_LABEL, fixLabel: FIX_LABEL };
+const VIEWER: Viewer = { login: "Stem-Bot", id: VIEWER_ID };
+
+/** `getPr`の応答。依頼先は誰も無い。 */
+function restPr(
+  number: number,
+  overrides: Partial<PullRequest> = {},
+): PullRequest {
+  return {
+    number,
+    title: `pr title ${String(number)}`,
+    body: "",
+    draft: false,
+    state: "open",
+    merged: false,
+    headSha: "b".repeat(40),
+    headRef: "feature",
+    headRepoFullName: "Acme/Widgets",
+    baseRepoFullName: "Acme/Widgets",
+    baseRepoId: REPO_ID,
+    baseRef: "main",
+    mergeable: null,
+    mergeableState: null,
+    authorLogin: "alice",
+    authorId: 1001,
+    authorType: "User",
+    autoMergeEnabled: false,
+    requestedReviewerIds: [],
+    ...overrides,
+  };
+}
+
+/** PRを`getIssue`で読んだ応答。ラベルとassigneeはここから読む。 */
+function restPrAsIssue(number: number, overrides: Partial<Issue> = {}): Issue {
+  return restIssue(number, {
+    htmlUrl: `https://github.com/Acme/Widgets/pull/${String(number)}`,
+    labels: [],
+    ...overrides,
+  });
+}
+
+describe("confirmTablePr", () => {
+  const row = prRow({ number: 3 });
+  const confirm = (
+    pr: PullRequest,
+    asIssue: Issue,
+  ): ReturnType<typeof confirmTablePr> =>
+    confirmTablePr(row, pr, asIssue, VIEWER, PR_LABELS);
+
+  test("accepts an open pull request with the review label", () => {
+    const check = confirm(
+      restPr(3),
+      restPrAsIssue(3, { labels: [REVIEW_LABEL] }),
+    );
+    expect(check.kind).toBe("ok");
+  });
+
+  test("accepts an open pull request with the fix label", () => {
+    const check = confirm(restPr(3), restPrAsIssue(3, { labels: [FIX_LABEL] }));
+    expect(check.kind).toBe("ok");
+  });
+
+  test("accepts an assignee whose login differs only in case", () => {
+    const check = confirm(
+      restPr(3),
+      restPrAsIssue(3, { assignees: ["stem-bot"] }),
+    );
+    expect(check.kind).toBe("ok");
+  });
+
+  test("accepts a pull request that requests the viewer", () => {
+    const check = confirm(
+      restPr(3, { requestedReviewerIds: [OTHER_ID, VIEWER_ID] }),
+      restPrAsIssue(3),
+    );
+    expect(check.kind).toBe("ok");
+  });
+
+  test("drops a closed pull request", () => {
+    const check = confirm(
+      restPr(3, { state: "closed" }),
+      restPrAsIssue(3, { labels: [REVIEW_LABEL] }),
+    );
+    expect(check).toEqual({ kind: "drop", reason: "closed" });
+  });
+
+  test("drops a pull request that has no label, request or assignee for the viewer", () => {
+    const check = confirm(
+      restPr(3, { requestedReviewerIds: [OTHER_ID] }),
+      restPrAsIssue(3, { assignees: ["someone-else"] }),
+    );
+    expect(check).toEqual({ kind: "drop", reason: "not_target" });
+  });
+
+  test("cannot decide when the reviewers are unreadable and nothing else matches", () => {
+    const check = confirm(
+      restPr(3, { requestedReviewerIds: null }),
+      restPrAsIssue(3),
+    );
+    expect(check).toEqual({ kind: "unknown_reviewers" });
+  });
+
+  test("accepts by the label even when the reviewers are unreadable", () => {
+    const check = confirm(
+      restPr(3, { requestedReviewerIds: null }),
+      restPrAsIssue(3, { labels: [REVIEW_LABEL] }),
+    );
+    expect(check.kind).toBe("ok");
+  });
+
+  test("reports a mismatch when the repository differs from the row in lowercase", () => {
+    const check = confirm(
+      restPr(3),
+      restPrAsIssue(3, {
+        labels: [REVIEW_LABEL],
+        repository: { owner: "Acme", repo: "Gadgets" },
+      }),
+    );
+    expect(check).toEqual({ kind: "mismatch" });
+  });
+
+  test("reports a mismatch when the repository is unknown", () => {
+    const check = confirm(
+      restPr(3),
+      restPrAsIssue(3, { labels: [REVIEW_LABEL], repository: null }),
+    );
+    expect(check).toEqual({ kind: "mismatch" });
+  });
+
+  test("reports a mismatch when the number differs from the row", () => {
+    const check = confirm(
+      restPr(4),
+      restPrAsIssue(4, { labels: [REVIEW_LABEL] }),
+    );
+    expect(check).toEqual({ kind: "mismatch" });
+  });
+
+  test("builds the item with the spelling of GitHub and the title of the pull request", () => {
+    const check = confirm(
+      restPr(3),
+      restPrAsIssue(3, { labels: [REVIEW_LABEL] }),
+    );
+    const expected: PrSearchItem = {
+      owner: "Acme",
+      repo: "Widgets",
+      number: 3,
+      title: "pr title 3",
+      htmlUrl: "https://github.com/Acme/Widgets/pull/3",
+    };
+    expect(check).toEqual({ kind: "ok", item: expected });
   });
 });

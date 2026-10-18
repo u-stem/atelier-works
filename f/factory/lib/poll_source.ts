@@ -7,7 +7,13 @@ import {
   judgeGhOwnerCoverage,
   judgeGhOwnerIssueRepos,
 } from "./gh_collect_read.ts";
-import type { Issue, IssueSearchItem } from "./github.ts";
+import type {
+  Issue,
+  IssueSearchItem,
+  PrSearchItem,
+  PullRequest,
+  Viewer,
+} from "./github.ts";
 import type { Logger } from "./log.ts";
 import {
   type FactoryConfig,
@@ -294,4 +300,21 @@ export function classifyPollPrRow(
     return "maybe";
   }
   return "none";
+}
+
+export type TablePrCheck =
+  | { readonly kind: "ok"; readonly item: PrSearchItem }
+  | { readonly kind: "drop"; readonly reason: "closed" | "not_target" }
+  | { readonly kind: "mismatch" }
+  | { readonly kind: "unknown_reviewers" };
+
+/** 表の候補を、RESTの応答で確かめる。 */
+export function confirmTablePr(
+  _row: GhPullRequest,
+  _pr: PullRequest,
+  _asIssue: Issue,
+  _viewer: Viewer,
+  _labels: { readonly reviewLabel: string; readonly fixLabel: string },
+): TablePrCheck {
+  return { kind: "drop", reason: "not_target" };
 }
