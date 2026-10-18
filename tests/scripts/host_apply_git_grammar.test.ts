@@ -19,6 +19,7 @@ import {
   showRefArgs,
 } from "../../scripts/host_apply/git.ts";
 import {
+  ALLOWED_GIT_FLAGS,
   checkFetchForm,
   checkGitReadArgs,
   checkGitReadEnv,
@@ -33,6 +34,28 @@ const P = [...GIT_FIXED_PREFIX];
 function read(...rest: string[]): string[] {
   return [...P, ...rest];
 }
+
+describe("the reference lists of the grammar", () => {
+  test("REMOTE_URL_ARGS is frozen", () => {
+    expect(Object.isFrozen(REMOTE_URL_ARGS)).toBe(true);
+  });
+
+  test("the table of flags is frozen", () => {
+    expect(Object.isFrozen(ALLOWED_GIT_FLAGS)).toBe(true);
+  });
+
+  test("every list of flags is frozen", () => {
+    expect(
+      Object.entries(ALLOWED_GIT_FLAGS)
+        .filter(([, flags]) => !Object.isFrozen(flags))
+        .map(([name]) => name),
+    ).toEqual([]);
+  });
+
+  test("the prefix that the grammar compares with is frozen", () => {
+    expect(Object.isFrozen(GIT_FIXED_PREFIX)).toBe(true);
+  });
+});
 
 describe("the git builders of git.ts", () => {
   test.each([

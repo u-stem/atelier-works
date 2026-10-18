@@ -31,7 +31,7 @@ export const REMOTE_URL_ARGS: readonly string[] = [
 ];
 
 /** サブコマンドごとの、許すフラグ。ここに無いフラグは通さない。 */
-const ALLOWED_FLAGS: Readonly<Record<string, readonly string[]>> = {
+export const ALLOWED_GIT_FLAGS: Readonly<Record<string, readonly string[]>> = {
   show: [],
   diff: [
     "--name-status",
@@ -107,7 +107,7 @@ function checkFlags(
   subcommand: string,
   flags: readonly string[],
 ): string | null {
-  const allowed = ALLOWED_FLAGS[subcommand] ?? [];
+  const allowed = ALLOWED_GIT_FLAGS[subcommand] ?? [];
   const seen = new Set<string>();
   for (const flag of flags) {
     if (!allowed.includes(flag)) return `flag is not allowed: ${flag}`;

@@ -101,6 +101,8 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<CommandKind, number>> = {
 /** 外部コマンドの標準エラーで、末尾から残す大きさ(バイト)。超えた先頭は捨てる。 */
 export const STDERR_LIMIT_BYTES = 64 * 1024;
 
+export const MAX_PROCESS_ID = 0;
+
 /** コミットから読むファイルの大きさの上限(バイト)。 */
 export const MAX_BLOB_BYTES = 256 * 1024;
 

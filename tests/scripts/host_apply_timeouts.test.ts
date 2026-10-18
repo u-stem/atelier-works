@@ -10,6 +10,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_STALE_MS,
   MAX_BLOB_BYTES,
+  MAX_PROCESS_ID,
   NOTIFY_INTERVAL_MS,
   RUN_TIMEOUT_MS,
   STALE_CI_MS,
@@ -125,6 +126,10 @@ describe("thresholds", () => {
 describe("limits on what the executor reads", () => {
   test("caps a file read from a commit at 256 KiB", () => {
     expect(MAX_BLOB_BYTES).toBe(256 * 1024);
+  });
+
+  test("accepts process ids up to 2 to the 22nd power", () => {
+    expect(MAX_PROCESS_ID).toBe(4_194_304);
   });
 
   test("keeps at most 64 KiB of the standard error of a command", () => {
