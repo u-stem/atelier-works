@@ -239,19 +239,16 @@ describe("ports", () => {
 });
 
 describe("paths that leave the checkout", () => {
-  test("accepts env_file inside the checkout", () => {
-    expect(verdict(one({ env_file: ["./app.env"] }))).toBe("ok");
+  test("rejects an env_file given as a string", () => {
+    expect(verdict(one({ env_file: "./app.env" }))).toBe("compose_forbidden");
   });
 
-  test.each(["../../etc/passwd", "/etc/passwd", "~/secret.env", "../.."])(
-    "rejects env_file %s",
-    (path) => {
-      expect(verdict(one({ env_file: [path] }))).toBe("compose_forbidden");
-    },
-  );
+  test("rejects an env_file given as a list", () => {
+    expect(verdict(one({ env_file: ["./app.env"] }))).toBe("compose_forbidden");
+  });
 
-  test("rejects an env_file object that leaves the checkout", () => {
-    expect(verdict(one({ env_file: [{ path: "/etc/x" }] }))).toBe(
+  test("rejects an env_file given as an object", () => {
+    expect(verdict(one({ env_file: [{ path: "./app.env" }] }))).toBe(
       "compose_forbidden",
     );
   });
@@ -770,7 +767,6 @@ describe("variables the executor does not know", () => {
         ],
       },
     ],
-    ["an env_file", { env_file: ["${HOME-.}/x.env"] }],
     ["a build context", { build: { context: "${HOME:-.}" } }],
     [
       "a dockerfile",
@@ -858,7 +854,6 @@ describe("security_opt allowlist", () => {
 
 describe("absolute paths in file references", () => {
   test.each([
-    ["an env_file", { env_file: ["/stage/infra/app.env"] }],
     ["a build context", { build: { context: "/stage/infra/worker" } }],
     [
       "a dockerfile",
@@ -896,16 +891,6 @@ describe("absolute paths in file references", () => {
         one({ configs: ["c"] }, { configs: { c: { file: "/stage/infra/c" } } }),
       ),
     ).toBe("compose_forbidden");
-  });
-
-  test("rejects an env_file object with an absolute path", () => {
-    expect(verdict(one({ env_file: [{ path: "/stage/infra/app.env" }] }))).toBe(
-      "compose_forbidden",
-    );
-  });
-
-  test("still accepts a relative env_file", () => {
-    expect(verdict(one({ env_file: ["./app.env"] }))).toBe("ok");
   });
 });
 
@@ -1056,5 +1041,156 @@ describe("input shape", () => {
 
   test("rejects a document without services", () => {
     expect(verdict({ volumes: {} })).toBe("compose_forbidden");
+  });
+});
+
+describe("files that hold the secrets of the host", () => {
+  test("rejects a bind of mise.local.toml", () => {
+    expect(verdict(one({ volumes: ["../mise.local.toml:/x:ro"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects a bind of MISE.LOCAL.TOML in capital letters", () => {
+    expect(verdict(one({ volumes: ["../MISE.LOCAL.TOML:/x:ro"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects a bind of a file with a .local.toml suffix", () => {
+    expect(verdict(one({ volumes: ["./x.LOCAL.TOML:/x:ro"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects a long bind of mise.local.toml", () => {
+    expect(
+      verdict(
+        one({
+          volumes: [
+            {
+              type: "bind",
+              source: "../Mise.Local.toml",
+              target: "/x",
+              read_only: true,
+            },
+          ],
+        }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a secret file of mise.local.toml", () => {
+    expect(
+      verdict(
+        one(
+          { secrets: ["s"] },
+          { secrets: { s: { file: "../Mise.Local.toml" } } },
+        ),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a config file of mise.local.toml", () => {
+    expect(
+      verdict(
+        one(
+          { configs: ["c"] },
+          { configs: { c: { file: "../mise.local.toml" } } },
+        ),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a build context of mise.local.toml", () => {
+    expect(verdict(one({ build: { context: "../mise.local.toml" } }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects an additional context of mise.local.toml", () => {
+    expect(
+      verdict(
+        one({
+          build: {
+            context: "./worker",
+            additional_contexts: { x: "../mise.local.toml" },
+          },
+        }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a path element that is not ASCII", () => {
+    expect(verdict(one({ volumes: ["./ｍise.local.toml:/x:ro"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("accepts a bind of a file that only looks similar", () => {
+    expect(verdict(one({ volumes: ["./mise.toml:/x:ro"] }))).toBe("ok");
+  });
+});
+
+describe("the raw text of the compose file", () => {
+  const BASE = "services:\n  db:\n    image: postgres:18\n";
+
+  test("accepts a plain text", () => {
+    expect(textVerdict(BASE)).toBe("ok");
+  });
+
+  test("rejects a tag after a quoted key in a flow map", () => {
+    expect(
+      textVerdict(`${BASE}    labels: {"x":!!binary JHtEQl9QQVNTV09SRH0=}\n`),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a reset tag", () => {
+    expect(textVerdict(`${BASE}    command: !reset []\n`)).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects a tag in a comment", () => {
+    expect(textVerdict(`# !!binary\n${BASE}`)).toBe("compose_forbidden");
+  });
+
+  test("rejects a merge key", () => {
+    expect(
+      textVerdict(`x-a: &a {k: 1}\n${BASE}    labels:\n      <<: *a\n`),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a merge key in a comment", () => {
+    expect(textVerdict(`# <<\n${BASE}`)).toBe("compose_forbidden");
+  });
+
+  test("rejects a carriage return", () => {
+    expect(textVerdict(BASE.replace("\n", "\r"))).toBe("compose_forbidden");
+  });
+
+  test("rejects a carriage return that hides a tag behind a comment", () => {
+    expect(
+      textVerdict(`${BASE}    labels:\n      # c\r      a: !!binary x\n`),
+    ).toBe("compose_forbidden");
+  });
+
+  test.each(["\u0085", " ", " "])("rejects the line break %j", (mark) => {
+    expect(textVerdict(`${BASE}# a${mark}b\n`)).toBe("compose_forbidden");
+  });
+
+  test("the real compose file has none of the rejected forms", () => {
+    expect(
+      textVerdict(
+        readFileSync(join(REPO_ROOT, "infra/docker-compose.yml"), "utf8"),
+        {
+          root: "/stage",
+          composeDir: "/stage/infra",
+          env:
+            readMiseEnv(readFileSync(join(REPO_ROOT, "mise.toml"), "utf8")) ??
+            {},
+        },
+      ),
+    ).toBe("ok");
   });
 });

@@ -35,6 +35,7 @@ import {
 } from "../../scripts/host_apply/git.ts";
 import {
   buildPlan,
+  checkTargetStatic,
   type PlanGit,
   type PlanResult,
   parsePlanArgs,
@@ -623,6 +624,177 @@ describe("buildPlan: paths that can name one file in two ways", () => {
     expect(
       plan.decision === "rejected" ? /^[\x20-\x7e]*$/.test(plan.detail) : false,
     ).toBe(true);
+  });
+});
+
+describe("buildPlan: .env files in the tree", () => {
+  async function rejectedFor(paths: string[]): Promise<PlanResult> {
+    const files: Record<string, string> = {};
+    for (const path of paths) files[path] = "x";
+    return planOf(chainOf(files), { applied: A, target: B });
+  }
+
+  test.each([
+    "infra/.env",
+    "infra/.env.local",
+    "infra/sub/.ENV",
+    ".env",
+    "docs/.env",
+    "docs/.Env.production",
+  ])("rejects the .env file %s", async (path) => {
+    expect(await rejectedFor([path])).toMatchObject({
+      decision: "rejected",
+      kind: "tree_forbidden",
+    });
+  });
+
+  test.each(["infra/environment.md", "infra/.envrc", "docs/env.md"])(
+    "accepts the file %s that only looks similar",
+    async (path) => {
+      expect((await rejectedFor([path])).decision).toBe("would_converge");
+    },
+  );
+});
+
+describe("checkTargetStatic", () => {
+  const input = { target: B, root: "/staging" };
+
+  test("rejects a tree with a symlink", async () => {
+    const commits = chainOf({ "docs/link": "x" });
+    const commit = commits[B];
+    if (commit !== undefined) commit.modes = { "docs/link": "120000" };
+    expect(await checkTargetStatic(fakeGit(commits).git, input)).toMatchObject({
+      ok: false,
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("rejects a target without mise.toml", async () => {
+    const commits = chainOf({});
+    const commit = commits[B];
+    if (commit !== undefined) delete commit.files["mise.toml"];
+    expect(await checkTargetStatic(fakeGit(commits).git, input)).toMatchObject({
+      ok: false,
+      kind: "mise_forbidden",
+    });
+  });
+
+  test("rejects a compose file that is not valid", async () => {
+    const { git } = fakeGit(chainOf({ "infra/docker-compose.yml": "a: [" }));
+    expect(await checkTargetStatic(git, input)).toMatchObject({
+      ok: false,
+      kind: "compose_forbidden",
+    });
+  });
+
+  test("passes the current files", async () => {
+    const { git } = fakeGit(chainOf({}));
+    expect((await checkTargetStatic(git, input)).ok).toBe(true);
+  });
+
+  test("finds no violation in the current compose file", async () => {
+    const { git } = fakeGit(chainOf({}));
+    expect(await checkTargetStatic(git, input)).toEqual({
+      ok: true,
+      violations: [],
+    });
+  });
+
+  test("checks the tree before the mise file", async () => {
+    const commits = chainOf({ "docs/Foo": "x", "docs/foo": "x" });
+    const commit = commits[B];
+    if (commit !== undefined) delete commit.files["mise.toml"];
+    expect(await checkTargetStatic(fakeGit(commits).git, input)).toMatchObject({
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("accepts a sha that is not related to the applied sha", async () => {
+    const commits = chainOf({});
+    commits[D] = { parent: null, files: { ...BASE_FILES } };
+    const { git } = fakeGit(commits);
+    expect((await checkTargetStatic(git, { target: D, root: "/s" })).ok).toBe(
+      true,
+    );
+  });
+
+  test("reports a violation for an image outside the table", async () => {
+    const { git } = fakeGit(
+      chainOf({
+        "infra/docker-compose.yml": COMPOSE.replace(
+          "image: postgres:18",
+          "image: docker.io/library/postgres:18",
+        ),
+      }),
+    );
+    const result = await checkTargetStatic(git, input);
+    expect(result.ok ? result.violations.length : -1).toBe(1);
+  });
+
+  test("does not change the plan for a violation", async () => {
+    const plan = await planOf(
+      chainOf({
+        "infra/docker-compose.yml": COMPOSE.replace(
+          "image: postgres:18",
+          "image: docker.io/library/postgres:18",
+        ),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan.decision).toBe("would_converge");
+  });
+
+  test("rejects a secret of the host in a label", async () => {
+    const plan = await planOf(
+      chainOf({
+        "infra/docker-compose.yml": COMPOSE.replace(
+          "  caddy:\n",
+          "  caddy:\n    labels:\n      x: ${GITHUB_TOKEN}\n",
+        ),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({ kind: "compose_forbidden" });
+  });
+
+  test("rejects a hidden tag through buildPlan", async () => {
+    const plan = await planOf(
+      chainOf({
+        "infra/docker-compose.yml": `${COMPOSE}\nx-a: {"k":!!binary YQ==}\n`,
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({ kind: "compose_forbidden" });
+  });
+
+  test("rejects an env_file through buildPlan", async () => {
+    const plan = await planOf(
+      chainOf({
+        "infra/docker-compose.yml": COMPOSE.replace(
+          "  caddy:\n",
+          "  caddy:\n    env_file: ./x.env\n",
+        ),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({ kind: "compose_forbidden" });
+  });
+
+  test("does not read mise.toml when a script change waits for approval", async () => {
+    const reads: string[] = [];
+    const { git } = fakeGit(chainOf({ "scripts/doctor.sh": "#!/bin/sh\nx\n" }));
+    const readBlob = git.readBlob.bind(git);
+    git.readBlob = async (sha, path) => {
+      reads.push(path);
+      return readBlob(sha, path);
+    };
+    await buildPlan(git, {
+      applied: A,
+      target: B,
+      approved: null,
+      root: "/staging",
+    });
+    expect(reads).not.toContain("mise.toml");
   });
 });
 
