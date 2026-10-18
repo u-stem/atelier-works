@@ -228,7 +228,14 @@ describe("fetchOrigin when the url does not match", () => {
   });
 
   test("reports a mismatch when the output was cut", async () => {
-    const s = scripted({ ...done(`${URL}\n`), stdoutDropped: true });
+    const s = scripted({
+      kind: "done",
+      code: 0,
+      stdout: `${URL}\n`,
+      stderr: "",
+      stdoutDropped: true,
+      stderrDropped: false,
+    });
     expect(await fetchOrigin(s.run, input())).toEqual({
       kind: "url_mismatch",
     });
