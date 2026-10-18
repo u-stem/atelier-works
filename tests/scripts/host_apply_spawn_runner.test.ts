@@ -818,6 +818,10 @@ describe("real processes", () => {
     },
   );
 
+  test("the default killGroup accepts a process group that does not exist", () => {
+    expect(() => defaultKillGroup(2147483647)).not.toThrow();
+  });
+
   test("the child sees only the environment of the specification", async () => {
     const spec = issueSpecUnchecked({
       kind: "git_read",

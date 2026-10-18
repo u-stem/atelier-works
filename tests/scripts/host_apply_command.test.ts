@@ -166,6 +166,28 @@ describe("a kind named like a property of Object", () => {
   });
 });
 
+describe("a kind that is not a string", () => {
+  // 型の上は種類の名前しか受けないので、実行時の入力を模して合成する。
+  function withKind(kind: unknown): CommandSpecInput {
+    return Object.assign({}, shape(), { kind });
+  }
+
+  test.each([
+    ["an array of a creatable kind", ["git_read"]],
+    ["a number", 1],
+    ["null", null],
+    ["an object", { toString: () => "git_read" }],
+  ])("%s is refused by issueSpec", (_name, kind) => {
+    expect(() => issueSpec(withKind(kind))).toThrow("kind must be a string");
+  });
+
+  test("an array of a creatable kind is refused by issueSpecUnchecked", () => {
+    expect(() => issueSpecUnchecked(withKind(["git_read"]))).toThrow(
+      "kind must be a string",
+    );
+  });
+});
+
 describe("the output limits", () => {
   test.each([
     ["git_read", 64 * 1024 * 1024, "kill"],
