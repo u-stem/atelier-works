@@ -3,7 +3,8 @@
  * `plan`は、引数の`--repo`のリポジトリから、gitのオブジェクトを読み取り、判定をJSONで出力する。
  * `approve`は、人が端末で`origin/main`のコミットを承認し、承認の記録を書く。
  * どちらも、作業ツリーの変更と取得(fetch)の経路を持たない。子プロセスは読み取りのgitだけで、実行口を通す。
- * このファイルと`scripts/host_apply/`は、NodeとBunの組み込みと`scripts/host_apply/`の中だけをimportする。
+ * このファイルと`scripts/host_apply/`がimportするのは、Nodeの組み込み4つ(`node:crypto`、`node:fs`、
+ * `node:path`、`node:readline`)と`scripts/host_apply/`の中だけで、`bun`と`bun:*`はimportしない。
  * 状態ディレクトリの`bin/`へコピーして、リポジトリの外で単独で動かすため。
  */
 

@@ -76,6 +76,7 @@ export async function fetchOrigin(
     return { kind: "url_mismatch" };
   }
   const read = await run(remoteUrlSpec(input.repoGit), opts);
+  // `truncated`は`git_fetch`の表(溢れたら捨てて続ける)では起きない。型を絞るための枝で、終了コードが無いので`null`にする。
   if (read.kind !== "done") return { kind: "failed", code: null };
   if (read.code !== 0) return { kind: "failed", code: read.code };
   const actual = read.stdout.replace(/\n$/, "");
@@ -88,6 +89,7 @@ export async function fetchOrigin(
     return { kind: "url_mismatch" };
   }
   const fetched = await run(fetchSpec(input), opts);
+  // ここも型を絞るための枝である(上の読み取りと同じ理由)。
   if (fetched.kind !== "done") return { kind: "failed", code: null };
   return fetched.code === 0
     ? { kind: "fetched" }

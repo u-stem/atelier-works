@@ -165,7 +165,7 @@ type KindRule = OutputLimit & {
   readonly check: (spec: Fields) => string | null;
 };
 
-/** 作れる種類の表。ここに無い種類は発行できない。後続の変更が、使う側と一緒に足す。 */
+/** 作れる種類の表。ここに無い種類は発行できない。 */
 const KIND_RULES: Readonly<Partial<Record<CommandKind, KindRule>>> = {
   git_read: {
     bins: [GIT_BIN],
