@@ -33,6 +33,7 @@ import {
 } from "./main_ci_support.ts";
 import type {
   FactoryOwnerKind,
+  GitHubRepoRef,
   GitIdentity,
   LabelerAssociation,
 } from "./types.ts";
@@ -40,7 +41,9 @@ import {
   assertBranchName,
   assertGitHubName,
   hasLabel,
+  isGitHubName,
   isRecord,
+  parseGitHubRepoUrl,
 } from "./types.ts";
 import {
   type CommandResult,
@@ -48,39 +51,15 @@ import {
   SpawnError,
 } from "./workspace.ts";
 
+export type { GitHubRepoRef };
 // 失敗の型は`github_errors.ts`にある。呼び出し側が`github.ts`から読めるよう再エクスポートする。
-export { GH_EXIT_AUTH_REQUIRED, GitHubHttpError };
+// リポジトリのURLの読み取りは`types.ts`にある。`config.ts`が子プロセスの依存を持たずに使えるようにするためである。
+export { GH_EXIT_AUTH_REQUIRED, GitHubHttpError, parseGitHubRepoUrl };
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
 export function validateOwnerRepo(owner: string, repo: string): void {
   assertGitHubName(owner);
   assertGitHubName(repo);
-}
-
-export type GitHubRepoRef = { readonly owner: string; readonly repo: string };
-
-const GITHUB_REPO_URL_PATTERN =
-  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/i;
-
-/**
- * `factory_config.factory_repo`(httpsのclone URL)をownerとrepoに分ける。
- * `https://github.com`の形だけを受け付ける。`lib/config.ts`の`isRepoAllowed`が
- * 正規化に使うのと同じ形で、正規化の仕方(ホスト名の大文字小文字を問わない、
- * 末尾の`.git`は省略可、末尾のスラッシュはいくつでもよい)もそろえている。
- * URLに認証情報が埋め込まれていることがある
- * (`https://user:token@github.com/...`)ため、エラーメッセージに元のURLは入れない。
- */
-export function parseGitHubRepoUrl(url: string): GitHubRepoRef {
-  const match = GITHUB_REPO_URL_PATTERN.exec(url.trim());
-  const owner = match?.[1];
-  const repo = match?.[2];
-  if (owner === undefined || repo === undefined) {
-    throw new Error(
-      "github: factory_repo is not a GitHub repository URL (expected https://github.com/<owner>/<repo>)",
-    );
-  }
-  validateOwnerRepo(owner, repo);
-  return { owner, repo };
 }
 
 export type GhClient = {
@@ -1075,6 +1054,8 @@ export type Issue = {
   readonly authorAssociation: string | null;
   readonly labels: string[];
   readonly assignees: string[];
+  /** 応答の`repository_url`から読んだリポジトリの正規の綴り。読めないときは`null`。 */
+  readonly repository: { readonly owner: string; readonly repo: string } | null;
 };
 
 /** `{ name: string }`。ラベルのオブジェクト(`{ name, ... }`の形)で使う。 */
@@ -1130,6 +1111,22 @@ function isIssuePayload(value: unknown): value is IssuePayload {
   return true;
 }
 
+/**
+ * `repository_url`から、GitHubが返した綴りのowner、repoを読む。
+ * 形が違うか、名前の形でないときは、例外にせず`null`にする。
+ */
+function repositoryOf(
+  repositoryUrl: unknown,
+): { readonly owner: string; readonly repo: string } | null {
+  if (typeof repositoryUrl !== "string") return null;
+  const match = repositoryUrl.match(/\/repos\/([^/]+)\/([^/]+)$/);
+  const owner = match?.[1];
+  const repo = match?.[2];
+  if (owner === undefined || repo === undefined) return null;
+  if (!isGitHubName(owner) || !isGitHubName(repo)) return null;
+  return { owner, repo };
+}
+
 export async function getIssue(
   client: GhClient,
   owner: string,
@@ -1175,6 +1172,7 @@ export async function getIssue(
     ),
     labels,
     assignees,
+    repository: repositoryOf(Reflect.get(parsed, "repository_url")),
   };
 }
 

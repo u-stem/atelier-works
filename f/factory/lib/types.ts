@@ -109,6 +109,33 @@ export function assertGitHubName(name: string): void {
   }
 }
 
+export type GitHubRepoRef = { readonly owner: string; readonly repo: string };
+
+const GITHUB_REPO_URL_PATTERN =
+  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/i;
+
+/**
+ * `factory_config.factory_repo`(httpsのclone URL)をownerとrepoに分ける。
+ * `https://github.com`の形だけを受け付ける。`lib/config.ts`の`isRepoAllowed`が
+ * 正規化に使うのと同じ形で、正規化の仕方(ホスト名の大文字小文字を問わない、
+ * 末尾の`.git`は省略可、末尾のスラッシュはいくつでもよい)もそろえている。
+ * URLに認証情報が埋め込まれていることがある
+ * (`https://user:token@github.com/...`)ため、エラーメッセージに元のURLは入れない。
+ */
+export function parseGitHubRepoUrl(url: string): GitHubRepoRef {
+  const match = GITHUB_REPO_URL_PATTERN.exec(url.trim());
+  const owner = match?.[1];
+  const repo = match?.[2];
+  if (owner === undefined || repo === undefined) {
+    throw new Error(
+      "github: factory_repo is not a GitHub repository URL (expected https://github.com/<owner>/<repo>)",
+    );
+  }
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  return { owner, repo };
+}
+
 /**
  * gitのコミットSHA(短縮形か完全形)。
  * GitHubは常に小文字で返すため、小文字の16進数だけを許す。
@@ -1136,6 +1163,15 @@ export type GhOwnerOpenPrSnapshot = {
   readonly prs: readonly GhPullRequest[];
 };
 
+/** 鮮度の判定と絞り込みが見る、詳細の行の列。PRの行とIssueの行の両方が満たす。 */
+export type GhDetailOpenRow = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly state: string;
+  readonly usable: boolean;
+};
+
 /** Issueの詳細として書く値。 */
 export type GhIssueWrite = {
   readonly number: number;
@@ -1155,6 +1191,16 @@ export type GhIssue = GhIssueWrite & {
   readonly state: GhIssueState;
   readonly written_at: Date;
   readonly usable: boolean;
+};
+
+/**
+ * 1人の所有者の`gh_repos`の全行、開いているIssueの全行、DBの`now()`を、1つの文で読んだ結果。
+ * 所有者の行が無ければ、`repos`と`issues`は空になる。
+ */
+export type GhOwnerOpenIssueSnapshot = {
+  readonly db_now: Date;
+  readonly repos: readonly GhOwnerRepoFreshnessRow[];
+  readonly issues: readonly GhIssue[];
 };
 
 /**
@@ -1485,7 +1531,7 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
 export type ReviewPostMode = "comment_only" | "gated";
 
 /**
- * `gh_source_dependabot`と`gh_source_pr_conflict_watch`の値。下流のscriptが候補のPRを列挙する元で、
+ * `gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_issues`の値。下流のscriptが候補を列挙する元で、
  * `search`は検索API、`db`は収集が書いた表を指す。
  */
 export type GhSource = "search" | "db";
@@ -1726,6 +1772,11 @@ export type FactoryConfig = {
    * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索とREST一覧になる。
    */
   gh_source_pr_conflict_watch: GhSource;
+  /**
+   * `poll_issues`がトリガーラベル付きのIssueを見つける元。既定は`search`。
+   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。
+   */
+  gh_source_poll_issues: GhSource;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。

@@ -16,6 +16,7 @@ import {
   isStringArray,
   JOB_TMP_MAX_AGE_SEC,
   type LabelerAssociation,
+  parseGitHubRepoUrl,
   type ReviewPostMode,
 } from "./types.ts";
 
@@ -107,6 +108,7 @@ type DefaultableField =
   | "gh_collect_detail_enabled"
   | "gh_source_dependabot"
   | "gh_source_pr_conflict_watch"
+  | "gh_source_poll_issues"
   | "worker_alert_memory_ratio"
   | "check_commands_by_repo";
 
@@ -189,6 +191,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // 収集の表から候補を読むのは、実機で表と検索の突き合わせを確かめてから、リモートのリソースで切り替える。
   gh_source_dependabot: "search",
   gh_source_pr_conflict_watch: "search",
+  gh_source_poll_issues: "search",
   // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
   worker_alert_memory_ratio: 0.8,
   check_commands_by_repo: {},
@@ -268,7 +271,10 @@ function isGhSource(value: unknown): value is GhSource {
 /** `raw[field]`が列挙の値ならそれを返す。値が無ければ`fallback`を返し、列挙の外なら例外を投げる。 */
 function ghSourceField(
   raw: Record<string, unknown>,
-  field: "gh_source_dependabot" | "gh_source_pr_conflict_watch",
+  field:
+    | "gh_source_dependabot"
+    | "gh_source_pr_conflict_watch"
+    | "gh_source_poll_issues",
   fallback: GhSource,
 ): GhSource {
   const value = raw[field];
@@ -1026,6 +1032,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "gh_source_pr_conflict_watch",
       DEFAULTS.gh_source_pr_conflict_watch,
     ),
+    gh_source_poll_issues: ghSourceField(
+      raw,
+      "gh_source_poll_issues",
+      DEFAULTS.gh_source_poll_issues,
+    ),
     worker_alert_memory_ratio: ratioField(
       raw,
       "worker_alert_memory_ratio",
@@ -1100,6 +1111,33 @@ export function isRepoAllowed(
   return config.repo_allowlist.some(
     (entry) => normalizeRepoUrl(entry) === target,
   );
+}
+
+/**
+ * 設定で明示されたリポジトリ。`factory_repo`と、`repo_allowlist`の各項目である。
+ * `owners`はオーナーの全リポジトリを指すので展開しない。読めない項目は飛ばす。
+ * 大文字小文字を区別せずに重なりを除き、最初の綴りを残す。
+ */
+export function configuredRepos(
+  config: Pick<FactoryConfig, "factory_repo" | "repo_allowlist">,
+): { owner: string; repo: string }[] {
+  const seen = new Set<string>();
+  const repos: { owner: string; repo: string }[] = [];
+  for (const url of [config.factory_repo, ...config.repo_allowlist]) {
+    let entry: { owner: string; repo: string };
+    try {
+      const parsed = parseGitHubRepoUrl(url);
+      entry = { owner: parsed.owner, repo: parsed.repo };
+    } catch {
+      // 読めない項目は、許可の判定にも合わないので、列挙の対象にしない。
+      continue;
+    }
+    const key = `${entry.owner}/${entry.repo}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    repos.push(entry);
+  }
+  return repos;
 }
 
 /**

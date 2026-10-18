@@ -1,0 +1,9 @@
+summary: '[LIB] Issueを見つける元の切り替え'
+description: 内部ライブラリです。直接実行するものではありません。poll_issuesが、トリガーラベル付きのIssueを検索か収集の表から見つける流れと、表の候補をRESTで確かめ直す判定を定めます。
+lock: '!inline f/factory/lib/poll_source.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

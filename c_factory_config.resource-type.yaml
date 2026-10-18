@@ -65,6 +65,7 @@ schema:
     - gh_collect_detail_enabled
     - gh_source_dependabot
     - gh_source_pr_conflict_watch
+    - gh_source_poll_issues
     - worker_alert_memory_ratio
     - check_commands_by_repo
   properties:
@@ -362,6 +363,14 @@ schema:
         - db
       description: >-
         watch_pr_conflictsが、リポジトリの発見とPRの列挙を行う元です。searchは検索APIとREST一覧で、dbは収集が書いた表です。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、周回全体が検索とREST一覧になります。記録が古い所有者とリポジトリも、検索とREST一覧に戻ります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
+      default: search
+    gh_source_poll_issues:
+      type: string
+      enum:
+        - search
+        - db
+      description: >-
+        poll_issuesが、トリガーラベル付きのIssueを見つける元です。searchは検索APIで、dbは収集が書いた表です。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、周回全体が検索になります。記録が古い所有者と、設定で明示したリポジトリを表で使えない所有者も、検索に戻ります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
       default: search
     worker_alert_memory_ratio:
       type: number

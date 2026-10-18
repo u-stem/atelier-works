@@ -532,6 +532,124 @@ GitHubは、push権限を持たないユーザーのassigneeへの追加を、�
 FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcollaboratorか確かめる。
 持っていなければ、権限を付ける。
 
+### Issueの発見の元を表に切り替える
+
+設定`gh_source_poll_issues`を`db`にすると、`poll_issues`はトリガーラベル付きのIssueを、検索でなく収集の表から見つける。
+検索の回数が減り、検索のレート制限に当たりにくくなる。
+既定の`search`のままなら、発見は変わらない。
+付与者の確認、取得、作業項目の登録、通知は、どちらの元でも同じである。
+
+| 項目 | 既定値 | 内容 |
+| --- | --- | --- |
+| `gh_source_poll_issues` | `search` | トリガーラベル付きのIssueを見つける元。`search`は検索、`db`は収集の表 |
+
+収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索になる。
+そのとき、`poll_issues`のログに警告が残る。
+`gh_source_poll_issues`に書ける値は、`search`と`db`の2つだけである。
+列挙の外の値を書くと、設定を読むscriptがすべて止まる。
+
+表を使えない所有者は、その周回だけ検索に戻る。
+戻るのは、主に次の場合である。
+
+- 記録の時刻が閾値を超えたリポジトリがある。閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`である。
+- 表の読み取りが失敗した。
+- 設定で明示したリポジトリ(`factory_repo`と`repo_allowlist`の各項目)が`gh_repos`に無いか、読み取りトークンに見えないか、一覧から消えている。
+  `poll_issues`にはリポジトリ単位の戻し先が無いので、取りこぼさないよう所有者の全体を検索に戻す。
+
+実装が戻す条件の全体は、次の6つの理由である。
+各理由の意味と対処は、後ろの`fallback_reasons`の表にある。
+
+- `no_record`: 所有者の行、または明示したリポジトリの行が`gh_repos`に無い。
+- `unusable`: 記録の`allowed`が偽、開いた行がすべて使えない、または明示したリポジトリが読み取りトークンに見えないか一覧から消えている。
+- `not_collected`: 詳細を一度も取り終えていない。
+- `in_future`: `last_collected_at`がDBの時刻より後である。
+- `too_old`: 記録の時刻が閾値を超えている。
+- `read_failed`: 表の読み取りが失敗した。
+
+戻したときの検索の回数は、周回全体が検索のときを超えない。
+表の候補は、`getIssue`で読み直し、開いていて、トリガーラベルが付いているものだけを使う。
+閉じたIssueと、ラベルが外れたIssueは、失敗にせず外す。
+
+表に切り替えると、次の4つが変わる。
+
+- ラベルを付けてから着手までが、普段は4〜9分ほどになる。次の収集が終わるまで表に載らないためである。取り直しが止まれば、閾値を過ぎた時点で所有者は検索に戻る。
+- archive済みのリポジトリは、表で探さない。読み取り専用で、ラベルを外すことも作業項目の起動もできない。
+- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリのIssueを、表では見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。
+- 処理の順が、検索の関連度の順から、リポジトリと番号の順に変わる。
+
+1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
+   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を表に切り替える](#候補の元を表に切り替える)の手順1と同じである。
+   `repo_allowlist`が空でないことも確かめる。空だと、上の3つ目の変化が当たる。
+2. 表の結果と検索の結果を照らし合わせる。
+   所有者ごとに、表の側を次のSQLで集める。
+   閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`で、`interval`に書く。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT i.repo || '#' || i.number FROM factory.gh_issues i JOIN factory.gh_repos r ON r.owner = i.owner AND r.repo = i.repo AND r.repo_id = i.repo_id WHERE i.owner = '<owner>' AND i.state = 'open' AND i.usable AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY 1"
+   ```
+
+   検索の側は、今の検索と同じ問い合わせを1回送る。
+
+   ```bash
+   gh api -X GET search/issues -f q='is:issue state:open user:<owner> label:"<トリガーラベル>"' -f per_page=100 --jq '.items[] | (.repository_url | sub(".*/repos/[^/]*/"; "") | ascii_downcase) + "#" + (.number | tostring)' | sort -u
+   ```
+
+   検索の範囲は、所有者が組織なら`org:<owner>`にする。
+   2つの出力をファイルに保存し、`cmp -s`で比べて、`same`と`different`のどちらになったかだけを見る。
+   トリガーラベルは取得のときに外れるので、開いたトリガーラベル付きのIssueは、ふだん0件か数件しかない。
+   両方が空で`same`でも、表の経路が実際のトリガーを見つけることの確かめにはならない。
+   手順4で、自然に付いたラベルの着手までの遅れを記録して補う。
+   `different`なら、収集の周回の遅れ(5分以内)か、上の変化で説明できるかを確かめ、数分後に読み直す。
+   検索が1件以上を返し、表の候補が0件の所有者があるときは、収集のラベルの絞り込みが合っていないおそれがある。
+   次の確認で説明できなければ、`db`にしない。
+3. 収集がラベルの絞り込みで、ラベル名の大小文字を区別しないことを確かめる。
+   収集はGraphQLの`issues(labels: [...])`でIssueを絞る。この挙動が変わると、表に行が載らないまま、所有者が`fresh`で見落とす。
+   実行中には検知できないので、切り替えの前と、`trigger_label`を変えたときに確かめる。
+   開いたIssueかどうかを問わず、ラベルが付いたIssueのあるリポジトリで、同じラベル名の小文字、先頭だけ大文字、すべて大文字の3通りの`totalCount`を比べる。
+
+   ```bash
+   gh api graphql -f 'query=query { repository(owner: "<owner>", name: "<repo>") { a: issues(labels: ["<小文字>"]) { totalCount } b: issues(labels: ["<先頭だけ大文字>"]) { totalCount } c: issues(labels: ["<すべて大文字>"]) { totalCount } } }' --jq .data.repository
+   ```
+
+   3つが等しければ、大小文字を区別していない。等しくなければ、`db`にせず、収集の側の変更として扱う。
+4. `gh_source_poll_issues`を`db`に切り替える。
+   書き換えの前に、リソースの値を取得して控えを取る。
+   取得した出力の`value`の`gh_source_poll_issues`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
+   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
+   戻すときは、控えの値で同じ手順を行い、`gh_source_poll_issues`を`search`にする。
+5. 続く3回の`poll_issues`の結果を、WindmillのRunsで確かめる。
+   `issue_source`が`db`、`fallback_searches`が0であることを見る。
+   `table_candidates`は、手順2の表の候補の数と近いはずである。
+   `table_dropped`は、0か、古い行で説明できる値になる。
+   失敗の記録に、段`read_gh_owner_issues:<owner>`と`confirm_table_issue:<owner>/<repo>#<番号>`が続かないことを見る。
+6. 表の経路で最初に作られた`issue`の作業項目で、`owner`と`repo`がGitHubの正規の綴りと大小文字まで一致することを確かめる。
+   一致しなければ、`search`に戻す。
+   綴りは`gh api repos/<owner>/<repo> --jq .full_name`で読む。
+7. 1日の間、`poll_issues`の失敗の記録に403と429が無いことを確かめる。
+   自然にトリガーラベルが付いたら、付けた時刻から着手までの遅れを記録する。
+
+`fallback_searches`が1以上なら、`fallback_reasons`の語で原因を読む。
+
+| `fallback_reasons`の語 | 対処 |
+| --- | --- |
+| `no_record` | `gh_repos`にその所有者の行が無い、または`repo_allowlist`か`factory_repo`のリポジトリの行が無い。所有者が収集の対象かと、許可リストの書き間違いを確かめる |
+| `unusable` | 許可の外か、開いた行がすべて使えない。明示したリポジトリが読み取りトークンに見えない、または一覧から消えたときも当たる。forkや改名前の名前が`repo_allowlist`にあると、所有者は毎周回検索に戻る |
+| `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
+| `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
+| `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_owner_issues:<owner>`と、DBの状態を確かめる |
+
+定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
+説明できないなら、`gh_source_poll_issues`を`search`に戻す。
+
+`confirm_table_issue:`が404で続くときは、読み取りトークンに見えるが、書き込みのPATに見えないリポジトリがある。
+今の検索は書き込みのPATで探すので、そのリポジトリを返さない。
+読み取りトークンの範囲を書き込みのPATに合わせるか、`repo_allowlist`で絞って直す。
+
+`trigger_label`を変えるときは、手順2と手順3をやり直す。
+収集が各リポジトリを取り直すまで、表は古いラベル名で答えるためである。
+
+読み取り元だけを戻すときは、`gh_source_poll_issues`を`search`にする。
+
 ## 要件定義を承認・却下する
 
 要件定義の生成が終わると、Discordに承認待ちの通知が届く。
@@ -1530,7 +1648,8 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 作者の数は、PATのアカウントと`allowed_labeler_logins`のアカウントを合わせた数である。
 
 検索のrate limitは、認証したトークンで1分に30本である。
-`poll_prs`はオーナーごとに4本、`poll_issues`もオーナーごとに検索し、同じトークンで共有する。
+`poll_prs`はオーナーごとに4本、`poll_issues`もオーナーごとに1本検索し、同じトークンで共有する。
+`poll_issues`は、設定`gh_source_poll_issues`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる([Issueの発見の元を表に切り替える](#issueの発見の元を表に切り替える))。
 `watch_pr_conflicts`もオーナーごとに1本検索する。設定`gh_source_pr_conflict_watch`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる。
 `watch_pr_ci`の本数が増えるほど、ほかのポーリングの検索が拒まれやすくなる。
 許可する作者は、少なくする。

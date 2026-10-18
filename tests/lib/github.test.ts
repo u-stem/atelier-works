@@ -1222,6 +1222,52 @@ describe("getIssue", () => {
     expect(issue.assignees).toEqual(["factory-bot", "alice"]);
   });
 
+  describe("repository", () => {
+    const payload = {
+      number: 5,
+      title: "t",
+      body: "b",
+      html_url: "https://github.com/Acme/Widgets/issues/5",
+      state: "open",
+      user: { login: "alice" },
+      labels: [],
+      assignees: [],
+    };
+    const read = (extra: Record<string, unknown>) =>
+      getIssue(
+        {
+          run: createFakeCommandRunner([ghApiOk({ ...payload, ...extra })]).run,
+          ghToken: "tok",
+        },
+        "acme",
+        "widgets",
+        5,
+      );
+
+    test("reads the owner and repo in the spelling of repository_url", async () => {
+      const issue = await read({
+        repository_url: "https://api.github.com/repos/Acme/Widgets",
+      });
+      expect(issue.repository).toEqual({ owner: "Acme", repo: "Widgets" });
+    });
+
+    test("is null when repository_url is absent, without throwing", async () => {
+      expect((await read({})).repository).toBeNull();
+    });
+
+    test("is null when repository_url has an unexpected shape", async () => {
+      const issue = await read({ repository_url: "https://example.com/x" });
+      expect(issue.repository).toBeNull();
+    });
+
+    test("is null when repository_url holds a name that is not a GitHub name", async () => {
+      const issue = await read({
+        repository_url: "https://api.github.com/repos/Acme/wid%20gets",
+      });
+      expect(issue.repository).toBeNull();
+    });
+  });
+
   test("rejects an owner that isn't a valid GitHub name", async () => {
     const fake = createFakeCommandRunner([]);
     await expect(
