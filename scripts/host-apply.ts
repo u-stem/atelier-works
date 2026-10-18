@@ -12,11 +12,13 @@ import { createInterface } from "node:readline";
 import {
   createApproveGit,
   EXIT_USAGE,
+  type LimitedGitRunner,
   parseApproveArgs,
   runApprove,
 } from "./host_apply/approve.ts";
 import { readApproved, writeApproved } from "./host_apply/approved_io.ts";
 import { checkCodeOrigin } from "./host_apply/code_origin.ts";
+import type { CommandRunner } from "./host_apply/command.ts";
 import { COMMAND_TIMEOUT_MS } from "./host_apply/constants.ts";
 import { buildChildEnv } from "./host_apply/env.ts";
 import { approveGitEnv } from "./host_apply/git.ts";
@@ -237,7 +239,30 @@ async function runApproveCommand(rest: readonly string[]): Promise<number> {
  * 判定が出れば0、実行の失敗(コミットが無い、gitの失敗など)は1、使い方の誤りは2。
  * `approve`の終了コードは、承認しないときが3(`approve.ts`を参照)。
  */
-export async function main(argv: readonly string[]): Promise<number> {
+export type MainDeps = { readonly runner?: CommandRunner };
+
+export function readOnlyRunner(runner: CommandRunner): CommandRunner {
+  return runner;
+}
+
+export function createGitRunner(
+  _runner: CommandRunner,
+  _cwd: string,
+): GitRunner {
+  return async () => ({ code: 0, stdout: "" });
+}
+
+export function createLimitedRunner(
+  _runner: CommandRunner,
+  _cwd: string,
+): LimitedGitRunner {
+  return async () => ({ truncated: false, code: 0, stdout: "" });
+}
+
+export async function main(
+  argv: readonly string[],
+  _deps: MainDeps = {},
+): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "plan") return runPlan(rest);
   if (command === "approve") return runApproveCommand(rest);

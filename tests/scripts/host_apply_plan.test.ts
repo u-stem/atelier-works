@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import {
   chmodSync,
   mkdtempSync,
@@ -11,12 +11,28 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChangedFile } from "../../scripts/host_apply/approval.ts";
+import { createApproveGit } from "../../scripts/host_apply/approve.ts";
 import {
   approvedFilePath,
   writeApproved,
 } from "../../scripts/host_apply/approved_io.ts";
-import { MAX_BLOB_BYTES } from "../../scripts/host_apply/constants.ts";
-import { parseLsTreeZ } from "../../scripts/host_apply/git.ts";
+import {
+  type CommandResult,
+  type CommandRunner,
+  HOST_PROBE_ENV,
+  type IssuedSpec,
+  issueSpec,
+} from "../../scripts/host_apply/command.ts";
+import {
+  COMMAND_TIMEOUT_MS,
+  MAX_BLOB_BYTES,
+} from "../../scripts/host_apply/constants.ts";
+import { GIT_BIN, PS_BIN } from "../../scripts/host_apply/exec_paths.ts";
+import {
+  approveGitEnv,
+  parseLsTreeZ,
+  showBlobArgs,
+} from "../../scripts/host_apply/git.ts";
 import {
   buildPlan,
   type PlanGit,
@@ -25,7 +41,14 @@ import {
   suspiciousTreePaths,
 } from "../../scripts/host_apply/plan.ts";
 import { createPlanGit } from "../../scripts/host_apply/plan_git.ts";
-import { formatFailure } from "../../scripts/host-apply.ts";
+import { createRunner } from "../../scripts/host_apply/spawn_runner.ts";
+import {
+  createGitRunner,
+  createLimitedRunner,
+  formatFailure,
+  main,
+  readOnlyRunner,
+} from "../../scripts/host-apply.ts";
 import {
   createFixtureRepo,
   type FixtureRepo,
@@ -1209,8 +1232,16 @@ describe("plan stays off the network, docker and the work tree", () => {
     expect(entry).not.toMatch(/docker|curl/i);
   });
 
-  test("the entry point spawns only git with arguments from the read-only builders", () => {
-    expect(entry.match(/Bun\.spawn\w*\(/g)?.length).toBe(1);
+  test("the entry point starts no process itself", () => {
+    expect(entry).not.toMatch(/Bun\.spawn|child_process|Bun\.\$/);
+  });
+
+  test("the entry point gets its runner from spawn_runner", () => {
+    expect(entry).toContain('from "./host_apply/spawn_runner.ts"');
+  });
+
+  test("the entry point builds its git commands only with gitReadSpec", () => {
+    expect(entry).toContain('from "./host_apply/run_git.ts"');
   });
 
   test("the entry point never runs a git command that writes or touches the network", () => {
@@ -1229,5 +1260,280 @@ describe("plan stays off the network, docker and the work tree", () => {
 
   test("the plan logic spawns no process", () => {
     expect(plan).not.toMatch(/Bun\.spawn|child_process|Bun\.\$/);
+  });
+});
+
+describe("the runner that the entry point gives to plan and approve", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+
+  function readSpec(): IssuedSpec {
+    return issueSpec({
+      kind: "git_read",
+      bin: GIT_BIN,
+      args: showBlobArgs(SHA, "a"),
+      env: approveGitEnv(),
+      cwd: "/srv/repo",
+      timeoutMs: COMMAND_TIMEOUT_MS.git_read,
+    });
+  }
+
+  function probeSpec(): IssuedSpec {
+    return issueSpec({
+      kind: "host_probe",
+      bin: PS_BIN,
+      args: ["-o", "lstart=", "-p", "1"],
+      env: HOST_PROBE_ENV,
+      cwd: "/",
+      timeoutMs: COMMAND_TIMEOUT_MS.host_probe,
+    });
+  }
+
+  function done(stdout: string, code = 0): CommandResult {
+    return {
+      kind: "done",
+      code,
+      stdout,
+      stderr: "",
+      stdoutDropped: false,
+      stderrDropped: false,
+    };
+  }
+
+  const TRUNCATED: CommandResult = {
+    kind: "truncated",
+    stderr: "",
+    stderrDropped: false,
+  };
+
+  function recording(result: CommandResult) {
+    const calls: IssuedSpec[] = [];
+    const run: CommandRunner = async (spec) => {
+      calls.push(spec);
+      return result;
+    };
+    return { calls, run };
+  }
+
+  test("readOnlyRunner refuses a kind other than git_read", async () => {
+    const inner = recording(done(""));
+    await expect(readOnlyRunner(inner.run)(probeSpec())).rejects.toMatchObject({
+      reason: "invalid_spec",
+    });
+  });
+
+  test("readOnlyRunner does not start a command of another kind", async () => {
+    const inner = recording(done(""));
+    await readOnlyRunner(inner.run)(probeSpec()).catch(() => {});
+    expect(inner.calls).toEqual([]);
+  });
+
+  test("readOnlyRunner passes a git_read command through", async () => {
+    const inner = recording(done("body"));
+    expect(await readOnlyRunner(inner.run)(readSpec())).toEqual(done("body"));
+  });
+
+  test("createGitRunner returns the exit code and the output", async () => {
+    const run = createGitRunner(recording(done("out", 3)).run, "/srv/repo");
+    expect(await run(showBlobArgs(SHA, "a"))).toEqual({
+      code: 3,
+      stdout: "out",
+    });
+  });
+
+  test("createGitRunner runs git in the given directory", async () => {
+    const inner = recording(done(""));
+    await createGitRunner(inner.run, "/srv/repo")(showBlobArgs(SHA, "a"));
+    expect(inner.calls[0]?.cwd).toBe("/srv/repo");
+  });
+
+  test("createGitRunner fails for output over the limit", async () => {
+    const run = createGitRunner(recording(TRUNCATED).run, "/srv/repo");
+    await expect(run(showBlobArgs(SHA, "a"))).rejects.toThrow("too large");
+  });
+
+  test("createLimitedRunner passes the limit to the command", async () => {
+    const inner = recording(done(""));
+    await createLimitedRunner(inner.run, "/srv/repo")(
+      showBlobArgs(SHA, "a"),
+      99,
+    );
+    expect(inner.calls[0]?.maxStdoutBytes).toBe(99);
+  });
+
+  test("createLimitedRunner reports output over the limit as truncated", async () => {
+    const run = createLimitedRunner(recording(TRUNCATED).run, "/srv/repo");
+    expect(await run(showBlobArgs(SHA, "a"), 99)).toEqual({ truncated: true });
+  });
+
+  test("createLimitedRunner returns the exit code and the output", async () => {
+    const run = createLimitedRunner(recording(done("out", 2)).run, "/srv/repo");
+    expect(await run(showBlobArgs(SHA, "a"), 99)).toEqual({
+      truncated: false,
+      code: 2,
+      stdout: "out",
+    });
+  });
+
+  describe("plan through main", () => {
+    function quiet() {
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      const out = spyOn(process.stdout, "write").mockImplementation(() => true);
+      return {
+        errors: () => err.mock.calls.map((call) => String(call[0])),
+        restore: () => {
+          err.mockRestore();
+          out.mockRestore();
+        },
+      };
+    }
+
+    const ARGS = ["plan", "--repo", "/srv/repo", "--applied", A, "--target", B];
+
+    test("fails when git output is over the limit, even if git exited with 0", async () => {
+      const io = quiet();
+      try {
+        expect(await main(ARGS, { runner: recording(TRUNCATED).run })).toBe(1);
+      } finally {
+        io.restore();
+      }
+    });
+
+    test("says that the output is too large", async () => {
+      const io = quiet();
+      try {
+        await main(ARGS, { runner: recording(TRUNCATED).run });
+        expect(io.errors()).toContain("host-apply: git output is too large");
+      } finally {
+        io.restore();
+      }
+    });
+
+    test("resolves a relative --repo against the working directory", async () => {
+      const io = quiet();
+      const inner = recording(done("", 1));
+      try {
+        await main(["plan", "--repo", ".", "--applied", A, "--target", B], {
+          runner: inner.run,
+        });
+        expect(inner.calls[0]?.cwd).toBe(process.cwd());
+      } finally {
+        io.restore();
+      }
+    });
+
+    test("starts only git_read commands", async () => {
+      const io = quiet();
+      const inner = recording(done("", 1));
+      try {
+        await main(ARGS, { runner: inner.run });
+        expect([...new Set(inner.calls.map((spec) => spec.kind))]).toEqual([
+          "git_read",
+        ]);
+      } finally {
+        io.restore();
+      }
+    });
+  });
+});
+
+describe("the entry point with the real runner", () => {
+  const repos: FixtureRepo[] = [];
+  afterAll(() => {
+    for (const repo of repos) repo.cleanup();
+  });
+
+  function run(cwd: string, args: string[]) {
+    const result = Bun.spawnSync(
+      ["bun", join(REPO_ROOT, "scripts/host-apply.ts"), "plan", ...args],
+      { cwd, env: fixtureGitEnv(dirname(cwd)) },
+    );
+    return { code: result.exitCode, out: result.stdout.toString() };
+  }
+
+  function setup() {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const applied = repo.commit(BASE_FILES, "base");
+    const doctor = repo.commit({ "scripts/doctor.sh": "changed\n" }, "doctor");
+    return { repo, applied, doctor };
+  }
+
+  test("plan --repo . judges the repository of the working directory", () => {
+    const { repo, applied, doctor } = setup();
+    const { out } = run(repo.dir, [
+      "--repo",
+      ".",
+      "--applied",
+      applied,
+      "--target",
+      doctor,
+    ]);
+    expect(JSON.parse(out).files).toEqual(["scripts/doctor.sh"]);
+  });
+
+  test("plan finds a change outside the directory that --repo names", () => {
+    const { repo, applied, doctor } = setup();
+    const { out } = run(repo.dir, [
+      "--repo",
+      join(repo.dir, "docs"),
+      "--applied",
+      applied,
+      "--target",
+      doctor,
+    ]);
+    expect(JSON.parse(out).files).toEqual(["scripts/doctor.sh"]);
+  });
+
+  test("plan rejects a symlink that is outside the directory that --repo names", () => {
+    const { repo, applied } = setup();
+    const target = repo.symlink("scripts/link.sh", "../secret");
+    const { out } = run(repo.dir, [
+      "--repo",
+      join(repo.dir, "docs"),
+      "--applied",
+      applied,
+      "--target",
+      target,
+    ]);
+    expect(JSON.parse(out)).toMatchObject({
+      decision: "rejected",
+      kind: "tree_forbidden",
+    });
+  });
+
+  function bigDiff(lines: number) {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const base = repo.commit({ "big.txt": "start\n" }, "base");
+    const target = repo.commit(
+      { "big.txt": `start\n${`${"x".repeat(99)}\n`.repeat(lines)}` },
+      "big",
+    );
+    return { repo, base, target };
+  }
+
+  function approveGit(repo: FixtureRepo) {
+    return createApproveGit(
+      createGitRunner(createRunner(), repo.dir),
+      createLimitedRunner(createRunner(), repo.dir),
+    );
+  }
+
+  test("approve can read a difference between 256 KiB and 512 KiB", async () => {
+    const { repo, base, target } = bigDiff(3000);
+    const patch = await approveGit(repo).diffPatch(base, target, ["big.txt"]);
+    expect(patch.truncated).toBe(false);
+  });
+
+  test("approve reports a difference over 512 KiB as truncated", async () => {
+    const { repo, base, target } = bigDiff(6000);
+    const patch = await approveGit(repo).diffPatch(base, target, ["big.txt"]);
+    expect(patch.truncated).toBe(true);
+  });
+
+  test("approve reads the text of the difference", async () => {
+    const { repo, base, target } = bigDiff(3);
+    const patch = await approveGit(repo).diffPatch(base, target, ["big.txt"]);
+    expect(patch.text).toContain(`+${"x".repeat(99)}\n`);
   });
 });
