@@ -740,9 +740,8 @@ describe("ids and order", () => {
     expect(subject).toBe(`r${"x".repeat(99)}...(301 chars)`);
   });
 
-  test("a control character in a subject is escaped", () => {
-    const subject = violationsOf(textOf({ db: { image: "a\u001bb" } }))[0]
-      ?.subject;
+  test("a non-ASCII character in a subject is escaped", () => {
+    const subject = violationsOf(textOf({ db: { image: "aéb" } }))[0]?.subject;
     expect(/^[\x20-\x7e]+$/.test(subject ?? "")).toBe(true);
   });
 });

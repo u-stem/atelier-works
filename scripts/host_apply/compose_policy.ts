@@ -670,11 +670,13 @@ export function checkCompose(
  *   コメントの中でも拒否する。コメントの範囲は、改行の解釈の違いで変わるため。
  * - マージキー(`<<`)。キーが重なったときの優先順位が、Bunとcomposeでずれうる。
  * - `\r`とUnicodeの改行(U+0085、U+2028、U+2029)。YAMLの実装で、行の区切りが違う。
+ * - バックスラッシュ。二重引用符のエスケープ(`"\x3c\x3c"`など)で、上の文字を書かずに同じ意味を作れるため。
  */
 export function rawTextViolation(text: string): string | null {
   if (/[\r\u0085\u2028\u2029]/.test(text)) {
     return "the compose file has a line break other than a line feed";
   }
+  if (text.includes("\\")) return "the compose file has a backslash";
   if (text.includes("!")) return "the compose file has a YAML tag";
   if (text.includes("<<")) return "the compose file has a merge key";
   return null;
