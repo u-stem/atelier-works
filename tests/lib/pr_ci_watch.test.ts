@@ -6569,6 +6569,286 @@ describe("the candidates from the table of the collection", () => {
   });
 });
 
+describe("the search and the table find the same pull requests", () => {
+  type Fact = {
+    readonly number: number;
+    readonly author: string;
+    readonly authorType?: string;
+    readonly draft?: boolean;
+    readonly fork?: boolean;
+    readonly branch?: string;
+    readonly repo?: string;
+    /** 更新からの経過時間(分)。小さいほど新しい。 */
+    readonly agoMin: number;
+  };
+
+  const AUTHORS = ["factory-bot", "alice"];
+
+  function keyOf(fact: Fact): string {
+    return `acme/${fact.repo ?? "widgets"}#${String(fact.number)}`;
+  }
+
+  /** GitHubが返すPR。 */
+  function restPrs(facts: readonly Fact[]): Record<string, PullRequest> {
+    const prs: Record<string, PullRequest> = {};
+    for (const fact of facts) {
+      const repo = fact.repo ?? "widgets";
+      prs[keyOf(fact)] = humanPr({
+        number: fact.number,
+        authorLogin: fact.author,
+        authorType: fact.authorType ?? "User",
+        draft: fact.draft ?? false,
+        headRef: fact.branch ?? "feature/x",
+        headRepoFullName: fact.fork === true ? "fork/widgets" : `acme/${repo}`,
+        baseRepoFullName: `acme/${repo}`,
+      });
+    }
+    return prs;
+  }
+
+  /** 検索の結果。下書きと、作者の違うPRは返さない。 */
+  function searchFor(
+    facts: readonly Fact[],
+  ): Record<string, OpenAuthoredPrSearchItem[]> {
+    const found: Record<string, OpenAuthoredPrSearchItem[]> = {};
+    for (const author of AUTHORS) {
+      found[author] = facts
+        .filter((fact) => fact.draft !== true && fact.author === author)
+        .map((fact) =>
+          hit(
+            fact.number,
+            fact.repo ?? "widgets",
+            NOW.getTime() - fact.agoMin * 60_000,
+          ),
+        );
+    }
+    return found;
+  }
+
+  /** 表の行。作者が`null`の行は、作者を知らない行として入れる。 */
+  function rowsFor(
+    facts: readonly Fact[],
+    unknownAuthors: readonly number[] = [],
+  ): GhPullRequest[] {
+    return facts.map((fact) => {
+      const unknown = unknownAuthors.includes(fact.number);
+      return ghPrRow(fact.number, {
+        repo: fact.repo ?? "widgets",
+        author_login: unknown ? null : fact.author,
+        author_type: unknown
+          ? null
+          : fact.authorType === "Bot"
+            ? "Bot"
+            : "User",
+        author_id: null,
+        is_draft: fact.draft ?? false,
+        is_cross_repository: fact.fork ?? false,
+        head_ref: fact.branch ?? "feature/x",
+        updated_at: minutesBefore(fact.agoMin),
+      });
+    });
+  }
+
+  function searchHarness(facts: readonly Fact[], overrides: Setup = {}) {
+    return harness({
+      human: { found: searchFor(facts) },
+      prs: restPrs(facts),
+      ...overrides,
+    });
+  }
+
+  function tableHarness(
+    facts: readonly Fact[],
+    rows: GhPullRequest[],
+    overrides: Setup = {},
+    human: HumanSetup = {},
+    repos: GhOwnerRepoFreshnessRow[] = [ghRepoRow()],
+  ) {
+    return harness({
+      human: {
+        source: "db",
+        ownerTables: { acme: ownerTable(rows, repos) },
+        found: searchFor(facts),
+        ...human,
+      },
+      prs: restPrs(facts),
+      ...overrides,
+    });
+  }
+
+  const PLAIN: Fact[] = [
+    { number: 40, author: "alice", agoMin: 30 },
+    { number: 41, author: "alice", agoMin: 10 },
+    { number: 43, author: "factory-bot", agoMin: 20 },
+  ];
+
+  const MIXED: Fact[] = [
+    ...PLAIN,
+    { number: 44, author: "alice", fork: true, agoMin: 5 },
+    { number: 45, author: "alice", draft: true, agoMin: 6 },
+    { number: 46, author: "alice", branch: "factory/issue-7-wi-90", agoMin: 7 },
+    { number: 47, author: "mallory", agoMin: 8 },
+    { number: 48, author: "alice", authorType: "Bot", agoMin: 9 },
+  ];
+
+  test("records the same rows when each author has at most a hundred pull requests", async () => {
+    const search = searchHarness(PLAIN);
+    const table = tableHarness(PLAIN, rowsFor(PLAIN));
+    await runPrCiWatch(search.deps);
+    await runPrCiWatch(table.deps);
+    expect(table.recorded).toEqual(search.recorded);
+  });
+
+  test("records the same rows when forks, drafts, factory branches and other authors are mixed in", async () => {
+    const search = searchHarness(MIXED);
+    const table = tableHarness(MIXED, rowsFor(MIXED));
+    await runPrCiWatch(search.deps);
+    await runPrCiWatch(table.deps);
+    expect(table.recorded).toEqual(search.recorded);
+  });
+
+  test("records the allowed pull requests of the mixed set from the newest", async () => {
+    const table = tableHarness(MIXED, rowsFor(MIXED));
+    await runPrCiWatch(table.deps);
+    expect(table.recorded.map((record) => record.pr_number)).toEqual([
+      41, 43, 40,
+    ]);
+  });
+
+  describe("a row whose author is unknown", () => {
+    const WITH_GHOST: Fact[] = [
+      ...PLAIN,
+      { number: 49, author: "ghost", agoMin: 1 },
+    ];
+
+    test("makes the table read every pull request that the search reads", async () => {
+      const search = searchHarness(WITH_GHOST);
+      const table = tableHarness(WITH_GHOST, rowsFor(WITH_GHOST, [49]));
+      await runPrCiWatch(search.deps);
+      await runPrCiWatch(table.deps);
+      expect(search.prCalls.every((call) => table.prCalls.includes(call))).toBe(
+        true,
+      );
+    });
+
+    test("makes the table read the pull request whose author is unknown", async () => {
+      const table = tableHarness(WITH_GHOST, rowsFor(WITH_GHOST, [49]));
+      await runPrCiWatch(table.deps);
+      expect(table.prCalls).toContain("acme/widgets#49");
+    });
+
+    test("records the same rows as the search", async () => {
+      const search = searchHarness(WITH_GHOST);
+      const table = tableHarness(WITH_GHOST, rowsFor(WITH_GHOST, [49]));
+      await runPrCiWatch(search.deps);
+      await runPrCiWatch(table.deps);
+      expect(table.recorded).toEqual(search.recorded);
+    });
+  });
+
+  describe("a repository without a record", () => {
+    const WITH_TOOLS: Fact[] = [
+      ...PLAIN,
+      { number: 50, author: "alice", repo: "tools", agoMin: 2 },
+    ];
+
+    function toolsFacts() {
+      return {
+        rows: rowsFor(PLAIN),
+        // `tools`の行は`gh_repos`に無い。
+        facts: WITH_TOOLS,
+      };
+    }
+
+    test("is not found by the table when the allowlist is empty", async () => {
+      const { rows, facts } = toolsFacts();
+      const table = tableHarness(facts, rows);
+      await runPrCiWatch(table.deps);
+      expect(table.prCalls).not.toContain("acme/tools#50");
+    });
+
+    test("is found by the search", async () => {
+      const search = searchHarness(WITH_TOOLS);
+      await runPrCiWatch(search.deps);
+      expect(search.prCalls).toContain("acme/tools#50");
+    });
+
+    test("is found by both when the allowlist names it", async () => {
+      const { rows, facts } = toolsFacts();
+      const search = searchHarness(facts);
+      const table = tableHarness(
+        facts,
+        rows,
+        {},
+        { required: { acme: ["tools"] } },
+      );
+      await runPrCiWatch(search.deps);
+      await runPrCiWatch(table.deps);
+      expect(table.recorded).toEqual(search.recorded);
+    });
+  });
+
+  describe("a new pull request that the table does not have yet", () => {
+    const WITH_NEW: Fact[] = [
+      ...PLAIN,
+      { number: 60, author: "alice", agoMin: 1 },
+    ];
+
+    test("is not read by the table while the records are fresh", async () => {
+      const table = tableHarness(WITH_NEW, rowsFor(PLAIN));
+      await runPrCiWatch(table.deps);
+      expect(table.prCalls).not.toContain("acme/widgets#60");
+    });
+
+    test("is read by the search", async () => {
+      const search = searchHarness(WITH_NEW);
+      await runPrCiWatch(search.deps);
+      expect(search.prCalls).toContain("acme/widgets#60");
+    });
+  });
+
+  describe("when the table cannot be used", () => {
+    test("records the same rows as the search round when every scope is too old", async () => {
+      const search = searchHarness(MIXED);
+      const table = tableHarness(MIXED, rowsFor(MIXED), {}, {}, staleRepos());
+      await runPrCiWatch(search.deps);
+      await runPrCiWatch(table.deps);
+      expect(table.recorded).toEqual(search.recorded);
+    });
+
+    test("records the same rows as the search round when every read fails", async () => {
+      const search = searchHarness(MIXED);
+      const table = harness({
+        human: {
+          source: "db",
+          ownerTables: { acme: new Error("boom") },
+          found: searchFor(MIXED),
+        },
+        prs: restPrs(MIXED),
+      });
+      await runPrCiWatch(search.deps);
+      await runPrCiWatch(table.deps);
+      expect(table.recorded).toEqual(search.recorded);
+    });
+
+    test("still judges the rows of people that are recorded", async () => {
+      const h = harness({
+        human: {
+          source: "db",
+          ownerTables: { acme: ownerTable([], staleRepos()) },
+          found: {},
+        },
+        prs: { [HUMAN_KEY]: humanPr() },
+        pending: [humanRow()],
+        rowsForPr: { 40: [humanRow()] },
+        runs: { [SHA_A]: [run()] },
+      });
+      await runPrCiWatch(h.deps);
+      expect(h.transitions.map((entry) => entry.to.state)).toEqual(["passed"]);
+    });
+  });
+});
+
 describe("the result of the human discovery", () => {
   function humanFields(result: PrCiWatchResult) {
     return {
