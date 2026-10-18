@@ -125,9 +125,13 @@ describe("poll_prs: the wiring of the discovery", () => {
     expect(source).toContain("table_dropped: discovered.stats.table_dropped,");
   });
 
-  test("does not call the search directly any more", async () => {
+  test("calls the search only as a dependency of the discovery", async () => {
     const source = await read("f/factory/poll_prs.ts");
-    expect(source).not.toContain("rawCandidates.push(...found)");
+    const calls = [...source.matchAll(/searchPrs\(client/g)].map(
+      (match) => match.index,
+    );
+    const discovery = source.indexOf("await discoverPrs(");
+    expect(calls.length === 1 && (calls[0] ?? -1) > discovery).toBe(true);
   });
 
   test("starts the candidates from the discovered items", async () => {
