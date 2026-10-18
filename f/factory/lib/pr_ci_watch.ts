@@ -1213,7 +1213,7 @@ function countTableCandidates(
  * 範囲がオーナーで、一部の作者だけが検索を拒まれた(422)ときは、改名や削除とみなして、その作者の検索を飛ばし、
  * 警告のログに残す。範囲がリポジトリのときと、範囲の全員が拒まれたときは、失敗として記録する。
  * 候補は、作者の分かる候補を更新の新しい順に、その後に作者の分からない候補を新しい順に並べて読む。
- * 表の候補は、PRを読んだ応答のリポジトリが候補と違えば記録せず、404なら通知を作らずにログに残す。
+ * 表の候補は、PRを読んだ応答のリポジトリが候補と違えば記録せず、404と403なら通知を作らずにログに残す。
  * FactoryのPRの判定と起動を人のPRの発見が遅らせないよう、起動の後に置き、全体の経過時間と
  * `HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。ここで記録した行の判定は、次の回に行う。
  * 新しく記録した行と、`reopen`した行の数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
@@ -1357,11 +1357,11 @@ async function discoverHuman(context: Context): Promise<void> {
         break;
       }
       // 読み取りトークンに見えて書き込みのPATに見えないリポジトリは、検索の経路では候補に出ない。
-      // 表の候補の404で通知を作ると、検索の経路に無い通知になるので、ログに残すだけにする。
+      // 表の候補の404と403で通知を作ると、検索の経路に無い通知になるので、ログに残すだけにする。
       if (
         hit.origin === "table" &&
         err instanceof GitHubHttpError &&
-        err.status === 404
+        (err.status === 404 || err.status === 403)
       ) {
         deps.log.warn(
           "pr ci skipped a table candidate that could not be read",
