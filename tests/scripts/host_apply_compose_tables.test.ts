@@ -397,12 +397,20 @@ describe("secrets", () => {
     ).toEqual(["secret:caddy:environment:DB_PASSWORD"]);
   });
 
-  test("an escaped dollar in a quoted scalar is found", () => {
+  test("an escaped dollar in a quoted scalar is rejected", () => {
     expect(
       foundText(
         'services:\n  caddy:\n    image: ghcr.io/windmill-labs/caddy-l4:1\n    labels:\n      x: "\\x24{DB_PASSWORD}"\n',
       ),
-    ).toEqual(["secret:caddy:labels:DB_PASSWORD"]);
+    ).toBe("rejected");
+  });
+
+  test("an escaped merge key is rejected", () => {
+    expect(
+      foundText(
+        'x: &a {A: b}\nservices:\n  db:\n    image: postgres:18\n    environment:\n      "\\x3c\\x3c": *a\n',
+      ),
+    ).toBe("rejected");
   });
 
   test("another secret of the host is rejected", () => {

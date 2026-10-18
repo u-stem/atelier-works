@@ -1165,6 +1165,12 @@ describe("the raw text of the compose file", () => {
     expect(textVerdict(`# <<\n${BASE}`)).toBe("compose_forbidden");
   });
 
+  test("rejects a backslash that can write an escaped character", () => {
+    expect(textVerdict(`${BASE}    labels:\n      x: "\\x3c"\n`)).toBe(
+      "compose_forbidden",
+    );
+  });
+
   test("rejects a carriage return", () => {
     expect(textVerdict(BASE.replace("\n", "\r"))).toBe("compose_forbidden");
   });
