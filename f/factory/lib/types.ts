@@ -1692,6 +1692,12 @@ export type FactoryConfig = {
    * 真でも、各パッケージは単独の更新と同じ検査を通る。
    */
   dependabot_group_enabled: boolean;
+  /**
+   * Factory自身(`factory_repo`)以外で、dependabotの自動処理の候補にするリポジトリ(`<owner>/<repo>`)。既定は空。
+   * 対象になるのは、`repo_allowlist`の照合も通ったリポジトリに限る。必須checkはこの設定で決めず、リポジトリのGitHubのルールから導く。
+   * 他のリポジトリは、cloneもインストールもせずに人に回す。
+   */
+  dependabot_other_repos: string[];
   /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
   dependabot_min_published_days: number;
   /**

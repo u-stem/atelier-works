@@ -93,6 +93,7 @@ type DefaultableField =
   | "dependabot_enabled"
   | "dependabot_merge_enabled"
   | "dependabot_group_enabled"
+  | "dependabot_other_repos"
   | "dependabot_min_published_days"
   | "pr_ci_watch_enabled"
   | "pr_ci_watch_human_prs"
@@ -171,6 +172,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   dependabot_merge_enabled: false,
   // 複数パッケージの同時更新は、試運転でマージ可の判定まで進むことを確かめてから、リモートのリソースで有効にする。
   dependabot_group_enabled: false,
+  // Factory自身以外のリポジトリは、設定で名前を挙げたものだけを自動処理の候補にする。既定は空で、挙げない。
+  dependabot_other_repos: [],
   dependabot_min_published_days: 7,
   // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
   pr_ci_watch_enabled: true,
@@ -695,6 +698,32 @@ function checkCommandsByRepoField(
   return result;
 }
 
+const STRICT_OWNER_SLASH_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * `dependabot_other_repos`を検証する。各項目は`<owner>/<repo>`の形に限る。
+ * URLや余分な区切りを許さず、`.`と`..`の部分も拒否する。
+ */
+function dependabotOtherReposField(
+  raw: Record<string, unknown>,
+  fallback: string[],
+): string[] {
+  const field = "dependabot_other_repos";
+  const value = stringArrayField(raw, field, fallback);
+  for (const entry of value) {
+    const parts = entry.split("/");
+    if (
+      !STRICT_OWNER_SLASH_REPO.test(entry) ||
+      parts.some((part) => part === "." || part === "..")
+    ) {
+      throw new ConfigValidationError(
+        `"${field}" entries must be "<owner>/<repo>"`,
+      );
+    }
+  }
+  return value;
+}
+
 /**
  * 既定値を持たない項目`raw[field]`を返す。
  * 値が無いとき、空の文字列のとき、文字列でないときは例外を投げる。
@@ -990,6 +1019,10 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "dependabot_group_enabled",
       DEFAULTS.dependabot_group_enabled,
+    ),
+    dependabot_other_repos: dependabotOtherReposField(
+      raw,
+      DEFAULTS.dependabot_other_repos,
     ),
     dependabot_min_published_days: positiveIntegerField(
       raw,
