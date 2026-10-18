@@ -55,7 +55,8 @@ export type CommandKind =
   | "compose_build"
   | "compose_up"
   | "host_script"
-  | "http_fetch";
+  | "http_fetch"
+  | "host_probe";
 
 export const COMMAND_KINDS: readonly CommandKind[] = [
   "git_read",
@@ -71,12 +72,14 @@ export const COMMAND_KINDS: readonly CommandKind[] = [
   "compose_up",
   "host_script",
   "http_fetch",
+  "host_probe",
 ];
 
 /**
  * 外部コマンドの種類ごとの上限(ミリ秒)。超えたコマンドは失敗として扱う。
  * macOSの標準に`timeout`コマンドが無いので、bunの子プロセスの時間切れで止める。
- * `git_read`は設計の一覧に無い、`plan`が使う読み取りのgit。ローカルのオブジェクトだけを読むので短くする。
+ * `git_read`は`plan`と`approve`が使う読み取りのgit。ローカルのオブジェクトだけを読むので短くする。
+ * `host_probe`は`ps`と`sysctl`の照会で、ホストの状態を読むだけなので短くする。
  */
 export const COMMAND_TIMEOUT_MS: Readonly<Record<CommandKind, number>> = {
   git_read: 30_000,
@@ -92,15 +95,14 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<CommandKind, number>> = {
   compose_up: 10 * MINUTE,
   host_script: 5 * MINUTE,
   http_fetch: 30_000,
+  host_probe: 10_000,
 };
 
-export const STDERR_LIMIT_BYTES = 0;
+/** 外部コマンドの標準エラーで、末尾から残す大きさ(バイト)。超えた先頭は捨てる。 */
+export const STDERR_LIMIT_BYTES = 64 * 1024;
 
 /** コミットから読むファイルの大きさの上限(バイト)。 */
 export const MAX_BLOB_BYTES = 256 * 1024;
-
-/** 実行役の版。拒否の控えは、この版と同じものだけを使う。実行役のコードを固定する版の識別に置き換える。 */
-export const EXECUTOR_VERSION = "stage1";
 
 /**
  * 値が変わると、形式に合っていても承認が要るキー。

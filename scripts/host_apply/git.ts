@@ -5,16 +5,41 @@ export function isSha40(value: string): boolean {
   return /^[0-9a-f]{40}$/.test(value);
 }
 
-export const GIT_FIXED_PREFIX: readonly string[] = [];
+/**
+ * 読み取りのgitの引数の前置き。`plan`と`approve`が同じものを使う。
+ * フック、fsmonitor、パスの引用、属性ファイルを無効にし、`diff.relative`を偽にして、
+ * 下位のディレクトリで実行しても変更を見落とさないようにする。
+ * `protocol.allow=never`は、部分cloneの遅延取得などの通信を止める。
+ * `--no-pager`はサブコマンドの前に置く。後ろでは`diff`の未知のオプションとして拒否される。
+ */
+export const GIT_FIXED_PREFIX: readonly string[] = [
+  "--no-pager",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.quotePath=false",
+  "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
+  "diff.relative=false",
+  "-c",
+  "protocol.allow=never",
+];
 
-export const REMOTE_URL_PATTERN = /$^/;
+/** 取得先として認めるURL。GitHubのhttpsで、ユーザー名と末尾の`/`を持たない。末尾の`.git`は可。 */
+export const REMOTE_URL_PATTERN =
+  /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 /**
- * `origin/main`を取得するgitの引数。
- * 取得した内容に実行を誘導されないよう、リダイレクト、サブモジュール、ファイルプロトコル、
- * フック、fsmonitor、認証ヘルパーを無効にする。
+ * 取得先のURLを直接指定して、`origin/main`を取得するgitの引数。
+ * 名前でなくURLを渡すのは、照合したURLと取得するURLを食い違わせないため。
+ * 取得した内容に実行を誘導されないよう、リダイレクト、サブモジュール、フック、fsmonitor、
+ * 認証ヘルパー、askpass、プロキシ、自動の保守を無効にし、プロトコルをhttpsだけにする。
  */
-export function fetchArgs(): string[] {
+export function fetchArgs(url: string): string[] {
+  if (!REMOTE_URL_PATTERN.test(url)) throw new Error("url is not allowed");
   return [
     "-c",
     "http.followRedirects=false",
@@ -23,6 +48,10 @@ export function fetchArgs(): string[] {
     "-c",
     "fetch.recurseSubmodules=false",
     "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.https.allow=always",
+    "-c",
     "protocol.file.allow=never",
     "-c",
     "core.hooksPath=/dev/null",
@@ -30,10 +59,20 @@ export function fetchArgs(): string[] {
     "core.fsmonitor=false",
     "-c",
     "credential.helper=",
+    "-c",
+    "core.askPass=",
+    "-c",
+    "http.sslVerify=true",
+    "-c",
+    "http.proxy=",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "maintenance.auto=false",
     "fetch",
     "--no-tags",
     "--no-recurse-submodules",
-    "origin",
+    url,
     "+refs/heads/main:refs/remotes/origin/main",
   ];
 }
@@ -81,16 +120,7 @@ export function readOnlyGitArgs(args: readonly string[]): string[] {
   if (subcommand === undefined || !PLAN_GIT_SUBCOMMANDS.includes(subcommand)) {
     throw new Error("git subcommand is not allowed");
   }
-  return [
-    "--no-pager",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.quotePath=false",
-    ...args,
-  ];
+  return [...GIT_FIXED_PREFIX, ...args];
 }
 
 function requireSha(value: string): string {
@@ -145,9 +175,18 @@ export type LsTreeEntry = {
   readonly size: number | null;
 };
 
-/** コミットのtreeの全エントリを、NUL区切りで列挙する。 */
+/**
+ * コミットのtreeの全エントリを、NUL区切りで列挙する。
+ * `--full-tree`で、実行したディレクトリに依らずリポジトリのルートから列挙する。
+ */
 export function lsTreeRecursiveArgs(sha: string): string[] {
-  return readOnlyGitArgs(["ls-tree", "-r", "-z", requireSha(sha)]);
+  return readOnlyGitArgs([
+    "ls-tree",
+    "-r",
+    "-z",
+    "--full-tree",
+    requireSha(sha),
+  ]);
 }
 
 /** コミットの1つのパスのエントリを、大きさつきで列挙する。パスが無ければ出力は空になる。 */
@@ -156,6 +195,7 @@ export function lsTreePathArgs(sha: string, path: string): string[] {
     "ls-tree",
     "-z",
     "-l",
+    "--full-tree",
     requireSha(sha),
     "--",
     requirePath(path),
@@ -200,9 +240,8 @@ export const APPROVE_GIT_SUBCOMMANDS: readonly string[] = [
 ];
 
 /**
- * `approve`用のgitの引数に、設定の上書きを前置する。
- * `--no-pager`はサブコマンドの前に置く。サブコマンドの後ろでは`diff`の未知のオプションとして拒否される。
- * 属性ファイルは読まない。サブコマンドが一覧に無ければ、ネットワークや書き込みを通さないよう例外にする。
+ * `approve`用のgitの引数に、設定の上書きを前置する。前置きは`plan`と同じ。
+ * サブコマンドが一覧に無ければ、ネットワークや書き込みを通さないよう例外にする。
  */
 export function approveGitArgs(args: readonly string[]): string[] {
   const subcommand = args[0];
@@ -212,24 +251,15 @@ export function approveGitArgs(args: readonly string[]): string[] {
   ) {
     throw new Error("git subcommand is not allowed");
   }
-  return [
-    "--no-pager",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.quotePath=false",
-    "-c",
-    "core.attributesFile=/dev/null",
-    ...args,
-  ];
+  return [...GIT_FIXED_PREFIX, ...args];
 }
 
 /**
- * `approve`のgitの環境。呼び出し元の環境は引き継がず、ここに書いた名前だけを渡す。
+ * 読み取りのgitの環境。`plan`と`approve`が使う。
+ * 呼び出し元の環境は引き継がず、ここに書いた名前だけを渡す。
  * `PATH`を固定して偽の`git`を拾わせず、ユーザーとシステムの設定、属性、pathspecの展開、
- * replace ref、ロックの取得、対話の入力を無効にする。
+ * replace ref、ロックの取得、部分cloneの遅延取得、対話の入力を無効にする。
+ * `GIT_NO_LAZY_FETCH`はgitの版によっては無視される。
  */
 export function approveGitEnv(): Record<string, string> {
   return {
@@ -241,6 +271,7 @@ export function approveGitEnv(): Record<string, string> {
     GIT_ATTR_SOURCE: EMPTY_TREE_SHA,
     GIT_LITERAL_PATHSPECS: "1",
     GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_NO_LAZY_FETCH: "1",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_TERMINAL_PROMPT: "0",
   };
@@ -327,6 +358,7 @@ export function lsTreeShaArgs(
     "ls-tree",
     "-r",
     "-z",
+    "--full-tree",
     requireSha(commit),
     "--",
     ...paths.map(requirePath),
