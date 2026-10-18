@@ -69,6 +69,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     authorId: null,
     authorType: "User",
     autoMergeEnabled: false,
+    requestedReviewerIds: [],
     ...overrides,
   };
 }

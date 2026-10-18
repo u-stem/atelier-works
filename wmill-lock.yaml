@@ -70,7 +70,7 @@ locks:
   f/factory/lib/gh_collect_read: 0bd43295f819f5cbb74ca6ce4090a6fcba7abb34facbdffcde5aab707722a11d
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 6d1a97e3aef6135cbadde8c3546d5768a9e591461642de65307f64083b6e39ab
-  f/factory/lib/github: e6b57b280ae9d51e0d67ea8a15c9617bd59e540b73e1913649e1d5ffeb96f889
+  f/factory/lib/github: 289b35fcaf2e1ef58ffb042f9822979c130a9ed8eb01459b744be98e22e6d6b7
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6

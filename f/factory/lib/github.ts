@@ -2480,6 +2480,12 @@ export type PullRequest = {
   readonly authorType: string | null;
   /** PRにauto-mergeが設定されているか。有効なら、条件が揃った時点でGitHubがマージする。 */
   readonly autoMergeEnabled: boolean;
+  /**
+   * レビューを依頼された利用者の数値ID(RESTの`requested_reviewers`)。チームへの依頼は含まない。
+   * 配列でないとき、要素の`id`が正の安全な整数でないときは`null`。
+   * 空の配列は、利用者への依頼が無いことを意味する。
+   */
+  readonly requestedReviewerIds: readonly number[] | null;
 };
 
 type PrPayload = {
@@ -2613,6 +2619,7 @@ async function fetchPr(
     // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
+    requestedReviewerIds: null,
   };
   return {
     pr,
