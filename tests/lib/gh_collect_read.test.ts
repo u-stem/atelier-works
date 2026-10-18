@@ -390,8 +390,8 @@ describe("judgeGhOwnerRepos", () => {
     expect(
       [...judged.entries()].map(([name, item]) => [name, item.freshness.kind]),
     ).toEqual([
-      ["gadgets", "stale"],
       ["widgets", "fresh"],
+      ["gadgets", "stale"],
     ]);
   });
 

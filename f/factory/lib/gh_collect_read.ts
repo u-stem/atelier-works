@@ -115,35 +115,103 @@ export type GhOwnerRepoJudgement = {
   readonly usable: readonly GhPullRequest[];
 };
 
-/** 所有者の読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。 */
+/**
+ * 所有者の読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。
+ * `gh_repos`の行の無いリポジトリの開いた行は、数値IDを確かめられないので使わない。
+ */
 export function judgeGhOwnerRepos(
-  _owner: string,
-  _snapshot: GhOwnerOpenPrSnapshot,
-  _staleAfterMs: number,
+  owner: string,
+  snapshot: GhOwnerOpenPrSnapshot,
+  staleAfterMs: number,
 ): Map<string, GhOwnerRepoJudgement> {
-  return new Map();
+  const ownerName = owner.toLowerCase();
+  const openByRepo = new Map<string, GhPullRequest[]>();
+  for (const pr of snapshot.prs) {
+    if (pr.owner.toLowerCase() !== ownerName) {
+      continue;
+    }
+    const key = pr.repo.toLowerCase();
+    const rows = openByRepo.get(key);
+    if (rows === undefined) {
+      openByRepo.set(key, [pr]);
+    } else {
+      rows.push(pr);
+    }
+  }
+  const judged = new Map<string, GhOwnerRepoJudgement>();
+  for (const row of snapshot.repos) {
+    const name = row.repo.toLowerCase();
+    const open = openByRepo.get(name) ?? [];
+    const freshness = judgeGhRepoFreshness(
+      row,
+      open,
+      snapshot.db_now,
+      staleAfterMs,
+    );
+    const usable =
+      freshness.kind === "fresh" && row.repo_id !== null
+        ? usableGhPullRequests(owner, name, row.repo_id, open)
+        : [];
+    judged.set(name, { row, freshness, usable });
+  }
+  return judged;
 }
 
 export type GhOwnerCoverage =
   | { readonly kind: "fresh" }
   | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
 
-/** 所有者の全体を表で探してよいか。検索の`user:`/`org:`の範囲の代わりにできるかを決める。 */
+/**
+ * 所有者の全体を表で探してよいか判定する。検索の`user:`/`org:`の範囲の代わりにできるかを決める。
+ * 1. `gh_repos`に所有者の行が無い(`no_record`)。
+ * 2. 読む時点の許可が偽のリポジトリは、判定から外す。
+ *    記録の`allowed`が偽でも、読む時点で許されるリポジトリは外さず、`unusable`で`stale`にする。
+ * 3. 一覧から消えた、archive済みのリポジトリは、判定から外す。外さないと、そのリポジトリを1つ持つ所有者が毎周回検索に戻る。
+ * 4. 残りに鮮度の足りないリポジトリがあれば、名前の順で最初のものの理由で`stale`にする。
+ * 5. どれでもなければ`fresh`。
+ * 所有者の最新の実行の照合結果は読まない。照合の不一致は収集が配下の行を使えなくし、一時的な失敗は鮮度が閾値で落とす。
+ */
 export function judgeGhOwnerCoverage(
-  _owner: string,
-  _judged: ReadonlyMap<string, GhOwnerRepoJudgement>,
-  _isRepoAllowedNow: (owner: string, repo: string) => boolean,
+  owner: string,
+  judged: ReadonlyMap<string, GhOwnerRepoJudgement>,
+  isRepoAllowedNow: (owner: string, repo: string) => boolean,
 ): GhOwnerCoverage {
-  return { kind: "stale", reason: "no_record" };
+  if (judged.size === 0) {
+    return { kind: "stale", reason: "no_record" };
+  }
+  const names = [...judged.keys()].sort();
+  for (const name of names) {
+    const item = judged.get(name);
+    if (item === undefined) {
+      continue;
+    }
+    if (!isRepoAllowedNow(owner, item.row.repo)) {
+      continue;
+    }
+    if (item.row.gone || item.row.archived) {
+      continue;
+    }
+    if (item.freshness.kind === "stale") {
+      return { kind: "stale", reason: item.freshness.reason };
+    }
+  }
+  return { kind: "fresh" };
 }
 
-/** 設定と収集の設定から、実際に使う読み取り元を決める。 */
+/**
+ * 設定と収集の設定から、実際に使う読み取り元を決める。
+ * 収集の記録が進まないときに表を読むと古い値で判断するので、収集の2つの設定が真のときだけ`db`にする。
+ */
 export function effectiveGhSource(
-  _setting: GhSource,
-  _config: Pick<
+  setting: GhSource,
+  config: Pick<
     FactoryConfig,
     "gh_collect_enabled" | "gh_collect_detail_enabled"
   >,
 ): GhSource {
-  return "search";
+  return setting === "db" &&
+    config.gh_collect_enabled &&
+    config.gh_collect_detail_enabled
+    ? "db"
+    : "search";
 }
