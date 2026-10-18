@@ -1432,7 +1432,8 @@ ${nested}  },
 `;
 }
 
-const FENCES = (count: number): string => "```".repeat(count);
+/** 無害化で`pairs`×2個の置き換えの印になる、隣り合う囲みの記号。 */
+const FENCES = (pairs: number): string => "```~~~".repeat(pairs);
 
 describe("runDependabotPrepare: group of packages", () => {
   test("moves to needs_human at the gate when groups are disabled", async () => {
@@ -1751,12 +1752,12 @@ describe("runDependabotPrepare: group of packages", () => {
   });
 
   test("moves to needs_human when the prompt input of the group is too large", async () => {
-    const big = `# 1.3.1\n${FENCES(10_000)}\n# 1.3.0\n- old`;
-    const bigRight = `# 2.0.1\n${FENCES(10_000)}\n# 2.0.0\n- old`;
+    const big = `# 1.3.1\n${FENCES(5_000)}\n# 1.3.0\n- old`;
+    const bigRight = `# 2.0.1\n${FENCES(5_000)}\n# 2.0.0\n- old`;
     const { h } = await prepare(
       {
         collect: async () => groupReady(),
-        pr: pullRequest({ body: FENCES(16_000) }),
+        pr: pullRequest({ body: FENCES(8_000) }),
         changelogByDir: { [LEFT_DIR]: big, [RIGHT_DIR]: bigRight },
       },
       GROUP_INPUT,
@@ -1765,9 +1766,9 @@ describe("runDependabotPrepare: group of packages", () => {
   });
 
   test("proceeds with the same inputs for a single package", async () => {
-    const big = `# 1.3.1\n${FENCES(10_000)}\n# 1.3.0\n- old`;
+    const big = `# 1.3.1\n${FENCES(5_000)}\n# 1.3.0\n- old`;
     const { result } = await prepare({
-      pr: pullRequest({ body: FENCES(16_000) }),
+      pr: pullRequest({ body: FENCES(8_000) }),
       changelogByDir: { [LEFT_DIR]: big },
     });
     expect(result.proceed).toBe(true);

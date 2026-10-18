@@ -45,6 +45,7 @@ import {
 import type { WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import {
+  coverageEscalationsOf,
   type DependabotAssessed,
   decideAssessedOutcome,
   parseDependabotAssessResult,
@@ -129,7 +130,7 @@ function fail(what: string): never {
  * 準備ステップと影響調査ステップの戻り値を読み直す。ステップの間はJSONで渡るので、型は保証されない。
  * 2つの結果が食い違うとき(片方だけが進んだ、影響調査の入力が準備の成果物と違う)は例外を投げる。
  * 影響調査の入力が準備の成果物と1文字でも違えば止めるので、間で人に回す根拠が落ちることはない。
- * 対象の名前は、投稿の本文に載せるのでnpmの名前の形に限る。
+ * すべての対象の名前は、投稿の本文に載せるのでnpmの名前の形に限る。
  */
 export function readFinishInput(
   prepare: unknown,
@@ -151,9 +152,10 @@ export function readFinishInput(
   if (JSON.stringify(assessed.input) !== JSON.stringify(prepared.input)) {
     fail("assess input differs from the prepare result");
   }
-  const { name } = assessed.input.target;
-  if (!PACKAGE_NAME.test(name) || name.includes("..")) {
-    fail("target name is not an npm package name");
+  for (const { name } of assessed.input.targets) {
+    if (!PACKAGE_NAME.test(name) || name.includes("..")) {
+      fail("target name is not an npm package name");
+    }
   }
   return assessed.kind === "needs_human"
     ? { kind: "needs_human", input: assessed.input, reason: assessed.reason }
@@ -162,9 +164,12 @@ export function readFinishInput(
 
 // ---- 投稿の本文 ----
 
+/** 投稿の本文で、更新の対象を指す句。名前は`readFinishInput`が検証した形だけが来る。 */
 function targetText(input: DependabotAssessInput): string {
-  const { name, from, to } = input.target;
-  return `dependabotの更新(\`${name}\`の${from}から${to}への更新)`;
+  const items = input.targets.map(
+    ({ name, from, to }) => `\`${name}\`の${from}から${to}への更新`,
+  );
+  return `dependabotの更新(${items.join("、")})`;
 }
 
 const EVIDENCE_LEAD =
@@ -224,7 +229,7 @@ export function renderHumanReviewBody(result: DependabotAssessed): string {
     listSection(
       "人に回した根拠",
       "機械の検査と入力の確認で見つかった根拠です。",
-      escalationsOf(result.input),
+      [...escalationsOf(result.input), ...coverageEscalationsOf(result)],
     ) +
     listSection(
       "サプライチェーンの懸念",
@@ -281,6 +286,11 @@ export type DependabotFinishDeps = {
     repo: string,
     branch: string,
   ) => Promise<string>;
+  /**
+   * `factory_config`の`dependabot_group_enabled`を読み直す。
+   * 対象が2つ以上のとき、マージの直前に呼ぶ。設定を偽に戻した後に、反映前のフローがマージしないため。
+   */
+  readonly readGroupEnabled: () => Promise<boolean>;
   /**
    * GitHubへ書く直前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
    * 通らないときは止める理由を返し、通るときは`null`を返す。noticeは照合が残す。
@@ -371,6 +381,7 @@ function errorText(error: unknown): string {
  *    通らないときは、マージも所見の投稿もラベルの付与もせず、その理由で人に回す。
  *    取得時(`poll_dependabot`)の照合から、準備と影響調査を挟むので、その間に名前が別の人に渡っていても、相手のPRに書かないためである。
  *    `dependabot_merge_enabled`が偽(試運転)なら、マージの直前の確認を終えた後、マージせずに人に回す。
+ *    対象が2つ以上のときは、マージの直前に`dependabot_group_enabled`を読み直し、偽か読めなければ、マージせずに人に回す(`dependabot finish:`)。
  * 8. マージ: headのshaを固定して1回だけマージを要求し、成功したら`reviewed`(`merged`)を1回だけ記録する。
  *    記録がfalse(ほかの処理が先に動かした)か例外のときは、警告だけ残してステップは成功で返す。
  *    マージの成功は通知しない(人の操作が要らないため)。
@@ -618,6 +629,33 @@ export async function runDependabotFinish(
       return cancel(DEPENDABOT_CANCEL_NOTE.gateWaiting);
     }
 
+    // 設定は準備の前から変わりうる。グループは、マージの直前に読み直して無効なら、マージしない。
+    if (target.targets.length >= 2) {
+      let groupEnabled: boolean;
+      try {
+        groupEnabled = await deps.readGroupEnabled();
+      } catch (error) {
+        deps.warn("failed to re-read the group setting", {
+          work_item_id: workItemId,
+          error: errorText(error),
+        });
+        return toHuman(
+          dependabotReason(
+            "finish",
+            "the group setting could not be re-read before the merge",
+          ),
+        );
+      }
+      if (!groupEnabled) {
+        return toHuman(
+          dependabotReason(
+            "finish",
+            "group updates were disabled before the merge",
+          ),
+        );
+      }
+    }
+
     // 試運転では、マージの直前の確認までを通し、マージだけを人に任せる。
     if (!run.mergeEnabled) return toHuman(DEPENDABOT_DRY_RUN_REASON);
 
@@ -746,7 +784,7 @@ export async function runDependabotFinish(
   const note = dependabotReason("impact", outcome.reason);
   const claude = assessed.claudeAssessment;
   // 通知はリンクとメンションを描くので、Claudeが書いた文は載せず、件数だけを載せる。
-  const counts = `内訳は、Claudeが挙げた懸念が${String(claude.supplyChainConcerns.length)}件、Claudeが確認できなかった項目が${String(claude.unverified.length)}件、機械の検査と入力の確認による根拠が${String(escalationsOf(target).length)}件です`;
+  const counts = `内訳は、Claudeが挙げた懸念が${String(claude.supplyChainConcerns.length)}件、Claudeが確認できなかった項目が${String(claude.unverified.length)}件、機械の検査と入力の確認による根拠が${String(escalationsOf(target).length + coverageEscalationsOf(assessed).length)}件です`;
   return toHuman(note, `${describeReason(note)}。${counts}`);
 }
 
@@ -780,6 +818,9 @@ export async function main(
         mergePullRequest(client, owner, repo, number, headSha),
       getBranchSha: (owner, repo, branch) =>
         getBranchSha(client, owner, repo, branch),
+      readGroupEnabled: async () =>
+        (await loadConfig(() => wmill.getResource("f/factory/factory_config")))
+          .dependabot_group_enabled,
       ensureRepoOwner: (owner, repo) =>
         repoOwnerStopReason(
           config,

@@ -167,6 +167,19 @@ function proceedingGroup(
   );
 }
 
+/** 任意の成果物を載せた、進む形の準備ステップの結果。ステップ間のJSONを通す。 */
+function preparedFrom(assess: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify({
+      proceed: true,
+      terminalStatus: null,
+      reason: null,
+      workItemId: WORK_ITEM_ID,
+      assess,
+    }),
+  );
+}
+
 /** 影響調査に進まなかった準備ステップの結果。 */
 function stoppedResult(
   overrides: Record<string, unknown> = {},
@@ -610,13 +623,11 @@ describe("readPrepareResult", () => {
   test.each<[string, unknown, string]>([
     [
       "the old single target form",
-      JSON.parse(
-        JSON.stringify({
-          ...assessInput(),
-          targets: undefined,
-          target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
-        }),
-      ),
+      preparedFrom({
+        ...assessInput(),
+        targets: undefined,
+        target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+      }),
       "assess input has no targets",
     ],
     [
@@ -691,12 +702,10 @@ describe("readPrepareResult", () => {
     ],
     [
       "a prompt input without packages",
-      JSON.parse(
-        JSON.stringify({
-          ...assessInput(),
-          promptInput: { ...promptInput(), packages: undefined },
-        }),
-      ),
+      preparedFrom({
+        ...assessInput(),
+        promptInput: { ...promptInput(), packages: undefined },
+      }),
       "promptInput has no packages",
     ],
     [

@@ -26,31 +26,39 @@ import {
 import {
   buildCollectDeps,
   type CollectDeps,
+  type CollectedPackage,
   type CollectResult,
   collectGateInput,
   LOCKFILE_PATHS,
 } from "../lib/dependabot_collect.ts";
 import {
-  buildChangelogExcerpt,
   buildLockfileSummary,
   buildManifestDiffSummary,
   changelogCoversVersion,
+  checkPromptSize,
   compareInstalledScripts,
   compareRepositoryUrls,
   DEPENDABOT_INSTALL_TIMEOUT_MS,
   dependabotReason,
   evaluatePostInstallStatus,
+  excerptChangelog,
+  hasTruncationMark,
   MAX_SUMMARY_CHARS,
   POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
 import {
   type DependabotPromptInput,
+  type DependabotPromptPackage,
   effectiveUnverifiedInputs,
   type UnverifiedInputName,
 } from "../lib/dependabot_prompt.ts";
 import { MAX_METADATA_CHARS } from "../lib/dependabot_registry.ts";
-import { evaluateGate, type GateInput } from "../lib/dependabot_support.ts";
+import {
+  evaluateGateGroup,
+  type GateInput,
+  type GateTargetFacts,
+} from "../lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   type GhClient,
@@ -120,12 +128,16 @@ export type DependabotAssessInput = {
   readonly repoDir: string;
   /** headのshaのdetachedの作業ツリー。インストール済みで、インストール先(`node_modules`と`vendor`、console/の下も含む)のほかに追跡外のファイルが無い。 */
   readonly worktreeDir: string;
-  /** 更新の対象。名前は`registry`の名前と一致し、版は`x.y.z`の形である(ゲートが確かめている)。 */
-  readonly target: {
+  /**
+   * 更新の対象。名前の辞書順で、1個以上`MAX_GROUP_TARGETS`個以下。
+   * 名前は`registry`の名前と一致し、版は`x.y.z`の形である(ゲートが確かめている)。
+   * `promptInput.packages`と同じ順で並ぶ。
+   */
+  readonly targets: readonly {
     readonly name: string;
     readonly from: string;
     readonly to: string;
-  };
+  }[];
   /**
    * `buildDependabotPrompt`にそのまま渡す入力。
    * 外部由来の文字列は`sanitizeUntrustedProse`を通してある。
@@ -188,6 +200,8 @@ export type DependabotPrepareWorkItem = Pick<
 export type DependabotPrepareInput = {
   readonly workItem: DependabotPrepareWorkItem;
   readonly dependabotEnabled: boolean;
+  /** `factory_config`の`dependabot_group_enabled`。偽なら、2つ以上のパッケージが変わるPRをゲートが止める。 */
+  readonly groupEnabled: boolean;
   readonly instanceName: string;
 };
 
@@ -557,6 +571,15 @@ function isUsableTarget(name: string, from: string, to: string): boolean {
 
 // ---- 本体 ----
 
+/** ゲートを通した対象1つと、その対象について集めた事実。 */
+type Member = {
+  readonly name: string;
+  readonly from: string;
+  readonly to: string;
+  readonly facts: GateTargetFacts;
+  readonly pkg: CollectedPackage;
+};
+
 /**
  * dependabotの作業項目の準備をする。手順は次のとおり。
  * 1. 作業項目が`picked`の`dependabot`でなければ、何もせずに終える。
@@ -564,13 +587,17 @@ function isUsableTarget(name: string, from: string, to: string): boolean {
  * 3. 事実を集め直す。閉じたPRは取り消し(`pr_closed`)、待ちは取り消し(`gate_waiting`)、
  *    人に回す結果と、GitHubの403は人に回す。そのほかの例外はそのまま投げる。
  * 4. 集めたheadが作業項目のheadと違えば、取り消す(`head_moved`)。
- * 5. ゲートを評価する。待ちは取り消し(`gate_waiting`)、止める結果は人に回す。
+ * 5. ゲート(`evaluateGateGroup`)を全対象について評価する。待ちは取り消し(`gate_waiting`)、止める結果は人に回す。
+ *    対象と集めた事実の並びが合わないとき、対象の名前か版がパスやプロンプトに使えない形のときも人に回す。
  * 6. cloneの前に、リポジトリのオーナーの数値IDを照合する。通らなければ、取得せずに人に回す。取得の失敗(404以外)は例外を投げる。
  * 7. headのshaの作業ツリーを作り直し、隔離した環境でインストールする。失敗は人に回す。
  * 8. `.git`を確かめてから`git status`を実行し、終了コードと出力を確かめる。きれいでなければ人に回す。
- * 9. インストールした対象のpackage.jsonのname、version、スクリプト、binding.gypを、registryの値と突き合わせる。食い違えば人に回す。
- * 10. repositoryのURLの前後を比べる。同じと確かめられなければ、機械の懸念に残して進む。
+ * 9. 全対象について、インストールしたpackage.jsonのname、version、スクリプト、binding.gypを、registryの値と突き合わせる。
+ *    食い違えば人に回す。複数の対象のときは、理由の先頭にパッケージの名前を付ける。
+ * 10. 全対象について、repositoryのURLの前後を比べる。同じと確かめられなければ、機械の懸念に残して進む。
  * 11. 変更履歴、要約、PRのタイトルと本文を無害化して、影響調査の入力を組み立てる。
+ *     変更履歴の抜粋や無害化と、要約が切り詰められたときは、その入力を未確認にする。
+ *     入力の合計が`MAX_PROMPT_CHARS`を超えるときは、人に回す。
  * 取り消すときと人に回すときは、作業ツリーがあれば先に消してから状態を変える。
  * 人に回したときだけ通知し、通知には理由の訳を無害化して載せ、次の操作に再実行を案内しない。
  * 状態がほかの処理で動いていたときは、通知しない。
@@ -678,22 +705,63 @@ export async function runDependabotPrepare(
   if (result.headSha !== expectedHead) {
     return finish("cancelled", DEPENDABOT_CANCEL_NOTE.headMoved);
   }
-  const gate = evaluateGate(result.input);
+  const gate = evaluateGateGroup(
+    result.common,
+    result.targets,
+    input.groupEnabled,
+  );
   if (!gate.ok) {
     return gate.kind === "wait"
       ? finish("cancelled", DEPENDABOT_CANCEL_NOTE.gateWaiting)
       : finish("needs_human", dependabotReason("gate", gate.reason));
   }
-  const { name, to } = result.input.target;
-  const from = result.from;
-  if (!isUsableTarget(name, from, to)) {
+
+  // ゲートが評価した対象と、影響調査に渡す事実は、同じ順で同じパッケージを指さなければならない。
+  const members: Member[] = [];
+  for (const [index, facts] of result.targets.entries()) {
+    const pkg = result.packages[index];
+    if (pkg === undefined || pkg.name !== facts.target.name) {
+      return finish(
+        "needs_human",
+        dependabotReason(
+          "localCheck",
+          "the collected packages do not match the targets",
+        ),
+      );
+    }
+    members.push({
+      name: facts.target.name,
+      from: pkg.from,
+      to: facts.target.to,
+      facts,
+      pkg,
+    });
+  }
+  if (result.packages.length !== members.length) {
     return finish(
       "needs_human",
       dependabotReason(
         "localCheck",
-        "the target name or version has an unexpected form",
+        "the collected packages do not match the targets",
       ),
     );
+  }
+  const isGroup = members.length > 1;
+  /** 複数のパッケージを調べるとき、どのパッケージの理由かを名前で示す。名前は`isUsableTarget`を通した後に使う。 */
+  const labeled = (name: string, reason: string): string =>
+    isGroup ? `package ${name}: ${reason}` : reason;
+  for (const [index, member] of members.entries()) {
+    if (!isUsableTarget(member.name, member.from, member.to)) {
+      return finish(
+        "needs_human",
+        dependabotReason(
+          "localCheck",
+          isGroup
+            ? `target ${String(index + 1)} of ${String(members.length)} has an unexpected name or version form`
+            : "the target name or version has an unexpected form",
+        ),
+      );
+    }
   }
 
   // 取得の入口の照合から収集を挟むので、名前でcloneする直前にもう一度照合する。
@@ -763,95 +831,136 @@ export async function runDependabotPrepare(
     return finish("needs_human", dependabotReason("localCheck", clean.reason));
   }
 
-  const mapped = installedPackageDirsFor(result.input.changedPaths, name);
-  if (mapped.problem !== null) {
-    return finish(
-      "needs_human",
-      dependabotReason("localCheck", mapped.problem),
+  const dirsByMember: (readonly string[])[] = [];
+  for (const member of members) {
+    const mapped = installedPackageDirsFor(
+      result.common.changedPaths,
+      member.name,
     );
-  }
-  const packageDirs = mapped.dirs;
-  for (const packageDir of packageDirs) {
-    const pkg = await deps.readInstalledPackage(worktreeDir, packageDir);
-    if (pkg === null) {
+    if (mapped.problem !== null) {
       return finish(
         "needs_human",
-        dependabotReason(
-          "localCheck",
-          `installed package could not be read: ${packageDir}`,
-        ),
+        dependabotReason("localCheck", labeled(member.name, mapped.problem)),
       );
     }
-    const identity = installedIdentity(pkg.packageJson);
-    if (
-      identity === null ||
-      identity.name !== name ||
-      identity.version !== to
-    ) {
-      return finish(
-        "needs_human",
-        dependabotReason(
-          "localCheck",
-          `installed package is not the target: ${packageDir}`,
-        ),
+    dirsByMember.push(mapped.dirs);
+    for (const packageDir of mapped.dirs) {
+      const pkg = await deps.readInstalledPackage(worktreeDir, packageDir);
+      if (pkg === null) {
+        return finish(
+          "needs_human",
+          dependabotReason(
+            "localCheck",
+            labeled(
+              member.name,
+              `installed package could not be read: ${packageDir}`,
+            ),
+          ),
+        );
+      }
+      const identity = installedIdentity(pkg.packageJson);
+      if (
+        identity === null ||
+        identity.name !== member.name ||
+        identity.version !== member.to
+      ) {
+        return finish(
+          "needs_human",
+          dependabotReason(
+            "localCheck",
+            labeled(
+              member.name,
+              `installed package is not the target: ${packageDir}`,
+            ),
+          ),
+        );
+      }
+      const scripts = compareInstalledScripts(
+        pkg.packageJson,
+        pkg.hasBindingGyp,
+        member.facts.installScripts.after,
       );
-    }
-    const scripts = compareInstalledScripts(
-      pkg.packageJson,
-      pkg.hasBindingGyp,
-      result.input.installScripts.after,
-    );
-    if (!scripts.ok) {
-      return finish(
-        "needs_human",
-        dependabotReason("localCheck", scripts.reason),
-      );
+      if (!scripts.ok) {
+        return finish(
+          "needs_human",
+          dependabotReason("localCheck", labeled(member.name, scripts.reason)),
+        );
+      }
     }
   }
 
   const machineConcerns: string[] = [];
-  const repository = compareRepositoryUrls(
-    result.repositoryBefore,
-    result.repositoryAfter,
-  );
-  if (!repository.ok) {
-    machineConcerns.push(
-      sanitizeUntrustedProse(repository.reason, CONCERN_MAX_CHARS),
+  for (const member of members) {
+    const repository = compareRepositoryUrls(
+      member.pkg.repositoryBefore,
+      member.pkg.repositoryAfter,
     );
+    if (!repository.ok) {
+      const concern = sanitizeUntrustedProse(
+        repository.reason,
+        CONCERN_MAX_CHARS,
+      );
+      // 名前は検証済みなので、無害化の外に置く。無害化は`@`を変え、名前の一致を崩す。
+      machineConcerns.push(labeled(member.name, concern));
+    }
   }
 
-  const unverified: UnverifiedInputName[] = [...result.unverifiedInputs];
-  const firstPackageDir = packageDirs[0];
-  const rawChangelog =
-    firstPackageDir === undefined
-      ? null
-      : await deps.readChangelog(worktreeDir, firstPackageDir);
-  const changelog =
-    rawChangelog === null
-      ? ""
-      : sanitizeUntrustedProse(
-          buildChangelogExcerpt(rawChangelog, from, to),
-          CHANGELOG_MAX_CHARS,
-        );
-  // 更新先の版の見出しが無い変更履歴は、その版の変更を確かめられないので未確認にする(本文はClaudeに渡す)。
-  if (
-    changelog === "" ||
-    rawChangelog === null ||
-    !changelogCoversVersion(rawChangelog, to)
-  ) {
-    unverified.push("changelog");
+  const unverified: UnverifiedInputName[] = members.flatMap(
+    (member) => member.pkg.unverifiedInputs,
+  );
+  const promptPackages: DependabotPromptPackage[] = [];
+  for (const [index, member] of members.entries()) {
+    const firstPackageDir = dirsByMember[index]?.[0];
+    const rawChangelog =
+      firstPackageDir === undefined
+        ? null
+        : await deps.readChangelog(worktreeDir, firstPackageDir);
+    const excerpt =
+      rawChangelog === null
+        ? null
+        : excerptChangelog(rawChangelog, member.from, member.to);
+    const changelog =
+      excerpt === null
+        ? ""
+        : sanitizeUntrustedProse(excerpt.text, CHANGELOG_MAX_CHARS);
+    // 更新先の版の見出しが無い変更履歴は、その版の変更を確かめられないので未確認にする(本文はClaudeに渡す)。
+    // 抜粋や無害化が区間を削ったときも未確認にする。削られた部分に破壊的な変更が含まれうるため。
+    if (
+      changelog === "" ||
+      rawChangelog === null ||
+      excerpt === null ||
+      excerpt.truncated ||
+      hasTruncationMark(changelog) ||
+      !changelogCoversVersion(rawChangelog, member.to)
+    ) {
+      unverified.push("changelog");
+    }
+    promptPackages.push({
+      name: member.name,
+      from: member.from,
+      to: member.to,
+      changelog,
+      registryMetadata: sanitizeUntrustedProse(
+        member.pkg.registryMetadata,
+        MAX_METADATA_CHARS,
+      ),
+    });
   }
 
-  const manifest = manifestDiffFor(result.input.files);
+  const manifest = manifestDiffFor(result.common.files);
   const manifestDiff = manifest.verified
     ? sanitizeUntrustedProse(manifest.text, MAX_SUMMARY_CHARS)
     : "";
-  if (manifestDiff === "") unverified.push("manifest diff");
+  if (manifestDiff === "" || hasTruncationMark(manifestDiff)) {
+    unverified.push("manifest diff");
+  }
   const lockfileSummary = sanitizeUntrustedProse(
-    buildLockfileSummary(result.input.files),
+    buildLockfileSummary(result.common.files),
     MAX_SUMMARY_CHARS,
   );
-  if (lockfileSummary === "") unverified.push("lockfile summary");
+  if (lockfileSummary === "" || hasTruncationMark(lockfileSummary)) {
+    unverified.push("lockfile summary");
+  }
 
   const pr = collected.pr;
   const prBody =
@@ -859,25 +968,22 @@ export async function runDependabotPrepare(
   if (prBody === "") unverified.push("pull request body");
 
   const draft: DependabotPromptInput = {
-    packageName: name,
-    fromVersion: from,
-    toVersion: to,
+    packages: promptPackages,
     prTitle:
       pr === null ? "" : sanitizeUntrustedProse(pr.title, PR_TITLE_MAX_CHARS),
     prBody,
-    changelog,
     manifestDiff,
     lockfileSummary,
-    registryMetadata: sanitizeUntrustedProse(
-      result.registryMetadata,
-      MAX_METADATA_CHARS,
-    ),
     unverifiedInputs: unverified,
   };
   const promptInput: DependabotPromptInput = {
     ...draft,
     unverifiedInputs: effectiveUnverifiedInputs(draft),
   };
+  const size = checkPromptSize(promptInput);
+  if (!size.ok) {
+    return finish("needs_human", dependabotReason("localCheck", size.reason));
+  }
 
   return {
     proceed: true,
@@ -895,7 +1001,7 @@ export async function runDependabotPrepare(
       mergeBaseSha: result.mergeBaseSha,
       repoDir: worktree.repoDir,
       worktreeDir,
-      target: { name, from, to },
+      targets: members.map(({ name, from, to }) => ({ name, from, to })),
       promptInput,
       machineConcerns,
     },
@@ -930,7 +1036,10 @@ function installedIdentity(
 export function collectDepsFor(
   args: {
     readonly client: GhClient;
-    readonly config: Pick<FactoryConfig, "dependabot_min_published_days">;
+    readonly config: Pick<
+      FactoryConfig,
+      "dependabot_min_published_days" | "dependabot_group_enabled"
+    >;
     readonly now: () => number;
   },
   build: typeof buildCollectDeps = buildCollectDeps,
@@ -1108,6 +1217,7 @@ export async function main(
     {
       workItem,
       dependabotEnabled: config.dependabot_enabled,
+      groupEnabled: config.dependabot_group_enabled,
       instanceName: config.instance_name,
     },
   );

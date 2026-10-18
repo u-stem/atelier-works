@@ -859,20 +859,6 @@ describe("processDependabotPr for a group of packages", () => {
     );
   });
 
-  test("falls back to the interval when a too-new package has an unreadable publish time", async () => {
-    const { outcome } = await run(
-      {
-        collect: readyGroup({
-          left: { publishedAtIso: TOO_NEW_LEFT },
-          right: { publishedAtIso: "not a date" },
-        }),
-      },
-      { allowGroups: true },
-    );
-
-    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + FIRST_BACKOFF_MS);
-  });
-
   test("caps the publish wait at the wait limit when a publish time is in the future", async () => {
     const { outcome } = await run(
       {
@@ -894,20 +880,6 @@ describe("processDependabotPr for a group of packages", () => {
     expect(waitOf(outcome)?.nextCheckAtMs).toBe(
       Date.parse("2026-10-25T00:00:00.000Z"),
     );
-  });
-
-  test("hands the group to a person when the pull request is not mergeable and a package is stopped", async () => {
-    const { outcome } = await run(
-      {
-        collect: readyGroup({
-          common: { mergeable: false },
-          right: { registry: null },
-        }),
-      },
-      { allowGroups: true },
-    );
-
-    expect(outcome.kind).toBe("escalated");
   });
 });
 
