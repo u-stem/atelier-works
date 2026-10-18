@@ -248,6 +248,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/host_apply_secure_file.test.ts",
   "tests/scripts/host_apply_drain_store.test.ts",
   "tests/scripts/host_apply_state_io.test.ts",
+  "tests/scripts/host_apply_command.test.ts",
+  "tests/scripts/host_apply_git_grammar.test.ts",
+  "tests/scripts/host_apply_spawn_runner.test.ts",
+  "tests/scripts/host_apply_run_git.test.ts",
+  "tests/scripts/host_apply_run_fetch.test.ts",
+  "tests/scripts/host_apply_host_probe.test.ts",
 ];
 
 /**

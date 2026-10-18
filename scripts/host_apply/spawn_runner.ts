@@ -55,9 +55,9 @@ function isNoSuchProcess(error: unknown): boolean {
 const realDeps: RunnerDeps = {
   spawn: (cmd, opts) => Bun.spawn(cmd, opts),
   killGroup: (pid) => {
-    // pid 0や1、自分自身の値で呼ぶと、無関係なグループに信号が届く。
+    // pidが0や1や自分自身だと、無関係なグループに信号が届く。
     if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) {
-      throw new Error("process group id is not valid");
+      throw new Error("pgid is not valid");
     }
     try {
       process.kill(-pid, "SIGKILL");
