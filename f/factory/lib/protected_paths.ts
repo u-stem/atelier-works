@@ -235,6 +235,11 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/host_apply_heartbeat.test.ts",
   "tests/scripts/host_apply_manifest.test.ts",
   "tests/scripts/host_apply_notify.test.ts",
+  "tests/scripts/host_apply_approved_store.test.ts",
+  "tests/scripts/host_apply_approve.test.ts",
+  "tests/scripts/host_apply_approved_io.test.ts",
+  "tests/scripts/host_apply_code_origin.test.ts",
+  "tests/scripts/host_apply_approve_cli.test.ts",
 ];
 
 /**

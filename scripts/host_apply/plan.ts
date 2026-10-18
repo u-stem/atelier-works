@@ -41,6 +41,13 @@ export type PlanInput = {
   readonly applied: string;
   readonly target: string;
   readonly approved: string | null;
+  /**
+   * 承認の記録が示す、承認のときの適用済みのsha。
+   * 与えられたとき、実際の適用済みと一致しなければ、承認を使わない。
+   * 実際の適用済みより古くても新しくても、承認が見ていない変更(変更して戻した差など)を隠しうるため、祖先や子孫は認めない。
+   * 与えなければ(`--approved`)、承認を無条件に使う。
+   */
+  readonly approvedFrom?: string | null;
   /** パスの内外の判定に使う、ステージングのルートの論理的な絶対パス。実在しなくてよい。 */
   readonly root: string;
 };
@@ -88,7 +95,7 @@ export function forbiddenTreePaths(entries: readonly TreeEntry[]): string[] {
 
 /**
  * treeのパスのうち、1つのパスが2つのファイルを指しうるものを返す。
- * - ASCIIの印字できる文字以外(ASCII以外の文字と制御文字)を含むパス。`ſcripts/doctor.sh`や、ケルビン記号の`K`を使った`docKer-compose.yml`は、
+ * - ASCIIの印字できる文字以外(ASCII以外の文字と制御文字)を含むパス。先頭をU+017Fの文字にした`doctor.sh`のパスや、U+212A(ケルビン記号)を使った`docker-compose.yml`のパスは、
  *   大文字小文字を畳む照合やUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
  * - ASCIIの小文字にそろえると、ディレクトリを含めて衝突するパス。大文字小文字を区別しないファイルシステムで同じファイルになる。
  * - composeが自動で読むoverrideファイル。定義を後から上書きできる。
@@ -133,7 +140,7 @@ function unreadableReason(read: BlobRead, name: string): string {
  * 先端が適用済みと同じか祖先ならnoop、子孫でなければ`not_ff`、treeにsymlinkかsubmoduleがあれば`tree_forbidden`、
  * 承認が要る変更があれば承認待ち、
  * 静的な検査(mise設定、composeの許可リスト)に通らなければ拒否、すべて通れば`would_converge`にする。
- * 承認の基準は、適用済みと承認済みのうち新しい方。
+ * 承認の基準は、適用済みと承認済みのうち新しい方。承認は、`approvedFrom`が与えられたとき、それが適用済みと一致する場合だけ使う。
  * shaが40桁の16進でない、またはコミットが無いときは例外にする。
  */
 export async function buildPlan(
@@ -141,7 +148,12 @@ export async function buildPlan(
   input: PlanInput,
 ): Promise<PlanResult> {
   const { applied, target } = input;
-  for (const sha of [applied, target, input.approved]) {
+  for (const sha of [
+    applied,
+    target,
+    input.approved,
+    input.approvedFrom ?? null,
+  ]) {
     if (sha !== null && !isSha40(sha)) {
       throw new Error("sha must be 40 lowercase hex digits");
     }
@@ -176,6 +188,9 @@ export async function buildPlan(
   }
 
   let approved = input.approved;
+  if (input.approvedFrom !== undefined && input.approvedFrom !== applied) {
+    approved = null;
+  }
   if (approved !== null && !(await git.commitExists(approved))) approved = null;
   const base = pickApprovalBase({
     applied,
@@ -236,22 +251,36 @@ export type PlanArgs = {
   readonly applied: string;
   readonly target: string;
   readonly approved: string | null;
+  /** 承認の記録を置いたディレクトリ。`--approved`とは同時に指定できない。 */
+  readonly stateDir: string | null;
 };
 
 export type ParsedPlanArgs =
   | { readonly ok: true; readonly args: PlanArgs }
   | { readonly ok: false; readonly error: string };
 
+/** `/`で始まり、制御文字(NUL、DEL、C1を含む)を含まないパスか。 */
+export function isAbsoluteCleanPath(value: string): boolean {
+  if (!value.startsWith("/")) return false;
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return false;
+  }
+  return true;
+}
+
 const PLAN_FLAGS: readonly string[] = [
   "--repo",
   "--applied",
   "--target",
   "--approved",
+  "--state-dir",
 ];
 
 /**
  * `plan`の引数を読む。
- * `--repo`、`--applied`、`--target`が必須で、`--approved`は任意。shaは40桁の16進だけを受け付ける。
+ * `--repo`、`--applied`、`--target`が必須で、`--approved`と`--state-dir`は任意。shaは40桁の16進だけを受け付ける。
+ * `--state-dir`は、制御文字を含まない絶対パスだけを受け付ける。`--approved`とは同時に指定できない。
  * 未知のフラグ、重複、値の無いフラグは拒否する。
  */
 export function parsePlanArgs(argv: readonly string[]): ParsedPlanArgs {
@@ -284,5 +313,15 @@ export function parsePlanArgs(argv: readonly string[]): ParsedPlanArgs {
   if (approved !== null && !isSha40(approved)) {
     return { ok: false, error: "--approved must be a 40-digit sha" };
   }
-  return { ok: true, args: { repo, applied, target, approved } };
+  const stateDir = values.get("--state-dir") ?? null;
+  if (stateDir !== null && !isAbsoluteCleanPath(stateDir)) {
+    return {
+      ok: false,
+      error: "--state-dir must be an absolute path without control characters",
+    };
+  }
+  if (approved !== null && stateDir !== null) {
+    return { ok: false, error: "--approved and --state-dir are exclusive" };
+  }
+  return { ok: true, args: { repo, applied, target, approved, stateDir } };
 }

@@ -842,7 +842,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- ホストの実行役による反映。判定を出力する`plan`だけがあり、排水、収束、定期実行、承認のコマンド、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
+- ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

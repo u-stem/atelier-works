@@ -3808,11 +3808,15 @@ workerのコンテナが作り直されるので、実装中(`implementing`)の�
 gitのオブジェクトを読むだけで、作業ツリー、ネットワーク、dockerには触れない。
 
 ```bash
-bun scripts/host-apply.ts plan --repo <リポジトリのパス> --applied <適用済みのsha> --target <目標のsha>
+bun --no-env-file ./scripts/host-apply.ts plan --repo <リポジトリのパス> --applied <適用済みのsha> --target <目標のsha>
 ```
 
 shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は受け付けない。
-承認済みのコミットがあるときは、`--approved <sha>`を足す。
+`./`で始めるのは、`bun run`が同名の`package.json`のscriptを先に実行するのを避けるためである。
+`--no-env-file`は、カレントディレクトリの`.env`をBunが読まないようにする。
+承認の記録を使うときは、`--state-dir <記録のディレクトリ>`を足す。
+記録は、その`applied`が`--applied`と一致するときだけ使われる。
+手元で承認済みのコミットを仮定して確かめるときは、`--approved <sha>`を使う。`--state-dir`とは同時に指定できない。
 
 標準出力にJSONを1行で出力する。`decision`の値は次の4つである。
 
@@ -3825,6 +3829,74 @@ shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は�
 
 終了コードは、判定が出れば0、コミットが無いなどの実行の失敗なら1、引数の誤りなら2である。
 承認が要る変更の範囲と、静的検査の内容は、[ホストの実行役の境界](security.md#ホストの実行役の境界)にある。
+
+### 変更を承認する
+
+`plan`が`pending_approval`を返す変更は、人が`approve`で承認する。
+承認の記録は、`plan --state-dir`が読む。
+`approve`は、端末で確認の文言を入力した人だけが記録を書ける道具で、Claudeの作業の中では動かない。
+門の内容と残るリスクは、[承認の門](security.md#承認の門)にある。
+
+手順は次のとおりである。
+
+1. ホストのメインのチェックアウトで、`git fetch origin`を実行して`origin/main`を更新する。
+   リンクされたworktreeでは動かない。
+   `HEAD`が`origin/main`に含まれ、実行するファイルが`HEAD`と同じでなければ、`approve`は止まる。
+2. 適用済みのshaを、ホストのcheckoutの履歴で確かめる。
+   `git reflog`で、最後に`mise run up`か`mise run deploy`を実行したときの`HEAD`を探す。
+   実行の直前に`git pull`していれば、その`git pull`で`HEAD`が動いた行が手がかりになる。
+   reflogは`HEAD`の動きだけを記録し、`mise run up`の実行は記録しない。
+   実行した時点は、端末のシェルの履歴などで特定する。
+   `scripts/record-host-applied.sh`が共有ボリュームに書く印は、`--applied`の値には使わない。
+   workerのジョブが書き換えられるためである。
+   印は照合にだけ使う。次のコマンドで読み、reflogで確かめた値と食い違えば、承認を始めずに原因を調べる。
+
+   ```bash
+   docker compose -f infra/docker-compose.yml exec -T windmill_worker cat /var/lib/factory/host_applied_sha | LC_ALL=C grep -xE '[0-9a-f]{40}'
+   ```
+
+   `grep`は、40桁の小文字の16進の行だけを通す。印に端末の制御文字が入っていても、端末に出さないためである。
+   `grep`が何も出さないときは、印が不正という意味で、reflogと食い違うときと同じに扱う。
+3. リポジトリのトップで、承認するコミットを指定して実行する。
+   `<sha>`は7〜40桁の小文字の16進で、ブランチ名は受け付けない。
+   `./`で始めるのは、`bun run`が同名の`package.json`のscriptを先に実行するのを避けるためである。
+   `--no-env-file`は、カレントディレクトリの`.env`を読ませないために付ける。
+4. 表示を読む。
+   承認するコミット、差の始点、人が示した適用済みのsha、`origin/main`の先端、ファイルの一覧と差分が出る。
+   `origin/main`の先端は、GitHubのmainの先端と照合する。refは同じユーザーが書き換えられるためである。
+5. 差分は40行ずつ表示される。Enterで次へ進み、やめるときは`q`を入力する。
+6. 最後のページの後に求められる文言を、そのまま入力する。
+   一致しなければ、記録は書かれない。
+7. `plan --state-dir`で、判定が`would_converge`になることを確かめる。
+   `plan`の`--target`には、`approve`が表示した40桁のshaを渡す。
+
+```bash
+bun --no-env-file ./scripts/host-apply.ts approve <承認するコミットのsha> --applied <適用済みのsha>
+bun --no-env-file ./scripts/host-apply.ts plan --repo . --applied <適用済みのsha> --target <承認したコミットのsha> --state-dir "$HOME/Library/Application Support/atelier-works-host"
+```
+
+記録の置き場は、`--state-dir`を省くと`~/Library/Application Support/atelier-works-host/`になる。
+`--applied`の値が実際の適用済みと違うと、記録は`plan`に使われず、承認をやり直すことになる。
+
+終了コードは、0が承認の記録、1が実行の失敗、2が使い方の誤り、3が承認しないである。
+3のときは、標準エラー出力に、止まった門の理由が出る。
+
+#### 差分が上限を超えたとき
+
+差分が512KiBを超えると、終了コード3で止まる。
+この道具では承認できないので、次のとおりにする。
+
+- マージの前なら、PRを分ける。
+- マージの後なら、mainのコミットを順に承認する。
+  前の記録の`applied`が`--applied`と一致していれば、次の承認の差の始点が前の記録の`sha`に進むので、連鎖できる。
+- 1つのコミットで上限を超えるときは、人が差分を読み、手で`mise run up`を実行する。
+
+#### 承認できない文字を含むとき
+
+承認するファイルの追加行に、許可した文字の外の文字があると、終了コード3で止まり、該当の行が見える表記で出る。
+そのPRで、文字をASCIIか許可した文字に書き換える。
+許可する文字は、[表示と文字](security.md#表示と文字)にある。
+追跡しているファイルの違反は、CIの`check`ジョブで止まるので、mainには入らない。
 
 ### f/とworkerのイメージを両方変えたとき
 
