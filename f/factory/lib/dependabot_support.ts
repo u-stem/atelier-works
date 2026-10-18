@@ -1055,7 +1055,11 @@ export function evaluateGateGroup(
       .map((other) => other.target);
     const result = evaluateWithCoTargets({
       ...common,
-      ...facts,
+      // 対象の値が余分な項目を持っても共通の事実を上書きできないよう、1つずつ取り出す
+      target: facts.target,
+      registry: facts.registry,
+      installScripts: facts.installScripts,
+      publishedAtIso: facts.publishedAtIso,
       coTargets,
     });
     if (result.ok) continue;
