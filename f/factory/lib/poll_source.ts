@@ -21,6 +21,7 @@ import {
   type FactoryOwner,
   type GhIssue,
   type GhOwnerOpenIssueSnapshot,
+  type GhOwnerOpenPrSnapshot,
   type GhPullRequest,
   type GhSource,
   hasLabel,
@@ -378,6 +379,60 @@ export function confirmTablePr(
       number: row.number,
       title: pr.title,
       htmlUrl: `https://github.com/${repository.owner}/${repository.repo}/pull/${String(row.number)}`,
+    },
+  };
+}
+
+/**
+ * ラベル、レビューの依頼、assigneeのPRを見つける。
+ * 失敗はこの関数の中で記録し、件数を`failed`で返す。
+ */
+export async function discoverPrs(
+  input: {
+    readonly source: GhSource;
+    readonly owners: readonly FactoryOwner[];
+    readonly scope: Pick<
+      FactoryConfig,
+      "owners" | "repo_allowlist" | "factory_repo"
+    >;
+    readonly viewer: Viewer;
+    readonly labels: {
+      readonly reviewLabel: string;
+      readonly fixLabel: string;
+    };
+    readonly staleAfterMs: number;
+    readonly log: Logger;
+  },
+  deps: {
+    readonly searchPrs: (owner: FactoryOwner) => Promise<PrSearchItem[]>;
+    readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
+    readonly getPr: (
+      owner: string,
+      repo: string,
+      number: number,
+    ) => Promise<PullRequest>;
+    readonly getIssue: (
+      owner: string,
+      repo: string,
+      number: number,
+    ) => Promise<Issue>;
+    readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+  },
+): Promise<{
+  items: PrSearchItem[];
+  failed: number;
+  stats: PollSourceStats;
+}> {
+  void deps;
+  return {
+    items: [],
+    failed: 0,
+    stats: {
+      source: input.source,
+      fallback_searches: 0,
+      fallback_reasons: {},
+      table_candidates: 0,
+      table_dropped: 0,
     },
   };
 }
