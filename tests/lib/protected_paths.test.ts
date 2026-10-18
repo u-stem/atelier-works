@@ -1190,3 +1190,25 @@ describe("libs whose lock is not protected", () => {
     expect(exposesEntryPoint(await Bun.file(path).text())).toBe(false);
   });
 });
+
+describe("wmill.yaml", () => {
+  test("FORBIDDEN_EXACT_PATHS lists it", () => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain("wmill.yaml");
+  });
+
+  test("matchesForbiddenPath matches it", () => {
+    expect(matchesForbiddenPath("wmill.yaml")).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches it", () => {
+    expect(matchesImplementProtectedPath("wmill.yaml")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches it written with a leading ./", () => {
+    expect(matchesForbiddenPath("./wmill.yaml")).toBe(true);
+  });
+
+  test("FORBIDDEN_EXACT_PATHS does not list wmill-lock.yaml, which changes with every dependency bump", () => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain("wmill-lock.yaml");
+  });
+});

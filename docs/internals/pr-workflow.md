@@ -1194,8 +1194,9 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
 個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
-一覧には、次の10種類が入る。
+一覧には、次の種類が入る。
 
+- 反映の設定: `wmill.yaml`。`codebases`の`customBundler`は反映時にシェルで実行され、`assets`の`from`は任意のパスのファイルを読むため
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump*`と、それが使う`f/factory/lib/`の3ファイル

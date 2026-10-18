@@ -3028,10 +3028,15 @@ YAMLでは、エスケープや行の継続で作る`!inline`、`%TAG`の指示�
 JSONは、解釈した後の値を調べる。
 flow、resource、appも同じ`!inline`を読むため、これらの経路を塞ぐ。
 `f/`の下では、`node_modules`という名前のフォルダも検査から外さない。
+`wmill.yaml`も止める。
+`codebases`の`customBundler`は、`wmill sync push`が反映時に、設定の文字列をシェルで実行する。
+`assets`の`from`は、`wmill sync push`が任意のパスのファイルを読み、ワークスペースに載せる。
+どちらも、保護の外から書き換えられると、反映するworkerやホストで任意のコマンドが走り、任意のファイルが載る。
+そのため、`wmill.yaml`は`FORBIDDEN_EXACT_PATHS`に入れて、`codebases`に限らず丸ごと止める。
+`wmill-lock.yaml`は、依存の変更のたびに書き換わるので止めない。
 テストは保護パスで止まるが、テストの実行環境は止めない。
 `tests/preload.ts`と、保護していないほかのテストは、テストを緑のまま通すために書き換えられる。
-`wmill.yaml`の`codebases`も止めない。
-これらは残るリスクで、マージ前の人のレビューで防ぐ。
+これは残るリスクで、マージ前の人のレビューで防ぐ。
 YAMLの解釈は、テストが使うBunとwmillで違いうる。
 そのため、script定義では`lock`の行を完全に一致させ、解釈の違いに頼らない。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
