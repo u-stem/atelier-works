@@ -57,6 +57,7 @@ import {
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { issueKey } from "./lib/poll_source.ts";
 import {
   actionableCancelNote,
   type ClosedTargetInfo,
@@ -753,7 +754,7 @@ export async function buildIssueCandidates(
         labelerLogin: labeler === null ? null : labeler.login,
         labelerId: labeler === null ? null : labeler.databaseId,
         hasActiveWorkItem: activeIssueKeys.has(
-          `${item.owner}/${item.repo}#${item.number}`,
+          issueKey(item.owner, item.repo, item.number),
         ),
       });
     } catch (err) {
@@ -1389,9 +1390,11 @@ export async function main(): Promise<{
 
   const active = await listActive();
   const activeIssueKeys = new Set(
-    active
-      .filter((item) => item.kind === "issue" && item.issue_number !== null)
-      .map((item) => `${item.owner}/${item.repo}#${item.issue_number}`),
+    active.flatMap((item) =>
+      item.kind === "issue" && item.issue_number !== null
+        ? [issueKey(item.owner, item.repo, item.issue_number)]
+        : [],
+    ),
   );
 
   const rawCandidates: IssueSearchItem[] = [];

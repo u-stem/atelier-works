@@ -620,7 +620,11 @@ describe("the table and the search find the same issues", () => {
   });
 
   test("agrees across several owners", async () => {
-    const betaItem = searchItem(7, { owner: "Beta", repo: "Tools" });
+    const betaItem = searchItem(7, {
+      owner: "Beta",
+      repo: "Tools",
+      htmlUrl: "https://github.com/Beta/Tools/issues/7",
+    });
     const { search, table } = await both(
       {
         searches: { acme: [searchItem(3)], beta: [betaItem] },
