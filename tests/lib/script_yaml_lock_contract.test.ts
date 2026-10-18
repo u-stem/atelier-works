@@ -64,6 +64,9 @@ function findLockViolations(definitionPath: string, content: string): string[] {
   return violations;
 }
 
+/** 値の頭にある`!`。`!==`は演算子として除く。 */
+const YAML_TAG_TOKEN = /(^|[\s[{,])!(?!=)/m;
+
 /** 解釈した後の値に、`!inline`で始まる文字列があるか。エスケープや行の継続も解く。 */
 function hasInlineValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -96,7 +99,15 @@ function findInlineInDataFile(path: string, content: string): string[] {
     violations.push("YAML directives are not allowed");
   }
   if (path.endsWith(".json")) {
+    if (hasInlineValue(JSON.parse(content))) {
+      violations.push("a value resolves to !inline");
+    }
     return violations;
+  }
+  // wmillのパーサは、`!in%6Cine`のように%エスケープしたタグも`!inline`に解く。
+  // Bunは解けないので、タグ自体を拒む。`!==`のような演算子は対象にしない。
+  if (YAML_TAG_TOKEN.test(content)) {
+    violations.push("YAML tags are not allowed");
   }
   if (hasInlineValue(Bun.YAML.parse(content))) {
     violations.push("a value resolves to !inline");
@@ -209,6 +220,29 @@ describe("findInlineInDataFile escapes", () => {
   test("rejects a TAG directive in a script definition", () => {
     const content = `%TAG !w! !in\n---\n${VALID}`;
     expect(findLockViolations(PATH, content).length).toBeGreaterThan(0);
+  });
+});
+
+describe("findInlineInDataFile tags and json", () => {
+  test("rejects a percent-escaped tag", () => {
+    const content = "content: !in%6Cine ../../../mise.local.toml\n";
+    expect(
+      findInlineInDataFile("f/factory/x.resource.yaml", content).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("accepts the !== operator in an expression", () => {
+    const content = 'expr: results.a.outcome !== "proceed"\n';
+    expect(
+      findInlineInDataFile("f/factory/x__flow/flow.yaml", content),
+    ).toEqual([]);
+  });
+
+  test("rejects an inline reference in a json definition", () => {
+    const content = '{"value":{"content":"\\u0021inline mise.local.toml"}}';
+    expect(
+      findInlineInDataFile("f/factory/x.resource.json", content).length,
+    ).toBeGreaterThan(0);
   });
 });
 
