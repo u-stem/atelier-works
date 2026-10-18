@@ -98,8 +98,10 @@ function reject(detail: string): never {
 
 type Ref = {
   readonly name: string;
-  /** 参照を含むスカラー全体。違反の鍵に使う。 */
+  /** 参照を含むスカラー全体。 */
   readonly scalar: string;
+  /** スカラー全体のSHA-256。鍵に使う(長いスカラーを参照ごとに連結しない)。 */
+  readonly sid: string;
   /** 名前の側(マップのキー、`NAME=値`の`NAME`)にあるか。 */
   readonly inKey: boolean;
 };
@@ -110,7 +112,7 @@ const REFERENCE = /\$\{?([A-Za-z_][A-Za-z0-9_]*)/g;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function refKey(ref: Ref): string {
-  return `${ref.name}\0${ref.inKey ? 1 : 0}\0${ref.scalar}`;
+  return `${ref.name}\0${ref.inKey ? 1 : 0}\0${ref.sid}`;
 }
 
 /** 文書の走査。同じノードの結果は1回だけ求めて、別名で共有された先でも使い回す。 */
@@ -120,6 +122,7 @@ class Scanner {
   private work = 0;
   private readonly memo = new Map<object, RefSet>();
   private readonly active = new Set<object>();
+  private readonly digests = new Map<string, string>();
 
   constructor(private readonly limits: TableLimits) {}
 
@@ -160,11 +163,24 @@ class Scanner {
     for (const [key, ref] of from) into.set(key, ref);
   }
 
+  /** スカラーのSHA-256。同じ文字列は1回だけ求める。 */
+  sidOf(text: string): string {
+    const known = this.digests.get(text);
+    if (known !== undefined) return known;
+    const made = createHash("sha256").update(text).digest("hex");
+    this.digests.set(text, made);
+    return made;
+  }
+
   refsOfString(text: string, inKey: boolean): RefSet {
     this.count(text);
     const refs: RefSet = new Map();
-    for (const match of text.matchAll(REFERENCE)) {
-      const ref = { name: match[1] ?? "", scalar: text, inKey };
+    const names = new Set<string>();
+    for (const match of text.matchAll(REFERENCE)) names.add(match[1] ?? "");
+    if (names.size === 0) return refs;
+    const sid = this.sidOf(text);
+    for (const name of names) {
+      const ref = { name, scalar: text, sid, inKey };
       refs.set(refKey(ref), ref);
     }
     return refs;
@@ -201,8 +217,15 @@ class Scanner {
     const refs: RefSet = new Map();
     const addAll = (from: RefSet, scalar: (ref: Ref) => string) => {
       this.spend(from.size);
+      const made = new Map<string, Ref["sid"]>();
       for (const ref of from.values()) {
-        const next = { ...ref, scalar: scalar(ref) };
+        const text = scalar(ref);
+        let sid = made.get(ref.scalar);
+        if (sid === undefined) {
+          sid = this.sidOf(text);
+          made.set(ref.scalar, sid);
+        }
+        const next = { ...ref, scalar: text, sid };
         refs.set(refKey(next), next);
       }
     };
@@ -261,30 +284,49 @@ function passThrough(raw: string, scanner: Scanner): RefSet {
   if (/\s/.test(name)) reject("an environment entry has a space in its name");
   if (!ENV_NAME.test(name)) return refs;
   scanner.count(name);
-  const ref = { name, scalar: name, inKey: false };
+  const ref = { name, scalar: name, sid: scanner.sidOf(name), inKey: false };
   refs.set(refKey(ref), ref);
   return refs;
 }
 
-/** 値を、キーを並べた文字列にする。上限を超える値は拒否する(別名で膨らむ値の鍵を作らない)。 */
+/**
+ * 値を、キーを並べた文字列にする。
+ * 上限(文字数と深さ)を超える値と、自分を参照する値は拒否する(別名で膨らむ値や循環した値の鍵を作らない)。
+ */
 function canonical(value: unknown): string {
   let left = CANONICAL_LIMIT;
-  const walk = (node: unknown): string => {
-    left -= 1;
+  const active = new Set<object>();
+  const spend = (amount: number) => {
+    left -= amount;
     if (left < 0) reject("a value is too large to be compared");
-    if (Array.isArray(node)) return `[${node.map(walk).join(",")}]`;
-    if (isRecord(node)) {
-      return `{${Object.keys(node)
-        .sort()
-        .map((key) => `${JSON.stringify(key)}:${walk(node[key])}`)
-        .join(",")}}`;
+  };
+  const walk = (node: unknown, depth: number): string => {
+    spend(1);
+    if (depth > 64) reject("a value is nested too deep to be compared");
+    if (typeof node === "object" && node !== null) {
+      if (active.has(node)) reject("the compose file refers to itself");
+      active.add(node);
+      let text: string;
+      if (Array.isArray(node)) {
+        text = `[${node.map((item) => walk(item, depth + 1)).join(",")}]`;
+      } else {
+        const parts: string[] = [];
+        for (const key of Object.keys(node).sort()) {
+          spend(key.length);
+          parts.push(
+            `${JSON.stringify(key)}:${walk(isRecord(node) ? node[key] : null, depth + 1)}`,
+          );
+        }
+        text = `{${parts.join(",")}}`;
+      }
+      active.delete(node);
+      return text;
     }
     const text = JSON.stringify(node) ?? "null";
-    left -= text.length;
-    if (left < 0) reject("a value is too large to be compared");
+    spend(text.length);
     return text;
   };
-  return walk(value);
+  return walk(value, 0);
 }
 
 function digest(parts: readonly string[]): string {
@@ -324,6 +366,14 @@ function imageMatches(repository: string, image: string): boolean {
   ).test(image);
 }
 
+/** 文字列の`image`の違反。`$`を含む値は、展開で取得先を変えられるので、承認でも通さない。 */
+function imageString(service: string, image: string): ComposeViolation {
+  if (image.includes("$")) {
+    reject(`the image of ${service} does not match the allowed form`);
+  }
+  return violation("image", service, "image", image, `s:${image}`);
+}
+
 function imageViolations(
   service: string,
   node: Record<string, unknown>,
@@ -339,30 +389,25 @@ function imageViolations(
       service,
       "image",
       "(not a string)",
-      `non-string:${canonical(image)}`,
+      `n:${canonical(image)}`,
     );
   if (expected === null) {
     if (hasImage) {
       out.push(
-        typeof image === "string"
-          ? violation("image", service, "image", image, image)
-          : nonString(),
+        typeof image === "string" ? imageString(service, image) : nonString(),
       );
     }
     if (!Object.hasOwn(node, "build")) {
-      out.push(violation("image", service, "build", "(no build)", "no build"));
+      out.push(violation("image", service, "build", "(no build)", "nobuild"));
     }
     return out;
   }
   if (!hasImage || image === undefined) {
-    out.push(violation("image", service, "image", "(none)", "none"));
+    out.push(violation("image", service, "image", "(none)", "missing"));
   } else if (typeof image !== "string") {
     out.push(nonString());
   } else if (!imageMatches(expected, image)) {
-    if (image.includes("$")) {
-      reject(`the image of ${service} has a variable outside the tag`);
-    }
-    out.push(violation("image", service, "image", image, image));
+    out.push(imageString(service, image));
   }
   if (Object.hasOwn(node, "build")) {
     out.push(
@@ -371,7 +416,7 @@ function imageViolations(
         service,
         "build",
         "build",
-        `build:${canonical(node.build)}`,
+        `b:${canonical(node.build)}`,
       ),
     );
   }
@@ -388,7 +433,7 @@ function judge(
   const allowed = Object.hasOwn(COMPOSE_SECRET_TABLE, ref.name)
     ? COMPOSE_SECRET_TABLE[ref.name]
     : undefined;
-  const material = `${ref.name}\0${ref.scalar}`;
+  const material = `${ref.name}\0${ref.sid}`;
   if (allowed !== undefined) {
     if (allowed.includes(service) && field === "environment" && !ref.inKey) {
       return null;
@@ -437,7 +482,6 @@ function scan(parsed: unknown, limits: TableLimits): ComposeViolation[] {
     }
     if (!isRecord(node)) reject(`service ${name} is not a map`);
     scanner.touch(2);
-    for (const item of imageViolations(name, node)) found.set(item.id, item);
     for (const [field, value] of Object.entries(node)) {
       judgeAll(scanner.refsOfString(field, true), name, field);
       judgeAll(
@@ -451,6 +495,8 @@ function scan(parsed: unknown, limits: TableLimits): ComposeViolation[] {
         judgeAll(scanner.buildArgRefs(value, 4), name, field);
       }
     }
+    // 走査が循環と上限を先に拒否してから、値の鍵を作る。
+    for (const item of imageViolations(name, node)) found.set(item.id, item);
   }
   for (const [key, value] of Object.entries(parsed)) {
     if (key === "services") continue;
