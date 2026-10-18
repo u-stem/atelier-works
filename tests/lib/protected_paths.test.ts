@@ -549,6 +549,22 @@ describe("drawio isolation test", () => {
   });
 });
 
+describe("script definition lock contract test", () => {
+  const path = "tests/lib/script_yaml_lock_contract.test.ts";
+
+  test("matchesForbiddenPath matches the test", () => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches the test", () => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("FORBIDDEN_EXACT_PATHS lists the test", () => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {

@@ -2854,6 +2854,24 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+scriptの定義の`lock`が自分の`.script.lock`を指す契約テストも止める。
+対象は`tests/lib/script_yaml_lock_contract.test.ts`である。
+`wmill sync push`は、`lock: '!inline <パス>'`のパスを読み、中身をlockとして保存する。
+パスに制限はなく、絶対パスや`..`も書ける。
+保護の外の定義を書き換えて参照先を変えると、workerやホストの任意のファイルがlockとしてワークスペースに載りうる。
+このテストは、全定義の参照先を固定する。
+あわせて、追跡するツリーにsymlinkとsubmoduleがないこと、`f/`の下にモジュールフォルダ(`__mod`など)がないことを確かめる。
+script定義以外のYAMLとJSONには、`!inline`を許さない。
+YAMLでは、エスケープや行の継続で作る`!inline`、`%TAG`の指示子、タグ(`!in%6Cine`など)も拒む。
+JSONは、解釈した後の値を調べる。
+flow、resource、appも同じ`!inline`を読むため、これらの経路を塞ぐ。
+`f/`の下では、`node_modules`という名前のフォルダも検査から外さない。
+テストは保護パスで止まるが、テストの実行環境は止めない。
+`tests/preload.ts`と、保護していないほかのテストは、テストを緑のまま通すために書き換えられる。
+`wmill.yaml`の`codebases`も止めない。
+これらは残るリスクで、マージ前の人のレビューで防ぐ。
+YAMLの解釈は、テストが使うBunとwmillで違いうる。
+そのため、script定義では`lock`の行を完全に一致させ、解釈の違いに頼らない。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
