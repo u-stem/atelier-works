@@ -987,7 +987,7 @@ describe("the fence receives the state directory", () => {
     const dir = privateDir();
     const { lock, seen } = recordingLock();
     await createState(dir, INPUT, lock, uid);
-    expect(seen).toEqual([dir, dir]);
+    expect([...new Set(seen)]).toEqual([dir]);
   });
 
   test("commitApplied passes it", async () => {

@@ -3,9 +3,10 @@
  * 記録は、workerのコンテナに終了の信号(SIGTERM)を送った事実を、信号を送る前に残すためのもの。
  * 項目を消してよいかや、送ってよいかの判定はここに置かない。判定の受け手が使う規則と一緒に作る。
  * ファイルの安全な読み書きは`secure_file.ts`に任せる。
- * 読み書きの競合は防がない。呼び出し側が排他を取ってから呼ぶ。
+ * 読み書きの競合は、書く側が受け取るロック(`HeldLock`)で防ぐ。読む側は排他を取らない。
  */
 
+import type { HeldLock } from "./held_lock.ts";
 import { currentUid, readSecureFile, writeSecureFile } from "./secure_file.ts";
 import { isRecord } from "./stable.ts";
 
@@ -186,17 +187,21 @@ export function readDrain(
 /**
  * 置き場に排水の記録を書く。空の記録も、ファイルを消さずに`entries`が空の記録として書く。
  * 置き場は作らない。置き場を作るのは初期化だけである。
+ * 書く直前に、ロックを今も持っていることと、ロックの置き場が`dir`であることを確かめる。
  */
 export function writeDrain(
   dir: string,
   record: DrainRecord,
+  lock: HeldLock,
   uid: number = currentUid(),
 ): void {
+  const body = serializeDrainRecord(record);
+  lock.assertHeld(dir);
   writeSecureFile({
     dir,
     name: FILE_NAME,
     label: FILE_LABEL,
-    body: serializeDrainRecord(record),
+    body,
     maxBytes: MAX_DRAIN_BYTES,
     uid,
     createDir: false,

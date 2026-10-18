@@ -78,7 +78,7 @@ function persist(
   uid: number,
 ): void {
   const body = serializeState(state);
-  lock.assertHeld();
+  lock.assertHeld(dir);
   writeSecureFile({
     dir,
     name: FILE_NAME,
@@ -194,12 +194,12 @@ export async function createState(
   await requireStack(input.stackMatches, input.applied_sha, images);
   // 状態の「無い」の再確認はしない。排水の記録は別の書き手が作りうるが、状態はロックで守る。
   if (drain === "absent") {
-    lock.assertHeld();
+    lock.assertHeld(dir);
     // 照合を待つ間に別の書き手が作った記録を、空の記録で上書きしない。
     if (readDrain(dir, uid).kind !== "absent") {
       throw new Error("drain file appeared during the check");
     }
-    writeDrain(dir, { schema: 1, entries: {} }, uid);
+    writeDrain(dir, { schema: 1, entries: {} }, lock, uid);
   }
   persist(dir, state, lock, uid);
   return state;
