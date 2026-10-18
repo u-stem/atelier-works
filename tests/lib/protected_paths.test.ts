@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { isDeniedPath } from "../../f/factory/lib/ci_fix_paths.ts";
+import { EMPTY_LOCK_REFERENCE } from "../../f/factory/lib/metadata_patch_verify.ts";
+import { readSourceShape } from "../../f/factory/lib/metadata_signature.ts";
 import {
   FORBIDDEN_EXACT_PATHS,
   FORBIDDEN_PATH_PREFIXES,
@@ -166,10 +169,10 @@ describe("matchesForbiddenPath", () => {
     ).toBe(true);
   });
 
-  test("matches the lock of the library that rewrites the viewer pin", () => {
+  test("does not match the dependency-free lock of the library that rewrites the viewer pin", () => {
     expect(
       matchesForbiddenPath("f/factory/lib/drawio_viewer_bump.script.lock"),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test("matches the script definition of the library that rewrites the viewer pin", () => {
@@ -178,12 +181,12 @@ describe("matchesForbiddenPath", () => {
     ).toBe(true);
   });
 
-  test("matches the lock of the GitHub module of the viewer pin update", () => {
+  test("does not match the dependency-free lock of the GitHub module of the viewer pin update", () => {
     expect(
       matchesForbiddenPath(
         "f/factory/lib/drawio_viewer_bump_github.script.lock",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test("matches the script definition of the observation record", () => {
@@ -549,6 +552,22 @@ describe("drawio isolation test", () => {
   });
 });
 
+describe("script definition lock contract test", () => {
+  const path = "tests/lib/script_yaml_lock_contract.test.ts";
+
+  test("matchesForbiddenPath matches the test", () => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches the test", () => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("FORBIDDEN_EXACT_PATHS lists the test", () => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {
@@ -558,34 +577,24 @@ describe("metadata patch manifest files", () => {
     "f/factory/lib/metadata_patch_manifest.script.lock",
     "f/factory/lib/metadata_patch_zip.ts",
     "f/factory/lib/metadata_patch_zip.script.yaml",
-    "f/factory/lib/metadata_patch_zip.script.lock",
     "f/factory/lib/metadata_patch_yaml.ts",
     "f/factory/lib/metadata_patch_yaml.script.yaml",
-    "f/factory/lib/metadata_patch_yaml.script.lock",
     "f/factory/lib/metadata_patch_verify.ts",
     "f/factory/lib/metadata_patch_verify.script.yaml",
-    "f/factory/lib/metadata_patch_verify.script.lock",
     "f/factory/lib/metadata_patch_imports.ts",
     "f/factory/lib/metadata_patch_imports.script.yaml",
-    "f/factory/lib/metadata_patch_imports.script.lock",
     "f/factory/lib/metadata_patch_download.ts",
     "f/factory/lib/metadata_patch_download.script.yaml",
-    "f/factory/lib/metadata_patch_download.script.lock",
     "f/factory/lib/metadata_hash.ts",
     "f/factory/lib/metadata_hash.script.yaml",
-    "f/factory/lib/metadata_hash.script.lock",
     "f/factory/lib/metadata_precheck.ts",
     "f/factory/lib/metadata_precheck.script.yaml",
-    "f/factory/lib/metadata_precheck.script.lock",
     "f/factory/lib/metadata_signature.ts",
     "f/factory/lib/metadata_signature.script.yaml",
-    "f/factory/lib/metadata_signature.script.lock",
     "f/factory/lib/metadata_git_ports.ts",
     "f/factory/lib/metadata_git_ports.script.yaml",
-    "f/factory/lib/metadata_git_ports.script.lock",
     "f/factory/lib/ci_metadata_rehash.ts",
     "f/factory/lib/ci_metadata_rehash.script.yaml",
-    "f/factory/lib/ci_metadata_rehash.script.lock",
   ];
   const NEAR_MISSES = [
     "f/factory/lib/metadata_patch_manifest.test.ts",
@@ -637,17 +646,13 @@ describe("dependabot flow files", () => {
     "f/factory/steps/dependabot_assess",
     "f/factory/steps/dependabot_finish",
   ];
-  // 依存の無いlib。lockは`"dependencies": {}`で、`windmill-client`の版更新で書き換わらない。
-  const LIB_LOCKS = SCRIPTS.filter((base) =>
-    base.startsWith("f/factory/lib/"),
-  ).map((base) => `${base}.script.lock`);
+  // libの依存の無いlockは保護しない(下の「dependency-free lib locks」)。
   // 窓口のscriptとステップのlockは`windmill-client`を含み、その版更新で書き換わる。
   const CLIENT_LOCKS = SCRIPTS.filter(
     (base) => !base.startsWith("f/factory/lib/"),
   ).map((base) => `${base}.script.lock`);
   const EXACT = [
     ...SCRIPTS.flatMap((base) => [`${base}.ts`, `${base}.script.yaml`]),
-    ...LIB_LOCKS,
     "f/factory/poll_dependabot.schedule.yaml",
   ];
   const FLOW_FILES = [
@@ -711,13 +716,6 @@ describe("dependabot flow files", () => {
     expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
   });
 
-  test.each(LIB_LOCKS)(
-    "the lock %s does not pin windmill-client, so it does not change with a bump",
-    async (path) => {
-      expect(await Bun.file(path).text()).not.toContain("windmill-client");
-    },
-  );
-
   test.each(NEAR_MISSES)(
     "matchesForbiddenPath does not match the near miss %s, so the protection is not a loose match",
     (path) => {
@@ -740,9 +738,10 @@ describe("dependabot flow files", () => {
 // `f/factory/`に置かれたdependabotのファイルが保護から漏れないよう、実際のファイルを調べる。
 // 後から足すファイルも、この検査に自動で入る。
 // 窓口のscriptとステップのlockは`windmill-client`を含み、その版更新で書き換わるので除く。
+// libの依存の無いlockも、保護しないので除く。
 describe("dependabot files on disk", () => {
-  const CLIENT_LOCK =
-    /^f\/factory\/(poll_dependabot|steps\/dependabot_[a-z_]+)\.script\.lock$/;
+  const UNPROTECTED_LOCK =
+    /^f\/factory\/(poll_dependabot|steps\/dependabot_[a-z_]+|lib\/dependabot_[a-z_]+)\.script\.lock$/;
 
   async function dependabotPaths(): Promise<string[]> {
     const paths: string[] = [];
@@ -761,16 +760,17 @@ describe("dependabot files on disk", () => {
     );
   });
 
-  test("matchesForbiddenPath matches every one except the locks that pin windmill-client", async () => {
+  test("matchesForbiddenPath matches every one except the unprotected locks", async () => {
     const unprotected = (await dependabotPaths()).filter(
-      (path) => !CLIENT_LOCK.test(path) && !matchesForbiddenPath(path),
+      (path) => !UNPROTECTED_LOCK.test(path) && !matchesForbiddenPath(path),
     );
     expect(unprotected).toEqual([]);
   });
 
-  test("matchesImplementProtectedPath matches every one except the locks that pin windmill-client", async () => {
+  test("matchesImplementProtectedPath matches every one except the unprotected locks", async () => {
     const unprotected = (await dependabotPaths()).filter(
-      (path) => !CLIENT_LOCK.test(path) && !matchesImplementProtectedPath(path),
+      (path) =>
+        !UNPROTECTED_LOCK.test(path) && !matchesImplementProtectedPath(path),
     );
     expect(unprotected).toEqual([]);
   });
@@ -1049,5 +1049,144 @@ describe("aliases that fold to a protected path", () => {
 
   test("matchesForbiddenPath still rejects an unrelated path", () => {
     expect(matchesForbiddenPath("docs/Readme.md")).toBe(false);
+  });
+});
+
+// 依存の無いlibのlockは保護しない。libは`main`を持たず、単独のjobとして動かない。
+// libをimportする側のscriptは、自分の`.ts`と`.script.lock`で動く。
+// libの`.ts`と`.script.yaml`(`lock`の参照先をlib自身のlockに固定する)は保護したままにする。
+describe("dependency-free lib locks", () => {
+  const LIBS = [
+    "drawio_viewer_bump",
+    "drawio_viewer_bump_github",
+    "dependabot_support",
+    "dependabot_prompt",
+    "dependabot_registry",
+    "dependabot_collect",
+    "dependabot_flow_support",
+    "metadata_patch_zip",
+    "metadata_patch_yaml",
+    "metadata_patch_verify",
+    "metadata_patch_imports",
+    "metadata_patch_download",
+    "metadata_hash",
+    "metadata_precheck",
+    "metadata_signature",
+    "metadata_git_ports",
+    "ci_metadata_rehash",
+  ].map((name) => `f/factory/lib/${name}`);
+  const LOCKS = LIBS.map((base) => `${base}.script.lock`);
+
+  test.each(LOCKS)("matchesForbiddenPath does not match %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+
+  test.each(LOCKS)(
+    "matchesImplementProtectedPath does not match %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
+  test.each(LOCKS)("FORBIDDEN_EXACT_PATHS does not list %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
+  });
+
+  test.each(LOCKS)("the CI round still denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each(LOCKS)("%s is byte-identical to the empty lock", async (path) => {
+    expect(await Bun.file(path).text()).toBe(
+      await Bun.file(EMPTY_LOCK_REFERENCE).text(),
+    );
+  });
+
+  test.each(LIBS)("matchesForbiddenPath keeps matching %s.ts", (base) => {
+    expect(matchesForbiddenPath(`${base}.ts`)).toBe(true);
+  });
+
+  test.each(LIBS)(
+    "matchesImplementProtectedPath keeps matching %s.script.yaml, which fixes the lock reference",
+    (base) => {
+      expect(matchesImplementProtectedPath(`${base}.script.yaml`)).toBe(true);
+    },
+  );
+
+  test.each(LIBS)(
+    "%s.script.yaml points at the lib's own lock",
+    async (base) => {
+      expect(await Bun.file(`${base}.script.yaml`).text()).toContain(
+        `lock: '!inline ${base}.script.lock'`,
+      );
+    },
+  );
+
+  test("the empty lock that the metadata patch check compares against stays protected", () => {
+    expect(matchesForbiddenPath(EMPTY_LOCK_REFERENCE)).toBe(true);
+  });
+
+  test("the empty lock that the metadata patch check compares against stays protected for implement", () => {
+    expect(matchesImplementProtectedPath(EMPTY_LOCK_REFERENCE)).toBe(true);
+  });
+});
+
+// libが単独で動く入口(`main`、`preprocessor`、行頭の`export default`、再export)を持たないことを確かめる。
+// lockを保護しない前提がこの形に依存するので、崩れたら失敗させる。
+function exposesEntryPoint(code: string): boolean {
+  const result = readSourceShape(code);
+  if (!result.ok) return true;
+  if (result.shape.main !== null || result.shape.preprocessor !== null) {
+    return true;
+  }
+  return (
+    /^\s*export\s+(default\b|\*|\{[^}]*\}\s*from\b)/m.test(code) ||
+    /\bexport\s*\{[^}]*\bas\s+(default|["']main["'])/.test(code)
+  );
+}
+
+describe("entry point detection of the libs", () => {
+  test.each([
+    ["export function main", "export async function main(a: string) {}"],
+    ["export function preprocessor", "export function preprocessor() {}"],
+    ["export const main", "export const main = () => 1;"],
+    ["aliased export", "const run = () => 1;\nexport { run as main };"],
+    ["default export", "export default function () {}"],
+    ["star re-export", 'export * from "./x.ts";'],
+    ["named re-export", 'export { main } from "./x.ts";'],
+    ["aliased default export", "const run = 1;\nexport { run as default };"],
+    ["string export name", 'const run = 1;\nexport { run as "main" };'],
+  ])("detects %s", (_label, code) => {
+    expect(exposesEntryPoint(code)).toBe(true);
+  });
+
+  test.each([
+    [
+      "a comment that mentions export const main",
+      "// export const main\nexport const a = 1;",
+    ],
+    [
+      "a string that mentions export default",
+      'export const a = "export default x";',
+    ],
+    ["a name that starts with main", "export function maintainerNames() {}"],
+  ])("does not detect %s", (_label, code) => {
+    expect(exposesEntryPoint(code)).toBe(false);
+  });
+});
+
+describe("libs whose lock is not protected", () => {
+  const libs = FORBIDDEN_EXACT_PATHS.filter(
+    (path) =>
+      /^f\/factory\/lib\/[a-z0-9_]+\.ts$/.test(path) &&
+      !FORBIDDEN_EXACT_PATHS.includes(path.replace(/\.ts$/, ".script.lock")),
+  );
+
+  test("finds the libs, so that the checks below are not empty", () => {
+    expect(libs.length).toBeGreaterThanOrEqual(18);
+  });
+
+  test.each(libs)("%s has no entry point", async (path) => {
+    expect(exposesEntryPoint(await Bun.file(path).text())).toBe(false);
   });
 });

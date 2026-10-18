@@ -61,10 +61,12 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 更新だけが使うGitHubの読み取りの`lib/drawio_viewer_bump_github.ts`、14日の待ちの根拠になる
  * 観測の記録の`lib/drawio_viewer_observations.ts`、スケジュールとscriptの定義(`*.schedule.yaml`、
  * `*.script.yaml`)も同じ理由で守る。書き換えられると、人の確認なしに別の取得元や版を固定のPRにできる。
- * 部品のscript定義と依存のlock(`lib/drawio_viewer_bump*.script.{yaml,lock}`、`lib/drawio_viewer_observations.script.yaml`)も守る。
- * これらは、依存の版の更新で書き換わらないので、正当な変更を止めない。
+ * 部品のscript定義(`lib/drawio_viewer_bump*.script.yaml`、`lib/drawio_viewer_observations.script.yaml`)も守る。
+ * `.script.yaml`は、`lock`の参照先を決める。参照先を書き換えられると、反映のときにworkerやホストの
+ * 任意のファイルがlockとして読まれうるので、libのものも守る。
  * 一方、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は守らない。
  * `windmill-client`の版を上げる変更で、全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
+ * 依存の無い`lib/`のlockも守らない(後述の「libのlockは入れない」)。
  * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
@@ -77,6 +79,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * このテストは、`DrawioFrame.tsx`のsandboxとiframeの受け口のメッセージを固定値と照合する。
  * 書き換えられると、図を描くiframeにsandboxを外したり別のページを読ませたりしても、検査を通る。
  * sandboxは、HTTPのCSP(`infra/Caddyfile`)も後ろ盾になる。
+ * scriptの定義の`lock`の契約テスト(`tests/lib/script_yaml_lock_contract.test.ts`)も守る。
+ * `wmill sync push`は`lock: '!inline <パス>'`のパスを制限なしに読んでlockとして保存する。
+ * このテストが、すべての定義の参照先を自分の`.script.lock`に固定している。
+ * 書き換えられると、保護の外の定義から、workerやホストの任意のファイルをlockに載せられる。
  * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
  * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
  * ゲート入力の組み立て(`lib/dependabot_collect.ts`)、フローの支援関数(`lib/dependabot_flow_support.ts`)、
@@ -85,21 +91,25 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * それぞれのscript定義(`*.script.yaml`)である。フロー(`dependabot__flow/`)は、前方一致で守る。
  * 書き換えられると、人の確認なしに、許可していない更新をマージできる。
  * まだ存在しないファイルも先に守る。名前を先に押さえ、後から置かれたファイルが保護の外に出ないようにするためである。
- * 依存の無い`lib/`の5つのlock(`lib/dependabot_*.script.lock`)も守る。中身は`"dependencies": {}`で、
- * `windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
  * 一方、窓口の`poll_dependabot.script.lock`と`steps/dependabot_*.script.lock`は守らない。
  * `windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
- * CIが出すメタデータのパッチを取得して検査する部品(`lib/metadata_patch_*.ts`の6つ)と、それぞれの`.script.yaml`、`.script.lock`も守る。
+ * CIが出すメタデータのパッチを取得して検査する部品(`lib/metadata_patch_*.ts`の6つ)と、それぞれの`.script.yaml`も守る。
+ * 6つのうち、`metadata_patch_manifest.script.lock`だけは守る。新しいscriptのlockを照合するときの空のlockの参照
+ * (`metadata_patch_verify.ts`の`EMPTY_LOCK_REFERENCE`)で、壊されると新しいscriptの自動適用が断られ続けるためである。
  * 6つは、manifest、zip、yaml、verify、imports、downloadである。
  * パスの許可リスト、manifestの形、zipの読み方、yamlの許可するキー、importの読み方、適用の条件、
  * トークンの渡し先と取得先を決める。書き換えられると、パッチの受け取り側の検査が緩む。
- * lockは依存が無く、`windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
  * `wmill-lock.yaml`のhashを自前で再計算する部品(`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、
- * `lib/metadata_git_ports.ts`)と、それぞれの`.script.yaml`、`.script.lock`も守る。
+ * `lib/metadata_git_ports.ts`)と、それぞれの`.script.yaml`も守る。
  * hashの算法、再計算してよい条件、`main`の引数の比べ方、検査が読むgitのオブジェクトの取り方を決める。
  * 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
- * 再計算の出力を配線する`lib/ci_metadata_rehash.ts`と、その`.script.yaml`、`.script.lock`も守る。
+ * 再計算の出力を配線する`lib/ci_metadata_rehash.ts`と、その`.script.yaml`も守る。
  * `wmill-lock.yaml`だけの変更を許す条件(`confirmRehash`、`rehashPushStopReason`、`readStagedRootLock`)と、書き込み先を決める。
+ * libのlockは入れない。上のlibは`main`を持たず、単独のjobとして動かない。importする側のscriptは
+ * 自分の`.ts`と`.script.lock`で動くので、libのlockは実行の入力にならず、中身が変わっても動きは変わらない。
+ * libの`.ts`と、`lock`の参照先を固定する`.script.yaml`は、守られている。
+ * この前提(libが`main`、`preprocessor`、行頭の`export default`、再exportを持たない)は、
+ * `tests/lib/protected_paths.test.ts`が固定する。
  * 一方、次のものは、このリストに入れない。
  * 例外を開くコールバックの本体(`steps/pr_fix_verify.ts`と`steps/pr_fix_finish.ts`)と、
  * 変更の形を判定する`isLockOnlyChange`と、それを呼ぶ`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、
@@ -131,9 +141,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/drawio_viewer_bump_github.ts",
   "f/factory/lib/drawio_viewer_observations.ts",
   "f/factory/lib/drawio_viewer_bump.script.yaml",
-  "f/factory/lib/drawio_viewer_bump.script.lock",
   "f/factory/lib/drawio_viewer_bump_github.script.yaml",
-  "f/factory/lib/drawio_viewer_bump_github.script.lock",
   "f/factory/lib/drawio_viewer_observations.script.yaml",
   "f/factory/drawio_viewer_bump.script.yaml",
   "f/factory/drawio_viewer_bump.schedule.yaml",
@@ -147,21 +155,17 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/vite.config.ts",
   "infra/Caddyfile",
   "tests/lib/drawio_frame_isolation.test.ts",
+  "tests/lib/script_yaml_lock_contract.test.ts",
   "f/factory/lib/dependabot_support.ts",
   "f/factory/lib/dependabot_support.script.yaml",
-  "f/factory/lib/dependabot_support.script.lock",
   "f/factory/lib/dependabot_prompt.ts",
   "f/factory/lib/dependabot_prompt.script.yaml",
-  "f/factory/lib/dependabot_prompt.script.lock",
   "f/factory/lib/dependabot_registry.ts",
   "f/factory/lib/dependabot_registry.script.yaml",
-  "f/factory/lib/dependabot_registry.script.lock",
   "f/factory/lib/dependabot_collect.ts",
   "f/factory/lib/dependabot_collect.script.yaml",
-  "f/factory/lib/dependabot_collect.script.lock",
   "f/factory/lib/dependabot_flow_support.ts",
   "f/factory/lib/dependabot_flow_support.script.yaml",
-  "f/factory/lib/dependabot_flow_support.script.lock",
   "f/factory/poll_dependabot.ts",
   "f/factory/poll_dependabot.script.yaml",
   "f/factory/poll_dependabot.schedule.yaml",
@@ -176,34 +180,24 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/metadata_patch_manifest.script.lock",
   "f/factory/lib/metadata_patch_zip.ts",
   "f/factory/lib/metadata_patch_zip.script.yaml",
-  "f/factory/lib/metadata_patch_zip.script.lock",
   "f/factory/lib/metadata_patch_yaml.ts",
   "f/factory/lib/metadata_patch_yaml.script.yaml",
-  "f/factory/lib/metadata_patch_yaml.script.lock",
   "f/factory/lib/metadata_patch_verify.ts",
   "f/factory/lib/metadata_patch_verify.script.yaml",
-  "f/factory/lib/metadata_patch_verify.script.lock",
   "f/factory/lib/metadata_patch_imports.ts",
   "f/factory/lib/metadata_patch_imports.script.yaml",
-  "f/factory/lib/metadata_patch_imports.script.lock",
   "f/factory/lib/metadata_patch_download.ts",
   "f/factory/lib/metadata_patch_download.script.yaml",
-  "f/factory/lib/metadata_patch_download.script.lock",
   "f/factory/lib/metadata_hash.ts",
   "f/factory/lib/metadata_hash.script.yaml",
-  "f/factory/lib/metadata_hash.script.lock",
   "f/factory/lib/metadata_precheck.ts",
   "f/factory/lib/metadata_precheck.script.yaml",
-  "f/factory/lib/metadata_precheck.script.lock",
   "f/factory/lib/metadata_signature.ts",
   "f/factory/lib/metadata_signature.script.yaml",
-  "f/factory/lib/metadata_signature.script.lock",
   "f/factory/lib/metadata_git_ports.ts",
   "f/factory/lib/metadata_git_ports.script.yaml",
-  "f/factory/lib/metadata_git_ports.script.lock",
   "f/factory/lib/ci_metadata_rehash.ts",
   "f/factory/lib/ci_metadata_rehash.script.yaml",
-  "f/factory/lib/ci_metadata_rehash.script.lock",
   "scripts/host-apply.ts",
   "scripts/host-apply.sh",
   "scripts/host-install.sh",

@@ -1,0 +1,9 @@
+summary: '[LIB] 収集の記録を読む側の判定'
+description: 内部ライブラリです。直接実行するものではありません。収集が書いたリポジトリの記録の鮮度と、使ってよい行の絞り込みを、通信もDBも持たない純粋関数として定めます。
+lock: '!inline f/factory/lib/gh_collect_read.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -84,6 +84,7 @@ import {
   markPrCiNotified,
   markPrConflictNotified,
   type NewWorkerSample,
+  readGhRepoOpenPullRequests,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
@@ -8039,6 +8040,33 @@ check(
     ) &&
     ghWDetail.issues.every((row) => row.state === "open"),
   ghWDetail,
+);
+
+// readGhRepoOpenPullRequests: 1つの文で、リポジトリの行、開いている行、DBの時刻を読む。
+const ghWAlphaSnapshot = await readGhRepoOpenPullRequests(
+  GH_W_OWNER,
+  "Alpha",
+  sql,
+);
+check(
+  "readGhRepoOpenPullRequests: reads the repository row, only its open rows and the database time",
+  ghWAlphaSnapshot.repo?.repo_id === 21 &&
+    ghWAlphaSnapshot.db_now instanceof Date &&
+    ghWAlphaSnapshot.prs.length > 0 &&
+    ghWAlphaSnapshot.prs.every(
+      (row) => row.state === "open" && row.repo === "alpha",
+    ),
+  ghWAlphaSnapshot,
+);
+const ghWMissingSnapshot = await readGhRepoOpenPullRequests(
+  GH_W_OWNER,
+  "no-such-repo",
+  sql,
+);
+check(
+  "readGhRepoOpenPullRequests: a repository without a row has no repository and no rows",
+  ghWMissingSnapshot.repo === null && ghWMissingSnapshot.prs.length === 0,
+  ghWMissingSnapshot,
 );
 
 // markGhOwnerRowsUnusable: 開いている行だけを使用不可にする。

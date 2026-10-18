@@ -39,6 +39,7 @@ import {
   getPr,
   getPrDiff,
   getPrFiles,
+  getPrWithCreatedAt,
   getPrWithoutWait,
   getRepositoryId,
   getRepositoryOwnerId,
@@ -3853,6 +3854,64 @@ describe("getPr", () => {
     expect(pr.state).toBe("closed");
     expect(pr.merged).toBe(true);
     expect(pr.headRef).toBe("feature-y");
+  });
+});
+
+describe("getPrWithCreatedAt", () => {
+  function prPayload(createdAt: unknown): Record<string, unknown> {
+    return {
+      number: 12,
+      title: "t",
+      body: "b",
+      draft: false,
+      state: "open",
+      merged: false,
+      head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+      base: { ref: "main", repo: { full_name: "acme/widgets", id: 99 } },
+      mergeable: true,
+      mergeable_state: "clean",
+      user: { login: "alice", type: "User" },
+      auto_merge: null,
+      created_at: createdAt,
+    };
+  }
+
+  async function read(payload: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([ghApiOk(payload)]);
+    const pr = await getPrWithCreatedAt(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    return { pr, fake };
+  }
+
+  test("turns created_at into epoch milliseconds", async () => {
+    const { pr } = await read(prPayload("2026-10-01T00:00:00Z"));
+
+    expect(pr.createdAtMs).toBe(Date.parse("2026-10-01T00:00:00Z"));
+  });
+
+  test("returns null when created_at is missing", async () => {
+    const payload = prPayload("2026-10-01T00:00:00Z");
+    delete payload.created_at;
+
+    const { pr } = await read(payload);
+
+    expect(pr.createdAtMs).toBeNull();
+  });
+
+  test("returns null when created_at is not a readable time", async () => {
+    const { pr } = await read(prPayload("not a date"));
+
+    expect(pr.createdAtMs).toBeNull();
+  });
+
+  test("asks GitHub once", async () => {
+    const { fake } = await read(prPayload("2026-10-01T00:00:00Z"));
+
+    expect(fake.calls).toHaveLength(1);
   });
 });
 

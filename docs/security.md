@@ -2294,7 +2294,7 @@ Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。�
 - 最初に動かした週は、すべての版の観測が始まったばかりなので、14日間は何も上げない。記録が消えたときも、同じように待ちを数え直す。
 - 上げる版に選んだ最新の版を保留している間は、それより古い版も上げない。保留の理由はnoticeに出る。
 - 保護するのは更新に専用の部品である。汎用の層(`github.ts`、`db.ts`、`types.ts`、`workspace.ts`)は保護していない。更新はこれらの関数を呼ぶので、挙動を変える変更は通常のレビューで確かめる。
-- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。他の部品のscript定義とlockは保護する。
+- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。部品のscript定義を保護し、部品の依存の無いlockを保護しない(理由は[保護パスの変更を止める](#保護パスの変更を止める)の「libのlockを保護しない理由」)。
 - ブランチ名が`factory/drawio-viewer-`で始まる未完了のPRが残ると、更新は止まる。そのPRを閉じるかマージすると、次の週に再開する。
 
 ## 要件定義書のリンク
@@ -2996,8 +2996,8 @@ Consoleでバンドルを通らずに配信される`console/public/`と`console
 - `drawio_viewer_bump_github.ts`
 - `drawio_viewer_observations.ts`
 
-この3つのscript定義(`.script.yaml`)と、観測の記録を除く2つのlock(`.script.lock`)も対象である。
-lockの保護を限る理由は、残るリスクに書いた。
+この3つのscript定義(`.script.yaml`)も対象である。
+lockは保護しない。理由は、残るリスクと「libのlockを保護しない理由」に書いた。
 
 dependabotのセキュリティ更新PRを自動で処理するフローも止める。
 対象は、次のscriptと定義である。
@@ -3009,24 +3009,57 @@ dependabotのセキュリティ更新PRを自動で処理するフローも止�
 
 書き換えられると、許可していない更新を人の確認なしにマージできるためである。
 まだ存在しないファイルも、名前を先に止める。後から置かれたファイルが、保護から漏れないようにするためである。
-依存の無い`f/factory/lib/`の5つのscriptのlock(`.script.lock`)も止める。中身は空の依存で、`windmill-client`の版を上げる変更では書き換わらないためである。
 PRの取得とステップのlockは止めない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
 共有のGitHub取得(`f/factory/lib/github.ts`)は、ほかのフローも使うので止めない。
 
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+scriptの定義の`lock`が自分の`.script.lock`を指す契約テストも止める。
+対象は`tests/lib/script_yaml_lock_contract.test.ts`である。
+`wmill sync push`は、`lock: '!inline <パス>'`のパスを読み、中身をlockとして保存する。
+パスに制限はなく、絶対パスや`..`も書ける。
+保護の外の定義を書き換えて参照先を変えると、workerやホストの任意のファイルがlockとしてワークスペースに載りうる。
+このテストは、全定義の参照先を固定する。
+あわせて、追跡するツリーにsymlinkとsubmoduleがないこと、`f/`の下にモジュールフォルダ(`__mod`など)がないことを確かめる。
+script定義以外のYAMLとJSONには、`!inline`を許さない。
+YAMLでは、エスケープや行の継続で作る`!inline`、`%TAG`の指示子、タグ(`!in%6Cine`など)も拒む。
+JSONは、解釈した後の値を調べる。
+flow、resource、appも同じ`!inline`を読むため、これらの経路を塞ぐ。
+`f/`の下では、`node_modules`という名前のフォルダも検査から外さない。
+テストは保護パスで止まるが、テストの実行環境は止めない。
+`tests/preload.ts`と、保護していないほかのテストは、テストを緑のまま通すために書き換えられる。
+`wmill.yaml`の`codebases`も止めない。
+これらは残るリスクで、マージ前の人のレビューで防ぐ。
+YAMLの解釈は、テストが使うBunとwmillで違いうる。
+そのため、script定義では`lock`の行を完全に一致させ、解釈の違いに頼らない。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
-それぞれの`.script.yaml`と`.script.lock`も止める。
+それぞれの`.script.yaml`も止める。
+lockは、`metadata_patch_manifest.script.lock`だけを止める。新しいscriptのlockを照合するときの空のlockの参照(`EMPTY_LOCK_REFERENCE`)で、壊されると新しいscriptの自動適用が断られ続けるためである。
 書き換えられると、パッチの受け取り側の検査が緩むためである。
 
 `wmill-lock.yaml`のhashを再計算する`f/factory/lib/`の`metadata_hash`、`metadata_precheck`、`metadata_signature`も止める。
-それぞれの`.script.yaml`と`.script.lock`も止める。
+それぞれの`.script.yaml`も止める。
 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられるためである。
 
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
+
+#### libのlockを保護しない理由
+
+上のlibのうち、依存の無い17個の`.script.lock`は保護しない。
+中身は`"dependencies": {}`と`<empty>`だけである。
+`metadata_patch_manifest.script.lock`は、空のlockの参照なので保護する。
+
+- libは`main`を持たず、単独のjobとして動かない。importする側のscriptは、自分の`.ts`と`.script.lock`で動くので、libのlockは実行の入力にならない。
+- libの`.ts`と、`lock`の参照先をlib自身のlockに固定する`.script.yaml`は、保護する。`.script.yaml`の`lock: '!inline <パス>'`は、反映のときに`wmill sync push`が読む。書き換えられると、任意のファイルがlockとして保存されうる。
+- CI回と競合回は、`*.script.lock`を全scriptについて拒否する(`ci_fix_paths.ts`)。この拒否は変わらない。
+- メタデータのパッチを適用する経路は、対応する`.ts`が保護されたscriptのlockを`protected_source`で拒否する。拒否の理由は`protected_path`から変わりうるが、拒否は続く。
+- 保護しない前提は「libが入口を持たない」ことである。`tests/lib/protected_paths.test.ts`が、保護するlibの`.ts`に次が無いことを固定する。
+  `main`、`preprocessor`、行頭の`export default`、再exportである。
+  崩れたら、lockを保護に戻す。
+- 実機のWindmillで、libのlockが使われないことは確かめていない。根拠は、Windmillの文書とリポジトリの実物である。前提が外れていても、importする側のlock(`steps/*.script.lock`など)がすでに保護の外にあるので、新しい種類の穴は増えない。
 
 #### 修正と実装で範囲が違う理由
 
@@ -3506,6 +3539,13 @@ Factoryは、原則としてPRをマージしない。
 マージは、`dependabot_merge_enabled`も真にしたときだけ行う。
 `dependabot_merge_enabled`が偽の間は試運転で、マージしてよいと判断したPRもマージせず人に回す。
 有効にする手順は[運用](operations.md#dependabotの更新を設定する)に、状態と分岐は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
+
+候補のPRの列挙は、設定によって収集の表から読む。
+表の値は候補を絞ることにだけ使う。
+マージの判断と保持期間の判定は、PRごとにRESTで読み直した値と集めた事実で行う。
+そのため、表の値が書き換えられても、候補が増えれば読み直して飛ばし、減れば検索に戻るか処理が遅れるだけである。
+記録が新しいリポジトリで、表に行の無いPRは、待ちの記録を捨てるので、人に回すのが遅れる。
+保持期間とゲートの判定は変わらない。
 
 ### マージする条件
 
