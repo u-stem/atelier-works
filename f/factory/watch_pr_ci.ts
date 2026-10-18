@@ -105,7 +105,7 @@ import {
   TRACKED_PR_LIMIT,
 } from "./lib/pr_ci_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
-import type { FactoryConfig } from "./lib/types.ts";
+import type { FactoryConfig, GhSource } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import { ciRoundTimeoutMisfit } from "./steps/pr_workflow_support.ts";
 
@@ -237,6 +237,17 @@ async function recordFailureSafe(
       error: maskSecrets(String(recordErr)),
     });
   }
+}
+
+/** 仮実装。常に検索を返す。 */
+export function resolvePrCiHumanSource(
+  _config: Pick<
+    FactoryConfig,
+    "gh_source_pr_ci_watch" | "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): GhSource {
+  return "search";
 }
 
 export async function main(): Promise<PrCiWatchResult> {
