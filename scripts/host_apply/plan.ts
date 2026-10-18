@@ -7,6 +7,10 @@ import {
   pickApprovalBase,
 } from "./approval.ts";
 import { checkComposeText } from "./compose_policy.ts";
+import {
+  type ComposeViolation,
+  checkComposeTablesText,
+} from "./compose_tables.ts";
 import { isSha40 } from "./git.ts";
 import { checkMiseStatic, classifyMiseTomlChange } from "./mise_policy.ts";
 import { classifyPackageJsonChange } from "./package_policy.ts";
@@ -100,6 +104,8 @@ export function forbiddenTreePaths(entries: readonly TreeEntry[]): string[] {
  * - ASCIIの小文字にそろえると、ディレクトリを含めて衝突するパス。大文字小文字を区別しないファイルシステムで同じファイルになる。
  * - composeが自動で読むoverrideファイル。定義を後から上書きできる。
  * 前提は、1つのパスが1つのファイルを指すこと。
+ * 別の規則として、`.env`系のファイル(ディレクトリを問わない)も返す。
+ * composeが補間に読み、中身は承認の対象にならないため、取り出した木に置かせない。
  */
 export function suspiciousTreePaths(entries: readonly TreeEntry[]): string[] {
   const bad = new Set<string>();
@@ -110,6 +116,7 @@ export function suspiciousTreePaths(entries: readonly TreeEntry[]): string[] {
     if (/^(?:docker-)?compose\.override\.ya?ml$/i.test(basename)) {
       bad.add(path);
     }
+    if (/^\.env(?:\..*)?$/i.test(basename)) bad.add(path);
     const parts = path.split("/");
     for (let i = 1; i <= parts.length; i++) {
       const prefix = parts.slice(0, i).join("/");
@@ -132,6 +139,92 @@ function unreadableReason(read: BlobRead, name: string): string {
   if (read.kind === "too_large") return `${name} is over the size limit`;
   if (read.kind === "not_regular") return `${name} is not a regular file`;
   return `${name} is missing`;
+}
+
+export type StaticRejection = {
+  readonly ok: false;
+  readonly kind: RejectionKind;
+  readonly detail: string;
+};
+
+export type StaticPass = {
+  readonly ok: true;
+  /** 承認すれば通せるcomposeの違反。今の`plan`の判定は変えない。 */
+  readonly violations: readonly ComposeViolation[];
+};
+
+/**
+ * 目標のtreeの検査。symlink、submodule、1つのパスが2つのファイルを指しうるパス、`.env`系を拒否する。
+ * 承認の判定より前に行う。通れば`null`。
+ */
+export async function checkTargetTree(
+  git: PlanGit,
+  input: { readonly target: string },
+): Promise<{ kind: RejectionKind; detail: string } | null> {
+  const tree = await git.listTree(input.target);
+  const forbiddenPaths = [
+    ...new Set([...forbiddenTreePaths(tree), ...suspiciousTreePaths(tree)]),
+  ];
+  if (forbiddenPaths.length === 0) return null;
+  return {
+    kind: "tree_forbidden",
+    detail: forbiddenPaths
+      .slice(0, DETAIL_PATH_LIMIT)
+      .map(escapeDetail)
+      .join(", "),
+  };
+}
+
+/**
+ * 目標のmise設定とcomposeの静的な検査。承認の判定より後に行う。
+ * composeが方針に合い、表の検査が拒否しなければ、承認すれば通せる違反を添えて返す。
+ */
+export async function checkTargetConfig(
+  git: PlanGit,
+  input: { readonly target: string; readonly root: string },
+): Promise<StaticRejection | StaticPass> {
+  const { target } = input;
+  const rejected = (kind: RejectionKind, detail: string): StaticRejection => ({
+    ok: false,
+    kind,
+    detail,
+  });
+  const targetRead = await git.readBlob(target, MISE_PATH);
+  if (targetRead.kind !== "found") {
+    return rejected("mise_forbidden", unreadableReason(targetRead, MISE_PATH));
+  }
+  const mise = checkMiseStatic(targetRead.text);
+  if (!mise.ok) return rejected("mise_forbidden", mise.reason);
+
+  const composeRead = await git.readBlob(target, COMPOSE_PATH);
+  if (composeRead.kind !== "found") {
+    return rejected(
+      "compose_forbidden",
+      unreadableReason(composeRead, COMPOSE_PATH),
+    );
+  }
+  const compose = checkComposeText(composeRead.text, {
+    root: input.root,
+    composeDir: join(input.root, "infra"),
+    env: mise.env,
+  });
+  if (!compose.ok) return rejected(compose.kind, compose.detail);
+  const tables = checkComposeTablesText(composeRead.text);
+  if (!tables.ok) return rejected("compose_forbidden", tables.detail);
+  return { ok: true, violations: tables.violations };
+}
+
+/**
+ * 目標のtreeとmise設定とcomposeの静的な検査の全体。祖先の検査と承認は含まない。
+ * `init`が適用済みのtreeに当てる入口。
+ */
+export async function checkTargetStatic(
+  git: PlanGit,
+  input: { readonly target: string; readonly root: string },
+): Promise<StaticRejection | StaticPass> {
+  const tree = await checkTargetTree(git, input);
+  if (tree !== null) return { ok: false, ...tree };
+  return checkTargetConfig(git, input);
 }
 
 /**
@@ -176,15 +269,9 @@ export async function buildPlan(
     return reject("not_ff", "the target does not descend from the applied sha");
   }
 
-  const tree = await git.listTree(target);
-  const forbiddenPaths = [
-    ...new Set([...forbiddenTreePaths(tree), ...suspiciousTreePaths(tree)]),
-  ];
-  if (forbiddenPaths.length > 0) {
-    return reject(
-      "tree_forbidden",
-      forbiddenPaths.slice(0, DETAIL_PATH_LIMIT).map(escapeDetail).join(", "),
-    );
+  const treeRejection = await checkTargetTree(git, { target });
+  if (treeRejection !== null) {
+    return reject(treeRejection.kind, treeRejection.detail);
   }
 
   let approved = input.approved;
@@ -202,8 +289,6 @@ export async function buildPlan(
   });
   const changed = await git.changedFiles(base, target);
 
-  const targetRead = await git.readBlob(target, MISE_PATH);
-  const targetMise = targetRead.kind === "found" ? targetRead.text : null;
   const exempt = new Set<string>();
   const exemptIfNotApproval = async (
     path: string,
@@ -223,25 +308,8 @@ export async function buildPlan(
     return { decision: "pending_approval", base, files, applied, target };
   }
 
-  if (targetMise === null) {
-    return reject("mise_forbidden", unreadableReason(targetRead, MISE_PATH));
-  }
-  const mise = checkMiseStatic(targetMise);
-  if (!mise.ok) return reject("mise_forbidden", mise.reason);
-
-  const composeRead = await git.readBlob(target, COMPOSE_PATH);
-  if (composeRead.kind !== "found") {
-    return reject(
-      "compose_forbidden",
-      unreadableReason(composeRead, COMPOSE_PATH),
-    );
-  }
-  const compose = checkComposeText(composeRead.text, {
-    root: input.root,
-    composeDir: join(input.root, "infra"),
-    env: mise.env,
-  });
-  if (!compose.ok) return reject(compose.kind, compose.detail);
+  const config = await checkTargetConfig(git, { target, root: input.root });
+  if (!config.ok) return reject(config.kind, config.detail);
 
   return { decision: "would_converge", ci: "not_checked", applied, target };
 }
