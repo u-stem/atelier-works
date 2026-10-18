@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   APPROVE_GIT_SUBCOMMANDS,
   approveGitArgs,
@@ -31,6 +32,7 @@ import {
 import {
   createFixtureRepo,
   type FixtureRepo,
+  fixtureGitEnv,
 } from "../fixtures/host_apply_repo.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -141,6 +143,10 @@ describe("fetchEnv", () => {
 
   test("ignores the system and global git configuration", () => {
     expect(fetchEnv(null).GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("allows only https, overriding the protocol settings of the repository", () => {
+    expect(fetchEnv(null).GIT_ALLOW_PROTOCOL).toBe("https");
   });
 });
 
@@ -435,6 +441,7 @@ describe("approveGitEnv", () => {
     ["GIT_LITERAL_PATHSPECS", "1"],
     ["GIT_OPTIONAL_LOCKS", "0"],
     ["GIT_NO_LAZY_FETCH", "1"],
+    ["GIT_ALLOW_PROTOCOL", ""],
     ["GIT_TERMINAL_PROMPT", "0"],
   ])("sets %s", (name, value) => {
     expect(env[name]).toBe(value);
@@ -443,6 +450,7 @@ describe("approveGitEnv", () => {
   test("passes nothing but the names it sets", () => {
     expect(Object.keys(env).sort()).toEqual(
       [
+        "GIT_ALLOW_PROTOCOL",
         "GIT_ATTR_NOSYSTEM",
         "GIT_ATTR_SOURCE",
         "GIT_CONFIG_GLOBAL",
@@ -700,5 +708,65 @@ describe("the read commands run from a subdirectory of the repository", () => {
     expect(runInSub(repo, diffNameStatusArgs(base, target))).toContain(
       "out.txt",
     );
+  });
+});
+
+describe("GIT_ALLOW_PROTOCOL against a repository that tries to run a command", () => {
+  const repos: FixtureRepo[] = [];
+  afterAll(() => {
+    for (const repo of repos) repo.cleanup();
+  });
+
+  // 取得先のURLをext::に書き換え、取得のたびに印のファイルを作らせるリポジトリ。
+  // protocol.ext.allowはprotocol.allowより優先されるので、引数の設定だけでは止まらない。
+  function setup() {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    repo.commit({ "a.txt": "1\n" }, "base");
+    const marker = join(dirname(repo.dir), "marker");
+    repo.git(["config", "protocol.ext.allow", "always"]);
+    repo.git([
+      "config",
+      `url.ext::touch ${marker} .insteadOf`,
+      "https://github.com/",
+    ]);
+    return { repo, marker };
+  }
+
+  function fetchIn(repo: FixtureRepo, env: Record<string, string>) {
+    Bun.spawnSync(["/usr/bin/git", ...fetchArgs(REMOTE)], {
+      cwd: repo.dir,
+      env,
+    });
+  }
+
+  test("the control: without the variable the repository runs the command", () => {
+    const { repo, marker } = setup();
+    fetchIn(repo, {
+      ...fixtureGitEnv(dirname(repo.dir)),
+      PATH: "/usr/bin:/bin",
+    });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("the fetch environment stops the command", () => {
+    const { repo, marker } = setup();
+    fetchIn(repo, { ...approveGitEnv(), ...fetchEnv(null) });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("the read environment, with an empty variable, stops the command", () => {
+    const { repo, marker } = setup();
+    fetchIn(repo, approveGitEnv());
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("the read environment still reads the repository", () => {
+    const { repo } = setup();
+    const result = Bun.spawnSync(["/usr/bin/git", ...resolveHeadArgs()], {
+      cwd: repo.dir,
+      env: approveGitEnv(),
+    });
+    expect(result.stdout.toString().trim()).toMatch(/^[0-9a-f]{40}$/);
   });
 });

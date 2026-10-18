@@ -593,6 +593,38 @@ describe("checkFetchForm", () => {
     ).not.toBeNull();
   });
 
+  test.each([
+    ["the empty list of the read environment", ""],
+    ["a list that adds ext", "https:ext"],
+    ["a list that adds file", "https:file"],
+    ["http", "http"],
+  ])("rejects a fetch that allows %s", (_name, value) => {
+    expect(
+      checkFetchForm({
+        args: fetchArgs(URL),
+        env: { ...fetchEnvFor(null), GIT_ALLOW_PROTOCOL: value },
+        cwd: CWD,
+      }),
+    ).not.toBeNull();
+  });
+
+  test("rejects a fetch that leaves out the allowed protocols", () => {
+    const { GIT_ALLOW_PROTOCOL: _omitted, ...rest } = fetchEnvFor(null);
+    expect(
+      checkFetchForm({ args: fetchArgs(URL), env: rest, cwd: CWD }),
+    ).not.toBeNull();
+  });
+
+  test("rejects a read of the remote url that allows https", () => {
+    expect(
+      checkFetchForm({
+        args: [...REMOTE_URL_ARGS],
+        env: { ...approveGitEnv(), GIT_DIR: CWD, GIT_ALLOW_PROTOCOL: "https" },
+        cwd: CWD,
+      }),
+    ).not.toBeNull();
+  });
+
   test("rejects a changed value of a fixed key", () => {
     expect(
       checkFetchForm({

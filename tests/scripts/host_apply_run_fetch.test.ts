@@ -73,6 +73,10 @@ describe("remoteUrlSpec", () => {
     expect([spec.cwd, spec.env.GIT_DIR]).toEqual([REPO_GIT, REPO_GIT]);
   });
 
+  test("allows no protocol, since reading a config needs no transport", () => {
+    expect(spec.env.GIT_ALLOW_PROTOCOL).toBe("");
+  });
+
   test("uses the fixed git environment besides GIT_DIR", () => {
     expect({ ...spec.env }).toEqual({ ...approveGitEnv(), GIT_DIR: REPO_GIT });
   });
@@ -118,6 +122,12 @@ describe("fetchOrigin when the url matches", () => {
     const s = scripted(done(`${URL}\n`), done(""));
     await fetchOrigin(s.run, input());
     expect(s.calls[1]?.spec.env.GIT_DIR).toBe(REPO_GIT);
+  });
+
+  test("allows only https in the environment of the fetch, whatever the repository config says", async () => {
+    const s = scripted(done(`${URL}\n`), done(""));
+    await fetchOrigin(s.run, input());
+    expect(s.calls[1]?.spec.env.GIT_ALLOW_PROTOCOL).toBe("https");
   });
 
   test("allows only https for the fetch", async () => {
