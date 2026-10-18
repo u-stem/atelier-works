@@ -46,6 +46,7 @@ import {
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
+import { requiredRepos } from "./poll_source.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
   classifyHeadFailure,
@@ -317,11 +318,11 @@ export async function buildHumanDiscovery(input: {
     scopes,
     getPr: input.getPr,
     search: input.search,
-    source: "search",
-    staleAfterMs: 0,
-    readOwnerPrs: async () => ({ db_now: new Date(0), repos: [], prs: [] }),
-    readRepoPrs: async () => ({ db_now: new Date(0), repo: null, prs: [] }),
-    requiredReposOf: () => new Set(),
+    source: input.source,
+    staleAfterMs: input.staleAfterMs,
+    readOwnerPrs: input.readOwnerPrs,
+    readRepoPrs: input.readRepoPrs,
+    requiredReposOf: (owner) => requiredRepos(config, owner),
   };
 }
 
@@ -1031,6 +1032,7 @@ async function discoverHuman(context: Context): Promise<void> {
   const trackedPrKeys = state.trackedPrKeys;
   if (human === undefined || trackedPrKeys === null) return;
   if (state.rateLimited || overBudget(context)) return;
+  context.counters.human_source = human.source;
   const startedAt = deps.now().getTime();
   const outOfTime = (): boolean =>
     overBudget(context) ||
@@ -1055,6 +1057,7 @@ async function discoverHuman(context: Context): Promise<void> {
           deps.log.warn("pr ci human search stopped by the rate limit", {
             error: errorMessage(err),
           });
+          context.counters.human_search_rate_limited += 1;
           searching = false;
           break;
         }
