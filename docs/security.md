@@ -1474,8 +1474,10 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 そこで、次の3つを確かめる。
 
 - 実行しているスクリプトが、メインのチェックアウトにある。リンクされたworktreeでは動かさない。カレントディレクトリは、リポジトリのトップでなければならない。
-- 実行するファイルの内容が、`HEAD`と同じである。対象は、入口、`scripts/host_apply/`の全ファイル、`bunfig.toml`、`package.json`、`tsconfig.json`、`tsconfig.wmill.json`である。
-  後ろの4つは、作業ツリーと`HEAD`のどちらにも無ければ、照合しない。
+- 実行するファイルの内容が、`HEAD`と同じである。
+  対象は、入口、`scripts/host_apply/`の全ファイル、`bunfig.toml`、`package.json`である。
+  `tsconfig.json`、`tsconfig.wmill.json`、`scripts/tsconfig.json`も対象にする。
+  `bunfig.toml`以降の5つは、作業ツリーと`HEAD`のどちらにも無ければ、照合しない。
 - `HEAD`が、`origin/main`の先端の祖先(同じを含む)である。
 
 内容の照合は、作業ツリーのファイルのblobのsha1を、`HEAD`のtreeと比べて行う。
@@ -1532,7 +1534,7 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 - 同じホストユーザーのプロセスは、`approved.json`を直接書ける。ファイルの権限では防げない。
 - agentが環境変数を消し、疑似端末で文言を入力すれば、`approve`を通せる。起動を拒否ルールで止めるかは、運用者の判断である。
 - コードの出どころの検査は、書き換えた側が迂回できる。
-  - Bunの読み込み: `~/.bunfig.toml`と`$XDG_CONFIG_HOME/.bunfig.toml`の`preload`、`BUN_OPTIONS`。カレントディレクトリの`bunfig.toml`の`preload`は、`--no-env-file`とカレントディレクトリの検査では防げない。
+  - Bunの読み込み: `~/.bunfig.toml`と`$XDG_CONFIG_HOME/.bunfig.toml`の`preload`、`BUN_OPTIONS`。リポジトリの外にある親ディレクトリの`tsconfig.json`は、照合できない。カレントディレクトリの`bunfig.toml`の`preload`は、`--no-env-file`とカレントディレクトリの検査では防げない。
   - gitの挙動: `.git/info/grafts`と、gitの設定。環境の固定で緩和するだけである。
   - `origin/main`のref: 同じユーザーが書き換えられる。
   - `HEAD`が、承認する版そのものになりうる。`--applied`と`HEAD`を揃える案は、人が先に`git pull`した場合の拒否を招くので採らない。
