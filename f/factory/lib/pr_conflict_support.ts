@@ -36,12 +36,14 @@ export type PrConflictFacts = Pick<
  * - `unknown`: GitHubがまだ計算していない(`mergeable`が`null`)。真偽に丸めず、次の巡回で判定し直す。
  * - `not_dirty`: 競合していないとは言えないが、競合とも言えない(`mergeable`は偽で`mergeable_state`が`dirty`でない)。
  * - `invalid_sha`: 競合しているが、headが完全なコミットshaでなく、記録できない。
+ * - `not_factory`: 読み直したPRが、FactoryのPR(PATのアカウントが作った、forkでない、Factoryのブランチ)でない。
  */
 export const PR_CONFLICT_SKIP_REASONS = [
   "draft",
   "unknown",
   "not_dirty",
   "invalid_sha",
+  "not_factory",
 ] as const;
 
 export type PrConflictSkipReason = (typeof PR_CONFLICT_SKIP_REASONS)[number];

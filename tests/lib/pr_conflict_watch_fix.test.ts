@@ -326,6 +326,11 @@ function setup(options: Setup = {}): Harness {
     isRepoAllowed: () => true,
     isRepoConfigured: () => true,
     getViewer: async () => VIEWER,
+    source: "search",
+    staleAfterMs: 15 * 60_000,
+    readOwnerPrs: async () => {
+      throw new Error("the table is not read in this test");
+    },
     searchOwners: [],
     searchOpenRepos: async () => [],
     explicitRepos: [],

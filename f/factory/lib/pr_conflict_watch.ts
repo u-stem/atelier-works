@@ -92,6 +92,9 @@ import {
   assertGitHubName,
   type FactoryConfig,
   type FactoryOwner,
+  type GhOwnerOpenPrSnapshot,
+  type GhPullRequest,
+  type GhSource,
   type NoticeRecord,
   parseImplementBranchWorkItemId,
 } from "./types.ts";
@@ -235,6 +238,15 @@ export type PrConflictWatchDeps = PrConflictFixWiring & {
   readonly listOpenRepos: () => Promise<RepoRef[]>;
   /** 競合の記録の行を持つリポジトリ。重複は無い。 */
   readonly listConflictRepos: () => Promise<RepoRef[]>;
+  /**
+   * 実効の読み取り元(`effectiveGhSource`)。`db`のときだけ、収集の表から発見とPRの列挙を行う。
+   * 表を使えない所有者とリポジトリは、検索とREST一覧に戻す。
+   */
+  readonly source: GhSource;
+  /** 表の記録を使わずに止める閾値(ミリ秒)。 */
+  readonly staleAfterMs: number;
+  /** 所有者の`gh_repos`の全行、開いているPRの全行、DBの時刻を1つの文で読む(`readGhOwnerOpenPullRequests`)。 */
+  readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
   /** 開いているPRを検索するオーナー。オーナーの照合を通ったものである。 */
   readonly searchOwners: readonly FactoryOwner[];
   /**
@@ -314,6 +326,14 @@ export type PrConflictWatchResult = {
   readonly rateLimited: boolean;
   /** PATが拒まれて(401)読み取りを止めたか。 */
   readonly unauthorized: boolean;
+  /** 実効の読み取り元。何も読まずに終わった回は`search`。 */
+  readonly source: GhSource;
+  /** 表を使えずに呼んだ検索の回数。 */
+  readonly fallback_searches: number;
+  /** 検索に戻した理由ごとの所有者の数。 */
+  readonly fallback_reasons: Readonly<Record<string, number>>;
+  /** PRの列挙を表から行ったリポジトリの数。 */
+  readonly table_repos: number;
 };
 
 /** 何も読まずに終わったときの結果。 */
@@ -332,6 +352,10 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult = {
   deferred: 0,
   rateLimited: false,
   unauthorized: false,
+  source: "search",
+  fallback_searches: 0,
+  fallback_reasons: {},
+  table_repos: 0,
 };
 
 type Counters = {
@@ -349,6 +373,10 @@ type Counters = {
   deferred: number;
   rateLimited: boolean;
   unauthorized: boolean;
+  source: GhSource;
+  fallback_searches: number;
+  fallback_reasons: Record<string, number>;
+  table_repos: number;
 };
 
 type Deferred = { repos: number; prs: number; rows: number };
@@ -586,6 +614,22 @@ function isCandidate(pr: OpenPullRequest, viewer: Viewer): boolean {
     pr.authorLogin.toLowerCase() === viewer.login.toLowerCase() &&
     (pr.authorId === null || pr.authorId === viewer.id)
   );
+}
+
+/** 表の行が、FactoryのPRの候補か。作者の分からない行は候補に入れ、RESTで確かめる。 */
+export function isFactoryConflictRow(
+  _row: GhPullRequest,
+  _viewer: Viewer,
+): boolean {
+  return false;
+}
+
+/** `getPr`の応答で、FactoryのPR(PATのアカウントが作った、forkでない、Factoryのブランチ)か。 */
+export function isFactoryPullRequest(
+  _pr: PullRequest,
+  _viewer: Viewer,
+): boolean {
+  return false;
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   listPrConflictRepos,
   listPrOpenRepos,
   markPrConflictNotified,
+  readGhOwnerOpenPullRequests,
   recordFailure,
   recordPrConflict,
   releasePrConflictFix,
@@ -53,6 +54,7 @@ import {
   updateStatusIfCurrent,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import { ghDetailStaleAfterMs } from "./lib/gh_collect_read.ts";
 import {
   type GhClient,
   getAccountId,
@@ -280,6 +282,9 @@ export async function main(): Promise<PrConflictWatchResult> {
         isRepoAllowed: gates.isRepoAllowed,
         isRepoConfigured: gates.isRepoConfigured,
         getViewer: () => getViewer(client),
+        source: "search",
+        staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
+        readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
         explicitRepos: configuredRepos(config),
         listOpenRepos: () => listPrOpenRepos(),
         listConflictRepos: () => listPrConflictRepos(),
