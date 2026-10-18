@@ -5,6 +5,7 @@
 
 import { escapeReasonSeparator } from "./log.ts";
 import { matchesForbiddenPath } from "./protected_paths.ts";
+import { parseGitHubRepoUrl } from "./types.ts";
 
 // 値の出典は、.github/workflows/ci.ymlのジョブIDと、docs/security.mdの必須チェックの節である。
 /**
@@ -32,6 +33,130 @@ export const ALLOWED_PATHS: readonly string[] = Object.freeze([
   "console/package.json",
   "console/bun.lock",
 ]);
+
+// ---- リポジトリごとの方針 ----
+
+/**
+ * リポジトリの扱い。
+ * `primary`はFactory自身のリポジトリで、必須checkは固定の`REQUIRED_CHECKS`を使う。
+ * `other`は設定で明示した他のリポジトリで、必須checkは、そのリポジトリのGitHubのルールだけから導く。
+ * `off`は自動処理の対象にしない。
+ */
+export type RepoPolicy = "primary" | "other" | "off";
+
+function repoKey(owner: string, repo: string): string {
+  return `${owner}/${repo}`.toLowerCase();
+}
+
+/**
+ * `owner`/`repo`の扱いを決める。
+ * `factory_repo`は設定の一覧によらず常に`primary`で、一覧に載せても変わらない。
+ * それ以外は、`dependabot_other_repos`の項目と、大文字小文字を除いて完全に一致するときだけ`other`にする。
+ * `factory_repo`を読めないときは、どのリポジトリも`primary`にできないので`off`にする。
+ */
+export function resolveRepoPolicy(
+  config: {
+    readonly factory_repo: string;
+    readonly dependabot_other_repos: readonly string[];
+  },
+  owner: string,
+  repo: string,
+): RepoPolicy {
+  const key = repoKey(owner, repo);
+  try {
+    const factory = parseGitHubRepoUrl(config.factory_repo);
+    if (repoKey(factory.owner, factory.repo) === key) return "primary";
+  } catch {
+    return "off";
+  }
+  return config.dependabot_other_repos.some(
+    (entry) => entry.toLowerCase() === key,
+  )
+    ? "other"
+    : "off";
+}
+
+/** 他のリポジトリの必須checkの件数の上限。理由と通知の長さと、チェックの照合の規模を抑える。 */
+export const MAX_REQUIRED_CHECKS = 40;
+
+const MAX_CHECK_NAME_CHARS = 100;
+
+export type RequiredChecksResult =
+  | { ok: true; checks: readonly string[] }
+  | { ok: false; reason: string };
+
+function isCheckName(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length === 0 || value.length > MAX_CHECK_NAME_CHARS) return false;
+  if (value.trim() !== value) return false;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
+}
+
+/**
+ * ブランチに効くルール(`GET repos/{o}/{r}/rules/branches/{branch}`の応答)から、必須checkの名前を取り出す。
+ * `required_status_checks`の規則だけを読み、複数の規則の名前を重複なく合わせる。
+ * 次のときは止める。理由は固定の文言で、GitHub由来の値を載せない。
+ * - 応答や規則の形が想定と違う。
+ * - 名前が1〜100文字でない、前後に空白がある、制御文字を含む。
+ * - GitHub Actions以外のAppに結んだ規則がある(ゲートはGitHub Actionsのcheckだけを数えるため)。
+ * - 必須checkが0件、または`MAX_REQUIRED_CHECKS`を超える。
+ */
+export function requiredChecksFromRules(rules: unknown): RequiredChecksResult {
+  if (!Array.isArray(rules)) {
+    return { ok: false, reason: "branch rules have an unexpected shape" };
+  }
+  const names: string[] = [];
+  for (const rule of rules) {
+    if (!isRecord(rule)) {
+      return { ok: false, reason: "branch rules have an unexpected shape" };
+    }
+    if (rule.type !== "required_status_checks") continue;
+    const parameters = rule.parameters;
+    const entries = isRecord(parameters)
+      ? parameters.required_status_checks
+      : undefined;
+    if (!Array.isArray(entries)) {
+      return {
+        ok: false,
+        reason: "a required status checks rule has an unexpected shape",
+      };
+    }
+    for (const entry of entries) {
+      if (!isRecord(entry) || !isCheckName(entry.context)) {
+        return {
+          ok: false,
+          reason: "a required status check has an unusable name",
+        };
+      }
+      const app = entry.integration_id;
+      if (app !== undefined && app !== null && app !== GITHUB_ACTIONS_APP_ID) {
+        return {
+          ok: false,
+          reason:
+            "a required status check is bound to an app other than GitHub Actions",
+        };
+      }
+      if (!names.includes(entry.context)) names.push(entry.context);
+    }
+  }
+  if (names.length === 0) {
+    return {
+      ok: false,
+      reason: "the base branch has no required status check",
+    };
+  }
+  if (names.length > MAX_REQUIRED_CHECKS) {
+    return {
+      ok: false,
+      reason: "the base branch has too many required status checks",
+    };
+  }
+  return { ok: true, checks: Object.freeze(names) };
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
