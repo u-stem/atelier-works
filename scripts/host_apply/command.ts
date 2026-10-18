@@ -241,6 +241,9 @@ function snapshot(input: CommandSpecInput): Fields & {
   readonly maxStdoutBytes: number | undefined;
 } {
   const { kind, bin, cwd, timeoutMs, maxStdoutBytes } = input;
+  // 種類は実行時の入力なので、文字列でない値(配列など)を表の引き方に渡さない。
+  const rawKind: unknown = kind;
+  if (typeof rawKind !== "string") invalid("kind must be a string");
   const rawArgs: unknown = input.args;
   const rawEnv: unknown = input.env;
   if (!isCleanAbsolute(bin)) invalid("bin must be a clean absolute path");

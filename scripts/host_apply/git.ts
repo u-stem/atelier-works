@@ -37,11 +37,14 @@ export const REMOTE_URL_PATTERN =
  * 取得先のURLを直接指定して、`origin/main`を取得するgitの引数。
  * 名前でなくURLを渡すのは、照合したURLと取得するURLを食い違わせないため。
  * 取得した内容に実行を誘導されないよう、リダイレクト、サブモジュール、フック、fsmonitor、
- * 認証ヘルパー、askpass、自動の保守を無効にし、検証を有効にしてプロキシを外し、プロトコルをhttpsだけにする。
+ * 認証ヘルパー、askpass、自動の保守を無効にし、名前解決の上書きを空にし、プロトコルをhttpsだけにする。
+ * 検証とプロキシとリダイレクトは、`http.<範囲>.*`の範囲で固定する。
  */
 export function fetchArgs(url: string): string[] {
   if (!REMOTE_URL_PATTERN.test(url)) throw new Error("url is not allowed");
-  // URL別の設定は、合う範囲が狭いほど優先され、広い`-c`に勝つ。ホスト、所有者、URLそのものの3段階で上書きする。
+  // URL別の設定は、ホストの一致の長さ、パスの一致の長さ、ユーザー名の順で比べ、同点なら後に読んだ値が勝つ。
+  // `-c`は最後に読まれる。渡したURLそのものの範囲は最も狭く、どの設定にも同点以上なので、引数が勝つ。
+  // ホストと所有者の範囲は、冗長だが害が無いので残す。
   const owner = url.split("/")[3] ?? "";
   const scopes = ["https://github.com/", `https://github.com/${owner}/`, url];
   return [
@@ -69,11 +72,15 @@ export function fetchArgs(url: string): string[] {
     "http.sslVerify=true",
     "-c",
     "http.proxy=",
+    "-c",
+    "http.curloptResolve=",
     ...scopes.flatMap((scope) => [
       "-c",
       `http.${scope}.sslVerify=true`,
       "-c",
       `http.${scope}.proxy=`,
+      "-c",
+      `http.${scope}.followRedirects=false`,
     ]),
     "-c",
     "gc.auto=0",
