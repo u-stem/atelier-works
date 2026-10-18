@@ -2,7 +2,14 @@
 // リポジトリごとの鮮度と、使ってよい行の絞り込みを、通信もDBも持たない純粋関数で行う。
 // 記録は、打ち切りや失敗のリポジトリでは古いまま`usable`が真で残るので、読む側は必ず鮮度を判定する。
 
-import type { GhPullRequest, GhRepoFreshnessRow } from "./types.ts";
+import type {
+  FactoryConfig,
+  GhOwnerOpenPrSnapshot,
+  GhOwnerRepoFreshnessRow,
+  GhPullRequest,
+  GhRepoFreshnessRow,
+  GhSource,
+} from "./types.ts";
 
 const MINUTE_MS = 60_000;
 
@@ -99,4 +106,44 @@ export function usableGhPullRequests(
       row.owner.toLowerCase() === ownerName &&
       row.repo.toLowerCase() === repoName,
   );
+}
+
+/** リポジトリごとの判定。`usable`は、鮮度が足りるときだけ使ってよい行。 */
+export type GhOwnerRepoJudgement = {
+  readonly row: GhOwnerRepoFreshnessRow;
+  readonly freshness: GhRepoFreshness;
+  readonly usable: readonly GhPullRequest[];
+};
+
+/** 所有者の読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。 */
+export function judgeGhOwnerRepos(
+  _owner: string,
+  _snapshot: GhOwnerOpenPrSnapshot,
+  _staleAfterMs: number,
+): Map<string, GhOwnerRepoJudgement> {
+  return new Map();
+}
+
+export type GhOwnerCoverage =
+  | { readonly kind: "fresh" }
+  | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
+
+/** 所有者の全体を表で探してよいか。検索の`user:`/`org:`の範囲の代わりにできるかを決める。 */
+export function judgeGhOwnerCoverage(
+  _owner: string,
+  _judged: ReadonlyMap<string, GhOwnerRepoJudgement>,
+  _isRepoAllowedNow: (owner: string, repo: string) => boolean,
+): GhOwnerCoverage {
+  return { kind: "stale", reason: "no_record" };
+}
+
+/** 設定と収集の設定から、実際に使う読み取り元を決める。 */
+export function effectiveGhSource(
+  _setting: GhSource,
+  _config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+): GhSource {
+  return "search";
 }

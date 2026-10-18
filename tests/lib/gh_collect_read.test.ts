@@ -4,11 +4,16 @@
 import { describe, expect, test } from "bun:test";
 import { staleNotifyThresholdMs } from "../../f/factory/lib/gh_collect_freshness.ts";
 import {
+  effectiveGhSource,
   ghDetailStaleAfterMs,
+  judgeGhOwnerCoverage,
+  judgeGhOwnerRepos,
   judgeGhRepoFreshness,
   usableGhPullRequests,
 } from "../../f/factory/lib/gh_collect_read.ts";
 import type {
+  GhOwnerOpenPrSnapshot,
+  GhOwnerRepoFreshnessRow,
   GhPullRequest,
   GhRepoFreshnessRow,
 } from "../../f/factory/lib/types.ts";
@@ -231,5 +236,221 @@ describe("usableGhPullRequests", () => {
     expect(usableGhPullRequests("Acme", "Widgets", REPO_ID, [row])).toEqual([
       row,
     ]);
+  });
+});
+
+function ownerRepoRow(
+  repo: string,
+  overrides: Partial<GhOwnerRepoFreshnessRow> = {},
+): GhOwnerRepoFreshnessRow {
+  return { ...repoRow(), repo, ...overrides };
+}
+
+function snapshot(
+  repos: readonly GhOwnerRepoFreshnessRow[],
+  prs: readonly GhPullRequest[] = [],
+): GhOwnerOpenPrSnapshot {
+  return { db_now: DB_NOW, repos, prs };
+}
+
+function judgeOwner(
+  snap: GhOwnerOpenPrSnapshot,
+  allowed: (owner: string, repo: string) => boolean = () => true,
+  owner = "acme",
+) {
+  const judged = judgeGhOwnerRepos(owner, snap, STALE_AFTER_MS);
+  return judgeGhOwnerCoverage(owner, judged, allowed);
+}
+
+const TOO_OLD = new Date(DB_NOW.getTime() - STALE_AFTER_MS - 1);
+
+describe("judgeGhOwnerCoverage", () => {
+  test("reports no_record when gh_repos has no row of the owner", () => {
+    expect(judgeOwner(snapshot([]))).toEqual({
+      kind: "stale",
+      reason: "no_record",
+    });
+  });
+
+  test("is fresh when every allowed repository is fresh", () => {
+    const snap = snapshot([ownerRepoRow("widgets"), ownerRepoRow("gadgets")]);
+
+    expect(judgeOwner(snap)).toEqual({ kind: "fresh" });
+  });
+
+  test("is stale with too_old when one allowed repository is too old", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
+    ]);
+
+    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "too_old" });
+  });
+
+  test("ignores a repository that is not allowed now even when it is too old", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
+    ]);
+
+    expect(judgeOwner(snap, (_owner, repo) => repo !== "gadgets")).toEqual({
+      kind: "fresh",
+    });
+  });
+
+  test("ignores a gone repository", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { gone: true }),
+    ]);
+
+    expect(judgeOwner(snap)).toEqual({ kind: "fresh" });
+  });
+
+  test("ignores an archived repository", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { archived: true }),
+    ]);
+
+    expect(judgeOwner(snap)).toEqual({ kind: "fresh" });
+  });
+
+  test("reports unusable for a repository allowed now but recorded as not allowed", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { allowed: false }),
+    ]);
+
+    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "unusable" });
+  });
+
+  test("reports unusable when every open row of a repository is unusable", () => {
+    const snap = snapshot(
+      [ownerRepoRow("widgets")],
+      [prRow({ repo: "widgets", usable: false })],
+    );
+
+    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "unusable" });
+  });
+
+  test("takes the reason of the first stale repository in name order", () => {
+    const snap = snapshot([
+      ownerRepoRow("zeta", { last_collected_at: null }),
+      ownerRepoRow("alpha", { last_collected_at: TOO_OLD }),
+    ]);
+
+    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "too_old" });
+  });
+
+  test("is fresh when no repository is allowed now", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets", { last_collected_at: null }),
+    ]);
+
+    expect(judgeOwner(snap, () => false)).toEqual({ kind: "fresh" });
+  });
+
+  test("passes the stored owner and repository names to the allowed check", () => {
+    const seen: string[] = [];
+    const snap = snapshot([ownerRepoRow("widgets")]);
+
+    judgeOwner(
+      snap,
+      (owner, repo) => {
+        seen.push(`${owner}/${repo}`);
+        return true;
+      },
+      "Acme",
+    );
+
+    expect(seen).toEqual(["Acme/widgets"]);
+  });
+});
+
+describe("judgeGhOwnerRepos", () => {
+  test("ignores open rows of a repository that has no gh_repos row", () => {
+    const snap = snapshot([], [prRow({ repo: "orphan" })]);
+
+    expect([...judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS).keys()]).toEqual(
+      [],
+    );
+  });
+
+  test("judges each repository against the database time of the read", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets", {
+        last_collected_at: new Date(DB_NOW.getTime() - STALE_AFTER_MS),
+      }),
+      ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
+    ]);
+
+    const judged = judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(
+      [...judged.entries()].map(([name, item]) => [name, item.freshness.kind]),
+    ).toEqual([
+      ["gadgets", "stale"],
+      ["widgets", "fresh"],
+    ]);
+  });
+
+  test("judges lowercase rows for an owner name with uppercase letters", () => {
+    const snap = snapshot([ownerRepoRow("widgets")], [prRow()]);
+
+    const judged = judgeGhOwnerRepos("Acme", snap, STALE_AFTER_MS);
+
+    expect(judged.get("widgets")?.freshness).toEqual({ kind: "fresh" });
+  });
+
+  test("keeps only usable open rows with the matching repo_id of a fresh repository", () => {
+    const keep = prRow({ number: 1, repo: "widgets" });
+    const snap = snapshot(
+      [ownerRepoRow("widgets")],
+      [
+        keep,
+        prRow({ number: 2, repo: "widgets", usable: false }),
+        prRow({ number: 3, repo: "widgets", repo_id: REPO_ID + 1 }),
+      ],
+    );
+
+    const judged = judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(judged.get("widgets")?.usable).toEqual([keep]);
+  });
+
+  test("returns no usable rows for a stale repository", () => {
+    const snap = snapshot(
+      [ownerRepoRow("widgets", { last_collected_at: TOO_OLD })],
+      [prRow({ repo: "widgets" })],
+    );
+
+    const judged = judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(judged.get("widgets")?.usable).toEqual([]);
+  });
+});
+
+describe("effectiveGhSource", () => {
+  const ENABLED = { gh_collect_enabled: true, gh_collect_detail_enabled: true };
+
+  test("is db when the setting is db and both collection settings are on", () => {
+    expect(effectiveGhSource("db", ENABLED)).toBe("db");
+  });
+
+  test("is search when gh_collect_enabled is off", () => {
+    expect(
+      effectiveGhSource("db", { ...ENABLED, gh_collect_enabled: false }),
+    ).toBe("search");
+  });
+
+  test("is search when gh_collect_detail_enabled is off", () => {
+    expect(
+      effectiveGhSource("db", { ...ENABLED, gh_collect_detail_enabled: false }),
+    ).toBe("search");
+  });
+
+  test("is search when the setting is search", () => {
+    expect(effectiveGhSource("search", ENABLED)).toBe("search");
   });
 });

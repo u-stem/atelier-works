@@ -1121,6 +1121,21 @@ export type GhRepoOpenPrSnapshot = {
   readonly prs: readonly GhPullRequest[];
 };
 
+/** 所有者の単位で読んだ`gh_repos`の行。`repo`は小文字のリポジトリ名。 */
+export type GhOwnerRepoFreshnessRow = GhRepoFreshnessRow & {
+  readonly repo: string;
+};
+
+/**
+ * 1人の所有者の`gh_repos`の全行、開いているPRの全行、DBの`now()`を、1つの文で読んだ結果。
+ * 所有者の行が無ければ、`repos`と`prs`は空になる。
+ */
+export type GhOwnerOpenPrSnapshot = {
+  readonly db_now: Date;
+  readonly repos: readonly GhOwnerRepoFreshnessRow[];
+  readonly prs: readonly GhPullRequest[];
+};
+
 /** Issueの詳細として書く値。 */
 export type GhIssueWrite = {
   readonly number: number;
