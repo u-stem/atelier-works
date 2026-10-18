@@ -133,17 +133,22 @@ function assessInput(): unknown {
     mergeBaseSha: "b".repeat(40),
     repoDir: REPO_DIR,
     worktreeDir: "/workspaces/acme/widgets/dependabot-12-aaaaaaa",
-    target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+    targets: [{ name: "left-pad", from: "1.3.0", to: "1.3.1" }],
     promptInput: {
-      packageName: "left-pad",
-      fromVersion: "1.3.0",
-      toVersion: "1.3.1",
+      packages: [
+        {
+          name: "left-pad",
+          from: "1.3.0",
+          to: "1.3.1",
+          changelog: "## 1.3.1\n- fix",
+          registryMetadata:
+            "before maintainers: alice\nafter maintainers: alice",
+        },
+      ],
       prTitle: "Bump left-pad from 1.3.0 to 1.3.1",
       prBody: "Bumps left-pad.",
-      changelog: "## 1.3.1\n- fix",
       manifestDiff: "package.json: left-pad 1.3.0 -> 1.3.1",
       lockfileSummary: "bun.lock: left-pad 1.3.0 -> 1.3.1",
-      registryMetadata: "before maintainers: alice\nafter maintainers: alice",
       unverifiedInputs: [],
     },
     machineConcerns: [],
@@ -458,7 +463,7 @@ function chainManifest(version: string): string {
 function chainCollected(repositoryAfter: string): CollectResult {
   return {
     kind: "ready",
-    input: {
+    common: {
       authorLogin: "dependabot[bot]",
       authorType: "Bot",
       headRepoFullName: "acme/widgets",
@@ -491,27 +496,36 @@ function chainCollected(repositoryAfter: string): CollectResult {
           after: chainLock("1.3.1", CHAIN_INTEGRITY_B),
         },
       ],
-      target: { name: "left-pad", to: "1.3.1" },
       mergeable: true,
-      publishedAtIso: "2026-10-01T00:00:00.000Z",
       nowMs: Date.parse("2026-10-20T00:00:00.000Z"),
       minPublishedDays: 7,
-      installScripts: { before: {}, after: {} },
-      registry: {
-        name: "left-pad",
-        version: "1.3.1",
-        integrity: CHAIN_INTEGRITY_B,
-      },
     },
+    targets: [
+      {
+        target: { name: "left-pad", to: "1.3.1" },
+        publishedAtIso: "2026-10-01T00:00:00.000Z",
+        installScripts: { before: {}, after: {} },
+        registry: {
+          name: "left-pad",
+          version: "1.3.1",
+          integrity: CHAIN_INTEGRITY_B,
+        },
+      },
+    ],
+    packages: [
+      {
+        name: "left-pad",
+        from: "1.3.0",
+        registryMetadata: "before maintainers: alice\nafter maintainers: alice",
+        repositoryBefore: CHAIN_REPOSITORY,
+        repositoryAfter,
+        unverifiedInputs: [],
+      },
+    ],
     headSha: HEAD,
     baseRef: "main",
     baseSha: "d".repeat(40),
     mergeBaseSha: "b".repeat(40),
-    from: "1.3.0",
-    registryMetadata: "before maintainers: alice\nafter maintainers: alice",
-    repositoryBefore: CHAIN_REPOSITORY,
-    repositoryAfter,
-    unverifiedInputs: [],
   };
 }
 
@@ -656,6 +670,7 @@ async function chainOutcome(
         head_sha: HEAD,
       },
       dependabotEnabled: true,
+      groupEnabled: false,
       instanceName: "test",
     }),
   );

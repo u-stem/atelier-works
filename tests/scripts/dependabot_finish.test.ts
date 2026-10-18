@@ -20,6 +20,7 @@ import {
   type PullRequest,
   withMarker,
 } from "../../f/factory/lib/github.ts";
+import { UNNAMED_PACKAGES_ESCALATION } from "../../f/factory/steps/dependabot_assess.ts";
 import {
   DEPENDABOT_AUTO_FIX_LABEL,
   DEPENDABOT_DONE_NOTE,
@@ -55,23 +56,58 @@ const FIX_LABEL = "factory:fix";
 const INSTANCE = "test-instance";
 const PR_URL = "https://github.com/acme/widgets/pull/12";
 
-function promptInput(
-  overrides: Partial<DependabotPromptInput> = {},
-): DependabotPromptInput {
+/** 先頭のパッケージの欄は、`packages`を作り直さずに上書きできる。 */
+type PromptOverrides = Partial<DependabotPromptInput> & {
+  readonly name?: string;
+  readonly changelog?: string;
+};
+
+function promptInput(overrides: PromptOverrides = {}): DependabotPromptInput {
+  const { name, changelog, ...rest } = overrides;
   return {
-    packageName: "left-pad",
-    fromVersion: "1.3.0",
-    toVersion: "1.3.1",
+    packages: [
+      {
+        name: name ?? "left-pad",
+        from: "1.3.0",
+        to: "1.3.1",
+        changelog: changelog ?? "## 1.3.1\n- fix",
+        registryMetadata: "before maintainers: alice\nafter maintainers: alice",
+      },
+    ],
     prTitle: "Bump left-pad from 1.3.0 to 1.3.1",
     prBody: "Bumps left-pad.",
-    changelog: "## 1.3.1\n- fix",
     manifestDiff: "package.json: left-pad 1.3.0 -> 1.3.1",
     lockfileSummary: "bun.lock: left-pad 1.3.0 -> 1.3.1",
-    registryMetadata: "before maintainers: alice\nafter maintainers: alice",
     unverifiedInputs: [],
+    ...rest,
+  };
+}
+
+const RIGHT_PACKAGE = {
+  name: "right-pad",
+  from: "2.0.0",
+  to: "2.0.1",
+  changelog: "## 2.0.1\n- fix",
+  registryMetadata: "before maintainers: bob\nafter maintainers: bob",
+};
+
+/** left-padとright-padが同時に更新される、影響調査の入力の上書き。 */
+function groupOverrides(
+  overrides: Partial<DependabotAssessInput> = {},
+): Partial<DependabotAssessInput> {
+  const base = promptInput();
+  return {
+    targets: [
+      { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+      { name: "right-pad", from: "2.0.0", to: "2.0.1" },
+    ],
+    promptInput: { ...base, packages: [...base.packages, RIGHT_PACKAGE] },
     ...overrides,
   };
 }
+
+/** 両方の名前を挙げた、懸念も未確認も無い評価。 */
+const NAMES_BOTH = "left-padとright-padの使用箇所を確認した";
 
 function assessInput(
   overrides: Partial<DependabotAssessInput> = {},
@@ -87,7 +123,7 @@ function assessInput(
     mergeBaseSha: MERGE_BASE,
     repoDir: REPO_DIR,
     worktreeDir: WORKTREE_DIR,
-    target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+    targets: [{ name: "left-pad", from: "1.3.0", to: "1.3.1" }],
     promptInput: promptInput(),
     machineConcerns: [],
     ...overrides,
@@ -265,6 +301,10 @@ type FakeOptions = {
   readonly enabled?: boolean;
   /** `dependabot_merge_enabled`。省略時は真。 */
   readonly mergeEnabled?: boolean;
+  /** マージの直前に読み直す`dependabot_group_enabled`。省略時は真。 */
+  readonly groupEnabled?: boolean;
+  /** `dependabot_group_enabled`の読み直しが投げる例外。 */
+  readonly groupEnabledError?: Error;
   /** `getBranchSha`が返すbaseのsha。省略時は影響調査の入力と同じ。 */
   readonly baseSha?: string;
   readonly getBranchShaError?: Error;
@@ -315,6 +355,13 @@ function fake(options: FakeOptions = {}): {
         throw options.getBranchShaError;
       }
       return options.baseSha ?? BASE_SHA;
+    },
+    readGroupEnabled: async () => {
+      record("readGroupEnabled");
+      if (options.groupEnabledError !== undefined) {
+        throw options.groupEnabledError;
+      }
+      return options.groupEnabled ?? true;
     },
     ensureRepoOwner: async (owner, repo) => {
       record("ensureRepoOwner", owner, repo);
@@ -514,16 +561,50 @@ describe("readFinishInput", () => {
     expect(() =>
       readFinishInput(
         proceeding({
-          target: { name, from: "1.3.0", to: "1.3.1" },
-          promptInput: promptInput({ packageName: name }),
+          targets: [{ name, from: "1.3.0", to: "1.3.1" }],
+          promptInput: promptInput({ name }),
         }),
         assessedRaw(claude(), {
-          target: { name, from: "1.3.0", to: "1.3.1" },
-          promptInput: promptInput({ packageName: name }),
+          targets: [{ name, from: "1.3.0", to: "1.3.1" }],
+          promptInput: promptInput({ name }),
         }),
         WORK_ITEM_ID,
       ),
     ).toThrow("dependabot_finish: target name is not an npm package name");
+  });
+
+  test("throws on a second target name that is not an npm package name", () => {
+    const name = "right`pad";
+    const base = promptInput();
+    const overrides = groupOverrides({
+      targets: [
+        { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+        { name, from: "2.0.0", to: "2.0.1" },
+      ],
+      promptInput: {
+        ...base,
+        packages: [...base.packages, { ...RIGHT_PACKAGE, name }],
+      },
+    });
+
+    expect(() =>
+      readFinishInput(
+        proceeding(overrides),
+        assessedRaw(claude(), overrides),
+        WORK_ITEM_ID,
+      ),
+    ).toThrow("dependabot_finish: target name is not an npm package name");
+  });
+
+  test("reads a group of two packages", () => {
+    const overrides = groupOverrides();
+    const input = readFinishInput(
+      proceeding(overrides),
+      assessedRaw(claude(), overrides),
+      WORK_ITEM_ID,
+    );
+
+    expect(input.kind).toBe("assessed");
   });
 });
 
@@ -892,6 +973,180 @@ describe("runDependabotFinish in the dry run", () => {
     const { calls } = await run(mergeInput(), { mergeEnabled: true });
 
     expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+});
+
+// ---- グループの更新 ----
+
+function groupInput(
+  assessment: Partial<ImpactAssessment> = { evidence: NAMES_BOTH },
+  overrides: Partial<DependabotAssessInput> = {},
+): FinishInput {
+  const merged = groupOverrides(overrides);
+  return readFinishInput(
+    proceeding(merged),
+    assessedRaw(claude(assessment), merged),
+    WORK_ITEM_ID,
+  );
+}
+
+function indexOfCall(calls: readonly Call[], name: string): number {
+  return calls.findIndex((call) => call.name === name);
+}
+
+describe("runDependabotFinish for a group of packages", () => {
+  test("merges a group when both settings are enabled", async () => {
+    const { calls } = await run(groupInput());
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+
+  test("merges at the head the assessment used", async () => {
+    const { calls } = await run(groupInput());
+
+    expect(named(calls, "mergePullRequest")[0]?.args).toEqual([
+      "acme",
+      "widgets",
+      12,
+      HEAD,
+    ]);
+  });
+
+  test("does not merge a group in the dry run", async () => {
+    const { calls } = await run(groupInput(), { mergeEnabled: false });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands a group to a person with the dry run reason", async () => {
+    const { calls } = await run(groupInput(), { mergeEnabled: false });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", DEPENDABOT_DRY_RUN_REASON],
+    ]);
+  });
+
+  test("does not merge a group when the group setting is off at the merge", async () => {
+    const { calls } = await run(groupInput(), { groupEnabled: false });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands a group to a person when the group setting is off at the merge", async () => {
+    const { calls } = await run(groupInput(), { groupEnabled: false });
+
+    expect(statusUpdates(calls)).toEqual([
+      [
+        WORK_ITEM_ID,
+        "picked",
+        "needs_human",
+        dependabotReason(
+          "finish",
+          "group updates were disabled before the merge",
+        ),
+      ],
+    ]);
+  });
+
+  test("notifies a person when the group setting is off at the merge", async () => {
+    const { calls } = await run(groupInput(), { groupEnabled: false });
+
+    expect(needsHumanEvent(calls)?.next_action).toBe(
+      nextActionFor(
+        dependabotReason(
+          "finish",
+          "group updates were disabled before the merge",
+        ),
+        "dependabot",
+      ),
+    );
+  });
+
+  test("reads the group setting after the base branch and before the merge", async () => {
+    const { calls } = await run(groupInput());
+    const read = indexOfCall(calls, "readGroupEnabled");
+
+    expect(
+      indexOfCall(calls, "getBranchSha") < read &&
+        read < indexOfCall(calls, "mergePullRequest"),
+    ).toBe(true);
+  });
+
+  test("hands a group to a person when the group setting cannot be read", async () => {
+    const { calls } = await run(groupInput(), {
+      groupEnabledError: new Error("resource unavailable"),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [
+        WORK_ITEM_ID,
+        "picked",
+        "needs_human",
+        dependabotReason(
+          "finish",
+          "the group setting could not be re-read before the merge",
+        ),
+      ],
+    ]);
+  });
+
+  test("does not merge a group when the group setting cannot be read", async () => {
+    const { calls } = await run(groupInput(), {
+      groupEnabledError: new Error("resource unavailable"),
+    });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("does not read the group setting for a single package", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(named(calls, "readGroupEnabled")).toHaveLength(0);
+  });
+
+  test("merges a single package although the group setting is off", async () => {
+    const { calls } = await run(mergeInput(), { groupEnabled: false });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+
+  test("does not merge a group when claude did not name every package", async () => {
+    const { calls } = await run(groupInput({ evidence: "left-padを確認した" }));
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands a group to a person when claude did not name every package", async () => {
+    const { result } = await run(
+      groupInput({ evidence: "left-padを確認した" }),
+    );
+
+    expect(result.status).toBe("needs_human");
+  });
+
+  test("does not merge a group with a concern about the second package", async () => {
+    const { calls } = await run(
+      groupInput({
+        evidence: NAMES_BOTH,
+        supplyChainConcerns: ["right-padの公開者が変わった"],
+      }),
+    );
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("counts the missing package names among the reasons in the notification", async () => {
+    const { calls } = await run(groupInput({ evidence: "left-padを確認した" }));
+
+    expect(needsHumanEvent(calls)?.reason).toContain(
+      "機械の検査と入力の確認による根拠が1件",
+    );
+  });
+
+  test("checks the repository owner before it reads the group setting", async () => {
+    const { calls } = await run(groupInput(), { ownerStop: "owner mismatch" });
+
+    expect(named(calls, "readGroupEnabled")).toHaveLength(0);
   });
 });
 
@@ -1651,6 +1906,18 @@ describe("renderFixReviewBody", () => {
     expect(body).not.toMatch(/(^|[^\\])@admin/);
   });
 
+  test("names every package of a group", () => {
+    const input = groupInput({ impact: "impact", evidence: NAMES_BOTH });
+    const body =
+      input.kind === "assessed"
+        ? renderFixReviewBody(input.result, FIX_LABEL)
+        : "";
+
+    expect(body).toContain(
+      "dependabotの更新(`left-pad`の1.3.0から1.3.1への更新、`right-pad`の2.0.0から2.0.1への更新)は、このリポジトリに影響すると判断しました。",
+    );
+  });
+
   test("starts with the role tag", () => {
     const input = fixInput();
     const body =
@@ -1959,6 +2226,42 @@ describe("renderHumanReviewBody", () => {
     const body = humanBody({ unverified: ["usage in src/"] });
 
     expect(body).toContain("```\n- usage in src/\n```");
+  });
+
+  function groupBody(assessment: Partial<ImpactAssessment>): string {
+    const input = groupInput(assessment);
+    return input.kind === "assessed" ? renderHumanReviewBody(input.result) : "";
+  }
+
+  test("names the single package as before", () => {
+    const body = humanBody({});
+
+    expect(body).toContain(
+      "dependabotの更新(`left-pad`の1.3.0から1.3.1への更新)は、自動ではマージせず、人の確認に回しました。",
+    );
+  });
+
+  test("names every package of a group", () => {
+    const body = groupBody({ supplyChainConcerns: ["x"] });
+
+    expect(body).toContain(
+      "dependabotの更新(`left-pad`の1.3.0から1.3.1への更新、`right-pad`の2.0.0から2.0.1への更新)は、自動ではマージせず、人の確認に回しました。",
+    );
+  });
+
+  test("lists the missing package names among the reasons for a human", () => {
+    const body = groupBody({ evidence: "left-padを確認した" });
+
+    expect(body).toContain(`\`\`\`\n- ${UNNAMED_PACKAGES_ESCALATION}\n\`\`\``);
+  });
+
+  test("lists no missing package names when every name is present", () => {
+    const body = groupBody({
+      evidence: NAMES_BOTH,
+      supplyChainConcerns: ["right-padの公開者が変わった"],
+    });
+
+    expect(body).not.toContain(UNNAMED_PACKAGES_ESCALATION);
   });
 
   test("stays within the GitHub body limit for the largest inputs", () => {

@@ -11,7 +11,9 @@ import {
   dependabotReason,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
 import {
+  type GateCommon,
   type GateInput,
+  type GateTargetFacts,
   GITHUB_ACTIONS_APP_ID,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
@@ -139,22 +141,131 @@ function gateInput(overrides: Partial<GateInput> = {}): GateInput {
   };
 }
 
+/** `GateInput`を、対象に依らない事実と対象ごとの事実に分ける。 */
+function splitGateInput(input: GateInput): {
+  common: GateCommon;
+  facts: GateTargetFacts;
+} {
+  const { target, registry, installScripts, publishedAtIso, ...common } = input;
+  return {
+    common,
+    facts: { target, registry, installScripts, publishedAtIso },
+  };
+}
+
 function ready(
   overrides: Partial<GateInput> = {},
   headSha = HEAD,
 ): CollectResult {
+  const { common, facts } = splitGateInput(gateInput(overrides));
   return {
     kind: "ready",
-    input: gateInput(overrides),
+    common,
+    targets: [facts],
+    packages: [
+      {
+        name: facts.target.name,
+        from: "1.3.0",
+        registryMetadata: "",
+        repositoryBefore: null,
+        repositoryAfter: null,
+        unverifiedInputs: [],
+      },
+    ],
     headSha,
     baseRef: "main",
     baseSha: "d".repeat(40),
     mergeBaseSha: "b".repeat(40),
-    from: "1.3.0",
-    registryMetadata: "",
-    repositoryBefore: null,
-    repositoryAfter: null,
-    unverifiedInputs: [],
+  };
+}
+
+const RIGHT_NAME = "right-pad";
+const INTEGRITY_C = `sha512-${"C".repeat(86)}==`;
+const INTEGRITY_D = `sha512-${"D".repeat(86)}==`;
+
+function groupLockText(version: string, rightVersion: string): string {
+  const left = version === "1.3.0" ? INTEGRITY_A : INTEGRITY_B;
+  const right = rightVersion === "2.0.0" ? INTEGRITY_C : INTEGRITY_D;
+  return `{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "fixture",
+      "dependencies": {
+        "left-pad": "${version}",
+        "${RIGHT_NAME}": "${rightVersion}",
+      },
+    },
+  },
+  "packages": {
+    "left-pad": ["left-pad@${version}", "", {}, "${left}"],
+    "${RIGHT_NAME}": ["${RIGHT_NAME}@${rightVersion}", "", {}, "${right}"],
+  },
+}
+`;
+}
+
+function groupManifest(version: string, rightVersion: string): string {
+  return JSON.stringify(
+    {
+      name: "fixture",
+      version: "1.0.0",
+      dependencies: { "left-pad": version, [RIGHT_NAME]: rightVersion },
+    },
+    null,
+    2,
+  );
+}
+
+type GroupReadyOverrides = {
+  readonly common?: Partial<GateCommon>;
+  readonly left?: Partial<GateTargetFacts>;
+  readonly right?: Partial<GateTargetFacts>;
+};
+
+/** left-padとright-padが同時に更新されるPRの収集結果。ゲートを通る。 */
+function readyGroup(overrides: GroupReadyOverrides = {}): CollectResult {
+  const base = splitGateInput(
+    gateInput({
+      files: [
+        {
+          path: "package.json",
+          before: groupManifest("1.3.0", "2.0.0"),
+          after: groupManifest("1.3.1", "2.0.1"),
+        },
+        {
+          path: "bun.lock",
+          before: groupLockText("1.3.0", "2.0.0"),
+          after: groupLockText("1.3.1", "2.0.1"),
+        },
+      ],
+    }),
+  );
+  const left: GateTargetFacts = { ...base.facts, ...overrides.left };
+  const right: GateTargetFacts = {
+    target: { name: RIGHT_NAME, to: "2.0.1" },
+    publishedAtIso: PUBLISHED_AT,
+    installScripts: { before: {}, after: {} },
+    registry: { name: RIGHT_NAME, version: "2.0.1", integrity: INTEGRITY_D },
+    ...overrides.right,
+  };
+  return {
+    kind: "ready",
+    common: { ...base.common, ...overrides.common },
+    targets: [left, right],
+    packages: [left, right].map((facts) => ({
+      name: facts.target.name,
+      from: facts.target.name === "left-pad" ? "1.3.0" : "2.0.0",
+      registryMetadata: "",
+      repositoryBefore: null,
+      repositoryAfter: null,
+      unverifiedInputs: [],
+    })),
+    headSha: HEAD,
+    baseRef: "main",
+    baseSha: "d".repeat(40),
+    mergeBaseSha: "b".repeat(40),
   };
 }
 
@@ -295,6 +406,7 @@ function context(
     instanceName: "test",
     viewerLogin: "factory-bot",
     minPublishedDays: 7,
+    allowGroups: false,
     retentionDays: 90,
     activeForPr: [],
     waits: new Map(),
@@ -636,6 +748,166 @@ describe("processDependabotPr after the flow stopped to wait", () => {
     });
 
     expect(outcome.kind).toBe("started");
+  });
+});
+
+// ---- グループの更新 ----
+
+describe("processDependabotPr for a group of packages", () => {
+  const TOO_NEW_LEFT = "2026-10-18T00:00:00.000Z";
+  const TOO_NEW_RIGHT = "2026-10-19T00:00:00.000Z";
+
+  test("hands a group to a person with the gate reason when groups are disabled", async () => {
+    const { outcome } = await run({ collect: readyGroup() });
+
+    expect(noteOf(outcome)).toBe(
+      dependabotReason(
+        "gate",
+        "more than one package changed: left-pad, right-pad",
+      ),
+    );
+  });
+
+  test("starts the flow for a group when groups are enabled", async () => {
+    const { h } = await run({ collect: readyGroup() }, { allowGroups: true });
+
+    expect(h.started).toEqual([41]);
+  });
+
+  test("names the package the gate stops in the reason", async () => {
+    const { outcome } = await run(
+      {
+        collect: readyGroup({
+          right: { registry: null },
+        }),
+      },
+      { allowGroups: true },
+    );
+
+    expect(noteOf(outcome)).toContain("package right-pad: ");
+  });
+
+  test("does not start the flow when only the second package is stopped", async () => {
+    const { h } = await run(
+      { collect: readyGroup({ right: { registry: null } }) },
+      { allowGroups: true },
+    );
+
+    expect(h.started).toHaveLength(0);
+  });
+
+  test("waits when only the second package is too new", async () => {
+    const { outcome } = await run(
+      { collect: readyGroup({ right: { publishedAtIso: TOO_NEW_RIGHT } }) },
+      { allowGroups: true },
+    );
+
+    expect(outcome.kind).toBe("waiting");
+  });
+
+  test("checks again when the second package is old enough", async () => {
+    const { outcome } = await run(
+      { collect: readyGroup({ right: { publishedAtIso: TOO_NEW_RIGHT } }) },
+      { allowGroups: true },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(
+      Date.parse("2026-10-26T00:00:00.000Z"),
+    );
+  });
+
+  test("checks again when the first package is old enough if only it is too new", async () => {
+    const { outcome } = await run(
+      { collect: readyGroup({ left: { publishedAtIso: TOO_NEW_LEFT } }) },
+      { allowGroups: true },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(
+      Date.parse("2026-10-25T00:00:00.000Z"),
+    );
+  });
+
+  test("checks again when the latest of the too-new packages is old enough", async () => {
+    const { outcome } = await run(
+      {
+        collect: readyGroup({
+          left: { publishedAtIso: TOO_NEW_RIGHT },
+          right: { publishedAtIso: TOO_NEW_LEFT },
+        }),
+      },
+      { allowGroups: true },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(
+      Date.parse("2026-10-26T00:00:00.000Z"),
+    );
+  });
+
+  test("ignores a package that is already old enough when it picks the time", async () => {
+    const { outcome } = await run(
+      {
+        collect: readyGroup({
+          left: { publishedAtIso: "2026-09-01T00:00:00.000Z" },
+          right: { publishedAtIso: TOO_NEW_LEFT },
+        }),
+      },
+      { allowGroups: true },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(
+      Date.parse("2026-10-25T00:00:00.000Z"),
+    );
+  });
+
+  test("falls back to the interval when a too-new package has an unreadable publish time", async () => {
+    const { outcome } = await run(
+      {
+        collect: readyGroup({
+          left: { publishedAtIso: TOO_NEW_LEFT },
+          right: { publishedAtIso: "not a date" },
+        }),
+      },
+      { allowGroups: true },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + FIRST_BACKOFF_MS);
+  });
+
+  test("caps the publish wait at the wait limit when a publish time is in the future", async () => {
+    const { outcome } = await run(
+      {
+        collect: readyGroup({
+          right: { publishedAtIso: "2027-01-01T00:00:00.000Z" },
+        }),
+      },
+      { allowGroups: true },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + LIMIT_MS);
+  });
+
+  test("keeps a single package waiting until its own publish day", async () => {
+    const { outcome } = await run({
+      collect: ready({ publishedAtIso: TOO_NEW_LEFT }),
+    });
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(
+      Date.parse("2026-10-25T00:00:00.000Z"),
+    );
+  });
+
+  test("hands the group to a person when the pull request is not mergeable and a package is stopped", async () => {
+    const { outcome } = await run(
+      {
+        collect: readyGroup({
+          common: { mergeable: false },
+          right: { registry: null },
+        }),
+      },
+      { allowGroups: true },
+    );
+
+    expect(outcome.kind).toBe("escalated");
   });
 });
 
@@ -1528,6 +1800,27 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
     },
   };
 }
+
+describe("pollDependabot with a group of packages", () => {
+  test("starts the flow for a group when dependabot_group_enabled is on", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: { ...CONFIG, dependabot_group_enabled: true },
+        collect: async () => readyGroup(),
+      }),
+    );
+
+    expect(result.started).toBe(1);
+  });
+
+  test("hands a group to a person when dependabot_group_enabled is off", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { collect: async () => readyGroup() }),
+    );
+
+    expect(result.escalated).toBe(1);
+  });
+});
 
 describe("pollDependabot", () => {
   test("does not open GitHub when dependabot is disabled", async () => {

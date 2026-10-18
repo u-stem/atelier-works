@@ -121,6 +121,15 @@ export type DependabotAssessResult =
 
 // ---- 判定に渡す評価 ----
 
+export const UNNAMED_PACKAGES_ESCALATION = "unnamed packages";
+
+export function coverageEscalationsOf(_result: {
+  readonly input: DependabotAssessInput;
+  readonly claudeAssessment: ImpactAssessment;
+}): string[] {
+  return [];
+}
+
 /**
  * 結論を出すために`decideImpactOutcome`へ渡す評価を返す。後段は直接使わず、`decideAssessedOutcome`を使う。
  * Claudeの評価に、人に回す根拠(`escalationsOf`)を足す。
