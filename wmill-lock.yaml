@@ -67,7 +67,7 @@ locks:
   f/factory/lib/gh_collect_detail: 4819e8d6e84ac6065c3d4de40820e75065482aaec00b890e85065e5ac957bc59
   f/factory/lib/gh_collect_detail_round: cda53e1882492fecbe3e46b45d6b2223c67a6e2cbe04edcda4e0378e5fe92691
   f/factory/lib/gh_collect_freshness: 487d7080e623e924a7cd278dfd3dfef4ad1d28287f5f1ec5146b1467b798e46d
-  f/factory/lib/gh_collect_read: 8f951e4565e8ce8a6c225cc14f694e819ee51256e781c8315223cc27c80281fd
+  f/factory/lib/gh_collect_read: e59455f5634ac3c932ed7c4bc2891ead08327fadf8012ffb8151eccc75c8cc0b
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 6d1a97e3aef6135cbadde8c3546d5768a9e591461642de65307f64083b6e39ab
   f/factory/lib/github: 37265824d3cbae73c76f5f0943a110f3f807724757cd57534c66f1b9617df588
@@ -98,14 +98,14 @@ locks:
   f/factory/lib/owner_id_notice: c5735593c26e7aa85064e0cf59ddb60a9ee0baa7ab6978038641c25d0339085d
   f/factory/lib/periodic_worker: 08d45ca6528652f68b176ed820efeac3f9499cd60c0292b2186b36112215f881
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
-  f/factory/lib/poll_source: 292851f50f94fd726e1afecd3780ad3860f4910675d7687f94a2b7d7db2288c8
+  f/factory/lib/poll_source: 93be8425c68b123f72056dd7f3f4cb4ea0c72e616e35e31bb2271bec640dd3c3
   f/factory/lib/poll_support: 76afdaffb8bb1ee30f54d08cbb7eed25d1bd5fa915399f2f1f23f5b428f3e634
   f/factory/lib/pr_ci_fix_claim: 3f34d3752aa2d1dcf8fa0b54f43c095bf6577e709895aeca0d57555351326420
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
   f/factory/lib/pr_ci_human_support: fe968e100eae14a91d84de42631191d45726a966be2913c5b7374ba783423f2c
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: 77c3ce5973d30509a460864d56f4b7e643c644f27de5d1f0bc86dd8c355e5af6
-  f/factory/lib/pr_ci_watch: 18d274093665ee1b35a3d13df9370ad0a4b9b72cf0ef119471bd58563a63b26d
+  f/factory/lib/pr_ci_watch: 8fd8f9d2d05423c4ec5a9220e4ba416f6a2502f68284a36083cdb1f58bc3ec01
   f/factory/lib/pr_conflict_fix_claim: 83a8e845d21336ef6e7b20662d3b192297bd458ecd46d8aeb047fc47478b514f
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: adaa381f1013323d9fcd27019329d849d7ba525da75bf7a1a0ca3bd5acca74d9

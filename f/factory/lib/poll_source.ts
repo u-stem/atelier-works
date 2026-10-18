@@ -1,15 +1,14 @@
 // `poll_issues`と`poll_prs`が、トリガーのIssueとPRを見つける元(検索か収集の表)の切り替えを持つ。
 // 表の行は候補を絞るだけに使い、候補に入れる前にRESTで読み直して、開いていて今も対象であることを確かめる。
 // 表を使えない所有者は、その所有者の全体を検索に戻す。リポジトリ単位の戻し先は無い。
-// 設定で明示したリポジトリの名前(`requiredRepos`)と、表の候補にしてよい行の絞り込み(`usableTableRows`)は、
-// `watch_pr_ci`の人のPRの発見も使う。
 
-import { configuredRepos, isRepoAllowed } from "./config.ts";
+import { isRepoAllowed } from "./config.ts";
 import {
-  type GhOwnerRepoCoverageInput,
   judgeGhOwnerCoverage,
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
+  requiredRepos,
+  usableTableRows,
 } from "./gh_collect_read.ts";
 import type {
   Issue,
@@ -93,48 +92,6 @@ export type PollSourceStats = {
   /** RESTで対象でないと分かって外した表の候補の数。 */
   readonly table_dropped: number;
 };
-
-/** 設定で明示したリポジトリのうち、この所有者のものの小文字の名前。 */
-export function requiredRepos(
-  scope: Pick<FactoryConfig, "repo_allowlist" | "factory_repo">,
-  owner: string,
-): Set<string> {
-  const ownerName = owner.toLowerCase();
-  return new Set(
-    configuredRepos(scope)
-      .filter((entry) => entry.owner.toLowerCase() === ownerName)
-      .map((entry) => entry.repo.toLowerCase()),
-  );
-}
-
-/**
- * 表の候補にしてよい行を、(リポジトリ、番号)の順に集める。
- * 読む時点で許されないリポジトリ、archive済みのリポジトリ、一覧から消えたリポジトリの行は入れない。
- * 鮮度の足りない所有者はここに来る前に検索へ戻すので、`usable`は使ってよい行だけである。
- */
-export function usableTableRows<T extends { readonly number: number }>(
-  owner: string,
-  judged: ReadonlyMap<
-    string,
-    GhOwnerRepoCoverageInput & { readonly usable: readonly T[] }
-  >,
-  isAllowedNow: (owner: string, repo: string) => boolean,
-): T[] {
-  const rows: T[] = [];
-  for (const name of [...judged.keys()].sort()) {
-    const item = judged.get(name);
-    if (item === undefined) continue;
-    if (
-      !isAllowedNow(owner, item.row.repo) ||
-      item.row.archived ||
-      item.row.gone
-    ) {
-      continue;
-    }
-    rows.push(...[...item.usable].sort((a, b) => a.number - b.number));
-  }
-  return rows;
-}
 
 /**
  * トリガーラベル付きのIssueを見つける。照合を通った所有者ごとに行う。

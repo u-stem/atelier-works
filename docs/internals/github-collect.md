@@ -597,6 +597,8 @@ IDが一致したことを確かめたい処理は、`id_checked`を見る。
 | `judgeGhOwnerRepos` | 所有者のPRの読み取りを、リポジトリごとの判定に分ける |
 | `judgeGhOwnerIssueRepos` | 所有者のIssueの読み取りを、リポジトリごとの判定に分ける |
 | `judgeGhOwnerCoverage` | 所有者の全体を表で探してよいかを判定する |
+| `requiredRepos` | 設定で明示したリポジトリのうち、その所有者のものの名前を返す |
+| `usableTableRows` | 所有者の判定から、表の候補にしてよい行を(リポジトリ、番号)の順に集める |
 | `effectiveGhSource` | 設定と収集の設定から、実際に使う読み取り元を決める |
 
 読む処理は、1つのリポジトリの`gh_repos`の行、開いているPRの行、DBの`now()`を、1つの文で読む(`readGhRepoOpenPullRequests`)。
@@ -670,7 +672,7 @@ PRの行には`judgeGhOwnerRepos`、Issueの行には`judgeGhOwnerIssueRepos`を
 - 順4で外さないと、archive済みのリポジトリを1つ持つ所有者が毎周回検索に戻り、表を読む意味が無くなる。archive済みのリポジトリは読み取り専用で、`required`に入っていても外す。
 - 順5で外さないと、消したリポジトリを1つ持つ所有者が毎周回検索に戻る。`required`に入っているリポジトリが`stale`になるのは、表で使えないまま所有者を`fresh`にすると、検索なら見つけるものを黙って取りこぼすためである。
 - `required`を渡すのは、リポジトリ単位の戻し先を持たない`poll_issues`と`poll_prs`と`watch_pr_ci`である。`watch_pr_conflicts`は、明示されたリポジトリをREST一覧で列挙できるので渡さない。
-- 明示したリポジトリの名前(`requiredRepos`)と、表の候補にしてよい行の絞り込み(`usableTableRows`)は、`poll_source.ts`に置き、この3つの処理が共有する。
+- 明示したリポジトリの名前(`requiredRepos`)と、表の候補にしてよい行の絞り込み(`usableTableRows`)は、`gh_collect_read.ts`に置き、この3つの処理が共有する。
 - 所有者の最新の実行の`verified`は、ここでも読まない。
 
 `watch_pr_conflicts`は、`stale`の所有者を検索に戻す。

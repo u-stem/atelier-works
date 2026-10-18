@@ -34,7 +34,9 @@ import {
   judgeGhOwnerCoverage,
   judgeGhOwnerRepos,
   judgeGhRepoFreshness,
+  requiredRepos,
   usableGhPullRequests,
+  usableTableRows,
 } from "./gh_collect_read.ts";
 import {
   GitHubHttpError,
@@ -52,7 +54,6 @@ import {
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
-import { requiredRepos, usableTableRows } from "./poll_source.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
   classifyHeadFailure,
