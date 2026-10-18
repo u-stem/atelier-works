@@ -81,8 +81,11 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]) {
   );
 }
 
-/** 暦に存在する日付と時刻か。小数部は9桁まで、オフセットは`Z`か`+hh:mm`か`-hh:mm`を許す。 */
-function isDateTime(value: unknown, utcOnly: boolean): boolean {
+/**
+ * 暦に存在する日付と時刻か。小数部は9桁まで、オフセットは`Z`か`+hh:mm`か`-hh:mm`を許す。
+ * `utcOnly`が真なら`Z`だけを許す。状態の記録も同じ形を使う。
+ */
+export function isDateTime(value: unknown, utcOnly: boolean): boolean {
   if (typeof value !== "string") return false;
   const match = DATE_TIME.exec(value);
   if (match === null) return false;

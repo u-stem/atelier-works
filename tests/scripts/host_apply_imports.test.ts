@@ -215,6 +215,9 @@ const APPROVAL_MODULES = [
   "code_origin.ts",
   "secure_file.ts",
   "drain_store.ts",
+  "state.ts",
+  "state_io.ts",
+  "held_lock.ts",
 ].map((name) => join(HOST_APPLY_DIR, name));
 
 const FORBIDDEN_BUILTINS =
@@ -321,9 +324,13 @@ describe("the env checker", () => {
 });
 
 describe("the state store modules", () => {
-  const STORE_MODULES = ["secure_file.ts", "drain_store.ts"].map((name) =>
-    join(HOST_APPLY_DIR, name),
-  );
+  const STORE_MODULES = [
+    "secure_file.ts",
+    "drain_store.ts",
+    "state.ts",
+    "state_io.ts",
+    "held_lock.ts",
+  ].map((name) => join(HOST_APPLY_DIR, name));
 
   test("import only built-ins and scripts/host_apply/", () => {
     expect(violations(STORE_MODULES)).toEqual([]);
@@ -346,5 +353,245 @@ describe("the state store modules", () => {
         envReads(readFileSync(file, "utf8")).map((form) => `${file}: ${form}`),
       ),
     ).toEqual([]);
+  });
+});
+
+/** 拡張子と`/index`の違いを除いた、モジュールの比較用のパス。 */
+function moduleKey(path: string): string {
+  return path.replace(/\.ts$/, "").replace(/\/index$/, "");
+}
+
+/** ファイルが`host_apply`の中のモジュールを読み込んでいるか。拡張子を省いた指定子も同じものとして扱う。 */
+function importsModule(file: string, source: string, name: string): boolean {
+  const wanted = moduleKey(join(HOST_APPLY_DIR, name));
+  return specifiers(source).some(
+    (specifier) =>
+      (specifier.startsWith("./") || specifier.startsWith("../")) &&
+      moduleKey(resolve(dirname(file), specifier)) === wanted,
+  );
+}
+
+function importsSecureFile(file: string, source: string): boolean {
+  return importsModule(file, source, "secure_file.ts");
+}
+
+/** 実行役と入口に加えて、`scripts/`の全体。別の場所から部品を取れないようにするため。 */
+function scriptFiles(): string[] {
+  return [...sourceFiles(), ...collectTs(join(REPO_ROOT, "scripts"))].filter(
+    (file, index, all) => all.indexOf(file) === index,
+  );
+}
+
+function relativeNames(files: string[]): string[] {
+  return files.map((file) => file.slice(REPO_ROOT.length + 1)).sort();
+}
+
+describe("the importers of secure_file", () => {
+  // 置き場のファイルを読み書きする経路を、この一覧に閉じる。増やすときはこのテストを直して、人のレビューを通す。
+  const ALLOWED_IMPORTERS = [
+    "scripts/host_apply/approved_io.ts",
+    "scripts/host_apply/drain_store.ts",
+    "scripts/host_apply/state_io.ts",
+  ];
+
+  function importers(): string[] {
+    return relativeNames(
+      scriptFiles().filter((file) =>
+        importsSecureFile(file, readFileSync(file, "utf8")),
+      ),
+    );
+  }
+
+  test("are exactly the allowed modules", () => {
+    expect(importers()).toEqual(ALLOWED_IMPORTERS);
+  });
+
+  test("the scanner finds a relative import of secure_file", () => {
+    expect(
+      importsSecureFile(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'import { readSecureFile } from "./secure_file.ts";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner finds a dynamic import of secure_file", () => {
+    expect(
+      importsSecureFile(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'const m = await import("./secure_file.ts");',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner finds an import without the extension", () => {
+    expect(
+      importsSecureFile(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'import { readSecureFile } from "./secure_file";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner finds an import from outside host_apply", () => {
+    expect(
+      importsSecureFile(
+        join(REPO_ROOT, "scripts/x.ts"),
+        'import { readSecureFile } from "./host_apply/secure_file";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner ignores an import of another module", () => {
+    expect(
+      importsSecureFile(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'import { a } from "./state.ts";',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("the state file", () => {
+  const STATE_FILE_LITERAL = /state\.json/;
+
+  /** ブロックコメントと行頭の行コメントを除く。説明文の中の名前を数えないため。 */
+  function withoutComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  }
+
+  function namesStateFile(source: string): boolean {
+    return STATE_FILE_LITERAL.test(withoutComments(source));
+  }
+
+  test("is named only in secure_file.ts and state_io.ts", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          namesStateFile(readFileSync(file, "utf8")),
+        ),
+      ),
+    ).toEqual([
+      "scripts/host_apply/secure_file.ts",
+      "scripts/host_apply/state_io.ts",
+    ]);
+  });
+
+  test("the literal scanner finds a quoted name", () => {
+    expect(namesStateFile('join(dir, "state.json")')).toBe(true);
+  });
+
+  test("the literal scanner finds a name in a template literal", () => {
+    expect(namesStateFile("const n = `state.json`;")).toBe(true);
+  });
+
+  test("the literal scanner ignores a name in a line comment", () => {
+    expect(namesStateFile("// the `state.json` is read here")).toBe(false);
+  });
+
+  test("the literal scanner ignores a name in a block comment", () => {
+    expect(namesStateFile("/** the `state.json` is read here */")).toBe(false);
+  });
+
+  test("state_io exports exactly the five functions", async () => {
+    const exported = await import("../../scripts/host_apply/state_io.ts");
+    expect(Object.keys(exported).sort()).toEqual([
+      "commitApplied",
+      "createState",
+      "readState",
+      "reinit",
+      "writeState",
+    ]);
+  });
+});
+
+describe("the re-exports and the names of secure_file", () => {
+  const REEXPORT_FROM_SECURE_FILE =
+    /export\s[^;]*?from\s*["']\.\/secure_file\.ts["']/;
+
+  test("no module re-exports from secure_file", () => {
+    expect(
+      sourceFiles().filter((file) =>
+        REEXPORT_FROM_SECURE_FILE.test(readFileSync(file, "utf8")),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the re-export scanner finds a re-export", () => {
+    expect(
+      REEXPORT_FROM_SECURE_FILE.test(
+        'export { writeSecureFile } from "./secure_file.ts";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the list of file names is used only in secure_file.ts", () => {
+    expect(
+      sourceFiles()
+        .filter((file) =>
+          readFileSync(file, "utf8").includes("SECURE_FILE_NAMES"),
+        )
+        .map((file) => file.slice(HOST_APPLY_DIR.length + 1)),
+    ).toEqual(["secure_file.ts"]);
+  });
+});
+
+describe("the importers of state_io", () => {
+  // 状態を書き換える関数を呼べるモジュールの閉じた一覧。今は呼ぶ実行役のコードが無い。
+  // 初期化と後処理のサブコマンドを足すときは、この一覧を直して人のレビューを通す。
+  const ALLOWED_IMPORTERS: string[] = [];
+
+  test("are exactly the allowed modules", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          importsModule(file, readFileSync(file, "utf8"), "state_io.ts"),
+        ),
+      ),
+    ).toEqual(ALLOWED_IMPORTERS);
+  });
+});
+
+/** `held_lock.ts`を値として読み込んでいるか。型だけの読み込みは数えない。 */
+function importsHeldLockValue(file: string, source: string): boolean {
+  const pattern =
+    /(?:^|\n)\s*import\s+(?!type\b)[^;]*?from\s*["']([^"']+)["']/g;
+  const wanted = moduleKey(join(HOST_APPLY_DIR, "held_lock.ts"));
+  return [...source.matchAll(pattern)].some(
+    (match) => moduleKey(resolve(dirname(file), match[1] ?? "")) === wanted,
+  );
+}
+
+describe("the value importers of held_lock", () => {
+  // フェンスを作れるモジュールの閉じた一覧。ロックの実装を足すときに、この一覧を直す。
+  // 型としての読み込み(`import type`)は数えない。
+  const ALLOWED_IMPORTERS: string[] = [];
+
+  test("are exactly the allowed modules", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          importsHeldLockValue(file, readFileSync(file, "utf8")),
+        ),
+      ),
+    ).toEqual(ALLOWED_IMPORTERS);
+  });
+
+  test("the scanner finds a value import", () => {
+    expect(
+      importsHeldLockValue(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'import { HeldLock as L } from "./held_lock";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner ignores a type import", () => {
+    expect(
+      importsHeldLockValue(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'import type { HeldLock } from "./held_lock.ts";',
+      ),
+    ).toBe(false);
   });
 });

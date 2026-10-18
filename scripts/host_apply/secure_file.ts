@@ -20,7 +20,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 /** 置き場に置いてよいファイル名。これ以外(`prod`、`lock`、`secrets`、`trees`、`repo.git`など)は読み書きできない。 */
 export const SECURE_FILE_NAMES = [
@@ -101,11 +101,31 @@ function assertName(name: string): asserts name is SecureFileName {
   }
 }
 
+/**
+ * 置き場のパスを字句で畳む。絶対パスで、`..`を含まないものだけを受け、満たさなければ`null`にする。
+ * 末尾の`/`と`/.`、`//`は取り除いて、以後は畳んだ1つのパスだけを検査・使用する。
+ * `lstat`は、パスの末尾が`/`や`/.`だとsymlinkを辿るので、`link/`のままでは検査をすり抜けるため。
+ * `..`は字句で畳むと、途中のsymlinkを辿るカーネルの解決と違う場所を指すので、受けない。
+ */
+function normalizeDir(dir: string): string | null {
+  if (!isAbsolute(dir)) return null;
+  if (dir.split("/").includes("..")) return null;
+  return resolve(dir);
+}
+
 /** 置き場のディレクトリが、symlinkでなく、実行ユーザーのもので、他者に開かれていないかを確かめる。 */
 export function inspectStateDir(
-  dir: string,
+  rawDir: string,
   uid: number,
 ): InspectStateDirResult {
+  const dir = normalizeDir(rawDir);
+  if (dir === null) {
+    return {
+      kind: "invalid",
+      cause: "unsafe",
+      reason: "state directory path is not a clean absolute path",
+    };
+  }
   let stat: ReturnType<typeof lstatSync>;
   try {
     stat = lstatSync(dir);
@@ -169,10 +189,11 @@ function readUpTo(fd: number, limit: number): Buffer {
 export function readSecureFile(
   input: ReadSecureFileInput,
 ): ReadSecureFileResult {
-  const { dir, name, label, maxBytes, uid } = input;
+  const { name, label, maxBytes, uid } = input;
   assertName(name);
-  const state = inspectStateDir(dir, uid);
+  const state = inspectStateDir(input.dir, uid);
   if (state.kind !== "ok") return state;
+  const dir = resolve(input.dir);
   let fd: number;
   try {
     fd = openSync(
@@ -294,12 +315,17 @@ function writeAll(fd: number, body: string): void {
  * 呼び出し側は、例外のときに読み直して判断する。
  */
 export function writeSecureFile(input: WriteSecureFileInput): void {
-  const { dir, name, label, body, maxBytes, uid, createDir = false } = input;
+  const { name, label, body, maxBytes, uid, createDir = false } = input;
   assertName(name);
   if (Buffer.byteLength(body, "utf8") > maxBytes) {
     throw new Error(`${label} is too large`);
   }
-  if (createDir && inspectStateDir(dir, uid).kind === "absent") {
+  const pathState = inspectStateDir(input.dir, uid);
+  if (pathState.kind === "invalid" && pathState.cause === "unsafe") {
+    throw new Error(pathState.reason);
+  }
+  const dir = resolve(input.dir);
+  if (createDir && pathState.kind === "absent") {
     createStateDir(dir);
   }
   const state = inspectStateDir(dir, uid);

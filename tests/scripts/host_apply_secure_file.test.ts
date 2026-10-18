@@ -364,3 +364,86 @@ describe("readSecureFile", () => {
     expect(get(dir)).toMatchObject({ dev: stat.dev, ino: stat.ino });
   });
 });
+
+describe("a state directory path that ends with a slash or a dot", () => {
+  /** 実体のある置き場と、そこへのsymlinkを作る。 */
+  function linkedDir(): { real: string; link: string } {
+    const real = privateDir();
+    const link = join(tempRoot(), "link");
+    symlinkSync(real, link);
+    return { real, link };
+  }
+
+  test("is unsafe to read when it is a symlink followed by a slash", () => {
+    const { link } = linkedDir();
+    expect(get(`${link}/`)).toMatchObject({
+      kind: "invalid",
+      cause: "unsafe",
+    });
+  });
+
+  test("is unsafe to read when it is a symlink followed by a dot segment", () => {
+    const { link } = linkedDir();
+    expect(get(`${link}/.`)).toMatchObject({
+      kind: "invalid",
+      cause: "unsafe",
+    });
+  });
+
+  test("refuses to write when it is a symlink followed by a slash", () => {
+    const { link } = linkedDir();
+    expect(() => put(`${link}/`)).toThrow("state directory is a symlink");
+  });
+
+  test("leaves the symlink target untouched when a write is refused", () => {
+    const { real, link } = linkedDir();
+    expect(() => put(`${link}/`)).toThrow();
+    expect(existsSync(filePath(real))).toBe(false);
+  });
+
+  test("reads a real directory that is written with a trailing slash", () => {
+    const dir = privateDir();
+    put(dir);
+    expect(get(`${dir}/`)).toMatchObject({ kind: "found" });
+  });
+
+  test("writes a real directory that is written with a trailing slash", () => {
+    const dir = privateDir();
+    put(`${dir}/`);
+    expect(existsSync(filePath(dir))).toBe(true);
+  });
+});
+
+describe("a state directory path that is not a clean absolute path", () => {
+  test("is unsafe to read when it is relative", () => {
+    expect(get("relative/state")).toMatchObject({
+      kind: "invalid",
+      cause: "unsafe",
+    });
+  });
+
+  test("is unsafe to read when it has a parent segment", () => {
+    const dir = privateDir();
+    expect(get(`${dir}/../state`)).toMatchObject({
+      kind: "invalid",
+      cause: "unsafe",
+    });
+  });
+
+  test("refuses to write when it is relative", () => {
+    expect(() => put("relative/state")).toThrow("clean absolute path");
+  });
+
+  test("refuses to write when it has a parent segment", () => {
+    const dir = privateDir();
+    expect(() => put(`${dir}/../state`)).toThrow("clean absolute path");
+  });
+
+  test("folds a doubled slash and reads the real directory", () => {
+    const dir = privateDir();
+    put(dir);
+    expect(get(dir.replace(/\/state$/, "//state"))).toMatchObject({
+      kind: "found",
+    });
+  });
+});

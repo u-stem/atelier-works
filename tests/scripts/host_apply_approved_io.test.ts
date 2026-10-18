@@ -98,6 +98,21 @@ describe("writeApproved", () => {
     expect(() => writeApproved(link, RECORD, uid)).toThrow();
   });
 
+  test("refuses a directory that is a symlink followed by a slash", () => {
+    const real = privateDir();
+    const link = join(tempRoot(), "link");
+    symlinkSync(real, link);
+    expect(() => writeApproved(`${link}/`, RECORD, uid)).toThrow();
+  });
+
+  test("does not read a record through a symlink followed by a slash", () => {
+    const real = privateDir();
+    writeApproved(real, RECORD, uid);
+    const link = join(tempRoot(), "link");
+    symlinkSync(real, link);
+    expect(readApproved(`${link}/`, uid).kind).toBe("invalid");
+  });
+
   test("refuses a directory owned by someone else", () => {
     const dir = privateDir();
     expect(() => writeApproved(dir, RECORD, uid + 1)).toThrow();
