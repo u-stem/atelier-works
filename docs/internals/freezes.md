@@ -153,4 +153,6 @@ mise run freeze:reset
 
 `mise run push`、`push:prune`、`push:dry`、`deploy`は、`scripts/freeze.ts push`を通る。
 このラッパーが除外を作って`wmill sync push`を実行する。
-`scripts/bootstrap.sh`の全手順のモード(`mise run bootstrap`)の`wmill sync push`は、このラッパーを通らないので、凍結を含まない。
+`scripts/bootstrap.sh`の全手順のモード(`mise run bootstrap`)も、同じラッパーを通してpushする。
+凍結の変数がまだ無い初回は、一覧で無いと確かめられたときだけ、凍結なしとして進む。
+変数を読めないとき、壊れているときは、bootstrapもpushの手順で止まる。

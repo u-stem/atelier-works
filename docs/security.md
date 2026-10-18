@@ -1790,8 +1790,6 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
   守る対象が誤操作であり、悪意のある主体は上の項目の権限で直接書き換えられるため、受け入れる。
 - 凍結を覆わない操作がある。
   `wmill sync push`の直接実行と、凍結を取り込む前の作業ツリーの`mise run`である。
-  `scripts/bootstrap.sh`の全手順のモード(`mise run bootstrap`)の`sync push`も覆わない。
-  ホストの実行役が呼ぶのは`bootstrap.sh custom-tags`だけで、このモードは`wmill`を使わない。
   特に、取り込む前の作業ツリーで`push:prune`(旧タスクの`wmill sync push --yes`)を走らせると、変数ごと削除される。
   `f/factory/freezes`が、除外にも手元のファイルにも無いためである。
   すべての凍結が、警告なしに消える。
