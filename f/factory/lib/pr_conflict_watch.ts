@@ -723,6 +723,7 @@ async function discoverFromTable(
  * 列挙するリポジトリの和集合を作る。読めない元は失敗として記録し、読めた元だけで進める。
  * 設定の読み取り元が`db`のときは、オーナーの全体をまず表で探し、使えないオーナーだけ検索に戻す。
  * 検索のrate limitは別の枠なので、記録せず、ほかの読み取りも止めない。
+ * 当たった後は検索だけを飛ばし、表を使えるオーナーは読み続ける。飛ばしたオーナーは、理由`search_rate_limited`で数える。
  */
 async function collectRepos(
   context: Context,
@@ -744,12 +745,20 @@ async function collectRepos(
   const conflict = await read("list_conflict_repos", deps.listConflictRepos);
   const table: RepoRef[] = [];
   const searched: RepoRef[] = [];
+  // 検索のrate limitは別の枠なので、当たったら以降の検索だけを飛ばす。表の読み取りは続ける。
+  let searchBlocked = false;
   for (const owner of deps.searchOwners) {
     if (stopped(context)) break;
+    if (deps.source !== "db" && searchBlocked) break;
     if (deps.source === "db") {
       const found = await discoverFromTable(context, owner, viewer);
       if (found.kind === "found") {
         table.push(...found.repos);
+        continue;
+      }
+      if (searchBlocked) {
+        counters.fallback_reasons.search_rate_limited =
+          (counters.fallback_reasons.search_rate_limited ?? 0) + 1;
         continue;
       }
       counters.fallback_reasons[found.reason] =
@@ -763,7 +772,8 @@ async function collectRepos(
         deps.log.warn("pr conflict search stopped by the rate limit", {
           owner: owner.name,
         });
-        break;
+        searchBlocked = true;
+        continue;
       }
       if (isStatus(err, 401)) {
         await absorbReadError(context, "search_open_repos", owner.name, err);
