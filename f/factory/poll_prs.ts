@@ -75,6 +75,8 @@ import {
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
+  type FactoryConfig,
+  type GhSource,
   hasLabel,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
@@ -1138,6 +1140,17 @@ async function recordLabelerCheckLimitSafe(
       error: errorMessage(err),
     });
   }
+}
+
+/** 設定`gh_source_poll_prs`と収集の設定から、この回の読み取り元を決める。 */
+export function resolvePrSource(
+  _config: Pick<
+    FactoryConfig,
+    "gh_source_poll_prs" | "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): GhSource {
+  return "search";
 }
 
 export async function main(): Promise<{
