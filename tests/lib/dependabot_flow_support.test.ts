@@ -1560,7 +1560,7 @@ describe("excerptChangelog", () => {
   });
 
   test("reports a cut when the range to the end of the text does not fit", () => {
-    expect(excerptChangelog(CHANGELOG, "9.9.9", "1.2.4", 80).truncated).toBe(
+    expect(excerptChangelog(CHANGELOG, "9.9.9", "1.2.4", 60).truncated).toBe(
       true,
     );
   });
