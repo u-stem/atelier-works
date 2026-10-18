@@ -1019,6 +1019,16 @@ function humanScopeLabel(scope: OpenAuthoredPrsScope): string {
   return scope.kind === "repo" ? `${scope.owner}/${scope.repo}` : scope.owner;
 }
 
+/** 候補の出所。表の候補にだけ、応答のリポジトリの一致の確かめと404の扱いを足す。 */
+type HumanHit = HumanPrCandidate & { readonly origin: "table" | "search" };
+
+function withOrigin(
+  candidates: readonly HumanPrCandidate[],
+  origin: HumanHit["origin"],
+): HumanHit[] {
+  return candidates.map((candidate) => ({ ...candidate, origin }));
+}
+
 /** 検索を続けてよいか。rate limitか時間の予算で閉じたら、以降の検索を飛ばす。 */
 type HumanSearchState = { open: boolean };
 
@@ -1173,13 +1183,36 @@ async function searchHumanScope(
 }
 
 /**
- * 許可された人が作ったPRを検索し、見つかったPRの今のheadを記録する。
+ * 表から候補にした、作者の分かる候補の数。表の候補どうしの重ねを除き、読む時点の許可を当てた後に数える。
+ * 追跡中の除外と、読む数の上限の前に数えるので、1回に読める数とは別に、表の規模を見られる。
+ */
+function countTableCandidates(
+  hits: readonly HumanHit[],
+  isAllowed: (owner: string, repo: string) => boolean,
+): number {
+  const seen = new Set<string>();
+  for (const hit of hits) {
+    if (hit.origin !== "table" || hit.authorUnknown) continue;
+    if (!isAllowed(hit.owner.toLowerCase(), hit.repo.toLowerCase())) continue;
+    seen.add(pullRequestKey(hit));
+  }
+  return seen.size;
+}
+
+/**
+ * 許可された人が作ったPRの候補を見つけ、見つかったPRの今のheadを記録する。
  * 行の`work_item_id`はNULLにする。追跡対象のFactoryのPRと、Factoryの実装ブランチの形のブランチは記録しない。
- * 検索は範囲(`scopes`)と作者ごとに1回で、1ページだけ読む。
- * 検索結果は、範囲と作者をまたいで更新の新しい順に並べ直してから読む。
- * 検索がrate limitで拒まれても、全体のrate limitにはせず、残りの検索を止める。
+ * 候補は範囲(`scopes`)ごとに、読み取り元で見つける。
+ * - `search`: 範囲と作者ごとに1回、1ページだけ検索する。
+ * - `db`: 範囲を収集の表で探す。表を使えない範囲だけ、検索に戻す。使えないのは次のときである。
+ *   表を読めなかった(失敗として記録する)、記録が古い、設定で明示したリポジトリを表で使えない(失敗にはしない)。
+ *   戻した理由は結果の`human_fallback_reasons`に数える。
+ * 検索がrate limitで拒まれても、全体のrate limitにはせず、残りの検索を止める。表を使える範囲は読み続け、
+ * 検索を飛ばした範囲は理由`search_rate_limited`で数える。時間の予算が尽きた後の範囲は、読まずに理由`out_of_time`で数える。
  * 範囲がオーナーで、一部の作者だけが検索を拒まれた(422)ときは、改名や削除とみなして、その作者の検索を飛ばし、
  * 警告のログに残す。範囲がリポジトリのときと、範囲の全員が拒まれたときは、失敗として記録する。
+ * 候補は、作者の分かる候補を更新の新しい順に、その後に作者の分からない候補を新しい順に並べて読む。
+ * 表の候補は、PRを読んだ応答のリポジトリが候補と違えば記録せず、404なら通知を作らずにログに残す。
  * FactoryのPRの判定と起動を人のPRの発見が遅らせないよう、起動の後に置き、全体の経過時間と
  * `HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。ここで記録した行の判定は、次の回に行う。
  * 新しく記録した行と、`reopen`した行の数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
@@ -1199,7 +1232,7 @@ async function discoverHuman(context: Context): Promise<void> {
     overBudget(context) ||
     deps.now().getTime() - startedAt >= HUMAN_DISCOVERY_BUDGET_MS;
 
-  const found: HumanPrCandidate[] = [];
+  const found: HumanHit[] = [];
   const authors = humanPrAuthors(human.policy);
   const search: HumanSearchState = { open: true };
   const countFallback = (reason: string): void => {
@@ -1209,18 +1242,15 @@ async function discoverHuman(context: Context): Promise<void> {
   let stoppedByTime = false;
   for (const scope of human.scopes) {
     if (human.source !== "db") {
-      found.push(
-        ...(
-          await searchHumanScope(
-            context,
-            human,
-            scope,
-            authors,
-            search,
-            outOfTime,
-          )
-        ).candidates,
+      const searched = await searchHumanScope(
+        context,
+        human,
+        scope,
+        authors,
+        search,
+        outOfTime,
       );
+      found.push(...withOrigin(searched.candidates, "search"));
       continue;
     }
     if (outOfTime()) {
@@ -1233,7 +1263,7 @@ async function discoverHuman(context: Context): Promise<void> {
     }
     const table = await readHumanTable(context, human, scope, authors);
     if (table.kind === "rows") {
-      found.push(...table.candidates);
+      found.push(...withOrigin(table.candidates, "table"));
       continue;
     }
     if (!search.open) {
@@ -1250,14 +1280,24 @@ async function discoverHuman(context: Context): Promise<void> {
       outOfTime,
     );
     if (searched.attempted) context.counters.human_fallback_searches += 1;
-    found.push(...searched.candidates);
+    found.push(...withOrigin(searched.candidates, "search"));
   }
-  found.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+  // 作者の分からない候補は末尾に回す。検索が返さない候補が、読む枠を先に使わないためである。
+  const newestFirst = (a: HumanHit, b: HumanHit): number =>
+    b.updatedAtMs - a.updatedAtMs;
+  const ordered = [
+    ...found.filter((hit) => !hit.authorUnknown).sort(newestFirst),
+    ...found.filter((hit) => hit.authorUnknown).sort(newestFirst),
+  ];
+  context.counters.human_table_candidates = countTableCandidates(
+    ordered,
+    deps.isRepoAllowed,
+  );
 
   const seen = new Set<string>();
   let reads = 0;
   let added = 0;
-  for (const hit of found) {
+  for (const hit of ordered) {
     if (added >= HUMAN_PR_LIMIT || reads >= HUMAN_PR_READ_LIMIT) break;
     if (state.rateLimited || outOfTime()) {
       deps.log.warn("pr ci human discovery stopped by the time budget");
@@ -1285,6 +1325,17 @@ async function discoverHuman(context: Context): Promise<void> {
     reads += 1;
     try {
       const pr = await human.getPr(ref.owner, ref.repo, ref.number);
+      // 名前の付け替えや移管の途中で、別のリポジトリのPRを記録しない。
+      if (
+        hit.origin === "table" &&
+        pr.baseRepoFullName.toLowerCase() !== `${ref.owner}/${ref.repo}`
+      ) {
+        deps.log.warn(
+          "pr ci skipped a table candidate that belongs to another repository",
+          { repo: repoKey(ref), pr: ref.number },
+        );
+        continue;
+      }
       const author = {
         login: pr.authorLogin,
         id: pr.authorId,
@@ -1303,6 +1354,22 @@ async function discoverHuman(context: Context): Promise<void> {
           error: errorMessage(err),
         });
         break;
+      }
+      // 読み取りトークンに見えて書き込みのPATに見えないリポジトリは、検索の経路では候補に出ない。
+      // 表の候補の404で通知を作ると、検索の経路に無い通知になるので、ログに残すだけにする。
+      if (
+        hit.origin === "table" &&
+        err instanceof GitHubHttpError &&
+        err.status === 404
+      ) {
+        deps.log.warn(
+          "pr ci skipped a table candidate that could not be read",
+          {
+            repo: repoKey(ref),
+            pr: ref.number,
+          },
+        );
+        continue;
       }
       if ((await absorbReadError(context, ref, err)) === null) {
         await recordFailureOf(context, `discover_human_pr:${key}`, err);

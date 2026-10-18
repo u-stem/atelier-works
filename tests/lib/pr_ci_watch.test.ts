@@ -5972,7 +5972,13 @@ describe("discovery from the table of the collection", () => {
         },
         found: { "factory-bot": rateLimitError() },
       },
-      prs: { "beta/widgets#50": humanPr({ number: 50 }) },
+      prs: {
+        "beta/widgets#50": humanPr({
+          number: 50,
+          headRepoFullName: "beta/widgets",
+          baseRepoFullName: "beta/widgets",
+        }),
+      },
     });
     await runPrCiWatch(h.deps);
     expect({
