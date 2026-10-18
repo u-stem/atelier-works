@@ -52,19 +52,29 @@ function isNoSuchProcess(error: unknown): boolean {
   );
 }
 
-const realDeps: RunnerDeps = {
-  spawn: (cmd, opts) => Bun.spawn(cmd, opts),
-  killGroup: (pid) => {
-    // pidが0や1や自分自身だと、無関係なグループに信号が届く。
+/**
+ * プロセスグループを止める関数を、信号を送る関数から作る。テストは偽の送信を渡す。
+ * グループIDが0や1や自分自身だと、無関係なグループに信号が届くので、送る前に拒否する。
+ * 存在しないグループ(`ESRCH`)は無視し、それ以外の失敗は呼び出し側へ返す。
+ */
+export function createKillGroup(
+  kill: (pid: number, signal: "SIGKILL") => void,
+): (pid: number) => void {
+  return (pid) => {
     if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) {
       throw new Error("pgid is not valid");
     }
     try {
-      process.kill(-pid, "SIGKILL");
+      kill(-pid, "SIGKILL");
     } catch (error) {
       if (!isNoSuchProcess(error)) throw error;
     }
-  },
+  };
+}
+
+const realDeps: RunnerDeps = {
+  spawn: (cmd, opts) => Bun.spawn(cmd, opts),
+  killGroup: createKillGroup((pid, signal) => process.kill(pid, signal)),
   setTimer: (fn, ms) => {
     const handle = setTimeout(fn, ms);
     return () => clearTimeout(handle);
@@ -72,18 +82,13 @@ const realDeps: RunnerDeps = {
   acceptUnchecked: false,
 };
 
+/** テストが、既定の実行口の部品を直接確かめるための参照。 */
+export const defaultRunnerDeps: RunnerDeps = realDeps;
+
 type ReadMode =
   | { readonly kind: "kill"; readonly limit: number }
   | { readonly kind: "drain"; readonly limit: number }
   | { readonly kind: "tail"; readonly limit: number };
-
-export function createKillGroup(
-  _kill: (pid: number, signal: "SIGKILL") => void,
-): (pid: number) => void {
-  return () => {};
-}
-
-export const defaultRunnerDeps: RunnerDeps = realDeps;
 
 /** 出力のストリームを読み切る、または取り消すための持ち手。 */
 type StreamReader = {
