@@ -249,12 +249,49 @@ export async function discoverIssues(
   };
 }
 
+/**
+ * 表のPRの行が、検索の4本(依頼、assignee、レビューのラベル、修正のラベル)のどれかに当たるかの分類。
+ * - `target`: 当たる。
+ * - `team`: チームへの依頼か、依頼先を読めない依頼があり、PATのアカウントに宛てた依頼かを表では決められない。
+ * - `maybe`: ラベルかassigneeが不明で、当たるかをRESTで確かめる。
+ * - `none`: 当たらない。
+ * 下書きとforkのPRも絞らない。検索も絞らず、判定がRESTの値で扱う。
+ */
 export type PollPrRowClass = "target" | "maybe" | "team" | "none";
 
-/** 表の行が、検索の4本のどれかに当たるか。`viewerId`はPATのアカウントの数値ID。 */
+/**
+ * 表の行を分類する。`viewerId`はPATのアカウントの数値IDで、依頼とassigneeはIDで比べる。
+ * 上から当てて、最初に当たったものを採る。
+ * 1. ラベルか、PATのアカウントへの依頼かassigneeに当たれば`target`。
+ * 2. チームへの依頼が真か不明、または直接の依頼先が不明なら`team`。
+ *    片方だけが不明の行でも、直接の依頼を判定できないので`team`にする。
+ * 3. ラベルかassigneeが不明なら`maybe`。
+ * 4. それ以外は`none`。
+ */
 export function classifyPollPrRow(
-  _row: GhPullRequest,
-  _viewerId: number,
+  row: GhPullRequest,
+  viewerId: number,
 ): PollPrRowClass {
+  if (
+    row.has_review_label === true ||
+    row.has_fix_label === true ||
+    row.review_requested_user_ids?.includes(viewerId) === true ||
+    row.assignee_ids?.includes(viewerId) === true
+  ) {
+    return "target";
+  }
+  if (
+    row.team_review_requested !== false ||
+    row.review_requested_user_ids === null
+  ) {
+    return "team";
+  }
+  if (
+    row.has_review_label === null ||
+    row.has_fix_label === null ||
+    row.assignee_ids === null
+  ) {
+    return "maybe";
+  }
   return "none";
 }
