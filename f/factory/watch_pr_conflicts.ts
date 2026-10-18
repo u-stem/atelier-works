@@ -18,6 +18,8 @@
 // 列挙するリポジトリは、`pr_open`の作業項目を持つもの、競合の記録の行を持つもの、設定で明示されたもの、
 // PATのアカウントが作った開いているPRを検索で見つけたものの和集合である。
 // 作業項目は`cleanup_db`が消すので、PRがFactoryのものかは、ブランチ名の形とPATのアカウントが作者であることで決める。
+// 設定`gh_source_pr_conflict_watch`が`db`で収集が有効なときは、リポジトリの発見とPRの列挙を収集の表から読み、
+// 記録が古い所有者は検索に、記録が古いリポジトリはREST一覧に戻す。PRごとの状態は、どちらの元でも`getPr`で読み直す。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
@@ -54,7 +56,10 @@ import {
   updateStatusIfCurrent,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
-import { ghDetailStaleAfterMs } from "./lib/gh_collect_read.ts";
+import {
+  effectiveGhSource,
+  ghDetailStaleAfterMs,
+} from "./lib/gh_collect_read.ts";
 import {
   type GhClient,
   getAccountId,
@@ -248,17 +253,29 @@ async function recordFailureSafe(
 
 /**
  * 設定`gh_source_pr_conflict_watch`と収集の設定から、この回の読み取り元を決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 設定を戻し忘れても監視が止まらないよう、周回全体を検索とREST一覧にして、偽の設定の名前を警告に残す。
  */
 export function resolveConflictSource(
-  _config: Pick<
+  config: Pick<
     FactoryConfig,
     | "gh_source_pr_conflict_watch"
     | "gh_collect_enabled"
     | "gh_collect_detail_enabled"
   >,
-  _log: Logger,
+  log: Logger,
 ): GhSource {
-  return "search";
+  const source = effectiveGhSource(config.gh_source_pr_conflict_watch, config);
+  if (config.gh_source_pr_conflict_watch === "db" && source === "search") {
+    log.warn(
+      "gh_source_pr_conflict_watch is db but the collection is not fully enabled, so the round searches",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return source;
 }
 
 export async function main(): Promise<PrConflictWatchResult> {
@@ -297,7 +314,7 @@ export async function main(): Promise<PrConflictWatchResult> {
         isRepoAllowed: gates.isRepoAllowed,
         isRepoConfigured: gates.isRepoConfigured,
         getViewer: () => getViewer(client),
-        source: "search",
+        source: resolveConflictSource(config, log),
         staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
         readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
         explicitRepos: configuredRepos(config),
