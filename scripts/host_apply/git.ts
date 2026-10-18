@@ -5,6 +5,10 @@ export function isSha40(value: string): boolean {
   return /^[0-9a-f]{40}$/.test(value);
 }
 
+export const GIT_FIXED_PREFIX: readonly string[] = [];
+
+export const REMOTE_URL_PATTERN = /$^/;
+
 /**
  * `origin/main`を取得するgitの引数。
  * 取得した内容に実行を誘導されないよう、リダイレクト、サブモジュール、ファイルプロトコル、

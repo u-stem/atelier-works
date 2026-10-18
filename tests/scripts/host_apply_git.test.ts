@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   APPROVE_GIT_SUBCOMMANDS,
   approveGitArgs,
@@ -8,6 +9,7 @@ import {
   diffPatchArgs,
   fetchArgs,
   fetchEnv,
+  GIT_FIXED_PREFIX,
   isAncestorArgs,
   isSha40,
   lsTreePathArgs,
@@ -17,6 +19,7 @@ import {
   PLAN_GIT_SUBCOMMANDS,
   parseLsTreeShaZ,
   parseLsTreeZ,
+  REMOTE_URL_PATTERN,
   readOnlyGitArgs,
   remoteUrlMatches,
   resolveCommitArgs,
@@ -32,17 +35,26 @@ import {
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
+const REMOTE = "https://github.com/example/repo.git";
+
 describe("fetchArgs", () => {
-  const args = fetchArgs();
+  const args = fetchArgs(REMOTE);
 
   test.each([
     "http.followRedirects=false",
     "submodule.recurse=false",
     "fetch.recurseSubmodules=false",
+    "protocol.allow=never",
+    "protocol.https.allow=always",
     "protocol.file.allow=never",
     "core.hooksPath=/dev/null",
     "core.fsmonitor=false",
     "credential.helper=",
+    "core.askPass=",
+    "http.sslVerify=true",
+    "http.proxy=",
+    "gc.auto=0",
+    "maintenance.auto=false",
   ])("sets -c %s", (setting) => {
     const index = args.indexOf(setting);
     expect([index > 0 ? args[index - 1] : null, args[index]]).toEqual([
@@ -51,22 +63,60 @@ describe("fetchArgs", () => {
     ]);
   });
 
-  test("runs fetch for origin only", () => {
+  test("runs fetch for the given url, not for a remote name", () => {
     expect(args.slice(args.indexOf("fetch"))).toEqual([
       "fetch",
       "--no-tags",
       "--no-recurse-submodules",
-      "origin",
+      REMOTE,
       "+refs/heads/main:refs/remotes/origin/main",
     ]);
   });
 
+  test("denies every protocol before it allows https", () => {
+    expect(args.indexOf("protocol.allow=never")).toBeLessThan(
+      args.indexOf("protocol.https.allow=always"),
+    );
+  });
+
   test("passes every setting before the subcommand", () => {
-    expect(args.indexOf("-c")).toBeLessThan(args.indexOf("fetch"));
+    expect(args.lastIndexOf("-c")).toBeLessThan(args.indexOf("fetch"));
   });
 
   test("is an array of plain strings, not a shell command line", () => {
     expect(args.every((a) => !a.includes(" "))).toBe(true);
+  });
+
+  test.each([
+    "origin",
+    "--upload-pack=evil",
+    "http://github.com/example/repo",
+    "https://example.com/example/repo",
+    "https://github.com/example",
+    "https://github.com/example/repo/extra",
+    `${REMOTE}\n`,
+    "",
+  ])("refuses the url %p", (url) => {
+    expect(() => fetchArgs(url)).toThrow("url");
+  });
+});
+
+describe("REMOTE_URL_PATTERN", () => {
+  test.each([
+    "https://github.com/example/repo",
+    "https://github.com/example/repo.git",
+    "https://github.com/a-b_c.d/e.f-g_h",
+  ])("accepts %s", (url) => {
+    expect(REMOTE_URL_PATTERN.test(url)).toBe(true);
+  });
+
+  test.each([
+    "git@github.com:example/repo.git",
+    "https://github.com/example/repo.git/",
+    "https://user@github.com/example/repo",
+    "file:///tmp/repo",
+  ])("rejects %s", (url) => {
+    expect(REMOTE_URL_PATTERN.test(url)).toBe(false);
   });
 });
 
@@ -78,7 +128,7 @@ describe("fetchEnv", () => {
   });
 
   test("never puts the token in the argument list", () => {
-    expect(fetchArgs().join(" ")).not.toContain("tok123456789");
+    expect(fetchArgs(REMOTE).join(" ")).not.toContain("tok123456789");
   });
 
   test("sets no credentials without a token", () => {
@@ -192,19 +242,21 @@ describe("the git commands that plan uses", () => {
   });
 
   test("lsTreeRecursiveArgs lists every entry of a tree with NUL separators", () => {
-    expect(lsTreeRecursiveArgs(SHA).slice(-4)).toEqual([
+    expect(lsTreeRecursiveArgs(SHA).slice(-5)).toEqual([
       "ls-tree",
       "-r",
       "-z",
+      "--full-tree",
       SHA,
     ]);
   });
 
   test("lsTreePathArgs asks for one path with its size", () => {
-    expect(lsTreePathArgs(SHA, "mise.toml").slice(-6)).toEqual([
+    expect(lsTreePathArgs(SHA, "mise.toml").slice(-7)).toEqual([
       "ls-tree",
       "-z",
       "-l",
+      "--full-tree",
       SHA,
       "--",
       "mise.toml",
@@ -216,13 +268,8 @@ describe("the git commands that plan uses", () => {
   });
 
   test("every command starts with the hardening settings", () => {
-    expect(showBlobArgs(SHA, "a").slice(0, 6)).toEqual([
-      "--no-pager",
-      "-c",
-      "core.hooksPath=/dev/null",
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
+    expect(showBlobArgs(SHA, "a").slice(0, GIT_FIXED_PREFIX.length)).toEqual([
+      ...GIT_FIXED_PREFIX,
     ]);
   });
 
@@ -291,6 +338,41 @@ describe("parseLsTreeZ", () => {
   });
 });
 
+describe("GIT_FIXED_PREFIX", () => {
+  test("is the one prefix of every read command", () => {
+    expect([...GIT_FIXED_PREFIX]).toEqual([
+      "--no-pager",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.quotePath=false",
+      "-c",
+      "core.attributesFile=/dev/null",
+      "-c",
+      "diff.relative=false",
+      "-c",
+      "protocol.allow=never",
+    ]);
+  });
+
+  test("starts the arguments that readOnlyGitArgs builds", () => {
+    expect(
+      readOnlyGitArgs(["show", `${SHA}:a`]).slice(0, GIT_FIXED_PREFIX.length),
+    ).toEqual([...GIT_FIXED_PREFIX]);
+  });
+
+  test("starts the arguments that approveGitArgs builds", () => {
+    expect(
+      approveGitArgs(["rev-parse", "--git-dir"]).slice(
+        0,
+        GIT_FIXED_PREFIX.length,
+      ),
+    ).toEqual([...GIT_FIXED_PREFIX]);
+  });
+});
+
 describe("approveGitArgs", () => {
   test.each(["fetch", "push", "checkout", "pull", "worktree", "update-ref"])(
     "refuses %s",
@@ -352,6 +434,7 @@ describe("approveGitEnv", () => {
     ["GIT_ATTR_SOURCE", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"],
     ["GIT_LITERAL_PATHSPECS", "1"],
     ["GIT_OPTIONAL_LOCKS", "0"],
+    ["GIT_NO_LAZY_FETCH", "1"],
     ["GIT_TERMINAL_PROMPT", "0"],
   ])("sets %s", (name, value) => {
     expect(env[name]).toBe(value);
@@ -365,6 +448,7 @@ describe("approveGitEnv", () => {
         "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_NOSYSTEM",
         "GIT_LITERAL_PATHSPECS",
+        "GIT_NO_LAZY_FETCH",
         "GIT_NO_REPLACE_OBJECTS",
         "GIT_OPTIONAL_LOCKS",
         "GIT_TERMINAL_PROMPT",
@@ -466,10 +550,11 @@ describe("the other approve builders", () => {
   );
 
   test("lsTreeShaArgs lists paths of a commit recursively", () => {
-    expect(lsTreeShaArgs(SHA, ["scripts/host_apply"]).slice(-6)).toEqual([
+    expect(lsTreeShaArgs(SHA, ["scripts/host_apply"]).slice(-7)).toEqual([
       "ls-tree",
       "-r",
       "-z",
+      "--full-tree",
       SHA,
       "--",
       "scripts/host_apply",
@@ -572,5 +657,48 @@ describe("the approve git commands against a real repository", () => {
     expect(
       run(repo, revParseQueryArgs("git-dir")).out.trim().startsWith("/"),
     ).toBe(true);
+  });
+});
+
+describe("the read commands run from a subdirectory of the repository", () => {
+  const repos: FixtureRepo[] = [];
+  afterAll(() => {
+    for (const repo of repos) repo.cleanup();
+  });
+
+  function setup() {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const base = repo.commit({ "sub/in.txt": "1\n", "out.txt": "1\n" }, "base");
+    const target = repo.commit(
+      { "sub/in.txt": "2\n", "out.txt": "2\n" },
+      "next",
+    );
+    return { repo, base, target };
+  }
+
+  function runInSub(repo: FixtureRepo, args: string[]): string {
+    const result = Bun.spawnSync(["/usr/bin/git", ...args], {
+      cwd: join(repo.dir, "sub"),
+      env: approveGitEnv(),
+    });
+    return result.stdout.toString();
+  }
+
+  test("lsTreeRecursiveArgs lists the entries outside the subdirectory", () => {
+    const { repo, target } = setup();
+    expect(
+      parseLsTreeZ(runInSub(repo, lsTreeRecursiveArgs(target))).map(
+        (entry) => entry.path,
+      ),
+    ).toEqual(["out.txt", "sub/in.txt"]);
+  });
+
+  test("diffNameStatusArgs lists the files outside the subdirectory even if diff.relative is on", () => {
+    const { repo, base, target } = setup();
+    repo.git(["config", "diff.relative", "true"]);
+    expect(runInSub(repo, diffNameStatusArgs(base, target))).toContain(
+      "out.txt",
+    );
   });
 });

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { EXECUTOR_VERSION } from "../../scripts/host_apply/constants.ts";
 import {
   CONTENT_REJECTION_KINDS,
   type DecideTargetInput,
@@ -17,6 +16,8 @@ const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
 const D = "d".repeat(40);
+/** 検査した`HEAD`のsha。実行役の版として渡される値と同じ形。 */
+const EXECUTOR_VERSION = "e".repeat(40);
 
 function input(overrides: Partial<DecideTargetInput>): DecideTargetInput {
   return {

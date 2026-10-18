@@ -94,6 +94,8 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<CommandKind, number>> = {
   http_fetch: 30_000,
 };
 
+export const STDERR_LIMIT_BYTES = 0;
+
 /** コミットから読むファイルの大きさの上限(バイト)。 */
 export const MAX_BLOB_BYTES = 256 * 1024;
 
