@@ -164,6 +164,20 @@ describe("readApproved", () => {
     expect(readApproved(dir, uid)).toEqual({ kind: "found", record: RECORD });
   });
 
+  test("rejects a FIFO at the file path without blocking", () => {
+    const dir = privateDir();
+    Bun.spawnSync(["mkfifo", approvedFilePath(dir)]);
+    // 開くのが止まる実装でもテスト全体が止まらないよう、別のプロセスで時間を切って読む。
+    const script = `import { readApproved } from ${JSON.stringify(
+      join(import.meta.dir, "../../scripts/host_apply/approved_io.ts"),
+    )}; console.log(readApproved(${JSON.stringify(dir)}).kind);`;
+    const result = Bun.spawnSync(["bun", "--no-env-file", "-e", script], {
+      timeout: 3000,
+      killSignal: "SIGKILL",
+    });
+    expect(result.stdout.toString().trim()).toBe("invalid");
+  });
+
   test("does not read a file that is a symlink", () => {
     const dir = privateDir();
     const target = join(tempRoot(), "real.json");

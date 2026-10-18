@@ -267,6 +267,13 @@ describe("parseApproveArgs", () => {
     ).toBe(false);
   });
 
+  test("rejects a --state-dir with a C1 control character", () => {
+    expect(
+      parseApproveArgs([SHA, "--applied", OTHER, "--state-dir", "/a\u009bb"])
+        .ok,
+    ).toBe(false);
+  });
+
   test("rejects a --state-dir with a control character", () => {
     expect(
       parseApproveArgs([SHA, "--applied", OTHER, "--state-dir", "/a\tb"]).ok,
@@ -799,6 +806,32 @@ describe("runApprove", () => {
         }),
       });
       expect(errors.join("\n")).toContain("split");
+    });
+
+    test("escapes the message of an error from git", async () => {
+      const s = scenario();
+      const { errors } = await approve(s, {
+        git: (real) => ({
+          ...real,
+          resolveCommit: async () => {
+            throw new Error("git said \u001b[2J");
+          },
+        }),
+      });
+      expect(errors.join("\n")).toContain("git said \\u001b[2J");
+    });
+
+    test("exits 1 for an error from git", async () => {
+      const s = scenario();
+      const result = await outcome(s, {
+        git: (real) => ({
+          ...real,
+          resolveCommit: async () => {
+            throw new Error("git said \u001b[2J");
+          },
+        }),
+      });
+      expect(result).toEqual({ code: EXIT_FAILED, wrote: 0 });
     });
 
     test("exits 1 for an abbreviation that git cannot resolve", async () => {

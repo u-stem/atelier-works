@@ -889,6 +889,12 @@ describe("parsePlanArgs", () => {
     expect(parsePlanArgs([...ok, "--state-dir", "state"]).ok).toBe(false);
   });
 
+  test("fails for a state directory with a C1 control character", () => {
+    expect(parsePlanArgs([...ok, "--state-dir", "/var/st\u0085ate"]).ok).toBe(
+      false,
+    );
+  });
+
   test("fails for a state directory with a control character", () => {
     expect(parsePlanArgs([...ok, "--state-dir", "/var/st\nate"]).ok).toBe(
       false,

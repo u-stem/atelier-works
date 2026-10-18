@@ -142,6 +142,33 @@ describe("checkCodeOrigin", () => {
     expect(await check(repo.dir)).toEqual(differs("bunfig.toml"));
   });
 
+  test.each(["tsconfig.json", "tsconfig.wmill.json"])(
+    "rejects a changed %s",
+    async (name) => {
+      const { repo } = setup({ ...FILES, [name]: "{}\n" });
+      writeFileSync(join(repo.dir, name), '{"files":["x.ts"]}\n');
+      expect(await check(repo.dir)).toEqual(differs(name));
+    },
+  );
+
+  test.each(["tsconfig.json", "tsconfig.wmill.json"])(
+    "rejects a %s that HEAD does not have",
+    async (name) => {
+      const { repo } = setup();
+      writeFileSync(join(repo.dir, name), "{}\n");
+      expect(await check(repo.dir)).toEqual(differs(name));
+    },
+  );
+
+  test("passes with an unchanged tsconfig.json and tsconfig.wmill.json", async () => {
+    const { repo } = setup({
+      ...FILES,
+      "tsconfig.json": "{}\n",
+      "tsconfig.wmill.json": "{}\n",
+    });
+    expect(await check(repo.dir)).toEqual({ ok: true });
+  });
+
   test("rejects a changed package.json", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "package.json"), '{"scripts":{}}\n');
