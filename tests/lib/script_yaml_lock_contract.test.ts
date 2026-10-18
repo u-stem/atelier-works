@@ -41,6 +41,13 @@ function findLockViolations(definitionPath: string, content: string): string[] {
     return ["definition is not a mapping"];
   }
   const violations: string[] = [];
+  if (content.includes("\uFEFF")) {
+    violations.push("BOM is not allowed");
+  }
+  // wmillは`lock`の値を空白で区切ってパスを取るので、空白を含む名前は拒む。
+  if (/\s/.test(definitionPath)) {
+    violations.push("the definition path must not contain whitespace");
+  }
   if (/^%/m.test(content)) {
     violations.push("YAML directives are not allowed");
   }
@@ -94,6 +101,10 @@ function findInlineInDataFile(path: string, content: string): string[] {
   const violations: string[] = [];
   if (content.includes("!inline")) {
     violations.push("!inline is not allowed here");
+  }
+  // 先頭のBOMは、wmillが外してから読むので、`^%`の検査をすり抜けるのに使われる。
+  if (content.includes("\uFEFF")) {
+    violations.push("BOM is not allowed");
   }
   if (/^%/m.test(content)) {
     violations.push("YAML directives are not allowed");
@@ -243,6 +254,28 @@ describe("findInlineInDataFile tags and json", () => {
     expect(
       findInlineInDataFile("f/factory/x.resource.json", content).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("findInlineInDataFile bom and unicode escapes", () => {
+  test("rejects a BOM before a TAG directive", () => {
+    const content = "\uFEFF%TAG !w! !in\n---\ncontent: !w!line x\n";
+    expect(
+      findInlineInDataFile("f/factory/x.resource.yaml", content).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("rejects a long unicode escape that spells !inline", () => {
+    const content = 'content: "\\U00000021inline mise.local.toml"\n';
+    expect(
+      findInlineInDataFile("f/factory/x.resource.yaml", content).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("rejects a definition path with whitespace", () => {
+    const path = "f/factory/a b.script.yaml";
+    const content = "lock: '!inline f/factory/a b.script.lock'\n";
+    expect(findLockViolations(path, content).length).toBeGreaterThan(0);
   });
 });
 
