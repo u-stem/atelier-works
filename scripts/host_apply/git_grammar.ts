@@ -254,7 +254,8 @@ export function checkGitReadArgs(args: readonly string[]): string | null {
 
 type Env = Readonly<Record<string, string>>;
 
-function sameEntries(actual: Env, expected: Env): boolean {
+/** 2つの環境が、キーも値も完全に等しいか。 */
+export function sameEnv(actual: Env, expected: Env): boolean {
   const keys = Object.keys(actual);
   return (
     keys.length === Object.keys(expected).length &&
@@ -264,7 +265,7 @@ function sameEntries(actual: Env, expected: Env): boolean {
 
 /** 読み取りのgitの環境を検査する。`approveGitEnv()`と、キーも値も完全に等しいこと。 */
 export function checkGitReadEnv(env: Env): string | null {
-  return sameEntries(env, approveGitEnv())
+  return sameEnv(env, approveGitEnv())
     ? null
     : "git environment differs from the fixed one";
 }
@@ -320,7 +321,7 @@ export function checkFetchForm(form: FetchForm): string | null {
   if (env.GIT_DIR === undefined || env.GIT_DIR !== cwd) {
     return "GIT_DIR must equal the working directory";
   }
-  if (!sameEntries(withoutFetchKeys(env), approveGitEnv())) {
+  if (!sameEnv(withoutFetchKeys(env), approveGitEnv())) {
     return "git environment differs from the fixed one";
   }
   if (sameArgs(args, REMOTE_URL_ARGS)) {
