@@ -4,6 +4,7 @@
 
 import { configuredRepos, isRepoAllowed } from "./config.ts";
 import {
+  type GhOwnerRepoCoverageInput,
   judgeGhOwnerCoverage,
   judgeGhOwnerIssueRepos,
 } from "./gh_collect_read.ts";
@@ -103,6 +104,35 @@ function requiredRepos(
 }
 
 /**
+ * 表の候補にしてよい行を、(リポジトリ、番号)の順に集める。
+ * 読む時点で許されないリポジトリ、archive済みのリポジトリ、一覧から消えたリポジトリの行は入れない。
+ * 鮮度の足りない所有者はここに来る前に検索へ戻すので、`usable`は使ってよい行だけである。
+ */
+function usableTableRows<T extends { readonly number: number }>(
+  owner: string,
+  judged: ReadonlyMap<
+    string,
+    GhOwnerRepoCoverageInput & { readonly usable: readonly T[] }
+  >,
+  isAllowedNow: (owner: string, repo: string) => boolean,
+): T[] {
+  const rows: T[] = [];
+  for (const name of [...judged.keys()].sort()) {
+    const item = judged.get(name);
+    if (item === undefined) continue;
+    if (
+      !isAllowedNow(owner, item.row.repo) ||
+      item.row.archived ||
+      item.row.gone
+    ) {
+      continue;
+    }
+    rows.push(...[...item.usable].sort((a, b) => a.number - b.number));
+  }
+  return rows;
+}
+
+/**
  * トリガーラベル付きのIssueを見つける。照合を通った所有者ごとに行う。
  * `search`なら、所有者ごとに検索する。
  * `db`なら、所有者の全体を表で探し、使えない所有者だけ検索に戻す。使えないのは次のときである。
@@ -191,20 +221,7 @@ export async function discoverIssues(
       if (coverage.kind === "stale") {
         reason = coverage.reason;
       } else {
-        for (const name of [...judged.keys()].sort()) {
-          const item = judged.get(name);
-          if (item === undefined) continue;
-          if (
-            !isAllowedNow(owner.name, item.row.repo) ||
-            item.row.archived ||
-            item.row.gone
-          ) {
-            continue;
-          }
-          tableRows.push(
-            ...[...item.usable].sort((a, b) => a.number - b.number),
-          );
-        }
+        tableRows.push(...usableTableRows(owner.name, judged, isAllowedNow));
       }
     }
     if (reason !== null) {
