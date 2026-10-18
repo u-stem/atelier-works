@@ -16,6 +16,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  normalizeStateDir,
   readSecureFile,
   writeSecureFile,
 } from "../../scripts/host_apply/secure_file.ts";
@@ -445,5 +446,27 @@ describe("a state directory path that is not a clean absolute path", () => {
     expect(get(dir.replace(/\/state$/, "//state"))).toMatchObject({
       kind: "found",
     });
+  });
+});
+
+describe("normalizeStateDir", () => {
+  test("drops a trailing slash", () => {
+    expect(normalizeStateDir("/a/b/")).toBe("/a/b");
+  });
+
+  test("drops a trailing dot element", () => {
+    expect(normalizeStateDir("/a/b/.")).toBe("/a/b");
+  });
+
+  test("collapses repeated slashes", () => {
+    expect(normalizeStateDir("/a//b")).toBe("/a/b");
+  });
+
+  test("rejects a relative path", () => {
+    expect(normalizeStateDir("a/b")).toBeNull();
+  });
+
+  test("rejects a parent element", () => {
+    expect(normalizeStateDir("/a/../b")).toBeNull();
   });
 });
