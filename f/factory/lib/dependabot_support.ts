@@ -736,11 +736,26 @@ function pathProblem(paths: readonly string[]): string | null {
   return null;
 }
 
-// マニフェストと、同じディレクトリのロックファイルの対応。
-const MANIFEST_LOCKFILES: readonly { manifest: string; lockfile: string }[] = [
-  { manifest: "package.json", lockfile: "bun.lock" },
-  { manifest: "console/package.json", lockfile: "console/bun.lock" },
-];
+/**
+ * マニフェストと、同じディレクトリのロックファイルの対応。
+ * 更新を許すファイルの出典で、ロックファイルとして読むパス(`LOCKFILE_PATHS`)はここから作る。
+ * `ALLOWED_PATHS`は意図してリテラルのまま残し、表だけ、許可だけの変更はテストが落ちて止める。
+ * 表はbunの解析器に渡す前提なので、別の言語の行を足すときは、表と許可に加えて、
+ * `fileProblem`、`integrityProblem`、`dependabot_collect.ts`の`deriveTargets`、
+ * `dependabot_flow_support.ts`の`isFileNamed`、
+ * `dependabot_prepare.ts`の`installedPackageDirsFor`と`LOCKFILE_NAME`の、bun専用の箇所を見直す。
+ * 判定の基準なので、実行時にも書き換えられないよう凍結する。
+ */
+export const MANIFEST_LOCKFILES: readonly {
+  readonly manifest: string;
+  readonly lockfile: string;
+}[] = Object.freeze([
+  Object.freeze({ manifest: "package.json", lockfile: "bun.lock" }),
+  Object.freeze({
+    manifest: "console/package.json",
+    lockfile: "console/bun.lock",
+  }),
+]);
 
 /**
  * 変更されたファイルの中身を検査し、止める理由を返す。無ければ`null`。

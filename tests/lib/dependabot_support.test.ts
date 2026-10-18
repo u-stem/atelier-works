@@ -1356,6 +1356,24 @@ describe("evaluateGate", () => {
     ).toBe("needs_human");
   });
 
+  test("names the missing lockfile when the root manifest changed alone", () => {
+    expect(
+      reasonOfResult(
+        evaluateGate(validInput({ changedPaths: ["package.json"] })),
+      ),
+    ).toContain("package.json changed without bun.lock");
+  });
+
+  test("names the missing lockfile when the console manifest changed alone", () => {
+    expect(
+      reasonOfResult(
+        evaluateGate(
+          validInput({ changedPaths: ["console/package.json", "bun.lock"] }),
+        ),
+      ),
+    ).toContain("console/package.json changed without console/bun.lock");
+  });
+
   test("accepts a lockfile-only update", () => {
     const lockOnly = lockText({ "left-pad": "^1.0.0", other: "2.0.0" }, [
       { key: "left-pad", id: "left-pad@1.3.0" },
