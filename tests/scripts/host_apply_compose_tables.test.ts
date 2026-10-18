@@ -527,6 +527,12 @@ describe("ids of violations", () => {
     );
   });
 
+  test("an integer image beyond the safe range is rejected", () => {
+    expect(
+      foundText("services:\n  db:\n    image: 12345678901234567890123\n"),
+    ).toBe("rejected");
+  });
+
   test("an image that is null and an image that is not a number differ", () => {
     expect(violationsOf("services:\n  db:\n    image: .nan\n")[0]?.id).not.toBe(
       violationsOf("services:\n  db:\n    image: null\n")[0]?.id,

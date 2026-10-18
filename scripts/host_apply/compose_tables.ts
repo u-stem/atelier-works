@@ -335,8 +335,12 @@ function canonical(value: unknown): string {
       active.delete(node);
       return text;
     }
-    if (typeof node === "number" && !Number.isFinite(node)) {
-      return `num:${String(node)}`;
+    if (typeof node === "number") {
+      // 浮動小数点に丸められた整数は、別の値と区別できないので、鍵にしない。
+      if (Number.isInteger(node) && !Number.isSafeInteger(node)) {
+        reject("a number is too large to be compared");
+      }
+      if (!Number.isFinite(node)) return `num:${String(node)}`;
     }
     const text = JSON.stringify(node) ?? "null";
     spend(text.length);
