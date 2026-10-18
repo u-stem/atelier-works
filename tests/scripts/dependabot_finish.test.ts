@@ -10,9 +10,13 @@ import {
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   dependabotReason,
+  OTHER_REPO_UNSUPPORTED_REASON,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { DependabotPromptInput } from "../../f/factory/lib/dependabot_prompt.ts";
-import type { ImpactAssessment } from "../../f/factory/lib/dependabot_support.ts";
+import type {
+  ImpactAssessment,
+  RepoPolicy,
+} from "../../f/factory/lib/dependabot_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   GitHubHttpError,
@@ -302,6 +306,8 @@ type FakeOptions = {
   readonly enabled?: boolean;
   /** `dependabot_merge_enabled`。省略時は真。 */
   readonly mergeEnabled?: boolean;
+  /** リポジトリの扱い。省略時は`primary`。 */
+  readonly repoPolicy?: RepoPolicy;
   /** マージの直前に読み直す`dependabot_group_enabled`。省略時は真。 */
   readonly groupEnabled?: boolean;
   /** `dependabot_group_enabled`の読み直しが投げる例外。 */
@@ -421,6 +427,7 @@ function run(
     fixLabel: FIX_LABEL,
     enabled: options.enabled ?? true,
     mergeEnabled: options.mergeEnabled ?? true,
+    repoPolicy: options.repoPolicy ?? "primary",
   }).then((result) => ({ result, calls }));
 }
 
@@ -438,6 +445,7 @@ async function callsOfFailingRun(
       fixLabel: FIX_LABEL,
       enabled: options.enabled ?? true,
       mergeEnabled: options.mergeEnabled ?? true,
+      repoPolicy: options.repoPolicy ?? "primary",
     });
   } catch {
     // 例外で終わることは別のテストが確かめる。
@@ -933,6 +941,59 @@ describe("runDependabotFinish when the outcome is merge", () => {
     expect(named(calls, "warn").map((c) => c.args[0])).toEqual([
       "failed to remove the dependabot worktree",
     ]);
+  });
+});
+
+describe("runDependabotFinish for another repository", () => {
+  const other: FakeOptions = { repoPolicy: "other" };
+
+  test("does not merge", async () => {
+    const { calls } = await run(mergeInput(), other);
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("does not post findings", async () => {
+    const { calls } = await run(fixInput(), other);
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("does not add a label", async () => {
+    const { calls } = await run(fixInput(), other);
+
+    expect(named(calls, "addLabels")).toHaveLength(0);
+  });
+
+  test("does not check the repository owner", async () => {
+    const { calls } = await run(mergeInput(), other);
+
+    expect(named(calls, "ensureRepoOwner")).toHaveLength(0);
+  });
+
+  test("does not read the pull request", async () => {
+    const { calls } = await run(mergeInput(), other);
+
+    expect(named(calls, "getPr")).toHaveLength(0);
+  });
+
+  test("hands the work item to a person with the unsupported reason", async () => {
+    const { calls } = await run(mergeInput(), other);
+
+    expect(statusUpdates(calls)).toEqual([
+      [
+        WORK_ITEM_ID,
+        "picked",
+        "needs_human",
+        dependabotReason("finish", OTHER_REPO_UNSUPPORTED_REASON),
+      ],
+    ]);
+  });
+
+  test("hands a repository that is off to a person without merging", async () => {
+    const { calls } = await run(mergeInput(), { repoPolicy: "off" });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
   });
 });
 
