@@ -771,6 +771,7 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 既定では無効で、`dependabot_enabled`を真にしたときだけ動く。
 マージは`dependabot_merge_enabled`も真にしたときだけ行い、偽の間は試運転としてマージ可のPRを人に回す。
 対象は`factory_repo`と、`repo_allowlist`に明示したリポジトリだけである。
+1つのPRで上がるパッケージは、1つが基本で、`dependabot_group_enabled`を真にしたときだけ3つまで扱う。
 候補のPRは、検索か、収集の表から列挙する。
 マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)に書く。
 

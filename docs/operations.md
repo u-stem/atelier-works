@@ -2317,13 +2317,14 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 ## dependabotの更新を設定する
 
 dependabotが開いた依存の更新PRを、Factoryが評価して自動でマージできる。
-`f/factory/factory_config`の次の4つの項目で設定する。
+`f/factory/factory_config`の次の5つの項目で設定する。
 `factory_config`は同期の対象外なので、WindmillのResourcesの編集画面で直す。
 
 | 項目 | 既定値 | 意味 |
 | --- | --- | --- |
 | `dependabot_enabled` | `false` | dependabotのPRを自動で処理するか |
 | `dependabot_merge_enabled` | `false` | マージしてよいと判断したPRを、実際にマージするか。偽の間は試運転で、そのPRを人に回す |
+| `dependabot_group_enabled` | `false` | 複数のパッケージを上げるグループ更新のPRを、2〜3つまで対象にするか。偽の間は、人に回す |
 | `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
 | `gh_source_dependabot` | `search` | 候補のPRを列挙する元。`search`は検索、`db`は収集の表。切り替えの手順は[候補の元を表に切り替える](#候補の元を表に切り替える) |
 
@@ -2360,6 +2361,22 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 7. `dependabot_merge_enabled`を`true`にする。
 8. 最初のマージの結果を確かめる。
    問題があれば、すぐに`dependabot_merge_enabled`を`false`に戻す。
+
+### グループの更新を有効にする
+
+`dependabot_group_enabled`は、上の手順で単独の更新を確かめた後に、人が決めて有効にする。
+次の順に進める。
+
+1. `dependabot_enabled`を`true`、`dependabot_merge_enabled`を`false`にして試運転を続ける。
+2. `dependabot_group_enabled`を`true`にする。
+3. グループのPRが来たら、作業項目が`dependabot dry run: merge allowed`まで進むことを確かめる。
+   人に回った理由と、影響調査の所見も読み、判断が妥当かを確かめる。
+   妥当なら、フラグを`true`のままにする。
+
+`dependabot_merge_enabled`が`false`の間は、`dependabot_group_enabled`を`true`にしても何もマージしない。
+グループのPRは、リポジトリの設定の「グループのセキュリティ更新」を有効にしたときにだけ作られる。
+問題があれば、`dependabot_group_enabled`を`false`に戻す。
+マージの直前にもこの項目を読み直すので、動いているフローも人に回る。
 
 ### 候補の元を表に切り替える
 
