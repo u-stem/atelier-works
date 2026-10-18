@@ -99,7 +99,8 @@
 #      これもsyncの対象外(`wmill.yaml`を参照)だが、理由は`factory_config`と違う。
 #      インスタンスの設定ではなく`self_update`の実行時の状態であり、
 #      bootstrapを実行し直しても空に戻してはならないため。
-#  13. `wmill sync push --yes --keep-deleted`
+#  13. `bun ./scripts/freeze.ts push`(`wmill sync push --yes --keep-deleted`に、
+#      凍結中のスケジュールの除外を足す。凍結の変数が無い初回は、凍結なしとして扱う)
 #  14. `wmill datatable migrate up`
 #  15. `wmill resource-type generate-namespace`(`rt.d.ts`を書く)
 #  16. 次の手順を表示する。
@@ -842,8 +843,10 @@ else
 fi
 
 # --- 手順13: ローカルのsyncの状態をpushする ------------------------------------
-# `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさせない。
-NPM_CONFIG_IGNORE_SCRIPTS=true run_wmill sync push --yes --keep-deleted >&2
+# 凍結中のスケジュールを上書きしないよう、除外を作るラッパーを通す。
+# ラッパーは、`wmill sync push`にだけinstall scriptを止める環境変数を付けて実行する。
+# 凍結の変数がまだ無い初回は、一覧で無いと確かめたうえで凍結なしとして進む。
+run_in_repo bun ./scripts/freeze.ts push >&2
 log "sync push complete"
 
 # --- 手順14: 未適用のData Tableのmigrationを適用する ---------------------------

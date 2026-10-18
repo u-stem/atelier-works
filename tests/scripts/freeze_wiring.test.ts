@@ -78,6 +78,38 @@ describe("tasks that ask a human to confirm", () => {
   }
 });
 
+describe("scripts/bootstrap.sh full mode", () => {
+  async function commandLines(): Promise<string[]> {
+    const text = await Bun.file("scripts/bootstrap.sh").text();
+    return text
+      .replaceAll("\\\n", " ")
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"));
+  }
+
+  test("does not call wmill sync push directly", async () => {
+    const lines = await commandLines();
+
+    expect(lines.some((line) => /wmill\s+sync\s+push/.test(line))).toBe(false);
+  });
+
+  test("pushes through the freeze wrapper", async () => {
+    const lines = await commandLines();
+
+    expect(
+      lines.some((line) => line.includes("./scripts/freeze.ts push")),
+    ).toBe(true);
+  });
+
+  test("keeps remote-only items by not passing --prune", async () => {
+    const lines = await commandLines();
+
+    expect(lines.some((line) => /freeze\.ts push.*--prune/.test(line))).toBe(
+      false,
+    );
+  });
+});
+
 describe("wmill.yaml excludes", () => {
   test("keep every required pattern", async () => {
     const parsed = parseWmillExcludes(await Bun.file("wmill.yaml").text());
