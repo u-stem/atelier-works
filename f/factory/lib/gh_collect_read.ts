@@ -298,3 +298,23 @@ export function effectiveGhSource(
     ? "db"
     : "search";
 }
+
+/** 仮実装。常に空の集合を返す。 */
+export function requiredRepos(
+  _scope: Pick<FactoryConfig, "repo_allowlist" | "factory_repo">,
+  _owner: string,
+): Set<string> {
+  return new Set();
+}
+
+/** 仮実装。常に空を返す。 */
+export function usableTableRows<T extends { readonly number: number }>(
+  _owner: string,
+  _judged: ReadonlyMap<
+    string,
+    GhOwnerRepoCoverageInput & { readonly usable: readonly T[] }
+  >,
+  _isAllowedNow: (owner: string, repo: string) => boolean,
+): T[] {
+  return [];
+}

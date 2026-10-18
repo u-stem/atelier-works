@@ -67,7 +67,7 @@ locks:
   f/factory/lib/gh_collect_detail: 4819e8d6e84ac6065c3d4de40820e75065482aaec00b890e85065e5ac957bc59
   f/factory/lib/gh_collect_detail_round: cda53e1882492fecbe3e46b45d6b2223c67a6e2cbe04edcda4e0378e5fe92691
   f/factory/lib/gh_collect_freshness: 487d7080e623e924a7cd278dfd3dfef4ad1d28287f5f1ec5146b1467b798e46d
-  f/factory/lib/gh_collect_read: 0bd43295f819f5cbb74ca6ce4090a6fcba7abb34facbdffcde5aab707722a11d
+  f/factory/lib/gh_collect_read: 8f951e4565e8ce8a6c225cc14f694e819ee51256e781c8315223cc27c80281fd
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: 6d1a97e3aef6135cbadde8c3546d5768a9e591461642de65307f64083b6e39ab
   f/factory/lib/github: 37265824d3cbae73c76f5f0943a110f3f807724757cd57534c66f1b9617df588
