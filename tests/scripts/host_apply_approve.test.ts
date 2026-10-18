@@ -841,7 +841,7 @@ describe("runApprove", () => {
 
     test("escapes the message of an origin check that throws", async () => {
       const { errors } = await approve(scenario(), { originThrows: true });
-      expect(errors.join("\n")).toContain("cannot read \\x1b[2J");
+      expect(errors.join("\n")).toContain("cannot read \\u001b[2J");
     });
 
     test("refuses a record that would be over 64 KiB, before asking", async () => {

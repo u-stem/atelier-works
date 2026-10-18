@@ -9,6 +9,7 @@ import {
   type ApprovedFile,
   type ApprovedRecord,
   isApprovedStatus,
+  serializeApprovedRecord,
 } from "./approved_store.ts";
 import type { OriginCheck } from "./code_origin.ts";
 import {
@@ -357,7 +358,13 @@ export async function runApprove(
   if (!deps.isTerminal()) {
     return refuse("stdin and stdout must both be a terminal");
   }
-  const origin = await deps.checkOrigin();
+  let origin: OriginCheck;
+  try {
+    origin = await deps.checkOrigin();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown error";
+    return refuse(`code origin check failed: ${escapeDetail(reason)}`);
+  }
   if (!origin.ok) return refuse(`code origin check failed: ${origin.reason}`);
 
   try {
@@ -431,6 +438,20 @@ export async function runApprove(
       );
     }
 
+    const buildRecord = (): ApprovedRecord => ({
+      schema: 1,
+      sha: target,
+      applied: args.applied,
+      approved_at: deps.now().toISOString(),
+      files,
+    });
+    try {
+      serializeApprovedRecord(buildRecord());
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown error";
+      return refuse(`the record cannot be written: ${escapeDetail(reason)}`);
+    }
+
     const patch = await git.diffPatch(
       base,
       target,
@@ -491,13 +512,7 @@ export async function runApprove(
     const typed = await io.readLine();
     if (typed !== phrase) return refuse("the confirmation did not match");
 
-    deps.writeRecord({
-      schema: 1,
-      sha: target,
-      applied: args.applied,
-      approved_at: deps.now().toISOString(),
-      files,
-    });
+    deps.writeRecord(buildRecord());
     io.print(`approved ${target}`);
     return EXIT_OK;
   } catch (error) {

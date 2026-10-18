@@ -86,8 +86,12 @@ export function parseApprovedRecord(text: string): ApprovedRecord | null {
   return isApprovedRecord(parsed) ? parsed : null;
 }
 
-/** 記録をファイルの本文にする。形の合わない記録は、書く前に止めるため例外にする。 */
+/** 記録をファイルの本文にする。形の合わない記録と、64KiBを超える本文は、書く前に止めるため例外にする。 */
 export function serializeApprovedRecord(record: ApprovedRecord): string {
   if (!isApprovedRecord(record)) throw new Error("invalid approved record");
-  return `${JSON.stringify(record, null, 2)}\n`;
+  const body = `${JSON.stringify(record, null, 2)}\n`;
+  if (Buffer.byteLength(body, "utf8") > MAX_APPROVED_BYTES) {
+    throw new Error("approved record is too large");
+  }
+  return body;
 }
