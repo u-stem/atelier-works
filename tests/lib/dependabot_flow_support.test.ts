@@ -4,6 +4,7 @@ import {
   buildLockfileSummary,
   buildManifestDiffSummary,
   changelogCoversVersion,
+  checkPromptSize,
   codeFenceFor,
   compareInstalledScripts,
   compareRepositoryUrls,
@@ -21,13 +22,17 @@ import {
   dependabotReason,
   dependabotTimeoutMisfit,
   evaluatePostInstallStatus,
+  excerptChangelog,
   fencedBlockMaxLength,
   fenceUntrustedBlock,
+  hasTruncationMark,
+  MAX_PROMPT_CHARS,
   POST_INSTALL_STATUS_ARGV,
   sanitizedProseMaxLength,
   sanitizeUntrustedProse,
   UNTRUSTED_PROSE_TRUNCATION_MARK,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
+import type { DependabotPromptInput } from "../../f/factory/lib/dependabot_prompt.ts";
 import { IMPLICIT_GYP_INSTALL } from "../../f/factory/lib/dependabot_support.ts";
 import { hasMarker } from "../../f/factory/lib/github.ts";
 import {
@@ -1500,6 +1505,177 @@ describe("buildChangelogExcerpt", () => {
     expect(buildChangelogExcerpt(text, "1.2.3", "1.2.4", 25)).toBe(
       "## 1.2.4\r\n- right\r",
     );
+  });
+});
+
+// ---- excerptChangelog ----
+
+describe("excerptChangelog", () => {
+  const CHANGELOG = [
+    "# Changelog",
+    "",
+    "## 1.2.5",
+    "- newer change",
+    "",
+    "## 1.2.4",
+    "- fix the crash",
+    "",
+    "## 1.2.3",
+    "- older change",
+    "",
+    "## 1.2.2",
+    "- oldest change",
+  ].join("\n");
+
+  test("returns the same text as buildChangelogExcerpt", () => {
+    expect(excerptChangelog(CHANGELOG, "1.2.3", "1.2.4", 100).text).toBe(
+      buildChangelogExcerpt(CHANGELOG, "1.2.3", "1.2.4", 100),
+    );
+  });
+
+  test("does not report a cut for a text that fits", () => {
+    expect(excerptChangelog(CHANGELOG, "1.2.3", "1.2.4").truncated).toBe(false);
+  });
+
+  test("does not report a cut for an empty text", () => {
+    expect(excerptChangelog("", "1.2.3", "1.2.4").truncated).toBe(false);
+  });
+
+  test("does not report a cut when the range reaches the fromVersion heading", () => {
+    expect(excerptChangelog(CHANGELOG, "1.2.3", "1.2.4", 100).truncated).toBe(
+      false,
+    );
+  });
+
+  test("does not report a cut when the range runs to the end of the text", () => {
+    expect(excerptChangelog(CHANGELOG, "9.9.9", "1.2.4", 120).truncated).toBe(
+      false,
+    );
+  });
+
+  test("reports a cut when the range stops before the fromVersion heading", () => {
+    const text = `## 1.2.4\n${"x".repeat(500)}\n## 1.2.3\n- old`;
+
+    expect(excerptChangelog(text, "1.2.3", "1.2.4", 100).truncated).toBe(true);
+  });
+
+  test("reports a cut when the range to the end of the text does not fit", () => {
+    expect(excerptChangelog(CHANGELOG, "9.9.9", "1.2.4", 60).truncated).toBe(
+      true,
+    );
+  });
+
+  test("reports a cut when the toVersion heading is missing", () => {
+    expect(excerptChangelog(CHANGELOG, "1.2.3", "9.9.9", 20).truncated).toBe(
+      true,
+    );
+  });
+
+  test("reports a cut when the limit leaves nothing", () => {
+    expect(excerptChangelog(CHANGELOG, "1.2.3", "1.2.4", 0).truncated).toBe(
+      true,
+    );
+  });
+});
+
+// ---- hasTruncationMark ----
+
+describe("hasTruncationMark", () => {
+  test("detects the mark that sanitizeUntrustedProse appends", () => {
+    expect(
+      hasTruncationMark(sanitizeUntrustedProse("word ".repeat(50), 20)),
+    ).toBe(true);
+  });
+
+  test("detects the mark that a long summary carries", () => {
+    const names = Array.from({ length: 400 }, (_, index) => `pkg-${index}`);
+    const dependencies = (version: string) =>
+      JSON.stringify({
+        dependencies: Object.fromEntries(names.map((n) => [n, version])),
+      });
+
+    expect(
+      hasTruncationMark(
+        buildManifestDiffSummary([
+          {
+            path: "package.json",
+            before: dependencies("1.0.0"),
+            after: dependencies("1.0.1"),
+          },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not detect a text that was not cut", () => {
+    expect(hasTruncationMark(sanitizeUntrustedProse("short", 20))).toBe(false);
+  });
+
+  test("does not detect the mark in the middle of a text", () => {
+    expect(
+      hasTruncationMark(`a${UNTRUSTED_PROSE_TRUNCATION_MARK} and more`),
+    ).toBe(false);
+  });
+});
+
+// ---- checkPromptSize ----
+
+describe("checkPromptSize", () => {
+  function inputOfSize(chars: number): DependabotPromptInput {
+    return {
+      packages: [
+        {
+          name: "left-pad",
+          from: "1.2.3",
+          to: "1.2.4",
+          changelog: "x".repeat(chars - "left-pad1.2.31.2.4".length),
+          registryMetadata: "",
+        },
+      ],
+      prTitle: "",
+      prBody: "",
+      manifestDiff: "",
+      lockfileSummary: "",
+      unverifiedInputs: [],
+    };
+  }
+
+  test("accepts an input that is exactly the limit", () => {
+    expect(checkPromptSize(inputOfSize(MAX_PROMPT_CHARS))).toEqual({
+      ok: true,
+    });
+  });
+
+  test("stops an input that is one character over the limit", () => {
+    expect(checkPromptSize(inputOfSize(MAX_PROMPT_CHARS + 1)).ok).toBe(false);
+  });
+
+  test("states the size in the reason", () => {
+    expect(
+      reasonOf(checkPromptSize(inputOfSize(MAX_PROMPT_CHARS + 1))),
+    ).toContain(String(MAX_PROMPT_CHARS + 1));
+  });
+
+  test("adds up the text of every package", () => {
+    const input = inputOfSize(MAX_PROMPT_CHARS);
+    const [first] = input.packages;
+    if (first === undefined) throw new Error("fixture has no package");
+
+    expect(
+      checkPromptSize({
+        ...input,
+        packages: [
+          first,
+          { ...first, name: "right-pad", changelog: "", registryMetadata: "" },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  test("counts the pull request text and the summaries", () => {
+    const input = inputOfSize(MAX_PROMPT_CHARS);
+
+    expect(checkPromptSize({ ...input, prBody: "x" }).ok).toBe(false);
   });
 });
 
