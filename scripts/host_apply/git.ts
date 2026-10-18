@@ -181,3 +181,172 @@ export function parseLsTreeZ(output: string): LsTreeEntry[] {
   }
   return entries;
 }
+
+/** 空のtreeのオブジェクト名。属性の取得元に指定して、作業ツリーの`.gitattributes`を読ませない。 */
+export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** 承認の道具が追跡する先のref。短い名前ではなく完全な名前で読む。 */
+export const ORIGIN_MAIN_REF = "refs/remotes/origin/main";
+
+/** `approve`が使うgitのサブコマンド。`plan`のものに、refの解決と読み取りを足す。 */
+export const APPROVE_GIT_SUBCOMMANDS: readonly string[] = [
+  ...PLAN_GIT_SUBCOMMANDS,
+  "rev-parse",
+  "show-ref",
+];
+
+/**
+ * `approve`用のgitの引数に、設定の上書きを前置する。
+ * `--no-pager`はサブコマンドの前に置く。サブコマンドの後ろでは`diff`の未知のオプションとして拒否される。
+ * 属性ファイルは読まない。サブコマンドが一覧に無ければ、ネットワークや書き込みを通さないよう例外にする。
+ */
+export function approveGitArgs(args: readonly string[]): string[] {
+  const subcommand = args[0];
+  if (
+    subcommand === undefined ||
+    !APPROVE_GIT_SUBCOMMANDS.includes(subcommand)
+  ) {
+    throw new Error("git subcommand is not allowed");
+  }
+  return [
+    "--no-pager",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+    ...args,
+  ];
+}
+
+/**
+ * `approve`のgitの環境。呼び出し元の環境は引き継がず、ここに書いた名前だけを渡す。
+ * `PATH`を固定して偽の`git`を拾わせず、ユーザーとシステムの設定、属性、pathspecの展開、
+ * replace ref、ロックの取得、対話の入力を無効にする。
+ */
+export function approveGitEnv(): Record<string, string> {
+  return {
+    PATH: "/usr/bin:/bin",
+    HOME: "/",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_ATTR_SOURCE: EMPTY_TREE_SHA,
+    GIT_LITERAL_PATHSPECS: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+/**
+ * 2つのコミットの間の差分を、指定したパスについて文字として出す引数。
+ * 色、textconv、外部のdiff、リネームの検出を使わず、バイナリ指定のファイルも文字として出す。
+ * 文脈は前後3行。modeだけの変更はヘッダーの行に出る。
+ */
+export function diffPatchArgs(
+  base: string,
+  target: string,
+  files: readonly string[],
+): string[] {
+  if (files.length === 0) throw new Error("path list is empty");
+  return approveGitArgs([
+    "diff",
+    "--no-color",
+    "--text",
+    "--no-textconv",
+    "--no-ext-diff",
+    "--no-renames",
+    "-U3",
+    `${requireSha(base)}..${requireSha(target)}`,
+    "--",
+    ...files.map(requirePath),
+  ]);
+}
+
+/**
+ * 人が入力した7〜40桁の16進を、コミットに解決する引数。
+ * ブランチ名などがshaに化けないよう、入力の形をここで絞る。
+ * 解決した値が入力で始まるかは、呼び出し側が確かめる。
+ */
+export function resolveCommitArgs(input: string): string[] {
+  if (!/^[0-9a-f]{7,40}$/.test(input)) {
+    throw new Error("sha must be 7 to 40 lowercase hex digits");
+  }
+  return approveGitArgs([
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `${input}^{commit}`,
+  ]);
+}
+
+/** `HEAD`をコミットに解決する引数。 */
+export function resolveHeadArgs(): string[] {
+  return approveGitArgs(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+}
+
+/**
+ * refの先端を読む引数。完全な名前だけを受ける。
+ * `rev-parse`は、refが無いと別のrefに解決し直すため使わない。
+ */
+export function showRefArgs(ref: string): string[] {
+  if (!/^refs\/[A-Za-z0-9._/-]+$/.test(ref) || ref.includes("..")) {
+    throw new Error("ref must be a full name");
+  }
+  return approveGitArgs(["show-ref", "--verify", ref]);
+}
+
+export type RevParseQuery = "git-dir" | "git-common-dir" | "show-toplevel";
+
+/** リポジトリの場所を、絶対パスで問い合わせる引数。 */
+export function revParseQueryArgs(query: RevParseQuery): string[] {
+  return approveGitArgs(["rev-parse", "--path-format=absolute", `--${query}`]);
+}
+
+export type LsTreeShaEntry = {
+  readonly mode: string;
+  readonly type: string;
+  readonly sha: string;
+  readonly path: string;
+};
+
+/** コミットのtreeのうち、指定したパスの下の全エントリを、NUL区切りで列挙する引数。 */
+export function lsTreeShaArgs(
+  commit: string,
+  paths: readonly string[],
+): string[] {
+  return readOnlyGitArgs([
+    "ls-tree",
+    "-r",
+    "-z",
+    requireSha(commit),
+    "--",
+    ...paths.map(requirePath),
+  ]);
+}
+
+const LS_TREE_SHA_ENTRY = /^(\d{6}) (\w+) ([0-9a-f]{40,64})\t([\s\S]*)$/;
+
+/** `ls-tree -z`の出力を、オブジェクト名つきで読む。読めないエントリがあれば例外にする。 */
+export function parseLsTreeShaZ(output: string): LsTreeShaEntry[] {
+  const entries: LsTreeShaEntry[] = [];
+  for (const raw of output.split("\0")) {
+    if (raw === "") continue;
+    const match = LS_TREE_SHA_ENTRY.exec(raw);
+    const [, mode, type, sha, path] = match ?? [];
+    if (
+      mode === undefined ||
+      type === undefined ||
+      sha === undefined ||
+      path === undefined
+    ) {
+      throw new Error("unexpected ls-tree output");
+    }
+    entries.push({ mode, type, sha, path });
+  }
+  return entries;
+}

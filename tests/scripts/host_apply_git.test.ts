@@ -1,19 +1,34 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import {
+  APPROVE_GIT_SUBCOMMANDS,
+  approveGitArgs,
+  approveGitEnv,
   commitExistsArgs,
   diffNameStatusArgs,
+  diffPatchArgs,
   fetchArgs,
   fetchEnv,
   isAncestorArgs,
   isSha40,
   lsTreePathArgs,
   lsTreeRecursiveArgs,
+  lsTreeShaArgs,
+  ORIGIN_MAIN_REF,
   PLAN_GIT_SUBCOMMANDS,
+  parseLsTreeShaZ,
   parseLsTreeZ,
   readOnlyGitArgs,
   remoteUrlMatches,
+  resolveCommitArgs,
+  resolveHeadArgs,
+  revParseQueryArgs,
   showBlobArgs,
+  showRefArgs,
 } from "../../scripts/host_apply/git.ts";
+import {
+  createFixtureRepo,
+  type FixtureRepo,
+} from "../fixtures/host_apply_repo.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
@@ -273,5 +288,289 @@ describe("parseLsTreeZ", () => {
 
   test("throws for a line it cannot read", () => {
     expect(() => parseLsTreeZ("garbage\u0000")).toThrow("ls-tree");
+  });
+});
+
+describe("approveGitArgs", () => {
+  test.each(["fetch", "push", "checkout", "pull", "worktree", "update-ref"])(
+    "refuses %s",
+    (subcommand) => {
+      expect(() => approveGitArgs([subcommand])).toThrow("subcommand");
+    },
+  );
+
+  test("accepts rev-parse, which plan does not allow", () => {
+    expect(approveGitArgs(["rev-parse", "--git-dir"]).slice(-2)).toEqual([
+      "rev-parse",
+      "--git-dir",
+    ]);
+  });
+
+  test("accepts show-ref", () => {
+    expect(approveGitArgs(["show-ref", "--verify", "x"])).toContain("show-ref");
+  });
+
+  test("puts --no-pager before every other argument", () => {
+    expect(approveGitArgs(["diff"])[0]).toBe("--no-pager");
+  });
+
+  test("turns the attributes file off", () => {
+    expect(approveGitArgs(["diff"])).toContain("core.attributesFile=/dev/null");
+  });
+
+  test("keeps the plan subcommand list as it is", () => {
+    expect([...PLAN_GIT_SUBCOMMANDS].sort()).toEqual([
+      "cat-file",
+      "diff",
+      "ls-tree",
+      "merge-base",
+      "show",
+    ]);
+  });
+
+  test("lists the plan subcommands, rev-parse and show-ref", () => {
+    expect([...APPROVE_GIT_SUBCOMMANDS].sort()).toEqual([
+      "cat-file",
+      "diff",
+      "ls-tree",
+      "merge-base",
+      "rev-parse",
+      "show",
+      "show-ref",
+    ]);
+  });
+});
+
+describe("approveGitEnv", () => {
+  const env = approveGitEnv();
+
+  test.each([
+    ["PATH", "/usr/bin:/bin"],
+    ["GIT_CONFIG_GLOBAL", "/dev/null"],
+    ["GIT_CONFIG_NOSYSTEM", "1"],
+    ["GIT_ATTR_NOSYSTEM", "1"],
+    ["GIT_ATTR_SOURCE", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"],
+    ["GIT_LITERAL_PATHSPECS", "1"],
+    ["GIT_OPTIONAL_LOCKS", "0"],
+    ["GIT_TERMINAL_PROMPT", "0"],
+  ])("sets %s", (name, value) => {
+    expect(env[name]).toBe(value);
+  });
+
+  test("passes nothing but the names it sets", () => {
+    expect(Object.keys(env).sort()).toEqual(
+      [
+        "GIT_ATTR_NOSYSTEM",
+        "GIT_ATTR_SOURCE",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OPTIONAL_LOCKS",
+        "GIT_TERMINAL_PROMPT",
+        "HOME",
+        "PATH",
+      ].sort(),
+    );
+  });
+});
+
+describe("diffPatchArgs", () => {
+  const OTHER = SHA.replace(/0/g, "1");
+  const args = diffPatchArgs(SHA, OTHER, ["scripts/doctor.sh", "a b"]);
+
+  test("puts --no-pager before the subcommand", () => {
+    expect(args.indexOf("--no-pager")).toBeLessThan(args.indexOf("diff"));
+  });
+
+  test("asks for plain text without textconv, external diff or renames", () => {
+    expect(args.slice(args.indexOf("diff"), args.indexOf("--"))).toEqual([
+      "diff",
+      "--no-color",
+      "--text",
+      "--no-textconv",
+      "--no-ext-diff",
+      "--no-renames",
+      "-U3",
+      `${SHA}..${OTHER}`,
+    ]);
+  });
+
+  test("puts the paths after --", () => {
+    expect(args.slice(args.indexOf("--") + 1)).toEqual([
+      "scripts/doctor.sh",
+      "a b",
+    ]);
+  });
+
+  test("refuses a ref name where a sha is expected", () => {
+    expect(() => diffPatchArgs("main", OTHER, ["a"])).toThrow("sha");
+  });
+
+  test("refuses an option-like path", () => {
+    expect(() => diffPatchArgs(SHA, OTHER, ["--output=x"])).toThrow("path");
+  });
+
+  test("refuses an empty list of paths", () => {
+    expect(() => diffPatchArgs(SHA, OTHER, [])).toThrow("path");
+  });
+});
+
+describe("the other approve builders", () => {
+  test("resolveCommitArgs asks for a commit with --verify", () => {
+    expect(resolveCommitArgs("abc1234").slice(-4)).toEqual([
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "abc1234^{commit}",
+    ]);
+  });
+
+  test.each(["main", "HEAD", "--help", "abc12", "ABC1234", `${SHA}0`])(
+    "resolveCommitArgs refuses %p",
+    (input) => {
+      expect(() => resolveCommitArgs(input)).toThrow("sha");
+    },
+  );
+
+  test("resolveHeadArgs resolves HEAD to a commit", () => {
+    expect(resolveHeadArgs().slice(-4)).toEqual([
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "HEAD^{commit}",
+    ]);
+  });
+
+  test("showRefArgs verifies the full name of origin/main", () => {
+    expect(showRefArgs(ORIGIN_MAIN_REF).slice(-3)).toEqual([
+      "show-ref",
+      "--verify",
+      "refs/remotes/origin/main",
+    ]);
+  });
+
+  test("showRefArgs refuses a short name", () => {
+    expect(() => showRefArgs("origin/main")).toThrow("ref");
+  });
+
+  test.each(["git-dir", "git-common-dir", "show-toplevel"] as const)(
+    "revParseQueryArgs asks for an absolute %s",
+    (query) => {
+      expect(revParseQueryArgs(query).slice(-3)).toEqual([
+        "rev-parse",
+        "--path-format=absolute",
+        `--${query}`,
+      ]);
+    },
+  );
+
+  test("lsTreeShaArgs lists paths of a commit recursively", () => {
+    expect(lsTreeShaArgs(SHA, ["scripts/host_apply"]).slice(-6)).toEqual([
+      "ls-tree",
+      "-r",
+      "-z",
+      SHA,
+      "--",
+      "scripts/host_apply",
+    ]);
+  });
+});
+
+describe("parseLsTreeShaZ", () => {
+  const blob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+
+  test("keeps the object name of each entry", () => {
+    expect(parseLsTreeShaZ(`100644 blob ${blob}\tbunfig.toml\u0000`)).toEqual([
+      { mode: "100644", type: "blob", sha: blob, path: "bunfig.toml" },
+    ]);
+  });
+
+  test("throws for a line it cannot read", () => {
+    expect(() => parseLsTreeShaZ("garbage\u0000")).toThrow("ls-tree");
+  });
+});
+
+describe("the approve git commands against a real repository", () => {
+  const repos: FixtureRepo[] = [];
+  afterAll(() => {
+    for (const repo of repos) repo.cleanup();
+  });
+
+  function run(repo: FixtureRepo, args: string[]) {
+    const result = Bun.spawnSync(["/usr/bin/git", ...args], {
+      cwd: repo.dir,
+      env: approveGitEnv(),
+    });
+    return { code: result.exitCode, out: result.stdout.toString() };
+  }
+
+  test("diffPatchArgs prints a unified diff", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const base = repo.commit({ "a.txt": "one\n" }, "base");
+    const target = repo.commit({ "a.txt": "one\ntwo\n" }, "next");
+    expect(run(repo, diffPatchArgs(base, target, ["a.txt"])).out).toContain(
+      "+two\n",
+    );
+  });
+
+  test("diffPatchArgs treats a glob character in a path literally", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const base = repo.commit({ "*": "1\n", "a.txt": "1\n" }, "base");
+    const target = repo.commit({ "*": "2\n", "a.txt": "2\n" }, "next");
+    expect(run(repo, diffPatchArgs(base, target, ["*"])).out).not.toContain(
+      "a.txt",
+    );
+  });
+
+  test("diffPatchArgs shows the text of a file that .gitattributes marks as binary", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const base = repo.commit(
+      { ".gitattributes": "x.dat binary\n", "x.dat": "one\n" },
+      "base",
+    );
+    const target = repo.commit({ "x.dat": "two\n" }, "next");
+    expect(run(repo, diffPatchArgs(base, target, ["x.dat"])).out).toContain(
+      "+two\n",
+    );
+  });
+
+  test("diffPatchArgs includes the mode lines of a mode-only change", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const base = repo.commit({ "run.sh": "echo\n" }, "base");
+    repo.git(["update-index", "--chmod=+x", "run.sh"]);
+    repo.git(["commit", "-q", "-m", "mode"]);
+    const target = repo.git(["rev-parse", "HEAD"]);
+    expect(run(repo, diffPatchArgs(base, target, ["run.sh"])).out).toContain(
+      "new mode 100755",
+    );
+  });
+
+  test("resolveCommitArgs resolves an abbreviation to the full sha", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const sha = repo.commit({ "a.txt": "1\n" }, "base");
+    expect(run(repo, resolveCommitArgs(sha.slice(0, 10))).out.trim()).toBe(sha);
+  });
+
+  test("showRefArgs prints the sha of origin/main", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const sha = repo.commit({ "a.txt": "1\n" }, "base");
+    repo.setOriginMain(sha);
+    expect(run(repo, showRefArgs(ORIGIN_MAIN_REF)).out).toContain(sha);
+  });
+
+  test("revParseQueryArgs prints an absolute git-dir", () => {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    repo.commit({ "a.txt": "1\n" }, "base");
+    expect(
+      run(repo, revParseQueryArgs("git-dir")).out.trim().startsWith("/"),
+    ).toBe(true);
   });
 });
