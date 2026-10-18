@@ -44,6 +44,7 @@ import {
   excerptChangelog,
   hasTruncationMark,
   MAX_SUMMARY_CHARS,
+  OTHER_REPO_UNSUPPORTED_REASON,
   POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
@@ -58,6 +59,8 @@ import {
   evaluateGateGroup,
   type GateInput,
   type GateTargetFacts,
+  type RepoPolicy,
+  resolveRepoPolicy,
 } from "../lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
@@ -202,6 +205,11 @@ export type DependabotPrepareInput = {
   readonly dependabotEnabled: boolean;
   /** `factory_config`の`dependabot_group_enabled`。偽なら、2つ以上のパッケージが変わるPRをゲートが止める。 */
   readonly groupEnabled: boolean;
+  /**
+   * このリポジトリの扱い。`primary`以外は、cloneもインストールもせずに、ゲートの後で人に回す。
+   * `off`は収集が先に止めるので、ここに届くのは設定が収集の後に変わったときだけである。
+   */
+  readonly repoPolicy: RepoPolicy;
   readonly instanceName: string;
 };
 
@@ -716,6 +724,14 @@ export async function runDependabotPrepare(
       : finish("needs_human", dependabotReason("gate", gate.reason));
   }
 
+  // 他のリポジトリのコマンドをworkerで動かさない。clone、インストール、オーナーの照合より前に止める。
+  if (input.repoPolicy !== "primary") {
+    return finish(
+      "needs_human",
+      dependabotReason("prepare", OTHER_REPO_UNSUPPORTED_REASON),
+    );
+  }
+
   // ゲートが評価した対象と、影響調査に渡す事実は、同じ順で同じパッケージを指さなければならない。
   const members: Member[] = [];
   for (const [index, facts] of result.targets.entries()) {
@@ -1038,7 +1054,10 @@ export function collectDepsFor(
     readonly client: GhClient;
     readonly config: Pick<
       FactoryConfig,
-      "dependabot_min_published_days" | "dependabot_group_enabled"
+      | "dependabot_min_published_days"
+      | "dependabot_group_enabled"
+      | "dependabot_other_repos"
+      | "factory_repo"
     >;
     readonly now: () => number;
   },
@@ -1218,6 +1237,7 @@ export async function main(
       workItem,
       dependabotEnabled: config.dependabot_enabled,
       groupEnabled: config.dependabot_group_enabled,
+      repoPolicy: resolveRepoPolicy(config, owner, repo),
       instanceName: config.instance_name,
     },
   );
