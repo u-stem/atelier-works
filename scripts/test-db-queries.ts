@@ -8098,6 +8098,11 @@ check(
 );
 
 // readGhOwnerOpenIssues: 1つの文で、所有者の全リポジトリの行、開いているIssueの行、DBの時刻を読む。
+await ghWWrite("alpha", 21, {
+  prs: [ghWPr(1)],
+  prKeep: [1, 2],
+  issues: [ghWIssue(7)],
+});
 const ghWOwnerIssueSnapshot = await readGhOwnerOpenIssues("Qdbghw", sql);
 check(
   "readGhOwnerOpenIssues: reads every repository row of the owner, only open rows and the database time",
