@@ -115,7 +115,7 @@ locks:
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 4c4547fa3bc52d23f27c3791696c6ce5eae7308e052c935fe58112969ea0249d
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: d99a5ef9a3537aec6739948a0a2fe221cf1bad077f83c0a9cfdd9233eefde402
+  f/factory/lib/protected_paths: 8620b413fde6f53af36b13e94c0816be4992b2281fa72b8dd28ce3a673548a7b
   f/factory/lib/repo_owner_gate: b0323a09556bf59c5cd7459bb8898dfe176381207f7a866e274c88ac9cd652ee
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955

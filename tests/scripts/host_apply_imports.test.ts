@@ -213,6 +213,8 @@ const APPROVAL_MODULES = [
   "approved_io.ts",
   "approved_store.ts",
   "code_origin.ts",
+  "secure_file.ts",
+  "drain_store.ts",
 ].map((name) => join(HOST_APPLY_DIR, name));
 
 const FORBIDDEN_BUILTINS =
@@ -295,6 +297,42 @@ describe("the approval modules", () => {
         forbiddenForms(readFileSync(file, "utf8")).map(
           (form) => `${file}: ${form}`,
         ),
+      ),
+    ).toEqual([]);
+  });
+});
+
+/** ソースに現れる、環境変数の読み取りの形。 */
+function envReads(source: string): string[] {
+  return ["process.env", "Bun.env"].filter((form) => source.includes(form));
+}
+
+describe("the env checker", () => {
+  test.each(["const v = process.env.HOME;", "const v = Bun.env.HOME;"])(
+    "flags %s",
+    (source) => {
+      expect(envReads(source)).not.toEqual([]);
+    },
+  );
+
+  test("accepts a source without env reads", () => {
+    expect(envReads("const uid = process.getuid?.() ?? -1;")).toEqual([]);
+  });
+});
+
+describe("the state store modules", () => {
+  const STORE_MODULES = ["secure_file.ts", "drain_store.ts"].map((name) =>
+    join(HOST_APPLY_DIR, name),
+  );
+
+  test("import only built-ins and scripts/host_apply/", () => {
+    expect(violations(STORE_MODULES)).toEqual([]);
+  });
+
+  test("read no environment variable", () => {
+    expect(
+      STORE_MODULES.flatMap((file) =>
+        envReads(readFileSync(file, "utf8")).map((form) => `${file}: ${form}`),
       ),
     ).toEqual([]);
   });
