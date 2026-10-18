@@ -39,6 +39,7 @@ const EXECUTED_FILES: readonly string[] = [
   "package.json",
   "tsconfig.json",
   "tsconfig.wmill.json",
+  "scripts/tsconfig.json",
 ];
 
 /** 実行するファイルのうち、下の全ファイルを対象にするディレクトリ。 */
@@ -93,8 +94,8 @@ function listWorkTree(root: string): Map<string, boolean> {
 /**
  * 実行しているコードが、`origin/main`に含まれるコミットの内容と一致するかを確かめる。
  * - コードがメインのチェックアウトにあり、カレントディレクトリがリポジトリのトップである。
- * - 実行するファイル(入口、`scripts/host_apply/`の全ファイル、`bunfig.toml`、`package.json`、`tsconfig.json`、`tsconfig.wmill.json`)の内容が`HEAD`と一致する。
- *   後ろの4つは、作業ツリーにも`HEAD`にも無ければ照合しない。
+ * - 実行するファイル(入口、`scripts/host_apply/`の全ファイル、`bunfig.toml`、`package.json`、`tsconfig.json`、`tsconfig.wmill.json`、`scripts/tsconfig.json`)の内容が`HEAD`と一致する。
+ *   後ろの5つは、作業ツリーにも`HEAD`にも無ければ照合しない。
  *   作業ツリーの内容のハッシュを`HEAD`のtreeと照合するので、`skip-worktree`や`.gitignore`では隠せない。
  * - `HEAD`が`origin/main`の先端の祖先(同じを含む)である。
  * 確かめられないときは、通さない側に倒す。

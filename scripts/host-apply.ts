@@ -22,6 +22,7 @@ import { buildChildEnv } from "./host_apply/env.ts";
 import { approveGitEnv } from "./host_apply/git.ts";
 import { buildPlan, parsePlanArgs } from "./host_apply/plan.ts";
 import { createPlanGit, type GitRunner } from "./host_apply/plan_git.ts";
+import { escapeDetail } from "./host_apply/stable.ts";
 
 const USAGE = [
   "usage: host-apply plan --repo <path> --applied <sha> --target <sha> [--approved <sha> | --state-dir <abs path>]",
@@ -134,8 +135,13 @@ function loadApproval(
   return { approved: null };
 }
 
+/**
+ * 失敗の文言を標準エラーに出す形にする。
+ * 例外の文言に制御文字が入っていても、端末を操作されないよう`\uXXXX`で書く。
+ */
 export function formatFailure(error: unknown): string {
-  return "host-apply: unknown error";
+  const reason = error instanceof Error ? error.message : "unknown error";
+  return `host-apply: ${escapeDetail(reason)}`;
 }
 
 async function runPlan(rest: readonly string[]): Promise<number> {
@@ -159,9 +165,7 @@ async function runPlan(rest: readonly string[]): Promise<number> {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {
-    console.error(
-      `host-apply: ${error instanceof Error ? error.message : "unknown error"}`,
-    );
+    console.error(formatFailure(error));
     return 1;
   }
 }
