@@ -209,6 +209,14 @@ export function deriveTarget(files: GateInput["files"]): DeriveResult {
   };
 }
 
+// スタブ。実装のコミットで置き換える。
+export function deriveTargets(
+  _files: GateInput["files"],
+  _allowGroups: boolean,
+): DeriveResult {
+  return humanStop("");
+}
+
 // ---- 事実の収集 ----
 
 /**

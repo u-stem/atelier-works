@@ -896,6 +896,27 @@ export function evaluateGate(input: GateInput): GateResult {
   return checks ?? { ok: true };
 }
 
+// スタブ。実装のコミットで置き換える。
+export const MAX_GROUP_TARGETS = 0;
+
+export type GateCommon = Omit<
+  GateInput,
+  "target" | "registry" | "installScripts" | "publishedAtIso"
+>;
+
+export type GateTargetFacts = Pick<
+  GateInput,
+  "target" | "registry" | "installScripts" | "publishedAtIso"
+>;
+
+export function evaluateGateGroup(
+  _common: GateCommon,
+  _targets: readonly GateTargetFacts[],
+  _allowGroups: boolean,
+): GateResult {
+  return stop("");
+}
+
 // ---- 影響の評価 ----
 
 export type ImpactAssessment = {
