@@ -2,7 +2,7 @@
  * ホストの実行役の入口。サブコマンドは`plan`と`approve`。
  * `plan`は、引数の`--repo`のリポジトリから、gitのオブジェクトを読み取り、判定をJSONで出力する。
  * `approve`は、人が端末で`origin/main`のコミットを承認し、承認の記録を書く。
- * どちらも、作業ツリーの変更とネットワークは使わない。子プロセスは読み取りのgitだけ。
+ * どちらも、作業ツリーの変更と取得(fetch)の経路を持たない。子プロセスは読み取りのgitだけで、実行口を通す。
  * このファイルと`scripts/host_apply/`は、NodeとBunの組み込みと`scripts/host_apply/`の中だけをimportする。
  * 状態ディレクトリの`bin/`へコピーして、リポジトリの外で単独で動かすため。
  */
@@ -18,12 +18,11 @@ import {
 } from "./host_apply/approve.ts";
 import { readApproved, writeApproved } from "./host_apply/approved_io.ts";
 import { checkCodeOrigin } from "./host_apply/code_origin.ts";
-import type { CommandRunner } from "./host_apply/command.ts";
-import { COMMAND_TIMEOUT_MS } from "./host_apply/constants.ts";
-import { buildChildEnv } from "./host_apply/env.ts";
-import { approveGitEnv } from "./host_apply/git.ts";
+import { CommandError, type CommandRunner } from "./host_apply/command.ts";
 import { buildPlan, parsePlanArgs } from "./host_apply/plan.ts";
 import { createPlanGit, type GitRunner } from "./host_apply/plan_git.ts";
+import { gitReadSpec } from "./host_apply/run_git.ts";
+import { createRunner } from "./host_apply/spawn_runner.ts";
 import { escapeDetail } from "./host_apply/stable.ts";
 
 const USAGE = [
@@ -34,85 +33,45 @@ const USAGE = [
 /** ステージングのルートの論理的なパス。パスの内外の判定にだけ使い、実在しなくてよい。 */
 const LOGICAL_ROOT = "/staging";
 
-/** `approve`が使うgitの絶対パス。`PATH`の偽物を拾わないため。 */
-const APPROVE_GIT = "/usr/bin/git";
-
-/** 差分以外のgitの出力の上限(バイト)。超えたら例外にする。 */
-const RUN_OUTPUT_LIMIT = 64 * 1024 * 1024;
-
 /** 承認の記録の既定の置き場。`HOME`の下の、アプリケーションサポートの中。 */
 const DEFAULT_STATE_DIR = "Library/Application Support/atelier-works-host";
 
-type GitSpec = {
-  readonly bin: string;
-  readonly cwd: string;
-  readonly env: Record<string, string>;
-};
-
-type GitOutput = {
-  readonly code: number;
-  readonly stdout: string;
-  /** 標準出力が上限を超え、プロセスを止めたか。 */
-  readonly truncated: boolean;
-};
-
 /**
- * gitを実行する。引数は配列で渡し、シェルを経由しない。
- * 標準出力が`maxBytes`を超えたら、プロセスを止めて`truncated`にする。
- * 時間切れなどで止められたときは、失敗の結果ではなく例外にする。
+ * `git_read`の種類だけを通す実行口にする。
+ * この入口が使うのは読み取りのgitだけなので、取得や`host_probe`の指定が紛れ込んでも起動しない。
  */
-async function spawnGit(
-  spec: GitSpec,
-  args: string[],
-  maxBytes: number,
-): Promise<GitOutput> {
-  const proc = Bun.spawn([spec.bin, ...args], {
-    cwd: spec.cwd,
-    env: spec.env,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    timeout: COMMAND_TIMEOUT_MS.git_read,
-    killSignal: "SIGKILL",
-  });
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let truncated = false;
-  for await (const chunk of proc.stdout) {
-    total += chunk.length;
-    if (total > maxBytes) {
-      truncated = true;
-      proc.kill("SIGKILL");
-      break;
-    }
-    chunks.push(chunk);
-  }
-  const code = await proc.exited;
-  if (!truncated && proc.signalCode !== null) {
-    throw new Error("git command was killed");
-  }
-  return { code, stdout: Buffer.concat(chunks).toString("utf8"), truncated };
+export function readOnlyRunner(runner: CommandRunner): CommandRunner {
+  return async (spec, opts) => {
+    if (spec.kind !== "git_read") throw new CommandError("invalid_spec");
+    return runner(spec, opts);
+  };
 }
 
-/** 読み取りだけのgitを`repo`で実行する。環境は許可リストで作る。 */
-async function runGit(
-  repo: string,
-  args: string[],
-): Promise<{ readonly code: number; readonly stdout: string }> {
-  const { code, stdout } = await spawnGit(
-    {
-      bin: "git",
-      cwd: repo,
-      env: buildChildEnv("git", {
-        path: process.env.PATH ?? "/usr/bin:/bin",
-        home: process.env.HOME ?? "/",
-        values: {},
-      }),
-    },
-    args,
-    Number.POSITIVE_INFINITY,
-  );
-  return { code, stdout };
+/**
+ * 読み取りのgitを`cwd`で実行する関数にする。
+ * 標準出力が上限を超えたときは、終了コードが0でも失敗にする。切れた出力を判定に使わないため。
+ */
+export function createGitRunner(runner: CommandRunner, cwd: string): GitRunner {
+  return async (args) => {
+    const result = await runner(gitReadSpec(args, { cwd }));
+    if (result.kind === "truncated") throw new Error("git output is too large");
+    return { code: result.code, stdout: result.stdout };
+  };
+}
+
+/** 標準出力の上限を指定できる、読み取りのgitの実行。上限を超えたときは`truncated`で返す。 */
+export function createLimitedRunner(
+  runner: CommandRunner,
+  cwd: string,
+): LimitedGitRunner {
+  return async (args, maxBytes) => {
+    const result = await runner(
+      gitReadSpec(args, { cwd, maxStdoutBytes: maxBytes }),
+    );
+    return result.kind === "truncated"
+      ? { truncated: true }
+      : { truncated: false, code: result.code, stdout: result.stdout };
+  };
 }
 
 /**
@@ -146,7 +105,10 @@ export function formatFailure(error: unknown): string {
   return `host-apply: ${escapeDetail(reason)}`;
 }
 
-async function runPlan(rest: readonly string[]): Promise<number> {
+async function runPlan(
+  rest: readonly string[],
+  runner: CommandRunner,
+): Promise<number> {
   const parsed = parsePlanArgs(rest);
   if (!parsed.ok) {
     console.error(`host-apply: ${parsed.error}`);
@@ -155,8 +117,10 @@ async function runPlan(rest: readonly string[]): Promise<number> {
   }
   try {
     const approval = loadApproval(parsed.args.stateDir, parsed.args.approved);
+    // 相対パスのままでは、実行口が絶対パスの作業ディレクトリを要求して失敗する。
+    const repo = resolve(process.cwd(), parsed.args.repo);
     const result = await buildPlan(
-      createPlanGit((args) => runGit(parsed.args.repo, args)),
+      createPlanGit(createGitRunner(runner, repo)),
       {
         applied: parsed.args.applied,
         target: parsed.args.target,
@@ -172,7 +136,10 @@ async function runPlan(rest: readonly string[]): Promise<number> {
   }
 }
 
-async function runApproveCommand(rest: readonly string[]): Promise<number> {
+async function runApproveCommand(
+  rest: readonly string[],
+  runner: CommandRunner,
+): Promise<number> {
   const parsed = parseApproveArgs(rest);
   if (!parsed.ok) {
     console.error(`host-apply: ${parsed.error}`);
@@ -190,16 +157,7 @@ async function runApproveCommand(rest: readonly string[]): Promise<number> {
 
   // スクリプト自身のリポジトリ。差分もここから読む。
   const repoRoot = resolve(import.meta.dir, "..");
-  const spec: GitSpec = {
-    bin: APPROVE_GIT,
-    cwd: repoRoot,
-    env: approveGitEnv(),
-  };
-  const run: GitRunner = async (args) => {
-    const output = await spawnGit(spec, args, RUN_OUTPUT_LIMIT);
-    if (output.truncated) throw new Error("git output is too large");
-    return { code: output.code, stdout: output.stdout };
-  };
+  const run = createGitRunner(runner, repoRoot);
   const lines = createInterface({ input: process.stdin })[
     Symbol.asyncIterator
   ]();
@@ -210,9 +168,7 @@ async function runApproveCommand(rest: readonly string[]): Promise<number> {
       isTerminal: () =>
         process.stdin.isTTY === true && process.stdout.isTTY === true,
       checkOrigin: () => checkCodeOrigin({ run, repoRoot, cwd: process.cwd() }),
-      git: createApproveGit(run, (args, maxBytes) =>
-        spawnGit(spec, args, maxBytes),
-      ),
+      git: createApproveGit(run, createLimitedRunner(runner, repoRoot)),
       readRecord: () => readApproved(stateDir),
       writeRecord: (record) => writeApproved(stateDir, record),
       now: () => new Date(),
@@ -234,38 +190,22 @@ async function runApproveCommand(rest: readonly string[]): Promise<number> {
   }
 }
 
+/** 入口に注入できるもの。テストが偽の実行口を渡す。 */
+export type MainDeps = { readonly runner?: CommandRunner };
+
 /**
  * 実行役の入口。終了コードを返す。
  * 判定が出れば0、実行の失敗(コミットが無い、gitの失敗など)は1、使い方の誤りは2。
  * `approve`の終了コードは、承認しないときが3(`approve.ts`を参照)。
  */
-export type MainDeps = { readonly runner?: CommandRunner };
-
-export function readOnlyRunner(runner: CommandRunner): CommandRunner {
-  return runner;
-}
-
-export function createGitRunner(
-  _runner: CommandRunner,
-  _cwd: string,
-): GitRunner {
-  return async () => ({ code: 0, stdout: "" });
-}
-
-export function createLimitedRunner(
-  _runner: CommandRunner,
-  _cwd: string,
-): LimitedGitRunner {
-  return async () => ({ truncated: false, code: 0, stdout: "" });
-}
-
 export async function main(
   argv: readonly string[],
-  _deps: MainDeps = {},
+  deps: MainDeps = {},
 ): Promise<number> {
   const [command, ...rest] = argv;
-  if (command === "plan") return runPlan(rest);
-  if (command === "approve") return runApproveCommand(rest);
+  const runner = readOnlyRunner(deps.runner ?? createRunner());
+  if (command === "plan") return runPlan(rest, runner);
+  if (command === "approve") return runApproveCommand(rest, runner);
   console.error(USAGE);
   return EXIT_USAGE;
 }
