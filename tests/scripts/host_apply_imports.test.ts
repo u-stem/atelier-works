@@ -913,11 +913,6 @@ function stripComments(source: string): string {
   return scanSource(source).code;
 }
 
-/** コメントを除き、文字列と正規表現の中身も空にする。文字列の外にある字句だけを調べるときに使う。 */
-function codeOutsideStrings(source: string): string {
-  return scanSource(source).bare;
-}
-
 /** テンプレートリテラルの置換の開き。例の中に書くと、リンターが文字列の中の書き損じと誤認するため、分けて書く。 */
 const INTERP = "$" + "{";
 
