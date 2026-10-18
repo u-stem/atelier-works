@@ -3605,6 +3605,7 @@ describe("getPr", () => {
       authorId: null,
       authorType: "User",
       autoMergeEnabled: false,
+      requestedReviewerIds: null,
     });
   });
 
@@ -3900,6 +3901,62 @@ describe("getPr", () => {
     expect(pr.state).toBe("closed");
     expect(pr.merged).toBe(true);
     expect(pr.headRef).toBe("feature-y");
+  });
+});
+
+describe("getPr requested reviewers", () => {
+  function prBody(requestedReviewers: unknown): Record<string, unknown> {
+    return {
+      number: 12,
+      title: "t",
+      body: "b",
+      draft: false,
+      state: "open",
+      merged: false,
+      head: { sha: "abc123", ref: "feature-x", repo: null },
+      base: { ref: "main", repo: { full_name: "acme/widgets" } },
+      mergeable_state: "clean",
+      user: { login: "alice", type: "User" },
+      ...(requestedReviewers === undefined
+        ? {}
+        : { requested_reviewers: requestedReviewers }),
+    };
+  }
+
+  async function read(requestedReviewers: unknown) {
+    const fake = createFakeCommandRunner([ghApiOk(prBody(requestedReviewers))]);
+    return getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 12);
+  }
+
+  test("returns the id of every requested reviewer", async () => {
+    const pr = await read([
+      { login: "bob", id: 2002 },
+      { login: "carol", id: 3003 },
+    ]);
+    expect(pr.requestedReviewerIds).toEqual([2002, 3003]);
+  });
+
+  test("returns an empty list when nobody is requested", async () => {
+    const pr = await read([]);
+    expect(pr.requestedReviewerIds).toEqual([]);
+  });
+
+  test("returns null when the response has no requested_reviewers, without throwing", async () => {
+    const pr = await read(undefined);
+    expect(pr.requestedReviewerIds).toBeNull();
+  });
+
+  test("returns null when a reviewer id is not a positive integer", async () => {
+    const pr = await read([
+      { login: "bob", id: 2002 },
+      { login: "carol", id: 0 },
+    ]);
+    expect(pr.requestedReviewerIds).toBeNull();
+  });
+
+  test("returns null when requested_reviewers is not an array", async () => {
+    const pr = await read({ login: "bob", id: 2002 });
+    expect(pr.requestedReviewerIds).toBeNull();
   });
 });
 

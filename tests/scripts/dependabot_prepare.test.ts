@@ -361,6 +361,7 @@ function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
     state: "open",
     merged: false,
     autoMergeEnabled: false,
+    requestedReviewerIds: [],
     headSha: HEAD,
     headRef: "dependabot/npm_and_yarn/left-pad-1.3.1",
     headRepoFullName: "acme/widgets",

@@ -2480,6 +2480,12 @@ export type PullRequest = {
   readonly authorType: string | null;
   /** PRにauto-mergeが設定されているか。有効なら、条件が揃った時点でGitHubがマージする。 */
   readonly autoMergeEnabled: boolean;
+  /**
+   * レビューを依頼された利用者の数値ID(RESTの`requested_reviewers`)。チームへの依頼は含まない。
+   * 配列でないとき、要素の`id`が正の安全な整数でないときは`null`。
+   * 空の配列は、利用者への依頼が無いことを意味する。
+   */
+  readonly requestedReviewerIds: readonly number[] | null;
 };
 
 type PrPayload = {
@@ -2506,6 +2512,7 @@ type PrPayload = {
   readonly user: unknown;
   readonly auto_merge?: unknown;
   readonly created_at?: unknown;
+  readonly requested_reviewers?: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2534,6 +2541,20 @@ function isPrPayload(value: unknown): value is PrPayload {
   if (typeof head.ref !== "string") return false;
   if (typeof base.ref !== "string") return false;
   return true;
+}
+
+/**
+ * `requested_reviewers`から、依頼された利用者の数値IDを読む。
+ * 配列でないとき、要素の`id`が正の安全な整数でないときは、依頼の有無を決められないので`null`にする。
+ */
+function requestedReviewerIdsOf(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids: number[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || !isPositiveSafeInteger(entry.id)) return null;
+    ids.push(entry.id);
+  }
+  return ids;
 }
 
 /** `getPr`の結果に、PRを作った時刻(epochミリ秒)を添えたもの。読めなければ`createdAtMs`は`null`。 */
@@ -2613,6 +2634,7 @@ async function fetchPr(
     // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
+    requestedReviewerIds: requestedReviewerIdsOf(parsed.requested_reviewers),
   };
   return {
     pr,

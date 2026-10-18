@@ -62,6 +62,7 @@ declare namespace RT {
     gh_source_dependabot: string,
     gh_source_pr_conflict_watch: string,
     gh_source_poll_issues: string,
+    gh_source_poll_prs: string,
     worker_alert_memory_ratio: number,
     check_commands_by_repo: object
   }

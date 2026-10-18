@@ -15,7 +15,7 @@
 // 付け直しも失敗して外れたままになったPRは、`processPrDecisions`が集め、
 // `collectLabelLeftRemoved`が要対応のnoticeに残し、1件のDiscord通知にまとめる。
 // assignで起きるレビューはラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
-// `searchPrs`のラベル検索ではそのPRを見つけられなくなるため、
+// 検索のラベルでも収集の表のラベルでも、そのPRを見つけられなくなるため、
 // `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
@@ -30,6 +30,7 @@ import {
   latestPrWorkItem,
   listActive,
   listTrackedPrs,
+  readGhOwnerOpenPullRequests,
   recordFailure,
   resolveUnresolvedNoticesByMessage,
   setFixRound,
@@ -37,6 +38,10 @@ import {
   setObservedWatermarks,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import {
+  effectiveGhSource,
+  ghDetailStaleAfterMs,
+} from "./lib/gh_collect_read.ts";
 import {
   addLabels,
   type GhClient,
@@ -59,6 +64,7 @@ import {
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { discoverPrs } from "./lib/poll_source.ts";
 import {
   confirmLabeler,
   decidePrActions,
@@ -75,6 +81,8 @@ import {
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
+  type FactoryConfig,
+  type GhSource,
   hasLabel,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
@@ -1140,11 +1148,41 @@ async function recordLabelerCheckLimitSafe(
   }
 }
 
+/**
+ * 設定`gh_source_poll_prs`と収集の設定から、この回の読み取り元を決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 設定を戻し忘れても処理が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
+ */
+export function resolvePrSource(
+  config: Pick<
+    FactoryConfig,
+    "gh_source_poll_prs" | "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  log: Logger,
+): GhSource {
+  const source = effectiveGhSource(config.gh_source_poll_prs, config);
+  if (config.gh_source_poll_prs === "db" && source === "search") {
+    log.warn(
+      "gh_source_poll_prs is db but the collection is not fully enabled, so the round searches",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return source;
+}
+
 export async function main(): Promise<{
   reviewsStarted: number;
   fixesStarted: number;
   skipped: number;
   failed: number;
+  pr_source: GhSource;
+  fallback_searches: number;
+  fallback_reasons: Readonly<Record<string, number>>;
+  table_candidates: number;
+  table_dropped: number;
 }> {
   const log = logger("poll_prs");
   const config = await loadConfig(() =>
@@ -1166,7 +1204,6 @@ export async function main(): Promise<{
   const active = await listActive();
   const byPr = activeItemsByPr(active);
 
-  const rawCandidates: PrSearchItem[] = [];
   const verified = await filterVerifiedOwners(config.owners, {
     getAccountId: (name) => getAccountId(client, name),
     recordFailure: (step, err) => recordFailureSafe(step, err, log),
@@ -1175,26 +1212,39 @@ export async function main(): Promise<{
   failed += verified.failed;
   // 照合を通ったオーナーだけを対象にする。
   const scope = { ...config, owners: verified.owners };
-  for (const owner of verified.owners) {
-    try {
-      const found = await searchPrs(client, {
-        owner: owner.name,
-        ownerKind: owner.kind,
-        viewer: viewer.login,
-        reviewLabel: config.review_label,
-        fixLabel: config.fix_label,
-      });
-      rawCandidates.push(...found);
-    } catch (err) {
-      failed += 1;
-      await recordFailureSafe(`search_prs:${owner.name}`, err, log);
-    }
-  }
+  const source = resolvePrSource(config, log);
+  const discovered = await discoverPrs(
+    {
+      source,
+      owners: verified.owners,
+      scope,
+      viewer,
+      labels: { reviewLabel: config.review_label, fixLabel: config.fix_label },
+      staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
+      log,
+    },
+    {
+      searchPrs: (owner) =>
+        searchPrs(client, {
+          owner: owner.name,
+          ownerKind: owner.kind,
+          viewer: viewer.login,
+          reviewLabel: config.review_label,
+          fixLabel: config.fix_label,
+        }),
+      readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
+      getPr: (owner, repo, number) => getPr(client, owner, repo, number),
+      getIssue: (owner, repo, number) => getIssue(client, owner, repo, number),
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    },
+  );
+  failed += discovered.failed;
+  const rawCandidates: PrSearchItem[] = [...discovered.items];
 
-  // DBから見つけ直す。トリガーラベルを取得時に消費すると、`searchPrs`の
-  // ラベル検索ではそのPRを見つけられない。そこで`listTrackedPrs`が、
+  // DBから見つけ直す。トリガーラベルを取得時に消費すると、検索のラベルでも
+  // 収集の表のラベルでも、そのPRを見つけられない。そこで`listTrackedPrs`が、
   // Factoryが追跡中のPR(pr_review・pr_fix種別、取り消されていない、
-  // `config.tracked_pr_days`以内に更新)を候補に足す。上の検索結果とは
+  // `config.tracked_pr_days`以内に更新)を候補に足す。上の発見の結果とは
   // PRのキーで重複を除き、`getPr`で取り直して開いていないものは落とす。
   // 閉じた・マージされたPRの作業項目の取り消しは`poll_issues.ts`の
   // reconcileが行うので、ここでは扱わない。
@@ -1367,7 +1417,17 @@ export async function main(): Promise<{
   skipped += processed.skipped;
   failed += processed.failed;
 
-  return { reviewsStarted, fixesStarted, skipped, failed };
+  return {
+    reviewsStarted,
+    fixesStarted,
+    skipped,
+    failed,
+    pr_source: source,
+    fallback_searches: discovered.stats.fallback_searches,
+    fallback_reasons: discovered.stats.fallback_reasons,
+    table_candidates: discovered.stats.table_candidates,
+    table_dropped: discovered.stats.table_dropped,
+  };
 }
 
 /**

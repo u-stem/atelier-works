@@ -610,3 +610,35 @@ describe("buildPrCandidate with active pr_fix work items", () => {
     ).toBeNull();
   });
 });
+
+describe("buildPrCandidate for a candidate that came from the table", () => {
+  test("reads the pull request and the issue itself, as for a searched candidate", async () => {
+    const fake = world({ labels: [], events: labelEventsOk([]) });
+    const endpoints: string[] = [];
+    const run = async (argv: readonly string[]): Promise<CommandResult> => {
+      endpoints.push(argv.find((arg) => arg.startsWith("repo")) ?? "");
+      return fake.run(argv);
+    };
+    await buildPrCandidate(
+      { run, ghToken: "tok" },
+      FOUND,
+      "octo-owner",
+      [],
+      LABELS,
+      DEPS,
+    );
+    expect(
+      endpoints.filter(
+        (endpoint) =>
+          endpoint.endsWith("/pulls/7") || endpoint.endsWith("/issues/7"),
+      ),
+    ).toEqual([
+      "repos/octo-owner/atelier-works/pulls/7",
+      "repos/octo-owner/atelier-works/issues/7",
+    ]);
+  });
+
+  test("takes no argument that carries values read beforehand", () => {
+    expect(buildPrCandidate.length).toBe(5);
+  });
+});

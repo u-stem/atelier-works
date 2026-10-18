@@ -84,6 +84,7 @@ function pullRequest(headRepoFullName: string | null): PullRequest {
     authorId: null,
     authorType: null,
     autoMergeEnabled: false,
+    requestedReviewerIds: [],
   };
 }
 

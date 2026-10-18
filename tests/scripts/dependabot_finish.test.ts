@@ -274,6 +274,7 @@ function openPr(overrides: Partial<PullRequest> = {}): PullRequest {
     authorId: null,
     authorType: "Bot",
     autoMergeEnabled: false,
+    requestedReviewerIds: [],
     ...overrides,
   };
 }

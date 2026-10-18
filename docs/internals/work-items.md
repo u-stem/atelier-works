@@ -17,7 +17,7 @@
 
 ### PRの再発見
 
-PRは終端になってもラベルが変わらないので、GitHubの検索では追跡中のPRを見つけられない。そのため`poll_prs`は、DBの作業項目から追跡中のPRを見つけ直す(`listTrackedPrs`)。
+PRは終端になってもラベルが変わらないので、GitHubの検索でも収集の表でも、追跡中のPRを見つけられない。そのため`poll_prs`は、DBの作業項目から追跡中のPRを見つけ直す(`listTrackedPrs`)。
 
 対象は次の条件をすべて満たす作業項目のPRである。見つけたPRは、`owners`(`id`の照合を通ったオーナー)と`repo_allowlist`で絞り、まだopenであることを`getPr`で確かめてから候補にする。
 
