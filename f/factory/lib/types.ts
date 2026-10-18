@@ -1121,6 +1121,21 @@ export type GhRepoOpenPrSnapshot = {
   readonly prs: readonly GhPullRequest[];
 };
 
+/** 所有者の単位で読んだ`gh_repos`の行。`repo`は小文字のリポジトリ名。 */
+export type GhOwnerRepoFreshnessRow = GhRepoFreshnessRow & {
+  readonly repo: string;
+};
+
+/**
+ * 1人の所有者の`gh_repos`の全行、開いているPRの全行、DBの`now()`を、1つの文で読んだ結果。
+ * 所有者の行が無ければ、`repos`と`prs`は空になる。
+ */
+export type GhOwnerOpenPrSnapshot = {
+  readonly db_now: Date;
+  readonly repos: readonly GhOwnerRepoFreshnessRow[];
+  readonly prs: readonly GhPullRequest[];
+};
+
 /** Issueの詳細として書く値。 */
 export type GhIssueWrite = {
   readonly number: number;
@@ -1470,7 +1485,7 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
 export type ReviewPostMode = "comment_only" | "gated";
 
 /**
- * `gh_source_dependabot`の値。`poll_dependabot`が候補のPRを列挙する元で、
+ * `gh_source_dependabot`と`gh_source_pr_conflict_watch`の値。下流のscriptが候補のPRを列挙する元で、
  * `search`は検索API、`db`は収集が書いた表を指す。
  */
 export type GhSource = "search" | "db";
@@ -1706,6 +1721,11 @@ export type FactoryConfig = {
    * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、収集の記録が進まないので周回全体が検索になる。
    */
   gh_source_dependabot: GhSource;
+  /**
+   * `watch_pr_conflicts`がリポジトリの発見とPRの列挙を行う元。既定は`search`。
+   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索とREST一覧になる。
+   */
+  gh_source_pr_conflict_watch: GhSource;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。

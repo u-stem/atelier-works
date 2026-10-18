@@ -6,6 +6,7 @@ import type {
   PrConflictSettledState,
 } from "../../f/factory/lib/db.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
+import { effectiveGhSource } from "../../f/factory/lib/gh_collect_read.ts";
 import {
   GitHubHttpError,
   GitHubPaginationLimitError,
@@ -23,12 +24,21 @@ import {
 import {
   CONFLICT_ROW_LIMIT,
   configuredRepos,
+  isFactoryConflictRow,
+  isFactoryPullRequest,
   PR_CONFLICT_WATCH_IDLE_RESULT,
   type PrConflictWatchDeps,
   runPrConflictWatch,
   runPrConflictWatchIfEnabled,
 } from "../../f/factory/lib/pr_conflict_watch.ts";
-import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
+import type {
+  FactoryOwner,
+  GhOwnerOpenPrSnapshot,
+  GhOwnerRepoFreshnessRow,
+  GhPullRequest,
+  GhSource,
+  NoticeRecord,
+} from "../../f/factory/lib/types.ts";
 
 const HEAD = "a".repeat(40);
 const NEW_HEAD = "d".repeat(40);
@@ -97,9 +107,88 @@ function check(overrides: Partial<PrConflictCheck> = {}): PrConflictCheck {
   };
 }
 
+const STALE_AFTER_MS = 15 * 60_000;
+const REPO_ID = 4242;
+const ACME: FactoryOwner = { name: "acme", kind: "org" };
+const BETA: FactoryOwner = { name: "beta", kind: "org" };
+
+/** 表の行。既定は、PATのアカウントが作った、Factoryのブランチの、開いたPR。 */
+function row(overrides: Partial<GhPullRequest> = {}): GhPullRequest {
+  return {
+    id: 1,
+    owner: "acme",
+    repo: "widgets",
+    repo_id: REPO_ID,
+    number: 12,
+    state: "open",
+    head_sha: HEAD,
+    head_ref: BRANCH,
+    base_ref: "main",
+    is_draft: false,
+    is_cross_repository: false,
+    auto_merge_enabled: false,
+    author_login: "factory-bot",
+    author_type: "User",
+    author_id: 5,
+    mergeable: null,
+    has_review_label: null,
+    has_fix_label: null,
+    review_requested_user_ids: null,
+    assignee_ids: null,
+    team_review_requested: null,
+    created_at: NOW,
+    updated_at: NOW,
+    written_at: NOW,
+    usable: true,
+    ...overrides,
+  };
+}
+
+/** `gh_repos`の行。既定は、直前に取り終えた、許可されたリポジトリ。 */
+function repoRow(
+  repo: string,
+  overrides: Partial<GhOwnerRepoFreshnessRow> = {},
+): GhOwnerRepoFreshnessRow {
+  return {
+    repo,
+    repo_id: REPO_ID,
+    allowed: true,
+    archived: false,
+    gone: false,
+    last_collected_at: new Date(NOW.getTime() - 5 * 60_000),
+    truncated: false,
+    detail_failed: false,
+    ...overrides,
+  };
+}
+
+function snapshotOf(
+  repos: readonly GhOwnerRepoFreshnessRow[],
+  prs: readonly GhPullRequest[] = [],
+): GhOwnerOpenPrSnapshot {
+  return { db_now: NOW, repos, prs };
+}
+
+/** 閾値を超えて古いリポジトリの行。 */
+function oldRepoRow(repo: string): GhOwnerRepoFreshnessRow {
+  return repoRow(repo, {
+    last_collected_at: new Date(NOW.getTime() - STALE_AFTER_MS - 1),
+  });
+}
+
+/** 表を読む周回の設定。リポジトリは表からだけ見つける。 */
+const DB_ONLY: Setup = {
+  source: "db",
+  repos: [],
+  searchOwners: [ACME],
+};
+
 type Harness = {
   readonly deps: PrConflictWatchDeps;
   readonly listed: string[];
+  /** 所有者の読み取りを呼んだ所有者の名前。 */
+  readonly ownerReads: string[];
+  readonly warned: { message: string; fields: unknown }[];
   readonly searched: string[];
   readonly reads: string[];
   readonly records: PrConflictObservation[];
@@ -126,6 +215,11 @@ type Setup = {
   readonly failViewer?: boolean;
   /** PATのアカウントの読み取りが投げる例外。 */
   readonly viewerError?: Error;
+  /** 実効の読み取り元。既定は`search`。 */
+  readonly source?: GhSource;
+  readonly staleAfterMs?: number;
+  /** 所有者ごとの表の読み取り。キーは所有者の名前。無ければ、行の無い所有者を返す。 */
+  readonly snapshots?: Record<string, GhOwnerOpenPrSnapshot | Error>;
   /** 開いているPRを検索するオーナー(照合を通ったもの)。 */
   readonly searchOwners?: FactoryOwner[];
   /** オーナーごとの検索の結果。キーはオーナー名。 */
@@ -156,6 +250,8 @@ type Setup = {
 
 function setup(options: Setup = {}): Harness {
   const listed: string[] = [];
+  const ownerReads: string[] = [];
+  const warned: { message: string; fields: unknown }[] = [];
   const searched: string[] = [];
   const reads: string[] = [];
   const records: PrConflictObservation[] = [];
@@ -177,8 +273,9 @@ function setup(options: Setup = {}): Harness {
     info(message, fields) {
       infos.push({ message, fields });
     },
-    warn(message) {
+    warn(message, fields) {
       warnings.push(message);
+      warned.push({ message, fields });
     },
     error() {},
   };
@@ -192,6 +289,15 @@ function setup(options: Setup = {}): Harness {
       if (options.viewerError) throw options.viewerError;
       if (options.failViewer) throw new Error("viewer down");
       return options.viewer ?? VIEWER;
+    },
+    source: options.source ?? "search",
+    staleAfterMs: options.staleAfterMs ?? STALE_AFTER_MS,
+    readOwnerPrs: async (owner) => {
+      ownerReads.push(owner);
+      const found = options.snapshots?.[owner];
+      if (found === undefined) return snapshotOf([]);
+      if (found instanceof Error) throw found;
+      return found;
     },
     searchOwners: options.searchOwners ?? [],
     searchOpenRepos: async (owner, author) => {
@@ -285,6 +391,8 @@ function setup(options: Setup = {}): Harness {
   return {
     deps,
     listed,
+    ownerReads,
+    warned,
     searched,
     reads,
     records,
@@ -868,9 +976,21 @@ describe("runPrConflictWatch: the count of repositories by source", () => {
       work_items: 1,
       conflict_rows: 2,
       explicit: 1,
+      table: 0,
       searched: 1,
       total: 5,
     });
+  });
+
+  test("logs how many repositories the table gave", async () => {
+    const h = setup({
+      source: "db",
+      repos: [],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      snapshots: { acme: snapshotOf([repoRow("widgets")], [row()]) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(collected(h)?.fields).toMatchObject({ table: 1, searched: 0 });
   });
 
   test("counts a repository once in the total when two sources name it", async () => {
@@ -1900,5 +2020,902 @@ describe("runPrConflictWatchIfEnabled", () => {
 describe("CONFLICT_ROW_LIMIT", () => {
   test("is a positive number of rows", () => {
     expect(CONFLICT_ROW_LIMIT).toBeGreaterThan(0);
+  });
+});
+
+describe("isFactoryConflictRow", () => {
+  test("accepts a row of a Factory branch made by the account", () => {
+    expect(isFactoryConflictRow(row(), VIEWER)).toBe(true);
+  });
+
+  test("rejects a draft row", () => {
+    expect(isFactoryConflictRow(row({ is_draft: true }), VIEWER)).toBe(false);
+  });
+
+  test("rejects a row of a pull request from a fork", () => {
+    expect(
+      isFactoryConflictRow(row({ is_cross_repository: true }), VIEWER),
+    ).toBe(false);
+  });
+
+  test("rejects a row without a head ref", () => {
+    expect(isFactoryConflictRow(row({ head_ref: null }), VIEWER)).toBe(false);
+  });
+
+  test("rejects a row whose branch is not in the Factory form", () => {
+    expect(
+      isFactoryConflictRow(row({ head_ref: "feature/login" }), VIEWER),
+    ).toBe(false);
+  });
+
+  test("rejects a row made by another author", () => {
+    expect(
+      isFactoryConflictRow(
+        row({ author_login: "someone", author_id: 9 }),
+        VIEWER,
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a row whose author id differs from the account", () => {
+    expect(isFactoryConflictRow(row({ author_id: 9 }), VIEWER)).toBe(false);
+  });
+
+  test("accepts a row without an author, to be confirmed by the REST read", () => {
+    expect(
+      isFactoryConflictRow(
+        row({ author_login: null, author_type: null, author_id: null }),
+        VIEWER,
+      ),
+    ).toBe(true);
+  });
+
+  test("compares the author login ignoring case", () => {
+    expect(
+      isFactoryConflictRow(row({ author_login: "Factory-Bot" }), VIEWER),
+    ).toBe(true);
+  });
+});
+
+describe("isFactoryPullRequest", () => {
+  test("accepts a Factory pull request made by the account", () => {
+    expect(isFactoryPullRequest(pr(), VIEWER)).toBe(true);
+  });
+
+  test("accepts an author id that is unknown when the login matches", () => {
+    expect(isFactoryPullRequest(pr({ authorId: null }), VIEWER)).toBe(true);
+  });
+
+  test("rejects another author", () => {
+    expect(isFactoryPullRequest(pr({ authorLogin: "someone" }), VIEWER)).toBe(
+      false,
+    );
+  });
+
+  test("rejects an author id that differs even when the login matches", () => {
+    expect(isFactoryPullRequest(pr({ authorId: 9 }), VIEWER)).toBe(false);
+  });
+
+  test("rejects a pull request whose head repository was deleted", () => {
+    expect(isFactoryPullRequest(pr({ headRepoFullName: null }), VIEWER)).toBe(
+      false,
+    );
+  });
+
+  test("rejects a pull request from a fork", () => {
+    expect(
+      isFactoryPullRequest(pr({ headRepoFullName: "someone/widgets" }), VIEWER),
+    ).toBe(false);
+  });
+
+  test("rejects a branch that is not in the Factory form", () => {
+    expect(isFactoryPullRequest(pr({ headRef: "feature/login" }), VIEWER)).toBe(
+      false,
+    );
+  });
+
+  test("does not look at the draft flag", () => {
+    expect(isFactoryPullRequest(pr({ draft: true }), VIEWER)).toBe(true);
+  });
+});
+
+describe("runPrConflictWatch: the pull request is confirmed by the REST read", () => {
+  const FRESH = snapshotOf([repoRow("widgets")], [row()]);
+  const table = (prs: Record<string, PullRequest>): Setup => ({
+    ...DB_ONLY,
+    repos: [REPO],
+    snapshots: { acme: FRESH },
+    prs,
+  });
+
+  test("does not record a pull request whose author differs from the table", async () => {
+    const h = setup(
+      table({ "acme/widgets#12": pr({ authorLogin: "someone" }) }),
+    );
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toEqual([]);
+  });
+
+  test("does not record a pull request that is from a fork", async () => {
+    const h = setup(
+      table({ "acme/widgets#12": pr({ headRepoFullName: "someone/widgets" }) }),
+    );
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toEqual([]);
+  });
+
+  test("does not record a branch that is not in the Factory form", async () => {
+    const h = setup(
+      table({ "acme/widgets#12": pr({ headRef: "feature/login" }) }),
+    );
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toEqual([]);
+  });
+
+  test("does not record a pull request whose author id differs from the account", async () => {
+    const h = setup(table({ "acme/widgets#12": pr({ authorId: 9 }) }));
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toEqual([]);
+  });
+
+  test("does not record a pull request whose head repository was deleted", async () => {
+    const h = setup(
+      table({ "acme/widgets#12": pr({ headRepoFullName: null }) }),
+    );
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toEqual([]);
+  });
+
+  test("records a pull request whose author id is unknown when the login matches", async () => {
+    const h = setup(table({ "acme/widgets#12": pr({ authorId: null }) }));
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toHaveLength(1);
+  });
+
+  test("warns about the skipped pull request", async () => {
+    const h = setup(
+      table({ "acme/widgets#12": pr({ authorLogin: "someone" }) }),
+    );
+    await runPrConflictWatch(h.deps);
+    expect(h.warned).toEqual([
+      {
+        message: "pr conflict skipped an unusual pull request",
+        fields: { pr: "acme/widgets#12", reason: "not_factory" },
+      },
+    ]);
+  });
+
+  test("does not count the skipped pull request as tracked", async () => {
+    const h = setup(
+      table({ "acme/widgets#12": pr({ authorLogin: "someone" }) }),
+    );
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.tracked).toBe(0);
+  });
+
+  test("reads a skipped pull request again when it has a conflict row", async () => {
+    const h = setup({
+      ...table({ "acme/widgets#12": pr({ authorLogin: "someone" }) }),
+      rows: [check()],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12", "acme/widgets#12"]);
+  });
+
+  test("applies the confirmation to the search path too", async () => {
+    const h = setup({
+      prs: { "acme/widgets#12": pr({ authorLogin: "someone" }) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.records).toEqual([]);
+  });
+});
+
+describe("runPrConflictWatch: discovery from the table", () => {
+  const FRESH = snapshotOf([repoRow("widgets")], [row()]);
+
+  test("does not search an owner whose records are fresh", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual([]);
+  });
+
+  test("reads the pull request of a repository found in the table", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12"]);
+  });
+
+  test("searches an owner whose records are too old", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot"]);
+  });
+
+  test("searches only the owners that are not fresh", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: FRESH,
+        beta: snapshotOf([oldRepoRow("gadgets")]),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["beta:factory-bot"]);
+  });
+
+  test("records a failed owner read", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: new Error("db down") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["read_gh_owner_prs:acme"]);
+  });
+
+  test("searches an owner whose read failed", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: new Error("db down") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot"]);
+  });
+
+  test("does not record the lack of freshness as a failure", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")]) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual([]);
+  });
+
+  test("reports the searches and the reasons of the fallback", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: snapshotOf([oldRepoRow("widgets")]),
+        beta: new Error("db down"),
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect({
+      searches: result.fallback_searches,
+      reasons: result.fallback_reasons,
+    }).toEqual({ searches: 2, reasons: { too_old: 1, read_failed: 1 } });
+  });
+
+  test("stops searching the remaining owners when a fallback search hits the rate limit", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: snapshotOf([oldRepoRow("widgets")]),
+        beta: snapshotOf([oldRepoRow("gadgets")]),
+      },
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot"]);
+  });
+
+  test("keeps reading the table of the remaining owners after a fallback search hits the rate limit", async () => {
+    const betaPr = pr({
+      headRepoFullName: "beta/gadgets",
+      baseRepoFullName: "beta/gadgets",
+    });
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: snapshotOf([oldRepoRow("widgets")]),
+        beta: snapshotOf(
+          [repoRow("gadgets")],
+          [row({ owner: "beta", repo: "gadgets" })],
+        ),
+      },
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+      prs: { "beta/gadgets#12": betaPr },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["beta/gadgets#12"]);
+  });
+
+  test("does not search a remaining owner that is not fresh after the rate limit", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: snapshotOf([oldRepoRow("widgets")]),
+        beta: snapshotOf([oldRepoRow("gadgets")]),
+      },
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect({
+      searches: result.fallback_searches,
+      reasons: result.fallback_reasons,
+    }).toEqual({
+      searches: 1,
+      reasons: { too_old: 1, search_rate_limited: 1 },
+    });
+  });
+
+  test("merges a repository of the table with the same repository of the work items, ignoring case", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [{ owner: "Acme", repo: "Widgets" }],
+      snapshots: { acme: FRESH },
+      prs: { "Acme/Widgets#12": pr() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["Acme/Widgets#12"]);
+  });
+
+  test("applies the repository gate to a repository found in the table", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: FRESH },
+      allowed: () => false,
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("judges the freshness with the threshold of the deps", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      staleAfterMs: 4 * 60_000,
+      snapshots: { acme: FRESH },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot"]);
+  });
+
+  test("lists a repository of an owner whose rows fail the check with the REST list", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: new Error("db: row field is invalid") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+});
+
+describe("runPrConflictWatch: listing from the table", () => {
+  const FRESH = snapshotOf([repoRow("widgets")], [row()]);
+
+  test("lists a fresh repository without the REST list", async () => {
+    const h = setup({ ...DB_ONLY, repos: [REPO], snapshots: { acme: FRESH } });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("reads the pull requests of a fresh repository that the table lists", async () => {
+    const h = setup({ ...DB_ONLY, repos: [REPO], snapshots: { acme: FRESH } });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12"]);
+  });
+
+  test("lists a repository that is not fresh with the REST list", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists a repository of an owner that is not searched with the REST list", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [{ owner: "other", repo: "widgets" }],
+      snapshots: { acme: FRESH },
+      openPrs: { "other/widgets": [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["other/widgets"]);
+  });
+
+  test("lists a repository without a gh_repos row with the REST list", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists an archived repository with the REST list", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: {
+        acme: snapshotOf([repoRow("widgets", { archived: true })], [row()]),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists a fresh repository from the table even when another repository sent the owner to the search", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: {
+        acme: snapshotOf([repoRow("widgets"), oldRepoRow("gadgets")], [row()]),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("counts the repositories listed from the table", async () => {
+    const h = setup({ ...DB_ONLY, repos: [REPO], snapshots: { acme: FRESH } });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.table_repos).toBe(1);
+  });
+
+  test("does not read the table when the source is search", async () => {
+    const h = setup({
+      source: "search",
+      searchOwners: [ACME],
+      snapshots: { acme: FRESH },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.ownerReads).toEqual([]);
+  });
+
+  test("reports search as the source when the collection is off", async () => {
+    const source = effectiveGhSource("db", {
+      gh_collect_enabled: false,
+      gh_collect_detail_enabled: true,
+    });
+    const h = setup({
+      source,
+      searchOwners: [ACME],
+      snapshots: { acme: FRESH },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.source).toBe("search");
+  });
+
+  test("reports db as the source of a round that read the table", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.source).toBe("db");
+  });
+
+  test("looks the snapshot up by lower-cased names when the factory repository has capitals", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [{ owner: "Acme", repo: "Widgets" }],
+      snapshots: { acme: FRESH },
+      prs: { "Acme/Widgets#12": pr() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("keeps the idle result unchanged after a round that fell back", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")]) },
+    });
+    await runPrConflictWatch(h.deps);
+    const idle = await runPrConflictWatchIfEnabled(
+      false,
+      h.deps.log,
+      async () => PR_CONFLICT_WATCH_IDLE_RESULT,
+    );
+    expect(idle.fallback_reasons).toEqual({});
+  });
+
+  test("freezes the reasons of the idle result", () => {
+    expect(
+      Object.isFrozen(PR_CONFLICT_WATCH_IDLE_RESULT.fallback_reasons),
+    ).toBe(true);
+  });
+});
+
+/** 検索の経路と表の経路に同じPRの集合を与えるための入力。 */
+type WorldPr = {
+  readonly number: number;
+  readonly draft?: boolean;
+  readonly headRef?: string;
+  readonly fork?: boolean;
+  /** RESTが返す作者。 */
+  readonly author?: string;
+  /** 表が持つ作者。`null`は作者の分からない行。 */
+  readonly tableAuthor?: string | null;
+  readonly mergeable?: boolean | null;
+  readonly mergeableState?: string;
+};
+
+type World = {
+  /** リポジトリごとのPR。キーは`owner/repo`。 */
+  readonly repos: Record<string, readonly WorldPr[]>;
+  /** 競合の記録の行。 */
+  readonly rows?: PrConflictCheck[];
+  /** 表が持たないPRの番号。 */
+  readonly missingFromTable?: readonly number[];
+  /** 表が古いリポジトリ。 */
+  readonly oldRepos?: readonly string[];
+  readonly archivedRepos?: readonly string[];
+  readonly explicit?: readonly { owner: string; repo: string }[];
+  readonly detailFailed?: readonly string[];
+};
+
+function authorId(login: string): number {
+  return login === "factory-bot" ? 5 : 9;
+}
+
+function worldPr(owner: string, repo: string, item: WorldPr): PullRequest {
+  const full = `${owner}/${repo}`;
+  const author = item.author ?? "factory-bot";
+  return pr({
+    number: item.number,
+    draft: item.draft ?? false,
+    headRef: item.headRef ?? BRANCH,
+    headRepoFullName: item.fork ? `fork/${repo}` : full,
+    baseRepoFullName: full,
+    authorLogin: author,
+    authorId: authorId(author),
+    mergeable: item.mergeable === undefined ? false : item.mergeable,
+    mergeableState: item.mergeableState ?? "dirty",
+  });
+}
+
+function worldOpen(
+  owner: string,
+  repo: string,
+  item: WorldPr,
+): OpenPullRequest {
+  const full = `${owner}/${repo}`;
+  const author = item.author ?? "factory-bot";
+  return open({
+    number: item.number,
+    draft: item.draft ?? false,
+    headRef: item.headRef ?? BRANCH,
+    headRepoFullName: item.fork ? `fork/${repo}` : full,
+    baseRepoFullName: full,
+    authorLogin: author,
+    authorId: authorId(author),
+  });
+}
+
+function worldRow(owner: string, repo: string, item: WorldPr): GhPullRequest {
+  const author =
+    item.tableAuthor === undefined
+      ? (item.author ?? "factory-bot")
+      : item.tableAuthor;
+  return row({
+    owner,
+    repo,
+    number: item.number,
+    is_draft: item.draft ?? false,
+    head_ref: item.headRef ?? BRANCH,
+    is_cross_repository: item.fork ?? false,
+    author_login: author,
+    author_type: author === null ? null : "User",
+    author_id: author === null ? null : authorId(author),
+  });
+}
+
+function splitRepo(full: string): { owner: string; repo: string } {
+  const [owner = "", repo = ""] = full.split("/");
+  return { owner, repo };
+}
+
+function worldSetup(world: World, source: GhSource): Harness {
+  const prs: Record<string, PullRequest> = {};
+  const openPrs: Record<string, OpenPullRequest[]> = {};
+  const rowsByOwner = new Map<string, GhPullRequest[]>();
+  const reposByOwner = new Map<string, GhOwnerRepoFreshnessRow[]>();
+  const searchRepos: Record<string, { owner: string; repo: string }[]> = {};
+  for (const [full, items] of Object.entries(world.repos)) {
+    const { owner, repo } = splitRepo(full);
+    openPrs[full] = items.map((item) => worldOpen(owner, repo, item));
+    searchRepos[owner] = [...(searchRepos[owner] ?? []), { owner, repo }];
+    const rows = rowsByOwner.get(owner) ?? [];
+    for (const item of items) {
+      prs[`${full}#${String(item.number)}`] = worldPr(owner, repo, item);
+      if (!world.missingFromTable?.includes(item.number)) {
+        rows.push(worldRow(owner, repo, item));
+      }
+    }
+    rowsByOwner.set(owner, rows);
+    const record = world.oldRepos?.includes(full)
+      ? oldRepoRow(repo)
+      : repoRow(repo, {
+          archived: world.archivedRepos?.includes(full) ?? false,
+          detail_failed: world.detailFailed?.includes(full) ?? false,
+        });
+    reposByOwner.set(owner, [...(reposByOwner.get(owner) ?? []), record]);
+  }
+  const snapshots: Record<string, GhOwnerOpenPrSnapshot> = {};
+  for (const [owner, repos] of reposByOwner) {
+    snapshots[owner] = snapshotOf(repos, rowsByOwner.get(owner) ?? []);
+  }
+  return setup({
+    source,
+    repos: [],
+    searchOwners: Object.keys(snapshots).map((name) => ({
+      name,
+      kind: "org" as const,
+    })),
+    searchRepos,
+    openPrs,
+    prs,
+    snapshots,
+    ...(world.rows === undefined ? {} : { rows: world.rows }),
+    ...(world.explicit === undefined
+      ? {}
+      : { explicitRepos: [...world.explicit] }),
+  });
+}
+
+async function runBoth(world: World) {
+  const search = worldSetup(world, "search");
+  const db = worldSetup(world, "db");
+  const searchResult = await runPrConflictWatch(search.deps);
+  const dbResult = await runPrConflictWatch(db.deps);
+  return { search, db, searchResult, dbResult };
+}
+
+const sorted = (list: readonly string[]) => [...list].sort();
+
+describe("runPrConflictWatch: the search path and the table path agree", () => {
+  test("reads the same pull requests of a set of Factory pull requests", async () => {
+    const { search, db } = await runBoth({
+      repos: { "acme/widgets": [{ number: 12 }, { number: 13 }] },
+    });
+    expect(sorted(db.reads)).toEqual(sorted(search.reads));
+  });
+
+  test("reads the same pull requests when forks, drafts, other authors and other branches are mixed in", async () => {
+    const { search, db } = await runBoth({
+      repos: {
+        "acme/widgets": [
+          { number: 12 },
+          { number: 13, fork: true },
+          { number: 14, draft: true },
+          { number: 15, author: "someone" },
+          { number: 16, headRef: "feature/login" },
+        ],
+      },
+    });
+    expect(sorted(db.reads)).toEqual(sorted(search.reads));
+  });
+
+  test("reads every pull request the search path reads when a row has no author", async () => {
+    const { search, db } = await runBoth({
+      repos: {
+        "acme/widgets": [
+          { number: 12, tableAuthor: null },
+          { number: 15, author: "someone", tableAuthor: null },
+        ],
+      },
+    });
+    expect(search.reads.every((key) => db.reads.includes(key))).toBe(true);
+  });
+
+  test("records the same pull requests when a row has no author", async () => {
+    const { search, db } = await runBoth({
+      repos: {
+        "acme/widgets": [
+          { number: 12, tableAuthor: null },
+          { number: 15, author: "someone", tableAuthor: null },
+        ],
+      },
+    });
+    expect(db.records).toEqual(search.records);
+  });
+
+  test("records, notifies and resolves the same for conflicted and resolved pull requests", async () => {
+    const { search, db } = await runBoth({
+      repos: {
+        "acme/widgets": [
+          { number: 12 },
+          { number: 13, mergeable: true, mergeableState: "clean" },
+        ],
+      },
+      rows: [check({ id: 8, pr_number: 13 })],
+    });
+    expect({
+      records: db.records,
+      notices: db.notices,
+      resolved: db.resolved,
+      events: db.events,
+      settled: db.settled,
+    }).toEqual({
+      records: search.records,
+      notices: search.notices,
+      resolved: search.resolved,
+      events: search.events,
+      settled: search.settled,
+    });
+  });
+
+  test("lists an archived explicit repository with the REST list in the table round too", async () => {
+    const { search, db } = await runBoth({
+      repos: { "acme/archived": [{ number: 12 }] },
+      explicit: [{ owner: "acme", repo: "archived" }],
+      archivedRepos: ["acme/archived"],
+    });
+    expect({ listed: db.listed, reads: db.reads }).toEqual({
+      listed: search.listed,
+      reads: search.reads,
+    });
+  });
+
+  test("tracks and conflicts the same over several owners and repositories", async () => {
+    const { searchResult, dbResult } = await runBoth({
+      repos: {
+        "acme/widgets": [{ number: 12 }],
+        "acme/gadgets": [{ number: 12 }, { number: 13 }],
+        "beta/tools": [{ number: 12 }],
+      },
+    });
+    expect({
+      tracked: dbResult.tracked,
+      conflicted: dbResult.conflicted,
+    }).toEqual({
+      tracked: searchResult.tracked,
+      conflicted: searchResult.conflicted,
+    });
+  });
+
+  test("does not find a repository without a gh_repos row in the table round when the allowlist is empty", async () => {
+    const options: Setup = {
+      repos: [],
+      searchOwners: [ACME],
+      searchRepos: { acme: [REPO] },
+    };
+    const search = setup({ ...options, source: "search" });
+    const db = setup({
+      ...options,
+      source: "db",
+      snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
+    });
+    await runPrConflictWatch(search.deps);
+    await runPrConflictWatch(db.deps);
+    expect({ search: search.reads, db: db.reads }).toEqual({
+      search: ["acme/widgets#12"],
+      db: [],
+    });
+  });
+
+  test("lists the same repository with the REST list when the allowlist names it", async () => {
+    const options: Setup = {
+      repos: [],
+      searchOwners: [ACME],
+      explicitRepos: [REPO],
+      searchRepos: { acme: [REPO] },
+    };
+    const search = setup({ ...options, source: "search" });
+    const db = setup({
+      ...options,
+      source: "db",
+      snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
+    });
+    await runPrConflictWatch(search.deps);
+    await runPrConflictWatch(db.deps);
+    expect(db.reads).toEqual(search.reads);
+  });
+
+  test("does not read a new pull request that the table does not hold yet", async () => {
+    const { search, db } = await runBoth({
+      repos: { "acme/widgets": [{ number: 12 }, { number: 13 }] },
+      missingFromTable: [13],
+    });
+    expect({ search: sorted(search.reads), db: sorted(db.reads) }).toEqual({
+      search: ["acme/widgets#12", "acme/widgets#13"],
+      db: ["acme/widgets#12"],
+    });
+  });
+
+  test("reads from the table a repository whose last detail failed but is inside the threshold", async () => {
+    const { search, db } = await runBoth({
+      repos: { "acme/widgets": [{ number: 12 }] },
+      detailFailed: ["acme/widgets"],
+    });
+    expect({ listed: db.listed, reads: sorted(db.reads) }).toEqual({
+      listed: [],
+      reads: sorted(search.reads),
+    });
+  });
+});
+
+describe("runPrConflictWatch: the watch does not stop when the table cannot be used", () => {
+  const WORLD: World = {
+    repos: {
+      "acme/widgets": [{ number: 12 }],
+      "beta/tools": [{ number: 12 }],
+    },
+  };
+
+  test("tracks the same pull requests when every owner is too old", async () => {
+    const { searchResult, dbResult } = await runBoth({
+      ...WORLD,
+      oldRepos: ["acme/widgets", "beta/tools"],
+    });
+    expect(dbResult.tracked).toBe(searchResult.tracked);
+  });
+
+  test("tracks the same pull requests when every owner read fails", async () => {
+    const search = worldSetup(WORLD, "search");
+    const failing = worldSetup(WORLD, "db");
+    const db: Harness = {
+      ...failing,
+      deps: {
+        ...failing.deps,
+        readOwnerPrs: async () => {
+          throw new Error("db down");
+        },
+      },
+    };
+    const searchResult = await runPrConflictWatch(search.deps);
+    const dbResult = await runPrConflictWatch(db.deps);
+    expect(dbResult.tracked).toBe(searchResult.tracked);
+  });
+
+  test("tracks the same pull requests when the collection is off although the setting is db", async () => {
+    const search = worldSetup(WORLD, "search");
+    const off = worldSetup(
+      WORLD,
+      effectiveGhSource("db", {
+        gh_collect_enabled: false,
+        gh_collect_detail_enabled: false,
+      }),
+    );
+    const searchResult = await runPrConflictWatch(search.deps);
+    const offResult = await runPrConflictWatch(off.deps);
+    expect(offResult.tracked).toBe(searchResult.tracked);
+  });
+
+  test("settles the row of a pull request that the table does not hold when its conflict is resolved", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: snapshotOf([repoRow("widgets")]) },
+      rows: [check()],
+      prs: {
+        "acme/widgets#12": pr({ mergeable: true, mergeableState: "clean" }),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.settled).toEqual([{ id: 7, to: "resolved" }]);
+  });
+
+  test("resolves the notices of that pull request", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: snapshotOf([repoRow("widgets")]) },
+      rows: [check()],
+      prs: {
+        "acme/widgets#12": pr({ mergeable: true, mergeableState: "clean" }),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect([...new Set(h.resolved.map((item) => item.prefix))]).toEqual([
+      PREFIX,
+    ]);
   });
 });

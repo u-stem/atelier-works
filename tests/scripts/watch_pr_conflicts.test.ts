@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { GhClient } from "../../f/factory/lib/github.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   buildConflictFixDeps,
   buildConflictRecoveryDeps,
+  resolveConflictSource,
 } from "../../f/factory/watch_pr_conflicts.ts";
 
 // watch_pr_conflictsの配線を静的に確かめる。判断と流れは`tests/lib/pr_conflict_watch.test.ts`が確かめる。
@@ -349,5 +351,112 @@ describe("buildConflictRecoveryDeps: the reads of the recovery", () => {
     });
     await deps.release(7, { fixWorkItemId: 55 });
     expect(released).toEqual([[7, { fixWorkItemId: 55 }]]);
+  });
+});
+
+describe("watch_pr_conflicts: the source of the round", () => {
+  const enabled = {
+    gh_collect_enabled: true,
+    gh_collect_detail_enabled: true,
+  };
+
+  function capture() {
+    const warnings: { message: string; fields: unknown }[] = [];
+    const log: Logger = {
+      info() {},
+      warn(message, fields) {
+        warnings.push({ message, fields });
+      },
+      error() {},
+    };
+    return { log, warnings };
+  }
+
+  test("passes the table source to the watch when the setting is db and the collection is on", () => {
+    const { log } = capture();
+    expect(
+      resolveConflictSource(
+        { ...enabled, gh_source_pr_conflict_watch: "db" },
+        log,
+      ),
+    ).toBe("db");
+  });
+
+  test("searches when the setting is search", () => {
+    const { log } = capture();
+    expect(
+      resolveConflictSource(
+        { ...enabled, gh_source_pr_conflict_watch: "search" },
+        log,
+      ),
+    ).toBe("search");
+  });
+
+  test("searches when the setting is db but the detail collection is off", () => {
+    const { log } = capture();
+    expect(
+      resolveConflictSource(
+        {
+          gh_collect_enabled: true,
+          gh_collect_detail_enabled: false,
+          gh_source_pr_conflict_watch: "db",
+        },
+        log,
+      ),
+    ).toBe("search");
+  });
+
+  test("warns with the names of the false settings when the source db is ignored", () => {
+    const { log, warnings } = capture();
+    resolveConflictSource(
+      {
+        gh_collect_enabled: true,
+        gh_collect_detail_enabled: false,
+        gh_source_pr_conflict_watch: "db",
+      },
+      log,
+    );
+    expect(warnings).toEqual([
+      {
+        message:
+          "gh_source_pr_conflict_watch is db but the collection is not fully enabled, so the round searches",
+        fields: {
+          gh_collect_enabled: true,
+          gh_collect_detail_enabled: false,
+        },
+      },
+    ]);
+  });
+
+  test("does not warn when the setting is search", () => {
+    const { log, warnings } = capture();
+    resolveConflictSource(
+      {
+        gh_collect_enabled: false,
+        gh_collect_detail_enabled: false,
+        gh_source_pr_conflict_watch: "search",
+      },
+      log,
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  test("passes the resolved source to the watch", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain("source: resolveConflictSource(config, log)");
+  });
+
+  test("passes a reader of the owner rows to the watch", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain(
+      "readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner)",
+    );
+  });
+
+  test("uses the number of owners for the threshold", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain(
+      "staleAfterMs: ghDetailStaleAfterMs(config.owners.length)",
+    );
   });
 });
