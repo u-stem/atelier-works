@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,7 +17,9 @@ import {
   showBlobArgs,
 } from "../../scripts/host_apply/git.ts";
 import {
+  createKillGroup,
   createRunner,
+  defaultRunnerDeps,
   type RunnerDeps,
   type SpawnedProcess,
   type SpawnOptions,
@@ -660,6 +662,60 @@ describe("the standard error", () => {
   });
 });
 
+describe("createKillGroup", () => {
+  function errnoError(code: string): Error {
+    return Object.assign(new Error(code), { code });
+  }
+
+  function recordingKill(failure: Error | null = null) {
+    const calls: [number, string][] = [];
+    const kill = (pid: number, signal: string): void => {
+      calls.push([pid, signal]);
+      if (failure !== null) throw failure;
+    };
+    return { calls, kill };
+  }
+
+  test("sends SIGKILL to the negative process group id", () => {
+    const k = recordingKill();
+    createKillGroup(k.kill)(4242);
+    expect(k.calls).toEqual([[-4242, "SIGKILL"]]);
+  });
+
+  test("ignores a group that does not exist", () => {
+    const k = recordingKill(errnoError("ESRCH"));
+    expect(() => createKillGroup(k.kill)(4242)).not.toThrow();
+  });
+
+  test("rethrows any other error", () => {
+    const k = recordingKill(errnoError("EPERM"));
+    expect(() => createKillGroup(k.kill)(4242)).toThrow("EPERM");
+  });
+
+  test("rethrows an error that has no code", () => {
+    const k = recordingKill(new Error("boom"));
+    expect(() => createKillGroup(k.kill)(4242)).toThrow("boom");
+  });
+
+  test.each([0, 1, -5, 1.5, Number.NaN, process.pid])(
+    "refuses the process id %p before sending anything",
+    (pid) => {
+      const k = recordingKill();
+      expect(() => createKillGroup(k.kill)(pid)).toThrow("pgid");
+    },
+  );
+
+  test("sends nothing for a refused process id", () => {
+    const k = recordingKill();
+    try {
+      createKillGroup(k.kill)(1);
+    } catch {
+      // 拒否の例外は、上のテストが確かめる。
+    }
+    expect(k.calls).toEqual([]);
+  });
+});
+
 describe("real processes", () => {
   const dirs: string[] = [];
   afterAll(() => {
@@ -674,13 +730,17 @@ describe("real processes", () => {
 
   const run = createRunner({ acceptUnchecked: true });
 
+  /** 終了して回収を待つゾンビは、生きているとは数えない。 */
   function alive(pid: number): boolean {
     try {
       process.kill(pid, 0);
-      return true;
     } catch {
       return false;
     }
+    const state = Bun.spawnSync(["/bin/ps", "-o", "stat=", "-p", String(pid)])
+      .stdout.toString()
+      .trim();
+    return state !== "" && !state.startsWith("Z");
   }
 
   async function goneWithin(pid: number, ms: number): Promise<boolean> {
@@ -692,11 +752,23 @@ describe("real processes", () => {
     return !alive(pid);
   }
 
-  test("an abort stops a grandchild that the shell started", async () => {
-    const dir = scratch();
-    const pidFile = join(dir, "pid");
-    const controller = new AbortController();
-    const spec = issueSpecUnchecked({
+  /** シェルが孫のpidを書き終えるまで、短い間隔で待つ。書かれた値が不正なら、前提が崩れているので例外にする。 */
+  async function waitForPid(file: string): Promise<number> {
+    const until = Date.now() + 5000;
+    while (Date.now() < until) {
+      const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+      if (/^[0-9]+\n$/.test(text)) {
+        const pid = Number(text.trim());
+        if (!(pid >= 1)) throw new Error("the pid file holds an invalid pid");
+        return pid;
+      }
+      await Bun.sleep(10);
+    }
+    throw new Error("the pid file was not written");
+  }
+
+  function sleeper(dir: string, pidFile: string) {
+    return issueSpecUnchecked({
       kind: "git_read",
       bin: "/bin/sh",
       args: ["-c", `sleep 30 & echo $! > '${pidFile}'; wait`],
@@ -704,29 +776,52 @@ describe("real processes", () => {
       cwd: dir,
       timeoutMs: COMMAND_TIMEOUT_MS.git_read,
     });
-    const result = run(spec, { signal: controller.signal });
-    await Bun.sleep(200);
+  }
+
+  test("an abort stops a grandchild that the shell started", async () => {
+    const dir = scratch();
+    const pidFile = join(dir, "pid");
+    const controller = new AbortController();
+    const result = run(sleeper(dir, pidFile), { signal: controller.signal });
+    const pid = await waitForPid(pidFile);
     controller.abort();
     await result.catch(() => {});
-    const pid = Number(readFileSync(pidFile, "utf8").trim());
     expect(await goneWithin(pid, 3000)).toBe(true);
+  });
+
+  test("the grandchild is alive before the abort", async () => {
+    const dir = scratch();
+    const pidFile = join(dir, "pid");
+    const controller = new AbortController();
+    const result = run(sleeper(dir, pidFile), { signal: controller.signal });
+    const pid = await waitForPid(pidFile);
+    const before = alive(pid);
+    controller.abort();
+    await result.catch(() => {});
+    expect(before).toBe(true);
   });
 
   test("an abort is reported as aborted", async () => {
     const dir = scratch();
+    const pidFile = join(dir, "pid");
     const controller = new AbortController();
-    const spec = issueSpecUnchecked({
-      kind: "git_read",
-      bin: "/bin/sh",
-      args: ["-c", "sleep 30 & wait"],
-      env: { PATH: "/usr/bin:/bin" },
-      cwd: dir,
-      timeoutMs: COMMAND_TIMEOUT_MS.git_read,
-    });
-    const result = run(spec, { signal: controller.signal });
-    setTimeout(() => controller.abort(), 200);
+    const result = run(sleeper(dir, pidFile), { signal: controller.signal });
+    await waitForPid(pidFile);
+    controller.abort();
     await expect(result).rejects.toMatchObject({ reason: "aborted" });
   });
+
+  test("the default killGroup ignores a group that no longer exists", async () => {
+    const done = Bun.spawnSync(["/usr/bin/true"]);
+    expect(() => defaultRunnerDeps.killGroup(done.pid)).not.toThrow();
+  });
+
+  test.each([0, 1, process.pid])(
+    "the default killGroup refuses the process id %d",
+    (pid) => {
+      expect(() => defaultRunnerDeps.killGroup(pid)).toThrow("pgid");
+    },
+  );
 
   test("the child sees only the environment of the specification", async () => {
     const spec = issueSpecUnchecked({

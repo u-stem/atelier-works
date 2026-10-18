@@ -77,6 +77,14 @@ type ReadMode =
   | { readonly kind: "drain"; readonly limit: number }
   | { readonly kind: "tail"; readonly limit: number };
 
+export function createKillGroup(
+  _kill: (pid: number, signal: "SIGKILL") => void,
+): (pid: number) => void {
+  return () => {};
+}
+
+export const defaultRunnerDeps: RunnerDeps = realDeps;
+
 /** 出力のストリームを読み切る、または取り消すための持ち手。 */
 type StreamReader = {
   /** EOF、取り消し、溢れ、読み取りの失敗のどれかで解決する。拒否はしない。 */
