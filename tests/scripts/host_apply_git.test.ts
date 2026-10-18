@@ -55,6 +55,12 @@ describe("fetchArgs", () => {
     "core.askPass=",
     "http.sslVerify=true",
     "http.proxy=",
+    "http.https://github.com/.sslVerify=true",
+    "http.https://github.com/.proxy=",
+    "http.https://github.com/example/.sslVerify=true",
+    "http.https://github.com/example/.proxy=",
+    `http.${REMOTE}.sslVerify=true`,
+    `http.${REMOTE}.proxy=`,
     "gc.auto=0",
     "maintenance.auto=false",
   ])("sets -c %s", (setting) => {
@@ -711,6 +717,55 @@ describe("the read commands run from a subdirectory of the repository", () => {
   });
 });
 
+describe("the http settings of fetchArgs against a repository that weakens them", () => {
+  const repos: FixtureRepo[] = [];
+  afterAll(() => {
+    for (const repo of repos) repo.cleanup();
+  });
+
+  const LEVELS = ["https://github.com/", "https://github.com/example/", REMOTE];
+
+  // URLごとの設定は、URLに合う範囲が狭いほど優先される。範囲の広い-cは、狭い設定に負ける。
+  function weakened(): FixtureRepo {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    repo.commit({ "a.txt": "1\n" }, "base");
+    for (const level of LEVELS) {
+      repo.git(["config", `http.${level}.sslVerify`, "false"]);
+      repo.git(["config", `http.${level}.proxy`, "http://evil.invalid:3128"]);
+    }
+    return repo;
+  }
+
+  function effective(repo: FixtureRepo, key: string, withOptions: boolean) {
+    const args = fetchArgs(REMOTE);
+    const options = withOptions ? args.slice(0, args.indexOf("fetch")) : [];
+    const result = Bun.spawnSync(
+      ["/usr/bin/git", ...options, "config", "--get-urlmatch", key, REMOTE],
+      { cwd: repo.dir, env: approveGitEnv() },
+    );
+    return result.stdout.toString().trim();
+  }
+
+  test("the control: the repository turns the verification off", () => {
+    expect(effective(weakened(), "http.sslVerify", false)).toBe("false");
+  });
+
+  test("the control: the repository sets a proxy", () => {
+    expect(effective(weakened(), "http.proxy", false)).toBe(
+      "http://evil.invalid:3128",
+    );
+  });
+
+  test("the arguments turn the verification back on", () => {
+    expect(effective(weakened(), "http.sslVerify", true)).toBe("true");
+  });
+
+  test("the arguments clear the proxy", () => {
+    expect(effective(weakened(), "http.proxy", true)).toBe("");
+  });
+});
+
 describe("GIT_ALLOW_PROTOCOL against a repository that tries to run a command", () => {
   const repos: FixtureRepo[] = [];
   afterAll(() => {
@@ -742,10 +797,9 @@ describe("GIT_ALLOW_PROTOCOL against a repository that tries to run a command", 
 
   test("the control: without the variable the repository runs the command", () => {
     const { repo, marker } = setup();
-    fetchIn(repo, {
-      ...fixtureGitEnv(dirname(repo.dir)),
-      PATH: "/usr/bin:/bin",
-    });
+    // 固定の環境から、この変数だけを除く。ほかの条件が同じなので、変数の効果だけが差になる。
+    const { GIT_ALLOW_PROTOCOL: _omitted, ...withoutIt } = approveGitEnv();
+    fetchIn(repo, withoutIt);
     expect(existsSync(marker)).toBe(true);
   });
 
