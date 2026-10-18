@@ -1161,6 +1161,49 @@ describe("the lexical checker", () => {
       "x.ts",
     ],
     ["a Bun call after a division", "const a = b / c; Bun.spawn(x);", "x.ts"],
+    [
+      "eval after a division at the start of a line",
+      "const a = 1\n/ 2; eval(x) / 3\n",
+      "x.ts",
+    ],
+    [
+      "eval after a division by a member named return",
+      "a.return / 1; eval(x) / 2",
+      "x.ts",
+    ],
+    [
+      "a Bun call after a division by a member named of",
+      "[m.of / 2, Bun.write(p, d), 4 / 2]",
+      "x.ts",
+    ],
+    [
+      "a Bun call after a regular expression that follows an arrow",
+      "const f = (x) => /'/.test(x); const { spawn: s } = Bun; s([cmd]); //'",
+      "x.ts",
+    ],
+    [
+      "a Bun call after a regular expression that follows an if",
+      "if (a) /'/.test(x); Bun.spawn(y); //'",
+      "x.ts",
+    ],
+    [
+      "eval after a division that is read as a regular expression",
+      "const a = b! / 2; eval(x); const c = d / 3;",
+      "x.ts",
+    ],
+    [
+      "eval after a division that follows a block",
+      "if (a) {}\n/ 2; eval(x) / 3\n",
+      "x.ts",
+    ],
+    ["eval after an increment and a division", "i++ / 2; eval(x) / 3;", "x.ts"],
+    ["a name inside a regular expression", "const r = /Bun.spawn/;", "x.ts"],
+    ["eval inside a regular expression", "const r = /a eval(x) b/;", "x.ts"],
+    [
+      "a process start named in a regular expression",
+      "const r = /child_process/;",
+      "x.ts",
+    ],
     ["a string that a newline cuts", 'const s = "abc\nrun();', "x.ts"],
     ["a template that never closes", "const t = `abc", "x.ts"],
     ["a block comment that never closes", "run(); /* abc", "x.ts"],
@@ -1270,7 +1313,6 @@ describe("the lexical checker", () => {
       String.raw`const r = /\u0000/;`,
       "x.ts",
     ],
-    ["a name inside a regular expression", "const r = /Bun.spawn/;", "x.ts"],
     [
       "a regular expression with a quote and a slash",
       String.raw`const r = /^["']\/$/; run(r);`,
@@ -1278,6 +1320,19 @@ describe("the lexical checker", () => {
     ],
     ["a division of two names", "const q = a / b; const w = c / d;", "x.ts"],
     ["a division after a parenthesis", "const q = (a + b) / 2;", "x.ts"],
+    ["a division after a bracket", "const q = a[0] / 2;", "x.ts"],
+    ["a division by a member named of", "const q = m.of / 2;", "x.ts"],
+    [
+      "a regular expression after an arrow",
+      "const f = (x) => /a/.test(x);",
+      "x.ts",
+    ],
+    ["a regular expression after an if", "if (a) /x/.test(b);", "x.ts"],
+    [
+      "a regular expression at the start of a line",
+      "run(\n/x/.test(b));",
+      "x.ts",
+    ],
     [
       "a division inside an interpolation",
       ["const t = `", INTERP, "a / 1024}`;"].join(""),
