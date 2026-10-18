@@ -3740,11 +3740,12 @@ workerのコンテナが作り直されるので、実装中(`implementing`)の�
 gitのオブジェクトを読むだけで、作業ツリー、ネットワーク、dockerには触れない。
 
 ```bash
-bun ./scripts/host-apply.ts plan --repo <リポジトリのパス> --applied <適用済みのsha> --target <目標のsha>
+bun --no-env-file ./scripts/host-apply.ts plan --repo <リポジトリのパス> --applied <適用済みのsha> --target <目標のsha>
 ```
 
 shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は受け付けない。
 `./`で始めるのは、`bun run`が同名の`package.json`のscriptを先に実行するのを避けるためである。
+`--no-env-file`は、カレントディレクトリの`.env`をBunが読まないようにする。
 承認の記録を使うときは、`--state-dir <記録のディレクトリ>`を足す。
 記録は、その`applied`が`--applied`と一致するときだけ使われる。
 手元で承認済みのコミットを仮定して確かめるときは、`--approved <sha>`を使う。`--state-dir`とは同時に指定できない。
@@ -3791,7 +3792,7 @@ shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は�
 
 ```bash
 bun --no-env-file ./scripts/host-apply.ts approve <承認するコミットのsha> --applied <適用済みのsha>
-bun ./scripts/host-apply.ts plan --repo . --applied <適用済みのsha> --target <承認したコミットのsha> --state-dir "$HOME/Library/Application Support/atelier-works-host"
+bun --no-env-file ./scripts/host-apply.ts plan --repo . --applied <適用済みのsha> --target <承認したコミットのsha> --state-dir "$HOME/Library/Application Support/atelier-works-host"
 ```
 
 記録の置き場は、`--state-dir`を省くと`~/Library/Application Support/atelier-works-host/`になる。
