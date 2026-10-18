@@ -92,23 +92,76 @@ export function judgeGhRepoFreshness<T extends GhDetailOpenRow>(
 
 /**
  * 開いていて、`usable`が真で、`repo_id`が`gh_repos`の数値IDと等しい、照会したリポジトリの行だけを返す。
+ * PRの行とIssueの行のどちらにも使う。
  * 名前は、照会の名前と行の名前をどちらも小文字にして比べる。
  * SQLが同じ条件で絞っていなくても、ここで絞る。
  */
+export function usableGhDetailRows<T extends GhDetailOpenRow>(
+  owner: string,
+  repo: string,
+  repoId: number,
+  rows: readonly T[],
+): T[] {
+  const ownerName = owner.toLowerCase();
+  const repoName = repo.toLowerCase();
+  return rows.filter(
+    (row) =>
+      isUsableOpenRow(row, repoId) &&
+      row.owner.toLowerCase() === ownerName &&
+      row.repo.toLowerCase() === repoName,
+  );
+}
+
+/** PRの行について`usableGhDetailRows`を呼ぶ。 */
 export function usableGhPullRequests(
   owner: string,
   repo: string,
   repoId: number,
   prs: readonly GhPullRequest[],
 ): GhPullRequest[] {
+  return usableGhDetailRows(owner, repo, repoId, prs);
+}
+
+/**
+ * 所有者の行を、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。
+ * `gh_repos`の行の無いリポジトリの開いた行は、数値IDを確かめられないので使わない。
+ */
+function judgeOwnerRows<T extends GhDetailOpenRow>(
+  owner: string,
+  repos: readonly GhOwnerRepoFreshnessRow[],
+  rows: readonly T[],
+  dbNow: Date,
+  staleAfterMs: number,
+): Map<string, GhOwnerRepoCoverageInput & { readonly usable: readonly T[] }> {
   const ownerName = owner.toLowerCase();
-  const repoName = repo.toLowerCase();
-  return prs.filter(
-    (row) =>
-      isUsableOpenRow(row, repoId) &&
-      row.owner.toLowerCase() === ownerName &&
-      row.repo.toLowerCase() === repoName,
-  );
+  const openByRepo = new Map<string, T[]>();
+  for (const found of rows) {
+    if (found.owner.toLowerCase() !== ownerName) {
+      continue;
+    }
+    const key = found.repo.toLowerCase();
+    const list = openByRepo.get(key);
+    if (list === undefined) {
+      openByRepo.set(key, [found]);
+    } else {
+      list.push(found);
+    }
+  }
+  const judged = new Map<
+    string,
+    GhOwnerRepoCoverageInput & { readonly usable: readonly T[] }
+  >();
+  for (const row of repos) {
+    const name = row.repo.toLowerCase();
+    const open = openByRepo.get(name) ?? [];
+    const freshness = judgeGhRepoFreshness(row, open, dbNow, staleAfterMs);
+    const usable =
+      freshness.kind === "fresh" && row.repo_id !== null
+        ? usableGhDetailRows(owner, name, row.repo_id, open)
+        : [];
+    judged.set(name, { row, freshness, usable });
+  }
+  return judged;
 }
 
 /** リポジトリごとの判定。`usable`は、鮮度が足りるときだけ使ってよい行。 */
@@ -119,7 +172,7 @@ export type GhOwnerRepoJudgement = {
 };
 
 /**
- * 所有者の読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。
+ * 所有者のPRの読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。
  * `gh_repos`の行の無いリポジトリの開いた行は、数値IDを確かめられないので使わない。
  */
 export function judgeGhOwnerRepos(
@@ -127,37 +180,13 @@ export function judgeGhOwnerRepos(
   snapshot: GhOwnerOpenPrSnapshot,
   staleAfterMs: number,
 ): Map<string, GhOwnerRepoJudgement> {
-  const ownerName = owner.toLowerCase();
-  const openByRepo = new Map<string, GhPullRequest[]>();
-  for (const pr of snapshot.prs) {
-    if (pr.owner.toLowerCase() !== ownerName) {
-      continue;
-    }
-    const key = pr.repo.toLowerCase();
-    const rows = openByRepo.get(key);
-    if (rows === undefined) {
-      openByRepo.set(key, [pr]);
-    } else {
-      rows.push(pr);
-    }
-  }
-  const judged = new Map<string, GhOwnerRepoJudgement>();
-  for (const row of snapshot.repos) {
-    const name = row.repo.toLowerCase();
-    const open = openByRepo.get(name) ?? [];
-    const freshness = judgeGhRepoFreshness(
-      row,
-      open,
-      snapshot.db_now,
-      staleAfterMs,
-    );
-    const usable =
-      freshness.kind === "fresh" && row.repo_id !== null
-        ? usableGhPullRequests(owner, name, row.repo_id, open)
-        : [];
-    judged.set(name, { row, freshness, usable });
-  }
-  return judged;
+  return judgeOwnerRows(
+    owner,
+    snapshot.repos,
+    snapshot.prs,
+    snapshot.db_now,
+    staleAfterMs,
+  );
 }
 
 /** 所有者の判定が見る、リポジトリごとの判定の部分。PRとIssueのどちらの判定も満たす。 */
@@ -171,23 +200,22 @@ export type GhOwnerIssueRepoJudgement = GhOwnerRepoCoverageInput & {
   readonly usable: readonly GhIssue[];
 };
 
-/** 詳細の行から、使ってよい開いた行だけを返す。 */
-export function usableGhDetailRows<T extends GhDetailOpenRow>(
-  _owner: string,
-  _repo: string,
-  _repoId: number,
-  _rows: readonly T[],
-): T[] {
-  return [];
-}
-
-/** 所有者のIssueの読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。 */
+/**
+ * 所有者のIssueの読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。
+ * `gh_repos`の行の無いリポジトリの開いた行は、数値IDを確かめられないので使わない。
+ */
 export function judgeGhOwnerIssueRepos(
-  _owner: string,
-  _snapshot: GhOwnerOpenIssueSnapshot,
-  _staleAfterMs: number,
+  owner: string,
+  snapshot: GhOwnerOpenIssueSnapshot,
+  staleAfterMs: number,
 ): Map<string, GhOwnerIssueRepoJudgement> {
-  return new Map();
+  return judgeOwnerRows(
+    owner,
+    snapshot.repos,
+    snapshot.issues,
+    snapshot.db_now,
+    staleAfterMs,
+  );
 }
 
 export type GhOwnerCoverage =
@@ -196,22 +224,37 @@ export type GhOwnerCoverage =
 
 /**
  * 所有者の全体を表で探してよいか判定する。検索の`user:`/`org:`の範囲の代わりにできるかを決める。
+ * 上から当てて、最初に当たったものを採る。
  * 1. `gh_repos`に所有者の行が無い(`no_record`)。
- * 2. 読む時点の許可が偽のリポジトリは、判定から外す。
+ * 2. `required`の名前のうち、`gh_repos`に行の無いものがある(`no_record`)。
+ * 3. 読む時点の許可が偽のリポジトリは、判定から外す。
  *    記録の`allowed`が偽でも、読む時点で許されるリポジトリは外さず、`unusable`で`stale`にする。
- * 3. 一覧から消えた、archive済みのリポジトリは、判定から外す。外さないと、そのリポジトリを1つ持つ所有者が毎周回検索に戻る。
- * 4. 残りに鮮度の足りないリポジトリがあれば、名前の順で最初のものの理由で`stale`にする。
- * 5. どれでもなければ`fresh`。
+ * 4. archive済みのリポジトリは、判定から外す。読み取り専用で、取得も起動もできない。
+ * 5. 一覧から消えた(`gone`が真で`archived`が偽の)リポジトリは、`required`に入っていれば`unusable`で`stale`にし、入っていなければ判定から外す。
+ *    外さないと、消したリポジトリを1つ持つ所有者が毎周回検索に戻る。
+ * 6. 残りに鮮度の足りないリポジトリがあれば、名前の順で最初のものの理由で`stale`にする。
+ * 7. どれでもなければ`fresh`。
+ * `required`は、設定で明示したリポジトリの名前である。
+ * 呼び出し側にリポジトリ単位の戻し先が無いとき、明示したリポジトリを表で使えないまま`fresh`にすると、
+ * 検索なら見つけるものを黙って取りこぼすので、所有者の全体を検索に戻す。
  * 所有者の最新の実行の照合結果は読まない。照合の不一致は収集が配下の行を使えなくし、一時的な失敗は鮮度が閾値で落とす。
  */
 export function judgeGhOwnerCoverage(
   owner: string,
   judged: ReadonlyMap<string, GhOwnerRepoCoverageInput>,
   isRepoAllowedNow: (owner: string, repo: string) => boolean,
-  _required?: ReadonlySet<string>,
+  required?: ReadonlySet<string>,
 ): GhOwnerCoverage {
   if (judged.size === 0) {
     return { kind: "stale", reason: "no_record" };
+  }
+  const requiredNames = new Set(
+    [...(required ?? [])].map((name) => name.toLowerCase()),
+  );
+  for (const name of requiredNames) {
+    if (!judged.has(name)) {
+      return { kind: "stale", reason: "no_record" };
+    }
   }
   const names = [...judged.keys()].sort();
   for (const name of names) {
@@ -222,7 +265,13 @@ export function judgeGhOwnerCoverage(
     if (!isRepoAllowedNow(owner, item.row.repo)) {
       continue;
     }
-    if (item.row.gone || item.row.archived) {
+    if (item.row.archived) {
+      continue;
+    }
+    if (item.row.gone) {
+      if (requiredNames.has(name)) {
+        return { kind: "stale", reason: "unusable" };
+      }
       continue;
     }
     if (item.freshness.kind === "stale") {
