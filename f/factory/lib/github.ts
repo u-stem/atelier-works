@@ -1075,6 +1075,8 @@ export type Issue = {
   readonly authorAssociation: string | null;
   readonly labels: string[];
   readonly assignees: string[];
+  /** 応答の`repository_url`から読んだリポジトリの正規の綴り。読めないときは`null`。 */
+  readonly repository: { readonly owner: string; readonly repo: string } | null;
 };
 
 /** `{ name: string }`。ラベルのオブジェクト(`{ name, ... }`の形)で使う。 */
@@ -1175,6 +1177,7 @@ export async function getIssue(
     ),
     labels,
     assignees,
+    repository: null,
   };
 }
 
