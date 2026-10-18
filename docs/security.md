@@ -4283,7 +4283,7 @@ Claudeのバージョンが変わったときは、同じ実験をやり直す�
     `workflows`、`code_scanning`、`required_deployments`、`merge_queue`、承認数1以上の`pull_request`がある。
   - `dependabot_other_repos`の既定値の置き場。今は保護パスの外の`config.ts`にある。保護パスの定数にするか、リソースに明示されたときだけ有効にする。
   - インストールを使わない変更履歴と同一性の確認(5b)。
-- 他のリポジトリを人に回す条件は、`factory_repo`の値を信頼する前提に立つ。`factory_repo`を書き換えられる者は、`self_update`などで全体を握れるので、新しいリスクではない。
+- 他のリポジトリを人に回す条件は、`factory_repo`の値と、その読み込み(保護パスの外の`config.ts`)を信頼する前提に立つ。`factory_repo`を書き換えられる者は、`self_update`などで全体を握れるので、新しいリスクではない。
 - ルールの読み取り(`listBranchRules`)は、保護パスの外の`lib/github.ts`にある。偽の値を返すように書き換える変更は、チェックの一覧(`listPrChecks`)と同じく、PRのレビューだけが止める。解釈と検証は保護パスの`requiredChecksFromRules`にある。
 - `repo_allowlist`の他のリポジトリを処理していた環境では、この変更の反映後、`dependabot_other_repos`に挙げるまで、そのリポジトリのdependabotのPRを処理しない。
 - `dependabot_group_enabled`の既定値は、保護パスの外の`config.ts`にある。

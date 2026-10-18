@@ -714,7 +714,8 @@ function dependabotOtherReposField(
     const parts = entry.split("/");
     if (
       !STRICT_OWNER_SLASH_REPO.test(entry) ||
-      parts.some((part) => part === "." || part === "..")
+      parts.some((part) => part === "." || part === "..") ||
+      /\.git$/i.test(entry)
     ) {
       throw new ConfigValidationError(
         `"${field}" entries must be "<owner>/<repo>"`,

@@ -2450,7 +2450,9 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 既存のリソースにこれらの項目が無くても、既定値で動く。
 
 対象は、`factory_repo`と、`dependabot_other_repos`に挙げたリポジトリである。
-`dependabot_other_repos`のリポジトリは、`repo_allowlist`にも載せ、`owners`の照合を通す必要がある。
+`dependabot_other_repos`の項目は、`<owner>/<repo>`の形で、末尾に拡張子を付けない。
+リポジトリは、`repo_allowlist`にも載せ、`owners`の照合を通す必要がある。
+どちらかを欠くと、そのリポジトリは黙って対象から外れる。
 `dependabot_other_repos`が空のときは`factory_repo`だけを見る。`poll_prs`のように、オーナーの全リポジトリは見ない。
 `repo_allowlist`にだけ載せたリポジトリは、dependabotの対象にならない。
 この変更の反映前に、`repo_allowlist`の他リポジトリを処理していた環境に注意する。
@@ -2464,7 +2466,10 @@ dependabotの対象は、baseが`main`のPRに限る。
 - rulesetに必須チェックが無い。古典的なブランチ保護だけを使うリポジトリは、これに当たる。
 - 必須チェックが、GitHub Actions以外のAppに結ばれている。
 
+試運転に使うリポジトリは、ルートに`package.json`と`bun.lock`を持つ必要がある。
+それ以外のファイルを変えるPRは、ゲートで人に回り、準備の理由まで届かない。
 挙げたリポジトリのPRも、今は準備のステップで人に回る。
+新しいheadのたびに通知が出るので、確かめた後は一覧から外す。
 そのリポジトリのコマンド(インストールを含む)を、workerで動かさないためである。
 この間は、ゲートまで通ったことを、人に回った理由(`dependabot prepare:`)で確かめるために使う。
 `factory_repo`の必須チェックは、今までどおり固定の7件で、設定に左右されない。
