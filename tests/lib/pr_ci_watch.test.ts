@@ -6734,6 +6734,20 @@ describe("the search and the table find the same pull requests", () => {
     expect(table.recorded).toEqual(search.recorded);
   });
 
+  test("records the same rows from the table alone when the search finds nothing", async () => {
+    const search = searchHarness(MIXED);
+    const table = tableHarness(MIXED, rowsFor(MIXED), {}, { found: {} });
+    await runPrCiWatch(search.deps);
+    await runPrCiWatch(table.deps);
+    expect(table.recorded).toEqual(search.recorded);
+  });
+
+  test("does not search when the table alone is used", async () => {
+    const table = tableHarness(MIXED, rowsFor(MIXED), {}, { found: {} });
+    await runPrCiWatch(table.deps);
+    expect(table.searches).toEqual([]);
+  });
+
   test("records the allowed pull requests of the mixed set from the newest", async () => {
     const table = tableHarness(MIXED, rowsFor(MIXED));
     await runPrCiWatch(table.deps);
