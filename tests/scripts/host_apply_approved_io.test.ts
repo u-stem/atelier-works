@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -236,5 +237,60 @@ describe("readApproved", () => {
     const dir = privateDir();
     writeFileSync(approvedFilePath(dir), "{}", { mode: 0o600 });
     expect(readApproved(dir, uid).kind).toBe("invalid");
+  });
+});
+
+describe("the reasons of approved_io", () => {
+  test("names a symlinked file as one that cannot be opened", () => {
+    const dir = privateDir();
+    const target = join(tempRoot(), "real.json");
+    writeFileSync(target, serializeApprovedRecord(RECORD), { mode: 0o600 });
+    symlinkSync(target, approvedFilePath(dir));
+    expect(readApproved(dir, uid)).toEqual({
+      kind: "invalid",
+      reason: "approved file cannot be opened",
+    });
+  });
+
+  test("names a loose file as one that is open to others", () => {
+    const dir = privateDir();
+    writeFileSync(approvedFilePath(dir), serializeApprovedRecord(RECORD));
+    chmodSync(approvedFilePath(dir), 0o644);
+    expect(readApproved(dir, uid)).toEqual({
+      kind: "invalid",
+      reason: "approved file is open to others",
+    });
+  });
+
+  test("names a loose directory as one that is open to others", () => {
+    const dir = privateDir();
+    chmodSync(dir, 0o755);
+    expect(readApproved(dir, uid)).toEqual({
+      kind: "invalid",
+      reason: "state directory is open to others",
+    });
+  });
+
+  test("names a body that is not a record", () => {
+    const dir = privateDir();
+    writeFileSync(approvedFilePath(dir), "{}", { mode: 0o600 });
+    expect(readApproved(dir, uid)).toEqual({
+      kind: "invalid",
+      reason: "approved file is not a record",
+    });
+  });
+
+  test("throws the directory reason when a write meets a loose directory", () => {
+    const dir = privateDir();
+    chmodSync(dir, 0o755);
+    expect(() => writeApproved(dir, RECORD, uid)).toThrow(
+      "state directory is open to others",
+    );
+  });
+
+  test("creates the missing parents of the directory too", () => {
+    const parent = join(tempRoot(), "parent");
+    writeApproved(join(parent, "state"), RECORD, uid);
+    expect(existsSync(approvedFilePath(join(parent, "state")))).toBe(true);
   });
 });
