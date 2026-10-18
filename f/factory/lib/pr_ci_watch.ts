@@ -98,6 +98,9 @@ import {
   assertGitHubName,
   type FactoryConfig,
   type FactoryOwner,
+  type GhOwnerOpenPrSnapshot,
+  type GhRepoOpenPrSnapshot,
+  type GhSource,
   type NoticeRecord,
 } from "./types.ts";
 
@@ -274,7 +277,12 @@ export async function buildHumanDiscovery(input: {
     | "allowed_labeler_logins"
     | "allowed_labeler_ids"
     | "factory_repo"
+    | "repo_allowlist"
   >;
+  readonly source: PrCiHumanDiscoveryDeps["source"];
+  readonly staleAfterMs: PrCiHumanDiscoveryDeps["staleAfterMs"];
+  readonly readOwnerPrs: PrCiHumanDiscoveryDeps["readOwnerPrs"];
+  readonly readRepoPrs: PrCiHumanDiscoveryDeps["readRepoPrs"];
   readonly verifiedOwners: readonly FactoryOwner[];
   readonly getViewer: () => Promise<Viewer>;
   readonly getPr: PrCiHumanDiscoveryDeps["getPr"];
@@ -309,6 +317,11 @@ export async function buildHumanDiscovery(input: {
     scopes,
     getPr: input.getPr,
     search: input.search,
+    source: "search",
+    staleAfterMs: 0,
+    readOwnerPrs: async () => ({ db_now: new Date(0), repos: [], prs: [] }),
+    readRepoPrs: async () => ({ db_now: new Date(0), repo: null, prs: [] }),
+    requiredReposOf: () => new Set(),
   };
 }
 
@@ -408,6 +421,19 @@ export type PrCiHumanDiscoveryDeps = {
     scope: OpenAuthoredPrsScope,
     author: string,
   ) => Promise<OpenAuthoredPrSearchItem[]>;
+  /** 実効の読み取り元。 */
+  readonly source: GhSource;
+  /** 収集の記録を使わずに止める閾値(ミリ秒)。 */
+  readonly staleAfterMs: number;
+  /** 所有者のPRの行を、リポジトリの行と合わせて1つの文で読む。 */
+  readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
+  /** 1つのリポジトリのPRの行を、リポジトリの行と合わせて1つの文で読む。 */
+  readonly readRepoPrs: (
+    owner: string,
+    repo: string,
+  ) => Promise<GhRepoOpenPrSnapshot>;
+  /** 設定で明示したリポジトリのうち、その所有者のものの小文字の名前。 */
+  readonly requiredReposOf: (owner: string) => ReadonlySet<string>;
 };
 
 export type PrCiWatchDeps = {
@@ -527,9 +553,22 @@ export type PrCiWatchResult = {
   readonly denied: number;
   /** 例外で処理できなかった数。 */
   readonly errors: number;
+  /** 人のPRの発見の実効の読み取り元。発見を行わなかった回は`search`。 */
+  readonly human_source: GhSource;
+  /** 表を使えずに検索に戻し、実際に検索した範囲の数。飛ばした範囲は数えない。 */
+  readonly human_fallback_searches: number;
+  /** 表を使えなかった範囲の、理由ごとの数。検索を飛ばした範囲も数える。 */
+  readonly human_fallback_reasons: Readonly<Record<string, number>>;
+  /** 表から候補にした、作者の分かる候補の数。 */
+  readonly human_table_candidates: number;
+  /** 人のPRの検索がrate limitに当たった回数。 */
+  readonly human_search_rate_limited: number;
 };
 
-/** 監視を無効にしているときの結果。 */
+/**
+ * 監視を無効にしているときの結果。
+ * 呼び出し側が写して使うので、入れ子の理由の表も凍結する。書き換えると次の回に残るためである。
+ */
 export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   tracked: 0,
   recorded: 0,
@@ -544,11 +583,17 @@ export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   notified: 0,
   denied: 0,
   errors: 0,
+  human_source: "search",
+  human_fallback_searches: 0,
+  human_fallback_reasons: Object.freeze({}),
+  human_table_candidates: 0,
+  human_search_rate_limited: 0,
 };
 
-type Counters = {
-  -readonly [K in keyof PrCiWatchResult]: PrCiWatchResult[K];
-};
+type Counters = Omit<
+  { -readonly [K in keyof PrCiWatchResult]: PrCiWatchResult[K] },
+  "human_fallback_reasons"
+> & { human_fallback_reasons: Record<string, number> };
 
 type WatchState = {
   /** rate limitに当たったら、今回はそれ以上GitHubを読まない。 */
@@ -715,7 +760,8 @@ function newContext(deps: PrCiWatchDeps): Context {
   return {
     deps,
     now: deps.now(),
-    counters: { ...PR_CI_WATCH_IDLE_RESULT },
+    // 理由の表は、凍結した定数と共有せず、回ごとに新しく作る。
+    counters: { ...PR_CI_WATCH_IDLE_RESULT, human_fallback_reasons: {} },
     state: {
       rateLimited: false,
       failedStarted: 0,

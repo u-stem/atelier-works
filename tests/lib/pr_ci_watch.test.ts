@@ -63,13 +63,20 @@ import {
   PR_CI_RESOLVED_BY,
   type PrCiClaimDeps,
   type PrCiWatchDeps,
+  type PrCiWatchResult,
   RUN_BUDGET_MS,
   runPrCiRecovery,
   runPrCiWatch,
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
 import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts";
-import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
+import type {
+  FactoryOwner,
+  GhOwnerOpenPrSnapshot,
+  GhRepoOpenPrSnapshot,
+  GhSource,
+  NoticeRecord,
+} from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -240,6 +247,18 @@ type HumanSetup = {
   found?: Record<string, OpenAuthoredPrSearchItem[] | Error>;
   /** 検索のたびに時計を進める時間(ミリ秒)。 */
   searchTakesMs?: number;
+  /** 実効の読み取り元。省略すると`search`。 */
+  source?: GhSource;
+  /** 閾値(ミリ秒)。省略すると15分。 */
+  staleAfterMs?: number;
+  /** 所有者名(小文字)ごとの表の読み取り。`Error`なら失敗する。無い所有者を読むと失敗する。 */
+  ownerTables?: Record<string, GhOwnerOpenPrSnapshot | Error>;
+  /** `owner/repo`(小文字)ごとの表の読み取り。`Error`なら失敗する。無いリポジトリを読むと失敗する。 */
+  repoTables?: Record<string, GhRepoOpenPrSnapshot | Error>;
+  /** 所有者名(小文字)ごとの、設定で明示したリポジトリ。省略すると空。 */
+  required?: Record<string, string[]>;
+  /** 表を読むたびに時計を進める時間(ミリ秒)。 */
+  tableReadTakesMs?: number;
 };
 
 function hit(
@@ -297,6 +316,8 @@ type Harness = {
   readonly misfitSteps: string[];
   /** 人のPRの検索の呼び出し。 */
   readonly searches: { scope: OpenAuthoredPrsScope; author: string }[];
+  /** 人のPRの表の読み取りの呼び出し。所有者は名前、リポジトリは`owner/repo`。 */
+  readonly tableReads: string[];
 };
 
 function asRuns(value: PrHeadWorkflowRuns | WorkflowRun[]): PrHeadWorkflowRuns {
@@ -323,6 +344,7 @@ function harness(setup: Setup = {}): Harness {
   const released: Harness["released"] = [];
   const fixItemReads: number[] = [];
   const searches: Harness["searches"] = [];
+  const tableReads: string[] = [];
   const prCursor = new Map<string, number>();
   let elapsedMs = 0;
   const log: Logger = {
@@ -474,6 +496,33 @@ function harness(setup: Setup = {}): Harness {
             scopes: setup.human.scopes ?? [
               { kind: "owner", owner: "acme", ownerKind: "user" },
             ],
+            source: setup.human.source ?? "search",
+            staleAfterMs: setup.human.staleAfterMs ?? 15 * 60_000,
+            readOwnerPrs: async (owner) => {
+              events.push("read_owner_prs");
+              tableReads.push(owner);
+              elapsedMs += setup.human?.tableReadTakesMs ?? 0;
+              const found = setup.human?.ownerTables?.[owner.toLowerCase()];
+              if (found === undefined) {
+                throw new Error(`no owner table set up: ${owner}`);
+              }
+              if (found instanceof Error) throw found;
+              return found;
+            },
+            readRepoPrs: async (owner, repo) => {
+              const key = `${owner}/${repo}`.toLowerCase();
+              events.push("read_repo_prs");
+              tableReads.push(key);
+              elapsedMs += setup.human?.tableReadTakesMs ?? 0;
+              const found = setup.human?.repoTables?.[key];
+              if (found === undefined) {
+                throw new Error(`no repository table set up: ${key}`);
+              }
+              if (found instanceof Error) throw found;
+              return found;
+            },
+            requiredReposOf: (owner) =>
+              new Set(setup.human?.required?.[owner.toLowerCase()] ?? []),
             getPr: readPrReply,
             search: async (scope, author) => {
               events.push("search");
@@ -513,6 +562,7 @@ function harness(setup: Setup = {}): Harness {
     fixItemReads,
     misfitSteps,
     searches,
+    tableReads,
   };
 }
 
@@ -4944,6 +4994,15 @@ describe("buildHumanDiscovery", () => {
         allowed_labeler_logins: ["alice"],
         allowed_labeler_ids: {},
         factory_repo: "https://github.com/acme/factory.git",
+        repo_allowlist: [],
+      },
+      source: "search",
+      staleAfterMs: 15 * 60_000,
+      readOwnerPrs: async () => {
+        throw new Error("unused");
+      },
+      readRepoPrs: async () => {
+        throw new Error("unused");
       },
       verifiedOwners: [{ name: "acme", kind: "user" }],
       getViewer: async () => {
@@ -4972,6 +5031,7 @@ describe("buildHumanDiscovery", () => {
         allowed_labeler_logins: [],
         allowed_labeler_ids: {},
         factory_repo: "https://github.com/acme/factory.git",
+        repo_allowlist: [],
       },
     });
     expect(await buildHumanDiscovery(built.input)).toBeUndefined();
@@ -4984,6 +5044,7 @@ describe("buildHumanDiscovery", () => {
         allowed_labeler_logins: [],
         allowed_labeler_ids: {},
         factory_repo: "https://github.com/acme/factory.git",
+        repo_allowlist: [],
       },
     });
     await buildHumanDiscovery(built.input);
@@ -5060,6 +5121,7 @@ describe("buildHumanDiscovery", () => {
         allowed_labeler_logins: [],
         allowed_labeler_ids: {},
         factory_repo: "not a url",
+        repo_allowlist: [],
       },
     });
     const discovery = await buildHumanDiscovery(built.input);
@@ -5075,6 +5137,7 @@ describe("buildHumanDiscovery", () => {
         allowed_labeler_logins: [],
         allowed_labeler_ids: {},
         factory_repo: "not a url",
+        repo_allowlist: [],
       },
     });
     await buildHumanDiscovery(built.input);
@@ -5089,6 +5152,81 @@ describe("buildHumanDiscovery", () => {
       "alice",
     );
     expect(built.searched).toEqual(["acme:alice"]);
+  });
+
+  test("passes the source and the threshold of the round", async () => {
+    const built = buildInput({ source: "db", staleAfterMs: 1234 });
+    const discovery = await buildHumanDiscovery(built.input);
+    expect({
+      source: discovery?.source,
+      staleAfterMs: discovery?.staleAfterMs,
+    }).toEqual({ source: "db", staleAfterMs: 1234 });
+  });
+
+  test("passes the read of the owner rows to the injected function", async () => {
+    const reads: string[] = [];
+    const built = buildInput({
+      readOwnerPrs: async (owner) => {
+        reads.push(owner);
+        return { db_now: NOW, repos: [], prs: [] };
+      },
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    await discovery?.readOwnerPrs("acme");
+    expect(reads).toEqual(["acme"]);
+  });
+
+  test("passes the read of the repository rows to the injected function", async () => {
+    const reads: string[] = [];
+    const built = buildInput({
+      readRepoPrs: async (owner, repo) => {
+        reads.push(`${owner}/${repo}`);
+        return { db_now: NOW, repo: null, prs: [] };
+      },
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    await discovery?.readRepoPrs("acme", "widgets");
+    expect(reads).toEqual(["acme/widgets"]);
+  });
+
+  test("lists the repositories of the owner that the config names", async () => {
+    const built = buildInput({
+      config: {
+        pr_ci_watch_human_prs: true,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "https://github.com/acme/factory.git",
+        repo_allowlist: [
+          "https://github.com/Acme/Widgets",
+          "https://github.com/other/tools",
+        ],
+      },
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    expect([...(discovery?.requiredReposOf("ACME") ?? [])].sort()).toEqual([
+      "factory",
+      "widgets",
+    ]);
+  });
+
+  test("does not read the tables when the setting is off even if the source is db", async () => {
+    const reads: string[] = [];
+    const built = buildInput({
+      source: "db",
+      readOwnerPrs: async (owner) => {
+        reads.push(owner);
+        return { db_now: NOW, repos: [], prs: [] };
+      },
+      config: {
+        pr_ci_watch_human_prs: false,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "https://github.com/acme/factory.git",
+        repo_allowlist: [],
+      },
+    });
+    await buildHumanDiscovery(built.input);
+    expect(reads).toEqual([]);
   });
 });
 
@@ -5255,6 +5393,15 @@ describe("the limits of the human discovery", () => {
               allowed_labeler_ids: {},
             }),
             scopes: [{ kind: "owner", owner: "acme", ownerKind: "user" }],
+            source: "search",
+            staleAfterMs: 15 * 60_000,
+            readOwnerPrs: async () => {
+              throw new Error("unused");
+            },
+            readRepoPrs: async () => {
+              throw new Error("unused");
+            },
+            requiredReposOf: () => new Set(),
             getPr: async () => {
               throw new Error("unused");
             },
@@ -5530,6 +5677,15 @@ describe("the read of the pull requests by the human discovery", () => {
         allowed_labeler_logins: [],
         allowed_labeler_ids: {},
         factory_repo: "https://github.com/acme/factory.git",
+        repo_allowlist: [],
+      },
+      source: "search",
+      staleAfterMs: 15 * 60_000,
+      readOwnerPrs: async () => {
+        throw new Error("unused");
+      },
+      readRepoPrs: async () => {
+        throw new Error("unused");
       },
       verifiedOwners: [],
       getViewer: async () => ({ login: "factory-bot", id: 1 }),
@@ -5542,6 +5698,55 @@ describe("the read of the pull requests by the human discovery", () => {
     });
     await discovery?.getPr("acme", "widgets", 7);
     expect(reads).toEqual([7]);
+  });
+});
+
+describe("the result of the human discovery", () => {
+  function humanFields(result: PrCiWatchResult) {
+    return {
+      human_source: result.human_source,
+      human_fallback_searches: result.human_fallback_searches,
+      human_fallback_reasons: result.human_fallback_reasons,
+      human_table_candidates: result.human_table_candidates,
+      human_search_rate_limited: result.human_search_rate_limited,
+    };
+  }
+
+  const NO_HUMAN_FIELDS = {
+    human_source: "search",
+    human_fallback_searches: 0,
+    human_fallback_reasons: {},
+    human_table_candidates: 0,
+    human_search_rate_limited: 0,
+  };
+
+  test("carries the five fields of the human discovery", async () => {
+    const h = harness(humanSetup());
+    expect(humanFields(await runPrCiWatch(h.deps))).toEqual(NO_HUMAN_FIELDS);
+  });
+
+  test("counts the search that the rate limit stopped in a search round", async () => {
+    const h = harness(
+      humanSetup({ human: { found: { "factory-bot": rateLimitError() } } }),
+    );
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_search_rate_limited).toBe(1);
+  });
+
+  test("does not read the tables in a search round", async () => {
+    const h = harness(humanSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.tableReads).toEqual([]);
+  });
+
+  test("reports the search source for the recovery that runs without the watch", async () => {
+    const h = harness(humanSetup());
+    expect(humanFields(await runPrCiRecovery(h.deps))).toEqual(NO_HUMAN_FIELDS);
+  });
+
+  test("reports the search source when the watch has nothing to discover with", async () => {
+    const h = harness(trackedSetup());
+    expect(humanFields(await runPrCiWatch(h.deps))).toEqual(NO_HUMAN_FIELDS);
   });
 });
 
