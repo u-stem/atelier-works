@@ -215,17 +215,14 @@ class Scanner {
     }
     this.touch(depth);
     const refs: RefSet = new Map();
-    const addAll = (from: RefSet, scalar: (ref: Ref) => string) => {
+    const addAll = (
+      from: RefSet,
+      scalar: (ref: Ref) => string,
+      sid: (ref: Ref) => string,
+    ) => {
       this.spend(from.size);
-      const made = new Map<string, Ref["sid"]>();
       for (const ref of from.values()) {
-        const text = scalar(ref);
-        let sid = made.get(ref.scalar);
-        if (sid === undefined) {
-          sid = this.sidOf(text);
-          made.set(ref.scalar, sid);
-        }
-        const next = { ...ref, scalar: text, sid };
+        const next = { ...ref, scalar: scalar(ref), sid: sid(ref) };
         refs.set(refKey(next), next);
       }
     };
@@ -237,9 +234,20 @@ class Scanner {
         }
         const at = item.indexOf("=");
         const left = at === -1 ? item : item.slice(0, at);
-        addAll(this.refsOfString(left, true), () => item);
+        const itemSid = this.sidOf(item);
+        addAll(
+          this.refsOfString(left, true),
+          () => item,
+          () => itemSid,
+        );
         if (at === -1) this.merge(refs, passThrough(left, this));
-        else addAll(this.refsOfString(item.slice(at + 1), false), () => item);
+        else {
+          addAll(
+            this.refsOfString(item.slice(at + 1), false),
+            () => item,
+            () => itemSid,
+          );
+        }
       }
       return refs;
     }
@@ -247,7 +255,12 @@ class Scanner {
       this.merge(refs, this.refsOfString(key, true));
       if (item === null) this.merge(refs, passThrough(key, this));
       else {
-        addAll(this.refsOf(item, depth + 1), (ref) => `${key}=${ref.scalar}`);
+        // 長いスカラーを、キーごとに連結し直さない。短い鍵を合成する。
+        addAll(
+          this.refsOf(item, depth + 1),
+          (ref) => ref.scalar,
+          (ref) => this.sidOf(`${key}\0${ref.sid}`),
+        );
       }
     }
     return refs;
@@ -321,6 +334,9 @@ function canonical(value: unknown): string {
       }
       active.delete(node);
       return text;
+    }
+    if (typeof node === "number" && !Number.isFinite(node)) {
+      return `num:${String(node)}`;
     }
     const text = JSON.stringify(node) ?? "null";
     spend(text.length);

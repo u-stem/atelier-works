@@ -527,6 +527,12 @@ describe("ids of violations", () => {
     );
   });
 
+  test("an image that is null and an image that is not a number differ", () => {
+    expect(violationsOf("services:\n  db:\n    image: .nan\n")[0]?.id).not.toBe(
+      violationsOf("services:\n  db:\n    image: null\n")[0]?.id,
+    );
+  });
+
   test("two names in one scalar make two violations", () => {
     expect(
       found({ caddy: { ...caddy, labels: { a: "${DB_PASSWORD}${HOME}" } } }),
@@ -607,6 +613,15 @@ describe("shared nodes, limits and cycles", () => {
     const started = Date.now();
     const result = checkComposeTablesText(text);
     expect([result.ok, Date.now() - started < 5000]).toEqual([false, true]);
+  });
+
+  test("environment values that share a long list do not multiply the memory", () => {
+    const long = `\${WM_VERSION}${"a".repeat(110_000)}`;
+    const keys = Array.from({ length: 6000 }, (_, i) => `k${i}: *l`).join(", ");
+    const text = `x-l: &l ["${long}"]\nservices:\n  db:\n    image: postgres:18\n    environment: {${keys}}\n`;
+    const before = process.memoryUsage().rss;
+    checkComposeTablesText(text);
+    expect(process.memoryUsage().rss - before < 300 * 1024 * 1024).toBe(true);
   });
 
   test("a scalar with many references finishes quickly", () => {
