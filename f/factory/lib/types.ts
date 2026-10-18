@@ -1136,6 +1136,15 @@ export type GhOwnerOpenPrSnapshot = {
   readonly prs: readonly GhPullRequest[];
 };
 
+/** 鮮度の判定と絞り込みが見る、詳細の行の列。PRの行とIssueの行の両方が満たす。 */
+export type GhDetailOpenRow = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly state: string;
+  readonly usable: boolean;
+};
+
 /** Issueの詳細として書く値。 */
 export type GhIssueWrite = {
   readonly number: number;
@@ -1155,6 +1164,16 @@ export type GhIssue = GhIssueWrite & {
   readonly state: GhIssueState;
   readonly written_at: Date;
   readonly usable: boolean;
+};
+
+/**
+ * 1人の所有者の`gh_repos`の全行、開いているIssueの全行、DBの`now()`を、1つの文で読んだ結果。
+ * 所有者の行が無ければ、`repos`と`issues`は空になる。
+ */
+export type GhOwnerOpenIssueSnapshot = {
+  readonly db_now: Date;
+  readonly repos: readonly GhOwnerRepoFreshnessRow[];
+  readonly issues: readonly GhIssue[];
 };
 
 /**

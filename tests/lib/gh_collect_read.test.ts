@@ -7,11 +7,15 @@ import {
   effectiveGhSource,
   ghDetailStaleAfterMs,
   judgeGhOwnerCoverage,
+  judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
   judgeGhRepoFreshness,
+  usableGhDetailRows,
   usableGhPullRequests,
 } from "../../f/factory/lib/gh_collect_read.ts";
 import type {
+  GhIssue,
+  GhOwnerOpenIssueSnapshot,
   GhOwnerOpenPrSnapshot,
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
@@ -452,5 +456,222 @@ describe("effectiveGhSource", () => {
 
   test("is search when the setting is search", () => {
     expect(effectiveGhSource("search", ENABLED)).toBe("search");
+  });
+});
+
+function issueRow(overrides: Partial<GhIssue> = {}): GhIssue {
+  return {
+    id: 1,
+    owner: "acme",
+    repo: "widgets",
+    repo_id: REPO_ID,
+    number: 3,
+    state: "open",
+    author_login: "alice",
+    author_type: "User",
+    author_id: 1001,
+    created_at: new Date("2026-10-10T00:00:00.000Z"),
+    updated_at: new Date("2026-10-11T00:00:00.000Z"),
+    written_at: new Date("2026-10-11T00:00:00.000Z"),
+    usable: true,
+    ...overrides,
+  };
+}
+
+function issueSnapshot(
+  repos: readonly GhOwnerRepoFreshnessRow[],
+  issues: readonly GhIssue[] = [],
+): GhOwnerOpenIssueSnapshot {
+  return { db_now: DB_NOW, repos, issues };
+}
+
+describe("judgeGhRepoFreshness with issue rows", () => {
+  test("reports unusable when every open issue row is marked unusable", () => {
+    expect(
+      judgeGhRepoFreshness(
+        repoRow(),
+        [issueRow({ usable: false })],
+        DB_NOW,
+        STALE_AFTER_MS,
+      ),
+    ).toEqual({ kind: "stale", reason: "unusable" });
+  });
+
+  test("stays fresh when only some open issue rows are unusable", () => {
+    expect(
+      judgeGhRepoFreshness(
+        repoRow(),
+        [issueRow(), issueRow({ number: 4, usable: false })],
+        DB_NOW,
+        STALE_AFTER_MS,
+      ),
+    ).toEqual({ kind: "fresh" });
+  });
+});
+
+describe("usableGhDetailRows", () => {
+  function usable(rows: readonly GhIssue[]) {
+    return usableGhDetailRows("acme", "widgets", REPO_ID, rows);
+  }
+
+  test("keeps an open usable row with the same repo_id", () => {
+    const row = issueRow();
+
+    expect(usable([row])).toEqual([row]);
+  });
+
+  test("drops a row that is marked unusable", () => {
+    expect(usable([issueRow({ usable: false })])).toEqual([]);
+  });
+
+  test("drops a row whose repo_id differs from gh_repos", () => {
+    expect(usable([issueRow({ repo_id: REPO_ID + 1 })])).toEqual([]);
+  });
+
+  test("drops a row of another repository", () => {
+    expect(usable([issueRow({ repo: "gadgets" })])).toEqual([]);
+  });
+});
+
+describe("judgeGhOwnerIssueRepos", () => {
+  test("judges each repository against the database time of the read", () => {
+    const snap = issueSnapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
+    ]);
+
+    const judged = judgeGhOwnerIssueRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(
+      [...judged.entries()].map(([name, item]) => [name, item.freshness.kind]),
+    ).toEqual([
+      ["widgets", "fresh"],
+      ["gadgets", "stale"],
+    ]);
+  });
+
+  test("ignores open rows of a repository that has no gh_repos row", () => {
+    const snap = issueSnapshot([], [issueRow({ repo: "orphan" })]);
+
+    expect([
+      ...judgeGhOwnerIssueRepos("acme", snap, STALE_AFTER_MS).keys(),
+    ]).toEqual([]);
+  });
+
+  test("judges lowercase rows for an owner name with uppercase letters", () => {
+    const snap = issueSnapshot([ownerRepoRow("widgets")], [issueRow()]);
+
+    const judged = judgeGhOwnerIssueRepos("Acme", snap, STALE_AFTER_MS);
+
+    expect(judged.get("widgets")?.usable).toEqual([issueRow()]);
+  });
+
+  test("keeps only usable open rows with the matching repo_id of a fresh repository", () => {
+    const keep = issueRow({ number: 1 });
+    const snap = issueSnapshot(
+      [ownerRepoRow("widgets")],
+      [
+        keep,
+        issueRow({ number: 2, usable: false }),
+        issueRow({ number: 3, repo_id: REPO_ID + 1 }),
+      ],
+    );
+
+    const judged = judgeGhOwnerIssueRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(judged.get("widgets")?.usable).toEqual([keep]);
+  });
+
+  test("returns no usable rows for a stale repository", () => {
+    const snap = issueSnapshot(
+      [ownerRepoRow("widgets", { last_collected_at: TOO_OLD })],
+      [issueRow()],
+    );
+
+    const judged = judgeGhOwnerIssueRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(judged.get("widgets")?.usable).toEqual([]);
+  });
+});
+
+describe("judgeGhOwnerCoverage with required repositories", () => {
+  function judgeRequired(
+    repos: readonly GhOwnerRepoFreshnessRow[],
+    required: ReadonlySet<string>,
+    allowed: (owner: string, repo: string) => boolean = () => true,
+  ) {
+    const judged = judgeGhOwnerIssueRepos(
+      "acme",
+      issueSnapshot(repos),
+      STALE_AFTER_MS,
+    );
+    return judgeGhOwnerCoverage("acme", judged, allowed, required);
+  }
+
+  test("reports no_record when a required repository has no gh_repos row", () => {
+    expect(
+      judgeRequired([ownerRepoRow("widgets")], new Set(["gadgets"])),
+    ).toEqual({ kind: "stale", reason: "no_record" });
+  });
+
+  test("reports unusable for a required repository that is not listed or not visible", () => {
+    expect(
+      judgeRequired(
+        [ownerRepoRow("widgets"), ownerRepoRow("gadgets", { gone: true })],
+        new Set(["gadgets"]),
+      ),
+    ).toEqual({ kind: "stale", reason: "unusable" });
+  });
+
+  test("ignores an archived repository even when it is required", () => {
+    expect(
+      judgeRequired(
+        [
+          ownerRepoRow("widgets"),
+          ownerRepoRow("gadgets", { gone: true, archived: true }),
+        ],
+        new Set(["gadgets"]),
+      ),
+    ).toEqual({ kind: "fresh" });
+  });
+
+  test("ignores a gone repository that is not required", () => {
+    expect(
+      judgeRequired(
+        [ownerRepoRow("widgets"), ownerRepoRow("gadgets", { gone: true })],
+        new Set(["widgets"]),
+      ),
+    ).toEqual({ kind: "fresh" });
+  });
+
+  test("matches required names without regard to case", () => {
+    expect(
+      judgeRequired([ownerRepoRow("widgets")], new Set(["Widgets"])),
+    ).toEqual({ kind: "fresh" });
+  });
+
+  test("ignores a required repository that is not allowed now", () => {
+    expect(
+      judgeRequired(
+        [
+          ownerRepoRow("widgets"),
+          ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
+        ],
+        new Set(["gadgets"]),
+        (_owner, repo) => repo !== "gadgets",
+      ),
+    ).toEqual({ kind: "fresh" });
+  });
+
+  test("gives the same result as before when required is omitted", () => {
+    const snap = snapshot([
+      ownerRepoRow("widgets"),
+      ownerRepoRow("gadgets", { gone: true }),
+    ]);
+    const judged = judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS);
+
+    expect(judgeGhOwnerCoverage("acme", judged, () => true)).toEqual({
+      kind: "fresh",
+    });
   });
 });

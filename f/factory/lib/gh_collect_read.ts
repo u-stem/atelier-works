@@ -4,6 +4,9 @@
 
 import type {
   FactoryConfig,
+  GhDetailOpenRow,
+  GhIssue,
+  GhOwnerOpenIssueSnapshot,
   GhOwnerOpenPrSnapshot,
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
@@ -42,7 +45,7 @@ export function ghDetailStaleAfterMs(ownerCount: number): number {
 }
 
 /** 行が、リポジトリの現在の数値IDで書かれた、使ってよい開いた行か。 */
-function isUsableOpenRow(row: GhPullRequest, repoId: number): boolean {
+function isUsableOpenRow(row: GhDetailOpenRow, repoId: number): boolean {
   return row.state === "open" && row.usable && row.repo_id === repoId;
 }
 
@@ -56,9 +59,9 @@ function isUsableOpenRow(row: GhPullRequest, repoId: number): boolean {
  * 6. DBの時刻との差が閾値を超える(`too_old`)。閾値ちょうどは`fresh`。
  * 比べる相手は、行を読んだ同じ文のDBの時刻である。workerの時計とは比べない。
  */
-export function judgeGhRepoFreshness(
+export function judgeGhRepoFreshness<T extends GhDetailOpenRow>(
   repo: GhRepoFreshnessRow | null,
-  openRows: readonly GhPullRequest[],
+  openRows: readonly T[],
   dbNow: Date,
   staleAfterMs: number,
 ): GhRepoFreshness {
@@ -157,6 +160,36 @@ export function judgeGhOwnerRepos(
   return judged;
 }
 
+/** 所有者の判定が見る、リポジトリごとの判定の部分。PRとIssueのどちらの判定も満たす。 */
+export type GhOwnerRepoCoverageInput = {
+  readonly row: GhOwnerRepoFreshnessRow;
+  readonly freshness: GhRepoFreshness;
+};
+
+/** Issueの行の、リポジトリごとの判定。`usable`は、鮮度が足りるときだけ使ってよい行。 */
+export type GhOwnerIssueRepoJudgement = GhOwnerRepoCoverageInput & {
+  readonly usable: readonly GhIssue[];
+};
+
+/** 詳細の行から、使ってよい開いた行だけを返す。 */
+export function usableGhDetailRows<T extends GhDetailOpenRow>(
+  _owner: string,
+  _repo: string,
+  _repoId: number,
+  _rows: readonly T[],
+): T[] {
+  return [];
+}
+
+/** 所有者のIssueの読み取りを、リポジトリごとの判定に分ける。鍵は小文字のリポジトリ名。 */
+export function judgeGhOwnerIssueRepos(
+  _owner: string,
+  _snapshot: GhOwnerOpenIssueSnapshot,
+  _staleAfterMs: number,
+): Map<string, GhOwnerIssueRepoJudgement> {
+  return new Map();
+}
+
 export type GhOwnerCoverage =
   | { readonly kind: "fresh" }
   | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
@@ -173,8 +206,9 @@ export type GhOwnerCoverage =
  */
 export function judgeGhOwnerCoverage(
   owner: string,
-  judged: ReadonlyMap<string, GhOwnerRepoJudgement>,
+  judged: ReadonlyMap<string, GhOwnerRepoCoverageInput>,
   isRepoAllowedNow: (owner: string, repo: string) => boolean,
+  _required?: ReadonlySet<string>,
 ): GhOwnerCoverage {
   if (judged.size === 0) {
     return { kind: "stale", reason: "no_record" };
