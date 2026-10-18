@@ -59,6 +59,7 @@ declare namespace RT {
     gh_collect_enabled: boolean,
     gh_collect_detail_enabled: boolean,
     gh_source_dependabot: string,
+    gh_source_pr_conflict_watch: string,
     worker_alert_memory_ratio: number,
     check_commands_by_repo: object
   }

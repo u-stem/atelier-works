@@ -106,6 +106,7 @@ type DefaultableField =
   | "gh_collect_enabled"
   | "gh_collect_detail_enabled"
   | "gh_source_dependabot"
+  | "gh_source_pr_conflict_watch"
   | "worker_alert_memory_ratio"
   | "check_commands_by_repo";
 
@@ -187,6 +188,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   gh_collect_detail_enabled: false,
   // 収集の表から候補を読むのは、実機で表と検索の突き合わせを確かめてから、リモートのリソースで切り替える。
   gh_source_dependabot: "search",
+  gh_source_pr_conflict_watch: "search",
   // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
   worker_alert_memory_ratio: 0.8,
   check_commands_by_repo: {},
@@ -266,7 +268,7 @@ function isGhSource(value: unknown): value is GhSource {
 /** `raw[field]`が列挙の値ならそれを返す。値が無ければ`fallback`を返し、列挙の外なら例外を投げる。 */
 function ghSourceField(
   raw: Record<string, unknown>,
-  field: "gh_source_dependabot",
+  field: "gh_source_dependabot" | "gh_source_pr_conflict_watch",
   fallback: GhSource,
 ): GhSource {
   const value = raw[field];
@@ -1018,6 +1020,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "gh_source_dependabot",
       DEFAULTS.gh_source_dependabot,
+    ),
+    gh_source_pr_conflict_watch: ghSourceField(
+      raw,
+      "gh_source_pr_conflict_watch",
+      DEFAULTS.gh_source_pr_conflict_watch,
     ),
     worker_alert_memory_ratio: ratioField(
       raw,
