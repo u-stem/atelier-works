@@ -7390,12 +7390,54 @@ export async function readGhOwnerOpenPullRequests(
 
 /**
  * 1人の所有者の`gh_repos`の全行、開いているIssueの全行、DBの`now()`を、1つの文で読む。
+ * 収集はリポジトリの行と`last_collected_at`を1つの文で書くので、1つの文で読めば、リポジトリごとに一貫した組を読む。
+ * 名前は小文字にして照会する。表の名前は小文字だけである。
+ * `usable`、数値IDの一致、鮮度はここでは絞らず、呼び出し側が判定する。
+ * 読んだ行は保存する値の述語で検査し直し、通らない値があれば、値を含めずに例外にする。
  */
 export async function readGhOwnerOpenIssues(
-  _owner: string,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<GhOwnerOpenIssueSnapshot> {
-  return { db_now: new Date(0), repos: [], issues: [] };
+  const ownerName = requireGitHubName(owner, "owner").toLowerCase();
+  const rows = await sql`
+    WITH r AS (
+      SELECT repo, repo_id, allowed, archived, gone, last_collected_at, truncated, detail_failed
+      FROM factory.gh_repos
+      WHERE owner = ${ownerName}
+    ), issue AS (
+      SELECT id, owner, repo, repo_id, number, state, author_login, author_type, author_id, created_at, updated_at, written_at, usable
+      FROM factory.gh_issues
+      WHERE owner = ${ownerName} AND state = 'open'
+    )
+    SELECT
+      now() AS db_now,
+      coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.repo) FROM r), '[]'::jsonb) AS repos,
+      coalesce((SELECT jsonb_agg(to_jsonb(issue) ORDER BY issue.repo, issue.number) FROM issue), '[]'::jsonb) AS issues
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("db: the owner open issue statement returned no row");
+  }
+  const toRow = (item: unknown, field: string) => {
+    if (!isRecord(item)) {
+      throw new Error(`db: row field "${field}" has a non-object element`);
+    }
+    return item;
+  };
+  return {
+    db_now: parseDate(row.db_now, "db_now"),
+    repos: parseJsonArray(row.repos, "repos").map((item) => {
+      const repoRow = toRow(item, "repos");
+      return {
+        repo: parseStoredGitHubName(repoRow.repo, "repo"),
+        ...toGhRepoFreshnessRow(repoRow),
+      };
+    }),
+    issues: parseJsonArray(row.issues, "issues").map((item) =>
+      toGhIssue(toRow(item, "issues")),
+    ),
+  };
 }
 
 /**
