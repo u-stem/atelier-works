@@ -50,7 +50,7 @@ function runIn(dir: string) {
 /** 実行するファイルが`HEAD`と違うときの拒否。 */
 function differs(path: string) {
   return {
-    ok: false,
+    ok: false as const,
     reason: `an executed file differs from HEAD: ${path}`,
   };
 }
@@ -75,22 +75,28 @@ describe("gitBlobSha1", () => {
 
 describe("checkCodeOrigin", () => {
   test("passes for a clean main checkout that is at origin/main", async () => {
-    const { repo } = setup();
-    expect(await check(repo.dir)).toEqual({ ok: true });
+    const { repo, head } = setup();
+    expect(await check(repo.dir)).toEqual({ ok: true, head });
+  });
+
+  test("returns the sha of the HEAD that it checked", async () => {
+    const { repo, head } = setup();
+    const result = await check(repo.dir);
+    expect(result.ok ? result.head : null).toBe(head);
   });
 
   test("passes when HEAD is behind origin/main", async () => {
-    const { repo } = setup();
+    const { repo, head } = setup();
     repo.commit({ "docs/a.md": "x\n" }, "next");
     repo.setOriginMain(repo.git(["rev-parse", "HEAD"]));
     repo.git(["reset", "-q", "--hard", "HEAD~1"]);
-    expect(await check(repo.dir)).toEqual({ ok: true });
+    expect(await check(repo.dir)).toEqual({ ok: true, head });
   });
 
   test("passes without a bunfig.toml when HEAD has none", async () => {
     const { "bunfig.toml": _bunfig, ...withoutBunfig } = FILES;
-    const { repo } = setup(withoutBunfig);
-    expect(await check(repo.dir)).toEqual({ ok: true });
+    const { repo, head } = setup(withoutBunfig);
+    expect(await check(repo.dir)).toEqual({ ok: true, head });
   });
 
   test("rejects a linked worktree", async () => {
@@ -161,13 +167,13 @@ describe("checkCodeOrigin", () => {
   );
 
   test("passes with unchanged tsconfig files", async () => {
-    const { repo } = setup({
+    const { repo, head } = setup({
       ...FILES,
       "tsconfig.json": "{}\n",
       "tsconfig.wmill.json": "{}\n",
       "scripts/tsconfig.json": "{}\n",
     });
-    expect(await check(repo.dir)).toEqual({ ok: true });
+    expect(await check(repo.dir)).toEqual({ ok: true, head });
   });
 
   test("rejects a changed package.json", async () => {

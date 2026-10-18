@@ -21,7 +21,7 @@ import type { GitRunner } from "./plan_git.ts";
 import { escapeDetail } from "./stable.ts";
 
 export type OriginCheck =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly head: string }
   | { readonly ok: false; readonly reason: string };
 
 export type CodeOriginInput = {
@@ -173,5 +173,5 @@ export async function checkCodeOrigin(
   const ancestor = await run(isAncestorArgs(headSha, tipSha));
   if (ancestor.code === 1) return failure("HEAD is not in origin/main");
   if (ancestor.code !== 0) return failure("git merge-base failed");
-  return { ok: true };
+  return { ok: true, head: "" };
 }
