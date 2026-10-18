@@ -4,7 +4,7 @@
  * 自由文字列の欄は持たず、欄ごとに形を検査する。
  */
 
-import { isDateTime } from "./drain_store.ts";
+import { isDateTime, WORKERS } from "./drain_store.ts";
 import { isSha40 } from "./git.ts";
 import { NOTIFY_REASONS } from "./notify_text.ts";
 import { isRecord, stableStringify } from "./stable.ts";
@@ -132,7 +132,7 @@ export type StateRead =
   | { readonly kind: "ok"; readonly state: HostApplyState }
   | { readonly kind: "state_unreadable"; readonly reason: string };
 
-const REJECTION_KINDS: readonly string[] = [
+const REJECTION_KINDS = [
   "compose_forbidden",
   "mise_forbidden",
   "unknown_service",
@@ -141,7 +141,14 @@ const REJECTION_KINDS: readonly string[] = [
   "tree_forbidden",
   "ci_failed",
   "docker_version",
-];
+] as const satisfies readonly RejectionKind[];
+
+/** 拒否の種類が増えたら、ここで型の検査が落ちる。一覧に足し忘れると、書いた状態が読めなくなるため。 */
+export const REJECTION_KINDS_COVER_ALL: [
+  Exclude<RejectionKind, (typeof REJECTION_KINDS)[number]>,
+] extends [never]
+  ? true
+  : never = true;
 
 const STATE_KEYS: readonly string[] = [
   "schema",
@@ -324,7 +331,7 @@ function hasConvergingShape(
 
 /**
  * 形が合った`converging`が、ケースに依らない段階の規則を満たすか。
- * ケースごとの規則(何を作り直せるか、何を排水できるか)は、そのケースの状態を書くPRで足す。
+ * ケースごとの規則(何を作り直せるか、何を排水できるか)は、そのケースの状態を書く側が足す。
  * 書き手のいないケースの規則を先に置くと、後から書く側の正当な状態を拒否して実行役が止まるため。
  */
 function isConsistent(c: Converging, appliedSha: string): boolean {
@@ -338,6 +345,16 @@ function isConsistent(c: Converging, appliedSha: string): boolean {
   } else {
     if (c.latest_before === null || c.case === null) return false;
     if (!sameSet(Object.keys(c.old_containers), c.recreate)) return false;
+  }
+  // 切り替えと後処理の段階では、作り直すworkerはすべて作り直しが済んでいる。
+  if (
+    (c.phase === "switch" || c.phase === "post") &&
+    !isSubset(
+      c.recreate.filter((name) => WORKERS.some((worker) => worker === name)),
+      rolledKeys,
+    )
+  ) {
+    return false;
   }
   // 前進しかできない状態は、ビルドの間と巻き戻しの間には無い。どのケースで立てるかは、そのケースを書く段階が決める。
   if (c.forward_only && (c.phase === "build" || c.phase === "restore")) {
@@ -667,8 +684,10 @@ export function isAllowedTransition(
     before.sha !== after.sha ||
     before.started_at !== after.started_at ||
     before.executor_version !== after.executor_version ||
-    !same(before.candidates, after.candidates) ||
-    !same(before.confirmation, after.confirmation)
+    !sameSet(before.candidates, after.candidates) ||
+    before.confirmation.at !== after.confirmation.at ||
+    before.confirmation.sha !== after.confirmation.sha ||
+    !sameSet(before.confirmation.candidates, after.confirmation.candidates)
   ) {
     return false;
   }
@@ -686,7 +705,7 @@ export function isAllowedTransition(
   }
   if (
     before.phase !== "build" &&
-    (!same(before.recreate, after.recreate) ||
+    (!sameSet(before.recreate, after.recreate) ||
       !same(before.old_containers, after.old_containers) ||
       !same(before.old_images, after.old_images) ||
       !same(before.new_images, after.new_images))

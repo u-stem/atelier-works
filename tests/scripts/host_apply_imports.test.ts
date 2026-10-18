@@ -505,25 +505,53 @@ describe("the state file", () => {
   });
 });
 
-describe("the re-exports and the names of secure_file", () => {
-  const REEXPORT_FROM_SECURE_FILE =
-    /export\s[^;]*?from\s*["']\.\/secure_file\.ts["']/;
+/** `secure_file`から取った束縛の再exportがあるか。拡張子を省いた指定子も数える。 */
+function reexportsSecureFile(file: string, source: string): boolean {
+  const wanted = moduleKey(join(HOST_APPLY_DIR, "secure_file.ts"));
+  return [...source.matchAll(/export\s[^;]*?from\s*["']([^"']+)["']/g)].some(
+    (match) => moduleKey(resolve(dirname(file), match[1] ?? "")) === wanted,
+  );
+}
 
+describe("the re-exports and the names of secure_file", () => {
   test("no module re-exports from secure_file", () => {
     expect(
-      sourceFiles().filter((file) =>
-        REEXPORT_FROM_SECURE_FILE.test(readFileSync(file, "utf8")),
+      relativeNames(
+        scriptFiles().filter((file) =>
+          reexportsSecureFile(file, readFileSync(file, "utf8")),
+        ),
       ),
     ).toEqual([]);
   });
 
   test("the re-export scanner finds a re-export", () => {
     expect(
-      REEXPORT_FROM_SECURE_FILE.test(
+      reexportsSecureFile(
+        join(HOST_APPLY_DIR, "x.ts"),
         'export { writeSecureFile } from "./secure_file.ts";',
       ),
     ).toBe(true);
   });
+
+  test("the re-export scanner finds a re-export without the extension", () => {
+    expect(
+      reexportsSecureFile(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'export { writeSecureFile } from "./secure_file";',
+      ),
+    ).toBe(true);
+  });
+
+  test.each(["approved_io.ts", "drain_store.ts", "state_io.ts"])(
+    "%s exports none of the names of secure_file",
+    async (name) => {
+      const own = Object.keys(await import(join(HOST_APPLY_DIR, name)));
+      const secure = Object.keys(
+        await import("../../scripts/host_apply/secure_file.ts"),
+      );
+      expect(own.filter((key) => secure.includes(key))).toEqual([]);
+    },
+  );
 
   test("the list of file names is used only in secure_file.ts", () => {
     expect(
@@ -552,14 +580,17 @@ describe("the importers of state_io", () => {
   });
 });
 
-/** `held_lock.ts`を値として読み込んでいるか。型だけの読み込みは数えない。 */
-function importsHeldLockValue(file: string, source: string): boolean {
-  const pattern =
-    /(?:^|\n)\s*import\s+(?!type\b)[^;]*?from\s*["']([^"']+)["']/g;
-  const wanted = moduleKey(join(HOST_APPLY_DIR, "held_lock.ts"));
-  return [...source.matchAll(pattern)].some(
-    (match) => moduleKey(resolve(dirname(file), match[1] ?? "")) === wanted,
+/** `import type`の文を除く。型だけの読み込みは、値としては数えない。 */
+function withoutTypeImports(source: string): string {
+  return source.replace(
+    /(?:^|\n)\s*import\s+type\b[^;]*?from\s*["'][^"']+["'];?/g,
+    "\n",
   );
+}
+
+/** `held_lock.ts`を値として読み込んでいるか。動的なimportと再exportも値として数える。 */
+function importsHeldLockValue(file: string, source: string): boolean {
+  return importsModule(file, withoutTypeImports(source), "held_lock.ts");
 }
 
 describe("the value importers of held_lock", () => {
@@ -582,6 +613,24 @@ describe("the value importers of held_lock", () => {
       importsHeldLockValue(
         join(HOST_APPLY_DIR, "x.ts"),
         'import { HeldLock as L } from "./held_lock";',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner finds a dynamic import", () => {
+    expect(
+      importsHeldLockValue(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'const { HeldLock } = await import("./held_lock.ts");',
+      ),
+    ).toBe(true);
+  });
+
+  test("the scanner finds a re-export", () => {
+    expect(
+      importsHeldLockValue(
+        join(HOST_APPLY_DIR, "x.ts"),
+        'export { HeldLock } from "./held_lock";',
       ),
     ).toBe(true);
   });

@@ -433,6 +433,97 @@ describe("createState", () => {
   });
 });
 
+describe("images that the stack check changes", () => {
+  test("createState writes the images that it checked", async () => {
+    const dir = privateDir();
+    await createState(
+      dir,
+      {
+        ...INPUT,
+        applied_images: { [WORKER]: { image_id: IMAGE_A, build_key: "k1" } },
+        stackMatches: async (_sha, images) => {
+          const entry = images[WORKER];
+          if (entry !== undefined) {
+            Object.assign(entry, { image_id: IMAGE_B });
+          }
+          return true;
+        },
+      },
+      held,
+      uid,
+    );
+    expect(readOk(dir).applied_images[SHA]?.[WORKER]?.image_id).toBe(IMAGE_A);
+  });
+
+  test("commitApplied writes the images that it checked", async () => {
+    const dir = privateDir();
+    await inPost(dir);
+    await commitApplied(
+      dir,
+      {
+        images: { [WORKER]: { image_id: IMAGE_B, build_key: "k2" } },
+        outcome: "converged",
+        now: AT,
+        stackMatches: async (_sha, images) => {
+          const entry = images[WORKER];
+          if (entry !== undefined) {
+            Object.assign(entry, { image_id: IMAGE_A });
+          }
+          return true;
+        },
+      },
+      held,
+      uid,
+    );
+    expect(readOk(dir).applied_images[NEXT]?.[WORKER]?.image_id).toBe(IMAGE_B);
+  });
+});
+
+describe("input that is not a valid state", () => {
+  test("createState does not call the stack check for a sha that is not a sha", async () => {
+    const dir = privateDir();
+    let calls = 0;
+    await ignoreFailure(() =>
+      createState(
+        dir,
+        {
+          ...INPUT,
+          applied_sha: "--all",
+          stackMatches: async () => {
+            calls += 1;
+            return true;
+          },
+        },
+        held,
+        uid,
+      ),
+    );
+    expect(calls).toBe(0);
+  });
+
+  test("reinit does not call the stack check for a sha that is not a sha", async () => {
+    const dir = privateDir();
+    await created(dir);
+    let calls = 0;
+    await ignoreFailure(() =>
+      reinit(
+        dir,
+        {
+          ...INPUT,
+          applied_sha: "--all",
+          stackMatches: async () => {
+            calls += 1;
+            return true;
+          },
+        },
+        held,
+        uid,
+      ),
+    );
+    expect(calls).toBe(0);
+  });
+});
+
 describe("writeState", () => {
   test("stores an update that keeps the applied state", async () => {
     const dir = privateDir();

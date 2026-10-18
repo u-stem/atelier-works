@@ -126,7 +126,8 @@ export function writeState(
 /**
  * 動いているスタックが、指定のコミットとイメージの定義と一致するかを確かめる関数。
  * 実装はdockerを呼ぶ側が注入する。次の3つをすべて満たすときだけ真を返す契約にする。
- * - 動いているサービスの集合が、`images`のキーと等しい(空は偽)。
+ * - 動いているサービスがすべて`images`のキーにあり(空は偽)、常駐するサービスもすべて`images`のキーにある。
+ *   一度だけ動いて終わるサービスは、`images`にあってもよい。
  * - 各コンテナのイメージIDが、`images`の`image_id`と等しい。
  * - `build_key`が、信頼できるgitのオブジェクトから`sha`のtreeで求めた値と等しい。
  * 共有ボリュームの印のように、workerが書ける出どころを唯一の根拠にしてはならない。
@@ -147,7 +148,8 @@ async function requireStack(
   sha: string,
   images: Readonly<Record<string, ImageEntry>>,
 ): Promise<void> {
-  if ((await check(sha, images)) !== true) {
+  // 照合した内容と書く内容を同じにするため、照合には写しを渡す。
+  if ((await check(sha, structuredClone(images))) !== true) {
     throw new Error("running stack does not match the sha");
   }
 }
@@ -184,13 +186,13 @@ export async function createState(
     throw new Error("state file already exists");
   }
   const drain = requireEmptyDrain(dir, uid, true);
-  const state = newState(input.applied_sha, input.applied_images);
+  // 呼び出し側が照合の間に書き換えられないよう、先に写しを取る。
+  const images = structuredClone(input.applied_images);
+  const state = newState(input.applied_sha, images);
+  // 型ガードに通す。形の合わない入力を、照合の関数に渡す前に止めるため。
   serializeState(state);
-  await requireStack(
-    input.stackMatches,
-    input.applied_sha,
-    input.applied_images,
-  );
+  await requireStack(input.stackMatches, input.applied_sha, images);
+  // 状態の「無い」の再確認はしない。排水の記録は別の書き手が作りうるが、状態はロックで守る。
   if (drain === "absent") {
     lock.assertHeld();
     // 照合を待つ間に別の書き手が作った記録を、空の記録で上書きしない。
@@ -217,8 +219,10 @@ export async function commitApplied(
   lock: HeldLock,
   uid: number = currentUid(),
 ): Promise<HostApplyState> {
-  const next = applyCommit(requireState(dir, uid), input);
-  await requireStack(input.stackMatches, next.applied_sha, input.images);
+  // 呼び出し側が照合の間に書き換えられないよう、先に写しを取る。
+  const images = structuredClone(input.images);
+  const next = applyCommit(requireState(dir, uid), { ...input, images });
+  await requireStack(input.stackMatches, next.applied_sha, images);
   persist(dir, next, lock, uid);
   return next;
 }
@@ -240,13 +244,12 @@ export async function reinit(
     throw new Error("a convergence is in progress");
   }
   requireEmptyDrain(dir, uid, false);
-  const state = newState(input.applied_sha, input.applied_images);
+  // 呼び出し側が照合の間に書き換えられないよう、先に写しを取る。
+  const images = structuredClone(input.applied_images);
+  const state = newState(input.applied_sha, images);
+  // 型ガードに通す。形の合わない入力を、照合の関数に渡す前に止めるため。
   serializeState(state);
-  await requireStack(
-    input.stackMatches,
-    input.applied_sha,
-    input.applied_images,
-  );
+  await requireStack(input.stackMatches, input.applied_sha, images);
   persist(dir, state, lock, uid);
   return state;
 }

@@ -1112,6 +1112,40 @@ describe("isAllowedTransition", () => {
   });
 });
 
+describe("switch and post", () => {
+  test("is state_unreadable at switch while a recreated worker is not rolled", () => {
+    expect(kindOf(withConverging({ phase: "switch" }))).toBe(
+      "state_unreadable",
+    );
+  });
+
+  test("reads switch once every recreated worker is rolled", () => {
+    expect(
+      kindOf(
+        withConverging({ phase: "switch", rolled: { [WORKER]: CONTAINER_B } }),
+      ),
+    ).toBe("ok");
+  });
+
+  test("ignores the order of recreate and candidates in a transition", () => {
+    const wide = converging({
+      phase: "drain",
+      rolled: {},
+      candidates: [WORKER, NATIVE],
+      recreate: [WORKER, NATIVE],
+      old_containers: { [WORKER]: CONTAINER_A, [NATIVE]: CONTAINER_A },
+      confirmation: { at: AT, sha: NEXT, candidates: [WORKER, NATIVE] },
+    });
+    const swapped = {
+      ...wide,
+      candidates: [NATIVE, WORKER],
+      recreate: [NATIVE, WORKER],
+      confirmation: { at: AT, sha: NEXT, candidates: [NATIVE, WORKER] },
+    };
+    expect(isAllowedTransition(stateWith(wide), stateWith(swapped))).toBe(true);
+  });
+});
+
 describe("the worker names", () => {
   test("every compose worker service is a drainable worker", async () => {
     const { COMPOSE_SERVICE_ALLOWLIST } = await import(
@@ -1123,6 +1157,41 @@ describe("the worker names", () => {
         name.startsWith("windmill_worker"),
       ).sort(),
     ).toEqual([...WORKERS].sort());
+  });
+});
+
+describe("keeping the newest entries", () => {
+  const NEW = "2".repeat(40);
+
+  function key(index: number): string {
+    return index.toString(16).padStart(40, "0");
+  }
+
+  function filled(time: (index: number) => string): HostApplyState {
+    let state = parseOk(base());
+    for (let index = 0; index < 20; index += 1) {
+      state = withCiPass(state, key(index), time(index));
+    }
+    return state;
+  }
+
+  test("compares times by value, not as text", () => {
+    // 小数部のある時刻は、文字列では「.」が「Z」より前に来て古く見えるが、値では新しい。
+    const state = withCiPass(
+      filled(() => "2026-10-18T01:00:00Z"),
+      NEW,
+      "2026-10-18T01:00:00.5Z",
+    );
+    expect(Object.keys(state.ci)).toContain(NEW);
+  });
+
+  test("drops the oldest entry when it is full", () => {
+    const state = withCiPass(
+      filled((index) => `2026-10-18T00:00:${String(index).padStart(2, "0")}Z`),
+      NEW,
+      "2026-10-18T02:00:00Z",
+    );
+    expect(Object.keys(state.ci)).not.toContain(key(0));
   });
 });
 
