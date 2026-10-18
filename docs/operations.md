@@ -2112,7 +2112,7 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 ## dependabotの更新を設定する
 
 dependabotが開いた依存の更新PRを、Factoryが評価して自動でマージできる。
-`f/factory/factory_config`の次の3つの項目で設定する。
+`f/factory/factory_config`の次の4つの項目で設定する。
 `factory_config`は同期の対象外なので、WindmillのResourcesの編集画面で直す。
 
 | 項目 | 既定値 | 意味 |
@@ -2120,6 +2120,7 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 | `dependabot_enabled` | `false` | dependabotのPRを自動で処理するか |
 | `dependabot_merge_enabled` | `false` | マージしてよいと判断したPRを、実際にマージするか。偽の間は試運転で、そのPRを人に回す |
 | `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
+| `gh_source_dependabot` | `search` | 候補のPRを列挙する元。`search`は検索、`db`は収集の表。切り替えの手順は[候補の元を表に切り替える](#候補の元を表に切り替える) |
 
 `dependabot_min_published_days`は、公開から日が浅い版を自動でマージしないための下限である。
 1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
@@ -2154,6 +2155,73 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 7. `dependabot_merge_enabled`を`true`にする。
 8. 最初のマージの結果を確かめる。
    問題があれば、すぐに`dependabot_merge_enabled`を`false`に戻す。
+
+### 候補の元を表に切り替える
+
+設定`gh_source_dependabot`を`db`にすると、`poll_dependabot`は候補のPRを検索でなく、収集の表から読む。
+検索の回数が減り、検索のレート制限に当たりにくくなる。
+既定の`search`のままなら、候補の列挙は変わらない。
+検索の経路でも変わる点が3つある。
+候補の名前とGitHubの返す名前が合わないPRは、飛ばす(`repoMismatch`)。
+保持期間と待ちの上限はRESTの`created_at`で判定し、読めなければそのPRの失敗にする。
+失敗の記録の段の名前は、リポジトリ名を小文字にそろえる。
+詳しくは[dependabotの更新の内部仕様](internals/dependabot.md)の「選ばないPR」と「周回の結果」にある。
+
+収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索になる。
+`gh_source_dependabot`に書ける値は、`search`と`db`の2つだけである。
+列挙の外の値(`DB`や`table`など)を書くと、設定を読むscriptがすべて止まる。
+
+記録の時刻が閾値を超えたリポジトリは、その周回だけ検索に戻る。
+閾値は、`owners`の所有者がn人のとき、`max(15分, (n+1)×5分)`である。
+
+1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリ(`factory_repo`と`repo_allowlist`)の記録が進んでいることを確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, repo, repo_id, allowed, archived, gone, truncated, detail_failed, last_collected_at, now() - last_collected_at AS age FROM factory.gh_repos ORDER BY owner, repo"
+   ```
+
+   対象のリポジトリが許可され、archiveされておらず、`gone`でなく、`age`が閾値の内にあることを見る。
+   満たさないリポジトリは、`db`にしても毎周回検索に戻る。
+2. 表の結果とGitHubの結果が合うことを確かめる。
+   dependabotが作者で、draftでなく、baseが`main`の開いているPRの番号を、表とGitHubの`pulls`の一覧のそれぞれから集める。
+   2つの集合を`cmp -s`で比べ、`same`と`different`のどちらになったかだけを見る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT number FROM factory.gh_pull_requests WHERE state = 'open' AND usable AND NOT is_draft AND base_ref = 'main' AND author_login = 'dependabot' AND author_type = 'Bot' AND owner = '<owner>' AND repo = '<repo>' ORDER BY number"
+   ```
+
+   表の作者の値は、1件だけ出して確かめる。
+   `author_login`が`dependabot`、`author_type`が`Bot`として入っていなければ、上の絞り込みが合わない。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT author_login, author_type FROM factory.gh_pull_requests WHERE state = 'open' AND author_login ILIKE 'dependabot%' LIMIT 1"
+   ```
+
+   手順1の鮮度の判定が、対象のリポジトリですべて`fresh`であることも確かめる。
+   周回の遅れ(5分以内)で説明できない差があれば、`db`にしない。
+3. `gh_source_dependabot`を`db`に切り替える。
+   書き換えの前に、リソースの値を取得して控えを取る。
+   取得した出力の`value`の`gh_source_dependabot`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
+   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
+   戻すときは、控えの値で同じ手順を行い、`gh_source_dependabot`を`search`にする。
+4. 続く3回の`poll_dependabot`の結果を、WindmillのRunsで確かめる。
+   `enabled`が`true`、`paused`が`false`、`source`が`db`、`failed`が0であることを見る。
+5. `fallback_searches`が0であることを確かめる。
+   1以上なら、`fallback_reasons`の語で原因を読む。
+
+| `fallback_reasons`の語 | 対処 |
+| --- | --- |
+| `no_record` | `gh_repos`に行が無い。そのリポジトリが収集の対象(`owners`の所有者の、forkでないリポジトリ)かを確かめる |
+| `unusable` | 許可の外、一覧から消えた、archive済み、開いた行がすべて使えない、のどれかである。archive済みのリポジトリは`repo_allowlist`から外す |
+| `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
+| `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
+| `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_pull_requests`と、DBの状態を確かめる |
+
+定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
+説明できないなら、`gh_source_dependabot`を`search`に戻す。
+
+読み取り元だけを戻すときは、`gh_source_dependabot`を`search`にする。
+すべてを止める手順は、[無効にする](#無効にする)の節にある。
 
 ### 初回の実機で確かめること
 

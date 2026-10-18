@@ -2853,6 +2853,24 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+scriptの定義の`lock`が自分の`.script.lock`を指す契約テストも止める。
+対象は`tests/lib/script_yaml_lock_contract.test.ts`である。
+`wmill sync push`は、`lock: '!inline <パス>'`のパスを読み、中身をlockとして保存する。
+パスに制限はなく、絶対パスや`..`も書ける。
+保護の外の定義を書き換えて参照先を変えると、workerやホストの任意のファイルがlockとしてワークスペースに載りうる。
+このテストは、全定義の参照先を固定する。
+あわせて、追跡するツリーにsymlinkとsubmoduleがないこと、`f/`の下にモジュールフォルダ(`__mod`など)がないことを確かめる。
+script定義以外のYAMLとJSONには、`!inline`を許さない。
+YAMLでは、エスケープや行の継続で作る`!inline`、`%TAG`の指示子、タグ(`!in%6Cine`など)も拒む。
+JSONは、解釈した後の値を調べる。
+flow、resource、appも同じ`!inline`を読むため、これらの経路を塞ぐ。
+`f/`の下では、`node_modules`という名前のフォルダも検査から外さない。
+テストは保護パスで止まるが、テストの実行環境は止めない。
+`tests/preload.ts`と、保護していないほかのテストは、テストを緑のまま通すために書き換えられる。
+`wmill.yaml`の`codebases`も止めない。
+これらは残るリスクで、マージ前の人のレビューで防ぐ。
+YAMLの解釈は、テストが使うBunとwmillで違いうる。
+そのため、script定義では`lock`の行を完全に一致させ、解釈の違いに頼らない。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
@@ -3360,6 +3378,13 @@ Factoryは、原則としてPRをマージしない。
 マージは、`dependabot_merge_enabled`も真にしたときだけ行う。
 `dependabot_merge_enabled`が偽の間は試運転で、マージしてよいと判断したPRもマージせず人に回す。
 有効にする手順は[運用](operations.md#dependabotの更新を設定する)に、状態と分岐は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
+
+候補のPRの列挙は、設定によって収集の表から読む。
+表の値は候補を絞ることにだけ使う。
+マージの判断と保持期間の判定は、PRごとにRESTで読み直した値と集めた事実で行う。
+そのため、表の値が書き換えられても、候補が増えれば読み直して飛ばし、減れば検索に戻るか処理が遅れるだけである。
+記録が新しいリポジトリで、表に行の無いPRは、待ちの記録を捨てるので、人に回すのが遅れる。
+保持期間とゲートの判定は変わらない。
 
 ### マージする条件
 

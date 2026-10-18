@@ -1202,6 +1202,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
+- scriptの定義の`lock`の参照先を固定する契約テスト: `tests/lib/script_yaml_lock_contract.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
 - CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`。lockは`metadata_patch_manifest.script.lock`だけ(空のlockの参照)
 - hashの再計算の側

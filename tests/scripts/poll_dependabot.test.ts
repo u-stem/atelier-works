@@ -20,10 +20,14 @@ import {
   type DependabotPrSearchItem,
   type DependabotPrSearchScope,
   GitHubRateLimitError,
-  type PullRequest,
+  type PullRequestWithCreatedAt,
 } from "../../f/factory/lib/github.ts";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
-import type { FactoryConfig } from "../../f/factory/lib/types.ts";
+import type {
+  FactoryConfig,
+  GhPullRequest,
+  GhRepoOpenPrSnapshot,
+} from "../../f/factory/lib/types.ts";
 import {
   DEPENDABOT_SKIP_REASON,
   type DependabotPollOutcome,
@@ -41,6 +45,7 @@ import {
   pollDependabot,
   processDependabotPr,
   RATE_LIMIT_DEFAULT_PAUSE_MS,
+  selectDependabotCandidates,
   WAIT_BACKOFF_MS,
 } from "../../f/factory/poll_dependabot.ts";
 import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -153,8 +158,11 @@ function ready(
   };
 }
 
-function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
+function pullRequest(
+  overrides: Partial<PullRequestWithCreatedAt> = {},
+): PullRequestWithCreatedAt {
   return {
+    createdAtMs: NOW_MS - 3 * DAY_MS,
     number: 12,
     title: "Bump left-pad from 1.3.0 to 1.3.1",
     body: "",
@@ -200,10 +208,12 @@ type Harness = {
   readonly flowJobIds: { id: number; jobId: string }[];
   readonly failures: { step: string; workItemId: number | null }[];
   readonly calls: { getPr: number; collect: number; ownerChecks: number };
+  /** `hasItemForHead`に渡った`owner/repo#番号`。 */
+  readonly handledChecks: string[];
 };
 
 type HarnessOptions = {
-  readonly pr?: PullRequest;
+  readonly pr?: PullRequestWithCreatedAt;
   readonly handled?: boolean;
   readonly waits?: { count: number; lastAt: Date | null };
   readonly collect?: CollectResult;
@@ -221,12 +231,16 @@ function harness(options: HarnessOptions = {}): Harness {
   const flowJobIds: Harness["flowJobIds"] = [];
   const failures: Harness["failures"] = [];
   const calls = { getPr: 0, collect: 0, ownerChecks: 0 };
+  const handledChecks: string[] = [];
   const deps: PollDependabotDeps = {
     getPr: async () => {
       calls.getPr += 1;
       return options.pr ?? pullRequest();
     },
-    hasItemForHead: async () => options.handled ?? false,
+    hasItemForHead: async (owner, repo, prNumber) => {
+      handledChecks.push(`${owner}/${repo}#${String(prNumber)}`);
+      return options.handled ?? false;
+    },
     gateWaitingCancels: async () => options.waits ?? { count: 0, lastAt: null },
     collect: async () => {
       calls.collect += 1;
@@ -269,6 +283,7 @@ function harness(options: HarnessOptions = {}): Harness {
     flowJobIds,
     failures,
     calls,
+    handledChecks,
   };
 }
 
@@ -292,7 +307,11 @@ async function run(
   ctx: Partial<PollDependabotContext> = {},
   found: DependabotPrSearchItem = FOUND,
 ): Promise<{ h: Harness; outcome: DependabotPollOutcome }> {
-  const h = harness(options);
+  // 作成の時刻はRESTの値で判定するので、候補の時刻を偽物のPRの側に移す。
+  const h = harness({
+    ...options,
+    pr: options.pr ?? pullRequest({ createdAtMs: found.createdAtMs }),
+  });
   const outcome = await processDependabotPr(h.deps, context(ctx), found);
   return { h, outcome };
 }
@@ -429,6 +448,108 @@ describe("processDependabotPr selection", () => {
     const { h } = await run({ handled: true });
 
     expect(h.calls.collect).toBe(0);
+  });
+});
+
+// ---- リポジトリの名前とRESTの作成の時刻 ----
+
+describe("processDependabotPr repository name", () => {
+  /** 候補は表の小文字の名前で、GitHubは正しい大小文字で返す。 */
+  const MIXED_CASE_PR = pullRequest({ baseRepoFullName: "Acme/Widgets" });
+
+  test("creates the work item with the repository name GitHub returned", async () => {
+    const { h } = await run({ pr: MIXED_CASE_PR });
+
+    expect([h.inserted[0]?.owner, h.inserted[0]?.repo]).toEqual([
+      "Acme",
+      "Widgets",
+    ]);
+  });
+
+  test("checks whether the head was handled with the repository name GitHub returned", async () => {
+    const { h } = await run({ pr: MIXED_CASE_PR });
+
+    expect(h.handledChecks).toEqual(["Acme/Widgets#12"]);
+  });
+
+  test("skips a pull request without a base repository", async () => {
+    const { outcome } = await run({
+      pr: pullRequest({ baseRepoFullName: "" }),
+    });
+
+    expect(outcome).toEqual({
+      kind: "skipped",
+      reason: DEPENDABOT_SKIP_REASON.repoMismatch,
+    });
+  });
+
+  test("skips a pull request that belongs to a repository with another name", async () => {
+    const { outcome } = await run({
+      pr: pullRequest({ baseRepoFullName: "mallory/widgets" }),
+    });
+
+    expect(outcome).toEqual({
+      kind: "skipped",
+      reason: DEPENDABOT_SKIP_REASON.repoMismatch,
+    });
+  });
+
+  test("does not collect for a pull request of another repository name", async () => {
+    const { h } = await run({
+      pr: pullRequest({ baseRepoFullName: "mallory/widgets" }),
+    });
+
+    expect(h.calls.collect).toBe(0);
+  });
+});
+
+describe("processDependabotPr creation time", () => {
+  test("judges the retention by the creation time GitHub returned, not the candidate", async () => {
+    const { outcome } = await run(
+      { pr: pullRequest({ createdAtMs: NOW_MS - 3 * DAY_MS }) },
+      {},
+      { ...FOUND, createdAtMs: NOW_MS - 89 * DAY_MS },
+    );
+
+    expect(outcome.kind).toBe("started");
+  });
+
+  test("hands a pull request that GitHub says is as old as the retention to a person even when the candidate looks new", async () => {
+    const { outcome } = await run({
+      pr: pullRequest({ createdAtMs: NOW_MS - 89 * DAY_MS }),
+    });
+
+    expect(noteOf(outcome).startsWith(DEPENDABOT_REASON_PREFIX.poll)).toBe(
+      true,
+    );
+  });
+
+  test("starts the wait limit from the creation time GitHub returned", async () => {
+    const { outcome } = await run(
+      {
+        pr: pullRequest({ createdAtMs: NOW_MS - 30 * DAY_MS }),
+        collect: { kind: "wait", reason: "GitHub rate limit was hit" },
+      },
+      { waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS - 1 }) },
+    );
+
+    expect(outcome.kind).toBe("escalated");
+  });
+
+  test("fails when GitHub returned no readable creation time", async () => {
+    const h = harness({ pr: pullRequest({ createdAtMs: null }) });
+
+    await expect(
+      processDependabotPr(h.deps, context(), FOUND),
+    ).rejects.toThrow();
+  });
+
+  test("creates no work item when the creation time is unreadable", async () => {
+    const h = harness({ pr: pullRequest({ createdAtMs: null }) });
+
+    await processDependabotPr(h.deps, context(), FOUND).catch(() => undefined);
+
+    expect(h.inserted).toHaveLength(0);
   });
 });
 
@@ -1047,6 +1168,160 @@ describe("processDependabotPr flow start failure", () => {
   });
 });
 
+// ---- 表からの候補の選別 ----
+
+const GH_REPO_ID = 4242;
+const MINUTE_MS = 60_000;
+const STALE_AFTER_MS = 15 * MINUTE_MS;
+
+/** 収集の表の、開いているdependabotのPRの行。 */
+function ghRow(overrides: Partial<GhPullRequest> = {}): GhPullRequest {
+  return {
+    id: 1,
+    owner: "acme",
+    repo: "widgets",
+    repo_id: GH_REPO_ID,
+    number: 12,
+    state: "open",
+    head_sha: HEAD,
+    head_ref: "dependabot/npm_and_yarn/left-pad-1.3.1",
+    base_ref: "main",
+    is_draft: false,
+    is_cross_repository: false,
+    auto_merge_enabled: false,
+    author_login: "dependabot",
+    author_type: "Bot",
+    author_id: 49699333,
+    mergeable: "MERGEABLE",
+    has_review_label: false,
+    has_fix_label: false,
+    review_requested_user_ids: [],
+    assignee_ids: [],
+    team_review_requested: false,
+    created_at: new Date(FOUND.createdAtMs),
+    updated_at: new Date(NOW_MS - DAY_MS),
+    written_at: new Date(NOW_MS - DAY_MS),
+    usable: true,
+    ...overrides,
+  };
+}
+
+/** 鮮度が足りるリポジトリの読み取りの結果。 */
+function snapshot(
+  prs: readonly GhPullRequest[],
+  repo: Partial<NonNullable<GhRepoOpenPrSnapshot["repo"]>> | null = {},
+): GhRepoOpenPrSnapshot {
+  return {
+    db_now: new Date(NOW_MS),
+    repo:
+      repo === null
+        ? null
+        : {
+            repo_id: GH_REPO_ID,
+            allowed: true,
+            archived: false,
+            gone: false,
+            last_collected_at: new Date(NOW_MS - 5 * MINUTE_MS),
+            truncated: false,
+            detail_failed: false,
+            ...repo,
+          },
+    prs,
+  };
+}
+
+const WIDGETS = { owner: "acme", repo: "widgets" } as const;
+
+function select(
+  prs: readonly GhPullRequest[],
+  repo: Partial<NonNullable<GhRepoOpenPrSnapshot["repo"]>> | null = {},
+) {
+  return selectDependabotCandidates(
+    snapshot(prs, repo),
+    WIDGETS,
+    STALE_AFTER_MS,
+  );
+}
+
+function selectedNumbers(
+  prs: readonly GhPullRequest[],
+): readonly number[] | string {
+  const selection = select(prs);
+  return selection.kind === "fresh"
+    ? selection.items.map((item) => item.number)
+    : selection.reason;
+}
+
+describe("selectDependabotCandidates", () => {
+  test("selects an open, non-draft row on main opened by the dependabot bot", () => {
+    expect(selectedNumbers([ghRow()])).toEqual([12]);
+  });
+
+  test("does not select a row whose author is a user named dependabot", () => {
+    expect(selectedNumbers([ghRow({ author_type: "User" })])).toEqual([]);
+  });
+
+  test("does not select a draft row", () => {
+    expect(selectedNumbers([ghRow({ is_draft: true })])).toEqual([]);
+  });
+
+  test("does not select a row based on another branch", () => {
+    expect(selectedNumbers([ghRow({ base_ref: "release" })])).toEqual([]);
+  });
+
+  test("selects a row whose base branch is unknown", () => {
+    expect(selectedNumbers([ghRow({ base_ref: null })])).toEqual([12]);
+  });
+
+  test("selects a row whose author is unknown", () => {
+    const row = ghRow({
+      author_login: null,
+      author_type: null,
+      author_id: null,
+    });
+
+    expect(selectedNumbers([row])).toEqual([12]);
+  });
+
+  test("does not select a row by another author", () => {
+    const row = ghRow({ author_login: "mallory", author_type: "User" });
+
+    expect(selectedNumbers([row])).toEqual([]);
+  });
+
+  test("selects a pull request from a fork and leaves it to the gate", () => {
+    expect(selectedNumbers([ghRow({ is_cross_repository: true })])).toEqual([
+      12,
+    ]);
+  });
+
+  test("turns the creation time into createdAtMs", () => {
+    const selection = select([ghRow()]);
+
+    expect(selection.kind === "fresh" ? selection.items : []).toEqual([
+      {
+        owner: "acme",
+        repo: "widgets",
+        number: 12,
+        createdAtMs: FOUND.createdAtMs,
+      },
+    ]);
+  });
+
+  test("returns the reason and no rows for a repository whose records are not fresh", () => {
+    expect(select([ghRow()], { last_collected_at: null })).toEqual({
+      kind: "stale",
+      reason: "not_collected",
+    });
+  });
+
+  test("does not select an unusable row", () => {
+    const rows = [ghRow({ usable: false }), ghRow({ number: 13 })];
+
+    expect(selectedNumbers(rows)).toEqual([13]);
+  });
+});
+
 // ---- 周回の状態 ----
 
 describe("poll state", () => {
@@ -1161,14 +1436,23 @@ type RoundLog = {
   collected: number;
   failures: string[];
   state: PollState | null;
+  /** 表を読んだリポジトリ(`owner/repo`)。 */
+  read: string[];
+  warnings: { message: string; fields: Record<string, unknown> }[];
 };
 
 type RoundOptions = {
   readonly config?: FactoryConfig;
   readonly state?: unknown;
   readonly found?: DependabotPrSearchItem[];
-  readonly getPr?: (number: number) => Promise<PullRequest>;
-  readonly search?: () => Promise<DependabotPrSearchItem[]>;
+  readonly getPr?: (number: number) => Promise<PullRequestWithCreatedAt>;
+  readonly search?: (
+    scope: DependabotPrSearchScope,
+  ) => Promise<DependabotPrSearchItem[]>;
+  readonly readRepoPrs?: (
+    owner: string,
+    repo: string,
+  ) => Promise<GhRepoOpenPrSnapshot>;
   readonly active?: Awaited<ReturnType<PollSession["listActive"]>>;
   readonly collect?: () => Promise<CollectResult>;
 };
@@ -1181,6 +1465,8 @@ function emptyLog(): RoundLog {
     collected: 0,
     failures: [],
     state: null,
+    read: [],
+    warnings: [],
   };
 }
 
@@ -1204,16 +1490,30 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
           log.searched.push(scope);
           return options.search === undefined
             ? (options.found ?? [FOUND])
-            : options.search();
+            : options.search(scope);
+        },
+        readRepoPrs: async (owner, repo) => {
+          log.read.push(`${owner}/${repo}`);
+          return options.readRepoPrs === undefined
+            ? snapshot([ghRow()])
+            : options.readRepoPrs(owner, repo);
         },
         listActive: async () => options.active ?? [],
-        warn: () => {},
+        warn: (message, fields) => {
+          log.warnings.push({ message, fields });
+        },
         deps: {
           ...h.deps,
           getPr: async (_owner, _repo, number) => {
             log.processed.push(number);
             return options.getPr === undefined
-              ? pullRequest({ number })
+              ? pullRequest({
+                  number,
+                  createdAtMs:
+                    (options.found ?? [FOUND]).find(
+                      (item) => item.number === number,
+                    )?.createdAtMs ?? FOUND.createdAtMs,
+                })
               : options.getPr(number);
           },
           collect: async () => {
@@ -1565,5 +1865,708 @@ describe("pollDependabot", () => {
     );
 
     expect(log.state?.heads).toEqual({ [KEY]: wait });
+  });
+});
+
+// ---- 読み取り元が表の周回 ----
+
+/** 収集の2つの設定が真で、表から候補を読む設定。 */
+const DB_CONFIG: FactoryConfig = {
+  ...CONFIG,
+  gh_source_dependabot: "db",
+  gh_collect_enabled: true,
+  gh_collect_detail_enabled: true,
+};
+
+const GADGETS_ALLOWLIST = ["https://github.com/acme/gadgets"];
+
+/** 一度も取り終えていないリポジトリの読み取りの結果。鮮度が足りない。 */
+function staleSnapshot(): GhRepoOpenPrSnapshot {
+  return snapshot([ghRow()], { last_collected_at: null });
+}
+
+describe("pollDependabot read source", () => {
+  test("reads the table when the source is db and both collection settings are true", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { config: DB_CONFIG }));
+
+    expect(log.read).toEqual(["acme/widgets"]);
+  });
+
+  test("searches when gh_collect_enabled is false even if the source is db", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...DB_CONFIG, gh_collect_enabled: false } }),
+    );
+
+    expect(log.searched).toHaveLength(1);
+  });
+
+  test("does not read the table when gh_collect_enabled is false", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...DB_CONFIG, gh_collect_enabled: false } }),
+    );
+
+    expect(log.read).toEqual([]);
+  });
+
+  test("searches when gh_collect_detail_enabled is false even if the source is db", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, gh_collect_detail_enabled: false },
+      }),
+    );
+
+    expect(log.searched).toHaveLength(1);
+  });
+
+  test("warns with the names of the false settings when the source db is ignored", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, gh_collect_detail_enabled: false },
+      }),
+    );
+
+    expect(log.warnings).toEqual([
+      {
+        message:
+          "gh_source_dependabot is db but the collection is not fully enabled, so the round searches",
+        fields: {
+          gh_collect_enabled: true,
+          gh_collect_detail_enabled: false,
+        },
+      },
+    ]);
+  });
+
+  test("does not read the table when the source is search", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...DB_CONFIG, gh_source_dependabot: "search" } }),
+    );
+
+    expect(log.read).toEqual([]);
+  });
+
+  test("reports db as the source of a round that read the table", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { config: DB_CONFIG }),
+    );
+
+    expect(result.source).toBe("db");
+  });
+
+  test("reports search as the source of a round that searched", async () => {
+    const result = await pollDependabot(round(emptyLog()));
+
+    expect(result.source).toBe("search");
+  });
+
+  test("reports no fallback for a round that searched", async () => {
+    const result = await pollDependabot(round(emptyLog()));
+
+    expect([result.fallback_searches, result.fallback_reasons]).toEqual([
+      0,
+      {},
+    ]);
+  });
+
+  test("reports a disabled round as a search round without fallbacks", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: { ...DB_CONFIG, dependabot_enabled: false },
+      }),
+    );
+
+    expect(result).toEqual({
+      enabled: false,
+      paused: false,
+      started: 0,
+      escalated: 0,
+      waiting: 0,
+      skipped: 0,
+      failed: 0,
+      source: "search",
+      fallback_searches: 0,
+      fallback_reasons: {},
+    });
+  });
+
+  test("reports a round skipped before the resume time as a search round without fallbacks", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        state: { resumeAtMs: NOW_MS + 1, heads: {} },
+      }),
+    );
+
+    expect([
+      result.paused,
+      result.source,
+      result.fallback_searches,
+      result.fallback_reasons,
+    ]).toEqual([true, "search", 0, {}]);
+  });
+});
+
+describe("pollDependabot with the table as the source", () => {
+  test("does not search when every repository is fresh", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { config: DB_CONFIG }));
+
+    expect(log.searched).toEqual([]);
+  });
+
+  test("searches only the repository whose records are not fresh", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, repo_allowlist: GADGETS_ALLOWLIST },
+        readRepoPrs: async (_owner, repo) =>
+          repo === "gadgets" ? staleSnapshot() : snapshot([ghRow()]),
+      }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "gadgets" },
+    ]);
+  });
+
+  test("processes the candidates of a repository it searched instead", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => [{ ...FOUND, number: 13 }],
+      }),
+    );
+
+    expect(log.processed).toEqual([13]);
+  });
+
+  test("counts the repositories it searched instead", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(result.fallback_searches).toBe(1);
+  });
+
+  test("counts the searches instead by reason", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(result.fallback_reasons).toEqual({ not_collected: 1 });
+  });
+
+  test("warns about a repository it searched instead with the reason", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(log.warnings).toEqual([
+      {
+        message: "dependabot candidates fall back to search",
+        fields: { owner: "acme", repo: "widgets", reason: "not_collected" },
+      },
+    ]);
+  });
+
+  test("does not record a stale repository as a failure", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(log.failures).toEqual([]);
+  });
+
+  test("records a failure to read the table", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+      }),
+    );
+
+    expect(log.failures).toEqual(["read_gh_pull_requests:acme/widgets"]);
+  });
+
+  test("searches the repository whose table could not be read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+      }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+    ]);
+  });
+
+  test("reports read_failed as the reason of a table that could not be read", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+      }),
+    );
+
+    expect(result.fallback_reasons).toEqual({ read_failed: 1 });
+  });
+
+  test("counts two failures when both the read and the search it fell back to fail", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(result.failed).toBe(2);
+  });
+
+  test("lowercases the repository in the names of the failure records", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...DB_CONFIG,
+          factory_repo: "https://github.com/Acme/Widgets.git",
+        },
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(log.failures).toEqual([
+      "read_gh_pull_requests:acme/widgets",
+      "search_dependabot_prs:acme/widgets",
+    ]);
+  });
+
+  test("keeps the wait records of a repository whose search it fell back to failed", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({ [KEY]: wait });
+  });
+
+  test("stops reading the remaining repositories when the search it fell back to hits the rate limit", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, repo_allowlist: GADGETS_ALLOWLIST },
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => {
+          throw new GitHubRateLimitError("search", 60_000, true);
+        },
+      }),
+    );
+
+    expect(log.read).toEqual(["acme/widgets"]);
+  });
+
+  test("saves the resume time when the search it fell back to hits the rate limit", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => {
+          throw new GitHubRateLimitError("search", 60_000, true);
+        },
+      }),
+    );
+
+    expect(log.state?.resumeAtMs).toBe(NOW_MS + 60_000);
+  });
+
+  test("drops the wait record of a pull request that has no row in a fresh repository", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        readRepoPrs: async () => snapshot([]),
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({});
+  });
+
+  test("uses the number of owners for the threshold", async () => {
+    const log = emptyLog();
+    const owners = [
+      { name: "acme", kind: "user" as const },
+      { name: "beta", kind: "user" as const },
+      { name: "gamma", kind: "user" as const },
+    ];
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, owners },
+        readRepoPrs: async () =>
+          snapshot([ghRow()], {
+            last_collected_at: new Date(NOW_MS - 18 * MINUTE_MS),
+          }),
+      }),
+    );
+
+    expect(log.searched).toEqual([]);
+  });
+
+  test("makes a pull request of a capitalized factory_repo a candidate from the table", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...DB_CONFIG,
+          factory_repo: "https://github.com/Acme/Widgets.git",
+        },
+        search: async () => [],
+      }),
+    );
+
+    expect(log.processed).toEqual([12]);
+  });
+});
+
+// ---- 検索と表の候補の一致 ----
+
+type WorldPr = {
+  readonly repo: string;
+  readonly number: number;
+  readonly createdAtMs: number;
+  readonly state?: "open" | "closed";
+  readonly draft?: boolean;
+  readonly baseRef?: string;
+  readonly author?: "dependabot" | "mallory";
+  readonly fork?: boolean;
+  /** 表ではbaseと作者が不明(`NULL`)だが、GitHubの実際の値は上のとおり。 */
+  readonly unknownInTable?: boolean;
+};
+
+type World = {
+  readonly prs: readonly WorldPr[];
+  readonly allowlist?: readonly string[];
+  readonly archivedRepos?: readonly string[];
+};
+
+function worldRestPr(pr: WorldPr): PullRequestWithCreatedAt {
+  const mallory = pr.author === "mallory";
+  return pullRequest({
+    number: pr.number,
+    createdAtMs: pr.createdAtMs,
+    state: pr.state ?? "open",
+    draft: pr.draft ?? false,
+    baseRef: pr.baseRef ?? "main",
+    authorLogin: mallory ? "mallory" : "dependabot[bot]",
+    authorType: mallory ? "User" : "Bot",
+    headRepoFullName: pr.fork ? "mallory/widgets" : `acme/${pr.repo}`,
+    baseRepoFullName: `acme/${pr.repo}`,
+  });
+}
+
+/** GitHubの検索が返す候補。開いていて、draftでなく、baseが`main`で、dependabotのアプリが開いたPR。 */
+function worldSearch(
+  world: World,
+  scope: DependabotPrSearchScope,
+): DependabotPrSearchItem[] {
+  return world.prs
+    .filter(
+      (pr) =>
+        pr.repo === scope.repo &&
+        (pr.state ?? "open") === "open" &&
+        !(pr.draft ?? false) &&
+        (pr.baseRef ?? "main") === "main" &&
+        (pr.author ?? "dependabot") === "dependabot",
+    )
+    .map((pr) => ({
+      owner: "acme",
+      repo: pr.repo,
+      number: pr.number,
+      createdAtMs: pr.createdAtMs,
+    }));
+}
+
+/** 収集の表が持つ、リポジトリの開いているPRの行。 */
+function worldSnapshot(world: World, repo: string): GhRepoOpenPrSnapshot {
+  const rows = world.prs
+    .filter((pr) => pr.repo === repo && (pr.state ?? "open") === "open")
+    .map((pr) =>
+      ghRow({
+        repo,
+        number: pr.number,
+        created_at: new Date(pr.createdAtMs),
+        is_draft: pr.draft ?? false,
+        is_cross_repository: pr.fork ?? false,
+        base_ref: pr.unknownInTable ? null : (pr.baseRef ?? "main"),
+        ...((pr.author ?? "dependabot") === "mallory"
+          ? { author_login: "mallory", author_type: "User" as const }
+          : pr.unknownInTable
+            ? { author_login: null, author_type: null, author_id: null }
+            : {}),
+      }),
+    );
+  return snapshot(rows, {
+    archived: world.archivedRepos?.includes(repo) ?? false,
+  });
+}
+
+type WorldRun = {
+  readonly processed: number[];
+  readonly read: number;
+  readonly result: Awaited<ReturnType<typeof pollDependabot>>;
+};
+
+async function runWorld(
+  world: World,
+  source: "search" | "db",
+): Promise<WorldRun> {
+  const log = emptyLog();
+  const config: FactoryConfig = {
+    ...(source === "db" ? DB_CONFIG : CONFIG),
+    repo_allowlist: [...(world.allowlist ?? [])],
+  };
+  const result = await pollDependabot(
+    round(log, {
+      config,
+      search: async (scope) => worldSearch(world, scope),
+      readRepoPrs: async (_owner, repo) => worldSnapshot(world, repo),
+      getPr: async (number) => {
+        const pr = world.prs.find((candidate) => candidate.number === number);
+        if (pr === undefined) throw new Error("unknown pull request");
+        return worldRestPr(pr);
+      },
+    }),
+  );
+  return { processed: log.processed, read: log.read.length, result };
+}
+
+/** 表の経路で走らせる。表を1回も読まなかったときは、経路を比べたことにならないので失敗させる。 */
+async function runWorldViaTable(world: World): Promise<WorldRun> {
+  const run = await runWorld(world, "db");
+  if (run.read === 0) throw new Error("the table was not read");
+  return run;
+}
+
+describe("pollDependabot candidates match between the search and the table", () => {
+  async function candidates(world: World) {
+    const viaSearch = await runWorld(world, "search");
+    const viaTable = await runWorldViaTable(world);
+    return { search: viaSearch.processed, table: viaTable.processed };
+  }
+
+  test("match for pull requests that are all targets", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        { repo: "widgets", number: 13, createdAtMs: NOW_MS - 2 * DAY_MS },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a pull request from a fork", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 14,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          fork: true,
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a closed pull request", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 15,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          state: "closed",
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a draft pull request and a pull request on another base", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 16,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          draft: true,
+        },
+        {
+          repo: "widgets",
+          number: 17,
+          createdAtMs: NOW_MS - 1 * DAY_MS,
+          baseRef: "release",
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a pull request by another author", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 18,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          author: "mallory",
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for an archived repository, which the table sends back to the search", async () => {
+    const { search, table } = await candidates({
+      prs: [{ repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS }],
+      archivedRepos: ["widgets"],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match in order across several repositories", async () => {
+    const { search, table } = await candidates({
+      allowlist: GADGETS_ALLOWLIST,
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 5 * DAY_MS },
+        { repo: "gadgets", number: 13, createdAtMs: NOW_MS - 4 * DAY_MS },
+        { repo: "widgets", number: 14, createdAtMs: NOW_MS - 3 * DAY_MS },
+        { repo: "gadgets", number: 15, createdAtMs: NOW_MS - 2 * DAY_MS },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("let the table include every candidate of the search when base and author are unknown", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 21,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          author: "mallory",
+          unknownInTable: true,
+        },
+      ],
+    });
+
+    expect(search.every((number) => table.includes(number))).toBe(true);
+  });
+
+  test("decide the same outcomes when base and author are unknown in the table", async () => {
+    const world: World = {
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 22,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          unknownInTable: true,
+        },
+      ],
+    };
+
+    const viaSearch = await runWorld(world, "search");
+    const viaTable = await runWorldViaTable(world);
+    const outcomes = (run: WorldRun) => ({
+      started: run.result.started,
+      escalated: run.result.escalated,
+      waiting: run.result.waiting,
+      skipped: run.result.skipped,
+    });
+
+    expect(outcomes(viaTable)).toEqual(outcomes(viaSearch));
   });
 });

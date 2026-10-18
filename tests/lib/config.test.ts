@@ -724,6 +724,26 @@ describe("gh_collect_detail_enabled", () => {
   });
 });
 
+describe("gh_source_dependabot", () => {
+  test("defaults gh_source_dependabot to search when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.gh_source_dependabot).toBe("search");
+  });
+
+  test("accepts gh_source_dependabot db", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      gh_source_dependabot: "db",
+    });
+    expect(config.gh_source_dependabot).toBe("db");
+  });
+
+  test("throws when gh_source_dependabot is neither search nor db", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, gh_source_dependabot: "both" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("pr_ci_watch_human_prs", () => {
   test("defaults pr_ci_watch_human_prs to false when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

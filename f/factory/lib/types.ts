@@ -1096,6 +1096,31 @@ export type GhPullRequest = GhPullRequestWrite & {
   readonly usable: boolean;
 };
 
+/**
+ * 下流が鮮度と使ってよいかの判定に読む、`gh_repos`の列。
+ * `repo_id`が`null`の行は、一度も見えていない`not_visible`の行である。
+ */
+export type GhRepoFreshnessRow = Pick<
+  GhRepo,
+  | "repo_id"
+  | "allowed"
+  | "archived"
+  | "gone"
+  | "last_collected_at"
+  | "truncated"
+  | "detail_failed"
+>;
+
+/**
+ * 1つのリポジトリの`gh_repos`の行、開いているPRの行、DBの`now()`を、1つの文で読んだ結果。
+ * `repo`が`null`なら、`gh_repos`に行が無い。
+ */
+export type GhRepoOpenPrSnapshot = {
+  readonly db_now: Date;
+  readonly repo: GhRepoFreshnessRow | null;
+  readonly prs: readonly GhPullRequest[];
+};
+
 /** Issueの詳細として書く値。 */
 export type GhIssueWrite = {
   readonly number: number;
@@ -1444,6 +1469,12 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
  */
 export type ReviewPostMode = "comment_only" | "gated";
 
+/**
+ * `gh_source_dependabot`の値。`poll_dependabot`が候補のPRを列挙する元で、
+ * `search`は検索API、`db`は収集が書いた表を指す。
+ */
+export type GhSource = "search" | "db";
+
 /** 投稿しなかったレビューの集計。`since`は、その最初のレビューの記録時刻。 */
 export type GatedReviewStats = {
   readonly since: Date | null;
@@ -1670,6 +1701,11 @@ export type FactoryConfig = {
    * `false`の間は、詳細の要求を送らず、一覧の下限も変えない。`gh_collect_enabled`が`false`なら、この値によらず何もしない。
    */
   gh_collect_detail_enabled: boolean;
+  /**
+   * `poll_dependabot`が候補のPRを列挙する元。既定は`search`。
+   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、収集の記録が進まないので周回全体が検索になる。
+   */
+  gh_source_dependabot: GhSource;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。
