@@ -9,6 +9,7 @@
 import {
   approveGitEnv,
   fetchArgs,
+  fetchEnv,
   GIT_FIXED_PREFIX,
   REMOTE_URL_PATTERN,
 } from "./git.ts";
@@ -321,13 +322,18 @@ export function checkFetchForm(form: FetchForm): string | null {
   if (env.GIT_DIR === undefined || env.GIT_DIR !== cwd) {
     return "GIT_DIR must equal the working directory";
   }
-  if (!sameEnv(withoutFetchKeys(env), approveGitEnv())) {
-    return "git environment differs from the fixed one";
-  }
+  const base = withoutFetchKeys(env);
   if (sameArgs(args, REMOTE_URL_ARGS)) {
+    if (!sameEnv(base, approveGitEnv())) {
+      return "git environment differs from the fixed one";
+    }
     return TOKEN_KEYS.some((key) => key in env)
       ? "the remote url read carries no credentials"
       : null;
+  }
+  // 取得は、読み取りの環境に、取得の環境(httpsだけを許す)を重ねたものに限る。
+  if (!sameEnv(base, { ...approveGitEnv(), ...fetchEnv(null) })) {
+    return "git environment differs from the fixed one";
   }
   const url = args[args.length - 2] ?? "";
   if (!REMOTE_URL_PATTERN.test(url) || !sameArgs(args, fetchArgs(url))) {

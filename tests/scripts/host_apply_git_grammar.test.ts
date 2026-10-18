@@ -477,7 +477,7 @@ describe("checkFetchForm", () => {
   const URL = "https://github.com/example/repo.git";
   const CWD = "/var/repo.git";
 
-  function fetchEnvFor(token: string | null) {
+  function fetchEnvFor(token: string | null): Record<string, string> {
     return { ...approveGitEnv(), ...fetchEnv(token), GIT_DIR: CWD };
   }
 

@@ -81,12 +81,16 @@ export function fetchArgs(url: string): string[] {
  * `fetch`の環境。トークンは引数ではなく`GIT_CONFIG_*`で渡す。
  * 引数に載せると、プロセス一覧から読めるため。
  * システムとユーザーのgit設定は読まない。対話の入力も求めない。
+ * `GIT_ALLOW_PROTOCOL`でhttpsだけを許す。この変数は、リポジトリの設定の`protocol.<名前>.allow`と
+ * `url.<base>.insteadOf`による`ext::`などの起動を上書きして止める。引数の`protocol.allow=never`だけでは、
+ * 個別のプロトコルの設定が優先されて止まらない。
  */
 export function fetchEnv(token: string | null): Record<string, string> {
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_ALLOW_PROTOCOL: "https",
   };
   if (token !== null) {
     env.GIT_CONFIG_COUNT = "1";
@@ -260,6 +264,8 @@ export function approveGitArgs(args: readonly string[]): string[] {
  * `PATH`を固定して偽の`git`を拾わせず、ユーザーとシステムの設定、属性、pathspecの展開、
  * replace ref、ロックの取得、部分cloneの遅延取得、対話の入力を無効にする。
  * `GIT_NO_LAZY_FETCH`はgitの版によっては無視される。
+ * `GIT_ALLOW_PROTOCOL`は空にする。空は「無指定」でなく「どのプロトコルも許さない」を意味し、
+ * リポジトリの設定の`protocol.<名前>.allow`を上書きする。読み取りは通信を使わない。
  */
 export function approveGitEnv(): Record<string, string> {
   return {
@@ -272,6 +278,7 @@ export function approveGitEnv(): Record<string, string> {
     GIT_LITERAL_PATHSPECS: "1",
     GIT_NO_REPLACE_OBJECTS: "1",
     GIT_NO_LAZY_FETCH: "1",
+    GIT_ALLOW_PROTOCOL: "",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_TERMINAL_PROMPT: "0",
   };

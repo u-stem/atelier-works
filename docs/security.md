@@ -1540,6 +1540,7 @@ modeだけの変更も、ヘッダーの`old mode`と`new mode`の行で見え�
 `origin/main`は、短い名前ではなく、`refs/remotes/origin/main`の完全な名前で読む。
 `plan`と`approve`は、取得の経路を持たない。
 部分cloneの遅延取得は、前置きの`protocol.allow=never`と環境の`GIT_NO_LAZY_FETCH`で止める。
+リポジトリの設定が`ext::`などの起動を許していても、環境の`GIT_ALLOW_PROTOCOL`を空にして止める。
 
 #### 承認の門の残るリスク
 
@@ -1893,6 +1894,13 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 余分なキーも、値の違いも拒否する。
 `GIT_EXEC_PATH`、`LD_*`、`DYLD_*`は、通らない。
 
+`GIT_ALLOW_PROTOCOL`は空にする。
+空は「無指定」ではなく、どのプロトコルも許さない指定である。
+この変数は、リポジトリの設定の`protocol.<名前>.allow`を上書きする。
+`protocol.allow=never`の引数だけでは、次の組み合わせによる任意のコマンドの起動を止められない。
+その組み合わせは、`protocol.ext.allow=always`と`url.<base>.insteadOf`である。
+この経路は、使い捨てのリポジトリで実際のgitを使うテストが確かめる。
+
 #### 取得
 
 取得の指定は、`scripts/host_apply/run_fetch.ts`が作る。
@@ -1908,6 +1916,7 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 `git_fetch`の指定が通すのは、この引数との完全一致と、`remote.origin.url`の読み取りの2つの形だけである。
 
 環境は、読み取りのgitの環境に、`GIT_DIR`と、あれば認証の1組を足したものに限る。
+取得の環境は`GIT_ALLOW_PROTOCOL`をhttpsにする。`remote.origin.url`の読み取りは、読み取りの環境のまま空にする。
 `GIT_DIR`は、作業ディレクトリと等しい絶対パスにする。
 トークンは環境の`GIT_CONFIG_*`に入れ、引数には載せない。プロセスの一覧に出さないためである。
 トークンは、GitHubへの基本認証のヘッダーの形に限る。
