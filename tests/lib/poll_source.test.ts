@@ -1893,7 +1893,9 @@ describe("the table and the search find the same pull requests", () => {
       },
       { owners: [ACME, BETA] },
     );
-    expect(table).toEqual(search);
+    // 表の候補は検索の結果の後に並ぶので、並びは比べない。
+    const byNumber = (a: PrSearchItem, b: PrSearchItem) => a.number - b.number;
+    expect([...table].sort(byNumber)).toEqual([...search].sort(byNumber));
   });
 });
 
