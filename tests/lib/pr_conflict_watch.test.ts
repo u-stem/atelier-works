@@ -2307,6 +2307,52 @@ describe("runPrConflictWatch: discovery from the table", () => {
     expect(h.searched).toEqual(["acme:factory-bot"]);
   });
 
+  test("keeps reading the table of the remaining owners after a fallback search hits the rate limit", async () => {
+    const betaPr = pr({
+      headRepoFullName: "beta/gadgets",
+      baseRepoFullName: "beta/gadgets",
+    });
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: snapshotOf([oldRepoRow("widgets")]),
+        beta: snapshotOf(
+          [repoRow("gadgets")],
+          [row({ owner: "beta", repo: "gadgets" })],
+        ),
+      },
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+      prs: { "beta/gadgets#12": betaPr },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["beta/gadgets#12"]);
+  });
+
+  test("does not search a remaining owner that is not fresh after the rate limit", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      searchOwners: [ACME, BETA],
+      snapshots: {
+        acme: snapshotOf([oldRepoRow("widgets")]),
+        beta: snapshotOf([oldRepoRow("gadgets")]),
+      },
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect({
+      searches: result.fallback_searches,
+      reasons: result.fallback_reasons,
+    }).toEqual({
+      searches: 1,
+      reasons: { too_old: 1, search_rate_limited: 1 },
+    });
+  });
+
   test("merges a repository of the table with the same repository of the work items, ignoring case", async () => {
     const h = setup({
       ...DB_ONLY,
