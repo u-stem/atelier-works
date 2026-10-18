@@ -61,6 +61,8 @@ import {
   listPrOpenIssueWorkItems,
   listUnnotifiedFailedPrCiChecks,
   markPrCiNotified,
+  readGhOwnerOpenPullRequests,
+  readGhRepoOpenPullRequests,
   recordFailure,
   recordPrCiCheck,
   releaseConfigMisfitHolds,
@@ -73,6 +75,10 @@ import {
   updateStatusIfCurrent,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import {
+  effectiveGhSource,
+  ghDetailStaleAfterMs,
+} from "./lib/gh_collect_read.ts";
 import {
   type GhClient,
   getAccountId,
@@ -239,15 +245,29 @@ async function recordFailureSafe(
   }
 }
 
-/** 仮実装。常に検索を返す。 */
+/**
+ * 設定`gh_source_pr_ci_watch`と収集の設定から、人のPRの候補を見つける元を決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 設定を戻し忘れても監視が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
+ */
 export function resolvePrCiHumanSource(
-  _config: Pick<
+  config: Pick<
     FactoryConfig,
     "gh_source_pr_ci_watch" | "gh_collect_enabled" | "gh_collect_detail_enabled"
   >,
-  _log: Logger,
+  log: Logger,
 ): GhSource {
-  return "search";
+  const source = effectiveGhSource(config.gh_source_pr_ci_watch, config);
+  if (config.gh_source_pr_ci_watch === "db" && source === "search") {
+    log.warn(
+      "gh_source_pr_ci_watch is db but the collection is not fully enabled, so the round searches",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return source;
 }
 
 export async function main(): Promise<PrCiWatchResult> {
@@ -295,6 +315,10 @@ export async function main(): Promise<PrCiWatchResult> {
       ? undefined
       : await buildHumanDiscovery({
           config,
+          source: resolvePrCiHumanSource(config, log),
+          staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
+          readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
+          readRepoPrs: (owner, repo) => readGhRepoOpenPullRequests(owner, repo),
           verifiedOwners,
           getViewer: () => getViewer(client),
           getPr: (owner, repo, number) =>

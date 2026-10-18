@@ -169,5 +169,5 @@ locks:
   f/factory/steps/pr_workflow_support: 2fc6fed23a02de89dfc274e73a8b667438ebc6c05c6349c1fb6f177c21ef4aab
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
-  f/factory/watch_pr_ci: da9198095ceeb97b7aedc7064a80f830d688845d21014af9fe91372a118c2381
+  f/factory/watch_pr_ci: 9ea5ca6b0e1e3fa90996269d62df5bf014142d01452f8f75cb82aea31cfb7cca
   f/factory/watch_pr_conflicts: c0491352ad5025b6c3209412d751bad0c367ff258cf479103d9ee636db10f6d8
