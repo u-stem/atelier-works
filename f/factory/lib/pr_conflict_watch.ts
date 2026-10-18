@@ -44,6 +44,7 @@
 // 外部由来の文字列(題名、ブランチ名)は、通知にもログにも載せない。
 // 例外は、PRごと、リポジトリごとに捕まえて、他を止めない。rate limitは、以降の読み取りを止める。
 
+import { configuredRepos } from "./config.ts";
 import type {
   ClaimPrConflictInput,
   PrConflictCheck,
@@ -66,7 +67,6 @@ import {
   type OpenPullRequest,
   type PrCommitMessages,
   type PullRequest,
-  parseGitHubRepoUrl,
   type Viewer,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
@@ -98,7 +98,6 @@ import {
 import { PrFixFlowJobIdRecordError } from "./pr_fix_launch.ts";
 import {
   assertGitHubName,
-  type FactoryConfig,
   type FactoryOwner,
   type GhOwnerOpenPrSnapshot,
   type GhPullRequest,
@@ -106,6 +105,9 @@ import {
   type NoticeRecord,
   parseImplementBranchWorkItemId,
 } from "./types.ts";
+
+/** 設定で明示されたリポジトリ。`factory_repo`と`repo_allowlist`の各項目で、実体は`config.ts`にある。 */
+export { configuredRepos };
 
 /** 1回の実行で読む、競合している行の最大の数。 */
 export const CONFLICT_ROW_LIMIT = 200;
@@ -502,24 +504,6 @@ async function absorbReadError(
     return;
   }
   await recordFailureOf(context, step, err);
-}
-
-/**
- * 設定で明示されたリポジトリ。`factory_repo`と、`repo_allowlist`の各項目である。
- * `owners`はオーナーの全リポジトリを指すので展開しない。読めない項目は飛ばす。
- */
-export function configuredRepos(
-  config: Pick<FactoryConfig, "factory_repo" | "repo_allowlist">,
-): RepoRef[] {
-  const repos: RepoRef[] = [];
-  for (const url of [config.factory_repo, ...config.repo_allowlist]) {
-    try {
-      repos.push(parseGitHubRepoUrl(url));
-    } catch {
-      // 読めない項目は、許可の判定にも合わないので、列挙の対象にしない。
-    }
-  }
-  return mergeRepos(repos);
 }
 
 function repoKey(entry: RepoRef): string {

@@ -3,6 +3,7 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
+import { parseGitHubRepoUrl } from "./github.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -1110,6 +1111,33 @@ export function isRepoAllowed(
   return config.repo_allowlist.some(
     (entry) => normalizeRepoUrl(entry) === target,
   );
+}
+
+/**
+ * 設定で明示されたリポジトリ。`factory_repo`と、`repo_allowlist`の各項目である。
+ * `owners`はオーナーの全リポジトリを指すので展開しない。読めない項目は飛ばす。
+ * 大文字小文字を区別せずに重なりを除き、最初の綴りを残す。
+ */
+export function configuredRepos(
+  config: Pick<FactoryConfig, "factory_repo" | "repo_allowlist">,
+): { owner: string; repo: string }[] {
+  const seen = new Set<string>();
+  const repos: { owner: string; repo: string }[] = [];
+  for (const url of [config.factory_repo, ...config.repo_allowlist]) {
+    let entry: { owner: string; repo: string };
+    try {
+      const parsed = parseGitHubRepoUrl(url);
+      entry = { owner: parsed.owner, repo: parsed.repo };
+    } catch {
+      // 読めない項目は、許可の判定にも合わないので、列挙の対象にしない。
+      continue;
+    }
+    const key = `${entry.owner}/${entry.repo}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    repos.push(entry);
+  }
+  return repos;
 }
 
 /**
