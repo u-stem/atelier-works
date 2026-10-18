@@ -72,9 +72,8 @@ const REASONS = {
   writeFailed: "lock owner record cannot be written",
   probeFailed: "process group check failed",
   clockInvalid: "clock value is not in the expected form",
+  pidInvalid: "pid is not a positive integer",
 } as const;
-
-export type BlockedReason = (typeof REASONS)[keyof typeof REASONS] | string;
 
 export type Holder = {
   readonly pid: number;
@@ -98,7 +97,13 @@ export type LockDeps = {
 export type LockIo = {
   readonly openLocked: (path: string, options: { create: boolean }) => number;
   readonly closeLocked: (fd: number) => void;
-  readonly hooks?: { readonly afterOpen?: (path: string) => void };
+  readonly hooks?: {
+    readonly afterOpen?: (path: string) => void;
+    /** 記録の書き込みの代わり。書き込みの失敗と短い書き込みを作るために使う。 */
+    readonly write?: (fd: number, body: Buffer) => number;
+    /** `lock`の所有者のuidの代わり。他者の所有を作るために使う。 */
+    readonly fileUid?: (actual: number) => number;
+  };
 };
 
 export type AcquireOptions = {
@@ -118,6 +123,7 @@ export type LockHandle = {
   /**
    * 子のグループが無いと確かめたときだけ控えから外して`true`を返す。
    * 残っているとき、確かめられないとき、書き込みに失敗したときは、控えを残して`false`を返す。
+   * ロックを放した後や、`lock`の実体が替わった後は例外を投げる。
    */
   readonly untrackGroup: (pgid: number) => boolean;
   /** ロックを放す。冪等。控えたまま残っているグループは、記録に残す。 */
@@ -258,9 +264,11 @@ function serializeOwnerRecord(record: OwnerRecord): Buffer {
 }
 
 /** 記録を先頭へ1回で書く。短い書き込みは失敗にする。 */
-function writeOwnerRecord(fd: number, record: OwnerRecord): void {
+function writeOwnerRecord(fd: number, record: OwnerRecord, io: LockIo): void {
   const body = serializeOwnerRecord(record);
-  if (writeSync(fd, body, 0, body.length, 0) !== RECORD_SIZE) {
+  const written =
+    io.hooks?.write?.(fd, body) ?? writeSync(fd, body, 0, body.length, 0);
+  if (written !== RECORD_SIZE) {
     throw new Error("lock owner record was written partially");
   }
 }
@@ -314,11 +322,11 @@ type Opened = {
 };
 
 /** 取得後の検査。通常のファイル、所有者、権限、リンク数、パスとの一致、置き場との一致。 */
-function checkOpened(opened: Opened, uid: number): void {
+function checkOpened(opened: Opened, uid: number, io: LockIo): void {
   const stat = fstatSync(opened.fd, { bigint: true });
   if (
     !stat.isFile() ||
-    Number(stat.uid) !== uid ||
+    (io.hooks?.fileUid?.(Number(stat.uid)) ?? Number(stat.uid)) !== uid ||
     (Number(stat.mode) & 0o077) !== 0 ||
     stat.nlink !== 1n
   ) {
@@ -449,7 +457,7 @@ function openAndCheck(
       file: { dev: stat.dev, ino: stat.ino },
       dirId,
     };
-    checkOpened(opened, deps.uid);
+    checkOpened(opened, deps.uid, io);
     const verdict = selfCheck(opened, io);
     if (verdict !== null) return fail(verdict.cause, verdict.reason);
     return { kind: "ok", opened };
@@ -582,7 +590,7 @@ function createHandle(
   };
 
   const persist = (next: Group[], holder: Holder | null): void => {
-    writeOwnerRecord(fd, { schema: 1, holder, groups: next });
+    writeOwnerRecord(fd, { schema: 1, holder, groups: next }, io);
   };
 
   const stillExists = (pgid: number): boolean => {
@@ -654,6 +662,9 @@ async function acquireWith(
   io: LockIo,
   options: AcquireOptions,
 ): Promise<AcquireResult> {
+  if (!Number.isInteger(deps.pid) || deps.pid <= 0) {
+    return { kind: "blocked", cause: "io", reason: REASONS.pidInvalid };
+  }
   const result = openAndCheck(rawDir, deps, io, options.create === true);
   if (result.kind !== "ok") return result;
   const { opened } = result;
@@ -681,8 +692,10 @@ async function acquireWith(
         return { kind: "orphan_alive", pgids };
       }
     }
+    // 孤児の検査の間に`lock`の実体が替わっていないかを、書く前にもう一度確かめる。
+    checkOpened(opened, deps.uid, io);
     const holder: Holder = { pid: deps.pid, acquired_at: currentTime(deps) };
-    writeOwnerRecord(opened.fd, { schema: 1, holder, groups: [] });
+    writeOwnerRecord(opened.fd, { schema: 1, holder, groups: [] }, io);
     return { kind: "held", handle: createHandle(opened, deps, io, holder) };
   } catch (error) {
     release();
@@ -736,7 +749,8 @@ async function resetWith(
       }
     }
     // 先に全体を書いてから大きさを揃える。途中で止まっても、記録は正しい形のまま残る。
-    writeOwnerRecord(opened.fd, { schema: 1, holder: null, groups: [] });
+    checkOpened(opened, deps.uid, io);
+    writeOwnerRecord(opened.fd, { schema: 1, holder: null, groups: [] }, io);
     ftruncateSync(opened.fd, RECORD_SIZE);
     close();
     return { kind: "reset" };
