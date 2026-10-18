@@ -79,6 +79,7 @@ export type CommandErrorReason =
   | "aborted"
   | "signal"
   | "spawn"
+  | "read"
   | "invalid_spec";
 
 /** 実行口が投げる失敗。文言は固定で、コマンドの出力や引数を含めない。 */
@@ -271,9 +272,17 @@ function snapshot(input: CommandSpecInput): Fields & {
 
 function build(input: CommandSpecInput, checked: boolean): IssuedSpec {
   const spec = snapshot(input);
-  const rule = KIND_RULES[spec.kind];
+  // 種類は実行時の入力なので、継承したプロパティ(`constructor`など)を表から引かない。
+  const known = COMMAND_KINDS.includes(spec.kind);
+  const rule =
+    known && Object.hasOwn(KIND_RULES, spec.kind)
+      ? KIND_RULES[spec.kind]
+      : undefined;
   if (rule === undefined) invalid("kind cannot be created");
-  if (spec.timeoutMs !== COMMAND_TIMEOUT_MS[spec.kind]) {
+  if (
+    !Object.hasOwn(COMMAND_TIMEOUT_MS, spec.kind) ||
+    spec.timeoutMs !== COMMAND_TIMEOUT_MS[spec.kind]
+  ) {
     invalid("timeout differs from the table", spec.kind);
   }
   const requested = spec.maxStdoutBytes ?? rule.ceilingBytes;

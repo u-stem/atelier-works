@@ -83,10 +83,13 @@ type StreamReader = {
   readonly done: Promise<void>;
   /** `kill`で上限を超えたときだけ解決する。 */
   readonly overflowed: Promise<void>;
+  /** 読み取りが失敗したときだけ解決する。 */
+  readonly failed: Promise<void>;
   readonly cancel: () => void;
   readonly text: () => string;
   readonly dropped: () => boolean;
   readonly didOverflow: () => boolean;
+  readonly didFail: () => boolean;
 };
 
 function readStream(
@@ -102,6 +105,11 @@ function readStream(
   let signalOverflow: () => void = () => {};
   const overflowed = new Promise<void>((resolve) => {
     signalOverflow = resolve;
+  });
+  let failure = false;
+  let signalFailure: () => void = () => {};
+  const failed = new Promise<void>((resolve) => {
+    signalFailure = resolve;
   });
   const cancel = (): void => {
     reader.cancel().catch(() => {});
@@ -153,21 +161,25 @@ function readStream(
         }
       }
     } catch {
-      // 読み取りの失敗は終端として扱う。結果の判定は終了の状態で行う。
+      // 失敗は呼び出し側が分類する。標準出力の失敗は欠けた出力を意味し、標準エラーの失敗は情報にとどまる。
+      failure = true;
+      signalFailure();
     }
   })();
 
   return {
     done,
     overflowed,
+    failed,
     cancel,
     text: () => Buffer.concat(chunks).toString("utf8"),
     dropped: () => dropped,
     didOverflow: () => overflow,
+    didFail: () => failure,
   };
 }
 
-type Outcome = "finished" | "overflow" | "timeout" | "aborted";
+type Outcome = "finished" | "overflow" | "read_failed" | "timeout" | "aborted";
 
 /**
  * 実行口を作る。
@@ -242,11 +254,14 @@ export function createRunner(
       const first = await Promise.race([
         finished.then((result) => ({ outcome: "finished" as const, result })),
         stdout.overflowed.then(() => ({ outcome: "overflow" as const })),
+        stdout.failed.then(() => ({ outcome: "read_failed" as const })),
         interrupted.then((outcome) => ({ outcome })),
       ]);
       const outcome: Outcome = stdout.didOverflow()
         ? "overflow"
-        : first.outcome;
+        : stdout.didFail()
+          ? "read_failed"
+          : first.outcome;
 
       if (outcome === "finished" && first.outcome === "finished") {
         if (!first.result.ok) throw new CommandError("spawn");
@@ -270,6 +285,7 @@ export function createRunner(
           stderrDropped: stderr.dropped(),
         };
       }
+      if (outcome === "read_failed") throw new CommandError("read");
       throw new CommandError(outcome === "aborted" ? "aborted" : "timeout");
     } finally {
       cancelTimer();

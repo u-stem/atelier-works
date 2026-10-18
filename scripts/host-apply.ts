@@ -55,6 +55,8 @@ export function createGitRunner(runner: CommandRunner, cwd: string): GitRunner {
   return async (args) => {
     const result = await runner(gitReadSpec(args, { cwd }));
     if (result.kind === "truncated") throw new Error("git output is too large");
+    // 読み取りは溢れたら止める種類だが、表が変わっても切れた出力を成功にしない。
+    if (result.stdoutDropped) throw new Error("git output was cut short");
     return { code: result.code, stdout: result.stdout };
   };
 }
@@ -68,9 +70,9 @@ export function createLimitedRunner(
     const result = await runner(
       gitReadSpec(args, { cwd, maxStdoutBytes: maxBytes }),
     );
-    return result.kind === "truncated"
-      ? { truncated: true }
-      : { truncated: false, code: result.code, stdout: result.stdout };
+    if (result.kind === "truncated") return { truncated: true };
+    if (result.stdoutDropped) throw new Error("git output was cut short");
+    return { truncated: false, code: result.code, stdout: result.stdout };
   };
 }
 
