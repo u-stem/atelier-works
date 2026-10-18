@@ -7,9 +7,9 @@
 
 import { randomUUID } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
@@ -81,6 +81,11 @@ export type WriteSecureFileInput = ReadSecureFileInput & {
   /** 真のときだけ、置き場が無ければ親ごと0700で作る。置き場を作るのは初期化だけにするため、既定は偽。 */
   readonly createDir?: boolean;
 };
+
+/** 実行ユーザーのuid。取れない環境では所有者の検査を満たせないので、負の値にする。 */
+export function currentUid(): number {
+  return process.getuid?.() ?? -1;
+}
 
 function errorCode(error: unknown): string | null {
   if (typeof error === "object" && error !== null && "code" in error) {
@@ -248,15 +253,28 @@ export function readSecureFile(
   }
 }
 
-/** 置き場を親ごと0700で作る。作った後に通常のディレクトリであることを確かめてから、権限を固定する。 */
+/**
+ * 置き場を親ごと0700で作る。
+ * 作った後は、パスではなく開いた記述子で通常のディレクトリであることを確かめ、権限もその記述子に固定する。
+ * パスで`chmod`すると、作った直後に差し替えられたsymlinkの先の権限を変えうるためである。
+ */
 function createStateDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  // `chmod`はsymlinkを辿るので、作った直後に差し替えられていないかを先に確かめる。
-  const stat = lstatSync(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error("state directory is not a directory");
+  const fd = openSync(
+    dir,
+    constants.O_RDONLY |
+      constants.O_DIRECTORY |
+      constants.O_NOFOLLOW |
+      constants.O_NONBLOCK,
+  );
+  try {
+    if (!fstatSync(fd).isDirectory()) {
+      throw new Error("state directory is not a directory");
+    }
+    fchmodSync(fd, 0o700);
+  } finally {
+    closeSync(fd);
   }
-  chmodSync(dir, 0o700);
 }
 
 function writeAll(fd: number, body: string): void {
@@ -272,6 +290,8 @@ function writeAll(fd: number, body: string): void {
  * 一時ファイルを`wx`の0600で作って書き、`fsync`してから`rename`するので、途中の状態は読まれない。
  * 置き場の検査を満たさないか、本文が`maxBytes`を超えれば、何も書かずに例外にする。
  * 失敗したときに消すのは、自分が作った一時ファイルだけである。
+ * 名前の置き換え(`rename`)の後にある置き場の`fsync`が失敗したときは、ファイルは既に置き換わっている。
+ * 呼び出し側は、例外のときに読み直して判断する。
  */
 export function writeSecureFile(input: WriteSecureFileInput): void {
   const { dir, name, label, body, maxBytes, uid, createDir = false } = input;
@@ -308,7 +328,13 @@ export function writeSecureFile(input: WriteSecureFileInput): void {
     closed = true;
     renameSync(temp, join(dir, name));
   } catch (error) {
-    if (!closed) closeSync(fd);
+    if (!closed) {
+      try {
+        closeSync(fd);
+      } catch {
+        // 閉じる失敗で、元の例外と一時ファイルの後始末を隠さない。
+      }
+    }
     rmSync(temp, { force: true });
     throw error;
   }

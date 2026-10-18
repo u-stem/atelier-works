@@ -6,7 +6,7 @@
  * 読み書きの競合は防がない。呼び出し側が排他を取ってから呼ぶ。
  */
 
-import { readSecureFile, writeSecureFile } from "./secure_file.ts";
+import { currentUid, readSecureFile, writeSecureFile } from "./secure_file.ts";
 import { isRecord } from "./stable.ts";
 
 /** 項目を書いた側。`compose_up`は予約で、今の書き手は`executor`だけである。 */
@@ -74,11 +74,6 @@ const CONTAINER_ID = /^[0-9a-f]{64}$/;
 const DATE_TIME =
   /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d{1,9})?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
-/** 実行ユーザーのuid。取れない環境では所有者の検査を満たせないので、負の値にする。 */
-function currentUid(): number {
-  return process.getuid?.() ?? -1;
-}
-
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]) {
   const actual = Object.keys(value);
   return (
@@ -86,7 +81,7 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]) {
   );
 }
 
-/** 暦に存在する日付と時刻か。小数部は9桁まで、オフセットは`Z`か`±hh:mm`を許す。 */
+/** 暦に存在する日付と時刻か。小数部は9桁まで、オフセットは`Z`か`+hh:mm`か`-hh:mm`を許す。 */
 function isDateTime(value: unknown, utcOnly: boolean): boolean {
   if (typeof value !== "string") return false;
   const match = DATE_TIME.exec(value);
@@ -95,7 +90,9 @@ function isDateTime(value: unknown, utcOnly: boolean): boolean {
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
+  // `Date.UTC`は0〜99年を1900年代に補正するので、年は`setUTCFullYear`で設定する。
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
   return (
     date.getUTCFullYear() === year &&
     date.getUTCMonth() === month - 1 &&
@@ -148,14 +145,10 @@ export function parseDrainRecord(text: string): DrainRecord | null {
   return isDrainRecord(parsed) ? parsed : null;
 }
 
-/** 記録をファイルの本文にする。形の合わない記録と、64KiBを超える本文は、書く前に止めるため例外にする。 */
+/** 記録をファイルの本文にする。形の合わない記録は、書く前に止めるため例外にする。上限は書き込みの側が守る。 */
 export function serializeDrainRecord(record: DrainRecord): string {
   if (!isDrainRecord(record)) throw new Error("invalid drain record");
-  const body = `${JSON.stringify(record, null, 2)}\n`;
-  if (Buffer.byteLength(body, "utf8") > MAX_DRAIN_BYTES) {
-    throw new Error("drain record is too large");
-  }
-  return body;
+  return `${JSON.stringify(record, null, 2)}\n`;
 }
 
 /**

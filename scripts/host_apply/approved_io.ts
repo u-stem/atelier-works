@@ -10,7 +10,7 @@ import {
   parseApprovedRecord,
   serializeApprovedRecord,
 } from "./approved_store.ts";
-import { readSecureFile, writeSecureFile } from "./secure_file.ts";
+import { currentUid, readSecureFile, writeSecureFile } from "./secure_file.ts";
 
 export type ReadApprovedResult =
   | { readonly kind: "absent" }
@@ -19,11 +19,6 @@ export type ReadApprovedResult =
 
 const FILE_NAME = "approved.json";
 const FILE_LABEL = "approved file";
-
-/** 実行ユーザーのuid。取れない環境では所有者の検査を満たせないので、負の値にする。 */
-function currentUid(): number {
-  return process.getuid?.() ?? -1;
-}
 
 export function approvedFilePath(dir: string): string {
   return join(dir, FILE_NAME);
