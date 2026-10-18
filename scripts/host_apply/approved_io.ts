@@ -82,6 +82,7 @@ function inspectDir(dir: string, uid: number): DirState {
 
 /**
  * 置き場の記録を読む。
+ * `O_NONBLOCK`で開くので、FIFOが置かれていても止まらず、通常のファイルでないとして拒否する。
  * 置き場かファイルが無ければ`absent`。symlink、緩い権限、他者の所有、リンクの複数化、大きすぎる本文、
  * 記録の形に合わない本文は、承認なしとして扱えるよう`invalid`にする。
  */
@@ -95,7 +96,7 @@ export function readApproved(
   try {
     fd = openSync(
       approvedFilePath(dir),
-      constants.O_RDONLY | constants.O_NOFOLLOW,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
   } catch (error) {
     if (errorCode(error) === "ENOENT") return { kind: "absent" };

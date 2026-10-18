@@ -516,6 +516,7 @@ export async function runApprove(
     io.print(`approved ${target}`);
     return EXIT_OK;
   } catch (error) {
-    return fail(error instanceof Error ? error.message : "unknown error");
+    const reason = error instanceof Error ? error.message : "unknown error";
+    return fail(escapeDetail(reason));
   }
 }

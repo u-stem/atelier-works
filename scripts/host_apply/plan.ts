@@ -259,12 +259,12 @@ export type ParsedPlanArgs =
   | { readonly ok: true; readonly args: PlanArgs }
   | { readonly ok: false; readonly error: string };
 
-/** `/`で始まり、制御文字(NULを含む)を含まないパスか。 */
+/** `/`で始まり、制御文字(NUL、DEL、C1を含む)を含まないパスか。 */
 export function isAbsoluteCleanPath(value: string): boolean {
   if (!value.startsWith("/")) return false;
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) return false;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return false;
   }
   return true;
 }
