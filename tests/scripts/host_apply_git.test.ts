@@ -55,11 +55,15 @@ describe("fetchArgs", () => {
     "http.sslVerify=true",
     "http.proxy=",
     "http.https://github.com/.sslVerify=true",
+    "http.curloptResolve=",
     "http.https://github.com/.proxy=",
+    "http.https://github.com/.followRedirects=false",
     "http.https://github.com/example/.sslVerify=true",
     "http.https://github.com/example/.proxy=",
+    "http.https://github.com/example/.followRedirects=false",
     `http.${REMOTE}.sslVerify=true`,
     `http.${REMOTE}.proxy=`,
+    `http.${REMOTE}.followRedirects=false`,
     "gc.auto=0",
     "maintenance.auto=false",
   ])("sets -c %s", (setting) => {
@@ -732,6 +736,7 @@ describe("the http settings of fetchArgs against a repository that weakens them"
     for (const level of LEVELS) {
       repo.git(["config", `http.${level}.sslVerify`, "false"]);
       repo.git(["config", `http.${level}.proxy`, "http://evil.invalid:3128"]);
+      repo.git(["config", `http.${level}.followRedirects`, "true"]);
     }
     return repo;
   }
@@ -756,12 +761,20 @@ describe("the http settings of fetchArgs against a repository that weakens them"
     );
   });
 
+  test("the control: the repository follows redirects", () => {
+    expect(effective(weakened(), "http.followRedirects", false)).toBe("true");
+  });
+
   test("the arguments turn the verification back on", () => {
     expect(effective(weakened(), "http.sslVerify", true)).toBe("true");
   });
 
   test("the arguments clear the proxy", () => {
     expect(effective(weakened(), "http.proxy", true)).toBe("");
+  });
+
+  test("the arguments turn the redirects off", () => {
+    expect(effective(weakened(), "http.followRedirects", true)).toBe("false");
   });
 });
 
