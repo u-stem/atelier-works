@@ -1531,6 +1531,7 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 
 検索のrate limitは、認証したトークンで1分に30本である。
 `poll_prs`はオーナーごとに4本、`poll_issues`もオーナーごとに検索し、同じトークンで共有する。
+`watch_pr_conflicts`もオーナーごとに1本検索する。設定`gh_source_pr_conflict_watch`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる。
 `watch_pr_ci`の本数が増えるほど、ほかのポーリングの検索が拒まれやすくなる。
 許可する作者は、少なくする。
 拒まれた回は、人のPRの発見だけを飛ばす。
@@ -1682,11 +1683,12 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 
 - 状態が`pr_open`の作業項目を持つ。
 - 競合の記録の行を持つ。
-- PATのアカウントが作った開いているPRを、照合を通ったオーナーごとに検索して、見つかった。
+- PATのアカウントが作った開いているPRを、照合を通ったオーナーごとに検索して、または収集の表から、見つかった。
 - `factory_repo`か、`repo_allowlist`に明示されている。
 
 `owners`だけで許されているリポジトリは、展開しない。
 検索は、リポジトリを見つけるためだけに使う。検索の索引は数分遅れる。1つのオーナーで読むのは、更新が新しい100件までである。
+設定`gh_source_pr_conflict_watch`が`db`のときは、収集の表でリポジトリを見つけ、PRも表から列挙する。表を使えないオーナーとリポジトリは、検索とREST一覧に戻る([競合の監視の読み取り元を表に切り替える](#競合の監視の読み取り元を表に切り替える))。
 作業項目が消え、競合の記録も無く、検索にも現れないリポジトリの古いPRは、見つけられない。
 このとき`repo_allowlist`にリポジトリを足してはならない。1件でも入れると、`repo_allowlist`が対象のリポジトリを絞り、書かなかったリポジトリがFactory全体で対象から外れる。
 1つのリポジトリで読むのは、1000件までである。超えたリポジトリは飛ばす。検索だけが見つけたリポジトリはログの警告だけで、それ以外は失敗として記録する。
@@ -1715,6 +1717,7 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 | `pr_conflict_fix_max_rounds` | `2` | 競合の1回で起動できる数。1以上5以下 |
 | `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数。2以上10以下。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
 | `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下。`pr_conflict_fix_enabled`が`true`なら、10以上 |
+| `gh_source_pr_conflict_watch` | `search` | リポジトリの発見とPRの列挙の元。`search`は検索とREST一覧、`db`は収集の表。切り替えの手順は[競合の監視の読み取り元を表に切り替える](#競合の監視の読み取り元を表に切り替える) |
 
 競合を直す設定の組み合わせが上の条件を満たさないと、設定の読み込みが拒否する。
 Factoryのほかの処理も止まるので、関連する項目は同じ編集で書く。
@@ -1754,11 +1757,13 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 | `work_items` | 作業項目を持つリポジトリの数 |
 | `conflict_rows` | 競合の記録の行を持つリポジトリの数 |
 | `explicit` | 設定で明示されたリポジトリの数 |
+| `table` | 収集の表で見つけたリポジトリの数。読み取り元が`search`なら0 |
 | `searched` | 検索が返したPRの件数。リポジトリの数ではなく、同じリポジトリが重なり、Factory以外のPRも含む |
 | `total` | 重複を除いたリポジトリの数 |
 
 検索が働いたかは、PATのアカウントが開いているPRを持つのに、`searched`が0になっていないかで確かめる。0のままなら、検索の索引か権限を疑う。
-`total`は、4つの元を合わせた和集合の数なので、`work_items`、`conflict_rows`、`explicit`の和に、検索だけが見つけたリポジトリを足した数以下になる。
+読み取り元が`db`のときは、表で見つかったオーナーを検索しないので、`searched`が0でも異常ではない。
+`total`は、5つの元を合わせた和集合の数なので、`work_items`、`conflict_rows`、`explicit`の和に、表か検索だけが見つけたリポジトリを足した数以下になる。
 
 止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 止めた後に残った通知は、そのままにしておく。再開した後に、競合が続く間は通知が残り、競合が解けると自動で解決される。
@@ -1770,6 +1775,81 @@ PATが拒まれた(401)ときは、以降の読み取りを止め、失敗を1�
 PATがリポジトリを読めなくなったときの専用の通知は無い。この監視だけを有効にしているときは、ログの警告だけが残る。
 読めなかったPRと、GitHubのrate limitの扱いは、[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 通知の本文は、競合を直す設定が有効なとき、保留の理由ごとに違う。実行が重なると、同じ競合の通知が2件残りうる。競合が解けると、どちらも自動で解決される。
+
+### 競合の監視の読み取り元を表に切り替える
+
+設定`gh_source_pr_conflict_watch`を`db`にすると、`watch_pr_conflicts`は収集の表を読む。
+読むのは、リポジトリの発見とPRの列挙である。検索とREST一覧は、表を使えないときだけ呼ぶ。
+検索とREST一覧の回数が減り、検索のレート制限に当たりにくくなる。
+既定の`search`のままなら、発見と列挙は変わらない。
+PRごとの読み直し、競合の判定、通知、起動の判断は、読み取り元によらず同じである。
+どちらの読み取り元でも、読み直したPRの作者、ブランチの形、forkを確かめ直す。合わないPRは、理由`not_factory`で飛ばし、ログに警告を残す。
+
+収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索とREST一覧になる。
+`gh_source_pr_conflict_watch`に書ける値は、`search`と`db`の2つだけである。
+列挙の外の値を書くと、設定を読むscriptがすべて止まる。
+
+記録の時刻が閾値を超えたオーナーは検索に、リポジトリはREST一覧に戻る。
+閾値は、`owners`の所有者がn人のとき、`max(15分, (n+1)×5分)`である。
+戻した検索の回数は、周回全体が検索のときを超えない。
+
+表に切り替えると、次の3つが変わる。
+
+- archive済みと、一覧から消えたリポジトリは、表で探さない。作業項目、競合の行、設定で明示されたリポジトリは、REST一覧で列挙する。どれにも入らず検索だけが見つけていたPRは、見つからなくなる。
+- 表の値が変わってから列挙に届くまで、普段は1周回(5分ほど)、最大で閾値と5分の和だけ遅れる。競合の通知も同じだけ遅れる。競合が解けたことと、PRが閉じたことの検知は遅れない。
+- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリのPRを、表では見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。
+
+1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, repo, repo_id, allowed, archived, gone, truncated, detail_failed, last_collected_at, now() - last_collected_at AS age FROM factory.gh_repos ORDER BY owner, repo"
+   ```
+
+   対象のリポジトリが許可され、archiveされておらず、`gone`でなく、`age`が閾値の内にあることを見る。
+   満たさないリポジトリは、`db`にしても毎周回REST一覧に戻る。
+2. 表で見つかるリポジトリの集合を、検索の結果と照らし合わせる。
+   次の条件のPRを持つリポジトリを、表と検索のそれぞれから集める。
+   - PATのアカウントが作った、開いているPRである。
+   - 下書きでなく、forkでなく、Factoryのブランチである。
+   2つの集合を`cmp -s`で比べ、`same`と`different`のどちらになったかだけを見る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT DISTINCT repo FROM factory.gh_pull_requests WHERE state = 'open' AND usable AND NOT is_draft AND NOT is_cross_repository AND head_ref LIKE 'factory/issue-%' AND lower(author_login) = lower('<PATのアカウント>') AND owner = '<owner>' ORDER BY repo"
+   ```
+
+   ```bash
+   gh api -X GET search/issues -f q='is:pr is:open draft:false author:<PATのアカウント> user:<owner>' -f per_page=100 --jq '.items[].repository_url' | sed 's|.*/repos/||' | sort -u
+   ```
+
+   検索の範囲は、所有者が組織なら`org:<owner>`にする。
+   検索の出力は、`<owner>/`を除いて小文字にしてから比べる。
+   `different`なら、収集の周回の遅れ(5分以内)か、archive済みのリポジトリで説明できるかを確かめ、数分後に読み直す。
+   `repo_allowlist`が空の構成では、検索が返すリポジトリのうち`gh_repos`に行の無いものの数も数える。1以上なら、`db`にしない。
+3. `gh_source_pr_conflict_watch`を`db`に切り替える。
+   書き換えの前に、リソースの値を取得して控えを取る。
+   取得した出力の`value`の`gh_source_pr_conflict_watch`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
+   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
+   戻すときは、控えの値で同じ手順を行い、`gh_source_pr_conflict_watch`を`search`にする。
+4. 続く3回の`watch_pr_conflicts`の結果を、WindmillのRunsで確かめる。
+   `source`が`db`、`errors`が0、`fallback_searches`が0であることを見る。
+   `table_repos`は、表から列挙したリポジトリの数で、対象のうち記録が新しいものの数と近いはずである。
+   `tracked`と`conflicted`は、切り替えの前と同じか、その間のPRの開閉で説明できる値になる。
+5. `fallback_searches`が1以上なら、`fallback_reasons`の語で原因を読む。
+
+| `fallback_reasons`の語 | 対処 |
+| --- | --- |
+| `no_record` | `gh_repos`にその所有者の行が無い。所有者が収集の対象(`owners`)かを確かめる |
+| `unusable` | 許可の外か、開いた行がすべて使えない。読む時点で許されるのに、記録の許可が偽のときも当たる。収集が次の一覧で書き直すのを待つ |
+| `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
+| `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
+| `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_owner_prs:<owner>`と、DBの状態を確かめる |
+
+定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
+説明できないなら、`gh_source_pr_conflict_watch`を`search`に戻す。
+失敗の記録の段`read_gh_owner_prs:`が続くときも、`search`に戻す。
+
+読み取り元だけを戻すときは、`gh_source_pr_conflict_watch`を`search`にする。
+監視を止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 
 ### 競合の自動修正を有効にする
 
