@@ -379,9 +379,9 @@ describe("createApproveGit", () => {
   function git(
     run: GitRunner,
     limited: LimitedGitRunner = async () => ({
+      truncated: false,
       code: 0,
       stdout: "",
-      truncated: false,
     }),
   ): ApproveGit {
     return createApproveGit(run, limited);
@@ -420,7 +420,7 @@ describe("createApproveGit", () => {
   test("diffPatch returns the text of the difference", async () => {
     const g = git(
       async () => ({ code: 0, stdout: "" }),
-      async () => ({ code: 0, stdout: "diff text", truncated: false }),
+      async () => ({ truncated: false, code: 0, stdout: "diff text" }),
     );
     expect(await g.diffPatch(SHA, OTHER, ["a"])).toEqual({
       text: "diff text",
@@ -431,7 +431,7 @@ describe("createApproveGit", () => {
   test("diffPatch reports a truncated output", async () => {
     const g = git(
       async () => ({ code: 0, stdout: "" }),
-      async () => ({ code: -1, stdout: "part", truncated: true }),
+      async () => ({ truncated: true }),
     );
     expect(await g.diffPatch(SHA, OTHER, ["a"])).toEqual({
       text: "",
@@ -445,7 +445,7 @@ describe("createApproveGit", () => {
       async () => ({ code: 0, stdout: "" }),
       async (_args, max) => {
         limits.push(max);
-        return { code: 0, stdout: "", truncated: false };
+        return { truncated: false, code: 0, stdout: "" };
       },
     );
     await g.diffPatch(SHA, OTHER, ["a"]);
@@ -455,7 +455,7 @@ describe("createApproveGit", () => {
   test("diffPatch throws when git fails", async () => {
     const g = git(
       async () => ({ code: 0, stdout: "" }),
-      async () => ({ code: 128, stdout: "", truncated: false }),
+      async () => ({ truncated: false, code: 128, stdout: "" }),
     );
     await expect(g.diffPatch(SHA, OTHER, ["a"])).rejects.toThrow("git diff");
   });
@@ -499,7 +499,9 @@ describe("runApprove", () => {
     };
     const limited: LimitedGitRunner = async (args, max) => {
       const result = await run(args);
-      return { ...result, truncated: result.stdout.length > max };
+      return result.stdout.length > max
+        ? { truncated: true }
+        : { truncated: false, ...result };
     };
     return createApproveGit(run, limited);
   }
@@ -546,7 +548,7 @@ describe("runApprove", () => {
         if (options.originThrows) throw new Error("cannot read \u001b[2J");
         return options.originOk === false
           ? { ok: false, reason: "the code is not at origin/main" }
-          : { ok: true };
+          : { ok: true, head: "c".repeat(40) };
       },
       git: options.git ? options.git(real) : real,
       readRecord: () => options.stored ?? { kind: "absent" },

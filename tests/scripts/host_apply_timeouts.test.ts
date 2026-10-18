@@ -1,18 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import * as constants from "../../scripts/host_apply/constants.ts";
 import {
   ATTEMPT_THROTTLE_AFTER,
   ATTEMPT_THROTTLE_INTERVAL_MS,
   COMMAND_KINDS,
   COMMAND_TIMEOUT_MS,
   DRAIN_LIMIT_MS,
-  EXECUTOR_VERSION,
   FAILED_NOTIFY_AFTER,
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_STALE_MS,
   MAX_BLOB_BYTES,
+  MAX_PROCESS_ID,
   NOTIFY_INTERVAL_MS,
   RUN_TIMEOUT_MS,
   STALE_CI_MS,
+  STDERR_LIMIT_BYTES,
 } from "../../scripts/host_apply/constants.ts";
 
 const MINUTE = 60_000;
@@ -31,7 +33,7 @@ describe("external command limits", () => {
     );
   });
 
-  test("lists the thirteen kinds of command", () => {
+  test("lists the fourteen kinds of command", () => {
     const kinds: string[] = [...COMMAND_KINDS].sort();
     expect(kinds).toEqual(
       [
@@ -48,12 +50,14 @@ describe("external command limits", () => {
         "compose_up",
         "host_script",
         "http_fetch",
+        "host_probe",
       ].sort(),
     );
   });
 
   test.each([
     ["git_fetch", 2 * MINUTE],
+    ["host_probe", 10_000],
     ["git_worktree_add", 2 * MINUTE],
     ["docker_inspect", 30_000],
     ["docker_ps", 30_000],
@@ -124,7 +128,15 @@ describe("limits on what the executor reads", () => {
     expect(MAX_BLOB_BYTES).toBe(256 * 1024);
   });
 
-  test("names the executor version, so that older rejection records can be ignored", () => {
-    expect(EXECUTOR_VERSION).not.toBe("");
+  test("accepts process ids up to 2 to the 22nd power", () => {
+    expect(MAX_PROCESS_ID).toBe(4_194_304);
+  });
+
+  test("keeps at most 64 KiB of the standard error of a command", () => {
+    expect(STDERR_LIMIT_BYTES).toBe(64 * 1024);
+  });
+
+  test("has no fixed executor version, since the checked HEAD names it", () => {
+    expect("EXECUTOR_VERSION" in constants).toBe(false);
   });
 });

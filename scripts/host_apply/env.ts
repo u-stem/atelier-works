@@ -6,6 +6,8 @@ import { MISE_ENV_KEYS } from "./constants.ts";
  * 子プロセスの種類。
  * `compose`はdocker compose、`admin_script`は`doctor.sh`と`bootstrap.sh custom-tags`、
  * `git`は取得などのgit、`plain`はそれ以外。
+ * `git`の環境は、`git.ts`の`approveGitEnv()`より弱い(属性、pathspecの展開、遅延取得を止めない)。
+ * gitの起動には使わない。読み取りのgitは`approveGitEnv()`、取得のgitは`fetchEnv()`を重ねた環境を使う。
  */
 export type EnvProfile = "compose" | "admin_script" | "git" | "plain";
 
