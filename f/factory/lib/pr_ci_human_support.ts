@@ -89,12 +89,39 @@ export type HumanPrCandidate = {
   readonly authorUnknown: boolean;
 };
 
-/** 仮実装。常に空を返す。 */
+/**
+ * 表の行から、人のPRの候補を作る。入力は、使ってよい行(鮮度と`usable`を確かめた行)に限る。
+ * 開いていて下書きでない行のうち、次のどちらかを選ぶ。
+ * - 作者の種別が`User`で、ログイン名(大文字小文字を区別しない)が`authors`に入る行。
+ * - 作者が分からない行(ログイン名か種別が空)。候補を広げる側に扱い、RESTの作者で確かめる。
+ * forkとFactoryの形のブランチでは絞らない。検索も絞らず、読み直した値で`isHumanPrCandidate`が除くためである。
+ */
 export function humanPrCandidatesFromRows(
-  _rows: readonly GhPullRequest[],
-  _authors: readonly string[],
+  rows: readonly GhPullRequest[],
+  authors: readonly string[],
 ): HumanPrCandidate[] {
-  return [];
+  const listed = new Set(authors.map((login) => login.toLowerCase()));
+  const candidates: HumanPrCandidate[] = [];
+  for (const row of rows) {
+    if (row.state !== "open" || row.is_draft) continue;
+    const authorUnknown = row.author_login === null || row.author_type === null;
+    if (
+      !authorUnknown &&
+      !(
+        row.author_type === "User" && listed.has(row.author_login.toLowerCase())
+      )
+    ) {
+      continue;
+    }
+    candidates.push({
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      updatedAtMs: row.updated_at.getTime(),
+      authorUnknown,
+    });
+  }
+  return candidates;
 }
 
 /**
