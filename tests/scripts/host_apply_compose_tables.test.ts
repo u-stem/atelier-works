@@ -316,6 +316,10 @@ describe("secrets", () => {
     );
   });
 
+  test("a bare name for a table service is not a violation", () => {
+    expect(found({ db: { ...DB, environment: ["DB_PASSWORD"] } })).toEqual([]);
+  });
+
   test("a bare name in a list passes the value of the host", () => {
     expect(
       found({
@@ -446,6 +450,73 @@ describe("secrets", () => {
   });
 });
 
+describe("references in keys", () => {
+  test("a reference in a top-level key is judged", () => {
+    expect(found({}, { "x-${GITHUB_TOKEN}": 1 })).toBe("rejected");
+  });
+
+  test("a reference in a field name of a service is judged", () => {
+    expect(found({ db: { ...DB, "x-${HOME}": 1 } })).toEqual([
+      "secret:db:x-${HOME}:HOME",
+    ]);
+  });
+});
+
+describe("raw text checks at the entry of the tables", () => {
+  const BASE = "services:\n  db:\n    image: postgres:18\n";
+
+  test.each(["\u0085", "\u2028", "\u2029", "\r"])(
+    "rejects the line break %j",
+    (mark) => {
+      expect(foundText(`${BASE}# a${mark}b\n`)).toBe("rejected");
+    },
+  );
+
+  test("rejects a tag in a comment", () => {
+    expect(foundText(`# !x\n${BASE}`)).toBe("rejected");
+  });
+
+  test("rejects a merge key in a comment", () => {
+    expect(foundText(`# <<\n${BASE}`)).toBe("rejected");
+  });
+});
+
+describe("ids of violations", () => {
+  const idsOf = (services: Services) =>
+    violationsOf(textOf(services)).map((item) => item.id);
+  const caddy = { image: "ghcr.io/windmill-labs/caddy-l4:1" };
+
+  test("two names in one scalar make two violations", () => {
+    expect(
+      found({ caddy: { ...caddy, labels: { a: "${DB_PASSWORD}${HOME}" } } }),
+    ).toEqual(["secret:caddy:labels:DB_PASSWORD", "secret:caddy:labels:HOME"]);
+  });
+
+  test("a different build gives a different id", () => {
+    expect(idsOf({ db: { ...DB, build: { context: "./a" } } }).join()).not.toBe(
+      idsOf({ db: { ...DB, build: { context: "./b" } } }).join(),
+    );
+  });
+
+  test("an image that is not a string gives an id for its value", () => {
+    expect(idsOf({ db: { image: { a: 1 } } }).join()).not.toBe(
+      idsOf({ db: { image: ["evil"] } }).join(),
+    );
+  });
+
+  test("the key of a map value is part of the id", () => {
+    expect(
+      idsOf({
+        caddy: { ...caddy, environment: { A: "${CONSOLE_GITHUB_TOKEN}" } },
+      }).join(),
+    ).not.toBe(
+      idsOf({
+        caddy: { ...caddy, environment: { B: "${CONSOLE_GITHUB_TOKEN}" } },
+      }).join(),
+    );
+  });
+});
+
 describe("shared nodes, limits and cycles", () => {
   const CADDY = "image: ghcr.io/windmill-labs/caddy-l4:1";
 
@@ -504,11 +575,17 @@ describe("shared nodes, limits and cycles", () => {
   const nested = (depth: number) =>
     `services:\n  db:\n    image: postgres:18\n    labels: ${"[".repeat(depth)}${"]".repeat(depth)}\n`;
   const limits = (
-    over: Partial<{ maxDepth: number; maxNodes: number; maxBytes: number }>,
+    over: Partial<{
+      maxDepth: number;
+      maxNodes: number;
+      maxBytes: number;
+      maxRefs: number;
+    }>,
   ) => ({
     maxDepth: 64,
     maxNodes: 100_000,
     maxBytes: 8 * 1024 * 1024,
+    maxRefs: 1_000_000,
     ...over,
   });
 
@@ -548,9 +625,26 @@ describe("shared nodes, limits and cycles", () => {
     );
   });
 
-  test("the rejection never becomes a violation", () => {
-    const result = checkComposeTablesText(wide, limits({ maxNodes: 1 }));
-    expect(result.ok).toBe(false);
+  test("a reference count at the limit is accepted", () => {
+    const text = `services:\n  db:\n    image: postgres:18\n    labels: ["\${WM_BIND}", "\${WM_VERSION}"]\n`;
+    expect(checkComposeTablesText(text, limits({ maxRefs: 2 })).ok).toBe(true);
+  });
+
+  test("a reference count over the limit is rejected", () => {
+    const text = `services:\n  db:\n    image: postgres:18\n    labels: ["\${WM_BIND}", "\${WM_VERSION}"]\n`;
+    expect(checkComposeTablesText(text, limits({ maxRefs: 1 })).ok).toBe(false);
+  });
+
+  test("many aliases of a large list finish quickly", () => {
+    const leaf = `["\${WM_VERSION}", "\${WM_BIND}"]`;
+    const aliases = Array.from({ length: 400 }, () => "*l0").join(", ");
+    const text = `x-l0: &l0 ${leaf}\nx-l1: &l1 [${aliases}]\n${Array.from(
+      { length: 300 },
+      (_, index) => `x-k${index}: *l1`,
+    ).join("\n")}\nservices:\n  db:\n    image: postgres:18\n`;
+    const started = Date.now();
+    const result = checkComposeTablesText(text);
+    expect([result.ok, Date.now() - started < 3000]).toEqual([true, true]);
   });
 
   test("the detail of a rejection is printable ASCII", () => {
