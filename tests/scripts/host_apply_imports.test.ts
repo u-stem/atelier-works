@@ -329,6 +329,17 @@ describe("the state store modules", () => {
     expect(violations(STORE_MODULES)).toEqual([]);
   });
 
+  test("start no process and run no shell", () => {
+    expect(
+      STORE_MODULES.flatMap((file) => {
+        const source = readFileSync(file, "utf8");
+        return [/\bspawn\w*\s*\(/, /Bun\.\$/]
+          .filter((pattern) => pattern.test(source))
+          .map((pattern) => `${file}: ${pattern.source}`);
+      }),
+    ).toEqual([]);
+  });
+
   test("read no environment variable", () => {
     expect(
       STORE_MODULES.flatMap((file) =>

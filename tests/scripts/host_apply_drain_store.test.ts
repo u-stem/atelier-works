@@ -136,6 +136,31 @@ describe("parseDrainRecord", () => {
     expect(parseDrainRecord(body({}, { signaled_at: signaledAt }))).toBeNull();
   });
 
+  test.each(["started_at", "signaled_at"])(
+    "rejects a %s of a day that does not exist",
+    (field) => {
+      expect(
+        parseDrainRecord(body({}, { [field]: "2026-02-30T00:00:00Z" })),
+      ).toBeNull();
+    },
+  );
+
+  test("accepts a started_at in the first year", () => {
+    expect(
+      parseDrainRecord(body({}, { started_at: "0001-01-01T00:00:00Z" })),
+    ).not.toBeNull();
+  });
+
+  test("rejects entries that is an array", () => {
+    expect(parseDrainRecord(body({ entries: [] }))).toBeNull();
+  });
+
+  test("rejects an entries object with a __proto__ key", () => {
+    // JSON.stringifyでは作れないので、本文を直接書く。
+    const text = `{"schema":1,"entries":{"__proto__":${JSON.stringify(ENTRY)}}}`;
+    expect(parseDrainRecord(text)).toBeNull();
+  });
+
   test.each([2, "1", null])("rejects a schema of %p", (schema) => {
     expect(parseDrainRecord(body({ schema }))).toBeNull();
   });

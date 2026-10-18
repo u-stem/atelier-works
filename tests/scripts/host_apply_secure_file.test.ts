@@ -75,6 +75,17 @@ describe("writeSecureFile", () => {
     expect(mode(dir)).toBe(0o700);
   });
 
+  test("fixes the mode of a created directory whatever the umask is", () => {
+    const dir = join(tempRoot(), "fresh");
+    const before = process.umask(0o300);
+    try {
+      put(dir, "hello\n", true);
+    } finally {
+      process.umask(before);
+    }
+    expect(mode(dir)).toBe(0o700);
+  });
+
   test("writes the file with mode 0600", () => {
     const dir = privateDir();
     put(dir);
@@ -242,11 +253,14 @@ describe("readSecureFile", () => {
     });
   });
 
-  test("is unsafe for a file owned by someone else", () => {
-    // 別のuidで読むと置き場の所有者も違うので、置き場の拒否と区別はつかない。
+  // ファイルの所有者の分岐は、別のuidのファイルを作れないので、通せない。
+  // 別のuidで読むと置き場の所有者の拒否で止まるので、その理由だけを確かめる。
+  test("names the directory owner when read by another uid", () => {
     const dir = privateDir();
     put(dir);
-    expect(get(dir, uid + 1).kind).toBe("invalid");
+    expect(get(dir, uid + 1)).toMatchObject({
+      reason: "state directory has another owner",
+    });
   });
 
   test("is unsafe for a file that is a symlink", () => {
