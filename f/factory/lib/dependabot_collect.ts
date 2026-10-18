@@ -24,6 +24,7 @@ import {
   type GateInput,
   type GateTargetFacts,
   lockfilePackages,
+  MANIFEST_LOCKFILES,
   MAX_GROUP_TARGETS,
   REQUIRED_CHECKS,
   type UpdateKind,
@@ -73,11 +74,12 @@ const UPDATE_WEIGHT: Record<UpdateKind, number> = {
 };
 
 /**
- * 許可したファイルのうち、ロックファイルとして読むもの。
+ * bunのロックファイルとして読むパス。許可するファイルの表(`MANIFEST_LOCKFILES`)のロックファイルである。
+ * 読む箇所は、`deriveTargets`と`dependabot_prepare.ts`の`installedPackageDirsFor`で、どちらもbun形式を前提にする。
  * 読み込み時に作る写しなので、元の一覧と同じく凍結する。
  */
 export const LOCKFILE_PATHS: readonly string[] = Object.freeze(
-  ALLOWED_PATHS.filter((path) => path.endsWith("bun.lock")),
+  MANIFEST_LOCKFILES.map((pair) => pair.lockfile),
 );
 
 const MAX_LISTED_NAMES = 5;

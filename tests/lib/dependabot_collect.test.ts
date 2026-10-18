@@ -19,6 +19,7 @@ import {
   evaluateGateGroup,
   type GateInput,
   GITHUB_ACTIONS_APP_ID,
+  MANIFEST_LOCKFILES,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
@@ -1765,6 +1766,16 @@ describe("collectGateInput", () => {
 });
 
 describe("LOCKFILE_PATHS", () => {
+  test("lists the lockfiles of the manifest table", () => {
+    expect(LOCKFILE_PATHS).toEqual(["bun.lock", "console/bun.lock"]);
+  });
+
+  test("equals the lockfile column of MANIFEST_LOCKFILES", () => {
+    expect(LOCKFILE_PATHS).toEqual(
+      MANIFEST_LOCKFILES.map((pair) => pair.lockfile),
+    );
+  });
+
   test("is frozen so that the paths read as lockfiles cannot be replaced", () => {
     expect(Object.isFrozen(LOCKFILE_PATHS)).toBe(true);
   });

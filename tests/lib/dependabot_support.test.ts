@@ -18,10 +18,12 @@ import {
   GITHUB_ACTIONS_APP_ID,
   isPublishedLongEnough,
   lockfileIntegrity,
+  MANIFEST_LOCKFILES,
   MAX_GROUP_TARGETS,
   parseImpactAssessment,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
+import { matchesForbiddenPath } from "../../f/factory/lib/protected_paths.ts";
 
 describe("classifyUpdate", () => {
   test("classifies a patch bump", () => {
@@ -1354,6 +1356,24 @@ describe("evaluateGate", () => {
     ).toBe("needs_human");
   });
 
+  test("names the missing lockfile when the root manifest changed alone", () => {
+    expect(
+      reasonOfResult(
+        evaluateGate(validInput({ changedPaths: ["package.json"] })),
+      ),
+    ).toContain("package.json changed without bun.lock");
+  });
+
+  test("names the missing lockfile when the console manifest changed alone", () => {
+    expect(
+      reasonOfResult(
+        evaluateGate(
+          validInput({ changedPaths: ["console/package.json", "bun.lock"] }),
+        ),
+      ),
+    ).toContain("console/package.json changed without console/bun.lock");
+  });
+
   test("accepts a lockfile-only update", () => {
     const lockOnly = lockText({ "left-pad": "^1.0.0", other: "2.0.0" }, [
       { key: "left-pad", id: "left-pad@1.3.0" },
@@ -2616,5 +2636,96 @@ describe("frozen gate constants", () => {
   test("ALLOWED_PATHS keeps its first element after an attempt to replace it", () => {
     Reflect.set(ALLOWED_PATHS, 0, "evil/package.json");
     expect(ALLOWED_PATHS[0]).toBe("package.json");
+  });
+});
+
+// 許可するファイルの出典は`MANIFEST_LOCKFILES`の表である。
+// `ALLOWED_PATHS`はリテラルのまま残し、表と許可のどちらか一方だけの変更を一致テストで止める。
+describe("MANIFEST_LOCKFILES", () => {
+  const flattened = MANIFEST_LOCKFILES.flatMap((pair) => [
+    pair.manifest,
+    pair.lockfile,
+  ]);
+
+  test("pairs the root and console manifests with their lockfiles", () => {
+    expect(MANIFEST_LOCKFILES).toEqual([
+      { manifest: "package.json", lockfile: "bun.lock" },
+      { manifest: "console/package.json", lockfile: "console/bun.lock" },
+    ]);
+  });
+
+  test("is frozen", () => {
+    expect(Object.isFrozen(MANIFEST_LOCKFILES)).toBe(true);
+  });
+
+  test("has frozen rows", () => {
+    expect(MANIFEST_LOCKFILES.every((pair) => Object.isFrozen(pair))).toBe(
+      true,
+    );
+  });
+
+  test("a row cannot be appended", () => {
+    expect(
+      Reflect.set(MANIFEST_LOCKFILES, MANIFEST_LOCKFILES.length, {
+        manifest: "evil/package.json",
+        lockfile: "evil/bun.lock",
+      }),
+    ).toBe(false);
+  });
+
+  test("ALLOWED_PATHS equals the table flattened in order", () => {
+    expect(ALLOWED_PATHS).toEqual(flattened);
+  });
+
+  test("every element of ALLOWED_PATHS is in the table", () => {
+    expect(ALLOWED_PATHS.every((path) => flattened.includes(path))).toBe(true);
+  });
+
+  test("no path in the table is a protected path", () => {
+    expect(flattened.some((path) => matchesForbiddenPath(path))).toBe(false);
+  });
+
+  test("every path in the table is relative and normalized", () => {
+    expect(
+      flattened.every(
+        (path) =>
+          !path.startsWith("/") &&
+          !path.split("/").some((part) => part === ".." || part === "."),
+      ),
+    ).toBe(true);
+  });
+
+  test("has no duplicated path", () => {
+    expect(new Set(flattened).size).toBe(flattened.length);
+  });
+
+  // bun専用の解析器に渡す表なので、別の言語の行を足す変更は、ここで落ちて解析器の見直しを強いる。
+  test("every lockfile in the table is named bun.lock", () => {
+    expect(
+      MANIFEST_LOCKFILES.every(
+        (pair) =>
+          pair.lockfile === "bun.lock" || pair.lockfile.endsWith("/bun.lock"),
+      ),
+    ).toBe(true);
+  });
+
+  test("every manifest in the table is named package.json", () => {
+    expect(
+      MANIFEST_LOCKFILES.every(
+        (pair) =>
+          pair.manifest === "package.json" ||
+          pair.manifest.endsWith("/package.json"),
+      ),
+    ).toBe(true);
+  });
+
+  test("each manifest sits in the same directory as its lockfile", () => {
+    expect(
+      MANIFEST_LOCKFILES.every(
+        (pair) =>
+          pair.manifest.slice(0, -"package.json".length) ===
+          pair.lockfile.slice(0, -"bun.lock".length),
+      ),
+    ).toBe(true);
   });
 });

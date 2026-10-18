@@ -126,6 +126,26 @@ archive済みのリポジトリと、収集が集めないリポジトリは、�
 registryの事実は、対象ごとに順に読む。
 全体の更新の幅は、最も重い種別にする。
 
+## 更新を許すファイル
+
+更新を許すファイルは、`dependabot_support.ts`の`MANIFEST_LOCKFILES`が出典である。
+マニフェストと、同じディレクトリのロックファイルを組にした表で、今はルートと`console/`の2組になる。
+ロックファイルとして読むパス(`LOCKFILE_PATHS`)は、この表から作る。
+
+許可するパス(`ALLOWED_PATHS`)は、表から作らず、リテラルで持つ。
+表だけ、許可だけを変えると、テストが落ちる。
+許可の拡大が、表への行の追加だけでは通らないようにするためである。
+
+表はbunの解析器に渡す前提で、テストが、すべてのロックファイルの名前が`bun.lock`であることを固定する。
+別の言語の行を足すときは、表と許可に加えて、次のbun専用の箇所を見直す。
+
+- `dependabot_support.ts`の`fileProblem`と`integrityProblem`
+- `dependabot_collect.ts`の`deriveTargets`
+- `dependabot_flow_support.ts`の`isFileNamed`
+- `dependabot_prepare.ts`の`installedPackageDirsFor`と`LOCKFILE_NAME`
+
+これらは保護パスのファイルなので、行の追加は人のレビューを通る。
+
 ## 評価と分岐
 
 選んだPRは、フローの準備と同じ収集(`collectGateInput`)とゲート(`evaluateGateGroup`)で評価する。
