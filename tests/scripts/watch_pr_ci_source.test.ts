@@ -24,7 +24,11 @@ function capture() {
   return { log, warnings };
 }
 
-const ENABLED = { gh_collect_enabled: true, gh_collect_detail_enabled: true };
+const ENABLED = {
+  gh_collect_enabled: true,
+  gh_collect_detail_enabled: true,
+  pr_ci_watch_human_prs: true,
+};
 
 describe("watch_pr_ci: the source of the human discovery", () => {
   test("is db when the setting is db and the collection is on", () => {
@@ -51,6 +55,7 @@ describe("watch_pr_ci: the source of the human discovery", () => {
         {
           gh_collect_enabled: false,
           gh_collect_detail_enabled: true,
+          pr_ci_watch_human_prs: true,
           gh_source_pr_ci_watch: "db",
         },
         log,
@@ -64,6 +69,7 @@ describe("watch_pr_ci: the source of the human discovery", () => {
       {
         gh_collect_enabled: false,
         gh_collect_detail_enabled: true,
+        pr_ci_watch_human_prs: true,
         gh_source_pr_ci_watch: "db",
       },
       log,
@@ -83,12 +89,27 @@ describe("watch_pr_ci: the source of the human discovery", () => {
     expect(warnings).toEqual([]);
   });
 
+  test("does not warn when the human discovery is off", () => {
+    const { log, warnings } = capture();
+    resolvePrCiHumanSource(
+      {
+        gh_collect_enabled: false,
+        gh_collect_detail_enabled: false,
+        pr_ci_watch_human_prs: false,
+        gh_source_pr_ci_watch: "db",
+      },
+      log,
+    );
+    expect(warnings).toEqual([]);
+  });
+
   test("does not warn when the setting is search", () => {
     const { log, warnings } = capture();
     resolvePrCiHumanSource(
       {
         gh_collect_enabled: false,
         gh_collect_detail_enabled: false,
+        pr_ci_watch_human_prs: true,
         gh_source_pr_ci_watch: "search",
       },
       log,
