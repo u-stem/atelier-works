@@ -2839,17 +2839,39 @@ workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_
 `GH_CONFIG_DIR`を届かせないのは、ghとgitの子プロセスが、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
 届かせても、読む処理が無い。
 
-ジョブに2つの変数が届いていないことは、`wmill script preview`で次の内容のscriptを実行して確かめる。
-値は出さず、有無だけを返す。
+ジョブの環境は、実ジョブで次の結果になる。
+
+| 変数 | ジョブでの状態 | 理由 |
+| --- | --- | --- |
+| `CLAUDE_CONFIG_DIR` | 未設定 | `WHITELIST_ENVS`に挙げない |
+| `GH_CONFIG_DIR` | 未設定 | `WHITELIST_ENVS`に挙げない |
+| `CLAUDE_VERSION` | 設定あり | `WHITELIST_ENVS`に挙げている |
+| `DISABLE_AUTOUPDATER` | 未設定 | `buildClaudeEnv`(`f/factory/lib/claude.ts`)が`claude`の子プロセスにだけ明示して渡す |
+
+workerやmiseを更新したときは、この結果が変わっていないかを次の手順で確かめる。
+
+1. 使い捨てのworktreeを作る。
+2. `f/factory/`の下に、次の内容の一時のscriptを置く。コミットしない。
+3. `wmill script preview <path> -d '{}'`で実行し、上の表と比べる。
+4. 一時のscriptを消す。
+
+値を返すと秘密値が出力に残るので、scriptは有無だけを返す。
 
 ```ts
 export async function main() {
-  return {
-    CLAUDE_CONFIG_DIR_set: process.env.CLAUDE_CONFIG_DIR !== undefined,
-    GH_CONFIG_DIR_set: process.env.GH_CONFIG_DIR !== undefined,
-  };
+  const names = [
+    "CLAUDE_CONFIG_DIR",
+    "GH_CONFIG_DIR",
+    "CLAUDE_VERSION",
+    "DISABLE_AUTOUPDATER",
+  ];
+  return Object.fromEntries(names.map((n) => [n, process.env[n] !== undefined]));
 }
 ```
+
+`WHITELIST_ENVS`に変数を足すときは、`CLAUDE_CONFIG_DIR`を足さない。
+足すと、人が手で使う永続の設定とジョブが共有になり、`--setting-sources user`が読む層に人の変更が混ざるためである。
+理由は`f/factory/lib/claude.ts`のコメントにも書いてある。
 
 ### 実際に使われたモデルごとの使用量
 
