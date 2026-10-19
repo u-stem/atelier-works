@@ -38,7 +38,7 @@ locks:
   f/factory/lib/claude: c729ad2c468d5b832b27fe65c7d81c5ed9ee22187240c449c299e5c56a91b626
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 81d98d59d095338a46ffc844fbb47254e89c113652498cfbe39c38cad3bf37da
-  f/factory/lib/config: f8e2448c2a1a5f9ae5a1d3eb6c3220ce491c9f584c7502fb357e9395605ecf36
+  f/factory/lib/config: 14a445bb86077fe5cbc1e6b7da80a8da32de00b03b96f290544105d852bf919c
   f/factory/lib/conflict_fix_apply: 73deb37f4bde7db94d3e03292daba0602cbc0bc72738f8352683add161e9a3bb
   f/factory/lib/conflict_fix_prompt: 5213e3c137bac55c2d77741241d8cc4193547984baf6af59d8ef1887c7aaa23f
   f/factory/lib/conflict_fix_round: 768797a74aa4136b43ffd91fdc8bb6c46a6240778269f6ecdbcabe7ba7057ce7
@@ -70,7 +70,7 @@ locks:
   f/factory/lib/gh_collect_read: 2a2b1ed3d9378c1a96e0e69ac48a650319aad6bc5f420de49390aa3df6385498
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
-  f/factory/lib/github: b1f8f3341d786edbe1b147d6ecde644d2d848fcf95566f83d868d8f8190ee78a
+  f/factory/lib/github: 1bec308a30751ff2702bc3e4bc2db136cb58526f92dcf820ffe1a01d27bae6c2
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
@@ -102,10 +102,10 @@ locks:
   f/factory/lib/poll_support: 76afdaffb8bb1ee30f54d08cbb7eed25d1bd5fa915399f2f1f23f5b428f3e634
   f/factory/lib/pr_ci_fix_claim: 3f34d3752aa2d1dcf8fa0b54f43c095bf6577e709895aeca0d57555351326420
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
-  f/factory/lib/pr_ci_human_support: fe968e100eae14a91d84de42631191d45726a966be2913c5b7374ba783423f2c
+  f/factory/lib/pr_ci_human_support: 2157ef0625e623c028617b316415c4739d3b50be99ce77a64bf76a5c410ea94a
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: 77c3ce5973d30509a460864d56f4b7e643c644f27de5d1f0bc86dd8c355e5af6
-  f/factory/lib/pr_ci_watch: c3ca63d5c9f819caf8f99a7a51dc58d1d5bdcf494ce31db49547d72c072e8025
+  f/factory/lib/pr_ci_watch: de71db935d589c758ff2327f1fceba78b76672c247579d355f05c72eaad1e5f4
   f/factory/lib/pr_conflict_fix_claim: 83a8e845d21336ef6e7b20662d3b192297bd458ecd46d8aeb047fc47478b514f
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: adaa381f1013323d9fcd27019329d849d7ba525da75bf7a1a0ca3bd5acca74d9
@@ -125,7 +125,7 @@ locks:
   f/factory/lib/self_update_support: 67c7b658a660af759976cf14ba5f2cf41921074e4f71916760a97bfd0475159c
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 4fc87225aa445b1934f43dec7d9af2d581a883e2862020a8c2fb5ea63d3ada79
+  f/factory/lib/types: 63de3ec2263bee5eb65ccbfb88e7759d87f9f0899fd35b97cb1669901176ae54
   f/factory/lib/worker_load_support: b68337109b6233aacd50be93bf977391910fcaf328a7a7ae6ba01be1269fe00c
   f/factory/lib/workspace: 4586bbeb2ef59260d2cac673043b58ecc9918231931a37be886f1f76c6090006
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -169,5 +169,5 @@ locks:
   f/factory/steps/pr_workflow_support: c3a429932cfc8ab80fe5b5250aeca319e8929f01f0516a36154e552b17f34a8d
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
-  f/factory/watch_pr_ci: e58d2e46a53fdcb5ab13fcfd3fbd951fd810fede7572168d0578abc8dd355626
+  f/factory/watch_pr_ci: 2391a93c4071c6b45a07daa6f387c562d2184b462864718cfca832426d5afe22
   f/factory/watch_pr_conflicts: 309b8dae5bc06e21b9a0f4dd199220b9b4ec8eefaa5aa4a72db2d3903a43e704

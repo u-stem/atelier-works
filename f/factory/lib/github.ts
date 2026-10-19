@@ -4549,6 +4549,8 @@ export type OpenPullRequest = {
   readonly baseRef?: string | null;
   /** PRを作った時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
   readonly createdAtMs?: number | null;
+  /** PRの最後の更新の時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly updatedAtMs?: number | null;
   /**
    * ラベルの名前。応答に無いか、名前の無い要素があるときは`null`。
    * 次の4つの項目は、候補を絞るためにだけ使う。確かめは`getPr`と`getIssue`の応答で行う。
@@ -4570,6 +4572,7 @@ function isOpenPullRequestPayload(value: unknown): value is {
   base: { ref?: unknown; repo: { full_name: string } };
   user?: unknown;
   created_at?: unknown;
+  updated_at?: unknown;
   labels?: unknown;
   assignees?: unknown;
   requested_reviewers?: unknown;
@@ -4588,9 +4591,9 @@ export const OPEN_PULL_REQUESTS_MAX_PAGES = 10;
 
 /**
  * `GET /repos/{owner}/{repo}/pulls?state=open`で、開いているPRを、ページ送りしながらすべて返す。
- * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成の時刻、headとbaseのリポジトリ、
+ * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成と更新の時刻、headとbaseのリポジトリ、
  * ラベル、assignee、レビューの依頼先を返す。
- * baseのブランチ、作成の時刻、ラベル、assignee、レビューの依頼先は、応答に無くても一覧全体を例外にせず、`null`にする。
+ * baseのブランチ、作成と更新の時刻、ラベル、assignee、レビューの依頼先は、応答に無くても一覧全体を例外にせず、`null`にする。
  * マージ可否は一覧に載らないので、`getPr`で読む。
  * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
  * 一部だけでは、返さなかったPRを「開いていない」と取り違えうるためである。
@@ -4638,6 +4641,7 @@ export async function listOpenPullRequests(
         : null,
     baseRef: typeof entry.base.ref === "string" ? entry.base.ref : null,
     createdAtMs: parseIsoMs(entry.created_at),
+    updatedAtMs: parseIsoMs(entry.updated_at),
     labels: labelNamesOf(entry.labels),
     assigneeIds: userIdsOf(entry.assignees),
     requestedReviewerIds: userIdsOf(entry.requested_reviewers),
@@ -4645,6 +4649,25 @@ export async function listOpenPullRequests(
       ? entry.requested_teams.length > 0
       : null,
   }));
+}
+
+/**
+ * `listOpenPullRequests`と同じだが、rate limitの解除を待たずに`GitHubRateLimitError`を投げる。
+ * 人のPRの発見が、PATのcoreの枠を使い切った回に、全体の時間を使わないために使う。
+ */
+export async function listOpenPullRequestsWithoutWait(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
+): Promise<OpenPullRequest[]> {
+  validateOwnerRepo(owner, repo);
+  return listOpenPullRequests(
+    noWaitClient(client, `repos/${owner}/${repo}/pulls`),
+    owner,
+    repo,
+    maxPages,
+  );
 }
 
 /** ラベルの名前を読む。配列でないとき、名前が文字列でない要素があるときは`null`にする。 */

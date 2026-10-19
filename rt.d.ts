@@ -60,7 +60,6 @@ declare namespace RT {
     pr_conflict_fix_notify_grace_min: number,
     gh_collect_enabled: boolean,
     gh_collect_detail_enabled: boolean,
-    gh_source_pr_ci_watch: string,
     worker_alert_memory_ratio: number,
     check_commands_by_repo: object
   }
