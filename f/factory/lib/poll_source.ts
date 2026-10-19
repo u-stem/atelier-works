@@ -18,8 +18,10 @@ import type {
   PrSearchItem,
   PullRequest,
   Viewer,
+  ViewerTeams,
 } from "./github.ts";
-import type { Logger } from "./log.ts";
+import { type Logger, maskSecrets } from "./log.ts";
+import { isAllowedLabeler, type LabelerPolicy } from "./poll_support.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -479,19 +481,36 @@ export type PrCandidateCheck =
  * 1. 応答のリポジトリか番号が参照と違うなら`mismatch`。名前の付け替えか移管の途中である。
  * 2. 閉じていれば`drop`(`closed`)。
  * 3. レビューか修正のラベル、またはPATのアカウントのassigneeがあれば`ok`。
- * 4. 依頼先を読めなければ`unknown_reviewers`。決められないまま外すと、依頼で起きるはずのレビューが黙って止まる。
- * 5. PATのアカウントへの依頼があれば`ok`。
- * 6. それ以外は`drop`(`not_target`)。
- * チームへの依頼はRESTでも一員かを決められないので、`not_target`になる。
+ * 4. PATのアカウントへの依頼があれば`ok`。
+ * 5. `team`があり、作者が許可された人で、依頼されたチームの1つが`team.ids`にあれば`ok`。PATのアカウントが属するチームへの依頼である。
+ *    作者が許可されていなければ、チームへの依頼は見ず、次へ進む。直接の依頼のPRは作者によらず対象になるのと違い、
+ *    チームへの依頼は、外の人が開いたPRにも付くことがあり、レビューの起動の判定(`decidePrActions`)が許可された作者に絞るためである。
+ * 6. 依頼先を読めなければ`unknown_reviewers`。決められないまま外すと、依頼で起きるはずのレビューが黙って止まる。
+ *    読めないのは、利用者の依頼先か、チームへの依頼を見るときのチームの依頼先である。
+ * 7. それ以外は`drop`(`not_target`)。
+ * `team`が`null`のときは、チームへの依頼を見ない。その場合、チームへの依頼だけが付いたPRは`not_target`になる。
  * 項目のownerとrepoは応答の綴りにする。作業項目の綴りをそろえるためである。
  */
+/** チームへの依頼でPATのアカウントに当たるかを見るときの入力。 */
+export type TeamMatch = {
+  /** PATのアカウントが属するチームの数値ID。 */
+  readonly ids: ReadonlySet<number>;
+  /** 作者が許可された人かの判定に使う。 */
+  readonly policy: LabelerPolicy;
+};
+
 export function confirmPrCandidate(
   row: PrRef,
   pr: PullRequest,
   asIssue: Issue,
   viewer: Viewer,
   labels: { readonly reviewLabel: string; readonly fixLabel: string },
+  team: TeamMatch | null = null,
 ): PrCandidateCheck {
+  const viewerTeamIds =
+    team !== null && isAllowedLabeler(pr.authorLogin, team.policy, pr.authorId)
+      ? team.ids
+      : null;
   const repository = asIssue.repository;
   if (
     repository === null ||
@@ -511,10 +530,19 @@ export function confirmPrCandidate(
     hasLabel(asIssue.labels, labels.fixLabel) ||
     asIssue.assignees.some((login) => login.toLowerCase() === viewerLogin);
   if (!matched) {
-    if (pr.requestedReviewerIds === null) {
-      return { kind: "unknown_reviewers" };
-    }
-    if (!pr.requestedReviewerIds.includes(viewer.id)) {
+    const reviewerIds = pr.requestedReviewerIds;
+    const teamIds = pr.requestedTeamIds ?? null;
+    const requestsViewer = reviewerIds?.includes(viewer.id) === true;
+    const requestsViewerTeam =
+      viewerTeamIds !== null &&
+      teamIds?.some((id) => viewerTeamIds.has(id)) === true;
+    if (!requestsViewer && !requestsViewerTeam) {
+      if (
+        reviewerIds === null ||
+        (viewerTeamIds !== null && teamIds === null)
+      ) {
+        return { kind: "unknown_reviewers" };
+      }
       return { kind: "drop", reason: "not_target" };
     }
   }
@@ -536,22 +564,125 @@ export function confirmPrCandidate(
  */
 export const TEAM_CONFIRM_LIMIT = 20;
 
+/**
+ * 確かめて対象でなかったPRを覚えておく時間(ミリ秒)。
+ * 同じheadのまま別のチームが依頼されても、この時間のうちに確かめ直す。
+ */
+export const TEAM_CHECK_MEMORY_TTL_MS = 60 * 60_000;
+
+/** 覚えの件数の上限。stateが際限なく大きくならないよう、超えた分は古いものから捨てる。 */
+const TEAM_CHECK_MEMORY_MAX_ENTRIES = 1000;
+
+/** チームを使えない組織の失敗に記録する固定の文。外部の文字列を載せない。 */
+const TEAM_UNRESOLVED_MESSAGE =
+  "the teams of the authenticated user could not be used for this organization, so review requests to its teams are not discovered";
+
+/**
+ * 確かめて対象でなかったPRの覚えを、Windmillのstateの値から読む。
+ * 鍵は`checkedKey`、値は確かめた時刻(epochミリ秒)である。形の違う値と要素は捨てる。
+ */
+export function parseCheckedPrs(value: unknown): Map<string, number> {
+  const entries = new Map<string, number>();
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return entries;
+  }
+  for (const [key, at] of Object.entries(value)) {
+    if (typeof at === "number" && Number.isFinite(at) && at >= 0) {
+      entries.set(key, at);
+    }
+  }
+  return entries;
+}
+
+/** 確かめて対象でなかったPRの覚えの置き場。 */
+export type CheckedPrState = {
+  /** 確かめて対象でなかったPRの覚え。 */
+  readonly entries: ReadonlyMap<string, number>;
+  /** 前の周回で確かめた最後の候補の鍵。 */
+  readonly cursor: string | null;
+};
+
+export type CheckedPrStore = {
+  /** 覚えと続きの位置を読む。失敗は、何も覚えていない扱いにする。 */
+  readonly load: () => Promise<CheckedPrState>;
+  /** 覚えと続きの位置を書く。失敗は、覚えていない扱いにする。 */
+  readonly save: (state: CheckedPrState) => Promise<void>;
+  readonly nowMs: () => number;
+};
+
+/** stateに置いた続きの位置を読む。`<owner>/<repo>#<番号>`の形でなければ`null`。 */
+export function parseConfirmCursor(value: unknown): string | null {
+  return typeof value === "string" && CURSOR_PATTERN.test(value) ? value : null;
+}
+
+/** 続きの位置の形。小文字の`<owner>/<repo>#<番号>`である。 */
+const CURSOR_PATTERN = /^[^/#\s]+\/[^/#\s]+#\d+$/;
+
+/** 続きの位置を、並び順の比較に使う参照に戻す。 */
+function cursorRef(cursor: string): PrRef | null {
+  const match = /^([^/#\s]+)\/([^/#\s]+)#(\d+)$/.exec(cursor);
+  if (match === null) return null;
+  const [, owner, repo, number] = match;
+  if (owner === undefined || repo === undefined || number === undefined) {
+    return null;
+  }
+  return { owner, repo, number: Number(number) };
+}
+
+/**
+ * 確かめる順に並べた候補から、続きの位置より後ろの候補を先頭にして、末尾から先頭へ戻る順にする。
+ * 続きの位置が`null`か、どの候補より後ろなら、並べた順のままにする。
+ */
+function rotateAfter<T extends PrRef>(
+  ordered: readonly T[],
+  cursor: string | null,
+): T[] {
+  const after = cursor === null ? null : cursorRef(cursor);
+  if (after === null) return [...ordered];
+  const start = ordered.findIndex((ref) => compareRefs(ref, after) > 0);
+  if (start < 0) return [...ordered];
+  return [...ordered.slice(start), ...ordered.slice(0, start)];
+}
+
+/** 覚えの鍵。PRと、確かめたときのheadのコミットで決まる。headが動いたPRは覚えに当たらない。 */
+function checkedKey(ref: PrRef, headSha: string): string {
+  return `${ref.owner}/${ref.repo}#${String(ref.number)}@${headSha}`.toLowerCase();
+}
+
+/** 期限内の覚えだけを残す。件数の上限を超えたら、新しいものから残す。 */
+function freshChecks(
+  entries: ReadonlyMap<string, number>,
+  nowMs: number,
+): Map<string, number> {
+  const fresh = [...entries].filter(
+    ([, at]) => Math.abs(nowMs - at) < TEAM_CHECK_MEMORY_TTL_MS,
+  );
+  fresh.sort((a, b) => b[1] - a[1]);
+  return new Map(fresh.slice(0, TEAM_CHECK_MEMORY_MAX_ENTRIES));
+}
+
 export type PrDiscoveryStats = IssueDiscoveryStats & {
   /**
-   * チーム宛ての依頼が付いていて、直接の依頼でなかったため見送ったPRの数。
-   * チーム宛ての依頼は、PATのアカウントが属するチームかを決められるまで見送る。
+   * チーム宛ての依頼が付いている可能性があり、PATのアカウントが属するチームを使えず、確かめられずに見送ったPRの数。
+   * 直接の依頼でなかったPRと、依頼先がチームだけと分かっているPRを数える。
    */
   readonly team_unresolved: number;
-  /** 依頼先を読めず、RESTで確かめる上限(`TEAM_CONFIRM_LIMIT`)を超えたため、この周回は確かめなかった候補の数。 */
+  /** チーム宛ての依頼を、RESTで確かめる上限(`TEAM_CONFIRM_LIMIT`)を超えたため、この周回は確かめなかった候補の数。 */
   readonly team_capped: number;
+  /** 前の周回で確かめて対象でなく、覚えていたため、この周回は確かめなかった候補の数。 */
+  readonly team_remembered: number;
 };
 
 /** 確かめるPRの参照に、チーム宛ての依頼の扱いを添えたもの。 */
 type PrCandidateRef = PrRef & {
-  /** 分類が`team`で、チームへの依頼が偽と分かっていない。直接の依頼を確かめて外れたら、見送りとして数える。 */
+  /** 分類が`team`で、チームへの依頼が偽と分かっていない。PATのアカウントが属するチームの照合が要る。 */
   readonly teamPossible: boolean;
-  /** 分類が`team`で、直接の依頼をRESTで確かめる。上限(`TEAM_CONFIRM_LIMIT`)の対象になる。 */
+  /** 分類が`team`で、依頼先が分かり、PATのアカウントを含まず、チームへの依頼が真。チームを使えないときは、確かめても決まらない。 */
+  readonly teamOnly: boolean;
+  /** 分類が`team`で、RESTで確かめる。上限(`TEAM_CONFIRM_LIMIT`)の対象になる。 */
   readonly teamRead: boolean;
+  /** 表の行か一覧が言うheadのコミット。覚えの鍵に使う。分からなければ`null`。 */
+  readonly headSha: string | null;
 };
 
 /** 候補の鍵(小文字の所有者、リポジトリ、番号)。上限で残す候補を決める順にも使う。 */
@@ -574,11 +705,6 @@ function compareRefs(a: PrRef, b: PrRef): number {
  * ラベル、レビューの依頼、assigneeのPRを見つける。照合を通った所有者ごとに行う。
  * 所有者の全体を表で読み、リポジトリごとに鮮度を判定して、新しいリポジトリの行だけを候補にする。
  * 行は、表の列(ラベル、依頼先、assignee)で分類し、`target`、`maybe`、`team`を候補にして、`none`は捨てる。
- * チームへの依頼は解決できないので、チーム宛ての依頼だけが付いた行(依頼先が分かり、PATのアカウントを含まず、チームへの依頼が真)は、
- * RESTで確かめても一致しないため、確かめずに見送り、`team_unresolved`に数える。
- * 依頼先を読めない行と、チームへの依頼が不明の行は、直接の依頼をRESTで確かめる。
- * 確かめるのは1周回に`TEAM_CONFIRM_LIMIT`件までで、鍵の昇順に選び、超えた件数を`team_capped`に数える。
- * 直接の依頼でなければ見送り、`team_unresolved`に数える。
  * 表が新しくないリポジトリの扱いは、設定で明示したかで分かれる。
  * - 明示していない: 見送り、理由別に数える。失敗にはしない。読めない間の通知は収集の側が出す。
  * - 明示した(`factory_repo`と`repo_allowlist`の項目): RESTの一覧で、開いているPRを読む。
@@ -589,6 +715,22 @@ function compareRefs(a: PrRef, b: PrRef): number {
  * 確かめ直しはPRを1件ずつ順に処理し、1件の中の2本だけを並列にする。GitHubへの同時の要求を増やさないためである。
  * 返す項目の並びは、所有者ごとに、表の候補を(リポジトリ、番号)の順に置き、続けて一覧の候補を置く。PRの鍵(小文字)で重ねを除く。
  * 失敗はこの関数の中で記録し、件数を`failed`で返す。
+ *
+ * チーム宛ての依頼は、組織の所有者のPRだけ、PATのアカウントが属するチームの数値IDと、PRの依頼先のチームの数値IDで照合する。
+ * 個人の所有者にチーム宛ての依頼は起きないので、個人の所有者の行は、直接の依頼だけで判定し、`getViewerTeams`もstateも使わない。
+ * - 組織の所有者の、覚えていない、チームへの依頼が偽と分かっていない`team`の行が1件でもある周回だけ、`getViewerTeams`を1回呼ぶ。
+ * - 読めなかったとき、またはその組織のチームが1件も返らないときは、その組織のチームを使えない。
+ *   その組織ごとに、固定の文の失敗を1件記録する。
+ *   チームを使えない間は、チーム宛ての依頼だけが付いた行を確かめずに見送って`team_unresolved`に数え、
+ *   ほかの行は直接の依頼だけをRESTで確かめる。直接の依頼でなければ、見送って`team_unresolved`に数える。
+ * - チームを使えるときは、直接の依頼か、許可された作者のPRへのチームへの依頼のどちらかがPATのアカウントに当たれば候補にする。
+ *   どちらでもなければ、失敗にせず外し、`dropped`に数える。
+ * - `team`の行の確認は、1周回に`TEAM_CONFIRM_LIMIT`件まで。前の周回で確かめた最後の候補の鍵より後ろから、
+ *   鍵の昇順に選び、末尾に来たら先頭に戻る。超えた件数を`team_capped`に数える。
+ *   確かめた最後の候補の鍵は、結果によらず次の周回のために保存する。stateを読めないときと、個人の所有者だけの周回は、先頭から選ぶ。
+ * - チームを使えて確かめた結果が対象でなかったPRは、(リポジトリ、番号、head)と時刻を覚え、期限(`TEAM_CHECK_MEMORY_TTL_MS`)まで確かめない。
+ *   覚えた件数は`team_remembered`に数える。
+ *   覚えの読み書きの失敗は、覚えていない扱いにして続ける。見つけたPRと、確かめられなかったPRは覚えない。
  */
 export async function discoverPrs(
   input: {
@@ -600,6 +742,8 @@ export async function discoverPrs(
       "owners" | "repo_allowlist" | "factory_repo"
     >;
     readonly viewer: Viewer;
+    /** 作者が許可された人かの判定。チームへの依頼は、許可された作者のPRだけ候補にする。 */
+    readonly labelerPolicy: LabelerPolicy;
     readonly labels: {
       readonly reviewLabel: string;
       readonly fixLabel: string;
@@ -625,6 +769,10 @@ export async function discoverPrs(
       number: number,
     ) => Promise<Issue>;
     readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+    /** PATのアカウントが属するチーム。チームの照合が要る行があるときだけ、周回で1回呼ぶ。 */
+    readonly getViewerTeams: () => Promise<ViewerTeams>;
+    /** 確かめて対象でなかったPRの覚え。 */
+    readonly checkedPrs: CheckedPrStore;
   },
 ): Promise<{
   items: PrSearchItem[];
@@ -638,6 +786,7 @@ export async function discoverPrs(
   let dropped = 0;
   let teamUnresolved = 0;
   let teamCapped = 0;
+  let teamRemembered = 0;
   const skippedReasons: Record<string, number> = {};
   const restReasons: Record<string, number> = {};
   const refs: PrCandidateRef[] = [];
@@ -652,10 +801,7 @@ export async function discoverPrs(
     seenRefs.add(key);
     return true;
   };
-  /**
-   * 分類が候補なら、確かめる参照に加える。`none`は捨てる。
-   * チーム宛ての依頼だけが付いた行は、確かめずに見送って数える。
-   */
+  /** 分類が候補なら、確かめる参照に加える。`none`は捨てる。 */
   const addClassified = (
     ref: PrRef,
     kind: PollPrRowClass,
@@ -663,25 +809,20 @@ export async function discoverPrs(
       readonly requestedUserIds: readonly number[] | null;
       readonly teamReviewRequested: boolean | null;
     },
+    headSha: string | null,
   ) => {
     if (kind === "none" || !markSeen(ref)) return;
-    if (
-      kind === "team" &&
-      reviewers.requestedUserIds !== null &&
-      reviewers.teamReviewRequested === true
-    ) {
-      teamUnresolved += 1;
-      input.log.info("pull request skipped: only a team asked", {
-        target: `${ref.owner}/${ref.repo}#${String(ref.number)}`,
-      });
-      return;
-    }
     refs.push({
       owner: ref.owner,
       repo: ref.repo,
       number: ref.number,
       teamPossible: kind === "team" && reviewers.teamReviewRequested !== false,
+      teamOnly:
+        kind === "team" &&
+        reviewers.requestedUserIds !== null &&
+        reviewers.teamReviewRequested === true,
       teamRead: kind === "team",
+      headSha,
     });
   };
 
@@ -715,10 +856,15 @@ export async function discoverPrs(
 
     if (judged !== null) {
       for (const row of usableTableRows(owner.name, judged, isAllowedNow)) {
-        addClassified(row, classifyPollPrRow(row, input.viewer.id), {
-          requestedUserIds: row.review_requested_user_ids,
-          teamReviewRequested: row.team_review_requested,
-        });
+        addClassified(
+          row,
+          classifyPollPrRow(row, input.viewer.id),
+          {
+            requestedUserIds: row.review_requested_user_ids,
+            teamReviewRequested: row.team_review_requested,
+          },
+          row.head_sha,
+        );
       }
       for (const reason of skippedStaleReasons(
         owner.name,
@@ -750,6 +896,7 @@ export async function discoverPrs(
               requestedUserIds: pr.requestedReviewerIds ?? null,
               teamReviewRequested: pr.teamReviewRequested ?? null,
             },
+            pr.headSha ?? null,
           );
         }
       } catch (err) {
@@ -758,18 +905,111 @@ export async function discoverPrs(
     }
   }
 
-  // 直接の依頼を確かめる候補は、鍵の昇順に上限まで選ぶ。選び方が周回で変わらないようにするためである。
+  // 組織の所有者の行だけが、チームとstateを使う。
+  const ownerOf = new Map(
+    input.owners.map((owner) => [owner.name.toLowerCase(), owner]),
+  );
+  const isOrg = (ownerName: string): boolean =>
+    ownerOf.get(ownerName.toLowerCase())?.kind === "org";
+
+  // 前の周回で確かめて対象でなかったPRは、期限まで確かめない。続きの位置も、同じstateから読む。
+  // 組織の所有者のチームの確認が要る行があるときだけ読む。
+  const nowMs = deps.checkedPrs.nowMs();
+  let memory = new Map<string, number>();
+  let memoryDirty = false;
+  let cursor: string | null = null;
+  let pending = refs;
+  const usesState = refs.some((ref) => ref.teamRead && isOrg(ref.owner));
+  if (usesState) {
+    try {
+      const stored = await deps.checkedPrs.load();
+      memory = freshChecks(stored.entries, nowMs);
+      memoryDirty = memory.size !== stored.entries.size;
+      cursor = stored.cursor;
+    } catch (err) {
+      input.log.warn("checked pull requests could not be read", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+    pending = refs.filter((ref) => {
+      const remembered =
+        ref.teamPossible &&
+        isOrg(ref.owner) &&
+        ref.headSha !== null &&
+        memory.has(checkedKey(ref, ref.headSha));
+      if (remembered) teamRemembered += 1;
+      return !remembered;
+    });
+  }
+
+  // 組織の所有者は、その組織のチームが1件でも返らなければ、チームを使えない。
+  let viewerTeams: ViewerTeams | null = null;
+  const teamsUsableFor = (ownerName: string): boolean => {
+    if (viewerTeams === null || !isOrg(ownerName)) return false;
+    const prefix = `${ownerName.toLowerCase()}/`;
+    return [...viewerTeams.slugs].some((slug) => slug.startsWith(prefix));
+  };
+  if (pending.some((ref) => ref.teamPossible && isOrg(ref.owner))) {
+    try {
+      viewerTeams = await deps.getViewerTeams();
+      input.log.info("viewer teams read", { count: viewerTeams.ids.size });
+    } catch (err) {
+      await fail("viewer_teams", err);
+    }
+    const reported = new Set<string>();
+    for (const ref of pending) {
+      const owner = ownerOf.get(ref.owner.toLowerCase());
+      if (
+        !ref.teamPossible ||
+        owner === undefined ||
+        owner.kind !== "org" ||
+        teamsUsableFor(ref.owner) ||
+        reported.has(owner.name)
+      ) {
+        continue;
+      }
+      reported.add(owner.name);
+      await fail(
+        `viewer_teams:${owner.name}`,
+        new Error(TEAM_UNRESOLVED_MESSAGE),
+      );
+    }
+  }
+  /** この候補にチームの照合を当てるときの、PATのアカウントが属するチームのID。当てないときは`null`。 */
+  const teamIdsFor = (ref: PrCandidateRef): ReadonlySet<number> | null =>
+    viewerTeams !== null && ref.teamPossible && teamsUsableFor(ref.owner)
+      ? viewerTeams.ids
+      : null;
+
+  // チームを使えない所有者で、チーム宛ての依頼だけが付いた行は、確かめても決まらないので、読まずに見送る。
+  // 個人の所有者は、チームを使わないので、この行を読まずに見送る。
+  const toRead: PrCandidateRef[] = [];
+  for (const ref of pending) {
+    if (ref.teamOnly && !teamsUsableFor(ref.owner)) {
+      teamUnresolved += 1;
+      input.log.info("pull request skipped: only a team asked", {
+        target: `${ref.owner}/${ref.repo}#${String(ref.number)}`,
+      });
+      continue;
+    }
+    toRead.push(ref);
+  }
+
+  // `team`の行の確認は、前の周回の続きから上限まで選ぶ。末尾に来たら先頭に戻る。
+  // 先頭から選ぶと、先頭の候補が毎周回枠を使い、後ろの候補が確かめられない。
+  const ordered = toRead.filter((ref) => ref.teamRead).sort(compareRefs);
+  const selected = rotateAfter(ordered, cursor).slice(0, TEAM_CONFIRM_LIMIT);
+  const selectedKeys = new Set(selected.map(keyOf));
   const overLimit = new Set(
-    refs
-      .filter((ref) => ref.teamRead)
-      .sort(compareRefs)
-      .slice(TEAM_CONFIRM_LIMIT)
-      .map(keyOf),
+    ordered.map(keyOf).filter((key) => !selectedKeys.has(key)),
   );
   teamCapped = overLimit.size;
+  const lastSelected = selected.at(-1);
+  const nextCursor = lastSelected === undefined ? null : keyOf(lastSelected);
+  const cursorDirty = usesState && nextCursor !== null && nextCursor !== cursor;
 
   const confirmed: PrSearchItem[] = [];
-  for (const ref of refs.filter((found) => !overLimit.has(keyOf(found)))) {
+  for (const ref of toRead.filter((found) => !overLimit.has(keyOf(found)))) {
     const target = `${ref.owner}/${ref.repo}#${String(ref.number)}`;
     candidates += 1;
     const [pr, asIssue] = await Promise.allSettled([
@@ -784,17 +1024,23 @@ export async function discoverPrs(
       await fail(`confirm_pr:${target}`, asIssue.reason);
       continue;
     }
+    const teamIds = teamIdsFor(ref);
     const check = confirmPrCandidate(
       ref,
       pr.value,
       asIssue.value,
       input.viewer,
       input.labels,
+      teamIds === null ? null : { ids: teamIds, policy: input.labelerPolicy },
     );
     if (check.kind === "ok") {
       confirmed.push(check.item);
     } else if (check.kind === "drop") {
-      if (check.reason === "not_target" && ref.teamPossible) {
+      if (
+        check.reason === "not_target" &&
+        ref.teamPossible &&
+        teamIds === null
+      ) {
         teamUnresolved += 1;
         input.log.info("pull request skipped: only a team may have asked", {
           target,
@@ -805,6 +1051,17 @@ export async function discoverPrs(
           target,
           reason: check.reason,
         });
+        // チームまで照合して対象でなかったPRだけを覚える。
+        // 確かめたheadが、行のheadと同じときに限る。違えば、覚える鍵が確かめた対象と合わない。
+        if (
+          check.reason === "not_target" &&
+          teamIds !== null &&
+          ref.headSha !== null &&
+          ref.headSha === pr.value.headSha
+        ) {
+          memory.set(checkedKey(ref, ref.headSha), nowMs);
+          memoryDirty = true;
+        }
       }
     } else {
       await fail(
@@ -815,6 +1072,19 @@ export async function discoverPrs(
             : "requested reviewers of the pull request could not be read",
         ),
       );
+    }
+  }
+
+  if (memoryDirty || cursorDirty) {
+    try {
+      await deps.checkedPrs.save({
+        entries: freshChecks(memory, nowMs),
+        cursor: cursorDirty ? nextCursor : cursor,
+      });
+    } catch (err) {
+      input.log.warn("checked pull requests could not be written", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
     }
   }
 
@@ -830,6 +1100,7 @@ export async function discoverPrs(
       dropped,
       team_unresolved: teamUnresolved,
       team_capped: teamCapped,
+      team_remembered: teamRemembered,
     },
   };
 }

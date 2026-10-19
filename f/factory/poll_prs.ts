@@ -20,7 +20,8 @@
 //
 // ラベル、レビューの依頼、assigneeのPRは、収集の表から見つける。検索は使わない。
 // 表が新しくないリポジトリは、設定で明示したものだけをRESTの一覧で読み、ほかは見送る。
-// チーム宛てのレビューの依頼は、PATのアカウントが属するチームかを決められるまで見送る。
+// チーム宛てのレビューの依頼は、`GET /user/teams`のチームIDと、PRの依頼先のチームIDで照合する。
+// 確かめて対象でなかったPRは、stateに覚えて次の周回以降に確かめ直さない。
 // 候補は、`getPr`と`getIssue`で今も対象であることを確かめてから使う。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
@@ -53,6 +54,7 @@ import {
   getLabelerActor,
   getPr,
   getViewer,
+  getViewerTeams,
   type Issue,
   type LabelerActor,
   LabelerCheckLimitError,
@@ -66,7 +68,12 @@ import {
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
-import { discoverPrs, resolveTableUse } from "./lib/poll_source.ts";
+import {
+  discoverPrs,
+  parseCheckedPrs,
+  parseConfirmCursor,
+  resolveTableUse,
+} from "./lib/poll_source.ts";
 import {
   confirmLabeler,
   decidePrActions,
@@ -85,6 +92,7 @@ import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
   type FactoryConfig,
   hasLabel,
+  isRecord,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
 } from "./lib/types.ts";
@@ -95,6 +103,12 @@ import {
   extractLinkedIssueNumbers,
   nextActionFor,
 } from "./steps/pr_workflow_support.ts";
+
+/** 確かめて対象でなかったPRの覚えを置く、Windmillのstateのキー。 */
+const CHECKED_PRS_STATE_KEY = "team_checked_prs";
+
+/** チームへの依頼の確認で、前の周回に確かめた最後の候補の鍵を置く、Windmillのstateのキー。 */
+const CONFIRM_CURSOR_STATE_KEY = "team_confirm_cursor";
 
 async function recordFailureSafe(
   step: string,
@@ -1160,10 +1174,12 @@ export async function main(): Promise<{
   skipped_stale_reasons: Readonly<Record<string, number>>;
   rest_lists: number;
   rest_reasons: Readonly<Record<string, number>>;
-  /** チーム宛ての依頼かもしれず、直接の依頼でなかったため見送ったPRの数。 */
+  /** チーム宛ての依頼かもしれず、PATのアカウントが属するチームを使えなかったため、確かめられずに見送ったPRの数。 */
   team_unresolved: number;
-  /** 依頼先を読めず、確かめる上限を超えたため、この周回は確かめなかった候補の数。 */
+  /** チーム宛ての依頼を確かめる上限を超えたため、この周回は確かめなかった候補の数。 */
   team_capped: number;
+  /** 前の周回で確かめて対象でなく、覚えていたため、この周回は確かめなかった候補の数。 */
+  team_remembered: number;
   candidates: number;
   dropped: number;
 }> {
@@ -1196,12 +1212,15 @@ export async function main(): Promise<{
   // 照合を通ったオーナーだけを対象にする。
   const scope = { ...config, owners: verified.owners };
   const useTable = resolveTableUse(config, log);
+  // 作者が許可された人かの判定。チームへの依頼は、許可された作者のPRだけ候補にし、レビューの起動の判定も同じ方針を使う。
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const discovered = await discoverPrs(
     {
       useTable,
       owners: verified.owners,
       scope,
       viewer,
+      labelerPolicy,
       labels: { reviewLabel: config.review_label, fixLabel: config.fix_label },
       staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
       log,
@@ -1212,6 +1231,27 @@ export async function main(): Promise<{
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       getIssue: (owner, repo, number) => getIssue(client, owner, repo, number),
       recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      getViewerTeams: () => getViewerTeams(client),
+      checkedPrs: {
+        load: async () => {
+          const stored = await wmill.getState();
+          const record = isRecord(stored) ? stored : {};
+          return {
+            entries: parseCheckedPrs(record[CHECKED_PRS_STATE_KEY]),
+            cursor: parseConfirmCursor(record[CONFIRM_CURSOR_STATE_KEY]),
+          };
+        },
+        save: async (state) => {
+          const stored = await wmill.getState();
+          // stateは全体を置き換えるので、ほかのキーを保って渡す。
+          await wmill.setState({
+            ...(isRecord(stored) ? stored : {}),
+            [CHECKED_PRS_STATE_KEY]: Object.fromEntries(state.entries),
+            [CONFIRM_CURSOR_STATE_KEY]: state.cursor,
+          });
+        },
+        nowMs: () => Date.now(),
+      },
     },
   );
   failed += discovered.failed;
@@ -1307,7 +1347,6 @@ export async function main(): Promise<{
     ]),
   );
 
-  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const decisions = decidePrActions(
     contexts.map((context) => context.candidate),
     config.review_label,
@@ -1405,6 +1444,7 @@ export async function main(): Promise<{
     rest_reasons: discovered.stats.rest_reasons,
     team_unresolved: discovered.stats.team_unresolved,
     team_capped: discovered.stats.team_capped,
+    team_remembered: discovered.stats.team_remembered,
     candidates: discovered.stats.candidates,
     dropped: discovered.stats.dropped,
   };
