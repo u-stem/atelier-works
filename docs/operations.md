@@ -2829,14 +2829,17 @@ workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_
 この2つは、コンテナの中で人が`claude`や`gh`を手で使うときの置き場である。
 
 ジョブのClaudeの設定の置き場は、`runClaude`が、ジョブごとの0700の一時ディレクトリの下(`<TMPDIR>/claude-config`)に指定する。
-置き場を決めるのは、`WM_JOB_ID`が読めて、`jobTmpDirPath()`(`f/factory/lib/job_tmp.ts`)が値を返すときである。
+`WM_JOB_ID`がジョブのIDとして読めるときに、置き場が決まる。
+読めないときは、`jobTmpDirPath()`(`f/factory/lib/job_tmp.ts`)が`null`を返す。
 ジョブの終了で消え、取り消しやタイムアウトで消えずに残ったものは、掃除のジョブが期限を過ぎてから消す。
 そのため状態と会話記録は溜まらず、検査用のユーザーからも読めない。
 `--setting-sources user`が読むユーザー層も、毎回空から始まり、人が手で動かした設定が混ざらない。
 認証は`CLAUDE_CODE_OAUTH_TOKEN`で渡すので、置き場所は認証に関わらない。
 
-`WM_JOB_ID`が読めないなどでジョブのディレクトリを得られないときは、`buildClaudeEnv`(`f/factory/lib/claude.ts`)が`CLAUDE_CONFIG_DIR`を渡さない。
+`WM_JOB_ID`が読めずにジョブのディレクトリを得られないとき、`buildClaudeEnv`(`f/factory/lib/claude.ts`)は環境変数の`CLAUDE_CONFIG_DIR`を使う。
+ジョブには届かないので、未設定のまま渡さない。
 このとき`claude`は既定の置き場(`$HOME/.claude`)に戻る。
+ジョブのディレクトリが安全でないときは、戻らずにジョブが失敗する。
 反映より前のジョブが`$HOME/.claude`に残した状態は、そのまま残る。
 
 `GH_CONFIG_DIR`を届かせないのは、ghとgitの子プロセスが、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
@@ -2854,13 +2857,14 @@ workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_
 この表が示すのは、環境変数の有無だけである。
 `CLAUDE_CONFIG_DIR`の未設定は、戻る経路で使う値が無いことを示すにすぎず、置き場が正しい保証にはならない。
 環境変数が届かないのは変数だけで、ファイルは隔離されていない。
-defaultのworkerのジョブは`factory_state`をマウントしているので、パスを指定すれば置き場を読める。
+defaultのworkerのジョブは`factory_state`をマウントしている。
+そのため、パスを指定すれば、人が手で使う`/var/lib/factory/claude`と`/var/lib/factory/gh`を読める。
 残るリスクは[Console用workerの境界](security.md#console用workerの境界)にある。
 
 #### 反映後に実ジョブで確かめること
 
 置き場が意図どおりかは、環境変数ではなく、ジョブの後のファイルで確かめる。
-次の3つがそろえば、空の設定ディレクトリで`claude -p`が起動し、一時ディレクトリの下に設定を作ったと言える。
+次の3つがそろえば、`claude -p`が空の設定ディレクトリで起動し、`$HOME/.claude`に戻っていないと言える。
 すべて読み取りだけである。
 
 1. `agent_runs`に、反映した時刻より後の成功した行がある。
@@ -2901,7 +2905,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker 
 ```
 
 2つ目のコマンドの出力が空なら、ジョブのディレクトリは残っていない。
-実行中のジョブのディレクトリは残るので、Claudeのジョブが動いていないときに確かめる。
+実行中のジョブのディレクトリは残るので、ジョブが動いていないときに確かめる。
 
 #### 環境変数の再確認
 
@@ -2910,7 +2914,7 @@ workerやmiseを更新したときは、表の結果が変わっていないか�
 1. 使い捨てのworktreeを、`mise run worktree:new -- <type>/<name>`で作る。ブランチ名を`wm-fork/`で始めない。
 2. `f/factory/`の下に、後述の内容の一時のscript(例: `f/factory/tmp_env_check.ts`)を置く。コミットしない。
 3. Claudeの長いジョブが動いていない間に、`wmill script preview f/factory/tmp_env_check.ts -d '{}'`で実行し、上の表と比べる。
-4. 一時のscriptを消し、`mise run worktree:prune`でworktreeを片付ける。
+4. 一時のscriptを消し、`mise run worktree:prune`で片付ける対象を確かめる(既定は一覧を出すだけで、消すには`-- --apply`を付ける)。
 
 そのworktreeで`mise run push`を実行しない。
 `f/`の下の一時のscriptが、ワークスペースに配信されるためである。
