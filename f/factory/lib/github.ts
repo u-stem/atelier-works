@@ -2639,10 +2639,10 @@ function isPrPayload(value: unknown): value is PrPayload {
 }
 
 /**
- * `requested_reviewers`から、依頼された利用者の数値IDを読む。
- * 配列でないとき、要素の`id`が正の安全な整数でないときは、依頼の有無を決められないので`null`にする。
+ * 利用者の配列(`requested_reviewers`、`assignees`)から、数値IDを読む。
+ * 配列でないとき、要素の`id`が正の安全な整数でないときは、有無を決められないので`null`にする。
  */
-function requestedReviewerIdsOf(value: unknown): number[] | null {
+function userIdsOf(value: unknown): number[] | null {
   if (!Array.isArray(value)) return null;
   const ids: number[] = [];
   for (const entry of value) {
@@ -2729,7 +2729,7 @@ async function fetchPr(
     // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
-    requestedReviewerIds: requestedReviewerIdsOf(parsed.requested_reviewers),
+    requestedReviewerIds: userIdsOf(parsed.requested_reviewers),
   };
   return {
     pr,
@@ -4549,6 +4549,18 @@ export type OpenPullRequest = {
   readonly baseRef?: string | null;
   /** PRを作った時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
   readonly createdAtMs?: number | null;
+  /**
+   * ラベルの名前。応答に無いか、名前の無い要素があるときは`null`。
+   * 次の4つの項目は、候補を絞るためにだけ使う。確かめは`getPr`と`getIssue`の応答で行う。
+   * 省略可能な理由は`baseRef`と同じである。
+   */
+  readonly labels?: readonly string[] | null;
+  /** assigneeの数値ID。応答に無いか、IDが正の安全な整数でない要素があるときは`null`。 */
+  readonly assigneeIds?: readonly number[] | null;
+  /** レビューを依頼された利用者の数値ID。チームへの依頼は含まない。読めないときは`null`。 */
+  readonly requestedReviewerIds?: readonly number[] | null;
+  /** チームへのレビューの依頼があるか。`requested_teams`が空なら偽、読めないときは`null`。 */
+  readonly teamReviewRequested?: boolean | null;
 };
 
 function isOpenPullRequestPayload(value: unknown): value is {
@@ -4558,6 +4570,10 @@ function isOpenPullRequestPayload(value: unknown): value is {
   base: { ref?: unknown; repo: { full_name: string } };
   user?: unknown;
   created_at?: unknown;
+  labels?: unknown;
+  assignees?: unknown;
+  requested_reviewers?: unknown;
+  requested_teams?: unknown;
 } {
   if (!isRecord(value)) return false;
   if (typeof value.number !== "number") return false;
@@ -4572,8 +4588,9 @@ export const OPEN_PULL_REQUESTS_MAX_PAGES = 10;
 
 /**
  * `GET /repos/{owner}/{repo}/pulls?state=open`で、開いているPRを、ページ送りしながらすべて返す。
- * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成の時刻、headとbaseのリポジトリを返す。
- * baseのブランチと作成の時刻は、応答に無くても一覧全体を例外にせず、`null`にする。
+ * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成の時刻、headとbaseのリポジトリ、
+ * ラベル、assignee、レビューの依頼先を返す。
+ * baseのブランチ、作成の時刻、ラベル、assignee、レビューの依頼先は、応答に無くても一覧全体を例外にせず、`null`にする。
  * マージ可否は一覧に載らないので、`getPr`で読む。
  * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
  * 一部だけでは、返さなかったPRを「開いていない」と取り違えうるためである。
@@ -4621,7 +4638,24 @@ export async function listOpenPullRequests(
         : null,
     baseRef: typeof entry.base.ref === "string" ? entry.base.ref : null,
     createdAtMs: parseIsoMs(entry.created_at),
+    labels: labelNamesOf(entry.labels),
+    assigneeIds: userIdsOf(entry.assignees),
+    requestedReviewerIds: userIdsOf(entry.requested_reviewers),
+    teamReviewRequested: Array.isArray(entry.requested_teams)
+      ? entry.requested_teams.length > 0
+      : null,
   }));
+}
+
+/** ラベルの名前を読む。配列でないとき、名前が文字列でない要素があるときは`null`にする。 */
+function labelNamesOf(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const names: string[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.name !== "string") return null;
+    names.push(entry.name);
+  }
+  return names;
 }
 
 /** ISO 8601の文字列をepochミリ秒にする。文字列でないか、日付として読めなければ`null`。 */

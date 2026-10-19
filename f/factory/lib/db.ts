@@ -4767,7 +4767,7 @@ export type ClaimPrCiCheckInput = {
  * 上の確認をすり抜けた並行する起動は、一意索引`work_items_active_pr_fix_key`が拒む。
  * その違反は、文全体が取り消されるので、行も変わらず`null`を返す。
  *
- * 作業項目の`owner`と`repo`は、`poll_prs`が`startFix`に渡す`owner`と`repo`(検索結果の`repository_url`由来)と
+ * 作業項目の`owner`と`repo`は、`poll_prs`が`startFix`に渡す`owner`と`repo`(`getIssue`の応答の`repository_url`由来)と
  * 同じ綴りを渡す。一意索引と既存の照合は大文字小文字を区別するためである。
  * 行との照合には小文字を使うので、`pr_ci_checks`の小文字の綴りをそのまま渡さない。
  *

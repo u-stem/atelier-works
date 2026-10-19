@@ -808,23 +808,34 @@ describe("a leftover key of the removed poll_issues source setting", () => {
   });
 });
 
-describe("gh_source_poll_prs", () => {
-  test("defaults gh_source_poll_prs to search when absent", () => {
-    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
-    expect(config.gh_source_poll_prs).toBe("search");
-  });
+describe("a leftover key of the removed poll_prs source setting", () => {
+  // 削除した設定の名前は、コードの別の場所に残さないよう、組み立てて使う。
+  const LEFTOVER_KEY = ["gh_source", "poll", "prs"].join("_");
 
-  test("accepts gh_source_poll_prs db", () => {
+  test("is not kept in the parsed config", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
-      gh_source_poll_prs: "db",
+      [LEFTOVER_KEY]: "db",
     });
-    expect(config.gh_source_poll_prs).toBe("db");
+    expect(LEFTOVER_KEY in config).toBe(false);
   });
 
-  test("throws when gh_source_poll_prs is neither search nor db", () => {
-    const raw = { ...LEGACY_RAW_CONFIG, gh_source_poll_prs: "both" };
-    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  test("is ignored even when its value is invalid", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, [LEFTOVER_KEY]: "both" };
+    expect(() => parseFactoryConfig(raw)).not.toThrow();
+  });
+
+  test("is not declared in the resource type", () => {
+    const text = readFileSync(
+      join(import.meta.dir, "../../c_factory_config.resource-type.yaml"),
+      "utf8",
+    );
+    expect(text.includes(LEFTOVER_KEY)).toBe(false);
+  });
+
+  test("is not declared in the generated resource types", () => {
+    const text = readFileSync(join(import.meta.dir, "../../rt.d.ts"), "utf8");
+    expect(text.includes(LEFTOVER_KEY)).toBe(false);
   });
 });
 

@@ -1,20 +1,19 @@
 // `poll_issues`と`poll_prs`が、トリガーのIssueとPRを見つける経路を持つ。
-// Issueは、収集の表を読み、表が使えないリポジトリのうち設定で明示したものだけをRESTで読む。検索は使わない。
-// PRは、検索か収集の表かを切り替える。
+// どちらも収集の表を読み、表が使えないリポジトリのうち設定で明示したものだけをRESTで読む。検索は使わない。
 // 表の行や一覧の番号は候補を絞るだけに使い、候補に入れる前にRESTで読み直して、開いていて今も対象であることを確かめる。
 
 import { configuredRepos, isRepoAllowed } from "./config.ts";
 import {
-  judgeGhOwnerCoverage,
+  type GhOwnerRepoCoverageInput,
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
   judgeGhRepoFreshness,
-  requiredRepos,
   usableTableRows,
 } from "./gh_collect_read.ts";
 import type {
   Issue,
   IssueSearchItem,
+  OpenPullRequest,
   PrSearchItem,
   PullRequest,
   Viewer,
@@ -27,9 +26,34 @@ import {
   type GhOwnerOpenIssueSnapshot,
   type GhOwnerOpenPrSnapshot,
   type GhPullRequest,
-  type GhSource,
   hasLabel,
 } from "./types.ts";
+
+/**
+ * 収集の設定から、この回に収集の表を読んでよいかを決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 偽のときは、明示したリポジトリだけをRESTの一覧で読み、ほかは発見されないので、偽の設定の名前を警告に残す。
+ */
+export function resolveTableUse(
+  config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  log: Logger,
+): boolean {
+  const useTable =
+    config.gh_collect_enabled && config.gh_collect_detail_enabled;
+  if (!useTable) {
+    log.warn(
+      "the collection is not fully enabled, so only explicit repositories are read",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return useTable;
+}
 
 /**
  * Issueの稼働中の作業項目を引く鍵。
@@ -95,16 +119,6 @@ export function confirmIssueCandidate(
   };
 }
 
-export type PollSourceStats = {
-  readonly source: GhSource;
-  readonly fallback_searches: number;
-  readonly fallback_reasons: Readonly<Record<string, number>>;
-  /** RESTで確かめ直した表の候補の数。 */
-  readonly table_candidates: number;
-  /** RESTで対象でないと分かって外した表の候補の数。 */
-  readonly table_dropped: number;
-};
-
 export type IssueDiscoveryStats = {
   /** 表が新しくないため見送った、明示でないリポジトリの数。 */
   readonly skipped_stale: number;
@@ -132,6 +146,85 @@ function explicitReposOf(
       entry.owner.toLowerCase() === name &&
       isAllowedNow(entry.owner, entry.repo),
   );
+}
+
+/**
+ * 表が新しくなく、見送るリポジトリの、鮮度の判定の理由を返す。
+ * 見送るのは、読む時点で許され、archive済みでも一覧から消えてもおらず、設定で明示してもいないリポジトリである。
+ */
+function skippedStaleReasons(
+  ownerName: string,
+  judged: ReadonlyMap<string, GhOwnerRepoCoverageInput>,
+  explicitNames: ReadonlySet<string>,
+  isAllowedNow: (owner: string, repo: string) => boolean,
+): string[] {
+  const reasons: string[] = [];
+  for (const name of [...judged.keys()].sort()) {
+    const item = judged.get(name);
+    if (
+      item === undefined ||
+      explicitNames.has(name) ||
+      !isAllowedNow(ownerName, item.row.repo) ||
+      item.row.archived ||
+      item.row.gone ||
+      item.freshness.kind !== "stale"
+    ) {
+      continue;
+    }
+    reasons.push(item.freshness.reason);
+  }
+  return reasons;
+}
+
+type ExplicitRepo = { owner: string; repo: string };
+
+/**
+ * 表の代わりにRESTの一覧で読む明示リポジトリを、読む理由とともに返す。
+ * 表を使えない理由(`tableReason`。収集の無効と表の読み取りの失敗)があれば、すべての明示リポジトリを読む。
+ * 表を読めたときは、行が無いか記録が新しくないものを読み、理由は鮮度の判定の語になる。
+ * archive済みの明示リポジトリは、記録が鮮度の内にあるときだけ読まない。
+ * 古い記録のarchiveの印は、解除された後も残りうるので信用しない。
+ */
+function explicitListReads(input: {
+  readonly explicit: readonly ExplicitRepo[];
+  readonly judged: ReadonlyMap<string, GhOwnerRepoCoverageInput> | null;
+  readonly tableReason: "collect_disabled" | "read_failed" | null;
+  readonly dbNow: Date | null;
+  readonly staleAfterMs: number;
+}): { entry: ExplicitRepo; reason: string }[] {
+  const reads: { entry: ExplicitRepo; reason: string }[] = [];
+  for (const entry of input.explicit) {
+    const item = input.judged?.get(entry.repo.toLowerCase());
+    let reason: string | null = input.tableReason;
+    if (input.judged !== null) {
+      if (item === undefined) {
+        reason = "no_record";
+      } else if (item.freshness.kind === "stale") {
+        reason = item.freshness.reason;
+      }
+    }
+    if (reason === null) continue;
+    if (
+      item !== undefined &&
+      input.dbNow !== null &&
+      item.row.archived &&
+      judgeGhRepoFreshness(
+        { ...item.row, archived: false },
+        [],
+        input.dbNow,
+        input.staleAfterMs,
+      ).kind === "fresh"
+    ) {
+      continue;
+    }
+    reads.push({ entry, reason });
+  }
+  return reads;
+}
+
+/** 理由ごとの件数に1を足す。 */
+function countReason(counts: Record<string, number>, reason: string): void {
+  counts[reason] = (counts[reason] ?? 0) + 1;
 }
 
 /**
@@ -234,52 +327,26 @@ export async function discoverIssues(
       for (const row of usableTableRows(owner.name, judged, isAllowedNow)) {
         addRef(row);
       }
-      for (const name of [...judged.keys()].sort()) {
-        const item = judged.get(name);
-        if (
-          item === undefined ||
-          explicitNames.has(name) ||
-          !isAllowedNow(owner.name, item.row.repo) ||
-          item.row.archived ||
-          item.row.gone ||
-          item.freshness.kind !== "stale"
-        ) {
-          continue;
-        }
+      for (const reason of skippedStaleReasons(
+        owner.name,
+        judged,
+        explicitNames,
+        isAllowedNow,
+      )) {
         skippedStale += 1;
-        skippedReasons[item.freshness.reason] =
-          (skippedReasons[item.freshness.reason] ?? 0) + 1;
+        countReason(skippedReasons, reason);
       }
     }
 
-    for (const entry of explicit) {
-      const item = judged?.get(entry.repo.toLowerCase());
-      let reason: string | null = tableReason;
-      if (judged !== null) {
-        if (item === undefined) {
-          reason = "no_record";
-        } else if (item.freshness.kind === "stale") {
-          reason = item.freshness.reason;
-        }
-      }
-      if (reason === null) continue;
-      // archive済みの明示リポジトリは、記録が鮮度の内にあるときだけ読まない。
-      // 古い記録のarchiveの印は、解除された後も残りうるので信用しない。
-      if (
-        item !== undefined &&
-        dbNow !== null &&
-        item.row.archived &&
-        judgeGhRepoFreshness(
-          { ...item.row, archived: false },
-          [],
-          dbNow,
-          input.staleAfterMs,
-        ).kind === "fresh"
-      ) {
-        continue;
-      }
+    for (const { entry, reason } of explicitListReads({
+      explicit,
+      judged,
+      tableReason,
+      dbNow,
+      staleAfterMs: input.staleAfterMs,
+    })) {
       restLists += 1;
-      restReasons[reason] = (restReasons[reason] ?? 0) + 1;
+      countReason(restReasons, reason);
       try {
         const numbers = await deps.listLabeledIssues(
           entry.owner,
@@ -338,77 +405,126 @@ export async function discoverIssues(
 }
 
 /**
- * 表のPRの行が、検索の4本(依頼、assignee、レビューのラベル、修正のラベル)のどれかに当たるかの分類。
+ * PRが、直接の条件(ラベル、PATのアカウントへの依頼、assignee)に当たるかの分類。
  * - `target`: 当たる。
- * - `team`: チームへの依頼か、依頼先を読めない依頼があり、PATのアカウントに宛てた依頼かを表では決められない。
+ * - `team`: チームへの依頼か、依頼先を読めない依頼があり、PATのアカウントに宛てた依頼かを元の値では決められない。
+ *   RESTで直接の依頼を確かめる。チーム宛ての依頼は、まだ解決できないので見送る。
  * - `maybe`: ラベルかassigneeが不明で、当たるかをRESTで確かめる。
  * - `none`: 当たらない。
- * 下書きとforkのPRも絞らない。検索も絞らず、判定がRESTの値で扱う。
+ * 下書きとforkのPRも絞らない。判定がRESTの値で扱う。
  */
 export type PollPrRowClass = "target" | "maybe" | "team" | "none";
 
+/** 分類の入力。表の行と、RESTの一覧の要素のどちらからも作る。`null`は不明を表す。 */
+type PrSignals = {
+  readonly hasReviewLabel: boolean | null;
+  readonly hasFixLabel: boolean | null;
+  readonly requestedUserIds: readonly number[] | null;
+  readonly assigneeIds: readonly number[] | null;
+  readonly teamReviewRequested: boolean | null;
+};
+
 /**
- * 表の行を分類する。`viewerId`はPATのアカウントの数値IDで、依頼とassigneeはIDで比べる。
- * 上から当てて、最初に当たったものを採る。
+ * 上から当てて、最初に当たったものを採る。`viewerId`はPATのアカウントの数値IDで、依頼とassigneeはIDで比べる。
  * 1. ラベルか、PATのアカウントへの依頼かassigneeに当たれば`target`。
  * 2. チームへの依頼が真か不明、または直接の依頼先が不明なら`team`。
- *    片方だけが不明の行でも、直接の依頼を判定できないので`team`にする。
+ *    片方だけが不明でも、直接の依頼を判定できないので`team`にする。
  * 3. ラベルかassigneeが不明なら`maybe`。
  * 4. それ以外は`none`。
  */
-export function classifyPollPrRow(
-  row: GhPullRequest,
-  viewerId: number,
-): PollPrRowClass {
+function classifySignals(signals: PrSignals, viewerId: number): PollPrRowClass {
   if (
-    row.has_review_label === true ||
-    row.has_fix_label === true ||
-    row.review_requested_user_ids?.includes(viewerId) === true ||
-    row.assignee_ids?.includes(viewerId) === true
+    signals.hasReviewLabel === true ||
+    signals.hasFixLabel === true ||
+    signals.requestedUserIds?.includes(viewerId) === true ||
+    signals.assigneeIds?.includes(viewerId) === true
   ) {
     return "target";
   }
   if (
-    row.team_review_requested !== false ||
-    row.review_requested_user_ids === null
+    signals.teamReviewRequested !== false ||
+    signals.requestedUserIds === null
   ) {
     return "team";
   }
   if (
-    row.has_review_label === null ||
-    row.has_fix_label === null ||
-    row.assignee_ids === null
+    signals.hasReviewLabel === null ||
+    signals.hasFixLabel === null ||
+    signals.assigneeIds === null
   ) {
     return "maybe";
   }
   return "none";
 }
 
-export type TablePrCheck =
+/** 表の行を分類する。分け方は`classifySignals`にある。 */
+export function classifyPollPrRow(
+  row: GhPullRequest,
+  viewerId: number,
+): PollPrRowClass {
+  return classifySignals(
+    {
+      hasReviewLabel: row.has_review_label,
+      hasFixLabel: row.has_fix_label,
+      requestedUserIds: row.review_requested_user_ids,
+      assigneeIds: row.assignee_ids,
+      teamReviewRequested: row.team_review_requested,
+    },
+    viewerId,
+  );
+}
+
+/**
+ * RESTの一覧の要素を分類する。分け方は`classifySignals`にある。
+ * 一覧が返さなかった項目(省略または`null`)は不明として扱う。
+ */
+function classifyListedPr(
+  pr: OpenPullRequest,
+  viewerId: number,
+  labels: { readonly reviewLabel: string; readonly fixLabel: string },
+): PollPrRowClass {
+  const names = pr.labels ?? null;
+  return classifySignals(
+    {
+      hasReviewLabel:
+        names === null ? null : hasLabel(names, labels.reviewLabel),
+      hasFixLabel: names === null ? null : hasLabel(names, labels.fixLabel),
+      requestedUserIds: pr.requestedReviewerIds ?? null,
+      assigneeIds: pr.assigneeIds ?? null,
+      teamReviewRequested: pr.teamReviewRequested ?? null,
+    },
+    viewerId,
+  );
+}
+
+/** 確かめる候補のPRの参照。表の行と、RESTの一覧の要素のどちらからも作る。 */
+export type PrRef = Pick<GhPullRequest, "owner" | "repo" | "number">;
+
+export type PrCandidateCheck =
   | { readonly kind: "ok"; readonly item: PrSearchItem }
   | { readonly kind: "drop"; readonly reason: "closed" | "not_target" }
   | { readonly kind: "mismatch" }
   | { readonly kind: "unknown_reviewers" };
 
 /**
- * 表のPRの候補を、`getPr`と`getIssue`の応答で確かめ、候補の項目を作る。
+ * 候補のPRを、`getPr`と`getIssue`の応答で確かめ、候補の項目を作る。表の行にも、RESTの一覧の要素にも使う。
  * 上から当てて、最初に当たったものを採る。
- * 1. 応答のリポジトリか番号が表の行と違うなら`mismatch`。名前の付け替えか移管の途中である。
+ * 1. 応答のリポジトリか番号が参照と違うなら`mismatch`。名前の付け替えか移管の途中である。
  * 2. 閉じていれば`drop`(`closed`)。
  * 3. レビューか修正のラベル、またはPATのアカウントのassigneeがあれば`ok`。
  * 4. 依頼先を読めなければ`unknown_reviewers`。決められないまま外すと、依頼で起きるはずのレビューが黙って止まる。
  * 5. PATのアカウントへの依頼があれば`ok`。
  * 6. それ以外は`drop`(`not_target`)。
  * チームへの依頼はRESTでも一員かを決められないので、`not_target`になる。
- * 項目のownerとrepoは応答の綴りにする。検索の経路と同じ綴りで作業項目を作るためである。
+ * 項目のownerとrepoは応答の綴りにする。作業項目の綴りをそろえるためである。
  */
-export function confirmTablePr(
-  row: GhPullRequest,
+export function confirmPrCandidate(
+  row: PrRef,
   pr: PullRequest,
   asIssue: Issue,
   viewer: Viewer,
   labels: { readonly reviewLabel: string; readonly fixLabel: string },
-): TablePrCheck {
+): PrCandidateCheck {
   const repository = asIssue.repository;
   if (
     repository === null ||
@@ -448,22 +564,69 @@ export function confirmTablePr(
 }
 
 /**
+ * 1周回に、チーム宛ての依頼の疑いでRESTで確かめる候補の上限。
+ * 確かめても一致しない候補を毎周回読み直して、読み取りの枠を使い切らないためである。
+ */
+export const TEAM_CONFIRM_LIMIT = 20;
+
+export type PrDiscoveryStats = IssueDiscoveryStats & {
+  /**
+   * チーム宛ての依頼が付いていて、直接の依頼でなかったため見送ったPRの数。
+   * チーム宛ての依頼は、PATのアカウントが属するチームかを決められるまで見送る。
+   */
+  readonly team_unresolved: number;
+  /** 依頼先を読めず、RESTで確かめる上限(`TEAM_CONFIRM_LIMIT`)を超えたため、この周回は確かめなかった候補の数。 */
+  readonly team_capped: number;
+};
+
+/** 確かめるPRの参照に、チーム宛ての依頼の扱いを添えたもの。 */
+type PrCandidateRef = PrRef & {
+  /** 分類が`team`で、チームへの依頼が偽と分かっていない。直接の依頼を確かめて外れたら、見送りとして数える。 */
+  readonly teamPossible: boolean;
+  /** 分類が`team`で、直接の依頼をRESTで確かめる。上限(`TEAM_CONFIRM_LIMIT`)の対象になる。 */
+  readonly teamRead: boolean;
+};
+
+/** 候補の鍵(小文字の所有者、リポジトリ、番号)。上限で残す候補を決める順にも使う。 */
+function refSortKey(ref: PrRef): [string, string, number] {
+  return [ref.owner.toLowerCase(), ref.repo.toLowerCase(), ref.number];
+}
+
+function compareRefs(a: PrRef, b: PrRef): number {
+  const left = refSortKey(a);
+  const right = refSortKey(b);
+  for (let index = 0; index < 2; index += 1) {
+    const l = String(left[index]);
+    const r = String(right[index]);
+    if (l !== r) return l < r ? -1 : 1;
+  }
+  return left[2] - right[2];
+}
+
+/**
  * ラベル、レビューの依頼、assigneeのPRを見つける。照合を通った所有者ごとに行う。
- * `search`なら、所有者ごとに検索する。
- * `db`なら、所有者の全体を表で探し、使えない所有者だけ検索に戻す。使えないのは次のときである。
- * - 表を読めなかった。失敗として記録する。
- * - 記録が古い、または設定で明示したリポジトリを表で使えない。失敗にはしない。
- * - チームへのレビューの依頼か、依頼先の読めない依頼が付いた行がある。
- *   表ではPATのアカウントに宛てた依頼かを決められず、検索なら見つけるものを取りこぼすためである。
- *   この所有者の表の候補は、確かめずに捨てる。
- * 表の候補は`getPr`と`getIssue`で確かめ直し、今も対象のものだけを項目にする。
+ * 所有者の全体を表で読み、リポジトリごとに鮮度を判定して、新しいリポジトリの行だけを候補にする。
+ * 行は、表の列(ラベル、依頼先、assignee)で分類し、`target`、`maybe`、`team`を候補にして、`none`は捨てる。
+ * チームへの依頼は解決できないので、チーム宛ての依頼だけが付いた行(依頼先が分かり、PATのアカウントを含まず、チームへの依頼が真)は、
+ * RESTで確かめても一致しないため、確かめずに見送り、`team_unresolved`に数える。
+ * 依頼先を読めない行と、チームへの依頼が不明の行は、直接の依頼をRESTで確かめる。
+ * 確かめるのは1周回に`TEAM_CONFIRM_LIMIT`件までで、鍵の昇順に選び、超えた件数を`team_capped`に数える。
+ * 直接の依頼でなければ見送り、`team_unresolved`に数える。
+ * 表が新しくないリポジトリの扱いは、設定で明示したかで分かれる。
+ * - 明示していない: 見送り、理由別に数える。失敗にはしない。読めない間の通知は収集の側が出す。
+ * - 明示した(`factory_repo`と`repo_allowlist`の項目): RESTの一覧で、開いているPRを読む。
+ *   表を読めなかったとき(失敗として記録する)と、収集が無効(`useTable`が偽)のときも、明示のリポジトリは一覧で読む。
+ *   明示のリポジトリは表から外れる道が多く、読めないままにすると、通知なしに止まるためである。
+ *   一覧のラベル、依頼先、assigneeは、表の列と同じ分類に通し、候補にするだけに使う。
+ * 候補は、表の行も一覧の要素も、`getPr`と`getIssue`で確かめ直し、今も対象のものだけを項目にする。
  * 確かめ直しはPRを1件ずつ順に処理し、1件の中の2本だけを並列にする。GitHubへの同時の要求を増やさないためである。
- * 返す項目の並びは、検索の結果の後に、表の候補を(リポジトリ、番号)の順に置く。PRの鍵(小文字)で重ねを除く。
+ * 返す項目の並びは、所有者ごとに、表の候補を(リポジトリ、番号)の順に置き、続けて一覧の候補を置く。PRの鍵(小文字)で重ねを除く。
  * 失敗はこの関数の中で記録し、件数を`failed`で返す。
  */
 export async function discoverPrs(
   input: {
-    readonly source: GhSource;
+    /** 収集の2つの設定が真で、表を読んでよいか。偽なら表を読まず、明示のリポジトリだけを一覧で読む。 */
+    readonly useTable: boolean;
     readonly owners: readonly FactoryOwner[];
     readonly scope: Pick<
       FactoryConfig,
@@ -478,8 +641,12 @@ export async function discoverPrs(
     readonly log: Logger;
   },
   deps: {
-    readonly searchPrs: (owner: FactoryOwner) => Promise<PrSearchItem[]>;
     readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
+    /** 開いているPRの一覧。ラベル、依頼先、assigneeは候補を絞るためにだけ使う。 */
+    readonly listOpenPrs: (
+      owner: string,
+      repo: string,
+    ) => Promise<OpenPullRequest[]>;
     readonly getPr: (
       owner: string,
       repo: string,
@@ -495,102 +662,163 @@ export async function discoverPrs(
 ): Promise<{
   items: PrSearchItem[];
   failed: number;
-  stats: PollSourceStats;
+  stats: PrDiscoveryStats;
 }> {
   let failed = 0;
-  let fallbackSearches = 0;
-  let tableCandidates = 0;
-  let tableDropped = 0;
-  const fallbackReasons: Record<string, number> = {};
-  const searched: PrSearchItem[] = [];
-  const tableRows: GhPullRequest[] = [];
+  let skippedStale = 0;
+  let restLists = 0;
+  let candidates = 0;
+  let dropped = 0;
+  let teamUnresolved = 0;
+  let teamCapped = 0;
+  const skippedReasons: Record<string, number> = {};
+  const restReasons: Record<string, number> = {};
+  const refs: PrCandidateRef[] = [];
+  // 一覧のページの境目で同じ番号が重なりうるので、PRの鍵で重ねを除く。
+  const seenRefs = new Set<string>();
+  const keyOf = (ref: PrRef) =>
+    `${ref.owner}/${ref.repo}#${String(ref.number)}`.toLowerCase();
+  /** 初めて見る鍵なら記録して真を返す。 */
+  const markSeen = (ref: PrRef): boolean => {
+    const key = keyOf(ref);
+    if (seenRefs.has(key)) return false;
+    seenRefs.add(key);
+    return true;
+  };
+  /**
+   * 分類が候補なら、確かめる参照に加える。`none`は捨てる。
+   * チーム宛ての依頼だけが付いた行は、確かめずに見送って数える。
+   */
+  const addClassified = (
+    ref: PrRef,
+    kind: PollPrRowClass,
+    reviewers: {
+      readonly requestedUserIds: readonly number[] | null;
+      readonly teamReviewRequested: boolean | null;
+    },
+  ) => {
+    if (kind === "none" || !markSeen(ref)) return;
+    if (
+      kind === "team" &&
+      reviewers.requestedUserIds !== null &&
+      reviewers.teamReviewRequested === true
+    ) {
+      teamUnresolved += 1;
+      input.log.info("pull request skipped: only a team asked", {
+        target: `${ref.owner}/${ref.repo}#${String(ref.number)}`,
+      });
+      return;
+    }
+    refs.push({
+      owner: ref.owner,
+      repo: ref.repo,
+      number: ref.number,
+      teamPossible: kind === "team" && reviewers.teamReviewRequested !== false,
+      teamRead: kind === "team",
+    });
+  };
 
   const fail = async (step: string, err: unknown) => {
     failed += 1;
     await deps.recordFailure(step, err);
   };
-  const search = async (owner: FactoryOwner) => {
-    try {
-      searched.push(...(await deps.searchPrs(owner)));
-    } catch (err) {
-      await fail(`search_prs:${owner.name}`, err);
-    }
-  };
   const isAllowedNow = (owner: string, repo: string) =>
     isRepoAllowed(input.scope, owner, repo);
 
   for (const owner of input.owners) {
-    if (input.source !== "db") {
-      await search(owner);
-      continue;
-    }
-    let reason: string | null = null;
-    let snapshot: GhOwnerOpenPrSnapshot | null = null;
-    try {
-      snapshot = await deps.readOwnerPrs(owner.name);
-    } catch (err) {
-      await fail(`read_gh_owner_prs:${owner.name}`, err);
-      reason = "read_failed";
-    }
-    if (snapshot !== null) {
-      const judged = judgeGhOwnerRepos(
-        owner.name,
-        snapshot,
-        input.staleAfterMs,
-      );
-      const coverage = judgeGhOwnerCoverage(
-        owner.name,
-        judged,
-        isAllowedNow,
-        requiredRepos(input.scope, owner.name),
-      );
-      if (coverage.kind === "stale") {
-        reason = coverage.reason;
-      } else {
-        const classified = usableTableRows(
-          owner.name,
-          judged,
-          isAllowedNow,
-        ).map((row) => ({
-          row,
-          kind: classifyPollPrRow(row, input.viewer.id),
-        }));
-        if (classified.some((entry) => entry.kind === "team")) {
-          reason = "team_review";
-        } else {
-          for (const entry of classified) {
-            if (entry.kind === "target" || entry.kind === "maybe") {
-              tableRows.push(entry.row);
-            }
-          }
-        }
+    const explicit = explicitReposOf(input.scope, owner.name, isAllowedNow);
+    const explicitNames = new Set(
+      explicit.map((entry) => entry.repo.toLowerCase()),
+    );
+    let tableReason: "collect_disabled" | "read_failed" | null = input.useTable
+      ? null
+      : "collect_disabled";
+    let judged: ReturnType<typeof judgeGhOwnerRepos> | null = null;
+    let dbNow: Date | null = null;
+    if (input.useTable) {
+      try {
+        const snapshot = await deps.readOwnerPrs(owner.name);
+        dbNow = snapshot.db_now;
+        judged = judgeGhOwnerRepos(owner.name, snapshot, input.staleAfterMs);
+      } catch (err) {
+        await fail(`read_gh_owner_prs:${owner.name}`, err);
+        tableReason = "read_failed";
       }
     }
-    if (reason !== null) {
-      fallbackSearches += 1;
-      fallbackReasons[reason] = (fallbackReasons[reason] ?? 0) + 1;
-      await search(owner);
+
+    if (judged !== null) {
+      for (const row of usableTableRows(owner.name, judged, isAllowedNow)) {
+        addClassified(row, classifyPollPrRow(row, input.viewer.id), {
+          requestedUserIds: row.review_requested_user_ids,
+          teamReviewRequested: row.team_review_requested,
+        });
+      }
+      for (const reason of skippedStaleReasons(
+        owner.name,
+        judged,
+        explicitNames,
+        isAllowedNow,
+      )) {
+        skippedStale += 1;
+        countReason(skippedReasons, reason);
+      }
+    }
+
+    for (const { entry, reason } of explicitListReads({
+      explicit,
+      judged,
+      tableReason,
+      dbNow,
+      staleAfterMs: input.staleAfterMs,
+    })) {
+      restLists += 1;
+      countReason(restReasons, reason);
+      try {
+        const listed = await deps.listOpenPrs(entry.owner, entry.repo);
+        for (const pr of [...listed].sort((a, b) => a.number - b.number)) {
+          addClassified(
+            { owner: entry.owner, repo: entry.repo, number: pr.number },
+            classifyListedPr(pr, input.viewer.id, input.labels),
+            {
+              requestedUserIds: pr.requestedReviewerIds ?? null,
+              teamReviewRequested: pr.teamReviewRequested ?? null,
+            },
+          );
+        }
+      } catch (err) {
+        await fail(`list_open_prs:${entry.owner}/${entry.repo}`, err);
+      }
     }
   }
 
+  // 直接の依頼を確かめる候補は、鍵の昇順に上限まで選ぶ。選び方が周回で変わらないようにするためである。
+  const overLimit = new Set(
+    refs
+      .filter((ref) => ref.teamRead)
+      .sort(compareRefs)
+      .slice(TEAM_CONFIRM_LIMIT)
+      .map(keyOf),
+  );
+  teamCapped = overLimit.size;
+
   const confirmed: PrSearchItem[] = [];
-  for (const row of tableRows) {
-    const target = `${row.owner}/${row.repo}#${String(row.number)}`;
-    tableCandidates += 1;
+  for (const ref of refs.filter((found) => !overLimit.has(keyOf(found)))) {
+    const target = `${ref.owner}/${ref.repo}#${String(ref.number)}`;
+    candidates += 1;
     const [pr, asIssue] = await Promise.allSettled([
-      deps.getPr(row.owner, row.repo, row.number),
-      deps.getIssue(row.owner, row.repo, row.number),
+      deps.getPr(ref.owner, ref.repo, ref.number),
+      deps.getIssue(ref.owner, ref.repo, ref.number),
     ]);
     if (pr.status === "rejected") {
-      await fail(`confirm_table_pr:${target}`, pr.reason);
+      await fail(`confirm_pr:${target}`, pr.reason);
       continue;
     }
     if (asIssue.status === "rejected") {
-      await fail(`confirm_table_pr:${target}`, asIssue.reason);
+      await fail(`confirm_pr:${target}`, asIssue.reason);
       continue;
     }
-    const check = confirmTablePr(
-      row,
+    const check = confirmPrCandidate(
+      ref,
       pr.value,
       asIssue.value,
       input.viewer,
@@ -599,42 +827,42 @@ export async function discoverPrs(
     if (check.kind === "ok") {
       confirmed.push(check.item);
     } else if (check.kind === "drop") {
-      tableDropped += 1;
-      input.log.info("table pull request dropped by the REST check", {
-        target,
-        reason: check.reason,
-      });
+      if (check.reason === "not_target" && ref.teamPossible) {
+        teamUnresolved += 1;
+        input.log.info("pull request skipped: only a team may have asked", {
+          target,
+        });
+      } else {
+        dropped += 1;
+        input.log.info("pull request dropped by the REST check", {
+          target,
+          reason: check.reason,
+        });
+      }
     } else {
       await fail(
-        `confirm_table_pr:${target}`,
+        `confirm_pr:${target}`,
         new Error(
           check.kind === "mismatch"
-            ? "table pull request does not match the pull request read from GitHub"
+            ? "pull request does not match the pull request read from GitHub"
             : "requested reviewers of the pull request could not be read",
         ),
       );
     }
   }
 
-  const seen = new Set<string>();
-  const items: PrSearchItem[] = [];
-  for (const item of [...searched, ...confirmed]) {
-    const key =
-      `${item.owner}/${item.repo}#${String(item.number)}`.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    items.push(item);
-  }
-
   return {
-    items,
+    items: confirmed,
     failed,
     stats: {
-      source: input.source,
-      fallback_searches: fallbackSearches,
-      fallback_reasons: fallbackReasons,
-      table_candidates: tableCandidates,
-      table_dropped: tableDropped,
+      skipped_stale: skippedStale,
+      skipped_stale_reasons: skippedReasons,
+      rest_lists: restLists,
+      rest_reasons: restReasons,
+      candidates,
+      dropped,
+      team_unresolved: teamUnresolved,
+      team_capped: teamCapped,
     },
   };
 }
