@@ -21,6 +21,7 @@ import type {
   ViewerTeams,
 } from "./github.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import type { LabelerPolicy } from "./poll_support.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -488,14 +489,23 @@ export type PrCandidateCheck =
  * `viewerTeamIds`が`null`のときは、チームへの依頼を見ない。その場合、チームへの依頼だけが付いたPRは`not_target`になる。
  * 項目のownerとrepoは応答の綴りにする。作業項目の綴りをそろえるためである。
  */
+/** チームへの依頼でPATのアカウントに当たるかを見るときの入力。 */
+export type TeamMatch = {
+  /** PATのアカウントが属するチームの数値ID。 */
+  readonly ids: ReadonlySet<number>;
+  /** 作者が許可された人かの判定に使う。 */
+  readonly policy: LabelerPolicy;
+};
+
 export function confirmPrCandidate(
   row: PrRef,
   pr: PullRequest,
   asIssue: Issue,
   viewer: Viewer,
   labels: { readonly reviewLabel: string; readonly fixLabel: string },
-  viewerTeamIds: ReadonlySet<number> | null = null,
+  team: TeamMatch | null = null,
 ): PrCandidateCheck {
+  const viewerTeamIds = team?.ids ?? null;
   const repository = asIssue.repository;
   if (
     repository === null ||
@@ -580,13 +590,25 @@ export function parseCheckedPrs(value: unknown): Map<string, number> {
 }
 
 /** 確かめて対象でなかったPRの覚えの置き場。 */
+export type CheckedPrState = {
+  /** 確かめて対象でなかったPRの覚え。 */
+  readonly entries: ReadonlyMap<string, number>;
+  /** 前の周回で確かめた最後の候補の鍵。 */
+  readonly cursor: string | null;
+};
+
 export type CheckedPrStore = {
-  /** 覚えを読む。失敗は、何も覚えていない扱いにする。 */
-  readonly load: () => Promise<ReadonlyMap<string, number>>;
-  /** 覚えを書く。失敗は、覚えていない扱いにする。 */
-  readonly save: (entries: ReadonlyMap<string, number>) => Promise<void>;
+  /** 覚えと続きの位置を読む。失敗は、何も覚えていない扱いにする。 */
+  readonly load: () => Promise<CheckedPrState>;
+  /** 覚えと続きの位置を書く。失敗は、覚えていない扱いにする。 */
+  readonly save: (state: CheckedPrState) => Promise<void>;
   readonly nowMs: () => number;
 };
+
+/** stateに置いた続きの位置を読む。`<owner>/<repo>#<番号>`の形でなければ`null`。 */
+export function parseConfirmCursor(_value: unknown): string | null {
+  return null;
+}
 
 /** 覚えの鍵。PRと、確かめたときのheadのコミットで決まる。headが動いたPRは覚えに当たらない。 */
 function checkedKey(ref: PrRef, headSha: string): string {
@@ -684,6 +706,8 @@ export async function discoverPrs(
       "owners" | "repo_allowlist" | "factory_repo"
     >;
     readonly viewer: Viewer;
+    /** 作者が許可された人かの判定。チームへの依頼は、許可された作者のPRだけ候補にする。 */
+    readonly labelerPolicy: LabelerPolicy;
     readonly labels: {
       readonly reviewLabel: string;
       readonly fixLabel: string;
@@ -853,7 +877,7 @@ export async function discoverPrs(
   let pending = refs;
   if (refs.some((ref) => ref.teamPossible)) {
     try {
-      const stored = await deps.checkedPrs.load();
+      const stored = (await deps.checkedPrs.load()).entries;
       memory = freshChecks(stored, nowMs);
       memoryDirty = memory.size !== stored.size;
     } catch (err) {
@@ -961,7 +985,7 @@ export async function discoverPrs(
       asIssue.value,
       input.viewer,
       input.labels,
-      teamIds,
+      teamIds === null ? null : { ids: teamIds, policy: input.labelerPolicy },
     );
     if (check.kind === "ok") {
       confirmed.push(check.item);
@@ -1007,7 +1031,10 @@ export async function discoverPrs(
 
   if (memoryDirty) {
     try {
-      await deps.checkedPrs.save(freshChecks(memory, nowMs));
+      await deps.checkedPrs.save({
+        entries: freshChecks(memory, nowMs),
+        cursor: null,
+      });
     } catch (err) {
       input.log.warn("checked pull requests could not be written", {
         error: maskSecrets(err instanceof Error ? err.message : String(err)),

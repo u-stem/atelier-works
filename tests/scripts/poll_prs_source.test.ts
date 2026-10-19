@@ -50,6 +50,27 @@ describe("poll_prs: the wiring of the discovery", () => {
     expect(source).toContain("await wmill.setState(");
   });
 
+  test("passes the policy of the authors to the discovery", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    const input = source.slice(
+      source.indexOf("await discoverPrs("),
+      source.indexOf("readOwnerPrs:"),
+    );
+    expect(input).toContain("labelerPolicy,");
+  });
+
+  test("builds the policy of the authors before the discovery", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(
+      source.indexOf("labelerPolicyFor(viewer.login, config)"),
+    ).toBeLessThan(source.indexOf("await discoverPrs("));
+  });
+
+  test("keeps the position of the next round in the state of the job", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain('"team_confirm_cursor"');
+  });
+
   test("uses the number of owners for the threshold", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source).toContain(

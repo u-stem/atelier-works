@@ -25,6 +25,7 @@ import {
   discoverPrs,
   issueKey,
   parseCheckedPrs,
+  parseConfirmCursor,
   resolveTableUse,
   TEAM_CHECK_MEMORY_TTL_MS,
 } from "../../f/factory/lib/poll_source.ts";
@@ -1389,6 +1390,12 @@ const REVIEW_LABEL = "factory:review";
 const FIX_LABEL = "factory:fix";
 const PR_LABELS = { reviewLabel: REVIEW_LABEL, fixLabel: FIX_LABEL };
 const VIEWER: Viewer = { login: "Stem-Bot", id: VIEWER_ID };
+/** 作者`alice`を許可する。`mallory`は許可しない。 */
+const TEAM_POLICY: LabelerPolicy = {
+  viewerLogin: VIEWER.login,
+  allowedLogins: ["alice"],
+  allowedIds: {},
+};
 
 /** `getPr`の応答。依頼先は誰も無い。 */
 function restPr(
@@ -1589,6 +1596,10 @@ type PrFixture = {
 type PrOptions = {
   /** 確かめて対象でなかったPRの覚え。周回をまたぐテストが共有する。既定は空。 */
   checked?: Map<string, number>;
+  /** 続きの位置。周回をまたぐテストが共有する。既定は無し。 */
+  cursor?: { value: string | null };
+  /** 作者の許可の判定。既定は`TEAM_POLICY`。 */
+  policy?: LabelerPolicy;
   /** 覚えの読み込みか書き込みを失敗させる。 */
   checkedFails?: "load" | "save";
   /** 覚えの時刻の基準(epochミリ秒)。 */
@@ -1622,6 +1633,8 @@ async function runPrs(fixture: PrFixture, options: PrOptions = {}) {
   const failureTexts: Record<string, string> = {};
   const logs: { message: string; fields: unknown }[] = [];
   const checked = options.checked ?? new Map<string, number>();
+  const cursor = options.cursor ?? { value: null };
+  let loads = 0;
   let viewerTeamsCalls = 0;
   const log: Logger = {
     info(message, fields) {
@@ -1639,6 +1652,7 @@ async function runPrs(fixture: PrFixture, options: PrOptions = {}) {
       scope: scopeOf(owners, options.repoAllowlist ?? [], options.factoryRepo),
       viewer: VIEWER,
       labels: PR_LABELS,
+      labelerPolicy: options.policy ?? TEAM_POLICY,
       staleAfterMs: options.staleAfterMs ?? STALE_AFTER_MS,
       log,
     },
@@ -1689,13 +1703,15 @@ async function runPrs(fixture: PrFixture, options: PrOptions = {}) {
       },
       checkedPrs: {
         load: async () => {
+          loads += 1;
           if (options.checkedFails === "load") throw new Error("state down");
-          return new Map(checked);
+          return { entries: new Map(checked), cursor: cursor.value };
         },
-        save: async (entries) => {
+        save: async (state) => {
           if (options.checkedFails === "save") throw new Error("state down");
           checked.clear();
-          for (const [key, at] of entries) checked.set(key, at);
+          for (const [key, at] of state.entries) checked.set(key, at);
+          cursor.value = state.cursor;
         },
         nowMs: () => options.nowMs ?? NOW_MS,
       },
@@ -1711,6 +1727,8 @@ async function runPrs(fixture: PrFixture, options: PrOptions = {}) {
     failureTexts,
     logs,
     checked,
+    cursor,
+    loads: () => loads,
     viewerTeamsCalls: () => viewerTeamsCalls,
   };
 }
@@ -2649,6 +2667,60 @@ describe("discoverPrs when the teams of the viewer cannot be used", () => {
     expect(gotPr).toEqual(["beta/tools#4"]);
   });
 
+  test("does not ask for the teams for a user owner with an unreadable row", async () => {
+    const { viewerTeamsCalls } = await runPrs(betaTeamWorld({}), {
+      owners: [BETA],
+    });
+    expect(viewerTeamsCalls()).toBe(0);
+  });
+
+  test("does not read the state for a user owner with an unreadable row", async () => {
+    const { loads } = await runPrs(betaTeamWorld({}), { owners: [BETA] });
+    expect(loads()).toBe(0);
+  });
+
+  test("does not record a failure for a user owner with an unreadable row", async () => {
+    const { failures } = await runPrs(betaTeamWorld({}), { owners: [BETA] });
+    expect(failures).toEqual([]);
+  });
+
+  test("does not match the team of the viewer for a user owner", async () => {
+    const { result } = await runPrs(
+      betaTeamWorld({ requestedTeamIds: [VIEWER_TEAM_ID] }),
+      { owners: [BETA] },
+    );
+    expect(result.items).toEqual([]);
+  });
+
+  test("counts a row of a user owner whose direct request is not the viewer as unresolved", async () => {
+    const { result } = await runPrs(betaTeamWorld({}), { owners: [BETA] });
+    expect(result.stats.team_unresolved).toBe(1);
+  });
+
+  test("still finds a row of a user owner by the direct request", async () => {
+    const { result } = await runPrs(
+      betaTeamWorld({ requestedReviewerIds: [VIEWER_ID] }),
+      { owners: [BETA] },
+    );
+    expect(numbersOf(result.items)).toEqual([4]);
+  });
+
+  test("skips a row of a user owner that only a team requested, without reading it", async () => {
+    const found = toolsPrCase(4, { team: true });
+    const { gotPr, result } = await runPrs(
+      {
+        snapshots: {
+          beta: prSnapshot(
+            [repoRow("tools")],
+            [{ ...found.row, owner: "beta" }],
+          ),
+        },
+      },
+      { owners: [BETA] },
+    );
+    expect([gotPr, result.stats.team_unresolved]).toEqual([[], 1]);
+  });
+
   test("decides for each owner", async () => {
     const acme = prCase(4, { team: true });
     const beta = toolsPrCase(4, { team: true });
@@ -2672,11 +2744,10 @@ describe("discoverPrs when the teams of the viewer cannot be used", () => {
             repository: { owner: "Beta", repo: "Tools" },
           },
         },
-        viewerTeams: EMPTY,
       },
       { owners: [ACME, BETA] },
     );
-    expect(gotPr).toEqual(["beta/tools#4"]);
+    expect(gotPr).toEqual(["acme/widgets#4"]);
   });
 });
 
@@ -3010,6 +3081,244 @@ describe("discoverPrs remembers the pull requests that it confirmed", () => {
   });
 });
 
+/** 作者を指定した、依頼先が分かっているチーム宛ての行を、番号の昇順に作る。 */
+function teamCasesBy(
+  author: string,
+  count: number,
+  firstNumber: number,
+  teamIds: number[] = [OTHER_TEAM_ID],
+): PrCase[] {
+  return Array.from({ length: count }, (_, index) =>
+    prCase(firstNumber + index, { team: true, author, teamIds }),
+  );
+}
+
+describe("discoverPrs continues from where the previous round stopped", () => {
+  const key = (number: number) => `acme/widgets#${String(number)}`;
+
+  test("reads the 21st row in the next round even when the first 20 are found", async () => {
+    const found = teamCasesBy("alice", 20, 1, [VIEWER_TEAM_ID]);
+    const last = teamCasesBy("alice", 1, 21);
+    const world = prWorld([...found, ...last]);
+    const checked = new Map<string, number>();
+    const cursor: { value: string | null } = { value: null };
+    await runPrs(world, { checked, cursor });
+    const next = await runPrs(world, { checked, cursor });
+    expect(next.gotPr).toContain(key(21));
+  });
+
+  test("starts the next round after the last candidate that it confirmed", async () => {
+    const next = await runPrs(prWorld(teamOnlyCases(25)), {
+      cursor: { value: key(10) },
+    });
+    expect(next.gotPr[0]).toBe(key(11));
+  });
+
+  test("saves the key of the last candidate that it confirmed", async () => {
+    const { cursor } = await runPrs(prWorld(teamOnlyCases(25)));
+    expect(cursor.value).toBe(key(20));
+  });
+
+  test("saves the key of the last candidate even when the read failed", async () => {
+    const world = prWorld(teamOnlyCases(21));
+    const { cursor } = await runPrs({
+      ...world,
+      prs: { ...world.prs, [key(20)]: new Error("down") },
+    });
+    expect(cursor.value).toBe(key(20));
+  });
+
+  test("goes back to the first candidate after the last one", async () => {
+    const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
+      cursor: { value: key(25) },
+    });
+    expect(gotPr[0]).toBe(key(1));
+  });
+
+  test("wraps around the end of the candidates in one round", async () => {
+    const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
+      cursor: { value: key(20) },
+    });
+    expect(gotPr).toEqual([
+      ...[
+        21, 22, 23, 24, 25, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+      ].map(key),
+    ]);
+  });
+
+  test("reaches every candidate within a few rounds without a memory", async () => {
+    const world = prWorld(teamOnlyCases(45));
+    const cursor: { value: string | null } = { value: null };
+    const seen = new Set<string>();
+    for (let round = 0; round < 3; round += 1) {
+      const { gotPr } = await runPrs(world, {
+        cursor,
+        checked: new Map(),
+      });
+      for (const found of gotPr) seen.add(found);
+    }
+    expect(seen.size).toBe(45);
+  });
+
+  test("reads the 21st row after 20 rows of an author who is not allowed", async () => {
+    const world = prWorld([
+      ...teamCasesBy("mallory", 20, 1, [VIEWER_TEAM_ID]),
+      ...teamCasesBy("alice", 1, 21, [VIEWER_TEAM_ID]),
+    ]);
+    const checked = new Map<string, number>();
+    const cursor: { value: string | null } = { value: null };
+    await runPrs(world, { checked, cursor });
+    const next = await runPrs(world, { checked, cursor });
+    expect(numbersOf(next.result.items)).toEqual([21]);
+  });
+
+  test("reads the 21st row after 20 rows of an author who is not allowed, without a memory", async () => {
+    const world = prWorld([
+      ...teamCasesBy("mallory", 20, 1, [VIEWER_TEAM_ID]),
+      ...teamCasesBy("alice", 1, 21, [VIEWER_TEAM_ID]),
+    ]);
+    const cursor: { value: string | null } = { value: null };
+    await runPrs(world, { cursor, checked: new Map() });
+    const next = await runPrs(world, { cursor, checked: new Map() });
+    expect(numbersOf(next.result.items)).toEqual([21]);
+  });
+
+  test("starts from the first candidate when the state cannot be read", async () => {
+    const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
+      checkedFails: "load",
+      cursor: { value: key(10) },
+    });
+    expect(gotPr[0]).toBe(key(1));
+  });
+
+  test("starts from the first candidate when the saved key is not a candidate and sorts last", async () => {
+    const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
+      cursor: { value: "zzz/zzz#1" },
+    });
+    expect(gotPr[0]).toBe(key(1));
+  });
+
+  test("compares the number of the saved key as a number", async () => {
+    const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
+      cursor: { value: key(9) },
+    });
+    expect(gotPr[0]).toBe(key(10));
+  });
+});
+
+describe("discoverPrs lets only an allowed author use a team request", () => {
+  test("does not find a team request of an author who is not allowed", async () => {
+    const found = prCase(4, {
+      team: true,
+      author: "mallory",
+      teamIds: [VIEWER_TEAM_ID],
+    });
+    const { result } = await runPrs(prWorld([found]));
+    expect(result.items).toEqual([]);
+  });
+
+  test("does not find a team request of a fork pull request of an author who is not allowed", async () => {
+    const found = prCase(4, {
+      team: true,
+      author: "mallory",
+      fork: true,
+      teamIds: [VIEWER_TEAM_ID],
+    });
+    const { result } = await runPrs(prWorld([found]));
+    expect(result.items).toEqual([]);
+  });
+
+  test("remembers a team request of an author who is not allowed", async () => {
+    const found = prCase(4, {
+      team: true,
+      author: "mallory",
+      teamIds: [VIEWER_TEAM_ID],
+    });
+    const { checked } = await runPrs(prWorld([found]));
+    expect(checked.size).toBe(1);
+  });
+
+  test("finds a team request of an author who is allowed", async () => {
+    const found = prCase(4, {
+      team: true,
+      author: "alice",
+      teamIds: [VIEWER_TEAM_ID],
+    });
+    const { result } = await runPrs(prWorld([found]));
+    expect(numbersOf(result.items)).toEqual([4]);
+  });
+
+  test("does not record a failure for the team list of an author who is not allowed", async () => {
+    const found = prCase(4, { team: true, author: "mallory" });
+    const { failures } = await runPrs({
+      ...prWorld([found]),
+      prs: {
+        "acme/widgets#4": { ...found.pr, requestedTeamIds: null },
+      },
+    });
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("discoverPrs keeps at most 1000 remembered pull requests", () => {
+  /** 新しい順に、`count`件の期限内の覚え。鍵`old-<i>`の`i`が大きいほど古い。 */
+  function seeded(count: number): Map<string, number> {
+    const entries = new Map<string, number>();
+    for (let i = 1; i <= count; i += 1) {
+      entries.set(`old-${String(i)}`, NOW_MS - i);
+    }
+    return entries;
+  }
+
+  test("keeps 1000 entries when 1001 would be saved", async () => {
+    const checked = seeded(1000);
+    await runPrs(prWorld([prCase(4, { team: true })]), { checked });
+    expect(checked.size).toBe(1000);
+  });
+
+  test("drops the oldest entry", async () => {
+    const checked = seeded(1000);
+    await runPrs(prWorld([prCase(4, { team: true })]), { checked });
+    expect(checked.has("old-1000")).toBe(false);
+  });
+
+  test("keeps the newest entry that it just confirmed", async () => {
+    const checked = seeded(1000);
+    await runPrs(prWorld([prCase(4, { team: true })]), { checked });
+    expect(
+      [...checked.keys()].some((k) => k.startsWith("acme/widgets#4@")),
+    ).toBe(true);
+  });
+
+  test("keeps the second oldest entry", async () => {
+    const checked = seeded(1000);
+    await runPrs(prWorld([prCase(4, { team: true })]), { checked });
+    expect(checked.has("old-999")).toBe(true);
+  });
+});
+
+describe("parseConfirmCursor", () => {
+  test("reads a key of a pull request", () => {
+    expect(parseConfirmCursor("acme/widgets#4")).toBe("acme/widgets#4");
+  });
+
+  test("returns null for a value that is not a string", () => {
+    expect(parseConfirmCursor(4)).toBeNull();
+  });
+
+  test("returns null when nothing is stored", () => {
+    expect(parseConfirmCursor(undefined)).toBeNull();
+  });
+
+  test("returns null for a string that is not a key of a pull request", () => {
+    expect(parseConfirmCursor("acme/widgets")).toBeNull();
+  });
+
+  test("returns null for an empty string", () => {
+    expect(parseConfirmCursor("")).toBeNull();
+  });
+});
+
 describe("parseCheckedPrs", () => {
   test("reads the entries of an object", () => {
     expect(parseCheckedPrs({ "a#1@x": 100, "b#2@y": 200 })).toEqual(
@@ -3047,19 +3356,12 @@ describe("parseCheckedPrs", () => {
 
 describe("confirmPrCandidate with the teams of the viewer", () => {
   const row = prRow({ number: 3 });
-  const teams = new Set([VIEWER_TEAM_ID]);
+  const teams = { ids: new Set([VIEWER_TEAM_ID]), policy: TEAM_POLICY };
   const confirm = (
     pr: PullRequest,
-    viewerTeamIds: ReadonlySet<number> | null = teams,
+    match: { ids: ReadonlySet<number>; policy: LabelerPolicy } | null = teams,
   ): ReturnType<typeof confirmPrCandidate> =>
-    confirmPrCandidate(
-      row,
-      pr,
-      restPrAsIssue(3),
-      VIEWER,
-      PR_LABELS,
-      viewerTeamIds,
-    );
+    confirmPrCandidate(row, pr, restPrAsIssue(3), VIEWER, PR_LABELS, match);
 
   test("accepts a pull request that a team of the viewer requested", () => {
     expect(
@@ -3124,6 +3426,56 @@ describe("confirmPrCandidate with the teams of the viewer", () => {
     expect(
       confirm(restPr(3, { requestedTeamIds: [VIEWER_TEAM_ID] }), null),
     ).toEqual({ kind: "drop", reason: "not_target" });
+  });
+
+  test("drops a team request of an author who is not allowed", () => {
+    expect(
+      confirm(
+        restPr(3, {
+          authorLogin: "mallory",
+          requestedTeamIds: [VIEWER_TEAM_ID],
+        }),
+      ),
+    ).toEqual({ kind: "drop", reason: "not_target" });
+  });
+
+  test("accepts a team request of an author who is allowed", () => {
+    expect(
+      confirm(
+        restPr(3, {
+          authorLogin: "alice",
+          requestedTeamIds: [VIEWER_TEAM_ID],
+        }),
+      ).kind,
+    ).toBe("ok");
+  });
+
+  test("accepts a team request of the viewer as the author", () => {
+    expect(
+      confirm(
+        restPr(3, {
+          authorLogin: "stem-bot",
+          requestedTeamIds: [VIEWER_TEAM_ID],
+        }),
+      ).kind,
+    ).toBe("ok");
+  });
+
+  test("does not need the team list of an author who is not allowed", () => {
+    expect(
+      confirm(restPr(3, { authorLogin: "mallory", requestedTeamIds: null })),
+    ).toEqual({ kind: "drop", reason: "not_target" });
+  });
+
+  test("accepts a direct request of an author who is not allowed", () => {
+    expect(
+      confirm(
+        restPr(3, {
+          authorLogin: "mallory",
+          requestedReviewerIds: [VIEWER_ID],
+        }),
+      ).kind,
+    ).toBe("ok");
   });
 
   test("does not need the teams when the teams of the viewer are not given", () => {
@@ -3835,6 +4187,7 @@ describe("discoverPrs never calls a search endpoint", () => {
         scope: scopeOf(owners, []),
         viewer: VIEWER,
         labels: PR_LABELS,
+        labelerPolicy: TEAM_POLICY,
         staleAfterMs: STALE_AFTER_MS,
         log,
       },
@@ -3848,7 +4201,7 @@ describe("discoverPrs never calls a search endpoint", () => {
         recordFailure: async () => {},
         getViewerTeams: () => getViewerTeams(client),
         checkedPrs: {
-          load: async () => new Map(),
+          load: async () => ({ entries: new Map(), cursor: null }),
           save: async () => {},
           nowMs: () => NOW_MS,
         },
@@ -3947,6 +4300,7 @@ describe("discoverPrs never calls a search endpoint", () => {
         scope: scopeOf([ACME], []),
         viewer: VIEWER,
         labels: PR_LABELS,
+        labelerPolicy: TEAM_POLICY,
         staleAfterMs: STALE_AFTER_MS,
         log,
       },
@@ -3959,7 +4313,7 @@ describe("discoverPrs never calls a search endpoint", () => {
         recordFailure: async () => {},
         getViewerTeams: () => getViewerTeams(client),
         checkedPrs: {
-          load: async () => new Map(),
+          load: async () => ({ entries: new Map(), cursor: null }),
           save: async () => {},
           nowMs: () => NOW_MS,
         },
