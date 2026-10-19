@@ -1583,7 +1583,7 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
 export type ReviewPostMode = "comment_only" | "gated";
 
 /**
- * `gh_source_pr_conflict_watch`、`gh_source_pr_ci_watch`の値。下流のscriptが候補を列挙する元で、
+ * `gh_source_pr_ci_watch`の値。下流のscriptが候補を列挙する元で、
  * `search`は検索API、`db`は収集が書いた表を指す。
  */
 export type GhSource = "search" | "db";
@@ -1826,11 +1826,6 @@ export type FactoryConfig = {
    * `false`の間は、詳細の要求を送らず、一覧の下限も変えない。`gh_collect_enabled`が`false`なら、この値によらず何もしない。
    */
   gh_collect_detail_enabled: boolean;
-  /**
-   * `watch_pr_conflicts`がリポジトリの発見とPRの列挙を行う元。既定は`search`。
-   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索とREST一覧になる。
-   */
-  gh_source_pr_conflict_watch: GhSource;
   /**
    * `watch_pr_ci`が、許可された人のPRの候補を見つける元。既定は`search`。
    * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。

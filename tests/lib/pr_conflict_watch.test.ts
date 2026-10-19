@@ -6,11 +6,13 @@ import type {
   PrConflictSettledState,
 } from "../../f/factory/lib/db.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
-import { effectiveGhSource } from "../../f/factory/lib/gh_collect_read.ts";
 import {
+  type GhClient,
   GitHubHttpError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
+  getPr,
+  listOpenPullRequests,
   type OpenPullRequest,
   type PullRequest,
   type Viewer,
@@ -36,9 +38,9 @@ import type {
   GhOwnerOpenPrSnapshot,
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
-  GhSource,
   NoticeRecord,
 } from "../../f/factory/lib/types.ts";
+import { ghApiOk } from "./testSupport.ts";
 
 const HEAD = "a".repeat(40);
 const NEW_HEAD = "d".repeat(40);
@@ -179,9 +181,9 @@ function oldRepoRow(repo: string): GhOwnerRepoFreshnessRow {
 
 /** 表を読む周回の設定。リポジトリは表からだけ見つける。 */
 const DB_ONLY: Setup = {
-  source: "db",
+  useTable: true,
   repos: [],
-  searchOwners: [ACME],
+  owners: [ACME],
 };
 
 type Harness = {
@@ -190,7 +192,6 @@ type Harness = {
   /** 所有者の読み取りを呼んだ所有者の名前。 */
   readonly ownerReads: string[];
   readonly warned: { message: string; fields: unknown }[];
-  readonly searched: string[];
   readonly reads: string[];
   readonly records: PrConflictObservation[];
   readonly marked: number[];
@@ -216,18 +217,13 @@ type Setup = {
   readonly failViewer?: boolean;
   /** PATのアカウントの読み取りが投げる例外。 */
   readonly viewerError?: Error;
-  /** 実効の読み取り元。既定は`search`。 */
-  readonly source?: GhSource;
+  /** 収集の表を読んでよいか。既定は偽で、表を読まない。 */
+  readonly useTable?: boolean;
   readonly staleAfterMs?: number;
   /** 所有者ごとの表の読み取り。キーは所有者の名前。無ければ、行の無い所有者を返す。 */
   readonly snapshots?: Record<string, GhOwnerOpenPrSnapshot | Error>;
-  /** 開いているPRを検索するオーナー(照合を通ったもの)。 */
-  readonly searchOwners?: FactoryOwner[];
-  /** オーナーごとの検索の結果。キーはオーナー名。 */
-  readonly searchRepos?: Record<
-    string,
-    { owner: string; repo: string }[] | Error
-  >;
+  /** 表で発見するオーナー(照合を通ったもの)。 */
+  readonly owners?: FactoryOwner[];
   readonly failTouch?: boolean;
   /** `pr_conflict_checks`に行を持つリポジトリ。 */
   readonly conflictRepos?: { owner: string; repo: string }[];
@@ -253,7 +249,6 @@ function setup(options: Setup = {}): Harness {
   const listed: string[] = [];
   const ownerReads: string[] = [];
   const warned: { message: string; fields: unknown }[] = [];
-  const searched: string[] = [];
   const reads: string[] = [];
   const records: PrConflictObservation[] = [];
   const marked: number[] = [];
@@ -291,7 +286,7 @@ function setup(options: Setup = {}): Harness {
       if (options.failViewer) throw new Error("viewer down");
       return options.viewer ?? VIEWER;
     },
-    source: options.source ?? "search",
+    useTable: options.useTable ?? false,
     staleAfterMs: options.staleAfterMs ?? STALE_AFTER_MS,
     readOwnerPrs: async (owner) => {
       ownerReads.push(owner);
@@ -300,14 +295,7 @@ function setup(options: Setup = {}): Harness {
       if (found instanceof Error) throw found;
       return found;
     },
-    searchOwners: options.searchOwners ?? [],
-    searchOpenRepos: async (owner, author) => {
-      searched.push(`${owner.name}:${author}`);
-      const found = options.searchRepos?.[owner.name];
-      if (found === undefined) return [];
-      if (found instanceof Error) throw found;
-      return found;
-    },
+    owners: options.owners ?? [],
     explicitRepos: options.explicitRepos ?? [],
     listOpenRepos: async () => options.repos ?? [REPO],
     listConflictRepos: async () => options.conflictRepos ?? [],
@@ -394,7 +382,6 @@ function setup(options: Setup = {}): Harness {
     listed,
     ownerReads,
     warned,
-    searched,
     reads,
     records,
     marked,
@@ -960,14 +947,15 @@ describe("runPrConflictWatch: the count of repositories by source", () => {
   }
 
   const sources: Setup = {
+    useTable: true,
     repos: [{ owner: "acme", repo: "a-work" }],
     conflictRepos: [
       { owner: "acme", repo: "b-row" },
       { owner: "acme", repo: "b-row2" },
     ],
     explicitRepos: [{ owner: "acme", repo: "c-explicit" }],
-    searchOwners: [{ name: "acme", kind: "org" }],
-    searchRepos: { acme: [{ owner: "acme", repo: "d-search" }] },
+    owners: [ACME],
+    snapshots: { acme: snapshotOf([repoRow("widgets")], [row()]) },
   };
 
   test("logs how many repositories each source gave", async () => {
@@ -977,21 +965,21 @@ describe("runPrConflictWatch: the count of repositories by source", () => {
       work_items: 1,
       conflict_rows: 2,
       explicit: 1,
-      table: 0,
-      searched: 1,
+      table: 1,
       total: 5,
     });
   });
 
-  test("logs how many repositories the table gave", async () => {
-    const h = setup({
-      source: "db",
-      repos: [],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      snapshots: { acme: snapshotOf([repoRow("widgets")], [row()]) },
-    });
+  test("logs no count of searched repositories", async () => {
+    const h = setup(sources);
     await runPrConflictWatch(h.deps);
-    expect(collected(h)?.fields).toMatchObject({ table: 1, searched: 0 });
+    expect(Object.keys(collected(h)?.fields ?? {})).not.toContain("searched");
+  });
+
+  test("logs zero repositories from the table when the table is not read", async () => {
+    const h = setup({ ...sources, useTable: false });
+    await runPrConflictWatch(h.deps);
+    expect(collected(h)?.fields).toMatchObject({ table: 0, total: 4 });
   });
 
   test("counts a repository once in the total when two sources name it", async () => {
@@ -1022,185 +1010,23 @@ describe("runPrConflictWatch: the count of repositories by source", () => {
   });
 });
 
-describe("runPrConflictWatch: finding repositories by search", () => {
-  const owners: FactoryOwner[] = [
-    { name: "acme", kind: "org" },
-    { name: "alice", kind: "user" },
-  ];
-
-  test("searches each verified owner for the open pull requests of the account", async () => {
-    const h = setup({ searchOwners: owners });
-    await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot", "alice:factory-bot"]);
-  });
-
-  test("lists a repository that only the search found", async () => {
-    const h = setup({
-      repos: [],
-      searchOwners: owners,
-      searchRepos: { acme: [{ owner: "acme", repo: "found" }] },
-      openPrs: { "acme/found": [] },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual(["acme/found"]);
-  });
-
-  test("lists a repository once when the search and another source both name it", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: { acme: [{ owner: "Acme", repo: "Widgets" }] },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual(["acme/widgets"]);
-  });
-
-  test("does not list a repository that the search found but that is not allowed", async () => {
-    const h = setup({
-      repos: [],
-      allowed: () => false,
-      searchOwners: owners,
-      searchRepos: { acme: [{ owner: "acme", repo: "found" }] },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual([]);
-  });
-
-  test("uses the search only to find repositories, and reads pull requests from the list", async () => {
-    const h = setup({
-      repos: [],
-      searchOwners: owners,
-      searchRepos: { acme: [{ owner: "acme", repo: "widgets" }] },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.reads).toEqual(["acme/widgets#12"]);
-  });
-
-  test("keeps searching the other owners after one search fails", async () => {
-    const h = setup({
-      repos: [],
-      searchOwners: owners,
-      searchRepos: {
-        acme: new Error("search down"),
-        alice: [{ owner: "alice", repo: "found" }],
-      },
-      openPrs: { "alice/found": [] },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual(["alice/found"]);
-  });
-
-  test("records the failure of a search", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: { acme: new Error("search down") },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.failures).toEqual(["search_open_repos:acme"]);
-  });
-
-  test("still lists the other sources when the search fails", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: { acme: new Error("search down") },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual(["acme/widgets"]);
-  });
-
-  test("does not record the rate limit of the search as a failure", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: {
-        acme: new GitHubRateLimitError("GET search", 60_000, false),
-      },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.failures).toEqual([]);
-  });
-
-  test("does not stop the reads of pull requests at the rate limit of the search", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: {
-        acme: new GitHubRateLimitError("GET search", 60_000, false),
-      },
-    });
-    const result = await runPrConflictWatch(h.deps);
-    expect(result.rateLimited).toBe(false);
-  });
-
-  test("does not search the remaining owners after the rate limit of the search", async () => {
-    const h = setup({
-      searchOwners: [
-        { name: "acme", kind: "org" },
-        { name: "beta", kind: "org" },
-      ],
-      searchRepos: {
-        acme: new GitHubRateLimitError("GET search", 60_000, false),
-        beta: [],
-      },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot"]);
-  });
-
-  test("does not search when the account is unreadable", async () => {
-    const h = setup({ failViewer: true, searchOwners: owners });
-    await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual([]);
-  });
-});
-
 describe("runPrConflictWatch: the order and the sources of repositories", () => {
   const found = { owner: "acme", repo: "found" };
 
-  test("lists the repositories of the work items, the conflict rows, the settings and the search, in that order", async () => {
+  test("lists the repositories of the work items, the conflict rows and the settings, in that order", async () => {
     const h = setup({
       repos: [{ owner: "acme", repo: "a-work" }],
       conflictRepos: [{ owner: "acme", repo: "b-row" }],
       explicitRepos: [{ owner: "acme", repo: "c-explicit" }],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      searchRepos: { acme: [{ owner: "acme", repo: "d-search" }] },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual([
-      "acme/a-work",
-      "acme/b-row",
-      "acme/c-explicit",
-      "acme/d-search",
-    ]);
-  });
-
-  test("does not record a failure when a repository that only the search found has too many open pull requests", async () => {
-    const h = setup({
-      repos: [],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      searchRepos: { acme: [found] },
-      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.failures).toEqual([]);
-  });
-
-  test("warns when a repository that only the search found has too many open pull requests", async () => {
-    const h = setup({
-      repos: [],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      searchRepos: { acme: [found] },
-      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.warnings).toEqual([
-      "pr conflict could not list all the open pull requests of a searched repository",
-    ]);
+    expect(h.listed).toEqual(["acme/a-work", "acme/b-row", "acme/c-explicit"]);
   });
 
   test("records a failure when a repository from the settings has too many open pull requests", async () => {
     const h = setup({
       repos: [],
       explicitRepos: [found],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      searchRepos: { acme: [found] },
       openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
     });
     await runPrConflictWatch(h.deps);
@@ -1211,19 +1037,25 @@ describe("runPrConflictWatch: the order and the sources of repositories", () => 
     const h = setup({
       repos: [],
       conflictRepos: [found],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      searchRepos: { acme: [found] },
       openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
     });
     await runPrConflictWatch(h.deps);
     expect(h.failures).toEqual(["list_open_prs:acme/found"]);
   });
 
-  test("records another failure of a repository that only the search found", async () => {
+  test("records a failure when a repository with a work item has too many open pull requests", async () => {
+    const h = setup({
+      repos: [found],
+      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["list_open_prs:acme/found"]);
+  });
+
+  test("records another failure of a listed repository", async () => {
     const h = setup({
       repos: [],
-      searchOwners: [{ name: "acme", kind: "org" }],
-      searchRepos: { acme: [found] },
+      explicitRepos: [found],
       openPrs: { "acme/found": new Error("boom") },
     });
     await runPrConflictWatch(h.deps);
@@ -1295,37 +1127,6 @@ describe("runPrConflictWatch: a conflict that was resolved while it was being no
 
 describe("runPrConflictWatch: an invalid token", () => {
   const unauthorized = new GitHubHttpError("bad credentials", 401);
-  const owners: FactoryOwner[] = [
-    { name: "acme", kind: "org" },
-    { name: "alice", kind: "user" },
-  ];
-
-  test("records one failure when a search is rejected", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: { acme: unauthorized, alice: unauthorized },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.failures).toEqual(["search_open_repos"]);
-  });
-
-  test("does not search the next owner after a search is rejected", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: { acme: unauthorized, alice: [] },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot"]);
-  });
-
-  test("reports that the token was rejected by a search", async () => {
-    const h = setup({
-      searchOwners: owners,
-      searchRepos: { acme: unauthorized },
-    });
-    const result = await runPrConflictWatch(h.deps);
-    expect(result.unauthorized).toBe(true);
-  });
 
   test("stops reading and records one failure", async () => {
     const h = setup({
@@ -2203,7 +2004,7 @@ describe("runPrConflictWatch: the pull request is confirmed by the REST read", (
     expect(h.reads).toEqual(["acme/widgets#12", "acme/widgets#12"]);
   });
 
-  test("applies the confirmation to the search path too", async () => {
+  test("applies the confirmation to the REST list path too", async () => {
     const h = setup({
       prs: { "acme/widgets#12": pr({ authorLogin: "someone" }) },
     });
@@ -2214,12 +2015,7 @@ describe("runPrConflictWatch: the pull request is confirmed by the REST read", (
 
 describe("runPrConflictWatch: discovery from the table", () => {
   const FRESH = snapshotOf([repoRow("widgets")], [row()]);
-
-  test("does not search an owner whose records are fresh", async () => {
-    const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
-    await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual([]);
-  });
+  const STALE = snapshotOf([oldRepoRow("widgets")], [row()]);
 
   test("reads the pull request of a repository found in the table", async () => {
     const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
@@ -2227,131 +2023,175 @@ describe("runPrConflictWatch: discovery from the table", () => {
     expect(h.reads).toEqual(["acme/widgets#12"]);
   });
 
-  test("searches an owner whose records are too old", async () => {
-    const h = setup({
-      ...DB_ONLY,
-      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
-    });
+  test("does not list a repository found in the table with the REST list", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
     await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot"]);
+    expect(h.listed).toEqual([]);
   });
 
-  test("searches only the owners that are not fresh", async () => {
+  test("reads the table of each owner", async () => {
     const h = setup({
       ...DB_ONLY,
-      searchOwners: [ACME, BETA],
-      snapshots: {
-        acme: FRESH,
-        beta: snapshotOf([oldRepoRow("gadgets")]),
-      },
+      owners: [ACME, BETA],
+      snapshots: { acme: FRESH, beta: snapshotOf([]) },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["beta:factory-bot"]);
+    expect(h.ownerReads).toEqual(["acme", "beta"]);
   });
 
-  test("records a failed owner read", async () => {
-    const h = setup({
-      ...DB_ONLY,
-      snapshots: { acme: new Error("db down") },
-    });
+  test("does not read a repository whose records are too old when nothing else names it", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: STALE } });
     await runPrConflictWatch(h.deps);
-    expect(h.failures).toEqual(["read_gh_owner_prs:acme"]);
+    expect(h.reads).toEqual([]);
   });
 
-  test("searches an owner whose read failed", async () => {
-    const h = setup({
-      ...DB_ONLY,
-      snapshots: { acme: new Error("db down") },
-    });
+  test("does not list a repository whose records are too old when nothing else names it", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: STALE } });
     await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot"]);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("counts the repository that was skipped for stale records", async () => {
+    const h = setup({ ...DB_ONLY, snapshots: { acme: STALE } });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(1);
   });
 
   test("does not record the lack of freshness as a failure", async () => {
-    const h = setup({
-      ...DB_ONLY,
-      snapshots: { acme: snapshotOf([oldRepoRow("widgets")]) },
-    });
+    const h = setup({ ...DB_ONLY, snapshots: { acme: STALE } });
     await runPrConflictWatch(h.deps);
     expect(h.failures).toEqual([]);
   });
 
-  test("reports the searches and the reasons of the fallback", async () => {
+  const STALE_REASONS: [string, GhOwnerRepoFreshnessRow][] = [
+    ["unusable", repoRow("widgets", { allowed: false })],
+    ["not_collected", repoRow("widgets", { last_collected_at: null })],
+    [
+      "in_future",
+      repoRow("widgets", {
+        last_collected_at: new Date(NOW.getTime() + 60_000),
+      }),
+    ],
+    ["too_old", oldRepoRow("widgets")],
+  ];
+
+  test.each(STALE_REASONS)(
+    "counts a skipped repository under the reason %s",
+    async (reason, record) => {
+      const h = setup({
+        ...DB_ONLY,
+        snapshots: { acme: snapshotOf([record], [row()]) },
+      });
+      const result = await runPrConflictWatch(h.deps);
+      expect(result.skipped_stale_reasons).toEqual({ [reason]: 1 });
+    },
+  );
+
+  test("counts the skipped repositories by reason", async () => {
     const h = setup({
       ...DB_ONLY,
-      searchOwners: [ACME, BETA],
       snapshots: {
-        acme: snapshotOf([oldRepoRow("widgets")]),
-        beta: new Error("db down"),
+        acme: snapshotOf([
+          oldRepoRow("a-old"),
+          oldRepoRow("b-old"),
+          repoRow("c-new", { last_collected_at: null }),
+        ]),
       },
     });
     const result = await runPrConflictWatch(h.deps);
-    expect({
-      searches: result.fallback_searches,
-      reasons: result.fallback_reasons,
-    }).toEqual({ searches: 2, reasons: { too_old: 1, read_failed: 1 } });
+    expect(result.skipped_stale_reasons).toEqual({
+      too_old: 2,
+      not_collected: 1,
+    });
   });
 
-  test("stops searching the remaining owners when a fallback search hits the rate limit", async () => {
+  test("does not count an archived repository as skipped", async () => {
     const h = setup({
       ...DB_ONLY,
-      searchOwners: [ACME, BETA],
-      snapshots: {
-        acme: snapshotOf([oldRepoRow("widgets")]),
-        beta: snapshotOf([oldRepoRow("gadgets")]),
-      },
-      searchRepos: {
-        acme: new GitHubRateLimitError("GET search", 60_000, false),
-      },
+      snapshots: { acme: snapshotOf([repoRow("widgets", { archived: true })]) },
     });
-    await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot"]);
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
   });
 
-  test("keeps reading the table of the remaining owners after a fallback search hits the rate limit", async () => {
+  test("does not count a repository that disappeared from the listing as skipped", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: snapshotOf([repoRow("widgets", { gone: true })]) },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("does not count a repository that is not allowed as skipped", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      allowed: () => false,
+      snapshots: { acme: STALE },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("does not count a stale repository that a work item names as skipped", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: STALE },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("does not count a stale repository that a conflict row names as skipped", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      conflictRepos: [REPO],
+      snapshots: { acme: STALE },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("does not count a stale explicit repository as skipped", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: STALE },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("judges the freshness with the threshold of the deps", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      staleAfterMs: 4 * 60_000,
+      snapshots: { acme: FRESH },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale_reasons).toEqual({ too_old: 1 });
+  });
+
+  test("keeps reading the table of the remaining owners after a stale owner", async () => {
     const betaPr = pr({
       headRepoFullName: "beta/gadgets",
       baseRepoFullName: "beta/gadgets",
     });
     const h = setup({
       ...DB_ONLY,
-      searchOwners: [ACME, BETA],
+      owners: [ACME, BETA],
       snapshots: {
-        acme: snapshotOf([oldRepoRow("widgets")]),
+        acme: STALE,
         beta: snapshotOf(
           [repoRow("gadgets")],
           [row({ owner: "beta", repo: "gadgets" })],
         ),
       },
-      searchRepos: {
-        acme: new GitHubRateLimitError("GET search", 60_000, false),
-      },
       prs: { "beta/gadgets#12": betaPr },
     });
     await runPrConflictWatch(h.deps);
     expect(h.reads).toEqual(["beta/gadgets#12"]);
-  });
-
-  test("does not search a remaining owner that is not fresh after the rate limit", async () => {
-    const h = setup({
-      ...DB_ONLY,
-      searchOwners: [ACME, BETA],
-      snapshots: {
-        acme: snapshotOf([oldRepoRow("widgets")]),
-        beta: snapshotOf([oldRepoRow("gadgets")]),
-      },
-      searchRepos: {
-        acme: new GitHubRateLimitError("GET search", 60_000, false),
-      },
-    });
-    const result = await runPrConflictWatch(h.deps);
-    expect({
-      searches: result.fallback_searches,
-      reasons: result.fallback_reasons,
-    }).toEqual({
-      searches: 1,
-      reasons: { too_old: 1, search_rate_limited: 1 },
-    });
   });
 
   test("merges a repository of the table with the same repository of the work items, ignoring case", async () => {
@@ -2374,18 +2214,50 @@ describe("runPrConflictWatch: discovery from the table", () => {
     await runPrConflictWatch(h.deps);
     expect(h.reads).toEqual([]);
   });
+});
 
-  test("judges the freshness with the threshold of the deps", async () => {
+describe("runPrConflictWatch: the table cannot be read", () => {
+  test("records a failed owner read", async () => {
     const h = setup({
       ...DB_ONLY,
-      staleAfterMs: 4 * 60_000,
-      snapshots: { acme: FRESH },
+      snapshots: { acme: new Error("db down") },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.searched).toEqual(["acme:factory-bot"]);
+    expect(h.failures).toEqual(["read_gh_owner_prs:acme"]);
   });
 
-  test("lists a repository of an owner whose rows fail the check with the REST list", async () => {
+  test("does not read a repository that only the table could name", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: new Error("db down") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("does not count a skipped repository when the read failed", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      snapshots: { acme: new Error("db down") },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("lists an explicit repository with the REST list under the reason read_failed", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: new Error("db down") },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect({ listed: h.listed, reasons: result.rest_reasons }).toEqual({
+      listed: ["acme/widgets"],
+      reasons: { read_failed: 1 },
+    });
+  });
+
+  test("lists a repository of a work item with the REST list", async () => {
     const h = setup({
       ...DB_ONLY,
       repos: [REPO],
@@ -2396,10 +2268,146 @@ describe("runPrConflictWatch: discovery from the table", () => {
   });
 });
 
-describe("runPrConflictWatch: listing from the table", () => {
+describe("runPrConflictWatch: the collection is off", () => {
+  const OFF: Setup = {
+    useTable: false,
+    repos: [],
+    owners: [ACME],
+    snapshots: { acme: snapshotOf([repoRow("widgets")], [row()]) },
+  };
+
+  test("does not read the table", async () => {
+    const h = setup(OFF);
+    await runPrConflictWatch(h.deps);
+    expect(h.ownerReads).toEqual([]);
+  });
+
+  test("reports that the collection was off", async () => {
+    const h = setup(OFF);
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.collect_disabled).toBe(true);
+  });
+
+  test("reports that the collection was on when the table is read", async () => {
+    const h = setup(DB_ONLY);
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.collect_disabled).toBe(false);
+  });
+
+  test("does not find a repository that only the table could name", async () => {
+    const h = setup(OFF);
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("does not count a skipped repository", async () => {
+    const h = setup(OFF);
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.skipped_stale).toBe(0);
+  });
+
+  test("lists an explicit repository with the REST list under the reason collect_disabled", async () => {
+    const h = setup({ ...OFF, explicitRepos: [REPO] });
+    const result = await runPrConflictWatch(h.deps);
+    expect({ listed: h.listed, reasons: result.rest_reasons }).toEqual({
+      listed: ["acme/widgets"],
+      reasons: { collect_disabled: 1 },
+    });
+  });
+
+  test("lists a repository of a work item with the REST list", async () => {
+    const h = setup({ ...OFF, repos: [REPO] });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists a repository of a conflict row with the REST list", async () => {
+    const h = setup({ ...OFF, conflictRepos: [REPO] });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+});
+
+describe("runPrConflictWatch: the union of the sources", () => {
+  /** 別のリポジトリのFactoryのPR。 */
+  function prIn(repo: string): PullRequest {
+    return pr({
+      headRepoFullName: `acme/${repo}`,
+      baseRepoFullName: `acme/${repo}`,
+    });
+  }
+
+  const UNION: Setup = {
+    ...DB_ONLY,
+    repos: [{ owner: "acme", repo: "a-work" }],
+    conflictRepos: [{ owner: "acme", repo: "b-row" }],
+    explicitRepos: [{ owner: "acme", repo: "c-explicit" }],
+    openPrs: {
+      "acme/a-work": [open()],
+      "acme/b-row": [open()],
+      "acme/c-explicit": [open()],
+    },
+    snapshots: {
+      acme: snapshotOf(
+        [repoRow("d-table"), oldRepoRow("e-stale")],
+        [row({ repo: "d-table" }), row({ repo: "e-stale" })],
+      ),
+    },
+    prs: {
+      "acme/a-work#12": prIn("a-work"),
+      "acme/b-row#12": prIn("b-row"),
+      "acme/c-explicit#12": prIn("c-explicit"),
+      "acme/d-table#12": prIn("d-table"),
+      "acme/e-stale#12": prIn("e-stale"),
+    },
+  };
+
+  test("reads the pull requests of the work items, the conflict rows, the settings and the table", async () => {
+    const h = setup(UNION);
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([
+      "acme/a-work#12",
+      "acme/b-row#12",
+      "acme/c-explicit#12",
+      "acme/d-table#12",
+    ]);
+  });
+
+  test("skips the stale repository that no other source names", async () => {
+    const h = setup(UNION);
+    const result = await runPrConflictWatch(h.deps);
+    expect({
+      skipped: result.skipped_stale,
+      reasons: result.skipped_stale_reasons,
+    }).toEqual({ skipped: 1, reasons: { too_old: 1 } });
+  });
+
+  test("lists the repositories that the table does not hold fresh with the REST list", async () => {
+    const h = setup(UNION);
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/a-work", "acme/b-row", "acme/c-explicit"]);
+  });
+
+  test("counts the REST lists by reason", async () => {
+    const h = setup(UNION);
+    const result = await runPrConflictWatch(h.deps);
+    expect({
+      lists: result.rest_lists,
+      reasons: result.rest_reasons,
+    }).toEqual({ lists: 3, reasons: { no_record: 3 } });
+  });
+
+  test("counts the repositories read from the table", async () => {
+    const h = setup(UNION);
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.table_repos).toBe(1);
+  });
+});
+
+describe("runPrConflictWatch: the REST list of a repository that the table does not hold", () => {
   const FRESH = snapshotOf([repoRow("widgets")], [row()]);
 
-  test("lists a fresh repository without the REST list", async () => {
+  test("does not list a work item repository whose records are fresh", async () => {
     const h = setup({ ...DB_ONLY, repos: [REPO], snapshots: { acme: FRESH } });
     await runPrConflictWatch(h.deps);
     expect(h.listed).toEqual([]);
@@ -2411,7 +2419,13 @@ describe("runPrConflictWatch: listing from the table", () => {
     expect(h.reads).toEqual(["acme/widgets#12"]);
   });
 
-  test("lists a repository that is not fresh with the REST list", async () => {
+  test("counts the repositories listed from the table", async () => {
+    const h = setup({ ...DB_ONLY, repos: [REPO], snapshots: { acme: FRESH } });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.table_repos).toBe(1);
+  });
+
+  test("lists a work item repository that is not fresh with the REST list", async () => {
     const h = setup({
       ...DB_ONLY,
       repos: [REPO],
@@ -2421,7 +2435,53 @@ describe("runPrConflictWatch: listing from the table", () => {
     expect(h.listed).toEqual(["acme/widgets"]);
   });
 
-  test("lists a repository of an owner that is not searched with the REST list", async () => {
+  test("counts the reason of the REST list of a repository that is not fresh", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect({
+      lists: result.rest_lists,
+      reasons: result.rest_reasons,
+    }).toEqual({ lists: 1, reasons: { too_old: 1 } });
+  });
+
+  test("lists an explicit repository that is not fresh with the REST list", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("does not list a fresh explicit repository", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: FRESH },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("lists an explicit repository without a gh_repos row under the reason no_record", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect({ listed: h.listed, reasons: result.rest_reasons }).toEqual({
+      listed: ["acme/widgets"],
+      reasons: { no_record: 1 },
+    });
+  });
+
+  test("lists a repository of an owner that the table does not cover with the REST list", async () => {
     const h = setup({
       ...DB_ONLY,
       repos: [{ owner: "other", repo: "widgets" }],
@@ -2432,17 +2492,7 @@ describe("runPrConflictWatch: listing from the table", () => {
     expect(h.listed).toEqual(["other/widgets"]);
   });
 
-  test("lists a repository without a gh_repos row with the REST list", async () => {
-    const h = setup({
-      ...DB_ONLY,
-      repos: [REPO],
-      snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.listed).toEqual(["acme/widgets"]);
-  });
-
-  test("lists an archived repository with the REST list", async () => {
+  test("lists an archived work item repository with the REST list", async () => {
     const h = setup({
       ...DB_ONLY,
       repos: [REPO],
@@ -2454,7 +2504,19 @@ describe("runPrConflictWatch: listing from the table", () => {
     expect(h.listed).toEqual(["acme/widgets"]);
   });
 
-  test("lists a fresh repository from the table even when another repository sent the owner to the search", async () => {
+  test("lists a repository that disappeared from the listing when a work item names it", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: {
+        acme: snapshotOf([repoRow("widgets", { gone: true })], [row()]),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists a fresh repository from the table even when another repository is stale", async () => {
     const h = setup({
       ...DB_ONLY,
       repos: [REPO],
@@ -2464,42 +2526,6 @@ describe("runPrConflictWatch: listing from the table", () => {
     });
     await runPrConflictWatch(h.deps);
     expect(h.listed).toEqual([]);
-  });
-
-  test("counts the repositories listed from the table", async () => {
-    const h = setup({ ...DB_ONLY, repos: [REPO], snapshots: { acme: FRESH } });
-    const result = await runPrConflictWatch(h.deps);
-    expect(result.table_repos).toBe(1);
-  });
-
-  test("does not read the table when the source is search", async () => {
-    const h = setup({
-      source: "search",
-      searchOwners: [ACME],
-      snapshots: { acme: FRESH },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.ownerReads).toEqual([]);
-  });
-
-  test("reports search as the source when the collection is off", async () => {
-    const source = effectiveGhSource("db", {
-      gh_collect_enabled: false,
-      gh_collect_detail_enabled: true,
-    });
-    const h = setup({
-      source,
-      searchOwners: [ACME],
-      snapshots: { acme: FRESH },
-    });
-    const result = await runPrConflictWatch(h.deps);
-    expect(result.source).toBe("search");
-  });
-
-  test("reports db as the source of a round that read the table", async () => {
-    const h = setup({ ...DB_ONLY, snapshots: { acme: FRESH } });
-    const result = await runPrConflictWatch(h.deps);
-    expect(result.source).toBe("db");
   });
 
   test("looks the snapshot up by lower-cased names when the factory repository has capitals", async () => {
@@ -2512,8 +2538,82 @@ describe("runPrConflictWatch: listing from the table", () => {
     await runPrConflictWatch(h.deps);
     expect(h.listed).toEqual([]);
   });
+});
 
-  test("keeps the idle result unchanged after a round that fell back", async () => {
+describe("runPrConflictWatch: an archived explicit repository", () => {
+  const ARCHIVED = (overrides: Partial<GhOwnerRepoFreshnessRow> = {}) =>
+    snapshotOf([repoRow("widgets", { archived: true, ...overrides })], [row()]);
+
+  test("is not listed while its record is inside the threshold", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("is not read while its record is inside the threshold", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("is not counted as a REST list while its record is inside the threshold", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.rest_lists).toBe(0);
+  });
+
+  test("is listed while its record is inside the threshold when a work item also names it", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("is listed while its record is inside the threshold when a conflict row also names it", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [],
+      conflictRepos: [REPO],
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("is listed when its record is too old, because the archive mark may be stale", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: {
+        acme: ARCHIVED({
+          last_collected_at: new Date(NOW.getTime() - STALE_AFTER_MS - 1),
+        }),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+});
+
+describe("runPrConflictWatch: the idle result", () => {
+  test("keeps the idle result unchanged after a round that skipped a repository", async () => {
     const h = setup({
       ...DB_ONLY,
       snapshots: { acme: snapshotOf([oldRepoRow("widgets")]) },
@@ -2524,17 +2624,151 @@ describe("runPrConflictWatch: listing from the table", () => {
       h.deps.log,
       async () => PR_CONFLICT_WATCH_IDLE_RESULT,
     );
-    expect(idle.fallback_reasons).toEqual({});
+    expect(idle.skipped_stale_reasons).toEqual({});
   });
 
-  test("freezes the reasons of the idle result", () => {
+  test("freezes the skipped reasons of the idle result", () => {
     expect(
-      Object.isFrozen(PR_CONFLICT_WATCH_IDLE_RESULT.fallback_reasons),
+      Object.isFrozen(PR_CONFLICT_WATCH_IDLE_RESULT.skipped_stale_reasons),
     ).toBe(true);
+  });
+
+  test("freezes the REST reasons of the idle result", () => {
+    expect(Object.isFrozen(PR_CONFLICT_WATCH_IDLE_RESULT.rest_reasons)).toBe(
+      true,
+    );
+  });
+
+  test("builds new reason records for every round", async () => {
+    const options: Setup = {
+      ...DB_ONLY,
+      explicitRepos: [REPO],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")]) },
+    };
+    const first = await runPrConflictWatch(setup(options).deps);
+    const second = await runPrConflictWatch(setup(options).deps);
+    expect(first.rest_reasons).not.toBe(second.rest_reasons);
+  });
+
+  test("has no search fields in the result", async () => {
+    const h = setup(DB_ONLY);
+    const result = await runPrConflictWatch(h.deps);
+    expect(
+      Object.keys(result).filter(
+        (key) => key === "source" || key.startsWith("fallback"),
+      ),
+    ).toEqual([]);
   });
 });
 
-/** 検索の経路と表の経路に同じPRの集合を与えるための入力。 */
+describe("runPrConflictWatch never calls a search endpoint", () => {
+  /** 実際の`listOpenPullRequests`と`getPr`を、呼ばれたendpointを記録する偽の`gh`に通す。 */
+  async function runWithRealReaders(options: Setup) {
+    const endpoints: string[] = [];
+    const client: GhClient = {
+      ghToken: "tok",
+      run: async (argv: readonly string[]) => {
+        const endpoint =
+          argv.find(
+            (arg) => arg.startsWith("repos/") || arg.startsWith("search/"),
+          ) ?? "";
+        endpoints.push(endpoint);
+        if (endpoint.includes("/pulls?state=open")) {
+          return ghApiOk([
+            {
+              number: 12,
+              draft: false,
+              head: { ref: BRANCH, repo: { full_name: "acme/widgets" } },
+              base: { ref: "main", repo: { full_name: "acme/widgets" } },
+              user: { login: "factory-bot", id: 5 },
+            },
+          ]);
+        }
+        return ghApiOk({
+          number: 12,
+          title: "t",
+          body: "",
+          draft: false,
+          state: "open",
+          merged: false,
+          head: {
+            sha: HEAD,
+            ref: BRANCH,
+            repo: { full_name: "acme/widgets" },
+          },
+          base: {
+            ref: "main",
+            repo: { full_name: "acme/widgets", id: REPO_ID },
+          },
+          mergeable: false,
+          mergeable_state: "dirty",
+          user: { login: "factory-bot", id: 5, type: "User" },
+          auto_merge: null,
+          requested_reviewers: [],
+        });
+      },
+    };
+    const h = setup(options);
+    const result = await runPrConflictWatch({
+      ...h.deps,
+      listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo),
+      getPr: (owner, repo, number) => getPr(client, owner, repo, number),
+    });
+    return { endpoints, result };
+  }
+
+  const searchCalls = (endpoints: readonly string[]) =>
+    endpoints.filter((endpoint) => endpoint.startsWith("search/"));
+
+  test("reads a stale explicit repository through the pulls endpoints only", async () => {
+    const { endpoints } = await runWithRealReaders({
+      ...DB_ONLY,
+      repos: [],
+      explicitRepos: [REPO],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    expect(searchCalls(endpoints)).toEqual([]);
+  });
+
+  test("reads the pull request of the explicit repository", async () => {
+    const { result } = await runWithRealReaders({
+      ...DB_ONLY,
+      repos: [],
+      explicitRepos: [REPO],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    expect(result.tracked).toBe(1);
+  });
+
+  test("does not call a search endpoint when the collection is off", async () => {
+    const { endpoints } = await runWithRealReaders({
+      useTable: false,
+      repos: [REPO],
+      owners: [ACME],
+    });
+    expect(searchCalls(endpoints)).toEqual([]);
+  });
+
+  test("does not call a search endpoint when the table cannot be read", async () => {
+    const { endpoints } = await runWithRealReaders({
+      ...DB_ONLY,
+      repos: [REPO],
+      snapshots: { acme: new Error("db down") },
+    });
+    expect(searchCalls(endpoints)).toEqual([]);
+  });
+
+  test("does not call a search endpoint for a stale owner that nothing names", async () => {
+    const { endpoints } = await runWithRealReaders({
+      ...DB_ONLY,
+      repos: [],
+      snapshots: { acme: snapshotOf([oldRepoRow("widgets")], [row()]) },
+    });
+    expect(searchCalls(endpoints)).toEqual([]);
+  });
+});
+
+/** REST一覧の経路と表の経路に同じPRの集合を与えるための入力。 */
 type WorldPr = {
   readonly number: number;
   readonly draft?: boolean;
@@ -2557,7 +2791,6 @@ type World = {
   readonly missingFromTable?: readonly number[];
   /** 表が古いリポジトリ。 */
   readonly oldRepos?: readonly string[];
-  readonly archivedRepos?: readonly string[];
   readonly explicit?: readonly { owner: string; repo: string }[];
   readonly detailFailed?: readonly string[];
 };
@@ -2623,16 +2856,22 @@ function splitRepo(full: string): { owner: string; repo: string } {
   return { owner, repo };
 }
 
-function worldSetup(world: World, source: GhSource): Harness {
+/**
+ * `workItems`が真なら、全リポジトリを作業項目のリポジトリとして渡す。
+ * `useTable`が偽でも真でも渡せる。偽で渡すと、REST一覧だけで読む。
+ */
+function worldSetup(
+  world: World,
+  useTable: boolean,
+  workItems: boolean = !useTable,
+): Harness {
   const prs: Record<string, PullRequest> = {};
   const openPrs: Record<string, OpenPullRequest[]> = {};
   const rowsByOwner = new Map<string, GhPullRequest[]>();
   const reposByOwner = new Map<string, GhOwnerRepoFreshnessRow[]>();
-  const searchRepos: Record<string, { owner: string; repo: string }[]> = {};
   for (const [full, items] of Object.entries(world.repos)) {
     const { owner, repo } = splitRepo(full);
     openPrs[full] = items.map((item) => worldOpen(owner, repo, item));
-    searchRepos[owner] = [...(searchRepos[owner] ?? []), { owner, repo }];
     const rows = rowsByOwner.get(owner) ?? [];
     for (const item of items) {
       prs[`${full}#${String(item.number)}`] = worldPr(owner, repo, item);
@@ -2644,7 +2883,6 @@ function worldSetup(world: World, source: GhSource): Harness {
     const record = world.oldRepos?.includes(full)
       ? oldRepoRow(repo)
       : repoRow(repo, {
-          archived: world.archivedRepos?.includes(full) ?? false,
           detail_failed: world.detailFailed?.includes(full) ?? false,
         });
     reposByOwner.set(owner, [...(reposByOwner.get(owner) ?? []), record]);
@@ -2654,13 +2892,12 @@ function worldSetup(world: World, source: GhSource): Harness {
     snapshots[owner] = snapshotOf(repos, rowsByOwner.get(owner) ?? []);
   }
   return setup({
-    source,
-    repos: [],
-    searchOwners: Object.keys(snapshots).map((name) => ({
+    useTable,
+    repos: workItems ? Object.keys(world.repos).map(splitRepo) : [],
+    owners: Object.keys(snapshots).map((name) => ({
       name,
       kind: "org" as const,
     })),
-    searchRepos,
     openPrs,
     prs,
     snapshots,
@@ -2672,25 +2909,25 @@ function worldSetup(world: World, source: GhSource): Harness {
 }
 
 async function runBoth(world: World) {
-  const search = worldSetup(world, "search");
-  const db = worldSetup(world, "db");
-  const searchResult = await runPrConflictWatch(search.deps);
+  const rest = worldSetup(world, false);
+  const db = worldSetup(world, true);
+  const restResult = await runPrConflictWatch(rest.deps);
   const dbResult = await runPrConflictWatch(db.deps);
-  return { search, db, searchResult, dbResult };
+  return { rest, db, restResult, dbResult };
 }
 
 const sorted = (list: readonly string[]) => [...list].sort();
 
-describe("runPrConflictWatch: the search path and the table path agree", () => {
+describe("runPrConflictWatch: the REST list path and the table path agree", () => {
   test("reads the same pull requests of a set of Factory pull requests", async () => {
-    const { search, db } = await runBoth({
+    const { rest, db } = await runBoth({
       repos: { "acme/widgets": [{ number: 12 }, { number: 13 }] },
     });
-    expect(sorted(db.reads)).toEqual(sorted(search.reads));
+    expect(sorted(db.reads)).toEqual(sorted(rest.reads));
   });
 
   test("reads the same pull requests when forks, drafts, other authors and other branches are mixed in", async () => {
-    const { search, db } = await runBoth({
+    const { rest, db } = await runBoth({
       repos: {
         "acme/widgets": [
           { number: 12 },
@@ -2701,11 +2938,11 @@ describe("runPrConflictWatch: the search path and the table path agree", () => {
         ],
       },
     });
-    expect(sorted(db.reads)).toEqual(sorted(search.reads));
+    expect(sorted(db.reads)).toEqual(sorted(rest.reads));
   });
 
-  test("reads every pull request the search path reads when a row has no author", async () => {
-    const { search, db } = await runBoth({
+  test("reads every pull request the REST list path reads when a row has no author", async () => {
+    const { rest, db } = await runBoth({
       repos: {
         "acme/widgets": [
           { number: 12, tableAuthor: null },
@@ -2713,11 +2950,11 @@ describe("runPrConflictWatch: the search path and the table path agree", () => {
         ],
       },
     });
-    expect(search.reads.every((key) => db.reads.includes(key))).toBe(true);
+    expect(rest.reads.every((key) => db.reads.includes(key))).toBe(true);
   });
 
   test("records the same pull requests when a row has no author", async () => {
-    const { search, db } = await runBoth({
+    const { rest, db } = await runBoth({
       repos: {
         "acme/widgets": [
           { number: 12, tableAuthor: null },
@@ -2725,11 +2962,11 @@ describe("runPrConflictWatch: the search path and the table path agree", () => {
         ],
       },
     });
-    expect(db.records).toEqual(search.records);
+    expect(db.records).toEqual(rest.records);
   });
 
   test("records, notifies and resolves the same for conflicted and resolved pull requests", async () => {
-    const { search, db } = await runBoth({
+    const { rest, db } = await runBoth({
       repos: {
         "acme/widgets": [
           { number: 12 },
@@ -2745,28 +2982,16 @@ describe("runPrConflictWatch: the search path and the table path agree", () => {
       events: db.events,
       settled: db.settled,
     }).toEqual({
-      records: search.records,
-      notices: search.notices,
-      resolved: search.resolved,
-      events: search.events,
-      settled: search.settled,
-    });
-  });
-
-  test("lists an archived explicit repository with the REST list in the table round too", async () => {
-    const { search, db } = await runBoth({
-      repos: { "acme/archived": [{ number: 12 }] },
-      explicit: [{ owner: "acme", repo: "archived" }],
-      archivedRepos: ["acme/archived"],
-    });
-    expect({ listed: db.listed, reads: db.reads }).toEqual({
-      listed: search.listed,
-      reads: search.reads,
+      records: rest.records,
+      notices: rest.notices,
+      resolved: rest.resolved,
+      events: rest.events,
+      settled: rest.settled,
     });
   });
 
   test("tracks and conflicts the same over several owners and repositories", async () => {
-    const { searchResult, dbResult } = await runBoth({
+    const { restResult, dbResult } = await runBoth({
       repos: {
         "acme/widgets": [{ number: 12 }],
         "acme/gadgets": [{ number: 12 }, { number: 13 }],
@@ -2777,27 +3002,27 @@ describe("runPrConflictWatch: the search path and the table path agree", () => {
       tracked: dbResult.tracked,
       conflicted: dbResult.conflicted,
     }).toEqual({
-      tracked: searchResult.tracked,
-      conflicted: searchResult.conflicted,
+      tracked: restResult.tracked,
+      conflicted: restResult.conflicted,
     });
   });
 
-  test("does not find a repository without a gh_repos row in the table round when the allowlist is empty", async () => {
-    const options: Setup = {
-      repos: [],
-      searchOwners: [ACME],
-      searchRepos: { acme: [REPO] },
-    };
-    const search = setup({ ...options, source: "search" });
+  test("does not find a repository without a gh_repos row in the table round when nothing names it", async () => {
+    const rest = setup({
+      useTable: false,
+      repos: [REPO],
+      owners: [ACME],
+    });
     const db = setup({
-      ...options,
-      source: "db",
+      useTable: true,
+      repos: [],
+      owners: [ACME],
       snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
     });
-    await runPrConflictWatch(search.deps);
+    await runPrConflictWatch(rest.deps);
     await runPrConflictWatch(db.deps);
-    expect({ search: search.reads, db: db.reads }).toEqual({
-      search: ["acme/widgets#12"],
+    expect({ rest: rest.reads, db: db.reads }).toEqual({
+      rest: ["acme/widgets#12"],
       db: [],
     });
   });
@@ -2805,40 +3030,39 @@ describe("runPrConflictWatch: the search path and the table path agree", () => {
   test("lists the same repository with the REST list when the allowlist names it", async () => {
     const options: Setup = {
       repos: [],
-      searchOwners: [ACME],
+      owners: [ACME],
       explicitRepos: [REPO],
-      searchRepos: { acme: [REPO] },
     };
-    const search = setup({ ...options, source: "search" });
+    const rest = setup({ ...options, useTable: false });
     const db = setup({
       ...options,
-      source: "db",
+      useTable: true,
       snapshots: { acme: snapshotOf([repoRow("gadgets")]) },
     });
-    await runPrConflictWatch(search.deps);
+    await runPrConflictWatch(rest.deps);
     await runPrConflictWatch(db.deps);
-    expect(db.reads).toEqual(search.reads);
+    expect(db.reads).toEqual(rest.reads);
   });
 
   test("does not read a new pull request that the table does not hold yet", async () => {
-    const { search, db } = await runBoth({
+    const { rest, db } = await runBoth({
       repos: { "acme/widgets": [{ number: 12 }, { number: 13 }] },
       missingFromTable: [13],
     });
-    expect({ search: sorted(search.reads), db: sorted(db.reads) }).toEqual({
-      search: ["acme/widgets#12", "acme/widgets#13"],
+    expect({ rest: sorted(rest.reads), db: sorted(db.reads) }).toEqual({
+      rest: ["acme/widgets#12", "acme/widgets#13"],
       db: ["acme/widgets#12"],
     });
   });
 
   test("reads from the table a repository whose last detail failed but is inside the threshold", async () => {
-    const { search, db } = await runBoth({
+    const { rest, db } = await runBoth({
       repos: { "acme/widgets": [{ number: 12 }] },
       detailFailed: ["acme/widgets"],
     });
     expect({ listed: db.listed, reads: sorted(db.reads) }).toEqual({
       listed: [],
-      reads: sorted(search.reads),
+      reads: sorted(rest.reads),
     });
   });
 });
@@ -2851,17 +3075,21 @@ describe("runPrConflictWatch: the watch does not stop when the table cannot be u
     },
   };
 
-  test("tracks the same pull requests when every owner is too old", async () => {
-    const { searchResult, dbResult } = await runBoth({
-      ...WORLD,
-      oldRepos: ["acme/widgets", "beta/tools"],
-    });
-    expect(dbResult.tracked).toBe(searchResult.tracked);
+  test("tracks the same pull requests of the work items when every owner is too old", async () => {
+    const rest = worldSetup(WORLD, false);
+    const stale = worldSetup(
+      { ...WORLD, oldRepos: ["acme/widgets", "beta/tools"] },
+      true,
+      true,
+    );
+    const restResult = await runPrConflictWatch(rest.deps);
+    const staleResult = await runPrConflictWatch(stale.deps);
+    expect(staleResult.tracked).toBe(restResult.tracked);
   });
 
-  test("tracks the same pull requests when every owner read fails", async () => {
-    const search = worldSetup(WORLD, "search");
-    const failing = worldSetup(WORLD, "db");
+  test("tracks the same pull requests of the work items when every owner read fails", async () => {
+    const rest = worldSetup(WORLD, false);
+    const failing = worldSetup(WORLD, true, true);
     const db: Harness = {
       ...failing,
       deps: {
@@ -2871,23 +3099,9 @@ describe("runPrConflictWatch: the watch does not stop when the table cannot be u
         },
       },
     };
-    const searchResult = await runPrConflictWatch(search.deps);
+    const restResult = await runPrConflictWatch(rest.deps);
     const dbResult = await runPrConflictWatch(db.deps);
-    expect(dbResult.tracked).toBe(searchResult.tracked);
-  });
-
-  test("tracks the same pull requests when the collection is off although the setting is db", async () => {
-    const search = worldSetup(WORLD, "search");
-    const off = worldSetup(
-      WORLD,
-      effectiveGhSource("db", {
-        gh_collect_enabled: false,
-        gh_collect_detail_enabled: false,
-      }),
-    );
-    const searchResult = await runPrConflictWatch(search.deps);
-    const offResult = await runPrConflictWatch(off.deps);
-    expect(offResult.tracked).toBe(searchResult.tracked);
+    expect(dbResult.tracked).toBe(restResult.tracked);
   });
 
   test("settles the row of a pull request that the table does not hold when its conflict is resolved", async () => {

@@ -327,13 +327,12 @@ function setup(options: Setup = {}): Harness {
     isRepoAllowed: () => true,
     isRepoConfigured: () => true,
     getViewer: async () => VIEWER,
-    source: "search",
+    useTable: false,
     staleAfterMs: 15 * 60_000,
     readOwnerPrs: async () => {
       throw new Error("the table is not read in this test");
     },
-    searchOwners: [],
-    searchOpenRepos: async () => [],
+    owners: [],
     explicitRepos: [],
     listOpenRepos: async () => [{ owner: "acme", repo: "widgets" }],
     listConflictRepos: async () => [],

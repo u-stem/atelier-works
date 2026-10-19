@@ -6,7 +6,7 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   buildConflictFixDeps,
   buildConflictRecoveryDeps,
-  resolveConflictSource,
+  resolveConflictTableUse,
 } from "../../f/factory/watch_pr_conflicts.ts";
 
 // watch_pr_conflictsの配線を静的に確かめる。判断と流れは`tests/lib/pr_conflict_watch.test.ts`が確かめる。
@@ -96,16 +96,6 @@ describe("watch_pr_conflicts script", () => {
   test("lists the open pull requests of the repositories that have pr_open items", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
     expect(source).toContain("listPrOpenRepos");
-  });
-
-  test("finds repositories by searching the open pull requests of the account", async () => {
-    const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toContain("searchOpenAuthoredPrs");
-  });
-
-  test("searches only the owners whose account id was verified", async () => {
-    const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toContain("searchOwners: verifiedOwners");
   });
 
   test("starts a fix through the shared pr_fix launch", async () => {
@@ -354,12 +344,7 @@ describe("buildConflictRecoveryDeps: the reads of the recovery", () => {
   });
 });
 
-describe("watch_pr_conflicts: the source of the round", () => {
-  const enabled = {
-    gh_collect_enabled: true,
-    gh_collect_detail_enabled: true,
-  };
-
+describe("watch_pr_conflicts: the use of the table in the round", () => {
   function capture() {
     const warnings: { message: string; fields: unknown }[] = [];
     const log: Logger = {
@@ -372,54 +357,46 @@ describe("watch_pr_conflicts: the source of the round", () => {
     return { log, warnings };
   }
 
-  test("passes the table source to the watch when the setting is db and the collection is on", () => {
+  test("reads the table when the collection is fully enabled", () => {
     const { log } = capture();
     expect(
-      resolveConflictSource(
-        { ...enabled, gh_source_pr_conflict_watch: "db" },
+      resolveConflictTableUse(
+        { gh_collect_enabled: true, gh_collect_detail_enabled: true },
         log,
       ),
-    ).toBe("db");
+    ).toBe(true);
   });
 
-  test("searches when the setting is search", () => {
+  test("does not read the table when the detail collection is off", () => {
     const { log } = capture();
     expect(
-      resolveConflictSource(
-        { ...enabled, gh_source_pr_conflict_watch: "search" },
+      resolveConflictTableUse(
+        { gh_collect_enabled: true, gh_collect_detail_enabled: false },
         log,
       ),
-    ).toBe("search");
+    ).toBe(false);
   });
 
-  test("searches when the setting is db but the detail collection is off", () => {
+  test("does not read the table when the collection is off", () => {
     const { log } = capture();
     expect(
-      resolveConflictSource(
-        {
-          gh_collect_enabled: true,
-          gh_collect_detail_enabled: false,
-          gh_source_pr_conflict_watch: "db",
-        },
+      resolveConflictTableUse(
+        { gh_collect_enabled: false, gh_collect_detail_enabled: true },
         log,
       ),
-    ).toBe("search");
+    ).toBe(false);
   });
 
-  test("warns with the names of the false settings when the source db is ignored", () => {
+  test("warns with the names of the false settings when the table is not read", () => {
     const { log, warnings } = capture();
-    resolveConflictSource(
-      {
-        gh_collect_enabled: true,
-        gh_collect_detail_enabled: false,
-        gh_source_pr_conflict_watch: "db",
-      },
+    resolveConflictTableUse(
+      { gh_collect_enabled: true, gh_collect_detail_enabled: false },
       log,
     );
     expect(warnings).toEqual([
       {
         message:
-          "gh_source_pr_conflict_watch is db but the collection is not fully enabled, so the round searches",
+          "the collection is not fully enabled, so the round does not discover repositories from the table",
         fields: {
           gh_collect_enabled: true,
           gh_collect_detail_enabled: false,
@@ -428,22 +405,23 @@ describe("watch_pr_conflicts: the source of the round", () => {
     ]);
   });
 
-  test("does not warn when the setting is search", () => {
+  test("does not warn when the table is read", () => {
     const { log, warnings } = capture();
-    resolveConflictSource(
-      {
-        gh_collect_enabled: false,
-        gh_collect_detail_enabled: false,
-        gh_source_pr_conflict_watch: "search",
-      },
+    resolveConflictTableUse(
+      { gh_collect_enabled: true, gh_collect_detail_enabled: true },
       log,
     );
     expect(warnings).toEqual([]);
   });
 
-  test("passes the resolved source to the watch", async () => {
+  test("passes the decision to the watch", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toContain("source: resolveConflictSource(config, log)");
+    expect(source).toContain("useTable: resolveConflictTableUse(config, log),");
+  });
+
+  test("passes the verified owners to the watch", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain("owners: verifiedOwners,");
   });
 
   test("passes a reader of the owner rows to the watch", async () => {
@@ -458,5 +436,51 @@ describe("watch_pr_conflicts: the source of the round", () => {
     expect(source).toContain(
       "staleAfterMs: ghDetailStaleAfterMs(config.owners.length)",
     );
+  });
+});
+
+describe("watch_pr_conflicts does not use the search API", () => {
+  const githubImport = /import\s*\{([^}]*)\}\s*from\s*"\.\/lib\/github\.ts"/;
+
+  test("imports no name that starts with search from github.ts", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    const names = (githubImport.exec(source)?.[1] ?? "")
+      .split(",")
+      .map((name) => name.replace(/^\s*type\s+/, "").trim());
+    expect(names.filter((name) => /^search/i.test(name))).toEqual([]);
+  });
+
+  test("does not call the search endpoint", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source.includes("search/issues")).toBe(false);
+  });
+
+  test("the watch has no dependency on a search of repositories", async () => {
+    const source = await read("f/factory/lib/pr_conflict_watch.ts");
+    expect(/searchOwners|searchOpenRepos|searchBlocked/.test(source)).toBe(
+      false,
+    );
+  });
+
+  test("the watch no longer reports a rate limit of the search", async () => {
+    const source = await read("f/factory/lib/pr_conflict_watch.ts");
+    expect(source.includes("search_rate_limited")).toBe(false);
+  });
+});
+
+describe("watch_pr_conflicts: the result", () => {
+  test("no longer reports a source of the round", async () => {
+    const source = await read("f/factory/lib/pr_conflict_watch.ts");
+    expect(/\bsource: /.test(source)).toBe(false);
+  });
+
+  test("no longer reports fallback searches", async () => {
+    const source = await read("f/factory/lib/pr_conflict_watch.ts");
+    expect(source.includes("fallback_searches")).toBe(false);
+  });
+
+  test("reports whether the collection was off", async () => {
+    const source = await read("f/factory/lib/pr_conflict_watch.ts");
+    expect(source).toContain("collect_disabled");
   });
 });
