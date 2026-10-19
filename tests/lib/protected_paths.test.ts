@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { isDeniedPath } from "../../f/factory/lib/ci_fix_paths.ts";
 import { EMPTY_LOCK_REFERENCE } from "../../f/factory/lib/metadata_patch_verify.ts";
 import { readSourceShape } from "../../f/factory/lib/metadata_signature.ts";
@@ -1220,5 +1221,76 @@ describe("wmill.yaml", () => {
 
   test("FORBIDDEN_EXACT_PATHS does not list wmill-lock.yaml, which changes with every dependency bump", () => {
     expect(FORBIDDEN_EXACT_PATHS).not.toContain("wmill-lock.yaml");
+  });
+});
+
+const MATCHERS: readonly (readonly [string, (path: string) => boolean])[] = [
+  ["matchesForbiddenPath", (path) => matchesForbiddenPath(path)],
+  ["matchesImplementProtectedPath", matchesImplementProtectedPath],
+];
+
+// wmillの設定は、サブディレクトリに置かれたものも、別名(`wmill.yml`)も止める。
+// `wmill-lock.yaml`は依存の変更のたびに書き換わるので、止めない。
+describe.each(MATCHERS)("%s and the wmill config", (_name, matches) => {
+  test("blocks wmill.yaml in a subdirectory", () => {
+    expect(matches("sub/dir/wmill.yaml")).toBe(true);
+  });
+
+  test("blocks wmill.yml", () => {
+    expect(matches("wmill.yml")).toBe(true);
+  });
+
+  test("blocks wmill.yml in a subdirectory", () => {
+    expect(matches("sub/wmill.yml")).toBe(true);
+  });
+
+  test("does not block wmill-lock.yaml", () => {
+    expect(matches("wmill-lock.yaml")).toBe(false);
+  });
+
+  test("does not block f/x/wmill-lock.yaml", () => {
+    expect(matches("f/x/wmill-lock.yaml")).toBe(false);
+  });
+
+  test("does not block wmill.yaml.bak", () => {
+    expect(matches("wmill.yaml.bak")).toBe(false);
+  });
+});
+
+// `bunfig.toml`の`preload`が全テストの前に読み込むファイルで、書き換えられるとテストの前にコードが走る。
+describe.each(MATCHERS)("%s and tests/preload.ts", (_name, matches) => {
+  test("blocks tests/preload.ts", () => {
+    expect(matches("tests/preload.ts")).toBe(true);
+  });
+
+  test("does not block tests/lib/other.test.ts", () => {
+    expect(matches("tests/lib/other.test.ts")).toBe(false);
+  });
+});
+
+describe("tests/preload.ts as an exact path", () => {
+  test("FORBIDDEN_EXACT_PATHS lists it", () => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain("tests/preload.ts");
+  });
+});
+
+// pr_fixのClaudeに渡す表は、種類ごとの代表例である。保護パスの全体はprotected_paths.tsが持つ。
+describe("the factory-fix table of protected files", () => {
+  const skill = readFileSync(
+    new URL("../../.claude/skills/factory-fix/SKILL.md", import.meta.url),
+    "utf8",
+  );
+
+  test("the factory-fix table lists wmill.yaml in the file name row", () => {
+    const row = skill
+      .split("\n")
+      .find((line) => line.startsWith("| ファイル名(どのディレクトリでも) |"));
+    expect(row).toContain("`wmill.yaml`");
+  });
+
+  test("the table says it is a set of examples", () => {
+    expect(skill).toMatch(
+      /表は種類ごとの代表例で、正確な一覧は.*`f\/factory\/lib\/protected_paths\.ts`が持つ/,
+    );
   });
 });

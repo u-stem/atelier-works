@@ -83,9 +83,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * `wmill sync push`は`lock: '!inline <パス>'`のパスを制限なしに読んでlockとして保存する。
  * このテストが、すべての定義の参照先を自分の`.script.lock`に固定している。
  * 書き換えられると、保護の外の定義から、workerやホストの任意のファイルをlockに載せられる。
+ * `bunfig.toml`の`preload`が読む`tests/preload.ts`も守る。
+ * libの`.script.yaml`は、引数を持たず変更がまれで、守る費用がほぼ無いので、外さない。
  * `wmill.yaml`も守る。`codebases`の`customBundler`は、`wmill sync push`が反映時にシェルで実行する。
  * `assets`の`from`は、`wmill sync push`が任意のパスのファイルを読んでワークスペースに載せる。
  * 書き換えられると、反映するworkerやホストで任意のコマンドが走り、任意のファイルがワークスペースに載る。
+ * 設定として読まれる別名(`wmill.yml`)と、サブディレクトリの`wmill.yaml`も、ファイル名で守る。
+ * wmillが読むかは確かめていないので、読むものとして安全側に倒す。
  * `wmill-lock.yaml`は、依存の変更のたびに書き換わるので守らない。
  * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
  * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
@@ -161,6 +165,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "infra/Caddyfile",
   "tests/lib/drawio_frame_isolation.test.ts",
   "tests/lib/script_yaml_lock_contract.test.ts",
+  "tests/preload.ts",
   "f/factory/lib/dependabot_support.ts",
   "f/factory/lib/dependabot_support.script.yaml",
   "f/factory/lib/dependabot_prompt.ts",
@@ -263,9 +268,13 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
  * pre-commitと`mise run check`が読むので、書き換えられるとコードを実行されるため。
  * ホストの実行役が動かすmise、bun、nodeの設定も含める(`.tool-versions`、`.node-version`、`.bun-version`、
  * `.env`系)。ツールの版と環境変数を変えると、実行役が動かす道具の中身が変わる。
+ * wmillの設定(`wmill.yaml`と別名の`wmill.yml`)もどのディレクトリでも含める。
+ * Factoryが扱う他のリポジトリのサブディレクトリの`wmill.yaml`も止まるが、安全側として受け入れる。
+ * `wmill-lock.yaml`は一致しない。
  * implementの一覧は、この一覧を引き継ぐ。
  */
 export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
+  /^wmill\.ya?ml$/,
   /^mise\.toml$/,
   /^mise\..*\.toml$/,
   /^\.mise\.toml$/,

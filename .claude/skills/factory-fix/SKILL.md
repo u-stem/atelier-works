@@ -74,12 +74,13 @@ headlessで起動したClaude Code(`claude -p`)がレビュー指摘と未解決
 ## 変更してはいけないファイル
 
 次のいずれかを変更すると、修正全体が`blocked`として扱われ、コミットもされない。
+表は種類ごとの代表例で、正確な一覧はFactoryの`f/factory/lib/protected_paths.ts`が持つ。
 
 | 種類 | 対象 |
 | --- | --- |
 | ディレクトリ | `.claude/`、`.agents/`、`.github/workflows/`、`.github/actions/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/`、`infra/console_fetcher/` |
 | 個別のファイル | `console/index.html`、`console/drawio-viewer.json`、`console/scripts/drawio-viewer.ts`、`console/scripts/fetch-drawio-viewer.ts`、`console/scripts/manifest.ts`、`console/scripts/write-manifest.ts`、`scripts/check-console-lockfile.ts`、`console/scripts/asset-name.ts`、`console/vite.config.ts`、`infra/Caddyfile` |
-| ファイル名(どのディレクトリでも) | `mise.toml`、`mise.*.toml`、`.mise.toml`、`lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules` |
+| ファイル名(どのディレクトリでも) | `mise.toml`、`mise.*.toml`、`.mise.toml`、`lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`wmill.yaml`、`wmill.yml` |
 | 文書の検査の設定(どのディレクトリでも) | `.markdownlint.*`、`.markdownlint-cli2.*`(`json`、`jsonc`、`yaml`、`yml`、`js`、`cjs`、`mjs`)、`.textlintrc`、`.textlintrc.*` |
 | ファイルの一部 | `package.json`の`scripts`フィールド |
 | 新規ファイル | 新しく追加する`*.sh`ファイル |

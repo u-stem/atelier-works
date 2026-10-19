@@ -1184,7 +1184,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `.tool-versions`、`.env`、`.env.*`、`.node-version`、`.bun-version`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
-- `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
+- `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`wmill.yaml`、`wmill.yml`
 - markdownlintとmarkdownlint-cli2の設定(`.markdownlint.*`と`.markdownlint-cli2.*`。拡張子は`jsonc?`、`ya?ml`、`[cm]?js`)
 - textlintの設定(`.textlintrc`と`.textlintrc.*`)
 - `package.json`の`scripts`の変更
@@ -1206,7 +1206,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
 一覧には、次の種類が入る。
 
-- 反映の設定: `wmill.yaml`。`codebases`の`customBundler`は反映時にシェルで実行され、`assets`の`from`は任意のパスのファイルを読むため
+- 反映の設定: `wmill.yaml`。`codebases`の`customBundler`は反映時にシェルで実行され、`assets`の`from`は任意のパスのファイルを読むため。別名の`wmill.yml`と、サブディレクトリの`wmill.yaml`は、ファイル名で止める
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump*`と、それが使う`f/factory/lib/`の3ファイル
@@ -1214,6 +1214,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - scriptの定義の`lock`の参照先を固定する契約テスト: `tests/lib/script_yaml_lock_contract.test.ts`
+- テストの実行環境: `tests/preload.ts`。`bunfig.toml`の`preload`が全テストの前に読み込み、書き換えられるとテストの前にコードが走るため
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
 - CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`。lockは`metadata_patch_manifest.script.lock`だけ(空のlockの参照)
 - hashの再計算の側
