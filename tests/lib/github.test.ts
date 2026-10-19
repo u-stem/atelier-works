@@ -4500,7 +4500,7 @@ describe("listOpenPullRequests", () => {
       "acme",
       "widgets",
     );
-    expect(prs).toEqual([
+    expect(prs).toMatchObject([
       {
         number: 12,
         draft: false,
@@ -4513,6 +4513,99 @@ describe("listOpenPullRequests", () => {
         createdAtMs: Date.parse("2026-10-01T00:00:00Z"),
       },
     ]);
+  });
+
+  async function listed(entry: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([ghApiOk([entry])]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    return prs[0];
+  }
+
+  test("returns the label names of the pull request", async () => {
+    const pr = await listed(
+      openPr(12, { labels: [{ name: "factory:review" }, { name: "bug" }] }),
+    );
+    expect(pr?.labels).toEqual(["factory:review", "bug"]);
+  });
+
+  test("returns null labels when the entry has none, and keeps the entry", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.labels).toBeNull();
+  });
+
+  test("returns null labels when a label has no name", async () => {
+    const pr = await listed(openPr(12, { labels: [{ name: "a" }, {}] }));
+    expect(pr?.labels).toBeNull();
+  });
+
+  test("returns the ids of the assignees", async () => {
+    const pr = await listed(
+      openPr(12, {
+        assignees: [
+          { id: 7, login: "a" },
+          { id: 8, login: "b" },
+        ],
+      }),
+    );
+    expect(pr?.assigneeIds).toEqual([7, 8]);
+  });
+
+  test("returns an empty list of assignees for a pull request nobody is assigned to", async () => {
+    const pr = await listed(openPr(12, { assignees: [] }));
+    expect(pr?.assigneeIds).toEqual([]);
+  });
+
+  test("returns null assignee ids when an id is not a positive integer", async () => {
+    const pr = await listed(
+      openPr(12, { assignees: [{ id: 7 }, { id: "x" }] }),
+    );
+    expect(pr?.assigneeIds).toBeNull();
+  });
+
+  test("returns null assignee ids when the entry has none", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.assigneeIds).toBeNull();
+  });
+
+  test("returns the ids of the requested reviewers", async () => {
+    const pr = await listed(
+      openPr(12, { requested_reviewers: [{ id: 5001, login: "a" }] }),
+    );
+    expect(pr?.requestedReviewerIds).toEqual([5001]);
+  });
+
+  test("returns null requested reviewers when an id is not a positive integer", async () => {
+    const pr = await listed(openPr(12, { requested_reviewers: [{ id: 0 }] }));
+    expect(pr?.requestedReviewerIds).toBeNull();
+  });
+
+  test("returns null requested reviewers when the entry has none", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.requestedReviewerIds).toBeNull();
+  });
+
+  test("reports a team review request when requested_teams is not empty", async () => {
+    const pr = await listed(openPr(12, { requested_teams: [{ id: 1 }] }));
+    expect(pr?.teamReviewRequested).toBe(true);
+  });
+
+  test("reports no team review request when requested_teams is empty", async () => {
+    const pr = await listed(openPr(12, { requested_teams: [] }));
+    expect(pr?.teamReviewRequested).toBe(false);
+  });
+
+  test("reports an unknown team review request when requested_teams is missing", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.teamReviewRequested).toBeNull();
+  });
+
+  test("reports an unknown team review request when requested_teams is not a list", async () => {
+    const pr = await listed(openPr(12, { requested_teams: "x" }));
+    expect(pr?.teamReviewRequested).toBeNull();
   });
 
   test("returns a null base branch when the entry has none, and keeps the entry", async () => {

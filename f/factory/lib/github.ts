@@ -4549,6 +4549,10 @@ export type OpenPullRequest = {
   readonly baseRef?: string | null;
   /** PRを作った時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
   readonly createdAtMs?: number | null;
+  readonly labels?: readonly string[] | null;
+  readonly assigneeIds?: readonly number[] | null;
+  readonly requestedReviewerIds?: readonly number[] | null;
+  readonly teamReviewRequested?: boolean | null;
 };
 
 function isOpenPullRequestPayload(value: unknown): value is {

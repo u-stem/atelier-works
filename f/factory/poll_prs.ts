@@ -1173,6 +1173,16 @@ export function resolvePrSource(
   return source;
 }
 
+export function resolvePrTableUse(
+  _config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): boolean {
+  return false;
+}
+
 export async function main(): Promise<{
   reviewsStarted: number;
   fixesStarted: number;

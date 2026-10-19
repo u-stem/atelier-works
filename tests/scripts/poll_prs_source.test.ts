@@ -1,10 +1,10 @@
-// `poll_prs.ts`が、PRを見つける元を設定と収集の設定から決め、発見の部品に配線していることのテスト。
+// `poll_prs.ts`が、収集の設定から表を読むかを決め、発見の部品に配線していることのテスト。
 // 発見の判断は`tests/lib/poll_source.test.ts`が確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { Logger } from "../../f/factory/lib/log.ts";
-import { resolvePrSource } from "../../f/factory/poll_prs.ts";
+import { resolvePrTableUse } from "../../f/factory/poll_prs.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 
@@ -24,64 +24,56 @@ function capture() {
   return { log, warnings };
 }
 
-const ENABLED = { gh_collect_enabled: true, gh_collect_detail_enabled: true };
-
-describe("poll_prs: the source of the round", () => {
-  test("is db when the setting is db and the collection is on", () => {
-    const { log } = capture();
-    expect(resolvePrSource({ ...ENABLED, gh_source_poll_prs: "db" }, log)).toBe(
-      "db",
-    );
-  });
-
-  test("is search when the setting is search", () => {
+describe("poll_prs: whether the round reads the table", () => {
+  test("reads the table when the collection and its detail are on", () => {
     const { log } = capture();
     expect(
-      resolvePrSource({ ...ENABLED, gh_source_poll_prs: "search" }, log),
-    ).toBe("search");
-  });
-
-  test("is search when the setting is db but the detail collection is off", () => {
-    const { log } = capture();
-    expect(
-      resolvePrSource(
-        {
-          gh_collect_enabled: true,
-          gh_collect_detail_enabled: false,
-          gh_source_poll_prs: "db",
-        },
+      resolvePrTableUse(
+        { gh_collect_enabled: true, gh_collect_detail_enabled: true },
         log,
       ),
-    ).toBe("search");
+    ).toBe(true);
   });
 
-  test("warns with the names of the false settings when the source db is ignored", () => {
+  test("does not read the table when the collection is off", () => {
+    const { log } = capture();
+    expect(
+      resolvePrTableUse(
+        { gh_collect_enabled: false, gh_collect_detail_enabled: true },
+        log,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not read the table when the detail collection is off", () => {
+    const { log } = capture();
+    expect(
+      resolvePrTableUse(
+        { gh_collect_enabled: true, gh_collect_detail_enabled: false },
+        log,
+      ),
+    ).toBe(false);
+  });
+
+  test("warns with the names of the false settings when the table is not read", () => {
     const { log, warnings } = capture();
-    resolvePrSource(
-      {
-        gh_collect_enabled: false,
-        gh_collect_detail_enabled: true,
-        gh_source_poll_prs: "db",
-      },
+    resolvePrTableUse(
+      { gh_collect_enabled: false, gh_collect_detail_enabled: true },
       log,
     );
     expect(warnings).toEqual([
       {
         message:
-          "gh_source_poll_prs is db but the collection is not fully enabled, so the round searches",
+          "the collection is not fully enabled, so only explicit repositories are read",
         fields: { gh_collect_enabled: false, gh_collect_detail_enabled: true },
       },
     ]);
   });
 
-  test("does not warn when the setting is search", () => {
+  test("does not warn when the table is read", () => {
     const { log, warnings } = capture();
-    resolvePrSource(
-      {
-        gh_collect_enabled: false,
-        gh_collect_detail_enabled: false,
-        gh_source_poll_prs: "search",
-      },
+    resolvePrTableUse(
+      { gh_collect_enabled: true, gh_collect_detail_enabled: true },
       log,
     );
     expect(warnings).toEqual([]);
@@ -89,15 +81,24 @@ describe("poll_prs: the source of the round", () => {
 });
 
 describe("poll_prs: the wiring of the discovery", () => {
-  test("decides the source from the settings", async () => {
+  test("decides whether to read the table from the settings", async () => {
     const source = await read("f/factory/poll_prs.ts");
-    expect(source).toContain("const source = resolvePrSource(config, log);");
+    expect(source).toContain(
+      "const useTable = resolvePrTableUse(config, log);",
+    );
   });
 
   test("passes a reader of the owner rows to the discovery", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source).toContain(
       "readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner)",
+    );
+  });
+
+  test("passes a lister of the open pull requests to the discovery", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain(
+      "listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo)",
     );
   });
 
@@ -115,25 +116,6 @@ describe("poll_prs: the wiring of the discovery", () => {
     );
   });
 
-  test("reports the source of the round", async () => {
-    const source = await read("f/factory/poll_prs.ts");
-    expect(source).toContain("pr_source: source,");
-  });
-
-  test("reports the table statistics of the round", async () => {
-    const source = await read("f/factory/poll_prs.ts");
-    expect(source).toContain("table_dropped: discovered.stats.table_dropped,");
-  });
-
-  test("calls the search only as a dependency of the discovery", async () => {
-    const source = await read("f/factory/poll_prs.ts");
-    const calls = [...source.matchAll(/searchPrs\(client/g)].map(
-      (match) => match.index,
-    );
-    const discovery = source.indexOf("await discoverPrs(");
-    expect(calls.length === 1 && (calls[0] ?? -1) > discovery).toBe(true);
-  });
-
   test("starts the candidates from the discovered items", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source).toContain(
@@ -144,5 +126,81 @@ describe("poll_prs: the wiring of the discovery", () => {
   test("still adds the tracked pull requests that the discovery did not return", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source).toContain("await listTrackedPrs(config.tracked_pr_days)");
+  });
+});
+
+describe("poll_prs: the result", () => {
+  test("reports whether the collection was off", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("collect_disabled: !useTable,");
+  });
+
+  test("reports the skipped repositories of the round", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("skipped_stale: discovered.stats.skipped_stale,");
+  });
+
+  test("reports the reasons of the skipped repositories", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain(
+      "skipped_stale_reasons: discovered.stats.skipped_stale_reasons,",
+    );
+  });
+
+  test("reports the repositories read by REST", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("rest_lists: discovered.stats.rest_lists,");
+  });
+
+  test("reports the reasons of the repositories read by REST", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("rest_reasons: discovered.stats.rest_reasons,");
+  });
+
+  test("reports the pull requests that only a team could have requested", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain(
+      "team_unresolved: discovered.stats.team_unresolved,",
+    );
+  });
+
+  test("no longer reports a source of the round", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source.includes("pr_source")).toBe(false);
+  });
+
+  test("no longer reports fallback searches", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source.includes("fallback_searches")).toBe(false);
+  });
+
+  test("no longer reports the table statistics under the old names", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source.includes("table_candidates")).toBe(false);
+  });
+});
+
+describe("poll_prs does not use the search API", () => {
+  const githubImport = /import\s*\{([^}]*)\}\s*from\s*"\.\/lib\/github\.ts"/;
+
+  test("imports no name that starts with search from github.ts", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    const names = (githubImport.exec(source)?.[1] ?? "")
+      .split(",")
+      .map((name) => name.replace(/^\s*type\s+/, "").trim());
+    expect(names.filter((name) => /^search/i.test(name))).toEqual([]);
+  });
+
+  test("does not call the search endpoint", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source.includes("search/issues")).toBe(false);
+  });
+
+  test("the discovery has no dependency on a search", async () => {
+    const source = await read("f/factory/lib/poll_source.ts");
+    const discovery = source.slice(
+      source.indexOf("export async function discoverPrs"),
+    );
+    expect(discovery.includes("searchPrs")).toBe(false);
   });
 });

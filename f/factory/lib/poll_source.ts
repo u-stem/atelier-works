@@ -15,6 +15,7 @@ import {
 import type {
   Issue,
   IssueSearchItem,
+  OpenPullRequest,
   PrSearchItem,
   PullRequest,
   Viewer,
@@ -447,23 +448,15 @@ export function confirmTablePr(
   };
 }
 
-/**
- * ラベル、レビューの依頼、assigneeのPRを見つける。照合を通った所有者ごとに行う。
- * `search`なら、所有者ごとに検索する。
- * `db`なら、所有者の全体を表で探し、使えない所有者だけ検索に戻す。使えないのは次のときである。
- * - 表を読めなかった。失敗として記録する。
- * - 記録が古い、または設定で明示したリポジトリを表で使えない。失敗にはしない。
- * - チームへのレビューの依頼か、依頼先の読めない依頼が付いた行がある。
- *   表ではPATのアカウントに宛てた依頼かを決められず、検索なら見つけるものを取りこぼすためである。
- *   この所有者の表の候補は、確かめずに捨てる。
- * 表の候補は`getPr`と`getIssue`で確かめ直し、今も対象のものだけを項目にする。
- * 確かめ直しはPRを1件ずつ順に処理し、1件の中の2本だけを並列にする。GitHubへの同時の要求を増やさないためである。
- * 返す項目の並びは、検索の結果の後に、表の候補を(リポジトリ、番号)の順に置く。PRの鍵(小文字)で重ねを除く。
- * 失敗はこの関数の中で記録し、件数を`failed`で返す。
- */
+export type PrDiscoveryStats = IssueDiscoveryStats & {
+  readonly team_unresolved: number;
+};
+
+export const confirmPrCandidate = confirmTablePr;
+
 export async function discoverPrs(
-  input: {
-    readonly source: GhSource;
+  _input: {
+    readonly useTable: boolean;
     readonly owners: readonly FactoryOwner[];
     readonly scope: Pick<
       FactoryConfig,
@@ -477,9 +470,12 @@ export async function discoverPrs(
     readonly staleAfterMs: number;
     readonly log: Logger;
   },
-  deps: {
-    readonly searchPrs: (owner: FactoryOwner) => Promise<PrSearchItem[]>;
+  _deps: {
     readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
+    readonly listOpenPrs: (
+      owner: string,
+      repo: string,
+    ) => Promise<OpenPullRequest[]>;
     readonly getPr: (
       owner: string,
       repo: string,
@@ -495,146 +491,19 @@ export async function discoverPrs(
 ): Promise<{
   items: PrSearchItem[];
   failed: number;
-  stats: PollSourceStats;
+  stats: PrDiscoveryStats;
 }> {
-  let failed = 0;
-  let fallbackSearches = 0;
-  let tableCandidates = 0;
-  let tableDropped = 0;
-  const fallbackReasons: Record<string, number> = {};
-  const searched: PrSearchItem[] = [];
-  const tableRows: GhPullRequest[] = [];
-
-  const fail = async (step: string, err: unknown) => {
-    failed += 1;
-    await deps.recordFailure(step, err);
-  };
-  const search = async (owner: FactoryOwner) => {
-    try {
-      searched.push(...(await deps.searchPrs(owner)));
-    } catch (err) {
-      await fail(`search_prs:${owner.name}`, err);
-    }
-  };
-  const isAllowedNow = (owner: string, repo: string) =>
-    isRepoAllowed(input.scope, owner, repo);
-
-  for (const owner of input.owners) {
-    if (input.source !== "db") {
-      await search(owner);
-      continue;
-    }
-    let reason: string | null = null;
-    let snapshot: GhOwnerOpenPrSnapshot | null = null;
-    try {
-      snapshot = await deps.readOwnerPrs(owner.name);
-    } catch (err) {
-      await fail(`read_gh_owner_prs:${owner.name}`, err);
-      reason = "read_failed";
-    }
-    if (snapshot !== null) {
-      const judged = judgeGhOwnerRepos(
-        owner.name,
-        snapshot,
-        input.staleAfterMs,
-      );
-      const coverage = judgeGhOwnerCoverage(
-        owner.name,
-        judged,
-        isAllowedNow,
-        requiredRepos(input.scope, owner.name),
-      );
-      if (coverage.kind === "stale") {
-        reason = coverage.reason;
-      } else {
-        const classified = usableTableRows(
-          owner.name,
-          judged,
-          isAllowedNow,
-        ).map((row) => ({
-          row,
-          kind: classifyPollPrRow(row, input.viewer.id),
-        }));
-        if (classified.some((entry) => entry.kind === "team")) {
-          reason = "team_review";
-        } else {
-          for (const entry of classified) {
-            if (entry.kind === "target" || entry.kind === "maybe") {
-              tableRows.push(entry.row);
-            }
-          }
-        }
-      }
-    }
-    if (reason !== null) {
-      fallbackSearches += 1;
-      fallbackReasons[reason] = (fallbackReasons[reason] ?? 0) + 1;
-      await search(owner);
-    }
-  }
-
-  const confirmed: PrSearchItem[] = [];
-  for (const row of tableRows) {
-    const target = `${row.owner}/${row.repo}#${String(row.number)}`;
-    tableCandidates += 1;
-    const [pr, asIssue] = await Promise.allSettled([
-      deps.getPr(row.owner, row.repo, row.number),
-      deps.getIssue(row.owner, row.repo, row.number),
-    ]);
-    if (pr.status === "rejected") {
-      await fail(`confirm_table_pr:${target}`, pr.reason);
-      continue;
-    }
-    if (asIssue.status === "rejected") {
-      await fail(`confirm_table_pr:${target}`, asIssue.reason);
-      continue;
-    }
-    const check = confirmTablePr(
-      row,
-      pr.value,
-      asIssue.value,
-      input.viewer,
-      input.labels,
-    );
-    if (check.kind === "ok") {
-      confirmed.push(check.item);
-    } else if (check.kind === "drop") {
-      tableDropped += 1;
-      input.log.info("table pull request dropped by the REST check", {
-        target,
-        reason: check.reason,
-      });
-    } else {
-      await fail(
-        `confirm_table_pr:${target}`,
-        new Error(
-          check.kind === "mismatch"
-            ? "table pull request does not match the pull request read from GitHub"
-            : "requested reviewers of the pull request could not be read",
-        ),
-      );
-    }
-  }
-
-  const seen = new Set<string>();
-  const items: PrSearchItem[] = [];
-  for (const item of [...searched, ...confirmed]) {
-    const key =
-      `${item.owner}/${item.repo}#${String(item.number)}`.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    items.push(item);
-  }
-
   return {
-    items,
-    failed,
+    items: [],
+    failed: 0,
     stats: {
-      source: input.source,
-      fallback_searches: fallbackSearches,
-      fallback_reasons: fallbackReasons,
-      table_candidates: tableCandidates,
-      table_dropped: tableDropped,
+      skipped_stale: 0,
+      skipped_stale_reasons: {},
+      rest_lists: 0,
+      rest_reasons: {},
+      candidates: 0,
+      dropped: 0,
+      team_unresolved: 0,
     },
   };
 }

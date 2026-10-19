@@ -70,7 +70,7 @@ locks:
   f/factory/lib/gh_collect_read: 3f86b024b7a3ea92b38eec68ad704996995b3fe45ab9fcb313f134939ffc945a
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
-  f/factory/lib/github: 438c37b4e41fe1931e9da5309c50ec326ba1f26a158348e6eafdbabaeb6e747b
+  f/factory/lib/github: 2e780cc3c8d748e9fc160e8d146122903244a7f962aff69e0a5bf6fdd1e46329
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
@@ -98,7 +98,7 @@ locks:
   f/factory/lib/owner_id_notice: c5735593c26e7aa85064e0cf59ddb60a9ee0baa7ab6978038641c25d0339085d
   f/factory/lib/periodic_worker: 08d45ca6528652f68b176ed820efeac3f9499cd60c0292b2186b36112215f881
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
-  f/factory/lib/poll_source: 9e1ba67486dc01a476d116f69fe0fecd03231ac25774fc4adee1d21ad887cf4d
+  f/factory/lib/poll_source: 19bb709c638e1c951bf6f32d609c900b2a1452e9ac471ba8d4084290b0bee4af
   f/factory/lib/poll_support: 76afdaffb8bb1ee30f54d08cbb7eed25d1bd5fa915399f2f1f23f5b428f3e634
   f/factory/lib/pr_ci_fix_claim: 3f34d3752aa2d1dcf8fa0b54f43c095bf6577e709895aeca0d57555351326420
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
@@ -136,7 +136,7 @@ locks:
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_dependabot: 35343e43d784aac7d14ff1dd4305aee2b70951d051dda2484a0b0b7955c5498b
   f/factory/poll_issues: ed9d42710d33ac425fc1959450a39ef2c06895e90fef972e5f567df9dbbfe945
-  f/factory/poll_prs: d59ec224668e83e7d6d45371c67081d625007cd071517f3c80919e57aee6cfbc
+  f/factory/poll_prs: bb74c81d04ff8bd359af338ab5c9d503dc63de84493be73ab8081a1d3731569d
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
