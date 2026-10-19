@@ -1823,21 +1823,17 @@ PRのCIが新しいpushで古い実行を取り消す設定のリポジトリを
 
 PATのアカウントが運用者本人のアカウントなら、運用者のPRの失敗がすべて通知される。
 通知の設定によっては、GitHubもpushした本人に失敗を知らせる。Factoryの通知は、見落としを防ぐためのものである。
-1回の実行で新しく記録するのは20件までで、作者ごとに更新が新しい100件から探す。
+1回の実行で新しく記録するのは20件まで、PRを読むのは60件までである。
 新しく記録した行の判定は、次の回の実行(5分後)になる。
 
-#### 検索の本数
+#### 一覧の本数
 
-1回の実行で呼ぶ検索は、範囲の数と作者の数の積だけである。
-範囲の数は、照合を通った`owners`の数に、`factory_repo`のオーナーが`owners`に無いときの1を足した数である。
-作者の数は、PATのアカウントと`allowed_labeler_logins`のアカウントを合わせた数である。
-設定`gh_source_pr_ci_watch`が`db`のときは、収集の記録が足りる範囲を検索しないので、普段は0本になる([人のPRの発見の元を表に切り替える](#人のprの発見の元を表に切り替える))。
-
-検索のrate limitは、認証したトークンで1分に30本である。
-`poll_prs`と`poll_issues`と`watch_pr_conflicts`は検索しない([PRの発見の元を確かめる](#prの発見の元を確かめる)、[Issueの発見の元を確かめる](#issueの発見の元を確かめる)、[競合の監視の発見の元を確かめる](#競合の監視の発見の元を確かめる))。
-`watch_pr_ci`の本数が増えるほど、ほかのポーリングの検索が拒まれやすくなる。
-許可する作者は、少なくする。
-拒まれた回は、人のPRの発見だけを飛ばす。
+人のPRの候補は、検索を使わず、収集の表と、設定で明示したリポジトリのRESTの一覧から見つける([人のPRの発見の元を確かめる](#人のprの発見の元を確かめる))。
+1回の実行で読む一覧は、表が使えない明示リポジトリごとに1回で、1回は最大10ページ(1000件)である。
+表の記録が足りる明示リポジトリは、一覧を読まない。
+`owners`に無いオーナーの`factory_repo`は、表に行が無いので、毎周回一覧で読む。
+一覧は、PATのcoreの枠を使う。検索のrate limitは使わない。
+一覧がrate limitで拒まれた回は、残りの一覧を止め、人のPRの発見だけを飛ばす。
 
 #### GitHubのAPIの枠
 
@@ -1848,15 +1844,18 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 40件で1回の実行に最大200回、5分ごとなので1時間に最大2400回である。
 発見のPRの取得は、1回の実行で最大60回、1時間で最大720回である。
 合わせて最大3120回になり、認証したトークンのRESTの上限(1時間に5000回)の約6割である。
+一覧は、表が使えない明示リポジトリ1件につき、1回の実行で最大10回、1時間で最大120回である。
+普段は、`owners`に無いオーナーの`factory_repo`の分だけが加わる。
 `poll_prs`や`poll_issues`など、同じトークンを使う処理の分は、ここに含まれない。
 
 有効にする手順は次のとおりである。
 
 1. 通知先を確かめる。通知は、Consoleの要対応と、Discordの`needs_human`に届く。
 2. 対象のアカウントを確かめる。PATのアカウントと`allowed_labeler_logins`の全員のPRが、通知の対象になる。
-3. 有効にした最初の巡回で、そのとき赤い開いた人のPRはすべて通知される。数が多いときは、先に片付ける。
-4. `factory_config`の`pr_ci_watch_human_prs`を`true`にする。
-5. 次の巡回の後、`watch_pr_ci`のログに`pr ci human discovery finished`が出ることと、記録した数が想定と合うことを確かめる。
+3. 初めて有効にするときは、[表の候補と一覧を突き合わせる](#表の候補と一覧を突き合わせる)手順を済ませる。
+4. 有効にした最初の巡回で、そのとき赤い開いた人のPRはすべて通知される。数が多いときは、先に片付ける。
+5. `factory_config`の`pr_ci_watch_human_prs`を`true`にする。
+6. 次の巡回の後、`watch_pr_ci`のログに`pr ci human discovery finished`が出ることと、記録した数が想定と合うことを確かめる。
 
 戻すときは、`pr_ci_watch_human_prs`を`false`にする。
 新しい人の行は作られなくなる。
@@ -1864,113 +1863,132 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 読み直しは、1回の実行で40件(判定待ち、失敗、実行なしの合計)までである。超えた分は次の回に回る。
 失敗の行は期限切れにしない。
 解決されずに残った通知`pr_ci_failed`は、Consoleから手で解決する。
-検索のrate limitや、PATのアカウントを読めない失敗は、人のPRの発見だけを飛ばす。FactoryのPRの監視は止まらない。
+一覧のrate limitや、PATのアカウントを読めない失敗は、人のPRの発見だけを飛ばす。FactoryのPRの監視は止まらない。
 
-### 人のPRの発見の元を表に切り替える
+### 人のPRの発見の元を確かめる
 
-設定`gh_source_pr_ci_watch`を`db`にすると、`watch_pr_ci`は許可された人のPRの候補を、検索でなく収集の表から見つける。
-検索の回数が減り、検索のレート制限に当たりにくくなる。
-既定の`search`のままなら、発見は変わらない。
-PRの読み直し、作者とforkとブランチの確認、記録するhead、判定、通知は、どちらの元でも同じである。
-`pr_ci_watch_human_prs`が`false`の間は、`db`にしても表を読まず、検索もしない。
+`watch_pr_ci`は、`pr_ci_watch_human_prs`が`true`のとき、許可された人のPRの候補を、収集の表と、設定で明示したリポジトリのRESTの一覧から見つける。
+明示リポジトリは、`factory_repo`と`repo_allowlist`の各項目である。
+一覧は`GET /repos/{owner}/{repo}/pulls?state=open`で、表が使えない明示リポジトリだけを読む。
+どちらも検索を使わない。
+発見の元を選ぶ設定は無い。
+リソースに削除した設定の項目が残っていても、読み捨てられて動作に影響しない。
+詳しくは、[GitHubの収集の内部仕様](internals/github-collect.md#所有者の単位の読み取り)と[PRのCI監視の仕様](internals/pr-ci.md#人のprの候補を見つけるとき)にある。
+`pr_ci_watch_human_prs`が`false`の間は、表と一覧を読まない。
+PRの読み直し、作者とforkとブランチの確認、記録するhead、判定、通知は、どの経路でも同じである。
 
-| 項目 | 既定値 | 内容 |
-| --- | --- | --- |
-| `gh_source_pr_ci_watch` | `search` | 許可された人のPRの候補を見つける元。`search`は検索、`db`は収集の表 |
+リポジトリごとに記録の鮮度を判定する。
+閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`である。
+鮮度が足りないときの扱いは、リポジトリが明示されているかで分かれる。
 
-収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索になる。
-そのとき、`watch_pr_ci`のログに警告が残る。
-`gh_source_pr_ci_watch`に書ける値は、`search`と`db`の2つだけである。
-列挙の外の値を書くと、設定を読むscriptがすべて止まる。
+- 明示リポジトリ: 一覧で読む。`gh_repos`に行が無いとき、表の読み取りが失敗したとき、収集の設定が偽のときも、一覧で読む。`owners`に無いオーナーの`factory_repo`は、表に行が無いので、毎周回一覧で読む。
+- 明示でないリポジトリ: 見送る。見送りは失敗にしない。通知は鮮度の監視が出す([リポジトリ単位の古さ](internals/github-collect.md#リポジトリ単位の古さ))。
 
-表を使えない範囲は、その周回だけ検索に戻る。
-範囲は、照合を通ったオーナーと、`owners`に無いオーナーの`factory_repo`のリポジトリである。
-戻る理由は、結果の`human_fallback_reasons`に数える。
+鮮度の判定の語は、[Issueの発見の元を確かめる](#issueの発見の元を確かめる)と同じ5つである。
 
-| `human_fallback_reasons`の語 | 対処 |
-| --- | --- |
-| `no_record` | `gh_repos`にその所有者かリポジトリの行が無い。`owners`に無いオーナーの`factory_repo`は毎周回これになり、受け入れる。ほかは、設定で明示したリポジトリが収集の対象かを確かめる |
-| `unusable` | 許可の外か、archive済みか、一覧から消えたリポジトリがある。設定で明示したリポジトリが一覧から消えたときは、設定を直す |
-| `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
-| `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
-| `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_owner_prs:<owner>`か`read_gh_repo_prs:<owner>/<repo>`と、DBの状態を確かめる |
-| `search_rate_limited` | 戻した検索がrate limitに当たった後で、検索を飛ばした。次の周回で戻す |
-| `out_of_time` | 発見の時間の予算が尽きて、範囲を読み始めなかった。次の周回で読む |
+次の6つに注意する。
 
-戻した検索の回数は、周回全体が検索のときを超えない。
-検索を飛ばした範囲と、読み始めなかった範囲は、`human_fallback_searches`に数えない。
-人のPRの検索がrate limitに当たった回数は、読み取り元によらず`human_search_rate_limited`で数える。
-
-表に切り替えると、次の5つが変わる。
-
-- 新しい人のPRと、下書きから戻したPRは、収集が次にそのリポジトリを取り終えるまで見つからない。普段は4〜9分ほど遅れる。取り直しが止まれば、閾値を過ぎた時点で範囲は検索に戻る。遅れた分だけ、新しいheadの失敗の通知も遅れる。記録済みの行の判定と、PRが閉じたことの検知は遅れない。
+- 明示でないリポジトリの人のPRは、表の記録が古い間、見つからない。鮮度の監視が通知するまでの間は、黙って見送る。
+- 収集の設定の片方でも偽の間は、明示リポジトリ以外の人のPRを見つけない。`repo_allowlist`が空のときは、鮮度の監視が通知を出す。止めるなら、先に`repo_allowlist`へ必要なリポジトリを並べる。
+- 新しい人のPRと、下書きから戻したPRは、収集が次にそのリポジトリを取り終えるまで、表では見つからない。普段は4〜9分ほど遅れる。遅れた分だけ、新しいheadの失敗の通知も遅れる。記録済みの行の判定と、PRが閉じたことの検知は遅れない。
 - 候補が60件を超えると、読む順が収集の時点の更新の時刻で決まる。記録済みのPRにpushした直後の新しいheadの記録が、次の収集まで遅れうる。60件以下なら、毎周回読むので遅れない。
-- archive済みのリポジトリの人のPRは、表で探さない。archive済みのリポジトリではActionsが動かず、新しい失敗は出ない。
-- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリの人のPRを、表では見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。
-- 検索の「作者ごとに100件」の上限が無くなる。読む数(60件)と記録する数(20件)の上限は、今のまま効く。
+- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリの人のPRを見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。
+- 記録が閾値の内にあるarchive済みの明示リポジトリは、一覧でも読まない。archive済みのリポジトリではActionsが動かず、新しい失敗は出ない。
 
-人のPRの発見を有効にしてから、`db`に切り替える。
-有効にした直後は、検索のままで3回の結果を確かめる。切り替えの不具合と、有効にしたことの影響を分けるためである。
+#### 表の候補と一覧を突き合わせる
 
-1. [人のPRの失敗を通知する](#人のprの失敗を通知する)の手順で、`pr_ci_watch_human_prs`を`true`にする。`gh_source_pr_ci_watch`は`search`のままにする。
-   続く3回の`watch_pr_ci`の結果で、`human_source`が`search`、`errors`が0であることを確かめる。
-   `pr_ci_check_denied`の未解決の件数も控える。手順6の比較の基準になる。
-2. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
+`pr_ci_watch_human_prs`を初めて有効にする前の確認として、表の候補とRESTの一覧を突き合わせる。
+表と一覧の経路は、有効にするまで実ジョブで動かないので、候補が合うことを先に確かめる。
+手順は次のとおりである。
+
+1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
    `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を確かめる](#候補の元を確かめる)の手順1と同じである。
-   `repo_allowlist`が空でないことも確かめる。空だと、上の4つ目の変化が当たる。
-3. 範囲と作者ごとに、表の候補の番号の集合と、検索の結果の番号の集合を照らし合わせる。
+   `repo_allowlist`が空でないかも確かめる。空だと、上の5つ目の注意が当たる。
+2. リポジトリごとに、表の候補の番号の集合と、RESTの一覧の番号の集合を照らし合わせる。
    作者は、PATのアカウントと`allowed_labeler_logins`のアカウントを小文字にしたものである。
    閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`で、次のSQLの`interval`に書く。
    表の側は、次のSQLで集める。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT p.repo || '#' || p.number FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.state = 'open' AND p.usable AND NOT p.is_draft AND p.author_type = 'User' AND lower(p.author_login) = '<作者>' AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY 1"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT p.repo || '#' || p.number FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.repo = '<repo>' AND p.state = 'open' AND p.usable AND NOT p.is_draft AND p.author_type = 'User' AND lower(p.author_login) = '<作者>' AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY 1"
    ```
 
-   検索の側は、今と同じ検索を1回ずつ送る。
+   RESTの一覧の側は、同じリポジトリの開いているPRを読み、同じ条件に当たる要素を集める。
 
    ```bash
-   gh api -X GET search/issues -f q='is:pr is:open draft:false author:<作者> user:<owner>' -f per_page=100 --jq '.items[] | (.repository_url | sub(".*/repos/[^/]*/"; "") | ascii_downcase) + "#" + (.number | tostring)' | sort -u
+   gh api -X GET repos/<owner>/<repo>/pulls -f state=open -f per_page=100 --paginate --jq '.[] | select((.draft | not) and ((.user.login // "" | ascii_downcase) == "<作者>")) | "<repo>#" + (.number | tostring)' | sort -u
    ```
 
-   検索の範囲は、所有者が組織なら`org:<owner>`に、`owners`に無いオーナーの`factory_repo`なら`repo:<owner>/<repo>`にする。
-   `repo_allowlist`が空でないときは、検索の出力を許可したリポジトリで絞ってから比べる。表の側は許可したリポジトリだけに絞るためである。
    2つの出力をファイルに保存し、`cmp -s`で比べて、`same`と`different`のどちらになったかだけを見る。
-   `different`なら、収集の周回の遅れ(5分以内)か、上の変化で説明できるかを確かめ、数分後に読み直す。
-   作者が不明の行の数も数える。作者が不明の行は、検索が返さない読み取りを増やす。
+   `different`なら、収集の周回の遅れ(5分以内)か、上の注意で説明できるかを確かめ、数分後に読み直す。
+   一覧はアカウントの種別を持たないので、一覧の側に`Bot`のPRが入ることがある。入ったPRは、読み直しで除かれる。
+   `owners`に無いオーナーの`factory_repo`は、表に行が無い。一覧の出力だけを見て、想定の人のPRが出ることを確かめる。
+   作者が不明の行の数も数える。作者が不明の行は、作者を確かめるための読み取りを増やす。
 
    ```bash
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT count(*) FROM factory.gh_pull_requests WHERE owner = '<owner>' AND state = 'open' AND usable AND NOT is_draft AND (author_login IS NULL OR author_type IS NULL)"
    ```
 
-   `repo_allowlist`が空の構成では、検索が返すリポジトリのうち`gh_repos`に行の無いものの数も数える。1以上なら、`db`にしない。
-4. `gh_source_pr_ci_watch`を`db`に切り替える。
-   書き換えの前に、リソースの値を取得して控えを取る。
-   取得した出力の`value`の`gh_source_pr_ci_watch`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
-   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
-   戻すときは、控えの値で同じ手順を行い、`gh_source_pr_ci_watch`を`search`にする。
-5. 続く3回の`watch_pr_ci`の結果を、WindmillのRunsで確かめる。
-   `human_source`が`db`、`errors`が0、`human_fallback_searches`が0であることを見る。
-   `owners`に無いオーナーの`factory_repo`の範囲があるときは、その範囲の分を除いて見る。
-   `human_table_candidates`は、手順3の表の候補の数と近いはずである。
-6. 人の行の記録の数(`recorded`)と、`pr_ci_failed`の未解決の通知の件数が、前後で説明できることを確かめる。
-   `pr_ci_check_denied`の未解決の件数が、手順1の値から増えていないことも確かめる。
-   失敗の記録に、段`read_gh_owner_prs:`と`read_gh_repo_prs:`(`flow_path`が`f/factory/watch_pr_ci`のもの)が続かないことを見る。
-7. 1日の間、`human_search_rate_limited`の合計が0で、`watch_pr_ci`の失敗の記録に403と429が無いことを確かめる。
+   `repo_allowlist`が空の構成では、PATのアカウントと許可した作者が開いているPRを持つリポジトリのうち、`gh_repos`に行の無いものの数も数える。1以上なら、そのリポジトリの人のPRは見つからない。
+3. [人のPRの失敗を通知する](#人のprの失敗を通知する)の手順で、`pr_ci_watch_human_prs`を`true`にする。
+   有効にする前の`pr_ci_check_denied`の未解決の件数を控える。手順5の比較の基準になる。
+4. 続く3回の`watch_pr_ci`の結果を、WindmillのRunsで確かめる。
+   `errors`が0、`human_collect_disabled`が`false`、`human_deferred`が0であることを見る。
+   `human_rest_lists`は、表が使えない明示リポジトリの数で、`owners`に無いオーナーの`factory_repo`の分だけのはずである。
+   `human_table_candidates`は、手順2の表の候補の数と近いはずである。
+5. 人の行の記録の数(`recorded`)と、`pr_ci_failed`の未解決の通知の件数が、前後で説明できることを確かめる。
+   `pr_ci_check_denied`の未解決の件数が、手順3の値から増えていないことも確かめる。
+   失敗の記録に、段`read_gh_owner_prs:`と`read_gh_repo_prs:`と`list_open_prs:`(`flow_path`が`f/factory/watch_pr_ci`のもの)が続かないことを見る。
+6. 1日の間、`watch_pr_ci`の失敗の記録に403と429が無いことを確かめる。
 
-`human_fallback_searches`が1以上なら、`human_fallback_reasons`の語で原因を読む。
+結果の`human_rest_lists`と`human_skipped_stale`が1以上なら、理由の語で原因を読む。
+`human_rest_lists`は表の代わりに一覧で読んだ明示リポジトリの数で、理由は`human_rest_reasons`に出る。
+`human_skipped_stale`は見送った明示でないリポジトリの数で、理由は`human_skipped_stale_reasons`に出る。
+理由の語の意味と対処は、[Issueの発見の元を確かめる](#issueの発見の元を確かめる)の表と同じである。
+ただし、表の読み取りの失敗の段は`read_gh_owner_prs:<owner>`か`read_gh_repo_prs:<owner>/<repo>`である。
+`human_deferred`が1以上なら、発見の時間の予算かrate limitで読み残している。次の周回で読むので、続くときだけ調べる。
+
 定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
-説明できないなら、`gh_source_pr_ci_watch`を`search`に戻す。
+説明できなければ、収集の失敗として調べる。
 
-読み取り元だけを戻すときは、`gh_source_pr_ci_watch`を`search`にする。
+一覧の読み取りが失敗すると、失敗の記録の段`list_open_prs:<owner>/<repo>`に残り、`errors`に数える。
+開いたPRが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
+明示リポジトリの一覧が失敗し続けても、通知は出ない。
+失敗は`job_failures`に残り、日次のまとめに載る。
+`repo_allowlist`が空でないと、リポジトリ単位の古さの通知と収集の無効の通知が出ないためである。
+結果の`errors`と、失敗の記録の段`list_open_prs:`を定期的に見る。
+
+反映後は、次の2つを確かめる。
+
+- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。WindmillのRunsで失敗を見て、次の周回で成功に戻ることを確かめる。
+- 実ジョブで手順4の結果を確かめた後に、`watch_pr_ci`の発見の元を選んでいた項目を、手で消す。
+  対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
+  消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
+  ただし、手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。
+
+検索へ戻す設定は無い。
+発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
+戻しは次の順で行う。
+
+1. リソース`f/factory/factory_config`の`gh_source_pr_ci_watch`は、控えの値のとおり未設定に戻す。戻した版は、未設定のとき検索で読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
+2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
+3. 戻しのPRをマージする。反映は`self_update`が行う。
+4. 反映後の実ジョブの結果を確かめる。
+
+リソースの項目は、検索の関数を消す段階まで消さない。
+今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
+ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
+戻すときは、後にマージされた変更から順に戻す。
+
 人のPRの発見をやめるときは、`pr_ci_watch_human_prs`を`false`にする。
 
 #### 読めないリポジトリの通知
 
 表の候補は、PRを読み直す。
-読み取りトークンに見えて、書き込みのPATに見えないリポジトリのPRは、読み直しが404か403になる。
-検索の経路は書き込みのPATで探すので、そのリポジトリを返さず、通知も作らない。
-表の候補の404と403は、これに合わせて通知を作らず、警告のログ`pr ci skipped a table candidate that could not be read`だけを残す。
+収集の読み取りトークンに見えて、書き込みのPATに見えないリポジトリのPRは、読み直しが404か403になる。
+PATの権限の不足とは限らないので、表の候補の404と403は、通知を作らない。
+警告のログ`pr ci skipped a table candidate that could not be read`だけを残す。
+一覧の候補は、PATが一覧を読めたリポジトリのものなので、読み直しが404か403になれば、権限の不足の通知`pr_ci_check_denied`を残す。
 続くなら、読み取りトークンの範囲を書き込みのPATに合わせるか、`repo_allowlist`で絞る。
 
 通知`pr_ci_check_denied`は、実行を読めたリポジトリの分が自動で解決される。

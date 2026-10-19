@@ -6,6 +6,7 @@
 // 設定`pr_ci_watch_human_prs`が真のときは、許可された人(PATのアカウントと`allowed_labeler_logins`)が作った
 // PR(開いていて、下書きでなく、forkでなく、Factoryが作っていないもの)も同じ手順で判定し、失敗を知らせる。
 // 人のPRの失敗は、自動修正の設定に関わらず確定した時点で知らせ、直す作業項目は起動しない。
+// 人のPRの候補は、検索を使わず、収集の表と、設定で明示したリポジトリのRESTの一覧から見つける。
 // PATのアカウントを読めないときは、人のPRの発見だけを飛ばす。
 //
 // 設定`pr_ci_fix_enabled`が真のときは、失敗した行を直す作業項目(pr_fixのCI回)を起動する。
@@ -75,10 +76,7 @@ import {
   updateStatusIfCurrent,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
-import {
-  effectiveGhSource,
-  ghDetailStaleAfterMs,
-} from "./lib/gh_collect_read.ts";
+import { ghDetailStaleAfterMs } from "./lib/gh_collect_read.ts";
 import {
   type GhClient,
   getAccountId,
@@ -86,11 +84,11 @@ import {
   getPr,
   getPrWithoutWait,
   getViewer,
+  listOpenPullRequestsWithoutWait,
   listPrCommitMessages,
   listPrHeadWorkflowRuns,
   listWorkflowRunJobs,
   parseGitHubRepoUrl,
-  searchOpenAuthoredPrs,
 } from "./lib/github.ts";
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -111,7 +109,7 @@ import {
   TRACKED_PR_LIMIT,
 } from "./lib/pr_ci_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
-import type { FactoryConfig, GhSource } from "./lib/types.ts";
+import type { FactoryConfig } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import { ciRoundTimeoutMisfit } from "./steps/pr_workflow_support.ts";
 
@@ -246,46 +244,30 @@ async function recordFailureSafe(
 }
 
 /**
- * 設定`gh_source_pr_ci_watch`と収集の設定から、人のPRの候補を見つける元を決める。
+ * 収集の設定から、この回に人のPRの候補を収集の表で見つけてよいかを決める。
  * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
- * 設定を戻し忘れても監視が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
+ * 偽のときは、設定で明示したリポジトリだけをRESTの一覧で読み、ほかは見つけられないので、偽の設定の名前を警告に残す。
  * 人のPRの発見が無効(`pr_ci_watch_human_prs`が偽)の間は発見を行わないので、警告も出さない。
  */
-export function resolvePrCiHumanSource(
+export function resolvePrCiHumanTableUse(
   config: Pick<
     FactoryConfig,
-    | "gh_source_pr_ci_watch"
-    | "gh_collect_enabled"
-    | "gh_collect_detail_enabled"
-    | "pr_ci_watch_human_prs"
+    "gh_collect_enabled" | "gh_collect_detail_enabled" | "pr_ci_watch_human_prs"
   >,
   log: Logger,
-): GhSource {
-  const source = effectiveGhSource(config.gh_source_pr_ci_watch, config);
-  if (
-    config.pr_ci_watch_human_prs &&
-    config.gh_source_pr_ci_watch === "db" &&
-    source === "search"
-  ) {
+): boolean {
+  const useTable =
+    config.gh_collect_enabled && config.gh_collect_detail_enabled;
+  if (config.pr_ci_watch_human_prs && !useTable) {
     log.warn(
-      "gh_source_pr_ci_watch is db but the collection is not fully enabled, so the round searches",
+      "the collection is not fully enabled, so the human discovery reads only the repositories that the config names",
       {
         gh_collect_enabled: config.gh_collect_enabled,
         gh_collect_detail_enabled: config.gh_collect_detail_enabled,
       },
     );
   }
-  return source;
-}
-
-export function resolvePrCiHumanTableUse(
-  _config: Pick<
-    FactoryConfig,
-    "gh_collect_enabled" | "gh_collect_detail_enabled" | "pr_ci_watch_human_prs"
-  >,
-  _log: Logger,
-): boolean {
-  return false;
+  return useTable;
 }
 
 export async function main(): Promise<PrCiWatchResult> {
@@ -333,16 +315,16 @@ export async function main(): Promise<PrCiWatchResult> {
       ? undefined
       : await buildHumanDiscovery({
           config,
-          source: resolvePrCiHumanSource(config, log),
+          useTable: resolvePrCiHumanTableUse(config, log),
           staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
           readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
           readRepoPrs: (owner, repo) => readGhRepoOpenPullRequests(owner, repo),
+          listOpenPrs: (owner, repo) =>
+            listOpenPullRequestsWithoutWait(client, owner, repo),
           verifiedOwners,
           getViewer: () => getViewer(client),
           getPr: (owner, repo, number) =>
             getPrWithoutWait(client, owner, repo, number),
-          search: (scope, author) =>
-            searchOpenAuthoredPrs(client, { scope, author }),
           recordFailure: (step, err) => recordFailureSafe(step, err, log),
         });
   // 監視が無効なら起動もしないので、保留していた通知はすぐ出す。

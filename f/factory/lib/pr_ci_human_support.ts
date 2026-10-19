@@ -1,6 +1,6 @@
 // 許可された人が作ったPRのCIの失敗を通知するための、I/Oを持たない判定。
 // どのPRを人のPRとして見るか、誰の作ったPRを許すか、人の行にどの通知の方針を当てるかを決める。
-// 人の行は、`pr_ci_checks.work_item_id`がNULLの行である。検索と記録は`pr_ci_watch.ts`が行う。
+// 人の行は、`pr_ci_checks.work_item_id`がNULLの行である。候補の発見と記録は`pr_ci_watch.ts`が行う。
 
 import type { PrCiCheck } from "./db.ts";
 import type { OpenPullRequest, PullRequest } from "./github.ts";
@@ -34,7 +34,7 @@ export function isAllowedPrAuthor(
 }
 
 /**
- * 人のPRを検索する作者のログイン名。PATのアカウントと、許可された名前を、大文字小文字を区別せず重ねずに返す。
+ * 人のPRの候補にする作者のログイン名。PATのアカウントと、許可された名前を、大文字小文字を区別せず重ねずに返す。
  * PATのアカウントが分からないときは、判定できないので空を返す。
  */
 export function humanPrAuthors(policy: LabelerPolicy): string[] {
@@ -79,7 +79,7 @@ export function isHumanPrCandidate(input: {
   return !trackedPrKeys.has(pullRequestKey(ref));
 }
 
-/** 収集の表の行から作る、人のPRの候補。 */
+/** 収集の表の行か、RESTの一覧の要素から作る、人のPRの候補。 */
 export type HumanPrCandidate = {
   readonly owner: string;
   readonly repo: string;
@@ -94,7 +94,7 @@ export type HumanPrCandidate = {
  * 開いていて下書きでない行のうち、次のどちらかを選ぶ。
  * - 作者の種別が`User`で、ログイン名(大文字小文字を区別しない)が`authors`に入る行。
  * - 作者が分からない行(ログイン名か種別が空)。候補を広げる側に扱い、RESTの作者で確かめる。
- * forkとFactoryの形のブランチでは絞らない。検索も絞らず、読み直した値で`isHumanPrCandidate`が除くためである。
+ * forkとFactoryの形のブランチでは絞らない。読み直した値で`isHumanPrCandidate`が除くためである。
  */
 export function humanPrCandidatesFromRows(
   rows: readonly GhPullRequest[],
@@ -124,13 +124,41 @@ export function humanPrCandidatesFromRows(
   return candidates;
 }
 
+/**
+ * RESTの一覧(`listOpenPullRequests`)の要素から、人のPRの候補を作る。表の行を使えない明示リポジトリに使う。
+ * 下書きでない要素のうち、次のどちらかを選ぶ。
+ * - 作者のログイン名(大文字小文字を区別しない)が`authors`に入る要素。
+ * - 作者のログイン名が無い要素。候補を広げる側に扱い、`getPr`の作者で確かめる。
+ * 一覧はアカウントの種別を持たないので、種別は`getPr`の応答で確かめる。
+ * 一覧は更新の時刻を持たないので、`updatedAtMs`には作成の時刻を入れる。読めないときは0にして、並びで末尾に回す。
+ * 名前は、一覧を求めたリポジトリの綴りで作る。
+ */
 export function humanPrCandidatesFromOpenList(
-  _owner: string,
-  _repo: string,
-  _prs: readonly OpenPullRequest[],
-  _authors: readonly string[],
+  owner: string,
+  repo: string,
+  prs: readonly OpenPullRequest[],
+  authors: readonly string[],
 ): HumanPrCandidate[] {
-  return [];
+  const listed = new Set(authors.map((login) => login.toLowerCase()));
+  const candidates: HumanPrCandidate[] = [];
+  for (const entry of prs) {
+    if (entry.draft) continue;
+    const authorUnknown = entry.authorLogin === null;
+    if (
+      entry.authorLogin !== null &&
+      !listed.has(entry.authorLogin.toLowerCase())
+    ) {
+      continue;
+    }
+    candidates.push({
+      owner,
+      repo,
+      number: entry.number,
+      updatedAtMs: entry.createdAtMs ?? 0,
+      authorUnknown,
+    });
+  }
+  return candidates;
 }
 
 /**

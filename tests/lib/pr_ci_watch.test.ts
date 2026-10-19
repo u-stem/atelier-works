@@ -6222,9 +6222,9 @@ describe("a repository that the config names", () => {
     test("records the pull requests of the lists", async () => {
       const h = harness(offSetup());
       await runPrCiWatch(h.deps);
-      expect(h.recorded.map((record) => record.pr_number).sort()).toEqual([
-        40, 300,
-      ]);
+      expect(
+        h.recorded.map((record) => record.pr_number).sort((a, b) => a - b),
+      ).toEqual([40, 300]);
     });
 
     test("counts the reason of the lists", async () => {

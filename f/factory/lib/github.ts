@@ -4647,13 +4647,23 @@ export async function listOpenPullRequests(
   }));
 }
 
+/**
+ * `listOpenPullRequests`と同じだが、rate limitの解除を待たずに`GitHubRateLimitError`を投げる。
+ * 人のPRの発見が、PATのcoreの枠を使い切った回に、全体の時間を使わないために使う。
+ */
 export async function listOpenPullRequestsWithoutWait(
-  _client: GhClient,
-  _owner: string,
-  _repo: string,
-  _maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
+  client: GhClient,
+  owner: string,
+  repo: string,
+  maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
 ): Promise<OpenPullRequest[]> {
-  return [];
+  validateOwnerRepo(owner, repo);
+  return listOpenPullRequests(
+    noWaitClient(client, `repos/${owner}/${repo}/pulls`),
+    owner,
+    repo,
+    maxPages,
+  );
 }
 
 /** ラベルの名前を読む。配列でないとき、名前が文字列でない要素があるときは`null`にする。 */
