@@ -4345,8 +4345,9 @@ describe("listOpenPullRequests", () => {
         ref: `factory/issue-${String(number)}-wi-9`,
         repo: { full_name: "acme/widgets" },
       },
-      base: { repo: { full_name: "acme/widgets" } },
+      base: { ref: "main", repo: { full_name: "acme/widgets" } },
       user: { login: "factory-bot", id: 5 },
+      created_at: "2026-10-01T00:00:00Z",
       ...overrides,
     };
   }
@@ -4363,7 +4364,7 @@ describe("listOpenPullRequests", () => {
     );
   });
 
-  test("returns the number, draft flag, head branch and repositories", async () => {
+  test("returns the number, draft flag, head branch, base branch, creation time and repositories", async () => {
     const fake = createFakeCommandRunner([ghApiOk([openPr(12)])]);
     const prs = await listOpenPullRequests(
       { run: fake.run, ghToken: "tok" },
@@ -4379,8 +4380,46 @@ describe("listOpenPullRequests", () => {
         baseRepoFullName: "acme/widgets",
         authorLogin: "factory-bot",
         authorId: 5,
+        baseRef: "main",
+        createdAtMs: Date.parse("2026-10-01T00:00:00Z"),
       },
     ]);
+  });
+
+  test("returns a null base branch when the entry has none, and keeps the entry", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { base: { repo: { full_name: "acme/widgets" } } })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.baseRef).toBeNull();
+  });
+
+  test("returns a null creation time when the entry has none, and keeps the entry", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { created_at: undefined })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.createdAtMs).toBeNull();
+  });
+
+  test("returns a null creation time when the value is not a date", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { created_at: "yesterday" })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.createdAtMs).toBeNull();
   });
 
   test("returns a null author when the pull request has none", async () => {
