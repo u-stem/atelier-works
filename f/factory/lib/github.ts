@@ -20,7 +20,12 @@
 // 区別する。
 
 import { revealControlChars, VolatileCiLog } from "./ci_log_support.ts";
-import { GH_EXIT_AUTH_REQUIRED, GitHubHttpError } from "./github_errors.ts";
+import {
+  GH_EXIT_AUTH_REQUIRED,
+  GitHubHttpError,
+  RATE_LIMIT_HINT_TEXT_LIMIT,
+  SECONDARY_RATE_LIMIT_PHRASE,
+} from "./github_errors.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -223,6 +228,20 @@ export function isRateLimited(response: GhApiResponse): boolean {
   if (response.status !== 403 && response.status !== 429) return false;
   if (response.headers.has("retry-after")) return true;
   return response.headers.get("x-ratelimit-remaining") === "0";
+}
+
+/**
+ * ヘッダーでは判定できない403のうち、本文に二次レート制限の語句があるものか。
+ * 語句の判定はGraphQL呼び出しと同じ(先頭の一定の長さを読み、大文字と小文字を区別しない)。
+ * 一次レート制限の本文だけの403と、権限不足の403は対象にしない。
+ */
+function isSecondaryRateLimitedByBody(response: GhApiResponse): boolean {
+  if (response.status !== 403) return false;
+  if (isRateLimited(response)) return false;
+  return response.bodyText
+    .slice(0, RATE_LIMIT_HINT_TEXT_LIMIT)
+    .toLowerCase()
+    .includes(SECONDARY_RATE_LIMIT_PHRASE);
 }
 
 /**
@@ -442,24 +461,32 @@ export async function callGhApi(
   options: GhApiCallOptions = {},
 ): Promise<GhApiResponse> {
   const first = await sendGhApi(client, endpoint, options);
-  if (!isRateLimited(first)) return first;
+  const limitedByBody = isSecondaryRateLimitedByBody(first);
+  if (!isRateLimited(first) && !limitedByBody) return first;
 
   const sleep = client.sleep ?? defaultSleep;
   const now = clientNow(client);
-  const waitMs =
-    rateLimitWaitMs(first.headers, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS;
+  // 本文だけで判定したときは、ヘッダーの`x-ratelimit-reset`が一次レート制限のものなので使わない。
+  const waitMs = limitedByBody
+    ? DEFAULT_RATE_LIMIT_WAIT_MS
+    : (rateLimitWaitMs(first.headers, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS);
   if (waitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS) {
     throw new GitHubRateLimitError(endpoint, waitMs, false);
   }
   await sleep(waitMs);
 
   const second = await sendGhApi(client, endpoint, options);
-  if (!isRateLimited(second)) return second;
-  throw new GitHubRateLimitError(
-    endpoint,
-    rateLimitWaitMs(second.headers, now),
-    true,
-  );
+  if (isRateLimited(second)) {
+    throw new GitHubRateLimitError(
+      endpoint,
+      rateLimitWaitMs(second.headers, now),
+      true,
+    );
+  }
+  if (isSecondaryRateLimitedByBody(second)) {
+    throw new GitHubRateLimitError(endpoint, null, true);
+  }
+  return second;
 }
 
 /**

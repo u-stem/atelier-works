@@ -5,6 +5,12 @@
 /** `gh`が認証を求めて終わったときの終了コード。ステータス行は無く、待っても直らない。 */
 export const GH_EXIT_AUTH_REQUIRED = 4;
 
+/** 二次レート制限の応答の本文に含まれる語句(小文字)。REST呼び出しとGraphQL呼び出しで共有する。 */
+export const SECONDARY_RATE_LIMIT_PHRASE = "secondary rate limit";
+
+/** 本文のうち、制限の種類を見分けるために読む長さ。 */
+export const RATE_LIMIT_HINT_TEXT_LIMIT = 4096;
+
 /**
  * 2xx以外の応答による失敗。`status`が0のときは応答が返らなかった(通信断やtimeout)。
  * 呼び出し側が、要求が効いたかを状態から判断するために使う(`claimIssue`を参照)。
