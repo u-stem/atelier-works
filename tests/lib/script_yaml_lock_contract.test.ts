@@ -212,7 +212,8 @@ function findShallowViolations(content: string): string[] {
     violations.push("an escape that spells ! is not allowed");
   }
   // wmillのパーサは、`!in%6Cine`のような%エスケープしたタグも`!inline`に解く。
-  if (content.includes("!in%")) {
+  // エスケープは`!`の後ろのどこにでも置けるので、`!`に続く空白でない並びに`%`があれば拒む。
+  if (/![^\s]*%/.test(content)) {
     violations.push("a percent-escaped tag is not allowed");
   }
   if (content.includes("\uFEFF")) {
