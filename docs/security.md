@@ -2491,6 +2491,34 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 投入は人が行う。
 フックは書き込みを止めないので、Claudeがこの形を実行すると、既にある値が空文字で上書きされうる。
 
+フックが`mise`で拒否するのは、ここまでの形にとどめる。
+許可リスト方式の全面化は採らず、層を新しく足さない縮小版にとどめて受け入れる。
+`mise`のサブコマンドを許可リストで絞って、一覧を出すあらゆる形を拒否することはしない。
+一覧を出す経路は列挙しきれないためである。
+許可リストを広げるほど、前置きのオプション、`mise run`のシェル指定、`MISE_*`の環境変数、`xargs`、書き込み先といった新しい迂回が見つかる。
+秘密値を会話に出さない設計にも広げず、会話への露出は残るリスクとして受け入れる。
+
+守りは、守る対象ごとに次のとおり分かれる。
+
+- `Read`ツールで`mise.local.toml`とその別名を読む経路は、`deny`が止める。GrepとGlobへの適用はベストエフォートである
+- Bashで、秘密値のファイル名を字面で書いた参照は、フックの`guarded-files.ts`が拒否する。変数、ブレース展開、`find -exec`、`xargs`、`*`だけのglobを使う形は、「判定しないもの」に挙げる
+- コミットへの混入は、層ごとに止める対象が違う。gitignoreは`git add`を、lefthookのgitleaksはコミットを、CIのgitleaksはmainへのマージを止める。CIが動くのは`pull_request`と`main`へのpushだけなので、値がリモートのブランチへ載ってから走る。`git add -f`はgitignoreを越え、gitleaksは規則に合う値だけを拾う
+- Windmill上の保存とUIでの表示は、secret変数が守る
+
+`mise`の一覧を出す経路は、これらのどの層も止めない。
+`deny`の`Read`はBashに効かず、gitignoreとgitleaksはコミットとマージしか止めず、secret変数はホストの`mise.local.toml`の一覧に関係しないためである。
+会話への露出は、ベストエフォートのフックと前方一致の`deny`だけで守る。
+デバッグ中の誤操作でも打つ形(`mise -E local env`、`mise hook-env`など)が残り、これを残るリスクとして「判定しないもの」に挙げて受け入れる。
+会話に出た値は、APIへ送られ、手元の記録にも残る。
+漏れた値は失効して再投入する。
+[運用](operations.md)の「秘密をローテーションする」が扱うのは、`GITHUB_TOKEN`、`CONSOLE_GITHUB_TOKEN`、OAuthトークンだけである。
+所有者ごとの読み取りPAT、`DISCORD_WEBHOOK_URL`、`DB_PASSWORD`、`WM_ADMIN_PASSWORD`には、手順が無い。
+`DB_PASSWORD`と`WM_ADMIN_PASSWORD`は、再投入だけでは壊れるので、先にPostgresと管理者のパスワードを変える。
+Postgresの`POSTGRES_PASSWORD`はvolumeの初期化時にだけ効くためである。
+管理者のパスワードを先に変えるのは、`scripts/bootstrap.sh`が`WM_ADMIN_PASSWORD`と既定値の`changeme`でしかログインを試さず、どちらも通らなければ止まるためである。
+`DISCORD_WEBHOOK_URL`は、[DiscordのWebhook URL](#discordのwebhook-url)の節の手順で新しいURLを取得して投入する。
+旧URLの失効は、Discordのウェブフック設定で旧いウェブフックを削除して行う。
+
 ## Claude Codeのフック
 
 ClaudeがBashを実行する前に、`.claude/settings.json`が`scripts/claude-hooks/`のフックを動かす。
@@ -2507,7 +2535,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くことと、追記(`+=`) | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
 | `CHECK_IDLE_FORCE`の代入(`=`と`+=`、前置き、`env`、`export`、`declare`、引用符とエスケープを外した後の形、値が動的な場合を含む) | `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばせる。付けるのは人が自分の端末で、確かめた後だけである |
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
-| `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
+| `lefthook uninstall`と、リダイレクトや`rm`、`mv`、`tee`、`cp`、`sed -i`などの既知のコマンドによる`.git/hooks`と`.git/config`への書き込み(ほかにも書き込める経路が残り、主なものを「判定しないもの」に挙げる) | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
 | フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`など)に前置きした`HOME=`と`XDG_CONFIG_HOME=`(`+=`の追記を含む) | gitに別の設定ファイルを読ませて、フックを外せる |
 | `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
@@ -2666,6 +2694,32 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`などの`MISE_*`の環境変数、`BASH_ENV`や`PATH`の差し替え
 - `mise set`のサブコマンドの前に、値を取る隠しオプションを置く形(未知の版で増えたもの)
 - `mise set`が、`-E local`を付けずにコミット対象の`mise.toml`へ、`-g`でグローバル設定へ、`--file`で任意のファイルへ書き込む形
+- `mise`の書き込みと実行のサブコマンド(次は例で、ほかにもある)。フックが`mise`を、書き込むコマンドとして扱わないので拒否しない
+  - `mise generate github-action`(`--write`を付けると`.github/workflows`に書く)
+  - `mise generate git-pre-commit`
+    - `--write`は`.git/hooks/pre-commit`に、`--hook <名前>`は`.git/hooks/<名前>`に書く
+    - lefthookが入れたフックを上書きして、gitleaksなどの検査を外せる
+    - worktreeでは`.git`がファイルなので、書けるかは未確認である
+  - `mise generate task-stubs`
+  - `mise settings set`(設定を追加、更新する。既定は`~/.config/mise/config.toml`で、`--local`でローカルの設定になる)
+  - `mise tasks add`(ローカルの`mise.toml`にタスクを足す。`-f`でファイルタスクを作る)と`mise tasks edit`
+  - `mise doctor project`(`mise.toml`の`[doctor.checks.<name>]`に書かれたコマンドを実行する)
+  - `mise unset`(設定ファイルの値を消す)
+  - `mise implode`(miseとその関連データを消す)
+  - `mise bootstrap`
+    - パッケージ、リポジトリ、dotfiles、ツールを整え、`bootstrap`タスクがあれば実行する
+    - このリポジトリのタスク`mise run bootstrap`は`scripts/bootstrap.sh`を動かすので、`mise bootstrap`もそれを実行する
+    - 2つは別のコマンドである
+- wmill CLIによる秘密値の読み取り
+  - secret変数だけではない
+  - `wmill instance get-config --show-secrets`はインスタンスの設定を出す
+  - `wmill sync pull --include-key`はワークスペースの暗号鍵を出す
+  - `wmill variable get`
+  - `wmill sync pull --include-secrets --plain-secrets`
+  - `wmill trash get`
+  - フックに判定は無く、値が会話に出るかは確かめていない
+  - CLIのプロファイルのトークンで復号されて返るなら、値が会話に出る
+- ブレース展開で作る秘密値のファイル名(`cat mise.local.{toml,}`)。ファイル名の判定が展開を見ない
 - 外すことにしていない前置きのコマンド(`watch`、`flock`、`stdbuf`、`script`、`parallel`、`setsid`、`doas`など)
 - スクリプトのファイルの中身
 - コマンドを起動するインタープリター(`bun -e`、`python -c`が`git push`を実行する場合など)
@@ -2673,15 +2727,18 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - gitの省略形のオプション(`--forc`など)
 - 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
 - `cd`やglob、`dd`、`perl -pi`、`find -delete`を使った`.git/hooks`と`.git/config`の書き換え
+- 行き先を`.git/`にした`cp`、`mv`、`rsync`と、`tar -C`、`unzip -d`、`curl -o`による展開と書き込み
+- リポジトリの根での`rg KEY *`や`grep KEY *`。シェルが`*`を`mise.local.toml`に展開しても拒否しない
 - `echo ... | cat | sh`のように、間にコマンドを挟んだ標準入力のシェル(直前のパイプの元だけを見る)
 - `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
-- `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
+- `gh auth token`や`mise token`(gitのホストのトークン)のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
 - `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
 - サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
 - 前置きではない`HOME`と`XDG_CONFIG_HOME`の設定(`export HOME=...`の後のgit、`sh -c`の中のgit)
 - 書き方を変えた`/proc/<pid>/environ`(`dd if=/proc/self/environ`、`/proc/self/./environ`、`//proc/...`、`/proc`の再帰的な検索)
 
 フックは誤操作を止める仕組みで、意図した迂回は防げない。
+上の一覧は主な経路で、網羅ではない。
 
 ## draw.ioの図の描画
 
