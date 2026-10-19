@@ -721,6 +721,53 @@ describe("runApprove", () => {
       expect(errors.join("\n")).toContain("compose_forbidden");
     });
 
+    test("refuses a change that is rejected by the compose tables once it is approved", async () => {
+      const s = scenario({
+        ...DOCTOR,
+        "infra/docker-compose.yml": COMPOSE.replace(
+          "  caddy:\n",
+          "  caddy:\n    labels:\n      x: ${CLAUDE_CODE_OAUTH_TOKEN}\n",
+        ),
+      });
+      expect(await outcome(s)).toEqual(REFUSED);
+    });
+
+    test("says that the compose file is rejected by the tables", async () => {
+      const s = scenario({
+        ...DOCTOR,
+        "infra/docker-compose.yml": COMPOSE.replace(
+          "  caddy:\n",
+          "  caddy:\n    labels:\n      x: ${CLAUDE_CODE_OAUTH_TOKEN}\n",
+        ),
+      });
+      const { errors } = await approve(s);
+      expect(errors.join("\n")).toContain("compose_forbidden");
+    });
+
+    test("writes nothing when a read after the approval fails", async () => {
+      const result = await outcome(scenario(), {
+        git: (real) => ({
+          ...real,
+          readBlob: async () => {
+            throw new Error("git read failed");
+          },
+        }),
+      });
+      expect(result.wrote).toBe(0);
+    });
+
+    test("does not succeed when a read after the approval fails", async () => {
+      const result = await outcome(scenario(), {
+        git: (real) => ({
+          ...real,
+          readBlob: async () => {
+            throw new Error("git read failed");
+          },
+        }),
+      });
+      expect(result.code).not.toBe(0);
+    });
+
     test("refuses a change that touches a .env file", async () => {
       const s = scenario({ ".env": "SECRET_VALUE=hunter2\n" });
       expect(await outcome(s)).toEqual(REFUSED);

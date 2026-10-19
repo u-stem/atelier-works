@@ -2,6 +2,7 @@
 // リポジトリごとの鮮度と、使ってよい行の絞り込みを、通信もDBも持たない純粋関数で行う。
 // 記録は、打ち切りや失敗のリポジトリでは古いまま`usable`が真で残るので、読む側は必ず鮮度を判定する。
 
+import { configuredRepos } from "./config.ts";
 import type {
   FactoryConfig,
   GhDetailOpenRow,
@@ -297,4 +298,46 @@ export function effectiveGhSource(
     config.gh_collect_detail_enabled
     ? "db"
     : "search";
+}
+
+/** 設定で明示したリポジトリのうち、この所有者のものの小文字の名前。 */
+export function requiredRepos(
+  scope: Pick<FactoryConfig, "repo_allowlist" | "factory_repo">,
+  owner: string,
+): Set<string> {
+  const ownerName = owner.toLowerCase();
+  return new Set(
+    configuredRepos(scope)
+      .filter((entry) => entry.owner.toLowerCase() === ownerName)
+      .map((entry) => entry.repo.toLowerCase()),
+  );
+}
+
+/**
+ * 表の候補にしてよい行を、(リポジトリ、番号)の順に集める。
+ * 読む時点で許されないリポジトリ、archive済みのリポジトリ、一覧から消えたリポジトリの行は入れない。
+ * 鮮度の足りない所有者はここに来る前に検索へ戻すので、`usable`は使ってよい行だけである。
+ */
+export function usableTableRows<T extends { readonly number: number }>(
+  owner: string,
+  judged: ReadonlyMap<
+    string,
+    GhOwnerRepoCoverageInput & { readonly usable: readonly T[] }
+  >,
+  isAllowedNow: (owner: string, repo: string) => boolean,
+): T[] {
+  const rows: T[] = [];
+  for (const name of [...judged.keys()].sort()) {
+    const item = judged.get(name);
+    if (item === undefined) continue;
+    if (
+      !isAllowedNow(owner, item.row.repo) ||
+      item.row.archived ||
+      item.row.gone
+    ) {
+      continue;
+    }
+    rows.push(...[...item.usable].sort((a, b) => a.number - b.number));
+  }
+  return rows;
 }
