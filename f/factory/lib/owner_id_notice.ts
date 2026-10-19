@@ -8,6 +8,8 @@ export const OWNER_ID_MISMATCH_KIND = "owner_id_mismatch";
  * 数値IDが食い違ったオーナーのnoticeの本文。
  * オーナーと2つのIDだけで決まるので、同じ食い違いが続くあいだは
  * 同じ本文の未解決のnoticeが重ならない。
+ * 本文は`addNotice`の重複防止の鍵なので、文言を変えない。
+ * 変えると、未解決のnoticeと別の本文になり、重複して残る。
  */
 export function ownerIdMismatchMessage(
   name: string,
@@ -20,6 +22,7 @@ export function ownerIdMismatchMessage(
 /**
  * 名前のアカウントが見つからないオーナーのnoticeの本文。
  * 改名か削除でほぼ恒久なので、人が`owners`を見直すまで同じ状況が続く。
+ * 本文は`addNotice`の重複防止の鍵なので、文言を変えない。
  */
 export function ownerNotFoundMessage(name: string, expectedId: number): string {
   return `${name}: GitHubにこの名前のアカウントが見つかりません(設定のID${String(expectedId)})。オーナーが改名または削除された可能性があるため、このオーナーの検索を飛ばしました。factory_configのownersの名前とidを見直してください`;

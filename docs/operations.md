@@ -672,6 +672,9 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 - 作業項目の`owner`と`repo`が、GitHubの正規の綴りである。手順5と同じ確認で、追跡中のPRとの重ねの除去に効く。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -680,10 +683,9 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 ### PRの発見の元を確かめる
 
@@ -847,6 +849,9 @@ stateを書けない間は、毎周回先頭から選ぶ。
 収集が各リポジトリを取り直すまで、表のラベルの真偽は古い名前で答えるためである。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -855,10 +860,9 @@ stateを書けない間は、毎周回先頭から選ぶ。
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 ### 組織の所有者を足す前の確認
 
@@ -2050,6 +2054,9 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
   手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。そうなる前に消す。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -2058,10 +2065,9 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 人のPRの発見をやめるときは、`pr_ci_watch_human_prs`を`false`にする。
 
@@ -2389,6 +2395,9 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
   ただし、手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -2397,10 +2406,9 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 監視を止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 
@@ -2800,33 +2808,68 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 ### 5分の境目の403を数える
 
-検索を使うフローが無くなった後、5分の境目に403が出ないことを、ジョブのログで確かめる。
-検索を外した変更が反映されてから24時間たった後に、読み取りだけで行う。
-Windmill本体のデータベース`windmill`を、`db`のコンテナで読む。
+検索を使うフローが無くなった後、5分の境目に検索の枠の403が出ないことを、ジョブのログと失敗の記録で確かめる。
+検索を外した変更が反映されてから、平日を含む7日間たった後に、読み取りだけで行う。
+Windmill本体のデータベース`windmill`と、`factory.job_failures`のある`datatable_db`を、どちらも`db`のコンテナで読む。
 
-1. 24時間分のジョブのログで、次の3つの印を、スクリプトごとに数える。
-   - `secondary_limit`は、二次レート制限の印`secondary rate limit`を含むジョブの数である。
-   - `search_limit`は、検索のendpointのレート制限の印を含むジョブの数である。印は`GitHub rate limit on search/`と`GET search/`である。
-   - `search_rejected`は、実行時の拒否のメッセージ`GitHub REST search endpoints are not allowed`を含むジョブの数である。
+`callGhApi`は、rate limitと判定した応答を、警告のログ1行に残す。
+メッセージは`github rate limit response`で、`status`、クエリを除いた`endpoint`、`retry_after`、`resource`、`outcome`を載せる。
+`resource`は、応答のヘッダー`x-ratelimit-resource`の値で、`core`、`search`、`graphql`のどれかになる。
+`outcome`は、待って再試行する`waiting`、待ちが長すぎて失敗する`wait_too_long`、再試行も拒まれた`still_limited`のどれかになる。
+待って成功した403も、このログに残る。
+
+1. 7日分のジョブのログで、4つの印を、スクリプトごとに数える。
+   - `limit_logged`は、ログ`github rate limit response`を含むジョブの数である。
+   - `resource_search`は、そのログの`resource`が`search`のジョブの数である。
+   - `rate_limit_text`は、失敗の文`GitHub rate limit on`を含むジョブの数である。
+   - `search_rejected`は、実行時の拒否の文`GitHub REST search endpoints are not allowed`を含むジョブの数である。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, count(*) AS runs, count(*) FILTER (WHERE l.logs ILIKE '%secondary rate limit%') AS secondary_limit, count(*) FILTER (WHERE l.logs LIKE '%GitHub rate limit on search/%' OR l.logs LIKE '%GET search/%') AS search_limit, count(*) FILTER (WHERE l.logs LIKE '%GitHub REST search endpoints are not allowed%') AS search_rejected FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND j.created_at > now() - interval '1 day' GROUP BY j.runnable_path ORDER BY j.runnable_path"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, count(*) AS runs, count(*) FILTER (WHERE l.logs LIKE '%\"message\":\"github rate limit response\"%') AS limit_logged, count(*) FILTER (WHERE l.logs LIKE '%\"resource\":\"search\"%') AS resource_search, count(*) FILTER (WHERE l.logs LIKE '%GitHub rate limit on%') AS rate_limit_text, count(*) FILTER (WHERE l.logs LIKE '%GitHub REST search endpoints are not allowed%') AS search_rejected FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND j.created_at > now() - interval '7 days' GROUP BY j.runnable_path ORDER BY j.runnable_path"
    ```
 
-2. 3つの数が、すべてのスクリプトで0であることを見る。
-   `search_limit`か`search_rejected`が1以上なら、検索を呼ぶ経路が残っているか、新しく入っている。
+2. 同じ7日分の失敗の記録で、文`GitHub rate limit on`を含む行を、フローごとに数える。
+   ログに残らない失敗も、この表には残る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT flow_path, count(*) FROM factory.job_failures WHERE error LIKE '%GitHub rate limit on%' AND occurred_at > now() - interval '7 days' GROUP BY flow_path ORDER BY flow_path"
+   ```
+
+3. `resource_search`と`search_rejected`が、すべてのスクリプトで0であることを見る。
+   1以上なら、検索を呼ぶ経路が残っているか、新しく入っている。
    その`runnable_path`のコードを調べ、検索を外す。
-   `secondary_limit`が1以上なら、次の問い合わせで、時刻が5分の境目に集まっているかを見る。
+4. `limit_logged`が1以上のスクリプトは、`resource`が`core`か`graphql`の403である。
+   検索の枠ではないので、時刻が5分の境目に集まっているかを、次の問い合わせで見る。
+   集まっていれば、同じ時刻に動くフローの呼び出しの数を見直す。
+   集まっていなければ、[GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき)に従う。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, j.created_at FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND l.logs ILIKE '%secondary rate limit%' AND j.created_at > now() - interval '1 day' ORDER BY j.created_at"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, (extract(minute FROM j.created_at)::int % 5) AS minute_mod_5, count(*) FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND l.logs LIKE '%\"message\":\"github rate limit response\"%' AND j.created_at > now() - interval '7 days' GROUP BY 1, 2 ORDER BY 1, 2"
    ```
 
-3. 境目に集まっていれば、同じ時刻に動くフローの呼び出しの数を見直す。
-   集まっていなければ、検索と無関係の二次レート制限なので、[GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき)に従う。
+5. 手順1の問い合わせが検出できることを、対照で確かめる。
+   検索を外す前のコミットが反映されていた期間のジョブに、`created_at`の範囲を替えて、同じ問い合わせをする。
+   検索の枠の403があったジョブでは、失敗の文`GitHub rate limit on`か`GET search/`を含むジョブが1以上になる。
+   その期間のログが保持期間で消えていれば、対照を確かめられなかったことを、確認の記録に書く。
 
-数えるのは、ログに残る印だけである。
-待って再試行して成功した403は、ログに残らないので数えない。
+数えるのは、ログと失敗の記録に残るものだけである。
+ログのメッセージを足す前に反映されたジョブでは、待って成功した403は残らない。
+
+### 検索を外した反映の確認
+
+検索を外した変更を反映した後に、次の4つを確かめる。
+反映は`self_update`が行う。
+
+1. 反映が成功し、新しいhashが使われている。
+   デプロイの記録で、反映の行が成功であることを見る。
+2. `poll_issues`、`poll_prs`、`watch_pr_conflicts`、`watch_pr_ci`、`poll_dependabot`の、反映後の1周回の結果を見る。
+   - `failed`と`skipped_stale`が、反映の前より増えていない。
+   - 文`GitHub REST search endpoints are not allowed`が、ジョブのログと失敗の記録のどちらにも、0件である。
+   - ログの問い合わせは、[5分の境目の403を数える](#5分の境目の403を数える)の手順1の`search_rejected`を使う。失敗の記録は、`factory.job_failures`の`error`に同じ文を含む行を数える。
+3. dependabotの判断が、通常どおり進む。
+   `dependabot_merge_enabled`が偽の試運転なら、人に回る件数が、反映の前と変わらない。
+4. `gh_source_*`の値とresource-typeの項目を整理した後も、次の周回が通る。
+   整理した後の最初の周回で、5つのフローの結果が成功であることを見る。
 
 ## 監査を使う
 
@@ -3000,6 +3043,9 @@ dependabotの対象は、baseが`main`のPRに限る。
 説明できなければ、収集の失敗として調べる。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 dependabotの対象は明示したリポジトリだけで、一覧の読み取りは小さいためである。
 列挙の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。

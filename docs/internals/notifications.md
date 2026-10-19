@@ -585,6 +585,29 @@ HTTP 403か429で、次のどちらかを満たす応答をrate limitとみな�
 
 GraphQLでは、HTTP 200で`errors[].type`が`RATE_LIMITED`の応答を一次レート制限とみなす。
 
+### rate limitのログ
+
+`callGhApi`は、rate limitと判定した応答を、警告のログ1行`github rate limit response`に残す。
+次の3つの時点で、1行ずつ残す。
+
+- 待って再試行する前。
+- 待ちが長すぎて失敗する前。
+- 再試行も拒まれた後。
+
+フィールドは次のとおりである。
+
+| フィールド | 内容 |
+| --- | --- |
+| `status` | 応答のステータス(403か429) |
+| `endpoint` | ホストと先頭の`/`とクエリを除いたendpoint |
+| `retry_after` | `retry-after`ヘッダーの値。無ければ`null` |
+| `resource` | `x-ratelimit-resource`ヘッダーの値(`core`、`search`、`graphql`)。無ければ`null` |
+| `outcome` | `waiting`、`wait_too_long`、`still_limited` |
+
+トークンもクエリの値も載せない。
+待って成功した403と、枠の種類ごとの403を、ジョブのログから数えるためである。
+`GhClient`の`log`で出力先を替えられ、省略すると標準出力に書く。
+
 ### 待って再試行する
 
 RESTのrate limitでは、解除まで待って1回だけ再試行する。待つ時間は次の順で決める。
@@ -622,9 +645,10 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 例外のメッセージにendpointを載せない。クエリに値が入りうるためである。
 対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
 
-静的テスト`tests/scripts/no_search_api.test.ts`は、次の2つを固定する。
+静的テスト`tests/scripts/no_search_api.test.ts`は、次の3つを固定する。
 
-- `f/factory`のテスト以外に、`search/`の字面、`gh search`、`--search`が無い。
+- `f/factory`のテスト以外に、`search/`の字面、`gh search`、`--search`、argvの`gh`と`search`の並びが無い。
+- `gh`をargvの先頭に置く配列を書くファイルは、`github.ts`だけである。
 - 5つのフローが、`search`で始まる名前を`github.ts`から読み込まない。
 
 `search/`の字面を書けるのは、拒否の接頭辞を持つ定数の1行だけである。

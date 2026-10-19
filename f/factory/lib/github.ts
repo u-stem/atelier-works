@@ -22,7 +22,7 @@
 import { revealControlChars, VolatileCiLog } from "./ci_log_support.ts";
 import { GH_EXIT_AUTH_REQUIRED, GitHubHttpError } from "./github_errors.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   assertCommitSha,
   isCommitSha,
@@ -448,6 +448,38 @@ function isRestSearchEndpoint(endpoint: string): boolean {
   return path.startsWith(REJECTED_REST_ENDPOINT_PREFIX);
 }
 
+const defaultRateLimitLog = logger("github");
+
+/** ログに載せるendpoint。ホスト、先頭の`/`、クエリを落とす。クエリには値が入りうるため。 */
+function endpointForLog(endpoint: string): string {
+  return endpoint
+    .replace(/^https?:\/\/[^/]+\//, "")
+    .replace(/^\/+/, "")
+    .replace(/[?#].*$/s, "");
+}
+
+/**
+ * レート制限と判定した応答を、警告の1行として残す。
+ * 待って成功した403と、どのリソースの枠(`x-ratelimit-resource`の`core`、`search`、`graphql`)の
+ * 403かを、ジョブのログから数えるためである。
+ * 載せるのはステータス、クエリを除いたendpoint、`retry-after`、リソースの枠、その後の扱いだけで、
+ * トークンもクエリの値も載せない。
+ */
+function logRateLimit(
+  client: GhClient,
+  endpoint: string,
+  response: GhApiResponse,
+  outcome: "waiting" | "wait_too_long" | "still_limited",
+): void {
+  (client.log ?? defaultRateLimitLog).warn("github rate limit response", {
+    status: response.status,
+    endpoint: endpointForLog(endpoint),
+    retry_after: response.headers.get("retry-after") ?? null,
+    resource: response.headers.get("x-ratelimit-resource") ?? null,
+    outcome,
+  });
+}
+
 /**
  * `gh api <endpoint>`を呼ぶ。RESTの検索APIのendpointは、`gh`を起動せずに例外で拒む。
  * メッセージにはendpointを載せない(クエリに値が入りうるため)。
@@ -456,6 +488,7 @@ function isRestSearchEndpoint(endpoint: string): boolean {
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
  * ghの起動失敗、応答の無い通信断、冪等な要求の5xxの再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
+ * レート制限の応答は、待つ前と再試行の後に、警告のログ1行として残す(`logRateLimit`)。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
@@ -475,12 +508,15 @@ export async function callGhApi(
   const waitMs =
     rateLimitWaitMs(first.headers, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS;
   if (waitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS) {
+    logRateLimit(client, endpoint, first, "wait_too_long");
     throw new GitHubRateLimitError(endpoint, waitMs, false);
   }
+  logRateLimit(client, endpoint, first, "waiting");
   await sleep(waitMs);
 
   const second = await sendGhApi(client, endpoint, options);
   if (!isRateLimited(second)) return second;
+  logRateLimit(client, endpoint, second, "still_limited");
   throw new GitHubRateLimitError(
     endpoint,
     rateLimitWaitMs(second.headers, now),

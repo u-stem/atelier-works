@@ -622,7 +622,8 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 仕様は[通知とrate limitの仕様](internals/notifications.md#restの検索の拒否)にある。
 残るリスクは次のとおりである。
 
-- 拒否は、`callGhApi`を通る呼び出しにだけ効く。`gh`を直接起動する経路には効かない。静的テストが`gh search`と`--search`の字面を走査して止める。
+- 拒否は、`callGhApi`を通る呼び出しにだけ効く。`gh`の直接の起動は`github.ts`の1か所だけで、静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。
+- `gh search`、`--search`、argvの`gh`と`search`の並びも、静的テストが字面で走査して止める。
 - GraphQLの`search`のフィールドは拒まない。使う変更は、枠の消費を設計から見直す。
 - endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。実行時の拒否が止める。
 
