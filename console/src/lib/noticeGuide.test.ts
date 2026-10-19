@@ -62,6 +62,30 @@ describe("noticeGuide", () => {
     ).toBe(true);
   });
 
+  test("explains the notice for a disabled collection", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "の収集の無効:",
+    );
+  });
+
+  test("names the settings that disable the collection", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "gh_collect_detail_enabled",
+    );
+  });
+
+  test("tells to list the repositories before keeping the collection off", () => {
+    expect(noticeGuide("github_collect_stale").action).toContain(
+      "repo_allowlistに必要なリポジトリを並べて",
+    );
+  });
+
+  test("tells when the disabled collection notice resolves", () => {
+    expect(noticeGuide("github_collect_stale").note).toContain(
+      "repo_allowlistが空でなくなったとき",
+    );
+  });
+
   test("does not promise a future halt of the Factory", () => {
     expect(noticeGuide("github_collect_stale").meaning).not.toContain("まだ");
   });

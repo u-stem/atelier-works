@@ -480,3 +480,12 @@ export function repoStaleTargetFilter(
     isRepoAllowed(config, owner, repo) &&
     !explicit.has(`${owner}/${repo}`.toLowerCase());
 }
+
+/**
+ * 明示以外のリポジトリがありうるか。
+ */
+export function nonExplicitReposPossible(
+  _config: Pick<FactoryConfig, "owners" | "repo_allowlist">,
+): boolean {
+  return false;
+}

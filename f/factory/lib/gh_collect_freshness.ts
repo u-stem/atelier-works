@@ -65,7 +65,11 @@ const JST_OFFSET_MS = 9 * 60 * MINUTE_MS;
  * `not_running`は、最新の実行の記録が古い(収集が動いていない)こと。
  * `repo_stale`は、所有者の収集は成功していても、一部のリポジトリの記録が古いままであること。
  */
-export type GhCollectCause = GhCollectErrorCode | "not_running" | "repo_stale";
+export type GhCollectCause =
+  | GhCollectErrorCode
+  | "not_running"
+  | "repo_stale"
+  | "collect_disabled";
 
 /** 所有者1人分の判定。 */
 export type FreshnessVerdict =
@@ -135,6 +139,8 @@ export function judgeOwnerFreshness(input: {
   readonly watchStartMs: number | null;
   readonly nowMs: number;
   readonly thresholdMs: number;
+  /** 明示以外のリポジトリがありうるか。 */
+  readonly nonExplicitPossible: boolean;
 }): FreshnessJudgement {
   const { row, watchStartMs, nowMs, thresholdMs } = input;
   const cause = collectCause(row, nowMs);
@@ -229,6 +235,23 @@ export function parseRepoStaleNoticeOwner(message: string): string | null {
   return isGitHubName(name) ? name : null;
 }
 
+/** 収集の無効のnoticeの本文の先頭。 */
+export function collectDisabledNoticePrefix(_owner: string): string {
+  return "";
+}
+
+/** 収集の無効のnotice。 */
+export function collectDisabledNotice(_owner: string): NoticeRecord {
+  return { kind: GH_COLLECT_STALE_KIND, message: "" };
+}
+
+/** 収集の無効のnoticeの本文から所有者を取り出す。 */
+export function parseCollectDisabledNoticeOwner(
+  _message: string,
+): string | null {
+  return null;
+}
+
 /** 所有者のnoticeの本文の先頭。解決の先頭一致に使う。末尾の区切りまで含めるので、`foo`が`foobar`に当たらない。 */
 export function staleNoticePrefix(owner: string): string {
   return `${owner}: `;
@@ -259,7 +282,7 @@ export function formatJstMinute(ms: number): string {
 
 /** 原因の言葉。`repo_stale`は所有者の最新の実行の原因ではないので持たない。 */
 const CAUSE_LABELS: Readonly<
-  Record<Exclude<GhCollectCause, "repo_stale">, string>
+  Record<Exclude<GhCollectCause, "repo_stale" | "collect_disabled">, string>
 > = {
   not_running: "収集が動いていません",
   no_token: "読み取りトークンがありません",
@@ -278,6 +301,7 @@ const CAUSE_LABELS: Readonly<
 };
 
 const NEXT_ACTIONS: Readonly<Record<GhCollectCause, string>> = {
+  collect_disabled: "",
   repo_stale:
     "collect_githubのジョブログで、記録が古いリポジトリの失敗や打ち切りを確かめる。続くときは、repo_allowlistで対象のリポジトリを絞るか、リポジトリの規模を減らす",
   not_running:
@@ -358,6 +382,9 @@ export function staleCauseText(input: {
         : `記録が古いのは${String(summary.stale)}件(${repoStaleBreakdown(summary)})です。`;
     return `${input.owner}のリポジトリで、GitHubの収集の記録が${String(minutes)}分以上更新されていません。${detail}所有者の収集そのものは成功しています。この間、そのリポジトリの記録は古く、下流の判断に使えません`;
   }
+  if (input.cause === "collect_disabled") {
+    return "";
+  }
   const last =
     input.lastSuccessAtMs === null
       ? "記録なし"
@@ -431,6 +458,8 @@ export type GhCollectFreshnessDeps = {
   readonly enabled: boolean;
   /** 設定の`gh_collect_detail_enabled`。偽の間は詳細を集めないので、リポジトリ単位の古さを数えない。 */
   readonly detailEnabled: boolean;
+  /** 明示以外のリポジトリがありうるか。 */
+  readonly nonExplicitPossible: boolean;
   /** 設定の`owners`の名前。 */
   readonly owners: readonly string[];
   /** この回に定期ジョブ用workerの停止を検知したか。真の間は新しいnoticeを足さない。 */
@@ -773,6 +802,7 @@ async function checkOnce(
         watchStartMs,
         nowMs,
         thresholdMs,
+        nonExplicitPossible: deps.nonExplicitPossible,
       });
       verdicts.set(name, judgement.verdict);
       if (judgement.resolve) {

@@ -63,13 +63,21 @@ function latestRun(
   };
 }
 
-/** 監視の開始時刻を「今からこの時間前」で渡して判定する。 */
-function judge(target: GhCollectFreshnessRow, watchStartAgoMs: number | null) {
+/**
+ * 監視の開始時刻を「今からこの時間前」で渡して判定する。
+ * 既定では明示以外のリポジトリは無い(`repo_allowlist`が空でない)ものとする。
+ */
+function judge(
+  target: GhCollectFreshnessRow,
+  watchStartAgoMs: number | null,
+  nonExplicitPossible = false,
+) {
   return judgeOwnerFreshness({
     row: target,
     watchStartMs: watchStartAgoMs === null ? null : NOW - watchStartAgoMs,
     nowMs: NOW,
     thresholdMs: THRESHOLD,
+    nonExplicitPossible,
   });
 }
 
@@ -141,12 +149,12 @@ describe("judgeOwnerFreshness", () => {
     expect(judge(target, MIN).resolve).toBe(false);
   });
 
-  test("skips an owner with no token and no success", () => {
+  test("skips an owner with no token and no success when only explicit repositories exist", () => {
     const target = row({ latest: latestRun("no_token") });
     expect(judge(target, 3 * HOUR).verdict).toBe("skip");
   });
 
-  test("resolves the notice of a skipped owner", () => {
+  test("resolves the notice of a skipped owner when only explicit repositories exist", () => {
     const target = row({ latest: latestRun("no_token") });
     expect(judge(target, 3 * HOUR).resolve).toBe(true);
   });
@@ -310,6 +318,8 @@ describe("stale notice", () => {
     const causes: readonly GhCollectCause[] = [
       ...GH_COLLECT_ERROR_CODES,
       "not_running",
+      "repo_stale",
+      "collect_disabled",
     ];
     expect(
       causes.filter((cause) => nextActionFor(cause).trim().length === 0),
@@ -474,6 +484,8 @@ type Setup = {
   enabled?: boolean;
   owners?: string[];
   periodicStalled?: boolean;
+  /** 明示以外のリポジトリがありうるか。既定は偽(`repo_allowlist`が空でない)。 */
+  nonExplicitPossible?: boolean;
   rows?: GhCollectFreshnessRow[];
   /** `"unreadable"`なら`getState`が拒否される。 */
   state?: unknown;
@@ -527,6 +539,7 @@ function setup(options: Setup = {}): {
   const deps: GhCollectFreshnessDeps = {
     enabled: options.enabled ?? true,
     detailEnabled: true,
+    nonExplicitPossible: options.nonExplicitPossible ?? false,
     owners,
     periodicStalled: options.periodicStalled ?? false,
     now: () => NOW,
@@ -580,7 +593,7 @@ function staleEvents(rec: Recorded) {
 }
 
 describe("checkGhCollectFreshness", () => {
-  test("disabled resolves all stale notices and reads no runs", async () => {
+  test("disabled resolves all stale notices and reads no runs when only explicit repositories exist", async () => {
     const { deps, rec } = setup({ enabled: false });
     await checkGhCollectFreshness(deps);
     expect(rec.resolved).toEqual([""]);

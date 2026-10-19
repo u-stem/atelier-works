@@ -66,8 +66,8 @@ locks:
   f/factory/lib/gh_collect: 482ee398dad39585cf42181fcd02089d018b45f3f6c036324fddcd8e7962ae10
   f/factory/lib/gh_collect_detail: 4819e8d6e84ac6065c3d4de40820e75065482aaec00b890e85065e5ac957bc59
   f/factory/lib/gh_collect_detail_round: cda53e1882492fecbe3e46b45d6b2223c67a6e2cbe04edcda4e0378e5fe92691
-  f/factory/lib/gh_collect_freshness: 5be328b8b9a44d58b09581de5031669aa772336e74fda9dc30496b3f8dbb6afe
-  f/factory/lib/gh_collect_read: e9415822228562082f79700bc87f78bb6570c359d18fff1508d390e0325e4279
+  f/factory/lib/gh_collect_freshness: 4e8925593e260f71d087d2558f2c510e3cc6aac0a30f8745a23b9f6350dd2e1f
+  f/factory/lib/gh_collect_read: 93020c4aa513e27111791abb274aa12f562cf73f16e33a6ce464d490c36a51f6
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
   f/factory/lib/github: 04fc7e089d2de715f9ba84b515fc329633c5cb477b1ba90cff4b8d8b1d57d937
@@ -141,7 +141,7 @@ locks:
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: 4c453d0c933358a4b6dae582eaa1a773482c40010b3ded191bd6228bc8f83037
+  f/factory/self_update: 886fbbac8234b0742cc229eb15b30866cfa983b8f7e8de99f600a705eaafdac2
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: dc2f6c7f5d0736b0b4a4dad4f7d48a7cfe847e7f4438b2181ffddd8660370124
