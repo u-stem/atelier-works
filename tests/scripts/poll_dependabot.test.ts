@@ -1619,7 +1619,7 @@ describe("poll state", () => {
       previous: new Map(),
       fresh: new Map([["acme/widgets#12@x", WAIT]]),
       unprocessedPrKeys: new Set(),
-      unsearchedRepoKeys: new Set(),
+      unlistedRepoKeys: new Set(),
       resumeAtMs: null,
     });
 
@@ -1631,7 +1631,7 @@ describe("poll state", () => {
       previous: new Map([["acme/widgets#12@x", WAIT]]),
       fresh: new Map(),
       unprocessedPrKeys: new Set(),
-      unsearchedRepoKeys: new Set(),
+      unlistedRepoKeys: new Set(),
       resumeAtMs: null,
     });
 
@@ -1643,19 +1643,19 @@ describe("poll state", () => {
       previous: new Map([["acme/widgets#12@x", WAIT]]),
       fresh: new Map(),
       unprocessedPrKeys: new Set(["acme/widgets#12"]),
-      unsearchedRepoKeys: new Set(),
+      unlistedRepoKeys: new Set(),
       resumeAtMs: null,
     });
 
     expect(next.heads).toEqual({ "acme/widgets#12@x": WAIT });
   });
 
-  test("carries the records of a repository it did not search", () => {
+  test("carries the records of a repository it did not list", () => {
     const next = nextPollState({
       previous: new Map([["acme/widgets#12@x", WAIT]]),
       fresh: new Map(),
       unprocessedPrKeys: new Set(),
-      unsearchedRepoKeys: new Set(["acme/widgets"]),
+      unlistedRepoKeys: new Set(["acme/widgets"]),
       resumeAtMs: null,
     });
 
@@ -1667,7 +1667,7 @@ describe("poll state", () => {
       previous: new Map([["acme/widgets-extra#12@x", WAIT]]),
       fresh: new Map(),
       unprocessedPrKeys: new Set(),
-      unsearchedRepoKeys: new Set(["acme/widgets"]),
+      unlistedRepoKeys: new Set(["acme/widgets"]),
       resumeAtMs: null,
     });
 
@@ -1679,7 +1679,7 @@ describe("poll state", () => {
       previous: new Map(),
       fresh: new Map(),
       unprocessedPrKeys: new Set(),
-      unsearchedRepoKeys: new Set(),
+      unlistedRepoKeys: new Set(),
       resumeAtMs: 9,
     });
 
@@ -1775,8 +1775,10 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
     open: async () => {
       log.opened += 1;
       const h = harness({
-        handled: options.handled,
-        ownerGate: options.ownerGate,
+        ...(options.handled === undefined ? {} : { handled: options.handled }),
+        ...(options.ownerGate === undefined
+          ? {}
+          : { ownerGate: options.ownerGate }),
       });
       return {
         viewerLogin: "factory-bot",
@@ -2855,7 +2857,15 @@ describe("pollDependabot selects the listed pull requests like the table rows", 
   test("selects a pull request whose base branch is missing", async () => {
     const log = emptyLog();
 
-    await pollDependabot(round(log, listOf({ baseRef: undefined })));
+    await pollDependabot(
+      round(log, {
+        ...listOf({}),
+        listOpenPrs: async () => {
+          const { baseRef: _omitted, ...withoutBase } = openPr(FOUND);
+          return [withoutBase];
+        },
+      }),
+    );
 
     expect(log.processed).toEqual([12]);
   });
@@ -2863,7 +2873,15 @@ describe("pollDependabot selects the listed pull requests like the table rows", 
   test("selects a pull request whose creation time is missing", async () => {
     const log = emptyLog();
 
-    await pollDependabot(round(log, listOf({ createdAtMs: undefined })));
+    await pollDependabot(
+      round(log, {
+        ...listOf({}),
+        listOpenPrs: async () => {
+          const { createdAtMs: _omitted, ...withoutTime } = openPr(FOUND);
+          return [withoutTime];
+        },
+      }),
+    );
 
     expect(log.processed).toEqual([12]);
   });

@@ -3,8 +3,9 @@
 // 待つ間は作業項目を作らない。人に回すと決めたPRは、作業項目を作ってすぐ`needs_human`で終え、1回だけ通知する。
 // `dependabot_enabled`が偽なら、GitHubにもDBにも触れずに終える。
 // 対象のリポジトリは`factory_repo`と`repo_allowlist`に明示したものだけで、オーナーの全リポジトリは見ない。
-// 候補の列挙は、設定`gh_source_dependabot`が`db`で収集が有効なときは収集の表から読み、記録が古いリポジトリだけ検索に戻す。
-// 表の値は候補を絞ることにだけ使い、マージに至る判断は、PRごとにRESTで読み直した値と収集の事実で行う。
+// 候補の列挙は、収集が有効なときは収集の表から読む。
+// 表を使えないリポジトリ(記録が古い、行が無い、読めないなど)は、RESTの開いているPRの一覧で読む。archive済みのリポジトリは、マージできないので読まない。
+// 表と一覧の値は候補を絞ることにだけ使い、マージに至る判断は、PRごとにRESTで読み直した値と収集の事実で行う。
 //
 // 判断は`processDependabotPr`と`pollDependabot`にあり、`main`は入出力をつなぐだけである。
 // 1件のPRの失敗では例外を投げず、失敗を記録して次のPRへ進む。
@@ -49,15 +50,14 @@ import {
   usableGhPullRequests,
 } from "./lib/gh_collect_read.ts";
 import {
-  type DependabotPrSearchItem,
-  type DependabotPrSearchScope,
   type GhClient,
   GitHubRateLimitError,
   getAccountId,
   getPrWithCreatedAt,
   getViewer,
+  listOpenPullRequests,
+  type OpenPullRequest,
   type PullRequestWithCreatedAt,
-  searchDependabotPrs,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
@@ -91,6 +91,9 @@ const DEPENDABOT_AUTHOR_LOGIN = "dependabot[bot]";
 
 /** 対象にするPRのbase。収集も同じブランチを求める。 */
 const DEPENDABOT_BASE_REF = "main";
+
+/** アプリのPRの作者のloginの末尾。RESTは付けて返し、収集の表は付けずに保存する。 */
+const BOT_LOGIN_SUFFIX = "[bot]";
 
 /**
  * 待ちの上限を、公開の日数(`dependabot_min_published_days`)に足す日数。
@@ -184,6 +187,15 @@ function prPartOf(key: string): string {
 }
 
 // ---- 1件のPR ----
+
+/** 評価する候補のPR。`createdAtMs`は並びにだけ使い、処理には使わない。 */
+export type DependabotPrCandidate = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+  /** PRを作った時刻(epochミリ秒)。 */
+  readonly createdAtMs: number;
+};
 
 /** 同じheadの待ちの記録。 */
 export type HeadWaitState = {
@@ -385,7 +397,7 @@ function nextPublishCheckAtMs(
 export async function processDependabotPr(
   deps: PollDependabotDeps,
   ctx: PollDependabotContext,
-  found: DependabotPrSearchItem,
+  found: DependabotPrCandidate,
 ): Promise<DependabotPollOutcome> {
   const { number } = found;
   const skipped = (reason: string): DependabotPollOutcome => ({
@@ -405,7 +417,7 @@ export async function processDependabotPr(
   }
 
   const pr = await deps.getPr(found.owner, found.repo, number);
-  // 候補の名前は表の小文字か検索の値なので、以後の処理にはGitHubが返した大小文字を使う。
+  // 候補の名前は表の小文字か設定の値なので、以後の処理にはGitHubが返した大小文字を使う。
   // 作業項目の照合は大小文字を区別するので、小文字のままだと処理済みの判定が外れる。
   const baseRepo = splitRepoFullName(pr.baseRepoFullName);
   if (
@@ -611,17 +623,28 @@ export async function processDependabotPr(
   return { kind: "started", workItemId: id };
 }
 
-// ---- 表からの候補の選別 ----
+// ---- 候補の選別 ----
 
 export type DependabotCandidateSelection =
-  | { readonly kind: "fresh"; readonly items: DependabotPrSearchItem[] }
+  | { readonly kind: "fresh"; readonly items: DependabotPrCandidate[] }
   | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
+
+/** 候補を選ぶ入力の1件。収集の表の行と、RESTの一覧の1件を、同じ形にそろえたもの。 */
+type DependabotRow = Pick<
+  GhPullRequest,
+  "owner" | "repo" | "number" | "is_draft" | "base_ref"
+> & {
+  /** 不明なら`null`。 */
+  readonly author_login: string | null;
+  readonly author_type: string | null;
+  readonly createdAtMs: number;
+};
 
 /**
  * 表の行の作者を、`poll_dependabot`が比べる形にそろえる。
  * 収集はGraphQLの値をそのまま保存するので、アプリ(`Bot`)の`login`には`[bot]`が付かない。
  */
-function normalizedAuthorLogin(row: GhPullRequest): string | null {
+function normalizedAuthorLogin(row: DependabotRow): string | null {
   if (row.author_login === null) return null;
   return row.author_type === "Bot"
     ? `${row.author_login}[bot]`
@@ -629,11 +652,34 @@ function normalizedAuthorLogin(row: GhPullRequest): string | null {
 }
 
 /**
- * 1つのリポジトリの読み取りの結果から、候補のPRを選ぶ。
- * 鮮度が足りなければ、行を選ばずに理由を返す。呼び出し側がそのリポジトリを検索に戻す。
- * 使ってよい開いた行のうち、draftでなく、baseが`main`で、作者が`dependabot[bot]`の行を残す。
+ * 行のうち、draftでなく、baseが`main`で、作者が`dependabot[bot]`のものを、候補にする。
  * 不明(`NULL`)のbaseと作者は、候補を広げる側に扱う。起動の前にRESTで確かめるので、広げても誤った操作には進まない。
- * forkの行は絞らない。検索も絞らず、ゲートがforkを人に回すためである。
+ * forkの行は絞らない。ゲートがforkを人に回すためである。
+ * 表と一覧が同じ規則で選ぶよう、両方がこの関数を通る。
+ */
+function pickDependabotRows(
+  rows: readonly DependabotRow[],
+): DependabotPrCandidate[] {
+  return rows
+    .filter((row) => {
+      if (row.is_draft) return false;
+      if (row.base_ref !== null && row.base_ref !== DEPENDABOT_BASE_REF) {
+        return false;
+      }
+      const author = normalizedAuthorLogin(row);
+      return author === null || author === DEPENDABOT_AUTHOR_LOGIN;
+    })
+    .map((row) => ({
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      createdAtMs: row.createdAtMs,
+    }));
+}
+
+/**
+ * 1つのリポジトリの読み取りの結果から、候補のPRを選ぶ。
+ * 鮮度が足りなければ、行を選ばずに理由を返す。呼び出し側がそのリポジトリをRESTの一覧で読む。
  * 候補の名前は表の小文字のまま返し、`createdAtMs`は並びにだけ使う。
  */
 export function selectDependabotCandidates(
@@ -654,27 +700,57 @@ export function selectDependabotCandidates(
   if (repoId === null) {
     return { kind: "stale", reason: "unusable" };
   }
-  const items = usableGhPullRequests(
+  const rows = usableGhPullRequests(
     target.owner,
     target.repo,
     repoId,
     snapshot.prs,
-  )
-    .filter((row) => {
-      if (row.is_draft) return false;
-      if (row.base_ref !== null && row.base_ref !== DEPENDABOT_BASE_REF) {
-        return false;
-      }
-      const author = normalizedAuthorLogin(row);
-      return author === null || author === DEPENDABOT_AUTHOR_LOGIN;
-    })
-    .map((row) => ({
-      owner: row.owner,
-      repo: row.repo,
-      number: row.number,
-      createdAtMs: row.created_at.getTime(),
-    }));
-  return { kind: "fresh", items };
+  ).map((row) => ({ ...row, createdAtMs: row.created_at.getTime() }));
+  return { kind: "fresh", items: pickDependabotRows(rows) };
+}
+
+/** 作成の時刻が無いPRの並び。最も新しい側に置き、時刻の分かるPRを先に処理する。 */
+const UNKNOWN_CREATED_AT_MS = Number.MAX_SAFE_INTEGER;
+
+/**
+ * RESTの一覧の1件を、表の行と同じ形にそろえる。
+ * 作者の`login`は、アプリなら末尾に`[bot]`が付く形で返るので、表の形(`[bot]`なし、種別`Bot`)に直す。
+ * 作者が無いときと、baseが無いときは、不明(`null`)として候補に残す。
+ * 候補の名前は、一覧の値ではなく、要求した名前から作る。
+ */
+function listedRow(
+  pr: OpenPullRequest,
+  target: { readonly owner: string; readonly repo: string },
+): DependabotRow {
+  let authorLogin: string | null = null;
+  let authorType: string | null = null;
+  if (pr.authorLogin !== null) {
+    if (pr.authorLogin.endsWith(BOT_LOGIN_SUFFIX)) {
+      authorLogin = pr.authorLogin.slice(0, -BOT_LOGIN_SUFFIX.length);
+      authorType = "Bot";
+    } else {
+      authorLogin = pr.authorLogin;
+      authorType = "User";
+    }
+  }
+  return {
+    owner: target.owner,
+    repo: target.repo,
+    number: pr.number,
+    is_draft: pr.draft,
+    base_ref: pr.baseRef ?? null,
+    author_login: authorLogin,
+    author_type: authorType,
+    createdAtMs: pr.createdAtMs ?? UNKNOWN_CREATED_AT_MS,
+  };
+}
+
+/** 開いているPRの一覧から、候補のPRを選ぶ。 */
+function selectListedDependabotCandidates(
+  prs: readonly OpenPullRequest[],
+  target: { readonly owner: string; readonly repo: string },
+): DependabotPrCandidate[] {
+  return pickDependabotRows(prs.map((pr) => listedRow(pr, target)));
 }
 
 // ---- 周回の状態 ----
@@ -735,7 +811,7 @@ export function parsePollState(raw: unknown): ParsedPollState {
 /**
  * 次の周回に渡すstateを作る。
  * 今回待ちになったheadの記録と、今回調べ終えなかったPR(失敗したPRと、レート制限で打ち切った後のPR)の前の記録を残す。
- * 検索が失敗したか、検索しなかったリポジトリのPRの前の記録も残す。待ちの起点を失わないためである。
+ * 一覧の読み取りが失敗したか、一覧を読まなかったリポジトリのPRの前の記録も残す。待ちの起点を失わないためである。
  * 処理を終えたPRと、候補から外れたPR(閉じたPR)の記録は捨てるので、stateは開いたPRの数を超えて増えない。
  */
 export function nextPollState(input: {
@@ -743,8 +819,8 @@ export function nextPollState(input: {
   readonly fresh: ReadonlyMap<string, HeadWaitState>;
   /** 今回調べ終えなかった候補のPRのキー(`headWaitKey`の`@`より前)。 */
   readonly unprocessedPrKeys: ReadonlySet<string>;
-  /** 検索が失敗したか、レート制限で検索しなかったリポジトリのキー(`owner/repo`の小文字)。 */
-  readonly unsearchedRepoKeys: ReadonlySet<string>;
+  /** 一覧の読み取りが失敗したか、レート制限で一覧を読まなかったリポジトリのキー(`owner/repo`の小文字)。 */
+  readonly unlistedRepoKeys: ReadonlySet<string>;
   readonly resumeAtMs: number | null;
 }): PollState {
   const heads: Record<string, HeadWaitState> = {};
@@ -752,7 +828,7 @@ export function nextPollState(input: {
     const prPart = prPartOf(key);
     if (
       input.unprocessedPrKeys.has(prPart) ||
-      input.unsearchedRepoKeys.has(repoPartOf(prPart))
+      input.unlistedRepoKeys.has(repoPartOf(prPart))
     ) {
       heads[key] = wait;
     }
@@ -770,9 +846,11 @@ export type PollSession = {
   readonly verifiedOwners: readonly FactoryOwner[];
   /** 照合で飛ばしたオーナーの数。 */
   readonly ownersFailed: number;
-  readonly search: (
-    scope: DependabotPrSearchScope,
-  ) => Promise<DependabotPrSearchItem[]>;
+  /** 1つのリポジトリの開いているPRを、RESTの一覧ですべて読む。 */
+  readonly listOpenPrs: (
+    owner: string,
+    repo: string,
+  ) => Promise<OpenPullRequest[]>;
   /** 収集の表から、1つのリポジトリの開いたPRの行とDBの時刻を、1つの文で読む。 */
   readonly readRepoPrs: (
     owner: string,
@@ -803,11 +881,9 @@ export type PollDependabotResult = {
   readonly waiting: number;
   readonly skipped: number;
   readonly failed: number;
-  /** 候補を列挙した元。表を読んだ周回だけ`db`で、それ以外は`search`。 */
-  readonly source: "search" | "db";
-  /** 表の代わりに検索で候補を列挙したリポジトリの数。 */
-  readonly fallback_searches: number;
-  /** 検索に戻した理由ごとの、リポジトリの数。 */
+  /** 表の代わりにRESTの一覧で候補を列挙したリポジトリの数。 */
+  readonly fallback_lists: number;
+  /** 一覧に戻した理由ごとの、リポジトリの数。 */
   readonly fallback_reasons: Readonly<Record<string, number>>;
 };
 
@@ -823,8 +899,12 @@ function resumeAfter(err: GitHubRateLimitError, nowMs: number): number {
  * 対象のリポジトリは`watch_main_ci`と同じ規則で決める(`listMainCiTargets`)。
  * `factory_repo`と、`repo_allowlist`のうち照合を通ったオーナーのリポジトリだけを、リポジトリごとに探す。
  * `repo_allowlist`が空なら`factory_repo`だけを見る。オーナーの全リポジトリは見ない。
- * 候補の列挙は、`gh_source_dependabot`が`db`で、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のときだけ、収集の表から読む。
- * 表を読めない、または記録の鮮度が足りないリポジトリは、その周回だけ検索に戻す。検索に戻したことは結果とログに出す。
+ * 候補の列挙は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のときだけ、収集の表から読む。
+ * 表を使えないリポジトリは、その周回だけRESTの一覧に戻す。戻したことは結果とログに出す。
+ * 戻す理由は、表の鮮度の判定の理由(`no_record`、`unusable`、`not_collected`、`in_future`、`too_old`)と、
+ * 表の読み取りの失敗(`read_failed`)と、収集の無効(`collection_disabled`)である。
+ * archive済みのリポジトリは、マージできないので、表も一覧も読まない。
+ * 一覧はページの上限を超えると失敗し、そのリポジトリは失敗として数える。
  * 1つのリポジトリの列挙の失敗と、1件のPRの失敗は記録して続ける。
  * GitHubのレート制限に当たったら、残りを次の周回に回し、解除の時刻をstateに残す。
  * 最後に、待っているheadの記録を保存する。
@@ -840,19 +920,15 @@ export async function pollDependabot(
     skipped: 0,
     failed: 0,
   };
-  const searchOnly = {
-    source: "search",
-    fallback_searches: 0,
-    fallback_reasons: {},
-  } as const;
+  const noFallback = { fallback_lists: 0, fallback_reasons: {} } as const;
   if (!config.dependabot_enabled) {
-    return { enabled: false, paused: false, ...counts, ...searchOnly };
+    return { enabled: false, paused: false, ...counts, ...noFallback };
   }
 
   const nowMs = io.now();
   const previous = parsePollState(await io.getState());
   if (previous.resumeAtMs !== null && previous.resumeAtMs > nowMs) {
-    return { enabled: true, paused: true, ...counts, ...searchOnly };
+    return { enabled: true, paused: true, ...counts, ...noFallback };
   }
 
   const session = await io.open(config);
@@ -880,36 +956,29 @@ export async function pollDependabot(
   }
 
   // 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
-  // 設定を戻し忘れても処理が止まらないよう、周回全体を検索にする。
+  // 設定を戻し忘れても処理が止まらないよう、その周回はすべてRESTの一覧で読む。
   const useTable =
-    config.gh_source_dependabot === "db" &&
-    config.gh_collect_enabled &&
-    config.gh_collect_detail_enabled;
-  if (config.gh_source_dependabot === "db" && !useTable) {
-    session.warn(
-      "gh_source_dependabot is db but the collection is not fully enabled, so the round searches",
-      {
-        gh_collect_enabled: config.gh_collect_enabled,
-        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
-      },
-    );
-  }
+    config.gh_collect_enabled && config.gh_collect_detail_enabled;
   const staleAfterMs = ghDetailStaleAfterMs(config.owners.length);
 
   let resumeAtMs: number | null = null;
-  const found: DependabotPrSearchItem[] = [];
+  const found: DependabotPrCandidate[] = [];
   // 候補を列挙できなかったリポジトリ。失敗したものと、レート制限で列挙しなかったものを入れる。
-  const unsearched = new Set(
+  const unlisted = new Set(
     targets.map((target) => `${target.owner}/${target.repo}`.toLowerCase()),
   );
   const fallbackReasons: Record<string, number> = {};
-  let fallbackSearches = 0;
+  let fallbackLists = 0;
 
-  /** 表から候補を足す。表を使えなければ、検索に戻す理由を返す。 */
+  /**
+   * 表から候補を足す。表を使えなければ、一覧に戻す理由を返す。
+   * archive済みのリポジトリは、何も足さずに`null`を返す。
+   */
   const readTable = async (target: {
     readonly owner: string;
     readonly repo: string;
   }): Promise<string | null> => {
+    const repoKey = `${target.owner}/${target.repo}`.toLowerCase();
     let snapshot: GhRepoOpenPrSnapshot;
     try {
       snapshot = await session.readRepoPrs(target.owner, target.repo);
@@ -922,6 +991,10 @@ export async function pollDependabot(
       );
       return "read_failed";
     }
+    if (snapshot.repo?.archived === true) {
+      unlisted.delete(repoKey);
+      return null;
+    }
     const selection = selectDependabotCandidates(
       snapshot,
       target,
@@ -929,28 +1002,27 @@ export async function pollDependabot(
     );
     if (selection.kind === "stale") return selection.reason;
     found.push(...selection.items);
-    unsearched.delete(`${target.owner}/${target.repo}`.toLowerCase());
+    unlisted.delete(repoKey);
     return null;
   };
 
-  /** 検索で候補を足す。レート制限に当たって周回を止めるべきときは`false`を返す。 */
-  const searchTarget = async (target: {
+  /** 一覧で候補を足す。レート制限に当たって周回を止めるべきときは`false`を返す。 */
+  const listTarget = async (target: {
     readonly owner: string;
     readonly repo: string;
   }): Promise<boolean> => {
     try {
       found.push(
-        ...(await session.search({
-          kind: "repo",
-          owner: target.owner,
-          repo: target.repo,
-        })),
+        ...selectListedDependabotCandidates(
+          await session.listOpenPrs(target.owner, target.repo),
+          target,
+        ),
       );
-      unsearched.delete(`${target.owner}/${target.repo}`.toLowerCase());
+      unlisted.delete(`${target.owner}/${target.repo}`.toLowerCase());
     } catch (err) {
       counts.failed += 1;
       await deps.recordFailure(
-        stepName("search_dependabot_prs", target.owner, target.repo),
+        stepName("list_open_pull_requests", target.owner, target.repo),
         err,
         null,
       );
@@ -963,18 +1035,20 @@ export async function pollDependabot(
   };
 
   for (const target of targets) {
+    let reason = "collection_disabled";
     if (useTable) {
-      const reason = await readTable(target);
-      if (reason === null) continue;
-      fallbackSearches += 1;
-      fallbackReasons[reason] = (fallbackReasons[reason] ?? 0) + 1;
-      session.warn("dependabot candidates fall back to search", {
-        owner: target.owner,
-        repo: target.repo,
-        reason,
-      });
+      const tableReason = await readTable(target);
+      if (tableReason === null) continue;
+      reason = tableReason;
     }
-    if (!(await searchTarget(target))) break;
+    fallbackLists += 1;
+    fallbackReasons[reason] = (fallbackReasons[reason] ?? 0) + 1;
+    session.warn("dependabot candidates fall back to list", {
+      owner: target.owner,
+      repo: target.repo,
+      reason,
+    });
+    if (!(await listTarget(target))) break;
   }
   const scope = { ...config, owners: [...session.verifiedOwners] };
   const seen = new Set<string>();
@@ -1048,7 +1122,7 @@ export async function pollDependabot(
       previous: previous.heads,
       fresh,
       unprocessedPrKeys: unprocessed,
-      unsearchedRepoKeys: unsearched,
+      unlistedRepoKeys: unlisted,
       resumeAtMs,
     }),
   );
@@ -1056,8 +1130,7 @@ export async function pollDependabot(
     enabled: true,
     paused: false,
     ...counts,
-    source: useTable ? "db" : "search",
-    fallback_searches: fallbackSearches,
+    fallback_lists: fallbackLists,
     fallback_reasons: fallbackReasons,
   };
 }
@@ -1115,7 +1188,7 @@ export async function main(): Promise<PollDependabotResult> {
         viewerLogin: viewer.login,
         verifiedOwners: verified.owners,
         ownersFailed: verified.failed,
-        search: (scope) => searchDependabotPrs(client, scope),
+        listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo),
         readRepoPrs: (owner, repo) => readGhRepoOpenPullRequests(owner, repo),
         listActive: () => listActive(),
         warn: (message, fields) => log.warn(message, fields),
