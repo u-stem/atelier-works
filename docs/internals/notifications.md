@@ -34,7 +34,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から11分以上待たされていることを検知し、通知を新しく残した |
-| `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないこと、または所有者の収集は成功していても一部のリポジトリの記録が閾値を超えて古いことを検知し、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない |
+| `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないこと、または所有者の収集は成功していても一部のリポジトリの記録が閾値を超えて古いことを検知し、通知を新しく残した。`repo_allowlist`が空で、設定により収集が止まっていること(収集の無効)を検知したときも、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない。ただし、収集の無効は設定の事実なので、停止の間も残す |
 | `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
@@ -93,7 +93,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `periodic_worker_missing` | なし | 説明に原因、「次の操作」 |
-| `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳)、「次の操作」、所有者 |
+| `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳。収集の無効では、止まっている設定と、設定を戻すか`repo_allowlist`に並べる操作)、「次の操作」、所有者 |
 | `default_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |
@@ -237,7 +237,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
 | `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces`、`watch_pr_ci` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
-| `github_collect_stale` | `self_update` | `<所有者>:`と空白と、最新の実行の記録を確かめる固定の文。リポジトリ単位の古さでは、`<所有者>のリポジトリ:`と空白と、収集のログを確かめて対象を絞る固定の文 |
+| `github_collect_stale` | `self_update` | `<所有者>:`と空白と、最新の実行の記録を確かめる固定の文。リポジトリ単位の古さでは、`<所有者>のリポジトリ:`と空白と、収集のログを確かめて対象を絞る固定の文。収集の無効では、`<所有者>の収集の無効:`と空白と、設定を戻すか`repo_allowlist`に並べる固定の文 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |

@@ -480,3 +480,15 @@ export function repoStaleTargetFilter(
     isRepoAllowed(config, owner, repo) &&
     !explicit.has(`${owner}/${repo}`.toLowerCase());
 }
+
+/**
+ * 明示されていないリポジトリがありうるか。
+ * `isRepoAllowed`は、`repo_allowlist`が空のとき`owners`の全リポジトリを許すので、
+ * 所有者がいて`repo_allowlist`が空のときに真になる。
+ * 収集の無効と、トークンの無い所有者の通知は、この述語で出すかを決める。
+ */
+export function nonExplicitReposPossible(
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist">,
+): boolean {
+  return config.owners.length > 0 && config.repo_allowlist.length === 0;
+}

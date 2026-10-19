@@ -97,9 +97,9 @@ describe("noticeKindLabel", () => {
     );
   });
 
-  test("names the stalled and lagging GitHub collection", () => {
+  test("names the stalled, lagging and disabled GitHub collection", () => {
     expect(noticeKindLabel("github_collect_stale")).toBe(
-      "GitHubの収集の停止と遅れ",
+      "GitHubの収集の停止・遅れ・無効",
     );
   });
 

@@ -100,6 +100,12 @@ describe("self_update gh collect freshness check", () => {
     );
   });
 
+  test("passes whether non-explicit repositories are possible", async () => {
+    expect(callSection(await selfUpdateSource())).toContain(
+      "nonExplicitPossible: nonExplicitReposPossible(config)",
+    );
+  });
+
   test("settles repositories by the downstream threshold", async () => {
     expect(callSection(await selfUpdateSource())).toMatch(
       /settledAfterMs: ghDetailStaleAfterMs\(owners\.length\)/,

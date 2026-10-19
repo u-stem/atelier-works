@@ -71,6 +71,7 @@ import {
 } from "./lib/gh_collect_freshness.ts";
 import {
   ghDetailStaleAfterMs,
+  nonExplicitReposPossible,
   repoStaleTargetFilter,
   summarizeRepoStale,
 } from "./lib/gh_collect_read.ts";
@@ -825,6 +826,7 @@ export async function main(): Promise<SelfUpdateResult> {
       await checkGhCollectFreshness({
         enabled: config.gh_collect_enabled,
         detailEnabled: config.gh_collect_detail_enabled,
+        nonExplicitPossible: nonExplicitReposPossible(config),
         owners: config.owners.map((owner) => owner.name),
         periodicStalled: periodicWorker === "stalled",
         now: () => Date.now(),

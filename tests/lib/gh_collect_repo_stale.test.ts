@@ -3,6 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  nonExplicitReposPossible,
   repoStaleTargetFilter,
   summarizeRepoStale,
 } from "../../f/factory/lib/gh_collect_read.ts";
@@ -372,5 +373,48 @@ describe("repoStaleTargetFilter", () => {
       repo_allowlist: ["https://github.com/acme/widgets"],
     };
     expect(repoStaleTargetFilter(config)("acme", "gadgets")).toBe(false);
+  });
+});
+
+describe("nonExplicitReposPossible", () => {
+  const BASE: Pick<
+    FactoryConfig,
+    "owners" | "repo_allowlist" | "factory_repo"
+  > = {
+    owners: [{ name: "acme", kind: "user" }],
+    repo_allowlist: [],
+    factory_repo: "https://github.com/acme/factory",
+  };
+
+  test("is true when owners are set and the allowlist is empty", () => {
+    expect(nonExplicitReposPossible(BASE)).toBe(true);
+  });
+
+  test("is false once the allowlist is not empty", () => {
+    const config = {
+      ...BASE,
+      repo_allowlist: ["https://github.com/acme/widgets"],
+    };
+    expect(nonExplicitReposPossible(config)).toBe(false);
+  });
+
+  test("is false when no owner is set", () => {
+    expect(nonExplicitReposPossible({ ...BASE, owners: [] })).toBe(false);
+  });
+
+  test("agrees with whether a non-explicit repository is a stale target", () => {
+    const config = {
+      ...BASE,
+      repo_allowlist: ["https://github.com/acme/widgets"],
+    };
+    expect(nonExplicitReposPossible(config)).toBe(
+      repoStaleTargetFilter(config)("acme", "gadgets"),
+    );
+  });
+
+  test("agrees with the stale target filter when the allowlist is empty", () => {
+    expect(nonExplicitReposPossible(BASE)).toBe(
+      repoStaleTargetFilter(BASE)("acme", "gadgets"),
+    );
   });
 });

@@ -18,6 +18,11 @@
 # 入れたアカウントは、同じ名前でもIDが違う人が付けたラベルを許可しない。
 # 入れないアカウントは名前だけで照合する。
 #
+# gh_collect_enabled / gh_collect_detail_enabled: GitHubの収集の設定。どちらも既定はfalseで、
+# falseの間は収集が止まる(後者は詳細の収集だけが止まる)。`repo_allowlist`が空で`owners`に
+# 所有者がいるときは、どちらかがfalseの間、`github_collect_stale`の通知が残る。
+# 収集を止めたままにするなら、先に`repo_allowlist`に必要なリポジトリを並べる。
+#
 # factory_repo_id: 任意。`factory_repo`のGitHubリポジトリの数値IDで、
 # `gh api repos/<owner>/<repo> --jq .id`で調べる。入れると、Factory自身のcloneを使う処理が
 # 取得の前に現在のIDと照合し、食い違うときは取得しない。
@@ -57,6 +62,8 @@ value:
   repo_allowlist: []
   diff_max_lines: 3000
   pr_ci_watch_enabled: true
+  gh_collect_enabled: false
+  gh_collect_detail_enabled: false
 resource_type: c_factory_config
 description: >-
   個人アカウント単体インスタンス向けの初期設定です。ownersとinstance_nameは、この画面から入力してください。

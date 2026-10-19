@@ -309,8 +309,8 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "github_collect_stale",
     guide(
-      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは25分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。本文が「<所有者>のリポジトリ: 」で始まる通知は、所有者の収集は成功していて、一部のリポジトリの記録だけが閾値を超えて更新されていません。この間、そのリポジトリの記録は古く、下流の判断に使えません。",
-      "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。「のリポジトリ: 」の通知は、リポジトリごとの記録を読み、失敗や打ち切りが続くリポジトリを確かめ、repo_allowlistで対象を絞るか、リポジトリの規模を減らします。",
+      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは25分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。本文が「<所有者>のリポジトリ: 」で始まる通知は、所有者の収集は成功していて、一部のリポジトリの記録だけが閾値を超えて更新されていません。この間、そのリポジトリの記録は古く、下流の判断に使えません。本文が「<所有者>の収集の無効: 」で始まる通知は、repo_allowlistが空で、gh_collect_enabledかgh_collect_detail_enabledがfalseのため、明示していないリポジトリの記録が更新されない状態です。所有者の収集が成功しても解決せず、設定を直すまで残ります。",
+      "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。「のリポジトリ: 」の通知は、リポジトリごとの記録を読み、失敗や打ち切りが続くリポジトリを確かめ、repo_allowlistで対象を絞るか、リポジトリの規模を減らします。「の収集の無効: 」の通知は、収集を使うなら両方の設定をtrueに戻し、止めたままにするなら、repo_allowlistに必要なリポジトリを並べてから止めます。",
       {
         commands: [
           "mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c \"SELECT owner, ok, error_code, verified, id_checked, requests, cost, remaining, finished_at FROM factory.gh_collect_runs WHERE owner = '<所有者>' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10\"",
@@ -318,7 +318,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
           "wmill schedule get f/factory/collect_github --json",
           "wmill job list --script-path f/factory/collect_github --limit 5",
         ],
-        note: "収集が成功すると、自己更新(2分ごと)が自動で解決します。「のリポジトリ: 」の通知は、所有者の収集が成功しても解決せず、対象のリポジトリがすべて、下流が記録を使う閾値(所有者が2人までは15分)の内に戻ったときに解決します。gh_collect_enabledをfalseにしたときと、ownersから外したときも解決します。止まったまま人が解決すると、次の自己更新で出直します。同じ停止について、定期ジョブの失敗や所有者の不一致の通知と重なって届くことがあります。",
+        note: "収集が成功すると、自己更新(2分ごと)が自動で解決します。「のリポジトリ: 」の通知は、所有者の収集が成功しても解決せず、対象のリポジトリがすべて、下流が記録を使う閾値(所有者が2人までは15分)の内に戻ったときに解決します。「の収集の無効: 」の通知は、両方の設定がtrueに戻ったとき、repo_allowlistが空でなくなったとき、ownersから外したときに解決します。gh_collect_enabledをfalseにしたときは、repo_allowlistが空でなければ立っている通知をすべて解決し、空なら解決しません。ownersから外したときも、その所有者の通知を解決します。止まったまま人が解決すると、次の自己更新で出直します。同じ停止について、定期ジョブの失敗や所有者の不一致の通知と重なって届くことがあります。",
       },
     ),
   ],

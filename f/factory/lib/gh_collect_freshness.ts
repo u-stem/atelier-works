@@ -1,6 +1,8 @@
 // GitHubの収集が続けて成功しているかを、所有者ごとに確かめる。
 // 止まっていればnoticeを残してDiscordに送り、回復していれば残したnoticeを解決する。
 // 所有者の収集が成功していても、一部のリポジトリの記録だけが古いままのときは、原因`repo_stale`のnoticeを別に残す。
+// 明示以外のリポジトリがありうる(`repo_allowlist`が空)のに収集が設定で止まっているときは、
+// 通知を解決せず、原因`collect_disabled`のnoticeを残す。
 // 判定は純関数にあり、記録の読み取りとnoticeの書き込みは依存として注入する。
 // defaultのworkerで動く`self_update`が呼ぶ。収集は定期ジョブ用のworkerで動くので、
 // そのworkerが止まると収集の停止に気づけなくなるため、同じworkerでは確かめない。
@@ -64,8 +66,13 @@ const JST_OFFSET_MS = 9 * 60 * MINUTE_MS;
  * 収集が成功していない原因。
  * `not_running`は、最新の実行の記録が古い(収集が動いていない)こと。
  * `repo_stale`は、所有者の収集は成功していても、一部のリポジトリの記録が古いままであること。
+ * `collect_disabled`は、明示以外のリポジトリがありうるのに、設定で収集(または詳細の収集)が止まっていること。
  */
-export type GhCollectCause = GhCollectErrorCode | "not_running" | "repo_stale";
+export type GhCollectCause =
+  | GhCollectErrorCode
+  | "not_running"
+  | "repo_stale"
+  | "collect_disabled";
 
 /** 所有者1人分の判定。 */
 export type FreshnessVerdict =
@@ -124,6 +131,8 @@ function latestOf(first: number | null, second: number | null): number | null {
 
 /**
  * 所有者1人分の鮮度を判定する。先に原因を求め、上から順に当てて最初に当たった行を採る。
+ * トークンの無い所有者は、明示以外のリポジトリがありうるときは`skip`にせず、ほかの所有者と同じ猶予と閾値で判定する。
+ * 明示のリポジトリだけ(`repo_allowlist`が空でない)なら、通知が要る明示以外のリポジトリが無いので`skip`にして通知を解決する。
  * 基準の時刻は、最後の成功と監視の開始時刻の遅い方。
  * 長く無効にした後や、所有者を足し直した後に、古い成功から閾値を超えたと誤って判定しないためである。
  * 原因が`not_running`のときは、記録が新しいことを前提にした行(トークンの無い所有者のskip、`next_allowed_at`の待ち、5xxの待ち)を外す。
@@ -135,6 +144,8 @@ export function judgeOwnerFreshness(input: {
   readonly watchStartMs: number | null;
   readonly nowMs: number;
   readonly thresholdMs: number;
+  /** 明示以外のリポジトリがありうるか。 */
+  readonly nonExplicitPossible: boolean;
 }): FreshnessJudgement {
   const { row, watchStartMs, nowMs, thresholdMs } = input;
   const cause = collectCause(row, nowMs);
@@ -146,6 +157,7 @@ export function judgeOwnerFreshness(input: {
   ): FreshnessJudgement => ({ verdict, cause, resolve });
 
   if (
+    !input.nonExplicitPossible &&
     cause !== "not_running" &&
     latest?.error_code === "no_token" &&
     lastSuccessMs === null
@@ -229,6 +241,52 @@ export function parseRepoStaleNoticeOwner(message: string): string | null {
   return isGitHubName(name) ? name : null;
 }
 
+const COLLECT_DISABLED_NOTICE_PREFIX_TAIL = "の収集の無効: ";
+
+/**
+ * 収集の無効のnoticeの本文の先頭。解決の先頭一致に使う。
+ * 所有者のnotice(`<owner>: `)とリポジトリ単位の古さのnotice(`<owner>のリポジトリ: `)のどちらの先頭とも一致しない形にする。
+ */
+export function collectDisabledNoticePrefix(owner: string): string {
+  return `${owner}${COLLECT_DISABLED_NOTICE_PREFIX_TAIL}`;
+}
+
+const COLLECT_DISABLED_NOTICE_BODY =
+  "設定でGitHubの収集が止まっています(gh_collect_enabledかgh_collect_detail_enabledがfalseです)。repo_allowlistが空なので、この所有者の明示していないリポジトリの記録は更新されません。次の操作: Discordの通知か、Consoleのこの通知の説明に従って、収集を使うなら両方の設定をtrueに戻し、止めたままにするなら、repo_allowlistに必要なリポジトリを並べてください";
+
+/**
+ * 収集の無効のnotice。本文は所有者ごとに常に同じにする。
+ * 変わる値を含めると、変わるたびに別のnoticeになり、`addNoticeUnlessUnresolved`が重ねて記録するため。
+ */
+export function collectDisabledNotice(owner: string): NoticeRecord {
+  return {
+    kind: GH_COLLECT_STALE_KIND,
+    message: `${collectDisabledNoticePrefix(owner)}${COLLECT_DISABLED_NOTICE_BODY}`,
+  };
+}
+
+/**
+ * 収集の無効のnoticeの本文から、先頭の`<owner>の収集の無効: `の所有者を取り出す。
+ * 取り出した名前が`isGitHubName`を通らないとき、先頭の形でないときは`null`。
+ */
+export function parseCollectDisabledNoticeOwner(
+  message: string,
+): string | null {
+  const separator = message.indexOf(": ");
+  if (separator <= 0) {
+    return null;
+  }
+  const head = message.slice(0, separator + 2);
+  if (!head.endsWith(COLLECT_DISABLED_NOTICE_PREFIX_TAIL)) {
+    return null;
+  }
+  const name = head.slice(
+    0,
+    head.length - COLLECT_DISABLED_NOTICE_PREFIX_TAIL.length,
+  );
+  return isGitHubName(name) ? name : null;
+}
+
 /** 所有者のnoticeの本文の先頭。解決の先頭一致に使う。末尾の区切りまで含めるので、`foo`が`foobar`に当たらない。 */
 export function staleNoticePrefix(owner: string): string {
   return `${owner}: `;
@@ -257,9 +315,9 @@ export function formatJstMinute(ms: number): string {
     .replace("T", " ");
 }
 
-/** 原因の言葉。`repo_stale`は所有者の最新の実行の原因ではないので持たない。 */
+/** 原因の言葉。`repo_stale`と`collect_disabled`は所有者の最新の実行の原因ではないので持たない。 */
 const CAUSE_LABELS: Readonly<
-  Record<Exclude<GhCollectCause, "repo_stale">, string>
+  Record<Exclude<GhCollectCause, "repo_stale" | "collect_disabled">, string>
 > = {
   not_running: "収集が動いていません",
   no_token: "読み取りトークンがありません",
@@ -278,10 +336,12 @@ const CAUSE_LABELS: Readonly<
 };
 
 const NEXT_ACTIONS: Readonly<Record<GhCollectCause, string>> = {
+  collect_disabled:
+    "収集を使うなら、gh_collect_enabledとgh_collect_detail_enabledをtrueにする。止めたままにするなら、repo_allowlistに必要なリポジトリを並べる",
   repo_stale:
     "collect_githubのジョブログで、記録が古いリポジトリの失敗や打ち切りを確かめる。続くときは、repo_allowlistで対象のリポジトリを絞るか、リポジトリの規模を減らす",
   not_running:
-    "wmill schedule get f/factory/collect_githubでスケジュールが有効か、wmill job list --script-path f/factory/collect_githubで直近のジョブを確かめる。止めるつもりなら、gh_collect_enabledをfalseにする",
+    "wmill schedule get f/factory/collect_githubでスケジュールが有効か、wmill job list --script-path f/factory/collect_githubで直近のジョブを確かめる。止めるつもりなら、repo_allowlistに必要なリポジトリを並べてから、gh_collect_enabledをfalseにする",
   unauthorized:
     "この所有者の読み取りトークンを作り直し、GITHUB_READ_TOKEN_<OWNER>を入れ替えてmise run bootstrapを実行する",
   forbidden:
@@ -336,6 +396,7 @@ function repoStaleBreakdown(summary: GhRepoStaleSummary): string {
 
 /**
  * Discordの説明に出す文。
+ * 原因が`collect_disabled`のときは、止まっている設定と、明示以外のリポジトリの記録が更新されないことを載せる。
  * 原因が`repo_stale`のときは、閾値、記録が古いリポジトリの数と理由別の内訳を載せる。
  * 所有者の収集は成功しているので、最後の成功と最新の実行は載せない。
  * それ以外は、閾値、最後の成功(JST)、最新の実行の原因を載せる。
@@ -357,6 +418,9 @@ export function staleCauseText(input: {
         ? ""
         : `記録が古いのは${String(summary.stale)}件(${repoStaleBreakdown(summary)})です。`;
     return `${input.owner}のリポジトリで、GitHubの収集の記録が${String(minutes)}分以上更新されていません。${detail}所有者の収集そのものは成功しています。この間、そのリポジトリの記録は古く、下流の判断に使えません`;
+  }
+  if (input.cause === "collect_disabled") {
+    return `${input.owner}のGitHubの収集が設定で止まっています。gh_collect_enabledかgh_collect_detail_enabledがfalseで、repo_allowlistが空です。この間、明示していないリポジトリの記録は更新されません`;
   }
   const last =
     input.lastSuccessAtMs === null
@@ -431,6 +495,11 @@ export type GhCollectFreshnessDeps = {
   readonly enabled: boolean;
   /** 設定の`gh_collect_detail_enabled`。偽の間は詳細を集めないので、リポジトリ単位の古さを数えない。 */
   readonly detailEnabled: boolean;
+  /**
+   * 明示以外のリポジトリがありうるか。`repo_allowlist`が空であること(`isRepoAllowed`が`owners`の全リポジトリを許す条件)。
+   * 真のときだけ、収集の無効とトークンの無い所有者を通知なしに止めない。
+   */
+  readonly nonExplicitPossible: boolean;
   /** 設定の`owners`の名前。 */
   readonly owners: readonly string[];
   /** この回に定期ジョブ用workerの停止を検知したか。真の間は新しいnoticeを足さない。 */
@@ -539,12 +608,75 @@ function sameStarts(
   return true;
 }
 
-/** 収集が無効のとき: 未解決のnoticeをすべて解決し、監視の開始時刻のキーを消す。 */
-async function handleDisabled(deps: GhCollectFreshnessDeps): Promise<void> {
-  try {
-    await deps.resolveNotices("");
-  } catch {
-    warn(deps, "could not resolve the gh collect stale notices");
+/**
+ * 収集の無効を通知する対象か。
+ * 明示以外のリポジトリがありうる(`repo_allowlist`が空)ことと、所有者がいることの両方が要る。
+ * 所有者がいなければ、集める相手がそもそも無い。
+ */
+function collectDisabledApplies(
+  deps: GhCollectFreshnessDeps,
+  names: readonly string[],
+): boolean {
+  return deps.nonExplicitPossible && names.length > 0;
+}
+
+/**
+ * 収集の無効のnoticeを、所有者ごとに足す。新しく挿入できたときだけDiscordに送る。
+ * 設定の事実なので、定期ジョブ用workerの停止では抑えない。
+ */
+async function addCollectDisabledNotices(
+  deps: GhCollectFreshnessDeps,
+  names: readonly string[],
+): Promise<void> {
+  const thresholdMs = staleNotifyThresholdMs(names.length);
+  for (const name of names) {
+    try {
+      const noticeId = await deps.addNotice(collectDisabledNotice(name));
+      if (noticeId === null) continue;
+      await deps.notify({
+        kind: GH_COLLECT_STALE_KIND,
+        instance_name: deps.instanceName,
+        owner: name,
+        cause: staleCauseText({
+          owner: name,
+          thresholdMs,
+          lastSuccessAtMs: null,
+          cause: "collect_disabled",
+        }),
+        next_action: nextActionFor("collect_disabled"),
+        url: deps.noticeUrl(noticeId),
+      });
+    } catch {
+      warn(
+        deps,
+        "could not process the collection disabled notice of an owner of the gh collect freshness check",
+      );
+    }
+  }
+}
+
+/**
+ * 収集が設定で無効のとき。
+ * 明示以外のリポジトリがありうるなら、立っているnoticeを解決せず、収集の無効のnoticeを足し、外れた所有者のnoticeだけを解決する。
+ * そうでなければ、未解決のnoticeをすべて解決する。
+ * どちらも、監視の開始時刻のキーを消す。
+ */
+async function handleDisabled(
+  deps: GhCollectFreshnessDeps,
+  names: readonly string[],
+): Promise<void> {
+  if (collectDisabledApplies(deps, names)) {
+    await addCollectDisabledNotices(deps, names);
+    const notices = await listNotices(deps);
+    if (notices !== null) {
+      await resolveRemovedOwners(deps, names, notices);
+    }
+  } else {
+    try {
+      await deps.resolveNotices("");
+    } catch {
+      warn(deps, "could not resolve the gh collect stale notices");
+    }
   }
   const stored = await readState(deps);
   if (stored === null || !Object.hasOwn(stored, GH_COLLECT_WATCH_STATE_KEY)) {
@@ -573,7 +705,7 @@ async function listNotices(
 
 /**
  * `owners`から外れた所有者の未解決のnoticeを、本文の接頭辞から解決する。
- * 所有者のnoticeとリポジトリ単位の古さのnoticeのどちらも、所有者を取り出して調べる。
+ * 所有者のnotice、リポジトリ単位の古さのnotice、収集の無効のnoticeのいずれも、所有者を取り出して調べる。
  */
 async function resolveRemovedOwners(
   deps: GhCollectFreshnessDeps,
@@ -592,10 +724,17 @@ async function resolveRemovedOwners(
       continue;
     }
     const repoOwner = parseRepoStaleNoticeOwner(notice.message);
-    if (repoOwner === null) {
+    if (repoOwner !== null) {
+      if (!current.has(repoOwner.toLowerCase())) {
+        prefixes.add(repoStaleNoticePrefix(repoOwner));
+      }
+      continue;
+    }
+    const disabledOwner = parseCollectDisabledNoticeOwner(notice.message);
+    if (disabledOwner === null) {
       unreadable += 1;
-    } else if (!current.has(repoOwner.toLowerCase())) {
-      prefixes.add(repoStaleNoticePrefix(repoOwner));
+    } else if (!current.has(disabledOwner.toLowerCase())) {
+      prefixes.add(collectDisabledNoticePrefix(disabledOwner));
     }
   }
   if (unreadable > 0) {
@@ -604,6 +743,35 @@ async function resolveRemovedOwners(
     });
   }
   for (const prefix of prefixes) {
+    try {
+      await deps.resolveNotices(prefix);
+    } catch {
+      warn(deps, "could not resolve a gh collect stale notice");
+    }
+  }
+}
+
+/**
+ * 収集が有効なとき、詳細の収集の無効のnoticeを足すか解決する。
+ * 明示以外のリポジトリがありうるのに詳細を集めない設定のときは、足す。
+ * そうでなければ、立っているnoticeを解決する。読めない回は、足しは行い、解決はしない。
+ * 収集そのものの無効(`gh_collect_enabled`が偽)は`handleDisabled`が扱う。
+ */
+async function handleDetailDisabled(
+  deps: GhCollectFreshnessDeps,
+  names: readonly string[],
+  notices: StaleNotices | null,
+): Promise<void> {
+  if (!deps.detailEnabled && collectDisabledApplies(deps, names)) {
+    await addCollectDisabledNotices(deps, names);
+    return;
+  }
+  if (notices === null) return;
+  for (const name of names) {
+    const prefix = collectDisabledNoticePrefix(name);
+    if (!notices.some((notice) => notice.message.startsWith(prefix))) {
+      continue;
+    }
     try {
       await deps.resolveNotices(prefix);
     } catch {
@@ -700,11 +868,11 @@ async function handleRepoStale(
 async function checkOnce(
   deps: GhCollectFreshnessDeps,
 ): Promise<GhCollectFreshnessCheck> {
+  const names = ownerNames(deps.owners);
   if (!deps.enabled) {
-    await handleDisabled(deps);
+    await handleDisabled(deps, names);
     return "checked";
   }
-  const names = ownerNames(deps.owners);
   const thresholdMs = staleNotifyThresholdMs(names.length);
   let rows: GhCollectFreshnessRow[];
   try {
@@ -773,6 +941,7 @@ async function checkOnce(
         watchStartMs,
         nowMs,
         thresholdMs,
+        nonExplicitPossible: deps.nonExplicitPossible,
       });
       verdicts.set(name, judgement.verdict);
       if (judgement.resolve) {
@@ -807,6 +976,7 @@ async function checkOnce(
   if (notices !== null) {
     await resolveRemovedOwners(deps, names, notices);
   }
+  await handleDetailDisabled(deps, names, notices);
   // 記録の読み取りが終わらなくても、外れた所有者の解決が止まらないよう、最後に行う。
   await handleRepoStale(deps, { names, thresholdMs, verdicts, notices });
   return "checked";
@@ -850,11 +1020,15 @@ async function withTimeout<T>(
 
 /**
  * 収集が続けて成功しているかを確かめる。
- * 無効のときは、未解決のnoticeをすべて解決し、監視の開始時刻を消す。
+ * 無効のときは、監視の開始時刻を消す。
+ * 明示以外のリポジトリがありうる(`repo_allowlist`が空)なら、立っているnoticeを解決せず、原因`collect_disabled`のnoticeを所有者ごとに足す。
+ * そうでなければ、未解決のnoticeをすべて解決する。
  * 有効のときは、所有者ごとに判定し、止まっていればnoticeを足して(新しく挿入できたときだけ)Discordに送り、
  * 回復していれば解決する。`owners`から外れた所有者のnoticeも解決する。
  * 所有者の収集が成功していても、一部のリポジトリの記録が古いままなら、所有者のnoticeとは別の本文で
  * 原因`repo_stale`のnoticeを足し、対象のすべてが下流が記録を使う閾値の内に戻るまで、所有者の成功では解決しない。
+ * 詳細を集めない設定(`detailEnabled`が偽)でも、明示以外のリポジトリがありうるなら`collect_disabled`のnoticeを足し、
+ * 両方の設定が真に戻るか、`repo_allowlist`が空でなくなるか、所有者が外れると解決する。
  * 記録を読めないとき、時間内に終わらないときは`unknown`を返し、足しも解決もしない。
  * ログと戻り値には固定の語と件数だけを載せる。例外は投げない。
  */
