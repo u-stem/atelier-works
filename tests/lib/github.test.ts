@@ -54,6 +54,7 @@ import {
   listIssueComments,
   listLabeledOpenIssues,
   listOpenPullRequests,
+  listOpenPullRequestsWithoutWait,
   listPrChecks,
   listPrCommitMessages,
   listPrCommits,
@@ -3926,6 +3927,75 @@ describe("getPrWithoutWait", () => {
         12,
       ),
     ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+});
+
+describe("listOpenPullRequestsWithoutWait", () => {
+  const RATE_LIMITED = () =>
+    ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" }));
+
+  test("asks for the open pull requests of the repository like listOpenPullRequests", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await listOpenPullRequestsWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/pulls?state=open&per_page=100",
+    );
+  });
+
+  test("returns the pull requests of the response", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          number: 12,
+          draft: false,
+          head: { ref: "feature/x", repo: { full_name: "acme/widgets" } },
+          base: { ref: "main", repo: { full_name: "acme/widgets" } },
+          user: { login: "alice", id: 11 },
+        },
+      ]),
+    ]);
+    const prs = await listOpenPullRequestsWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs.map((entry) => entry.number)).toEqual([12]);
+  });
+
+  test("throws the rate limit error without waiting for the limit to reset", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await expect(
+      listOpenPullRequestsWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+      ),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("does not send a second request after the rate limit", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await listOpenPullRequestsWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("rejects a repository name that GitHub does not accept", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      listOpenPullRequestsWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "../widgets",
+      ),
+    ).rejects.toThrow();
   });
 });
 

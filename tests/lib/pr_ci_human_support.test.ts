@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { PrCiCheck } from "../../f/factory/lib/db.ts";
+import type { OpenPullRequest } from "../../f/factory/lib/github.ts";
 import { labelerPolicyFor } from "../../f/factory/lib/poll_support.ts";
 import {
   humanPrAuthors,
+  humanPrCandidatesFromOpenList,
   humanPrCandidatesFromRows,
   isAllowedPrAuthor,
   isHumanPrCandidate,
@@ -368,6 +370,107 @@ describe("humanPrCandidatesFromRows", () => {
     ];
     expect(
       humanPrCandidatesFromRows(rows, AUTHORS).map((found) => found.number),
+    ).toEqual([41, 42]);
+  });
+});
+
+describe("humanPrCandidatesFromOpenList", () => {
+  const AUTHORS = ["factory-bot", "alice"];
+
+  function listed(overrides: Partial<OpenPullRequest> = {}): OpenPullRequest {
+    return {
+      number: 40,
+      draft: false,
+      headRef: "feature/x",
+      headRepoFullName: "acme/widgets",
+      baseRepoFullName: "acme/widgets",
+      authorLogin: "alice",
+      authorId: 11,
+      createdAtMs: Date.parse("2026-10-10T00:00:00.000Z"),
+      ...overrides,
+    };
+  }
+
+  function numbersOf(prs: readonly OpenPullRequest[]): number[] {
+    return humanPrCandidatesFromOpenList("acme", "widgets", prs, AUTHORS).map(
+      (found) => found.number,
+    );
+  }
+
+  test("selects an open pull request of an allowed author", () => {
+    expect(numbersOf([listed()])).toEqual([40]);
+  });
+
+  test("compares the author without regard to case", () => {
+    expect(numbersOf([listed({ authorLogin: "ALICE" })])).toEqual([40]);
+  });
+
+  test("leaves out a pull request of another author", () => {
+    expect(numbersOf([listed({ authorLogin: "mallory" })])).toEqual([]);
+  });
+
+  test("leaves out a draft pull request", () => {
+    expect(numbersOf([listed({ draft: true })])).toEqual([]);
+  });
+
+  test("keeps a pull request whose author is unknown, marked as unknown", () => {
+    expect(
+      humanPrCandidatesFromOpenList(
+        "acme",
+        "widgets",
+        [listed({ authorLogin: null, authorId: null })],
+        AUTHORS,
+      ).map((found) => found.authorUnknown),
+    ).toEqual([true]);
+  });
+
+  test("marks a pull request of a known author as known", () => {
+    expect(
+      humanPrCandidatesFromOpenList("acme", "widgets", [listed()], AUTHORS).map(
+        (found) => found.authorUnknown,
+      ),
+    ).toEqual([false]);
+  });
+
+  test("names the candidate by the requested repository", () => {
+    expect(
+      humanPrCandidatesFromOpenList(
+        "Acme",
+        "Widgets",
+        [listed({ baseRepoFullName: "other/place" })],
+        AUTHORS,
+      ).map((found) => `${found.owner}/${found.repo}`),
+    ).toEqual(["Acme/Widgets"]);
+  });
+
+  test("uses the creation time to order the candidates", () => {
+    expect(
+      humanPrCandidatesFromOpenList(
+        "acme",
+        "widgets",
+        [listed({ createdAtMs: Date.parse("2026-10-12T01:02:03.000Z") })],
+        AUTHORS,
+      ).map((found) => found.updatedAtMs),
+    ).toEqual([Date.parse("2026-10-12T01:02:03.000Z")]);
+  });
+
+  test("puts the candidate without a creation time last", () => {
+    expect(
+      humanPrCandidatesFromOpenList(
+        "acme",
+        "widgets",
+        [listed({ createdAtMs: null })],
+        AUTHORS,
+      ).map((found) => found.updatedAtMs),
+    ).toEqual([0]);
+  });
+
+  test("selects the pull request of a fork and of a factory-shaped branch like the table does", () => {
+    expect(
+      numbersOf([
+        listed({ number: 41, headRepoFullName: "alice/widgets" }),
+        listed({ number: 42, headRef: "factory/issue-7-wi-90" }),
+      ]),
     ).toEqual([41, 42]);
   });
 });

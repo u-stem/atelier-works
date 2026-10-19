@@ -4647,6 +4647,15 @@ export async function listOpenPullRequests(
   }));
 }
 
+export async function listOpenPullRequestsWithoutWait(
+  _client: GhClient,
+  _owner: string,
+  _repo: string,
+  _maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
+): Promise<OpenPullRequest[]> {
+  return [];
+}
+
 /** ラベルの名前を読む。配列でないとき、名前が文字列でない要素があるときは`null`にする。 */
 function labelNamesOf(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;

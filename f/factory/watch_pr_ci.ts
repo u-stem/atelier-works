@@ -278,6 +278,16 @@ export function resolvePrCiHumanSource(
   return source;
 }
 
+export function resolvePrCiHumanTableUse(
+  _config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled" | "pr_ci_watch_human_prs"
+  >,
+  _log: Logger,
+): boolean {
+  return false;
+}
+
 export async function main(): Promise<PrCiWatchResult> {
   const log = logger("watch_pr_ci");
   const config = await loadConfig(() =>

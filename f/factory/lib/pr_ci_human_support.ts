@@ -3,7 +3,7 @@
 // 人の行は、`pr_ci_checks.work_item_id`がNULLの行である。検索と記録は`pr_ci_watch.ts`が行う。
 
 import type { PrCiCheck } from "./db.ts";
-import type { PullRequest } from "./github.ts";
+import type { OpenPullRequest, PullRequest } from "./github.ts";
 import { isAllowedLabeler, type LabelerPolicy } from "./poll_support.ts";
 import type { PrCiNotifyPolicy } from "./pr_ci_notify.ts";
 import type { PullRequestRef } from "./pr_ci_support.ts";
@@ -122,6 +122,15 @@ export function humanPrCandidatesFromRows(
     });
   }
   return candidates;
+}
+
+export function humanPrCandidatesFromOpenList(
+  _owner: string,
+  _repo: string,
+  _prs: readonly OpenPullRequest[],
+  _authors: readonly string[],
+): HumanPrCandidate[] {
+  return [];
 }
 
 /**
