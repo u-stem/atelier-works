@@ -1,7 +1,8 @@
 // GitHubの収集の本体。依存を注入して、所有者ごとにリポジトリの一覧(段1)と、開いているPRとトリガーラベル付きIssueの詳細(段2)を読み、DBに書く。
 // 所有者ごとに読み取り専用のトークンを使い、一覧を取り終えて照合が通ったときだけ、その所有者の記録を置き換える。
 // 段2は設定の`gh_collect_detail_enabled`が真のときだけ行い、全員分の段1の後に、段1と同じ順で回す。
-// GitHubの失敗は例外にせず、実行の行に失敗の種類だけを残す。ジョブ結果とログには、件数と失敗の種類しか載せない。
+// GitHubの失敗は例外にせず、実行の行に失敗の種類だけを残す。
+// ジョブ結果には件数と失敗の種類だけを載せる。ログには、それに加えて、拒否された項目の許可表の`type`と問い合わせの項目名を1回10件まで載せる。
 
 import {
   canStartDetailRequest,
@@ -42,6 +43,7 @@ import {
 import {
   GRAPHQL_REQUEST_TIMEOUT_MS,
   type GraphqlResponse,
+  type RejectedItem,
 } from "./gh_graphql.ts";
 import type { Logger } from "./log.ts";
 import {
@@ -279,6 +281,27 @@ function interruptedCollected(listed: ListedOwner): OwnerCollected {
 }
 
 /**
+ * 拒否された項目を、ログに1行で残す。0件なら出さない。
+ * 項目は許可表の`type`と問い合わせの項目名だけで、エラーの文も応答の本文も含まない。
+ * 段2の行にはリポジトリ名が載らないので、同じ周回の`a repository detail failed`と突き合わせる。
+ */
+function logRefusedItems(
+  log: Logger,
+  owner: string,
+  stage: "list" | "detail",
+  items: readonly RejectedItem[],
+): void {
+  if (items.length === 0) {
+    return;
+  }
+  log.warn("graphql query items refused", {
+    owner,
+    stage,
+    items: items.map((item) => ({ type: item.type, field: item.field })),
+  });
+}
+
+/**
  * `owners`の所有者のリポジトリの状態を集めて、DBに書く。
  * `gh_collect_enabled`が偽なら、トークンを読まず、行も書かずに終わる。
  * 実行の行は、トークンを読む前に全員分を1つの文で書く。書けなければ例外を投げて、`on_failure`に任せる。
@@ -474,6 +497,7 @@ export async function runGhCollect(
         firstReceivedMs = deps.nowMs();
       }
       if (!response.ok) {
+        logRefusedItems(log, owner.name, "list", response.rejected);
         const failure = classifyGraphqlFailure(response, deps.nowMs());
         return fail(failure.error_code, failure.next_allowed_at);
       }
@@ -800,6 +824,14 @@ export async function runGhCollect(
           log.error("a GitHub detail request failed unexpectedly", {
             owner: owner.name,
           });
+        }
+        if (response !== null) {
+          logRefusedItems(
+            log,
+            owner.name,
+            "detail",
+            response.ok ? (response.rejected ?? []) : response.rejected,
+          );
         }
         const result: BatchResult =
           response === null
