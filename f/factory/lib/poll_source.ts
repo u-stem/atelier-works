@@ -563,26 +563,55 @@ export function confirmPrCandidate(
   };
 }
 
+/**
+ * 1周回に、チーム宛ての依頼の疑いでRESTで確かめる候補の上限。
+ * 確かめても一致しない候補を毎周回読み直して、読み取りの枠を使い切らないためである。
+ */
+export const TEAM_CONFIRM_LIMIT = 20;
+
 export type PrDiscoveryStats = IssueDiscoveryStats & {
   /**
-   * RESTの直接の依頼では対象でなかったが、チーム宛ての依頼が付いているかもしれず、見送ったPRの数。
+   * チーム宛ての依頼が付いていて、直接の依頼でなかったため見送ったPRの数。
    * チーム宛ての依頼は、PATのアカウントが属するチームかを決められるまで見送る。
    */
   readonly team_unresolved: number;
+  /** 依頼先を読めず、RESTで確かめる上限(`TEAM_CONFIRM_LIMIT`)を超えたため、この周回は確かめなかった候補の数。 */
+  readonly team_capped: number;
 };
 
-/** 確かめるPRの参照に、チーム宛ての依頼だけが残りうるかを添えたもの。 */
+/** 確かめるPRの参照に、チーム宛ての依頼の扱いを添えたもの。 */
 type PrCandidateRef = PrRef & {
   /** 分類が`team`で、チームへの依頼が偽と分かっていない。直接の依頼を確かめて外れたら、見送りとして数える。 */
   readonly teamPossible: boolean;
+  /** 分類が`team`で、直接の依頼をRESTで確かめる。上限(`TEAM_CONFIRM_LIMIT`)の対象になる。 */
+  readonly teamRead: boolean;
 };
+
+/** 候補の鍵(小文字の所有者、リポジトリ、番号)。上限で残す候補を決める順にも使う。 */
+function refSortKey(ref: PrRef): [string, string, number] {
+  return [ref.owner.toLowerCase(), ref.repo.toLowerCase(), ref.number];
+}
+
+function compareRefs(a: PrRef, b: PrRef): number {
+  const left = refSortKey(a);
+  const right = refSortKey(b);
+  for (let index = 0; index < 2; index += 1) {
+    const l = String(left[index]);
+    const r = String(right[index]);
+    if (l !== r) return l < r ? -1 : 1;
+  }
+  return left[2] - right[2];
+}
 
 /**
  * ラベル、レビューの依頼、assigneeのPRを見つける。照合を通った所有者ごとに行う。
  * 所有者の全体を表で読み、リポジトリごとに鮮度を判定して、新しいリポジトリの行だけを候補にする。
  * 行は、表の列(ラベル、依頼先、assignee)で分類し、`target`、`maybe`、`team`を候補にして、`none`は捨てる。
- * チームへの依頼は解決できないので、`team`の行も直接の依頼をRESTで確かめる。
- * 直接の依頼でなければ見送り、`team_unresolved`に数える。依頼先を読めない行も直接の依頼を確かめる。
+ * チームへの依頼は解決できないので、チーム宛ての依頼だけが付いた行(依頼先が分かり、PATのアカウントを含まず、チームへの依頼が真)は、
+ * RESTで確かめても一致しないため、確かめずに見送り、`team_unresolved`に数える。
+ * 依頼先を読めない行と、チームへの依頼が不明の行は、直接の依頼をRESTで確かめる。
+ * 確かめるのは1周回に`TEAM_CONFIRM_LIMIT`件までで、鍵の昇順に選び、超えた件数を`team_capped`に数える。
+ * 直接の依頼でなければ見送り、`team_unresolved`に数える。
  * 表が新しくないリポジトリの扱いは、設定で明示したかで分かれる。
  * - 明示していない: 見送り、理由別に数える。失敗にはしない。読めない間の通知は収集の側が出す。
  * - 明示した(`factory_repo`と`repo_allowlist`の項目): RESTの一覧で、開いているPRを読む。
@@ -641,29 +670,51 @@ export async function discoverPrs(
   let candidates = 0;
   let dropped = 0;
   let teamUnresolved = 0;
+  let teamCapped = 0;
   const skippedReasons: Record<string, number> = {};
   const restReasons: Record<string, number> = {};
   const refs: PrCandidateRef[] = [];
   // 一覧のページの境目で同じ番号が重なりうるので、PRの鍵で重ねを除く。
   const seenRefs = new Set<string>();
-  const addRef = (ref: PrCandidateRef) => {
-    const key = `${ref.owner}/${ref.repo}#${String(ref.number)}`.toLowerCase();
-    if (seenRefs.has(key)) return;
+  const keyOf = (ref: PrRef) =>
+    `${ref.owner}/${ref.repo}#${String(ref.number)}`.toLowerCase();
+  /** 初めて見る鍵なら記録して真を返す。 */
+  const markSeen = (ref: PrRef): boolean => {
+    const key = keyOf(ref);
+    if (seenRefs.has(key)) return false;
     seenRefs.add(key);
-    refs.push(ref);
+    return true;
   };
-  /** 分類が候補なら、確かめる参照に加える。`none`は捨てる。 */
+  /**
+   * 分類が候補なら、確かめる参照に加える。`none`は捨てる。
+   * チーム宛ての依頼だけが付いた行は、確かめずに見送って数える。
+   */
   const addClassified = (
     ref: PrRef,
     kind: PollPrRowClass,
-    teamReviewRequested: boolean | null,
+    reviewers: {
+      readonly requestedUserIds: readonly number[] | null;
+      readonly teamReviewRequested: boolean | null;
+    },
   ) => {
-    if (kind === "none") return;
-    addRef({
+    if (kind === "none" || !markSeen(ref)) return;
+    if (
+      kind === "team" &&
+      reviewers.requestedUserIds !== null &&
+      reviewers.teamReviewRequested === true
+    ) {
+      teamUnresolved += 1;
+      input.log.info("pull request skipped: only a team asked", {
+        target: `${ref.owner}/${ref.repo}#${String(ref.number)}`,
+      });
+      return;
+    }
+    refs.push({
       owner: ref.owner,
       repo: ref.repo,
       number: ref.number,
-      teamPossible: kind === "team" && teamReviewRequested !== false,
+      teamPossible: kind === "team" && reviewers.teamReviewRequested !== false,
+      teamRead: kind === "team",
     });
   };
 
@@ -697,11 +748,10 @@ export async function discoverPrs(
 
     if (judged !== null) {
       for (const row of usableTableRows(owner.name, judged, isAllowedNow)) {
-        addClassified(
-          row,
-          classifyPollPrRow(row, input.viewer.id),
-          row.team_review_requested,
-        );
+        addClassified(row, classifyPollPrRow(row, input.viewer.id), {
+          requestedUserIds: row.review_requested_user_ids,
+          teamReviewRequested: row.team_review_requested,
+        });
       }
       for (const reason of skippedStaleReasons(
         owner.name,
@@ -729,7 +779,10 @@ export async function discoverPrs(
           addClassified(
             { owner: entry.owner, repo: entry.repo, number: pr.number },
             classifyListedPr(pr, input.viewer.id, input.labels),
-            pr.teamReviewRequested ?? null,
+            {
+              requestedUserIds: pr.requestedReviewerIds ?? null,
+              teamReviewRequested: pr.teamReviewRequested ?? null,
+            },
           );
         }
       } catch (err) {
@@ -738,8 +791,18 @@ export async function discoverPrs(
     }
   }
 
+  // 直接の依頼を確かめる候補は、鍵の昇順に上限まで選ぶ。選び方が周回で変わらないようにするためである。
+  const overLimit = new Set(
+    refs
+      .filter((ref) => ref.teamRead)
+      .sort(compareRefs)
+      .slice(TEAM_CONFIRM_LIMIT)
+      .map(keyOf),
+  );
+  teamCapped = overLimit.size;
+
   const confirmed: PrSearchItem[] = [];
-  for (const ref of refs) {
+  for (const ref of refs.filter((found) => !overLimit.has(keyOf(found)))) {
     const target = `${ref.owner}/${ref.repo}#${String(ref.number)}`;
     candidates += 1;
     const [pr, asIssue] = await Promise.allSettled([
@@ -799,6 +862,7 @@ export async function discoverPrs(
       candidates,
       dropped,
       team_unresolved: teamUnresolved,
+      team_capped: teamCapped,
     },
   };
 }

@@ -1162,6 +1162,8 @@ export async function main(): Promise<{
   rest_reasons: Readonly<Record<string, number>>;
   /** チーム宛ての依頼かもしれず、直接の依頼でなかったため見送ったPRの数。 */
   team_unresolved: number;
+  /** 依頼先を読めず、確かめる上限を超えたため、この周回は確かめなかった候補の数。 */
+  team_capped: number;
   candidates: number;
   dropped: number;
 }> {
@@ -1402,6 +1404,7 @@ export async function main(): Promise<{
     rest_lists: discovered.stats.rest_lists,
     rest_reasons: discovered.stats.rest_reasons,
     team_unresolved: discovered.stats.team_unresolved,
+    team_capped: discovered.stats.team_capped,
     candidates: discovered.stats.candidates,
     dropped: discovered.stats.dropped,
   };
