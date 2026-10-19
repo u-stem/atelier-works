@@ -1582,6 +1582,24 @@ describe("selectDependabotCandidates", () => {
     });
   });
 
+  test("reports an archived repository whose records are fresh as archived", () => {
+    expect(select([ghRow()], { archived: true }).kind).toBe("archived");
+  });
+
+  test("reports an archived repository that was never collected as stale", () => {
+    expect(
+      select([ghRow()], { archived: true, last_collected_at: null }),
+    ).toEqual({ kind: "stale", reason: "not_collected" });
+  });
+
+  test("reports an archived repository collected too long ago as stale", () => {
+    const old = new Date(NOW_MS - 16 * MINUTE_MS);
+
+    expect(
+      select([ghRow()], { archived: true, last_collected_at: old }),
+    ).toEqual({ kind: "stale", reason: "too_old" });
+  });
+
   test("does not select an unusable row", () => {
     const rows = [ghRow({ usable: false }), ghRow({ number: 13 })];
 
@@ -2724,6 +2742,51 @@ describe("pollDependabot lists the open pull requests for each reason the table 
     );
 
     expect(result.fallback_lists).toBe(0);
+  });
+
+  const STALE_ARCHIVED = async () =>
+    snapshot([ghRow()], {
+      archived: true,
+      last_collected_at: new Date(NOW_MS - 16 * MINUTE_MS),
+    });
+
+  test("reads an archived repository with old records by REST", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: DB_CONFIG, readRepoPrs: STALE_ARCHIVED }),
+    );
+
+    expect(log.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("counts an archived repository with old records as a fallback with its reason", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { config: DB_CONFIG, readRepoPrs: STALE_ARCHIVED }),
+    );
+
+    expect([result.fallback_lists, result.fallback_reasons]).toEqual([
+      1,
+      { too_old: 1 },
+    ]);
+  });
+
+  test("keeps the wait record of an archived repository with old records when the list fails", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        readRepoPrs: STALE_ARCHIVED,
+        listOpenPrs: async () => {
+          throw new Error("list failed");
+        },
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({ [KEY]: wait });
   });
 
   test("goes on to the next repository when one is archived", async () => {
