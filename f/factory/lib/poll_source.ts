@@ -29,14 +29,30 @@ import {
   hasLabel,
 } from "./types.ts";
 
+/**
+ * 収集の設定から、この回に収集の表を読んでよいかを決める。
+ * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
+ * 偽のときは、明示したリポジトリだけをRESTの一覧で読み、ほかは発見されないので、偽の設定の名前を警告に残す。
+ */
 export function resolveTableUse(
-  _config: Pick<
+  config: Pick<
     FactoryConfig,
     "gh_collect_enabled" | "gh_collect_detail_enabled"
   >,
-  _log: Logger,
+  log: Logger,
 ): boolean {
-  return false;
+  const useTable =
+    config.gh_collect_enabled && config.gh_collect_detail_enabled;
+  if (!useTable) {
+    log.warn(
+      "the collection is not fully enabled, so only explicit repositories are read",
+      {
+        gh_collect_enabled: config.gh_collect_enabled,
+        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
+      },
+    );
+  }
+  return useTable;
 }
 
 /**
@@ -462,7 +478,7 @@ export function classifyPollPrRow(
  * RESTの一覧の要素を分類する。分け方は`classifySignals`にある。
  * 一覧が返さなかった項目(省略または`null`)は不明として扱う。
  */
-export function classifyListedPr(
+function classifyListedPr(
   pr: OpenPullRequest,
   viewerId: number,
   labels: { readonly reviewLabel: string; readonly fixLabel: string },

@@ -660,6 +660,14 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 `trigger_label`を変えるときは、手順2と手順3をやり直す。
 収集が各リポジトリを取り直すまで、表は古いラベル名で答えるためである。
 
+反映後は、次の3つを確かめる。
+
+- 反映直後の1周回は、`poll_prs`と`poll_source`の版が混ざり、失敗として記録されうる。次の周回で消えることを確かめる。
+- 実ジョブで手順4と手順5の結果を確かめた後に、`poll_prs`の発見の元を選んでいた項目を、手で消す。
+  対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
+  消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
+- 作業項目の`owner`と`repo`が、GitHubの正規の綴りである。手順5と同じ確認で、追跡中のPRとの重ねの除去に効く。
+
 検索へ戻す設定は無い。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
@@ -760,12 +768,16 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
    `collect_disabled`が`false`、`failed`が0であることを見る。
    `candidates`は、手順2の`target`と`maybe`と`team`の合計と近いはずである。
    `dropped`は、0か、古い行で説明できる値になる。
-   `team_unresolved`は、個人の所有者だけなら0になる。
+   `team_unresolved`は、個人の所有者だけなら、普段は0になる。
+   ただし、収集は依頼先を読めない行と、依頼が20件を超える行の依頼先を`NULL`にする。
+   この2つの行は、個人のリポジトリでも`team_unresolved`に数えられる。
    失敗の記録に、段`read_gh_owner_prs:<owner>`(`flow_path`が`f/factory/poll_prs`のもの)、`list_open_prs:<owner>/<repo>`、`confirm_pr:<owner>/<repo>#<番号>`が続かないことを見る。
    `confirm_pr:`が依頼先を読めない理由で出たときは、`getPr`の応答の形を調べる。
 5. 表の経路で最初に作られた`pr_review`か`pr_fix`の作業項目で、`owner`と`repo`がGitHubの正規の綴りと大小文字まで一致することを確かめる。
    一致しなければ、収集の不具合として調べる。
    綴りは`gh api repos/<owner>/<repo> --jq .full_name`で読む。
+   追跡中のPRとの重ねは、大文字小文字を区別した鍵で除く。
+   綴りが違うと、同じPRが別の候補として並ぶ。
 6. 1日の間、`poll_prs`の失敗の記録に403と429が無いことを確かめる。
    自然にレビューの依頼、assignee、ラベルが付いたら、付けた時刻から作業項目の作成までの遅れを記録する。
 

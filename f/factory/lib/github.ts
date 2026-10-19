@@ -2639,10 +2639,10 @@ function isPrPayload(value: unknown): value is PrPayload {
 }
 
 /**
- * `requested_reviewers`から、依頼された利用者の数値IDを読む。
- * 配列でないとき、要素の`id`が正の安全な整数でないときは、依頼の有無を決められないので`null`にする。
+ * 利用者の配列(`requested_reviewers`、`assignees`)から、数値IDを読む。
+ * 配列でないとき、要素の`id`が正の安全な整数でないときは、有無を決められないので`null`にする。
  */
-function requestedReviewerIdsOf(value: unknown): number[] | null {
+function userIdsOf(value: unknown): number[] | null {
   if (!Array.isArray(value)) return null;
   const ids: number[] = [];
   for (const entry of value) {
@@ -2729,7 +2729,7 @@ async function fetchPr(
     // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
-    requestedReviewerIds: requestedReviewerIdsOf(parsed.requested_reviewers),
+    requestedReviewerIds: userIdsOf(parsed.requested_reviewers),
   };
   return {
     pr,
@@ -4639,8 +4639,8 @@ export async function listOpenPullRequests(
     baseRef: typeof entry.base.ref === "string" ? entry.base.ref : null,
     createdAtMs: parseIsoMs(entry.created_at),
     labels: labelNamesOf(entry.labels),
-    assigneeIds: requestedReviewerIdsOf(entry.assignees),
-    requestedReviewerIds: requestedReviewerIdsOf(entry.requested_reviewers),
+    assigneeIds: userIdsOf(entry.assignees),
+    requestedReviewerIds: userIdsOf(entry.requested_reviewers),
     teamReviewRequested: Array.isArray(entry.requested_teams)
       ? entry.requested_teams.length > 0
       : null,
