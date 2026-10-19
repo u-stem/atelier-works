@@ -7000,6 +7000,9 @@ export async function listGhRepoStaleSnapshot(
  * それ以外の開いている行は、許可の外、archive済み、一覧から消えた(前回からのものを含む)、数値IDの入れ替わりのどれかなので、`usable=false`にする。
  * 一覧が空の所有者でも文を送り、開いている行を残さない。
  * 数値IDが変わった(空でない数値IDが別の値になった)リポジトリは、詳細の4列を初めに戻し、その名前を返す。
+ * `first_seen_at`は行を作るときだけ書く。
+ * 更新前の行が対象外(gone、archive済み、`allowed`が偽)で、更新後が対象になるときだけ`now()`に戻す。
+ * 対象に戻ったリポジトリの記録は古いままなので、新しく載ったリポジトリと同じ猶予を与えるためである。
  */
 export async function replaceGhRepoSnapshot(
   snapshot: {
@@ -7085,6 +7088,7 @@ export async function replaceGhRepoSnapshot(
         gone = EXCLUDED.gone,
         gone_reason = EXCLUDED.gone_reason,
         listed_at = EXCLUDED.listed_at,
+        first_seen_at = CASE WHEN (factory.gh_repos.gone OR factory.gh_repos.archived OR NOT factory.gh_repos.allowed) AND NOT EXCLUDED.gone AND NOT EXCLUDED.archived AND EXCLUDED.allowed THEN now() ELSE factory.gh_repos.first_seen_at END,
         last_collected_at = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN NULL ELSE factory.gh_repos.last_collected_at END,
         last_attempted_at = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN NULL ELSE factory.gh_repos.last_attempted_at END,
         truncated = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN false ELSE factory.gh_repos.truncated END,

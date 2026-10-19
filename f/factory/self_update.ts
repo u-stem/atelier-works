@@ -70,6 +70,7 @@ import {
   GH_COLLECT_STALE_KIND,
 } from "./lib/gh_collect_freshness.ts";
 import {
+  ghDetailStaleAfterMs,
   repoStaleTargetFilter,
   summarizeRepoStale,
 } from "./lib/gh_collect_read.ts";
@@ -823,7 +824,7 @@ export async function main(): Promise<SelfUpdateResult> {
     try {
       await checkGhCollectFreshness({
         enabled: config.gh_collect_enabled,
-        detailEnabled: true,
+        detailEnabled: config.gh_collect_detail_enabled,
         owners: config.owners.map((owner) => owner.name),
         periodicStalled: periodicWorker === "stalled",
         now: () => Date.now(),
@@ -838,7 +839,7 @@ export async function main(): Promise<SelfUpdateResult> {
                 snapshot,
                 owners,
                 staleAfterMs: thresholdMs,
-                settledAfterMs: thresholdMs,
+                settledAfterMs: ghDetailStaleAfterMs(owners.length),
                 isTarget: repoStaleTargetFilter(config),
               }),
             ),

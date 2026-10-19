@@ -2486,15 +2486,17 @@ stateを読めない回は、所有者の最古の実行の開始時刻で代え
 
 所有者の収集が成功していても、一部のリポジトリの記録だけが古いままのときがある。
 そのときは、本文が`<所有者>のリポジトリ:`と空白で始まる通知を、所有者ごとに1件残し、Discordに1回送る。
-Discordの通知には、閾値、記録が古いリポジトリの数と理由別の内訳、次の操作、Consoleの通知へのリンクが載る。
+Discordの通知には、閾値、記録が古いリポジトリの数と理由別の内訳(日本語の語)、次の操作、Consoleの通知へのリンクが載る。
 数えるのは、`repo_allowlist`と`factory_repo`で明示していない、許可されたリポジトリである。
 一覧から消えたリポジトリと、archive済みのリポジトリは数えない。
 新しく一覧に載ったリポジトリは、載った時刻から閾値の間、古くても数えない。
 
 この通知は、所有者の収集が成功しても解決しない。
-対象のリポジトリがすべて閾値の内へ戻ると、自己更新が自動で解決する。
-閾値は、所有者の通知と同じである。
+足す閾値は、所有者の通知と同じである。
+解決は、対象のリポジトリがすべて、下流が記録を使う閾値(`max(15分, (n+1)×5分)`)の内へ戻ったときに、自己更新が自動で行う。
+2つの閾値の間では、noticeを足さず、解決もしない。通知が出ては消えることを繰り返さないためである。
 レート制限などで待っている間は、noticeを足さず、解決もしない。
+`gh_collect_detail_enabled`を`false`にすると、詳細を集めないので、対象を0件として扱い、立っている通知を解決する。
 
 打ち切りが続くリポジトリは、記録が進まないので、通知が残り続ける。
 次のどれかで直す。
@@ -2509,9 +2511,9 @@ Discordの通知には、閾値、記録が古いリポジトリの数と理由�
 mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT repo, last_collected_at, last_attempted_at, truncated, detail_failed, first_seen_at FROM factory.gh_repos WHERE owner = '<所有者>' AND NOT gone AND NOT archived ORDER BY last_collected_at NULLS FIRST LIMIT 20"
 ```
 
-下流の処理は、記録が古いリポジトリを、通知が出る前から見送る。
-見送りが始まってから通知が出るまで、黙って見送る時間がある。
-最大は、通知の閾値に、レート制限などの待ちの最大60分が足された時間である([鮮度の足りないリポジトリ](internals/github-collect.md#鮮度の足りないリポジトリ))。
+記録が古くなってから通知が出るまで、記録が下流で使えない状態が通知なしに続く。
+下流は、記録の経過が`max(15分, (n+1)×5分)`を超えると、記録を使わなくなる。
+通知が出るまでの上限は、通知の閾値に、レート制限などの待ちの最大60分が足された時間である([鮮度の足りないリポジトリ](internals/github-collect.md#鮮度の足りないリポジトリ))。
 
 同じ停止について、ほかの通知と重なって届くことがある。
 収集が例外で落ち続けると、`job_failed`と`schedule_failing`に重なる。
@@ -3226,7 +3228,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から11分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
-| `github_collect_stale` | 設定の所有者の収集が、閾値(`owners`が2人までは25分)を超えて成功していない。本文は`<所有者>:`と空白で始まり、所有者ごとに1件残る。または、所有者の収集は成功していて、一部のリポジトリの記録が閾値を超えて古い。本文は`<所有者>のリポジトリ:`と空白で始まり、所有者ごとに1件残る。Discordにも届く | 通知の説明と、Discordの「次の操作」に従い、[実行の記録の読み方](#実行の記録の読み方)の対処をする。収集が成功するか、`gh_collect_enabled`を`false`にするか、`owners`から外すと、自動で解決される。リポジトリの古さの通知は、対象のリポジトリがすべて閾値の内に戻ると解決される。重なる通知は[収集が止まったときの通知](#収集が止まったときの通知)にある |
+| `github_collect_stale` | 設定の所有者の収集が、閾値(`owners`が2人までは25分)を超えて成功していない。本文は`<所有者>:`と空白で始まり、所有者ごとに1件残る。または、所有者の収集は成功していて、一部のリポジトリの記録が閾値を超えて古い。本文は`<所有者>のリポジトリ:`と空白で始まり、所有者ごとに1件残る。Discordにも届く | 通知の説明と、Discordの「次の操作」に従い、[実行の記録の読み方](#実行の記録の読み方)の対処をする。収集が成功するか、`gh_collect_enabled`を`false`にするか、`owners`から外すと、自動で解決される。リポジトリの古さの通知は、対象のリポジトリがすべて、下流が記録を使う閾値の内に戻ると解決される。重なる通知は[収集が止まったときの通知](#収集が止まったときの通知)にある |
 | `default_worker_missing` | defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブが1つも無い。defaultのworkerが居ないか、ジョブを受けられない状態で、flowとscriptが動かない。長いジョブが枠を埋めて後ろのジョブが待つだけのときは出ない。Discordにも届く | `docker compose ps windmill_worker`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、Windmillの画面のWorkers画面で、ワーカーグループdefaultのworkerが生きているかを確かめる。生きていなければ、`docker compose logs windmill_worker`でエラーを確かめる。受けるようになると、定期ジョブ用のworkerで動く確認(5分ごと)が自動で解決する |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら、メモリを使うジョブの見直しか、メモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |

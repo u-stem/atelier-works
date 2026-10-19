@@ -11,6 +11,7 @@ import type { Logger } from "./log.ts";
 import {
   type GhCollectErrorCode,
   type GhCollectFreshnessRow,
+  type GhRepoStaleReasonCounts,
   type GhRepoStaleSummary,
   isGitHubName,
   isRecord,
@@ -194,7 +195,7 @@ export function repoStaleNoticePrefix(owner: string): string {
 }
 
 const REPO_STALE_NOTICE_BODY =
-  "一部のリポジトリで、GitHubの収集の記録が更新されていません。下流の処理は、そのリポジトリを見送っています。次の操作: Discordの通知か、Consoleのこの通知の説明に従って、収集の実行ログを確かめ、repo_allowlistで対象を絞るか、リポジトリの規模を減らしてください";
+  "一部のリポジトリで、GitHubの収集の記録が更新されていません。この間、そのリポジトリの記録は古く、下流の判断に使えません。次の操作: Discordの通知か、Consoleのこの通知の説明に従って、収集の実行ログを確かめ、repo_allowlistで対象を絞るか、リポジトリの規模を減らしてください";
 
 /**
  * リポジトリ単位の古さのnotice。本文は所有者ごとに常に同じにする。
@@ -256,9 +257,11 @@ export function formatJstMinute(ms: number): string {
     .replace("T", " ");
 }
 
-const CAUSE_LABELS: Readonly<Record<GhCollectCause, string>> = {
+/** 原因の言葉。`repo_stale`は所有者の最新の実行の原因ではないので持たない。 */
+const CAUSE_LABELS: Readonly<
+  Record<Exclude<GhCollectCause, "repo_stale">, string>
+> = {
   not_running: "収集が動いていません",
-  repo_stale: "",
   no_token: "読み取りトークンがありません",
   token_config_invalid: "トークンの設定が不正です",
   db_error: "DBへの書き込みに失敗しました",
@@ -310,12 +313,25 @@ export function nextActionFor(cause: GhCollectCause): string {
   return NEXT_ACTIONS[cause];
 }
 
+/** 理由ごとの件数を読む言葉。`no_record`は、行を起点に数えるSQLからは来ないが、判定の語彙としては持つ。 */
+const REPO_STALE_REASON_LABELS: readonly (readonly [
+  keyof GhRepoStaleReasonCounts,
+  string,
+])[] = [
+  ["no_record", "記録の行なし"],
+  ["unusable", "使えない記録"],
+  ["not_collected", "未収集"],
+  ["in_future", "収集時刻が未来"],
+  ["too_old", "最後の収集が古い"],
+];
+
 /** `repo_stale`の件数の内訳。0件の理由は載せない。 */
 function repoStaleBreakdown(summary: GhRepoStaleSummary): string {
-  const parts = Object.entries(summary.reasons)
-    .filter(([, count]) => count > 0)
-    .map(([reason, count]) => `${reason} ${String(count)}件`);
-  return parts.join("、");
+  return REPO_STALE_REASON_LABELS.filter(
+    ([reason]) => summary.reasons[reason] > 0,
+  )
+    .map(([reason, label]) => `${label} ${String(summary.reasons[reason])}件`)
+    .join("、");
 }
 
 /**
@@ -340,7 +356,7 @@ export function staleCauseText(input: {
       summary === undefined
         ? ""
         : `記録が古いのは${String(summary.stale)}件(${repoStaleBreakdown(summary)})です。`;
-    return `${input.owner}のリポジトリで、GitHubの収集の記録が${String(minutes)}分以上更新されていません。${detail}所有者の収集そのものは成功しています。下流の処理は、そのリポジトリを見送っています`;
+    return `${input.owner}のリポジトリで、GitHubの収集の記録が${String(minutes)}分以上更新されていません。${detail}所有者の収集そのものは成功しています。この間、そのリポジトリの記録は古く、下流の判断に使えません`;
   }
   const last =
     input.lastSuccessAtMs === null
@@ -598,11 +614,14 @@ async function resolveRemovedOwners(
 
 /**
  * リポジトリ単位の古さ(原因`repo_stale`)のnoticeを、所有者ごとに足すか解決する。
- * 所有者の判定が`recovered`のときだけ見る。
+ * 詳細を集めない設定(`detailEnabled`が偽)の間は、対象を0件として扱い、記録を読まずに、立っているnoticeを解決する。
+ * 詳細が集まらないのは設定どおりで、全リポジトリの記録が古くなるためである。
+ * 詳細を集める設定のときは、所有者の判定が`recovered`のときだけ見る。
  * レート制限などの待ち、監視の猶予、実行中、所有者そのものの停止の間は、
  * 古さの原因が所有者の収集にあるか分からないので、足しも解決もしない。
- * 所有者の収集が成功していても、記録が古いリポジトリがある間は解決しない。
- * 解決は、猶予の間のものも含めて、対象のすべてが`fresh`になったときだけ行う。
+ * 足すのは、通知の閾値を超えた(`stale`)リポジトリがあるときである。
+ * 解決は、下流が記録を使う閾値の内に、猶予の間のものも含めて対象のすべてが入ったとき(`unsettled`が0)だけ行う。
+ * 所有者の収集が成功しても、閾値の間では解決しない。
  * 記録を読めない回と、時間内に終わらない回は、足しも解決もしない。
  */
 async function handleRepoStale(
@@ -615,6 +634,21 @@ async function handleRepoStale(
   },
 ): Promise<void> {
   const { names, thresholdMs, verdicts, notices } = input;
+  if (!deps.detailEnabled) {
+    if (notices === null) return;
+    for (const name of names) {
+      const prefix = repoStaleNoticePrefix(name);
+      if (!notices.some((notice) => notice.message.startsWith(prefix))) {
+        continue;
+      }
+      try {
+        await deps.resolveNotices(prefix);
+      } catch {
+        warn(deps, "could not resolve a gh collect stale notice");
+      }
+    }
+    return;
+  }
   let summaries: readonly GhRepoStaleSummary[];
   try {
     summaries = await deps.listRepoStale(names, thresholdMs);
@@ -648,7 +682,7 @@ async function handleRepoStale(
             url: deps.noticeUrl(noticeId),
           });
         }
-      } else if (summary.pending === 0 && notices !== null) {
+      } else if (summary.unsettled === 0 && notices !== null) {
         const prefix = repoStaleNoticePrefix(name);
         if (notices.some((notice) => notice.message.startsWith(prefix))) {
           await deps.resolveNotices(prefix);
@@ -820,7 +854,7 @@ async function withTimeout<T>(
  * 有効のときは、所有者ごとに判定し、止まっていればnoticeを足して(新しく挿入できたときだけ)Discordに送り、
  * 回復していれば解決する。`owners`から外れた所有者のnoticeも解決する。
  * 所有者の収集が成功していても、一部のリポジトリの記録が古いままなら、所有者のnoticeとは別の本文で
- * 原因`repo_stale`のnoticeを足し、対象のすべてが`fresh`になるまで、所有者の成功では解決しない。
+ * 原因`repo_stale`のnoticeを足し、対象のすべてが下流が記録を使う閾値の内に戻るまで、所有者の成功では解決しない。
  * 記録を読めないとき、時間内に終わらないときは`unknown`を返し、足しも解決もしない。
  * ログと戻り値には固定の語と件数だけを載せる。例外は投げない。
  */

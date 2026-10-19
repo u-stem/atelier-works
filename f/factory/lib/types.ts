@@ -1040,7 +1040,7 @@ export type GhRepo = {
   readonly truncated: boolean;
   /** 前回の着手が失敗した。 */
   readonly detail_failed: boolean;
-  /** 収集が最初にこの行を作った時刻。更新されない。 */
+  /** 収集が最初にこの行を作った時刻。対象外から対象に戻るときだけ、now()に戻る。 */
   readonly first_seen_at: Date;
 };
 
@@ -1084,7 +1084,7 @@ export type GhRepoStaleProbe = {
   readonly owner: string;
   readonly repo: string;
   readonly row: GhRepoFreshnessRow | null;
-  /** `gh_repos`に最初に行ができた時刻。更新されない。 */
+  /** `gh_repos`に最初に行ができた時刻。対象外から対象に戻るときだけ、now()に戻る。 */
   readonly first_seen_at: Date;
   readonly pr_open: boolean;
   readonly pr_usable: boolean;
@@ -1098,7 +1098,10 @@ export type GhRepoStaleSnapshot = {
   readonly probes: readonly GhRepoStaleProbe[];
 };
 
-/** 非`fresh`の理由ごとの件数。 */
+/**
+ * 非`fresh`の理由ごとの件数。
+ * `no_record`は、`gh_repos`の行を起点に数えるので、SQLから読んだ入力では0件である。
+ */
 export type GhRepoStaleReasonCounts = {
   readonly no_record: number;
   readonly unusable: number;

@@ -401,6 +401,9 @@ function judgeRepoProbe(
  * 対象の鮮度は、閾値`staleAfterMs`で`judgeGhRepoFreshness`にかける。
  * 閾値は下流が記録を使わなくなる閾値より長い、通知の閾値を渡す。
  * `stale`でも、`first_seen_at`から`staleAfterMs`以内のリポジトリは、新しく一覧に載った猶予として`pending`に数える。
+ * `unsettled`は、閾値`settledAfterMs`(下流が記録を使う閾値)で非`fresh`の対象の数で、猶予の間のものも含む。
+ * 通知は閾値`staleAfterMs`を超えたときに足し、`unsettled`が0になるまで解決しない。
+ * 足す閾値と解決の閾値を分けるので、閾値の付近で通知が足されては解決されることを繰り返さない。
  * 比べる相手は、行を読んだ同じ文のDBの時刻で、workerの時計とは比べない。
  * `owners`の全員について、対象が無くても集計を返す。
  */
@@ -426,6 +429,7 @@ export function summarizeRepoStale(input: {
     let targets = 0;
     let stale = 0;
     let pending = 0;
+    let unsettled = 0;
     for (const probe of snapshot.probes) {
       if (probe.owner.toLowerCase() !== owner) {
         continue;
@@ -437,6 +441,12 @@ export function summarizeRepoStale(input: {
         continue;
       }
       targets += 1;
+      if (
+        judgeRepoProbe(probe, snapshot.db_now, input.settledAfterMs).kind ===
+        "stale"
+      ) {
+        unsettled += 1;
+      }
       const freshness = judgeRepoProbe(probe, snapshot.db_now, staleAfterMs);
       if (freshness.kind === "fresh") {
         continue;
@@ -448,7 +458,7 @@ export function summarizeRepoStale(input: {
       stale += 1;
       reasons[freshness.reason] += 1;
     }
-    return { owner, targets, stale, pending, unsettled: 0, reasons };
+    return { owner, targets, stale, pending, unsettled, reasons };
   });
 }
 
