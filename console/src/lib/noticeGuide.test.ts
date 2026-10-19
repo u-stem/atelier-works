@@ -68,6 +68,12 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("says the disabled collection notice stays even when the owner collection succeeds", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "所有者の収集が成功しても解決せず",
+    );
+  });
+
   test("names the settings that disable the collection", () => {
     expect(noticeGuide("github_collect_stale").meaning).toContain(
       "gh_collect_detail_enabled",

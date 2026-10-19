@@ -78,6 +78,8 @@ type Setup = {
   state?: Record<string, unknown>;
   existingNotices?: { id: number; message: string }[];
   addNotice?: (record: NoticeRecord) => Promise<number | null>;
+  /** 指定すると、立っているnoticeの一覧の読み取りを置き換える。 */
+  listStaleNotices?: () => Promise<{ id: number; message: string }[]>;
 };
 
 function setup(options: Setup = {}): {
@@ -116,7 +118,8 @@ function setup(options: Setup = {}): {
     setState: async (next) => {
       rec.states.push(next);
     },
-    listStaleNotices: async () => options.existingNotices ?? [],
+    listStaleNotices:
+      options.listStaleNotices ?? (async () => options.existingNotices ?? []),
     addNotice:
       options.addNotice ??
       (async (record) => {
@@ -439,6 +442,17 @@ describe("checkGhCollectFreshness with collection disabled (enabled is false)", 
     expect(rec.notices).toEqual([collectDisabledNotice("acme")]);
   });
 
+  test("adds the notice when the notices cannot be listed", async () => {
+    const { deps, rec } = setup({
+      enabled: false,
+      listStaleNotices: async () => {
+        throw new Error("db down");
+      },
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.notices).toEqual([collectDisabledNotice("acme")]);
+  });
+
   test("resolves the notices of an owner removed from the config", async () => {
     const { deps, rec } = setup({
       enabled: false,
@@ -552,6 +566,26 @@ describe("checkGhCollectFreshness with only the detail collection disabled", () 
     expect(rec.notices).toEqual([collectDisabledNotice("acme")]);
   });
 
+  test("adds the notice even while the periodic worker is stalled", async () => {
+    const { deps, rec } = setup({
+      detailEnabled: false,
+      periodicStalled: true,
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.notices).toEqual([collectDisabledNotice("acme")]);
+  });
+
+  test("adds the notice when the notices cannot be listed", async () => {
+    const { deps, rec } = setup({
+      detailEnabled: false,
+      listStaleNotices: async () => {
+        throw new Error("db down");
+      },
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.notices).toEqual([collectDisabledNotice("acme")]);
+  });
+
   test("adds no notice when the allowlist is not empty", async () => {
     const { deps, rec } = setup({
       detailEnabled: false,
@@ -593,6 +627,16 @@ describe("checkGhCollectFreshness once the collection is enabled again", () => {
 
   test("does not resolve the collect_disabled prefix when no such notice is set", async () => {
     const { deps, rec } = setup({ existingNotices: OWNER_NOTICE });
+    await checkGhCollectFreshness(deps);
+    expect(rec.resolved).not.toContain(collectDisabledNoticePrefix("acme"));
+  });
+
+  test("does not resolve the collect_disabled notice when the notices cannot be listed", async () => {
+    const { deps, rec } = setup({
+      listStaleNotices: async () => {
+        throw new Error("db down");
+      },
+    });
     await checkGhCollectFreshness(deps);
     expect(rec.resolved).not.toContain(collectDisabledNoticePrefix("acme"));
   });
