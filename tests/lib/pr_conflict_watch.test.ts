@@ -2574,6 +2574,29 @@ describe("runPrConflictWatch: an archived explicit repository", () => {
     expect(result.rest_lists).toBe(0);
   });
 
+  test("is listed while its record is inside the threshold when a work item also names it", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [REPO],
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("is listed while its record is inside the threshold when a conflict row also names it", async () => {
+    const h = setup({
+      ...DB_ONLY,
+      repos: [],
+      conflictRepos: [REPO],
+      explicitRepos: [REPO],
+      snapshots: { acme: ARCHIVED() },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
   test("is listed when its record is too old, because the archive mark may be stale", async () => {
     const h = setup({
       ...DB_ONLY,
