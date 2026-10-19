@@ -84,6 +84,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * このテストが、すべての定義の参照先を自分の`.script.lock`に固定している。
  * 書き換えられると、保護の外の定義から、workerやホストの任意のファイルをlockに載せられる。
  * 契約テストは、保護していないほかのテストに書き換えられないよう、`mise.toml`の`[tasks.test]`が別のプロセスで先に走らせる。
+ * このプロセスには、契約テストだけを載せる。保護パスのテスト(`tests/lib/protected_paths.test.ts`)は保護していないコードをimportするので、全体のプロセスで走る。
  * そのプロセスが全テストの前に読む`tests/preload.ts`(`bunfig.toml`の`preload`)も守る。
  * libの`.script.yaml`は、引数を持たず変更がまれで、守る費用がほぼ無いので、外さない。
  * `wmill.yaml`も守る。`codebases`の`customBundler`は、`wmill sync push`が反映時にシェルで実行する。

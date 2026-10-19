@@ -35,8 +35,9 @@ import { Glob } from "bun";
 //
 // このテストは、保護された別のプロセスで先に走る(`mise.toml`の`[tasks.test]`)。
 // 保護していないほかのテストが、同じプロセスで組み込みの関数を差し替えて、
-// この検査を無効にするのを防ぐためである。そのため、importは組み込みのモジュールと
-// 相対パスに限り、補助の関数はこのファイルの中に置く。
+// この検査を無効にするのを防ぐためである。そのため、importは組み込みのモジュールとbunに限り、
+// 補助の関数はこのファイルの中に置く。保護していない`lib/`のコードをimportすると、
+// そのコードが先行プロセスに載ってしまう。
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -229,7 +230,7 @@ function findShallowViolations(content: string): string[] {
  * 段Bに掛けない3つのパス。生のパスの完全一致で比べ、ディレクトリやglobでは除外しない。
  * - `.github/workflows/ci.yml`: GitHub式の`${{ !cancelled() }}`が、YAMLのタグの検査に当たる。
  * - `tsconfig.json`、`tsconfig.wmill.json`: `tsc`が読むJSONCで、JSONとして解釈できない。
- * wmillが項目として解釈しない名前で、`wmill.yaml`の`includes`は`f/**`だけである。
+ * `wmill.yaml`の`includes`が`f/**`だけなら、この3つはwmillが項目として解釈しない名前である。
  * 段Aは、この3つにも掛ける。
  */
 const STAGE_B_EXCLUSIONS: readonly string[] = [
@@ -647,7 +648,9 @@ describe("the tracked tree", () => {
   });
 
   // `tests/preload.ts`は`bunfig.toml`の`preload`が、全テストの前に同じプロセスで読み込む。
-  // importやrequireを持つと、保護していない別のファイルを経由して、この検査より先にコードが走る。
+  // importやrequireを持つと、保護していない別のファイルを経由してコードが走る。
+  // preloadはこのテストより先に実行されるので、このテストは書き換えを防がない。
+  // 実際に効く関門は保護パスと人のレビューで、このテストはその補助である。
   test("preload has no import or require", () => {
     const code = readFileSync(`${ROOT}tests/preload.ts`, "utf8")
       .split("\n")
