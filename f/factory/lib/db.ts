@@ -2833,8 +2833,8 @@ export async function setIssueProposalCreatedIssue(
  * または`leaseSeconds`以内に別の呼び出しが印を取った行である。
  *
  * 条件付きの1回のUPDATEで取るので、同時に呼ばれても取れるのは1つだけになる。
- * GitHubの検索は索引の反映が遅れ、マーカーで探すだけでは、同時の呼び出しが
- * どちらも空振りしてIssueを2件作りうるため、`issue_proposal_apply.ts`が作る直前に取る。
+ * 同時の呼び出しは、どちらもマーカーの走査の時点でIssueが無いと見て、
+ * Issueを2件作りうるため、`issue_proposal_apply.ts`が作る直前に取る。
  * 期限を過ぎた印は取り直せるので、処理が途中で止まっても、やり直しを塞がない。
  */
 export async function claimIssueCreation(
@@ -2869,9 +2869,10 @@ export async function claimIssueCreation(
  * 古い判断を持ったままの`pending`ではなく、`insertIssueProposal`が作る
  * 新しい保留中の提案と同じ見た目にする。
  *
- * Issueを作る処理の印(`issue_creation_claimed_at`)は残す。
- * 例外で終わった呼び出しの中で、Issueが作られていることがありうる(応答の取りこぼしなど)。
- * 印が期限で切れるまで、次の承認が何もせずに終わるようにして、GitHubの検索の索引の遅れを覆う。
+ * Issueを作る処理の印(`issue_creation_claimed_at`)は残す。この関数は印の列を書き換えない。
+ * 期限を過ぎて走り続けた呼び出しが失敗して戻すとき、印を取り直した別の呼び出しが、
+ * 同じ提案のIssueを作っている最中のことがありうる。印を消すと、その処理と次の承認が重なり、
+ * Issueを2件作りうる。印が期限で切れるまで、次の承認は印を取れず、何もせずに終わる。
  *
  * この呼び出しで実際に戻したら`true`を返す。一致する行が無ければ`false`を返す
  * (並行する再試行がすでに戻した、その間にIssueが作られたなど)。

@@ -2199,7 +2199,7 @@ export type FindIssueByMarkerOptions = {
 const MARKER_SCAN_MARGIN_MS = 60 * 60 * 1000;
 
 /** `findIssueByMarker`が読むページ数の上限。1ページ100件なので、1000件までである。 */
-export const MARKER_SCAN_MAX_PAGES = 10;
+const MARKER_SCAN_MAX_PAGES = 10;
 
 type MarkerScanEntry = {
   readonly number: number;
@@ -2262,6 +2262,7 @@ export function endsWithMarkerLine(body: string, markerText: string): boolean {
  * 作成時刻が`proposalCreatedAt`の1時間前より古い要素に当たったところで読み終える。
  * それより古いIssueは、この提案の前に作られたもので、印を持たないためである。
  * 一覧の要素にはPRも入るので、`pull_request`を持つ要素は除く。
+ * 除いたPRもページを消費するので、上限の1000件は作成者のIssueとPRの合計である。
  * 本文の最後の行との一致だけを採る(`endsWithMarkerLine`)。本文の途中にある印は、
  * 引用や貼り付けで書かれうるため、作成済みの印として信じない。
  * 読み終える前にページ数が`MARKER_SCAN_MAX_PAGES`を超えたときは、

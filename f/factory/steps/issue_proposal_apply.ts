@@ -506,10 +506,11 @@ async function run(
         // この時点ではIssueの番号が分からない。
         // このままだと行は`created_issue_number`がnullの"approved"で止まり、人から見えなくなる。
         // "pending"に戻し、再試行できるようConsoleの要対応に再び出す。
-        // 印は残す。Issueが作られていた場合に、期限が切れるまで次の承認が何もせず終わる。
+        // 印は残す。期限を過ぎて走る別の呼び出しがIssueを作っている最中でも、
+        // 期限が切れるまで次の承認が印を取れず、重ならない。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
-          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの要対応から再度承認してください`,
+          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの要対応から再度承認してください。既存のIssueの走査がページの上限に当たったときは、再度承認しても通らないので、却下して起票し直してください`,
         );
       }
       await setIssueProposalCreatedIssue(proposal_id, {

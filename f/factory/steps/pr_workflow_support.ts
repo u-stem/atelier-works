@@ -3586,11 +3586,7 @@ const ISSUE_PROPOSAL_MARKER_KIND = "issue_proposal";
 /**
  * 印の中身の語句(`<!-- -->`のコメント構文を除いたもの)を返す。
  */
-export function issueProposalMarkerKey(_proposalId: number): string {
-  return "";
-}
-
-export function issueProposalMarkerSearchTerm(proposalId: number): string {
+export function issueProposalMarkerKey(proposalId: number): string {
   return `factory:${ISSUE_PROPOSAL_MARKER_KIND}:${String(proposalId)}`;
 }
 
@@ -3599,7 +3595,7 @@ export function issueProposalMarkerSearchTerm(proposalId: number): string {
  * `findIssueByMarker`に渡す。
  */
 export function issueProposalMarkerText(proposalId: number): string {
-  return `<!-- ${issueProposalMarkerSearchTerm(proposalId)} -->`;
+  return `<!-- ${issueProposalMarkerKey(proposalId)} -->`;
 }
 
 /**
