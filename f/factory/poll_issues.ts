@@ -5,8 +5,9 @@
 // (Issueはassignee、PRはトリガーラベルの消費。どちらも取り直して確かめる)。
 // 1つのインスタンス内での重複実行は、スケジュールの`no_flow_overlap: true`で防ぐ。
 //
-// トリガーラベル付きのIssueは、設定`gh_source_poll_issues`が`db`で収集が有効なときは収集の表から見つけ、
-// 記録が古い所有者だけ検索に戻す。表の候補は、`getIssue`で開いていることとトリガーラベルを確かめてから使う。
+// トリガーラベル付きのIssueは、収集の表から見つける。検索は使わない。
+// 表が新しくないリポジトリは、設定で明示したものだけをRESTの一覧で読み、ほかは見送る。
+// 候補は、`getIssue`で開いていることとトリガーラベルを確かめてから使う。
 //
 // 判断(どのIssueを取得・見送るか、進行中の作業項目をどうするか)は
 // `./lib/poll_support.ts`の純粋関数にあり、このファイルは入出力をつなぐだけ。
@@ -44,10 +45,7 @@ import {
 } from "./lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import { openFactoryClone } from "./lib/factory_clone.ts";
-import {
-  effectiveGhSource,
-  ghDetailStaleAfterMs,
-} from "./lib/gh_collect_read.ts";
+import { ghDetailStaleAfterMs } from "./lib/gh_collect_read.ts";
 import {
   ClaimOwnershipUnknownError,
   claimIssue,
@@ -60,7 +58,7 @@ import {
   getViewer,
   type IssueSearchItem,
   LabelerCheckLimitError,
-  searchIssues,
+  listLabeledOpenIssues,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
@@ -97,7 +95,6 @@ import {
 import { postSupersededComments } from "./lib/supersede_support.ts";
 import type {
   FactoryConfig,
-  GhSource,
   LabelerAssociation,
   WorkItem,
 } from "./lib/types.ts";
@@ -1364,38 +1361,29 @@ async function expirePendingApprovals(
 }
 
 /**
- * 設定`gh_source_poll_issues`と収集の設定から、この回の読み取り元を決める。
+ * 収集の設定から、この回に収集の表を読んでよいかを決める。
  * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
- * 設定を戻し忘れても処理が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
+ * 偽のときは、明示したリポジトリだけをRESTの一覧で読み、ほかは発見されないので、偽の設定の名前を警告に残す。
  */
-export function resolveIssueSource(
+export function resolveIssueTableUse(
   config: Pick<
     FactoryConfig,
-    "gh_source_poll_issues" | "gh_collect_enabled" | "gh_collect_detail_enabled"
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
   >,
   log: Logger,
-): GhSource {
-  const source = effectiveGhSource(config.gh_source_poll_issues, config);
-  if (config.gh_source_poll_issues === "db" && source === "search") {
+): boolean {
+  const useTable =
+    config.gh_collect_enabled && config.gh_collect_detail_enabled;
+  if (!useTable) {
     log.warn(
-      "gh_source_poll_issues is db but the collection is not fully enabled, so the round searches",
+      "the collection is not fully enabled, so only explicit repositories are read",
       {
         gh_collect_enabled: config.gh_collect_enabled,
         gh_collect_detail_enabled: config.gh_collect_detail_enabled,
       },
     );
   }
-  return source;
-}
-
-export function resolveIssueTableUse(
-  _config: Pick<
-    FactoryConfig,
-    "gh_collect_enabled" | "gh_collect_detail_enabled"
-  >,
-  _log: Logger,
-): boolean {
-  return false;
+  return useTable;
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,11 +1397,14 @@ export async function main(): Promise<{
   actionable_cancelled: number;
   expired: number;
   failed: number;
-  issue_source: GhSource;
-  fallback_searches: number;
-  fallback_reasons: Readonly<Record<string, number>>;
-  table_candidates: number;
-  table_dropped: number;
+  /** 収集が無効で表を読まなかったか。真の間は、明示のリポジトリ以外は発見されない。 */
+  collect_disabled: boolean;
+  skipped_stale: number;
+  skipped_stale_reasons: Readonly<Record<string, number>>;
+  rest_lists: number;
+  rest_reasons: Readonly<Record<string, number>>;
+  candidates: number;
+  dropped: number;
 }> {
   const log = logger("poll_issues");
   const config = await loadConfig(() =>
@@ -1454,10 +1445,10 @@ export async function main(): Promise<{
   failed += verified.failed;
   // 照合を通ったオーナーだけを対象にする。
   const scope = { ...config, owners: verified.owners };
-  const source = resolveIssueSource(config, log);
+  const useTable = resolveIssueTableUse(config, log);
   const discovered = await discoverIssues(
     {
-      source,
+      useTable,
       owners: verified.owners,
       scope,
       triggerLabel: config.trigger_label,
@@ -1465,13 +1456,9 @@ export async function main(): Promise<{
       log,
     },
     {
-      searchIssues: (owner) =>
-        searchIssues(client, {
-          owner: owner.name,
-          ownerKind: owner.kind,
-          label: config.trigger_label,
-        }),
       readOwnerIssues: (owner) => readGhOwnerOpenIssues(owner),
+      listLabeledIssues: (owner, repo, label) =>
+        listLabeledOpenIssues(client, owner, repo, label),
       getIssue: (owner, repo, number) => getIssue(client, owner, repo, number),
       recordFailure: (step, err) => recordFailureSafe(step, err, log),
     },
@@ -1559,10 +1546,12 @@ export async function main(): Promise<{
     actionable_cancelled: actionable.cancelled,
     expired,
     failed,
-    issue_source: source,
-    fallback_searches: discovered.stats.fallback_searches,
-    fallback_reasons: discovered.stats.fallback_reasons,
-    table_candidates: discovered.stats.table_candidates,
-    table_dropped: discovered.stats.table_dropped,
+    collect_disabled: !useTable,
+    skipped_stale: discovered.stats.skipped_stale,
+    skipped_stale_reasons: discovered.stats.skipped_stale_reasons,
+    rest_lists: discovered.stats.rest_lists,
+    rest_reasons: discovered.stats.rest_reasons,
+    candidates: discovered.stats.candidates,
+    dropped: discovered.stats.dropped,
   };
 }

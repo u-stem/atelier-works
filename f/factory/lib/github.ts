@@ -1054,7 +1054,10 @@ export type Issue = {
   readonly assignees: string[];
   /** 応答の`repository_url`から読んだリポジトリの正規の綴り。読めないときは`null`。 */
   readonly repository: { readonly owner: string; readonly repo: string } | null;
-  /** PRか。 */
+  /**
+   * PRか。応答に`pull_request`の項目があるときに真になる。
+   * PRの番号もIssueのAPIで読めるので、Issueとして扱う前に区別する。
+   */
   readonly isPullRequest: boolean;
 };
 
@@ -1173,21 +1176,47 @@ export async function getIssue(
     labels,
     assignees,
     repository: repositoryOf(Reflect.get(parsed, "repository_url")),
-    isPullRequest: false,
+    isPullRequest: "pull_request" in parsed,
   };
 }
 
-/** `listLabeledOpenIssues`が読むページ数の既定の上限。 */
+/** `listLabeledOpenIssues`が読むページ数の既定の上限。1ページ100件なので、1000件までである。 */
 export const LABELED_ISSUES_MAX_PAGES = 10;
 
+/**
+ * `GET /repos/{owner}/{repo}/issues?labels=<label>&state=open`で、ラベルの付いた開いているIssueの番号を、
+ * ページ送りしながら最後のページまで返す。
+ * このAPIはPRも返すので、`pull_request`を持つ要素は捨てる。
+ * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
+ * 一部だけでは、返さなかったIssueを「ラベルが付いていない」と取り違えうるためである。
+ * 応答の形が違えば例外を投げる。
+ * 番号の素性(リポジトリ、開閉、ラベル)は呼び出し側が`getIssue`で読み直して確かめる。
+ */
 export async function listLabeledOpenIssues(
-  _client: GhClient,
-  _owner: string,
-  _repo: string,
-  _label: string,
-  _maxPages: number = LABELED_ISSUES_MAX_PAGES,
+  client: GhClient,
+  owner: string,
+  repo: string,
+  label: string,
+  maxPages: number = LABELED_ISSUES_MAX_PAGES,
 ): Promise<number[]> {
-  return [];
+  validateOwnerRepo(owner, repo);
+  const numbers = await paginateGhApi<number | null>(
+    client,
+    `repos/${owner}/${repo}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${context}: expected an array response`);
+      }
+      return parsed.map((entry) => {
+        if (!isRecord(entry) || typeof entry.number !== "number") {
+          throw new Error(`${context}: unexpected response shape`);
+        }
+        return "pull_request" in entry ? null : entry.number;
+      });
+    },
+    maxPages,
+  );
+  return numbers.filter((number) => number !== null);
 }
 
 /** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */

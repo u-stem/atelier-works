@@ -109,7 +109,6 @@ type DefaultableField =
   | "gh_collect_enabled"
   | "gh_collect_detail_enabled"
   | "gh_source_pr_conflict_watch"
-  | "gh_source_poll_issues"
   | "gh_source_poll_prs"
   | "gh_source_pr_ci_watch"
   | "worker_alert_memory_ratio"
@@ -197,7 +196,6 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   gh_collect_detail_enabled: false,
   // 収集の表から候補を読むのは、実機で表と検索の突き合わせを確かめてから、リモートのリソースで切り替える。
   gh_source_pr_conflict_watch: "search",
-  gh_source_poll_issues: "search",
   gh_source_poll_prs: "search",
   gh_source_pr_ci_watch: "search",
   // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
@@ -281,7 +279,6 @@ function ghSourceField(
   raw: Record<string, unknown>,
   field:
     | "gh_source_pr_conflict_watch"
-    | "gh_source_poll_issues"
     | "gh_source_poll_prs"
     | "gh_source_pr_ci_watch",
   fallback: GhSource,
@@ -1071,11 +1068,6 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "gh_source_pr_conflict_watch",
       DEFAULTS.gh_source_pr_conflict_watch,
-    ),
-    gh_source_poll_issues: ghSourceField(
-      raw,
-      "gh_source_poll_issues",
-      DEFAULTS.gh_source_poll_issues,
     ),
     gh_source_poll_prs: ghSourceField(
       raw,
