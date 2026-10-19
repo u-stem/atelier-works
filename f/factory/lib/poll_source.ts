@@ -5,9 +5,10 @@
 import { configuredRepos, isRepoAllowed } from "./config.ts";
 import {
   type GhOwnerRepoCoverageInput,
+  isArchivedWithinFreshness,
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
-  judgeGhRepoFreshness,
+  skippedStaleReasons,
   usableTableRows,
 } from "./gh_collect_read.ts";
 import type {
@@ -148,34 +149,6 @@ function explicitReposOf(
   );
 }
 
-/**
- * 表が新しくなく、見送るリポジトリの、鮮度の判定の理由を返す。
- * 見送るのは、読む時点で許され、archive済みでも一覧から消えてもおらず、設定で明示してもいないリポジトリである。
- */
-function skippedStaleReasons(
-  ownerName: string,
-  judged: ReadonlyMap<string, GhOwnerRepoCoverageInput>,
-  explicitNames: ReadonlySet<string>,
-  isAllowedNow: (owner: string, repo: string) => boolean,
-): string[] {
-  const reasons: string[] = [];
-  for (const name of [...judged.keys()].sort()) {
-    const item = judged.get(name);
-    if (
-      item === undefined ||
-      explicitNames.has(name) ||
-      !isAllowedNow(ownerName, item.row.repo) ||
-      item.row.archived ||
-      item.row.gone ||
-      item.freshness.kind !== "stale"
-    ) {
-      continue;
-    }
-    reasons.push(item.freshness.reason);
-  }
-  return reasons;
-}
-
 type ExplicitRepo = { owner: string; repo: string };
 
 /**
@@ -207,13 +180,7 @@ function explicitListReads(input: {
     if (
       item !== undefined &&
       input.dbNow !== null &&
-      item.row.archived &&
-      judgeGhRepoFreshness(
-        { ...item.row, archived: false },
-        [],
-        input.dbNow,
-        input.staleAfterMs,
-      ).kind === "fresh"
+      isArchivedWithinFreshness(item.row, input.dbNow, input.staleAfterMs)
     ) {
       continue;
     }

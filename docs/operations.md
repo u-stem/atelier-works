@@ -1834,8 +1834,7 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 設定`gh_source_pr_ci_watch`が`db`のときは、収集の記録が足りる範囲を検索しないので、普段は0本になる([人のPRの発見の元を表に切り替える](#人のprの発見の元を表に切り替える))。
 
 検索のrate limitは、認証したトークンで1分に30本である。
-`poll_prs`と`poll_issues`は検索しない([PRの発見の元を確かめる](#prの発見の元を確かめる)、[Issueの発見の元を確かめる](#issueの発見の元を確かめる))。
-`watch_pr_conflicts`もオーナーごとに1本検索する。設定`gh_source_pr_conflict_watch`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる。
+`poll_prs`と`poll_issues`と`watch_pr_conflicts`は検索しない([PRの発見の元を確かめる](#prの発見の元を確かめる)、[Issueの発見の元を確かめる](#issueの発見の元を確かめる)、[競合の監視の発見の元を確かめる](#競合の監視の発見の元を確かめる))。
 `watch_pr_ci`の本数が増えるほど、ほかのポーリングの検索が拒まれやすくなる。
 許可する作者は、少なくする。
 拒まれた回は、人のPRの発見だけを飛ばす。
@@ -2094,19 +2093,19 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
 人が作ったPRは、対象にしない。draw.ioのビューアを上げるPRなど、別の形のブランチのPRも対象にしない。
 作業項目は`cleanup_db`が消すので、PRの判定には使わない。
 
-`watch_pr_conflicts`は、次のどれかに入るリポジトリの、開いているPRの一覧を読む。
+`watch_pr_conflicts`は、次のどれかに入るリポジトリの、開いているPRを読む。検索は使わない。
 
 - 状態が`pr_open`の作業項目を持つ。
 - 競合の記録の行を持つ。
-- PATのアカウントが作った開いているPRを、照合を通ったオーナーごとに検索して、または収集の表から、見つかった。
 - `factory_repo`か、`repo_allowlist`に明示されている。
+- PATのアカウントが作った開いているPRを、収集の表から見つけた。
 
 `owners`だけで許されているリポジトリは、展開しない。
-検索は、リポジトリを見つけるためだけに使う。検索の索引は数分遅れる。1つのオーナーで読むのは、更新が新しい100件までである。
-設定`gh_source_pr_conflict_watch`が`db`のときは、収集の表でリポジトリを見つけ、PRも表から列挙する。表を使えないオーナーとリポジトリは、検索とREST一覧に戻る([競合の監視の読み取り元を表に切り替える](#競合の監視の読み取り元を表に切り替える))。
-作業項目が消え、競合の記録も無く、検索にも現れないリポジトリの古いPRは、見つけられない。
+収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`が真のときは、収集の表でリポジトリを見つけ、記録が新しいリポジトリのPRは表から列挙する。
+表を使えない作業項目、競合の行、明示のリポジトリは、RESTの一覧で列挙する([競合の監視の発見の元を確かめる](#競合の監視の発見の元を確かめる))。
+作業項目も競合の記録も無く、表の記録も新しくない、明示でないリポジトリにあるFactoryのPRは、拾えなくなる。
 このとき`repo_allowlist`にリポジトリを足してはならない。1件でも入れると、`repo_allowlist`が対象のリポジトリを絞り、書かなかったリポジトリがFactory全体で対象から外れる。
-1つのリポジトリで読むのは、1000件までである。超えたリポジトリは飛ばす。検索だけが見つけたリポジトリはログの警告だけで、それ以外は失敗として記録する。
+1つのリポジトリで読むのは、1000件までである。超えたリポジトリは飛ばし、失敗として記録する。
 競合の行を持たないマージ済みのPRは、読まない。
 
 競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
@@ -2132,7 +2131,6 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 | `pr_conflict_fix_max_rounds` | `2` | 競合の1回で起動できる数。1以上5以下 |
 | `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数。2以上10以下。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
 | `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下。`pr_conflict_fix_enabled`が`true`なら、10以上 |
-| `gh_source_pr_conflict_watch` | `search` | リポジトリの発見とPRの列挙の元。`search`は検索とREST一覧、`db`は収集の表。切り替えの手順は[競合の監視の読み取り元を表に切り替える](#競合の監視の読み取り元を表に切り替える) |
 
 競合を直す設定の組み合わせが上の条件を満たさないと、設定の読み込みが拒否する。
 Factoryのほかの処理も止まるので、関連する項目は同じ編集で書く。
@@ -2156,6 +2154,7 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 5. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
    - `tracked`は読んだPRの数、`conflicted`は競合しているPRの数、`skipped`は見送ったPRの数である。
    - `errors`は0で、`unauthorized`と`rateLimited`は偽である。Consoleの失敗の記録に、`f/factory/watch_pr_conflicts`の行が無い。
+   - `collect_disabled`は偽である。`skipped_stale`か`rest_lists`が1以上なら、[競合の監視の発見の元を確かめる](#競合の監視の発見の元を確かめる)の理由の表で原因を読む。
    - 最初の回は、GitHubがマージ可否をまだ計算しておらず(`null`)、`skipped`が多く出やすい。
 6. 2回目の巡回の後、`skipped`が減り、`conflicted`が揃ったことを確かめる。`tracked`は、2で合計した数と近いはずである。
 7. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
@@ -2172,13 +2171,13 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 | `work_items` | 作業項目を持つリポジトリの数 |
 | `conflict_rows` | 競合の記録の行を持つリポジトリの数 |
 | `explicit` | 設定で明示されたリポジトリの数 |
-| `table` | 収集の表で見つけたリポジトリの数。読み取り元が`search`なら0 |
-| `searched` | 検索が返したPRの件数。リポジトリの数ではなく、同じリポジトリが重なり、Factory以外のPRも含む |
+| `table` | 収集の表で見つけたリポジトリの数。収集の設定が偽のときは0 |
 | `total` | 重複を除いたリポジトリの数 |
 
-検索が働いたかは、PATのアカウントが開いているPRを持つのに、`searched`が0になっていないかで確かめる。0のままなら、検索の索引か権限を疑う。
-読み取り元が`db`のときは、表で見つかったオーナーを検索しないので、`searched`が0でも異常ではない。
-`total`は、5つの元を合わせた和集合の数なので、`work_items`、`conflict_rows`、`explicit`の和に、表か検索だけが見つけたリポジトリを足した数以下になる。
+表が働いたかは、PATのアカウントが開いているPRを持つのに、`table`が0になっていないかで確かめる。
+0のままなら、収集の設定と、表の記録の鮮度を疑う。
+作業項目、競合の行、設定で明示したリポジトリのPRは、表が働かなくてもRESTの一覧で見つかるので、`table`が0でも異常とは限らない。
+`total`は、4つの元を合わせた和集合の数なので、4つの項目の和以下になる。
 
 止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 止めた後に残った通知は、そのままにしておく。再開した後に、競合が続く間は通知が残り、競合が解けると自動で解決される。
@@ -2191,28 +2190,36 @@ PATがリポジトリを読めなくなったときの専用の通知は無い�
 読めなかったPRと、GitHubのrate limitの扱いは、[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 通知の本文は、競合を直す設定が有効なとき、保留の理由ごとに違う。実行が重なると、同じ競合の通知が2件残りうる。競合が解けると、どちらも自動で解決される。
 
-### 競合の監視の読み取り元を表に切り替える
+### 競合の監視の発見の元を確かめる
 
-設定`gh_source_pr_conflict_watch`を`db`にすると、`watch_pr_conflicts`は収集の表を読む。
-読むのは、リポジトリの発見とPRの列挙である。検索とREST一覧は、表を使えないときだけ呼ぶ。
-検索とREST一覧の回数が減り、検索のレート制限に当たりにくくなる。
-既定の`search`のままなら、発見と列挙は変わらない。
-PRごとの読み直し、競合の判定、通知、起動の判断は、読み取り元によらず同じである。
-どちらの読み取り元でも、読み直したPRの作者、ブランチの形、forkを確かめ直す。合わないPRは、理由`not_factory`で飛ばし、ログに警告を残す。
+`watch_pr_conflicts`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、リポジトリの発見とPRの列挙を収集の表から行う。
+表を使えない作業項目、競合の行、明示リポジトリ(`factory_repo`と`repo_allowlist`の各項目)は、その周回だけRESTの一覧で読む。
+一覧は`GET /repos/{owner}/{repo}/pulls?state=open`である。
+どちらも検索を使わない。
+発見の元を選ぶ設定は無い。
+リソースに削除した設定の項目が残っていても、読み捨てられて動作に影響しない。
+詳しくは、[GitHubの収集の内部仕様](internals/github-collect.md#所有者の単位の読み取り)にある。
+PRごとの読み直し、競合の判定、通知、起動の判断は、どの経路でも同じである。
+読み直したPRの作者、ブランチの形、forkは、どの経路でも確かめ直す。合わないPRは、理由`not_factory`で飛ばし、ログに警告を残す。
 
-収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索とREST一覧になる。
-`gh_source_pr_conflict_watch`に書ける値は、`search`と`db`の2つだけである。
-列挙の外の値を書くと、設定を読むscriptがすべて止まる。
+リポジトリごとに記録の鮮度を判定する。
+閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`である。
+鮮度が足りないときの扱いは、リポジトリがどの元に入るかで分かれる。
 
-記録の時刻が閾値を超えたオーナーは検索に、リポジトリはREST一覧に戻る。
-閾値は、`owners`の所有者がn人のとき、`max(15分, (n+1)×5分)`である。
-戻した検索の回数は、周回全体が検索のときを超えない。
+- 作業項目、競合の行、明示リポジトリ: 一覧で読む。`gh_repos`に行が無いとき、表の読み取りが失敗したとき、収集の設定が偽のときも、一覧で読む。
+- どれにも入らないリポジトリ: 見送る。見送りは失敗にしない。通知は鮮度の監視が出す([リポジトリ単位の古さ](internals/github-collect.md#リポジトリ単位の古さ))。
 
-表に切り替えると、次の3つが変わる。
+鮮度の判定の語は、[Issueの発見の元を確かめる](#issueの発見の元を確かめる)と同じ5つである。
 
-- archive済みと、一覧から消えたリポジトリは、表で探さない。作業項目、競合の行、設定で明示されたリポジトリは、REST一覧で列挙する。どれにも入らず検索だけが見つけていたPRは、見つからなくなる。
+次の5つに注意する。
+
+- 作業項目も競合の行も無く、表も古い、明示でないリポジトリにあるFactoryのPRは、拾えなくなる。鮮度の監視が通知するまでの間は、黙って見送る。
+- 収集の設定の片方でも偽の間は、作業項目、競合の行、明示リポジトリ以外のPRを見つけない。`repo_allowlist`が空のときは、鮮度の監視が通知を出す。止めるなら、先に`repo_allowlist`へ必要なリポジトリを並べる。
 - 表の値が変わってから列挙に届くまで、普段は1周回(5分ほど)、最大で閾値と5分の和だけ遅れる。競合の通知も同じだけ遅れる。競合が解けたことと、PRが閉じたことの検知は遅れない。
-- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリのPRを、表では見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。
+- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリのPRを、表では見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。作業項目か競合の行に載れば、一覧で読む。
+- 設定の明示だけで名前が挙がり、記録が閾値の内にあるarchive済みのリポジトリは、一覧でも読まない。読み取り専用で、競合を直せないためである。
+
+次の手順で、収集が動き、表が使えていることを確かめる。
 
 1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
 
@@ -2221,8 +2228,8 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、読み
    ```
 
    対象のリポジトリが許可され、archiveされておらず、`gone`でなく、`age`が閾値の内にあることを見る。
-   満たさないリポジトリは、`db`にしても毎周回REST一覧に戻る。
-2. 表で見つかるリポジトリの集合を、検索の結果と照らし合わせる。
+   満たさないリポジトリは、作業項目、競合の行、明示のどれかに入らなければ見送られ、入れば毎周回RESTの一覧で読まれる。
+2. 表で見つかるPRの集合を、GitHubの結果と照らし合わせる。
    表の側は、コードが候補に選ぶ条件と同じ条件で集める。
    対象は、記録の数値IDが合い、使ってよい開いた行である。
    リポジトリの記録は、閾値の内にあり、archive済みでも一覧から消えてもいない。
@@ -2232,44 +2239,64 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、読み
    閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`で、次のSQLの`interval`に書く。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT DISTINCT p.repo FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.state = 'open' AND p.usable AND NOT p.is_draft AND NOT p.is_cross_repository AND p.head_ref ~ '^factory/issue-[1-9][0-9]*-wi-[1-9][0-9]*\$' AND (p.author_login IS NULL OR (lower(p.author_login) = lower('<PATのアカウント>') AND (p.author_id IS NULL OR p.author_id = <PATの数値ID>))) AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY p.repo"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT p.repo || '#' || p.number FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.state = 'open' AND p.usable AND NOT p.is_draft AND NOT p.is_cross_repository AND p.head_ref ~ '^factory/issue-[1-9][0-9]*-wi-[1-9][0-9]*\$' AND (p.author_login IS NULL OR (lower(p.author_login) = lower('<PATのアカウント>') AND (p.author_id IS NULL OR p.author_id = <PATの数値ID>))) AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY 1"
    ```
 
-   検索の側は、検索APIが返すリポジトリを集める。
+   GitHubの側は、リポジトリごとにRESTの一覧を読み、同じ条件に当たる要素を集める。
 
    ```bash
-   gh api -X GET search/issues -f q='is:pr is:open draft:false author:<PATのアカウント> user:<owner>' -f per_page=100 --jq '.items[].repository_url' | sed 's|.*/repos/[^/]*/||' | tr 'A-Z' 'a-z' | sort -u
+   gh api -X GET repos/<owner>/<repo>/pulls -f state=open -f per_page=100 --paginate --jq '.[] | select((.draft | not) and ((.user.login // "" | ascii_downcase) == ("<PATのアカウント>" | ascii_downcase)) and (.head.ref | test("^factory/issue-[1-9][0-9]*-wi-[1-9][0-9]*$")) and (.head.repo.full_name == .base.repo.full_name)) | "<repo>#" + (.number | tostring)' | sort -u
    ```
 
-   検索の範囲は、所有者が組織なら`org:<owner>`にする。
    2つの出力をファイルに保存し、`cmp -s`で比べて、`same`と`different`のどちらになったかだけを見る。
    作者が空の行は表の側にだけ入る。差が出たら、作者が空の行の数を先に確かめる。
    それ以外の差は、収集の周回の遅れ(5分以内)か、archive済みのリポジトリで説明できるかを確かめ、数分後に読み直す。
-   `repo_allowlist`が空の構成では、検索が返すリポジトリのうち`gh_repos`に行の無いものの数も数える。1以上なら、`db`にしない。
-3. `gh_source_pr_conflict_watch`を`db`に切り替える。
-   書き換えの前に、リソースの値を取得して控えを取る。
-   取得した出力の`value`の`gh_source_pr_conflict_watch`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
-   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
-   戻すときは、控えの値で同じ手順を行い、`gh_source_pr_conflict_watch`を`search`にする。
-4. 続く3回の`watch_pr_conflicts`の結果を、WindmillのRunsで確かめる。
-   `source`が`db`、`errors`が0、`fallback_searches`が0であることを見る。
+   `repo_allowlist`が空の構成では、PATのアカウントが開いているPRを持つリポジトリのうち、`gh_repos`に行の無いものがないことも確かめる。
+   あれば、そのリポジトリのFactoryのPRは、作業項目か競合の行に載るまで見つからない。
+3. 続く3回の`watch_pr_conflicts`の結果を、WindmillのRunsで確かめる。
+   `collect_disabled`が`false`、`errors`が0であることを見る。
    `table_repos`は、表から列挙したリポジトリの数で、対象のうち記録が新しいものの数と近いはずである。
-   `tracked`と`conflicted`は、切り替えの前と同じか、その間のPRの開閉で説明できる値になる。
-5. `fallback_searches`が1以上なら、`fallback_reasons`の語で原因を読む。
+   `tracked`と`conflicted`は、直前の周回と同じか、その間のPRの開閉で説明できる値になる。
+   失敗の記録に、段`read_gh_owner_prs:<owner>`と`list_open_prs:<owner>/<repo>`が続かないことを見る。
 
-| `fallback_reasons`の語 | 対処 |
-| --- | --- |
-| `no_record` | `gh_repos`にその所有者の行が無い。所有者が収集の対象(`owners`)かを確かめる |
-| `unusable` | 許可の外か、開いた行がすべて使えない。読む時点で許されるのに、記録の許可が偽のときも当たる。収集が次の一覧で書き直すのを待つ |
-| `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
-| `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
-| `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_owner_prs:<owner>`と、DBの状態を確かめる |
+結果の`rest_lists`と`skipped_stale`が1以上なら、理由の語で原因を読む。
+`rest_lists`は表の代わりに一覧で読んだリポジトリの数で、理由は`rest_reasons`に出る。
+`skipped_stale`は見送った、どの元にも入らないリポジトリの数で、理由は`skipped_stale_reasons`に出る。
+理由の語の意味と対処は、[Issueの発見の元を確かめる](#issueの発見の元を確かめる)の表と同じである。
+ただし、表の読み取りの失敗の段は`read_gh_owner_prs:<owner>`である。
 
 定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
-説明できないなら、`gh_source_pr_conflict_watch`を`search`に戻す。
-失敗の記録の段`read_gh_owner_prs:`が続くときも、`search`に戻す。
+説明できなければ、収集の失敗として調べる。
 
-読み取り元だけを戻すときは、`gh_source_pr_conflict_watch`を`search`にする。
+一覧の読み取りが失敗すると、失敗の記録の段`list_open_prs:<owner>/<repo>`に残り、`errors`に数える。
+開いたPRが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
+一覧を読むのは、収集が止まっている間と、表の記録が新しくない作業項目、競合の行、明示リポジトリである。
+明示リポジトリの一覧が失敗し続けても、通知は出ない。
+失敗は`job_failures`に残り、日次のまとめに載る。
+`repo_allowlist`が空でないと、リポジトリ単位の古さの通知と収集の無効の通知が出ないためである。
+結果の`errors`と、失敗の記録の段`list_open_prs:`を定期的に見る。
+
+反映後は、次の2つを確かめる。
+
+- 反映直後の1周回は、`watch_pr_conflicts`と`pr_conflict_watch`の版が混ざり、失敗として記録されうる。次の周回で消えることを確かめる。
+- 実ジョブで手順3の結果を確かめた後に、`watch_pr_conflicts`の発見の元を選んでいた項目を、手で消す。
+  対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
+  消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
+
+検索へ戻す設定は無い。
+発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
+戻しは次の順で行う。
+
+1. リソース`f/factory/factory_config`に、控えの値`gh_source_pr_conflict_watch: db`を先に入れる。戻す前の版は、この項目が`db`のときに表を読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
+2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
+3. 戻しのPRをマージする。反映は`self_update`が行う。
+4. 反映後の実ジョブの結果を確かめる。
+
+リソースの項目は、検索の関数を消す段階まで消さない。
+今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
+ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
+戻すときは、後にマージされた変更から順に戻す。
+
 監視を止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 
 ### 競合の自動修正を有効にする

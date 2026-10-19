@@ -287,9 +287,6 @@ function setup(options: Setup = {}): Harness {
       return options.viewer ?? VIEWER;
     },
     useTable: options.useTable ?? false,
-    source: options.useTable ? "db" : "search",
-    searchOwners: options.owners ?? [],
-    searchOpenRepos: async () => [],
     staleAfterMs: options.staleAfterMs ?? STALE_AFTER_MS,
     readOwnerPrs: async (owner) => {
       ownerReads.push(owner);

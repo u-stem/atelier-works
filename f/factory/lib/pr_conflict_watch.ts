@@ -3,20 +3,22 @@
 // 競合を直す設定が有効なときは、競合を直す作業項目(`pr_fix`の競合回)を起動する(`PrConflictFixDeps`)。
 // 起動の依存を渡さないときは、検知と通知だけを行う。
 //
-// 対象のPRは、作業項目の存在や更新時刻に頼らずに見つける。
+// 対象のPRは、作業項目の存在や更新時刻に頼らずに見つける。検索は使わない。
 // 次の和集合のリポジトリごとに、開いているPRを列挙する。
 // - 状態が`pr_open`の作業項目を持つリポジトリ。
 // - 競合の記録(`pr_conflict_checks`)の行を持つリポジトリ。
-// - PATのアカウントが作った開いているPRを、照合を通ったオーナーごとに見つけたリポジトリ。
-//   読み取り元が`search`なら検索で、`db`なら収集の表で見つける。表を使えないオーナーだけ検索に戻す。
-//   見つけるのはリポジトリだけで、PRの判定は一覧か表の行と`getPr`で行う。
 // - 設定で明示されたリポジトリ(`factory_repo`と、`repo_allowlist`の各項目)。`owners`は展開しない。
+//   archive済みの印のある記録が鮮度の内にあるときは、読まない。
+// - PATのアカウントが作った開いているPRを、収集の表から見つけたリポジトリ。
+//   照合を通ったオーナーごとに表を読み、記録の鮮度が足りるリポジトリだけを見つける。
+//   見つけるのはリポジトリだけで、PRの判定は表の行と`getPr`で行う。
 // 列挙したPRのうち、Factoryのブランチ(`factory/issue-<N>-wi-<id>`)で、PATのアカウントが作った、
 // 下書きでなく、forkでないものだけを、PRとして読む。
-// 読み取り元が`db`のときは、記録の鮮度が足りるリポジトリのPRを表の行から選び、足りないリポジトリはREST一覧で選ぶ。
+// 記録の鮮度が足りるリポジトリのPRは表の行から選び、足りないリポジトリはREST一覧で選ぶ。
 // 表の行は候補を絞るだけに使う。`getPr`の応答で、作者、ブランチの形、forkを確かめ直してから扱う。
 // 作業項目は`cleanup_db`が消すので、判定に使わない。
-// 上の和集合に入らないリポジトリ(作業項目も競合の行も無く、検索にも現れず、設定にも明示されていない)のPRは、見つけられない。
+// 上の和集合に入らないリポジトリ(作業項目も競合の行も無く、設定にも明示されておらず、表の記録も新しくない)のPRは、
+// 処理せず、数えて結果に出す。読めない間の通知は収集の側が出す。
 //
 // 競合とみなすのは、`mergeable`が偽で`mergeable_state`が`dirty`のときだけである(`decidePrConflict`)。
 // GitHubが計算していない(`mergeable`が`null`)PRは何もせず、次の回に判定し直す。
@@ -57,12 +59,12 @@ import type {
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   type GhOwnerRepoJudgement,
-  judgeGhOwnerCoverage,
+  isArchivedWithinFreshness,
   judgeGhOwnerRepos,
+  skippedStaleReasons,
 } from "./gh_collect_read.ts";
 import {
   GitHubHttpError,
-  GitHubPaginationLimitError,
   GitHubRateLimitError,
   type OpenPullRequest,
   type PrCommitMessages,
@@ -101,7 +103,6 @@ import {
   type FactoryOwner,
   type GhOwnerOpenPrSnapshot,
   type GhPullRequest,
-  type GhSource,
   type NoticeRecord,
   parseImplementBranchWorkItemId,
 } from "./types.ts";
@@ -249,24 +250,16 @@ export type PrConflictWatchDeps = PrConflictFixWiring & {
   /** 競合の記録の行を持つリポジトリ。重複は無い。 */
   readonly listConflictRepos: () => Promise<RepoRef[]>;
   /**
-   * 実効の読み取り元(`effectiveGhSource`)。`db`のときだけ、収集の表から発見とPRの列挙を行う。
-   * 表を使えない所有者とリポジトリは、検索とREST一覧に戻す。
+   * 収集の表を読んでよいか(収集の2つの設定が真か)。偽なら表を読まず、
+   * 作業項目、競合の行、設定で明示されたリポジトリだけを、REST一覧で読む。
    */
-  readonly source: GhSource;
+  readonly useTable: boolean;
   /** 表の記録を使わずに止める閾値(ミリ秒)。 */
   readonly staleAfterMs: number;
   /** 所有者の`gh_repos`の全行、開いているPRの全行、DBの時刻を1つの文で読む(`readGhOwnerOpenPullRequests`)。 */
   readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
-  /** 開いているPRを検索するオーナー。オーナーの照合を通ったものである。 */
-  readonly searchOwners: readonly FactoryOwner[];
-  /**
-   * そのオーナーで、`author`が作った開いているPRを検索し、そのリポジトリを返す(`searchOpenAuthoredPrs`)。
-   * リポジトリを見つけるためだけに使う。rate limitの解除は待たず、拒まれたら`GitHubRateLimitError`を投げる。
-   */
-  readonly searchOpenRepos: (
-    owner: FactoryOwner,
-    author: string,
-  ) => Promise<RepoRef[]>;
+  /** 表でリポジトリを見つけるオーナー。オーナーの照合を通ったものである。 */
+  readonly owners: readonly FactoryOwner[];
   /** リポジトリの開いているPRをすべて返す。多すぎて読み切れないときは例外を投げる。 */
   readonly listOpenPrs: (
     owner: string,
@@ -336,12 +329,16 @@ export type PrConflictWatchResult = {
   readonly rateLimited: boolean;
   /** PATが拒まれて(401)読み取りを止めたか。 */
   readonly unauthorized: boolean;
-  /** 実効の読み取り元。何も読まずに終わった回は`search`。 */
-  readonly source: GhSource;
-  /** 表を使えずに呼んだ検索の回数。 */
-  readonly fallback_searches: number;
-  /** 検索に戻した理由ごとの所有者の数。 */
-  readonly fallback_reasons: Readonly<Record<string, number>>;
+  /** 収集が無効で表を読まなかったか。真の間は、作業項目、競合の行、明示のリポジトリ以外は見つけられない。 */
+  readonly collect_disabled: boolean;
+  /** 表が新しくないため、処理せず見送ったリポジトリの数。どの元にも名前のないものだけを数える。 */
+  readonly skipped_stale: number;
+  /** 見送った理由ごとのリポジトリの数。理由は表の鮮度の判定の語である。 */
+  readonly skipped_stale_reasons: Readonly<Record<string, number>>;
+  /** 表の代わりにREST一覧でPRを列挙したリポジトリの数。 */
+  readonly rest_lists: number;
+  /** 一覧で読んだ理由ごとのリポジトリの数。表の鮮度の判定の語に、`read_failed`と`collect_disabled`を足したもの。 */
+  readonly rest_reasons: Readonly<Record<string, number>>;
   /** PRの列挙を表から行ったリポジトリの数。 */
   readonly table_repos: number;
 };
@@ -366,9 +363,11 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult =
     deferred: 0,
     rateLimited: false,
     unauthorized: false,
-    source: "search",
-    fallback_searches: 0,
-    fallback_reasons: Object.freeze({}),
+    collect_disabled: false,
+    skipped_stale: 0,
+    skipped_stale_reasons: Object.freeze({}),
+    rest_lists: 0,
+    rest_reasons: Object.freeze({}),
     table_repos: 0,
   });
 
@@ -387,9 +386,11 @@ type Counters = {
   deferred: number;
   rateLimited: boolean;
   unauthorized: boolean;
-  source: GhSource;
-  fallback_searches: number;
-  fallback_reasons: Record<string, number>;
+  collect_disabled: boolean;
+  skipped_stale: number;
+  skipped_stale_reasons: Record<string, number>;
+  rest_lists: number;
+  rest_reasons: Record<string, number>;
   table_repos: number;
 };
 
@@ -418,10 +419,17 @@ type Context = {
   readonly rows: ReadonlyMap<string, PrConflictCheck>;
   readonly facts: Facts;
   /**
-   * この回に表から読んだ所有者の、リポジトリごとの判定。鍵は小文字の所有者名、その中は小文字のリポジトリ名。
-   * 読めなかった所有者は入らない。
+   * この回に表から読んだ所有者の、リポジトリごとの判定と、読んだ時点のDBの時刻。
+   * 鍵は小文字の所有者名、判定の中は小文字のリポジトリ名。読めなかった所有者は入らない。
    */
-  readonly tables: Map<string, ReadonlyMap<string, GhOwnerRepoJudgement>>;
+  readonly tables: Map<string, OwnerTable>;
+  /** この回に表を読めなかった所有者の、小文字の名前。 */
+  readonly readFailed: Set<string>;
+};
+
+type OwnerTable = {
+  readonly judged: ReadonlyMap<string, GhOwnerRepoJudgement>;
+  readonly dbNow: Date;
 };
 
 /** `slot`に最初の読み取りを覚え、2回目からは同じ結果を返す。失敗も同じ失敗として返す。 */
@@ -510,15 +518,6 @@ function repoKey(entry: RepoRef): string {
   return `${entry.owner}/${entry.repo}`.toLowerCase();
 }
 
-/** `found`のうち、`others`のどれにも入らないリポジトリの鍵。 */
-function onlyFound(
-  found: readonly RepoRef[],
-  others: readonly (readonly RepoRef[])[],
-): Set<string> {
-  const known = new Set(others.flatMap((list) => list.map(repoKey)));
-  return new Set(found.map(repoKey).filter((key) => !known.has(key)));
-}
-
 /** 重複を除いて重ねる。大文字小文字は区別せず、最初の綴りを残す。 */
 function mergeRepos(...lists: readonly (readonly RepoRef[])[]): RepoRef[] {
   const seen = new Set<string>();
@@ -544,8 +543,9 @@ export async function runPrConflictWatch(
   // 理由の表は、凍結した定数と共有せず、回ごとに新しく作る。
   const counters: Counters = {
     ...PR_CONFLICT_WATCH_IDLE_RESULT,
-    source: deps.source,
-    fallback_reasons: {},
+    collect_disabled: !deps.useTable,
+    skipped_stale_reasons: {},
+    rest_reasons: {},
   };
   const deferred: Deferred = { repos: 0, prs: 0, rows: 0 };
   const startedAt = deps.now();
@@ -564,6 +564,7 @@ export async function runPrConflictWatch(
       reported: new Set(),
     },
     tables: new Map(),
+    readFailed: new Set(),
   };
   // 回復を先に行う。競合している行は、回復が結びを外した後に読む。
   await recoverFixing(context);
@@ -661,35 +662,51 @@ export function isFactoryPullRequest(pr: PullRequest, viewer: Viewer): boolean {
   );
 }
 
-/** 表から所有者のリポジトリを探した結果。 */
-type TableDiscovery =
-  | { readonly kind: "found"; readonly repos: RepoRef[] }
-  | { readonly kind: "fallback"; readonly reason: string };
+/** 理由ごとの件数に1を足す。 */
+function countReason(counts: Record<string, number>, reason: string): void {
+  counts[reason] = (counts[reason] ?? 0) + 1;
+}
 
 /**
- * 所有者の全体を表で探す。鮮度の足りない所有者と、読めなかった所有者は、検索に戻す理由を返す。
- * 読めなかったときは、その所有者の全体を使わず、失敗として記録する。
- * 鮮度の不足は失敗にしない。収集の停止は鮮度の監視が知らせ、戻した回数と理由は結果に出る。
- * 読めた所有者の判定は、PRの列挙のために覚える。発見が検索に戻っても、鮮度の足りるリポジトリは表から列挙する。
+ * 所有者の全体を表で読み、鮮度の足りるリポジトリのうち、FactoryのPRの候補の行を持つものを返す。
+ * 読めた所有者の判定は、PRの列挙のために覚える。
+ * 読めなかったときは、その所有者の表は使わず、失敗として記録する。
+ * 鮮度の足りないリポジトリは、`named`に入らないものだけを、処理せず理由別に数える。
+ * 鮮度の不足は失敗にしない。収集の停止は鮮度の監視が知らせ、見送った数と理由は結果に出る。
+ * `named`は、ほかの元(作業項目、競合の行、設定)が名前を挙げたリポジトリの小文字の鍵である。
+ * これらはREST一覧で読むので、見送りに数えない。
  */
 async function discoverFromTable(
   context: Context,
   owner: FactoryOwner,
   viewer: Viewer,
-): Promise<TableDiscovery> {
-  const { deps } = context;
+  named: ReadonlySet<string>,
+): Promise<RepoRef[]> {
+  const { deps, counters } = context;
+  const ownerKey = owner.name.toLowerCase();
   let snapshot: GhOwnerOpenPrSnapshot;
   try {
     snapshot = await deps.readOwnerPrs(owner.name);
   } catch (err) {
     await recordFailureOf(context, `read_gh_owner_prs:${owner.name}`, err);
-    return { kind: "fallback", reason: "read_failed" };
+    context.readFailed.add(ownerKey);
+    return [];
   }
   const judged = judgeGhOwnerRepos(owner.name, snapshot, deps.staleAfterMs);
-  context.tables.set(owner.name.toLowerCase(), judged);
-  const coverage = judgeGhOwnerCoverage(owner.name, judged, deps.isRepoAllowed);
-  if (coverage.kind === "stale") {
-    return { kind: "fallback", reason: coverage.reason };
+  context.tables.set(ownerKey, { judged, dbNow: snapshot.db_now });
+  const namedHere = new Set(
+    [...named]
+      .filter((key) => key.startsWith(`${ownerKey}/`))
+      .map((key) => key.slice(ownerKey.length + 1)),
+  );
+  for (const reason of skippedStaleReasons(
+    owner.name,
+    judged,
+    namedHere,
+    deps.isRepoAllowed,
+  )) {
+    counters.skipped_stale += 1;
+    countReason(counters.skipped_stale_reasons, reason);
   }
   const repos: RepoRef[] = [];
   for (const item of judged.values()) {
@@ -697,23 +714,46 @@ async function discoverFromTable(
       item.freshness.kind === "fresh" &&
       item.usable.some((found) => isFactoryConflictRow(found, viewer))
     ) {
-      repos.push({ owner: owner.name.toLowerCase(), repo: item.row.repo });
+      repos.push({ owner: ownerKey, repo: item.row.repo });
     }
   }
-  return { kind: "found", repos };
+  return repos;
+}
+
+/**
+ * 設定で明示されたリポジトリのうち、archive済みの印が信用できるものを除く。
+ * 信用できるのは、表の記録がarchiveの印を除いて鮮度の内にあるときだけである。
+ * 古い記録の印は、解除された後も残りうるので、除かずに読む。
+ */
+function dropArchivedExplicit(
+  context: Context,
+  explicit: readonly RepoRef[],
+): RepoRef[] {
+  return explicit.filter((entry) => {
+    const table = context.tables.get(entry.owner.toLowerCase());
+    const item = table?.judged.get(entry.repo.toLowerCase());
+    return !(
+      table !== undefined &&
+      item !== undefined &&
+      isArchivedWithinFreshness(
+        item.row,
+        table.dbNow,
+        context.deps.staleAfterMs,
+      )
+    );
+  });
 }
 
 /**
  * 列挙するリポジトリの和集合を作る。読めない元は失敗として記録し、読めた元だけで進める。
- * 設定の読み取り元が`db`のときは、オーナーの全体をまず表で探し、使えないオーナーだけ検索に戻す。
- * 検索のrate limitは別の枠なので、記録せず、ほかの読み取りも止めない。
- * 当たった後は検索だけを飛ばし、表を使えるオーナーは読み続ける。飛ばしたオーナーは、理由`search_rate_limited`で数える。
+ * 和集合は、作業項目、競合の行、設定で明示されたリポジトリ、表で見つけたリポジトリである。
+ * 表は、収集の設定が真のときだけ、照合を通ったオーナーごとに読む。
  */
 async function collectRepos(
   context: Context,
   viewer: Viewer,
-): Promise<{ repos: RepoRef[]; searchOnly: ReadonlySet<string> }> {
-  const { deps, counters } = context;
+): Promise<RepoRef[]> {
+  const { deps } = context;
   const read = async (
     step: string,
     load: () => Promise<RepoRef[]>,
@@ -727,64 +767,27 @@ async function collectRepos(
   };
   const open = await read("list_open_repos", deps.listOpenRepos);
   const conflict = await read("list_conflict_repos", deps.listConflictRepos);
+  const named = new Set(
+    mergeRepos(open, conflict, deps.explicitRepos).map(repoKey),
+  );
   const table: RepoRef[] = [];
-  const searched: RepoRef[] = [];
-  // 検索のrate limitは別の枠なので、当たったら以降の検索だけを飛ばす。表の読み取りは続ける。
-  let searchBlocked = false;
-  for (const owner of deps.searchOwners) {
-    if (stopped(context)) break;
-    if (deps.source !== "db" && searchBlocked) break;
-    if (deps.source === "db") {
-      const found = await discoverFromTable(context, owner, viewer);
-      if (found.kind === "found") {
-        table.push(...found.repos);
-        continue;
-      }
-      if (searchBlocked) {
-        counters.fallback_reasons.search_rate_limited =
-          (counters.fallback_reasons.search_rate_limited ?? 0) + 1;
-        continue;
-      }
-      counters.fallback_reasons[found.reason] =
-        (counters.fallback_reasons[found.reason] ?? 0) + 1;
-      counters.fallback_searches += 1;
-    }
-    try {
-      searched.push(...(await deps.searchOpenRepos(owner, viewer.login)));
-    } catch (err) {
-      if (err instanceof GitHubRateLimitError) {
-        deps.log.warn("pr conflict search stopped by the rate limit", {
-          owner: owner.name,
-        });
-        searchBlocked = true;
-        continue;
-      }
-      if (isStatus(err, 401)) {
-        await absorbReadError(context, "search_open_repos", owner.name, err);
-        break;
-      }
-      await recordFailureOf(context, `search_open_repos:${owner.name}`, err);
+  if (deps.useTable) {
+    for (const owner of deps.owners) {
+      if (stopped(context)) break;
+      table.push(...(await discoverFromTable(context, owner, viewer, named)));
     }
   }
-  const repos = mergeRepos(open, conflict, deps.explicitRepos, table, searched);
-  // リポジトリ名は出さず、元ごとの件数だけを出す。検索が期待どおり動いたかを、件数で確かめられる。
+  const explicit = dropArchivedExplicit(context, deps.explicitRepos);
+  const repos = mergeRepos(open, conflict, explicit, table);
+  // リポジトリ名は出さず、元ごとの件数だけを出す。表が期待どおり動いたかを、件数で確かめられる。
   deps.log.info("pr conflict repositories collected", {
     work_items: open.length,
     conflict_rows: conflict.length,
     explicit: deps.explicitRepos.length,
     table: table.length,
-    searched: searched.length,
     total: repos.length,
   });
-  return {
-    repos,
-    searchOnly: onlyFound(searched, [
-      open,
-      conflict,
-      deps.explicitRepos,
-      table,
-    ]),
-  };
+  return repos;
 }
 
 /**
@@ -802,31 +805,47 @@ function isReadable(deps: PrConflictWatchDeps, entry: RepoRef): boolean {
   }
 }
 
+/** リポジトリのPRの読み方。表の行から選ぶか、理由を付けてREST一覧で読む。 */
+type RepoRead =
+  | { readonly kind: "table"; readonly numbers: number[] }
+  | { readonly kind: "list"; readonly reason: string };
+
 /**
- * 表から列挙できるリポジトリの、候補のPRの番号。表を使えないときは`null`で、REST一覧に戻す。
- * 使えるのは、この回に所有者を表から読めて、そのリポジトリの鮮度が足りるときだけである。
- * 引き当ては小文字で行う。リポジトリの綴りは、作業項目、競合の行、設定、検索のどれから来たかで違いうる。
+ * リポジトリのPRの読み方を決める。表から列挙できるのは、この回に所有者を表から読めて、
+ * そのリポジトリの鮮度が足りるときだけである。それ以外はREST一覧で読み、理由を返す。
+ * 引き当ては小文字で行う。リポジトリの綴りは、作業項目、競合の行、設定、表のどれから来たかで違いうる。
  */
-function tableCandidates(
+function planRepoRead(
   context: Context,
   owner: string,
   repo: string,
   viewer: Viewer,
-): number[] | null {
-  const judgement = context.tables
-    .get(owner.toLowerCase())
-    ?.get(repo.toLowerCase());
-  if (judgement === undefined || judgement.freshness.kind !== "fresh") {
-    return null;
+): RepoRead {
+  const ownerKey = owner.toLowerCase();
+  if (!context.deps.useTable) {
+    return { kind: "list", reason: "collect_disabled" };
   }
-  return judgement.usable
-    .filter((found) => isFactoryConflictRow(found, viewer))
-    .map((found) => found.number);
+  if (context.readFailed.has(ownerKey)) {
+    return { kind: "list", reason: "read_failed" };
+  }
+  const judgement = context.tables
+    .get(ownerKey)
+    ?.judged.get(repo.toLowerCase());
+  if (judgement === undefined) return { kind: "list", reason: "no_record" };
+  if (judgement.freshness.kind === "stale") {
+    return { kind: "list", reason: judgement.freshness.reason };
+  }
+  return {
+    kind: "table",
+    numbers: judgement.usable
+      .filter((found) => isFactoryConflictRow(found, viewer))
+      .map((found) => found.number),
+  };
 }
 
 /** 開いているFactoryのPRを読んで扱う。読めたPRの鍵の集合を返す。 */
 async function watchOpenPrs(context: Context): Promise<Set<string>> {
-  const { deps, deferred } = context;
+  const { deps, deferred, counters } = context;
   const seen = new Set<string>();
   let viewer: Viewer;
   try {
@@ -836,41 +855,31 @@ async function watchOpenPrs(context: Context): Promise<Set<string>> {
     return seen;
   }
   const collected = await collectRepos(context, viewer);
-  const repos = collected.repos.filter((entry) => isReadable(deps, entry));
+  const repos = collected.filter((entry) => isReadable(deps, entry));
   for (const [index, { owner, repo }] of repos.entries()) {
     if (stopped(context)) {
       deferred.repos += repos.length - index;
       break;
     }
-    const fromTable = tableCandidates(context, owner, repo, viewer);
-    if (fromTable !== null) {
-      context.counters.table_repos += 1;
-      for (const [at, number] of fromTable.entries()) {
+    const plan = planRepoRead(context, owner, repo, viewer);
+    if (plan.kind === "table") {
+      counters.table_repos += 1;
+      for (const [at, number] of plan.numbers.entries()) {
         if (stopped(context)) {
-          deferred.prs += fromTable.length - at;
+          deferred.prs += plan.numbers.length - at;
           break;
         }
         await watchOpenPr(context, viewer, owner, repo, number, seen);
       }
       continue;
     }
+    counters.rest_lists += 1;
+    countReason(counters.rest_reasons, plan.reason);
     let open: OpenPullRequest[];
     try {
       open = await deps.listOpenPrs(owner, repo);
     } catch (err) {
       if (err instanceof GitHubRateLimitError) deferred.repos += 1;
-      // 検索だけが見つけたリポジトリは、設定でも作業項目でも選んでいない。
-      // 件数の上限を超えても対応できないので、毎回の失敗として記録せず、ログだけに残す。
-      if (
-        err instanceof GitHubPaginationLimitError &&
-        collected.searchOnly.has(repoKey({ owner, repo }))
-      ) {
-        deps.log.warn(
-          "pr conflict could not list all the open pull requests of a searched repository",
-          { repo: `${owner}/${repo}` },
-        );
-        continue;
-      }
       await absorbReadError(
         context,
         `list_open_prs:${owner}/${repo}`,

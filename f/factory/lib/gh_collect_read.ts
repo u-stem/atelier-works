@@ -286,6 +286,50 @@ export function judgeGhOwnerCoverage(
 }
 
 /**
+ * 表が新しくなく、見送るリポジトリの、鮮度の判定の理由を返す。
+ * 見送るのは、読む時点で許され、archive済みでも一覧から消えてもおらず、設定で明示してもいないリポジトリである。
+ */
+export function skippedStaleReasons(
+  ownerName: string,
+  judged: ReadonlyMap<string, GhOwnerRepoCoverageInput>,
+  explicitNames: ReadonlySet<string>,
+  isAllowedNow: (owner: string, repo: string) => boolean,
+): string[] {
+  const reasons: string[] = [];
+  for (const name of [...judged.keys()].sort()) {
+    const item = judged.get(name);
+    if (
+      item === undefined ||
+      explicitNames.has(name) ||
+      !isAllowedNow(ownerName, item.row.repo) ||
+      item.row.archived ||
+      item.row.gone ||
+      item.freshness.kind !== "stale"
+    ) {
+      continue;
+    }
+    reasons.push(item.freshness.reason);
+  }
+  return reasons;
+}
+
+/**
+ * archive済みの印のあるリポジトリの記録が、archiveの印を除いて鮮度の内にあるか。
+ * 真のときだけ、archive済みの印を信用できる。古い記録の印は、解除された後も残りうる。
+ */
+export function isArchivedWithinFreshness(
+  row: GhOwnerRepoFreshnessRow,
+  dbNow: Date,
+  staleAfterMs: number,
+): boolean {
+  return (
+    row.archived &&
+    judgeGhRepoFreshness({ ...row, archived: false }, [], dbNow, staleAfterMs)
+      .kind === "fresh"
+  );
+}
+
+/**
  * 設定と収集の設定から、実際に使う読み取り元を決める。
  * 収集の記録が進まないときに表を読むと古い値で判断するので、収集の2つの設定が真のときだけ`db`にする。
  */
