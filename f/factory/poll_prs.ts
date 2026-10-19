@@ -90,7 +90,6 @@ import {
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
-  type FactoryConfig,
   hasLabel,
   isRecord,
   TERMINAL_WORK_ITEM_STATUSES,

@@ -32,7 +32,6 @@ import {
   type WorkflowRun,
 } from "./main_ci_support.ts";
 import type {
-  FactoryOwnerKind,
   GitHubRepoRef,
   GitIdentity,
   LabelerAssociation,
@@ -155,7 +154,7 @@ function parseGhApiOutput(stdout: string): GhApiResponse {
  * rate limitの解除を待つ時間の上限(ミリ秒)。
  * 1回の待ちはどのstepのtimeoutよりも短い(最も短いのはpr_fixの指摘の収集の600秒)ので、
  * 1つのstepで何度か待っても打ち切られない。
- * search APIの1分ごとの上限と、二次レート制限の`retry-after`(多くは60秒)はこの範囲で待てる。
+ * 二次レート制限の`retry-after`(多くは60秒)はこの範囲で待てる。
  * 一次レート制限(1時間ごと)を使い切ったときの`x-ratelimit-reset`までの待ちは収まらないので、
  * 待たずに`GitHubRateLimitError`を投げる。
  */
@@ -428,7 +427,29 @@ async function sendGhApi(
 }
 
 /**
- * `gh api <endpoint>`を呼ぶ。レート制限の応答を受けたら、待ってから1回だけ再試行する。
+ * RESTの検索APIのendpointの接頭辞。検索は1分ごとの枠が小さく、5分の境目に集中して拒まれるため、
+ * 呼び出しの入口で拒む(`isRestSearchEndpoint`)。
+ */
+const REJECTED_REST_ENDPOINT_PREFIX = "search/";
+
+/**
+ * endpointが、RESTの検索APIを指すか。先頭の`/`とホストを落とし、小文字にして接頭辞で比べる。
+ * 書き方の違い(先頭の`/`、大文字、絶対URL)で拒否をすり抜けないようにする。
+ * 接頭辞だけを見るので、`repos/o/search-x/issues`のようにリポジトリ名やクエリに含むだけの要求は拒まない。
+ * GraphQLの検索のフィールドは`graphql`への要求で、対象外である。
+ */
+function isRestSearchEndpoint(endpoint: string): boolean {
+  const path = endpoint
+    .toLowerCase()
+    .replace(/^https?:\/\/[^/]+\//, "")
+    .replace(/^\/+/, "");
+  return path.startsWith(REJECTED_REST_ENDPOINT_PREFIX);
+}
+
+/**
+ * `gh api <endpoint>`を呼ぶ。RESTの検索APIのendpointは、`gh`を起動せずに例外で拒む。
+ * メッセージにはendpointを載せない(クエリに値が入りうるため)。
+ * レート制限の応答を受けたら、待ってから1回だけ再試行する。
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
@@ -441,6 +462,9 @@ export async function callGhApi(
   endpoint: string,
   options: GhApiCallOptions = {},
 ): Promise<GhApiResponse> {
+  if (isRestSearchEndpoint(endpoint)) {
+    throw new Error("GitHub REST search endpoints are not allowed");
+  }
   const first = await sendGhApi(client, endpoint, options);
   if (!isRateLimited(first)) return first;
 
@@ -591,8 +615,7 @@ export class GitHubPaginationLimitError extends Error {
  * `GitHubPaginationLimitError`を投げる。
  * 各ページの要素を`extractPage`で取り出してつなげる。
  * `extractPage`はエンドポイントの応答の形によって変わる
- * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
- * `{ items: [...] }`で包まれている)。
+ * (timeline・comments・reviewsは裸のJSON配列で、`extractPage`が配列を取り出す)。
  */
 export async function paginateGhApi<T>(
   client: GhClient,
@@ -960,24 +983,10 @@ export function gitIdentityForViewer(viewer: Viewer): GitIdentity {
 }
 
 // ---------------------------------------------------------------------------
-// Issueの検索・取得・取得宣言・コメント・ラベル
+// Issueの取得・取得宣言・コメント・ラベル
 // ---------------------------------------------------------------------------
 
-function ownerQualifier(owner: string, ownerKind: FactoryOwnerKind): string {
-  return ownerKind === "org" ? `org:${owner}` : `user:${owner}`;
-}
-
-function repoFromRepositoryUrl(repositoryUrl: string): {
-  readonly owner: string;
-  readonly repo: string;
-} {
-  const match = repositoryUrl.match(/\/repos\/([^/]+)\/([^/]+)$/);
-  if (match === null || match[1] === undefined || match[2] === undefined) {
-    throw new Error(`unexpected repository_url shape: ${repositoryUrl}`);
-  }
-  return { owner: match[1], repo: match[2] };
-}
-
+/** 表またはRESTの一覧が見つけた、起動の候補のIssue。 */
 export type IssueSearchItem = {
   readonly owner: string;
   readonly repo: string;
@@ -987,105 +996,6 @@ export type IssueSearchItem = {
   readonly htmlUrl: string;
   readonly authorLogin: string;
 };
-
-type SearchIssuesPayload = {
-  readonly items: readonly SearchIssueItemPayload[];
-};
-
-type SearchIssueItemPayload = {
-  readonly id: number;
-  readonly number: number;
-  readonly title: string;
-  readonly body: string | null;
-  readonly html_url: string;
-  readonly repository_url: string;
-  readonly user: { readonly login: string } | null;
-  /** 更新の時刻。読む関数(`searchOpenAuthoredPrs`)だけが形を確かめる。 */
-  readonly updated_at?: unknown;
-};
-
-function isSearchIssueItemPayload(
-  value: unknown,
-): value is SearchIssueItemPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    id: unknown;
-    number: unknown;
-    title: unknown;
-    body: unknown;
-    html_url: unknown;
-    repository_url: unknown;
-    user: unknown;
-  };
-  if (typeof record.id !== "number") return false;
-  if (typeof record.number !== "number") return false;
-  if (typeof record.title !== "string") return false;
-  if (record.body !== null && typeof record.body !== "string") return false;
-  if (typeof record.html_url !== "string") return false;
-  if (typeof record.repository_url !== "string") return false;
-  if (record.user !== null && typeof record.user !== "object") return false;
-  return true;
-}
-
-function isSearchIssuesPayload(value: unknown): value is SearchIssuesPayload {
-  if (typeof value !== "object" || value === null) return false;
-  if (!("items" in value)) return false;
-  const items = (value as { items: unknown }).items;
-  return Array.isArray(items) && items.every(isSearchIssueItemPayload);
-}
-
-/**
- * `callGhApiAll`と同じだが、`/search/issues`の包まれた形
- * (裸の配列ではなく`{ items: [...] }`)を扱う。
- */
-async function callGhApiAllSearchItems(
-  client: GhClient,
-  endpoint: string,
-): Promise<SearchIssueItemPayload[]> {
-  return paginateGhApi(client, endpoint, (parsed, context) => {
-    if (!isSearchIssuesPayload(parsed)) {
-      throw new Error(`${context}: unexpected response shape`);
-    }
-    return parsed.items;
-  });
-}
-
-export type SearchIssuesOptions = {
-  readonly owner: string;
-  readonly ownerKind: FactoryOwnerKind;
-  readonly label: string;
-};
-
-/**
- * `GET /search/issues`で、`label`の付いたPRでない未完了のIssueを
- * ページ送りしながらすべて取得する。
- */
-export async function searchIssues(
-  client: GhClient,
-  opts: SearchIssuesOptions,
-): Promise<IssueSearchItem[]> {
-  assertGitHubName(opts.owner);
-  // ラベル名はコロンを含みうる(`factory:review`など)ため引用符で囲む。
-  // 現在の`/search/issues`は引用符なしの`label:factory:review`も受け付けるが、
-  // 引用符で囲む形がドキュメントにある安全な形で、下の`searchPrs`ともそろう。
-  const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:"${opts.label}"`;
-  const items = await callGhApiAllSearchItems(
-    client,
-    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-  );
-  return items.map((item) => {
-    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-    return {
-      owner,
-      repo,
-      number: item.number,
-      title: item.title,
-      body: item.body ?? "",
-      htmlUrl: item.html_url,
-      authorLogin: item.user?.login ?? "",
-    };
-  });
-}
 
 export type Issue = {
   readonly number: number;
@@ -2422,6 +2332,7 @@ export async function findIssueByMarker(
 // プルリクエスト
 // ---------------------------------------------------------------------------
 
+/** 表またはRESTの一覧が見つけた、起動の候補のPR。 */
 export type PrSearchItem = {
   readonly owner: string;
   readonly repo: string;
@@ -2429,70 +2340,6 @@ export type PrSearchItem = {
   readonly title: string;
   readonly htmlUrl: string;
 };
-
-export type SearchPrsOptions = {
-  readonly owner: string;
-  readonly ownerKind: FactoryOwnerKind;
-  readonly viewer: string;
-  readonly reviewLabel: string;
-  readonly fixLabel: string;
-};
-
-/**
- * `GET /search/issues`をPRに絞って呼び、レビューを依頼されたPR、assignされたPR、
- * `reviewLabel`か`fixLabel`の付いたPRを返す。
- * PRのトリガーラベル(`factory:review` / `factory:fix`)は、Issue側の
- * `factory`ラベルと同じく取得時に消費する。`wip`ラベルも状態ラベルも無く、
- * ラベルで再発見できないため、トリガーラベルを消費済みのPRは`poll_prs.ts`が
- * ラベル検索ではなく`listTrackedPrs`(DBに基づく)で再発見する。
- *
- * `(review-requested:X OR assignee:X OR label:Y OR ...)`のように1つに
- * まとめず、条件ごとに1つのクエリを実行する。GitHubの`/search/issues`は
- * 括弧によるORのまとめに対応していないことを、実際のフローのE2Eの失敗で
- * 確かめている(まとめたクエリは常に0件を返し、条件ごとなら一致した)。
- * 1つのPRが複数の条件を同時に満たすことがあるため、結果はGitHubの`id`で
- * 重複を除いてまとめる。
- */
-export async function searchPrs(
-  client: GhClient,
-  opts: SearchPrsOptions,
-): Promise<PrSearchItem[]> {
-  assertGitHubName(opts.owner);
-  assertGitHubName(opts.viewer);
-  // ラベル名はコロンを含みうる(`factory:review`など)ため、ラベルの条件は引用符で囲む。
-  const base = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)}`;
-  const queries = [
-    `${base} review-requested:${opts.viewer}`,
-    `${base} assignee:${opts.viewer}`,
-    `${base} label:"${opts.reviewLabel}"`,
-    `${base} label:"${opts.fixLabel}"`,
-  ];
-  const resultsByQuery = await Promise.all(
-    queries.map((query) =>
-      callGhApiAllSearchItems(
-        client,
-        `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-      ),
-    ),
-  );
-  const seen = new Set<number>();
-  const items: PrSearchItem[] = [];
-  for (const queryItems of resultsByQuery) {
-    for (const item of queryItems) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-      items.push({
-        owner,
-        repo,
-        number: item.number,
-        title: item.title,
-        htmlUrl: item.html_url,
-      });
-    }
-  }
-  return items;
-}
 
 /**
  * rate limitの解除を待たないクライアントを返す。
@@ -2526,78 +2373,6 @@ export async function getPrWithoutWait(
     repo,
     number,
   );
-}
-
-/** 人のPRを探す範囲。オーナーの全体か、1つのリポジトリ。 */
-export type OpenAuthoredPrsScope =
-  | {
-      readonly kind: "owner";
-      readonly owner: string;
-      readonly ownerKind: FactoryOwnerKind;
-    }
-  | {
-      readonly kind: "repo";
-      readonly owner: string;
-      readonly repo: string;
-    };
-
-export type OpenAuthoredPrSearchItem = PrSearchItem & {
-  /** PRの最後の更新の時刻(epochミリ秒)。範囲と作者をまたいで新しい順に並べるのに使う。 */
-  readonly updatedAtMs: number;
-};
-
-export type SearchOpenAuthoredPrsOptions = {
-  readonly scope: OpenAuthoredPrsScope;
-  /** PRの作者のログイン名。 */
-  readonly author: string;
-};
-
-/**
- * `GET /search/issues`で、`author`が作った、開いていて下書きでないPRを、更新の新しい順に1ページ(最大100件)返す。
- * 更新の時刻を読めない項目があれば`GitHubResponseError`を投げる。
- * 検索は候補を絞るだけで、作者の種別、fork、ブランチは呼び出し側がPRを読み直して確かめる。
- * 補助の検索なので、rate limitの解除を待たない。拒まれたら待たずに`GitHubRateLimitError`を投げ、
- * 呼び出し側は検索だけを飛ばす。ghの起動失敗と5xxの再試行は、待たずにすぐ行う。
- * オーナーとリポジトリと作者の名前は、検索の修飾子が紛れ込まないよう検証する。
- */
-export async function searchOpenAuthoredPrs(
-  client: GhClient,
-  opts: SearchOpenAuthoredPrsOptions,
-): Promise<OpenAuthoredPrSearchItem[]> {
-  assertGitHubName(opts.author);
-  assertGitHubName(opts.scope.owner);
-  let qualifier: string;
-  if (opts.scope.kind === "repo") {
-    assertGitHubName(opts.scope.repo);
-    qualifier = `repo:${opts.scope.owner}/${opts.scope.repo}`;
-  } else {
-    qualifier = ownerQualifier(opts.scope.owner, opts.scope.ownerKind);
-  }
-  const query = `is:pr is:open draft:false author:${opts.author} ${qualifier} sort:updated-desc`;
-  const endpoint = `search/issues?q=${encodeURIComponent(query)}&per_page=100`;
-  const response = await callGhApi(noWaitClient(client, endpoint), endpoint);
-  const context = `GET ${endpoint}`;
-  ensureSuccess(response, context);
-  const parsed = parseJsonBody(response, context);
-  if (!isSearchIssuesPayload(parsed)) {
-    throw new Error(`${context}: unexpected response shape`);
-  }
-  return parsed.items.map((item) => {
-    const updatedAtMs =
-      typeof item.updated_at === "string" ? Date.parse(item.updated_at) : NaN;
-    if (!Number.isFinite(updatedAtMs)) {
-      throw unexpectedShape("search open authored prs");
-    }
-    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-    return {
-      owner,
-      repo,
-      number: item.number,
-      title: item.title,
-      htmlUrl: item.html_url,
-      updatedAtMs,
-    };
-  });
 }
 
 export type PullRequest = {

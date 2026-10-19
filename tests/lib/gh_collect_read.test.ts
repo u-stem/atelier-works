@@ -4,13 +4,10 @@
 import { describe, expect, test } from "bun:test";
 import { staleNotifyThresholdMs } from "../../f/factory/lib/gh_collect_freshness.ts";
 import {
-  effectiveGhSource,
   ghDetailStaleAfterMs,
-  judgeGhOwnerCoverage,
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
   judgeGhRepoFreshness,
-  requiredRepos,
   usableGhDetailRows,
   usableGhPullRequests,
   usableTableRows,
@@ -259,120 +256,7 @@ function snapshot(
   return { db_now: DB_NOW, repos, prs };
 }
 
-function judgeOwner(
-  snap: GhOwnerOpenPrSnapshot,
-  allowed: (owner: string, repo: string) => boolean = () => true,
-  owner = "acme",
-) {
-  const judged = judgeGhOwnerRepos(owner, snap, STALE_AFTER_MS);
-  return judgeGhOwnerCoverage(owner, judged, allowed);
-}
-
 const TOO_OLD = new Date(DB_NOW.getTime() - STALE_AFTER_MS - 1);
-
-describe("judgeGhOwnerCoverage", () => {
-  test("reports no_record when gh_repos has no row of the owner", () => {
-    expect(judgeOwner(snapshot([]))).toEqual({
-      kind: "stale",
-      reason: "no_record",
-    });
-  });
-
-  test("is fresh when every allowed repository is fresh", () => {
-    const snap = snapshot([ownerRepoRow("widgets"), ownerRepoRow("gadgets")]);
-
-    expect(judgeOwner(snap)).toEqual({ kind: "fresh" });
-  });
-
-  test("is stale with too_old when one allowed repository is too old", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets"),
-      ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
-    ]);
-
-    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "too_old" });
-  });
-
-  test("ignores a repository that is not allowed now even when it is too old", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets"),
-      ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
-    ]);
-
-    expect(judgeOwner(snap, (_owner, repo) => repo !== "gadgets")).toEqual({
-      kind: "fresh",
-    });
-  });
-
-  test("ignores a gone repository", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets"),
-      ownerRepoRow("gadgets", { gone: true }),
-    ]);
-
-    expect(judgeOwner(snap)).toEqual({ kind: "fresh" });
-  });
-
-  test("ignores an archived repository", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets"),
-      ownerRepoRow("gadgets", { archived: true }),
-    ]);
-
-    expect(judgeOwner(snap)).toEqual({ kind: "fresh" });
-  });
-
-  test("reports unusable for a repository allowed now but recorded as not allowed", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets"),
-      ownerRepoRow("gadgets", { allowed: false }),
-    ]);
-
-    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "unusable" });
-  });
-
-  test("reports unusable when every open row of a repository is unusable", () => {
-    const snap = snapshot(
-      [ownerRepoRow("widgets")],
-      [prRow({ repo: "widgets", usable: false })],
-    );
-
-    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "unusable" });
-  });
-
-  test("takes the reason of the first stale repository in name order", () => {
-    const snap = snapshot([
-      ownerRepoRow("zeta", { last_collected_at: null }),
-      ownerRepoRow("alpha", { last_collected_at: TOO_OLD }),
-    ]);
-
-    expect(judgeOwner(snap)).toEqual({ kind: "stale", reason: "too_old" });
-  });
-
-  test("is fresh when no repository is allowed now", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets", { last_collected_at: null }),
-    ]);
-
-    expect(judgeOwner(snap, () => false)).toEqual({ kind: "fresh" });
-  });
-
-  test("passes the stored owner and repository names to the allowed check", () => {
-    const seen: string[] = [];
-    const snap = snapshot([ownerRepoRow("widgets")]);
-
-    judgeOwner(
-      snap,
-      (owner, repo) => {
-        seen.push(`${owner}/${repo}`);
-        return true;
-      },
-      "Acme",
-    );
-
-    expect(seen).toEqual(["Acme/widgets"]);
-  });
-});
 
 describe("judgeGhOwnerRepos", () => {
   test("ignores open rows of a repository that has no gh_repos row", () => {
@@ -434,30 +318,6 @@ describe("judgeGhOwnerRepos", () => {
     const judged = judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS);
 
     expect(judged.get("widgets")?.usable).toEqual([]);
-  });
-});
-
-describe("effectiveGhSource", () => {
-  const ENABLED = { gh_collect_enabled: true, gh_collect_detail_enabled: true };
-
-  test("is db when the setting is db and both collection settings are on", () => {
-    expect(effectiveGhSource("db", ENABLED)).toBe("db");
-  });
-
-  test("is search when gh_collect_enabled is off", () => {
-    expect(
-      effectiveGhSource("db", { ...ENABLED, gh_collect_enabled: false }),
-    ).toBe("search");
-  });
-
-  test("is search when gh_collect_detail_enabled is off", () => {
-    expect(
-      effectiveGhSource("db", { ...ENABLED, gh_collect_detail_enabled: false }),
-    ).toBe("search");
-  });
-
-  test("is search when the setting is search", () => {
-    expect(effectiveGhSource("search", ENABLED)).toBe("search");
   });
 });
 
@@ -593,121 +453,6 @@ describe("judgeGhOwnerIssueRepos", () => {
     const judged = judgeGhOwnerIssueRepos("acme", snap, STALE_AFTER_MS);
 
     expect(judged.get("widgets")?.usable).toEqual([]);
-  });
-});
-
-describe("judgeGhOwnerCoverage with required repositories", () => {
-  function judgeRequired(
-    repos: readonly GhOwnerRepoFreshnessRow[],
-    required: ReadonlySet<string>,
-    allowed: (owner: string, repo: string) => boolean = () => true,
-  ) {
-    const judged = judgeGhOwnerIssueRepos(
-      "acme",
-      issueSnapshot(repos),
-      STALE_AFTER_MS,
-    );
-    return judgeGhOwnerCoverage("acme", judged, allowed, required);
-  }
-
-  test("reports no_record when a required repository has no gh_repos row", () => {
-    expect(
-      judgeRequired([ownerRepoRow("widgets")], new Set(["gadgets"])),
-    ).toEqual({ kind: "stale", reason: "no_record" });
-  });
-
-  test("reports unusable for a required repository that is not listed or not visible", () => {
-    expect(
-      judgeRequired(
-        [ownerRepoRow("widgets"), ownerRepoRow("gadgets", { gone: true })],
-        new Set(["gadgets"]),
-      ),
-    ).toEqual({ kind: "stale", reason: "unusable" });
-  });
-
-  test("ignores an archived repository even when it is required", () => {
-    expect(
-      judgeRequired(
-        [
-          ownerRepoRow("widgets"),
-          ownerRepoRow("gadgets", { gone: true, archived: true }),
-        ],
-        new Set(["gadgets"]),
-      ),
-    ).toEqual({ kind: "fresh" });
-  });
-
-  test("ignores a gone repository that is not required", () => {
-    expect(
-      judgeRequired(
-        [ownerRepoRow("widgets"), ownerRepoRow("gadgets", { gone: true })],
-        new Set(["widgets"]),
-      ),
-    ).toEqual({ kind: "fresh" });
-  });
-
-  test("matches required names without regard to case", () => {
-    expect(
-      judgeRequired([ownerRepoRow("widgets")], new Set(["Widgets"])),
-    ).toEqual({ kind: "fresh" });
-  });
-
-  test("ignores a required repository that is not allowed now", () => {
-    expect(
-      judgeRequired(
-        [
-          ownerRepoRow("widgets"),
-          ownerRepoRow("gadgets", { last_collected_at: TOO_OLD }),
-        ],
-        new Set(["gadgets"]),
-        (_owner, repo) => repo !== "gadgets",
-      ),
-    ).toEqual({ kind: "fresh" });
-  });
-
-  test("gives the same result as before when required is omitted", () => {
-    const snap = snapshot([
-      ownerRepoRow("widgets"),
-      ownerRepoRow("gadgets", { gone: true }),
-    ]);
-    const judged = judgeGhOwnerRepos("acme", snap, STALE_AFTER_MS);
-
-    expect(judgeGhOwnerCoverage("acme", judged, () => true)).toEqual({
-      kind: "fresh",
-    });
-  });
-});
-
-describe("requiredRepos", () => {
-  const SCOPE = {
-    factory_repo: "https://github.com/Acme/Factory.git",
-    repo_allowlist: [
-      "https://github.com/acme/Widgets",
-      "https://github.com/other/tools",
-    ],
-  };
-
-  test("lists the factory repository and the allowlist entries of the owner in lower case", () => {
-    expect([...requiredRepos(SCOPE, "acme")].sort()).toEqual([
-      "factory",
-      "widgets",
-    ]);
-  });
-
-  test("leaves out the entries of other owners", () => {
-    expect([...requiredRepos(SCOPE, "other")]).toEqual(["tools"]);
-  });
-
-  test("compares the owner without regard to case", () => {
-    expect([...requiredRepos(SCOPE, "ACME")].sort()).toEqual([
-      "factory",
-      "widgets",
-    ]);
-  });
-
-  test("skips an entry that cannot be read", () => {
-    const scope = { ...SCOPE, repo_allowlist: ["not a url"] };
-    expect([...requiredRepos(scope, "acme")]).toEqual(["factory"]);
   });
 });
 
