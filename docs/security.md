@@ -3644,11 +3644,15 @@ scriptの定義の`lock`が自分の`.script.lock`を指す契約テストも止
 保護の外の定義を書き換えて参照先を変えると、workerやホストの任意のファイルがlockとしてワークスペースに載りうる。
 このテストは、全定義の参照先を固定する。
 あわせて、追跡するツリーにsymlinkとsubmoduleがないこと、`f/`の下にモジュールフォルダ(`__mod`など)がないことを確かめる。
-追跡するパスは、`git ls-files -z`の出力だけから作る。
-非ASCIIや引用の要るパスが欠けないようにし、ファイルシステムは辿らない。
+`f/`の外の走査の対象と、symlinkの検査に使うパスは、`git ls-files -z`の出力だけから作る。
+非ASCIIや引用の要るパスが欠けないようにするためである。
+定義の集合(`definitions`)は、ファイルシステムをたどる`Glob`から作り、`f/`の下の検査は`readdirSync`で読む。
 script定義以外のYAMLとJSONには、`!inline`を許さない。
 flow、resource、appも同じ`!inline`を読むため、これらの経路を塞ぐ。
 `f/`の下では、`node_modules`という名前のフォルダも検査から外さない。
+`f/`の下のYAMLとJSONは、除外なしで深い検査に掛ける。
+エスケープや行の継続で作る`!inline`、`%TAG`の指示子、タグ(`!in%6Cine`など)も拒む。
+JSONは、解釈した後の値を調べる。
 `f/`の外のファイルを、wmillが同期して読むかは確かめていない。
 そのため、`f/`の外の追跡するYAMLとJSONを、広めに調べる。
 `f/`の外では、`findLockViolations`が検査するscript定義の集合に入るものだけを、この走査から外す。
@@ -3667,8 +3671,18 @@ flow、resource、appも同じ`!inline`を読むため、これらの経路を�
 - `tsconfig.json`、`tsconfig.wmill.json`: `tsc`が読むコメント付きのJSONで、JSONとして解釈できない。
 
 `wmill.yaml`の`includes`が`f/**`だけなら、3つともwmillが項目として解釈しない名前である。
-浅い検査は、この3つにも掛ける。
+この3つに掛かるのは浅い検査だけで、見るのは`!`を表すエスケープと、文字列の`!inline`と、`!`に続く`%`だけである。
+`!`以外の文字のエスケープは見ない。
+例えば、JSONの`"!inline x"`のように組み立てた`!inline`は、この3つでは拒めない。
 解釈できないファイルは、読み手によって解釈が分かれうるので、違反として数える。
+保護した`.yml`と`.yaml`の`run: |`の中のシェルの否定(`if ! cmd`、`test ! -f`)は、浅い検査で誤検知になる。
+直すには、契約テストの除外の3パスを広げる必要がある。
+
+`findLockViolations`が検査する定義は、`definitions`の集合差で、`f/`の外の走査から外れる。
+この検査が見るのは、`lock`の値の一致と、文字列の`!inline`と、BOMと指示子だけである。
+`lock`以外のフィールドの、エスケープした`!inline`は見ない。
+被害が出るのは、wmillが`lock`以外のフィールドの`!inline`を解決するときだけである。
+`f/`の下の定義も、同じ状態である。
 
 `wmill.yaml`も止める。
 `codebases`の`customBundler`は、`wmill sync push`が反映時に、設定の文字列をシェルで実行する。
@@ -3682,10 +3696,10 @@ Factoryが扱う他のリポジトリのサブディレクトリの`wmill.yaml`�
 
 テストの実行環境のうち、`tests/preload.ts`も止める。
 `bunfig.toml`の`preload`が全テストの前に読み込むファイルで、書き換えられるとテストの前にコードが走る。
-保護した2つのテストは、保護していないコードと同じ実行の中で、その後に走る。
-2つは、契約テストと`tests/lib/drawio_frame_isolation.test.ts`である。
-`mise run check`が先に走らせる`scripts/lint-*.ts`と`lint-docs.ts`は、保護していない。
-ほかのテスト、`tsconfig.json`、`mise-tasks/`も、保護していない。
+保護したテストは、どれも保護していないコードと同じ実行の中で走る。
+契約テストと`tests/lib/drawio_frame_isolation.test.ts`は、その例である。
+`mise run check`が走らせる検査のうち、保護していないものがある。
+例は、`scripts/lint-*.ts`、`lint-docs.ts`、ほかのテスト、`tsconfig.json`、`biome.json`、`wmill lint f`の設定、`mise-tasks/`である。
 保護していないコードの変更で、これらの検査を無効にしたまま、CIを緑にできる。
 そのため、CIはこの経路の関門にならない。
 止めるのはマージ前の人のレビューである。
