@@ -97,6 +97,12 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the stalled and lagging GitHub collection", () => {
+    expect(noticeKindLabel("github_collect_stale")).toBe(
+      "GitHubの収集の停止と遅れ",
+    );
+  });
+
   test("names the failed main CI", () => {
     expect(noticeKindLabel("main_ci_failed")).toBe("mainのCIの失敗");
   });

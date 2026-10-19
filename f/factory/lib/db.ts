@@ -81,6 +81,7 @@ import {
   type GhRepoFreshnessRow,
   type GhRepoGone,
   type GhRepoOpenPrSnapshot,
+  type GhRepoStaleSnapshot,
   type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
@@ -6467,6 +6468,7 @@ export const GH_REPOS_COLUMNS = [
   "last_attempted_at",
   "truncated",
   "detail_failed",
+  "first_seen_at",
 ] as const satisfies readonly (keyof GhRepo)[];
 
 /** `factory.gh_collect_runs`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
@@ -6622,6 +6624,7 @@ function toGhRepo(row: GhRepoSqlRow): GhRepo {
     ),
     truncated: parseBoolean(row.truncated, "truncated"),
     detail_failed: parseBoolean(row.detail_failed, "detail_failed"),
+    first_seen_at: parseDate(row.first_seen_at, "first_seen_at"),
   };
 }
 
@@ -6681,7 +6684,7 @@ export async function listGhRepos(
 ): Promise<GhRepo[]> {
   const name = requireGitHubName(owner, "owner").toLowerCase();
   const rows = await sql`
-    SELECT id, owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at, last_collected_at, last_attempted_at, truncated, detail_failed
+    SELECT id, owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at, last_collected_at, last_attempted_at, truncated, detail_failed, first_seen_at
     FROM factory.gh_repos
     WHERE owner = ${name}
     ORDER BY repo
@@ -6927,6 +6930,64 @@ export async function listGhCollectFreshness(
 }
 
 /**
+ * リポジトリ単位の古さを数える入力を、1つの文で読む。
+ * 対象は、`owners`の`gh_repos`の行のうち、一覧から消えていない(`gone`が偽)、archive済みでないものである。
+ * 開いたPRとIssueの行は読まず、リポジトリごとに、開いた行があるか、使える行があるかだけを返す。
+ * 使える行は、`usable`が真で、`repo_id`が`gh_repos.repo_id`と等しい開いた行である。
+ * 比べる相手のDBの時刻は、行を読んだ同じ文の`now()`である。
+ * 読んだ値は保存する値の述語で検査し直し、通らない値があれば、値を含めずに例外にする。
+ */
+export async function listGhRepoStaleSnapshot(
+  owners: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<GhRepoStaleSnapshot> {
+  const names = [
+    ...new Set(
+      owners.map((owner) => requireGitHubName(owner, "owner").toLowerCase()),
+    ),
+  ];
+  if (names.length === 0) {
+    return { db_now: new Date(), probes: [] };
+  }
+  const rows = await sql`
+    WITH r AS (
+      SELECT g.owner, g.repo, g.repo_id, g.allowed, g.archived, g.gone, g.last_collected_at, g.truncated, g.detail_failed, g.first_seen_at,
+        EXISTS (SELECT 1 FROM factory.gh_pull_requests p WHERE p.owner = g.owner AND p.repo = g.repo AND p.state = 'open') AS pr_open,
+        EXISTS (SELECT 1 FROM factory.gh_pull_requests p WHERE p.owner = g.owner AND p.repo = g.repo AND p.state = 'open' AND p.usable AND p.repo_id = g.repo_id) AS pr_usable,
+        EXISTS (SELECT 1 FROM factory.gh_issues i WHERE i.owner = g.owner AND i.repo = g.repo AND i.state = 'open') AS issue_open,
+        EXISTS (SELECT 1 FROM factory.gh_issues i WHERE i.owner = g.owner AND i.repo = g.repo AND i.state = 'open' AND i.usable AND i.repo_id = g.repo_id) AS issue_usable
+      FROM factory.gh_repos g
+      WHERE g.owner = ANY(${names}::text[]) AND NOT g.gone AND NOT g.archived
+    )
+    SELECT
+      now() AS db_now,
+      coalesce((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.owner, r.repo) FROM r), '[]'::jsonb) AS probes
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("db: the repository stale statement returned no row");
+  }
+  return {
+    db_now: parseDate(row.db_now, "db_now"),
+    probes: parseJsonArray(row.probes, "probes").map((item) => {
+      if (!isRecord(item)) {
+        throw new Error('db: row field "probes" has a non-object element');
+      }
+      return {
+        owner: parseStoredGitHubName(item.owner, "owner"),
+        repo: parseStoredGitHubName(item.repo, "repo"),
+        row: toGhRepoFreshnessRow(item),
+        first_seen_at: parseDate(item.first_seen_at, "first_seen_at"),
+        pr_open: parseBoolean(item.pr_open, "pr_open"),
+        pr_usable: parseBoolean(item.pr_usable, "pr_usable"),
+        issue_open: parseBoolean(item.issue_open, "issue_open"),
+        issue_usable: parseBoolean(item.issue_usable, "issue_usable"),
+      };
+    }),
+  };
+}
+
+/**
  * 所有者のリポジトリの記録を、1つの文(1つのトランザクション)で書き換える。
  * `listed`は一覧に載ったリポジトリで、upsertして`listed_at`を進める。
  * archive済みなら`gone_reason`を`archived`にし、そうでなければ`gone`を戻す。
@@ -6939,6 +7000,9 @@ export async function listGhCollectFreshness(
  * それ以外の開いている行は、許可の外、archive済み、一覧から消えた(前回からのものを含む)、数値IDの入れ替わりのどれかなので、`usable=false`にする。
  * 一覧が空の所有者でも文を送り、開いている行を残さない。
  * 数値IDが変わった(空でない数値IDが別の値になった)リポジトリは、詳細の4列を初めに戻し、その名前を返す。
+ * `first_seen_at`は行を作るときだけ書く。
+ * 更新前の行が対象外(gone、archive済み、`allowed`が偽)で、更新後が対象になるときだけ`now()`に戻す。
+ * 対象に戻ったリポジトリの記録は古いままなので、新しく載ったリポジトリと同じ猶予を与えるためである。
  */
 export async function replaceGhRepoSnapshot(
   snapshot: {
@@ -7010,9 +7074,9 @@ export async function replaceGhRepoSnapshot(
     ), usable_repos AS (
       SELECT repo, repo_id FROM listed WHERE allowed AND NOT archived
     ), upserted AS (
-      INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at)
+      INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at, first_seen_at)
       SELECT ${owner}::text, ${ownerId}::bigint, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count,
-        archived, CASE WHEN archived THEN 'archived' END, now()
+        archived, CASE WHEN archived THEN 'archived' END, now(), now()
       FROM listed
       ON CONFLICT (owner, repo) DO UPDATE SET
         owner_id = EXCLUDED.owner_id,
@@ -7024,6 +7088,7 @@ export async function replaceGhRepoSnapshot(
         gone = EXCLUDED.gone,
         gone_reason = EXCLUDED.gone_reason,
         listed_at = EXCLUDED.listed_at,
+        first_seen_at = CASE WHEN (factory.gh_repos.gone OR factory.gh_repos.archived OR NOT factory.gh_repos.allowed) AND NOT EXCLUDED.gone AND NOT EXCLUDED.archived AND EXCLUDED.allowed THEN now() ELSE factory.gh_repos.first_seen_at END,
         last_collected_at = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN NULL ELSE factory.gh_repos.last_collected_at END,
         last_attempted_at = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN NULL ELSE factory.gh_repos.last_attempted_at END,
         truncated = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN false ELSE factory.gh_repos.truncated END,
@@ -7031,8 +7096,8 @@ export async function replaceGhRepoSnapshot(
         repo_id = EXCLUDED.repo_id
       RETURNING id
     ), gone_upserted AS (
-      INSERT INTO factory.gh_repos (owner, owner_id, repo, allowed, gone, gone_reason)
-      SELECT ${owner}::text, ${ownerId}::bigint, repo, true, true, reason
+      INSERT INTO factory.gh_repos (owner, owner_id, repo, allowed, gone, gone_reason, first_seen_at)
+      SELECT ${owner}::text, ${ownerId}::bigint, repo, true, true, reason, now()
       FROM gone_input
       ON CONFLICT (owner, repo) DO UPDATE SET
         gone = EXCLUDED.gone,

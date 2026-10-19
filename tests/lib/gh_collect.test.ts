@@ -136,6 +136,7 @@ function previousRepo(repo: string, overrides: Partial<GhRepo> = {}): GhRepo {
     last_attempted_at: null,
     truncated: false,
     detail_failed: false,
+    first_seen_at: new Date(NOW - 3_600_000),
     ...overrides,
   };
 }

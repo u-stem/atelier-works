@@ -54,6 +54,7 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 }
 
 const LISTED_AT = new Date("2026-10-17T01:00:00.000Z");
+const FIRST_SEEN_AT = new Date("2026-10-16T01:00:00.000Z");
 
 const REPO_ROW: SqlRow = {
   id: "7",
@@ -73,6 +74,7 @@ const REPO_ROW: SqlRow = {
   last_attempted_at: null,
   truncated: false,
   detail_failed: false,
+  first_seen_at: FIRST_SEEN_AT.toISOString(),
 };
 
 const RUN_ROW: SqlRow = {
@@ -186,6 +188,7 @@ describe("listGhRepos", () => {
         last_attempted_at: null,
         truncated: false,
         detail_failed: false,
+        first_seen_at: FIRST_SEEN_AT,
       },
     ]);
   });
@@ -654,6 +657,47 @@ describe("replaceGhRepoSnapshot", () => {
     const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.text).toContain("gone = EXCLUDED.gone");
+  });
+
+  test("writes first_seen_at when a listed repository is inserted", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(
+      insertedColumns(calls[0]?.text ?? "", "gh_repos").includes(
+        "first_seen_at",
+      ),
+    ).toBe(true);
+  });
+
+  test("writes first_seen_at when a repository that is not listed is inserted", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(calls[0]?.text).toMatch(
+      /INSERT INTO factory\.gh_repos \(owner, owner_id, repo, allowed, gone, gone_reason, first_seen_at\)/,
+    );
+  });
+
+  test("resets first_seen_at only when a repository returns from out of scope", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(calls[0]?.text).toMatch(
+      /first_seen_at = CASE WHEN \(factory\.gh_repos\.gone OR factory\.gh_repos\.archived OR NOT factory\.gh_repos\.allowed\) AND NOT EXCLUDED\.gone AND NOT EXCLUDED\.archived AND EXCLUDED\.allowed THEN now\(\)/,
+    );
+  });
+
+  test("keeps first_seen_at in every other case", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(calls[0]?.text).toContain("ELSE factory.gh_repos.first_seen_at END");
+  });
+
+  test("never rewrites first_seen_at of a repository that is not listed", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    const text = calls[0]?.text ?? "";
+    expect(text.slice(text.indexOf("gone_upserted AS"))).not.toMatch(
+      /first_seen_at\s*=/,
+    );
   });
 
   test("advances listed_at for listed repositories", async () => {

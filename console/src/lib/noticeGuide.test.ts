@@ -32,6 +32,36 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("explains the notice for repositories that are stale while the owner succeeds", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "のリポジトリ:",
+    );
+  });
+
+  test("does not claim what the downstream does with a stale repository", () => {
+    expect(noticeGuide("github_collect_stale").meaning).not.toContain("見送");
+  });
+
+  test("states that a stale record cannot be used downstream", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "下流の判断に使えません",
+    );
+  });
+
+  test("tells to narrow the repositories for a stale repository", () => {
+    expect(noticeGuide("github_collect_stale").action).toContain(
+      "repo_allowlist",
+    );
+  });
+
+  test("reads the repositories of the owner", () => {
+    expect(
+      noticeGuide("github_collect_stale").commands.some((command) =>
+        command.includes("FROM factory.gh_repos WHERE owner = '<所有者>'"),
+      ),
+    ).toBe(true);
+  });
+
   test("does not promise a future halt of the Factory", () => {
     expect(noticeGuide("github_collect_stale").meaning).not.toContain("まだ");
   });

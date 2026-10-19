@@ -94,6 +94,30 @@ describe("self_update gh collect freshness check", () => {
     );
   });
 
+  test("passes the detail collection setting", async () => {
+    expect(callSection(await selfUpdateSource())).toContain(
+      "detailEnabled: config.gh_collect_detail_enabled",
+    );
+  });
+
+  test("settles repositories by the downstream threshold", async () => {
+    expect(callSection(await selfUpdateSource())).toMatch(
+      /settledAfterMs: ghDetailStaleAfterMs\(owners\.length\)/,
+    );
+  });
+
+  test("reads the repositories inside the check", async () => {
+    expect(callSection(await selfUpdateSource())).toContain(
+      "listGhRepoStaleSnapshot(",
+    );
+  });
+
+  test("bounds the repository read by the call timeout", async () => {
+    expect(callSection(await selfUpdateSource())).toMatch(
+      /withCallTimeout\(\s*"listGhRepoStale"/,
+    );
+  });
+
   test("fixes the listed kind to github_collect_stale", async () => {
     expect(callSection(await selfUpdateSource())).toMatch(
       /listUnresolvedNoticesByKind\(\s*GH_COLLECT_STALE_KIND\s*\)/,
@@ -162,12 +186,12 @@ describe("self_update gh collect freshness check", () => {
     expect(callSection(await selfUpdateSource()).length).toBeGreaterThan(0);
   });
 
-  test("counts seven bounded calls inside the check", () => {
-    expect(GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT).toBe(7);
+  test("counts eight bounded calls inside the check", () => {
+    expect(GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT).toBe(8);
   });
 
-  test("counts thirty-five bounded calls in total", () => {
-    expect(SELF_UPDATE_BOUNDED_CALL_COUNT).toBe(35);
+  test("counts thirty-six bounded calls in total", () => {
+    expect(SELF_UPDATE_BOUNDED_CALL_COUNT).toBe(36);
   });
 
   test("the worst case is 3086.2 seconds", () => {

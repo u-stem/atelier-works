@@ -526,6 +526,7 @@ function setup(options: Setup = {}): {
       : options.state;
   const deps: GhCollectFreshnessDeps = {
     enabled: options.enabled ?? true,
+    detailEnabled: true,
     owners,
     periodicStalled: options.periodicStalled ?? false,
     now: () => NOW,
@@ -535,6 +536,7 @@ function setup(options: Setup = {}): {
         rec.listed.push(names);
         return rows;
       }),
+    listRepoStale: async () => [],
     getState: async () => {
       if (state === "unreadable") throw new Error("state unreadable");
       return state;

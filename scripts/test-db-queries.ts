@@ -64,6 +64,7 @@ import {
   listGhCollectFreshness,
   listGhCollectOwnerStates,
   listGhDetailRows,
+  listGhRepoStaleSnapshot,
   listGhRepos,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
@@ -7128,6 +7129,130 @@ check(
   "gh_collect_runs: a run that did not lead, or is unfinished, does not mark the turn",
   ghTurnD?.last_led_at === null,
   ghTurnD,
+);
+// リポジトリ単位の古さ: gone・archivedは読まず、開いた行の有無と使える行の有無を1つの文で返す。
+const GH_STALE_OWNER = "qdbghs";
+const GH_STALE_SHA = "a".repeat(40);
+execPsql(
+  target,
+  `INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed, archived, gone, gone_reason, last_collected_at) VALUES
+    ('${GH_STALE_OWNER}', 1, 'fresh', 701, true, false, false, NULL, now() - interval '1 minute'),
+    ('${GH_STALE_OWNER}', 1, 'vanished', NULL, true, false, true, 'not_visible', NULL),
+    ('${GH_STALE_OWNER}', 1, 'shelved', 703, true, true, true, 'archived', NULL),
+    ('${GH_STALE_OWNER}', 1, 'prs', 704, true, false, false, NULL, now() - interval '1 minute'),
+    ('${GH_STALE_OWNER}', 1, 'issues', 705, true, false, false, NULL, now() - interval '1 minute');
+  INSERT INTO factory.gh_pull_requests (owner, repo, repo_id, number, state, head_sha, is_draft, is_cross_repository, created_at, updated_at, usable) VALUES
+    ('${GH_STALE_OWNER}', 'prs', 704, 1, 'open', '${GH_STALE_SHA}', false, false, now(), now(), false),
+    ('${GH_STALE_OWNER}', 'prs', 704, 2, 'open', '${GH_STALE_SHA}', false, false, now(), now(), true),
+    ('${GH_STALE_OWNER}', 'fresh', 701, 1, 'closed', '${GH_STALE_SHA}', false, false, now(), now(), true);
+  INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at, usable) VALUES
+    ('${GH_STALE_OWNER}', 'issues', 705, 1, 'open', now(), now(), false),
+    ('${GH_STALE_OWNER}', 'issues', 999, 2, 'open', now(), now(), true)`,
+);
+const ghStale = await listGhRepoStaleSnapshot(["QdbGhS"], sql);
+const ghStaleBy = (repo: string) =>
+  ghStale.probes.find((probe) => probe.repo === repo);
+const ghStaleFirstSeenMs = ghStaleBy("fresh")?.first_seen_at.getTime() ?? 0;
+check(
+  "gh_repo_stale: gone and archived repositories are not returned",
+  ghStale.probes.map((probe) => probe.repo).join(",") === "fresh,issues,prs",
+  ghStale.probes,
+);
+check(
+  "gh_repo_stale: a closed row does not count as an open row",
+  ghStaleBy("fresh")?.pr_open === false &&
+    ghStaleBy("fresh")?.pr_usable === false,
+  ghStaleBy("fresh"),
+);
+check(
+  "gh_repo_stale: a usable open row is found next to an unusable one",
+  ghStaleBy("prs")?.pr_open === true && ghStaleBy("prs")?.pr_usable === true,
+  ghStaleBy("prs"),
+);
+check(
+  "gh_repo_stale: a row with another repo_id is not a usable row",
+  ghStaleBy("issues")?.issue_open === true &&
+    ghStaleBy("issues")?.issue_usable === false,
+  ghStaleBy("issues"),
+);
+check(
+  "gh_repo_stale: first_seen_at is set by the insert and now() is the database clock",
+  Math.abs(ghStaleFirstSeenMs - Date.now()) < 120_000 &&
+    Math.abs(ghStale.db_now.getTime() - Date.now()) < 120_000,
+  ghStale,
+);
+// 使用不可の行を残すと、ほかの所有者の行が変わらないことを確かめる後ろの検査が数え違えるので、消す。
+execPsql(
+  target,
+  `DELETE FROM factory.gh_pull_requests WHERE owner = '${GH_STALE_OWNER}';
+  DELETE FROM factory.gh_issues WHERE owner = '${GH_STALE_OWNER}';
+  DELETE FROM factory.gh_repos WHERE owner = '${GH_STALE_OWNER}'`,
+);
+// first_seen_at: 対象外(gone、allowedが偽)から対象に戻ったときだけ now() に戻し、それ以外は触らない。
+const GH_SEEN_OWNER = "qdbghr";
+const ghSeenListed = (repo: string, repoId: number, allowed = true) => ({
+  repo,
+  repo_id: repoId,
+  allowed,
+  default_branch: null,
+  archived: false,
+  open_pr_count: allowed ? 0 : null,
+  labeled_issue_count: allowed ? 0 : null,
+});
+const ghSeenSnapshot = (
+  listed: ReturnType<typeof ghSeenListed>[],
+  gone: { repo: string; reason: "not_listed" | "not_visible" }[] = [],
+) =>
+  replaceGhRepoSnapshot(
+    { owner: GH_SEEN_OWNER, owner_id: 4545, listed, gone },
+    sql,
+  );
+const ghSeenAgeDays = async (repo: string) => {
+  const [row] = await sql`
+    SELECT extract(epoch FROM (now() - first_seen_at)) / 86400 AS days
+    FROM factory.gh_repos WHERE owner = ${GH_SEEN_OWNER} AND repo = ${repo}
+  `.fetch();
+  return Number(row?.days);
+};
+await ghSeenSnapshot([
+  ghSeenListed("kept", 801),
+  ghSeenListed("returned", 802),
+  ghSeenListed("widened", 803, false),
+]);
+execPsql(
+  target,
+  `UPDATE factory.gh_repos SET first_seen_at = now() - interval '7 days' WHERE owner = '${GH_SEEN_OWNER}'`,
+);
+await ghSeenSnapshot(
+  [ghSeenListed("kept", 801), ghSeenListed("widened", 803, false)],
+  [{ repo: "returned", reason: "not_listed" }],
+);
+const ghSeenWhileGone = await ghSeenAgeDays("returned");
+await ghSeenSnapshot([
+  ghSeenListed("kept", 801),
+  ghSeenListed("returned", 802),
+  ghSeenListed("widened", 803, true),
+]);
+check(
+  "gh_repos: first_seen_at is untouched while a repository goes out of scope",
+  ghSeenWhileGone > 6.9,
+  ghSeenWhileGone,
+);
+check(
+  "gh_repos: first_seen_at returns to now when a gone repository is listed again",
+  (await ghSeenAgeDays("returned")) < 0.01,
+);
+check(
+  "gh_repos: first_seen_at returns to now when a repository becomes allowed",
+  (await ghSeenAgeDays("widened")) < 0.01,
+);
+check(
+  "gh_repos: first_seen_at of a repository that stays in scope is untouched",
+  (await ghSeenAgeDays("kept")) > 6.9,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.gh_repos WHERE owner = '${GH_SEEN_OWNER}'`,
 );
 // 収集の鮮度: 成功は`ok`かつ`verified`で終わった行だけ。最新は終わった行、実行中は最新の開始の行だけ。
 const GH_OWNER_E = "qdbghe";

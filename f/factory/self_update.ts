@@ -39,6 +39,7 @@ import {
   latestRequirementsApproval,
   listAutoRetryCandidates,
   listGhCollectFreshness,
+  listGhRepoStaleSnapshot,
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
@@ -68,6 +69,11 @@ import {
   GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS,
   GH_COLLECT_STALE_KIND,
 } from "./lib/gh_collect_freshness.ts";
+import {
+  ghDetailStaleAfterMs,
+  repoStaleTargetFilter,
+  summarizeRepoStale,
+} from "./lib/gh_collect_read.ts";
 import { getRepositoryId } from "./lib/github.ts";
 import {
   HOST_ACTION_NOTICE_KIND,
@@ -624,8 +630,8 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
 
 /**
  * 収集の鮮度の確認の中で、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの箇所の数。
- * stateの読み、stateの書き、収集の記録の読み、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得の7か所である。
- * この7か所は確認全体の上限(`GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS`)に包まれるので、
+ * stateの読み、stateの書き、収集の記録の読み、リポジトリ単位の古さの読み、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得の8か所である。
+ * この8か所は確認全体の上限(`GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS`)に包まれるので、
  * 最悪の長さには箇所の数としては数えず、上限を1回だけ数える。
  * この数え方は、次の3つがすべて成り立つときだけ成り立つ。
  * - 確認の呼び出しが、finallyの最後の文である。呼び出し元が上限で戻った後に、背景の処理の後ろで待たされる区切りの呼び出しも、
@@ -635,7 +641,7 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  * - 区切りの時間切れの後に中断されずに残る背景の処理は数えない(`SELF_UPDATE_WORST_CASE_MS`の前提)。
  * 条件は`tests/scripts/self_update_gh_collect_freshness.test.ts`が固定する。
  */
-export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 7;
+export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 8;
 
 /**
  * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
@@ -818,12 +824,25 @@ export async function main(): Promise<SelfUpdateResult> {
     try {
       await checkGhCollectFreshness({
         enabled: config.gh_collect_enabled,
+        detailEnabled: config.gh_collect_detail_enabled,
         owners: config.owners.map((owner) => owner.name),
         periodicStalled: periodicWorker === "stalled",
         now: () => Date.now(),
         listFreshness: (owners) =>
           withCallTimeout("listGhCollectFreshness", () =>
             listGhCollectFreshness(owners),
+          ),
+        listRepoStale: (owners, thresholdMs) =>
+          withCallTimeout("listGhRepoStale", () =>
+            listGhRepoStaleSnapshot(owners).then((snapshot) =>
+              summarizeRepoStale({
+                snapshot,
+                owners,
+                staleAfterMs: thresholdMs,
+                settledAfterMs: ghDetailStaleAfterMs(owners.length),
+                isTarget: repoStaleTargetFilter(config),
+              }),
+            ),
           ),
         getState: () => withCallTimeout("getState", () => wmill.getState()),
         setState: (state) =>
