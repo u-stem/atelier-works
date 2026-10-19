@@ -170,4 +170,4 @@ locks:
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: e58d2e46a53fdcb5ab13fcfd3fbd951fd810fede7572168d0578abc8dd355626
-  f/factory/watch_pr_conflicts: c0491352ad5025b6c3209412d751bad0c367ff258cf479103d9ee636db10f6d8
+  f/factory/watch_pr_conflicts: 59665bc0a44119c885fa932996e0cea98bf217c5c3d8e18934f4571ec6ae2cf5

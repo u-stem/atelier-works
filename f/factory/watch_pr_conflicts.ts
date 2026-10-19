@@ -360,3 +360,14 @@ export async function main(): Promise<PrConflictWatchResult> {
     },
   );
 }
+
+/** 収集の設定から、この回に表を読むかを決める。 */
+export function resolveConflictTableUse(
+  _config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): boolean {
+  return false;
+}
