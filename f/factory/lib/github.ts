@@ -831,11 +831,48 @@ export type ViewerTeams = {
 /** `getViewerTeams`が読むページ数の既定の上限。1ページ100件なので、1000チームまでである。 */
 export const VIEWER_TEAMS_MAX_PAGES = 10;
 
+/**
+ * `GET /user/teams`で、PATのアカウントが属するチームを、ページ送りしながらすべて読む。
+ * 要素が1つでも想定の形でなければ、一部だけを返さず例外を投げる。
+ * 読めなかったチームへの依頼を「属さない」と取り違えて、依頼を黙って見送らないためである。
+ * 続きのページが`maxPages`を超えるときは`GitHubPaginationLimitError`を投げる。
+ * 失敗の文言にチームの名前やIDは載せない。
+ */
 export async function getViewerTeams(
-  _client: GhClient,
-  _maxPages: number = VIEWER_TEAMS_MAX_PAGES,
+  client: GhClient,
+  maxPages: number = VIEWER_TEAMS_MAX_PAGES,
 ): Promise<ViewerTeams> {
-  return { ids: new Set(), slugs: new Set() };
+  const teams = await paginateGhApi(
+    client,
+    "user/teams?per_page=100",
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${context}: expected an array response`);
+      }
+      return parsed.map((entry) => {
+        if (
+          !isRecord(entry) ||
+          !isPositiveSafeInteger(entry.id) ||
+          typeof entry.slug !== "string" ||
+          entry.slug.length === 0 ||
+          !isRecord(entry.organization) ||
+          typeof entry.organization.login !== "string" ||
+          entry.organization.login.length === 0
+        ) {
+          throw unexpectedShape(context);
+        }
+        return {
+          id: entry.id,
+          slug: `${entry.organization.login}/${entry.slug}`.toLowerCase(),
+        };
+      });
+    },
+    maxPages,
+  );
+  return {
+    ids: new Set(teams.map((team) => team.id)),
+    slugs: new Set(teams.map((team) => team.slug)),
+  };
 }
 
 /**
@@ -2633,6 +2670,7 @@ type PrPayload = {
   readonly auto_merge?: unknown;
   readonly created_at?: unknown;
   readonly requested_reviewers?: unknown;
+  readonly requested_teams?: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2664,7 +2702,7 @@ function isPrPayload(value: unknown): value is PrPayload {
 }
 
 /**
- * 利用者の配列(`requested_reviewers`、`assignees`)から、数値IDを読む。
+ * 利用者かチームの配列(`requested_reviewers`、`assignees`、`requested_teams`)から、数値IDを読む。
  * 配列でないとき、要素の`id`が正の安全な整数でないときは、有無を決められないので`null`にする。
  */
 function userIdsOf(value: unknown): number[] | null {
@@ -2755,6 +2793,7 @@ async function fetchPr(
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
     requestedReviewerIds: userIdsOf(parsed.requested_reviewers),
+    requestedTeamIds: userIdsOf(parsed.requested_teams),
   };
   return {
     pr,
@@ -4597,7 +4636,7 @@ export type OpenPullRequest = {
 function isOpenPullRequestPayload(value: unknown): value is {
   number: number;
   draft: boolean;
-  head: { ref: string; repo: unknown };
+  head: { ref: string; repo: unknown; sha?: unknown };
   base: { ref?: unknown; repo: { full_name: string } };
   user?: unknown;
   created_at?: unknown;
@@ -4677,6 +4716,8 @@ export async function listOpenPullRequests(
     teamReviewRequested: Array.isArray(entry.requested_teams)
       ? entry.requested_teams.length > 0
       : null,
+    requestedTeamIds: userIdsOf(entry.requested_teams),
+    headSha: typeof entry.head.sha === "string" ? entry.head.sha : null,
   }));
 }
 

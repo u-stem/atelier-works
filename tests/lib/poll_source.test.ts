@@ -1420,6 +1420,12 @@ function restPr(
   };
 }
 
+/** `requestedTeamIds`の項目を持たない`getPr`の応答。項目を知らない呼び出し元が作る値を表す。 */
+function withoutTeamIds(pr: PullRequest): PullRequest {
+  const { requestedTeamIds: _teams, ...rest } = pr;
+  return rest;
+}
+
 /** PRを`getIssue`で読んだ応答。ラベルとassigneeはここから読む。 */
 function restPrAsIssue(number: number, overrides: Partial<Issue> = {}): Issue {
   return restIssue(number, {
@@ -2320,9 +2326,11 @@ describe("discoverPrs resolves a team request", () => {
   });
 
   test("records an absent team list of a team row as a failure", async () => {
-    const { failures } = await runPrs(
-      teamWorld({ requestedTeamIds: undefined }),
-    );
+    const found = prCase(4, { team: true });
+    const { failures } = await runPrs({
+      ...prWorld([found]),
+      prs: { "acme/widgets#4": withoutTeamIds(found.pr) },
+    });
     expect(failures).toEqual(["confirm_pr:acme/widgets#4"]);
   });
 
@@ -3074,7 +3082,7 @@ describe("confirmPrCandidate with the teams of the viewer", () => {
   });
 
   test("cannot decide when the teams are absent and nothing else matches", () => {
-    expect(confirm(restPr(3, { requestedTeamIds: undefined }))).toEqual({
+    expect(confirm(withoutTeamIds(restPr(3)))).toEqual({
       kind: "unknown_reviewers",
     });
   });
@@ -3501,8 +3509,11 @@ describe("discoverPrs takes only a candidate from the list and confirms it by RE
     expect(numbersOf(result.items)).toEqual([6]);
   });
 
-  test("counts a listed pull request that only a team requested as unresolved", async () => {
-    const { result } = await runPrs(staleWorld([prCase(4, { team: true })]));
+  test("counts a listed pull request that only a team requested as unresolved when the teams cannot be used", async () => {
+    const { result } = await runPrs({
+      ...staleWorld([prCase(4, { team: true })]),
+      viewerTeams: new Error("teams down"),
+    });
     expect(result.stats.team_unresolved).toBe(1);
   });
 

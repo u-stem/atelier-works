@@ -311,7 +311,7 @@ describe("getViewerTeams", () => {
       id,
       slug,
       name: "display name",
-      organization: org === undefined ? undefined : { login: org },
+      organization: org === null ? undefined : { login: org },
     };
   }
 
@@ -397,7 +397,7 @@ describe("getViewerTeams", () => {
 
   test("fails as a whole when one team has no organization", async () => {
     const fake = createFakeCommandRunner([
-      ghApiOk([team(11, "core"), team(22, "infra", undefined)]),
+      ghApiOk([team(11, "core"), team(22, "infra", null)]),
     ]);
     await expect(getViewerTeams(client(fake))).rejects.toThrow(
       /unexpected response shape/,
@@ -4177,6 +4177,7 @@ describe("getPr", () => {
       authorType: "User",
       autoMergeEnabled: false,
       requestedReviewerIds: null,
+      requestedTeamIds: null,
     });
   });
 
