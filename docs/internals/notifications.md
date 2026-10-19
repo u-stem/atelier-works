@@ -237,7 +237,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
 | `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces`、`watch_pr_ci` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
-| `github_collect_stale` | `self_update` | `<所有者>:`と空白と、最新の実行の記録を確かめる固定の文。リポジトリ単位の古さでは、`<所有者>のリポジトリ:`と空白と、収集のログを確かめて対象を絞る固定の文 |
+| `github_collect_stale` | `self_update` | `<所有者>:`と空白と、最新の実行の記録を確かめる固定の文。リポジトリ単位の古さでは、`<所有者>のリポジトリ:`と空白と、収集のログを確かめて対象を絞る固定の文。収集の無効では、`<所有者>の収集の無効:`と空白と、設定を戻すか`repo_allowlist`に並べる固定の文 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |

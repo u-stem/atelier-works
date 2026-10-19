@@ -66,8 +66,8 @@ locks:
   f/factory/lib/gh_collect: 482ee398dad39585cf42181fcd02089d018b45f3f6c036324fddcd8e7962ae10
   f/factory/lib/gh_collect_detail: 4819e8d6e84ac6065c3d4de40820e75065482aaec00b890e85065e5ac957bc59
   f/factory/lib/gh_collect_detail_round: cda53e1882492fecbe3e46b45d6b2223c67a6e2cbe04edcda4e0378e5fe92691
-  f/factory/lib/gh_collect_freshness: 4e8925593e260f71d087d2558f2c510e3cc6aac0a30f8745a23b9f6350dd2e1f
-  f/factory/lib/gh_collect_read: 93020c4aa513e27111791abb274aa12f562cf73f16e33a6ce464d490c36a51f6
+  f/factory/lib/gh_collect_freshness: 98f0a1ee826a4eb5f9439a8d0bdd7ccbdd76d59c471e1454f037f22d9e9b11f9
+  f/factory/lib/gh_collect_read: 3f86b024b7a3ea92b38eec68ad704996995b3fe45ab9fcb313f134939ffc945a
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
   f/factory/lib/github: 04fc7e089d2de715f9ba84b515fc329633c5cb477b1ba90cff4b8d8b1d57d937

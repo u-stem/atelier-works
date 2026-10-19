@@ -832,6 +832,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 一覧を取り終えて所有者のIDの照合が通った周回だけが、その所有者の記録を置き換える。
 記録を読むのは、`self_update`、`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`の6つである。
 `self_update`は、収集が続けて成功しているかを確かめて、止まっていれば通知する。
+`repo_allowlist`が空で`owners`に所有者がいるときは、設定で止めていても通知する。
 `poll_dependabot`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、候補のPRを表から読む。表を使えないリポジトリは、RESTの開いているPRの一覧に戻す。
 `watch_pr_conflicts`は、設定`gh_source_pr_conflict_watch`(既定は`search`)が`db`のときだけ、リポジトリの発見とPRの列挙を表から読む。
 記録が古い所有者は検索に、記録が古いリポジトリはREST一覧に戻す。

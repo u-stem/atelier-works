@@ -2328,6 +2328,7 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 今の収集は記録を書くだけで、Factoryの判断は記録を読まない。
 `self_update`だけが記録を読み、収集が続けて成功しているかを確かめる。
 止まっていれば通知する([収集が止まったときの通知](#収集が止まったときの通知))。
+`repo_allowlist`が空で`owners`に所有者がいるときは、設定で止めていても通知する([設定で止めた収集の通知](#設定で止めた収集の通知))。
 
 ### 収集を有効にする
 
@@ -2335,6 +2336,7 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 マージの後、`self_update`がscriptとスケジュールとmigrationを反映する。
 このときは`gh_collect_enabled`が`false`なので、収集は何もしない。
 反映を確かめてから、トークンを入れて有効にする。
+`repo_allowlist`が空で`owners`に所有者がいる間は、有効にするまで、収集の無効の通知が残る。
 
 1. 反映の後に、`gh_collect_enabled`が`false`のまま、収集が何も書かずに終わることを実ジョブで確かめる。
 
@@ -2368,7 +2370,8 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 
    トークンを入れた所有者の`ok`が`true`で、`requests`と`cost`が残っていることを見る。
    トークンの無い所有者は`error_code`が`no_token`になる。
-   成功が一度も無い所有者は、収集が動いている間は通知しない。
+   成功が一度も無い所有者は、`repo_allowlist`が空でないとき、収集が動いている間は通知しない。
+   `repo_allowlist`が空のときは、監視の開始から閾値の後に通知する。
    収集が止まると、最後の実行から16分の後に知らせる。
    一度成功した所有者が`no_token`になったときは、閾値を超えると`github_collect_stale`で知らせる。
 6. 所有者ごとの`requests`が、リポジトリの数を100で割って切り上げた値に合うことを見る。
@@ -2398,6 +2401,8 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
    `detail_done`が`detail_targets`に近づき、`detail_failed`が真のリポジトリが続かないことを見る。
 5. 止めるときは、`gh_collect_detail_enabled`を`false`に戻す。
    書いた行は残る。使えない行の無効化は続き、閉じた行はDBの掃除が保持期間で消す。
+   `repo_allowlist`が空で`owners`に所有者がいるときは、`false`の間、収集の無効の通知が残る。
+   止めたままにするなら、先に`repo_allowlist`に必要なリポジトリを並べる。
 
 段1は、段2が有効なとき、残りが40秒を切ると新しい要求を始めない。
 約600リポジトリ以上の所有者は、`stage`が`list`の`deadline`が続く。
@@ -2470,7 +2475,7 @@ stateを読めない回は、所有者の最古の実行の開始時刻で代え
 
 | 状況 | 扱い |
 | --- | --- |
-| 成功が一度も無く、トークンの無い所有者。収集が動いている間 | 通知しない。最新の実行の終わりが16分以内なら、収集が動いていると見なす |
+| 成功が一度も無く、トークンの無い所有者。収集が動いている間で、`repo_allowlist`が空でないとき | 通知しない。最新の実行の終わりが16分以内なら、収集が動いていると見なす |
 | レート制限で待っている間 | 待ちが終わってから10分まで通知しない。基準の時刻から60分を超えたら通知する |
 | GitHubの5xxと時間切れ | 基準の時刻から60分まで通知しない |
 | 最新の実行が150秒以内に始まって実行中 | 通知しない |
@@ -2480,8 +2485,16 @@ stateを読めない回は、所有者の最古の実行の開始時刻で代え
 定期ジョブ用のworkerの待ち(最大11分)に、収集の1周回を足した時間である。
 このとき通知の原因は、スケジュールが止まったか、定期ジョブ用のworkerが受けていないことである。
 
+`repo_allowlist`が空のときは、成功が一度も無くトークンの無い所有者も、ほかの所有者と同じ猶予と閾値で通知する。
+猶予は、監視の開始時刻から閾値までである。
+原因は`no_token`で、本文は所有者の通知と同じ固定の文である。
+トークンを入れて収集が成功すると解決し、`no_token`の間は解決しない。
+`repo_allowlist`が空でないと、明示のリポジトリだけが対象なので、この所有者は通知しない。
+
 通知は、収集が成功に戻ると、自己更新が自動で解決する。
-`gh_collect_enabled`を`false`にしたとき、所有者を`owners`から外したときも解決する。
+所有者を`owners`から外したときも解決する。
+`gh_collect_enabled`を`false`にしたときは、`repo_allowlist`が空でなければ、立っている通知をすべて解決する。
+`repo_allowlist`が空なら解決しない([設定で止めた収集の通知](#設定で止めた収集の通知))。
 止まったまま人が解決すると、次の自己更新で出直す。
 
 所有者の収集が成功していても、一部のリポジトリの記録だけが古いままのときがある。
@@ -2497,6 +2510,7 @@ Discordの通知には、閾値、記録が古いリポジトリの数と理由�
 2つの閾値の間では、noticeを足さず、解決もしない。通知が出ては消えることを繰り返さないためである。
 レート制限などで待っている間は、noticeを足さず、解決もしない。
 `gh_collect_detail_enabled`を`false`にすると、詳細を集めないので、対象を0件として扱い、立っている通知を解決する。
+`repo_allowlist`が空のときは、代わりに収集の無効の通知が立つ([設定で止めた収集の通知](#設定で止めた収集の通知))。
 
 打ち切りが続くリポジトリは、記録が進まないので、通知が残り続ける。
 次のどれかで直す。
@@ -2529,6 +2543,28 @@ wmill schedule get f/factory/collect_github --json
 wmill job list --script-path f/factory/collect_github --limit 5
 ```
 
+### 設定で止めた収集の通知
+
+`repo_allowlist`が空で`owners`に所有者がいるときは、`owners`の全リポジトリが対象になりうる。
+このとき、`gh_collect_enabled`か`gh_collect_detail_enabled`のどちらかが`false`の間は、収集の記録が更新されない。
+この状態を通知なしに続けないため、`github_collect_stale`の通知を所有者ごとに1件残し、Discordに1回送る。
+本文は`<所有者>の収集の無効:`と空白で始まる固定の文で、所有者の通知とリポジトリの古さの通知の先頭と重ならない。
+Discordの通知の原因は`collect_disabled`で、次の操作が載る。
+
+この通知を出している間は、立っている所有者の通知とリポジトリの古さの通知を解決しない。
+`gh_collect_enabled`が`false`の間も、`gh_collect_detail_enabled`だけが`false`の間も同じである。
+設定の事実なので、定期ジョブ用のworkerが止まっていても抑えない。
+
+次のどれかで、自己更新が自動で解決する。
+
+- 両方の設定を`true`に戻す。
+- `repo_allowlist`に1件以上並べる。
+- その所有者を`owners`から外す。
+
+`repo_allowlist`が空でないと、明示のリポジトリだけが対象なので、この通知は出ない。
+このとき`gh_collect_enabled`が`false`なら、立っている通知はすべて解決する。
+`owners`が空のときも出さない。
+
 ### 許可リストが空のときの件数の確かめ方
 
 `repo_allowlist`が空の所有者は、見えないリポジトリを判別できない。
@@ -2543,15 +2579,17 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 ### 収集を止める
 
-- 収集だけを止めるには、`gh_collect_enabled`を`false`に戻す。
+- 収集だけを止めるには、`repo_allowlist`に必要なリポジトリを並べてから、`gh_collect_enabled`を`false`に戻す。
   設定は上と同じ手順で直す。
   `factory_config`はsyncの対象外なので、反映で上書きされない。
-  無効の間は、収集の通知を出さず、残った通知を自己更新が解決する。
+  `repo_allowlist`が空のまま`false`にすると、収集の無効の通知が残る。
+  `owners`を空にして止める方法は、Factory全体が止まるので使わない。
+  `repo_allowlist`が空でない間の無効は、収集の通知を出さず、残った通知を自己更新が解決する。
 - スケジュールを止めるには、`collect_github.schedule.yaml`の`enabled`を`false`にする修正のPRを出す。
   `self_update`が`sync push`するので、Windmillの画面で止めても上書きされうる。
   確認のために画面で止めるときは、先に凍結を置く([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
   スケジュールだけを止めると、収集が成功しなくなるので、閾値の後に通知が出る。
-  止めるつもりなら、`gh_collect_enabled`も`false`にする。
+  止めるつもりなら、`repo_allowlist`に必要なリポジトリを並べてから、`gh_collect_enabled`も`false`にする。
 - migrationのdownは自動では走らない。
   表は残るが、害は無い。
 
@@ -3228,7 +3266,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から11分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
-| `github_collect_stale` | 設定の所有者の収集が、閾値(`owners`が2人までは25分)を超えて成功していない。本文は`<所有者>:`と空白で始まり、所有者ごとに1件残る。または、所有者の収集は成功していて、一部のリポジトリの記録が閾値を超えて古い。本文は`<所有者>のリポジトリ:`と空白で始まり、所有者ごとに1件残る。Discordにも届く | 通知の説明と、Discordの「次の操作」に従い、[実行の記録の読み方](#実行の記録の読み方)の対処をする。収集が成功するか、`gh_collect_enabled`を`false`にするか、`owners`から外すと、自動で解決される。リポジトリの古さの通知は、対象のリポジトリがすべて、下流が記録を使う閾値の内に戻ると解決される。重なる通知は[収集が止まったときの通知](#収集が止まったときの通知)にある |
+| `github_collect_stale` | 設定の所有者の収集が、閾値(`owners`が2人までは25分)を超えて成功していない。本文は`<所有者>:`と空白で始まり、所有者ごとに1件残る。または、所有者の収集は成功していて、一部のリポジトリの記録が閾値を超えて古い。本文は`<所有者>のリポジトリ:`と空白で始まり、所有者ごとに1件残る。または、`repo_allowlist`が空で、`gh_collect_enabled`か`gh_collect_detail_enabled`が`false`である。本文は`<所有者>の収集の無効:`と空白で始まり、所有者ごとに1件残る。Discordにも届く | 通知の説明と、Discordの「次の操作」に従い、[実行の記録の読み方](#実行の記録の読み方)の対処をする。収集が成功するか、`owners`から外すと、自動で解決される。`gh_collect_enabled`を`false`にしたときは、`repo_allowlist`が空でなければ解決される。リポジトリの古さの通知は、対象のリポジトリがすべて、下流が記録を使う閾値の内に戻ると解決される。収集の無効の通知は、両方の設定を`true`に戻すか、`repo_allowlist`に並べると解決される。重なる通知は[収集が止まったときの通知](#収集が止まったときの通知)にある |
 | `default_worker_missing` | defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブが1つも無い。defaultのworkerが居ないか、ジョブを受けられない状態で、flowとscriptが動かない。長いジョブが枠を埋めて後ろのジョブが待つだけのときは出ない。Discordにも届く | `docker compose ps windmill_worker`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、Windmillの画面のWorkers画面で、ワーカーグループdefaultのworkerが生きているかを確かめる。生きていなければ、`docker compose logs windmill_worker`でエラーを確かめる。受けるようになると、定期ジョブ用のworkerで動く確認(5分ごと)が自動で解決する |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら、メモリを使うジョブの見直しか、メモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |
