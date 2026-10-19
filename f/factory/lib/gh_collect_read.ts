@@ -2,7 +2,7 @@
 // リポジトリごとの鮮度と、使ってよい行の絞り込みを、通信もDBも持たない純粋関数で行う。
 // 記録は、打ち切りや失敗のリポジトリでは古いまま`usable`が真で残るので、読む側は必ず鮮度を判定する。
 
-import { configuredRepos } from "./config.ts";
+import { configuredRepos, isRepoAllowed } from "./config.ts";
 import type {
   FactoryConfig,
   GhDetailOpenRow,
@@ -12,6 +12,7 @@ import type {
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
   GhRepoFreshnessRow,
+  GhRepoStaleProbe,
   GhRepoStaleSnapshot,
   GhRepoStaleSummary,
   GhSource,
@@ -344,19 +345,126 @@ export function usableTableRows<T extends { readonly number: number }>(
   return rows;
 }
 
-/** リポジトリ単位の古さを所有者ごとに数える。 */
-export function summarizeRepoStale(_input: {
+/**
+ * 開いた行の有無と、使える行の有無を、判定が読む行の形に戻す。
+ * 判定は、開いた行が1件以上あり、すべて使えないかだけを見るので、行は1件で足りる。
+ */
+function openRowsOf(
+  probe: GhRepoStaleProbe,
+  open: boolean,
+  usable: boolean,
+): GhDetailOpenRow[] {
+  if (!open) {
+    return [];
+  }
+  return [
+    {
+      owner: probe.owner,
+      repo: probe.repo,
+      repo_id: probe.row?.repo_id ?? 0,
+      state: "open",
+      usable,
+    },
+  ];
+}
+
+/**
+ * リポジトリ1件の鮮度を判定する。PRの行とIssueの行の判定のどちらかが`stale`なら`stale`とし、PRの理由を先に採る。
+ * 下流が読む表はPRとIssueで別々に判定されるので、どちらか一方が使えなければ、そのリポジトリは下流で見送られる。
+ */
+function judgeRepoProbe(
+  probe: GhRepoStaleProbe,
+  dbNow: Date,
+  staleAfterMs: number,
+): GhRepoFreshness {
+  const pullRequests = judgeGhRepoFreshness(
+    probe.row,
+    openRowsOf(probe, probe.pr_open, probe.pr_usable),
+    dbNow,
+    staleAfterMs,
+  );
+  if (pullRequests.kind === "stale") {
+    return pullRequests;
+  }
+  return judgeGhRepoFreshness(
+    probe.row,
+    openRowsOf(probe, probe.issue_open, probe.issue_usable),
+    dbNow,
+    staleAfterMs,
+  );
+}
+
+/**
+ * リポジトリ単位の古さを、所有者ごとに数える。
+ * 数える対象は、`isTarget`が真で、一覧から消えていない(`gone`が偽)、archive済みでないリポジトリである。
+ * 一覧から消えたリポジトリとarchive済みのリポジトリは、下流が読まないので、古くても数えない。
+ * 対象の鮮度は、閾値`staleAfterMs`で`judgeGhRepoFreshness`にかける。
+ * 閾値は下流が記録を使わなくなる閾値より長い、通知の閾値を渡す。
+ * `stale`でも、`first_seen_at`から`staleAfterMs`以内のリポジトリは、新しく一覧に載った猶予として`pending`に数える。
+ * 比べる相手は、行を読んだ同じ文のDBの時刻で、workerの時計とは比べない。
+ * `owners`の全員について、対象が無くても集計を返す。
+ */
+export function summarizeRepoStale(input: {
   readonly snapshot: GhRepoStaleSnapshot;
   readonly owners: readonly string[];
   readonly staleAfterMs: number;
   readonly isTarget: (owner: string, repo: string) => boolean;
 }): GhRepoStaleSummary[] {
-  return [];
+  const { snapshot, staleAfterMs, isTarget } = input;
+  const dbNowMs = snapshot.db_now.getTime();
+  const names = [...new Set(input.owners.map((owner) => owner.toLowerCase()))];
+  return names.map((owner) => {
+    const reasons: Record<GhRepoStaleReason, number> = {
+      no_record: 0,
+      unusable: 0,
+      not_collected: 0,
+      in_future: 0,
+      too_old: 0,
+    };
+    let targets = 0;
+    let stale = 0;
+    let pending = 0;
+    for (const probe of snapshot.probes) {
+      if (probe.owner.toLowerCase() !== owner) {
+        continue;
+      }
+      if (probe.row !== null && (probe.row.gone || probe.row.archived)) {
+        continue;
+      }
+      if (!isTarget(owner, probe.repo)) {
+        continue;
+      }
+      targets += 1;
+      const freshness = judgeRepoProbe(probe, snapshot.db_now, staleAfterMs);
+      if (freshness.kind === "fresh") {
+        continue;
+      }
+      if (dbNowMs - probe.first_seen_at.getTime() <= staleAfterMs) {
+        pending += 1;
+        continue;
+      }
+      stale += 1;
+      reasons[freshness.reason] += 1;
+    }
+    return { owner, targets, stale, pending, reasons };
+  });
 }
 
-/** 数える対象のリポジトリか判定する関数を作る。 */
+/**
+ * リポジトリ単位の古さを数える対象かを判定する関数を作る。
+ * 対象は、読む時点で許される(`isRepoAllowed`)リポジトリのうち、明示されていないものである。
+ * 明示された(`factory_repo`と`repo_allowlist`の各項目)リポジトリは、表が使えなくてもRESTで読むので数えない。
+ * `repo_allowlist`が空でなければ、許されるのは明示されたリポジトリだけなので、対象は無くなる。
+ */
 export function repoStaleTargetFilter(
-  _config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
 ): (owner: string, repo: string) => boolean {
-  return () => false;
+  const explicit = new Set(
+    configuredRepos(config).map((entry) =>
+      `${entry.owner}/${entry.repo}`.toLowerCase(),
+    ),
+  );
+  return (owner, repo) =>
+    isRepoAllowed(config, owner, repo) &&
+    !explicit.has(`${owner}/${repo}`.toLowerCase());
 }

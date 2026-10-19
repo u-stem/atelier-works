@@ -309,15 +309,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "github_collect_stale",
     guide(
-      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは25分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。",
-      "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。",
+      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは25分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。本文が「<所有者>のリポジトリ: 」で始まる通知は、所有者の収集は成功していて、一部のリポジトリの記録だけが閾値を超えて更新されていません。下流の処理は、そのリポジトリを見送ります。",
+      "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。「のリポジトリ: 」の通知は、リポジトリごとの記録を読み、失敗や打ち切りが続くリポジトリを確かめ、repo_allowlistで対象を絞るか、リポジトリの規模を減らします。",
       {
         commands: [
           "mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c \"SELECT owner, ok, error_code, verified, id_checked, requests, cost, remaining, finished_at FROM factory.gh_collect_runs WHERE owner = '<所有者>' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10\"",
+          "mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c \"SELECT repo, last_collected_at, last_attempted_at, truncated, detail_failed, first_seen_at FROM factory.gh_repos WHERE owner = '<所有者>' AND NOT gone AND NOT archived ORDER BY last_collected_at NULLS FIRST LIMIT 20\"",
           "wmill schedule get f/factory/collect_github --json",
           "wmill job list --script-path f/factory/collect_github --limit 5",
         ],
-        note: "収集が成功すると、自己更新(2分ごと)が自動で解決します。gh_collect_enabledをfalseにしたときと、ownersから外したときも解決します。止まったまま人が解決すると、次の自己更新で出直します。同じ停止について、定期ジョブの失敗や所有者の不一致の通知と重なって届くことがあります。",
+        note: "収集が成功すると、自己更新(2分ごと)が自動で解決します。「のリポジトリ: 」の通知は、所有者の収集が成功しても解決せず、対象のリポジトリがすべて閾値の内に戻ったときに解決します。gh_collect_enabledをfalseにしたときと、ownersから外したときも解決します。止まったまま人が解決すると、次の自己更新で出直します。同じ停止について、定期ジョブの失敗や所有者の不一致の通知と重なって届くことがあります。",
       },
     ),
   ],
