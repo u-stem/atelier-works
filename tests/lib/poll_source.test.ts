@@ -14,7 +14,7 @@ import {
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   classifyPollPrRow,
-  confirmTableIssue,
+  confirmIssueCandidate,
   confirmTablePr,
   discoverIssues,
   discoverPrs,
@@ -250,14 +250,14 @@ describe("issueKey", () => {
   });
 });
 
-describe("confirmTableIssue", () => {
+describe("confirmIssueCandidate", () => {
   test("accepts an open issue with the trigger label and builds the item from the REST values", () => {
-    const check = confirmTableIssue(tableRow(), restIssue(3), LABEL);
+    const check = confirmIssueCandidate(tableRow(), restIssue(3), LABEL);
     expect(check).toEqual({ kind: "ok", item: searchItem(3) });
   });
 
   test("compares the trigger label without regard to case", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       tableRow(),
       restIssue(3, { labels: ["Factory"] }),
       LABEL,
@@ -266,7 +266,7 @@ describe("confirmTableIssue", () => {
   });
 
   test("drops a closed issue", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       tableRow(),
       restIssue(3, { state: "closed" }),
       LABEL,
@@ -275,7 +275,7 @@ describe("confirmTableIssue", () => {
   });
 
   test("drops an issue whose trigger label is gone", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       tableRow(),
       restIssue(3, { labels: ["bug"] }),
       LABEL,
@@ -284,7 +284,7 @@ describe("confirmTableIssue", () => {
   });
 
   test("drops a pull request", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       tableRow(),
       restIssue(3, { isPullRequest: true }),
       LABEL,
@@ -293,7 +293,7 @@ describe("confirmTableIssue", () => {
   });
 
   test("reports a mismatch when the repository is unknown", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       tableRow(),
       restIssue(3, { repository: null }),
       LABEL,
@@ -302,7 +302,7 @@ describe("confirmTableIssue", () => {
   });
 
   test("reports a mismatch when the repository differs from the row in lowercase", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       tableRow(),
       restIssue(3, { repository: { owner: "Acme", repo: "Gadgets" } }),
       LABEL,
@@ -311,12 +311,12 @@ describe("confirmTableIssue", () => {
   });
 
   test("reports a mismatch when the number differs from the row", () => {
-    const check = confirmTableIssue(tableRow(), restIssue(4), LABEL);
+    const check = confirmIssueCandidate(tableRow(), restIssue(4), LABEL);
     expect(check).toEqual({ kind: "mismatch" });
   });
 
   test("accepts a reference that is only an owner, a repository and a number", () => {
-    const check = confirmTableIssue(
+    const check = confirmIssueCandidate(
       { owner: "acme", repo: "widgets", number: 3 },
       restIssue(3),
       LABEL,

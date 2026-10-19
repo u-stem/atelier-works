@@ -605,6 +605,14 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
    ```
 
    3つが等しければ、大小文字を区別していない。等しくなければ、収集の側の変更として扱う。
+   明示リポジトリを読む一覧のAPIも、同じ性質を前提にする。
+   ラベル名の大小文字と、カンマを含むラベル名が合うことを、次のコマンドで確かめる。
+
+   ```bash
+   gh api -X GET repos/<owner>/<repo>/issues -f labels='<トリガーラベル>' -f state=open --jq 'length'
+   ```
+
+   大小文字を変えたラベル名でも件数が等しいことと、カンマを含む名前が複数のラベルの指定として読まれないことを見る。
 4. 続く3回の`poll_issues`の結果を、WindmillのRunsで確かめる。
    `collect_disabled`が`false`、`failed`が0であることを見る。
    `candidates`は、手順2の表の候補の数と近いはずである。
@@ -624,7 +632,7 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 | --- | --- |
 | `collect_disabled` | `gh_collect_enabled`か`gh_collect_detail_enabled`が偽である。意図した停止でなければ、真に戻す。`rest_reasons`にだけ出る |
 | `no_record` | `gh_repos`に明示リポジトリの行が無い。そのリポジトリが収集の対象(`owners`の所有者の、forkでないリポジトリ)かと、`repo_allowlist`の書き間違いを確かめる。`rest_reasons`にだけ出る |
-| `unusable` | 許可の外か、開いた行がすべて使えない。明示リポジトリが読み取りトークンに見えない、または一覧から消えたときも当たる。forkや改名前の名前が`repo_allowlist`にあると、毎周回一覧で読む |
+| `unusable` | 許可の外か、開いた行がすべて使えない。明示リポジトリが読み取りトークンに見えない、または一覧から消えた(`gone`)ときも当たる。forkや改名前の名前が`repo_allowlist`にあると、毎周回一覧で読み、本当に消えたリポジトリは404が失敗として残る。記録が閾値の内にあるarchive済みの明示リポジトリは、この語にならず、一覧でも読まない |
 | `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
 | `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
 | `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_owner_issues:<owner>`と、DBの状態を確かめる。`rest_reasons`にだけ出る |
@@ -635,6 +643,10 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 一覧の読み取りが失敗すると、失敗の記録の段`list_labeled_issues:<owner>/<repo>`に残り、`failed`に数える。
 トリガーラベルの付いた開いたIssueが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
 一覧を読むのは、収集が止まっている間と、収集が集めない明示リポジトリである。
+明示リポジトリの一覧が失敗し続けても、通知は出ない。
+失敗は`job_failures`に残り、日次のまとめに載る。
+`repo_allowlist`が空でないと、リポジトリ単位の古さの通知と収集の無効の通知が出ないためである。
+結果の`failed`と、失敗の記録の段`list_labeled_issues:`を定期的に見る。
 
 `confirm_issue:`が404で続くときは、読み取りトークンに見えるが、書き込みのPATに見えないリポジトリがある。
 書き込みのPATがそのリポジトリを読めないので、候補を確かめられない。
@@ -647,10 +659,15 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
-1. 戻しのPRをマージする。反映は`self_update`が行う。
-2. リソース`f/factory/factory_config`に、控えの値`gh_source_poll_issues: db`を入れ直す。戻す前の版は、この項目が`db`のときに表を読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
-3. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
-4. 反映後の実ジョブの結果を確かめてから、リソースに残った項目を整理する。
+1. リソース`f/factory/factory_config`に、控えの値`gh_source_poll_issues: db`を先に入れる。戻す前の版は、この項目が`db`のときに表を読む。取得して直して反映する手順は、[収集を有効にする](#収集を有効にする)の手順4と同じである。
+2. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
+3. 戻しのPRをマージする。反映は`self_update`が行う。
+4. 反映後の実ジョブの結果を確かめる。
+
+リソースの項目は、検索の関数を消す段階まで消さない。
+今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
+ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
+戻すときは、後にマージされた変更から順に戻す。
 
 ### PRの発見の元を表に切り替える
 

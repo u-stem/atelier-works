@@ -8,6 +8,7 @@ import {
   judgeGhOwnerCoverage,
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
+  judgeGhRepoFreshness,
   requiredRepos,
   usableTableRows,
 } from "./gh_collect_read.ts";
@@ -41,7 +42,7 @@ export function issueKey(owner: string, repo: string, number: number): string {
 /** 確かめる候補のIssueの参照。表の行と、RESTの一覧の番号のどちらからも作る。 */
 export type IssueRef = Pick<GhIssue, "owner" | "repo" | "number">;
 
-export type TableIssueCheck =
+export type IssueCandidateCheck =
   | { readonly kind: "ok"; readonly item: IssueSearchItem }
   | {
       readonly kind: "drop";
@@ -57,11 +58,11 @@ export type TableIssueCheck =
  * 外れたラベルの付与者を読むと、偽の`labeler_denied`を残すためである。
  * 項目のownerとrepoは応答の綴りにする。作業項目の綴りをそろえるためである。
  */
-export function confirmTableIssue(
+export function confirmIssueCandidate(
   row: IssueRef,
   issue: Issue,
   triggerLabel: string,
-): TableIssueCheck {
+): IssueCandidateCheck {
   const repository = issue.repository;
   if (
     repository === null ||
@@ -188,6 +189,14 @@ export async function discoverIssues(
   const skippedReasons: Record<string, number> = {};
   const restReasons: Record<string, number> = {};
   const refs: IssueRef[] = [];
+  // 一覧のページの境目で同じ番号が重なりうるので、番号の鍵で重ねを除く。
+  const seenRefs = new Set<string>();
+  const addRef = (ref: IssueRef) => {
+    const key = issueKey(ref.owner, ref.repo, ref.number);
+    if (seenRefs.has(key)) return;
+    seenRefs.add(key);
+    refs.push(ref);
+  };
 
   const fail = async (step: string, err: unknown) => {
     failed += 1;
@@ -205,11 +214,14 @@ export async function discoverIssues(
       ? null
       : "collect_disabled";
     let judged: ReturnType<typeof judgeGhOwnerIssueRepos> | null = null;
+    let dbNow: Date | null = null;
     if (input.useTable) {
       try {
+        const snapshot = await deps.readOwnerIssues(owner.name);
+        dbNow = snapshot.db_now;
         judged = judgeGhOwnerIssueRepos(
           owner.name,
-          await deps.readOwnerIssues(owner.name),
+          snapshot,
           input.staleAfterMs,
         );
       } catch (err) {
@@ -219,7 +231,9 @@ export async function discoverIssues(
     }
 
     if (judged !== null) {
-      refs.push(...usableTableRows(owner.name, judged, isAllowedNow));
+      for (const row of usableTableRows(owner.name, judged, isAllowedNow)) {
+        addRef(row);
+      }
       for (const name of [...judged.keys()].sort()) {
         const item = judged.get(name);
         if (
@@ -249,6 +263,21 @@ export async function discoverIssues(
         }
       }
       if (reason === null) continue;
+      // archive済みの明示リポジトリは、記録が鮮度の内にあるときだけ読まない。
+      // 古い記録のarchiveの印は、解除された後も残りうるので信用しない。
+      if (
+        item !== undefined &&
+        dbNow !== null &&
+        item.row.archived &&
+        judgeGhRepoFreshness(
+          { ...item.row, archived: false },
+          [],
+          dbNow,
+          input.staleAfterMs,
+        ).kind === "fresh"
+      ) {
+        continue;
+      }
       restLists += 1;
       restReasons[reason] = (restReasons[reason] ?? 0) + 1;
       try {
@@ -257,15 +286,9 @@ export async function discoverIssues(
           entry.repo,
           input.triggerLabel,
         );
-        refs.push(
-          ...[...numbers]
-            .sort((a, b) => a - b)
-            .map((number) => ({
-              owner: entry.owner,
-              repo: entry.repo,
-              number,
-            })),
-        );
+        for (const number of [...numbers].sort((a, b) => a - b)) {
+          addRef({ owner: entry.owner, repo: entry.repo, number });
+        }
       } catch (err) {
         await fail(`list_labeled_issues:${entry.owner}/${entry.repo}`, err);
       }
@@ -283,7 +306,7 @@ export async function discoverIssues(
       await fail(`confirm_issue:${target}`, err);
       continue;
     }
-    const check = confirmTableIssue(ref, issue, input.triggerLabel);
+    const check = confirmIssueCandidate(ref, issue, input.triggerLabel);
     if (check.kind === "ok") {
       confirmed.push(check.item);
     } else if (check.kind === "drop") {
