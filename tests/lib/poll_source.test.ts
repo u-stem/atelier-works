@@ -2162,11 +2162,15 @@ describe("discoverPrs skips a stale repository that is not explicit", () => {
 });
 
 describe("discoverPrs reads a row that a team may have requested", () => {
-  /** 表の行は依頼先を決められないので、直接の依頼は`getPr`の応答で決める。 */
+  /** 依頼先を読めない行。直接の依頼は`getPr`の応答で決める。 */
+  const UNREADABLE_REVIEWERS: Partial<GhPullRequest> = {
+    review_requested_user_ids: null,
+  };
+
   function teamWorld(
     restOverrides: Partial<PullRequest>,
     caseOptions: PrCaseOptions = { team: true },
-    rowOverrides: Partial<GhPullRequest> = {},
+    rowOverrides: Partial<GhPullRequest> = UNREADABLE_REVIEWERS,
   ): PrFixture {
     const found = prCase(4, caseOptions);
     const world = prWorld([
@@ -2178,51 +2182,70 @@ describe("discoverPrs reads a row that a team may have requested", () => {
     };
   }
 
-  test("reads the pull request of a team row by REST", async () => {
+  /** 依頼先が分かっていて、PATのアカウントを含まず、チーム宛ての依頼が真の行。 */
+  const TEAM_ONLY = teamWorld({}, { team: true }, {});
+
+  test("reads the pull request of a row whose reviewers are unreadable by REST", async () => {
     const { gotPr } = await runPrs(teamWorld({}));
     expect(gotPr).toEqual(["acme/widgets#4"]);
   });
 
-  test("finds a team row whose reviewer list names the viewer", async () => {
+  test("finds a row whose reviewers are unreadable and whose reviewer list names the viewer", async () => {
     const { result } = await runPrs(
       teamWorld({ requestedReviewerIds: [VIEWER_ID] }),
     );
     expect(numbersOf(result.items)).toEqual([4]);
   });
 
-  test("skips a pull request that only a team requested", async () => {
-    const { result } = await runPrs(
-      teamWorld({ requestedReviewerIds: [OTHER_ID] }),
-    );
-    expect(result.items).toEqual([]);
-  });
-
-  test("counts a pull request that only a team requested as unresolved", async () => {
-    const { result } = await runPrs(
-      teamWorld({ requestedReviewerIds: [OTHER_ID] }),
-    );
-    expect(result.stats.team_unresolved).toBe(1);
-  });
-
-  test("does not count a team row that was found by the direct request", async () => {
+  test("does not count a row that was found by the direct request", async () => {
     const { result } = await runPrs(
       teamWorld({ requestedReviewerIds: [VIEWER_ID] }),
     );
     expect(result.stats.team_unresolved).toBe(0);
   });
 
-  test("does not record a failure for a pull request that only a team requested", async () => {
-    const { failures } = await runPrs(
+  test("counts a row whose reviewers are unreadable and whose direct request is not the viewer", async () => {
+    const { result } = await runPrs(
       teamWorld({ requestedReviewerIds: [OTHER_ID] }),
     );
+    expect(result.stats.team_unresolved).toBe(1);
+  });
+
+  test("records an unreadable reviewer list of a team row as a failure", async () => {
+    const { failures } = await runPrs(
+      teamWorld({ requestedReviewerIds: null }),
+    );
+    expect(failures).toEqual(["confirm_pr:acme/widgets#4"]);
+  });
+
+  test("skips a pull request that only a team requested", async () => {
+    const { result } = await runPrs(TEAM_ONLY);
+    expect(result.items).toEqual([]);
+  });
+
+  test("counts a pull request that only a team requested as unresolved", async () => {
+    const { result } = await runPrs(TEAM_ONLY);
+    expect(result.stats.team_unresolved).toBe(1);
+  });
+
+  test("does not read the pull request or the issue of a pull request that only a team requested", async () => {
+    const { gotPr, gotIssue } = await runPrs(TEAM_ONLY);
+    expect([gotPr, gotIssue]).toEqual([[], []]);
+  });
+
+  test("does not record a failure for a pull request that only a team requested", async () => {
+    const { failures } = await runPrs(TEAM_ONLY);
     expect(failures).toEqual([]);
   });
 
   test("does not count a pull request that only a team requested as dropped", async () => {
-    const { result } = await runPrs(
-      teamWorld({ requestedReviewerIds: [OTHER_ID] }),
-    );
+    const { result } = await runPrs(TEAM_ONLY);
     expect(result.stats.dropped).toBe(0);
+  });
+
+  test("does not count a pull request that only a team requested as capped", async () => {
+    const { result } = await runPrs(TEAM_ONLY);
+    expect(result.stats.team_capped).toBe(0);
   });
 
   test("reads a row whose team request is unknown by REST", async () => {
@@ -2247,7 +2270,7 @@ describe("discoverPrs reads a row that a team may have requested", () => {
     expect(result.stats.team_unresolved).toBe(1);
   });
 
-  test("reads a row whose requested reviewers are unknown by REST", async () => {
+  test("reads a row whose requested reviewers are unknown and which has no team request by REST", async () => {
     const { result } = await runPrs(
       teamWorld(
         { requestedReviewerIds: [VIEWER_ID] },
@@ -2269,14 +2292,7 @@ describe("discoverPrs reads a row that a team may have requested", () => {
     expect(result.stats.team_unresolved).toBe(0);
   });
 
-  test("records an unreadable reviewer list of a team row as a failure", async () => {
-    const { failures } = await runPrs(
-      teamWorld({ requestedReviewerIds: null }),
-    );
-    expect(failures).toEqual(["confirm_pr:acme/widgets#4"]);
-  });
-
-  test("reads the team rows of an organization and of a user the same way", async () => {
+  test("counts the team-only rows of an organization and of a user the same way", async () => {
     const acme = prCase(4, { team: true });
     const beta = toolsPrCase(8, { team: true });
     const { result } = await runPrs(
@@ -2288,17 +2304,6 @@ describe("discoverPrs reads a row that a team may have requested", () => {
             [{ ...beta.row, owner: "beta" }],
           ),
         },
-        prs: {
-          "acme/widgets#4": acme.pr,
-          "beta/tools#8": beta.pr,
-        },
-        issues: {
-          "acme/widgets#4": acme.asIssue,
-          "beta/tools#8": {
-            ...beta.asIssue,
-            repository: { owner: "Beta", repo: "Tools" },
-          },
-        },
       },
       { owners: [ACME, BETA] },
     );
@@ -2306,9 +2311,7 @@ describe("discoverPrs reads a row that a team may have requested", () => {
   });
 
   test("does not list a repository for a team row", async () => {
-    const { listed } = await runPrs(
-      teamWorld({ requestedReviewerIds: [OTHER_ID] }),
-    );
+    const { listed } = await runPrs(TEAM_ONLY);
     expect(listed).toEqual([]);
   });
 
@@ -2317,6 +2320,171 @@ describe("discoverPrs reads a row that a team may have requested", () => {
     const labeled = prCase(3, { labels: [REVIEW_LABEL] });
     const { result } = await runPrs(prWorld([labeled, team]));
     expect(numbersOf(result.items)).toEqual([3]);
+  });
+});
+
+describe("discoverPrs limits the rows that it confirms for a team request", () => {
+  /** 依頼先を読めず、REST以外に決める手立てが無い行を、番号の逆順に`count`件作る。 */
+  function unreadableCases(count: number, firstNumber = 1): PrCase[] {
+    return Array.from({ length: count }, (_, index) => {
+      const found = prCase(firstNumber + count - 1 - index, { team: true });
+      return {
+        ...found,
+        row: { ...found.row, review_requested_user_ids: null },
+        listed: { ...found.listed, requestedReviewerIds: null },
+      };
+    });
+  }
+
+  const keysOf = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `acme/widgets#${from + i}`);
+
+  test("reads 20 rows and not the 21st", async () => {
+    const { gotPr } = await runPrs(prWorld(unreadableCases(21)));
+    expect(gotPr).toHaveLength(20);
+  });
+
+  test("reads the rows in ascending order of the number", async () => {
+    const { gotPr } = await runPrs(prWorld(unreadableCases(21)));
+    expect(gotPr).toEqual(keysOf(1, 20));
+  });
+
+  test("reports the rows over the limit", async () => {
+    const { result } = await runPrs(prWorld(unreadableCases(23)));
+    expect(result.stats.team_capped).toBe(3);
+  });
+
+  test("reports nothing when the rows are at the limit", async () => {
+    const { result } = await runPrs(prWorld(unreadableCases(20)));
+    expect(result.stats.team_capped).toBe(0);
+  });
+
+  test("does not record a failure for a row over the limit", async () => {
+    const { failures } = await runPrs(prWorld(unreadableCases(21)));
+    expect(failures).toEqual([]);
+  });
+
+  test("does not count a row over the limit as unresolved", async () => {
+    const { result } = await runPrs(prWorld(unreadableCases(21)));
+    expect(result.stats.team_unresolved).toBe(20);
+  });
+
+  test("reads the same rows in every round", async () => {
+    const first = await runPrs(prWorld(unreadableCases(25)));
+    const second = await runPrs(prWorld(unreadableCases(25)));
+    expect(second.gotPr).toEqual(first.gotPr);
+  });
+
+  test("does not apply the limit to the rows that match a direct condition", async () => {
+    const cases = Array.from({ length: 25 }, (_, index) =>
+      prCase(index + 1, { labels: [REVIEW_LABEL] }),
+    );
+    const { result } = await runPrs(prWorld(cases));
+    expect([result.items.length, result.stats.team_capped]).toEqual([25, 0]);
+  });
+
+  test("does not count the rows that only a team requested against the limit", async () => {
+    const teamOnly = Array.from({ length: 25 }, (_, index) =>
+      prCase(100 + index, { team: true }),
+    );
+    const { result } = await runPrs(
+      prWorld([...unreadableCases(20), ...teamOnly]),
+    );
+    expect(result.stats.team_capped).toBe(0);
+  });
+
+  test("applies the limit to the whole round, across owners", async () => {
+    const acme = unreadableCases(15);
+    const beta = Array.from({ length: 15 }, (_, index) => {
+      const found = toolsPrCase(index + 1, { team: true });
+      return {
+        ...found,
+        row: { ...found.row, owner: "beta", review_requested_user_ids: null },
+      };
+    });
+    const { result, gotPr } = await runPrs(
+      {
+        snapshots: {
+          acme: prSnapshot(
+            [repoRow("widgets")],
+            acme.map((c) => c.row),
+          ),
+          beta: prSnapshot(
+            [repoRow("tools")],
+            beta.map((c) => c.row),
+          ),
+        },
+        prs: {
+          ...restFixtures(acme).prs,
+          ...Object.fromEntries(
+            beta.map((c) => [`beta/tools#${c.item.number}`, c.pr]),
+          ),
+        },
+        issues: {
+          ...restFixtures(acme).issues,
+          ...Object.fromEntries(
+            beta.map((c) => [
+              `beta/tools#${c.item.number}`,
+              { ...c.asIssue, repository: { owner: "Beta", repo: "Tools" } },
+            ]),
+          ),
+        },
+      },
+      { owners: [ACME, BETA] },
+    );
+    expect([gotPr.length, result.stats.team_capped]).toEqual([20, 10]);
+  });
+
+  test("keeps the rows of the key that sorts first when the owners differ", async () => {
+    const acme = unreadableCases(15);
+    const beta = Array.from({ length: 15 }, (_, index) => {
+      const found = toolsPrCase(index + 1, { team: true });
+      return {
+        ...found,
+        row: { ...found.row, owner: "beta", review_requested_user_ids: null },
+      };
+    });
+    const { gotPr } = await runPrs(
+      {
+        snapshots: {
+          acme: prSnapshot(
+            [repoRow("widgets")],
+            acme.map((c) => c.row),
+          ),
+          beta: prSnapshot(
+            [repoRow("tools")],
+            beta.map((c) => c.row),
+          ),
+        },
+        prs: {
+          ...restFixtures(acme).prs,
+          ...Object.fromEntries(
+            beta.map((c) => [`beta/tools#${c.item.number}`, c.pr]),
+          ),
+        },
+        issues: {
+          ...restFixtures(acme).issues,
+          ...Object.fromEntries(
+            beta.map((c) => [
+              `beta/tools#${c.item.number}`,
+              { ...c.asIssue, repository: { owner: "Beta", repo: "Tools" } },
+            ]),
+          ),
+        },
+      },
+      { owners: [BETA, ACME] },
+    );
+    expect(gotPr.filter((key) => key.startsWith("acme/"))).toHaveLength(15);
+  });
+
+  test("applies the limit to the candidates of the list too", async () => {
+    const { gotPr, result } = await runPrs(staleWorld(unreadableCases(21)));
+    expect([gotPr.length, result.stats.team_capped]).toEqual([20, 1]);
+  });
+
+  test("does not read a listed pull request that only a team requested", async () => {
+    const { gotPr } = await runPrs(staleWorld([prCase(4, { team: true })]));
+    expect(gotPr).toEqual([]);
   });
 });
 
@@ -2693,11 +2861,6 @@ describe("discoverPrs takes only a candidate from the list and confirms it by RE
     };
     const { result } = await runPrs(staleWorld([{ ...found, listed: bare }]));
     expect(numbersOf(result.items)).toEqual([6]);
-  });
-
-  test("reads a listed pull request that a team requested by REST", async () => {
-    const { gotPr } = await runPrs(staleWorld([prCase(4, { team: true })]));
-    expect(gotPr).toEqual(["acme/widgets#4"]);
   });
 
   test("counts a listed pull request that only a team requested as unresolved", async () => {

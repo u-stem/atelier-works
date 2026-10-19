@@ -92,6 +92,11 @@ describe("poll_prs: the result", () => {
     );
   });
 
+  test("reports the pull requests that were not confirmed because of the limit", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("team_capped: discovered.stats.team_capped,");
+  });
+
   test("no longer reports a source of the round", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source.includes("pr_source")).toBe(false);
