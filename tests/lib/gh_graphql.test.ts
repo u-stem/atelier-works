@@ -879,20 +879,26 @@ describe("readRejectedItems", () => {
     );
   });
 
-  test("never reads message, locations, or extensions", () => {
-    expect(
-      JSON.stringify(
-        readRejectedItems([
-          {
-            type: "FORBIDDEN",
-            path: ["r0", "pullRequests"],
-            message: `leak ${FAKE_GHP}`,
-            locations: [{ line: FAKE_GHP }],
-            extensions: { token: FAKE_GHP },
-          },
-        ]),
-      ),
-    ).not.toContain("ghp_");
+  const MESSAGE_LEAK_INPUT = [
+    {
+      type: "FORBIDDEN",
+      path: ["r0", "pullRequests"],
+      message: `leak ${FAKE_GHP}`,
+      locations: [{ line: FAKE_GHP }],
+      extensions: { token: FAKE_GHP },
+    },
+  ];
+
+  test("never reads message, locations, or extensions into the output text", () => {
+    expect(JSON.stringify(readRejectedItems(MESSAGE_LEAK_INPUT))).not.toContain(
+      "ghp_",
+    );
+  });
+
+  test("returns only type and field for an entry carrying message, locations, and extensions", () => {
+    expect(readRejectedItems(MESSAGE_LEAK_INPUT)).toEqual([
+      { type: "FORBIDDEN", field: "pullRequests" },
+    ]);
   });
 
   test.each([

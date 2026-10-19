@@ -3403,6 +3403,17 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
     { type: LEAK_PAT, path: ["repositoryOwner", LEAK_GHP, "name", LEAK_PAT] },
   ];
 
+  // 段2の成功の経路に落とすため、すべて`r0`で始める。
+  const leakyAliasErrors = [
+    { type: LEAK_GHP, path: ["r0", "pullRequests"], message: LEAK_BODY },
+    {
+      type: "FORBIDDEN",
+      path: ["r0", "pullRequests", LEAK_PAT, "mergeable"],
+      message: LEAK_BODY,
+    },
+    { type: LEAK_GHP, path: ["r0", LEAK_PAT, "nodes", LEAK_GHP] },
+  ];
+
   function detailBody(errors: readonly unknown[]) {
     const ok = detailResponse([
       aliasData(repoIdOf("a"), { prs: [prNode(1)], issues: [issueNode(1)] }),
@@ -3495,5 +3506,28 @@ describe("runGhCollect refused items from raw GraphQL responses", () => {
       }),
     );
     expect(refusedLogs(h).length).toBe(1);
+  });
+
+  test("takes the success path at stage detail with leaky alias errors", async () => {
+    const h = detailHarness();
+    await runGhCollect(
+      withRawStage(h, {
+        detail: detailBody([...detailErrors, ...leakyAliasErrors]),
+      }),
+    );
+    expect(refusedLogs(h).map((entry) => entry.fields)).toMatchObject([
+      { stage: "detail" },
+    ]);
+  });
+
+  test("keeps tokens and bodies out of the logs on the success path at stage detail", async () => {
+    const h = detailHarness();
+    await runGhCollect(
+      withRawStage(h, {
+        detail: detailBody([...detailErrors, ...leakyAliasErrors]),
+      }),
+    );
+    const text = JSON.stringify(h.logs);
+    expect(LEAKS.filter((value) => text.includes(value))).toEqual([]);
   });
 });
