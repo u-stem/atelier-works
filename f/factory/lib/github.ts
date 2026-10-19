@@ -79,6 +79,8 @@ export type GhClient = {
    */
   readonly transientRetryDelayMs?: number;
   readonly now?: () => Date;
+  /** レート制限の応答を警告として残す先。省略すると標準出力の構造化ログに書く。 */
+  readonly log?: Logger;
 };
 
 function buildGhEnv(client: GhClient): Record<string, string> {

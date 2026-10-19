@@ -41,6 +41,18 @@ function factorySources(): Source[] {
     });
 }
 
+/** `["gh", "search", ...]`のようなargv配列。改行をまたいでも見つける。 */
+const GH_SEARCH_ARGV = /["']gh["']\s*,\s*["']search["']/;
+
+/** `gh`をargvの先頭に置く配列。 */
+const GH_ARGV_START = /\[\s*["']gh["']\s*,/;
+
+function pathsMatching(sources: readonly Source[], pattern: RegExp): string[] {
+  return sources
+    .filter((source) => pattern.test(source.text))
+    .map((source) => source.path);
+}
+
 function linesMatching(
   sources: readonly Source[],
   pattern: RegExp,
@@ -111,6 +123,22 @@ describe("the Factory scripts never name the REST search API", () => {
 
   test("no script passes a search option to gh", () => {
     expect(linesMatching(sources, /--search\b/)).toEqual([]);
+  });
+
+  test("no script writes an argv array that runs gh search", () => {
+    expect(pathsMatching(sources, GH_SEARCH_ARGV)).toEqual([]);
+  });
+
+  test("the argv pattern finds gh and search split across lines", () => {
+    expect(GH_SEARCH_ARGV.test('["gh",\n  "search", "issues"]')).toBe(true);
+  });
+
+  test("the argv pattern does not match gh api", () => {
+    expect(GH_SEARCH_ARGV.test('["gh", "api", endpoint]')).toBe(false);
+  });
+
+  test("gh is started directly only by github.ts", () => {
+    expect(pathsMatching(sources, GH_ARGV_START)).toEqual([GUARD_FILE]);
   });
 });
 
