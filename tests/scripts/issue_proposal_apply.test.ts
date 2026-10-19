@@ -221,6 +221,11 @@ describe("appendIssueProposalMarker / hasIssueProposalMarker", () => {
     expect(hasIssueProposalMarker(body, 5)).toBe(false);
   });
 
+  test("hasIssueProposalMarker rejects a marker that follows other text on the last line", () => {
+    const body = `背景\n\n続き ${issueProposalMarkerText(5)}`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
+
   test("hasIssueProposalMarker rejects a longer id that ends with the same digits", () => {
     const body = appendIssueProposalMarker("背景", 15);
     expect(hasIssueProposalMarker(body, 5)).toBe(false);

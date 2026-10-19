@@ -70,7 +70,7 @@ locks:
   f/factory/lib/gh_collect_read: e59455f5634ac3c932ed7c4bc2891ead08327fadf8012ffb8151eccc75c8cc0b
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
-  f/factory/lib/github: b8cef0e09ec49461b45164fba63ce324872275f05f1dfb08bab992b0a5491db3
+  f/factory/lib/github: 69b824dae461ee19a6fbb79f275a522817518cec46e5b6b0e498286fa6f278cd
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
@@ -152,7 +152,7 @@ locks:
   f/factory/steps/implement_generate: 0671a360eef104568c2efaf753c42348a779005d3185c64e26fea5aeb15a36c1
   f/factory/steps/implement_prepare: a3856a352b58ed770c1c38628621febddb509f03915d92772ee16ebb175748fa
   f/factory/steps/implement_verify: 39346ed4dbe978230241634e02043e1e634fa07d44cf39dc44ab422f0da838f2
-  f/factory/steps/issue_proposal_apply: 008b135082d2640930368da4285ba9ffe82337b5b41df7a43b27295d81086fd2
+  f/factory/steps/issue_proposal_apply: 53da6c8f8383cc263a29e8685809a517f3e962bad7e3b8ac19eebb5827d2d3eb
   f/factory/steps/manual_intake_create_issue: c03d7a48360ec3955558c2d16e6a96c1433ce5f1b4ff5f7ca3a10d3a1376d4b7
   f/factory/steps/manual_intake_register: 7a70e5311cee44ebc6f7e33646a4c826fc7a96ea2a2b98cbb44130c0f8673fa8
   f/factory/steps/pipeline_generate: 32db3d8e2ded0b0731c98fba812e66f35cf681681663626b8fb9ab0060e6a8a6
@@ -166,7 +166,7 @@ locks:
   f/factory/steps/pr_review_generate: eb116cae89512a05ce41de2818489ae2ea8ffee2036807d3cceb0e90bed0caaf
   f/factory/steps/pr_review_post: b2ea0351363d6a1e95fc4f021f4f35fd3970db46fc5f8cd0aed86c2c3830ee98
   f/factory/steps/pr_review_prepare: 08e09697d6989fcfcb82502f39ca37847d1891f94153ad23a08db3ae07e30b8f
-  f/factory/steps/pr_workflow_support: 2fc6fed23a02de89dfc274e73a8b667438ebc6c05c6349c1fb6f177c21ef4aab
+  f/factory/steps/pr_workflow_support: ad869bd6701f5135e46f3c96a75c1779cf33435b6c6d3c555fb0827d3ac06f8c
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: e58d2e46a53fdcb5ab13fcfd3fbd951fd810fede7572168d0578abc8dd355626

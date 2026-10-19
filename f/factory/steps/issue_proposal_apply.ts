@@ -26,6 +26,7 @@ import {
   createIssue,
   findIssueByMarker,
   type GhClient,
+  getViewer,
   postIssueComment,
   replyReviewComment,
   resolveReviewThread,
@@ -49,7 +50,7 @@ import {
   classifyIssueProposalDecision,
   decidePostProposalTransition,
   hasIssueProposalMarker,
-  issueProposalMarkerSearchTerm,
+  issueProposalMarkerText,
   renderIssueProposalApprovedReply,
   renderIssueProposalRejectedReply,
 } from "./pr_workflow_support.ts";
@@ -57,8 +58,9 @@ import {
 /**
  * Issueを作る処理の印の有効期間(秒)。
  * 印を取った呼び出しが途中で止まったときに、やり直しが塞がれる最長の時間になる。
- * 最悪の経路は、マーカーの検索(約380秒)の後にIssueの作成(約250秒)が続く約630秒である。
- * これを覆い、余裕を持たせて900秒(15分)にする。
+ * 経路は、マーカーの走査の後にIssueの作成(約250秒)が続く。
+ * 走査は通常1ページで終わる。複数ページでレート制限の待ちが重なると、900秒(15分)を超えうる。
+ * 通常の経路と余裕を覆うため、900秒にする。
  * Consoleの画面がやり直しを止める時間(`REDO_COOLDOWN_MS`)も、同じ長さにそろえる。
  * 印に持ち主の識別子は無いので、期限を超えた処理と、取り直した処理が重なる可能性は、理論上残る。
  */
@@ -260,7 +262,7 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * 2つ目のIssueは作らない。
  * 同時に2つの呼び出しが走っても、Issueを作る段階は1つだけが通る。
  * Issueを作るか探す前に、`claimIssueCreation`の条件付きUPDATEで印を取り、取れなかった呼び出しは何もしない。
- * マーカーでの検索はGitHubの索引の反映が遅れ、同時の呼び出しがどちらも空振りしうるためである。
+ * 同時の呼び出しは、どちらもマーカーの走査の時点でIssueが無いと見て、2件作りうるためである。
  * 印は期限付きなので、印を取った呼び出しが止まっても、期限後のやり直しは塞がれない。
  * 却下も同じく、判断を先に記録してから返信する。
  *
@@ -451,8 +453,8 @@ async function run(
       // 決め直さずに記録済みの判断を反映する。
       labelApplied = current.with_factory_label ?? false;
     } else {
-      // Issueを作る呼び出しを1つに絞る。マーカーでの検索はGitHubの索引の反映が遅れるので、
-      // 同時の呼び出しがどちらも空振りして、Issueが2件できうる。
+      // Issueを作る呼び出しを1つに絞る。同時の呼び出しは、どちらもマーカーの走査の時点で
+      // Issueが無いと見て、Issueを2件作りうる。
       // 印を取れなかった呼び出しは、別の呼び出しが作っている最中なので、何もせずに終える。
       const claimed = await claimIssueCreation(
         proposal_id,
@@ -463,19 +465,23 @@ async function run(
         return { ok: true, status: "in_progress", label_applied: false };
       }
       try {
-        const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
+        const viewer = await getViewer(client);
         const existingIssue = await findIssueByMarker(
           client,
           owner,
           repo,
-          markerSearchTerm,
+          issueProposalMarkerText(proposal_id),
+          {
+            creatorLogin: viewer.login,
+            proposalCreatedAt: proposal.created_at,
+          },
         );
         if (
           existingIssue !== null &&
           hasIssueProposalMarker(existingIssue.body, proposal_id)
         ) {
           created = existingIssue;
-          // 上と同じ理由。DBの行ではなくマーカーの検索で見つけたIssueは、
+          // 上と同じ理由。DBの行ではなくマーカーの走査で見つけたIssueは、
           // おそらくクラッシュした先の呼び出しが作ったもので、ここで新たに決めることは無い。
           labelApplied = current.with_factory_label ?? false;
         } else {
