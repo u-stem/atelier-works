@@ -770,7 +770,8 @@ Factoryのブランチかと作者は、PRごとに読み直す`getPr`の応答�
 `owners`に無い所有者の`factory_repo`は、これまでどおり発見しない。
 
 一覧は`GET /repos/{owner}/{repo}/issues?labels=<トリガーラベル>&state=open&per_page=100`で、最後のページまで読む。
-読むのは10ページ(1000件)までで、超えたら一部だけを返さず失敗として記録する(段`list_labeled_issues:<owner>/<repo>`)。
+読むのは10ページまでである。
+ラベルの付いた開いたIssueとPRが合わせて1000件を超えたら、一部だけを返さず失敗として記録する(段`list_labeled_issues:<owner>/<repo>`)。
 このAPIはPRも返すので、`pull_request`を持つ要素は捨てる。
 一覧は番号だけを使い、表の候補と同じく、次の`getIssue`の読み直しに渡す。
 
