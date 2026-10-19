@@ -820,6 +820,24 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
   return { login: parsed.login, id: parsed.id };
 }
 
+/** PATのアカウントが属するチーム。 */
+export type ViewerTeams = {
+  /** チームの数値ID。レビューの依頼先との照合に使う。 */
+  readonly ids: ReadonlySet<number>;
+  /** `<組織>/<チーム>`(小文字)。組織のチームが1件も無いかの判定に使う。 */
+  readonly slugs: ReadonlySet<string>;
+};
+
+/** `getViewerTeams`が読むページ数の既定の上限。1ページ100件なので、1000チームまでである。 */
+export const VIEWER_TEAMS_MAX_PAGES = 10;
+
+export async function getViewerTeams(
+  _client: GhClient,
+  _maxPages: number = VIEWER_TEAMS_MAX_PAGES,
+): Promise<ViewerTeams> {
+  return { ids: new Set(), slugs: new Set() };
+}
+
 /**
  * アカウント(ユーザーか組織)の現在の数値IDを取得する。
  * 組織でも`GET /users/{name}`で数値のIDが取れるので、`kind`によらず同じ経路を使う。
@@ -2581,6 +2599,13 @@ export type PullRequest = {
    * 空の配列は、利用者への依頼が無いことを意味する。
    */
   readonly requestedReviewerIds: readonly number[] | null;
+  /**
+   * レビューを依頼されたチームの数値ID(RESTの`requested_teams`)。
+   * 配列でないとき、要素の`id`が正の安全な整数でないときは`null`。
+   * 空の配列は、チームへの依頼が無いことを意味する。
+   * 省略可能にしてあるのは、この項目を使わない呼び出し元が値を作るときに書かずに済むようにするためである。
+   */
+  readonly requestedTeamIds?: readonly number[] | null;
 };
 
 type PrPayload = {
@@ -4563,6 +4588,10 @@ export type OpenPullRequest = {
   readonly requestedReviewerIds?: readonly number[] | null;
   /** チームへのレビューの依頼があるか。`requested_teams`が空なら偽、読めないときは`null`。 */
   readonly teamReviewRequested?: boolean | null;
+  /** レビューを依頼されたチームの数値ID。読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly requestedTeamIds?: readonly number[] | null;
+  /** headのコミットのSHA。応答に無いときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly headSha?: string | null;
 };
 
 function isOpenPullRequestPayload(value: unknown): value is {

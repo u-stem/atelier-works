@@ -44,6 +44,7 @@ import {
   getRepositoryId,
   getRepositoryOwnerId,
   getViewer,
+  getViewerTeams,
   gitIdentityForViewer,
   hasMarker,
   isFactoryPost,
@@ -296,6 +297,128 @@ describe("getViewer", () => {
     await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
       /unexpected response shape/,
     );
+  });
+});
+
+describe("getViewerTeams", () => {
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  function team(id: unknown, slug: unknown, org: unknown = "Acme") {
+    return {
+      id,
+      slug,
+      name: "display name",
+      organization: org === undefined ? undefined : { login: org },
+    };
+  }
+
+  test("asks for the teams of the authenticated user, 100 per page", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await getViewerTeams(client(fake));
+    expect(fake.calls[0]?.argv).toContain("user/teams?per_page=100");
+  });
+
+  test("returns the numeric id of every team", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(22, "infra", "Beta")]),
+    ]);
+    const teams = await getViewerTeams(client(fake));
+    expect([...teams.ids].sort()).toEqual([11, 22]);
+  });
+
+  test("returns the organization and slug of every team in lowercase", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "Core"), team(22, "Infra", "Beta")]),
+    ]);
+    const teams = await getViewerTeams(client(fake));
+    expect([...teams.slugs].sort()).toEqual(["acme/core", "beta/infra"]);
+  });
+
+  test("returns empty sets when the user belongs to no team", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    const teams = await getViewerTeams(client(fake));
+    expect([teams.ids.size, teams.slugs.size]).toEqual([0, 0]);
+  });
+
+  test("reads every page", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core")], {
+        link: '<https://api.github.com/user/teams?per_page=100&page=2>; rel="next"',
+      }),
+      ghApiOk([team(22, "infra")]),
+    ]);
+    const teams = await getViewerTeams(client(fake));
+    expect([...teams.ids].sort()).toEqual([11, 22]);
+  });
+
+  test("fails when the pages exceed the limit", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core")], {
+        link: '<https://api.github.com/user/teams?per_page=100&page=2>; rel="next"',
+      }),
+      ghApiOk([team(22, "infra")], {
+        link: '<https://api.github.com/user/teams?per_page=100&page=3>; rel="next"',
+      }),
+    ]);
+    await expect(getViewerTeams(client(fake), 2)).rejects.toThrow(
+      GitHubPaginationLimitError,
+    );
+  });
+
+  test("fails as a whole when one team has no numeric id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team("x", "infra")]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails as a whole when one team has an id that is not positive", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(0, "infra")]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails as a whole when one team has no slug", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(22, undefined)]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails as a whole when one team has no organization", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(22, "infra", undefined)]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails when the response is not a list", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ teams: [] })]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /expected an array/,
+    );
+  });
+
+  test("does not put the slug of a valid team into the message of a failure", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "secret-team"), team("x", "infra")]),
+    ]);
+    const error = await getViewerTeams(client(fake)).catch(
+      (err: unknown) => err,
+    );
+    expect(String(error)).not.toContain("secret-team");
   });
 });
 
@@ -4408,6 +4531,89 @@ describe("getPr requested reviewers", () => {
   });
 });
 
+describe("getPr requested teams", () => {
+  function prBody(requestedTeams: unknown): Record<string, unknown> {
+    return {
+      number: 12,
+      title: "t",
+      body: "b",
+      draft: false,
+      state: "open",
+      merged: false,
+      head: { sha: "abc123", ref: "feature-x", repo: null },
+      base: { ref: "main", repo: { full_name: "acme/widgets" } },
+      mergeable_state: "clean",
+      user: { login: "alice", type: "User" },
+      ...(requestedTeams === undefined
+        ? {}
+        : { requested_teams: requestedTeams }),
+    };
+  }
+
+  async function read(requestedTeams: unknown) {
+    const fake = createFakeCommandRunner([ghApiOk(prBody(requestedTeams))]);
+    return getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 12);
+  }
+
+  async function readWithCreatedAt(requestedTeams: unknown) {
+    const fake = createFakeCommandRunner([ghApiOk(prBody(requestedTeams))]);
+    return getPrWithCreatedAt(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+  }
+
+  test("returns the id of every requested team", async () => {
+    const pr = await read([
+      { id: 11, slug: "core" },
+      { id: 22, slug: "infra" },
+    ]);
+    expect(pr.requestedTeamIds).toEqual([11, 22]);
+  });
+
+  test("returns an empty list when no team is requested", async () => {
+    const pr = await read([]);
+    expect(pr.requestedTeamIds).toEqual([]);
+  });
+
+  test("returns null when the response has no requested_teams, without throwing", async () => {
+    const pr = await read(undefined);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null when requested_teams is not an array, without throwing", async () => {
+    const pr = await read({ id: 11 });
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null when a team id is not a positive integer, without throwing", async () => {
+    const pr = await read([{ id: 11 }, { id: "x" }]);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null when an element of requested_teams is not an object, without throwing", async () => {
+    const pr = await read([null]);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("keeps the other fields when requested_teams is malformed", async () => {
+    const pr = await read("broken");
+    expect(pr.title).toBe("t");
+  });
+
+  test("getPrWithCreatedAt succeeds when requested_teams is missing", async () => {
+    const pr = await readWithCreatedAt(undefined);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("getPrWithCreatedAt succeeds when requested_teams is malformed", async () => {
+    const pr = await readWithCreatedAt([{ id: "x" }]);
+    expect(pr.number).toBe(12);
+  });
+});
+
 describe("getPrWithCreatedAt", () => {
   function prPayload(createdAt: unknown): Record<string, unknown> {
     return {
@@ -4676,6 +4882,46 @@ describe("listOpenPullRequests", () => {
   test("reports an unknown team review request when requested_teams is not a list", async () => {
     const pr = await listed(openPr(12, { requested_teams: "x" }));
     expect(pr?.teamReviewRequested).toBeNull();
+  });
+
+  test("returns the ids of the requested teams", async () => {
+    const pr = await listed(
+      openPr(12, { requested_teams: [{ id: 11 }, { id: 22 }] }),
+    );
+    expect(pr?.requestedTeamIds).toEqual([11, 22]);
+  });
+
+  test("returns null requested team ids when the entry has none, and keeps the entry", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null requested team ids when an id is not a positive integer", async () => {
+    const pr = await listed(openPr(12, { requested_teams: [{ id: "x" }] }));
+    expect(pr?.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null requested team ids when requested_teams is not a list", async () => {
+    const pr = await listed(openPr(12, { requested_teams: "x" }));
+    expect(pr?.requestedTeamIds).toBeNull();
+  });
+
+  test("returns the head commit of the pull request", async () => {
+    const pr = await listed(
+      openPr(12, {
+        head: {
+          ref: "f",
+          sha: "c".repeat(40),
+          repo: { full_name: "acme/widgets" },
+        },
+      }),
+    );
+    expect(pr?.headSha).toBe("c".repeat(40));
+  });
+
+  test("returns a null head commit when the entry has none, and keeps the entry", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.headSha).toBeNull();
   });
 
   test("returns a null base branch when the entry has none, and keeps the entry", async () => {

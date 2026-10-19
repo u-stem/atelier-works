@@ -18,6 +18,7 @@ import type {
   PrSearchItem,
   PullRequest,
   Viewer,
+  ViewerTeams,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import {
@@ -491,6 +492,7 @@ export function confirmPrCandidate(
   asIssue: Issue,
   viewer: Viewer,
   labels: { readonly reviewLabel: string; readonly fixLabel: string },
+  _viewerTeamIds: ReadonlySet<number> | null = null,
 ): PrCandidateCheck {
   const repository = asIssue.repository;
   if (
@@ -536,6 +538,24 @@ export function confirmPrCandidate(
  */
 export const TEAM_CONFIRM_LIMIT = 20;
 
+/**
+ * 確かめて対象でなかったPRを覚えておく時間(ミリ秒)。
+ * 同じheadのまま別のチームが依頼されても、この時間のうちに確かめ直す。
+ */
+export const TEAM_CHECK_MEMORY_TTL_MS = 60 * 60_000;
+
+/** 確かめて対象でなかったPRの覚えを、Windmillのstateの値から読む。形の違う値と要素は捨てる。 */
+export function parseCheckedPrs(_value: unknown): Map<string, number> {
+  return new Map();
+}
+
+/** 確かめて対象でなかったPRの覚えの置き場。 */
+export type CheckedPrStore = {
+  readonly load: () => Promise<ReadonlyMap<string, number>>;
+  readonly save: (entries: ReadonlyMap<string, number>) => Promise<void>;
+  readonly nowMs: () => number;
+};
+
 export type PrDiscoveryStats = IssueDiscoveryStats & {
   /**
    * チーム宛ての依頼が付いていて、直接の依頼でなかったため見送ったPRの数。
@@ -544,6 +564,8 @@ export type PrDiscoveryStats = IssueDiscoveryStats & {
   readonly team_unresolved: number;
   /** 依頼先を読めず、RESTで確かめる上限(`TEAM_CONFIRM_LIMIT`)を超えたため、この周回は確かめなかった候補の数。 */
   readonly team_capped: number;
+  /** 前の周回で確かめて対象でなく、覚えていたため、この周回は確かめなかった候補の数。 */
+  readonly team_remembered: number;
 };
 
 /** 確かめるPRの参照に、チーム宛ての依頼の扱いを添えたもの。 */
@@ -625,6 +647,8 @@ export async function discoverPrs(
       number: number,
     ) => Promise<Issue>;
     readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+    readonly getViewerTeams: () => Promise<ViewerTeams>;
+    readonly checkedPrs: CheckedPrStore;
   },
 ): Promise<{
   items: PrSearchItem[];
@@ -830,6 +854,7 @@ export async function discoverPrs(
       dropped,
       team_unresolved: teamUnresolved,
       team_capped: teamCapped,
+      team_remembered: 0,
     },
   };
 }

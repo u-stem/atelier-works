@@ -30,6 +30,26 @@ describe("poll_prs: the wiring of the discovery", () => {
     );
   });
 
+  test("passes a reader of the teams of the viewer to the discovery", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("getViewerTeams: () => getViewerTeams(client),");
+  });
+
+  test("keeps the confirmed pull requests in the state of the job", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("checkedPrs: {");
+  });
+
+  test("reads the state of the job for the confirmed pull requests", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("await wmill.getState()");
+  });
+
+  test("writes the state of the job for the confirmed pull requests", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain("await wmill.setState(");
+  });
+
   test("uses the number of owners for the threshold", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source).toContain(
@@ -95,6 +115,13 @@ describe("poll_prs: the result", () => {
   test("reports the pull requests that were not confirmed because of the limit", async () => {
     const source = await read("f/factory/poll_prs.ts");
     expect(source).toContain("team_capped: discovered.stats.team_capped,");
+  });
+
+  test("reports the pull requests that were remembered", async () => {
+    const source = await read("f/factory/poll_prs.ts");
+    expect(source).toContain(
+      "team_remembered: discovered.stats.team_remembered,",
+    );
   });
 
   test("no longer reports a source of the round", async () => {
