@@ -7188,6 +7188,72 @@ execPsql(
   DELETE FROM factory.gh_issues WHERE owner = '${GH_STALE_OWNER}';
   DELETE FROM factory.gh_repos WHERE owner = '${GH_STALE_OWNER}'`,
 );
+// first_seen_at: 対象外(gone、allowedが偽)から対象に戻ったときだけ now() に戻し、それ以外は触らない。
+const GH_SEEN_OWNER = "qdbghr";
+const ghSeenListed = (repo: string, repoId: number, allowed = true) => ({
+  repo,
+  repo_id: repoId,
+  allowed,
+  default_branch: null,
+  archived: false,
+  open_pr_count: allowed ? 0 : null,
+  labeled_issue_count: allowed ? 0 : null,
+});
+const ghSeenSnapshot = (
+  listed: ReturnType<typeof ghSeenListed>[],
+  gone: { repo: string; reason: "not_listed" | "not_visible" }[] = [],
+) =>
+  replaceGhRepoSnapshot(
+    { owner: GH_SEEN_OWNER, owner_id: 4545, listed, gone },
+    sql,
+  );
+const ghSeenAgeDays = async (repo: string) => {
+  const [row] = await sql`
+    SELECT extract(epoch FROM (now() - first_seen_at)) / 86400 AS days
+    FROM factory.gh_repos WHERE owner = ${GH_SEEN_OWNER} AND repo = ${repo}
+  `.fetch();
+  return Number(row?.days);
+};
+await ghSeenSnapshot([
+  ghSeenListed("kept", 801),
+  ghSeenListed("returned", 802),
+  ghSeenListed("widened", 803, false),
+]);
+execPsql(
+  target,
+  `UPDATE factory.gh_repos SET first_seen_at = now() - interval '7 days' WHERE owner = '${GH_SEEN_OWNER}'`,
+);
+await ghSeenSnapshot(
+  [ghSeenListed("kept", 801), ghSeenListed("widened", 803, false)],
+  [{ repo: "returned", reason: "not_listed" }],
+);
+const ghSeenWhileGone = await ghSeenAgeDays("returned");
+await ghSeenSnapshot([
+  ghSeenListed("kept", 801),
+  ghSeenListed("returned", 802),
+  ghSeenListed("widened", 803, true),
+]);
+check(
+  "gh_repos: first_seen_at is untouched while a repository goes out of scope",
+  ghSeenWhileGone > 6.9,
+  ghSeenWhileGone,
+);
+check(
+  "gh_repos: first_seen_at returns to now when a gone repository is listed again",
+  (await ghSeenAgeDays("returned")) < 0.01,
+);
+check(
+  "gh_repos: first_seen_at returns to now when a repository becomes allowed",
+  (await ghSeenAgeDays("widened")) < 0.01,
+);
+check(
+  "gh_repos: first_seen_at of a repository that stays in scope is untouched",
+  (await ghSeenAgeDays("kept")) > 6.9,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.gh_repos WHERE owner = '${GH_SEEN_OWNER}'`,
+);
 // 収集の鮮度: 成功は`ok`かつ`verified`で終わった行だけ。最新は終わった行、実行中は最新の開始の行だけ。
 const GH_OWNER_E = "qdbghe";
 const GH_OWNER_F = "qdbghf";

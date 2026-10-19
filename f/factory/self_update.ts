@@ -823,6 +823,7 @@ export async function main(): Promise<SelfUpdateResult> {
     try {
       await checkGhCollectFreshness({
         enabled: config.gh_collect_enabled,
+        detailEnabled: true,
         owners: config.owners.map((owner) => owner.name),
         periodicStalled: periodicWorker === "stalled",
         now: () => Date.now(),
@@ -837,6 +838,7 @@ export async function main(): Promise<SelfUpdateResult> {
                 snapshot,
                 owners,
                 staleAfterMs: thresholdMs,
+                settledAfterMs: thresholdMs,
                 isTarget: repoStaleTargetFilter(config),
               }),
             ),

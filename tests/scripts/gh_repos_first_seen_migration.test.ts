@@ -42,6 +42,14 @@ describe("20261019120000_gh_repos_first_seen.up.sql", () => {
     expect(await up()).toMatch(/--.*既存の行/);
   });
 
+  test("states that the column returns to now() when a repository returns to scope", async () => {
+    expect(await up()).toMatch(/--.*now\(\)に戻/);
+  });
+
+  test("states the order of the rollout and the one failed collection it allows", async () => {
+    expect(await up()).toMatch(/--.*sync push[\s\S]*--.*db_error/);
+  });
+
   test("bounds the wait for a lock", async () => {
     expect(await up()).toContain("SET LOCAL lock_timeout = '30s';");
   });

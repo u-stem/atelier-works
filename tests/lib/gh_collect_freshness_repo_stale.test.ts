@@ -80,6 +80,7 @@ function summary(
     targets: 2,
     stale: 0,
     pending: 0,
+    unsettled: 0,
     reasons: {
       no_record: 0,
       unusable: 0,
@@ -93,6 +94,7 @@ function summary(
 
 const STALE_SUMMARY = summary({
   stale: 1,
+  unsettled: 1,
   reasons: {
     no_record: 0,
     unusable: 0,
@@ -111,6 +113,7 @@ type Recorded = {
 
 type Setup = {
   row?: GhCollectFreshnessRow;
+  detailEnabled?: boolean;
   periodicStalled?: boolean;
   summaries?: readonly GhRepoStaleSummary[];
   existingNotices?: { id: number; message: string }[];
@@ -130,6 +133,7 @@ function setup(options: Setup = {}): {
   const owners = options.owners ?? ["acme"];
   const deps: GhCollectFreshnessDeps = {
     enabled: true,
+    detailEnabled: options.detailEnabled ?? true,
     owners,
     periodicStalled: options.periodicStalled ?? false,
     now: () => NOW,
@@ -213,6 +217,14 @@ describe("repo_stale notice text", () => {
     expect(repoStaleNotice("acme").message).toContain("repo_allowlist");
   });
 
+  test("does not claim what the downstream does", () => {
+    expect(repoStaleNotice("acme").message).not.toContain("見送");
+  });
+
+  test("states that the record cannot be used downstream", () => {
+    expect(repoStaleNotice("acme").message).toContain("下流の判断に使えません");
+  });
+
   test("reads the owner back from its own text", () => {
     expect(parseRepoStaleNoticeOwner(repoStaleNotice("acme").message)).toBe(
       "acme",
@@ -255,8 +267,20 @@ describe("repo_stale cause text", () => {
     expect(TEXT).toContain("1件");
   });
 
-  test("states the reason", () => {
-    expect(TEXT).toContain("too_old");
+  test("states the reason in words", () => {
+    expect(TEXT).toContain("最後の収集が古い");
+  });
+
+  test("does not show the reason code", () => {
+    expect(TEXT).not.toContain("too_old");
+  });
+
+  test("does not claim what the downstream does", () => {
+    expect(TEXT).not.toContain("見送");
+  });
+
+  test("states that the record cannot be used downstream", () => {
+    expect(TEXT).toContain("下流の判断に使えません");
   });
 
   test("names the owner", () => {
@@ -399,7 +423,7 @@ describe("checkGhCollectFreshness resolution of repo_stale", () => {
 
   test("keeps the notice while a repository is still within its grace", async () => {
     const { deps, rec } = setup({
-      summaries: [summary({ pending: 1 })],
+      summaries: [summary({ pending: 1, unsettled: 1 })],
       existingNotices: EXISTING_REPO_NOTICE,
     });
     await checkGhCollectFreshness(deps);
@@ -408,7 +432,7 @@ describe("checkGhCollectFreshness resolution of repo_stale", () => {
 
   test("keeps the notice while one of two stale repositories stays stale", async () => {
     const { deps, rec } = setup({
-      summaries: [summary({ targets: 2, stale: 1 })],
+      summaries: [summary({ targets: 2, stale: 1, unsettled: 1 })],
       existingNotices: EXISTING_REPO_NOTICE,
     });
     await checkGhCollectFreshness(deps);
@@ -537,5 +561,128 @@ describe("checkGhCollectFreshness when the repositories cannot be read", () => {
     });
     await checkGhCollectFreshness(deps);
     expect(rec.resolved).not.toContain(repoStaleNoticePrefix("acme"));
+  });
+});
+
+describe("checkGhCollectFreshness with the detail collection disabled", () => {
+  test("adds nothing for stale repositories", async () => {
+    const { deps, rec } = setup({
+      detailEnabled: false,
+      summaries: [STALE_SUMMARY],
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.notices).toEqual([]);
+  });
+
+  test("does not read the repositories", async () => {
+    const { deps, rec } = setup({ detailEnabled: false });
+    await checkGhCollectFreshness(deps);
+    expect(rec.asked).toEqual([]);
+  });
+
+  test("resolves a repo_stale notice that is already up", async () => {
+    const { deps, rec } = setup({
+      detailEnabled: false,
+      existingNotices: EXISTING_REPO_NOTICE,
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.resolved).toContain(repoStaleNoticePrefix("acme"));
+  });
+
+  test("resolves it even while the owner itself is stale", async () => {
+    const { deps, rec } = setup({
+      detailEnabled: false,
+      row: UNAUTHORIZED_ROW,
+      existingNotices: EXISTING_REPO_NOTICE,
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.resolved).toContain(repoStaleNoticePrefix("acme"));
+  });
+
+  test("resolves nothing when no repo_stale notice is up", async () => {
+    const { deps, rec } = setup({ detailEnabled: false });
+    await checkGhCollectFreshness(deps);
+    expect(rec.resolved).toEqual([staleNoticePrefix("acme")]);
+  });
+});
+
+describe("checkGhCollectFreshness hysteresis of repo_stale", () => {
+  /** 通知の閾値は超えていないが、下流が記録を使う閾値は超えている状態。 */
+  const BETWEEN = summary({ unsettled: 1 });
+
+  test("does not resolve between the downstream threshold and the notify threshold", async () => {
+    const { deps, rec } = setup({
+      summaries: [BETWEEN],
+      existingNotices: EXISTING_REPO_NOTICE,
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.resolved).toEqual([staleNoticePrefix("acme")]);
+  });
+
+  test("adds nothing between the thresholds", async () => {
+    const { deps, rec } = setup({ summaries: [BETWEEN] });
+    await checkGhCollectFreshness(deps);
+    expect(rec.notices).toEqual([]);
+  });
+
+  test("keeps one notice through stale, a re-collection, and stale again", async () => {
+    // 27分前(stale)、取り直して20分前(閾値の間)、再び27分前(stale)の列。
+    const sequence = [STALE_SUMMARY, BETWEEN, STALE_SUMMARY];
+    const up = new Set<string>();
+    const sent: string[] = [];
+    let index = 0;
+    const base = setup({
+      existingNotices: [],
+      addNotice: async (record) => {
+        if (up.has(record.message)) return null;
+        up.add(record.message);
+        return 7;
+      },
+      listRepoStale: async () => [sequence[index] ?? summary()],
+    });
+    const deps: GhCollectFreshnessDeps = {
+      ...base.deps,
+      listStaleNotices: async () =>
+        [...up].map((message, id) => ({ id, message })),
+      notify: async (event) => {
+        sent.push(event.kind);
+      },
+    };
+    for (index = 0; index < sequence.length; index += 1) {
+      await checkGhCollectFreshness(deps);
+    }
+    expect([sent.length, [...up].length]).toEqual([1, 1]);
+  });
+
+  test("does not resolve during that sequence", async () => {
+    const sequence = [STALE_SUMMARY, BETWEEN, STALE_SUMMARY];
+    const up = new Set<string>();
+    let index = 0;
+    const base = setup({
+      addNotice: async (record) => {
+        if (up.has(record.message)) return null;
+        up.add(record.message);
+        return 7;
+      },
+      listRepoStale: async () => [sequence[index] ?? summary()],
+    });
+    const deps: GhCollectFreshnessDeps = {
+      ...base.deps,
+      listStaleNotices: async () =>
+        [...up].map((message, id) => ({ id, message })),
+    };
+    for (index = 0; index < sequence.length; index += 1) {
+      await checkGhCollectFreshness(deps);
+    }
+    expect(base.rec.resolved).not.toContain(repoStaleNoticePrefix("acme"));
+  });
+
+  test("resolves once every repository is inside the downstream threshold", async () => {
+    const { deps, rec } = setup({
+      summaries: [summary()],
+      existingNotices: EXISTING_REPO_NOTICE,
+    });
+    await checkGhCollectFreshness(deps);
+    expect(rec.resolved).toContain(repoStaleNoticePrefix("acme"));
   });
 });

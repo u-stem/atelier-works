@@ -94,6 +94,18 @@ describe("self_update gh collect freshness check", () => {
     );
   });
 
+  test("passes the detail collection setting", async () => {
+    expect(callSection(await selfUpdateSource())).toContain(
+      "detailEnabled: config.gh_collect_detail_enabled",
+    );
+  });
+
+  test("settles repositories by the downstream threshold", async () => {
+    expect(callSection(await selfUpdateSource())).toMatch(
+      /settledAfterMs: ghDetailStaleAfterMs\(owners\.length\)/,
+    );
+  });
+
   test("reads the repositories inside the check", async () => {
     expect(callSection(await selfUpdateSource())).toContain(
       "listGhRepoStaleSnapshot(",

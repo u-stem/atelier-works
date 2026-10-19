@@ -408,6 +408,8 @@ export function summarizeRepoStale(input: {
   readonly snapshot: GhRepoStaleSnapshot;
   readonly owners: readonly string[];
   readonly staleAfterMs: number;
+  /** 解決の判定に使う、下流が記録を使う閾値。`staleAfterMs`以下にする。 */
+  readonly settledAfterMs: number;
   readonly isTarget: (owner: string, repo: string) => boolean;
 }): GhRepoStaleSummary[] {
   const { snapshot, staleAfterMs, isTarget } = input;
@@ -446,7 +448,7 @@ export function summarizeRepoStale(input: {
       stale += 1;
       reasons[freshness.reason] += 1;
     }
-    return { owner, targets, stale, pending, reasons };
+    return { owner, targets, stale, pending, unsettled: 0, reasons };
   });
 }
 

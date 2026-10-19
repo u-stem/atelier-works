@@ -18,6 +18,8 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 const DB_NOW = new Date("2026-10-19T00:00:00.000Z");
 /** 所有者が2人までの通知の閾値。 */
 const THRESHOLD_MS = 25 * MINUTE_MS;
+/** 所有者が2人までの、下流が記録を使う閾値。 */
+const SETTLED_MS = 15 * MINUTE_MS;
 const REPO_ID = 4242;
 const NO_REASONS: GhRepoStaleReasonCounts = {
   no_record: 0,
@@ -71,6 +73,7 @@ function summarize(
     snapshot: { db_now: DB_NOW, probes },
     owners: options.owners ?? ["acme"],
     staleAfterMs: THRESHOLD_MS,
+    settledAfterMs: SETTLED_MS,
     isTarget: options.isTarget ?? (() => true),
   });
 }
@@ -78,13 +81,27 @@ function summarize(
 describe("summarizeRepoStale", () => {
   test("counts a fresh repository as a target that is not stale", () => {
     expect(summarize([probe()])).toEqual([
-      { owner: "acme", targets: 1, stale: 0, pending: 0, reasons: NO_REASONS },
+      {
+        owner: "acme",
+        targets: 1,
+        stale: 0,
+        pending: 0,
+        unsettled: 0,
+        reasons: NO_REASONS,
+      },
     ]);
   });
 
   test("returns an entry for an owner without repositories", () => {
     expect(summarize([], { owners: ["acme"] })).toEqual([
-      { owner: "acme", targets: 0, stale: 0, pending: 0, reasons: NO_REASONS },
+      {
+        owner: "acme",
+        targets: 0,
+        stale: 0,
+        pending: 0,
+        unsettled: 0,
+        reasons: NO_REASONS,
+      },
     ]);
   });
 
@@ -194,6 +211,42 @@ describe("summarizeRepoStale reasons", () => {
         }),
       ])[0]?.stale,
     ).toBe(1);
+  });
+});
+
+describe("summarizeRepoStale unsettled", () => {
+  const collectedAgo = (ms: number) =>
+    probe({ row: repoRow({ last_collected_at: ago(ms) }) });
+
+  test("counts nothing for a repository inside the downstream threshold", () => {
+    expect(summarize([collectedAgo(10 * MINUTE_MS)])[0]?.unsettled).toBe(0);
+  });
+
+  test("treats a collection exactly at the downstream threshold as settled", () => {
+    expect(summarize([collectedAgo(SETTLED_MS)])[0]?.unsettled).toBe(0);
+  });
+
+  test("counts a repository between the downstream and the notify threshold", () => {
+    expect(summarize([collectedAgo(20 * MINUTE_MS)])[0]?.unsettled).toBe(1);
+  });
+
+  test("does not count a repository between the thresholds as stale", () => {
+    expect(summarize([collectedAgo(20 * MINUTE_MS)])[0]?.stale).toBe(0);
+  });
+
+  test("counts a stale repository as unsettled", () => {
+    expect(summarize([collectedAgo(DAY_MS)])[0]?.unsettled).toBe(1);
+  });
+
+  test("counts a repository within its grace as unsettled", () => {
+    const first_seen_at = ago(MINUTE_MS);
+    const row = repoRow({ last_collected_at: null });
+    expect(summarize([probe({ row, first_seen_at })])[0]?.unsettled).toBe(1);
+  });
+
+  test("does not count a gone repository as unsettled", () => {
+    const row = repoRow({ gone: true, last_collected_at: null });
+    expect(summarize([probe({ row })])[0]?.unsettled).toBe(0);
   });
 });
 

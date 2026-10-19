@@ -1116,6 +1116,8 @@ export type GhRepoStaleSummary = {
   readonly stale: number;
   /** 非`fresh`だが、猶予の間のリポジトリの数。 */
   readonly pending: number;
+  /** 下流が記録を使う閾値(`settledAfterMs`)で非`fresh`のリポジトリの数。猶予の間のものも含む。解決は0件のときだけ行う。 */
+  readonly unsettled: number;
   /** `stale`の理由ごとの件数。 */
   readonly reasons: GhRepoStaleReasonCounts;
 };

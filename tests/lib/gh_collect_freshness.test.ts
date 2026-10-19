@@ -526,6 +526,7 @@ function setup(options: Setup = {}): {
       : options.state;
   const deps: GhCollectFreshnessDeps = {
     enabled: options.enabled ?? true,
+    detailEnabled: true,
     owners,
     periodicStalled: options.periodicStalled ?? false,
     now: () => NOW,

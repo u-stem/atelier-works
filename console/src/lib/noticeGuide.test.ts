@@ -38,6 +38,16 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("does not claim what the downstream does with a stale repository", () => {
+    expect(noticeGuide("github_collect_stale").meaning).not.toContain("見送");
+  });
+
+  test("states that a stale record cannot be used downstream", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "下流の判断に使えません",
+    );
+  });
+
   test("tells to narrow the repositories for a stale repository", () => {
     expect(noticeGuide("github_collect_stale").action).toContain(
       "repo_allowlist",

@@ -413,6 +413,8 @@ export type GhCollectFreshnessCheck = "checked" | "unknown";
 export type GhCollectFreshnessDeps = {
   /** 設定の`gh_collect_enabled`。 */
   readonly enabled: boolean;
+  /** 設定の`gh_collect_detail_enabled`。偽の間は詳細を集めないので、リポジトリ単位の古さを数えない。 */
+  readonly detailEnabled: boolean;
   /** 設定の`owners`の名前。 */
   readonly owners: readonly string[];
   /** この回に定期ジョブ用workerの停止を検知したか。真の間は新しいnoticeを足さない。 */
