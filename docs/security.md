@@ -2716,8 +2716,6 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
   - `wmill sync pull --include-key`はワークスペースの暗号鍵を出す
   - `wmill variable get`
   - `wmill sync pull --include-secrets --plain-secrets`
-  - `wmill sync pull --include-key`
-  - `wmill instance get-config --show-secrets`
   - `wmill trash get`
   - フックに判定は無く、値が会話に出るかは確かめていない
   - CLIのプロファイルのトークンで復号されて返るなら、値が会話に出る
