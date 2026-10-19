@@ -47,6 +47,7 @@ declare namespace RT {
     dependabot_enabled: boolean,
     dependabot_merge_enabled: boolean,
     dependabot_group_enabled: boolean,
+    dependabot_other_repos: string[],
     dependabot_min_published_days: number,
     pr_ci_watch_enabled: boolean,
     pr_ci_watch_human_prs: boolean,

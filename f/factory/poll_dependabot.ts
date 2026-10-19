@@ -39,6 +39,7 @@ import {
   type GateCommon,
   type GateTargetFacts,
   isPublishedLongEnough,
+  resolveRepoPolicy,
 } from "./lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import {
@@ -858,11 +859,16 @@ export async function pollDependabot(
   const { deps } = session;
   counts.failed += session.ownersFailed;
 
-  const { targets, invalid } = listMainCiTargets({
+  const listed = listMainCiTargets({
     owners: [...session.verifiedOwners],
     repo_allowlist: config.repo_allowlist,
     factory_repo: config.factory_repo,
   });
+  const { invalid } = listed;
+  // Factory自身のほかは、dependabot_other_repos に名前を挙げたものだけを見る。
+  const targets = listed.targets.filter(
+    (target) => resolveRepoPolicy(config, target.owner, target.repo) !== "off",
+  );
   if (invalid.length > 0) {
     // URLに認証情報が埋め込まれていることがあるので、値は載せない。
     session.warn(

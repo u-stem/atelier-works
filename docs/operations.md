@@ -2545,7 +2545,7 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 ## dependabotの更新を設定する
 
 dependabotが開いた依存の更新PRを、Factoryが評価して自動でマージできる。
-`f/factory/factory_config`の次の5つの項目で設定する。
+`f/factory/factory_config`の次の6つの項目で設定する。
 `factory_config`は同期の対象外なので、WindmillのResourcesの編集画面で直す。
 
 | 項目 | 既定値 | 意味 |
@@ -2553,6 +2553,7 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 | `dependabot_enabled` | `false` | dependabotのPRを自動で処理するか |
 | `dependabot_merge_enabled` | `false` | マージしてよいと判断したPRを、実際にマージするか。偽の間は試運転で、そのPRを人に回す |
 | `dependabot_group_enabled` | `false` | 複数のパッケージを上げるグループ更新のPRを、2〜3つまで対象にするか。偽の間は、人に回す |
+| `dependabot_other_repos` | `[]` | `factory_repo`のほかに、dependabotの自動処理の候補にするリポジトリ。`<owner>/<repo>`の形で書く |
 | `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
 | `gh_source_dependabot` | `search` | 候補のPRを列挙する元。`search`は検索、`db`は収集の表。切り替えの手順は[候補の元を表に切り替える](#候補の元を表に切り替える) |
 
@@ -2560,10 +2561,30 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
 既存のリソースにこれらの項目が無くても、既定値で動く。
 
-対象は、`factory_repo`と`repo_allowlist`のリポジトリである。
-`repo_allowlist`の項目は、`owners`の照合を通ったオーナーのものだけが対象になる。
-`repo_allowlist`が空のときは`factory_repo`だけを見る。`poll_prs`のように、オーナーの全リポジトリは見ない。
-対象のリポジトリを足すときは、そのリポジトリの`main`のrulesetと必須チェックの名前が、[マージする条件](security.md#マージする条件)の7件と同じかを確かめる。
+対象は、`factory_repo`と、`dependabot_other_repos`に挙げたリポジトリである。
+`dependabot_other_repos`の項目は、`<owner>/<repo>`の形で、末尾に拡張子を付けない。
+リポジトリは、`repo_allowlist`にも載せ、`owners`の照合を通す必要がある。
+どちらかを欠くと、そのリポジトリは黙って対象から外れる。
+`dependabot_other_repos`が空のときは`factory_repo`だけを見る。`poll_prs`のように、オーナーの全リポジトリは見ない。
+`repo_allowlist`にだけ載せたリポジトリは、dependabotの対象にならない。
+この変更の反映前に、`repo_allowlist`の他リポジトリを処理していた環境に注意する。
+反映の後は、`dependabot_other_repos`に挙げるまで、そのリポジトリのdependabotのPRを処理せず、通知も出ない。
+
+他のリポジトリの必須チェックは、設定に書かない。
+そのリポジトリの`main`のrulesetが課す必須チェックを、収集のたびに読んで使う。
+dependabotの対象は、baseが`main`のPRに限る。
+次の場合は、人に回る。
+
+- rulesetに必須チェックが無い。古典的なブランチ保護だけを使うリポジトリは、これに当たる。
+- 必須チェックが、GitHub Actions以外のAppに結ばれている。
+
+試運転に使うリポジトリは、ルートに`package.json`と`bun.lock`を持つ必要がある。
+それ以外のファイルを変えるPRは、ゲートで人に回り、準備の理由まで届かない。
+挙げたリポジトリのPRも、今は準備のステップで人に回る。
+新しいheadのたびに通知が出るので、確かめた後は一覧から外す。
+そのリポジトリのコマンド(インストールを含む)を、workerで動かさないためである。
+この間は、ゲートまで通ったことを、人に回った理由(`dependabot prepare:`)で確かめるために使う。
+`factory_repo`の必須チェックは、今までどおり固定の7件で、設定に左右されない。
 
 マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
 

@@ -49,6 +49,7 @@ import {
   isFactoryPost,
   isOwnPost,
   LabelerCheckLimitError,
+  listBranchRules,
   listIssueComments,
   listOpenPullRequests,
   listPrChecks,
@@ -5174,6 +5175,59 @@ describe("getBranchRuleCount", () => {
         "main",
       ),
     ).rejects.toThrow("unexpected response shape");
+  });
+});
+
+describe("listBranchRules", () => {
+  test("returns the rules that apply to the branch as they are", async () => {
+    const rules = [{ type: "deletion" }, { type: "pull_request", extra: 1 }];
+    const fake = createFakeCommandRunner([ghApiOk(rules)]);
+    const result = await listBranchRules(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(result).toEqual(rules);
+  });
+
+  test("encodes the branch name in the endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await listBranchRules(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(fake.calls[0]?.argv[2]).toContain(
+      "repos/acme/widgets/rules/branches/feature%2Fx",
+    );
+  });
+
+  test("throws GitHubHttpError when the API answers 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      listBranchRules(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "main",
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("throws GitHubResponseError when the response is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ message: "x" })]);
+    await expect(
+      listBranchRules(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "main",
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 });
 

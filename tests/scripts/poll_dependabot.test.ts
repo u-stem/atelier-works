@@ -1690,6 +1690,8 @@ const CONFIG = parseFactoryConfig({
   instance_name: "test",
   factory_repo: "https://github.com/acme/widgets.git",
   dependabot_enabled: true,
+  // 他のリポジトリは、名前を挙げたものだけが対象になる。以降の試験が使う名前を挙げておく。
+  dependabot_other_repos: ["acme/gadgets", "mallory/gadgets"],
 });
 
 type RoundLog = {
@@ -1836,6 +1838,50 @@ describe("pollDependabot", () => {
     const log = emptyLog();
 
     await pollDependabot(round(log));
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+    ]);
+  });
+
+  test("keeps the factory repository with the default settings", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...CONFIG, dependabot_other_repos: [] } }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+    ]);
+  });
+
+  test("does not search an allowlisted repository that dependabot_other_repos does not name", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...CONFIG,
+          dependabot_other_repos: [],
+          repo_allowlist: ["https://github.com/acme/gadgets"],
+        },
+      }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+    ]);
+  });
+
+  test("does not search a repository named only in dependabot_other_repos", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...CONFIG, dependabot_other_repos: ["acme/gadgets"] },
+      }),
+    );
 
     expect(log.searched).toEqual([
       { kind: "repo", owner: "acme", repo: "widgets" },

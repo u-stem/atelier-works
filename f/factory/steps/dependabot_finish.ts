@@ -18,8 +18,13 @@ import {
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   dependabotReason,
   fenceUntrustedBlock,
+  OTHER_REPO_UNSUPPORTED_REASON,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
+import {
+  type RepoPolicy,
+  resolveRepoPolicy,
+} from "../lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   addLabels,
@@ -341,6 +346,11 @@ export type DependabotFinishRunInput = {
   readonly enabled: boolean;
   /** `factory_config`の`dependabot_merge_enabled`。偽なら、マージの結論でもマージせずに人に回す(試運転)。 */
   readonly mergeEnabled: boolean;
+  /**
+   * このリポジトリの扱い。`primary`以外は、PRを読み直す前、書き込みの前に人に回す。
+   * 他のリポジトリは準備で止まるので、ここに届くのは準備と設定が食い違ったときだけである。
+   */
+  readonly repoPolicy: RepoPolicy;
 };
 
 /** このステップの戻り値。 */
@@ -501,6 +511,11 @@ export async function runDependabotFinish(
   if (!run.enabled) return cancel(DEPENDABOT_CANCEL_NOTE.disabled);
 
   if (input.kind === "needs_human") return toHuman(input.reason);
+
+  // 他のリポジトリには、マージも所見の投稿もラベルの付与もしない。
+  if (run.repoPolicy !== "primary") {
+    return toHuman(dependabotReason("finish", OTHER_REPO_UNSUPPORTED_REASON));
+  }
 
   /** GitHubに書く前にPRを読み直す。書いてよければ`null`、止めるときはその結果を返す。 */
   const recheck = async (): Promise<DependabotFinishResult | null> => {
@@ -808,6 +823,10 @@ export async function main(
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
+  // 作業項目を読めないときは、本体が先に失敗する。ここでは書き込ませない側の`off`にする。
+  const item = await getWorkItem(work_item_id);
+  const repoPolicy: RepoPolicy =
+    item === null ? "off" : resolveRepoPolicy(config, item.owner, item.repo);
   return runDependabotFinish(
     {
       getWorkItem: (id) => getWorkItem(id),
@@ -868,6 +887,7 @@ export async function main(
       fixLabel: config.fix_label,
       enabled: config.dependabot_enabled,
       mergeEnabled: config.dependabot_merge_enabled,
+      repoPolicy,
     },
   );
 }

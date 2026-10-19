@@ -21,6 +21,7 @@ import {
   GITHUB_ACTIONS_APP_ID,
   MANIFEST_LOCKFILES,
   REQUIRED_CHECKS,
+  type RepoPolicy,
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
   type GhClient,
@@ -616,6 +617,11 @@ function facts(overrides: Partial<RegistryFacts> = {}): RegistryFacts {
   };
 }
 
+const BUILD_RULE = {
+  type: "required_status_checks",
+  parameters: { required_status_checks: [{ context: "build" }] },
+};
+
 type Setup = {
   prs?: PullRequest[];
   changed?: { filename: string; previousFilename?: string | null }[];
@@ -624,6 +630,10 @@ type Setup = {
   registry?: (name: string, from: string, to: string) => Promise<RegistryFacts>;
   /** グループの更新を許すか。既定は偽。 */
   allowGroups?: boolean;
+  /** リポジトリの扱い。既定は`primary`。 */
+  policy?: RepoPolicy;
+  /** ブランチのルールの読み取り。既定は、必須checkが`build`1件のルール。 */
+  rules?: () => Promise<unknown[]>;
   compare?: () => Promise<{
     mergeBaseSha: string;
     files: {
@@ -647,6 +657,7 @@ type Calls = {
   branch: string[];
   files: { path: string; ref: string }[];
   checks: string[];
+  rules: { owner: string; repo: string; branch: string }[];
   registry: { name: string; from: string; to: string }[];
   /** registryの読み取りが同時に走った最大の数。 */
   registryMaxInFlight: number;
@@ -659,6 +670,7 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
     branch: [],
     files: [],
     checks: [],
+    rules: [],
     registry: [],
     registryMaxInFlight: 0,
   };
@@ -741,6 +753,12 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
     minPublishedDays: 7,
     expectedBaseRef: "main",
     allowGroups: options.allowGroups ?? false,
+    repoPolicy: () => options.policy ?? "primary",
+    listBranchRules: async (owner, repo, branch) => {
+      calls.rules.push({ owner, repo, branch });
+      if (options.rules !== undefined) return options.rules();
+      return [BUILD_RULE];
+    },
   };
   return { deps, calls };
 }
@@ -1804,6 +1822,7 @@ function depsWith(
     run?: GhClient["run"];
     days?: number;
     group?: boolean;
+    others?: string[];
     fetchImpl?: FetchLike;
     now?: () => number;
   } = {},
@@ -1819,6 +1838,8 @@ function depsWith(
     config: {
       dependabot_min_published_days: overrides.days ?? 7,
       dependabot_group_enabled: overrides.group ?? false,
+      factory_repo: "https://github.com/acme/factory",
+      dependabot_other_repos: overrides.others ?? [],
     },
     fetchImpl: overrides.fetchImpl ?? neverFetch(),
     now: overrides.now ?? (() => NOW),
@@ -1834,9 +1855,220 @@ async function firstGhArgv(
   return fake.calls[0]?.argv ?? [];
 }
 
+const BUILD_CHECK = {
+  name: "build",
+  appId: GITHUB_ACTIONS_APP_ID,
+  conclusion: "success",
+};
+
+describe("collectGateInput repository policy", () => {
+  test("does not read the branch rules for the primary repository", async () => {
+    const { deps, calls } = setup({ policy: "primary" });
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.rules).toEqual([]);
+  });
+
+  test("uses the fixed required checks for the primary repository", async () => {
+    const result = await readyResult({ policy: "primary" });
+
+    expect(result.common.requiredChecks).toEqual(REQUIRED_CHECKS);
+  });
+
+  test("reads the rules of the base branch for another repository", async () => {
+    const { deps, calls } = setup({ policy: "other", checks: [BUILD_CHECK] });
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.rules).toEqual([
+      { owner: "acme", repo: "widgets", branch: "main" },
+    ]);
+  });
+
+  test("takes the required checks of another repository from the rules", async () => {
+    const result = await readyResult({
+      policy: "other",
+      checks: [BUILD_CHECK],
+    });
+
+    expect(result.common.requiredChecks).toEqual(["build"]);
+  });
+
+  test("hands another repository to a person when the rules require no check", async () => {
+    const result = await collectGateInput(
+      setup({ policy: "other", rules: async () => [{ type: "deletion" }] })
+        .deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "the base branch has no required status check",
+    });
+  });
+
+  test("hands another repository to a person when a check is bound to another app", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => [
+          {
+            type: "required_status_checks",
+            parameters: {
+              required_status_checks: [{ context: "build", integration_id: 7 }],
+            },
+          },
+        ],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("needs_human");
+  });
+
+  test("keeps rule values out of the reason", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => [
+          {
+            type: "required_status_checks",
+            parameters: { required_status_checks: [{ context: "evil\nname" }] },
+          },
+        ],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(
+      result.kind === "needs_human" && result.reason.includes("evil"),
+    ).toBe(false);
+  });
+
+  test("hands another repository to a person when the rules answer 404", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => {
+          throw new GitHubHttpError("GET rules failed", 404);
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "the branch rules could not be read from GitHub",
+    });
+  });
+
+  test("hands another repository to a person when the rules answer 403", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => {
+          throw new GitHubHttpError("GET rules failed", 403);
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("needs_human");
+  });
+
+  test("waits when the rules answer 500", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => {
+          throw new GitHubHttpError("GET rules failed", 500);
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
+  test("hands another repository to a person when the rules have an unexpected shape", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        rules: async () => {
+          throw new GitHubResponseError("GET rules: unexpected response shape");
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("needs_human");
+  });
+
+  test("hands another repository to a person when the base repository was renamed", async () => {
+    const result = await collectGateInput(
+      setup({
+        policy: "other",
+        checks: [BUILD_CHECK],
+        prs: [pullRequest({ baseRepoFullName: "acme/moved" })],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "the base repository differs from the requested one",
+    });
+  });
+
+  test("hands a repository that is off to a person without reading the rules", async () => {
+    const { deps, calls } = setup({ policy: "off" });
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.rules).toEqual([]);
+  });
+
+  test("reports that dependabot is not enabled for a repository that is off", async () => {
+    const result = await collectGateInput(
+      setup({ policy: "off" }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "dependabot is not enabled for this repository",
+    });
+  });
+});
+
 describe("buildCollectDeps", () => {
   afterEach(() => {
     mock.restore();
+  });
+
+  test("resolves the factory repository as primary", () => {
+    expect(depsWith().repoPolicy("acme", "factory")).toBe("primary");
+  });
+
+  test("resolves a listed repository as other", () => {
+    expect(
+      depsWith({ others: ["acme/widgets"] }).repoPolicy("acme", "widgets"),
+    ).toBe("other");
+  });
+
+  test("resolves an unlisted repository as off", () => {
+    expect(depsWith().repoPolicy("acme", "widgets")).toBe("off");
+  });
+
+  test("binds listBranchRules to the rules endpoint", async () => {
+    const argv = await firstGhArgv((deps) =>
+      deps.listBranchRules("acme", "widgets", "main"),
+    );
+
+    expect(argv).toContain(
+      "repos/acme/widgets/rules/branches/main?per_page=100",
+    );
   });
 
   test("binds getPr to the client and puts the client first", async () => {

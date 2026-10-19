@@ -672,6 +672,7 @@ async function chainOutcome(
       },
       dependabotEnabled: true,
       groupEnabled: false,
+      repoPolicy: "primary",
       instanceName: "test",
     }),
   );

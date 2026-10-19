@@ -27,6 +27,9 @@ import {
   MANIFEST_LOCKFILES,
   MAX_GROUP_TARGETS,
   REQUIRED_CHECKS,
+  type RepoPolicy,
+  requiredChecksFromRules,
+  resolveRepoPolicy,
   type UpdateKind,
 } from "./dependabot_support.ts";
 import {
@@ -40,6 +43,7 @@ import {
   getBranchSha,
   getFileAtRef,
   getPr,
+  listBranchRules,
   listPrChecks,
   type PullRequest,
 } from "./github.ts";
@@ -289,6 +293,14 @@ export type CollectDeps = {
   expectedBaseRef: string;
   /** 複数のパッケージが同時に更新されるPR(グループの更新)を対象にするか。 */
   allowGroups: boolean;
+  /** リポジトリの扱い。`factory_repo`が`primary`、設定が名前を挙げたリポジトリだけが`other`になる。 */
+  repoPolicy: (owner: string, repo: string) => RepoPolicy;
+  /** ブランチに効くルールを、解釈せずに読む。 */
+  listBranchRules: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => Promise<unknown[]>;
 };
 
 /** 影響調査に渡す、パッケージごとの事実。`targets`と同じ順で並ぶ。 */
@@ -342,7 +354,10 @@ export function buildCollectDeps(args: {
   client: GhClient;
   config: Pick<
     FactoryConfig,
-    "dependabot_min_published_days" | "dependabot_group_enabled"
+    | "dependabot_min_published_days"
+    | "dependabot_group_enabled"
+    | "dependabot_other_repos"
+    | "factory_repo"
   >;
   fetchImpl: FetchLike;
   now: () => number;
@@ -364,6 +379,9 @@ export function buildCollectDeps(args: {
     minPublishedDays: config.dependabot_min_published_days,
     expectedBaseRef: "main",
     allowGroups: config.dependabot_group_enabled,
+    repoPolicy: (owner, repo) => resolveRepoPolicy(config, owner, repo),
+    listBranchRules: (owner, repo, branch) =>
+      listBranchRules(client, owner, repo, branch),
   };
 }
 
@@ -460,6 +478,47 @@ async function readRegistryFacts(
   }
 }
 
+/**
+ * 他のリポジトリの必須checkを、baseのブランチに効くGitHubのルールから導く。
+ * 設定は名前を持たないので、設定を書き換えても、リポジトリ自身のルールより弱い一覧にはならない。
+ * 理由は固定の文言で、GitHub由来の値を載せない。
+ * 4xxは待っても読めないので人に回し、レート制限と5xxは呼び出し側の`toStop`が待ちにする。
+ */
+async function readRequiredChecks(
+  deps: CollectDeps,
+  pr: { owner: string; repo: string },
+  first: PullRequest,
+): Promise<readonly string[]> {
+  if (
+    first.baseRepoFullName.toLowerCase() !==
+    `${pr.owner}/${pr.repo}`.toLowerCase()
+  ) {
+    throw new Stop(
+      "needs_human",
+      "the base repository differs from the requested one",
+    );
+  }
+  let rules: unknown[];
+  try {
+    rules = await deps.listBranchRules(pr.owner, pr.repo, first.baseRef);
+  } catch (error) {
+    if (
+      error instanceof GitHubHttpError &&
+      error.status >= 400 &&
+      error.status < 500
+    ) {
+      throw new Stop(
+        "needs_human",
+        "the branch rules could not be read from GitHub",
+      );
+    }
+    throw error;
+  }
+  const derived = requiredChecksFromRules(rules);
+  if (!derived.ok) throw new Stop("needs_human", derived.reason);
+  return derived.checks;
+}
+
 type Gathered = {
   kind: "gathered";
   common: Omit<GateCommon, "mergeable">;
@@ -485,6 +544,17 @@ async function gather(
 ): Promise<Gathered | { kind: "needs_human"; reason: string }> {
   const headSha = first.headSha;
   try {
+    const policy = deps.repoPolicy(pr.owner, pr.repo);
+    if (policy === "off") {
+      throw new Stop(
+        "needs_human",
+        "dependabot is not enabled for this repository",
+      );
+    }
+    const requiredChecks: readonly string[] =
+      policy === "primary"
+        ? REQUIRED_CHECKS
+        : await readRequiredChecks(deps, pr, first);
     const comparison = await deps.compareCommits(
       pr.owner,
       pr.repo,
@@ -556,7 +626,7 @@ async function gather(
         baseRepoFullName: first.baseRepoFullName,
         commits: comparison.commits,
         checks,
-        requiredChecks: REQUIRED_CHECKS,
+        requiredChecks,
         update: derived.targets.reduce<UpdateKind>(
           (heaviest, target) => heavier(heaviest, target.update),
           "patch",

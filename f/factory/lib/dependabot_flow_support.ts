@@ -935,3 +935,11 @@ export function dependabotReason(
   const body = escapeReasonSeparator(clipped);
   return `${DEPENDABOT_REASON_PREFIX[kind]}${body === "" ? "no detail" : body}`;
 }
+
+/**
+ * 他のリポジトリを、cloneもインストールもせずに人に回すときの理由。
+ * 影響調査の入力の変更履歴は、インストールした依存から読む。
+ * そのリポジトリのコマンドをworkerで動かさない方針では、この入力を確かめられないので、自動の経路を作らない。
+ */
+export const OTHER_REPO_UNSUPPORTED_REASON =
+  "analysis without running repository commands is not implemented for this repository";
