@@ -1069,11 +1069,20 @@ type HumanRun = {
   stoppedByTime: boolean;
 };
 
-/** 時間の予算で止めたことを、1回の発見で1度だけログに残す。 */
+/** 時間の予算で止めた段。候補を集める段(表と一覧の読み取り)と、候補のPRを読み直す段である。 */
+type HumanStage = "collect_candidates" | "read_prs";
+
+/** 時間の予算で止めたことを、段ごとに1回の発見で1度だけログに残す。 */
 function noteStoppedByTime(context: Context, run: HumanRun): void {
   if (run.stoppedByTime) return;
   run.stoppedByTime = true;
-  context.deps.log.warn("pr ci human discovery stopped by the time budget");
+  warnStoppedByTime(context, "collect_candidates");
+}
+
+function warnStoppedByTime(context: Context, stage: HumanStage): void {
+  context.deps.log.warn("pr ci human discovery stopped by the time budget", {
+    stage,
+  });
 }
 
 /**
@@ -1374,10 +1383,21 @@ async function discoverHuman(context: Context): Promise<void> {
   const seen = new Set<string>();
   let reads = 0;
   let added = 0;
-  for (const hit of ordered) {
+  // 時間の予算かrate limitで読み残した候補を、読み残した数に足す。
+  // 数と上限で読まなかった候補は、意図した上限なので足さない。重ねと追跡中のPRは、読まない候補なので足さない。
+  const leftUnread = (from: number): void => {
+    const unread = new Set<string>();
+    for (const rest of ordered.slice(from)) {
+      const key = pullRequestKey(rest);
+      if (!seen.has(key) && !trackedPrKeys.has(key)) unread.add(key);
+    }
+    context.counters.human_deferred += unread.size;
+  };
+  for (const [index, hit] of ordered.entries()) {
     if (added >= HUMAN_PR_LIMIT || reads >= HUMAN_PR_READ_LIMIT) break;
     if (state.rateLimited || outOfTime()) {
-      deps.log.warn("pr ci human discovery stopped by the time budget");
+      warnStoppedByTime(context, "read_prs");
+      leftUnread(index);
       break;
     }
     const ref: PullRequestRef = {
@@ -1425,8 +1445,12 @@ async function discoverHuman(context: Context): Promise<void> {
     } catch (err) {
       if (err instanceof GitHubRateLimitError) {
         deps.log.warn("pr ci human discovery stopped by the rate limit", {
+          stage: "read_prs",
           error: errorMessage(err),
         });
+        // 読もうとして拒まれた候補も、読み残した数に入れる。
+        seen.delete(key);
+        leftUnread(index);
         break;
       }
       // 収集の読み取りトークンに見えて、書き込みのPATに見えないリポジトリがありうる。

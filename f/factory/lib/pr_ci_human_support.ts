@@ -130,7 +130,7 @@ export function humanPrCandidatesFromRows(
  * - 作者のログイン名(大文字小文字を区別しない)が`authors`に入る要素。
  * - 作者のログイン名が無い要素。候補を広げる側に扱い、`getPr`の作者で確かめる。
  * 一覧はアカウントの種別を持たないので、種別は`getPr`の応答で確かめる。
- * 一覧は更新の時刻を持たないので、`updatedAtMs`には作成の時刻を入れる。読めないときは0にして、並びで末尾に回す。
+ * `updatedAtMs`には一覧の更新の時刻を入れる。読めないときは作成の時刻を使い、それも読めないときは0にして、並びで末尾に回す。
  * 名前は、一覧を求めたリポジトリの綴りで作る。
  */
 export function humanPrCandidatesFromOpenList(
@@ -154,7 +154,7 @@ export function humanPrCandidatesFromOpenList(
       owner,
       repo,
       number: entry.number,
-      updatedAtMs: entry.createdAtMs ?? 0,
+      updatedAtMs: entry.updatedAtMs ?? entry.createdAtMs ?? 0,
       authorUnknown,
     });
   }

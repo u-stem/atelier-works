@@ -70,7 +70,7 @@ locks:
   f/factory/lib/gh_collect_read: 2a2b1ed3d9378c1a96e0e69ac48a650319aad6bc5f420de49390aa3df6385498
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
   f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
-  f/factory/lib/github: 0f116b794226f5742e0f11b58c7ccfe0e7471817e669bde66d971f9c2fb69998
+  f/factory/lib/github: 1bec308a30751ff2702bc3e4bc2db136cb58526f92dcf820ffe1a01d27bae6c2
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
@@ -102,10 +102,10 @@ locks:
   f/factory/lib/poll_support: 76afdaffb8bb1ee30f54d08cbb7eed25d1bd5fa915399f2f1f23f5b428f3e634
   f/factory/lib/pr_ci_fix_claim: 3f34d3752aa2d1dcf8fa0b54f43c095bf6577e709895aeca0d57555351326420
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
-  f/factory/lib/pr_ci_human_support: fc8e35fb0e9e6d55525f8fefa03110c8c27dccefcaac515d69e3913c43b09e74
+  f/factory/lib/pr_ci_human_support: 2157ef0625e623c028617b316415c4739d3b50be99ce77a64bf76a5c410ea94a
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: 77c3ce5973d30509a460864d56f4b7e643c644f27de5d1f0bc86dd8c355e5af6
-  f/factory/lib/pr_ci_watch: 0968c3990e28d01cbd699c9af45701ac5e3f10fb242908b4c096c7be2f4a0e11
+  f/factory/lib/pr_ci_watch: de71db935d589c758ff2327f1fceba78b76672c247579d355f05c72eaad1e5f4
   f/factory/lib/pr_conflict_fix_claim: 83a8e845d21336ef6e7b20662d3b192297bd458ecd46d8aeb047fc47478b514f
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: adaa381f1013323d9fcd27019329d849d7ba525da75bf7a1a0ca3bd5acca74d9

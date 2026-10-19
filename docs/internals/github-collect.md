@@ -932,7 +932,7 @@ Factoryのブランチかと作者は、PRごとに読み直す`getPr`の応答�
 - 作者のログイン名が許可された作者に入る要素。一覧はアカウントの種別を持たないので、種別は読み直した値で確かめる。
 - 作者のログイン名が無い要素。表の行と同じく、候補の並びの末尾に回す。
 
-一覧は更新の時刻を持たないので、候補の並びには作成の時刻を使う。
+候補の並びには、一覧の更新の時刻を使う。応答に更新の時刻が無いときは、作成の時刻を使う。
 forkとFactoryの形のブランチでは絞らない。読み直した値で除くためである。
 
 候補は、`getPrWithoutWait`で読み直す。
@@ -951,7 +951,7 @@ forkとFactoryの形のブランチでは絞らない。読み直した値で除
 | `human_skipped_stale_reasons` | 見送った理由ごとのリポジトリの数。理由は鮮度の判定の語(`unusable`、`not_collected`、`in_future`、`too_old`)である |
 | `human_rest_lists` | 表の代わりにRESTの一覧で読んだ明示リポジトリの数。rate limitで拒まれた一覧も数える |
 | `human_rest_reasons` | 一覧で読んだ理由ごとのリポジトリの数。鮮度の判定の語に、`no_record`、`read_failed`、`collect_disabled`が加わる |
-| `human_deferred` | 時間の予算かrate limitで読み残した所有者とリポジトリの数。次の周回に回る |
+| `human_deferred` | 時間の予算かrate limitで読み残した所有者とリポジトリと、読み直さなかった候補のPRの数。次の周回に回る |
 | `human_table_candidates` | 表から候補にした、作者の分かる候補の数 |
 
 `gh_repos`に行の無い明示でないリポジトリは、表に現れないので、見送りに数えない。
