@@ -21,7 +21,7 @@ import type {
   ViewerTeams,
 } from "./github.ts";
 import { type Logger, maskSecrets } from "./log.ts";
-import type { LabelerPolicy } from "./poll_support.ts";
+import { isAllowedLabeler, type LabelerPolicy } from "./poll_support.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -482,11 +482,13 @@ export type PrCandidateCheck =
  * 2. 閉じていれば`drop`(`closed`)。
  * 3. レビューか修正のラベル、またはPATのアカウントのassigneeがあれば`ok`。
  * 4. PATのアカウントへの依頼があれば`ok`。
- * 5. `viewerTeamIds`があり、依頼されたチームの1つがその中にあれば`ok`。PATのアカウントが属するチームへの依頼である。
+ * 5. `team`があり、作者が許可された人で、依頼されたチームの1つが`team.ids`にあれば`ok`。PATのアカウントが属するチームへの依頼である。
+ *    作者が許可されていなければ、チームへの依頼は見ず、次へ進む。直接の依頼のPRは作者によらず対象になるのと違い、
+ *    チームへの依頼は、外の人が開いたPRにも付くことがあり、レビューの起動の判定(`decidePrActions`)が許可された作者に絞るためである。
  * 6. 依頼先を読めなければ`unknown_reviewers`。決められないまま外すと、依頼で起きるはずのレビューが黙って止まる。
- *    読めないのは、利用者の依頼先か、`viewerTeamIds`があるときのチームの依頼先である。
+ *    読めないのは、利用者の依頼先か、チームへの依頼を見るときのチームの依頼先である。
  * 7. それ以外は`drop`(`not_target`)。
- * `viewerTeamIds`が`null`のときは、チームへの依頼を見ない。その場合、チームへの依頼だけが付いたPRは`not_target`になる。
+ * `team`が`null`のときは、チームへの依頼を見ない。その場合、チームへの依頼だけが付いたPRは`not_target`になる。
  * 項目のownerとrepoは応答の綴りにする。作業項目の綴りをそろえるためである。
  */
 /** チームへの依頼でPATのアカウントに当たるかを見るときの入力。 */
@@ -505,7 +507,10 @@ export function confirmPrCandidate(
   labels: { readonly reviewLabel: string; readonly fixLabel: string },
   team: TeamMatch | null = null,
 ): PrCandidateCheck {
-  const viewerTeamIds = team?.ids ?? null;
+  const viewerTeamIds =
+    team !== null && isAllowedLabeler(pr.authorLogin, team.policy, pr.authorId)
+      ? team.ids
+      : null;
   const repository = asIssue.repository;
   if (
     repository === null ||
@@ -606,8 +611,37 @@ export type CheckedPrStore = {
 };
 
 /** stateに置いた続きの位置を読む。`<owner>/<repo>#<番号>`の形でなければ`null`。 */
-export function parseConfirmCursor(_value: unknown): string | null {
-  return null;
+export function parseConfirmCursor(value: unknown): string | null {
+  return typeof value === "string" && CURSOR_PATTERN.test(value) ? value : null;
+}
+
+/** 続きの位置の形。小文字の`<owner>/<repo>#<番号>`である。 */
+const CURSOR_PATTERN = /^[^/#\s]+\/[^/#\s]+#\d+$/;
+
+/** 続きの位置を、並び順の比較に使う参照に戻す。 */
+function cursorRef(cursor: string): PrRef | null {
+  const match = /^([^/#\s]+)\/([^/#\s]+)#(\d+)$/.exec(cursor);
+  if (match === null) return null;
+  const [, owner, repo, number] = match;
+  if (owner === undefined || repo === undefined || number === undefined) {
+    return null;
+  }
+  return { owner, repo, number: Number(number) };
+}
+
+/**
+ * 確かめる順に並べた候補から、続きの位置より後ろの候補を先頭にして、末尾から先頭へ戻る順にする。
+ * 続きの位置が`null`か、どの候補より後ろなら、並べた順のままにする。
+ */
+function rotateAfter<T extends PrRef>(
+  ordered: readonly T[],
+  cursor: string | null,
+): T[] {
+  const after = cursor === null ? null : cursorRef(cursor);
+  if (after === null) return [...ordered];
+  const start = ordered.findIndex((ref) => compareRefs(ref, after) > 0);
+  if (start < 0) return [...ordered];
+  return [...ordered.slice(start), ...ordered.slice(0, start)];
 }
 
 /** 覚えの鍵。PRと、確かめたときのheadのコミットで決まる。headが動いたPRは覚えに当たらない。 */
@@ -682,18 +716,20 @@ function compareRefs(a: PrRef, b: PrRef): number {
  * 返す項目の並びは、所有者ごとに、表の候補を(リポジトリ、番号)の順に置き、続けて一覧の候補を置く。PRの鍵(小文字)で重ねを除く。
  * 失敗はこの関数の中で記録し、件数を`failed`で返す。
  *
- * チーム宛ての依頼は、PATのアカウントが属するチームの数値IDと、PRの依頼先のチームの数値IDで照合する。
- * - チームの照合が要る行(`team`に分類され、チームへの依頼が偽と分かっていない行)が1件でもあれば、周回で1回だけ`getViewerTeams`を呼ぶ。
- *   個人の所有者にチーム宛ての依頼は起きないので、そのような行が無ければ呼ばない。
- * - 組織の所有者で、読めなかったとき、またはその組織のチームが1件も返らないときは、その組織のチームを使えない。
+ * チーム宛ての依頼は、組織の所有者のPRだけ、PATのアカウントが属するチームの数値IDと、PRの依頼先のチームの数値IDで照合する。
+ * 個人の所有者にチーム宛ての依頼は起きないので、個人の所有者の行は、直接の依頼だけで判定し、`getViewerTeams`もstateも使わない。
+ * - 組織の所有者の、覚えていない、チームへの依頼が偽と分かっていない`team`の行が1件でもある周回だけ、`getViewerTeams`を1回呼ぶ。
+ * - 読めなかったとき、またはその組織のチームが1件も返らないときは、その組織のチームを使えない。
  *   その組織ごとに、固定の文の失敗を1件記録する。
  *   チームを使えない間は、チーム宛ての依頼だけが付いた行を確かめずに見送って`team_unresolved`に数え、
  *   ほかの行は直接の依頼だけをRESTで確かめる。直接の依頼でなければ、見送って`team_unresolved`に数える。
- * - チームを使えるときは、直接の依頼かチームへの依頼のどちらかがPATのアカウントに当たれば候補にする。
+ * - チームを使えるときは、直接の依頼か、許可された作者のPRへのチームへの依頼のどちらかがPATのアカウントに当たれば候補にする。
  *   どちらでもなければ、失敗にせず外し、`dropped`に数える。
- * - チームへの依頼の確認は、1周回に`TEAM_CONFIRM_LIMIT`件まで。鍵の昇順に選び、超えた件数を`team_capped`に数える。
- *   チームを使えて確かめた結果が対象でなかったPRは、(リポジトリ、番号、head)と時刻を覚え、期限(`TEAM_CHECK_MEMORY_TTL_MS`)まで確かめない。
- *   これで、上限を超えた分が次の周回以降に確かめられる。覚えた件数は`team_remembered`に数える。
+ * - `team`の行の確認は、1周回に`TEAM_CONFIRM_LIMIT`件まで。前の周回で確かめた最後の候補の鍵より後ろから、
+ *   鍵の昇順に選び、末尾に来たら先頭に戻る。超えた件数を`team_capped`に数える。
+ *   確かめた最後の候補の鍵は、結果によらず次の周回のために保存する。stateを読めないときと、個人の所有者だけの周回は、先頭から選ぶ。
+ * - チームを使えて確かめた結果が対象でなかったPRは、(リポジトリ、番号、head)と時刻を覚え、期限(`TEAM_CHECK_MEMORY_TTL_MS`)まで確かめない。
+ *   覚えた件数は`team_remembered`に数える。
  *   覚えの読み書きの失敗は、覚えていない扱いにして続ける。見つけたPRと、確かめられなかったPRは覚えない。
  */
 export async function discoverPrs(
@@ -869,17 +905,27 @@ export async function discoverPrs(
     }
   }
 
-  // 前の周回で確かめて対象でなかったPRは、期限まで確かめない。
-  // チームの照合が要る行があるときだけ読む。個人の所有者の周回では、stateに触れない。
+  // 組織の所有者の行だけが、チームとstateを使う。
+  const ownerOf = new Map(
+    input.owners.map((owner) => [owner.name.toLowerCase(), owner]),
+  );
+  const isOrg = (ownerName: string): boolean =>
+    ownerOf.get(ownerName.toLowerCase())?.kind === "org";
+
+  // 前の周回で確かめて対象でなかったPRは、期限まで確かめない。続きの位置も、同じstateから読む。
+  // 組織の所有者のチームの確認が要る行があるときだけ読む。
   const nowMs = deps.checkedPrs.nowMs();
   let memory = new Map<string, number>();
   let memoryDirty = false;
+  let cursor: string | null = null;
   let pending = refs;
-  if (refs.some((ref) => ref.teamPossible)) {
+  const usesState = refs.some((ref) => ref.teamRead && isOrg(ref.owner));
+  if (usesState) {
     try {
-      const stored = (await deps.checkedPrs.load()).entries;
-      memory = freshChecks(stored, nowMs);
-      memoryDirty = memory.size !== stored.size;
+      const stored = await deps.checkedPrs.load();
+      memory = freshChecks(stored.entries, nowMs);
+      memoryDirty = memory.size !== stored.entries.size;
+      cursor = stored.cursor;
     } catch (err) {
       input.log.warn("checked pull requests could not be read", {
         error: maskSecrets(err instanceof Error ? err.message : String(err)),
@@ -888,6 +934,7 @@ export async function discoverPrs(
     pending = refs.filter((ref) => {
       const remembered =
         ref.teamPossible &&
+        isOrg(ref.owner) &&
         ref.headSha !== null &&
         memory.has(checkedKey(ref, ref.headSha));
       if (remembered) teamRemembered += 1;
@@ -896,18 +943,13 @@ export async function discoverPrs(
   }
 
   // 組織の所有者は、その組織のチームが1件でも返らなければ、チームを使えない。
-  // 個人の所有者は、チームが無いのが普通なので、読めていれば使える。
   let viewerTeams: ViewerTeams | null = null;
-  const ownerOf = new Map(
-    input.owners.map((owner) => [owner.name.toLowerCase(), owner]),
-  );
   const teamsUsableFor = (ownerName: string): boolean => {
-    if (viewerTeams === null) return false;
-    if (ownerOf.get(ownerName.toLowerCase())?.kind === "user") return true;
+    if (viewerTeams === null || !isOrg(ownerName)) return false;
     const prefix = `${ownerName.toLowerCase()}/`;
     return [...viewerTeams.slugs].some((slug) => slug.startsWith(prefix));
   };
-  if (pending.some((ref) => ref.teamPossible)) {
+  if (pending.some((ref) => ref.teamPossible && isOrg(ref.owner))) {
     try {
       viewerTeams = await deps.getViewerTeams();
       input.log.info("viewer teams read", { count: viewerTeams.ids.size });
@@ -939,7 +981,8 @@ export async function discoverPrs(
       ? viewerTeams.ids
       : null;
 
-  // チームを使えない組織で、チーム宛ての依頼だけが付いた行は、確かめても決まらないので、読まずに見送る。
+  // チームを使えない所有者で、チーム宛ての依頼だけが付いた行は、確かめても決まらないので、読まずに見送る。
+  // 個人の所有者は、チームを使わないので、この行を読まずに見送る。
   const toRead: PrCandidateRef[] = [];
   for (const ref of pending) {
     if (ref.teamOnly && !teamsUsableFor(ref.owner)) {
@@ -952,15 +995,18 @@ export async function discoverPrs(
     toRead.push(ref);
   }
 
-  // チームの確認の候補は、鍵の昇順に上限まで選ぶ。選び方が周回で変わらないようにするためである。
+  // `team`の行の確認は、前の周回の続きから上限まで選ぶ。末尾に来たら先頭に戻る。
+  // 先頭から選ぶと、先頭の候補が毎周回枠を使い、後ろの候補が確かめられない。
+  const ordered = toRead.filter((ref) => ref.teamRead).sort(compareRefs);
+  const selected = rotateAfter(ordered, cursor).slice(0, TEAM_CONFIRM_LIMIT);
+  const selectedKeys = new Set(selected.map(keyOf));
   const overLimit = new Set(
-    toRead
-      .filter((ref) => ref.teamRead)
-      .sort(compareRefs)
-      .slice(TEAM_CONFIRM_LIMIT)
-      .map(keyOf),
+    ordered.map(keyOf).filter((key) => !selectedKeys.has(key)),
   );
   teamCapped = overLimit.size;
+  const lastSelected = selected.at(-1);
+  const nextCursor = lastSelected === undefined ? null : keyOf(lastSelected);
+  const cursorDirty = usesState && nextCursor !== null && nextCursor !== cursor;
 
   const confirmed: PrSearchItem[] = [];
   for (const ref of toRead.filter((found) => !overLimit.has(keyOf(found)))) {
@@ -1029,11 +1075,11 @@ export async function discoverPrs(
     }
   }
 
-  if (memoryDirty) {
+  if (memoryDirty || cursorDirty) {
     try {
       await deps.checkedPrs.save({
         entries: freshChecks(memory, nowMs),
-        cursor: null,
+        cursor: cursorDirty ? nextCursor : cursor,
       });
     } catch (err) {
       input.log.warn("checked pull requests could not be written", {

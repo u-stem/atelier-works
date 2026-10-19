@@ -71,6 +71,7 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   discoverPrs,
   parseCheckedPrs,
+  parseConfirmCursor,
   resolveTableUse,
 } from "./lib/poll_source.ts";
 import {
@@ -105,6 +106,9 @@ import {
 
 /** 確かめて対象でなかったPRの覚えを置く、Windmillのstateのキー。 */
 const CHECKED_PRS_STATE_KEY = "team_checked_prs";
+
+/** チームへの依頼の確認で、前の周回に確かめた最後の候補の鍵を置く、Windmillのstateのキー。 */
+const CONFIRM_CURSOR_STATE_KEY = "team_confirm_cursor";
 
 async function recordFailureSafe(
   step: string,
@@ -1208,12 +1212,15 @@ export async function main(): Promise<{
   // 照合を通ったオーナーだけを対象にする。
   const scope = { ...config, owners: verified.owners };
   const useTable = resolveTableUse(config, log);
+  // 作者が許可された人かの判定。チームへの依頼は、許可された作者のPRだけ候補にし、レビューの起動の判定も同じ方針を使う。
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const discovered = await discoverPrs(
     {
       useTable,
       owners: verified.owners,
       scope,
       viewer,
+      labelerPolicy,
       labels: { reviewLabel: config.review_label, fixLabel: config.fix_label },
       staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
       log,
@@ -1228,16 +1235,19 @@ export async function main(): Promise<{
       checkedPrs: {
         load: async () => {
           const stored = await wmill.getState();
-          return parseCheckedPrs(
-            isRecord(stored) ? stored[CHECKED_PRS_STATE_KEY] : undefined,
-          );
+          const record = isRecord(stored) ? stored : {};
+          return {
+            entries: parseCheckedPrs(record[CHECKED_PRS_STATE_KEY]),
+            cursor: parseConfirmCursor(record[CONFIRM_CURSOR_STATE_KEY]),
+          };
         },
-        save: async (entries) => {
+        save: async (state) => {
           const stored = await wmill.getState();
           // stateは全体を置き換えるので、ほかのキーを保って渡す。
           await wmill.setState({
             ...(isRecord(stored) ? stored : {}),
-            [CHECKED_PRS_STATE_KEY]: Object.fromEntries(entries),
+            [CHECKED_PRS_STATE_KEY]: Object.fromEntries(state.entries),
+            [CONFIRM_CURSOR_STATE_KEY]: state.cursor,
           });
         },
         nowMs: () => Date.now(),
@@ -1337,7 +1347,6 @@ export async function main(): Promise<{
     ]),
   );
 
-  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const decisions = decidePrActions(
     contexts.map((context) => context.candidate),
     config.review_label,
