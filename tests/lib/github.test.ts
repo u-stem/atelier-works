@@ -3347,6 +3347,22 @@ describe("findIssueByMarker", () => {
       ),
     ).rejects.toThrow("invalid GitHub name");
   });
+
+  test("rejects an invalid proposal creation time", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        {
+          creatorLogin: "factory-bot",
+          proposalCreatedAt: new Date(Number.NaN),
+        },
+      ),
+    ).rejects.toThrow("proposalCreatedAt is an invalid date");
+  });
 });
 
 describe("searchPrs", () => {

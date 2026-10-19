@@ -20,7 +20,7 @@ import {
   chooseIssueProposalReplyTarget,
   classifyIssueProposalDecision,
   hasIssueProposalMarker,
-  issueProposalMarkerSearchTerm,
+  issueProposalMarkerKey,
   issueProposalMarkerText,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -174,12 +174,12 @@ describe("classifyIssueProposalDecision", () => {
   });
 });
 
-describe("issueProposalMarkerSearchTerm / issueProposalMarkerText", () => {
-  test("the search term has no HTML comment syntax", () => {
-    expect(issueProposalMarkerSearchTerm(5)).toBe("factory:issue_proposal:5");
+describe("issueProposalMarkerKey / issueProposalMarkerText", () => {
+  test("the key has no HTML comment syntax", () => {
+    expect(issueProposalMarkerKey(5)).toBe("factory:issue_proposal:5");
   });
 
-  test("the marker text wraps the search term in an HTML comment", () => {
+  test("the marker text wraps the key in an HTML comment", () => {
     expect(issueProposalMarkerText(5)).toBe(
       "<!-- factory:issue_proposal:5 -->",
     );
@@ -460,6 +460,13 @@ describe("the marker lookup in issue_proposal_apply", () => {
 
   test("passes the login of the token's account as the creator", async () => {
     expect(await lookupCall()).toContain("creatorLogin: viewer.login");
+  });
+
+  test("tells the operator to reject and re-propose when the scan limit is hit", async () => {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/issue_proposal_apply.ts", import.meta.url),
+    ).text();
+    expect(text).toContain("却下して起票し直");
   });
 
   test("passes the creation time of the proposal", async () => {
