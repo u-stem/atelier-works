@@ -29,6 +29,16 @@ import {
   hasLabel,
 } from "./types.ts";
 
+export function resolveTableUse(
+  _config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): boolean {
+  return false;
+}
+
 /**
  * Issueの稼働中の作業項目を引く鍵。
  * GitHubのownerとrepoは大文字小文字を区別しないので、綴りが違っても同じIssueを引けるよう小文字にする。

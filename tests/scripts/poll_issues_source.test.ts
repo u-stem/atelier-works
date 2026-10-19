@@ -3,8 +3,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { Logger } from "../../f/factory/lib/log.ts";
-import { resolveIssueTableUse } from "../../f/factory/poll_issues.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 
@@ -12,80 +10,10 @@ async function read(path: string): Promise<string> {
   return Bun.file(join(ROOT, path)).text();
 }
 
-function capture() {
-  const warnings: { message: string; fields: unknown }[] = [];
-  const log: Logger = {
-    info() {},
-    warn(message, fields) {
-      warnings.push({ message, fields });
-    },
-    error() {},
-  };
-  return { log, warnings };
-}
-
-describe("poll_issues: whether the round reads the table", () => {
-  test("reads the table when the collection and its detail are on", () => {
-    const { log } = capture();
-    expect(
-      resolveIssueTableUse(
-        { gh_collect_enabled: true, gh_collect_detail_enabled: true },
-        log,
-      ),
-    ).toBe(true);
-  });
-
-  test("does not read the table when the collection is off", () => {
-    const { log } = capture();
-    expect(
-      resolveIssueTableUse(
-        { gh_collect_enabled: false, gh_collect_detail_enabled: true },
-        log,
-      ),
-    ).toBe(false);
-  });
-
-  test("does not read the table when the detail collection is off", () => {
-    const { log } = capture();
-    expect(
-      resolveIssueTableUse(
-        { gh_collect_enabled: true, gh_collect_detail_enabled: false },
-        log,
-      ),
-    ).toBe(false);
-  });
-
-  test("warns with the names of the false settings when the table is not read", () => {
-    const { log, warnings } = capture();
-    resolveIssueTableUse(
-      { gh_collect_enabled: false, gh_collect_detail_enabled: true },
-      log,
-    );
-    expect(warnings).toEqual([
-      {
-        message:
-          "the collection is not fully enabled, so only explicit repositories are read",
-        fields: { gh_collect_enabled: false, gh_collect_detail_enabled: true },
-      },
-    ]);
-  });
-
-  test("does not warn when the table is read", () => {
-    const { log, warnings } = capture();
-    resolveIssueTableUse(
-      { gh_collect_enabled: true, gh_collect_detail_enabled: true },
-      log,
-    );
-    expect(warnings).toEqual([]);
-  });
-});
-
 describe("poll_issues: the wiring of the discovery", () => {
   test("decides whether to read the table from the settings", async () => {
     const source = await read("f/factory/poll_issues.ts");
-    expect(source).toContain(
-      "const useTable = resolveIssueTableUse(config, log);",
-    );
+    expect(source).toContain("const useTable = resolveTableUse(config, log);");
   });
 
   test("passes a reader of the owner rows to the discovery", async () => {

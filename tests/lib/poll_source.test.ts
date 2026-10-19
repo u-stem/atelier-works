@@ -22,6 +22,7 @@ import {
   discoverIssues,
   discoverPrs,
   issueKey,
+  resolveTableUse,
 } from "../../f/factory/lib/poll_source.ts";
 import {
   decidePrActions,
@@ -246,6 +247,74 @@ const STALE_CASES: readonly {
   { reason: "in_future", overrides: { last_collected_at: IN_FUTURE } },
   { reason: "unusable", overrides: { repo_id: null } },
 ];
+
+describe("resolveTableUse", () => {
+  function capture() {
+    const warnings: { message: string; fields: unknown }[] = [];
+    const log: Logger = {
+      info() {},
+      warn(message, fields) {
+        warnings.push({ message, fields });
+      },
+      error() {},
+    };
+    return { log, warnings };
+  }
+
+  test("reads the table when the collection and its detail are on", () => {
+    const { log } = capture();
+    expect(
+      resolveTableUse(
+        { gh_collect_enabled: true, gh_collect_detail_enabled: true },
+        log,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not read the table when the collection is off", () => {
+    const { log } = capture();
+    expect(
+      resolveTableUse(
+        { gh_collect_enabled: false, gh_collect_detail_enabled: true },
+        log,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not read the table when the detail collection is off", () => {
+    const { log } = capture();
+    expect(
+      resolveTableUse(
+        { gh_collect_enabled: true, gh_collect_detail_enabled: false },
+        log,
+      ),
+    ).toBe(false);
+  });
+
+  test("warns with the names of the false settings when the table is not read", () => {
+    const { log, warnings } = capture();
+    resolveTableUse(
+      { gh_collect_enabled: false, gh_collect_detail_enabled: true },
+      log,
+    );
+    expect(warnings).toEqual([
+      {
+        message:
+          "the collection is not fully enabled, so only explicit repositories are read",
+        fields: { gh_collect_enabled: false, gh_collect_detail_enabled: true },
+      },
+    ]);
+  });
+
+  test("does not warn when the table is read", () => {
+    const { log, warnings } = capture();
+    resolveTableUse(
+      { gh_collect_enabled: true, gh_collect_detail_enabled: true },
+      log,
+    );
+    expect(warnings).toEqual([]);
+  });
+});
 
 describe("issueKey", () => {
   test("lowercases the owner and the repository", () => {
