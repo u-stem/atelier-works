@@ -15,7 +15,7 @@
 記録を読むのは、次の6つの処理だけである。
 
 - `self_update`は、実行の記録を読み、収集の鮮度を監視する([鮮度の監視](#鮮度の監視))。
-- `poll_dependabot`は、設定`gh_source_dependabot`が`db`のとき、候補のPRを表から読む([読む側の判定](#読む側の判定))。
+- `poll_dependabot`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、候補のPRを表から読む([読む側の判定](#読む側の判定))。
 - `watch_pr_conflicts`は、設定`gh_source_pr_conflict_watch`が`db`のとき、リポジトリの発見とPRの列挙を表から読む([読む側の判定](#読む側の判定))。
 - `poll_issues`は、設定`gh_source_poll_issues`が`db`のとき、トリガーラベル付きのIssueを表から見つける([所有者の単位の読み取り](#所有者の単位の読み取り))。
 - `poll_prs`は、設定`gh_source_poll_prs`が`db`のとき、ラベル、レビューの依頼、assigneeのPRを表から見つける([所有者の単位の読み取り](#所有者の単位の読み取り))。
@@ -673,7 +673,7 @@ nは、トークンの無い所有者も数える。
 照合の不一致では、収集が配下の行を使用不可にする。
 照合の一時的な失敗では、`last_collected_at`が進まず、閾値を過ぎて使わなくなる。
 
-`poll_dependabot`は、記録を使わないリポジトリを、判断を止めて黙らせずに、その周回だけ検索で列挙する。
+`poll_dependabot`は、記録を使わないリポジトリを、判断を止めて黙らせずに、その周回だけRESTの開いているPRの一覧で列挙する。
 手順は[dependabotの更新の内部仕様](dependabot.md#表から読むとき)にある。
 
 ### 所有者の単位の読み取り
@@ -906,12 +906,13 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
 - リポジトリ単位の停止は通知しない。
   特定のリポジトリが続けて失敗するか、打ち切られるか、回り切らないと、そのリポジトリの`last_collected_at`が古くなる。
   下流は閾値で判断を止める。
-  `poll_dependabot`は、そのリポジトリを検索に戻して処理を続ける。
+  `poll_dependabot`は、そのリポジトリをRESTの一覧に戻して処理を続ける。
   `watch_pr_conflicts`は、所有者の全体を検索に戻し、そのリポジトリのPRをREST一覧で列挙する。
   `poll_issues`と`poll_prs`と`watch_pr_ci`は、所有者の全体を検索に戻す。
   所有者の`ok`は真のままなので、鮮度の監視の通知は出ない。
   確かめるには、`gh_repos`の`detail_failed`と`truncated`と`last_attempted_at`、実行の行の`detail_incomplete`を見る。
-- 収集が集めないリポジトリは、`gh_repos`に使える行が無いので、`poll_dependabot`が毎周回検索に戻す。
+- 収集が集めないリポジトリは、`gh_repos`に使える行が無いので、`poll_dependabot`が毎周回RESTの一覧に戻す。
+  `poll_dependabot`は、表でarchive済みと分かり、記録が鮮度の内にあるリポジトリを、一覧でも読まない。
   `watch_pr_conflicts`は、設定か作業項目か競合の行で明示されたリポジトリをREST一覧で列挙する。
   どれにも入らず検索だけが見つけていたリポジトリは、表では見つからない。
   `owners`に無い所有者の`factory_repo`、`repo_allowlist`にあるfork、先頭が`.`のリポジトリ名、loginに`_`を含む所有者のリポジトリ、archive済みのリポジトリ、改名か移管をした古い名前が当たる。

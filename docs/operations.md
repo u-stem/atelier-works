@@ -578,7 +578,7 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 - 処理の順が、検索の関連度の順から、リポジトリと番号の順に変わる。
 
 1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
-   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を表に切り替える](#候補の元を表に切り替える)の手順1と同じである。
+   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を確かめる](#候補の元を確かめる)の手順1と同じである。
    `repo_allowlist`が空でないことも確かめる。空だと、上の3つ目の変化が当たる。
 2. 表の結果と検索の結果を照らし合わせる。
    所有者ごとに、表の側を次のSQLで集める。
@@ -693,7 +693,7 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 - 処理の順が、検索の関連度の順から、リポジトリと番号の順に変わる。
 
 1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
-   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を表に切り替える](#候補の元を表に切り替える)の手順1と同じである。
+   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を確かめる](#候補の元を確かめる)の手順1と同じである。
    `repo_allowlist`が空でないことも確かめる。空だと、上の3つ目の変化が当たる。
 2. 所有者ごとに、表の開いたPRの行が、検索の4本のどれに当たるかを数える。
    PATのアカウントの数値IDは、`gh api user --jq .id`で読む。
@@ -1849,7 +1849,7 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
    続く3回の`watch_pr_ci`の結果で、`human_source`が`search`、`errors`が0であることを確かめる。
    `pr_ci_check_denied`の未解決の件数も控える。手順6の比較の基準になる。
 2. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
-   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を表に切り替える](#候補の元を表に切り替える)の手順1と同じである。
+   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を確かめる](#候補の元を確かめる)の手順1と同じである。
    `repo_allowlist`が空でないことも確かめる。空だと、上の4つ目の変化が当たる。
 3. 範囲と作者ごとに、表の候補の番号の集合と、検索の結果の番号の集合を照らし合わせる。
    作者は、PATのアカウントと`allowed_labeler_logins`のアカウントを小文字にしたものである。
@@ -2555,7 +2555,6 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 | `dependabot_group_enabled` | `false` | 複数のパッケージを上げるグループ更新のPRを、2〜3つまで対象にするか。偽の間は、人に回す |
 | `dependabot_other_repos` | `[]` | `factory_repo`のほかに、dependabotの自動処理の候補にするリポジトリ。`<owner>/<repo>`の形で書く |
 | `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
-| `gh_source_dependabot` | `search` | 候補のPRを列挙する元。`search`は検索、`db`は収集の表。切り替えの手順は[候補の元を表に切り替える](#候補の元を表に切り替える) |
 
 `dependabot_min_published_days`は、公開から日が浅い版を自動でマージしないための下限である。
 1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
@@ -2627,32 +2626,36 @@ dependabotの対象は、baseが`main`のPRに限る。
 問題があれば、`dependabot_group_enabled`を`false`に戻す。
 マージの直前にもこの項目を読み直すので、動いているフローも人に回る。
 
-### 候補の元を表に切り替える
+### 候補の元を確かめる
 
-設定`gh_source_dependabot`を`db`にすると、`poll_dependabot`は候補のPRを検索でなく、収集の表から読む。
-検索の回数が減り、検索のレート制限に当たりにくくなる。
-既定の`search`のままなら、候補の列挙は変わらない。
-検索の経路でも変わる点が3つある。
+`poll_dependabot`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、候補のPRを収集の表から読む。
+表を使えないリポジトリは、その周回だけ、REST(`GET /repos/{owner}/{repo}/pulls?state=open`)の開いているPRの一覧で読む。
+どちらも検索を使わない。
+候補の元を選ぶ設定は無い。
+リソースに削除した設定の項目が残っていても、読み捨てられて動作に影響しない。
+詳しくは、[dependabotの更新の内部仕様](internals/dependabot.md)の「候補の列挙の元」と「周回の結果」にある。
+
+どの経路でも、次の点は変わらない。
 候補の名前とGitHubの返す名前が合わないPRは、飛ばす(`repoMismatch`)。
 保持期間と待ちの上限はRESTの`created_at`で判定し、読めなければそのPRの失敗にする。
 失敗の記録の段の名前は、リポジトリ名を小文字にそろえる。
-詳しくは[dependabotの更新の内部仕様](internals/dependabot.md)の「選ばないPR」と「周回の結果」にある。
 
-収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索になる。
-`gh_source_dependabot`に書ける値は、`search`と`db`の2つだけである。
-列挙の外の値(`DB`や`table`など)を書くと、設定を読むscriptがすべて止まる。
-
-記録の時刻が閾値を超えたリポジトリは、その周回だけ検索に戻る。
+記録の時刻が閾値を超えたリポジトリは、その周回だけ一覧に戻る。
 閾値は、`owners`の所有者がn人のとき、`max(15分, (n+1)×5分)`である。
+収集が動いていても、収集が集めないリポジトリ(`owners`に無い所有者の`factory_repo`、fork、先頭が`.`のリポジトリ名など)は、毎周回一覧で読む。
+次の手順で、収集が動き、表が使えていることを確かめる。
 
-1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリ(`factory_repo`と`repo_allowlist`)の記録が進んでいることを確かめる。
+1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリ(`factory_repo`と`dependabot_other_repos`)の記録が進んでいることを確かめる。
 
    ```bash
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, repo, repo_id, allowed, archived, gone, truncated, detail_failed, last_collected_at, now() - last_collected_at AS age FROM factory.gh_repos ORDER BY owner, repo"
    ```
 
    対象のリポジトリが許可され、archiveされておらず、`gone`でなく、`age`が閾値の内にあることを見る。
-   満たさないリポジトリは、`db`にしても毎周回検索に戻る。
+   `owners`に無い所有者の`factory_repo`など、収集が集めないリポジトリは、行が無く、毎周回一覧に戻る。
+   archive済みで、`age`が閾値の内にあるリポジトリは、マージできないので読まない。
+   archive済みでも、`age`が閾値を超えていれば一覧で読む。
+   収集の無効と表の読み取りの失敗でも、一覧で読む。
 2. 表の結果とGitHubの結果が合うことを確かめる。
    dependabotが作者で、draftでなく、baseが`main`の開いているPRの番号を、表とGitHubの`pulls`の一覧のそれぞれから集める。
    2つの集合を`cmp -s`で比べ、`same`と`different`のどちらになったかだけを見る。
@@ -2668,30 +2671,39 @@ dependabotの対象は、baseが`main`のPRに限る。
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT author_login, author_type FROM factory.gh_pull_requests WHERE state = 'open' AND author_login ILIKE 'dependabot%' LIMIT 1"
    ```
 
-   手順1の鮮度の判定が、対象のリポジトリですべて`fresh`であることも確かめる。
-   周回の遅れ(5分以内)で説明できない差があれば、`db`にしない。
-3. `gh_source_dependabot`を`db`に切り替える。
-   書き換えの前に、リソースの値を取得して控えを取る。
-   取得した出力の`value`の`gh_source_dependabot`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
-   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
-   戻すときは、控えの値で同じ手順を行い、`gh_source_dependabot`を`search`にする。
-4. 続く3回の`poll_dependabot`の結果を、WindmillのRunsで確かめる。
-   `enabled`が`true`、`paused`が`false`、`source`が`db`、`failed`が0であることを見る。
-5. `fallback_searches`が0であることを確かめる。
+   周回の遅れ(5分以内)で説明できない差があれば、収集の不具合として調べる。
+3. 続く3回の`poll_dependabot`の結果を、WindmillのRunsで確かめる。
+   `enabled`が`true`、`paused`が`false`、`failed`が0であることを見る。
+4. `fallback_lists`が0であることを確かめる。
    1以上なら、`fallback_reasons`の語で原因を読む。
 
 | `fallback_reasons`の語 | 対処 |
 | --- | --- |
+| `collection_disabled` | `gh_collect_enabled`か`gh_collect_detail_enabled`が偽である。意図した停止でなければ、真に戻す |
 | `no_record` | `gh_repos`に行が無い。そのリポジトリが収集の対象(`owners`の所有者の、forkでないリポジトリ)かを確かめる |
-| `unusable` | 許可の外、一覧から消えた、archive済み、開いた行がすべて使えない、のどれかである。archive済みのリポジトリは`repo_allowlist`から外す |
+| `unusable` | 許可の外、一覧から消えた、開いた行がすべて使えない、のどれかである |
 | `not_collected`、`too_old` | 詳細が取り終えられていない。`truncated`、`detail_failed`、所有者の`gh_collect_runs`の`detail_targets`と`detail_incomplete`を見て、[実行の記録の読み方](#実行の記録の読み方)の対処をする |
 | `in_future` | `last_collected_at`がDBの時刻より後で、正しく書かれていれば起きない。収集の不具合として調べる |
 | `read_failed` | 表の読み取りが失敗した。失敗の記録の段`read_gh_pull_requests`と、DBの状態を確かめる |
 
-定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
-説明できないなら、`gh_source_dependabot`を`search`に戻す。
+一覧の読み取りが失敗すると、失敗の記録の段`list_open_pull_requests`に残り、`failed`に数える。
+開いているPRが1000件を超えるリポジトリでは、一覧が上限に当たって失敗し続ける。
+一覧を読むのは、収集が止まっている間と、収集が集めないリポジトリである。
+公開のリポジトリへ第三者が大量のPRを開くと、その場合に当たりうる([セキュリティ](security.md#dependabotの更新の自動マージ)の残るリスク)。
 
-読み取り元だけを戻すときは、`gh_source_dependabot`を`search`にする。
+定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
+説明できなければ、収集の失敗として調べる。
+
+検索へ戻す設定は無い。
+dependabotの対象は明示したリポジトリだけで、一覧の読み取りは小さいためである。
+列挙の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
+戻しは次の順で行う。
+
+1. 戻しのPRをマージする。`poll_dependabot.ts`は保護パスなので、戻しのPRも人がマージする。反映は`self_update`が行う。
+2. リソース`f/factory/factory_config`に、`gh_source_dependabot: db`を入れ直す。戻す前の版は、この項目で表を読むかを決める。
+3. 同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマを、手で元に戻す。
+4. 反映後の実ジョブの結果を確かめてから、リソースに残った項目を整理する。
+
 すべてを止める手順は、[無効にする](#無効にする)の節にある。
 
 ### 初回の実機で確かめること

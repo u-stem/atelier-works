@@ -945,8 +945,6 @@ type SearchIssueItemPayload = {
   readonly html_url: string;
   readonly repository_url: string;
   readonly user: { readonly login: string } | null;
-  /** 作成の時刻。読む関数(`searchDependabotPrs`)だけが形を確かめる。 */
-  readonly created_at?: unknown;
   /** 更新の時刻。読む関数(`searchOpenAuthoredPrs`)だけが形を確かめる。 */
   readonly updated_at?: unknown;
 };
@@ -2499,50 +2497,6 @@ export async function searchOpenAuthoredPrs(
       htmlUrl: item.html_url,
       updatedAtMs,
     };
-  });
-}
-
-/**
- * dependabotのPRを探す範囲。1つのリポジトリに限る。
- * オーナーの全リポジトリは探さない。自動でマージする対象を、明示したリポジトリに限るためである。
- */
-export type DependabotPrSearchScope = {
-  readonly kind: "repo";
-  readonly owner: string;
-  readonly repo: string;
-};
-
-export type DependabotPrSearchItem = {
-  readonly owner: string;
-  readonly repo: string;
-  readonly number: number;
-  /** PRを作った時刻(epochミリ秒)。待ちの上限を数える起点にする。 */
-  readonly createdAtMs: number;
-};
-
-/**
- * `GET /search/issues`で、dependabotのアプリが開いた、`main`をbaseにする、draftでない、開いたPRを返す。
- * 検索は候補を絞るだけで、作者とbaseとdraftは呼び出し側がPRを読み直して確かめる。
- * 作成の時刻を読めない項目があれば`GitHubResponseError`を投げる。
- */
-export async function searchDependabotPrs(
-  client: GhClient,
-  scope: DependabotPrSearchScope,
-): Promise<DependabotPrSearchItem[]> {
-  validateOwnerRepo(scope.owner, scope.repo);
-  const query = `is:pr state:open draft:false base:main author:app/dependabot repo:${scope.owner}/${scope.repo}`;
-  const items = await callGhApiAllSearchItems(
-    client,
-    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-  );
-  return items.map((item) => {
-    const createdAtMs =
-      typeof item.created_at === "string" ? Date.parse(item.created_at) : NaN;
-    if (!Number.isFinite(createdAtMs)) {
-      throw unexpectedShape("search dependabot prs");
-    }
-    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-    return { owner, repo, number: item.number, createdAtMs };
   });
 }
 
@@ -4543,14 +4497,22 @@ export type OpenPullRequest = {
   readonly authorLogin: string | null;
   /** PRの作者の数値ID。無いか、正の安全な整数でなければ`null`。 */
   readonly authorId: number | null;
+  /**
+   * baseのブランチ名。応答に無いときは`null`。
+   * 省略可能にしてあるのは、この項目を使わない呼び出し元が値を作るときに書かずに済むようにするためである。
+   */
+  readonly baseRef?: string | null;
+  /** PRを作った時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly createdAtMs?: number | null;
 };
 
 function isOpenPullRequestPayload(value: unknown): value is {
   number: number;
   draft: boolean;
   head: { ref: string; repo: unknown };
-  base: { repo: { full_name: string } };
+  base: { ref?: unknown; repo: { full_name: string } };
   user?: unknown;
+  created_at?: unknown;
 } {
   if (!isRecord(value)) return false;
   if (typeof value.number !== "number") return false;
@@ -4565,7 +4527,9 @@ export const OPEN_PULL_REQUESTS_MAX_PAGES = 10;
 
 /**
  * `GET /repos/{owner}/{repo}/pulls?state=open`で、開いているPRを、ページ送りしながらすべて返す。
- * 一覧は、PRの番号、下書きか、headのブランチ、headとbaseのリポジトリだけを返す。マージ可否は一覧に載らないので、`getPr`で読む。
+ * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成の時刻、headとbaseのリポジトリを返す。
+ * baseのブランチと作成の時刻は、応答に無くても一覧全体を例外にせず、`null`にする。
+ * マージ可否は一覧に載らないので、`getPr`で読む。
  * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
  * 一部だけでは、返さなかったPRを「開いていない」と取り違えうるためである。
  * 応答の形が違えば例外を投げる。
@@ -4610,7 +4574,16 @@ export async function listOpenPullRequests(
       isRecord(entry.user) && isPositiveSafeInteger(entry.user.id)
         ? entry.user.id
         : null,
+    baseRef: typeof entry.base.ref === "string" ? entry.base.ref : null,
+    createdAtMs: parseIsoMs(entry.created_at),
   }));
+}
+
+/** ISO 8601の文字列をepochミリ秒にする。文字列でないか、日付として読めなければ`null`。 */
+function parseIsoMs(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /**

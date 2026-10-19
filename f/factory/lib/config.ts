@@ -108,7 +108,6 @@ type DefaultableField =
   | "pr_conflict_fix_notify_grace_min"
   | "gh_collect_enabled"
   | "gh_collect_detail_enabled"
-  | "gh_source_dependabot"
   | "gh_source_pr_conflict_watch"
   | "gh_source_poll_issues"
   | "gh_source_poll_prs"
@@ -197,7 +196,6 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // 詳細の収集は、収集が動くことを確かめてから、リモートのリソースで有効にする。
   gh_collect_detail_enabled: false,
   // 収集の表から候補を読むのは、実機で表と検索の突き合わせを確かめてから、リモートのリソースで切り替える。
-  gh_source_dependabot: "search",
   gh_source_pr_conflict_watch: "search",
   gh_source_poll_issues: "search",
   gh_source_poll_prs: "search",
@@ -282,7 +280,6 @@ function isGhSource(value: unknown): value is GhSource {
 function ghSourceField(
   raw: Record<string, unknown>,
   field:
-    | "gh_source_dependabot"
     | "gh_source_pr_conflict_watch"
     | "gh_source_poll_issues"
     | "gh_source_poll_prs"
@@ -1069,11 +1066,6 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "gh_collect_detail_enabled",
       DEFAULTS.gh_collect_detail_enabled,
-    ),
-    gh_source_dependabot: ghSourceField(
-      raw,
-      "gh_source_dependabot",
-      DEFAULTS.gh_source_dependabot,
     ),
     gh_source_pr_conflict_watch: ghSourceField(
       raw,
