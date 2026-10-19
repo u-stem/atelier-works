@@ -7,9 +7,13 @@ import {
   type GhRequestKind,
   runGhCollect,
 } from "../../f/factory/lib/gh_collect.ts";
-import type {
-  GraphqlFailure,
-  GraphqlResponse,
+import {
+  buildRepoDetailQuery,
+  type GraphqlFailure,
+  type GraphqlFetch,
+  type GraphqlResponse,
+  graphqlRequest,
+  OWNER_REPOS_QUERY,
 } from "../../f/factory/lib/gh_graphql.ts";
 import {
   OWNER_ID_MISMATCH_KIND,
@@ -108,6 +112,7 @@ function failure(detail: Partial<GraphqlFailure>): GraphqlResponse {
     secondary_limit: false,
     retry_after_sec: null,
     reset_at_sec: null,
+    rejected: [],
     ...detail,
   };
 }
@@ -3229,5 +3234,266 @@ describe("runGhCollect stage 2 logs and results", () => {
     });
     await runGhCollect(h.deps);
     expect(JSON.stringify(h.logs)).not.toContain("github_pat_");
+  });
+});
+
+const REFUSED_LOG = "graphql query items refused";
+
+function refusedLogs(h: ReturnType<typeof harness>) {
+  return h.logs.filter((entry) => entry.message === REFUSED_LOG);
+}
+
+describe("runGhCollect logs refused items", () => {
+  const FORBIDDEN_OWNER = [
+    { type: "FORBIDDEN", field: "repositoryOwner.repositories" },
+  ] as const;
+  const FORBIDDEN_PR = [
+    { type: "FORBIDDEN", field: "pullRequests.nodes.mergeable" },
+  ] as const;
+
+  test("logs refused items at stage list", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      pages: {
+        alice: [failure({ kind: "graphql_errors", rejected: FORBIDDEN_OWNER })],
+      },
+    });
+    await runGhCollect(h.deps);
+    expect(refusedLogs(h).map((entry) => entry.fields)).toEqual([
+      { owner: "alice", stage: "list", items: FORBIDDEN_OWNER },
+    ]);
+  });
+
+  test("logs refused items at stage detail on failure", async () => {
+    const h = harness({
+      config: ALICE_DETAIL,
+      pages: { alice: [okPage(1001, [node("a")])] },
+      details: {
+        alice: [failure({ kind: "graphql_errors", rejected: FORBIDDEN_PR })],
+      },
+    });
+    await runGhCollect(h.deps);
+    expect(refusedLogs(h).map((entry) => entry.fields)).toEqual([
+      { owner: "alice", stage: "detail", items: FORBIDDEN_PR },
+    ]);
+  });
+
+  test("logs refused items at stage detail on success", async () => {
+    const h = harness({
+      config: ALICE_DETAIL,
+      pages: { alice: [okPage(1001, [node("a")])] },
+      details: {
+        alice: [
+          detailResponse(
+            [
+              aliasData(repoIdOf("a"), {
+                prs: [prNode(1)],
+                issues: [issueNode(1)],
+              }),
+            ],
+            { rejected: FORBIDDEN_PR },
+          ),
+        ],
+      },
+    });
+    await runGhCollect(h.deps);
+    expect(refusedLogs(h).map((entry) => entry.fields)).toEqual([
+      { owner: "alice", stage: "detail", items: FORBIDDEN_PR },
+    ]);
+  });
+
+  test("logs nothing when rejected is empty at stage list", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      pages: { alice: [failure({ kind: "graphql_errors" })] },
+    });
+    await runGhCollect(h.deps);
+    expect(refusedLogs(h)).toEqual([]);
+  });
+
+  test("logs nothing when rejected is empty at stage detail", async () => {
+    const h = harness({
+      config: ALICE_DETAIL,
+      pages: { alice: [okPage(1001, [node("a")])] },
+      details: { alice: [failure({ kind: "graphql_errors" })] },
+    });
+    await runGhCollect(h.deps);
+    expect(refusedLogs(h)).toEqual([]);
+  });
+});
+
+describe("runGhCollect refused items from raw GraphQL responses", () => {
+  const LEAK_GHP = `ghp_${"B".repeat(36)}`;
+  const LEAK_PAT = "github_pat_E2ELEAKVALUE0123456789";
+  const LEAK_BODY = "private-repo-body-text";
+  const LEAKS = [LEAK_GHP, LEAK_PAT, LEAK_BODY, "ghp_", "github_pat_"];
+
+  /** 生の応答を返す`fetch`。`graphqlRequest`を通して`runGhCollect`に渡す。 */
+  function rawFetch(body: unknown): GraphqlFetch {
+    return async () => ({
+      status: 200,
+      headers: { get: () => null },
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+  }
+
+  function withRawStage(
+    h: ReturnType<typeof harness>,
+    raw: { list?: unknown; detail?: unknown },
+  ) {
+    const fake = h.deps.request;
+    return {
+      ...h.deps,
+      request: async (call: Parameters<GhCollectDeps["request"]>[0]) => {
+        if (call.kind.kind === "owner_repos" && raw.list !== undefined) {
+          return await graphqlRequest(
+            {
+              fetch: rawFetch(raw.list),
+              token: call.token,
+              timeoutMs: call.timeoutMs,
+            },
+            OWNER_REPOS_QUERY,
+            call.variables,
+          );
+        }
+        if (call.kind.kind === "repo_details" && raw.detail !== undefined) {
+          return await graphqlRequest(
+            {
+              fetch: rawFetch(raw.detail),
+              token: call.token,
+              timeoutMs: call.timeoutMs,
+              aliasErrors: { count: call.kind.aliases },
+            },
+            buildRepoDetailQuery(call.kind.aliases),
+            call.variables,
+          );
+        }
+        return await fake(call);
+      },
+    };
+  }
+
+  const listErrors = [
+    {
+      type: "FORBIDDEN",
+      path: ["repositoryOwner", "repositories", "nodes", 0, "pullRequests"],
+      message: `denied ${LEAK_GHP} ${LEAK_BODY}`,
+      extensions: { token: LEAK_PAT },
+      locations: [{ line: 1, column: LEAK_GHP }],
+    },
+  ];
+  const detailErrors = [
+    {
+      type: "FORBIDDEN",
+      path: ["r0", "pullRequests", "nodes", 0, "mergeable"],
+      message: `denied ${LEAK_GHP} ${LEAK_BODY}`,
+      extensions: { token: LEAK_PAT },
+      locations: [{ line: 1, column: LEAK_GHP }],
+    },
+  ];
+  const leakyErrors = [
+    { type: LEAK_GHP, path: ["r0", "pullRequests"], message: LEAK_BODY },
+    {
+      type: "FORBIDDEN",
+      path: ["r0", "pullRequests", "nodes", 0, LEAK_PAT],
+      message: LEAK_BODY,
+    },
+    { type: "FORBIDDEN", path: ["r0", LEAK_GHP, "nodes"], message: LEAK_BODY },
+    { type: LEAK_PAT, path: ["repositoryOwner", LEAK_GHP, "name", LEAK_PAT] },
+  ];
+
+  function detailBody(errors: readonly unknown[]) {
+    const ok = detailResponse([
+      aliasData(repoIdOf("a"), { prs: [prNode(1)], issues: [issueNode(1)] }),
+    ]);
+    return { data: ok.ok ? ok.data : null, errors };
+  }
+
+  function listHarness() {
+    return harness({
+      config: ALICE_ONLY,
+      pages: { alice: [okPage(1001, [node("a")])] },
+    });
+  }
+
+  function detailHarness() {
+    return harness({
+      config: ALICE_DETAIL,
+      pages: { alice: [okPage(1001, [node("a")])] },
+    });
+  }
+
+  test("names the refused item at stage list", async () => {
+    const h = listHarness();
+    await runGhCollect(
+      withRawStage(h, { list: { data: null, errors: listErrors } }),
+    );
+    expect(refusedLogs(h).map((entry) => entry.fields)).toEqual([
+      {
+        owner: "alice",
+        stage: "list",
+        items: [
+          {
+            type: "FORBIDDEN",
+            field: "repositoryOwner.repositories.nodes.pullRequests",
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("names the refused item at stage detail on success", async () => {
+    const h = detailHarness();
+    await runGhCollect(withRawStage(h, { detail: detailBody(detailErrors) }));
+    expect(refusedLogs(h).map((entry) => entry.fields)).toEqual([
+      {
+        owner: "alice",
+        stage: "detail",
+        items: [{ type: "FORBIDDEN", field: "pullRequests.nodes.mergeable" }],
+      },
+    ]);
+  });
+
+  test("keeps tokens and bodies out of the logs at stage list", async () => {
+    const h = listHarness();
+    await runGhCollect(
+      withRawStage(h, {
+        list: { data: null, errors: [...listErrors, ...leakyErrors] },
+      }),
+    );
+    const text = JSON.stringify(h.logs);
+    expect(LEAKS.filter((value) => text.includes(value))).toEqual([]);
+  });
+
+  test("keeps tokens and bodies out of the logs at stage detail", async () => {
+    const h = detailHarness();
+    await runGhCollect(
+      withRawStage(h, {
+        detail: detailBody([...detailErrors, ...leakyErrors]),
+      }),
+    );
+    const text = JSON.stringify(h.logs);
+    expect(LEAKS.filter((value) => text.includes(value))).toEqual([]);
+  });
+
+  test("still logs the refused item when leaky entries are present at stage list", async () => {
+    const h = listHarness();
+    await runGhCollect(
+      withRawStage(h, {
+        list: { data: null, errors: [...listErrors, ...leakyErrors] },
+      }),
+    );
+    expect(refusedLogs(h).length).toBe(1);
+  });
+
+  test("still logs the refused item when leaky entries are present at stage detail", async () => {
+    const h = detailHarness();
+    await runGhCollect(
+      withRawStage(h, {
+        detail: detailBody([...detailErrors, ...leakyErrors]),
+      }),
+    );
+    expect(refusedLogs(h).length).toBe(1);
   });
 });

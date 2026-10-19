@@ -72,7 +72,31 @@ export type GraphqlFailure = {
   readonly secondary_limit: boolean;
   readonly retry_after_sec: number | null;
   readonly reset_at_sec: number | null;
+  readonly rejected: readonly RejectedItem[];
 };
+
+/** 拒否された項目の`type`。許可表の語か`OTHER`。 */
+export type RejectedType =
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "INSUFFICIENT_SCOPES"
+  | "MAX_NODE_LIMIT_EXCEEDED"
+  | "SERVICE_UNAVAILABLE"
+  | "OTHER";
+
+/** 拒否された項目。`field`は問い合わせの文に現れる語をつないだものか、`null`。 */
+export type RejectedItem = {
+  readonly type: RejectedType;
+  readonly field: string | null;
+};
+
+/** 問い合わせの文に現れる語。 */
+export const REJECTABLE_FIELDS: ReadonlySet<string> = new Set();
+
+/** `errors`から拒否された項目を読む。 */
+export function readRejectedItems(_errors: readonly unknown[]): RejectedItem[] {
+  return [];
+}
 
 /** 別名の水準のエラーの`type`。固定の語に丸める。 */
 export type AliasErrorType = "FORBIDDEN" | "NOT_FOUND" | "OTHER";
@@ -100,6 +124,7 @@ export type GraphqlResponse =
       readonly ok: true;
       readonly data: Record<string, unknown>;
       readonly alias_errors?: readonly AliasError[];
+      readonly rejected?: readonly RejectedItem[];
     }
   | GraphqlFailure;
 
@@ -258,6 +283,7 @@ function failure(
     secondary_limit: detail.secondary_limit ?? false,
     retry_after_sec: detail.retry_after_sec ?? null,
     reset_at_sec: detail.reset_at_sec ?? null,
+    rejected: detail.rejected ?? [],
   };
 }
 

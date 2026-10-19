@@ -4,6 +4,7 @@ import type {
   AliasError,
   GraphqlFailure,
   GraphqlResponse,
+  RejectedItem,
 } from "../../f/factory/lib/gh_graphql.ts";
 
 export const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -91,6 +92,7 @@ export function detailResponse(
   aliases: readonly unknown[],
   options: {
     aliasErrors?: readonly AliasError[] | undefined;
+    rejected?: readonly RejectedItem[] | undefined;
     cost?: number | undefined;
     remaining?: number | undefined;
     resetAt?: string | undefined;
@@ -106,7 +108,12 @@ export function detailResponse(
   aliases.forEach((alias, index) => {
     data[`r${index}`] = alias;
   });
-  return { ok: true, data, alias_errors: options.aliasErrors ?? [] };
+  return {
+    ok: true,
+    data,
+    alias_errors: options.aliasErrors ?? [],
+    ...(options.rejected === undefined ? {} : { rejected: options.rejected }),
+  };
 }
 
 export function httpFailure(detail: Partial<GraphqlFailure>): GraphqlResponse {
@@ -118,6 +125,7 @@ export function httpFailure(detail: Partial<GraphqlFailure>): GraphqlResponse {
     secondary_limit: false,
     retry_after_sec: null,
     reset_at_sec: null,
+    rejected: [],
     ...detail,
   };
 }
@@ -135,6 +143,7 @@ export function failureOfKind(
     secondary_limit: false,
     retry_after_sec: null,
     reset_at_sec: null,
+    rejected: [],
     ...detail,
   };
 }

@@ -600,6 +600,7 @@ describe("startDetailRound failures", () => {
         secondary_limit: false,
         retry_after_sec: null,
         reset_at_sec: null,
+        rejected: [],
       },
       NOW,
     );
@@ -619,6 +620,7 @@ describe("startDetailRound failures", () => {
         secondary_limit: false,
         retry_after_sec: null,
         reset_at_sec: null,
+        rejected: [],
       },
       NOW,
     );
@@ -774,6 +776,7 @@ describe("startDetailRound failures", () => {
       secondary_limit: false,
       retry_after_sec: null,
       reset_at_sec: null,
+      rejected: [],
     };
     const failed: string[] = [];
     for (
@@ -858,6 +861,7 @@ describe("startDetailRound owner level stops", () => {
         secondary_limit: false,
         retry_after_sec: null,
         reset_at_sec: null,
+        rejected: [],
       },
       NOW,
     );

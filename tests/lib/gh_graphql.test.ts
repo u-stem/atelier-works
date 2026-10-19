@@ -8,6 +8,8 @@ import {
   type GraphqlResponseLike,
   graphqlRequest,
   OWNER_REPOS_QUERY,
+  REJECTABLE_FIELDS,
+  readRejectedItems,
 } from "../../f/factory/lib/gh_graphql.ts";
 
 const TOKEN = "github_pat_TESTSECRETVALUE0123456789";
@@ -509,6 +511,7 @@ describe("graphqlRequest alias errors", () => {
       alias_errors: [
         { alias: "r1", type: "FORBIDDEN", target: { kind: "alias" } },
       ],
+      rejected: [{ type: "FORBIDDEN", field: "pullRequests" }],
     });
   });
 
@@ -700,5 +703,313 @@ describe("graphqlRequest alias errors", () => {
       }),
     );
     expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+});
+
+const FAKE_GHP = `ghp_${"A".repeat(36)}`;
+
+describe("REJECTABLE_FIELDS", () => {
+  test("contains autoMergeRequest", () => {
+    expect(REJECTABLE_FIELDS.has("autoMergeRequest")).toBe(true);
+  });
+
+  test("contains repositoryOwner", () => {
+    expect(REJECTABLE_FIELDS.has("repositoryOwner")).toBe(true);
+  });
+
+  test("excludes the variable o0", () => {
+    expect(REJECTABLE_FIELDS.has("o0")).toBe(false);
+  });
+
+  test("excludes the variable pc0", () => {
+    expect(REJECTABLE_FIELDS.has("pc0")).toBe(false);
+  });
+
+  test("excludes the variable cursor", () => {
+    expect(REJECTABLE_FIELDS.has("cursor")).toBe(false);
+  });
+
+  test("excludes the alias r0", () => {
+    expect(REJECTABLE_FIELDS.has("r0")).toBe(false);
+  });
+});
+
+describe("readRejectedItems", () => {
+  test("maps type and the path field", () => {
+    expect(
+      readRejectedItems([{ type: "FORBIDDEN", path: ["r0", "pullRequests"] }]),
+    ).toEqual([{ type: "FORBIDDEN", field: "pullRequests" }]);
+  });
+
+  test("skips numeric indices", () => {
+    expect(
+      readRejectedItems([
+        { type: "NOT_FOUND", path: ["repositoryOwner", "repositories", 3] },
+      ]),
+    ).toEqual([{ type: "NOT_FOUND", field: "repositoryOwner.repositories" }]);
+  });
+
+  test("joins the path without indices and alias as a dotted field", () => {
+    expect(
+      readRejectedItems([
+        {
+          type: "FORBIDDEN",
+          path: ["r2", "pullRequests", "nodes", 4, "autoMergeRequest"],
+        },
+      ]),
+    ).toEqual([
+      { type: "FORBIDDEN", field: "pullRequests.nodes.autoMergeRequest" },
+    ]);
+  });
+
+  test("keeps a path of exactly 6 elements", () => {
+    expect(
+      readRejectedItems([
+        {
+          type: "FORBIDDEN",
+          path: ["pullRequests", "nodes", "labels", "nodes", "name", "name"],
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "FORBIDDEN",
+        field: "pullRequests.nodes.labels.nodes.name.name",
+      },
+    ]);
+  });
+
+  test("gives null beyond 6 elements", () => {
+    expect(
+      readRejectedItems([
+        {
+          type: "FORBIDDEN",
+          path: [
+            "pullRequests",
+            "nodes",
+            "labels",
+            "nodes",
+            "name",
+            "name",
+            "name",
+          ],
+        },
+      ]),
+    ).toEqual([{ type: "FORBIDDEN", field: null }]);
+  });
+
+  test("gives null when any element is outside the allowlist", () => {
+    expect(
+      readRejectedItems([
+        { type: "FORBIDDEN", path: ["r0", "pullRequests", 0, "bogus"] },
+      ]),
+    ).toEqual([{ type: "FORBIDDEN", field: null }]);
+  });
+
+  test("gives null when the path has only an alias and indices", () => {
+    expect(readRejectedItems([{ type: "FORBIDDEN", path: ["r0", 1] }])).toEqual(
+      [{ type: "FORBIDDEN", field: null }],
+    );
+  });
+
+  test("gives null field when path is missing", () => {
+    expect(readRejectedItems([{ type: "FORBIDDEN" }])).toEqual([
+      { type: "FORBIDDEN", field: null },
+    ]);
+  });
+
+  test("gives null field when path is not an array", () => {
+    expect(
+      readRejectedItems([{ type: "FORBIDDEN", path: "pullRequests" }]),
+    ).toEqual([{ type: "FORBIDDEN", field: null }]);
+  });
+
+  test("drops RATE_LIMITED", () => {
+    expect(
+      readRejectedItems([
+        { type: "RATE_LIMITED", path: ["r0", "pullRequests"] },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("drops an entry without type and path", () => {
+    expect(readRejectedItems([{ message: "oops" }])).toEqual([]);
+  });
+
+  test("drops an entry whose type is unknown and whose path is outside the allowlist", () => {
+    expect(
+      readRejectedItems([{ type: "WEIRD", path: ["r0", "bogus"] }]),
+    ).toEqual([]);
+  });
+
+  test("drops non-record entries", () => {
+    expect(
+      readRejectedItems(["text", 5, null, ["x"], { type: "FORBIDDEN" }]),
+    ).toEqual([{ type: "FORBIDDEN", field: null }]);
+  });
+
+  test("dedupes the same pair", () => {
+    expect(
+      readRejectedItems([
+        { type: "FORBIDDEN", path: ["r0", "pullRequests"] },
+        { type: "FORBIDDEN", path: ["r1", "pullRequests"] },
+      ]),
+    ).toEqual([{ type: "FORBIDDEN", field: "pullRequests" }]);
+  });
+
+  test("keeps exactly 10 and drops the 11th", () => {
+    const names = [
+      "databaseId",
+      "name",
+      "isArchived",
+      "number",
+      "createdAt",
+      "updatedAt",
+      "isDraft",
+      "headRefName",
+      "mergeable",
+      "totalCount",
+      "pageInfo",
+    ];
+    expect(
+      readRejectedItems(
+        names.map((name) => ({ type: "FORBIDDEN", path: [name] })),
+      ),
+    ).toEqual(
+      names.slice(0, 10).map((name) => ({ type: "FORBIDDEN", field: name })),
+    );
+  });
+
+  test("never reads message, locations, or extensions", () => {
+    expect(
+      JSON.stringify(
+        readRejectedItems([
+          {
+            type: "FORBIDDEN",
+            path: ["r0", "pullRequests"],
+            message: `leak ${FAKE_GHP}`,
+            locations: [{ line: FAKE_GHP }],
+            extensions: { token: FAKE_GHP },
+          },
+        ]),
+      ),
+    ).not.toContain("ghp_");
+  });
+
+  test.each([
+    ["unknown type", "SOMETHING_ELSE"],
+    ["non-string type", 5],
+    ["null type", null],
+    ["object type", { type: "FORBIDDEN" }],
+    ["a 40 char ghp_ shaped type", FAKE_GHP],
+    ["a github_pat_ shaped type", "github_pat_TESTSECRETVALUE0123456789"],
+  ])("%s becomes OTHER", (_name, type) => {
+    expect(readRejectedItems([{ type, path: ["r0", "pullRequests"] }])).toEqual(
+      [{ type: "OTHER", field: "pullRequests" }],
+    );
+  });
+
+  test.each([
+    ["a 40 char ghp_ shaped element", FAKE_GHP],
+    ["a github_pat_ shaped element", "github_pat_TESTSECRETVALUE0123456789"],
+    ["an alias in the middle", "r3"],
+    ["an element with spaces", "pull Requests"],
+  ])("path field outside the allowlist becomes null: %s", (_name, element) => {
+    expect(
+      readRejectedItems([
+        { type: "FORBIDDEN", path: ["r0", "pullRequests", element] },
+      ]),
+    ).toEqual([{ type: "FORBIDDEN", field: null }]);
+  });
+});
+
+describe("graphqlRequest rejected items", () => {
+  test("failure carries rejected for graphql_errors", async () => {
+    const { result } = await request(async () =>
+      respond({
+        json: () =>
+          Promise.resolve({
+            data: null,
+            errors: [
+              {
+                type: "FORBIDDEN",
+                path: ["repositoryOwner", "repositories"],
+                message: "denied",
+              },
+            ],
+          }),
+      }),
+    );
+    expect(result.ok ? null : result.rejected).toEqual([
+      { type: "FORBIDDEN", field: "repositoryOwner.repositories" },
+    ]);
+  });
+
+  test("failure of rate limited carries none", async () => {
+    const { result } = await request(async () =>
+      respond({
+        json: () =>
+          Promise.resolve({
+            errors: [
+              { type: "RATE_LIMITED" },
+              { type: "FORBIDDEN", path: ["repositoryOwner"] },
+            ],
+          }),
+      }),
+    );
+    expect(result.ok ? null : result.rejected).toEqual([]);
+  });
+
+  test("a failure without errors carries none", async () => {
+    const { result } = await request(() => Promise.reject(new Error("down")));
+    expect(result.ok ? null : result.rejected).toEqual([]);
+  });
+
+  test("success with alias errors carries rejected only for alias targets", async () => {
+    const h = harness(async () =>
+      respond({
+        json: () =>
+          Promise.resolve({
+            data: { r0: { databaseId: 1 }, r1: null },
+            errors: [
+              { type: "FORBIDDEN", path: ["r1", "pullRequests"] },
+              {
+                type: "FORBIDDEN",
+                path: ["r0", "pullRequests", "nodes", 0, "autoMergeRequest"],
+              },
+            ],
+          }),
+      }),
+    );
+    const result = await graphqlRequest(
+      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 2 } },
+      buildRepoDetailQuery(2),
+      VARIABLES,
+    );
+    expect(result.ok ? result.rejected : null).toEqual([
+      { type: "FORBIDDEN", field: "pullRequests" },
+    ]);
+  });
+
+  test("success with only optional field errors carries no rejected", async () => {
+    const h = harness(async () =>
+      respond({
+        json: () =>
+          Promise.resolve({
+            data: { r0: { databaseId: 1 } },
+            errors: [
+              {
+                type: "FORBIDDEN",
+                path: ["r0", "pullRequests", "nodes", 0, "autoMergeRequest"],
+              },
+            ],
+          }),
+      }),
+    );
+    const result = await graphqlRequest(
+      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 1 } },
+      buildRepoDetailQuery(1),
+      VARIABLES,
+    );
+    expect(result.ok ? result.rejected : null).toBeUndefined();
   });
 });
