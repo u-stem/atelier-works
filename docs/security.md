@@ -2501,12 +2501,12 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 守りは、守る対象ごとに次のとおり分かれる。
 
 - `Read`ツールで`mise.local.toml`とその別名を読む経路は、`deny`が止める。GrepとGlobへの適用はベストエフォートである
-- Bashでファイル名を指す参照は、フックの`guarded-files.ts`が拒否する
-- コミットへの混入は、gitignoreと、lefthookとCIのgitleaksが止める。`git add -f`はgitignoreを越え、gitleaksは規則に合う値だけを拾う
+- Bashで、秘密値のファイル名を字面で書いた参照は、フックの`guarded-files.ts`が拒否する。変数、ブレース展開、`find -exec`、`xargs`、`*`だけのglobを使う形は、「判定しないもの」に挙げる
+- コミットへの混入は、層ごとに止める対象が違う。gitignoreは`git add`を、lefthookのgitleaksはコミットを、CIのgitleaksはmainへのマージを止める。CIが動くのは`pull_request`と`main`へのpushだけなので、値がリモートのブランチへ載ってから走る。`git add -f`はgitignoreを越え、gitleaksは規則に合う値だけを拾う
 - Windmill上の保存とUIでの表示は、secret変数が守る
 
 `mise`の一覧を出す経路は、これらのどの層も止めない。
-`deny`の`Read`はBashに効かず、gitignoreとgitleaksはコミットしか止めず、secret変数はホストの`mise.local.toml`の一覧に関係しないためである。
+`deny`の`Read`はBashに効かず、gitignoreとgitleaksはコミットとマージしか止めず、secret変数はホストの`mise.local.toml`の一覧に関係しないためである。
 会話への露出は、ベストエフォートのフックと前方一致の`deny`だけで守る。
 デバッグ中の誤操作でも打つ形(`mise -E local env`、`mise hook-env`など)が残り、これを残るリスクとして「判定しないもの」に挙げて受け入れる。
 会話に出た値は、APIへ送られ、手元の記録にも残る。
@@ -2515,7 +2515,9 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 所有者ごとの読み取りPAT、`DISCORD_WEBHOOK_URL`、`DB_PASSWORD`、`WM_ADMIN_PASSWORD`には、手順が無い。
 `DB_PASSWORD`と`WM_ADMIN_PASSWORD`は、再投入だけでは壊れるので、先にPostgresと管理者のパスワードを変える。
 Postgresの`POSTGRES_PASSWORD`はvolumeの初期化時にだけ効くためである。
-Discordのwebhookは、[DiscordのWebhook URL](#discordのwebhook-url)の節を参照する。
+管理者のパスワードを先に変えるのは、`scripts/bootstrap.sh`が`WM_ADMIN_PASSWORD`と既定値の`changeme`でしかログインを試さず、どちらも通らなければ止まるためである。
+`DISCORD_WEBHOOK_URL`は、[DiscordのWebhook URL](#discordのwebhook-url)の節の手順で新しいURLを取得して投入する。
+旧URLの失効は、Discordのウェブフック設定で旧いウェブフックを削除して行う。
 
 ## Claude Codeのフック
 
@@ -2694,15 +2696,24 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `mise set`が、`-E local`を付けずにコミット対象の`mise.toml`へ、`-g`でグローバル設定へ、`--file`で任意のファイルへ書き込む形
 - `mise`の書き込みと実行のサブコマンド(次は例で、ほかにもある)。フックが`mise`を、書き込むコマンドとして扱わないので拒否しない
   - `mise generate github-action`(`--write`を付けると`.github/workflows`に書く)
-  - `mise generate git-pre-commit`(`--write`を付けて`.git/hooks`に書くかは未確認である)
+  - `mise generate git-pre-commit`
+    - `--write`は`.git/hooks/pre-commit`に、`--hook <名前>`は`.git/hooks/<名前>`に書く
+    - lefthookが入れたフックを上書きして、gitleaksなどの検査を外せる
+    - worktreeでは`.git`がファイルなので、書けるかは未確認である
   - `mise generate task-stubs`
   - `mise settings set`(設定を追加、更新する。既定は`~/.config/mise/config.toml`で、`--local`でローカルの設定になる)
   - `mise tasks add`(ローカルの`mise.toml`にタスクを足す。`-f`でファイルタスクを作る)と`mise tasks edit`
   - `mise doctor project`(`mise.toml`の`[doctor.checks.<name>]`に書かれたコマンドを実行する)
   - `mise unset`(設定ファイルの値を消す)
   - `mise implode`(miseとその関連データを消す)
-  - `mise bootstrap`(現在の設定から環境を整える実行系)
-- wmill CLIによるsecret変数の読み取り
+  - `mise bootstrap`
+    - パッケージ、リポジトリ、dotfiles、ツールを整え、`bootstrap`タスクがあれば実行する
+    - このリポジトリのタスク`mise run bootstrap`は`scripts/bootstrap.sh`を動かすので、`mise bootstrap`もそれを実行する
+    - 2つは別のコマンドである
+- wmill CLIによる秘密値の読み取り
+  - secret変数だけではない
+  - `wmill instance get-config --show-secrets`はインスタンスの設定を出す
+  - `wmill sync pull --include-key`はワークスペースの暗号鍵を出す
   - `wmill variable get`
   - `wmill sync pull --include-secrets --plain-secrets`
   - `wmill sync pull --include-key`
