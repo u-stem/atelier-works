@@ -205,6 +205,26 @@ describe("appendIssueProposalMarker / hasIssueProposalMarker", () => {
   test("hasIssueProposalMarker returns false for plain text with no marker", () => {
     expect(hasIssueProposalMarker("just an issue body", 5)).toBe(false);
   });
+
+  test("hasIssueProposalMarker accepts trailing whitespace after the marker", () => {
+    const body = `${appendIssueProposalMarker("背景", 5)}\n \n`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(true);
+  });
+
+  test("hasIssueProposalMarker rejects a marker followed by more text", () => {
+    const body = `${appendIssueProposalMarker("背景", 5)}\n\n続きの文`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
+
+  test("hasIssueProposalMarker rejects a marker quoted in the middle of a body", () => {
+    const body = `前置き ${issueProposalMarkerText(5)} 後ろ`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
+
+  test("hasIssueProposalMarker rejects a longer id that ends with the same digits", () => {
+    const body = appendIssueProposalMarker("背景", 15);
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
 });
 
 describe("chooseIssueProposalReplyTarget", () => {
@@ -414,5 +434,32 @@ describe("the owner check of an issue proposal", () => {
         error_name: "GitHubHttpError",
       });
     });
+  });
+});
+
+describe("the marker lookup in issue_proposal_apply", () => {
+  async function lookupCall(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/issue_proposal_apply.ts", import.meta.url),
+    ).text();
+    const start = text.indexOf("await findIssueByMarker(");
+    if (start === -1) throw new Error("findIssueByMarker call not found");
+    return text.slice(start, text.indexOf(");", start));
+  }
+
+  test("passes the full marker text, not a search term", async () => {
+    expect(await lookupCall()).toContain(
+      "issueProposalMarkerText(proposal_id)",
+    );
+  });
+
+  test("passes the login of the token's account as the creator", async () => {
+    expect(await lookupCall()).toContain("creatorLogin: viewer.login");
+  });
+
+  test("passes the creation time of the proposal", async () => {
+    expect(await lookupCall()).toContain(
+      "proposalCreatedAt: proposal.created_at",
+    );
   });
 });
