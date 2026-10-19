@@ -1514,9 +1514,8 @@ function selectedNumbers(
   prs: readonly GhPullRequest[],
 ): readonly number[] | string {
   const selection = select(prs);
-  return selection.kind === "fresh"
-    ? selection.items.map((item) => item.number)
-    : selection.reason;
+  if (selection.kind === "fresh") return selection.items.map((i) => i.number);
+  return selection.kind === "stale" ? selection.reason : selection.kind;
 }
 
 describe("selectDependabotCandidates", () => {

@@ -4,7 +4,8 @@
 // `dependabot_enabled`が偽なら、GitHubにもDBにも触れずに終える。
 // 対象のリポジトリは`factory_repo`と`repo_allowlist`に明示したものだけで、オーナーの全リポジトリは見ない。
 // 候補の列挙は、収集が有効なときは収集の表から読む。
-// 表を使えないリポジトリ(記録が古い、行が無い、読めないなど)は、RESTの開いているPRの一覧で読む。archive済みのリポジトリは、マージできないので読まない。
+// 表を使えないリポジトリ(記録が古い、行が無い、読めないなど)は、RESTの開いているPRの一覧で読む。
+// 表でarchive済みと分かり、記録が鮮度の内にあるリポジトリは、マージできないので読まない。
 // 表と一覧の値は候補を絞ることにだけ使い、マージに至る判断は、PRごとにRESTで読み直した値と収集の事実で行う。
 //
 // 判断は`processDependabotPr`と`pollDependabot`にあり、`main`は入出力をつなぐだけである。
@@ -627,6 +628,8 @@ export async function processDependabotPr(
 
 export type DependabotCandidateSelection =
   | { readonly kind: "fresh"; readonly items: DependabotPrCandidate[] }
+  /** archive済みで、記録が鮮度の閾値の内にある。マージできないので、候補は無い。 */
+  | { readonly kind: "archived" }
   | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
 
 /** 候補を選ぶ入力の1件。収集の表の行と、RESTの一覧の1件を、同じ形にそろえたもの。 */
@@ -680,6 +683,8 @@ function pickDependabotRows(
 /**
  * 1つのリポジトリの読み取りの結果から、候補のPRを選ぶ。
  * 鮮度が足りなければ、行を選ばずに理由を返す。呼び出し側がそのリポジトリをRESTの一覧で読む。
+ * archive済みの記録は、鮮度が閾値の内にあるときだけ`archived`を返す。
+ * 古い記録のarchiveの印は、解除された後も残りうるので信用せず、鮮度の理由で一覧に戻す。
  * 候補の名前は表の小文字のまま返し、`createdAtMs`は並びにだけ使う。
  */
 export function selectDependabotCandidates(
@@ -687,8 +692,10 @@ export function selectDependabotCandidates(
   target: { readonly owner: string; readonly repo: string },
   staleAfterMs: number,
 ): DependabotCandidateSelection {
+  const archived = snapshot.repo?.archived === true;
+  // archiveの印は鮮度とは別に扱うので、鮮度の判定では外して渡す。
   const freshness = judgeGhRepoFreshness(
-    snapshot.repo,
+    snapshot.repo === null ? null : { ...snapshot.repo, archived: false },
     snapshot.prs,
     snapshot.db_now,
     staleAfterMs,
@@ -700,6 +707,7 @@ export function selectDependabotCandidates(
   if (repoId === null) {
     return { kind: "stale", reason: "unusable" };
   }
+  if (archived) return { kind: "archived" };
   const rows = usableGhPullRequests(
     target.owner,
     target.repo,
@@ -903,7 +911,8 @@ function resumeAfter(err: GitHubRateLimitError, nowMs: number): number {
  * 表を使えないリポジトリは、その周回だけRESTの一覧に戻す。戻したことは結果とログに出す。
  * 戻す理由は、表の鮮度の判定の理由(`no_record`、`unusable`、`not_collected`、`in_future`、`too_old`)と、
  * 表の読み取りの失敗(`read_failed`)と、収集の無効(`collection_disabled`)である。
- * archive済みのリポジトリは、マージできないので、表も一覧も読まない。
+ * 表でarchive済みと分かり、記録が鮮度の閾値の内にあるリポジトリは、マージできないので、一覧を読まない。
+ * 収集の無効、表の読み取りの失敗、古い記録のときは、archiveの印を信用せず一覧で読む。
  * 一覧はページの上限を超えると失敗し、そのリポジトリは失敗として数える。
  * 1つのリポジトリの列挙の失敗と、1件のPRの失敗は記録して続ける。
  * GitHubのレート制限に当たったら、残りを次の周回に回し、解除の時刻をstateに残す。
@@ -972,7 +981,7 @@ export async function pollDependabot(
 
   /**
    * 表から候補を足す。表を使えなければ、一覧に戻す理由を返す。
-   * archive済みのリポジトリは、何も足さずに`null`を返す。
+   * 記録が鮮度の内にあるarchive済みのリポジトリは、何も足さずに`null`を返す。
    */
   const readTable = async (target: {
     readonly owner: string;
@@ -991,17 +1000,13 @@ export async function pollDependabot(
       );
       return "read_failed";
     }
-    if (snapshot.repo?.archived === true) {
-      unlisted.delete(repoKey);
-      return null;
-    }
     const selection = selectDependabotCandidates(
       snapshot,
       target,
       staleAfterMs,
     );
     if (selection.kind === "stale") return selection.reason;
-    found.push(...selection.items);
+    if (selection.kind === "fresh") found.push(...selection.items);
     unlisted.delete(repoKey);
     return null;
   };

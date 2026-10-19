@@ -912,6 +912,7 @@ Discordの説明には、閾値、最後の成功(JST)、最新の実行の原�
   所有者の`ok`は真のままなので、鮮度の監視の通知は出ない。
   確かめるには、`gh_repos`の`detail_failed`と`truncated`と`last_attempted_at`、実行の行の`detail_incomplete`を見る。
 - 収集が集めないリポジトリは、`gh_repos`に使える行が無いので、`poll_dependabot`が毎周回RESTの一覧に戻す。
+  `poll_dependabot`は、表でarchive済みと分かり、記録が鮮度の内にあるリポジトリを、一覧でも読まない。
   `watch_pr_conflicts`は、設定か作業項目か競合の行で明示されたリポジトリをREST一覧で列挙する。
   どれにも入らず検索だけが見つけていたリポジトリは、表では見つからない。
   `owners`に無い所有者の`factory_repo`、`repo_allowlist`にあるfork、先頭が`.`のリポジトリ名、loginに`_`を含む所有者のリポジトリ、archive済みのリポジトリ、改名か移管をした古い名前が当たる。
