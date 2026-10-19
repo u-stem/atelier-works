@@ -34,7 +34,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から11分以上待たされていることを検知し、通知を新しく残した |
-| `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないこと、または所有者の収集は成功していても一部のリポジトリの記録が閾値を超えて古いことを検知し、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない |
+| `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないこと、または所有者の収集は成功していても一部のリポジトリの記録が閾値を超えて古いことを検知し、通知を新しく残した。`repo_allowlist`が空で、設定により収集が止まっていること(収集の無効)を検知したときも、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない。ただし、収集の無効は設定の事実なので、停止の間も残す |
 | `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
@@ -93,7 +93,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `periodic_worker_missing` | なし | 説明に原因、「次の操作」 |
-| `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳)、「次の操作」、所有者 |
+| `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳。収集の無効では、止まっている設定と、設定を戻すか`repo_allowlist`に並べる操作)、「次の操作」、所有者 |
 | `default_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |

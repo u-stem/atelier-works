@@ -2337,6 +2337,8 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 このときは`gh_collect_enabled`が`false`なので、収集は何もしない。
 反映を確かめてから、トークンを入れて有効にする。
 `repo_allowlist`が空で`owners`に所有者がいる間は、有効にするまで、収集の無効の通知が残る。
+新しいインスタンスは両方の設定が既定の`false`なので、この通知が最初から出る。
+今は行動が要らない通知だが、これは受け入れている。収集を有効にすると解決される。
 
 1. 反映の後に、`gh_collect_enabled`が`false`のまま、収集が何も書かずに終わることを実ジョブで確かめる。
 
@@ -2390,6 +2392,8 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT to_regclass('factory.gh_pull_requests'), to_regclass('factory.gh_issues')"
    ```
 
+   手順1から手順3の間は、`repo_allowlist`が空で`owners`に所有者がいると、収集の無効の通知が出る。
+   手順3で両方の設定が`true`になると、自動で解決される。
 3. `gh_collect_detail_enabled`を`true`に直す。直し方は[収集を有効にする](#収集を有効にする)の手順4と同じである。
 4. 次の周回(5分以内)の後に、所有者ごとの実行の記録と、リポジトリごとの印を読む。
 
@@ -2475,7 +2479,7 @@ stateを読めない回は、所有者の最古の実行の開始時刻で代え
 
 | 状況 | 扱い |
 | --- | --- |
-| 成功が一度も無く、トークンの無い所有者。収集が動いている間で、`repo_allowlist`が空でないとき | 通知しない。最新の実行の終わりが16分以内なら、収集が動いていると見なす |
+| 成功が一度も無く、トークンの無い所有者。収集が動いている間で、`repo_allowlist`が空でないとき | 通知しない。最新の実行の終わりが16分以内なら、収集が動いていると見なす。`repo_allowlist`が空のときは、この行に当たらず、猶予の後に通知する |
 | レート制限で待っている間 | 待ちが終わってから10分まで通知しない。基準の時刻から60分を超えたら通知する |
 | GitHubの5xxと時間切れ | 基準の時刻から60分まで通知しない |
 | 最新の実行が150秒以内に始まって実行中 | 通知しない |
@@ -2551,8 +2555,9 @@ wmill job list --script-path f/factory/collect_github --limit 5
 本文は`<所有者>の収集の無効:`と空白で始まる固定の文で、所有者の通知とリポジトリの古さの通知の先頭と重ならない。
 Discordの通知の原因は`collect_disabled`で、次の操作が載る。
 
-この通知を出している間は、立っている所有者の通知とリポジトリの古さの通知を解決しない。
-`gh_collect_enabled`が`false`の間も、`gh_collect_detail_enabled`だけが`false`の間も同じである。
+`gh_collect_enabled`が`false`の間だけ、立っている所有者の通知とリポジトリの古さの通知を解決しない。
+`gh_collect_detail_enabled`だけが`false`の間は、リポジトリの古さの通知を解決し、収集の無効の通知を立てる。
+所有者の通知は、どちらの場合も通常どおり判定する。
 設定の事実なので、定期ジョブ用のworkerが止まっていても抑えない。
 
 次のどれかで、自己更新が自動で解決する。
