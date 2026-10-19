@@ -443,23 +443,44 @@ describe("humanPrCandidatesFromOpenList", () => {
     ).toEqual(["Acme/Widgets"]);
   });
 
-  test("uses the creation time to order the candidates", () => {
+  test("uses the update time to order the candidates", () => {
     expect(
       humanPrCandidatesFromOpenList(
         "acme",
         "widgets",
-        [listed({ createdAtMs: Date.parse("2026-10-12T01:02:03.000Z") })],
+        [
+          listed({
+            createdAtMs: Date.parse("2026-10-01T00:00:00.000Z"),
+            updatedAtMs: Date.parse("2026-10-13T05:06:07.000Z"),
+          }),
+        ],
+        AUTHORS,
+      ).map((found) => found.updatedAtMs),
+    ).toEqual([Date.parse("2026-10-13T05:06:07.000Z")]);
+  });
+
+  test("uses the creation time when the update time is missing", () => {
+    expect(
+      humanPrCandidatesFromOpenList(
+        "acme",
+        "widgets",
+        [
+          listed({
+            createdAtMs: Date.parse("2026-10-12T01:02:03.000Z"),
+            updatedAtMs: null,
+          }),
+        ],
         AUTHORS,
       ).map((found) => found.updatedAtMs),
     ).toEqual([Date.parse("2026-10-12T01:02:03.000Z")]);
   });
 
-  test("puts the candidate without a creation time last", () => {
+  test("puts the candidate without a time last", () => {
     expect(
       humanPrCandidatesFromOpenList(
         "acme",
         "widgets",
-        [listed({ createdAtMs: null })],
+        [listed({ createdAtMs: null, updatedAtMs: null })],
         AUTHORS,
       ).map((found) => found.updatedAtMs),
     ).toEqual([0]);

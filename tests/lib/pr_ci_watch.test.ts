@@ -5401,6 +5401,29 @@ describe("the limits of the human discovery", () => {
     expect(h.prCalls).toEqual([HUMAN_KEY]);
   });
 
+  test("counts the candidates that the rate limit of a pull request left unread as deferred", async () => {
+    const h = harness({
+      human: tableHuman([ghPrRow(40), ghPrRow(41)]),
+      prs: {
+        [HUMAN_KEY]: rateLimitError(),
+        "acme/widgets#41": humanPr({ number: 41 }),
+      },
+    });
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_deferred).toBe(2);
+  });
+
+  test("does not count the candidates that the read limit left as deferred", async () => {
+    const { rows, prs } = manyPrs(100, 170);
+    const h = harness({
+      human: tableHuman(rows),
+      prs,
+      rowsForPr: recordedRows(100, 170),
+    });
+    const result = await runPrCiWatch(h.deps);
+    expect(result.human_deferred).toBe(0);
+  });
+
   test("does not record a failure for the rate limit of a pull request", async () => {
     const h = harness({
       human: tableHuman([ghPrRow(40)]),
@@ -6319,6 +6342,31 @@ describe("a repository that the config names", () => {
       ]);
     });
 
+    test("reads the pull requests that were updated recently first", async () => {
+      const h = harness(
+        listOnly(
+          [
+            listedPr(40, { createdAtMs: 9000, updatedAtMs: 1000 }),
+            listedPr(41, { createdAtMs: 1000, updatedAtMs: 3000 }),
+            listedPr(42, { createdAtMs: 2000, updatedAtMs: 2000 }),
+          ],
+          {
+            prs: {
+              "acme/widgets#40": humanPr({ number: 40 }),
+              "acme/widgets#41": humanPr({ number: 41 }),
+              "acme/widgets#42": humanPr({ number: 42 }),
+            },
+          },
+        ),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([
+        "acme/widgets#41",
+        "acme/widgets#42",
+        "acme/widgets#40",
+      ]);
+    });
+
     test("reads the pull requests whose author is known before the ones whose author is unknown", async () => {
       const h = harness(
         listOnly(
@@ -6477,6 +6525,18 @@ describe("a repository that the config names", () => {
         const result = await runPrCiWatch(h.deps);
         expect(result.human_deferred).toBe(1);
       });
+
+      test("names the stage of the candidates in the warning", async () => {
+        const h = harness(slowLists());
+        await runPrCiWatch(h.deps);
+        expect(
+          h.logs.find(
+            (line) =>
+              line.message ===
+              "pr ci human discovery stopped by the time budget",
+          )?.fields,
+        ).toEqual({ stage: "collect_candidates" });
+      });
     });
 
     test("does not list when the run budget is already used", async () => {
@@ -6505,6 +6565,41 @@ describe("a repository that the config names", () => {
       });
       await runPrCiWatch(h.deps);
       expect(h.prCalls).toEqual([]);
+    });
+
+    describe("when the list used up the budget before the pull requests are read", () => {
+      function usedUp(): Setup {
+        return {
+          human: {
+            useTable: false,
+            explicit: [{ owner: "acme", repo: "widgets" }],
+            lists: { "acme/widgets": [listedPr(40), listedPr(41)] },
+            listTakesMs: HUMAN_DISCOVERY_BUDGET_MS,
+          },
+          prs: {
+            [HUMAN_KEY]: humanPr(),
+            "acme/widgets#41": humanPr({ number: 41 }),
+          },
+        };
+      }
+
+      test("counts the candidates that were not read as deferred", async () => {
+        const h = harness(usedUp());
+        const result = await runPrCiWatch(h.deps);
+        expect(result.human_deferred).toBe(2);
+      });
+
+      test("names the stage of the pull requests in the warning", async () => {
+        const h = harness(usedUp());
+        await runPrCiWatch(h.deps);
+        expect(
+          h.logs.find(
+            (line) =>
+              line.message ===
+              "pr ci human discovery stopped by the time budget",
+          )?.fields,
+        ).toEqual({ stage: "read_prs" });
+      });
     });
 
     test("does not record a pull request of the list that belongs to another repository", async () => {

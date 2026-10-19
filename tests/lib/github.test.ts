@@ -4714,6 +4714,40 @@ describe("listOpenPullRequests", () => {
     expect(prs[0]?.createdAtMs).toBeNull();
   });
 
+  test("returns the update time of the pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { updated_at: "2026-10-03T04:05:06Z" })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.updatedAtMs).toBe(Date.parse("2026-10-03T04:05:06Z"));
+  });
+
+  test("returns a null update time when the entry has none, and keeps the entry", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([openPr(12)])]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.updatedAtMs).toBeNull();
+  });
+
+  test("returns a null update time when the value is not a date", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { updated_at: "yesterday" })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.updatedAtMs).toBeNull();
+  });
+
   test("returns a null author when the pull request has none", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([openPr(12, { user: null })]),
