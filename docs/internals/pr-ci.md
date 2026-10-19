@@ -229,7 +229,7 @@ PRが閉じる、headが進む、通るのどれかになるまで続ける。�
 直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、ラウンドの番号も処理済みの位置も進めない。
 完了のステップでも、作業項目の`head_sha`を更新しない([PRワークフロー](pr-workflow.md)の「CIの失敗を直す回」)。
 ownerとrepoは、行との照合では小文字で比べる。
-作業項目には、`poll_prs`が`startFix`に渡すownerとrepo(検索結果か、表の候補を確かめ直した`getIssue`の応答の`repository_url`由来)と同じ綴りを渡す。
+作業項目には、`poll_prs`が`startFix`に渡すownerとrepo(候補を確かめ直した`getIssue`の応答の`repository_url`由来)と同じ綴りを渡す。
 一意索引と既存の照合が大文字小文字を区別するためである。
 
 `countPrFixFailures`は、`ci_check_id`を持つ作業項目と、`conflict_check_id`を持つ作業項目を数えない。
