@@ -12,6 +12,8 @@ import type {
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
   GhRepoFreshnessRow,
+  GhRepoStaleSnapshot,
+  GhRepoStaleSummary,
   GhSource,
 } from "./types.ts";
 
@@ -340,4 +342,21 @@ export function usableTableRows<T extends { readonly number: number }>(
     rows.push(...[...item.usable].sort((a, b) => a.number - b.number));
   }
   return rows;
+}
+
+/** リポジトリ単位の古さを所有者ごとに数える。 */
+export function summarizeRepoStale(_input: {
+  readonly snapshot: GhRepoStaleSnapshot;
+  readonly owners: readonly string[];
+  readonly staleAfterMs: number;
+  readonly isTarget: (owner: string, repo: string) => boolean;
+}): GhRepoStaleSummary[] {
+  return [];
+}
+
+/** 数える対象のリポジトリか判定する関数を作る。 */
+export function repoStaleTargetFilter(
+  _config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+): (owner: string, repo: string) => boolean {
+  return () => false;
 }

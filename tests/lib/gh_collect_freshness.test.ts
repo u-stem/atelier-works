@@ -535,6 +535,7 @@ function setup(options: Setup = {}): {
         rec.listed.push(names);
         return rows;
       }),
+    listRepoStale: async () => [],
     getState: async () => {
       if (state === "unreadable") throw new Error("state unreadable");
       return state;

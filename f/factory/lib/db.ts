@@ -81,6 +81,7 @@ import {
   type GhRepoFreshnessRow,
   type GhRepoGone,
   type GhRepoOpenPrSnapshot,
+  type GhRepoStaleSnapshot,
   type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
@@ -6622,6 +6623,7 @@ function toGhRepo(row: GhRepoSqlRow): GhRepo {
     ),
     truncated: parseBoolean(row.truncated, "truncated"),
     detail_failed: parseBoolean(row.detail_failed, "detail_failed"),
+    first_seen_at: new Date(0),
   };
 }
 
@@ -6924,6 +6926,14 @@ export async function listGhCollectFreshness(
       "first_started_at",
     ),
   }));
+}
+
+/** リポジトリ単位の古さを数える入力を読む。 */
+export async function listGhRepoStaleSnapshot(
+  _owners: readonly string[],
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhRepoStaleSnapshot> {
+  return { db_now: new Date(0), probes: [] };
 }
 
 /**

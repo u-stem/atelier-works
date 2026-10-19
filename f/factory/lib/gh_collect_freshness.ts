@@ -10,6 +10,7 @@ import type { Logger } from "./log.ts";
 import {
   type GhCollectErrorCode,
   type GhCollectFreshnessRow,
+  type GhRepoStaleSummary,
   isGitHubName,
   isRecord,
   type NoticeRecord,
@@ -58,7 +59,7 @@ const MIN_STALE_THRESHOLD_MS = 25 * MINUTE_MS;
 const JST_OFFSET_MS = 9 * 60 * MINUTE_MS;
 
 /** 収集が成功していない原因。`not_running`は、最新の実行の記録が古い(収集が動いていない)こと。 */
-export type GhCollectCause = GhCollectErrorCode | "not_running";
+export type GhCollectCause = GhCollectErrorCode | "not_running" | "repo_stale";
 
 /** 所有者1人分の判定。 */
 export type FreshnessVerdict =
@@ -177,6 +178,21 @@ export function judgeOwnerFreshness(input: {
   return done("stale");
 }
 
+/** リポジトリ単位の古さのnoticeの本文の先頭。 */
+export function repoStaleNoticePrefix(_owner: string): string {
+  return "";
+}
+
+/** リポジトリ単位の古さのnotice。 */
+export function repoStaleNotice(_owner: string): NoticeRecord {
+  return { kind: GH_COLLECT_STALE_KIND, message: "" };
+}
+
+/** リポジトリ単位の古さのnoticeの本文から所有者を取り出す。 */
+export function parseRepoStaleNoticeOwner(_message: string): string | null {
+  return null;
+}
+
 /** 所有者のnoticeの本文の先頭。解決の先頭一致に使う。末尾の区切りまで含めるので、`foo`が`foobar`に当たらない。 */
 export function staleNoticePrefix(owner: string): string {
   return `${owner}: `;
@@ -207,6 +223,7 @@ export function formatJstMinute(ms: number): string {
 
 const CAUSE_LABELS: Readonly<Record<GhCollectCause, string>> = {
   not_running: "収集が動いていません",
+  repo_stale: "",
   no_token: "読み取りトークンがありません",
   token_config_invalid: "トークンの設定が不正です",
   db_error: "DBへの書き込みに失敗しました",
@@ -223,6 +240,7 @@ const CAUSE_LABELS: Readonly<Record<GhCollectCause, string>> = {
 };
 
 const NEXT_ACTIONS: Readonly<Record<GhCollectCause, string>> = {
+  repo_stale: "",
   not_running:
     "wmill schedule get f/factory/collect_githubでスケジュールが有効か、wmill job list --script-path f/factory/collect_githubで直近のジョブを確かめる。止めるつもりなら、gh_collect_enabledをfalseにする",
   unauthorized:
@@ -263,6 +281,8 @@ export function staleCauseText(input: {
   /** 最後の成功の時刻。無ければ`null`。 */
   readonly lastSuccessAtMs: number | null;
   readonly cause: GhCollectCause;
+  /** 原因が`repo_stale`のときの集計。 */
+  readonly repoStale?: GhRepoStaleSummary;
 }): string {
   const minutes = Math.round(input.thresholdMs / MINUTE_MS);
   const last =
@@ -345,6 +365,11 @@ export type GhCollectFreshnessDeps = {
   readonly listFreshness: (
     owners: readonly string[],
   ) => Promise<GhCollectFreshnessRow[]>;
+  /** 所有者ごとの、リポジトリ単位の古さの集計。 */
+  readonly listRepoStale: (
+    owners: readonly string[],
+    thresholdMs: number,
+  ) => Promise<readonly GhRepoStaleSummary[]>;
   /** Windmillのstateを読む。 */
   readonly getState: () => Promise<unknown>;
   /** Windmillのstateに書く。stateの全体を置き換える。 */

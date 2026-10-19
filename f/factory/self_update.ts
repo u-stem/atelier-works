@@ -825,6 +825,7 @@ export async function main(): Promise<SelfUpdateResult> {
           withCallTimeout("listGhCollectFreshness", () =>
             listGhCollectFreshness(owners),
           ),
+        listRepoStale: async () => [],
         getState: () => withCallTimeout("getState", () => wmill.getState()),
         setState: (state) =>
           withCallTimeout("setState", () => wmill.setState(state)),

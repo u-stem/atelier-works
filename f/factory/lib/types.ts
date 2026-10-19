@@ -1040,6 +1040,8 @@ export type GhRepo = {
   readonly truncated: boolean;
   /** 前回の着手が失敗した。 */
   readonly detail_failed: boolean;
+  /** 収集が最初にこの行を作った時刻。更新されない。 */
+  readonly first_seen_at: Date;
 };
 
 /** 一覧に載ったリポジトリの書き込み。`owner`は呼び出し側が別に渡す。 */
@@ -1071,6 +1073,51 @@ export type GhCollectOwnerState = {
   } | null;
   /** `led`が真で`finished_at`のある最新の実行の`started_at`。無ければ`null`。 */
   readonly last_led_at: Date | null;
+};
+
+/**
+ * リポジトリ単位の古さを数えるための、リポジトリ1件分の入力。
+ * `row`が`null`なら`gh_repos`に行が無い。SQLは行のあるリポジトリだけを返す。
+ * 開いた行は中身を読まず、あるか(`*_open`)と、使える行があるか(`*_usable`)だけを持つ。
+ */
+export type GhRepoStaleProbe = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly row: GhRepoFreshnessRow | null;
+  /** `gh_repos`に最初に行ができた時刻。更新されない。 */
+  readonly first_seen_at: Date;
+  readonly pr_open: boolean;
+  readonly pr_usable: boolean;
+  readonly issue_open: boolean;
+  readonly issue_usable: boolean;
+};
+
+/** リポジトリ単位の古さを数えるための入力を、1つの文で読んだ結果。 */
+export type GhRepoStaleSnapshot = {
+  readonly db_now: Date;
+  readonly probes: readonly GhRepoStaleProbe[];
+};
+
+/** 非`fresh`の理由ごとの件数。 */
+export type GhRepoStaleReasonCounts = {
+  readonly no_record: number;
+  readonly unusable: number;
+  readonly not_collected: number;
+  readonly in_future: number;
+  readonly too_old: number;
+};
+
+/** 所有者1人分の、リポジトリ単位の古さの集計。 */
+export type GhRepoStaleSummary = {
+  readonly owner: string;
+  /** 数える対象のリポジトリの数。 */
+  readonly targets: number;
+  /** 非`fresh`で、最初に見た時刻からの猶予も過ぎたリポジトリの数。 */
+  readonly stale: number;
+  /** 非`fresh`だが、猶予の間のリポジトリの数。 */
+  readonly pending: number;
+  /** `stale`の理由ごとの件数。 */
+  readonly reasons: GhRepoStaleReasonCounts;
 };
 
 /** 所有者ごとの、収集の鮮度の判定に使う記録。実行の無い所有者は、時刻と`latest`が`null`の行になる。 */
