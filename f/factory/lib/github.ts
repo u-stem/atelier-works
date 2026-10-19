@@ -1054,6 +1054,8 @@ export type Issue = {
   readonly assignees: string[];
   /** 応答の`repository_url`から読んだリポジトリの正規の綴り。読めないときは`null`。 */
   readonly repository: { readonly owner: string; readonly repo: string } | null;
+  /** PRか。 */
+  readonly isPullRequest: boolean;
 };
 
 /** `{ name: string }`。ラベルのオブジェクト(`{ name, ... }`の形)で使う。 */
@@ -1171,7 +1173,21 @@ export async function getIssue(
     labels,
     assignees,
     repository: repositoryOf(Reflect.get(parsed, "repository_url")),
+    isPullRequest: false,
   };
+}
+
+/** `listLabeledOpenIssues`が読むページ数の既定の上限。 */
+export const LABELED_ISSUES_MAX_PAGES = 10;
+
+export async function listLabeledOpenIssues(
+  _client: GhClient,
+  _owner: string,
+  _repo: string,
+  _label: string,
+  _maxPages: number = LABELED_ISSUES_MAX_PAGES,
+): Promise<number[]> {
+  return [];
 }
 
 /** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */

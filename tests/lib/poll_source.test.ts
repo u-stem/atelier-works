@@ -1,13 +1,15 @@
-// `poll_issues`が、トリガーラベル付きのIssueを見つける元の切り替えのテスト。
-// 表の候補をRESTで確かめ直すこと、使えない所有者を検索に戻すこと、検索の経路と同じ項目になることを確かめる。
+// `poll_issues`が、トリガーラベル付きのIssueを見つける経路のテスト。
+// 表の候補をRESTで確かめ直すこと、古い非明示のリポジトリを見送ること、明示のリポジトリを表が使えないときだけRESTで読むことを確かめる。
 
 import { describe, expect, test } from "bun:test";
-import type {
-  Issue,
-  IssueSearchItem,
-  PrSearchItem,
-  PullRequest,
-  Viewer,
+import {
+  getIssue,
+  type Issue,
+  type IssueSearchItem,
+  listLabeledOpenIssues,
+  type PrSearchItem,
+  type PullRequest,
+  type Viewer,
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
@@ -32,11 +34,13 @@ import type {
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
 } from "../../f/factory/lib/types.ts";
+import { ghApiOk } from "./testSupport.ts";
 
 const MINUTE_MS = 60_000;
 const DB_NOW = new Date("2026-10-18T00:00:00.000Z");
 const STALE_AFTER_MS = 15 * MINUTE_MS;
 const TOO_OLD = new Date(DB_NOW.getTime() - STALE_AFTER_MS - 1);
+const IN_FUTURE = new Date(DB_NOW.getTime() + MINUTE_MS);
 const REPO_ID = 4242;
 const LABEL = "factory";
 
@@ -99,11 +103,12 @@ function restIssue(number: number, overrides: Partial<Issue> = {}): Issue {
     labels: [LABEL],
     assignees: [],
     repository: { owner: "Acme", repo: "Widgets" },
+    isPullRequest: false,
     ...overrides,
   };
 }
 
-/** 検索が返す項目。綴りは`getIssue`の応答と同じ。 */
+/** 候補の項目。綴りは`getIssue`の応答と同じ。 */
 function searchItem(
   number: number,
   overrides: Partial<IssueSearchItem> = {},
@@ -123,34 +128,52 @@ function searchItem(
 const ACME: FactoryOwner = { name: "Acme", kind: "org" };
 const BETA: FactoryOwner = { name: "Beta", kind: "user" };
 
+/** 所有者`acme`の`gadgets`の応答。 */
+function gadgetsIssue(number: number, overrides: Partial<Issue> = {}): Issue {
+  return restIssue(number, {
+    htmlUrl: `https://github.com/Acme/Gadgets/issues/${String(number)}`,
+    repository: { owner: "Acme", repo: "Gadgets" },
+    ...overrides,
+  });
+}
+
+/** 明示のどのリポジトリにも当たらない`factory_repo`。所有者の他のリポジトリがすべて非明示になる。 */
+const OUTSIDE_FACTORY = "https://github.com/outside/factory";
+
 type Fixture = {
-  /** 所有者名(小文字)ごとの検索の結果。`Error`なら失敗する。 */
-  searches?: Record<string, IssueSearchItem[] | Error>;
   /** 所有者名(小文字)ごとの表の読み取り。`Error`なら失敗する。 */
   snapshots?: Record<string, GhOwnerOpenIssueSnapshot | Error>;
+  /** `owner/repo`(小文字)ごとの、トリガーラベル付きのIssueの一覧。`Error`なら失敗する。 */
+  listings?: Record<string, number[] | Error>;
   /** `owner/repo#number`(小文字)ごとの`getIssue`の応答。 */
   issues?: Record<string, Issue | Error>;
 };
 
 type Options = {
-  source?: "search" | "db";
+  useTable?: boolean;
   owners?: readonly FactoryOwner[];
   repoAllowlist?: string[];
+  factoryRepo?: string;
   staleAfterMs?: number;
 };
 
-function scopeOf(owners: readonly FactoryOwner[], repoAllowlist: string[]) {
+function scopeOf(
+  owners: readonly FactoryOwner[],
+  repoAllowlist: string[],
+  factoryRepo = "https://github.com/acme/widgets",
+) {
   return {
     owners: [...owners],
     repo_allowlist: repoAllowlist,
-    factory_repo: "https://github.com/acme/widgets",
+    factory_repo: factoryRepo,
   };
 }
 
 async function run(fixture: Fixture, options: Options = {}) {
   const owners = options.owners ?? [ACME];
-  const searched: string[] = [];
   const read: string[] = [];
+  const listed: string[] = [];
+  const labels: string[] = [];
   const got: string[] = [];
   const failures: string[] = [];
   const logs: { message: string; fields: unknown }[] = [];
@@ -163,24 +186,26 @@ async function run(fixture: Fixture, options: Options = {}) {
   };
   const result = await discoverIssues(
     {
-      source: options.source ?? "db",
+      useTable: options.useTable ?? true,
       owners,
-      scope: scopeOf(owners, options.repoAllowlist ?? []),
+      scope: scopeOf(owners, options.repoAllowlist ?? [], options.factoryRepo),
       triggerLabel: LABEL,
       staleAfterMs: options.staleAfterMs ?? STALE_AFTER_MS,
       log,
     },
     {
-      searchIssues: async (owner) => {
-        searched.push(owner.name);
-        const found = fixture.searches?.[owner.name.toLowerCase()] ?? [];
-        if (found instanceof Error) throw found;
-        return found;
-      },
       readOwnerIssues: async (owner) => {
         read.push(owner);
         const found = fixture.snapshots?.[owner.toLowerCase()];
         if (found === undefined) throw new Error("no snapshot");
+        if (found instanceof Error) throw found;
+        return found;
+      },
+      listLabeledIssues: async (owner, repo, label) => {
+        listed.push(`${owner}/${repo}`);
+        labels.push(label);
+        const found = fixture.listings?.[`${owner}/${repo}`.toLowerCase()];
+        if (found === undefined) throw new Error("no listing");
         if (found instanceof Error) throw found;
         return found;
       },
@@ -197,7 +222,7 @@ async function run(fixture: Fixture, options: Options = {}) {
       },
     },
   );
-  return { result, searched, read, got, failures, logs };
+  return { result, read, listed, labels, got, failures, logs };
 }
 
 /** 鮮度の足りるwidgetsの表に、指定の番号の行がある所有者。 */
@@ -207,6 +232,17 @@ function freshAcme(...numbers: number[]): GhOwnerOpenIssueSnapshot {
     numbers.map((number) => tableRow({ id: number, number })),
   );
 }
+
+/** 表が使えない理由と、それを起こす`gh_repos`の行の上書き。 */
+const STALE_CASES: readonly {
+  readonly reason: string;
+  readonly overrides: Partial<GhOwnerRepoFreshnessRow>;
+}[] = [
+  { reason: "too_old", overrides: { last_collected_at: TOO_OLD } },
+  { reason: "not_collected", overrides: { last_collected_at: null } },
+  { reason: "in_future", overrides: { last_collected_at: IN_FUTURE } },
+  { reason: "unusable", overrides: { repo_id: null } },
+];
 
 describe("issueKey", () => {
   test("lowercases the owner and the repository", () => {
@@ -247,6 +283,15 @@ describe("confirmTableIssue", () => {
     expect(check).toEqual({ kind: "drop", reason: "label_absent" });
   });
 
+  test("drops a pull request", () => {
+    const check = confirmTableIssue(
+      tableRow(),
+      restIssue(3, { isPullRequest: true }),
+      LABEL,
+    );
+    expect(check).toEqual({ kind: "drop", reason: "pull_request" });
+  });
+
   test("reports a mismatch when the repository is unknown", () => {
     const check = confirmTableIssue(
       tableRow(),
@@ -269,45 +314,24 @@ describe("confirmTableIssue", () => {
     const check = confirmTableIssue(tableRow(), restIssue(4), LABEL);
     expect(check).toEqual({ kind: "mismatch" });
   });
-});
 
-describe("discoverIssues from a search", () => {
-  test("searches every owner and reads neither the table nor the issues", async () => {
-    const { searched, read, got } = await run(
-      { searches: { acme: [searchItem(3)], beta: [] } },
-      { source: "search", owners: [ACME, BETA] },
+  test("accepts a reference that is only an owner, a repository and a number", () => {
+    const check = confirmTableIssue(
+      { owner: "acme", repo: "widgets", number: 3 },
+      restIssue(3),
+      LABEL,
     );
-    expect([searched, read, got]).toEqual([["Acme", "Beta"], [], []]);
-  });
-
-  test("returns the searched items", async () => {
-    const { result } = await run(
-      { searches: { acme: [searchItem(3)] } },
-      { source: "search" },
-    );
-    expect(result.items).toEqual([searchItem(3)]);
-  });
-
-  test("records a failed search and goes on to the next owner", async () => {
-    const { failures, result } = await run(
-      { searches: { acme: new Error("boom"), beta: [searchItem(8)] } },
-      { source: "search", owners: [ACME, BETA] },
-    );
-    expect([failures, result.failed, result.items.length]).toEqual([
-      ["search_issues:Acme"],
-      1,
-      1,
-    ]);
+    expect(check.kind).toBe("ok");
   });
 });
 
 describe("discoverIssues from the table", () => {
-  test("does not search when every owner is fresh", async () => {
-    const { searched } = await run({
+  test("does not list the explicit repository when its record is fresh", async () => {
+    const { listed } = await run({
       snapshots: { acme: freshAcme(3) },
       issues: { "acme/widgets#3": restIssue(3) },
     });
-    expect(searched).toEqual([]);
+    expect(listed).toEqual([]);
   });
 
   test("returns the confirmed table candidates in the spelling of GitHub", async () => {
@@ -329,70 +353,17 @@ describe("discoverIssues from the table", () => {
     expect(got).toEqual(["acme/widgets#3", "acme/widgets#5"]);
   });
 
-  test("searches only the owner whose records are stale", async () => {
-    const { searched } = await run(
+  test("reads the table of each owner once", async () => {
+    const { read } = await run(
       {
         snapshots: {
-          acme: freshAcme(3),
-          beta: snapshot(
-            [repoRow("widgets", { last_collected_at: TOO_OLD })],
-            [],
-          ),
+          acme: freshAcme(),
+          beta: snapshot([repoRow("tools")], []),
         },
-        issues: { "acme/widgets#3": restIssue(3) },
       },
       { owners: [ACME, BETA] },
     );
-    expect(searched).toEqual(["Beta"]);
-  });
-
-  test("records a failed read of the owner and searches that owner", async () => {
-    const { failures, searched } = await run({
-      snapshots: { acme: new Error("db down") },
-    });
-    expect([failures, searched]).toEqual([
-      ["read_gh_owner_issues:Acme"],
-      ["Acme"],
-    ]);
-  });
-
-  test("counts a failed read as a failure of the round", async () => {
-    const { result } = await run({
-      snapshots: { acme: new Error("db down") },
-    });
-    expect(result.failed).toBe(1);
-  });
-
-  test("does not record a failure for stale records", async () => {
-    const { failures } = await run({
-      snapshots: {
-        acme: snapshot(
-          [repoRow("widgets", { last_collected_at: TOO_OLD })],
-          [],
-        ),
-      },
-    });
-    expect(failures).toEqual([]);
-  });
-
-  test("searches the owner when an explicit repository is not visible", async () => {
-    const { searched } = await run(
-      {
-        snapshots: {
-          acme: snapshot(
-            [repoRow("widgets"), repoRow("gadgets", { gone: true })],
-            [],
-          ),
-        },
-      },
-      {
-        repoAllowlist: [
-          "https://github.com/acme/widgets",
-          "https://github.com/acme/gadgets",
-        ],
-      },
-    );
-    expect(searched).toEqual(["Acme"]);
+    expect(read).toEqual(["Acme", "Beta"]);
   });
 
   test("does not take the issues of an archived repository", async () => {
@@ -438,6 +409,17 @@ describe("discoverIssues from the table", () => {
     expect([result.items, failures]).toEqual([[], []]);
   });
 
+  test("counts the confirmed candidates", async () => {
+    const { result } = await run({
+      snapshots: { acme: freshAcme(3, 4) },
+      issues: {
+        "acme/widgets#3": restIssue(3, { labels: [] }),
+        "acme/widgets#4": restIssue(4),
+      },
+    });
+    expect(result.stats.candidates).toBe(2);
+  });
+
   test("counts the dropped candidates", async () => {
     const { result } = await run({
       snapshots: { acme: freshAcme(3, 4) },
@@ -446,9 +428,15 @@ describe("discoverIssues from the table", () => {
         "acme/widgets#4": restIssue(4),
       },
     });
-    expect([result.stats.table_candidates, result.stats.table_dropped]).toEqual(
-      [2, 1],
-    );
+    expect(result.stats.dropped).toBe(1);
+  });
+
+  test("drops a row that GitHub reports as a pull request", async () => {
+    const { result } = await run({
+      snapshots: { acme: freshAcme(3) },
+      issues: { "acme/widgets#3": restIssue(3, { isPullRequest: true }) },
+    });
+    expect(result.items).toEqual([]);
   });
 
   test("records a failed read of an issue and drops only that candidate", async () => {
@@ -463,7 +451,7 @@ describe("discoverIssues from the table", () => {
       failures,
       result.items.map((item) => item.number),
       result.failed,
-    ]).toEqual([["confirm_table_issue:acme/widgets#3"], [4], 1]);
+    ]).toEqual([["confirm_issue:acme/widgets#3"], [4], 1]);
   });
 
   test("records a mismatch as a failure and drops the candidate", async () => {
@@ -472,71 +460,13 @@ describe("discoverIssues from the table", () => {
       issues: { "acme/widgets#3": restIssue(3, { repository: null }) },
     });
     expect([failures, result.items]).toEqual([
-      ["confirm_table_issue:acme/widgets#3"],
+      ["confirm_issue:acme/widgets#3"],
       [],
     ]);
   });
 
-  test("records a failed fallback search and goes on to the next owner", async () => {
-    const { failures, result } = await run(
-      {
-        snapshots: {
-          acme: snapshot(
-            [repoRow("widgets", { last_collected_at: TOO_OLD })],
-            [],
-          ),
-          beta: snapshot(
-            [repoRow("widgets", { last_collected_at: TOO_OLD })],
-            [],
-          ),
-        },
-        searches: { acme: new Error("boom"), beta: [searchItem(8)] },
-      },
-      { owners: [ACME, BETA] },
-    );
-    expect([failures, result.items.length]).toEqual([
-      ["search_issues:Acme"],
-      1,
-    ]);
-  });
-
-  test("reports the number and the reasons of the fallback searches", async () => {
-    const { result } = await run(
-      {
-        snapshots: {
-          acme: snapshot(
-            [repoRow("widgets", { last_collected_at: TOO_OLD })],
-            [],
-          ),
-          beta: new Error("db down"),
-        },
-      },
-      { owners: [ACME, BETA] },
-    );
-    expect([
-      result.stats.fallback_searches,
-      result.stats.fallback_reasons,
-    ]).toEqual([2, { too_old: 1, read_failed: 1 }]);
-  });
-
-  test("builds a new reason record for every round", async () => {
-    const fixture = {
-      snapshots: {
-        acme: snapshot(
-          [repoRow("widgets", { last_collected_at: TOO_OLD })],
-          [],
-        ),
-      },
-    };
-    const first = await run(fixture);
-    const second = await run(fixture);
-    expect(first.result.stats.fallback_reasons).not.toBe(
-      second.result.stats.fallback_reasons,
-    );
-  });
-
   test("judges the freshness with the given threshold", async () => {
-    const { searched } = await run(
+    const { listed } = await run(
       {
         snapshots: {
           acme: snapshot(
@@ -547,234 +477,645 @@ describe("discoverIssues from the table", () => {
       },
       { staleAfterMs: STALE_AFTER_MS + 2 },
     );
-    expect(searched).toEqual([]);
-  });
-
-  test("reports the source of the round", async () => {
-    const { result } = await run({ snapshots: { acme: freshAcme() } });
-    expect(result.stats.source).toBe("db");
+    expect(listed).toEqual([]);
   });
 });
 
-describe("the table and the search find the same issues", () => {
-  /** 検索の経路と表の経路の項目を、許可リストを当ててから返す。 */
-  async function both(
-    fixture: Fixture,
-    options: Options = {},
-  ): Promise<{ search: IssueSearchItem[]; table: IssueSearchItem[] }> {
-    const owners = options.owners ?? [ACME];
-    const scope = scopeOf(owners, options.repoAllowlist ?? []);
-    const search = await run(fixture, { ...options, source: "search" });
-    const table = await run(fixture, { ...options, source: "db" });
+describe("discoverIssues skips a stale repository that is not explicit", () => {
+  const options: Options = { factoryRepo: OUTSIDE_FACTORY };
+
+  /** gadgetsが古く、toolsが新しい所有者。 */
+  function mixed(overrides: Partial<GhOwnerRepoFreshnessRow>) {
     return {
-      search: filterByRepoAllowlist(search.result.items, scope),
-      table: filterByRepoAllowlist(table.result.items, scope),
+      snapshots: {
+        acme: snapshot(
+          [repoRow("gadgets", overrides), repoRow("tools")],
+          [
+            tableRow({ id: 9, repo: "gadgets", number: 9 }),
+            tableRow({ id: 7, repo: "tools", number: 7 }),
+          ],
+        ),
+      },
+      issues: {
+        "acme/gadgets#9": gadgetsIssue(9),
+        "acme/tools#7": restIssue(7, {
+          htmlUrl: "https://github.com/Acme/Tools/issues/7",
+          repository: { owner: "Acme", repo: "Tools" },
+        }),
+      },
     };
   }
 
-  test("returns the same items for open issues with the trigger label", async () => {
-    const { search, table } = await both({
-      searches: { acme: [searchItem(3), searchItem(4)] },
-      snapshots: { acme: freshAcme(3, 4) },
-      issues: {
-        "acme/widgets#3": restIssue(3),
-        "acme/widgets#4": restIssue(4),
-      },
+  for (const { reason, overrides } of STALE_CASES) {
+    test(`counts the repository by the reason ${reason}`, async () => {
+      const { result } = await run(mixed(overrides), options);
+      expect(result.stats.skipped_stale_reasons).toEqual({ [reason]: 1 });
     });
-    expect(table).toEqual(search);
+  }
+
+  test("counts the skipped repositories", async () => {
+    const { result } = await run(
+      mixed({ last_collected_at: TOO_OLD }),
+      options,
+    );
+    expect(result.stats.skipped_stale).toBe(1);
   });
 
-  test("drops stale rows by REST and agrees with a fresh search index", async () => {
-    const { search, table } = await both({
-      searches: { acme: [searchItem(3)] },
-      snapshots: { acme: freshAcme(3, 4, 5) },
-      issues: {
-        "acme/widgets#3": restIssue(3),
-        "acme/widgets#4": restIssue(4, { state: "closed" }),
-        "acme/widgets#5": restIssue(5, { labels: ["bug"] }),
-      },
-    });
-    expect(table).toEqual(search);
+  test("takes the rows of a fresh repository next to a stale one", async () => {
+    const { result } = await run(
+      mixed({ last_collected_at: TOO_OLD }),
+      options,
+    );
+    expect(result.items.map((item) => item.repo)).toEqual(["Tools"]);
   });
 
-  test("gives the owner and repository of the work item the spelling of the search", async () => {
-    const { table } = await both({
-      searches: { acme: [searchItem(3)] },
-      snapshots: { acme: freshAcme(3) },
-      issues: { "acme/widgets#3": restIssue(3) },
+  test("does not read the issues of a stale repository", async () => {
+    const { got } = await run(mixed({ last_collected_at: TOO_OLD }), options);
+    expect(got).toEqual(["acme/tools#7"]);
+  });
+
+  test("does not list a stale repository by REST", async () => {
+    const { listed } = await run(
+      mixed({ last_collected_at: TOO_OLD }),
+      options,
+    );
+    expect(listed).toEqual([]);
+  });
+
+  test("does not record a failure for a skipped repository", async () => {
+    const { failures } = await run(
+      mixed({ last_collected_at: TOO_OLD }),
+      options,
+    );
+    expect(failures).toEqual([]);
+  });
+
+  test("counts nothing when every repository is fresh", async () => {
+    const { result } = await run(mixed({}), options);
+    expect(result.stats.skipped_stale).toBe(0);
+  });
+
+  test("counts both repositories when both are stale", async () => {
+    const { result } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [
+              repoRow("gadgets", { last_collected_at: TOO_OLD }),
+              repoRow("tools", { last_collected_at: null }),
+            ],
+            [],
+          ),
+        },
+      },
+      options,
+    );
+    expect(result.stats.skipped_stale_reasons).toEqual({
+      too_old: 1,
+      not_collected: 1,
     });
-    expect(table.map((item) => `${item.owner}/${item.repo}`)).toEqual([
-      "Acme/Widgets",
+  });
+
+  test("does not count an archived repository", async () => {
+    const { result } = await run(
+      mixed({ archived: true, last_collected_at: TOO_OLD }),
+      options,
+    );
+    expect(result.stats.skipped_stale).toBe(0);
+  });
+
+  test("does not count a repository that is gone", async () => {
+    const { result } = await run(
+      mixed({ gone: true, last_collected_at: TOO_OLD }),
+      options,
+    );
+    expect(result.stats.skipped_stale).toBe(0);
+  });
+
+  test("does not count a repository that is not allowed now", async () => {
+    const { result } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [repoRow("gadgets", { last_collected_at: TOO_OLD })],
+            [],
+          ),
+        },
+      },
+      {
+        factoryRepo: OUTSIDE_FACTORY,
+        repoAllowlist: ["https://github.com/acme/widgets"],
+      },
+    );
+    expect(result.stats.skipped_stale).toBe(0);
+  });
+
+  test("builds new reason records for every round", async () => {
+    const fixture = mixed({ last_collected_at: TOO_OLD });
+    const first = await run(fixture, options);
+    const second = await run(fixture, options);
+    expect(first.result.stats.skipped_stale_reasons).not.toBe(
+      second.result.stats.skipped_stale_reasons,
+    );
+  });
+});
+
+describe("discoverIssues reads an explicit repository by REST when the table cannot be used", () => {
+  const OPEN_LISTING = { "acme/widgets": [3] };
+  const WIDGETS_ISSUE = { "acme/widgets#3": restIssue(3) };
+
+  function staleWidgets(overrides: Partial<GhOwnerRepoFreshnessRow>) {
+    return {
+      snapshots: {
+        acme: snapshot([repoRow("widgets", overrides)], []),
+      },
+      listings: OPEN_LISTING,
+      issues: WIDGETS_ISSUE,
+    };
+  }
+
+  for (const { reason, overrides } of STALE_CASES) {
+    test(`lists the repository by REST for the reason ${reason}`, async () => {
+      const { listed } = await run(staleWidgets(overrides));
+      expect(listed).toEqual(["acme/widgets"]);
+    });
+
+    test(`reports the reason ${reason}`, async () => {
+      const { result } = await run(staleWidgets(overrides));
+      expect(result.stats.rest_reasons).toEqual({ [reason]: 1 });
+    });
+  }
+
+  test("returns the confirmed candidates of the list in the spelling of GitHub", async () => {
+    const { result } = await run(staleWidgets({ last_collected_at: TOO_OLD }));
+    expect(result.items).toEqual([searchItem(3)]);
+  });
+
+  test("asks for the issues with the trigger label", async () => {
+    const { labels } = await run(staleWidgets({ last_collected_at: TOO_OLD }));
+    expect(labels).toEqual([LABEL]);
+  });
+
+  test("lists the repository when it has no gh_repos row", async () => {
+    const { listed } = await run({
+      snapshots: { acme: snapshot([repoRow("tools")], []) },
+      listings: OPEN_LISTING,
+      issues: WIDGETS_ISSUE,
+    });
+    expect(listed).toEqual(["acme/widgets"]);
+  });
+
+  test("reports no_record when the repository has no gh_repos row", async () => {
+    const { result } = await run({
+      snapshots: { acme: snapshot([], []) },
+      listings: OPEN_LISTING,
+      issues: WIDGETS_ISSUE,
+    });
+    expect(result.stats.rest_reasons).toEqual({ no_record: 1 });
+  });
+
+  test("lists the repository when it is gone", async () => {
+    const { listed } = await run(staleWidgets({ gone: true }));
+    expect(listed).toEqual(["acme/widgets"]);
+  });
+
+  test("counts the repositories read by REST", async () => {
+    const { result } = await run(staleWidgets({ last_collected_at: TOO_OLD }));
+    expect(result.stats.rest_lists).toBe(1);
+  });
+
+  test("lists every explicit repository of the allowlist that is stale", async () => {
+    const { listed } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [
+              repoRow("widgets", { last_collected_at: TOO_OLD }),
+              repoRow("gadgets", { last_collected_at: TOO_OLD }),
+            ],
+            [],
+          ),
+        },
+        listings: { "acme/widgets": [], "acme/gadgets": [] },
+      },
+      {
+        repoAllowlist: [
+          "https://github.com/acme/widgets",
+          "https://github.com/acme/gadgets",
+        ],
+      },
+    );
+    expect(listed).toEqual(["acme/widgets", "acme/gadgets"]);
+  });
+
+  test("lists only the stale one when another explicit repository is fresh", async () => {
+    const { listed } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [
+              repoRow("widgets"),
+              repoRow("gadgets", { last_collected_at: TOO_OLD }),
+            ],
+            [tableRow({ number: 3 })],
+          ),
+        },
+        listings: { "acme/gadgets": [] },
+        issues: WIDGETS_ISSUE,
+      },
+      {
+        repoAllowlist: [
+          "https://github.com/acme/widgets",
+          "https://github.com/acme/gadgets",
+        ],
+      },
+    );
+    expect(listed).toEqual(["acme/gadgets"]);
+  });
+
+  test("returns the table candidates before the listed ones", async () => {
+    const { result } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [
+              repoRow("widgets"),
+              repoRow("gadgets", { last_collected_at: TOO_OLD }),
+            ],
+            [tableRow({ number: 3 })],
+          ),
+        },
+        listings: { "acme/gadgets": [8] },
+        issues: { ...WIDGETS_ISSUE, "acme/gadgets#8": gadgetsIssue(8) },
+      },
+      {
+        repoAllowlist: [
+          "https://github.com/acme/widgets",
+          "https://github.com/acme/gadgets",
+        ],
+      },
+    );
+    expect(
+      result.items.map((item) => `${item.repo}#${String(item.number)}`),
+    ).toEqual(["Widgets#3", "Gadgets#8"]);
+  });
+
+  test("does not list an explicit repository of an owner that is not verified", async () => {
+    const { listed } = await run(
+      {
+        snapshots: { beta: snapshot([], []) },
+        listings: OPEN_LISTING,
+        issues: WIDGETS_ISSUE,
+      },
+      { owners: [BETA] },
+    );
+    expect(listed).toEqual([]);
+  });
+
+  test("lists an explicit repository under its own owner only", async () => {
+    const { listed } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [repoRow("widgets", { last_collected_at: TOO_OLD })],
+            [],
+          ),
+          beta: snapshot([], []),
+        },
+        listings: OPEN_LISTING,
+        issues: WIDGETS_ISSUE,
+      },
+      {
+        owners: [ACME, BETA],
+        repoAllowlist: ["https://github.com/acme/widgets"],
+      },
+    );
+    expect(listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists the repository and records a failure when the table cannot be read", async () => {
+    const { listed, failures } = await run({
+      snapshots: { acme: new Error("db down") },
+      listings: OPEN_LISTING,
+      issues: WIDGETS_ISSUE,
+    });
+    expect([listed, failures]).toEqual([
+      ["acme/widgets"],
+      ["read_gh_owner_issues:Acme"],
     ]);
   });
 
-  test("agrees when the set includes a repository that is not allowed", async () => {
-    const { search, table } = await both(
-      {
-        searches: {
-          acme: [searchItem(3), searchItem(9, { repo: "Gadgets" })],
-        },
-        snapshots: {
-          acme: snapshot(
-            [repoRow("widgets"), repoRow("gadgets")],
-            [
-              tableRow({ number: 3 }),
-              tableRow({ id: 9, repo: "gadgets", number: 9 }),
-            ],
-          ),
-        },
-        issues: {
-          "acme/widgets#3": restIssue(3),
-          "acme/gadgets#9": restIssue(9, {
-            repository: { owner: "Acme", repo: "Gadgets" },
-          }),
-        },
-      },
-      { repoAllowlist: ["https://github.com/acme/widgets"] },
-    );
-    expect(table).toEqual(search);
+  test("counts a failed read of the table as a failure of the round", async () => {
+    const { result } = await run({
+      snapshots: { acme: new Error("db down") },
+      listings: OPEN_LISTING,
+      issues: WIDGETS_ISSUE,
+    });
+    expect(result.failed).toBe(1);
   });
 
-  test("agrees across several owners", async () => {
-    const betaItem = searchItem(7, {
-      owner: "Beta",
-      repo: "Tools",
-      htmlUrl: "https://github.com/Beta/Tools/issues/7",
+  test("reports read_failed when the table cannot be read", async () => {
+    const { result } = await run({
+      snapshots: { acme: new Error("db down") },
+      listings: OPEN_LISTING,
+      issues: WIDGETS_ISSUE,
     });
-    const { search, table } = await both(
+    expect(result.stats.rest_reasons).toEqual({ read_failed: 1 });
+  });
+
+  test("does not read the table when the collection is off", async () => {
+    const { read } = await run(
+      { listings: OPEN_LISTING, issues: WIDGETS_ISSUE },
+      { useTable: false },
+    );
+    expect(read).toEqual([]);
+  });
+
+  test("lists the explicit repository when the collection is off", async () => {
+    const { listed } = await run(
+      { listings: OPEN_LISTING, issues: WIDGETS_ISSUE },
+      { useTable: false },
+    );
+    expect(listed).toEqual(["acme/widgets"]);
+  });
+
+  test("reports collect_disabled when the collection is off", async () => {
+    const { result } = await run(
+      { listings: OPEN_LISTING, issues: WIDGETS_ISSUE },
+      { useTable: false },
+    );
+    expect(result.stats.rest_reasons).toEqual({ collect_disabled: 1 });
+  });
+
+  test("records no failure when the collection is off", async () => {
+    const { failures } = await run(
+      { listings: OPEN_LISTING, issues: WIDGETS_ISSUE },
+      { useTable: false },
+    );
+    expect(failures).toEqual([]);
+  });
+
+  test("records a failed list and goes on to the next repository", async () => {
+    const { failures, result } = await run(
       {
-        searches: { acme: [searchItem(3)], beta: [betaItem] },
         snapshots: {
-          acme: freshAcme(3),
+          acme: snapshot(
+            [
+              repoRow("widgets", { last_collected_at: TOO_OLD }),
+              repoRow("gadgets", { last_collected_at: TOO_OLD }),
+            ],
+            [],
+          ),
+        },
+        listings: { "acme/widgets": new Error("boom"), "acme/gadgets": [8] },
+        issues: { "acme/gadgets#8": gadgetsIssue(8) },
+      },
+      {
+        repoAllowlist: [
+          "https://github.com/acme/widgets",
+          "https://github.com/acme/gadgets",
+        ],
+      },
+    );
+    expect([failures, result.items.map((item) => item.number)]).toEqual([
+      ["list_labeled_issues:acme/widgets"],
+      [8],
+    ]);
+  });
+
+  test("counts a failed list as a failure of the round", async () => {
+    const { result } = await run({
+      snapshots: {
+        acme: snapshot(
+          [repoRow("widgets", { last_collected_at: TOO_OLD })],
+          [],
+        ),
+      },
+      listings: { "acme/widgets": new Error("boom") },
+    });
+    expect(result.failed).toBe(1);
+  });
+
+  test("goes on to the next owner after a failed list", async () => {
+    const { result } = await run(
+      {
+        snapshots: {
+          acme: snapshot(
+            [repoRow("widgets", { last_collected_at: TOO_OLD })],
+            [],
+          ),
           beta: snapshot(
             [repoRow("tools")],
             [tableRow({ id: 7, owner: "beta", repo: "tools", number: 7 })],
           ),
         },
+        listings: { "acme/widgets": new Error("boom") },
         issues: {
-          "acme/widgets#3": restIssue(3),
           "beta/tools#7": restIssue(7, {
             repository: { owner: "Beta", repo: "Tools" },
-            htmlUrl: "https://github.com/Beta/Tools/issues/7",
           }),
         },
       },
-      { owners: [ACME, BETA] },
-    );
-    expect(table).toEqual(search);
-  });
-});
-
-describe("the differences that are accepted", () => {
-  test("a new issue that is not in the table yet is found by the search only", async () => {
-    const fixture = {
-      searches: { acme: [searchItem(3), searchItem(9)] },
-      snapshots: { acme: freshAcme(3) },
-      issues: { "acme/widgets#3": restIssue(3) },
-    };
-    const search = await run(fixture, { source: "search" });
-    const table = await run(fixture, { source: "db" });
-    expect([
-      search.result.items.map((item) => item.number),
-      table.result.items.map((item) => item.number),
-    ]).toEqual([[3, 9], [3]]);
-  });
-
-  test("an issue of an archived repository is found by the search only", async () => {
-    const fixture = {
-      searches: { acme: [searchItem(3), searchItem(9, { repo: "Old" })] },
-      snapshots: {
-        acme: snapshot(
-          [repoRow("widgets"), repoRow("old", { archived: true })],
-          [
-            tableRow({ number: 3 }),
-            tableRow({ id: 9, repo: "old", number: 9 }),
-          ],
-        ),
+      {
+        owners: [ACME, BETA],
+        repoAllowlist: [
+          "https://github.com/acme/widgets",
+          "https://github.com/beta/tools",
+        ],
       },
-      issues: { "acme/widgets#3": restIssue(3) },
-    };
-    const search = await run(fixture, { source: "search" });
-    const table = await run(fixture, { source: "db" });
-    expect([
-      search.result.items.map((item) => item.number),
-      table.result.items.map((item) => item.number),
-    ]).toEqual([[3, 9], [3]]);
+    );
+    expect(result.items.map((item) => item.number)).toEqual([7]);
   });
 
-  test("with an empty allowlist, a repository without a gh_repos row is missed by the table", async () => {
-    const fixture = {
-      searches: { acme: [searchItem(3), searchItem(9, { repo: "Stray" })] },
-      snapshots: { acme: freshAcme(3) },
-      issues: { "acme/widgets#3": restIssue(3) },
-    };
-    const table = await run(fixture, { source: "db" });
-    expect(table.result.items.map((item) => item.number)).toEqual([3]);
-  });
-
-  test("with an allowlist, the same repository is explicit and the owner goes back to the search", async () => {
-    const fixture = {
-      searches: { acme: [searchItem(3), searchItem(9, { repo: "Stray" })] },
-      snapshots: { acme: freshAcme(3) },
-      issues: { "acme/widgets#3": restIssue(3) },
-    };
-    const table = await run(fixture, {
-      source: "db",
-      repoAllowlist: [
-        "https://github.com/acme/widgets",
-        "https://github.com/acme/stray",
-      ],
-    });
-    expect(table.result.items.map((item) => item.number)).toEqual([3, 9]);
-  });
-});
-
-describe("a table row whose trigger label was removed", () => {
-  test("yields no item", async () => {
+  test("drops a listed issue that has been closed since", async () => {
     const { result } = await run({
-      snapshots: { acme: freshAcme(3) },
-      issues: { "acme/widgets#3": restIssue(3, { labels: [] }) },
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      issues: { "acme/widgets#3": restIssue(3, { state: "closed" }) },
     });
     expect(result.items).toEqual([]);
   });
-});
 
-describe("the round does not stop when the table cannot be used", () => {
-  const sameAsSearch = async (fixture: Fixture, options: Options = {}) => {
-    const search = await run(fixture, { ...options, source: "search" });
-    const table = await run(fixture, { ...options, source: "db" });
-    return { search: search.result.items, table: table.result.items };
-  };
-
-  test("finds the issues by the search when every owner is too old", async () => {
-    const { search, table } = await sameAsSearch(
-      {
-        searches: { acme: [searchItem(3)], beta: [searchItem(8)] },
-        snapshots: {
-          acme: snapshot(
-            [repoRow("widgets", { last_collected_at: TOO_OLD })],
-            [],
-          ),
-          beta: snapshot(
-            [repoRow("widgets", { last_collected_at: TOO_OLD })],
-            [],
-          ),
-        },
-      },
-      { owners: [ACME, BETA] },
-    );
-    expect(table).toEqual(search);
+  test("drops a listed number that GitHub reports as a pull request", async () => {
+    const { result } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      issues: { "acme/widgets#3": restIssue(3, { isPullRequest: true }) },
+    });
+    expect(result.items).toEqual([]);
   });
 
-  test("finds the issues by the search when every read fails", async () => {
-    const { search, table } = await sameAsSearch(
-      {
-        searches: { acme: [searchItem(3)], beta: [searchItem(8)] },
-        snapshots: { acme: new Error("down"), beta: new Error("down") },
+  test("records no failure for a dropped pull request", async () => {
+    const { failures } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      issues: { "acme/widgets#3": restIssue(3, { isPullRequest: true }) },
+    });
+    expect(failures).toEqual([]);
+  });
+
+  test("counts a listed candidate that is dropped", async () => {
+    const { result } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      issues: { "acme/widgets#3": restIssue(3, { labels: [] }) },
+    });
+    expect([result.stats.candidates, result.stats.dropped]).toEqual([1, 1]);
+  });
+
+  test("records a mismatch of a listed issue as a failure", async () => {
+    const { failures } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      issues: { "acme/widgets#3": restIssue(3, { repository: null }) },
+    });
+    expect(failures).toEqual(["confirm_issue:acme/widgets#3"]);
+  });
+
+  test("records a failed read of a listed issue and drops only that candidate", async () => {
+    const { result, failures } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      listings: { "acme/widgets": [3, 4] },
+      issues: {
+        "acme/widgets#3": new Error("boom"),
+        "acme/widgets#4": restIssue(4),
       },
-      { owners: [ACME, BETA] },
+    });
+    expect([failures, result.items.map((item) => item.number)]).toEqual([
+      ["confirm_issue:acme/widgets#3"],
+      [4],
+    ]);
+  });
+
+  test("builds new reason records for every round", async () => {
+    const fixture = staleWidgets({ last_collected_at: TOO_OLD });
+    const first = await run(fixture);
+    const second = await run(fixture);
+    expect(first.result.stats.rest_reasons).not.toBe(
+      second.result.stats.rest_reasons,
     );
-    expect(table).toEqual(search);
+  });
+});
+
+describe("the table and the list find the same issues", () => {
+  const WORLD = {
+    listings: { "acme/widgets": [3, 4] },
+    issues: {
+      "acme/widgets#3": restIssue(3),
+      "acme/widgets#4": restIssue(4),
+    },
+  };
+
+  async function both() {
+    const table = await run({
+      ...WORLD,
+      snapshots: { acme: freshAcme(3, 4) },
+    });
+    const listed = await run({
+      ...WORLD,
+      snapshots: {
+        acme: snapshot(
+          [repoRow("widgets", { last_collected_at: TOO_OLD })],
+          [],
+        ),
+      },
+    });
+    return { table: table.result.items, listed: listed.result.items };
+  }
+
+  test("returns the same items for open issues with the trigger label", async () => {
+    const { table, listed } = await both();
+    expect(listed).toEqual(table);
+  });
+
+  test("gives the work item the spelling of GitHub", async () => {
+    const { listed } = await both();
+    expect(listed.map((item) => `${item.owner}/${item.repo}`)).toEqual([
+      "Acme/Widgets",
+      "Acme/Widgets",
+    ]);
+  });
+
+  test("passes the same repository gate as the table", async () => {
+    const { listed } = await both();
+    const scope = scopeOf([ACME], []);
+    expect(filterByRepoAllowlist(listed, scope)).toEqual(listed);
+  });
+});
+
+describe("discoverIssues never calls a search endpoint", () => {
+  /** 実際の`listLabeledOpenIssues`と`getIssue`を、呼ばれたendpointを記録する偽の`gh`に通す。 */
+  async function discoverWithRealReaders(options: Options) {
+    const endpoints: string[] = [];
+    const client = {
+      ghToken: "tok",
+      run: async (argv: readonly string[]) => {
+        const endpoint =
+          argv.find(
+            (arg) => arg.startsWith("repos/") || arg.startsWith("search/"),
+          ) ?? "";
+        endpoints.push(endpoint);
+        if (endpoint.includes("/issues?labels=")) {
+          return ghApiOk([
+            { number: 3, title: "t", html_url: "u", state: "open" },
+            {
+              number: 4,
+              title: "t",
+              html_url: "u",
+              state: "open",
+              pull_request: {},
+            },
+          ]);
+        }
+        return ghApiOk({
+          number: 3,
+          title: "title 3",
+          body: "body 3",
+          html_url: "https://github.com/Acme/Widgets/issues/3",
+          state: "open",
+          user: { login: "alice" },
+          labels: [{ name: LABEL }],
+          assignees: [],
+          repository_url: "https://api.github.com/repos/Acme/Widgets",
+        });
+      },
+    };
+    const owners = options.owners ?? [ACME];
+    const log: Logger = { info() {}, warn() {}, error() {} };
+    const result = await discoverIssues(
+      {
+        useTable: options.useTable ?? true,
+        owners,
+        scope: scopeOf(owners, []),
+        triggerLabel: LABEL,
+        staleAfterMs: STALE_AFTER_MS,
+        log,
+      },
+      {
+        readOwnerIssues: async () =>
+          snapshot([repoRow("widgets", { last_collected_at: TOO_OLD })], []),
+        listLabeledIssues: (owner, repo, label) =>
+          listLabeledOpenIssues(client, owner, repo, label),
+        getIssue: (owner, repo, number) =>
+          getIssue(client, owner, repo, number),
+        recordFailure: async () => {},
+      },
+    );
+    return { result, endpoints };
+  }
+
+  test("reads the explicit repository through the issues endpoint only", async () => {
+    const { endpoints } = await discoverWithRealReaders({});
+    expect(endpoints.filter((endpoint) => endpoint.includes("search"))).toEqual(
+      [],
+    );
+  });
+
+  test("finds the labeled issue and leaves the pull request out", async () => {
+    const { result } = await discoverWithRealReaders({});
+    expect(result.items.map((item) => item.number)).toEqual([3]);
+  });
+
+  test("does not call a search endpoint when the collection is off", async () => {
+    const { endpoints } = await discoverWithRealReaders({ useTable: false });
+    expect(endpoints.filter((endpoint) => endpoint.includes("search"))).toEqual(
+      [],
+    );
   });
 });
 

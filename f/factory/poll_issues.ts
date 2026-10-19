@@ -1388,6 +1388,16 @@ export function resolveIssueSource(
   return source;
 }
 
+export function resolveIssueTableUse(
+  _config: Pick<
+    FactoryConfig,
+    "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): boolean {
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
