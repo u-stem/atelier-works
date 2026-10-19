@@ -679,6 +679,54 @@ describe("discoverIssues reads an explicit repository by REST when the table can
     expect(listed).toEqual(["acme/widgets"]);
   });
 
+  test("records a failure when the list of a gone repository is not found", async () => {
+    const { failures } = await run({
+      ...staleWidgets({ gone: true }),
+      listings: { "acme/widgets": new Error("HTTP 404") },
+    });
+    expect(failures).toEqual(["list_labeled_issues:acme/widgets"]);
+  });
+
+  test("does not list an archived repository whose record is fresh", async () => {
+    const { listed } = await run(staleWidgets({ archived: true }));
+    expect(listed).toEqual([]);
+  });
+
+  test("does not count an archived repository whose record is fresh", async () => {
+    const { result } = await run(staleWidgets({ archived: true }));
+    expect(result.stats.rest_lists).toBe(0);
+  });
+
+  test("lists an archived repository whose record is too old", async () => {
+    const { listed } = await run(
+      staleWidgets({ archived: true, last_collected_at: TOO_OLD }),
+    );
+    expect(listed).toEqual(["acme/widgets"]);
+  });
+
+  test("lists an archived repository whose record was never collected", async () => {
+    const { listed } = await run(
+      staleWidgets({ archived: true, last_collected_at: null }),
+    );
+    expect(listed).toEqual(["acme/widgets"]);
+  });
+
+  test("reads a number once when the pages of the list overlap", async () => {
+    const { got } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      listings: { "acme/widgets": [3, 3] },
+    });
+    expect(got).toEqual(["acme/widgets#3"]);
+  });
+
+  test("returns an issue once when the pages of the list overlap", async () => {
+    const { result } = await run({
+      ...staleWidgets({ last_collected_at: TOO_OLD }),
+      listings: { "acme/widgets": [3, 3] },
+    });
+    expect(result.items).toEqual([searchItem(3)]);
+  });
+
   test("counts the repositories read by REST", async () => {
     const { result } = await run(staleWidgets({ last_collected_at: TOO_OLD }));
     expect(result.stats.rest_lists).toBe(1);
