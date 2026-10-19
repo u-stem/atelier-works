@@ -110,7 +110,7 @@ function findLockViolations(definitionPath: string, content: string): string[] {
     return ["definition is not a mapping"];
   }
   const violations: string[] = [];
-  if (content.includes("﻿")) {
+  if (content.includes("\uFEFF")) {
     violations.push("BOM is not allowed");
   }
   // wmillは`lock`の値を空白で区切ってパスを取るので、空白を含む名前は拒む。
@@ -173,7 +173,7 @@ function findInlineInDataFile(path: string, content: string): string[] {
     violations.push("!inline is not allowed here");
   }
   // 先頭のBOMは、wmillが外してから読むので、`^%`の検査をすり抜けるのに使われる。
-  if (content.includes("﻿")) {
+  if (content.includes("\uFEFF")) {
     violations.push("BOM is not allowed");
   }
   if (/^%/m.test(content)) {
@@ -215,7 +215,7 @@ function findShallowViolations(content: string): string[] {
   if (content.includes("!in%")) {
     violations.push("a percent-escaped tag is not allowed");
   }
-  if (content.includes("﻿")) {
+  if (content.includes("\uFEFF")) {
     violations.push("BOM is not allowed");
   }
   if (/^%/m.test(content)) {
@@ -413,7 +413,7 @@ describe("findInlineInDataFile tags and json", () => {
 
 describe("findInlineInDataFile bom and unicode escapes", () => {
   test("rejects a BOM before a TAG directive", () => {
-    const content = "﻿%TAG !w! !in\n---\ncontent: !w!line x\n";
+    const content = "\uFEFF%TAG !w! !in\n---\ncontent: !w!line x\n";
     expect(
       findInlineInDataFile("f/factory/x.resource.yaml", content).length,
     ).toBeGreaterThan(0);
@@ -477,8 +477,25 @@ describe("stage A", () => {
     expect(findShallowViolations(content).length).toBeGreaterThan(0);
   });
 
+  test("stage A rejects a percent escape of the first letter of inline", () => {
+    const content = "content: !%69nline ../../../mise.local.toml\n";
+    expect(findShallowViolations(content).length).toBeGreaterThan(0);
+  });
+
+  test("stage A rejects a percent escape in the middle of a tag", () => {
+    const content = "content: !i%6Eline ../../../mise.local.toml\n";
+    expect(findShallowViolations(content).length).toBeGreaterThan(0);
+  });
+
+  test("stage A accepts a percent sign that is not part of a tag", () => {
+    const content = "content: !cancelled 100% done\n";
+    expect(findShallowViolations(content)).toEqual([]);
+  });
+
   test("stage A rejects a BOM in the middle of a file", () => {
-    expect(findShallowViolations("a: 1\n﻿b: 2\n").length).toBeGreaterThan(0);
+    expect(findShallowViolations("a: 1\n\uFEFFb: 2\n").length).toBeGreaterThan(
+      0,
+    );
   });
 
   test("stage A rejects a directive at the start of a line", () => {
@@ -638,7 +655,7 @@ describe("the tracked tree", () => {
     expect(/\b(import|require)\b/.test(code)).toBe(false);
   });
 
-  test("the test task runs the protected tests in a separate process first", () => {
+  test("the test task runs the protected contract test in a separate process first", () => {
     const parsed: unknown = Bun.TOML.parse(
       readFileSync(`${ROOT}mise.toml`, "utf8"),
     );
@@ -655,7 +672,7 @@ describe("the tracked tree", () => {
       }
     }
     expect(commands).toEqual([
-      "bun test ./tests/lib/script_yaml_lock_contract.test.ts ./tests/lib/protected_paths.test.ts",
+      "bun test ./tests/lib/script_yaml_lock_contract.test.ts",
       "bun test --path-ignore-patterns 'console/**'",
     ]);
   });
