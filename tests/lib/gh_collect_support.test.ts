@@ -324,6 +324,7 @@ describe("classifyGraphqlFailure maps errors to codes", () => {
     secondary_limit: false,
     retry_after_sec: null,
     reset_at_sec: null,
+    rejected: [],
     ...detail,
   });
   const code = (detail: Partial<GraphqlFailure>) =>
@@ -413,6 +414,7 @@ describe("classifyGraphqlFailure clamps next_allowed_at", () => {
         secondary_limit: false,
         retry_after_sec: null,
         reset_at_sec: null,
+        rejected: [],
         ...detail,
       },
       NOW,

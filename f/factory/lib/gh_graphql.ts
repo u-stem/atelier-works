@@ -1,6 +1,7 @@
 // GitHubのGraphQL APIを呼ぶ最小のクライアント。ファイルにも子プロセスにも触れない。
 // 読み取り専用のトークンを`Authorization`ヘッダだけに載せて、宛先を固定した`fetch`で送る。
 // 失敗は例外にせず、分類に要る事実だけを持つ結果にする。応答の本文とエラーの文は、分類にだけ使って残さない。
+// 拒否された項目は、許可表の`type`と、問い合わせの文に現れる語だけの項目名に絞って残す。
 
 import {
   GH_DETAIL_OPTIONAL_FIELDS,
@@ -56,6 +57,8 @@ export type GraphqlFetch = (
 
 /**
  * 失敗の分類に要る事実。本文もエラーの文も持たない。
+ * `rejected`は拒否された項目で、`type`は許可表の語、`field`は問い合わせの文に現れる語だけを持つ。
+ * `graphql_errors`でレート制限でないときだけ中身が入り、他は空にする。
  * `rate_limited`は一次のレート制限、`secondary_limit`は二次のレート制限を表す。
  * `reset_at_sec`は一次の制限が解ける時刻(エポック秒)、`retry_after_sec`は二次の制限で待つ秒数。
  */
@@ -72,6 +75,22 @@ export type GraphqlFailure = {
   readonly secondary_limit: boolean;
   readonly retry_after_sec: number | null;
   readonly reset_at_sec: number | null;
+  readonly rejected: readonly RejectedItem[];
+};
+
+/** 拒否された項目の`type`。許可表の語か`OTHER`。 */
+export type RejectedType =
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "INSUFFICIENT_SCOPES"
+  | "MAX_NODE_LIMIT_EXCEEDED"
+  | "SERVICE_UNAVAILABLE"
+  | "OTHER";
+
+/** 拒否された項目。`field`は問い合わせの文に現れる語をつないだものか、`null`。 */
+export type RejectedItem = {
+  readonly type: RejectedType;
+  readonly field: string | null;
 };
 
 /** 別名の水準のエラーの`type`。固定の語に丸める。 */
@@ -94,12 +113,16 @@ export type AliasError = {
   readonly target: AliasErrorTarget;
 };
 
-/** `alias_errors`は、`aliasErrors`を渡した要求の成功にだけ付く。 */
+/**
+ * `alias_errors`は、`aliasErrors`を渡した要求の成功にだけ付く。
+ * `rejected`は、別名の水準のエラーのうち項目が固定の語に落ちなかったものから作り、無いときは付けない。
+ */
 export type GraphqlResponse =
   | {
       readonly ok: true;
       readonly data: Record<string, unknown>;
       readonly alias_errors?: readonly AliasError[];
+      readonly rejected?: readonly RejectedItem[];
     }
   | GraphqlFailure;
 
@@ -181,6 +204,106 @@ ${selections}
 }`;
 }
 
+/** 変数(`$`付き)と別名(`r<数>`)を除いた、問い合わせの文の語。 */
+function queryWords(query: string): string[] {
+  const words = query.match(/\$?[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  return words.filter(
+    (word) => !word.startsWith("$") && !/^r[0-9]+$/.test(word),
+  );
+}
+
+/**
+ * 拒否された項目名として残してよい語。
+ * 自前の2つの問い合わせの文に現れる語(項目名、引数名、型名など)だけを、読み込み時に文から作る。
+ * `errors`の側の値は、この表に含まれるときだけログに残す。外から来た文字列を、形の検査で通さないため。
+ */
+export const REJECTABLE_FIELDS: ReadonlySet<string> = new Set([
+  ...queryWords(OWNER_REPOS_QUERY),
+  ...queryWords(buildRepoDetailQuery(1)),
+]);
+
+const KNOWN_REJECTED_TYPES = [
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "INSUFFICIENT_SCOPES",
+  "MAX_NODE_LIMIT_EXCEEDED",
+  "SERVICE_UNAVAILABLE",
+] as const;
+
+/** 1回の応答で残す拒否の件数の上限。 */
+const REJECTED_ITEMS_LIMIT = 10;
+
+/** 項目名として残す、`path`の要素数の上限(添字と先頭の別名を除く)。 */
+const REJECTED_FIELD_MAX_ELEMENTS = 6;
+
+function rejectedType(value: unknown): RejectedType {
+  return KNOWN_REJECTED_TYPES.find((name) => name === value) ?? "OTHER";
+}
+
+/**
+ * `path`から添字と先頭の別名を除いた項目名を、`.`でつないで返す。
+ * 要素がひとつでも許可表に無いとき、数値と文字列以外の要素があるとき、
+ * 要素が無いか多すぎるときは`null`にする。
+ */
+function rejectedField(path: unknown): string | null {
+  if (!Array.isArray(path)) {
+    return null;
+  }
+  const names: string[] = [];
+  for (const element of path) {
+    if (typeof element === "number") {
+      continue;
+    }
+    if (typeof element !== "string") {
+      return null;
+    }
+    names.push(element);
+  }
+  if (names[0] !== undefined && /^r[0-9]{1,3}$/.test(names[0])) {
+    names.shift();
+  }
+  if (
+    names.length === 0 ||
+    names.length > REJECTED_FIELD_MAX_ELEMENTS ||
+    !names.every((name) => REJECTABLE_FIELDS.has(name))
+  ) {
+    return null;
+  }
+  return names.join(".");
+}
+
+/**
+ * 応答の`errors`から、拒否された項目を読む。
+ * 残すのは許可表の`type`(それ以外は`OTHER`)と、`REJECTABLE_FIELDS`の語だけの項目名で、
+ * `message`、`locations`、`extensions`は読まない。
+ * レート制限は項目の拒否ではないので除く。`type`も項目名も特定できないエラーは残さない。
+ * 同じ組は1件にまとめ、先頭から10件までにする。
+ */
+export function readRejectedItems(errors: readonly unknown[]): RejectedItem[] {
+  const seen = new Set<string>();
+  const items: RejectedItem[] = [];
+  for (const entry of errors) {
+    if (!isRecord(entry) || entry.type === "RATE_LIMITED") {
+      continue;
+    }
+    const type = rejectedType(entry.type);
+    const field = rejectedField(entry.path);
+    if (type === "OTHER" && field === null) {
+      continue;
+    }
+    const key = `${type}|${field ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    items.push({ type, field });
+    if (items.length >= REJECTED_ITEMS_LIMIT) {
+      break;
+    }
+  }
+  return items;
+}
+
 /** `r<数>`の形(先頭に0を付けない)で、送った別名の数の内にある別名か。 */
 function isSentAlias(value: unknown, count: number): value is string {
   if (typeof value !== "string" || !/^r(0|[1-9][0-9]{0,2})$/.test(value)) {
@@ -215,6 +338,12 @@ function aliasErrorTarget(path: readonly unknown[]): AliasErrorTarget {
   return { kind: "alias" };
 }
 
+/** 別名の水準のエラーを丸めた結果。`rejected`は、項目が固定の語に落ちなかったエラーから作る。 */
+type AliasErrorsRead = {
+  readonly errors: AliasError[];
+  readonly rejected: RejectedItem[];
+};
+
 /**
  * 応答の`errors`がすべて、送った別名の下のエラーなら、別名ごとのエラーに丸めて返す。
  * `data`がオブジェクトでないとき、`path`が無いか送った別名で始まらないエラーがあるとき、
@@ -224,11 +353,12 @@ function readAliasErrors(
   errors: readonly unknown[],
   data: unknown,
   count: number,
-): AliasError[] | null {
+): AliasErrorsRead | null {
   if (!isRecord(data)) {
     return null;
   }
   const result: AliasError[] = [];
+  const untargeted: unknown[] = [];
   for (const entry of errors) {
     if (!isRecord(entry) || entry.type === "RATE_LIMITED") {
       return null;
@@ -237,13 +367,17 @@ function readAliasErrors(
     if (!Array.isArray(path) || !isSentAlias(path[0], count)) {
       return null;
     }
+    const target = aliasErrorTarget(path);
     result.push({
       alias: path[0],
       type: roundErrorType(entry.type),
-      target: aliasErrorTarget(path),
+      target,
     });
+    if (target.kind === "alias") {
+      untargeted.push(entry);
+    }
   }
-  return result;
+  return { errors: result, rejected: readRejectedItems(untargeted) };
 }
 
 function failure(
@@ -258,6 +392,7 @@ function failure(
     secondary_limit: detail.secondary_limit ?? false,
     retry_after_sec: detail.retry_after_sec ?? null,
     reset_at_sec: detail.reset_at_sec ?? null,
+    rejected: detail.rejected ?? [],
   };
 }
 
@@ -327,6 +462,7 @@ async function failureFromStatus(
  * 宛先は`GITHUB_GRAPHQL_URL`、リダイレクトは辿らず、`Authorization`ヘッダだけがトークンを持つ。
  * `timeoutMs`(省略時は`GRAPHQL_REQUEST_TIMEOUT_MS`)を過ぎると打ち切る。
  * 例外は投げない。失敗は`GraphqlFailure`で返し、トークン・応答の本文・エラーの文・例外の文を含めない。
+ * 拒否された項目(`rejected`)は、許可表の`type`と問い合わせの文に現れる語だけを持つ。
  * `errors`のある応答は、一部の`data`があっても失敗にする。
  * ただし`aliasErrors`を渡すと、すべてのエラーが送った別名の下にあり、`RATE_LIMITED`が無いときだけ、
  * `data`に別名ごとのエラー(`alias_errors`)を添えて成功として返す。
@@ -386,15 +522,24 @@ export async function graphqlRequest(
           deps.aliasErrors.count,
         );
         if (aliasErrors !== null && isRecord(body.data)) {
-          return { ok: true, data: body.data, alias_errors: aliasErrors };
+          return {
+            ok: true,
+            data: body.data,
+            alias_errors: aliasErrors.errors,
+            ...(aliasErrors.rejected.length > 0
+              ? { rejected: aliasErrors.rejected }
+              : {}),
+          };
         }
       }
+      const rateLimited = errors.some(
+        (entry) => isRecord(entry) && entry.type === "RATE_LIMITED",
+      );
       return failure("graphql_errors", {
         status: response.status,
-        rate_limited: errors.some(
-          (entry) => isRecord(entry) && entry.type === "RATE_LIMITED",
-        ),
+        rate_limited: rateLimited,
         reset_at_sec: headerInteger(response.headers, "x-ratelimit-reset"),
+        rejected: rateLimited ? [] : readRejectedItems(errors),
       });
     }
   }

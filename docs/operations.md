@@ -2419,7 +2419,7 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 | `rate_limited`、`secondary_limit` | レート制限。`next_allowed_at`まで通信しない。待つのは1時間以内に切り詰める | 待つ。続くときは所有者とリポジトリの数を見直す |
 | `http_5xx` | GitHubの5xx、通信断、GraphQLの宛先の404 | 続くときはGitHubの状態を確かめる |
 | `timeout` | 1要求の10秒の打ち切り | 続くときはGitHubの状態を確かめる |
-| `graphql_error` | 応答に`errors`がある(レート制限でない)。トークンに無い権限が要る項目を問い合わせると、その項目が拒否されて起きる。問い合わせは、Metadata、Pull requests、IssuesのRead-onlyで読める項目だけにしてある | 続くときは、問い合わせの項目(`f/factory/lib/gh_graphql.ts`の`OWNER_REPOS_QUERY`)とトークンの権限を突き合わせる。エラーの項目はログに残らないので、読み取りトークンで同じ問い合わせを流して`errors`の`path`を見る |
+| `graphql_error` | 応答に`errors`がある(レート制限でない)。トークンに無い権限が要る項目を問い合わせると、その項目が拒否されて起きる。問い合わせは、Metadata、Pull requests、IssuesのRead-onlyで読める項目だけにしてある | 続くときは、`collect_github`のジョブのログで`graphql query items refused`(`stage`が`list`)を探し、`items`の`type`と項目名を見る。項目名は問い合わせ(`f/factory/lib/gh_graphql.ts`の`OWNER_REPOS_QUERY`)の項目で、トークンの権限と突き合わせる。`type`が`SERVICE_UNAVAILABLE`か`NOT_FOUND`のときは、権限の問題とは限らない(一時的な障害や、リポジトリが消えた場合がある)。この行が無いときは、読み取りトークンで同じ問い合わせを流して`errors`の`path`を見る |
 | `parse_error` | 応答の形が誤り | 続くときは調べる |
 | `deadline` | 100秒の締め切りで、未着手か、一覧の途中で打ち切った。記録は前回のまま | 続くときは、所有者かリポジトリが多すぎる |
 | `db_error` | DBの書き込みに失敗した。記録は前回のまま | DBの状態を確かめる |
@@ -2436,7 +2436,7 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 | --- | --- | --- |
 | `unauthorized`、`forbidden` | 段2の要求が401か、レート制限でない403 | 段1と同じ。トークンの権限と、組織の承認を確かめる |
 | `rate_limited`、`secondary_limit` | 段2の要求が制限を受けたか、`remaining`が500を切った。`next_allowed_at`まで通信しない | 待つ。続くときはリポジトリと所有者の数を見直す |
-| `graphql_error`、`parse_error`、`timeout`、`http_5xx` | 対象を1件以上取ろうとして、1件も取り終えられず、失敗が1件以上あった | リポジトリごとの`detail_failed`を見る。続くときは調べる |
+| `graphql_error`、`parse_error`、`timeout`、`http_5xx` | 対象を1件以上取ろうとして、1件も取り終えられず、失敗が1件以上あった | リポジトリごとの`detail_failed`を見る。`graphql_error`のときは、`collect_github`のジョブのログで`graphql query items refused`(`stage`が`detail`)を探し、`items`の項目名を見る。`type`が`SERVICE_UNAVAILABLE`か`NOT_FOUND`のときは、権限の問題とは限らない(一時的な障害や、リポジトリが消えた場合がある)。この行にリポジトリ名は載らないので、同じ周回の`a repository detail failed`と突き合わせる。続くときは調べる |
 | `deadline` | 対象が1件以上あるのに、時間が足りず1件も着手できなかった | 続くときは、所有者かリポジトリが多すぎる |
 | `db_error` | DBの書き込みか読み取りに失敗した | DBの状態を確かめる |
 
