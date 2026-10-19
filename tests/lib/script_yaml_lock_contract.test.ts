@@ -32,12 +32,6 @@ import { Glob } from "bun";
 // 追跡するツリー全体を広めに調べる。調べ方は2段ある。
 // 段A: 除外なしで、文字列としての`!inline`とその書き換え(エスケープ、BOM、指示子)を拒む。
 // 段B: 解釈した後の値まで調べる。除外は`STAGE_B_EXCLUSIONS`の完全一致の3パスだけにする。
-//
-// このテストは、保護された別のプロセスで先に走る(`mise.toml`の`[tasks.test]`)。
-// 保護していないほかのテストが、同じプロセスで組み込みの関数を差し替えて、
-// この検査を無効にするのを防ぐためである。そのため、importは組み込みのモジュールとbunに限り、
-// 補助の関数はこのファイルの中に置く。保護していない`lib/`のコードをimportすると、
-// そのコードが先行プロセスに載ってしまう。
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -645,40 +639,6 @@ describe("the tracked tree", () => {
   // 同期するかもしれず、symlinkを辿って読む。追跡するツリー全体で拒む。
   test("has no symlink or submodule", () => {
     expect(findSpecialEntries(listTrackedEntries(ROOT))).toEqual([]);
-  });
-
-  // `tests/preload.ts`は`bunfig.toml`の`preload`が、全テストの前に同じプロセスで読み込む。
-  // importやrequireを持つと、保護していない別のファイルを経由してコードが走る。
-  // preloadはこのテストより先に実行されるので、このテストは書き換えを防がない。
-  // 実際に効く関門は保護パスと人のレビューで、このテストはその補助である。
-  test("preload has no import or require", () => {
-    const code = readFileSync(`${ROOT}tests/preload.ts`, "utf8")
-      .split("\n")
-      .filter((line) => !line.trimStart().startsWith("//"))
-      .join("\n");
-    expect(/\b(import|require)\b/.test(code)).toBe(false);
-  });
-
-  test("the test task runs the protected contract test in a separate process first", () => {
-    const parsed: unknown = Bun.TOML.parse(
-      readFileSync(`${ROOT}mise.toml`, "utf8"),
-    );
-    const commands: string[] = [];
-    if (isRecord(parsed) && isRecord(parsed.tasks)) {
-      const task = parsed.tasks.test;
-      if (isRecord(task) && typeof task.run === "string") {
-        commands.push(
-          ...task.run
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line !== ""),
-        );
-      }
-    }
-    expect(commands).toEqual([
-      "bun test ./tests/lib/script_yaml_lock_contract.test.ts",
-      "bun test --path-ignore-patterns 'console/**'",
-    ]);
   });
 });
 

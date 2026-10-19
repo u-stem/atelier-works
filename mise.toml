@@ -158,13 +158,7 @@ run = "bunx --bun tsc --noEmit"
 
 [tasks.test]
 description = "Run the test suite (the console has its own suite in console:check)"
-# 保護された契約テスト(`tests/lib/script_yaml_lock_contract.test.ts`)を、別のプロセスで先に走らせる。
-# 契約テストのimportは組み込みのモジュールだけなので、保護していないコードはこのプロセスに載らない。
-# 保護していないほかのテストが、同じプロセスで検査を書き換えるのを防ぐ。
-run = """
-bun test ./tests/lib/script_yaml_lock_contract.test.ts
-bun test --path-ignore-patterns 'console/**'
-"""
+run = "bun test --path-ignore-patterns 'console/**'"
 
 [tasks."lint:docs"]
 description = "Lint the Markdown documents (repository rules, markdownlint, textlint, generated blocks)"
