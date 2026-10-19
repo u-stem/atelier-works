@@ -3095,6 +3095,11 @@ function teamCasesBy(
 
 describe("discoverPrs continues from where the previous round stopped", () => {
   const key = (number: number) => `acme/widgets#${String(number)}`;
+  /** 番号の範囲`[from, to]`(両端を含む)の鍵を、範囲の順に並べる。 */
+  const rangeKeys = (...ranges: [number, number][]) =>
+    ranges.flatMap(([from, to]) =>
+      Array.from({ length: to - from + 1 }, (_, i) => key(from + i)),
+    );
 
   test("reads the 21st row in the next round even when the first 20 are found", async () => {
     const found = teamCasesBy("alice", 20, 1, [VIEWER_TEAM_ID]);
@@ -3111,7 +3116,7 @@ describe("discoverPrs continues from where the previous round stopped", () => {
     const next = await runPrs(prWorld(teamOnlyCases(25)), {
       cursor: { value: key(10) },
     });
-    expect(next.gotPr[0]).toBe(key(11));
+    expect(next.gotPr).toEqual(rangeKeys([1, 5], [11, 25]));
   });
 
   test("saves the key of the last candidate that it confirmed", async () => {
@@ -3132,18 +3137,14 @@ describe("discoverPrs continues from where the previous round stopped", () => {
     const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
       cursor: { value: key(25) },
     });
-    expect(gotPr[0]).toBe(key(1));
+    expect(gotPr).toEqual(rangeKeys([1, 20]));
   });
 
   test("wraps around the end of the candidates in one round", async () => {
     const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
       cursor: { value: key(20) },
     });
-    expect(gotPr).toEqual([
-      ...[
-        21, 22, 23, 24, 25, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-      ].map(key),
-    ]);
+    expect(gotPr).toEqual(rangeKeys([1, 15], [21, 25]));
   });
 
   test("reaches every candidate within a few rounds without a memory", async () => {
@@ -3188,21 +3189,21 @@ describe("discoverPrs continues from where the previous round stopped", () => {
       checkedFails: "load",
       cursor: { value: key(10) },
     });
-    expect(gotPr[0]).toBe(key(1));
+    expect(gotPr).toEqual(rangeKeys([1, 20]));
   });
 
   test("starts from the first candidate when the saved key is not a candidate and sorts last", async () => {
     const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
       cursor: { value: "zzz/zzz#1" },
     });
-    expect(gotPr[0]).toBe(key(1));
+    expect(gotPr).toEqual(rangeKeys([1, 20]));
   });
 
   test("compares the number of the saved key as a number", async () => {
     const { gotPr } = await runPrs(prWorld(teamOnlyCases(25)), {
       cursor: { value: key(9) },
     });
-    expect(gotPr[0]).toBe(key(10));
+    expect(gotPr).toEqual(rangeKeys([1, 4], [10, 25]));
   });
 });
 
