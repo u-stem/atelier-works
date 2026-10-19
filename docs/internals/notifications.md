@@ -595,7 +595,7 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 待つのは最大120秒(`GITHUB_RATE_LIMIT_MAX_WAIT_MS`)である。1回の待ちは、どのステップのtimeoutよりも短い。最も短いのはPRの修正の指摘の収集の600秒なので、1つのステップで何度か待っても打ち切られない。
 
-この範囲で待てるのは、search APIの1分ごとの上限と、`retry-after`のある二次レート制限(多くは60秒)である。1時間ごとの一次レート制限を使い切ったときの待ちは収まらない。
+この範囲で待てるのは、`retry-after`のある二次レート制限(多くは60秒)である。1時間ごとの一次レート制限を使い切ったときの待ちは収まらない。
 
 ### 待てないときは失敗する
 
@@ -610,6 +610,24 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 失敗した作業項目と人の対応待ちの作業項目は、解除を待ってからConsoleの**要対応**で再実行する。
 人の対応待ちの通知でも、rate limitが原因のときは、次の操作に解除を待ってから再実行するよう表示する。
 rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
+
+### RESTの検索の拒否
+
+`callGhApi`は、RESTの検索APIのendpointを、`gh`を起動せずに例外で拒む。
+検索の枠は小さく、周期の同じフローが5分の境目に重なって呼ぶと拒まれるので、呼び出しを入口で止める。
+判定は、endpointの先頭の`/`とホストを落とし、小文字にして、`search/`で始まるかを見る。
+`/search/issues`、`SEARCH/issues`、`https://api.github.com/search/issues`は拒む。
+`repos/o/search-x/issues`のように、リポジトリ名やクエリに含むだけの要求は拒まない。
+`paginateGhApi`と`callGhApiRawBody`は`callGhApi`を通るので、次のページのURLも同じ判定を受ける。
+例外のメッセージにendpointを載せない。クエリに値が入りうるためである。
+対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
+
+静的テスト`tests/scripts/no_search_api.test.ts`は、次の2つを固定する。
+
+- `f/factory`のテスト以外に、`search/`の字面、`gh search`、`--search`が無い。
+- 5つのフローが、`search`で始まる名前を`github.ts`から読み込まない。
+
+`search/`の字面を書けるのは、拒否の接頭辞を持つ定数の1行だけである。
 
 ## GitHub APIの一時的な失敗
 

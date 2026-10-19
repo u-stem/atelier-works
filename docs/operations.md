@@ -116,7 +116,7 @@ gh api users/<名前> --jq .id
 ```
 
 オーナーが改名して別の人がその名前を取得すると、名前だけの照合では同じオーナーに見える。
-`id`を入れると、名前を取得した第三者のリポジトリのIssueとPRが、検索の候補に入らない。
+`id`を入れると、名前を取得した第三者のリポジトリのIssueとPRが、発見の候補に入らない。
 承認を待つ間に名前が入れ替わっても、保存済みの作業項目は、リポジトリを取得する前に止まる。
 `allowed_labeler_logins`に古い名前が残っていても、その名前がオーナーの名前なら、そのオーナーのリポジトリのラベルはラベルの確認まで進まない。
 候補に入らないので、拒否のnotice(`labeler_denied`)も積もらない。
@@ -126,8 +126,8 @@ gh api users/<名前> --jq .id
 `id`を入れたオーナーでは、この拒否を待たずに、候補の段階で外す。
 
 `id`があるオーナーは、`poll_issues`と`poll_prs`が発見の前にGitHubの現在のIDを取得して照合する。
-IDが一致すれば、そのオーナーを検索する。
-食い違うか、IDを取得できないオーナーは、その回の検索を飛ばし、失敗として記録する。
+IDが一致すれば、そのオーナーのIssueとPRを発見する。
+食い違うか、IDを取得できないオーナーは、その回の発見を飛ばし、失敗として記録する。
 `id`の無いオーナーは、名前だけで動く。
 DBから見つけ直す追跡中のPRも、`owners`にあって照合を通ったオーナーのものだけを候補に残す。
 飛ばしたオーナーと、`owners`に無い旧名のオーナーのPRは、候補から外れる。
@@ -137,7 +137,7 @@ DBから見つけ直す追跡中のPRも、`owners`にあって照合を通っ�
 本文にオーナー名と、設定のIDが載る。
 食い違いのときは、GitHubの現在のIDも載る。
 GitHubでそのアカウントが意図した持ち主かを確かめ、`factory_config`の`owners`の名前か`id`を見直す。
-名前とIDが合うと、次の回から検索が再開する。
+名前とIDが合うと、次の回から発見が再開する。
 見直した後に、noticeを解決する。
 
 正規の改名(AからB)のときは、`owners`の名前をBに直し、B側のIssueとPRにトリガーラベルを付け直す。
@@ -151,7 +151,7 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 
 #### 作業項目を進める前の照合
 
-作業項目は、検索の時点の`owner`と`repo`の名前を保存する。
+作業項目は、発見の時点の`owner`と`repo`の名前を保存する。
 承認を待つ間などに名前が別の人に渡ると、保存した名前のURLは別のリポジトリを指す。
 そこで、作業項目を進めるステップが、リポジトリを取得する前か、GitHubへ書き込む前に照合する。
 対象は次のとおりである。
@@ -2242,14 +2242,14 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。
 
 1. migrationが反映済みであることを確かめる。競合の記録の表(`pr_conflict_checks`)を作るmigrationは、`self_update`が反映する。デプロイの記録で、反映が成功していることを見る。
-2. 開いているFactoryのPRの数を、リポジトリごとに数える。リポジトリを`-R`で指定し、PATのアカウントのログイン名を`--author`に渡す。下書きは数えない。
+2. 開いているFactoryのPRの数を、リポジトリごとに数える。PATのアカウントのログイン名を作者の条件に渡す。下書きは数えない。
 
    ```bash
-   gh pr list -R <owner>/<repo> --author <PATのアカウント> --state open --limit 200 --search "draft:false head:factory/issue-" --json number --jq length
+   gh api -X GET repos/<owner>/<repo>/pulls -f state=open -f per_page=100 --paginate --jq '[.[] | select((.draft | not) and ((.user.login // "" | ascii_downcase) == ("<PATのアカウント>" | ascii_downcase)) and (.head.ref | startswith("factory/issue-")))] | length'
    ```
 
-   各リポジトリの数を合計して、あとで`tracked`と比べる。`gh pr list`は、`-R`で指定した1つのリポジトリしか数えず、`--limit`の既定は30である。
-   `head:`の検索が接頭辞に合わないときは、`--search`を外し、`--json headRefName,isDraft`で、`factory/issue-`で始まり下書きでないものに絞って数える。
+   各リポジトリの数を合計して、あとで`tracked`と比べる。
+   `--paginate`は、ページごとに数を出す。ページが複数あるときは、出た数を足す。
 3. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
 4. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
 5. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
@@ -2797,6 +2797,36 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   止めるつもりなら、`repo_allowlist`に必要なリポジトリを並べてから、`gh_collect_enabled`も`false`にする。
 - migrationのdownは自動では走らない。
   表は残るが、害は無い。
+
+### 5分の境目の403を数える
+
+検索を使うフローが無くなった後、5分の境目に403が出ないことを、ジョブのログで確かめる。
+検索を外した変更が反映されてから24時間たった後に、読み取りだけで行う。
+Windmill本体のデータベース`windmill`を、`db`のコンテナで読む。
+
+1. 24時間分のジョブのログで、次の3つの印を、スクリプトごとに数える。
+   - `secondary_limit`は、二次レート制限の印`secondary rate limit`を含むジョブの数である。
+   - `search_limit`は、検索のendpointのレート制限の印を含むジョブの数である。印は`GitHub rate limit on search/`と`GET search/`である。
+   - `search_rejected`は、実行時の拒否のメッセージ`GitHub REST search endpoints are not allowed`を含むジョブの数である。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, count(*) AS runs, count(*) FILTER (WHERE l.logs ILIKE '%secondary rate limit%') AS secondary_limit, count(*) FILTER (WHERE l.logs LIKE '%GitHub rate limit on search/%' OR l.logs LIKE '%GET search/%') AS search_limit, count(*) FILTER (WHERE l.logs LIKE '%GitHub REST search endpoints are not allowed%') AS search_rejected FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND j.created_at > now() - interval '1 day' GROUP BY j.runnable_path ORDER BY j.runnable_path"
+   ```
+
+2. 3つの数が、すべてのスクリプトで0であることを見る。
+   `search_limit`か`search_rejected`が1以上なら、検索を呼ぶ経路が残っているか、新しく入っている。
+   その`runnable_path`のコードを調べ、検索を外す。
+   `secondary_limit`が1以上なら、次の問い合わせで、時刻が5分の境目に集まっているかを見る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, j.created_at FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND l.logs ILIKE '%secondary rate limit%' AND j.created_at > now() - interval '1 day' ORDER BY j.created_at"
+   ```
+
+3. 境目に集まっていれば、同じ時刻に動くフローの呼び出しの数を見直す。
+   集まっていなければ、検索と無関係の二次レート制限なので、[GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき)に従う。
+
+数えるのは、ログに残る印だけである。
+待って再試行して成功した403は、ログに残らないので数えない。
 
 ## 監査を使う
 
@@ -3453,7 +3483,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。名前が同じでも、`allowed_labeler_ids`のIDと違う人は許可されない。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す。許可した本人のラベルが拒否されたときは、`allowed_labeler_ids`のIDが合っているかを確かめる([ラベルの付与者の数値IDを固定する](#ラベルの付与者の数値idを固定する)) |
 | `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
-| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できないか、作業項目のオーナーが`owners`に無い。そのオーナーの検索を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
+| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できないか、作業項目のオーナーが`owners`に無い。そのオーナーの発見を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
 | `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が取得も反映もしていない。Factory自身のリポジトリを使うほかの処理は、取得の前に失敗する | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
 | `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
