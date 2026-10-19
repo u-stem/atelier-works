@@ -20,7 +20,7 @@ import {
   chooseIssueProposalReplyTarget,
   classifyIssueProposalDecision,
   hasIssueProposalMarker,
-  issueProposalMarkerSearchTerm,
+  issueProposalMarkerKey,
   issueProposalMarkerText,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -174,12 +174,12 @@ describe("classifyIssueProposalDecision", () => {
   });
 });
 
-describe("issueProposalMarkerSearchTerm / issueProposalMarkerText", () => {
-  test("the search term has no HTML comment syntax", () => {
-    expect(issueProposalMarkerSearchTerm(5)).toBe("factory:issue_proposal:5");
+describe("issueProposalMarkerKey / issueProposalMarkerText", () => {
+  test("the key has no HTML comment syntax", () => {
+    expect(issueProposalMarkerKey(5)).toBe("factory:issue_proposal:5");
   });
 
-  test("the marker text wraps the search term in an HTML comment", () => {
+  test("the marker text wraps the key in an HTML comment", () => {
     expect(issueProposalMarkerText(5)).toBe(
       "<!-- factory:issue_proposal:5 -->",
     );
@@ -204,6 +204,31 @@ describe("appendIssueProposalMarker / hasIssueProposalMarker", () => {
 
   test("hasIssueProposalMarker returns false for plain text with no marker", () => {
     expect(hasIssueProposalMarker("just an issue body", 5)).toBe(false);
+  });
+
+  test("hasIssueProposalMarker accepts trailing whitespace after the marker", () => {
+    const body = `${appendIssueProposalMarker("背景", 5)}\n \n`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(true);
+  });
+
+  test("hasIssueProposalMarker rejects a marker followed by more text", () => {
+    const body = `${appendIssueProposalMarker("背景", 5)}\n\n続きの文`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
+
+  test("hasIssueProposalMarker rejects a marker quoted in the middle of a body", () => {
+    const body = `前置き ${issueProposalMarkerText(5)} 後ろ`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
+
+  test("hasIssueProposalMarker rejects a marker that follows other text on the last line", () => {
+    const body = `背景\n\n続き ${issueProposalMarkerText(5)}`;
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
+  });
+
+  test("hasIssueProposalMarker rejects a longer id that ends with the same digits", () => {
+    const body = appendIssueProposalMarker("背景", 15);
+    expect(hasIssueProposalMarker(body, 5)).toBe(false);
   });
 });
 
@@ -414,5 +439,39 @@ describe("the owner check of an issue proposal", () => {
         error_name: "GitHubHttpError",
       });
     });
+  });
+});
+
+describe("the marker lookup in issue_proposal_apply", () => {
+  async function lookupCall(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/issue_proposal_apply.ts", import.meta.url),
+    ).text();
+    const start = text.indexOf("await findIssueByMarker(");
+    if (start === -1) throw new Error("findIssueByMarker call not found");
+    return text.slice(start, text.indexOf(");", start));
+  }
+
+  test("passes the full marker text, not a search term", async () => {
+    expect(await lookupCall()).toContain(
+      "issueProposalMarkerText(proposal_id)",
+    );
+  });
+
+  test("passes the login of the token's account as the creator", async () => {
+    expect(await lookupCall()).toContain("creatorLogin: viewer.login");
+  });
+
+  test("tells the operator to reject and re-propose when the scan limit is hit", async () => {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/issue_proposal_apply.ts", import.meta.url),
+    ).text();
+    expect(text).toContain("却下して起票し直");
+  });
+
+  test("passes the creation time of the proposal", async () => {
+    expect(await lookupCall()).toContain(
+      "proposalCreatedAt: proposal.created_at",
+    );
   });
 });

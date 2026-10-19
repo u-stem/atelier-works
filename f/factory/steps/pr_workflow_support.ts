@@ -31,6 +31,7 @@ import {
 } from "../lib/dependabot_flow_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
+  endsWithMarkerLine,
   type GhClient,
   getBranchProtected,
   getBranchRuleCount,
@@ -3584,18 +3585,17 @@ const ISSUE_PROPOSAL_MARKER_KIND = "issue_proposal";
 
 /**
  * 印の中身の語句(`<!-- -->`のコメント構文を除いたもの)を返す。
- * `findIssueByMarker`の引用符付きのGitHub検索に渡す。
- * コメント構文の`<`、`-`、`>`は、GitHubの検索の字句解析では雑音になるため。
  */
-export function issueProposalMarkerSearchTerm(proposalId: number): string {
+export function issueProposalMarkerKey(proposalId: number): string {
   return `factory:${ISSUE_PROPOSAL_MARKER_KIND}:${String(proposalId)}`;
 }
 
 /**
  * 作ったIssueの本文に埋める、`<!-- factory:issue_proposal:<id> -->`の印の全文を返す。
+ * `findIssueByMarker`に渡す。
  */
 export function issueProposalMarkerText(proposalId: number): string {
-  return `<!-- ${issueProposalMarkerSearchTerm(proposalId)} -->`;
+  return `<!-- ${issueProposalMarkerKey(proposalId)} -->`;
 }
 
 /**
@@ -3609,16 +3609,15 @@ export function appendIssueProposalMarker(
 }
 
 /**
- * `body`が`proposalId`の印をそのまま含むかを返す。
- * `findIssueByMarker`の検索結果を信じる前の確認に使う。
- * 引用符付きのGitHub検索の語句は、完全一致ではなく単語や部分文字列での一致なので、
- * 理屈の上では、このidを先頭に含むもっと長いidにも一致しうるため。
+ * `body`の最後の行(末尾の空白を除く)が`proposalId`の印だけであるかを返す。
+ * `findIssueByMarker`の結果を信じる前の確認に使う。
+ * 本文の途中にある印は、引用や貼り付けで人が書けるため、作成済みの印として扱わない。
  */
 export function hasIssueProposalMarker(
   body: string,
   proposalId: number,
 ): boolean {
-  return body.includes(issueProposalMarkerText(proposalId));
+  return endsWithMarkerLine(body, issueProposalMarkerText(proposalId));
 }
 
 export type IssueProposalReplyTarget = "inline" | "issue_comment";

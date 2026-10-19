@@ -3052,68 +3052,316 @@ describe("createIssue", () => {
 });
 
 describe("findIssueByMarker", () => {
-  test("returns the first match's number/htmlUrl/body", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({
-        items: [
-          {
-            id: 1,
-            number: 7,
-            title: "Extract a shared helper",
-            body: "背景\n\n<!-- factory:issue_proposal:3 -->",
-            html_url: "https://github.com/acme/widgets/issues/7",
-            repository_url: "https://api.github.com/repos/acme/widgets",
-            user: { login: "alice" },
-          },
-        ],
-      }),
-    ]);
+  const MARKER = "<!-- factory:issue_proposal:3 -->";
+  // 提案の作成時刻。打ち切りの境目はこの1時間前(02:00:00Z)である。
+  const PROPOSAL_CREATED_AT = new Date("2026-10-19T03:00:00Z");
+  const CUTOFF_ENDPOINT =
+    "repos/acme/widgets/issues?creator=factory-bot&state=all&since=2026-10-19T02%3A00%3A00Z&sort=created&direction=desc&per_page=100";
+  const OPTIONS = {
+    creatorLogin: "factory-bot",
+    proposalCreatedAt: PROPOSAL_CREATED_AT,
+  };
+
+  function issueEntry(
+    number: number,
+    createdAt: string,
+    body: string | null,
+    extra: Record<string, unknown> = {},
+  ) {
+    return {
+      id: number * 10,
+      number,
+      title: `issue ${String(number)}`,
+      body,
+      html_url: `https://github.com/acme/widgets/issues/${String(number)}`,
+      created_at: createdAt,
+      user: { login: "factory-bot" },
+      ...extra,
+    };
+  }
+
+  function nextLink(page: number): Record<string, string> {
+    return {
+      link: `<https://api.github.com/repos/acme/widgets/issues?creator=factory-bot&page=${String(page)}>; rel="next"`,
+    };
+  }
+
+  async function find(
+    responses: Parameters<typeof createFakeCommandRunner>[0],
+    options = OPTIONS,
+  ) {
+    const fake = createFakeCommandRunner(responses);
     const result = await findIssueByMarker(
       { run: fake.run, ghToken: "tok" },
       "acme",
       "widgets",
-      "factory:issue_proposal:3",
+      MARKER,
+      options,
     );
+    return { fake, result };
+  }
+
+  test("returns the number, url and body of an issue whose body ends with the marker", async () => {
+    const body = `背景\n\n${MARKER}`;
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T03:05:00Z", body)]),
+    ]);
     expect(result).toEqual({
       number: 7,
       htmlUrl: "https://github.com/acme/widgets/issues/7",
-      body: "背景\n\n<!-- factory:issue_proposal:3 -->",
+      body,
     });
   });
 
-  test("returns null when nothing matches", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    const result = await findIssueByMarker(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      "factory:issue_proposal:3",
-    );
+  test("returns null when no issue has the marker", async () => {
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T03:05:00Z", "背景")]),
+    ]);
     expect(result).toBeNull();
   });
 
-  test("quotes the marker phrase in the search query", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await findIssueByMarker(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      "factory:issue_proposal:3",
-    );
-    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
-    expect(decoded).toContain('"factory:issue_proposal:3" in:body');
+  test("returns null for an empty list", async () => {
+    const { result } = await find([ghApiOk([])]);
+    expect(result).toBeNull();
   });
 
-  test("scopes the search to the given repo", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await findIssueByMarker(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      "factory:issue_proposal:3",
+  test("treats an issue with a null body as having no marker", async () => {
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T03:05:00Z", null)]),
+    ]);
+    expect(result).toBeNull();
+  });
+
+  test("matches a marker followed only by trailing whitespace", async () => {
+    const { result } = await find([
+      ghApiOk([
+        issueEntry(7, "2026-10-19T03:05:00Z", `背景\n\n${MARKER}\n \n`),
+      ]),
+    ]);
+    expect(result?.number).toBe(7);
+  });
+
+  test("ignores a marker in the middle of a body", async () => {
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T03:05:00Z", `${MARKER}\n\n続きの文`)]),
+    ]);
+    expect(result).toBeNull();
+  });
+
+  test("ignores a quoted marker line", async () => {
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T03:05:00Z", `> ${MARKER}`)]),
+    ]);
+    expect(result).toBeNull();
+  });
+
+  test("ignores a pull request entry that carries the marker", async () => {
+    const { result } = await find([
+      ghApiOk([
+        issueEntry(7, "2026-10-19T03:05:00Z", `背景\n\n${MARKER}`, {
+          pull_request: {
+            url: "https://api.github.com/repos/acme/widgets/pulls/7",
+          },
+        }),
+      ]),
+    ]);
+    expect(result).toBeNull();
+  });
+
+  test("matches an issue created exactly at the margin before the proposal", async () => {
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T02:00:00Z", `背景\n\n${MARKER}`)]),
+    ]);
+    expect(result?.number).toBe(7);
+  });
+
+  test("ignores an issue created one second before the margin", async () => {
+    const { result } = await find([
+      ghApiOk([issueEntry(7, "2026-10-19T01:59:59Z", `背景\n\n${MARKER}`)]),
+    ]);
+    expect(result).toBeNull();
+  });
+
+  test("requests the list endpoint with the creator, the since margin and newest-first order", async () => {
+    const { fake } = await find([ghApiOk([])]);
+    expect(fake.calls[0]?.argv).toContain(CUTOFF_ENDPOINT);
+  });
+
+  test("drops the milliseconds of the since value", async () => {
+    const { fake } = await find([ghApiOk([])], {
+      creatorLogin: "factory-bot",
+      proposalCreatedAt: new Date("2026-10-19T03:00:00.789Z"),
+    });
+    expect(fake.calls[0]?.argv.join(" ")).toContain(
+      "since=2026-10-19T02%3A00%3A00Z&",
     );
-    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
-    expect(decoded).toContain("is:issue repo:acme/widgets");
+  });
+
+  test("never calls an endpoint under search/", async () => {
+    const { fake } = await find([ghApiOk([])]);
+    expect(
+      fake.calls.some((call) =>
+        call.argv.some((arg) => arg.startsWith("search/")),
+      ),
+    ).toBe(false);
+  });
+
+  test("follows the next link and finds the marker on a later page", async () => {
+    const { result } = await find([
+      ok(
+        ghApiStdout(
+          200,
+          [issueEntry(8, "2026-10-19T03:10:00Z", "別のIssue")],
+          nextLink(2),
+        ),
+      ),
+      ghApiOk([issueEntry(7, "2026-10-19T03:05:00Z", `背景\n\n${MARKER}`)]),
+    ]);
+    expect(result?.number).toBe(7);
+  });
+
+  test("stops paging at the first issue older than the margin", async () => {
+    const { fake } = await find([
+      ok(
+        ghApiStdout(
+          200,
+          [
+            issueEntry(8, "2026-10-19T03:10:00Z", "別のIssue"),
+            issueEntry(2, "2026-10-19T01:00:00Z", "古いIssue"),
+          ],
+          nextLink(2),
+        ),
+      ),
+    ]);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("does not read entries after the first one older than the margin", async () => {
+    const { result } = await find([
+      ghApiOk([
+        issueEntry(2, "2026-10-19T01:00:00Z", "古いIssue"),
+        issueEntry(7, "2026-10-19T03:05:00Z", `背景\n\n${MARKER}`),
+      ]),
+    ]);
+    expect(result).toBeNull();
+  });
+
+  test("fails with a pagination limit error when ten pages are all newer than the margin", async () => {
+    const pages = Array.from({ length: 10 }, (_, index) =>
+      ok(
+        ghApiStdout(
+          200,
+          [issueEntry(100 + index, "2026-10-19T03:10:00Z", "別のIssue")],
+          nextLink(index + 2),
+        ),
+      ),
+    );
+    const fake = createFakeCommandRunner(pages);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        OPTIONS,
+      ),
+    ).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+  });
+
+  test("reads ten pages when the tenth has no next link", async () => {
+    const pages = Array.from({ length: 10 }, (_, index) =>
+      index < 9
+        ? ok(
+            ghApiStdout(
+              200,
+              [issueEntry(100 + index, "2026-10-19T03:10:00Z", "別のIssue")],
+              nextLink(index + 2),
+            ),
+          )
+        : ghApiOk([
+            issueEntry(100 + index, "2026-10-19T03:10:00Z", "別のIssue"),
+          ]),
+    );
+    const { fake } = await find(pages);
+    expect(fake.calls).toHaveLength(10);
+  });
+
+  test("rejects an HTTP error response", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "rate limited" })),
+    ]);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        OPTIONS,
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("rejects a response that is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        OPTIONS,
+      ),
+    ).rejects.toThrow("expected an array response");
+  });
+
+  test("rejects an entry without a created_at", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          number: 7,
+          html_url: "https://github.com/acme/widgets/issues/7",
+          body: MARKER,
+        },
+      ]),
+    ]);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        OPTIONS,
+      ),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects a creator login that is not a GitHub name", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        { creatorLogin: "bad/login", proposalCreatedAt: PROPOSAL_CREATED_AT },
+      ),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("rejects an invalid proposal creation time", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      findIssueByMarker(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        MARKER,
+        {
+          creatorLogin: "factory-bot",
+          proposalCreatedAt: new Date(Number.NaN),
+        },
+      ),
+    ).rejects.toThrow("proposalCreatedAt is an invalid date");
   });
 });
 

@@ -2179,49 +2179,145 @@ export async function createIssue(
   return { number: parsed.number, htmlUrl: parsed.html_url };
 }
 
-export type MarkerSearchResult = {
+export type IssueMarkerMatch = {
   readonly number: number;
   readonly htmlUrl: string;
   readonly body: string;
 };
 
+export type FindIssueByMarkerOptions = {
+  /** 一覧を絞る作成者。Factoryが使うPATのアカウントのログイン名である。 */
+  readonly creatorLogin: string;
+  /** 目印を埋めた提案の作成時刻。これより1時間以上前に作られたIssueは探さない。 */
+  readonly proposalCreatedAt: Date;
+};
+
 /**
- * `GET /search/issues`で、本文に`markerText`をそのまま含む`owner/repo`の
- * Issueを、未完了・完了を問わず探す(引用符で囲んだフレーズ検索)。
- * 最初に一致したものの番号・`htmlUrl`・本文を返し、無ければ`null`を返す。
+ * 提案の作成時刻より前まで広げて探す余裕。
+ * 時計のずれで、提案より少し前の時刻になったIssueを取りこぼさないためである。
+ */
+const MARKER_SCAN_MARGIN_MS = 60 * 60 * 1000;
+
+/** `findIssueByMarker`が読むページ数の上限。1ページ100件なので、1000件までである。 */
+const MARKER_SCAN_MAX_PAGES = 10;
+
+type MarkerScanEntry = {
+  readonly number: number;
+  readonly htmlUrl: string;
+  readonly body: string;
+  readonly createdAtMs: number;
+  readonly isPullRequest: boolean;
+};
+
+function parseMarkerScanEntry(
+  value: unknown,
+  context: string,
+): MarkerScanEntry {
+  if (
+    !isRecord(value) ||
+    typeof value.number !== "number" ||
+    typeof value.html_url !== "string" ||
+    typeof value.created_at !== "string" ||
+    (value.body !== null &&
+      value.body !== undefined &&
+      typeof value.body !== "string")
+  ) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  const createdAtMs = Date.parse(value.created_at);
+  if (Number.isNaN(createdAtMs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return {
+    number: value.number,
+    htmlUrl: value.html_url,
+    body: value.body ?? "",
+    createdAtMs,
+    isPullRequest: "pull_request" in value,
+  };
+}
+
+/**
+ * `body`の最後の行(末尾の空白を除く)が、`markerText`だけであるかを返す。
+ * 本文の途中や、引用(`> `)・他の文字に続く印は、人が書けるので一致としない。
+ */
+export function endsWithMarkerLine(body: string, markerText: string): boolean {
+  const trimmed = body.trimEnd();
+  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1);
+  return lastLine.trim() === markerText;
+}
+
+/**
+ * `owner/repo`のIssueを新しい順に読み、本文の最後の行が`markerText`だけである
+ * 最初のIssueの番号・`htmlUrl`・本文を返す。無ければ`null`を返す。
+ * 完了したIssueも探す。前に作ったIssueが別に閉じられていることがあるためである。
  *
  * `issue_proposal_apply.ts`は、承認の判断で`createIssue`を呼ぶ前にこれを使う。
  * 判断の記録とIssueの作成の間で異常終了して再試行したとき、前回の試行で
  * 作ったIssueを再利用し、重複して作らないためである。
- * 呼び出し側は`<!-- ... -->`の全体ではなく、内側の目印の文字列
- * (`factory:issue_proposal:<id>`。`pr_workflow_support.ts`の
- * `issueProposalMarkerSearchTerm`)を渡す。GitHubの検索は`<` `-` `>`を
- * 無視するためである。コロンを含むフレーズが`qualifier:value`の検索演算子と
- * 解釈されないよう、引用符で囲む(`searchIssues`のラベルと同じ扱い)。
- * 検索は単語やフレーズの一致で、完全な比較ではない。そのため本文も返し、
- * 呼び出し側が信用する前に部分文字列の完全一致(`hasIssueProposalMarker`)で
- * 確かめられるようにする。
- * 前に作ったIssueが別に閉じられていることもあるため、`state:open`には絞らない。
+ * 呼び出し側は`<!-- ... -->`を含む印の全文(`pr_workflow_support.ts`の
+ * `issueProposalMarkerText`)を渡す。
+ *
+ * 一覧は`creator`で絞り、作成の新しい順に読む。`since`は更新時刻での絞りなので、
+ * 作成時刻が`proposalCreatedAt`の1時間前より古い要素に当たったところで読み終える。
+ * それより古いIssueは、この提案の前に作られたもので、印を持たないためである。
+ * 一覧の要素にはPRも入るので、`pull_request`を持つ要素は除く。
+ * 除いたPRもページを消費するので、上限の1000件は作成者のIssueとPRの合計である。
+ * 本文の最後の行との一致だけを採る(`endsWithMarkerLine`)。本文の途中にある印は、
+ * 引用や貼り付けで書かれうるため、作成済みの印として信じない。
+ * 読み終える前にページ数が`MARKER_SCAN_MAX_PAGES`を超えたときは、
+ * 一部だけで「無い」と判断しないよう`GitHubPaginationLimitError`を投げる。
+ * 応答の形が違うときも例外を投げる。
  */
 export async function findIssueByMarker(
   client: GhClient,
   owner: string,
   repo: string,
   markerText: string,
-): Promise<MarkerSearchResult | null> {
+  options: FindIssueByMarkerOptions,
+): Promise<IssueMarkerMatch | null> {
   validateOwnerRepo(owner, repo);
-  const query = `is:issue repo:${owner}/${repo} "${markerText}" in:body`;
-  const items = await callGhApiAllSearchItems(
-    client,
-    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-  );
-  const first = items[0];
-  if (first === undefined) return null;
-  return {
-    number: first.number,
-    htmlUrl: first.html_url,
-    body: first.body ?? "",
-  };
+  assertGitHubName(options.creatorLogin);
+  const createdAtMs = options.proposalCreatedAt.getTime();
+  if (Number.isNaN(createdAtMs)) {
+    throw new Error("findIssueByMarker: proposalCreatedAt is an invalid date");
+  }
+  // `since`は秒の精度で渡すので、切り捨てた値を打ち切りの境目にも使い、両者をそろえる。
+  const cutoffMs =
+    Math.floor((createdAtMs - MARKER_SCAN_MARGIN_MS) / 1000) * 1000;
+  const since = new Date(cutoffMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+  let endpoint: string | null =
+    `repos/${owner}/${repo}/issues?creator=${encodeURIComponent(options.creatorLogin)}` +
+    `&state=all&since=${encodeURIComponent(since)}&sort=created&direction=desc&per_page=100`;
+  let pages = 0;
+  while (endpoint !== null) {
+    if (pages >= MARKER_SCAN_MAX_PAGES) {
+      throw new GitHubPaginationLimitError(MARKER_SCAN_MAX_PAGES);
+    }
+    pages += 1;
+    const context = `GET ${endpoint}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const parsed = parseJsonBody(response, context);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${context}: expected an array response`);
+    }
+    for (const raw of parsed) {
+      const entry = parseMarkerScanEntry(raw, context);
+      if (entry.createdAtMs < cutoffMs) return null;
+      if (entry.isPullRequest) continue;
+      if (endsWithMarkerLine(entry.body, markerText)) {
+        return {
+          number: entry.number,
+          htmlUrl: entry.htmlUrl,
+          body: entry.body,
+        };
+      }
+    }
+    const nextUrl = parseNextLinkUrl(response.headers.get("link"));
+    endpoint = nextUrl !== null ? toApiEndpoint(nextUrl) : null;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
