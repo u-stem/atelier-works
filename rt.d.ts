@@ -61,7 +61,6 @@ declare namespace RT {
     gh_collect_enabled: boolean,
     gh_collect_detail_enabled: boolean,
     gh_source_pr_conflict_watch: string,
-    gh_source_poll_issues: string,
     gh_source_poll_prs: string,
     gh_source_pr_ci_watch: string,
     worker_alert_memory_ratio: number,

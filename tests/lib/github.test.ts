@@ -48,9 +48,11 @@ import {
   hasMarker,
   isFactoryPost,
   isOwnPost,
+  LABELED_ISSUES_MAX_PAGES,
   LabelerCheckLimitError,
   listBranchRules,
   listIssueComments,
+  listLabeledOpenIssues,
   listOpenPullRequests,
   listPrChecks,
   listPrCommitMessages,
@@ -1272,6 +1274,215 @@ describe("getIssue", () => {
     const fake = createFakeCommandRunner([]);
     await expect(
       getIssue({ run: fake.run, ghToken: "tok" }, "../etc", "widgets", 5),
+    ).rejects.toThrow();
+  });
+});
+
+describe("getIssue pull request marker", () => {
+  const payload = {
+    number: 5,
+    title: "t",
+    body: "b",
+    html_url: "https://github.com/acme/widgets/issues/5",
+    state: "open",
+    user: { login: "alice" },
+    labels: [],
+    assignees: [],
+  };
+  const read = (extra: Record<string, unknown>) =>
+    getIssue(
+      {
+        run: createFakeCommandRunner([ghApiOk({ ...payload, ...extra })]).run,
+        ghToken: "tok",
+      },
+      "acme",
+      "widgets",
+      5,
+    );
+
+  test("is a pull request when the response has a pull_request key", async () => {
+    const issue = await read({
+      pull_request: {
+        url: "https://api.github.com/repos/acme/widgets/pulls/5",
+      },
+    });
+    expect(issue.isPullRequest).toBe(true);
+  });
+
+  test("is not a pull request when the response has no pull_request key", async () => {
+    expect((await read({})).isPullRequest).toBe(false);
+  });
+});
+
+describe("listLabeledOpenIssues", () => {
+  const CLIENT_TOKEN = "tok";
+
+  function entry(number: number, extra: Record<string, unknown> = {}) {
+    return {
+      id: number * 10,
+      number,
+      title: `issue ${String(number)}`,
+      html_url: `https://github.com/acme/widgets/issues/${String(number)}`,
+      state: "open",
+      ...extra,
+    };
+  }
+
+  function nextLink(page: number): Record<string, string> {
+    return {
+      link: `<https://api.github.com/repos/acme/widgets/issues?labels=factory&state=open&page=${String(page)}>; rel="next"`,
+    };
+  }
+
+  async function list(
+    responses: Parameters<typeof createFakeCommandRunner>[0],
+    label = "factory",
+    maxPages?: number,
+  ) {
+    const fake = createFakeCommandRunner(responses);
+    const numbers = await listLabeledOpenIssues(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      label,
+      maxPages,
+    );
+    return { fake, numbers };
+  }
+
+  test("returns the numbers of the listed issues", async () => {
+    const { numbers } = await list([ghApiOk([entry(3), entry(8)])]);
+    expect(numbers).toEqual([3, 8]);
+  });
+
+  test("returns nothing for an empty list", async () => {
+    const { numbers } = await list([ghApiOk([])]);
+    expect(numbers).toEqual([]);
+  });
+
+  test("asks for the open issues of the repository with the label", async () => {
+    const { fake } = await list([ghApiOk([])]);
+    expect(fake.calls[0]?.argv.join(" ")).toContain(
+      "repos/acme/widgets/issues?labels=factory&state=open&per_page=100",
+    );
+  });
+
+  test("encodes the label in the query", async () => {
+    const { fake } = await list([ghApiOk([])], "factory:review & more");
+    expect(fake.calls[0]?.argv.join(" ")).toContain(
+      "labels=factory%3Areview%20%26%20more&state=open",
+    );
+  });
+
+  test("drops an entry that is a pull request", async () => {
+    const { numbers } = await list([
+      ghApiOk([
+        entry(3),
+        entry(4, {
+          pull_request: {
+            url: "https://api.github.com/repos/acme/widgets/pulls/4",
+          },
+        }),
+        entry(5),
+      ]),
+    ]);
+    expect(numbers).toEqual([3, 5]);
+  });
+
+  test("follows the next link to the last page", async () => {
+    const { numbers } = await list([
+      ok(ghApiStdout(200, [entry(3)], nextLink(2))),
+      ok(ghApiStdout(200, [entry(4)], nextLink(3))),
+      ghApiOk([entry(5)]),
+    ]);
+    expect(numbers).toEqual([3, 4, 5]);
+  });
+
+  test("drops a pull request on a later page", async () => {
+    const { numbers } = await list([
+      ok(ghApiStdout(200, [entry(3)], nextLink(2))),
+      ghApiOk([entry(4, { pull_request: {} })]),
+    ]);
+    expect(numbers).toEqual([3]);
+  });
+
+  test("fails when the pages run past the limit", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, [entry(3)], nextLink(2))),
+      ok(ghApiStdout(200, [entry(4)], nextLink(3))),
+      ghApiOk([entry(5)]),
+    ]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+        2,
+      ),
+    ).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+  });
+
+  test("reads the pages up to the limit when the last one has no next link", async () => {
+    const { numbers } = await list(
+      [ok(ghApiStdout(200, [entry(3)], nextLink(2))), ghApiOk([entry(4)])],
+      "factory",
+      2,
+    );
+    expect(numbers).toEqual([3, 4]);
+  });
+
+  test("uses ten pages as the default limit", () => {
+    expect(LABELED_ISSUES_MAX_PAGES).toBe(10);
+  });
+
+  test("rejects an HTTP error response", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("rejects a response that is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+      ),
+    ).rejects.toThrow("expected an array response");
+  });
+
+  test("rejects an entry without a number", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ title: "x" }])]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+      ),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an owner that is not a GitHub name", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "../etc",
+        "widgets",
+        "factory",
+      ),
     ).rejects.toThrow();
   });
 });

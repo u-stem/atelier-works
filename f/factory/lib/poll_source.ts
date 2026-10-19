@@ -1,12 +1,14 @@
-// `poll_issues`と`poll_prs`が、トリガーのIssueとPRを見つける元(検索か収集の表)の切り替えを持つ。
-// 表の行は候補を絞るだけに使い、候補に入れる前にRESTで読み直して、開いていて今も対象であることを確かめる。
-// 表を使えない所有者は、その所有者の全体を検索に戻す。リポジトリ単位の戻し先は無い。
+// `poll_issues`と`poll_prs`が、トリガーのIssueとPRを見つける経路を持つ。
+// Issueは、収集の表を読み、表が使えないリポジトリのうち設定で明示したものだけをRESTで読む。検索は使わない。
+// PRは、検索か収集の表かを切り替える。
+// 表の行や一覧の番号は候補を絞るだけに使い、候補に入れる前にRESTで読み直して、開いていて今も対象であることを確かめる。
 
-import { isRepoAllowed } from "./config.ts";
+import { configuredRepos, isRepoAllowed } from "./config.ts";
 import {
   judgeGhOwnerCoverage,
   judgeGhOwnerIssueRepos,
   judgeGhOwnerRepos,
+  judgeGhRepoFreshness,
   requiredRepos,
   usableTableRows,
 } from "./gh_collect_read.ts";
@@ -37,23 +39,30 @@ export function issueKey(owner: string, repo: string, number: number): string {
   return `${owner}/${repo}#${String(number)}`.toLowerCase();
 }
 
-export type TableIssueCheck =
+/** 確かめる候補のIssueの参照。表の行と、RESTの一覧の番号のどちらからも作る。 */
+export type IssueRef = Pick<GhIssue, "owner" | "repo" | "number">;
+
+export type IssueCandidateCheck =
   | { readonly kind: "ok"; readonly item: IssueSearchItem }
-  | { readonly kind: "drop"; readonly reason: "closed" | "label_absent" }
+  | {
+      readonly kind: "drop";
+      readonly reason: "closed" | "label_absent" | "pull_request";
+    }
   | { readonly kind: "mismatch" };
 
 /**
- * 表の候補を`getIssue`の応答で確かめ、候補の項目を作る。
- * 応答のリポジトリか番号が表の行と違うときは`mismatch`で、名前の付け替えか移管の途中である。
- * 閉じているか、トリガーラベルが外れているときは`drop`にする。
+ * 候補を`getIssue`の応答で確かめ、候補の項目を作る。表の行にも、RESTの一覧の番号にも使う。
+ * 応答のリポジトリか番号が参照と違うときは`mismatch`で、名前の付け替えか移管の途中である。
+ * PRの番号は、Issueのまま扱うと別の処理に誤って回るので、`drop`(`pull_request`)にする。
+ * 閉じているか、トリガーラベルが外れているときも`drop`にする。
  * 外れたラベルの付与者を読むと、偽の`labeler_denied`を残すためである。
- * 項目のownerとrepoは応答の綴りにする。検索の経路と同じ綴りで作業項目を作るためである。
+ * 項目のownerとrepoは応答の綴りにする。作業項目の綴りをそろえるためである。
  */
-export function confirmTableIssue(
-  row: GhIssue,
+export function confirmIssueCandidate(
+  row: IssueRef,
   issue: Issue,
   triggerLabel: string,
-): TableIssueCheck {
+): IssueCandidateCheck {
   const repository = issue.repository;
   if (
     repository === null ||
@@ -62,6 +71,9 @@ export function confirmTableIssue(
     issue.number !== row.number
   ) {
     return { kind: "mismatch" };
+  }
+  if (issue.isPullRequest) {
+    return { kind: "drop", reason: "pull_request" };
   }
   if (issue.state !== "open") {
     return { kind: "drop", reason: "closed" };
@@ -93,19 +105,51 @@ export type PollSourceStats = {
   readonly table_dropped: number;
 };
 
+export type IssueDiscoveryStats = {
+  /** 表が新しくないため見送った、明示でないリポジトリの数。 */
+  readonly skipped_stale: number;
+  /** 見送った理由ごとのリポジトリの数。理由は表の鮮度の判定の語である。 */
+  readonly skipped_stale_reasons: Readonly<Record<string, number>>;
+  /** 表の代わりにRESTの一覧で読んだ、明示のリポジトリの数。 */
+  readonly rest_lists: number;
+  /** 一覧で読んだ理由ごとのリポジトリの数。表の鮮度の判定の語に、`read_failed`と`collect_disabled`を足したもの。 */
+  readonly rest_reasons: Readonly<Record<string, number>>;
+  /** RESTで確かめ直した候補の数。表の候補と一覧の候補を合わせる。 */
+  readonly candidates: number;
+  /** RESTで対象でないと分かって外した候補の数。 */
+  readonly dropped: number;
+};
+
+/** この所有者の、設定で明示したリポジトリのうち、読む時点で許されるもの。 */
+function explicitReposOf(
+  scope: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+  ownerName: string,
+  isAllowedNow: (owner: string, repo: string) => boolean,
+): { owner: string; repo: string }[] {
+  const name = ownerName.toLowerCase();
+  return configuredRepos(scope).filter(
+    (entry) =>
+      entry.owner.toLowerCase() === name &&
+      isAllowedNow(entry.owner, entry.repo),
+  );
+}
+
 /**
  * トリガーラベル付きのIssueを見つける。照合を通った所有者ごとに行う。
- * `search`なら、所有者ごとに検索する。
- * `db`なら、所有者の全体を表で探し、使えない所有者だけ検索に戻す。使えないのは次のときである。
- * - 表を読めなかった。失敗として記録する。
- * - 記録が古い、または設定で明示したリポジトリを表で使えない。失敗にはしない。
- * 表の候補は`getIssue`で確かめ直し、開いていてトリガーラベルが付いたものだけを項目にする。
- * 返す項目の並びは、検索の結果の後に、表の候補を(リポジトリ、番号)の順に置く。
+ * 所有者の全体を表で読み、リポジトリごとに鮮度を判定して、新しいリポジトリの行だけを候補にする。
+ * 表が新しくないリポジトリの扱いは、設定で明示したかで分かれる。
+ * - 明示していない: 見送り、理由別に数える。失敗にはしない。読めない間の通知は収集の側が出す。
+ * - 明示した(`factory_repo`と`repo_allowlist`の項目): RESTの一覧で、ラベル付きの開いたIssueを読む。
+ *   表を読めなかったとき(失敗として記録する)と、収集が無効(`useTable`が偽)のときも、明示のリポジトリは一覧で読む。
+ *   明示のリポジトリは表から外れる道が多く、読めないままにすると、通知なしに止まるためである。
+ * 候補は、表の行も一覧の番号も、`getIssue`で確かめ直し、開いていてトリガーラベルが付いたIssueだけを項目にする。
+ * 返す項目の並びは、所有者ごとに、表の候補を(リポジトリ、番号)の順に置き、続けて一覧の候補を置く。
  * 失敗はこの関数の中で記録し、件数を`failed`で返す。
  */
 export async function discoverIssues(
   input: {
-    readonly source: GhSource;
+    /** 収集の2つの設定が真で、表を読んでよいか。偽なら表を読まず、明示のリポジトリだけを一覧で読む。 */
+    readonly useTable: boolean;
     readonly owners: readonly FactoryOwner[];
     readonly scope: Pick<
       FactoryConfig,
@@ -116,10 +160,15 @@ export async function discoverIssues(
     readonly log: Logger;
   },
   deps: {
-    readonly searchIssues: (owner: FactoryOwner) => Promise<IssueSearchItem[]>;
     readonly readOwnerIssues: (
       owner: string,
     ) => Promise<GhOwnerOpenIssueSnapshot>;
+    /** ラベル付きの開いたIssueの番号を、PRを除いて返す。 */
+    readonly listLabeledIssues: (
+      owner: string,
+      repo: string,
+      label: string,
+    ) => Promise<number[]>;
     readonly getIssue: (
       owner: string,
       repo: string,
@@ -130,105 +179,160 @@ export async function discoverIssues(
 ): Promise<{
   items: IssueSearchItem[];
   failed: number;
-  stats: PollSourceStats;
+  stats: IssueDiscoveryStats;
 }> {
   let failed = 0;
-  let fallbackSearches = 0;
-  let tableCandidates = 0;
-  let tableDropped = 0;
-  const fallbackReasons: Record<string, number> = {};
-  const searched: IssueSearchItem[] = [];
-  const tableRows: GhIssue[] = [];
+  let skippedStale = 0;
+  let restLists = 0;
+  let candidates = 0;
+  let dropped = 0;
+  const skippedReasons: Record<string, number> = {};
+  const restReasons: Record<string, number> = {};
+  const refs: IssueRef[] = [];
+  // 一覧のページの境目で同じ番号が重なりうるので、番号の鍵で重ねを除く。
+  const seenRefs = new Set<string>();
+  const addRef = (ref: IssueRef) => {
+    const key = issueKey(ref.owner, ref.repo, ref.number);
+    if (seenRefs.has(key)) return;
+    seenRefs.add(key);
+    refs.push(ref);
+  };
 
   const fail = async (step: string, err: unknown) => {
     failed += 1;
     await deps.recordFailure(step, err);
   };
-  const search = async (owner: FactoryOwner) => {
-    try {
-      searched.push(...(await deps.searchIssues(owner)));
-    } catch (err) {
-      await fail(`search_issues:${owner.name}`, err);
-    }
-  };
   const isAllowedNow = (owner: string, repo: string) =>
     isRepoAllowed(input.scope, owner, repo);
 
   for (const owner of input.owners) {
-    if (input.source !== "db") {
-      await search(owner);
-      continue;
-    }
-    let reason: string | null = null;
-    let snapshot: GhOwnerOpenIssueSnapshot | null = null;
-    try {
-      snapshot = await deps.readOwnerIssues(owner.name);
-    } catch (err) {
-      await fail(`read_gh_owner_issues:${owner.name}`, err);
-      reason = "read_failed";
-    }
-    if (snapshot !== null) {
-      const judged = judgeGhOwnerIssueRepos(
-        owner.name,
-        snapshot,
-        input.staleAfterMs,
-      );
-      const coverage = judgeGhOwnerCoverage(
-        owner.name,
-        judged,
-        isAllowedNow,
-        requiredRepos(input.scope, owner.name),
-      );
-      if (coverage.kind === "stale") {
-        reason = coverage.reason;
-      } else {
-        tableRows.push(...usableTableRows(owner.name, judged, isAllowedNow));
+    const explicit = explicitReposOf(input.scope, owner.name, isAllowedNow);
+    const explicitNames = new Set(
+      explicit.map((entry) => entry.repo.toLowerCase()),
+    );
+    let tableReason: "collect_disabled" | "read_failed" | null = input.useTable
+      ? null
+      : "collect_disabled";
+    let judged: ReturnType<typeof judgeGhOwnerIssueRepos> | null = null;
+    let dbNow: Date | null = null;
+    if (input.useTable) {
+      try {
+        const snapshot = await deps.readOwnerIssues(owner.name);
+        dbNow = snapshot.db_now;
+        judged = judgeGhOwnerIssueRepos(
+          owner.name,
+          snapshot,
+          input.staleAfterMs,
+        );
+      } catch (err) {
+        await fail(`read_gh_owner_issues:${owner.name}`, err);
+        tableReason = "read_failed";
       }
     }
-    if (reason !== null) {
-      fallbackSearches += 1;
-      fallbackReasons[reason] = (fallbackReasons[reason] ?? 0) + 1;
-      await search(owner);
+
+    if (judged !== null) {
+      for (const row of usableTableRows(owner.name, judged, isAllowedNow)) {
+        addRef(row);
+      }
+      for (const name of [...judged.keys()].sort()) {
+        const item = judged.get(name);
+        if (
+          item === undefined ||
+          explicitNames.has(name) ||
+          !isAllowedNow(owner.name, item.row.repo) ||
+          item.row.archived ||
+          item.row.gone ||
+          item.freshness.kind !== "stale"
+        ) {
+          continue;
+        }
+        skippedStale += 1;
+        skippedReasons[item.freshness.reason] =
+          (skippedReasons[item.freshness.reason] ?? 0) + 1;
+      }
+    }
+
+    for (const entry of explicit) {
+      const item = judged?.get(entry.repo.toLowerCase());
+      let reason: string | null = tableReason;
+      if (judged !== null) {
+        if (item === undefined) {
+          reason = "no_record";
+        } else if (item.freshness.kind === "stale") {
+          reason = item.freshness.reason;
+        }
+      }
+      if (reason === null) continue;
+      // archive済みの明示リポジトリは、記録が鮮度の内にあるときだけ読まない。
+      // 古い記録のarchiveの印は、解除された後も残りうるので信用しない。
+      if (
+        item !== undefined &&
+        dbNow !== null &&
+        item.row.archived &&
+        judgeGhRepoFreshness(
+          { ...item.row, archived: false },
+          [],
+          dbNow,
+          input.staleAfterMs,
+        ).kind === "fresh"
+      ) {
+        continue;
+      }
+      restLists += 1;
+      restReasons[reason] = (restReasons[reason] ?? 0) + 1;
+      try {
+        const numbers = await deps.listLabeledIssues(
+          entry.owner,
+          entry.repo,
+          input.triggerLabel,
+        );
+        for (const number of [...numbers].sort((a, b) => a - b)) {
+          addRef({ owner: entry.owner, repo: entry.repo, number });
+        }
+      } catch (err) {
+        await fail(`list_labeled_issues:${entry.owner}/${entry.repo}`, err);
+      }
     }
   }
 
   const confirmed: IssueSearchItem[] = [];
-  for (const row of tableRows) {
-    const target = `${row.owner}/${row.repo}#${String(row.number)}`;
-    tableCandidates += 1;
+  for (const ref of refs) {
+    const target = `${ref.owner}/${ref.repo}#${String(ref.number)}`;
+    candidates += 1;
     let issue: Issue;
     try {
-      issue = await deps.getIssue(row.owner, row.repo, row.number);
+      issue = await deps.getIssue(ref.owner, ref.repo, ref.number);
     } catch (err) {
-      await fail(`confirm_table_issue:${target}`, err);
+      await fail(`confirm_issue:${target}`, err);
       continue;
     }
-    const check = confirmTableIssue(row, issue, input.triggerLabel);
+    const check = confirmIssueCandidate(ref, issue, input.triggerLabel);
     if (check.kind === "ok") {
       confirmed.push(check.item);
     } else if (check.kind === "drop") {
-      tableDropped += 1;
-      input.log.info("table issue dropped by the REST check", {
+      dropped += 1;
+      input.log.info("issue dropped by the REST check", {
         target,
         reason: check.reason,
       });
     } else {
       await fail(
-        `confirm_table_issue:${target}`,
-        new Error("table issue does not match the issue read from GitHub"),
+        `confirm_issue:${target}`,
+        new Error("issue does not match the issue read from GitHub"),
       );
     }
   }
 
   return {
-    items: [...searched, ...confirmed],
+    items: confirmed,
     failed,
     stats: {
-      source: input.source,
-      fallback_searches: fallbackSearches,
-      fallback_reasons: fallbackReasons,
-      table_candidates: tableCandidates,
-      table_dropped: tableDropped,
+      skipped_stale: skippedStale,
+      skipped_stale_reasons: skippedReasons,
+      rest_lists: restLists,
+      rest_reasons: restReasons,
+      candidates,
+      dropped,
     },
   };
 }
