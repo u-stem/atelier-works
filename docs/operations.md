@@ -116,7 +116,7 @@ gh api users/<名前> --jq .id
 ```
 
 オーナーが改名して別の人がその名前を取得すると、名前だけの照合では同じオーナーに見える。
-`id`を入れると、名前を取得した第三者のリポジトリのIssueとPRが、検索の候補に入らない。
+`id`を入れると、名前を取得した第三者のリポジトリのIssueとPRが、発見の候補に入らない。
 承認を待つ間に名前が入れ替わっても、保存済みの作業項目は、リポジトリを取得する前に止まる。
 `allowed_labeler_logins`に古い名前が残っていても、その名前がオーナーの名前なら、そのオーナーのリポジトリのラベルはラベルの確認まで進まない。
 候補に入らないので、拒否のnotice(`labeler_denied`)も積もらない。
@@ -126,8 +126,8 @@ gh api users/<名前> --jq .id
 `id`を入れたオーナーでは、この拒否を待たずに、候補の段階で外す。
 
 `id`があるオーナーは、`poll_issues`と`poll_prs`が発見の前にGitHubの現在のIDを取得して照合する。
-IDが一致すれば、そのオーナーを検索する。
-食い違うか、IDを取得できないオーナーは、その回の検索を飛ばし、失敗として記録する。
+IDが一致すれば、そのオーナーのIssueとPRを発見する。
+食い違うか、IDを取得できないオーナーは、その回の発見を飛ばし、失敗として記録する。
 `id`の無いオーナーは、名前だけで動く。
 DBから見つけ直す追跡中のPRも、`owners`にあって照合を通ったオーナーのものだけを候補に残す。
 飛ばしたオーナーと、`owners`に無い旧名のオーナーのPRは、候補から外れる。
@@ -137,7 +137,7 @@ DBから見つけ直す追跡中のPRも、`owners`にあって照合を通っ�
 本文にオーナー名と、設定のIDが載る。
 食い違いのときは、GitHubの現在のIDも載る。
 GitHubでそのアカウントが意図した持ち主かを確かめ、`factory_config`の`owners`の名前か`id`を見直す。
-名前とIDが合うと、次の回から検索が再開する。
+名前とIDが合うと、次の回から発見が再開する。
 見直した後に、noticeを解決する。
 
 正規の改名(AからB)のときは、`owners`の名前をBに直し、B側のIssueとPRにトリガーラベルを付け直す。
@@ -151,7 +151,7 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 
 #### 作業項目を進める前の照合
 
-作業項目は、検索の時点の`owner`と`repo`の名前を保存する。
+作業項目は、発見の時点の`owner`と`repo`の名前を保存する。
 承認を待つ間などに名前が別の人に渡ると、保存した名前のURLは別のリポジトリを指す。
 そこで、作業項目を進めるステップが、リポジトリを取得する前か、GitHubへ書き込む前に照合する。
 対象は次のとおりである。
@@ -672,6 +672,9 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 - 作業項目の`owner`と`repo`が、GitHubの正規の綴りである。手順5と同じ確認で、追跡中のPRとの重ねの除去に効く。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -680,10 +683,9 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 ### PRの発見の元を確かめる
 
@@ -847,6 +849,9 @@ stateを書けない間は、毎周回先頭から選ぶ。
 収集が各リポジトリを取り直すまで、表のラベルの真偽は古い名前で答えるためである。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -855,10 +860,9 @@ stateを書けない間は、毎周回先頭から選ぶ。
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 ### 組織の所有者を足す前の確認
 
@@ -2050,6 +2054,9 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
   手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。そうなる前に消す。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -2058,10 +2065,9 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 人のPRの発見をやめるときは、`pr_ci_watch_human_prs`を`false`にする。
 
@@ -2242,14 +2248,14 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。
 
 1. migrationが反映済みであることを確かめる。競合の記録の表(`pr_conflict_checks`)を作るmigrationは、`self_update`が反映する。デプロイの記録で、反映が成功していることを見る。
-2. 開いているFactoryのPRの数を、リポジトリごとに数える。リポジトリを`-R`で指定し、PATのアカウントのログイン名を`--author`に渡す。下書きは数えない。
+2. 開いているFactoryのPRの数を、リポジトリごとに数える。PATのアカウントのログイン名を作者の条件に渡す。下書きは数えない。
 
    ```bash
-   gh pr list -R <owner>/<repo> --author <PATのアカウント> --state open --limit 200 --search "draft:false head:factory/issue-" --json number --jq length
+   gh api -X GET repos/<owner>/<repo>/pulls -f state=open -f per_page=100 --paginate --jq '[.[] | select((.draft | not) and ((.user.login // "" | ascii_downcase) == ("<PATのアカウント>" | ascii_downcase)) and (.head.ref | startswith("factory/issue-")))] | length'
    ```
 
-   各リポジトリの数を合計して、あとで`tracked`と比べる。`gh pr list`は、`-R`で指定した1つのリポジトリしか数えず、`--limit`の既定は30である。
-   `head:`の検索が接頭辞に合わないときは、`--search`を外し、`--json headRefName,isDraft`で、`factory/issue-`で始まり下書きでないものに絞って数える。
+   各リポジトリの数を合計して、あとで`tracked`と比べる。
+   `--paginate`は、ページごとに数を出す。ページが複数あるときは、出た数を足す。
 3. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
 4. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
 5. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
@@ -2389,6 +2395,9 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
   ただし、手で消すまで、bootstrapが`rt.d.ts`を再生成すると項目が戻り、`config.test.ts`の「生成された型に宣言されない」テストが落ちる。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 発見の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
 
@@ -2397,10 +2406,9 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
 3. 戻しのPRをマージする。反映は`self_update`が行う。
 4. 反映後の実ジョブの結果を確かめる。
 
-リソースの項目は、検索の関数を消す段階まで消さない。
-今のコードは、残った項目を読み捨てるので、先に入れても動作に影響しない。
-ほかのフローの検索を外す変更が後でマージされると、この変更だけを戻す操作は衝突しうる。
-戻すときは、後にマージされた変更から順に戻す。
+リソースの項目は、検索の関数を消した変更が反映され、各フローの実ジョブで確かめた後に、`gh_source_*`の値とresource-typeの項目を整理する。
+整理後に戻すときは、控えの値を入れ直してから、revertする。
+今のコードは、残った項目を読み捨てるので、整理の前は残っていても動作に影響しない。
 
 監視を止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 
@@ -2798,6 +2806,71 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 - migrationのdownは自動では走らない。
   表は残るが、害は無い。
 
+### 5分の境目の403を数える
+
+検索を使うフローが無くなった後、5分の境目に検索の枠の403が出ないことを、ジョブのログと失敗の記録で確かめる。
+検索を外した変更が反映されてから、平日を含む7日間たった後に、読み取りだけで行う。
+Windmill本体のデータベース`windmill`と、`factory.job_failures`のある`datatable_db`を、どちらも`db`のコンテナで読む。
+
+`callGhApi`は、rate limitと判定した応答を、警告のログ1行に残す。
+メッセージは`github rate limit response`で、`status`、クエリを除いた`endpoint`、`retry_after`、`resource`、`outcome`を載せる。
+`resource`は、応答のヘッダー`x-ratelimit-resource`の値で、`core`、`search`、`graphql`のどれかになる。
+`outcome`は、待って再試行する`waiting`、待ちが長すぎて失敗する`wait_too_long`、再試行も拒まれた`still_limited`のどれかになる。
+待って成功した403も、このログに残る。
+
+1. 7日分のジョブのログで、4つの印を、スクリプトごとに数える。
+   - `limit_logged`は、ログ`github rate limit response`を含むジョブの数である。
+   - `resource_search`は、そのログの`resource`が`search`のジョブの数である。
+   - `rate_limit_text`は、失敗の文`GitHub rate limit on`を含むジョブの数である。
+   - `search_rejected`は、実行時の拒否の文`GitHub REST search endpoints are not allowed`を含むジョブの数である。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, count(*) AS runs, count(*) FILTER (WHERE l.logs LIKE '%\"message\":\"github rate limit response\"%') AS limit_logged, count(*) FILTER (WHERE l.logs LIKE '%\"resource\":\"search\"%') AS resource_search, count(*) FILTER (WHERE l.logs LIKE '%GitHub rate limit on%') AS rate_limit_text, count(*) FILTER (WHERE l.logs LIKE '%GitHub REST search endpoints are not allowed%') AS search_rejected FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND j.created_at > now() - interval '7 days' GROUP BY j.runnable_path ORDER BY j.runnable_path"
+   ```
+
+2. 同じ7日分の失敗の記録で、文`GitHub rate limit on`を含む行を、フローごとに数える。
+   ログに残らない失敗も、この表には残る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT flow_path, count(*) FROM factory.job_failures WHERE error LIKE '%GitHub rate limit on%' AND occurred_at > now() - interval '7 days' GROUP BY flow_path ORDER BY flow_path"
+   ```
+
+3. `resource_search`と`search_rejected`が、すべてのスクリプトで0であることを見る。
+   1以上なら、検索を呼ぶ経路が残っているか、新しく入っている。
+   その`runnable_path`のコードを調べ、検索を外す。
+4. `limit_logged`が1以上のスクリプトは、`resource`が`core`か`graphql`の403である。
+   検索の枠ではないので、時刻が5分の境目に集まっているかを、次の問い合わせで見る。
+   集まっていれば、同じ時刻に動くフローの呼び出しの数を見直す。
+   集まっていなければ、[GitHubのrate limitで失敗したとき](#githubのrate-limitで失敗したとき)に従う。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT j.runnable_path, (extract(minute FROM j.created_at)::int % 5) AS minute_mod_5, count(*) FROM v2_job j JOIN job_logs l ON l.job_id = j.id WHERE j.workspace_id = 'factory' AND j.runnable_path LIKE 'f/factory/%' AND l.logs LIKE '%\"message\":\"github rate limit response\"%' AND j.created_at > now() - interval '7 days' GROUP BY 1, 2 ORDER BY 1, 2"
+   ```
+
+5. 手順1の問い合わせが検出できることを、対照で確かめる。
+   検索を外す前のコミットが反映されていた期間のジョブに、`created_at`の範囲を替えて、同じ問い合わせをする。
+   検索の枠の403があったジョブでは、失敗の文`GitHub rate limit on`か`GET search/`を含むジョブが1以上になる。
+   その期間のログが保持期間で消えていれば、対照を確かめられなかったことを、確認の記録に書く。
+
+数えるのは、ログと失敗の記録に残るものだけである。
+ログのメッセージを足す前に反映されたジョブでは、待って成功した403は残らない。
+
+### 検索を外した反映の確認
+
+検索を外した変更を反映した後に、次の4つを確かめる。
+反映は`self_update`が行う。
+
+1. 反映が成功し、新しいhashが使われている。
+   デプロイの記録で、反映の行が成功であることを見る。
+2. `poll_issues`、`poll_prs`、`watch_pr_conflicts`、`watch_pr_ci`、`poll_dependabot`の、反映後の1周回の結果を見る。
+   - `failed`と`skipped_stale`が、反映の前より増えていない。
+   - 文`GitHub REST search endpoints are not allowed`が、ジョブのログと失敗の記録のどちらにも、0件である。
+   - ログの問い合わせは、[5分の境目の403を数える](#5分の境目の403を数える)の手順1の`search_rejected`を使う。失敗の記録は、`factory.job_failures`の`error`に同じ文を含む行を数える。
+3. dependabotの判断が、通常どおり進む。
+   `dependabot_merge_enabled`が偽の試運転なら、人に回る件数が、反映の前と変わらない。
+4. `gh_source_*`の値とresource-typeの項目を整理した後も、次の周回が通る。
+   整理した後の最初の周回で、5つのフローの結果が成功であることを見る。
+
 ## 監査を使う
 
 Factory自身の運用記録の監査は、毎週月曜09:30に自動で走る(`audit_kickoff`)。Consoleの**レポート**の**今すぐ監査**で前倒しできる。
@@ -2970,6 +3043,9 @@ dependabotの対象は、baseが`main`のPRに限る。
 説明できなければ、収集の失敗として調べる。
 
 検索へ戻す設定は無い。
+検索の関数を消した変更を先にrevertしてから、フローごとの変更を、後にマージされたものから順にrevertする。
+検索の関数を消した変更を戻さずにフローだけ戻すと、削除済みの関数を参照して、typecheckが通らない。
+通ったとしても、`callGhApi`の入口の拒否で毎回失敗する。
 dependabotの対象は明示したリポジトリだけで、一覧の読み取りは小さいためである。
 列挙の経路そのものを戻すときは、該当のコミットをgit revertして反映する。
 戻しは次の順で行う。
@@ -3453,7 +3529,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。名前が同じでも、`allowed_labeler_ids`のIDと違う人は許可されない。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す。許可した本人のラベルが拒否されたときは、`allowed_labeler_ids`のIDが合っているかを確かめる([ラベルの付与者の数値IDを固定する](#ラベルの付与者の数値idを固定する)) |
 | `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
-| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できないか、作業項目のオーナーが`owners`に無い。そのオーナーの検索を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
+| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できないか、作業項目のオーナーが`owners`に無い。そのオーナーの発見を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
 | `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が取得も反映もしていない。Factory自身のリポジトリを使うほかの処理は、取得の前に失敗する | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
 | `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |

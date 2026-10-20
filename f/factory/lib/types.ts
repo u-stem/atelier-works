@@ -1567,7 +1567,7 @@ export type FactoryOwner = {
    * GitHubのアカウントの数値ID(正の整数)。
    * 指定すると、`poll_issues`と`poll_prs`が発見の前に現在のIDと照合する。
    * 作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合する。
-   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れず、保存済みの作業項目も進めないため。
+   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを発見の候補に入れず、保存済みの作業項目も進めないため。
    * 省略すると、名前だけで照合する。
    */
   id?: number;
@@ -1581,12 +1581,6 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
  * 承認を経て投稿する仕組みはまだ無い。
  */
 export type ReviewPostMode = "comment_only" | "gated";
-
-/**
- * 下流のscriptが候補を列挙する元。`search`は検索API、`db`は収集が書いた表を指す。
- * `effectiveGhSource`が返す。
- */
-export type GhSource = "search" | "db";
 
 /** 投稿しなかったレビューの集計。`since`は、その最初のレビューの記録時刻。 */
 export type GatedReviewStats = {

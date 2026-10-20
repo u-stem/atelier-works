@@ -219,6 +219,24 @@ describe("noticeGuide", () => {
     expect(noticeGuide("owner_id_mismatch").meaning).toContain("ownersに無く");
   });
 
+  test("tells the owner id mismatch skips the discovery of the owner", () => {
+    expect(noticeGuide("owner_id_mismatch").meaning).toContain(
+      "このオーナーの発見は飛ばし",
+    );
+  });
+
+  test("tells the discovery resumes once the owner id matches", () => {
+    expect(noticeGuide("owner_id_mismatch").note).toContain(
+      "次の回から発見が再開します",
+    );
+  });
+
+  test("does not call the discovery of the owner a search", () => {
+    const guide = noticeGuide("owner_id_mismatch");
+
+    expect(`${guide.meaning}${guide.note ?? ""}`.includes("検索")).toBe(false);
+  });
+
   test("falls back to the generic guide for an unknown kind", () => {
     expect(noticeGuide("future_kind")).toBe(GENERIC_NOTICE_GUIDE);
   });
