@@ -622,10 +622,16 @@ cloneを開くステップでは、`openFactoryClone`の照合も重なるので
 仕様は[通知とrate limitの仕様](internals/notifications.md#restの検索の拒否)にある。
 残るリスクは次のとおりである。
 
-- 拒否は、`callGhApi`を通る呼び出しにだけ効く。`gh`の直接の起動は`github.ts`の1か所だけで、静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。
+- 拒否は、`callGhApi`を通る呼び出しにだけ効く。
+  argv配列で`gh`を起動するのは`github.ts`だけである。`workspace.ts`のgit credential helperの`gh auth git-credential`は除く。
+  静的テストが、argvの先頭に`gh`を置く配列を書くファイルが`github.ts`だけであることを確かめる。
+- `fetch`でRESTを呼ぶ経路は、`callGhApi`を通らず、実行時の拒否が効かない。
+  経路は、`github.ts`の`fetchIssueObject`、`lib/metadata_patch_download.ts`、GraphQLの`gh_graphql.ts`である。
+  字面の`search/`だけを静的テストが止める。宛先は固定で、実害は無い。
 - `gh search`、`--search`、argvの`gh`と`search`の並びも、静的テストが字面で走査して止める。
 - GraphQLの`search`のフィールドは拒まない。使う変更は、枠の消費を設計から見直す。
-- endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。実行時の拒否が止める。
+- endpointを文字列の組み立てで作る呼び出しは、静的テストが見つけられない。`callGhApi`を通る呼び出しなら、実行時の拒否が止める。
+- 実行時の拒否が正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
 
 ## シークレットの扱い
 

@@ -644,6 +644,10 @@ rate limitで失敗したときに各ステップが何を済ませているか�
 `paginateGhApi`と`callGhApiRawBody`は`callGhApi`を通るので、次のページのURLも同じ判定を受ける。
 例外のメッセージにendpointを載せない。クエリに値が入りうるためである。
 対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
+正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。
+ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
+`fetch`でRESTを呼ぶ経路は、`callGhApi`を通らないので、実行時の拒否が効かない。
+経路は、`fetchIssueObject`、`lib/metadata_patch_download.ts`、`gh_graphql.ts`である。
 
 静的テスト`tests/scripts/no_search_api.test.ts`は、次の3つを固定する。
 
