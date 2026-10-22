@@ -587,16 +587,40 @@ describe("review-loop round breakdown", () => {
         "実装レビューのラウンド",
         "security-auditorの修正の組",
         "次を別々に数え、和は書かない。",
-        "  この欄の値は、組の数(0〜2)である。\n  組の内側の手順4と手順7は、どの段にも足さず、記録しない。",
-        "レビューを1回行うことを、1ラウンドに数える。",
-        "指摘が0件で終わる最後のレビューも、1ラウンドに数える。",
-        "doc-writerの修正が入ったときだけ、実装レビューのラウンドに1を足す。",
+        "  この段の値は、組の数(0〜2)である。\n  組の内側の手順4と手順7は、どの段にも足さず、記録しない。",
         "種類が文書のPR(ループに通さない)は、内訳を書かない。",
-        "- 範囲を狭めた差分に対する手順6から10の手順7の修正も、実装レビューのラウンドに数える。",
-        "- 完了の報告の「ラウンドの数と上限」の数は、実装レビューのラウンドの数え方に合わせる。",
-        "- 設計レビューが無い種類(小、大きさか、文書から外した7つのファイルの変更で機能になったもの)は、設計を0と書く。",
+        "- 設計レビューが無い種類(小と、大きさか文書から外した7つのファイルの変更で機能になったもの)は、設計を0と書く。",
       ]),
     ).toEqual([]);
+  });
+
+  test("rules.md counts implementation rounds by reviewer launches", () => {
+    expect(sectionOf(rulesText(), "## ラウンドの内訳")).toContain(
+      [
+        "- 実装レビューのラウンドは、レビュアーを起動した回数とする。",
+        "  指摘が0件のレビューも数える。",
+        "  文書の追従の後の文書の再レビュー、組の内側の再レビュー、範囲を狭めた差分への通過は、どの段にも数えない。",
+      ].join("\n"),
+    );
+  });
+
+  test("rules.md does not add documentation fixes to the implementation rounds", () => {
+    expect(sectionOf(rulesText(), "## ラウンドの内訳")).not.toContain(
+      "doc-writerの修正が入ったときだけ",
+    );
+  });
+
+  test("rules.md does not tie the report limit field to the breakdown counting", () => {
+    expect(sectionOf(rulesText(), "## ラウンドの内訳")).not.toContain(
+      "ラウンドの数と上限",
+    );
+  });
+
+  test("rules.md does not refer to step numbers in the counting rules", () => {
+    const counting = sectionOf(rulesText(), "## ラウンドの内訳").split(
+      "数え方は次のとおり。",
+    )[1];
+    expect(counting).not.toMatch(/手順\d/);
   });
 
   test("rules.md does not define a combined round total", () => {
@@ -664,7 +688,7 @@ describe("review-loop round breakdown", () => {
     expect(
       missing(skillText(), [
         "- 集計の比べ方と結論の規則は、この変更では定めない。\n  記録が溜まってから、別の変更で定める。",
-        "- ラウンドの内訳の件数は、上限、人数、止める基準を変える根拠にしない。\n  「使わない」の範囲は、`rules.md`の「ラウンドの内訳」に従う。\n  変えるときは、別の変更として削除・権限で通す。",
+        "- ラウンドの内訳の件数は、上限、人数、止める基準を変える根拠にしない。\n  ラウンドの内訳の件数を使わない判断の範囲は、`rules.md`の「ラウンドの内訳」が定める。\n  変えるときは、別の変更として削除・権限で通す。",
         "- 数え漏れと、PRに進まなかった件が記録に残らないことは、測定の限界として受け入れる。\n  `docs/security.md`の残るリスクではない。",
       ]),
     ).toEqual([]);
