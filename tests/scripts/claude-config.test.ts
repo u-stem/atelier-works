@@ -554,3 +554,96 @@ describe("review-loop scaling rules", () => {
     );
   });
 });
+
+describe("review-loop round breakdown", () => {
+  const RULES = join(ROOT, ".claude/skills/review-loop/rules.md");
+  const SKILL = join(ROOT, ".claude/skills/review-loop/SKILL.md");
+  const rulesText = (): string => readFileSync(RULES, "utf8");
+  const skillText = (): string => readFileSync(SKILL, "utf8");
+
+  /** 見出しの行から、同じ階層以上の次の見出しの手前までを返す。 */
+  function sectionOf(text: string, heading: string): string {
+    const lines = text.split("\n");
+    const start = lines.indexOf(heading);
+    if (start < 0) return "";
+    const level = heading.indexOf(" ");
+    const next = new RegExp(`^#{1,${level}} `);
+    const end = lines.findIndex(
+      (line, index) => index > start && next.test(line),
+    );
+    return lines.slice(start, end < 0 ? undefined : end).join("\n");
+  }
+
+  /** 語のうち、本文に載っていないものを返す。 */
+  function missing(text: string, terms: string[]): string[] {
+    return terms.filter((term) => !text.includes(term));
+  }
+
+  test("rules.md defines the round breakdown with design, implementation and audit rounds", () => {
+    const section = sectionOf(rulesText(), "## ラウンドの内訳");
+    expect(
+      missing(section, [
+        "設計レビューのラウンド",
+        "実装レビューのラウンド",
+        "security-auditorの修正の組",
+        "合計",
+      ]),
+    ).toEqual([]);
+  });
+
+  test("rules.md defines the cause classes in priority order", () => {
+    const section = sectionOf(rulesText(), "### 区分");
+    const labels = [
+      "(c)設計の欠陥",
+      "(d)修正不足",
+      "(a)修正が生んだ",
+      "(b)取りこぼし",
+      "判別不能",
+    ];
+    const found = labels
+      .map((label) => ({ label, at: section.indexOf(label) }))
+      .filter(({ at }) => at >= 0)
+      .sort((left, right) => left.at - right.at)
+      .map(({ label }) => label);
+    expect(found).toEqual(labels);
+  });
+
+  test("rules.md keeps the round breakdown out of the stop criteria", () => {
+    expect(sectionOf(rulesText(), "## ラウンドの内訳")).toContain(
+      "この節の数は記録のためで、上限や止める基準の判定には使わない",
+    );
+  });
+
+  test("review-loop report template records round breakdown and cause classes", () => {
+    const template = sectionOf(skillText(), "### レビューのループ");
+    expect(
+      missing(template, [
+        "- ラウンドの内訳(上限の判定には使わない):",
+        "- 区分ごとの件数:",
+        "- 原因の分類ごとの件数:",
+      ]),
+    ).toEqual([]);
+  });
+
+  test("review-loop measurement forbids scenarios and command output", () => {
+    expect(skillText()).toContain(
+      [
+        "  書くのは、件数とラベルだけにする。",
+        "  筋書き、`file:line`、コマンドの出力、環境変数の値は書かない。",
+      ].join("\n"),
+    );
+  });
+
+  const EXISTING_LIMIT_REVIEW = [
+    "- 上限と、小の閾値(3ファイル、100行)は、実績が無い暫定の値である。",
+    "  PRの本文の「開発の記録」に、種類、ラウンドの数、上限、上限に達したかを残す。",
+    "  各種類を5件回した後に、上限に達した件が半分を超える種類は、上限か閾値を見直す。",
+    "  ラウンドが1回で終わった件が大半の種類は、人数を減らせないかを見る。",
+  ].join("\n");
+
+  test("review-loop keeps the existing limit review and adds the measurement review", () => {
+    expect(skillText()).toContain(
+      `${EXISTING_LIMIT_REVIEW}\n- ラウンドの多い原因を見分けるため、`,
+    );
+  });
+});
