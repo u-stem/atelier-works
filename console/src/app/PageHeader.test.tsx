@@ -26,6 +26,12 @@ function render(label: string | null = null): string {
 }
 
 const REFRESH_BUTTON = 'aria-label="この画面を更新"';
+const ACTIONS = "<span>操作</span>";
+
+// 題を含む左のブロックの閉じタグの直後の位置。
+function titleBlockEnd(markup: string): number {
+  return markup.indexOf("</div>", markup.indexOf("</h1>")) + "</div>".length;
+}
 
 function renderWith(options: {
   refresh?: RefreshStatus;
@@ -60,13 +66,13 @@ describe("PageHeader", () => {
       actions: <span>操作</span>,
     });
 
-    expect(markup).toContain("<span>操作</span>");
+    expect(markup).toContain(ACTIONS);
   });
 
-  test("renders the actions without a refresh status", () => {
+  test("places the actions outside the title block without a refresh status", () => {
     const markup = renderWith({ actions: <span>操作</span> });
 
-    expect(markup).toContain("<span>操作</span>");
+    expect(markup.indexOf(ACTIONS)).toBeGreaterThan(titleBlockEnd(markup));
   });
 
   test("places the actions after the refresh button", () => {
@@ -75,33 +81,54 @@ describe("PageHeader", () => {
       actions: <span>操作</span>,
     });
 
-    expect(markup.indexOf("<span>操作</span>")).toBeGreaterThan(
+    expect(markup.indexOf(ACTIONS)).toBeGreaterThan(
       markup.lastIndexOf(REFRESH_BUTTON),
     );
   });
 
-  test("keeps the children on the title side", () => {
+  test("keeps the children inside the title block", () => {
     const markup = renderWith({
       refresh: REFRESH,
       actions: <span>操作</span>,
       children: <p>子</p>,
     });
 
-    expect(markup.indexOf("<p>子</p>")).toBeLessThan(
-      markup.indexOf(REFRESH_BUTTON),
+    expect(markup.indexOf("<p>子</p>")).toBeLessThan(titleBlockEnd(markup));
+  });
+
+  test("renders nothing after the title block without refresh or actions", () => {
+    const markup = renderWith({});
+
+    expect(markup.slice(titleBlockEnd(markup))).toBe("</header>");
+  });
+
+  test("does not wrap the refresh block without actions", () => {
+    const markup = renderWith({ refresh: REFRESH });
+
+    expect(markup).toContain(
+      '</div><div class="flex items-center gap-2 text-small',
     );
   });
 
-  test("renders no refresh text without refresh or actions", () => {
-    const markup = renderWith({});
+  test("pushes the block holding the actions to the right edge", () => {
+    const markup = renderWith({ actions: <span>操作</span> });
 
-    expect(markup).not.toContain("更新");
+    expect(markup).toContain("ml-auto");
   });
 
-  test("renders no right side block without refresh or actions", () => {
-    const markup = renderWith({});
+  test("right aligns the contents of the block holding the actions", () => {
+    const markup = renderWith({
+      refresh: REFRESH,
+      actions: <span>操作</span>,
+    });
 
-    expect(markup.split("<div").length - 1).toBe(1);
+    expect(markup).toContain("justify-end");
+  });
+
+  test("does not push the refresh block to the right edge without actions", () => {
+    const markup = renderWith({ refresh: REFRESH });
+
+    expect(markup).not.toContain("ml-auto");
   });
 
   test("renders the refresh button without actions", () => {
