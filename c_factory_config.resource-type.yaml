@@ -65,10 +65,6 @@ schema:
     - pr_conflict_fix_notify_grace_min
     - gh_collect_enabled
     - gh_collect_detail_enabled
-    - gh_source_pr_conflict_watch
-    - gh_source_poll_issues
-    - gh_source_poll_prs
-    - gh_source_pr_ci_watch
     - worker_alert_memory_ratio
     - check_commands_by_repo
   properties:
@@ -290,7 +286,7 @@ schema:
             type: integer
             minimum: 1
             description: >-
-              GitHubのアカウントの数値IDです。指定すると、検索の前にGitHubの現在のIDと照合し、食い違うオーナーは検索を飛ばします。作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合します。オーナーが改名して別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れず、保存済みの作業項目も進めないためです。省略すると名前だけで照合します。
+              GitHubのアカウントの数値IDです。指定すると、発見の前にGitHubの現在のIDと照合し、食い違うオーナーは発見を飛ばします。作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合します。オーナーが改名して別の人がその名前を取得した場合に、その人のIssueとPRを発見の候補に入れず、保存済みの作業項目も進めないためです。省略すると名前だけで照合します。
           kind:
             type: string
             description: userなら個人アカウント、orgなら組織を指定します。
@@ -363,38 +359,6 @@ schema:
       description: >-
         collect_githubが、リポジトリの一覧に続けて、開いているPRとトリガーラベル付きのIssueの詳細を集めてDBに書くかどうかです。falseの間は、詳細の要求を送りません。gh_collect_enabledがfalseのときは、この値によらず何もしません。
       default: false
-    gh_source_pr_conflict_watch:
-      type: string
-      enum:
-        - search
-        - db
-      description: >-
-        watch_pr_conflictsが、リポジトリの発見とPRの列挙を行う元です。searchは検索APIとREST一覧で、dbは収集が書いた表です。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、周回全体が検索とREST一覧になります。記録が古い所有者とリポジトリも、検索とREST一覧に戻ります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
-      default: search
-    gh_source_poll_issues:
-      type: string
-      enum:
-        - search
-        - db
-      description: >-
-        poll_issuesが、トリガーラベル付きのIssueを見つける元です。searchは検索APIで、dbは収集が書いた表です。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、周回全体が検索になります。記録が古い所有者と、設定で明示したリポジトリを表で使えない所有者も、検索に戻ります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
-      default: search
-    gh_source_poll_prs:
-      type: string
-      enum:
-        - search
-        - db
-      description: >-
-        poll_prsが、ラベル、レビューの依頼、assigneeのPRを見つける元です。searchは検索APIで、dbは収集が書いた表です。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、周回全体が検索になります。記録が古い所有者と、設定で明示したリポジトリを表で使えない所有者も、検索に戻ります。チームへのレビューの依頼が付いたPRのある所有者も、検索に戻ります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
-      default: search
-    gh_source_pr_ci_watch:
-      type: string
-      enum:
-        - search
-        - db
-      description: >-
-        watch_pr_ciが、許可された人のPRの候補を見つける元です。searchは検索APIで、dbは収集が書いた表です。pr_ci_watch_human_prsがtrueのときだけ効きます。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、周回全体が検索になります。記録が古い範囲と、設定で明示したリポジトリを表で使えない所有者も、検索に戻ります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
-      default: search
     worker_alert_memory_ratio:
       type: number
       exclusiveMinimum: 0

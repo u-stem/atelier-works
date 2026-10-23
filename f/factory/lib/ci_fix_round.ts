@@ -6,7 +6,13 @@
 
 import { lstat, readFile } from "node:fs/promises";
 import { type CiFailureClass, classifyCiFailure } from "./ci_fix_classify.ts";
-import { type CiFixChange, checkCiFixChanges } from "./ci_fix_paths.ts";
+import {
+  type CiFixChange,
+  checkCiFixChanges,
+  isMeaningfulLine,
+  isTestPath,
+} from "./ci_fix_paths.ts";
+import type { PrBase } from "./ci_fix_pr_base.ts";
 import {
   buildCiExcerpt,
   CI_LOG_MAX_JOBS,
@@ -54,6 +60,12 @@ import {
  */
 export const CI_ROUND_REASON_PREFIX = "ci round";
 const REASON_PREFIX = CI_ROUND_REASON_PREFIX;
+
+/**
+ * テストの行を減らす変更で、PRが足した行かを調べられなかったときの理由の接頭辞。後ろにパスが続く。
+ * 理由を人が読む文と次の操作にする規則(`pr_workflow_support.ts`)が、この理由を見分けるために使う。
+ */
+export const CI_TEST_BASE_UNKNOWN_REASON_PREFIX = `${CI_ROUND_REASON_PREFIX} change not allowed (test_base_unknown): `;
 
 /** factory-fixスキルが、CI回の節を持つことを示す固定のマーカー。 */
 export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";
@@ -252,9 +264,16 @@ export function evaluateCiRoundPrepareGuard(
 }
 
 /**
+ * PRの基点を求めるgitの実行の数(存在の確認、取り込み、merge-base)。
+ * 修正のステップが1回、検証のステップが1回(結果は4回の読み取りで使い回す)、実行する。
+ * 基点を求めるAPI呼び出し(PR、既定のブランチ、ブランチの先端)は、`baseSec`の余裕に含める。
+ */
+const BASE_RESOLUTION_GIT_RUNS = 3;
+
+/**
  * 修正ステップの時間設定が、CI回の追加の作業を含めてstep timeoutに収まらなければ理由を返す。
  * CI回の修正ステップは、Claudeの実行(不正な出力への再試行を含めて2回)に加えて、
- * gitleaksを最大5回(抜粋の4回と出力の1回)走らせる。
+ * gitleaksを最大5回(抜粋の4回と出力の1回)と、基点を求めるgitを走らせる。
  * `overhead`は、通常の回の見積もりと同じ値を渡す。
  */
 export function ciRoundApplyTimeoutMisfit(
@@ -266,9 +285,11 @@ export function ciRoundApplyTimeoutMisfit(
   },
 ): string | null {
   const scanSec = CI_FIX_GITLEAKS_TIMEOUT_MS / 1000 + overhead.commandStopSec;
+  const gitSec = DEFAULT_TIMEOUT_MS / 1000 + overhead.commandStopSec;
   const total =
     2 * (claudeTimeoutSec + overhead.commandStopSec) +
     5 * scanSec +
+    BASE_RESOLUTION_GIT_RUNS * gitSec +
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
   return `${ciRoundReason(CI_ROUND_DETAILS.timeMisfit)}2 claude runs and 5 secret scans need ${String(total)}s but the step allows ${String(stepTimeoutSec)}s`;
@@ -280,6 +301,8 @@ export function ciRoundApplyTimeoutMisfit(
  * 通常の回の見積もり(Claude 2回と、全件の検査2回)に、CI回だけの次の作業を足す。
  * - 再実行のgitleaks最大5回(抜粋の4回と、出力の1回)と、止める理由の検査1回。
  * - 検査コマンドの後の`git clean`2回。gitの1回は`DEFAULT_TIMEOUT_MS`で打ち切る。
+ * - PRの基点を求めるgit(`BASE_RESOLUTION_GIT_RUNS`回)。結果は4回の読み取りで使い回すので、1回だけ数える。
+ *   読み取りの1件ごとに、基点との差分を読むgitが2回増えるが、時間の上限を超えた時点で実行中のgitの数(3回)に収まる。
  * - 変更を読む4回(Claudeの実行の後、検査コマンドの後、再実行の後、2回目の検査コマンドの後)。
  *   1回の読み取りは、時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)に、上限を超えた時点で実行中のgit数回を足した時間で収まる。
  * 再実行のログ取得のAPI呼び出しは、通常の回と同じく、`baseSec`の余裕に含める。
@@ -305,6 +328,7 @@ export function ciRoundVerifyTimeoutMisfit(
     6 * scanSec +
     2 * gitSec +
     4 * collectSec +
+    BASE_RESOLUTION_GIT_RUNS * gitSec +
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
   return `${ciRoundReason(CI_ROUND_DETAILS.timeMisfit)}the verify step needs ${String(total)}s for ${String(checkCount)} check commands but the step allows ${String(stepTimeoutSec)}s`;
@@ -863,19 +887,31 @@ export function parseRawDiffZ(output: string): RawDiffEntry[] {
 }
 
 /**
- * `git diff -U0`の差分から、追加した行(先頭の`+`を除く)と、削除した行の数を読む。
+ * `git diff -U0`の差分から、追加した行(先頭の`+`を除く)と、削除した行の数と、
+ * 削除した行より意味のある追加行が少ないhunkの数を読む。
+ * 意味のある追加行は、空行とコメントだけの行を除いた行である(`isMeaningfulLine`)。
  * 最初の`@@`より前はファイルの見出しなので数えない。`@@`より後は、`+++`や`---`で始まる行も内容として数える。
  * バイナリの差分は、追加だけとは言えないので、削除が1行あるものとして扱う。
  */
 export function parseZeroContextPatch(patch: string): {
   readonly addedLines: string[];
   readonly removedLineCount: number;
+  readonly shrinkingHunkCount: number;
 } {
   const addedLines: string[] = [];
   let removedLineCount = 0;
+  let shrinkingHunkCount = 0;
+  let hunkRemoved = 0;
+  let hunkMeaningful = 0;
   let inHunk = false;
+  const closeHunk = (): void => {
+    if (inHunk && hunkRemoved > hunkMeaningful) shrinkingHunkCount += 1;
+    hunkRemoved = 0;
+    hunkMeaningful = 0;
+  };
   for (const line of patch.split("\n")) {
     if (line.startsWith("@@")) {
+      closeHunk();
       inHunk = true;
     } else if (!inHunk) {
       if (line.startsWith("Binary files ") || line === "GIT binary patch") {
@@ -883,11 +919,14 @@ export function parseZeroContextPatch(patch: string): {
       }
     } else if (line.startsWith("+")) {
       addedLines.push(line.slice(1));
+      if (isMeaningfulLine(line.slice(1))) hunkMeaningful += 1;
     } else if (line.startsWith("-")) {
       removedLineCount += 1;
+      hunkRemoved += 1;
     }
   }
-  return { addedLines, removedLineCount };
+  closeHunk();
+  return { addedLines, removedLineCount, shrinkingHunkCount };
 }
 
 function gitEnv(): Record<string, string> {
@@ -938,6 +977,15 @@ export type CiChangeOptions = {
    * `checkCiFixChanges`は変えず、呼び出し側のこの検査だけが例外を置く。
    */
   readonly rehashCheck?: () => Promise<RehashCheckVerdict>;
+  /**
+   * PRの基点(PRのbaseブランチの先端と、先端とheadのmerge-base)を求める。求められなければ`null`を返す。
+   * 回の開始時のheadに対して行が減ったテストの変更だけを、基点との差分でも読む(`removedOutsidePrLineCount`)。
+   * 渡さないとき、`null`を返したとき、差分を読めないときは、PRが足した行かが不明のまま残り、検査は拒否に倒れる。
+   * 例外は読み取りを止める。一時的な失敗を、人が直すしかない停止にしないために、そのまま投げる。
+   * PRが追加したテストの修正を許すために使う。競合回の読み取りは渡さない。
+   * 1回の読み取りの中では、最初に要ったときに1回だけ呼ぶ。
+   */
+  readonly resolvePrBase?: () => Promise<PrBase | null>;
 };
 
 /**
@@ -983,6 +1031,222 @@ export function isRehashCandidate(collected: {
     !collected.timedOut &&
     isLockOnlyChange(collected.changes)
   );
+}
+
+/** 行の範囲。`start`行目から`count`行。 */
+export type LineRange = { readonly start: number; readonly count: number };
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/** 昇順の行番号を、続く行をまとめた範囲にする。 */
+function toRanges(lines: readonly number[]): LineRange[] {
+  const ranges: LineRange[] = [];
+  for (const line of lines) {
+    const last = ranges[ranges.length - 1];
+    if (last !== undefined && last.start + last.count === line) {
+      ranges[ranges.length - 1] = { start: last.start, count: last.count + 1 };
+    } else {
+      ranges.push({ start: line, count: 1 });
+    }
+  }
+  return ranges;
+}
+
+/**
+ * `git diff -U0`の差分から、削除側(旧)と追加側(新)の行の範囲を読む。
+ * 見出しの行数は信じない。見出しの開始位置から、hunkの中の`-`、`+`、文脈の行を数えて行番号を進める。
+ * 設定で文脈の行が混ざっても、行番号が崩れないようにするためである。
+ * 末尾に改行の無い最終行は、改行の有無だけが変わった行が変更に見えるので、追加の範囲から外す。
+ * - 旧側の最終行に改行が無いとき、同じ内容で追加された行を外す。
+ * - 新側の最終行に改行が無いとき、その行が削除された行と同じ内容なら外す。
+ * バイナリの差分と、読めない見出しがあるときは、行の位置が分からないので`null`を返す。
+ * 最初の`@@`より前は見出しなので、行の位置は読まない。
+ */
+export function parseHunkRanges(patch: string): {
+  readonly removed: LineRange[];
+  readonly added: LineRange[];
+} | null {
+  const removed: number[] = [];
+  const added: number[] = [];
+  type Hunk = {
+    oldLine: number;
+    newLine: number;
+    previous: string;
+    minus: string[];
+    plus: { line: number; text: string }[];
+    oldNoNewline: boolean;
+    newNoNewline: boolean;
+  };
+  let hunk: Hunk | null = null;
+  const closeHunk = (): void => {
+    const current = hunk;
+    if (current === null) return;
+    const lastMinus = current.minus[current.minus.length - 1];
+    current.plus.forEach((entry, index) => {
+      const gainedNewline = current.oldNoNewline && entry.text === lastMinus;
+      const lostNewline =
+        current.newNoNewline &&
+        index === current.plus.length - 1 &&
+        current.minus.includes(entry.text);
+      if (!gainedNewline && !lostNewline) added.push(entry.line);
+    });
+    hunk = null;
+  };
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@")) {
+      closeHunk();
+      inHunk = true;
+      const match = HUNK_HEADER.exec(line);
+      if (match === null) return null;
+      const oldLine = Number(match[1]);
+      const newLine = Number(match[2]);
+      if (!Number.isSafeInteger(oldLine) || !Number.isSafeInteger(newLine)) {
+        return null;
+      }
+      hunk = {
+        oldLine,
+        newLine,
+        previous: "",
+        minus: [],
+        plus: [],
+        oldNoNewline: false,
+        newNoNewline: false,
+      };
+    } else if (!inHunk) {
+      if (line.startsWith("Binary files ") || line === "GIT binary patch") {
+        return null;
+      }
+    } else if (hunk !== null) {
+      const text = line.slice(1);
+      if (line.startsWith("-")) {
+        removed.push(hunk.oldLine);
+        hunk.oldLine += 1;
+        hunk.minus.push(text);
+        hunk.previous = "-";
+      } else if (line.startsWith("+")) {
+        hunk.plus.push({ line: hunk.newLine, text });
+        hunk.newLine += 1;
+        hunk.previous = "+";
+      } else if (line.startsWith(" ")) {
+        hunk.oldLine += 1;
+        hunk.newLine += 1;
+        hunk.previous = " ";
+      } else if (line.startsWith("\\")) {
+        if (hunk.previous === "-") hunk.oldNoNewline = true;
+        if (hunk.previous === "+") hunk.newNoNewline = true;
+      }
+    }
+  }
+  closeHunk();
+  return { removed: toRanges(removed), added: toRanges(added) };
+}
+
+function inRanges(line: number, ranges: readonly LineRange[]): boolean {
+  return ranges.some(
+    (range) => line >= range.start && line < range.start + range.count,
+  );
+}
+
+/**
+ * `removed`の行のうち、`allowed`のすべての範囲の集合に含まれない行の数。
+ * 行は、すべての集合に含まれるときだけ許される。
+ */
+export function countLinesOutside(
+  removed: readonly LineRange[],
+  allowed: readonly (readonly LineRange[])[],
+): number {
+  let outside = 0;
+  for (const range of removed) {
+    for (let line = range.start; line < range.start + range.count; line += 1) {
+      if (!allowed.every((ranges) => inRanges(line, ranges))) outside += 1;
+    }
+  }
+  return outside;
+}
+
+/**
+ * 2つのcommitの間のファイル1件の`-U0`の差分の行の範囲。gitが失敗したとき、大きすぎるとき、読めないときは`null`。
+ * 空白だけが違う行は変更に数えない。PRが字下げだけを変えた基点の行を、PRが足した行にしないためである。
+ * 整形で1行が複数行に分かれた場合は、分かれた行がPRの追加になる。
+ */
+async function readHunkRanges(
+  run: CommandRunner,
+  worktreeDir: string,
+  fromSha: string,
+  toSha: string,
+  path: string,
+): Promise<ReturnType<typeof parseHunkRanges>> {
+  let patch: string;
+  try {
+    patch = await runGit(
+      run,
+      worktreeDir,
+      "git diff -U0 between commits",
+      [
+        "diff",
+        "-U0",
+        "--inter-hunk-context=0",
+        "--diff-algorithm=myers",
+        "--ignore-all-space",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--ignore-submodules=none",
+        fromSha,
+        toSha,
+        "--",
+        `:(literal)${path}`,
+      ],
+      PATCH_MAX_BYTES,
+    );
+  } catch {
+    return null;
+  }
+  return isCappedOutput(patch) ? null : parseHunkRanges(patch);
+}
+
+/**
+ * 回の開始時のheadから削除された行のうち、PRが足した行でないものの数を返す。
+ * PRが足した行は、基点(merge-base)との差分と、baseの先端との差分のどちらでも、headで追加された範囲にある行である。
+ * 行の内容ではなく位置で数えるので、PRが基点と同じ内容の行を足していても、基点の行を足した行とは見なさない。
+ * baseの先端とも比べるのは、積み重ねたブランチをsquashしたときなどに基点がずれて、
+ * baseにすでにある行がPRの追加に見えるのを防ぐためである。
+ * 基点にパスが無いファイルは、全体が追加された行になる。
+ * gitが失敗したときと、差分が大きすぎるとき、差分を読めないときは`undefined`を返す。
+ * 不明は、基点から持っていた行を消したものとして扱い、拒否に倒す。
+ */
+async function removedOutsidePrLines(input: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly base: PrBase;
+  readonly roundBaseSha: string;
+  readonly path: string;
+  readonly roundPatch: string;
+}): Promise<number | undefined> {
+  const { run, worktreeDir, base, roundBaseSha, path } = input;
+  assertSha(base.mergeBase);
+  assertSha(base.tip);
+  const round = parseHunkRanges(input.roundPatch);
+  if (round === null) return undefined;
+  const pr = await readHunkRanges(
+    run,
+    worktreeDir,
+    base.mergeBase,
+    roundBaseSha,
+    path,
+  );
+  if (pr === null) return undefined;
+  const tip = await readHunkRanges(
+    run,
+    worktreeDir,
+    base.tip,
+    roundBaseSha,
+    path,
+  );
+  if (tip === null) return undefined;
+  return countLinesOutside(round.removed, [pr.added, tip.added]);
 }
 
 function splitLines(text: string): string[] {
@@ -1036,6 +1300,9 @@ async function untrackedChange(
  * 無視されたファイルはcommitされないが、検査コマンドの動き方を変えうるので、Claudeが書いた分も検査の対象にする。
  * 無視の規則をかけずに(`--exclude-standard`なしで)一覧を取るので、`.gitignore`を書き換えても隠せない。
  * 外部のdiffとtextconvのプログラムは使わない。
+ * `resolvePrBase`を渡すと、`baseSha`に対して行が減ったテストの変更だけ、PRの基点との差分も読み、
+ * 削除された行のうちPRが足した行でないものの数を`removedOutsidePrLineCount`に入れる。
+ * 基点は1回の読み取りにつき1回だけ求める。
  * 変更が上限を超えたら、1件ずつ読まずに`overflow`を返す。
  * symlinkの先は読まない。
  */
@@ -1058,6 +1325,8 @@ export async function collectCiFixChanges(
   const outOfTime = (): boolean =>
     now() - startedAt > CI_ROUND_COLLECT_BUDGET_MS;
   const cached = options.source === "staged" ? ["--cached"] : [];
+  const resolvePrBase = options.resolvePrBase ?? (async () => null);
+  let prBase: Promise<PrBase | null> | null = null;
 
   const tracked = parseRawDiffZ(
     await runGit(run, worktreeDir, "git diff --raw", [
@@ -1113,6 +1382,8 @@ export async function collectCiFixChanges(
         "diff",
         ...cached,
         "-U0",
+        "--inter-hunk-context=0",
+        "--diff-algorithm=myers",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
@@ -1124,22 +1395,50 @@ export async function collectCiFixChanges(
       ],
       PATCH_MAX_BYTES,
     );
-    changes.push(
-      isCappedOutput(patch)
-        ? {
-            path: entry.path,
-            status: entry.status,
-            mode: UNSUPPORTED_MODE,
-            addedLines: [],
-            removedLineCount: 0,
-          }
-        : {
-            path: entry.path,
-            status: entry.status,
-            mode: entry.mode,
-            ...parseZeroContextPatch(patch),
-          },
-    );
+    if (isCappedOutput(patch)) {
+      changes.push({
+        path: entry.path,
+        status: entry.status,
+        mode: UNSUPPORTED_MODE,
+        addedLines: [],
+        removedLineCount: 0,
+      });
+      continue;
+    }
+    const parsed = parseZeroContextPatch(patch);
+    const change: CiFixChange = {
+      path: entry.path,
+      status: entry.status,
+      mode: entry.mode,
+      ...parsed,
+    };
+    const needsBase =
+      options.resolvePrBase !== undefined &&
+      entry.status === "modified" &&
+      parsed.removedLineCount > 0 &&
+      isTestPath(entry.path);
+    if (needsBase) {
+      prBase ??= resolvePrBase();
+      const base = await prBase;
+      const removedOutsidePrLineCount =
+        base === null
+          ? undefined
+          : await removedOutsidePrLines({
+              run,
+              worktreeDir,
+              base,
+              roundBaseSha: baseSha,
+              path: entry.path,
+              roundPatch: patch,
+            });
+      changes.push(
+        removedOutsidePrLineCount === undefined
+          ? change
+          : { ...change, removedOutsidePrLineCount },
+      );
+      continue;
+    }
+    changes.push(change);
   }
   for (const path of untracked) {
     if (outOfTime()) return { changes: [], overflow: true, timedOut: true };

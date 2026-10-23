@@ -95,7 +95,7 @@ flowchart TD
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
 
 `owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
-1つは、検索の入口である`poll_issues`と`poll_prs`である。
+1つは、発見の入口である`poll_issues`と`poll_prs`である。
 もう1つは、作業項目を進める処理である。
 準備のステップは、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`である。
 ほかに、フォームからのIssueの作成(`manual_intake_create_issue`)と、Issue化の提案の処理(`issue_proposal_apply`)がある。
@@ -248,10 +248,10 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
 | `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
 | `pr_conflict_checks` | FactoryのPRのマージの競合の記録。PRごとに1行で、競合を見つけたPRだけが行を持つ。競合を見たときのheadのコミットと、PRの何回目の競合か(`episode`)と、今の競合で通知した時刻を持つ。競合を直す側の列として、直している作業項目のID、今の競合の回で起動した回数、起動の保留理由、今の競合の回が始まった時刻を持つ。作業項目とは外部キーを持たず、IDの値だけで結ぶ。競合から離れた行はDBの掃除が消す([PRのCI監視の内部仕様](internals/pr-ci.md#競合の検知)) |
-| `gh_repos` | GitHubの所有者のリポジトリごとの状態。所有者、リポジトリ、数値ID、許可の有無、既定のブランチ(取らないので空)、archive済みか、開いているPRとトリガーラベル付きのIssueの件数、一覧から消えたか(`gone`)とその理由を持つ。詳細を最後に取り終えた時刻(`last_collected_at`)と着手した時刻、打ち切りと失敗の印も持つ。一覧を取り終えた所有者だけを書き直し、消えた行は残す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`は収集の2つの設定が真のときに、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`は、それぞれの設定(`gh_source_pr_conflict_watch`、`gh_source_poll_issues`、`gh_source_poll_prs`、`gh_source_pr_ci_watch`)が`db`のときに、鮮度の判定に読む([GitHubの収集](internals/github-collect.md)) |
+| `gh_repos` | GitHubの所有者のリポジトリごとの状態。所有者、リポジトリ、数値ID、許可の有無、既定のブランチ(取らないので空)、archive済みか、開いているPRとトリガーラベル付きのIssueの件数、一覧から消えたか(`gone`)とその理由を持つ。詳細を最後に取り終えた時刻(`last_collected_at`)と着手した時刻、打ち切りと失敗の印も持つ。一覧を取り終えた所有者だけを書き直し、消えた行は残す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`と`poll_issues`と`poll_prs`と`watch_pr_conflicts`は収集の2つの設定が真のときに、`watch_pr_ci`は収集の2つの設定が真で、設定`pr_ci_watch_human_prs`が`true`のときに、鮮度の判定に読む([GitHubの収集](internals/github-collect.md)) |
 | `gh_collect_runs` | `collect_github`の実行の記録。所有者ごとに1行で、始めに空の行を書き、終わりに更新する。成否、失敗の種類とその段、照合の結果、GraphQLの費用と要求数、詳細を取った件数、通信を控える時刻を持つ。保持期間を過ぎた行はDBの掃除が消す([GitHubの収集](internals/github-collect.md)) |
-| `gh_pull_requests` | GitHubの開いているPRの記録。リポジトリの番号ごとに1行で、headのコミットとブランチ名、作者、ドラフトかとforkか、競合の有無、ラベルの有無、レビュー依頼とassigneeの数値IDを持つ。題と本文は持たない。行を使ってよいかを`usable`で表す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`は収集の2つの設定が真のときに、`watch_pr_conflicts`、`poll_prs`、`watch_pr_ci`は、それぞれの設定(`gh_source_pr_conflict_watch`、`gh_source_poll_prs`、`gh_source_pr_ci_watch`)が`db`のときに、候補の列挙に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
-| `gh_issues` | GitHubのトリガーラベル付きの開いているIssueの記録。リポジトリの番号ごとに1行で、作者と作成と更新の時刻を持つ。題と本文は持たない。作業項目とは独立した記録で、外部キーを持たない。`poll_issues`が、設定`gh_source_poll_issues`が`db`のときに、候補のIssueの発見に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
+| `gh_pull_requests` | GitHubの開いているPRの記録。リポジトリの番号ごとに1行で、headのコミットとブランチ名、作者、ドラフトかとforkか、競合の有無、ラベルの有無、レビュー依頼とassigneeの数値IDを持つ。題と本文は持たない。行を使ってよいかを`usable`で表す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`と`poll_prs`と`watch_pr_conflicts`は収集の2つの設定が真のときに、`watch_pr_ci`は収集の2つの設定が真で、設定`pr_ci_watch_human_prs`が`true`のときに、候補の列挙に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
+| `gh_issues` | GitHubのトリガーラベル付きの開いているIssueの記録。リポジトリの番号ごとに1行で、作者と作成と更新の時刻を持つ。題と本文は持たない。作業項目とは独立した記録で、外部キーを持たない。`poll_issues`が、収集の2つの設定が真のときに、候補のIssueの発見に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録で、保持期間を過ぎた行はDBの掃除が消す |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
@@ -351,8 +351,8 @@ Consoleの一覧と集計は次のviewを読む。
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
-| poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索か収集の表から見つけて担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
-| poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。PRは検索か収集の表から見つけます。作業項目の後始末はIssueの巡回処理側で行います。 |
+| poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを収集の表から見つけ、表を使えない明示リポジトリはRESTの一覧で読んで、担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
+| poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。PRは収集の表から見つけ、表を使えない明示リポジトリはRESTの一覧で読みます。作業項目の後始末はIssueの巡回処理側で行います。 |
 | sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。ポーリングの間隔やジョブのメモリを見直す根拠にします。 |
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 | watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
@@ -441,7 +441,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/gh_collect_freshness` | script | [LIB] GitHubの収集の鮮度の監視 |
 | `f/factory/lib/github_errors` | script | [LIB] GitHubの呼び出しの失敗の型 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
-| `f/factory/lib/poll_source` | script | [LIB] IssueとPRを見つける元の切り替え |
+| `f/factory/lib/poll_source` | script | [LIB] IssueとPRを見つける経路 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
 | `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
@@ -450,6 +450,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
+| `f/factory/lib/ci_fix_pr_base` | script | [LIB] PRの基点のcommitを求める |
 | `f/factory/lib/pr_conflict_support` | script | [LIB] PRの競合の判断 |
 | `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
@@ -772,7 +773,7 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 マージは`dependabot_merge_enabled`も真にしたときだけ行い、偽の間は試運転としてマージ可のPRを人に回す。
 対象は`factory_repo`と、`repo_allowlist`に明示したリポジトリだけである。
 1つのPRで上がるパッケージは、1つが基本で、`dependabot_group_enabled`を真にしたときだけ3つまで扱う。
-候補のPRは、検索か、収集の表から列挙する。
+候補のPRは、収集の表か、表を使えない明示リポジトリのRESTの一覧から列挙する。
 マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)に書く。
 
 ## 工程4のmainのCI監視
@@ -802,8 +803,8 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 
 `watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
 対象は、Factoryがブランチ`factory/issue-<N>-wi-<id>`に作った、開いていて下書きでなく、forkでないPRである。PATのアカウントが作ったPRだけを見る。人が作ったPRと、draw.ioのビューアを上げるPRは対象にしない。
-作業項目は`cleanup_db`が消すので、判定に使わない。作業項目、競合の記録、PATのアカウントのPRの検索か収集の表、設定が示すリポジトリの、開いているPRの一覧から見つける。
-それらに入らないリポジトリの古いPRは見つけられない。限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+作業項目は`cleanup_db`が消すので、判定に使わない。作業項目、競合の記録、設定が示すリポジトリ、収集の表で見つけたリポジトリの、開いているPRを見つける。検索は使わない。
+それらに入らず、表の記録も古いリポジトリの古いPRは見つけられない。限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
 計算前のPRは、次の回に判定し直す。
 競合したPRは、要対応の通知とDiscordで知らせる。通知は競合の1回につき1回で、headが進んでも重ねない。
@@ -832,18 +833,22 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 一覧を取り終えて所有者のIDの照合が通った周回だけが、その所有者の記録を置き換える。
 記録を読むのは、`self_update`、`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`の6つである。
 `self_update`は、収集が続けて成功しているかを確かめて、止まっていれば通知する。
+`repo_allowlist`が空で`owners`に所有者がいるときは、設定で止めていても通知する。
 `poll_dependabot`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、候補のPRを表から読む。表を使えないリポジトリは、RESTの開いているPRの一覧に戻す。
-`watch_pr_conflicts`は、設定`gh_source_pr_conflict_watch`(既定は`search`)が`db`のときだけ、リポジトリの発見とPRの列挙を表から読む。
-記録が古い所有者は検索に、記録が古いリポジトリはREST一覧に戻す。
-`poll_issues`は、設定`gh_source_poll_issues`(既定は`search`)が`db`のときだけ、トリガーラベル付きのIssueを表から見つける。
-記録が古い所有者と、設定で明示したリポジトリを表で使えない所有者は、検索に戻す。
-表の候補は、`getIssue`で開いていることとトリガーラベルを確かめてから使う。
-`poll_prs`は、設定`gh_source_poll_prs`(既定は`search`)が`db`のときだけ、ラベル、レビューの依頼、assigneeのPRを表から見つける。
-記録が古い所有者、設定で明示したリポジトリを表で使えない所有者、チームへのレビューの依頼が付いたPRのある所有者は、検索に戻す。
-表の候補は、`getPr`と`getIssue`で開いていることと今も対象であることを確かめてから使う。
-`watch_pr_ci`は、設定`gh_source_pr_ci_watch`(既定は`search`)が`db`のときだけ、許可された人のPRの候補を表から見つける。
-記録が古い範囲と、設定で明示したリポジトリを表で使えない所有者は、その範囲だけ検索に戻す。
-表の候補は、PRを読み直して作者、fork、ブランチを確かめてから記録する。
+`watch_pr_conflicts`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、リポジトリの発見とPRの列挙を表から読む。検索は使わない。
+作業項目、競合の行、設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
+どれにも入らず、記録が古いリポジトリは見送る。
+`poll_issues`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、トリガーラベル付きのIssueを表から見つける。検索は使わない。
+記録が古い明示でないリポジトリは見送る。設定で明示したリポジトリは、表を使えないとき、RESTのIssueの一覧で読む。
+候補は、表の行も一覧の番号も、`getIssue`で開いていることとトリガーラベルを確かめてから使う。
+`poll_prs`は、`gh_collect_enabled`と`gh_collect_detail_enabled`が真のとき、ラベル、レビューの依頼、assigneeのPRを表から見つける。検索は使わない。
+記録が古い明示でないリポジトリは見送る。設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
+チーム宛てのレビューの依頼は、`GET /user/teams`のチームの数値IDと照合して判定する。チームを使えない組織では、見送る。
+候補は、表の行も一覧の要素も、`getPr`と`getIssue`で開いていることと今も対象であることを確かめてから使う。
+`watch_pr_ci`は、設定`pr_ci_watch_human_prs`が`true`で、収集の2つの設定が真のとき、許可された人のPRの候補を表から見つける。検索は使わない。
+記録が古い明示でないリポジトリは見送る。設定で明示したリポジトリは、表を使えないとき、RESTのPRの一覧で読む。
+`owners`に無い所有者の`factory_repo`も、一覧で読む。
+候補は、表の行も一覧の要素も、PRを読み直して作者、fork、ブランチを確かめてから記録する。
 トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[運用](operations.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
 
 ## 工程5の監査

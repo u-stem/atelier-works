@@ -1,0 +1,138 @@
+// PRの基点(PRのbaseブランチの先端と、先端とPRのheadのmerge-base)を求める部品。
+// CI回が、PRが足した行と、基点から持っていた行を見分ける基準になる。
+// 求められなければnullを返し、呼び出し側は基点の行を消したものとして拒否に倒す。
+
+import {
+  type GhClient,
+  getBranchSha,
+  getDefaultBranch,
+  getPr,
+} from "./github.ts";
+import { fetchCommit } from "./metadata_git_ports.ts";
+import { assertSha } from "./types.ts";
+import {
+  buildGitArgv,
+  type CommandRunner,
+  DEFAULT_TIMEOUT_MS,
+  localGitEnv,
+} from "./workspace.ts";
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * PRの基点。
+ * `mergeBase`はbaseの先端とPRのheadのmerge-baseで、PRが足した行の基準になる。
+ * `tip`はbaseの先端で、baseにすでにある行をPRの追加と見誤らないための基準になる。
+ */
+export type PrBase = {
+  readonly mergeBase: string;
+  readonly tip: string;
+};
+
+/** 基点を求めるためのI/O。テストでは偽物に差し替える。 */
+export type PrMergeBaseIo = {
+  /** PRが向いているbaseブランチの名前。 */
+  readonly readBaseRef: () => Promise<string>;
+  /** リポジトリの既定のブランチの名前。 */
+  readonly readDefaultBranch: () => Promise<string>;
+  /** worktreeの`.git`が、記録のままであることを確かめる。そうでなければ投げる。 */
+  readonly assertWorktreeIntact: () => Promise<void>;
+  /** ブランチの今の先端のsha。 */
+  readonly readBranchSha: (branch: string) => Promise<string>;
+  /** commit`sha`をローカルのcloneに取り込む。追跡refは動かさない。 */
+  readonly fetchCommit: (sha: string) => Promise<void>;
+  /** baseの先端`tipSha`とPRのheadのmerge-base。 */
+  readonly mergeBase: (tipSha: string) => Promise<string>;
+};
+
+/**
+ * PRの基点(merge-baseとbaseの先端)を返す。
+ * PRが既定のブランチを向いていなければ、基点とは言えないので`null`を返し、理由を`onUnusable`に渡す。
+ * 既定でないブランチは、そのテストを持たないことがあり、持たないと全行がPRの追加に見える。
+ * `null`は、待っても変わらない理由だけで返す。呼び出し側は、基点の行を消したものとして拒否する。
+ * baseブランチの今の先端を読み、`.git`の記録を照合してから、そのcommitを取り込み、headとのmerge-baseを求める。
+ * 先端を取り込むのは、merge-baseの計算がそのオブジェクトをローカルに要るためである。
+ * APIの失敗、取り込みの失敗、gitの失敗、形の違う応答は、一時的な失敗かもしれないので、例外として投げる。
+ * `null`にすると、一時的な失敗が、人が直すしかない停止になる。
+ */
+export async function resolvePrMergeBase(
+  io: PrMergeBaseIo,
+  onUnusable?: (message: string) => void,
+): Promise<PrBase | null> {
+  const baseRef = await io.readBaseRef();
+  if (baseRef !== (await io.readDefaultBranch())) {
+    onUnusable?.("the pull request does not target the default branch");
+    return null;
+  }
+  const tip = await io.readBranchSha(baseRef);
+  if (!FULL_SHA.test(tip)) throw new Error("the base tip is not a full sha");
+  await io.assertWorktreeIntact();
+  await io.fetchCommit(tip);
+  const mergeBase = await io.mergeBase(tip);
+  if (!FULL_SHA.test(mergeBase)) {
+    throw new Error("the merge base is not a full sha");
+  }
+  return { mergeBase, tip };
+}
+
+/**
+ * worktreeで`git merge-base -- <tipSha> <headSha>`を実行し、merge-baseのshaを返す。
+ * 失敗したときと、出力がshaでないときは例外を投げる。
+ * 例外の文にgitのstderrを入れない。
+ */
+export async function gitMergeBase(opts: {
+  readonly run: CommandRunner;
+  readonly cwd: string;
+  readonly tipSha: string;
+  readonly headSha: string;
+}): Promise<string> {
+  assertSha(opts.tipSha);
+  assertSha(opts.headSha);
+  const result = await opts.run(
+    buildGitArgv(["merge-base", "--", opts.tipSha, opts.headSha]),
+    { cwd: opts.cwd, env: localGitEnv(), timeoutMs: DEFAULT_TIMEOUT_MS },
+  );
+  if (result.timedOut || result.exitCode !== 0) {
+    throw new Error("git merge-base failed");
+  }
+  const sha = result.stdout.trim();
+  assertSha(sha);
+  return sha;
+}
+
+/** `resolvePrMergeBase`のI/Oを、GitHubのAPIとworktreeのgitで組む。 */
+export function githubPrMergeBaseIo(input: {
+  readonly client: GhClient;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly worktreeDir: string;
+  readonly ghToken: string;
+  readonly run: CommandRunner;
+  /** 取り込みの前に、worktreeの`.git`が記録のままであることを確かめる。そうでなければ投げる。 */
+  readonly assertWorktreeIntact: () => Promise<void>;
+}): PrMergeBaseIo {
+  const { client, owner, repo, worktreeDir } = input;
+  return {
+    readBaseRef: async () =>
+      (await getPr(client, owner, repo, input.prNumber)).baseRef,
+    readDefaultBranch: () => getDefaultBranch(client, owner, repo),
+    assertWorktreeIntact: input.assertWorktreeIntact,
+    readBranchSha: (branch) => getBranchSha(client, owner, repo, branch),
+    fetchCommit: (sha) =>
+      fetchCommit({
+        cwd: worktreeDir,
+        sha,
+        ghToken: input.ghToken,
+        run: input.run,
+      }),
+    mergeBase: (tipSha) =>
+      gitMergeBase({
+        run: input.run,
+        cwd: worktreeDir,
+        tipSha,
+        headSha: input.headSha,
+      }),
+  };
+}

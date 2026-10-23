@@ -56,7 +56,7 @@ export {
  * 監査から起票したIssueなどFactory自身のリポジトリの候補を、`owners`や`repo_allowlist`に
  * 載っていなくても`poll_issues`と`poll_prs`の候補に残すため。
  * 呼び出し側は、照合を通ったオーナーだけを`config.owners`に渡す。
- * 検索を飛ばしたオーナーや、`owners`から消えた旧名の追跡中のPRを、候補から外すため。
+ * 発見を飛ばしたオーナーや、`owners`から消えた旧名の追跡中のPRを、候補から外すため。
  */
 export function filterByRepoAllowlist<
   T extends { readonly owner: string; readonly repo: string },
@@ -78,9 +78,9 @@ export type OwnerIdGateDeps = {
 };
 
 /**
- * `id`を持つオーナーだけ、GitHubの現在のIDと照合し、検索してよいかを返す。
+ * `id`を持つオーナーだけ、GitHubの現在のIDと照合し、発見してよいかを返す。
  * `id`の無いオーナーは名前だけで動かすので、取得せずに`true`を返す。
- * 食い違いと取得の失敗は、検索を飛ばす(`false`)うえで、失敗として記録する。
+ * 食い違いと取得の失敗は、発見を飛ばす(`false`)うえで、失敗として記録する。
  * noticeは、食い違いと、名前のアカウントが無い(404)ときに残す。
  * どちらも改名か削除でほぼ恒久で、人が`owners`を見直す操作がある。
  * 5xxやレート制限は一時的な障害でありうるので、失敗の記録だけにする。
@@ -663,7 +663,7 @@ export type IssueCandidate = {
   /**
    * この(owner, repo, number)に、終了していない`work_items`の行がすでにあるか。
    * トリガーラベルは着手時に外すが、同じIssueに重ねて着手しないよう念のため確かめる。
-   * 判断の根拠は`listActive`だけである(作業中ラベルで検索から除く仕組みは無い)。
+   * 判断の根拠は`listActive`だけである(作業中ラベルで候補から除く仕組みは無い)。
    */
   readonly hasActiveWorkItem: boolean;
 };

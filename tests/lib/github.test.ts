@@ -44,14 +44,18 @@ import {
   getRepositoryId,
   getRepositoryOwnerId,
   getViewer,
+  getViewerTeams,
   gitIdentityForViewer,
   hasMarker,
   isFactoryPost,
   isOwnPost,
+  LABELED_ISSUES_MAX_PAGES,
   LabelerCheckLimitError,
   listBranchRules,
   listIssueComments,
+  listLabeledOpenIssues,
   listOpenPullRequests,
+  listOpenPullRequestsWithoutWait,
   listPrChecks,
   listPrCommitMessages,
   listPrCommits,
@@ -71,9 +75,6 @@ import {
   replyReviewComment,
   requestReviewers,
   resolveReviewThread,
-  searchIssues,
-  searchOpenAuthoredPrs,
-  searchPrs,
   setLabels,
   updatePullRequest,
   updatePullRequestBody,
@@ -293,6 +294,128 @@ describe("getViewer", () => {
     await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
       /unexpected response shape/,
     );
+  });
+});
+
+describe("getViewerTeams", () => {
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  function team(id: unknown, slug: unknown, org: unknown = "Acme") {
+    return {
+      id,
+      slug,
+      name: "display name",
+      organization: org === null ? undefined : { login: org },
+    };
+  }
+
+  test("asks for the teams of the authenticated user, 100 per page", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await getViewerTeams(client(fake));
+    expect(fake.calls[0]?.argv).toContain("user/teams?per_page=100");
+  });
+
+  test("returns the numeric id of every team", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(22, "infra", "Beta")]),
+    ]);
+    const teams = await getViewerTeams(client(fake));
+    expect([...teams.ids].sort()).toEqual([11, 22]);
+  });
+
+  test("returns the organization and slug of every team in lowercase", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "Core"), team(22, "Infra", "Beta")]),
+    ]);
+    const teams = await getViewerTeams(client(fake));
+    expect([...teams.slugs].sort()).toEqual(["acme/core", "beta/infra"]);
+  });
+
+  test("returns empty sets when the user belongs to no team", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    const teams = await getViewerTeams(client(fake));
+    expect([teams.ids.size, teams.slugs.size]).toEqual([0, 0]);
+  });
+
+  test("reads every page", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core")], {
+        link: '<https://api.github.com/user/teams?per_page=100&page=2>; rel="next"',
+      }),
+      ghApiOk([team(22, "infra")]),
+    ]);
+    const teams = await getViewerTeams(client(fake));
+    expect([...teams.ids].sort()).toEqual([11, 22]);
+  });
+
+  test("fails when the pages exceed the limit", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core")], {
+        link: '<https://api.github.com/user/teams?per_page=100&page=2>; rel="next"',
+      }),
+      ghApiOk([team(22, "infra")], {
+        link: '<https://api.github.com/user/teams?per_page=100&page=3>; rel="next"',
+      }),
+    ]);
+    await expect(getViewerTeams(client(fake), 2)).rejects.toThrow(
+      GitHubPaginationLimitError,
+    );
+  });
+
+  test("fails as a whole when one team has no numeric id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team("x", "infra")]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails as a whole when one team has an id that is not positive", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(0, "infra")]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails as a whole when one team has no slug", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(22, undefined)]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails as a whole when one team has no organization", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "core"), team(22, "infra", null)]),
+    ]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+
+  test("fails when the response is not a list", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ teams: [] })]);
+    await expect(getViewerTeams(client(fake))).rejects.toThrow(
+      /expected an array/,
+    );
+  });
+
+  test("does not put the slug of a valid team into the message of a failure", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([team(11, "secret-team"), team("x", "infra")]),
+    ]);
+    const error = await getViewerTeams(client(fake)).catch(
+      (err: unknown) => err,
+    );
+    expect(String(error)).not.toContain("secret-team");
   });
 });
 
@@ -1201,134 +1324,6 @@ describe("gitIdentityForViewer", () => {
   });
 });
 
-describe("searchIssues", () => {
-  test("derives owner/repo from repository_url", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({
-        items: [
-          {
-            id: 101,
-            number: 7,
-            title: "do the thing",
-            body: "body text",
-            html_url: "https://github.com/acme/widgets/issues/7",
-            repository_url: "https://api.github.com/repos/acme/widgets",
-            user: { login: "alice" },
-          },
-        ],
-      }),
-    ]);
-    const items = await searchIssues(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        label: "factory",
-      },
-    );
-    expect(items).toEqual([
-      {
-        owner: "acme",
-        repo: "widgets",
-        number: 7,
-        title: "do the thing",
-        body: "body text",
-        htmlUrl: "https://github.com/acme/widgets/issues/7",
-        authorLogin: "alice",
-      },
-    ]);
-  });
-
-  test("uses an org: qualifier when ownerKind is org", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await searchIssues(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme-org",
-        ownerKind: "org",
-        label: "factory",
-      },
-    );
-    const argv = fake.calls[0]?.argv.join(" ") ?? "";
-    expect(decodeURIComponent(argv)).toContain("org:acme-org");
-  });
-
-  test("requests per_page=100", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await searchIssues(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        label: "factory",
-      },
-    );
-    expect(fake.calls[0]?.argv.join(" ")).toContain("per_page=100");
-  });
-
-  test("follows the link header's rel=next page and combines both pages' items", async () => {
-    const fake = createFakeCommandRunner([
-      ok(
-        ghApiStdout(
-          200,
-          {
-            items: [
-              {
-                id: 201,
-                number: 1,
-                title: "first page",
-                body: "b1",
-                html_url: "https://github.com/acme/widgets/issues/1",
-                repository_url: "https://api.github.com/repos/acme/widgets",
-                user: { login: "alice" },
-              },
-            ],
-          },
-          {
-            link: '<https://api.github.com/search/issues?q=x&page=2>; rel="next"',
-          },
-        ),
-      ),
-      ghApiOk({
-        items: [
-          {
-            id: 202,
-            number: 2,
-            title: "second page",
-            body: "b2",
-            html_url: "https://github.com/acme/widgets/issues/2",
-            repository_url: "https://api.github.com/repos/acme/widgets",
-            user: { login: "bob" },
-          },
-        ],
-      }),
-    ]);
-    const items = await searchIssues(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        label: "factory",
-      },
-    );
-    expect(items.map((item) => item.number)).toEqual([1, 2]);
-  });
-
-  test('quotes the label qualifier (a label name can contain a colon, e.g. "factory:review")', async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await searchIssues(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        label: "factory:review",
-      },
-    );
-    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
-    expect(decoded).toContain('label:"factory:review"');
-  });
-});
-
 describe("getIssue", () => {
   test("normalizes string and object label shapes", async () => {
     const fake = createFakeCommandRunner([
@@ -1424,6 +1419,215 @@ describe("getIssue", () => {
     const fake = createFakeCommandRunner([]);
     await expect(
       getIssue({ run: fake.run, ghToken: "tok" }, "../etc", "widgets", 5),
+    ).rejects.toThrow();
+  });
+});
+
+describe("getIssue pull request marker", () => {
+  const payload = {
+    number: 5,
+    title: "t",
+    body: "b",
+    html_url: "https://github.com/acme/widgets/issues/5",
+    state: "open",
+    user: { login: "alice" },
+    labels: [],
+    assignees: [],
+  };
+  const read = (extra: Record<string, unknown>) =>
+    getIssue(
+      {
+        run: createFakeCommandRunner([ghApiOk({ ...payload, ...extra })]).run,
+        ghToken: "tok",
+      },
+      "acme",
+      "widgets",
+      5,
+    );
+
+  test("is a pull request when the response has a pull_request key", async () => {
+    const issue = await read({
+      pull_request: {
+        url: "https://api.github.com/repos/acme/widgets/pulls/5",
+      },
+    });
+    expect(issue.isPullRequest).toBe(true);
+  });
+
+  test("is not a pull request when the response has no pull_request key", async () => {
+    expect((await read({})).isPullRequest).toBe(false);
+  });
+});
+
+describe("listLabeledOpenIssues", () => {
+  const CLIENT_TOKEN = "tok";
+
+  function entry(number: number, extra: Record<string, unknown> = {}) {
+    return {
+      id: number * 10,
+      number,
+      title: `issue ${String(number)}`,
+      html_url: `https://github.com/acme/widgets/issues/${String(number)}`,
+      state: "open",
+      ...extra,
+    };
+  }
+
+  function nextLink(page: number): Record<string, string> {
+    return {
+      link: `<https://api.github.com/repos/acme/widgets/issues?labels=factory&state=open&page=${String(page)}>; rel="next"`,
+    };
+  }
+
+  async function list(
+    responses: Parameters<typeof createFakeCommandRunner>[0],
+    label = "factory",
+    maxPages?: number,
+  ) {
+    const fake = createFakeCommandRunner(responses);
+    const numbers = await listLabeledOpenIssues(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      label,
+      maxPages,
+    );
+    return { fake, numbers };
+  }
+
+  test("returns the numbers of the listed issues", async () => {
+    const { numbers } = await list([ghApiOk([entry(3), entry(8)])]);
+    expect(numbers).toEqual([3, 8]);
+  });
+
+  test("returns nothing for an empty list", async () => {
+    const { numbers } = await list([ghApiOk([])]);
+    expect(numbers).toEqual([]);
+  });
+
+  test("asks for the open issues of the repository with the label", async () => {
+    const { fake } = await list([ghApiOk([])]);
+    expect(fake.calls[0]?.argv.join(" ")).toContain(
+      "repos/acme/widgets/issues?labels=factory&state=open&per_page=100",
+    );
+  });
+
+  test("encodes the label in the query", async () => {
+    const { fake } = await list([ghApiOk([])], "factory:review & more");
+    expect(fake.calls[0]?.argv.join(" ")).toContain(
+      "labels=factory%3Areview%20%26%20more&state=open",
+    );
+  });
+
+  test("drops an entry that is a pull request", async () => {
+    const { numbers } = await list([
+      ghApiOk([
+        entry(3),
+        entry(4, {
+          pull_request: {
+            url: "https://api.github.com/repos/acme/widgets/pulls/4",
+          },
+        }),
+        entry(5),
+      ]),
+    ]);
+    expect(numbers).toEqual([3, 5]);
+  });
+
+  test("follows the next link to the last page", async () => {
+    const { numbers } = await list([
+      ok(ghApiStdout(200, [entry(3)], nextLink(2))),
+      ok(ghApiStdout(200, [entry(4)], nextLink(3))),
+      ghApiOk([entry(5)]),
+    ]);
+    expect(numbers).toEqual([3, 4, 5]);
+  });
+
+  test("drops a pull request on a later page", async () => {
+    const { numbers } = await list([
+      ok(ghApiStdout(200, [entry(3)], nextLink(2))),
+      ghApiOk([entry(4, { pull_request: {} })]),
+    ]);
+    expect(numbers).toEqual([3]);
+  });
+
+  test("fails when the pages run past the limit", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, [entry(3)], nextLink(2))),
+      ok(ghApiStdout(200, [entry(4)], nextLink(3))),
+      ghApiOk([entry(5)]),
+    ]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+        2,
+      ),
+    ).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+  });
+
+  test("reads the pages up to the limit when the last one has no next link", async () => {
+    const { numbers } = await list(
+      [ok(ghApiStdout(200, [entry(3)], nextLink(2))), ghApiOk([entry(4)])],
+      "factory",
+      2,
+    );
+    expect(numbers).toEqual([3, 4]);
+  });
+
+  test("uses ten pages as the default limit", () => {
+    expect(LABELED_ISSUES_MAX_PAGES).toBe(10);
+  });
+
+  test("rejects an HTTP error response", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("rejects a response that is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+      ),
+    ).rejects.toThrow("expected an array response");
+  });
+
+  test("rejects an entry without a number", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ title: "x" }])]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "factory",
+      ),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an owner that is not a GitHub name", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listLabeledOpenIssues(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "../etc",
+        "widgets",
+        "factory",
+      ),
     ).rejects.toThrow();
   });
 });
@@ -3516,320 +3720,6 @@ describe("findIssueByMarker", () => {
   });
 });
 
-describe("searchPrs", () => {
-  const SEARCH_PRS_OPTS = {
-    owner: "acme",
-    ownerKind: "user" as const,
-    viewer: "factory-bot",
-    reviewLabel: "factory:review",
-    fixLabel: "factory:fix",
-  };
-
-  // クエリは4本: レビュー依頼、担当者、レビューラベル、修正ラベル。
-  const QUERY_COUNT = 4;
-
-  function emptyResponses(count: number): CommandResult[] {
-    return Array.from({ length: count }, () => ghApiOk({ items: [] }));
-  }
-
-  function prItem(id: number, number: number): unknown {
-    return {
-      id,
-      number,
-      title: `pr ${String(number)}`,
-      body: null,
-      html_url: `https://github.com/acme/widgets/pull/${String(number)}`,
-      repository_url: "https://api.github.com/repos/acme/widgets",
-      user: null,
-    };
-  }
-
-  // GitHubの`/search/issues`は括弧でまとめたORに対応しない。
-  // 実際に`(review-requested:X OR assignee:X OR label:Y)`は常に0件を返し、
-  // 修飾子を1つずつ指定すると一致した。
-  // そのため`searchPrs`は修飾子ごとに1本ずつ問い合わせて結果をまとめる。
-  // 対象はレビュー依頼、担当者、レビューラベル、修正ラベルの4つ。
-  // トリガーラベルを消費済みのPRは、この検索ではなく
-  // `poll_prs.ts`の`listTrackedPrs`が拾い直す。
-
-  test("issues one query per qualifier — review-requested, assignee, review label, fix label — instead of one OR-grouped query", async () => {
-    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
-    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    expect(fake.calls).toHaveLength(QUERY_COUNT);
-    const decoded = fake.calls.map((call) =>
-      decodeURIComponent(call.argv.join(" ")),
-    );
-    expect(decoded[0]).toContain("review-requested:factory-bot");
-    expect(decoded[0]).not.toContain("OR");
-    expect(decoded[1]).toContain("assignee:factory-bot");
-    expect(decoded[2]).toContain('label:"factory:review"');
-    expect(decoded[3]).toContain('label:"factory:fix"');
-  });
-
-  test("issues no commenter: query", async () => {
-    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
-    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    for (const call of fake.calls) {
-      expect(decodeURIComponent(call.argv.join(" "))).not.toContain(
-        "commenter:",
-      );
-    }
-  });
-
-  test("issues no wip-label exclusion (there is no wip label any more)", async () => {
-    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
-    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    for (const call of fake.calls) {
-      expect(decodeURIComponent(call.argv.join(" "))).not.toContain("-label:");
-    }
-  });
-
-  test("quotes the label qualifiers (a label name can contain a colon)", async () => {
-    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
-    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    const decoded = fake.calls.map((call) =>
-      decodeURIComponent(call.argv.join(" ")),
-    );
-    expect(decoded[2]).toContain('label:"factory:review"');
-    expect(decoded[3]).toContain('label:"factory:fix"');
-  });
-
-  test("requests per_page=100 on every query", async () => {
-    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
-    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    expect(fake.calls).toHaveLength(QUERY_COUNT); // 用意した応答をすべて消費した
-    for (const call of fake.calls) {
-      expect(call.argv.join(" ")).toContain("per_page=100");
-    }
-  });
-
-  test("de-duplicates by PR id when the same PR matches more than one query", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ items: [prItem(1, 10)] }), // レビュー依頼
-      ghApiOk({ items: [prItem(1, 10)] }), // 担当者(同じPRがもう一度一致する)
-      ghApiOk({ items: [] }), // レビューラベル
-      ghApiOk({ items: [] }), // 修正ラベル
-    ]);
-    const items = await searchPrs(
-      { run: fake.run, ghToken: "tok" },
-      SEARCH_PRS_OPTS,
-    );
-    expect(fake.calls).toHaveLength(QUERY_COUNT); // 用意した応答をすべて消費した
-    expect(items.map((item) => item.number)).toEqual([10]);
-  });
-
-  test("combines distinct PRs across every query", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ items: [prItem(1, 10)] }),
-      ghApiOk({ items: [prItem(2, 11)] }),
-      ghApiOk({ items: [prItem(3, 12)] }),
-      ghApiOk({ items: [prItem(4, 13)] }),
-    ]);
-    const items = await searchPrs(
-      { run: fake.run, ghToken: "tok" },
-      SEARCH_PRS_OPTS,
-    );
-    expect(items.map((item) => item.number)).toEqual([10, 11, 12, 13]);
-  });
-
-  test("follows the link header's rel=next page within a single query", async () => {
-    const fake = createFakeCommandRunner([
-      ok(
-        ghApiStdout(
-          200,
-          { items: [prItem(1, 10)] },
-          {
-            link: '<https://api.github.com/search/issues?q=x&page=2>; rel="next"',
-          },
-        ),
-      ),
-      ghApiOk({ items: [prItem(2, 11)] }),
-      ...emptyResponses(QUERY_COUNT - 1),
-    ]);
-    const items = await searchPrs(
-      { run: fake.run, ghToken: "tok" },
-      SEARCH_PRS_OPTS,
-    );
-    expect(fake.calls).toHaveLength(QUERY_COUNT + 1); // 1本目のクエリの2ページ分と残りのクエリ
-    expect(items.map((item) => item.number)).toEqual([10, 11]);
-  });
-});
-
-describe("searchOpenAuthoredPrs", () => {
-  const OWNER_SCOPE = {
-    kind: "owner" as const,
-    owner: "acme",
-    ownerKind: "user" as const,
-  };
-
-  function item(id: number, number: number): unknown {
-    return {
-      id,
-      number,
-      title: `pr ${String(number)}`,
-      body: null,
-      html_url: `https://github.com/acme/widgets/pull/${String(number)}`,
-      repository_url: "https://api.github.com/repos/acme/widgets",
-      user: { login: "alice" },
-      updated_at: "2026-10-14T00:00:00Z",
-    };
-  }
-
-  async function queryOf(
-    scope: Parameters<typeof searchOpenAuthoredPrs>[1]["scope"],
-    author = "alice",
-  ): Promise<string> {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await searchOpenAuthoredPrs(
-      { run: fake.run, ghToken: "tok" },
-      { scope, author },
-    );
-    return decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
-  }
-
-  test("asks for open pull requests", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("is:pr is:open");
-  });
-
-  test("leaves out draft pull requests", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("draft:false");
-  });
-
-  test("narrows the search to the author", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("author:alice");
-  });
-
-  test("sorts by the latest update", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("sort:updated-desc");
-  });
-
-  test("scopes a user owner with the user qualifier", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("user:acme");
-  });
-
-  test("scopes an organization owner with the org qualifier", async () => {
-    expect(
-      await queryOf({ kind: "owner", owner: "acme", ownerKind: "org" }),
-    ).toContain("org:acme");
-  });
-
-  test("scopes a repository with the repo qualifier", async () => {
-    expect(
-      await queryOf({ kind: "repo", owner: "acme", repo: "widgets" }),
-    ).toContain("repo:acme/widgets");
-  });
-
-  test("reads a single page even when the response links to the next one", async () => {
-    const fake = createFakeCommandRunner([
-      ok(
-        ghApiStdout(
-          200,
-          { items: [item(1, 10)] },
-          {
-            link: '<https://api.github.com/search/issues?q=x&page=2>; rel="next"',
-          },
-        ),
-      ),
-    ]);
-    await searchOpenAuthoredPrs(
-      { run: fake.run, ghToken: "tok" },
-      { scope: OWNER_SCOPE, author: "alice" },
-    );
-    expect(fake.calls).toHaveLength(1);
-  });
-
-  test("returns the repository and the number of every hit", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ items: [item(1, 10), item(2, 11)] }),
-    ]);
-    const items = await searchOpenAuthoredPrs(
-      { run: fake.run, ghToken: "tok" },
-      { scope: OWNER_SCOPE, author: "alice" },
-    );
-    expect(
-      items.map((found) => `${found.owner}/${found.repo}#${found.number}`),
-    ).toEqual(["acme/widgets#10", "acme/widgets#11"]);
-  });
-
-  test("returns the time of the last update of every hit", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [item(1, 10)] })]);
-    const items = await searchOpenAuthoredPrs(
-      { run: fake.run, ghToken: "tok" },
-      { scope: OWNER_SCOPE, author: "alice" },
-    );
-    expect(items.map((found) => found.updatedAtMs)).toEqual([
-      Date.parse("2026-10-14T00:00:00Z"),
-    ]);
-  });
-
-  test("rejects a hit without the time of the last update", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({
-        items: [
-          {
-            id: 1,
-            number: 10,
-            title: "pr 10",
-            body: null,
-            html_url: "https://github.com/acme/widgets/pull/10",
-            repository_url: "https://api.github.com/repos/acme/widgets",
-            user: { login: "alice" },
-          },
-        ],
-      }),
-    ]);
-    await expect(
-      searchOpenAuthoredPrs(
-        { run: fake.run, ghToken: "tok" },
-        { scope: OWNER_SCOPE, author: "alice" },
-      ),
-    ).rejects.toBeInstanceOf(GitHubResponseError);
-  });
-
-  test("rejects an author name that carries a search qualifier", async () => {
-    await expect(queryOf(OWNER_SCOPE, "alice label:secret")).rejects.toThrow(
-      /invalid GitHub name/,
-    );
-  });
-
-  test("rejects an owner name that carries a search qualifier", async () => {
-    await expect(
-      queryOf({ kind: "owner", owner: "acme -user:x", ownerKind: "user" }),
-    ).rejects.toThrow(/invalid GitHub name/);
-  });
-
-  test("rejects a repository name that carries a search qualifier", async () => {
-    await expect(
-      queryOf({ kind: "repo", owner: "acme", repo: "widgets is:issue" }),
-    ).rejects.toThrow(/invalid GitHub name/);
-  });
-
-  test("throws the rate limit error without waiting for the limit to reset", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" })),
-      ghApiOk({ items: [] }),
-    ]);
-    await expect(
-      searchOpenAuthoredPrs(
-        { run: fake.run, ghToken: "tok" },
-        { scope: OWNER_SCOPE, author: "alice" },
-      ),
-    ).rejects.toBeInstanceOf(GitHubRateLimitError);
-  });
-
-  test("does not send a second request after the rate limit", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" })),
-      ghApiOk({ items: [] }),
-    ]);
-    await searchOpenAuthoredPrs(
-      { run: fake.run, ghToken: "tok" },
-      { scope: OWNER_SCOPE, author: "alice" },
-    ).catch(() => undefined);
-    expect(fake.calls).toHaveLength(1);
-  });
-});
-
 describe("getPrWithoutWait", () => {
   const RATE_LIMITED = () =>
     ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" }));
@@ -3867,6 +3757,75 @@ describe("getPrWithoutWait", () => {
         12,
       ),
     ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+});
+
+describe("listOpenPullRequestsWithoutWait", () => {
+  const RATE_LIMITED = () =>
+    ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" }));
+
+  test("asks for the open pull requests of the repository like listOpenPullRequests", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await listOpenPullRequestsWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/pulls?state=open&per_page=100",
+    );
+  });
+
+  test("returns the pull requests of the response", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          number: 12,
+          draft: false,
+          head: { ref: "feature/x", repo: { full_name: "acme/widgets" } },
+          base: { ref: "main", repo: { full_name: "acme/widgets" } },
+          user: { login: "alice", id: 11 },
+        },
+      ]),
+    ]);
+    const prs = await listOpenPullRequestsWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs.map((entry) => entry.number)).toEqual([12]);
+  });
+
+  test("throws the rate limit error without waiting for the limit to reset", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await expect(
+      listOpenPullRequestsWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+      ),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("does not send a second request after the rate limit", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await listOpenPullRequestsWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("rejects a repository name that GitHub does not accept", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      listOpenPullRequestsWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "../widgets",
+      ),
+    ).rejects.toThrow();
   });
 });
 
@@ -3925,6 +3884,7 @@ describe("getPr", () => {
       authorType: "User",
       autoMergeEnabled: false,
       requestedReviewerIds: null,
+      requestedTeamIds: null,
     });
   });
 
@@ -4279,6 +4239,89 @@ describe("getPr requested reviewers", () => {
   });
 });
 
+describe("getPr requested teams", () => {
+  function prBody(requestedTeams: unknown): Record<string, unknown> {
+    return {
+      number: 12,
+      title: "t",
+      body: "b",
+      draft: false,
+      state: "open",
+      merged: false,
+      head: { sha: "abc123", ref: "feature-x", repo: null },
+      base: { ref: "main", repo: { full_name: "acme/widgets" } },
+      mergeable_state: "clean",
+      user: { login: "alice", type: "User" },
+      ...(requestedTeams === undefined
+        ? {}
+        : { requested_teams: requestedTeams }),
+    };
+  }
+
+  async function read(requestedTeams: unknown) {
+    const fake = createFakeCommandRunner([ghApiOk(prBody(requestedTeams))]);
+    return getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 12);
+  }
+
+  async function readWithCreatedAt(requestedTeams: unknown) {
+    const fake = createFakeCommandRunner([ghApiOk(prBody(requestedTeams))]);
+    return getPrWithCreatedAt(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+  }
+
+  test("returns the id of every requested team", async () => {
+    const pr = await read([
+      { id: 11, slug: "core" },
+      { id: 22, slug: "infra" },
+    ]);
+    expect(pr.requestedTeamIds).toEqual([11, 22]);
+  });
+
+  test("returns an empty list when no team is requested", async () => {
+    const pr = await read([]);
+    expect(pr.requestedTeamIds).toEqual([]);
+  });
+
+  test("returns null when the response has no requested_teams, without throwing", async () => {
+    const pr = await read(undefined);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null when requested_teams is not an array, without throwing", async () => {
+    const pr = await read({ id: 11 });
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null when a team id is not a positive integer, without throwing", async () => {
+    const pr = await read([{ id: 11 }, { id: "x" }]);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null when an element of requested_teams is not an object, without throwing", async () => {
+    const pr = await read([null]);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("keeps the other fields when requested_teams is malformed", async () => {
+    const pr = await read("broken");
+    expect(pr.title).toBe("t");
+  });
+
+  test("getPrWithCreatedAt succeeds when requested_teams is missing", async () => {
+    const pr = await readWithCreatedAt(undefined);
+    expect(pr.requestedTeamIds).toBeNull();
+  });
+
+  test("getPrWithCreatedAt succeeds when requested_teams is malformed", async () => {
+    const pr = await readWithCreatedAt([{ id: "x" }]);
+    expect(pr.number).toBe(12);
+  });
+});
+
 describe("getPrWithCreatedAt", () => {
   function prPayload(createdAt: unknown): Record<string, unknown> {
     return {
@@ -4441,7 +4484,7 @@ describe("listOpenPullRequests", () => {
       "acme",
       "widgets",
     );
-    expect(prs).toEqual([
+    expect(prs).toMatchObject([
       {
         number: 12,
         draft: false,
@@ -4454,6 +4497,139 @@ describe("listOpenPullRequests", () => {
         createdAtMs: Date.parse("2026-10-01T00:00:00Z"),
       },
     ]);
+  });
+
+  async function listed(entry: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([ghApiOk([entry])]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    return prs[0];
+  }
+
+  test("returns the label names of the pull request", async () => {
+    const pr = await listed(
+      openPr(12, { labels: [{ name: "factory:review" }, { name: "bug" }] }),
+    );
+    expect(pr?.labels).toEqual(["factory:review", "bug"]);
+  });
+
+  test("returns null labels when the entry has none, and keeps the entry", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.labels).toBeNull();
+  });
+
+  test("returns null labels when a label has no name", async () => {
+    const pr = await listed(openPr(12, { labels: [{ name: "a" }, {}] }));
+    expect(pr?.labels).toBeNull();
+  });
+
+  test("returns the ids of the assignees", async () => {
+    const pr = await listed(
+      openPr(12, {
+        assignees: [
+          { id: 7, login: "a" },
+          { id: 8, login: "b" },
+        ],
+      }),
+    );
+    expect(pr?.assigneeIds).toEqual([7, 8]);
+  });
+
+  test("returns an empty list of assignees for a pull request nobody is assigned to", async () => {
+    const pr = await listed(openPr(12, { assignees: [] }));
+    expect(pr?.assigneeIds).toEqual([]);
+  });
+
+  test("returns null assignee ids when an id is not a positive integer", async () => {
+    const pr = await listed(
+      openPr(12, { assignees: [{ id: 7 }, { id: "x" }] }),
+    );
+    expect(pr?.assigneeIds).toBeNull();
+  });
+
+  test("returns null assignee ids when the entry has none", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.assigneeIds).toBeNull();
+  });
+
+  test("returns the ids of the requested reviewers", async () => {
+    const pr = await listed(
+      openPr(12, { requested_reviewers: [{ id: 5001, login: "a" }] }),
+    );
+    expect(pr?.requestedReviewerIds).toEqual([5001]);
+  });
+
+  test("returns null requested reviewers when an id is not a positive integer", async () => {
+    const pr = await listed(openPr(12, { requested_reviewers: [{ id: 0 }] }));
+    expect(pr?.requestedReviewerIds).toBeNull();
+  });
+
+  test("returns null requested reviewers when the entry has none", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.requestedReviewerIds).toBeNull();
+  });
+
+  test("reports a team review request when requested_teams is not empty", async () => {
+    const pr = await listed(openPr(12, { requested_teams: [{ id: 1 }] }));
+    expect(pr?.teamReviewRequested).toBe(true);
+  });
+
+  test("reports no team review request when requested_teams is empty", async () => {
+    const pr = await listed(openPr(12, { requested_teams: [] }));
+    expect(pr?.teamReviewRequested).toBe(false);
+  });
+
+  test("reports an unknown team review request when requested_teams is missing", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.teamReviewRequested).toBeNull();
+  });
+
+  test("reports an unknown team review request when requested_teams is not a list", async () => {
+    const pr = await listed(openPr(12, { requested_teams: "x" }));
+    expect(pr?.teamReviewRequested).toBeNull();
+  });
+
+  test("returns the ids of the requested teams", async () => {
+    const pr = await listed(
+      openPr(12, { requested_teams: [{ id: 11 }, { id: 22 }] }),
+    );
+    expect(pr?.requestedTeamIds).toEqual([11, 22]);
+  });
+
+  test("returns null requested team ids when the entry has none, and keeps the entry", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null requested team ids when an id is not a positive integer", async () => {
+    const pr = await listed(openPr(12, { requested_teams: [{ id: "x" }] }));
+    expect(pr?.requestedTeamIds).toBeNull();
+  });
+
+  test("returns null requested team ids when requested_teams is not a list", async () => {
+    const pr = await listed(openPr(12, { requested_teams: "x" }));
+    expect(pr?.requestedTeamIds).toBeNull();
+  });
+
+  test("returns the head commit of the pull request", async () => {
+    const pr = await listed(
+      openPr(12, {
+        head: {
+          ref: "f",
+          sha: "c".repeat(40),
+          repo: { full_name: "acme/widgets" },
+        },
+      }),
+    );
+    expect(pr?.headSha).toBe("c".repeat(40));
+  });
+
+  test("returns a null head commit when the entry has none, and keeps the entry", async () => {
+    const pr = await listed(openPr(12));
+    expect(pr?.headSha).toBeNull();
   });
 
   test("returns a null base branch when the entry has none, and keeps the entry", async () => {
@@ -4490,6 +4666,40 @@ describe("listOpenPullRequests", () => {
       "widgets",
     );
     expect(prs[0]?.createdAtMs).toBeNull();
+  });
+
+  test("returns the update time of the pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { updated_at: "2026-10-03T04:05:06Z" })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.updatedAtMs).toBe(Date.parse("2026-10-03T04:05:06Z"));
+  });
+
+  test("returns a null update time when the entry has none, and keeps the entry", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([openPr(12)])]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.updatedAtMs).toBeNull();
+  });
+
+  test("returns a null update time when the value is not a date", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { updated_at: "yesterday" })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.updatedAtMs).toBeNull();
   });
 
   test("returns a null author when the pull request has none", async () => {

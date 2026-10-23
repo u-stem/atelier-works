@@ -27,7 +27,7 @@ import {
   SECONDARY_RATE_LIMIT_PHRASE,
 } from "./github_errors.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
-import { type Logger, maskSecrets } from "./log.ts";
+import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   assertCommitSha,
   isCommitSha,
@@ -37,7 +37,6 @@ import {
   type WorkflowRun,
 } from "./main_ci_support.ts";
 import type {
-  FactoryOwnerKind,
   GitHubRepoRef,
   GitIdentity,
   LabelerAssociation,
@@ -85,6 +84,8 @@ export type GhClient = {
    */
   readonly transientRetryDelayMs?: number;
   readonly now?: () => Date;
+  /** レート制限の応答を警告として残す先。省略すると標準出力の構造化ログに書く。 */
+  readonly log?: Logger;
 };
 
 function buildGhEnv(client: GhClient): Record<string, string> {
@@ -160,7 +161,7 @@ function parseGhApiOutput(stdout: string): GhApiResponse {
  * rate limitの解除を待つ時間の上限(ミリ秒)。
  * 1回の待ちはどのstepのtimeoutよりも短い(最も短いのはpr_fixの指摘の収集の600秒)ので、
  * 1つのstepで何度か待っても打ち切られない。
- * search APIの1分ごとの上限と、二次レート制限の`retry-after`(多くは60秒)はこの範囲で待てる。
+ * 二次レート制限の`retry-after`(多くは60秒)はこの範囲で待てる。
  * 一次レート制限(1時間ごと)を使い切ったときの`x-ratelimit-reset`までの待ちは収まらないので、
  * 待たずに`GitHubRateLimitError`を投げる。
  */
@@ -447,11 +448,68 @@ async function sendGhApi(
 }
 
 /**
- * `gh api <endpoint>`を呼ぶ。レート制限の応答を受けたら、待ってから1回だけ再試行する。
+ * RESTの検索APIのendpointの接頭辞。検索は1分ごとの枠が小さく、5分の境目に集中して拒まれるため、
+ * 呼び出しの入口で拒む(`isRestSearchEndpoint`)。
+ */
+const REJECTED_REST_ENDPOINT_PREFIX = "search/";
+
+/**
+ * endpointが、RESTの検索APIを指すか。先頭の`/`とホストを落とし、小文字にして接頭辞で比べる。
+ * 書き方の違いのうち、先頭の`/`、大文字、絶対URLの3種類だけを正規化する。
+ * ドットセグメントとパーセントエンコードは対象外である。
+ * 呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通るため、その書き方は入らない。
+ * 接頭辞だけを見るので、`repos/o/search-x/issues`のようにリポジトリ名やクエリに含むだけの要求は拒まない。
+ * GraphQLの検索のフィールドは`graphql`への要求で、対象外である。
+ */
+function isRestSearchEndpoint(endpoint: string): boolean {
+  const path = endpoint
+    .toLowerCase()
+    .replace(/^https?:\/\/[^/]+\//, "")
+    .replace(/^\/+/, "");
+  return path.startsWith(REJECTED_REST_ENDPOINT_PREFIX);
+}
+
+const defaultRateLimitLog = logger("github");
+
+/** ログに載せるendpoint。ホスト、先頭の`/`、クエリを落とす。クエリには値が入りうるため。 */
+function endpointForLog(endpoint: string): string {
+  return endpoint
+    .replace(/^https?:\/\/[^/]+\//, "")
+    .replace(/^\/+/, "")
+    .replace(/[?#].*$/s, "");
+}
+
+/**
+ * レート制限と判定した応答を、警告の1行として残す。
+ * 待って成功した403と、どのリソースの枠(`x-ratelimit-resource`の`core`、`search`、`graphql`)の
+ * 403かを、ジョブのログから数えるためである。
+ * 載せるのはステータス、クエリを除いたendpoint、`retry-after`、リソースの枠、その後の扱いだけで、
+ * トークンもクエリの値も載せない。
+ */
+function logRateLimit(
+  client: GhClient,
+  endpoint: string,
+  response: GhApiResponse,
+  outcome: "waiting" | "wait_too_long" | "still_limited",
+): void {
+  (client.log ?? defaultRateLimitLog).warn("github rate limit response", {
+    status: response.status,
+    endpoint: endpointForLog(endpoint),
+    retry_after: response.headers.get("retry-after") ?? null,
+    resource: response.headers.get("x-ratelimit-resource") ?? null,
+    outcome,
+  });
+}
+
+/**
+ * `gh api <endpoint>`を呼ぶ。RESTの検索APIのendpointは、`gh`を起動せずに例外で拒む。
+ * メッセージにはendpointを載せない(クエリに値が入りうるため)。
+ * レート制限の応答を受けたら、待ってから1回だけ再試行する。
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
  * ghの起動失敗、応答の無い通信断、冪等な要求の5xxの再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
+ * レート制限の応答は、待つ前と再試行の後に、警告のログ1行として残す(`logRateLimit`)。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
@@ -460,6 +518,9 @@ export async function callGhApi(
   endpoint: string,
   options: GhApiCallOptions = {},
 ): Promise<GhApiResponse> {
+  if (isRestSearchEndpoint(endpoint)) {
+    throw new Error("GitHub REST search endpoints are not allowed");
+  }
   const first = await sendGhApi(client, endpoint, options);
   const limitedByBody = isSecondaryRateLimitedByBody(first);
   if (!isRateLimited(first) && !limitedByBody) return first;
@@ -471,12 +532,15 @@ export async function callGhApi(
     ? DEFAULT_RATE_LIMIT_WAIT_MS
     : (rateLimitWaitMs(first.headers, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS);
   if (waitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS) {
+    logRateLimit(client, endpoint, first, "wait_too_long");
     throw new GitHubRateLimitError(endpoint, waitMs, false);
   }
+  logRateLimit(client, endpoint, first, "waiting");
   await sleep(waitMs);
 
   const second = await sendGhApi(client, endpoint, options);
   if (isRateLimited(second)) {
+    logRateLimit(client, endpoint, second, "still_limited");
     throw new GitHubRateLimitError(
       endpoint,
       rateLimitWaitMs(second.headers, now),
@@ -484,6 +548,7 @@ export async function callGhApi(
     );
   }
   if (isSecondaryRateLimitedByBody(second)) {
+    logRateLimit(client, endpoint, second, "still_limited");
     throw new GitHubRateLimitError(endpoint, null, true);
   }
   return second;
@@ -618,8 +683,7 @@ export class GitHubPaginationLimitError extends Error {
  * `GitHubPaginationLimitError`を投げる。
  * 各ページの要素を`extractPage`で取り出してつなげる。
  * `extractPage`はエンドポイントの応答の形によって変わる
- * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
- * `{ items: [...] }`で包まれている)。
+ * (timeline・comments・reviewsは裸のJSON配列で、`extractPage`が配列を取り出す)。
  */
 export async function paginateGhApi<T>(
   client: GhClient,
@@ -847,6 +911,61 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
   return { login: parsed.login, id: parsed.id };
 }
 
+/** PATのアカウントが属するチーム。 */
+export type ViewerTeams = {
+  /** チームの数値ID。レビューの依頼先との照合に使う。 */
+  readonly ids: ReadonlySet<number>;
+  /** `<組織>/<チーム>`(小文字)。組織のチームが1件も無いかの判定に使う。 */
+  readonly slugs: ReadonlySet<string>;
+};
+
+/** `getViewerTeams`が読むページ数の既定の上限。1ページ100件なので、1000チームまでである。 */
+export const VIEWER_TEAMS_MAX_PAGES = 10;
+
+/**
+ * `GET /user/teams`で、PATのアカウントが属するチームを、ページ送りしながらすべて読む。
+ * 要素が1つでも想定の形でなければ、一部だけを返さず例外を投げる。
+ * 読めなかったチームへの依頼を「属さない」と取り違えて、依頼を黙って見送らないためである。
+ * 続きのページが`maxPages`を超えるときは`GitHubPaginationLimitError`を投げる。
+ * 失敗の文言にチームの名前やIDは載せない。
+ */
+export async function getViewerTeams(
+  client: GhClient,
+  maxPages: number = VIEWER_TEAMS_MAX_PAGES,
+): Promise<ViewerTeams> {
+  const teams = await paginateGhApi(
+    client,
+    "user/teams?per_page=100",
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${context}: expected an array response`);
+      }
+      return parsed.map((entry) => {
+        if (
+          !isRecord(entry) ||
+          !isPositiveSafeInteger(entry.id) ||
+          typeof entry.slug !== "string" ||
+          entry.slug.length === 0 ||
+          !isRecord(entry.organization) ||
+          typeof entry.organization.login !== "string" ||
+          entry.organization.login.length === 0
+        ) {
+          throw unexpectedShape(context);
+        }
+        return {
+          id: entry.id,
+          slug: `${entry.organization.login}/${entry.slug}`.toLowerCase(),
+        };
+      });
+    },
+    maxPages,
+  );
+  return {
+    ids: new Set(teams.map((team) => team.id)),
+    slugs: new Set(teams.map((team) => team.slug)),
+  };
+}
+
 /**
  * アカウント(ユーザーか組織)の現在の数値IDを取得する。
  * 組織でも`GET /users/{name}`で数値のIDが取れるので、`kind`によらず同じ経路を使う。
@@ -932,24 +1051,10 @@ export function gitIdentityForViewer(viewer: Viewer): GitIdentity {
 }
 
 // ---------------------------------------------------------------------------
-// Issueの検索・取得・取得宣言・コメント・ラベル
+// Issueの取得・取得宣言・コメント・ラベル
 // ---------------------------------------------------------------------------
 
-function ownerQualifier(owner: string, ownerKind: FactoryOwnerKind): string {
-  return ownerKind === "org" ? `org:${owner}` : `user:${owner}`;
-}
-
-function repoFromRepositoryUrl(repositoryUrl: string): {
-  readonly owner: string;
-  readonly repo: string;
-} {
-  const match = repositoryUrl.match(/\/repos\/([^/]+)\/([^/]+)$/);
-  if (match === null || match[1] === undefined || match[2] === undefined) {
-    throw new Error(`unexpected repository_url shape: ${repositoryUrl}`);
-  }
-  return { owner: match[1], repo: match[2] };
-}
-
+/** 表またはRESTの一覧が見つけた、起動の候補のIssue。 */
 export type IssueSearchItem = {
   readonly owner: string;
   readonly repo: string;
@@ -959,105 +1064,6 @@ export type IssueSearchItem = {
   readonly htmlUrl: string;
   readonly authorLogin: string;
 };
-
-type SearchIssuesPayload = {
-  readonly items: readonly SearchIssueItemPayload[];
-};
-
-type SearchIssueItemPayload = {
-  readonly id: number;
-  readonly number: number;
-  readonly title: string;
-  readonly body: string | null;
-  readonly html_url: string;
-  readonly repository_url: string;
-  readonly user: { readonly login: string } | null;
-  /** 更新の時刻。読む関数(`searchOpenAuthoredPrs`)だけが形を確かめる。 */
-  readonly updated_at?: unknown;
-};
-
-function isSearchIssueItemPayload(
-  value: unknown,
-): value is SearchIssueItemPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as {
-    id: unknown;
-    number: unknown;
-    title: unknown;
-    body: unknown;
-    html_url: unknown;
-    repository_url: unknown;
-    user: unknown;
-  };
-  if (typeof record.id !== "number") return false;
-  if (typeof record.number !== "number") return false;
-  if (typeof record.title !== "string") return false;
-  if (record.body !== null && typeof record.body !== "string") return false;
-  if (typeof record.html_url !== "string") return false;
-  if (typeof record.repository_url !== "string") return false;
-  if (record.user !== null && typeof record.user !== "object") return false;
-  return true;
-}
-
-function isSearchIssuesPayload(value: unknown): value is SearchIssuesPayload {
-  if (typeof value !== "object" || value === null) return false;
-  if (!("items" in value)) return false;
-  const items = (value as { items: unknown }).items;
-  return Array.isArray(items) && items.every(isSearchIssueItemPayload);
-}
-
-/**
- * `callGhApiAll`と同じだが、`/search/issues`の包まれた形
- * (裸の配列ではなく`{ items: [...] }`)を扱う。
- */
-async function callGhApiAllSearchItems(
-  client: GhClient,
-  endpoint: string,
-): Promise<SearchIssueItemPayload[]> {
-  return paginateGhApi(client, endpoint, (parsed, context) => {
-    if (!isSearchIssuesPayload(parsed)) {
-      throw new Error(`${context}: unexpected response shape`);
-    }
-    return parsed.items;
-  });
-}
-
-export type SearchIssuesOptions = {
-  readonly owner: string;
-  readonly ownerKind: FactoryOwnerKind;
-  readonly label: string;
-};
-
-/**
- * `GET /search/issues`で、`label`の付いたPRでない未完了のIssueを
- * ページ送りしながらすべて取得する。
- */
-export async function searchIssues(
-  client: GhClient,
-  opts: SearchIssuesOptions,
-): Promise<IssueSearchItem[]> {
-  assertGitHubName(opts.owner);
-  // ラベル名はコロンを含みうる(`factory:review`など)ため引用符で囲む。
-  // 現在の`/search/issues`は引用符なしの`label:factory:review`も受け付けるが、
-  // 引用符で囲む形がドキュメントにある安全な形で、下の`searchPrs`ともそろう。
-  const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:"${opts.label}"`;
-  const items = await callGhApiAllSearchItems(
-    client,
-    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-  );
-  return items.map((item) => {
-    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-    return {
-      owner,
-      repo,
-      number: item.number,
-      title: item.title,
-      body: item.body ?? "",
-      htmlUrl: item.html_url,
-      authorLogin: item.user?.login ?? "",
-    };
-  });
-}
 
 export type Issue = {
   readonly number: number;
@@ -1081,6 +1087,11 @@ export type Issue = {
   readonly assignees: string[];
   /** 応答の`repository_url`から読んだリポジトリの正規の綴り。読めないときは`null`。 */
   readonly repository: { readonly owner: string; readonly repo: string } | null;
+  /**
+   * PRか。応答に`pull_request`の項目があるときに真になる。
+   * PRの番号もIssueのAPIで読めるので、Issueとして扱う前に区別する。
+   */
+  readonly isPullRequest: boolean;
 };
 
 /** `{ name: string }`。ラベルのオブジェクト(`{ name, ... }`の形)で使う。 */
@@ -1198,7 +1209,47 @@ export async function getIssue(
     labels,
     assignees,
     repository: repositoryOf(Reflect.get(parsed, "repository_url")),
+    isPullRequest: "pull_request" in parsed,
   };
+}
+
+/** `listLabeledOpenIssues`が読むページ数の既定の上限。1ページ100件なので、1000件までである。 */
+export const LABELED_ISSUES_MAX_PAGES = 10;
+
+/**
+ * `GET /repos/{owner}/{repo}/issues?labels=<label>&state=open`で、ラベルの付いた開いているIssueの番号を、
+ * ページ送りしながら最後のページまで返す。
+ * このAPIはPRも返すので、`pull_request`を持つ要素は捨てる。
+ * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
+ * 一部だけでは、返さなかったIssueを「ラベルが付いていない」と取り違えうるためである。
+ * 応答の形が違えば例外を投げる。
+ * 番号の素性(リポジトリ、開閉、ラベル)は呼び出し側が`getIssue`で読み直して確かめる。
+ */
+export async function listLabeledOpenIssues(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  label: string,
+  maxPages: number = LABELED_ISSUES_MAX_PAGES,
+): Promise<number[]> {
+  validateOwnerRepo(owner, repo);
+  const numbers = await paginateGhApi<number | null>(
+    client,
+    `repos/${owner}/${repo}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${context}: expected an array response`);
+      }
+      return parsed.map((entry) => {
+        if (!isRecord(entry) || typeof entry.number !== "number") {
+          throw new Error(`${context}: unexpected response shape`);
+        }
+        return "pull_request" in entry ? null : entry.number;
+      });
+    },
+    maxPages,
+  );
+  return numbers.filter((number) => number !== null);
 }
 
 /** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */
@@ -2349,6 +2400,7 @@ export async function findIssueByMarker(
 // プルリクエスト
 // ---------------------------------------------------------------------------
 
+/** 表またはRESTの一覧が見つけた、起動の候補のPR。 */
 export type PrSearchItem = {
   readonly owner: string;
   readonly repo: string;
@@ -2356,70 +2408,6 @@ export type PrSearchItem = {
   readonly title: string;
   readonly htmlUrl: string;
 };
-
-export type SearchPrsOptions = {
-  readonly owner: string;
-  readonly ownerKind: FactoryOwnerKind;
-  readonly viewer: string;
-  readonly reviewLabel: string;
-  readonly fixLabel: string;
-};
-
-/**
- * `GET /search/issues`をPRに絞って呼び、レビューを依頼されたPR、assignされたPR、
- * `reviewLabel`か`fixLabel`の付いたPRを返す。
- * PRのトリガーラベル(`factory:review` / `factory:fix`)は、Issue側の
- * `factory`ラベルと同じく取得時に消費する。`wip`ラベルも状態ラベルも無く、
- * ラベルで再発見できないため、トリガーラベルを消費済みのPRは`poll_prs.ts`が
- * ラベル検索ではなく`listTrackedPrs`(DBに基づく)で再発見する。
- *
- * `(review-requested:X OR assignee:X OR label:Y OR ...)`のように1つに
- * まとめず、条件ごとに1つのクエリを実行する。GitHubの`/search/issues`は
- * 括弧によるORのまとめに対応していないことを、実際のフローのE2Eの失敗で
- * 確かめている(まとめたクエリは常に0件を返し、条件ごとなら一致した)。
- * 1つのPRが複数の条件を同時に満たすことがあるため、結果はGitHubの`id`で
- * 重複を除いてまとめる。
- */
-export async function searchPrs(
-  client: GhClient,
-  opts: SearchPrsOptions,
-): Promise<PrSearchItem[]> {
-  assertGitHubName(opts.owner);
-  assertGitHubName(opts.viewer);
-  // ラベル名はコロンを含みうる(`factory:review`など)ため、ラベルの条件は引用符で囲む。
-  const base = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)}`;
-  const queries = [
-    `${base} review-requested:${opts.viewer}`,
-    `${base} assignee:${opts.viewer}`,
-    `${base} label:"${opts.reviewLabel}"`,
-    `${base} label:"${opts.fixLabel}"`,
-  ];
-  const resultsByQuery = await Promise.all(
-    queries.map((query) =>
-      callGhApiAllSearchItems(
-        client,
-        `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-      ),
-    ),
-  );
-  const seen = new Set<number>();
-  const items: PrSearchItem[] = [];
-  for (const queryItems of resultsByQuery) {
-    for (const item of queryItems) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-      items.push({
-        owner,
-        repo,
-        number: item.number,
-        title: item.title,
-        htmlUrl: item.html_url,
-      });
-    }
-  }
-  return items;
-}
 
 /**
  * rate limitの解除を待たないクライアントを返す。
@@ -2453,78 +2441,6 @@ export async function getPrWithoutWait(
     repo,
     number,
   );
-}
-
-/** 人のPRを探す範囲。オーナーの全体か、1つのリポジトリ。 */
-export type OpenAuthoredPrsScope =
-  | {
-      readonly kind: "owner";
-      readonly owner: string;
-      readonly ownerKind: FactoryOwnerKind;
-    }
-  | {
-      readonly kind: "repo";
-      readonly owner: string;
-      readonly repo: string;
-    };
-
-export type OpenAuthoredPrSearchItem = PrSearchItem & {
-  /** PRの最後の更新の時刻(epochミリ秒)。範囲と作者をまたいで新しい順に並べるのに使う。 */
-  readonly updatedAtMs: number;
-};
-
-export type SearchOpenAuthoredPrsOptions = {
-  readonly scope: OpenAuthoredPrsScope;
-  /** PRの作者のログイン名。 */
-  readonly author: string;
-};
-
-/**
- * `GET /search/issues`で、`author`が作った、開いていて下書きでないPRを、更新の新しい順に1ページ(最大100件)返す。
- * 更新の時刻を読めない項目があれば`GitHubResponseError`を投げる。
- * 検索は候補を絞るだけで、作者の種別、fork、ブランチは呼び出し側がPRを読み直して確かめる。
- * 補助の検索なので、rate limitの解除を待たない。拒まれたら待たずに`GitHubRateLimitError`を投げ、
- * 呼び出し側は検索だけを飛ばす。ghの起動失敗と5xxの再試行は、待たずにすぐ行う。
- * オーナーとリポジトリと作者の名前は、検索の修飾子が紛れ込まないよう検証する。
- */
-export async function searchOpenAuthoredPrs(
-  client: GhClient,
-  opts: SearchOpenAuthoredPrsOptions,
-): Promise<OpenAuthoredPrSearchItem[]> {
-  assertGitHubName(opts.author);
-  assertGitHubName(opts.scope.owner);
-  let qualifier: string;
-  if (opts.scope.kind === "repo") {
-    assertGitHubName(opts.scope.repo);
-    qualifier = `repo:${opts.scope.owner}/${opts.scope.repo}`;
-  } else {
-    qualifier = ownerQualifier(opts.scope.owner, opts.scope.ownerKind);
-  }
-  const query = `is:pr is:open draft:false author:${opts.author} ${qualifier} sort:updated-desc`;
-  const endpoint = `search/issues?q=${encodeURIComponent(query)}&per_page=100`;
-  const response = await callGhApi(noWaitClient(client, endpoint), endpoint);
-  const context = `GET ${endpoint}`;
-  ensureSuccess(response, context);
-  const parsed = parseJsonBody(response, context);
-  if (!isSearchIssuesPayload(parsed)) {
-    throw new Error(`${context}: unexpected response shape`);
-  }
-  return parsed.items.map((item) => {
-    const updatedAtMs =
-      typeof item.updated_at === "string" ? Date.parse(item.updated_at) : NaN;
-    if (!Number.isFinite(updatedAtMs)) {
-      throw unexpectedShape("search open authored prs");
-    }
-    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-    return {
-      owner,
-      repo,
-      number: item.number,
-      title: item.title,
-      htmlUrl: item.html_url,
-      updatedAtMs,
-    };
-  });
 }
 
 export type PullRequest = {
@@ -2563,6 +2479,13 @@ export type PullRequest = {
    * 空の配列は、利用者への依頼が無いことを意味する。
    */
   readonly requestedReviewerIds: readonly number[] | null;
+  /**
+   * レビューを依頼されたチームの数値ID(RESTの`requested_teams`)。
+   * 配列でないとき、要素の`id`が正の安全な整数でないときは`null`。
+   * 空の配列は、チームへの依頼が無いことを意味する。
+   * 省略可能にしてあるのは、この項目を使わない呼び出し元が値を作るときに書かずに済むようにするためである。
+   */
+  readonly requestedTeamIds?: readonly number[] | null;
 };
 
 type PrPayload = {
@@ -2590,6 +2513,7 @@ type PrPayload = {
   readonly auto_merge?: unknown;
   readonly created_at?: unknown;
   readonly requested_reviewers?: unknown;
+  readonly requested_teams?: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2621,10 +2545,10 @@ function isPrPayload(value: unknown): value is PrPayload {
 }
 
 /**
- * `requested_reviewers`から、依頼された利用者の数値IDを読む。
- * 配列でないとき、要素の`id`が正の安全な整数でないときは、依頼の有無を決められないので`null`にする。
+ * 利用者かチームの配列(`requested_reviewers`、`assignees`、`requested_teams`)から、数値IDを読む。
+ * 配列でないとき、要素の`id`が正の安全な整数でないときは、有無を決められないので`null`にする。
  */
-function requestedReviewerIdsOf(value: unknown): number[] | null {
+function userIdsOf(value: unknown): number[] | null {
   if (!Array.isArray(value)) return null;
   const ids: number[] = [];
   for (const entry of value) {
@@ -2711,7 +2635,8 @@ async function fetchPr(
     // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
-    requestedReviewerIds: requestedReviewerIdsOf(parsed.requested_reviewers),
+    requestedReviewerIds: userIdsOf(parsed.requested_reviewers),
+    requestedTeamIds: userIdsOf(parsed.requested_teams),
   };
   return {
     pr,
@@ -4531,15 +4456,38 @@ export type OpenPullRequest = {
   readonly baseRef?: string | null;
   /** PRを作った時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
   readonly createdAtMs?: number | null;
+  /** PRの最後の更新の時刻(epochミリ秒)。応答に無いか、日付として読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly updatedAtMs?: number | null;
+  /**
+   * ラベルの名前。応答に無いか、名前の無い要素があるときは`null`。
+   * 次の4つの項目は、候補を絞るためにだけ使う。確かめは`getPr`と`getIssue`の応答で行う。
+   * 省略可能な理由は`baseRef`と同じである。
+   */
+  readonly labels?: readonly string[] | null;
+  /** assigneeの数値ID。応答に無いか、IDが正の安全な整数でない要素があるときは`null`。 */
+  readonly assigneeIds?: readonly number[] | null;
+  /** レビューを依頼された利用者の数値ID。チームへの依頼は含まない。読めないときは`null`。 */
+  readonly requestedReviewerIds?: readonly number[] | null;
+  /** チームへのレビューの依頼があるか。`requested_teams`が空なら偽、読めないときは`null`。 */
+  readonly teamReviewRequested?: boolean | null;
+  /** レビューを依頼されたチームの数値ID。読めないときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly requestedTeamIds?: readonly number[] | null;
+  /** headのコミットのSHA。応答に無いときは`null`。省略可能な理由は`baseRef`と同じ。 */
+  readonly headSha?: string | null;
 };
 
 function isOpenPullRequestPayload(value: unknown): value is {
   number: number;
   draft: boolean;
-  head: { ref: string; repo: unknown };
+  head: { ref: string; repo: unknown; sha?: unknown };
   base: { ref?: unknown; repo: { full_name: string } };
   user?: unknown;
   created_at?: unknown;
+  updated_at?: unknown;
+  labels?: unknown;
+  assignees?: unknown;
+  requested_reviewers?: unknown;
+  requested_teams?: unknown;
 } {
   if (!isRecord(value)) return false;
   if (typeof value.number !== "number") return false;
@@ -4554,8 +4502,9 @@ export const OPEN_PULL_REQUESTS_MAX_PAGES = 10;
 
 /**
  * `GET /repos/{owner}/{repo}/pulls?state=open`で、開いているPRを、ページ送りしながらすべて返す。
- * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成の時刻、headとbaseのリポジトリを返す。
- * baseのブランチと作成の時刻は、応答に無くても一覧全体を例外にせず、`null`にする。
+ * 一覧は、PRの番号、下書きか、作者、headのブランチ、baseのブランチ、作成と更新の時刻、headとbaseのリポジトリ、
+ * ラベル、assignee、レビューの依頼先を返す。
+ * baseのブランチ、作成と更新の時刻、ラベル、assignee、レビューの依頼先は、応答に無くても一覧全体を例外にせず、`null`にする。
  * マージ可否は一覧に載らないので、`getPr`で読む。
  * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
  * 一部だけでは、返さなかったPRを「開いていない」と取り違えうるためである。
@@ -4603,7 +4552,46 @@ export async function listOpenPullRequests(
         : null,
     baseRef: typeof entry.base.ref === "string" ? entry.base.ref : null,
     createdAtMs: parseIsoMs(entry.created_at),
+    updatedAtMs: parseIsoMs(entry.updated_at),
+    labels: labelNamesOf(entry.labels),
+    assigneeIds: userIdsOf(entry.assignees),
+    requestedReviewerIds: userIdsOf(entry.requested_reviewers),
+    teamReviewRequested: Array.isArray(entry.requested_teams)
+      ? entry.requested_teams.length > 0
+      : null,
+    requestedTeamIds: userIdsOf(entry.requested_teams),
+    headSha: typeof entry.head.sha === "string" ? entry.head.sha : null,
   }));
+}
+
+/**
+ * `listOpenPullRequests`と同じだが、rate limitの解除を待たずに`GitHubRateLimitError`を投げる。
+ * 人のPRの発見が、PATのcoreの枠を使い切った回に、全体の時間を使わないために使う。
+ */
+export async function listOpenPullRequestsWithoutWait(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
+): Promise<OpenPullRequest[]> {
+  validateOwnerRepo(owner, repo);
+  return listOpenPullRequests(
+    noWaitClient(client, `repos/${owner}/${repo}/pulls`),
+    owner,
+    repo,
+    maxPages,
+  );
+}
+
+/** ラベルの名前を読む。配列でないとき、名前が文字列でない要素があるときは`null`にする。 */
+function labelNamesOf(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const names: string[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.name !== "string") return null;
+    names.push(entry.name);
+  }
+  return names;
 }
 
 /** ISO 8601の文字列をepochミリ秒にする。文字列でないか、日付として読めなければ`null`。 */

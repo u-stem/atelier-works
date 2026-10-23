@@ -22,7 +22,7 @@
 // 1つの行の判定は、実行を読む、PRのheadを読む、判定する、の順に行う。
 // 先にPRのheadを読むと、読んでいる間に進んだheadの実行を、今のheadの失敗として扱ってしまう。
 
-import { isRepoAllowed } from "./config.ts";
+import { configuredRepos, isRepoAllowed } from "./config.ts";
 import type {
   ClaimPrCiCheckInput,
   NewPrCiCheck,
@@ -31,18 +31,18 @@ import type {
 } from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
-  judgeGhOwnerCoverage,
+  type GhOwnerRepoJudgement,
+  isArchivedWithinFreshness,
   judgeGhOwnerRepos,
   judgeGhRepoFreshness,
-  requiredRepos,
+  skippedStaleReasons,
   usableGhPullRequests,
   usableTableRows,
 } from "./gh_collect_read.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
-  type OpenAuthoredPrSearchItem,
-  type OpenAuthoredPrsScope,
+  type OpenPullRequest,
   type PrCommitMessages,
   type PrHeadWorkflowRuns,
   type PrHeadWorkflowRunsOptions,
@@ -69,6 +69,7 @@ import {
 import {
   type HumanPrCandidate,
   humanPrAuthors,
+  humanPrCandidatesFromOpenList,
   humanPrCandidatesFromRows,
   isAllowedPrAuthor,
   isHumanPrCandidate,
@@ -110,7 +111,6 @@ import {
   type FactoryOwner,
   type GhOwnerOpenPrSnapshot,
   type GhRepoOpenPrSnapshot,
-  type GhSource,
   type NoticeRecord,
 } from "./types.ts";
 
@@ -165,7 +165,7 @@ export const HUMAN_PR_READ_LIMIT = 60;
 export const HUMAN_RECHECK_LIMIT = 40;
 
 /**
- * 人のPRの発見(検索とPRの読み取り)に使える時間。
+ * 人のPRの発見(表と一覧の読み取りと、PRの読み取り)に使える時間。
  * 判定と起動の時間を、人のPRの発見が食わないようにする。
  */
 export const HUMAN_DISCOVERY_BUDGET_MS = 30_000;
@@ -277,8 +277,9 @@ export function buildRecoveryRepoGates(
  * 人のPRの発見の依存を組む。設定が偽のときは、PATのアカウントを読まずに`undefined`を返す。
  * PATのアカウントを読めなかったときも`undefined`を返し、失敗を記録する。人のPRの発見だけを飛ばし、
  * FactoryのPRの監視は止めないためである。
- * 検索する範囲は、照合を通ったオーナーである。`factory_repo`のオーナーがその中に無ければ、
- * `factory_repo`のリポジトリを足す。`factory_repo`は許可リストに関わらず常に対象だからである。
+ * 表で探す範囲は、照合を通ったオーナーである。設定で明示したリポジトリ(`factory_repo`と`repo_allowlist`の項目)は、
+ * 別に渡す。`factory_repo`は許可リストに関わらず常に対象で、`owners`の外にもありうる。
+ * `factory_repo`を読めないときは、失敗を記録して、そのほかの範囲で発見を続ける。
  */
 export async function buildHumanDiscovery(input: {
   readonly config: Pick<
@@ -289,14 +290,14 @@ export async function buildHumanDiscovery(input: {
     | "factory_repo"
     | "repo_allowlist"
   >;
-  readonly source: PrCiHumanDiscoveryDeps["source"];
+  readonly useTable: PrCiHumanDiscoveryDeps["useTable"];
   readonly staleAfterMs: PrCiHumanDiscoveryDeps["staleAfterMs"];
   readonly readOwnerPrs: PrCiHumanDiscoveryDeps["readOwnerPrs"];
   readonly readRepoPrs: PrCiHumanDiscoveryDeps["readRepoPrs"];
+  readonly listOpenPrs: PrCiHumanDiscoveryDeps["listOpenPrs"];
   readonly verifiedOwners: readonly FactoryOwner[];
   readonly getViewer: () => Promise<Viewer>;
   readonly getPr: PrCiHumanDiscoveryDeps["getPr"];
-  readonly search: PrCiHumanDiscoveryDeps["search"];
   readonly recordFailure: (step: string, err: unknown) => Promise<void>;
 }): Promise<PrCiHumanDiscoveryDeps | undefined> {
   const { config } = input;
@@ -308,30 +309,21 @@ export async function buildHumanDiscovery(input: {
     await input.recordFailure("human_discovery_viewer", err);
     return undefined;
   }
-  const scopes: OpenAuthoredPrsScope[] = input.verifiedOwners.map((owner) => ({
-    kind: "owner",
-    owner: owner.name,
-    ownerKind: owner.kind,
-  }));
   try {
-    const factoryRepo = parseGitHubRepoUrl(config.factory_repo);
-    const searched = input.verifiedOwners.some(
-      (owner) => owner.name.toLowerCase() === factoryRepo.owner.toLowerCase(),
-    );
-    if (!searched) scopes.push({ kind: "repo", ...factoryRepo });
+    parseGitHubRepoUrl(config.factory_repo);
   } catch (err) {
     await input.recordFailure("human_discovery_factory_repo", err);
   }
   return {
     policy: labelerPolicyFor(viewer.login, config),
-    scopes,
-    getPr: input.getPr,
-    search: input.search,
-    source: input.source,
+    scopes: input.verifiedOwners.map((owner) => ({ owner: owner.name })),
+    explicitRepos: configuredRepos(config),
+    useTable: input.useTable,
     staleAfterMs: input.staleAfterMs,
     readOwnerPrs: input.readOwnerPrs,
     readRepoPrs: input.readRepoPrs,
-    requiredReposOf: (owner) => requiredRepos(config, owner),
+    listOpenPrs: input.listOpenPrs,
+    getPr: input.getPr,
   };
 }
 
@@ -406,14 +398,28 @@ export type PrCiClaimDeps = {
   readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
 };
 
+/** 収集の表で探す所有者の範囲。 */
+export type HumanOwnerScope = {
+  /** 所有者の名前。 */
+  readonly owner: string;
+};
+
+/** 設定で明示したリポジトリ。 */
+export type HumanExplicitRepo = {
+  readonly owner: string;
+  readonly repo: string;
+};
+
 /**
  * 許可された人が作ったPRを見つけて記録する依存。渡さなければ見つけない。
  * 作者は、`policy`のPATのアカウントと許可されたログイン名である。
  */
 export type PrCiHumanDiscoveryDeps = {
   readonly policy: LabelerPolicy;
-  /** 検索する範囲。オーナーごと、または`factory_repo`のリポジトリ。 */
-  readonly scopes: readonly OpenAuthoredPrsScope[];
+  /** 収集の表で探す所有者。オーナーの照合を通ったものである。 */
+  readonly scopes: readonly HumanOwnerScope[];
+  /** 設定で明示したリポジトリ(`factory_repo`と`repo_allowlist`の項目)。表を使えないときは、RESTの一覧で読む。 */
+  readonly explicitRepos: readonly HumanExplicitRepo[];
   /**
    * 見つかったPRを読む。rate limitのときは、待たずに`GitHubRateLimitError`を投げる(`getPrWithoutWait`)。
    * FactoryのPRの読み取り(`PrCiWatchDeps.getPr`)とは分ける。人のPRの発見が、解除を待って全体の時間を使わないためである。
@@ -424,26 +430,24 @@ export type PrCiHumanDiscoveryDeps = {
     number: number,
   ) => Promise<PullRequest>;
   /**
-   * 範囲と作者で、開いていて下書きでないPRを検索する(`searchOpenAuthoredPrs`)。
-   * rate limitのときは、待たずに`GitHubRateLimitError`を投げる。
+   * リポジトリの開いているPRをすべて返す(`listOpenPullRequestsWithoutWait`)。
+   * rate limitのときは、待たずに`GitHubRateLimitError`を投げる。多すぎて読み切れないときは例外を投げる。
    */
-  readonly search: (
-    scope: OpenAuthoredPrsScope,
-    author: string,
-  ) => Promise<OpenAuthoredPrSearchItem[]>;
-  /** 実効の読み取り元。 */
-  readonly source: GhSource;
+  readonly listOpenPrs: (
+    owner: string,
+    repo: string,
+  ) => Promise<OpenPullRequest[]>;
+  /** 収集の表を読んでよいか(収集の2つの設定が真か)。偽なら表を読まず、明示したリポジトリだけをRESTの一覧で読む。 */
+  readonly useTable: boolean;
   /** 収集の記録を使わずに止める閾値(ミリ秒)。 */
   readonly staleAfterMs: number;
   /** 所有者のPRの行を、リポジトリの行と合わせて1つの文で読む。 */
   readonly readOwnerPrs: (owner: string) => Promise<GhOwnerOpenPrSnapshot>;
-  /** 1つのリポジトリのPRの行を、リポジトリの行と合わせて1つの文で読む。 */
+  /** 1つのリポジトリのPRの行を、リポジトリの行と合わせて1つの文で読む。所有者の範囲に入らない明示リポジトリに使う。 */
   readonly readRepoPrs: (
     owner: string,
     repo: string,
   ) => Promise<GhRepoOpenPrSnapshot>;
-  /** 設定で明示したリポジトリのうち、その所有者のものの小文字の名前。 */
-  readonly requiredReposOf: (owner: string) => ReadonlySet<string>;
 };
 
 export type PrCiWatchDeps = {
@@ -563,16 +567,20 @@ export type PrCiWatchResult = {
   readonly denied: number;
   /** 例外で処理できなかった数。 */
   readonly errors: number;
-  /** 人のPRの発見の実効の読み取り元。発見を行わなかった回は`search`。 */
-  readonly human_source: GhSource;
-  /** 表を使えずに検索に戻し、実際に検索した範囲の数。飛ばした範囲は数えない。 */
-  readonly human_fallback_searches: number;
-  /** 表を使えなかった範囲の、理由ごとの数。検索を飛ばした範囲も数える。 */
-  readonly human_fallback_reasons: Readonly<Record<string, number>>;
+  /** 収集が無効で表を読まなかったか。真の間は、設定で明示したリポジトリ以外の人のPRを見つけられない。 */
+  readonly human_collect_disabled: boolean;
+  /** 表が新しくないため、処理せず見送った、明示でないリポジトリの数。 */
+  readonly human_skipped_stale: number;
+  /** 見送った理由ごとのリポジトリの数。理由は表の鮮度の判定の語である。 */
+  readonly human_skipped_stale_reasons: Readonly<Record<string, number>>;
+  /** 表の代わりにRESTの一覧で読んだ、明示のリポジトリの数。読めなかった一覧も数える。 */
+  readonly human_rest_lists: number;
+  /** 一覧で読んだ理由ごとのリポジトリの数。表の鮮度の判定の語に、`read_failed`と`collect_disabled`を足したもの。 */
+  readonly human_rest_reasons: Readonly<Record<string, number>>;
+  /** 時間の予算かrate limitで読み残した、所有者とリポジトリの数。次の回に回る。 */
+  readonly human_deferred: number;
   /** 表から候補にした、作者の分かる候補の数。 */
   readonly human_table_candidates: number;
-  /** 人のPRの検索がrate limitに当たった回数。 */
-  readonly human_search_rate_limited: number;
 };
 
 /**
@@ -593,17 +601,22 @@ export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   notified: 0,
   denied: 0,
   errors: 0,
-  human_source: "search",
-  human_fallback_searches: 0,
-  human_fallback_reasons: Object.freeze({}),
+  human_collect_disabled: false,
+  human_skipped_stale: 0,
+  human_skipped_stale_reasons: Object.freeze({}),
+  human_rest_lists: 0,
+  human_rest_reasons: Object.freeze({}),
+  human_deferred: 0,
   human_table_candidates: 0,
-  human_search_rate_limited: 0,
 };
 
 type Counters = Omit<
   { -readonly [K in keyof PrCiWatchResult]: PrCiWatchResult[K] },
-  "human_fallback_reasons"
-> & { human_fallback_reasons: Record<string, number> };
+  "human_skipped_stale_reasons" | "human_rest_reasons"
+> & {
+  human_skipped_stale_reasons: Record<string, number>;
+  human_rest_reasons: Record<string, number>;
+};
 
 type WatchState = {
   /** rate limitに当たったら、今回はそれ以上GitHubを読まない。 */
@@ -771,7 +784,11 @@ function newContext(deps: PrCiWatchDeps): Context {
     deps,
     now: deps.now(),
     // 理由の表は、凍結した定数と共有せず、回ごとに新しく作る。
-    counters: { ...PR_CI_WATCH_IDLE_RESULT, human_fallback_reasons: {} },
+    counters: {
+      ...PR_CI_WATCH_IDLE_RESULT,
+      human_skipped_stale_reasons: {},
+      human_rest_reasons: {},
+    },
     state: {
       rateLimited: false,
       failedStarted: 0,
@@ -1015,13 +1032,8 @@ async function recordPrHead(
   return added;
 }
 
-/** 検索の範囲を、失敗の記録の手順名に使う短い名前にする。 */
-function humanScopeLabel(scope: OpenAuthoredPrsScope): string {
-  return scope.kind === "repo" ? `${scope.owner}/${scope.repo}` : scope.owner;
-}
-
-/** 候補の出所。表の候補にだけ、応答のリポジトリの一致の確かめと404の扱いを足す。 */
-type HumanHit = HumanPrCandidate & { readonly origin: "table" | "search" };
+/** 候補の出所。表の候補にだけ、404と403の扱いを足す。 */
+type HumanHit = HumanPrCandidate & { readonly origin: "table" | "rest" };
 
 function withOrigin(
   candidates: readonly HumanPrCandidate[],
@@ -1030,60 +1042,140 @@ function withOrigin(
   return candidates.map((candidate) => ({ ...candidate, origin }));
 }
 
-/** 検索を続けてよいか。rate limitか時間の予算で閉じたら、以降の検索を飛ばす。 */
-type HumanSearchState = { open: boolean };
+/** 理由ごとの件数に1を足す。 */
+function countReason(counts: Record<string, number>, reason: string): void {
+  counts[reason] = (counts[reason] ?? 0) + 1;
+}
 
-/** 表から範囲を読んだ結果。使えなければ、検索に戻す理由を持つ。 */
-type HumanTableRead =
-  | { readonly kind: "rows"; readonly candidates: HumanPrCandidate[] }
-  | { readonly kind: "stale"; readonly reason: string };
+/** 所有者の表の読み取りの結果。 */
+type OwnerTable =
+  | {
+      readonly kind: "read";
+      readonly judged: ReadonlyMap<string, GhOwnerRepoJudgement>;
+      readonly dbNow: Date;
+    }
+  | { readonly kind: "failed" }
+  | { readonly kind: "deferred" };
+
+/** 1回の発見の途中で持つ状態。 */
+type HumanRun = {
+  readonly human: PrCiHumanDiscoveryDeps;
+  readonly authors: readonly string[];
+  readonly found: HumanHit[];
+  readonly outOfTime: () => boolean;
+  /** RESTの一覧を続けてよいか。rate limitで閉じる。 */
+  listOpen: boolean;
+  /** 時間の予算で止めたことを、ログに残したか。 */
+  stoppedByTime: boolean;
+};
+
+/** 時間の予算で止めた段。候補を集める段(表と一覧の読み取り)と、候補のPRを読み直す段である。 */
+type HumanStage = "collect_candidates" | "read_prs";
+
+/** 時間の予算で止めたことを、段ごとに1回の発見で1度だけログに残す。 */
+function noteStoppedByTime(context: Context, run: HumanRun): void {
+  if (run.stoppedByTime) return;
+  run.stoppedByTime = true;
+  warnStoppedByTime(context, "collect_candidates");
+}
+
+function warnStoppedByTime(context: Context, stage: HumanStage): void {
+  context.deps.log.warn("pr ci human discovery stopped by the time budget", {
+    stage,
+  });
+}
 
 /**
- * 範囲を表で探す。オーナーはリポジトリごとの判定を、リポジトリの範囲はその1つの判定を当てる。
- * 読めなかった範囲は、失敗として記録して検索に戻す。鮮度の不足は失敗にしない。
- * 収集の停止は鮮度の監視が知らせ、戻した回数と理由は結果に出る。
+ * 所有者の全体を表で読み、記録が新しいリポジトリの候補を集める。読めた所有者の判定は返す。
+ * 記録が新しくなく、設定でも明示していないリポジトリは、処理せず理由別に数える。失敗にはしない。
+ * 収集の停止は鮮度の監視が知らせ、見送った数と理由は結果に出る。
+ * 読めなかった所有者は、失敗として記録する。時間の予算が尽きた後の所有者は、読まずに数える。
  */
-async function readHumanTable(
+async function readHumanOwnerTables(
   context: Context,
-  human: PrCiHumanDiscoveryDeps,
-  scope: OpenAuthoredPrsScope,
-  authors: readonly string[],
-): Promise<HumanTableRead> {
-  const { deps } = context;
-  if (scope.kind === "owner") {
+  run: HumanRun,
+  explicitNames: ReadonlyMap<string, ReadonlySet<string>>,
+): Promise<Map<string, OwnerTable>> {
+  const { deps, counters } = context;
+  const { human } = run;
+  const tables = new Map<string, OwnerTable>();
+  if (!human.useTable) return tables;
+  for (const scope of human.scopes) {
+    const ownerKey = scope.owner.toLowerCase();
+    if (run.outOfTime()) {
+      noteStoppedByTime(context, run);
+      counters.human_deferred += 1;
+      tables.set(ownerKey, { kind: "deferred" });
+      continue;
+    }
     let snapshot: GhOwnerOpenPrSnapshot;
     try {
       snapshot = await human.readOwnerPrs(scope.owner);
     } catch (err) {
       await recordFailureOf(context, `read_gh_owner_prs:${scope.owner}`, err);
-      return { kind: "stale", reason: "read_failed" };
+      tables.set(ownerKey, { kind: "failed" });
+      continue;
     }
     const judged = judgeGhOwnerRepos(scope.owner, snapshot, human.staleAfterMs);
-    const coverage = judgeGhOwnerCoverage(
+    tables.set(ownerKey, { kind: "read", judged, dbNow: snapshot.db_now });
+    const rows = usableTableRows(scope.owner, judged, deps.isRepoAllowed);
+    run.found.push(
+      ...withOrigin(humanPrCandidatesFromRows(rows, run.authors), "table"),
+    );
+    for (const reason of skippedStaleReasons(
       scope.owner,
       judged,
+      explicitNames.get(ownerKey) ?? new Set(),
       deps.isRepoAllowed,
-      human.requiredReposOf(scope.owner),
-    );
-    if (coverage.kind === "stale") {
-      return { kind: "stale", reason: coverage.reason };
+    )) {
+      counters.human_skipped_stale += 1;
+      countReason(counters.human_skipped_stale_reasons, reason);
     }
-    const rows = usableTableRows(scope.owner, judged, deps.isRepoAllowed);
-    return {
-      kind: "rows",
-      candidates: humanPrCandidatesFromRows(rows, authors),
-    };
+  }
+  return tables;
+}
+
+/** 明示したリポジトリの読み方。表の行で足りるか、時間切れで読み残すか、理由を付けてRESTの一覧で読むか。 */
+type ExplicitRead =
+  | { readonly kind: "covered" }
+  | { readonly kind: "deferred" }
+  | { readonly kind: "list"; readonly reason: string };
+
+/**
+ * 所有者の範囲に入らない明示リポジトリを、そのリポジトリの行で読む。`owners`の外の`factory_repo`がこれに当たる。
+ * 記録が新しければ、その行から候補を集める。archive済みの印は、記録が鮮度の内にあるときだけ信用して読まない。
+ * 古い記録の印は、解除された後も残りうる。
+ */
+async function readHumanRepoTable(
+  context: Context,
+  run: HumanRun,
+  entry: HumanExplicitRepo,
+): Promise<ExplicitRead> {
+  const { human } = run;
+  if (run.outOfTime()) {
+    noteStoppedByTime(context, run);
+    return { kind: "deferred" };
   }
   let snapshot: GhRepoOpenPrSnapshot;
   try {
-    snapshot = await human.readRepoPrs(scope.owner, scope.repo);
+    snapshot = await human.readRepoPrs(entry.owner, entry.repo);
   } catch (err) {
     await recordFailureOf(
       context,
-      `read_gh_repo_prs:${scope.owner}/${scope.repo}`,
+      `read_gh_repo_prs:${entry.owner}/${entry.repo}`,
       err,
     );
-    return { kind: "stale", reason: "read_failed" };
+    return { kind: "list", reason: "read_failed" };
+  }
+  if (
+    snapshot.repo !== null &&
+    isArchivedWithinFreshness(
+      { ...snapshot.repo, repo: entry.repo.toLowerCase() },
+      snapshot.db_now,
+      human.staleAfterMs,
+    )
+  ) {
+    return { kind: "covered" };
   }
   const freshness = judgeGhRepoFreshness(
     snapshot.repo,
@@ -1092,95 +1184,108 @@ async function readHumanTable(
     human.staleAfterMs,
   );
   if (freshness.kind === "stale") {
-    return { kind: "stale", reason: freshness.reason };
+    return { kind: "list", reason: freshness.reason };
   }
   const repoId = snapshot.repo?.repo_id ?? null;
   const rows =
     repoId === null
       ? []
-      : usableGhPullRequests(scope.owner, scope.repo, repoId, snapshot.prs);
-  return {
-    kind: "rows",
-    candidates: humanPrCandidatesFromRows(rows, authors),
-  };
+      : usableGhPullRequests(entry.owner, entry.repo, repoId, snapshot.prs);
+  run.found.push(
+    ...withOrigin(humanPrCandidatesFromRows(rows, run.authors), "table"),
+  );
+  return { kind: "covered" };
 }
 
 /**
- * 範囲を作者ごとに検索し、見つかったPRを候補にする。検索を1回でも呼んだかも返す。
- * rate limitの検索は数えて閉じる。範囲がオーナーで一部の作者だけが拒まれた(422)ときは、
- * 改名や削除とみなして、その作者を飛ばし、警告のログに残す。
- * 範囲がリポジトリのときと、範囲の全員が拒まれたときは、失敗として記録する。
+ * 明示したリポジトリを、表で足りるか、RESTの一覧で読むかに分ける。
+ * 収集が無効のときと、表を読めなかったときは、一覧で読む。明示したリポジトリは、表から外れる道が多く、
+ * 読めないままにすると、通知なしに止まるためである。
+ * 所有者の表を読めたときは、行が無いか記録が新しくないものを一覧で読む。
+ * archive済みの印は、記録が鮮度の内にあるときだけ信用して読まない。
  */
-async function searchHumanScope(
+async function planExplicitRead(
   context: Context,
-  human: PrCiHumanDiscoveryDeps,
-  scope: OpenAuthoredPrsScope,
-  authors: readonly string[],
-  search: HumanSearchState,
-  outOfTime: () => boolean,
-): Promise<{ attempted: boolean; candidates: HumanPrCandidate[] }> {
-  const { deps } = context;
-  const candidates: HumanPrCandidate[] = [];
-  const rejected: { author: string; error: GitHubHttpError }[] = [];
-  let attempted = false;
-  for (const author of authors) {
-    if (!search.open) break;
-    if (outOfTime()) {
-      deps.log.warn("pr ci human search stopped by the time budget");
-      search.open = false;
-      break;
-    }
-    attempted = true;
-    try {
-      for (const item of await human.search(scope, author)) {
-        candidates.push({
-          owner: item.owner,
-          repo: item.repo,
-          number: item.number,
-          updatedAtMs: item.updatedAtMs,
-          authorUnknown: false,
-        });
-      }
-    } catch (err) {
-      if (err instanceof GitHubRateLimitError) {
-        deps.log.warn("pr ci human search stopped by the rate limit", {
-          error: errorMessage(err),
-        });
-        context.counters.human_search_rate_limited += 1;
-        search.open = false;
-        break;
-      }
-      if (
-        scope.kind === "owner" &&
-        err instanceof GitHubHttpError &&
-        err.status === 422
-      ) {
-        rejected.push({ author, error: err });
-        continue;
-      }
-      await recordFailureOf(
-        context,
-        `search_human_prs:${humanScopeLabel(scope)}:${author}`,
-        err,
-      );
-    }
+  run: HumanRun,
+  tables: ReadonlyMap<string, OwnerTable>,
+  entry: HumanExplicitRepo,
+): Promise<ExplicitRead> {
+  const { human } = run;
+  if (!human.useTable) return { kind: "list", reason: "collect_disabled" };
+  const table = tables.get(entry.owner.toLowerCase());
+  if (table === undefined) return readHumanRepoTable(context, run, entry);
+  if (table.kind === "deferred") return { kind: "deferred" };
+  if (table.kind === "failed") return { kind: "list", reason: "read_failed" };
+  const item = table.judged.get(entry.repo.toLowerCase());
+  if (item === undefined) return { kind: "list", reason: "no_record" };
+  if (isArchivedWithinFreshness(item.row, table.dbNow, human.staleAfterMs)) {
+    return { kind: "covered" };
   }
-  const firstRejected = rejected[0];
-  if (firstRejected === undefined) return { attempted, candidates };
-  if (rejected.length === authors.length) {
-    // 範囲の全員が拒まれたのは、作者の改名や削除ではなく、範囲の側の問題かもしれない。
+  if (item.freshness.kind === "stale") {
+    return { kind: "list", reason: item.freshness.reason };
+  }
+  return { kind: "covered" };
+}
+
+/**
+ * 明示したリポジトリの開いているPRをRESTの一覧で読み、候補を集める。
+ * rate limitに拒まれたら、失敗にはせず、以降の一覧を止める。読み残したリポジトリは数える。
+ * 時間の予算が尽きた後のリポジトリも、読まずに数える。
+ */
+async function listHumanRepo(
+  context: Context,
+  run: HumanRun,
+  entry: HumanExplicitRepo,
+  reason: string,
+): Promise<void> {
+  const { deps, counters } = context;
+  if (!run.listOpen) {
+    counters.human_deferred += 1;
+    return;
+  }
+  if (run.outOfTime()) {
+    noteStoppedByTime(context, run);
+    counters.human_deferred += 1;
+    return;
+  }
+  counters.human_rest_lists += 1;
+  countReason(counters.human_rest_reasons, reason);
+  let open: OpenPullRequest[];
+  try {
+    open = await run.human.listOpenPrs(entry.owner, entry.repo);
+  } catch (err) {
+    if (err instanceof GitHubRateLimitError) {
+      deps.log.warn("pr ci human list stopped by the rate limit", {
+        error: errorMessage(err),
+      });
+      run.listOpen = false;
+      counters.human_deferred += 1;
+      return;
+    }
     await recordFailureOf(
       context,
-      `search_human_prs:${humanScopeLabel(scope)}`,
-      firstRejected.error,
+      `list_open_prs:${entry.owner}/${entry.repo}`,
+      err,
     );
-  } else {
-    deps.log.warn("pr ci human search skipped authors that GitHub rejected", {
-      scope: humanScopeLabel(scope),
-      authors: rejected.map((entry) => entry.author),
-    });
+    return;
   }
-  return { attempted, candidates };
+  run.found.push(
+    ...withOrigin(
+      humanPrCandidatesFromOpenList(entry.owner, entry.repo, open, run.authors),
+      "rest",
+    ),
+  );
+}
+
+/** 記録が通す名前か。通さない名前のリポジトリは、読まない。 */
+function hasReadableNames(entry: HumanExplicitRepo): boolean {
+  try {
+    assertGitHubName(entry.owner);
+    assertGitHubName(entry.repo);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1203,17 +1308,18 @@ function countTableCandidates(
 /**
  * 許可された人が作ったPRの候補を見つけ、見つかったPRの今のheadを記録する。
  * 行の`work_item_id`はNULLにする。追跡対象のFactoryのPRと、Factoryの実装ブランチの形のブランチは記録しない。
- * 候補は範囲(`scopes`)ごとに、読み取り元で見つける。
- * - `search`: 範囲と作者ごとに1回、1ページだけ検索する。
- * - `db`: 範囲を収集の表で探す。表を使えない範囲だけ、検索に戻す。使えないのは次のときである。
- *   表を読めなかった(失敗として記録する)、記録が古い、設定で明示したリポジトリを表で使えない(失敗にはしない)。
- *   戻した理由は結果の`human_fallback_reasons`に数える。
- * 検索がrate limitで拒まれても、全体のrate limitにはせず、残りの検索を止める。表を使える範囲は読み続け、
- * 検索を飛ばした範囲は理由`search_rate_limited`で数える。時間の予算が尽きた後の範囲は、読まずに理由`out_of_time`で数える。
- * 範囲がオーナーで、一部の作者だけが検索を拒まれた(422)ときは、改名や削除とみなして、その作者の検索を飛ばし、
- * 警告のログに残す。範囲がリポジトリのときと、範囲の全員が拒まれたときは、失敗として記録する。
+ * 候補は次の元から集める。
+ * - 収集の表: 照合を通った所有者ごとに全体を読み、リポジトリごとに鮮度を判定して、新しいリポジトリの行だけを候補にする。
+ *   新しくなく、設定で明示してもいないリポジトリは、処理せず結果の`human_skipped_stale`に理由別に数える。
+ * - RESTの一覧: 設定で明示したリポジトリ(`factory_repo`と`repo_allowlist`の項目)のうち、表が新しくないものを読む。
+ *   表を読めなかったとき(失敗として記録する)と、収集が無効のときも読む。
+ *   `owners`の外の`factory_repo`は、所有者の表に行が無いので、そのリポジトリの行を読み、新しくなければ一覧で読む。
+ *   一覧は作者のログイン名と下書きで候補を絞り、アカウントの種別は読み直した値で確かめる。
+ * 一覧がrate limitで拒まれても、全体のrate limitにはせず、残りの一覧を止める。表の候補は読み続ける。
+ * 時間の予算が尽きた後の所有者とリポジトリは、読まずに`human_deferred`に数える。
  * 候補は、作者の分かる候補を更新の新しい順に、その後に作者の分からない候補を新しい順に並べて読む。
- * 表の候補は、PRを読んだ応答のリポジトリが候補と違えば記録せず、404と403なら通知を作らずにログに残す。
+ * 一覧の候補の並びには、更新の時刻の代わりに作成の時刻を使う。
+ * 候補のPRを読んだ応答のリポジトリが候補と違えば記録しない。表の候補の404と403は、通知を作らずにログに残す。
  * FactoryのPRの判定と起動を人のPRの発見が遅らせないよう、起動の後に置き、全体の経過時間と
  * `HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。ここで記録した行の判定は、次の回に行う。
  * 新しく記録した行と、`reopen`した行の数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
@@ -1227,63 +1333,42 @@ async function discoverHuman(context: Context): Promise<void> {
   const trackedPrKeys = state.trackedPrKeys;
   if (human === undefined || trackedPrKeys === null) return;
   if (state.rateLimited || overBudget(context)) return;
-  context.counters.human_source = human.source;
+  context.counters.human_collect_disabled = !human.useTable;
   const startedAt = deps.now().getTime();
   const outOfTime = (): boolean =>
     overBudget(context) ||
     deps.now().getTime() - startedAt >= HUMAN_DISCOVERY_BUDGET_MS;
 
-  const found: HumanHit[] = [];
-  const authors = humanPrAuthors(human.policy);
-  const search: HumanSearchState = { open: true };
-  const countFallback = (reason: string): void => {
-    const reasons = context.counters.human_fallback_reasons;
-    reasons[reason] = (reasons[reason] ?? 0) + 1;
+  const run: HumanRun = {
+    human,
+    authors: humanPrAuthors(human.policy),
+    found: [],
+    outOfTime,
+    listOpen: true,
+    stoppedByTime: false,
   };
-  let stoppedByTime = false;
-  for (const scope of human.scopes) {
-    if (human.source !== "db") {
-      const searched = await searchHumanScope(
-        context,
-        human,
-        scope,
-        authors,
-        search,
-        outOfTime,
-      );
-      found.push(...withOrigin(searched.candidates, "search"));
-      continue;
-    }
-    if (outOfTime()) {
-      if (!stoppedByTime) {
-        deps.log.warn("pr ci human discovery stopped by the time budget");
-        stoppedByTime = true;
-      }
-      countFallback("out_of_time");
-      continue;
-    }
-    const table = await readHumanTable(context, human, scope, authors);
-    if (table.kind === "rows") {
-      found.push(...withOrigin(table.candidates, "table"));
-      continue;
-    }
-    if (!search.open) {
-      countFallback("search_rate_limited");
-      continue;
-    }
-    countFallback(table.reason);
-    const searched = await searchHumanScope(
-      context,
-      human,
-      scope,
-      authors,
-      search,
-      outOfTime,
-    );
-    if (searched.attempted) context.counters.human_fallback_searches += 1;
-    found.push(...withOrigin(searched.candidates, "search"));
+  const found = run.found;
+  // 設定で明示したリポジトリのうち、読む時点で許されるもの。許されないものは表にも一覧にも使わない。
+  const explicit = human.explicitRepos.filter((entry) =>
+    deps.isRepoAllowed(entry.owner.toLowerCase(), entry.repo.toLowerCase()),
+  );
+  const explicitNames = new Map<string, Set<string>>();
+  for (const entry of explicit) {
+    const ownerKey = entry.owner.toLowerCase();
+    const names = explicitNames.get(ownerKey) ?? new Set<string>();
+    names.add(entry.repo.toLowerCase());
+    explicitNames.set(ownerKey, names);
   }
-  // 作者の分からない候補は末尾に回す。検索が返さない候補が、読む枠を先に使わないためである。
+  const tables = await readHumanOwnerTables(context, run, explicitNames);
+  for (const entry of explicit.filter(hasReadableNames)) {
+    const plan = await planExplicitRead(context, run, tables, entry);
+    if (plan.kind === "deferred") {
+      context.counters.human_deferred += 1;
+    } else if (plan.kind === "list") {
+      await listHumanRepo(context, run, entry, plan.reason);
+    }
+  }
+  // 作者の分からない候補は末尾に回す。作者を確かめられた候補が、読む枠を先に使えるようにするためである。
   const newestFirst = (a: HumanHit, b: HumanHit): number =>
     b.updatedAtMs - a.updatedAtMs;
   const ordered = [
@@ -1298,10 +1383,21 @@ async function discoverHuman(context: Context): Promise<void> {
   const seen = new Set<string>();
   let reads = 0;
   let added = 0;
-  for (const hit of ordered) {
+  // 時間の予算かrate limitで読み残した候補を、読み残した数に足す。
+  // 数と上限で読まなかった候補は、意図した上限なので足さない。重ねと追跡中のPRは、読まない候補なので足さない。
+  const leftUnread = (from: number): void => {
+    const unread = new Set<string>();
+    for (const rest of ordered.slice(from)) {
+      const key = pullRequestKey(rest);
+      if (!seen.has(key) && !trackedPrKeys.has(key)) unread.add(key);
+    }
+    context.counters.human_deferred += unread.size;
+  };
+  for (const [index, hit] of ordered.entries()) {
     if (added >= HUMAN_PR_LIMIT || reads >= HUMAN_PR_READ_LIMIT) break;
     if (state.rateLimited || outOfTime()) {
-      deps.log.warn("pr ci human discovery stopped by the time budget");
+      warnStoppedByTime(context, "read_prs");
+      leftUnread(index);
       break;
     }
     const ref: PullRequestRef = {
@@ -1327,12 +1423,9 @@ async function discoverHuman(context: Context): Promise<void> {
     try {
       const pr = await human.getPr(ref.owner, ref.repo, ref.number);
       // 名前の付け替えや移管の途中で、別のリポジトリのPRを記録しない。
-      if (
-        hit.origin === "table" &&
-        pr.baseRepoFullName.toLowerCase() !== `${ref.owner}/${ref.repo}`
-      ) {
+      if (pr.baseRepoFullName.toLowerCase() !== `${ref.owner}/${ref.repo}`) {
         deps.log.warn(
-          "pr ci skipped a table candidate that belongs to another repository",
+          "pr ci skipped a candidate that belongs to another repository",
           { repo: repoKey(ref), pr: ref.number },
         );
         continue;
@@ -1352,12 +1445,17 @@ async function discoverHuman(context: Context): Promise<void> {
     } catch (err) {
       if (err instanceof GitHubRateLimitError) {
         deps.log.warn("pr ci human discovery stopped by the rate limit", {
+          stage: "read_prs",
           error: errorMessage(err),
         });
+        // 読もうとして拒まれた候補も、読み残した数に入れる。
+        seen.delete(key);
+        leftUnread(index);
         break;
       }
-      // 読み取りトークンに見えて書き込みのPATに見えないリポジトリは、検索の経路では候補に出ない。
-      // 表の候補の404と403で通知を作ると、検索の経路に無い通知になるので、ログに残すだけにする。
+      // 収集の読み取りトークンに見えて、書き込みのPATに見えないリポジトリがありうる。
+      // 表の候補の404と403は、PATの権限の不足を示すとは限らないので、通知を作らずにログに残すだけにする。
+      // RESTの一覧の候補は、PATが一覧を読めたリポジトリのものなので、読めなければ通知にする。
       if (
         hit.origin === "table" &&
         err instanceof GitHubHttpError &&

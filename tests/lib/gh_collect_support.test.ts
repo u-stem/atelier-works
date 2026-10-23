@@ -819,6 +819,7 @@ describe("planGone", () => {
     last_attempted_at: null,
     truncated: false,
     detail_failed: false,
+    first_seen_at: new Date(NOW),
     ...overrides,
   });
 

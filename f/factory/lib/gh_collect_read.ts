@@ -2,7 +2,7 @@
 // リポジトリごとの鮮度と、使ってよい行の絞り込みを、通信もDBも持たない純粋関数で行う。
 // 記録は、打ち切りや失敗のリポジトリでは古いまま`usable`が真で残るので、読む側は必ず鮮度を判定する。
 
-import { configuredRepos } from "./config.ts";
+import { configuredRepos, isRepoAllowed } from "./config.ts";
 import type {
   FactoryConfig,
   GhDetailOpenRow,
@@ -12,7 +12,9 @@ import type {
   GhOwnerRepoFreshnessRow,
   GhPullRequest,
   GhRepoFreshnessRow,
-  GhSource,
+  GhRepoStaleProbe,
+  GhRepoStaleSnapshot,
+  GhRepoStaleSummary,
 } from "./types.ts";
 
 const MINUTE_MS = 60_000;
@@ -190,7 +192,7 @@ export function judgeGhOwnerRepos(
   );
 }
 
-/** 所有者の判定が見る、リポジトリごとの判定の部分。PRとIssueのどちらの判定も満たす。 */
+/** リポジトリごとの判定の、行と鮮度の部分。PRとIssueのどちらの判定も満たす。 */
 export type GhOwnerRepoCoverageInput = {
   readonly row: GhOwnerRepoFreshnessRow;
   readonly freshness: GhRepoFreshness;
@@ -219,104 +221,54 @@ export function judgeGhOwnerIssueRepos(
   );
 }
 
-export type GhOwnerCoverage =
-  | { readonly kind: "fresh" }
-  | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
-
 /**
- * 所有者の全体を表で探してよいか判定する。検索の`user:`/`org:`の範囲の代わりにできるかを決める。
- * 上から当てて、最初に当たったものを採る。
- * 1. `gh_repos`に所有者の行が無い(`no_record`)。
- * 2. `required`の名前のうち、`gh_repos`に行の無いものがある(`no_record`)。
- * 3. 読む時点の許可が偽のリポジトリは、判定から外す。
- *    記録の`allowed`が偽でも、読む時点で許されるリポジトリは外さず、`unusable`で`stale`にする。
- * 4. archive済みのリポジトリは、判定から外す。読み取り専用で、取得も起動もできない。
- * 5. 一覧から消えた(`gone`が真で`archived`が偽の)リポジトリは、`required`に入っていれば`unusable`で`stale`にし、入っていなければ判定から外す。
- *    外さないと、消したリポジトリを1つ持つ所有者が毎周回検索に戻る。
- * 6. 残りに鮮度の足りないリポジトリがあれば、名前の順で最初のものの理由で`stale`にする。
- * 7. どれでもなければ`fresh`。
- * `required`は、設定で明示したリポジトリの名前である。
- * 呼び出し側にリポジトリ単位の戻し先が無いとき、明示したリポジトリを表で使えないまま`fresh`にすると、
- * 検索なら見つけるものを黙って取りこぼすので、所有者の全体を検索に戻す。
- * 所有者の最新の実行の照合結果は読まない。照合の不一致は収集が配下の行を使えなくし、一時的な失敗は鮮度が閾値で落とす。
+ * 表が新しくなく、見送るリポジトリの、鮮度の判定の理由を返す。
+ * 見送るのは、読む時点で許され、archive済みでも一覧から消えてもおらず、設定で明示してもいないリポジトリである。
  */
-export function judgeGhOwnerCoverage(
-  owner: string,
+export function skippedStaleReasons(
+  ownerName: string,
   judged: ReadonlyMap<string, GhOwnerRepoCoverageInput>,
-  isRepoAllowedNow: (owner: string, repo: string) => boolean,
-  required?: ReadonlySet<string>,
-): GhOwnerCoverage {
-  if (judged.size === 0) {
-    return { kind: "stale", reason: "no_record" };
-  }
-  const requiredNames = new Set(
-    [...(required ?? [])].map((name) => name.toLowerCase()),
-  );
-  for (const name of requiredNames) {
-    if (!judged.has(name)) {
-      return { kind: "stale", reason: "no_record" };
-    }
-  }
-  const names = [...judged.keys()].sort();
-  for (const name of names) {
+  explicitNames: ReadonlySet<string>,
+  isAllowedNow: (owner: string, repo: string) => boolean,
+): string[] {
+  const reasons: string[] = [];
+  for (const name of [...judged.keys()].sort()) {
     const item = judged.get(name);
-    if (item === undefined) {
+    if (
+      item === undefined ||
+      explicitNames.has(name) ||
+      !isAllowedNow(ownerName, item.row.repo) ||
+      item.row.archived ||
+      item.row.gone ||
+      item.freshness.kind !== "stale"
+    ) {
       continue;
     }
-    if (!isRepoAllowedNow(owner, item.row.repo)) {
-      continue;
-    }
-    if (item.row.archived) {
-      continue;
-    }
-    if (item.row.gone) {
-      if (requiredNames.has(name)) {
-        return { kind: "stale", reason: "unusable" };
-      }
-      continue;
-    }
-    if (item.freshness.kind === "stale") {
-      return { kind: "stale", reason: item.freshness.reason };
-    }
+    reasons.push(item.freshness.reason);
   }
-  return { kind: "fresh" };
+  return reasons;
 }
 
 /**
- * 設定と収集の設定から、実際に使う読み取り元を決める。
- * 収集の記録が進まないときに表を読むと古い値で判断するので、収集の2つの設定が真のときだけ`db`にする。
+ * archive済みの印のあるリポジトリの記録が、archiveの印を除いて鮮度の内にあるか。
+ * 真のときだけ、archive済みの印を信用できる。古い記録の印は、解除された後も残りうる。
  */
-export function effectiveGhSource(
-  setting: GhSource,
-  config: Pick<
-    FactoryConfig,
-    "gh_collect_enabled" | "gh_collect_detail_enabled"
-  >,
-): GhSource {
-  return setting === "db" &&
-    config.gh_collect_enabled &&
-    config.gh_collect_detail_enabled
-    ? "db"
-    : "search";
-}
-
-/** 設定で明示したリポジトリのうち、この所有者のものの小文字の名前。 */
-export function requiredRepos(
-  scope: Pick<FactoryConfig, "repo_allowlist" | "factory_repo">,
-  owner: string,
-): Set<string> {
-  const ownerName = owner.toLowerCase();
-  return new Set(
-    configuredRepos(scope)
-      .filter((entry) => entry.owner.toLowerCase() === ownerName)
-      .map((entry) => entry.repo.toLowerCase()),
+export function isArchivedWithinFreshness(
+  row: GhOwnerRepoFreshnessRow,
+  dbNow: Date,
+  staleAfterMs: number,
+): boolean {
+  return (
+    row.archived &&
+    judgeGhRepoFreshness({ ...row, archived: false }, [], dbNow, staleAfterMs)
+      .kind === "fresh"
   );
 }
 
 /**
  * 表の候補にしてよい行を、(リポジトリ、番号)の順に集める。
  * 読む時点で許されないリポジトリ、archive済みのリポジトリ、一覧から消えたリポジトリの行は入れない。
- * 鮮度の足りない所有者はここに来る前に検索へ戻すので、`usable`は使ってよい行だけである。
+ * `usable`は鮮度が足りるリポジトリの使ってよい行だけなので、鮮度の足りないリポジトリは行を出さない。
  */
 export function usableTableRows<T extends { readonly number: number }>(
   owner: string,
@@ -340,4 +292,152 @@ export function usableTableRows<T extends { readonly number: number }>(
     rows.push(...[...item.usable].sort((a, b) => a.number - b.number));
   }
   return rows;
+}
+
+/**
+ * 開いた行の有無と、使える行の有無を、判定が読む行の形に戻す。
+ * 判定は、開いた行が1件以上あり、すべて使えないかだけを見るので、行は1件で足りる。
+ */
+function openRowsOf(
+  probe: GhRepoStaleProbe,
+  open: boolean,
+  usable: boolean,
+): GhDetailOpenRow[] {
+  if (!open) {
+    return [];
+  }
+  return [
+    {
+      owner: probe.owner,
+      repo: probe.repo,
+      repo_id: probe.row?.repo_id ?? 0,
+      state: "open",
+      usable,
+    },
+  ];
+}
+
+/**
+ * リポジトリ1件の鮮度を判定する。PRの行とIssueの行の判定のどちらかが`stale`なら`stale`とし、PRの理由を先に採る。
+ * 下流が読む表はPRとIssueで別々に判定されるので、どちらか一方が使えなければ、そのリポジトリは下流で見送られる。
+ */
+function judgeRepoProbe(
+  probe: GhRepoStaleProbe,
+  dbNow: Date,
+  staleAfterMs: number,
+): GhRepoFreshness {
+  const pullRequests = judgeGhRepoFreshness(
+    probe.row,
+    openRowsOf(probe, probe.pr_open, probe.pr_usable),
+    dbNow,
+    staleAfterMs,
+  );
+  if (pullRequests.kind === "stale") {
+    return pullRequests;
+  }
+  return judgeGhRepoFreshness(
+    probe.row,
+    openRowsOf(probe, probe.issue_open, probe.issue_usable),
+    dbNow,
+    staleAfterMs,
+  );
+}
+
+/**
+ * リポジトリ単位の古さを、所有者ごとに数える。
+ * 数える対象は、`isTarget`が真で、一覧から消えていない(`gone`が偽)、archive済みでないリポジトリである。
+ * 一覧から消えたリポジトリとarchive済みのリポジトリは、下流が読まないので、古くても数えない。
+ * 対象の鮮度は、閾値`staleAfterMs`で`judgeGhRepoFreshness`にかける。
+ * 閾値は下流が記録を使わなくなる閾値より長い、通知の閾値を渡す。
+ * `stale`でも、`first_seen_at`から`staleAfterMs`以内のリポジトリは、新しく一覧に載った猶予として`pending`に数える。
+ * `unsettled`は、閾値`settledAfterMs`(下流が記録を使う閾値)で非`fresh`の対象の数で、猶予の間のものも含む。
+ * 通知は閾値`staleAfterMs`を超えたときに足し、`unsettled`が0になるまで解決しない。
+ * 足す閾値と解決の閾値を分けるので、閾値の付近で通知が足されては解決されることを繰り返さない。
+ * 比べる相手は、行を読んだ同じ文のDBの時刻で、workerの時計とは比べない。
+ * `owners`の全員について、対象が無くても集計を返す。
+ */
+export function summarizeRepoStale(input: {
+  readonly snapshot: GhRepoStaleSnapshot;
+  readonly owners: readonly string[];
+  readonly staleAfterMs: number;
+  /** 解決の判定に使う、下流が記録を使う閾値。`staleAfterMs`以下にする。 */
+  readonly settledAfterMs: number;
+  readonly isTarget: (owner: string, repo: string) => boolean;
+}): GhRepoStaleSummary[] {
+  const { snapshot, staleAfterMs, isTarget } = input;
+  const dbNowMs = snapshot.db_now.getTime();
+  const names = [...new Set(input.owners.map((owner) => owner.toLowerCase()))];
+  return names.map((owner) => {
+    const reasons: Record<GhRepoStaleReason, number> = {
+      no_record: 0,
+      unusable: 0,
+      not_collected: 0,
+      in_future: 0,
+      too_old: 0,
+    };
+    let targets = 0;
+    let stale = 0;
+    let pending = 0;
+    let unsettled = 0;
+    for (const probe of snapshot.probes) {
+      if (probe.owner.toLowerCase() !== owner) {
+        continue;
+      }
+      if (probe.row !== null && (probe.row.gone || probe.row.archived)) {
+        continue;
+      }
+      if (!isTarget(owner, probe.repo)) {
+        continue;
+      }
+      targets += 1;
+      if (
+        judgeRepoProbe(probe, snapshot.db_now, input.settledAfterMs).kind ===
+        "stale"
+      ) {
+        unsettled += 1;
+      }
+      const freshness = judgeRepoProbe(probe, snapshot.db_now, staleAfterMs);
+      if (freshness.kind === "fresh") {
+        continue;
+      }
+      if (dbNowMs - probe.first_seen_at.getTime() <= staleAfterMs) {
+        pending += 1;
+        continue;
+      }
+      stale += 1;
+      reasons[freshness.reason] += 1;
+    }
+    return { owner, targets, stale, pending, unsettled, reasons };
+  });
+}
+
+/**
+ * リポジトリ単位の古さを数える対象かを判定する関数を作る。
+ * 対象は、読む時点で許される(`isRepoAllowed`)リポジトリのうち、明示されていないものである。
+ * 明示された(`factory_repo`と`repo_allowlist`の各項目)リポジトリは、表が使えなくてもRESTで読むので数えない。
+ * `repo_allowlist`が空でなければ、許されるのは明示されたリポジトリだけなので、対象は無くなる。
+ */
+export function repoStaleTargetFilter(
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+): (owner: string, repo: string) => boolean {
+  const explicit = new Set(
+    configuredRepos(config).map((entry) =>
+      `${entry.owner}/${entry.repo}`.toLowerCase(),
+    ),
+  );
+  return (owner, repo) =>
+    isRepoAllowed(config, owner, repo) &&
+    !explicit.has(`${owner}/${repo}`.toLowerCase());
+}
+
+/**
+ * 明示されていないリポジトリがありうるか。
+ * `isRepoAllowed`は、`repo_allowlist`が空のとき`owners`の全リポジトリを許すので、
+ * 所有者がいて`repo_allowlist`が空のときに真になる。
+ * 収集の無効と、トークンの無い所有者の通知は、この述語で出すかを決める。
+ */
+export function nonExplicitReposPossible(
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist">,
+): boolean {
+  return config.owners.length > 0 && config.repo_allowlist.length === 0;
 }

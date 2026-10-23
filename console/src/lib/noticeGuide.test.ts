@@ -32,6 +32,66 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("explains the notice for repositories that are stale while the owner succeeds", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "のリポジトリ:",
+    );
+  });
+
+  test("does not claim what the downstream does with a stale repository", () => {
+    expect(noticeGuide("github_collect_stale").meaning).not.toContain("見送");
+  });
+
+  test("states that a stale record cannot be used downstream", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "下流の判断に使えません",
+    );
+  });
+
+  test("tells to narrow the repositories for a stale repository", () => {
+    expect(noticeGuide("github_collect_stale").action).toContain(
+      "repo_allowlist",
+    );
+  });
+
+  test("reads the repositories of the owner", () => {
+    expect(
+      noticeGuide("github_collect_stale").commands.some((command) =>
+        command.includes("FROM factory.gh_repos WHERE owner = '<所有者>'"),
+      ),
+    ).toBe(true);
+  });
+
+  test("explains the notice for a disabled collection", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "の収集の無効:",
+    );
+  });
+
+  test("says the disabled collection notice stays even when the owner collection succeeds", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "所有者の収集が成功しても解決せず",
+    );
+  });
+
+  test("names the settings that disable the collection", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain(
+      "gh_collect_detail_enabled",
+    );
+  });
+
+  test("tells to list the repositories before keeping the collection off", () => {
+    expect(noticeGuide("github_collect_stale").action).toContain(
+      "repo_allowlistに必要なリポジトリを並べて",
+    );
+  });
+
+  test("tells when the disabled collection notice resolves", () => {
+    expect(noticeGuide("github_collect_stale").note).toContain(
+      "repo_allowlistが空でなくなったとき",
+    );
+  });
+
   test("does not promise a future halt of the Factory", () => {
     expect(noticeGuide("github_collect_stale").meaning).not.toContain("まだ");
   });
@@ -157,6 +217,24 @@ describe("noticeGuide", () => {
 
   test("tells the owner id mismatch also covers an owner missing from owners", () => {
     expect(noticeGuide("owner_id_mismatch").meaning).toContain("ownersに無く");
+  });
+
+  test("tells the owner id mismatch skips the discovery of the owner", () => {
+    expect(noticeGuide("owner_id_mismatch").meaning).toContain(
+      "このオーナーの発見は飛ばし",
+    );
+  });
+
+  test("tells the discovery resumes once the owner id matches", () => {
+    expect(noticeGuide("owner_id_mismatch").note).toContain(
+      "次の回から発見が再開します",
+    );
+  });
+
+  test("does not call the discovery of the owner a search", () => {
+    const guide = noticeGuide("owner_id_mismatch");
+
+    expect(`${guide.meaning}${guide.note ?? ""}`.includes("検索")).toBe(false);
   });
 
   test("falls back to the generic guide for an unknown kind", () => {

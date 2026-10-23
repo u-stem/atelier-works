@@ -1040,6 +1040,8 @@ export type GhRepo = {
   readonly truncated: boolean;
   /** 前回の着手が失敗した。 */
   readonly detail_failed: boolean;
+  /** 収集が最初にこの行を作った時刻。対象外から対象に戻るときだけ、now()に戻る。 */
+  readonly first_seen_at: Date;
 };
 
 /** 一覧に載ったリポジトリの書き込み。`owner`は呼び出し側が別に渡す。 */
@@ -1071,6 +1073,56 @@ export type GhCollectOwnerState = {
   } | null;
   /** `led`が真で`finished_at`のある最新の実行の`started_at`。無ければ`null`。 */
   readonly last_led_at: Date | null;
+};
+
+/**
+ * リポジトリ単位の古さを数えるための、リポジトリ1件分の入力。
+ * `row`が`null`なら`gh_repos`に行が無い。SQLは行のあるリポジトリだけを返す。
+ * 開いた行は中身を読まず、あるか(`*_open`)と、使える行があるか(`*_usable`)だけを持つ。
+ */
+export type GhRepoStaleProbe = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly row: GhRepoFreshnessRow | null;
+  /** `gh_repos`に最初に行ができた時刻。対象外から対象に戻るときだけ、now()に戻る。 */
+  readonly first_seen_at: Date;
+  readonly pr_open: boolean;
+  readonly pr_usable: boolean;
+  readonly issue_open: boolean;
+  readonly issue_usable: boolean;
+};
+
+/** リポジトリ単位の古さを数えるための入力を、1つの文で読んだ結果。 */
+export type GhRepoStaleSnapshot = {
+  readonly db_now: Date;
+  readonly probes: readonly GhRepoStaleProbe[];
+};
+
+/**
+ * 非`fresh`の理由ごとの件数。
+ * `no_record`は、`gh_repos`の行を起点に数えるので、SQLから読んだ入力では0件である。
+ */
+export type GhRepoStaleReasonCounts = {
+  readonly no_record: number;
+  readonly unusable: number;
+  readonly not_collected: number;
+  readonly in_future: number;
+  readonly too_old: number;
+};
+
+/** 所有者1人分の、リポジトリ単位の古さの集計。 */
+export type GhRepoStaleSummary = {
+  readonly owner: string;
+  /** 数える対象のリポジトリの数。 */
+  readonly targets: number;
+  /** 非`fresh`で、最初に見た時刻からの猶予も過ぎたリポジトリの数。 */
+  readonly stale: number;
+  /** 非`fresh`だが、猶予の間のリポジトリの数。 */
+  readonly pending: number;
+  /** 下流が記録を使う閾値(`settledAfterMs`)で非`fresh`のリポジトリの数。猶予の間のものも含む。解決は0件のときだけ行う。 */
+  readonly unsettled: number;
+  /** `stale`の理由ごとの件数。 */
+  readonly reasons: GhRepoStaleReasonCounts;
 };
 
 /** 所有者ごとの、収集の鮮度の判定に使う記録。実行の無い所有者は、時刻と`latest`が`null`の行になる。 */
@@ -1513,9 +1565,9 @@ export type FactoryOwner = {
   kind: FactoryOwnerKind;
   /**
    * GitHubのアカウントの数値ID(正の整数)。
-   * 指定すると、`poll_issues`と`poll_prs`が検索の前に現在のIDと照合する。
+   * 指定すると、`poll_issues`と`poll_prs`が発見の前に現在のIDと照合する。
    * 作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合する。
-   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れず、保存済みの作業項目も進めないため。
+   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを発見の候補に入れず、保存済みの作業項目も進めないため。
    * 省略すると、名前だけで照合する。
    */
   id?: number;
@@ -1529,12 +1581,6 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
  * 承認を経て投稿する仕組みはまだ無い。
  */
 export type ReviewPostMode = "comment_only" | "gated";
-
-/**
- * `gh_source_pr_conflict_watch`、`gh_source_poll_issues`、`gh_source_poll_prs`、`gh_source_pr_ci_watch`の値。下流のscriptが候補を列挙する元で、
- * `search`は検索API、`db`は収集が書いた表を指す。
- */
-export type GhSource = "search" | "db";
 
 /** 投稿しなかったレビューの集計。`since`は、その最初のレビューの記録時刻。 */
 export type GatedReviewStats = {
@@ -1774,27 +1820,6 @@ export type FactoryConfig = {
    * `false`の間は、詳細の要求を送らず、一覧の下限も変えない。`gh_collect_enabled`が`false`なら、この値によらず何もしない。
    */
   gh_collect_detail_enabled: boolean;
-  /**
-   * `watch_pr_conflicts`がリポジトリの発見とPRの列挙を行う元。既定は`search`。
-   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索とREST一覧になる。
-   */
-  gh_source_pr_conflict_watch: GhSource;
-  /**
-   * `poll_issues`がトリガーラベル付きのIssueを見つける元。既定は`search`。
-   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。
-   */
-  gh_source_poll_issues: GhSource;
-  /**
-   * `poll_prs`がラベル、レビューの依頼、assigneeのPRを見つける元。既定は`search`。
-   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。
-   */
-  gh_source_poll_prs: GhSource;
-  /**
-   * `watch_pr_ci`が、許可された人のPRの候補を見つける元。既定は`search`。
-   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、周回全体が検索になる。
-   * 人のPRの発見が有効(`pr_ci_watch_human_prs`が真)のときだけ効く。
-   */
-  gh_source_pr_ci_watch: GhSource;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。

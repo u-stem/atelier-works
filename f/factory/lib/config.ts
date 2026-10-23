@@ -7,7 +7,6 @@ import {
   type FactoryConfig,
   type FactoryOwner,
   type FactoryOwnerKind,
-  type GhSource,
   isBoolean,
   isNumber,
   isOneOf,
@@ -33,7 +32,6 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
   "COLLABORATOR",
 ];
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
-const GH_SOURCES: readonly GhSource[] = ["search", "db"];
 const OWNER_KINDS = ["user", "org"];
 /**
  * `model`と`heavy_model`に許す形。`claude --model`の引数に渡すので、
@@ -108,10 +106,6 @@ type DefaultableField =
   | "pr_conflict_fix_notify_grace_min"
   | "gh_collect_enabled"
   | "gh_collect_detail_enabled"
-  | "gh_source_pr_conflict_watch"
-  | "gh_source_poll_issues"
-  | "gh_source_poll_prs"
-  | "gh_source_pr_ci_watch"
   | "worker_alert_memory_ratio"
   | "check_commands_by_repo";
 
@@ -195,11 +189,6 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   gh_collect_enabled: false,
   // 詳細の収集は、収集が動くことを確かめてから、リモートのリソースで有効にする。
   gh_collect_detail_enabled: false,
-  // 収集の表から候補を読むのは、実機で表と検索の突き合わせを確かめてから、リモートのリソースで切り替える。
-  gh_source_pr_conflict_watch: "search",
-  gh_source_poll_issues: "search",
-  gh_source_poll_prs: "search",
-  gh_source_pr_ci_watch: "search",
   // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
   worker_alert_memory_ratio: 0.8,
   check_commands_by_repo: {},
@@ -270,30 +259,6 @@ function isLabelerAssociationArray(
 
 function isReviewPostMode(value: unknown): value is ReviewPostMode {
   return isOneOf(value, REVIEW_POST_MODES);
-}
-
-function isGhSource(value: unknown): value is GhSource {
-  return isOneOf(value, GH_SOURCES);
-}
-
-/** `raw[field]`が列挙の値ならそれを返す。値が無ければ`fallback`を返し、列挙の外なら例外を投げる。 */
-function ghSourceField(
-  raw: Record<string, unknown>,
-  field:
-    | "gh_source_pr_conflict_watch"
-    | "gh_source_poll_issues"
-    | "gh_source_poll_prs"
-    | "gh_source_pr_ci_watch",
-  fallback: GhSource,
-): GhSource {
-  const value = raw[field];
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!isGhSource(value)) {
-    throw new ConfigValidationError(`"${field}" must be "search" | "db"`);
-  }
-  return value;
 }
 
 /**
@@ -1066,26 +1031,6 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "gh_collect_detail_enabled",
       DEFAULTS.gh_collect_detail_enabled,
-    ),
-    gh_source_pr_conflict_watch: ghSourceField(
-      raw,
-      "gh_source_pr_conflict_watch",
-      DEFAULTS.gh_source_pr_conflict_watch,
-    ),
-    gh_source_poll_issues: ghSourceField(
-      raw,
-      "gh_source_poll_issues",
-      DEFAULTS.gh_source_poll_issues,
-    ),
-    gh_source_poll_prs: ghSourceField(
-      raw,
-      "gh_source_poll_prs",
-      DEFAULTS.gh_source_poll_prs,
-    ),
-    gh_source_pr_ci_watch: ghSourceField(
-      raw,
-      "gh_source_pr_ci_watch",
-      DEFAULTS.gh_source_pr_ci_watch,
     ),
     worker_alert_memory_ratio: ratioField(
       raw,

@@ -34,7 +34,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から11分以上待たされていることを検知し、通知を新しく残した |
-| `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないことを検知し、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない |
+| `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないこと、または所有者の収集は成功していても一部のリポジトリの記録が閾値を超えて古いことを検知し、通知を新しく残した。`repo_allowlist`が空で、設定により収集が止まっていること(収集の無効)を検知したときも、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない。ただし、収集の無効は設定の事実なので、停止の間も残す |
 | `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
@@ -93,7 +93,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `periodic_worker_missing` | なし | 説明に原因、「次の操作」 |
-| `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因、「次の操作」、所有者 |
+| `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳。収集の無効では、止まっている設定と、設定を戻すか`repo_allowlist`に並べる操作)、「次の操作」、所有者 |
 | `default_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |
@@ -237,7 +237,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
 | `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces`、`watch_pr_ci` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
-| `github_collect_stale` | `self_update` | `<所有者>:`と空白と、最新の実行の記録を確かめる固定の文 |
+| `github_collect_stale` | `self_update` | `<所有者>:`と空白と、最新の実行の記録を確かめる固定の文。リポジトリ単位の古さでは、`<所有者>のリポジトリ:`と空白と、収集のログを確かめて対象を絞る固定の文。収集の無効では、`<所有者>の収集の無効:`と空白と、設定を戻すか`repo_allowlist`に並べる固定の文 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
@@ -585,6 +585,29 @@ HTTP 403か429で、次のどちらかを満たす応答をrate limitとみな�
 
 GraphQLでは、HTTP 200で`errors[].type`が`RATE_LIMITED`の応答を一次レート制限とみなす。
 
+### rate limitのログ
+
+`callGhApi`は、rate limitと判定した応答を、警告のログ1行`github rate limit response`に残す。
+次の3つの時点で、1行ずつ残す。
+
+- 待って再試行する前。
+- 待ちが長すぎて失敗する前。
+- 再試行も拒まれた後。
+
+フィールドは次のとおりである。
+
+| フィールド | 内容 |
+| --- | --- |
+| `status` | 応答のステータス(403か429) |
+| `endpoint` | ホストと先頭の`/`とクエリを除いたendpoint |
+| `retry_after` | `retry-after`ヘッダーの値。無ければ`null` |
+| `resource` | `x-ratelimit-resource`ヘッダーの値(`core`、`search`、`graphql`)。無ければ`null` |
+| `outcome` | `waiting`、`wait_too_long`、`still_limited` |
+
+トークンもクエリの値も載せない。
+待って成功した403と、枠の種類ごとの403を、ジョブのログから数えるためである。
+`GhClient`の`log`で出力先を替えられ、省略すると標準出力に書く。
+
 ### 待って再試行する
 
 RESTのrate limitでは、解除まで待って1回だけ再試行する。待つ時間は次の順で決める。
@@ -595,7 +618,7 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 待つのは最大120秒(`GITHUB_RATE_LIMIT_MAX_WAIT_MS`)である。1回の待ちは、どのステップのtimeoutよりも短い。最も短いのはPRの修正の指摘の収集の600秒なので、1つのステップで何度か待っても打ち切られない。
 
-この範囲で待てるのは、search APIの1分ごとの上限と、`retry-after`のある二次レート制限(多くは60秒)である。1時間ごとの一次レート制限を使い切ったときの待ちは収まらない。
+この範囲で待てるのは、`retry-after`のある二次レート制限(多くは60秒)である。1時間ごとの一次レート制限を使い切ったときの待ちは収まらない。
 
 ### 待てないときは失敗する
 
@@ -610,6 +633,29 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 失敗した作業項目と人の対応待ちの作業項目は、解除を待ってからConsoleの**要対応**で再実行する。
 人の対応待ちの通知でも、rate limitが原因のときは、次の操作に解除を待ってから再実行するよう表示する。
 rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
+
+### RESTの検索の拒否
+
+`callGhApi`は、RESTの検索APIのendpointを、`gh`を起動せずに例外で拒む。
+検索の枠は小さく、周期の同じフローが5分の境目に重なって呼ぶと拒まれるので、呼び出しを入口で止める。
+判定は、endpointの先頭の`/`とホストを落とし、小文字にして、`search/`で始まるかを見る。
+`/search/issues`、`SEARCH/issues`、`https://api.github.com/search/issues`は拒む。
+`repos/o/search-x/issues`のように、リポジトリ名やクエリに含むだけの要求は拒まない。
+`paginateGhApi`と`callGhApiRawBody`は`callGhApi`を通るので、次のページのURLも同じ判定を受ける。
+例外のメッセージにendpointを載せない。クエリに値が入りうるためである。
+対象はRESTだけで、GraphQLの`search`のフィールドは拒まない。
+正規化するのは、先頭の`/`、大文字、絶対URLの3種類だけである。
+ドットセグメントとパーセントエンコードは対象外で、呼び出し側が自前で組み立てた名前だけを渡し、名前は`assertGitHubName`を通る。
+`fetch`でRESTを呼ぶ経路は、`callGhApi`を通らないので、実行時の拒否が効かない。
+経路は、`fetchIssueObject`、`lib/metadata_patch_download.ts`、`gh_graphql.ts`である。
+
+静的テスト`tests/scripts/no_search_api.test.ts`は、次の3つを固定する。
+
+- `f/factory`のテスト以外に、`search/`の字面、`gh search`、`--search`、argvの`gh`と`search`の並びが無い。
+- `gh`をargvの先頭に置く配列を書くファイルは、`github.ts`だけである。
+- 5つのフローが、`search`で始まる名前を`github.ts`から読み込まない。
+
+`search/`の字面を書けるのは、拒否の接頭辞を持つ定数の1行だけである。
 
 ## GitHub APIの一時的な失敗
 

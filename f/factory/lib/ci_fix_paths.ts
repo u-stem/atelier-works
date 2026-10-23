@@ -35,6 +35,20 @@ export type CiFixChange = {
   readonly addedLines: readonly string[];
   /** 削除された行の数。 */
   readonly removedLineCount: number;
+  /**
+   * 削除された行のうち、PRが足した行でないものの数。
+   * PRが足した行は、PRの基点とbaseの先端のどちらにも無く、回の開始時のheadに加わった行である。
+   * 0は、削除された行がすべてPRが足した行であることを表す。
+   * 基点を求められないとき、差分を読めないとき、テストの変更でないときは省略する。
+   * 省略は不明であり、基点から持っていた行を消したものとして扱う。
+   */
+  readonly removedOutsidePrLineCount?: number;
+  /**
+   * 削除した行より、意味のある追加行が少ないhunkの数(`isMeaningfulLine`)。
+   * 0は、どのhunkも、削除した行の数以上に意味のある行を足していることを表す。
+   * テストの変更でないときは省略する。省略は不明であり、行を減らす変更は拒否する。
+   */
+  readonly shrinkingHunkCount?: number;
 };
 
 export type CiFixPathInput = {
@@ -51,7 +65,10 @@ export type CiFixPathInput = {
  * - `protected_path`: 保護パスかFactoryの安全装置。
  * - `case_variant_path`: PRが変更したファイルと大文字小文字だけが違うパス。
  * - `not_in_pull_request`: PRが変更しておらず、新規のテストファイルでもない。
- * - `test_not_additive`: テストの削除、または既存のテスト行の削除や変更。
+ * - `test_not_additive`: テストの削除、PRが足した行でないテスト行の削除や変更、
+ *   またはPRが足した行でも、意味のある追加行より多く行を減らす変更。
+ * - `test_base_unknown`: テスト行を減らす変更で、PRが足した行かを調べられなかった。
+ *   基点を求められない、差分が大きすぎる、読めない、のいずれかである。調べられれば通りうる。
  * - `weakens_checks`: 検査を弱める行を追加した。
  */
 export type CiFixViolationCode =
@@ -62,6 +79,7 @@ export type CiFixViolationCode =
   | "case_variant_path"
   | "not_in_pull_request"
   | "test_not_additive"
+  | "test_base_unknown"
   | "weakens_checks";
 
 export type CiFixViolation = {
@@ -353,6 +371,57 @@ const SYMLINK_MODE = "120000";
 /** 通常のファイルのモード。実行権限の有無だけが違う。 */
 const REGULAR_FILE_MODES: readonly string[] = ["100644", "100755"];
 
+/** 行頭がコメントの行。 */
+const COMMENT_ONLY_LINE = /^\s*(?:\/\/|\/\*|\*|#|<!--)/;
+
+/**
+ * 検査の対象になる、意味のある行か。空行とコメントだけの行は、意味のある行ではない。
+ * コメントは、行頭の`//`、`#`、`/*`、`*`、`<!--`で見分ける。`#`は常にコメントと読む。
+ * Rustの属性(`#[test]`)やCのプリプロセッサ(`#include`)は、コメントではないが、意味のある行に数えない。
+ * その行を書き換える修正は拒否される。コメントでない行をコメントと読むのは、拒否に倒れる誤りである。
+ * `--`、`;`、`%`で始まるコメントは見分けない。
+ * テストの行をコメントや空行に置き換える変更を、書き換えに見せかけさせないために使う。
+ */
+export function isMeaningfulLine(line: string): boolean {
+  return line.trim() !== "" && !COMMENT_ONLY_LINE.test(line);
+}
+
+/** `lines`のうち、意味のある行(`isMeaningfulLine`)の数。 */
+export function countMeaningfulLines(lines: readonly string[]): number {
+  return lines.filter(isMeaningfulLine).length;
+}
+
+/**
+ * テストの変更の、行の規則の違反。無ければnull。
+ * ファイルの削除は拒否する。行を減らす変更は、次の条件をすべて満たすときだけ許す。
+ * - 意味のある追加行の数が、削除した行の数以上である。
+ * - どのhunkも、削除した行の数以上に、意味のある行を足している。
+ *   コメントや空行への置き換えと、別の場所に足した行による相殺を、書き換えと見分けるためである。
+ * - 削除した行がすべて、PRが足した行である(`removedOutsidePrLineCount`が0)。
+ *   PRが足したテストの検査違反を、CI回が直せるようにするためである。
+ * 数えるのは行の数と位置だけなので、同じhunkの中で別の行に置き換える変更は、書き換えと区別できない。
+ * 最初の2つは、基点が分かっても分からなくても変わらない違反である。
+ * PRが足した行かを調べられなかったときは、基点から持っていた行を消したものとして拒否し、
+ * 別の理由(`test_base_unknown`)で知らせる。
+ */
+function testLineViolation(change: CiFixChange): CiFixViolationCode | null {
+  if (change.status === "deleted") return "test_not_additive";
+  if (change.removedLineCount === 0) return null;
+  if (change.status !== "modified") return "test_not_additive";
+  if (countMeaningfulLines(change.addedLines) < change.removedLineCount) {
+    return "test_not_additive";
+  }
+  const { shrinkingHunkCount, removedOutsidePrLineCount } = change;
+  if (shrinkingHunkCount !== undefined && shrinkingHunkCount > 0) {
+    return "test_not_additive";
+  }
+  if (removedOutsidePrLineCount === undefined) return "test_base_unknown";
+  if (shrinkingHunkCount === undefined || removedOutsidePrLineCount > 0) {
+    return "test_not_additive";
+  }
+  return null;
+}
+
 /** 1件の変更の最初の違反の理由。違反が無ければnull。 */
 function violationOf(
   change: CiFixChange,
@@ -376,9 +445,8 @@ function violationOf(
   if (!changedByPr && !newTest) return "not_in_pull_request";
 
   if (isTestPath(path)) {
-    const removesTestLines =
-      change.status === "deleted" || change.removedLineCount > 0;
-    if (removesTestLines) return "test_not_additive";
+    const testViolation = testLineViolation(change);
+    if (testViolation !== null) return testViolation;
   }
   if (weakensChecks(change.addedLines)) return "weakens_checks";
   return null;
@@ -388,7 +456,7 @@ function violationOf(
  * CI回でClaudeが加えた変更が、許可リストの範囲に収まるかを検査する。
  * 変更ごとに、次の順で最初に当たる違反を1件ずつ返す。
  * パスの形、シンボリックリンク、保護パス、許可リスト(PRが変更したファイルか新規のテスト)、
- * テストの追加だけの規則、検査を弱める行。
+ * テストの行の規則(基点から持っていた行を消さず、PRが足した行も、意味のある行への置き換えに限る)、検査を弱める行。
  * 1件でも違反があれば`ok: false`にし、呼び出し側はpushせず人に渡す。
  */
 export function checkCiFixChanges(input: CiFixPathInput): CiFixPathVerdict {

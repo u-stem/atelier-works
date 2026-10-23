@@ -13,6 +13,11 @@ import {
   checkSandboxFromEnv,
   kernelWarningText,
 } from "../lib/check_sandbox.ts";
+import {
+  githubPrMergeBaseIo,
+  type PrBase,
+  resolvePrMergeBase,
+} from "../lib/ci_fix_pr_base.ts";
 import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
 import {
   buildCiGatherDeps,
@@ -674,6 +679,42 @@ export async function main(
     })();
     return prChangedPathsRead;
   };
+  // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
+  // 既定のブランチを向いていないPRはnullになり、検査は基点の行を消したものとして拒否に倒れる。
+  // APIやgitの失敗は例外にする。ステップが失敗し、回復が行を保留なしで戻して、回数の上限の範囲で起動し直す。
+  let prBaseResolved: Promise<PrBase | null> | null = null;
+  const resolvePrBaseOnce = (): Promise<PrBase | null> => {
+    prBaseResolved ??= (async () => {
+      const ghToken = await wmill.getVariable("f/factory/github_token");
+      const client: GhClient = { run: runCommand, ghToken };
+      return await resolvePrMergeBase(
+        githubPrMergeBaseIo({
+          client,
+          owner,
+          repo,
+          prNumber: pr_number,
+          headSha: requireCiRoundHeadSha(head_sha),
+          worktreeDir: worktree_dir,
+          ghToken,
+          run: runCommand,
+          assertWorktreeIntact: async () => {
+            if (worktree_git_pointer === null) {
+              throw new Error(
+                "the .git pointer of the worktree is not recorded",
+              );
+            }
+            await assertWorktreeGitPointer(worktree_dir, worktree_git_pointer);
+          },
+        }),
+        (reason) =>
+          log.warn("the base commit of the PR cannot be used", {
+            work_item_id,
+            reason,
+          }),
+      );
+    })();
+    return prBaseResolved;
+  };
   // hashの再計算の確認に使う、baseの先端の読み取りと再計算。最初に要るときに1回だけ組む。
   // 回の種類(再計算の回か)を読み直す関数も、同じ認証で組む。
   let rehashPlannerBuilt: Promise<{
@@ -872,6 +913,7 @@ export async function main(
               await loadPrChangedPaths(),
               {
                 source: "worktree",
+                resolvePrBase: resolvePrBaseOnce,
                 // 変更が`wmill-lock.yaml`の1件だけのときに限り、PRのheadの木からの独立した再計算と照合する。
                 rehashCheck: async () => {
                   const { planner, isRehashRound } = await rehashPlannerOnce();

@@ -15,8 +15,14 @@
 // 付け直しも失敗して外れたままになったPRは、`processPrDecisions`が集め、
 // `collectLabelLeftRemoved`が要対応のnoticeに残し、1件のDiscord通知にまとめる。
 // assignで起きるレビューはラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
-// 検索のラベルでも収集の表のラベルでも、そのPRを見つけられなくなるため、
+// 収集の表のラベルでも一覧のラベルでも、そのPRを見つけられなくなるため、
 // `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
+//
+// ラベル、レビューの依頼、assigneeのPRは、収集の表から見つける。検索は使わない。
+// 表が新しくないリポジトリは、設定で明示したものだけをRESTの一覧で読み、ほかは見送る。
+// チーム宛てのレビューの依頼は、`GET /user/teams`のチームIDと、PRの依頼先のチームIDで照合する。
+// 確かめて対象でなかったPRは、stateに覚えて次の周回以降に確かめ直さない。
+// 候補は、`getPr`と`getIssue`で今も対象であることを確かめてから使う。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
@@ -38,10 +44,7 @@ import {
   setObservedWatermarks,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
-import {
-  effectiveGhSource,
-  ghDetailStaleAfterMs,
-} from "./lib/gh_collect_read.ts";
+import { ghDetailStaleAfterMs } from "./lib/gh_collect_read.ts";
 import {
   addLabels,
   type GhClient,
@@ -51,20 +54,26 @@ import {
   getLabelerActor,
   getPr,
   getViewer,
+  getViewerTeams,
   type Issue,
   type LabelerActor,
   LabelerCheckLimitError,
+  listOpenPullRequests,
   listPrReviewComments,
   listPrReviews,
   type PrSearchItem,
   type RemoveLabelResult,
   removeLabel,
   rereadWithRetries,
-  searchPrs,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
-import { discoverPrs } from "./lib/poll_source.ts";
+import {
+  discoverPrs,
+  parseCheckedPrs,
+  parseConfirmCursor,
+  resolveTableUse,
+} from "./lib/poll_source.ts";
 import {
   confirmLabeler,
   decidePrActions,
@@ -81,9 +90,8 @@ import {
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
-  type FactoryConfig,
-  type GhSource,
   hasLabel,
+  isRecord,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
 } from "./lib/types.ts";
@@ -94,6 +102,12 @@ import {
   extractLinkedIssueNumbers,
   nextActionFor,
 } from "./steps/pr_workflow_support.ts";
+
+/** 確かめて対象でなかったPRの覚えを置く、Windmillのstateのキー。 */
+const CHECKED_PRS_STATE_KEY = "team_checked_prs";
+
+/** チームへの依頼の確認で、前の周回に確かめた最後の候補の鍵を置く、Windmillのstateのキー。 */
+const CONFIRM_CURSOR_STATE_KEY = "team_confirm_cursor";
 
 async function recordFailureSafe(
   step: string,
@@ -337,7 +351,7 @@ export type ClaimPrResult =
  * `claimed: false`と理由を返す。
  * 外した後の確認の読み取りは、`rereadWithRetries`で数回試す(`log`に各回の失敗を警告で残す)。
  * それでも読めなければ、取得できたか分からない。ラベルを消費したまま
- * 作業項目を作らないと、以後ラベル検索でもDBでもそのPRを見つけられない。
+ * 作業項目を作らないと、以後ラベルでもDBでもそのPRを見つけられない。
  * 一方、読めないまま作業を始めると、別のアクターがラベルを付け直していた場合に、
  * 次のポーリングで同じPRのサイクルが二重に始まる。レビューのラベルの経路は、稼働中の作業項目が
  * あっても`decidePrActions`が止めない。修正のラベルの経路は、終端でない`pr_fix`がある間だけ止まり、
@@ -351,7 +365,7 @@ export type ClaimPrResult =
  * 該当したPRを集める(`collectLabelLeftRemoved`が要対応のnoticeも残す)。
  * 集めたPRは、ループを抜けるときにDiscordへ知らせる(`notifyPrLabelsLeftRemoved`)。
  * assigneeは付けない(`claimIssue`と違う)。Factoryのログインをassignすると、
- * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
+ * assigneeの条件にそのPRが以後ずっと当たり続けるため。
  * 外した後に取り直して確かめるのは、別のアクターがラベルを付け直した場合を
  * 見分けるためである。
  * assignで起きるレビューはラベルが関わらないので、これを呼ばない。
@@ -1148,41 +1162,25 @@ async function recordLabelerCheckLimitSafe(
   }
 }
 
-/**
- * 設定`gh_source_poll_prs`と収集の設定から、この回の読み取り元を決める。
- * 収集のどちらかを止めると`last_collected_at`が進まず、表を使えない。
- * 設定を戻し忘れても処理が止まらないよう、周回全体を検索にして、偽の設定の名前を警告に残す。
- */
-export function resolvePrSource(
-  config: Pick<
-    FactoryConfig,
-    "gh_source_poll_prs" | "gh_collect_enabled" | "gh_collect_detail_enabled"
-  >,
-  log: Logger,
-): GhSource {
-  const source = effectiveGhSource(config.gh_source_poll_prs, config);
-  if (config.gh_source_poll_prs === "db" && source === "search") {
-    log.warn(
-      "gh_source_poll_prs is db but the collection is not fully enabled, so the round searches",
-      {
-        gh_collect_enabled: config.gh_collect_enabled,
-        gh_collect_detail_enabled: config.gh_collect_detail_enabled,
-      },
-    );
-  }
-  return source;
-}
-
 export async function main(): Promise<{
   reviewsStarted: number;
   fixesStarted: number;
   skipped: number;
   failed: number;
-  pr_source: GhSource;
-  fallback_searches: number;
-  fallback_reasons: Readonly<Record<string, number>>;
-  table_candidates: number;
-  table_dropped: number;
+  /** 収集が無効で表を読まなかったか。真の間は、明示のリポジトリ以外は発見されない。 */
+  collect_disabled: boolean;
+  skipped_stale: number;
+  skipped_stale_reasons: Readonly<Record<string, number>>;
+  rest_lists: number;
+  rest_reasons: Readonly<Record<string, number>>;
+  /** チーム宛ての依頼かもしれず、PATのアカウントが属するチームを使えなかったため、確かめられずに見送ったPRの数。 */
+  team_unresolved: number;
+  /** チーム宛ての依頼を確かめる上限を超えたため、この周回は確かめなかった候補の数。 */
+  team_capped: number;
+  /** 前の周回で確かめて対象でなく、覚えていたため、この周回は確かめなかった候補の数。 */
+  team_remembered: number;
+  candidates: number;
+  dropped: number;
 }> {
   const log = logger("poll_prs");
   const config = await loadConfig(() =>
@@ -1212,37 +1210,54 @@ export async function main(): Promise<{
   failed += verified.failed;
   // 照合を通ったオーナーだけを対象にする。
   const scope = { ...config, owners: verified.owners };
-  const source = resolvePrSource(config, log);
+  const useTable = resolveTableUse(config, log);
+  // 作者が許可された人かの判定。チームへの依頼は、許可された作者のPRだけ候補にし、レビューの起動の判定も同じ方針を使う。
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const discovered = await discoverPrs(
     {
-      source,
+      useTable,
       owners: verified.owners,
       scope,
       viewer,
+      labelerPolicy,
       labels: { reviewLabel: config.review_label, fixLabel: config.fix_label },
       staleAfterMs: ghDetailStaleAfterMs(config.owners.length),
       log,
     },
     {
-      searchPrs: (owner) =>
-        searchPrs(client, {
-          owner: owner.name,
-          ownerKind: owner.kind,
-          viewer: viewer.login,
-          reviewLabel: config.review_label,
-          fixLabel: config.fix_label,
-        }),
       readOwnerPrs: (owner) => readGhOwnerOpenPullRequests(owner),
+      listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo),
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       getIssue: (owner, repo, number) => getIssue(client, owner, repo, number),
       recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      getViewerTeams: () => getViewerTeams(client),
+      checkedPrs: {
+        load: async () => {
+          const stored = await wmill.getState();
+          const record = isRecord(stored) ? stored : {};
+          return {
+            entries: parseCheckedPrs(record[CHECKED_PRS_STATE_KEY]),
+            cursor: parseConfirmCursor(record[CONFIRM_CURSOR_STATE_KEY]),
+          };
+        },
+        save: async (state) => {
+          const stored = await wmill.getState();
+          // stateは全体を置き換えるので、ほかのキーを保って渡す。
+          await wmill.setState({
+            ...(isRecord(stored) ? stored : {}),
+            [CHECKED_PRS_STATE_KEY]: Object.fromEntries(state.entries),
+            [CONFIRM_CURSOR_STATE_KEY]: state.cursor,
+          });
+        },
+        nowMs: () => Date.now(),
+      },
     },
   );
   failed += discovered.failed;
   const rawCandidates: PrSearchItem[] = [...discovered.items];
 
-  // DBから見つけ直す。トリガーラベルを取得時に消費すると、検索のラベルでも
-  // 収集の表のラベルでも、そのPRを見つけられない。そこで`listTrackedPrs`が、
+  // DBから見つけ直す。トリガーラベルを取得時に消費すると、収集の表のラベルでも
+  // 一覧のラベルでも、そのPRを見つけられない。そこで`listTrackedPrs`が、
   // Factoryが追跡中のPR(pr_review・pr_fix種別、取り消されていない、
   // `config.tracked_pr_days`以内に更新)を候補に足す。上の発見の結果とは
   // PRのキーで重複を除き、`getPr`で取り直して開いていないものは落とす。
@@ -1331,7 +1346,6 @@ export async function main(): Promise<{
     ]),
   );
 
-  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const decisions = decidePrActions(
     contexts.map((context) => context.candidate),
     config.review_label,
@@ -1422,11 +1436,16 @@ export async function main(): Promise<{
     fixesStarted,
     skipped,
     failed,
-    pr_source: source,
-    fallback_searches: discovered.stats.fallback_searches,
-    fallback_reasons: discovered.stats.fallback_reasons,
-    table_candidates: discovered.stats.table_candidates,
-    table_dropped: discovered.stats.table_dropped,
+    collect_disabled: !useTable,
+    skipped_stale: discovered.stats.skipped_stale,
+    skipped_stale_reasons: discovered.stats.skipped_stale_reasons,
+    rest_lists: discovered.stats.rest_lists,
+    rest_reasons: discovered.stats.rest_reasons,
+    team_unresolved: discovered.stats.team_unresolved,
+    team_capped: discovered.stats.team_capped,
+    team_remembered: discovered.stats.team_remembered,
+    candidates: discovered.stats.candidates,
+    dropped: discovered.stats.dropped,
   };
 }
 

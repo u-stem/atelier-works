@@ -120,6 +120,22 @@ describe("buildCiFixPrompt", () => {
     expect(prompt()).toContain("Do not weaken tests");
   });
 
+  test("tells Claude to rewrite only the lines the log points to", () => {
+    expect(prompt()).toContain("Rewrite only the lines the log points to.");
+  });
+
+  test("tells Claude not to reduce the number of lines, and allows a line that splits when formatted", () => {
+    expect(prompt()).toContain(
+      "Do not reduce the number of lines; a line may become several lines when the formatter requires it.",
+    );
+  });
+
+  test("tells Claude not to touch the other lines of a test", () => {
+    expect(prompt()).toContain(
+      "Do not touch the other lines of a test file, even if you think they are wrong.",
+    );
+  });
+
   test("forbids changing the CI definition", () => {
     expect(prompt()).toContain("Do not change the CI definition");
   });

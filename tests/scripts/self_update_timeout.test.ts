@@ -48,7 +48,7 @@ const WRAPPERS = [
 // 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
 // 自前の上限(`CONSOLE_WORKER_CHECK_TIMEOUT_MS`)で区切る。
 const UNBOUNDED_CALL =
-  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(|\blistUnresolvedNoticesByKind\(|\bresolveNoticeIfUnresolved\(|\breadHostAppliedSha\(|\blistGhCollectFreshness\(|\bresolveUnresolvedNoticesByPrefix\(/g;
+  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(|\blistUnresolvedNoticesByKind\(|\bresolveNoticeIfUnresolved\(|\breadHostAppliedSha\(|\blistGhCollectFreshness\(|\blistGhRepoStaleSnapshot\(|\bresolveUnresolvedNoticesByPrefix\(/g;
 /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
 const WRAPPER_REACH = 700;
 
