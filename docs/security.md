@@ -114,6 +114,10 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 判定を書き換える変更は、保護パスとして`pr_fix`が止める。`implement`は止めず、記録して検査を省き、PRの「確認して欲しい点」に載せる。
 人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
 
+判定の`DB_DEPENDENCY_FILES`には、`test:db`が実行するコードの依存を列挙する。
+`console_query.ts`が`lib/config.ts`を読むので、`f/factory/lib/config.ts`を入れている。
+入れないと、設定の読み取りだけを変えるPRで`db`のジョブが動かない。
+
 ### CIのメタデータの再生成
 
 `metadata`ジョブは、検査が失敗したときに、使い捨てのWindmillでメタデータを作り直し、結果をartifact(`metadata-patch`)に出す。
@@ -962,7 +966,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
 | 旧Consoleのリンクを固定の行き先に飛ばす | 廃止した旧ConsoleのURL(`/apps/get/f/factory/factory_console`と`/apps_raw/get/f/factory/factory_console`、配下を含む)は、パスとクエリによらず固定の`/console/`へ302で飛ばす。行き先を要求から作らないので、オープンリダイレクトにならない。`Cache-Control: no-store`を付け、ブラウザに転送を覚えさせない |
 | 他のサイトからAPIを呼ばせない | `/api/*`への要求は、次の4つをCaddyが403にする。`Sec-Fetch-Site`が`cross-site`か`same-site`のもの。`Origin`がブラウザの開いたオリジンと一致しないもの。ジョブを起動するGET(`run_wait_result`、`run_and_stream`、`slack_approval`、`teams_approval`、`move_s3_file`)を、fetchとXHR以外(`Sec-Fetch-Dest`が`empty`でないもの)で呼んだもの。GETとHEAD以外の要求を、ページの移動(`Sec-Fetch-Mode`が`navigate`か`nested-navigate`)で送ったもの。副作用のあるGETも、`Sec-Fetch-Mode`が`navigate`のときは止める。`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らないCLIは通す |
-| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの5つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
+| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの6つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決、手動投入の受付)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
 | 秘密を配信物に入れない | Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない |
 
@@ -976,6 +980,11 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。
   ログインのセッションの有効期間は30日で、Windmillの既定の3日より長い。
   運用者のブラウザが管理者のCookieを持つ時間も、そのぶん長い。
+- 新規投入で、投入されたか分からない失敗の後に再送を止められるのは、このタブの中だけである。
+  別のタブ、リロードの後、案内を無視した再送は止められない。
+  そのとき、Issue、作業項目、pipelineが重複しうる。
+  重複したpipelineは承認で止まり、無人では実装まで進まない。
+  重複したIssueは、人が閉じる。
 - 承認の二重の送信を画面で止められるのは、このタブの中だけである。別のタブや別の端末、リロードの後は止められない。
   Issue提案のIssue作成のやり直しは、画面でもこのタブで15分間止める。
   それでも重なると、どちらの呼び出しも作成済みのIssueが無いと見て、Issueが2件できうる。
@@ -1075,6 +1084,13 @@ Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bo
 許可しても、このworkerのマウントとDBへの到達は変わらない。
 変わるのは、このworkerでscriptを動かせる主体である。
 
+`manual_intake_submit`で実際に投入できるのは、フォルダ`f/factory`の権限で決まる主体である。
+このフォルダには所有者も追加の権限も付けていないので、ワークスペースの管理者だけが該当する。
+tag`console`がsuperadminでない主体にも許されていても、フォルダの権限は広がらない。
+フローは呼び出した主体の権限で起動し、`on_behalf_of_email`を置かない。
+そのため、投入できる主体は、WindmillのUIから`manual_intake`を実行できる主体と同じである。
+`on_behalf_of_email`を置くと、フローが別の主体の権限で動くので、Console用のscriptに置かれていないことを契約テストが確かめる。
+
 管理者の資格情報を送る`doctor`と`bootstrap`は、宛先を`WM_HTTP_PORT`のポートの`127.0.0.1`に限る。
 `WM_BASE_URL`は使わない。
 `mise.toml`では`WM_BASE_URL`が8080に固定されている。
@@ -1086,7 +1102,7 @@ Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bo
 
 Consoleから押せる書き込みには、読むsecret変数の上限を決める。
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
-`audit_kickoff`と`notice_resolve`は、どのsecret変数も読まない。
+`audit_kickoff`、`notice_resolve`、`manual_intake_submit`は、どのsecret変数も読まない。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。
@@ -1122,6 +1138,12 @@ Podmanは対象外である。
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- 次のtag`console`のscriptは、resource`f/factory/factory_config`を読む。
+  `audit_kickoff`、`retry_work_item`、`manual_intake_submit`、`console_query`である。
+  `console_query`は、手動投入の候補(`intake_targets`)のために初めて読む。
+  契約テストが見るのはsecret変数の名前の読み取りだけなので、resourceの値に`$var:`の参照が無いことは、人が確かめる。
+  参照があると、参照先のsecret変数が、tag`console`のscriptから読めてしまう。
+  確かめる手順はtag`periodic`の場合と同じで、[tagを付けるscriptの選び方](#tagを付けるscriptの選び方)に書く。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
   `retry_work_item`が実際に読むのは、次の2つのときの`github_token`である。
