@@ -192,6 +192,49 @@ describe("onlyReadsHolds", () => {
     expect(onlyReadsHolds('const m = require("./holds");')).toBe(false);
   });
 
+  test("rejects an import whose clause has a comment with a quote", () => {
+    expect(
+      onlyReadsHolds(`import { placeHold /* writer's */ } from "./holds.ts";`),
+    ).toBe(false);
+  });
+
+  test("rejects an import whose clause has a line comment with a quote", () => {
+    expect(
+      onlyReadsHolds(
+        `import {\n  placeHold, // writer's\n} from "./holds.ts";`,
+      ),
+    ).toBe(false);
+  });
+
+  test.each([
+    "./holds.js",
+    "./holds.mjs",
+    "./holds.cts",
+    "./holds.jsx",
+    "./Holds.ts",
+    "./HOLDS",
+    "./holds.ts?version=1",
+    "../lib/holds.js",
+  ])("rejects the write function imported from %s", (specifier) => {
+    expect(onlyReadsHolds(`import { placeHold } from "${specifier}";`)).toBe(
+      false,
+    );
+  });
+
+  test("rejects an import that follows a string with two slashes on the same line", () => {
+    expect(
+      onlyReadsHolds(
+        'const url = "//"; import { placeHold } from "./holds.ts";',
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a re-export whose clause has a comment with a quote", () => {
+    expect(
+      onlyReadsHolds(`export { placeHold /* writer's */ } from "./holds.ts";`),
+    ).toBe(false);
+  });
+
   test("rejects an import over several lines", () => {
     expect(
       onlyReadsHolds(
@@ -234,6 +277,15 @@ describe("writesHolds", () => {
     "DELETE FROM holds",
     "COPY factory.holds FROM STDIN",
     "UPDATE ONLY factory.holds SET x = 1",
+    "MERGE INTO factory.holds AS h USING t ON h.id = t.id WHEN MATCHED THEN DELETE",
+    "merge into holds using t on true when matched then delete",
+    "INSERT/**/INTO factory.holds (scope) VALUES (1)",
+    "UPDATE /* hidden */ factory.holds SET x = 1",
+    "DELETE/* a */FROM/* b */factory.holds",
+    "INSERT -- split\nINTO factory.holds (scope) VALUES (1)",
+    "INSERT INTO -- split\n factory.holds (scope) VALUES (1)",
+    'const dashes = "--"; sql`INSERT INTO factory.holds (scope) VALUES (1)`',
+    "/* a */ INSERT /* b */ INTO /* c */ factory . /* d */ holds",
   ])("detects %p", (source) => {
     expect(writesHolds(source)).toBe(true);
   });
@@ -278,12 +330,8 @@ describe(HOLDS_MODULE, () => {
     expect(writesHolds(source)).toBe(true);
   });
 
-  test("imports the types of db.ts", () => {
-    expect(source).toMatch(/^import type \{[^}]*\} from "\.\/db\.ts";$/m);
-  });
-
-  test("has no import other than the type import of db.ts", () => {
-    expect(source.match(/^import\b/gm)).toHaveLength(1);
+  test("has no import, so that no unprotected module is its input", () => {
+    expect(source.match(/^import\b/gm)).toBeNull();
   });
 
   test("gives no default to the sql parameter", () => {
@@ -326,5 +374,98 @@ describe("scripts/test-db.sh", () => {
 
   test("runs the holds check before the rollback of the migrations", () => {
     expect(holdsIndex).toBeLessThan(rollbackIndex);
+  });
+});
+
+// 表を作るmigration以外が、表の中身や定義に触れないことを確かめる。
+// 保護パスにmigrations全体は入れない(日常的に増えるため)ので、足されたmigrationは、このテストが見る。
+const HOLDS_MIGRATION_FILES = [
+  "20261023131355_holds.up.sql",
+  "20261023131355_holds.down.sql",
+];
+const MIGRATIONS_DIR = "migrations/datatable/main";
+
+/** 表を作るmigration以外のうち、`factory.holds`に書き込むか定義を変えるものの名前を返す。 */
+function migrationViolations(
+  files: Readonly<Record<string, string>>,
+): string[] {
+  void files;
+  return [];
+}
+
+function otherMigrations(): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const name of readdirSync(MIGRATIONS_DIR)) {
+    if (!name.endsWith(".sql") || HOLDS_MIGRATION_FILES.includes(name))
+      continue;
+    files[name] = read(join(MIGRATIONS_DIR, name));
+  }
+  return files;
+}
+
+describe("migrationViolations", () => {
+  test.each([
+    "INSERT INTO factory.holds (scope) VALUES (1);",
+    "UPDATE factory.holds SET released_at = now();",
+    "DELETE FROM factory.holds;",
+    "TRUNCATE factory.holds;",
+    "MERGE INTO factory.holds h USING t ON h.id = t.id WHEN MATCHED THEN DELETE;",
+    "ALTER TABLE factory.holds DROP CONSTRAINT holds_expiry_check;",
+    "ALTER TABLE factory.holds DISABLE TRIGGER ALL;",
+    "DROP TABLE factory.holds;",
+    "DROP TABLE IF EXISTS factory.holds;",
+    "CREATE INDEX x ON factory.holds (id);",
+    "CREATE UNIQUE INDEX x ON factory.holds (id);",
+    "CREATE TRIGGER t BEFORE INSERT ON factory.holds FOR EACH ROW EXECUTE FUNCTION f();",
+    "DROP INDEX factory.holds_active_merge_key;",
+    "ALTER INDEX factory.holds_active_claim_key RENAME TO x;",
+    "INSERT/**/INTO factory.holds (scope) VALUES (1);",
+    "-- x\nUPDATE -- y\n factory.holds SET x = 1;",
+    "ALTER TABLE holds ADD COLUMN x int;",
+  ])("detects %p in a later migration", (sql) => {
+    expect(migrationViolations({ "20270101000000_later.up.sql": sql })).toEqual(
+      ["20270101000000_later.up.sql"],
+    );
+  });
+
+  test.each([
+    "SELECT * FROM factory.holds;",
+    "ALTER TABLE factory.work_items ADD COLUMN x int;",
+    "CREATE INDEX x ON factory.pr_conflict_fix_holds (id);",
+    "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL;",
+    "-- the holds table is not touched here",
+  ])("does not detect %p", (sql) => {
+    expect(migrationViolations({ "20270101000000_later.up.sql": sql })).toEqual(
+      [],
+    );
+  });
+
+  test("names every offending file", () => {
+    expect(
+      migrationViolations({
+        "a.up.sql": "DELETE FROM factory.holds;",
+        "b.up.sql": "SELECT 1;",
+        "c.down.sql": "DROP TABLE factory.holds;",
+      }),
+    ).toEqual(["a.up.sql", "c.down.sql"]);
+  });
+});
+
+describe("migrations other than the one that creates the holds table", () => {
+  test("finds the migrations, so that the check below is not empty", () => {
+    expect(Object.keys(otherMigrations()).length).toBeGreaterThan(40);
+  });
+
+  test("none of them writes to or changes the holds table", () => {
+    expect(migrationViolations(otherMigrations())).toEqual([]);
+  });
+
+  test("the migration that creates the table is detected when it is checked", () => {
+    const files: Record<string, string> = {};
+    for (const name of HOLDS_MIGRATION_FILES) {
+      files[name] = read(join(MIGRATIONS_DIR, name));
+    }
+
+    expect(migrationViolations(files)).toEqual(HOLDS_MIGRATION_FILES);
   });
 });

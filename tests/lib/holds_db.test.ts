@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
   type HoldActor,
+  type HoldSqlClient,
   listActiveHolds,
   listInvalidHolds,
   type PlaceInput,
@@ -302,14 +303,22 @@ describe("placeHold", () => {
     );
   });
 
-  test("closes only rows that fail the active condition", async () => {
+  test("closes an expired row, a row created far in the future and a row beyond the limit", async () => {
     const { sql, calls } = fakeSql([[], [{ id: 12 }]]);
 
     await placeHold(MERGE, sql);
 
     expect(calls[0]?.text).toContain(
-      "AND NOT (created_at <= now() AND expires_at > now() AND expires_at <= created_at + interval '24 hours')",
+      "AND (expires_at <= now() OR created_at > now() + interval '1 minute' OR expires_at > created_at + interval '24 hours')",
     );
+  });
+
+  test("does not close a row created a little after the start of the statement", async () => {
+    const { sql, calls } = fakeSql([[], [{ id: 12 }]]);
+
+    await placeHold(MERGE, sql);
+
+    expect(calls[0]?.text).not.toContain("NOT (created_at <= now()");
   });
 
   test("limits the closing of a merge hold to the same holder", async () => {
@@ -393,6 +402,42 @@ describe("placeHold", () => {
     const result = await placeHold(MERGE, sql);
 
     expect(result.ok === false && result.reason).toContain("does not exist");
+  });
+});
+
+describe("placeHold input check", () => {
+  test("refuses a holder that does not match the holder kind", async () => {
+    const { sql } = fakeSql([[], [{ id: 12 }]]);
+
+    expect(await placeHold({ ...MERGE, holder: "human" }, sql)).toEqual({
+      ok: false,
+      reason: "holder does not match holder_kind",
+    });
+  });
+
+  test("sends no statement for an invalid input", async () => {
+    const { sql, calls } = fakeSql([[], [{ id: 12 }]]);
+
+    await placeHold({ ...MERGE, reason: "a\nb" }, sql);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses minutes beyond the limit", async () => {
+    const { sql } = fakeSql([[], [{ id: 12 }]]);
+
+    expect(await placeHold({ ...MERGE, minutes: 1441 }, sql)).toEqual({
+      ok: false,
+      reason: "minutes must be an integer between 1 and 1440",
+    });
+  });
+
+  test("lowercases the target before it reaches the database", async () => {
+    const { sql, calls } = fakeSql([[], [{ id: 12 }]]);
+
+    await placeHold({ ...MERGE, target: "Octo/Repo" }, sql);
+
+    expect(calls[1]?.values[1]).toBe("octo/repo");
   });
 });
 
@@ -505,5 +550,24 @@ describe("releaseHold", () => {
     const result = await releaseHold(7, HUMAN, sql);
 
     expect(result.ok).toBe(false);
+  });
+});
+
+// holds.tsは保護されたdb.tsから切り離し、必要な形の型を自前で持つ。
+// 型の互換は、次の代入が型検査を通ることで確かめる。
+describe("HoldSqlClient", () => {
+  test("accepts the SqlClient of db.ts", () => {
+    const { sql } = fakeSql();
+    const client: HoldSqlClient = sql;
+
+    expect(client).toBe(sql);
+  });
+
+  test("is accepted where the SqlClient of db.ts is required", () => {
+    const { sql } = fakeSql();
+    const holdClient: HoldSqlClient = sql;
+    const client: SqlClient = holdClient;
+
+    expect(client).toBe(sql);
   });
 });

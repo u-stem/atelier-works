@@ -5,6 +5,7 @@
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-holds.ts
 
 import {
+  HOLD_ALREADY_ACTIVE,
   type HoldActor,
   listActiveHolds,
   listInvalidHolds,
@@ -131,7 +132,7 @@ const doubleMerge = await placeHold(
 );
 check(
   "placeHold: the same holder cannot place a merge hold twice",
-  !doubleMerge.ok,
+  !doubleMerge.ok && doubleMerge.reason === HOLD_ALREADY_ACTIVE,
   doubleMerge,
 );
 
@@ -245,7 +246,7 @@ const rivalClaim = await placeHold(
 check("placeHold: a claim hold is placed", firstClaim.ok, firstClaim);
 check(
   "placeHold: a claim hold is exclusive across holders",
-  !rivalClaim.ok,
+  !rivalClaim.ok && rivalClaim.reason === HOLD_ALREADY_ACTIVE,
   rivalClaim,
 );
 if (firstClaim.ok) {
@@ -260,6 +261,85 @@ check(
   "placeHold: a claim hold can be placed once the earlier one is released",
   claimAfterRelease.ok,
   claimAfterRelease,
+);
+
+// claimは排他なので、別のholderの期限切れの行や未来の作成時刻の行も、置く操作の文(1)が閉じる。
+const CLAIM_EXPIRED_TARGET = `${PREFIX}/claim-expired#2`;
+insertRaw(
+  "claim",
+  CLAIM_EXPIRED_TARGET,
+  SESSION_A.holder,
+  "-2 hours",
+  "-1 hour",
+);
+const claimOverExpired = await placeHold(
+  input("claim", CLAIM_EXPIRED_TARGET, SESSION_B),
+  sql,
+);
+const claimExpiredRows = await rowsOf(CLAIM_EXPIRED_TARGET);
+check(
+  "placeHold: a claim hold is placed over an expired row of another holder",
+  claimOverExpired.ok,
+  claimOverExpired,
+);
+check(
+  "placeHold: the expired claim row of another holder is closed as expired",
+  claimExpiredRows[0]?.released === true &&
+    claimExpiredRows[0]?.released_by === "expired",
+  claimExpiredRows,
+);
+
+const CLAIM_FUTURE_TARGET = `${PREFIX}/claim-future#3`;
+insertRaw("claim", CLAIM_FUTURE_TARGET, SESSION_A.holder, "1 hour", "2 hours");
+const claimOverFuture = await placeHold(
+  input("claim", CLAIM_FUTURE_TARGET, SESSION_B),
+  sql,
+);
+const claimFutureRows = await rowsOf(CLAIM_FUTURE_TARGET);
+check(
+  "placeHold: a claim hold is placed over a row of another holder created in the future",
+  claimOverFuture.ok,
+  claimOverFuture,
+);
+check(
+  "placeHold: the claim row created in the future is closed as invalid",
+  claimFutureRows[0]?.released === true &&
+    claimFutureRows[0]?.released_by === "invalid",
+  claimFutureRows,
+);
+
+// 別の主体が置いたばかりの行は、READ COMMITTEDと`now()`の開始時刻のずれで、作成時刻が自分の文より少し後になりうる。
+// 1分以内の差は余裕として閉じず、置く操作は「既に有効な保留がある」で断られる。
+const CLAIM_SOON_TARGET = `${PREFIX}/claim-soon#4`;
+insertRaw("claim", CLAIM_SOON_TARGET, SESSION_A.holder, "30 seconds", "1 hour");
+const claimOverSoon = await placeHold(
+  input("claim", CLAIM_SOON_TARGET, SESSION_B),
+  sql,
+);
+const claimSoonRows = await rowsOf(CLAIM_SOON_TARGET);
+check(
+  "placeHold: a claim row created within the margin after the statement is refused",
+  !claimOverSoon.ok && claimOverSoon.reason === HOLD_ALREADY_ACTIVE,
+  claimOverSoon,
+);
+check(
+  "placeHold: a claim row created within the margin is not closed",
+  claimSoonRows.length === 1 && claimSoonRows[0]?.released === false,
+  claimSoonRows,
+);
+const CLAIM_LATE_TARGET = `${PREFIX}/claim-late#5`;
+insertRaw("claim", CLAIM_LATE_TARGET, SESSION_A.holder, "2 minutes", "1 hour");
+const claimOverLate = await placeHold(
+  input("claim", CLAIM_LATE_TARGET, SESSION_B),
+  sql,
+);
+const claimLateRows = await rowsOf(CLAIM_LATE_TARGET);
+check(
+  "placeHold: a claim row created beyond the margin is closed as invalid",
+  claimOverLate.ok &&
+    claimLateRows[0]?.released === true &&
+    claimLateRows[0]?.released_by === "invalid",
+  { claimOverLate, claimLateRows },
 );
 
 // ---------------------------------------------------------------------------

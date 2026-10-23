@@ -11,6 +11,8 @@
 
 import type { SqlClient, SqlRow } from "./db.ts";
 
+export type HoldSqlClient = SqlClient;
+
 export const HOLD_SCOPES = ["merge", "claim"] as const;
 export type HoldScope = (typeof HOLD_SCOPES)[number];
 
