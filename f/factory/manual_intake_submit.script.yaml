@@ -1,0 +1,40 @@
+summary: '[OP-1-2] 手動投入をConsoleから受け付ける'
+description: Consoleの新規投入から呼ぶ入口です。入力を検証し、通れば手動投入フォーム(manual_intake)を起動してジョブIDを返します。許可されていないリポジトリや不正な入力は、起動せずに理由を返します。Issueの作成と作業項目の登録はフローが行います。
+lock: '!inline f/factory/manual_intake_submit.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    acceptance_criteria:
+      type: string
+      description: 受入基準。1行に1項目で書きます。空でもかまいません。
+      default: ''
+      originalType: string
+    body:
+      type: string
+      description: 目的(Issueの本文)。空にはできません。
+      default: null
+      originalType: string
+    owner:
+      type: string
+      description: 投入先リポジトリのオーナー。factory_configで許可されたものに限ります。
+      default: null
+      originalType: string
+    repo:
+      type: string
+      description: 投入先のリポジトリ名。
+      default: null
+      originalType: string
+    title:
+      type: string
+      description: Issueの題名。256文字まで。
+      default: null
+      originalType: string
+  required:
+    - owner
+    - repo
+    - title
+    - body
+tag: console
+timeout: 30

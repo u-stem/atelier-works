@@ -28,6 +28,7 @@ describe("flattenRoutePaths", () => {
     ).toEqual([
       "",
       "items",
+      "items/new",
       "items/:id/requirements",
       "items/:id",
       "reports",

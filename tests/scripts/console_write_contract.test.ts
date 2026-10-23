@@ -12,8 +12,12 @@ import {
   type AuditSkipReason,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  MANUAL_INTAKE_REFUSAL_REASONS,
+  type ManualIntakeRefusalReason,
+  type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
 } from "../../console/src/api/guards/writeResults.ts";
@@ -23,13 +27,16 @@ import {
   SCRIPT_PATHS,
 } from "../../console/src/api/windmill.ts";
 import * as consoleWrites from "../../console/src/api/writes.ts";
+import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import {
   type AuditKickoffSkip,
   decideAuditKickoff,
 } from "../../f/factory/lib/audit_support.ts";
+import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.ts";
 import type { Notice } from "../../f/factory/lib/types.ts";
+import * as manualIntakeSubmit from "../../f/factory/manual_intake_submit.ts";
 import * as noticeResolve from "../../f/factory/notice_resolve.ts";
 import * as retryScript from "../../f/factory/retry_work_item.ts";
 
@@ -37,12 +44,14 @@ type WriteScript =
   | "approval_decide"
   | "retry_work_item"
   | "audit_kickoff"
+  | "manual_intake_submit"
   | "notice_resolve";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
   "retry_work_item",
   "audit_kickoff",
+  "manual_intake_submit",
   "notice_resolve",
 ];
 
@@ -100,11 +109,22 @@ const WRAPPER_CALLS: Readonly<
     ),
   retry_work_item: (fetchFn) => consoleWrites.retryWorkItem(7, { fetchFn }),
   audit_kickoff: (fetchFn) => consoleWrites.kickoffAudit({ fetchFn }),
+  manual_intake_submit: (fetchFn) =>
+    consoleWrites.submitManualIntake(
+      {
+        owner: "octo-owner",
+        repo: "widgets",
+        title: "Add a widget",
+        body: "Add a widget.",
+        acceptanceCriteria: "",
+      },
+      { fetchFn },
+    ),
   notice_resolve: (fetchFn) => consoleWrites.resolveNotice(4, { fetchFn }),
 };
 
 describe("allowlist", () => {
-  test("holds the query and the four write scripts", () => {
+  test("holds the query and the five write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       ["console_query", ...WRITE_SCRIPTS].sort(),
     );
@@ -191,6 +211,22 @@ describe("what the typed calls send", () => {
   test("notice_resolve has no input that names the resolver", async () => {
     const { properties } = await schemaOf(SCRIPT_PATHS.notice_resolve);
     expect(properties).toEqual(["notice_id"]);
+  });
+
+  test("manual_intake_submit has no input that names the actor", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.manual_intake_submit);
+    expect([...properties].sort()).toEqual([
+      "acceptance_criteria",
+      "body",
+      "owner",
+      "repo",
+      "title",
+    ]);
+  });
+
+  test("manual_intake_submit requires the inputs the flow requires", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.manual_intake_submit);
+    expect([...required].sort()).toEqual(["body", "owner", "repo", "title"]);
   });
 
   test("audit_kickoff runs as a manual run without force", async () => {
@@ -296,6 +332,78 @@ describe("what the scripts return", () => {
     );
   });
 
+  test("the console refusal reasons are the backend refusal reasons", () => {
+    expect([...MANUAL_INTAKE_REFUSAL_REASONS]).toEqual([
+      ...manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS,
+    ]);
+  });
+
+  test.each([...manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS])(
+    "the refusal %s passes the guard",
+    (reason) => {
+      expect(isManualIntakeSubmitResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test.each([...manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS])(
+    "the refusal %s has a Japanese sentence",
+    (reason) => {
+      expect(describeIntakeRefusal(reason)).toMatch(/[ぁ-んァ-ヶ一-龠]/);
+    },
+  );
+
+  test("a refusal from the real validation passes the guard", async () => {
+    const result = await manualIntakeSubmit.submitManualIntake(
+      {
+        owner: "stranger",
+        repo: "widgets",
+        title: "t",
+        body: "b",
+        acceptance_criteria: "",
+      },
+      {
+        loadConfig: () =>
+          Promise.resolve({
+            owners: [],
+            repo_allowlist: [],
+            factory_repo: "https://github.com/octo-owner/atelier-works",
+          }),
+        deriveActor: () => "alice",
+        runFlow: () => Promise.resolve(JOB),
+        log: { info: () => undefined },
+      },
+    );
+    expect(isManualIntakeSubmitResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("a started flow passes the guard", async () => {
+    const result = await manualIntakeSubmit.submitManualIntake(
+      {
+        owner: "octo-owner",
+        repo: "widgets",
+        title: "t",
+        body: "b",
+        acceptance_criteria: "",
+      },
+      {
+        loadConfig: () =>
+          Promise.resolve({
+            owners: [{ name: "octo-owner", kind: "user" }],
+            repo_allowlist: [],
+            factory_repo: "https://github.com/octo-owner/atelier-works",
+          }),
+        deriveActor: () => "alice",
+        runFlow: () => Promise.resolve(JOB),
+        log: { info: () => undefined },
+      },
+    );
+    expect(isManualIntakeSubmitResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
   test("a started audit passes the guard", () => {
     const started: auditKickoff.AuditKickoffResult = {
       skipped: false,
@@ -318,6 +426,22 @@ describe("types", () => {
     const equal: Equal<
       AuditSkipReason,
       Extract<auditKickoff.AuditKickoffResult, { skipped: true }>["reason"]
+    > = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console refusal reasons are the backend refusal reasons as types", () => {
+    const equal: Equal<
+      ManualIntakeRefusalReason,
+      manualIntakeSupport.ManualIntakeRefusalReason
+    > = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console manual intake result is the backend result", () => {
+    const equal: Equal<
+      ManualIntakeSubmitResult,
+      manualIntakeSubmit.ManualIntakeSubmitResult
     > = true;
     expect(equal).toBe(true);
   });

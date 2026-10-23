@@ -12,6 +12,7 @@ const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/approval_decide": 120,
   "f/factory/retry_work_item": 120,
   "f/factory/audit_kickoff": 120,
+  "f/factory/manual_intake_submit": 30,
   "f/factory/console_fetch_watch": 60,
 };
 
@@ -67,7 +68,15 @@ describe("console scripts", () => {
     expect(others).toEqual([]);
   });
 
-  test("the six console scripts exist", async () => {
+  test("no console script runs on behalf of another user", async () => {
+    const delegating: string[] = [];
+    for (const path of Object.keys(CONSOLE_SCRIPTS)) {
+      if (/on_behalf_of/.test(await scriptYaml(path))) delegating.push(path);
+    }
+    expect(delegating).toEqual([]);
+  });
+
+  test("the seven console scripts exist", async () => {
     const paths = await allScriptYamlPaths();
     expect(
       Object.keys(CONSOLE_SCRIPTS).filter((path) => !paths.includes(path)),
