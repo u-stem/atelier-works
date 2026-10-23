@@ -71,7 +71,7 @@ function compareText(a: string, b: string): number {
  * 起動関係のグラフを作る。ノードと辺の並びは入力の並びに依らない。
  * - flowのノードは、すべてのflowに作る
  * - scriptのノードは、flowを起動するscriptだけに作る
- * - スケジュールのノードは、そのscriptかflowを実行するスケジュールだけに作る
+ * - スケジュールのノードは、有効で、そのscriptかflowを実行するスケジュールだけに作る
  * - 人の操作のノードは、flowを起動する操作と、scriptを動かすConsoleの操作に作る
  * - flowからscriptへの辺は、flowのモジュールが、flowを起動するscriptを実行するときに引く
  * 起動の辺が存在しないflowを指していれば、例外を投げる。
@@ -122,6 +122,7 @@ export function buildFlowGraph(input: FlowGraphInput): FlowGraph {
   }
 
   for (const schedule of input.schedules) {
+    if (!schedule.enabled) continue;
     const target = relativeToFactory(schedule.target);
     const targetId = `${schedule.isFlow ? "flow" : "script"}:${target}`;
     if (!nodes.has(targetId)) continue;

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { DrawioFrame } from "../../components/drawio/DrawioFrame.tsx";
 import type { FlowGraph } from "../../lib/flowGraph.ts";
 import { flowGraphToDrawioXml } from "../../lib/flowGraphXml.ts";
@@ -9,6 +10,11 @@ import { flowGraphToDrawioXml } from "../../lib/flowGraphXml.ts";
  * 図の幅は広いので、ほかの節より広く取る。
  */
 export function FlowGraphSection({ graph }: { graph: FlowGraph | null }) {
+  // 再描画のたびに組み立て直すと、DrawioFrameがXMLの変更とみなしてiframeを作り直す。
+  const xml = useMemo(
+    () => (graph === null ? null : flowGraphToDrawioXml(graph)),
+    [graph],
+  );
   return (
     <section
       aria-labelledby="flow-graph-heading"
@@ -21,15 +27,17 @@ export function FlowGraphSection({ graph }: { graph: FlowGraph | null }) {
         <div className="text-small text-muted-foreground">
           スケジュール、script、flow、人の操作が、何を起動するかを示します。
           実線の矢印はscriptがflowを起動する関係、破線の矢印は時刻や人の操作による起動、点線の矢印はflowが実行するステップです。
+          scriptからscriptの起動は含みません。
+          たとえばself_updateがauto_retry_stale_imageを起動する関係は、図に出ません。
           コードから読み取った構造で、実行の状態は示しません。
         </div>
       </div>
-      {graph === null ? (
+      {xml === null ? (
         <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
           起動の関係のデータを読み込めませんでした。
         </p>
       ) : (
-        <DrawioFrame xml={flowGraphToDrawioXml(graph)} title="起動の関係の図" />
+        <DrawioFrame xml={xml} title="起動の関係の図" />
       )}
     </section>
   );

@@ -2955,6 +2955,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 最上位のページで描くと、ビューアの欠陥が、Windmillを管理者として操作できるXSSになる。
 実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
 要件定義書の画面(`/console/items/:id/requirements`)が、図ごとに`DrawioFrame`で描く。
+システムの画面(`/console/system`)の起動の関係の節も、`DrawioFrame`で描く。このXMLはリポジトリのコードから作るが、同じ隔離したiframeを通す。
 安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 

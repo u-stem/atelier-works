@@ -1,31 +1,23 @@
 // 起動関係のグラフから、draw.ioの非圧縮XMLを組み立てる純関数。
+// 配置は`flowGraphLayout.ts`が決める。
+// ノードは機械生成の全体の見取り図で、drawio-diagramスキルの目安(15個)を超える。
+// 分割すると、起動の経路を1枚で追うという目的を失うので、1枚にまとめる。
 // 図は信頼できない入力として隔離したiframeで描くので、リンク、`placeholders`、
 // ラベルのHTMLの属性は出さない。ラベルは、HTMLの文字としてエスケープした後、
 // XMLの属性値としてもう一度エスケープする。
 
 import type {
   FlowGraph,
-  GraphEdge,
   GraphEdgeKind,
   GraphNode,
   GraphNodeKind,
 } from "./flowGraph.ts";
-
-const NODE_WIDTH = 200;
-const NODE_HEIGHT = 64;
-const COLUMN_GAP = 160;
-const ROW_GAP = 24;
-const MARGIN = 40;
-/** 並べ替えの往復の回数。ノードが数十個なら、数回で並びが落ち着く。 */
-const ORDER_PASSES = 4;
-
-/** 左から、入口(スケジュールと人の操作)、script、flowの3列に並べる。 */
-const COLUMN_OF: Readonly<Record<GraphNodeKind, number>> = {
-  schedule: 0,
-  human: 0,
-  script: 1,
-  flow: 2,
-};
+import {
+  type Anchor,
+  type LayoutBox,
+  type LayoutLink,
+  layoutFlowGraph,
+} from "./flowGraphLayout.ts";
 
 const NODE_STYLE: Readonly<Record<GraphNodeKind, string>> = {
   schedule:
@@ -37,15 +29,16 @@ const NODE_STYLE: Readonly<Record<GraphNodeKind, string>> = {
   flow: "rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;",
 };
 
-const EDGE_BASE =
-  "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;";
-
-/** 実線はscriptがflowを起動する関係、破線は時刻と人の操作による起動、点線はflowの中のステップ。 */
+/**
+ * 辺は直線で引く(経路を決める`edgeStyle`を付けない)。
+ * 実線はscriptがflowを起動する関係、破線は時刻と人の操作による起動、点線はflowの中のステップ。
+ */
+const EDGE_BASE = "html=1;endArrow=block;";
 const EDGE_STYLE: Readonly<Record<GraphEdgeKind, string>> = {
-  run: EDGE_BASE,
-  schedule: `${EDGE_BASE}dashed=1;`,
-  human: `${EDGE_BASE}dashed=1;`,
-  step: `${EDGE_BASE}dashed=1;dashPattern=1 3;`,
+  run: `${EDGE_BASE}strokeColor=#333333;`,
+  schedule: `${EDGE_BASE}dashed=1;strokeColor=#b09500;`,
+  human: `${EDGE_BASE}dashed=1;strokeColor=#d79b00;`,
+  step: `${EDGE_BASE}dashed=1;dashPattern=1 3;strokeColor=#9673a6;fontColor=#9673a6;`,
 };
 
 const EDGE_LABEL: Readonly<Record<GraphEdgeKind, string>> = {
@@ -75,72 +68,28 @@ function labelValue(node: GraphNode): string {
   return escapeAttribute(html);
 }
 
-/** 列ごとのノードの並びを、つながる先の位置の平均で整える。 */
-function orderColumns(graph: FlowGraph): GraphNode[][] {
-  const columns: GraphNode[][] = [[], [], []];
-  for (const node of graph.nodes) columns[COLUMN_OF[node.kind]]?.push(node);
-
-  const neighbors = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    neighbors.set(edge.from, [...(neighbors.get(edge.from) ?? []), edge.to]);
-    neighbors.set(edge.to, [...(neighbors.get(edge.to) ?? []), edge.from]);
-  }
-
-  const position = new Map<string, number>();
-  const record = (): void => {
-    for (const column of columns) {
-      column.forEach((node, index) => {
-        position.set(node.id, (index + 0.5) / column.length);
-      });
-    }
-  };
-  record();
-
-  for (let pass = 0; pass < ORDER_PASSES; pass += 1) {
-    for (const index of [1, 0, 2]) {
-      const column = columns[index];
-      if (column === undefined) continue;
-      const keyed = column.map((node, order) => {
-        const near = neighbors.get(node.id) ?? [];
-        const own = position.get(node.id) ?? 0;
-        const key =
-          near.length === 0
-            ? own
-            : near.reduce((sum, id) => sum + (position.get(id) ?? own), 0) /
-              near.length;
-        return { node, order, key };
-      });
-      keyed.sort((a, b) => a.key - b.key || a.order - b.order);
-      columns[index] = keyed.map((entry) => entry.node);
-      record();
-    }
-  }
-  return columns;
-}
-
-function vertexCell(
-  id: string,
-  node: GraphNode,
-  column: number,
-  row: number,
-): string {
-  const x = MARGIN + column * (NODE_WIDTH + COLUMN_GAP);
-  const y = MARGIN + row * (NODE_HEIGHT + ROW_GAP);
+function vertexCell(id: string, box: LayoutBox): string {
   return [
-    `        <mxCell id="${id}" value="${labelValue(node)}" style="${NODE_STYLE[node.kind]}" vertex="1" parent="1">`,
-    `          <mxGeometry x="${x}" y="${y}" width="${NODE_WIDTH}" height="${NODE_HEIGHT}" as="geometry" />`,
+    `        <mxCell id="${id}" value="${labelValue(box.node)}" style="${NODE_STYLE[box.node.kind]}" vertex="1" parent="1">`,
+    `          <mxGeometry x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" as="geometry" />`,
     "        </mxCell>",
   ].join("\n");
 }
 
+function constraint(prefix: "exit" | "entry", anchor: Anchor): string {
+  const x = anchor.side === "right" ? 1 : 0;
+  return `${prefix}X=${x};${prefix}Y=${anchor.fraction};${prefix}Dx=0;${prefix}Dy=0;`;
+}
+
 function edgeCell(
   id: string,
-  edge: GraphEdge,
+  link: LayoutLink,
   source: string,
   target: string,
 ): string {
+  const style = `${EDGE_STYLE[link.edge.kind]}${constraint("exit", link.exit)}${constraint("entry", link.entry)}`;
   return [
-    `        <mxCell id="${id}" value="${escapeAttribute(escapeHtml(EDGE_LABEL[edge.kind]))}" style="${EDGE_STYLE[edge.kind]}" edge="1" parent="1" source="${source}" target="${target}">`,
+    `        <mxCell id="${id}" value="${escapeAttribute(escapeHtml(EDGE_LABEL[link.edge.kind]))}" style="${style}" edge="1" parent="1" source="${source}" target="${target}">`,
     '          <mxGeometry relative="1" as="geometry" />',
     "        </mxCell>",
   ].join("\n");
@@ -148,28 +97,26 @@ function edgeCell(
 
 /**
  * 起動関係のグラフを、draw.ioのXMLにする。
- * 同じグラフからは同じ文字列を返す。辺の両端が存在しない辺は描かない。
+ * 同じグラフからは同じ文字列を返す。辺のidは、グラフの辺の並びの番号に合わせる。
  */
 export function flowGraphToDrawioXml(graph: FlowGraph): string {
-  const columns = orderColumns(graph);
+  const layout = layoutFlowGraph(graph);
   const cellIds = new Map<string, string>();
-  const vertices: string[] = [];
-  let count = 0;
-  columns.forEach((column, columnIndex) => {
-    column.forEach((node, row) => {
-      const id = `n${count}`;
-      count += 1;
-      cellIds.set(node.id, id);
-      vertices.push(vertexCell(id, node, columnIndex, row));
-    });
+  const vertices = layout.boxes.map((box, index) => {
+    const id = `n${index}`;
+    cellIds.set(box.node.id, id);
+    return vertexCell(id, box);
   });
 
   const edges: string[] = [];
   graph.edges.forEach((edge, index) => {
+    const link = layout.links.find((candidate) => candidate.edge === edge);
     const source = cellIds.get(edge.from);
     const target = cellIds.get(edge.to);
-    if (source === undefined || target === undefined) return;
-    edges.push(edgeCell(`e${index}`, edge, source, target));
+    if (link === undefined || source === undefined || target === undefined) {
+      return;
+    }
+    edges.push(edgeCell(`e${index}`, link, source, target));
   });
 
   return [

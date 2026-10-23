@@ -1073,7 +1073,7 @@ Consoleから解決できる種類の行は、「詳細と解決」と書く。�
 `scripts/docs-gen.ts --check`が古さを検出するので、CIの`check`が、データを更新し忘れたPRを止める。
 
 - `scripts/launch-graph.ts`の起動辺の表。scriptがflowを起動する関係と、人の操作
-- `f/factory/*.schedule.yaml`の実行先とcron。flowを起動するscriptか、flowを実行するスケジュールだけを載せる
+- `f/factory/*.schedule.yaml`の実行先とcron。有効で、flowを起動するscriptかflowを実行するスケジュールだけを載せる
 - `f/factory/*__flow/flow.yaml`の概要とモジュール。flowが実行するステップのうち、flowを起動するscriptだけを辺にする
 
 ノードはスケジュール、script、flow、人の操作の4種類で、辺はスケジュールからの起動、scriptによるflowの起動、人の操作による起動、flowのステップの4種類である。
@@ -1083,10 +1083,20 @@ Consoleから解決できる種類の行は、「詳細と解決」と書く。�
 JSONはViteがそのままバンドルに取り込む。
 `src/lib/flowGraph.ts`の`parseFlowGraph`が形を確かめ、ノードのidの重複や存在しない辺の端があればnullを返す。
 nullのときは、節に読み込めなかった旨を出し、図は描かない。
-`src/lib/flowGraphXml.ts`の`flowGraphToDrawioXml`が、グラフからdraw.ioのXMLを作る純関数で、`DrawioFrame`に渡す。
-列はスケジュールと人の操作、script、flowの3つで、列の中は、つながる先の位置の平均で並べる。
+座標は`src/lib/flowGraphLayout.ts`の`layoutFlowGraph`が決める。
+`src/lib/flowGraphXml.ts`の`flowGraphToDrawioXml`が、その座標からdraw.ioのXMLを作る。
+どちらも純関数で、XMLは`DrawioFrame`に渡す。
+箱は3列に並べる。1列目はscriptを起動するスケジュールとConsoleの操作、2列目はscriptと、flowを直接起動するスケジュールと人の操作、3列目はflowである。
+どの辺も隣り合う列を結ぶので、辺が他のノードの箱の上を通らない。
+辺は直線で引く。同じ箱の同じ側につく辺は、つなぎ先の高さの順に、箱の高さを等分した位置へ割り当てる。多数の辺が列の間の1本の線に重ならないためである。
+辺の線は、scriptがflowを起動する関係を実線、時刻や人の操作による起動を破線、flowのステップを色の違う点線にして見分ける。
+ノードは31個あり、図の目安の15個を超える。機械生成の全体の見取り図で、分割すると、起動の経路を1枚で追う目的を失うため、1枚にまとめる。
 ラベルはHTMLとして、続いてXMLの属性値としてエスケープする。リンク、`placeholders`、HTMLの属性は出さない。
 XMLの大きさが`DrawioFrame`の上限を超えると、図は描かず、大きすぎる旨を出す。
+
+図に出ない関係がある。scriptからscriptの起動は含まない。たとえば`self_update`が`auto_retry_stale_image`を起動する関係である。
+そのため、入ってくる辺を持たないscriptも図に出る。節の説明にも同じ旨を書く。
+無効のスケジュールは、図に載せない。
 
 図は取得も実行の状態の重ね合わせも持たない。コードから読み取った構造だけを示す。
 
@@ -1562,7 +1572,7 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 要件定義書の図は、最上位のページではなく、隔離したiframeの中で描く。
 何を守るかは、[セキュリティ](../security.md)の「draw.ioの図の描画」にある。
 要件定義書の画面が、本文の図ごとに`DrawioFrame`で描く。
-システムの画面の起動の関係の節も、組み立てたXMLを`DrawioFrame`で描く。
+システムの画面の起動の関係の節も、組み立てたXMLを`DrawioFrame`で描く。XMLはリポジトリ由来で、同じ隔離したiframeを通す。
 
 | ファイル | 役割 |
 | --- | --- |

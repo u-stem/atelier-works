@@ -165,7 +165,7 @@ description = "Lint the Markdown documents (repository rules, markdownlint, text
 run = "bun run scripts/lint-docs.ts"
 
 [tasks."docs:gen"]
-description = "Regenerate the generated blocks in the documents"
+description = "Regenerate the generated blocks in the documents and the flow graph data for the console"
 run = "bun run scripts/docs-gen.ts"
 
 [tasks.check]
