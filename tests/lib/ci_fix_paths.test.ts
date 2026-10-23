@@ -465,10 +465,28 @@ describe("tests", () => {
     ).toBe("test_not_additive");
   });
 
-  test("rejects a removal when the lines the pull request added are unknown", () => {
-    expect(codeOf([change(TEST, { removedLineCount: 1 })], [TEST])).toBe(
-      "test_not_additive",
-    );
+  test("reports a removal as unknown when the lines the pull request added are unknown", () => {
+    expect(
+      codeOf(
+        [change(TEST, { removedLineCount: 1, shrinkingHunkCount: 0 })],
+        [TEST],
+      ),
+    ).toBe("test_base_unknown");
+  });
+
+  test("reports a removal that is wrong whatever the base is as not additive, even if the base is unknown", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 1,
+            addedLines: ["// gone"],
+            shrinkingHunkCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
   });
 
   test("rejects removing more lines than it adds, even for lines the pull request added", () => {

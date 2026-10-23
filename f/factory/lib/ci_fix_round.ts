@@ -1013,7 +1013,7 @@ const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 export function parseHunkRanges(patch: string): {
   readonly removed: LineRange[];
   readonly added: LineRange[];
-  readonly newFile: boolean;
+  readonly newFile?: boolean;
 } | null {
   const removed: LineRange[] = [];
   const added: LineRange[] = [];
