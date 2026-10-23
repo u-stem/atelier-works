@@ -264,9 +264,16 @@ export function evaluateCiRoundPrepareGuard(
 }
 
 /**
+ * PRの基点を求めるgitの実行の数(存在の確認、取り込み、merge-base)。
+ * 修正のステップが1回、検証のステップが1回(結果は4回の読み取りで使い回す)、実行する。
+ * 基点を求めるAPI呼び出し(PR、既定のブランチ、ブランチの先端)は、`baseSec`の余裕に含める。
+ */
+const BASE_RESOLUTION_GIT_RUNS = 3;
+
+/**
  * 修正ステップの時間設定が、CI回の追加の作業を含めてstep timeoutに収まらなければ理由を返す。
  * CI回の修正ステップは、Claudeの実行(不正な出力への再試行を含めて2回)に加えて、
- * gitleaksを最大5回(抜粋の4回と出力の1回)走らせる。
+ * gitleaksを最大5回(抜粋の4回と出力の1回)と、基点を求めるgitを走らせる。
  * `overhead`は、通常の回の見積もりと同じ値を渡す。
  */
 export function ciRoundApplyTimeoutMisfit(
@@ -278,9 +285,11 @@ export function ciRoundApplyTimeoutMisfit(
   },
 ): string | null {
   const scanSec = CI_FIX_GITLEAKS_TIMEOUT_MS / 1000 + overhead.commandStopSec;
+  const gitSec = DEFAULT_TIMEOUT_MS / 1000 + overhead.commandStopSec;
   const total =
     2 * (claudeTimeoutSec + overhead.commandStopSec) +
     5 * scanSec +
+    BASE_RESOLUTION_GIT_RUNS * gitSec +
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
   return `${ciRoundReason(CI_ROUND_DETAILS.timeMisfit)}2 claude runs and 5 secret scans need ${String(total)}s but the step allows ${String(stepTimeoutSec)}s`;
@@ -292,6 +301,8 @@ export function ciRoundApplyTimeoutMisfit(
  * 通常の回の見積もり(Claude 2回と、全件の検査2回)に、CI回だけの次の作業を足す。
  * - 再実行のgitleaks最大5回(抜粋の4回と、出力の1回)と、止める理由の検査1回。
  * - 検査コマンドの後の`git clean`2回。gitの1回は`DEFAULT_TIMEOUT_MS`で打ち切る。
+ * - PRの基点を求めるgit(`BASE_RESOLUTION_GIT_RUNS`回)。結果は4回の読み取りで使い回すので、1回だけ数える。
+ *   読み取りの1件ごとに、基点との差分を読むgitが2回増えるが、時間の上限を超えた時点で実行中のgitの数(3回)に収まる。
  * - 変更を読む4回(Claudeの実行の後、検査コマンドの後、再実行の後、2回目の検査コマンドの後)。
  *   1回の読み取りは、時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)に、上限を超えた時点で実行中のgit数回を足した時間で収まる。
  * 再実行のログ取得のAPI呼び出しは、通常の回と同じく、`baseSec`の余裕に含める。
@@ -317,6 +328,7 @@ export function ciRoundVerifyTimeoutMisfit(
     6 * scanSec +
     2 * gitSec +
     4 * collectSec +
+    BASE_RESOLUTION_GIT_RUNS * gitSec +
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
   return `${ciRoundReason(CI_ROUND_DETAILS.timeMisfit)}the verify step needs ${String(total)}s for ${String(checkCount)} check commands but the step allows ${String(stepTimeoutSec)}s`;
