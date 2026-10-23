@@ -135,7 +135,7 @@ export function resolveNotice(
   );
 }
 
-type ManualIntakeInput = {
+export type ManualIntakeInput = {
   readonly owner: string;
   readonly repo: string;
   readonly title: string;
