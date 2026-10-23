@@ -36,8 +36,8 @@ function renderWith(options: {
     <TooltipProvider>
       <PageHeader
         title="題"
-        refresh={options.refresh}
         actions={options.actions}
+        {...(options.refresh === undefined ? {} : { refresh: options.refresh })}
       >
         {options.children}
       </PageHeader>
