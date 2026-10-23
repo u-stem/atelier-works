@@ -308,13 +308,14 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の6つのscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の7つのscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
 - `retry_work_item`
 - `audit_kickoff`
 - `notice_resolve`
+- `manual_intake_submit`
 - `console_fetch_watch`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
