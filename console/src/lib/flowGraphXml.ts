@@ -16,6 +16,7 @@ import {
   type Anchor,
   type LayoutBox,
   type LayoutLink,
+  layoutExtent,
   layoutFlowGraph,
 } from "./flowGraphLayout.ts";
 
@@ -101,6 +102,7 @@ function edgeCell(
  */
 export function flowGraphToDrawioXml(graph: FlowGraph): string {
   const layout = layoutFlowGraph(graph);
+  const extent = layoutExtent(layout);
   const cellIds = new Map<string, string>();
   const vertices = layout.boxes.map((box, index) => {
     const id = `n${index}`;
@@ -122,7 +124,7 @@ export function flowGraphToDrawioXml(graph: FlowGraph): string {
   return [
     '<mxfile host="app.diagrams.net">',
     '  <diagram name="flow-launch-graph" id="flow-launch-graph">',
-    '    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="1100" math="0" shadow="0">',
+    `    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="${extent.width}" pageHeight="${extent.height}" math="0" shadow="0">`,
     "      <root>",
     '        <mxCell id="0" />',
     '        <mxCell id="1" parent="0" />',

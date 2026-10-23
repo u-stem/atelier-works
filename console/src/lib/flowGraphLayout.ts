@@ -12,6 +12,8 @@ import type {
 
 export const NODE_WIDTH = 200;
 export const NODE_HEIGHT = 56;
+/** flowは名前に説明が続き、折り返して3行になることがあるので、高く取る。 */
+export const FLOW_NODE_HEIGHT = 72;
 const COLUMN_GAP = 200;
 const ROW_GAP = 16;
 export const LAYOUT_MARGIN = 40;
@@ -121,10 +123,19 @@ function orderColumns(
   return columns;
 }
 
+function heightOf(node: GraphNode): number {
+  return node.kind === "flow" ? FLOW_NODE_HEIGHT : NODE_HEIGHT;
+}
+
 /** 箱を列ごとに置く。短い列は、いちばん長い列の高さに均等に散らす。 */
 function placeBoxes(columns: readonly (readonly GraphNode[])[]): LayoutBox[] {
-  const rows = Math.max(1, ...columns.map((column) => column.length));
-  const total = rows * (NODE_HEIGHT + ROW_GAP);
+  const total = Math.max(
+    1,
+    ...columns.map(
+      (column) =>
+        column.length * (Math.max(0, ...column.map(heightOf)) + ROW_GAP),
+    ),
+  );
   return columns.flatMap((column, columnIndex) =>
     column.map((node, row) => ({
       node,
@@ -132,9 +143,9 @@ function placeBoxes(columns: readonly (readonly GraphNode[])[]): LayoutBox[] {
       x: MARGIN + columnIndex * (NODE_WIDTH + COLUMN_GAP),
       y:
         MARGIN +
-        Math.round(((row + 0.5) / column.length) * total - NODE_HEIGHT / 2),
+        Math.round(((row + 0.5) / column.length) * total - heightOf(node) / 2),
       width: NODE_WIDTH,
-      height: NODE_HEIGHT,
+      height: heightOf(node),
     })),
   );
 }
@@ -218,9 +229,14 @@ export function layoutFlowGraph(graph: FlowGraph): FlowGraphLayout {
 }
 
 /** 図全体の大きさ。いちばん外側の箱の外に、余白を足した値。 */
-export function layoutExtent(_layout: FlowGraphLayout): {
+export function layoutExtent(layout: FlowGraphLayout): {
   readonly width: number;
   readonly height: number;
 } {
-  return { width: 0, height: 0 };
+  return {
+    width:
+      Math.max(0, ...layout.boxes.map((box) => box.x + box.width)) + MARGIN,
+    height:
+      Math.max(0, ...layout.boxes.map((box) => box.y + box.height)) + MARGIN,
+  };
 }
