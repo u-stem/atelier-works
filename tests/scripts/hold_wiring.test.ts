@@ -1484,6 +1484,7 @@ describe("the hold command files", () => {
       "placeHold",
       "releaseHold",
       "sanitizeHoldText",
+      "validatePlaceInput",
     ]);
   });
 

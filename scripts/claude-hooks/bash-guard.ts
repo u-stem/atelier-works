@@ -11,8 +11,11 @@
 // - `--no-verify`、`git commit -n`: lefthookの検査が落ちたとき、直さずに迂回する。
 // - `core.hooksPath`、`LEFTHOOK*`、`GIT_CONFIG_*`、`include.*`、`.git/hooks`と`.git/config`の書き換え: 同じ迂回を、設定の裏から行う。
 // - `remote.*.push`、`push.default`、`alias.*`: pushの行き先や中身を、別の名前や設定に隠す。
+// - `mise generate`の`git-pre-commit --write`、`--hook`、`github-action --write`: 同じフックとワークフローを、生成の書き込みで上書きする。
 // - xargsや標準入力から渡すgit push、シェルのコード: 渡された引数やコードを判定できないまま実行する。
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
+// - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
+//   一覧(`list`)は許す。ベストエフォートで、別名の呼び出しや変数で組んだパスは止めない。
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
 // 字句に分けられないコマンドと、実行するまでpush先が決まらないコマンドは拒否する。
 // `cd`と`pushd`の文字どおりの移動先と、`git checkout`などで切り替えたブランチは、続くコマンドの前提にする。
@@ -29,6 +32,7 @@ import {
   shellInputSource,
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
+import { touchesHolds } from "./hold-guard.ts";
 import {
   ALLOW,
   type BashToolInput,
@@ -403,6 +407,10 @@ export const REASONS = {
     "mise exec passes the secrets of mise.local.toml to its command as environment variables, so a shell given code (-c or stdin), the -c/--command option, or an environment dump (env, printenv, set, export -p) can print them. Run the intended tool directly (for example mise exec -- gitleaks ... or mise exec -- wmill ...), or add a mise task and use mise run. Never print secret values.",
   shellStdin:
     "Shell code built from variables and passed through stdin cannot be checked. Pass literal text (echo 'git status' | sh), use sh -c '...', or run a script file.",
+  miseGenerate:
+    "mise generate git-pre-commit with --write or --hook writes into .git/hooks, and mise generate github-action with --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Print to stdout (without those options) and review the output instead.",
+  subagentHold:
+    "Subagents must not place or release holds: a hold stops merges, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place or mise run hold:release. Listing with mise run hold:list is fine.",
 } as const;
 
 const DOCKER_REASONS = {
@@ -587,11 +595,20 @@ function checkSimpleCommand(
   }
   const docker = dockerExposure(words);
   if (docker !== null) return deny(DOCKER_REASONS[docker]);
+  if (
+    scope.input.agentId !== null &&
+    touchesHolds(words, () => literalShellInputs(command))
+  ) {
+    return deny(REASONS.subagentHold);
+  }
   if (isLefthookUninstall(words)) {
     return deny(REASONS.lefthookUninstall);
   }
   if (touchesGitInternals(command, program, words)) {
     return deny(REASONS.gitInternals);
+  }
+  if (writesGeneratedFiles(program, words)) {
+    return deny(REASONS.miseGenerate);
   }
   const shellArgs = shellArguments(words);
   if (shellArgs !== null) {
@@ -758,6 +775,38 @@ function touchesGitInternals(
   }
   if (!MUTATING_PROGRAMS.has(program) && !editsInPlace) return false;
   return args.some((word) => GIT_INTERNALS.test(word.text));
+}
+
+/** `mise generate git-pre-commit`が、フックのファイルへ書くオプション。 */
+const GENERATE_HOOK_WRITE_OPTIONS = /^(--write|-w|--hook(=.*)?|-t)$/;
+
+/**
+ * `mise generate git-pre-commit`の`--write`と`--hook`は`.git/hooks`へ、
+ * `mise generate github-action`の`--write`は`.github/workflows`へ書く。
+ * 書き込み先は字面で決まるので、この形だけを拒否する。標準出力へ出す形は拒否しない。
+ */
+function writesGeneratedFiles(
+  program: string,
+  words: readonly Word[],
+): boolean {
+  if (program !== "mise") return false;
+  const args = words.slice(1);
+  const generate = args.findIndex(
+    (word) => word.text === "generate" || word.text === "g",
+  );
+  if (generate === -1) return false;
+  const rest = args.slice(generate + 1);
+  const target = rest.find((word) => !word.text.startsWith("-"))?.text;
+  const options = rest.filter((word) => word.text.startsWith("-"));
+  if (target === "git-pre-commit") {
+    return options.some((word) => GENERATE_HOOK_WRITE_OPTIONS.test(word.text));
+  }
+  if (target === "github-action") {
+    return options.some(
+      (word) => word.text === "--write" || word.text === "-w",
+    );
+  }
+  return false;
 }
 
 /** `cp`、`rsync`、`install`の行き先を返す。`-t`か`--target-directory`があればその値、無ければ最後の引数。 */

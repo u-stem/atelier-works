@@ -34,6 +34,10 @@ export type ChangedPath = {
  * `mise/`はmiseの設定ディレクトリで、どれもホストのユーザーの権限で動くか、動く道具の入力になる。
  * これらの変更をホストへ通す関門は、保護パスではなく実行役の承認である(`docs/security.md`のホストの実行役の節)。
  * 保護パスは、pr_fixの自動修正がこれらを書き換えるのを止め、implementのPRに明記させる補助である。
+ * ローカルのフック(`scripts/claude-hooks/`とそのテスト`tests/scripts/claude-hooks/`)も含める。
+ * subagentの拒否(push、秘密値の参照、保留の操作)を決めるので、書き換えられると拒否が外れる。
+ * miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)も含める。置いたファイルが`mise run`のタスクとして実行されるので、
+ * 拒否のフックが見分ける`hold:*`の外から、保留などの操作を実行する道になる。まだ存在しなくても、名前を先に押さえる。
  */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
@@ -49,6 +53,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   "scripts/host_apply/",
   "infra/worker/",
   "mise/",
+  "scripts/claude-hooks/",
+  "tests/scripts/claude-hooks/",
+  "mise-tasks/",
+  ".mise-tasks/",
 ];
 
 /**
@@ -144,6 +152,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
  * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
  * 書き換えられると、参照の混入の検出が外れ、保留の期限の上限が外れる。
+ * 保留のCLI(`scripts/hold.ts`)とpsqlの経路(`scripts/hold_psql.ts`)、そのテスト(`tests/scripts/hold.test.ts`、
+ * `tests/scripts/hold_psql.test.ts`)も守る。CLIは保留を置く・解除する入口で、psqlの経路は接続先のデータベースと
+ * 読み取り専用の設定を決める。書き換えられると、置く主体の確認や、実DBの検査が使い捨てのデータベースだけに書く保証が外れる。
+ * `scripts/ci-scope.ts`はすでに守っている。psqlの経路は、実DBの検査が読み込むファイルとして、そこに載せる。
  * 一方、`holds.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * `scripts/test-db-holds.ts`が使う`scripts/test-db-sql.ts`も守らない。ほかの実DBの検査も使う部品で、
  * 守ると日常の変更を止めるためである。制約の拒否は、失敗の文に制約名が含まれることまで照合するので、
@@ -228,6 +240,10 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/lib/holds_db.test.ts",
   "tests/scripts/hold_wiring.test.ts",
   "scripts/test-db-holds.ts",
+  "scripts/hold.ts",
+  "scripts/hold_psql.ts",
+  "tests/scripts/hold.test.ts",
+  "tests/scripts/hold_psql.test.ts",
   "migrations/datatable/main/20261023131355_holds.up.sql",
   "migrations/datatable/main/20261023131355_holds.down.sql",
   "scripts/host-apply.ts",

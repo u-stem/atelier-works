@@ -1,6 +1,8 @@
 // 10分ごとに、dependabotが開いたPRを探し、自動でマージできるかをフローと同じ収集とゲートで評価する。
 // 通ったPRだけ作業項目を`picked`で作り、フロー`f/factory/dependabot`を起動する。
 // 待つ間は作業項目を作らない。人に回すと決めたPRは、作業項目を作ってすぐ`needs_human`で終え、1回だけ通知する。
+// リポジトリにマージの保留があるときと、保留を読めないときも、作業項目を作らずに待つ。影響調査(Claudeの実行)も走らせない。
+// 保留が解けるか読めるようになれば、次の取得で自動で再開する。待ったPRの数は、周回ごとに1件の通知にまとめる。
 // `dependabot_enabled`が偽なら、GitHubにもDBにも触れずに終える。
 // 対象のリポジトリは`factory_repo`と`repo_allowlist`に明示したものだけで、オーナーの全リポジトリは見ない。
 // 候補の列挙は、収集が有効なときは収集の表から読む。
@@ -16,6 +18,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  defaultSqlClient,
   dependabotGateWaitingCancels,
   hasDependabotItemForHead,
   insertDependabotWorkItemUnlessActive,
@@ -32,8 +35,10 @@ import {
   collectGateInput,
 } from "./lib/dependabot_collect.ts";
 import {
+  classifyMergeHolds,
   DEPENDABOT_FLOW_PATH,
   dependabotReason,
+  type MergeHoldCheck,
   type MergeHoldFailure,
   sanitizeUntrustedProse,
 } from "./lib/dependabot_flow_support.ts";
@@ -61,6 +66,11 @@ import {
   type OpenPullRequest,
   type PullRequestWithCreatedAt,
 } from "./lib/github.ts";
+import {
+  type HoldReadOutcome,
+  type HoldRow,
+  listActiveHolds,
+} from "./lib/holds.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import { isCommitSha } from "./lib/main_ci_support.ts";
@@ -229,6 +239,14 @@ export type PollDependabotDeps = {
     prNumber: number,
     headSha: string,
   ) => Promise<{ readonly count: number; readonly lastAt: Date | null }>;
+  /**
+   * リポジトリのマージの保留を読む(`listActiveHolds`)。
+   * PRごとに呼ぶ。読めないときは失敗を返すか例外を投げ、呼び出し側は保留なしとは扱わない。
+   */
+  readonly listMergeHolds: (
+    owner: string,
+    repo: string,
+  ) => Promise<HoldReadOutcome<readonly HoldRow[]>>;
   /** フローの準備と同じ収集(`collectGateInput`)。 */
   readonly collect: (
     owner: string,
@@ -294,6 +312,11 @@ export type DependabotPollOutcome =
       readonly key: string;
       /** 次の周回へ引き継ぐ待ちの記録。 */
       readonly wait: HeadWaitState;
+    }
+  | {
+      /** マージの保留があるか、保留を読めないので、作業項目を作らずに待つ。待ちの記録は変えない。 */
+      readonly kind: "held";
+      readonly check: Exclude<MergeHoldCheck, { kind: "clear" }>;
     }
   | { readonly kind: "skipped"; readonly reason: string };
 
@@ -382,6 +405,7 @@ function nextPublishCheckAtMs(
  * 2. PRを読み、baseのリポジトリの名前が候補と大小文字を除いて同じで、開いた、draftでない、baseが`main`、作者が`dependabot[bot]`、headが完全なshaのものだけを続ける。
  *    以後の処理には、GitHubが返したリポジトリの名前とPRの作成の時刻を使う。候補の値は並びにだけ使う。
  * 3. そのheadを処理済み(`hasDependabotItemForHead`)なら、何もしない。
+ *    リポジトリにマージの保留があるか、保留を読めなければ、作業項目を作らずに待つ(`held`)。待ちの記録は変えない。
  * 4. 待っているheadは、次に確かめる時刻まで評価しない。
  * 5. PRを作ってから保持期間に近いほど時間がたっていれば、処理済みの記録が消えたかもしれないので、人に回す。
  * 6. 同じheadでフローが待ちで止まった回数が上限に達していれば人に回し、直後なら起動を見送る。
@@ -451,6 +475,13 @@ export async function processDependabotPr(
   if (await deps.hasItemForHead(owner, repo, number, headSha)) {
     return skipped(DEPENDABOT_SKIP_REASON.headHandled);
   }
+
+  // マージの保留は、収集と影響調査より前に確かめる。保留があるPRに、Claudeの実行を使わない。
+  // 保留を読めないときも待つ。保留なしとは扱わない。
+  const holdCheck = await classifyMergeHolds(() =>
+    deps.listMergeHolds(owner, repo),
+  );
+  if (holdCheck.kind !== "clear") return { kind: "held", check: holdCheck };
 
   const key = headWaitKey(owner, repo, number, headSha);
   const previousWait = ctx.waits.get(key);
@@ -868,6 +899,8 @@ export type PollSession = {
   readonly listActive: () => Promise<
     readonly Pick<WorkItem, "kind" | "owner" | "repo" | "pr_number">[]
   >;
+  /** 保留で待ったPRの数を、通知の表に残す。1周で、種類ごとに1回だけ呼ぶ。 */
+  readonly recordHoldNotice: (notice: HoldNotice) => Promise<void>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
   readonly deps: PollDependabotDeps;
 };
@@ -890,6 +923,8 @@ export type PollDependabotResult = {
   readonly waiting: number;
   readonly skipped: number;
   readonly failed: number;
+  /** マージの保留のために待ったPRの数。保留を読めずに待ったPRを含む。 */
+  readonly held: number;
   /** 表の代わりにRESTの一覧で候補を列挙したリポジトリの数。 */
   readonly fallback_lists: number;
   /** 一覧に戻した理由ごとの、リポジトリの数。 */
@@ -929,6 +964,7 @@ export async function pollDependabot(
     waiting: 0,
     skipped: 0,
     failed: 0,
+    held: 0,
   };
   const noFallback = { fallback_lists: 0, fallback_reasons: {} } as const;
   if (!config.dependabot_enabled) {
@@ -1077,6 +1113,9 @@ export async function pollDependabot(
   }
 
   const fresh = new Map<string, HeadWaitState>();
+  // 保留で待ったPRの数。保留があるPRと、保留を読めなかった理由ごとのPRを数える。
+  let heldPrs = 0;
+  const unreadablePrs = new Map<MergeHoldFailure, number>();
   const unprocessed = new Set(
     candidates.map((item) => prKey(item.owner, item.repo, item.number)),
   );
@@ -1118,9 +1157,36 @@ export async function pollDependabot(
       }
       continue;
     }
-    unprocessed.delete(key);
     counts[outcome.kind] += 1;
+    if (outcome.kind === "held") {
+      // 待ちの記録は変えない。保留が解けた後の待ちの上限の起点を、前の記録から続ける。
+      if (outcome.check.kind === "held") {
+        heldPrs += 1;
+      } else {
+        const failure = outcome.check.failure;
+        unreadablePrs.set(failure, (unreadablePrs.get(failure) ?? 0) + 1);
+      }
+      continue;
+    }
+    unprocessed.delete(key);
     if (outcome.kind === "waiting") fresh.set(outcome.key, outcome.wait);
+  }
+
+  // 保留で待ったPRは、PRごとではなく周回ごとに、種類を分けて1件ずつ通知する。通知の失敗で周回を止めない。
+  const holdNotices: HoldNotice[] = [];
+  if (heldPrs > 0) holdNotices.push({ kind: "held", prCount: heldPrs });
+  for (const [failure, prCount] of unreadablePrs) {
+    holdNotices.push({ kind: "unreadable", failure, prCount });
+  }
+  for (const notice of holdNotices) {
+    try {
+      await session.recordHoldNotice(notice);
+    } catch (err) {
+      session.warn("failed to record the hold notice", {
+        kind: notice.kind,
+        error: errorMessage(err),
+      });
+    }
   }
 
   await io.setState(
@@ -1150,12 +1216,36 @@ export type HoldNotice =
       readonly prCount: number;
     };
 
-/** 保留の通知を、通知の表に残す形にする。 */
-export function holdNoticeRecord(_notice: HoldNotice): {
+/** 保留を読めない通知の、最初に確かめることの説明。 */
+const HOLD_UNREADABLE_FIRST_STEP: Readonly<Record<MergeHoldFailure, string>> = {
+  missing_table:
+    "保留の表を作るmigrationが反映済みか、デプロイの記録で確認してください",
+  read_failed: "DBが動いているか確認してください",
+  corrupt:
+    "`mise run hold:list`で壊れた行を確認し、psqlでその行を解除か削除してください",
+  error: "workerのログで原因を確認してください",
+};
+
+/**
+ * 保留の通知を、通知の表に残す形にする。
+ * 保留で待った通知は、人の行動が要らない情報(`info`)で、PRの数を載せる。
+ * 保留を読めない通知は、人の対応が要る(`action`)ので、同じ原因の通知が重ならないよう、PRの数を載せない。
+ * 保留の`reason`と`holder`は、信頼できない文字列なので載せない。
+ */
+export function holdNoticeRecord(notice: HoldNotice): {
   readonly kind: string;
   readonly message: string;
 } {
-  return { kind: "", message: "" };
+  if (notice.kind === "held") {
+    return {
+      kind: "dependabot_merge_held",
+      message: `dependabotの更新PRが${String(notice.prCount)}件、マージの保留のため待っています。保留が解けると、次の取得で自動で再開します。\`mise run hold:list\`で理由と期限を確認し、解除してよければ\`mise run hold:release -- <id>\`を実行してください`,
+    };
+  }
+  return {
+    kind: "dependabot_merge_hold_unreadable",
+    message: `保留の表を読めないため、dependabotの更新PRのマージを待たせています(${notice.failure})。${HOLD_UNREADABLE_FIRST_STEP[notice.failure]}。読めるようになると、次の取得で自動で再開します`,
+  };
 }
 
 export async function main(): Promise<PollDependabotResult> {
@@ -1214,6 +1304,9 @@ export async function main(): Promise<PollDependabotResult> {
         listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo),
         readRepoPrs: (owner, repo) => readGhRepoOpenPullRequests(owner, repo),
         listActive: () => listActive(),
+        recordHoldNotice: async (notice) => {
+          await addNoticeUnlessUnresolved(holdNoticeRecord(notice));
+        },
         warn: (message, fields) => log.warn(message, fields),
         deps: {
           getPr: (owner, repo, number) =>
@@ -1222,6 +1315,11 @@ export async function main(): Promise<PollDependabotResult> {
             hasDependabotItemForHead(owner, repo, prNumber, headSha),
           gateWaitingCancels: (owner, repo, prNumber, headSha) =>
             dependabotGateWaitingCancels(owner, repo, prNumber, headSha),
+          listMergeHolds: (owner, repo) =>
+            listActiveHolds(
+              { scope: "merge", target: `${owner}/${repo}` },
+              defaultSqlClient,
+            ),
           collect: (owner, repo, number) =>
             collectGateInput(collectDeps, { owner, repo, number }),
           checkRepoOwner: (owner, repo) =>

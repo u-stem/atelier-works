@@ -116,6 +116,17 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "dependabot_merge_held",
+    guide(
+      "リポジトリにマージの保留があるため、dependabotの更新PRの自動マージを待たせています。待っている間は、作業項目を作らず、影響調査も走らせません。",
+      "保留が意図したものなら、操作は要りません。解除してよければ、ホストの端末でmise run hold:listで理由と期限を確かめ、mise run hold:release -- <id>で解除してください。",
+      {
+        commands: ["mise run hold:list", "mise run hold:release -- <id>"],
+        note: "保留が解けると、次の取得で自動で再開します。通知は情報なので、システム画面に7日だけ出ます。1件の保留の期限は最長24時間です。",
+      },
+    ),
+  ],
+  [
     "approval_comment_failed",
     guide(
       "承認のコメントをIssueに投稿できませんでした。",
@@ -430,6 +441,17 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "投稿を続けるなら、factory_configのreview_post_modeをcomment_onlyに戻してください。戻すと、次の日次のまとめの実行でこの通知は自動で解決されます。意図してgatedを続けるなら、作業項目で結果を確かめてから、この通知を解決してください。",
       {
         note: "日数と投稿しなかったレビューの件数は、日次のまとめの「レビューの投稿」欄に出ます。gatedを続ける間は、解決しても翌日の日次のまとめで出直します。",
+      },
+    ),
+  ],
+  [
+    "dependabot_merge_hold_unreadable",
+    guide(
+      "マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせています。保留があるかを確かめられないまま、マージはしません。本文に原因の種類が載ります。",
+      "原因の種類に従ってください。missing_tableは、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめます。read_failedは、DBが動いているかを確かめます。corruptは、mise run hold:listで壊れた行を確かめ、psqlでその行を解除か削除します。errorは、workerのログで原因を確かめます。",
+      {
+        commands: ["mise run hold:list"],
+        note: "読めるようになると、次の取得で自動で再開しますが、この通知は自動では解決されません。確かめたあとに、人が解決してください。取得から終了までに読めなくなった作業項目は、人に回っています。保留を解いても再開しないので、PRを確認して手でマージしてください。",
       },
     ),
   ],

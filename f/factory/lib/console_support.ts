@@ -25,6 +25,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   fork_head_denied: "info",
   unsandboxed_check_commands: "info",
   implement_needs_human: "info",
+  dependabot_merge_held: "info",
   approval_comment_failed: "action",
   intake_refreshed: "action",
   implement_launch_failed: "action",
@@ -62,6 +63,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   pr_conflict: "action",
   worker_load_high: "action",
   review_gated_prolonged: "action",
+  dependabot_merge_hold_unreadable: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */

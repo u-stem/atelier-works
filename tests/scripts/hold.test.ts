@@ -737,22 +737,20 @@ describe("place", () => {
     expect(code).toBe(1);
   });
 
-  test("shows a reason with control characters without them", async () => {
-    const { lines } = await run(
-      { ...PLACE_COMMAND, reason: "a\u001b[31mb" },
-      { confirm: false },
-    );
+  test("refuses a reason with control characters, without asking a human", async () => {
+    const result = await run({ ...PLACE_COMMAND, reason: "a\u001b[31mb" });
 
-    expect(lines.join("\n")).not.toContain("\u001b");
+    expect([result.code, result.confirmations, result.write]).toEqual([
+      1,
+      [],
+      [],
+    ]);
   });
 
-  test("sanitizes the reason in the confirmation", async () => {
-    const { confirmations } = await run(
-      { ...PLACE_COMMAND, reason: "a\u202eb" },
-      { confirm: false },
-    );
+  test("does not echo the rejected reason", async () => {
+    const { lines } = await run({ ...PLACE_COMMAND, reason: "a\u202eb" });
 
-    expect(confirmations.join("")).not.toContain("\u202e");
+    expect(lines.join("\n")).not.toContain("\u202e");
   });
 });
 

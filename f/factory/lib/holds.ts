@@ -381,15 +381,19 @@ export function isUndefinedTableError(err: unknown): boolean {
   return typeof body === "string" && body.includes(TABLE_MISSING_MESSAGE);
 }
 
-/** 表示用の文字列から、制御文字と書式文字を空白にする。 */
-export function sanitizeHoldText(_text: string): string {
-  return "";
+/**
+ * 表の行から読んだ文字列を、端末などに出す前に無害化する。
+ * 制御文字、書式文字(双方向制御など)、行と段落の区切りを空白にする。
+ * `reason`、`holder`、`released_by`は、DBに書ける主体が決める信頼できない文字列である。
+ */
+export function sanitizeHoldText(text: string): string {
+  return text.replace(CONTROL_CHARS_GLOBAL, " ");
 }
 
 /** 例外の文を、制御文字を空白にして、200字までにする。 */
 function describeError(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
-  return text.replace(CONTROL_CHARS_GLOBAL, " ").slice(0, 200);
+  return sanitizeHoldText(text).slice(0, 200);
 }
 
 function readFailure(err: unknown): HoldReadOutcome<never> {
