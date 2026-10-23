@@ -324,14 +324,34 @@ Consoleの一覧と集計は次のviewを読む。
 
 ### フロー
 
+<!-- generated:flows -->
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
-| `manual_intake` | 人がフォームから実行 | 入力からIssueを作り、作業項目を登録してpipelineを起動する |
-| `pipeline` | `poll_issues`、`manual_intake`、再実行、差し戻し | 要件定義ドラフトを生成し、承認依頼を記録する |
-| `implement` | 要件定義の承認、再実行 | 承認済みの要件定義から実装し、検証と修正を繰り返し、PRを作る |
-| `pr_review` | `poll_prs`、再実行 | PRをレビューし、COMMENTとして投稿する |
-| `pr_fix` | `poll_prs`、再実行 | 指摘を修正してpushし、各コメントに返信して再レビューを依頼する |
-| `audit` | `audit_kickoff` | 証跡を集め、監査レポートと改善提案を生成し、提案の承認依頼を登録する |
+| `manual_intake` | 人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
+| `pipeline` | `implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
+| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
+| `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
+| `implement` | `auto_retry_stale_image`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
+| `dependabot` | `poll_dependabot` | 依存の更新PRの検査と自動マージ |
+| `audit` | `audit_kickoff`(Consoleの今すぐ監査) | 運用記録の監査と改善提案 |
+<!-- /generated:flows -->
+
+起動元は、flowを起動するscriptの名前である。
+括弧は、そのscriptをConsoleから動かせる操作の例で、スケジュールによる起動は示さない。
+たとえば`audit`は、Consoleの今すぐ監査のほかに、`audit_kickoff`の週次のスケジュールでも起動する。
+起動元の一覧は`scripts/launch-graph.ts`の`LAUNCH_EDGES`から作る。
+同じ表から、Consoleのシステムの画面に出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)も作る。
+`wmill.runFlowAsync`を呼ぶscriptを足したときは、`LAUNCH_EDGES`にも足す。
+足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
+辺だけを残して起動のコードを消したときと、`*_FLOW_PATH`の定数を足したときも、同じテストが失敗する。
+テストには、検出できない形もある。
+別名の変数で呼ぶ起動、`wmill.`を付けない呼び出し、包みの関数だけでflowを起動するscriptは、見落とす。
+そのような起動を足したときは、人が表を確かめる。
+
+- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。
+- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。
+- `auto_retry_stale_image`は、`self_update`が起動する。
+- `requirements_apply`は、`approval_decide`が承認か却下を記録した後に起動する。
 
 承認、却下、期限切れの分岐はフローの外にある。人の決定は`approval_decide`が記録し、期限切れは`poll_issues`が判定する。
 
