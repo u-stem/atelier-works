@@ -1469,3 +1469,40 @@ describe("bash-guard leaves the main session free to place and release holds", (
     expect(await decide(command)).toBe("allow");
   });
 });
+
+// `mise generate`のうち、フックやワークフローのファイルへ書く形は拒否する。
+describe("bash-guard denies mise generate that writes hook or workflow files", () => {
+  test.each([
+    "mise generate git-pre-commit --write",
+    "mise generate git-pre-commit -w",
+    "mise generate git-pre-commit --hook pre-commit",
+    "mise generate git-pre-commit --hook=pre-commit",
+    "mise generate git-pre-commit -t pre-push",
+    "mise generate github-action --write",
+    "mise generate github-action -w --name ci",
+    "mise -q generate github-action --write",
+    "mise g git-pre-commit --write",
+    "sh -c 'mise generate git-pre-commit --write'",
+    "mise exec -- mise generate git-pre-commit --write",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("the reason says that the hooks and workflows are not for writing", async () => {
+    expect(await denyReason("mise generate git-pre-commit --write")).toContain(
+      ".git/hooks",
+    );
+  });
+});
+
+describe("bash-guard allows mise generate that only prints", () => {
+  test.each([
+    "mise generate git-pre-commit",
+    "mise generate github-action",
+    "mise generate task-docs",
+    "mise generate github-action --name ci",
+    "mise run check",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
