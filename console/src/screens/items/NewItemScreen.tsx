@@ -15,6 +15,11 @@ import { Input } from "../../components/ui/input.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { describeIntakeAttempt } from "../../lib/intakeAttempt.ts";
 import {
+  fieldsAfterCount,
+  type IntakeFields,
+  restoreFields,
+} from "../../lib/intakeFields.ts";
+import {
   buildIntakeInput,
   defaultRepoText,
   describeIntakeProblem,
@@ -90,25 +95,28 @@ export function NewItemScreen() {
   const targets = useIntakeTargets();
   const intake = useManualIntake();
   const { session } = intake;
-  // 一覧へ移って戻っても、投入されたか分からない間は、直近に送った入力欄の値を復元する。
-  const [repo, setRepo] = useState<string | null>(session.form?.repo ?? null);
-  const [title, setTitle] = useState(session.form?.title ?? "");
-  const [body, setBody] = useState(session.form?.body ?? "");
-  const [acceptance, setAcceptance] = useState(
-    session.form?.acceptanceCriteria ?? "",
+  // 一覧へ移って戻っても、投入できた後を除いて、直近に送った入力欄の値を復元する。
+  const [typed, setTyped] = useState<IntakeFields>(() =>
+    restoreFields(session),
   );
+  const [seenCount, setSeenCount] = useState(session.clearedCount);
   const [checked, setChecked] = useState(false);
-  const [seenSubmissions, setSeenSubmissions] = useState(
-    session.submittedCount,
-  );
-  // 表示中に投入できたときは、入力欄を空に戻す。
-  if (seenSubmissions !== session.submittedCount) {
-    setSeenSubmissions(session.submittedCount);
-    setTitle("");
-    setBody("");
-    setAcceptance("");
+  // 表示中に保存した入力を消したとき(投入できた、破棄した)は、入力欄を空に戻す。
+  const reconciled = fieldsAfterCount(typed, seenCount, session);
+  if (reconciled.seenCount !== seenCount) {
+    setSeenCount(reconciled.seenCount);
+    setTyped(reconciled.fields);
     setChecked(false);
   }
+  const {
+    repo,
+    title,
+    body,
+    acceptanceCriteria: acceptance,
+  } = reconciled.fields;
+  const setField = (change: Partial<IntakeFields>) => {
+    setTyped({ ...reconciled.fields, ...change });
+  };
 
   const candidates = targets.data ?? [];
   const repoText = repo ?? defaultRepoText(candidates);
@@ -116,7 +124,7 @@ export function NewItemScreen() {
   const built = buildIntakeInput(form);
   const problems: readonly IntakeProblem[] =
     checked && !built.ok ? built.problems : [];
-  const view = describeIntakeAttempt(session.attempt);
+  const view = describeIntakeAttempt(session.attempt, session.form);
   const targetsError = targets.isError ? apiErrorOf(targets.error) : null;
   const targetsFailed =
     targets.isError && !(targetsError !== null && isBannerError(targetsError));
@@ -152,11 +160,12 @@ export function NewItemScreen() {
               id={`${ids}-repo`}
               list={`${ids}-targets`}
               value={repoText}
+              disabled={intake.locked}
               autoComplete="off"
               spellCheck={false}
               aria-invalid={problemOf(problems, "repo_invalid") !== undefined}
               onChange={(event) => {
-                setRepo(event.target.value);
+                setField({ repo: event.target.value });
               }}
             />
             <datalist id={`${ids}-targets`}>
@@ -182,12 +191,13 @@ export function NewItemScreen() {
             <Input
               id={`${ids}-title`}
               value={title}
+              disabled={intake.locked}
               aria-invalid={
                 problemOf(problems, "title_empty", "title_too_long") !==
                 undefined
               }
               onChange={(event) => {
-                setTitle(event.target.value);
+                setField({ title: event.target.value });
               }}
             />
           </Field>
@@ -201,9 +211,10 @@ export function NewItemScreen() {
               id={`${ids}-body`}
               rows={6}
               value={body}
+              disabled={intake.locked}
               aria-invalid={problemOf(problems, "body_empty") !== undefined}
               onChange={(event) => {
-                setBody(event.target.value);
+                setField({ body: event.target.value });
               }}
             />
           </Field>
@@ -216,8 +227,9 @@ export function NewItemScreen() {
               id={`${ids}-acceptance`}
               rows={4}
               value={acceptance}
+              disabled={intake.locked}
               onChange={(event) => {
-                setAcceptance(event.target.value);
+                setField({ acceptanceCriteria: event.target.value });
               }}
             />
           </Field>
@@ -234,6 +246,16 @@ export function NewItemScreen() {
                 onClick={intake.confirmResend}
               >
                 確かめたので再送する
+              </Button>
+            ) : null}
+            {session.attempt.kind === "unknown" ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={intake.locked}
+                onClick={intake.discard}
+              >
+                投入されていたので入力を破棄する
               </Button>
             ) : null}
           </div>

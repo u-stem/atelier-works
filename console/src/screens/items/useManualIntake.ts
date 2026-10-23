@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
+  createLeaveGuard,
   type IntakeSession,
   intakeSessions,
   startIntake,
@@ -26,7 +27,12 @@ type ManualIntake = {
   readonly blocked: boolean;
   /** 投入されたか分からないとき、確かめたうえで再送を許す。 */
   readonly confirmResend: () => void;
+  /** 投入されていたと分かったとき、警告と保存した入力を片付ける。 */
+  readonly discard: () => void;
 };
+
+/** 画面を離れるときに、見せた結果を消す。 */
+const leaveGuard = createLeaveGuard(intakeSessions, MANUAL_INTAKE_WRITE_KEY);
 
 const NO_INPUT: ManualIntakeInput = {
   owner: "",
@@ -45,6 +51,10 @@ export function useManualIntake(): ManualIntake {
   const session = useSyncExternalStore(intakeSessions.subscribe, () =>
     intakeSessions.get(MANUAL_INTAKE_WRITE_KEY),
   );
+  useEffect(() => {
+    leaveGuard.enter();
+    return leaveGuard.leave;
+  }, []);
   const config = useMemo(() => manualIntakeConfig(), []);
   const mutation = useWriteMutation(config);
   const locked = mutation.isLocked(NO_INPUT);
@@ -58,6 +68,9 @@ export function useManualIntake(): ManualIntake {
     blocked: locked || isSubmitBlocked(session.attempt),
     confirmResend: useCallback(() => {
       intakeSessions.confirmResend(MANUAL_INTAKE_WRITE_KEY);
+    }, []),
+    discard: useCallback(() => {
+      intakeSessions.discard(MANUAL_INTAKE_WRITE_KEY);
     }, []),
   };
 }

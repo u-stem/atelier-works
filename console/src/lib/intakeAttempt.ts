@@ -8,6 +8,7 @@
 import { isResultUnknown, type WriteOutcome } from "../api/executeWrite.ts";
 import type { ManualIntakeSubmitResult } from "../api/guards/writeResults.ts";
 import { describeIntakeRefusal } from "./intakeRefusal.ts";
+import { displayableIssueText } from "./intakeText.ts";
 import type { IntakeForm } from "./manualIntake.ts";
 
 export type IntakeAttempt =
@@ -52,11 +53,6 @@ export function confirmResend(attempt: IntakeAttempt): IntakeAttempt {
     : attempt;
 }
 
-/** 入力欄の値を残すか。投入できたときだけ空に戻す。 */
-export function keepsInput(attempt: IntakeAttempt): boolean {
-  return attempt.kind !== "submitted";
-}
-
 /** 画面に出す結果の知らせ。 */
 export type IntakeAttemptView = {
   readonly tone: "success" | "warning" | "error";
@@ -72,8 +68,9 @@ const SUBMITTED_LINES = [
   "現れないときは、システムの画面の「作業項目に紐づかない失敗」を確かめてください。",
 ] as const;
 
-const UNKNOWN_LINES = [
-  "入力は残してあります。",
+const KEPT_INPUT_LINE = "入力は残してあります。";
+
+const CHECK_LINES = [
   "再送する前に、次の3つを確かめてください。",
   "Windmillのジョブ一覧に、manual_intake_submitのジョブが待ちか実行中でないか。待っている間は、manual_intakeのジョブもIssueもまだありません。",
   "Windmillのジョブ一覧に、manual_intakeのジョブがあるか。",
@@ -81,10 +78,37 @@ const UNKNOWN_LINES = [
   "投入されていないと分かったら、「確かめたので再送する」を押してください。",
 ] as const;
 
+const CONFIRMED_LINES = [
+  "投入されていないことを確かめた状態です。「投入する」で再送できます。",
+] as const;
+
+const DISCARD_LINE =
+  "投入されていたと分かったときは、「投入されていたので入力を破棄する」を押してください。";
+
+/** 送った題名を探す手がかりとして案内に載せる。保存した入力が無ければ載せない。 */
+function sentTitleLines(form: IntakeForm | null): readonly string[] {
+  return form === null
+    ? []
+    : [`送った題名: ${displayableIssueText(form.title.trim()).text}`];
+}
+
+function unknownLines(
+  attempt: Extract<IntakeAttempt, { kind: "unknown" }>,
+  form: IntakeForm | null,
+): readonly string[] {
+  return [
+    attempt.message,
+    KEPT_INPUT_LINE,
+    ...sentTitleLines(form),
+    ...(attempt.resendConfirmed ? CONFIRMED_LINES : CHECK_LINES),
+    DISCARD_LINE,
+  ];
+}
+
 /** 送信の状態を、画面に出す知らせにする。まだ送っていないときは`null`を返す。 */
 export function describeIntakeAttempt(
   attempt: IntakeAttempt,
-  _form: IntakeForm | null = null,
+  form: IntakeForm | null = null,
 ): IntakeAttemptView | null {
   switch (attempt.kind) {
     case "idle":
@@ -108,7 +132,7 @@ export function describeIntakeAttempt(
       return {
         tone: "warning",
         headline: "投入されたか分かりません",
-        lines: [attempt.message, ...UNKNOWN_LINES],
+        lines: unknownLines(attempt, form),
         flowJobId: null,
       };
   }
