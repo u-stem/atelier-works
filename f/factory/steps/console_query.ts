@@ -4,6 +4,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { isAbsolute, resolve } from "node:path";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
+import { configuredRepos, isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   classifyFetcherStatus,
   type FetcherState,
@@ -50,6 +51,7 @@ import {
   assertPullRequestUrl,
   type DeploymentPullRequest,
   type Diagram,
+  type FactoryConfig,
   type FixReply,
   ISSUE_PROPOSAL_ORIGINS,
   type IssueProposalOrigin,
@@ -88,6 +90,9 @@ const CONSOLE_ROW_VIEWS = [
   "deployments",
 ] as const;
 
+/** 設定(`factory_config`)から答えるビュー。DBは読まない。 */
+const CONSOLE_CONFIG_VIEWS = ["intake_targets"] as const;
+
 /** 1つのオブジェクトを返すビュー。行の配列を返す`CONSOLE_ROW_VIEWS`とは返り値の形が違う。 */
 const CONSOLE_OBJECT_VIEWS = [
   "summary",
@@ -95,7 +100,11 @@ const CONSOLE_OBJECT_VIEWS = [
   "system_status",
 ] as const;
 
-const CONSOLE_VIEWS = [...CONSOLE_ROW_VIEWS, ...CONSOLE_OBJECT_VIEWS] as const;
+const CONSOLE_VIEWS = [
+  ...CONSOLE_ROW_VIEWS,
+  ...CONSOLE_OBJECT_VIEWS,
+  ...CONSOLE_CONFIG_VIEWS,
+] as const;
 
 export type ConsoleRowView = (typeof CONSOLE_ROW_VIEWS)[number];
 export type ConsoleObjectView = (typeof CONSOLE_OBJECT_VIEWS)[number];
@@ -2516,17 +2525,31 @@ export function resolvePositiveIntArg(
     : null;
 }
 
+/** 手動投入の候補。選べば`manual_intake_submit`が許可するリポジトリだけを入れる。 */
 export type IntakeTarget = { readonly owner: string; readonly repo: string };
 
-export function runIntakeTargets(
-  _loadConfig: unknown,
+/**
+ * "intake_targets"ビューの結果。手動投入で選べるリポジトリを返す。
+ * 候補は`configuredRepos`(`factory_repo`と`repo_allowlist`)のうち、`isRepoAllowed`が通るものに限る。
+ * `configuredRepos`は`owners`で絞らないので、選ぶと必ず断られる候補を出さないよう、ここで絞る。
+ * 設定の他の値(オーナーの数値ID、予算、コマンドなど)は返さない。
+ * `repo_allowlist`が空のときの候補は`factory_repo`だけになる。
+ */
+export async function runIntakeTargets(
+  load: () => Promise<
+    Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">
+  >,
 ): Promise<IntakeTarget[]> {
-  return Promise.resolve([]);
+  const config = await load();
+  return configuredRepos(config)
+    .filter(({ owner, repo }) => isRepoAllowed(config, owner, repo))
+    .map(({ owner, repo }) => ({ owner, repo }));
 }
 
 /** `main`が返しうる値。行のビューは配列、`CONSOLE_OBJECT_VIEWS`のビューは1つのオブジェクトを返す。 */
 export type ConsoleQueryResult =
   | ConsoleQueryRow[]
+  | IntakeTarget[]
   | ConsoleSummary
   | WorkItemDetail
   | SystemStatus;
@@ -2567,6 +2590,11 @@ export async function main(
       case "system_status":
         return await runSystemStatus(resolvedLimit);
     }
+  }
+  if (isOneOf(view, CONSOLE_CONFIG_VIEWS)) {
+    return await runIntakeTargets(() =>
+      loadConfig(() => wmill.getResource("f/factory/factory_config")),
+    );
   }
   if (!isOneOf(view, CONSOLE_ROW_VIEWS)) {
     throw new Error(
