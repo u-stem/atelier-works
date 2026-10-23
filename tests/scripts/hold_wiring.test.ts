@@ -585,6 +585,40 @@ function scanText(path: string, source: string): string {
   return path.endsWith(".ts") ? codeOf(source) : source;
 }
 
+type HoldsReference = {
+  readonly offset: number;
+  readonly rule: string;
+  readonly excerpt: string;
+};
+
+/** テキストから、保留の表への参照を探す。最初の1件を返す。無ければnull。 */
+function findHoldsReference(text: string): HoldsReference | null {
+  void text;
+  return null;
+}
+
+function referencesHolds(text: string): boolean {
+  return findHoldsReference(text) !== null;
+}
+
+/** TypeScriptのソースを変換してから、保留の表への参照を探す。JavaScriptのコメントは消える。 */
+function tsReferencesHolds(source: string): boolean {
+  return referencesHolds(codeOf(source));
+}
+
+/** ファイルの診断。変換する前のソースの行番号と、当たった前後の抜粋を返す。無ければnull。 */
+function holdsReferenceReport(path: string, source: string): string | null {
+  void path;
+  void source;
+  return null;
+}
+
+/** `main`をエクスポートするか。 */
+function exportsMain(source: string): boolean {
+  void source;
+  return false;
+}
+
 /** 書く関数のsql引数に、既定値か省略があるか。型の名前に依存しない。 */
 function allowsDefaultSql(source: string): boolean {
   return /\bsql\s*\?\s*:|\bsql\s*:[^,)=]*=/.test(source);
@@ -639,6 +673,159 @@ describe("writesHolds", () => {
     "// the holds are read-only here",
   ])("does not detect %p", (source) => {
     expect(writesHolds(source)).toBe(false);
+  });
+});
+
+const MANY_TABLES = Array.from({ length: 25 }, (_, i) => `factory.t${i}`).join(
+  ", ",
+);
+
+describe("referencesHolds", () => {
+  test.each([
+    "SELECT * FROM factory.holds",
+    "select * from FACTORY.HOLDS",
+    'SELECT * FROM "factory"."holds"',
+    "SELECT * FROM factory . holds",
+    "SELECT * FROM factory . /* x */ holds",
+    "SELECT * FROM factory -- c\n . holds",
+    "SELECT * FROM factory /* a /* b */ c */ . holds",
+    "SELECT * FROM factory /* a /* b /* c */ */ */ . holds",
+    "SELECT * FROM datatable_db.factory.holds",
+    "INSERT /**/ INTO factory.holds (scope) VALUES (1)",
+    "INSERT -- /*\nINTO factory.holds (scope) VALUES (1)",
+    "INSERT -- see a\\n b\nINTO factory.holds (scope) VALUES (1)",
+    "TRUNCATE factory.notices *, factory.holds",
+    `TRUNCATE ${MANY_TABLES}, factory.holds`,
+    "DROP TRIGGER t ON factory.holds",
+    "LOCK TABLE factory.holds IN EXCLUSIVE MODE",
+    "GRANT SELECT ON factory.holds TO someone",
+    "DROP SCHEMA factory CASCADE",
+    "drop schema if exists factory",
+    "DROP/**/SCHEMA/* a /* b */ */factory",
+    "ALTER SCHEMA factory RENAME TO other",
+    "DROP INDEX factory.holds_active_claim_key",
+    "ALTER TABLE x DROP CONSTRAINT holds_expiry_check",
+    "SET search_path = factory",
+    "SET LOCAL search_path TO factory, public",
+  ])("detects %p", (text) => {
+    expect(referencesHolds(text)).toBe(true);
+  });
+
+  test.each([
+    "could not insert into holds",
+    "update holds failed",
+    "SELECT * FROM factory.work_items",
+    "SELECT * FROM factory_config",
+    "SELECT * FROM myfactory.holds",
+    "SELECT * FROM factory.holdsx",
+    "SELECT * FROM factory.pr_conflict_fix_holds",
+    "f/factory/lib/holds.ts",
+    "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL",
+    "DROP SCHEMA other",
+  ])("does not detect %p", (text) => {
+    expect(referencesHolds(text)).toBe(false);
+  });
+});
+
+describe("tsReferencesHolds", () => {
+  test.each([
+    // ファイルの先頭の文字列が`/*`を含み、後ろにJSDocがある。
+    "const a = '/*';\nconst q = \"INSERT /**/ INTO factory.holds (scope) VALUES (1)\";\n/** doc */\nexport const x = 1;",
+    // 行コメントの中の`/*`が、後ろのJSDocの`*/`で閉じられる。
+    "const q = `INSERT -- /*\nINTO factory.holds (scope) VALUES (1)`;\n/** doc */\nexport const x = 1;",
+    "const q = `INSERT /* a */ INTO /* b /* nested */ */ factory.holds (scope) VALUES (1)`;",
+    "const q = `UPDATE /* a /* b */ c */ factory.holds SET x = 1`;",
+    "const q = `UPDATE factory /* a /* b /* c */ */ */ . holds SET x = 1`;",
+    "const q = sql`SELECT * FROM factory.holds`;",
+    "const q = `SELECT * FROM datatable_db.factory.holds`;",
+    'const q = "INSERT -- see a\\n b\\nINTO factory.holds (scope) VALUES (1)";',
+    "const q = `SET search_path = factory`;",
+  ])("detects %p", (source) => {
+    expect(tsReferencesHolds(source)).toBe(true);
+  });
+
+  test.each([
+    "// factory.holds\nexport const x = 1;",
+    "/* factory.holds */\nexport const x = 1;",
+    "/** INSERT INTO factory.holds (scope) VALUES (1) */\nexport const x = 1;",
+    'log.warn("could not insert into holds");',
+    'log.warn("copy holds");',
+    "const q = `SELECT * FROM factory.work_items`;",
+  ])("does not detect %p", (source) => {
+    expect(tsReferencesHolds(source)).toBe(false);
+  });
+});
+
+describe("holdsReferenceReport", () => {
+  test("names the file and the line of the original source", () => {
+    expect(
+      holdsReferenceReport(
+        "f/factory/x.ts",
+        "export const a = 1;\nexport const b = 2;\nexport const q = `SELECT 1 FROM factory.holds`;\n",
+      ),
+    ).toStartWith("f/factory/x.ts:3:");
+  });
+
+  test("counts the lines of comments that the conversion removes", () => {
+    expect(
+      holdsReferenceReport(
+        "f/factory/x.ts",
+        "/* one\n two */\n// three\nexport const q = `SELECT 1 FROM factory.holds`;\n",
+      ),
+    ).toStartWith("f/factory/x.ts:4:");
+  });
+
+  test("shows an excerpt around the hit", () => {
+    expect(
+      holdsReferenceReport(
+        "f/factory/x.ts",
+        "export const q = `SELECT 1 FROM factory.holds WHERE id = 1`;\n",
+      ),
+    ).toContain("FROM factory.holds WHERE id = 1");
+  });
+
+  test("reads an sql file as it is", () => {
+    expect(
+      holdsReferenceReport(
+        "migrations/datatable/main/x.up.sql",
+        "SELECT 1;\nSELECT * FROM factory.holds;\n",
+      ),
+    ).toStartWith("migrations/datatable/main/x.up.sql:2:");
+  });
+
+  test("names the rule", () => {
+    expect(
+      holdsReferenceReport(
+        "f/factory/x.ts",
+        "export const q = `SET search_path = x`;\n",
+      ),
+    ).toContain("search_path");
+  });
+
+  test("returns null when nothing refers to the table", () => {
+    expect(
+      holdsReferenceReport("f/factory/x.ts", "export const a = 1;\n"),
+    ).toBeNull();
+  });
+});
+
+describe("exportsMain", () => {
+  test.each([
+    "export async function main() {}",
+    "export function main() {}",
+    "export const main = () => 1;",
+    "const run = () => 1;\nexport { run as main };",
+    "export { main } from './x.ts';",
+  ])("detects %p", (source) => {
+    expect(exportsMain(source)).toBe(true);
+  });
+
+  test.each([
+    "export function maintain() {}",
+    "export const mainly = 1;",
+    "// export function main() {}\nexport const a = 1;",
+  ])("does not detect %p", (source) => {
+    expect(exportsMain(source)).toBe(false);
   });
 });
 
@@ -703,6 +890,11 @@ describe("allowsDefaultSql", () => {
     "export async function f(a: number, sql?: HoldSqlClient) {}",
     "export async function f(\n  a: number,\n  sql: HoldSqlClient = x,\n) {}",
     "const f = (sql: Anything<string> = x) => 1;",
+    "export async function f(a: number, sql: Foo<A, B> = fb) {}",
+    "export async function f(a: number, sql: (a: string) => X = fb) {}",
+    "export async function f(a: number, sql = fb) {}",
+    "export async function f(\n  a: number,\n  sql: {\n    x: number;\n    y: string;\n  } = fb,\n) {}",
+    "export async function f(a: number, sql: Foo<A, B>[] = []) {}",
   ])("detects %p", (source) => {
     expect(allowsDefaultSql(source)).toBe(true);
   });
@@ -711,6 +903,10 @@ describe("allowsDefaultSql", () => {
     "export async function f(a: number, sql: HoldSqlClient) {}",
     "export async function f(\n  a: number,\n  sql: HoldSqlClient,\n): Promise<void> {}",
     "const rows = await sql`SELECT 1`.fetch();",
+    "export async function f(a: number, sql: Foo<A, B>) {}",
+    "export async function f(a: number, sql: (a: string) => X) {}",
+    "const same = sql === other;",
+    "const g = (sql) => 1;\nconst h = sql => 2;",
   ])("does not detect %p", (source) => {
     expect(allowsDefaultSql(source)).toBe(false);
   });
@@ -786,6 +982,10 @@ describe(HOLDS_MODULE, () => {
 
   test("gives no default to the sql parameter", () => {
     expect(allowsDefaultSql(source)).toBe(false);
+  });
+
+  test("exports no main, so that no script or flow can run it", () => {
+    expect(exportsMain(source)).toBe(false);
   });
 
   test("does not use the default client", () => {
