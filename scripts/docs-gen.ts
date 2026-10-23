@@ -8,6 +8,8 @@
 // - flows: `f/factory`のflowの一覧と起動元(`docs/architecture.md`)。
 //   起動元は`scripts/launch-graph.ts`の表から作る
 // - assets: `f/factory`のscriptとflowのpathとsummaryの一覧(`docs/architecture.md`)
+// 起動関係の図のデータ(`console/src/generated/flow-graph.json`)も同じ元から作る。
+// Consoleのシステム画面が図にして出す。
 // READMEのmiseタスクの表は日本語の説明を手で書くので生成せず、
 // `mise.toml`のタスクと過不足が無いかだけを`--check`で確かめる。
 //
@@ -15,9 +17,18 @@
 //   bun run scripts/docs-gen.ts          生成範囲を書き換える
 //   bun run scripts/docs-gen.ts --check  書き換えが要るか、タスクの表に過不足があれば終了コード1
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import {
+  buildFlowGraph,
+  type FlowInput,
+  renderFlowGraphJson,
+  type ScheduleInput,
+} from "./flow-graph.ts";
 import {
   describeOrigin,
+  HUMAN_ENTRY_SCRIPTS,
+  HUMAN_OPERATIONS,
   LAUNCH_EDGES,
   type LaunchEdge,
 } from "./launch-graph.ts";
@@ -162,17 +173,17 @@ export function compareTaskNames(
   ];
 }
 
-/** 起動関係の図のデータの、あるべき中身を返す。 */
-export function renderFlowGraphFile(): string {
-  return "";
-}
-
 /** 起動関係の図のデータが古ければ、問題を説明する文を返す(無ければnull)。 */
 export function flowGraphProblem(
-  _current: string | null,
-  _next: string,
+  current: string | null,
+  next: string,
 ): string | null {
-  return null;
+  if (current === null) {
+    return `${FLOW_GRAPH_FILE}: file is missing (run \`mise run docs:gen\`)`;
+  }
+  return current === next
+    ? null
+    : `${FLOW_GRAPH_FILE}: file is stale (run \`mise run docs:gen\`)`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -228,6 +239,53 @@ function loadAssets(): AssetEntry[] {
   return [...scripts, ...flows];
 }
 
+/** flowの定義から、モジュールが実行するscriptのpathを、現れる順に集める。 */
+function scriptPathsIn(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(scriptPathsIn);
+  if (!isRecord(node)) return [];
+  const own =
+    node.type === "script" && typeof node.path === "string" ? [node.path] : [];
+  return [...own, ...Object.values(node).flatMap(scriptPathsIn)];
+}
+
+function loadFlowInputs(): FlowInput[] {
+  return listFiles("f/factory/*__flow/flow.yaml").map((path) => {
+    const yaml = readYaml(path);
+    return {
+      name: path
+        .replace(/^f\/factory\//, "")
+        .replace(/__flow\/flow\.yaml$/, ""),
+      summary: stringField(yaml, "summary"),
+      stepPaths: scriptPathsIn(yaml.value),
+    };
+  });
+}
+
+function loadScheduleInputs(): ScheduleInput[] {
+  return listFiles("f/factory/*.schedule.yaml").map((path) => {
+    const yaml = readYaml(path);
+    return {
+      name: path.replace(/^f\/factory\//, "").replace(/\.schedule\.yaml$/, ""),
+      cron: stringField(yaml, "schedule"),
+      target: stringField(yaml, "script_path"),
+      isFlow: yaml.is_flow === true,
+    };
+  });
+}
+
+/** 起動関係の図のデータの、あるべき中身を返す。 */
+export function renderFlowGraphFile(): string {
+  return renderFlowGraphJson(
+    buildFlowGraph({
+      edges: LAUNCH_EDGES,
+      humanOperations: HUMAN_OPERATIONS,
+      humanEntryScripts: HUMAN_ENTRY_SCRIPTS,
+      schedules: loadScheduleInputs(),
+      flows: loadFlowInputs(),
+    }),
+  );
+}
+
 function loadMiseTaskNames(): string[] {
   const parsed: unknown = Bun.TOML.parse(readFileSync("mise.toml", "utf8"));
   if (!isRecord(parsed) || !isRecord(parsed.tasks)) return [];
@@ -245,8 +303,8 @@ function renderBlock(name: string): string | null {
 }
 
 /**
- * 生成範囲とタスクの表を確かめ、問題を説明する文を返す(無ければ空)。
- * `write`が真なら、生成範囲が古い文書を書き換える(その文書は問題に数えない)。
+ * 生成範囲、起動関係の図のデータ、タスクの表を確かめ、問題を説明する文を返す(無ければ空)。
+ * `write`が真なら、生成範囲が古い文書と図のデータを書き換える(問題に数えない)。
  */
 export function runDocsGen(write: boolean): string[] {
   const problems: string[] = [];
@@ -261,6 +319,19 @@ export function runDocsGen(write: boolean): string[] {
         `${path}: generated blocks are stale (run \`mise run docs:gen\`)`,
       );
     }
+  }
+  const graphNext = renderFlowGraphFile();
+  const graphCurrent = existsSync(FLOW_GRAPH_FILE)
+    ? readFileSync(FLOW_GRAPH_FILE, "utf8")
+    : null;
+  if (write) {
+    if (graphCurrent !== graphNext) {
+      mkdirSync(dirname(FLOW_GRAPH_FILE), { recursive: true });
+      writeFileSync(FLOW_GRAPH_FILE, graphNext);
+    }
+  } else {
+    const problem = flowGraphProblem(graphCurrent, graphNext);
+    if (problem !== null) problems.push(problem);
   }
   problems.push(
     ...compareTaskNames(

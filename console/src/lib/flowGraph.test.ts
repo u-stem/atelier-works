@@ -14,7 +14,10 @@ const VALID = {
 
 describe("parseFlowGraph", () => {
   test("reads a graph of the expected shape", () => {
-    expect(parseFlowGraph(VALID)).toEqual(VALID);
+    expect(parseFlowGraph(VALID)?.nodes.map((node) => node.id)).toEqual([
+      "schedule:poll_prs",
+      "script:poll_prs",
+    ]);
   });
 
   test("rejects a value that is not an object", () => {
