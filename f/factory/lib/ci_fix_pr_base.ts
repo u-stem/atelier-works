@@ -1,5 +1,5 @@
-// PRの基点(PRのbaseブランチの先端とPRのheadのmerge-base)のcommitを求める部品。
-// CI回が、PRが基点から持っていたテスト行を消していないかを確かめる基準になる。
+// PRの基点(PRのbaseブランチの先端と、先端とPRのheadのmerge-base)を求める部品。
+// CI回が、PRが足した行と、基点から持っていた行を見分ける基準になる。
 // 求められなければnullを返し、呼び出し側は基点の行を消したものとして拒否に倒す。
 
 import { type GhClient, getBranchSha, getPr } from "./github.ts";
@@ -14,7 +14,11 @@ import {
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
-/** PRの基点。 */
+/**
+ * PRの基点。
+ * `mergeBase`はbaseの先端とPRのheadのmerge-baseで、PRが足した行の基準になる。
+ * `tip`はbaseの先端で、baseにすでにある行をPRの追加と見誤らないための基準になる。
+ */
 export type PrBase = {
   readonly mergeBase: string;
   readonly tip: string;
@@ -33,7 +37,7 @@ export type PrMergeBaseIo = {
 };
 
 /**
- * PRの基点のcommitのshaを返す。
+ * PRの基点(merge-baseとbaseの先端)を返す。
  * baseブランチの今の先端を読み、そのcommitを取り込んでから、headとのmerge-baseを求める。
  * 先端を取り込むのは、merge-baseの計算がそのオブジェクトをローカルに要るためである。
  * どの段階の失敗も例外にせず、`null`を返す。基点が分からなければ、CI回は基点の行を消したものとして
@@ -51,7 +55,7 @@ export async function resolvePrMergeBase(
     if (!FULL_SHA.test(base)) {
       throw new Error("the merge base is not a full sha");
     }
-    return { mergeBase: base, tip: "" };
+    return { mergeBase: base, tip };
   } catch (err) {
     onError?.(err instanceof Error ? err.message : String(err));
     return null;

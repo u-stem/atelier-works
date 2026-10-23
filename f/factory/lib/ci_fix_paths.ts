@@ -36,12 +36,12 @@ export type CiFixChange = {
   /** 削除された行の数。 */
   readonly removedLineCount: number;
   /**
-   * PRの基点(PRのbaseブランチの先端とheadのmerge-base)との差分で、削除された行の数。
-   * 0は、基点から持っていた行が1行も消えていないことを表す。
+   * 削除された行のうち、PRが足した行でないものの数。
+   * PRが足した行は、PRの基点とbaseの先端のどちらにも無く、回の開始時のheadに加わった行である。
+   * 0は、削除された行がすべてPRが足した行であることを表す。
    * 基点を求められないとき、差分を読めないとき、テストの変更でないときは省略する。
-   * 省略は不明であり、基点の行を消したものとして扱う。
+   * 省略は不明であり、基点から持っていた行を消したものとして扱う。
    */
-  readonly baseRemovedLineCount?: number;
   readonly removedOutsidePrLineCount?: number;
 };
 
@@ -59,7 +59,8 @@ export type CiFixPathInput = {
  * - `protected_path`: 保護パスかFactoryの安全装置。
  * - `case_variant_path`: PRが変更したファイルと大文字小文字だけが違うパス。
  * - `not_in_pull_request`: PRが変更しておらず、新規のテストファイルでもない。
- * - `test_not_additive`: テストの削除、またはPRの基点から持っていたテスト行の削除や変更。
+ * - `test_not_additive`: テストの削除、PRが足した行でないテスト行の削除や変更、
+ *   またはPRが足した行でも、追加より多く行を減らす変更。
  * - `weakens_checks`: 検査を弱める行を追加した。
  */
 export type CiFixViolationCode =
@@ -362,15 +363,21 @@ const SYMLINK_MODE = "120000";
 const REGULAR_FILE_MODES: readonly string[] = ["100644", "100755"];
 
 /**
- * テストの変更が、テストの削除か、PRの基点から持っていた行の削除や変更か。
- * 回の開始時のheadに対して行が減っていても、減ったのがPRの追加した行だけなら、基点の行は残っている。
- * PRが追加したテストの修正を止めないために、その場合は許す。
- * 基点に対する削除の有無が分からないとき(`baseRemovedLineCount`の省略)は、拒否に倒す。
+ * テストの変更が、許されない行の削除を含むか。
+ * 削除は拒否する。行を減らす変更は、次の両方を満たすときだけ許す。
+ * - 削除された行がすべて、PRが足した行である(`removedOutsidePrLineCount`が0)。
+ *   PRが足したテストの検査違反を、CI回が直せるようにするためである。
+ *   基点を求められないなど、数が不明のときは、基点から持っていた行を消したものとして拒否する。
+ * - 削除した行の数が、追加した行の数を超えない。
+ *   書き換えは1行ずつの置き換えで済むが、PRが足したテストを空にしたり丸ごと消したりする変更は、
+ *   テストを弱めるので許さない。
  */
-function removesBaseTestLines(change: CiFixChange): boolean {
+function breaksTestLineRule(change: CiFixChange): boolean {
   if (change.status === "deleted") return true;
   if (change.removedLineCount === 0) return false;
-  return !(change.status === "modified" && change.baseRemovedLineCount === 0);
+  if (change.status !== "modified") return true;
+  if (change.removedLineCount > change.addedLines.length) return true;
+  return change.removedOutsidePrLineCount !== 0;
 }
 
 /** 1件の変更の最初の違反の理由。違反が無ければnull。 */
@@ -395,7 +402,7 @@ function violationOf(
   const newTest = change.status === "added" && isTestPath(path);
   if (!changedByPr && !newTest) return "not_in_pull_request";
 
-  if (isTestPath(path) && removesBaseTestLines(change)) {
+  if (isTestPath(path) && breaksTestLineRule(change)) {
     return "test_not_additive";
   }
   if (weakensChecks(change.addedLines)) return "weakens_checks";
@@ -406,7 +413,7 @@ function violationOf(
  * CI回でClaudeが加えた変更が、許可リストの範囲に収まるかを検査する。
  * 変更ごとに、次の順で最初に当たる違反を1件ずつ返す。
  * パスの形、シンボリックリンク、保護パス、許可リスト(PRが変更したファイルか新規のテスト)、
- * テストの追加だけの規則、検査を弱める行。
+ * テストの行の規則(基点から持っていた行を消さず、PRが足した行も1行ずつの置き換えに限る)、検査を弱める行。
  * 1件でも違反があれば`ok: false`にし、呼び出し側はpushせず人に渡す。
  */
 export function checkCiFixChanges(input: CiFixPathInput): CiFixPathVerdict {

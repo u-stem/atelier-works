@@ -944,9 +944,9 @@ export type CiChangeOptions = {
    */
   readonly rehashCheck?: () => Promise<RehashCheckVerdict>;
   /**
-   * PRの基点(PRのbaseブランチの先端とheadのmerge-base)のcommitのshaを求める。求められなければ`null`を返す。
-   * 回の開始時のheadに対して行が減ったテストの変更だけを、基点との差分でも読む(`baseRemovedLineCount`)。
-   * 渡さないとき、`null`を返したとき、差分を読めないときは、基点との差分が不明のまま残り、検査は拒否に倒れる。
+   * PRの基点(PRのbaseブランチの先端と、先端とheadのmerge-base)を求める。求められなければ`null`を返す。
+   * 回の開始時のheadに対して行が減ったテストの変更だけを、基点との差分でも読む(`removedOutsidePrLineCount`)。
+   * 渡さないとき、`null`を返したとき、差分を読めないときは、PRが足した行かが不明のまま残り、検査は拒否に倒れる。
    * PRが追加したテストの修正を許すために使う。競合回の読み取りは渡さない。
    * 1回の読み取りの中では、最初に要ったときに1回だけ呼ぶ。
    */
@@ -998,63 +998,190 @@ export function isRehashCandidate(collected: {
   );
 }
 
+/** 行の範囲。`start`行目から`count`行。 */
+export type LineRange = { readonly start: number; readonly count: number };
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
 /**
- * テストのファイルを、PRの基点(`prBaseSha`)と比べて、基点から削除された行の数を返す。
- * 差分が大きすぎるときと、gitが失敗したときは`undefined`を返す。基点の行を消していないとは言えないためである。
- * 失敗を例外にしないのは、不明のまま拒否に倒せば、基点との差分を読まない場合と同じ結果になるためである。
+ * `git diff -U0`の差分から、削除側(旧)と追加側(新)の行の範囲を読む。
+ * 行数が0の範囲は含めない。`newFile`は、旧側にファイルが無い差分(`new file mode`の行がある)で真になる。
+ * バイナリの差分と、読めない見出しがあるときは、行の位置が分からないので`null`を返す。
+ * 最初の`@@`より前は見出しなので、行の位置は読まない。
  */
-async function removedLinesAgainstBase(
+export function parseHunkRanges(patch: string): {
+  readonly removed: LineRange[];
+  readonly added: LineRange[];
+  readonly newFile: boolean;
+} | null {
+  const removed: LineRange[] = [];
+  const added: LineRange[] = [];
+  let inHunk = false;
+  let newFile = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      const match = HUNK_HEADER.exec(line);
+      if (match === null) return null;
+      const numbers = [
+        Number(match[1]),
+        match[2] === undefined ? 1 : Number(match[2]),
+        Number(match[3]),
+        match[4] === undefined ? 1 : Number(match[4]),
+      ];
+      if (!numbers.every(Number.isSafeInteger)) return null;
+      const [oldStart = 0, oldCount = 0, newStart = 0, newCount = 0] = numbers;
+      if (oldCount > 0) removed.push({ start: oldStart, count: oldCount });
+      if (newCount > 0) added.push({ start: newStart, count: newCount });
+    } else if (!inHunk) {
+      if (line.startsWith("Binary files ") || line === "GIT binary patch") {
+        return null;
+      }
+      if (line.startsWith("new file mode ")) newFile = true;
+    }
+  }
+  return { removed, added, newFile };
+}
+
+function inRanges(line: number, ranges: readonly LineRange[]): boolean {
+  return ranges.some(
+    (range) => line >= range.start && line < range.start + range.count,
+  );
+}
+
+/**
+ * `removed`の行のうち、`allowed`のすべての範囲の集合に含まれない行の数。
+ * 行は、すべての集合に含まれるときだけ許される。
+ */
+export function countLinesOutside(
+  removed: readonly LineRange[],
+  allowed: readonly (readonly LineRange[])[],
+): number {
+  let outside = 0;
+  for (const range of removed) {
+    for (let line = range.start; line < range.start + range.count; line += 1) {
+      if (!allowed.every((ranges) => inRanges(line, ranges))) outside += 1;
+    }
+  }
+  return outside;
+}
+
+/** 2つのcommitの間のファイル1件の`-U0`の差分の行の範囲。gitが失敗したとき、大きすぎるとき、読めないときは`null`。 */
+async function readHunkRanges(
   run: CommandRunner,
   worktreeDir: string,
-  prBaseSha: string,
-  cached: readonly string[],
+  fromSha: string,
+  toSha: string,
   path: string,
-): Promise<number | undefined> {
-  assertSha(prBaseSha);
+): Promise<ReturnType<typeof parseHunkRanges>> {
   let patch: string;
   try {
     patch = await runGit(
       run,
       worktreeDir,
-      "git diff -U0 against the base",
+      "git diff -U0 between commits",
       [
         "diff",
-        ...cached,
         "-U0",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
         "--no-renames",
         "--ignore-submodules=none",
-        prBaseSha,
+        fromSha,
+        toSha,
         "--",
         `:(literal)${path}`,
       ],
       PATCH_MAX_BYTES,
     );
   } catch {
-    return undefined;
+    return null;
   }
-  if (isCappedOutput(patch)) return undefined;
-  return parseZeroContextPatch(patch).removedLineCount;
+  return isCappedOutput(patch) ? null : parseHunkRanges(patch);
 }
 
-/** 行の範囲。`start`行目から`count`行。 */
-export type LineRange = { readonly start: number; readonly count: number };
-
-export function parseHunkRanges(_patch: string): {
-  readonly removed: LineRange[];
-  readonly added: LineRange[];
-  readonly newFile: boolean;
-} | null {
-  return null;
+/**
+ * PRが、基点からテストのファイルを削除したか。読めないときと、一覧が大きすぎるときも真を返す。
+ * 基点にパスが無いテストのファイルは、削除したテストの移動先かもしれない。
+ * 移動先では、基点から持っていた行がPRの追加に見えるため、削除があれば不明として扱う。
+ */
+async function prDeletesTestFile(
+  run: CommandRunner,
+  worktreeDir: string,
+  mergeBaseSha: string,
+  headSha: string,
+): Promise<boolean> {
+  let output: string;
+  try {
+    output = await runGit(
+      run,
+      worktreeDir,
+      "git diff --raw between commits",
+      [
+        "diff",
+        "--raw",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        mergeBaseSha,
+        headSha,
+        "--",
+      ],
+      PATCH_MAX_BYTES,
+    );
+  } catch {
+    return true;
+  }
+  if (isCappedOutput(output)) return true;
+  return parseRawDiffZ(output).some(
+    (entry) => entry.status === "deleted" && isTestPath(entry.path),
+  );
 }
 
-export function countLinesOutside(
-  _removed: readonly LineRange[],
-  _allowed: readonly (readonly LineRange[])[],
-): number {
-  return 0;
+/**
+ * 回の開始時のheadから削除された行のうち、PRが足した行でないものの数を返す。
+ * PRが足した行は、基点(merge-base)との差分と、baseの先端との差分のどちらでも、headで追加された範囲にある行である。
+ * 行の内容ではなく位置で数えるので、PRが基点と同じ内容の行を足していても、基点の行を足した行とは見なさない。
+ * baseの先端とも比べるのは、積み重ねたブランチをsquashしたときなどに基点がずれて、
+ * baseにすでにある行がPRの追加に見えるのを防ぐためである。
+ * 基点にパスが無いファイルで、PRがほかのテストのファイルを削除していれば、移動先かもしれないので`undefined`を返す。
+ * gitが失敗したときと、差分が大きすぎるとき、差分を読めないときも`undefined`を返す。
+ * 不明は、基点から持っていた行を消したものとして扱い、拒否に倒す。
+ */
+async function removedOutsidePrLines(input: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly base: PrBase;
+  readonly roundBaseSha: string;
+  readonly path: string;
+  readonly roundPatch: string;
+  readonly prDeletesTest: () => Promise<boolean>;
+}): Promise<number | undefined> {
+  const { run, worktreeDir, base, roundBaseSha, path } = input;
+  assertSha(base.mergeBase);
+  assertSha(base.tip);
+  const round = parseHunkRanges(input.roundPatch);
+  if (round === null) return undefined;
+  const pr = await readHunkRanges(
+    run,
+    worktreeDir,
+    base.mergeBase,
+    roundBaseSha,
+    path,
+  );
+  if (pr === null) return undefined;
+  const tip = await readHunkRanges(
+    run,
+    worktreeDir,
+    base.tip,
+    roundBaseSha,
+    path,
+  );
+  if (tip === null) return undefined;
+  if (pr.newFile && (await input.prDeletesTest())) return undefined;
+  return countLinesOutside(round.removed, [pr.added, tip.added]);
 }
 
 function splitLines(text: string): string[] {
@@ -1109,7 +1236,8 @@ async function untrackedChange(
  * 無視の規則をかけずに(`--exclude-standard`なしで)一覧を取るので、`.gitignore`を書き換えても隠せない。
  * 外部のdiffとtextconvのプログラムは使わない。
  * `resolvePrBase`を渡すと、`baseSha`に対して行が減ったテストの変更だけ、PRの基点との差分も読み、
- * 基点から削除された行の数を`baseRemovedLineCount`に入れる。基点は1回の読み取りにつき1回だけ求める。
+ * 削除された行のうちPRが足した行でないものの数を`removedOutsidePrLineCount`に入れる。
+ * 基点は1回の読み取りにつき1回だけ求める。
  * 変更が上限を超えたら、1件ずつ読まずに`overflow`を返す。
  * symlinkの先は読まない。
  */
@@ -1134,6 +1262,7 @@ export async function collectCiFixChanges(
   const cached = options.source === "staged" ? ["--cached"] : [];
   const resolvePrBase = options.resolvePrBase ?? (async () => null);
   let prBase: Promise<PrBase | null> | null = null;
+  let prDeletes: Promise<boolean> | null = null;
 
   const tracked = parseRawDiffZ(
     await runGit(run, worktreeDir, "git diff --raw", [
@@ -1224,21 +1353,29 @@ export async function collectCiFixChanges(
       isTestPath(entry.path);
     if (needsBase) {
       prBase ??= resolvePrBase();
-      const prBaseSha = (await prBase)?.mergeBase ?? null;
-      const baseRemovedLineCount =
-        prBaseSha === null
+      const base = await prBase;
+      const removedOutsidePrLineCount =
+        base === null
           ? undefined
-          : await removedLinesAgainstBase(
+          : await removedOutsidePrLines({
               run,
               worktreeDir,
-              prBaseSha,
-              cached,
-              entry.path,
-            );
+              base,
+              roundBaseSha: baseSha,
+              path: entry.path,
+              roundPatch: patch,
+              prDeletesTest: () =>
+                (prDeletes ??= prDeletesTestFile(
+                  run,
+                  worktreeDir,
+                  base.mergeBase,
+                  baseSha,
+                )),
+            });
       changes.push(
-        baseRemovedLineCount === undefined
+        removedOutsidePrLineCount === undefined
           ? change
-          : { ...change, baseRemovedLineCount },
+          : { ...change, removedOutsidePrLineCount },
       );
       continue;
     }
