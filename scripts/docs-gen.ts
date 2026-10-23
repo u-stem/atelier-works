@@ -5,6 +5,8 @@
 // 生成範囲は`<!-- generated:名前 -->`と`<!-- /generated:名前 -->`の行で囲む。
 // 名前ごとの中身は次のとおり。
 // - schedules: `f/factory/*.schedule.yaml`の一覧(`docs/architecture.md`)
+// - flows: `f/factory`のflowの一覧と起動元(`docs/architecture.md`)。
+//   起動元は`scripts/launch-graph.ts`の表から作る
 // - assets: `f/factory`のscriptとflowのpathとsummaryの一覧(`docs/architecture.md`)
 // READMEのmiseタスクの表は日本語の説明を手で書くので生成せず、
 // `mise.toml`のタスクと過不足が無いかだけを`--check`で確かめる。
@@ -14,6 +16,11 @@
 //   bun run scripts/docs-gen.ts --check  書き換えが要るか、タスクの表に過不足があれば終了コード1
 
 import { readFileSync, writeFileSync } from "node:fs";
+import {
+  describeOrigin,
+  LAUNCH_EDGES,
+  type LaunchEdge,
+} from "./launch-graph.ts";
 
 /** 生成範囲を持つ文書。 */
 export const GENERATED_DOCS: readonly string[] = ["docs/architecture.md"];
@@ -59,6 +66,36 @@ export function renderSchedules(entries: readonly ScheduleEntry[]): string {
     "| --- | --- | --- | --- |",
     ...rows,
   ].join("\n");
+}
+
+export type FlowEntry = {
+  readonly name: string;
+  readonly summary: string;
+};
+
+/**
+ * flowと起動元の一覧を表にする。並びは、`[SF-2-1]`などの接頭辞を含むsummaryの順。
+ * 内容の列は、summaryから接頭辞を除いたもの。
+ * 起動元は`originLabel`の表記を昇順に並べ、無ければ「なし」と書く。
+ */
+export function renderFlows(
+  flows: readonly FlowEntry[],
+  edges: readonly LaunchEdge[],
+  originLabel: (edge: LaunchEdge) => string,
+): string {
+  const rows = [...flows]
+    .sort((a, b) => a.summary.localeCompare(b.summary, "en"))
+    .map((flow) => {
+      const origins = edges
+        .filter((edge) => edge.to === flow.name)
+        .map(originLabel)
+        .sort((a, b) => a.localeCompare(b, "en"));
+      const content = flow.summary.replace(/^\[[^\]]+\]\s*/, "");
+      return `| \`${flow.name}\` | ${origins.length === 0 ? "なし" : origins.join("、")} | ${cell(content)} |`;
+    });
+  return ["| フロー | 起動元 | 内容 |", "| --- | --- | --- |", ...rows].join(
+    "\n",
+  );
 }
 
 /** scriptとflowの一覧を表にする。並びはWindmillの画面と同じくsummaryの順。 */
@@ -154,6 +191,13 @@ function loadSchedules(): ScheduleEntry[] {
   });
 }
 
+function loadFlows(): FlowEntry[] {
+  return listFiles("f/factory/*__flow/flow.yaml").map((path) => ({
+    name: path.replace(/^f\/factory\//, "").replace(/__flow\/flow\.yaml$/, ""),
+    summary: stringField(readYaml(path), "summary"),
+  }));
+}
+
 function loadAssets(): AssetEntry[] {
   const scripts = listFiles("f/factory/**/*.script.yaml").map((path) => ({
     path: path.replace(/\.script\.yaml$/, ""),
@@ -177,6 +221,9 @@ function loadMiseTaskNames(): string[] {
 /** 生成範囲の名前から中身を作る。知らない名前ならnull。 */
 function renderBlock(name: string): string | null {
   if (name === "schedules") return renderSchedules(loadSchedules());
+  if (name === "flows") {
+    return renderFlows(loadFlows(), LAUNCH_EDGES, describeOrigin);
+  }
   if (name === "assets") return renderAssets(loadAssets());
   return null;
 }
