@@ -2,11 +2,11 @@
 //
 // 保留は「この対象を進めないで」を、期限つきで伝える。止めるためだけに使い、
 // 保留があることが何かを許可することはない。
-// 表への書き込み(`placeHold`と`releaseHold`)は、このファイルだけに置く。
+// 表の読み書きは、このファイルの関数を通す。他のファイルは、`factory.holds`を直接書かない。
 // 他のファイルは、読み取りの`listActiveHolds`と`listInvalidHolds`だけを読み込んでよい。
-// この決まりを守らせるのは、`tests/scripts/hold_wiring.test.ts`のimportとSQLの文字列の走査だけである。
+// この決まりを守らせるのは、`tests/scripts/hold_wiring.test.ts`の参照の検出だけである。
 // `sql`に既定値を持たせないのは、呼び出し側に接続を選ばせるためで、書き込みを止める仕組みではない。
-// Windmillのscriptは同じdatatableの接続を持つので、走査をすり抜けるコードは表を書ける。
+// Windmillのscriptは同じdatatableの接続を持つので、検出をすり抜けるコードは表を読み書きできる。
 //
 // 保護の外のモジュールに判定が依存しないよう、このファイルは何もimportしない。
 // `Outcome`型、表示の補助、接続の型(`HoldSqlClient`)を、このファイルに持つ。

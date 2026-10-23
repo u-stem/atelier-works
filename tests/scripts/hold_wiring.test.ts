@@ -28,14 +28,14 @@ function listFiles(dir: string): string[] {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...listFiles(path));
-    } else if (entry.name.endsWith(".ts") || entry.name === "flow.yaml") {
+    } else {
       files.push(path);
     }
   }
   return files.sort();
 }
 
-const SCANNED = listFiles("f/factory").filter((path) => path !== HOLDS_MODULE);
+const SCANNED = listFiles("f").filter((path) => path !== HOLDS_MODULE);
 
 function read(path: string): string {
   return readFileSync(path, "utf8");
@@ -366,18 +366,8 @@ describe("onlyReadsHolds", () => {
   });
 });
 
-/** 空白として読む文字。引用符は、テンプレートや文字列の中のSQLで識別子を囲むので、読み飛ばす。 */
+/** 空白として読む文字。引用符は識別子を囲むので、読み飛ばす。 */
 const IGNORED = /[\s"'`]/;
-
-/** 行コメントの終わり。JavaScriptの文字列に書かれた改行のエスケープも、改行として扱う。 */
-function lineEnd(text: string, from: number): number {
-  const ends = [
-    text.indexOf("\n", from),
-    text.indexOf("\\n", from),
-    text.indexOf("\\r", from),
-  ].filter((index) => index >= 0);
-  return ends.length === 0 ? text.length : Math.min(...ends) + 1;
-}
 
 /** 入れ子を数えて、ブロックコメントの終わりの次の位置を返す。閉じていなければ終端を返す。 */
 function blockCommentEnd(text: string, from: number): number {
@@ -399,19 +389,40 @@ function blockCommentEnd(text: string, from: number): number {
 }
 
 /**
- * `start`から先を、SQLの字句として読む。空白、行コメント、入れ子のブロックコメントを読み飛ばし、
- * 語は小文字にして、記号は1文字ずつ返す。この位置から読むので、手前にあるほかの字句の`/*`に引きずられない。
+ * 行コメントの終わりの次の位置を返す。実際の改行で終わる。
+ * `escapeEnds`が真のときは、JavaScriptの文字列に書かれた改行のエスケープ(文字の`\n`と`\r`)でも終わる。
  */
-function readSqlTokens(text: string, start: number, limit = 80): string[] {
+function lineCommentEnd(
+  text: string,
+  from: number,
+  escapeEnds: boolean,
+): number {
+  const ends = [text.indexOf("\n", from)];
+  if (escapeEnds)
+    ends.push(text.indexOf("\\n", from), text.indexOf("\\r", from));
+  const found = ends.filter((index) => index >= 0);
+  return found.length === 0 ? text.length : Math.min(...found) + 1;
+}
+
+/**
+ * `start`から先を、SQLの字句で`count`個読む。空白、行コメント、入れ子のブロックコメントを読み飛ばし、
+ * 語は小文字にして、記号は1文字ずつ返す。起点を指定するので、手前にある別の字句の`/*`や引用符に引きずられない。
+ */
+function readSqlTokens(
+  text: string,
+  start: number,
+  count: number,
+  escapeEnds: boolean,
+): string[] {
   const tokens: string[] = [];
   let i = start;
-  while (i < text.length && tokens.length < limit) {
-    const rest = text.slice(i, i + 2);
-    if (rest === "--") {
-      i = lineEnd(text, i);
-    } else if (rest === "/*") {
+  while (i < text.length && tokens.length < count) {
+    const pair = text.slice(i, i + 2);
+    if (pair === "--") {
+      i = lineCommentEnd(text, i, escapeEnds);
+    } else if (pair === "/*") {
       i = blockCommentEnd(text, i);
-    } else if (/^\\[nrt]$/.test(rest)) {
+    } else if (/^\\[nrt]$/.test(pair)) {
       i += 2;
     } else if (IGNORED.test(text.charAt(i)) || text.charAt(i) === "\\") {
       i += 1;
@@ -429,176 +440,70 @@ function readSqlTokens(text: string, start: number, limit = 80): string[] {
   return tokens;
 }
 
-type TableRef = {
-  readonly qualifier: string | null;
-  readonly name: string;
-  readonly next: number;
-};
-
-function isWord(token: string | undefined): token is string {
-  return token !== undefined && /^[a-z_]/.test(token);
-}
-
-function readRef(tokens: readonly string[], from: number): TableRef | null {
-  let i = from;
-  if (tokens[i] === "only") i += 1;
-  const first = tokens[i];
-  if (!isWord(first)) return null;
-  const second = tokens[i + 2];
-  if (tokens[i + 1] === "." && isWord(second)) {
-    return { qualifier: first, name: second, next: i + 3 };
-  }
-  return { qualifier: null, name: first, next: i + 1 };
-}
-
-function readRefList(tokens: readonly string[], from: number): TableRef[] {
-  const refs: TableRef[] = [];
-  let i = from;
-  for (;;) {
-    const ref = readRef(tokens, i);
-    if (ref === null) return refs;
-    refs.push(ref);
-    if (tokens[ref.next] !== ",") return refs;
-    i = ref.next + 1;
-  }
-}
-
-function inOurSchema(ref: TableRef): boolean {
-  return ref.qualifier === null || ref.qualifier === "factory";
-}
-
-function isHoldsTable(ref: TableRef | null): boolean {
-  return ref !== null && inOurSchema(ref) && ref.name === "holds";
-}
-
-function isHoldsIndex(ref: TableRef | null): boolean {
-  return ref !== null && inOurSchema(ref) && ref.name.startsWith("holds_");
-}
-
-/** `IF EXISTS`があれば読み飛ばした位置を返す。 */
-function skipIfExists(tokens: readonly string[], from: number): number {
-  return tokens[from] === "if" && tokens[from + 1] === "exists"
-    ? from + 2
-    : from;
-}
-
-/** 動詞で始まるトークン列が、保留の表への書き込みか、表とインデックスの定義の変更かを返す。 */
-function touchesHolds(tokens: readonly string[]): boolean {
-  switch (tokens[0]) {
-    case "insert":
-      return tokens[1] === "into" && isHoldsTable(readRef(tokens, 2));
-    case "delete":
-      return tokens[1] === "from" && isHoldsTable(readRef(tokens, 2));
-    case "merge":
-      return tokens[1] === "into" && isHoldsTable(readRef(tokens, 2));
-    case "update": {
-      const ref = readRef(tokens, 1);
-      return (
-        ref !== null &&
-        isHoldsTable(ref) &&
-        tokens.slice(ref.next, ref.next + 4).includes("set")
-      );
-    }
-    case "truncate":
-      return readRefList(tokens, tokens[1] === "table" ? 2 : 1).some(
-        isHoldsTable,
-      );
-    case "copy": {
-      const ref = readRef(tokens, 1);
-      return (
-        ref !== null &&
-        isHoldsTable(ref) &&
-        ["from", "to", "("].includes(tokens[ref.next] ?? "")
-      );
-    }
-    case "drop":
-      if (tokens[1] === "table") {
-        return readRefList(tokens, skipIfExists(tokens, 2)).some(isHoldsTable);
-      }
-      if (tokens[1] === "index") {
-        const from = tokens[2] === "concurrently" ? 3 : 2;
-        return readRefList(tokens, skipIfExists(tokens, from)).some(
-          isHoldsIndex,
-        );
-      }
-      return false;
-    case "alter":
-      if (tokens[1] === "table") {
-        return isHoldsTable(readRef(tokens, skipIfExists(tokens, 2)));
-      }
-      if (tokens[1] === "index") {
-        return isHoldsIndex(readRef(tokens, skipIfExists(tokens, 2)));
-      }
-      return false;
-    case "create": {
-      let i = 1;
-      while (
-        ["or", "replace", "unique", "constraint"].includes(tokens[i] ?? "")
-      ) {
-        i += 1;
-      }
-      if (!["index", "trigger", "rule", "policy"].includes(tokens[i] ?? "")) {
-        return false;
-      }
-      for (let j = i; j < tokens.length && tokens[j] !== ";"; j += 1) {
-        if (tokens[j] === "on" || tokens[j] === "to") {
-          if (isHoldsTable(readRef(tokens, j + 1))) return true;
-        }
-      }
-      return false;
-    }
-    default:
-      return false;
-  }
-}
-
-const SQL_VERBS =
-  /\b(insert|update|delete|merge|truncate|drop|alter|copy|create)\b/gi;
-
-/**
- * テキストから、保留の表へ書く文か、表とインデックスの定義を変える文を探し、最初の文の抜粋を返す。無ければnull。
- * 動詞は文字列として探し、見つけた位置から先をSQLの字句で読む。
- * 英文のログ(`could not update holds`)は、表名の後ろにSQLの構造が続かないので当たらない。
- */
-function findHoldsWrite(text: string): string | null {
-  for (const match of text.matchAll(SQL_VERBS)) {
-    const start = match.index ?? 0;
-    if (touchesHolds(readSqlTokens(text, start))) {
-      return text.slice(start, start + 100).replace(/\s+/g, " ");
-    }
-  }
-  return null;
-}
-
-/** 保留の表へ書く文を、コメントを除かずにそのまま読んで探す。SQLのファイルと、文字列の入力に使う。 */
-function writesHolds(text: string): boolean {
-  return findHoldsWrite(text) !== null;
-}
-
-/** TypeScriptのソースに書かれた、保留の表へ書くSQLの有無。JavaScriptのコメントは除く。 */
-function tsWritesHolds(source: string): boolean {
-  return findHoldsWrite(codeOf(source)) !== null;
-}
-
-/** 走査するファイルの、SQLを探す対象の文字列。TypeScriptはコメントを除く。 */
-function scanText(path: string, source: string): string {
-  return path.endsWith(".ts") ? codeOf(source) : source;
-}
-
 type HoldsReference = {
   readonly offset: number;
   readonly rule: string;
   readonly excerpt: string;
 };
 
+/** 参照を見つける目印。`factory`は、その位置から先を数トークン読んで`factory.holds`かを確かめる。 */
+const MARKERS =
+  /\bfactory\b|\bholds_(?:[a-z0-9_]*_)?(?:key|idx|check|pkey|fkey|excl|seq)\b|\bsearch_path\b|\b(?:drop|alter)\b/gi;
+
+/**
+ * テキストから、保留の表への参照をすべて返す。
+ * 禁止するのは、`factory.holds`(間に空白、コメント、引用符があってもよい。3部の名前は最後の2部で判定)、
+ * `holds_`で始まるインデックス・制約・シーケンスの名前(`holds_active_merge_key`、`holds_pkey`、`holds_id_seq`など)、`search_path`、`DROP SCHEMA factory`と`ALTER SCHEMA factory`である。
+ * スキーマ無しの`holds`は、単独の語が英文に多いので数えない。`search_path`の禁止と上の規則で、間接的に塞ぐ。
+ * 行コメントの終わりは、実際の改行だけの読みと、文字のエスケープも含む読みの両方で評価する。
+ */
+function findHoldsReferences(text: string): HoldsReference[] {
+  const found: HoldsReference[] = [];
+  const hit = (offset: number, rule: string): void => {
+    found.push({
+      offset,
+      rule,
+      excerpt: text
+        .slice(Math.max(0, offset - 40), offset + 80)
+        .replace(/\s+/g, " "),
+    });
+  };
+  for (const match of text.matchAll(MARKERS)) {
+    const offset = match.index ?? 0;
+    const word = match[0].toLowerCase();
+    if (word.startsWith("holds_")) {
+      hit(offset, "holds_ name");
+    } else if (word === "search_path") {
+      hit(offset, "search_path");
+    }
+    for (const escapeEnds of [false, true]) {
+      if (word === "factory") {
+        const [, dot, table] = readSqlTokens(text, offset, 3, escapeEnds);
+        if (dot === "." && table === "holds") hit(offset, "factory.holds");
+      } else if (word === "drop" || word === "alter") {
+        const tokens = readSqlTokens(text, offset, 12, escapeEnds);
+        const statement = tokens.slice(2, tokens.indexOf(";") + 1 || undefined);
+        if (tokens[1] === "schema" && statement.includes("factory")) {
+          hit(offset, "schema factory");
+        }
+      }
+    }
+  }
+  return found;
+}
+
 /** テキストから、保留の表への参照を探す。最初の1件を返す。無ければnull。 */
 function findHoldsReference(text: string): HoldsReference | null {
-  void text;
-  return null;
+  return findHoldsReferences(text)[0] ?? null;
 }
 
 function referencesHolds(text: string): boolean {
   return findHoldsReference(text) !== null;
+}
+
+/** 走査するファイルの、参照を探す対象の文字列。TypeScriptはコメントを除く。 */
+function scanText(path: string, source: string): string {
+  return path.endsWith(".ts") ? codeOf(source) : source;
 }
 
 /** TypeScriptのソースを変換してから、保留の表への参照を探す。JavaScriptのコメントは消える。 */
@@ -606,22 +511,56 @@ function tsReferencesHolds(source: string): boolean {
   return referencesHolds(codeOf(source));
 }
 
-/** ファイルの診断。変換する前のソースの行番号と、当たった前後の抜粋を返す。無ければnull。 */
+function lineOf(text: string, offset: number): number {
+  return text.slice(0, offset).split("\n").length;
+}
+
+/**
+ * ファイルの診断。変換する前のソースの行番号と、当たった前後の抜粋を返す。無ければnull。
+ * 変換後の位置は、変換する前の行に直接は対応しない。
+ * 当たった語の周りの文字列を変換する前のソースから探し、見つかったすべての行を示す。
+ */
 function holdsReferenceReport(path: string, source: string): string | null {
-  void path;
-  void source;
-  return null;
+  const text = scanText(path, source);
+  const reference = findHoldsReference(text);
+  if (reference === null) return null;
+  let lines: number[] = [lineOf(text, reference.offset)];
+  if (path.endsWith(".ts")) {
+    const snippet = (
+      text.slice(reference.offset, reference.offset + 30).split(/["'`]/)[0] ??
+      ""
+    ).trimEnd();
+    lines = [];
+    for (
+      let at = source.indexOf(snippet);
+      snippet !== "" && at >= 0;
+      at = source.indexOf(snippet, at + 1)
+    ) {
+      lines.push(lineOf(source, at));
+    }
+    if (lines.length === 0) lines = [0];
+  }
+  return `${path}:${lines.join(",")}: [${reference.rule}] ${reference.excerpt}`;
 }
 
 /** `main`をエクスポートするか。 */
 function exportsMain(source: string): boolean {
-  void source;
-  return false;
+  const code = codeOf(source);
+  return (
+    /\bexport\s+(?:async\s+)?function\s+main\b/.test(code) ||
+    /\bexport\s+(?:const|let|var)\s+main\b/.test(code) ||
+    /\bexport\s*\{[^}]*\bmain\b[^}]*\}/.test(code)
+  );
 }
 
-/** 書く関数のsql引数に、既定値か省略があるか。型の名前に依存しない。 */
+/**
+ * 書く関数のsql引数に、既定値か省略があるか。型の名前や形に依存しない。
+ * 既定値は、型が消えた変換後のコードで調べる。省略(`sql?:`)は、型を含む元のソースで調べる。
+ */
 function allowsDefaultSql(source: string): boolean {
-  return /\bsql\s*\?\s*:|\bsql\s*:[^,)=]*=/.test(source);
+  return (
+    /\bsql\s*\?\s*:/.test(source) || /\bsql\s*=(?![=>])/.test(codeOf(source))
+  );
 }
 
 /** ソースが何かを読み込むか。型だけのimportも数える。 */
@@ -634,47 +573,6 @@ function importsSomething(source: string): boolean {
     scannedImports(source).length > 0
   );
 }
-
-describe("writesHolds", () => {
-  test.each([
-    "INSERT INTO factory.holds (scope) VALUES (1)",
-    "insert\n  into factory . holds",
-    'INSERT INTO "factory"."holds"',
-    "UPDATE factory.holds SET released_at = now()",
-    "DELETE FROM factory.holds WHERE id = 1",
-    "TRUNCATE factory.holds",
-    "TRUNCATE TABLE factory.holds",
-    "DROP TABLE factory.holds",
-    "DROP TABLE IF EXISTS factory.holds",
-    "ALTER TABLE factory.holds DROP CONSTRAINT x",
-    "INSERT INTO holds (scope) VALUES (1)",
-    "UPDATE holds SET released_at = now()",
-    "DELETE FROM holds",
-    "COPY factory.holds FROM STDIN",
-    "UPDATE ONLY factory.holds SET x = 1",
-    "MERGE INTO factory.holds AS h USING t ON h.id = t.id WHEN MATCHED THEN DELETE",
-    "merge into holds using t on true when matched then delete",
-    "INSERT/**/INTO factory.holds (scope) VALUES (1)",
-    "UPDATE /* hidden */ factory.holds SET x = 1",
-    "DELETE/* a */FROM/* b */factory.holds",
-    "INSERT -- split\nINTO factory.holds (scope) VALUES (1)",
-    "INSERT INTO -- split\n factory.holds (scope) VALUES (1)",
-    'const dashes = "--"; sql`INSERT INTO factory.holds (scope) VALUES (1)`',
-    "/* a */ INSERT /* b */ INTO /* c */ factory . /* d */ holds",
-  ])("detects %p", (source) => {
-    expect(writesHolds(source)).toBe(true);
-  });
-
-  test.each([
-    "SELECT * FROM factory.holds",
-    "INSERT INTO factory.work_items (id) VALUES (1)",
-    "UPDATE factory.pr_conflict_fix_holds SET x = 1",
-    "UPDATE factory.work_items SET hold_reason = 1",
-    "// the holds are read-only here",
-  ])("does not detect %p", (source) => {
-    expect(writesHolds(source)).toBe(false);
-  });
-});
 
 const MANY_TABLES = Array.from({ length: 25 }, (_, i) => `factory.t${i}`).join(
   ", ",
@@ -704,6 +602,8 @@ describe("referencesHolds", () => {
     "DROP/**/SCHEMA/* a /* b */ */factory",
     "ALTER SCHEMA factory RENAME TO other",
     "DROP INDEX factory.holds_active_claim_key",
+    "ALTER TABLE x DROP CONSTRAINT holds_pkey",
+    "ALTER SEQUENCE holds_id_seq RESTART",
     "ALTER TABLE x DROP CONSTRAINT holds_expiry_check",
     "SET search_path = factory",
     "SET LOCAL search_path TO factory, public",
@@ -720,6 +620,7 @@ describe("referencesHolds", () => {
     "SELECT * FROM factory.holdsx",
     "SELECT * FROM factory.pr_conflict_fix_holds",
     "f/factory/lib/holds.ts",
+    '"tests/lib/holds_db.test.ts", "scripts/test-db-holds.ts"',
     "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL",
     "DROP SCHEMA other",
   ])("does not detect %p", (text) => {
@@ -829,60 +730,6 @@ describe("exportsMain", () => {
   });
 });
 
-describe("writesHolds in TypeScript code", () => {
-  test.each([
-    // ファイルの先頭の文字列が`/*`を含み、後ろにJSDocがある。
-    "const a = '/*';\nconst q = \"INSERT /**/ INTO factory.holds (scope) VALUES (1)\";\n/** doc */\nexport const x = 1;",
-    // 行コメントの中の`/*`が、後ろのJSDocの`*/`で閉じられる。
-    "const q = `INSERT -- /*\nINTO factory.holds (scope) VALUES (1)`;\n/** doc */\nexport const x = 1;",
-    // PostgreSQLの入れ子のブロックコメント。
-    "const q = `INSERT /* a */ INTO /* b /* nested */ */ factory.holds (scope) VALUES (1)`;",
-    "const q = `UPDATE /* a /* b */ c */ factory.holds SET x = 1`;",
-    "const q = `UPDATE /* a /* b /* c */ */ */ factory.holds SET x = 1`;",
-    // 複数の表を並べる。
-    "const q = `TRUNCATE factory.notices, factory.holds`;",
-    "const q = `DROP TABLE IF EXISTS factory.notices, factory.holds`;",
-    "const q = `DROP INDEX factory.holds_active_claim_key`;",
-    "const q = `DROP INDEX IF EXISTS factory.holds_active_claim_key, factory.x`;",
-    "const q = `CREATE TRIGGER t BEFORE INSERT ON holds FOR EACH ROW EXECUTE FUNCTION f()`;",
-    // エスケープの改行。
-    'const q = "INSERT\\nINTO factory.holds (scope) VALUES (1)";',
-    'const q = "INSERT -- x\\nINTO factory.holds (scope) VALUES (1)";',
-    "const q = sql`MERGE INTO factory.holds h USING t ON true WHEN MATCHED THEN DELETE`;",
-  ])("detects %p", (source) => {
-    expect(tsWritesHolds(source)).toBe(true);
-  });
-
-  test.each([
-    'log.warn("could not update holds");',
-    'log.warn("copy holds");',
-    'log.warn("update holds");',
-    'const text = "insert the holds into the list";',
-    "// import() is not used here\nexport const x = 1;",
-    "/* INSERT INTO factory.holds (scope) VALUES (1) */\nexport const x = 1;",
-    "// UPDATE factory.holds SET x = 1\nexport const x = 1;",
-    "const q = `SELECT * FROM factory.holds WHERE scope = 'merge'`;",
-    "const q = `UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL`;",
-    "const q = `CREATE INDEX x ON factory.pr_conflict_fix_holds (id)`;",
-  ])("does not detect %p", (source) => {
-    expect(tsWritesHolds(source)).toBe(false);
-  });
-});
-
-describe("findHoldsWrite", () => {
-  test("returns the statement that writes", () => {
-    expect(
-      findHoldsWrite(
-        "const q = `INSERT INTO factory.holds (scope) VALUES (1)`;",
-      ),
-    ).toContain("INSERT INTO factory.holds");
-  });
-
-  test("returns null when nothing writes", () => {
-    expect(findHoldsWrite("const q = `SELECT 1`;")).toBeNull();
-  });
-});
-
 describe("allowsDefaultSql", () => {
   test.each([
     "export async function f(a: number, sql: HoldSqlClient = defaultSqlClient) {}",
@@ -933,7 +780,7 @@ describe("importsSomething", () => {
   });
 });
 
-describe("files under f/factory", () => {
+describe("files under f/", () => {
   test("finds the files, so that the checks below are not empty", () => {
     expect(SCANNED.length).toBeGreaterThan(100);
   });
@@ -942,13 +789,17 @@ describe("files under f/factory", () => {
     expect(SCANNED.some((path) => path.endsWith("flow.yaml"))).toBe(true);
   });
 
-  test("none but holds.ts writes to the holds table", () => {
-    const writers = SCANNED.flatMap((path) => {
-      const excerpt = findHoldsWrite(scanText(path, read(path)));
-      return excerpt === null ? [] : [`${path}: ${excerpt}`];
+  test("leaves out the documents", () => {
+    expect(SCANNED.filter((path) => !path.startsWith("f/"))).toEqual([]);
+  });
+
+  test("none but holds.ts refers to the holds table", () => {
+    const reports = SCANNED.flatMap((path) => {
+      const report = holdsReferenceReport(path, read(path));
+      return report === null ? [] : [report];
     });
 
-    expect(writers).toEqual([]);
+    expect(reports).toEqual([]);
   });
 
   test("none but holds.ts reaches the holds module beyond the read functions", () => {
@@ -972,8 +823,8 @@ describe("files under f/factory", () => {
 describe(HOLDS_MODULE, () => {
   const source = read(HOLDS_MODULE);
 
-  test("writes to the holds table, so that the scan above detects something", () => {
-    expect(writesHolds(source)).toBe(true);
+  test("refers to the holds table, so that the scan above detects something", () => {
+    expect(tsReferencesHolds(source)).toBe(true);
   });
 
   test("has no import, so that no unprotected module is its input", () => {
@@ -1035,13 +886,32 @@ const HOLDS_MIGRATION_FILES = [
 ];
 const MIGRATIONS_DIR = "migrations/datatable/main";
 
-/** 表を作るmigration以外のうち、`factory.holds`に書き込むか定義を変えるものの名前を返す。 */
+/**
+ * 表を作るmigration以外のうち、保留の表を参照するものの診断を返す。
+ * 初期のmigrationのdownは、スキーマごと消す。このファイルのスキーマの削除だけは認める。
+ */
+const SCHEMA_DROP_ALLOWED = ["20260925153414_factory_init.down.sql"];
+
+function migrationReports(files: Readonly<Record<string, string>>): string[] {
+  return Object.entries(files).flatMap(([name, sql]) => {
+    const hits = findHoldsReferences(sql).filter(
+      (hit) =>
+        !(hit.rule === "schema factory" && SCHEMA_DROP_ALLOWED.includes(name)),
+    );
+    const first = hits[0];
+    return first === undefined
+      ? []
+      : [
+          `${name}:${lineOf(sql, first.offset)}: [${first.rule}] ${first.excerpt}`,
+        ];
+  });
+}
+
+/** 診断のうち、migrationの名前だけを返す。 */
 function migrationViolations(
   files: Readonly<Record<string, string>>,
 ): string[] {
-  return Object.entries(files)
-    .filter(([, sql]) => findHoldsWrite(sql) !== null)
-    .map(([name]) => name);
+  return migrationReports(files).map((report) => report.split(":")[0] ?? "");
 }
 
 function otherMigrations(): Record<string, string> {
@@ -1072,7 +942,11 @@ describe("migrationViolations", () => {
     "ALTER INDEX factory.holds_active_claim_key RENAME TO x;",
     "INSERT/**/INTO factory.holds (scope) VALUES (1);",
     "-- x\nUPDATE -- y\n factory.holds SET x = 1;",
-    "ALTER TABLE holds ADD COLUMN x int;",
+    "SELECT * FROM factory.holds;",
+    "SELECT * FROM datatable_db.factory.holds;",
+    "LOCK TABLE factory.holds;",
+    "DROP SCHEMA factory CASCADE;",
+    "SET search_path = factory;",
     "CREATE OR REPLACE TRIGGER t BEFORE INSERT ON factory.holds FOR EACH ROW EXECUTE FUNCTION f();",
     "CREATE CONSTRAINT TRIGGER t AFTER INSERT ON factory.holds DEFERRABLE FOR EACH ROW EXECUTE FUNCTION f();",
     "CREATE RULE r AS ON INSERT TO factory.holds DO INSTEAD NOTHING;",
@@ -1088,7 +962,6 @@ describe("migrationViolations", () => {
   });
 
   test.each([
-    "SELECT * FROM factory.holds;",
     "ALTER TABLE factory.work_items ADD COLUMN x int;",
     "CREATE INDEX x ON factory.pr_conflict_fix_holds (id);",
     "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL;",
@@ -1097,6 +970,40 @@ describe("migrationViolations", () => {
     expect(migrationViolations({ "20270101000000_later.up.sql": sql })).toEqual(
       [],
     );
+  });
+
+  test("allows the rollback of the initial migration to drop the schema", () => {
+    expect(
+      migrationViolations({
+        "20260925153414_factory_init.down.sql":
+          "DROP SCHEMA IF EXISTS factory CASCADE;",
+      }),
+    ).toEqual([]);
+  });
+
+  test("does not allow the same statement in another migration", () => {
+    expect(
+      migrationViolations({
+        "20270101000000_other.down.sql":
+          "DROP SCHEMA IF EXISTS factory CASCADE;",
+      }),
+    ).toEqual(["20270101000000_other.down.sql"]);
+  });
+
+  test("does not let the initial rollback refer to the holds table", () => {
+    expect(
+      migrationViolations({
+        "20260925153414_factory_init.down.sql": "DELETE FROM factory.holds;",
+      }),
+    ).toEqual(["20260925153414_factory_init.down.sql"]);
+  });
+
+  test("reports the line of the hit", () => {
+    expect(
+      migrationReports({
+        "a.up.sql": "SELECT 1;\nSELECT 2;\nDELETE FROM factory.holds;",
+      })[0],
+    ).toStartWith("a.up.sql:3: [factory.holds]");
   });
 
   test("names every offending file", () => {
@@ -1115,8 +1022,8 @@ describe("migrations other than the one that creates the holds table", () => {
     expect(Object.keys(otherMigrations()).length).toBeGreaterThan(40);
   });
 
-  test("none of them writes to or changes the holds table", () => {
-    expect(migrationViolations(otherMigrations())).toEqual([]);
+  test("none of them refers to the holds table", () => {
+    expect(migrationReports(otherMigrations())).toEqual([]);
   });
 
   test("the migration that creates the table is detected when it is checked", () => {

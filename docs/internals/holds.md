@@ -153,44 +153,63 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 表が無いことは、例外のSQLSTATE(`42P01`)、エラーの文、API errorの`body`のどれかで判定する。
 回復の手順を示すのは、`corrupt`のときだけである。
 
-## 書き込みの検出
+## 参照の禁止
 
-表への書き込みは、`holds.ts`だけに置く。
-保留を置く主体を絞るためである。
-この決まりを守らせる仕組みは無く、混入を検出するテストがある。
-Windmillのscriptはすべて同じdatatableの接続を持つので、走査をすり抜けるコードは表を書ける。
+`holds.ts`の外では、読み取りも含めて`factory.holds`を直接書かない。
+書き込みと読み取りは、`holds.ts`の関数を通す。
+有効の条件(24時間の上限など)と書き込みの制限を、`holds.ts`に集めるためである。
+保留を読む処理は、`holds.ts`の関数を使う。
+この決まりを守らせる仕組みは無く、参照の混入を検出するテストがある。
+Windmillのscriptはすべて同じdatatableの接続を持つので、検出をすり抜けるコードは表を読み書きできる。
 
 書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。
-これは呼び出し側に接続を選ばせるためで、書き込みは止めない。
+これは呼び出し側に接続を選ばせるためで、参照は止めない。
 
-`tests/scripts/hold_wiring.test.ts`は、次の3つを検出する。
+`tests/scripts/hold_wiring.test.ts`は、SQLの動詞を読まず、次の参照を検出する。
+`holds.ts`と、表を作る2本のmigrationでは認める。
 
-- `f/factory/`のすべての`.ts`と`flow.yaml`で、`holds.ts`以外が、読み取りの2つの関数と型のほかを読み込むこと。
-  名前空間の読み込み、再export、動的な読み込み、`.js`など拡張子違いの指定、絶対パスの指定も検出する。
-- 同じ範囲で、`holds.ts`以外が`factory.holds`へ書くSQLの文字列を持つこと。
-  対象は、INSERT、UPDATE、DELETE、MERGE、TRUNCATE、DROP、ALTER、COPYである。
-  表とインデックスの定義を変えるCREATE文(インデックス、トリガー、ルール、ポリシー)も含む。
-  スキーマ名の無い`holds`、複数の表を並べた文、入れ子のブロックコメントや行コメントで分割した文も含む。
-- `migrations/datatable/main/`で、表を作るmigration以外が、同じ文を持つこと。
+- `factory.holds`の名前。間に空白、SQLのコメント(入れ子のブロックコメントと行コメント)、引用符があってもよい。`datatable_db.factory.holds`のような3部の名前は、最後の2部で判定する。
+- `holds_`で始まるインデックス、制約、シーケンスの名前(`holds_active_merge_key`、`holds_pkey`など)
+- `search_path`
+- `DROP SCHEMA factory`と`ALTER SCHEMA factory`。表ごと消えるためである。初期のmigrationのdownだけは認める。
 
-TypeScriptは、`Bun.Transpiler`で変換してから読む。
-JavaScriptのコメントと型だけのimportは、変換で消える。
-SQLは、動詞を見つけた位置から先を、SQLの字句で読む。
-英文のログ(`could not update holds`)は、表名の後ろにSQLの構造が続かないので当たらない。
+スキーマ名の無い`holds`は数えない。
+単独の語が英文に多いためで、`search_path`の禁止と上の規則で間接的に塞ぐ。
+
+検出する範囲は次のとおりである。
+
+- `f/`のすべてのファイル(`holds.ts`を除く)。TypeScriptは`Bun.Transpiler`で変換したコードを読み、JavaScriptのコメントは消える。
+- `migrations/datatable/main/`の、表を作る2本以外。
+- 同じ範囲で、`holds.ts`以外が、読み取りの2つの関数と型のほかを読み込むこと。名前空間の読み込み、再export、動的な読み込み、`.js`など拡張子違いの指定、絶対パスの指定も検出する。
+
+読み方は次のとおりである。
+`factory`の出現位置ごとに、その位置から先の数トークンをSQLの字句で読む。
+空白、行コメント、入れ子のブロックコメント、引用符を読み飛ばす。
+起点を出現位置に固定するので、手前にある別の字句の`/*`や引用符に引きずられない。
+行コメントの終わりは、実際の改行だけの読みと、JavaScriptの文字列の改行のエスケープも含む読みの両方で評価し、どちらかで当たれば検出とする。
+
+英文のログは、`factory.holds`を含まなければ当たらない。
+`factory.holds`を含む英文は当たる。誤検知を許して、見逃しを減らすためである。
+当たったときの診断は、ファイル、変換する前のソースの行番号、前後の抜粋を示す。
 
 検出するのは文字列の形だけで、見つけられない入力がある。
 次は例であり、すべてではない。
 
-- SQLの文を文字列の連結やテンプレートで組み立てるコード
-- 動詞や表名をJavaScriptの文字列のエスケープ(`\u0049NSERT`など)で書くコード
+- 文字列の連結で名前を組み立てるコード
+- `${}`で名前を組み立てるテンプレート(`factory.${"holds"}`など)
+- 名前をJavaScriptの文字列のエスケープ(`\u0066actory`など)で書くコード
 - 保留のモジュールの名前を組み立てるimport
-- `f/factory/`とmigrationの外のコード(`scripts/`など)
+- `f/`とmigrationの外のコード(`scripts/`など)
+
+表の定義を変えるmigration(scopeを広げるなど)は、表を作るmigrationと並べて、テストの`HOLDS_MIGRATION_FILES`に足す。
+これは保護パスの変更として出す。
 
 追加の守りは次のとおりである。
 
 - `holds.ts`とそのテスト、実DBの検査は、保護パス(`f/factory/lib/protected_paths.ts`)に入れる。
 - 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。
 - `holds.ts`は何もimportしない。接続の型(`HoldSqlClient`)も自前で持つ。保護の外のモジュールに、判定が依存しないようにするためである。
+- `holds.ts`は`main`をエクスポートしない。`runScriptByPath`やフローの`path:`から直接実行する経路を作らないためである。
 
 ## 反映の順序
 
@@ -209,7 +228,7 @@ migrationが失敗すると、`self_update`は次の回で再試行する。
 | --- | --- |
 | `tests/lib/holds.test.ts` | 有効の判定、入力の検証、解除の権限、行の解析、表が無いことの判定 |
 | `tests/lib/holds_db.test.ts` | 偽の接続で、読み取りの失敗の種類、置く操作の2つの文と入力の検証、解除、接続の型の互換 |
-| `tests/scripts/hold_wiring.test.ts` | 書き込みの混入の検出、表を作る以外のmigrationが表に触れないこと、`test-db.sh`が実DBの検査を呼ぶ位置 |
+| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入の検出、表を作る以外のmigrationが表に触れないこと、`test-db.sh`が実DBの検査を呼ぶ位置 |
 | `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる |
 
 実DBの検査は、値を定数として埋め込む検査用のクライアントで流す。

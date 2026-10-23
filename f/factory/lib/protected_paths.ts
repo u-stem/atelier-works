@@ -136,11 +136,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 実行役のテストは、グロブではなくファイル名で列挙する。名前を先に押さえ、足したテストを列挙し忘れると、
  * 保護パスの契約テスト(`tests/lib/protected_paths.test.ts`)が失敗する。
  * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
- * 保留の表(`factory.holds`)への書き込みを持つ`lib/holds.ts`と、その`.script.yaml`も守る。
- * 保留は、自動マージとIssueの取り込みを止める。書き込みを`holds.ts`だけに絞る検査
+ * 保留の表(`factory.holds`)の読み書きを持つ`lib/holds.ts`と、その`.script.yaml`も守る。
+ * 保留は、自動マージとIssueの取り込みを止める。表への参照を`holds.ts`だけに絞る検査
  * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
  * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
- * 書き換えられると、書き込みの混入の検出が外れ、保留の期限の上限が外れる。
+ * 書き換えられると、参照の混入の検出が外れ、保留の期限の上限が外れる。
  * 一方、`holds.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * `scripts/test-db-holds.ts`が使う`scripts/test-db-sql.ts`も守らない。ほかの実DBの検査も使う部品で、
  * 守ると日常の変更を止めるためである。制約の拒否は、失敗の文に制約名が含まれることまで照合するので、
