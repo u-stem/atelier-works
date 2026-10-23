@@ -124,6 +124,11 @@ function foldColumns(sqls: string[]): Set<string> {
   return columns;
 }
 
+// 文が`pr_ci_checks`の表を指すかを返す。
+function mentionsTable(_sql: string): boolean {
+  return false;
+}
+
 function sorted(values: Iterable<string>): string[] {
   return [...values].sort();
 }
@@ -146,11 +151,19 @@ function migratedColumns(): Set<string> {
 
 describe("PR_CI_CHECK_COLUMNS against the migrations", () => {
   test("reads the create and the fix schema migrations", () => {
-    const names = touchingMigrations();
-    expect([
-      names.includes("20261013100000_pr_ci_checks.up.sql"),
-      names.includes("20261013100400_pr_ci_fix_schema.up.sql"),
-    ]).toEqual([true, true]);
+    const expected = [
+      "20261013100000_pr_ci_checks.up.sql",
+      "20261013100400_pr_ci_fix_schema.up.sql",
+    ];
+    expect(touchingMigrations().filter((n) => expected.includes(n))).toEqual(
+      expected,
+    );
+  });
+
+  test("does not read the migration that only names a column of another table", () => {
+    expect(touchingMigrations()).not.toContain(
+      "20261013100100_cleanup_pr_ci_checks.up.sql",
+    );
   });
 
   test("has no column the migrations do not create", () => {
@@ -160,9 +173,7 @@ describe("PR_CI_CHECK_COLUMNS against the migrations", () => {
 
   test("lacks no column the migrations create", () => {
     const defined = new Set<string>(PR_CI_CHECK_COLUMNS);
-    expect(sorted(migratedColumns()).filter((c) => !defined.has(c))).toEqual(
-      [],
-    );
+    expect([...migratedColumns()].filter((c) => !defined.has(c))).toEqual([]);
   });
 
   test("lists each column once", () => {
@@ -226,5 +237,150 @@ describe("foldColumns", () => {
     const drop = "ALTER TABLE factory.pr_ci_checks DROP COLUMN id;";
     const add = "ALTER TABLE factory.pr_ci_checks ADD COLUMN id text;";
     expect(sorted(foldColumns([create, drop, add]))).toEqual(["id"]);
+  });
+});
+
+describe("foldColumns recognizes the table by any spelling", () => {
+  const create = "CREATE TABLE factory.pr_ci_checks (id bigint);";
+
+  test("reads an unqualified table name", () => {
+    const alter = "ALTER TABLE pr_ci_checks ADD COLUMN a text;";
+    expect(sorted(foldColumns([create, alter]))).toEqual(["a", "id"]);
+  });
+
+  test("reads an upper case statement", () => {
+    const alter = "ALTER TABLE FACTORY.PR_CI_CHECKS ADD COLUMN a text;";
+    expect(sorted(foldColumns([create, alter]))).toEqual(["a", "id"]);
+  });
+
+  test("reads a quoted table name", () => {
+    const alter = 'ALTER TABLE "factory"."pr_ci_checks" ADD COLUMN a text;';
+    expect(sorted(foldColumns([create, alter]))).toEqual(["a", "id"]);
+  });
+
+  test("reads a quoted column name", () => {
+    const alter = 'ALTER TABLE factory.pr_ci_checks ADD COLUMN "a" text;';
+    expect(sorted(foldColumns([create, alter]))).toEqual(["a", "id"]);
+  });
+
+  test("removes a quoted column of DROP COLUMN", () => {
+    const alter = 'ALTER TABLE factory.pr_ci_checks DROP COLUMN "id";';
+    expect(sorted(foldColumns([create, alter]))).toEqual([]);
+  });
+
+  test("removes the column of DROP without COLUMN", () => {
+    const alter = "ALTER TABLE factory.pr_ci_checks DROP id;";
+    expect(sorted(foldColumns([create, alter]))).toEqual([]);
+  });
+
+  test("keeps the columns on DROP CONSTRAINT", () => {
+    const alter = "ALTER TABLE factory.pr_ci_checks DROP CONSTRAINT c;";
+    expect(sorted(foldColumns([create, alter]))).toEqual(["id"]);
+  });
+
+  test("keeps the columns on ALTER COLUMN", () => {
+    const alter =
+      "ALTER TABLE factory.pr_ci_checks ALTER COLUMN id SET NOT NULL;";
+    expect(sorted(foldColumns([create, alter]))).toEqual(["id"]);
+  });
+
+  test("keeps the columns on SET", () => {
+    const alter = "ALTER TABLE factory.pr_ci_checks SET (fillfactor = 70);";
+    expect(sorted(foldColumns([create, alter]))).toEqual(["id"]);
+  });
+
+  test("keeps the columns on COMMENT ON", () => {
+    const comment = "COMMENT ON COLUMN factory.pr_ci_checks.id IS 'x, y; z';";
+    expect(sorted(foldColumns([create, comment]))).toEqual(["id"]);
+  });
+
+  test("keeps the columns on CREATE INDEX", () => {
+    const index = "CREATE INDEX i ON factory.pr_ci_checks (id) WHERE id > 0;";
+    expect(sorted(foldColumns([create, index]))).toEqual(["id"]);
+  });
+
+  test("skips CREATE TABLE IF NOT EXISTS for an existing table", () => {
+    const again =
+      "CREATE TABLE IF NOT EXISTS factory.pr_ci_checks (id bigint, b text);";
+    expect(sorted(foldColumns([create, again]))).toEqual(["id"]);
+  });
+});
+
+describe("foldColumns fails on a statement it cannot read", () => {
+  const create = "CREATE TABLE factory.pr_ci_checks (id bigint);";
+
+  test("throws on DROP TABLE", () => {
+    const drop = "DROP TABLE factory.pr_ci_checks;";
+    expect(() => foldColumns([create, drop])).toThrow();
+  });
+
+  test("throws on a SELECT that names the table", () => {
+    const select = "SELECT id FROM factory.pr_ci_checks;";
+    expect(() => foldColumns([create, select])).toThrow();
+  });
+
+  test("throws on a second CREATE TABLE", () => {
+    expect(() => foldColumns([create, create])).toThrow();
+  });
+
+  test("throws on RENAME TO", () => {
+    const alter = "ALTER TABLE factory.pr_ci_checks RENAME TO other;";
+    expect(() => foldColumns([create, alter])).toThrow();
+  });
+
+  test("throws on SET SCHEMA", () => {
+    const alter = "ALTER TABLE factory.pr_ci_checks SET SCHEMA other;";
+    expect(() => foldColumns([create, alter])).toThrow();
+  });
+
+  test("throws on an unknown ALTER action", () => {
+    const alter = "ALTER TABLE factory.pr_ci_checks VALIDATE CONSTRAINT c;";
+    expect(() => foldColumns([create, alter])).toThrow();
+  });
+
+  test("throws on a table in another schema", () => {
+    const alter = "ALTER TABLE other.pr_ci_checks ADD COLUMN a text;";
+    expect(() => foldColumns([create, alter])).toThrow();
+  });
+
+  test("throws on a CREATE TABLE with an option after the columns", () => {
+    const partitioned =
+      "CREATE TABLE factory.pr_ci_checks (id bigint) PARTITION BY RANGE (id);";
+    expect(() => foldColumns([partitioned])).toThrow();
+  });
+
+  test("throws on a dollar quoted body", () => {
+    const block = `DO $$ BEGIN
+      ALTER TABLE factory.pr_ci_checks ADD COLUMN a text;
+    END $$;`;
+    expect(() => foldColumns([create, block])).toThrow();
+  });
+});
+
+describe("mentionsTable", () => {
+  test("is true for the qualified name", () => {
+    expect(
+      mentionsTable("ALTER TABLE factory.pr_ci_checks ADD COLUMN a int"),
+    ).toBe(true);
+  });
+
+  test("is true for an unqualified quoted upper case name", () => {
+    expect(mentionsTable('SELECT 1 FROM "PR_CI_CHECKS"')).toBe(true);
+  });
+
+  test("is false for a name that only starts with the table name", () => {
+    expect(
+      mentionsTable("ALTER TABLE factory.pr_ci_checks_archive ADD a int"),
+    ).toBe(false);
+  });
+
+  test("is false for the name inside a string literal", () => {
+    expect(mentionsTable("COMMENT ON COLUMN x.y IS 'pr_ci_checksの行'")).toBe(
+      false,
+    );
+  });
+
+  test("is false for the name inside a comment", () => {
+    expect(mentionsTable("-- pr_ci_checks\nSELECT 1")).toBe(false);
   });
 });
