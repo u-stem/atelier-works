@@ -13,12 +13,13 @@ import type { RefreshStatus } from "./refreshStatus.ts";
 import { useNow } from "./useNow.ts";
 
 /**
- * 各画面の見出し。題と短い副題を左に、`refresh`を渡すと右に最終更新と更新ボタンを置く。
+ * 各画面の見出し。題と短い副題を左に置く。
+ * `refresh`を渡すと右側に最終更新と更新ボタンを置き、`actions`を渡すとその右に並べる。
  * 更新ボタンは画面全体を取り直すアイコンだけのボタン1つで、取得中は回る。
  * 画面が自分のクエリから`refresh`を作って渡す。取得するデータを持たない画面は渡さない。
  * 画面のすべての取得が自動で取り直されるときは、最終更新の脇に間隔を示す。
  * 更新は取得し直すだけで、画面の選択や絞り込みは変えない。
- * `actions`を渡すと、右側の最も右に置く。画面の主要な操作は`children`でなくここに渡す。
+ * 画面の主要な操作は、題の下の`children`でなく`actions`に渡す。
  */
 export function PageHeader({
   title,
