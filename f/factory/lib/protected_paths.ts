@@ -136,6 +136,14 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 実行役のテストは、グロブではなくファイル名で列挙する。名前を先に押さえ、足したテストを列挙し忘れると、
  * 保護パスの契約テスト(`tests/lib/protected_paths.test.ts`)が失敗する。
  * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
+ * 保留の表(`factory.holds`)への書き込みを持つ`lib/holds.ts`と、その`.script.yaml`も守る。
+ * 保留は、自動マージとIssueの取り込みを止める。書き込みを`holds.ts`だけに絞る検査
+ * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
+ * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
+ * 書き換えられると、保留を置く主体を絞った意味が無くなり、保留の期限の上限が外れる。
+ * 一方、`holds.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
+ * `scripts/test-db.sh`は、日常的に直すので守らない。代わりに、`hold_wiring.test.ts`が、
+ * `scripts/test-db-holds.ts`を呼ぶ位置を固定する。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
@@ -208,6 +216,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/metadata_git_ports.script.yaml",
   "f/factory/lib/ci_metadata_rehash.ts",
   "f/factory/lib/ci_metadata_rehash.script.yaml",
+  "f/factory/lib/holds.ts",
+  "f/factory/lib/holds.script.yaml",
+  "tests/lib/holds.test.ts",
+  "tests/lib/holds_db.test.ts",
+  "tests/scripts/hold_wiring.test.ts",
+  "scripts/test-db-holds.ts",
   "scripts/host-apply.ts",
   "scripts/host-apply.sh",
   "scripts/host-install.sh",
