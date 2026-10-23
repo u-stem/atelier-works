@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildRenderMessage } from "./drawioMessages.ts";
 import type { FlowGraph } from "./flowGraph.ts";
 import { FLOW_GRAPH } from "./flowGraphData.ts";
+import { layoutExtent, layoutFlowGraph } from "./flowGraphLayout.ts";
 import { flowGraphToDrawioXml } from "./flowGraphXml.ts";
 
 const GRAPH: FlowGraph = {
@@ -144,5 +145,30 @@ describe("flowGraphToDrawioXml", () => {
     expect(cellTag(flowGraphToDrawioXml(GRAPH), "e0")).toContain(
       "dashed=1;strokeColor",
     );
+  });
+
+  test("declares the page height of the layout", () => {
+    const extent = layoutExtent(layoutFlowGraph(GRAPH));
+
+    expect(flowGraphToDrawioXml(GRAPH)).toContain(
+      `pageHeight="${extent.height}"`,
+    );
+  });
+
+  test("declares the page width of the layout", () => {
+    const extent = layoutExtent(layoutFlowGraph(GRAPH));
+
+    expect(flowGraphToDrawioXml(GRAPH)).toContain(
+      `pageWidth="${extent.width}"`,
+    );
+  });
+
+  test("declares the page height of the layout for the bundled graph", () => {
+    const extent = layoutExtent(
+      layoutFlowGraph(FLOW_GRAPH ?? { nodes: [], edges: [] }),
+    );
+    const xml = FLOW_GRAPH === null ? "" : flowGraphToDrawioXml(FLOW_GRAPH);
+
+    expect(xml).toContain(`pageHeight="${extent.height}"`);
   });
 });

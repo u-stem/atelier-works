@@ -14,7 +14,8 @@ export const NODE_WIDTH = 200;
 export const NODE_HEIGHT = 56;
 const COLUMN_GAP = 200;
 const ROW_GAP = 16;
-const MARGIN = 40;
+export const LAYOUT_MARGIN = 40;
+const MARGIN = LAYOUT_MARGIN;
 /** 並べ替えの往復の回数。ノードが数十個なら、数回で並びが落ち着く。 */
 const ORDER_PASSES = 4;
 const COLUMN_COUNT = 3;
@@ -214,4 +215,12 @@ export function layoutFlowGraph(graph: FlowGraph): FlowGraphLayout {
     });
   });
   return { boxes, links };
+}
+
+/** 図全体の大きさ。いちばん外側の箱の外に、余白を足した値。 */
+export function layoutExtent(_layout: FlowGraphLayout): {
+  readonly width: number;
+  readonly height: number;
+} {
+  return { width: 0, height: 0 };
 }

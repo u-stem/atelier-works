@@ -3,7 +3,9 @@ import type { FlowGraph } from "./flowGraph.ts";
 import { FLOW_GRAPH } from "./flowGraphData.ts";
 import {
   type FlowGraphLayout,
+  LAYOUT_MARGIN,
   type LayoutBox,
+  layoutExtent,
   layoutFlowGraph,
 } from "./flowGraphLayout.ts";
 
@@ -216,6 +218,28 @@ describe("layoutFlowGraph", () => {
 
     expect([link?.exit.side, link?.entry.side]).toEqual(["left", "right"]);
   });
+
+  test("gives a flow box room for a name and a two-line note", () => {
+    const layout = layoutFlowGraph(GRAPH);
+
+    expect(boxById(layout, "flow:x")?.height).toBeGreaterThanOrEqual(72);
+  });
+
+  for (const [name, graph] of bothGraphs()) {
+    test(`leaves the margin below the lowest box (${name})`, () => {
+      const layout = layoutFlowGraph(graph);
+      const bottom = Math.max(...layout.boxes.map((box) => box.y + box.height));
+
+      expect(layoutExtent(layout).height).toBe(bottom + LAYOUT_MARGIN);
+    });
+
+    test(`leaves the margin right of the rightmost box (${name})`, () => {
+      const layout = layoutFlowGraph(graph);
+      const right = Math.max(...layout.boxes.map((box) => box.x + box.width));
+
+      expect(layoutExtent(layout).width).toBe(right + LAYOUT_MARGIN);
+    });
+  }
 
   test("returns the same layout for the same graph", () => {
     expect(layoutFlowGraph(GRAPH)).toEqual(layoutFlowGraph(GRAPH));
