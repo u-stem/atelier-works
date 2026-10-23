@@ -5344,6 +5344,15 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker cat
 mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 ```
 
+## 保留を確かめる
+
+保留の表(`factory.holds`)は置いてあるが、保留を読んで止まる主体はまだ無い。
+仕様は[保留の内部仕様](internals/holds.md)にある。
+
+対象を止める仕組みは、保留のほかに、スケジュールの凍結がある。
+凍結は変数に置くので、保留の表には現れない。
+スケジュールを止めている凍結は、`mise run freeze:list`で確かめる([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
+
 ## 秘密をローテーションする
 
 1. GitHubのPAT(`GITHUB_TOKEN`、`CONSOLE_GITHUB_TOKEN`)かClaude CodeのOAuthトークンを発行し直す。手順は[セキュリティ](security.md)にある。
