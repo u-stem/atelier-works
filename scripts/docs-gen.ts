@@ -14,6 +14,7 @@
 //   bun run scripts/docs-gen.ts --check  書き換えが要るか、タスクの表に過不足があれば終了コード1
 
 import { readFileSync, writeFileSync } from "node:fs";
+import type { LaunchEdge } from "./launch-graph.ts";
 
 /** 生成範囲を持つ文書。 */
 export const GENERATED_DOCS: readonly string[] = ["docs/architecture.md"];
@@ -59,6 +60,20 @@ export function renderSchedules(entries: readonly ScheduleEntry[]): string {
     "| --- | --- | --- | --- |",
     ...rows,
   ].join("\n");
+}
+
+export type FlowEntry = {
+  readonly name: string;
+  readonly summary: string;
+};
+
+/** flowと起動元の一覧を表にする。 */
+export function renderFlows(
+  _flows: readonly FlowEntry[],
+  _edges: readonly LaunchEdge[],
+  _originLabel: (edge: LaunchEdge) => string,
+): string {
+  return "";
 }
 
 /** scriptとflowの一覧を表にする。並びはWindmillの画面と同じくsummaryの順。 */

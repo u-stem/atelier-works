@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   compareTaskNames,
   renderAssets,
+  renderFlows,
   renderSchedules,
   replaceGeneratedBlocks,
   taskNamesInTable,
 } from "../../scripts/docs-gen.ts";
+import type { LaunchEdge } from "../../scripts/launch-graph.ts";
 
 describe("replaceGeneratedBlocks", () => {
   test("replaces only the content between the markers", () => {
@@ -55,6 +57,83 @@ describe("renderAssets", () => {
     ]);
 
     expect(table.split("\n")[2]).toBe("| `f/factory/a` | flow | [SF-1-1] a |");
+  });
+});
+
+describe("renderFlows", () => {
+  const label = (edge: LaunchEdge): string => `\`${edge.from}\``;
+  const pipeline = {
+    name: "pipeline",
+    summary: "[SF-2-1] 要件定義の生成と承認",
+  };
+
+  test("renders one row per flow with the summary after its id prefix", () => {
+    const edges: LaunchEdge[] = [
+      { from: "poll_issues", to: "pipeline", kind: "script" },
+    ];
+
+    const table = renderFlows([pipeline], edges, label);
+
+    expect(table.split("\n")[2]).toBe(
+      "| `pipeline` | `poll_issues` | 要件定義の生成と承認 |",
+    );
+  });
+
+  test("lists every origin of a flow in order", () => {
+    const edges: LaunchEdge[] = [
+      { from: "retry_work_item", to: "pipeline", kind: "script" },
+      { from: "poll_issues", to: "pipeline", kind: "script" },
+    ];
+
+    const table = renderFlows([pipeline], edges, label);
+
+    expect(table.split("\n")[2]).toBe(
+      "| `pipeline` | `poll_issues`、`retry_work_item` | 要件定義の生成と承認 |",
+    );
+  });
+
+  test("ignores edges that target another flow", () => {
+    const edges: LaunchEdge[] = [
+      { from: "poll_issues", to: "pipeline", kind: "script" },
+      { from: "poll_prs", to: "pr_review", kind: "script" },
+    ];
+
+    const table = renderFlows([pipeline], edges, label);
+
+    expect(table.split("\n")[2]).toBe(
+      "| `pipeline` | `poll_issues` | 要件定義の生成と承認 |",
+    );
+  });
+
+  test("shows that a flow has no origin", () => {
+    const table = renderFlows([pipeline], [], label);
+
+    expect(table.split("\n")[2]).toBe(
+      "| `pipeline` | なし | 要件定義の生成と承認 |",
+    );
+  });
+
+  test("keeps a summary without an id prefix as it is", () => {
+    const table = renderFlows(
+      [{ name: "audit", summary: "監査" }],
+      [{ from: "audit_kickoff", to: "audit", kind: "script" }],
+      label,
+    );
+
+    expect(table.split("\n")[2]).toBe("| `audit` | `audit_kickoff` | 監査 |");
+  });
+
+  test("sorts the rows by summary", () => {
+    const table = renderFlows(
+      [
+        { name: "pr_fix", summary: "[SF-3-2] 修正" },
+        { name: "pipeline", summary: "[SF-2-1] 生成" },
+      ],
+      [],
+      label,
+    );
+
+    expect(table.split("\n")[2]).toBe("| `pipeline` | なし | 生成 |");
   });
 });
 
