@@ -444,6 +444,59 @@ describe("placeHold input check", () => {
 const HUMAN: HoldActor = { kind: "human", holder: "human" };
 const SESSION: HoldActor = { kind: "session", holder: "session:feat/x" };
 
+describe("releaseHold actor check", () => {
+  const bad: [string, HoldActor][] = [
+    ["a control character", { kind: "session", holder: "session:a\nb" }],
+    [
+      "a bidirectional control character",
+      { kind: "session", holder: "session:a\u202eb" },
+    ],
+    ["a holder of the wrong kind", { kind: "human", holder: "session:x" }],
+    ["an empty holder", { kind: "session", holder: "" }],
+    [
+      "a holder beyond the limit",
+      { kind: "session", holder: `session:${"a".repeat(93)}` },
+    ],
+  ];
+
+  test.each(bad)("sends no statement for %s", async (_label, actor) => {
+    const { sql, calls } = fakeSql([[ROW], [{ id: 7 }]]);
+
+    await releaseHold(7, actor, sql);
+
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses a control character in the holder", async () => {
+    const { sql } = fakeSql([[ROW], [{ id: 7 }]]);
+
+    expect(
+      await releaseHold(7, { kind: "session", holder: "session:a\nb" }, sql),
+    ).toEqual({
+      ok: false,
+      reason: "holder must be 1 to 100 characters without control characters",
+    });
+  });
+
+  test("refuses a holder that does not match the kind", async () => {
+    const { sql } = fakeSql([[ROW], [{ id: 7 }]]);
+
+    expect(
+      await releaseHold(7, { kind: "human", holder: "session:x" }, sql),
+    ).toEqual({ ok: false, reason: "holder does not match holder_kind" });
+  });
+
+  test("refuses a kind that is not one of the three", async () => {
+    const { sql } = fakeSql([[ROW], [{ id: 7 }]]);
+    const robot: HoldActor = JSON.parse('{"kind":"robot","holder":"robot"}');
+
+    expect(await releaseHold(7, robot, sql)).toEqual({
+      ok: false,
+      reason: "holder_kind must be session, human or factory",
+    });
+  });
+});
+
 describe("releaseHold", () => {
   test("fails when no hold has the id", async () => {
     const { sql } = fakeSql([[]]);

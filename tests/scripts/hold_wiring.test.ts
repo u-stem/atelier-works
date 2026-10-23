@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  FORBIDDEN_EXACT_PATHS,
+  matchesForbiddenPath,
+  matchesImplementProtectedPath,
+} from "../../f/factory/lib/protected_paths.ts";
 
 // 保留の表への書き込みは、`f/factory/lib/holds.ts`だけに置く。
 // このテストは、他のファイルが書く関数を読み込んでいないことと、表へ書くSQLの文字列を持たないことを検出する。
@@ -657,6 +662,52 @@ describe("tsReferencesHolds", () => {
   });
 });
 
+describe("holdsReferenceReport for files of any language", () => {
+  test.each([
+    ["f/factory/x/clear.pg.sql", "DELETE FROM factory.holds;\n"],
+    ["f/factory/x/clear.sh", "psql -c 'DELETE FROM factory.holds'\n"],
+    ["f/factory/x/clear.py", 'cur.execute("DELETE FROM factory.holds")\n'],
+    [
+      "f/factory/x/script.inline_script.ts",
+      "export const q = `DELETE FROM factory.holds`;\n",
+    ],
+    ["f/other/x.ts", "export const q = `SELECT * FROM factory.holds`;\n"],
+    ["f/other/deep/x.yaml", "content: SELECT * FROM factory.holds\n"],
+  ])("detects a reference in %s", (path, source) => {
+    expect(holdsReferenceReport(path, source)).toStartWith(`${path}:1:`);
+  });
+});
+
+describe("files that the scan leaves out", () => {
+  test.each([
+    HOLDS_MODULE,
+    ...["20261023131355_holds.up.sql", "20261023131355_holds.down.sql"].map(
+      (name) => `migrations/datatable/main/${name}`,
+    ),
+  ])("%s is a protected path, in the pr_fix list", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each([
+    HOLDS_MODULE,
+    "migrations/datatable/main/20261023131355_holds.up.sql",
+    "migrations/datatable/main/20261023131355_holds.down.sql",
+  ])("%s is a protected path, in the implement list", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("the exact list names the migrations that create the table", () => {
+    expect(
+      FORBIDDEN_EXACT_PATHS.filter((path) => path.includes("_holds.")),
+    ).toEqual(
+      expect.arrayContaining([
+        "migrations/datatable/main/20261023131355_holds.up.sql",
+        "migrations/datatable/main/20261023131355_holds.down.sql",
+      ]),
+    );
+  });
+});
+
 describe("holdsReferenceReport", () => {
   test("names the file and the line of the original source", () => {
     expect(
@@ -787,6 +838,15 @@ describe("files under f/", () => {
 
   test("includes the flow definitions", () => {
     expect(SCANNED.some((path) => path.endsWith("flow.yaml"))).toBe(true);
+  });
+
+  test("leaves out only the locks and holds.ts", () => {
+    expect(listFiles("f").filter((path) => !SCANNED.includes(path))).toEqual(
+      [
+        HOLDS_MODULE,
+        ...listFiles("f").filter((path) => path.endsWith(".lock")),
+      ].sort(),
+    );
   });
 
   test("leaves out the documents", () => {

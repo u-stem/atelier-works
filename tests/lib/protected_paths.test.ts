@@ -579,6 +579,8 @@ describe("hold files", () => {
     "tests/lib/holds_db.test.ts",
     "tests/scripts/hold_wiring.test.ts",
     "scripts/test-db-holds.ts",
+    "migrations/datatable/main/20261023131355_holds.up.sql",
+    "migrations/datatable/main/20261023131355_holds.down.sql",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
