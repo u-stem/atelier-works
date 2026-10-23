@@ -249,7 +249,7 @@ describe("body", () => {
       reasonOf({
         ...VALID,
         body: bodyForTotal(65536),
-        acceptance_criteria: "x",
+        acceptance_criteria: "x".repeat(14),
       }),
     ).toBe("body_too_long");
   });

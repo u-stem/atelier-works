@@ -6,43 +6,19 @@ import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved } from "../lib/db.ts";
 import { createIssue, type GhClient } from "../lib/github.ts";
 import {
+  buildManualIntakeIssueBody,
+  type ManualIntakeIssueInput,
+} from "../lib/manual_intake_support.ts";
+import {
   repoOwnerGateDeps,
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 
-const NO_RESPONSE = "_No response_";
-
-export type ManualIntakeIssueInput = {
-  readonly body: string;
-  readonly acceptance_criteria: string;
-};
-
-/**
- * `input`を、`.github/ISSUE_TEMPLATE/factory-task.yml`と同じ見出し
- * (目的 / 受入基準)のIssue本文に組み立てる。
- * 書式はGitHubのissue formsの描画に合わせる。
- * 各項目を`### <見出し>`と回答で表し、空の項目は`_No response_`にする。
- * manual_intakeはissue formsを通さずに本文を作るため、この書式を自前で再現する。
- *
- * 描画するのは入力にある目的(`body`)と受入基準(`acceptance_criteria`)だけ。
- * 背景・制約・対象範囲は入力に無いため、空の見出しも作らない。
- * 作ると、投入内容に無い項目を空欄で回答したように見えてしまう。
- */
-export function buildManualIntakeIssueBody(
-  input: ManualIntakeIssueInput,
-): string {
-  const purpose =
-    input.body.trim().length > 0 ? input.body.trim() : NO_RESPONSE;
-  const acceptance =
-    input.acceptance_criteria.trim().length > 0
-      ? input.acceptance_criteria.trim()
-      : NO_RESPONSE;
-  return ["### 目的", "", purpose, "", "### 受入基準", "", acceptance].join(
-    "\n",
-  );
-}
+// `buildManualIntakeIssueBody`は、秘密値を読まないConsole用のscriptも使うので`lib/`にある。
+// 向きは、このステップが`lib/`から取り込む一方向にする。
+export { buildManualIntakeIssueBody, type ManualIntakeIssueInput };
 
 export type ManualIntakeCreateIssueResult = {
   readonly owner: string;
