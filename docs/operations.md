@@ -3538,6 +3538,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 - `fork_head_denied`
 - `unsandboxed_check_commands`
 - `implement_needs_human`
+- `dependabot_merge_held`
 
 | 種類 | 意味 | 人がすること |
 | --- | --- | --- |
@@ -3588,6 +3589,8 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `pr_ci_check_denied` | 対象リポジトリのPRかCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのPRのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される([PATの権限](security.md#githubのpat)) |
 | `config_misfit` | 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。収まらない設定では自動修正を起動できないので、CIの失敗の自動修正を保留している。設定全体で1件だけ残り、失敗中のPRの数には依らない。本文に見直す項目が載る。Discordにも1回届く | `claude_timeout_sec`を小さくするか、`allowed_check_commands`の数を減らす。直すと、次の巡回で保留が外れて起動し直し、この通知も自動で解決される。自動修正だけを無効にした場合も、次の巡回で解決される。監視を無効にした場合は、修正中の行も通知を保留した行も無いと残るので、人が解決する |
 | `pr_conflict` | Factoryが作ったPRが、ベースブランチとマージできない競合の状態である。本文は`<owner>/<repo>#<PR番号>:`で始まり、次の操作とPRのリンクが載る。Discordにも届く | 本文の「次の操作」に従う。PRのブランチにベースブランチをmergeして競合を解消し、pushする。競合が解けたとき、PRを閉じたときは、自動で解決される。競合が続く間は、PRのコミットが進んでも通知は重ならない |
+| `dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが自動マージを待っている。取得の1周ごとに、待ったPRの数を1件にまとめる。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、[保留を確かめる](#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
+| `dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開する。通知は自動では解決されないので、確かめた後に人が解決する |
 
 ### Console用のworkerの検知を確かめる
 
@@ -5373,11 +5376,57 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 
 ## 保留を確かめる
 
-保留の表(`factory.holds`)は置いてあるが、保留を読んで止まる主体はまだ無い。
+保留は、対象を進めないことを、期限つきで伝える仕組みである。
+保留を読んで止まるのは、Factoryのdependabotの自動マージだけである。
 仕様は[保留の内部仕様](internals/holds.md)にある。
+
+保留の操作は、ホストの端末で、`mise run`のタスクから行う。
+
+| 操作 | コマンド |
+| --- | --- |
+| 一覧 | `mise run hold:list` |
+| 置く | `mise run hold:place -- --scope merge --target <owner>/<repo> --minutes <分> --reason <理由>` |
+| 解除 | `mise run hold:release -- <id>` |
+
+タスクは、チェックアウトを更新した端末で使える。
+タスクが見つからないときは、`mise exec -- bun ./scripts/hold.ts <list|place|release>`を直接実行する。
+置く操作と解除は、端末で`yes`を入力して確かめる。
+期限は最長24時間で、延長は無い。
+続けるときは、解除して置き直す。
+置き直しの回数に上限は無いので、続けて置くと保留は続く。
+`hold:list`で、期限の切れた行と、有効の条件を満たさない行(`invalid`)も確かめられる。
+
+保留が止めるのは、`dependabot_merge_enabled`が真のときの、dependabotの自動マージである。
+`gh pr merge`による手のマージは止めない。
+範囲`claim`は読む処理が無いので、置けない。
+
+### 保留で止まったdependabotのPRを再開する
+
+1. `mise run hold:list`で、保留の理由と期限を確かめる。
+2. 解除してよければ、`mise run hold:release -- <id>`で解除する。
+3. 取得が待たせていたPRは、次の取得(10分ごと)に自動で再開する。
+4. 終了のステップで止まった作業項目は、再開しない。
+   作業項目は人の対応待ちで終わり、理由は`dependabot merge held by a hold`である。
+   PRを確認して手でマージする。
+   dependabotがrebaseして新しいコミットが積まれると、新しいheadとして自動で評価される。
+
+保留を読めないときは、通知`dependabot_merge_hold_unreadable`の手順に従う。
+
+### 保留を置くときの注意
+
+保留は止めるためだけに使い、許可には使わない。
+`reason`には秘密を書かない。
+値はプロセスの引数に現れ、一覧に表示される。
+
+subagentは保留を置かず、解除もしない。
+主セッションか人に頼む。
+一覧(`mise run hold:list`)だけ、subagentも使える。
+
+### 凍結と合わせて確かめる
 
 対象を止める仕組みは、保留のほかに、スケジュールの凍結がある。
 凍結は変数に置くので、保留の表には現れない。
+`mise run hold:list`は、有効な凍結の件数も表示する。
 スケジュールを止めている凍結は、`mise run freeze:list`で確かめる([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
 
 ## 秘密をローテーションする
