@@ -61,6 +61,12 @@ import {
 export const CI_ROUND_REASON_PREFIX = "ci round";
 const REASON_PREFIX = CI_ROUND_REASON_PREFIX;
 
+/**
+ * テストの行を減らす変更で、PRが足した行かを調べられなかったときの理由の接頭辞。後ろにパスが続く。
+ * 理由を人が読む文と次の操作にする規則(`pr_workflow_support.ts`)が、この理由を見分けるために使う。
+ */
+export const CI_TEST_BASE_UNKNOWN_REASON_PREFIX = `${CI_ROUND_REASON_PREFIX} change not allowed (test_base_unknown): `;
+
 /** factory-fixスキルが、CI回の節を持つことを示す固定のマーカー。 */
 export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";
 
@@ -963,6 +969,7 @@ export type CiChangeOptions = {
    * PRの基点(PRのbaseブランチの先端と、先端とheadのmerge-base)を求める。求められなければ`null`を返す。
    * 回の開始時のheadに対して行が減ったテストの変更だけを、基点との差分でも読む(`removedOutsidePrLineCount`)。
    * 渡さないとき、`null`を返したとき、差分を読めないときは、PRが足した行かが不明のまま残り、検査は拒否に倒れる。
+   * 例外は読み取りを止める。一時的な失敗を、人が直すしかない停止にしないために、そのまま投げる。
    * PRが追加したテストの修正を許すために使う。競合回の読み取りは渡さない。
    * 1回の読み取りの中では、最初に要ったときに1回だけ呼ぶ。
    */
@@ -1146,7 +1153,11 @@ export function countLinesOutside(
   return outside;
 }
 
-/** 2つのcommitの間のファイル1件の`-U0`の差分の行の範囲。gitが失敗したとき、大きすぎるとき、読めないときは`null`。 */
+/**
+ * 2つのcommitの間のファイル1件の`-U0`の差分の行の範囲。gitが失敗したとき、大きすぎるとき、読めないときは`null`。
+ * 空白だけが違う行は変更に数えない。PRが字下げだけを変えた基点の行を、PRが足した行にしないためである。
+ * 整形で1行が複数行に分かれた場合は、分かれた行がPRの追加になる。
+ */
 async function readHunkRanges(
   run: CommandRunner,
   worktreeDir: string,
@@ -1165,6 +1176,7 @@ async function readHunkRanges(
         "-U0",
         "--inter-hunk-context=0",
         "--diff-algorithm=myers",
+        "--ignore-all-space",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",

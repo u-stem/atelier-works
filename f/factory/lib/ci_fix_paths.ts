@@ -408,12 +408,15 @@ function testLineViolation(change: CiFixChange): CiFixViolationCode | null {
   if (countMeaningfulLines(change.addedLines) < change.removedLineCount) {
     return "test_not_additive";
   }
-  if ((change.shrinkingHunkCount ?? 0) > 0) return "test_not_additive";
-  if (change.removedOutsidePrLineCount === undefined) {
-    return "test_base_unknown";
+  const { shrinkingHunkCount, removedOutsidePrLineCount } = change;
+  if (shrinkingHunkCount !== undefined && shrinkingHunkCount > 0) {
+    return "test_not_additive";
   }
-  if (change.shrinkingHunkCount === undefined) return "test_not_additive";
-  return change.removedOutsidePrLineCount > 0 ? "test_not_additive" : null;
+  if (removedOutsidePrLineCount === undefined) return "test_base_unknown";
+  if (shrinkingHunkCount === undefined || removedOutsidePrLineCount > 0) {
+    return "test_not_additive";
+  }
+  return null;
 }
 
 /** 1件の変更の最初の違反の理由。違反が無ければnull。 */

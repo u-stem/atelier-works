@@ -680,7 +680,8 @@ export async function main(
     return prChangedPathsRead;
   };
   // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
-  // 求められなければnullになり、検査は基点の行を消したものとして拒否に倒れる。
+  // 既定のブランチを向いていないPRはnullになり、検査は基点の行を消したものとして拒否に倒れる。
+  // APIやgitの失敗は例外にする。ステップが失敗し、回復が行を保留なしで戻して、回数の上限の範囲で起動し直す。
   let prBaseResolved: Promise<PrBase | null> | null = null;
   const resolvePrBaseOnce = (): Promise<PrBase | null> => {
     prBaseResolved ??= (async () => {
@@ -696,9 +697,17 @@ export async function main(
           worktreeDir: worktree_dir,
           ghToken,
           run: runCommand,
+          assertWorktreeIntact: async () => {
+            if (worktree_git_pointer === null) {
+              throw new Error(
+                "the .git pointer of the worktree is not recorded",
+              );
+            }
+            await assertWorktreeGitPointer(worktree_dir, worktree_git_pointer);
+          },
         }),
         (reason) =>
-          log.warn("failed to resolve the base commit of the PR", {
+          log.warn("the base commit of the PR cannot be used", {
             work_item_id,
             reason,
           }),

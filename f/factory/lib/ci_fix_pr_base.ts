@@ -47,34 +47,32 @@ export type PrMergeBaseIo = {
 
 /**
  * PRの基点(merge-baseとbaseの先端)を返す。
- * PRが既定のブランチを向いていなければ、基点とは言えないので`null`を返す。
+ * PRが既定のブランチを向いていなければ、基点とは言えないので`null`を返し、理由を`onUnusable`に渡す。
  * 既定でないブランチは、そのテストを持たないことがあり、持たないと全行がPRの追加に見える。
- * baseブランチの今の先端を読み、そのcommitを取り込んでから、headとのmerge-baseを求める。
+ * `null`は、待っても変わらない理由だけで返す。呼び出し側は、基点の行を消したものとして拒否する。
+ * baseブランチの今の先端を読み、`.git`の記録を照合してから、そのcommitを取り込み、headとのmerge-baseを求める。
  * 先端を取り込むのは、merge-baseの計算がそのオブジェクトをローカルに要るためである。
- * どの段階の失敗も例外にせず、`null`を返す。基点が分からなければ、CI回は基点の行を消したものとして
- * テストの変更を拒否するので、`null`は以前と同じ結果になる。原因は`onError`に渡す。
+ * APIの失敗、取り込みの失敗、gitの失敗、形の違う応答は、一時的な失敗かもしれないので、例外として投げる。
+ * `null`にすると、一時的な失敗が、人が直すしかない停止になる。
  */
 export async function resolvePrMergeBase(
   io: PrMergeBaseIo,
-  onError?: (message: string) => void,
+  onUnusable?: (message: string) => void,
 ): Promise<PrBase | null> {
-  try {
-    const baseRef = await io.readBaseRef();
-    if (baseRef !== (await io.readDefaultBranch())) {
-      throw new Error("the pull request does not target the default branch");
-    }
-    const tip = await io.readBranchSha(baseRef);
-    if (!FULL_SHA.test(tip)) throw new Error("the base tip is not a full sha");
-    await io.fetchCommit(tip);
-    const base = await io.mergeBase(tip);
-    if (!FULL_SHA.test(base)) {
-      throw new Error("the merge base is not a full sha");
-    }
-    return { mergeBase: base, tip };
-  } catch (err) {
-    onError?.(err instanceof Error ? err.message : String(err));
+  const baseRef = await io.readBaseRef();
+  if (baseRef !== (await io.readDefaultBranch())) {
+    onUnusable?.("the pull request does not target the default branch");
     return null;
   }
+  const tip = await io.readBranchSha(baseRef);
+  if (!FULL_SHA.test(tip)) throw new Error("the base tip is not a full sha");
+  await io.assertWorktreeIntact();
+  await io.fetchCommit(tip);
+  const mergeBase = await io.mergeBase(tip);
+  if (!FULL_SHA.test(mergeBase)) {
+    throw new Error("the merge base is not a full sha");
+  }
+  return { mergeBase, tip };
 }
 
 /**
@@ -112,13 +110,15 @@ export function githubPrMergeBaseIo(input: {
   readonly worktreeDir: string;
   readonly ghToken: string;
   readonly run: CommandRunner;
+  /** 取り込みの前に、worktreeの`.git`が記録のままであることを確かめる。そうでなければ投げる。 */
+  readonly assertWorktreeIntact: () => Promise<void>;
 }): PrMergeBaseIo {
   const { client, owner, repo, worktreeDir } = input;
   return {
     readBaseRef: async () =>
       (await getPr(client, owner, repo, input.prNumber)).baseRef,
     readDefaultBranch: () => getDefaultBranch(client, owner, repo),
-    assertWorktreeIntact: async () => undefined,
+    assertWorktreeIntact: input.assertWorktreeIntact,
     readBranchSha: (branch) => getBranchSha(client, owner, repo, branch),
     fetchCommit: (sha) =>
       fetchCommit({
