@@ -5,11 +5,16 @@ import { join } from "node:path";
 // 保留の表への書き込みは、`f/factory/lib/holds.ts`だけに置く。
 // このテストは、他のファイルが書く関数を読み込んでいないことと、表へ書くSQLの文字列を持たないことを検出する。
 // 検出は文字列のヒューリスティックで、書き込みを止める仕組みではない。
-// 次の入力は見つけられない。
+// 見つけられない入力の例は次のとおりである。
 // - SQLの文を文字列の連結やテンプレートで組み立てるコード(`UPDATE factory.${"holds"}`など)
+// - SQLの動詞や表名を、JavaScriptの文字列のエスケープ(`\u0049NSERT`など)で書くコード
 // - 保留のモジュールの名前を、連結や変数で組み立てるimport
 // - `f/factory/`の外のコード(`scripts/`など)。migrationは、表を作るもの以外を別に検査する。
 // Windmillのscriptは同じdatatableの接続を持つので、これらをすり抜けるコードは表を書ける。
+//
+// TypeScriptは`Bun.Transpiler`で変換してから読む。JavaScriptのコメントと、型だけのimportが消える。
+// SQLは、動詞を見つけた位置から先を、SQLの字句(空白、`--`の行コメント、入れ子の`/* */`)で読む。
+// ファイル全体のコメントを先に除くと、文字列の中の`/*`に引きずられて、後ろの文を消すためである。
 //
 // 後の段で`cleanup_db`が期限の過ぎた行を消すときは、削除を`holds.ts`の関数として置き、
 // `cleanup_db`だけがその関数を読み込んでよいことにする。この例外は、関数を置く段で足す。
@@ -55,59 +60,74 @@ type ModuleReference = {
   readonly specifier: string;
 };
 
-/** JavaScriptのコメントを空白にする。コメントの中の引用符が、節の解析を狂わせないようにするためである。 */
-function stripJsComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+const transpiler = new Bun.Transpiler({ loader: "ts" });
+
+/** コメントと型を落としたJavaScript。変換できないソースは、元の文字列を返す。 */
+function codeOf(source: string): string {
+  try {
+    return transpiler.transformSync(source);
+  } catch {
+    return source;
+  }
 }
 
-const HOLDS_LITERAL =
-  /["'`]([^"'`\s]*holds(?:\.[cm]?[jt]sx?)?(?:[?#][^"'`\s]*)?)["'`]/gi;
+function scannedImports(source: string): { kind: string; path: string }[] {
+  try {
+    return transpiler.scanImports(source);
+  } catch {
+    return [];
+  }
+}
 
 /**
- * 保留のモジュールを指す文字列を探し、その直前のimport・export・requireの節を読む。
- * 節は直前のキーワードから文字列までを取り、コメントを除いてから読む。
- * 節の中の引用符や、同じ行の前にある`//`を含む文字列に、読み取りが左右されない。
+ * 保留のモジュールを読み込む、再exportする、動的に読む箇所をすべて返す。
+ * 節は、コメントを落とした変換後のコードから読む。コメントの中の引用符やimportに左右されない。
+ * 変換後のコードに現れないimportも、`scanImports`の指定子から拾う。
  */
 function holdsReferences(source: string): ModuleReference[] {
+  const code = codeOf(source);
   const found: ModuleReference[] = [];
-  for (const match of source.matchAll(HOLDS_LITERAL)) {
-    const specifier = match[1] ?? "";
-    if (!isHoldsSpecifier(specifier)) continue;
-    const start = match.index ?? 0;
-    const before = source.slice(Math.max(0, start - 2000), start);
-    const keyword = [...before.matchAll(/\b(import|export|require)\b/g)].at(-1);
-    if (keyword === undefined) {
-      found.push({ kind: "import", clause: "?", specifier });
-      continue;
-    }
-    const clause = stripJsComments(
-      before.slice((keyword.index ?? 0) + keyword[0].length),
-    ).trim();
-    if (clause.startsWith("(")) {
+  for (const match of code.matchAll(
+    /\b(import|export)\b([^;]*?)\bfrom\s*"([^"]+)"/g,
+  )) {
+    const [, keyword = "", clause = "", specifier = ""] = match;
+    if (isHoldsSpecifier(specifier)) {
       found.push({
-        kind: keyword[1] === "require" ? "require" : "dynamic",
-        clause,
+        kind: keyword === "export" ? "export" : "import",
+        clause: clause.trim(),
         specifier,
       });
-      continue;
     }
-    found.push({
-      kind: keyword[1] === "export" ? "export" : "import",
-      clause: clause.replace(/\bfrom\s*$/, "").trim(),
-      specifier,
-    });
+  }
+  for (const match of code.matchAll(/\bimport\s*"([^"]+)"/g)) {
+    const specifier = match[1] ?? "";
+    if (isHoldsSpecifier(specifier)) {
+      found.push({ kind: "import", clause: "", specifier });
+    }
+  }
+  for (const entry of scannedImports(source)) {
+    if (!isHoldsSpecifier(entry.path)) continue;
+    if (entry.kind === "import-statement") {
+      if (!found.some((reference) => reference.specifier === entry.path)) {
+        found.push({ kind: "import", clause: "?", specifier: entry.path });
+      }
+    } else {
+      found.push({
+        kind: entry.kind === "require-call" ? "require" : "dynamic",
+        clause: "",
+        specifier: entry.path,
+      });
+    }
   }
   // 引数が文字列でない動的なimportとrequireは、何を読むか分からないので、保留のモジュールを読むものとして扱う。
-  for (const text of [source, stripJsComments(source)]) {
-    for (const match of text.matchAll(/\b(import|require)\s*\(\s*([^)]*)\)/g)) {
-      const argument = (match[2] ?? "").trim();
-      if (!/^["'][^"']*["']$/.test(argument)) {
-        found.push({
-          kind: match[1] === "import" ? "dynamic" : "require",
-          clause: argument,
-          specifier: argument,
-        });
-      }
+  for (const match of code.matchAll(/\b(import|require)\s*\(\s*([^)]*)\)/g)) {
+    const argument = (match[2] ?? "").trim();
+    if (!/^"[^"]*"$/.test(argument)) {
+      found.push({
+        kind: match[1] === "import" ? "dynamic" : "require",
+        clause: argument,
+        specifier: argument,
+      });
     }
   }
   return found;
@@ -134,16 +154,31 @@ function namedImports(
     });
 }
 
-/** 保留のモジュールに対して、読み取りの関数と型だけを名前付きで読み込んでいるか。 */
-function onlyReadsHolds(source: string): boolean {
-  return holdsReferences(source).every((reference) => {
-    if (reference.kind !== "import") return false;
+/** 読み取りの関数と型だけを名前付きで読み込む形でない、保留のモジュールへの参照。 */
+function disallowedHoldsReferences(source: string): ModuleReference[] {
+  return holdsReferences(source).filter((reference) => {
+    if (reference.kind !== "import") return true;
     const names = namedImports(reference.clause);
-    if (names === null) return false;
-    return names.every(
+    if (names === null) return true;
+    return !names.every(
       ({ name, isType }) => isType || READ_ONLY_NAMES.includes(name),
     );
   });
+}
+
+/** 保留のモジュールに対して、読み取りの関数と型だけを名前付きで読み込んでいるか。 */
+function onlyReadsHolds(source: string): boolean {
+  return disallowedHoldsReferences(source).length === 0;
+}
+
+/** YAMLなどTypeScriptでないファイルに、保留のモジュールを指す文字列があるか。 */
+function mentionsHoldsModule(text: string): boolean {
+  for (const match of text.matchAll(
+    /["'`]([^"'`\s]*holds(?:\.[cm]?[jt]sx?)?(?:[?#][^"'`\s]*)?)["'`]/gi,
+  )) {
+    if (isHoldsSpecifier(match[1] ?? "")) return true;
+  }
+  return false;
 }
 
 describe("onlyReadsHolds", () => {
@@ -331,57 +366,239 @@ describe("onlyReadsHolds", () => {
   });
 });
 
-/** SQLのコメントを空白にした文字列を、コメントを除く範囲ごとに返す。PostgreSQLはコメントを空白として読む。 */
-function sqlVariants(source: string): string[] {
-  const withoutBlock = source.replace(/\/\*[\s\S]*?\*\//g, " ");
-  // 行コメントを除くと、同じ行の`"--"`のような文字列の後ろが消えて、文を隠せる。
-  // そのため、除く前の文字列も検査に使う。
-  const withoutLine = withoutBlock.replace(/--[^\n]*/g, " ");
-  return [source, withoutBlock, withoutLine];
+/** 空白として読む文字。引用符は、テンプレートや文字列の中のSQLで識別子を囲むので、読み飛ばす。 */
+const IGNORED = /[\s"'`]/;
+
+/** 行コメントの終わり。JavaScriptの文字列に書かれた改行のエスケープも、改行として扱う。 */
+function lineEnd(text: string, from: number): number {
+  const ends = [
+    text.indexOf("\n", from),
+    text.indexOf("\\n", from),
+    text.indexOf("\\r", from),
+  ].filter((index) => index >= 0);
+  return ends.length === 0 ? text.length : Math.min(...ends) + 1;
 }
 
-/** 空白と引用符をそろえて、SQLの文を大文字小文字を区別せずに探せる形にする。 */
-function normalizeSql(source: string): string {
-  return source
-    .replace(/["'`]/g, "")
-    .replace(/\s*\.\s*/g, ".")
-    .replace(/\s+/g, " ")
-    .toUpperCase();
+/** 入れ子を数えて、ブロックコメントの終わりの次の位置を返す。閉じていなければ終端を返す。 */
+function blockCommentEnd(text: string, from: number): number {
+  let depth = 0;
+  let i = from;
+  while (i < text.length) {
+    if (text.startsWith("/*", i)) {
+      depth += 1;
+      i += 2;
+    } else if (text.startsWith("*/", i)) {
+      depth -= 1;
+      i += 2;
+      if (depth === 0) return i;
+    } else {
+      i += 1;
+    }
+  }
+  return text.length;
 }
 
-function matchesAny(source: string, patterns: readonly RegExp[]): boolean {
-  return sqlVariants(source).some((variant) => {
-    const normalized = normalizeSql(variant);
-    return patterns.some((pattern) => pattern.test(normalized));
-  });
+/**
+ * `start`から先を、SQLの字句として読む。空白、行コメント、入れ子のブロックコメントを読み飛ばし、
+ * 語は小文字にして、記号は1文字ずつ返す。この位置から読むので、手前にあるほかの字句の`/*`に引きずられない。
+ */
+function readSqlTokens(text: string, start: number, limit = 80): string[] {
+  const tokens: string[] = [];
+  let i = start;
+  while (i < text.length && tokens.length < limit) {
+    const rest = text.slice(i, i + 2);
+    if (rest === "--") {
+      i = lineEnd(text, i);
+    } else if (rest === "/*") {
+      i = blockCommentEnd(text, i);
+    } else if (/^\\[nrt]$/.test(rest)) {
+      i += 2;
+    } else if (IGNORED.test(text.charAt(i)) || text.charAt(i) === "\\") {
+      i += 1;
+    } else {
+      const word = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(text.slice(i, i + 80));
+      if (word === null) {
+        tokens.push(text.charAt(i));
+        i += 1;
+      } else {
+        tokens.push(word[0].toLowerCase());
+        i += word[0].length;
+      }
+    }
+  }
+  return tokens;
 }
 
-const WRITE_STATEMENT =
-  /(INSERT INTO|UPDATE|DELETE FROM|MERGE INTO|TRUNCATE( TABLE)?|DROP TABLE|ALTER TABLE|COPY)( IF EXISTS)?( ONLY)? (FACTORY\.)?HOLDS\b/;
+type TableRef = {
+  readonly qualifier: string | null;
+  readonly name: string;
+  readonly next: number;
+};
 
-function writesHolds(source: string): boolean {
-  return matchesAny(source, [WRITE_STATEMENT]);
+function isWord(token: string | undefined): token is string {
+  return token !== undefined && /^[a-z_]/.test(token);
 }
 
-/** TypeScriptのコードから、書き込みの文の抜粋を返す。 */
+function readRef(tokens: readonly string[], from: number): TableRef | null {
+  let i = from;
+  if (tokens[i] === "only") i += 1;
+  const first = tokens[i];
+  if (!isWord(first)) return null;
+  const second = tokens[i + 2];
+  if (tokens[i + 1] === "." && isWord(second)) {
+    return { qualifier: first, name: second, next: i + 3 };
+  }
+  return { qualifier: null, name: first, next: i + 1 };
+}
+
+function readRefList(tokens: readonly string[], from: number): TableRef[] {
+  const refs: TableRef[] = [];
+  let i = from;
+  for (;;) {
+    const ref = readRef(tokens, i);
+    if (ref === null) return refs;
+    refs.push(ref);
+    if (tokens[ref.next] !== ",") return refs;
+    i = ref.next + 1;
+  }
+}
+
+function inOurSchema(ref: TableRef): boolean {
+  return ref.qualifier === null || ref.qualifier === "factory";
+}
+
+function isHoldsTable(ref: TableRef | null): boolean {
+  return ref !== null && inOurSchema(ref) && ref.name === "holds";
+}
+
+function isHoldsIndex(ref: TableRef | null): boolean {
+  return ref !== null && inOurSchema(ref) && ref.name.startsWith("holds_");
+}
+
+/** `IF EXISTS`があれば読み飛ばした位置を返す。 */
+function skipIfExists(tokens: readonly string[], from: number): number {
+  return tokens[from] === "if" && tokens[from + 1] === "exists"
+    ? from + 2
+    : from;
+}
+
+/** 動詞で始まるトークン列が、保留の表への書き込みか、表とインデックスの定義の変更かを返す。 */
+function touchesHolds(tokens: readonly string[]): boolean {
+  switch (tokens[0]) {
+    case "insert":
+      return tokens[1] === "into" && isHoldsTable(readRef(tokens, 2));
+    case "delete":
+      return tokens[1] === "from" && isHoldsTable(readRef(tokens, 2));
+    case "merge":
+      return tokens[1] === "into" && isHoldsTable(readRef(tokens, 2));
+    case "update": {
+      const ref = readRef(tokens, 1);
+      return (
+        ref !== null &&
+        isHoldsTable(ref) &&
+        tokens.slice(ref.next, ref.next + 4).includes("set")
+      );
+    }
+    case "truncate":
+      return readRefList(tokens, tokens[1] === "table" ? 2 : 1).some(
+        isHoldsTable,
+      );
+    case "copy": {
+      const ref = readRef(tokens, 1);
+      return (
+        ref !== null &&
+        isHoldsTable(ref) &&
+        ["from", "to", "("].includes(tokens[ref.next] ?? "")
+      );
+    }
+    case "drop":
+      if (tokens[1] === "table") {
+        return readRefList(tokens, skipIfExists(tokens, 2)).some(isHoldsTable);
+      }
+      if (tokens[1] === "index") {
+        const from = tokens[2] === "concurrently" ? 3 : 2;
+        return readRefList(tokens, skipIfExists(tokens, from)).some(
+          isHoldsIndex,
+        );
+      }
+      return false;
+    case "alter":
+      if (tokens[1] === "table") {
+        return isHoldsTable(readRef(tokens, skipIfExists(tokens, 2)));
+      }
+      if (tokens[1] === "index") {
+        return isHoldsIndex(readRef(tokens, skipIfExists(tokens, 2)));
+      }
+      return false;
+    case "create": {
+      let i = 1;
+      while (
+        ["or", "replace", "unique", "constraint"].includes(tokens[i] ?? "")
+      ) {
+        i += 1;
+      }
+      if (!["index", "trigger", "rule", "policy"].includes(tokens[i] ?? "")) {
+        return false;
+      }
+      for (let j = i; j < tokens.length && tokens[j] !== ";"; j += 1) {
+        if (tokens[j] === "on" || tokens[j] === "to") {
+          if (isHoldsTable(readRef(tokens, j + 1))) return true;
+        }
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
+const SQL_VERBS =
+  /\b(insert|update|delete|merge|truncate|drop|alter|copy|create)\b/gi;
+
+/**
+ * テキストから、保留の表へ書く文か、表とインデックスの定義を変える文を探し、最初の文の抜粋を返す。無ければnull。
+ * 動詞は文字列として探し、見つけた位置から先をSQLの字句で読む。
+ * 英文のログ(`could not update holds`)は、表名の後ろにSQLの構造が続かないので当たらない。
+ */
 function findHoldsWrite(text: string): string | null {
-  void text;
+  for (const match of text.matchAll(SQL_VERBS)) {
+    const start = match.index ?? 0;
+    if (touchesHolds(readSqlTokens(text, start))) {
+      return text.slice(start, start + 100).replace(/\s+/g, " ");
+    }
+  }
   return null;
+}
+
+/** 保留の表へ書く文を、コメントを除かずにそのまま読んで探す。SQLのファイルと、文字列の入力に使う。 */
+function writesHolds(text: string): boolean {
+  return findHoldsWrite(text) !== null;
 }
 
 /** TypeScriptのソースに書かれた、保留の表へ書くSQLの有無。JavaScriptのコメントは除く。 */
 function tsWritesHolds(source: string): boolean {
-  return writesHolds(source);
+  return findHoldsWrite(codeOf(source)) !== null;
 }
 
-/** 書く関数のsql引数に、既定値か省略があるか。 */
+/** 走査するファイルの、SQLを探す対象の文字列。TypeScriptはコメントを除く。 */
+function scanText(path: string, source: string): string {
+  return path.endsWith(".ts") ? codeOf(source) : source;
+}
+
+/** 書く関数のsql引数に、既定値か省略があるか。型の名前に依存しない。 */
 function allowsDefaultSql(source: string): boolean {
-  return /sql\s*:\s*SqlClient\s*=/.test(source);
+  return /\bsql\s*\?\s*:|\bsql\s*:[^,)=]*=/.test(source);
 }
 
-/** ソースが何かを読み込むか。 */
+/** ソースが何かを読み込むか。型だけのimportも数える。 */
 function importsSomething(source: string): boolean {
-  return /^import\b/m.test(source);
+  return (
+    /^import\b/m.test(source) ||
+    /\bfrom\s*["']/.test(source) ||
+    /\bimport\s*\(/.test(source) ||
+    /\brequire\s*\(/.test(source) ||
+    scannedImports(source).length > 0
+  );
 }
 
 describe("writesHolds", () => {
@@ -530,13 +747,27 @@ describe("files under f/factory", () => {
   });
 
   test("none but holds.ts writes to the holds table", () => {
-    const writers = SCANNED.filter((path) => writesHolds(read(path)));
+    const writers = SCANNED.flatMap((path) => {
+      const excerpt = findHoldsWrite(scanText(path, read(path)));
+      return excerpt === null ? [] : [`${path}: ${excerpt}`];
+    });
 
     expect(writers).toEqual([]);
   });
 
   test("none but holds.ts reaches the holds module beyond the read functions", () => {
-    const offenders = SCANNED.filter((path) => !onlyReadsHolds(read(path)));
+    const offenders = SCANNED.flatMap((path) => {
+      const source = read(path);
+      if (!path.endsWith(".ts")) {
+        return mentionsHoldsModule(source)
+          ? [`${path}: names the holds module`]
+          : [];
+      }
+      return disallowedHoldsReferences(source).map(
+        (reference) =>
+          `${path}: ${reference.kind} ${reference.specifier} ${reference.clause}`,
+      );
+    });
 
     expect(offenders).toEqual([]);
   });
@@ -604,20 +835,12 @@ const HOLDS_MIGRATION_FILES = [
 ];
 const MIGRATIONS_DIR = "migrations/datatable/main";
 
-/** migrationが表の定義を変える文。インデックスやトリガーを足すもの、名前がholds_で始まるインデックスの変更を含む。 */
-const DEFINITION_STATEMENTS: readonly RegExp[] = [
-  WRITE_STATEMENT,
-  /\bCREATE (UNIQUE )?INDEX\b[^;]*? ON (ONLY )?(FACTORY\.)?HOLDS\b/,
-  /\bCREATE (TRIGGER|RULE|POLICY)\b[^;]*? ON (ONLY )?(FACTORY\.)?HOLDS\b/,
-  /\b(DROP|ALTER) INDEX( CONCURRENTLY)?( IF EXISTS)? (FACTORY\.)?HOLDS_/,
-];
-
 /** 表を作るmigration以外のうち、`factory.holds`に書き込むか定義を変えるものの名前を返す。 */
 function migrationViolations(
   files: Readonly<Record<string, string>>,
 ): string[] {
   return Object.entries(files)
-    .filter(([, sql]) => matchesAny(sql, DEFINITION_STATEMENTS))
+    .filter(([, sql]) => findHoldsWrite(sql) !== null)
     .map(([name]) => name);
 }
 

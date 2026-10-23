@@ -106,13 +106,18 @@
 余裕は閉じる条件だけに使い、有効の条件は変えない。
 余裕の内の行は、有効ではないが閉じられもしないので、置く操作は「既に有効な保留がある」で断られる。
 
-`placeHold`は、文を送る前に`validatePlaceInput`で入力を検証する。
-通らない入力は、文を送らずに失敗を返す。
-`holder`と`holder_kind`の対応と制御文字は、表の制約が拾わないためである。
-
 1つのCTEにまとめず、2つの文に分ける。
 間で失敗しても、閉じるのは無効な行だけなので、表は壊れない。
 期限切れの行が残っていても、置く操作は塞がれない。
+
+2つの文は、それぞれ自動コミットで送る。
+`now()`が文ごとに決まる前提なので、呼び出し側が2つの文を1つのトランザクションに束ねた接続を渡してはならない。
+1分を超えて開いたトランザクションでは、他の主体が置いたばかりのclaimの行を、`invalid`で閉じうる。
+psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクションになるので、文ごとに送る。
+
+`placeHold`は、文を送る前に`validatePlaceInput`で入力を検証する。
+通らない入力は、文を送らずに失敗を返す。
+`holder`と`holder_kind`の対応と制御文字は、表の制約が拾わないためである。
 
 期限は、呼び出し側が時刻を渡さず、分(1〜1440)をDBが`now() + make_interval(mins => n::integer)`で時刻にする。
 延長は設けない。
@@ -163,12 +168,21 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、走査を
 - `f/factory/`のすべての`.ts`と`flow.yaml`で、`holds.ts`以外が、読み取りの2つの関数と型のほかを読み込むこと。
   名前空間の読み込み、再export、動的な読み込み、`.js`など拡張子違いの指定、絶対パスの指定も検出する。
 - 同じ範囲で、`holds.ts`以外が`factory.holds`へ書くSQLの文字列を持つこと。
-  INSERT、UPDATE、DELETE、MERGE、TRUNCATE、DROP、ALTER、COPYが対象で、スキーマ名の無い`holds`と、SQLのコメントで分割した文も含む。
-- `migrations/datatable/main/`で、表を作るmigration以外が、表への書き込みと定義の変更を持つこと。
+  対象は、INSERT、UPDATE、DELETE、MERGE、TRUNCATE、DROP、ALTER、COPYである。
+  表とインデックスの定義を変えるCREATE文(インデックス、トリガー、ルール、ポリシー)も含む。
+  スキーマ名の無い`holds`、複数の表を並べた文、入れ子のブロックコメントや行コメントで分割した文も含む。
+- `migrations/datatable/main/`で、表を作るmigration以外が、同じ文を持つこと。
+
+TypeScriptは、`Bun.Transpiler`で変換してから読む。
+JavaScriptのコメントと型だけのimportは、変換で消える。
+SQLは、動詞を見つけた位置から先を、SQLの字句で読む。
+英文のログ(`could not update holds`)は、表名の後ろにSQLの構造が続かないので当たらない。
 
 検出するのは文字列の形だけで、見つけられない入力がある。
+次は例であり、すべてではない。
 
 - SQLの文を文字列の連結やテンプレートで組み立てるコード
+- 動詞や表名をJavaScriptの文字列のエスケープ(`\u0049NSERT`など)で書くコード
 - 保留のモジュールの名前を組み立てるimport
 - `f/factory/`とmigrationの外のコード(`scripts/`など)
 

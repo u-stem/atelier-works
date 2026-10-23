@@ -140,7 +140,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 保留は、自動マージとIssueの取り込みを止める。書き込みを`holds.ts`だけに絞る検査
  * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
  * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
- * 書き換えられると、保留を置く主体を絞った意味が無くなり、保留の期限の上限が外れる。
+ * 書き換えられると、書き込みの混入の検出が外れ、保留の期限の上限が外れる。
  * 一方、`holds.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * `scripts/test-db-holds.ts`が使う`scripts/test-db-sql.ts`も守らない。ほかの実DBの検査も使う部品で、
  * 守ると日常の変更を止めるためである。制約の拒否は、失敗の文に制約名が含まれることまで照合するので、

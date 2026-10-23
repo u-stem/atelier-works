@@ -553,7 +553,7 @@ describe("releaseHold", () => {
   });
 });
 
-// holds.tsは保護されたdb.tsから切り離し、必要な形の型を自前で持つ。
+// holds.tsは保護の外のdb.tsから切り離し、必要な形の型を自前で持つ。
 // 型の互換は、次の代入が型検査を通ることで確かめる。
 describe("HoldSqlClient", () => {
   test("accepts the SqlClient of db.ts", () => {
