@@ -4,6 +4,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  githubPrMergeBaseIo,
+  type PrBase,
+  resolvePrMergeBase,
+} from "../lib/ci_fix_pr_base.ts";
+import {
   CI_ROUND_REPLIES_REASON,
   ciAddedPathsStopReason,
   ciRoundPushGuardReason,
@@ -943,6 +948,37 @@ export async function main(
     });
   }
 
+  // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
+  // 既定のブランチを向いていないPRはnullになり、検査は基点の行を消したものとして拒否に倒れる。
+  // APIやgitの失敗は例外にする。ステップが失敗し、回復が行を保留なしで戻して、回数の上限の範囲で起動し直す。
+  let prBaseResolved: Promise<PrBase | null> | null = null;
+  const resolvePrBaseOnce = (): Promise<PrBase | null> => {
+    prBaseResolved ??= resolvePrMergeBase(
+      githubPrMergeBaseIo({
+        client,
+        owner,
+        repo,
+        prNumber: pr_number,
+        headSha: head_sha,
+        worktreeDir: worktree_dir,
+        ghToken,
+        run: runCommand,
+        assertWorktreeIntact: async () => {
+          if (worktree_git_pointer === null) {
+            throw new Error("the .git pointer of the worktree is not recorded");
+          }
+          await assertWorktreeGitPointer(worktree_dir, worktree_git_pointer);
+        },
+      }),
+      (reason) =>
+        log.warn("the base commit of the PR cannot be used", {
+          work_item_id,
+          reason,
+        }),
+    );
+    return prBaseResolved;
+  };
+
   // gitleaksは長くかかりうるので、`commitAndPush`のリポジトリのロックの外で先に実行する。
   const scanned = await scanPrFixBeforeCommit({
     scanForSecrets: async () => {
@@ -982,6 +1018,7 @@ export async function main(
             prChangedPaths,
             {
               source: "staged",
+              resolvePrBase: resolvePrBaseOnce,
               // ステージした本文が、照合済みの再計算の本文と同じときだけ、`wmill-lock.yaml`だけの変更を許す。
               rehashCheck: async () =>
                 rehash.gate === null

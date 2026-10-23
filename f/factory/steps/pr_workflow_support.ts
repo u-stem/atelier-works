@@ -15,6 +15,7 @@ import {
   CI_FIX_GITLEAKS_TIMEOUT_MS,
   CI_ROUND_DETAILS,
   CI_ROUND_REASON_PREFIX,
+  CI_TEST_BASE_UNKNOWN_REASON_PREFIX,
   ciRoundApplyTimeoutMisfit,
   ciRoundReason,
   ciRoundVerifyTimeoutMisfit,
@@ -4147,11 +4148,21 @@ const REPO_NOT_ALLOWED_CI_NEXT_ACTION =
   "factory_configのowners / repo_allowlistを見直してください。直すと、Factoryが次の巡回で自動で起動し直します。最初に失敗を見てから24時間たった行は閉じるので、そのときはPRにpushしてください";
 
 /**
+ * テストの行を減らす変更で、PRが足した行かを調べられなかったCI回の、次の操作。
+ * 一時的な失敗は例外になって回復が戻すので、ここへ来るのは、待っても変わらない原因である。
+ * 原因は、PRが既定のブランチを向いていない、テストの差分が大きすぎるか読めない、のどれかである。
+ */
+const TEST_BASE_UNKNOWN_CI_NEXT_ACTION = `PRが既定のブランチを向いているかと、テストの差分が大きすぎないかを確かめ、人が直してから、${CI_PUSH_ACTION}`;
+
+/**
  * 修正の前に止めた理由の次の操作。保留の理由(`fix_hold_reason`)に写せる理由は、その理由の敬体の固定文(`stopAction`)を使う。
  * 写せない理由は、`CI_ROUND_NEXT_ACTION`にする。
  * `match.input`は、規則が一致した理由の1項目である。
  */
 function ciRoundStopAction(match: RegExpMatchArray): string {
+  if (match.input?.startsWith(CI_TEST_BASE_UNKNOWN_REASON_PREFIX)) {
+    return TEST_BASE_UNKNOWN_CI_NEXT_ACTION;
+  }
   if (match.input?.startsWith(ciRoundReason(CI_ROUND_DETAILS.timeMisfit))) {
     return TIME_SETTINGS_CI_NEXT_ACTION;
   }

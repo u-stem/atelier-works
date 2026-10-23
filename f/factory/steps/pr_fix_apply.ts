@@ -4,6 +4,10 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { readFile } from "node:fs/promises";
+import {
+  githubPrMergeBaseIo,
+  resolvePrMergeBase,
+} from "../lib/ci_fix_pr_base.ts";
 import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
 import {
   buildCiGatherDeps,
@@ -561,6 +565,23 @@ async function applyCiRound(
         prChangedPaths: ready.prChangedPaths,
       }),
     startClaude: async (prompt) => {
+      // 検証と完了のステップが基点を求めるので、先に求められるかを確かめる。
+      // APIやgitの一時的な失敗は、Claudeを動かす前に例外にして、flowの再試行に任せる。
+      // 結果は使わない。baseの先端が動きうるので、各ステップがもう一度求める。
+      await resolvePrMergeBase(
+        githubPrMergeBaseIo({
+          client,
+          owner,
+          repo,
+          prNumber: input.prNumber,
+          headSha,
+          worktreeDir: input.worktreeDir,
+          ghToken: client.ghToken,
+          run: runCommand,
+          assertWorktreeIntact: () =>
+            assertWorktreeGitPointer(input.worktreeDir, input.recordedPointer),
+        }),
+      );
       const systemPrompt = await buildSystemPrompt({
         skillNames: ["factory-fix"],
         factoryCloneDir: input.factoryCloneDir,

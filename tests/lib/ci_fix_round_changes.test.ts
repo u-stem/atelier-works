@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   type CiChangeFs,
   collectCiFixChanges,
+  countLinesOutside,
   inspectCiFixChanges,
   isLockOnlyChange,
   isRehashCandidate,
   listCiAddedPathsInTree,
+  parseHunkRanges,
   parseRawDiffZ,
   parseZeroContextPatch,
   type RehashCheckVerdict,
@@ -16,6 +18,8 @@ import type {
 } from "../../f/factory/lib/workspace.ts";
 
 const SHA = "a".repeat(40);
+const MERGE_BASE = "d".repeat(40);
+const BASE_TIP = "e".repeat(40);
 const DIR = "/work/tree";
 
 function raw(
@@ -148,8 +152,47 @@ describe("parseZeroContextPatch", () => {
       {
         addedLines: [],
         removedLineCount: 0,
+        shrinkingHunkCount: 0,
       },
     );
+  });
+
+  test("counts no shrinking hunk when every removed line is replaced by a code line", () => {
+    expect(
+      parseZeroContextPatch("@@ -1,2 +1,2 @@\n-a\n-b\n+c\n+d\n")
+        .shrinkingHunkCount,
+    ).toBe(0);
+  });
+
+  test("counts a hunk whose added lines are only comments as shrinking", () => {
+    expect(
+      parseZeroContextPatch(
+        "@@ -1 +1 @@\n-expect(a).toBe(1);\n+// expect(a).toBe(1);\n",
+      ).shrinkingHunkCount,
+    ).toBe(1);
+  });
+
+  test("counts a hunk whose added lines are only blank as shrinking", () => {
+    expect(
+      parseZeroContextPatch("@@ -1,2 +1,2 @@\n-a\n-b\n+\n+  \n")
+        .shrinkingHunkCount,
+    ).toBe(1);
+  });
+
+  test("does not let an addition in another hunk pay for a removal", () => {
+    const patch = "@@ -1,2 +0,0 @@\n-a\n-b\n@@ -9,0 +8,2 @@\n+c\n+d\n";
+    expect(parseZeroContextPatch(patch).shrinkingHunkCount).toBe(1);
+  });
+
+  test("counts only the shrinking hunks", () => {
+    const patch =
+      "@@ -1 +1 @@\n-a\n+b\n@@ -5 +5,0 @@\n-x\n@@ -9 +8 @@\n-y\n+z\n";
+    expect(parseZeroContextPatch(patch).shrinkingHunkCount).toBe(1);
+  });
+
+  test("ignores the no-newline marker when it counts the lines of a hunk", () => {
+    const patch = "@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n";
+    expect(parseZeroContextPatch(patch).shrinkingHunkCount).toBe(0);
   });
 });
 
@@ -161,6 +204,10 @@ type GitScript = {
   readonly tracked?: string;
   readonly untracked?: readonly string[];
   readonly patches?: Readonly<Record<string, string>>;
+  /** merge-baseから回の開始時のheadまでの`-U0`の出力。merge-baseのshaを引数に持つ呼び出しに返す。 */
+  readonly prPatches?: Readonly<Record<string, string>>;
+  /** baseの先端から回の開始時のheadまでの`-U0`の出力。先端のshaを引数に持つ呼び出しに返す。 */
+  readonly tipPatches?: Readonly<Record<string, string>>;
   readonly fail?: string;
 };
 
@@ -183,8 +230,12 @@ function fakeGit(script: GitScript): {
     }
     if (argv.includes("--raw")) return result(script.tracked ?? "");
     if (argv.includes("-U0")) {
-      const spec = argv[argv.length - 1] ?? "";
-      return result(script.patches?.[spec.replace(":(literal)", "")] ?? "");
+      const spec = (argv[argv.length - 1] ?? "").replace(":(literal)", "");
+      if (argv.includes(MERGE_BASE))
+        return result(script.prPatches?.[spec] ?? "");
+      if (argv.includes(BASE_TIP))
+        return result(script.tipPatches?.[spec] ?? "");
+      return result(script.patches?.[spec] ?? "");
     }
     return result("");
   };
@@ -241,6 +292,7 @@ describe("collectCiFixChanges", () => {
         mode: "100644",
         addedLines: ["new"],
         removedLineCount: 1,
+        shrinkingHunkCount: 0,
       },
     ]);
   });
@@ -506,6 +558,622 @@ describe("collectCiFixChanges", () => {
       (error: unknown) => (error instanceof Error ? error.message : ""),
     );
     expect(message).not.toContain("boom");
+  });
+});
+
+describe("parseHunkRanges", () => {
+  test("reads the removed and added line ranges of a hunk", () => {
+    expect(
+      parseHunkRanges("@@ -3,2 +5,4 @@\n-a\n-b\n+c\n+d\n+e\n+f\n"),
+    ).toEqual({
+      removed: [{ start: 3, count: 2 }],
+      added: [{ start: 5, count: 4 }],
+    });
+  });
+
+  test("reads an omitted count as one line", () => {
+    expect(parseHunkRanges("@@ -3 +3 @@\n-a\n+b\n")?.added).toEqual([
+      { start: 3, count: 1 },
+    ]);
+  });
+
+  test("drops a range of zero lines", () => {
+    expect(parseHunkRanges("@@ -0,0 +5,2 @@\n+a\n+b\n")?.removed).toEqual([]);
+  });
+
+  test("reads every hunk", () => {
+    const patch = "@@ -1 +1 @@\n-a\n+b\n@@ -7,0 +8 @@\n+c\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([
+      { start: 1, count: 1 },
+      { start: 8, count: 1 },
+    ]);
+  });
+
+  test("returns nothing for a binary patch", () => {
+    expect(parseHunkRanges("Binary files a/x and b/x differ\n")).toBeNull();
+  });
+
+  test("returns nothing for a hunk header that cannot be read", () => {
+    expect(parseHunkRanges("@@ garbage @@\n")).toBeNull();
+  });
+
+  test("reads the lines of a hunk, not the counts of its header", () => {
+    expect(parseHunkRanges("@@ -1 +1,3 @@\n-a\n+b\n")?.added).toEqual([
+      { start: 1, count: 1 },
+    ]);
+  });
+
+  test("takes the removed lines from the content when the header counts fewer", () => {
+    expect(parseHunkRanges("@@ -1 +1 @@\n-a\n-b\n+c\n")?.removed).toEqual([
+      { start: 1, count: 2 },
+    ]);
+  });
+
+  test("keeps the line numbers right when context lines are mixed in", () => {
+    const patch = "@@ -3,3 +3,3 @@\n ctx\n-a\n+b\n ctx\n-c\n+d\n";
+    expect(parseHunkRanges(patch)).toEqual({
+      removed: [
+        { start: 4, count: 1 },
+        { start: 6, count: 1 },
+      ],
+      added: [
+        { start: 4, count: 1 },
+        { start: 6, count: 1 },
+      ],
+    });
+  });
+
+  test("reads the removed lines of a hunk that adds nothing", () => {
+    expect(parseHunkRanges("@@ -5,2 +4,0 @@\n-x\n-y\n")).toEqual({
+      removed: [{ start: 5, count: 2 }],
+      added: [],
+    });
+  });
+
+  test("leaves out the line that only gained a newline at the end of the old side", () => {
+    const patch = "@@ -3 +3,2 @@\n-x\n\\ No newline at end of file\n+x\n+new\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([{ start: 4, count: 1 }]);
+  });
+
+  test("leaves out the line that only lost its newline at the end of the new side", () => {
+    const patch = "@@ -3 +3 @@\n-x\n+x\n\\ No newline at end of file\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([]);
+  });
+
+  test("keeps a new last line without a newline as added", () => {
+    const patch = "@@ -3,0 +4 @@\n+y\n\\ No newline at end of file\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([{ start: 4, count: 1 }]);
+  });
+
+  test("keeps the removed range when it leaves out an added line", () => {
+    const patch = "@@ -3 +3,2 @@\n-x\n\\ No newline at end of file\n+x\n+new\n";
+    expect(parseHunkRanges(patch)?.removed).toEqual([{ start: 3, count: 1 }]);
+  });
+
+  test("returns empty ranges for a mode-only change", () => {
+    expect(parseHunkRanges("old mode 100644\nnew mode 100755\n")).toEqual({
+      removed: [],
+      added: [],
+    });
+  });
+});
+
+describe("countLinesOutside", () => {
+  test("counts nothing when every line is inside the allowed ranges", () => {
+    expect(
+      countLinesOutside([{ start: 3, count: 2 }], [[{ start: 1, count: 9 }]]),
+    ).toBe(0);
+  });
+
+  test("counts the lines outside the allowed ranges", () => {
+    expect(
+      countLinesOutside([{ start: 3, count: 3 }], [[{ start: 4, count: 1 }]]),
+    ).toBe(2);
+  });
+
+  test("allows only the lines that every set allows", () => {
+    expect(
+      countLinesOutside(
+        [{ start: 3, count: 3 }],
+        [[{ start: 3, count: 3 }], [{ start: 5, count: 1 }]],
+      ),
+    ).toBe(2);
+  });
+
+  test("counts every line when a set allows nothing", () => {
+    expect(countLinesOutside([{ start: 3, count: 3 }], [[]])).toBe(3);
+  });
+});
+
+describe("collectCiFixChanges against the base of the pull request", () => {
+  const TEST = "tests/lib/a.test.ts";
+  const MODIFIED = raw(["100644", "100644", "M", TEST]);
+  /** 3行目を1行に置き換える。 */
+  const REPLACES_LINE_3 = { [TEST]: "@@ -3 +3 @@\n-old\n+new\n" };
+  const ADDED_3_TO_4 = { [TEST]: "@@ -2,0 +3,2 @@\n+one\n+two\n" };
+  const BASE = { mergeBase: MERGE_BASE, tip: BASE_TIP };
+
+  function options(
+    resolvePrBase: () => Promise<{ mergeBase: string; tip: string } | null>,
+    source: "worktree" | "staged" = "worktree",
+  ) {
+    return { source, fs: fakeFs({}).fs, resolvePrBase } as const;
+  }
+
+  async function removedOutside(script: GitScript) {
+    const { run } = fakeGit({ tracked: MODIFIED, ...script });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    return changes[0]?.removedOutsidePrLineCount;
+  }
+
+  test("counts nothing when every removed line is a line the pull request added", async () => {
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: ADDED_3_TO_4,
+        tipPatches: ADDED_3_TO_4,
+      }),
+    ).toBe(0);
+  });
+
+  test("counts a removed line that the base already had, even if the pull request added a line with the same text", async () => {
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: { [TEST]: "@@ -9,0 +10,2 @@\n+});\n+});\n" },
+        tipPatches: { [TEST]: "@@ -9,0 +10,2 @@\n+});\n+});\n" },
+      }),
+    ).toBe(1);
+  });
+
+  test("counts only the removed lines outside the added range", async () => {
+    expect(
+      await removedOutside({
+        patches: { [TEST]: "@@ -3,2 +3 @@\n-a\n-b\n+c\n" },
+        prPatches: { [TEST]: "@@ -2,0 +3 @@\n+x\n" },
+        tipPatches: { [TEST]: "@@ -2,0 +3 @@\n+x\n" },
+      }),
+    ).toBe(1);
+  });
+
+  test("ignores a base line that the pull request changed elsewhere in the file", async () => {
+    const pr = {
+      [TEST]:
+        "@@ -1 +1 @@\n-first\n+first changed\n@@ -2,0 +3,2 @@\n+one\n+two\n",
+    };
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: pr,
+        tipPatches: pr,
+      }),
+    ).toBe(0);
+  });
+
+  test("counts a removed line that the tip of the base branch already has", async () => {
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: ADDED_3_TO_4,
+        tipPatches: { [TEST]: "@@ -2,0 +9 @@\n+other\n" },
+      }),
+    ).toBe(1);
+  });
+
+  test("reads the added lines of a file that the base does not have as the whole file", async () => {
+    const whole = {
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
+    };
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: whole,
+        tipPatches: whole,
+      }),
+    ).toBe(0);
+  });
+
+  test("reads a file that the base does not have as added as a whole, wherever its lines came from", async () => {
+    const whole = {
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
+    };
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: whole,
+        tipPatches: whole,
+      }),
+    ).toBe(0);
+  });
+
+  test("reads the diffs of the pull request only per file, never the list of its files", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      tipPatches: ADDED_3_TO_4,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    const listing = argvs.filter(
+      (argv) => argv.includes("--numstat") || argv.includes("--name-status"),
+    );
+    expect(listing).toEqual([]);
+  });
+
+  test("ignores whitespace in the diffs that decide which lines the pull request added", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      tipPatches: ADDED_3_TO_4,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    const patchRuns = argvs.filter((argv) => argv.includes("-U0"));
+    expect(
+      patchRuns.map((argv) => argv.includes("--ignore-all-space")),
+    ).toEqual([false, true, true]);
+  });
+
+  test("diffs the staged tree for the round and the commits for the pull request", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      tipPatches: ADDED_3_TO_4,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE, "staged"),
+    );
+    const cachedRuns = argvs.filter(
+      (argv) => argv.includes("-U0") && argv.includes("--cached"),
+    );
+    expect(cachedRuns.map((argv) => argv.includes(MERGE_BASE))).toEqual([
+      false,
+    ]);
+  });
+
+  test("diffs one path without interpreting it as a pathspec", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    const against = argvs.find((argv) => argv.includes(MERGE_BASE)) ?? [];
+    expect(against.slice(-2)).toEqual(["--", `:(literal)${TEST}`]);
+  });
+
+  test("keeps hunks apart and fixes the diff algorithm in every diff it reads", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      tipPatches: ADDED_3_TO_4,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    const patchRuns = argvs.filter((argv) => argv.includes("-U0"));
+    expect(
+      patchRuns.map(
+        (argv) =>
+          argv.includes("--inter-hunk-context=0") &&
+          argv.includes("--diff-algorithm=myers"),
+      ),
+    ).toEqual([true, true, true]);
+  });
+
+  test("reports a hunk that replaces a line with a comment as shrinking", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: {
+        [TEST]: "@@ -3 +3 @@\n-expect(a).toBe(1);\n+// expect(a).toBe(1);\n",
+      },
+    });
+    const { changes } = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+    });
+    expect(changes[0]?.shrinkingHunkCount).toBe(1);
+  });
+
+  test("does not resolve the base when the test only adds lines", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: { [TEST]: "@@ -3,0 +4 @@\n+added\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return BASE;
+      }),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  test("does not resolve the base for a source file that removes lines", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", "f/factory/lib/a.ts"]),
+      patches: { "f/factory/lib/a.ts": "@@ -1 +1 @@\n-a\n+b\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return BASE;
+      }),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  test("does not resolve the base for a deleted test", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "000000", "D", TEST]),
+      patches: { [TEST]: "@@ -1,2 +0,0 @@\n-x\n-y\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return BASE;
+      }),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  test("resolves the base once for several tests", async () => {
+    const second = "tests/lib/b.test.ts";
+    const { run } = fakeGit({
+      tracked: raw(
+        ["100644", "100644", "M", TEST],
+        ["100644", "100644", "M", second],
+      ),
+      patches: { ...REPLACES_LINE_3, [second]: "@@ -1 +1 @@\n-a\n+b\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return BASE;
+      }),
+    );
+    expect(resolved).toBe(1);
+  });
+
+  test("leaves the count unknown when the base cannot be resolved", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REPLACES_LINE_3 });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => null),
+    );
+    expect(changes[0]?.removedOutsidePrLineCount).toBeUndefined();
+  });
+
+  test("leaves the count unknown when the diff against the merge base fails", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      fail: MERGE_BASE,
+    });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    expect(changes[0]?.removedOutsidePrLineCount).toBeUndefined();
+  });
+
+  test("leaves the count unknown when the diff against the tip fails", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      fail: BASE_TIP,
+    });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    expect(changes[0]?.removedOutsidePrLineCount).toBeUndefined();
+  });
+
+  test("leaves the count unknown when the diff against the merge base is too large", async () => {
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: { [TEST]: "[... 100 bytes omitted ...]" },
+        tipPatches: ADDED_3_TO_4,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("leaves the count unknown when a diff of the pull request cannot be read", async () => {
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: { [TEST]: "Binary files a/x and b/x differ\n" },
+        tipPatches: ADDED_3_TO_4,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("leaves the count unknown when the patch of the round cannot be read", async () => {
+    expect(
+      await removedOutside({
+        patches: { [TEST]: "Binary files a/x and b/x differ\n" },
+        prPatches: ADDED_3_TO_4,
+        tipPatches: ADDED_3_TO_4,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("leaves the count unknown when no resolver is given", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REPLACES_LINE_3 });
+    const { changes } = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+    });
+    expect(changes[0]?.removedOutsidePrLineCount).toBeUndefined();
+  });
+
+  test("throws when the base cannot be resolved temporarily", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REPLACES_LINE_3 });
+    await expect(
+      collectCiFixChanges(
+        run,
+        DIR,
+        SHA,
+        options(async () => {
+          throw new Error("503");
+        }),
+      ),
+    ).rejects.toThrow("503");
+  });
+
+  test("rejects a merge base that is not a full sha", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REPLACES_LINE_3 });
+    await expect(
+      collectCiFixChanges(
+        run,
+        DIR,
+        SHA,
+        options(async () => ({ mergeBase: "main", tip: BASE_TIP })),
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("inspectCiFixChanges for lines the pull request added", () => {
+  const TEST = "tests/lib/a.test.ts";
+
+  function inspect(script: GitScript) {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", TEST]),
+      ...script,
+    });
+    return inspectCiFixChanges(run, DIR, SHA, [TEST], {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+      resolvePrBase: async () => ({ mergeBase: MERGE_BASE, tip: BASE_TIP }),
+    });
+  }
+
+  const ADDED = { [TEST]: "@@ -2,0 +3,2 @@\n+one\n+two\n" };
+
+  test("allows rewriting a line that the pull request added", async () => {
+    expect(
+      await inspect({
+        patches: { [TEST]: "@@ -3 +3 @@\n-old\n+new\n" },
+        prPatches: ADDED,
+        tipPatches: ADDED,
+      }),
+    ).toEqual([]);
+  });
+
+  test("rejects rewriting a line that the base had", async () => {
+    expect(
+      await inspect({
+        patches: { [TEST]: "@@ -1 +1 @@\n-old\n+new\n" },
+        prPatches: ADDED,
+        tipPatches: ADDED,
+      }),
+    ).toEqual([`ci round change not allowed (test_not_additive): ${TEST}`]);
+  });
+
+  test("rejects emptying lines that the pull request added", async () => {
+    expect(
+      await inspect({
+        patches: { [TEST]: "@@ -3,2 +2,0 @@\n-one\n-two\n" },
+        prPatches: ADDED,
+        tipPatches: ADDED,
+      }),
+    ).toEqual([`ci round change not allowed (test_not_additive): ${TEST}`]);
+  });
+
+  test("reports a base that is unknown as its own reason when no resolver is given", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", TEST]),
+      patches: { [TEST]: "@@ -3 +3 @@\n-old\n+new\n" },
+    });
+    expect(
+      await inspectCiFixChanges(run, DIR, SHA, [TEST], {
+        ...WORKTREE,
+        fs: fakeFs({}).fs,
+      }),
+    ).toEqual([`ci round change not allowed (test_base_unknown): ${TEST}`]);
+  });
+
+  test("reports a base that is unknown as its own reason when the base cannot be resolved", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", TEST]),
+      patches: { [TEST]: "@@ -3 +3 @@\n-old\n+new\n" },
+    });
+    expect(
+      await inspectCiFixChanges(run, DIR, SHA, [TEST], {
+        ...WORKTREE,
+        fs: fakeFs({}).fs,
+        resolvePrBase: async () => null,
+      }),
+    ).toEqual([`ci round change not allowed (test_base_unknown): ${TEST}`]);
+  });
+
+  test("still reports a removal that is wrong whatever the base is as test_not_additive", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", TEST]),
+      patches: {
+        [TEST]: "@@ -3 +3 @@\n-expect(a).toBe(1);\n+// expect(a).toBe(1);\n",
+      },
+    });
+    expect(
+      await inspectCiFixChanges(run, DIR, SHA, [TEST], {
+        ...WORKTREE,
+        fs: fakeFs({}).fs,
+        resolvePrBase: async () => null,
+      }),
+    ).toEqual([`ci round change not allowed (test_not_additive): ${TEST}`]);
   });
 });
 

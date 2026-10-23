@@ -1,0 +1,213 @@
+import { describe, expect, test } from "bun:test";
+import {
+  gitMergeBase,
+  type PrMergeBaseIo,
+  resolvePrMergeBase,
+} from "../../f/factory/lib/ci_fix_pr_base.ts";
+import type {
+  CommandResult,
+  CommandRunner,
+} from "../../f/factory/lib/workspace.ts";
+
+const TIP = "1".repeat(40);
+const HEAD = "2".repeat(40);
+const MERGE_BASE = "3".repeat(40);
+
+function io(overrides: Partial<PrMergeBaseIo> = {}): {
+  io: PrMergeBaseIo;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  return {
+    calls,
+    io: {
+      readBaseRef: async () => {
+        calls.push("readBaseRef");
+        return "main";
+      },
+      readDefaultBranch: async () => {
+        calls.push("readDefaultBranch");
+        return "main";
+      },
+      readBranchSha: async (branch) => {
+        calls.push(`readBranchSha ${branch}`);
+        return TIP;
+      },
+      assertWorktreeIntact: async () => {
+        calls.push("assertWorktreeIntact");
+      },
+      fetchCommit: async (sha) => {
+        calls.push(`fetchCommit ${sha}`);
+      },
+      mergeBase: async (tip) => {
+        calls.push(`mergeBase ${tip}`);
+        return MERGE_BASE;
+      },
+      ...overrides,
+    },
+  };
+}
+
+describe("resolvePrMergeBase", () => {
+  test("returns the merge base of the tip of the base branch and the head", async () => {
+    expect(await resolvePrMergeBase(io().io)).toEqual({
+      mergeBase: MERGE_BASE,
+      tip: TIP,
+    });
+  });
+
+  test("fetches the tip of the base branch before it takes the merge base", async () => {
+    const fake = io();
+    await resolvePrMergeBase(fake.io);
+    expect(fake.calls).toEqual([
+      "readBaseRef",
+      "readDefaultBranch",
+      "readBranchSha main",
+      "assertWorktreeIntact",
+      `fetchCommit ${TIP}`,
+      `mergeBase ${TIP}`,
+    ]);
+  });
+
+  test("returns null when the pull request does not target the default branch", async () => {
+    const fake = io({ readDefaultBranch: async () => "trunk" });
+    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+  });
+
+  test("does not read the tip when the pull request does not target the default branch", async () => {
+    const fake = io({ readDefaultBranch: async () => "trunk" });
+    await resolvePrMergeBase(fake.io);
+    expect(fake.calls).not.toContain("readBranchSha main");
+  });
+
+  test("reports that the pull request does not target the default branch", async () => {
+    const seen: string[] = [];
+    const fake = io({ readDefaultBranch: async () => "trunk" });
+    await resolvePrMergeBase(fake.io, (message) => seen.push(message));
+    expect(seen).toEqual([
+      "the pull request does not target the default branch",
+    ]);
+  });
+
+  test("throws when the default branch cannot be read, so that a temporary failure is not taken for a final one", async () => {
+    const fake = io({
+      readDefaultBranch: async () => {
+        throw new Error("503");
+      },
+    });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("503");
+  });
+
+  test("throws when the tip of the base branch cannot be read", async () => {
+    const fake = io({
+      readBranchSha: async () => {
+        throw new Error("rate limit");
+      },
+    });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("rate limit");
+  });
+
+  test("throws when the tip cannot be fetched", async () => {
+    const fake = io({
+      fetchCommit: async () => {
+        throw new Error("fetch failed");
+      },
+    });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("fetch failed");
+  });
+
+  test("throws when the merge base cannot be taken", async () => {
+    const fake = io({
+      mergeBase: async () => {
+        throw new Error("no common ancestor");
+      },
+    });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow(
+      "no common ancestor",
+    );
+  });
+
+  test("throws when the merge base is not a full sha", async () => {
+    const fake = io({ mergeBase: async () => "main" });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("full sha");
+  });
+
+  test("throws when the tip is not a full sha", async () => {
+    const fake = io({ readBranchSha: async () => "main" });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("full sha");
+  });
+
+  test("does not fetch when the worktree is no longer intact", async () => {
+    const fake = io({
+      assertWorktreeIntact: async () => {
+        throw new Error("the git pointer was modified");
+      },
+    });
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("modified");
+    expect(fake.calls).not.toContain(`fetchCommit ${TIP}`);
+  });
+});
+
+describe("gitMergeBase", () => {
+  function runner(result: Partial<CommandResult>): {
+    run: CommandRunner;
+    calls: { argv: readonly string[]; cwd: string | undefined }[];
+  } {
+    const calls: { argv: readonly string[]; cwd: string | undefined }[] = [];
+    const run: CommandRunner = async (argv, options) => {
+      calls.push({ argv: [...argv], cwd: options?.cwd });
+      return {
+        stdout: `${MERGE_BASE}\n`,
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        ...result,
+      };
+    };
+    return { run, calls };
+  }
+
+  test("reads the merge base from git", async () => {
+    const { run } = runner({});
+    expect(
+      await gitMergeBase({ run, cwd: "/w", tipSha: TIP, headSha: HEAD }),
+    ).toBe(MERGE_BASE);
+  });
+
+  test("passes the two shas after the separator, in the worktree", async () => {
+    const { run, calls } = runner({});
+    await gitMergeBase({ run, cwd: "/w", tipSha: TIP, headSha: HEAD });
+    expect([calls[0]?.argv.slice(-4), calls[0]?.cwd]).toEqual([
+      ["merge-base", "--", TIP, HEAD],
+      "/w",
+    ]);
+  });
+
+  test("throws when git fails", async () => {
+    const { run } = runner({ exitCode: 1, stdout: "" });
+    await expect(
+      gitMergeBase({ run, cwd: "/w", tipSha: TIP, headSha: HEAD }),
+    ).rejects.toThrow("git merge-base failed");
+  });
+
+  test("throws when git times out", async () => {
+    const { run } = runner({ timedOut: true });
+    await expect(
+      gitMergeBase({ run, cwd: "/w", tipSha: TIP, headSha: HEAD }),
+    ).rejects.toThrow("git merge-base failed");
+  });
+
+  test("throws when the output is not a sha", async () => {
+    const { run } = runner({ stdout: "fatal\n" });
+    await expect(
+      gitMergeBase({ run, cwd: "/w", tipSha: TIP, headSha: HEAD }),
+    ).rejects.toThrow("invalid git SHA");
+  });
+
+  test("rejects a ref instead of a sha", async () => {
+    const { run } = runner({});
+    await expect(
+      gitMergeBase({ run, cwd: "/w", tipSha: "main", headSha: HEAD }),
+    ).rejects.toThrow("invalid git SHA");
+  });
+});

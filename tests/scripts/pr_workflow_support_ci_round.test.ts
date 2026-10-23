@@ -210,6 +210,17 @@ describe("nextActionFor a CI round", () => {
     ).toBe(NEXT_ACTION);
   });
 
+  test("tells how to deal with a test whose lines the round could not check", () => {
+    expect(
+      nextActionFor(
+        "ci round change not allowed (test_base_unknown): tests/a.test.ts",
+        "pr_fix",
+      ),
+    ).toBe(
+      `PRが既定のブランチを向いているかと、テストの差分が大きすぎないかを確かめ、人が直してから、${PUSH}`,
+    );
+  });
+
   test("does not point to retry_work_item", () => {
     expect(nextActionFor("ci round: x", "pr_fix")).not.toContain(
       "retry_work_item",
