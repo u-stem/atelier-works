@@ -35,6 +35,7 @@ export type CiFixChange = {
   readonly addedLines: readonly string[];
   /** 削除された行の数。 */
   readonly removedLineCount: number;
+  readonly baseRemovedLineCount?: number;
 };
 
 export type CiFixPathInput = {

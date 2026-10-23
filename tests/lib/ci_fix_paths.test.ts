@@ -433,6 +433,57 @@ describe("tests", () => {
     ).toBe("test_not_additive");
   });
 
+  test("allows removing lines that only the pull request added", () => {
+    expect(
+      allowed(TEST, { removedLineCount: 5, baseRemovedLineCount: 0 }),
+    ).toBe(true);
+  });
+
+  test("rejects removing lines that the base of the pull request has", () => {
+    expect(
+      codeOf(
+        [change(TEST, { removedLineCount: 5, baseRemovedLineCount: 1 })],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("rejects a removal when the lines against the base are unknown", () => {
+    expect(codeOf([change(TEST, { removedLineCount: 5 })], [TEST])).toBe(
+      "test_not_additive",
+    );
+  });
+
+  test("rejects deleting a test even when no base line is removed", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            status: "deleted",
+            addedLines: [],
+            baseRemovedLineCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("still rejects a weakening line added while fixing the pull request lines", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 1,
+            baseRemovedLineCount: 0,
+            addedLines: ["// @ts-ignore"],
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("weakens_checks");
+  });
+
   test("rejects a modification of a spec file that removes lines", () => {
     const path = "f/factory/lib/foo.spec.ts";
     expect(codeOf([change(path, { removedLineCount: 1 })], [path])).toBe(

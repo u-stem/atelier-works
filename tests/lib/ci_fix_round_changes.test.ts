@@ -16,6 +16,7 @@ import type {
 } from "../../f/factory/lib/workspace.ts";
 
 const SHA = "a".repeat(40);
+const PR_BASE = "b".repeat(40);
 const DIR = "/work/tree";
 
 function raw(
@@ -161,6 +162,8 @@ type GitScript = {
   readonly tracked?: string;
   readonly untracked?: readonly string[];
   readonly patches?: Readonly<Record<string, string>>;
+  /** PRの基点との差分の`-U0`の出力。基点のshaを引数に持つ呼び出しに返す。 */
+  readonly prBasePatches?: Readonly<Record<string, string>>;
   readonly fail?: string;
 };
 
@@ -183,8 +186,10 @@ function fakeGit(script: GitScript): {
     }
     if (argv.includes("--raw")) return result(script.tracked ?? "");
     if (argv.includes("-U0")) {
-      const spec = argv[argv.length - 1] ?? "";
-      return result(script.patches?.[spec.replace(":(literal)", "")] ?? "");
+      const spec = (argv[argv.length - 1] ?? "").replace(":(literal)", "");
+      if (argv.includes(PR_BASE))
+        return result(script.prBasePatches?.[spec] ?? "");
+      return result(script.patches?.[spec] ?? "");
     }
     return result("");
   };
@@ -506,6 +511,252 @@ describe("collectCiFixChanges", () => {
       (error: unknown) => (error instanceof Error ? error.message : ""),
     );
     expect(message).not.toContain("boom");
+  });
+});
+
+describe("collectCiFixChanges against the base of the pull request", () => {
+  const TEST = "tests/lib/a.test.ts";
+  const MODIFIED = raw(["100644", "100644", "M", TEST]);
+  const REMOVES = { [TEST]: "@@ -3 +3 @@\n-old\n+new\n" };
+
+  function options(
+    resolvePrBase: () => Promise<string | null>,
+    source: "worktree" | "staged" = "worktree",
+  ) {
+    return { source, fs: fakeFs({}).fs, resolvePrBase } as const;
+  }
+
+  test("counts the lines removed from the base for a test that removes lines", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: REMOVES,
+      prBasePatches: { [TEST]: "@@ -0,0 +3,2 @@\n+one\n+two\n" },
+    });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => PR_BASE),
+    );
+    expect(changes[0]?.baseRemovedLineCount).toBe(0);
+  });
+
+  test("keeps the lines removed from the base when the pull request base has them", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: REMOVES,
+      prBasePatches: { [TEST]: "@@ -3,2 +3 @@\n-keep\n-keep two\n+x\n" },
+    });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => PR_BASE),
+    );
+    expect(changes[0]?.baseRemovedLineCount).toBe(2);
+  });
+
+  test("diffs the staged tree against the base when the source is staged", async () => {
+    const { run, argvs } = fakeGit({ tracked: MODIFIED, patches: REMOVES });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => PR_BASE, "staged"),
+    );
+    const against = argvs.find((argv) => argv.includes(PR_BASE)) ?? [];
+    expect(against).toContain("--cached");
+  });
+
+  test("reads the base diff of one path without interpreting the path as a pathspec", async () => {
+    const { run, argvs } = fakeGit({ tracked: MODIFIED, patches: REMOVES });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => PR_BASE),
+    );
+    const against = argvs.find((argv) => argv.includes(PR_BASE)) ?? [];
+    expect(against.slice(-2)).toEqual(["--", `:(literal)${TEST}`]);
+  });
+
+  test("does not resolve the base when the test only adds lines", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: { [TEST]: "@@ -3,0 +4 @@\n+added\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return PR_BASE;
+      }),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  test("does not resolve the base for a source file that removes lines", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", "f/factory/lib/a.ts"]),
+      patches: { "f/factory/lib/a.ts": "@@ -1 +1 @@\n-a\n+b\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return PR_BASE;
+      }),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  test("does not resolve the base for a deleted test", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "000000", "D", TEST]),
+      patches: { [TEST]: "@@ -1,2 +0,0 @@\n-x\n-y\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return PR_BASE;
+      }),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  test("resolves the base once for several tests", async () => {
+    const second = "tests/lib/b.test.ts";
+    const { run } = fakeGit({
+      tracked: raw(
+        ["100644", "100644", "M", TEST],
+        ["100644", "100644", "M", second],
+      ),
+      patches: { ...REMOVES, [second]: "@@ -1 +1 @@\n-a\n+b\n" },
+    });
+    let resolved = 0;
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => {
+        resolved += 1;
+        return PR_BASE;
+      }),
+    );
+    expect(resolved).toBe(1);
+  });
+
+  test("leaves the count unknown when the base cannot be resolved", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REMOVES });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => null),
+    );
+    expect(changes[0]?.baseRemovedLineCount).toBeUndefined();
+  });
+
+  test("leaves the count unknown when the diff against the base fails", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: REMOVES,
+      fail: PR_BASE,
+    });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => PR_BASE),
+    );
+    expect(changes[0]?.baseRemovedLineCount).toBeUndefined();
+  });
+
+  test("leaves the count unknown when the diff against the base is too large", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: REMOVES,
+      prBasePatches: { [TEST]: "[... 100 bytes omitted ...]" },
+    });
+    const { changes } = await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => PR_BASE),
+    );
+    expect(changes[0]?.baseRemovedLineCount).toBeUndefined();
+  });
+
+  test("leaves the count unknown when no resolver is given", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REMOVES });
+    const { changes } = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+    });
+    expect(changes[0]?.baseRemovedLineCount).toBeUndefined();
+  });
+
+  test("rejects a base that is not a full sha", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REMOVES });
+    await expect(
+      collectCiFixChanges(
+        run,
+        DIR,
+        SHA,
+        options(async () => "main"),
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("inspectCiFixChanges for lines the pull request added", () => {
+  const TEST = "tests/lib/a.test.ts";
+  const REMOVES = { [TEST]: "@@ -3 +3 @@\n-old\n+new\n" };
+
+  function inspect(prBasePatch: string) {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", TEST]),
+      patches: REMOVES,
+      prBasePatches: { [TEST]: prBasePatch },
+    });
+    return inspectCiFixChanges(run, DIR, SHA, [TEST], {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+      resolvePrBase: async () => PR_BASE,
+    });
+  }
+
+  test("allows fixing a line that the pull request added", async () => {
+    expect(await inspect("@@ -0,0 +3,2 @@\n+one\n+two\n")).toEqual([]);
+  });
+
+  test("rejects changing a line that the base has", async () => {
+    expect(await inspect("@@ -3 +3 @@\n-old\n+new\n")).toEqual([
+      `ci round change not allowed (test_not_additive): ${TEST}`,
+    ]);
+  });
+
+  test("rejects the same fix when no resolver is given", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", TEST]),
+      patches: REMOVES,
+    });
+    expect(
+      await inspectCiFixChanges(run, DIR, SHA, [TEST], {
+        ...WORKTREE,
+        fs: fakeFs({}).fs,
+      }),
+    ).toEqual([`ci round change not allowed (test_not_additive): ${TEST}`]);
   });
 });
 

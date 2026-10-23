@@ -938,6 +938,7 @@ export type CiChangeOptions = {
    * `checkCiFixChanges`は変えず、呼び出し側のこの検査だけが例外を置く。
    */
   readonly rehashCheck?: () => Promise<RehashCheckVerdict>;
+  readonly resolvePrBase?: () => Promise<string | null>;
 };
 
 /**
