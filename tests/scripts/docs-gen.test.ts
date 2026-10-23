@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   compareTaskNames,
+  FLOW_GRAPH_FILE,
+  flowGraphProblem,
   renderAssets,
+  renderFlowGraphFile,
   renderFlows,
   renderSchedules,
   replaceGeneratedBlocks,
@@ -155,5 +159,25 @@ describe("compareTaskNames", () => {
       'README.md: task "down" is missing from the table',
       'README.md: task "gone" is not in mise.toml',
     ]);
+  });
+});
+
+describe("flowGraphProblem", () => {
+  test("reports a missing file", () => {
+    expect(flowGraphProblem(null, "{}\n")).toContain("is missing");
+  });
+
+  test("reports a file that differs from the expected content", () => {
+    expect(flowGraphProblem("{ }\n", "{}\n")).toContain("is stale");
+  });
+
+  test("accepts a file that matches the expected content", () => {
+    expect(flowGraphProblem("{}\n", "{}\n")).toBeNull();
+  });
+});
+
+describe("the committed flow graph", () => {
+  test("is the same as the one built from the repository", () => {
+    expect(readFileSync(FLOW_GRAPH_FILE, "utf8")).toBe(renderFlowGraphFile());
   });
 });

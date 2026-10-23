@@ -336,9 +336,16 @@ Consoleの一覧と集計は次のviewを読む。
 <!-- /generated:flows -->
 
 起動元は、flowを起動するscriptの名前である。
-括弧は、そのscriptを動かすConsoleの操作を示す。
-起動元の一覧は`scripts/launch-graph.ts`の表から作る。
-`wmill.runFlowAsync`を呼ぶscriptを足したときは、この表にも足す。足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
+括弧は、そのscriptをConsoleから動かせる操作の例で、スケジュールによる起動は示さない。
+たとえば`audit`は、Consoleの今すぐ監査のほかに、`audit_kickoff`の週次のスケジュールでも起動する。
+起動元の一覧は`scripts/launch-graph.ts`の`LAUNCH_EDGES`から作る。
+同じ表から、Consoleのシステムの画面に出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)も作る。
+`wmill.runFlowAsync`を呼ぶscriptを足したときは、`LAUNCH_EDGES`にも足す。
+足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
+辺だけを残して起動のコードを消したときと、`*_FLOW_PATH`の定数を足したときも、同じテストが失敗する。
+テストには、検出できない形もある。
+別名の変数で呼ぶ起動、`wmill.`を付けない呼び出し、包みの関数だけでflowを起動するscriptは、見落とす。
+そのような起動を足したときは、人が表を確かめる。
 
 - `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。
 - `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。
