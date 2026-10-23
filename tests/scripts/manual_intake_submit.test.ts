@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LogFields } from "../../f/factory/lib/log.ts";
+import type { ManualIntakeRefusalReason } from "../../f/factory/lib/manual_intake_support.ts";
 import type { FactoryConfig } from "../../f/factory/lib/types.ts";
 import {
   type ManualIntakeSubmitDeps,
@@ -117,7 +118,9 @@ describe("a refusal", () => {
     ).toEqual({ refused: true, reason: "repo_not_allowed" });
   });
 
-  test.each([
+  const CASES: ReadonlyArray<
+    readonly [ManualIntakeRefusalReason, Partial<typeof INPUT>]
+  > = [
     ["invalid_owner", { owner: "bad owner" }],
     ["invalid_repo", { repo: "a/b" }],
     ["repo_not_allowed", { owner: "stranger" }],
@@ -127,7 +130,9 @@ describe("a refusal", () => {
     ["empty_body", { body: "" }],
     ["invalid_body_chars", { body: "a‮b" }],
     ["body_too_long", { body: "a".repeat(65536) }],
-  ])("is %s for the matching input", async (reason, change) => {
+  ];
+
+  test.each(CASES)("is %s for the matching input", async (reason, change) => {
     const { deps } = harness();
     const result = await submitManualIntake({ ...INPUT, ...change }, deps);
     expect(result).toEqual({ refused: true, reason });
