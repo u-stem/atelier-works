@@ -722,6 +722,12 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-queries.ts" \
   || die "the application queries failed against the real PostgreSQL"
 
+# 保留の表の制約と、`lib/holds.ts`が組み立てるSQL文を、本物のPostgreSQLで確かめる。
+log "running the holds checks against '${SCRATCH_DB}'"
+COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
+  bun run "${REPO_ROOT}/scripts/test-db-holds.ts" \
+  || die "the holds checks failed against the real PostgreSQL"
+
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
 shopt -u nullglob

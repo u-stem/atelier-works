@@ -569,6 +569,35 @@ describe("script definition lock contract test", () => {
   });
 });
 
+// 保留の表への書き込みを持つ部品と、その検査は、書き換えられると、保留を置く主体の絞り込みが外れる。
+// グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
+describe("hold files", () => {
+  const PATHS = [
+    "f/factory/lib/holds.ts",
+    "f/factory/lib/holds.script.yaml",
+    "tests/lib/holds.test.ts",
+    "tests/lib/holds_db.test.ts",
+    "tests/scripts/hold_wiring.test.ts",
+    "scripts/test-db-holds.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect scripts/test-db.sh, which changes with every migration check", () => {
+    expect(matchesForbiddenPath("scripts/test-db.sh")).toBe(false);
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {
@@ -1085,6 +1114,7 @@ describe("dependency-free lib locks", () => {
     "metadata_signature",
     "metadata_git_ports",
     "ci_metadata_rehash",
+    "holds",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
 
