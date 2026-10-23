@@ -33,6 +33,9 @@ function io(overrides: Partial<PrMergeBaseIo> = {}): {
         calls.push(`readBranchSha ${branch}`);
         return TIP;
       },
+      assertWorktreeIntact: async () => {
+        calls.push("assertWorktreeIntact");
+      },
       fetchCommit: async (sha) => {
         calls.push(`fetchCommit ${sha}`);
       },
@@ -60,6 +63,7 @@ describe("resolvePrMergeBase", () => {
       "readBaseRef",
       "readDefaultBranch",
       "readBranchSha main",
+      "assertWorktreeIntact",
       `fetchCommit ${TIP}`,
       `mergeBase ${TIP}`,
     ]);
@@ -85,61 +89,62 @@ describe("resolvePrMergeBase", () => {
     ]);
   });
 
-  test("returns null when the default branch cannot be read", async () => {
+  test("throws when the default branch cannot be read, so that a temporary failure is not taken for a final one", async () => {
     const fake = io({
       readDefaultBranch: async () => {
-        throw new Error("404");
+        throw new Error("503");
       },
     });
-    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("503");
   });
 
-  test("returns null when the tip of the base branch cannot be read", async () => {
+  test("throws when the tip of the base branch cannot be read", async () => {
     const fake = io({
       readBranchSha: async () => {
-        throw new Error("404");
+        throw new Error("rate limit");
       },
     });
-    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("rate limit");
   });
 
-  test("returns null when the tip cannot be fetched", async () => {
+  test("throws when the tip cannot be fetched", async () => {
     const fake = io({
       fetchCommit: async () => {
         throw new Error("fetch failed");
       },
     });
-    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("fetch failed");
   });
 
-  test("returns null when the merge base cannot be taken", async () => {
+  test("throws when the merge base cannot be taken", async () => {
     const fake = io({
       mergeBase: async () => {
         throw new Error("no common ancestor");
       },
     });
-    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow(
+      "no common ancestor",
+    );
   });
 
-  test("returns null when the merge base is not a full sha", async () => {
+  test("throws when the merge base is not a full sha", async () => {
     const fake = io({ mergeBase: async () => "main" });
-    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("full sha");
   });
 
-  test("returns null when the tip is not a full sha", async () => {
+  test("throws when the tip is not a full sha", async () => {
     const fake = io({ readBranchSha: async () => "main" });
-    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("full sha");
   });
 
-  test("reports why the base could not be resolved", async () => {
-    const seen: string[] = [];
+  test("does not fetch when the worktree is no longer intact", async () => {
     const fake = io({
-      fetchCommit: async () => {
-        throw new Error("fetch failed");
+      assertWorktreeIntact: async () => {
+        throw new Error("the git pointer was modified");
       },
     });
-    await resolvePrMergeBase(fake.io, (message) => seen.push(message));
-    expect(seen).toEqual(["fetch failed"]);
+    await expect(resolvePrMergeBase(fake.io)).rejects.toThrow("modified");
+    expect(fake.calls).not.toContain(`fetchCommit ${TIP}`);
   });
 });
 

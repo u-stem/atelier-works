@@ -120,6 +120,18 @@ describe("buildCiFixPrompt", () => {
     expect(prompt()).toContain("Do not weaken tests");
   });
 
+  test("tells Claude to rewrite only the lines the log points to, one line for one line", () => {
+    expect(prompt()).toContain(
+      "Rewrite only the lines the log points to, one line for one line",
+    );
+  });
+
+  test("tells Claude not to touch the other lines of a test", () => {
+    expect(prompt()).toContain(
+      "Do not touch the other lines of a test file, even if you think they are wrong.",
+    );
+  });
+
   test("forbids changing the CI definition", () => {
     expect(prompt()).toContain("Do not change the CI definition");
   });

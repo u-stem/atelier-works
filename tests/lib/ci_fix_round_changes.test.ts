@@ -810,6 +810,25 @@ describe("collectCiFixChanges against the base of the pull request", () => {
     expect(listing).toEqual([]);
   });
 
+  test("ignores whitespace in the diffs that decide which lines the pull request added", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      tipPatches: ADDED_3_TO_4,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    const patchRuns = argvs.filter((argv) => argv.includes("-U0"));
+    expect(
+      patchRuns.map((argv) => argv.includes("--ignore-all-space")),
+    ).toEqual([false, true, true]);
+  });
+
   test("diffs the staged tree for the round and the commits for the pull request", async () => {
     const { run, argvs } = fakeGit({
       tracked: MODIFIED,
@@ -1038,6 +1057,20 @@ describe("collectCiFixChanges against the base of the pull request", () => {
       fs: fakeFs({}).fs,
     });
     expect(changes[0]?.removedOutsidePrLineCount).toBeUndefined();
+  });
+
+  test("throws when the base cannot be resolved temporarily", async () => {
+    const { run } = fakeGit({ tracked: MODIFIED, patches: REPLACES_LINE_3 });
+    await expect(
+      collectCiFixChanges(
+        run,
+        DIR,
+        SHA,
+        options(async () => {
+          throw new Error("503");
+        }),
+      ),
+    ).rejects.toThrow("503");
   });
 
   test("rejects a merge base that is not a full sha", async () => {

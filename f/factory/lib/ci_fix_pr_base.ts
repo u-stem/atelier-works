@@ -35,6 +35,8 @@ export type PrMergeBaseIo = {
   readonly readBaseRef: () => Promise<string>;
   /** リポジトリの既定のブランチの名前。 */
   readonly readDefaultBranch: () => Promise<string>;
+  /** worktreeの`.git`が、記録のままであることを確かめる。そうでなければ投げる。 */
+  readonly assertWorktreeIntact: () => Promise<void>;
   /** ブランチの今の先端のsha。 */
   readonly readBranchSha: (branch: string) => Promise<string>;
   /** commit`sha`をローカルのcloneに取り込む。追跡refは動かさない。 */
@@ -116,6 +118,7 @@ export function githubPrMergeBaseIo(input: {
     readBaseRef: async () =>
       (await getPr(client, owner, repo, input.prNumber)).baseRef,
     readDefaultBranch: () => getDefaultBranch(client, owner, repo),
+    assertWorktreeIntact: async () => undefined,
     readBranchSha: (branch) => getBranchSha(client, owner, repo, branch),
     fetchCommit: (sha) =>
       fetchCommit({

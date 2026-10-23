@@ -208,6 +208,22 @@ describe("collectCiFixChanges with a real git", () => {
     ).toBe(0);
   });
 
+  test("does not take a base line that the pull request only re-indented for a line it added", async () => {
+    const repo = await repoWithPr({
+      base: { [TEST]: lines("  expect(a).toBe(1);", "  expect(b).toBe(2);") },
+      prSteps: async ({ write }) =>
+        write(
+          TEST,
+          lines("    expect(a).toBe(1);", "  expect(b).toBe(2);", "  run();"),
+        ),
+    });
+    repo.write(
+      TEST,
+      lines("    expect(a).toBeDefined();", "  expect(b).toBe(2);", "  run();"),
+    );
+    expect((await changeOf(repo, TEST))?.removedOutsidePrLineCount).toBe(1);
+  });
+
   test("does not take the last base line without a newline for a line the pull request added", async () => {
     const repo = await repoWithPr({
       base: { [TEST]: "b1\nb2" },
