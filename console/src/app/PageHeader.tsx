@@ -31,6 +31,8 @@ export function PageHeader({
   refresh?: RefreshStatus;
   /** 更新ボタンの名前。更新が画面の一部だけを取り直すときは、取り直す範囲が分かる名前にする。 */
   refreshLabel?: string;
+  /** 見出しの右端に置く主要な操作。 */
+  actions?: ReactNode;
   children?: ReactNode;
 }) {
   const now = useNow();
