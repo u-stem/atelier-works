@@ -35,13 +35,26 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   );
 }
 
-/** 文がエラーで失敗したら真を返す。CHECKや一意インデックスが拒否することを確かめるのに使う。 */
-function rejects(statement: string): boolean {
+/** 文が成功したら真を返す。 */
+function accepts(statement: string): boolean {
+  try {
+    execPsql(target, statement);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 文が、名前が`constraint`の制約への違反で失敗したら真を返す。
+ * 構文の誤りなど別の理由の失敗を、制約が拒否したと取り違えないよう、制約の名前まで照合する。
+ */
+function rejects(statement: string, constraint: string): boolean {
   try {
     execPsql(target, statement);
     return false;
-  } catch {
-    return true;
+  } catch (err) {
+    return err instanceof Error && err.message.includes(`"${constraint}"`);
   }
 }
 
@@ -285,78 +298,98 @@ check(
 // ---------------------------------------------------------------------------
 
 const CHECK_TARGET = `${PREFIX}/check`;
-const columns = "(scope, target, reason, holder_kind, holder, expires_at";
-check(
-  "CHECK: an expiry beyond 24 hours is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'session', 'session:c', now() + interval '25 hours')`,
-  ),
-);
+const HOUR = "now() + interval '1 hour'";
+
+/** 検査用の1行のINSERT。`extra`に、既定と違う列とその値を足す。 */
+function insertStatement(
+  values: {
+    scope?: string;
+    target?: string;
+    reason?: string;
+    holderKind?: string;
+    holder?: string;
+    expires?: string;
+  },
+  extra: { columns: string; values: string } = { columns: "", values: "" },
+): string {
+  const scope = values.scope ?? "merge";
+  const targetName = values.target ?? CHECK_TARGET;
+  const reason = values.reason ?? "probe";
+  const holderKind = values.holderKind ?? "session";
+  const holder = values.holder ?? "session:c";
+  const expires = values.expires ?? HOUR;
+  return `INSERT INTO factory.holds (scope, target, reason, holder_kind, holder, expires_at${extra.columns}) VALUES ('${scope}', '${targetName}', '${reason}', '${holderKind}', '${holder}', ${expires}${extra.values})`;
+}
+
+const longReason = "a".repeat(201);
+const longHolder = "a".repeat(101);
+const rejections: readonly (readonly [string, string, string])[] = [
+  [
+    "an expiry beyond 24 hours",
+    insertStatement({ expires: "now() + interval '25 hours'" }),
+    "holds_expiry_check",
+  ],
+  [
+    "an expiry not after the creation",
+    insertStatement(
+      { expires: "now()" },
+      { columns: ", created_at", values: ", now()" },
+    ),
+    "holds_expiry_check",
+  ],
+  [
+    "released_at without released_by",
+    insertStatement({}, { columns: ", released_at", values: ", now()" }),
+    "holds_released_check",
+  ],
+  [
+    "released_by without released_at",
+    insertStatement({}, { columns: ", released_by", values: ", 'human'" }),
+    "holds_released_check",
+  ],
+  [
+    "a scope outside merge and claim",
+    insertStatement({ scope: "config" }),
+    "holds_scope_check",
+  ],
+  [
+    "a holder kind outside the three kinds",
+    insertStatement({ holderKind: "robot" }),
+    "holds_holder_kind_check",
+  ],
+  [
+    "a target with an uppercase letter",
+    insertStatement({ target: "QH/Upper" }),
+    "holds_target_check",
+  ],
+  ["an empty target", insertStatement({ target: "" }), "holds_target_check"],
+  ["an empty reason", insertStatement({ reason: "" }), "holds_reason_check"],
+  [
+    "a reason of 201 characters",
+    insertStatement({ reason: longReason }),
+    "holds_reason_check",
+  ],
+  [
+    "a holder of 101 characters",
+    insertStatement({ holder: longHolder }),
+    "holds_holder_check",
+  ],
+  [
+    "a second unreleased merge row of the same holder",
+    insertStatement({ target: MERGE_TARGET, holder: SESSION_A.holder }),
+    "holds_active_merge_key",
+  ],
+];
+for (const [label, statement, constraint] of rejections) {
+  check(
+    `constraint ${constraint}: ${label} is rejected`,
+    rejects(statement, constraint),
+  );
+}
+
 check(
   "CHECK: an expiry of exactly 24 hours is accepted",
-  !rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'session', 'session:c', now() + interval '24 hours')`,
-  ),
-);
-check(
-  "CHECK: an expiry not after the creation is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}, created_at) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'session', 'session:d', now(), now())`,
-  ),
-);
-check(
-  "CHECK: released_at without released_by is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}, released_at) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'session', 'session:e', now() + interval '1 hour', now())`,
-  ),
-);
-check(
-  "CHECK: released_by without released_at is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}, released_by) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'session', 'session:f', now() + interval '1 hour', 'human')`,
-  ),
-);
-check(
-  "CHECK: a scope outside merge and claim is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('config', '${CHECK_TARGET}', 'probe', 'session', 'session:g', now() + interval '1 hour')`,
-  ),
-);
-check(
-  "CHECK: a holder kind outside the three kinds is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'robot', 'session:h', now() + interval '1 hour')`,
-  ),
-);
-check(
-  "CHECK: a target with an uppercase letter is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', 'QH/Upper', 'probe', 'session', 'session:i', now() + interval '1 hour')`,
-  ),
-);
-check(
-  "CHECK: an empty reason is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${CHECK_TARGET}', '', 'session', 'session:j', now() + interval '1 hour')`,
-  ),
-);
-check(
-  "CHECK: a reason of 201 characters is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${CHECK_TARGET}', '${"a".repeat(201)}', 'session', 'session:k', now() + interval '1 hour')`,
-  ),
-);
-check(
-  "CHECK: a holder of 101 characters is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${CHECK_TARGET}', 'probe', 'session', '${"a".repeat(101)}', now() + interval '1 hour')`,
-  ),
-);
-check(
-  "unique index: a second unreleased merge row of the same holder is rejected",
-  rejects(
-    `INSERT INTO factory.holds ${columns}) VALUES ('merge', '${MERGE_TARGET}', 'probe', 'session', '${SESSION_A.holder}', now() + interval '1 hour')`,
-  ),
+  accepts(insertStatement({ expires: "now() + interval '24 hours'" })),
 );
 
 // 後で適用するdown migrationが表を消すので、検査の行は残してよいが、他の検査に影響しないよう消しておく。
