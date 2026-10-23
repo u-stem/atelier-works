@@ -8,6 +8,7 @@
 import { isResultUnknown, type WriteOutcome } from "../api/executeWrite.ts";
 import type { ManualIntakeSubmitResult } from "../api/guards/writeResults.ts";
 import { describeIntakeRefusal } from "./intakeRefusal.ts";
+import type { IntakeForm } from "./manualIntake.ts";
 
 export type IntakeAttempt =
   | { readonly kind: "idle" }
@@ -83,6 +84,7 @@ const UNKNOWN_LINES = [
 /** 送信の状態を、画面に出す知らせにする。まだ送っていないときは`null`を返す。 */
 export function describeIntakeAttempt(
   attempt: IntakeAttempt,
+  _form: IntakeForm | null = null,
 ): IntakeAttemptView | null {
   switch (attempt.kind) {
     case "idle":

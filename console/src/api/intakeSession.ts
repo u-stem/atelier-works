@@ -27,6 +27,8 @@ export type IntakeSession = {
    * 画面が外れている間に投入できた場合は、戻った画面が`form`の`null`から空で始める。
    */
   readonly submittedCount: number;
+  /** 仮の実装。常に0を返す。 */
+  readonly clearedCount: number;
 };
 
 const EMPTY: IntakeSession = {
@@ -34,6 +36,7 @@ const EMPTY: IntakeSession = {
   form: null,
   stale: false,
   submittedCount: 0,
+  clearedCount: 0,
 };
 
 export type IntakeSessions = {
@@ -50,8 +53,8 @@ export type IntakeSessions = {
   readonly confirmResend: (key: string) => void;
   /** `useSyncExternalStore`に渡す。変わったときだけ呼ぶ。 */
   readonly subscribe: (listener: () => void) => () => void;
-  /** 変わるたびに新しい写しを返す。変わらないあいだは同じ参照を返す。 */
-  readonly getSnapshot: () => ReadonlyMap<string, IntakeSession>;
+  readonly dismiss: (key: string) => void;
+  readonly discard: (key: string) => void;
 };
 
 export function createIntakeSessions(): IntakeSessions {
@@ -108,7 +111,8 @@ export function createIntakeSessions(): IntakeSessions {
         listeners.delete(listener);
       };
     },
-    getSnapshot: () => sessions,
+    dismiss: () => undefined,
+    discard: () => undefined,
   };
 }
 
@@ -134,4 +138,13 @@ export function startIntake(
   }
   sessions.begin(key, form);
   return true;
+}
+
+/** 仮の実装。何もしない。 */
+export function createLeaveGuard(
+  _sessions: IntakeSessions,
+  _key: string,
+  _defer?: (run: () => void) => () => void,
+): { readonly enter: () => void; readonly leave: () => void } {
+  return { enter: () => undefined, leave: () => undefined };
 }

@@ -8,8 +8,8 @@ import {
   describeIntakeAttempt,
   type IntakeAttempt,
   isSubmitBlocked,
-  keepsInput,
 } from "./intakeAttempt.ts";
+import type { IntakeForm } from "./manualIntake.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -106,21 +106,6 @@ describe("the submit button", () => {
   });
 });
 
-describe("the input", () => {
-  test.each([
-    ["refused", attemptFromOutcome(REFUSED)],
-    ["rejected", attemptFromOutcome(failed({ kind: "forbidden" }))],
-    ["unknown", attemptFromOutcome(failed({ kind: "network" }))],
-    ["idle", { kind: "idle" }],
-  ] satisfies [string, IntakeAttempt][])("stays after %s", (_name, attempt) => {
-    expect(keepsInput(attempt)).toBe(true);
-  });
-
-  test("is cleared after a submission", () => {
-    expect(keepsInput(attemptFromOutcome(STARTED))).toBe(false);
-  });
-});
-
 describe("describeIntakeAttempt", () => {
   test("shows nothing before the first try", () => {
     expect(describeIntakeAttempt({ kind: "idle" })).toBeNull();
@@ -200,5 +185,57 @@ describe("describeIntakeAttempt", () => {
       describeIntakeAttempt(attemptFromOutcome(failed({ kind: "network" })))
         ?.flowJobId,
     ).toBeNull();
+  });
+
+  const FORM: IntakeForm = {
+    repo: "octo-owner/widgets",
+    title: "Add a widget",
+    body: "Add a widget to the page.",
+    acceptanceCriteria: "",
+  };
+  const NOT_KNOWN = attemptFromOutcome(failed({ kind: "network" }));
+  const lines = (attempt: IntakeAttempt, form: IntakeForm | null = null) =>
+    describeIntakeAttempt(attempt, form)?.lines.join("\n");
+
+  test("names the title that was sent, so the Issue can be found", () => {
+    expect(lines(NOT_KNOWN, FORM)).toContain("送った題名: Add a widget");
+  });
+
+  test("names no title when there is no saved input", () => {
+    expect(lines(NOT_KNOWN, null)).not.toContain("送った題名");
+  });
+
+  test("replaces hidden characters in the title that was sent", () => {
+    expect(lines(NOT_KNOWN, { ...FORM, title: "a\u202eb" })).not.toContain(
+      "\u202e",
+    );
+  });
+
+  test("asks to confirm the resend before it is confirmed", () => {
+    expect(lines(NOT_KNOWN, FORM)).toContain(
+      "「確かめたので再送する」を押してください",
+    );
+  });
+
+  test("stops asking to confirm once it is confirmed", () => {
+    expect(lines(confirmResend(NOT_KNOWN), FORM)).not.toContain(
+      "「確かめたので再送する」を押してください",
+    );
+  });
+
+  test("says that the resend is possible once it is confirmed", () => {
+    expect(lines(confirmResend(NOT_KNOWN), FORM)).toContain("再送できます");
+  });
+
+  test("offers to discard the input when the Issue exists, before the confirmation", () => {
+    expect(lines(NOT_KNOWN, FORM)).toContain(
+      "「投入されていたので入力を破棄する」",
+    );
+  });
+
+  test("offers to discard the input when the Issue exists, after the confirmation", () => {
+    expect(lines(confirmResend(NOT_KNOWN), FORM)).toContain(
+      "「投入されていたので入力を破棄する」",
+    );
   });
 });

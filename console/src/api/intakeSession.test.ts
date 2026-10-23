@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { IntakeAttempt } from "../lib/intakeAttempt.ts";
+import { type IntakeAttempt, isSubmitBlocked } from "../lib/intakeAttempt.ts";
 import type { IntakeForm } from "../lib/manualIntake.ts";
 import {
   createIntakeSessions,
-  intakeSessions,
+  createLeaveGuard,
   startIntake,
 } from "./intakeSession.ts";
 import { MANUAL_INTAKE_WRITE_KEY } from "./writeLocks.ts";
@@ -46,13 +46,15 @@ describe("a result that is not known", () => {
     expect(sessions.isBlocked(KEY)).toBe(true);
   });
 
-  test("still blocks after the screen left and came back", () => {
+  test("still blocks a screen that comes back after the result arrived while it was away", () => {
     const sessions = createIntakeSessions();
-    sessions.begin(KEY, FORM);
     const leave = sessions.subscribe(() => undefined);
-    sessions.record(KEY, UNKNOWN);
+    sessions.begin(KEY, FORM);
     leave();
-    expect(sessions.isBlocked(KEY)).toBe(true);
+    sessions.dismiss(KEY);
+    sessions.record(KEY, UNKNOWN);
+    const seenByTheNewScreen = sessions.get(KEY);
+    expect(isSubmitBlocked(seenByTheNewScreen.attempt)).toBe(true);
   });
 
   test("keeps the input for the screen that comes back", () => {
@@ -129,13 +131,13 @@ describe("a submission", () => {
     const sessions = createIntakeSessions();
     sessions.record(KEY, SUBMITTED);
     sessions.record(KEY, SUBMITTED);
-    expect(sessions.get(KEY).submittedCount).toBe(2);
+    expect(sessions.get(KEY).clearedCount).toBe(2);
   });
 
   test("does not count a refusal as a submission", () => {
     const sessions = createIntakeSessions();
     sessions.record(KEY, REFUSED);
-    expect(sessions.get(KEY).submittedCount).toBe(0);
+    expect(sessions.get(KEY).clearedCount).toBe(0);
   });
 });
 
@@ -190,18 +192,6 @@ describe("subscribe", () => {
     sessions.record(KEY, REFUSED);
     expect(calls).toBe(0);
   });
-
-  test("gives a new snapshot after a change", () => {
-    const sessions = createIntakeSessions();
-    const before = sessions.getSnapshot();
-    sessions.record(KEY, REFUSED);
-    expect(sessions.getSnapshot()).not.toBe(before);
-  });
-
-  test("gives the same snapshot while nothing changes", () => {
-    const sessions = createIntakeSessions();
-    expect(sessions.getSnapshot()).toBe(sessions.getSnapshot());
-  });
 });
 
 describe("startIntake", () => {
@@ -255,8 +245,148 @@ describe("startIntake", () => {
   });
 });
 
-describe("the shared sessions", () => {
-  test("are one object for the whole tab", () => {
-    expect(intakeSessions.get(KEY)).toBe(intakeSessions.get(KEY));
+describe("dismiss", () => {
+  test.each([
+    ["a submission", SUBMITTED],
+    ["a refusal", REFUSED],
+    ["a rejection", { kind: "rejected", message: "断られました" } as const],
+  ])("clears %s the screen has shown", (_name, attempt) => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, attempt);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).attempt).toEqual({ kind: "idle" });
+  });
+
+  test("keeps a result that is not known", () => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, UNKNOWN);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).attempt).toEqual(UNKNOWN);
+  });
+
+  test("keeps the input of a send in progress", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).form).toEqual(FORM);
+  });
+
+  test("keeps the input of a refusal", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.record(KEY, REFUSED);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).form).toEqual(FORM);
+  });
+
+  test("does not clear a result that was written after the screen left", () => {
+    const sessions = createIntakeSessions();
+    sessions.dismiss(KEY);
+    sessions.record(KEY, SUBMITTED);
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
+  });
+});
+
+describe("discard", () => {
+  test("forgets the warning", () => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, UNKNOWN);
+    sessions.discard(KEY);
+    expect(sessions.get(KEY).attempt).toEqual({ kind: "idle" });
+  });
+
+  test("forgets the saved input", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.record(KEY, UNKNOWN);
+    sessions.discard(KEY);
+    expect(sessions.get(KEY).form).toBeNull();
+  });
+
+  test("opens the submission again", () => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, UNKNOWN);
+    sessions.discard(KEY);
+    expect(sessions.isBlocked(KEY)).toBe(false);
+  });
+
+  test("tells a mounted screen to empty its fields", () => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, UNKNOWN);
+    sessions.discard(KEY);
+    expect(sessions.get(KEY).clearedCount).toBe(1);
+  });
+
+  test("does nothing when the result was known", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.record(KEY, REFUSED);
+    sessions.discard(KEY);
+    expect(sessions.get(KEY).form).toEqual(FORM);
+  });
+});
+
+describe("createLeaveGuard", () => {
+  /** 遅らせた処理を、手で実行できるようにためる。 */
+  function manualDefer() {
+    const pending: (() => void)[] = [];
+    return {
+      defer: (run: () => void) => {
+        pending.push(run);
+        return () => {
+          pending.splice(pending.indexOf(run), 1);
+        };
+      },
+      flush: () => {
+        for (const run of pending.splice(0)) run();
+      },
+    };
+  }
+
+  test("clears the result of a screen that left", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer);
+    guard.enter();
+    sessions.record(KEY, SUBMITTED);
+    guard.leave();
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual({ kind: "idle" });
+  });
+
+  test("keeps the result when the screen came straight back, as a development remount does", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer);
+    guard.enter();
+    sessions.record(KEY, SUBMITTED);
+    guard.leave();
+    guard.enter();
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
+  });
+
+  test("keeps a result that is not known when the screen left", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer);
+    guard.enter();
+    sessions.record(KEY, UNKNOWN);
+    guard.leave();
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual(UNKNOWN);
+  });
+
+  test("shows a result written while away to the screen that comes back", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer);
+    guard.enter();
+    guard.leave();
+    flush();
+    sessions.record(KEY, SUBMITTED);
+    guard.enter();
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
   });
 });

@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import type { IntakeForm } from "../lib/manualIntake.ts";
 import { ApiFailure } from "./errors.ts";
 import type { ManualIntakeSubmitResult } from "./guards/writeResults.ts";
-import { createIntakeSessions } from "./intakeSession.ts";
+import {
+  createIntakeSessions,
+  intakeSessions,
+  startIntake,
+} from "./intakeSession.ts";
 import { manualIntakeConfig } from "./manualIntakeConfig.ts";
 import { pipelineQueryKey } from "./queries.ts";
 import { createWriteLocks, MANUAL_INTAKE_WRITE_KEY } from "./writeLocks.ts";
@@ -14,6 +19,13 @@ const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const INPUT: ManualIntakeInput = {
   owner: "octo-owner",
   repo: "widgets",
+  title: "Add a widget",
+  body: "Add a widget to the page.",
+  acceptanceCriteria: "",
+};
+
+const FORM: IntakeForm = {
+  repo: "octo-owner/widgets",
   title: "Add a widget",
   body: "Add a widget to the page.",
   acceptanceCriteria: "",
@@ -156,7 +168,7 @@ describe("manualIntakeConfig", () => {
     ]).toEqual([true, true]);
   });
 
-  test("writes the result of a call that finished after the screen left", async () => {
+  test("shows a submission that finished while the screen was away to the screen that comes back", async () => {
     let finish: (result: ManualIntakeSubmitResult) => void = () => undefined;
     const { runner, sessions } = setup(
       () =>
@@ -164,7 +176,11 @@ describe("manualIntakeConfig", () => {
           finish = resolve;
         }),
     );
+    const leave = sessions.subscribe(() => undefined);
+    startIntake(sessions, MANUAL_INTAKE_WRITE_KEY, FORM, () => true);
     const running = runner(INPUT);
+    leave();
+    sessions.dismiss(MANUAL_INTAKE_WRITE_KEY);
     finish(STARTED);
     await running;
     expect(sessions.get(MANUAL_INTAKE_WRITE_KEY).attempt.kind).toBe(
@@ -172,7 +188,7 @@ describe("manualIntakeConfig", () => {
     );
   });
 
-  test("writes a result that is not known after the screen left", async () => {
+  test("blocks a screen that comes back after a result that was not known arrived while it was away", async () => {
     let fail: () => void = () => undefined;
     const { runner, sessions } = setup(
       () =>
@@ -180,9 +196,37 @@ describe("manualIntakeConfig", () => {
           fail = () => reject(new ApiFailure({ kind: "network" }));
         }),
     );
+    const leave = sessions.subscribe(() => undefined);
+    startIntake(sessions, MANUAL_INTAKE_WRITE_KEY, FORM, () => true);
     const running = runner(INPUT).catch(() => undefined);
+    leave();
+    sessions.dismiss(MANUAL_INTAKE_WRITE_KEY);
     fail();
     await running;
     expect(sessions.isBlocked(MANUAL_INTAKE_WRITE_KEY)).toBe(true);
+  });
+
+  test("restores the input of a send that finished with a result that was not known while the screen was away", async () => {
+    let fail: () => void = () => undefined;
+    const { runner, sessions } = setup(
+      () =>
+        new Promise<ManualIntakeSubmitResult>((_resolve, reject) => {
+          fail = () => reject(new ApiFailure({ kind: "network" }));
+        }),
+    );
+    startIntake(sessions, MANUAL_INTAKE_WRITE_KEY, FORM, () => true);
+    const running = runner(INPUT).catch(() => undefined);
+    sessions.dismiss(MANUAL_INTAKE_WRITE_KEY);
+    fail();
+    await running;
+    expect(sessions.get(MANUAL_INTAKE_WRITE_KEY).form).toEqual(FORM);
+  });
+
+  test("writes into the shared sessions of the tab by default", async () => {
+    const config = manualIntakeConfig();
+    config.onOutcome({ kind: "done", result: STARTED }, INPUT);
+    const written = intakeSessions.get(MANUAL_INTAKE_WRITE_KEY).attempt.kind;
+    intakeSessions.dismiss(MANUAL_INTAKE_WRITE_KEY);
+    expect(written).toBe("submitted");
   });
 });
