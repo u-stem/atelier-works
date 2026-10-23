@@ -4220,6 +4220,8 @@ export type NewPrCiCheck = {
  * 列の追加や改名で、定義、行の型、変換、SELECT句の1つでも食い違うと、型検査か単体テストが失敗する。
  * 列が行の型に無いときは、`satisfies`が型検査で止める。行の型の列が変換の入力に無いときは、`toPrCiCheck`が型検査で止める。
  * SELECT句との一致は、`tests/lib/db.test.ts`が行を読む関数のすべてで確かめる。
+ * migrationとの一致は、`tests/scripts/pr_ci_checks_columns_migration.test.ts`が確かめる。
+ * migrationが`factory.pr_ci_checks`に作る列は、すべてこの定義に載せる。載せない列があると、そのテストが失敗する。
  */
 export const PR_CI_CHECK_COLUMNS = [
   "id",

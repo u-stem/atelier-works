@@ -1,6 +1,7 @@
 // `f/factory/lib/db.ts`の`PR_CI_CHECK_COLUMNS`と、migrationが`factory.pr_ci_checks`に作る列を比べる。
 // migrationを番号順に読み、CREATE TABLEとADD COLUMNで列を足し、DROP COLUMNとRENAME COLUMNで列を引く。
 // 列の追加漏れと綴りの食い違いを、実DBを使う`mise run test:db`より前に検出する。
+// 表を指す文のうち解釈できないものは、列の集合を取り違えないよう例外にする。
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -17,29 +18,77 @@ const CONSTRAINT_WORDS = new Set([
   "EXCLUDE",
   "LIKE",
 ]);
+// 識別子。引用符つきも読む。
+const ID = String.raw`"[^"]+"|\w+`;
+// 対象の表。スキーマの修飾なしと、引用符つきも読む。別のスキーマは読まない。
+const TABLE = String.raw`(?:"?factory"?\.)?"?pr_ci_checks"?`;
+const CREATE_TABLE = new RegExp(
+  String.raw`^CREATE TABLE (IF NOT EXISTS )?${TABLE} ?\((.*)\)$`,
+  "is",
+);
+const ALTER_TABLE = new RegExp(
+  `^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?${TABLE} (.*)$`,
+  "is",
+);
+// 表を指していても、列の集合を変えないと分かっている文。
+const HARMLESS_STATEMENTS = [/^COMMENT ON /i, /^CREATE (?:UNIQUE )?INDEX /i];
 
-// `--`の行コメントを取り除く。単引用符の中の`--`は残す。
+// 行コメントと、ブロックコメントを取り除く。単引用符の中の`--`は残す。
 function stripComments(sql: string): string {
   let out = "";
   let inQuote = false;
-  let inComment = false;
+  let inLine = false;
+  let inBlock = false;
   for (let i = 0; i < sql.length; i++) {
     const ch = sql.charAt(i);
-    if (inComment) {
+    const next = sql.charAt(i + 1);
+    if (inLine) {
       if (ch === "\n") {
-        inComment = false;
+        inLine = false;
         out += ch;
       }
       continue;
     }
+    if (inBlock) {
+      if (ch === "*" && next === "/") {
+        inBlock = false;
+        i++;
+      }
+      continue;
+    }
     if (ch === "'") inQuote = !inQuote;
-    if (!inQuote && ch === "-" && sql.charAt(i + 1) === "-") {
-      inComment = true;
+    if (!inQuote && ch === "-" && next === "-") {
+      inLine = true;
+      continue;
+    }
+    if (!inQuote && ch === "/" && next === "*") {
+      inBlock = true;
+      i++;
       continue;
     }
     out += ch;
   }
   return out;
+}
+
+// 単引用符の中身を空にする。文字列の中の語を、識別子と取り違えないため。
+function maskLiterals(sql: string): string {
+  let out = "";
+  let inQuote = false;
+  for (const ch of sql) {
+    if (ch === "'") {
+      inQuote = !inQuote;
+      out += ch;
+    } else if (!inQuote) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+// 文が`pr_ci_checks`の表を指すかを返す。`pr_ci_checks_archive`のような別名は指さない。
+function mentionsTable(sql: string): boolean {
+  return /\bpr_ci_checks\b/i.test(maskLiterals(stripComments(sql)));
 }
 
 // 括弧と単引用符の外にある区切り文字で分ける。
@@ -65,6 +114,22 @@ function splitTopLevel(text: string, separator: string): string[] {
   return parts.map((part) => part.replace(/\s+/g, " ").trim());
 }
 
+// 引用符つきはそのまま、引用符なしは小文字にする。
+function identifier(raw: string): string {
+  return raw.startsWith('"') ? raw.slice(1, -1) : raw.toLowerCase();
+}
+
+// 括弧の開きと閉じが対応しているかを返す。CREATE TABLEの末尾に続く句を、列の定義と取り違えないため。
+function isBalanced(text: string): boolean {
+  let depth = 0;
+  for (const ch of maskLiterals(text)) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
+}
+
 function firstWord(item: string): string {
   return item.split(" ")[0] ?? "";
 }
@@ -73,74 +138,92 @@ function applyCreateTable(columns: Set<string>, body: string): void {
   for (const item of splitTopLevel(body, ",")) {
     const word = firstWord(item);
     if (word !== "" && !CONSTRAINT_WORDS.has(word.toUpperCase())) {
-      columns.add(word);
+      columns.add(identifier(word));
     }
   }
 }
 
+// 知っている操作だけを読む。それ以外は、列の集合を取り違えないよう例外にする。
 function applyAlterAction(columns: Set<string>, action: string): void {
-  const rename = /^RENAME (?:COLUMN )?(\w+) TO (\w+)$/i.exec(action);
+  const rename = new RegExp(
+    `^RENAME (?:COLUMN )?(${ID}) TO (${ID})$`,
+    "i",
+  ).exec(action);
   if (rename) {
-    const from = rename[1] ?? "";
-    const to = rename[2] ?? "";
-    columns.delete(from);
-    columns.add(to);
+    columns.delete(identifier(rename[1] ?? ""));
+    columns.add(identifier(rename[2] ?? ""));
     return;
   }
-  const drop = /^DROP COLUMN (?:IF EXISTS )?(\w+)/i.exec(action);
+  if (/^(?:DROP CONSTRAINT|ALTER)\b/i.test(action)) return;
+  if (/^SET (?!SCHEMA\b)/i.test(action)) return;
+  const drop = new RegExp(`^DROP (?:COLUMN )?(?:IF EXISTS )?(${ID})`, "i").exec(
+    action,
+  );
   if (drop) {
-    columns.delete(drop[1] ?? "");
+    columns.delete(identifier(drop[1] ?? ""));
     return;
   }
-  const add = /^ADD (?:COLUMN )?(?:IF NOT EXISTS )?(\w+)/i.exec(action);
+  const add = new RegExp(
+    `^ADD (?:COLUMN )?(?:IF NOT EXISTS )?(${ID})`,
+    "i",
+  ).exec(action);
   if (add) {
     const name = add[1] ?? "";
-    if (!CONSTRAINT_WORDS.has(name.toUpperCase())) columns.add(name);
+    if (!CONSTRAINT_WORDS.has(name.toUpperCase()))
+      columns.add(identifier(name));
+    return;
   }
+  throw new Error(`Unsupported ALTER TABLE action: ${action.slice(0, 80)}`);
 }
 
 // migrationを渡された順に読み、`factory.pr_ci_checks`の列の集合を返す。
+// 表を指す文を読めなければ、列の集合を取り違えたまま通さないよう例外にする。
 function foldColumns(sqls: string[]): Set<string> {
   const columns = new Set<string>();
-  const create =
-    /^CREATE TABLE (?:IF NOT EXISTS )?factory\.pr_ci_checks ?\((.*)\)$/is;
-  const alter =
-    /^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?factory\.pr_ci_checks (.*)$/is;
+  let created = false;
   for (const sql of sqls) {
-    for (const statement of splitTopLevel(stripComments(sql), ";")) {
-      const created = create.exec(statement);
-      if (created) {
-        applyCreateTable(columns, created[1] ?? "");
+    const stripped = stripComments(sql);
+    if (!mentionsTable(stripped)) continue;
+    if (/\$\w*\$/.test(maskLiterals(stripped))) {
+      throw new Error("A dollar quoted body is not supported");
+    }
+    for (const statement of splitTopLevel(stripped, ";")) {
+      if (!mentionsTable(statement)) continue;
+      const create = CREATE_TABLE.exec(statement);
+      if (create && isBalanced(create[2] ?? "")) {
+        if (created && create[1] === undefined) {
+          throw new Error("CREATE TABLE for an existing table");
+        }
+        if (!created) applyCreateTable(columns, create[2] ?? "");
+        created = true;
         continue;
       }
-      const altered = alter.exec(statement);
-      if (altered) {
-        for (const action of splitTopLevel(altered[1] ?? "", ",")) {
+      const alter = ALTER_TABLE.exec(statement);
+      if (alter) {
+        for (const action of splitTopLevel(alter[1] ?? "", ",")) {
           applyAlterAction(columns, action);
         }
+        continue;
       }
+      if (HARMLESS_STATEMENTS.some((pattern) => pattern.test(statement))) {
+        continue;
+      }
+      throw new Error(`Unsupported statement: ${statement.slice(0, 80)}`);
     }
   }
   return columns;
-}
-
-// 文が`pr_ci_checks`の表を指すかを返す。
-function mentionsTable(_sql: string): boolean {
-  return false;
 }
 
 function sorted(values: Iterable<string>): string[] {
   return [...values].sort();
 }
 
-// 番号順に並べた、`factory.pr_ci_checks`に触れるup.sqlのファイル名。
+// 番号順に並べた、`pr_ci_checks`の表を指すup.sqlのファイル名。
 function touchingMigrations(): string[] {
   return readdirSync(DIR)
     .filter((name) => name.endsWith(".up.sql"))
     .sort()
-    .filter((name) =>
-      /factory\.pr_ci_checks\b/.test(readFileSync(`${DIR}/${name}`, "utf8")),
-    );
+    .filter((name) => mentionsTable(readFileSync(`${DIR}/${name}`, "utf8")));
 }
 
 function migratedColumns(): Set<string> {
