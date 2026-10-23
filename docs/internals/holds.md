@@ -162,42 +162,76 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 
 ## 参照の禁止
 
-`holds.ts`の外では、読み取りも含めて`factory.holds`を直接書かない。
+`f/`とmigrationの中で、`holds.ts`の外に、表の名前(`factory.holds`)を直接書かない。
 書き込みと読み取りは、`holds.ts`の関数を通す。
 有効の条件(24時間の上限など)と書き込みの制限を、`holds.ts`に集めるためである。
 保留を読む処理は、`holds.ts`の関数を使う。
+
 この決まりを守らせる仕組みは無く、参照の混入を検出するテストがある。
 Windmillのscriptはすべて同じdatatableの接続を持つので、検出をすり抜けるコードは表を読み書きできる。
+決まりの範囲も限られる。
+許可した読み取りの関数(`listActiveHolds`)は、呼び出し側から`sql`を受け取る。
+呼び出し側が`strings`を書き換えた接続を渡す迂回は、止めない。
+`f/`の外のコード(ローカルのフックなど)は、走査の対象にならない。
 
 書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。
 これは呼び出し側に接続を選ばせるためで、参照は止めない。
 
-`tests/scripts/hold_wiring.test.ts`は、SQLの動詞を読まず、次の参照を検出する。
+`tests/scripts/hold_wiring.test.ts`は、次の参照を検出する。
 `holds.ts`と、表を作る2本のmigrationでは認める。
 この3つは走査から外すので、保護パスに入れる。
 
-- `factory.holds`の名前。間に空白、SQLのコメント(入れ子のブロックコメントと行コメント)、引用符があってもよい。`datatable_db.factory.holds`のような3部の名前は、最後の2部で判定する。
-- `holds_`で始まるインデックス、制約、シーケンスの名前(`holds_active_merge_key`、`holds_pkey`など)
-- `search_path`
-- `DROP SCHEMA factory`と`ALTER SCHEMA factory`。表ごと消えるためである。初期のmigrationのdownだけは認める。
+- `factory.holds`の名前。
+  間に空白、SQLのコメント(入れ子のブロックコメントと行コメント)、引用符があってもよい。
+  `datatable_db.factory.holds`のような3部の名前は、最後の2部で判定する。
+- `holds_`で始まるインデックス、制約、シーケンスの名前。
+  `key`、`idx`、`check`、`pkey`、`fkey`、`excl`、`seq`で終わる名前に限る(`holds_active_merge_key`、`holds_pkey`など)。
+- `search_path`と`SET SCHEMA`。
+  `SET SCHEMA`は`LOCAL`や`SESSION`を付けても、`SET search_path TO`の別名である。
+- `DROP SCHEMA factory`と`ALTER SCHEMA factory`。
+  表ごと消えるためである。
+  スキーマの数に上限を設けず、文の終わりまで読む。
+  初期のmigrationのdownにある`DROP SCHEMA IF EXISTS factory CASCADE`の1文(1件だけ)は認める。
+- `DROP OWNED BY`と`DROP DATABASE`。
+  どちらも表を消せるためである。
+- `datatable`の名前が`:factory`で終わる指定(`wmill.datatable("main:factory")`など)。
+  windmill-clientは、スキーマ部があると実行時に`SET search_path`を足す。
+  そのため、ソースに`search_path`と`factory.holds`が現れずに、スキーマの付かない名前で書ける。
+- 動詞の直後の、スキーマの付かない`holds`。
+  対象の動詞は、`INSERT INTO`、`UPDATE`、`DELETE FROM`、`TRUNCATE`、`MERGE INTO`、`ALTER TABLE`、`DROP TABLE`、`COPY`である。
 
-スキーマ名の無い`holds`は数えない。
-単独の語が英文に多いためで、`search_path`の禁止と上の規則で間接的に塞ぐ。
+最後の規則は、動詞の位置から先を読み、`holds`の後ろにSQLの構造が続くときだけ当てる。
+`UPDATE`は`SET`、`COPY`は`FROM`、`TO`、`(`のどれか、`INSERT INTO`は列または`VALUES`、`MERGE INTO`は`USING`が要る。
+`DELETE FROM`、`TRUNCATE`、`DROP TABLE`は、文字列の終わりで終わる形も当てる。
+`holds`単独の語や、構造の続かない英文(`could not update holds`、`copy holds`)は数えない。
 
 検出する範囲は次のとおりである。
 
-- `f/`のすべてのファイル(`holds.ts`と、依存の固定の`.lock`を除く)。TypeScriptは`Bun.Transpiler`で変換したコードを読み、JavaScriptのコメントは消える。SQL、シェル、Python、YAMLなど、ほかの形式は生のテキストを読む。
+- `f/`のすべてのファイル(`holds.ts`を除く)。
+  `.lock`も含む。
+  flowの`content`が`!inline`で任意のファイルを指せるので、`.lock`をscriptの本文として参照させる経路がありうるためである。
+  TypeScriptは`Bun.Transpiler`で変換したコードを読み、JavaScriptのコメントは消える。
+  SQL、シェル、Python、YAMLなど、ほかの形式は生のテキストを読む。
 - `migrations/datatable/main/`の、表を作る2本以外。
-- 同じ範囲で、`holds.ts`以外が、読み取りの2つの関数と型のほかを読み込むこと。名前空間の読み込み、再export、動的な読み込み、`.js`など拡張子違いの指定、絶対パスの指定も検出する。
+- 同じ範囲で、`holds.ts`以外が、読み取りの2つの関数と型のほかを読み込むこと。
+  名前空間の読み込み、再export、動的な読み込み、`.js`など拡張子違いの指定、絶対パスの指定も検出する。
 
 読み方は次のとおりである。
-`factory`の出現位置ごとに、その位置から先の数トークンをSQLの字句で読む。
+`factory`と動詞などの目印の出現位置ごとに、その位置から先の数トークンをSQLの字句で読む。
 空白、行コメント、入れ子のブロックコメント、引用符を読み飛ばす。
 起点を出現位置に固定するので、手前にある別の字句の`/*`や引用符に引きずられない。
 行コメントの終わりは、実際の改行だけの読みと、JavaScriptの文字列の改行のエスケープも含む読みの両方で評価し、どちらかで当たれば検出とする。
 
 英文のログは、`factory.holds`を含まなければ当たらない。
-`factory.holds`を含む英文は当たる。誤検知を許して、見逃しを減らすためである。
+`factory.holds`を含む文字列は、英文でも当たる。誤検知を許して、見逃しを減らすためである。
+次のような、表の名前を書くだけの文字列も当たる。
+
+- 後のmigrationのSQLコメント(`-- 保留(factory.holds)とは別の表`)
+- `COMMENT ON ... IS 'see factory.holds'`
+- `.script.yaml`の`description`
+- TypeScriptのログ文字列
+
+誤検知の規則を直すには、テストが保護パスなので、保護パスの変更としてPRを出す。
 当たったときの診断は、ファイル、変換する前のソースの行番号、前後の抜粋を示す。
 
 検出するのは文字列の形だけで、見つけられない入力がある。
@@ -206,8 +240,20 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、検出を
 - 文字列の連結で名前を組み立てるコード
 - `${}`で名前を組み立てるテンプレート(`factory.${"holds"}`など)
 - 名前をJavaScriptの文字列のエスケープ(`\u0066actory`など)で書くコード
+- migrationの動的SQL。
+  `EXECUTE format('DELETE FROM %I.%I', 'factory', 'holds')`、`EXECUTE 'DELETE FROM factory.' || 'holds'`、カタログを引くループで名前を作る形がある。
+  `search_path`やスキーマ無しの`holds`の規則も、動的SQLでは塞げない。
+- `search_path`の語を分ける形。
+  `PGOPTIONS=-csearch_path=factory`(語の境界に当たらない)や、`set_config('search_'||'path', ...)`がある。
 - 保留のモジュールの名前を組み立てるimport
 - `f/`とmigrationの外のコード(`scripts/`など)
+
+datatableの接続の既定の`search_path`に`factory`が入っていないことは、確かめていない。
+入っていれば、スキーマの付かない`holds`が、`datatable`の名前の指定なしで`factory.holds`を指す。
+上の動詞の規則は、その場合も働く。
+
+接続の`role`(windmill-clientの`datatable(name, { role })`、1.817.0)で、DBの層で分離できる可能性がある。
+確かめるまで、分離できないとは断定しない。
 
 表の定義を変えるmigration(scopeを広げるなど)は、表を作るmigrationと並べて、テストの`HOLDS_MIGRATION_FILES`に足す。
 これは保護パスの変更として出す。
@@ -215,9 +261,13 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、検出を
 追加の守りは次のとおりである。
 
 - `holds.ts`とそのテスト、実DBの検査は、保護パス(`f/factory/lib/protected_paths.ts`)に入れる。
-- 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。
-- `holds.ts`は何もimportしない。接続の型(`HoldSqlClient`)も自前で持つ。保護の外のモジュールに、判定が依存しないようにするためである。
-- `holds.ts`は`main`をエクスポートしない。`runScriptByPath`やフローの`path:`から直接実行する経路を作らないためである。
+- 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。
+  ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。
+- `holds.ts`は何もimportしない。
+  接続の型(`HoldSqlClient`)も自前で持つ。
+  保護の外のモジュールに、判定が依存しないようにするためである。
+- `holds.ts`は`main`をエクスポートしない。
+  `runScriptByPath`やフローの`path:`から直接実行する経路を作らないためである。
 
 ## 反映の順序
 

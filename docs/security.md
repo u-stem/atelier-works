@@ -2573,11 +2573,11 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 保留は止めるためだけに使い、許可には使わない。
 偽の保留で対象が止まっても、元の保護(レビューとゲート)は残る。
 
-表への書き込みと読み取りは、`f/factory/lib/holds.ts`の関数を通す決まりである。
+`f/`とmigrationの中で、表の名前を直接書くコードは、`f/factory/lib/holds.ts`の関数を通す決まりである。
 この決まりを守らせる仕組みは無い。
 `tests/scripts/hold_wiring.test.ts`が、`holds.ts`の外にある表への参照の混入を検出する。
 `holds.ts`とそのテスト、実DBの検査、表を作る2本のmigrationは保護パスに入れる。
-走査から外すのは、保護したファイルだけにするためである。
+走査から外すのは、この3つのファイルだけである。
 保護パスを書き換える変更は、PR修正のpushが止まり、実装のPRには明記される。
 
 検出は文字列を読むヒューリスティックで、まれな入力では見逃しが起こる。
@@ -2586,16 +2586,28 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 - Windmillのscriptはすべて同じdatatableの接続を持つ。
   検出をすり抜けるコードは、表を読み書きできる。
   保留は止めるためだけに使い、外れても元の保護が残るので、受け入れる。
-- 検出の範囲は、`f/`のすべてのファイル(`.lock`を除く)と、`migrations/datatable/main/`の表を作る2本以外である。
+  接続の`role`で分離できる可能性は、確かめるまで、できないとは断定しない。
+- 検出の範囲は、`f/`のすべてのファイル(`.lock`を含む)と、`migrations/datatable/main/`の表を作る2本以外である。
   `.ts`は変換後のコードを、ほかの形式(SQL、シェル、Python、YAML)は生のテキストを読む。
-  `scripts/`など、ほかの場所は見ない。
-- 検出するのは、`factory.holds`の名前(コメントや引用符を挟んだ形と3部の名前を含む)、`holds_`で始まる名前、`search_path`、`DROP SCHEMA factory`である。
-  動詞は読まない。
-  スキーマ名の無い`holds`は数えない。
-  `factory.holds`を含む英文は当たる。誤検知を許して、見逃しを減らすためである。
+  `scripts/`やローカルのフックなど、ほかの場所は見ない。
+- 許可した読み取りの関数(`listActiveHolds`)は、呼び出し側から接続を受け取る。
+  呼び出し側が`strings`を書き換えた接続を渡す迂回は、止めない。
+- 検出するのは次の参照である。
+  `factory.holds`の名前(コメントや引用符を挟んだ形と3部の名前を含む)、`search_path`、`SET SCHEMA`。
+  `DROP SCHEMA factory`(スキーマを何個並べても検出する)、`DROP OWNED BY`、`DROP DATABASE`。
+  `key`、`idx`、`check`、`pkey`、`fkey`、`excl`、`seq`で終わる`holds_`の名前。
+  `datatable`の名前が`:factory`で終わる指定。実行時に`SET search_path`が足され、スキーマの付かない名前で書けるためである。
+  動詞の直後のスキーマの付かない`holds`は、SQLの構造が続くときだけ検出する。
+- 英文のログ(`could not update holds`など)は当たらない。
+  `factory.holds`を含む文字列は、英文でも、SQLコメントや`COMMENT ON`、`.script.yaml`の`description`でも当たる。
+  誤検知を許して、見逃しを減らすためである。
+  誤検知の規則を直すには、保護パスの変更としてPRを出す。
 - 見つけられない入力の例は次のとおりである。
   文字列の連結や`${}`で名前を組み立てるコード、名前をJavaScriptの文字列のエスケープで書くコード、保留のモジュールの名前を組み立てるimportがある。
+  migrationの動的SQL(`EXECUTE format(...)`、文字列の連結、カタログを引くループ)では、スキーマ無しの`holds`の規則も塞げない。
+  `PGOPTIONS=-csearch_path=factory`や`set_config('search_'||'path', ...)`のように、語を分ける形もある。
   これらは例であり、すべてではない。
+- datatableの接続の既定の`search_path`に`factory`が入っていないことは、確かめていない。
 - `scripts/test-db.sh`は守らない。
   日常的に直すファイルなので、守ると正当な変更を止める。
   実DBの検査を呼ぶ位置の検査は、`exit 0`を足すか、呼び出しを`if false; then ... fi`で囲むと、迂回できる。

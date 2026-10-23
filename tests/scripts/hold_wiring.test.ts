@@ -7,19 +7,25 @@ import {
   matchesImplementProtectedPath,
 } from "../../f/factory/lib/protected_paths.ts";
 
-// 保留の表への書き込みは、`f/factory/lib/holds.ts`だけに置く。
-// このテストは、他のファイルが書く関数を読み込んでいないことと、表へ書くSQLの文字列を持たないことを検出する。
-// 検出は文字列のヒューリスティックで、書き込みを止める仕組みではない。
-// 見つけられない入力の例は次のとおりである。
-// - SQLの文を文字列の連結やテンプレートで組み立てるコード(`UPDATE factory.${"holds"}`など)
-// - SQLの動詞や表名を、JavaScriptの文字列のエスケープ(`\u0049NSERT`など)で書くコード
-// - 保留のモジュールの名前を、連結や変数で組み立てるimport
-// - `f/factory/`の外のコード(`scripts/`など)。migrationは、表を作るもの以外を別に検査する。
-// Windmillのscriptは同じdatatableの接続を持つので、これらをすり抜けるコードは表を書ける。
+// 保留の表`factory.holds`の読み書きは、`f/factory/lib/holds.ts`の関数を通す。
+// このテストは、`holds.ts`の外にある表への参照と、保留のモジュールの書く関数の読み込みを検出する。
+// 検出は文字列のヒューリスティックで、参照を止める仕組みではない。
 //
+// 禁止する参照は、`factory.holds`、`holds_`で始まる名前、`search_path`、`SET SCHEMA`、
+// `DROP SCHEMA factory`、`DROP OWNED`、`DROP DATABASE`、`datatable`の名前の`:factory`、
+// 動詞の直後のスキーマの付かない`holds`である。動詞を読む文法は持たない。
+// `factory`などの目印の出現位置から先だけを、数トークン、SQLの字句(空白、`--`の行コメント、入れ子の`/* */`)で読む。
+// 起点を固定するので、手前にある別の字句の`/*`や引用符に引きずられない。
+// 行コメントの終わりは、実際の改行だけの読みと、文字のエスケープも含む読みの両方で評価する。
 // TypeScriptは`Bun.Transpiler`で変換してから読む。JavaScriptのコメントと、型だけのimportが消える。
-// SQLは、動詞を見つけた位置から先を、SQLの字句(空白、`--`の行コメント、入れ子の`/* */`)で読む。
-// ファイル全体のコメントを先に除くと、文字列の中の`/*`に引きずられて、後ろの文を消すためである。
+//
+// 見つけられない入力の例は次のとおりである。
+// - 名前を文字列の連結やテンプレートで組み立てるコード(`UPDATE factory.${"holds"}`など)
+// - 動詞や表名を、JavaScriptの文字列のエスケープ(`\u0049NSERT`など)で書くコード
+// - 動的SQL(`EXECUTE format(...)`など)や、`PGOPTIONS`で`search_path`を渡す形
+// - 保留のモジュールの名前を、連結や変数で組み立てるimport
+// - `f/`とmigrationの外のコード(`scripts/`など)
+// Windmillのscriptは同じdatatableの接続を持つので、これらをすり抜けるコードは表を読み書きできる。
 //
 // 後の段で`cleanup_db`が期限の過ぎた行を消すときは、削除を`holds.ts`の関数として置き、
 // `cleanup_db`だけがその関数を読み込んでよいことにする。この例外は、関数を置く段で足す。
@@ -426,7 +432,7 @@ type SqlToken = {
 };
 
 /**
- * `start`から先を、SQLの字句で`count`個読む。空白、行コメント、入れ子のブロックコメントを読み飛ばし、
+ * `start`から先を、SQLの字句で`count`個読む。`until`の記号を読んだら止まる。空白、行コメント、入れ子のブロックコメントを読み飛ばし、
  * 語は小文字にして、記号は1文字ずつ返す。起点を指定するので、手前にある別の字句の`/*`や引用符に引きずられない。
  */
 function readSqlTokens(
@@ -434,10 +440,12 @@ function readSqlTokens(
   start: number,
   count: number,
   escapeEnds: boolean,
+  until = "",
 ): SqlToken[] {
   const tokens: SqlToken[] = [];
   let i = start;
   while (i < text.length && tokens.length < count) {
+    if (until !== "" && tokens.at(-1)?.text === until) break;
     const pair = text.slice(i, i + 2);
     if (pair === "--") {
       i = lineCommentEnd(text, i, escapeEnds);
@@ -468,7 +476,7 @@ type HoldsReference = {
 
 /** 参照を見つける目印。`factory`は、その位置から先を数トークン読んで`factory.holds`かを確かめる。 */
 const MARKERS =
-  /\bfactory\b|\bholds_(?:[a-z0-9_]*_)?(?:key|idx|check|pkey|fkey|excl|seq)\b|\bsearch_path\b|\b(?:insert|update|delete|merge|truncate|copy|drop|alter)\b/gi;
+  /\bfactory\b|\bholds_(?:[a-z0-9_]*_)?(?:key|idx|check|pkey|fkey|excl|seq)\b|\bsearch_path\b|\b(?:insert|update|delete|merge|truncate|copy|drop|alter|set)\b/gi;
 
 /** `holds`の後ろに続けば、表の名前として読めるSQLの語。 */
 const AFTER_HOLDS: Readonly<Record<string, readonly string[]>> = {
@@ -571,7 +579,8 @@ function schemaLessHolds(tokens: readonly SqlToken[]): boolean {
  * - `factory.holds`(間に空白、コメント、引用符があってもよい。3部の名前は最後の2部で判定)
  * - `holds_`で始まるインデックス・制約・シーケンスの名前(`holds_active_merge_key`、`holds_pkey`、`holds_id_seq`など)
  * - `search_path`
- * - `DROP SCHEMA factory`と`ALTER SCHEMA factory`
+ * - `DROP SCHEMA factory`と`ALTER SCHEMA factory`(スキーマを何個並べても、文の終わりまで読む)、`DROP OWNED BY`、`DROP DATABASE`
+ * - `SET SCHEMA`(`LOCAL`、`SESSION`を含む)。`SET search_path TO`の別名である。
  * - `datatable`の名前が`:factory`で終わる指定。実行時に`SET search_path`を足すので、スキーマ無しの名前で書ける。
  * - 動詞の直後の、スキーマの付かない`holds`。SQLの構造が続くときだけ当てる。
  * 行コメントの終わりは、実際の改行だけの読みと、文字のエスケープも含む読みの両方で評価する。
@@ -609,13 +618,34 @@ function findHoldsReferences(text: string): HoldsReference[] {
           hit(offset, "factory.holds");
         }
       } else if (word === "drop" || word === "alter") {
-        const words = readSqlTokens(text, offset, 12, escapeEnds).map(
-          (token) => token.text,
-        );
-        const statement = words.slice(2, words.indexOf(";") + 1 || undefined);
-        if (words[1] === "schema" && statement.includes("factory")) {
+        // 文の終わりまで読む。スキーマを何個並べても、`factory`を見逃さない。
+        const words = readSqlTokens(
+          text,
+          offset,
+          text.length,
+          escapeEnds,
+          ";",
+        ).map((token) => token.text);
+        if (words[1] === "schema" && words.slice(2).includes("factory")) {
           hit(offset, "schema factory");
         }
+        if (
+          word === "drop" &&
+          (words[1] === "owned" || words[1] === "database")
+        ) {
+          hit(offset, "drop owned or database");
+        }
+      } else if (word === "set") {
+        // `SET SCHEMA`は`SET search_path TO`の別名である。
+        const [first, second] = readSqlTokens(
+          text,
+          offset + 3,
+          2,
+          escapeEnds,
+        ).map((token) => token.text);
+        const target =
+          first === "local" || first === "session" ? second : first;
+        if (target === "schema") hit(offset, "set schema");
       }
       if (
         schemaLessHolds(readSqlTokens(text, offset, 12, escapeEnds)) &&

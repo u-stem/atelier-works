@@ -139,6 +139,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 保留の表(`factory.holds`)の読み書きを持つ`lib/holds.ts`と、その`.script.yaml`も守る。
  * 表を作るmigration2本(`20261023131355_holds.up.sql`と`.down.sql`)も守る。参照を検出するテストが、この2本を走査から外すためである。
  * 走査から外すのは保護したファイルだけにする。外したファイルを書き換えられると、検出も保護も働かないからである。
+ * `.lock`は保護しないので、走査に含める。
  * 保留は、自動マージとIssueの取り込みを止める。表への参照を`holds.ts`だけに絞る検査
  * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
  * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
