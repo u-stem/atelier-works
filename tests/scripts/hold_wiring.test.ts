@@ -616,6 +616,29 @@ describe("referencesHolds", () => {
     "ALTER TABLE x DROP CONSTRAINT holds_expiry_check",
     "SET search_path = factory",
     "SET LOCAL search_path TO factory, public",
+    // スキーマ名の付かない`holds`。動詞の直後に、SQLの構造が続く。
+    "UPDATE holds SET released_at = now()",
+    "UPDATE ONLY holds h SET released_at = now()",
+    "update /* a */ holds set released_at = now()",
+    "TRUNCATE holds",
+    "TRUNCATE TABLE ONLY holds, other",
+    'INSERT INTO "holds" (scope) VALUES (1)',
+    "INSERT INTO /* a */ holds (scope) VALUES (1)",
+    "INSERT INTO holds VALUES (1)",
+    "DELETE FROM holds WHERE id = 1",
+    "DELETE FROM ONLY holds",
+    "MERGE INTO holds h USING t ON true WHEN MATCHED THEN DELETE",
+    "ALTER TABLE holds ADD COLUMN x int",
+    "ALTER TABLE IF EXISTS ONLY holds DISABLE TRIGGER ALL",
+    "DROP TABLE holds",
+    "DROP TABLE IF EXISTS holds CASCADE",
+    "COPY holds FROM STDIN",
+    "COPY holds (scope) TO STDOUT",
+    // `datatable`の名前の`:factory`は、実行時に`SET search_path`を足す。
+    'wmill.datatable("main:factory")',
+    "wmill.datatable('main:factory')",
+    "wmill.datatable(`main:factory`)",
+    'datatable("other:factory")',
   ])("detects %p", (text) => {
     expect(referencesHolds(text)).toBe(true);
   });
@@ -632,6 +655,15 @@ describe("referencesHolds", () => {
     '"tests/lib/holds_db.test.ts", "scripts/test-db-holds.ts"',
     "UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL",
     "DROP SCHEMA other",
+    'log.warn("could not update holds");',
+    'log.warn("could not insert into holds");',
+    'log.warn("copy holds");',
+    "update holds failed",
+    "the holds are updated",
+    "SELECT * FROM holds",
+    'wmill.datatable("main")',
+    "wmill.datatable()",
+    'const label = "factory:status";',
   ])("does not detect %p", (text) => {
     expect(referencesHolds(text)).toBe(false);
   });
@@ -650,6 +682,12 @@ describe("tsReferencesHolds", () => {
     "const q = `SELECT * FROM datatable_db.factory.holds`;",
     'const q = "INSERT -- see a\\n b\\nINTO factory.holds (scope) VALUES (1)";',
     "const q = `SET search_path = factory`;",
+    // `search_path`も`factory.holds`も現れず、スキーマ無しの名前で書く。
+    'const tag = wmill.datatable("main:factory");\nawait tag`DELETE FROM holds`.execute();',
+    "const tag = wmill.datatable('main:factory');\nawait tag`UPDATE holds SET released_at = now()`.execute();",
+    "const tag = wmill.datatable(`main:factory`);\nawait tag`TRUNCATE holds`.execute();",
+    'const tag = wmill.datatable("main:factory");\nawait tag`INSERT INTO "holds" (scope) VALUES (1)`.execute();',
+    'const q = "UPDATE holds SET released_at = now()";',
   ])("detects %p", (source) => {
     expect(tsReferencesHolds(source)).toBe(true);
   });
@@ -844,13 +882,14 @@ describe("files under f/", () => {
     expect(SCANNED.some((path) => path.endsWith("flow.yaml"))).toBe(true);
   });
 
-  test("leaves out only the locks and holds.ts", () => {
-    expect(listFiles("f").filter((path) => !SCANNED.includes(path))).toEqual(
-      [
-        HOLDS_MODULE,
-        ...listFiles("f").filter((path) => path.endsWith(".lock")),
-      ].sort(),
-    );
+  test("leaves out only holds.ts", () => {
+    expect(listFiles("f").filter((path) => !SCANNED.includes(path))).toEqual([
+      HOLDS_MODULE,
+    ]);
+  });
+
+  test("scans the locks too, which a flow can name as the body of a script", () => {
+    expect(SCANNED.some((path) => path.endsWith(".lock"))).toBe(true);
   });
 
   test("leaves out the documents", () => {
@@ -1043,6 +1082,41 @@ describe("migrationViolations", () => {
           "DROP SCHEMA IF EXISTS factory CASCADE;",
       }),
     ).toEqual([]);
+  });
+
+  test("allows only that statement, so a second drop in the initial rollback is reported", () => {
+    expect(
+      migrationViolations({
+        "20260925153414_factory_init.down.sql":
+          "DROP SCHEMA IF EXISTS factory CASCADE;\nDROP SCHEMA IF EXISTS factory CASCADE;",
+      }),
+    ).toEqual(["20260925153414_factory_init.down.sql"]);
+  });
+
+  test("reports a rename of the schema in the initial rollback", () => {
+    expect(
+      migrationViolations({
+        "20260925153414_factory_init.down.sql":
+          "DROP SCHEMA IF EXISTS factory CASCADE;\nALTER SCHEMA factory RENAME TO x;",
+      }),
+    ).toEqual(["20260925153414_factory_init.down.sql"]);
+  });
+
+  test("reports a drop of the schema without IF EXISTS in the initial rollback", () => {
+    expect(
+      migrationViolations({
+        "20260925153414_factory_init.down.sql": "DROP SCHEMA factory CASCADE;",
+      }),
+    ).toEqual(["20260925153414_factory_init.down.sql"]);
+  });
+
+  test("reports a drop of the schema that comes before an allowed one and differs", () => {
+    expect(
+      migrationViolations({
+        "20260925153414_factory_init.down.sql":
+          "DROP SCHEMA factory, other CASCADE;\nDROP SCHEMA IF EXISTS factory CASCADE;",
+      }),
+    ).toEqual(["20260925153414_factory_init.down.sql"]);
   });
 
   test("does not allow the same statement in another migration", () => {
