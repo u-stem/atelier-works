@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
-import type { IntakeAttempt } from "../lib/intakeAttempt.ts";
 import { ApiFailure } from "./errors.ts";
 import type { ManualIntakeSubmitResult } from "./guards/writeResults.ts";
+import { createIntakeSessions } from "./intakeSession.ts";
 import { manualIntakeConfig } from "./manualIntakeConfig.ts";
 import { pipelineQueryKey } from "./queries.ts";
-import { createWriteLocks } from "./writeLocks.ts";
+import { createWriteLocks, MANUAL_INTAKE_WRITE_KEY } from "./writeLocks.ts";
 import { createWriteRunner } from "./writeRunner.ts";
 import type { ManualIntakeInput } from "./writes.ts";
 
@@ -29,19 +29,11 @@ function setup(
 ) {
   const queryClient = new QueryClient();
   const locks = createWriteLocks();
-  const attempts: IntakeAttempt[] = [];
-  const stale: number[] = [];
-  const config = manualIntakeConfig({
-    run,
-    onAttempt: (attempt) => {
-      attempts.push(attempt);
-    },
-    onStale: () => {
-      stale.push(1);
-    },
-  });
+  const sessions = createIntakeSessions();
+  const config = manualIntakeConfig({ run, sessions });
   const runner = createWriteRunner({ ...config, queryClient, locks });
-  return { queryClient, locks, attempts, stale, runner, config };
+  const attempt = () => sessions.get(MANUAL_INTAKE_WRITE_KEY).attempt;
+  return { queryClient, locks, sessions, attempt, runner, config };
 }
 
 /** 作業項目の進捗のキーを購読して、取得の回数を数える。 */
@@ -102,33 +94,33 @@ describe("manualIntakeConfig", () => {
   });
 
   test("reports a started flow as a submission", async () => {
-    const { runner, attempts } = setup(() => Promise.resolve(STARTED));
+    const { runner, attempt } = setup(() => Promise.resolve(STARTED));
     await runner(INPUT);
-    expect(attempts).toEqual([{ kind: "submitted", flowJobId: JOB }]);
+    expect(attempt()).toEqual({ kind: "submitted", flowJobId: JOB });
   });
 
   test("reports a refusal as a refusal", async () => {
-    const { runner, attempts } = setup(() =>
+    const { runner, attempt } = setup(() =>
       Promise.resolve({ refused: true, reason: "empty_title" }),
     );
     await runner(INPUT);
-    expect(attempts.map((attempt) => attempt.kind)).toEqual(["refused"]);
+    expect(attempt().kind).toBe("refused");
   });
 
   test("reports a failed job as not knowing", async () => {
-    const { runner, attempts } = setup(() =>
+    const { runner, attempt } = setup(() =>
       Promise.reject(new ApiFailure({ kind: "job_failed", message: "boom" })),
     );
     await runner(INPUT).catch(() => undefined);
-    expect(attempts.map((attempt) => attempt.kind)).toEqual(["unknown"]);
+    expect(attempt().kind).toBe("unknown");
   });
 
   test("reports a forbidden call as rejected", async () => {
-    const { runner, attempts } = setup(() =>
+    const { runner, attempt } = setup(() =>
       Promise.reject(new ApiFailure({ kind: "forbidden" })),
     );
     await runner(INPUT).catch(() => undefined);
-    expect(attempts.map((attempt) => attempt.kind)).toEqual(["rejected"]);
+    expect(attempt().kind).toBe("rejected");
   });
 
   test("does not retry a failure", async () => {
@@ -151,13 +143,46 @@ describe("manualIntakeConfig", () => {
   });
 
   test("keeps the button locked and says so when the progress cannot be read", async () => {
-    const { runner, queryClient, locks, stale } = setup(() =>
+    const { runner, queryClient, locks, sessions } = setup(() =>
       Promise.resolve(STARTED),
     );
     const pipeline = watchPipeline(queryClient);
     await Promise.resolve();
     pipeline.failNext();
     await runner(INPUT);
-    expect([locks.isLocked("manual_intake"), stale.length]).toEqual([true, 1]);
+    expect([
+      locks.isLocked("manual_intake"),
+      sessions.get(MANUAL_INTAKE_WRITE_KEY).stale,
+    ]).toEqual([true, true]);
+  });
+
+  test("writes the result of a call that finished after the screen left", async () => {
+    let finish: (result: ManualIntakeSubmitResult) => void = () => undefined;
+    const { runner, sessions } = setup(
+      () =>
+        new Promise<ManualIntakeSubmitResult>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const running = runner(INPUT);
+    finish(STARTED);
+    await running;
+    expect(sessions.get(MANUAL_INTAKE_WRITE_KEY).attempt.kind).toBe(
+      "submitted",
+    );
+  });
+
+  test("writes a result that is not known after the screen left", async () => {
+    let fail: () => void = () => undefined;
+    const { runner, sessions } = setup(
+      () =>
+        new Promise<ManualIntakeSubmitResult>((_resolve, reject) => {
+          fail = () => reject(new ApiFailure({ kind: "network" }));
+        }),
+    );
+    const running = runner(INPUT).catch(() => undefined);
+    fail();
+    await running;
+    expect(sessions.isBlocked(MANUAL_INTAKE_WRITE_KEY)).toBe(true);
   });
 });

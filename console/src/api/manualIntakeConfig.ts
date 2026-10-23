@@ -8,6 +8,7 @@ import {
   type IntakeAttempt,
 } from "../lib/intakeAttempt.ts";
 import type { ManualIntakeSubmitResult } from "./guards/writeResults.ts";
+import type { IntakeSessions } from "./intakeSession.ts";
 import { pipelineQueryKey } from "./queries.ts";
 import { MANUAL_INTAKE_WRITE_KEY } from "./writeLocks.ts";
 import type { WriteRunnerConfig } from "./writeRunner.ts";
@@ -15,9 +16,11 @@ import { type ManualIntakeInput, submitManualIntake } from "./writes.ts";
 
 type ManualIntakeDeps = {
   /** 送信の結果を画面に残す。 */
-  readonly onAttempt: (attempt: IntakeAttempt) => void;
+  readonly onAttempt?: (attempt: IntakeAttempt) => void;
+  /** 仮の実装は無視する。 */
+  readonly sessions?: IntakeSessions;
   /** 一覧を読み直せなかったことを画面に残す。 */
-  readonly onStale: () => void;
+  readonly onStale?: () => void;
   /** テストで差し替える。既定は`submitManualIntake`。 */
   readonly run?: (
     input: ManualIntakeInput,
@@ -32,10 +35,10 @@ export function manualIntakeConfig(
     run: deps.run ?? ((input) => submitManualIntake(input)),
     invalidates: [pipelineQueryKey],
     onOutcome: (outcome) => {
-      deps.onAttempt(attemptFromOutcome(outcome));
+      deps.onAttempt?.(attemptFromOutcome(outcome));
     },
     onStale: () => {
-      deps.onStale();
+      deps.onStale?.();
     },
   };
 }

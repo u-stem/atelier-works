@@ -179,6 +179,22 @@ describe("describeIntakeAttempt", () => {
     ).toContain("対象リポジトリのIssue");
   });
 
+  test("tells to check for a manual_intake_submit job that is still waiting or running", () => {
+    expect(
+      describeIntakeAttempt(
+        attemptFromOutcome(failed({ kind: "network" })),
+      )?.lines.join("\n"),
+    ).toContain("manual_intake_submitのジョブが待ちか実行中でないか");
+  });
+
+  test("explains that nothing exists yet while that job waits", () => {
+    expect(
+      describeIntakeAttempt(
+        attemptFromOutcome(failed({ kind: "network" })),
+      )?.lines.join("\n"),
+    ).toContain("manual_intakeのジョブもIssueもまだありません");
+  });
+
   test("has no job link when the result is not known", () => {
     expect(
       describeIntakeAttempt(attemptFromOutcome(failed({ kind: "network" })))
