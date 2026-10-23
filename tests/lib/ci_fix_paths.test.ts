@@ -4,6 +4,7 @@ import {
   type CiFixChange,
   type CiFixViolationCode,
   checkCiFixChanges,
+  countMeaningfulLines,
   isDeniedPath,
   isTestPath,
   weakensChecks,
@@ -439,6 +440,7 @@ describe("tests", () => {
         removedLineCount: 5,
         addedLines: ["a", "b", "c", "d", "e"],
         removedOutsidePrLineCount: 0,
+        shrinkingHunkCount: 0,
       }),
     ).toBe(true);
   });
@@ -449,6 +451,7 @@ describe("tests", () => {
         removedLineCount: 1,
         addedLines: ["a", "b"],
         removedOutsidePrLineCount: 0,
+        shrinkingHunkCount: 0,
       }),
     ).toBe(true);
   });
@@ -498,6 +501,69 @@ describe("tests", () => {
     ).toBe("test_not_additive");
   });
 
+  test("rejects rewriting a line into a comment of the same line", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 1,
+            addedLines: ["// expect(a).toBe(1);"],
+            removedOutsidePrLineCount: 0,
+            shrinkingHunkCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("rejects replacing lines with blank lines", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 3,
+            addedLines: ["", "", ""],
+            removedOutsidePrLineCount: 0,
+            shrinkingHunkCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("rejects a change with a hunk that removes more than it adds, even if the totals balance", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 2,
+            addedLines: ["a", "b"],
+            removedOutsidePrLineCount: 0,
+            shrinkingHunkCount: 1,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("rejects a removal when the hunks are unknown", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 1,
+            addedLines: ["a"],
+            removedOutsidePrLineCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
   test("rejects deleting a test even when no line is outside the pull request", () => {
     expect(
       codeOf(
@@ -520,7 +586,8 @@ describe("tests", () => {
           change(TEST, {
             removedLineCount: 1,
             removedOutsidePrLineCount: 0,
-            addedLines: ["// @ts-ignore"],
+            shrinkingHunkCount: 0,
+            addedLines: ['it.skip("x", () => {});'],
           }),
         ],
         [TEST],
@@ -850,5 +917,42 @@ describe("files of the conflict round", () => {
     "f/factory/lib/ci_fix_paths.ts",
   ])("denies %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);
+  });
+});
+
+describe("countMeaningfulLines", () => {
+  test("counts a line of code", () => {
+    expect(countMeaningfulLines(["expect(a).toBe(1);"])).toBe(1);
+  });
+
+  test("counts a line of code with a trailing comment", () => {
+    expect(countMeaningfulLines(["run(); // note"])).toBe(1);
+  });
+
+  test("does not count blank lines", () => {
+    expect(countMeaningfulLines(["", "   ", "\t"])).toBe(0);
+  });
+
+  test("does not count a line comment", () => {
+    expect(countMeaningfulLines(["  // expect(a).toBe(1);"])).toBe(0);
+  });
+
+  test("does not count a hash comment", () => {
+    expect(countMeaningfulLines(["# assert a == 1"])).toBe(0);
+  });
+
+  test("does not count a block comment line", () => {
+    expect(
+      countMeaningfulLines([
+        "/* expect(a); */",
+        " * note",
+        " */",
+        "<!-- x -->",
+      ]),
+    ).toBe(0);
+  });
+
+  test("counts a Rust attribute", () => {
+    expect(countMeaningfulLines(["#[test]"])).toBe(1);
   });
 });

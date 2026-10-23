@@ -25,6 +25,10 @@ function io(overrides: Partial<PrMergeBaseIo> = {}): {
         calls.push("readBaseRef");
         return "main";
       },
+      readDefaultBranch: async () => {
+        calls.push("readDefaultBranch");
+        return "main";
+      },
       readBranchSha: async (branch) => {
         calls.push(`readBranchSha ${branch}`);
         return TIP;
@@ -54,10 +58,40 @@ describe("resolvePrMergeBase", () => {
     await resolvePrMergeBase(fake.io);
     expect(fake.calls).toEqual([
       "readBaseRef",
+      "readDefaultBranch",
       "readBranchSha main",
       `fetchCommit ${TIP}`,
       `mergeBase ${TIP}`,
     ]);
+  });
+
+  test("returns null when the pull request does not target the default branch", async () => {
+    const fake = io({ readDefaultBranch: async () => "trunk" });
+    expect(await resolvePrMergeBase(fake.io)).toBeNull();
+  });
+
+  test("does not read the tip when the pull request does not target the default branch", async () => {
+    const fake = io({ readDefaultBranch: async () => "trunk" });
+    await resolvePrMergeBase(fake.io);
+    expect(fake.calls).not.toContain("readBranchSha main");
+  });
+
+  test("reports that the pull request does not target the default branch", async () => {
+    const seen: string[] = [];
+    const fake = io({ readDefaultBranch: async () => "trunk" });
+    await resolvePrMergeBase(fake.io, (message) => seen.push(message));
+    expect(seen).toEqual([
+      "the pull request does not target the default branch",
+    ]);
+  });
+
+  test("returns null when the default branch cannot be read", async () => {
+    const fake = io({
+      readDefaultBranch: async () => {
+        throw new Error("404");
+      },
+    });
+    expect(await resolvePrMergeBase(fake.io)).toBeNull();
   });
 
   test("returns null when the tip of the base branch cannot be read", async () => {

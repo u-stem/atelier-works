@@ -152,8 +152,47 @@ describe("parseZeroContextPatch", () => {
       {
         addedLines: [],
         removedLineCount: 0,
+        shrinkingHunkCount: 0,
       },
     );
+  });
+
+  test("counts no shrinking hunk when every removed line is replaced by a code line", () => {
+    expect(
+      parseZeroContextPatch("@@ -1,2 +1,2 @@\n-a\n-b\n+c\n+d\n")
+        .shrinkingHunkCount,
+    ).toBe(0);
+  });
+
+  test("counts a hunk whose added lines are only comments as shrinking", () => {
+    expect(
+      parseZeroContextPatch(
+        "@@ -1 +1 @@\n-expect(a).toBe(1);\n+// expect(a).toBe(1);\n",
+      ).shrinkingHunkCount,
+    ).toBe(1);
+  });
+
+  test("counts a hunk whose added lines are only blank as shrinking", () => {
+    expect(
+      parseZeroContextPatch("@@ -1,2 +1,2 @@\n-a\n-b\n+\n+  \n")
+        .shrinkingHunkCount,
+    ).toBe(1);
+  });
+
+  test("does not let an addition in another hunk pay for a removal", () => {
+    const patch = "@@ -1,2 +0,0 @@\n-a\n-b\n@@ -9,0 +8,2 @@\n+c\n+d\n";
+    expect(parseZeroContextPatch(patch).shrinkingHunkCount).toBe(1);
+  });
+
+  test("counts only the shrinking hunks", () => {
+    const patch =
+      "@@ -1 +1 @@\n-a\n+b\n@@ -5 +5,0 @@\n-x\n@@ -9 +8 @@\n-y\n+z\n";
+    expect(parseZeroContextPatch(patch).shrinkingHunkCount).toBe(1);
+  });
+
+  test("ignores the no-newline marker when it counts the lines of a hunk", () => {
+    const patch = "@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n";
+    expect(parseZeroContextPatch(patch).shrinkingHunkCount).toBe(0);
   });
 });
 
@@ -169,8 +208,8 @@ type GitScript = {
   readonly prPatches?: Readonly<Record<string, string>>;
   /** baseの先端から回の開始時のheadまでの`-U0`の出力。先端のshaを引数に持つ呼び出しに返す。 */
   readonly tipPatches?: Readonly<Record<string, string>>;
-  /** merge-baseから回の開始時のheadまでの`--raw`の出力。 */
-  readonly prRaw?: string;
+  /** merge-baseから回の開始時のheadまでの`--numstat -z`の出力。 */
+  readonly prNumstat?: string;
   readonly fail?: string;
 };
 
@@ -191,10 +230,8 @@ function fakeGit(script: GitScript): {
     if (argv.includes("ls-files")) {
       return result((script.untracked ?? []).map((p) => `${p}\0`).join(""));
     }
-    if (argv.includes("--raw")) {
-      if (argv.includes(MERGE_BASE)) return result(script.prRaw ?? "");
-      return result(script.tracked ?? "");
-    }
+    if (argv.includes("--numstat")) return result(script.prNumstat ?? "");
+    if (argv.includes("--raw")) return result(script.tracked ?? "");
     if (argv.includes("-U0")) {
       const spec = (argv[argv.length - 1] ?? "").replace(":(literal)", "");
       if (argv.includes(MERGE_BASE))
@@ -258,6 +295,7 @@ describe("collectCiFixChanges", () => {
         mode: "100644",
         addedLines: ["new"],
         removedLineCount: 1,
+        shrinkingHunkCount: 0,
       },
     ]);
   });
@@ -528,7 +566,9 @@ describe("collectCiFixChanges", () => {
 
 describe("parseHunkRanges", () => {
   test("reads the removed and added line ranges of a hunk", () => {
-    expect(parseHunkRanges("@@ -3,2 +5,4 @@\n-a\n-b\n+c\n")).toEqual({
+    expect(
+      parseHunkRanges("@@ -3,2 +5,4 @@\n-a\n-b\n+c\n+d\n+e\n+f\n"),
+    ).toEqual({
       removed: [{ start: 3, count: 2 }],
       added: [{ start: 5, count: 4 }],
       newFile: false,
@@ -570,6 +610,34 @@ describe("parseHunkRanges", () => {
 
   test("returns nothing for a hunk header that cannot be read", () => {
     expect(parseHunkRanges("@@ garbage @@\n")).toBeNull();
+  });
+
+  test("returns nothing when a header counts more added lines than the hunk has", () => {
+    expect(parseHunkRanges("@@ -1 +1,3 @@\n-a\n+b\n")).toBeNull();
+  });
+
+  test("returns nothing when a header counts fewer removed lines than the hunk has", () => {
+    expect(parseHunkRanges("@@ -1 +1 @@\n-a\n-b\n+c\n")).toBeNull();
+  });
+
+  test("leaves out the line that only gained a newline at the end of the old side", () => {
+    const patch = "@@ -3 +3,2 @@\n-x\n\\ No newline at end of file\n+x\n+new\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([{ start: 4, count: 1 }]);
+  });
+
+  test("leaves out the line that only lost its newline at the end of the new side", () => {
+    const patch = "@@ -3 +3 @@\n-x\n+x\n\\ No newline at end of file\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([]);
+  });
+
+  test("keeps a new last line without a newline as added", () => {
+    const patch = "@@ -3,0 +4 @@\n+y\n\\ No newline at end of file\n";
+    expect(parseHunkRanges(patch)?.added).toEqual([{ start: 4, count: 1 }]);
+  });
+
+  test("keeps the removed range when it leaves out an added line", () => {
+    const patch = "@@ -3 +3,2 @@\n-x\n\\ No newline at end of file\n+x\n+new\n";
+    expect(parseHunkRanges(patch)?.removed).toEqual([{ start: 3, count: 1 }]);
   });
 
   test("returns empty ranges for a mode-only change", () => {
@@ -690,7 +758,7 @@ describe("collectCiFixChanges against the base of the pull request", () => {
 
   test("reads the added lines of a file that the base does not have as the whole file", async () => {
     const whole = {
-      [TEST]: "diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n+a\n",
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
     };
     expect(
       await removedOutside({
@@ -701,35 +769,77 @@ describe("collectCiFixChanges against the base of the pull request", () => {
     ).toBe(0);
   });
 
-  test("leaves the count unknown for a new file when the pull request deleted a test", async () => {
+  test("leaves the count unknown for a new file when the pull request removed lines from a test", async () => {
     const whole = {
-      [TEST]: "diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n+a\n",
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
     };
     expect(
       await removedOutside({
         patches: REPLACES_LINE_3,
         prPatches: whole,
         tipPatches: whole,
-        prRaw: raw(["100644", "000000", "D", "tests/lib/old.test.ts"]),
+        prNumstat: "0\t5\ttests/lib/old.test.ts\0",
       }),
     ).toBeUndefined();
   });
 
-  test("counts a new file normally when the pull request deleted only a source file", async () => {
+  test("leaves the count unknown for a new file when the pull request changed a line of another test", async () => {
     const whole = {
-      [TEST]: "diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n+a\n",
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
     };
     expect(
       await removedOutside({
         patches: REPLACES_LINE_3,
         prPatches: whole,
         tipPatches: whole,
-        prRaw: raw(["100644", "000000", "D", "f/factory/lib/old.ts"]),
+        prNumstat: "1\t1\ttests/lib/other.test.ts\0",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("leaves the count unknown for a new file when the pull request changed a binary test file", async () => {
+    const whole = {
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
+    };
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: whole,
+        tipPatches: whole,
+        prNumstat: "-\t-\ttests/lib/data.test.bin\0",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("counts a new file normally when the pull request only added lines to tests", async () => {
+    const whole = {
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
+    };
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: whole,
+        tipPatches: whole,
+        prNumstat: "7\t0\ttests/lib/other.test.ts\0",
       }),
     ).toBe(0);
   });
 
-  test("does not list the files of the pull request for a file that the base has", async () => {
+  test("counts a new file normally when the pull request removed lines only from a source file", async () => {
+    const whole = {
+      [TEST]: `diff --git a/x b/x\nnew file mode 100644\n@@ -0,0 +1,9 @@\n${"+a\n".repeat(9)}`,
+    };
+    expect(
+      await removedOutside({
+        patches: REPLACES_LINE_3,
+        prPatches: whole,
+        tipPatches: whole,
+        prNumstat: "0\t5\tf/factory/lib/old.ts\0",
+      }),
+    ).toBe(0);
+  });
+
+  test("does not read the numstat of the pull request for a file that the base has", async () => {
     const { run, argvs } = fakeGit({
       tracked: MODIFIED,
       patches: REPLACES_LINE_3,
@@ -742,9 +852,7 @@ describe("collectCiFixChanges against the base of the pull request", () => {
       SHA,
       options(async () => BASE),
     );
-    const listing = argvs.filter(
-      (argv) => argv.includes("--raw") && argv.includes(MERGE_BASE),
-    );
+    const listing = argvs.filter((argv) => argv.includes("--numstat"));
     expect(listing).toEqual([]);
   });
 
@@ -782,6 +890,39 @@ describe("collectCiFixChanges against the base of the pull request", () => {
     );
     const against = argvs.find((argv) => argv.includes(MERGE_BASE)) ?? [];
     expect(against.slice(-2)).toEqual(["--", `:(literal)${TEST}`]);
+  });
+
+  test("keeps hunks apart in every diff it reads", async () => {
+    const { run, argvs } = fakeGit({
+      tracked: MODIFIED,
+      patches: REPLACES_LINE_3,
+      prPatches: ADDED_3_TO_4,
+      tipPatches: ADDED_3_TO_4,
+    });
+    await collectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      options(async () => BASE),
+    );
+    const patchRuns = argvs.filter((argv) => argv.includes("-U0"));
+    expect(
+      patchRuns.map((argv) => argv.includes("--inter-hunk-context=0")),
+    ).toEqual([true, true, true]);
+  });
+
+  test("reports a hunk that replaces a line with a comment as shrinking", async () => {
+    const { run } = fakeGit({
+      tracked: MODIFIED,
+      patches: {
+        [TEST]: "@@ -3 +3 @@\n-expect(a).toBe(1);\n+// expect(a).toBe(1);\n",
+      },
+    });
+    const { changes } = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+    });
+    expect(changes[0]?.shrinkingHunkCount).toBe(1);
   });
 
   test("does not resolve the base when the test only adds lines", async () => {

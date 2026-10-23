@@ -29,10 +29,10 @@ locks:
   f/factory/lib/check_sandbox: 9579c901bc49a4a238e7e22be924d911cf1c17b2e6b1a78b594045b387672b7b
   f/factory/lib/check_sandbox_reasons: 1c162edbcb7aff4ae5b1a282fceca8b4072543c845054a50f3af07f1fffc11e2
   f/factory/lib/ci_fix_classify: eb35e7112fa3b72e97c4b37137f7bcc4d6942b52a60736d4b5a959a436b11092
-  f/factory/lib/ci_fix_paths: 840d56f16a3f85e1853898d8df8ad3d3484e5ba368bd974e2495e625f7e0e68e
-  f/factory/lib/ci_fix_pr_base: 766e28a9f193d3af053b4fe7965881ef0353101d70345198a0eb011020a6460a
+  f/factory/lib/ci_fix_paths: 28a4c10c085759fc366002b7928aa44cc3d9c1df3616459b6f7ec0d74e5578e1
+  f/factory/lib/ci_fix_pr_base: b4dcc6194baebfb3874d47247a7dc8412608eabcc6571c778b22c29b107640f1
   f/factory/lib/ci_fix_prompt: c96988f34a27420e9493ab7ad0f904b49a39c17b11036f5a44f9de42a2885a47
-  f/factory/lib/ci_fix_round: 95baf45ca98d3d50bc8017b5ae29e82cec3886b4386da8c0c09a19ce8d5a8b89
+  f/factory/lib/ci_fix_round: bd851b270706104c91c25848137c4391e17017fa157f59b7190dc31e7b99c807
   f/factory/lib/ci_log_support: 82bfb98e03c1afb71b08c3b95d72fd95d8016f853373268b5c3fbbdd416d8a9e
   f/factory/lib/ci_metadata_rehash: 990a7c9511d17bfe01682e83716b065765d1cf7eaad98e3682737c613d18a4e3
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a

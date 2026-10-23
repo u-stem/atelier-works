@@ -43,6 +43,7 @@ export type CiFixChange = {
    * 省略は不明であり、基点から持っていた行を消したものとして扱う。
    */
   readonly removedOutsidePrLineCount?: number;
+  readonly shrinkingHunkCount?: number;
 };
 
 export type CiFixPathInput = {
@@ -378,6 +379,10 @@ function breaksTestLineRule(change: CiFixChange): boolean {
   if (change.status !== "modified") return true;
   if (change.removedLineCount > change.addedLines.length) return true;
   return change.removedOutsidePrLineCount !== 0;
+}
+
+export function countMeaningfulLines(_lines: readonly string[]): number {
+  return 0;
 }
 
 /** 1件の変更の最初の違反の理由。違反が無ければnull。 */

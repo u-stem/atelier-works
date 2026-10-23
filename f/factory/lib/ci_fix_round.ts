@@ -875,6 +875,7 @@ export function parseRawDiffZ(output: string): RawDiffEntry[] {
 export function parseZeroContextPatch(patch: string): {
   readonly addedLines: string[];
   readonly removedLineCount: number;
+  readonly shrinkingHunkCount: number;
 } {
   const addedLines: string[] = [];
   let removedLineCount = 0;
@@ -892,7 +893,7 @@ export function parseZeroContextPatch(patch: string): {
       removedLineCount += 1;
     }
   }
-  return { addedLines, removedLineCount };
+  return { addedLines, removedLineCount, shrinkingHunkCount: 0 };
 }
 
 function gitEnv(): Record<string, string> {

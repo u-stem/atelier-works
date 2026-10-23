@@ -2,7 +2,12 @@
 // CI回が、PRが足した行と、基点から持っていた行を見分ける基準になる。
 // 求められなければnullを返し、呼び出し側は基点の行を消したものとして拒否に倒す。
 
-import { type GhClient, getBranchSha, getPr } from "./github.ts";
+import {
+  type GhClient,
+  getBranchSha,
+  getDefaultBranch,
+  getPr,
+} from "./github.ts";
 import { fetchCommit } from "./metadata_git_ports.ts";
 import { assertSha } from "./types.ts";
 import {
@@ -28,6 +33,7 @@ export type PrBase = {
 export type PrMergeBaseIo = {
   /** PRが向いているbaseブランチの名前。 */
   readonly readBaseRef: () => Promise<string>;
+  readonly readDefaultBranch: () => Promise<string>;
   /** ブランチの今の先端のsha。 */
   readonly readBranchSha: (branch: string) => Promise<string>;
   /** commit`sha`をローカルのcloneに取り込む。追跡refは動かさない。 */
@@ -102,6 +108,7 @@ export function githubPrMergeBaseIo(input: {
   return {
     readBaseRef: async () =>
       (await getPr(client, owner, repo, input.prNumber)).baseRef,
+    readDefaultBranch: () => getDefaultBranch(client, owner, repo),
     readBranchSha: (branch) => getBranchSha(client, owner, repo, branch),
     fetchCommit: (sha) =>
       fetchCommit({
