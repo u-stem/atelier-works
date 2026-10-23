@@ -28,6 +28,7 @@ const FLOW_REFERENCES: ReadonlyArray<readonly [RegExp, readonly string[]]> = [
   [/\bDEPENDABOT_FLOW_PATH\b/, ["dependabot"]],
   [/\bPR_REVIEW_FLOW_PATH\b/, ["pr_review"]],
   [/\bPR_FIX_FLOW_PATH\b/, ["pr_fix"]],
+  [/\bMANUAL_INTAKE_FLOW_PATH\b/, ["manual_intake"]],
   [/\blaunchPrFixFlow\b/, ["pr_fix"]],
   [/\bstartImplement\b/, ["implement"]],
   [/\brerouteRequirementsGap\b/, ["pipeline"]],
