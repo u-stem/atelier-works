@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  MANUAL_INTAKE_REFUSAL_REASONS,
 } from "./writeResults.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -137,5 +139,52 @@ describe("isNoticeResolveResult", () => {
     expect(
       isNoticeResolveResult({ ok: true, status: "resolved", notice_id: 0 }),
     ).toBe(false);
+  });
+});
+
+describe("isManualIntakeSubmitResult", () => {
+  test("accepts a started flow", () => {
+    expect(
+      isManualIntakeSubmitResult({ refused: false, flow_job_id: JOB }),
+    ).toBe(true);
+  });
+
+  test.each(MANUAL_INTAKE_REFUSAL_REASONS)(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isManualIntakeSubmitResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("lists the ten refusal reasons", () => {
+    expect(MANUAL_INTAKE_REFUSAL_REASONS).toHaveLength(10);
+  });
+
+  test("rejects a reason it does not know", () => {
+    expect(
+      isManualIntakeSubmitResult({ refused: true, reason: "something_new" }),
+    ).toBe(false);
+  });
+
+  test("rejects a refusal without a reason", () => {
+    expect(isManualIntakeSubmitResult({ refused: true })).toBe(false);
+  });
+
+  test("rejects a started flow without a job id", () => {
+    expect(isManualIntakeSubmitResult({ refused: false })).toBe(false);
+  });
+
+  test("rejects a started flow whose job id is not a string", () => {
+    expect(isManualIntakeSubmitResult({ refused: false, flow_job_id: 3 })).toBe(
+      false,
+    );
+  });
+
+  test("rejects a result without refused", () => {
+    expect(isManualIntakeSubmitResult({ flow_job_id: JOB })).toBe(false);
+  });
+
+  test("rejects null", () => {
+    expect(isManualIntakeSubmitResult(null)).toBe(false);
   });
 });

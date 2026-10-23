@@ -2,6 +2,7 @@
 // 候補は、選べば必ず通るリポジトリだけである。設定の他の値は返さない。
 
 import { describe, expect, test } from "bun:test";
+import { isIntakeTargets } from "../../console/src/api/guards/intakeTargets.ts";
 import type { FactoryConfig } from "../../f/factory/lib/types.ts";
 import { main, runIntakeTargets } from "../../f/factory/steps/console_query.ts";
 
@@ -92,6 +93,18 @@ describe("intake_targets", () => {
       ["owner", "repo"],
       ["owner", "repo"],
     ]);
+  });
+});
+
+describe("the console guard", () => {
+  test("accepts the targets as Windmill delivers them", async () => {
+    const config = {
+      ...CONFIG,
+      repo_allowlist: ["https://github.com/octo-owner/widgets"],
+    };
+    expect(
+      isIntakeTargets(JSON.parse(JSON.stringify(await targets(config)))),
+    ).toBe(true);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   MAX_REASON_LENGTH,
   resolveNotice,
   retryWorkItem,
+  submitManualIntake,
 } from "./writes.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -260,5 +261,73 @@ describe("resolveNotice", () => {
     expect(await failureOf(resolveNotice(4, { fetchFn }))).toEqual({
       kind: "unauthorized",
     });
+  });
+});
+
+describe("submitManualIntake", () => {
+  const INPUT = {
+    owner: "octo-owner",
+    repo: "widgets",
+    title: "Add a widget",
+    body: "Add a widget to the page.",
+    acceptanceCriteria: "It renders.",
+  };
+  const STARTED = { refused: false, flow_job_id: JOB };
+
+  test("calls manual_intake_submit", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    await submitManualIntake(INPUT, { fetchFn });
+    expect(calls[0]?.url).toBe(
+      "/api/w/factory/jobs/run_wait_result/p/f/factory/manual_intake_submit",
+    );
+  });
+
+  test("sends exactly the inputs of the script", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    await submitManualIntake(INPUT, { fetchFn });
+    expect(calls[0]?.body).toEqual({
+      owner: "octo-owner",
+      repo: "widgets",
+      title: "Add a widget",
+      body: "Add a widget to the page.",
+      acceptance_criteria: "It renders.",
+    });
+  });
+
+  test("returns the started flow", async () => {
+    const { fetchFn } = respondWith(STARTED);
+    expect(await submitManualIntake(INPUT, { fetchFn })).toEqual(STARTED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const { fetchFn } = respondWith({
+      refused: true,
+      reason: "repo_not_allowed",
+    });
+    expect(await submitManualIntake(INPUT, { fetchFn })).toEqual({
+      refused: true,
+      reason: "repo_not_allowed",
+    });
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ refused: true, reason: "unknown" });
+    expect(await failureOf(submitManualIntake(INPUT, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+
+  test("fails with the classified error when the job fails", async () => {
+    const { fetchFn } = respondWith({ error: { message: "boom" } }, 500);
+    expect(await failureOf(submitManualIntake(INPUT, { fetchFn }))).toEqual({
+      kind: "job_failed",
+      message: "boom",
+    });
+  });
+
+  test("does not retry after a failure", async () => {
+    const { fetchFn, calls } = respondWith({ error: { message: "boom" } }, 500);
+    await submitManualIntake(INPUT, { fetchFn }).catch(() => undefined);
+    expect(calls).toHaveLength(1);
   });
 });

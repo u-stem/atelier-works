@@ -17,6 +17,7 @@ import {
   isAuditKickoffResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
 } from "./guards/writeResults.ts";
@@ -131,4 +132,20 @@ export function resolveNotice(
     isNoticeResolveResult,
     options,
   );
+}
+
+type ManualIntakeInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly title: string;
+  readonly body: string;
+  readonly acceptanceCriteria: string;
+};
+
+// 仮の実装。テストが失敗することを確かめるための値だけを返す。
+export function submitManualIntake(
+  _input: ManualIntakeInput,
+  _options: RunScriptOptions = {},
+): Promise<ManualIntakeSubmitResult> {
+  return Promise.resolve({ refused: false });
 }

@@ -120,3 +120,19 @@ export function isNoticeResolveResult(
     isPositiveInteger(value.notice_id)
   );
 }
+
+// 仮の実装。テストが失敗することを確かめるための値だけを返す。
+export type ManualIntakeRefusalReason = string;
+
+export const MANUAL_INTAKE_REFUSAL_REASONS: readonly ManualIntakeRefusalReason[] =
+  [];
+
+export type ManualIntakeSubmitResult = {
+  readonly refused: boolean;
+};
+
+export function isManualIntakeSubmitResult(
+  _value: unknown,
+): _value is ManualIntakeSubmitResult {
+  return false;
+}

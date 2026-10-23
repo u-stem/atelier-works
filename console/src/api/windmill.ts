@@ -11,6 +11,7 @@ export const SCRIPT_PATHS = {
   approval_decide: "f/factory/approval_decide",
   retry_work_item: "f/factory/retry_work_item",
   audit_kickoff: "f/factory/audit_kickoff",
+  manual_intake_submit: "f/factory/manual_intake_submit",
   notice_resolve: "f/factory/notice_resolve",
 } as const;
 
