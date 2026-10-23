@@ -3,8 +3,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // 保留の表への書き込みは、`f/factory/lib/holds.ts`だけに置く。
-// 他のファイルが書く関数を読み込んだり、表へのINSERT・UPDATE・DELETEの文を持ったりすると、
-// 保留を置く主体を絞った意味が無くなる。
+// このテストは、他のファイルが書く関数を読み込んでいないことと、表へ書くSQLの文字列を持たないことを検出する。
+// 検出は文字列のヒューリスティックで、書き込みを止める仕組みではない。
+// 次の入力は見つけられない。
+// - SQLの文を文字列の連結やテンプレートで組み立てるコード(`UPDATE factory.${"holds"}`など)
+// - 保留のモジュールの名前を、連結や変数で組み立てるimport
+// - `f/factory/`の外のコード(`scripts/`など)。migrationは、表を作るもの以外を別に検査する。
+// Windmillのscriptは同じdatatableの接続を持つので、これらをすり抜けるコードは表を書ける。
 //
 // 後の段で`cleanup_db`が期限の過ぎた行を消すときは、削除を`holds.ts`の関数として置き、
 // `cleanup_db`だけがその関数を読み込んでよいことにする。この例外は、関数を置く段で足す。
@@ -31,9 +36,17 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-/** 保留のモジュールを指す指定。`pr_conflict_fix_holds.ts`のような別の名前は含めない。 */
+/**
+ * 保留のモジュールを指す指定。`pr_conflict_fix_holds.ts`のような別の名前は含めない。
+ * 拡張子の違い(`.js`、`.mjs`、`.cts`など)と大文字小文字は、実行環境が同じファイルに解決しうるので含める。
+ * 相対(`./`、`../`)、絶対(`/f/factory/lib/holds`。`tsconfig.json`の`paths`が解決する)、`file:`だけを数える。
+ * `f/factory/lib/holds.ts`のようなリポジトリのパスの文字列は、どのimportからも解決されないので数えない。
+ */
 function isHoldsSpecifier(specifier: string): boolean {
-  return /(^|\/)holds(\.ts)?$/.test(specifier);
+  return (
+    /^(\.|\/|file:)/i.test(specifier) &&
+    /(^|\/)holds(\.[cm]?[jt]sx?)?([?#].*)?$/i.test(specifier)
+  );
 }
 
 type ModuleReference = {
@@ -42,35 +55,59 @@ type ModuleReference = {
   readonly specifier: string;
 };
 
-/** 保留のモジュールを読み込む、再exportする、動的に読む箇所をすべて返す。 */
+/** JavaScriptのコメントを空白にする。コメントの中の引用符が、節の解析を狂わせないようにするためである。 */
+function stripJsComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
+const HOLDS_LITERAL =
+  /["'`]([^"'`\s]*holds(?:\.[cm]?[jt]sx?)?(?:[?#][^"'`\s]*)?)["'`]/gi;
+
+/**
+ * 保留のモジュールを指す文字列を探し、その直前のimport・export・requireの節を読む。
+ * 節は直前のキーワードから文字列までを取り、コメントを除いてから読む。
+ * 節の中の引用符や、同じ行の前にある`//`を含む文字列に、読み取りが左右されない。
+ */
 function holdsReferences(source: string): ModuleReference[] {
   const found: ModuleReference[] = [];
-  for (const match of source.matchAll(
-    /\b(import|export)\b([^;'"`]*?)\bfrom\s*["']([^"']+)["']/g,
-  )) {
-    const [, keyword = "", clause = "", specifier = ""] = match;
-    if (isHoldsSpecifier(specifier)) {
+  for (const match of source.matchAll(HOLDS_LITERAL)) {
+    const specifier = match[1] ?? "";
+    if (!isHoldsSpecifier(specifier)) continue;
+    const start = match.index ?? 0;
+    const before = source.slice(Math.max(0, start - 2000), start);
+    const keyword = [...before.matchAll(/\b(import|export|require)\b/g)].at(-1);
+    if (keyword === undefined) {
+      found.push({ kind: "import", clause: "?", specifier });
+      continue;
+    }
+    const clause = stripJsComments(
+      before.slice((keyword.index ?? 0) + keyword[0].length),
+    ).trim();
+    if (clause.startsWith("(")) {
       found.push({
-        kind: keyword === "export" ? "export" : "import",
-        clause: clause.trim(),
+        kind: keyword[1] === "require" ? "require" : "dynamic",
+        clause,
         specifier,
       });
+      continue;
     }
+    found.push({
+      kind: keyword[1] === "export" ? "export" : "import",
+      clause: clause.replace(/\bfrom\s*$/, "").trim(),
+      specifier,
+    });
   }
-  for (const match of source.matchAll(/\bimport\s+["']([^"']+)["']/g)) {
-    const specifier = match[1] ?? "";
-    if (isHoldsSpecifier(specifier)) {
-      found.push({ kind: "import", clause: "", specifier });
-    }
-  }
-  for (const match of source.matchAll(/\b(import|require)\s*\(\s*([^)]*)\)/g)) {
-    const [, keyword = "", argument = ""] = match;
-    if (/holds/.test(argument) || !/^["'][^"']*["']$/.test(argument.trim())) {
-      found.push({
-        kind: keyword === "import" ? "dynamic" : "require",
-        clause: argument.trim(),
-        specifier: argument.trim(),
-      });
+  // 引数が文字列でない動的なimportとrequireは、何を読むか分からないので、保留のモジュールを読むものとして扱う。
+  for (const text of [source, stripJsComments(source)]) {
+    for (const match of text.matchAll(/\b(import|require)\s*\(\s*([^)]*)\)/g)) {
+      const argument = (match[2] ?? "").trim();
+      if (!/^["'][^"']*["']$/.test(argument)) {
+        found.push({
+          kind: match[1] === "import" ? "dynamic" : "require",
+          clause: argument,
+          specifier: argument,
+        });
+      }
     }
   }
   return found;
@@ -192,6 +229,18 @@ describe("onlyReadsHolds", () => {
     expect(onlyReadsHolds('const m = require("./holds");')).toBe(false);
   });
 
+  test("rejects the write function imported by an absolute path", () => {
+    expect(
+      onlyReadsHolds('import { placeHold } from "/f/factory/lib/holds";'),
+    ).toBe(false);
+  });
+
+  test("does not take a repository path string for an import", () => {
+    expect(
+      onlyReadsHolds('export const PATHS = ["f/factory/lib/holds.ts"];'),
+    ).toBe(true);
+  });
+
   test("rejects an import whose clause has a comment with a quote", () => {
     expect(
       onlyReadsHolds(`import { placeHold /* writer's */ } from "./holds.ts";`),
@@ -244,6 +293,15 @@ describe("onlyReadsHolds", () => {
   });
 });
 
+/** SQLのコメントを空白にした文字列を、コメントを除く範囲ごとに返す。PostgreSQLはコメントを空白として読む。 */
+function sqlVariants(source: string): string[] {
+  const withoutBlock = source.replace(/\/\*[\s\S]*?\*\//g, " ");
+  // 行コメントを除くと、同じ行の`"--"`のような文字列の後ろが消えて、文を隠せる。
+  // そのため、除く前の文字列も検査に使う。
+  const withoutLine = withoutBlock.replace(/--[^\n]*/g, " ");
+  return [source, withoutBlock, withoutLine];
+}
+
 /** 空白と引用符をそろえて、SQLの文を大文字小文字を区別せずに探せる形にする。 */
 function normalizeSql(source: string): string {
   return source
@@ -253,11 +311,18 @@ function normalizeSql(source: string): string {
     .toUpperCase();
 }
 
+function matchesAny(source: string, patterns: readonly RegExp[]): boolean {
+  return sqlVariants(source).some((variant) => {
+    const normalized = normalizeSql(variant);
+    return patterns.some((pattern) => pattern.test(normalized));
+  });
+}
+
 const WRITE_STATEMENT =
-  /(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE( TABLE)?|DROP TABLE|ALTER TABLE|COPY)( IF EXISTS)?( ONLY)? (FACTORY\.)?HOLDS\b/;
+  /(INSERT INTO|UPDATE|DELETE FROM|MERGE INTO|TRUNCATE( TABLE)?|DROP TABLE|ALTER TABLE|COPY)( IF EXISTS)?( ONLY)? (FACTORY\.)?HOLDS\b/;
 
 function writesHolds(source: string): boolean {
-  return WRITE_STATEMENT.test(normalizeSql(source));
+  return matchesAny(source, [WRITE_STATEMENT]);
 }
 
 describe("writesHolds", () => {
@@ -385,12 +450,21 @@ const HOLDS_MIGRATION_FILES = [
 ];
 const MIGRATIONS_DIR = "migrations/datatable/main";
 
+/** migrationが表の定義を変える文。インデックスやトリガーを足すもの、名前がholds_で始まるインデックスの変更を含む。 */
+const DEFINITION_STATEMENTS: readonly RegExp[] = [
+  WRITE_STATEMENT,
+  /\bCREATE (UNIQUE )?INDEX\b[^;]*? ON (ONLY )?(FACTORY\.)?HOLDS\b/,
+  /\bCREATE (TRIGGER|RULE|POLICY)\b[^;]*? ON (ONLY )?(FACTORY\.)?HOLDS\b/,
+  /\b(DROP|ALTER) INDEX( CONCURRENTLY)?( IF EXISTS)? (FACTORY\.)?HOLDS_/,
+];
+
 /** 表を作るmigration以外のうち、`factory.holds`に書き込むか定義を変えるものの名前を返す。 */
 function migrationViolations(
   files: Readonly<Record<string, string>>,
 ): string[] {
-  void files;
-  return [];
+  return Object.entries(files)
+    .filter(([, sql]) => matchesAny(sql, DEFINITION_STATEMENTS))
+    .map(([name]) => name);
 }
 
 function otherMigrations(): Record<string, string> {

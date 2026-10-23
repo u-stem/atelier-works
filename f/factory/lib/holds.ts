@@ -3,15 +3,30 @@
 // 保留は「この対象を進めないで」を、期限つきで伝える。止めるためだけに使い、
 // 保留があることが何かを許可することはない。
 // 表への書き込み(`placeHold`と`releaseHold`)は、このファイルだけに置く。
-// 他のファイルは、読み取りの`listActiveHolds`と`listInvalidHolds`だけを読み込んでよい
-// (`tests/scripts/hold_wiring.test.ts`が固定する)。
-// 書き込みの関数は、`sql`に既定値を持たせない。workerの既定のクライアントから呼べないようにするためである。
+// 他のファイルは、読み取りの`listActiveHolds`と`listInvalidHolds`だけを読み込んでよい。
+// この決まりを守らせるのは、`tests/scripts/hold_wiring.test.ts`のimportとSQLの文字列の走査だけである。
+// `sql`に既定値を持たせないのは、呼び出し側に接続を選ばせるためで、書き込みを止める仕組みではない。
+// Windmillのscriptは同じdatatableの接続を持つので、走査をすり抜けるコードは表を書ける。
 //
-// 保護の外のモジュールに判定が依存しないよう、`Outcome`型と表示の補助をこのファイルに持つ。
+// 保護の外のモジュールに判定が依存しないよう、このファイルは何もimportしない。
+// `Outcome`型、表示の補助、接続の型(`HoldSqlClient`)を、このファイルに持つ。
 
-import type { SqlClient, SqlRow } from "./db.ts";
+/**
+ * 行の値。`lib/db.ts`の`SqlRow`と同じ形で、取り込まずに持つ。
+ */
+export type HoldSqlRow = Record<string, unknown>;
 
-export type HoldSqlClient = SqlClient;
+/**
+ * タグ付きテンプレートのSQLの接続。`lib/db.ts`の`SqlClient`と同じ形で、取り込まずに持つ。
+ * 互換は`tests/lib/holds_db.test.ts`が型検査で確かめる。
+ */
+export type HoldSqlClient = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => {
+  fetch(): Promise<HoldSqlRow[]>;
+  execute(): Promise<void>;
+};
 
 export const HOLD_SCOPES = ["merge", "claim"] as const;
 export type HoldScope = (typeof HOLD_SCOPES)[number];
@@ -277,7 +292,7 @@ function toIso(value: unknown): string | null {
  * `released_at`と`released_by`は、両方がnullか、両方がnullでないときだけ受け付ける。
  * 解析に失敗した行は、破損として扱う。
  */
-export function parseHoldRow(row: SqlRow): Outcome<HoldRow> {
+export function parseHoldRow(row: HoldSqlRow): Outcome<HoldRow> {
   const id = toIdNumber(row.id);
   if (id === null) return fail("a row has an invalid id");
   if (!isHoldScope(row.scope)) return fail(`hold ${id} has an invalid scope`);
@@ -373,7 +388,7 @@ function corruptFailure(detail: string): HoldReadOutcome<never> {
 }
 
 function parseRows(
-  rows: readonly SqlRow[],
+  rows: readonly HoldSqlRow[],
 ): HoldReadOutcome<readonly HoldRow[]> {
   const parsed: HoldRow[] = [];
   for (const row of rows) {
@@ -396,11 +411,11 @@ function parseRows(
  */
 export async function listActiveHolds(
   filter: HoldFilter,
-  sql: SqlClient,
+  sql: HoldSqlClient,
 ): Promise<HoldReadOutcome<readonly HoldRow[]>> {
   const scope = filter.scope ?? null;
   const target = filter.target?.toLowerCase() ?? null;
-  let rows: SqlRow[];
+  let rows: HoldSqlRow[];
   try {
     rows = await sql`
       SELECT id, scope, target, reason, holder_kind, holder,
@@ -427,11 +442,11 @@ export async function listActiveHolds(
  */
 export async function listInvalidHolds(
   filter: HoldFilter,
-  sql: SqlClient,
+  sql: HoldSqlClient,
 ): Promise<HoldReadOutcome<readonly HoldRow[]>> {
   const scope = filter.scope ?? null;
   const target = filter.target?.toLowerCase() ?? null;
-  let rows: SqlRow[];
+  let rows: HoldSqlRow[];
   try {
     rows = await sql`
       SELECT id, scope, target, reason, holder_kind, holder,
@@ -459,7 +474,7 @@ function writeFailure<T>(err: unknown): Outcome<T> {
 }
 
 function toReturnedId(
-  rows: readonly SqlRow[],
+  rows: readonly HoldSqlRow[],
 ): Outcome<{ readonly id: number }> {
   const id = toIdNumber(rows[0]?.id);
   return id === null ? fail("the database returned an invalid id") : ok({ id });
@@ -467,17 +482,25 @@ function toReturnedId(
 
 /**
  * 保留を置く。自動コミットの2つの文で行う。
- * (1) 同じ(scope, target)の未解除の行のうち、有効の条件を満たさないものを閉じる。
- *     期限切れは`expired`、未来の作成時刻と上限を超えた行は`invalid`を`released_by`に入れる。
+ * 入力は`validatePlaceInput`で検証してから使う。検証を通らない入力は、文を送らずに失敗を返す。
+ * holderとholder_kindの対応や制御文字は、表の制約が拾わないためである。
+ * (1) 同じ(scope, target)の未解除の行のうち、無効なものを閉じる。
+ *     期限切れ(`expires_at <= now()`)は`expired`、1分より後の作成時刻と上限を超えた期限は`invalid`を`released_by`に入れる。
+ *     作成時刻が`now()`より1分以内に後の行は閉じない。別の主体が置いたばかりの行は、
+ *     READ COMMITTEDと`now()`が文の開始時刻であるために、作成時刻がこの文の`now()`より少し後になりうる。
+ *     その行を無効として閉じると、有効な保留を消すためである。
  *     mergeは主体ごとに重ねられるので、同じ`holder`の行だけを閉じる。claimは排他なので、持ち主を問わない。
  * (2) `ON CONFLICT DO NOTHING`で挿入する。戻りが空なら、有効な保留が既にある。
  * 期限は、DBが`now()`と分から作る。呼び出し側は時刻を渡せない。
  * 間で失敗しても、(1)が閉じるのは無効な行だけなので、表は壊れない。
  */
 export async function placeHold(
-  input: PlaceInput,
-  sql: SqlClient,
+  raw: RawPlaceInput,
+  sql: HoldSqlClient,
 ): Promise<Outcome<{ readonly id: number }>> {
+  const checked = validatePlaceInput(raw);
+  if (!checked.ok) return fail(checked.reason);
+  const input = checked.value;
   try {
     await sql`
       UPDATE factory.holds
@@ -487,7 +510,7 @@ export async function placeHold(
         AND scope = ${input.scope}
         AND target = ${input.target}
         AND (scope = 'claim' OR holder = ${input.holder})
-        AND NOT (created_at <= now() AND expires_at > now() AND expires_at <= created_at + interval '24 hours')
+        AND (expires_at <= now() OR created_at > now() + interval '1 minute' OR expires_at > created_at + interval '24 hours')
     `.execute();
     const rows = await sql`
       INSERT INTO factory.holds (scope, target, reason, holder_kind, holder, expires_at)
@@ -515,7 +538,7 @@ export async function placeHold(
 export async function releaseHold(
   id: number,
   actor: HoldActor,
-  sql: SqlClient,
+  sql: HoldSqlClient,
 ): Promise<Outcome<{ readonly id: number }>> {
   if (!Number.isSafeInteger(id) || id < 1) {
     return fail("id must be a positive integer");

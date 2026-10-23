@@ -87,18 +87,28 @@
 そのため、24時間の上限は、表の制約だけでなく、読み取りの有効条件でも効かせる。
 `isActiveHold`と`listActiveHolds`のSQLは、同じ条件を使う。
 
-期限は書き込みに頼らず、時刻で無効と数える。
+期限切れの行は、閉じられていなくても、読み取りの時点で無効と数える。
 
 ## 置く操作
 
 `placeHold`は、自動コミットの2つの文で保留を置く。
 
-1. 同じ対象の未解除の行のうち、有効の条件を満たさないものを閉じる。
+1. 同じ対象の未解除の行のうち、無効なものを閉じる。
    `merge`は同じ`holder`の行だけ、`claim`は持ち主を問わず閉じる。
-   期限切れは`expired`、未来の`created_at`と上限を超えた行は`invalid`を`released_by`に入れる。
+   期限切れの行は`expired`、`created_at`が`now()`より1分を超えて後の行と、上限を超えた行は`invalid`を`released_by`に入れる。
+   `created_at`が`now()`より1分以内に後の行は、閉じない。
 2. `ON CONFLICT DO NOTHING`で挿入する。
    戻りが空なら、有効な保留が既にある。
    阻んだ行が期限切れになった直後であれば、再実行で通る。
+
+1分の余裕は、他の主体が置いたばかりの行を閉じないためである。
+`READ COMMITTED`では`now()`が文の開始時刻なので、置いたばかりの行の`created_at`が、この文の`now()`より少し後になりうる。
+余裕は閉じる条件だけに使い、有効の条件は変えない。
+余裕の内の行は、有効ではないが閉じられもしないので、置く操作は「既に有効な保留がある」で断られる。
+
+`placeHold`は、文を送る前に`validatePlaceInput`で入力を検証する。
+通らない入力は、文を送らずに失敗を返す。
+`holder`と`holder_kind`の対応と制御文字は、表の制約が拾わないためである。
 
 1つのCTEにまとめず、2つの文に分ける。
 間で失敗しても、閉じるのは無効な行だけなので、表は壊れない。
@@ -138,21 +148,35 @@
 表が無いことは、例外のSQLSTATE(`42P01`)、エラーの文、API errorの`body`のどれかで判定する。
 回復の手順を示すのは、`corrupt`のときだけである。
 
-## 書き込みの制限
+## 書き込みの検出
 
 表への書き込みは、`holds.ts`だけに置く。
 保留を置く主体を絞るためである。
+この決まりを守らせる仕組みは無く、混入を検出するテストがある。
+Windmillのscriptはすべて同じdatatableの接続を持つので、走査をすり抜けるコードは表を書ける。
 
-- 書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。workerの既定のクライアントから呼べないようにするためである。
-- `tests/scripts/hold_wiring.test.ts`が、`f/factory/`のすべての`.ts`と`flow.yaml`を走査する。
-  `holds.ts`以外が、`listActiveHolds`と`listInvalidHolds`と型のほかを読み込まないことを固定する。
-  名前空間の読み込みと再exportも拒否する。
-- 同じテストが、`holds.ts`以外が`factory.holds`へ書くSQLの文字列を持たないことを固定する。
-  スキーマ名の無い`holds`も対象にする。
+書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。
+これは呼び出し側に接続を選ばせるためで、書き込みは止めない。
+
+`tests/scripts/hold_wiring.test.ts`は、次の3つを検出する。
+
+- `f/factory/`のすべての`.ts`と`flow.yaml`で、`holds.ts`以外が、読み取りの2つの関数と型のほかを読み込むこと。
+  名前空間の読み込み、再export、動的な読み込み、`.js`など拡張子違いの指定、絶対パスの指定も検出する。
+- 同じ範囲で、`holds.ts`以外が`factory.holds`へ書くSQLの文字列を持つこと。
+  INSERT、UPDATE、DELETE、MERGE、TRUNCATE、DROP、ALTER、COPYが対象で、スキーマ名の無い`holds`と、SQLのコメントで分割した文も含む。
+- `migrations/datatable/main/`で、表を作るmigration以外が、表への書き込みと定義の変更を持つこと。
+
+検出するのは文字列の形だけで、見つけられない入力がある。
+
+- SQLの文を文字列の連結やテンプレートで組み立てるコード
+- 保留のモジュールの名前を組み立てるimport
+- `f/factory/`とmigrationの外のコード(`scripts/`など)
+
+追加の守りは次のとおりである。
+
 - `holds.ts`とそのテスト、実DBの検査は、保護パス(`f/factory/lib/protected_paths.ts`)に入れる。
-
-`holds.ts`は`freezes.ts`を読み込まない。
-保護の外のモジュールに、判定が依存しないようにするためである。
+- 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。
+- `holds.ts`は何もimportしない。接続の型(`HoldSqlClient`)も自前で持つ。保護の外のモジュールに、判定が依存しないようにするためである。
 
 ## 反映の順序
 
@@ -161,13 +185,17 @@
 読み取りは、表が無いことを`missing_table`として返し、「保留なし」と扱わない。
 migrationが失敗すると、`self_update`は次の回で再試行する。
 
+保留を読む処理を足すPRは、表を作るmigrationの反映が済んでからマージする。
+反映済みかは、`f/factory/deployed_sha`が、表を作るmigrationのコミット以降かで確かめる。
+先にマージすると、読む処理が表の無い間に`missing_table`を受け、保留の有無を判定できないためである。
+
 ## 検査
 
 | 検査 | 確かめること |
 | --- | --- |
 | `tests/lib/holds.test.ts` | 有効の判定、入力の検証、解除の権限、行の解析、表が無いことの判定 |
-| `tests/lib/holds_db.test.ts` | 偽の`SqlClient`で、読み取りの失敗の種類、置く操作の2つの文、解除 |
-| `tests/scripts/hold_wiring.test.ts` | 書き込みが`holds.ts`だけにあること、`test-db.sh`が実DBの検査を呼ぶ位置 |
+| `tests/lib/holds_db.test.ts` | 偽の接続で、読み取りの失敗の種類、置く操作の2つの文と入力の検証、解除、接続の型の互換 |
+| `tests/scripts/hold_wiring.test.ts` | 書き込みの混入の検出、表を作る以外のmigrationが表に触れないこと、`test-db.sh`が実DBの検査を呼ぶ位置 |
 | `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる |
 
 実DBの検査は、値を定数として埋め込む検査用のクライアントで流す。
