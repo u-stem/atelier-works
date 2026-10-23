@@ -713,7 +713,9 @@ describe("rate limit wait cap", () => {
         bodyOnlyLimited("secondary rate limit SENSITIVE-BODY-TEXT"),
       ]);
       const error = await rejectionOf(getViewer(client));
-      expect(String((error as Error).message)).not.toContain("SENSITIVE");
+      expect(
+        String(error instanceof Error ? error.message : error),
+      ).not.toContain("SENSITIVE");
     });
 
     test("returns a 403 without the phrase as a plain HTTP error without waiting or retrying", async () => {
@@ -724,8 +726,8 @@ describe("rate limit wait cap", () => {
       );
       const error = await rejectionOf(getViewer(client));
       expect({
-        name: (error as Error).name,
-        status: (error as GitHubHttpError).status,
+        name: error instanceof Error ? error.name : undefined,
+        status: error instanceof GitHubHttpError ? error.status : undefined,
         sleeps,
         calls: calls.length,
       }).toEqual({
@@ -742,7 +744,7 @@ describe("rate limit wait cap", () => {
       ]);
       const error = await rejectionOf(getViewer(client));
       expect({
-        name: (error as Error).name,
+        name: error instanceof Error ? error.name : undefined,
         calls: calls.length,
       }).toEqual({ name: "GitHubHttpError", calls: 1 });
     });
@@ -753,7 +755,7 @@ describe("rate limit wait cap", () => {
       ]);
       const error = await rejectionOf(getViewer(client));
       expect({
-        name: (error as Error).name,
+        name: error instanceof Error ? error.name : undefined,
         calls: calls.length,
       }).toEqual({ name: "GitHubHttpError", calls: 1 });
     });
