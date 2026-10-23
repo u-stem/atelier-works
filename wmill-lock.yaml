@@ -147,7 +147,7 @@ locks:
   f/factory/self_update: 886fbbac8234b0742cc229eb15b30866cfa983b8f7e8de99f600a705eaafdac2
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
-  f/factory/steps/console_query: cfce872a3449da49361a27d9b54d72151691d8c3e2e445550a296743a59defcd
+  f/factory/steps/console_query: 675145294823ee2282219ddc2c8c9d82cb521227e72eafae2ab7333c962b6dd2
   f/factory/steps/dependabot_assess: 15c82461f3f283e89e953107be209c1b77e85311033966261245dbb0cfd9c7f6
   f/factory/steps/dependabot_finish: 51781de41dc80b83023596334722445028c1f3b8fbcbe5cb689924704a62a110
   f/factory/steps/dependabot_prepare: c7f1d8acb7f22c04ec4103a39bcf6e977a0592d7e0d535ee261c9eba17a486e9

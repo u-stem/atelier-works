@@ -1,27 +1,31 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  type IntakeSession,
+  intakeSessions,
+  startIntake,
+} from "../../api/intakeSession.ts";
 import { manualIntakeConfig } from "../../api/manualIntakeConfig.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
+import { MANUAL_INTAKE_WRITE_KEY } from "../../api/writeLocks.ts";
 import type { ManualIntakeInput } from "../../api/writes.ts";
-import {
-  confirmResend,
-  type IntakeAttempt,
-  isSubmitBlocked,
-  keepsInput,
-} from "../../lib/intakeAttempt.ts";
+import { isSubmitBlocked } from "../../lib/intakeAttempt.ts";
+import type { IntakeForm } from "../../lib/manualIntake.ts";
 
 type ManualIntake = {
-  /** 送信を始める。実行中か、一覧が古いままか、確かめるまで止めているときは何もしない。 */
-  readonly submit: (input: ManualIntakeInput) => void;
-  /** 直近の送信の結果。次に送るか、画面を離れるまで残す。 */
-  readonly attempt: IntakeAttempt;
+  /**
+   * 送信を始める。始められれば`true`。
+   * 実行中か、一覧が古いままか、投入されたか分からず再送を確かめていないときは、何もせず`false`を返す。
+   * `form`は入力欄の値で、画面が外れても復元できるよう、タブ全体の状態に残す。
+   */
+  readonly submit: (form: IntakeForm, input: ManualIntakeInput) => boolean;
+  /** タブ全体で持つ、直近の送信の結果と入力欄の値。画面が外れて戻っても残る。 */
+  readonly session: IntakeSession;
   /** 送信が実行中か、一覧を読み直せないままで止まっているか。 */
   readonly locked: boolean;
-  /** 投入されたか分からないとき、確かめたうえで再送を許す。 */
-  readonly confirmResend: () => void;
   /** 送信のボタンを止めるか。実行中、一覧が古い、確かめるまでの再送の抑止のどれか。 */
   readonly blocked: boolean;
-  /** 投入の後に一覧を読み直せなかったか。 */
-  readonly stale: boolean;
+  /** 投入されたか分からないとき、確かめたうえで再送を許す。 */
+  readonly confirmResend: () => void;
 };
 
 const NO_INPUT: ManualIntakeInput = {
@@ -33,43 +37,27 @@ const NO_INPUT: ManualIntakeInput = {
 };
 
 /**
- * 新規投入の送信。固定のロックのキーで二重の送信を止め、結果は次に送るか画面を離れるまで残す。
- * 投入できたときは`onSubmitted`で入力欄を空に戻させる。ほかの結果では入力を残す。
- * ロックを持つのは、このタブの中だけである。
+ * 新規投入の送信。固定のロックのキーで二重の送信を止める。
+ * 結果と入力欄の値は、タブ全体で持つ状態に書く。送信中に画面を離れても、結果が失われず、
+ * 戻った画面に警告が出る。ロックを持つのは、このタブの中だけである。
  */
-export function useManualIntake(onSubmitted: () => void): ManualIntake {
-  const [attempt, setAttempt] = useState<IntakeAttempt>({ kind: "idle" });
-  const [stale, setStale] = useState(false);
-  const config = useMemo(
-    () =>
-      manualIntakeConfig({
-        onAttempt: (next) => {
-          setAttempt(next);
-          if (!keepsInput(next)) {
-            onSubmitted();
-          }
-        },
-        onStale: () => {
-          setStale(true);
-        },
-      }),
-    [onSubmitted],
+export function useManualIntake(): ManualIntake {
+  const session = useSyncExternalStore(intakeSessions.subscribe, () =>
+    intakeSessions.get(MANUAL_INTAKE_WRITE_KEY),
   );
+  const config = useMemo(() => manualIntakeConfig(), []);
   const mutation = useWriteMutation(config);
   const locked = mutation.isLocked(NO_INPUT);
   return {
-    submit: (input) => {
-      if (mutation.submit(input)) {
-        setAttempt({ kind: "idle" });
-        setStale(false);
-      }
-    },
-    attempt,
+    submit: (form, input) =>
+      startIntake(intakeSessions, MANUAL_INTAKE_WRITE_KEY, form, () =>
+        mutation.submit(input),
+      ),
+    session,
     locked,
+    blocked: locked || isSubmitBlocked(session.attempt),
     confirmResend: useCallback(() => {
-      setAttempt((current) => confirmResend(current));
+      intakeSessions.confirmResend(MANUAL_INTAKE_WRITE_KEY);
     }, []),
-    blocked: locked || isSubmitBlocked(attempt),
-    stale: stale && locked,
   };
 }

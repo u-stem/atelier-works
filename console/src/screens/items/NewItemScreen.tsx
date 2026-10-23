@@ -88,17 +88,27 @@ function problemOf(
 export function NewItemScreen() {
   const ids = useId();
   const targets = useIntakeTargets();
-  const [repo, setRepo] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [acceptance, setAcceptance] = useState("");
+  const intake = useManualIntake();
+  const { session } = intake;
+  // 一覧へ移って戻っても、投入されたか分からない間は、直近に送った入力欄の値を復元する。
+  const [repo, setRepo] = useState<string | null>(session.form?.repo ?? null);
+  const [title, setTitle] = useState(session.form?.title ?? "");
+  const [body, setBody] = useState(session.form?.body ?? "");
+  const [acceptance, setAcceptance] = useState(
+    session.form?.acceptanceCriteria ?? "",
+  );
   const [checked, setChecked] = useState(false);
-  const intake = useManualIntake(() => {
+  const [seenSubmissions, setSeenSubmissions] = useState(
+    session.submittedCount,
+  );
+  // 表示中に投入できたときは、入力欄を空に戻す。
+  if (seenSubmissions !== session.submittedCount) {
+    setSeenSubmissions(session.submittedCount);
     setTitle("");
     setBody("");
     setAcceptance("");
     setChecked(false);
-  });
+  }
 
   const candidates = targets.data ?? [];
   const repoText = repo ?? defaultRepoText(candidates);
@@ -106,15 +116,15 @@ export function NewItemScreen() {
   const built = buildIntakeInput(form);
   const problems: readonly IntakeProblem[] =
     checked && !built.ok ? built.problems : [];
-  const view = describeIntakeAttempt(intake.attempt);
+  const view = describeIntakeAttempt(session.attempt);
   const targetsError = targets.isError ? apiErrorOf(targets.error) : null;
   const targetsFailed =
     targets.isError && !(targetsError !== null && isBannerError(targetsError));
 
   const send = () => {
     setChecked(true);
-    if (built.ok) {
-      intake.submit(built.input);
+    if (built.ok && !intake.blocked) {
+      intake.submit(form, built.input);
     }
   };
 
@@ -215,8 +225,8 @@ export function NewItemScreen() {
             <Button type="submit" disabled={intake.blocked}>
               {intake.locked ? "送信しています" : "投入する"}
             </Button>
-            {intake.attempt.kind === "unknown" &&
-            !intake.attempt.resendConfirmed ? (
+            {session.attempt.kind === "unknown" &&
+            !session.attempt.resendConfirmed ? (
               <Button
                 type="button"
                 variant="outline"
@@ -227,7 +237,7 @@ export function NewItemScreen() {
               </Button>
             ) : null}
           </div>
-          {intake.stale ? (
+          {session.stale && intake.locked ? (
             <Alert variant="warning">
               <AlertDescription>
                 <p>

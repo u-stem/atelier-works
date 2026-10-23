@@ -73,9 +73,10 @@ const SUBMITTED_LINES = [
 
 const UNKNOWN_LINES = [
   "入力は残してあります。",
-  "再送する前に、次の2か所で投入されたかを確かめてください。",
-  "Windmillのジョブ一覧で、manual_intakeのジョブを探す。",
-  "対象リポジトリのIssueで、同じ題名のIssueを探す。",
+  "再送する前に、次の3つを確かめてください。",
+  "Windmillのジョブ一覧に、manual_intake_submitのジョブが待ちか実行中でないか。待っている間は、manual_intakeのジョブもIssueもまだありません。",
+  "Windmillのジョブ一覧に、manual_intakeのジョブがあるか。",
+  "対象リポジトリのIssueに、同じ題名のIssueがあるか。",
   "投入されていないと分かったら、「確かめたので再送する」を押してください。",
 ] as const;
 
