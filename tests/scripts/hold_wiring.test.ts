@@ -284,6 +284,44 @@ describe("onlyReadsHolds", () => {
     ).toBe(false);
   });
 
+  test("rejects a write import that hides behind a comment with another import", () => {
+    expect(
+      onlyReadsHolds(
+        'import { placeHold /* import { listActiveHolds */ } from "./lib/holds.ts";',
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a write re-export that hides behind a comment with an import", () => {
+    expect(
+      onlyReadsHolds(
+        'export { placeHold /* import { listActiveHolds */ } from "./lib/holds.ts";',
+      ),
+    ).toBe(false);
+  });
+
+  test("allows a read import whose comment mentions a write function", () => {
+    expect(
+      onlyReadsHolds(
+        'import { listActiveHolds /* not placeHold */ } from "./lib/holds.ts";',
+      ),
+    ).toBe(true);
+  });
+
+  test("allows a comment that mentions a dynamic import", () => {
+    expect(
+      onlyReadsHolds("// import() is not used here\nexport const a = 1;"),
+    ).toBe(true);
+  });
+
+  test("allows a type-only name in braces", () => {
+    expect(
+      onlyReadsHolds(
+        'import { type HoldRow } from "./holds.ts";\nexport type T = HoldRow;',
+      ),
+    ).toBe(true);
+  });
+
   test("rejects an import over several lines", () => {
     expect(
       onlyReadsHolds(
@@ -323,6 +361,27 @@ const WRITE_STATEMENT =
 
 function writesHolds(source: string): boolean {
   return matchesAny(source, [WRITE_STATEMENT]);
+}
+
+/** TypeScriptのコードから、書き込みの文の抜粋を返す。 */
+function findHoldsWrite(text: string): string | null {
+  void text;
+  return null;
+}
+
+/** TypeScriptのソースに書かれた、保留の表へ書くSQLの有無。JavaScriptのコメントは除く。 */
+function tsWritesHolds(source: string): boolean {
+  return writesHolds(source);
+}
+
+/** 書く関数のsql引数に、既定値か省略があるか。 */
+function allowsDefaultSql(source: string): boolean {
+  return /sql\s*:\s*SqlClient\s*=/.test(source);
+}
+
+/** ソースが何かを読み込むか。 */
+function importsSomething(source: string): boolean {
+  return /^import\b/m.test(source);
 }
 
 describe("writesHolds", () => {
@@ -366,6 +425,101 @@ describe("writesHolds", () => {
   });
 });
 
+describe("writesHolds in TypeScript code", () => {
+  test.each([
+    // ファイルの先頭の文字列が`/*`を含み、後ろにJSDocがある。
+    "const a = '/*';\nconst q = \"INSERT /**/ INTO factory.holds (scope) VALUES (1)\";\n/** doc */\nexport const x = 1;",
+    // 行コメントの中の`/*`が、後ろのJSDocの`*/`で閉じられる。
+    "const q = `INSERT -- /*\nINTO factory.holds (scope) VALUES (1)`;\n/** doc */\nexport const x = 1;",
+    // PostgreSQLの入れ子のブロックコメント。
+    "const q = `INSERT /* a */ INTO /* b /* nested */ */ factory.holds (scope) VALUES (1)`;",
+    "const q = `UPDATE /* a /* b */ c */ factory.holds SET x = 1`;",
+    "const q = `UPDATE /* a /* b /* c */ */ */ factory.holds SET x = 1`;",
+    // 複数の表を並べる。
+    "const q = `TRUNCATE factory.notices, factory.holds`;",
+    "const q = `DROP TABLE IF EXISTS factory.notices, factory.holds`;",
+    "const q = `DROP INDEX factory.holds_active_claim_key`;",
+    "const q = `DROP INDEX IF EXISTS factory.holds_active_claim_key, factory.x`;",
+    "const q = `CREATE TRIGGER t BEFORE INSERT ON holds FOR EACH ROW EXECUTE FUNCTION f()`;",
+    // エスケープの改行。
+    'const q = "INSERT\\nINTO factory.holds (scope) VALUES (1)";',
+    'const q = "INSERT -- x\\nINTO factory.holds (scope) VALUES (1)";',
+    "const q = sql`MERGE INTO factory.holds h USING t ON true WHEN MATCHED THEN DELETE`;",
+  ])("detects %p", (source) => {
+    expect(tsWritesHolds(source)).toBe(true);
+  });
+
+  test.each([
+    'log.warn("could not update holds");',
+    'log.warn("copy holds");',
+    'log.warn("update holds");',
+    'const text = "insert the holds into the list";',
+    "// import() is not used here\nexport const x = 1;",
+    "/* INSERT INTO factory.holds (scope) VALUES (1) */\nexport const x = 1;",
+    "// UPDATE factory.holds SET x = 1\nexport const x = 1;",
+    "const q = `SELECT * FROM factory.holds WHERE scope = 'merge'`;",
+    "const q = `UPDATE factory.pr_ci_checks SET fix_hold_reason = NULL`;",
+    "const q = `CREATE INDEX x ON factory.pr_conflict_fix_holds (id)`;",
+  ])("does not detect %p", (source) => {
+    expect(tsWritesHolds(source)).toBe(false);
+  });
+});
+
+describe("findHoldsWrite", () => {
+  test("returns the statement that writes", () => {
+    expect(
+      findHoldsWrite(
+        "const q = `INSERT INTO factory.holds (scope) VALUES (1)`;",
+      ),
+    ).toContain("INSERT INTO factory.holds");
+  });
+
+  test("returns null when nothing writes", () => {
+    expect(findHoldsWrite("const q = `SELECT 1`;")).toBeNull();
+  });
+});
+
+describe("allowsDefaultSql", () => {
+  test.each([
+    "export async function f(a: number, sql: HoldSqlClient = defaultSqlClient) {}",
+    "export async function f(a: number, sql: SqlClient = defaultSqlClient) {}",
+    "export async function f(a: number, sql?: HoldSqlClient) {}",
+    "export async function f(\n  a: number,\n  sql: HoldSqlClient = x,\n) {}",
+    "const f = (sql: Anything<string> = x) => 1;",
+  ])("detects %p", (source) => {
+    expect(allowsDefaultSql(source)).toBe(true);
+  });
+
+  test.each([
+    "export async function f(a: number, sql: HoldSqlClient) {}",
+    "export async function f(\n  a: number,\n  sql: HoldSqlClient,\n): Promise<void> {}",
+    "const rows = await sql`SELECT 1`.fetch();",
+  ])("does not detect %p", (source) => {
+    expect(allowsDefaultSql(source)).toBe(false);
+  });
+});
+
+describe("importsSomething", () => {
+  test.each([
+    'import type { A } from "./a.ts";',
+    'import { a } from "./a.ts";',
+    'export * from "./a.ts";',
+    'export { a } from "./a.ts";',
+    'const m = await import("./a.ts");',
+    'const m = require("./a.ts");',
+    'import {\n  a,\n} from "./a.ts";',
+  ])("detects %p", (source) => {
+    expect(importsSomething(source)).toBe(true);
+  });
+
+  test.each([
+    "export const a = 1;",
+    "// text that mentions nothing\nexport const a = 1;",
+  ])("does not detect %p", (source) => {
+    expect(importsSomething(source)).toBe(false);
+  });
+});
+
 describe("files under f/factory", () => {
   test("finds the files, so that the checks below are not empty", () => {
     expect(SCANNED.length).toBeGreaterThan(100);
@@ -396,11 +550,11 @@ describe(HOLDS_MODULE, () => {
   });
 
   test("has no import, so that no unprotected module is its input", () => {
-    expect(source.match(/^import\b/gm)).toBeNull();
+    expect(importsSomething(source)).toBe(false);
   });
 
   test("gives no default to the sql parameter", () => {
-    expect(source).not.toMatch(/sql\s*:\s*SqlClient\s*=/);
+    expect(allowsDefaultSql(source)).toBe(false);
   });
 
   test("does not use the default client", () => {
@@ -496,6 +650,14 @@ describe("migrationViolations", () => {
     "INSERT/**/INTO factory.holds (scope) VALUES (1);",
     "-- x\nUPDATE -- y\n factory.holds SET x = 1;",
     "ALTER TABLE holds ADD COLUMN x int;",
+    "CREATE OR REPLACE TRIGGER t BEFORE INSERT ON factory.holds FOR EACH ROW EXECUTE FUNCTION f();",
+    "CREATE CONSTRAINT TRIGGER t AFTER INSERT ON factory.holds DEFERRABLE FOR EACH ROW EXECUTE FUNCTION f();",
+    "CREATE RULE r AS ON INSERT TO factory.holds DO INSTEAD NOTHING;",
+    "TRUNCATE factory.notices, factory.holds;",
+    "DROP TABLE IF EXISTS factory.notices, factory.holds CASCADE;",
+    "INSERT /* a */ INTO /* b /* nested */ */ factory.holds (scope) VALUES (1);",
+    "UPDATE /* a /* b */ c */ factory.holds SET x = 1;",
+    "INSERT -- /*\nINTO factory.holds (scope) VALUES (1);\n/* doc */",
   ])("detects %p in a later migration", (sql) => {
     expect(migrationViolations({ "20270101000000_later.up.sql": sql })).toEqual(
       ["20270101000000_later.up.sql"],
