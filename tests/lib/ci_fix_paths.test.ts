@@ -615,16 +615,34 @@ describe("tests", () => {
 
   test("rejects a modification of a spec file that removes lines", () => {
     const path = "f/factory/lib/foo.spec.ts";
-    expect(codeOf([change(path, { removedLineCount: 1 })], [path])).toBe(
-      "test_not_additive",
-    );
+    expect(
+      codeOf(
+        [
+          change(path, {
+            removedLineCount: 1,
+            removedOutsidePrLineCount: 1,
+            shrinkingHunkCount: 0,
+          }),
+        ],
+        [path],
+      ),
+    ).toBe("test_not_additive");
   });
 
   test("applies the additive rule to a fixture", () => {
     const path = "tests/fixtures/data.json";
-    expect(codeOf([change(path, { removedLineCount: 1 })], [path])).toBe(
-      "test_not_additive",
-    );
+    expect(
+      codeOf(
+        [
+          change(path, {
+            removedLineCount: 1,
+            removedOutsidePrLineCount: 1,
+            shrinkingHunkCount: 0,
+          }),
+        ],
+        [path],
+      ),
+    ).toBe("test_not_additive");
   });
 
   test("allows a source file change that removes lines", () => {

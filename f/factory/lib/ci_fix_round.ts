@@ -9,6 +9,7 @@ import { type CiFailureClass, classifyCiFailure } from "./ci_fix_classify.ts";
 import {
   type CiFixChange,
   checkCiFixChanges,
+  isMeaningfulLine,
   isTestPath,
 } from "./ci_fix_paths.ts";
 import type { PrBase } from "./ci_fix_pr_base.ts";
@@ -868,7 +869,9 @@ export function parseRawDiffZ(output: string): RawDiffEntry[] {
 }
 
 /**
- * `git diff -U0`の差分から、追加した行(先頭の`+`を除く)と、削除した行の数を読む。
+ * `git diff -U0`の差分から、追加した行(先頭の`+`を除く)と、削除した行の数と、
+ * 削除した行より意味のある追加行が少ないhunkの数を読む。
+ * 意味のある追加行は、空行とコメントだけの行を除いた行である(`isMeaningfulLine`)。
  * 最初の`@@`より前はファイルの見出しなので数えない。`@@`より後は、`+++`や`---`で始まる行も内容として数える。
  * バイナリの差分は、追加だけとは言えないので、削除が1行あるものとして扱う。
  */
@@ -879,9 +882,18 @@ export function parseZeroContextPatch(patch: string): {
 } {
   const addedLines: string[] = [];
   let removedLineCount = 0;
+  let shrinkingHunkCount = 0;
+  let hunkRemoved = 0;
+  let hunkMeaningful = 0;
   let inHunk = false;
+  const closeHunk = (): void => {
+    if (inHunk && hunkRemoved > hunkMeaningful) shrinkingHunkCount += 1;
+    hunkRemoved = 0;
+    hunkMeaningful = 0;
+  };
   for (const line of patch.split("\n")) {
     if (line.startsWith("@@")) {
+      closeHunk();
       inHunk = true;
     } else if (!inHunk) {
       if (line.startsWith("Binary files ") || line === "GIT binary patch") {
@@ -889,11 +901,14 @@ export function parseZeroContextPatch(patch: string): {
       }
     } else if (line.startsWith("+")) {
       addedLines.push(line.slice(1));
+      if (isMeaningfulLine(line.slice(1))) hunkMeaningful += 1;
     } else if (line.startsWith("-")) {
       removedLineCount += 1;
+      hunkRemoved += 1;
     }
   }
-  return { addedLines, removedLineCount, shrinkingHunkCount: 0 };
+  closeHunk();
+  return { addedLines, removedLineCount, shrinkingHunkCount };
 }
 
 function gitEnv(): Record<string, string> {
@@ -1002,46 +1017,110 @@ export function isRehashCandidate(collected: {
 /** 行の範囲。`start`行目から`count`行。 */
 export type LineRange = { readonly start: number; readonly count: number };
 
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/** 昇順の行番号を、続く行をまとめた範囲にする。 */
+function toRanges(lines: readonly number[]): LineRange[] {
+  const ranges: LineRange[] = [];
+  for (const line of lines) {
+    const last = ranges[ranges.length - 1];
+    if (last !== undefined && last.start + last.count === line) {
+      ranges[ranges.length - 1] = { start: last.start, count: last.count + 1 };
+    } else {
+      ranges.push({ start: line, count: 1 });
+    }
+  }
+  return ranges;
+}
 
 /**
  * `git diff -U0`の差分から、削除側(旧)と追加側(新)の行の範囲を読む。
- * 行数が0の範囲は含めない。`newFile`は、旧側にファイルが無い差分(`new file mode`の行がある)で真になる。
+ * 見出しの行数は信じない。見出しの開始位置から、hunkの中の`-`、`+`、文脈の行を数えて行番号を進める。
+ * 設定で文脈の行が混ざっても、行番号が崩れないようにするためである。
+ * 末尾に改行の無い最終行は、改行の有無だけが変わった行が変更に見えるので、追加の範囲から外す。
+ * - 旧側の最終行に改行が無いとき、同じ内容で追加された行を外す。
+ * - 新側の最終行に改行が無いとき、その行が削除された行と同じ内容なら外す。
  * バイナリの差分と、読めない見出しがあるときは、行の位置が分からないので`null`を返す。
  * 最初の`@@`より前は見出しなので、行の位置は読まない。
  */
 export function parseHunkRanges(patch: string): {
   readonly removed: LineRange[];
   readonly added: LineRange[];
-  readonly newFile?: boolean;
 } | null {
-  const removed: LineRange[] = [];
-  const added: LineRange[] = [];
+  const removed: number[] = [];
+  const added: number[] = [];
+  type Hunk = {
+    oldLine: number;
+    newLine: number;
+    previous: string;
+    minus: string[];
+    plus: { line: number; text: string }[];
+    oldNoNewline: boolean;
+    newNoNewline: boolean;
+  };
+  let hunk: Hunk | null = null;
+  const closeHunk = (): void => {
+    const current = hunk;
+    if (current === null) return;
+    const lastMinus = current.minus[current.minus.length - 1];
+    current.plus.forEach((entry, index) => {
+      const gainedNewline = current.oldNoNewline && entry.text === lastMinus;
+      const lostNewline =
+        current.newNoNewline &&
+        index === current.plus.length - 1 &&
+        current.minus.includes(entry.text);
+      if (!gainedNewline && !lostNewline) added.push(entry.line);
+    });
+    hunk = null;
+  };
   let inHunk = false;
-  let newFile = false;
   for (const line of patch.split("\n")) {
     if (line.startsWith("@@")) {
+      closeHunk();
       inHunk = true;
       const match = HUNK_HEADER.exec(line);
       if (match === null) return null;
-      const numbers = [
-        Number(match[1]),
-        match[2] === undefined ? 1 : Number(match[2]),
-        Number(match[3]),
-        match[4] === undefined ? 1 : Number(match[4]),
-      ];
-      if (!numbers.every(Number.isSafeInteger)) return null;
-      const [oldStart = 0, oldCount = 0, newStart = 0, newCount = 0] = numbers;
-      if (oldCount > 0) removed.push({ start: oldStart, count: oldCount });
-      if (newCount > 0) added.push({ start: newStart, count: newCount });
+      const oldLine = Number(match[1]);
+      const newLine = Number(match[2]);
+      if (!Number.isSafeInteger(oldLine) || !Number.isSafeInteger(newLine)) {
+        return null;
+      }
+      hunk = {
+        oldLine,
+        newLine,
+        previous: "",
+        minus: [],
+        plus: [],
+        oldNoNewline: false,
+        newNoNewline: false,
+      };
     } else if (!inHunk) {
       if (line.startsWith("Binary files ") || line === "GIT binary patch") {
         return null;
       }
-      if (line.startsWith("new file mode ")) newFile = true;
+    } else if (hunk !== null) {
+      const text = line.slice(1);
+      if (line.startsWith("-")) {
+        removed.push(hunk.oldLine);
+        hunk.oldLine += 1;
+        hunk.minus.push(text);
+        hunk.previous = "-";
+      } else if (line.startsWith("+")) {
+        hunk.plus.push({ line: hunk.newLine, text });
+        hunk.newLine += 1;
+        hunk.previous = "+";
+      } else if (line.startsWith(" ")) {
+        hunk.oldLine += 1;
+        hunk.newLine += 1;
+        hunk.previous = " ";
+      } else if (line.startsWith("\\")) {
+        if (hunk.previous === "-") hunk.oldNoNewline = true;
+        if (hunk.previous === "+") hunk.newNoNewline = true;
+      }
     }
   }
-  return { removed, added, newFile };
+  closeHunk();
+  return { removed: toRanges(removed), added: toRanges(added) };
 }
 
 function inRanges(line: number, ranges: readonly LineRange[]): boolean {
@@ -1084,6 +1163,8 @@ async function readHunkRanges(
       [
         "diff",
         "-U0",
+        "--inter-hunk-context=0",
+        "--diff-algorithm=myers",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
@@ -1103,52 +1184,13 @@ async function readHunkRanges(
 }
 
 /**
- * PRが、基点からテストのファイルを削除したか。読めないときと、一覧が大きすぎるときも真を返す。
- * 基点にパスが無いテストのファイルは、削除したテストの移動先かもしれない。
- * 移動先では、基点から持っていた行がPRの追加に見えるため、削除があれば不明として扱う。
- */
-async function prDeletesTestFile(
-  run: CommandRunner,
-  worktreeDir: string,
-  mergeBaseSha: string,
-  headSha: string,
-): Promise<boolean> {
-  let output: string;
-  try {
-    output = await runGit(
-      run,
-      worktreeDir,
-      "git diff --raw between commits",
-      [
-        "diff",
-        "--raw",
-        "-z",
-        "--no-renames",
-        "--no-ext-diff",
-        "--ignore-submodules=none",
-        mergeBaseSha,
-        headSha,
-        "--",
-      ],
-      PATCH_MAX_BYTES,
-    );
-  } catch {
-    return true;
-  }
-  if (isCappedOutput(output)) return true;
-  return parseRawDiffZ(output).some(
-    (entry) => entry.status === "deleted" && isTestPath(entry.path),
-  );
-}
-
-/**
  * 回の開始時のheadから削除された行のうち、PRが足した行でないものの数を返す。
  * PRが足した行は、基点(merge-base)との差分と、baseの先端との差分のどちらでも、headで追加された範囲にある行である。
  * 行の内容ではなく位置で数えるので、PRが基点と同じ内容の行を足していても、基点の行を足した行とは見なさない。
  * baseの先端とも比べるのは、積み重ねたブランチをsquashしたときなどに基点がずれて、
  * baseにすでにある行がPRの追加に見えるのを防ぐためである。
- * 基点にパスが無いファイルで、PRがほかのテストのファイルを削除していれば、移動先かもしれないので`undefined`を返す。
- * gitが失敗したときと、差分が大きすぎるとき、差分を読めないときも`undefined`を返す。
+ * 基点にパスが無いファイルは、全体が追加された行になる。
+ * gitが失敗したときと、差分が大きすぎるとき、差分を読めないときは`undefined`を返す。
  * 不明は、基点から持っていた行を消したものとして扱い、拒否に倒す。
  */
 async function removedOutsidePrLines(input: {
@@ -1158,7 +1200,6 @@ async function removedOutsidePrLines(input: {
   readonly roundBaseSha: string;
   readonly path: string;
   readonly roundPatch: string;
-  readonly prDeletesTest: () => Promise<boolean>;
 }): Promise<number | undefined> {
   const { run, worktreeDir, base, roundBaseSha, path } = input;
   assertSha(base.mergeBase);
@@ -1181,7 +1222,6 @@ async function removedOutsidePrLines(input: {
     path,
   );
   if (tip === null) return undefined;
-  if (pr.newFile && (await input.prDeletesTest())) return undefined;
   return countLinesOutside(round.removed, [pr.added, tip.added]);
 }
 
@@ -1263,7 +1303,6 @@ export async function collectCiFixChanges(
   const cached = options.source === "staged" ? ["--cached"] : [];
   const resolvePrBase = options.resolvePrBase ?? (async () => null);
   let prBase: Promise<PrBase | null> | null = null;
-  let prDeletes: Promise<boolean> | null = null;
 
   const tracked = parseRawDiffZ(
     await runGit(run, worktreeDir, "git diff --raw", [
@@ -1319,6 +1358,8 @@ export async function collectCiFixChanges(
         "diff",
         ...cached,
         "-U0",
+        "--inter-hunk-context=0",
+        "--diff-algorithm=myers",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
@@ -1365,13 +1406,6 @@ export async function collectCiFixChanges(
               roundBaseSha: baseSha,
               path: entry.path,
               roundPatch: patch,
-              prDeletesTest: () =>
-                (prDeletes ??= prDeletesTestFile(
-                  run,
-                  worktreeDir,
-                  base.mergeBase,
-                  baseSha,
-                )),
             });
       changes.push(
         removedOutsidePrLineCount === undefined

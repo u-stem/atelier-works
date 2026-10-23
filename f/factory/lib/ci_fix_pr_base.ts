@@ -33,6 +33,7 @@ export type PrBase = {
 export type PrMergeBaseIo = {
   /** PRが向いているbaseブランチの名前。 */
   readonly readBaseRef: () => Promise<string>;
+  /** リポジトリの既定のブランチの名前。 */
   readonly readDefaultBranch: () => Promise<string>;
   /** ブランチの今の先端のsha。 */
   readonly readBranchSha: (branch: string) => Promise<string>;
@@ -44,6 +45,8 @@ export type PrMergeBaseIo = {
 
 /**
  * PRの基点(merge-baseとbaseの先端)を返す。
+ * PRが既定のブランチを向いていなければ、基点とは言えないので`null`を返す。
+ * 既定でないブランチは、そのテストを持たないことがあり、持たないと全行がPRの追加に見える。
  * baseブランチの今の先端を読み、そのcommitを取り込んでから、headとのmerge-baseを求める。
  * 先端を取り込むのは、merge-baseの計算がそのオブジェクトをローカルに要るためである。
  * どの段階の失敗も例外にせず、`null`を返す。基点が分からなければ、CI回は基点の行を消したものとして
@@ -54,7 +57,11 @@ export async function resolvePrMergeBase(
   onError?: (message: string) => void,
 ): Promise<PrBase | null> {
   try {
-    const tip = await io.readBranchSha(await io.readBaseRef());
+    const baseRef = await io.readBaseRef();
+    if (baseRef !== (await io.readDefaultBranch())) {
+      throw new Error("the pull request does not target the default branch");
+    }
+    const tip = await io.readBranchSha(baseRef);
     if (!FULL_SHA.test(tip)) throw new Error("the base tip is not a full sha");
     await io.fetchCommit(tip);
     const base = await io.mergeBase(tip);
