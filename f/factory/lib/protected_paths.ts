@@ -137,6 +137,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 保護パスの契約テスト(`tests/lib/protected_paths.test.ts`)が失敗する。
  * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
  * 保留の表(`factory.holds`)の読み書きを持つ`lib/holds.ts`と、その`.script.yaml`も守る。
+ * 表を作るmigration2本(`20261023131355_holds.up.sql`と`.down.sql`)も守る。参照を検出するテストが、この2本を走査から外すためである。
+ * 走査から外すのは保護したファイルだけにする。外したファイルを書き換えられると、検出も保護も働かないからである。
  * 保留は、自動マージとIssueの取り込みを止める。表への参照を`holds.ts`だけに絞る検査
  * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
  * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
@@ -225,6 +227,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/lib/holds_db.test.ts",
   "tests/scripts/hold_wiring.test.ts",
   "scripts/test-db-holds.ts",
+  "migrations/datatable/main/20261023131355_holds.up.sql",
+  "migrations/datatable/main/20261023131355_holds.down.sql",
   "scripts/host-apply.ts",
   "scripts/host-apply.sh",
   "scripts/host-install.sh",

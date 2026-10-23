@@ -250,6 +250,25 @@ export function validatePlaceInput(raw: RawPlaceInput): Outcome<PlaceInput> {
 }
 
 /**
+ * 解除する主体の名乗りを検証する。`released_by`に`holder`を書くので、置くときと同じ規則で確かめる。
+ * 表の制約は長さしか見ないため、制御文字と、種類と`holder`の対応はここで拒否する。
+ */
+export function validateActor(actor: HoldActor): Outcome<HoldActor> {
+  if (!isHolderKind(actor.kind)) {
+    return fail("holder_kind must be session, human or factory");
+  }
+  if (!validText(actor.holder, HOLD_HOLDER_MAX)) {
+    return fail(
+      `holder must be 1 to ${HOLD_HOLDER_MAX} characters without control characters`,
+    );
+  }
+  if (!holderMatchesKind(actor.kind, actor.holder)) {
+    return fail("holder does not match holder_kind");
+  }
+  return ok({ kind: actor.kind, holder: actor.holder });
+}
+
+/**
  * `actor`が`hold`を解除してよいかを返す。
  * 持ち主を問わない解除は人(`human`)に限る(端末での確認は呼び出し側が行う)。
  * 人以外は、自分の`holder`の保留だけ解除できる。
@@ -531,6 +550,7 @@ export async function placeHold(
 
 /**
  * 保留を解除する。`released_by`に`actor.holder`を残す。
+ * 主体は`validateActor`で検証してから使う。通らない主体は、文を送らずに失敗を返す。
  * 期限切れや無効な未解除の行も解除できる(人が一覧から片付けるため)。
  * `canRelease`が許さない主体には、更新を送らずに失敗を返す。
  * 読んでから更新するまでの間に別の解除が先に通ったときは、「既に解除された」と返す。
@@ -543,6 +563,8 @@ export async function releaseHold(
   if (!Number.isSafeInteger(id) || id < 1) {
     return fail("id must be a positive integer");
   }
+  const checkedActor = validateActor(actor);
+  if (!checkedActor.ok) return fail(checkedActor.reason);
   try {
     const rows = await sql`
       SELECT id, scope, target, reason, holder_kind, holder,

@@ -40,7 +40,11 @@ function listFiles(dir: string): string[] {
   return files.sort();
 }
 
-const SCANNED = listFiles("f").filter((path) => path !== HOLDS_MODULE);
+// 走査から外すのは、`holds.ts`と、依存の固定の`.lock`だけにする。
+// `holds.ts`と、表を作るmigration2本は、保護パスに入れてあることを下で確かめる。
+const SCANNED = listFiles("f").filter(
+  (path) => path !== HOLDS_MODULE && !path.endsWith(".lock"),
+);
 
 function read(path: string): string {
   return readFileSync(path, "utf8");
