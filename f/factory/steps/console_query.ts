@@ -2516,6 +2516,14 @@ export function resolvePositiveIntArg(
     : null;
 }
 
+export type IntakeTarget = { readonly owner: string; readonly repo: string };
+
+export function runIntakeTargets(
+  _loadConfig: unknown,
+): Promise<IntakeTarget[]> {
+  return Promise.resolve([]);
+}
+
 /** `main`が返しうる値。行のビューは配列、`CONSOLE_OBJECT_VIEWS`のビューは1つのオブジェクトを返す。 */
 export type ConsoleQueryResult =
   | ConsoleQueryRow[]
