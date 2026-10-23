@@ -5,6 +5,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import {
   githubPrMergeBaseIo,
+  type PrBase,
   resolvePrMergeBase,
 } from "../lib/ci_fix_pr_base.ts";
 import {
@@ -949,8 +950,8 @@ export async function main(
 
   // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
   // 求められなければnullになり、検査は基点の行を消したものとして拒否に倒れる。
-  let prBaseResolved: Promise<string | null> | null = null;
-  const resolvePrBaseOnce = (): Promise<string | null> => {
+  let prBaseResolved: Promise<PrBase | null> | null = null;
+  const resolvePrBaseOnce = (): Promise<PrBase | null> => {
     prBaseResolved ??= resolvePrMergeBase(
       githubPrMergeBaseIo({
         client,

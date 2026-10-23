@@ -42,6 +42,7 @@ export type CiFixChange = {
    * 省略は不明であり、基点の行を消したものとして扱う。
    */
   readonly baseRemovedLineCount?: number;
+  readonly removedOutsidePrLineCount?: number;
 };
 
 export type CiFixPathInput = {

@@ -14,6 +14,12 @@ import {
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
+/** PRの基点。 */
+export type PrBase = {
+  readonly mergeBase: string;
+  readonly tip: string;
+};
+
 /** 基点を求めるためのI/O。テストでは偽物に差し替える。 */
 export type PrMergeBaseIo = {
   /** PRが向いているbaseブランチの名前。 */
@@ -36,7 +42,7 @@ export type PrMergeBaseIo = {
 export async function resolvePrMergeBase(
   io: PrMergeBaseIo,
   onError?: (message: string) => void,
-): Promise<string | null> {
+): Promise<PrBase | null> {
   try {
     const tip = await io.readBranchSha(await io.readBaseRef());
     if (!FULL_SHA.test(tip)) throw new Error("the base tip is not a full sha");
@@ -45,7 +51,7 @@ export async function resolvePrMergeBase(
     if (!FULL_SHA.test(base)) {
       throw new Error("the merge base is not a full sha");
     }
-    return base;
+    return { mergeBase: base, tip: "" };
   } catch (err) {
     onError?.(err instanceof Error ? err.message : String(err));
     return null;

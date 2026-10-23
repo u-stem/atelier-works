@@ -43,7 +43,10 @@ function io(overrides: Partial<PrMergeBaseIo> = {}): {
 
 describe("resolvePrMergeBase", () => {
   test("returns the merge base of the tip of the base branch and the head", async () => {
-    expect(await resolvePrMergeBase(io().io)).toBe(MERGE_BASE);
+    expect(await resolvePrMergeBase(io().io)).toEqual({
+      mergeBase: MERGE_BASE,
+      tip: TIP,
+    });
   });
 
   test("fetches the tip of the base branch before it takes the merge base", async () => {

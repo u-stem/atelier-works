@@ -11,6 +11,7 @@ import {
   checkCiFixChanges,
   isTestPath,
 } from "./ci_fix_paths.ts";
+import type { PrBase } from "./ci_fix_pr_base.ts";
 import {
   buildCiExcerpt,
   CI_LOG_MAX_JOBS,
@@ -949,7 +950,7 @@ export type CiChangeOptions = {
    * PRが追加したテストの修正を許すために使う。競合回の読み取りは渡さない。
    * 1回の読み取りの中では、最初に要ったときに1回だけ呼ぶ。
    */
-  readonly resolvePrBase?: () => Promise<string | null>;
+  readonly resolvePrBase?: () => Promise<PrBase | null>;
 };
 
 /**
@@ -1038,6 +1039,24 @@ async function removedLinesAgainstBase(
   return parseZeroContextPatch(patch).removedLineCount;
 }
 
+/** 行の範囲。`start`行目から`count`行。 */
+export type LineRange = { readonly start: number; readonly count: number };
+
+export function parseHunkRanges(_patch: string): {
+  readonly removed: LineRange[];
+  readonly added: LineRange[];
+  readonly newFile: boolean;
+} | null {
+  return null;
+}
+
+export function countLinesOutside(
+  _removed: readonly LineRange[],
+  _allowed: readonly (readonly LineRange[])[],
+): number {
+  return 0;
+}
+
 function splitLines(text: string): string[] {
   if (text === "") return [];
   const lines = text.split("\n");
@@ -1114,7 +1133,7 @@ export async function collectCiFixChanges(
     now() - startedAt > CI_ROUND_COLLECT_BUDGET_MS;
   const cached = options.source === "staged" ? ["--cached"] : [];
   const resolvePrBase = options.resolvePrBase ?? (async () => null);
-  let prBase: Promise<string | null> | null = null;
+  let prBase: Promise<PrBase | null> | null = null;
 
   const tracked = parseRawDiffZ(
     await runGit(run, worktreeDir, "git diff --raw", [
@@ -1205,7 +1224,7 @@ export async function collectCiFixChanges(
       isTestPath(entry.path);
     if (needsBase) {
       prBase ??= resolvePrBase();
-      const prBaseSha = await prBase;
+      const prBaseSha = (await prBase)?.mergeBase ?? null;
       const baseRemovedLineCount =
         prBaseSha === null
           ? undefined

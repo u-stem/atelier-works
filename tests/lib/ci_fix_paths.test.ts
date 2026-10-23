@@ -433,35 +433,49 @@ describe("tests", () => {
     ).toBe("test_not_additive");
   });
 
-  test("allows removing lines that only the pull request added", () => {
+  test("allows rewriting lines that only the pull request added", () => {
     expect(
-      allowed(TEST, { removedLineCount: 5, baseRemovedLineCount: 0 }),
+      allowed(TEST, {
+        removedLineCount: 5,
+        addedLines: ["a", "b", "c", "d", "e"],
+        removedOutsidePrLineCount: 0,
+      }),
     ).toBe(true);
   });
 
-  test("rejects removing lines that the base of the pull request has", () => {
+  test("allows a rewrite that adds more lines than it removes", () => {
+    expect(
+      allowed(TEST, {
+        removedLineCount: 1,
+        addedLines: ["a", "b"],
+        removedOutsidePrLineCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects removing a line that is not one the pull request added", () => {
     expect(
       codeOf(
-        [change(TEST, { removedLineCount: 5, baseRemovedLineCount: 1 })],
+        [change(TEST, { removedLineCount: 1, removedOutsidePrLineCount: 1 })],
         [TEST],
       ),
     ).toBe("test_not_additive");
   });
 
-  test("rejects a removal when the lines against the base are unknown", () => {
-    expect(codeOf([change(TEST, { removedLineCount: 5 })], [TEST])).toBe(
+  test("rejects a removal when the lines the pull request added are unknown", () => {
+    expect(codeOf([change(TEST, { removedLineCount: 1 })], [TEST])).toBe(
       "test_not_additive",
     );
   });
 
-  test("rejects deleting a test even when no base line is removed", () => {
+  test("rejects removing more lines than it adds, even for lines the pull request added", () => {
     expect(
       codeOf(
         [
           change(TEST, {
-            status: "deleted",
-            addedLines: [],
-            baseRemovedLineCount: 0,
+            removedLineCount: 3,
+            addedLines: ["a", "b"],
+            removedOutsidePrLineCount: 0,
           }),
         ],
         [TEST],
@@ -469,13 +483,43 @@ describe("tests", () => {
     ).toBe("test_not_additive");
   });
 
-  test("still rejects a weakening line added while fixing the pull request lines", () => {
+  test("rejects emptying lines that the pull request added", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            removedLineCount: 4,
+            addedLines: [],
+            removedOutsidePrLineCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("rejects deleting a test even when no line is outside the pull request", () => {
+    expect(
+      codeOf(
+        [
+          change(TEST, {
+            status: "deleted",
+            addedLines: [],
+            removedOutsidePrLineCount: 0,
+          }),
+        ],
+        [TEST],
+      ),
+    ).toBe("test_not_additive");
+  });
+
+  test("still rejects a weakening line added while rewriting the pull request lines", () => {
     expect(
       codeOf(
         [
           change(TEST, {
             removedLineCount: 1,
-            baseRemovedLineCount: 0,
+            removedOutsidePrLineCount: 0,
             addedLines: ["// @ts-ignore"],
           }),
         ],

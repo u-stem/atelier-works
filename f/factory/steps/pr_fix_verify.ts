@@ -15,6 +15,7 @@ import {
 } from "../lib/check_sandbox.ts";
 import {
   githubPrMergeBaseIo,
+  type PrBase,
   resolvePrMergeBase,
 } from "../lib/ci_fix_pr_base.ts";
 import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
@@ -680,8 +681,8 @@ export async function main(
   };
   // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
   // 求められなければnullになり、検査は基点の行を消したものとして拒否に倒れる。
-  let prBaseResolved: Promise<string | null> | null = null;
-  const resolvePrBaseOnce = (): Promise<string | null> => {
+  let prBaseResolved: Promise<PrBase | null> | null = null;
+  const resolvePrBaseOnce = (): Promise<PrBase | null> => {
     prBaseResolved ??= (async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
       const client: GhClient = { run: runCommand, ghToken };
