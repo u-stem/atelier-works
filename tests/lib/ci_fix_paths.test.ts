@@ -988,7 +988,15 @@ describe("countMeaningfulLines", () => {
     ).toBe(0);
   });
 
-  test("counts a Rust attribute", () => {
-    expect(countMeaningfulLines(["#[test]"])).toBe(1);
+  test("does not count a shebang line, which is a comment in a shell or Python script", () => {
+    expect(countMeaningfulLines(["#!/bin/sh"])).toBe(0);
+  });
+
+  test("does not count a Rust attribute, so that a rewrite of it is refused", () => {
+    expect(countMeaningfulLines(["#[test]"])).toBe(0);
+  });
+
+  test("counts a line that a comment syntax of another language starts", () => {
+    expect(countMeaningfulLines(["-- select 1", "; run", "% note"])).toBe(3);
   });
 });

@@ -39,6 +39,8 @@ type Repo = {
 async function repoWithPr(input: {
   readonly base: Readonly<Record<string, string>>;
   readonly config?: readonly (readonly [string, string])[];
+  /** PRを作った後にmainへ足すcommitの内容。baseの先端は、このcommitになる。 */
+  readonly main?: Readonly<Record<string, string>>;
   readonly prSteps: (steps: {
     readonly write: (path: string, content: string) => void;
     readonly git: (args: readonly string[]) => Promise<string>;
@@ -99,10 +101,21 @@ async function repoWithPr(input: {
   await git(["add", "-A"]);
   await git(["commit", "-q", "-m", "pr"]);
   const head = await git(["rev-parse", "HEAD"]);
+  let tip = mergeBase;
+  if (input.main !== undefined) {
+    await git(["checkout", "-q", "main"]);
+    for (const [path, content] of Object.entries(input.main)) {
+      write(path, content);
+    }
+    await git(["add", "-A"]);
+    await git(["commit", "-q", "-m", "main"]);
+    tip = await git(["rev-parse", "HEAD"]);
+    await git(["checkout", "-q", "pr"]);
+  }
   return {
     dir,
     head,
-    base: { mergeBase, tip: mergeBase },
+    base: { mergeBase, tip },
     run,
     write,
   };
@@ -222,6 +235,38 @@ describe("collectCiFixChanges with a real git", () => {
       lines("    expect(a).toBeDefined();", "  expect(b).toBe(2);", "  run();"),
     );
     expect((await changeOf(repo, TEST))?.removedOutsidePrLineCount).toBe(1);
+  });
+
+  test("counts a line that the base branch already has after it moved on, as in a stacked pull request", async () => {
+    const repo = await repoWithPr({
+      base: { [TEST]: lines("b1", "b2", "b3") },
+      main: { [TEST]: lines("b1", "b2", "p1", "b3") },
+      prSteps: async ({ write }) =>
+        write(TEST, lines("b1", "b2", "p1", "p2", "b3")),
+    });
+    repo.write(TEST, lines("b1", "b2", "q1", "p2", "b3"));
+    expect((await changeOf(repo, TEST))?.removedOutsidePrLineCount).toBe(1);
+  });
+
+  test("counts no line outside the pull request for a line only the pull request has after the base branch moved on", async () => {
+    const repo = await repoWithPr({
+      base: { [TEST]: lines("b1", "b2", "b3") },
+      main: { [TEST]: lines("b1", "b2", "p1", "b3") },
+      prSteps: async ({ write }) =>
+        write(TEST, lines("b1", "b2", "p1", "p2", "b3")),
+    });
+    repo.write(TEST, lines("b1", "b2", "p1", "q2", "b3"));
+    expect((await changeOf(repo, TEST))?.removedOutsidePrLineCount).toBe(0);
+  });
+
+  test("counts no line outside the pull request when the base branch changed elsewhere after the pull request branched", async () => {
+    const repo = await repoWithPr({
+      base: { [TEST]: lines("b1", "b2", "b3") },
+      main: { [TEST]: lines("b1", "b2", "b3", "m1") },
+      prSteps: async ({ write }) => write(TEST, lines("b1", "b2", "p1", "b3")),
+    });
+    repo.write(TEST, lines("b1", "b2", "q1", "b3"));
+    expect((await changeOf(repo, TEST))?.removedOutsidePrLineCount).toBe(0);
   });
 
   test("does not take the last base line without a newline for a line the pull request added", async () => {

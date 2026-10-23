@@ -179,6 +179,11 @@ describe("ciRoundApplyTimeoutMisfit", () => {
     expect(ciRoundApplyTimeoutMisfit(1800, 7200)).toBeNull();
   });
 
+  test("counts the resolution of the base of the pull request", () => {
+    // 基点の解決のgit3回(1回あたり60 + 15秒)を含む。含めない見積もりは4905秒である。
+    expect(ciRoundApplyTimeoutMisfit(1800, 5_000)).not.toBeNull();
+  });
+
   test("reports a Claude timeout that leaves no room for the scans", () => {
     expect(ciRoundApplyTimeoutMisfit(3000, 7200)).toContain("ci round");
   });
@@ -187,6 +192,11 @@ describe("ciRoundApplyTimeoutMisfit", () => {
 describe("ciRoundVerifyTimeoutMisfit", () => {
   test("accepts the default time settings with four check commands", () => {
     expect(ciRoundVerifyTimeoutMisfit(1800, 4, 21_600)).toBeNull();
+  });
+
+  test("counts the resolution of the base of the pull request", () => {
+    // 基点の解決のgit3回(1回あたり60 + 15秒)を含む。含めない見積もりは21090秒である。
+    expect(ciRoundVerifyTimeoutMisfit(1800, 4, 21_200)).not.toBeNull();
   });
 
   test("reports a fifth check command that no longer fits", () => {
