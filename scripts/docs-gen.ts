@@ -25,6 +25,9 @@ import {
 /** 生成範囲を持つ文書。 */
 export const GENERATED_DOCS: readonly string[] = ["docs/architecture.md"];
 
+/** 起動関係の図のデータ。Consoleのバンドルに取り込む。 */
+export const FLOW_GRAPH_FILE = "console/src/generated/flow-graph.json";
+
 /** miseタスクの表を持つ文書。 */
 export const TASK_TABLE_DOC = "README.md";
 
@@ -157,6 +160,19 @@ export function compareTaskNames(
       .filter((name) => !toml.has(name))
       .map((name) => `${TASK_TABLE_DOC}: task "${name}" is not in mise.toml`),
   ];
+}
+
+/** 起動関係の図のデータの、あるべき中身を返す。 */
+export function renderFlowGraphFile(): string {
+  return "";
+}
+
+/** 起動関係の図のデータが古ければ、問題を説明する文を返す(無ければnull)。 */
+export function flowGraphProblem(
+  _current: string | null,
+  _next: string,
+): string | null {
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
