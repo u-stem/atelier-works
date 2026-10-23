@@ -9,8 +9,11 @@ type WriteTargetKind = "approval" | "work_item" | "notice";
 /** 監査の起動は対象を持たないので、キーを1つに固定する。 */
 export const AUDIT_WRITE_KEY = "audit";
 
-// 仮の値。テストが失敗することを確かめるために、正しい値にしていない。
-export const MANUAL_INTAKE_WRITE_KEY = "";
+/**
+ * 新規投入は対象を持たないので、キーを1つに固定する。
+ * 入力の内容でキーを変えると、題名を書き換えるだけで二重に送れてしまう。
+ */
+export const MANUAL_INTAKE_WRITE_KEY = "manual_intake";
 
 /** 対象の種類とIDから、ロックのキーを作る。承認の承認と却下は同じキーで止める。 */
 export function writeTargetKey(kind: WriteTargetKind, id: number): string {
