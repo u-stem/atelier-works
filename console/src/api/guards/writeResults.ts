@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `notice_resolve.ts`の戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`の戻りに合わせる。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
 
@@ -121,18 +121,46 @@ export function isNoticeResolveResult(
   );
 }
 
-// 仮の実装。テストが失敗することを確かめるための値だけを返す。
-export type ManualIntakeRefusalReason = string;
+/**
+ * 手動投入を断った理由。`f/factory/lib/manual_intake_support.ts`の
+ * `MANUAL_INTAKE_REFUSAL_REASONS`と同じ並びで、契約テストが突き合わせる。
+ * 理由に入力の文字列は含まれない。画面は日本語の固定文に直す(`lib/intakeRefusal.ts`)。
+ */
+export const MANUAL_INTAKE_REFUSAL_REASONS = [
+  "invalid_owner",
+  "invalid_repo",
+  "repo_not_allowed",
+  "empty_title",
+  "title_too_long",
+  "invalid_title_chars",
+  "empty_body",
+  "invalid_body_chars",
+  "body_too_long",
+  "actor_unknown",
+] as const;
 
-export const MANUAL_INTAKE_REFUSAL_REASONS: readonly ManualIntakeRefusalReason[] =
-  [];
+export type ManualIntakeRefusalReason =
+  (typeof MANUAL_INTAKE_REFUSAL_REASONS)[number];
 
-export type ManualIntakeSubmitResult = {
-  readonly refused: boolean;
-};
+export type ManualIntakeSubmitResult =
+  | {
+      readonly refused: true;
+      readonly reason: ManualIntakeRefusalReason;
+    }
+  | { readonly refused: false; readonly flow_job_id: string };
+
+const isManualIntakeRefusalReason: Guard<ManualIntakeRefusalReason> = isOneOf(
+  MANUAL_INTAKE_REFUSAL_REASONS,
+);
 
 export function isManualIntakeSubmitResult(
-  _value: unknown,
-): _value is ManualIntakeSubmitResult {
-  return false;
+  value: unknown,
+): value is ManualIntakeSubmitResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isManualIntakeRefusalReason(value.reason);
+  }
+  return value.refused === false && isString(value.flow_job_id);
 }

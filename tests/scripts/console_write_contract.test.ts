@@ -338,14 +338,14 @@ describe("what the scripts return", () => {
     ]);
   });
 
-  test.each(manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS)(
+  test.each([...manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS])(
     "the refusal %s passes the guard",
     (reason) => {
       expect(isManualIntakeSubmitResult({ refused: true, reason })).toBe(true);
     },
   );
 
-  test.each(manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS)(
+  test.each([...manualIntakeSupport.MANUAL_INTAKE_REFUSAL_REASONS])(
     "the refusal %s has a Japanese sentence",
     (reason) => {
       expect(describeIntakeRefusal(reason)).toMatch(/[ぁ-んァ-ヶ一-龠]/);

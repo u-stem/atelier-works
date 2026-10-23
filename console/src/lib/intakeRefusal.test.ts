@@ -3,14 +3,14 @@ import { MANUAL_INTAKE_REFUSAL_REASONS } from "../api/guards/writeResults.ts";
 import { describeIntakeRefusal } from "./intakeRefusal.ts";
 
 describe("describeIntakeRefusal", () => {
-  test.each(MANUAL_INTAKE_REFUSAL_REASONS)(
+  test.each([...MANUAL_INTAKE_REFUSAL_REASONS])(
     "explains %s in a sentence that ends with a full stop",
     (reason) => {
       expect(describeIntakeRefusal(reason).endsWith("。")).toBe(true);
     },
   );
 
-  test.each(MANUAL_INTAKE_REFUSAL_REASONS)(
+  test.each([...MANUAL_INTAKE_REFUSAL_REASONS])(
     "does not show the raw code for %s",
     (reason) => {
       expect(describeIntakeRefusal(reason)).not.toContain(reason);

@@ -15,6 +15,7 @@ import {
   type AuditKickoffResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
   type ManualIntakeSubmitResult,
@@ -139,13 +140,29 @@ type ManualIntakeInput = {
   readonly repo: string;
   readonly title: string;
   readonly body: string;
+  /** 受入基準。1行に1項目で書く。空でもよい。 */
   readonly acceptanceCriteria: string;
 };
 
-// 仮の実装。テストが失敗することを確かめるための値だけを返す。
+/**
+ * 手動で投入する。許可されていないリポジトリや不正な入力は、フローを起動せず、理由つきの断りで返る。
+ * 断りは失敗ではなく結果として返す。投入した人は引数に取らない。scriptがジョブの実行文脈から導く。
+ * 入力の検証と、Issueの作成、作業項目の登録は、scriptとフローが行う。
+ */
 export function submitManualIntake(
-  _input: ManualIntakeInput,
-  _options: RunScriptOptions = {},
+  input: ManualIntakeInput,
+  options: RunScriptOptions = {},
 ): Promise<ManualIntakeSubmitResult> {
-  return Promise.resolve({ refused: false });
+  return callWrite(
+    "manual_intake_submit",
+    {
+      owner: input.owner,
+      repo: input.repo,
+      title: input.title,
+      body: input.body,
+      acceptance_criteria: input.acceptanceCriteria,
+    },
+    isManualIntakeSubmitResult,
+    options,
+  );
 }

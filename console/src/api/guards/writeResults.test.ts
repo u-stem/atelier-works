@@ -149,7 +149,7 @@ describe("isManualIntakeSubmitResult", () => {
     ).toBe(true);
   });
 
-  test.each(MANUAL_INTAKE_REFUSAL_REASONS)(
+  test.each([...MANUAL_INTAKE_REFUSAL_REASONS])(
     "accepts the refusal %s",
     (reason) => {
       expect(isManualIntakeSubmitResult({ refused: true, reason })).toBe(true);

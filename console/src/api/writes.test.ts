@@ -272,7 +272,7 @@ describe("submitManualIntake", () => {
     body: "Add a widget to the page.",
     acceptanceCriteria: "It renders.",
   };
-  const STARTED = { refused: false, flow_job_id: JOB };
+  const STARTED = { refused: false, flow_job_id: JOB } as const;
 
   test("calls manual_intake_submit", async () => {
     const { fetchFn, calls } = respondWith(STARTED);
