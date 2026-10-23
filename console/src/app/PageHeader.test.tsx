@@ -92,6 +92,24 @@ describe("PageHeader", () => {
     );
   });
 
+  test("renders no refresh text without refresh or actions", () => {
+    const markup = renderWith({});
+
+    expect(markup).not.toContain("更新");
+  });
+
+  test("renders no right side block without refresh or actions", () => {
+    const markup = renderWith({});
+
+    expect(markup.split("<div").length - 1).toBe(1);
+  });
+
+  test("renders the refresh button without actions", () => {
+    const markup = renderWith({ refresh: REFRESH });
+
+    expect(markup).toContain(REFRESH_BUTTON);
+  });
+
   test("places the children after the title", () => {
     const markup = renderWith({ children: <p>子</p> });
 
