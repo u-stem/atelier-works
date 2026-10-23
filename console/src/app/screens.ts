@@ -77,6 +77,13 @@ export const SCREENS: readonly Screen[] = [
       })),
     children: [
       {
+        path: "items/new",
+        lazy: () =>
+          import("../screens/items/NewItemScreen.tsx").then((module) => ({
+            Component: module.NewItemScreen,
+          })),
+      },
+      {
         path: "items/:id/requirements",
         lazy: () =>
           import("../screens/items/ItemRequirementsScreen.tsx").then(
