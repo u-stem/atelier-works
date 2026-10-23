@@ -338,6 +338,7 @@ Consoleの一覧と集計は次のviewを読む。
 起動元は、flowを起動するscriptの名前である。
 括弧は、そのscriptを動かすConsoleの操作を示す。
 起動元の一覧は`scripts/launch-graph.ts`の表から作る。
+同じ表から、Consoleのシステムの画面に出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)も作る。
 `wmill.runFlowAsync`を呼ぶscriptを足したときは、この表にも足す。足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
 
 - `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。
