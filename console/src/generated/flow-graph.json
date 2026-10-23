@@ -49,6 +49,12 @@
       "note": ""
     },
     {
+      "id": "human:entry:manual_intake_submit",
+      "kind": "human",
+      "label": "Consoleの新規投入",
+      "note": ""
+    },
+    {
       "id": "human:entry:retry_work_item",
       "kind": "human",
       "label": "Consoleの再実行",
@@ -82,6 +88,12 @@
       "id": "script:auto_retry_stale_image",
       "kind": "script",
       "label": "auto_retry_stale_image",
+      "note": ""
+    },
+    {
+      "id": "script:manual_intake_submit",
+      "kind": "script",
+      "label": "manual_intake_submit",
       "note": ""
     },
     {
@@ -229,6 +241,11 @@
       "kind": "human"
     },
     {
+      "from": "human:entry:manual_intake_submit",
+      "to": "script:manual_intake_submit",
+      "kind": "human"
+    },
+    {
       "from": "human:entry:retry_work_item",
       "to": "script:retry_work_item",
       "kind": "human"
@@ -261,6 +278,11 @@
     {
       "from": "script:auto_retry_stale_image",
       "to": "flow:pr_fix",
+      "kind": "run"
+    },
+    {
+      "from": "script:manual_intake_submit",
+      "to": "flow:manual_intake",
       "kind": "run"
     },
     {
