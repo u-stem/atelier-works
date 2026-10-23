@@ -87,6 +87,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/ci_log_support.ts",
   "f/factory/lib/claude.ts",
   "f/factory/lib/cleanup_db_support.ts",
+  "f/factory/lib/config.ts",
   "f/factory/lib/conflict_fix_round.ts",
   "f/factory/lib/console_status.ts",
   "f/factory/lib/console_support.ts",
