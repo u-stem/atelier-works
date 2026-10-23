@@ -381,6 +381,11 @@ export function isUndefinedTableError(err: unknown): boolean {
   return typeof body === "string" && body.includes(TABLE_MISSING_MESSAGE);
 }
 
+/** 表示用の文字列から、制御文字と書式文字を空白にする。 */
+export function sanitizeHoldText(_text: string): string {
+  return "";
+}
+
 /** 例外の文を、制御文字を空白にして、200字までにする。 */
 function describeError(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);

@@ -13,6 +13,7 @@ import {
   INSTALL_SCRIPT_NAMES,
   lockfilePackages,
 } from "./dependabot_support.ts";
+import type { HoldReadFailureKind, HoldReadOutcome } from "./holds.ts";
 import { sanitizePrProse } from "./implement_support.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import { type FactoryConfig, isRecord } from "./types.ts";
@@ -943,3 +944,36 @@ export function dependabotReason(
  */
 export const OTHER_REPO_UNSUPPORTED_REASON =
   "analysis without running repository commands is not implemented for this repository";
+
+/** 保留を読めなかった理由の種類。`HoldReadFailureKind`に、読み取りが例外で終わった`error`を足す。 */
+export type MergeHoldFailure = HoldReadFailureKind | "error";
+
+/** マージの保留の確認の結果。 */
+export type MergeHoldCheck =
+  | { readonly kind: "clear" }
+  | { readonly kind: "held"; readonly ids: readonly number[] }
+  | { readonly kind: "unreadable"; readonly failure: MergeHoldFailure };
+
+/** 保留があるために、マージせずに人に回すときの理由。 */
+export const DEPENDABOT_MERGE_HELD_REASON = "";
+
+/** 保留を読めなかったために、マージせずに人に回すときの理由。 */
+export function dependabotHoldUnreadableReason(
+  _failure: MergeHoldFailure,
+): string {
+  return "";
+}
+
+/** 止める確認の結果に対応する理由。 */
+export function mergeHoldReason(
+  _check: Exclude<MergeHoldCheck, { kind: "clear" }>,
+): string {
+  return "";
+}
+
+/** マージの保留を読み、進めてよいかを分類する。 */
+export async function classifyMergeHolds(
+  _read: () => Promise<HoldReadOutcome<readonly { readonly id: number }[]>>,
+): Promise<MergeHoldCheck> {
+  return { kind: "clear" };
+}

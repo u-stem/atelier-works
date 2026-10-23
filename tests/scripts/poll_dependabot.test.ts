@@ -27,6 +27,7 @@ import {
   type OpenPullRequest,
   type PullRequestWithCreatedAt,
 } from "../../f/factory/lib/github.ts";
+import type { HoldReadOutcome, HoldRow } from "../../f/factory/lib/holds.ts";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
 import type {
   FactoryConfig,
@@ -39,7 +40,9 @@ import {
   type DependabotPrCandidate,
   FLOW_WAIT_COOLDOWN_MS,
   type HeadWaitState,
+  type HoldNotice,
   headWaitKey,
+  holdNoticeRecord,
   MAX_FLOW_GATE_WAITS,
   nextPollState,
   type PollDependabotContext,
@@ -326,6 +329,8 @@ type Harness = {
   readonly calls: { getPr: number; collect: number; ownerChecks: number };
   /** `hasItemForHead`に渡った`owner/repo#番号`。 */
   readonly handledChecks: string[];
+  /** 保留を読んだリポジトリ(`owner/repo`)。 */
+  readonly holdReads: string[];
 };
 
 type HarnessOptions = {
@@ -337,6 +342,10 @@ type HarnessOptions = {
   readonly insertId?: number | null;
   readonly updated?: boolean;
   readonly startFlow?: () => Promise<string>;
+  /** マージの保留の読み取りの結果。省略時は保留なし。 */
+  readonly holds?: HoldReadOutcome<readonly HoldRow[]>;
+  /** マージの保留の読み取りが投げる例外。 */
+  readonly holdsError?: Error;
 };
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -348,6 +357,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const failures: Harness["failures"] = [];
   const calls = { getPr: 0, collect: 0, ownerChecks: 0 };
   const handledChecks: string[] = [];
+  const holdReads: string[] = [];
   const deps: PollDependabotDeps = {
     getPr: async () => {
       calls.getPr += 1;
@@ -358,6 +368,11 @@ function harness(options: HarnessOptions = {}): Harness {
       return options.handled ?? false;
     },
     gateWaitingCancels: async () => options.waits ?? { count: 0, lastAt: null },
+    listMergeHolds: async (owner, repo) => {
+      holdReads.push(`${owner}/${repo}`);
+      if (options.holdsError !== undefined) throw options.holdsError;
+      return options.holds ?? { ok: true, value: [] };
+    },
     collect: async () => {
       calls.collect += 1;
       return options.collect ?? ready();
@@ -400,6 +415,7 @@ function harness(options: HarnessOptions = {}): Harness {
     failures,
     calls,
     handledChecks,
+    holdReads,
   };
 }
 
@@ -1726,6 +1742,8 @@ type RoundLog = {
   /** 表を読んだリポジトリ(`owner/repo`)。 */
   read: string[];
   warnings: { message: string; fields: Record<string, unknown> }[];
+  /** 保留で待った周回の通知として残そうとした内容。 */
+  holdNotices: HoldNotice[];
 };
 
 type RoundOptions = {
@@ -1746,6 +1764,10 @@ type RoundOptions = {
   readonly collect?: () => Promise<CollectResult>;
   readonly handled?: boolean;
   readonly ownerGate?: RepoOwnerGateResult;
+  readonly holds?: HoldReadOutcome<readonly HoldRow[]>;
+  readonly holdsError?: Error;
+  /** 保留の通知を残す処理が投げる例外。 */
+  readonly holdNoticeError?: Error;
 };
 
 function emptyLog(): RoundLog {
@@ -1758,6 +1780,7 @@ function emptyLog(): RoundLog {
     state: null,
     read: [],
     warnings: [],
+    holdNotices: [],
   };
 }
 
@@ -1796,6 +1819,10 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
         ...(options.ownerGate === undefined
           ? {}
           : { ownerGate: options.ownerGate }),
+        ...(options.holds === undefined ? {} : { holds: options.holds }),
+        ...(options.holdsError === undefined
+          ? {}
+          : { holdsError: options.holdsError }),
       });
       return {
         viewerLogin: "factory-bot",
@@ -1821,6 +1848,12 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
             : options.readRepoPrs(owner, repo);
         },
         listActive: async () => options.active ?? [],
+        recordHoldNotice: async (notice) => {
+          log.holdNotices.push(notice);
+          if (options.holdNoticeError !== undefined) {
+            throw options.holdNoticeError;
+          }
+        },
         warn: (message, fields) => {
           log.warnings.push({ message, fields });
         },
@@ -2348,6 +2381,7 @@ describe("pollDependabot read source", () => {
       waiting: 0,
       skipped: 0,
       failed: 0,
+      held: 0,
       fallback_lists: 0,
       fallback_reasons: {},
     });
@@ -3403,5 +3437,319 @@ describe("poll_dependabot does not use the search API", () => {
 
   test("github.ts does not export searchDependabotPrs", () => {
     expect("searchDependabotPrs" in github).toBe(false);
+  });
+});
+
+// ---- マージの保留 ----
+
+function holdRow(id: number): HoldRow {
+  return {
+    id,
+    scope: "merge",
+    target: "acme/widgets",
+    reason: "SECRET-REASON",
+    holder_kind: "session",
+    holder: "session:SECRET-HOLDER",
+    created_at: "2026-10-19T23:00:00.000Z",
+    expires_at: "2026-10-20T02:00:00.000Z",
+    released_at: null,
+    released_by: null,
+  };
+}
+
+const HELD: HoldReadOutcome<readonly HoldRow[]> = {
+  ok: true,
+  value: [holdRow(3)],
+};
+
+describe("processDependabotPr when a merge hold is active", () => {
+  test("waits without creating a work item", async () => {
+    const { h, outcome } = await run({ holds: HELD });
+
+    expect([outcome.kind, h.inserted]).toEqual(["held", []]);
+  });
+
+  test("reports the ids of the holds", async () => {
+    const { outcome } = await run({ holds: HELD });
+
+    expect(outcome).toEqual({
+      kind: "held",
+      check: { kind: "held", ids: [3] },
+    });
+  });
+
+  test("does not run the impact assessment, so it never collects", async () => {
+    const { h } = await run({ holds: HELD });
+
+    expect(h.calls.collect).toBe(0);
+  });
+
+  test("does not start the flow", async () => {
+    const { h } = await run({ holds: HELD });
+
+    expect(h.started).toEqual([]);
+  });
+
+  test("does not notify a person", async () => {
+    const { h } = await run({ holds: HELD });
+
+    expect(h.notified).toEqual([]);
+  });
+
+  test("does not check the repository owner", async () => {
+    const { h } = await run({ holds: HELD });
+
+    expect(h.calls.ownerChecks).toBe(0);
+  });
+
+  test("reads the holds of the repository the GitHub response names", async () => {
+    const { h } = await run({ holds: HELD });
+
+    expect(h.holdReads).toEqual(["acme/widgets"]);
+  });
+
+  test("reads the holds after it knows the head is not handled yet", async () => {
+    const { h } = await run({ handled: true, holds: HELD });
+
+    expect(h.holdReads).toEqual([]);
+  });
+
+  test("does not read the holds for a pull request that is not open", async () => {
+    const { h } = await run({
+      holds: HELD,
+      pr: pullRequest({ state: "closed", createdAtMs: FOUND.createdAtMs }),
+    });
+
+    expect(h.holdReads).toEqual([]);
+  });
+
+  test("does not read the holds when a review is active", async () => {
+    const { h } = await run(
+      { holds: HELD },
+      { activeForPr: [{ kind: "pr_review" }] },
+    );
+
+    expect(h.holdReads).toEqual([]);
+  });
+
+  test("starts the flow as before once the hold is gone", async () => {
+    const { outcome } = await run({ holds: { ok: true, value: [] } });
+
+    expect(outcome.kind).toBe("started");
+  });
+
+  test.each(["missing_table", "read_failed", "corrupt"] as const)(
+    "waits when the read fails with %s",
+    async (kind) => {
+      const { outcome } = await run({
+        holds: { ok: false, kind, reason: "x" },
+      });
+
+      expect(outcome).toEqual({
+        kind: "held",
+        check: { kind: "unreadable", failure: kind },
+      });
+    },
+  );
+
+  test("waits when the read throws", async () => {
+    const { outcome } = await run({
+      holdsError: new Error("connection refused"),
+    });
+
+    expect(outcome).toEqual({
+      kind: "held",
+      check: { kind: "unreadable", failure: "error" },
+    });
+  });
+
+  test("creates no work item when the read fails", async () => {
+    const { h } = await run({
+      holds: { ok: false, kind: "read_failed", reason: "x" },
+    });
+
+    expect(h.inserted).toEqual([]);
+  });
+
+  test("starts no flow when the read throws", async () => {
+    const { h } = await run({ holdsError: new Error("boom") });
+
+    expect(h.started).toEqual([]);
+  });
+});
+
+describe("pollDependabot when a merge hold is active", () => {
+  test("counts the pull request as held", async () => {
+    const result = await pollDependabot(round(emptyLog(), { holds: HELD }));
+
+    expect([result.held, result.started]).toEqual([1, 0]);
+  });
+
+  test("does not create a work item or start the flow", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { holds: HELD }));
+
+    expect(log.collected).toBe(0);
+  });
+
+  test("leaves the held pull request out of the waiting count", async () => {
+    const result = await pollDependabot(round(emptyLog(), { holds: HELD }));
+
+    expect(result.waiting).toBe(0);
+  });
+
+  test("records one notice for the round with the number of held pull requests", async () => {
+    const log = emptyLog();
+    const second: DependabotPrCandidate = { ...FOUND, number: 13 };
+
+    await pollDependabot(round(log, { holds: HELD, found: [FOUND, second] }));
+
+    expect(log.holdNotices).toEqual([{ kind: "held", prCount: 2 }]);
+  });
+
+  test("records no notice when no hold is active", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log));
+
+    expect(log.holdNotices).toEqual([]);
+  });
+
+  test("records a notice for the failure when the holds cannot be read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { holds: { ok: false, kind: "missing_table", reason: "x" } }),
+    );
+
+    expect(log.holdNotices).toEqual([
+      { kind: "unreadable", failure: "missing_table", prCount: 1 },
+    ]);
+  });
+
+  test("records no notice for a hold when the holds cannot be read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { holdsError: new Error("boom") }));
+
+    expect(log.holdNotices.map((notice) => notice.kind)).toEqual([
+      "unreadable",
+    ]);
+  });
+
+  test("still finishes the round when the notice cannot be recorded", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { holds: HELD, holdNoticeError: new Error("db down") }),
+    );
+
+    expect(result.held).toBe(1);
+  });
+
+  test("warns when the notice cannot be recorded", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { holds: HELD, holdNoticeError: new Error("db down") }),
+    );
+
+    expect(log.warnings.map((w) => w.message)).toContain(
+      "failed to record the hold notice",
+    );
+  });
+
+  test("keeps the earlier wait of a held pull request", async () => {
+    const log = emptyLog();
+    const previous = {
+      firstWaitAtMs: NOW_MS - DAY_MS,
+      waitCount: 2,
+      nextCheckAtMs: NOW_MS - 1,
+    };
+
+    await pollDependabot(
+      round(log, {
+        holds: HELD,
+        state: { resumeAtMs: null, heads: { [KEY]: previous } },
+      }),
+    );
+
+    expect(log.state?.heads[KEY]).toEqual(previous);
+  });
+
+  test("resumes by itself when the hold is gone", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { holds: { ok: true, value: [] } }),
+    );
+
+    expect(result.started).toBe(1);
+  });
+});
+
+describe("holdNoticeRecord", () => {
+  test("files a held notice as an info kind", () => {
+    expect(holdNoticeRecord({ kind: "held", prCount: 2 }).kind).toBe(
+      "dependabot_merge_held",
+    );
+  });
+
+  test("puts the number of pull requests in the held notice", () => {
+    expect(holdNoticeRecord({ kind: "held", prCount: 2 }).message).toContain(
+      "2件",
+    );
+  });
+
+  test("tells what to do about a held notice", () => {
+    const message = holdNoticeRecord({ kind: "held", prCount: 1 }).message;
+
+    expect(
+      message.includes("mise run hold:list") &&
+        message.includes("mise run hold:release"),
+    ).toBe(true);
+  });
+
+  test("says that waiting ends by itself once the hold is released", () => {
+    expect(holdNoticeRecord({ kind: "held", prCount: 1 }).message).toContain(
+      "自動で再開",
+    );
+  });
+
+  test("files an unreadable notice as an action kind", () => {
+    expect(
+      holdNoticeRecord({ kind: "unreadable", failure: "corrupt", prCount: 1 })
+        .kind,
+    ).toBe("dependabot_merge_hold_unreadable");
+  });
+
+  test("names the failure in the unreadable notice", () => {
+    expect(
+      holdNoticeRecord({ kind: "unreadable", failure: "corrupt", prCount: 1 })
+        .message,
+    ).toContain("corrupt");
+  });
+
+  test("leaves the count out of the unreadable notice, so that repeated rounds share one", () => {
+    const one = holdNoticeRecord({
+      kind: "unreadable",
+      failure: "read_failed",
+      prCount: 1,
+    });
+    const three = holdNoticeRecord({
+      kind: "unreadable",
+      failure: "read_failed",
+      prCount: 3,
+    });
+
+    expect(one.message).toBe(three.message);
+  });
+
+  test.each([
+    ["missing_table", "migration"],
+    ["read_failed", "DB"],
+    ["corrupt", "hold:list"],
+    ["error", "ログ"],
+  ] as const)("points the %s notice at its first step", (failure, hint) => {
+    expect(
+      holdNoticeRecord({ kind: "unreadable", failure, prCount: 1 }).message,
+    ).toContain(hint);
   });
 });

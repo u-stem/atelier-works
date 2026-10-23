@@ -35,6 +35,10 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       "scripts/host_apply/",
       "infra/worker/",
       "mise/",
+      "scripts/claude-hooks/",
+      "tests/scripts/claude-hooks/",
+      "mise-tasks/",
+      ".mise-tasks/",
       "infra/",
       ".husky/",
       ".githooks/",
@@ -1324,5 +1328,133 @@ describe("the factory-fix table of protected files", () => {
     expect(skill).toMatch(
       /表は種類ごとの代表例で、正確な一覧は.*`f\/factory\/lib\/protected_paths\.ts`が持つ/,
     );
+  });
+});
+
+// subagentの拒否のフックは、書き換えられると拒否が外れる。
+// miseのタスクのディレクトリは、置いたファイルがタスクとして実行されるので、拒否の外から保留を操作する道になる。
+describe("hook and task directories", () => {
+  const DIRECTORIES = [
+    "scripts/claude-hooks/",
+    "tests/scripts/claude-hooks/",
+    "mise-tasks/",
+    ".mise-tasks/",
+  ];
+
+  test.each(DIRECTORIES)("FORBIDDEN_PATH_PREFIXES lists %s", (prefix) => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(prefix);
+  });
+
+  test.each(DIRECTORIES)(
+    "IMPLEMENT_PROTECTED_PATH_PREFIXES lists %s",
+    (prefix) => {
+      expect(IMPLEMENT_PROTECTED_PATH_PREFIXES).toContain(prefix);
+    },
+  );
+
+  test.each([
+    "scripts/claude-hooks/bash-guard.ts",
+    "scripts/claude-hooks/run.sh",
+    "scripts/claude-hooks/hold-guard.ts",
+    "tests/scripts/claude-hooks/bash-guard.test.ts",
+    "mise-tasks/hold",
+    "mise-tasks/nested/task",
+    ".mise-tasks/hold",
+    "scripts/claude-hooks",
+    "mise-tasks",
+    ".mise-tasks",
+  ])("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each([
+    "scripts/claude-hooks/bash-guard.ts",
+    "tests/scripts/claude-hooks/bash-guard.test.ts",
+    "mise-tasks/hold",
+    ".mise-tasks/hold",
+  ])("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "scripts/claude-hooks-notes/readme.md",
+    "scripts/claude-hooks.ts",
+    "tests/scripts/claude-hooks-extra/a.test.ts",
+    "mise-tasks-old/hold",
+    "docs/mise-tasks/readme.md",
+  ])("does not match the look-alike %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+
+  test("matches a differently cased directory name", () => {
+    expect(matchesForbiddenPath("Scripts/Claude-Hooks/Bash-Guard.ts")).toBe(
+      true,
+    );
+  });
+});
+
+describe("hook files on disk", () => {
+  async function paths(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    for await (const path of new Bun.Glob(pattern).scan({
+      cwd: ".",
+      onlyFiles: true,
+    })) {
+      found.push(path);
+    }
+    return found;
+  }
+
+  test("finds the hook files, so that the checks below are not empty", async () => {
+    expect(await paths("scripts/claude-hooks/*.ts")).toContain(
+      "scripts/claude-hooks/bash-guard.ts",
+    );
+  });
+
+  test("matchesForbiddenPath matches every file under scripts/claude-hooks/", async () => {
+    const unprotected = (await paths("scripts/claude-hooks/**/*")).filter(
+      (path) => !matchesForbiddenPath(path),
+    );
+    expect(unprotected).toEqual([]);
+  });
+
+  test("matchesForbiddenPath matches every file under tests/scripts/claude-hooks/", async () => {
+    const unprotected = (await paths("tests/scripts/claude-hooks/**/*")).filter(
+      (path) => !matchesForbiddenPath(path),
+    );
+    expect(unprotected).toEqual([]);
+  });
+});
+
+// 保留のCLIとpsqlの経路は、保留を置く・解除する入口なので、書き換えられると、置く主体の絞り込みが外れる。
+describe("hold command files", () => {
+  const PATHS = [
+    "scripts/hold.ts",
+    "scripts/hold_psql.ts",
+    "tests/scripts/hold.test.ts",
+    "tests/scripts/hold_psql.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect scripts/freeze.ts, which a hold does not depend on", () => {
+    expect(matchesForbiddenPath("scripts/freeze.ts")).toBe(false);
+  });
+});
+
+// mise.tomlはファイル名で守られている。保留のタスクを含む変更は、保護パスの変更として扱われる。
+describe("mise.toml", () => {
+  test("is a protected path, which holds the hold tasks", () => {
+    expect(matchesForbiddenPath("mise.toml")).toBe(true);
   });
 });

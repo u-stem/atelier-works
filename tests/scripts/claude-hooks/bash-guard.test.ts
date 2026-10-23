@@ -1328,3 +1328,144 @@ describe("bash-guard allows mentioning CHECK_IDLE_FORCE without setting it", () 
     expect(await decide(command)).toBe("allow");
   });
 });
+
+// 保留(hold)を置く・解除する操作は、subagentに許さない。許すのは一覧(list)だけである。
+// ベストエフォートの規則で、別名の呼び出しや、変数で組んだパスは止めない。
+describe("bash-guard denies a subagent that places or releases a hold", () => {
+  test.each([
+    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
+    "bun ./scripts/hold.ts release 1",
+    "bun run scripts/hold.ts place",
+    "bun run ./scripts/hold.ts release 3",
+    "bun /Users/someone/ws/atelier-works/scripts/hold.ts place",
+    "bun scripts/hold.ts",
+    "bun scripts/hold.ts --help",
+    "bun scripts/hold.ts -- place",
+    "bun scripts/hold.ts list; bun scripts/hold.ts place",
+    "bun scripts/hold.ts list && bun scripts/hold.ts release 1",
+    "bunx tsx scripts/hold.ts place",
+    "bun x tsx scripts/hold.ts place",
+    "npx tsx scripts/hold.ts place",
+    "node scripts/hold.ts place",
+    "node --experimental-strip-types scripts/hold.ts place",
+    "tsx scripts/hold.ts place",
+    "deno run scripts/hold.ts place",
+    "deno run -A scripts/hold.ts release 2",
+    "env FOO=1 bun scripts/hold.ts place",
+    "timeout 30 bun scripts/hold.ts place",
+    "sh -c 'bun scripts/hold.ts place'",
+    "bash -lc 'bun ./scripts/hold.ts release 1'",
+    "echo 'bun scripts/hold.ts place' | sh",
+    "mise exec -- bun scripts/hold.ts place",
+    "mise x -- bun scripts/hold.ts release 1",
+    "mise run hold:place",
+    "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+    "mise run hold:release -- 1",
+    "mise r hold:place",
+    "mise r hold:release -- 1",
+    "mise hold:place",
+    "mise hold:release 1",
+    "mise tasks run hold:release -- 3",
+    "mise tasks r hold:place",
+    "mise run lint ::: hold:place",
+    "mise -C /repo run hold:place",
+    "mise run 'hold:*'",
+    "mise run hold:*",
+    "mise run 'hold:rel*'",
+    "mise run '*'",
+    'mise run "$TASK"',
+    'mise run hold:"$ACTION"',
+    "bun -e \"import {placeHold} from './f/factory/lib/holds.ts'; import {createHoldPsqlClient} from './scripts/hold_psql.ts'; console.log(placeHold, createHoldPsqlClient)\"",
+    "bun -e \"import './scripts/hold_psql.ts'\"",
+    "bun --eval \"await import('./f/factory/lib/holds.ts')\"",
+    "node -e \"require('./scripts/hold_psql.ts')\"",
+    "deno eval \"import './scripts/hold.ts'\"",
+    "bun -p \"import('./scripts/hold.ts')\"",
+    "bun run - <<'EOF'\nimport './f/factory/lib/holds.ts';\nEOF",
+    'docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c "UPDATE factory.holds SET released_at = now()"',
+    "docker compose exec db psql -c 'DELETE FROM factory.holds'",
+    "docker-compose exec db psql -c 'TRUNCATE factory.holds'",
+    "docker-compose -f infra/docker-compose.yml exec -T db psql -c 'UPDATE factory.holds SET x = 1'",
+    'psql -c "UPDATE factory.holds SET released_at = now()"',
+    "psql -d datatable_db -f /tmp/holds.sql",
+    "docker compose exec -T db psql -U postgres -f /tmp/holds.sql",
+    'echo "UPDATE factory.holds SET released_at = now()" | docker compose exec -T db psql -U postgres -d datatable_db',
+    "printf 'DELETE FROM factory.holds' | psql",
+    "docker compose exec -T db psql -U postgres <<'SQL'\nUPDATE factory.holds SET released_at = now();\nSQL",
+    "psql <<<'DELETE FROM factory.holds'",
+    "mise exec -- psql -c 'UPDATE factory.holds SET x = 1'",
+    "sh -c \"psql -c 'UPDATE factory.holds SET x = 1'\"",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason tells the subagent to ask the main session or a person", async () => {
+    expect(
+      await denyReason("bun scripts/hold.ts place", { subagent: true }),
+    ).toContain("main session");
+  });
+
+  test("the reason is the same for the mise task", async () => {
+    expect(
+      await denyReason("mise run hold:release -- 1", { subagent: true }),
+    ).toContain("must not place or release holds");
+  });
+});
+
+describe("bash-guard allows a subagent to list holds and to work on the hold code", () => {
+  test.each([
+    "bun scripts/hold.ts list",
+    "bun ./scripts/hold.ts list",
+    "bun run scripts/hold.ts list",
+    "bun /Users/someone/ws/atelier-works/scripts/hold.ts list",
+    "node scripts/hold.ts list",
+    "mise exec -- bun scripts/hold.ts list",
+    "mise run hold:list",
+    "mise r hold:list",
+    "mise hold:list",
+    "mise tasks run hold:list",
+    "mise run freeze:list",
+    "mise run check",
+    "mise run test:db",
+    "mise run lint ::: typecheck",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/scripts/hold_psql.test.ts tests/scripts/hold_wiring.test.ts",
+    "bun test tests/lib/holds.test.ts",
+    "bunx biome check scripts/hold.ts",
+    "bunx biome check scripts/hold.ts scripts/hold_psql.ts f/factory/lib/holds.ts",
+    "bunx tsc --noEmit scripts/hold.ts",
+    "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
+    "bun x biome check scripts/hold.ts",
+    "git add scripts/hold.ts scripts/hold_psql.ts",
+    "git diff -- f/factory/lib/holds.ts",
+    "git commit -m 'feat: scripts/hold.ts place と release'",
+    "cat scripts/hold.ts",
+    "grep -n holds docs/internals/holds.md",
+    "rg 'factory.holds' f",
+    "docker compose ps",
+    "docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c 'SELECT 1'",
+    "docker compose exec db psql -c 'SELECT count(*) FROM factory.work_items'",
+    "psql --version",
+    "echo 'SELECT 1' | docker compose exec -T db psql -U postgres",
+    "echo 'hold.ts place is for the main session'",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard leaves the main session free to place and release holds", () => {
+  test.each([
+    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
+    "bun ./scripts/hold.ts release 1",
+    "mise run hold:place",
+    "mise run hold:release -- 1",
+    "mise r hold:place",
+    "mise exec -- bun scripts/hold.ts place",
+    "sh -c 'bun scripts/hold.ts place'",
+    "bun -e \"import './scripts/hold_psql.ts'\"",
+    "docker compose exec db psql -c 'UPDATE factory.holds SET x = 1'",
+    "psql -f /tmp/holds.sql",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});

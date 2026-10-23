@@ -34,6 +34,7 @@ import {
 import {
   DEPENDABOT_FLOW_PATH,
   dependabotReason,
+  type MergeHoldFailure,
   sanitizeUntrustedProse,
 } from "./lib/dependabot_flow_support.ts";
 import {
@@ -1138,6 +1139,23 @@ export async function pollDependabot(
     fallback_lists: fallbackLists,
     fallback_reasons: fallbackReasons,
   };
+}
+
+/** 保留で待ったPRについて、周回ごとに1件にまとめて残す通知の内容。 */
+export type HoldNotice =
+  | { readonly kind: "held"; readonly prCount: number }
+  | {
+      readonly kind: "unreadable";
+      readonly failure: MergeHoldFailure;
+      readonly prCount: number;
+    };
+
+/** 保留の通知を、通知の表に残す形にする。 */
+export function holdNoticeRecord(_notice: HoldNotice): {
+  readonly kind: string;
+  readonly message: string;
+} {
+  return { kind: "", message: "" };
 }
 
 export async function main(): Promise<PollDependabotResult> {
