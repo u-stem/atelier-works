@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 手動投入の検証とIssue本文'
+description: 内部ライブラリです。直接実行するものではありません。手動投入の入力の検証と、断りの理由の符号、Issue本文の組み立てを持つ共通処理です。
 lock: '!inline f/factory/lib/manual_intake_support.script.lock'
 kind: script
 schema:

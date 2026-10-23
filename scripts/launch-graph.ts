@@ -32,6 +32,7 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "auto_retry_pr_review", to: "pr_review", kind: "script" },
   { from: "auto_retry_stale_image", to: "implement", kind: "script" },
   { from: "auto_retry_stale_image", to: "pr_fix", kind: "script" },
+  { from: "manual_intake_submit", to: "manual_intake", kind: "script" },
   { from: "retry_work_item", to: "pipeline", kind: "script" },
   { from: "retry_work_item", to: "implement", kind: "script" },
   { from: "retry_work_item", to: "pr_review", kind: "script" },
@@ -56,6 +57,7 @@ export const HUMAN_OPERATIONS: Readonly<Record<string, string>> = {
 export const HUMAN_ENTRY_SCRIPTS: Readonly<Record<string, string>> = {
   retry_work_item: "Consoleの再実行",
   audit_kickoff: "Consoleの今すぐ監査",
+  manual_intake_submit: "Consoleの新規投入",
   "steps/requirements_apply": "Consoleの承認と却下",
 };
 
