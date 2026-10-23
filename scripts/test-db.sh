@@ -4,6 +4,7 @@
 # 適用し、`factory`スキーマの各ビューからSELECTしてビューが成り立つことを
 # 確かめる。次に対応する`*.down.sql`を新しい順に適用し、戻せることを確かめる。
 # あわせて、最小の行を入れて`scripts/test-db-queries.ts`が、アプリのコードが組み立てるSQL文を実行する。
+# 保留の表の制約と、`lib/holds.ts`のSQL文は、`scripts/test-db-holds.ts`が実行して確かめる。
 # 使い捨てのデータベースは成否を問わず終了時に削除し、本物の`windmill`
 # データベースには触れない。
 #
@@ -721,6 +722,12 @@ log "running the application queries against '${SCRATCH_DB}'"
 COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-queries.ts" \
   || die "the application queries failed against the real PostgreSQL"
+
+# 保留の表の制約と、`lib/holds.ts`が組み立てるSQL文を、本物のPostgreSQLで確かめる。
+log "running the holds checks against '${SCRATCH_DB}'"
+COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
+  bun run "${REPO_ROOT}/scripts/test-db-holds.ts" \
+  || die "the holds checks failed against the real PostgreSQL"
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)

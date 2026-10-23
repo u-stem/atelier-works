@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -125,6 +126,18 @@ describe("scopeOfPaths", () => {
   test("runs db for the test-db queries", () => {
     expect(scopeOfPaths(["scripts/test-db-queries.ts"])).toEqual(
       noneScope({ db: true }),
+    );
+  });
+
+  test("runs db for the holds checks", () => {
+    expect(scopeOfPaths(["scripts/test-db-holds.ts"])).toEqual(
+      noneScope({ db: true }),
+    );
+  });
+
+  test("runs db and metadata for the holds library", () => {
+    expect(scopeOfPaths(["f/factory/lib/holds.ts"])).toEqual(
+      noneScope({ db: true, metadata: true }),
     );
   });
 
@@ -1159,9 +1172,30 @@ function importClosure(entry: string): string[] {
   return [...seen].sort();
 }
 
+// test:dbが実行するscriptの全体。実行するscriptを足したときに、一覧から漏れないようグロブで列挙する。
+function dbTestEntries(): string[] {
+  return readdirSync(join(ROOT, "scripts"))
+    .filter((name) => /^test-db.*\.ts$/.test(name))
+    .map((name) => `scripts/${name}`)
+    .sort();
+}
+
+function dbTestClosure(): string[] {
+  return [...new Set(dbTestEntries().flatMap(importClosure))].sort();
+}
+
 describe("import closure of the CI tests", () => {
-  test("every file the db test imports under f/ triggers db", () => {
-    const uncovered = importClosure("scripts/test-db-queries.ts").filter(
+  test("the db test entries include the queries and the holds checks", () => {
+    expect(dbTestEntries()).toEqual(
+      expect.arrayContaining([
+        "scripts/test-db-holds.ts",
+        "scripts/test-db-queries.ts",
+      ]),
+    );
+  });
+
+  test("every file the db tests import under f/ triggers db", () => {
+    const uncovered = dbTestClosure().filter(
       (path) => scopeOfPaths([path]).db === false,
     );
 
@@ -1190,7 +1224,7 @@ describe("import closure of the CI tests", () => {
 
   test("the traced files use no dynamic import or require", () => {
     const files = [
-      ...importClosure("scripts/test-db-queries.ts"),
+      ...dbTestClosure(),
       ...importClosure("tests/lib/process_lock.test.ts"),
       ...importClosure("tests/lib/check_sandbox_integration.test.ts"),
     ];

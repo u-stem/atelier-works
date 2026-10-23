@@ -118,6 +118,37 @@ describe("launch edges and the scripts that start flows", () => {
   });
 });
 
+describe("each launch edge and its source", () => {
+  test("every script edge is backed by a reference to its flow in the origin's source", () => {
+    const flows = flowNames();
+    const codes = new Map(
+      launchers().map((launcher) => [launcher.script, launcher.code]),
+    );
+
+    const unbacked = scriptEdges
+      .filter(
+        (edge) =>
+          !referencedFlows(codes.get(edge.from) ?? "", flows).includes(edge.to),
+      )
+      .map((edge) => `${edge.from} -> ${edge.to}`);
+
+    expect(unbacked).toEqual([]);
+  });
+
+  test("every *_FLOW_PATH constant in a launcher is known to FLOW_REFERENCES", () => {
+    const unknown = launchers().flatMap((launcher) =>
+      [...launcher.code.matchAll(/\b[A-Z][A-Z_]*_FLOW_PATH\b/g)]
+        .map((match) => match[0])
+        .filter(
+          (name) => !FLOW_REFERENCES.some(([pattern]) => pattern.test(name)),
+        )
+        .map((name) => `${launcher.script}: ${name}`),
+    );
+
+    expect(unknown).toEqual([]);
+  });
+});
+
 describe("launch edges and the assets", () => {
   test("every target is an existing flow", () => {
     const flows = new Set(flowNames());

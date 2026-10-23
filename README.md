@@ -86,7 +86,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
-| `mise run docs:gen` | 文書の中の生成した範囲を作り直す |
+| `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)を作り直す |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test`でsmallのテストを実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
@@ -140,6 +140,7 @@ atelier-works/
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
 | [GitHubの収集の内部仕様](docs/internals/github-collect.md) | 所有者ごとのリポジトリの状態の収集、照合、記録の意味 |
 | [スケジュールの凍結の仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復 |
+| [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、書き込みの制限 |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
 | [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |

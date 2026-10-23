@@ -73,6 +73,7 @@ locks:
   f/factory/lib/gh_graphql: 6df2c0f549bffcff4d562c2e5d6f9c0cf3b7be5575e6ec1727ee61151f3e15e5
   f/factory/lib/github: 0c06f96db34c504358ff8c124a892d8013e0d6b546eee27626a93ff4fea1def4
   f/factory/lib/github_errors: c1c63662dbdc331149e492cfd841f14f93f898a99bde2605b753b0db2127f8b4
+  f/factory/lib/holds: dca2e3a8c5bbf5ae62136eac7fbdb1909f3494129056d53400c0f038acb4a883
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
@@ -118,7 +119,7 @@ locks:
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 4c4547fa3bc52d23f27c3791696c6ce5eae7308e052c935fe58112969ea0249d
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: b702f471ac536c0a4b2d803736be7b084fdda06a76daf7cfb941a6702b0fdf8e
+  f/factory/lib/protected_paths: 006aa6a8a19d92fe4a9f7af4d77bfb6646fc623400ab7e5471d6389c088b0c70
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955

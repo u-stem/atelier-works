@@ -253,6 +253,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `gh_pull_requests` | GitHubの開いているPRの記録。リポジトリの番号ごとに1行で、headのコミットとブランチ名、作者、ドラフトかとforkか、競合の有無、ラベルの有無、レビュー依頼とassigneeの数値IDを持つ。題と本文は持たない。行を使ってよいかを`usable`で表す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`と`poll_prs`と`watch_pr_conflicts`は収集の2つの設定が真のときに、`watch_pr_ci`は収集の2つの設定が真で、設定`pr_ci_watch_human_prs`が`true`のときに、候補の列挙に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `gh_issues` | GitHubのトリガーラベル付きの開いているIssueの記録。リポジトリの番号ごとに1行で、作者と作成と更新の時刻を持つ。題と本文は持たない。作業項目とは独立した記録で、外部キーを持たない。`poll_issues`が、収集の2つの設定が真のときに、候補のIssueの発見に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録で、保持期間を過ぎた行はDBの掃除が消す |
+| `holds` | 共通の保留。対象を進めないことを、期限つきで伝える。範囲は自動マージ(`merge`、主体ごとに重ねられる)とIssueの取り込み(`claim`、排他)で、置いた主体の名乗り、期限、閉じた時刻と閉じた理由を持つ。作業項目とは独立した記録で、外部キーを持たない。行は消さず履歴として残す([保留の内部仕様](internals/holds.md)) |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
 
@@ -337,9 +338,16 @@ Consoleの一覧と集計は次のviewを読む。
 <!-- /generated:flows -->
 
 起動元は、flowを起動するscriptの名前である。
-括弧は、そのscriptを動かすConsoleの操作を示す。
-起動元の一覧は`scripts/launch-graph.ts`の表から作る。
-`wmill.runFlowAsync`を呼ぶscriptを足したときは、この表にも足す。足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
+括弧は、そのscriptをConsoleから動かせる操作の例で、スケジュールによる起動は示さない。
+たとえば`audit`は、Consoleの今すぐ監査のほかに、`audit_kickoff`の週次のスケジュールでも起動する。
+起動元の一覧は`scripts/launch-graph.ts`の`LAUNCH_EDGES`から作る。
+同じ表から、Consoleのシステムの画面に出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)も作る。
+`wmill.runFlowAsync`を呼ぶscriptを足したときは、`LAUNCH_EDGES`にも足す。
+足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
+辺だけを残して起動のコードを消したときと、`*_FLOW_PATH`の定数を足したときも、同じテストが失敗する。
+テストには、検出できない形もある。
+別名の変数で呼ぶ起動、`wmill.`を付けない呼び出し、包みの関数だけでflowを起動するscriptは、見落とす。
+そのような起動を足したときは、人が表を確かめる。
 
 - `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。
 - `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。
@@ -491,6 +499,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
+| `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
 | `f/factory/lib/gh_collect_read` | script | [LIB] 収集の記録を読む側の判定 |
@@ -878,5 +887,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- 保留の読み手と、保留を置く・解除するコマンド。表(`holds`)と`lib/holds.ts`だけがあり、保留を読んで止まる主体は無い([保留の内部仕様](internals/holds.md))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

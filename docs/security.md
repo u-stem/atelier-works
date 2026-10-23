@@ -2589,6 +2589,71 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
   `workspaces.<name>`の`overrides`に`excludes`を足すと、CLIの`--excludes`が黙って置き換えるので、足さない。
   足さない決まりを守れば、読み違いは起きないため、受け入れる。
 
+## 保留
+
+保留は、対象を進めないことを、期限つきで伝える仕組みである。
+仕様は[保留の内部仕様](internals/holds.md)にある。
+保留は止めるためだけに使い、許可には使わない。
+偽の保留で対象が止まっても、元の保護(レビューとゲート)は残る。
+
+`f/`とmigrationの中で、表の名前を直接書くコードは、`f/factory/lib/holds.ts`の関数を通す決まりである。
+この決まりを守らせる仕組みは無い。
+`tests/scripts/hold_wiring.test.ts`が、`holds.ts`の外にある表への参照の混入を検出する。
+`holds.ts`とそのテスト、実DBの検査、表を作る2本のmigrationは保護パスに入れる。
+走査から外すのは、この3つのファイルだけである。
+保護パスを書き換える変更は、PR修正のpushが止まり、実装のPRには明記される。
+
+検出は文字列を読むヒューリスティックで、まれな入力では見逃しが起こる。
+見逃しの例と、残るリスクは次のとおりである。いずれも受け入れる。
+
+- Windmillのscriptはすべて同じdatatableの接続を持つ。
+  検出をすり抜けるコードは、表を読み書きできる。
+  保留は止めるためだけに使い、外れても元の保護が残るので、受け入れる。
+  接続の`role`で分離できる可能性は、確かめるまで、できないとは断定しない。
+- 検出の範囲は、`f/`のすべてのファイル(`.lock`を含む)と、`migrations/datatable/main/`の表を作る2本以外である。
+  `.ts`は変換後のコードを、ほかの形式(SQL、シェル、Python、YAML)は生のテキストを読む。
+  `scripts/`やローカルのフックなど、ほかの場所は見ない。
+- 許可した読み取りの関数(`listActiveHolds`)は、呼び出し側から接続を受け取る。
+  呼び出し側が`strings`を書き換えた接続を渡す迂回は、止めない。
+- 検出するのは次の参照である。
+  `factory.holds`の名前(コメントや引用符を挟んだ形と3部の名前を含む)、`search_path`、`SET SCHEMA`。
+  `DROP SCHEMA factory`(スキーマを何個並べても検出する)、`DROP OWNED BY`、`DROP DATABASE`。
+  `key`、`idx`、`check`、`pkey`、`fkey`、`excl`、`seq`で終わる`holds_`の名前。
+  `datatable`の名前が`:factory`で終わる指定。実行時に`SET search_path`が足され、スキーマの付かない名前で書けるためである。
+  動詞の直後のスキーマの付かない`holds`は、SQLの構造が続くときだけ検出する。
+- 英文のログ(`could not update holds`など)は当たらない。
+  `factory.holds`を含む文字列は、英文でも、SQLコメントや`COMMENT ON`、`.script.yaml`の`description`でも当たる。
+  誤検知を許して、見逃しを減らすためである。
+  誤検知の規則を直すには、保護パスの変更としてPRを出す。
+- 見つけられない入力の例は次のとおりである。
+  文字列の連結や`${}`で名前を組み立てるコード、名前をJavaScriptの文字列のエスケープで書くコード、保留のモジュールの名前を組み立てるimportがある。
+  migrationの動的SQL(`EXECUTE format(...)`、文字列の連結、カタログを引くループ)では、スキーマ無しの`holds`の規則も塞げない。
+  `PGOPTIONS=-csearch_path=factory`や`set_config('search_'||'path', ...)`のように、語を分ける形もある。
+  これらは例であり、すべてではない。
+- datatableの接続の既定の`search_path`に`factory`が入っていないことは、確かめていない。
+- `scripts/test-db.sh`は守らない。
+  日常的に直すファイルなので、守ると正当な変更を止める。
+  実DBの検査を呼ぶ位置の検査は、`exit 0`を足すか、呼び出しを`if false; then ... fi`で囲むと、迂回できる。
+  迂回しても、制約名まで照合する`scripts/test-db-holds.ts`と、CIの`test-db`ジョブが別の層で守るので、受け入れる。
+- 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。
+  ほかの実DBの検査も使う部品なので、守ると日常の変更を止める。
+  制約の拒否は制約名まで照合するので、単純な誤りでは検査を通らない。
+- 書き手は`created_at`と`expires_at`の列を自由に渡せる。
+  24時間の上限は、表の制約と、読み取りの有効条件の両方で効かせる。
+  制約を外せる主体は、下の`psql`の項目の権限を持つ。
+- 1行の期限は最大24時間だが、置き直しの回数に上限は無い。
+  `holder`は名乗りなので、上限は抑止にならない。
+  連続した保留は、人が表の未解除の行を確かめて解除するまで続きうる。
+- `session`と`human`の区別は、呼び出し側が名乗る`holder`で決まる。
+  解除の可否を決める`canRelease`は名乗りを信じるので、権限の境界ではない。
+  BashとDockerを持つ主体は、`psql`で他の主体の保留を解除でき、削除でき、制約も外せる。
+  止めが外れる向きでも、区別は境界ではない。
+- 偽造した保留の影響は、対象の進みが遅れることに限られる。
+  許可に使わない限り、保留が権限を増やすことはない。
+- 止め方が、スケジュールの凍結(変数)と、保留(表)に分かれる。
+  範囲が違うので、同じ対象に二重にはならない。
+  確かめる手順は[運用](operations.md)に書く。
+
 ## Claude Codeの拒否ルール
 
 `.claude/settings.json`の`deny`は、誤操作を防ぐためのもので、秘匿性を保証しない。設定ファイルを読めば、ルールは誰でも確かめられる。秘匿性は、値をコミットしないこと(`mise.local.toml`はgitignore済み)と、値をWindmillのsecret変数に置くことで保つ。
@@ -2978,6 +3043,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 最上位のページで描くと、ビューアの欠陥が、Windmillを管理者として操作できるXSSになる。
 実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
 要件定義書の画面(`/console/items/:id/requirements`)が、図ごとに`DrawioFrame`で描く。
+システムの画面(`/console/system`)の起動の関係の節も、`DrawioFrame`で描く。このXMLはリポジトリのコードから作るが、同じ隔離したiframeを通す。
 安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 
