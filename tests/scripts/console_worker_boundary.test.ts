@@ -19,7 +19,7 @@ import {
 // 境界を保つため、tag: consoleのscriptがどのsecret変数を読むかを、importをたどって数える。
 // - github_tokenを読んでよいのは、approval_decideとretry_work_itemだけ。
 // - その2つも、github_token以外のsecret変数は読まない。
-// - audit_kickoffとnotice_resolveは、どのsecret変数も読まない。
+// - audit_kickoff、notice_resolve、manual_intake_submitは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
 //
 // 走査の方法と限界:
@@ -40,7 +40,11 @@ const MAY_READ_GITHUB_TOKEN = [
   "f/factory/approval_decide",
   "f/factory/retry_work_item",
 ];
-const READS_NO_SECRET = ["f/factory/audit_kickoff", "f/factory/notice_resolve"];
+const READS_NO_SECRET = [
+  "f/factory/audit_kickoff",
+  "f/factory/notice_resolve",
+  "f/factory/manual_intake_submit",
+];
 
 /**
  * 引数が文字列リテラルでないgetVariable()の呼び出しのうち、許すもの。
