@@ -4,8 +4,9 @@
 // sessionStorageにも書かない。保証する範囲は「このタブの中だけ」である。
 //
 // 結果は、送信を始めた画面が外れていても書き込まれる。戻った画面は、書き込まれた状態を読む。
-// 画面が見せた結果(投入できた、断られた、ジョブが動く前に断られた)は、その画面を離れるときに消す。
+// 画面が実際に見せた結果(投入できた、断られた、ジョブが動く前に断られた)は、その画面を離れるときに消す。
 // 古い結果が、後から開いた新しい入力に出ないようにするためである。
+// 画面がまだ見せていない結果は、離れるときに消さない。戻った画面で見せる。
 // 投入されたか分からない結果は、利用者が片付けるまで消さない。
 
 import {
@@ -30,8 +31,10 @@ export type IntakeSession = {
    * 画面が表示中に増えたことを知り、入力欄を空にするために使う。
    */
   readonly clearedCount: number;
-  /** 仮の実装。常に0を返す。 */
+  /** 結果を書くたびに増える連番。画面が見せた結果と、まだ見せていない結果を区別する。 */
   readonly resultId: number;
+  /** 画面が描画したことを記録した、最後の結果の連番。まだ見せていなければ`null`。 */
+  readonly shownResultId: number | null;
 };
 
 const EMPTY: IntakeSession = {
@@ -40,6 +43,7 @@ const EMPTY: IntakeSession = {
   stale: false,
   clearedCount: 0,
   resultId: 0,
+  shownResultId: null,
 };
 
 export type IntakeSessions = {
@@ -55,10 +59,15 @@ export type IntakeSessions = {
   /** 「確かめたので再送する」。投入されたか分からないときだけ、次の送信を開ける。 */
   readonly confirmResend: (key: string) => void;
   /**
-   * 画面が見せた結果を消す。投入できた、断られた、ジョブが動く前に断られた、のどれかだけを消す。
-   * 投入されたか分からない結果と、送信中の状態(結果がまだ無い)は消さない。入力欄の値も残す。
+   * 画面が結果を描画したことを記録する。`resultId`が今の結果の連番と同じときだけ記録する。
+   * 画面が表示したのは、その連番の結果だけだからである。
    */
   readonly markShown: (key: string, resultId: number) => void;
+  /**
+   * 画面が見せた結果を消す。投入できた、断られた、ジョブが動く前に断られた、のどれかで、
+   * 画面が見せたと記録した結果と同じものだけを消す。まだ見せていない結果は消さない。
+   * 投入されたか分からない結果と、送信中の状態(結果がまだ無い)も消さない。入力欄の値も残す。
+   */
   readonly dismiss: (key: string) => void;
   /**
    * 「投入されていたので入力を破棄する」。投入されたか分からないときだけ、
@@ -102,15 +111,22 @@ export function createIntakeSessions(): IntakeSessions {
       }));
     },
     record: (key, attempt) => {
-      update(key, (current) =>
-        attempt.kind === "submitted"
+      update(key, (current) => {
+        const written = { ...current, attempt, resultId: current.resultId + 1 };
+        return attempt.kind === "submitted"
           ? {
-              ...current,
-              attempt,
+              ...written,
               form: null,
               clearedCount: current.clearedCount + 1,
             }
-          : { ...current, attempt },
+          : written;
+      });
+    },
+    markShown: (key, resultId) => {
+      update(key, (current) =>
+        current.resultId === resultId && current.shownResultId !== resultId
+          ? { ...current, shownResultId: resultId }
+          : current,
       );
     },
     markStale: (key) => {
@@ -122,11 +138,12 @@ export function createIntakeSessions(): IntakeSessions {
         return attempt === current.attempt ? current : { ...current, attempt };
       });
     },
-    markShown: () => undefined,
     dismiss: (key) => {
       update(key, (current) => {
         const kind = current.attempt.kind;
-        return kind === "submitted" || kind === "refused" || kind === "rejected"
+        const clearable =
+          kind === "submitted" || kind === "refused" || kind === "rejected";
+        return clearable && current.shownResultId === current.resultId
           ? { ...current, attempt: { kind: "idle" } }
           : current;
       });
@@ -189,12 +206,14 @@ function deferToNextTask(run: () => void): () => void {
  * 消すのは、離れた直後ではなく、次の処理に遅らせる。開発時のStrictModeは、描画の直後に
  * 部品を外して付け直すので、遅らせないと、戻った画面に見せるはずの結果まで消してしまう。
  * 離れてすぐに付け直されたときは、消さない。
+ * `canDismiss`が偽のとき(書き込みがロックを持ち続けているとき)も消さない。
+ * 離れて戻った画面が、実行中の送信の結果を見失わないためである。消すのは、次に離れるときになる。
  */
 export function createLeaveGuard(
   sessions: IntakeSessions,
   key: string,
   defer: (run: () => void) => () => void = deferToNextTask,
-  _canDismiss: () => boolean = () => true,
+  canDismiss: () => boolean = () => true,
 ): { readonly enter: () => void; readonly leave: () => void } {
   let cancel: (() => void) | null = null;
   return {
@@ -206,7 +225,9 @@ export function createLeaveGuard(
       cancel?.();
       cancel = defer(() => {
         cancel = null;
-        sessions.dismiss(key);
+        if (canDismiss()) {
+          sessions.dismiss(key);
+        }
       });
     },
   };

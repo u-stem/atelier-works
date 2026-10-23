@@ -7,7 +7,7 @@ import {
 } from "../../api/intakeSession.ts";
 import { manualIntakeConfig } from "../../api/manualIntakeConfig.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
-import { MANUAL_INTAKE_WRITE_KEY } from "../../api/writeLocks.ts";
+import { MANUAL_INTAKE_WRITE_KEY, writeLocks } from "../../api/writeLocks.ts";
 import type { ManualIntakeInput } from "../../api/writes.ts";
 import { isSubmitBlocked } from "../../lib/intakeAttempt.ts";
 import type { IntakeForm } from "../../lib/manualIntake.ts";
@@ -31,8 +31,16 @@ type ManualIntake = {
   readonly discard: () => void;
 };
 
-/** 画面を離れるときに、見せた結果を消す。 */
-const leaveGuard = createLeaveGuard(intakeSessions, MANUAL_INTAKE_WRITE_KEY);
+/**
+ * 画面を離れるときに、見せた結果を消す。
+ * 書き込みがロックを持ち続けているあいだは消さず、戻った画面に結果を見せる。
+ */
+const leaveGuard = createLeaveGuard(
+  intakeSessions,
+  MANUAL_INTAKE_WRITE_KEY,
+  undefined,
+  () => !writeLocks.isLocked(MANUAL_INTAKE_WRITE_KEY),
+);
 
 const NO_INPUT: ManualIntakeInput = {
   owner: "",
@@ -55,6 +63,14 @@ export function useManualIntake(): ManualIntake {
     leaveGuard.enter();
     return leaveGuard.leave;
   }, []);
+  // 描画した結果を記録する。離れるときに消すのは、この記録がある結果だけになる。
+  const { resultId } = session;
+  const showing = session.attempt.kind !== "idle";
+  useEffect(() => {
+    if (showing) {
+      intakeSessions.markShown(MANUAL_INTAKE_WRITE_KEY, resultId);
+    }
+  }, [showing, resultId]);
   const config = useMemo(() => manualIntakeConfig(), []);
   const mutation = useWriteMutation(config);
   const locked = mutation.isLocked(NO_INPUT);
