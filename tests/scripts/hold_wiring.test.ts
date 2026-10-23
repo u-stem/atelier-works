@@ -296,7 +296,10 @@ describe(HOLDS_MODULE, () => {
 });
 
 describe("scripts/test-db.sh", () => {
-  const lines = readFileSync("scripts/test-db.sh", "utf8").split("\n");
+  // コメントの行に書かれたファイル名を、呼び出しと取り違えないよう空にする。行の位置は保つ。
+  const lines = readFileSync("scripts/test-db.sh", "utf8")
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("#") ? "" : line));
   const holdsIndex = lines.findIndex((line) =>
     line.includes("scripts/test-db-holds.ts"),
   );
