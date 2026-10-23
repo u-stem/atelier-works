@@ -269,6 +269,7 @@ function loadScheduleInputs(): ScheduleInput[] {
       cron: stringField(yaml, "schedule"),
       target: stringField(yaml, "script_path"),
       isFlow: yaml.is_flow === true,
+      enabled: true,
     };
   });
 }

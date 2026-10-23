@@ -16,6 +16,8 @@ export type ScheduleInput = {
   /** スケジュールが実行するscriptかflowのpath(`f/factory/poll_issues`)。 */
   readonly target: string;
   readonly isFlow: boolean;
+  /** 無効のスケジュールは図に載せない。 */
+  readonly enabled: boolean;
 };
 
 export type FlowInput = {

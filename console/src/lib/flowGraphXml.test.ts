@@ -35,6 +35,11 @@ function attributes(xml: string, name: string): string[] {
   );
 }
 
+/** idで指すセルの開始タグ。 */
+function cellTag(xml: string, id: string): string {
+  return new RegExp(`<mxCell id="${id}"[^>]*>`).exec(xml)?.[0] ?? "";
+}
+
 describe("flowGraphToDrawioXml", () => {
   test("is an uncompressed mxfile", () => {
     expect(flowGraphToDrawioXml(GRAPH).startsWith("<mxfile")).toBe(true);
@@ -105,5 +110,39 @@ describe("flowGraphToDrawioXml", () => {
     const xml = FLOW_GRAPH === null ? "" : flowGraphToDrawioXml(FLOW_GRAPH);
 
     expect(buildRenderMessage(xml).ok).toBe(true);
+  });
+
+  test("draws a link as a straight line", () => {
+    expect(cellTag(flowGraphToDrawioXml(GRAPH), "e1")).not.toContain(
+      "edgeStyle",
+    );
+  });
+
+  test("leaves a link from the right side of its source", () => {
+    expect(cellTag(flowGraphToDrawioXml(GRAPH), "e1")).toMatch(
+      /exitX=1;exitY=0\.\d+;/,
+    );
+  });
+
+  test("enters a link on the left side of its target", () => {
+    expect(cellTag(flowGraphToDrawioXml(GRAPH), "e1")).toMatch(
+      /entryX=0;entryY=0\.\d+;/,
+    );
+  });
+
+  test("draws a launch link as a solid line", () => {
+    expect(cellTag(flowGraphToDrawioXml(GRAPH), "e1")).not.toContain("dashed");
+  });
+
+  test("draws a step link dotted", () => {
+    expect(cellTag(flowGraphToDrawioXml(GRAPH), "e3")).toContain(
+      "dashPattern=1 3",
+    );
+  });
+
+  test("draws a scheduled launch dashed but not dotted", () => {
+    expect(cellTag(flowGraphToDrawioXml(GRAPH), "e0")).toContain(
+      "dashed=1;strokeColor",
+    );
   });
 });

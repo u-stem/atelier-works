@@ -27,6 +27,12 @@ describe("FlowGraphSection", () => {
     );
   });
 
+  test("says that a launch from one script to another is not drawn", () => {
+    expect(renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />)).toContain(
+      "scriptからscriptの起動は含みません",
+    );
+  });
+
   test("says so when the data cannot be read", () => {
     expect(renderToStaticMarkup(<FlowGraphSection graph={null} />)).toContain(
       "起動の関係のデータを読み込めませんでした",

@@ -20,12 +20,14 @@ const INPUT: FlowGraphInput = {
       cron: "0 */5 * * * *",
       target: "f/factory/poll_prs",
       isFlow: false,
+      enabled: true,
     },
     {
       name: "cleanup_db",
       cron: "0 30 3 * * *",
       target: "f/factory/cleanup_db",
       isFlow: false,
+      enabled: true,
     },
   ],
   flows: [
@@ -115,6 +117,18 @@ describe("buildFlowGraph", () => {
     ]);
   });
 
+  test("leaves out a schedule that is disabled", () => {
+    const input: FlowGraphInput = {
+      ...INPUT,
+      schedules: INPUT.schedules.map((schedule) => ({
+        ...schedule,
+        enabled: false,
+      })),
+    };
+
+    expect(nodeIds(input, "schedule")).toEqual([]);
+  });
+
   test("connects a schedule that runs a flow directly to the flow", () => {
     const input: FlowGraphInput = {
       ...INPUT,
@@ -124,6 +138,7 @@ describe("buildFlowGraph", () => {
           cron: "0 0 3 * * *",
           target: "f/factory/pipeline",
           isFlow: true,
+          enabled: true,
         },
       ],
     };
