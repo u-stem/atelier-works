@@ -27,6 +27,13 @@ import {
 const HOLDS_MODULE = "f/factory/lib/holds.ts";
 const READ_ONLY_NAMES = ["listActiveHolds", "listInvalidHolds"];
 
+// 表を作るmigration。走査から外すので、保護パスに入れてあることを下で確かめる。
+const HOLDS_MIGRATION_FILES = [
+  "20261023131355_holds.up.sql",
+  "20261023131355_holds.down.sql",
+];
+const MIGRATIONS_DIR = "migrations/datatable/main";
+
 function listFiles(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -40,11 +47,10 @@ function listFiles(dir: string): string[] {
   return files.sort();
 }
 
-// 走査から外すのは、`holds.ts`と、依存の固定の`.lock`だけにする。
+// 走査から外すのは`holds.ts`だけにする。`.lock`も走査する。
+// flowの`content`は`!inline`で任意のファイルを指せるので、`.lock`をscriptの本文として参照させる経路がありうる。
 // `holds.ts`と、表を作るmigration2本は、保護パスに入れてあることを下で確かめる。
-const SCANNED = listFiles("f").filter(
-  (path) => path !== HOLDS_MODULE && !path.endsWith(".lock"),
-);
+const SCANNED = listFiles("f").filter((path) => path !== HOLDS_MODULE);
 
 function read(path: string): string {
   return readFileSync(path, "utf8");
@@ -413,6 +419,12 @@ function lineCommentEnd(
   return found.length === 0 ? text.length : Math.min(...found) + 1;
 }
 
+type SqlToken = {
+  readonly text: string;
+  /** 語の直後に、引用符が続く。文字列や識別子の終わりを表す。 */
+  readonly closed: boolean;
+};
+
 /**
  * `start`から先を、SQLの字句で`count`個読む。空白、行コメント、入れ子のブロックコメントを読み飛ばし、
  * 語は小文字にして、記号は1文字ずつ返す。起点を指定するので、手前にある別の字句の`/*`や引用符に引きずられない。
@@ -422,8 +434,8 @@ function readSqlTokens(
   start: number,
   count: number,
   escapeEnds: boolean,
-): string[] {
-  const tokens: string[] = [];
+): SqlToken[] {
+  const tokens: SqlToken[] = [];
   let i = start;
   while (i < text.length && tokens.length < count) {
     const pair = text.slice(i, i + 2);
@@ -437,13 +449,12 @@ function readSqlTokens(
       i += 1;
     } else {
       const word = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(text.slice(i, i + 80));
-      if (word === null) {
-        tokens.push(text.charAt(i));
-        i += 1;
-      } else {
-        tokens.push(word[0].toLowerCase());
-        i += word[0].length;
-      }
+      const length = word === null ? 1 : word[0].length;
+      tokens.push({
+        text: word === null ? text.charAt(i) : word[0].toLowerCase(),
+        closed: /["'`]/.test(text.charAt(i + length)),
+      });
+      i += length;
     }
   }
   return tokens;
@@ -457,18 +468,118 @@ type HoldsReference = {
 
 /** 参照を見つける目印。`factory`は、その位置から先を数トークン読んで`factory.holds`かを確かめる。 */
 const MARKERS =
-  /\bfactory\b|\bholds_(?:[a-z0-9_]*_)?(?:key|idx|check|pkey|fkey|excl|seq)\b|\bsearch_path\b|\b(?:drop|alter)\b/gi;
+  /\bfactory\b|\bholds_(?:[a-z0-9_]*_)?(?:key|idx|check|pkey|fkey|excl|seq)\b|\bsearch_path\b|\b(?:insert|update|delete|merge|truncate|copy|drop|alter)\b/gi;
+
+/** `holds`の後ろに続けば、表の名前として読めるSQLの語。 */
+const AFTER_HOLDS: Readonly<Record<string, readonly string[]>> = {
+  insert: ["(", "values", "select", "default", "overriding", "with", "table"],
+  delete: ["where", "using", "returning", ";"],
+  truncate: [
+    ";",
+    ",",
+    "restart",
+    "continue",
+    "cascade",
+    "restrict",
+    "identity",
+  ],
+  drop: [";", ",", "cascade", "restrict"],
+  alter: [
+    "add",
+    "drop",
+    "rename",
+    "alter",
+    "disable",
+    "enable",
+    "owner",
+    "set",
+    "attach",
+    "detach",
+    "replica",
+    "force",
+    "no",
+    "cluster",
+    "inherit",
+    "validate",
+    "reset",
+  ],
+  copy: ["from", "to", "("],
+};
+
+/**
+ * 動詞で始まるトークン列が、スキーマの付かない`holds`への文かを返す。
+ * `search_path`は、`wmill.datatable("main:factory")`が実行時に足すので、ソースに現れない。
+ * 英文の誤検知を避けるため、動詞と`holds`の後ろに、SQLの構造が続くときだけ当てる。
+ * `update`は`set`、`copy`は`from`か`to`か`(`、`insert`は列か値、`merge`は`using`が要る。
+ * `delete`、`truncate`、`drop`は、文字列の終わりで終わる形(`DELETE FROM holds`)も、完結した文なので当てる。
+ */
+function schemaLessHolds(tokens: readonly SqlToken[]): boolean {
+  const words = tokens.map((token) => token.text);
+  const verb = words[0] ?? "";
+  let i = 1;
+  const skip = (...skipped: string[]): void => {
+    while (skipped.includes(words[i] ?? "")) i += 1;
+  };
+  const expect = (word: string): boolean => {
+    if (words[i] !== word) return false;
+    i += 1;
+    return true;
+  };
+  switch (verb) {
+    case "insert":
+    case "merge":
+      if (!expect("into")) return false;
+      break;
+    case "delete":
+      if (!expect("from")) return false;
+      skip("only");
+      break;
+    case "update":
+    case "copy":
+      skip("only");
+      break;
+    case "truncate":
+      skip("table");
+      skip("only");
+      break;
+    case "drop":
+    case "alter":
+      if (!expect("table")) return false;
+      if (words[i] === "if" && words[i + 1] === "exists") i += 2;
+      skip("only");
+      break;
+    default:
+      return false;
+  }
+  if (words[i] !== "holds" || words[i + 1] === ".") return false;
+  const holds = tokens[i];
+  const next = words[i + 1];
+  const ended = next === undefined || holds?.closed === true;
+  if (verb === "update") return words.slice(i + 1, i + 4).includes("set");
+  if (verb === "merge") return words.slice(i + 1, i + 4).includes("using");
+  const structure = AFTER_HOLDS[verb] ?? [];
+  const completeAtEnd =
+    verb === "delete" || verb === "truncate" || verb === "drop";
+  return (
+    (next !== undefined && structure.includes(next)) || (completeAtEnd && ended)
+  );
+}
 
 /**
  * テキストから、保留の表への参照をすべて返す。
- * 禁止するのは、`factory.holds`(間に空白、コメント、引用符があってもよい。3部の名前は最後の2部で判定)、
- * `holds_`で始まるインデックス・制約・シーケンスの名前(`holds_active_merge_key`、`holds_pkey`、`holds_id_seq`など)、`search_path`、`DROP SCHEMA factory`と`ALTER SCHEMA factory`である。
- * スキーマ無しの`holds`は、単独の語が英文に多いので数えない。`search_path`の禁止と上の規則で、間接的に塞ぐ。
+ * 禁止するのは次のとおりである。
+ * - `factory.holds`(間に空白、コメント、引用符があってもよい。3部の名前は最後の2部で判定)
+ * - `holds_`で始まるインデックス・制約・シーケンスの名前(`holds_active_merge_key`、`holds_pkey`、`holds_id_seq`など)
+ * - `search_path`
+ * - `DROP SCHEMA factory`と`ALTER SCHEMA factory`
+ * - `datatable`の名前が`:factory`で終わる指定。実行時に`SET search_path`を足すので、スキーマ無しの名前で書ける。
+ * - 動詞の直後の、スキーマの付かない`holds`。SQLの構造が続くときだけ当てる。
  * 行コメントの終わりは、実際の改行だけの読みと、文字のエスケープも含む読みの両方で評価する。
  */
 function findHoldsReferences(text: string): HoldsReference[] {
   const found: HoldsReference[] = [];
   const hit = (offset: number, rule: string): void => {
+    if (found.some((h) => h.offset === offset && h.rule === rule)) return;
     found.push({
       offset,
       rule,
@@ -484,17 +595,33 @@ function findHoldsReferences(text: string): HoldsReference[] {
       hit(offset, "holds_ name");
     } else if (word === "search_path") {
       hit(offset, "search_path");
+    } else if (
+      word === "factory" &&
+      text.charAt(offset - 1) === ":" &&
+      /["'`]/.test(text.charAt(offset + word.length))
+    ) {
+      hit(offset, "datatable schema");
     }
     for (const escapeEnds of [false, true]) {
       if (word === "factory") {
         const [, dot, table] = readSqlTokens(text, offset, 3, escapeEnds);
-        if (dot === "." && table === "holds") hit(offset, "factory.holds");
+        if (dot?.text === "." && table?.text === "holds") {
+          hit(offset, "factory.holds");
+        }
       } else if (word === "drop" || word === "alter") {
-        const tokens = readSqlTokens(text, offset, 12, escapeEnds);
-        const statement = tokens.slice(2, tokens.indexOf(";") + 1 || undefined);
-        if (tokens[1] === "schema" && statement.includes("factory")) {
+        const words = readSqlTokens(text, offset, 12, escapeEnds).map(
+          (token) => token.text,
+        );
+        const statement = words.slice(2, words.indexOf(";") + 1 || undefined);
+        if (words[1] === "schema" && statement.includes("factory")) {
           hit(offset, "schema factory");
         }
+      }
+      if (
+        schemaLessHolds(readSqlTokens(text, offset, 12, escapeEnds)) &&
+        word !== "factory"
+      ) {
+        hit(offset, "schema-less holds");
       }
     }
   }
@@ -616,6 +743,20 @@ describe("referencesHolds", () => {
     "ALTER TABLE x DROP CONSTRAINT holds_expiry_check",
     "SET search_path = factory",
     "SET LOCAL search_path TO factory, public",
+    // `SET SCHEMA`は`SET search_path TO`の別名である。
+    "SET SCHEMA 'factory'",
+    "SET LOCAL SCHEMA factory",
+    'SET SESSION SCHEMA "factory"',
+    "set /* x */ schema factory; DELETE FROM holds;",
+    // 固定の窓では見逃す、13番目以降のスキーマ名。
+    "DROP SCHEMA IF EXISTS a, b, c, d, factory CASCADE",
+    "DROP SCHEMA a, b, c, d, e, f, g, h, i, j, factory",
+    "DROP SCHEMA a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, factory",
+    "ALTER SCHEMA a RENAME TO b; DROP SCHEMA x, y, z, w, v, u, factory",
+    // ロールやデータベースごと、表を消す。
+    "DROP OWNED BY someone",
+    "drop /* x */ owned by someone",
+    "DROP DATABASE datatable_db",
     // スキーマ名の付かない`holds`。動詞の直後に、SQLの構造が続く。
     "UPDATE holds SET released_at = now()",
     "UPDATE ONLY holds h SET released_at = now()",
@@ -664,6 +805,9 @@ describe("referencesHolds", () => {
     'wmill.datatable("main")',
     "wmill.datatable()",
     'const label = "factory:status";',
+    "UPDATE t SET schema_name = 1",
+    "the schema is set by the caller",
+    "DROP SCHEMA a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p;\nSELECT 1 AS factory_count",
   ])("does not detect %p", (text) => {
     expect(referencesHolds(text)).toBe(false);
   });
@@ -688,6 +832,8 @@ describe("tsReferencesHolds", () => {
     "const tag = wmill.datatable(`main:factory`);\nawait tag`TRUNCATE holds`.execute();",
     'const tag = wmill.datatable("main:factory");\nawait tag`INSERT INTO "holds" (scope) VALUES (1)`.execute();',
     'const q = "UPDATE holds SET released_at = now()";',
+    "const q = `SET SCHEMA 'factory'; DELETE FROM holds`;",
+    "const q = `DROP SCHEMA IF EXISTS a, b, c, d, factory CASCADE`;",
   ])("detects %p", (source) => {
     expect(tsReferencesHolds(source)).toBe(true);
   });
@@ -721,32 +867,30 @@ describe("holdsReferenceReport for files of any language", () => {
 });
 
 describe("files that the scan leaves out", () => {
-  test.each([
+  const LEFT_OUT = [
     HOLDS_MODULE,
-    ...["20261023131355_holds.up.sql", "20261023131355_holds.down.sql"].map(
-      (name) => `migrations/datatable/main/${name}`,
-    ),
-  ])("%s is a protected path, in the pr_fix list", (path) => {
+    ...HOLDS_MIGRATION_FILES.map((name) => `${MIGRATIONS_DIR}/${name}`),
+  ];
+
+  test.each(LEFT_OUT)("%s is a protected path, in the pr_fix list", (path) => {
     expect(matchesForbiddenPath(path)).toBe(true);
   });
 
-  test.each([
-    HOLDS_MODULE,
-    "migrations/datatable/main/20261023131355_holds.up.sql",
-    "migrations/datatable/main/20261023131355_holds.down.sql",
-  ])("%s is a protected path, in the implement list", (path) => {
-    expect(matchesImplementProtectedPath(path)).toBe(true);
+  test.each(LEFT_OUT)(
+    "%s is a protected path, in the implement list",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(true);
+    },
+  );
+
+  test.each(LEFT_OUT)("%s is named in the exact list", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
   });
 
-  test("the exact list names the migrations that create the table", () => {
-    expect(
-      FORBIDDEN_EXACT_PATHS.filter((path) => path.includes("_holds.")),
-    ).toEqual(
-      expect.arrayContaining([
-        "migrations/datatable/main/20261023131355_holds.up.sql",
-        "migrations/datatable/main/20261023131355_holds.down.sql",
-      ]),
-    );
+  test("the scan leaves out nothing else", () => {
+    expect(listFiles("f").filter((path) => !SCANNED.includes(path))).toEqual([
+      HOLDS_MODULE,
+    ]);
   });
 });
 
@@ -983,24 +1127,28 @@ describe("scripts/test-db.sh", () => {
 
 // 表を作るmigration以外が、表の中身や定義に触れないことを確かめる。
 // 保護パスにmigrations全体は入れない(日常的に増えるため)ので、足されたmigrationは、このテストが見る。
-const HOLDS_MIGRATION_FILES = [
-  "20261023131355_holds.up.sql",
-  "20261023131355_holds.down.sql",
-];
-const MIGRATIONS_DIR = "migrations/datatable/main";
 
 /**
- * 表を作るmigration以外のうち、保留の表を参照するものの診断を返す。
- * 初期のmigrationのdownは、スキーマごと消す。このファイルのスキーマの削除だけは認める。
+ * 初期のmigrationのdownは、スキーマごと消す。許可するのは、このファイルの
+ * `DROP SCHEMA IF EXISTS factory CASCADE`の1文(1件だけ)である。同じ文の2件目やほかのスキーマ文は報告する。
  */
 const SCHEMA_DROP_ALLOWED = ["20260925153414_factory_init.down.sql"];
+const ALLOWED_DROP = "drop schema if exists factory cascade";
 
+/** 表を作るmigration以外のうち、保留の表を参照するものの診断を返す。 */
 function migrationReports(files: Readonly<Record<string, string>>): string[] {
   return Object.entries(files).flatMap(([name, sql]) => {
-    const hits = findHoldsReferences(sql).filter(
-      (hit) =>
-        !(hit.rule === "schema factory" && SCHEMA_DROP_ALLOWED.includes(name)),
-    );
+    let granted = false;
+    const hits = findHoldsReferences(sql).filter((hit) => {
+      if (granted || hit.rule !== "schema factory") return true;
+      if (!SCHEMA_DROP_ALLOWED.includes(name)) return true;
+      const statement = readSqlTokens(sql, hit.offset, 6, false)
+        .map((token) => token.text)
+        .join(" ");
+      if (statement !== ALLOWED_DROP) return true;
+      granted = true;
+      return false;
+    });
     const first = hits[0];
     return first === undefined
       ? []
