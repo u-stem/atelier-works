@@ -422,7 +422,8 @@ GitHubのIssueフォーム(`.github/ISSUE_TEMPLATE/factory-task.yml`)は、ラ�
 
 ### フォームで投入する
 
-Consoleの**作業項目**を開き、「新規投入」から入力して投入する。FactoryがIssueを作成し、ラベルで投入したときと同じ要件定義の工程に乗せる。
+Consoleの**作業項目**を開き、「新規投入」から入力して投入する。
+FactoryがIssueを作成し、ラベルで投入したときと同じ要件定義の工程に乗せる。
 
 | 入力 | 内容 |
 | --- | --- |
@@ -446,7 +447,8 @@ Consoleの**作業項目**を開き、「新規投入」から入力して投入
 再送の前に、次の3つを確かめる。
 投入されていたのに再送すると、Issue、作業項目、pipelineが重複するためである。
 
-1. Windmillのジョブ一覧で、`manual_intake_submit`のジョブが待ち状態か実行中ではないか。待っている間は、`manual_intake`のジョブとIssueが無い
+1. Windmillのジョブ一覧で、`manual_intake_submit`のジョブが待ち状態か実行中ではないか。
+   待っている間は、`manual_intake`のジョブとIssueが無い
 2. Windmillのジョブ一覧に、`manual_intake`のジョブがあるか
 3. 対象リポジトリのIssueに、送った題名と同じIssueがあるか
 

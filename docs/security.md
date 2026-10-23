@@ -1139,8 +1139,9 @@ Podmanは対象外である。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - 次のtag`console`のscriptは、resource`f/factory/factory_config`を読む。
-  `audit_kickoff`、`retry_work_item`、`manual_intake_submit`、`console_query`である。
-  `console_query`は、手動投入の候補(`intake_targets`)のために初めて読む。
+  `audit_kickoff`、`retry_work_item`、`manual_intake_submit`、`console_query`、`console_fetch_watch`である。
+  `console_query`は、手動投入の候補(`intake_targets`)のために読む。
+  `approval_decide`と`notice_resolve`は、設定を読まない。
   契約テストが見るのはsecret変数の名前の読み取りだけなので、resourceの値に`$var:`の参照が無いことは、人が確かめる。
   参照があると、参照先のsecret変数が、tag`console`のscriptから読めてしまう。
   確かめる手順はtag`periodic`の場合と同じで、[tagを付けるscriptの選び方](#tagを付けるscriptの選び方)に書く。
