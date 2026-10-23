@@ -246,6 +246,11 @@ describe("startIntake", () => {
 });
 
 describe("dismiss", () => {
+  /** 画面が結果を描画した、という記録を付ける。 */
+  function show(sessions: ReturnType<typeof createIntakeSessions>) {
+    sessions.markShown(KEY, sessions.get(KEY).resultId);
+  }
+
   test.each([
     ["a submission", SUBMITTED],
     ["a refusal", REFUSED],
@@ -253,13 +258,45 @@ describe("dismiss", () => {
   ])("clears %s the screen has shown", (_name, attempt) => {
     const sessions = createIntakeSessions();
     sessions.record(KEY, attempt);
+    show(sessions);
     sessions.dismiss(KEY);
     expect(sessions.get(KEY).attempt).toEqual({ kind: "idle" });
   });
 
-  test("keeps a result that is not known", () => {
+  test.each([
+    ["a submission", SUBMITTED],
+    ["a refusal", REFUSED],
+    ["a rejection", { kind: "rejected", message: "断られました" } as const],
+  ])("keeps %s the screen has not shown", (_name, attempt) => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, attempt);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).attempt).toEqual(attempt);
+  });
+
+  test("keeps a newer result when only an older one was shown", () => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, REFUSED);
+    show(sessions);
+    sessions.record(KEY, SUBMITTED);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
+  });
+
+  test("does not mark a result that is no longer the current one as shown", () => {
+    const sessions = createIntakeSessions();
+    sessions.record(KEY, REFUSED);
+    const old = sessions.get(KEY).resultId;
+    sessions.record(KEY, SUBMITTED);
+    sessions.markShown(KEY, old);
+    sessions.dismiss(KEY);
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
+  });
+
+  test("keeps a result that is not known even when it was shown", () => {
     const sessions = createIntakeSessions();
     sessions.record(KEY, UNKNOWN);
+    show(sessions);
     sessions.dismiss(KEY);
     expect(sessions.get(KEY).attempt).toEqual(UNKNOWN);
   });
@@ -271,10 +308,11 @@ describe("dismiss", () => {
     expect(sessions.get(KEY).form).toEqual(FORM);
   });
 
-  test("keeps the input of a refusal", () => {
+  test("keeps the input of a refusal that was shown", () => {
     const sessions = createIntakeSessions();
     sessions.begin(KEY, FORM);
     sessions.record(KEY, REFUSED);
+    show(sessions);
     sessions.dismiss(KEY);
     expect(sessions.get(KEY).form).toEqual(FORM);
   });
@@ -334,7 +372,8 @@ describe("createLeaveGuard", () => {
       defer: (run: () => void) => {
         pending.push(run);
         return () => {
-          pending.splice(pending.indexOf(run), 1);
+          const at = pending.indexOf(run);
+          if (at >= 0) pending.splice(at, 1);
         };
       },
       flush: () => {
@@ -343,12 +382,71 @@ describe("createLeaveGuard", () => {
     };
   }
 
-  test("clears the result of a screen that left", () => {
+  function show(sessions: ReturnType<typeof createIntakeSessions>) {
+    sessions.markShown(KEY, sessions.get(KEY).resultId);
+  }
+
+  test("clears the result the screen showed when it left", () => {
     const sessions = createIntakeSessions();
     const { defer, flush } = manualDefer();
     const guard = createLeaveGuard(sessions, KEY, defer);
     guard.enter();
     sessions.record(KEY, SUBMITTED);
+    show(sessions);
+    guard.leave();
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual({ kind: "idle" });
+  });
+
+  test("keeps a result that arrives after the screen left during a send", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer);
+    guard.enter();
+    sessions.begin(KEY, FORM);
+    guard.leave();
+    sessions.record(KEY, SUBMITTED);
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
+  });
+
+  test("shows a result that arrived after the screen left to the screen that comes back", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer);
+    guard.enter();
+    sessions.begin(KEY, FORM);
+    guard.leave();
+    sessions.record(KEY, SUBMITTED);
+    flush();
+    guard.enter();
+    expect(sessions.get(KEY).attempt.kind).toBe("submitted");
+  });
+
+  test("keeps the result while the write still holds the lock", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    const guard = createLeaveGuard(sessions, KEY, defer, () => false);
+    guard.enter();
+    sessions.record(KEY, SUBMITTED);
+    show(sessions);
+    guard.leave();
+    flush();
+    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
+  });
+
+  test("clears the result that was shown once the lock is released", () => {
+    const sessions = createIntakeSessions();
+    const { defer, flush } = manualDefer();
+    let canDismiss = false;
+    const guard = createLeaveGuard(sessions, KEY, defer, () => canDismiss);
+    guard.enter();
+    sessions.record(KEY, SUBMITTED);
+    show(sessions);
+    guard.leave();
+    flush();
+    guard.enter();
+    canDismiss = true;
     guard.leave();
     flush();
     expect(sessions.get(KEY).attempt).toEqual({ kind: "idle" });
@@ -360,6 +458,7 @@ describe("createLeaveGuard", () => {
     const guard = createLeaveGuard(sessions, KEY, defer);
     guard.enter();
     sessions.record(KEY, SUBMITTED);
+    show(sessions);
     guard.leave();
     guard.enter();
     flush();
@@ -372,21 +471,9 @@ describe("createLeaveGuard", () => {
     const guard = createLeaveGuard(sessions, KEY, defer);
     guard.enter();
     sessions.record(KEY, UNKNOWN);
+    show(sessions);
     guard.leave();
     flush();
     expect(sessions.get(KEY).attempt).toEqual(UNKNOWN);
-  });
-
-  test("shows a result written while away to the screen that comes back", () => {
-    const sessions = createIntakeSessions();
-    const { defer, flush } = manualDefer();
-    const guard = createLeaveGuard(sessions, KEY, defer);
-    guard.enter();
-    guard.leave();
-    flush();
-    sessions.record(KEY, SUBMITTED);
-    guard.enter();
-    flush();
-    expect(sessions.get(KEY).attempt).toEqual(SUBMITTED);
   });
 });

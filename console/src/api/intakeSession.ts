@@ -30,6 +30,8 @@ export type IntakeSession = {
    * 画面が表示中に増えたことを知り、入力欄を空にするために使う。
    */
   readonly clearedCount: number;
+  /** 仮の実装。常に0を返す。 */
+  readonly resultId: number;
 };
 
 const EMPTY: IntakeSession = {
@@ -37,6 +39,7 @@ const EMPTY: IntakeSession = {
   form: null,
   stale: false,
   clearedCount: 0,
+  resultId: 0,
 };
 
 export type IntakeSessions = {
@@ -55,6 +58,7 @@ export type IntakeSessions = {
    * 画面が見せた結果を消す。投入できた、断られた、ジョブが動く前に断られた、のどれかだけを消す。
    * 投入されたか分からない結果と、送信中の状態(結果がまだ無い)は消さない。入力欄の値も残す。
    */
+  readonly markShown: (key: string, resultId: number) => void;
   readonly dismiss: (key: string) => void;
   /**
    * 「投入されていたので入力を破棄する」。投入されたか分からないときだけ、
@@ -118,6 +122,7 @@ export function createIntakeSessions(): IntakeSessions {
         return attempt === current.attempt ? current : { ...current, attempt };
       });
     },
+    markShown: () => undefined,
     dismiss: (key) => {
       update(key, (current) => {
         const kind = current.attempt.kind;
@@ -189,6 +194,7 @@ export function createLeaveGuard(
   sessions: IntakeSessions,
   key: string,
   defer: (run: () => void) => () => void = deferToNextTask,
+  _canDismiss: () => boolean = () => true,
 ): { readonly enter: () => void; readonly leave: () => void } {
   let cancel: (() => void) | null = null;
   return {
