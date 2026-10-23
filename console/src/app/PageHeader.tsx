@@ -39,6 +39,17 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   const now = useNow();
+  const refreshControls =
+    refresh === undefined ? null : (
+      <RefreshControls
+        refresh={refresh}
+        refreshLabel={refreshLabel}
+        now={now}
+      />
+    );
+  // 幅が狭く右側が1行に1つへ折り返すと、見出しのjustify-betweenで左端へ戻る。
+  // ml-autoで右端へ寄せ、中の並びもjustify-endで揃えて、折り返した行も右端に置く。
+  // actionsが無い画面は、更新の塊をそのまま置き、描画を変えない。
   return (
     <header className="flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8">
       <div className="min-w-0">
@@ -52,52 +63,64 @@ export function PageHeader({
         )}
         {children}
       </div>
-      {refresh === undefined && actions === undefined ? null : (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          {refresh === undefined ? null : (
-            <div className="flex items-center gap-2 text-small whitespace-nowrap text-subtle">
-              {refresh.isError ? (
-                <span className="font-medium text-failure">
-                  更新に失敗しました
-                </span>
-              ) : null}
-              {refresh.updatedAt > 0 ? (
-                <TimeText
-                  iso={new Date(refresh.updatedAt).toISOString()}
-                  now={now}
-                  prefix="最終更新 "
-                />
-              ) : (
-                <span>まだ取得していません</span>
-              )}
-              <AutoRefreshNote
-                intervalMs={refresh.autoRefreshMs}
-                failed={refresh.isError}
-              />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={refreshLabel}
-                    aria-disabled={refresh.isFetching}
-                    onClick={refresh.isFetching ? undefined : refresh.onRefresh}
-                  >
-                    <RefreshCw
-                      aria-hidden="true"
-                      className={cn(refresh.isFetching && "animate-spin")}
-                    />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {refresh.isFetching ? "取得しています" : refreshLabel}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          )}
+      {actions === undefined ? (
+        refreshControls
+      ) : (
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+          {refreshControls}
           {actions}
         </div>
       )}
     </header>
+  );
+}
+
+function RefreshControls({
+  refresh,
+  refreshLabel,
+  now,
+}: {
+  refresh: RefreshStatus;
+  refreshLabel: string;
+  now: number;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-small whitespace-nowrap text-subtle">
+      {refresh.isError ? (
+        <span className="font-medium text-failure">更新に失敗しました</span>
+      ) : null}
+      {refresh.updatedAt > 0 ? (
+        <TimeText
+          iso={new Date(refresh.updatedAt).toISOString()}
+          now={now}
+          prefix="最終更新 "
+        />
+      ) : (
+        <span>まだ取得していません</span>
+      )}
+      <AutoRefreshNote
+        intervalMs={refresh.autoRefreshMs}
+        failed={refresh.isError}
+      />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={refreshLabel}
+            aria-disabled={refresh.isFetching}
+            onClick={refresh.isFetching ? undefined : refresh.onRefresh}
+          >
+            <RefreshCw
+              aria-hidden="true"
+              className={cn(refresh.isFetching && "animate-spin")}
+            />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {refresh.isFetching ? "取得しています" : refreshLabel}
+        </TooltipContent>
+      </Tooltip>
+    </div>
   );
 }
