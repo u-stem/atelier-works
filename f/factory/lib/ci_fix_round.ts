@@ -6,7 +6,11 @@
 
 import { lstat, readFile } from "node:fs/promises";
 import { type CiFailureClass, classifyCiFailure } from "./ci_fix_classify.ts";
-import { type CiFixChange, checkCiFixChanges } from "./ci_fix_paths.ts";
+import {
+  type CiFixChange,
+  checkCiFixChanges,
+  isTestPath,
+} from "./ci_fix_paths.ts";
 import {
   buildCiExcerpt,
   CI_LOG_MAX_JOBS,
@@ -938,6 +942,13 @@ export type CiChangeOptions = {
    * `checkCiFixChanges`は変えず、呼び出し側のこの検査だけが例外を置く。
    */
   readonly rehashCheck?: () => Promise<RehashCheckVerdict>;
+  /**
+   * PRの基点(PRのbaseブランチの先端とheadのmerge-base)のcommitのshaを求める。求められなければ`null`を返す。
+   * 回の開始時のheadに対して行が減ったテストの変更だけを、基点との差分でも読む(`baseRemovedLineCount`)。
+   * 渡さないとき、`null`を返したとき、差分を読めないときは、基点との差分が不明のまま残り、検査は拒否に倒れる。
+   * PRが追加したテストの修正を許すために使う。競合回の読み取りは渡さない。
+   * 1回の読み取りの中では、最初に要ったときに1回だけ呼ぶ。
+   */
   readonly resolvePrBase?: () => Promise<string | null>;
 };
 
@@ -984,6 +995,47 @@ export function isRehashCandidate(collected: {
     !collected.timedOut &&
     isLockOnlyChange(collected.changes)
   );
+}
+
+/**
+ * テストのファイルを、PRの基点(`prBaseSha`)と比べて、基点から削除された行の数を返す。
+ * 差分が大きすぎるときと、gitが失敗したときは`undefined`を返す。基点の行を消していないとは言えないためである。
+ * 失敗を例外にしないのは、不明のまま拒否に倒せば、基点との差分を読まない場合と同じ結果になるためである。
+ */
+async function removedLinesAgainstBase(
+  run: CommandRunner,
+  worktreeDir: string,
+  prBaseSha: string,
+  cached: readonly string[],
+  path: string,
+): Promise<number | undefined> {
+  assertSha(prBaseSha);
+  let patch: string;
+  try {
+    patch = await runGit(
+      run,
+      worktreeDir,
+      "git diff -U0 against the base",
+      [
+        "diff",
+        ...cached,
+        "-U0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--ignore-submodules=none",
+        prBaseSha,
+        "--",
+        `:(literal)${path}`,
+      ],
+      PATCH_MAX_BYTES,
+    );
+  } catch {
+    return undefined;
+  }
+  if (isCappedOutput(patch)) return undefined;
+  return parseZeroContextPatch(patch).removedLineCount;
 }
 
 function splitLines(text: string): string[] {
@@ -1037,6 +1089,8 @@ async function untrackedChange(
  * 無視されたファイルはcommitされないが、検査コマンドの動き方を変えうるので、Claudeが書いた分も検査の対象にする。
  * 無視の規則をかけずに(`--exclude-standard`なしで)一覧を取るので、`.gitignore`を書き換えても隠せない。
  * 外部のdiffとtextconvのプログラムは使わない。
+ * `resolvePrBase`を渡すと、`baseSha`に対して行が減ったテストの変更だけ、PRの基点との差分も読み、
+ * 基点から削除された行の数を`baseRemovedLineCount`に入れる。基点は1回の読み取りにつき1回だけ求める。
  * 変更が上限を超えたら、1件ずつ読まずに`overflow`を返す。
  * symlinkの先は読まない。
  */
@@ -1059,6 +1113,8 @@ export async function collectCiFixChanges(
   const outOfTime = (): boolean =>
     now() - startedAt > CI_ROUND_COLLECT_BUDGET_MS;
   const cached = options.source === "staged" ? ["--cached"] : [];
+  const resolvePrBase = options.resolvePrBase ?? (async () => null);
+  let prBase: Promise<string | null> | null = null;
 
   const tracked = parseRawDiffZ(
     await runGit(run, worktreeDir, "git diff --raw", [
@@ -1125,22 +1181,49 @@ export async function collectCiFixChanges(
       ],
       PATCH_MAX_BYTES,
     );
-    changes.push(
-      isCappedOutput(patch)
-        ? {
-            path: entry.path,
-            status: entry.status,
-            mode: UNSUPPORTED_MODE,
-            addedLines: [],
-            removedLineCount: 0,
-          }
-        : {
-            path: entry.path,
-            status: entry.status,
-            mode: entry.mode,
-            ...parseZeroContextPatch(patch),
-          },
-    );
+    if (isCappedOutput(patch)) {
+      changes.push({
+        path: entry.path,
+        status: entry.status,
+        mode: UNSUPPORTED_MODE,
+        addedLines: [],
+        removedLineCount: 0,
+      });
+      continue;
+    }
+    const parsed = parseZeroContextPatch(patch);
+    const change: CiFixChange = {
+      path: entry.path,
+      status: entry.status,
+      mode: entry.mode,
+      ...parsed,
+    };
+    const needsBase =
+      options.resolvePrBase !== undefined &&
+      entry.status === "modified" &&
+      parsed.removedLineCount > 0 &&
+      isTestPath(entry.path);
+    if (needsBase) {
+      prBase ??= resolvePrBase();
+      const prBaseSha = await prBase;
+      const baseRemovedLineCount =
+        prBaseSha === null
+          ? undefined
+          : await removedLinesAgainstBase(
+              run,
+              worktreeDir,
+              prBaseSha,
+              cached,
+              entry.path,
+            );
+      changes.push(
+        baseRemovedLineCount === undefined
+          ? change
+          : { ...change, baseRemovedLineCount },
+      );
+      continue;
+    }
+    changes.push(change);
   }
   for (const path of untracked) {
     if (outOfTime()) return { changes: [], overflow: true, timedOut: true };

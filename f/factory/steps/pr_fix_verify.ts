@@ -13,6 +13,10 @@ import {
   checkSandboxFromEnv,
   kernelWarningText,
 } from "../lib/check_sandbox.ts";
+import {
+  githubPrMergeBaseIo,
+  resolvePrMergeBase,
+} from "../lib/ci_fix_pr_base.ts";
 import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
 import {
   buildCiGatherDeps,
@@ -674,6 +678,33 @@ export async function main(
     })();
     return prChangedPathsRead;
   };
+  // テストの変更が、PRの基点から持っていた行を消していないかの基準。最初に要るときに1回だけ求める。
+  // 求められなければnullになり、検査は基点の行を消したものとして拒否に倒れる。
+  let prBaseResolved: Promise<string | null> | null = null;
+  const resolvePrBaseOnce = (): Promise<string | null> => {
+    prBaseResolved ??= (async () => {
+      const ghToken = await wmill.getVariable("f/factory/github_token");
+      const client: GhClient = { run: runCommand, ghToken };
+      return await resolvePrMergeBase(
+        githubPrMergeBaseIo({
+          client,
+          owner,
+          repo,
+          prNumber: pr_number,
+          headSha: requireCiRoundHeadSha(head_sha),
+          worktreeDir: worktree_dir,
+          ghToken,
+          run: runCommand,
+        }),
+        (reason) =>
+          log.warn("failed to resolve the base commit of the PR", {
+            work_item_id,
+            reason,
+          }),
+      );
+    })();
+    return prBaseResolved;
+  };
   // hashの再計算の確認に使う、baseの先端の読み取りと再計算。最初に要るときに1回だけ組む。
   // 回の種類(再計算の回か)を読み直す関数も、同じ認証で組む。
   let rehashPlannerBuilt: Promise<{
@@ -872,6 +903,7 @@ export async function main(
               await loadPrChangedPaths(),
               {
                 source: "worktree",
+                resolvePrBase: resolvePrBaseOnce,
                 // 変更が`wmill-lock.yaml`の1件だけのときに限り、PRのheadの木からの独立した再計算と照合する。
                 rehashCheck: async () => {
                   const { planner, isRehashRound } = await rehashPlannerOnce();

@@ -35,6 +35,12 @@ export type CiFixChange = {
   readonly addedLines: readonly string[];
   /** 削除された行の数。 */
   readonly removedLineCount: number;
+  /**
+   * PRの基点(PRのbaseブランチの先端とheadのmerge-base)との差分で、削除された行の数。
+   * 0は、基点から持っていた行が1行も消えていないことを表す。
+   * 基点を求められないとき、差分を読めないとき、テストの変更でないときは省略する。
+   * 省略は不明であり、基点の行を消したものとして扱う。
+   */
   readonly baseRemovedLineCount?: number;
 };
 
@@ -52,7 +58,7 @@ export type CiFixPathInput = {
  * - `protected_path`: 保護パスかFactoryの安全装置。
  * - `case_variant_path`: PRが変更したファイルと大文字小文字だけが違うパス。
  * - `not_in_pull_request`: PRが変更しておらず、新規のテストファイルでもない。
- * - `test_not_additive`: テストの削除、または既存のテスト行の削除や変更。
+ * - `test_not_additive`: テストの削除、またはPRの基点から持っていたテスト行の削除や変更。
  * - `weakens_checks`: 検査を弱める行を追加した。
  */
 export type CiFixViolationCode =
@@ -354,6 +360,18 @@ const SYMLINK_MODE = "120000";
 /** 通常のファイルのモード。実行権限の有無だけが違う。 */
 const REGULAR_FILE_MODES: readonly string[] = ["100644", "100755"];
 
+/**
+ * テストの変更が、テストの削除か、PRの基点から持っていた行の削除や変更か。
+ * 回の開始時のheadに対して行が減っていても、減ったのがPRの追加した行だけなら、基点の行は残っている。
+ * PRが追加したテストの修正を止めないために、その場合は許す。
+ * 基点に対する削除の有無が分からないとき(`baseRemovedLineCount`の省略)は、拒否に倒す。
+ */
+function removesBaseTestLines(change: CiFixChange): boolean {
+  if (change.status === "deleted") return true;
+  if (change.removedLineCount === 0) return false;
+  return !(change.status === "modified" && change.baseRemovedLineCount === 0);
+}
+
 /** 1件の変更の最初の違反の理由。違反が無ければnull。 */
 function violationOf(
   change: CiFixChange,
@@ -376,10 +394,8 @@ function violationOf(
   const newTest = change.status === "added" && isTestPath(path);
   if (!changedByPr && !newTest) return "not_in_pull_request";
 
-  if (isTestPath(path)) {
-    const removesTestLines =
-      change.status === "deleted" || change.removedLineCount > 0;
-    if (removesTestLines) return "test_not_additive";
+  if (isTestPath(path) && removesBaseTestLines(change)) {
+    return "test_not_additive";
   }
   if (weakensChecks(change.addedLines)) return "weakens_checks";
   return null;

@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] PRの基点のcommitを求める'
+description: 内部ライブラリです。直接実行するものではありません。CI回が、PRの基点(baseブランチの先端とPRのheadのmerge-base)のcommitを求める部品を置きます。
 lock: '!inline f/factory/lib/ci_fix_pr_base.script.lock'
 kind: script
 schema:
