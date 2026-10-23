@@ -1,0 +1,9 @@
+summary: '[LIB] 共通の保留の表の読み書き'
+description: 内部ライブラリです。直接実行するものではありません。保留の入力の検証、有効の判定、保留の表の読み書きを行う関数です。
+lock: '!inline f/factory/lib/holds.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

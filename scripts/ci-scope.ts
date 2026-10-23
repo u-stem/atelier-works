@@ -79,7 +79,7 @@ export type ScopeDeps = {
 };
 
 // `test:db`が実行するコードの、f/配下の依存。
-// `scripts/test-db-queries.ts`が読み込むファイルを、再帰的にたどった全体である。
+// `scripts/test-db*.ts`(`test-db-queries.ts`と`test-db-holds.ts`など)が読み込むファイルを、再帰的にたどった全体である。
 // 一覧の網羅は、テストがimportの連鎖から確かめる。
 export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/audit_support.ts",
@@ -94,6 +94,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/drawio.ts",
   "f/factory/lib/drawio_viewer_observations.ts",
   "f/factory/lib/gated_review_support.ts",
+  "f/factory/lib/holds.ts",
   "f/factory/lib/job_ids.ts",
   "f/factory/lib/job_tmp.ts",
   "f/factory/lib/log.ts",
