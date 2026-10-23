@@ -70,9 +70,9 @@ locks:
   f/factory/lib/gh_collect_freshness: 98f0a1ee826a4eb5f9439a8d0bdd7ccbdd76d59c471e1454f037f22d9e9b11f9
   f/factory/lib/gh_collect_read: 73c7075dc3f8dd186ea835bd9311d4719003170e374b065eee4b7f98ad7261b7
   f/factory/lib/gh_collect_support: aeb821a14e83c6670779ffe63c80dc9f43dff6d42d64bcebcb116b9c95df7bad
-  f/factory/lib/gh_graphql: e11c3e9619f6cb509472a4a1f54cee0ad9787ec497c874481d2c214d485c6a7d
-  f/factory/lib/github: 0fe8b018b0d212d13c606fa5a31f5c27d7a3995caec42ff2b32b688e83f67663
-  f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
+  f/factory/lib/gh_graphql: 6df2c0f549bffcff4d562c2e5d6f9c0cf3b7be5575e6ec1727ee61151f3e15e5
+  f/factory/lib/github: 0c06f96db34c504358ff8c124a892d8013e0d6b546eee27626a93ff4fea1def4
+  f/factory/lib/github_errors: c1c63662dbdc331149e492cfd841f14f93f898a99bde2605b753b0db2127f8b4
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4

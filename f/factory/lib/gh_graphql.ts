@@ -4,6 +4,10 @@
 // 拒否された項目は、許可表の`type`と、問い合わせの文に現れる語だけの項目名に絞って残す。
 
 import {
+  RATE_LIMIT_HINT_TEXT_LIMIT,
+  SECONDARY_RATE_LIMIT_PHRASE,
+} from "./github_errors.ts";
+import {
   GH_DETAIL_OPTIONAL_FIELDS,
   type GhDetailOptionalField,
   isRecord,
@@ -414,20 +418,19 @@ function headerInteger(
   return Number(value.trim());
 }
 
-/** 本文のうち、制限の種類を見分けるために読む長さ。 */
-const HINT_TEXT_LIMIT = 4096;
-
 /** 失敗した応答の本文を、制限の言及があるかを調べるためだけに読む。読めなければ言及なしとする。 */
 async function readLimitHints(
   response: GraphqlResponseLike,
 ): Promise<{ readonly rate: boolean; readonly secondary: boolean }> {
   let text: string;
   try {
-    text = (await response.text()).slice(0, HINT_TEXT_LIMIT).toLowerCase();
+    text = (await response.text())
+      .slice(0, RATE_LIMIT_HINT_TEXT_LIMIT)
+      .toLowerCase();
   } catch {
     return { rate: false, secondary: false };
   }
-  const secondary = text.includes("secondary rate limit");
+  const secondary = text.includes(SECONDARY_RATE_LIMIT_PHRASE);
   return { rate: secondary || text.includes("rate limit"), secondary };
 }
 

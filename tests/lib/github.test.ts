@@ -748,6 +748,158 @@ describe("rate limit wait cap", () => {
     expect(err.name).toBe("GitHubRateLimitError");
   });
 
+  describe("secondary rate limit detected from the body", () => {
+    const DEFAULT_WAIT_MS = 60_000;
+
+    /** 待ちのヘッダーも残り回数0のヘッダーも無い、本文だけの二次レート制限の403。 */
+    function bodyOnlyLimited(message: string): CommandResult {
+      return ok(ghApiStdout(403, { message }));
+    }
+
+    const secondaryBody = () =>
+      bodyOnlyLimited(
+        "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+      );
+
+    test("waits the default time once and returns the successful retry", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient([secondaryBody(), viewerOk], sleeps);
+      const viewer = await getViewer(client);
+      expect({ viewer, sleeps }).toEqual({
+        viewer: { login: "factory-bot", id: 12345 },
+        sleeps: [DEFAULT_WAIT_MS],
+      });
+    });
+
+    test("matches the phrase regardless of letter case", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [bodyOnlyLimited("SECONDARY Rate Limit exceeded"), viewerOk],
+        sleeps,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
+    });
+
+    test("ignores x-ratelimit-reset when only the body says secondary", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [
+          ok(
+            ghApiStdout(
+              403,
+              { message: "secondary rate limit" },
+              {
+                "x-ratelimit-remaining": "42",
+                "x-ratelimit-reset": String(nowEpochSeconds + 3600),
+              },
+            ),
+          ),
+          viewerOk,
+        ],
+        sleeps,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([DEFAULT_WAIT_MS]);
+    });
+
+    test("throws a retried GitHubRateLimitError when the retry is limited again", async () => {
+      const sleeps: number[] = [];
+      const { client, calls } = fakeClient(
+        [secondaryBody(), secondaryBody()],
+        sleeps,
+      );
+      const error = await rejectionOf(getViewer(client));
+      expect({
+        rateLimited: error instanceof GitHubRateLimitError,
+        retried: error instanceof GitHubRateLimitError && error.retried,
+        sleeps,
+        calls: calls.length,
+      }).toEqual({
+        rateLimited: true,
+        retried: true,
+        sleeps: [DEFAULT_WAIT_MS],
+        calls: 2,
+      });
+    });
+
+    test("records the same message format as the header-based limit", async () => {
+      const { client } = fakeClient([secondaryBody(), secondaryBody()]);
+      await expect(getViewer(client)).rejects.toThrow(
+        /^GitHub rate limit on user: still limited after waiting once \(rerun after the limit resets\)$/,
+      );
+    });
+
+    test("does not copy the response body into the error message", async () => {
+      const { client } = fakeClient([
+        bodyOnlyLimited("secondary rate limit SENSITIVE-BODY-TEXT"),
+        bodyOnlyLimited("secondary rate limit SENSITIVE-BODY-TEXT"),
+      ]);
+      const error = await rejectionOf(getViewer(client));
+      expect(
+        String(error instanceof Error ? error.message : error),
+      ).not.toContain("SENSITIVE");
+    });
+
+    test("returns a 403 without the phrase as a plain HTTP error without waiting or retrying", async () => {
+      const sleeps: number[] = [];
+      const { client, calls } = fakeClient(
+        [bodyOnlyLimited("Resource not accessible by personal access token")],
+        sleeps,
+      );
+      const error = await rejectionOf(getViewer(client));
+      expect({
+        name: error instanceof Error ? error.name : undefined,
+        status: error instanceof GitHubHttpError ? error.status : undefined,
+        sleeps,
+        calls: calls.length,
+      }).toEqual({
+        name: "GitHubHttpError",
+        status: 403,
+        sleeps: [],
+        calls: 1,
+      });
+    });
+
+    test("does not treat a primary-only rate limit body as secondary", async () => {
+      const { client, calls } = fakeClient([
+        bodyOnlyLimited("API rate limit exceeded for user ID 1."),
+      ]);
+      const error = await rejectionOf(getViewer(client));
+      expect({
+        name: error instanceof Error ? error.name : undefined,
+        calls: calls.length,
+      }).toEqual({ name: "GitHubHttpError", calls: 1 });
+    });
+
+    test("does not apply to statuses other than 403", async () => {
+      const { client, calls } = fakeClient([
+        ok(ghApiStdout(429, { message: "secondary rate limit" })),
+      ]);
+      const error = await rejectionOf(getViewer(client));
+      expect({
+        name: error instanceof Error ? error.name : undefined,
+        calls: calls.length,
+      }).toEqual({ name: "GitHubHttpError", calls: 1 });
+    });
+
+    test("a client that does not wait throws the rate limit error at once", async () => {
+      const fake = createFakeCommandRunner([secondaryBody(), secondaryBody()]);
+      const error = await rejectionOf(
+        getPrWithoutWait(
+          { run: fake.run, ghToken: "tok" },
+          "acme",
+          "widgets",
+          12,
+        ),
+      );
+      expect({
+        rateLimited: error instanceof GitHubRateLimitError,
+        calls: fake.calls.length,
+      }).toEqual({ rateLimited: true, calls: 1 });
+    });
+  });
+
   describe("GraphQL", () => {
     /** GraphQLの一次レート制限の応答(HTTP 200で、`errors[].type`が`RATE_LIMITED`)。 */
     const graphqlLimited = ok(
