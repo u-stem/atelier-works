@@ -542,19 +542,35 @@ mise run worktree:prune -- --apply
 | `stamp` | 直近の成功の時刻 |
 | `failures` | 連続して失敗した回数。ロックを取った直後に1増え、成功した実行が0に戻す |
 
-`WORKTREE_AUTO_PRUNE=0`を付けると、自動の片付けは起動しない。
+環境変数`WORKTREE_AUTO_PRUNE`が`0`のとき、自動の片付けは起動しない。
 未設定か`1`のときに起動する。
+
+`worktree-prune.sh`か`worktree-new.sh`を編集する作業では、親のセッションを`WORKTREE_AUTO_PRUNE=0`をexportした環境で起動する。
+フックが作るworktree(EnterWorktreeやsubagentの`isolation: "worktree"`)も含めて、確実に止まる。
+止めないと、編集中の版の`--auto`が、本物のworktreeに対して走るためである。
+
+コマンドに前置きして、1回だけ止める方法もある。
 
 ```bash
 WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
 ```
 
-`worktree-prune.sh`か`worktree-new.sh`を編集しているworktreeから作るときは、`WORKTREE_AUTO_PRUNE=0`を付ける。
-付けないと、編集中の版の`--auto`が、本物のworktreeに対して走るためである。
+この形は`.claude/settings.json`の許可に当たらず、確認を求められる場合がある。
+当たるかは確かめていない。
+フックが作るworktreeには、前置きできない。
 
 `failures`が2以上のときは、worktreeを作るたびに、標準エラーに失敗の回数と`log`のパスを出す。
 この警告を見たら、運用者に報告する。
-続けて`mise run worktree:prune`を実行し、残る理由の一覧で原因を確かめる。
+原因は先に`log`の`failed:`の行で確かめる。
+`mise run worktree:prune`の乾燥実行は、残る候補の確認用である。
+次の失敗は、乾燥実行には出ない。
+
+- 祖先のPIDが不正
+- `lsof`の出力が空
+- `lsof`が呼び出し元を見られない
+- 削除に失敗した(`could not remove`)
+- `gh`がすべての候補で使えない
+
 手動の`--apply`は、自動の片付けと別に使える。
 
 ## 自己更新の設定
