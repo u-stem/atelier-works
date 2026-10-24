@@ -21,7 +21,7 @@ export function ItemsScreen() {
         title="作業項目"
         refresh={refresh}
         actions={
-          <Button asChild size="sm">
+          <Button asChild>
             <Link to="/items/new">新規投入</Link>
           </Button>
         }
