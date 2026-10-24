@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -1223,6 +1224,176 @@ describe("worktree-prune.sh", () => {
       runAuto();
 
       expect(existsSync(path)).toBe(true);
+    });
+
+    describe("state files", () => {
+      const stateDir = () => join(mainDir, ".git", "worktree-prune");
+      const stateFile = (name: string) => join(stateDir(), name);
+
+      // 状態のディレクトリを作り、その中の`name`を`target`へのシンボリックリンクにする。
+      function linkStateFile(name: string, target: string): void {
+        mkdirSync(stateDir(), { mode: 0o700 });
+        symlinkSync(target, stateFile(name));
+      }
+
+      test("--auto prints nothing to stdout", () => {
+        addMergedWorktree("docs-old", "docs/old");
+
+        const result = runAuto();
+
+        expect(result.stdout).toBe("");
+      });
+
+      test("--auto writes the log", () => {
+        addMergedWorktree("docs-old", "docs/old");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain("removed: ");
+      });
+
+      test("--auto writes the reason a worktree was kept to the log", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        addWorktree("docs-wip", "docs/wip");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain(
+          "(docs/wip): unused",
+        );
+      });
+
+      test("--auto writes a failure to the log", () => {
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain("failed: ");
+      });
+
+      test("--auto creates the state directory readable only by the owner", () => {
+        runAuto();
+
+        expect(statSync(stateDir()).mode & 0o777).toBe(0o700);
+      });
+
+      test("--auto trims a large log", () => {
+        mkdirSync(stateDir(), { mode: 0o700 });
+        writeFileSync(stateFile("log"), "old line\n".repeat(30_000));
+
+        runAuto();
+
+        expect(statSync(stateFile("log")).size).toBeLessThan(102_400);
+      });
+
+      test("--auto keeps the end of a large log", () => {
+        mkdirSync(stateDir(), { mode: 0o700 });
+        writeFileSync(
+          stateFile("log"),
+          `${"old line\n".repeat(30_000)}last old line\n`,
+        );
+
+        runAuto();
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain(
+          "last old line\n",
+        );
+      });
+
+      test("--auto writes the stamp as epoch seconds on success", () => {
+        const before = Math.floor(Date.now() / 1000);
+
+        runAuto();
+
+        const stamp = Number(readFileSync(stateFile("stamp"), "utf8").trim());
+        expect(stamp).toBeGreaterThanOrEqual(before);
+      });
+
+      test("--auto writes 0 to failures on success", () => {
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("0");
+      });
+
+      test("--auto does nothing when the state directory is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-state");
+        mkdirSync(elsewhere);
+        symlinkSync(elsewhere, stateDir());
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto writes nothing into the target of a symlinked state directory", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-state");
+        mkdirSync(elsewhere);
+        symlinkSync(elsewhere, stateDir());
+
+        runAuto();
+
+        expect(readdirSync(elsewhere)).toEqual([]);
+      });
+
+      test("--auto does nothing when lock is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-lock");
+        mkdirSync(elsewhere);
+        linkStateFile("lock", elsewhere);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does nothing when log is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        linkStateFile("log", join(root, "victim"));
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does nothing when stamp is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        linkStateFile("stamp", join(root, "victim"));
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does nothing when failures is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        linkStateFile("failures", join(root, "victim"));
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto never writes through a symlink target", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const victim = join(root, "victim");
+        writeFileSync(victim, "untouched\n");
+        linkStateFile("log", victim);
+
+        runAuto();
+
+        expect(readFileSync(victim, "utf8")).toBe("untouched\n");
+      });
+
+      test("--auto never writes through a symlink to a directory", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-dir");
+        mkdirSync(elsewhere);
+        linkStateFile("stamp", elsewhere);
+
+        runAuto();
+
+        expect(readdirSync(elsewhere)).toEqual([]);
+      });
     });
   });
 
