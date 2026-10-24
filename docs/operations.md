@@ -3782,7 +3782,7 @@ Claudeの長いジョブ(実装は最長6時間)がdefaultの枠を埋め、後�
 動いているジョブが無いので、先に動くジョブの後ろで待っているのではない。
 止まってから通知までの遅れは、最大で約20分である。
 内訳は、待つジョブが次に予定される時刻までの約90秒、しきい値の600秒、確認の周期の300秒、読み直しの60秒である。
-読み直しを含めた確認の上限は100秒(観測ごとの上限20秒を2回と、おく60秒)である。
+読み直しを含めると、確認の上限は100秒になる(観測ごとの上限20秒を2回と、おく60秒)。
 続けて行う検出器の確認の上限10秒を足しても110秒で、scriptの`timeout`の120秒に収まる。
 
 待ちが10分未満になるか、defaultで動くジョブが現れると、残した通知を自動で解決する。
@@ -4506,13 +4506,19 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 1. 検出器の直近のジョブが成功していることを見る。
    `wmill job list --script-path f/factory/detect_schedule_failures --limit 3`でジョブを選び、`wmill job result <ジョブのID>`の`mode`が、初回は`bootstrap`、以降は`scan`であることを見る。
 2. 初回の後に、`job_failures`の`step`が空の行が、過去の失敗の分だけ増えていないことを見る。
-3. 使い捨てのscheduleを失敗させて、記録と通知を確かめる。
+3. scheduleから`on_failure`の行を外した反映で、サーバー側のscheduleの`on_failure`が消えたかを見る。
+   `wmill schedule get <scheduleのpath> --json`で、`on_failure`が`null`か無いことを確かめる。
+   行を外した反映で消えるかは、実機で未確認である。
+   消えなくても、このWindmillは呼ばないので、動きは変わらない。
+   旧ハンドラ`f/factory/on_error_schedule`は、反映が`--keep-deleted`を付けるので、サーバーに残る。
+   害は無い。`mise run push:prune`で消すのは任意で、人が実行する。
+4. 使い捨てのscheduleを失敗させて、記録と通知を確かめる。
    scriptは`f/factory/_probe_`で始まる名前にする。検出器は`f/factory/`の下だけを拾う。
    scheduleは2分ごとにし、`on_failure`を付けない。
    3回失敗させた後で、`step`が空の行が、回数分、重複せずにできることを見る。
    初回に`job_failed`が、3回目に`schedule_failing`が出ることも見る。
    行の`occurred_at`と`root_job_id`が、失敗したジョブのものであることも見る。
-4. 検出器のscheduleを止めて、心拍を確かめる。
+5. 検出器のscheduleを止めて、心拍を確かめる。
    凍結で止める。
 
    ```bash
@@ -4522,7 +4528,7 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
    Windmillの画面でscheduleを無効にしても、次の反映で戻る。
    25分と見る側の次の実行のあとに、`schedule_detector_stale`ができ、Discordにも届くことを見る。
    凍結を解除し、検出器が成功すると、通知が自動で解決されることを見る。
-5. 終わったら、使い捨てのscheduleを元の状態に戻し、出た通知をConsoleで解決する。
+6. 終わったら、使い捨てのscheduleを元の状態に戻し、出た通知をConsoleで解決する。
    `job_failures`の使い捨ての行は、[自己更新の打ち切りを確かめる](#自己更新の打ち切りを確かめる)の手順と同じく、SELECTで確かめてから`id`を指定して消す。
    週次の監査(月曜9時30分)の前に消す。
 
@@ -4608,7 +4614,7 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
    cronは`0 */2 * * * *`(2分ごと)にし、`no_flow_overlap`を有効にする。
    失敗時のハンドラは付けない。
 4. スケジュールの実行を待つ。
-   手動の実行はスケジュールが起こした実行ではなく、検出器が拾わないので、手動では確かめられない。
+   手動の実行は、scheduleが起こしていないので検出器が拾わない。手動では確かめられない。
 5. `wmill job list --script-path f/factory/_probe_timeout`で打ち切られた回を見つける。
    `wmill job get <id> --json`で`canceled`、`canceled_by`、`canceled_reason`を読む。
    出力に`canceled_by`が無いときは、Windmillの画面のジョブ詳細で読む。
@@ -4638,7 +4644,7 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
    ```
 
    `u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`は手動で実行する。
-   スケジュールが起こした実行ではなく、検出器も`f/factory/`の外は拾わないので、通常は行が付かない。
+   scheduleが起こしていない実行で、`f/factory/`の外のscriptでもあるので、検出器は拾わず、通常は行が付かない。
    SELECTで行が出た場合だけ、同じ手順で消す。
 
 打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。
