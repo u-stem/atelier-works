@@ -200,15 +200,47 @@ describe("self_update deploy freeze", () => {
   /** 見送りの判定から、見送りの戻りまでの本文。 */
   async function heldBlock(): Promise<string> {
     const text = await source();
-    const start = at(text, "shouldHoldDeploy(plan)");
+    const start = at(text, "shouldHoldDeploy(freeze.value)");
     return text.slice(start, at(text, 'return { outcome: "held"'));
   }
 
   test("decides to hold before the first wmill call", async () => {
     const text = await source();
 
-    expect(at(text, "shouldHoldDeploy(plan)")).toBeLessThan(
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
       at(text, "await runWmillCli("),
+    );
+  });
+
+  test("decides to hold before the wmill token is read", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, 'getVariable("f/factory/wmill_token")'),
+    );
+  });
+
+  test("decides to hold before the wmill.yaml check", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, "await assertWmillYamlExists("),
+    );
+  });
+
+  test("decides to hold outside the try block that records a failed deployment", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, "let deployedShaUpdated"),
+    );
+  });
+
+  test("decides to hold only after the freeze variable is known to be readable", async () => {
+    const text = await source();
+
+    expect(text).toMatch(
+      /if \(freeze\.ok && shouldHoldDeploy\(freeze\.value\)\)/,
     );
   });
 
@@ -245,13 +277,13 @@ describe("self_update deploy freeze", () => {
   });
 
   test("logs the id and the expiry of the freezes", async () => {
-    expect(await heldBlock()).toContain("plan.deployFreezes");
+    expect(await heldBlock()).toContain("freeze.value.deployFreezes");
   });
 
   test("holds while it reconciles an ended schedule freeze too", async () => {
     const text = await source();
 
-    expect(at(text, "shouldHoldDeploy(plan)")).toBeLessThan(
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
       at(text, "if (reconcileOnly) {"),
     );
   });
