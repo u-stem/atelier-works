@@ -1870,6 +1870,8 @@ export function isMissingJobLinkColumnError(err: unknown): boolean {
  * ルートジョブIDの列を足すmigrationより先に、この関数を含むコードが反映されると、
  * 列が無いエラーになる。そのときだけ、新しい列を含まない文で記録し直す。
  * 失敗の記録が消えると、反映の遅れ自体に気づけないためである。ほかのエラーは投げる。
+ * 発生時刻(`occurred_at`)は、省略するとDBの現在時刻になる。
+ * 後から拾ったスケジュールの失敗には、失敗したジョブの完了時刻を渡す。
  */
 export async function recordFailure(
   record: FailureRecord,
@@ -1877,9 +1879,10 @@ export async function recordFailure(
   jobIds: JobIds = jobIdsFromEnv(process.env),
   log: Logger = logger("db"),
 ): Promise<number> {
+  const occurredAt = record.occurred_at ?? null;
   const statement = sql`
-    INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error, root_job_id)
-    VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error}, ${jobIds.root_job_id}::text)
+    INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error, root_job_id, occurred_at)
+    VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error}, ${jobIds.root_job_id}::text, COALESCE(${occurredAt}::timestamptz, now()))
     RETURNING id
   `;
   let row: SqlRow;
@@ -1892,8 +1895,8 @@ export async function recordFailure(
       { flow_path: record.flow_path },
     );
     const legacy = sql`
-      INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
-      VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
+      INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error, occurred_at)
+      VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error}, COALESCE(${occurredAt}::timestamptz, now()))
       RETURNING id
     `;
     row = await fetchOneRow(legacy, "recordFailure");
@@ -2066,11 +2069,25 @@ export async function getLatestScheduleFailure(
       };
 }
 
+/**
+ * `jobIds`のうち、スケジュールの失敗として`factory.job_failures`に記録済みのジョブIDを返す。
+ * `step`がNULLの行だけを見る。ステップ付きの行は、成功した実行の中で記録する部分的な失敗で、
+ * そのジョブ自体の失敗の記録ではないため(`getLatestScheduleFailure`と同じ)。
+ * `jobIds`が空のときは問い合わせない。
+ */
 export async function listRecordedScheduleFailureJobIds(
-  _jobIds: readonly string[],
-  _sql: SqlClient = defaultSqlClient,
+  jobIds: readonly string[],
+  sql: SqlClient = defaultSqlClient,
 ): Promise<ReadonlySet<string>> {
-  return new Set();
+  if (jobIds.length === 0) {
+    return new Set();
+  }
+  const rows = await sql`
+    SELECT DISTINCT job_id
+    FROM factory.job_failures
+    WHERE step IS NULL AND job_id = ANY(${[...jobIds]}::text[])
+  `.fetch();
+  return new Set(rows.map((row) => parseRequiredString(row.job_id, "job_id")));
 }
 
 // ---------------------------------------------------------------------------
