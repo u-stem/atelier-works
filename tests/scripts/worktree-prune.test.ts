@@ -1022,6 +1022,109 @@ describe("worktree-prune.sh", () => {
     });
   });
 
+  // 2回目以降のlsofの呼び出しで、`hook`(シェルの行)を実行し、`secondOutput`を返す偽のlsof。
+  // 1回目は`firstOutput`を返す。1回目は最初の検査、2回目は削除の直前の検査で呼ばれる。
+  function writeLsofChanging(
+    firstOutput: string,
+    secondOutput: string,
+    hook = ":",
+  ): void {
+    const counter = join(root, "lsof-count");
+    writeFileSync(
+      join(fakeBin, "lsof"),
+      [
+        "#!/usr/bin/env bash",
+        `n=$(cat "${counter}" 2>/dev/null || echo 0)`,
+        "n=$((n + 1))",
+        `echo "$n" > "${counter}"`,
+        'if [ "$n" -ge 2 ]; then',
+        `  ${hook}`,
+        `  cat <<'EOF'\n${secondOutput}\nEOF`,
+        "else",
+        `  cat <<'EOF'\n${firstOutput}\nEOF`,
+        "fi",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(fakeBin, "lsof"), 0o755);
+  }
+
+  describe("re-checking just before the removal", () => {
+    let path: string;
+
+    beforeEach(() => {
+      path = addMergedWorktree("docs-old", "docs/old");
+    });
+
+    test("keeps a worktree that became dirty after the first check", () => {
+      writeLsofChanging("p1\nn/", "p1\nn/", `echo x > "${path}/new.txt"`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps a worktree that became recent after the first check", () => {
+      writeLsofChanging("p1\nn/", "p1\nn/", `touch "${path}/README.md"`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps a worktree that came into use after the first check", () => {
+      writeLsofChanging("p1\nn/", `p1\nn${path}`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps a worktree whose branch moved after the first check", () => {
+      writeLsofChanging(
+        "p1\nn/",
+        "p1\nn/",
+        `git -C "${path}" commit -q --allow-empty --no-gpg-sign -m moved`,
+      );
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps the branch of a worktree that became dirty after the first check", () => {
+      writeLsofChanging("p1\nn/", "p1\nn/", `echo x > "${path}/new.txt"`);
+
+      run(["--apply"]);
+
+      expect(branchExists("docs/old")).toBe(true);
+    });
+
+    test("reports the reason for keeping a worktree that came into use", () => {
+      writeLsofChanging("p1\nn/", `p1\nn${path}`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): in use`);
+    });
+
+    test("removes the worktree when nothing changed between the checks", () => {
+      writeLsofChanging("p1\nn/", "p1\nn/");
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("does not call lsof again in the dry run", () => {
+      writeLsofChanging("p1\nn/", `p1\nn${path}`);
+
+      const result = run();
+
+      expect(result.stdout).toContain(`would remove: ${path} (docs/old)`);
+    });
+  });
+
   describe("--auto usage", () => {
     test("--auto rejects --min-idle-minutes", () => {
       const result = run(["--auto", "--min-idle-minutes", "10"]);
@@ -1528,6 +1631,82 @@ describe("worktree-prune.sh", () => {
         runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "7" } });
 
         expect(logText()).toContain("gh time limit 7s");
+      });
+    });
+
+    describe("removal", () => {
+      const callers = () => `p${CALLER_PID}\ncbash\nn${root}`;
+
+      // `worktree remove`だけを`body`(シェルの行)に差し替える、偽のgit。他は本物のgitに渡す。
+      function writeGitWrapper(body: string): void {
+        writeFileSync(
+          join(fakeBin, "git"),
+          `#!/usr/bin/env bash\nif [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then\n${body}\nfi\nexec "${requireBin("git")}" "$@"\n`,
+        );
+        chmodSync(join(fakeBin, "git"), 0o755);
+      }
+
+      test("--auto keeps a worktree that came into use after the first check", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        writeLsofChanging(callers(), `${callers()}\nn${path}`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto removes nothing when the second lsof does not show the callers", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        writeLsofChanging(callers(), `p9999\ncbash\nn${root}`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto counts a second lsof that does not show the callers as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeLsofChanging(callers(), `p9999\ncbash\nn${root}`);
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts a failed removal as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeGitWrapper("  exit 1");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto does not update the stamp after a failed removal", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeGitWrapper("  exit 1");
+
+        runAuto();
+
+        expect(existsSync(stateFile("stamp"))).toBe(false);
+      });
+
+      test("--auto ignores TERM while removing", async () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const started = join(root, "remove-started");
+        writeGitWrapper(`  : > "${started}"\n  sleep 2`);
+
+        const proc = Bun.spawn(
+          [BASH, SCRIPT, "--auto", "--ancestors", CALLER_PID],
+          { cwd: mainDir, env: autoEnv() },
+        );
+        for (let i = 0; i < 100 && !existsSync(started); i++) {
+          await Bun.sleep(50);
+        }
+        proc.kill("SIGTERM");
+        await proc.exited;
+
+        expect(branchExists("docs/old")).toBe(false);
       });
     });
 
