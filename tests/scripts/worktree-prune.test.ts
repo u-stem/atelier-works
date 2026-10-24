@@ -1399,6 +1399,138 @@ describe("worktree-prune.sh", () => {
       });
     });
 
+    describe("gh", () => {
+      // gh pr listが必要になる、squashマージ済み(に見える)worktreeを作る。
+      function addSquashWorktree(
+        name: string,
+        branch: string,
+      ): { path: string; tip: string } {
+        const path = addWorktree(name, branch);
+        const tip = commitIn(path);
+        return { path, tip };
+      }
+
+      const logText = () => readFileSync(stateFile("log"), "utf8");
+
+      test("--auto removes a squash-merged worktree when gh answers", () => {
+        const { path, tip } = addSquashWorktree("feat-sq", "feat/sq");
+        writeGh(`echo ${tip}`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto keeps a worktree when gh does not answer", () => {
+        const { path, tip } = addSquashWorktree("feat-sq", "feat/sq");
+        writeGh(`sleep 30\necho ${tip}`);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto stops asking gh after one timeout", () => {
+        addSquashWorktree("feat-sq1", "feat/sq1");
+        addSquashWorktree("feat-sq2", "feat/sq2");
+        const calls = join(root, "gh-calls");
+        writeGh(`echo called >> "${calls}"\nsleep 30`);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+      });
+
+      test("--auto marks every candidate as gh unavailable after one timeout", () => {
+        addSquashWorktree("feat-sq1", "feat/sq1");
+        addSquashWorktree("feat-sq2", "feat/sq2");
+        writeGh("sleep 30");
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(logText().match(/gh unavailable/g)).toHaveLength(2);
+      });
+
+      test("--auto kills the whole gh process group on a timeout", async () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        const childPid = join(root, "gh-child-pid");
+        writeGh(`sleep 47 &\necho $! > "${childPid}"\nwait`);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+        await Bun.sleep(300);
+
+        const alive = Bun.spawnSync([
+          "kill",
+          "-0",
+          readFileSync(childPid, "utf8").trim(),
+        ]);
+        expect(alive.exitCode).not.toBe(0);
+      });
+
+      test("--auto counts a gh timeout as a failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("sleep 30");
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts a gh failure as a failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 1");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto does not count an unmerged answer from gh as a failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 0");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("0");
+      });
+
+      test("--auto does not update the stamp when gh is unavailable", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 1");
+
+        runAuto();
+
+        expect(existsSync(stateFile("stamp"))).toBe(false);
+      });
+
+      test("--auto exits 0 on failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 1");
+
+        const result = runAuto();
+
+        expect(result.exitCode).toBe(0);
+      });
+
+      test("--auto ignores a gh time limit above 30", () => {
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "100" } });
+
+        expect(logText()).toContain("gh time limit 30s");
+      });
+
+      test("--auto ignores a gh time limit that is not a number", () => {
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "soon" } });
+
+        expect(logText()).toContain("gh time limit 30s");
+      });
+
+      test("--auto accepts a gh time limit of 30 or less", () => {
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "7" } });
+
+        expect(logText()).toContain("gh time limit 7s");
+      });
+    });
+
     describe("stamp", () => {
       test("--auto skips within 30 minutes", () => {
         const path = addMergedWorktree("docs-old", "docs/old");
