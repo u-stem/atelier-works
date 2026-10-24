@@ -220,6 +220,7 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
   そこでは、外へ書き込めるコマンドを実行しない。
   `git push`、`mise run push`、`mise run push:prune`、`mise run up`が、その例である。
   `mise run deploy`、`mise run migrate`、`mise run pull`、`mise run console:rollback`、`mise run console:unpin`、`mise run worktree:prune -- --apply`も、その例である。
+  `worktree:new`が新規作成の後に起動する自動の片付けは、この規則の対象外である。作成の副作用として設計済みであるため。
 - `gh`と`wmill`は、読み取りのサブコマンド(`view`、`list`、`get`、`--dry-run`)に限る。
   書き込みが要る検証は、実行せずに親へ返す。
   ワークスペースで実行される検証(`wmill script preview`など)は、使い捨ての環境が無ければ「未確認」として親へ返す。
@@ -475,6 +476,8 @@ shaは`^[0-9a-f]{40}$`に、ファイル名は`^(tests|console)/[A-Za-z0-9_./-]+
 ファイル名は、引用して1つずつ渡す。
 
 1. `mise run worktree:new -- test/verify-<名前>`で、使い捨てのworktreeを作る。
+   削除や権限を変える変更(`worktree-prune.sh`と`worktree-new.sh`を触る変更)のブランチから作るときは、`WORKTREE_AUTO_PRUNE=0`を前に付ける。
+   編集中の版の自動の片付けが、本物のworktreeに対して走るのを避けるためである。
    名前に使えるのは、小文字、数字、ハイフン(`[a-z0-9-]`)だけである。
    同じ名前のブランチかディレクトリがあると、何も変えずに失敗する。
    そのときは、別の名前で作り直す。

@@ -448,6 +448,7 @@ EnterWorktree、`claude --worktree`、subagentの`isolation: "worktree"`が作�
   オフラインでsubagentの起動を止めないためである。
 
 WorktreeRemoveフックは無く、削除はClaude Codeの既定に任せる。
+マージ済みの古いworktreeは、新しいworktreeを作った後に自動で片付く([自動の片付け](#自動の片付け))。
 既存のworktreeへ入るときは、EnterWorktreeの`path`にそのパスを渡す。
 
 > [!NOTE]
@@ -511,7 +512,50 @@ mise run worktree:prune -- --apply
 | `unmerged` | マージ済みと確かめられない。pushしていないコミットを含む |
 | `reflog has unreachable commits` | `git reset --hard`などで外したコミットが、削除でreflogごと失われる |
 
-毎回、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
+手動で消すときは、毎回、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
+
+### 自動の片付け
+
+新しいworktreeを作ると、マージ済みの古いworktreeが自動で片付く。
+`worktree-new.sh`が、worktreeを作れた後で、`worktree-prune.sh --auto`をバックグラウンドで起動する。
+作成の経路は、`mise run worktree:new`とWorktreeCreateフックのどちらでもよい。
+既存のworktreeを再利用したときは起動しない。
+再利用したworktreeを、片付けが消しうるためである。
+
+消す条件は手動の`--apply`と同じで、前節の条件と理由をそのまま使う。
+自動の実行は無人で消すので、次の点が違う。
+
+- 呼び出し元の祖先のプロセスが`lsof`の出力に現れないときは、何も消さず、失敗に数える。
+  `lsof`が呼び出し元のcwdを見られない環境では、`in use`の判定が働かないためである。
+- 前回の成功から30分以内なら、何もしない。
+  他の実行がロックを持つ間も、何もしない。
+  ロックの更新時刻が10分より古ければ、放置されたロックとして取り直す。
+- `gh`が動いた時間の合計が1回の実行で30秒に達したら、残りの候補は調べずに残す。
+- 標準出力には何も出さず、結果を`log`に書く。
+
+状態は、`<git-common-dir>/worktree-prune/`の下に置く。
+
+| ファイル | 内容 |
+| --- | --- |
+| `log` | 実行の記録。100KBを超えると、末尾の半分だけを残す |
+| `lock` | 同時に走らせないためのロック |
+| `stamp` | 直近の成功の時刻 |
+| `failures` | 連続して失敗した回数。ロックを取った直後に1増え、成功した実行が0に戻す |
+
+`WORKTREE_AUTO_PRUNE=0`を付けると、自動の片付けは起動しない。
+未設定か`1`のときに起動する。
+
+```bash
+WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
+```
+
+`worktree-prune.sh`か`worktree-new.sh`を編集しているworktreeから作るときは、`WORKTREE_AUTO_PRUNE=0`を付ける。
+付けないと、編集中の版の`--auto`が、本物のworktreeに対して走るためである。
+
+`failures`が2以上のときは、worktreeを作るたびに、標準エラーに失敗の回数と`log`のパスを出す。
+この警告を見たら、運用者に報告する。
+続けて`mise run worktree:prune`を実行し、残る理由の一覧で原因を確かめる。
+手動の`--apply`は、自動の片付けと別に使える。
 
 ## 自己更新の設定
 

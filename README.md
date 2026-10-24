@@ -93,7 +93,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
 | `mise run worktree:new` | `mise run worktree:new -- feat/foo`で、`origin/main`から`feat/foo`のブランチとworktreeを作り、依存を入れる。詳しくは[セットアップ](docs/setup.md)の「worktreeの作成と片付け」に書く |
-| `mise run worktree:prune` | `.claude/worktrees/`の下にある、消してよいworktreeを一覧にする。`mise run worktree:prune -- --apply`で消す。詳しくは[セットアップ](docs/setup.md)の「worktreeの作成と片付け」に書く |
+| `mise run worktree:prune` | `.claude/worktrees/`の下にある、消してよいworktreeを一覧にする。`mise run worktree:prune -- --apply`で消す。マージ済みのworktreeは、`worktree:new`で新しく作った後に自動でも片付く。詳しくは[セットアップ](docs/setup.md)の「worktreeの作成と片付け」に書く |
 
 ## リポジトリの構成
 
