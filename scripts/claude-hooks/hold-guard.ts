@@ -501,8 +501,15 @@ function direct0IsFreezeCli(words: readonly Word[]): boolean {
  */
 export type HoldStdin = {
   readonly redirects: readonly Word[];
-  readonly upstream: readonly (readonly Word[])[];
+  readonly upstream: readonly HoldUpstream[];
   readonly dynamicInput: boolean;
+};
+
+/** パイプの前のコマンド。語に加えて、そのコマンド自身の標準入力の出どころを持つ。 */
+export type HoldUpstream = {
+  readonly words: readonly Word[];
+  readonly redirects: readonly Word[];
+  readonly inputs: readonly Word[];
 };
 
 const NO_STDIN: HoldStdin = {
@@ -512,8 +519,15 @@ const NO_STDIN: HoldStdin = {
 };
 
 /** 標準入力をコードとして読む形のオペランド。 */
+const STDIN_OPERANDS: ReadonlySet<string> = new Set([
+  "-",
+  "/dev/stdin",
+  "/dev/fd/0",
+  "/proc/self/fd/0",
+]);
+
 function readsCodeFromStdin(args: readonly Word[]): boolean {
-  return args.some((word) => word.text === "-" || word.text === "/dev/stdin");
+  return args.some((word) => STDIN_OPERANDS.has(word.text));
 }
 
 /** パイプの前に置いてよい、中身を語から読めるプログラム。 */
@@ -540,24 +554,33 @@ function stdinCodeFinding(
   inputs: () => readonly string[] | null,
   stdin: HoldStdin,
 ): HoldFinding | null {
-  if (!readsCodeFromStdin(args) || startsWithInspectionTool(args)) return null;
+  if (startsWithInspectionTool(args)) return null;
+  // `<(...)`は入力元が実行時に決まる。`-`が無くても、`/dev/fd/N`などで読めるので拒否に倒す。
+  if (stdin.redirects.some((word) => word.text === "<(")) return "dynamic";
+  if (!readsCodeFromStdin(args)) return null;
   if (stdin.dynamicInput) return "dynamic";
   const literal = inputs();
   if (literal === null) return "dynamic";
   for (const command of stdin.upstream) {
-    const program = baseName(command[0]?.text ?? "");
+    const program = baseName(command.words[0]?.text ?? "");
     if (program === "echo" || program === "printf") continue;
     if (
       !PLAIN_UPSTREAM.has(program) ||
-      command.slice(1).some(opaqueOrHoldCode)
+      command.words.slice(1).some(opaqueOrHoldCode) ||
+      // `cat < scripts/freeze.ts`や`cat <<< "$(...)"`のように、catも標準入力から読める。
+      command.redirects.some(opaqueOrHoldCode) ||
+      command.inputs.some(
+        (word) =>
+          word.dynamic ||
+          FREEZE_MENTION.test(word.text) ||
+          HOLD_MENTION.test(word.text),
+      )
     ) {
       return "operation";
     }
   }
   if (literal.some((text) => FREEZE_MENTION.test(text))) {
-    const dash = args.findIndex(
-      (word) => word.text === "-" || word.text === "/dev/stdin",
-    );
+    const dash = args.findIndex((word) => STDIN_OPERANDS.has(word.text));
     return freezeSubcommandFinding(args.slice(dash + 1));
   }
   return null;

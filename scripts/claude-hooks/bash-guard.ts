@@ -32,7 +32,11 @@ import {
   shellInputSource,
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
-import { findHoldOperation, type HoldStdin } from "./hold-guard.ts";
+import {
+  findHoldOperation,
+  type HoldStdin,
+  type HoldUpstream,
+} from "./hold-guard.ts";
 import {
   ALLOW,
   type BashToolInput,
@@ -545,13 +549,17 @@ function directoryAfter(
 
 /** 標準入力に流れ込むものの出どころ。保留と凍結のコードを実行系へ流し込む形を見分けるために渡す。 */
 function holdStdin(command: SimpleCommand): HoldStdin {
-  const upstream: Word[][] = [];
+  const upstream: HoldUpstream[] = [];
   for (
     let source = command.pipedFrom;
     source !== null;
     source = source.pipedFrom
   ) {
-    upstream.push([...stripWrappers(source.words).words]);
+    upstream.push({
+      words: [...stripWrappers(source.words).words],
+      redirects: source.redirects,
+      inputs: source.inputs,
+    });
   }
   return {
     redirects: command.redirects,
