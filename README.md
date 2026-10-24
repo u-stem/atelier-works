@@ -78,6 +78,9 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run freeze:list` | スケジュールの凍結の一覧を表示する |
 | `mise run freeze:release` | 凍結を解除する。`-- <id>`を渡す |
 | `mise run freeze:reset` | 壊れた凍結の状態を空に戻す。人が端末で実行する |
+| `mise run hold:list` | 保留の一覧と、有効なスケジュールの凍結の件数を表示する |
+| `mise run hold:place` | 自動マージを止める保留を置く。`-- --scope merge --target <owner>/<repo> --minutes <n> --reason <text>`を渡す |
+| `mise run hold:release` | 保留を解除する。`-- <id>`を渡す |
 | `mise run pull` | `wmill sync pull`で、Windmillの状態をローカルに取り込む |
 | `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する |
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
@@ -140,7 +143,7 @@ atelier-works/
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
 | [GitHubの収集の内部仕様](docs/internals/github-collect.md) | 所有者ごとのリポジトリの状態の収集、照合、記録の意味 |
 | [スケジュールの凍結の仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復 |
-| [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、書き込みの制限 |
+| [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、読む処理、CLI、subagentの拒否 |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
 | [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |

@@ -1191,6 +1191,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - `.claude/`、`.agents/`、`.github/workflows/`、`.github/actions/`、`.mise/`、`.config/mise/`、`.lefthook/`の下のファイル
 - `console/public/`、`infra/console_fetcher/`の下のファイル
 - `scripts/host_apply/`、`infra/worker/`、`mise/`の下のファイル
+- `scripts/claude-hooks/`、`tests/scripts/claude-hooks/`、`mise-tasks/`、`.mise-tasks/`の下のファイル
 - 個別のファイル(一覧は下の説明を参照)
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `.tool-versions`、`.env`、`.env.*`、`.node-version`、`.bun-version`

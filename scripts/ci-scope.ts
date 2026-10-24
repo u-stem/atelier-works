@@ -78,7 +78,7 @@ export type ScopeDeps = {
   readonly report?: (reason: FallbackReason) => void;
 };
 
-// `test:db`が実行するコードの、f/配下の依存。
+// `test:db`が実行するコードの、`scripts/test-db*.ts`以外の依存(f/配下と、保留のpsqlの経路)。
 // `scripts/test-db*.ts`(`test-db-queries.ts`と`test-db-holds.ts`など)が読み込むファイルを、再帰的にたどった全体である。
 // 一覧の網羅は、テストがimportの連鎖から確かめる。
 export const DB_DEPENDENCY_FILES: readonly string[] = [
@@ -109,6 +109,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/worker_load_support.ts",
   "f/factory/lib/workspace.ts",
   "f/factory/steps/console_query.ts",
+  "scripts/hold_psql.ts",
 ];
 
 // workerイメージの中で動かすプロセスロックのテストの、テストとlib側の依存。

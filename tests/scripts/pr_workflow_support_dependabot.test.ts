@@ -5,9 +5,11 @@ import { describe, expect, test } from "bun:test";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
+  DEPENDABOT_MERGE_HELD_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
+  dependabotHoldUnreadableReason,
   dependabotReason,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
 import {
@@ -141,6 +143,46 @@ const CASES: {
     described: "dependabotの更新のマージ結果を確認できませんでした",
     nextAction:
       "PRがマージ済みかを確認してください。未マージなら内容を確認し、手でマージするか閉じてください。この作業項目は再実行できません",
+  },
+  {
+    label: "merge held",
+    reason: DEPENDABOT_MERGE_HELD_REASON,
+    described:
+      "dependabotの更新を、マージの保留があるため自動ではマージしませんでした",
+    nextAction:
+      "`mise run hold:list`で保留の理由と期限を確認してください。解除してよければ`mise run hold:release -- <id>`を実行し、その後PRを確認して手でマージしてください。保留を解いても、この作業項目は再開せず、再実行もできません。dependabotがrebaseして新しいコミットが積まれると、自動で再び対象になります",
+  },
+  {
+    label: "hold table missing",
+    reason: dependabotHoldUnreadableReason("missing_table"),
+    described:
+      "dependabotの更新を、保留の表がないため自動ではマージしませんでした(missing_table)",
+    nextAction:
+      "保留の表を作るmigrationが反映済みか、デプロイの記録で確認してください。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+  },
+  {
+    label: "hold read failed",
+    reason: dependabotHoldUnreadableReason("read_failed"),
+    described:
+      "dependabotの更新を、保留の表を読めなかったため自動ではマージしませんでした(read_failed)",
+    nextAction:
+      "DBが動いているか確認し、`mise run hold:list`で保留を読めるか確かめてください。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+  },
+  {
+    label: "hold table corrupt",
+    reason: dependabotHoldUnreadableReason("corrupt"),
+    described:
+      "dependabotの更新を、保留の表に壊れた行があるため自動ではマージしませんでした(corrupt)",
+    nextAction:
+      "`mise run hold:list`で壊れた行を確認し、psqlでその行を解除か削除してください。回復の手順は保留の内部仕様にあります。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+  },
+  {
+    label: "hold read error",
+    reason: dependabotHoldUnreadableReason("error"),
+    described:
+      "dependabotの更新を、保留の読み取りで予期しない失敗があったため自動ではマージしませんでした(error)",
+    nextAction:
+      "workerのログで原因を確認し、`mise run hold:list`で保留を読めるか確かめてください。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
   },
   {
     label: "time settings misfit",

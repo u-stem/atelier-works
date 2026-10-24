@@ -2,22 +2,26 @@
 // 準備と影響調査の結果から結論(マージ、修正に回す、人に回す)を出し、作業項目を終端にする。
 // PRをマージするのは、フロー全体でこのステップだけである。
 // 結論は`decideAssessedOutcome`だけで出し、マージの直前にPRを読み直して、影響調査と同じheadであることを確かめる。
+// マージの直前に、リポジトリのマージの保留も読む。保留があるか、保留を読めなければ、マージせずに人に回す。
 // マージはheadのshaを固定して要求し、状態はマージの後に1回だけ記録する。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  defaultSqlClient,
   getWorkItem,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
 import {
+  classifyMergeHolds,
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   dependabotReason,
   fenceUntrustedBlock,
+  mergeHoldReason,
   OTHER_REPO_UNSUPPORTED_REASON,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
@@ -42,6 +46,11 @@ import {
   type PullRequest,
   withMarker,
 } from "../lib/github.ts";
+import {
+  type HoldReadOutcome,
+  type HoldRow,
+  listActiveHolds,
+} from "../lib/holds.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import {
   repoOwnerGateDeps,
@@ -305,6 +314,14 @@ export type DependabotFinishDeps = {
     owner: string,
     repo: string,
   ) => Promise<string | null>;
+  /**
+   * リポジトリのマージの保留を読む(`listActiveHolds`)。
+   * 取得の段(`poll_dependabot`)で保留を読んで待たせるが、取得から終了までに置かれた保留を、マージの直前に確かめる。
+   */
+  readonly listMergeHolds: (
+    owner: string,
+    repo: string,
+  ) => Promise<HoldReadOutcome<readonly HoldRow[]>>;
   readonly getViewerLogin: () => Promise<string>;
   readonly listPrReviews: (
     owner: string,
@@ -392,6 +409,9 @@ function errorText(error: unknown): string {
  *    取得時(`poll_dependabot`)の照合から、準備と影響調査を挟むので、その間に名前が別の人に渡っていても、相手のPRに書かないためである。
  *    `dependabot_merge_enabled`が偽(試運転)なら、マージの直前の確認を終えた後、マージせずに人に回す。
  *    対象が2つ以上のときは、マージの直前に`dependabot_group_enabled`を読み直し、偽か読めなければ、マージせずに人に回す(`dependabot finish:`)。
+ *    その後、試運転の判定より前に、リポジトリのマージの保留を読む。保留があるか、保留を読めない(表が無い、読めない、行が壊れている、例外)ときは、
+ *    マージせずに人に回す。取得の段で保留を読んで待たせるので、ここは取得から終了までの間に置かれた保留の最後の確認である。
+ *    人に回した作業項目は、保留が解けても再開しない。人がPRを確認して手でマージする。
  * 8. マージ: headのshaを固定して1回だけマージを要求し、成功したら`reviewed`(`merged`)を1回だけ記録する。
  *    記録がfalse(ほかの処理が先に動かした)か例外のときは、警告だけ残してステップは成功で返す。
  *    マージの成功は通知しない(人の操作が要らないため)。
@@ -671,6 +691,34 @@ export async function runDependabotFinish(
       }
     }
 
+    // 保留は、マージを止めるためだけに読む。試運転の判定より前に読み、保留があるときの理由を試運転で隠さない。
+    // 読めないとき(表が無い、読めない、行が壊れている、例外)も、保留なしとは扱わずに止める。
+    // 止めた作業項目は`needs_human`で終わる。保留が解けても、この作業項目は再開しない。
+    const holdCheck = await classifyMergeHolds(() =>
+      deps.listMergeHolds(owner, repo),
+    );
+    if (holdCheck.kind !== "clear") {
+      const stopReason = mergeHoldReason(holdCheck);
+      // 保留の`reason`と`holder`は信頼できない文字列なので、ログにも通知にも載せない。種類と件数とidだけを載せる。
+      if (holdCheck.kind === "held") {
+        deps.warn("dependabot merge stopped by a hold", {
+          work_item_id: workItemId,
+          kind: "held",
+          count: holdCheck.ids.length,
+          hold_ids: holdCheck.ids,
+        });
+        return toHuman(
+          stopReason,
+          `${describeReason(stopReason)}。保留は${String(holdCheck.ids.length)}件(id: ${holdCheck.ids.join(", ")})です`,
+        );
+      }
+      deps.warn("dependabot merge stopped by a hold", {
+        work_item_id: workItemId,
+        kind: holdCheck.failure,
+      });
+      return toHuman(stopReason);
+    }
+
     // 試運転では、マージの直前の確認までを通し、マージだけを人に任せる。
     if (!run.mergeEnabled) return toHuman(DEPENDABOT_DRY_RUN_REASON);
 
@@ -846,6 +894,11 @@ export async function main(
           owner,
           repo,
           repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
+      listMergeHolds: (owner, repo) =>
+        listActiveHolds(
+          { scope: "merge", target: `${owner}/${repo}` },
+          defaultSqlClient,
         ),
       getViewerLogin: async () => (await getViewer(client)).login,
       listPrReviews: async (owner, repo, number, viewer) =>

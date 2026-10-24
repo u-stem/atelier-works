@@ -126,6 +126,20 @@ description = "Clear every schedule freeze, including a corrupt state (human onl
 run = "bun ./scripts/freeze.ts reset"
 raw = true
 
+[tasks."hold:list"]
+description = "List the holds that stop the Factory, and the schedule freezes in effect"
+run = "bun ./scripts/hold.ts list"
+
+[tasks."hold:place"]
+description = "Place a hold that stops merges of a repository (usage: -- --scope merge --target <owner>/<repo> --minutes <n> --reason <text>)"
+run = "bun ./scripts/hold.ts place"
+raw = true
+
+[tasks."hold:release"]
+description = "Release a hold (usage: -- <id>)"
+run = "bun ./scripts/hold.ts release"
+raw = true
+
 [tasks.pull]
 description = "Pull remote Windmill state into the sync root"
 run = "wmill sync pull"

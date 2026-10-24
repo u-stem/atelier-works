@@ -887,6 +887,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 保留の読み手と、保留を置く・解除するコマンド。表(`holds`)と`lib/holds.ts`だけがあり、保留を読んで止まる主体は無い([保留の内部仕様](internals/holds.md))
+- 保留の範囲`claim`(Issueの取り込み)を読む処理と、ローカルのセッションが`gh pr merge`の前に読むフック。保留を読んで止まるのは、dependabotの自動マージだけである([保留の内部仕様](internals/holds.md))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

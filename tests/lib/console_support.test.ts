@@ -97,6 +97,20 @@ describe("host_action_required", () => {
   });
 });
 
+describe("merge hold notices", () => {
+  test("the notice that pull requests wait for a hold needs no action", () => {
+    expect(noticeSeverity("dependabot_merge_held")).toBe("info");
+  });
+
+  test("the notice that the holds cannot be read needs an action", () => {
+    expect(noticeSeverity("dependabot_merge_hold_unreadable")).toBe("action");
+  });
+
+  test("the notice that the holds cannot be read can be resolved from the Console", () => {
+    expect(isNoticeResolvable("dependabot_merge_hold_unreadable")).toBe(true);
+  });
+});
+
 describe("INFO_NOTICE_KINDS", () => {
   test("lists exactly the kinds whose severity is info", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual(
@@ -107,11 +121,12 @@ describe("INFO_NOTICE_KINDS", () => {
     );
   });
 
-  test("contains the ten kinds that need no action", () => {
+  test("contains the eleven kinds that need no action", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual([
       "approval_notify_failed",
       "claim_race_lost",
       "cleanup_worktrees_skipped",
+      "dependabot_merge_held",
       "fix_feedback_association_excluded",
       "fork_head_denied",
       "implement_needs_human",

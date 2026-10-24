@@ -5,6 +5,7 @@ import {
   buildManifestDiffSummary,
   changelogCoversVersion,
   checkPromptSize,
+  classifyMergeHolds,
   codeFenceFor,
   compareInstalledScripts,
   compareRepositoryUrls,
@@ -13,12 +14,14 @@ import {
   DEPENDABOT_FINISH_STEP_TIMEOUT_SEC,
   DEPENDABOT_INSTALL_TIMEOUT_MS,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
+  DEPENDABOT_MERGE_HELD_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_PREPARE_STEP_TIMEOUT_SEC,
   DEPENDABOT_REASON_PREFIX,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   DEPENDABOT_STEP_OVERRUN_BASE_SEC,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
+  dependabotHoldUnreadableReason,
   dependabotReason,
   dependabotTimeoutMisfit,
   evaluatePostInstallStatus,
@@ -27,6 +30,7 @@ import {
   fenceUntrustedBlock,
   hasTruncationMark,
   MAX_PROMPT_CHARS,
+  mergeHoldReason,
   POST_INSTALL_STATUS_ARGV,
   sanitizedProseMaxLength,
   sanitizeUntrustedProse,
@@ -35,6 +39,7 @@ import {
 import type { DependabotPromptInput } from "../../f/factory/lib/dependabot_prompt.ts";
 import { IMPLICIT_GYP_INSTALL } from "../../f/factory/lib/dependabot_support.ts";
 import { hasMarker } from "../../f/factory/lib/github.ts";
+import type { HoldReadOutcome } from "../../f/factory/lib/holds.ts";
 import {
   PR_COMMAND_STOP_OVERHEAD_SEC,
   PR_STEP_OVERRUN_BASE_SEC,
@@ -2302,4 +2307,121 @@ describe("sanitizedProseMaxLength and fencedBlockMaxLength", () => {
       expect(fencedBlockMaxLength(limit)).toBe(0);
     },
   );
+});
+
+// ---- マージの保留 ----
+
+describe("classifyMergeHolds", () => {
+  test("is clear when the table has no active hold", async () => {
+    expect(
+      await classifyMergeHolds(async () => ({ ok: true, value: [] })),
+    ).toEqual({
+      kind: "clear",
+    });
+  });
+
+  test("is held with the ids when a hold is active", async () => {
+    expect(
+      await classifyMergeHolds(async () => ({
+        ok: true,
+        value: [{ id: 3 }, { id: 8 }],
+      })),
+    ).toEqual({ kind: "held", ids: [3, 8] });
+  });
+
+  test.each(["missing_table", "read_failed", "corrupt"] as const)(
+    "is unreadable when the read fails with %s",
+    async (kind) => {
+      const failed: HoldReadOutcome<readonly { id: number }[]> = {
+        ok: false,
+        kind,
+        reason: "x",
+      };
+
+      expect(await classifyMergeHolds(async () => failed)).toEqual({
+        kind: "unreadable",
+        failure: kind,
+      });
+    },
+  );
+
+  test("is unreadable when the read throws", async () => {
+    expect(
+      await classifyMergeHolds(async () => {
+        throw new Error("connection refused");
+      }),
+    ).toEqual({ kind: "unreadable", failure: "error" });
+  });
+
+  test("does not carry the text of an error that contains a secret", async () => {
+    const check = await classifyMergeHolds(async () => {
+      throw new Error("password=hunter2");
+    });
+
+    expect(JSON.stringify(check)).not.toContain("hunter2");
+  });
+
+  test("does not carry the reason of a failure either", async () => {
+    const check = await classifyMergeHolds(async () => ({
+      ok: false,
+      kind: "read_failed",
+      reason: "token=abc123",
+    }));
+
+    expect(JSON.stringify(check)).not.toContain("abc123");
+  });
+
+  test("sorts the ids so that the report does not depend on the row order", async () => {
+    expect(
+      await classifyMergeHolds(async () => ({
+        ok: true,
+        value: [{ id: 9 }, { id: 2 }],
+      })),
+    ).toEqual({ kind: "held", ids: [2, 9] });
+  });
+});
+
+describe("merge hold reasons", () => {
+  test("the held reason is a fixed text that names the hold", () => {
+    expect(DEPENDABOT_MERGE_HELD_REASON).toBe(
+      "dependabot merge held by a hold",
+    );
+  });
+
+  test.each(["missing_table", "read_failed", "corrupt", "error"] as const)(
+    "the unreadable reason names the failure %s",
+    (failure) => {
+      expect(dependabotHoldUnreadableReason(failure)).toBe(
+        `dependabot merge hold unreadable: ${failure}`,
+      );
+    },
+  );
+
+  test("mergeHoldReason picks the held reason for a hold", () => {
+    expect(mergeHoldReason({ kind: "held", ids: [1] })).toBe(
+      DEPENDABOT_MERGE_HELD_REASON,
+    );
+  });
+
+  test("mergeHoldReason picks the unreadable reason for a failure", () => {
+    expect(mergeHoldReason({ kind: "unreadable", failure: "corrupt" })).toBe(
+      dependabotHoldUnreadableReason("corrupt"),
+    );
+  });
+
+  test("no reason starts with the prefix of the dry run or of a refused merge", () => {
+    const reasons = [
+      DEPENDABOT_MERGE_HELD_REASON,
+      dependabotHoldUnreadableReason("error"),
+    ];
+
+    expect(
+      reasons.some(
+        (reason) =>
+          reason.startsWith(DEPENDABOT_MERGE_REFUSED_REASON) ||
+          reason.startsWith(DEPENDABOT_MERGE_FORBIDDEN_REASON) ||
+          reason.startsWith(DEPENDABOT_RESULT_UNKNOWN_REASON),
+      ),
+    ).toBe(false);
+  });
 });
