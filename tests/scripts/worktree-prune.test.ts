@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -75,10 +76,20 @@ describe("worktree-prune.sh", () => {
     chmodSync(join(fakeBin, "gh"), 0o755);
   }
 
-  function run(args: string[] = [], cwd: string = mainDir): Run {
+  function run(
+    args: string[] = [],
+    cwd: string = mainDir,
+    env: Record<string, string> = {},
+  ): Run {
     const result = Bun.spawnSync([BASH, SCRIPT, ...args], {
       cwd,
-      env: { ...cleanEnv(), PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+      env: {
+        ...cleanEnv(),
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        // 偽のlsofを使わせる。本物の絶対パスが優先されるのを避けるため。
+        WORKTREE_PRUNE_LSOF: join(fakeBin, "lsof"),
+        ...env,
+      },
     });
     return {
       exitCode: result.exitCode,
@@ -1008,6 +1019,1135 @@ describe("worktree-prune.sh", () => {
       const result = run();
 
       expect(result.stdout).toContain(`kept: ${mainDir} (main): outside`);
+    });
+  });
+
+  // 2回目以降のlsofの呼び出しで、`hook`(シェルの行)を実行し、`secondOutput`を返す偽のlsof。
+  // 1回目は`firstOutput`を返す。1回目は最初の検査、2回目は削除の直前の検査で呼ばれる。
+  function writeLsofChanging(
+    firstOutput: string,
+    secondOutput: string,
+    hook = ":",
+  ): void {
+    const counter = join(root, "lsof-count");
+    writeFileSync(
+      join(fakeBin, "lsof"),
+      [
+        "#!/usr/bin/env bash",
+        `n=$(cat "${counter}" 2>/dev/null || echo 0)`,
+        "n=$((n + 1))",
+        `echo "$n" > "${counter}"`,
+        'if [ "$n" -ge 2 ]; then',
+        `  ${hook}`,
+        `  cat <<'EOF'\n${secondOutput}\nEOF`,
+        "else",
+        `  cat <<'EOF'\n${firstOutput}\nEOF`,
+        "fi",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(fakeBin, "lsof"), 0o755);
+  }
+
+  describe("re-checking just before the removal", () => {
+    let path: string;
+
+    beforeEach(() => {
+      path = addMergedWorktree("docs-old", "docs/old");
+    });
+
+    // 2回目の`git status`が始まる前に`hook`(シェルの行)を実行する偽のgit。
+    // 最初の検査の後、削除の直前の検査が始まる前に、worktreeが変わる状況を作る。
+    function writeStatusHook(hook: string): void {
+      const counter = join(root, "hook-status-count");
+      writeFileSync(
+        join(fakeBin, "git"),
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$3" = "status" ]; then',
+          `  n=$(cat "${counter}" 2>/dev/null || echo 0)`,
+          "  n=$((n + 1))",
+          `  echo "$n" > "${counter}"`,
+          `  if [ "$n" -eq 2 ]; then ${hook}; fi`,
+          "fi",
+          `exec "${requireBin("git")}" "$@"`,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fakeBin, "git"), 0o755);
+    }
+
+    test("keeps a worktree that became dirty after the first check", () => {
+      writeStatusHook(`echo x > "${path}/new.txt"`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps a worktree that became recent after the first check", () => {
+      writeStatusHook(`touch "${path}/README.md"`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps a worktree that came into use after the first check", () => {
+      writeLsofChanging("p1\nn/", `p1\nn${path}`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps a worktree whose branch moved after the first check", () => {
+      writeStatusHook(
+        `git -C "${path}" commit -q --allow-empty --no-gpg-sign -m moved`,
+      );
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps the branch of a worktree that became dirty after the first check", () => {
+      writeStatusHook(`echo x > "${path}/new.txt"`);
+
+      run(["--apply"]);
+
+      expect(branchExists("docs/old")).toBe(true);
+    });
+
+    test("reports dirty for a worktree that became dirty after the first check", () => {
+      writeStatusHook(`echo x > "${path}/new.txt"`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): dirty`);
+    });
+
+    test("reports recent for a worktree that became recent after the first check", () => {
+      writeStatusHook(`touch "${path}/README.md"`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): recent`);
+    });
+
+    test("reports branch moved for a worktree whose branch moved after the first check", () => {
+      writeStatusHook(
+        `git -C "${path}" commit -q --allow-empty --no-gpg-sign -m moved`,
+      );
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): branch moved`);
+    });
+
+    test("reports the reason for keeping a worktree that came into use", () => {
+      writeLsofChanging("p1\nn/", `p1\nn${path}`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): in use`);
+    });
+
+    test("removes the worktree when nothing changed between the checks", () => {
+      writeLsofChanging("p1\nn/", "p1\nn/");
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    // 2回目の`git status`が始まった後にだけ、`afterOutput`を返す偽のlsofと、
+    // 2回目の`git status`の印を付ける偽のgit。削除の直前の検査で、lsofが
+    // `git status`より後に呼ばれるかを確かめる。
+    function writeLateProcess(beforeOutput: string, afterOutput: string): void {
+      const counter = join(root, "status-count");
+      const marker = join(root, "second-status");
+      writeFileSync(
+        join(fakeBin, "git"),
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$3" = "status" ]; then',
+          `  n=$(cat "${counter}" 2>/dev/null || echo 0)`,
+          "  n=$((n + 1))",
+          `  echo "$n" > "${counter}"`,
+          `  if [ "$n" -ge 2 ]; then : > "${marker}"; fi`,
+          "fi",
+          `exec "${requireBin("git")}" "$@"`,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fakeBin, "git"), 0o755);
+      writeFileSync(
+        join(fakeBin, "lsof"),
+        [
+          "#!/usr/bin/env bash",
+          `if [ -e "${marker}" ]; then`,
+          `  cat <<'EOF'\n${afterOutput}\nEOF`,
+          "else",
+          `  cat <<'EOF'\n${beforeOutput}\nEOF`,
+          "fi",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fakeBin, "lsof"), 0o755);
+    }
+
+    test("keeps a worktree whose process appeared while the re-check ran", () => {
+      writeLateProcess("p1\nn/", `p1\nn${path}`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("reports in use for a process that appeared while the re-check ran", () => {
+      writeLateProcess("p1\nn/", `p1\nn${path}`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): in use`);
+    });
+
+    test("does not call lsof again in the dry run", () => {
+      writeLsofChanging("p1\nn/", `p1\nn${path}`);
+
+      const result = run();
+
+      expect(result.stdout).toContain(`would remove: ${path} (docs/old)`);
+    });
+  });
+
+  describe("--auto usage", () => {
+    test("--auto rejects --min-idle-minutes", () => {
+      const result = run(["--auto", "--min-idle-minutes", "10"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--auto rejects --apply", () => {
+      const result = run(["--auto", "--apply"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--auto rejects --min-idle-minutes given before it", () => {
+      const result = run(["--min-idle-minutes", "10", "--auto"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--ancestors without --auto is rejected", () => {
+      const result = run(["--ancestors", "1"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--ancestors without a value is rejected", () => {
+      const result = run(["--auto", "--ancestors"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--auto with --ancestors is accepted", () => {
+      const result = run(["--auto", "--ancestors", "4242"]);
+
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("--auto without --ancestors is accepted", () => {
+      const result = run(["--auto"]);
+
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("--auto accepts an empty --ancestors value", () => {
+      const result = run(["--auto", "--ancestors", ""]);
+
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("--auto", () => {
+    // 呼び出し元のプロセスとして、lsofの出力に現れるべきPID。
+    const CALLER_PID = "4242";
+
+    // 呼び出し元のcwdを含む、正常なlsofの出力を返す偽のlsofにする。`extra`は追加の行。
+    function writeCallerLsof(extra = ""): void {
+      writeLsof(`p${CALLER_PID}\ncbash\nn${root}${extra ? `\n${extra}` : ""}`);
+    }
+
+    // 非同期に起動するテスト用の環境変数。`run`と同じ偽のコマンドを使わせる。
+    function autoEnv(): Record<string, string> {
+      return {
+        ...cleanEnv(),
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        WORKTREE_PRUNE_LSOF: join(fakeBin, "lsof"),
+      };
+    }
+
+    function runAuto(
+      options: { ancestors?: string | null; env?: Record<string, string> } = {},
+    ): Run {
+      const ancestors =
+        options.ancestors === undefined ? CALLER_PID : options.ancestors;
+      const args =
+        ancestors === null ? ["--auto"] : ["--auto", "--ancestors", ancestors];
+      return run(args, mainDir, options.env);
+    }
+
+    const stateDir = () => join(mainDir, ".git", "worktree-prune");
+    const stateFile = (name: string) => join(stateDir(), name);
+
+    // 状態のディレクトリを作り、`name`に`content`を書く。
+    function seedState(name: string, content: string): void {
+      mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
+      writeFileSync(stateFile(name), content);
+    }
+
+    // 状態のディレクトリの`lock/`を作り、更新時刻を`secondsAgo`秒前にする(負なら未来)。
+    function seedLock(secondsAgo: number): void {
+      mkdirSync(stateFile("lock"), { recursive: true, mode: 0o700 });
+      const when = new Date(Date.now() - secondsAgo * 1000);
+      utimesSync(stateFile("lock"), when, when);
+    }
+
+    const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+    // lsofが呼ばれた時点の副作用`hook`(シェルの行)を持つ偽のlsofにする。
+    function writeLsofWithHook(hook: string): void {
+      writeLsof(`p${CALLER_PID}\ncbash\nn${root}`);
+      const lsof = join(fakeBin, "lsof");
+      const body = readFileSync(lsof, "utf8").replace(
+        "#!/usr/bin/env bash\n",
+        `#!/usr/bin/env bash\n${hook}\n`,
+      );
+      writeFileSync(lsof, body);
+    }
+
+    beforeEach(() => {
+      writeCallerLsof();
+    });
+
+    test("--auto removes a merged idle worktree", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("--auto removes the branch of a merged idle worktree", () => {
+      addMergedWorktree("docs-old", "docs/old");
+
+      runAuto();
+
+      expect(branchExists("docs/old")).toBe(false);
+    });
+
+    test("--auto keeps recent", () => {
+      const path = addMergedWorktree("docs-busy", "docs/busy");
+      const now = new Date();
+      utimesSync(join(path, "README.md"), now, now);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps in use", () => {
+      const path = addMergedWorktree("docs-busy", "docs/busy");
+      writeCallerLsof(`p1234\nn${path}/console`);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps dirty", () => {
+      const path = addMergedWorktree("docs-dirty", "docs/dirty");
+      writeFileSync(join(path, "scratch.txt"), "x\n");
+      ageFiles(path, 180);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps unmerged", () => {
+      const path = addWorktree("docs-wip", "docs/wip");
+      commitIn(path);
+      ageFiles(path, 180);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps the worktree it runs in as current directory", () => {
+      const path = addMergedWorktree("fix-current", "fix/current");
+
+      run(["--auto", "--ancestors", CALLER_PID], path);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto logs current directory as the reason for keeping the worktree it runs in", () => {
+      const path = addMergedWorktree("fix-current", "fix/current");
+
+      run(["--auto", "--ancestors", CALLER_PID], path);
+
+      expect(readFileSync(stateFile("log"), "utf8")).toContain(
+        `kept: ${path} (fix/current): current directory`,
+      );
+    });
+
+    test("--auto removes nothing without ancestors", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: null });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing with an empty ancestors value", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "" });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing with a malformed ancestors value", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "4242,abc" });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing with an ancestors value that has an empty item", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "4242,,1" });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing when lsof does not show the callers", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      writeLsof(`p9999\ncbash\nn${root}`);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing when only one of the ancestors would be a prefix", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      writeLsof(`p42420\ncbash\nn${root}`);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes a worktree when any one ancestor shows up", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "7,4242,9" });
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("--auto removes nothing without lsof", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      rmSync(join(fakeBin, "lsof"));
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing when lsof prints nothing", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      writeLsof("");
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    describe("lock", () => {
+      test("--auto skips a lock younger than the limit", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedLock(60);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does not count a young lock as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        seedLock(60);
+
+        runAuto();
+
+        expect(existsSync(stateFile("failures"))).toBe(false);
+      });
+
+      test("--auto leaves a young lock in place", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        seedLock(60);
+
+        runAuto();
+
+        expect(existsSync(stateFile("lock"))).toBe(true);
+      });
+
+      test("--auto takes over a lock older than the limit", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedLock(11 * 60);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto takes over a lock dated in the future", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedLock(-3600);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto removes its own lock at the end", () => {
+        addMergedWorktree("docs-old", "docs/old");
+
+        runAuto();
+
+        expect(existsSync(stateFile("lock"))).toBe(false);
+      });
+
+      test("--auto removes its own lock after a failure", () => {
+        runAuto({ ancestors: null });
+
+        expect(existsSync(stateFile("lock"))).toBe(false);
+      });
+
+      test("--auto leaves a lock owned by another run", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeLsofWithHook(`echo other-run > "${stateFile("lock")}/owner"`);
+
+        runAuto();
+
+        expect(
+          readFileSync(join(stateFile("lock"), "owner"), "utf8").trim(),
+        ).toBe("other-run");
+      });
+    });
+
+    describe("failures", () => {
+      test("--auto increments failures before working", () => {
+        seedState("failures", "2\n");
+        const probe = join(root, "probe");
+        writeLsofWithHook(`cat "${stateFile("failures")}" > "${probe}"`);
+
+        runAuto();
+
+        expect(readFileSync(probe, "utf8").trim()).toBe("3");
+      });
+
+      test("--auto resets failures on success", () => {
+        seedState("failures", "5\n");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("0");
+      });
+
+      test("--auto counts an anomaly as a failure", () => {
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts lsof not showing the callers as a failure", () => {
+        writeLsof(`p9999\ncbash\nn${root}`);
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts a missing lsof as a failure", () => {
+        rmSync(join(fakeBin, "lsof"));
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts an empty lsof output as a failure", () => {
+        writeLsof("");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto adds to the count of earlier failures", () => {
+        seedState("failures", "4\n");
+
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("5");
+      });
+
+      test("--auto treats a malformed failures value as 0", () => {
+        seedState("failures", "many\n");
+
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto leaves the incremented failures when killed", async () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const started = join(root, "started");
+        writeLsofWithHook(`: > "${started}"; sleep 5`);
+
+        const proc = Bun.spawn(
+          [BASH, SCRIPT, "--auto", "--ancestors", CALLER_PID],
+          {
+            cwd: mainDir,
+            env: autoEnv(),
+          },
+        );
+        for (let i = 0; i < 100 && !existsSync(started); i++) {
+          await Bun.sleep(50);
+        }
+        proc.kill("SIGKILL");
+        await proc.exited;
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+    });
+
+    describe("gh", () => {
+      // gh pr listが必要になる、squashマージ済み(に見える)worktreeを作る。
+      function addSquashWorktree(
+        name: string,
+        branch: string,
+      ): { path: string; tip: string } {
+        const path = addWorktree(name, branch);
+        const tip = commitIn(path);
+        return { path, tip };
+      }
+
+      const logText = () => readFileSync(stateFile("log"), "utf8");
+
+      test("--auto removes a squash-merged worktree when gh answers", () => {
+        const { path, tip } = addSquashWorktree("feat-sq", "feat/sq");
+        writeGh(`echo ${tip}`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto keeps a worktree when gh does not answer", () => {
+        const { path, tip } = addSquashWorktree("feat-sq", "feat/sq");
+        writeGh(`sleep 30\necho ${tip}`);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto stops asking gh after one timeout", () => {
+        addSquashWorktree("feat-sq1", "feat/sq1");
+        addSquashWorktree("feat-sq2", "feat/sq2");
+        const calls = join(root, "gh-calls");
+        writeGh(`echo called >> "${calls}"\nsleep 30`);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+      });
+
+      test("--auto marks every candidate as gh unavailable after one timeout", () => {
+        addSquashWorktree("feat-sq1", "feat/sq1");
+        addSquashWorktree("feat-sq2", "feat/sq2");
+        writeGh("sleep 30");
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(logText().match(/gh unavailable/g)).toHaveLength(2);
+      });
+
+      // 1件ごとは上限より短く返るが、合計が上限を超える候補の列を作る。
+      function addSlowCandidates(): string {
+        const calls = join(root, "gh-calls");
+        for (const n of [1, 2, 3, 4, 5, 6]) {
+          addSquashWorktree(`feat-sq${n}`, `feat/sq${n}`);
+        }
+        writeGh(`echo called >> "${calls}"\nsleep 1`);
+        return calls;
+      }
+
+      // `git status`の前に`seconds`秒眠る偽のgit。候補の間の処理が長い状況を作る。
+      function writeSlowStatusGit(seconds: number): void {
+        writeFileSync(
+          join(fakeBin, "git"),
+          `#!/usr/bin/env bash\nif [ "$3" = "status" ]; then sleep ${seconds}; fi\nexec "${requireBin("git")}" "$@"\n`,
+        );
+        chmodSync(join(fakeBin, "git"), 0o755);
+      }
+
+      test("--auto does not count the time between candidates against the gh limit", () => {
+        const calls = join(root, "gh-calls");
+        for (const n of [1, 2, 3]) {
+          addSquashWorktree(`feat-sq${n}`, `feat/sq${n}`);
+        }
+        writeGh(`echo called >> "${calls}"\nsleep 1`);
+        writeSlowStatusGit(5);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "10" } });
+
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(3);
+      }, 60_000);
+
+      test("--auto stops asking gh once the total time reaches the limit", () => {
+        const calls = addSlowCandidates();
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "3" } });
+
+        expect(
+          readFileSync(calls, "utf8").trim().split("\n").length,
+        ).toBeLessThan(6);
+      }, 30_000);
+
+      test("--auto leaves the rest as gh unavailable once the total time reaches the limit", () => {
+        addSlowCandidates();
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "3" } });
+
+        expect(logText()).toContain("gh unavailable");
+      }, 30_000);
+
+      test("--auto kills the whole gh process group on a timeout", async () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        const childPid = join(root, "gh-child-pid");
+        writeGh(`sleep 47 &\necho $! > "${childPid}"\nwait`);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+        await Bun.sleep(300);
+
+        const alive = Bun.spawnSync([
+          "kill",
+          "-0",
+          readFileSync(childPid, "utf8").trim(),
+        ]);
+        expect(alive.exitCode).not.toBe(0);
+      });
+
+      test("--auto counts a gh timeout as a failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("sleep 30");
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts a gh failure as a failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 1");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto does not count an unmerged answer from gh as a failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 0");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("0");
+      });
+
+      test("--auto does not update the stamp when gh is unavailable", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 1");
+
+        runAuto();
+
+        expect(existsSync(stateFile("stamp"))).toBe(false);
+      });
+
+      test("--auto exits 0 on failure", () => {
+        addSquashWorktree("feat-sq", "feat/sq");
+        writeGh("exit 1");
+
+        const result = runAuto();
+
+        expect(result.exitCode).toBe(0);
+      });
+
+      test("--auto ignores a gh time limit above 30", () => {
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "100" } });
+
+        expect(logText()).toContain("gh time limit 30s");
+      });
+
+      test("--auto ignores a gh time limit that is not a number", () => {
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "soon" } });
+
+        expect(logText()).toContain("gh time limit 30s");
+      });
+
+      test("--auto accepts a gh time limit of 30 or less", () => {
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "7" } });
+
+        expect(logText()).toContain("gh time limit 7s");
+      });
+    });
+
+    describe("removal", () => {
+      const callers = () => `p${CALLER_PID}\ncbash\nn${root}`;
+
+      // `worktree remove`だけを`body`(シェルの行)に差し替える、偽のgit。他は本物のgitに渡す。
+      function writeGitWrapper(body: string): void {
+        writeFileSync(
+          join(fakeBin, "git"),
+          `#!/usr/bin/env bash\nif [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then\n${body}\nfi\nexec "${requireBin("git")}" "$@"\n`,
+        );
+        chmodSync(join(fakeBin, "git"), 0o755);
+      }
+
+      test("--auto keeps a worktree that came into use after the first check", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        writeLsofChanging(callers(), `${callers()}\nn${path}`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto removes nothing when the second lsof does not show the callers", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        writeLsofChanging(callers(), `p9999\ncbash\nn${root}`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto counts a second lsof that does not show the callers as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeLsofChanging(callers(), `p9999\ncbash\nn${root}`);
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts a failed removal as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeGitWrapper("  exit 1");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto does not update the stamp after a failed removal", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeGitWrapper("  exit 1");
+
+        runAuto();
+
+        expect(existsSync(stateFile("stamp"))).toBe(false);
+      });
+
+      test("--auto ignores TERM while removing", async () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const started = join(root, "remove-started");
+        writeGitWrapper(`  : > "${started}"\n  sleep 2`);
+
+        const proc = Bun.spawn(
+          [BASH, SCRIPT, "--auto", "--ancestors", CALLER_PID],
+          { cwd: mainDir, env: autoEnv() },
+        );
+        for (let i = 0; i < 100 && !existsSync(started); i++) {
+          await Bun.sleep(50);
+        }
+        proc.kill("SIGTERM");
+        await proc.exited;
+
+        expect(branchExists("docs/old")).toBe(false);
+      });
+    });
+
+    describe("stamp", () => {
+      test("--auto skips within 30 minutes", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() - 600}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does not count a skip within 30 minutes as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() - 600}\n`);
+
+        runAuto();
+
+        expect(existsSync(stateFile("failures"))).toBe(false);
+      });
+
+      test("--auto runs after 30 minutes", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() - 31 * 60}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto treats a future stamp as stale", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() + 3600}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto treats a malformed stamp as stale", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", "yesterday\n");
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto reads a stamp with leading zeros as a decimal number", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `0${nowSeconds() - 600}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto updates the stamp on success", () => {
+        const old = nowSeconds() - 31 * 60;
+        seedState("stamp", `${old}\n`);
+
+        runAuto();
+
+        expect(
+          Number(readFileSync(stateFile("stamp"), "utf8").trim()),
+        ).toBeGreaterThan(old);
+      });
+
+      test("--auto does not touch the stamp on failure", () => {
+        const old = String(nowSeconds() - 31 * 60);
+        seedState("stamp", `${old}\n`);
+
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("stamp"), "utf8").trim()).toBe(old);
+      });
+    });
+
+    test("--auto exits 0 when lsof does not show the callers", () => {
+      writeLsof(`p9999\ncbash\nn${root}`);
+
+      const result = runAuto();
+
+      expect(result.exitCode).toBe(0);
+    });
+
+    describe("state files", () => {
+      // 状態のディレクトリを作り、その中の`name`を`target`へのシンボリックリンクにする。
+      function linkStateFile(name: string, target: string): void {
+        mkdirSync(stateDir(), { mode: 0o700 });
+        symlinkSync(target, stateFile(name));
+      }
+
+      test("--auto prints nothing to stdout", () => {
+        addMergedWorktree("docs-old", "docs/old");
+
+        const result = runAuto();
+
+        expect(result.stdout).toBe("");
+      });
+
+      test("--auto writes the log", () => {
+        addMergedWorktree("docs-old", "docs/old");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain("removed: ");
+      });
+
+      test("--auto writes the reason a worktree was kept to the log", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        addWorktree("docs-wip", "docs/wip");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain(
+          "(docs/wip): unused",
+        );
+      });
+
+      test("--auto writes a failure to the log", () => {
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain("failed: ");
+      });
+
+      test("--auto creates the state directory readable only by the owner", () => {
+        runAuto();
+
+        expect(statSync(stateDir()).mode & 0o777).toBe(0o700);
+      });
+
+      test("--auto trims a large log", () => {
+        mkdirSync(stateDir(), { mode: 0o700 });
+        writeFileSync(stateFile("log"), "old line\n".repeat(30_000));
+
+        runAuto();
+
+        expect(statSync(stateFile("log")).size).toBeLessThan(102_400);
+      });
+
+      test("--auto keeps the end of a large log", () => {
+        mkdirSync(stateDir(), { mode: 0o700 });
+        writeFileSync(
+          stateFile("log"),
+          `${"old line\n".repeat(30_000)}last old line\n`,
+        );
+
+        runAuto();
+
+        expect(readFileSync(stateFile("log"), "utf8")).toContain(
+          "last old line\n",
+        );
+      });
+
+      test("--auto writes the stamp as epoch seconds on success", () => {
+        const before = Math.floor(Date.now() / 1000);
+
+        runAuto();
+
+        const stamp = Number(readFileSync(stateFile("stamp"), "utf8").trim());
+        expect(stamp).toBeGreaterThanOrEqual(before);
+      });
+
+      test("--auto writes 0 to failures on success", () => {
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("0");
+      });
+
+      test("--auto does nothing when the state directory is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-state");
+        mkdirSync(elsewhere);
+        symlinkSync(elsewhere, stateDir());
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto writes nothing into the target of a symlinked state directory", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-state");
+        mkdirSync(elsewhere);
+        symlinkSync(elsewhere, stateDir());
+
+        runAuto();
+
+        expect(readdirSync(elsewhere)).toEqual([]);
+      });
+
+      test("--auto does nothing when lock is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-lock");
+        mkdirSync(elsewhere);
+        linkStateFile("lock", elsewhere);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does nothing when log is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        linkStateFile("log", join(root, "victim"));
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does nothing when stamp is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        linkStateFile("stamp", join(root, "victim"));
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does nothing when failures is a symlink", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        linkStateFile("failures", join(root, "victim"));
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto never writes through a symlink target", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const victim = join(root, "victim");
+        writeFileSync(victim, "untouched\n");
+        linkStateFile("log", victim);
+
+        runAuto();
+
+        expect(readFileSync(victim, "utf8")).toBe("untouched\n");
+      });
+
+      test("--auto never writes through a symlink to a directory", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const elsewhere = join(root, "elsewhere-dir");
+        mkdirSync(elsewhere);
+        linkStateFile("stamp", elsewhere);
+
+        runAuto();
+
+        expect(readdirSync(elsewhere)).toEqual([]);
+      });
     });
   });
 

@@ -448,6 +448,7 @@ EnterWorktree、`claude --worktree`、subagentの`isolation: "worktree"`が作�
   オフラインでsubagentの起動を止めないためである。
 
 WorktreeRemoveフックは無く、削除はClaude Codeの既定に任せる。
+マージ済みの古いworktreeは、新しいworktreeを作った後に自動で片付く([自動の片付け](#自動の片付け))。
 既存のworktreeへ入るときは、EnterWorktreeの`path`にそのパスを渡す。
 
 > [!NOTE]
@@ -511,7 +512,72 @@ mise run worktree:prune -- --apply
 | `unmerged` | マージ済みと確かめられない。pushしていないコミットを含む |
 | `reflog has unreachable commits` | `git reset --hard`などで外したコミットが、削除でreflogごと失われる |
 
-毎回、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
+手動で消すときは、毎回、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
+
+### 自動の片付け
+
+新しいworktreeを作ると、マージ済みの古いworktreeが自動で片付く。
+`worktree-new.sh`が、worktreeを作れた後で、`worktree-prune.sh --auto`をバックグラウンドで起動する。
+作成の経路は、`mise run worktree:new`とWorktreeCreateフックのどちらでもよい。
+既存のworktreeを再利用したときは起動しない。
+再利用したworktreeを、片付けが消しうるためである。
+
+作成先のリポジトリが、実行している`worktree-new.sh`の属するリポジトリ(`git-common-dir`)と同じときだけ起動する。
+WorktreeCreateフックは標準入力の`cwd`へ移るので、作成先が別のリポジトリになりうる。
+別のリポジトリのworktreeを、確認なしで消さないための条件である。
+違うときは起動せず、標準エラーに警告を1行出す。
+worktreeの作成の結果は変わらない。
+
+消す条件は手動の`--apply`と同じで、前節の条件と理由をそのまま使う。
+自動の実行は無人で消すので、次の点が違う。
+
+- 呼び出し元の祖先のプロセスが`lsof`の出力に現れないときは、何も消さず、失敗に数える。
+  `lsof`が呼び出し元のcwdを見られない環境では、`in use`の判定が働かないためである。
+- 前回の成功から30分以内なら、何もしない。
+  他の実行がロックを持つ間も、何もしない。
+  ロックの更新時刻が10分より古ければ、放置されたロックとして取り直す。
+- `gh`が動いた時間の合計が1回の実行で30秒に達したら、残りの候補は調べずに残す。
+- 標準出力には何も出さず、結果を`log`に書く。
+
+状態は、`<git-common-dir>/worktree-prune/`の下に置く。
+
+| ファイル | 内容 |
+| --- | --- |
+| `log` | 実行の記録。100KBを超えると、末尾の半分だけを残す |
+| `lock` | 同時に走らせないためのロック |
+| `stamp` | 直近の成功の時刻 |
+| `failures` | 連続して失敗した回数。ロックを取った直後に1増え、成功した実行が0に戻す |
+
+環境変数`WORKTREE_AUTO_PRUNE`が`0`のとき、自動の片付けは起動しない。
+未設定か`1`のときに起動する。
+
+`worktree-prune.sh`か`worktree-new.sh`を編集する作業では、親のセッションを`WORKTREE_AUTO_PRUNE=0`をexportした環境で起動する。
+フックが作るworktree(EnterWorktreeやsubagentの`isolation: "worktree"`)も含めて、確実に止まる。
+止めないと、編集中の版の`--auto`が、本物のworktreeに対して走るためである。
+
+コマンドに前置きして、1回だけ止める方法もある。
+
+```bash
+WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
+```
+
+この形は`.claude/settings.json`の許可に当たらず、確認を求められる場合がある。
+当たるかは確かめていない。
+フックが作るworktreeには、前置きできない。
+
+`failures`が2以上のときは、worktreeを作るたびに、標準エラーに失敗の回数と`log`のパスを出す。
+この警告を見たら、運用者に報告する。
+原因は先に`log`の`failed:`の行で確かめる。
+`mise run worktree:prune`の乾燥実行は、残る候補の確認用である。
+次の失敗は、乾燥実行には出ない。
+
+- 祖先のPIDが不正
+- `lsof`の出力が空
+- `lsof`が呼び出し元を見られない
+- 削除に失敗した(`could not remove`)
+- `gh`がすべての候補で使えない
+
+手動の`--apply`は、自動の片付けと別に使える。
 
 ## 自己更新の設定
 

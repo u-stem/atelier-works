@@ -10,6 +10,9 @@
 # 既にブランチ(ローカルとorigin)かディレクトリがあれば、何も変えずに非ゼロで終わる。
 # ただしフックは、登録済みで期待するブランチのworktreeが既にあれば、依存を入れ直して再利用し、
 # ブランチだけがあってディレクトリが無ければ、そのブランチをチェックアウトして使う。
+# 新しいworktreeを作れたときは、`worktree-prune.sh --auto`をバックグラウンドで起動して、
+# マージ済みのworktreeを片付ける(既存を再利用したときは起動しない)。
+# 環境変数`WORKTREE_AUTO_PRUNE`が未設定か`1`のときだけ起動する。止めるには`0`にする。
 set -euo pipefail
 
 usage() {
@@ -20,6 +23,16 @@ usage() {
 }
 
 types='feat|fix|docs|refactor|test|chore'
+# 自動の片付けに渡す呼び出し元のディレクトリ。後でcdするので、先に控える。
+# 消えているディレクトリから呼ばれたときは空になり、起動のときにメインのcheckoutで代える。
+caller_dir="$(pwd -P 2>/dev/null)" || caller_dir=""
+# 相対パスで呼ばれても、後のcdで見失わないよう、このスクリプトのあるディレクトリを控える。
+# PATHが空でも先の検査(jqの有無など)の報告まで届くよう、外部コマンドを使わず、失敗しても止めない。
+script_dir="."
+case "${BASH_SOURCE[0]}" in
+  */*) script_dir="${BASH_SOURCE[0]%/*}" ;;
+esac
+script_dir="$(cd "$script_dir" 2>/dev/null && pwd -P)" || script_dir=""
 hook=0
 hook_cwd=""
 # 追加のgitの引数。フックのときだけ、通信の待ちを制限する。
@@ -46,6 +59,7 @@ if [ "$#" -eq 1 ] && [ "$1" = "--hook" ]; then
   hook_cwd="$(printf '%s' "$input" | jq -r '.cwd | select(type == "string")')"
   if [ -n "$hook_cwd" ] && [ -d "$hook_cwd" ]; then
     cd "$hook_cwd"
+    caller_dir="$(pwd -P)"
   fi
   # オフラインや遅い回線でも、subagentの起動を長く止めないよう、fetchとls-remoteの待ちを制限する。
   # HTTPSは20秒間1KB/s未満なら諦める。sshは、つながらなければ15秒で諦め、パスワードを聞かない。
@@ -244,6 +258,79 @@ if [ "$existing_branch" -eq 0 ]; then
   prepare_new_branch
 fi
 
+# 新しいworktreeを作れたあとに、マージ済みのworktreeの自動の片付けを、バックグラウンドで起動する。
+# 起動する側は待たない。フックの呼び出し元が子の終了まで標準出力を待たないよう、
+# 標準入力、標準出力、標準エラーのすべてを切り離す。macOSには`setsid`が無い。
+# 片付けは、呼び出し元のディレクトリで起動する。呼び出したセッションのworktreeを、
+# 片付けが`current directory`として残すため。
+# `gh`はmiseのツールで、フックのPATHから解決できない。miseのshimsを子のPATHの末尾にだけ足す。
+# 末尾なので、システムのコマンドを覆わない。
+# 既存のworktreeを再利用する経路では呼ばない。再利用したworktreeを、片付けが消しうるため。
+# `WORKTREE_AUTO_PRUNE`が未設定か`1`のときだけ起動する。`WORKTREE_NEW_PRUNE_SCRIPT`は、
+# 起動するスクリプトを差し替える(テスト用)。
+start_auto_prune() {
+  local prune_script state_dir failures value ancestors pid depth dir script_common target_common
+  if [ "${WORKTREE_AUTO_PRUNE-1}" != "1" ]; then
+    return 0
+  fi
+
+  # `--hook`は標準入力の`cwd`へ移るので、作成先がこのスクリプトと別のリポジトリになりうる。
+  # 別のリポジトリのworktreeを、確認なしで消さないよう、このスクリプトの属するリポジトリと
+  # 作成先が同じときだけ起動する。実パスにそろえて比べ、/varと/private/varのような違いで止めない。
+  # `git -C ""`は何も移動しないので、空のときは試さない。
+  script_common=""
+  if [ -n "$script_dir" ]; then
+    script_common="$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || script_common=""
+  fi
+  if [ -n "$script_common" ]; then
+    script_common="$(cd "$script_common" 2>/dev/null && pwd -P)" || script_common=""
+  fi
+  target_common="$(cd "$common_dir" 2>/dev/null && pwd -P)" || target_common=""
+  if [ -z "$script_common" ] || [ "$script_common" != "$target_common" ]; then
+    echo "worktree-new: warning: not starting the automatic worktree cleanup; the target is in a different repository from this script" >&2
+    return 0
+  fi
+
+  # 前の自動の実行が続けて失敗しているときは、標準エラーに知らせる。標準出力はパスだけにする。
+  # 数字だけを数として読み、数字でない中身は表示しない。
+  state_dir="$common_dir/worktree-prune"
+  failures="$state_dir/failures"
+  if [ ! -L "$state_dir" ] && [ -f "$failures" ] && [ ! -L "$failures" ]; then
+    value="$(cat -- "$failures" 2>/dev/null || true)"
+    if [[ "$value" =~ ^[0-9]{1,9}$ ]] && [ "$((10#$value))" -ge 2 ]; then
+      echo "worktree-new: automatic worktree cleanup failed $((10#$value)) times in a row; see $state_dir/log" >&2
+    fi
+  fi
+
+  prune_script="${WORKTREE_NEW_PRUNE_SCRIPT:-$script_dir/worktree-prune.sh}"
+  if [ ! -f "$prune_script" ]; then
+    echo "worktree-new: warning: cannot start the automatic worktree cleanup; not found: $prune_script" >&2
+    return 0
+  fi
+
+  # 自分から親をたどったPIDの一覧(PID 1は除く)。片付けは、lsofの出力にこのどれかが現れることを
+  # 確かめ、lsofが呼び出し元の側を見られない環境で何も消さないようにする。
+  ancestors=""
+  pid="$$"
+  depth=0
+  while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ "$depth" -lt 64 ]; do
+    ancestors="${ancestors:+$ancestors,}$pid"
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" || pid=""
+    depth=$((depth + 1))
+  done
+
+  dir="$caller_dir"
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+    dir="$main_root"
+  fi
+  (
+    (
+      cd "$dir" && exec env PATH="$PATH:${HOME:-/nonexistent}/.local/share/mise/shims" \
+        nohup "$BASH" "$prune_script" --auto --ancestors "$ancestors"
+    ) </dev/null >/dev/null 2>&1 &
+  ) || true
+}
+
 # 後始末の対象は、`git worktree add`の成功から依存の導入の完了までに限る。
 # ここまでの検査で止まったときは、既存のブランチやディレクトリを消さない。
 # 完成したあとの失敗や中断では、できあがったworktreeを消さない。
@@ -320,6 +407,9 @@ echo "worktree-new: installing dependencies" >&2
 "${bun_cmd[@]}" install --frozen-lockfile --ignore-scripts >&2
 "${bun_cmd[@]}" install --cwd console --frozen-lockfile --ignore-scripts >&2
 created=0
+
+# 起動に失敗しても、作成の結果(終了コードと標準出力のパス)は変えない。
+start_auto_prune || true
 
 echo "worktree-new: first push: git push -u origin HEAD" >&2
 echo "$worktree_path"
