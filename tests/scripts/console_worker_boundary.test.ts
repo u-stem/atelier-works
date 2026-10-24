@@ -19,7 +19,7 @@ import {
 // 境界を保つため、tag: consoleのscriptがどのsecret変数を読むかを、importをたどって数える。
 // - github_tokenを読んでよいのは、approval_decideとretry_work_itemだけ。
 // - その2つも、github_token以外のsecret変数は読まない。
-// - audit_kickoff、notice_resolve、manual_intake_submitは、どのsecret変数も読まない。
+// - audit_kickoff、notice_resolve、manual_intake_submit、console_holds、hold_release、freeze_releaseは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
 //
 // 走査の方法と限界:
@@ -44,6 +44,9 @@ const READS_NO_SECRET = [
   "f/factory/audit_kickoff",
   "f/factory/notice_resolve",
   "f/factory/manual_intake_submit",
+  "f/factory/console_holds",
+  "f/factory/hold_release",
+  "f/factory/freeze_release",
 ];
 
 /**
@@ -55,6 +58,8 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
     "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
   "f/factory/steps/console_query.ts":
     "deployed_shaの読み取りの依存(deps.getVariable)。呼び出し側は定数DEPLOYED_SHA_VARIABLEだけを渡す",
+  "f/factory/lib/freeze_apply.ts":
+    "注入されたsdkの呼び出し(sdk.getVariable)。呼び出し側は定数FREEZE_VARIABLE_PATHだけを渡す。変数f/factory/freezesはsecretではない",
 };
 
 async function consoleScripts(): Promise<string[]> {

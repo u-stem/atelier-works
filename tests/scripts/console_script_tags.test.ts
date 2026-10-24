@@ -14,6 +14,9 @@ const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/audit_kickoff": 120,
   "f/factory/manual_intake_submit": 30,
   "f/factory/console_fetch_watch": 60,
+  "f/factory/console_holds": 30,
+  "f/factory/hold_release": 30,
+  "f/factory/freeze_release": 30,
 };
 
 async function scriptYaml(path: string): Promise<string> {
@@ -76,7 +79,7 @@ describe("console scripts", () => {
     expect(delegating).toEqual([]);
   });
 
-  test("the seven console scripts exist", async () => {
+  test("the ten console scripts exist", async () => {
     const paths = await allScriptYamlPaths();
     expect(
       Object.keys(CONSOLE_SCRIPTS).filter((path) => !paths.includes(path)),

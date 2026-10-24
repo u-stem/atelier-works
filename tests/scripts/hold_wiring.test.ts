@@ -33,6 +33,18 @@ import {
 const HOLDS_MODULE = "f/factory/lib/holds.ts";
 const READ_ONLY_NAMES = ["listActiveHolds", "listInvalidHolds"];
 
+// `f/`のWindmillで保留のモジュールを実行時に読み込んでよいファイルは、3つの分類に分ける。
+// - 止める読み手(`HOLD_READERS`): 保留を読んで処理を止める。下の「保留を読む主体」で固定する。
+// - 表示の読み手(`HOLD_VIEWERS`): 人に見せるだけで、何も止めない。
+// - 解除の書き手(`HOLD_RELEASERS`): 人の操作で保留を解除する。`releaseHold`を読み込んでよい`f/`のファイルは、これだけである。
+// 値は、そのファイルが保留のモジュールから実行時に読み込む名前のすべてである。
+const HOLD_VIEWERS: Readonly<Record<string, readonly string[]>> = {
+  "f/factory/console_holds.ts": ["listActiveHolds"],
+};
+const HOLD_RELEASERS: Readonly<Record<string, readonly string[]>> = {
+  "f/factory/hold_release.ts": ["listActiveHolds", "releaseHold"],
+};
+
 // 表を作るmigration。走査から外すので、保護パスに入れてあることを下で確かめる。
 const HOLDS_MIGRATION_FILES = [
   "20261023131355_holds.up.sql",
@@ -175,15 +187,19 @@ function namedImports(
     });
 }
 
-/** 読み取りの関数と型だけを名前付きで読み込む形でない、保留のモジュールへの参照。 */
-function disallowedHoldsReferences(source: string): ModuleReference[] {
+/**
+ * `allowed`の名前と型だけを名前付きで読み込む形でない、保留のモジュールへの参照。
+ * 既定では、読み取りの関数(`READ_ONLY_NAMES`)だけを許す。
+ */
+function disallowedHoldsReferences(
+  source: string,
+  allowed: readonly string[] = READ_ONLY_NAMES,
+): ModuleReference[] {
   return holdsReferences(source).filter((reference) => {
     if (reference.kind !== "import") return true;
     const names = namedImports(reference.clause);
     if (names === null) return true;
-    return !names.every(
-      ({ name, isType }) => isType || READ_ONLY_NAMES.includes(name),
-    );
+    return !names.every(({ name, isType }) => isType || allowed.includes(name));
   });
 }
 
@@ -1079,7 +1095,7 @@ describe("files under f/", () => {
     expect(reports).toEqual([]);
   });
 
-  test("none but holds.ts reaches the holds module beyond the read functions", () => {
+  test("none but the releasers reaches the holds module beyond the read functions", () => {
     const offenders = SCANNED.flatMap((path) => {
       const source = read(path);
       if (!path.endsWith(".ts")) {
@@ -1087,7 +1103,10 @@ describe("files under f/", () => {
           ? [`${path}: names the holds module`]
           : [];
       }
-      return disallowedHoldsReferences(source).map(
+      const allowed = Object.keys(HOLD_RELEASERS).includes(path)
+        ? [...READ_ONLY_NAMES, "releaseHold"]
+        : READ_ONLY_NAMES;
+      return disallowedHoldsReferences(source, allowed).map(
         (reference) =>
           `${path}: ${reference.kind} ${reference.specifier} ${reference.clause}`,
       );
@@ -1356,9 +1375,10 @@ describe("migrations other than the one that creates the holds table", () => {
 // 保留を読む主体、マージを要求する主体、CLI、miseのタスク
 // ---------------------------------------------------------------------------
 
-// `f/`のWindmillで保留を読んで止まる主体。`f/`の下で実行時に保留のモジュールを読み込んでよいのは、ここに挙げたファイルだけである。
-// 読み込んでよい名前は`listActiveHolds`だけで、書く関数は読み込めない。
-// `f/`のWindmillの読み手を足す段では、このリストに足す。
+// `f/`のWindmillで保留を読んで止まる主体。実行時に保留のモジュールを読み込んでよいファイルは、
+// ここに挙げた止める読み手と、冒頭の表示の読み手(`HOLD_VIEWERS`)、解除の書き手(`HOLD_RELEASERS`)だけである。
+// 止める読み手が読み込んでよい名前は`listActiveHolds`だけで、書く関数は読み込めない。
+// `f/`のWindmillの止める読み手を足す段では、このリストに足す。
 // ローカルのフックの読み手(`scripts/claude-hooks/merge-read.ts`)は`f/`の外にあるので、このリストに入れず、下の別の`describe`で固定する。
 const HOLD_READERS = [
   "f/factory/steps/dependabot_finish.ts",
@@ -1402,6 +1422,8 @@ describe("the files that read the holds", () => {
   test("no other file under f/ imports the holds module at run time", () => {
     const offenders = typescript
       .filter((path) => !HOLD_READERS.includes(path))
+      .filter((path) => !(path in HOLD_VIEWERS))
+      .filter((path) => !(path in HOLD_RELEASERS))
       .filter((path) => runtimeHoldNames(read(path)).length > 0);
 
     expect(offenders).toEqual([]);
@@ -1414,6 +1436,217 @@ describe("the files that read the holds", () => {
 
     expect(offenders).toEqual([]);
   });
+});
+
+describe("the allowed names of the holds module", () => {
+  test("accepts a name that the caller allows", () => {
+    expect(
+      disallowedHoldsReferences('import { releaseHold } from "./holds.ts";', [
+        "releaseHold",
+      ]),
+    ).toEqual([]);
+  });
+
+  test("still rejects a name that the caller does not allow", () => {
+    expect(
+      disallowedHoldsReferences('import { placeHold } from "./holds.ts";', [
+        "releaseHold",
+      ]).length,
+    ).toBe(1);
+  });
+});
+
+describe("the files that show the holds", () => {
+  const paths = Object.keys(HOLD_VIEWERS);
+  const typescript = SCANNED.filter((path) => path.endsWith(".ts"));
+
+  test.each(paths)("%s exists", (path) => {
+    expect(typescript).toContain(path);
+  });
+
+  test.each(paths)(
+    "%s imports exactly the listed names at run time",
+    (path) => {
+      expect(runtimeHoldNames(read(path))).toEqual(
+        [...(HOLD_VIEWERS[path] ?? [])].sort(),
+      );
+    },
+  );
+
+  test.each(paths)("%s passes the shared default client itself", (path) => {
+    expect(read(path)).toContain("defaultSqlClient");
+  });
+
+  test.each(paths)("%s is not one of the readers that stop work", (path) => {
+    expect(HOLD_READERS).not.toContain(path);
+  });
+
+  test.each(paths)("%s does not write the freeze variable", (path) => {
+    expect(codeOf(read(path))).not.toMatch(
+      /\b(?:setVariable|writeVariable|mutateFreezeState|releaseFreeze)\b/,
+    );
+  });
+
+  test("the stopping readers are not changed by the viewers", () => {
+    expect(HOLD_READERS).toEqual([
+      "f/factory/steps/dependabot_finish.ts",
+      "f/factory/poll_dependabot.ts",
+    ]);
+  });
+});
+
+describe("the files that release the holds", () => {
+  const paths = Object.keys(HOLD_RELEASERS);
+  const typescript = SCANNED.filter((path) => path.endsWith(".ts"));
+
+  test.each(paths)("%s exists", (path) => {
+    expect(typescript).toContain(path);
+  });
+
+  test.each(paths)(
+    "%s imports exactly the listed names at run time",
+    (path) => {
+      expect(runtimeHoldNames(read(path))).toEqual(
+        [...(HOLD_RELEASERS[path] ?? [])].sort(),
+      );
+    },
+  );
+
+  test.each(paths)("%s does not import placeHold", (path) => {
+    expect(runtimeHoldNames(read(path))).not.toContain("placeHold");
+  });
+
+  test.each(paths)("%s passes the shared default client itself", (path) => {
+    expect(read(path)).toContain("defaultSqlClient");
+  });
+
+  test.each(paths)("%s is a protected path in the pr_fix list", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(paths)("%s is a protected path in the implement list", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(paths)("%s is named in the exact list", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(paths)("the definition of %s is a protected path", (path) => {
+    expect(
+      FORBIDDEN_EXACT_PATHS.includes(path.replace(/\.ts$/, ".script.yaml")),
+    ).toBe(true);
+  });
+
+  test("no file lets a viewer release", () => {
+    expect(
+      Object.keys(HOLD_VIEWERS).filter((path) => path in HOLD_RELEASERS),
+    ).toEqual([]);
+  });
+});
+
+describe("the freeze variable", () => {
+  const WRITES = /\b(?:setVariable|writeVariable)\b/;
+
+  test("freeze_release.ts writes through mutateFreezeState", () => {
+    expect(codeOf(read("f/factory/freeze_release.ts"))).toContain(
+      "mutateFreezeState",
+    );
+  });
+
+  test("freeze_release.ts does not call the variable writer itself", () => {
+    expect(codeOf(read("f/factory/freeze_release.ts"))).not.toMatch(WRITES);
+  });
+
+  test("freeze_release.ts does not import the holds module", () => {
+    expect(runtimeHoldNames(read("f/factory/freeze_release.ts"))).toEqual([]);
+  });
+
+  test("freeze_release.ts releases only through releaseFreeze", () => {
+    expect(codeOf(read("f/factory/freeze_release.ts"))).toMatch(
+      /\breleaseFreeze\(/,
+    );
+  });
+
+  test("the support library does not write the freeze variable", () => {
+    expect(codeOf(read("f/factory/lib/console_holds_support.ts"))).not.toMatch(
+      WRITES,
+    );
+  });
+
+  test("the support library imports the holds module for types only", () => {
+    expect(
+      runtimeHoldNames(read("f/factory/lib/console_holds_support.ts")),
+    ).toEqual([]);
+  });
+});
+
+describe("the names of the console release scripts", () => {
+  /** 名前の前後が英数字と`_`でないときだけ数える。通知の種類`hold_released`を取り違えない。 */
+  function mentionsReleaseScript(text: string, name: string): boolean {
+    return new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(text);
+  }
+
+  test.each([
+    "f/factory/hold_release",
+    "./hold_release.ts",
+    '"hold_release"',
+    "hold_release:",
+  ])("sees the name in %p", (text) => {
+    expect(mentionsReleaseScript(text, "hold_release")).toBe(true);
+  });
+
+  test.each([
+    "hold_released",
+    "hold_release_x",
+    "my_hold_release",
+    "hold:release",
+  ])("does not see the name in %p", (text) => {
+    expect(mentionsReleaseScript(text, "hold_release")).toBe(false);
+  });
+
+  const everything = listFiles("f");
+
+  test("scans the locks and the flow definitions too", () => {
+    expect(
+      [".lock", "flow.yaml"].every((suffix) =>
+        everything.some((path) => path.endsWith(suffix)),
+      ),
+    ).toBe(true);
+  });
+
+  test.each(["hold_release", "freeze_release"])(
+    "no file under f/ but the files of %s names it",
+    (name) => {
+      const offenders = everything
+        .filter((path) => !path.startsWith(`f/factory/${name}.`))
+        .filter((path) => mentionsReleaseScript(read(path), name));
+
+      expect(offenders).toEqual([]);
+    },
+  );
+
+  test.each(["hold_release", "freeze_release"])(
+    "the script %s exists, so that the scan above has an owner",
+    (name) => {
+      expect(everything).toContain(`f/factory/${name}.ts`);
+    },
+  );
+
+  test.each(["hold_release", "freeze_release"])(
+    "no file under f/ imports %s",
+    (name) => {
+      const importers = everything
+        .filter((path) => path.endsWith(".ts"))
+        .filter((path) =>
+          scannedImports(read(path)).some((entry) =>
+            new RegExp(`(^|/)${name}(\\.ts)?$`).test(entry.path),
+          ),
+        );
+
+      expect(importers).toEqual([]);
+    },
+  );
 });
 
 describe("the merge request", () => {

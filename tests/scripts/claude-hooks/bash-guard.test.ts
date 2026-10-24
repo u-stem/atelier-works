@@ -2140,3 +2140,95 @@ describe("bash-guard reads the command in env -S", () => {
     expect(await denyReason('env -S "$CMD"')).toContain("env -S");
   });
 });
+
+// Consoleの解除scriptを1コマンドで呼ぶ道は、主セッションを含むすべてのClaudeのセッションに許さない。
+// 解除は、人がConsoleの画面で行うか、端末で確認を通してCLIで行う。
+describe("bash-guard denies releasing through the Console scripts", () => {
+  const URL_BASE = "http://localhost:8000/api/w/factory/jobs";
+
+  const COMMANDS = [
+    `wmill script run f/factory/hold_release -d '{"hold_id":1}'`,
+    `wmill script run f/factory/freeze_release -d '{"freeze_id":"0a1b2c3d"}'`,
+    "wmill script run f/factory/hold_release.ts",
+    "wmill script preview f/factory/hold_release.ts",
+    "wmill job run f/factory/freeze_release",
+    "wmill --workspace factory script run f/factory/hold_release -d '{}'",
+    "wmill script run -d '{}' f/factory/hold_release",
+    "mise exec -- wmill script run f/factory/hold_release",
+    "bunx wmill script run f/factory/hold_release",
+    "npx wmill script run f/factory/freeze_release",
+    `sh -c "wmill script run f/factory/hold_release"`,
+    `curl -X POST ${URL_BASE}/run_wait_result/p/f/factory/hold_release -d '{"hold_id":1}'`,
+    `curl -s -H "Authorization: Bearer $TOKEN" ${URL_BASE}/run/p/f/factory/freeze_release`,
+    `curl '${URL_BASE}/run_wait_result/p/f/factory/hold_release'`,
+    `curl --data @body.json "${URL_BASE}/run_wait_result/p/f/factory/freeze_release"`,
+    `wget --post-data='{}' ${URL_BASE}/run_wait_result/p/f/factory/hold_release`,
+    `http POST ${URL_BASE}/run_wait_result/p/f/factory/hold_release`,
+    `bun -e 'fetch("${URL_BASE}/run_wait_result/p/f/factory/hold_release")'`,
+    "wmill variable add '{}' f/factory/freezes",
+    "wmill variable push freezes.variable.yaml f/factory/freezes",
+    "wmill variable add '{}' f/factory/freezes --workspace factory",
+    "mise exec -- wmill variable add '{}' f/factory/freezes",
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/freezes -d '{}'`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/create -d '{"path":"f/factory/freezes"}'`,
+  ];
+
+  test.each(COMMANDS)("denies %s in the main session", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(COMMANDS)("denies %s in a subagent", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason says that a person releases from the Console", async () => {
+    expect(
+      await denyReason("wmill script run f/factory/hold_release"),
+    ).toContain("Console");
+  });
+
+  test("the reason names the CLI that a person confirms", async () => {
+    expect(
+      await denyReason("wmill script run f/factory/freeze_release"),
+    ).toContain("mise run hold:release");
+  });
+});
+
+describe("bash-guard allows work near the Console release scripts", () => {
+  const URL_BASE = "http://localhost:8000/api/w/factory/jobs";
+
+  test.each([
+    "mise run check",
+    "mise run test -- tests/scripts/hold_release.test.ts",
+    "bun test tests/scripts/hold_release.test.ts",
+    "bun test tests/scripts/freeze_release.test.ts",
+    "bun test f/factory/hold_release.ts",
+    "git add f/factory/hold_release.ts f/factory/freeze_release.ts",
+    'git commit -m "feat: hold_release を足す"',
+    "grep -rn hold_release f/factory",
+    "cat f/factory/freeze_release.ts",
+    "wmill script get f/factory/hold_release",
+    "wmill generate-metadata f/factory/hold_release",
+    "wmill variable get f/factory/freezes",
+    "wmill variable list",
+    "wmill variable add '{}' f/factory/other",
+    "wmill sync push --dry-run",
+    "wmill script run f/factory/console_holds",
+    "wmill script run f/factory/notice_resolve -d '{\"notice_id\":1}'",
+    `curl ${URL_BASE}/run_wait_result/p/f/factory/console_holds`,
+    "curl http://localhost:8000/api/version",
+    "curl http://localhost:8000/api/w/factory/variables/get_value/f/factory/freezes",
+    "mise run hold:list",
+    "mise run freeze:list",
+  ])("allows %s in the main session", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "bun test tests/scripts/hold_release.test.ts",
+    "wmill script get f/factory/hold_release",
+    "wmill script run f/factory/console_holds",
+  ])("allows %s in a subagent", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});

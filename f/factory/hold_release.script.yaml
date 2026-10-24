@@ -1,0 +1,14 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/hold_release.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    hold_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - hold_id
