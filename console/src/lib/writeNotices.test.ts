@@ -174,6 +174,23 @@ describe("describeHoldReleaseResult", () => {
     ).toEqual({ tone: "success", message: "期限切れの保留を片付けました。" });
   });
 
+  test("says that it could not tell whether the hold was active", () => {
+    expect(
+      describeHoldReleaseResult({
+        ok: true,
+        status: "released",
+        hold_id: 12,
+        was_active: false,
+        active_unknown: true,
+        audit: "recorded",
+      }),
+    ).toEqual({
+      tone: "warning",
+      message:
+        "保留を解除しました。ただし、解除の前に有効だったかは確認できませんでした。",
+    });
+  });
+
   test("reports a hold that was already released as information", () => {
     expect(
       describeHoldReleaseResult({

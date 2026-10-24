@@ -186,12 +186,68 @@ describe("releaseHoldFromConsole release", () => {
     expect((await releaseHoldFromConsole(12, h.deps)).audit).toBeUndefined();
   });
 
-  test("assumes the hold was active when the list cannot be read", async () => {
+  test("does not report the hold as active when the list cannot be read", async () => {
     const h = harness({
       active: { ok: false, kind: "read_failed", reason: "down" },
     });
 
-    expect((await releaseHoldFromConsole(12, h.deps)).was_active).toBe(true);
+    expect((await releaseHoldFromConsole(12, h.deps)).was_active).toBe(false);
+  });
+
+  test("marks the activity as unknown when the list cannot be read", async () => {
+    const h = harness({
+      active: { ok: false, kind: "read_failed", reason: "down" },
+    });
+
+    expect((await releaseHoldFromConsole(12, h.deps)).active_unknown).toBe(
+      true,
+    );
+  });
+
+  test("does not mark the activity as unknown when the list is read", async () => {
+    const h = harness();
+
+    expect(
+      (await releaseHoldFromConsole(12, h.deps)).active_unknown,
+    ).toBeUndefined();
+  });
+
+  test("does not claim a release in the notice when the list cannot be read", async () => {
+    const h = harness({
+      active: { ok: false, kind: "read_failed", reason: "down" },
+    });
+
+    await releaseHoldFromConsole(12, h.deps);
+
+    expect(h.notices[0]?.message).not.toContain("解除しました");
+  });
+
+  test("says that it could not tell whether the hold was active", async () => {
+    const h = harness({
+      active: { ok: false, kind: "read_failed", reason: "down" },
+    });
+
+    await releaseHoldFromConsole(12, h.deps);
+
+    expect(h.notices[0]?.message).toContain("確認できませんでした");
+  });
+
+  test("names the operator and the id in that notice", async () => {
+    const h = harness({
+      active: { ok: false, kind: "read_failed", reason: "down" },
+    });
+
+    await releaseHoldFromConsole(12, h.deps);
+
+    expect(h.notices[0]?.message).toContain("operator");
+  });
+
+  test("reports the audit when the list cannot be read", async () => {
+    const h = harness({
+      active: { ok: false, kind: "read_failed", reason: "down" },
+    });
+
+    expect((await releaseHoldFromConsole(12, h.deps)).audit).toBe("recorded");
   });
 
   test("still releases when the list cannot be read", async () => {

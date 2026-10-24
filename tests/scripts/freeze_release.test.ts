@@ -407,6 +407,39 @@ describe("releaseFreezeFromConsole confirmation", () => {
     expect(h.notices).toEqual([]);
   });
 
+  test("accepts the loss of a released row that another writer cleaned up", async () => {
+    const ended = schedule({
+      id: "2c3d4e5f",
+      target: "f/factory/poll_prs",
+      released_at: new Date(NOW.getTime() - HOUR).toISOString(),
+    });
+    const h = harness(text([schedule(), ended]), {
+      afterWrite: (store) => {
+        store.value = text([schedule({ released_at: NOW.toISOString() })]);
+      },
+    });
+
+    expect((await releaseFreezeFromConsole("0a1b2c3d", h.deps)).status).toBe(
+      "released",
+    );
+  });
+
+  test("accepts the loss of an expired row that another writer cleaned up", async () => {
+    const expired = deploy({
+      created_at: new Date(NOW.getTime() - 2 * HOUR).toISOString(),
+      expires_at: new Date(NOW.getTime() - HOUR).toISOString(),
+    });
+    const h = harness(text([schedule()], [expired]), {
+      afterWrite: (store) => {
+        store.value = text([schedule({ released_at: NOW.toISOString() })]);
+      },
+    });
+
+    expect((await releaseFreezeFromConsole("0a1b2c3d", h.deps)).status).toBe(
+      "released",
+    );
+  });
+
   test("accepts a row that another writer added after the release", async () => {
     const h = harness(text([schedule()]), {
       afterWrite: (store) => {

@@ -213,6 +213,22 @@ describe("isHoldReleaseResult", () => {
     expect(isHoldReleaseResult({ ...rest, was_active: false })).toBe(true);
   });
 
+  test("accepts a release whose activity is unknown", () => {
+    expect(
+      isHoldReleaseResult({
+        ...RELEASED,
+        was_active: false,
+        active_unknown: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a non-boolean active_unknown", () => {
+    expect(isHoldReleaseResult({ ...RELEASED, active_unknown: "yes" })).toBe(
+      false,
+    );
+  });
+
   test("accepts a hold that was already released", () => {
     expect(
       isHoldReleaseResult({
