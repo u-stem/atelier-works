@@ -685,4 +685,65 @@ describe("runDeployedShaCheck with a deploy freeze", () => {
     await runDeployedShaCheck(h.deps);
     expect(reads).toBe(0);
   });
+
+  test("restarts the grace period from now while a deploy freeze is active", async () => {
+    const nowMs = T0 + DEPLOYED_SHA_GRACE_MS + 1;
+    const h = harness({ ...held, nowMs: () => nowMs });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states).toEqual([
+      {
+        [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "bbb", first_seen_ms: nowMs },
+      },
+    ]);
+  });
+
+  test("does not notify in the grace period that follows the end of the freeze", async () => {
+    const nowMs = T0 + DEPLOYED_SHA_GRACE_MS + 1;
+    const first = harness({ ...held, nowMs: () => nowMs });
+    await runDeployedShaCheck(first.deps);
+    const restarted = first.states[0] ?? {};
+    const next = harness({
+      getState: () => Promise.resolve(restarted),
+      nowMs: () => nowMs + 5 * MIN,
+    });
+    expect(await runDeployedShaCheck(next.deps)).toBe("waiting");
+  });
+
+  test("notifies once the grace period after the end of the freeze has passed", async () => {
+    const nowMs = T0 + DEPLOYED_SHA_GRACE_MS + 1;
+    const first = harness({ ...held, nowMs: () => nowMs });
+    await runDeployedShaCheck(first.deps);
+    const restarted = first.states[0] ?? {};
+    const next = harness({
+      getState: () => Promise.resolve(restarted),
+      nowMs: () => nowMs + DEPLOYED_SHA_GRACE_MS + 1,
+    });
+    expect(await runDeployedShaCheck(next.deps)).toBe("notified");
+  });
+
+  test("keeps the other keys of the state when it restarts the count", async () => {
+    const h = harness({
+      ...held,
+      getState: () => Promise.resolve({ ...STORED, other: 1 }),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states[0]?.other).toBe(1);
+  });
+
+  test("does not write the state when the state cannot be read", async () => {
+    const h = harness({
+      ...held,
+      getState: () => Promise.reject(new Error("no state")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states).toEqual([]);
+  });
+
+  test("still waits when the state write fails", async () => {
+    const h = harness({
+      ...held,
+      setState: () => Promise.reject(new Error("write failed")),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("waiting");
+  });
 });
