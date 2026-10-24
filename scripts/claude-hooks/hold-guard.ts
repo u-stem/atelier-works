@@ -10,6 +10,13 @@
 // `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
 // 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
+// Consoleの解除script(`hold_release`と`freeze_release`)を1コマンドで呼ぶ形は、主セッションを含む
+// すべてのセッションで拒否する(`findConsoleReleaseCall`)。ローカルの主セッションはCLIでは`session`として
+// 扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らずに他の主体の保留を外せるためである。
+// 対象は、`wmill`の`script run`、`script preview`、`job run`などの実行と、`curl`などのHTTPクライアントが
+// 解除scriptの名前を含むURLを呼ぶ形、`wmill variable`と`curl`が凍結の変数`f/factory/freezes`を書く形である。
+// 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。
+//
 // 拒否を既定にする。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
 // 次のどれにも当たらない呼び出しは、保留のコードを指す語を含む限り拒否する。
@@ -39,6 +46,8 @@
 // - `docker`、`docker-compose`、`psql`: 語か標準入力の文字列に`holds`を含めば拒否する。
 //
 // ベストエフォートの規則で、境界ではない。次は止めない。
+// - Consoleの解除scriptを、ハッシュ(`run_wait_result/h/<hash>`)、パーセント符号化したパス、
+//   変数や連結で組み立てた名前で呼ぶ形。
 // - 別名の呼び出し(`cp scripts/hold.ts /tmp/h.ts`の後に実行する形)。
 // - 変数や文字列の連結で組んだパス、動的なimport、`docker compose exec db psql`に渡す語を組み立てて書く形。
 // - 呼び出し側が前置きとして外さない、コマンドを起動するプログラム(`find -exec`、`watch`、`parallel`、`ssh`、
@@ -683,4 +692,103 @@ export function findHoldOperation(
       : "operation";
   }
   return null;
+}
+
+/** Consoleの解除scriptの名前。前後が英数字と`_`でないときだけ数え、通知の種類`hold_released`は取り違えない。 */
+const RELEASE_SCRIPT_NAME =
+  /(?<![A-Za-z0-9_])(?:hold_release|freeze_release)(?![A-Za-z0-9_])/;
+
+/** 凍結の変数のパス。スラッシュはパーセント符号化でも数える。 */
+const FREEZE_VARIABLE_PATH =
+  /f(?:\/|%2[Ff])factory(?:\/|%2[Ff])freezes(?![A-Za-z0-9_])/;
+
+/** 変数を書くURLの経路。読み取り(`get_value`など)は数えない。 */
+const VARIABLE_WRITE_URL =
+  /\/variables\/(?:update|create|delete)(?![A-Za-z0-9_])/i;
+
+/** URLを呼ぶHTTPクライアント。 */
+const HTTP_CLIENTS: ReadonlySet<string> = new Set([
+  "curl",
+  "wget",
+  "http",
+  "https",
+  "xh",
+  "httpie",
+]);
+
+/** `wmill`でscriptやjobを実行する語。 */
+const WMILL_EXECUTION_WORDS: ReadonlySet<string> = new Set([
+  "run",
+  "preview",
+  "rerun",
+  "restart",
+]);
+
+/** `wmill variable`で変数を書く副コマンド。 */
+const WMILL_VARIABLE_WRITES: ReadonlySet<string> = new Set(["add", "push"]);
+
+/**
+ * Consoleの解除を1コマンドで起こす形の種類。
+ * `script`は解除scriptの実行、`variable`は凍結の変数への書き込みである。
+ */
+export type ConsoleReleaseFinding = "script" | "variable";
+
+function anySpelling(words: readonly Word[], pattern: RegExp): boolean {
+  return words.some((word) =>
+    spellings(word).some((text) => pattern.test(text)),
+  );
+}
+
+function httpFinding(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+): ConsoleReleaseFinding | null {
+  if (anySpelling(args, RELEASE_SCRIPT_NAME)) return "script";
+  if (!anySpelling(args, VARIABLE_WRITE_URL)) return null;
+  const named =
+    anySpelling(args, FREEZE_VARIABLE_PATH) ||
+    (inputs()?.some((text) => FREEZE_VARIABLE_PATH.test(text)) ?? false);
+  return named ? "variable" : null;
+}
+
+function wmillFinding(args: readonly Word[]): ConsoleReleaseFinding | null {
+  const positional = args.filter((word) => !word.text.startsWith("-"));
+  const has = (names: ReadonlySet<string>): boolean =>
+    positional.some((word) => names.has(word.text));
+  if (has(WMILL_EXECUTION_WORDS) && anySpelling(args, RELEASE_SCRIPT_NAME)) {
+    return "script";
+  }
+  if (
+    positional.some((word) => word.text === "variable") &&
+    has(WMILL_VARIABLE_WRITES) &&
+    anySpelling(args, FREEZE_VARIABLE_PATH)
+  ) {
+    return "variable";
+  }
+  return null;
+}
+
+/**
+ * 単純コマンドが、Consoleの解除scriptを実行するか、凍結の変数を書く形なら、その種類を返す。そうでなければnullを返す。
+ * セッションの種類は問わない。`words`は、変数代入と前置きを外した語である。
+ * `wmill`は、実行系(`bunx wmill`、`npx wmill`)の後ろに置いた形も見る。
+ * 実行系が`-e`などで受け取るコードに解除scriptの名前があれば、`script`を返す。
+ */
+export function findConsoleReleaseCall(
+  words: readonly Word[],
+  inputs: () => readonly string[] | null,
+): ConsoleReleaseFinding | null {
+  const program = baseName(words[0]?.text ?? "");
+  if (HTTP_CLIENTS.has(program)) return httpFinding(words.slice(1), inputs);
+  if (program === "wmill") return wmillFinding(words.slice(1));
+  if (!RUNNERS.has(program)) return null;
+  const wmillAt = words.findIndex(
+    (word, index) => index > 0 && baseName(word.text) === "wmill",
+  );
+  if (wmillAt > 0) return wmillFinding(words.slice(wmillAt + 1));
+  return codeStrings(words.slice(1)).some((code) =>
+    RELEASE_SCRIPT_NAME.test(code),
+  )
+    ? "script"
+    : null;
 }

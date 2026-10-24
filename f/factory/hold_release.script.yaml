@@ -1,5 +1,6 @@
-summary: ''
-description: ''
+summary: '[OP-2-4] 保留を解除'
+description: Factory
+  Consoleから、保留を1件解除します。解除する主体は人に固定し、操作者は実行したユーザーから決まります。解除した操作者は情報の通知に残します。解除済みの保留への呼び出しは、成功として返します。保留を置く操作は、このscriptにはありません。
 lock: '!inline f/factory/hold_release.script.lock'
 kind: script
 schema:
@@ -8,7 +9,9 @@ schema:
   properties:
     hold_id:
       type: number
-      description: ''
+      description: 解除する保留のID。Consoleの保留と凍結の画面に載っています。
       default: null
   required:
     - hold_id
+tag: console
+timeout: 30

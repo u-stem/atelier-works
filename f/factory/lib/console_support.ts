@@ -26,6 +26,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   unsandboxed_check_commands: "info",
   implement_needs_human: "info",
   dependabot_merge_held: "info",
+  hold_released: "info",
   approval_comment_failed: "action",
   intake_refreshed: "action",
   implement_launch_failed: "action",

@@ -1,5 +1,6 @@
-summary: ''
-description: ''
+summary: '[OP-2-5] 凍結を解除'
+description: Factory
+  Consoleから、スケジュールの凍結かdeployの保留を1件解除します。解除する主体は人に固定し、操作者は実行したユーザーから決まります。書いた後に変数を読み直し、解除が残っていなければ確認できなかったと返します。終わっている行への呼び出しは、成功として返します。
 lock: '!inline f/factory/freeze_release.script.lock'
 kind: script
 schema:
@@ -8,8 +9,10 @@ schema:
   properties:
     freeze_id:
       type: string
-      description: ''
+      description: 解除する凍結かdeployの保留のID。8桁の16進数で、Consoleの保留と凍結の画面に載っています。
       default: null
       originalType: string
   required:
     - freeze_id
+tag: console
+timeout: 30

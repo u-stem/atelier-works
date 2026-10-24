@@ -86,6 +86,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["review_gated_prolonged", "レビューを投稿しない状態の継続"],
   ["dependabot_merge_held", "マージの保留による待ち"],
   ["dependabot_merge_hold_unreadable", "マージの保留を読めない状態"],
+  ["hold_released", "保留の解除"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */

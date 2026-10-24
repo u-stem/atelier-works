@@ -16,6 +16,8 @@
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
 // - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
 //   一覧(`list`)は許す。ベストエフォートで、別名の呼び出しや変数で組んだパスは止めない。
+// - Consoleの解除script(`hold_release`、`freeze_release`)を呼ぶ`wmill script run`と`curl`、凍結の変数を書く`wmill variable`と`curl`
+//   (`hold-guard.ts`): 端末での人の確認を通らずに、他の主体の保留や凍結を外す。すべてのセッションで拒否する。
 // - マージと反映(`gh pr merge`、`wmill sync push`など)を保留の間止める判定は、別のフック(`merge-guard.ts`)が行う。
 //   このフックとは独立に動き、どちらかが拒否すれば止まる。
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
@@ -35,6 +37,7 @@ import {
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
 import {
+  findConsoleReleaseCall,
   findHoldOperation,
   type HoldStdin,
   type HoldUpstream,
@@ -389,6 +392,8 @@ export const REASONS = {
     "Shell code built from variables and passed through stdin cannot be checked. Pass literal text (echo 'git status' | sh), use sh -c '...', or run a script file.",
   miseGenerate:
     "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Any mise generate with a path under .git/hooks, .git/config, or .github/workflows, or with a word built from a variable, is denied too, because an option such as --output can write there. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
+  consoleRelease:
+    "Releasing a hold or a freeze through the Console scripts is not allowed in any Claude session: wmill script run (or job run) and curl to hold_release or freeze_release, and wmill variable add/push or curl that writes f/factory/freezes. They skip the confirmation that a person gives in the terminal. A person releases from the system screen of the Console, or runs mise run hold:release or mise run freeze:release in a terminal and confirms there. This rule reads the words of the command, so a call by hash or with a name built from a variable is not caught; do not try it.",
   subagentHold:
     "Subagents must not place or release holds, place a deploy freeze, or release a freeze: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
   subagentHoldOption:
@@ -605,6 +610,11 @@ function checkSimpleCommand(
   }
   const docker = dockerExposure(words);
   if (docker !== null) return deny(DOCKER_REASONS[docker]);
+  if (
+    findConsoleReleaseCall(words, () => literalShellInputs(command)) !== null
+  ) {
+    return deny(REASONS.consoleRelease);
+  }
   const hold =
     scope.input.agentId === null
       ? null

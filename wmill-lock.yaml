@@ -14,12 +14,12 @@ locks:
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
   f/factory/collect_github: 150e44bca16d65aec9a05b899337db653f12622632d3c3b56f50bae83877f81d
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
-  f/factory/console_holds: 5a7a45a7fedd2535d93c5c9f3d2ccebe335ac78234c64572d3335b2930e8f06c
+  f/factory/console_holds: d57c433b693d24ce7fa9d3fd3fa55fb05eaf36a29d4affbdbe721e7a77a41f0c
   f/factory/default_worker_watch: 0ccf5b20c2eb47e999b431197c32f1039db76c4499b7ef78dfd62c6cd4ad6716
   f/factory/dependabot__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/drawio_viewer_bump: 2f3ddde70a8b9e866ab902bd2bc0e1c17e69c6dfc05c367d36e90d456d648f8b
-  f/factory/freeze_release: 737ace4b180a7dcc31a473bc5d3b589c65302868b2e2f91df95dbf79361e4683
-  f/factory/hold_release: 021acaef6d1873dcae4ef4b47ab5afe2779b7d6dbff442d1e1fcab026d76112e
+  f/factory/freeze_release: 87b683a929bb9d481aa4dc69404083d3f37865fd3fb69dfc9f38c6583a3e4063
+  f/factory/hold_release: af28cdc3487339a48240ad73385197af914a5095abd8d51b65950123ec6eb997
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/lib/approval_support: 9c73dd50de48f717cbfd05829ac87676e3351ffcd1471757b5c018e7358db9fe
   f/factory/lib/approver: 1c82cf702f2bb7ac29d81bf9a5d439ced908228a3ee8229b415118a13619c300
@@ -47,9 +47,9 @@ locks:
   f/factory/lib/conflict_fix_prompt: 5213e3c137bac55c2d77741241d8cc4193547984baf6af59d8ef1887c7aaa23f
   f/factory/lib/conflict_fix_round: 768797a74aa4136b43ffd91fdc8bb6c46a6240778269f6ecdbcabe7ba7057ce7
   f/factory/lib/conflict_fix_verify: 4a244c4da1dacfe86bed6878d2b41e1a6586268091c6c2b1aaf6616cff48f83a
-  f/factory/lib/console_holds_support: bcf049846e0e2d6a6f7e890ea9973ffd0826a0a6d122d794e2d146489e7d9c53
+  f/factory/lib/console_holds_support: 7e7170d8a4ec874829bf881fdcb5ccf247760347843aaa8525619f153a02b44b
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
-  f/factory/lib/console_support: eebc8aaa9f015c7c85ff0fdcd237a16588fe56df84f11377d13cdbddd7142d6c
+  f/factory/lib/console_support: ae7f00d9c654559eca2914cfbb9c9070628a7f2381e1badbd8a675c272a10446
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/db: fa8c013cc6e546ceb95e86fbc0bba6ae65dcf876c249a4d55284e8d3087e14fe
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
@@ -77,7 +77,7 @@ locks:
   f/factory/lib/gh_graphql: 6df2c0f549bffcff4d562c2e5d6f9c0cf3b7be5575e6ec1727ee61151f3e15e5
   f/factory/lib/github: 0c06f96db34c504358ff8c124a892d8013e0d6b546eee27626a93ff4fea1def4
   f/factory/lib/github_errors: c1c63662dbdc331149e492cfd841f14f93f898a99bde2605b753b0db2127f8b4
-  f/factory/lib/holds: 1e1ecda5414c05727a8540261fb0ee65ac3ddaaa2f0c851590d8798c093cdc16
+  f/factory/lib/holds: dc9b83511555daeed641c13255e413d1077e9b8de25bf3a42e5ac5bfbb118d90
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
@@ -123,7 +123,7 @@ locks:
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 4c4547fa3bc52d23f27c3791696c6ce5eae7308e052c935fe58112969ea0249d
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: c5e8e17099cfa842c38ce73de13a5f500eac951585412e16188ff93f4ec31d72
+  f/factory/lib/protected_paths: 11b63be2c6b7451b6e187e093999ce43d38f76ea60cb5a9beadcd565a0a6bf74
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955

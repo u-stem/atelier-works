@@ -1615,11 +1615,15 @@ describe("the names of the console release scripts", () => {
     ).toBe(true);
   });
 
+  // 保護パスの一覧は、パスの文字列を並べるだけで、scriptを呼ばない。
+  const ONLY_LISTS_PATHS = ["f/factory/lib/protected_paths.ts"];
+
   test.each(["hold_release", "freeze_release"])(
     "no file under f/ but the files of %s names it",
     (name) => {
       const offenders = everything
         .filter((path) => !path.startsWith(`f/factory/${name}.`))
+        .filter((path) => !ONLY_LISTS_PATHS.includes(path))
         .filter((path) => mentionsReleaseScript(read(path), name));
 
       expect(offenders).toEqual([]);

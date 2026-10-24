@@ -434,6 +434,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_fix_round` | script | [LIB] CI回のpr_fixの共通部品 |
 | `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
+| `f/factory/lib/console_holds_support` | script | [LIB] Consoleの保留と凍結の画面の整形と解除の共通部品 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
 | `f/factory/lib/console_support` | script | [LIB] Consoleの通知の重要度 |
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |
@@ -544,6 +545,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
+| `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
@@ -551,6 +553,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
+| `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |
+| `f/factory/freeze_release` | script | [OP-2-5] 凍結を解除 |
 | `f/factory/poll_issues` | script | [SF-1-1] Issueを巡回して担当を確定 |
 | `f/factory/poll_prs` | script | [SF-1-2] PRを巡回してレビュー / 修正を起動 |
 | `f/factory/poll_dependabot` | script | [SF-1-3] dependabotのPRを巡回して自動マージを起動 |
