@@ -143,6 +143,78 @@ describe("self_update reconcile-only run", () => {
   });
 });
 
+describe("self_update deploy freeze", () => {
+  async function source(): Promise<string> {
+    return await Bun.file("f/factory/self_update.ts").text();
+  }
+
+  /** 見つからない照合を、通ったことにしないために例外にする。 */
+  function at(text: string, needle: string): number {
+    const index = text.indexOf(needle);
+    if (index < 0) throw new Error(`not found in self_update.ts: ${needle}`);
+    return index;
+  }
+
+  /** 見送りの判定から、見送りの戻りまでの本文。 */
+  async function heldBlock(): Promise<string> {
+    const text = await source();
+    const start = at(text, "shouldHoldDeploy(plan)");
+    return text.slice(start, at(text, 'outcome: "held"'));
+  }
+
+  test("decides to hold before the first wmill call", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(plan)")).toBeLessThan(
+      at(text, "await runWmillCli("),
+    );
+  });
+
+  test("decides to hold only once", async () => {
+    const text = await source();
+
+    expect(text.match(/shouldHoldDeploy\(plan\)/g)?.length).toBe(1);
+  });
+
+  test("returns held before the deployed sha update", async () => {
+    const text = await source();
+
+    expect(at(text, 'outcome: "held"')).toBeLessThan(
+      at(text, "await setDeployedSha("),
+    );
+  });
+
+  test("returns held with the deploy_freeze reason", async () => {
+    const text = await source();
+
+    expect(text).toContain('{ outcome: "held", reason: "deploy_freeze" }');
+  });
+
+  test("does not record a failed deployment when it holds", async () => {
+    expect(await heldBlock()).not.toContain("recordFailedDeployment");
+  });
+
+  test("does not throw when it holds", async () => {
+    expect(await heldBlock()).not.toContain("throw ");
+  });
+
+  test("does not read the reason or the holder of a freeze", async () => {
+    expect(await heldBlock()).not.toMatch(/\.(reason|holder)\b/);
+  });
+
+  test("logs the id and the expiry of the freezes", async () => {
+    expect(await heldBlock()).toContain("plan.deployFreezes");
+  });
+
+  test("holds while it reconciles an ended schedule freeze too", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(plan)")).toBeLessThan(
+      at(text, "if (reconcileOnly) {"),
+    );
+  });
+});
+
 describe("self_update", () => {
   test("builds the push arguments from the freeze plan", async () => {
     const source = await Bun.file("f/factory/self_update.ts").text();

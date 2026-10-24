@@ -45,7 +45,19 @@ describe("self_update host action wiring", () => {
   test("resolves notices once on each path", async () => {
     const source = await selfUpdateSource();
 
-    expect(source.match(/await resolveHostActionNotices\(\)/g)?.length).toBe(3);
+    expect(source.match(/await resolveHostActionNotices\(\)/g)?.length).toBe(4);
+  });
+
+  test("resolves notices before the held return", async () => {
+    const source = await selfUpdateSource();
+    const held = source.indexOf('outcome: "held"');
+    const start = source.indexOf("shouldHoldDeploy(plan)");
+
+    expect(
+      held >= 0 &&
+        start >= 0 &&
+        source.lastIndexOf("await resolveHostActionNotices()", held) > start,
+    ).toBe(true);
   });
 
   test("records the deployment before raising the notice", async () => {
