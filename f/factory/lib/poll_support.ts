@@ -362,6 +362,19 @@ async function resolveNoticesBeforeDeployment(
 }
 
 /**
+ * 有効なdeployの保留があるか。保留中は`self_update`が反映を見送るので、食い違いは異常ではない。
+ * 読めないときは、反映の停止を見逃さないよう、保留が無いものとして通知する側に倒す。
+ */
+async function deployFreezeHolds(deps: DeployedShaCheckDeps): Promise<boolean> {
+  try {
+    return await deps.isDeployHeld();
+  } catch (err) {
+    deps.log.warn("deploy freeze read failed", { error: errorText(err) });
+    return false;
+  }
+}
+
+/**
  * 版の食い違いを判定し、stateとnoticeに反映する。
  * 変数が無い、または空のときは、まだ比べる対象が無いので、stateにもnoticeにも触れない。
  * 毎回、判定の結果によらず、先にnoticeの解決を行う。解決するのは、今の`deployed_sha`への
@@ -372,6 +385,7 @@ async function resolveNoticesBeforeDeployment(
  * その場合は、本当の反映の停止を見逃さないよう、猶予を待たずに知らせる
  * (同じ本文のnoticeは重複して登録されない)。
  * stateの失敗とnoticeの解決の失敗は警告のログだけにし、判定は続ける。
+ * 通知する段になっても、有効なdeployの保留があれば通知せず待つ。
  */
 export async function runDeployedShaCheck(
   deps: DeployedShaCheckDeps,
@@ -429,6 +443,14 @@ export async function runDeployedShaCheck(
     } catch (err) {
       log.warn("deployed_sha state write failed", { error: errorText(err) });
     }
+  }
+
+  if (await deployFreezeHolds(deps)) {
+    log.info("deployed_sha_mismatch held by a deploy freeze", {
+      self_sha: selfSha,
+      deployed_sha: deployedSha,
+    });
+    return "waiting";
   }
 
   let latest: LatestDeployment | null = null;
