@@ -107,6 +107,15 @@ const TRANSPARENT_WORDS: ReadonlySet<string> = new Set([
   "noglob",
 ]);
 
+/** 後ろに`(`が続いてよい語。制御構文と、`for ((`のような算術の構文である。 */
+const PAREN_LEADING_WORDS: ReadonlySet<string> = new Set([
+  ...TRANSPARENT_WORDS,
+  "for",
+  "select",
+  "time",
+  "coproc",
+]);
+
 /** 後ろの語を実行するだけで、自分のオプションを持つ語。オプションだけを読み飛ばす(`command -v`は問い合わせなので外さない)。 */
 const TRANSPARENT_OPTIONS: ReadonlyMap<
   string,
@@ -630,6 +639,7 @@ class Parser {
         this.position += 1;
         return;
       case "(":
+        this.rejectGlobGroup();
         this.endCommand();
         this.subshellDepth += 1;
         this.position += 1;
@@ -672,6 +682,33 @@ class Parser {
     }
     this.append(char);
     this.position += 1;
+  }
+
+  /**
+   * コマンドの語を読んでいる途中の`(`は、zshでは引数のglobのまとまり(`(ho)ld.ts`、`*(.)`)になりうる。
+   * 語の字面が変わるので、構文エラーとして拒否に倒す。
+   * 配列の代入(`NAME=(`)、関数の定義(`name()`)、プロセス置換、制御語だけが前にある`(`(`if (`、`! (`、`for ((`)は、これまでどおり読む。
+   */
+  private rejectGlobGroup(): void {
+    // `<(...)`と`>(...)`のプロセス置換は、語の途中の括弧ではない。
+    const previous = this.source.charAt(this.position - 1);
+    if (previous === "<" || previous === ">") return;
+    const pending = this.inWord ? this.text : null;
+    const before = this.words.map((word) => word.text);
+    if (pending === null && before.length === 0) return;
+    if (
+      before.length === 0 &&
+      pending !== null &&
+      /^[A-Za-z_][A-Za-z0-9_]*\+?=$/.test(pending)
+    ) {
+      return;
+    }
+    if (/^\s*\)/.test(this.source.slice(this.position + 1))) return;
+    const heads = pending === null ? before : [...before, pending];
+    if (heads.every((text) => PAREN_LEADING_WORDS.has(text))) return;
+    throw new ShellSyntaxError(
+      `"(" after a word at offset ${this.position} may start a glob group`,
+    );
   }
 
   private append(value: string): void {

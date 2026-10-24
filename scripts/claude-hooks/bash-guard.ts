@@ -796,7 +796,7 @@ function writesGeneratedFiles(
   if (
     args.some(
       (word) =>
-        word.dynamic ||
+        isUnstable(word) ||
         PROTECTED_GENERATE_PATH.test(normalizeGeneratePath(word.text)),
     )
   ) {

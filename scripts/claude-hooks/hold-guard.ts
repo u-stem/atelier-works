@@ -181,8 +181,8 @@ function globMatches(
   candidate: string,
   ignoreCase = false,
 ): boolean {
-  // `[[:lower:]]`、`[[=o=]]`、`[[.o.]]`は読み解かず、当たりうるものとして扱う。
-  if (pattern.includes("[[")) return true;
+  // `[:lower:]`、`[=o=]`、`[.o.]`のPOSIX文字クラスは、括弧の中のどこにあっても読み解かず、当たりうるものとして扱う。
+  if (/\[[:=.]/.test(pattern)) return true;
   try {
     return globToRegExp(pattern, ignoreCase).test(candidate);
   } catch {
