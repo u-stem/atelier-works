@@ -48,8 +48,50 @@ describe("mise.toml push tasks", () => {
     );
   });
 
-  test("deploy pushes through the wrapper", () => {
-    expect(taskBody("deploy")).toContain("scripts/freeze.ts push");
+  test("deploy pushes and migrates through the wrapper", () => {
+    expect(taskBody("deploy")).toContain("scripts/freeze.ts apply");
+  });
+
+  test("deploy applies after it restarts the stack", () => {
+    const body = taskBody("deploy");
+
+    expect(
+      body.indexOf("docker compose -f infra/docker-compose.yml up"),
+    ).toBeLessThan(body.indexOf("scripts/freeze.ts apply"));
+  });
+
+  test("deploy records the host apply after the wrapper", () => {
+    const body = taskBody("deploy");
+    const wrapper = body.indexOf("scripts/freeze.ts apply");
+
+    expect(
+      wrapper >= 0 && wrapper < body.indexOf("scripts/record-host-applied.sh"),
+    ).toBe(true);
+  });
+
+  test("migrate runs the migration through the wrapper", () => {
+    expect(taskBody("migrate")).toContain("scripts/freeze.ts migrate");
+  });
+
+  test("up checks the freezes before it touches docker", () => {
+    const body = taskBody("up");
+    const check = body.indexOf("scripts/freeze.ts check");
+
+    expect(check >= 0 && check < body.indexOf("docker compose")).toBe(true);
+  });
+
+  test("up checks the freezes", () => {
+    expect(taskBody("up")).toContain("scripts/freeze.ts check");
+  });
+
+  test("no task runs the migration without the wrapper", () => {
+    const commands = MISE.split("\n").filter(
+      (line) => !line.trimStart().startsWith("#"),
+    );
+
+    expect(
+      commands.some((line) => line.includes("wmill datatable migrate up")),
+    ).toBe(false);
   });
 
   for (const name of [
