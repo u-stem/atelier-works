@@ -2,15 +2,24 @@
 // 状態の読み書きは`./freeze_apply.ts`、人の端末のCLIは`scripts/freeze.ts`が行う。
 //
 // 凍結は「このスケジュールを`wmill sync push`で書き換えないで」を、期限つきで伝える。
-// 止めるためだけに使い、凍結があることが何かを許可することはない。
+// 同じ変数は、反映全体(push、migration、`deployed_sha`の更新)を待たせるdeployの保留も持つ。
+// 止めるためだけに使い、凍結や保留があることが何かを許可することはない。
 // 状態はsyncから外したWindmillの変数`f/factory/freezes`(JSON)に置く。
+// deployの保留は別の配列`deploy_freezes`に置く。読み手は知らない最上位のキーを無視するので、
+// この配列を知らない版の読み手と書き手が、スケジュールの凍結を従来どおり扱える。
 
 export const FREEZE_VARIABLE_PATH = "f/factory/freezes";
 
 /** 1件の凍結の期限の上限(置いた時刻から)。 */
 export const FREEZE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** 変数に持つ行の上限。 */
+/**
+ * deployの保留を置くときの期限の上限。読み手の上限(`FREEZE_MAX_TTL_MS`)は変えない。
+ * 手で書いた行が変数全体を壊さないよう、読み手は緩く、書き手は厳しくする。
+ */
+export const DEPLOY_FREEZE_MAX_TTL_MS = 120 * 60 * 1000;
+
+/** 変数に持つ行の上限(2つの配列の合計)。置くときだけ検査する。 */
 export const FREEZE_MAX_ENTRIES = 50;
 
 /** 自己更新を担うスケジュール。凍結すると追従する本人が動かなくなるので置けない。 */
@@ -50,11 +59,13 @@ export type FreezeEntry = {
   readonly released_at: string | null;
 };
 
+/** deployの保留の行。対象は常に反映全体なので`target`を持たない。 */
 export type DeployFreezeEntry = Omit<FreezeEntry, "target">;
 
 export type FreezeState = {
   readonly version: 1;
   readonly freezes: readonly FreezeEntry[];
+  readonly deploy_freezes: readonly DeployFreezeEntry[];
 };
 
 export type Outcome<T> =
@@ -70,7 +81,7 @@ function fail<T>(reason: string): Outcome<T> {
 }
 
 export function emptyFreezeState(): FreezeState {
-  return { version: 1, freezes: [] };
+  return { version: 1, freezes: [], deploy_freezes: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -102,15 +113,12 @@ function validText(value: unknown, max: number): value is string {
   );
 }
 
-/** 行の1件を、形と値の範囲を確かめて取り出す。 */
-function parseEntry(value: unknown): Outcome<FreezeEntry> {
+/** `target`以外の欄を、形と値の範囲を確かめて取り出す。 */
+function parseDeployEntry(value: unknown): Outcome<DeployFreezeEntry> {
   if (!isRecord(value)) return fail("an entry is not an object");
-  const { id, target, reason, holder_kind, holder } = value;
+  const { id, reason, holder_kind, holder } = value;
   if (typeof id !== "string" || !ID_PATTERN.test(id)) {
     return fail("an entry has a malformed id");
-  }
-  if (typeof target !== "string" || !TARGET_PATTERN.test(target)) {
-    return fail(`freeze ${id} has a malformed target`);
   }
   if (!validText(reason, REASON_MAX)) {
     return fail(`freeze ${id} has an invalid reason`);
@@ -139,7 +147,6 @@ function parseEntry(value: unknown): Outcome<FreezeEntry> {
   }
   return ok({
     id,
-    target,
     reason,
     holder_kind,
     holder,
@@ -149,9 +156,23 @@ function parseEntry(value: unknown): Outcome<FreezeEntry> {
   });
 }
 
+/** スケジュールの凍結の行の1件を、形と値の範囲を確かめて取り出す。 */
+function parseEntry(value: unknown): Outcome<FreezeEntry> {
+  const base = parseDeployEntry(value);
+  if (!base.ok) return base;
+  const target = isRecord(value) ? value.target : undefined;
+  if (typeof target !== "string" || !TARGET_PATTERN.test(target)) {
+    return fail(`freeze ${base.value.id} has a malformed target`);
+  }
+  const { id, reason, holder_kind, holder, ...times } = base.value;
+  // 書き出したJSONの欄の順を保つ(`target`は`id`の次)。
+  return ok({ id, target, reason, holder_kind, holder, ...times });
+}
+
 /**
  * 変数の値を状態に変える。`null`は変数が無いと確かめられたときで、空の状態として扱う。
  * 構造が崩れていれば失敗にする(呼び出し側は反映しない)。知らないキーは無視する。
+ * `deploy_freezes`が無ければ空として読む。idは2つの配列をまたいで一意でなければならない。
  */
 export function parseFreezeState(text: string | null): Outcome<FreezeState> {
   if (text === null) return ok(emptyFreezeState());
@@ -167,7 +188,13 @@ export function parseFreezeState(text: string | null): Outcome<FreezeState> {
   if (!Array.isArray(parsed.freezes)) {
     return fail("the freeze variable has no freezes array");
   }
+  const rawDeploy: unknown =
+    parsed.deploy_freezes === undefined ? [] : parsed.deploy_freezes;
+  if (!Array.isArray(rawDeploy)) {
+    return fail("the freeze variable has a malformed deploy_freezes");
+  }
   const freezes: FreezeEntry[] = [];
+  const deploy: DeployFreezeEntry[] = [];
   const ids = new Set<string>();
   for (const raw of parsed.freezes) {
     const entry = parseEntry(raw);
@@ -176,11 +203,23 @@ export function parseFreezeState(text: string | null): Outcome<FreezeState> {
     ids.add(entry.value.id);
     freezes.push(entry.value);
   }
-  return ok({ version: 1, freezes });
+  for (const raw of rawDeploy) {
+    const entry = parseDeployEntry(raw);
+    if (!entry.ok) return fail(entry.reason);
+    if (ids.has(entry.value.id)) return fail("duplicate freeze id");
+    ids.add(entry.value.id);
+    deploy.push(entry.value);
+  }
+  return ok({ version: 1, freezes, deploy_freezes: deploy });
 }
 
+/**
+ * 状態を変数の値にする。deployの保留が無いときは`deploy_freezes`のキーを出さない。
+ * キーを知らない版の読み手と、従来の形の変数を、そのまま保つためである。
+ */
 export function serializeFreezeState(state: FreezeState): string {
-  return JSON.stringify(state);
+  const { deploy_freezes: deploy, ...schedule } = state;
+  return JSON.stringify(deploy.length === 0 ? schedule : state);
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +227,10 @@ export function serializeFreezeState(state: FreezeState): string {
 // ---------------------------------------------------------------------------
 
 /** 期限が来ておらず、解除されていない。期限切れは書き込みに頼らず、時刻で無効と数える。 */
-export function isActive(entry: FreezeEntry, now: Date): boolean {
+export function isActive(
+  entry: Pick<DeployFreezeEntry, "expires_at" | "released_at">,
+  now: Date,
+): boolean {
   return (
     entry.released_at === null && Date.parse(entry.expires_at) > now.getTime()
   );
@@ -199,6 +241,14 @@ export function activeFreezes(
   now: Date,
 ): readonly FreezeEntry[] {
   return state.freezes.filter((entry) => isActive(entry, now));
+}
+
+/** 有効なdeployの保留。 */
+export function activeDeployFreezes(
+  state: FreezeState,
+  now: Date,
+): readonly DeployFreezeEntry[] {
+  return state.deploy_freezes.filter((entry) => isActive(entry, now));
 }
 
 /** 解除されたか期限が切れた行。除いて反映した設定を戻すpushの対象になる。 */
@@ -302,10 +352,21 @@ export type PlaceInput = {
   readonly holder: string;
 };
 
+export type DeployPlaceInput = {
+  readonly id: string;
+  readonly minutes: number;
+  readonly reason: string;
+  readonly holder_kind: FreezeHolderKind;
+  readonly holder: string;
+};
+
 /** 終わってからこの時間が過ぎた行は、追従の機会を過ぎたものとして、置くときに捨てる。 */
 const STALE_ENDED_MS = FREEZE_MAX_TTL_MS;
 
-function endedWithin(entry: FreezeEntry, now: Date): boolean {
+function endedWithin(
+  entry: Pick<DeployFreezeEntry, "expires_at" | "released_at">,
+  now: Date,
+): boolean {
   const released =
     entry.released_at === null
       ? Number.POSITIVE_INFINITY
@@ -314,9 +375,31 @@ function endedWithin(entry: FreezeEntry, now: Date): boolean {
   return now.getTime() - ended <= STALE_ENDED_MS;
 }
 
+function idInUse(state: FreezeState, id: string): boolean {
+  return (
+    state.freezes.some((e) => e.id === id) ||
+    state.deploy_freezes.some((e) => e.id === id)
+  );
+}
+
+/** 有効な行と、終わってから間もない行だけを残す。 */
+function sweep<T extends Pick<DeployFreezeEntry, "expires_at" | "released_at">>(
+  rows: readonly T[],
+  now: Date,
+): T[] {
+  return rows.filter((e) => isActive(e, now) || endedWithin(e, now));
+}
+
+function validMinutes(minutes: number, limitMs: number): boolean {
+  return (
+    Number.isInteger(minutes) && minutes >= 1 && minutes * 60_000 <= limitMs
+  );
+}
+
 /**
  * 凍結を足した状態を返す。`known`は実在する`*.schedule.yaml`のパス(拡張子なし)。
  * 期限は呼び出し側の時刻でなく、分と`now`から作る。
+ * idの衝突と行数の上限は、deployの保留も含めて数える。
  */
 export function placeFreeze(
   state: FreezeState,
@@ -324,11 +407,7 @@ export function placeFreeze(
   known: ReadonlySet<string>,
   now: Date,
 ): Outcome<FreezeState> {
-  if (
-    !Number.isInteger(input.minutes) ||
-    input.minutes < 1 ||
-    input.minutes * 60_000 > FREEZE_MAX_TTL_MS
-  ) {
+  if (!validMinutes(input.minutes, FREEZE_MAX_TTL_MS)) {
     return fail(
       `minutes must be an integer between 1 and ${FREEZE_MAX_TTL_MS / 60_000}`,
     );
@@ -353,19 +432,67 @@ export function placeFreeze(
     released_at: null,
   });
   if (!entry.ok) return fail(entry.reason);
-  if (state.freezes.some((e) => e.id === input.id)) {
+  if (idInUse(state, input.id)) {
     return fail(FREEZE_ID_IN_USE);
   }
   if (activeFreezes(state, now).some((e) => e.target === input.target)) {
     return fail("the target already has an active freeze");
   }
-  const kept = state.freezes.filter(
-    (e) => isActive(e, now) || endedWithin(e, now),
-  );
-  if (kept.length >= FREEZE_MAX_ENTRIES) {
+  const kept = sweep(state.freezes, now);
+  const keptDeploy = sweep(state.deploy_freezes, now);
+  if (kept.length + keptDeploy.length >= FREEZE_MAX_ENTRIES) {
     return fail("too many freezes");
   }
-  return ok({ version: 1, freezes: [...kept, entry.value] });
+  return ok({
+    version: 1,
+    freezes: [...kept, entry.value],
+    deploy_freezes: keptDeploy,
+  });
+}
+
+/**
+ * deployの保留を足した状態を返す。期限は分と`now`から作り、120分を超えられない。
+ * 同じ主体(`holder_kind`と`holder`)の有効な保留は1件までで、別の主体は重ねられる。
+ * idの衝突と行数の上限は、スケジュールの凍結も含めて数える。
+ */
+export function placeDeployFreeze(
+  state: FreezeState,
+  input: DeployPlaceInput,
+  now: Date,
+): Outcome<FreezeState> {
+  if (!validMinutes(input.minutes, DEPLOY_FREEZE_MAX_TTL_MS)) {
+    return fail(
+      `minutes must be an integer between 1 and ${DEPLOY_FREEZE_MAX_TTL_MS / 60_000}`,
+    );
+  }
+  const entry = parseDeployEntry({
+    id: input.id,
+    reason: input.reason,
+    holder_kind: input.holder_kind,
+    holder: input.holder,
+    created_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + input.minutes * 60_000).toISOString(),
+    released_at: null,
+  });
+  if (!entry.ok) return fail(entry.reason);
+  if (idInUse(state, input.id)) return fail(FREEZE_ID_IN_USE);
+  if (
+    activeDeployFreezes(state, now).some(
+      (e) => e.holder_kind === input.holder_kind && e.holder === input.holder,
+    )
+  ) {
+    return fail("the holder already has an active deploy freeze");
+  }
+  const kept = sweep(state.freezes, now);
+  const keptDeploy = sweep(state.deploy_freezes, now);
+  if (kept.length + keptDeploy.length >= FREEZE_MAX_ENTRIES) {
+    return fail("too many freezes");
+  }
+  return ok({
+    version: 1,
+    freezes: kept,
+    deploy_freezes: [...keptDeploy, entry.value],
+  });
 }
 
 export type FreezeActor = {
@@ -374,7 +501,7 @@ export type FreezeActor = {
 };
 
 /**
- * 有効な凍結を解除した状態を返す。`session`は自分の`holder`の凍結だけ解除できる。
+ * 有効な凍結かdeployの保留を解除した状態を返す。`session`は自分の`holder`の行だけ解除できる。
  * 持ち主を問わない解除は`human`(端末での確認は呼び出し側が行う)に限る。
  */
 export function releaseFreeze(
@@ -383,27 +510,30 @@ export function releaseFreeze(
   actor: FreezeActor,
   now: Date,
 ): Outcome<FreezeState> {
-  const target = state.freezes.find((entry) => entry.id === id);
+  const target =
+    state.freezes.find((entry) => entry.id === id) ??
+    state.deploy_freezes.find((entry) => entry.id === id);
   if (target === undefined) return fail("no freeze has that id");
   if (!isActive(target, now)) return fail("the freeze is no longer active");
   if (actor.kind === "session" && target.holder !== actor.holder) {
     return fail("a session can release only its own freeze");
   }
+  const release = <T extends DeployFreezeEntry>(entry: T): T =>
+    entry.id === id ? { ...entry, released_at: now.toISOString() } : entry;
   return ok({
     version: 1,
-    freezes: state.freezes.map((entry) =>
-      entry.id === id ? { ...entry, released_at: now.toISOString() } : entry,
-    ),
+    freezes: state.freezes.map(release),
+    deploy_freezes: state.deploy_freezes.map(release),
   });
 }
 
-/** 追従が済んだ行を消す。 */
+/** 追従が済んだスケジュールの凍結の行を消す。deployの保留には触れない。 */
 export function removeFreezes(
   state: FreezeState,
   ids: readonly string[],
 ): FreezeState {
   return {
-    version: 1,
+    ...state,
     freezes: state.freezes.filter((entry) => !ids.includes(entry.id)),
   };
 }
@@ -422,33 +552,4 @@ export function sessionHolderFromBranch(branch: string): string {
   const cleaned = branch.trim().replace(/[^A-Za-z0-9._/-]/g, "-");
   const name = cleaned.length === 0 ? "detached" : cleaned;
   return `session:${name}`.slice(0, HOLDER_MAX);
-}
-
-// ---------------------------------------------------------------------------
-// deployの保留
-// ---------------------------------------------------------------------------
-
-export const DEPLOY_FREEZE_MAX_TTL_MS = 0;
-
-export type DeployPlaceInput = {
-  readonly id: string;
-  readonly minutes: number;
-  readonly reason: string;
-  readonly holder_kind: FreezeHolderKind;
-  readonly holder: string;
-};
-
-export function activeDeployFreezes(
-  _state: FreezeState,
-  _now: Date,
-): readonly DeployFreezeEntry[] {
-  return [];
-}
-
-export function placeDeployFreeze(
-  _state: FreezeState,
-  _input: DeployPlaceInput,
-  _now: Date,
-): Outcome<FreezeState> {
-  return fail("not implemented");
 }

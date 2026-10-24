@@ -41,7 +41,7 @@ function entry(overrides: Partial<FreezeEntry> = {}): FreezeEntry {
 }
 
 function text(...freezes: FreezeEntry[]): string {
-  const state: FreezeState = { version: 1, freezes };
+  const state: FreezeState = { version: 1, freezes, deploy_freezes: [] };
   return serializeFreezeState(state);
 }
 
@@ -183,7 +183,7 @@ describe("mutateFreezeState", () => {
 
     await mutateFreezeState(ports, (state) => ({
       ok: true,
-      value: { version: 1, freezes: state.freezes.slice(0, 0) },
+      value: { ...state, freezes: state.freezes.slice(0, 0) },
     }));
 
     expect(writes).toEqual([text()]);
