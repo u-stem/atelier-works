@@ -101,7 +101,8 @@
 #      bootstrapを実行し直しても空に戻してはならないため。
 #  13. `bun ./scripts/freeze.ts push`(`wmill sync push --yes --keep-deleted`に、
 #      凍結中のスケジュールの除外を足す。凍結の変数が無い初回は、凍結なしとして扱う)
-#  14. `wmill datatable migrate up`
+#  14. `bun ./scripts/freeze.ts migrate`(`wmill datatable migrate up`を、deployの保留が
+#      有効か、保留を読めないときは実行しない形で呼ぶ)
 #  15. `wmill resource-type generate-namespace`(`rt.d.ts`を書く)
 #  16. 次の手順を表示する。
 set -euo pipefail
@@ -854,10 +855,12 @@ log "sync push complete"
 # 非常口(例: 手順3の後のインスタンスのデータベースの状態を、`migrate up`が
 # 触る前に手で確かめたいとき)。意図してこのスクリプトの外には書いていない。
 # 必要な理由を分かっている運用者向けで、普段使うフラグではない。
+# migrationは、deployの保留を確かめるラッパーを通す。deployの保留が有効なとき、
+# 保留を読めないときは、ラッパーが実行せずに失敗する。
 if [ -n "${FACTORY_BOOTSTRAP_SKIP_MIGRATE:-}" ]; then
-  log "FACTORY_BOOTSTRAP_SKIP_MIGRATE is set; skipping 'wmill datatable migrate up'"
+  log "FACTORY_BOOTSTRAP_SKIP_MIGRATE is set; skipping the datatable migration"
 else
-  run_wmill datatable migrate up >&2
+  run_in_repo bun ./scripts/freeze.ts migrate >&2
   log "datatable migrations applied"
 fi
 

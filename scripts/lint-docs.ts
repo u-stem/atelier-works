@@ -19,7 +19,7 @@ import { runDocsGen } from "./docs-gen.ts";
 
 /** 自作のスキル。これ以外の`.claude/skills/`は`wmill`の管理スキルか取り込んだもの。 */
 const OWN_SKILL_PATTERN =
-  /^\.claude\/skills\/(factory-[a-z-]+|windmill-script|drawio-diagram|review-loop)\//;
+  /^\.claude\/skills\/(factory-[a-z-]+|windmill-script|drawio-diagram|review-loop|hold)\//;
 
 /** 自作のsubagentの定義。 */
 const OWN_AGENT_PATTERN = /^\.claude\/agents\/[^/]+\.md$/;

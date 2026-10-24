@@ -1,6 +1,7 @@
 // merge-guardが、保留の表と凍結の変数を読む部品。
-// 読むのは、マージの保留(`factory.holds`の有効な行)と、deployの保留・スケジュールの凍結(変数`f/factory/freezes`)だけで、
+// 読むのは、有効なマージの保留と、deployの保留・スケジュールの凍結(変数`f/factory/freezes`)だけで、
 // 書き込む関数は読み込まない。
+// 依存はすべて保護パスに置く。保護の外のモジュール(ログの部品など)には依存せず、必要な最小の処理は、ここに持つ。
 //
 // 読む経路は、リポジトリの根の`mise exec -C <根> --`で包んだ子プロセスである。
 // composeが`mise`の環境変数(`DB_PASSWORD`など)を要し、`wmill`も`mise`のツールだからである。
@@ -25,9 +26,7 @@ import {
   type HoldReadOutcome,
   type HoldRow,
   listActiveHolds,
-  sanitizeHoldText,
 } from "../../f/factory/lib/holds.ts";
-import { maskSecrets } from "../../f/factory/lib/log.ts";
 import { wmillCliPorts } from "../freeze.ts";
 import { HOLD_DATABASE } from "../hold.ts";
 import {
@@ -61,6 +60,30 @@ const AUTO_INSTALL_SETTINGS: readonly string[] = [
   "MISE_NOT_FOUND_AUTO_INSTALL",
   "MISE_TASK_RUN_AUTO_INSTALL",
 ];
+
+/**
+ * 形式だけで見分けられる秘密値(GitHubとAnthropicのトークン、DiscordのWebhook URL)。
+ * 子の標準エラーは拒否の文言に載りうるので、載せる前に伏せる。
+ */
+const TOKEN_PATTERNS: readonly RegExp[] = [
+  /github_pat_[A-Za-z0-9_]{20,}/g,
+  /gh[oprsu]_[A-Za-z0-9]{20,}/g,
+  /sk-ant-[A-Za-z0-9_-]{10,}/g,
+  /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
+];
+
+/** 名前に`PASSWORD`、`TOKEN`、`SECRET`、`KEY`を含む変数の代入。値を伏せる。 */
+const SECRET_ASSIGNMENT =
+  /\b([A-Za-z0-9_]*(?:PASSWORD|TOKEN|SECRET|KEY)[A-Za-z0-9_]*)=\S+/gi;
+
+/** 制御文字、書式文字、行と段落の区切り。 */
+const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+function maskSecrets(text: string): string {
+  let masked = text.replace(SECRET_ASSIGNMENT, "$1=***");
+  for (const pattern of TOKEN_PATTERNS) masked = masked.replace(pattern, "***");
+  return masked;
+}
 
 const MISE_MISSING =
   "mise was not found, so the holds cannot be read; install mise or start the session from a shell that has it";
@@ -222,7 +245,7 @@ function misePrefix(options: ReadOptions): readonly string[] {
 
 function describeError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  return sanitizeHoldText(text).slice(0, 200);
+  return text.replace(UNSAFE_CHARS, " ").slice(0, 200);
 }
 
 /**

@@ -14,10 +14,11 @@
 // `human`の置く・解除は、端末(TTY)で`yes`を入力して確かめる。`session`は自分の`holder`の保留だけ解除できる。
 // この区別は誤操作を防ぐためのもので、権限の境界ではない。迂回のための環境変数は設けない。
 //
-// 置けるのは、読み手のある範囲だけである。今は`merge`(Factoryのdependabotの自動マージ)だけで、
+// 置けるのは、読み手のある範囲だけである。今は`merge`(Factoryのdependabotの自動マージと、ローカルのセッションのフック)だけで、
 // `claim`は読み手がなく何も止めないので、置く操作を拒否する。`list`と`release`は両方の範囲を扱う。
-// `merge`の保留が止めるのは、Factoryのdependabotの自動マージだけである。
-// `gh pr merge`は止まらない。
+// `merge`の保留が止めるのは、Factoryのdependabotの自動マージと、ローカルのClaudeのセッションの
+// `gh pr merge`など(`scripts/claude-hooks/merge-guard.ts`)である。
+// 人の端末、GitHubのWeb UI、クラウドのセッションのGitHubのMCPによるマージは止まらない。
 
 import { resolve } from "node:path";
 import {
@@ -65,7 +66,7 @@ export const WIRED_SCOPES: readonly HoldScope[] = ["merge"];
 
 /** 保留が止める経路の説明。`list`と`place`が表示する。 */
 const COVERAGE_NOTE =
-  "note: a merge hold stops the Factory dependabot from assessing the pull requests of the repository, even in a dry run; its last check before the merge matters only while dependabot_merge_enabled is true; gh pr merge is not stopped";
+  "note: a merge hold stops the Factory dependabot from assessing the pull requests of the repository, even in a dry run; its last check before the merge matters only while dependabot_merge_enabled is true; a local Claude session is stopped before gh pr merge, but a person's terminal, the GitHub web UI, and a cloud session that merges through the GitHub MCP are not";
 
 const HOLDER_MAX = 100;
 
