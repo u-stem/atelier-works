@@ -2605,11 +2605,14 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 - この配列を知らない版が、`deploy_freezes`を落とすことがある。
   知らない版の`self_update`と`freeze.ts`は、スケジュールの凍結を書き戻すときに、この配列を書かない。
   知らない版の`self_update`は、保留を効かせない。
-  運用手順に、保留に頼る操作の直前に`freeze:list`で確かめる手順を置いているため、受け入れる。
+  作業の途中で落ちた保留は、開始時の確認では検知できない。
+  運用手順に、作業の直前と終わりに`freeze:list`で確かめる手順を置いているため、受け入れる。
 - `session`は、deployの保留を確認なしで置ける。
   上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
   subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`と`freeze:release`を拒否する。
   ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
+  `bun run - list < scripts/freeze.ts`のように標準入力へ流し込む形は、作業ツリーの`scripts/`で実行すると動くことを実測した。
+  実行系の標準入力に流し込むファイルが保留か凍結のコードなら、拒否する。
 - 人が手で打つ`wmill datatable migrate up`と`wmill sync push`は、保留で止まらない。
   `scripts/bootstrap.sh`の全手順のモードのmigration、ホストの実行役(`scripts/host_apply/`)も止まらない。
   これらは人が意図して実行する経路であり、第5段で覆いを広げるまで受け入れる。

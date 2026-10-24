@@ -739,12 +739,12 @@ describe("runDeployedShaCheck with a deploy freeze", () => {
   });
 
   test("does not notify in the grace period that follows the end of the freeze", async () => {
-    const outcomes = await runChecks([55, 60, 65, 89], 60);
-    expect(outcomes.slice(2)).toEqual(["waiting", "waiting"]);
+    const outcomes = await runChecks([55, 59, 60, 65, 88], 60);
+    expect(outcomes.slice(3)).toEqual(["waiting", "waiting"]);
   });
 
   test("notifies once the grace period counted from the end of the freeze has passed", async () => {
-    const outcomes = await runChecks([55, 60, 65, 91], 60);
+    const outcomes = await runChecks([55, 59, 60, 65, 91], 60);
     expect(outcomes.at(-1)).toBe("notified");
   });
 
