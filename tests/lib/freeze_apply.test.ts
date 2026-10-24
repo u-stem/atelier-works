@@ -367,6 +367,7 @@ describe("chooseFreezeAction", () => {
       excludesArg: "--excludes=a",
       excludedTargets: [],
       readyIds: ids,
+      deployFreezes: [],
       warnings: [],
     },
   });
