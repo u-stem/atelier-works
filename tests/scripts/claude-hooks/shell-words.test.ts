@@ -579,22 +579,22 @@ describe("ANSI-C quoted words", () => {
 
 describe("stripWrappers with global options of mise", () => {
   test.each([
-    ["-q"],
-    ["-v"],
-    ["-vv"],
-    ["-y"],
-    ["-qy"],
-    ["--quiet"],
-    ["--no-config"],
-    ["--cd=/repo"],
-    ["-C", "/repo"],
-    ["--cd", "/repo"],
-    ["-E", "ci"],
-    ["--env", "ci"],
-    ["-P", "dev"],
-    ["-qC", "/repo"],
-    ["-q", "-C", "/repo", "-E", "ci"],
-  ])("reads the command that follows mise %p exec --", (...options) => {
+    [["-q"]],
+    [["-v"]],
+    [["-vv"]],
+    [["-y"]],
+    [["-qy"]],
+    [["--quiet"]],
+    [["--no-config"]],
+    [["--cd=/repo"]],
+    [["-C", "/repo"]],
+    [["--cd", "/repo"]],
+    [["-E", "ci"]],
+    [["--env", "ci"]],
+    [["-P", "dev"]],
+    [["-qC", "/repo"]],
+    [["-q", "-C", "/repo", "-E", "ci"]],
+  ])("reads the command that follows mise %p exec --", (options: string[]) => {
     const stripped = stripWrappers(
       words("mise", ...options, "exec", "--", "git", "push"),
     );

@@ -3773,15 +3773,23 @@ describe("holdNoticeRecord", () => {
 
   test("files an unreadable notice as an action kind", () => {
     expect(
-      holdNoticeRecord({ kind: "unreadable", failure: "corrupt", prCount: 1 })
-        .kind,
+      holdNoticeRecord({
+        kind: "unreadable",
+        failure: "corrupt",
+        prCount: 1,
+        repository: "acme/widgets",
+      }).kind,
     ).toBe("dependabot_merge_hold_unreadable");
   });
 
   test("names the failure in the unreadable notice", () => {
     expect(
-      holdNoticeRecord({ kind: "unreadable", failure: "corrupt", prCount: 1 })
-        .message,
+      holdNoticeRecord({
+        kind: "unreadable",
+        failure: "corrupt",
+        prCount: 1,
+        repository: "acme/widgets",
+      }).message,
     ).toContain("corrupt");
   });
 
@@ -3790,11 +3798,13 @@ describe("holdNoticeRecord", () => {
       kind: "unreadable",
       failure: "read_failed",
       prCount: 1,
+      repository: null,
     });
     const three = holdNoticeRecord({
       kind: "unreadable",
       failure: "read_failed",
       prCount: 3,
+      repository: null,
     });
 
     expect(one.message).toBe(three.message);
@@ -3807,7 +3817,12 @@ describe("holdNoticeRecord", () => {
     ["error", "ログ"],
   ] as const)("points the %s notice at its first step", (failure, hint) => {
     expect(
-      holdNoticeRecord({ kind: "unreadable", failure, prCount: 1 }).message,
+      holdNoticeRecord({
+        kind: "unreadable",
+        failure,
+        prCount: 1,
+        repository: null,
+      }).message,
     ).toContain(hint);
   });
 });
@@ -4026,7 +4041,11 @@ describe("pollDependabot resolves the notice of one repository only when that re
       round(log, { holds: { ok: false, kind: "missing_table", reason: "x" } }),
     );
 
-    expect(log.holdNotices.map((notice) => notice.repository)).toEqual([null]);
+    expect(
+      log.holdNotices.flatMap((notice) =>
+        notice.kind === "unreadable" ? [notice.repository] : [],
+      ),
+    ).toEqual([null]);
   });
 
   test("resolves the notice of a repository that was read, though another repository is corrupt", async () => {
