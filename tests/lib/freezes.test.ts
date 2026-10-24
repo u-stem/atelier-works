@@ -3,6 +3,7 @@ import {
   activeDeployFreezes,
   activeFreezes,
   buildExcludes,
+  countActiveFreezes,
   DEPLOY_FREEZE_MAX_TTL_MS,
   type DeployFreezeEntry,
   emptyFreezeState,
@@ -614,6 +615,33 @@ describe("activeDeployFreezes", () => {
 
   test("does not count schedule freezes", () => {
     expect(activeDeployFreezes(state(entry()), NOW)).toEqual([]);
+  });
+});
+
+describe("countActiveFreezes", () => {
+  const expiredDeploy = deployEntry({
+    id: "bbbb2222",
+    expires_at: new Date(NOW.getTime() - 1).toISOString(),
+  });
+
+  test("counts the active schedule freezes", () => {
+    const current = stateWith([entry(), entry({ id: "cccc3333" })], []);
+
+    expect(countActiveFreezes(current, NOW).schedule).toBe(2);
+  });
+
+  test("counts the active deploy freezes", () => {
+    const current = stateWith([], [deployEntry(), expiredDeploy]);
+
+    expect(countActiveFreezes(current, NOW).deploy).toBe(1);
+  });
+
+  test("does not count ended schedule freezes", () => {
+    const ended = entry({
+      expires_at: new Date(NOW.getTime() - 1).toISOString(),
+    });
+
+    expect(countActiveFreezes(stateWith([ended], []), NOW).schedule).toBe(0);
   });
 });
 

@@ -20,7 +20,11 @@
 // `gh pr merge`は止まらない。
 
 import { resolve } from "node:path";
-import { activeFreezes, parseFreezeState } from "../f/factory/lib/freezes.ts";
+import {
+  type ActiveFreezeCounts,
+  countActiveFreezes,
+  parseFreezeState,
+} from "../f/factory/lib/freezes.ts";
 import {
   HOLD_SCOPES,
   type HoldActor,
@@ -166,7 +170,7 @@ export type CliDeps = {
   readonly confirm: (message: string) => Promise<boolean>;
   readonly print: (line: string) => void;
   /** 有効なスケジュールの凍結の件数。読めなければ例外を投げる。 */
-  readonly activeFreezeCount: () => Promise<number>;
+  readonly activeFreezeCounts: () => Promise<ActiveFreezeCounts>;
 };
 
 /** CLIが使う読み取り専用の接続と書き込める接続を作る。接続先は`HOLD_DATABASE`である。 */
@@ -262,9 +266,9 @@ async function runList(deps: CliDeps): Promise<number> {
   }
   for (const hold of invalid.value) deps.print(describeHold(hold, "invalid"));
   try {
-    const count = await deps.activeFreezeCount();
+    const counts = await deps.activeFreezeCounts();
     deps.print(
-      `active schedule freezes: ${String(count)} (see mise run freeze:list)`,
+      `active schedule freezes: ${String(counts.schedule)} (see mise run freeze:list)`,
     );
   } catch (err) {
     deps.print(
@@ -392,10 +396,10 @@ async function main(): Promise<number> {
     env: process.env,
     confirm: confirmOnTerminal,
     print: (line) => console.log(line),
-    activeFreezeCount: async () => {
+    activeFreezeCounts: async () => {
       const state = parseFreezeState(await freezePorts.readVariable());
       if (!state.ok) throw new Error(state.reason);
-      return activeFreezes(state.value, freezePorts.now()).length;
+      return countActiveFreezes(state.value, freezePorts.now());
     },
   };
   return await runCommand(command.value, deps);

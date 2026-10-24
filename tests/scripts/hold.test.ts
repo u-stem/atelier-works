@@ -330,7 +330,7 @@ type Options = {
   readonly env?: Record<string, string | undefined>;
   readonly branch?: string;
   readonly confirm?: boolean;
-  readonly freezes?: number | Error;
+  readonly freezes?: { schedule: number; deploy: number } | Error;
 };
 
 async function run(
@@ -347,7 +347,7 @@ async function run(
   const write = fakeSql(options.db ?? {});
   const lines: string[] = [];
   const confirmations: string[] = [];
-  const freezes = options.freezes ?? 0;
+  const freezes = options.freezes ?? { schedule: 0, deploy: 0 };
   const deps: CliDeps = {
     read: read.sql,
     write: write.sql,
@@ -360,7 +360,7 @@ async function run(
     print: (line) => {
       lines.push(line);
     },
-    activeFreezeCount: async () => {
+    activeFreezeCounts: async () => {
       if (freezes instanceof Error) throw freezes;
       return freezes;
     },
@@ -483,11 +483,22 @@ describe("list", () => {
     expect(lines.join("\n")).toContain("a [31mred");
   });
 
-  test("prints the number of active schedule freezes", async () => {
-    const { lines } = await run({ kind: "list" }, { freezes: 2 });
+  test("prints the number of active schedule freezes and deploy freezes", async () => {
+    const { lines } = await run(
+      { kind: "list" },
+      { freezes: { schedule: 2, deploy: 1 } },
+    );
 
     expect(lines).toContain(
-      "active schedule freezes: 2 (see mise run freeze:list)",
+      "active freezes: schedule 2, deploy 1 (see mise run freeze:list)",
+    );
+  });
+
+  test("prints zero for both kinds of freeze", async () => {
+    const { lines } = await run({ kind: "list" });
+
+    expect(lines).toContain(
+      "active freezes: schedule 0, deploy 0 (see mise run freeze:list)",
     );
   });
 
@@ -611,7 +622,7 @@ describe("list", () => {
         print: (line) => {
           lines.push(line);
         },
-        activeFreezeCount: async () => 0,
+        activeFreezeCounts: async () => ({ schedule: 0, deploy: 0 }),
       },
     );
 
@@ -657,7 +668,7 @@ describe("list", () => {
         print: (line) => {
           lines.push(line);
         },
-        activeFreezeCount: async () => 0,
+        activeFreezeCounts: async () => ({ schedule: 0, deploy: 0 }),
       },
     );
 

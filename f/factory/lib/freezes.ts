@@ -251,6 +251,18 @@ export function activeDeployFreezes(
   return state.deploy_freezes.filter((entry) => isActive(entry, now));
 }
 
+export type ActiveFreezeCounts = {
+  readonly schedule: number;
+  readonly deploy: number;
+};
+
+export function countActiveFreezes(
+  _state: FreezeState,
+  _now: Date,
+): ActiveFreezeCounts {
+  return { schedule: 0, deploy: 0 };
+}
+
 /** 解除されたか期限が切れた行。除いて反映した設定を戻すpushの対象になる。 */
 export function endedFreezes(
   state: FreezeState,
