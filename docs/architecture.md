@@ -13,7 +13,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | GitHub | Issue、PR、コメントのやり取り先。Factoryはここに成果物だけを書く |
 | Windmillのserverとworker | フローとスケジュールの実行基盤 |
 | Data Tables | 作業の状態、要件定義ドラフト、承認依頼、実行ログ、失敗記録を持つPostgresのテーブル群 |
-| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
+| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、保留と凍結の確認と解除、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
 | Discord | 拾い上げ、承認待ち、承認、要対応、失敗などのイベントをWebhookで通知する |
 
 Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く。
@@ -309,7 +309,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の7つのscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の10本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -318,6 +318,9 @@ Consoleの一覧と集計は次のviewを読む。
 - `notice_resolve`
 - `manual_intake_submit`
 - `console_fetch_watch`
+- `console_holds`
+- `hold_release`
+- `freeze_release`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 

@@ -169,6 +169,48 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 `released_by`に名乗りを書くので、置くときと同じ規則で、制御文字と、種類と`holder`の対応を確かめる。
 通らない主体は、文を送らずに失敗を返す。
 
+### Consoleからの解除
+
+人は、Consoleのシステムの画面の「保留と凍結」から、確認のダイアログを通して解除できる([Consoleの仕様](console.md)の「保留と凍結」)。
+`f/factory/hold_release`が保留を、`f/factory/freeze_release`が凍結とdeployの保留([凍結とdeployの保留の内部仕様](freezes.md))を解除する。
+どちらもtag`console`のscriptで、Console用のworkerで動く。
+読み取りは`f/factory/console_holds`が行い、保留の表と凍結の変数を別々に読む。
+置く操作を持つscriptは無い。
+
+`hold_release`は、次の順で解除する。
+
+1. 保留のidが正の整数であることを確かめる。
+2. 操作者を、ジョブの実行文脈(`WM_USERNAME`、無ければ`WM_EMAIL`)から導く。導けなければ、何も変えずに拒否する。
+3. 有効な保留の一覧から、解除する行を探す。読めなくても進む。
+4. `releaseHold`を、主体`{kind: "human", holder: "human"}`で呼ぶ。`session`と`factory`が置いた行も解除できる。
+5. 有効だった行を解除したときだけ、情報の通知`hold_released`を残す。
+
+解除する主体は引数に取らず、`human`に固定する。
+`human`の`holder`は`human`に限るので、`released_by`に操作者の名前は書けない。
+操作者は、通知とジョブのログに残す。ログには、`reason`と`holder`を載せない。
+
+| 結果 | 戻り |
+| --- | --- |
+| 解除した | `status`が`released`。`was_active`は、解除の前に有効だったか。有効だったときだけ`audit`(`recorded`か`failed`)が付く |
+| 期限切れの行を片付けた | `released`で、`was_active`が偽。通知は残さず、`audit`も付かない |
+| すでに解除されていた | `already_released`。通知は残さない。複数のタブからの再送も、副作用は1回である |
+| そのほかの失敗 | 接頭辞`hold_release:`の例外 |
+
+有効な一覧を読めなかったときは、有効だったものとして扱い、通知を残す。
+通知の書き込みが失敗しても、解除は取り消さない。ジョブのログに警告を残し、`audit`に`failed`を返す。
+画面は、通知を残せなかったことを警告で知らせる。
+通知の本文は、解除した対象(種類、対象、id)、操作者、時刻(JST、秒まで)である。
+未解決の通知は`(kind, message)`で重複が弾かれるので、時刻を秒まで含める。
+通知は[通知の仕様](notifications.md)にある。
+
+`released_at IS NULL`の条件つきで更新するので、再送は安全である。
+`already_released`と判定する固定の理由は、`holds.ts`の出力と一致することをテストが固定する。
+
+ローカルのClaudeのセッションは、この2つのscriptを`wmill`や`curl`で呼べない。
+主セッションを含むすべてのセッションで、フックが拒否する([セキュリティ](../security.md)の「保留」)。
+ローカルの主セッションはCLIでは`session`として扱われ、人の解除には端末での確認が要る。
+Consoleのscriptは、その確認を通らずに他の主体の保留を外せるためである。
+
 ## 読み取り
 
 | 関数 | 返すもの |
@@ -577,6 +619,21 @@ subagentが保留を置くと、確認する相手がいないまま、自動マ
 
 BashとDockerを持つ主体は、psqlで保留を直接書ける。
 
+### 全セッションの拒否
+
+Consoleの解除scriptを1コマンドで呼ぶ形は、subagentだけでなく、主セッションを含むすべてのセッションで拒否する。
+subagentの拒否と違い、`bash-guard`は、セッションの種類で分けずに`findConsoleReleaseCall`を適用する。
+対象は次の形である。
+
+- `wmill`の`script run`、`script preview`、`job run`、`job rerun`、`job restart`で、語に解除scriptの名前を含むもの。`mise exec`、`bunx`、`npx`、`sh -c`の中も見る
+- `curl`、`wget`、`http`、`xh`が、解除scriptの名前を含むURLを呼ぶ形
+- 凍結の変数`f/factory/freezes`を名指しする、`wmill variable add`と`wmill variable push`
+- 凍結の変数を名指しして、変数を書くURL(`/variables/update`、`/variables/create`、`/variables/delete`)を呼ぶ`curl`
+- 実行系の`-e`の文字列に、解除scriptの名前を含むもの
+
+`wmill script get`、`wmill generate-metadata`、`wmill variable get`、変数の読み取りのURL、解除scriptのテストの実行は、拒否しない。
+ベストエフォートで、ハッシュでの呼び出し(`run_wait_result/h/<hash>`)、パーセント符号化したパス、変数で組み立てた名前は止められない。
+
 ## 参照の禁止
 
 `f/`とmigrationの中で、`holds.ts`の外に、表の名前(`factory.holds`)を直接書かない。
@@ -593,11 +650,29 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、検出を
 `scripts/hold.ts`と`scripts/hold_psql.ts`は、表の名前を書かない。
 `hold_wiring.test.ts`が、この2つに表の名前が無いことを固定する。
 
-実行時に`holds.ts`を読み込んでよい`f/`のファイルは、保留を読む2つ(`poll_dependabot.ts`と`dependabot_finish.ts`)だけである。
-読み込む名前は`listActiveHolds`だけで、型は読み込みに数えない。
-保留を読む処理を足すときは、テストの`HOLD_READERS`に足す。
+実行時に`holds.ts`を読み込んでよい`f/`のファイルは、次の3つの分類に挙げたものだけである。
+どの分類も、読み込む名前が一覧と一致することを、配線テストが固定する。型は読み込みに数えない。
+
+| 分類 | テストの定数 | ファイル | 読み込む名前 | 意味 |
+| --- | --- | --- | --- | --- |
+| 止める読み手 | `HOLD_READERS` | `poll_dependabot.ts`、`dependabot_finish.ts` | `listActiveHolds` | 読んで止まる |
+| 表示の読み手 | `HOLD_VIEWERS` | `console_holds.ts` | `listActiveHolds` | 人に見せるだけで、何も止めない |
+| 解除の書き手 | `HOLD_RELEASERS` | `hold_release.ts` | `listActiveHolds`、`releaseHold` | 人の操作で解除する |
+
+読み込む名前を足すときは、テストの該当する定数に足す。
+`releaseHold`を読み込んでよいのは、解除の書き手だけである。
+`placeHold`を読み込む`f/`のファイルは無く、解除の書き手が読み込まないことも名前の一致で固定する。
+解除の書き手のファイルは、すべて保護パスに入れる(下の「追加の守り」)。
 ローカルのフックの読みの部品(`scripts/claude-hooks/merge-read.ts`)は`f/`の外にあるので、この一覧に入れない。
 配線テストの別の検査が、`listActiveHolds`だけを読み込むこと、書く関数と書き込みの接続を使わないこと、データベース名を定数から取ることを固定する。
+
+解除scriptの名前(`hold_release`と`freeze_release`)は、各scriptの`.ts`、`.script.yaml`、`.lock`のほかの、`f/`のどのファイルにも書かない。
+`.lock`とflowの定義を含めて走査する。
+書くと、自動のコードから解除scriptを起動できるためである。
+保護パスの一覧(`protected_paths.ts`)だけは、パスの文字列を並べるだけなので、走査から外す。
+通知の種類`hold_released`は、語の前後が英数字と`_`でない場合だけを名前として数えるので、当たらない。
+`console/src/`では、許可リストと型付きの書き込みと戻りの型ガードのファイルだけに、この名前が出る。
+名前を組み立てる形は検出できない。
 
 書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。
 これは呼び出し側に接続を選ばせるためで、参照は止めない。
@@ -690,6 +765,9 @@ datatableの接続の既定の`search_path`には`factory`が入っていない(
   書き換えられると、CLIの実行に任意の処理を足せるためである。
   拒否のフックの`scripts/claude-hooks/`とそのテスト、miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)も入れる。
   置いたファイルがタスクとして実行されるので、拒否の外から保留を操作できるためである。
+- Consoleの解除scriptとその部品(`hold_release.ts`、`freeze_release.ts`、`lib/console_holds_support.ts`)と、そのテストも入れる。
+  書き換えられると、他の主体の保留を無条件に外せるためである。
+  読み取りだけの`console_holds.ts`は入れない。置く操作を持たず、読み込める名前を配線テストが固定する。
 - 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。
   ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。
 - `holds.ts`は何もimportしない。
@@ -718,12 +796,14 @@ migrationが失敗すると、`self_update`は次の回で再試行する。
 | `tests/scripts/hold_psql.test.ts` | psqlの引数、値の束縛、読み書きのモード、接続先、時間切れ、失敗の文 |
 | `tests/scripts/hold.test.ts` | 引数、主体、`claim`の拒否、一覧と置く操作と解除、表示の無害化、CLIの接続先 |
 | `tests/scripts/dependabot_finish.test.ts`、`tests/scripts/poll_dependabot.test.ts` | 保留があるとき、読めないときに、マージせず作業項目も作らないこと。読む位置。読めない通知の解決 |
-| `tests/scripts/claude-hooks/bash-guard.test.ts` | subagentの拒否と許可の形、主セッションを止めないこと |
+| `tests/scripts/claude-hooks/bash-guard.test.ts` | subagentの拒否と許可の形、主セッションを止めないこと、主セッションを含む全セッションでConsoleの解除scriptの呼び出しを拒否し、検査やビルドなどの近い作業を許すこと |
 | `tests/scripts/claude-hooks/merge-targets.test.ts` | マージと反映の操作の見つけ方、リポジトリの候補の集め方と食い違い、入れ子のシェル、見つけない形 |
 | `tests/scripts/claude-hooks/merge-read.test.ts` | 読みの子プロセスの起動の形、失敗の種類、時間切れとプロセスグループの終了、`mise`の探索、子の環境、凍結の変数の読み方 |
 | `tests/scripts/claude-hooks/merge-guard.test.ts` | 判定、リポジトリの照合、読めないときの拒否、時間切れ、主セッションとsubagentの文言、敵対的な文字列を載せないこと |
 | `tests/scripts/claude-hooks/merge-guard-process.test.ts` | 実プロセスのフックが、偽の`mise`で保留を読んで拒否と許可を返すこと。孫が出力を握っても期限内に拒否すること。nodeで動くこと |
-| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入、読む処理の名前、マージを要求するファイル、CLIが表の名前を持たないこと、フックの読みの部品が読み取りだけであること、miseのタスク、`test-db.sh`が実DBの検査を呼ぶ位置 |
+| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入、読む処理と表示の読み手と解除の書き手の名前、解除の書き手が保護パスであること、解除scriptの名前が`f/`のほかに無いこと、マージを要求するファイル、CLIが表の名前を持たないこと、フックの読みの部品が読み取りだけであること、miseのタスク、`test-db.sh`が実DBの検査を呼ぶ位置 |
+| `tests/scripts/console_holds.test.ts`、`hold_release.test.ts`、`freeze_release.test.ts` | Consoleの読み取りの失敗の分離と無害化、解除の主体と操作者、固定の理由と`holds.ts`の出力の一致、通知と通知の失敗、凍結の書いた後の読み直し |
+| `tests/scripts/console_holds_contract.test.ts` | Consoleの型ガードがbackendの戻りを通ること、ラベルがbackendの値を漏らさないこと |
 | `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる。psqlの経路で値の束縛と読み取り専用の接続も確かめる |
 
 実DBの検査のうち、制約と文の検査は、値を定数として埋め込む検査用のクライアントで流す。
@@ -732,6 +812,21 @@ CLIの経路は、`hold_psql.ts`に使い捨てのデータベース(`factory_te
 どちらも、`wmill.datatable()`の束縛の経路は通らない。
 
 ## 実機での確認
+
+Consoleからの解除の確認は、人が行う。
+ログイン済みのブラウザの自動操作は、Bashのフックの外で解除のボタンを押せるためである。
+実装した主体は、解除scriptの確認をテストの偽で代える。
+ローカルのスタックの`wmill script run`はフックが拒否するので、人の端末で行う。
+
+人の確認の手順は、次のとおりである。
+
+1. `mise run hold:place`で、使い捨ての対象と短い期限の保留を置く。
+2. Consoleのシステムの画面に、置いた保留が出ることを確かめる。
+3. 「解除」を押し、確認のダイアログの内容を読んで確かめる。
+4. 解除すると、`mise run hold:list`から消え、`released_by`が`human`になり、情報の通知`hold_released`が出る。
+5. 同じidをもう一度解除すると、「すでに解除されています」になり、通知は増えない。
+6. 凍結は、`mise run freeze:place`でスケジュールの凍結を置き、同じ手順で確かめる。deployの保留は、反映の直後に短い期限で試す。
+7. セッションが置いた保留を、人として解除できることを確かめる。
 
 外部の挙動に依存する前提の確認の結果である。
 確認は、mainの`9dae4761`を反映したローカルのスタックで行った。

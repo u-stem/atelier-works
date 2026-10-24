@@ -11,6 +11,9 @@
 
 - `f/factory/lib/freezes.ts`
 - `f/factory/lib/freeze_apply.ts`
+- `f/factory/freeze_release.ts`
+- `f/factory/console_holds.ts`
+- `f/factory/lib/console_holds_support.ts`
 - `scripts/freeze.ts`
 - `f/factory/self_update.ts`
 - `f/factory/poll_issues.ts`
@@ -233,12 +236,42 @@ pushとmigrationの間に保留が置かれても、migrationは続く。
 | スケジュールの凍結を置く(`freeze:place`) | 置ける | 端末(TTY)で`yes`を入力して置く |
 | deployの保留を置く(`freeze:place -- --scope deploy`) | 置ける。subagentは拒否される | 端末で`yes`を入力して置く |
 | 解除(`freeze:release`) | 自分の`holder`の行だけ解除できる。subagentは拒否される | 端末で`yes`を入力して解除する |
+| 解除(Consoleの画面) | できない。`freeze_release`を`wmill`や`curl`で呼ぶ形は、主セッションを含めて拒否される | 確認のダイアログを通して、誰の行でも解除できる |
 | 壊れた変数を空に戻す(`freeze:reset`) | できない | 端末で`yes`を入力して実行する |
 | 削除を反映するpush(`push:prune`) | できない | 端末で`yes`を入力して実行する |
 
 `--dry-run`付きのpushは、どちらの主体も実行できる。
 
 subagentの拒否は、[セキュリティ](../security.md)の「Claude Codeの拒否ルール」にある、ベストエフォートの規則である。
+
+### Consoleからの解除
+
+人は、Consoleのシステムの画面の「保留と凍結」から、凍結とdeployの保留を解除できる([Consoleの仕様](console.md)の「保留と凍結」)。
+`f/factory/freeze_release`が、解除する主体を人(`human`)に固定して、`releaseFreeze`を`mutateFreezeState`で当てる。
+操作者は、ジョブの実行文脈から導く。凍結の行は解除した主体を残さないので、操作者は情報の通知`hold_released`とジョブのログに残す。
+`reason`と`holder`は、通知とログに載せない。
+
+`freeze_release`は、idが8桁の16進でなければ例外を投げる。
+そのほかは、次の戻りになる。
+
+| 状況 | 戻り |
+| --- | --- |
+| 解除した | `status`が`released`。`scope`が`schedule`か`deploy`。`audit`が`recorded`か`failed` |
+| 行が変数に無い、解除済み、期限切れ | `already_ended`。何も書かず、通知を残さない。スケジュールの凍結は、追従が済むと行が消えるので、複数のタブの再送が成功になる |
+| 書いた後に読み直すと、解除が残っていない、またはほかの行が欠けている | `unconfirmed`。通知を残さない。画面は、一覧を取り直して確かめるよう知らせる |
+| 変数を読めない、壊れている、書けない | 接頭辞`freeze_release:`の例外。壊れた変数の理由には、回復の手順を含める |
+
+変数の読み直しと書き込みは排他しない。
+Console用のworkerは1つ(`replicas: 1`)で動くので、Consoleのジョブ同士は重ならない。
+CLIや`self_update`と重なると、2つの結果がありうる。
+
+- ほかの行を黙って消す。書く前に読んだ状態を、競合した書き込みが上書きしたとき
+- 解除を巻き戻す。競合した書き込みが、解除の前の状態を書いたとき
+
+どちらも、書いた後の読み直しで気づける。
+窓は秒単位で、気づけない場合は人が`freeze:list`で確かめる。
+解除の後の追従(スケジュールを戻すpush)は、`self_update`の次の回が行う。
+`f/factory/self_update`は凍結できないので、解除の対象にもならない。
 
 ## 運用手順
 

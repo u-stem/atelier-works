@@ -5427,13 +5427,20 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 仕様は[保留の内部仕様](internals/holds.md)にある。
 Claudeが保留を置く・解除する手順は、[保留のスキル](../.claude/skills/hold/SKILL.md)にある。
 
-保留の操作は、ホストの端末で、`mise run`のタスクから行う。
+保留の一覧は、Consoleのシステムの画面の「保留と凍結」でも見られる。
+置く操作は、ホストの端末で、`mise run`のタスクから行う。
+解除は、端末のタスクのほかに、Consoleの画面からもできる。
 
 | 操作 | コマンド |
 | --- | --- |
 | 一覧 | `mise run hold:list` |
 | 置く | `mise run hold:place -- --scope merge --target <owner>/<repo> --minutes <分> --reason <理由>` |
 | 解除 | `mise run hold:release -- <id>` |
+
+Consoleでは、行の「解除」を押し、確認のダイアログで種類、対象、理由、置いた主体、期限、効果を読んでから確定する。
+Consoleの解除は、`yes`の入力を求めず、誰が置いた保留も解除できる。
+解除した操作者は、情報の通知`hold_released`に残る。
+凍結とdeployの保留も、同じ画面から解除できる。
 
 タスクは、チェックアウトを更新した端末で使える。
 タスクが見つからないときは、`mise exec -- bun ./scripts/hold.ts <list|place|release>`を直接実行する。
@@ -5462,7 +5469,7 @@ gh pr list --repo <owner>/<repo> --json number,autoMergeRequest --jq '.[] | sele
 ### 保留で止まったdependabotのPRを再開する
 
 1. `mise run hold:list`で、保留の理由と期限を確かめる。
-2. 解除してよければ、`mise run hold:release -- <id>`で解除する。
+2. 解除してよければ、Consoleのシステムの画面の「保留と凍結」の「解除」か、`mise run hold:release -- <id>`で解除する。
 3. 取得が待たせていたPRは、次の取得(10分ごと)に自動で再開する。
 4. 終了のステップで止まった作業項目は、再開しない。
    作業項目は人の対応待ちで終わり、理由は`dependabot merge held by a hold`である。
@@ -5477,7 +5484,9 @@ Claudeのセッションのマージ(`gh pr merge`など)と、`wmill sync push`
 
 1. 拒否の文に載るidと期限を、`mise run hold:list`と`mise run freeze:list`で確かめる。
 2. 置いた主体が解除するか、期限が切れるのを待つ。
-   解除してよければ、人が`mise run hold:release -- <id>`か`mise run freeze:release -- <id>`で解除する。
+   解除してよければ、人が解除する。
+   Consoleのシステムの画面の「保留と凍結」から解除する。
+   端末では、`mise run hold:release -- <id>`か`mise run freeze:release -- <id>`を実行する。
 3. 保留を読めないという拒否は、保留が無いことを意味しない。
    スタックが止まっていれば`mise run up`で起動して、同じコマンドをやり直す。
    ツールが無いと出たら`mise install`を実行する。
@@ -5496,6 +5505,9 @@ subagentは保留を置かず、解除もしない。
 deployの保留を置くことと、凍結の解除も同じである。
 主セッションか人に頼む。
 一覧(`mise run hold:list`、`mise run freeze:list`)と、スケジュールの凍結を置くことは、subagentも使える。
+Consoleの解除script(`hold_release`と`freeze_release`)を`wmill script run`や`curl`で呼ぶ操作は、フックが拒否する。
+subagentだけでなく、主セッションを含むすべてのClaudeのセッションが対象である。
+解除は、人がConsoleの画面で行う。
 
 ### 凍結と合わせて確かめる
 
