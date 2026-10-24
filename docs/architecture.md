@@ -612,7 +612,6 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |
 | `f/factory/detect_schedule_failures` | script | [SYS-5] scheduleの失敗を検出して記録 |
-| `f/factory/on_error_schedule` | script | [SYS-5] schedule失敗ハンドラ |
 | `f/factory/cleanup_db` | script | [SYS-6] DBを掃除 |
 | `f/factory/console_fetch_watch` | script | [SYS-7] Consoleの取り込みを見張る |
 | `f/factory/drawio_viewer_bump` | script | [SYS-8] draw.ioのビューアの固定を最新化 |

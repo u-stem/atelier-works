@@ -5,7 +5,6 @@ cron_version: v2
 enabled: true
 is_flow: false
 no_flow_overlap: true
-on_failure: f/factory/on_error_schedule
 schedule: 30 */2 * * * *
 script_path: f/factory/sample_worker_load
 timezone: Asia/Tokyo

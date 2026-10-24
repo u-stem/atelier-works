@@ -169,7 +169,7 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
   これはベストエフォートで、最後の防御はDBの部分一意インデックス`work_items_active_issue_key`である。
   Issueの作業項目は`insertIssueWorkItemUnlessActive`で挿入し、競合したら取得を失ったものとして引く。
   DBを分けた複数のインスタンスが同じリポジトリを扱う構成は対象外である。
-- scheduleにはerror handler(`on_failure: f/factory/on_error_schedule`)を設定する。失敗は`job_failures`テーブルとDiscordの通知に流れる。
+- scheduleに`on_failure`は付けない。このWindmillはscheduleの失敗時の呼び出しを呼ばず、付けると通知されるという誤った安心が残るためである。失敗は`detect_schedule_failures`がジョブ履歴から拾い、`job_failures`テーブルとDiscordの通知に流す。契約テスト(`tests/scripts/schedule_no_on_failure.test.ts`)が、付けていないことを固定する。
 - 承認のタイムアウト(7日)は、`poll_issues`がreconcileの後に行う期限切れのスイープが、`approval_requests.expires_at`を見て判定する。`pipeline.flow`はsuspendを使わない。
 
 ## プロンプトと投稿の規約

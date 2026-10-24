@@ -6,7 +6,6 @@ cron_version: v2
 enabled: true
 is_flow: false
 no_flow_overlap: true
-on_failure: f/factory/on_error_schedule
 schedule: 30 */5 * * * *
 script_path: f/factory/watch_pr_conflicts
 timezone: Asia/Tokyo
