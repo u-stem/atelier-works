@@ -123,24 +123,88 @@ main_root="$(cd "$(dirname "$common_dir")" && pwd -P)"
 cd "$main_root"
 scope="$main_root/.claude/worktrees/"
 
+# lsofの実行ファイル。`WORKTREE_PRUNE_LSOF`は差し替える(テスト用)。
+# 無ければ絶対パスの`/usr/sbin/lsof`、それも無ければPATHから探す。
+# フックから起動されたときのPATHに`/usr/sbin`が無くても、見つけられるようにするため。
+lsof_cmd=""
+if [ -n "${WORKTREE_PRUNE_LSOF+x}" ]; then
+  lsof_cmd="$WORKTREE_PRUNE_LSOF"
+elif [ -x /usr/sbin/lsof ]; then
+  lsof_cmd="/usr/sbin/lsof"
+else
+  lsof_cmd="$(command -v lsof || true)"
+fi
+if [ -n "$lsof_cmd" ] && [ ! -x "$lsof_cmd" ]; then
+  lsof_cmd=""
+fi
+
 # 各プロセスのcwdの一覧。`lsof`は権限の無いプロセスで終了コード1になるが、読めた分は使う。
 cwd_list=""
 have_lsof=0
-if command -v lsof >/dev/null 2>&1; then
-  have_lsof=1
-  cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null)" || true
-  # 自分自身のcwdが必ず出るので、空なら失敗とみなす。空のまま照合すると、何も使われていないことになる。
-  if [ -z "$cwd_list" ]; then
-    have_lsof=0
-    echo "worktree-prune: warning: lsof returned nothing; skipped the in use check" >&2
-  fi
-fi
+
+# lsofを実行して`cwd_list`を更新する。lsofが使えないか出力が空なら、更新せずに1を返す。
+# 自分自身のcwdが必ず出るので、空なら失敗とみなす。空のまま照合すると、何も使われていないことになる。
+read_cwd_list() {
+  local out=""
+  [ -n "$lsof_cmd" ] || return 1
+  out="$("$lsof_cmd" -a -d cwd -Fpcn 2>/dev/null)" || true
+  [ -n "$out" ] || return 1
+  cwd_list="$out"
+}
+
+# `--ancestors`のPIDのうち、1つでも`cwd_list`にpの行として現れれば0を返す(陽性の対照)。
+# lsofが呼び出し元の側を見られない環境では、何も使われていないように見える。その検出に使う。
+callers_visible() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      p[0-9]*)
+        case ",$ancestors," in
+          *",${line#p},"*) return 0 ;;
+        esac
+        ;;
+    esac
+  done <<<"$cwd_list"
+  return 1
+}
 
 removed=0
 kept=0
+# 失敗として数える事象があれば1にする。--autoでは、成功しなかった実行の印になる。
+run_failed=0
+# 1なら、worktreeの判定に進まずに終える。
+run_aborted=0
+
+emit() {
+  echo "$1"
+}
+
+fail_run() {
+  run_failed=1
+  emit "failed: $1"
+}
+
+if [ "$auto" -eq 1 ]; then
+  if [[ ! "$ancestors" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    fail_run "the ancestors are missing or malformed; removed nothing"
+    run_aborted=1
+  elif ! read_cwd_list; then
+    fail_run "lsof is unavailable or printed nothing; removed nothing"
+    run_aborted=1
+  elif ! callers_visible; then
+    fail_run "lsof does not show the callers; removed nothing"
+    run_aborted=1
+  else
+    have_lsof=1
+  fi
+elif read_cwd_list; then
+  have_lsof=1
+elif [ -n "$lsof_cmd" ]; then
+  echo "worktree-prune: warning: lsof returned nothing; skipped the in use check" >&2
+fi
 
 keep() {
-  echo "kept: $wt_path${wt_branch:+ ($wt_branch)}: $1"
+  emit "kept: $wt_path${wt_branch:+ ($wt_branch)}: $1"
   kept=$((kept + 1))
 }
 
@@ -324,7 +388,7 @@ consider() {
   fi
 
   if [ "$apply" -ne 1 ]; then
-    echo "would remove: $wt_path ($wt_branch): $how"
+    emit "would remove: $wt_path ($wt_branch): $how"
     removed=$((removed + 1))
     return
   fi
@@ -336,9 +400,9 @@ consider() {
   if git update-ref -d "refs/heads/$wt_branch" "$wt_head" >&2; then
     # 設定のセクションが無いと終了コード128になるので、失敗は無視する。
     git config --remove-section "branch.$wt_branch" 2>/dev/null || true
-    echo "removed: $wt_path ($wt_branch): $how"
+    emit "removed: $wt_path ($wt_branch): $how"
   else
-    echo "removed: $wt_path, but branch $wt_branch remains (it moved from $wt_head or could not be deleted)"
+    emit "removed: $wt_path, but branch $wt_branch remains (it moved from $wt_head or could not be deleted)"
   fi
   removed=$((removed + 1))
 }
@@ -350,7 +414,10 @@ reset_record() {
   wt_locked=0
 }
 
-list="$(git worktree list --porcelain)"
+list=""
+if [ "$run_aborted" -eq 0 ]; then
+  list="$(git worktree list --porcelain)"
+fi
 reset_record
 # 最後の記録の後ろにも空行を足して、判定を漏らさない。
 while IFS= read -r line; do
