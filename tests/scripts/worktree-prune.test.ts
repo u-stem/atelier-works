@@ -1291,6 +1291,24 @@ describe("worktree-prune.sh", () => {
       expect(existsSync(path)).toBe(true);
     });
 
+    test("--auto keeps the worktree it runs in as current directory", () => {
+      const path = addMergedWorktree("fix-current", "fix/current");
+
+      run(["--auto", "--ancestors", CALLER_PID], path);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto logs current directory as the reason for keeping the worktree it runs in", () => {
+      const path = addMergedWorktree("fix-current", "fix/current");
+
+      run(["--auto", "--ancestors", CALLER_PID], path);
+
+      expect(readFileSync(stateFile("log"), "utf8")).toContain(
+        `kept: ${path} (fix/current): current directory`,
+      );
+    });
+
     test("--auto removes nothing without ancestors", () => {
       const path = addMergedWorktree("docs-old", "docs/old");
 
@@ -1464,6 +1482,30 @@ describe("worktree-prune.sh", () => {
         expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
       });
 
+      test("--auto counts lsof not showing the callers as a failure", () => {
+        writeLsof(`p9999\ncbash\nn${root}`);
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts a missing lsof as a failure", () => {
+        rmSync(join(fakeBin, "lsof"));
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto counts an empty lsof output as a failure", () => {
+        writeLsof("");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
       test("--auto adds to the count of earlier failures", () => {
         seedState("failures", "4\n");
 
@@ -1553,6 +1595,34 @@ describe("worktree-prune.sh", () => {
 
         expect(logText().match(/gh unavailable/g)).toHaveLength(2);
       });
+
+      // 1件ごとは上限より短く返るが、合計が上限を超える候補の列を作る。
+      function addSlowCandidates(): string {
+        const calls = join(root, "gh-calls");
+        for (const n of [1, 2, 3, 4, 5, 6]) {
+          addSquashWorktree(`feat-sq${n}`, `feat/sq${n}`);
+        }
+        writeGh(`echo called >> "${calls}"\nsleep 1`);
+        return calls;
+      }
+
+      test("--auto stops asking gh once the total time reaches the limit", () => {
+        const calls = addSlowCandidates();
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "3" } });
+
+        expect(
+          readFileSync(calls, "utf8").trim().split("\n").length,
+        ).toBeLessThan(6);
+      }, 30_000);
+
+      test("--auto leaves the rest as gh unavailable once the total time reaches the limit", () => {
+        addSlowCandidates();
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "3" } });
+
+        expect(logText()).toContain("gh unavailable");
+      }, 30_000);
 
       test("--auto kills the whole gh process group on a timeout", async () => {
         addSquashWorktree("feat-sq", "feat/sq");
@@ -1754,6 +1824,15 @@ describe("worktree-prune.sh", () => {
         runAuto();
 
         expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto reads a stamp with leading zeros as a decimal number", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `0${nowSeconds() - 600}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
       });
 
       test("--auto updates the stamp on success", () => {
