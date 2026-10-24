@@ -169,7 +169,7 @@ export type CliDeps = {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly confirm: (message: string) => Promise<boolean>;
   readonly print: (line: string) => void;
-  /** 有効なスケジュールの凍結の件数。読めなければ例外を投げる。 */
+  /** 有効なスケジュールの凍結とdeployの保留の件数。読めなければ例外を投げる。 */
   readonly activeFreezeCounts: () => Promise<ActiveFreezeCounts>;
 };
 

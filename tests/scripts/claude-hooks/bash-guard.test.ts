@@ -1470,6 +1470,99 @@ describe("bash-guard leaves the main session free to place and release holds", (
   });
 });
 
+// deployの保留(`freeze:place --scope deploy`)を置くことと、凍結の解除(`freeze:release`)は、subagentに許さない。
+// スケジュールの凍結を置くこと(`--scope`なし、または`--scope schedule`)と、一覧と検査は許す。
+describe("bash-guard denies a subagent that places a deploy freeze or releases a freeze", () => {
+  test.each([
+    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --minutes 60 --reason x --scope deploy",
+    "mise run freeze:place -- --scope=deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --scope DEPLOY --minutes 60 --reason x",
+    "mise r freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise freeze:place --scope deploy --minutes 60 --reason x",
+    "mise tasks run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise -C /repo run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --scope $SCOPE --minutes 60 --reason x",
+    'mise run freeze:place -- --scope "$(echo deploy)" --minutes 60 --reason x',
+    "mise run freeze:place -- --scope dep* --minutes 60 --reason x",
+    "mise run freeze:release -- d0a1b2c3",
+    "mise r freeze:release -- 1",
+    "mise freeze:release 1",
+    "mise tasks run freeze:release -- 1",
+    "mise run 'freeze:*'",
+    "mise run freeze:rel*",
+    "mise run freeze:place ::: freeze:release",
+    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "bun ./scripts/freeze.ts release d0a1b2c3",
+    "bun run scripts/freeze.ts release 1",
+    "bun scripts/freeze release 1",
+    "bun /Users/someone/ws/atelier-works/scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "node scripts/freeze.ts release 1",
+    "bunx tsx scripts/freeze.ts release 1",
+    "./scripts/freeze.ts release 1",
+    "mise exec -- bun scripts/freeze.ts release 1",
+    "sh -c 'bun scripts/freeze.ts release 1'",
+    "bun scripts/freeze.ts list; bun scripts/freeze.ts release 1",
+    "bun scripts/freeze.ts $ACTION",
+    "bun scripts/freeze.ts place --scope $SCOPE --minutes 60 --reason x",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason names the deploy freeze", async () => {
+    expect(
+      await denyReason(
+        "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+        { subagent: true },
+      ),
+    ).toContain("deploy freeze");
+  });
+
+  test("the reason is the hold reason for releasing a freeze", async () => {
+    expect(
+      await denyReason("mise run freeze:release -- 1", { subagent: true }),
+    ).toContain("main session");
+  });
+});
+
+describe("bash-guard allows a subagent to place a schedule freeze and to list freezes", () => {
+  test.each([
+    "mise run freeze:list",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason verify",
+    "mise run freeze:place -- --scope schedule --target f/factory/collect_github --minutes 30 --reason verify",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason 'check the deploy'",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason deploy",
+    "mise run push:dry",
+    "mise run check",
+    "bun scripts/freeze.ts list",
+    "bun scripts/freeze.ts check",
+    "bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason r",
+    "bun test tests/scripts/freeze.test.ts tests/lib/freezes.test.ts",
+    "bun test tests/scripts/freeze_wiring.test.ts",
+    "bunx biome check scripts/freeze.ts",
+    "bunx tsc --noEmit scripts/freeze.ts",
+    "git add scripts/freeze.ts f/factory/lib/freezes.ts",
+    "git diff -- scripts/freeze.ts",
+    "cat scripts/freeze.ts",
+    "grep -n release scripts/freeze.ts",
+    "echo 'freeze.ts release is for the main session'",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard leaves the main session free to place a deploy freeze and release a freeze", () => {
+  test.each([
+    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:release -- d0a1b2c3",
+    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "bun scripts/freeze.ts release d0a1b2c3",
+    "mise exec -- bun scripts/freeze.ts release 1",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
 // `mise generate`のうち、フックやワークフローのファイルへ書く形は拒否する。
 describe("bash-guard denies mise generate that writes hook or workflow files", () => {
   test.each([
