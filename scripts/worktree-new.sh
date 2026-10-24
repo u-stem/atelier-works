@@ -269,8 +269,25 @@ fi
 # `WORKTREE_AUTO_PRUNE`が未設定か`1`のときだけ起動する。`WORKTREE_NEW_PRUNE_SCRIPT`は、
 # 起動するスクリプトを差し替える(テスト用)。
 start_auto_prune() {
-  local prune_script state_dir failures value ancestors pid depth dir
+  local prune_script state_dir failures value ancestors pid depth dir script_common target_common
   if [ "${WORKTREE_AUTO_PRUNE-1}" != "1" ]; then
+    return 0
+  fi
+
+  # `--hook`は標準入力の`cwd`へ移るので、作成先がこのスクリプトと別のリポジトリになりうる。
+  # 別のリポジトリのworktreeを、確認なしで消さないよう、このスクリプトの属するリポジトリと
+  # 作成先が同じときだけ起動する。実パスにそろえて比べ、/varと/private/varのような違いで止めない。
+  # `git -C ""`は何も移動しないので、空のときは試さない。
+  script_common=""
+  if [ -n "$script_dir" ]; then
+    script_common="$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || script_common=""
+  fi
+  if [ -n "$script_common" ]; then
+    script_common="$(cd "$script_common" 2>/dev/null && pwd -P)" || script_common=""
+  fi
+  target_common="$(cd "$common_dir" 2>/dev/null && pwd -P)" || target_common=""
+  if [ -z "$script_common" ] || [ "$script_common" != "$target_common" ]; then
+    echo "worktree-new: warning: not starting the automatic worktree cleanup; the target is in a different repository from this script" >&2
     return 0
   fi
 
