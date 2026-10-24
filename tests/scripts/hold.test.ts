@@ -697,7 +697,7 @@ describe("list", () => {
 // ---- place ----
 
 describe("place", () => {
-  test("refuses a claim hold, because nothing reads it yet", async () => {
+  test("refuses a claim hold, because nothing reads it", async () => {
     const result = await run({
       ...PLACE_COMMAND,
       scope: "claim",
@@ -708,6 +708,16 @@ describe("place", () => {
       1,
       expect.stringContaining("claim"),
     ]);
+  });
+
+  test("says that a claim hold has no reader and none is planned", async () => {
+    const result = await run({
+      ...PLACE_COMMAND,
+      scope: "claim",
+      target: "a/b#1",
+    });
+
+    expect(result.lines.join("\n")).toContain("no reader and none is planned");
   });
 
   test("does not touch the database for a claim hold", async () => {
