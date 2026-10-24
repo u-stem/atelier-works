@@ -2873,8 +2873,19 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   ローカルのsubagentが、そこに書いて実行する形は止めない。
 - Consoleの解除scriptを1コマンドで呼ぶ形は、`hold-guard.ts`が、主セッションを含むすべてのセッションで拒否する。
   ローカルの主セッションはCLIでは`session`として扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らないためである。
-  対象は、`wmill`の実行と、HTTPクライアントが解除scriptの名前を含むURLを呼ぶ形、凍結の変数を書く`wmill variable`と`curl`である。
-  ベストエフォートで、ハッシュでの呼び出し(`run_wait_result/h/<hash>`)、パーセント符号化したパス、変数で組んだ名前は止めない。
+  解除scriptの名前を軸に、拒否を既定にする。
+  プログラムを問わず、コマンドの語か標準入力の文字列に、名前、名前に当たりうるglob、ブレースの形があれば拒否する。
+  実行系が包む形(`npx windmill-cli`、`bunx windmill-cli@<版>`、`bun x`、`pnpm dlx`、`deno run npm:`)も同じである。
+  `curl`のURLのglobとブレース、`xargs`が標準入力から受ける名前も同じである。
+  読み取りなどで何も実行しないプログラム(`git`、`gh`、`grep`、`rg`、`cat`など)は通す。
+  `wmill`の副コマンドのうち、解除scriptを実行せずに読む・配るもの(`script get`、`script push`、`job list`など)も通す。
+  名前が語に現れない`wmill jobs push`は、名前なしで拒否する。
+  凍結の変数を書く`wmill variable add/push`と、変数を書くURLの経路も拒否する。
+  ベストエフォートで、止めない形は次のとおりである。
+  - ハッシュでの呼び出し(`run_wait_result/h/<hash>`)、パーセント符号化したパス、変数で組んだ名前。
+  - ファイルに書いた設定(`curl -K config`)や、ファイルから名前を読む`xargs`のように、名前が語にも標準入力の文字列にも現れない形。
+  - 別のファイルに解除scriptの呼び出しを書いて実行する形、本文をファイルで渡す`wmill script preview`の呼び出し。
+  - ソースは、ReadツールかGitの`git show`で読む。名前を含むURLの取得は、読み取りでも拒否する。
   解除は、人がConsoleの画面で行う。ログイン済みのブラウザの自動操作は、Bashのフックの外で解除のボタンを押せるので、実機の解除の操作は人が行う。
 - `mise run hold:list -- '<文字列>'`で余分な引数を渡しても、シェルの文としては解釈されない。
   実機で確かめた。miseは追加の引数を引用符で囲んでコマンドに続け、CLIは`list`の後ろの引数を拒否する。
@@ -2976,7 +2987,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)と凍結の解除(`freeze:release`、`scripts/freeze.ts release`)。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除すると保留を外せる。subagentには、確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
-| 主セッションを含むすべてのClaudeのセッションの、Consoleの解除scriptを呼ぶ操作。`wmill`の`script run`、`script preview`、`job run`などの実行と、`curl`などのHTTPクライアントが、解除script(`hold_release`と`freeze_release`)の名前を含むURLを呼ぶ形。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの`curl` | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数で組み立てた名前は止められないので、残るリスクとして受け入れる |
+| 主セッションを含むすべてのClaudeのセッションの、Consoleの解除scriptを呼びうる操作。コマンドの語か標準入力の文字列に、解除script(`hold_release`と`freeze_release`)の名前、名前に当たりうるglob、ブレースの形があるもの(読み取りなどで何も実行しないプログラムと、`wmill`の読み取りの副コマンドを除く)。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
 | subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |

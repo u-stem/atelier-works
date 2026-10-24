@@ -5505,7 +5505,8 @@ subagentは保留を置かず、解除もしない。
 deployの保留を置くことと、凍結の解除も同じである。
 主セッションか人に頼む。
 一覧(`mise run hold:list`、`mise run freeze:list`)と、スケジュールの凍結を置くことは、subagentも使える。
-Consoleの解除script(`hold_release`と`freeze_release`)を`wmill script run`や`curl`で呼ぶ操作は、フックが拒否する。
+Consoleの解除script(`hold_release`と`freeze_release`)の名前を含むコマンドは、実行系の包み方やglobを問わず、フックが拒否する。
+ソースを読むときは、Readツールか`git show`を使う。
 subagentだけでなく、主セッションを含むすべてのClaudeのセッションが対象である。
 解除は、人がConsoleの画面で行う。
 
