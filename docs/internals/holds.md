@@ -6,6 +6,9 @@
 
 - `f/factory/lib/holds.ts`
 - `migrations/datatable/main/20261023131355_holds.up.sql`
+- `f/factory/poll_dependabot.ts`と`f/factory/steps/dependabot_finish.ts`(保留を読む処理)
+- `scripts/hold.ts`と`scripts/hold_psql.ts`(CLI)
+- `scripts/claude-hooks/hold-guard.ts`(subagentの拒否)
 - `tests/scripts/hold_wiring.test.ts`
 - `scripts/test-db-holds.ts`
 
@@ -17,12 +20,13 @@
 保留の有無が、何かを許可することはない。
 許可に使うと、偽の行を置くだけで保護が外れるためである。
 
-保留を読んで止まる主体は、まだ無い。
+保留を読んで止まる主体は、Factoryのdependabotの自動マージだけである。
+範囲`claim`を読む主体は、まだ無い。
 実装の状態は[アーキテクチャ](../architecture.md)の「未実装の機能」に書く。
 
 ## 凍結との違い
 
-[スケジュールの凍結](freezes.md)は、スケジュールを`wmill sync push`から外す仕組みで、状態は`f/factory/freezes`の変数に置く。
+[スケジュールの凍結とdeployの保留](freezes.md)は、スケジュールを`wmill sync push`から外す仕組みと、反映全体を待たせる仕組みで、状態は`f/factory/freezes`の変数に置く。
 保留の対象は、凍結の対象と重ならない。
 保留の表は、凍結の変数の代わりにはならない。
 
@@ -160,6 +164,216 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 表が無いことは、例外のSQLSTATE(`42P01`)、エラーの文、API errorの`body`のどれかで判定する。
 回復の手順を示すのは、`corrupt`のときだけである。
 
+## dependabotの自動マージ
+
+dependabotのセキュリティ更新PRを自動でマージする処理は、`merge`の保留を2か所で読む。
+どちらも、リポジトリ(`owner/repo`の小文字)の有効な保留を`listActiveHolds`で読む。
+
+取得(`poll_dependabot`)は、PRごとに、作業項目を作る前に読む。
+処理済みのheadと、開いていないPRは読まない。
+待ちの間引きの対象になっているheadも、間引きの判定を先に行うので読まない。
+間引きは待ちの記録をそのまま返すので、保留の確認を間引きの後ろに置いても、待ちの記録は変わらない。
+有効な保留が1件でもあれば、作業項目を作らず、影響調査(Claudeの実行)も走らせずに待つ。
+保留を読めないときも、保留なしとは扱わず、同じように待つ。
+読めないのは、表が無いとき、DBに届かないとき、行が壊れているとき、例外が出たときである。
+待ちの記録は変えない。
+保留が続いても、待ちの上限の起点は前の記録から続く。
+
+待ったPRがある周回は、種類を分けて1件ずつ通知にまとめる。
+壊れた行と想定外の失敗は、リポジトリごとの通知になる。
+
+| 状態 | 通知の種類 | 重要度 | 本文 |
+| --- | --- | --- | --- |
+| 保留がある | `dependabot_merge_held` | 情報 | 一覧と解除の操作 |
+| 保留を読めない | `dependabot_merge_hold_unreadable` | 要対応 | 読めない原因の種類と、最初に確かめること |
+
+どちらの通知も、PRの数を本文に載せない。
+数が変わるたびに本文が変わり、別の行が並ぶためである。
+待ったPRの数は、取得の周回のログ(`pull requests wait for merge holds`)と、周回の結果の`held`に残る。
+保留の`reason`と`holder`は、通知とログのどちらにも載せない。
+
+保留を読めない通知は、保留を読めた次の取得の周回で、自動で解決する。
+人の作業は、自動で回復できないときの受け皿だけにするためである。
+解決の条件は、原因の種類で分ける。
+
+- 表を読めない(`missing_table`、`read_failed`)通知は、その周回で保留の読み取りが1件以上あり、読めなかったものが1件も無いときに解決する。
+- 壊れた行(`corrupt`)と想定外の失敗(`error`)の通知は、本文の先頭に、リポジトリ名とコロンを置く。
+  その周回で、そのリポジトリの保留を読めたときだけ解決する。
+  別のリポジトリを読めても、壊れたままのリポジトリの通知は残る。
+  リポジトリ名は小文字にそろえる。
+  間引きでそのリポジトリの保留を読まなかった周回は、解決しない。
+
+候補のPRが無い周回でも、未解決の通知があれば、取得が保留を読む。
+リポジトリごとの通知は、そのリポジトリを読む。
+表そのものの通知は、周回でまだ何も読んでいなければ、1つのリポジトリを読む。
+この読み取りでは、通知を新しく残さない。
+読めなかったときは、通知が残る。
+監視の対象から外れたリポジトリの通知は、読まないので解決しない。
+
+保留が解けるか、読めるようになれば、次の取得が自動で再開する。
+dependabotがrebaseして新しいheadになったPRは、新しいheadとして評価する。
+
+終了(`dependabot_finish`)は、マージの直前にもう一度読む。
+取得から終了までの間に置かれた保留を、最後に確かめるためである。
+読む位置は、試運転(`dependabot_merge_enabled`が偽)の判定より前である。
+保留があるか読めなければ、マージせずに、作業項目を人の対応待ち(`needs_human`)で終える。
+この作業項目は、保留が解けても再開しない。
+dependabotの作業項目は再実行できないので、人がPRを確認して手でマージする。
+次の操作は、通知に載る。
+
+終了のステップのログと通知に載せるのは、種類、件数、保留のidだけである。
+`reason`と`holder`は、DBに書ける主体が決める信頼できない文字列なので、載せない。
+
+保留を読んでからマージを要求するまでの数秒は、受け入れる。
+保留は止めるだけの補助で、元の保護(レビューとゲート)が残るためである。
+保留が止めるのは、Factoryのdependabotの自動マージだけである。
+取得の待ちは、`dependabot_merge_enabled`が偽の試運転中も働く。
+`dependabot_merge_enabled`が真のときだけ働くのは、終了のステップのマージの直前の最後の確認である。
+`gh pr merge`は止まらない。
+マージを要求するのは終了のステップだけで、配線テストが固定する。
+
+## CLI
+
+`mise run hold:list`、`mise run hold:place`、`mise run hold:release`が、`scripts/hold.ts`を呼ぶ。
+miseのタスクを使えないときは、`mise exec -- bun ./scripts/hold.ts <コマンド>`と書く。
+composeに要る環境変数を、miseが渡すためである。
+
+| コマンド | 内容 |
+| --- | --- |
+| `list` | 有効な保留、未解除で無効な行、有効なスケジュールの凍結とdeployの保留の件数を表示する |
+| `place --scope merge --target <owner>/<repo> --minutes <n> --reason <text>` | 保留を置く |
+| `release <id>` | 保留を解除する |
+
+終了コードは、引数の誤りが2、拒否と失敗が1である。
+
+`list`は、読み取り専用の接続で読む。
+有効な保留を先に表示してから、無効な未解除の行(`invalid`と表示する)を表示する。
+無効な行を読めなくても、読めた有効な保留は先に表示し、その後に失敗を表示して終了コード1で終わる。
+読めなければ、理由を表示して失敗にする。
+行が壊れているときは、回復の手順を表示する。
+`target`、`reason`、`holder`は、制御文字と書式文字を空白にして表示する。
+行の文字列を信用せず、表示で一覧の行を偽装させないためである。
+凍結の件数は、`wmill`を使えないときは警告にとどめる。
+`list`と`place`は、保留が止める経路の説明を表示する。
+
+置く主体は、環境変数`CLAUDECODE`で分ける。
+あれば`session`で、`holder`は`session:<ブランチ>`になる。
+無ければ`human`である。
+`human`の置く操作と解除は、端末で`yes`を入力して確かめる。
+`session`(`CLAUDECODE`があるClaude Codeのセッション)は、確認なしで置ける。
+`session`は、自分の`holder`の保留だけ解除できる。
+この区別は誤操作を防ぐためのもので、権限の境界ではない。
+迂回のための環境変数は設けない。
+
+`place`が受け付ける範囲は、読み手のある`merge`だけである。
+読み手の無い`claim`は、DBを読み書きする前に拒否する。
+置いても何も止まらず、守られていると誤解させるためである。
+`list`と`release`は、両方の範囲を扱う。
+
+### psqlの経路
+
+`scripts/hold_psql.ts`が、`holds.ts`の関数に渡す接続を作る。
+接続先のデータベースは、呼び出し側が必ず渡す。
+CLIは本番のデータベースを渡し、実DBの検査は使い捨てのデータベースだけを渡す。
+
+- composeのDBのコンテナで`psql`を起動し、文を標準入力で渡す。
+  `-c`で渡すと変数が展開されないためである。
+- 値は文にも埋め込まない。
+  文字列と数値はpsqlの変数に渡し、文には`:'pN'`を書く。
+  psqlが引用符つきの文字列にするので、引用符、バックスラッシュ、`:name`を含む値もそのまま束縛される。
+  `null`は`NULL`と直接書く。
+  変数の番号は、値の位置である。
+  NULを含む文字列と、文字列と数値以外の値は、例外にする。
+- 読み取りは`default_transaction_read_only=on`で接続する。
+  書き込みの文は、セッションの設定で拒否される。
+- 文の時間は10秒、書き込みのロックの待ちは5秒、1回の呼び出し全体は20秒に上限を置く。
+- `fetch()`は、文を`WITH q AS (...) SELECT json_agg(...)`で包み、結果を1つのJSONで読む。
+  行は`id`の列を持つ。
+  `execute()`は包まない。
+- 文ごとに別のプロセスを起動し、`BEGIN`も付けない。
+  `placeHold`の2つの文は、文ごとの自動コミットを前提にするためである。
+- 終了コードが0でなければ、標準エラーの先頭200字を、制御文字を空白にして、例外の文に載せる。
+  `holds.ts`が`read_failed`か`missing_table`に分類する。
+
+書き込みが全体の上限を超えたときは、結果が不明である。
+強制終了で止まるのはdockerのクライアントだけで、コンテナの中のpsqlは止まらない。
+`hold:list`で確かめる。
+値はプロセスの引数に現れるので、`reason`と`holder`に秘密を書かない。
+
+## subagentの拒否
+
+`scripts/claude-hooks/hold-guard.ts`が、subagentの保留の操作を拒否する。
+`bash-guard`が、subagentのBashのコマンドだけに適用する。
+主セッションと人は、止められない。
+許すのは一覧(`list`)だけである。
+subagentが保留を置くと、確認する相手がいないまま、自動マージを止められるためである。
+凍結のCLIのうち、deployの保留を置く操作(`--scope deploy`)と、凍結の解除(`release`)も同じ規則で拒否する。
+`--scope`の値が実行時に決まる形は、`deploy`かを判定できないので拒否する。
+凍結のCLIを指す語の直後の`--`は読み飛ばし、globは凍結のファイル名に当たりうれば拒否する。
+`-e`の直後の文字列と標準入力のコードに、凍結のCLIと`release`か`deploy`が書かれていても拒否する。
+`bun test -t "deploy freeze"`のように、コードでない引数の文字列は読まない。
+実行系の標準入力へ流し込むファイル(`bun run - < scripts/hold.ts`)が、保留か凍結のコードなら拒否する。
+パイプ、ヒアストリング、プロセス置換で流し込む形も、入力元が保留か凍結のコードか、読めないものなら拒否する。
+パイプの前の`cat`が標準入力から保留か凍結のコードを読む形も同じである。
+
+拒否を既定にする。
+コマンドの語には、値を取るオプションや実行の前置きが混ざる。
+値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
+保留のコードを指す語を含む呼び出しは、次の許可に当たらない限り拒否する。
+
+- `bun`、`bunx`、`node`、`tsx`、`ts-node`、`deno`、`npx`、`npm`、`pnpm`、`pnpx`、`yarn`と、スクリプトの直接の実行。
+  語のどれかが、保留のコード(`hold`、`hold_psql`、`holds`)を指していれば拒否する。
+  拡張子は省ける。`bun`が拡張子の無いパスを`hold.ts`に解決することを、実機で確かめてある。
+  引用符の外のglobと文字クラス(`scripts/hol?.ts`、`scripts/hol[d].ts`、`scripts/*`)は、ファイル名の部分が保留のコードの名前に当たりうれば拒否する。
+  ディレクトリは見ない。`scripts//hol?.ts`や`scripts/./hol?.ts`のように、ディレクトリの書き方が揺れても同じである。
+  `[:lower:]`、`[=o=]`、`[.o.]`のようなPOSIXの文字クラスは、括弧の中のどこにあっても読み解かず、当たりうるものとして拒否する。
+  語の途中の`(`は、zshでは引数のglobのまとまり(`(ho)ld.ts`)になりうるので、構文エラーとして拒否する。
+  配列の代入、関数の定義、プロセス置換、制御語だけが前にある括弧は、拒否しない。
+  `{hold.ts,place}`のようなブレースは、展開した綴りと、`{`、`}`、`,`を空白にした綴りの両方で判定する。
+  `-e`などの文字列と、標準入力で渡すコードに含まれる場合も同じである。
+  `bun exec '<文字列>'`は、文字列をシェルの入力として読み、中のコマンドも判定する。
+  `$'...'`の中の`\x64`、`\144`、`\u0064`は、文字に展開してから判定する。
+  `$'...'`の中のNULは、bashと同じに、閉じの引用符までを捨てる。切り詰めない綴りも、別の綴りとして判定する。
+  `$"..."`は、ふつうの二重引用符として読む。
+  zshの`=bun`のように`=`で始まるコマンドは、`=`を外した名前として読む。
+- `mise`: 全体オプション(`-q`、`-C <dir>`、`--cd=<dir>`、`-E <env>`など)を読み飛ばして、サブコマンドを見る。
+  実行系のサブコマンド(`run`、`r`、`tasks run`、`watch`、`w`、`exec`、`x`)かタスク名(`mise hold:place`)がある呼び出しを調べる。
+  その呼び出しに、`hold:place`か`hold:release`を指しうる語が1つでもあれば、位置を問わず拒否する。
+  `hold:`で始まる`hold:list`以外の語、globや文字クラスが当たる語(`hold:[pr]*`、`h[o]ld:place`)、実行時に決まる語、ブレースを含む語が当たる。
+  `mise tasks info hold:place`のような、実行しないサブコマンドは拒否しない。
+  `--`より後ろはタスクへの引数なので、globと実行時に決まる語は見ない。`hold:`で名指しする語だけ見る。
+  この版のmiseは、`--`より後ろの`:::`をタスクの区切りとして実行しない。実測で確かめた。
+  実行時に決まる語で拒否したときは、拒否の文にその原因を示す。
+  `mise -q exec -- bun scripts/hold.ts place`のように、全体オプションを前に置いた`mise exec`は、内側のコマンドとして判定する。
+  全体オプションの一覧は、値を取るもの(`-C`、`-E`、`-j`、`-P`、`-s`、`-t`、`--log-level`、`--output`など)と、値を取らない長いものを持つ。
+  束の中で最初に値を取る文字が末尾でなければ、後ろの文字は値の一部である(`-EC`は`-E`が値`C`を取る)。
+  一覧に無い長いオプション(`=`の無いもの)があると、サブコマンドの位置が決まらないので、`mise`のコマンド全体を拒否する。
+  `exec`か`x`が語にあれば、位置を問わず、その後ろの語を実行系のコマンドとして判定する。
+- `docker`、`docker-compose`、`psql`で、語か標準入力の文字列に`holds`を含むもの。
+  ヒアドキュメントと、パイプの前の`echo`や`printf`も見る。
+
+許可は次の2つだけである。
+
+1. 保留のコードを指す語の直後の語が`list`である。
+2. 最初のオペランドが検査の道具(`test`、`biome`、`@biomejs/biome`、`tsc`、`scripts/lint-*.ts`)である。
+   `@biomejs/biome@1.9.4`のような版付きの名前と、`npx --yes`や`-y`の後ろも、同じに扱う。
+   `bunx biome check scripts/hold.ts`は、実行ではなく検査なので止めない。
+
+止められない形は、残るリスクとして受け入れる。
+境界ではなく、誤操作と、拒否を知らない呼び出しを止める補助である。
+詳しくは[セキュリティ](../security.md)の「保留」に書く。
+
+- 別名の呼び出し(`cp scripts/hold.ts /tmp/h.ts`の後に実行する形)。
+- 変数や文字列の連結で組んだパス、動的なimport。
+- `docker compose exec db psql`に渡す語を組み立てて書く形。
+- subagentが新しいファイルを書いて実行する形。
+- コマンドを起動する前置き(`find -exec`、`watch`、`parallel`、`ssh`、`/usr/bin/time`、`caffeinate`など)の後ろに実行系を置く形。
+- 実行系以外が文字列で受け取るコード(`python -c`、`perl -e`など)。
+  `mise-tasks/`と`.mise-tasks/`は保護パスだが、止めるのはFactoryのpr_fixとimplementのフローだけである。
+  ローカルのsubagentには効かない。
+
+BashとDockerを持つ主体は、psqlで保留を直接書ける。
+
 ## 参照の禁止
 
 `f/`とmigrationの中で、`holds.ts`の外に、表の名前(`factory.holds`)を直接書かない。
@@ -173,6 +387,12 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、検出を
 許可した読み取りの関数(`listActiveHolds`)は、呼び出し側から`sql`を受け取る。
 呼び出し側が`strings`を書き換えた接続を渡す迂回は、止めない。
 `f/`の外のコード(ローカルのフックなど)は、走査の対象にならない。
+`scripts/hold.ts`と`scripts/hold_psql.ts`は、表の名前を書かない。
+`hold_wiring.test.ts`が、この2つに表の名前が無いことを固定する。
+
+実行時に`holds.ts`を読み込んでよい`f/`のファイルは、保留を読む2つ(`poll_dependabot.ts`と`dependabot_finish.ts`)だけである。
+読み込む名前は`listActiveHolds`だけで、型は読み込みに数えない。
+保留を読む処理を足すときは、テストの`HOLD_READERS`に足す。
 
 書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。
 これは呼び出し側に接続を選ばせるためで、参照は止めない。
@@ -248,19 +468,23 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、検出を
 - 保留のモジュールの名前を組み立てるimport
 - `f/`とmigrationの外のコード(`scripts/`など)
 
-datatableの接続の既定の`search_path`に`factory`が入っていないことは、確かめていない。
+datatableの接続の既定の`search_path`には`factory`が入っていない([実機での確認](#実機での確認))。
 入っていれば、スキーマの付かない`holds`が、`datatable`の名前の指定なしで`factory.holds`を指す。
 上の動詞の規則は、その場合も働く。
 
-接続の`role`(windmill-clientの`datatable(name, { role })`、1.817.0)で、DBの層で分離できる可能性がある。
-確かめるまで、分離できないとは断定しない。
+接続の`role`(windmill-clientの`datatable(name, { role })`、1.817.0)は、Windmillの文書がEnterprise Editionの機能と書いている。
+このリポジトリはCommunity Editionなので、DBの層で書き手を分離する設計はしない。
 
 表の定義を変えるmigration(scopeを広げるなど)は、表を作るmigrationと並べて、テストの`HOLDS_MIGRATION_FILES`に足す。
 これは保護パスの変更として出す。
 
 追加の守りは次のとおりである。
 
-- `holds.ts`とそのテスト、実DBの検査は、保護パス(`f/factory/lib/protected_paths.ts`)に入れる。
+- `holds.ts`とそのテスト、実DBの検査、CLIとpsqlの経路とそのテストは、保護パス(`f/factory/lib/protected_paths.ts`)に入れる。
+  CLIが実行時に読み込む`scripts/freeze.ts`、`lib/freezes.ts`、`lib/freeze_apply.ts`も入れる。
+  書き換えられると、CLIの実行に任意の処理を足せるためである。
+  拒否のフックの`scripts/claude-hooks/`とそのテスト、miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)も入れる。
+  置いたファイルがタスクとして実行されるので、拒否の外から保留を操作できるためである。
 - 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。
   ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。
 - `holds.ts`は何もimportしない。
@@ -284,10 +508,33 @@ migrationが失敗すると、`self_update`は次の回で再試行する。
 
 | 検査 | 確かめること |
 | --- | --- |
-| `tests/lib/holds.test.ts` | 有効の判定、入力の検証、解除の権限、行の解析、表が無いことの判定 |
+| `tests/lib/holds.test.ts` | 有効の判定、入力の検証、解除の権限、行の解析、表が無いことの判定、表示の無害化 |
 | `tests/lib/holds_db.test.ts` | 偽の接続で、読み取りの失敗の種類、置く操作の2つの文と入力の検証、解除、接続の型の互換 |
-| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入の検出、表を作る以外のmigrationが表に触れないこと、`test-db.sh`が実DBの検査を呼ぶ位置 |
-| `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる |
+| `tests/scripts/hold_psql.test.ts` | psqlの引数、値の束縛、読み書きのモード、接続先、時間切れ、失敗の文 |
+| `tests/scripts/hold.test.ts` | 引数、主体、`claim`の拒否、一覧と置く操作と解除、表示の無害化、CLIの接続先 |
+| `tests/scripts/dependabot_finish.test.ts`、`tests/scripts/poll_dependabot.test.ts` | 保留があるとき、読めないときに、マージせず作業項目も作らないこと。読む位置。読めない通知の解決 |
+| `tests/scripts/claude-hooks/bash-guard.test.ts` | subagentの拒否と許可の形、主セッションを止めないこと |
+| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入、読む処理の名前、マージを要求するファイル、CLIが表の名前を持たないこと、miseのタスク、`test-db.sh`が実DBの検査を呼ぶ位置 |
+| `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる。psqlの経路で値の束縛と読み取り専用の接続も確かめる |
 
-実DBの検査は、値を定数として埋め込む検査用のクライアントで流す。
-`wmill.datatable()`の束縛の経路は通らない。
+実DBの検査のうち、制約と文の検査は、値を定数として埋め込む検査用のクライアントで流す。
+CLIの経路は、`hold_psql.ts`に使い捨てのデータベース(`factory_test`)を渡して流す。
+本番のデータベースには書かない。
+どちらも、`wmill.datatable()`の束縛の経路は通らない。
+
+## 実機での確認
+
+外部の挙動に依存する前提の確認の結果である。
+確認は、mainの`9dae4761`を反映したローカルのスタックで行った。
+`wmill.datatable()`の確認は、稼働中のWindmillのワークスペースで、保留を1行置いて解除する使い捨てのスクリプトを流して行った。
+
+| 前提 | 結果 |
+| --- | --- |
+| psqlの標準入力、`:'name'`の展開、`-X`、`ON_ERROR_STOP`、`docker compose exec -e PGOPTIONS`、読み取り専用の接続、終了コード | 確認済み。引用符、バックスラッシュ、`:name`を含む値を、実DBの検査が通す |
+| psqlのpostgresロールの既定の`search_path` | 確認済み。`"$user", public`で、ロールとデータベースの個別の設定は無く、スキーマ無しの`holds`は解決しない |
+| `wmill.datatable()`の接続の既定の`search_path`に`factory`が入らない | 確認済み。`"$user", public`で、スキーマ無しの`SELECT 1 FROM holds`は`relation "holds" does not exist`になる |
+| `wmill.datatable()`で`listActiveHolds`と同じ形の読み取りを呼び、行が1件あるときに破損にならない | 確認済み。1件を正しく読み戻せた |
+| `make_interval(mins => n::integer)`の、`wmill.datatable()`の束縛での型の解決 | 確認済み。`expires_at - created_at`がちょうど5分になった。書き込みはpsqlだけを通るが、`placeHold`を`wmill.datatable()`で呼ぶ処理を足すときの前提になる |
+
+`search_path`に`factory`が入っていると、スキーマ無しの`holds`が`factory.holds`を指す。
+入っていないことは確認済みだが、参照の検出の動詞の規則は、入っていた場合も働く。

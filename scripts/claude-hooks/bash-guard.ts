@@ -11,8 +11,11 @@
 // - `--no-verify`、`git commit -n`: lefthookの検査が落ちたとき、直さずに迂回する。
 // - `core.hooksPath`、`LEFTHOOK*`、`GIT_CONFIG_*`、`include.*`、`.git/hooks`と`.git/config`の書き換え: 同じ迂回を、設定の裏から行う。
 // - `remote.*.push`、`push.default`、`alias.*`: pushの行き先や中身を、別の名前や設定に隠す。
+// - `mise generate`の`git-pre-commit --write`と`github-action --write`: 同じフックとワークフローを、生成の書き込みで上書きする。
 // - xargsや標準入力から渡すgit push、シェルのコード: 渡された引数やコードを判定できないまま実行する。
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
+// - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
+//   一覧(`list`)は許す。ベストエフォートで、別名の呼び出しや変数で組んだパスは止めない。
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
 // 字句に分けられないコマンドと、実行するまでpush先が決まらないコマンドは拒否する。
 // `cd`と`pushd`の文字どおりの移動先と、`git checkout`などで切り替えたブランチは、続くコマンドの前提にする。
@@ -30,6 +33,11 @@ import {
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
 import {
+  findHoldOperation,
+  type HoldStdin,
+  type HoldUpstream,
+} from "./hold-guard.ts";
+import {
   ALLOW,
   type BashToolInput,
   type Decision,
@@ -42,6 +50,7 @@ import {
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
   type MiseExec,
+  miseOptionTakesNext,
   parseCommandLine,
   type SimpleCommand,
   shellArguments,
@@ -121,24 +130,6 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
 
-/** サブコマンドの前に置ける、値を取るグローバルオプション。`--help`に出ない隠しオプションを含む。 */
-const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  "-C",
-  "--cd",
-  "-E",
-  "--env",
-  "-j",
-  "--jobs",
-  "-P",
-  "--profile",
-  "--log-level",
-  "--output",
-  "-s",
-  "--shell",
-  "-t",
-  "--tool",
-]);
-
 /** `mise set`の書き込む形が持ってよい、値を取るオプション。 */
 const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-C",
@@ -162,18 +153,6 @@ const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
 
 /** `mise set`と、その別名。 */
 const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
-
-/**
- * グローバルオプションの語が、次の語を値として取るなら真。
- * `-qE x`のように束ねた短いオプションは、値を取る文字が最初に現れる位置が末尾のときだけ、次の語を取る。
- */
-function miseOptionTakesNext(text: string): boolean {
-  if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) return true;
-  if (!/^-[A-Za-z]{2,}$/.test(text)) return false;
-  const letters = text.slice(1);
-  const at = letters.search(/[CEjPst]/);
-  return at !== -1 && at === letters.length - 1;
-}
 
 /** 実行時に語が増えるか変わる語なら真。引用符の外の展開、glob、ブレースである。 */
 function isUnstable(word: Word): boolean {
@@ -386,7 +365,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it.",
+    'mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. An option or value before the subcommand that is built from a variable or a glob (mise -C "$DIR" run ...) is denied too, because it could hide set; write it out as literal text.',
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
@@ -403,6 +382,14 @@ export const REASONS = {
     "mise exec passes the secrets of mise.local.toml to its command as environment variables, so a shell given code (-c or stdin), the -c/--command option, or an environment dump (env, printenv, set, export -p) can print them. Run the intended tool directly (for example mise exec -- gitleaks ... or mise exec -- wmill ...), or add a mise task and use mise run. Never print secret values.",
   shellStdin:
     "Shell code built from variables and passed through stdin cannot be checked. Pass literal text (echo 'git status' | sh), use sh -c '...', or run a script file.",
+  miseGenerate:
+    "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Any mise generate with a path under .git/hooks, .git/config, or .github/workflows, or with a word built from a variable, is denied too, because an option such as --output can write there. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
+  subagentHold:
+    "Subagents must not place or release holds, place a deploy freeze, or release a freeze: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
+  subagentHoldOption:
+    "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value. Subagents must not place or release holds.",
+  subagentHoldDynamic:
+    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Write the task name and the arguments out as literal text. Subagents must not place or release holds, place a deploy freeze, or release a freeze.",
 } as const;
 
 const DOCKER_REASONS = {
@@ -560,6 +547,29 @@ function directoryAfter(
   return resolveFrom(directory, target.text);
 }
 
+/** 標準入力に流れ込むものの出どころ。保留と凍結のコードを実行系へ流し込む形を見分けるために渡す。 */
+function holdStdin(command: SimpleCommand): HoldStdin {
+  const upstream: HoldUpstream[] = [];
+  for (
+    let source = command.pipedFrom;
+    source !== null;
+    source = source.pipedFrom
+  ) {
+    upstream.push({
+      words: [...stripWrappers(source.words).words],
+      redirects: source.redirects,
+      inputs: source.inputs,
+    });
+  }
+  return {
+    redirects: command.redirects,
+    upstream,
+    dynamicInput:
+      command.inputs.some((word) => word.dynamic) ||
+      command.redirects.some((word) => word.dynamic),
+  };
+}
+
 function checkSimpleCommand(
   command: SimpleCommand,
   directory: string | null,
@@ -587,11 +597,25 @@ function checkSimpleCommand(
   }
   const docker = dockerExposure(words);
   if (docker !== null) return deny(DOCKER_REASONS[docker]);
+  const hold =
+    scope.input.agentId === null
+      ? null
+      : findHoldOperation(
+          words,
+          () => literalShellInputs(command),
+          holdStdin(command),
+        );
+  if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
+  if (hold === "option") return deny(REASONS.subagentHoldOption);
+  if (hold !== null) return deny(REASONS.subagentHold);
   if (isLefthookUninstall(words)) {
     return deny(REASONS.lefthookUninstall);
   }
   if (touchesGitInternals(command, program, words)) {
     return deny(REASONS.gitInternals);
+  }
+  if (writesGeneratedFiles(program, words)) {
+    return deny(REASONS.miseGenerate);
   }
   const shellArgs = shellArguments(words);
   if (shellArgs !== null) {
@@ -758,6 +782,64 @@ function touchesGitInternals(
   }
   if (!MUTATING_PROGRAMS.has(program) && !editsInPlace) return false;
   return args.some((word) => GIT_INTERNALS.test(word.text));
+}
+
+/**
+ * 生成の書き先にしてはならないパス。`.git/hooks`、`.git/config`、`.github/workflows`。
+ * 照合の前に、`//`と`/./`を`/`にまとめる。大文字小文字は区別しない。
+ * 既存の`GIT_INTERNALS`と同じく、`cd`やシンボリックリンクを使った別名の書き方は見ない。
+ */
+const PROTECTED_GENERATE_PATH =
+  /\.git\/(?:hooks|config)\b|\.github\/workflows/i;
+
+function normalizeGeneratePath(text: string): string {
+  return text.replace(/\/(?:\.?\/)+/g, "/");
+}
+
+/** `mise generate`の別名。 */
+const GENERATE_NAMES: ReadonlySet<string> = new Set(["generate", "gen", "g"]);
+
+/** ファイルへ書く`--write`を持つ生成先。`pre-commit`は`git-pre-commit`の別名である。 */
+const GENERATE_WRITABLE_TARGETS: ReadonlySet<string> = new Set([
+  "git-pre-commit",
+  "pre-commit",
+  "github-action",
+]);
+
+/**
+ * `mise generate git-pre-commit`の`--write`は`.git/hooks`へ、
+ * `mise generate github-action`の`--write`は`.github/workflows`へ書く。
+ * `--write`(`-w`)だけが書く。`--hook`と`-t`(`--task`)は、書く先や中身を選ぶだけで、単独では書かない(実機で確かめた)。
+ * 短いフラグの束(`-wt`、`-wn`)は、`w`を含めば書く形として拒否する。
+ * 標準出力へ出す形は拒否しない。
+ */
+function writesGeneratedFiles(
+  program: string,
+  words: readonly Word[],
+): boolean {
+  if (program !== "mise") return false;
+  const args = words.slice(1);
+  const generate = args.findIndex((word) => GENERATE_NAMES.has(word.text));
+  if (generate === -1) return false;
+  const rest = args.slice(generate + 1);
+  // `--output`などで、どの生成先からでも書き込める。書き先が守る対象のパスか、実行時に決まる語は拒否する。
+  // `generate`の前の`-C`と`--cd`の値も、書き先の基準になるので見る。
+  if (
+    args.some(
+      (word) =>
+        isUnstable(word) ||
+        PROTECTED_GENERATE_PATH.test(normalizeGeneratePath(word.text)),
+    )
+  ) {
+    return true;
+  }
+  if (!rest.some((word) => GENERATE_WRITABLE_TARGETS.has(word.text))) {
+    return false;
+  }
+  return rest.some(
+    (word) =>
+      word.text === "--write" || /^-[A-Za-z]*w[A-Za-z]*$/.test(word.text),
+  );
 }
 
 /** `cp`、`rsync`、`install`の行き先を返す。`-t`か`--target-directory`があればその値、無ければ最後の引数。 */

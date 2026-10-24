@@ -1,6 +1,8 @@
 // `mise run test:db`の一部。migrationを適用した使い捨てデータベースで、保留の表`factory.holds`の
 // 制約と、`lib/holds.ts`が組み立てるSQL文を、本物のPostgreSQLで確かめる。
 // 値を埋め込む検査用の`SqlClient`で流すので、`wmill.datatable()`の束縛の経路は通らない。
+// 最後の節は、保留のCLIが使うpsqlの経路(`scripts/hold_psql.ts`)で、値の束縛と読み取り専用の接続を確かめる。
+// どちらも使い捨てのデータベース(`SCRATCH_DB`)だけに書き、CLIが書き込む本番のデータベースには触れない。
 //
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-holds.ts
 
@@ -13,6 +15,7 @@ import {
   placeHold,
   releaseHold,
 } from "../f/factory/lib/holds.ts";
+import { createHoldPsqlClient } from "./hold_psql.ts";
 import { createPsqlClient, execPsql, type PsqlTarget } from "./test-db-sql.ts";
 
 const composeFile = process.env.COMPOSE_FILE;
@@ -470,6 +473,187 @@ for (const [label, statement, constraint] of rejections) {
 check(
   "CHECK: an expiry of exactly 24 hours is accepted",
   accepts(insertStatement({ expires: "now() + interval '24 hours'" })),
+);
+
+// ---------------------------------------------------------------------------
+// psqlの経路(保留のCLIが使う)。値はSQLに埋め込まず、psqlの変数で束縛する
+// ---------------------------------------------------------------------------
+
+const psqlWrite = createHoldPsqlClient({
+  composeFile,
+  database,
+  mode: "write",
+});
+const psqlRead = createHoldPsqlClient({ composeFile, database, mode: "read" });
+
+const PSQL_TARGET = `${PREFIX}/psql`;
+const PSQL_FIRST = await placeHold(
+  input("merge", PSQL_TARGET, SESSION_A, 90),
+  psqlWrite,
+);
+check("psql: a merge hold is placed", PSQL_FIRST.ok, PSQL_FIRST);
+
+const psqlActive = await listActiveHolds(
+  { scope: "merge", target: PSQL_TARGET },
+  psqlRead,
+);
+check(
+  "psql: the placed hold is read back through the read-only connection",
+  psqlActive.ok &&
+    psqlActive.value.length === 1 &&
+    psqlActive.value[0]?.holder === SESSION_A.holder &&
+    psqlActive.value[0]?.reason === "probe",
+  psqlActive,
+);
+
+const psqlMinutes = await psqlRead`
+  SELECT id, (expires_at - created_at = interval '90 minutes') AS exact
+  FROM factory.holds WHERE target = ${PSQL_TARGET}
+`.fetch();
+check(
+  "psql: the number of minutes is bound as an integer and the database computes the expiry",
+  psqlMinutes.length === 1 && psqlMinutes[0]?.exact === true,
+  psqlMinutes,
+);
+
+const psqlDouble = await placeHold(
+  input("merge", PSQL_TARGET, SESSION_A),
+  psqlWrite,
+);
+check(
+  "psql: the same holder cannot place a merge hold twice",
+  !psqlDouble.ok && psqlDouble.reason === HOLD_ALREADY_ACTIVE,
+  psqlDouble,
+);
+
+const psqlStacked = await placeHold(
+  input("merge", PSQL_TARGET, SESSION_B),
+  psqlWrite,
+);
+check("psql: a hold of another holder is stacked", psqlStacked.ok, psqlStacked);
+
+if (PSQL_FIRST.ok) {
+  const refusedRelease = await releaseHold(
+    PSQL_FIRST.value.id,
+    SESSION_B,
+    psqlWrite,
+  );
+  check(
+    "psql: a session cannot release a hold of another holder",
+    !refusedRelease.ok,
+    refusedRelease,
+  );
+  const released = await releaseHold(PSQL_FIRST.value.id, SESSION_A, psqlWrite);
+  check("psql: a session releases its own hold", released.ok, released);
+}
+const psqlAfterRelease = await listActiveHolds(
+  { scope: "merge", target: PSQL_TARGET },
+  psqlRead,
+);
+check(
+  "psql: a released hold is no longer active",
+  psqlAfterRelease.ok &&
+    psqlAfterRelease.value.length === 1 &&
+    psqlAfterRelease.value[0]?.holder === SESSION_B.holder,
+  psqlAfterRelease,
+);
+
+// 引用符、バックスラッシュ、`:name`、`=`、二重引用符、`$`、非ASCII文字を含む値が、そのまま保存されること。
+const TRICKY_TARGET = `${PREFIX}/tricky`;
+const TRICKY_REASON = `it's a\\b :foo "q" $x =y; DROP \\; 保留`;
+const TRICKY_HOLDER = `session:o'brien\\x :bar`;
+const trickyPlaced = await placeHold(
+  {
+    scope: "merge",
+    target: TRICKY_TARGET,
+    reason: TRICKY_REASON,
+    holder_kind: "session",
+    holder: TRICKY_HOLDER,
+    minutes: 5,
+  },
+  psqlWrite,
+);
+check(
+  "psql: a value with quotes, a backslash and a :name is placed",
+  trickyPlaced.ok,
+  trickyPlaced,
+);
+const trickyRead = await listActiveHolds(
+  { scope: "merge", target: TRICKY_TARGET },
+  psqlRead,
+);
+check(
+  "psql: the tricky reason and holder are stored as they were given",
+  trickyRead.ok &&
+    trickyRead.value[0]?.reason === TRICKY_REASON &&
+    trickyRead.value[0]?.holder === TRICKY_HOLDER,
+  trickyRead,
+);
+if (trickyPlaced.ok) {
+  const trickyRelease = await releaseHold(
+    trickyPlaced.value.id,
+    { kind: "session", holder: TRICKY_HOLDER },
+    psqlWrite,
+  );
+  check(
+    "psql: the tricky holder releases its own hold",
+    trickyRelease.ok,
+    trickyRelease,
+  );
+}
+
+// NULLはSQLに直接書かれ、変数にならない。
+const psqlNull = await psqlRead`
+  SELECT 1 AS id, ${null}::text IS NULL AS is_null
+`.fetch();
+check(
+  "psql: null is written as NULL",
+  psqlNull.length === 1 && psqlNull[0]?.is_null === true,
+  psqlNull,
+);
+
+// 読み取り専用の接続は、書き込みを拒否する。拒否は接続のセッションの設定で、SQLの書き方には依らない。
+const READONLY_TARGET = `${PREFIX}/readonly`;
+const readOnlyPlace = await placeHold(
+  input("merge", READONLY_TARGET, SESSION_A),
+  psqlRead,
+);
+check(
+  "psql: the read-only connection refuses to place a hold",
+  !readOnlyPlace.ok,
+  readOnlyPlace,
+);
+const readOnlyRows = await rowsOf(READONLY_TARGET);
+check(
+  "psql: the refused placement left no row",
+  readOnlyRows.length === 0,
+  readOnlyRows,
+);
+let readOnlyError = "";
+try {
+  await psqlRead`UPDATE factory.holds SET reason = reason WHERE false`.execute();
+} catch (err) {
+  readOnlyError = err instanceof Error ? err.message : String(err);
+}
+check(
+  "psql: the read-only connection names the read-only transaction in its error",
+  readOnlyError.includes("read-only transaction"),
+  readOnlyError,
+);
+
+// 表が無いときのエラーの文が、`holds.ts`の判定が使う形であること。
+let missingError = "";
+try {
+  await psqlRead`SELECT 1 AS id FROM factory.holds_missing_probe`.fetch();
+} catch (err) {
+  missingError = err instanceof Error ? err.message : String(err);
+}
+check(
+  "psql: a missing relation is reported as 'relation \"factory.<name>\" does not exist'",
+  missingError.includes(
+    'relation "factory.holds_missing_probe" does not exist',
+  ),
+  missingError,
 );
 
 // 後で適用するdown migrationが表を消すので、検査の行は残してよいが、他の検査に影響しないよう消しておく。

@@ -147,6 +147,28 @@ describe("noticeGuide", () => {
     expect(noticeGuide("review_gated_prolonged").note).toContain("解決");
   });
 
+  test("tells how to see and release the hold that makes pull requests wait", () => {
+    expect(noticeGuide("dependabot_merge_held").action).toContain(
+      "mise run hold:list",
+    );
+  });
+
+  test("tells that the waiting pull requests resume by themselves", () => {
+    expect(noticeGuide("dependabot_merge_held").note).toContain("自動で再開");
+  });
+
+  test("tells what to check when the holds cannot be read", () => {
+    expect(noticeGuide("dependabot_merge_hold_unreadable").action).toContain(
+      "migration",
+    );
+  });
+
+  test("tells that the unreadable notice resolves by itself", () => {
+    expect(noticeGuide("dependabot_merge_hold_unreadable").note).toContain(
+      "自動で解決",
+    );
+  });
+
   test("tells where to see the load behind the worker load alert", () => {
     expect(noticeGuide("worker_load_high").action).toContain("システム");
   });

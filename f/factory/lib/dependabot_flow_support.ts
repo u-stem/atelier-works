@@ -13,6 +13,7 @@ import {
   INSTALL_SCRIPT_NAMES,
   lockfilePackages,
 } from "./dependabot_support.ts";
+import type { HoldReadFailureKind, HoldReadOutcome } from "./holds.ts";
 import { sanitizePrProse } from "./implement_support.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import { type FactoryConfig, isRecord } from "./types.ts";
@@ -943,3 +944,61 @@ export function dependabotReason(
  */
 export const OTHER_REPO_UNSUPPORTED_REASON =
   "analysis without running repository commands is not implemented for this repository";
+
+/** 保留を読めなかった理由の種類。`HoldReadFailureKind`に、読み取りが例外で終わった`error`を足す。 */
+export type MergeHoldFailure = HoldReadFailureKind | "error";
+
+/** マージの保留の確認の結果。 */
+export type MergeHoldCheck =
+  | { readonly kind: "clear" }
+  | { readonly kind: "held"; readonly ids: readonly number[] }
+  | { readonly kind: "unreadable"; readonly failure: MergeHoldFailure };
+
+/**
+ * 保留があるために、マージせずに人に回すときの理由。
+ * 保留の`reason`と`holder`は信頼できない文字列なので、理由にも通知にも載せない。
+ */
+export const DEPENDABOT_MERGE_HELD_REASON = "dependabot merge held by a hold";
+
+/** 保留を読めなかったために、マージせずに人に回すときの理由の接頭辞。後ろに`MergeHoldFailure`が付く。 */
+export const DEPENDABOT_HOLD_UNREADABLE_PREFIX =
+  "dependabot merge hold unreadable: ";
+
+/** 保留を読めなかったために、マージせずに人に回すときの理由。 */
+export function dependabotHoldUnreadableReason(
+  failure: MergeHoldFailure,
+): string {
+  return `${DEPENDABOT_HOLD_UNREADABLE_PREFIX}${failure}`;
+}
+
+/** 止める確認の結果に対応する理由。 */
+export function mergeHoldReason(
+  check: Exclude<MergeHoldCheck, { kind: "clear" }>,
+): string {
+  return check.kind === "held"
+    ? DEPENDABOT_MERGE_HELD_REASON
+    : dependabotHoldUnreadableReason(check.failure);
+}
+
+/**
+ * マージの保留を読み、進めてよいかを分類する。
+ * 保留があるときと、読めないとき(表が無い、読めない、行が壊れている、例外)は、どちらも止める。
+ * 読めないことを「保留なし」と扱わない。止める確認の結果は、種類と保留のidだけを持つ。
+ * 失敗の文は秘密を含みうるので、持たない。
+ */
+export async function classifyMergeHolds(
+  read: () => Promise<HoldReadOutcome<readonly { readonly id: number }[]>>,
+): Promise<MergeHoldCheck> {
+  let outcome: HoldReadOutcome<readonly { readonly id: number }[]>;
+  try {
+    outcome = await read();
+  } catch {
+    return { kind: "unreadable", failure: "error" };
+  }
+  if (!outcome.ok) return { kind: "unreadable", failure: outcome.kind };
+  if (outcome.value.length === 0) return { kind: "clear" };
+  return {
+    kind: "held",
+    ids: outcome.value.map((hold) => hold.id).sort((a, b) => a - b),
+  };
+}

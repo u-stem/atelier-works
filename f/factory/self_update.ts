@@ -62,6 +62,7 @@ import {
   loadFreezeInputs,
   prepareFrozenPush,
   sdkFreezePorts,
+  shouldHoldDeploy,
 } from "./lib/freeze_apply.ts";
 import type { Outcome } from "./lib/freezes.ts";
 import {
@@ -483,6 +484,33 @@ async function resolveChangedPaths(
     : diffPaths(run, dir, oldSha, newSha);
 }
 
+type DeployedShaAdvance = {
+  readonly changedPaths: string[];
+  readonly classification: ReturnType<typeof classifyChangedPaths>;
+};
+
+/**
+ * `deployed_sha`を更新し、そのあとで変更パスを列挙して分類する。
+ * 更新を先に行うのは、`deployed_sha`が clone に無い値などの誤った値のとき、列挙が失敗し続けて
+ * 同じ範囲のpushとmigrationと失敗の記録が2分ごとに繰り返されるのを、1回の失敗で`HEAD`に進めて止めるため。
+ * 更新できたら`onUpdated`を呼ぶ。更新の後に列挙が失敗すると、host actionの通知と`changed_paths`が欠ける。
+ */
+export async function advanceDeployedSha(deps: {
+  readonly setSha: () => Promise<void>;
+  readonly onUpdated: () => void;
+  readonly listChangedPaths: () => Promise<string[]>;
+  readonly hostSectionsChanged: () => Promise<boolean>;
+}): Promise<DeployedShaAdvance> {
+  await deps.setSha();
+  deps.onUpdated();
+  const changedPaths = await deps.listChangedPaths();
+  const miseChanged = changedPaths.includes(MISE_TOML_PATH)
+    ? await deps.hostSectionsChanged()
+    : false;
+  const classification = classifyChangedPaths(changedPaths, miseChanged);
+  return { changedPaths, classification };
+}
+
 // ---------------------------------------------------------------------------
 // `wmill` CLIの子プロセスの実行
 // ---------------------------------------------------------------------------
@@ -727,6 +755,7 @@ export const SELF_UPDATE_WORST_CASE_MS =
 export type SelfUpdateResult =
   | { readonly outcome: "unchanged" }
   | { readonly outcome: "skipped"; readonly reason: "factory_repo_id" }
+  | { readonly outcome: "held"; readonly reason: "deploy_freeze" }
   | {
       readonly outcome: "updated";
       readonly sha_from: string | null;
@@ -1065,6 +1094,21 @@ async function updateSelf(
     return { outcome: "unchanged" };
   }
 
+  // deployの保留が有効なあいだは反映全体(push、migration、`deployed_sha`の更新)を待つ。
+  // 凍結を読めたときだけ判定する。読めない回は、下で失敗として記録する。
+  // 失敗の行を足す`try`の前で戻るので、トークンの取得などの例外でも、見送った回に失敗の行は足さない。
+  // `deployed_sha`を進めないので、保留が切れた最初の回が同じ範囲をそのまま反映する。
+  // `reason`と`holder`は信頼できない文字列なので、ログにはidと期限だけを出す。
+  if (freeze.ok && shouldHoldDeploy(freeze.value)) {
+    log.info("a deploy freeze is active, deferring the deployment", {
+      freezes: freeze.value.deployFreezes,
+      sha_from: deployedSha,
+      sha_to: currentSha,
+    });
+    await resolveHostActionNotices();
+    return { outcome: "held", reason: "deploy_freeze" };
+  }
+
   log.info(
     reconcileOnly
       ? "schedule freezes ended, pushing again"
@@ -1078,6 +1122,8 @@ async function updateSelf(
   // 下でトークンを取得した時点で埋め、外側のcatchの`maskSecrets`でも使う。
   // 両方から参照できるよう、ここで宣言する。
   let secrets: string[] = [];
+  // `deployed_sha`を更新した後は反映が済んでいる。その後の失敗は、失敗の反映として記録しない。
+  let deployedShaUpdated = false;
 
   try {
     const wmillToken = await withCallTimeout("getVariable wmill_token", () =>
@@ -1134,35 +1180,39 @@ async function updateSelf(
       secrets,
     );
 
-    await setDeployedSha(
-      {
-        set: () =>
-          wmill.setVariable(
-            "f/factory/deployed_sha",
-            currentSha,
-            false,
-            "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
-          ),
-        get: () => wmill.getVariable("f/factory/deployed_sha"),
+    const { changedPaths, classification } = await advanceDeployedSha({
+      setSha: () =>
+        setDeployedSha(
+          {
+            set: () =>
+              wmill.setVariable(
+                "f/factory/deployed_sha",
+                currentSha,
+                false,
+                "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+              ),
+            get: () => wmill.getVariable("f/factory/deployed_sha"),
+          },
+          currentSha,
+        ),
+      onUpdated: () => {
+        deployedShaUpdated = true;
       },
-      currentSha,
-    );
-
-    const changedPaths = await resolveChangedPaths(
-      runCommand,
-      factoryClone.dir,
-      deployedSha,
-      currentSha,
-    );
-    const miseChanged = changedPaths.includes(MISE_TOML_PATH)
-      ? await miseTomlHostSectionsChanged(
+      listChangedPaths: () =>
+        resolveChangedPaths(
           runCommand,
           factoryClone.dir,
           deployedSha,
           currentSha,
-        )
-      : false;
-    const classification = classifyChangedPaths(changedPaths, miseChanged);
+        ),
+      hostSectionsChanged: () =>
+        miseTomlHostSectionsChanged(
+          runCommand,
+          factoryClone.dir,
+          deployedSha,
+          currentSha,
+        ),
+    });
 
     // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
     let pullRequests: DeploymentPullRequest[] = [];
@@ -1251,7 +1301,8 @@ async function updateSelf(
     });
     // 理由はログと同じ伏せ字処理を通して記録する。記録に失敗しても元の例外を投げる。
     // 凍結の追従だけの回は、反映の対象のコミットが無いので、失敗の行を足さない(次の回が再試行する)。
-    if (!reconcileOnly) {
+    // `deployed_sha`の更新後は反映が済んでいるので、失敗の行を足さない。
+    if (!reconcileOnly && !deployedShaUpdated) {
       await recordFailedDeployment(
         {
           record: (record) => recordDeployment(record),

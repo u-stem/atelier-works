@@ -6,6 +6,7 @@ import {
   isUndefinedTableError,
   parseHoldRow,
   type RawPlaceInput,
+  sanitizeHoldText,
   validatePlaceInput,
 } from "../../f/factory/lib/holds.ts";
 
@@ -441,5 +442,27 @@ describe("isUndefinedTableError", () => {
     expect(
       isUndefinedTableError('relation "factory.holds" does not exist'),
     ).toBe(false);
+  });
+});
+
+describe("sanitizeHoldText", () => {
+  test("turns a control character into a space", () => {
+    expect(sanitizeHoldText("a\u001b[31mb")).toBe("a [31mb");
+  });
+
+  test("turns a newline into a space", () => {
+    expect(sanitizeHoldText("line1\nline2")).toBe("line1 line2");
+  });
+
+  test("turns a bidirectional override into a space", () => {
+    expect(sanitizeHoldText("ok\u202eevil")).toBe("ok evil");
+  });
+
+  test("turns a line separator into a space", () => {
+    expect(sanitizeHoldText("a\u2028b")).toBe("a b");
+  });
+
+  test("keeps ordinary text, including Japanese", () => {
+    expect(sanitizeHoldText("保留 hold: ok")).toBe("保留 hold: ok");
   });
 });

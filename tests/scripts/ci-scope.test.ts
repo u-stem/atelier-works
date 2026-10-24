@@ -135,6 +135,16 @@ describe("scopeOfPaths", () => {
     );
   });
 
+  test("runs only db for the psql route of the holds CLI, which the holds checks import", () => {
+    expect(scopeOfPaths(["scripts/hold_psql.ts"])).toEqual(
+      noneScope({ db: true }),
+    );
+  });
+
+  test("lists the psql route of the holds CLI as a db dependency", () => {
+    expect(DB_DEPENDENCY_FILES).toContain("scripts/hold_psql.ts");
+  });
+
   test("runs db and metadata for the holds library", () => {
     expect(scopeOfPaths(["f/factory/lib/holds.ts"])).toEqual(
       noneScope({ db: true, metadata: true }),

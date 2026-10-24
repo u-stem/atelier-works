@@ -48,8 +48,50 @@ describe("mise.toml push tasks", () => {
     );
   });
 
-  test("deploy pushes through the wrapper", () => {
-    expect(taskBody("deploy")).toContain("scripts/freeze.ts push");
+  test("deploy pushes and migrates through the wrapper", () => {
+    expect(taskBody("deploy")).toContain("scripts/freeze.ts apply");
+  });
+
+  test("deploy applies after it restarts the stack", () => {
+    const body = taskBody("deploy");
+
+    expect(
+      body.indexOf("docker compose -f infra/docker-compose.yml up"),
+    ).toBeLessThan(body.indexOf("scripts/freeze.ts apply"));
+  });
+
+  test("deploy records the host apply after the wrapper", () => {
+    const body = taskBody("deploy");
+    const wrapper = body.indexOf("scripts/freeze.ts apply");
+
+    expect(
+      wrapper >= 0 && wrapper < body.indexOf("scripts/record-host-applied.sh"),
+    ).toBe(true);
+  });
+
+  test("migrate runs the migration through the wrapper", () => {
+    expect(taskBody("migrate")).toContain("scripts/freeze.ts migrate");
+  });
+
+  test("up checks the freezes before it touches docker", () => {
+    const body = taskBody("up");
+    const check = body.indexOf("scripts/freeze.ts check");
+
+    expect(check >= 0 && check < body.indexOf("docker compose")).toBe(true);
+  });
+
+  test("up checks the freezes", () => {
+    expect(taskBody("up")).toContain("scripts/freeze.ts check");
+  });
+
+  test("no task runs the migration without the wrapper", () => {
+    const commands = MISE.split("\n").filter(
+      (line) => !line.trimStart().startsWith("#"),
+    );
+
+    expect(
+      commands.some((line) => line.includes("wmill datatable migrate up")),
+    ).toBe(false);
   });
 
   for (const name of [
@@ -138,8 +180,133 @@ describe("self_update reconcile-only run", () => {
     const text = await source();
 
     expect(text).toMatch(
-      /if \(!reconcileOnly\) \{\s*await recordFailedDeployment\(/,
+      /if \(!reconcileOnly && !deployedShaUpdated\) \{\s*await recordFailedDeployment\(/,
     );
+  });
+});
+
+describe("self_update deploy freeze", () => {
+  async function source(): Promise<string> {
+    return await Bun.file("f/factory/self_update.ts").text();
+  }
+
+  /** 見つからない照合を、通ったことにしないために例外にする。 */
+  function at(text: string, needle: string): number {
+    const index = text.indexOf(needle);
+    if (index < 0) throw new Error(`not found in self_update.ts: ${needle}`);
+    return index;
+  }
+
+  /** 見送りの判定から、見送りの戻りまでの本文。 */
+  async function heldBlock(): Promise<string> {
+    const text = await source();
+    const start = at(text, "shouldHoldDeploy(freeze.value)");
+    return text.slice(start, at(text, 'return { outcome: "held"'));
+  }
+
+  test("decides to hold before the first wmill call", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, "await runWmillCli("),
+    );
+  });
+
+  test("decides to hold before the wmill token is read", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, 'getVariable("f/factory/wmill_token")'),
+    );
+  });
+
+  test("decides to hold before the wmill.yaml check", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, "await assertWmillYamlExists("),
+    );
+  });
+
+  test("decides to hold outside the try block that records a failed deployment", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, "let deployedShaUpdated"),
+    );
+  });
+
+  test("decides to hold only after the freeze variable is known to be readable", async () => {
+    const text = await source();
+
+    expect(text).toMatch(
+      /if \(freeze\.ok && shouldHoldDeploy\(freeze\.value\)\)/,
+    );
+  });
+
+  test("decides to hold only once", async () => {
+    const text = await source();
+
+    expect(text.match(/shouldHoldDeploy\(freeze\.value\)/g)?.length).toBe(1);
+  });
+
+  test("returns held before the deployed sha update", async () => {
+    const text = await source();
+
+    expect(at(text, 'return { outcome: "held"')).toBeLessThan(
+      at(text, "setDeployedSha("),
+    );
+  });
+
+  test("returns held with the deploy_freeze reason", async () => {
+    const text = await source();
+
+    expect(text).toContain('{ outcome: "held", reason: "deploy_freeze" }');
+  });
+
+  test("does not record a failed deployment when it holds", async () => {
+    expect(await heldBlock()).not.toContain("recordFailedDeployment");
+  });
+
+  test("does not throw when it holds", async () => {
+    expect(await heldBlock()).not.toContain("throw ");
+  });
+
+  test("does not read the reason or the holder of a freeze", async () => {
+    expect(await heldBlock()).not.toMatch(/\.(reason|holder)\b/);
+  });
+
+  test("logs the id and the expiry of the freezes", async () => {
+    expect(await heldBlock()).toContain("freeze.value.deployFreezes");
+  });
+
+  test("holds while it reconciles an ended schedule freeze too", async () => {
+    const text = await source();
+
+    expect(at(text, "shouldHoldDeploy(freeze.value)")).toBeLessThan(
+      at(text, "if (reconcileOnly) {"),
+    );
+  });
+});
+
+describe("poll_issues deploy freeze", () => {
+  async function source(): Promise<string> {
+    return await Bun.file("f/factory/poll_issues.ts").text();
+  }
+
+  test("passes the deploy freeze check to the deployed sha check", async () => {
+    expect(await source()).toContain("isDeployHeld:");
+  });
+
+  test("reads only the deploy freezes", async () => {
+    expect(await source()).toContain("readActiveDeployFreezes(");
+  });
+
+  test("bounds the read of the freeze variable", async () => {
+    const text = await source();
+    const at = text.indexOf("readActiveDeployFreezes(");
+
+    expect(at >= 0 && text.lastIndexOf("withCallTimeout(", at) > 0).toBe(true);
   });
 });
 

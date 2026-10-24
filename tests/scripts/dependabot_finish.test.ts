@@ -7,8 +7,10 @@ import { describe, expect, test } from "bun:test";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
+  DEPENDABOT_MERGE_HELD_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
+  dependabotHoldUnreadableReason,
   dependabotReason,
   OTHER_REPO_UNSUPPORTED_REASON,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
@@ -24,6 +26,7 @@ import {
   type PullRequest,
   withMarker,
 } from "../../f/factory/lib/github.ts";
+import type { HoldReadOutcome, HoldRow } from "../../f/factory/lib/holds.ts";
 import { UNNAMED_PACKAGES_ESCALATION } from "../../f/factory/steps/dependabot_assess.ts";
 import {
   DEPENDABOT_AUTO_FIX_LABEL,
@@ -319,6 +322,10 @@ type FakeOptions = {
   readonly ownerStop?: string;
   /** オーナーの数値IDの照合が投げる例外(404以外の取得の失敗)。 */
   readonly ownerCheckError?: Error;
+  /** マージの保留の読み取りの結果。省略時は保留なし。 */
+  readonly holds?: HoldReadOutcome<readonly HoldRow[]>;
+  /** マージの保留の読み取りが投げる例外。 */
+  readonly holdsError?: Error;
 };
 
 function fake(options: FakeOptions = {}): {
@@ -374,6 +381,11 @@ function fake(options: FakeOptions = {}): {
       record("ensureRepoOwner", owner, repo);
       if (options.ownerCheckError !== undefined) throw options.ownerCheckError;
       return options.ownerStop ?? null;
+    },
+    listMergeHolds: async (owner, repo) => {
+      record("listMergeHolds", owner, repo);
+      if (options.holdsError !== undefined) throw options.holdsError;
+      return options.holds ?? { ok: true, value: [] };
     },
     getViewerLogin: async () => {
       record("getViewerLogin");
@@ -2350,5 +2362,341 @@ describe("renderHumanReviewBody", () => {
       withMarker("dependabot", WORK_ITEM_ID, renderHumanReviewBody(result))
         .length,
     ).toBeLessThanOrEqual(GITHUB_REVIEW_BODY_MAX_CHARS);
+  });
+});
+
+// ---- マージの保留 ----
+
+function holdRow(id: number, overrides: Partial<HoldRow> = {}): HoldRow {
+  return {
+    id,
+    scope: "merge",
+    target: "acme/widgets",
+    reason: "checking the lockfile",
+    holder_kind: "session",
+    holder: "session:feat/x",
+    created_at: "2026-10-24T00:00:00.000Z",
+    expires_at: "2026-10-24T02:00:00.000Z",
+    released_at: null,
+    released_by: null,
+    ...overrides,
+  };
+}
+
+const HELD: HoldReadOutcome<readonly HoldRow[]> = {
+  ok: true,
+  value: [holdRow(3)],
+};
+
+describe("runDependabotFinish when a merge hold is active", () => {
+  test("does not merge", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands the pull request to a person with the held reason", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", DEPENDABOT_MERGE_HELD_REASON],
+    ]);
+  });
+
+  test("ends the work item as needs_human without cancelling it", async () => {
+    const { result } = await run(mergeInput(), { holds: HELD });
+
+    expect([result.action, result.status]).toEqual([
+      "needs_human",
+      "needs_human",
+    ]);
+  });
+
+  test("reads the holds of the repository of the pull request", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(named(calls, "listMergeHolds").map((c) => c.args)).toEqual([
+      ["acme", "widgets"],
+    ]);
+  });
+
+  test("reads the holds only once", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(named(calls, "listMergeHolds")).toHaveLength(1);
+  });
+
+  test("stops before the dry run decides", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: HELD,
+      mergeEnabled: false,
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", DEPENDABOT_MERGE_HELD_REASON],
+    ]);
+  });
+
+  test("tells the person how to see and release the hold", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    const action = needsHumanEvent(calls)?.next_action ?? "";
+    expect(
+      action.includes("mise run hold:list") &&
+        action.includes("mise run hold:release"),
+    ).toBe(true);
+  });
+
+  test("tells the person that the work item cannot be run again", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(needsHumanEvent(calls)?.next_action).toContain("再実行もできません");
+  });
+
+  test("uses the next action of the held reason", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(needsHumanEvent(calls)?.next_action).toBe(
+      nextActionFor(DEPENDABOT_MERGE_HELD_REASON, "dependabot"),
+    );
+  });
+
+  test("puts the number of holds and their ids in the notification", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: { ok: true, value: [holdRow(8), holdRow(3)] },
+    });
+
+    expect(needsHumanEvent(calls)?.reason).toContain("2件(id: 3, 8)");
+  });
+
+  test("does not put the reason or the holder of a hold in the notification", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: {
+        ok: true,
+        value: [
+          holdRow(3, {
+            reason: "SECRET-REASON",
+            holder: "session:SECRET-HOLDER",
+          }),
+        ],
+      },
+    });
+
+    expect(JSON.stringify(named(calls, "notify"))).not.toMatch(/SECRET/);
+  });
+
+  test("logs the kind, the count and the ids, but not the reason or the holder", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: {
+        ok: true,
+        value: [
+          holdRow(3, {
+            reason: "SECRET-REASON",
+            holder: "session:SECRET-HOLDER",
+          }),
+        ],
+      },
+    });
+
+    expect(named(calls, "warn").map((c) => c.args)).toEqual([
+      [
+        "dependabot merge stopped by a hold",
+        { work_item_id: WORK_ITEM_ID, kind: "held", count: 1, hold_ids: [3] },
+      ],
+    ]);
+  });
+
+  test("records the status once", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(statusUpdates(calls)).toHaveLength(1);
+  });
+
+  test("does not post to the pull request", async () => {
+    const { calls } = await run(mergeInput(), { holds: HELD });
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("still stops when another status update was lost", async () => {
+    const { result } = await run(mergeInput(), {
+      holds: HELD,
+      updateResult: false,
+    });
+
+    expect([result.action, result.status]).toEqual(["needs_human", null]);
+  });
+});
+
+describe("runDependabotFinish when the merge holds cannot be read", () => {
+  const FAILURES = [
+    ["missing_table", "missing_table"],
+    ["read_failed", "read_failed"],
+    ["corrupt", "corrupt"],
+  ] as const;
+
+  test.each(FAILURES)(
+    "does not merge when the read fails with %s",
+    async (kind) => {
+      const { calls } = await run(mergeInput(), {
+        holds: { ok: false, kind, reason: "x" },
+      });
+
+      expect(named(calls, "mergePullRequest")).toHaveLength(0);
+    },
+  );
+
+  test.each(FAILURES)(
+    "hands the pull request to a person when the read fails with %s",
+    async (kind) => {
+      const { calls } = await run(mergeInput(), {
+        holds: { ok: false, kind, reason: "x" },
+      });
+
+      expect(statusUpdates(calls)).toEqual([
+        [
+          WORK_ITEM_ID,
+          "picked",
+          "needs_human",
+          dependabotHoldUnreadableReason(kind),
+        ],
+      ]);
+    },
+  );
+
+  test("does not merge when the read throws", async () => {
+    const { calls } = await run(mergeInput(), {
+      holdsError: new Error("connection refused"),
+    });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands the pull request to a person when the read throws", async () => {
+    const { calls } = await run(mergeInput(), {
+      holdsError: new Error("connection refused"),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [
+        WORK_ITEM_ID,
+        "picked",
+        "needs_human",
+        dependabotHoldUnreadableReason("error"),
+      ],
+    ]);
+  });
+
+  test("does not leave the work item picked when the read throws", async () => {
+    const { result } = await run(mergeInput(), {
+      holdsError: new Error("connection refused"),
+    });
+
+    expect(result.status).toBe("needs_human");
+  });
+
+  test("does not put the text of the failure in the notification or the log", async () => {
+    const { calls } = await run(mergeInput(), {
+      holdsError: new Error("password=hunter2"),
+    });
+
+    expect(
+      JSON.stringify([...named(calls, "notify"), ...named(calls, "warn")]),
+    ).not.toContain("hunter2");
+  });
+
+  test("logs the kind of the failure", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: { ok: false, kind: "corrupt", reason: "x" },
+    });
+
+    expect(named(calls, "warn").map((c) => c.args)).toEqual([
+      [
+        "dependabot merge stopped by a hold",
+        { work_item_id: WORK_ITEM_ID, kind: "corrupt" },
+      ],
+    ]);
+  });
+
+  test("separates the unreadable reason from the held reason", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: { ok: false, kind: "read_failed", reason: "x" },
+    });
+
+    expect(needsHumanEvent(calls)?.next_action).not.toBe(
+      nextActionFor(DEPENDABOT_MERGE_HELD_REASON, "dependabot"),
+    );
+  });
+
+  test("points at the migration when the table is missing", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: { ok: false, kind: "missing_table", reason: "x" },
+    });
+
+    expect(needsHumanEvent(calls)?.next_action).toContain("migration");
+  });
+
+  test("points at the recovery steps when a row is malformed", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: { ok: false, kind: "corrupt", reason: "x" },
+    });
+
+    expect(needsHumanEvent(calls)?.next_action).toContain("hold:list");
+  });
+});
+
+describe("runDependabotFinish merges when no merge hold is active", () => {
+  test("merges when the read returns no hold", async () => {
+    const { calls } = await run(mergeInput(), {
+      holds: { ok: true, value: [] },
+    });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+
+  test("reads the holds", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(named(calls, "listMergeHolds")).toHaveLength(1);
+  });
+
+  test("reads the holds before the merge request", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(indexOfCall(calls, "listMergeHolds")).toBeLessThan(
+      indexOfCall(calls, "mergePullRequest"),
+    );
+  });
+
+  test("reads the holds after the checks of the pull request and of main", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(indexOfCall(calls, "listMergeHolds")).toBeGreaterThan(
+      indexOfCall(calls, "getBranchSha"),
+    );
+  });
+
+  test("reads the holds when merging is disabled, as the dry run comes after", async () => {
+    const { calls } = await run(mergeInput(), { mergeEnabled: false });
+
+    expect(named(calls, "listMergeHolds")).toHaveLength(1);
+  });
+
+  test("does not read the holds when the outcome is not a merge", async () => {
+    const { calls } = await run(fixInput());
+
+    expect(named(calls, "listMergeHolds")).toHaveLength(0);
+  });
+
+  test("does not read the holds when the work item is handed to a person", async () => {
+    const { calls } = await run(humanInput());
+
+    expect(named(calls, "listMergeHolds")).toHaveLength(0);
+  });
+
+  test("does not read the holds when dependabot is disabled", async () => {
+    const { calls } = await run(mergeInput(), { enabled: false });
+
+    expect(named(calls, "listMergeHolds")).toHaveLength(0);
   });
 });

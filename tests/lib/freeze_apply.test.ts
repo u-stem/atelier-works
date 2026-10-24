@@ -10,9 +10,12 @@ import {
   loadFreezeInputs,
   mutateFreezeState,
   prepareFrozenPush,
+  readActiveDeployFreezes,
   sdkFreezePorts,
+  shouldHoldDeploy,
 } from "../../f/factory/lib/freeze_apply.ts";
 import {
+  type DeployFreezeEntry,
   FREEZE_REQUIRED_EXCLUDES,
   type FreezeEntry,
   type FreezeState,
@@ -41,7 +44,7 @@ function entry(overrides: Partial<FreezeEntry> = {}): FreezeEntry {
 }
 
 function text(...freezes: FreezeEntry[]): string {
-  const state: FreezeState = { version: 1, freezes };
+  const state: FreezeState = { version: 1, freezes, deploy_freezes: [] };
   return serializeFreezeState(state);
 }
 
@@ -183,7 +186,7 @@ describe("mutateFreezeState", () => {
 
     await mutateFreezeState(ports, (state) => ({
       ok: true,
-      value: { version: 1, freezes: state.freezes.slice(0, 0) },
+      value: { ...state, freezes: state.freezes.slice(0, 0) },
     }));
 
     expect(writes).toEqual([text()]);
@@ -364,6 +367,7 @@ describe("chooseFreezeAction", () => {
       excludesArg: "--excludes=a",
       excludedTargets: [],
       readyIds: ids,
+      deployFreezes: [],
       warnings: [],
     },
   });
@@ -387,5 +391,186 @@ describe("chooseFreezeAction", () => {
 
   test("tries to deploy a changed clone even when the freezes cannot be read", () => {
     expect(chooseFreezeAction(false, broken)).toBe("deploy");
+  });
+});
+
+function deployEntry(
+  overrides: Partial<DeployFreezeEntry> = {},
+): DeployFreezeEntry {
+  return {
+    id: "d0a1b2c3",
+    reason: "migrate",
+    holder_kind: "session",
+    holder: "session:x",
+    created_at: new Date(NOW.getTime() - HOUR).toISOString(),
+    expires_at: new Date(NOW.getTime() + HOUR).toISOString(),
+    released_at: null,
+    ...overrides,
+  };
+}
+
+function textWithDeploy(
+  freezes: readonly FreezeEntry[],
+  deploy: readonly DeployFreezeEntry[],
+): string {
+  return serializeFreezeState({
+    version: 1,
+    freezes,
+    deploy_freezes: deploy,
+  });
+}
+
+const EXPIRED_DEPLOY = deployEntry({
+  id: "bbbb9999",
+  expires_at: new Date(NOW.getTime() - 1).toISOString(),
+});
+
+describe("prepareFrozenPush with deploy freezes", () => {
+  test("lists an active deploy freeze with its id and expiry", async () => {
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [deployEntry()])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok && result.value.deployFreezes).toEqual([
+      { id: "d0a1b2c3", expires_at: deployEntry().expires_at },
+    ]);
+  });
+
+  test("does not list an expired deploy freeze", async () => {
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [EXPIRED_DEPLOY])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok && result.value.deployFreezes).toEqual([]);
+  });
+
+  test("does not list a released deploy freeze", async () => {
+    const released = deployEntry({
+      released_at: new Date(NOW.getTime() - 1).toISOString(),
+    });
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [released])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok && result.value.deployFreezes).toEqual([]);
+  });
+
+  test("does not make an ended deploy row ready for reconciliation", async () => {
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [EXPIRED_DEPLOY])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok && result.value.readyIds).toEqual([]);
+  });
+
+  test("does not exclude any schedule for a deploy freeze", async () => {
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [deployEntry()])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok && result.value.excludedTargets).toEqual([]);
+  });
+
+  test("is empty when the variable is missing", async () => {
+    const result = await prepareFrozenPush(fake(null).ports, INPUTS);
+
+    expect(result.ok && result.value.deployFreezes).toEqual([]);
+  });
+});
+
+describe("finishFrozenPush with deploy freezes", () => {
+  test("keeps the deploy rows when it removes the ended schedule rows", async () => {
+    const { ports, writes } = fake(textWithDeploy([EXPIRED], [deployEntry()]));
+
+    await finishFrozenPush(ports, ["bbbb2222"]);
+
+    expect(writes[0]).toBe(textWithDeploy([], [deployEntry()]));
+  });
+});
+
+describe("readActiveDeployFreezes", () => {
+  test("returns the active deploy freezes", async () => {
+    const result = await readActiveDeployFreezes(
+      fake(textWithDeploy([], [deployEntry(), EXPIRED_DEPLOY])).ports,
+    );
+
+    expect(result.ok && result.value.map((e) => e.id)).toEqual(["d0a1b2c3"]);
+  });
+
+  test("returns none for a variable without deploy freezes", async () => {
+    const result = await readActiveDeployFreezes(fake(text(entry())).ports);
+
+    expect(result.ok && result.value).toEqual([]);
+  });
+
+  test("returns none when the variable is missing", async () => {
+    const result = await readActiveDeployFreezes(fake(null).ports);
+
+    expect(result.ok && result.value).toEqual([]);
+  });
+
+  test("fails when the variable cannot be read", async () => {
+    const result = await readActiveDeployFreezes(
+      fake(new Error("connection refused")).ports,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("fails when the variable is corrupt", async () => {
+    const result = await readActiveDeployFreezes(fake("{").ports);
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("does not write", async () => {
+    const { ports, writes } = fake(textWithDeploy([], [deployEntry()]));
+
+    await readActiveDeployFreezes(ports);
+
+    expect(writes).toEqual([]);
+  });
+});
+
+describe("shouldHoldDeploy", () => {
+  test("is true when a deploy freeze is active", () => {
+    expect(
+      shouldHoldDeploy({
+        deployFreezes: [{ id: "d0a1b2c3", expires_at: "x" }],
+      }),
+    ).toBe(true);
+  });
+
+  test("is false when no deploy freeze is active", () => {
+    expect(shouldHoldDeploy({ deployFreezes: [] })).toBe(false);
+  });
+});
+
+describe("a row with an impossible time", () => {
+  const future = deployEntry({
+    created_at: new Date(NOW.getTime() + 10 * 60_000).toISOString(),
+    expires_at: new Date(NOW.getTime() + 70 * 60_000).toISOString(),
+  });
+
+  test("makes the preparation of a push fail", async () => {
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [future])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("makes the read of the deploy freezes fail", async () => {
+    const result = await readActiveDeployFreezes(
+      fake(textWithDeploy([], [future])).ports,
+    );
+
+    expect(result.ok).toBe(false);
   });
 });

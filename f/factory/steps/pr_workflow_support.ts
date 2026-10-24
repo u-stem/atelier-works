@@ -24,7 +24,9 @@ import {
 import { conflictRoundReason } from "../lib/conflict_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
+  DEPENDABOT_HOLD_UNREADABLE_PREFIX,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
+  DEPENDABOT_MERGE_HELD_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_REASON_PREFIX,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
@@ -3976,6 +3978,53 @@ function reasonPattern(prefix: string, tail: string): RegExp {
   return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`);
 }
 
+/** マージの保留を読めなかった理由ごとの、原因の説明と次の操作。 */
+const HOLD_UNREADABLE_TEXT: ReadonlyMap<
+  string,
+  { readonly cause: string; readonly next: string }
+> = new Map([
+  [
+    "missing_table",
+    {
+      cause: "保留の表がないため",
+      next: "保留の表を作るmigrationが反映済みか、デプロイの記録で確認してください。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+    },
+  ],
+  [
+    "read_failed",
+    {
+      cause: "保留の表を読めなかったため",
+      next: "DBが動いているか確認し、`mise run hold:list`で保留を読めるか確かめてください。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+    },
+  ],
+  [
+    "corrupt",
+    {
+      cause: "保留の表に壊れた行があるため",
+      next: "`mise run hold:list`で壊れた行を確認し、psqlでその行を解除か削除してください。回復の手順は保留の内部仕様にあります。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+    },
+  ],
+  [
+    "error",
+    {
+      cause: "保留の読み取りで予期しない失敗があったため",
+      next: "workerのログで原因を確認し、`mise run hold:list`で保留を読めるか確かめてください。その後PRを確認して手でマージしてください。この作業項目は再実行できません",
+    },
+  ],
+]);
+
+function holdUnreadableText(failure: string | undefined): {
+  readonly cause: string;
+  readonly next: string;
+} {
+  return (
+    HOLD_UNREADABLE_TEXT.get(failure ?? "") ?? {
+      cause: "保留を確認できなかったため",
+      next: DEPENDABOT_MANUAL_NEXT_ACTION,
+    }
+  );
+}
+
 /**
  * dependabotの作業項目を、自動で処理できず人に回すときの次の操作。
  * dependabotの作業項目は`retry_work_item`が拒否するので、再実行は案内しない。
@@ -4101,6 +4150,22 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
     describe: () => "dependabotの更新をマージする権限がありませんでした(403)",
     nextAction: () =>
       "PATのマージ権限とrulesetのbypassを確認し、手でマージしてください",
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_MERGE_HELD_REASON, ""),
+    describe: () =>
+      "dependabotの更新を、マージの保留があるため自動ではマージしませんでした",
+    nextAction: () =>
+      "`mise run hold:list`で保留の理由と期限を確認してください。解除してよければ`mise run hold:release -- <id>`を実行し、その後PRを確認して手でマージしてください。保留を解いても、この作業項目は再開せず、再実行もできません。dependabotがrebaseして新しいコミットが積まれると、自動で再び対象になります",
+  },
+  {
+    pattern: reasonPattern(
+      DEPENDABOT_HOLD_UNREADABLE_PREFIX,
+      "(missing_table|read_failed|corrupt|error)$",
+    ),
+    describe: (m) =>
+      `dependabotの更新を、${holdUnreadableText(m[1]).cause}自動ではマージしませんでした(${m[1] ?? ""})`,
+    nextAction: (m) => holdUnreadableText(m[1]).next,
   },
   {
     pattern: reasonPattern(DEPENDABOT_MERGE_REFUSED_REASON, ""),

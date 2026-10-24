@@ -62,7 +62,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | --- | --- |
 | `mise run setup` | miseで管理するツール、`bun install --frozen-lockfile --ignore-scripts`、`bun install --cwd console --frozen-lockfile --ignore-scripts`、`lefthook install`をまとめて入れる |
 | `mise run doctor` | 環境を診断し、項目ごとにOKかNGを出す |
-| `mise run up` | ローカルのWindmillのスタックを、ビルドしてから起動する。ホストのcheckoutからビルドするので、先にmainをpullする |
+| `mise run up` | ローカルのWindmillのスタックを、ビルドしてから起動する。ホストのcheckoutからビルドするので、先にmainをpullする。deployの保留が有効なあいだは止まる |
 | `mise run down` | スタックを止める |
 | `mise run build` | workerのイメージだけをビルドする |
 | `mise run logs` | スタックのログを追う |
@@ -70,16 +70,19 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 | `mise run bootstrap` | ワークスペースの作成、secret変数の投入、インスタンスのカスタムtagの設定、sync push、migrationを行う。何度実行してもよい |
 | `mise run instance:tags` | インスタンスのカスタムtagに`console`と`periodic`を足す。`bootstrap`済みのインスタンス向けで、何度実行してもよい |
-| `mise run deploy` | `git pull --ff-only`、ビルド、起動、push(凍結中のスケジュールを除く)、migrationを続けて実行する。手で一括して反映したいときに使う |
-| `mise run push` | 凍結中のスケジュールを除いて`wmill sync push --yes --keep-deleted`を実行し、ローカルの変更をWindmillに反映する |
+| `mise run deploy` | `git pull --ff-only`、ビルド、起動、push(凍結中のスケジュールを除く)、migrationを続けて実行する。deployの保留が有効なあいだは止まる。手で一括して反映したいときに使う |
+| `mise run push` | 凍結中のスケジュールを除いて`wmill sync push --yes --keep-deleted`を実行し、ローカルの変更をWindmillに反映する。deployの保留が有効なあいだは止まる |
 | `mise run push:dry` | 凍結中のスケジュールを除いて`wmill sync push --dry-run`を実行し、反映する内容だけを確かめる |
 | `mise run push:prune` | 凍結中のスケジュールを除き、ローカルに無いものをWindmillから消すpush。人が端末で実行する |
-| `mise run freeze:place` | スケジュールを凍結し、`wmill sync push`から期限つきで外す。`-- --target f/factory/<name> --minutes <n> --reason <text>`を渡す |
-| `mise run freeze:list` | スケジュールの凍結の一覧を表示する |
-| `mise run freeze:release` | 凍結を解除する。`-- <id>`を渡す |
+| `mise run freeze:place` | スケジュールを凍結し、`wmill sync push`から期限つきで外す。`-- --target f/factory/<name> --minutes <n> --reason <text>`を渡す。`-- --scope deploy --minutes <n> --reason <text>`を渡すと、反映全体を待たせるdeployの保留を置く |
+| `mise run freeze:list` | スケジュールの凍結とdeployの保留の一覧を表示する |
+| `mise run freeze:release` | 凍結かdeployの保留を解除する。`-- <id>`を渡す |
 | `mise run freeze:reset` | 壊れた凍結の状態を空に戻す。人が端末で実行する |
+| `mise run hold:list` | 保留の一覧と、有効なスケジュールの凍結とdeployの保留の件数を表示する |
+| `mise run hold:place` | 自動マージを止める保留を置く。`-- --scope merge --target <owner>/<repo> --minutes <n> --reason <text>`を渡す |
+| `mise run hold:release` | 保留を解除する。`-- <id>`を渡す |
 | `mise run pull` | `wmill sync pull`で、Windmillの状態をローカルに取り込む |
-| `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する |
+| `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する。deployの保留が有効なあいだは止まる |
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
 | `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
 | `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する |
@@ -139,8 +142,8 @@ atelier-works/
 | [dependabotの更新の仕様](docs/internals/dependabot.md) | dependabotのPRの選び方、自動マージの流れ、作業項目の状態 |
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
 | [GitHubの収集の内部仕様](docs/internals/github-collect.md) | 所有者ごとのリポジトリの状態の収集、照合、記録の意味 |
-| [スケジュールの凍結の仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復 |
-| [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、書き込みの制限 |
+| [凍結とdeployの保留の内部仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復 |
+| [保留の内部仕様](docs/internals/holds.md) | 対象を進めないことを期限つきで伝える保留の表、有効の条件、置く操作、読む処理、CLI、subagentの拒否 |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
 | [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |

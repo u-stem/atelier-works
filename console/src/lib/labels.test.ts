@@ -131,6 +131,18 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the pull requests that wait for a merge hold", () => {
+    expect(noticeKindLabel("dependabot_merge_held")).toBe(
+      "マージの保留による待ち",
+    );
+  });
+
+  test("names the unreadable merge holds", () => {
+    expect(noticeKindLabel("dependabot_merge_hold_unreadable")).toBe(
+      "マージの保留を読めない状態",
+    );
+  });
+
   test("names the worker load alert", () => {
     expect(noticeKindLabel("worker_load_high")).toBe("workerの負荷の超過");
   });

@@ -1351,3 +1351,227 @@ describe("migrations other than the one that creates the holds table", () => {
     expect(migrationViolations(files)).toEqual(HOLDS_MIGRATION_FILES);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 保留を読む主体、マージを要求する主体、CLI、miseのタスク
+// ---------------------------------------------------------------------------
+
+// 保留を読んで止まる主体。実行時に保留のモジュールを読み込んでよいのは、ここに挙げたファイルだけである。
+// 読み込んでよい名前は`listActiveHolds`だけで、書く関数は読み込めない。
+// 読む主体を足す段では、このリストに足す。
+const HOLD_READERS = [
+  "f/factory/steps/dependabot_finish.ts",
+  "f/factory/poll_dependabot.ts",
+];
+
+/** 保留のモジュールから、実行時に読み込む名前を返す。名前空間や既定の読み込みは`*`にする。 */
+function runtimeHoldNames(source: string): string[] {
+  const names: string[] = [];
+  for (const reference of holdsReferences(source)) {
+    if (reference.kind !== "import") {
+      names.push("*");
+      continue;
+    }
+    const imports = namedImports(reference.clause);
+    if (imports === null) {
+      names.push("*");
+      continue;
+    }
+    for (const { name, isType } of imports) {
+      if (!isType) names.push(name);
+    }
+  }
+  return names.sort();
+}
+
+describe("the files that read the holds", () => {
+  const typescript = SCANNED.filter((path) => path.endsWith(".ts"));
+
+  test.each(HOLD_READERS)("%s exists", (path) => {
+    expect(typescript).toContain(path);
+  });
+
+  test.each(HOLD_READERS)(
+    "%s reads the holds by listActiveHolds only",
+    (path) => {
+      expect(runtimeHoldNames(read(path))).toEqual(["listActiveHolds"]);
+    },
+  );
+
+  test("no other file under f/ imports the holds module at run time", () => {
+    const offenders = typescript
+      .filter((path) => !HOLD_READERS.includes(path))
+      .filter((path) => runtimeHoldNames(read(path)).length > 0);
+
+    expect(offenders).toEqual([]);
+  });
+
+  test("the readers pass the shared default client themselves, not a client of holds.ts", () => {
+    const offenders = HOLD_READERS.filter(
+      (path) => !read(path).includes("defaultSqlClient"),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("the merge request", () => {
+  const typescript = SCANNED.filter((path) => path.endsWith(".ts"));
+
+  /** `lib/github.ts`から`mergePullRequest`を名前で、または名前空間で読み込むファイル。 */
+  function importsMerge(source: string): boolean {
+    const code = codeOf(source);
+    for (const match of code.matchAll(
+      /\bimport\b([^;]*?)\bfrom\s*"([^"]*\/github\.ts)"/g,
+    )) {
+      const clause = match[1] ?? "";
+      if (/\bmergePullRequest\b/.test(clause) || /\*\s*as\b/.test(clause)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  test("only the finish step of the dependabot flow imports mergePullRequest", () => {
+    const importers = typescript
+      .filter((path) => path !== "f/factory/lib/github.ts")
+      .filter((path) => importsMerge(read(path)));
+
+    expect(importers).toEqual(["f/factory/steps/dependabot_finish.ts"]);
+  });
+
+  test("the finish step reads the holds before it calls mergePullRequest", () => {
+    const source = codeOf(read("f/factory/steps/dependabot_finish.ts"));
+
+    expect(source.indexOf("listMergeHolds(")).toBeLessThan(
+      source.indexOf("deps.mergePullRequest("),
+    );
+  });
+
+  test("importsMerge sees a named import", () => {
+    expect(
+      importsMerge(
+        'import { mergePullRequest } from "../lib/github.ts";\nmergePullRequest;',
+      ),
+    ).toBe(true);
+  });
+
+  test("importsMerge sees a namespace import", () => {
+    expect(importsMerge('import * as gh from "../lib/github.ts";\ngh.x;')).toBe(
+      true,
+    );
+  });
+
+  test("importsMerge ignores another name", () => {
+    expect(
+      importsMerge('import { getPr } from "../lib/github.ts";\ngetPr;'),
+    ).toBe(false);
+  });
+});
+
+describe("the hold command files", () => {
+  const COMMAND_FILES = ["scripts/hold.ts", "scripts/hold_psql.ts"];
+
+  test.each(COMMAND_FILES)("%s does not name the holds table", (path) => {
+    expect(read(path)).not.toContain("factory.holds");
+  });
+
+  test("scripts/hold.ts writes only through the functions of holds.ts", () => {
+    expect(runtimeHoldNames(read("scripts/hold.ts"))).toEqual([
+      "HOLD_SCOPES",
+      "listActiveHolds",
+      "listInvalidHolds",
+      "placeHold",
+      "releaseHold",
+      "sanitizeHoldText",
+      "validatePlaceInput",
+    ]);
+  });
+
+  test("scripts/hold.ts keeps the database name in one constant", () => {
+    expect(read("scripts/hold.ts").match(/datatable_db/g)).toHaveLength(1);
+  });
+
+  test("scripts/hold_psql.ts does not name a database", () => {
+    expect(read("scripts/hold_psql.ts")).not.toContain("datatable_db");
+  });
+
+  test("scripts/hold_psql.ts asks for the database as an option", () => {
+    expect(read("scripts/hold_psql.ts")).toMatch(/readonly database: string/);
+  });
+});
+
+describe("scripts/test-db-holds.ts", () => {
+  const source = read("scripts/test-db-holds.ts");
+
+  test("goes through the psql route of the hold command", () => {
+    expect(source).toContain("createHoldPsqlClient");
+  });
+
+  test("takes the database from SCRATCH_DB", () => {
+    expect(source).toContain("process.env.SCRATCH_DB");
+  });
+
+  test("never names the database that the command writes to", () => {
+    expect(source).not.toContain("datatable_db");
+  });
+
+  test("never imports the database name of the command", () => {
+    expect(source).not.toContain("HOLD_DATABASE");
+  });
+
+  test("never imports the command itself", () => {
+    expect(source).not.toMatch(/from "\.\/hold\.ts"/);
+  });
+});
+
+describe("mise.toml hold tasks", () => {
+  const MISE = readFileSync("mise.toml", "utf8");
+
+  function taskBody(name: string): string {
+    const header = `[tasks."${name}"]`;
+    const start = MISE.indexOf(header);
+    if (start < 0) return "";
+    const next = MISE.indexOf("\n[", start + header.length);
+    return MISE.slice(start, next < 0 ? undefined : next);
+  }
+
+  test.each(["hold:list", "hold:place", "hold:release"])(
+    "%s runs the command",
+    (name) => {
+      expect(taskBody(name)).toContain("bun ./scripts/hold.ts");
+    },
+  );
+
+  test.each(["hold:place", "hold:release"])(
+    "%s runs in raw mode, so that a human can confirm",
+    (name) => {
+      expect(taskBody(name)).toContain("raw = true");
+    },
+  );
+
+  test("hold:list passes the list command", () => {
+    expect(taskBody("hold:list")).toContain("bun ./scripts/hold.ts list");
+  });
+
+  test("hold:place passes the place command", () => {
+    expect(taskBody("hold:place")).toContain("bun ./scripts/hold.ts place");
+  });
+
+  test("hold:release passes the release command", () => {
+    expect(taskBody("hold:release")).toContain("bun ./scripts/hold.ts release");
+  });
+
+  test("hold:place tells how to pass the flags", () => {
+    expect(taskBody("hold:place")).toContain("--scope merge");
+  });
+
+  test("no other task calls the hold command", () => {
+    const others = MISE.split("\n[").filter(
+      (block) =>
+        block.includes("scripts/hold.ts") && !/^tasks\."hold:/.test(block),
+    );
+
+    expect(others).toEqual([]);
+  });
+});
