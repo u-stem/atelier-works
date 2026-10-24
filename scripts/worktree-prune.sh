@@ -112,16 +112,111 @@ fi
 # 消す対象が、実行したディレクトリを含むかを後で調べるので、先に控える。
 invoked_from="$(pwd -P)"
 
-common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+common_dir=""
+rev_status=0
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir)" || rev_status=$?
+# --autoは、状態を残せない場所では何もせず、終了コード0で終える。
+if [ "$rev_status" -ne 0 ]; then
+  if [ "$auto" -eq 1 ]; then
+    exit 0
+  fi
+  exit "$rev_status"
+fi
 # bareリポジトリなど`.git`でない場合は、メインのcheckoutの場所を決められない。
 if [ "$(basename "$common_dir")" != ".git" ]; then
   echo "worktree-prune: cannot locate the main checkout from $common_dir" >&2
+  if [ "$auto" -eq 1 ]; then
+    exit 0
+  fi
   exit 1
 fi
 main_root="$(cd "$(dirname "$common_dir")" && pwd -P)"
 # ghは、カレントディレクトリのgitのリモートからリポジトリを決める。
 cd "$main_root"
 scope="$main_root/.claude/worktrees/"
+
+# --autoの状態は`<git-common-dir>/worktree-prune/`にまとめる(`log`、`lock/`、`stamp`、`failures`)。
+# 書き込みはすべて、ディレクトリの中に作った一時ファイルへ書いてから`mv`で置き換える。
+# 追記や`touch`は、既存のシンボリックリンクを辿って別の場所に書くおそれがあるので使わない。
+state_dir="$common_dir/worktree-prune"
+log_file="$state_dir/log"
+lock_dir="$state_dir/lock"
+stamp_file="$state_dir/stamp"
+failures_file="$state_dir/failures"
+# ログがこの大きさ(バイト)を超えたら、書き換えのときに末尾の半分だけを残す。
+log_limit_bytes=102400
+
+# 状態のファイルを読む。通常のファイルでなければ(シンボリックリンクを含む)何も出さない。
+read_state() {
+  if [ -f "$1" ] && [ ! -L "$1" ]; then
+    cat -- "$1" 2>/dev/null || true
+  fi
+}
+
+# 状態のファイル`$1`を、内容`$2`で置き換える。置き換え先がシンボリックリンクやディレクトリなら書かない。
+# `mv`はシンボリックリンクがディレクトリを指すと、その中へ移すので、`mv`の直前にも確かめる。
+write_state() {
+  local dest="$1" tmp
+  if [ -L "$dest" ] || [ -d "$dest" ]; then
+    return 1
+  fi
+  tmp="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 1
+  if ! printf '%s\n' "$2" >"$tmp" || [ -L "$dest" ] || [ -d "$dest" ] || ! mv -f -- "$tmp" "$dest"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+# ログに1行足す。ログ全体を書き換えるので、大きくなりすぎたら末尾の半分だけを残す。
+log_line() {
+  local tmp
+  if [ -L "$log_file" ] || [ -d "$log_file" ]; then
+    return 0
+  fi
+  tmp="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 0
+  if [ -f "$log_file" ]; then
+    if [ "$(($(wc -c <"$log_file")))" -gt "$log_limit_bytes" ]; then
+      # 先頭は行の途中で切れるので捨てる。
+      tail -c "$((log_limit_bytes / 2))" -- "$log_file" | sed '1d' >"$tmp" || true
+    else
+      cat -- "$log_file" >"$tmp" || true
+    fi
+  fi
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" >>"$tmp"
+  if [ -L "$log_file" ] || [ -d "$log_file" ] || ! mv -f -- "$tmp" "$log_file"; then
+    rm -f -- "$tmp"
+  fi
+}
+
+# --autoの終了時の後始末。終了コードは常に0にする。
+auto_cleanup() {
+  trap '' INT TERM
+  trap - EXIT
+  exit 0
+}
+
+if [ "$auto" -eq 1 ]; then
+  # 標準出力には何も出さない。結果はログに書く。
+  exec >/dev/null
+  # 状態のディレクトリがシンボリックリンクなら、辿らずに何もしない。
+  if [ -L "$state_dir" ]; then
+    exit 0
+  fi
+  if [ ! -e "$state_dir" ]; then
+    mkdir -m 700 "$state_dir" 2>/dev/null || true
+  fi
+  if [ -L "$state_dir" ] || [ ! -d "$state_dir" ] || [ ! -O "$state_dir" ]; then
+    exit 0
+  fi
+  for state_name in lock log stamp failures; do
+    if [ -L "$state_dir/$state_name" ]; then
+      exit 0
+    fi
+  done
+  trap auto_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+fi
 
 # lsofの実行ファイル。`WORKTREE_PRUNE_LSOF`は差し替える(テスト用)。
 # 無ければ絶対パスの`/usr/sbin/lsof`、それも無ければPATHから探す。
@@ -175,8 +270,13 @@ run_failed=0
 # 1なら、worktreeの判定に進まずに終える。
 run_aborted=0
 
+# 標準出力の行。--autoでは標準出力に出さず、ログに書く。
 emit() {
-  echo "$1"
+  if [ "$auto" -eq 1 ]; then
+    log_line "$1"
+  else
+    echo "$1"
+  fi
 }
 
 fail_run() {
@@ -436,7 +536,13 @@ while IFS= read -r line; do
 done <<<"$list"$'\n'
 
 if [ "$apply" -eq 1 ]; then
-  echo "removed $removed, kept $kept"
+  emit "removed $removed, kept $kept"
 else
   echo "dry run: would remove $removed, keep $kept. Pass --apply to remove."
+fi
+
+# 失敗として数える事象が無かった実行だけが、失敗の回数を0に戻し、実行の時刻を残す。
+if [ "$auto" -eq 1 ] && [ "$run_failed" -eq 0 ]; then
+  write_state "$failures_file" 0 || true
+  write_state "$stamp_file" "$(date +%s)" || true
 fi
