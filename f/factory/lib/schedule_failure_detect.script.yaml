@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] scheduleの失敗の検出'
+description: 内部ライブラリです。直接実行するものではありません。前回の続きの位置から、失敗したscheduleのジョブを拾って記録し、通知します。
 lock: '!inline f/factory/lib/schedule_failure_detect.script.lock'
 kind: script
 schema:

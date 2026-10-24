@@ -264,13 +264,13 @@ describe("judgeOwnerFreshness", () => {
 });
 
 describe("collectCause", () => {
-  test("cause is not_running when the latest finish is older than 16 minutes", () => {
-    const target = row({ latest: latestRun("unauthorized", 17 * MIN) });
+  test("cause is not_running when the latest finish is older than 18 minutes", () => {
+    const target = row({ latest: latestRun("unauthorized", 19 * MIN) });
     expect(collectCause(target, NOW)).toBe("not_running");
   });
 
-  test("cause stays the latest error_code during an 11 minute periodic wait", () => {
-    const target = row({ latest: latestRun("unauthorized", 11 * MIN) });
+  test("cause stays the latest error_code during a 13 minute periodic wait", () => {
+    const target = row({ latest: latestRun("unauthorized", 13 * MIN) });
     expect(collectCause(target, NOW)).toBe("unauthorized");
   });
 

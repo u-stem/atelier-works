@@ -48,9 +48,12 @@ tag`periodic`を付けるのは、ファイル、独自イメージの道具、c
 通知を送る定期ジョブが`discord_webhook_url`を、収集の`collect_github`が`github_read_tokens`を読む。
 `claude_oauth_token`、`github_token`、`wmill_token`は届かせない。
 依存するジョブは、defaultのworkerで動かす。
-tag`periodic`のジョブが11分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
+tag`periodic`のジョブが13分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
 逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations.md#defaultのworkerの検知を確かめる))。
 止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。両方が止まる障害は拾えない。
+scheduleの失敗を拾う検出器(`detect_schedule_failures`)も、このworkerで動かす。
+defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、失敗の検知が止まるためである。
+検出器が止まったことは、`default_worker_watch`が同じ回で検知して通知する([運用](operations.md#scheduleの失敗の検出))。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
@@ -72,7 +75,7 @@ tag`periodic`のジョブが11分以上待つと、defaultのworkerで動く`sel
 
 工程3の実装フロー(`implement`)は、`factory_config`の`implement_enabled`を`true`にしたときだけ動く。既定値は`false`で、その間は要件定義を承認した作業項目が承認済み(`approved`)のまま残る。
 
-工程をまたいで、Factory Console、自己更新(`self_update`)、フローとスケジュールの失敗ハンドラが動く。
+工程をまたいで、Factory Console、自己更新(`self_update`)、フローの失敗ハンドラ、スケジュールの失敗の検出器が動く。
 
 ```mermaid
 flowchart TD
@@ -373,6 +376,7 @@ Consoleの一覧と集計は次のviewを読む。
 | collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | default_worker_watch | `45 4-59/5 * * * *` | `f/factory/default_worker_watch` | 5分ごとに実行します。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、defaultのworkerが止まっているとして通知を残し、Discordにも知らせます。長いClaudeのジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。 |
+| detect_schedule_failures | `20 3-59/5 * * * *` | `f/factory/detect_schedule_failures` | 5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
@@ -385,7 +389,9 @@ Consoleの一覧と集計は次のviewを読む。
 | watch_pr_conflicts | `30 */5 * * * *` | `f/factory/watch_pr_conflicts` | 5分ごとに実行します。Factoryが作ったPRにマージの競合があるかを調べ、競合したPRは要対応の通知とDiscordで知らせます。競合が解けたら通知を自動で解決し、閉じたPRの記録は整理します。設定で有効にしたときだけ動き、無効のときはGitHubもDBも読みません。PRには書き込みません。競合を直す設定が有効なときは、通知の前に、競合を直す作業項目を起動します。競合を直す作業項目が結ばれた行を戻す回復は、競合を直す設定に依らず、毎回行います。 |
 <!-- /generated:schedules -->
 
-cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
+cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。
+このWindmillはスケジュールの失敗時の呼び出し(`on_failure`)を呼ばないので、どのスケジュールにも`on_failure`を設定しない。
+スケジュールの失敗は、`detect_schedule_failures`がジョブ履歴から拾って記録し、通知する([運用](operations.md#scheduleの失敗の検出))。
 
 生成した表の内容欄より細かい処理の対象は次のとおり。
 
@@ -480,6 +486,10 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_conflict_support` | script | [LIB] PRの競合の判断 |
 | `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
+| `f/factory/lib/schedule_failure_detect` | script | [LIB] scheduleの失敗の検出 |
+| `f/factory/lib/schedule_detector_heartbeat` | script | [LIB] scheduleの失敗の検出器の心拍 |
+| `f/factory/lib/schedule_failure_report` | script | [LIB] scheduleの失敗の記録 |
+| `f/factory/lib/schedule_failure_scan` | script | [LIB] scheduleの失敗の走査 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/job_state` | script | [LIB] Windmillのジョブの状態の読み替え |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
@@ -601,6 +611,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |
+| `f/factory/detect_schedule_failures` | script | [SYS-5] scheduleの失敗を検出して記録 |
 | `f/factory/on_error_schedule` | script | [SYS-5] schedule失敗ハンドラ |
 | `f/factory/cleanup_db` | script | [SYS-6] DBを掃除 |
 | `f/factory/console_fetch_watch` | script | [SYS-7] Consoleの取り込みを見張る |
@@ -788,12 +799,10 @@ Console用のworkerの確認も、受けていない通知は上限の10秒の�
 - 打ち切られるまでの最大約52分、実行が終わらない。
   2分ごとの次の約25回は多重実行の防止で飛ばされる。
   この間は、自己更新の反映と、3つの確認が止まる。
-- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`で即時に気づける。
-  これが主な経路になる想定だが、呼ばれるかは実機で未確認である([運用](operations.md)の「自己更新の打ち切りを確かめる」)。
-- `schedule_failing`は補助の経路になる想定だが、こちらも実機で未確認である。
-  打ち切られた回を、ジョブ履歴で`canceled_by`が`timeout`の取り消しとみなして失敗に数え、3回続くと要対応に残す。
+- 検出器が、打ち切られた回をジョブ履歴で`canceled_by`が`timeout`の取り消しとみなして失敗に数え、最大5分遅れてDiscordの`job_failed`で知らせる。
+  3回続くと要対応の`schedule_failing`に残す。
   人が止めた回は数えない。
-  `canceled_by`が`timeout`になるかは確かめていない。
+  `canceled_by`が`timeout`になるかは確かめていない([運用](operations.md)の「自己更新の打ち切りを確かめる」)。
 - ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
 `console/`の変更は`self_update`の対象ではない。

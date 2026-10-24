@@ -1,8 +1,10 @@
-// defaultのworkerが止まっていないかを5分ごとに確かめるscript。
-// 判定と通知は`./lib/default_worker.ts`にあり、このファイルは入出力をつなぐだけ。
+// defaultのworkerが止まっていないかと、scheduleの失敗を拾う検出器が止まっていないかを、5分ごとに確かめるscript。
+// 判定と通知は`./lib/default_worker.ts`と`./lib/schedule_detector_heartbeat.ts`にあり、このファイルは入出力をつなぐだけ。
 // tag `periodic`のworkerで動かす。defaultのworkerの中で動くscriptは、そのworkerが止まると動かず、
 // 止まったことを知らせられないため。逆に定期ジョブ用のworkerが止まったことは、
 // defaultのworkerで動く`self_update`が確かめる(`./lib/periodic_worker.ts`)。
+// 検出器の確認は、defaultのworkerの確認の後に、独立して行う。どちらの失敗も、もう一方を止めない。
+// 検出器自身は別のscript(`detect_schedule_failures`)で、見る側と見られる側が同じにならないようにしている。
 // 読むsecretは通知先の`discord_webhook_url`だけである。
 // tag periodicを付けたscriptの境界は`tests/scripts/periodic_script_boundary.test.ts`が固定する。
 
@@ -22,10 +24,11 @@ import {
   type DefaultWorkerCheckDeps,
 } from "./lib/default_worker.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
-import { type Logger, logger } from "./lib/log.ts";
-import type {
-  ScheduleDetectorCheck,
-  ScheduleDetectorCheckDeps,
+import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import {
+  checkScheduleDetector,
+  type ScheduleDetectorCheck,
+  type ScheduleDetectorCheckDeps,
 } from "./lib/schedule_detector_heartbeat.ts";
 import type { NoticeRecord } from "./lib/types.ts";
 import {
@@ -80,71 +83,99 @@ export function buildWatchDeps(
   };
 }
 
+/** 検出器の確認が使う依存を、入出力から組み立てる。 */
 export function buildHeartbeatDeps(
   io: DefaultWorkerWatchIo,
   instanceName: string,
   log: Logger,
 ): ScheduleDetectorCheckDeps {
   return {
-    workspace: "",
-    now: () => 0,
-    listCompletedJobs: async () => [],
-    getSchedule: async () => ({}),
+    workspace: io.workspace,
+    now: () => Date.now(),
+    listCompletedJobs: io.listCompletedJobs,
+    getSchedule: io.getSchedule,
     addNotice: io.addNotice,
-    resolveNotices: async () => 0,
-    notify: async () => undefined,
-    instanceName: "",
+    resolveNotices: (kind, messagePrefix) =>
+      io.resolveNotices(kind, messagePrefix, DEFAULT_WORKER_NOTICE_RESOLVER),
+    notify: async (event) => {
+      await io.notifyBestEffort(await io.getWebhookUrl(), event, log);
+    },
+    instanceName,
     log,
   };
 }
 
-export async function runWatchChecks(
-  _io: DefaultWorkerWatchIo,
-  _instanceName: string,
-  _log: Logger,
-  _checks: {
-    readonly defaultWorker: (
-      deps: DefaultWorkerCheckDeps,
-    ) => Promise<DefaultWorkerCheck>;
-    readonly scheduleDetector: (
-      deps: ScheduleDetectorCheckDeps,
-    ) => Promise<ScheduleDetectorCheck>;
-  } = {
-    defaultWorker: checkDefaultWorker,
-    scheduleDetector: async () => "unknown",
-  },
-): Promise<{
+/** 2つの確認の実体。テストでは差し替える。 */
+export type WatchChecks = {
+  readonly defaultWorker: (
+    deps: DefaultWorkerCheckDeps,
+  ) => Promise<DefaultWorkerCheck>;
+  readonly scheduleDetector: (
+    deps: ScheduleDetectorCheckDeps,
+  ) => Promise<ScheduleDetectorCheck>;
+};
+
+const DEFAULT_CHECKS: WatchChecks = {
+  defaultWorker: checkDefaultWorker,
+  scheduleDetector: checkScheduleDetector,
+};
+
+export type WatchOutcome = {
   readonly result: DefaultWorkerCheck;
+  /** 検出器の確認が例外を投げたときは`error`。 */
   readonly schedule_detector: ScheduleDetectorCheck | "error";
-}> {
-  return { result: "unknown", schedule_detector: "error" };
+};
+
+/**
+ * defaultのworkerの確認の後に、検出器の確認を行う。
+ * 検出器の確認が例外を投げても、defaultのworkerの結果は返す。
+ * 検出器の確認は自分で時間を区切る。defaultのworkerの確認の最悪の長さに足した値が、このscriptのtimeoutに収まることを、テストが固定する。
+ */
+export async function runWatchChecks(
+  io: DefaultWorkerWatchIo,
+  instanceName: string,
+  log: Logger,
+  checks: WatchChecks = DEFAULT_CHECKS,
+): Promise<WatchOutcome> {
+  const result = await checks.defaultWorker(
+    buildWatchDeps(io, instanceName, log),
+  );
+  let scheduleDetector: ScheduleDetectorCheck | "error" = "error";
+  try {
+    scheduleDetector = await checks.scheduleDetector(
+      buildHeartbeatDeps(io, instanceName, log),
+    );
+  } catch (err) {
+    log.warn("schedule detector check failed", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+  return { result, schedule_detector: scheduleDetector };
 }
 
-export async function main(): Promise<{ readonly result: DefaultWorkerCheck }> {
+export async function main(): Promise<WatchOutcome> {
   const log = logger("default_worker_watch");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
-  const result = await checkDefaultWorker(
-    buildWatchDeps(
-      {
-        workspace: wmillDefault.getWorkspace(),
-        listQueue: (query) => wmill.JobService.listQueue(query),
-        listCompletedJobs: (query) => wmill.JobService.listCompletedJobs(query),
-        getSchedule: (path) =>
-          wmill.ScheduleService.getSchedule({
-            workspace: wmillDefault.getWorkspace(),
-            path,
-          }),
-        addNotice: addNoticeUnlessUnresolved,
-        resolveNotices: resolveUnresolvedNoticesByPrefix,
-        getWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),
-        notifyBestEffort,
-      },
-      config.instance_name,
-      log,
-    ),
+  const outcome = await runWatchChecks(
+    {
+      workspace: wmillDefault.getWorkspace(),
+      listQueue: (query) => wmill.JobService.listQueue(query),
+      listCompletedJobs: (query) => wmill.JobService.listCompletedJobs(query),
+      getSchedule: (path) =>
+        wmill.ScheduleService.getSchedule({
+          workspace: wmillDefault.getWorkspace(),
+          path,
+        }),
+      addNotice: addNoticeUnlessUnresolved,
+      resolveNotices: resolveUnresolvedNoticesByPrefix,
+      getWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),
+      notifyBestEffort,
+    },
+    config.instance_name,
+    log,
   );
-  log.info("default worker checked", { result });
-  return { result };
+  log.info("default worker and schedule detector checked", { ...outcome });
+  return outcome;
 }

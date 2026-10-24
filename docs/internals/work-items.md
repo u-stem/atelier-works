@@ -201,7 +201,7 @@ Consoleは、このIDからジョブの画面(`/run/<job_id>`)へのリンクを
 - フローの失敗(`on_error_flow`)の行は、ルートのフローを指す。どのフローも`failure_module`から`job_id`を渡さないので、`root_job_id`と同じ値になり、失敗したステップのジョブIDは取れない。
 - ステップやscriptの中で記録した行は、そのジョブのID(`WM_JOB_ID`)を持つ。該当のジョブの画面へ辿れる。
   記録するのは`poll_issues`、`poll_prs`、`requirements_apply`、`pr_fix_finish`、`issue_proposal_apply`などである。
-- スケジュールの失敗(`on_error_schedule`)の行は、引数で渡されたジョブIDを持つ。
+- スケジュールの失敗(`detect_schedule_failures`)の行は、失敗したジョブのIDを`job_id`とルートのジョブIDに持つ。検出器自身のジョブIDではない。発生時刻は、失敗したジョブの完了時刻である。
 
 取れなかったときは`unknown`が入り、Consoleには`null`で返す。
 

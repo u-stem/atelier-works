@@ -143,7 +143,11 @@ describe("findBaselineRun", () => {
 });
 
 describe("readProcessedUntil", () => {
-  const BASE = { id: "run-1", startedAtMs: NOW - 5 * MIN };
+  const BASE = {
+    id: "run-1",
+    startedAtMs: NOW - 5 * MIN,
+    completedAtMs: NOW - 4 * MIN,
+  };
 
   test("reads processed_until of the result", () => {
     expect(

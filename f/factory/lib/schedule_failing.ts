@@ -147,7 +147,7 @@ export function buildScheduleFailingNotice(flowPath: string): NoticeRecord {
 export const SCHEDULE_FAILING_CHECK_FAILED_NOTICE: NoticeRecord = {
   kind: "schedule_failing_check_failed",
   message:
-    "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できません。失敗が続いても気づけない状態です。次の操作: on_error_scheduleのジョブのログでエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる",
+    "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できません。失敗が続いても気づけない状態です。次の操作: detect_schedule_failuresのジョブのログでエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる",
 };
 
 export type FlagFailingScheduleDeps = {

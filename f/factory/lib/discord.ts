@@ -189,6 +189,14 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "schedule_detector_stale";
+      instance_name: string;
+      /** scheduleの失敗を拾う検出器が、成功していない、または無効になっていること。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "github_collect_stale";
       instance_name: string;
       /** 収集が成功していない所有者(小文字)。 */
@@ -539,6 +547,16 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "periodic_worker_missing":
       return {
         title: "定期ジョブ用のworkerがジョブを受けていません",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "schedule_detector_stale":
+      return {
+        title: "scheduleの失敗の検出器が止まっています",
         description: event.cause,
         url: null,
         fields: [

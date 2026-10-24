@@ -876,7 +876,7 @@ Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も�
 - 再試行の前にPATのアカウントが替わると、前のアカウントが作ったIssueは作成者で絞った一覧に出ず、取りこぼして重複して起票される。受け入れる。再試行の前にPATを替える運用は想定しないためである。
 
 有効期限は最長で1年である。`poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。
-失敗はスケジュールの失敗ハンドラ(`on_error_schedule`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
+失敗は、スケジュールの失敗を拾う検出器(`detect_schedule_failures`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
 直近3回の実行が続けて失敗すると、要対応の通知`schedule_failing`も残る。
 
 GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとしての`gh auth git-credential`だけで行う。`gh auth login`の対話ログインと、トークンを埋め込んだclone URLは使わない。
@@ -1294,7 +1294,13 @@ superadminでない主体は、許可されたtagしか使えない。
 1つでも依存するなら、tagを付けない。
 
 読んでよいsecret変数は、scriptごとに決める。
-`notify_daily_summary`と`auto_retry_pr_review`が読めるのは、`discord_webhook_url`だけである。
+次のscriptが読めるのは、`discord_webhook_url`だけである。
+
+- `notify_daily_summary`
+- `auto_retry_pr_review`
+- `default_worker_watch`
+- `detect_schedule_failures`
+
 `collect_github`が読めるのは、`github_read_tokens`だけである。
 `claude_oauth_token`、`github_token`、`wmill_token`は、このworkerに届かせない。
 対象のscriptが読まない許可は、残さない。
@@ -1332,9 +1338,9 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - 各scriptについて、他のscriptの`timeout`の合計に300秒の余裕を足した値が、待ちの検知のしきい値(`PERIODIC_JOB_WAIT_SECONDS`)を超えない。
   このworkerの枠は1つなので、長く動くジョブの後ろで待つジョブを、workerの不在と誤って知らせないためである。
   待たされる最悪は、他のscriptのtimeoutの合計である。
-  今の4本では、`collect_github`と`default_worker_watch`が最も待たされる。
-  他の3本は、どれも120秒のtimeoutで、その後ろで最大360秒待つ。
-  しきい値は、それに余裕を足した660秒である。
+  今の5本では、`detect_schedule_failures`が最も待たされる。
+  他の4本は、どれも120秒のtimeoutで、その後ろで最大480秒待つ。
+  しきい値は、それに余裕を足した780秒である。
 - importでたどれるソースが読むsecret変数は、scriptごとの許可に限る。
   許可のキーが、tag`periodic`のscriptの一覧と一致することと、許可したsecretを実際に読むことも固定する。
   ある許可を別のscriptに当てると、違反が返ることも確かめる。
@@ -1363,7 +1369,14 @@ tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中
 ### 選定の結果
 
 `f/factory/**`の定期実行のscriptを1つずつ読んだ結果は、次のとおりである。
-tag`periodic`を付けたのは、`notify_daily_summary`、`auto_retry_pr_review`、`collect_github`、`default_worker_watch`である。
+tag`periodic`を付けたのは、次の5本である。
+
+- `notify_daily_summary`
+- `auto_retry_pr_review`
+- `collect_github`
+- `default_worker_watch`
+- `detect_schedule_failures`
+
 いずれもresource`f/factory/factory_config`だけを読む。
 ローカルのインスタンスでは、その値に`$var:`と`$res:`の参照が無いことを確かめた。
 本番相当のインスタンスのresourceは、リポジトリから確かめられない。人がWindmillの画面で見て確かめる。
@@ -1379,7 +1392,8 @@ tag`periodic`を付けたのは、`notify_daily_summary`、`auto_retry_pr_review
 | `notify_daily_summary` | DB、Windmillの状態、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
 | `auto_retry_pr_review` | DB、WindmillのAPI、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
 | `collect_github` | DB、Windmillのresource、宛先を固定したGitHubのGraphQLだけを使う。読むsecretは`github_read_tokens`だけである | `periodic`を付ける |
-| `default_worker_watch` | DB、Windmillのqueue、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。defaultのworkerが止まると動かないので、defaultには置けない | `periodic`を付ける |
+| `default_worker_watch` | DB、Windmillのqueueとジョブ履歴とschedule、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。defaultのworkerが止まると動かないので、defaultには置けない | `periodic`を付ける |
+| `detect_schedule_failures` | DB、Windmillのジョブ履歴、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。失敗の記録とnoticeをDBに書く。defaultのworkerで動かすと、長いジョブが枠を塞ぐ間、検知が止まるので置けない | `periodic`を付ける |
 
 `github_token`を読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
 `notify_daily_summary`と`auto_retry_pr_review`は、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらない。

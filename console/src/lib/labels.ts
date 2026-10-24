@@ -75,6 +75,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["worker_sample_failed", "workerの負荷の記録の失敗"],
   ["schedule_failing", "定期実行の失敗"],
   ["schedule_failing_check_failed", "定期実行の確認の失敗"],
+  ["schedule_detector_stale", "scheduleの失敗の検出器の停止"],
   ["drawio_viewer_bump_held", "draw.ioのビューアの更新の保留"],
   ["main_ci_failed", "mainのCIの失敗"],
   ["main_ci_check_denied", "mainのCIを読む権限の不足"],

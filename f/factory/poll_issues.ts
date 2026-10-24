@@ -1422,7 +1422,7 @@ export async function main(): Promise<{
 
   // ヘルスチェック。PATが壊れている・期限切れのとき、下のIssueを
   // 黙ってすべて飛ばすのではなく、ジョブ全体を失敗させて
-  // `on_error_schedule`で知らせる。
+  // 検出器(`detect_schedule_failures`)に拾わせて知らせる。
   const viewer = await getViewer(client);
   log.info("health check ok", { login: viewer.login });
 

@@ -75,6 +75,8 @@ export type ScheduleFailureJob = {
 export type BaselineRun = {
   readonly id: string;
   readonly startedAtMs: number;
+  /** 完了時刻。応答に無い、または読めないときは`null`。 */
+  readonly completedAtMs: number | null;
 };
 
 /** 読む範囲。 */
@@ -119,7 +121,14 @@ export function findBaselineRun(response: unknown): BaselineRun | null {
     }
     const startedAtMs = Date.parse(run.started_at);
     if (!Number.isNaN(startedAtMs)) {
-      return { id: run.id, startedAtMs };
+      const completedAtMs = isString(run.completed_at)
+        ? Date.parse(run.completed_at)
+        : Number.NaN;
+      return {
+        id: run.id,
+        startedAtMs,
+        completedAtMs: Number.isNaN(completedAtMs) ? null : completedAtMs,
+      };
     }
   }
   return null;

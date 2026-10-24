@@ -622,7 +622,7 @@ async function run(
  * `approval_request_id`の承認依頼を処理し、その結果を返す。
  * このスクリプトはフローのステップではなく単独で動くため、
  * 例外はここで捕まえ、`factory.job_failures`に記録して
- * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
+ * Discordへ通知してから投げ直す(`on_error_flow.ts`と同じ自己完結の処理)。
  */
 export async function main(
   approval_request_id: number,
