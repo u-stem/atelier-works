@@ -268,11 +268,11 @@ async function runList(deps: CliDeps): Promise<number> {
   try {
     const counts = await deps.activeFreezeCounts();
     deps.print(
-      `active schedule freezes: ${String(counts.schedule)} (see mise run freeze:list)`,
+      `active freezes: schedule ${String(counts.schedule)}, deploy ${String(counts.deploy)} (see mise run freeze:list)`,
     );
   } catch (err) {
     deps.print(
-      `warning: could not read the schedule freezes (${sanitizeHoldText(errorMessage(err)).slice(0, 200)}); run mise run freeze:list`,
+      `warning: could not read the freezes (${sanitizeHoldText(errorMessage(err)).slice(0, 200)}); run mise run freeze:list`,
     );
   }
   deps.print(COVERAGE_NOTE);

@@ -62,7 +62,7 @@ locks:
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
   f/factory/lib/freeze_apply: 6cb6d7cdd3ec6c629a71fab676ce35d326dd28b9f131998a9e22fb18bf941ffb
-  f/factory/lib/freezes: 748e548d7f4381c05d5c5b89ecedff223477de1cd38d2dbfcce0aee66951ed15
+  f/factory/lib/freezes: 6c3ded8453a328b0527c7e2a7d7558366309f5132db7304313f03db9abbdcf59
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
   f/factory/lib/gh_collect: 482ee398dad39585cf42181fcd02089d018b45f3f6c036324fddcd8e7962ae10
   f/factory/lib/gh_collect_detail: 4819e8d6e84ac6065c3d4de40820e75065482aaec00b890e85065e5ac957bc59

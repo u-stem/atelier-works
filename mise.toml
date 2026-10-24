@@ -31,9 +31,10 @@ LOG_MAX_SIZE = "20m"
 LOG_MAX_FILE = "10"
 
 [tasks.up]
-description = "Start the local Windmill stack"
+description = "Start the local Windmill stack (refuses while a deploy freeze is active)"
 run = """
 set -e
+bun ./scripts/freeze.ts check
 scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml pull --ignore-pull-failures
 docker compose -f infra/docker-compose.yml build
@@ -75,7 +76,7 @@ lefthook install
 """
 
 [tasks.deploy]
-description = "Update checkout, rebuild, restart, push, and migrate"
+description = "Update checkout, rebuild, restart, push, and migrate (refuses while a deploy freeze is active)"
 run = """
 set -e
 bun ./scripts/freeze.ts check
@@ -88,13 +89,12 @@ bun ./scripts/check-idle.ts --when-worker-recreated --after-pull
 docker compose -f infra/docker-compose.yml up -d --pull never --no-build
 docker compose -f infra/docker-compose.yml restart caddy
 docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile
-bun ./scripts/freeze.ts push
-wmill datatable migrate up
+bun ./scripts/freeze.ts apply
 scripts/record-host-applied.sh
 """
 
 [tasks.push]
-description = "Push local sync state to the Windmill workspace (keeps remote-only items)"
+description = "Push local sync state to the Windmill workspace (keeps remote-only items; refuses while a deploy freeze is active)"
 run = "bun ./scripts/freeze.ts push"
 
 [tasks."push:prune"]
@@ -108,26 +108,26 @@ description = "Dry-run of wmill sync push"
 run = "bun ./scripts/freeze.ts push --dry-run"
 
 [tasks."freeze:place"]
-description = "Freeze a schedule so wmill sync push leaves it alone (usage: -- --target f/factory/<name> --minutes <n> --reason <text>)"
+description = "Freeze a schedule so wmill sync push leaves it alone, or hold every deployment (usage: -- --target f/factory/<name> --minutes <n> --reason <text>, or -- --scope deploy --minutes <n> --reason <text>)"
 run = "bun ./scripts/freeze.ts place"
 raw = true
 
 [tasks."freeze:list"]
-description = "List the schedule freezes"
+description = "List the schedule freezes and the deploy freezes"
 run = "bun ./scripts/freeze.ts list"
 
 [tasks."freeze:release"]
-description = "Release a schedule freeze (usage: -- <id>)"
+description = "Release a schedule freeze or a deploy freeze (usage: -- <id>)"
 run = "bun ./scripts/freeze.ts release"
 raw = true
 
 [tasks."freeze:reset"]
-description = "Clear every schedule freeze, including a corrupt state (human only)"
+description = "Clear every schedule freeze and deploy freeze, including a corrupt state (human only)"
 run = "bun ./scripts/freeze.ts reset"
 raw = true
 
 [tasks."hold:list"]
-description = "List the holds that stop the Factory, and the schedule freezes in effect"
+description = "List the holds that stop the Factory, and the schedule freezes and deploy freezes in effect"
 run = "bun ./scripts/hold.ts list"
 
 [tasks."hold:place"]
@@ -145,8 +145,8 @@ description = "Pull remote Windmill state into the sync root"
 run = "wmill sync pull"
 
 [tasks.migrate]
-description = "Apply pending datatable migrations"
-run = "wmill datatable migrate up"
+description = "Apply pending datatable migrations (refuses while a deploy freeze is active)"
+run = "bun ./scripts/freeze.ts migrate"
 
 [tasks.metadata]
 description = "Regenerate stale Windmill metadata (locks and schemas)"

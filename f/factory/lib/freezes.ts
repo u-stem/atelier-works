@@ -256,11 +256,15 @@ export type ActiveFreezeCounts = {
   readonly deploy: number;
 };
 
+/** 有効なスケジュールの凍結とdeployの保留の件数。`hold:list`が表示に使う。 */
 export function countActiveFreezes(
-  _state: FreezeState,
-  _now: Date,
+  state: FreezeState,
+  now: Date,
 ): ActiveFreezeCounts {
-  return { schedule: 0, deploy: 0 };
+  return {
+    schedule: activeFreezes(state, now).length,
+    deploy: activeDeployFreezes(state, now).length,
+  };
 }
 
 /** 解除されたか期限が切れた行。除いて反映した設定を戻すpushの対象になる。 */
