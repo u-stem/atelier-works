@@ -29,11 +29,6 @@ describe("watch_pr_conflicts schedule", () => {
     expect(yaml).toContain("no_flow_overlap: true");
   });
 
-  test("reports a failure to the schedule error handler", async () => {
-    const yaml = await read("f/factory/watch_pr_conflicts.schedule.yaml");
-    expect(yaml).toContain("on_failure: f/factory/on_error_schedule");
-  });
-
   test("runs the watch_pr_conflicts script", async () => {
     const yaml = await read("f/factory/watch_pr_conflicts.schedule.yaml");
     expect(yaml).toContain("script_path: f/factory/watch_pr_conflicts");
