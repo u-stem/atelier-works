@@ -4739,6 +4739,9 @@ pullは済んでいて、次の起動でmiseが新しい`[env]`を読むので�
 `mise run push`と`mise run deploy`は、凍結中のスケジュールを除くラッパー(`scripts/freeze.ts`)を通る。
 `mise run migrate`も同じラッパーを通り、deployの保留が有効か、凍結を読めなければ止まる。
 `mise run up`は、Dockerの版の検査の後、コンテナを変える前に保留を確かめ、有効なら止まる。
+凍結の変数が壊れていると、`mise run up`と`mise run deploy`の確認は失敗して止まる。
+壊れた状態のまま反映すると、凍結を無視して上書きするおそれがあるためである。
+人が`mise run freeze:reset`で変数を空に戻してから、実行し直す。
 ラッパーは`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
 理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。

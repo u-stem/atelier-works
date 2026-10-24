@@ -645,7 +645,7 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
-2. 反映が要るときに、deployの保留が有効なら、3から5を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
+2. 反映が要る回と、凍結が終わった後の追従の回で、deployの保留が有効なら、3から5を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
 3. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
    凍結中のスケジュールはpushから除く。
    凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す。

@@ -450,6 +450,20 @@ export async function runDeployedShaCheck(
       self_sha: selfSha,
       deployed_sha: deployedSha,
     });
+    // 保留が続くあいだは、食い違いを最初に見た時刻を今に直す。保留が終わった後の猶予を、保留の終わりから数えるため。
+    if (stateUsable) {
+      try {
+        await deps.setState({
+          ...stored,
+          [DEPLOYED_SHA_STATE_KEY]: {
+            deployed_sha: deployedSha,
+            first_seen_ms: deps.nowMs(),
+          },
+        });
+      } catch (err) {
+        log.warn("deployed_sha state write failed", { error: errorText(err) });
+      }
+    }
     return "waiting";
   }
 
