@@ -180,7 +180,7 @@ describe("self_update reconcile-only run", () => {
     const text = await source();
 
     expect(text).toMatch(
-      /if \(!reconcileOnly\) \{\s*await recordFailedDeployment\(/,
+      /if \(!reconcileOnly && !deployedShaUpdated\) \{\s*await recordFailedDeployment\(/,
     );
   });
 });

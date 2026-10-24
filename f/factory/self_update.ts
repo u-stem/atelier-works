@@ -1080,6 +1080,8 @@ async function updateSelf(
   // 下でトークンを取得した時点で埋め、外側のcatchの`maskSecrets`でも使う。
   // 両方から参照できるよう、ここで宣言する。
   let secrets: string[] = [];
+  // `deployed_sha`を更新した後は反映が済んでいる。その後の失敗は、失敗の反映として記録しない。
+  let deployedShaUpdated = false;
 
   try {
     const wmillToken = await withCallTimeout("getVariable wmill_token", () =>
@@ -1149,20 +1151,8 @@ async function updateSelf(
       secrets,
     );
 
-    await setDeployedSha(
-      {
-        set: () =>
-          wmill.setVariable(
-            "f/factory/deployed_sha",
-            currentSha,
-            false,
-            "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
-          ),
-        get: () => wmill.getVariable("f/factory/deployed_sha"),
-      },
-      currentSha,
-    );
-
+    // 変更パスの列挙は`deployed_sha`の更新より前に行う。更新の後に失敗すると、
+    // 反映が済んでいるのに失敗の行が残り、次の回も反映済みとして扱われるため。
     const changedPaths = await resolveChangedPaths(
       runCommand,
       factoryClone.dir,
@@ -1178,6 +1168,21 @@ async function updateSelf(
         )
       : false;
     const classification = classifyChangedPaths(changedPaths, miseChanged);
+
+    await setDeployedSha(
+      {
+        set: () =>
+          wmill.setVariable(
+            "f/factory/deployed_sha",
+            currentSha,
+            false,
+            "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+          ),
+        get: () => wmill.getVariable("f/factory/deployed_sha"),
+      },
+      currentSha,
+    );
+    deployedShaUpdated = true;
 
     // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
     let pullRequests: DeploymentPullRequest[] = [];
@@ -1266,7 +1271,8 @@ async function updateSelf(
     });
     // 理由はログと同じ伏せ字処理を通して記録する。記録に失敗しても元の例外を投げる。
     // 凍結の追従だけの回は、反映の対象のコミットが無いので、失敗の行を足さない(次の回が再試行する)。
-    if (!reconcileOnly) {
+    // `deployed_sha`の更新後は反映が済んでいるので、失敗の行を足さない。
+    if (!reconcileOnly && !deployedShaUpdated) {
       await recordFailedDeployment(
         {
           record: (record) => recordDeployment(record),
