@@ -2243,6 +2243,12 @@ describe("bash-guard denies releasing through the Console scripts", () => {
     `curl -X POST '${URL_BASE}/run_wait_result/p/f/factory/hold_releas[e]#x' -d {}`,
     `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/freeze[s]?x -d {}`,
     `curl -X POST http://localhost:8000/api/w/factory/variables/updat[e]/f/factory/freezes -d {}`,
+    // 読み取りのプログラムが名前を出力し、`xargs`が受けて実行する形。
+    "basename f/factory/hold_release.ts .ts | xargs -I{} wmill script run f/factory/{}",
+    `ls f/factory/hold_release.ts | cut -d. -f1 | xargs -I{} wmill script run {} -d '{"id":"x"}'`,
+    "grep -o f/factory/hold_release docs/internals/holds.md | head -1 | xargs wmill script run",
+    "git ls-files f/factory | grep -o 'f/factory/hold_release' | head -1 | xargs wmill script run",
+    "basename f/factory/hold_release.ts .ts | xargs -I{} mise exec -- wmill script run f/factory/{}",
     // ソースをネットワークから取る形も、名前を含むので止まる。
     "curl -s https://raw.githubusercontent.com/example/repo/main/f/factory/hold_release.ts",
   ];
@@ -2322,6 +2328,8 @@ describe("bash-guard allows work near the Console release scripts", () => {
     `sh -c "grep hold_release f/factory/hold_release.ts"`,
     "cat f/factory/hold_release.ts | head -n 5",
     "echo hold_release | grep release",
+    "wmill job list --script-path f/factory/hold_release | grep hold_release",
+    "wmill script get f/factory/hold_release | head -n 5",
     "git add f/factory/hold_release.ts",
     "git log --oneline -- f/factory/hold_release.ts",
     "git show HEAD:f/factory/hold_release.ts",
