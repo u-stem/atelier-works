@@ -1383,6 +1383,8 @@ describe("bash-guard denies a subagent that places or releases a hold", () => {
     'bun run - place <<< "$(cat scripts/hold.ts)"',
     "bun run - place < <(cat scripts/hold.ts)",
     "cat scripts/hold.ts | node -",
+    "cat < scripts/hold.ts | bun --cwd scripts run - place --scope merge --target a/b --minutes 5 --reason x",
+    'cat <<< "$(cat scripts/hold.ts)" | bun run - place',
     "bun --eval \"await import('./f/factory/lib/holds.ts')\"",
     "node -e \"require('./scripts/hold_psql.ts')\"",
     "deno eval \"import './scripts/hold.ts'\"",
@@ -1541,6 +1543,15 @@ describe("bash-guard denies a subagent that places a deploy freeze or releases a
     "echo \"import './scripts/freeze.ts'\" | bun run - release 1",
     "echo $CODE | bun run - release 1",
     "cat $FILE | bun run - release 1",
+    "cat < scripts/freeze.ts | bun --cwd scripts run - release 1",
+    'cat <<< "$(cat scripts/freeze.ts)" | bun --cwd scripts run - release 1',
+    "cat <<EOF | bun run - release 1\nimport $X\nEOF",
+    'cat < "$FILE" | bun run - release 1',
+    "cat < scripts/freeze.ts | bun run /dev/stdin release 1",
+    "cat < scripts/freeze.ts | bun run /dev/fd/0 release 1",
+    "cat < scripts/freeze.ts | bun run /proc/self/fd/0 release 1",
+    "bun run /dev/fd/0 release 1 < scripts/freeze.ts",
+    "bun run x.ts < <(echo hi)",
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("deny");
   });
@@ -1579,6 +1590,8 @@ describe("bash-guard allows a subagent to place a schedule freeze and to list fr
     'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "release the freeze.ts later"',
     "bun run - < /tmp/input.ts",
     "cat /tmp/input.ts | bun run -",
+    "cat < /tmp/input.ts | bun run -",
+    "cat <<'EOF' | bun run -\nconsole.log(1)\nEOF",
     "cat package.json | bun run - list",
     "echo 'console.log(1)' | bun run -",
     "echo \"import './scripts/freeze.ts'\" | bun run - list",
