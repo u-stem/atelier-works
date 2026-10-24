@@ -573,7 +573,11 @@ function checkSimpleCommand(
   const hold =
     scope.input.agentId === null
       ? null
-      : findHoldOperation(words, () => literalShellInputs(command));
+      : findHoldOperation(
+          words,
+          () => literalShellInputs(command),
+          command.redirects,
+        );
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
   if (hold === "option") return deny(REASONS.subagentHoldOption);
   if (hold !== null) return deny(REASONS.subagentHold);

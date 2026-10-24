@@ -7,7 +7,8 @@
 // - 凍結の解除(`release`)。deployの保留を外せるためである。
 // `--scope`の値が実行時に決まる形(変数、コマンド置換、glob)は、`deploy`かを判定できないので拒否する。
 // 凍結のCLIを指す語は、直後の`--`を読み飛ばして副コマンドを決め、globは凍結のファイル名に当たるかで判定する。
-// `-e`と標準入力のコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
+// `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
+// 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
 // 拒否を既定にする。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -407,8 +408,36 @@ function pointsAtFreezeCode(word: Word): boolean {
   });
 }
 
-/** 空白か引用符を含む語は、コードの文字列として読む。 */
-const CODE_LIKE = /[\s'"`(]/;
+/** 次の語をコードとして実行する実行系のオプションと副コマンド。 */
+const CODE_FLAGS: ReadonlySet<string> = new Set([
+  "-e",
+  "--eval",
+  "-p",
+  "--print",
+  "-c",
+  "--command",
+  "eval",
+]);
+
+/**
+ * 実行系の引数のうち、コードとして実行される文字列。
+ * `-e`などの直後の語と、`--eval=<コード>`の値である。
+ * `-t`の値や凍結のCLIの`--reason`の値のように、コードでない文字列は読まない。
+ */
+function codeStrings(args: readonly Word[]): string[] {
+  const codes: string[] = [];
+  for (const [index, word] of args.entries()) {
+    for (const text of spellings(word)) {
+      const inline = /^--(?:eval|print|command)=([\s\S]*)$/.exec(text);
+      if (inline?.[1] !== undefined) codes.push(inline[1]);
+    }
+    if (CODE_FLAGS.has(word.text)) {
+      const next = args[index + 1];
+      if (next !== undefined) codes.push(...spellings(next));
+    }
+  }
+  return codes;
+}
 
 /** コードの文字列が、凍結のCLIを指しながら、解除かdeployの保留を書いているなら真。 */
 function codeTouchesFreezeRelease(text: string): boolean {
@@ -441,18 +470,13 @@ function freezeSubcommandFinding(rest: readonly Word[]): HoldFinding | null {
  * 実行系の引数が、凍結のCLI(`scripts/freeze.ts`)で解除するか、deployの保留を置く形なら拒否の種類を返す。
  * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。
  * 実行時に決まるときは判定できないので`dynamic`を返す。
- * `-e`などの文字列と標準入力で渡すコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
+ * `-e`などの直後の文字列と標準入力で渡すコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
  */
 function freezeCliFinding(
   args: readonly Word[],
   inputs: () => readonly string[] | null,
 ): HoldFinding | null {
-  const codes = [
-    ...(inputs() ?? []),
-    ...args.flatMap((word) =>
-      spellings(word).filter((text) => CODE_LIKE.test(text)),
-    ),
-  ];
+  const codes = [...(inputs() ?? []), ...codeStrings(args)];
   if (codes.some(codeTouchesFreezeRelease)) return "operation";
   let found: HoldFinding | null = null;
   for (const [at, word] of args.entries()) {
@@ -529,16 +553,28 @@ function sqlTouchesHolds(
  * 単純コマンドが、保留を置く・解除する操作なら、拒否の種類を返す。そうでなければnullを返す。
  * `words`は、変数代入と前置き(`env`、`timeout`、`mise exec --`など)を外した語である。
  * `inputs`は、標準入力に渡る文字列(ヒアドキュメントと、パイプの前の`echo`など)を返す。
+ * `redirects`は、リダイレクトの先の語である。実行系の標準入力に流し込むファイルが、保留か凍結のコードなら拒否する。
  * 読めないときはnullを返す。呼ばれるのは、必要になったときだけである。
  */
 export function findHoldOperation(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
+  redirects: readonly Word[] = [],
 ): HoldFinding | null {
   const first = words[0]?.text ?? "";
   const program = baseName(first);
   if (program === "mise") return miseFinding(words, inputs);
-  if (RUNNERS.has(program)) return runnerFinding(words.slice(1), inputs);
+  if (RUNNERS.has(program)) {
+    // `bun run - < scripts/freeze.ts`のように、標準入力で流し込んだコードも実行される。
+    if (
+      redirects.some(
+        (word) => pointsAtHoldCode(word) || pointsAtFreezeCode(word),
+      )
+    ) {
+      return "operation";
+    }
+    return runnerFinding(words.slice(1), inputs);
+  }
   if (SQL_PROGRAMS.has(program)) {
     return sqlTouchesHolds(words, inputs) ? "operation" : null;
   }
