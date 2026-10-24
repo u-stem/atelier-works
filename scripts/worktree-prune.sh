@@ -3,7 +3,21 @@
 # 消す。既定は乾燥実行で、消す対象を表示するだけにする。`--apply`を付けると実際に消す。
 #
 # 使い方: scripts/worktree-prune.sh [--apply] [--min-idle-minutes N]
+#         scripts/worktree-prune.sh --auto --ancestors <PIDのカンマ区切り>
 # 終了コードは、残したworktreeがあっても0にする(情報を示すのが目的)。使い方の誤りは2。
+#
+# `--auto`は、`worktree-new.sh`がworktreeを作った後に、バックグラウンドで起動する無人の実行である。
+# `--apply`を含み、`--apply`や`--min-idle-minutes`とは同時に指定できない(`recent`は既定の120分)。
+# 消す条件は下の手動と同じで、`consider`の同じコードを通す。無人で動かすために、次の点が違う。
+#   - `--ancestors`は、起動した側の祖先のPIDである。`lsof`の出力にそのどれかが現れなければ、
+#     `lsof`が呼び出し元の側を見られない環境とみなし、何も消さずに失敗として数える(陽性の対照)。
+#   - 状態を`<git-common-dir>/worktree-prune/`に残す(`log`、`lock/`、`stamp`、`failures`)。
+#     書き込みは一時ファイルと`mv`だけで、シンボリックリンクがあれば何もしない。
+#   - 前回の成功から30分以内、または他の実行がロックを持つ間は、何もしない。
+#   - `failures`は、ロックを取った直後に先に1増やし、成功した実行が0に戻す。
+#     途中で死んだ実行も、失敗として数えられる。
+#   - `gh`には、ghが動いていた時間の合計の上限(30秒)を課す。上限に達したら、残りの候補は打ち切る。
+#   - 標準出力には何も出さず、終了コードは常に0にする。結果は`log`に書く。
 #
 # 消す条件は、すべてを満たすことである。
 #   - メインのcheckoutの`.claude/worktrees/`の下にある。
@@ -45,20 +59,42 @@ set -euo pipefail
 
 usage() {
   echo "usage: scripts/worktree-prune.sh [--apply] [--min-idle-minutes N]" >&2
+  echo "       scripts/worktree-prune.sh --auto --ancestors <pid,pid,...>" >&2
   echo "  without --apply, only prints what would be removed" >&2
   echo "  --min-idle-minutes N: keep worktrees with files changed within N minutes (default 120)" >&2
+  echo "  --auto: unattended mode started by worktree-new.sh; cannot be combined with --apply or --min-idle-minutes" >&2
 }
 
 # 作ったまま使っていないworktreeを放置とみなす時間(分)。
 abandoned_minutes=1440
 
 apply=0
+apply_given=0
+auto=0
+ancestors=""
+ancestors_given=0
 idle_minutes=120
+idle_given=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --apply)
       apply=1
+      apply_given=1
       shift
+      ;;
+    --auto)
+      auto=1
+      shift
+      ;;
+    --ancestors)
+      # 値の検査は、`--auto`の実行の中で行う。不正な値は、何も消さずに失敗として数える。
+      if [ "$#" -lt 2 ]; then
+        usage
+        exit 2
+      fi
+      ancestors="$2"
+      ancestors_given=1
+      shift 2
       ;;
     --min-idle-minutes)
       if [ "$#" -lt 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
@@ -66,6 +102,7 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       idle_minutes="$2"
+      idle_given=1
       shift 2
       ;;
     *)
@@ -74,14 +111,37 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+# `--auto`は`--apply`を含み、`recent`の閾値を既定に固定する。
+if [ "$auto" -eq 1 ]; then
+  if [ "$apply_given" -eq 1 ] || [ "$idle_given" -eq 1 ]; then
+    usage
+    exit 2
+  fi
+  apply=1
+elif [ "$ancestors_given" -eq 1 ]; then
+  usage
+  exit 2
+fi
 
 # 消す対象が、実行したディレクトリを含むかを後で調べるので、先に控える。
 invoked_from="$(pwd -P)"
 
-common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+common_dir=""
+rev_status=0
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir)" || rev_status=$?
+# --autoは、状態を残せない場所では何もせず、終了コード0で終える。
+if [ "$rev_status" -ne 0 ]; then
+  if [ "$auto" -eq 1 ]; then
+    exit 0
+  fi
+  exit "$rev_status"
+fi
 # bareリポジトリなど`.git`でない場合は、メインのcheckoutの場所を決められない。
 if [ "$(basename "$common_dir")" != ".git" ]; then
   echo "worktree-prune: cannot locate the main checkout from $common_dir" >&2
+  if [ "$auto" -eq 1 ]; then
+    exit 0
+  fi
   exit 1
 fi
 main_root="$(cd "$(dirname "$common_dir")" && pwd -P)"
@@ -89,24 +149,366 @@ main_root="$(cd "$(dirname "$common_dir")" && pwd -P)"
 cd "$main_root"
 scope="$main_root/.claude/worktrees/"
 
-# 各プロセスのcwdの一覧。`lsof`は権限の無いプロセスで終了コード1になるが、読めた分は使う。
-cwd_list=""
-have_lsof=0
-if command -v lsof >/dev/null 2>&1; then
-  have_lsof=1
-  cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null)" || true
-  # 自分自身のcwdが必ず出るので、空なら失敗とみなす。空のまま照合すると、何も使われていないことになる。
-  if [ -z "$cwd_list" ]; then
-    have_lsof=0
-    echo "worktree-prune: warning: lsof returned nothing; skipped the in use check" >&2
+# --autoの状態は`<git-common-dir>/worktree-prune/`にまとめる(`log`、`lock/`、`stamp`、`failures`)。
+# 書き込みはすべて、ディレクトリの中に作った一時ファイルへ書いてから`mv`で置き換える。
+# 追記や`touch`は、既存のシンボリックリンクを辿って別の場所に書くおそれがあるので使わない。
+state_dir="$common_dir/worktree-prune"
+log_file="$state_dir/log"
+lock_dir="$state_dir/lock"
+stamp_file="$state_dir/stamp"
+failures_file="$state_dir/failures"
+# ログがこの大きさ(バイト)を超えたら、書き換えのときに末尾の半分だけを残す。
+log_limit_bytes=102400
+
+# 状態のファイルを読む。通常のファイルでなければ(シンボリックリンクを含む)何も出さない。
+read_state() {
+  if [ -f "$1" ] && [ ! -L "$1" ]; then
+    cat -- "$1" 2>/dev/null || true
+  fi
+}
+
+# 状態のファイル`$1`を、内容`$2`で置き換える。置き換え先がシンボリックリンクやディレクトリなら書かない。
+# `mv`はシンボリックリンクがディレクトリを指すと、その中へ移すので、`mv`の直前にも確かめる。
+write_state() {
+  local dest="$1" tmp
+  if [ -L "$dest" ] || [ -d "$dest" ]; then
+    return 1
+  fi
+  tmp="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 1
+  if ! printf '%s\n' "$2" >"$tmp" || [ -L "$dest" ] || [ -d "$dest" ] || ! mv -f -- "$tmp" "$dest"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+# ログに1行足す。ログ全体を書き換えるので、大きくなりすぎたら末尾の半分だけを残す。
+log_line() {
+  local tmp
+  if [ -L "$log_file" ] || [ -d "$log_file" ]; then
+    return 0
+  fi
+  tmp="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 0
+  if [ -f "$log_file" ]; then
+    if [ "$(($(wc -c <"$log_file")))" -gt "$log_limit_bytes" ]; then
+      # 先頭は行の途中で切れるので捨てる。
+      tail -c "$((log_limit_bytes / 2))" -- "$log_file" | sed '1d' >"$tmp" || true
+    else
+      cat -- "$log_file" >"$tmp" || true
+    fi
+  fi
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" >>"$tmp"
+  if [ -L "$log_file" ] || [ -d "$log_file" ] || ! mv -f -- "$tmp" "$log_file"; then
+    rm -f -- "$tmp"
+  fi
+}
+
+# 更新時刻(epoch秒)を返す。GNUとBSDのstatのどちらでも動かす。
+file_mtime() {
+  local value
+  value="$(stat -c %Y -- "$1" 2>/dev/null)" || value=""
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    value="$(stat -f %m -- "$1" 2>/dev/null)" || value=""
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  echo "$value"
+}
+
+# 前回の成功から30分以内なら0を返す。今より未来の値や数字でない値は、古いものとして扱う。
+stamp_is_fresh() {
+  local value now
+  value="$(read_state "$stamp_file")"
+  [[ "$value" =~ ^[0-9]{1,12}$ ]] || return 1
+  # 先頭の0を八進数として読まないよう、十進数として固定する。
+  value=$((10#$value))
+  now="$(date +%s)"
+  [ "$value" -le "$now" ] && [ $((now - value)) -le 1800 ]
+}
+
+# ロックの持ち主の識別(乱数)。自分が取ったロックだけを、終了時に消すために使う。
+# 持ち主のPIDの生死は使わない。PIDの再利用や空のPIDで誤るため。
+lock_owner=""
+
+# `lock/`を作れたので、持ち主の識別を書く。書けなければロックを放す。
+claim_lock() {
+  lock_owner="$$-$RANDOM-$RANDOM-$RANDOM"
+  if ! write_state "$lock_dir/owner" "$lock_owner"; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    lock_owner=""
+    return 1
+  fi
+}
+
+# `lock/`の更新時刻が10分より古いか、今より未来なら0を返す(放置されたロック)。
+lock_is_stale() {
+  local mtime now
+  mtime="$(file_mtime "$1")" || return 1
+  now="$(date +%s)"
+  [ "$mtime" -gt "$now" ] || [ $((now - mtime)) -gt 600 ]
+}
+
+# ロックを取る。取れたら0、他の実行が動いていて取れなければ1を返す。
+# 取れなかったときの`lock/`が放置されたものなら、一意の名前へ移し、移した先がまだ古いことを
+# 確かめてから消し、取り直す。移した先が新しければ、他の実行が取り直した直後なので、元に戻す。
+acquire_lock() {
+  local moved
+  if mkdir "$lock_dir" 2>/dev/null; then
+    claim_lock
+    return
+  fi
+  if [ -L "$lock_dir" ] || [ ! -d "$lock_dir" ] || ! lock_is_stale "$lock_dir"; then
+    return 1
+  fi
+  moved="$state_dir/lock.stale.$$.$RANDOM"
+  mv -- "$lock_dir" "$moved" 2>/dev/null || return 1
+  if ! lock_is_stale "$moved"; then
+    if [ ! -e "$lock_dir" ]; then
+      mv -- "$moved" "$lock_dir" 2>/dev/null || true
+    fi
+    return 1
+  fi
+  # 消すのは、いま自分が一意の名前へ移した、状態のディレクトリの中のものに限る。
+  if [ -d "$moved" ] && [ ! -L "$moved" ]; then
+    rm -rf -- "$moved"
+  fi
+  if mkdir "$lock_dir" 2>/dev/null; then
+    claim_lock
+    return
+  fi
+  return 1
+}
+
+# 自分の識別が`owner`にあるときだけ、`lock/`を消す。
+release_lock() {
+  [ -n "$lock_owner" ] || return 0
+  if [ -d "$lock_dir" ] && [ ! -L "$lock_dir" ] && [ "$(read_state "$lock_dir/owner")" = "$lock_owner" ]; then
+    rm -rf -- "$lock_dir"
+  fi
+  lock_owner=""
+}
+
+# 失敗の回数。数字でない中身は0として扱う。
+read_failures() {
+  local value
+  value="$(read_state "$failures_file")"
+  if [[ "$value" =~ ^[0-9]{1,9}$ ]]; then
+    echo "$((10#$value))"
+  else
+    echo 0
+  fi
+}
+
+# `gh`の時間の上限(秒)。`timeout`はmacOSに無いので、別のプロセスグループで動かして自分で測る。
+# 環境変数は、1以上30以下の数字のときだけ使う。延ばせないのは、無人の実行が
+# 10分のロックの期限を超えないようにするため。短くするのはテスト用。
+gh_limit=30
+if [[ "${WORKTREE_PRUNE_GH_TIMEOUT-}" =~ ^[0-9]{1,2}$ ]]; then
+  gh_limit_env=$((10#$WORKTREE_PRUNE_GH_TIMEOUT))
+  if [ "$gh_limit_env" -ge 1 ] && [ "$gh_limit_env" -le 30 ]; then
+    gh_limit="$gh_limit_env"
   fi
 fi
 
+gh_pid=""
+gh_out=""
+gh_out_file=""
+# 1件でも時間切れになったら、その実行の残りの候補はghに聞かずに打ち切る。
+gh_timed_out=0
+# ghが実際に動いていた時間(秒)の、実行全体の合計。候補の間の別の処理の時間は含めない。
+gh_spent=0
+gh_asked=0
+gh_unavailable=0
+
+# 動いているghを、プロセスグループごと止める。
+stop_gh() {
+  if [ -n "$gh_pid" ]; then
+    kill -TERM -- "-$gh_pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$gh_pid" 2>/dev/null || true
+    wait "$gh_pid" 2>/dev/null || true
+    gh_pid=""
+  fi
+}
+
+# `wt_branch`のマージ済みPRの先頭のcommitを`gh_out`に入れる。成功なら0を返す。
+# --autoでは、時間の上限を課す。上限を超えたらプロセスグループごと止めて、1を返す。
+ask_gh() {
+  local call_started status=0
+  gh_out=""
+  if [ "$auto" -ne 1 ]; then
+    gh_out="$(gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || status=$?
+    return "$status"
+  fi
+  if [ "$gh_timed_out" -eq 1 ]; then
+    return 1
+  fi
+  # 上限は1件ごとではなく、ghが動いていた時間の合計で測る。合計が上限に達したら、残りは打ち切る。
+  if [ "$gh_spent" -ge "$gh_limit" ]; then
+    gh_timed_out=1
+    return 1
+  fi
+  call_started="$(date +%s)"
+  gh_out_file="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 1
+  set -m
+  gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' \
+    >"$gh_out_file" 2>/dev/null </dev/null &
+  gh_pid=$!
+  set +m
+  while kill -0 "$gh_pid" 2>/dev/null; do
+    if [ $((gh_spent + $(date +%s) - call_started)) -ge "$gh_limit" ]; then
+      gh_timed_out=1
+      gh_spent=$((gh_spent + $(date +%s) - call_started))
+      stop_gh
+      rm -f -- "$gh_out_file"
+      gh_out_file=""
+      return 1
+    fi
+    sleep 1
+  done
+  wait "$gh_pid" || status=$?
+  gh_pid=""
+  gh_spent=$((gh_spent + $(date +%s) - call_started))
+  if [ "$status" -eq 0 ]; then
+    gh_out="$(cat -- "$gh_out_file")"
+  fi
+  rm -f -- "$gh_out_file"
+  gh_out_file=""
+  return "$status"
+}
+
+# --autoの終了時の後始末。終了コードは常に0にする。
+auto_cleanup() {
+  trap '' INT TERM
+  trap - EXIT
+  stop_gh
+  if [ -n "$gh_out_file" ]; then
+    rm -f -- "$gh_out_file"
+  fi
+  release_lock
+  exit 0
+}
+
+if [ "$auto" -eq 1 ]; then
+  # 標準出力には何も出さない。結果はログに書く。
+  exec >/dev/null
+  # 状態のディレクトリがシンボリックリンクなら、辿らずに何もしない。
+  if [ -L "$state_dir" ]; then
+    exit 0
+  fi
+  if [ ! -e "$state_dir" ]; then
+    mkdir -m 700 "$state_dir" 2>/dev/null || true
+  fi
+  if [ -L "$state_dir" ] || [ ! -d "$state_dir" ] || [ ! -O "$state_dir" ]; then
+    exit 0
+  fi
+  for state_name in lock log stamp failures; do
+    if [ -L "$state_dir/$state_name" ]; then
+      exit 0
+    fi
+  done
+  trap auto_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  # 順序: stampを見る → ロックを取る → 失敗の回数を先に1増やす → 片付ける。
+  # 先に増やすので、途中で死んだ実行も失敗として数えられる。成功した実行が0に戻す。
+  # stampが新しいときと、他の実行がロックを持っているときは、何もせず、失敗にも数えない。
+  if stamp_is_fresh; then
+    exit 0
+  fi
+  if ! acquire_lock; then
+    exit 0
+  fi
+  write_state "$failures_file" "$(($(read_failures) + 1))" || true
+  log_line "start (gh time limit ${gh_limit}s)"
+fi
+
+# lsofの実行ファイル。`WORKTREE_PRUNE_LSOF`は差し替える(テスト用)。
+# 無ければ絶対パスの`/usr/sbin/lsof`、それも無ければPATHから探す。
+# フックから起動されたときのPATHに`/usr/sbin`が無くても、見つけられるようにするため。
+lsof_cmd=""
+if [ -n "${WORKTREE_PRUNE_LSOF+x}" ]; then
+  lsof_cmd="$WORKTREE_PRUNE_LSOF"
+elif [ -x /usr/sbin/lsof ]; then
+  lsof_cmd="/usr/sbin/lsof"
+else
+  lsof_cmd="$(command -v lsof || true)"
+fi
+if [ -n "$lsof_cmd" ] && [ ! -x "$lsof_cmd" ]; then
+  lsof_cmd=""
+fi
+
+# 各プロセスのcwdの一覧。`lsof`は権限の無いプロセスで終了コード1になるが、読めた分は使う。
+cwd_list=""
+have_lsof=0
+
+# lsofを実行して`cwd_list`を更新する。lsofが使えないか出力が空なら、更新せずに1を返す。
+# 自分自身のcwdが必ず出るので、空なら失敗とみなす。空のまま照合すると、何も使われていないことになる。
+read_cwd_list() {
+  local out=""
+  [ -n "$lsof_cmd" ] || return 1
+  out="$("$lsof_cmd" -a -d cwd -Fpcn 2>/dev/null)" || true
+  [ -n "$out" ] || return 1
+  cwd_list="$out"
+}
+
+# `--ancestors`のPIDのうち、1つでも`cwd_list`にpの行として現れれば0を返す(陽性の対照)。
+# lsofが呼び出し元の側を見られない環境では、何も使われていないように見える。その検出に使う。
+callers_visible() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      p[0-9]*)
+        case ",$ancestors," in
+          *",${line#p},"*) return 0 ;;
+        esac
+        ;;
+    esac
+  done <<<"$cwd_list"
+  return 1
+}
+
 removed=0
 kept=0
+# 失敗として数える事象があれば1にする。--autoでは、成功しなかった実行の印になる。
+run_failed=0
+# 1なら、worktreeの判定に進まずに終える。
+run_aborted=0
+
+# 標準出力の行。--autoでは標準出力に出さず、ログに書く。
+emit() {
+  if [ "$auto" -eq 1 ]; then
+    log_line "$1"
+  else
+    echo "$1"
+  fi
+}
+
+fail_run() {
+  run_failed=1
+  emit "failed: $1"
+}
+
+if [ "$auto" -eq 1 ]; then
+  if [[ ! "$ancestors" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    fail_run "the ancestors are missing or malformed; removed nothing"
+    run_aborted=1
+  elif ! read_cwd_list; then
+    fail_run "lsof is unavailable or printed nothing; removed nothing"
+    run_aborted=1
+  elif ! callers_visible; then
+    fail_run "lsof does not show the callers; removed nothing"
+    run_aborted=1
+  else
+    have_lsof=1
+  fi
+elif read_cwd_list; then
+  have_lsof=1
+elif [ -n "$lsof_cmd" ]; then
+  echo "worktree-prune: warning: lsof returned nothing; skipped the in use check" >&2
+fi
 
 keep() {
-  echo "kept: $wt_path${wt_branch:+ ($wt_branch)}: $1"
+  emit "kept: $wt_path${wt_branch:+ ($wt_branch)}: $1"
   kept=$((kept + 1))
 }
 
@@ -158,6 +560,93 @@ reflogs_reachable() {
   return 0
 }
 
+# 削除の区間を抜けたので、--autoのINTとTERMの扱いを戻す。
+resume_signals() {
+  if [ "$auto" -eq 1 ]; then
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
+}
+
+# 使われているか、失うものがあるかを調べ、残す理由を`blocker`に入れる(無ければ空)。
+# 変更と未追跡のファイルは`dirty`、再生成できるもの以外の無視されたファイルは
+# `ignored files`として残す。再生成できるものは、node_modules、`.wmill`のリンク、
+# `console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
+# `.wmill`は実体のディレクトリを許さない。ログインの情報が入りうるため。
+# 利用者の`status.showUntrackedFiles=no`で未追跡のファイルが隠れないよう、明示する。
+# 最初の検査と、削除の直前の再検査の両方が、この関数を通る。
+blocker=""
+check_blockers() {
+  local status_out status_line dirty=0 ignored=0
+  blocker=""
+  if ! status_out="$(git -C "$wt_path" status --porcelain --ignored --untracked-files=all)"; then
+    blocker="dirty"
+    return
+  fi
+  while IFS= read -r status_line; do
+    case "$status_line" in
+      "") ;;
+      "!! node_modules/"* | "!! "*"/node_modules/"*) ;;
+      "!! .wmill") ;;
+      "!! console/dist/"* | "!! console/.cache/"*) ;;
+      "!! __pycache__/"* | "!! "*"/__pycache__/"*) ;;
+      "!! .DS_Store" | "!! "*"/.DS_Store") ;;
+      "!! "*) ignored=1 ;;
+      *) dirty=1 ;;
+    esac
+  done <<<"$status_out"
+  if [ "$dirty" -eq 1 ]; then
+    blocker="dirty"
+    return
+  fi
+  if [ "$ignored" -eq 1 ]; then
+    blocker="ignored files"
+    return
+  fi
+  if has_recent_file "$wt_path" "$idle_minutes"; then
+    blocker="recent"
+    return
+  fi
+  if has_process_inside "$wt_path"; then
+    blocker="in use"
+    return
+  fi
+}
+
+# 削除の直前の再検査。最初の検査から時間が空く間(ghの待ちなど)に、worktreeが使われうる。
+# `check_blockers`をもう一度通し、ブランチが検査の時点のcommitのままかを確かめた後、
+# 最後にlsofを取り直して使用中かを調べる。`check_blockers`は数秒かかることがあり、
+# その間に現れたcwdを見逃さないよう、lsofを`git worktree remove`の直前に最も近づける。
+# 残す理由を`blocker`に入れる(無ければ空)。--autoでは、取り直したlsofにも陽性の対照を課す。
+recheck_before_remove() {
+  local head_ref current
+  check_blockers
+  if [ -n "$blocker" ]; then
+    return
+  fi
+  head_ref="$(git -C "$wt_path" symbolic-ref -q HEAD 2>/dev/null)" || head_ref=""
+  current="$(git rev-parse --verify --quiet "refs/heads/$wt_branch" 2>/dev/null)" || current=""
+  if [ "$head_ref" != "refs/heads/$wt_branch" ] || [ "$current" != "$wt_head" ]; then
+    blocker="branch moved"
+    return
+  fi
+  if read_cwd_list; then
+    have_lsof=1
+    if [ "$auto" -eq 1 ] && ! callers_visible; then
+      fail_run "lsof does not show the callers just before removing $wt_path"
+      blocker="lsof check failed"
+      return
+    fi
+  elif [ "$auto" -eq 1 ]; then
+    fail_run "lsof is unavailable or printed nothing just before removing $wt_path"
+    blocker="lsof check failed"
+    return
+  fi
+  if has_process_inside "$wt_path"; then
+    blocker="in use"
+  fi
+}
+
 # `wt_*`の変数に入れた1件のworktreeを判定し、消せるものは消す(または予定を表示する)。
 consider() {
   if [[ "$wt_path/" != "$scope"* ]]; then
@@ -181,43 +670,9 @@ consider() {
     return
   fi
 
-  # 変更と未追跡のファイルは`dirty`、再生成できるもの以外の無視されたファイルは
-  # `ignored files`として残す。再生成できるものは、node_modules、`.wmill`のリンク、
-  # `console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
-  # `.wmill`は実体のディレクトリを許さない。ログインの情報が入りうるため。
-  # 利用者の`status.showUntrackedFiles=no`で未追跡のファイルが隠れないよう、明示する。
-  local status_out status_line dirty=0 ignored=0
-  if ! status_out="$(git -C "$wt_path" status --porcelain --ignored --untracked-files=all)"; then
-    keep "dirty"
-    return
-  fi
-  while IFS= read -r status_line; do
-    case "$status_line" in
-      "") ;;
-      "!! node_modules/"* | "!! "*"/node_modules/"*) ;;
-      "!! .wmill") ;;
-      "!! console/dist/"* | "!! console/.cache/"*) ;;
-      "!! __pycache__/"* | "!! "*"/__pycache__/"*) ;;
-      "!! .DS_Store" | "!! "*"/.DS_Store") ;;
-      "!! "*) ignored=1 ;;
-      *) dirty=1 ;;
-    esac
-  done <<<"$status_out"
-  if [ "$dirty" -eq 1 ]; then
-    keep "dirty"
-    return
-  fi
-  if [ "$ignored" -eq 1 ]; then
-    keep "ignored files"
-    return
-  fi
-
-  if has_recent_file "$wt_path" "$idle_minutes"; then
-    keep "recent"
-    return
-  fi
-  if has_process_inside "$wt_path"; then
-    keep "in use"
+  check_blockers
+  if [ -n "$blocker" ]; then
+    keep "$blocker"
     return
   fi
 
@@ -264,9 +719,9 @@ consider() {
     how="ancestor of origin/main"
     reach_target="refs/remotes/origin/main"
   else
-    local gh_status=0 gh_out=""
-    gh_out="$(gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || gh_status=$?
-    if [ "$gh_status" -ne 0 ]; then
+    gh_asked=$((gh_asked + 1))
+    if ! ask_gh; then
+      gh_unavailable=$((gh_unavailable + 1))
       keep "gh unavailable"
       return
     fi
@@ -290,21 +745,43 @@ consider() {
   fi
 
   if [ "$apply" -ne 1 ]; then
-    echo "would remove: $wt_path ($wt_branch): $how"
+    emit "would remove: $wt_path ($wt_branch): $how"
     removed=$((removed + 1))
     return
   fi
+
+  # 検査から削除までの間に使われ始めたものを、残す。
+  recheck_before_remove
+  if [ -n "$blocker" ]; then
+    keep "$blocker"
+    return
+  fi
+
+  # --autoでは、worktreeだけが消えてブランチが残らないよう、削除の区間のINTとTERMを無視する。
+  if [ "$auto" -eq 1 ]; then
+    trap '' INT TERM
+  fi
   if ! git worktree remove "$wt_path" >&2; then
-    echo "failed: $wt_path ($wt_branch): could not remove the worktree" >&2
+    resume_signals
+    if [ "$auto" -eq 1 ]; then
+      fail_run "$wt_path ($wt_branch): could not remove the worktree"
+    else
+      echo "failed: $wt_path ($wt_branch): could not remove the worktree" >&2
+    fi
     kept=$((kept + 1))
     return
   fi
+  local ref_deleted=0
   if git update-ref -d "refs/heads/$wt_branch" "$wt_head" >&2; then
+    ref_deleted=1
     # 設定のセクションが無いと終了コード128になるので、失敗は無視する。
     git config --remove-section "branch.$wt_branch" 2>/dev/null || true
-    echo "removed: $wt_path ($wt_branch): $how"
+  fi
+  resume_signals
+  if [ "$ref_deleted" -eq 1 ]; then
+    emit "removed: $wt_path ($wt_branch): $how"
   else
-    echo "removed: $wt_path, but branch $wt_branch remains (it moved from $wt_head or could not be deleted)"
+    emit "removed: $wt_path, but branch $wt_branch remains (it moved from $wt_head or could not be deleted)"
   fi
   removed=$((removed + 1))
 }
@@ -316,7 +793,10 @@ reset_record() {
   wt_locked=0
 }
 
-list="$(git worktree list --porcelain)"
+list=""
+if [ "$run_aborted" -eq 0 ]; then
+  list="$(git worktree list --porcelain)"
+fi
 reset_record
 # 最後の記録の後ろにも空行を足して、判定を漏らさない。
 while IFS= read -r line; do
@@ -334,8 +814,19 @@ while IFS= read -r line; do
   esac
 done <<<"$list"$'\n'
 
+# マージ済みかもしれない候補が、すべてghに聞けずに残ったときは、失敗として数える。
+if [ "$auto" -eq 1 ] && [ "$gh_asked" -gt 0 ] && [ "$gh_unavailable" -eq "$gh_asked" ]; then
+  fail_run "gh was unavailable for every candidate that might be merged"
+fi
+
 if [ "$apply" -eq 1 ]; then
-  echo "removed $removed, kept $kept"
+  emit "removed $removed, kept $kept"
 else
   echo "dry run: would remove $removed, keep $kept. Pass --apply to remove."
+fi
+
+# 失敗として数える事象が無かった実行だけが、失敗の回数を0に戻し、実行の時刻を残す。
+if [ "$auto" -eq 1 ] && [ "$run_failed" -eq 0 ]; then
+  write_state "$failures_file" 0 || true
+  write_state "$stamp_file" "$(date +%s)" || true
 fi
