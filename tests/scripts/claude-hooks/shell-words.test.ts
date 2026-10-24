@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   CURRENT_BRANCH_SUBSTITUTIONS,
+  miseOptionTakesNext,
   parseCommandLine,
+  scanMiseGlobalOptions,
   stripWrappers,
   type Word,
 } from "../../../scripts/claude-hooks/shell-words.ts";
@@ -556,7 +558,7 @@ describe("ANSI-C quoted words", () => {
     ["echo $'a\\x62c'", "abc"],
     ["echo $'a\\x6z'", "a\u0006z"],
     ["echo $'a\\142c'", "abc"],
-    ["echo $'a\\0c'", "ac"],
+    ["echo $'a\\0c'", "a"],
     ["echo $'a\\u0062c'", "abc"],
     ["echo $'a\\U00000062c'", "abc"],
     ["echo $'a\\u3042c'", "aあc"],
@@ -567,7 +569,7 @@ describe("ANSI-C quoted words", () => {
     ["echo $'a\\'b'", "a'b"],
     ["echo $'a\\\"b'", 'a"b'],
     ["echo $'a\\qb'", "a\\qb"],
-    ["echo $'a\\x00b'", "ab"],
+    ["echo $'a\\x00b'", "a"],
   ])("%s expands to one word", (line, expected) => {
     expect(commandTexts(line)).toEqual([["echo", expected]]);
   });
@@ -614,5 +616,117 @@ describe("stripWrappers with global options of mise", () => {
       "run",
       "check",
     ]);
+  });
+});
+
+describe("NUL in an ANSI-C quoted word", () => {
+  test.each([
+    ["echo $'a\\000b'", "a"],
+    ["echo $'a\\u0000b'", "a"],
+    ["echo $'a\\0b\\'c'd", "ad"],
+  ])("%s is cut at the NUL, as bash does", (line, expected) => {
+    expect(commandTexts(line)).toEqual([["echo", expected]]);
+  });
+
+  test("keeps the spelling without the NUL as a variant", () => {
+    const result = parseCommandLine("echo $'hol\\x00d'");
+    const variants = result.ok ? result.commands[0]?.words[1]?.variants : null;
+
+    expect(variants).toEqual(["hold"]);
+  });
+
+  test("gives a word without a NUL no variant", () => {
+    const result = parseCommandLine("echo hold");
+    const variants = result.ok ? result.commands[0]?.words[1]?.variants : null;
+
+    expect(variants).toBeUndefined();
+  });
+});
+
+describe("dollar double quotes", () => {
+  test('reads $"..." as a double quoted word', () => {
+    expect(commandTexts('echo $"a b"')).toEqual([["echo", "a b"]]);
+  });
+
+  test('joins $"..." with the text around it', () => {
+    expect(commandTexts('echo x/$"hold".ts')).toEqual([["echo", "x/hold.ts"]]);
+  });
+
+  test("keeps a dollar inside double quotes", () => {
+    expect(commandTexts('echo "a$"')).toEqual([["echo", "a$"]]);
+  });
+});
+
+describe("zsh =command words", () => {
+  test("reads =git as git", () => {
+    const stripped = stripWrappers(words("=git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("strips =env as a wrapper", () => {
+    const stripped = stripWrappers(words("=env", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("keeps a word that is not a command name", () => {
+    const stripped = stripWrappers(words("=", "x"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["=", "x"]);
+  });
+});
+
+describe("global options of mise", () => {
+  test.each(["--log-level", "--output", "-s", "--shell", "-t", "--tool"])(
+    "%s takes the next word",
+    (option) => {
+      expect(miseOptionTakesNext(option)).toBe(true);
+    },
+  );
+
+  test("takes the next word at the end of a bundle", () => {
+    expect(miseOptionTakesNext("-qE")).toBe(true);
+  });
+
+  test("keeps the value inside a bundle where the first value letter is not last", () => {
+    expect(miseOptionTakesNext("-EC")).toBe(false);
+  });
+
+  test("reads a command after a bundle with an inline value", () => {
+    const stripped = stripWrappers(words("mise", "-EC", "x", "--", "env"));
+    expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
+  });
+
+  test.each(["--log-level", "--output", "-s", "--shell", "-t", "--tool"])(
+    "reads the command that follows mise %s <value> x --",
+    (option) => {
+      const stripped = stripWrappers(
+        words("mise", option, "v", "x", "--", "env"),
+      );
+      expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
+    },
+  );
+
+  test("reports an unknown long option", () => {
+    expect(
+      scanMiseGlobalOptions(words("mise", "--future", "x"), 1).unknown,
+    ).toBe(true);
+  });
+
+  test("does not report a known flag", () => {
+    expect(
+      scanMiseGlobalOptions(words("mise", "--quiet", "x"), 1).unknown,
+    ).toBe(false);
+  });
+
+  test("does not report a long option with =", () => {
+    expect(
+      scanMiseGlobalOptions(words("mise", "--future=1", "x"), 1).unknown,
+    ).toBe(false);
+  });
+
+  test("falls back to the first exec word after an unknown option", () => {
+    const stripped = stripWrappers(
+      words("mise", "--future", "v", "x", "--", "env"),
+    );
+    expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
   });
 });

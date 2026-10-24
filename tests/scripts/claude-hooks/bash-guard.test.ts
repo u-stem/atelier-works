@@ -1756,3 +1756,150 @@ describe("bash-guard denies mise generate that writes anywhere in the hook or wo
     expect(await decide(command)).toBe("allow");
   });
 });
+
+// シェルが語を組み立てる形(文字クラス、ディレクトリの揺れ、NUL、$"、ブレース、=コマンド)で、保留の操作を隠す。
+describe("bash-guard denies a subagent that builds the hold code with a pattern", () => {
+  test.each([
+    "mise run hold:[[:lower:]]*",
+    "mise run hold:[[=p=]]lace",
+    "mise run 'hold:[[.p.]]lace'",
+    "bun scripts/hol[[:lower:]].ts place",
+    "bun scripts/[[.h.]]old.ts place",
+    "bun scripts//hol?.ts place",
+    "bun scripts/./hol?.ts place",
+    "bun scripts/x/../hol?.ts place",
+    "bun /abs/dir/hol?.ts place",
+    "bun ../hol?.ts place",
+    "bun run ./hol[d].ts",
+    "bun $'scripts/hold.ts\\0junk' place",
+    "bun $'scripts/hol\\x00d.ts' place",
+    "bun $'scripts/hol\\000d.ts' place",
+    "mise run $'hold:pla\\u0000ce'",
+    "mise run $'hold:place\\x00x'",
+    'mise run $"hold:place"',
+    'bun scripts/$"hold".ts place',
+    "bun --cwd scripts {hold.ts,place}",
+    "bun scripts/{hold,x}.ts place",
+    "bun run {scripts/hold.ts,x}",
+    "bun {a,scripts/hold}.ts place",
+    "=bun scripts/hold.ts place",
+    "=mise run hold:place",
+    "=env bun scripts/hold.ts place",
+    "=node scripts/hold.ts release 1",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard denies a subagent that puts the options of mise in new places", () => {
+  test.each([
+    "mise --log-level debug exec -- bun scripts/hold.ts place",
+    "mise --output quiet x -- bun scripts/hold.ts place",
+    "mise -s bash x -- bun scripts/hold.ts place",
+    "mise --shell zsh exec -- bun scripts/hold.ts place",
+    "mise -t node x -- bun scripts/hold.ts place",
+    "mise --tool node@22 exec -- bun scripts/hold.ts place",
+    "mise -EC x -- bun scripts/hold.ts place",
+    "mise -qEC x -- bun scripts/hold.ts place",
+    "mise --future-flag value x -- bun scripts/hold.ts place",
+    "mise --future-flag run check",
+    "mise --future-flag value run hold:place",
+    "mise run x -- bun scripts/hold.ts place",
+    "mise run x bun scripts/hold.ts place",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+
+  test("the reason for an unknown option says to write a known one", async () => {
+    expect(
+      await denyReason("mise --future-flag run check", { subagent: true }),
+    ).toContain("option");
+  });
+});
+
+describe("bash-guard keeps the secret check working behind unknown mise options", () => {
+  test.each([
+    "mise --log-level debug x -- env",
+    "mise -s bash exec -- printenv",
+    "mise --future-flag value x -- env",
+    "mise -EC x -- env",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "mise --log-level debug x -- echo hi",
+    "mise --future-flag=1 x -- echo hi",
+    "mise --future-flag run check",
+  ])("%s is allowed for the main session", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard reads =command of zsh as the command", () => {
+  test.each(["=git push --force origin feature", "=git push origin main"])(
+    "%s",
+    async (command) => {
+      expect(await decide(command)).toBe("deny");
+    },
+  );
+
+  test("=git status is allowed", async () => {
+    expect(await decide("=git status")).toBe("allow");
+  });
+});
+
+describe("bash-guard allows work that only looks like a pattern", () => {
+  test.each([
+    "mise run check",
+    "mise run test -- -t '*'",
+    "mise run test -- -t 'ho*'",
+    'mise run test -- "$ARG"',
+    "mise -C /repo run check",
+    "mise -q x -- echo hi",
+    "mise --log-level debug run check",
+    "mise --future-flag=1 run check",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/scripts/{a,b}.test.ts",
+    "bun test tests/scripts/ho[[:lower:]]d.test.ts",
+    "bunx --bun biome check scripts/hold.ts",
+    "bunx @biomejs/biome@1.9.4 check scripts/hold.ts",
+    "npx --yes @biomejs/biome check scripts/hold.ts",
+    "npx -y biome check scripts/hold.ts",
+    "bun -e 'console.log({a:1})'",
+    'echo $"hi"',
+    "=bun test tests/scripts/hold.test.ts",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+
+  test.each([
+    "mise run lint -- hold:place",
+    "mise run test -- hold:*",
+    "mise run test -- hold:release 3",
+  ])("%s stays denied after --", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard compares the write path of mise generate loosely", () => {
+  test.each([
+    "mise generate task-docs -o .git//hooks/pre-commit",
+    "mise generate task-docs -o .git/./hooks/pre-commit",
+    "mise generate task-docs -o .GIT/Hooks/pre-commit",
+    "mise generate task-docs -o .Github/Workflows/ci.yml",
+    "mise generate task-docs -o ./.github/./workflows//ci.yml",
+    "mise -C .git/hooks generate task-docs -o pre-commit",
+    "mise --cd=.github/workflows generate task-docs",
+    "mise --cd .git/hooks generate task-docs",
+    'mise -C "$DIR" generate task-docs',
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("a harmless write path is allowed", async () => {
+    expect(await decide("mise generate task-docs -o docs//tasks.md")).toBe(
+      "allow",
+    );
+  });
+});

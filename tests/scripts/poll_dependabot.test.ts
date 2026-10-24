@@ -1764,6 +1764,8 @@ type RoundLog = {
   holdResolves: number;
   /** 解決を頼んだ、通知の本文の接頭辞。 */
   holdResolvePrefixes: string[];
+  /** 保留を読んだリポジトリ(`owner/repo`)。 */
+  holdReadRepos: string[];
 };
 
 type RoundOptions = {
@@ -1791,6 +1793,10 @@ type RoundOptions = {
     Record<string, HoldReadOutcome<readonly HoldRow[]>>
   >;
   readonly holdsErrorRepos?: readonly string[];
+  /** 未解決の、保留を読めない通知の本文。 */
+  readonly unresolvedHoldNotices?: readonly string[];
+  /** 未解決の通知を列挙する処理が投げる例外。 */
+  readonly listHoldNoticesError?: Error;
   /** 保留の通知を残す処理が投げる例外。 */
   readonly holdNoticeError?: Error;
   /** 保留を読めない通知を解決する処理が投げる例外。 */
@@ -1810,6 +1816,7 @@ function emptyLog(): RoundLog {
     holdNotices: [],
     holdResolves: 0,
     holdResolvePrefixes: [],
+    holdReadRepos: [],
   };
 }
 
@@ -1886,6 +1893,12 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
             : options.readRepoPrs(owner, repo);
         },
         listActive: async () => options.active ?? [],
+        listUnresolvedHoldNotices: async () => {
+          if (options.listHoldNoticesError !== undefined) {
+            throw options.listHoldNoticesError;
+          }
+          return options.unresolvedHoldNotices ?? [];
+        },
         resolveHoldUnreadableNotices: async (prefixes) => {
           log.holdResolves += 1;
           log.holdResolvePrefixes.push(...prefixes);
@@ -1905,6 +1918,10 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
         },
         deps: {
           ...h.deps,
+          listMergeHolds: async (owner, repo) => {
+            log.holdReadRepos.push(`${owner}/${repo}`);
+            return h.deps.listMergeHolds(owner, repo);
+          },
           getPr: async (_owner, _repo, number) => {
             log.processed.push(number);
             return options.getPr === undefined
@@ -4175,5 +4192,186 @@ describe("holdNoticeRecord for a notice of one repository", () => {
     });
 
     expect(message.startsWith(HOLD_TABLE_NOTICE_PREFIX)).toBe(true);
+  });
+});
+
+const CAPITALIZED_CONFIG = {
+  ...DB_CONFIG,
+  factory_repo: "https://github.com/Acme/Widgets.git",
+};
+
+describe("pollDependabot keeps the repository of a notice in lower case", () => {
+  test("lowers the repository of a notice", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: CAPITALIZED_CONFIG,
+        found: [],
+        holds: { ok: false, kind: "corrupt", reason: "x" },
+      }),
+    );
+
+    expect(
+      log.holdNotices.flatMap((notice) =>
+        notice.kind === "unreadable" ? [notice.repository] : [],
+      ),
+    ).toEqual(["acme/widgets"]);
+  });
+
+  test("resolves with a lower case prefix", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { config: CAPITALIZED_CONFIG, found: [] }));
+
+    expect(log.holdResolvePrefixes).toContain("acme/widgets: ");
+  });
+
+  test("lowers the repository in the message", () => {
+    const { message } = holdNoticeRecord({
+      kind: "unreadable",
+      failure: "corrupt",
+      prCount: 1,
+      repository: "Acme/Widgets",
+    });
+
+    expect(message.startsWith("acme/widgets: ")).toBe(true);
+  });
+});
+
+function corruptNotice(repository: string): string {
+  return holdNoticeRecord({
+    kind: "unreadable",
+    failure: "corrupt",
+    prCount: 1,
+    repository,
+  }).message;
+}
+
+const TABLE_NOTICE = holdNoticeRecord({
+  kind: "unreadable",
+  failure: "read_failed",
+  prCount: 1,
+  repository: null,
+}).message;
+
+describe("pollDependabot resolves a notice though no pull request is open", () => {
+  test("reads the holds of the repository named in an unresolved notice", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        found: [],
+        unresolvedHoldNotices: [corruptNotice("acme/widgets")],
+      }),
+    );
+
+    expect(log.holdReadRepos).toEqual(["acme/widgets"]);
+  });
+
+  test("resolves the notice once the repository is read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        found: [],
+        unresolvedHoldNotices: [corruptNotice("acme/widgets")],
+      }),
+    );
+
+    expect(log.holdResolvePrefixes).toEqual(["acme/widgets: "]);
+  });
+
+  test("does not resolve the notice when the read fails", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        found: [],
+        unresolvedHoldNotices: [corruptNotice("acme/widgets")],
+        holds: { ok: false, kind: "corrupt", reason: "x" },
+      }),
+    );
+
+    expect(log.holdResolvePrefixes).toEqual([]);
+  });
+
+  test("records no notice for the read it made for a notice", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        found: [],
+        unresolvedHoldNotices: [corruptNotice("acme/widgets")],
+        holds: { ok: false, kind: "corrupt", reason: "x" },
+      }),
+    );
+
+    expect(log.holdNotices).toEqual([]);
+  });
+
+  test("reads one repository for a notice about the table", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { found: [], unresolvedHoldNotices: [TABLE_NOTICE] }),
+    );
+
+    expect(log.holdReadRepos).toEqual(["acme/widgets"]);
+  });
+
+  test("resolves the notice about the table once a repository is read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { found: [], unresolvedHoldNotices: [TABLE_NOTICE] }),
+    );
+
+    expect(log.holdResolvePrefixes).toEqual([HOLD_TABLE_NOTICE_PREFIX]);
+  });
+
+  test("does not read a repository that is not a target", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        found: [],
+        unresolvedHoldNotices: [corruptNotice("other/thing")],
+      }),
+    );
+
+    expect(log.holdReadRepos).toEqual([]);
+  });
+
+  test("does not read a repository again that a pull request already read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        unresolvedHoldNotices: [corruptNotice("acme/widgets")],
+      }),
+    );
+
+    expect(log.holdReadRepos).toEqual(["acme/widgets"]);
+  });
+
+  test("reads nothing extra when no notice is unresolved", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { found: [] }));
+
+    expect(log.holdReadRepos).toEqual([]);
+  });
+
+  test("still finishes the round when the notices cannot be listed", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { found: [], listHoldNoticesError: new Error("db down") }),
+    );
+
+    expect(log.warnings.map((w) => w.message)).toContain(
+      "failed to list the hold notices",
+    );
   });
 });

@@ -15,6 +15,8 @@ export type Word = {
   readonly text: string;
   readonly dynamic: boolean;
   readonly glob: boolean;
+  /** NULを含んでいた語の、NULを除いた綴り。シェルによって切り詰めるかが違うので、判定には両方を使う。 */
+  readonly variants?: readonly string[];
 };
 
 /**
@@ -1075,4 +1077,17 @@ class Parser {
     }
     throw new ShellSyntaxError("unterminated backquote");
   }
+}
+
+/** 値を取るオプションか判定する(実装は別のコミットで書く)。 */
+export function miseOptionTakesNext(_text: string): boolean {
+  return false;
+}
+
+/** 全体オプションを読み飛ばす(実装は別のコミットで書く)。 */
+export function scanMiseGlobalOptions(
+  _words: readonly Word[],
+  start: number,
+): { readonly next: number; readonly unknown: boolean } {
+  return { next: start, unknown: false };
 }
