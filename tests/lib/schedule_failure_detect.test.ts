@@ -1275,3 +1275,61 @@ describe("detectScheduleFailures: a scan that stops at the page limit right afte
     expect((await afterBootstrap()).w.recorded.size).toBe(0);
   });
 });
+
+describe("detectScheduleFailures: a scan that stops at the page limit twice in a row", () => {
+  /** 1100件が溜まっている。1回で読むのは500件までなので、3回で読み終える。 */
+  async function threeRuns() {
+    const w = newWorld();
+    w.baselineResult = { processed_until: iso(NOW - 3 * HOUR) };
+    const start = NOW - 2 * HOUR;
+    w.failureJobs = Array.from({ length: 1100 }, (_, i) =>
+      failedJob(i + 1, start + i * 1000 + 10_000, POLL, {
+        started_at: iso(start + i * 1000),
+        created_at: iso(start + i * 1000 - 1000),
+      }),
+    );
+    const first = await detectScheduleFailures(harness(w).deps);
+    w.baselineResult = first;
+    w.nowMs = NOW + 5 * MIN;
+    const second = await detectScheduleFailures(harness(w).deps);
+    w.baselineResult = second;
+    w.nowMs = NOW + 10 * MIN;
+    const third = await detectScheduleFailures(harness(w).deps);
+    return { w, first, second, third };
+  }
+
+  test("the first two runs stop at the limit", async () => {
+    const { first, second } = await threeRuns();
+    expect([first.truncated, second.truncated]).toEqual([true, true]);
+  });
+
+  test("the third run finishes", async () => {
+    expect((await threeRuns()).third.truncated).toBe(false);
+  });
+
+  test("no failure is dropped", async () => {
+    expect((await threeRuns()).w.recorded.size).toBe(1100);
+  });
+
+  test("the second run hands over the completion bound of the first run, unchanged", async () => {
+    const { first, second } = await threeRuns();
+    expect(second.scan_completed_from).toBe(first.scan_completed_from);
+  });
+
+  test("the completion bound is the baseline of the first run", async () => {
+    const { first } = await threeRuns();
+    expect(first.scan_completed_from).toBe(iso(NOW - 3 * HOUR));
+  });
+
+  test("the second run moves the start point on", async () => {
+    const { first, second } = await threeRuns();
+    expect(Date.parse(second.scan_started_after ?? "")).toBeGreaterThan(
+      Date.parse(first.scan_started_after ?? ""),
+    );
+  });
+
+  test("the last run keeps processed_until of the first run", async () => {
+    const { first, third } = await threeRuns();
+    expect(third.processed_until).toBe(first.processed_until);
+  });
+});

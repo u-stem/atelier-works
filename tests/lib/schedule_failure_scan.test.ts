@@ -460,6 +460,22 @@ describe("extractScheduleFailures", () => {
     expect(extractScheduleFailures([job], BASE).failures).toHaveLength(1);
   });
 
+  test("keeps one failure when the same job comes twice, as when a page shifts", () => {
+    expect(
+      extractScheduleFailures([failed("a", T1), failed("a", T1)], BASE)
+        .failures,
+    ).toHaveLength(1);
+  });
+
+  test("keeps the other failures next to a repeated one", () => {
+    expect(
+      extractScheduleFailures(
+        [failed("a", T1), failed("b", T2), failed("a", T1)],
+        BASE,
+      ).failures.map((f) => f.id),
+    ).toEqual(["a", "b"]);
+  });
+
   test("sorts the failures oldest first by completion", () => {
     const jobs = [failed("c", T3), failed("a", T1), failed("b", T2)];
     expect(
@@ -789,26 +805,15 @@ describe("collectPages", () => {
 
 describe("nextProcessedUntil", () => {
   const BASELINE = NOW - 30 * MIN;
-  const input = (extra: {
-    baselineMs?: number;
-    truncated?: boolean;
-    continued?: boolean;
-  }) => ({
+  const input = (extra: { baselineMs?: number; continued?: boolean }) => ({
     baselineMs: BASELINE,
     runStartedAtMs: NOW,
-    truncated: false,
     continued: false,
     ...extra,
   });
 
-  test("overlaps the previous scan by the margin when the whole window was read", () => {
+  test("overlaps the previous scan by the margin, whether or not the pages ran out", () => {
     expect(nextProcessedUntil(input({}))).toBe(NOW - SCAN_OVERLAP_MS);
-  });
-
-  test("moves on by the same rule when the pages ran out, so that the next ordinary scan re-reads jobs that were still running", () => {
-    expect(nextProcessedUntil(input({ truncated: true }))).toBe(
-      NOW - SCAN_OVERLAP_MS,
-    );
   });
 
   test("never moves back before the baseline", () => {
@@ -817,11 +822,5 @@ describe("nextProcessedUntil", () => {
 
   test("stays at the baseline in a scan that continues from a start time", () => {
     expect(nextProcessedUntil(input({ continued: true }))).toBe(BASELINE);
-  });
-
-  test("stays at the baseline in a continued scan that also ran out of pages", () => {
-    expect(
-      nextProcessedUntil(input({ continued: true, truncated: true })),
-    ).toBe(BASELINE);
   });
 });
