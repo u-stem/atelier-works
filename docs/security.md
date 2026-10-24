@@ -2771,9 +2771,18 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   - 追わない形(別名、変数で組んだ語、`curl`、`hub`、スクリプトのファイルの中の呼び出し)。
   端末は人が意図して実行する経路で、止めると復旧の手段を失うため、受け入れる。
   ほかは、保留は止めるだけの補助で、元の保護(レビューとゲート)が残るため、受け入れる。
+- `gh pr comment`は対象外にしている。
+  コメントで`@dependabot merge`のようなコマンドを送れるが、保留が有効な間にそれがマージを起こすかは、確かめていない。
+  Factoryのdependabotの自動マージは、保留が別に止める。
 - フックが保留を読んでからマージを要求するまでの間は、保留が置かれても止まらない。
   人の承認を待つ間は、分単位に延びうる。
   待つ間にマージが要る作業は、保留を置いた主体と調整するため、受け入れる。
+- 判定は、安全と確かめられた形を対象外にし、それ以外をマージか反映として扱う。
+  確かめられない形は、次のどれかである。
+  - `gh`のグループの前に、`--help`と`--version`以外のオプションがある。
+  - 値を付けた`--help=false`や`--disable-auto=0`のような真偽値のオプション。
+  - 前置きを外し切れず、残った語に`gh`か`wmill`がある。
+  新しい迂回が見つかっても、列挙を足し続けず、残るリスクとして書いて受け入れる。
 - `gh api`の書き込み(POST、PUT、PATCH、DELETE)と、`gh pr`の読み取りと編集以外のサブコマンドは、マージとして扱う。
   コメントの投稿や、ラベルの変更なども、保留が有効な間と保留を読めないときは止まる。
   止めすぎは、綴りの漏れを追い続けないために、受け入れる。
@@ -2948,7 +2957,6 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 
 - 変数名の組み立てと、スクリプトファイルを経由した代入。
 - 代入以外で変数を設定する組み込み(`read`、`printf -v`、`declare -n`)と、`set -a`に続く`source`。
-- 値が実行時に決まる`env -S`と`--split-string`。
 - ブレース展開(`CHECK_IDLE_FORCE{,}=1`)。
 - フックが外さない前置き(`stdbuf`、`caffeinate`、`bunx`、`npx cross-env`など)。
 - 標準入力から渡る値(`xargs`)。
@@ -2956,8 +2964,9 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 - 添字付きの代入(`CHECK_IDLE_FORCE[1]=1`)。
 - `mise set CHECK_IDLE_FORCE=1`による`mise.toml`の`[env]`への書き込み。`mise.toml`は保護パスなので、差分はレビューされる。
 
-値が実行時に決まる`env -S`と添字付きの代入(`LEFTHOOK[1]=0`)は、`LEFTHOOK`の拒否にも当たる、既存の穴である。
-文字どおりの`env -S`の文字列は、読み直して判定する。
+添字付きの代入(`LEFTHOOK[1]=0`)は、`LEFTHOOK`の拒否にも当たる、既存の穴である。
+`env -S`の文字列は、`env`と同じ規則で語に分けて判定する。
+実行時に決まる文字列と、読めない文字列は、`bash-guard`が拒否する。
 
 `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
 リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
@@ -3095,7 +3104,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - 変数に入れたパスやコマンド(`cat "$FILE"`、`"$GIT" push`、`eval $CMD`、`bash -c "$X"`)
 - 値が実行時に決まるオプション名(`git push ${X:---force}`など)
 - シェルのエイリアスと関数
-- `find -exec`、値が実行時に決まる`env -S`、標準入力から名前を読む`xargs`(`git push`、`git commit`、`gh`、`wmill`を除く)
+- `find -exec`、標準入力から名前を読む`xargs`(`git push`、`git commit`、`gh`、`wmill`を除く)
 - `mise`のほかのサブコマンドによる秘密値の出力(`mise env`、`mise config`、`mise hook-env`、`mise en`、`mise direnv exec`、`mise mcp`)
 - サブコマンドの前にグローバルオプションを置くと、設定の前方一致の拒否が外れる(`mise -E local env`など)
 - `mise run`の`-s`と`--shell`、`mise exec`の`-c`の位置と束ねた形、`xargs`から起動する`mise`

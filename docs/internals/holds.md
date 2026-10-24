@@ -326,20 +326,29 @@ CLIは本番のデータベースを渡し、実DBの検査は使い捨てのデ
 | `wmill sync push`(`--dry-run`を除く) | deployの保留かスケジュールの凍結が有効 |
 | `wmill datatable migrate up`と`migrate down` | deployの保留が有効 |
 
+`gh`のグループの前にオプションがあると、cobraは知らないオプションを値を取るものとして読みうる。
+`--help`と`--version`以外のオプションがグループの前にあれば、マージとして扱う(`gh -R o/r pr merge 1`、`gh -X PUT api ...`)。
+`gh pr`のサブコマンドの前にも、`-R`と`--repo`と`--help`以外のオプションがあれば、マージとして扱う。
+
 `gh pr`が対象外になるのは、サブコマンドが文字どおり次のどれかのときである。
-`view`、`list`、`checks`、`create`、`diff`、`comment`、`status`、`edit`、`ready`、`review`、`checkout`、`reopen`、`close`、`lock`、`unlock`である。
-`merge`は、`--help`と`-h`、`--auto`の無い`--disable-auto`のときだけ対象外になる。
+`view`、`list`、`checks`、`create`、`diff`、`comment`、`status`、`edit`、`ready`、`review`である。
+`checkout`、`reopen`、`close`、`lock`、`unlock`と、別名の`co`、`ls`、`new`も対象外である。
+`merge`は、値を持たない`--help`と`-h`、`--auto`の無い値を持たない`--disable-auto`のときだけ対象外になる。
+`--help=false`や`--disable-auto=0`のように値を付けた形は、有効にするとは限らないので、マージとして扱う。
 サブコマンドが実行時に決まる、または上記以外(`merge`を含む)なら、マージとして扱う。
 
 `gh api`が対象外になるのは、次の条件をすべて満たすときである。
 
 - メソッドが文字どおりのGETか、指定が無い。
 - 本文を送る指定(`--input`、メソッドを指定しない`-f`と`-F`)が無い。
-- エンドポイントが`graphql`でなく、`merge`を含まない。
+- エンドポイントが`graphql`でない。
 
+GETではPRをマージできないので、パスに`merge`を含んでも対象外にする。
+メソッドが実行時に決まる場合は、マージとして扱う。
 エンドポイントは、スキームとホスト、先頭と末尾の`/`、クエリ、GHESの`api/v3/`を外した形で見る。
 `..`を含むパスは、リポジトリを決めない。
-GraphQLは、queryが文字どおりで、マージを要求する3つのmutationを含まないと確かめられたときだけ対象外になる。
+GraphQLは、queryが文字どおりで、`mutation`の語を含まないと確かめられたときだけ対象外になる。
+`mergeBranch`や`updateRef`のような、マージを要求する3つのmutation以外の書き込みも、この規則で覆う。
 次のqueryは、マージとして扱う。
 
 - queryが無い。
@@ -355,16 +364,29 @@ GraphQLは、queryが文字どおりで、マージを要求する3つのmutatio
 束ねた文字(`-dR o/held`、`-iXPUT`)は、1文字ずつ見る。
 値を取る文字に当たったら、その後ろを値にする。
 後ろが空なら次の語が値で、先頭の`=`は落とす(`-X=PUT`)。
+値を取らない文字にも`=値`を付けられる(`-h=false`)。
 `gh pr merge 1 --body --disable-auto`では、`--disable-auto`は本文の値なので、マージとして扱う。
 `wmill sync push -i --dry-run`では、`--dry-run`は`-i`の値なので、pushとして扱う。
-`wmill`で値を取るオプションは、`-i`と`-e`、およびそれぞれの長い形(`--includes`、`--excludes`)である。
-`--extra-includes`、`--message`、`--workspace`、`--token`、`--base-url`、`--config-dir`、`--datatable`も値を取る。
+`wmill`で値を取るオプションは、次のとおりである。
+
+- 短い形: `-i`、`-e`
+- 長い形(絞り込み): `--includes`、`--excludes`、`--extra-includes`
+- 長い形(接続): `--workspace`、`--token`、`--base-url`、`--config-dir`、`--env`、`--branch`
+- 長い形(そのほか): `--message`、`--parallel`、`--repository`、`--datatable`
+
 `--dry-run=false`のように値を付けた形は、`--dry-run`とみなさず、対象にする。
+`wmill workspace merge`(別名`profile merge`)は、反映として扱う。
 `mise run push`のようなラッパーは対象にしない。
 ラッパーの中で、凍結の入口(`scripts/freeze.ts`)が止める。
 
 コマンド行は、字句に分けてから見る。
-`sh -c`、`eval`、`$(...)`、`env`、`env -S`の文字列、`timeout`、`xargs`、`mise exec --`、絶対パスは外して判定する。
+`sh -c`、`eval`、`$(...)`、`env`、`timeout`、`xargs`、`mise exec --`、絶対パスは外して判定する。
+前置きの短いオプションは、getoptと同じに読む。値を取る最初の文字から後ろが値で、後ろが空なら次の語が値である。
+`env -P`、`xargs -J`、`-R`、`-S`、`--max-args`のような値を取るオプションも読み飛ばす。
+前置きを外し切れなかったとき、残った語に`gh`か`wmill`があれば(`gh pr merge 1`が1語の場合を含む)、リポジトリを決めないマージか反映として扱う。
+`env -S`の文字列は、`env`と同じ規則で分ける。空白と引用符で分け、`;`、`|`、`&`、`(`は演算子とせず語の一部にする。
+文字列が実行時に決まる、引用符が閉じない、知らない逃れを含むときは、読めないものとして扱う。
+読めない`env -S`は、`bash-guard`が拒否し、`merge-guard`はマージと反映のすべてとして扱う。
 標準入力でシェルに渡す文字列(`echo '...' | sh`、ヒアドキュメント)は、深さ4まで読み直す。
 字句に分けられないコマンド行は、何も見つけない。`bash-guard`が拒否するためである。
 実行する名前や、`gh`のグループとサブコマンドが実行時に決まる語は、マージとして扱う。
