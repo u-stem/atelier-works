@@ -1081,6 +1081,15 @@ describe("worktree-prune.sh", () => {
       writeLsof(`p${CALLER_PID}\ncbash\nn${root}${extra ? `\n${extra}` : ""}`);
     }
 
+    // 非同期に起動するテスト用の環境変数。`run`と同じ偽のコマンドを使わせる。
+    function autoEnv(): Record<string, string> {
+      return {
+        ...cleanEnv(),
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        WORKTREE_PRUNE_LSOF: join(fakeBin, "lsof"),
+      };
+    }
+
     function runAuto(
       options: { ancestors?: string | null; env?: Record<string, string> } = {},
     ): Run {
@@ -1089,6 +1098,35 @@ describe("worktree-prune.sh", () => {
       const args =
         ancestors === null ? ["--auto"] : ["--auto", "--ancestors", ancestors];
       return run(args, mainDir, options.env);
+    }
+
+    const stateDir = () => join(mainDir, ".git", "worktree-prune");
+    const stateFile = (name: string) => join(stateDir(), name);
+
+    // 状態のディレクトリを作り、`name`に`content`を書く。
+    function seedState(name: string, content: string): void {
+      mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
+      writeFileSync(stateFile(name), content);
+    }
+
+    // 状態のディレクトリの`lock/`を作り、更新時刻を`secondsAgo`秒前にする(負なら未来)。
+    function seedLock(secondsAgo: number): void {
+      mkdirSync(stateFile("lock"), { recursive: true, mode: 0o700 });
+      const when = new Date(Date.now() - secondsAgo * 1000);
+      utimesSync(stateFile("lock"), when, when);
+    }
+
+    const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+    // lsofが呼ばれた時点の副作用`hook`(シェルの行)を持つ偽のlsofにする。
+    function writeLsofWithHook(hook: string): void {
+      writeLsof(`p${CALLER_PID}\ncbash\nn${root}`);
+      const lsof = join(fakeBin, "lsof");
+      const body = readFileSync(lsof, "utf8").replace(
+        "#!/usr/bin/env bash\n",
+        `#!/usr/bin/env bash\n${hook}\n`,
+      );
+      writeFileSync(lsof, body);
     }
 
     beforeEach(() => {
@@ -1226,10 +1264,217 @@ describe("worktree-prune.sh", () => {
       expect(existsSync(path)).toBe(true);
     });
 
-    describe("state files", () => {
-      const stateDir = () => join(mainDir, ".git", "worktree-prune");
-      const stateFile = (name: string) => join(stateDir(), name);
+    describe("lock", () => {
+      test("--auto skips a lock younger than the limit", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedLock(60);
 
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does not count a young lock as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        seedLock(60);
+
+        runAuto();
+
+        expect(existsSync(stateFile("failures"))).toBe(false);
+      });
+
+      test("--auto leaves a young lock in place", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        seedLock(60);
+
+        runAuto();
+
+        expect(existsSync(stateFile("lock"))).toBe(true);
+      });
+
+      test("--auto takes over a lock older than the limit", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedLock(11 * 60);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto takes over a lock dated in the future", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedLock(-3600);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto removes its own lock at the end", () => {
+        addMergedWorktree("docs-old", "docs/old");
+
+        runAuto();
+
+        expect(existsSync(stateFile("lock"))).toBe(false);
+      });
+
+      test("--auto removes its own lock after a failure", () => {
+        runAuto({ ancestors: null });
+
+        expect(existsSync(stateFile("lock"))).toBe(false);
+      });
+
+      test("--auto leaves a lock owned by another run", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        writeLsofWithHook(`echo other-run > "${stateFile("lock")}/owner"`);
+
+        runAuto();
+
+        expect(
+          readFileSync(join(stateFile("lock"), "owner"), "utf8").trim(),
+        ).toBe("other-run");
+      });
+    });
+
+    describe("failures", () => {
+      test("--auto increments failures before working", () => {
+        seedState("failures", "2\n");
+        const probe = join(root, "probe");
+        writeLsofWithHook(`cat "${stateFile("failures")}" > "${probe}"`);
+
+        runAuto();
+
+        expect(readFileSync(probe, "utf8").trim()).toBe("3");
+      });
+
+      test("--auto resets failures on success", () => {
+        seedState("failures", "5\n");
+
+        runAuto();
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("0");
+      });
+
+      test("--auto counts an anomaly as a failure", () => {
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto adds to the count of earlier failures", () => {
+        seedState("failures", "4\n");
+
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("5");
+      });
+
+      test("--auto treats a malformed failures value as 0", () => {
+        seedState("failures", "many\n");
+
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+
+      test("--auto leaves the incremented failures when killed", async () => {
+        addMergedWorktree("docs-old", "docs/old");
+        const started = join(root, "started");
+        writeLsofWithHook(`: > "${started}"; sleep 5`);
+
+        const proc = Bun.spawn(
+          [BASH, SCRIPT, "--auto", "--ancestors", CALLER_PID],
+          {
+            cwd: mainDir,
+            env: autoEnv(),
+          },
+        );
+        for (let i = 0; i < 100 && !existsSync(started); i++) {
+          await Bun.sleep(50);
+        }
+        proc.kill("SIGKILL");
+        await proc.exited;
+
+        expect(readFileSync(stateFile("failures"), "utf8").trim()).toBe("1");
+      });
+    });
+
+    describe("stamp", () => {
+      test("--auto skips within 30 minutes", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() - 600}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(true);
+      });
+
+      test("--auto does not count a skip within 30 minutes as a failure", () => {
+        addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() - 600}\n`);
+
+        runAuto();
+
+        expect(existsSync(stateFile("failures"))).toBe(false);
+      });
+
+      test("--auto runs after 30 minutes", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() - 31 * 60}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto treats a future stamp as stale", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", `${nowSeconds() + 3600}\n`);
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto treats a malformed stamp as stale", () => {
+        const path = addMergedWorktree("docs-old", "docs/old");
+        seedState("stamp", "yesterday\n");
+
+        runAuto();
+
+        expect(existsSync(path)).toBe(false);
+      });
+
+      test("--auto updates the stamp on success", () => {
+        const old = nowSeconds() - 31 * 60;
+        seedState("stamp", `${old}\n`);
+
+        runAuto();
+
+        expect(
+          Number(readFileSync(stateFile("stamp"), "utf8").trim()),
+        ).toBeGreaterThan(old);
+      });
+
+      test("--auto does not touch the stamp on failure", () => {
+        const old = String(nowSeconds() - 31 * 60);
+        seedState("stamp", `${old}\n`);
+
+        runAuto({ ancestors: null });
+
+        expect(readFileSync(stateFile("stamp"), "utf8").trim()).toBe(old);
+      });
+    });
+
+    test("--auto exits 0 when lsof does not show the callers", () => {
+      writeLsof(`p9999\ncbash\nn${root}`);
+
+      const result = runAuto();
+
+      expect(result.exitCode).toBe(0);
+    });
+
+    describe("state files", () => {
       // 状態のディレクトリを作り、その中の`name`を`target`へのシンボリックリンクにする。
       function linkStateFile(name: string, target: string): void {
         mkdirSync(stateDir(), { mode: 0o700 });
