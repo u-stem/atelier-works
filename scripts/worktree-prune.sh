@@ -188,10 +188,104 @@ log_line() {
   fi
 }
 
+# 更新時刻(epoch秒)を返す。GNUとBSDのstatのどちらでも動かす。
+file_mtime() {
+  local value
+  value="$(stat -c %Y -- "$1" 2>/dev/null)" || value=""
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    value="$(stat -f %m -- "$1" 2>/dev/null)" || value=""
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  echo "$value"
+}
+
+# 前回の成功から30分以内なら0を返す。今より未来の値や数字でない値は、古いものとして扱う。
+stamp_is_fresh() {
+  local value now
+  value="$(read_state "$stamp_file")"
+  [[ "$value" =~ ^[0-9]{1,12}$ ]] || return 1
+  now="$(date +%s)"
+  [ "$value" -le "$now" ] && [ $((now - value)) -le 1800 ]
+}
+
+# ロックの持ち主の識別(乱数)。自分が取ったロックだけを、終了時に消すために使う。
+# 持ち主のPIDの生死は使わない。PIDの再利用や空のPIDで誤るため。
+lock_owner=""
+
+# `lock/`を作れたので、持ち主の識別を書く。書けなければロックを放す。
+claim_lock() {
+  lock_owner="$$-$RANDOM-$RANDOM-$RANDOM"
+  if ! write_state "$lock_dir/owner" "$lock_owner"; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    lock_owner=""
+    return 1
+  fi
+}
+
+# `lock/`の更新時刻が10分より古いか、今より未来なら0を返す(放置されたロック)。
+lock_is_stale() {
+  local mtime now
+  mtime="$(file_mtime "$1")" || return 1
+  now="$(date +%s)"
+  [ "$mtime" -gt "$now" ] || [ $((now - mtime)) -gt 600 ]
+}
+
+# ロックを取る。取れたら0、他の実行が動いていて取れなければ1を返す。
+# 取れなかったときの`lock/`が放置されたものなら、一意の名前へ移し、移した先がまだ古いことを
+# 確かめてから消し、取り直す。移した先が新しければ、他の実行が取り直した直後なので、元に戻す。
+acquire_lock() {
+  local moved
+  if mkdir "$lock_dir" 2>/dev/null; then
+    claim_lock
+    return
+  fi
+  if [ -L "$lock_dir" ] || [ ! -d "$lock_dir" ] || ! lock_is_stale "$lock_dir"; then
+    return 1
+  fi
+  moved="$state_dir/lock.stale.$$.$RANDOM"
+  mv -- "$lock_dir" "$moved" 2>/dev/null || return 1
+  if ! lock_is_stale "$moved"; then
+    if [ ! -e "$lock_dir" ]; then
+      mv -- "$moved" "$lock_dir" 2>/dev/null || true
+    fi
+    return 1
+  fi
+  # 消すのは、いま自分が一意の名前へ移した、状態のディレクトリの中のものに限る。
+  if [ -d "$moved" ] && [ ! -L "$moved" ]; then
+    rm -rf -- "$moved"
+  fi
+  if mkdir "$lock_dir" 2>/dev/null; then
+    claim_lock
+    return
+  fi
+  return 1
+}
+
+# 自分の識別が`owner`にあるときだけ、`lock/`を消す。
+release_lock() {
+  [ -n "$lock_owner" ] || return 0
+  if [ -d "$lock_dir" ] && [ ! -L "$lock_dir" ] && [ "$(read_state "$lock_dir/owner")" = "$lock_owner" ]; then
+    rm -rf -- "$lock_dir"
+  fi
+  lock_owner=""
+}
+
+# 失敗の回数。数字でない中身は0として扱う。
+read_failures() {
+  local value
+  value="$(read_state "$failures_file")"
+  if [[ "$value" =~ ^[0-9]{1,9}$ ]]; then
+    echo "$((10#$value))"
+  else
+    echo 0
+  fi
+}
+
 # --autoの終了時の後始末。終了コードは常に0にする。
 auto_cleanup() {
   trap '' INT TERM
   trap - EXIT
+  release_lock
   exit 0
 }
 
@@ -216,6 +310,18 @@ if [ "$auto" -eq 1 ]; then
   trap auto_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+
+  # 順序: stampを見る → ロックを取る → 失敗の回数を先に1増やす → 片付ける。
+  # 先に増やすので、途中で死んだ実行も失敗として数えられる。成功した実行が0に戻す。
+  # stampが新しいときと、他の実行がロックを持っているときは、何もせず、失敗にも数えない。
+  if stamp_is_fresh; then
+    exit 0
+  fi
+  if ! acquire_lock; then
+    exit 0
+  fi
+  write_state "$failures_file" "$(($(read_failures) + 1))" || true
+  log_line "start"
 fi
 
 # lsofの実行ファイル。`WORKTREE_PRUNE_LSOF`は差し替える(テスト用)。
