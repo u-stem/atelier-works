@@ -42,6 +42,7 @@ function failedJob(
     schedule_path: scriptPath,
     completed_at: iso(completedAtMs),
     started_at: iso(completedAtMs - MIN),
+    created_at: iso(completedAtMs - 2 * MIN),
     canceled: false,
     is_skipped: false,
     ...extra,
@@ -60,6 +61,8 @@ type World = {
   failurePages: unknown[][];
   /** 設定すると、失敗の一覧をこの集合から、開始の古い順に、問い合わせの絞り込みどおりに返す。 */
   failureJobs: unknown[] | null;
+  /** 現在時刻。完了していないジョブは、一覧に出ない。 */
+  nowMs: number;
   /** `true`なら、サーバーが開始時刻の絞り込みを無視する。 */
   ignoreStartedAfter: boolean;
   /** scriptごとの履歴(新しい順)。 */
@@ -91,6 +94,7 @@ function newWorld(): World {
     baselineResult: { processed_until: iso(BASELINE) },
     failurePages: [[]],
     failureJobs: null,
+    nowMs: NOW,
     ignoreStartedAfter: false,
     history: {},
     recentVisible: [{ script_path: POLL, schedule_path: POLL }],
@@ -140,7 +144,7 @@ function harness(world: World): Harness {
   };
   const deps: ScheduleFailureDetectDeps = {
     workspace: "factory",
-    now: () => NOW,
+    now: () => world.nowMs,
     listCompletedJobs: async (query) => {
       queries.push(query);
       if (query.schedulePath === SCHEDULE_DETECTOR_PATH) {
@@ -155,9 +159,11 @@ function harness(world: World): Harness {
           return world.failureJobs
             .filter(
               (job) =>
-                world.ignoreStartedAfter ||
-                Date.parse(String(Reflect.get(Object(job), "started_at"))) >
-                  after,
+                Date.parse(String(Reflect.get(Object(job), "completed_at"))) <=
+                  world.nowMs &&
+                (world.ignoreStartedAfter ||
+                  Date.parse(String(Reflect.get(Object(job), "started_at"))) >
+                    after),
             )
             .sort(
               (a, b) =>
@@ -173,7 +179,9 @@ function harness(world: World): Harness {
         return world.history[query.scriptPathExact] ?? [];
       }
       const since = Date.parse(query.startedAfter ?? "");
-      return NOW - since <= 15 * MIN ? world.recentVisible : world.wideVisible;
+      return world.nowMs - since <= 15 * MIN
+        ? world.recentVisible
+        : world.wideVisible;
     },
     getCompletedJobResult: async () => {
       if (world.baselineResultError !== null) throw world.baselineResultError;
@@ -581,17 +589,30 @@ describe("detectScheduleFailures: more failures than the pages hold", () => {
     expect(result.truncated).toBe(true);
   });
 
-  test("keeps the baseline for the completion filter of the next scan", async () => {
+  test("moves processed_until on, so that the next ordinary scan re-reads jobs that were still running", async () => {
     const world = saturated();
     const result = await detectScheduleFailures(harness(world).deps);
-    expect(result.processed_until).toBe(iso(BASELINE));
+    expect(result.processed_until).toBe(iso(NOW - SCAN_OVERLAP_MS));
   });
 
-  test("hands over the latest start it read, to be used as is by the next scan", async () => {
+  test("hands over the latest creation time it read, to be used as is by the next scan", async () => {
     const world = saturated();
     const result = await detectScheduleFailures(harness(world).deps);
-    // 開始は完了の1分前。最後に読んだジョブの完了は BASELINE + 4100 秒。
-    expect(result.scan_started_after).toBe(iso(BASELINE + 4100 * 1000 - MIN));
+    // 作成は完了の2分前。最後に読んだジョブの完了は BASELINE + 4100 秒。
+    expect(result.scan_started_after).toBe(
+      iso(BASELINE + 4100 * 1000 - 2 * MIN),
+    );
+  });
+
+  test("hands over the original baseline as the completion bound of the next scan", async () => {
+    const world = saturated();
+    const result = await detectScheduleFailures(harness(world).deps);
+    expect(result.scan_completed_from).toBe(iso(BASELINE));
+  });
+
+  test("leaves scan_completed_from empty when the whole window was read", async () => {
+    const result = await detectScheduleFailures(harness(newWorld()).deps);
+    expect(result.scan_completed_from).toBeNull();
   });
 
   test("leaves scan_started_after empty when the whole window was read", async () => {
@@ -629,11 +650,17 @@ describe("detectScheduleFailures: a backlog larger than one run reads", () => {
     world.baselineResult = { processed_until: iso(NOW - 3 * HOUR) };
     const start = NOW - 2 * HOUR;
     const jobs: unknown[] = [];
-    jobs.push(failedJob(1, NOW - MIN, POLL, { started_at: iso(start - 1000) }));
+    jobs.push(
+      failedJob(1, NOW - MIN, POLL, {
+        started_at: iso(start - 1000),
+        created_at: iso(start - 2000),
+      }),
+    );
     for (let i = 0; i < 519; i += 1) {
       jobs.push(
         failedJob(i + 2, start + i * 1000 + 10_000, POLL, {
           started_at: iso(start + i * 1000),
+          created_at: iso(start + i * 1000 - 1000),
         }),
       );
     }
@@ -687,6 +714,19 @@ describe("detectScheduleFailures: a backlog larger than one run reads", () => {
   test("the long running job is recorded", async () => {
     const { world } = await twoRuns();
     expect(world.recorded.has(jobIdOf(1))).toBe(true);
+  });
+
+  test("the continued run keeps processed_until, so that the next ordinary scan re-reads jobs that were running", async () => {
+    const { first, second } = await twoRuns();
+    expect(second.processed_until).toBe(first.processed_until);
+  });
+
+  test("the continued run hands nothing on once the backlog is read", async () => {
+    const { second } = await twoRuns();
+    expect([second.scan_started_after, second.scan_completed_from]).toEqual([
+      null,
+      null,
+    ]);
   });
 
   test("the second run does not throw even though the first one read the newest failure", async () => {
@@ -1126,5 +1166,112 @@ describe("detectScheduleFailures: the announcement comes right after the records
     };
     await detectScheduleFailures(deps).catch(() => undefined);
     expect(h.sent.map((s) => s.flowPath)).toEqual([POLL]);
+  });
+});
+
+describe("detectScheduleFailures: three runs around a scan that stopped at the page limit", () => {
+  const START = NOW - 2 * HOUR;
+
+  /** 520件の失敗が溜まっている。600番は回Nの時点で実行中で、回N+1の前に失敗する。 */
+  function world(): World {
+    const w = newWorld();
+    w.baselineResult = { processed_until: iso(NOW - 3 * HOUR) };
+    const jobs: unknown[] = [];
+    for (let i = 0; i < 520; i += 1) {
+      jobs.push(
+        failedJob(i + 1, START + i * 1000 + 10_000, POLL, {
+          started_at: iso(START + i * 1000),
+          created_at: iso(START + i * 1000 - 1000),
+        }),
+      );
+    }
+    jobs.push(
+      failedJob(600, NOW + 2 * MIN, POLL, {
+        started_at: iso(START + 100 * 1000 + 500),
+        created_at: iso(START + 100 * 1000 - 500),
+      }),
+    );
+    w.failureJobs = jobs;
+    return w;
+  }
+
+  async function threeRuns() {
+    const w = world();
+    w.nowMs = NOW;
+    const n = await detectScheduleFailures(harness(w).deps);
+    w.baselineResult = n;
+    w.nowMs = NOW + 5 * MIN;
+    const afterN = new Set(w.recorded);
+    const n1 = await detectScheduleFailures(harness(w).deps);
+    w.baselineResult = n1;
+    w.nowMs = NOW + 10 * MIN;
+    const afterN1 = new Set(w.recorded);
+    const n2 = await detectScheduleFailures(harness(w).deps);
+    return { w, n, n1, n2, afterN, afterN1 };
+  }
+
+  test("the job that was running when the first run stopped is not read by the continued run", async () => {
+    const { afterN1 } = await threeRuns();
+    expect(afterN1.has(jobIdOf(600))).toBe(false);
+  });
+
+  test("the next ordinary run records the job that was running", async () => {
+    const { w } = await threeRuns();
+    expect(w.recorded.has(jobIdOf(600))).toBe(true);
+  });
+
+  test("the first run moves processed_until to a minute before its start", async () => {
+    const { n } = await threeRuns();
+    expect(n.processed_until).toBe(iso(NOW - SCAN_OVERLAP_MS));
+  });
+
+  test("the continued run leaves processed_until as it was", async () => {
+    const { n, n1 } = await threeRuns();
+    expect(n1.processed_until).toBe(n.processed_until);
+  });
+
+  test("an ordinary run that stops again moves processed_until on, so that the scan keeps advancing", async () => {
+    const { n2 } = await threeRuns();
+    expect(n2.processed_until).toBe(iso(NOW + 10 * MIN - SCAN_OVERLAP_MS));
+  });
+});
+
+describe("detectScheduleFailures: a scan that stops at the page limit right after the first run", () => {
+  /** 基準を作る前に完了した失敗が、600件ある。 */
+  async function afterBootstrap() {
+    const w = newWorld();
+    w.baselineRun = null;
+    w.failureJobs = Array.from({ length: 600 }, (_, i) =>
+      failedJob(i + 1, NOW - 3 * HOUR + i * 1000 + 10_000, POLL, {
+        started_at: iso(NOW - 3 * HOUR + i * 1000),
+        created_at: iso(NOW - 3 * HOUR + i * 1000 - 1000),
+      }),
+    );
+    const bootstrap = await detectScheduleFailures(harness(w).deps);
+    w.baselineRun = {
+      id: "baseline-run",
+      success: true,
+      schedule_path: SCHEDULE_DETECTOR_PATH,
+      started_at: iso(NOW),
+    };
+    w.baselineResult = bootstrap;
+    w.nowMs = NOW + 5 * MIN;
+    const first = await detectScheduleFailures(harness(w).deps);
+    w.baselineResult = first;
+    w.nowMs = NOW + 10 * MIN;
+    const second = await detectScheduleFailures(harness(w).deps);
+    return { w, first, second };
+  }
+
+  test("the first scan after the bootstrap stops at the limit", async () => {
+    expect((await afterBootstrap()).first.truncated).toBe(true);
+  });
+
+  test("the continued scan finishes", async () => {
+    expect((await afterBootstrap()).second.truncated).toBe(false);
+  });
+
+  test("no past failure is recorded", async () => {
+    expect((await afterBootstrap()).w.recorded.size).toBe(0);
   });
 });

@@ -9,9 +9,10 @@ import {
   findBaselineRun,
   groupByScript,
   hasOtherScheduleJob,
-  latestStartedAtMs,
+  latestScanPointMs,
   nextProcessedUntil,
   readProcessedUntil,
+  readScanCompletedFrom,
   readScanStartedAfter,
   SCAN_LOOKBACK_MS,
   SCAN_MAX_PAGES,
@@ -231,8 +232,20 @@ describe("scanWindow after a scan that stopped at the page limit", () => {
     expect(scanWindow(NOW - HOUR, NOW, CONT).startedAfterMs).toBe(CONT);
   });
 
-  test("does not filter by completion time", () => {
-    expect(scanWindow(NOW - HOUR, NOW, CONT).completedFromMs).toBe(0);
+  test("filters by the completion bound handed over from the first scan", () => {
+    expect(
+      scanWindow(NOW - HOUR, NOW, CONT, NOW - 3 * HOUR).completedFromMs,
+    ).toBe(NOW - 3 * HOUR);
+  });
+
+  test("falls back to the baseline without a handed over completion bound", () => {
+    expect(scanWindow(NOW - HOUR, NOW, CONT).completedFromMs).toBe(NOW - HOUR);
+  });
+
+  test("keeps the completion bound within a day", () => {
+    expect(
+      scanWindow(NOW - HOUR, NOW, CONT, NOW - 40 * HOUR).completedFromMs,
+    ).toBe(NOW - SCAN_MAX_WINDOW_MS);
   });
 
   test("filters by the baseline without a scan point", () => {
@@ -254,29 +267,64 @@ describe("scanWindow after a scan that stopped at the page limit", () => {
   });
 });
 
-describe("latestStartedAtMs", () => {
-  test("is the latest start among the jobs, whatever their order", () => {
+describe("latestScanPointMs", () => {
+  test("is the latest creation time among the jobs, whatever their order", () => {
     expect(
-      latestStartedAtMs([
-        { started_at: "2026-10-25T10:00:00.000Z" },
-        { started_at: "2026-10-25T11:00:00.000Z" },
-        { started_at: "2026-10-25T10:30:00.000Z" },
+      latestScanPointMs([
+        { created_at: "2026-10-25T10:00:00.000Z" },
+        { created_at: "2026-10-25T11:00:00.000Z" },
+        { created_at: "2026-10-25T10:30:00.000Z" },
       ]),
     ).toBe(Date.parse("2026-10-25T11:00:00.000Z"));
   });
 
-  test("counts jobs that the failure filter drops", () => {
+  test("uses the creation time, which no job's start precedes, so that it is safe whether the list is ordered by creation or by start", () => {
     expect(
-      latestStartedAtMs([
-        { started_at: "2026-10-25T10:00:00.000Z", is_skipped: true },
+      latestScanPointMs([
+        {
+          created_at: "2026-10-25T10:00:00.000Z",
+          started_at: "2026-10-25T10:30:00.000Z",
+        },
       ]),
     ).toBe(Date.parse("2026-10-25T10:00:00.000Z"));
   });
 
-  test("ignores elements without a readable start", () => {
+  test("falls back to the start when a job has no creation time", () => {
     expect(
-      latestStartedAtMs([null, { started_at: "soon" }, { id: "x" }]),
+      latestScanPointMs([{ started_at: "2026-10-25T10:00:00.000Z" }]),
+    ).toBe(Date.parse("2026-10-25T10:00:00.000Z"));
+  });
+
+  test("counts jobs that the failure filter drops", () => {
+    expect(
+      latestScanPointMs([
+        { created_at: "2026-10-25T10:00:00.000Z", is_skipped: true },
+      ]),
+    ).toBe(Date.parse("2026-10-25T10:00:00.000Z"));
+  });
+
+  test("ignores elements without a readable time", () => {
+    expect(
+      latestScanPointMs([null, { created_at: "soon" }, { id: "x" }]),
     ).toBeNull();
+  });
+});
+
+describe("readScanCompletedFrom", () => {
+  test("reads scan_completed_from of the result", () => {
+    expect(
+      readScanCompletedFrom({
+        scan_completed_from: "2026-10-25T11:00:00.000Z",
+      }),
+    ).toBe(Date.parse("2026-10-25T11:00:00.000Z"));
+  });
+
+  test("is null when it is empty", () => {
+    expect(readScanCompletedFrom({ scan_completed_from: null })).toBeNull();
+  });
+
+  test("is null when the result is not an object", () => {
+    expect(readScanCompletedFrom(null)).toBeNull();
   });
 });
 
@@ -641,6 +689,13 @@ describe("describeJobError", () => {
     ).toBe("canceled: xy");
   });
 
+  test("removes a control character inside a secret before masking, so that the mask still applies", () => {
+    const token = `ghp_${"a".repeat(15)}\u0000${"a".repeat(15)}`;
+    expect(describeJobError({ result: { error: { message: token } } })).toBe(
+      "***",
+    );
+  });
+
   test("cuts a long message", () => {
     const long = "x".repeat(ERROR_MAX_CHARS + 500);
     expect(
@@ -734,34 +789,39 @@ describe("collectPages", () => {
 
 describe("nextProcessedUntil", () => {
   const BASELINE = NOW - 30 * MIN;
+  const input = (extra: {
+    baselineMs?: number;
+    truncated?: boolean;
+    continued?: boolean;
+  }) => ({
+    baselineMs: BASELINE,
+    runStartedAtMs: NOW,
+    truncated: false,
+    continued: false,
+    ...extra,
+  });
 
   test("overlaps the previous scan by the margin when the whole window was read", () => {
-    expect(
-      nextProcessedUntil({
-        baselineMs: BASELINE,
-        runStartedAtMs: NOW,
-        truncated: false,
-      }),
-    ).toBe(NOW - SCAN_OVERLAP_MS);
+    expect(nextProcessedUntil(input({}))).toBe(NOW - SCAN_OVERLAP_MS);
+  });
+
+  test("moves on by the same rule when the pages ran out, so that the next ordinary scan re-reads jobs that were still running", () => {
+    expect(nextProcessedUntil(input({ truncated: true }))).toBe(
+      NOW - SCAN_OVERLAP_MS,
+    );
   });
 
   test("never moves back before the baseline", () => {
-    expect(
-      nextProcessedUntil({
-        baselineMs: NOW,
-        runStartedAtMs: NOW,
-        truncated: false,
-      }),
-    ).toBe(NOW);
+    expect(nextProcessedUntil(input({ baselineMs: NOW }))).toBe(NOW);
   });
 
-  test("stays at the baseline when the pages ran out, because the next scan resumes from a start time", () => {
+  test("stays at the baseline in a scan that continues from a start time", () => {
+    expect(nextProcessedUntil(input({ continued: true }))).toBe(BASELINE);
+  });
+
+  test("stays at the baseline in a continued scan that also ran out of pages", () => {
     expect(
-      nextProcessedUntil({
-        baselineMs: BASELINE,
-        runStartedAtMs: NOW,
-        truncated: true,
-      }),
+      nextProcessedUntil(input({ continued: true, truncated: true })),
     ).toBe(BASELINE);
   });
 });

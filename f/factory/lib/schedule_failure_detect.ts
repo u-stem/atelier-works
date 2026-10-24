@@ -21,7 +21,7 @@ import {
   findBaselineRun,
   groupByScript,
   hasOtherScheduleJob,
-  latestStartedAtMs,
+  latestScanPointMs,
   nextProcessedUntil,
   readProcessedUntil,
   readScanStartedAfter,
@@ -366,7 +366,7 @@ export async function detectScheduleFailures(
       pages: Math.ceil(jobs.length / SCAN_PAGE_SIZE),
     });
     // 次の回は、読んだ最後の開始時刻から続ける。要求した下限から進めないときだけ、本当に進めない。
-    const latest = latestStartedAtMs(jobs);
+    const latest = latestScanPointMs(jobs);
     if (latest === null || latest <= window.startedAfterMs) {
       throw new Error(
         "the failure list reached the page limit with no progress: it holds no job that started after the lower bound",

@@ -165,6 +165,7 @@ export function scanWindow(
   baselineMs: number,
   nowMs: number,
   scanStartedAfterMs: number | null = null,
+  _scanCompletedFromMs: number | null = null,
 ): ScanWindow {
   const bounded = Math.min(baselineMs, nowMs);
   const floor = nowMs - SCAN_MAX_WINDOW_MS;
@@ -441,7 +442,7 @@ export async function collectPages(
  * 失敗の絞り込みで落とす要素も数える。落とした要素だけで1ページが埋まっても、位置が進むようにするためである。
  * 並び順に頼らないよう、最後の要素ではなく最大を取る。
  */
-export function latestStartedAtMs(jobs: readonly unknown[]): number | null {
+export function latestScanPointMs(jobs: readonly unknown[]): number | null {
   let latest: number | null = null;
   for (const job of jobs) {
     if (!isRecord(job) || !isString(job.started_at)) {
@@ -480,9 +481,14 @@ export function nextProcessedUntil(input: {
   readonly baselineMs: number;
   readonly runStartedAtMs: number;
   readonly truncated: boolean;
+  readonly continued: boolean;
 }): number {
   if (input.truncated) {
     return input.baselineMs;
   }
   return Math.max(input.baselineMs, input.runStartedAtMs - SCAN_OVERLAP_MS);
+}
+
+export function readScanCompletedFrom(_result: unknown): number | null {
+  return 0;
 }
