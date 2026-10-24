@@ -7,6 +7,7 @@ import {
   DEPLOYED_SHA_GRACE_MS,
   DEPLOYED_SHA_STATE_KEY,
   type DeployedShaCheckDeps,
+  type DeployedShaCheckOutcome,
   type DeployedShaState,
   decideDeployedSha,
   deployedShaHint,
@@ -660,7 +661,7 @@ describe("runDeployedShaCheck with a deploy freeze", () => {
     expect(await runDeployedShaCheck(h.deps)).toBe("notified");
   });
 
-  test("does not read the freezes inside the grace period", async () => {
+  test("reads the freezes inside the grace period while the shas differ", async () => {
     let reads = 0;
     const h = harness({
       nowMs: () => T0 + 1000,
@@ -670,7 +671,17 @@ describe("runDeployedShaCheck with a deploy freeze", () => {
       },
     });
     await runDeployedShaCheck(h.deps);
-    expect(reads).toBe(0);
+    expect(reads).toBe(1);
+  });
+
+  test("restarts the count from now inside the grace period while a deploy freeze is active", async () => {
+    const nowMs = T0 + 10 * MIN;
+    const h = harness({ ...held, nowMs: () => nowMs });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states[0]?.[DEPLOYED_SHA_STATE_KEY]).toEqual({
+      deployed_sha: "bbb",
+      first_seen_ms: nowMs,
+    });
   });
 
   test("does not read the freezes when the shas match", async () => {
@@ -697,28 +708,44 @@ describe("runDeployedShaCheck with a deploy freeze", () => {
     ]);
   });
 
-  test("does not notify in the grace period that follows the end of the freeze", async () => {
-    const nowMs = T0 + DEPLOYED_SHA_GRACE_MS + 1;
-    const first = harness({ ...held, nowMs: () => nowMs });
-    await runDeployedShaCheck(first.deps);
-    const restarted = first.states[0] ?? {};
-    const next = harness({
-      getState: () => Promise.resolve(restarted),
-      nowMs: () => nowMs + 5 * MIN,
-    });
-    expect(await runDeployedShaCheck(next.deps)).toBe("waiting");
+  /**
+   * 5分ごとの確認を再現する。状態は回をまたいで残す。
+   * `heldUntil`の分より前の確認では、deployの保留が有効である。
+   */
+  async function runChecks(
+    minutes: readonly number[],
+    heldUntil: number,
+  ): Promise<DeployedShaCheckOutcome[]> {
+    let stored: Record<string, unknown> = { ...STORED };
+    const outcomes: DeployedShaCheckOutcome[] = [];
+    for (const minute of minutes) {
+      const h = harness({
+        getState: () => Promise.resolve({ ...stored }),
+        setState: (state) => {
+          stored = state;
+          return Promise.resolve();
+        },
+        isDeployHeld: () => Promise.resolve(minute < heldUntil),
+        nowMs: () => T0 + minute * MIN,
+      });
+      outcomes.push(await runDeployedShaCheck(h.deps));
+    }
+    return outcomes;
+  }
+
+  test("does not notify while the freeze lasts, even past the first grace period", async () => {
+    const outcomes = await runChecks([10, 20, 30, 40, 50, 59], 60);
+    expect(outcomes).not.toContain("notified");
   });
 
-  test("notifies once the grace period after the end of the freeze has passed", async () => {
-    const nowMs = T0 + DEPLOYED_SHA_GRACE_MS + 1;
-    const first = harness({ ...held, nowMs: () => nowMs });
-    await runDeployedShaCheck(first.deps);
-    const restarted = first.states[0] ?? {};
-    const next = harness({
-      getState: () => Promise.resolve(restarted),
-      nowMs: () => nowMs + DEPLOYED_SHA_GRACE_MS + 1,
-    });
-    expect(await runDeployedShaCheck(next.deps)).toBe("notified");
+  test("does not notify in the grace period that follows the end of the freeze", async () => {
+    const outcomes = await runChecks([55, 60, 65, 89], 60);
+    expect(outcomes.slice(2)).toEqual(["waiting", "waiting"]);
+  });
+
+  test("notifies once the grace period counted from the end of the freeze has passed", async () => {
+    const outcomes = await runChecks([55, 60, 65, 91], 60);
+    expect(outcomes.at(-1)).toBe("notified");
   });
 
   test("keeps the other keys of the state when it restarts the count", async () => {
