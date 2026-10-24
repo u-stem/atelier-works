@@ -55,6 +55,13 @@ const MERGE_ANY: GuardedOperation = { kind: "merge", repo: null };
 const SYNC_PUSH: GuardedOperation = { kind: "deploy", via: "sync_push" };
 const MIGRATE: GuardedOperation = { kind: "deploy", via: "migrate" };
 
+/** `env -S`の文字列を読めないとき、実行されるコマンドが分からないので、すべての操作として扱う。 */
+const EVERY_OPERATION: readonly GuardedOperation[] = [
+  MERGE_ANY,
+  SYNC_PUSH,
+  MIGRATE,
+];
+
 /** 標準入力でシェルに渡る文字列を読み直す深さの上限。bash-guardの上限と同じにする。 */
 const MAX_INPUT_DEPTH = 4;
 
@@ -63,6 +70,9 @@ const NAME = /^[a-z0-9._-]+$/;
 /** GraphQLの、マージを要求するmutation。 */
 const MERGE_MUTATIONS =
   /mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest/;
+
+/** GraphQLの書き込み。`mergeBranch`や`updateRef`も覆うため、mutationの語を含むものはすべて対象にする。 */
+const MUTATION_KEYWORD = /mutation/i;
 
 /** マージを要求しないと分かっている`gh pr`のサブコマンド。 */
 const SAFE_PR_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -81,6 +91,9 @@ const SAFE_PR_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "close",
   "lock",
   "unlock",
+  "co",
+  "ls",
+  "new",
 ]);
 
 /** オプションの読み方。値を取る短い文字と、値を取る長い名前。 */
@@ -142,7 +155,12 @@ const WMILL_OPTIONS: OptionSpec = {
 type Value = { readonly text: string; readonly dynamic: boolean };
 
 /** 読んだオプション。`name`は`-R`や`--repo`の形で、`value`は値(値を取らなければnull)である。 */
-type ParsedOption = { readonly name: string; readonly value: Value | null };
+type ParsedOption = {
+  readonly name: string;
+  readonly value: Value | null;
+  /** オプションが始まる語の位置。 */
+  readonly at: number;
+};
 
 type ParsedArgs = {
   readonly options: readonly ParsedOption[];
@@ -172,32 +190,46 @@ function parseArgs(args: readonly Word[], spec: OptionSpec): ParsedArgs {
         options.push({
           name: text.slice(0, equals),
           value: { text: text.slice(equals + 1), dynamic: word.dynamic },
+          at: index,
         });
       } else if (spec.longValue.has(text)) {
         const next = args[index + 1];
-        options.push({ name: text, value: next ?? null });
+        options.push({ name: text, value: next ?? null, at: index });
         index += 1;
       } else {
-        options.push({ name: text, value: null });
+        options.push({ name: text, value: null, at: index });
       }
       continue;
     }
     if (text.startsWith("-") && text !== "-") {
       for (let at = 1; at < text.length; at += 1) {
         const letter = text.charAt(at);
-        if (!spec.shortValue.includes(letter)) {
-          options.push({ name: `-${letter}`, value: null });
+        const name = `-${letter}`;
+        const isValue = spec.shortValue.includes(letter);
+        const afterLetter = text.slice(at + 1);
+        if (!isValue) {
+          // 真偽値のオプションにも`=値`を付けられる(`-h=false`)。値付きは値を持たない形と区別する。
+          if (afterLetter.startsWith("=")) {
+            options.push({
+              name,
+              value: { text: afterLetter.slice(1), dynamic: word.dynamic },
+              at: index,
+            });
+            break;
+          }
+          options.push({ name, value: null, at: index });
           continue;
         }
-        const rest = text.slice(at + 1).replace(/^=/, "");
+        const rest = afterLetter.replace(/^=/, "");
         if (rest !== "") {
           options.push({
-            name: `-${letter}`,
+            name,
             value: { text: rest, dynamic: word.dynamic },
+            at: index,
           });
         } else {
           const next = args[index + 1];
-          options.push({ name: `-${letter}`, value: next ?? null });
+          options.push({ name, value: next ?? null, at: index });
           index += 1;
         }
         break;
@@ -255,11 +287,14 @@ function repoCandidates(options: readonly ParsedOption[]): (string | null)[] {
     );
 }
 
+/** 値を持たない形のオプションがあれば真。`--help=false`のような値付きの形は、有効にするとは限らないので数えない。 */
 function hasOption(
   options: readonly ParsedOption[],
   ...names: readonly string[]
 ): boolean {
-  return options.some((option) => names.includes(option.name));
+  return options.some(
+    (option) => names.includes(option.name) && option.value === null,
+  );
 }
 
 /** `gh pr`の引数から、マージとして扱う対象を返す。安全と確かめられたらnullを返す。 */
@@ -270,6 +305,17 @@ function ghPr(
   const { options, positionals } = parseArgs(args, PR_OPTIONS);
   const [subcommand, ...selectors] = positionals;
   if (subcommand === undefined) return null;
+  // サブコマンドの前に、`-R`と`--repo`と`--help`以外のオプションがあると、cobraは値を取るものとして読みうる。
+  const subcommandAt = args.indexOf(subcommand);
+  const allowedBefore = ["-R", "--repo", "-h", "--help"];
+  if (
+    options.some(
+      (option) =>
+        option.at < subcommandAt && !allowedBefore.includes(option.name),
+    )
+  ) {
+    return MERGE_ANY;
+  }
   if (subcommand.dynamic) return MERGE_ANY;
   if (SAFE_PR_SUBCOMMANDS.has(subcommand.text)) return null;
   if (subcommand.text !== "merge") return MERGE_ANY;
@@ -311,7 +357,9 @@ function graphqlMayMerge(fields: readonly Value[], hasInput: boolean): boolean {
     const at = field.text.indexOf("=");
     const key = at === -1 ? field.text : field.text.slice(0, at);
     const value = at === -1 ? "" : field.text.slice(at + 1);
-    if (MERGE_MUTATIONS.test(field.text)) return true;
+    if (MERGE_MUTATIONS.test(field.text) || MUTATION_KEYWORD.test(field.text)) {
+      return true;
+    }
     if (field.dynamic && (at === -1 || key === "query" || /[$`]/.test(key))) {
       return true;
     }
@@ -338,7 +386,7 @@ function ghApi(args: readonly Word[]): GuardedOperation | null {
       ? [option.value]
       : [],
   );
-  const hasInput = hasOption(options, "--input");
+  const hasInput = options.some((option) => option.name === "--input");
   const path = normalizeEndpoint(endpoint.text);
   if (!endpoint.dynamic && path.toLowerCase() === "graphql") {
     return graphqlMayMerge(fields, hasInput) ? MERGE_ANY : null;
@@ -348,8 +396,8 @@ function ghApi(args: readonly Word[]): GuardedOperation | null {
   const reads = method === null || explicitGet;
   // 指定の無いメソッドは、フィールドを渡すとPOSTになる。明示したGETのフィールドは検索条件である。
   const hasBody = hasInput || (fields.length > 0 && !explicitGet);
-  const mentionsMerge = path.toLowerCase().includes("merge");
-  if (reads && !hasBody && !mentionsMerge) return null;
+  // GETではPRをマージできないので、パスに`merge`を含んでも対象外にする。
+  if (reads && !hasBody) return null;
   const segments = path.split("/");
   const match = /^repos\/([^/]+)\/([^/]+)(?:\/|$)/i.exec(path);
   const repo =
@@ -385,6 +433,13 @@ function ghOperation(
   const groupAt = args.findIndex((word) => !word.text.startsWith("-"));
   const group = args[groupAt];
   if (group === undefined) return null;
+  // グループの前に`--help`と`--version`以外のオプションがあると、cobraは値を取るものとして読みうる。
+  const before = args.slice(0, groupAt);
+  if (
+    before.some((word) => !["--help", "--version", "-h"].includes(word.text))
+  ) {
+    return MERGE_ANY;
+  }
   if (group.dynamic) return MERGE_ANY;
   const rest = args.slice(groupAt + 1);
   switch (group.text) {
@@ -413,6 +468,10 @@ function wmillOperation(
       (option) => option.name === "--dry-run" && option.value === null,
     );
     return dryRun ? [] : [SYNC_PUSH];
+  }
+  // ワークスペースのmerge(`profile`は別名)は、ワークスペースの内容を書き換える反映である。
+  if ((first === "workspace" || first === "profile") && second === "merge") {
+    return [SYNC_PUSH];
   }
   if (
     first === "datatable" &&
@@ -451,29 +510,51 @@ function repoFromEnvironment(
   return found;
 }
 
+/** 前置きを外し切れなかったとき、残った語の中の`gh`と`wmill`を、マージと反映として扱う。 */
+function leftoverOperations(words: readonly Word[]): GuardedOperation[] {
+  const found: GuardedOperation[] = [];
+  const names = words.map((word) => baseName(word.text));
+  if (
+    names.includes("gh") ||
+    words.some((word) => word.text.startsWith("gh "))
+  ) {
+    found.push(MERGE_ANY);
+  }
+  if (
+    names.includes("wmill") ||
+    words.some((word) => word.text.startsWith("wmill "))
+  ) {
+    found.push(SYNC_PUSH, MIGRATE);
+  }
+  return found;
+}
+
 function commandOperations(command: SimpleCommand): GuardedOperation[] {
-  const { assignments, words, wrappers } = stripWrappers(command.words);
+  const { assignments, words, wrappers, opaque } = stripWrappers(command.words);
+  if (opaque) return [...EVERY_OPERATION];
+  const found: GuardedOperation[] = [];
   const first = words[0];
-  if (first === undefined) return [];
+  if (first === undefined) return found;
   if (first.dynamic) {
     const operation = dynamicProgramOperation(words.slice(1));
-    return operation === null ? [] : [operation];
+    return operation === null ? found : [...found, operation];
   }
   const viaXargs = wrappers.includes("xargs");
-  switch (baseName(first.text)) {
-    case "gh": {
-      const operation = ghOperation(
-        words.slice(1),
-        repoFromEnvironment(assignments),
-        viaXargs,
-      );
-      return operation === null ? [] : [operation];
-    }
-    case "wmill":
-      return [...wmillOperation(words.slice(1), viaXargs)];
-    default:
-      return [];
+  const program = baseName(first.text);
+  if (program === "gh") {
+    const operation = ghOperation(
+      words.slice(1),
+      repoFromEnvironment(assignments),
+      viaXargs,
+    );
+    return operation === null ? found : [...found, operation];
   }
+  if (program === "wmill") {
+    return [...found, ...wmillOperation(words.slice(1), viaXargs)];
+  }
+  // シェルの`-c`の引数は、字句に分ける段階で別のコマンドとして取り出されている。
+  if (shellArguments(words) !== null) return found;
+  return wrappers.length > 0 ? [...found, ...leftoverOperations(words)] : found;
 }
 
 function scan(line: string, depth: number): GuardedOperation[] {

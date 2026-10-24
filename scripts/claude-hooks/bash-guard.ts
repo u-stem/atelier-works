@@ -331,6 +331,8 @@ const CONFIG_READ_OR_UNSET_OPTIONS: ReadonlySet<string> = new Set([
 ]);
 
 export const REASONS = {
+  envSplit:
+    "The string of env -S is decided at run time or cannot be split, so the command it runs cannot be checked. Write the command out without env -S.",
   unparsable: (error: string) =>
     `Could not parse the command (${error}). Rewrite it with balanced quotes and simpler syntax so the guard can check it.`,
   force:
@@ -584,7 +586,10 @@ function checkSimpleCommand(
   };
   const secret = findSecretReference(command, context);
   if (secret !== null) return deny(secret);
-  const { assignments, words, wrappers, mise } = stripWrappers(command.words);
+  const { assignments, words, wrappers, mise, opaque } = stripWrappers(
+    command.words,
+  );
+  if (opaque) return deny(REASONS.envSplit);
   const program = baseName(words[0]?.text ?? "");
   const declared = ENVIRONMENT_BUILTINS.has(program)
     ? words.slice(1).filter((word) => ASSIGNMENT.test(word.text))

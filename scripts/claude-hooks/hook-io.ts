@@ -133,15 +133,26 @@ export function isEntryPoint(moduleUrl: string): boolean {
   }
 }
 
-/** 暫定の実装。常に成功を返す。 */
+/**
+ * ストリームに書き、書き終わるまで待つ。
+ * 書き込みが`limitMs`のうちに終わらないとき、書き込みがエラーを返したときは、偽を返す。
+ * 空の文字列は書かずに真を返す。
+ */
 export function writeAndWait(
-  _stream: {
+  stream: {
     write: (text: string, done: (error?: Error | null) => void) => unknown;
   },
-  _text: string,
-  _limitMs: number,
+  text: string,
+  limitMs: number,
 ): Promise<boolean> {
-  return Promise.resolve(true);
+  if (text === "") return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), limitMs);
+    stream.write(text, (error) => {
+      clearTimeout(timer);
+      resolve(error === undefined || error === null);
+    });
+  });
 }
 
 /** 出力を書き終えるまで待つ上限(ミリ秒)。 */
@@ -163,7 +174,10 @@ export async function runHookMain(
     process.exitCode = result.exitCode;
     return;
   }
-  process.stdout.write(result.stdout);
-  process.stderr.write(result.stderr);
-  process.exit(result.exitCode);
+  const written = await Promise.all([
+    writeAndWait(process.stdout, result.stdout, FLUSH_LIMIT_MS),
+    writeAndWait(process.stderr, result.stderr, FLUSH_LIMIT_MS),
+  ]);
+  // 拒否の返事を書けなかったときは、通さずに終了コード2で拒否する。
+  process.exit(written.every(Boolean) ? result.exitCode : 2);
 }

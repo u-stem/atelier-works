@@ -89,9 +89,9 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
 ];
 
-/** 名前に`PASSWORD`、`TOKEN`、`SECRET`、`KEY`を含む変数の代入。値を伏せる。 */
+/** 名前に`PASSWORD`、`TOKEN`、`SECRET`、`KEY`を含む代入(`=`と`:`、空白、引用符つきの値を含む)。値を伏せる。 */
 const SECRET_ASSIGNMENT =
-  /\b([A-Za-z0-9_]*(?:PASSWORD|TOKEN|SECRET|KEY)[A-Za-z0-9_]*)=\S+/gi;
+  /\b([A-Za-z0-9_]*(?:PASSWORD|TOKEN|SECRET|KEY)[A-Za-z0-9_]*)\s*[=:]\s*("[^"]*"|'[^']*'|\S+)/gi;
 
 /** 制御文字、書式文字、行と段落の区切り。 */
 const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
