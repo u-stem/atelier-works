@@ -614,11 +614,22 @@ check_blockers() {
 }
 
 # 削除の直前の再検査。最初の検査から時間が空く間(ghの待ちなど)に、worktreeが使われうる。
-# lsofを取り直し、`check_blockers`をもう一度通し、ブランチが検査の時点のcommitのままかを確かめる。
+# `check_blockers`をもう一度通し、ブランチが検査の時点のcommitのままかを確かめた後、
+# 最後にlsofを取り直して使用中かを調べる。`check_blockers`は数秒かかることがあり、
+# その間に現れたcwdを見逃さないよう、lsofを`git worktree remove`の直前に最も近づける。
 # 残す理由を`blocker`に入れる(無ければ空)。--autoでは、取り直したlsofにも陽性の対照を課す。
 recheck_before_remove() {
   local head_ref current
-  blocker=""
+  check_blockers
+  if [ -n "$blocker" ]; then
+    return
+  fi
+  head_ref="$(git -C "$wt_path" symbolic-ref -q HEAD 2>/dev/null)" || head_ref=""
+  current="$(git rev-parse --verify --quiet "refs/heads/$wt_branch" 2>/dev/null)" || current=""
+  if [ "$head_ref" != "refs/heads/$wt_branch" ] || [ "$current" != "$wt_head" ]; then
+    blocker="branch moved"
+    return
+  fi
   if read_cwd_list; then
     have_lsof=1
     if [ "$auto" -eq 1 ] && ! callers_visible; then
@@ -631,14 +642,8 @@ recheck_before_remove() {
     blocker="lsof check failed"
     return
   fi
-  check_blockers
-  if [ -n "$blocker" ]; then
-    return
-  fi
-  head_ref="$(git -C "$wt_path" symbolic-ref -q HEAD 2>/dev/null)" || head_ref=""
-  current="$(git rev-parse --verify --quiet "refs/heads/$wt_branch" 2>/dev/null)" || current=""
-  if [ "$head_ref" != "refs/heads/$wt_branch" ] || [ "$current" != "$wt_head" ]; then
-    blocker="branch moved"
+  if has_process_inside "$wt_path"; then
+    blocker="in use"
   fi
 }
 
