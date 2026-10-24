@@ -550,3 +550,27 @@ describe("shouldHoldDeploy", () => {
     expect(shouldHoldDeploy({ deployFreezes: [] })).toBe(false);
   });
 });
+
+describe("a row with an impossible time", () => {
+  const future = deployEntry({
+    created_at: new Date(NOW.getTime() + 10 * 60_000).toISOString(),
+    expires_at: new Date(NOW.getTime() + 70 * 60_000).toISOString(),
+  });
+
+  test("makes the preparation of a push fail", async () => {
+    const result = await prepareFrozenPush(
+      fake(textWithDeploy([], [future])).ports,
+      INPUTS,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("makes the read of the deploy freezes fail", async () => {
+    const result = await readActiveDeployFreezes(
+      fake(textWithDeploy([], [future])).ports,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+});

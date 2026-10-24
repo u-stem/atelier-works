@@ -571,6 +571,94 @@ describe("parseFreezeState with deploy_freezes", () => {
   });
 });
 
+describe("parseFreezeState with the current time", () => {
+  const MIN = 60 * 1000;
+
+  function deployText(overrides: Partial<DeployFreezeEntry>): string {
+    return JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [deployEntry(overrides)],
+    });
+  }
+
+  function scheduleText(overrides: Partial<FreezeEntry>): string {
+    return JSON.stringify(state(entry(overrides)));
+  }
+
+  test("rejects a deploy freeze created in the future", () => {
+    const text = deployText({
+      created_at: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      expires_at: new Date(NOW.getTime() + 70 * MIN).toISOString(),
+    });
+
+    expect(parseFreezeState(text, NOW).ok).toBe(false);
+  });
+
+  test("accepts a deploy freeze created a little ahead of the clock", () => {
+    const text = deployText({
+      created_at: new Date(NOW.getTime() + 4 * MIN).toISOString(),
+      expires_at: new Date(NOW.getTime() + 64 * MIN).toISOString(),
+    });
+
+    expect(parseFreezeState(text, NOW).ok).toBe(true);
+  });
+
+  test("rejects a deploy freeze that expires more than a day from now", () => {
+    const text = deployText({
+      created_at: new Date(NOW.getTime() + 4 * MIN).toISOString(),
+      expires_at: new Date(
+        NOW.getTime() + 4 * MIN + FREEZE_MAX_TTL_MS,
+      ).toISOString(),
+    });
+
+    expect(parseFreezeState(text, NOW).ok).toBe(false);
+  });
+
+  test("rejects a schedule freeze created in the future", () => {
+    const text = scheduleText({
+      created_at: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      expires_at: new Date(NOW.getTime() + 70 * MIN).toISOString(),
+    });
+
+    expect(parseFreezeState(text, NOW).ok).toBe(false);
+  });
+
+  test("rejects a schedule freeze that expires more than a day from now", () => {
+    const text = scheduleText({
+      created_at: new Date(NOW.getTime() + 4 * MIN).toISOString(),
+      expires_at: new Date(
+        NOW.getTime() + 4 * MIN + FREEZE_MAX_TTL_MS,
+      ).toISOString(),
+    });
+
+    expect(parseFreezeState(text, NOW).ok).toBe(false);
+  });
+
+  test("accepts a row created in the past that expires within a day", () => {
+    expect(parseFreezeState(deployText({}), NOW).ok).toBe(true);
+  });
+
+  test("does not check the time when it is not given", () => {
+    const text = deployText({
+      created_at: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      expires_at: new Date(NOW.getTime() + 70 * MIN).toISOString(),
+    });
+
+    expect(parseFreezeState(text).ok).toBe(true);
+  });
+
+  test("explains the reason", () => {
+    const text = deployText({
+      created_at: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      expires_at: new Date(NOW.getTime() + 70 * MIN).toISOString(),
+    });
+    const result = parseFreezeState(text, NOW);
+
+    expect(!result.ok && result.reason).toContain("created in the future");
+  });
+});
+
 describe("serializeFreezeState with deploy_freezes", () => {
   test("omits the key when there are no deploy freezes", () => {
     expect(serializeFreezeState(state(entry()))).not.toContain(

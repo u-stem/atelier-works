@@ -174,7 +174,10 @@ function parseEntry(value: unknown): Outcome<FreezeEntry> {
  * 構造が崩れていれば失敗にする(呼び出し側は反映しない)。知らないキーは無視する。
  * `deploy_freezes`が無ければ空として読む。idは2つの配列をまたいで一意でなければならない。
  */
-export function parseFreezeState(text: string | null): Outcome<FreezeState> {
+export function parseFreezeState(
+  text: string | null,
+  _now?: Date,
+): Outcome<FreezeState> {
   if (text === null) return ok(emptyFreezeState());
   let parsed: unknown;
   try {
