@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -60,6 +61,8 @@ type RunOptions = {
   closeStdout?: boolean;
   // 標準入力に渡す文字列。フックのJSONに使う。
   input?: string;
+  // 実行するスクリプト。省略すると、このリポジトリの`scripts/worktree-new.sh`を使う。
+  script?: string;
 };
 
 const BASH = Bun.which("bash") ?? "bash";
@@ -73,9 +76,10 @@ function runScript(
   bun: string,
   options: RunOptions = {},
 ): Run {
+  const script = options.script ?? SCRIPT;
   const command = options.closeStdout
-    ? [BASH, "-c", 'bash "$0" "$@" >&-', SCRIPT, ...args]
-    : [BASH, SCRIPT, ...args];
+    ? [BASH, "-c", 'bash "$0" "$@" >&-', script, ...args]
+    : [BASH, script, ...args];
   const env: Record<string, string> = {
     ...cleanEnv(),
     // 利用者のClaude設定(`~/.claude/settings.json`)を読ませない。
@@ -1441,6 +1445,10 @@ describe("worktree-new.sh", () => {
     // 起動された片付けのスクリプトが、cwd、引数、PATHを記録する場所。
     let record: string;
     let pruneStub: string;
+    // 一時リポジトリの`scripts/`に置いた、`worktree-new.sh`の写し。
+    // 自動の片付けは、スクリプトの属するリポジトリと作成先が同じときだけ起動するため、
+    // 起動を確かめるテストは、一時リポジトリの中のスクリプトを実行する。
+    let installedScript: string;
 
     // 偽の片付け。記録してから数秒眠る。眠る間に、起動した側が待たないことを確かめる。
     function writePruneStub(path: string, body = "sleep 4"): void {
@@ -1453,6 +1461,7 @@ describe("worktree-new.sh", () => {
     // 起動の環境変数。`WORKTREE_AUTO_PRUNE`は`1`にして偽の片付けを使わせる。
     function startEnv(extra: Record<string, string> = {}): RunOptions {
       return {
+        script: installedScript,
         env: {
           WORKTREE_AUTO_PRUNE: "1",
           WORKTREE_NEW_PRUNE_SCRIPT: pruneStub,
@@ -1481,6 +1490,9 @@ describe("worktree-new.sh", () => {
       record = join(root, "prune-record");
       pruneStub = join(root, "prune-stub.sh");
       writePruneStub(pruneStub);
+      mkdirSync(join(mainDir, "scripts"));
+      installedScript = join(mainDir, "scripts", "worktree-new.sh");
+      copyFileSync(SCRIPT, installedScript);
     });
 
     test("starts the automatic prune after creating a worktree", async () => {
@@ -1606,6 +1618,7 @@ describe("worktree-new.sh", () => {
 
     test("defaults WORKTREE_AUTO_PRUNE to 0 in the helper", async () => {
       runScript(mainDir, ["feat/foo"], fakeBun, {
+        script: installedScript,
         env: { WORKTREE_NEW_PRUNE_SCRIPT: pruneStub },
       });
 
@@ -1700,6 +1713,82 @@ describe("worktree-new.sh", () => {
         const result = runScript(mainDir, ["feat/foo"], fakeBun, startEnv());
 
         expect(result.stderr).not.toContain("automatic worktree cleanup");
+      });
+    });
+
+    describe("when the target repository differs from the script's repository", () => {
+      // 別の一時リポジトリ(originつき)を作り、メインのcheckoutのパスを返す。
+      function makeOtherRepo(): string {
+        const otherOrigin = join(root, "other-origin.git");
+        const otherMain = join(root, "other-main");
+        git(root, [
+          "init",
+          "--quiet",
+          "--bare",
+          "--initial-branch=main",
+          otherOrigin,
+        ]);
+        git(root, ["clone", "--quiet", otherOrigin, otherMain]);
+        git(otherMain, ["checkout", "--quiet", "-b", "main"]);
+        writeFileSync(join(otherMain, "README.md"), "x\n");
+        writeFileSync(join(otherMain, ".gitignore"), "node_modules/\n");
+        git(otherMain, ["add", "README.md", ".gitignore"]);
+        git(otherMain, ["commit", "--quiet", "--no-gpg-sign", "-m", "init"]);
+        git(otherMain, ["push", "--quiet", "origin", "main"]);
+        return otherMain;
+      }
+
+      const otherInput = (otherMain: string) =>
+        JSON.stringify({ name: "feat-foo", cwd: otherMain });
+
+      test("does not start the automatic prune", async () => {
+        const otherMain = makeOtherRepo();
+
+        runScript(mainDir, ["--hook"], fakeBun, {
+          ...startEnv(),
+          input: otherInput(otherMain),
+        });
+
+        expect(await notStarted()).toBe(true);
+      });
+
+      test("warns that the repository differs", () => {
+        const otherMain = makeOtherRepo();
+
+        const result = runScript(mainDir, ["--hook"], fakeBun, {
+          ...startEnv(),
+          input: otherInput(otherMain),
+        });
+
+        expect(result.stderr).toContain("different repository");
+      });
+
+      test("still creates the worktree in the target repository", () => {
+        const otherMain = makeOtherRepo();
+
+        const result = runScript(mainDir, ["--hook"], fakeBun, {
+          ...startEnv(),
+          input: otherInput(otherMain),
+        });
+
+        expect(result.stdout).toBe(
+          `${join(otherMain, ".claude", "worktrees", "feat-foo")}\n`,
+        );
+      });
+
+      test("starts the prune when the script runs from a worktree of the same repository", async () => {
+        const created = runScript(mainDir, ["feat/inner"], fakeBun);
+        const inner = created.stdout.trim();
+        mkdirSync(join(inner, "scripts"));
+        const innerScript = join(inner, "scripts", "worktree-new.sh");
+        copyFileSync(SCRIPT, innerScript);
+
+        runScript(inner, ["feat/second"], fakeBun, {
+          ...startEnv(),
+          script: innerScript,
+        });
+
+        expect(await waitForRecord()).not.toBeNull();
       });
     });
 
