@@ -218,6 +218,8 @@ stamp_is_fresh() {
   local value now
   value="$(read_state "$stamp_file")"
   [[ "$value" =~ ^[0-9]{1,12}$ ]] || return 1
+  # 先頭の0を八進数として読まないよう、十進数として固定する。
+  value=$((10#$value))
   now="$(date +%s)"
   [ "$value" -le "$now" ] && [ $((now - value)) -le 1800 ]
 }
