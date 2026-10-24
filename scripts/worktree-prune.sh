@@ -535,6 +535,88 @@ reflogs_reachable() {
   return 0
 }
 
+# 削除の区間を抜けたので、--autoのINTとTERMの扱いを戻す。
+resume_signals() {
+  if [ "$auto" -eq 1 ]; then
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
+}
+
+# 使われているか、失うものがあるかを調べ、残す理由を`blocker`に入れる(無ければ空)。
+# 変更と未追跡のファイルは`dirty`、再生成できるもの以外の無視されたファイルは
+# `ignored files`として残す。再生成できるものは、node_modules、`.wmill`のリンク、
+# `console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
+# `.wmill`は実体のディレクトリを許さない。ログインの情報が入りうるため。
+# 利用者の`status.showUntrackedFiles=no`で未追跡のファイルが隠れないよう、明示する。
+# 最初の検査と、削除の直前の再検査の両方が、この関数を通る。
+blocker=""
+check_blockers() {
+  local status_out status_line dirty=0 ignored=0
+  blocker=""
+  if ! status_out="$(git -C "$wt_path" status --porcelain --ignored --untracked-files=all)"; then
+    blocker="dirty"
+    return
+  fi
+  while IFS= read -r status_line; do
+    case "$status_line" in
+      "") ;;
+      "!! node_modules/"* | "!! "*"/node_modules/"*) ;;
+      "!! .wmill") ;;
+      "!! console/dist/"* | "!! console/.cache/"*) ;;
+      "!! __pycache__/"* | "!! "*"/__pycache__/"*) ;;
+      "!! .DS_Store" | "!! "*"/.DS_Store") ;;
+      "!! "*) ignored=1 ;;
+      *) dirty=1 ;;
+    esac
+  done <<<"$status_out"
+  if [ "$dirty" -eq 1 ]; then
+    blocker="dirty"
+    return
+  fi
+  if [ "$ignored" -eq 1 ]; then
+    blocker="ignored files"
+    return
+  fi
+  if has_recent_file "$wt_path" "$idle_minutes"; then
+    blocker="recent"
+    return
+  fi
+  if has_process_inside "$wt_path"; then
+    blocker="in use"
+    return
+  fi
+}
+
+# 削除の直前の再検査。最初の検査から時間が空く間(ghの待ちなど)に、worktreeが使われうる。
+# lsofを取り直し、`check_blockers`をもう一度通し、ブランチが検査の時点のcommitのままかを確かめる。
+# 残す理由を`blocker`に入れる(無ければ空)。--autoでは、取り直したlsofにも陽性の対照を課す。
+recheck_before_remove() {
+  local head_ref current
+  blocker=""
+  if read_cwd_list; then
+    have_lsof=1
+    if [ "$auto" -eq 1 ] && ! callers_visible; then
+      fail_run "lsof does not show the callers just before removing $wt_path"
+      blocker="lsof check failed"
+      return
+    fi
+  elif [ "$auto" -eq 1 ]; then
+    fail_run "lsof is unavailable or printed nothing just before removing $wt_path"
+    blocker="lsof check failed"
+    return
+  fi
+  check_blockers
+  if [ -n "$blocker" ]; then
+    return
+  fi
+  head_ref="$(git -C "$wt_path" symbolic-ref -q HEAD 2>/dev/null)" || head_ref=""
+  current="$(git rev-parse --verify --quiet "refs/heads/$wt_branch" 2>/dev/null)" || current=""
+  if [ "$head_ref" != "refs/heads/$wt_branch" ] || [ "$current" != "$wt_head" ]; then
+    blocker="branch moved"
+  fi
+}
+
 # `wt_*`の変数に入れた1件のworktreeを判定し、消せるものは消す(または予定を表示する)。
 consider() {
   if [[ "$wt_path/" != "$scope"* ]]; then
@@ -558,43 +640,9 @@ consider() {
     return
   fi
 
-  # 変更と未追跡のファイルは`dirty`、再生成できるもの以外の無視されたファイルは
-  # `ignored files`として残す。再生成できるものは、node_modules、`.wmill`のリンク、
-  # `console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
-  # `.wmill`は実体のディレクトリを許さない。ログインの情報が入りうるため。
-  # 利用者の`status.showUntrackedFiles=no`で未追跡のファイルが隠れないよう、明示する。
-  local status_out status_line dirty=0 ignored=0
-  if ! status_out="$(git -C "$wt_path" status --porcelain --ignored --untracked-files=all)"; then
-    keep "dirty"
-    return
-  fi
-  while IFS= read -r status_line; do
-    case "$status_line" in
-      "") ;;
-      "!! node_modules/"* | "!! "*"/node_modules/"*) ;;
-      "!! .wmill") ;;
-      "!! console/dist/"* | "!! console/.cache/"*) ;;
-      "!! __pycache__/"* | "!! "*"/__pycache__/"*) ;;
-      "!! .DS_Store" | "!! "*"/.DS_Store") ;;
-      "!! "*) ignored=1 ;;
-      *) dirty=1 ;;
-    esac
-  done <<<"$status_out"
-  if [ "$dirty" -eq 1 ]; then
-    keep "dirty"
-    return
-  fi
-  if [ "$ignored" -eq 1 ]; then
-    keep "ignored files"
-    return
-  fi
-
-  if has_recent_file "$wt_path" "$idle_minutes"; then
-    keep "recent"
-    return
-  fi
-  if has_process_inside "$wt_path"; then
-    keep "in use"
+  check_blockers
+  if [ -n "$blocker" ]; then
+    keep "$blocker"
     return
   fi
 
@@ -671,14 +719,36 @@ consider() {
     removed=$((removed + 1))
     return
   fi
+
+  # 検査から削除までの間に使われ始めたものを、残す。
+  recheck_before_remove
+  if [ -n "$blocker" ]; then
+    keep "$blocker"
+    return
+  fi
+
+  # --autoでは、worktreeだけが消えてブランチが残らないよう、削除の区間のINTとTERMを無視する。
+  if [ "$auto" -eq 1 ]; then
+    trap '' INT TERM
+  fi
   if ! git worktree remove "$wt_path" >&2; then
-    echo "failed: $wt_path ($wt_branch): could not remove the worktree" >&2
+    resume_signals
+    if [ "$auto" -eq 1 ]; then
+      fail_run "$wt_path ($wt_branch): could not remove the worktree"
+    else
+      echo "failed: $wt_path ($wt_branch): could not remove the worktree" >&2
+    fi
     kept=$((kept + 1))
     return
   fi
+  local ref_deleted=0
   if git update-ref -d "refs/heads/$wt_branch" "$wt_head" >&2; then
+    ref_deleted=1
     # 設定のセクションが無いと終了コード128になるので、失敗は無視する。
     git config --remove-section "branch.$wt_branch" 2>/dev/null || true
+  fi
+  resume_signals
+  if [ "$ref_deleted" -eq 1 ]; then
     emit "removed: $wt_path ($wt_branch): $how"
   else
     emit "removed: $wt_path, but branch $wt_branch remains (it moved from $wt_head or could not be deleted)"
