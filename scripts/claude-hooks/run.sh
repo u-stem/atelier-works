@@ -3,7 +3,7 @@
 # Claude Codeは終了コード2だけをツールの呼び出しの拒否として扱い、ほかの失敗では呼び出しを通す。
 # フックが見つからないとき、フックが異常終了したときは、終了コード2で拒否する側に倒す。
 # 動くbunもnodeも無い環境(依存をまだ入れていないコンテナなど)では、すべてのBashを止めてしまうので、
-# 警告を出して通す。この場合は、設定ファイルの拒否ルールだけが残る。
+# 警告を出して通す。bash-guardでは設定ファイルの拒否ルールだけが残り、merge-guardでは保留が確かめられなくなる。
 # 使い方: sh scripts/claude-hooks/run.sh <フックの名前>(標準入力にフックの入力のJSONを渡す)
 set -u
 
@@ -44,7 +44,18 @@ if [ -z "$runtime" ]; then
   echo "claude hook $hook: no working bun or node 24+ was found, so the command was not checked; allowing the tool call." >&2
   echo "Install bun to enable the guard." >&2
   # 終了コード0のときstderrは表示されないので、利用者にはJSONのsystemMessageで知らせる。
-  echo '{"systemMessage":"The bash guard hook did not run (no working bun or node 24+), so the command was not checked; only the deny rules of .claude/settings.json apply."}'
+  # フックごとに、何が確かめられなくなったかを伝える。
+  case "$hook" in
+    merge-guard)
+      echo '{"systemMessage":"The merge guard hook did not run (no working bun or node 24+), so merges and deploys were not checked against holds."}'
+      ;;
+    bash-guard)
+      echo '{"systemMessage":"The bash guard hook did not run (no working bun or node 24+), so the command was not checked; only the deny rules of .claude/settings.json apply."}'
+      ;;
+    *)
+      echo "{\"systemMessage\":\"The $hook hook did not run (no working bun or node 24+), so the command was not checked.\"}"
+      ;;
+  esac
   exit 0
 fi
 

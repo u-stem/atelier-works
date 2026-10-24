@@ -133,12 +133,51 @@ export function isEntryPoint(moduleUrl: string): boolean {
   }
 }
 
-/** 標準入力を読んで判定し、結果を書き出す。各フックのエントリーポイントから呼ぶ。 */
+/**
+ * ストリームに書き、書き終わるまで待つ。
+ * 書き込みが`limitMs`のうちに終わらないとき、書き込みがエラーを返したときは、偽を返す。
+ * 空の文字列は書かずに真を返す。
+ */
+export function writeAndWait(
+  stream: {
+    write: (text: string, done: (error?: Error | null) => void) => unknown;
+  },
+  text: string,
+  limitMs: number,
+): Promise<boolean> {
+  if (text === "") return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), limitMs);
+    stream.write(text, (error) => {
+      clearTimeout(timer);
+      resolve(error === undefined || error === null);
+    });
+  });
+}
+
+/** 出力を書き終えるまで待つ上限(ミリ秒)。 */
+const FLUSH_LIMIT_MS = 1000;
+
+/**
+ * 標準入力を読んで判定し、結果を書き出す。各フックのエントリーポイントから呼ぶ。
+ * `exitWhenDone`を真にすると、書き終えた後にプロセスを終了する。
+ * 判定の途中で起動した子プロセスや待ちが残っていても、拒否の返事を遅らせないためである。
+ */
 export async function runHookMain(
   evaluate: (input: BashToolInput) => Promise<Decision>,
+  options: { readonly exitWhenDone?: boolean } = {},
 ): Promise<void> {
   const result = await runHook(await readStdin(), evaluate, process.cwd());
-  process.stdout.write(result.stdout);
-  process.stderr.write(result.stderr);
-  process.exitCode = result.exitCode;
+  if (options.exitWhenDone !== true) {
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exitCode = result.exitCode;
+    return;
+  }
+  const written = await Promise.all([
+    writeAndWait(process.stdout, result.stdout, FLUSH_LIMIT_MS),
+    writeAndWait(process.stderr, result.stderr, FLUSH_LIMIT_MS),
+  ]);
+  // 拒否の返事を書けなかったときは、通さずに終了コード2で拒否する。
+  process.exit(written.every(Boolean) ? result.exitCode : 2);
 }

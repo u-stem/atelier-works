@@ -5421,8 +5421,9 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 ## 保留を確かめる
 
 保留は、対象を進めないことを、期限つきで伝える仕組みである。
-保留を読んで止まるのは、Factoryのdependabotの自動マージだけである。
+保留を読んで止まるのは、Factoryのdependabotの自動マージと、ローカルのClaudeのセッションのマージ(`gh pr merge`など)である。
 仕様は[保留の内部仕様](internals/holds.md)にある。
+Claudeが保留を置く・解除する手順は、[保留のスキル](../.claude/skills/hold/SKILL.md)にある。
 
 保留の操作は、ホストの端末で、`mise run`のタスクから行う。
 
@@ -5442,11 +5443,19 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 置き直しの回数に上限は無いので、続けて置くと保留は続く。
 `hold:list`で、期限の切れた行と、有効の条件を満たさない行(`invalid`)も確かめられる。
 
-保留が止めるのは、dependabotのPRの評価と自動マージである。
+保留が止めるのは、dependabotのPRの評価と自動マージ、ローカルのClaudeのセッションのマージである。
 取得は、`dependabot_merge_enabled`が偽の試運転中も、保留のあるリポジトリのPRを待たせる。
 マージの直前の最後の確認が働くのは、`dependabot_merge_enabled`が真のときだけである。
-`gh pr merge`による手のマージは止めない。
+ローカルのセッションの`gh pr merge`などは、フックが止める。
+人の端末(プロンプトの`!`)、GitHubのWeb UI、クラウドのセッションのGitHubのMCPによるマージは止めない。
 範囲`claim`は読む処理が無いので、置けない。
+
+保留を置く前に、自動マージが有効なPRを確かめる。
+GitHubの自動マージは、保留を置いた後もチェックが通れば実行されるためである。
+
+```bash
+gh pr list --repo <owner>/<repo> --json number,autoMergeRequest --jq '.[] | select(.autoMergeRequest != null) | .number'
+```
 
 ### 保留で止まったdependabotのPRを再開する
 
@@ -5459,6 +5468,21 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
    dependabotがrebaseして新しいコミットが積まれると、新しいheadとして自動で評価される。
 
 保留を読めないときは、通知`dependabot_merge_hold_unreadable`の手順に従う。
+
+### 保留でマージや反映が止められたとき
+
+Claudeのセッションのマージ(`gh pr merge`など)と、`wmill sync push`、`wmill datatable migrate`が拒否されたときの手順である。
+
+1. 拒否の文に載るidと期限を、`mise run hold:list`と`mise run freeze:list`で確かめる。
+2. 置いた主体が解除するか、期限が切れるのを待つ。
+   解除してよければ、人が`mise run hold:release -- <id>`か`mise run freeze:release -- <id>`で解除する。
+3. 保留を読めないという拒否は、保留が無いことを意味しない。
+   スタックが止まっていれば`mise run up`で起動して、同じコマンドをやり直す。
+   ツールが無いと出たら`mise install`を実行する。
+4. それでも読めないときは、人が端末でプロンプトの先頭に`!`を付けて実行する。
+   クラウドのセッションは保留を読めないので、マージと反映を人が行う。
+
+スケジュールの凍結だけが有効なときの`wmill sync push`は、除外を付ける`mise run push`を使う。
 
 ### 保留を置くときの注意
 

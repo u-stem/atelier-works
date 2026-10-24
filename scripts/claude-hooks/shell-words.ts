@@ -51,6 +51,10 @@ export type StrippedCommand = {
   readonly wrappers: readonly string[];
   /** 最初に見つけた`mise exec`。無ければnull。 */
   readonly mise: MiseExec | null;
+  /** `env -S`の文字列を語に分けて差し込んだときは真。 */
+  readonly expanded: boolean;
+  /** `env -S`の文字列を読めなかったとき(実行時に決まる、引用符が閉じない)は真。 */
+  readonly opaque: boolean;
 };
 
 /** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
@@ -178,11 +182,36 @@ const MISE_SHORT_LETTERS = /^-[qvyhVCEjPst]+$/;
 /** 前置きのコマンドと、その値を取るオプション。値の語も一緒に外す。 */
 const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   [
-    ["env", new Set(["-u", "-C", "-S", "--unset", "--chdir"])],
+    [
+      "env",
+      new Set(["-u", "-C", "-S", "-P", "--unset", "--chdir", "--split-string"]),
+    ],
     ["sudo", new Set(["-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t"])],
     ["nice", new Set(["-n", "--adjustment"])],
     ["timeout", new Set(["-k", "-s", "--kill-after", "--signal"])],
-    ["xargs", new Set(["-I", "-n", "-L", "-P", "-d", "-s", "-E", "-a"])],
+    [
+      "xargs",
+      new Set([
+        "-I",
+        "-n",
+        "-L",
+        "-P",
+        "-d",
+        "-s",
+        "-E",
+        "-a",
+        "-J",
+        "-R",
+        "-S",
+        "--max-args",
+        "--max-procs",
+        "--max-lines",
+        "--max-chars",
+        "--delimiter",
+        "--arg-file",
+        "--process-slot-var",
+      ]),
+    ],
   ],
 );
 
@@ -295,7 +324,10 @@ export function baseName(path: string): string {
  * 先頭の変数代入、`env`や`sudo`などの前置きのコマンド、制御構文の語を外し、
  * 実際に起動するプログラムからの語を返す。外した変数代入は`assignments`に入れる。
  */
-export function stripWrappers(words: readonly Word[]): StrippedCommand {
+export function stripWrappers(input: readonly Word[]): StrippedCommand {
+  let words = input;
+  let expanded = false;
+  let opaque = false;
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
@@ -316,6 +348,12 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
       index = skipTransparentOptions(words, index + 1, transparent);
     } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
       wrappers.push(name);
+      if (name === "env") {
+        const split = expandEnvSplitString(words, index);
+        words = split.words;
+        expanded ||= split.expanded;
+        opaque ||= split.opaque;
+      }
       index = skipWrapperOptions(words, index + 1, name);
     } else if (name === "mise" && miseExecAt(words, index) !== -1) {
       wrappers.push(text);
@@ -331,7 +369,157 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
   if (first !== undefined && zshCommandName(first.text) !== first.text) {
     rest[0] = { ...first, text: zshCommandName(first.text) };
   }
-  return { assignments, words: rest, wrappers, mise };
+  return {
+    assignments,
+    words: rest,
+    wrappers,
+    mise,
+    expanded,
+    opaque,
+  };
+}
+
+/** `env`の値を取る短いオプションの文字。 */
+const ENV_VALUE_LETTERS = "uCSP";
+
+/**
+ * `env -S`の文字列を、`env`と同じ規則で語に分ける。
+ * 空白で分け、単一引用符と二重引用符で囲み、バックスラッシュで逃れる。
+ * `;`、`|`、`&`、`(`は演算子ではなく、語の一部である。
+ * 二重引用符の外の`$`は展開されるので、その語は実行時に決まる語にする。
+ * 引用符が閉じない、末尾のバックスラッシュ、知らない逃れは、読めないものとしてnullを返す。
+ */
+function splitEnvString(input: string): Word[] | null {
+  const words: Word[] = [];
+  let current = "";
+  let started = false;
+  let dynamic = false;
+  const flush = (): void => {
+    if (started) words.push({ text: current, dynamic, glob: false });
+    current = "";
+    started = false;
+    dynamic = false;
+  };
+  let at = 0;
+  while (at < input.length) {
+    const char = input.charAt(at);
+    if (char === " " || char === "\t" || char === "\n") {
+      flush();
+      at += 1;
+    } else if (char === "#" && !started) {
+      break;
+    } else if (char === "'") {
+      const end = input.indexOf("'", at + 1);
+      if (end === -1) return null;
+      current += input.slice(at + 1, end);
+      started = true;
+      at = end + 1;
+    } else if (char === '"') {
+      started = true;
+      at += 1;
+      for (;;) {
+        const inner = input.charAt(at);
+        if (inner === "") return null;
+        if (inner === '"') {
+          at += 1;
+          break;
+        }
+        if (inner === "\\") {
+          const next = input.charAt(at + 1);
+          if (next !== '"' && next !== "\\" && next !== "$") return null;
+          current += next;
+          at += 2;
+          continue;
+        }
+        if (inner === "$") dynamic = true;
+        current += inner;
+        at += 1;
+      }
+    } else if (char === "\\") {
+      const next = input.charAt(at + 1);
+      if (next === "") return null;
+      if (next === "_") {
+        flush();
+      } else {
+        current += next;
+        started = true;
+      }
+      at += 2;
+    } else {
+      if (char === "$") dynamic = true;
+      current += char;
+      started = true;
+      at += 1;
+    }
+  }
+  flush();
+  return words;
+}
+
+type EnvSplit = {
+  readonly words: readonly Word[];
+  readonly expanded: boolean;
+  readonly opaque: boolean;
+};
+
+/**
+ * `env -S '<コマンド>'`(`--split-string`)の文字列を語に分け、その位置に差し込んだ語の並びを返す。
+ * `env`は、この文字列を空白と引用符で分けて、コマンドとして実行するためである。
+ * 束ねた短いオプションは、getoptと同じに読む。値を取る最初の文字から後ろが値で、後ろが空なら次の語が値である。
+ * 文字列が実行時に決まるか読めないときは、語をそのまま返し、`opaque`を真にする。
+ */
+function expandEnvSplitString(
+  words: readonly Word[],
+  envIndex: number,
+): EnvSplit {
+  const unchanged: EnvSplit = { words, expanded: false, opaque: false };
+  for (let at = envIndex + 1; at < words.length; at += 1) {
+    const word = words[at];
+    const text = word?.text ?? "";
+    if (word === undefined || text === "--" || text === "-") return unchanged;
+    if (!text.startsWith("-")) return unchanged;
+    let value: Word | undefined;
+    let end = at + 1;
+    if (text.startsWith("--")) {
+      if (text === "--split-string") {
+        value = words[at + 1];
+        end = at + 2;
+      } else if (text.startsWith("--split-string=")) {
+        value = { ...word, text: text.slice("--split-string=".length) };
+      } else {
+        if (WRAPPER_VALUE_OPTIONS.get("env")?.has(text) === true) at += 1;
+        continue;
+      }
+    } else {
+      const found = [...text.slice(1)].findIndex((letter) =>
+        ENV_VALUE_LETTERS.includes(letter),
+      );
+      if (found === -1) continue;
+      const letter = text.charAt(found + 1);
+      const rest = text.slice(found + 2);
+      if (letter !== "S") {
+        if (rest === "") at += 1;
+        continue;
+      }
+      if (rest === "") {
+        value = words[at + 1];
+        end = at + 2;
+      } else {
+        value = { ...word, text: rest };
+      }
+    }
+    if (value === undefined || value.dynamic) {
+      return { words, expanded: false, opaque: true };
+    }
+    const split = splitEnvString(value.text);
+    if (split === null) return { words, expanded: false, opaque: true };
+    return {
+      words: [...words.slice(0, at), ...split, ...words.slice(end)],
+      expanded: true,
+      opaque: false,
+    };
+  }
+  return unchanged;
 }
 
 /** zshは、コマンドの位置の`=名前`を、その名前のコマンドのパスに展開する。展開後の名前を返す。 */
@@ -478,12 +666,26 @@ function skipWrapperOptions(
   wrapper: string,
 ): number {
   const valueOptions = WRAPPER_VALUE_OPTIONS.get(wrapper) ?? new Set<string>();
+  const valueLetters = [...valueOptions]
+    .filter((option) => option.length === 2 && !option.startsWith("--"))
+    .map((option) => option.charAt(1))
+    .join("");
   let index = start;
   while (index < words.length) {
     const text = words[index]?.text ?? "";
     if (text === "--") return index + 1;
     if (!text.startsWith("-") || text === "-") break;
-    index += valueOptions.has(text) ? 2 : 1;
+    if (valueOptions.has(text)) {
+      index += 2;
+    } else if (text.startsWith("--")) {
+      index += 1;
+    } else {
+      // 束ねた短いオプションは、値を取る最初の文字から後ろが値である。後ろが空なら次の語が値になる。
+      const found = [...text.slice(1)].findIndex((letter) =>
+        valueLetters.includes(letter),
+      );
+      index += found !== -1 && found === text.length - 2 ? 2 : 1;
+    }
   }
   // `timeout`は、オプションの後の1語が継続時間になる。
   if (wrapper === "timeout" && index < words.length) index += 1;
@@ -1204,4 +1406,33 @@ class Parser {
     }
     throw new ShellSyntaxError("unterminated backquote");
   }
+}
+
+/**
+ * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
+ * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
+ * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、空の配列を返して通す。
+ * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
+ */
+export function literalShellInputs(
+  command: SimpleCommand,
+): readonly string[] | null {
+  if (command.inputs.length > 0)
+    return command.inputs.map((input) => input.text);
+  const source = command.pipedFrom;
+  if (source === null) return [];
+  const { words } = stripWrappers(source.words);
+  const program = baseName(words[0]?.text ?? "");
+  if (program !== "echo" && program !== "printf") return [];
+  let args = words.slice(1);
+  if (program === "echo") {
+    const first = args.findIndex((word) => !/^-[neE]+$/.test(word.text));
+    args = first === -1 ? [] : args.slice(first);
+  }
+  if (args.some((word) => word.dynamic)) return null;
+  // `\n`や`\t`は、echoとprintfが改行や区切りに直す。
+  const texts = args.map((word) =>
+    word.text.replace(/\\n/g, "\n").replace(/\\t/g, " "),
+  );
+  return program === "echo" ? [texts.join(" ")] : texts;
 }

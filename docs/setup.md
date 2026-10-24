@@ -407,6 +407,15 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 フックを入れる前に作った作業ツリーには、次のcheckoutでリンクが張られる。
 すぐに張るときは、その作業ツリーで`scripts/link-worktree-wmill.sh`を実行する。
 
+## Claude Codeのフック
+
+`.claude/settings.json`が、ClaudeがBashを実行する前に`scripts/claude-hooks/`のフックを動かす。
+フックの内容と限界は[セキュリティ](security.md#claude-codeのフック)に書く。
+
+`merge-guard`は、マージと反映の前に保留と凍結を読む。
+読むには、スタックが起動していて、`mise`を使える必要がある。
+クラウドのセッションは保留を読めないので、マージ系と反映系のコマンドを実行できず、人が行う。
+
 ## worktreeの作成と片付け
 
 作業用のworktreeは、メインのcheckoutの`.claude/worktrees/`に置く。

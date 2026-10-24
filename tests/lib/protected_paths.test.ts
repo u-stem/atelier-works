@@ -1457,7 +1457,7 @@ describe("files that the hold command imports", () => {
     "f/factory/lib/freeze_apply.ts",
   ];
 
-  /** `scripts/hold.ts`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。 */
+  /** `entry`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。動的なimportも辿る。 */
   function importClosure(entry: string): string[] {
     const seen = new Set<string>();
     const queue = [entry];
@@ -1466,7 +1466,9 @@ describe("files that the hold command imports", () => {
       if (current === undefined || seen.has(current)) continue;
       seen.add(current);
       const source = readFileSync(current, "utf8");
-      for (const match of source.matchAll(/(?:from|import)\s+"(\.[^"]+)"/g)) {
+      for (const match of source.matchAll(
+        /(?:from\s+|import\s*\(?\s*)"(\.[^"]+)"/g,
+      )) {
         const next = normalize(join(dirname(current), match[1] ?? ""));
         if (existsSync(next)) queue.push(next);
       }
@@ -1496,6 +1498,47 @@ describe("files that the hold command imports", () => {
     );
 
     expect(unprotected).toEqual([]);
+  });
+
+  test("finds the file that merge-guard.ts loads by a dynamic import", () => {
+    expect(importClosure("scripts/claude-hooks/merge-guard.ts")).toContain(
+      "scripts/claude-hooks/merge-read.ts",
+    );
+  });
+
+  test("finds the files that merge-read.ts imports through the hold command", () => {
+    expect(importClosure("scripts/claude-hooks/merge-guard.ts")).toContain(
+      "scripts/hold.ts",
+    );
+  });
+
+  test("every file that merge-guard.ts can load is a protected path", () => {
+    const unprotected = importClosure(
+      "scripts/claude-hooks/merge-guard.ts",
+    ).filter((path) => !matchesForbiddenPath(path));
+
+    expect(unprotected).toEqual([]);
+  });
+});
+
+// マージと反映を保留の間止めるフックとスキル。書き換えられると、保留が効かなくなる。
+describe("merge guard files", () => {
+  const PATHS = [
+    "scripts/claude-hooks/merge-guard.ts",
+    "scripts/claude-hooks/merge-targets.ts",
+    "scripts/claude-hooks/merge-read.ts",
+    "tests/scripts/claude-hooks/merge-guard.test.ts",
+    "tests/scripts/claude-hooks/merge-targets.test.ts",
+    "tests/scripts/claude-hooks/merge-read.test.ts",
+    ".claude/skills/hold/SKILL.md",
+  ];
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
   });
 });
 

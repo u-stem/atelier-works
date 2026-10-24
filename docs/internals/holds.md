@@ -9,6 +9,8 @@
 - `f/factory/poll_dependabot.ts`と`f/factory/steps/dependabot_finish.ts`(保留を読む処理)
 - `scripts/hold.ts`と`scripts/hold_psql.ts`(CLI)
 - `scripts/claude-hooks/hold-guard.ts`(subagentの拒否)
+- `scripts/claude-hooks/merge-guard.ts`、`merge-targets.ts`、`merge-read.ts`(ローカルのセッションのフック)
+- `.claude/skills/hold/SKILL.md`(保留を置く・解除する手順)
 - `tests/scripts/hold_wiring.test.ts`
 - `scripts/test-db-holds.ts`
 
@@ -20,7 +22,7 @@
 保留の有無が、何かを許可することはない。
 許可に使うと、偽の行を置くだけで保護が外れるためである。
 
-保留を読んで止まる主体は、Factoryのdependabotの自動マージだけである。
+保留を読んで止まる主体は、Factoryのdependabotの自動マージと、ローカルのClaudeのセッションのフックである。
 範囲`claim`を読む主体は、まだ無い。
 実装の状態は[アーキテクチャ](../architecture.md)の「未実装の機能」に書く。
 
@@ -226,11 +228,11 @@ dependabotの作業項目は再実行できないので、人がPRを確認し�
 
 保留を読んでからマージを要求するまでの数秒は、受け入れる。
 保留は止めるだけの補助で、元の保護(レビューとゲート)が残るためである。
-保留が止めるのは、Factoryのdependabotの自動マージだけである。
+Factoryの側で保留が止めるのは、dependabotの自動マージだけである。
 取得の待ちは、`dependabot_merge_enabled`が偽の試運転中も働く。
 `dependabot_merge_enabled`が真のときだけ働くのは、終了のステップのマージの直前の最後の確認である。
-`gh pr merge`は止まらない。
-マージを要求するのは終了のステップだけで、配線テストが固定する。
+ローカルのセッションの`gh pr merge`は、フックが止める([ローカルのセッションのフック](#ローカルのセッションのフック))。
+マージを要求するFactoryの処理は終了のステップだけで、配線テストが固定する。
 
 ## CLI
 
@@ -299,6 +301,181 @@ CLIは本番のデータベースを渡し、実DBの検査は使い捨てのデ
 強制終了で止まるのはdockerのクライアントだけで、コンテナの中のpsqlは止まらない。
 `hold:list`で確かめる。
 値はプロセスの引数に現れるので、`reason`と`holder`に秘密を書かない。
+
+## ローカルのセッションのフック
+
+`scripts/claude-hooks/merge-guard.ts`が、ローカルのセッションのBashのコマンドを、実行の前に判定する。
+マージと反映を、保留と凍結が有効な間は止めるためである。
+`.claude/settings.json`が、`bash-guard`とは別の項目として登録する。
+2つのフックは並行して動き、どちらかが拒否すれば止まる。
+判定は主セッションとsubagentで同じで、拒否の文だけが違う。
+操作の見つけ方は`merge-targets.ts`、保留と凍結の読み方は`merge-read.ts`にある。
+
+### 止める操作
+
+`gh`の判定は、安全と確かめられた形だけを対象外にし、それ以外はマージとして扱う。
+綴りを列挙してマージを見つける方式は、列挙に無い綴りで破られるためである。
+マージとして扱っても、止まるのは保留が有効なときと、保留を読めないときだけである。
+
+| 操作 | 止める条件 |
+| --- | --- |
+| `gh pr`のうち、対象外の形以外 | `merge`はリポジトリが決まれば、そのリポジトリのマージの保留が有効なとき。決まらないものと`merge`以外は、どのリポジトリでもマージの保留が有効なとき |
+| `gh api`のうち、対象外の形以外 | パスから`repos/<owner>/<repo>/`が決まれば、そのリポジトリの保留。決まらなければ、どのリポジトリでも |
+| 語に`merge`を含む`gh alias set`と`gh alias import` | どのリポジトリでもマージの保留が有効 |
+| `xargs`の後ろの`gh pr`、`gh api`、`gh alias`、`wmill` | `gh`はどのリポジトリでもマージの保留が有効。`wmill`は反映の保留かスケジュールの凍結が有効 |
+| `wmill sync push`(`--dry-run`を除く) | deployの保留かスケジュールの凍結が有効 |
+| `wmill datatable migrate up`と`migrate down` | deployの保留が有効 |
+
+`gh`のグループの前にオプションがあると、cobraは知らないオプションを値を取るものとして読みうる。
+`--help`と`--version`以外のオプションがグループの前にあれば、マージとして扱う(`gh -R o/r pr merge 1`、`gh -X PUT api ...`)。
+`gh pr`のサブコマンドの前にも、`-R`と`--repo`と`--help`以外のオプションがあれば、マージとして扱う。
+
+`gh pr`が対象外になるのは、サブコマンドが文字どおり次のどれかのときである。
+`view`、`list`、`checks`、`create`、`diff`、`comment`、`status`、`edit`、`ready`、`review`である。
+`checkout`、`reopen`、`close`、`lock`、`unlock`と、別名の`co`、`ls`、`new`も対象外である。
+`merge`は、値を持たない`--help`と`-h`、`--auto`の無い値を持たない`--disable-auto`のときだけ対象外になる。
+`--help=false`や`--disable-auto=0`のように値を付けた形は、有効にするとは限らないので、マージとして扱う。
+サブコマンドが実行時に決まる、または上記以外(`merge`を含む)なら、マージとして扱う。
+
+`gh api`が対象外になるのは、次の条件をすべて満たすときである。
+
+- メソッドが文字どおりのGETか、指定が無い。
+- 本文を送る指定(`--input`、メソッドを指定しない`-f`と`-F`)が無い。
+- エンドポイントが`graphql`でない。
+
+GETではPRをマージできないので、パスに`merge`を含んでも対象外にする。
+メソッドが実行時に決まる場合は、マージとして扱う。
+エンドポイントは、スキームとホスト、先頭と末尾の`/`、クエリ、GHESの`api/v3/`を外した形で見る。
+`..`を含むパスは、リポジトリを決めない。
+GraphQLは、queryが文字どおりで、`mutation`の語を含まないと確かめられたときだけ対象外になる。
+`mergeBranch`や`updateRef`のような、マージを要求する3つのmutation以外の書き込みも、この規則で覆う。
+次のqueryは、マージとして扱う。
+
+- queryが無い。
+- 実行時に決まる。
+- ファイルから読む。
+- `--input`で渡す。
+
+コメントの投稿などの書き込みのメソッドも、保留が有効な間は止まる。
+安全側に倒すので、止めすぎは受け入れる。
+
+オプションの値は、読み飛ばしてから判定する。
+短いオプションは、pflagと同じに読む。
+束ねた文字(`-dR o/held`、`-iXPUT`)は、1文字ずつ見る。
+値を取る文字に当たったら、その後ろを値にする。
+後ろが空なら次の語が値で、先頭の`=`は落とす(`-X=PUT`)。
+値を取らない文字にも`=値`を付けられる(`-h=false`)。
+`gh pr merge 1 --body --disable-auto`では、`--disable-auto`は本文の値なので、マージとして扱う。
+`wmill sync push -i --dry-run`では、`--dry-run`は`-i`の値なので、pushとして扱う。
+`wmill`で値を取るオプションは、次のとおりである。
+
+- 短い形: `-i`、`-e`
+- 長い形(絞り込み): `--includes`、`--excludes`、`--extra-includes`
+- 長い形(接続): `--workspace`、`--token`、`--base-url`、`--config-dir`、`--env`、`--branch`
+- 長い形(そのほか): `--message`、`--parallel`、`--repository`、`--datatable`
+
+`--dry-run=false`のように値を付けた形は、`--dry-run`とみなさず、対象にする。
+`wmill workspace merge`(別名`profile merge`)は、反映として扱う。
+`mise run push`のようなラッパーは対象にしない。
+ラッパーの中で、凍結の入口(`scripts/freeze.ts`)が止める。
+
+コマンド行は、字句に分けてから見る。
+`sh -c`、`eval`、`$(...)`、`env`、`timeout`、`xargs`、`mise exec --`、絶対パスは外して判定する。
+前置きの短いオプションは、getoptと同じに読む。値を取る最初の文字から後ろが値で、後ろが空なら次の語が値である。
+`env -P`、`xargs -J`、`-R`、`-S`、`--max-args`のような値を取るオプションも読み飛ばす。
+前置きを外し切れなかったとき、残った語に`gh`か`wmill`があれば(`gh pr merge 1`が1語の場合を含む)、リポジトリを決めないマージか反映として扱う。
+`env -S`の文字列は、`env`と同じ規則で分ける。空白と引用符で分け、`;`、`|`、`&`、`(`は演算子とせず語の一部にする。
+文字列が実行時に決まる、引用符が閉じない、知らない逃れを含むときは、読めないものとして扱う。
+読めない`env -S`は、`bash-guard`が拒否し、`merge-guard`はマージと反映のすべてとして扱う。
+標準入力でシェルに渡す文字列(`echo '...' | sh`、ヒアドキュメント)は、深さ4まで読み直す。
+字句に分けられないコマンド行は、何も見つけない。`bash-guard`が拒否するためである。
+実行する名前や、`gh`のグループとサブコマンドが実行時に決まる語は、マージとして扱う。
+
+### 対象のリポジトリ
+
+`--repo`、`-R`、前置きの`GH_REPO`、PRのURL、`gh api`のパスの`repos/<owner>/<repo>/`を、すべて集める。
+値は、末尾の`owner/repo`を小文字にし、`.git`を落として、保留の対象の形に合わせる。
+候補が1つに決まるときだけ、そのリポジトリの保留と照合する。
+
+次のときは、リポジトリが決まらないものとして扱い、有効なマージの保留が1件でもあれば止める。
+
+- 候補が無い(`gh pr merge 123`)。
+- 候補の値が食い違う(`--repo`の繰り返し、URLと`--repo`)。
+- 値が`owner/repo`の形に合わない、置換記号(`{owner}`)を含む、実行時に決まる。
+- PRを指す位置の語が実行時に決まる。その語がURLの可能性があるためである。
+
+回避は、`--repo <owner>/<repo>`を文字どおり書くことである。
+他のリポジトリの保留でも止まるのは、安全側に倒すためである。
+
+### 読み方
+
+対象の操作に当たったときだけ、読みの部品(`merge-read.ts`)を動的に読み込む。
+対象外のコマンドは、解析だけで許可する。DBを読まず、変数も読まない。
+
+- マージの保留は、全件(`scope`が`merge`の有効な行)を1回で読み、リポジトリの照合はメモリ上で行う。
+  `listActiveHolds`を、読み取り専用の接続(`default_transaction_read_only=on`)で呼ぶ。
+- deployの保留とスケジュールの凍結は、変数`f/factory/freezes`を`wmill variable get`で読む。
+- 読みは子プロセスで行い、`mise exec -C <リポジトリの根> --`で包む。
+  composeが`mise`の環境変数を要し、`wmill`も`mise`のツールのためである。
+  `mise`は、PATH、`/opt/homebrew/bin`、`$HOME/.local/bin`、`/usr/local/bin`の順に探す。
+- 子の環境では、`mise`のツールの自動インストールを止める(`MISE_AUTO_INSTALL=0`など)。
+  読みのためにネットワークへ出ず、入っていないツールは「コマンドが見つからない」の失敗になる。
+- 子は新しいプロセスグループで起動する。
+  読みの上限は6秒で、上限に達したらプロセスグループごと終了する。
+  `mise`や`docker`の孫が標準出力を握り続けても、結果は子の終了かタイマーで決める。
+- フック自身にも6.5秒の上限があり、超えたら拒否する。
+  判定を書き出したら、残った待ちを待たずにプロセスを終了する。
+- 子の標準エラーは、秘密値を伏せてから使う。
+- マージの保留と凍結の両方に当たるコマンド行は、並行して読む。
+- 結果は保存しない。保留は置いた直後に効かせるためである。
+
+### 読めないとき
+
+読めないときは、すべて拒否する。
+次の場合が当たる。
+
+- 表が無い。
+- 行が壊れている。
+- `mise`か`docker`が無い。
+- 子プロセスが非ゼロで終わる。
+- 時間切れになる。
+- 読みの処理が例外を投げる。
+「保留なし」と取り違えると、保留を置いた意味が外れるためである。
+
+クラウドのセッションには`mise`と`docker`が無く、保留を読めない。
+そのため、マージ系と反映系のコマンドは拒否になる。
+ただし、`bun`か24以上の`node`が無い環境では、起動スクリプトが警告を出して通す。
+
+### 拒否の文
+
+文に載せるのは、保留のid、検証した対象、期限(日本時間)、置いた主体の種類だけである。
+`reason`と`holder`は、DBに書ける主体が決める文字列なので載せない。
+対象は`owner/repo`の形に合うときだけ載せ、合わなければ`<invalid target>`にして、長さを切る。
+読めない理由は、制御文字を空白にして200字までにする。
+
+主セッションの文は、`mise run hold:list`で確かめることと、人に尋ねることを示す。
+subagentの文は、マージと反映をしないと伝える。主セッションへの報告で終えるよう促す。
+どちらの文にも、保留の解除の手順は載せない。
+止められたエージェントに迂回を勧めないためである。
+解除の手順は、[保留のスキル](../../.claude/skills/hold/SKILL.md)に置く。
+
+deployの保留の文は、期限まで待つか、置いた人に頼むことと、`mise run freeze:list`を示す。
+スケジュールの凍結だけが有効なときの`wmill sync push`は、除外を付ける`mise run push`を案内する。
+
+### 限界
+
+判定は語の字面で見る。ベストエフォートの規則で、境界ではない。
+次は追わない。
+
+- 別名や関数、変数や連結で組んだ語、スクリプトのファイルの中の呼び出し。
+- `curl`、`python`、`hub`、GitHubのMCPによるマージ。
+- GraphQLの`mergeBranch`。
+- `find -exec`、`parallel`、`watch`の後ろに書いたコマンド。`xargs`は追う。
+- `bunx wmill`、`npx wmill`、`wmill script push`などの個別のpush、`wmill schedule enable`。
+- 保留を置く前から有効だった自動マージ。
+
+迂回のための環境変数は設けない。
+残るリスクは[セキュリティ](../security.md)の「保留」に書く。
 
 ## subagentの拒否
 
@@ -393,6 +570,8 @@ Windmillのscriptはすべて同じdatatableの接続を持つので、検出を
 実行時に`holds.ts`を読み込んでよい`f/`のファイルは、保留を読む2つ(`poll_dependabot.ts`と`dependabot_finish.ts`)だけである。
 読み込む名前は`listActiveHolds`だけで、型は読み込みに数えない。
 保留を読む処理を足すときは、テストの`HOLD_READERS`に足す。
+ローカルのフックの読みの部品(`scripts/claude-hooks/merge-read.ts`)は`f/`の外にあるので、この一覧に入れない。
+配線テストの別の検査が、`listActiveHolds`だけを読み込むこと、書く関数と書き込みの接続を使わないこと、データベース名を定数から取ることを固定する。
 
 書く関数(`placeHold`、`releaseHold`)は、`sql`に既定値を持たない。
 これは呼び出し側に接続を選ばせるためで、参照は止めない。
@@ -514,7 +693,11 @@ migrationが失敗すると、`self_update`は次の回で再試行する。
 | `tests/scripts/hold.test.ts` | 引数、主体、`claim`の拒否、一覧と置く操作と解除、表示の無害化、CLIの接続先 |
 | `tests/scripts/dependabot_finish.test.ts`、`tests/scripts/poll_dependabot.test.ts` | 保留があるとき、読めないときに、マージせず作業項目も作らないこと。読む位置。読めない通知の解決 |
 | `tests/scripts/claude-hooks/bash-guard.test.ts` | subagentの拒否と許可の形、主セッションを止めないこと |
-| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入、読む処理の名前、マージを要求するファイル、CLIが表の名前を持たないこと、miseのタスク、`test-db.sh`が実DBの検査を呼ぶ位置 |
+| `tests/scripts/claude-hooks/merge-targets.test.ts` | マージと反映の操作の見つけ方、リポジトリの候補の集め方と食い違い、入れ子のシェル、見つけない形 |
+| `tests/scripts/claude-hooks/merge-read.test.ts` | 読みの子プロセスの起動の形、失敗の種類、時間切れとプロセスグループの終了、`mise`の探索、子の環境、凍結の変数の読み方 |
+| `tests/scripts/claude-hooks/merge-guard.test.ts` | 判定、リポジトリの照合、読めないときの拒否、時間切れ、主セッションとsubagentの文言、敵対的な文字列を載せないこと |
+| `tests/scripts/claude-hooks/merge-guard-process.test.ts` | 実プロセスのフックが、偽の`mise`で保留を読んで拒否と許可を返すこと。孫が出力を握っても期限内に拒否すること。nodeで動くこと |
+| `tests/scripts/hold_wiring.test.ts` | 表への参照の混入、読む処理の名前、マージを要求するファイル、CLIが表の名前を持たないこと、フックの読みの部品が読み取りだけであること、miseのタスク、`test-db.sh`が実DBの検査を呼ぶ位置 |
 | `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる。psqlの経路で値の束縛と読み取り専用の接続も確かめる |
 
 実DBの検査のうち、制約と文の検査は、値を定数として埋め込む検査用のクライアントで流す。

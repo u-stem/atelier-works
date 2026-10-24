@@ -69,6 +69,11 @@
             "type": "command",
             "command": "/bin/sh -c '[ -f \"$1\" ] || { echo \"claude hook: launcher not found at $1, so the command was not checked; allowing the tool call\" >&2; echo \"{\\\"systemMessage\\\":\\\"The bash guard hook did not run (the launcher was not found), so the command was not checked; only the deny rules of .claude/settings.json apply.\\\"}\"; exit 0; }; exec /bin/sh \"$@\"' _ \"${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh\" bash-guard",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "/bin/sh -c '[ -f \"$1\" ] && [ -f \"${1%/*}/$2.ts\" ] || { echo \"claude hook: launcher or hook script not found under $1, so the command was not checked; allowing the tool call\" >&2; echo \"{\\\"systemMessage\\\":\\\"The merge guard hook did not run (the launcher or the hook script was not found), so merges and deploys were not checked against holds.\\\"}\"; exit 0; }; exec /bin/sh \"$@\"' _ \"${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh\" merge-guard",
+            "timeout": 10
           }
         ]
       }

@@ -60,6 +60,13 @@ function denyRules(): string[] {
   );
 }
 
+/** 登録したフックのコマンド。無ければ空文字を返す。 */
+function registeredCommand(hook: string): string {
+  return (
+    bashHookCommands().find((candidate) => candidate.endsWith(` ${hook}`)) ?? ""
+  );
+}
+
 /** 登録したコマンドを、Claude Codeと同じくshで実行する。 */
 function runRegistered(hook: string, projectDir: string, stdin: string) {
   const command = bashHookCommands().find((candidate) =>
@@ -79,16 +86,19 @@ const DENIED_COMMAND = JSON.stringify({
 });
 
 describe(".claude/settings.json", () => {
-  test.each(["bash-guard"])("registers the %s hook for Bash", (hook) => {
-    expect(
-      bashHookCommands().some(
-        (command) =>
-          command.includes(
-            `"\${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh"`,
-          ) && command.endsWith(` ${hook}`),
-      ),
-    ).toBe(true);
-  });
+  test.each(["bash-guard", "merge-guard"])(
+    "registers the %s hook for Bash",
+    (hook) => {
+      expect(
+        bashHookCommands().some(
+          (command) =>
+            command.includes(
+              `"\${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh"`,
+            ) && command.endsWith(` ${hook}`),
+        ),
+      ).toBe(true);
+    },
+  );
 
   test("points every Bash hook at an existing script", () => {
     const missing = bashHookCommands()
@@ -177,29 +187,139 @@ describe("the registered Bash guard command", () => {
     expect(result.stderr.toString()).toContain("launcher not found");
   });
 
-  test("starts with an absolute path to sh", () => {
-    expect(bashHookCommands()[0]).toStartWith("/bin/sh -c ");
-  });
+  test.each(["bash-guard", "merge-guard"])(
+    "starts the %s command with an absolute path to sh",
+    (hook) => {
+      expect(registeredCommand(hook)).toStartWith("/bin/sh -c ");
+    },
+  );
 
-  test("starts the launcher with an absolute path to sh", () => {
-    const command = bashHookCommands()[0] ?? "";
-    expect(command).toContain('exec /bin/sh "$@"');
-  });
+  test.each(["bash-guard", "merge-guard"])(
+    "starts the launcher of %s with an absolute path to sh",
+    (hook) => {
+      expect(registeredCommand(hook)).toContain('exec /bin/sh "$@"');
+    },
+  );
 
-  test("still runs with an empty PATH", () => {
-    const command = bashHookCommands()[0] ?? "exit 99";
-    const result = Bun.spawnSync(["/bin/sh", "-c", command], {
-      stdin: Buffer.from(DENIED_COMMAND),
-      env: { PATH: "", CLAUDE_PROJECT_DIR: ROOT },
-    });
-    expect(result.exitCode).toBe(0);
-  });
+  test.each(["bash-guard", "merge-guard"])(
+    "still runs %s with an empty PATH",
+    (hook) => {
+      const result = Bun.spawnSync(
+        ["/bin/sh", "-c", registeredCommand(hook) || "exit 99"],
+        {
+          stdin: Buffer.from(DENIED_COMMAND),
+          env: { PATH: "", CLAUDE_PROJECT_DIR: ROOT },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+    },
+  );
 
   test("runs the guard when CLAUDE_PROJECT_DIR is set", () => {
     const result = runRegistered("bash-guard", ROOT, DENIED_COMMAND);
     expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
   });
 });
+
+const GUARDED_MERGE = JSON.stringify({
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command: "gh pr merge 1 --repo example/test-hold" },
+  cwd: "/repo",
+});
+
+describe("the registered merge guard command", () => {
+  test("allows the tool call when CLAUDE_PROJECT_DIR is empty", () => {
+    expect(runRegistered("merge-guard", "", GUARDED_MERGE).exitCode).toBe(0);
+  });
+
+  test("allows the tool call when the launcher does not exist", () => {
+    expect(
+      runRegistered("merge-guard", "/nonexistent", GUARDED_MERGE).exitCode,
+    ).toBe(0);
+  });
+
+  test("prints no decision when the launcher does not exist", () => {
+    const result = runRegistered("merge-guard", "/nonexistent", GUARDED_MERGE);
+    expect(result.stdout.toString()).not.toContain("permissionDecision");
+  });
+
+  test("tells the user that merges were not checked when the launcher does not exist", () => {
+    const result = runRegistered("merge-guard", "/nonexistent", GUARDED_MERGE);
+    const output: unknown = JSON.parse(result.stdout.toString());
+    expect(output).toEqual({
+      systemMessage: expect.stringMatching(/merge guard.*did not run.*merges/),
+    });
+  });
+
+  test("names the missing launcher", () => {
+    const result = runRegistered("merge-guard", "", GUARDED_MERGE);
+    expect(result.stderr.toString()).toContain("not found");
+  });
+
+  test("allows the tool call when the launcher exists but the hook script does not", () => {
+    const result = withProjectWithoutHookScript((directory) =>
+      runRegistered("merge-guard", directory, GUARDED_MERGE),
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("tells the user that merges were not checked when the hook script does not exist", () => {
+    const result = withProjectWithoutHookScript((directory) =>
+      runRegistered("merge-guard", directory, GUARDED_MERGE),
+    );
+    const output: unknown = JSON.parse(result.stdout.toString());
+    expect(output).toEqual({
+      systemMessage: expect.stringMatching(/merge guard.*did not run.*merges/),
+    });
+  });
+
+  test("prints no decision when the hook script does not exist", () => {
+    const result = withProjectWithoutHookScript((directory) =>
+      runRegistered("merge-guard", directory, GUARDED_MERGE),
+    );
+    expect(result.stdout.toString()).not.toContain("permissionDecision");
+  });
+
+  test("allows a command that is not guarded with no output", () => {
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "git status" },
+      cwd: ROOT,
+    });
+    expect(runRegistered("merge-guard", ROOT, input).stdout.toString()).toBe(
+      "",
+    );
+  });
+
+  test("allows a tool other than Bash with no output", () => {
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Read",
+      tool_input: { file_path: "/x" },
+      cwd: ROOT,
+    });
+    expect(runRegistered("merge-guard", ROOT, input).stdout.toString()).toBe(
+      "",
+    );
+  });
+});
+
+/** 起動スクリプトだけを持ち、merge-guardのスクリプトが無いプロジェクトのディレクトリで`run`を実行する。 */
+function withProjectWithoutHookScript<T>(run: (directory: string) => T): T {
+  const directory = mkdtempSync(join(tmpdir(), "hook-project-"));
+  try {
+    mkdirSync(join(directory, "scripts/claude-hooks"), { recursive: true });
+    writeFileSync(
+      join(directory, "scripts/claude-hooks/run.sh"),
+      readFileSync(join(ROOT, "scripts/claude-hooks/run.sh")),
+    );
+    return run(directory);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 describe("docs/security.md", () => {
   const security = readFileSync(join(ROOT, "docs/security.md"), "utf8");

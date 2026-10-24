@@ -521,7 +521,25 @@ describe("list", () => {
 
     const note =
       lines.find((l) => l.includes("dependabot_merge_enabled")) ?? "";
-    expect(note).toContain("gh pr merge");
+    expect(note).toContain(
+      "a local Claude session is stopped before gh pr merge",
+    );
+  });
+
+  test("does not say that gh pr merge is not stopped", async () => {
+    const { lines } = await run({ kind: "list" });
+
+    const note =
+      lines.find((l) => l.includes("dependabot_merge_enabled")) ?? "";
+    expect(note).not.toContain("is not stopped");
+  });
+
+  test("says which routes a merge hold does not stop", async () => {
+    const { lines } = await run({ kind: "list" });
+
+    const note =
+      lines.find((l) => l.includes("dependabot_merge_enabled")) ?? "";
+    expect(note).toContain("the GitHub web UI");
   });
 
   test("reads through the read client only", async () => {
@@ -785,7 +803,9 @@ describe("place", () => {
 
     const note =
       lines.find((l) => l.includes("dependabot_merge_enabled")) ?? "";
-    expect(note).toContain("gh pr merge");
+    expect(note).toContain(
+      "a local Claude session is stopped before gh pr merge",
+    );
   });
 
   test("refuses when an active hold of the holder already exists", async () => {

@@ -1356,9 +1356,10 @@ describe("migrations other than the one that creates the holds table", () => {
 // 保留を読む主体、マージを要求する主体、CLI、miseのタスク
 // ---------------------------------------------------------------------------
 
-// 保留を読んで止まる主体。実行時に保留のモジュールを読み込んでよいのは、ここに挙げたファイルだけである。
+// `f/`のWindmillで保留を読んで止まる主体。`f/`の下で実行時に保留のモジュールを読み込んでよいのは、ここに挙げたファイルだけである。
 // 読み込んでよい名前は`listActiveHolds`だけで、書く関数は読み込めない。
-// 読む主体を足す段では、このリストに足す。
+// `f/`のWindmillの読み手を足す段では、このリストに足す。
+// ローカルのフックの読み手(`scripts/claude-hooks/merge-read.ts`)は`f/`の外にあるので、このリストに入れず、下の別の`describe`で固定する。
 const HOLD_READERS = [
   "f/factory/steps/dependabot_finish.ts",
   "f/factory/poll_dependabot.ts",
@@ -1573,5 +1574,90 @@ describe("mise.toml hold tasks", () => {
     );
 
     expect(others).toEqual([]);
+  });
+});
+
+// ローカルのフック。マージと反映の前に保留を読んで止める。`f/`の外にあるので、上の走査には入らない。
+describe("the merge guard hook", () => {
+  const GUARD = "scripts/claude-hooks/merge-guard.ts";
+  const READ = "scripts/claude-hooks/merge-read.ts";
+  const TARGETS = "scripts/claude-hooks/merge-targets.ts";
+  const FILES = [GUARD, READ, TARGETS];
+
+  /** コメントを落としたコード。 */
+  function codeOfFile(path: string): string {
+    return codeOf(read(path));
+  }
+
+  test("merge-read.ts reads the holds by listActiveHolds only", () => {
+    expect(runtimeHoldNames(read(READ))).toEqual(["listActiveHolds"]);
+  });
+
+  test.each([
+    "placeHold",
+    "releaseHold",
+    "writeVariable",
+    "variable add",
+    "variable update",
+  ])("merge-read.ts does not use %s", (name) => {
+    expect(codeOfFile(READ)).not.toContain(name);
+  });
+
+  test('merge-read.ts does not open a connection in the "write" mode', () => {
+    expect(codeOfFile(READ)).not.toMatch(/mode:\s*"write"/);
+  });
+
+  test("merge-read.ts connects in the read mode", () => {
+    expect(codeOfFile(READ)).toMatch(/mode:\s*"read"/);
+  });
+
+  test("merge-read.ts takes the database name from HOLD_DATABASE", () => {
+    expect(codeOfFile(READ)).toContain("HOLD_DATABASE");
+  });
+
+  test("merge-read.ts does not name a database", () => {
+    expect(read(READ)).not.toContain("datatable_db");
+  });
+
+  test("merge-read.ts does not name the holds table", () => {
+    expect(read(READ)).not.toContain("factory.holds");
+  });
+
+  test.each(FILES)("%s does not use Bun", (path) => {
+    expect(codeOfFile(path)).not.toMatch(/\bBun\./);
+  });
+
+  test.each(FILES)("%s does not use import.meta.dir", (path) => {
+    expect(codeOfFile(path)).not.toContain("import.meta.dir");
+  });
+
+  test("merge-guard.ts does not import merge-read.ts statically", () => {
+    const statics = scannedImports(read(GUARD))
+      .filter((entry) => entry.kind === "import-statement")
+      .map((entry) => entry.path);
+    expect(statics).not.toContain("./merge-read.ts");
+  });
+
+  test("merge-guard.ts imports merge-read.ts dynamically", () => {
+    const dynamics = scannedImports(read(GUARD))
+      .filter((entry) => entry.kind === "dynamic-import")
+      .map((entry) => entry.path);
+    expect(dynamics).toEqual(["./merge-read.ts"]);
+  });
+
+  test("merge-guard.ts loads only the hook files at start", () => {
+    const statics = scannedImports(read(GUARD))
+      .filter((entry) => entry.kind === "import-statement")
+      .map((entry) => entry.path)
+      .sort();
+    expect(statics).toEqual(["./hook-io.ts", "./merge-targets.ts"]);
+  });
+
+  test("merge-targets.ts loads only the shell parsing at start", () => {
+    const statics = scannedImports(read(TARGETS))
+      .filter((entry) => entry.kind === "import-statement")
+      .map((entry) => entry.path)
+      .sort();
+    expect(statics).toEqual(["./env-exposure.ts", "./shell-words.ts"]);
   });
 });

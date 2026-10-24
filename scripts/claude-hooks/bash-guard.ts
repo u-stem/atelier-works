@@ -16,6 +16,8 @@
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
 // - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
 //   一覧(`list`)は許す。ベストエフォートで、別名の呼び出しや変数で組んだパスは止めない。
+// - マージと反映(`gh pr merge`、`wmill sync push`など)を保留の間止める判定は、別のフック(`merge-guard.ts`)が行う。
+//   このフックとは独立に動き、どちらかが拒否すれば止まる。
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
 // 字句に分けられないコマンドと、実行するまでpush先が決まらないコマンドは拒否する。
 // `cd`と`pushd`の文字どおりの移動先と、`git checkout`などで切り替えたブランチは、続くコマンドの前提にする。
@@ -49,6 +51,7 @@ import {
   ASSIGNMENT,
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
+  literalShellInputs,
   type MiseExec,
   miseOptionTakesNext,
   parseCommandLine,
@@ -328,6 +331,8 @@ const CONFIG_READ_OR_UNSET_OPTIONS: ReadonlySet<string> = new Set([
 ]);
 
 export const REASONS = {
+  envSplit:
+    "The string of env -S is decided at run time or cannot be split, so the command it runs cannot be checked. Write the command out without env -S.",
   unparsable: (error: string) =>
     `Could not parse the command (${error}). Rewrite it with balanced quotes and simpler syntax so the guard can check it.`,
   force:
@@ -581,7 +586,10 @@ function checkSimpleCommand(
   };
   const secret = findSecretReference(command, context);
   if (secret !== null) return deny(secret);
-  const { assignments, words, wrappers, mise } = stripWrappers(command.words);
+  const { assignments, words, wrappers, mise, opaque } = stripWrappers(
+    command.words,
+  );
+  if (opaque) return deny(REASONS.envSplit);
   const program = baseName(words[0]?.text ?? "");
   const declared = ENVIRONMENT_BUILTINS.has(program)
     ? words.slice(1).filter((word) => ASSIGNMENT.test(word.text))
@@ -880,33 +888,6 @@ function checkShellInput(
     if (decision.kind === "deny") return decision;
   }
   return ALLOW;
-}
-
-/**
- * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
- * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
- * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、空の配列を返して通す。
- * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
- */
-function literalShellInputs(command: SimpleCommand): readonly string[] | null {
-  if (command.inputs.length > 0)
-    return command.inputs.map((input) => input.text);
-  const source = command.pipedFrom;
-  if (source === null) return [];
-  const { words } = stripWrappers(source.words);
-  const program = baseName(words[0]?.text ?? "");
-  if (program !== "echo" && program !== "printf") return [];
-  let args = words.slice(1);
-  if (program === "echo") {
-    const first = args.findIndex((word) => !/^-[neE]+$/.test(word.text));
-    args = first === -1 ? [] : args.slice(first);
-  }
-  if (args.some((word) => word.dynamic)) return null;
-  // `\n`や`\t`は、echoとprintfが改行や区切りに直す。
-  const texts = args.map((word) =>
-    word.text.replace(/\\n/g, "\n").replace(/\\t/g, " "),
-  );
-  return program === "echo" ? [texts.join(" ")] : texts;
 }
 
 function parseGitInvocation(
