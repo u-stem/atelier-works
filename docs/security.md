@@ -2381,6 +2381,7 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 - ローカルのフック(`scripts/claude-hooks/`)とそのテスト(`tests/scripts/claude-hooks/`)。subagentの拒否を決めるためである。
 - miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)。置いたファイルがタスクとして実行され、フックが見分けるタスク名の外から操作できるためである。
 - 保留のCLI(`scripts/hold.ts`と`scripts/hold_psql.ts`)とそのテスト。
+- 保留のCLIが起動のたびに読み込む、凍結の道具(`scripts/freeze.ts`、`f/factory/lib/freezes.ts`、`f/factory/lib/freeze_apply.ts`)。書き換えられると、保留のCLIの実行に任意の処理を足せるためである。
 - 実行役のテストと、それが使う一時リポジトリの補助(`tests/fixtures/host_apply_repo.ts`)。
 - `.tool-versions`、`.env`系、`.node-version`、`.bun-version`。
 
@@ -2555,10 +2556,14 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
   `f/factory/freezes`が、除外にも手元のファイルにも無いためである。
   すべての凍結が、警告なしに消える。
   凍結は確認作業のための期限つきの補助であり、消えた場合の影響は、スケジュールが次の反映で戻るだけに限られるため、受け入れる。
-- 凍結の実装は保護パスの外にある。
-  `scripts/bootstrap.sh`の全手順のモードと`mise run push`、`deploy`は、保護パスに入れていない`scripts/freeze.ts`と`f/factory/lib/freeze*.ts`を、ホストのユーザーの権限で動かす。
+- 凍結の道具のうち、`scripts/freeze.ts`、`f/factory/lib/freezes.ts`、`f/factory/lib/freeze_apply.ts`は保護パスに入れる。
+  保留のCLIが起動のたびにこの3つを読み込み、書き換えられるとCLIの実行に任意の処理を足せるためである。
+  `self_update`が行う凍結の通常の修正も、保護パスの変更になるので、人が確認してマージする。
+  凍結の変更が人に回るのは、凍結の仕組みの修正が、保留のCLIの実行にも効くためで、受け入れる。
+- 保護パスに入れていない`f/factory/lib/freeze*.ts`のファイルは、ホストのユーザーの権限で動く。
+  動かすのは、`scripts/bootstrap.sh`の全手順のモードと、`mise run push`、`deploy`である。
   これらのファイルを書き換えるPRがマージされると、次の実行でその内容が動く。
-  `self_update`も同じファイルを使い、正当な変更を止めたくないため、保護パスには入れず受け入れる。
+  正当な変更を止めたくないため、受け入れる。
 - 同時書き込みで、行が失われうる。
   `self_update`の行の削除と人の`place`が重なる窓はミリ秒から秒、CLI同士が重なる窓は秒単位である。
   `place`は書いた後に読み直し、自分の行が残っているかを確かめる。
@@ -2672,14 +2677,23 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 - `gh pr merge`は、保留で止まらない。
   ローカルのセッションの手前で止めるフックは、未実装である。
 - subagentの保留の操作は、`scripts/claude-hooks/hold-guard.ts`が、拒否を既定にして拒否する。
+  判定はプログラムの種類によらず、語や標準入力に保留のコードの字面があるかで行う。
   保留のコードを指す語を含む呼び出しは、`list`と検査の道具の2つの形だけを許す。
+  引用符の外のglobと文字クラス(`scripts/hol?.ts`、`scripts/hol[d].ts`、`hold:[pr]*`)は、保留のコードの名前に当たりうれば拒否する。
+  `$'\x68old:place'`のように文字コードで書いた語は、展開してから判定する。
+  `mise -q exec --`や`mise -C /repo x --`のように、全体オプションを前に置いた`mise exec`は、オプションを読み飛ばして内側のコマンドを判定する。
+  `npm`、`pnpm`、`pnpx`、`yarn`も実行系として扱う。
   拒否はベストエフォートで、境界ではない。
   別名の呼び出し、変数で組んだパス、`docker compose exec db psql`に渡す語を組み立てて書く形、新しいファイルを書いて実行する形は止めない。
+  コマンドを起動する前置き(`find -exec`、`watch`、`parallel`、`ssh`、`/usr/bin/time`、`caffeinate`など)の後ろに実行系を置く形と、実行系以外が文字列で受け取るコード(`python -c`、`perl -e`など)も止めない。
   BashとDockerを持つ主体は、psqlで保留を直接書ける。
   止めるのは、誤操作と、拒否を知らない呼び出しである。
   フックのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
   miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)の保護は、Factoryのpr_fixとimplementのフローにだけ効く。
   ローカルのsubagentが、そこに書いて実行する形は止めない。
+- `mise run hold:list -- '<文字列>'`で余分な引数を渡しても、シェルの文としては解釈されない。
+  実機で確かめた。miseは追加の引数を引用符で囲んでコマンドに続け、CLIは`list`の後ろの引数を拒否する。
+  置く・解除する操作と違い、`hold:list`は標準入力を使わないので、`raw`にしない。
 - CLIの接続先のデータベースは、`scripts/hold.ts`の定数だけに書く。
   実DBの検査は、使い捨てのデータベースだけを渡す。
   テストが、この2つを固定する。
@@ -2689,6 +2703,8 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 - 保留で待つPRが増えても、取得の通知は周回ごとに種類ごとの1件に保つ。
   本文にPRの数を載せないので、数が変わっても別の行は並ばない。
   保留を読めない通知は、保留を読めた周回に解決する。
+  壊れた行と想定外の失敗の通知は、本文の先頭にリポジトリを置き、そのリポジトリを読めた周回に解決する。
+  別のリポジトリを読めても、壊れたままのリポジトリの通知は解決しない。
   保留は1行が最長24時間なので、受け入れる。
 - 止め方が、スケジュールの凍結(変数)と、保留(表)に分かれる。
   範囲が違うので、同じ対象に二重にはならない。
@@ -2788,7 +2804,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
 | `/proc/<pid>/environ`(`task/<tid>`の下を含む)を引数やリダイレクトに含むコマンド | プロセスの環境変数がそのまま入っている |
 | 書き込む形(`KEY=VALUE`、または`--stdin`と鍵1つ)を持たない`mise set` | `mise.local.toml`の値を一覧する |
-| `mise generate git-pre-commit`(別名`pre-commit`)と`mise generate github-action`の`--write`(`-w`を含む短いフラグの束を含む)。`generate`の別名`gen`と`g`も同じ | `.git/hooks`と`.github/workflows`へ書き、lefthookのフックやCIの検査を上書きできる。`--hook`と`--task`は単独では書かないので拒否しない |
+| `mise generate git-pre-commit`(別名`pre-commit`)と`mise generate github-action`の`--write`(`-w`を含む短いフラグの束を含む)。`generate`の別名`gen`と`g`も同じ。生成先を問わず、`generate`の後ろに`.git/hooks`、`.git/config`、`.github/workflows`を含む語か、実行時に決まる語がある形 | `.git/hooks`と`.github/workflows`へ書き、lefthookのフックやCIの検査を上書きできる。`task-docs --output`のように、書き先を引数で選べる生成先もある。`--hook`と`--task`は単独では書かないので拒否しない。`--write`の省略形(`--wri`、`--w`)と別名(`gha`)は、この版のmiseが受け付けないことを実機で確かめたので、拒否しない |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
@@ -2930,10 +2946,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - シェルのエイリアスと関数
 - `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
 - `mise`のほかのサブコマンドによる秘密値の出力(`mise env`、`mise config`、`mise hook-env`、`mise en`、`mise direnv exec`、`mise mcp`)
-- サブコマンドの前にグローバルオプションを置くと、設定の前方一致の拒否が外れる(`mise -E local env`、`mise -q x -- env`など)
-- オプションを前に置いた`mise exec`の内側のシェルの`-c`(`mise -q x -- bash -c 'mise set'`)
-- オプションを前に置いた`mise exec`の`-c`と`--command`(`mise -q x -c 'mise set'`)
-- オプションを前に置いた`mise exec`の内側に、標準入力やヒアストリングで渡すシェル(`echo 'mise set' | mise -q x -- bash`)
+- サブコマンドの前にグローバルオプションを置くと、設定の前方一致の拒否が外れる(`mise -E local env`など)
 - `mise run`の`-s`と`--shell`、`mise exec`の`-c`の位置と束ねた形、`xargs`から起動する`mise`
 - `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`などの`MISE_*`の環境変数、`BASH_ENV`や`PATH`の差し替え
 - `mise set`のサブコマンドの前に、値を取る隠しオプションを置く形(未知の版で増えたもの)
@@ -2954,6 +2967,9 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
   - 変数や文字列の連結で組んだパス、動的なimport
   - `docker compose exec db psql`に渡す語を、組み立てて書く形
   - 新しいファイルを書いて実行する形。`mise-tasks/`と`.mise-tasks/`は保護パスだが、止めるのはFactoryのフローだけで、ローカルのsubagentには効かない
+  - コマンドを起動する前置き(`find -exec`、`watch`、`parallel`、`ssh`、`/usr/bin/time`、`caffeinate`、`script`、`strace`など)の後ろに実行系を置く形
+  - 実行系以外が文字列で受け取るコード(`python -c`、`perl -e`、`ruby -e`、`awk`の`system()`など)
+  - 実行時に決まる語を含む`mise run`は、保留の操作と区別できないので拒否する。静的な値で書けば通る。全体オプションの値(`mise -C "$DIR" run check`)の変数は、保留とは別の規則で拒否する
 - wmill CLIによる秘密値の読み取り
   - secret変数だけではない
   - `wmill instance get-config --show-secrets`はインスタンスの設定を出す

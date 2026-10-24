@@ -9,6 +9,14 @@
 - `scripts/freeze.ts`
 - `f/factory/self_update.ts`
 
+保留のCLIは、起動のたびに次の3つのファイルを読み込むので、これらを保護パスに入れる。
+
+- `scripts/freeze.ts`
+- `f/factory/lib/freezes.ts`
+- `f/factory/lib/freeze_apply.ts`
+
+これらを変更するPRは、`self_update`の修正も含め、人が確認してマージする。
+
 残るリスクは[セキュリティ](../security.md)の「スケジュールの凍結」に書く。
 
 凍結は、スケジュールを反映から外す仕組みである。
