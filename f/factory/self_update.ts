@@ -484,6 +484,30 @@ async function resolveChangedPaths(
     : diffPaths(run, dir, oldSha, newSha);
 }
 
+type DeployedShaAdvance = {
+  readonly changedPaths: string[];
+  readonly classification: ReturnType<typeof classifyChangedPaths>;
+};
+
+/**
+ * 変更パスを列挙して分類し、`deployed_sha`を更新する。
+ */
+export async function advanceDeployedSha(deps: {
+  readonly setSha: () => Promise<void>;
+  readonly onUpdated: () => void;
+  readonly listChangedPaths: () => Promise<string[]>;
+  readonly hostSectionsChanged: () => Promise<boolean>;
+}): Promise<DeployedShaAdvance> {
+  const changedPaths = await deps.listChangedPaths();
+  const miseChanged = changedPaths.includes(MISE_TOML_PATH)
+    ? await deps.hostSectionsChanged()
+    : false;
+  const classification = classifyChangedPaths(changedPaths, miseChanged);
+  await deps.setSha();
+  deps.onUpdated();
+  return { changedPaths, classification };
+}
+
 // ---------------------------------------------------------------------------
 // `wmill` CLIの子プロセスの実行
 // ---------------------------------------------------------------------------
@@ -1151,38 +1175,39 @@ async function updateSelf(
       secrets,
     );
 
-    // 変更パスの列挙は`deployed_sha`の更新より前に行う。更新の後に失敗すると、
-    // 反映が済んでいるのに失敗の行が残り、次の回も反映済みとして扱われるため。
-    const changedPaths = await resolveChangedPaths(
-      runCommand,
-      factoryClone.dir,
-      deployedSha,
-      currentSha,
-    );
-    const miseChanged = changedPaths.includes(MISE_TOML_PATH)
-      ? await miseTomlHostSectionsChanged(
+    const { changedPaths, classification } = await advanceDeployedSha({
+      setSha: () =>
+        setDeployedSha(
+          {
+            set: () =>
+              wmill.setVariable(
+                "f/factory/deployed_sha",
+                currentSha,
+                false,
+                "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+              ),
+            get: () => wmill.getVariable("f/factory/deployed_sha"),
+          },
+          currentSha,
+        ),
+      onUpdated: () => {
+        deployedShaUpdated = true;
+      },
+      listChangedPaths: () =>
+        resolveChangedPaths(
           runCommand,
           factoryClone.dir,
           deployedSha,
           currentSha,
-        )
-      : false;
-    const classification = classifyChangedPaths(changedPaths, miseChanged);
-
-    await setDeployedSha(
-      {
-        set: () =>
-          wmill.setVariable(
-            "f/factory/deployed_sha",
-            currentSha,
-            false,
-            "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
-          ),
-        get: () => wmill.getVariable("f/factory/deployed_sha"),
-      },
-      currentSha,
-    );
-    deployedShaUpdated = true;
+        ),
+      hostSectionsChanged: () =>
+        miseTomlHostSectionsChanged(
+          runCommand,
+          factoryClone.dir,
+          deployedSha,
+          currentSha,
+        ),
+    });
 
     // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
     let pullRequests: DeploymentPullRequest[] = [];

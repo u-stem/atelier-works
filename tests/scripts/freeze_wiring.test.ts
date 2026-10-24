@@ -222,7 +222,7 @@ describe("self_update deploy freeze", () => {
     const text = await source();
 
     expect(at(text, 'return { outcome: "held"')).toBeLessThan(
-      at(text, "await setDeployedSha("),
+      at(text, "setDeployedSha("),
     );
   });
 
