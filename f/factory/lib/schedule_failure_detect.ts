@@ -391,7 +391,6 @@ export async function detectScheduleFailures(
   const processedUntilMs = nextProcessedUntil({
     baselineMs: window.baselineMs,
     runStartedAtMs: startedAtMs,
-    truncated,
     continued,
   });
 

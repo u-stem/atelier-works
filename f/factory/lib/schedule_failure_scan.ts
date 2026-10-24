@@ -34,7 +34,7 @@ export const SCAN_PAGE_SIZE = 100;
 export const SCAN_MAX_PAGES = 5;
 
 /**
- * 全件を読み終えたとき、続きの位置を実行の開始よりこの時間だけ手前に置く。
+ * 通常の回(読み終えた回も、ページの上限で打ち切った回も)の`processed_until`を、実行の開始よりこの時間だけ手前に置く。
  * ジョブの完了時刻の記録と一覧への表示のずれで、取りこぼさないためである。
  * 重なった分は、記録済みのジョブとして飛ばす。
  */
@@ -85,7 +85,7 @@ export type ScanWindow = {
   readonly baselineMs: number;
   /** 一覧に頼む開始時刻の下限。 */
   readonly startedAfterMs: number;
-  /** 完了時刻がこれ以降のジョブを新しい失敗とする。打ち切った回の続きでは0で、完了時刻では絞らない。 */
+  /** 完了時刻がこれ以降のジョブを新しい失敗とする。打ち切った回の続きでは、打ち切った最初の回の基準(`scan_completed_from`)を引き継ぐ。 */
   readonly completedFromMs: number;
   /** 続きの位置が古すぎて、`SCAN_MAX_WINDOW_MS`に切り詰めたか。 */
   readonly clamped: boolean;
@@ -226,6 +226,8 @@ export function extractScheduleFailures(
   baselineMs: number,
 ): { failures: ScheduleFailureJob[]; malformed: number } {
   const failures: ScheduleFailureJob[] = [];
+  // ページのずれで、同じジョブが2回出ることがある。
+  const seen = new Set<string>();
   let malformed = 0;
   for (const job of jobs) {
     if (!isRecord(job)) {
@@ -256,9 +258,10 @@ export function extractScheduleFailures(
       malformed += 1;
       continue;
     }
-    if (completedAtMs < baselineMs) {
+    if (completedAtMs < baselineMs || seen.has(job.id)) {
       continue;
     }
+    seen.add(job.id);
     failures.push({
       id: job.id,
       scriptPath: job.script_path,
@@ -480,7 +483,7 @@ export function readScanStartedAfter(result: unknown): number | null {
 
 /**
  * 次の回の`processed_until`を返す。
- * 通常の回は、読み終えたか打ち切ったかによらず、この回の開始から`SCAN_OVERLAP_MS`手前(`baselineMs`より戻さない)にする。
+ * 通常の回は、読み終えたか打ち切ったかによらず(打ち切りは入力に要らない)、この回の開始から`SCAN_OVERLAP_MS`手前(`baselineMs`より戻さない)にする。
  * 最後の失敗の完了時刻に留めると、その後に失敗が無い間、位置が進まず、同じ範囲を読み直し続けるためである。
  * 打ち切った回の時点で実行中だったジョブの失敗は、続きの回が読む開始時刻の下限より前に開始している。
  * その失敗は、続きを読み終えた後の通常の回が、この位置と遡りで読み直して拾う。
@@ -489,7 +492,6 @@ export function readScanStartedAfter(result: unknown): number | null {
 export function nextProcessedUntil(input: {
   readonly baselineMs: number;
   readonly runStartedAtMs: number;
-  readonly truncated: boolean;
   readonly continued: boolean;
 }): number {
   if (input.continued) {
