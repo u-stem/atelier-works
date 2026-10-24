@@ -5,6 +5,7 @@ export const SCAN_LOOKBACK_MS = 0;
 export const SCAN_MAX_WINDOW_MS = 0;
 export const SCAN_PAGE_SIZE = 0;
 export const SCAN_MAX_PAGES = 0;
+export const SCAN_OVERLAP_MS = 0;
 export const ERROR_MAX_CHARS = 0;
 
 export type ScheduleFailureJob = {
@@ -91,9 +92,11 @@ export async function collectPages(
   return { jobs: [], truncated: false };
 }
 
-export function nextProcessedUntil(
-  _failures: readonly ScheduleFailureJob[],
-  _runStartedAtMs: number,
-): number {
+export function nextProcessedUntil(_input: {
+  readonly failures: readonly ScheduleFailureJob[];
+  readonly baselineMs: number;
+  readonly runStartedAtMs: number;
+  readonly truncated: boolean;
+}): number {
   return 0;
 }

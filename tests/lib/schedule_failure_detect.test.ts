@@ -13,6 +13,7 @@ import {
 import {
   SCAN_LOOKBACK_MS,
   SCAN_MAX_WINDOW_MS,
+  SCAN_OVERLAP_MS,
   SCAN_PAGE_SIZE,
   SCHEDULE_DETECTOR_PATH,
 } from "../../f/factory/lib/schedule_failure_scan.ts";
@@ -503,26 +504,27 @@ describe("detectScheduleFailures: recording", () => {
 });
 
 describe("detectScheduleFailures: the point to continue from", () => {
-  test("is the completion of the last failure", async () => {
+  test("is a minute before the start of the run", async () => {
     const world = newWorld();
     world.failurePages = [
       [failedJob(1, NOW - 20 * MIN), failedJob(2, NOW - 10 * MIN)],
     ];
     const result = await detectScheduleFailures(harness(world).deps);
-    expect(result.processed_until).toBe(iso(NOW - 10 * MIN));
+    expect(result.processed_until).toBe(iso(NOW - SCAN_OVERLAP_MS));
   });
 
-  test("includes a failure that was already recorded", async () => {
+  test("moves on when the only failure was already recorded", async () => {
     const world = newWorld();
+    world.baselineResult = { processed_until: iso(NOW - 10 * MIN) };
     world.failurePages = [[failedJob(1, NOW - 10 * MIN)]];
     world.recorded.add(jobIdOf(1));
     const result = await detectScheduleFailures(harness(world).deps);
-    expect(result.processed_until).toBe(iso(NOW - 10 * MIN));
+    expect(result.processed_until).toBe(iso(NOW - SCAN_OVERLAP_MS));
   });
 
-  test("is the start of the run when there is no failure", async () => {
+  test("is a minute before the start of the run when there is no failure", async () => {
     const result = await detectScheduleFailures(harness(newWorld()).deps);
-    expect(result.processed_until).toBe(iso(NOW));
+    expect(result.processed_until).toBe(iso(NOW - SCAN_OVERLAP_MS));
   });
 
   test("reports the scan mode", async () => {

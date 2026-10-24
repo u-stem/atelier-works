@@ -14,6 +14,7 @@ import {
   SCAN_LOOKBACK_MS,
   SCAN_MAX_PAGES,
   SCAN_MAX_WINDOW_MS,
+  SCAN_OVERLAP_MS,
   SCAN_PAGE_SIZE,
   SCHEDULE_DETECTOR_PATH,
   scanWindow,
@@ -60,6 +61,10 @@ describe("the contract constants", () => {
 
   test("the scan reads five pages at most", () => {
     expect(SCAN_MAX_PAGES).toBe(5);
+  });
+
+  test("a scan overlaps the previous one by a minute", () => {
+    expect(SCAN_OVERLAP_MS).toBe(60 * 1000);
   });
 
   test("the detector is the script of the schedule it is set on", () => {
@@ -619,14 +624,60 @@ describe("nextProcessedUntil", () => {
     completedAt: new Date(completedAtMs).toISOString(),
     canceledByTimeout: false,
   });
+  const BASELINE = NOW - 30 * MIN;
 
-  test("is the start of the run without a failure", () => {
-    expect(nextProcessedUntil([], NOW)).toBe(NOW);
+  test("overlaps the previous scan by the margin when the whole window was read", () => {
+    expect(
+      nextProcessedUntil({
+        failures: [f(NOW - 10 * MIN)],
+        baselineMs: BASELINE,
+        runStartedAtMs: NOW,
+        truncated: false,
+      }),
+    ).toBe(NOW - SCAN_OVERLAP_MS);
   });
 
-  test("is the completion of the last failure", () => {
+  test("moves past a failure that completed long before the run", () => {
     expect(
-      nextProcessedUntil([f(NOW - 20 * MIN), f(NOW - 10 * MIN)], NOW),
+      nextProcessedUntil({
+        failures: [f(BASELINE)],
+        baselineMs: BASELINE,
+        runStartedAtMs: NOW,
+        truncated: false,
+      }),
+    ).toBe(NOW - SCAN_OVERLAP_MS);
+  });
+
+  test("never moves back before the baseline", () => {
+    expect(
+      nextProcessedUntil({
+        failures: [],
+        baselineMs: NOW,
+        runStartedAtMs: NOW,
+        truncated: false,
+      }),
+    ).toBe(NOW);
+  });
+
+  test("is the completion of the last failure when the pages ran out", () => {
+    expect(
+      nextProcessedUntil({
+        failures: [f(NOW - 20 * MIN), f(NOW - 10 * MIN)],
+        baselineMs: BASELINE,
+        runStartedAtMs: NOW,
+        truncated: true,
+      }),
     ).toBe(NOW - 10 * MIN);
+  });
+
+  test("stays at the baseline when the pages ran out without a failure", () => {
+    expect(
+      nextProcessedUntil({
+        failures: [],
+        baselineMs: BASELINE,
+        runStartedAtMs: NOW,
+        truncated: true,
+      }),
+    ).toBe(BASELINE);
   });
 });
