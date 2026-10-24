@@ -240,6 +240,12 @@ describe("SCHEDULE_FAILING_CHECK_FAILED_NOTICE", () => {
     expect(SCHEDULE_FAILING_CHECK_FAILED_NOTICE.message).toContain("権限");
   });
 
+  test("points to the logs of the detector that reads the history", () => {
+    expect(SCHEDULE_FAILING_CHECK_FAILED_NOTICE.message).toContain(
+      "detect_schedule_failuresのジョブのログ",
+    );
+  });
+
   test("does not depend on a schedule or an error", () => {
     expect(SCHEDULE_FAILING_CHECK_FAILED_NOTICE.message).not.toContain(
       "f/factory",

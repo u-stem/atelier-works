@@ -97,8 +97,8 @@ describe("staleNotifyThresholdMs", () => {
     ]);
   });
 
-  test("not_running threshold is 16 minutes", () => {
-    expect(GH_COLLECT_NOT_RUNNING_AFTER_MS).toBe(16 * MIN);
+  test("not_running threshold is 18 minutes", () => {
+    expect(GH_COLLECT_NOT_RUNNING_AFTER_MS).toBe(18 * MIN);
   });
 
   test("not_running threshold is shorter than the notify threshold", () => {

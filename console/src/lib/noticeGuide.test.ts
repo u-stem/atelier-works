@@ -8,11 +8,11 @@ describe("noticeGuide", () => {
     );
   });
 
-  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(660秒)から作る。
+  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(780秒)から作る。
   // f/はConsoleからimportできないので、分数を直書きして一致を固定する。
   test("states the same wait minutes as the periodic worker notice", () => {
     expect(noticeGuide("periodic_worker_missing").meaning).toContain(
-      "予定時刻から11分以上",
+      "予定時刻から13分以上",
     );
   });
 
@@ -110,6 +110,23 @@ describe("noticeGuide", () => {
   test("tells the operator to run mise run up for a missing default worker", () => {
     expect(noticeGuide("default_worker_missing").action).toContain(
       "mise run up",
+    );
+  });
+
+  // 検出器が成功していないと見なす時間は`f/factory/lib/schedule_detector_heartbeat.ts`の`SCHEDULE_DETECTOR_STALE_MS`(25分)から作る。
+  test("states the same minutes as the schedule detector notice", () => {
+    expect(noticeGuide("schedule_detector_stale").meaning).toContain("25分");
+  });
+
+  test("tells the operator to read the jobs of the schedule detector", () => {
+    expect(noticeGuide("schedule_detector_stale").action).toContain(
+      "detect_schedule_failures",
+    );
+  });
+
+  test("points the failed schedule check to the detector, not to the removed handler", () => {
+    expect(noticeGuide("schedule_failing_check_failed").action).toContain(
+      "detect_schedule_failures",
     );
   });
 

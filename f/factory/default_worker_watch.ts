@@ -6,7 +6,10 @@
 // 読むsecretは通知先の`discord_webhook_url`だけである。
 // tag periodicを付けたscriptの境界は`tests/scripts/periodic_script_boundary.test.ts`が固定する。
 
-import type { ListQueueData } from "windmill-client@1.817.0";
+import type {
+  ListCompletedJobsData,
+  ListQueueData,
+} from "windmill-client@1.817.0";
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
@@ -20,6 +23,10 @@ import {
 } from "./lib/default_worker.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import { type Logger, logger } from "./lib/log.ts";
+import type {
+  ScheduleDetectorCheck,
+  ScheduleDetectorCheckDeps,
+} from "./lib/schedule_detector_heartbeat.ts";
 import type { NoticeRecord } from "./lib/types.ts";
 import {
   runningQueueQuery,
@@ -33,6 +40,10 @@ const DEFAULT_WORKER_NOTICE_RESOLVER = "default_worker_watch";
 export type DefaultWorkerWatchIo = {
   readonly workspace: string;
   readonly listQueue: (query: ListQueueData) => Promise<unknown>;
+  readonly listCompletedJobs: (
+    query: ListCompletedJobsData,
+  ) => Promise<unknown>;
+  readonly getSchedule: (path: string) => Promise<unknown>;
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   readonly resolveNotices: (
     kind: string,
@@ -69,6 +80,46 @@ export function buildWatchDeps(
   };
 }
 
+export function buildHeartbeatDeps(
+  io: DefaultWorkerWatchIo,
+  instanceName: string,
+  log: Logger,
+): ScheduleDetectorCheckDeps {
+  return {
+    workspace: "",
+    now: () => 0,
+    listCompletedJobs: async () => [],
+    getSchedule: async () => ({}),
+    addNotice: io.addNotice,
+    resolveNotices: async () => 0,
+    notify: async () => undefined,
+    instanceName: "",
+    log,
+  };
+}
+
+export async function runWatchChecks(
+  _io: DefaultWorkerWatchIo,
+  _instanceName: string,
+  _log: Logger,
+  _checks: {
+    readonly defaultWorker: (
+      deps: DefaultWorkerCheckDeps,
+    ) => Promise<DefaultWorkerCheck>;
+    readonly scheduleDetector: (
+      deps: ScheduleDetectorCheckDeps,
+    ) => Promise<ScheduleDetectorCheck>;
+  } = {
+    defaultWorker: checkDefaultWorker,
+    scheduleDetector: async () => "unknown",
+  },
+): Promise<{
+  readonly result: DefaultWorkerCheck;
+  readonly schedule_detector: ScheduleDetectorCheck | "error";
+}> {
+  return { result: "unknown", schedule_detector: "error" };
+}
+
 export async function main(): Promise<{ readonly result: DefaultWorkerCheck }> {
   const log = logger("default_worker_watch");
   const config = await loadConfig(() =>
@@ -79,6 +130,12 @@ export async function main(): Promise<{ readonly result: DefaultWorkerCheck }> {
       {
         workspace: wmillDefault.getWorkspace(),
         listQueue: (query) => wmill.JobService.listQueue(query),
+        listCompletedJobs: (query) => wmill.JobService.listCompletedJobs(query),
+        getSchedule: (path) =>
+          wmill.ScheduleService.getSchedule({
+            workspace: wmillDefault.getWorkspace(),
+            path,
+          }),
         addNotice: addNoticeUnlessUnresolved,
         resolveNotices: resolveUnresolvedNoticesByPrefix,
         getWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),

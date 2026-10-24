@@ -296,6 +296,39 @@ describe("buildEmbed periodic_worker_missing", () => {
   });
 });
 
+describe("buildEmbed schedule_detector_stale", () => {
+  const event: NotifyEvent = {
+    kind: "schedule_detector_stale",
+    instance_name: "local",
+    cause: "検出器が成功していません",
+    next_action: "ジョブのログを確かめる",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("検出器が成功していません");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "ジョブのログを確かめる",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("says the detector stopped in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "scheduleの失敗の検出器が止まっています",
+    );
+  });
+});
+
 describe("buildEmbed github_collect_stale", () => {
   const event: NotifyEvent = {
     kind: "github_collect_stale",

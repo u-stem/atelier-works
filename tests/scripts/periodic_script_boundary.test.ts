@@ -56,6 +56,7 @@ const PERIODIC_SCRIPTS: readonly string[] = [
   "f/factory/auto_retry_pr_review",
   "f/factory/collect_github",
   "f/factory/default_worker_watch",
+  "f/factory/detect_schedule_failures",
 ];
 
 /**
@@ -72,6 +73,7 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "f/factory/auto_retry_pr_review": [DISCORD_WEBHOOK_URL],
   "f/factory/collect_github": [GITHUB_READ_TOKENS],
   "f/factory/default_worker_watch": [DISCORD_WEBHOOK_URL],
+  "f/factory/detect_schedule_failures": [DISCORD_WEBHOOK_URL],
 };
 
 /**
@@ -441,13 +443,19 @@ describe("periodic scripts", () => {
     );
   });
 
-  test("the worst wait of a periodic script is 360 seconds", async () => {
+  test("detect_schedule_failures times out in 60 seconds", async () => {
+    expect(
+      await scriptTimeoutSeconds("f/factory/detect_schedule_failures"),
+    ).toBe(60);
+  });
+
+  test("the worst wait of a periodic script is 480 seconds", async () => {
     const timeouts: number[] = [];
     for (const path of PERIODIC_SCRIPTS) {
       timeouts.push((await scriptTimeoutSeconds(path)) ?? 0);
     }
     const total = timeouts.reduce((sum, t) => sum + t, 0);
-    expect(Math.max(...timeouts.map((own) => total - own))).toBe(360);
+    expect(Math.max(...timeouts.map((own) => total - own))).toBe(480);
   });
 
   test("no periodic script declares a variable or resource reference in its inputs", async () => {

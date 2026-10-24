@@ -93,6 +93,12 @@ describe("approvalStatusLabel", () => {
 });
 
 describe("noticeKindLabel", () => {
+  test("names the stopped schedule detector", () => {
+    expect(noticeKindLabel("schedule_detector_stale")).toBe(
+      "scheduleの失敗の検出器の停止",
+    );
+  });
+
   test("names the held draw.io viewer bump", () => {
     expect(noticeKindLabel("drawio_viewer_bump_held")).toBe(
       "draw.ioのビューアの更新の保留",
