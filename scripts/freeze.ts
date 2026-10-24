@@ -1,16 +1,21 @@
 #!/usr/bin/env bun
-// スケジュールの凍結の、人の端末用のCLI。
+// スケジュールの凍結とdeployの保留の、人の端末用のCLI。
 //
-// 凍結は、`wmill sync push`が指定したスケジュールの`enabled`などを書き換えないよう、
+// スケジュールの凍結は、`wmill sync push`が指定したスケジュールの`enabled`などを書き換えないよう、
 // 期限つきで押さえる。確認作業のためにスケジュールを止めている間に、無関係なmergeの
-// 反映で有効に戻されることを防ぐ。状態はWindmillの変数`f/factory/freezes`に置く。
+// 反映で有効に戻されることを防ぐ。
+// deployの保留は、反映全体(push、migration、`self_update`の反映)を期限つきで待たせる。
+// 状態はどちらもWindmillの変数`f/factory/freezes`に置く。
 //
 // 使い方(`mise run`のタスクから呼ぶ):
 //   freeze.ts place --target f/factory/<name> --minutes <n> --reason <text>
+//   freeze.ts place --scope deploy --minutes <n> --reason <text>
 //   freeze.ts list
 //   freeze.ts release <id>
-//   freeze.ts check          有効な凍結を表示する。読めないときは警告だけで通す
-//   freeze.ts push [--prune] [--dry-run]   除外を付けて`wmill sync push`を実行する
+//   freeze.ts check          有効な凍結を表示する。deployの保留があれば1を返す。読めないときは警告だけで通す
+//   freeze.ts push [--prune] [--dry-run]   除外を付けて`wmill sync push`を実行する。deployの保留があれば拒否する
+//   freeze.ts migrate        `wmill datatable migrate up`を実行する。deployの保留があるか、読めなければ拒否する
+//   freeze.ts apply          1回の読み取りで、pushに続けてmigrateを実行する
 //   freeze.ts reset          壊れた変数を空に戻す(人の端末の確認が要る)
 //
 // 置く主体は環境変数`CLAUDECODE`で分ける。あれば`session`、無ければ`human`とする。
@@ -22,20 +27,26 @@ import { resolve } from "node:path";
 import {
   type FreezeInputs,
   type FreezePorts,
+  type FrozenPushPlan,
   loadFreezeInputs,
   mutateFreezeState,
   prepareFrozenPush,
+  readActiveDeployFreezes,
+  shouldHoldDeploy,
 } from "../f/factory/lib/freeze_apply.ts";
 import {
+  activeDeployFreezes,
   activeFreezes,
+  type DeployFreezeEntry,
   emptyFreezeState,
   FREEZE_ID_IN_USE,
   FREEZE_VARIABLE_PATH,
   type FreezeActor,
-  type FreezeEntry,
+  type FreezeState,
   isActive,
   type Outcome,
   parseFreezeState,
+  placeDeployFreeze,
   placeFreeze,
   releaseFreeze,
   sanitizeForDisplay,
@@ -78,6 +89,8 @@ export function parseArgs(argv: readonly string[]): Outcome<Command> {
     case "list":
     case "check":
     case "reset":
+    case "migrate":
+    case "apply":
       return rest.length === 0
         ? { ok: true, value: { kind: name } }
         : fail(`${name} takes no arguments`);
@@ -101,10 +114,13 @@ export function parseArgs(argv: readonly string[]): Outcome<Command> {
       return parsePlace(rest);
     default:
       return fail(
-        "usage: freeze.ts place|list|release|check|push|reset (see the header of scripts/freeze.ts)",
+        "usage: freeze.ts place|list|release|check|push|migrate|apply|reset (see the header of scripts/freeze.ts)",
       );
   }
 }
+
+const PLACE_USAGE =
+  "usage: place --target f/factory/<name> --minutes <n> --reason <text> | place --scope deploy --minutes <n> --reason <text>";
 
 function parsePlace(args: readonly string[]): Outcome<Command> {
   const values = new Map<string, string>();
@@ -112,24 +128,41 @@ function parsePlace(args: readonly string[]): Outcome<Command> {
     const flag = args[i];
     const value = args[i + 1];
     if (
-      (flag !== "--target" && flag !== "--minutes" && flag !== "--reason") ||
+      (flag !== "--scope" &&
+        flag !== "--target" &&
+        flag !== "--minutes" &&
+        flag !== "--reason") ||
       value === undefined ||
       values.has(flag)
     ) {
-      return fail(
-        "usage: place --target f/factory/<name> --minutes <n> --reason <text>",
-      );
+      return fail(PLACE_USAGE);
     }
     values.set(flag, value);
   }
+  const scope = values.get("--scope") ?? "schedule";
   const target = values.get("--target");
   const minutes = values.get("--minutes");
   const reason = values.get("--reason");
-  if (target === undefined || minutes === undefined || reason === undefined) {
-    return fail("place needs --target, --minutes, and --reason");
+  if (scope !== "schedule" && scope !== "deploy") {
+    return fail("--scope must be schedule or deploy");
+  }
+  if (minutes === undefined || reason === undefined) {
+    return fail("place needs --minutes and --reason");
   }
   if (!/^[0-9]+$/.test(minutes)) {
     return fail("--minutes must be a positive integer");
+  }
+  if (scope === "deploy") {
+    if (target !== undefined) {
+      return fail("--target cannot be used with --scope deploy");
+    }
+    return {
+      ok: true,
+      value: { kind: "place_deploy", minutes: Number(minutes), reason },
+    };
+  }
+  if (target === undefined) {
+    return fail("place needs --target for the schedule scope");
   }
   return {
     ok: true,
@@ -259,7 +292,17 @@ export type CliDeps = {
  * 余裕を足して7分にする。
  */
 const IN_FLIGHT_PUSH_WAIT_MINUTES = 7;
+
+/**
+ * deployの保留を置く前に始まった`self_update`の回が、push、migrate up、記録を終えるまでの目安(分)。
+ * 凍結の読みの後、トークンの取得(30秒)、push(300秒と停止の猶予13秒)、migrate up(同じく313秒)で約656秒。
+ * 余裕を足して13分にする。
+ */
+const IN_FLIGHT_DEPLOY_WAIT_MINUTES = 13;
 const PLACE_ID_ATTEMPTS = 5;
+
+/** 一覧の対象の欄に出す、deployの保留の印。 */
+const DEPLOY_LABEL = "deploy";
 
 /** `check`が変数を読む待ちの上限。凍結の読む段(`self_update`)と同じ10秒にする。 */
 const CHECK_READ_TIMEOUT_MS = 10_000;
@@ -277,7 +320,11 @@ function formatJst(date: Date): string {
   return `${text} JST`;
 }
 
-function describeEntry(entry: FreezeEntry, now: Date): string {
+function describeEntry(
+  entry: DeployFreezeEntry,
+  target: string,
+  now: Date,
+): string {
   const status = isActive(entry, now)
     ? "active"
     : entry.released_at === null
@@ -286,7 +333,7 @@ function describeEntry(entry: FreezeEntry, now: Date): string {
   return [
     entry.id,
     status,
-    entry.target,
+    target,
     `until ${formatJst(new Date(entry.expires_at))}`,
     `${entry.holder_kind} "${sanitizeForDisplay(entry.holder)}"`,
     `reason "${sanitizeForDisplay(entry.reason)}"`,
@@ -326,10 +373,42 @@ export async function runCommand(
     case "reset":
       return await runReset(actor, deps);
     case "place_deploy":
+      return await runPlaceDeploy(command, actor, deps);
     case "migrate":
+      return await runMigrate(deps);
     case "apply":
-      return 0;
+      return await runApply(deps);
   }
+}
+
+/**
+ * 空いているidを選んで、操作を当てて書く。idの衝突は選び直す。
+ * 置けたらidを返し、置けなかったら理由を表示してnullを返す。
+ */
+async function placeWithFreshId(
+  deps: CliDeps,
+  operation: (
+    id: string,
+  ) => (state: FreezeState, now: Date) => Outcome<FreezeState>,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < PLACE_ID_ATTEMPTS; attempt++) {
+    const id = deps.newId();
+    let result: Outcome<unknown>;
+    try {
+      result = await mutateFreezeState(deps.ports, operation(id));
+    } catch (err) {
+      deps.print(`failed: ${errorMessage(err)}`);
+      return null;
+    }
+    if (!result.ok) {
+      if (result.reason === FREEZE_ID_IN_USE) continue;
+      deps.print(`refused: ${result.reason}`);
+      return null;
+    }
+    return id;
+  }
+  deps.print("failed: could not pick an unused freeze id");
+  return null;
 }
 
 async function runPlace(
@@ -344,62 +423,31 @@ async function runPlace(
   }
   const summary = `freeze ${sanitizeForDisplay(command.target)} for ${command.minutes} minutes, reason "${sanitizeForDisplay(command.reason)}"`;
   if (!(await authorize(actor, summary, deps))) return 1;
-  for (let attempt = 0; attempt < PLACE_ID_ATTEMPTS; attempt++) {
-    const id = deps.newId();
-    let result: Outcome<unknown>;
-    try {
-      result = await mutateFreezeState(deps.ports, (state, now) =>
-        placeFreeze(
-          state,
-          {
-            id,
-            target: command.target,
-            minutes: command.minutes,
-            reason: command.reason,
-            holder_kind: actor.kind,
-            holder: actor.holder,
-          },
-          inputs.value.known,
-          now,
-        ),
-      );
-    } catch (err) {
-      deps.print(`failed: ${errorMessage(err)}`);
-      return 1;
-    }
-    if (!result.ok) {
-      if (result.reason === FREEZE_ID_IN_USE) continue;
-      deps.print(`refused: ${result.reason}`);
-      return 1;
-    }
-    return await confirmPlaced(id, command, deps);
-  }
-  deps.print("failed: could not pick an unused freeze id");
-  return 1;
-}
-
-/** 書いた後に読み直し、自分の行が残っていることを確かめる(同時の書き込みに負けていないか)。 */
-async function confirmPlaced(
-  id: string,
-  command: Extract<Command, { kind: "place" }>,
-  deps: CliDeps,
-): Promise<number> {
-  let state: Outcome<ReturnType<typeof emptyFreezeState>>;
-  try {
-    state = parseFreezeState(await deps.ports.readVariable());
-  } catch (err) {
-    deps.print(`failed to confirm the freeze: ${errorMessage(err)}`);
-    return 1;
-  }
-  const entry = state.ok
-    ? state.value.freezes.find((e) => e.id === id)
-    : undefined;
-  if (entry === undefined) {
-    deps.print("the freeze was lost to a concurrent write; place it again");
-    return 1;
-  }
-  const now = deps.ports.now();
-  const safeAt = new Date(now.getTime() + IN_FLIGHT_PUSH_WAIT_MINUTES * 60_000);
+  const id = await placeWithFreshId(
+    deps,
+    (freshId) => (state, now) =>
+      placeFreeze(
+        state,
+        {
+          id: freshId,
+          target: command.target,
+          minutes: command.minutes,
+          reason: command.reason,
+          holder_kind: actor.kind,
+          holder: actor.holder,
+        },
+        inputs.value.known,
+        now,
+      ),
+  );
+  if (id === null) return 1;
+  const entry = await readPlaced(deps, (state) =>
+    state.freezes.find((e) => e.id === id),
+  );
+  if (entry === null) return 1;
+  const safeAt = new Date(
+    deps.ports.now().getTime() + IN_FLIGHT_PUSH_WAIT_MINUTES * 60_000,
+  );
   deps.print(
     `placed ${id}: ${command.target} until ${formatJst(new Date(entry.expires_at))}`,
   );
@@ -407,6 +455,65 @@ async function confirmPlaced(
     `a self_update push that started before now may still run; stop the schedule after ${formatJst(safeAt).slice(11)}`,
   );
   return 0;
+}
+
+async function runPlaceDeploy(
+  command: Extract<Command, { kind: "place_deploy" }>,
+  actor: FreezeActor,
+  deps: CliDeps,
+): Promise<number> {
+  const summary = `hold every deployment for ${command.minutes} minutes, reason "${sanitizeForDisplay(command.reason)}"`;
+  if (!(await authorize(actor, summary, deps))) return 1;
+  const id = await placeWithFreshId(
+    deps,
+    (freshId) => (state, now) =>
+      placeDeployFreeze(
+        state,
+        {
+          id: freshId,
+          minutes: command.minutes,
+          reason: command.reason,
+          holder_kind: actor.kind,
+          holder: actor.holder,
+        },
+        now,
+      ),
+  );
+  if (id === null) return 1;
+  const entry = await readPlaced(deps, (state) =>
+    state.deploy_freezes.find((e) => e.id === id),
+  );
+  if (entry === null) return 1;
+  const safeAt = new Date(
+    deps.ports.now().getTime() + IN_FLIGHT_DEPLOY_WAIT_MINUTES * 60_000,
+  );
+  deps.print(
+    `placed ${id}: deploy until ${formatJst(new Date(entry.expires_at))}`,
+  );
+  deps.print(
+    `a self_update run that started before now may still push and migrate; start the work after ${formatJst(safeAt).slice(11)}`,
+  );
+  return 0;
+}
+
+/** 書いた後に読み直し、自分の行が残っていることを確かめる(同時の書き込みに負けていないか)。 */
+async function readPlaced(
+  deps: CliDeps,
+  find: (state: FreezeState) => DeployFreezeEntry | undefined,
+): Promise<DeployFreezeEntry | null> {
+  let state: Outcome<FreezeState>;
+  try {
+    state = parseFreezeState(await deps.ports.readVariable());
+  } catch (err) {
+    deps.print(`failed to confirm the freeze: ${errorMessage(err)}`);
+    return null;
+  }
+  const entry = state.ok ? find(state.value) : undefined;
+  if (entry === undefined) {
+    deps.print("the freeze was lost to a concurrent write; place it again");
+    return null;
+  }
+  return entry;
 }
 
 async function runRelease(
@@ -434,7 +541,7 @@ async function runRelease(
 }
 
 async function runList(deps: CliDeps): Promise<number> {
-  let state: Outcome<ReturnType<typeof emptyFreezeState>>;
+  let state: Outcome<FreezeState>;
   try {
     state = parseFreezeState(await deps.ports.readVariable());
   } catch (err) {
@@ -448,21 +555,59 @@ async function runList(deps: CliDeps): Promise<number> {
     return 1;
   }
   const now = deps.ports.now();
-  if (state.value.freezes.length === 0) deps.print("no freezes");
+  if (
+    state.value.freezes.length === 0 &&
+    state.value.deploy_freezes.length === 0
+  ) {
+    deps.print("no freezes");
+  }
   for (const entry of state.value.freezes) {
-    deps.print(describeEntry(entry, now));
+    deps.print(describeEntry(entry, entry.target, now));
+  }
+  for (const entry of state.value.deploy_freezes) {
+    deps.print(describeEntry(entry, DEPLOY_LABEL, now));
   }
   return 0;
 }
 
-/** 読めないときは警告だけで通す(`deploy`が止まっているスタックを起こせるように)。pushの時点では読めないと止める。 */
+/** `ms`のうちに終わらなければ`timeout`を返す。待ちの後にタイマーを残さない。 */
+async function within<T>(
+  work: Promise<T>,
+  ms: number,
+): Promise<{ readonly done: T } | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"timeout">((resolveExpired) => {
+    timer = setTimeout(() => resolveExpired("timeout"), ms);
+  });
+  try {
+    return await Promise.race([work.then((done) => ({ done })), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 有効なスケジュールの凍結とdeployの保留を表示し、deployの保留があれば1を返す。
+ * 読めないときと、応答が上限を超えたときは警告だけで通す(`deploy`と`up`が、止まっているスタックを
+ * 起こせるように)。後段のpushとmigrateは、読めないと止める。
+ */
 async function runCheck(deps: CliDeps): Promise<number> {
   let raw: string | null;
   try {
-    raw = await deps.ports.readVariable();
+    const read = await within(
+      deps.ports.readVariable(),
+      deps.checkReadTimeoutMs,
+    );
+    if (read === "timeout") {
+      deps.print(
+        `warning: could not read the freeze variable (timed out after ${deps.checkReadTimeoutMs} ms); the push and the migration will refuse to run until it is readable`,
+      );
+      return 0;
+    }
+    raw = read.done;
   } catch (err) {
     deps.print(
-      `warning: could not read the freeze variable (${errorMessage(err)}); the push will refuse to run until it is readable`,
+      `warning: could not read the freeze variable (${errorMessage(err)}); the push and the migration will refuse to run until it is readable`,
     );
     return 0;
   }
@@ -476,8 +621,59 @@ async function runCheck(deps: CliDeps): Promise<number> {
   const now = deps.ports.now();
   const active = activeFreezes(state.value, now);
   deps.print(`active freezes: ${active.length}`);
-  for (const entry of active) deps.print(describeEntry(entry, now));
+  for (const entry of active) {
+    deps.print(describeEntry(entry, entry.target, now));
+  }
+  const held = activeDeployFreezes(state.value, now);
+  for (const entry of held) {
+    deps.print(describeEntry(entry, DEPLOY_LABEL, now));
+  }
+  if (held.length > 0) {
+    deps.print(
+      "refused: a deploy freeze is active; wait until it ends, or ask its holder to release it (mise run freeze:list)",
+    );
+    return 1;
+  }
   return 0;
+}
+
+/** 拒否の文言に載せる、deployの保留のidと期限。`reason`と`holder`は載せない。 */
+function describeHold(held: FrozenPushPlan["deployFreezes"]): string {
+  return held
+    .map((h) => `${h.id} until ${formatJst(new Date(h.expires_at))}`)
+    .join(", ");
+}
+
+/**
+ * 変数を1回読み、pushの除外とdeployの保留を求める。`checkHold`が真でdeployの保留があれば拒否する。
+ * 拒否や失敗のときは理由を表示してnullを返す。
+ */
+async function planPush(
+  deps: CliDeps,
+  action: string,
+  checkHold: boolean,
+): Promise<FrozenPushPlan | null> {
+  const inputs = await deps.loadInputs();
+  if (!inputs.ok) {
+    deps.print(`refused to ${action}: ${inputs.reason}`);
+    return null;
+  }
+  const plan = await prepareFrozenPush(deps.ports, inputs.value);
+  if (!plan.ok) {
+    deps.print(`refused to ${action}: ${plan.reason}`);
+    return null;
+  }
+  if (checkHold && shouldHoldDeploy(plan.value)) {
+    deps.print(
+      `refused to ${action}: a deploy freeze is active (${describeHold(plan.value.deployFreezes)})`,
+    );
+    return null;
+  }
+  for (const warning of plan.value.warnings) deps.print(`warning: ${warning}`);
+  for (const target of plan.value.excludedTargets) {
+    deps.print(`frozen, not pushed: ${target}`);
+  }
+  return plan.value;
 }
 
 async function runPush(
@@ -486,30 +682,50 @@ async function runPush(
   deps: CliDeps,
 ): Promise<number> {
   // 削除を確定するpushは、人が端末で確かめる(AGENTS.mdの決まり)。確認の無いセッションからは実行させない。
-  if (command.prune && !command.dryRun) {
-    if (actor.kind !== "human") {
-      deps.print("refused: only a human can push with --prune");
-      return 1;
-    }
-    if (!(await authorize(actor, "push and delete remote-only items", deps))) {
-      return 1;
-    }
-  }
-  const inputs = await deps.loadInputs();
-  if (!inputs.ok) {
-    deps.print(`refused to push: ${inputs.reason}`);
+  const pruning = command.prune && !command.dryRun;
+  if (pruning && actor.kind !== "human") {
+    deps.print("refused: only a human can push with --prune");
     return 1;
   }
-  const plan = await prepareFrozenPush(deps.ports, inputs.value);
-  if (!plan.ok) {
-    deps.print(`refused to push: ${plan.reason}`);
+  // 保留による拒否の後に確認する。保留中に、人へyesを打たせない。
+  const plan = await planPush(deps, "push", !command.dryRun);
+  if (plan === null) return 1;
+  if (
+    pruning &&
+    !(await authorize(actor, "push and delete remote-only items", deps))
+  ) {
     return 1;
   }
-  for (const warning of plan.value.warnings) deps.print(`warning: ${warning}`);
-  for (const target of plan.value.excludedTargets) {
-    deps.print(`frozen, not pushed: ${target}`);
+  return await deps.runPush(buildPushArgv(plan.excludesArg, command));
+}
+
+const MIGRATE_ARGV: readonly string[] = ["wmill", "datatable", "migrate", "up"];
+
+/** deployの保留があるか、読めなければ拒否する。通れば`wmill datatable migrate up`を実行する。 */
+async function runMigrate(deps: CliDeps): Promise<number> {
+  const held = await readActiveDeployFreezes(deps.ports);
+  if (!held.ok) {
+    deps.print(`refused to migrate: ${held.reason}`);
+    return 1;
   }
-  return await deps.runPush(buildPushArgv(plan.value.excludesArg, command));
+  if (held.value.length > 0) {
+    deps.print(
+      `refused to migrate: a deploy freeze is active (${describeHold(held.value)})`,
+    );
+    return 1;
+  }
+  return await deps.runMigrate(MIGRATE_ARGV);
+}
+
+/** 1回の読み取りで、pushに続けてmigrateを実行する。pushが失敗したら、migrateは実行しない。 */
+async function runApply(deps: CliDeps): Promise<number> {
+  const plan = await planPush(deps, "apply", true);
+  if (plan === null) return 1;
+  const pushed = await deps.runPush(
+    buildPushArgv(plan.excludesArg, { prune: false, dryRun: false }),
+  );
+  if (pushed !== 0) return pushed;
+  return await deps.runMigrate(MIGRATE_ARGV);
 }
 
 async function runReset(actor: FreezeActor, deps: CliDeps): Promise<number> {
@@ -517,7 +733,15 @@ async function runReset(actor: FreezeActor, deps: CliDeps): Promise<number> {
     deps.print("refused: only a human can reset the freezes");
     return 1;
   }
-  if (!(await authorize(actor, "reset all freezes to empty", deps))) return 1;
+  if (
+    !(await authorize(
+      actor,
+      "reset all freezes, schedule and deploy, to empty",
+      deps,
+    ))
+  ) {
+    return 1;
+  }
   try {
     await deps.ports.writeVariable(serializeFreezeState(emptyFreezeState()));
   } catch (err) {
@@ -536,6 +760,16 @@ function errorMessage(err: unknown): string {
 // 実行
 // ---------------------------------------------------------------------------
 
+/**
+ * 起動した子プロセス。`check`が応答を待ちきれずに終わるとき、読みの`wmill`が残らないよう、
+ * 終了時に止める。
+ */
+const liveChildren = new Set<ReturnType<typeof Bun.spawn>>();
+
+process.on("exit", () => {
+  for (const child of liveChildren) child.kill();
+});
+
 async function capture(
   argv: readonly string[],
   cwd?: string,
@@ -546,6 +780,8 @@ async function capture(
     stderr: "pipe",
     stdin: "ignore",
   });
+  liveChildren.add(child);
+  child.exited.finally(() => liveChildren.delete(child));
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
