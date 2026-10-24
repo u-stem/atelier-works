@@ -1071,6 +1071,161 @@ describe("worktree-prune.sh", () => {
     });
   });
 
+  describe("--auto", () => {
+    // 呼び出し元のプロセスとして、lsofの出力に現れるべきPID。
+    const CALLER_PID = "4242";
+
+    // 呼び出し元のcwdを含む、正常なlsofの出力を返す偽のlsofにする。`extra`は追加の行。
+    function writeCallerLsof(extra = ""): void {
+      writeLsof(`p${CALLER_PID}\ncbash\nn${root}${extra ? `\n${extra}` : ""}`);
+    }
+
+    function runAuto(
+      options: { ancestors?: string | null; env?: Record<string, string> } = {},
+    ): Run {
+      const ancestors =
+        options.ancestors === undefined ? CALLER_PID : options.ancestors;
+      const args =
+        ancestors === null ? ["--auto"] : ["--auto", "--ancestors", ancestors];
+      return run(args, mainDir, options.env);
+    }
+
+    beforeEach(() => {
+      writeCallerLsof();
+    });
+
+    test("--auto removes a merged idle worktree", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("--auto removes the branch of a merged idle worktree", () => {
+      addMergedWorktree("docs-old", "docs/old");
+
+      runAuto();
+
+      expect(branchExists("docs/old")).toBe(false);
+    });
+
+    test("--auto keeps recent", () => {
+      const path = addMergedWorktree("docs-busy", "docs/busy");
+      const now = new Date();
+      utimesSync(join(path, "README.md"), now, now);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps in use", () => {
+      const path = addMergedWorktree("docs-busy", "docs/busy");
+      writeCallerLsof(`p1234\nn${path}/console`);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps dirty", () => {
+      const path = addMergedWorktree("docs-dirty", "docs/dirty");
+      writeFileSync(join(path, "scratch.txt"), "x\n");
+      ageFiles(path, 180);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto keeps unmerged", () => {
+      const path = addWorktree("docs-wip", "docs/wip");
+      commitIn(path);
+      ageFiles(path, 180);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing without ancestors", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: null });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing with an empty ancestors value", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "" });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing with a malformed ancestors value", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "4242,abc" });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing with an ancestors value that has an empty item", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "4242,,1" });
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing when lsof does not show the callers", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      writeLsof(`p9999\ncbash\nn${root}`);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing when only one of the ancestors would be a prefix", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      writeLsof(`p42420\ncbash\nn${root}`);
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes a worktree when any one ancestor shows up", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+
+      runAuto({ ancestors: "7,4242,9" });
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("--auto removes nothing without lsof", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      rmSync(join(fakeBin, "lsof"));
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("--auto removes nothing when lsof prints nothing", () => {
+      const path = addMergedWorktree("docs-old", "docs/old");
+      writeLsof("");
+
+      runAuto();
+
+      expect(existsSync(path)).toBe(true);
+    });
+  });
+
   test("works when run from another worktree", () => {
     const old = addMergedWorktree("docs-old", "docs/old");
     const other = addWorktree("fix-other", "fix/other");
