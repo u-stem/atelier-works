@@ -1698,7 +1698,6 @@ describe("bash-guard allows work that only looks like a hold operation", () => {
     "bun test tests/scripts/hold.test.ts",
     "bun test tests/scripts/ho*.test.ts",
     "mise -C /repo run check",
-    'mise -C "$DIR" run check',
     "mise -q run check",
     "mise --cd /repo run lint",
     "mise tasks info hold:place",
@@ -1716,6 +1715,10 @@ describe("bash-guard allows work that only looks like a hold operation", () => {
 });
 
 describe("bash-guard says why a dynamic mise word is denied", () => {
+  test("the reason for a dynamic option value names the variable", async () => {
+    expect(await denyReason('mise -C "$DIR" run check')).toContain("variable");
+  });
+
   test("the reason names the dynamic word", async () => {
     expect(await denyReason('mise run "$TASK"', { subagent: true })).toContain(
       "variable",

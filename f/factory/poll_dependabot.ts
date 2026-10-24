@@ -903,8 +903,10 @@ export type PollSession = {
   >;
   /** 保留で待ったPRの通知を、通知の表に残す。1周で、種類ごとに1回だけ呼ぶ。 */
   readonly recordHoldNotice: (notice: HoldNotice) => Promise<void>;
-  /** 保留を読めない通知を、すべて解決済みにする。保留を読めた周回だけ呼ぶ。 */
-  readonly resolveHoldUnreadableNotices: () => Promise<number>;
+  /** 保留を読めない通知のうち、本文が`messagePrefixes`のどれかで始まるものを解決済みにする。 */
+  readonly resolveHoldUnreadableNotices: (
+    messagePrefixes: readonly string[],
+  ) => Promise<number>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
   readonly deps: PollDependabotDeps;
 };
@@ -983,18 +985,31 @@ export async function pollDependabot(
 
   const session = await io.open(config);
   counts.failed += session.ownersFailed;
-  // 保留を読めたかを周回で数える。読めない通知を、読めた周回で解決するためである。
-  const holdReads = { ok: 0, failed: 0 };
+  // 保留を読めたかを、周回で数える。読めない通知を、読めた周回で解決するためである。
+  // リポジトリごとに読めたかも残す。壊れた行などの通知は、そのリポジトリを読めたときだけ解決する。
+  const holdReads = {
+    ok: 0,
+    failed: 0,
+    okRepos: new Set<string>(),
+    failedRepos: new Set<string>(),
+  };
   const deps: PollDependabotDeps = {
     ...session.deps,
     listMergeHolds: async (owner, repo) => {
+      const repository = `${owner}/${repo}`;
       try {
         const outcome = await session.deps.listMergeHolds(owner, repo);
-        if (outcome.ok) holdReads.ok += 1;
-        else holdReads.failed += 1;
+        if (outcome.ok) {
+          holdReads.ok += 1;
+          holdReads.okRepos.add(repository);
+        } else {
+          holdReads.failed += 1;
+          holdReads.failedRepos.add(repository);
+        }
         return outcome;
       } catch (err) {
         holdReads.failed += 1;
+        holdReads.failedRepos.add(repository);
         throw err;
       }
     },
@@ -1134,7 +1149,10 @@ export async function pollDependabot(
   const fresh = new Map<string, HeadWaitState>();
   // 保留で待ったPRの数。保留があるPRと、保留を読めなかった理由ごとのPRを数える。
   let heldPrs = 0;
-  const unreadablePrs = new Map<MergeHoldFailure, number>();
+  const unreadablePrs = new Map<
+    string,
+    { failure: MergeHoldFailure; repository: string | null; prCount: number }
+  >();
   const unprocessed = new Set(
     candidates.map((item) => prKey(item.owner, item.repo, item.number)),
   );
@@ -1183,7 +1201,17 @@ export async function pollDependabot(
         heldPrs += 1;
       } else {
         const failure = outcome.check.failure;
-        unreadablePrs.set(failure, (unreadablePrs.get(failure) ?? 0) + 1);
+        // 壊れた行と想定外の失敗は、リポジトリごとの通知にする。
+        const repository = holdFailureIsPerRepository(failure)
+          ? `${candidate.owner}/${candidate.repo}`
+          : null;
+        const noticeKey = `${failure}\t${repository ?? ""}`;
+        const known = unreadablePrs.get(noticeKey);
+        unreadablePrs.set(noticeKey, {
+          failure,
+          repository,
+          prCount: (known?.prCount ?? 0) + 1,
+        });
       }
       continue;
     }
@@ -1194,14 +1222,16 @@ export async function pollDependabot(
   // 保留で待ったPRは、PRごとではなく周回ごとに、種類を分けて1件ずつ通知する。通知の失敗で周回を止めない。
   const holdNotices: HoldNotice[] = [];
   if (heldPrs > 0) holdNotices.push({ kind: "held", prCount: heldPrs });
-  for (const [failure, prCount] of unreadablePrs) {
-    holdNotices.push({ kind: "unreadable", failure, prCount });
+  const unreadableCounts: Record<string, number> = {};
+  for (const { failure, repository, prCount } of unreadablePrs.values()) {
+    holdNotices.push({ kind: "unreadable", failure, prCount, repository });
+    unreadableCounts[failure] = (unreadableCounts[failure] ?? 0) + prCount;
   }
   if (heldPrs > 0 || unreadablePrs.size > 0) {
     // 通知の本文は件数を含まない。件数はここに残す。
     session.warn("pull requests wait for merge holds", {
       held: heldPrs,
-      unreadable: Object.fromEntries(unreadablePrs),
+      unreadable: unreadableCounts,
     });
   }
   for (const notice of holdNotices) {
@@ -1214,10 +1244,20 @@ export async function pollDependabot(
       });
     }
   }
-  // 保留を読めて、読めない読み取りが1件も無い周回では、保留を読めない通知を解決する。
-  if (holdReads.ok > 0 && holdReads.failed === 0) {
+  // 保留を読めない通知を解決する。
+  // 表そのものの通知は、読めて、読めない読み取りが1件も無い周回で解決する。
+  // リポジトリごとの通知は、その周回でそのリポジトリを読めたときだけ解決する。
+  const resolvablePrefixes = [
+    ...(holdReads.ok > 0 && holdReads.failed === 0
+      ? [HOLD_UNREADABLE_TABLE_PREFIX]
+      : []),
+    ...[...holdReads.okRepos]
+      .filter((repository) => !holdReads.failedRepos.has(repository))
+      .map(holdUnreadableRepositoryPrefix),
+  ];
+  if (resolvablePrefixes.length > 0) {
     try {
-      await session.resolveHoldUnreadableNotices();
+      await session.resolveHoldUnreadableNotices(resolvablePrefixes);
     } catch (err) {
       session.warn("failed to resolve the hold notice", {
         error: errorMessage(err),
@@ -1250,9 +1290,24 @@ export type HoldNotice =
       readonly kind: "unreadable";
       readonly failure: MergeHoldFailure;
       readonly prCount: number;
+      /** 壊れた行と想定外の失敗では、読めなかったリポジトリ(`owner/repo`)。表そのものの失敗ではnull。 */
+      readonly repository: string | null;
     };
 
 const HOLD_UNREADABLE_NOTICE_KIND = "dependabot_merge_hold_unreadable";
+
+/** 表そのものを読めない通知の本文の接頭辞。 */
+const HOLD_UNREADABLE_TABLE_PREFIX = "保留の表を読めないため";
+
+/** 壊れた行と想定外の失敗は、リポジトリごとに読めたかが決まる。 */
+function holdFailureIsPerRepository(failure: MergeHoldFailure): boolean {
+  return failure === "corrupt" || failure === "error";
+}
+
+/** リポジトリごとの通知の本文の接頭辞。`acme/app: `は`acme/app2: `に当たらない。 */
+function holdUnreadableRepositoryPrefix(repository: string): string {
+  return `${repository}: `;
+}
 
 /** 保留を読めない通知の、最初に確かめることの説明。 */
 const HOLD_UNREADABLE_FIRST_STEP: Readonly<Record<MergeHoldFailure, string>> = {
@@ -1270,6 +1325,7 @@ const HOLD_UNREADABLE_FIRST_STEP: Readonly<Record<MergeHoldFailure, string>> = {
  * どちらの通知も、PRの数を本文に載せない。数が変わるたびに別の本文になり、別の行が並ぶためである。
  * 件数は周回のログに残す。
  * 保留を読めない通知は、人の対応が要る(`action`)。読めた周回で自動で解決する。
+ * 壊れた行と想定外の失敗は、本文の先頭にリポジトリを置き、そのリポジトリを読めた周回で解決する。
  * 保留の`reason`と`holder`は、信頼できない文字列なので載せない。
  */
 export function holdNoticeRecord(notice: HoldNotice): {
@@ -1283,9 +1339,13 @@ export function holdNoticeRecord(notice: HoldNotice): {
         "リポジトリにマージの保留があるため、dependabotの更新PRが待っています。保留が解けると、次の取得で自動で再開します。`mise run hold:list`で理由と期限を確認し、解除してよければ`mise run hold:release -- <id>`を実行してください",
     };
   }
+  const where =
+    notice.repository === null
+      ? ""
+      : holdUnreadableRepositoryPrefix(notice.repository);
   return {
     kind: HOLD_UNREADABLE_NOTICE_KIND,
-    message: `保留の表を読めないため、dependabotの更新PRのマージを待たせています(${notice.failure})。${HOLD_UNREADABLE_FIRST_STEP[notice.failure]}。読めるようになると、次の取得で自動で再開します`,
+    message: `${where}${HOLD_UNREADABLE_TABLE_PREFIX}、dependabotの更新PRのマージを待たせています(${notice.failure})。${HOLD_UNREADABLE_FIRST_STEP[notice.failure]}。読めるようになると、次の取得で自動で再開します`,
   };
 }
 
@@ -1348,12 +1408,17 @@ export async function main(): Promise<PollDependabotResult> {
         recordHoldNotice: async (notice) => {
           await addNoticeUnlessUnresolved(holdNoticeRecord(notice));
         },
-        resolveHoldUnreadableNotices: () =>
-          resolveUnresolvedNoticesByPrefix(
-            HOLD_UNREADABLE_NOTICE_KIND,
-            "",
-            "poll_dependabot",
-          ),
+        resolveHoldUnreadableNotices: async (messagePrefixes) => {
+          let resolved = 0;
+          for (const messagePrefix of messagePrefixes) {
+            resolved += await resolveUnresolvedNoticesByPrefix(
+              HOLD_UNREADABLE_NOTICE_KIND,
+              messagePrefix,
+              "poll_dependabot",
+            );
+          }
+          return resolved;
+        },
         warn: (message, fields) => log.warn(message, fields),
         deps: {
           getPr: (owner, repo, number) =>

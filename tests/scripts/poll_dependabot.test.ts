@@ -3974,6 +3974,18 @@ const GADGETS_PR: DependabotPrCandidate = {
 };
 const HOLD_TABLE_NOTICE_PREFIX = "保留の表を読めないため";
 
+/** gadgetsのPR(31)にはgadgetsのリポジトリ名を、ほかにはwidgetsのリポジトリ名を持たせる。 */
+async function pullRequestOfEitherRepo(
+  number: number,
+): Promise<PullRequestWithCreatedAt> {
+  const name = number === GADGETS_PR.number ? "acme/gadgets" : "acme/widgets";
+  return pullRequest({
+    number,
+    headRepoFullName: name,
+    baseRepoFullName: name,
+  });
+}
+
 describe("pollDependabot resolves the notice of one repository only when that repository was read", () => {
   test("names the repository in a corrupt notice", async () => {
     const log = emptyLog();
@@ -4024,6 +4036,7 @@ describe("pollDependabot resolves the notice of one repository only when that re
       round(log, {
         config: GADGETS_CONFIG,
         found: [FOUND, GADGETS_PR],
+        getPr: pullRequestOfEitherRepo,
         holdsByRepo: {
           "acme/gadgets": { ok: false, kind: "corrupt", reason: "x" },
         },
@@ -4040,6 +4053,7 @@ describe("pollDependabot resolves the notice of one repository only when that re
       round(log, {
         config: GADGETS_CONFIG,
         found: [FOUND, GADGETS_PR],
+        getPr: pullRequestOfEitherRepo,
         holdsByRepo: {
           "acme/gadgets": { ok: false, kind: "corrupt", reason: "x" },
         },
@@ -4049,6 +4063,23 @@ describe("pollDependabot resolves the notice of one repository only when that re
     expect(log.holdResolvePrefixes).not.toContain("acme/gadgets: ");
   });
 
+  test("does not resolve the notice of a repository that was read once and failed once", async () => {
+    const log = emptyLog();
+    const second: DependabotPrCandidate = { ...FOUND, number: 13 };
+
+    await pollDependabot(
+      round(log, {
+        found: [FOUND, second],
+        holdsSequence: [
+          { ok: true, value: [] },
+          { ok: false, kind: "corrupt", reason: "x" },
+        ],
+      }),
+    );
+
+    expect(log.holdResolvePrefixes).not.toContain("acme/widgets: ");
+  });
+
   test("does not resolve the notice of a repository whose read threw", async () => {
     const log = emptyLog();
 
@@ -4056,6 +4087,7 @@ describe("pollDependabot resolves the notice of one repository only when that re
       round(log, {
         config: GADGETS_CONFIG,
         found: [FOUND, GADGETS_PR],
+        getPr: pullRequestOfEitherRepo,
         holdsErrorRepos: ["acme/gadgets"],
       }),
     );
@@ -4067,7 +4099,11 @@ describe("pollDependabot resolves the notice of one repository only when that re
     const log = emptyLog();
 
     await pollDependabot(
-      round(log, { config: GADGETS_CONFIG, found: [FOUND, GADGETS_PR] }),
+      round(log, {
+        config: GADGETS_CONFIG,
+        found: [FOUND, GADGETS_PR],
+        getPr: pullRequestOfEitherRepo,
+      }),
     );
 
     expect(log.holdResolvePrefixes).toEqual([

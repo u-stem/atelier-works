@@ -32,7 +32,7 @@ import {
   shellInputSource,
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
-import { touchesHolds } from "./hold-guard.ts";
+import { findHoldOperation } from "./hold-guard.ts";
 import {
   ALLOW,
   type BashToolInput,
@@ -390,7 +390,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it.",
+    'mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. An option or value before the subcommand that is built from a variable or a glob (mise -C "$DIR" run ...) is denied too, because it could hide set; write it out as literal text.',
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
@@ -408,9 +408,11 @@ export const REASONS = {
   shellStdin:
     "Shell code built from variables and passed through stdin cannot be checked. Pass literal text (echo 'git status' | sh), use sh -c '...', or run a script file.",
   miseGenerate:
-    "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
+    "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Any mise generate with a path under .git/hooks, .git/config, or .github/workflows, or with a word built from a variable, is denied too, because an option such as --output can write there. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
   subagentHold:
-    "Subagents must not place or release holds: a hold stops merges, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place or mise run hold:release. Listing with mise run hold:list is fine.",
+    "Subagents must not place or release holds: a hold stops merges, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place or mise run hold:release. Listing with mise run hold:list is fine. A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
+  subagentHoldDynamic:
+    "This mise command has a word built from a variable or a command substitution, so it cannot be told apart from mise run hold:place or mise run hold:release. Write the task name and the arguments out as literal text. Subagents must not place or release holds.",
 } as const;
 
 const DOCKER_REASONS = {
@@ -595,12 +597,12 @@ function checkSimpleCommand(
   }
   const docker = dockerExposure(words);
   if (docker !== null) return deny(DOCKER_REASONS[docker]);
-  if (
-    scope.input.agentId !== null &&
-    touchesHolds(words, () => literalShellInputs(command))
-  ) {
-    return deny(REASONS.subagentHold);
-  }
+  const hold =
+    scope.input.agentId === null
+      ? null
+      : findHoldOperation(words, () => literalShellInputs(command));
+  if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
+  if (hold !== null) return deny(REASONS.subagentHold);
   if (isLefthookUninstall(words)) {
     return deny(REASONS.lefthookUninstall);
   }
@@ -777,6 +779,9 @@ function touchesGitInternals(
   return args.some((word) => GIT_INTERNALS.test(word.text));
 }
 
+/** 生成の書き先にしてはならないパス。`.git/hooks`、`.git/config`、`.github/workflows`。 */
+const PROTECTED_GENERATE_PATH = /\.git\/(?:hooks|config)\b|\.github\/workflows/;
+
 /** `mise generate`の別名。 */
 const GENERATE_NAMES: ReadonlySet<string> = new Set(["generate", "gen", "g"]);
 
@@ -803,6 +808,12 @@ function writesGeneratedFiles(
   const generate = args.findIndex((word) => GENERATE_NAMES.has(word.text));
   if (generate === -1) return false;
   const rest = args.slice(generate + 1);
+  // `--output`などで、どの生成先からでも書き込める。書き先が守る対象のパスか、実行時に決まる語は拒否する。
+  if (
+    rest.some((word) => word.dynamic || PROTECTED_GENERATE_PATH.test(word.text))
+  ) {
+    return true;
+  }
   if (!rest.some((word) => GENERATE_WRITABLE_TARGETS.has(word.text))) {
     return false;
   }

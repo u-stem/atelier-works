@@ -125,6 +125,26 @@ const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--env",
 ]);
 
+/** `mise`の全体オプションのうち、値を取るもの。サブコマンドの前に置ける。 */
+const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-C",
+  "--cd",
+  "-E",
+  "--env",
+  "-j",
+  "--jobs",
+  "-P",
+  "--profile",
+]);
+
+/** 短いオプションの束(`-qC`)で、最後に置くと次の語を値に取る文字。 */
+const MISE_GLOBAL_VALUE_LETTERS: ReadonlySet<string> = new Set([
+  "C",
+  "E",
+  "j",
+  "P",
+]);
+
 /** 前置きのコマンドと、その値を取るオプション。値の語も一緒に外す。 */
 const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   [
@@ -137,6 +157,87 @@ const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
 );
 
 class ShellSyntaxError extends Error {}
+
+/** `$'...'`の中の、1文字で表す逃れ(`\n`など)。 */
+const ANSI_C_SIMPLE_ESCAPES: ReadonlyMap<string, string> = new Map([
+  ["a", "\u0007"],
+  ["b", "\b"],
+  ["e", "\u001b"],
+  ["E", "\u001b"],
+  ["f", "\f"],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+  ["v", "\v"],
+  ["\\", "\\"],
+  ["'", "'"],
+  ['"', '"'],
+  ["?", "?"],
+]);
+
+/** `from`から、`digits`で表せる文字が最大`max`個続く部分を返す。 */
+function leadingDigits(
+  source: string,
+  from: number,
+  digits: RegExp,
+  max: number,
+): string {
+  let end = from;
+  while (
+    end < source.length &&
+    end - from < max &&
+    digits.test(source.charAt(end))
+  ) {
+    end += 1;
+  }
+  return source.slice(from, end);
+}
+
+/**
+ * `$'...'`の中のバックスラッシュの逃れを、シェルと同じに展開する。
+ * `from`はバックスラッシュの次の位置で、展開した文字列と、次に読む位置を返す。
+ * 文字コードで書いた語(`\x64`、`\144`、`\u0064`)を文字にするのは、
+ * 語の字面で判定するフックが、文字コードに隠された名前を見落とさないためである。
+ * NULは語を切り詰めるので、空にして残りを判定に使う。
+ */
+function decodeAnsiCEscape(
+  source: string,
+  from: number,
+): { readonly text: string; readonly next: number } {
+  const char = source.charAt(from);
+  if (char === "") return { text: "\\", next: from };
+  const simple = ANSI_C_SIMPLE_ESCAPES.get(char);
+  if (simple !== undefined) return { text: simple, next: from + 1 };
+  const numeric: Readonly<
+    Record<string, { digits: RegExp; max: number; radix: number }>
+  > = {
+    x: { digits: /[0-9A-Fa-f]/, max: 2, radix: 16 },
+    u: { digits: /[0-9A-Fa-f]/, max: 4, radix: 16 },
+    U: { digits: /[0-9A-Fa-f]/, max: 8, radix: 16 },
+  };
+  const spec = numeric[char];
+  if (spec !== undefined) {
+    const digits = leadingDigits(source, from + 1, spec.digits, spec.max);
+    if (digits === "") return { text: `\\${char}`, next: from + 1 };
+    return {
+      text: codePointText(Number.parseInt(digits, spec.radix)),
+      next: from + 1 + digits.length,
+    };
+  }
+  if (/[0-7]/.test(char)) {
+    const digits = leadingDigits(source, from, /[0-7]/, 3);
+    return {
+      text: codePointText(Number.parseInt(digits, 8) % 256),
+      next: from + digits.length,
+    };
+  }
+  return { text: `\\${char}`, next: from + 1 };
+}
+
+function codePointText(code: number): string {
+  if (code === 0 || code > 0x10ffff) return "";
+  return String.fromCodePoint(code);
+}
 
 /** `line`を単純コマンドの並びに分ける。構文を読めなければ`ok: false`を返す。 */
 export function parseCommandLine(line: string): ParseResult {
@@ -182,9 +283,13 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
     } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
       wrappers.push(name);
       index = skipWrapperOptions(words, index + 1, name);
-    } else if (name === "mise" && isMiseExec(words[index + 1])) {
+    } else if (
+      name === "mise" &&
+      isMiseExec(words[skipMiseGlobalOptions(words, index + 1)])
+    ) {
       wrappers.push(text);
-      const read = readMiseExec(words, index + 2);
+      const subcommand = skipMiseGlobalOptions(words, index + 1);
+      const read = readMiseExec(words, subcommand + 1);
       mise ??= read.mise;
       index = read.next;
     } else {
@@ -192,6 +297,27 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
     }
   }
   return { assignments, words: words.slice(index), wrappers, mise };
+}
+
+/**
+ * `mise`の後ろの全体オプション(`-q`、`-C <dir>`、`--cd=<dir>`など)を読み飛ばし、
+ * サブコマンドの位置を返す。知らないオプションは、値を取らないものとして1語だけ飛ばす。
+ */
+export function skipMiseGlobalOptions(
+  words: readonly Word[],
+  start: number,
+): number {
+  let index = start;
+  while (index < words.length) {
+    const text = words[index]?.text ?? "";
+    if (text === "--" || text === "-" || !text.startsWith("-")) break;
+    const bundle = /^-[A-Za-z]+$/.test(text);
+    const takesValue =
+      MISE_GLOBAL_VALUE_OPTIONS.has(text) ||
+      (bundle && MISE_GLOBAL_VALUE_LETTERS.has(text.slice(-1)));
+    index += takesValue ? 2 : 1;
+  }
+  return index;
 }
 
 function isMiseExec(word: Word | undefined): boolean {
@@ -911,8 +1037,9 @@ class Parser {
     while (at < this.source.length) {
       const char = this.source.charAt(at);
       if (char === "\\") {
-        value += this.source.charAt(at + 1);
-        at += 2;
+        const decoded = decodeAnsiCEscape(this.source, at + 1);
+        value += decoded.text;
+        at = decoded.next;
         continue;
       }
       if (char === "'") {
