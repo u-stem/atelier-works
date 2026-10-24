@@ -16,7 +16,7 @@
 #   - 前回の成功から30分以内、または他の実行がロックを持つ間は、何もしない。
 #   - `failures`は、ロックを取った直後に先に1増やし、成功した実行が0に戻す。
 #     途中で死んだ実行も、失敗として数えられる。
-#   - `gh`には時間の上限(30秒)を課し、1件でも時間切れなら、残りの候補は打ち切る。
+#   - `gh`には、実行全体の合計の時間の上限(30秒)を課す。上限に達したら、残りの候補は打ち切る。
 #   - 標準出力には何も出さず、終了コードは常に0にする。結果は`log`に書く。
 #
 # 消す条件は、すべてを満たすことである。
@@ -313,6 +313,8 @@ gh_out=""
 gh_out_file=""
 # 1件でも時間切れになったら、その実行の残りの候補はghに聞かずに打ち切る。
 gh_timed_out=0
+# 最初にghに聞いた時刻(epoch秒)。実行全体の合計の時間を測る起点になる。
+gh_started_at=""
 gh_asked=0
 gh_unavailable=0
 
@@ -330,13 +332,22 @@ stop_gh() {
 # `wt_branch`のマージ済みPRの先頭のcommitを`gh_out`に入れる。成功なら0を返す。
 # --autoでは、時間の上限を課す。上限を超えたらプロセスグループごと止めて、1を返す。
 ask_gh() {
-  local waited=0 status=0
+  local now status=0
   gh_out=""
   if [ "$auto" -ne 1 ]; then
     gh_out="$(gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || status=$?
     return "$status"
   fi
   if [ "$gh_timed_out" -eq 1 ]; then
+    return 1
+  fi
+  # 上限は1件ごとではなく、最初に聞いてからの合計で測る。合計が上限に達したら、残りは打ち切る。
+  now="$(date +%s)"
+  if [ -z "$gh_started_at" ]; then
+    gh_started_at="$now"
+  fi
+  if [ $((now - gh_started_at)) -ge "$gh_limit" ]; then
+    gh_timed_out=1
     return 1
   fi
   gh_out_file="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 1
@@ -346,7 +357,7 @@ ask_gh() {
   gh_pid=$!
   set +m
   while kill -0 "$gh_pid" 2>/dev/null; do
-    if [ "$waited" -ge "$gh_limit" ]; then
+    if [ $(($(date +%s) - gh_started_at)) -ge "$gh_limit" ]; then
       gh_timed_out=1
       stop_gh
       rm -f -- "$gh_out_file"
@@ -354,7 +365,6 @@ ask_gh() {
       return 1
     fi
     sleep 1
-    waited=$((waited + 1))
   done
   wait "$gh_pid" || status=$?
   gh_pid=""
