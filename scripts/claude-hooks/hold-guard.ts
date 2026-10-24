@@ -13,8 +13,10 @@
 // Consoleの解除script(`hold_release`と`freeze_release`)を1コマンドで呼ぶ形は、主セッションを含む
 // すべてのセッションで拒否する(`findConsoleReleaseCall`)。ローカルの主セッションはCLIでは`session`として
 // 扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らずに他の主体の保留を外せるためである。
-// 解除scriptの名前を軸に、拒否を既定にする。プログラムの種類を問わず、語や標準入力の文字列に、
-// 名前、名前に当たりうるglob、ブレースの形があれば拒否する。読み取りなどで何も実行しないプログラム(`git`、`grep`、`cat`など)と、
+// 解除scriptの名前を軸に、拒否を既定にする。プログラムの種類を問わず、語、変数代入の値、標準入力の文字列に、
+// 名前、名前に当たりうるglob、ブレースの形があれば拒否する。標準入力の文字列は、パイプの連鎖の上流まで辿る。
+// 読み取りなどのプログラム(`git`、`grep`、`cat`など)は、名前だけでは通す。同じコマンドに実行を表す語(`wmill`、`curl`、`npx`、`sh`など)が
+// 並ぶとき、実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
 // `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)は通す。
 // `wmill jobs push`は、待ち行列のファイルからジョブを積み、名前が語に現れないので、名前なしで拒否する。
 // 凍結の変数`f/factory/freezes`は、`variable add/push`の語と、変数を書くURLの経路に、そのパスが当たるときに拒否する。
@@ -726,9 +728,13 @@ const FREEZE_VARIABLE_PATH =
 const VARIABLE_WRITE_URL =
   /\/variables\/(?:update|create|delete)(?![A-Za-z0-9_])/i;
 
+/** 変数を書くURLの経路の末尾の語。globが当たるかを見る対象である。 */
+const VARIABLE_WRITE_ROUTES: readonly string[] = ["update", "create", "delete"];
+
 /**
- * 解除scriptの名前が語にあっても、実行や通信をしないプログラム。
- * 読み取り、検索、gitとgh、ファイルの整理である。
+ * 解除scriptの名前が語にあっても、それだけでは何も実行しないプログラム。
+ * 読み取り、検索、gitとgh、ファイルの整理、シェルの`for`と`select`の見出しである。
+ * 名前と実行を表す語が並んだときは、このプログラムでも拒否する(`namesAndExecutes`)。
  * シェルは中身を別に調べるので、ここには置かない。
  */
 const NON_EXECUTING_PROGRAMS: ReadonlySet<string> = new Set([
@@ -738,14 +744,11 @@ const NON_EXECUTING_PROGRAMS: ReadonlySet<string> = new Set([
   "egrep",
   "fgrep",
   "rg",
-  "ag",
   "cat",
   "head",
   "tail",
-  "sed",
   "less",
   "more",
-  "bat",
   "ls",
   "tree",
   "wc",
@@ -773,6 +776,67 @@ const NON_EXECUTING_PROGRAMS: ReadonlySet<string> = new Set([
   "realpath",
   "basename",
   "dirname",
+  "for",
+  "select",
+]);
+
+/**
+ * 名前が、ファイルのパスの形の語にあるときだけ通すプログラム。
+ * `sed`の`e`コマンドと、`bat`と`ag`の`--pager`は、文字列をコマンドとして実行できる。
+ */
+const PATH_ONLY_PROGRAMS: ReadonlySet<string> = new Set(["sed", "bat", "ag"]);
+
+/** ファイルのパスの形の語。空白、引用符、`;`、`|`、`#`などの文字を含まない。 */
+const PATH_LIKE = /^[A-Za-z0-9_./@~+*?[\]{},-]+$/;
+
+/** 実行を表す語。コマンドの語、コマンド文字列、標準入力の文字列を空白などで分けた1語として当てる。 */
+const EXECUTION_TOKENS: ReadonlySet<string> = new Set([
+  "wmill",
+  "curl",
+  "wget",
+  "http",
+  "xh",
+  "httpie",
+  "npx",
+  "bunx",
+  "pnpm",
+  "pnpx",
+  "yarn",
+  "deno",
+  "bun",
+  "node",
+  "python",
+  "python3",
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+]);
+
+/** 実行を表す部分文字列。URLの経路の一部として現れる。 */
+const EXECUTION_FRAGMENTS: readonly string[] = [
+  "windmill-cli",
+  "run_wait_result",
+  "/jobs/run",
+];
+
+/** `git`が別のコマンドを実行する副コマンド。名前が当たるときは通さない。 */
+const GIT_EXECUTING_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "rebase",
+  "bisect",
+  "submodule",
+  "difftool",
+  "mergetool",
+  "filter-branch",
+]);
+
+/** `git`の、値を次の語に取るグローバルのオプション。 */
+const GIT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "-C",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
 ]);
 
 /** `find`が別のコマンドを実行する式。 */
@@ -794,6 +858,7 @@ const WMILL_READ_WORDS: ReadonlySet<string> = new Set([
   "ls",
   "logs",
   "result",
+  "history",
   "push",
   "pull",
   "generate-metadata",
@@ -804,11 +869,25 @@ const WMILL_READ_WORDS: ReadonlySet<string> = new Set([
 /** `wmill variable`で変数を書く副コマンド。 */
 const VARIABLE_WRITE_WORDS: ReadonlySet<string> = new Set(["add", "push"]);
 
+/** `mise`でリポジトリのタスクを走らせる語。 */
+const MISE_TASK_WORDS: ReadonlySet<string> = new Set(["run", "r"]);
+
 /**
  * Consoleの解除を1コマンドで起こす形の種類。
  * `script`は解除scriptの名前が当たる実行、`variable`は凍結の変数への書き込みである。
  */
 export type ConsoleReleaseFinding = "script" | "variable";
+
+/**
+ * 判定に使う、コマンドの外にある入力。
+ * `inputs`は標準入力に渡る文字列(ヒアドキュメント、ヒアストリング、パイプの連鎖の`echo`)。
+ * `assignments`は変数代入の語、`upstream`はパイプの上流のコマンドの語(すべて)である。
+ */
+export type ReleaseCallContext = {
+  readonly inputs: () => readonly string[] | null;
+  readonly assignments: readonly Word[];
+  readonly upstream: readonly Word[];
+};
 
 /**
  * 文字列の綴り。ブレースは、展開した形に加えて、括弧だけを外した形も足す。
@@ -824,9 +903,16 @@ function wordForms(word: Word): string[] {
   return spellings(word).flatMap(releaseForms);
 }
 
-/** 文字列を空白と引用符で分けた、globを判定する単位。 */
+/**
+ * globを判定する単位。文字列を空白と引用符で分け、URLの`?`と`#`より後ろを切った形も足す。
+ * 後ろに`?x=1`や`#x`が続いても、パスの部分のglobが名前に当たるかを見るためである。
+ */
 function patternTokens(text: string): string[] {
-  return text.split(/[\s"']+/).filter((token) => token !== "");
+  const tokens = text.split(/[\s"']+/).filter((token) => token !== "");
+  return tokens.flatMap((token) => {
+    const cut = token.split(/[?#]/)[0] ?? token;
+    return cut === token || cut === "" ? [token] : [token, cut];
+  });
 }
 
 /**
@@ -870,8 +956,39 @@ function mentionsFreezeVariable(text: string): boolean {
   );
 }
 
+/** 文字列が、変数を書くURLの経路か、それに当たりうるglobを含むなら真。 */
+function mentionsVariableWriteUrl(text: string): boolean {
+  return releaseForms(text).some(
+    (form) =>
+      VARIABLE_WRITE_URL.test(form) ||
+      patternTokens(form).some((token) => {
+        const parts = token.split("/");
+        return parts.some((part, index) => {
+          const route = parts[index + 1] ?? "";
+          return (
+            GLOB_CHARACTERS.test(`${part}${route}`) &&
+            (part === "variables" || globMatches(part, "variables")) &&
+            aimsAtName(route) &&
+            VARIABLE_WRITE_ROUTES.some((name) => globMatches(route, name))
+          );
+        });
+      }),
+  );
+}
+
 function anyWord(words: readonly Word[], test: (text: string) => boolean) {
   return words.some((word) => wordForms(word).some(test));
+}
+
+/** 文字列に、実行を表す語が1つでもあれば真。 */
+function hasExecutionToken(text: string): boolean {
+  if (EXECUTION_FRAGMENTS.some((fragment) => text.includes(fragment))) {
+    return true;
+  }
+  return text.split(/[\s"'`;|&()<>=:,]+/).some((raw) => {
+    const token = baseName(raw).replace(VERSION_SUFFIX, "");
+    return EXECUTION_TOKENS.has(token);
+  });
 }
 
 /** 語に、変数を書く副コマンドと凍結の変数のパスがそろっているなら真。 */
@@ -910,55 +1027,171 @@ function wmillReadsOnly(positional: readonly string[]): boolean {
   );
 }
 
-/** 解除scriptの名前が語にあっても、何も実行しないと言えるコマンドなら真。 */
-function doesNotExecute(program: string, words: readonly Word[]): boolean {
-  if (NON_EXECUTING_PROGRAMS.has(program)) return true;
-  if (program === "find") {
-    return !words.some((word) => FIND_EXECUTION.test(word.text));
-  }
-  if (program === "mise") {
-    return words.slice(1, 5).some((word) => MISE_TASK_WORDS.has(word.text));
-  }
-  return RUNNERS.has(program) && startsWithInspectionTool(words.slice(1));
+/**
+ * シェルの語から、`-c`の直後のコマンド文字列を除いた語を返す。
+ * コマンド文字列は再帰で別に調べるので、位置引数と`$0`、スクリプトのオペランドだけを残す。
+ */
+function shellOperands(args: readonly Word[]): readonly Word[] {
+  const at = args.findIndex((word) => /^-[A-Za-z]*c[A-Za-z]*$/.test(word.text));
+  return at === -1 ? args : args.filter((_, index) => index !== at + 1);
 }
 
-/** `mise`でリポジトリのタスクを走らせる語。 */
-const MISE_TASK_WORDS: ReadonlySet<string> = new Set(["run", "r"]);
+type ReaderKind = "plain" | "path-only";
+
+/** 名前が語にあっても、それだけでは何も実行しないと言えるコマンドの種類。そうでなければnull。 */
+function readerKind(
+  program: string,
+  words: readonly Word[],
+): ReaderKind | null {
+  if (NON_EXECUTING_PROGRAMS.has(program)) return "plain";
+  if (PATH_ONLY_PROGRAMS.has(program)) return "path-only";
+  if (program === "find") {
+    return words.some((word) => FIND_EXECUTION.test(word.text))
+      ? null
+      : "plain";
+  }
+  if (program === "mise") {
+    return words.slice(1, 5).some((word) => MISE_TASK_WORDS.has(word.text))
+      ? "plain"
+      : null;
+  }
+  return RUNNERS.has(program) && startsWithInspectionTool(words.slice(1))
+    ? "plain"
+    : null;
+}
+
+/** `git`の呼び出しが、別のコマンドを実行する設定、副コマンド、オプションを持つなら真。 */
+function gitExecutes(args: readonly Word[]): boolean {
+  let subcommand: string | null = null;
+  for (let index = 0; index < args.length; index += 1) {
+    const text = args[index]?.text ?? "";
+    if (subcommand === null) {
+      if (text.startsWith("-c") || text.startsWith("--config-env")) return true;
+      if (GIT_OPTIONS_WITH_VALUE.has(text)) {
+        index += 1;
+      } else if (!text.startsWith("-")) {
+        subcommand = text;
+        if (GIT_EXECUTING_SUBCOMMANDS.has(text)) return true;
+      }
+      continue;
+    }
+    if (
+      /^--(?:ext-diff|upload-pack|receive-pack|exec|open-files-in-pager)/.test(
+        text,
+      )
+    ) {
+      return true;
+    }
+    if (subcommand === "grep" && text.startsWith("-O")) return true;
+  }
+  return false;
+}
+
+/** `gh`の呼び出しが、別名やextensionでコマンドを足すものなら真。 */
+function ghExecutes(args: readonly Word[]): boolean {
+  const positional = wmillPositional(args);
+  return (
+    (positional[0] === "alias" && positional[1] === "set") ||
+    positional[0] === "extension" ||
+    positional[0] === "ext"
+  );
+}
+
+/** 何も実行しないはずのプログラムが、オプションで別のコマンドを実行する形なら真。 */
+function delegatesExecution(program: string, args: readonly Word[]): boolean {
+  if (program === "git") return gitExecutes(args);
+  if (program === "gh") return ghExecutes(args);
+  if (program === "rg") {
+    return args.some(
+      (word) => word.text === "--pre" || word.text.startsWith("--pre="),
+    );
+  }
+  return false;
+}
+
+/**
+ * 何も実行しないはずのコマンドの語に名前が当たるとき、拒否する理由があるなら真。
+ * 名前と実行を表す語が並ぶとき、実行を委ねるオプションがあるとき、
+ * ファイルのパスの形だけを通すプログラムで、名前がパスの形でない語にあるときである。
+ * 実行を表す語は、先頭の語(プログラム自身)を除いて探す。
+ */
+function readerRefuses(
+  kind: ReaderKind,
+  program: string,
+  words: readonly Word[],
+  context: ReleaseCallContext,
+  texts: readonly string[],
+): boolean {
+  const args = words.slice(1);
+  if (delegatesExecution(program, args)) return true;
+  if (
+    kind === "path-only" &&
+    words.some(
+      (word) =>
+        wordForms(word).some(mentionsRelease) && !PATH_LIKE.test(word.text),
+    )
+  ) {
+    return true;
+  }
+  const sources = [
+    ...args.map((word) => word.text),
+    ...context.assignments.map((word) => word.text),
+    ...texts,
+  ];
+  return sources.some(hasExecutionToken);
+}
 
 /**
  * 単純コマンドが、Consoleの解除scriptを実行しうるか、凍結の変数を書く形なら、その種類を返す。そうでなければnullを返す。
  * セッションの種類は問わない。`words`は、変数代入と前置きを外した語である。
- * 解除scriptの名前を軸にして、拒否を既定にする。プログラムの種類を問わず、語や標準入力の文字列に、
+ * 解除scriptの名前を軸にして、拒否を既定にする。プログラムの種類を問わず、語、変数代入の値、標準入力の文字列に、
  * 名前、名前に当たりうるglob、ブレースの形があれば`script`を返す。名前を標準入力で受ける`xargs`も同じである。
- * 例外は、読み取りなどで何も実行しない`doesNotExecute`のプログラムと、シェル(中身を別に調べる)と、
- * `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)である。
+ * 例外は次のとおりである。
+ * - 読み取りなどのプログラム(`NON_EXECUTING_PROGRAMS`と、`bun test`などの検査の道具)。名前と実行を表す語が並ぶとき、
+ *   実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`など)があるとき、変数代入の値に名前があるときは拒否する。
+ * - `sed`、`bat`、`ag`。名前がファイルのパスの形の語にあるときだけ通す。
+ * - シェル。`-c`の直後の文字列は再帰で別に調べるので、それ以外の語と標準入力の文字列に名前があるときだけ拒否する。
+ * - `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)。
  * `wmill jobs push`は名前なしで`script`を返す。
  * 凍結の変数は、`variable add/push`の語と、変数を書くURLの経路に、凍結の変数のパスが当たるときに`variable`を返す。
  */
 export function findConsoleReleaseCall(
   words: readonly Word[],
-  inputs: () => readonly string[] | null,
+  context: ReleaseCallContext,
 ): ConsoleReleaseFinding | null {
   const program = baseName(words[0]?.text ?? "");
-  if (shellArguments(words) !== null) return null;
+  const literal = context.inputs() ?? [];
+  if (anyWord(context.assignments, mentionsRelease)) return "script";
+  const shellArgs = shellArguments(words);
+  if (shellArgs !== null) {
+    return anyWord(shellOperands(shellArgs), mentionsRelease) ||
+      anyWord(context.upstream, mentionsRelease) ||
+      literal.some(mentionsRelease)
+      ? "script"
+      : null;
+  }
   if (program === "wmill") {
     if (writesFreezeVariable(words)) return "variable";
     const args = words.slice(1);
     const positional = wmillPositional(args);
     if (pushesJobs(positional)) return "script";
     const named =
-      anyWord(args, mentionsRelease) || (inputs() ?? []).some(mentionsRelease);
+      anyWord(args, mentionsRelease) || literal.some(mentionsRelease);
     return named && !wmillReadsOnly(positional) ? "script" : null;
   }
-  if (doesNotExecute(program, words)) return null;
-  const literal = inputs() ?? [];
-  if (anyWord(words, mentionsRelease) || literal.some(mentionsRelease)) {
-    return "script";
+  const kind = readerKind(program, words);
+  const named =
+    anyWord(words, mentionsRelease) || literal.some(mentionsRelease);
+  if (kind !== null) {
+    return named && readerRefuses(kind, program, words, context, literal)
+      ? "script"
+      : null;
   }
+  if (named || anyWord(context.upstream, mentionsRelease)) return "script";
   if (writesFreezeVariable(words)) return "variable";
   const writesUrl =
-    anyWord(words, (text) => VARIABLE_WRITE_URL.test(text)) ||
-    literal.some((text) => VARIABLE_WRITE_URL.test(text));
+    anyWord(words, mentionsVariableWriteUrl) ||
+    literal.some(mentionsVariableWriteUrl);
   const namesFreeze =
     anyWord(words, mentionsFreezeVariable) ||
     literal.some(mentionsFreezeVariable);

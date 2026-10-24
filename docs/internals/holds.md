@@ -191,7 +191,7 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 
 | 結果 | 戻り |
 | --- | --- |
-| 解除した | `status`が`released`。`was_active`は、解除の前に有効だったか。有効だったときだけ`audit`(`recorded`か`failed`)が付く |
+| 解除した | `status`が`released`。`was_active`は、解除の前に有効だったか。有効だったとき(と、有効かを確認できなかったとき)だけ`audit`(`recorded`か`failed`)が付く |
 | 期限切れの行を片付けた | `released`で、`was_active`が偽。通知は残さず、`audit`も付かない |
 | 有効な一覧を読めなかった | `released`で、`was_active`が偽、`active_unknown`が真。解除の前に有効だったかを確認できなかったと書いた通知を残し、`audit`が付く |
 | すでに解除されていた | `already_released`。通知は残さない。複数のタブからの再送も、副作用は1回である |
@@ -626,16 +626,36 @@ BashとDockerを持つ主体は、psqlで保留を直接書ける。
 
 Consoleの解除scriptを1コマンドで呼ぶ形は、subagentだけでなく、主セッションを含むすべてのセッションで拒否する。
 subagentの拒否と違い、`bash-guard`は、セッションの種類で分けずに`findConsoleReleaseCall`を適用する。
-対象は次の形である。
+解除scriptの名前を軸にして、拒否を既定にする。
+プログラムは問わない。次のどれかに、名前、名前に当たりうるglob、ブレースの形があれば拒否する。
 
-- `wmill`の`script run`、`script preview`、`job run`、`job rerun`、`job restart`で、語に解除scriptの名前を含むもの。`mise exec`、`bunx`、`npx`、`sh -c`の中も見る
-- `curl`、`wget`、`http`、`xh`が、解除scriptの名前を含むURLを呼ぶ形
-- 凍結の変数`f/factory/freezes`を名指しする、`wmill variable add`と`wmill variable push`
-- 凍結の変数を名指しして、変数を書くURL(`/variables/update`、`/variables/create`、`/variables/delete`)を呼ぶ`curl`
-- 実行系の`-e`の文字列に、解除scriptの名前を含むもの
+- コマンドの語
+- 変数代入の値
+- 標準入力の文字列(ヒアドキュメント、ヒアストリング、パイプの連鎖の`echo`と`printf`)
+- 読み取りのプログラム以外の前にある、パイプの上流の語
 
-`wmill script get`、`wmill generate-metadata`、`wmill variable get`、変数の読み取りのURL、解除scriptのテストの実行は、拒否しない。
-ベストエフォートで、ハッシュでの呼び出し(`run_wait_result/h/<hash>`)、パーセント符号化したパス、変数で組み立てた名前は止められない。
+`npx windmill-cli`、`bunx windmill-cli`、`bun x`、`pnpm dlx`、`deno run npm:`のような実行系の包み方も、名前で止まる。
+シェルは、`-c`の直後の文字列を再帰で別に調べ、それ以外の語を名前に当てる。
+
+読み取りのプログラム(`git`、`gh`、`grep`、`rg`、`cat`、`wc`など)と、検査の道具(`bun test`、`bunx biome`、`mise run`)は、名前だけでは拒否しない。
+次のときは拒否する。
+
+- 同じコマンドに実行を表す語(`wmill`、`curl`、`npx`、`bun`、`sh`など)が並ぶ。
+- 実行を委ねるオプション(`git -c`、`git rebase`、`gh alias set`、`rg --pre`)がある。
+- 変数代入の値に名前がある。
+`sed`、`bat`、`ag`は、名前がファイルのパスの形の語にあるときだけ通す。
+`awk`は拒否する。名前を含む検索は、`grep`、`rg`、Readツールを使う。
+
+`wmill`は、解除scriptを実行せずに読む・配る副コマンド(`script get`、`script push`、`job list`、`job history`など)を通す。
+名前が語に現れない`wmill jobs push`は拒否する。
+
+凍結の変数`f/factory/freezes`を書く形も拒否する。
+`wmill variable add`と`wmill variable push`が対象である。
+変数を書くURL(`/variables/update`、`/variables/create`、`/variables/delete`)を呼ぶ形も対象である。
+URLの経路と変数のパスのglobも当てる。
+
+ソースは、Readツールか`git show`で読む。
+ベストエフォートで、ハッシュでの呼び出し(`run_wait_result/h/<hash>`)、パーセント符号化したパス、変数やファイルで組み立てた名前は止められない。
 
 ## 参照の禁止
 
