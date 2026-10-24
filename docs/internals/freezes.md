@@ -154,10 +154,10 @@ deployの保留の判定は読む段の中で済ませるので、段は増え�
 | `mise run push`、`push:prune` | 拒否する。`push:dry`は通る | 拒否する |
 | `mise run migrate` | 拒否する | 拒否する |
 | `mise run deploy` | 先頭の確認で拒否する。通った後は、`freeze.ts apply`も拒否する | 先頭の確認は警告で通る。`freeze.ts apply`は拒否する |
-| `mise run up` | 先頭の確認で拒否する | 警告で通す |
+| `mise run up` | コンテナに触れる前の確認で拒否する | 警告で通す |
 | `scripts/bootstrap.sh`の全手順のモード | pushで止まる | pushで止まる |
 
-`up`と`deploy`の先頭の確認(`freeze.ts check`)は、読めないときに警告だけで通す。
+`up`と`deploy`の確認(`freeze.ts check`)は、読めないときに警告だけで通す。
 Windmillが止まっていると変数を読めず、スタックを起こせなくなるためである。
 `check`が変数を読む待ちは10秒で打ち切り、同じく警告で通す。
 `up`は復旧の道具なので、応答しないサーバーで長く止まらないようにする。
@@ -264,7 +264,7 @@ deployの保留を置く手順は、[運用](../operations.md)の「migrationの
 mise run freeze:reset
 ```
 
-`mise run deploy`と`mise run up`は、先頭で`freeze.ts check`を実行する。
+`mise run deploy`と`mise run up`は、コンテナを変える前に`freeze.ts check`を実行する。
 変数を読めないときは警告だけで進み、壊れていれば失敗する。
 
 ## 反映の経路

@@ -4738,7 +4738,7 @@ pullは済んでいて、次の起動でmiseが新しい`[env]`を読むので�
 
 `mise run push`と`mise run deploy`は、凍結中のスケジュールを除くラッパー(`scripts/freeze.ts`)を通る。
 `mise run migrate`も同じラッパーを通り、deployの保留が有効か、凍結を読めなければ止まる。
-`mise run up`は先頭で保留を確かめ、有効なら止まる。
+`mise run up`は、Dockerの版の検査の後、コンテナを変える前に保留を確かめ、有効なら止まる。
 ラッパーは`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
 理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。
@@ -4755,7 +4755,7 @@ workerのコンテナが作り直されるので、実装中(`implementing`)の�
 ### migrationの前にdeployを保留する
 
 migrationのように、反映を待たせたい作業の間は、deployの保留を置く。
-保留が有効なあいだ、`self_update`は反映全体を見送り、`mise run push`、`push:prune`、`migrate`、`deploy`、`up`は先頭で止まる。
+保留が有効なあいだ、`self_update`は反映全体を見送り、`mise run push`、`push:prune`、`migrate`、`deploy`、`up`は、反映の前に止まる。
 仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[セキュリティ](security.md)の「凍結とdeployの保留」にある。
 
 1. `f/factory/deployed_sha`が、保留の仕組みを含むコミットに進んでいることを確かめる。

@@ -34,8 +34,8 @@ LOG_MAX_FILE = "10"
 description = "Start the local Windmill stack (refuses while a deploy freeze is active)"
 run = """
 set -e
-bun ./scripts/freeze.ts check
 scripts/check-docker-version.sh
+bun ./scripts/freeze.ts check
 docker compose -f infra/docker-compose.yml pull --ignore-pull-failures
 docker compose -f infra/docker-compose.yml build
 docker compose -f infra/docker-compose.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile
