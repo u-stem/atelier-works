@@ -1,0 +1,9 @@
+summary: '[LIB] scheduleの失敗の記録'
+description: 内部ライブラリです。直接実行するものではありません。scheduleのジョブの失敗を1件記録し、Discordに知らせるかを判定します。
+lock: '!inline f/factory/lib/schedule_failure_report.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

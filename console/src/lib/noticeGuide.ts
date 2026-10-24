@@ -320,7 +320,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "periodic_worker_missing",
     guide(
-      "tag periodicのジョブが、予定時刻から11分以上実行されずに待っています。定期ジョブ用のworkerが居ないか、塞がっているか、tagの設定がずれています。",
+      "tag periodicのジョブが、予定時刻から13分以上実行されずに待っています。定期ジョブ用のworkerが居ないか、塞がっているか、tagの設定がずれています。",
       "本文の「次の操作」に従い、コンテナの状態、カスタムtagの許可、Windmillの画面での実行中のジョブとワーカーグループのtagの順に確かめてください。",
       {
         note: "待ちが解けると、自己更新が自動で解決します。",
@@ -371,7 +371,17 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     "schedule_failing_check_failed",
     guide(
       "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できませんでした。失敗が続いても気づけない状態です。",
-      "on_error_scheduleのジョブのログで、failed to read the schedule historyのエラーを確かめ、ジョブ履歴を読む権限があるかを確かめてください。",
+      "detect_schedule_failuresのジョブのログで、failed to read the schedule historyのエラーを確かめ、ジョブ履歴を読む権限があるかを確かめてください。",
+    ),
+  ],
+  [
+    "schedule_detector_stale",
+    guide(
+      "scheduleの失敗を拾う検出器(detect_schedule_failures)が、25分以上成功していないか、scheduleが無効になっています。この間、scheduleのジョブが失敗しても、記録も通知もされません。",
+      "本文の「次の操作」に従い、detect_schedule_failuresの直近のジョブのログ、scheduleのenabled、凍結の有無の順に確かめてください。tag periodicのworkerが止まっているときは、periodic_worker_missingの案内に従います。",
+      {
+        note: "検出器が成功すると、defaultのworkerの停止を見張る確認(5分ごと)が自動で解決します。",
+      },
     ),
   ],
   [

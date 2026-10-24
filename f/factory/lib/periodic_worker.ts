@@ -24,7 +24,7 @@ export const PERIODIC_WORKER_TAG = "periodic";
  * 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、この関係を固定する。
  * 分で本文に出すので、60の倍数にする。
  */
-export const PERIODIC_JOB_WAIT_SECONDS = 660;
+export const PERIODIC_JOB_WAIT_SECONDS = 780;
 
 /**
  * 待ちの通知の本文の、しきい値より前の固定の部分。

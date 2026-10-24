@@ -256,7 +256,7 @@ export async function summarizePendingDays(
  * 届かなかった日が`yesterday`(その実行で最後に出すはずの日)のときは、
  * 次の実行が自動で出し直すので、人の操作は要らず、例外にしない。
  * 成功で終えると、Discordに届かない状態が続いても、ジョブのログの警告しか残らない。
- * 昨日より古い日まで届かないときは、例外にして`on_error_schedule`に失敗を`job_failures`へ記録させ、Consoleに残す。
+ * 昨日より古い日まで届かないときは、例外にして、検出器(`detect_schedule_failures`)に失敗を`job_failures`へ記録させ、Consoleに残す。
  * stateは次に出す日の前日を指しているので、次の実行は届かなかった日から再開する。
  */
 export function assertAllDelivered(

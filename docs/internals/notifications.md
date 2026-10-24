@@ -33,8 +33,9 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
-| `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から11分以上待たされていることを検知し、通知を新しく残した |
+| `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から13分以上待たされていることを検知し、通知を新しく残した |
 | `github_collect_stale` | GitHubの収集が止まっています | `self_update`(2分ごと) | 設定の所有者の収集が閾値を超えて成功していないこと、または所有者の収集は成功していても一部のリポジトリの記録が閾値を超えて古いことを検知し、通知を新しく残した。`repo_allowlist`が空で、設定により収集が止まっていること(収集の無効)を検知したときも、通知を新しく残した。定期ジョブ用のworkerの停止を同じ回に検知したときは残さない。ただし、収集の無効は設定の事実なので、停止の間も残す |
+| `schedule_detector_stale` | scheduleの失敗の検出器が止まっています | `default_worker_watch`(5分ごと) | scheduleの失敗を拾う検出器(`detect_schedule_failures`)が25分以上成功していないこと、または検出器のscheduleが無効になっていることを検知し、通知を新しく残した。ホストのスリープ明けと、検出器のscheduleの反映の直後は残さない |
 | `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
@@ -70,7 +71,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
-| `on_error_schedule` | スケジュールのジョブが失敗した。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
+| `detect_schedule_failures` | スケジュールのジョブが失敗した。検出器が失敗をジョブ履歴から拾い、記録した後に送る。失敗の発生から通知まで、最大5分遅れる。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。1回の実行で拾った同じscriptの失敗が複数あっても、最新の失敗の内容で1回に収める。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗して、ここで拾われる。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
 | `issue_proposal_apply` | Issue化の提案の反映が失敗した |
@@ -93,6 +94,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `periodic_worker_missing` | なし | 説明に原因、「次の操作」 |
+| `schedule_detector_stale` | なし | 説明に原因、「次の操作」 |
 | `github_collect_stale` | Consoleの通知 | 説明に閾値と最後の成功と最新の実行の原因(リポジトリ単位の古さでは、記録が古いリポジトリの数と理由別の内訳。収集の無効では、止まっている設定と、設定を戻すか`repo_allowlist`に並べる操作)、「次の操作」、所有者 |
 | `default_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
@@ -200,7 +202,7 @@ DiscordがHTTP 429を返したら、待ってから1回だけ再送する。待�
 | 呼び出し元 | 失敗の記録 |
 | --- | --- |
 | ふつうのステップ | ジョブのログにwarn |
-| 失敗の記録と通知を受け持つ処理(`on_error_flow`、`on_error_schedule`、`requirements_apply`の例外処理など) | ジョブのログにerror |
+| 失敗の記録と通知を受け持つ処理(`on_error_flow`、`detect_schedule_failures`、`requirements_apply`の例外処理など) | ジョブのログにerror |
 
 届かなかった通知は再送しない。webhookのURLが空のインスタンスでは、何も送らない。
 

@@ -28,11 +28,6 @@ describe("watch_main_ci", () => {
     expect(yaml).toContain("no_flow_overlap: true");
   });
 
-  test("reports a failure to the schedule error handler", async () => {
-    const yaml = await read("f/factory/watch_main_ci.schedule.yaml");
-    expect(yaml).toContain("on_failure: f/factory/on_error_schedule");
-  });
-
   test("runs on the default worker", async () => {
     const yaml = await read("f/factory/watch_main_ci.script.yaml");
     expect(yaml).not.toMatch(/^tag:/m);

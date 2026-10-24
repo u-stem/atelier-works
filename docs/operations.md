@@ -2609,7 +2609,7 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
    トークンの無い所有者は`error_code`が`no_token`になる。
    成功が一度も無い所有者は、`repo_allowlist`が空でないとき、収集が動いている間は通知しない。
    `repo_allowlist`が空のときは、監視の開始から閾値の後に通知する。
-   収集が止まると、最後の実行から16分の後に知らせる。
+   収集が止まると、最後の実行から18分の後に知らせる。
    一度成功した所有者が`no_token`になったときは、閾値を超えると`github_collect_stale`で知らせる。
 6. 所有者ごとの`requests`が、リポジトリの数を100で割って切り上げた値に合うことを見る。
 7. 設定の`repo_allowlist`が空の所有者は、[件数の確かめ方](#許可リストが空のときの件数の確かめ方)の手順で、一覧の漏れを確かめる。
@@ -2714,14 +2714,14 @@ stateを読めない回は、所有者の最古の実行の開始時刻で代え
 
 | 状況 | 扱い |
 | --- | --- |
-| 成功が一度も無く、トークンの無い所有者。収集が動いている間で、`repo_allowlist`が空でないとき | 通知しない。最新の実行の終わりが16分以内なら、収集が動いていると見なす。`repo_allowlist`が空のときは、この行に当たらず、猶予の後に通知する |
+| 成功が一度も無く、トークンの無い所有者。収集が動いている間で、`repo_allowlist`が空でないとき | 通知しない。最新の実行の終わりが18分以内なら、収集が動いていると見なす。`repo_allowlist`が空のときは、この行に当たらず、猶予の後に通知する |
 | レート制限で待っている間 | 待ちが終わってから10分まで通知しない。基準の時刻から60分を超えたら通知する |
 | GitHubの5xxと時間切れ | 基準の時刻から60分まで通知しない |
 | 最新の実行が150秒以内に始まって実行中 | 通知しない |
 | 定期ジョブ用のworkerが止まっている | 新しい通知を足さない。`periodic_worker_missing`が知らせる |
 
-最新の実行の終わりが16分より前なら、収集が動いていないと見なす。
-定期ジョブ用のworkerの待ち(最大11分)に、収集の1周回を足した時間である。
+最新の実行の終わりが18分より前なら、収集が動いていないと見なす。
+定期ジョブ用のworkerの待ち(最大13分)に、収集の1周回を足した時間である。
 このとき通知の原因は、スケジュールが止まったか、定期ジョブ用のworkerが受けていないことである。
 
 `repo_allowlist`が空のときは、成功が一度も無くトークンの無い所有者も、ほかの所有者と同じ猶予と閾値で通知する。
@@ -3460,7 +3460,7 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | 承認待ち(`approval_requested`) | 要件定義が承認待ちになった | [要件定義を承認・却下する](#要件定義を承認却下する) |
 | 要件定義承認(`requirements_approved`) | 要件定義が承認され、Issueにリンクを投稿した | なし。実装が有効なら実装フローが始まる |
 | 人による対応が必要(`needs_human`) | 作業項目が人の対応待ちか期限切れになった。または、Factoryが作ったPRのCIが失敗した。通知を新しく残したときに届く | 通知の「次の操作」に従う。作業項目を再実行するときは、Windmillで`retry_work_item`を実行する。PRのCIの失敗は[PRのCIを監視する](#prのciを監視する)にある |
-| ジョブ失敗(`job_failed`) | フローやスケジュールが失敗した。孤児のジョブや閉じたIssue・PRの片付けも含む。スケジュールは、連続した失敗の初回とエラー文が変わったときだけ届く。同じ失敗が続くときは、3回目に`schedule_failing`が出て、そのときもう一度届く(同じスケジュールの未解決の`schedule_failing`が残っているときは届かない) | Consoleの**要対応**の失敗か、**システム**の「作業項目に紐づかない失敗」で内容を確かめる。作業項目の失敗は再実行する。dependabotの作業項目は再実行できないので、通知の「次の操作」に従ってPRを人が確かめる |
+| ジョブ失敗(`job_failed`) | フローやスケジュールが失敗した。孤児のジョブや閉じたIssue・PRの片付けも含む。スケジュールは、連続した失敗の初回とエラー文が変わったときだけ、失敗の発生から最大5分遅れて届く。同じ失敗が続くときは、3回目に`schedule_failing`が出て、そのときもう一度届く(同じスケジュールの未解決の`schedule_failing`が残っているときは届かない) | Consoleの**要対応**の失敗か、**システム**の「作業項目に紐づかない失敗」で内容を確かめる。作業項目の失敗は再実行する。dependabotの作業項目は再実行できないので、通知の「次の操作」に従ってPRを人が確かめる |
 | PR作成・更新(`pr_opened`) | 実装フローがPRを作成か更新した | [PRができたら](#prができたら) |
 | PRレビュー完了(`pr_reviewed`) | レビューを投稿した | 指摘を確かめる。修正必須の指摘が無ければApproveを判断する |
 | PR修正適用(`pr_fixed`) | 修正をpushし、再レビューを依頼した | 再レビューを待つ。補足に依頼の失敗が載っていれば、GitHubのPRで人がレビュアーを依頼する |
@@ -3575,14 +3575,15 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から11分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
+| `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から13分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
 | `github_collect_stale` | 設定の所有者の収集が、閾値(`owners`が2人までは25分)を超えて成功していない。本文は`<所有者>:`と空白で始まり、所有者ごとに1件残る。または、所有者の収集は成功していて、一部のリポジトリの記録が閾値を超えて古い。本文は`<所有者>のリポジトリ:`と空白で始まり、所有者ごとに1件残る。または、`repo_allowlist`が空で、`gh_collect_enabled`か`gh_collect_detail_enabled`が`false`である。本文は`<所有者>の収集の無効:`と空白で始まり、所有者ごとに1件残る。Discordにも届く | 通知の説明と、Discordの「次の操作」に従い、[実行の記録の読み方](#実行の記録の読み方)の対処をする。収集が成功するか、`owners`から外すと、自動で解決される。`gh_collect_enabled`を`false`にしたときは、`repo_allowlist`が空でなければ解決される。リポジトリの古さの通知は、対象のリポジトリがすべて、下流が記録を使う閾値の内に戻ると解決される。収集の無効の通知は、両方の設定を`true`に戻すか、`repo_allowlist`に並べると解決される。重なる通知は[収集が止まったときの通知](#収集が止まったときの通知)にある |
 | `default_worker_missing` | defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブが1つも無い。defaultのworkerが居ないか、ジョブを受けられない状態で、flowとscriptが動かない。長いジョブが枠を埋めて後ろのジョブが待つだけのときは出ない。Discordにも届く | `docker compose ps windmill_worker`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、Windmillの画面のWorkers画面で、ワーカーグループdefaultのworkerが生きているかを確かめる。生きていなければ、`docker compose logs windmill_worker`でエラーを確かめる。受けるようになると、定期ジョブ用のworkerで動く確認(5分ごと)が自動で解決する |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら、メモリを使うジョブの見直しか、メモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |
 | `review_gated_prolonged` | `review_post_mode`が`gated`のまま、レビューをPRに投稿しない状態が3日以上続いた。本文に作業項目の画面のリンクが載る。日数と件数は日次のまとめの「レビューの投稿」欄に出る。Discordには届かない | 投稿を続けるなら、`factory_config`の`review_post_mode`を`comment_only`に戻す。戻すと、次の日次のまとめの実行で自動で解決される。意図して続けるなら、作業項目で結果を確かめ、人が解決する。続く間は翌日に出直す |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
-| `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
+| `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `detect_schedule_failures`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
+| `schedule_detector_stale` | scheduleの失敗を拾う検出器(`detect_schedule_failures`)が、25分以上成功していないか、検出器のscheduleが無効になっている。この間、scheduleのジョブが失敗しても、記録も通知もされない。原因ごとに本文が固定で、無効のときは本文が別になる。検出器のscheduleを反映した直後と、ホストのスリープ明けは残さない。Discordにも届く | 通知の「次の操作」に従い、検出器の直近のジョブのログ、scheduleの`enabled`、凍結の順に確かめる。検出器が成功すると、`default_worker_watch`(5分ごと)が自動で解決する([scheduleの失敗の検出](#scheduleの失敗の検出)) |
 | `drawio_viewer_bump_held` | draw.ioのビューアの固定を、自動では上げなかった。原因は3つある。ビューアの大きさが2割を超えて変わった。取得したファイルがGitHubの記録と一致しない。PRの無い既存のブランチの中身が作るはずの内容と違う。本文に版と理由が載る。上げる版に選んだ最新の版を保留している間は、古い版も上げない。メジャー版の更新は、このお知らせではなく、題名が[major]で始まるPRになる | 本文の「次の操作」に従う。大きさの変化が正当なら、Windmillで`f/factory/drawio_viewer_bump`を`approved_version`にその版を指定して実行する。既存のブランチが原因なら、ブランチを確かめ、不要なら削除する。原因が続けば、解決しても次の週に出直す([draw.ioのビューアの更新](internals/console.md#ビューアの更新)) |
 | `main_ci_failed` | 対象リポジトリの既定のブランチ(main)のコミットで、CI(GitHub Actionsのpushの実行)が失敗した。本文に、リポジトリ、コミットの先頭7文字、失敗した実行のリンクが載る。1つ前のコミットも失敗していたときは、本文にその旨が付く。Discordにも届く | リンク先の実行のログで原因を確かめ、直す修正を入れるか、原因のコミットを取り消す。同じリポジトリでより新しいコミットのCIが通ると、自動で解決される。同じコミットの実行をやり直して通っても、失敗は取り消されないので、次のコミットが通るまで残る |
 | `main_ci_check_denied` | 対象リポジトリの既定のブランチのCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのmainのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される。権限を戻すと、最新の失敗は通知され、より新しい行がある古い失敗は通知されない([PATの権限](security.md#githubのpat)) |
@@ -3622,7 +3623,7 @@ workerが居ても、枠が塞がっているときや、tagの設定がずれ�
 次の点に注意する。
 
 - workerが動いていても、ジョブが大量に溜まると5分以上待つことがある。通知が出たら、待っているジョブの数と実行中のジョブを確かめる。
-- workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検知(`schedule_failing`)が拾う。
+- workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検出が拾う([scheduleの失敗の検出](#scheduleの失敗の検出))。
 - `mise run up`でConsole用のworkerを作り直している間は、`console_worker_missing`が出うる。作り直しが終われば、通知を解決する。
 - この検知は、`console_fetch_watch`のスケジュールが有効なことを前提にする。スケジュールを無効にするか削除すると、待つジョブと完了の記録が新しく増えなくなる。判定できない回が続き、1時間で`console_worker_check_failed`になる。
 
@@ -3661,17 +3662,17 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 定期ジョブ用のworkerがジョブを受けているかどうかは、自己更新(`self_update`)が毎回の最後に、Console用のworkerの確認に続けて確かめる。
 判定は、tag `periodic`のジョブのうち、予定時刻を過ぎても実行が始まっていないものを、古い順に100件まで読んで決める。
-予定時刻から11分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定し、通知`periodic_worker_missing`を残してDiscordにも送る。
-11分未満の待ちと、待つジョブが無いことは、問題なしと判定する。
+予定時刻から13分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定し、通知`periodic_worker_missing`を残してDiscordにも送る。
+13分未満の待ちと、待つジョブが無いことは、問題なしと判定する。
 しきい値は、tag `periodic`を付けた各scriptについて、他のscriptの`timeout`の合計に余裕を足した値以上にしている。
 枠が1つなので、長く動くジョブの後ろで待つ間を、workerの不在と誤って知らせないためである。
-今の4本では、`collect_github`と`default_worker_watch`が最も待たされ、他の3本の`timeout`の合計である360秒まで待つ。
+今の5本では、`detect_schedule_failures`が最も待たされ、他の4本の`timeout`の合計である480秒まで待つ。
 通知の解決は、本文のしきい値より前の固定の部分で選ぶので、しきい値を変える前に残した通知も、自動で解決される。
 
 Console用のworkerの確認と違い、動作の証拠は求めない。
 tag `periodic`を付けたscriptが無い間や、スケジュールが無効な間は、待つジョブがそもそも作られない。
 証拠を求めると、その間も判定できない回が続き、確認の失敗が通知されるためである。
-待つジョブが無くなるか、11分未満になると、残した通知を自動で解決する。
+待つジョブが無くなるか、13分未満になると、残した通知を自動で解決する。
 
 通知が立つのは、workerが居ないときだけではない。
 workerが居ても、枠が塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
@@ -3680,17 +3681,17 @@ workerが居ても、枠が塞がっているときや、tagの設定がずれ�
 次の点に注意する。
 
 - この検知は、tag `periodic`のジョブが1件以上作られて初めて働く。tagを付けたscriptが無い間は、workerが止まっていても気づけない。
-- workerの枠は1つなので、長く動くジョブがあると、ほかのジョブが11分以上待ちうる。通知が出たら、実行中のジョブと、そのscriptの`timeout`を確かめる。
-- workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検知(`schedule_failing`)が拾う。
+- workerの枠は1つなので、長く動くジョブがあると、ほかのジョブが13分以上待ちうる。通知が出たら、実行中のジョブと、そのscriptの`timeout`を確かめる。
+- workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検出が拾う([scheduleの失敗の検出](#scheduleの失敗の検出))。
 - `mise run up`で定期ジョブ用のworkerを作り直している間は、通知が出うる。作り直しが終われば、自動で解決する。
 - スケジュールの`permissioned_as`がsuperadminなら、カスタムtag`periodic`の許可が無くても動く。
   superadminでなければ、許可が要る。
-  `notify_daily_summary`、`auto_retry_pr_review`、`collect_github`、`default_worker_watch`のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
+  `notify_daily_summary`、`auto_retry_pr_review`、`collect_github`、`default_worker_watch`、`detect_schedule_failures`のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
   許可を欠くと、ジョブは積まれないことがある。実機では確かめていないので、起きうる事象として扱う。
-  ジョブが積まれなければ、この検知も、スケジュールの失敗の検知(`schedule_failing`)も働かず、どちらでも拾えない。
+  ジョブが積まれなければ、この検知も、スケジュールの失敗の検出も働かず、どちらでも拾えない。
   `mise run doctor`の「カスタムtag」の項目で、`periodic`が`OK`であることを確かめて防ぐ。`NG`なら`mise run instance:tags`を実行する。
-- defaultのworkerが止まったときの検知(`default_worker_watch`)も、このworkerで動く。
-  このworkerが止まると、その検知も止まる。片方だけが止まるときは、もう一方が拾う。
+- defaultのworkerが止まったときの検知(`default_worker_watch`)と、スケジュールの失敗の検出(`detect_schedule_failures`)も、このworkerで動く。
+  このworkerが止まると、どちらも止まる。defaultのworkerの検知は、片方だけが止まるときは、もう一方が拾う。
 - 一覧を読めなかった回と、応答が一覧の形でない回は、判定できないものとして扱う。通知は出さず、残した通知も解決しない。自己更新のジョブログに警告を残す。
 
 警告は次の3種類である。
@@ -3708,8 +3709,8 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_pe
 ```
 
 1. `stop`で定期ジョブ用のworkerを止める。
-2. tag `periodic`のscriptの次の予定から約16分以内に、通知`periodic_worker_missing`ができ、Discordにも届くことを見る。
-   内訳は、待ちの11分と、自己更新の間隔2分に、自己更新の実行時間を足した値である。
+2. tag `periodic`のscriptの次の予定から約18分以内に、通知`periodic_worker_missing`ができ、Discordにも届くことを見る。
+   内訳は、待ちの13分と、自己更新の間隔2分に、自己更新の実行時間を足した値である。
 3. `start`で戻す。待ちのジョブが動き出して数分以内に、通知が自動で解決されることを見る。
 
 tag `periodic`を付けたscriptが、定期ジョブ用のworkerで動くことは、反映の後に次のコマンドで確かめる。
@@ -3741,6 +3742,8 @@ defaultのworkerが止まっていないかは、tag `periodic`のscript `defaul
 defaultのworkerの中で動くscriptは、そのworkerが止まると動かず、止まったことを知らせられない。
 そこで、定期ジョブ用のworkerで動かす。
 定期ジョブ用のworkerが止まったことは、逆に、defaultのworkerで動く`self_update`が確かめる([定期ジョブ用のworkerの検知を確かめる](#定期ジョブ用のworkerの検知を確かめる))。
+このscriptは、defaultのworkerの確認の後に、scheduleの失敗を拾う検出器が止まっていないかも確かめる([scheduleの失敗の検出](#scheduleの失敗の検出))。
+2つの確認は独立していて、片方が失敗しても、もう一方を止めない。
 
 通知するのは、defaultのworkerが止まっているときだけである。
 枠がすべて塞がっていた割合や、queueの待ちの長さでは通知しない。
@@ -3779,7 +3782,8 @@ Claudeの長いジョブ(実装は最長6時間)がdefaultの枠を埋め、後�
 動いているジョブが無いので、先に動くジョブの後ろで待っているのではない。
 止まってから通知までの遅れは、最大で約20分である。
 内訳は、待つジョブが次に予定される時刻までの約90秒、しきい値の600秒、確認の周期の300秒、読み直しの60秒である。
-読み直しを含めた確認の上限は100秒(観測ごとの上限20秒を2回と、おく60秒)で、scriptの`timeout`の120秒に収まる。
+読み直しを含めると、確認の上限は100秒になる(観測ごとの上限20秒を2回と、おく60秒)。
+続けて行う検出器の確認の上限10秒を足しても110秒で、scriptの`timeout`の120秒に収まる。
 
 待ちが10分未満になるか、defaultで動くジョブが現れると、残した通知を自動で解決する。
 一覧を読めなかった回、応答の形が想定外の回、時間切れの回は、判定できないものとして扱う。
@@ -3809,7 +3813,7 @@ workerが居ても、ジョブを受けられない状態のときにも立つ�
 次の状態は拾わない。
 
 - defaultのworkerは居るが、ジョブが毎回すぐ失敗する。待ちが短く、止まりと判定されない。
-  失敗の検知(`schedule_failing`)は、`on_error_schedule`が行うが、このscriptもdefaultのworkerで動くので、一斉に失敗すると鳴らないことがある。
+  失敗の検出(`detect_schedule_failures`)は、定期ジョブ用のworkerで動くので、defaultのworkerのジョブが一斉に失敗しても鳴る([scheduleの失敗の検出](#scheduleの失敗の検出))。
 - 確認できない状態が続く。`unknown`は警告ログだけで、通知にしない。ジョブログの警告を見ないと気づけない。
 - 定期ジョブ用のworkerとdefaultのworkerが両方止まる。Windmillのserver、DB、docker、ホストの共通の障害も同じである。互いの監視は、片方だけが止まるときに働く。
 - 長いジョブ(最長6時間)がdefaultの枠を埋めている間は、`self_update`が待たされ、定期ジョブ用のworkerの確認が走らない。その間に定期ジョブ用のworkerが止まっても、気づけない。
@@ -4363,9 +4367,238 @@ stateはscriptのパスごとに持つ。
   主な原因はnoticeの記録の失敗で、この回は通知が残らない。
   回数が上限以上の間は、次の回で記録をやり直す。
 
+### scheduleの失敗の検出
+
+このWindmillは、scheduleの失敗時の呼び出し(`on_failure`)を呼ばない。
+そのため、どのscheduleにも`on_failure`を設定しない。
+scheduleが起こしたジョブの失敗は、script`detect_schedule_failures`(検出器)が、Windmillのジョブ履歴から拾う。
+tag `periodic`のworkerで、5分ごとに動く。
+defaultのworkerで動かすと、長いジョブ(実装は最長6時間)が枠を塞ぐ間、検知が止まるためである。
+
+拾った失敗は、`factory.job_failures`に記録し、Discordの`job_failed`と、要対応の`schedule_failing`で知らせる。
+失敗の発生から通知までは、最大5分遅れる。
+
+#### 拾う失敗
+
+拾うのは、`f/factory/`の下のscriptかflowで、scheduleが起こした根のジョブの失敗である。
+Factory以外の個人のscheduleは拾わない。
+次の実行は拾わない。
+
+- scheduleが起こしていない実行。手動の実行とpreviewである。
+- 前回の実行中で見送られた回(`is_skipped`)。
+- 人が取り消した実行。
+
+ジョブの上限(`timeout`)による取り消しは、失敗として拾う。
+ジョブ履歴で`canceled_by`が`timeout`のものである。
+この値は実機で未確認である。
+
+記録の`flow_path`は、失敗したscriptかflowのpathにする。
+連続した失敗の判定が読むジョブ履歴と同じ値である。
+
+#### 読む範囲
+
+前回の続きの位置は、検出器自身の直近の成功したscheduleの実行の結果に、`processed_until`として持つ。
+手動の実行、preview、前回の実行中で見送られた回(`is_skipped`)は数えない。
+見送られた回の`success`の値は、実機で未確認である。
+表は足さず、変数も増やさない。
+続きの位置と心拍の元のデータは、ジョブ履歴の1か所に集まる。
+
+- 完了時刻が続きの位置以降の失敗を、新しい失敗とする。
+- 一覧は開始時刻でしか絞れないので、続きの位置の7時間前から開始したジョブを読む。
+  `timeout`を持たないscriptが、インスタンスの`job_default_timeout`(21600秒以上にする決まりである)まで動きうるためである。
+- 続きの位置が現在から24時間より古いときは、24時間前から読む。
+  このとき、警告`the last scan is older than the maximum window; scanning the last day only`を残す。
+  検出器が長く止まった後に、古い失敗を束で届けないためである。
+- 通常の回は、次の`processed_until`を、この回の開始の1分前にする。
+  全件を読み終えた回も、ページの上限で打ち切った回も同じである。
+  完了時刻の記録と一覧への表示のずれで取りこぼさないためである。
+  重なった分は、記録済みとして飛ばす。
+- 1回に読むのは、100件の5ページまでである。
+  上限に達したら、読んだジョブの作成時刻の最大を、結果の`scan_started_after`に入れて成功で終える。
+  あわせて、この回が完了時刻の下限に使った基準を、`scan_completed_from`に入れる。
+  この回の`processed_until`は、通常の回と同じに、この回の開始の1分前まで進める。
+  次の回(続きの回)は、`scan_started_after`をそのまま開始時刻の下限にし、遡りを引かない。
+  完了時刻の下限は`scan_completed_from`を引き継ぎ、0にはしない。0にすると、基準を作った直後に打ち切られたとき、過去の失敗を記録する。
+  続きの回は、`processed_until`を進めずに、前回の値のまま返す。重なりは、記録済みの除外で吸収する。
+  続きを読み終えた後の通常の回が、`processed_until`と7時間の遡りで読み直す。
+  打ち切った回の時点で実行中で、後から失敗したジョブは、続きの回の下限より前に開始している。この読み直しで拾う。
+  完了時刻で絞ると、未読の失敗のうち、開始が遅く完了の早いものを落とす。
+  溜まった失敗を読み直し続ける問題も起きる。
+  `scan_started_after`が24時間より古いときは、24時間前を下限にする。
+  上限に達して、要求した下限より後に作成されたジョブが1件も読めないときだけ、進めないので例外にする。
+- 前回の実行の結果を読めないときは、例外にして次の回に任せる。
+  前回の実行が24時間より古ければ、24時間前から読み、次の警告を残す。
+  `could not read the result of the previous run, which is older than a day; scanning the last day only`
+  読めない状態が続いても、24時間で抜けるためである。
+- 初回(成功した実行が無い)は、何も記録せず、続きの位置だけを作って成功で終える。過去の失敗をさかのぼって通知しない。
+- 失敗した回は成功に数えないので、続きの位置が進まず、次の回が同じ範囲をやり直す。
+
+#### 記録と通知
+
+失敗したジョブのIDを、`job_failures`の`job_id`とルートのジョブIDに記録する。
+発生時刻は、失敗したジョブの完了時刻である。
+`step`が空の行に同じジョブIDがあれば、記録済みとして飛ばす。
+記録してから通知する。
+表に一意索引は足さない。
+同じ失敗が重なりうる経路は2つある。
+1つは、1回の読み込みの中でページがずれて、同じジョブが2回出ることである。抽出の段階で、ジョブIDにより1件にする。
+もう1つは、手動の実行とpreviewの並行である。下の既知の限界に書く。
+scheduleの実行同士は、定期ジョブ用のworkerの枠が1つで、`no_flow_overlap`もあるので、並行しない。
+
+エラー文は、失敗したジョブごとに`JobService.getJob`で読む。
+制御文字を落とし、秘密をマスクし、2000文字に切る。
+秘密の途中に制御文字があると、先にマスクしても一致しないので、この順にする。
+制御文字を落とすのは、NULがtextの列に入らず、記録が毎回失敗して続きの位置が止まるためである。改行とタブは残す。
+読めなければ、読めなかった旨の固定の文で記録し、警告`could not read the error of a failed job`を残す。
+
+通知は、scriptごとにまとめて、古い失敗から処理する。
+
+1. 前回の失敗を、記録の前に1回だけ読む。束の2件目以降の前回は、束の直前の件とする。
+2. 記録は全件に行う。
+3. `job_failed`の判定は、束の全件に当てる。
+   同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ、通知の対象にする。
+   1件でも該当すれば、そのscriptにつき1回だけ、最新の失敗の内容で送る。
+   長い停止の後に、同じ失敗が束で届くのを防ぐ。
+4. 直近3回の実行が続けて失敗しているかの判定(`schedule_failing`)は、scriptごとに1回、最後に行う。
+   noticeを新しく残したとき、まだ`job_failed`を送っていなければ、Discordにも送る。
+
+通知は、scriptの記録が終わった直後に送る。
+後のscriptの処理で止まっても、記録済みのscriptの通知は残る。
+記録に失敗した失敗は、通知もしない。
+続きの位置が進まないので、次の回が記録と通知をやり直す。
+記録に1件でも失敗した回は、残りを処理してから例外にする。
+
+#### 見えていない状態の検知
+
+権限が足りないと、ジョブの一覧は黙って空になる。
+空のままでは、失敗が無いことと区別できない。
+そのため毎回、直近15分に開始した、検出器以外のscheduleのジョブが見えることを確かめる。
+
+- 見えなければ、直近24時間で1件見えるかを確かめる。
+  15分だけ見えない場合は、ホストのスリープ明けなどを疑い、警告`no job of another schedule started in the last 15 minutes`だけで続ける。
+- 24時間でも見えなければ、権限不足の疑いがあるとして、例外にする。成功に数えないので、心拍が止まる。
+  ただし、前回の続きの位置が24時間より古い回は、検出器が長く止まっていて見えないのが当然である。
+  次の警告だけで続ける。
+  `no job of another schedule is visible in the last 24 hours; continuing because the last scan is older than a day`
+
+#### 既知の限界
+
+- 記録をやり直すと、同じscriptの`job_failed`が重なりうる。
+  束の途中で記録に失敗した回は、記録できた分の通知を送った後に、残りを次の回が記録し、前回の失敗との比較で改めて通知の対象になりうるためである。
+- 時間切れの取り消しで`canceled_by`が`timeout`になることは、実測まで未確認である。違う値なら、打ち切られた回は拾えない。
+- 見送られた回の`success`の値は、実測まで未確認である。
+- 数百件の失敗をこなす回の所要時間は、実測まで未確認である。
+  `timeout`の60秒を超えると、その回は成功に数えず、記録済みの分を飛ばして次の回が続ける。
+- 打ち切りが続くと、通常の回と続きの回が交互に走り、同じ失敗を読み直す。
+  溜まった失敗が遡りの7時間より古くなるまで続く。
+  同じ回の中の重複はジョブIDで除き、前の回で記録した分は記録済みの除外で飛ばすので、記録は重ならない。
+- 完了ジョブの一覧が、どの列で並ぶかは、実機で未確認である。
+  `wmill job list`は別の一覧を読むので、確かめにならない。完了ジョブの一覧を読む手段は、トークンを要し、この確認では使わなかった。
+  作成時刻か開始時刻で並ぶなら、続きの位置に使う作成時刻の最大は安全である。作成は開始と同じかそれより前である。
+  完了時刻で並ぶと、開始が早く完了が遅いジョブを落とす。
+  `startedAfter`が排他であることは、SDKの型の説明による。比較が違っても、ミリ秒に切り捨てた値で重なって読むだけで、取りこぼさない。
+- 1回で処理する失敗の件数に上限は置かない。
+  1回の実行が`timeout`の60秒を超えると、記録した分は残るが、通知が出ない。
+  上限を置くと、完了順に処理した最後の失敗から続きの位置を決められない。開始時刻と作成時刻の順が完了順とずれるためである。
+  最大500件の記録と`getJob`が60秒に収まるかは、実測まで未確認である。
+- 前回の続きの位置が24時間より古い回は、見えていることの確認が警告に緩む。
+  権限の不足が続いても、検出器は成功し続ける。
+  心拍の通知は、24時間ごとに解決と再発を繰り返す。
+- 進みが極端に遅い間は、心拍で気づけない。
+  検出器は成功し続けるので、通知が出ない。
+- 検出器を手動で実行する場合と、previewで実行する場合には、`no_flow_overlap`が効かない。
+  効くのはscheduleの実行だけである。
+  手動の実行はscriptのtag `periodic`を持つので、同じworkerの枠で順に動き、先の回の記録が見える。
+  previewのtagはscriptのtagを持たない。defaultのworkerで並行して動き、同じ失敗を二重に記録しうる。
+  表に一意索引を足していないので、DBは重なりを止めない。この並行は、実機で未確認である。
+
+#### 検出器が止まったとき
+
+検出器の心拍は、検出器自身の直近の成功した実行の完了時刻である。
+Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
+`default_worker_watch`が5分ごとに、defaultのworkerの確認の後に確かめる。
+検出器と別のscriptで確かめるのは、同じscriptで確かめると、止まったときに誰も気づけないためである。
+
+判定は次の表のとおりである。
+
+| 状態 | 結果 | 動き |
+| --- | --- | --- |
+| 最後の成功が25分以内 | 問題なし | 残した通知を解決する |
+| 最後の成功が25分より古く、見る側のscheduleの実行がその後に3回以上完了している | 止まり | 通知`schedule_detector_stale`を残し、Discordにも送る |
+| 同じで、検出器のscheduleが無効 | 無効 | 原因を分けた本文の通知を残し、Discordにも送る |
+| 最後の成功が古く、見る側の実行が3回未満 | 判定しない | 何もしない。ホストのスリープ明けなど |
+| 成功が1件も無く、scheduleの更新が25分以内 | 判定しない | 何もしない。反映の直後である |
+| 成功が1件も無く、scheduleの更新が25分より前 | 止まり。無効なら無効 | 通知を残し、Discordにも送る |
+| 履歴やscheduleを読めない、10秒以内に終わらない | 判定しない | 何もしない。警告のログだけ残す |
+
+25分は、定期ジョブ用のworkerの待ちのしきい値(13分)に、検出器の間隔(5分)の2回分を足した値より長い。
+待たされて遅れた回と、その次の回が続けて失敗しても、誤って知らせないためである。
+検出器自身が履歴を読めずに失敗している間は、最後の成功が古くなるので、この確認が拾う。
+
+通知の本文は、原因ごとの固定の文で、時刻を含めない。
+同じ本文の未解決の通知は、重ねて残さない。
+解決は、本文の固定の先頭で選ぶので、しきい値を変える前に残した通知も、自動で解決される。
+
+警告は次の6種類である。
+
+- `could not list the runs of the schedule detector`: 検出器の成功した実行の一覧を読めない。
+- `could not count the runs of the watch script`: 見る側のscheduleの実行の一覧を読めない。
+- `could not read the schedule of the detector`: 検出器のscheduleを読めない。
+- `could not record the schedule detector problem`: 通知を記録できない。
+- `could not resolve the schedule detector problem`: 通知を解決できない。
+- `schedule detector check timed out`: 確認が10秒以内に終わらなかった。
+
+#### 拾わない状態
+
+- 検出器と`default_worker_watch`が同時に黙って止まる状態。
+  どちらも、定期ジョブ用のworkerで動く。
+  定期ジョブ用のworkerが止まった状態は、`self_update`の`periodic_worker_missing`が拾う。
+- Windmillのserver、DB、docker、ホストの共通の障害。
+- 失敗が起きてから、最大5分より前の通知。
+- ジョブ履歴に残らない失敗。履歴から消えたジョブは読めない。
+- ジョブの一覧を、検出器と`default_worker_watch`の両方が読めない状態。
+  たとえばscheduleの`permissioned_as`の主体からAPIの権限が外れたときに起きる。
+  検出器は例外で終わり続け、成功が無いので、記録と通知が残らない。
+  心拍の確認は、一覧を読めないので判定せず、警告のログだけを残す。
+  この状態は、Windmillのジョブ履歴を人が見て気づく。
+
+#### 確かめ方
+
+反映の後、検出器のscheduleが有効になり、初回の実行が基準を作る回として成功する。
+次の手順で動いていることを確かめる。
+
+1. 検出器の直近のジョブが成功していることを見る。
+   `wmill job list --script-path f/factory/detect_schedule_failures --limit 3`でジョブを選び、`wmill job result <ジョブのID>`の`mode`が、初回は`bootstrap`、以降は`scan`であることを見る。
+2. 初回の後に、`job_failures`の`step`が空の行が、過去の失敗の分だけ増えていないことを見る。
+3. scheduleから`on_failure`の行を外した反映で、サーバー側のscheduleの`on_failure`が消えたかを見る。
+   `wmill schedule get <scheduleのpath> --json`で、`on_failure`が`null`か無いことを確かめる。
+   行を外した反映で消えるかは、実機で未確認である。
+   消えなくても、このWindmillは呼ばないので、動きは変わらない。
+   旧ハンドラ`f/factory/on_error_schedule`は、反映が`--keep-deleted`を付けるので、サーバーに残る。
+   害は無い。`mise run push:prune`で消すのは任意で、人が実行する。
+4. 使い捨てのscheduleを失敗させて、記録と通知を確かめる。
+   scriptは`f/factory/_probe_`で始まる名前にする。検出器は`f/factory/`の下だけを拾う。
+   scheduleは2分ごとにし、`on_failure`を付けない。
+   3回失敗させた後で、`step`が空の行が、回数分、重複せずにできることを見る。
+   初回に`job_failed`が、3回目に`schedule_failing`が出ることも見る。
+   行の`occurred_at`と`root_job_id`が、失敗したジョブのものであることも見る。
+5. 検出器のscheduleを止めて、心拍を確かめる。
+   凍結で止める。
+
+   ```bash
+   mise run freeze:place -- --target f/factory/detect_schedule_failures --minutes 40 --reason "心拍の確認"
+   ```
+
+   Windmillの画面でscheduleを無効にしても、次の反映で戻る。
+   25分と見る側の次の実行のあとに、`schedule_detector_stale`ができ、Discordにも届くことを見る。
+   凍結を解除し、検出器が成功すると、通知が自動で解決されることを見る。
+6. 終わったら、使い捨てのscheduleを元の状態に戻し、出た通知をConsoleで解決する。
+   `job_failures`の使い捨ての行は、[自己更新の打ち切りを確かめる](#自己更新の打ち切りを確かめる)の手順と同じく、SELECTで確かめてから`id`を指定して消す。
+   週次の監査(月曜9時30分)の前に消す。
+
 ### 続けて失敗するスケジュールの検知を確かめる
 
-スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
+スケジュールの直近3回の実行が続けて失敗したかどうかは、検出器(`detect_schedule_failures`)がジョブ履歴を読んで判定する([scheduleの失敗の検出](#scheduleの失敗の検出))。
 飛ばされた回(前回の実行中で見送った回)と、人が取り消した回は、失敗として数えず、連続も切らない。
 ジョブの上限(`timeout`)で打ち切られた回は、失敗として数える。
 時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。
@@ -4374,11 +4607,11 @@ stateはscriptのパスごとに持つ。
 
 1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
 2. 失敗が3回続いた後で、通知`schedule_failing`ができていることを見る。
-3. `on_error_schedule`のジョブログに、次のエラーが出ていないことを見る。
+3. `detect_schedule_failures`のジョブログに、次のエラーが出ていないことを見る。
    履歴を読めなかったときは`failed to read the schedule history`である。
    通知を記録できなかったときは`failed to record the schedule failing notice`である。
    通知`schedule_failing_check_failed`を記録できなかったときは`failed to record the schedule check failure`である。
-4. 3回目の失敗の直後に通知ができていなければ、次の失敗で出るかを見る。直後は今回の失敗をジョブ履歴で読めない場合があり、検知が1回遅れることもある。
+4. 3回目の失敗から、検出器の次の回(最大5分後)までに通知ができていなければ、検出器のジョブが成功しているかを見る。失敗の記録に失敗した回は、次の回がやり直す。
 
 ジョブ履歴を読めないとき(APIの失敗と、想定外の形の応答)は、通知`schedule_failing_check_failed`が残る。
 その場合は、ジョブ履歴を読む権限を確かめる。
@@ -4394,38 +4627,35 @@ stateはscriptのパスごとに持つ。
 打ち切られるまでの最大約52分は、2分ごとの次の約25回が飛ばされる。
 この間は、自己更新の反映と、Console用と定期ジョブ用のworkerの停止の検知と、収集の停止の検知が止まる。
 
-気づく経路は2つある。
+気づく経路は、検出器(`detect_schedule_failures`)である([scheduleの失敗の検出](#scheduleの失敗の検出))。
+打ち切られた回を失敗として拾い、最大5分遅れてDiscordの`job_failed`で知らせる。
+打ち切りが3回続くと、通知`schedule_failing`が残る。
 
-- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。
-  これが主な経路になる想定である。
-- 打ち切りが3回続くと、通知`schedule_failing`が残る想定である。
-  補助の経路になる。
-
-どちらも、次の2点を実機で確かめていない。
+次の点を実機で確かめていない。
 確かめるまでは、頼れる経路とみなさない。
 確かめていなければ、自己更新が止まっても気づけない。
 なお、ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
 - 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。
-  違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
-- `on_error_schedule`が、打ち切られた回でも呼ばれること。
-  呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
+  違う値なら、打ち切られた回が失敗として数えられない。
+  `job_failed`も`schedule_failing`も出ない。
 
 あわせて、`self_update`の実行ユーザーに`f/factory/deployed_sha`が見えることも実機で確かめる。
 見えないと存在の確認が`false`になり、全体を反映し直す。
 このとき、見えない既存の変数に対して、`setVariable`の作成が既存のパスと衝突しうる。
 
 確かめるには、本番の`self_update`やロックには触れず、使い捨てのscriptとスケジュールを使う。
-`wmill sync`の対象は`f/**`だけなので、`u/<user>/`のscriptとスケジュールはWindmillの画面で作る。
-自己更新の`wmill sync push`で消えたり上書きされたりしない。
+検出器は`f/factory/`の下だけを拾うので、scriptは`f/factory/_probe_timeout`の名前でWindmillの画面から作る。
+自己更新の`wmill sync push`は`--keep-deleted`を付けるため、リポジトリに無いこのscriptとスケジュールを消さない。
+削除を確定する`mise run push:prune`は人が実行するので、その前に使い捨ての資産を消しておく。
 
 次の点に注意する。
 
 - 作る人は、`f/factory`のスケジュールと同じ権限(admin)にする。
-  失敗のハンドラはスケジュールの`permissioned_as`で動くので、`f/factory`の資源と変数を読めないと、黙って失敗する。
+  検出器はスケジュールの`permissioned_as`で動くので、ジョブ履歴を読む権限を欠くと、拾えない。
 - 手順の前に、Discordのチャンネルの人へ知らせる。
   使い捨てのスケジュールの失敗が、`job_failed`として届くためである。
-- `on_error_schedule`は、`factory.job_failures`に`flow_path`が`u/<user>/timeout_probe`の行を残す。
+- 検出器は、`factory.job_failures`に`flow_path`が`f/factory/_probe_timeout`の行を残す。
   この行は週次監査(月曜9時30分)の証跡に入るので、後片付けで消すか、監査の前に手順を終える。
 
 手順は次のとおりである。
@@ -4434,7 +4664,7 @@ stateはscriptのパスごとに持つ。
    `wmill script get f/factory/self_update`の出力で、`timeout`が3100であることを見る。
    3100秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
    `job_default_timeout`は21600秒以上にする決まりなので、3100秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
-2. `u/<user>/timeout_probe`というscriptを作る。
+2. `f/factory/_probe_timeout`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
 
@@ -4444,20 +4674,19 @@ stateはscriptのパスごとに持つ。
    }
    ```
 
-3. `u/<user>/timeout_probe`のスケジュールを作る。
+3. `f/factory/_probe_timeout`のスケジュールを作る。
    cronは`0 */2 * * * *`(2分ごと)にし、`no_flow_overlap`を有効にする。
-   失敗時のハンドラは`f/factory/on_error_schedule`にする。
+   失敗時のハンドラは付けない。
 4. スケジュールの実行を待つ。
-   手動の実行では`on_error_schedule`が呼ばれないので、手動では確かめられない。
-5. `wmill job list --script-path u/<user>/timeout_probe`で打ち切られた回を見つける。
+   手動の実行は、scheduleが起こしていないので検出器が拾わない。手動では確かめられない。
+5. `wmill job list --script-path f/factory/_probe_timeout`で打ち切られた回を見つける。
    `wmill job get <id> --json`で`canceled`、`canceled_by`、`canceled_reason`を読む。
    出力に`canceled_by`が無いときは、Windmillの画面のジョブ詳細で読む。
    `canceled_by`が`timeout`であることを見る。
-   違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
-6. 先に`wmill job list --script-path f/factory/on_error_schedule`を見る。
-   `on_error_schedule`のジョブが、打ち切られた回の直後にあることを確かめる。
-   ジョブが無ければ、`on_error_schedule`は時間切れでは呼ばれない。
-   ジョブがあれば、続けてDiscordに`job_failed`が届いたことを見る。
+   違う値なら、`f/factory/lib/schedule_failing.ts`と`f/factory/lib/schedule_failure_scan.ts`の判定を、読んだ値に合わせて直す。
+6. 打ち切られた回の後、検出器の次の回(最大5分後)までに、Discordに`job_failed`が届いたことを見る。
+   届かなければ、検出器のジョブが成功しているかを見る。
+   コマンドは`wmill job list --script-path f/factory/detect_schedule_failures --limit 3`である。
 7. 通知`schedule_failing`まで見るなら、打ち切りが3回続くまで(約6分)待つ。
    Consoleの**要対応**に出ることを見る。
 8. 終わったら、スケジュールとscriptを消す。
@@ -4465,10 +4694,9 @@ stateはscriptのパスごとに持つ。
 9. `factory.job_failures`に残った使い捨ての記録を消す。
    Data Tableのデータベースに接続し、消す前に行を確かめる。
    データベース名は、`main`のData Tableのresource_pathで、既定は`datatable_db`である。
-   `<user>`は、作ったscriptのパスに合わせて置き換える。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, flow_path, occurred_at FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe'"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, flow_path, occurred_at FROM factory.job_failures WHERE flow_path = 'f/factory/_probe_timeout'"
    ```
 
    表示された行の件数が使い捨ての実行の回数と合うことを確かめ、行の`id`を控える。
@@ -4476,10 +4704,11 @@ stateはscriptのパスごとに持つ。
    `<確かめたid>`には、控えた`id`をカンマで区切って並べる。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe' AND id IN (<確かめたid>)"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path = 'f/factory/_probe_timeout' AND id IN (<確かめたid>)"
    ```
 
-   `u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`は手動で実行するので、`on_error_schedule`が呼ばれず、通常は行が付かない。
+   `u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`は手動で実行する。
+   scheduleが起こしていない実行で、`f/factory/`の外のscriptでもあるので、検出器は拾わず、通常は行が付かない。
    SELECTで行が出た場合だけ、同じ手順で消す。
 
 打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。

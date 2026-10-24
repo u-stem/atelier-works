@@ -36,12 +36,6 @@ describe("collect_github schedule", () => {
     );
   });
 
-  test("reports a failure through the schedule error handler", async () => {
-    expect((await yamlOf(`${SCRIPT}.schedule.yaml`)).on_failure).toBe(
-      "f/factory/on_error_schedule",
-    );
-  });
-
   test("calls the script", async () => {
     expect((await yamlOf(`${SCRIPT}.schedule.yaml`)).script_path).toBe(SCRIPT);
   });

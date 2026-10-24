@@ -77,6 +77,7 @@ import {
   listPrOpenRepos,
   listRecentGhCollectRuns,
   listRecentWorkerSamples,
+  listRecordedScheduleFailureJobIds,
   listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
@@ -8424,6 +8425,62 @@ check(
     Number(ghWRemaining[0]?.unlisted_issues) === 0 &&
     Number(ghWRemaining[0]?.open_prs) === ghWOpenBefore,
   { ghWDeleted, ghWRemaining, ghWOpenBefore },
+);
+
+// listRecordedScheduleFailureJobIds: stepの無い行(スケジュールの失敗)のジョブIDだけを返す。
+// recordFailure: 渡した発生時刻を記録する。
+const sfOccurredAt = "2026-10-20T01:02:03.000Z";
+await recordFailure(
+  {
+    work_item_id: null,
+    flow_path: "f/factory/qdb_schedule",
+    job_id: "qdb-sf-a",
+    step: null,
+    error: "scheduled",
+    occurred_at: sfOccurredAt,
+  },
+  sql,
+);
+await recordFailure(
+  {
+    work_item_id: null,
+    flow_path: "f/factory/qdb_schedule",
+    job_id: "qdb-sf-b",
+    step: null,
+    error: "scheduled",
+  },
+  sql,
+);
+await recordFailure(
+  {
+    work_item_id: null,
+    flow_path: "f/factory/qdb_schedule",
+    job_id: "qdb-sf-c",
+    step: "inner",
+    error: "partial",
+  },
+  sql,
+);
+const sfRecorded = await listRecordedScheduleFailureJobIds(
+  ["qdb-sf-a", "qdb-sf-b", "qdb-sf-c", "qdb-sf-missing"],
+  sql,
+);
+check(
+  "listRecordedScheduleFailureJobIds: returns the job ids of rows without a step only",
+  sfRecorded.size === 2 &&
+    sfRecorded.has("qdb-sf-a") &&
+    sfRecorded.has("qdb-sf-b"),
+  [...sfRecorded],
+);
+const sfRows = await sql`
+  SELECT job_id, occurred_at = ${sfOccurredAt}::timestamptz AS given, now() - occurred_at < interval '1 minute' AS recent
+  FROM factory.job_failures WHERE job_id IN ('qdb-sf-a', 'qdb-sf-b')
+  ORDER BY job_id
+`.fetch();
+check(
+  "recordFailure: records the given occurrence time and falls back to now()",
+  sfRows[0]?.given === true && sfRows[1]?.recent === true,
+  sfRows,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

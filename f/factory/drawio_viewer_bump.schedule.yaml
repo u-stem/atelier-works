@@ -6,7 +6,6 @@ cron_version: v2
 enabled: true
 is_flow: false
 no_flow_overlap: true
-on_failure: f/factory/on_error_schedule
 schedule: 0 0 10 * * 1
 script_path: f/factory/drawio_viewer_bump
 timezone: Asia/Tokyo

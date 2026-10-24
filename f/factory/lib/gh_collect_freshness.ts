@@ -30,11 +30,11 @@ export const GH_COLLECT_WATCH_STATE_KEY = "gh_collect_watch_since_ms";
 
 /**
  * 最新の実行の終わりがこの時間より前なら、収集が動いていないと見なす。
- * 定期ジョブ用workerの待ちは、予定時刻から最大660秒(`periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`)で、
+ * 定期ジョブ用workerの待ちは、予定時刻から最大780秒(`periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`)で、
  * その間は収集が動いていても記録が新しくならない。その待ちに、収集の1周回(5分)を足した値である。
  * 値は複製で、`periodic_worker.ts`をimportしない。両者の関係はテストが固定する。
  */
-export const GH_COLLECT_NOT_RUNNING_AFTER_MS = (660 + 300) * 1000;
+export const GH_COLLECT_NOT_RUNNING_AFTER_MS = (780 + 300) * 1000;
 
 /**
  * 確認全体の上限(ミリ秒)。`self_update`の最悪の長さに1回だけ数える。

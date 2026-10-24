@@ -1,0 +1,12 @@
+summary: '[SYS-5] scheduleの失敗を検出して記録'
+description: 5分ごとに実行し、scheduleが起こしたジョブの失敗をジョブ履歴から拾います。失敗を記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。前回の続きの位置は、自分の直近の成功した実行の結果に持ちます。初回は基準だけを作り、過去の失敗は拾いません。tag
+  periodicのworkerで動かします。
+lock: '!inline f/factory/detect_schedule_failures.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+tag: periodic
+timeout: 60

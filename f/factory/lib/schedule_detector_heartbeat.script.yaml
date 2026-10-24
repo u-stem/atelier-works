@@ -1,0 +1,9 @@
+summary: '[LIB] scheduleの失敗の検出器の心拍'
+description: 内部ライブラリです。直接実行するものではありません。scheduleの失敗を拾う検出器が止まっていないかを、成功した実行の完了時刻から確かめます。
+lock: '!inline f/factory/lib/schedule_detector_heartbeat.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

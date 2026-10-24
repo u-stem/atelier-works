@@ -1,0 +1,12 @@
+summary: '[SYS-5] scheduleの失敗を検出して記録'
+description: >-
+  5分ごとに実行します。scheduleが起こしたジョブの失敗をジョブ履歴から拾って記録し、連続した失敗の初回とエラー文が変わったときはDiscordに知らせ、直近3回の実行が続けて失敗していれば要対応の通知を残します。このWindmillではscheduleの失敗時の呼び出し(on_failure)が働かないため、失敗を拾う入口はこのscheduleだけです。止まると、defaultのworkerの停止を見張る確認が通知を残します。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+schedule: 20 3-59/5 * * * *
+script_path: f/factory/detect_schedule_failures
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

@@ -147,7 +147,7 @@ export function buildScheduleFailingNotice(flowPath: string): NoticeRecord {
 export const SCHEDULE_FAILING_CHECK_FAILED_NOTICE: NoticeRecord = {
   kind: "schedule_failing_check_failed",
   message:
-    "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できません。失敗が続いても気づけない状態です。次の操作: on_error_scheduleのジョブのログでエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる",
+    "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できません。失敗が続いても気づけない状態です。次の操作: detect_schedule_failuresのジョブのログでエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる",
 };
 
 export type FlagFailingScheduleDeps = {
@@ -167,11 +167,11 @@ export type FlagFailingScheduleDeps = {
 };
 
 /**
- * 失敗のハンドラの最後に呼ぶ。直近の実行から飛ばされた回と人が取り消した回を除いた
+ * 失敗の検出器が、scriptごとの処理の最後に呼ぶ。直近の実行から飛ばされた回と人が取り消した回を除いた
  * 先頭`SCHEDULE_FAILING_RUNS`回がすべて失敗なら、noticeを残して`true`を返す。
  * スケジュールの特定できない失敗(`unknown`)は数えない。
  * 履歴を読めなかったとき(例外、配列でない応答)は、`SCHEDULE_FAILING_CHECK_FAILED_NOTICE`を残して`false`を返す。
- * 失敗のハンドラを止めないよう、例外は投げない。
+ * 検出器の処理を止めないよう、例外は投げない。
  */
 export async function flagFailingSchedule(
   flowPath: string,

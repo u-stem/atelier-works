@@ -692,7 +692,7 @@ async function run(
  * このスクリプトはフローのステップではなく単独で動くため、
  * フローの`on_error_flow`に頼れない。
  * そのため例外はここで捕まえ、`factory.job_failures`に記録して
- * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
+ * Discordへ通知してから投げ直す(`on_error_flow.ts`と同じ自己完結の処理)。
  * 作業項目のIDを付けて記録するのは、却下の作り直しで`requirements_generating`へ移した後の失敗だけである。
  * その作業項目は`retry_work_item`で再開できる状態で終わるので、Consoleの要対応から再実行できる。
  * 比較交換より前の失敗では作業項目が`awaiting_approval`のままで、`retry_work_item`では再開できないため、IDを付けない。

@@ -1,0 +1,9 @@
+summary: '[LIB] scheduleの失敗の走査'
+description: 内部ライブラリです。直接実行するものではありません。scheduleが起こしたジョブの失敗を、ジョブ履歴から拾うための問い合わせと応答の読み取りです。
+lock: '!inline f/factory/lib/schedule_failure_scan.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
