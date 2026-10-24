@@ -2196,6 +2196,9 @@ describe("bash-guard denies releasing through the Console scripts", () => {
     // 本文を渡す別の経路。
     `python3 -c 'import os; os.system("wmill script run f/factory/hold_release")'`,
     `node -e 'require("child_process").execSync("wmill script run f/factory/hold_release")'`,
+    // 待ち行列のファイルから、名前を書かずにジョブを積む形。
+    "wmill jobs push -q queued.json",
+    "wmill --workspace factory jobs push",
     // ソースをネットワークから取る形も、名前を含むので止まる。
     "curl -s https://raw.githubusercontent.com/example/repo/main/f/factory/hold_release.ts",
   ];
