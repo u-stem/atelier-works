@@ -49,6 +49,7 @@ import {
   ASSIGNMENT,
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
+  literalShellInputs,
   type MiseExec,
   miseOptionTakesNext,
   parseCommandLine,
@@ -880,33 +881,6 @@ function checkShellInput(
     if (decision.kind === "deny") return decision;
   }
   return ALLOW;
-}
-
-/**
- * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
- * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
- * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、空の配列を返して通す。
- * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
- */
-function literalShellInputs(command: SimpleCommand): readonly string[] | null {
-  if (command.inputs.length > 0)
-    return command.inputs.map((input) => input.text);
-  const source = command.pipedFrom;
-  if (source === null) return [];
-  const { words } = stripWrappers(source.words);
-  const program = baseName(words[0]?.text ?? "");
-  if (program !== "echo" && program !== "printf") return [];
-  let args = words.slice(1);
-  if (program === "echo") {
-    const first = args.findIndex((word) => !/^-[neE]+$/.test(word.text));
-    args = first === -1 ? [] : args.slice(first);
-  }
-  if (args.some((word) => word.dynamic)) return null;
-  // `\n`や`\t`は、echoとprintfが改行や区切りに直す。
-  const texts = args.map((word) =>
-    word.text.replace(/\\n/g, "\n").replace(/\\t/g, " "),
-  );
-  return program === "echo" ? [texts.join(" ")] : texts;
 }
 
 function parseGitInvocation(
