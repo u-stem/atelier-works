@@ -13,7 +13,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | GitHub | Issue、PR、コメントのやり取り先。Factoryはここに成果物だけを書く |
 | Windmillのserverとworker | フローとスケジュールの実行基盤 |
 | Data Tables | 作業の状態、要件定義ドラフト、承認依頼、実行ログ、失敗記録を持つPostgresのテーブル群 |
-| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
+| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、保留と凍結の確認と解除、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
 | Discord | 拾い上げ、承認待ち、承認、要対応、失敗などのイベントをWebhookで通知する |
 
 Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く。
@@ -309,7 +309,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の7つのscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の10本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -318,6 +318,9 @@ Consoleの一覧と集計は次のviewを読む。
 - `notice_resolve`
 - `manual_intake_submit`
 - `console_fetch_watch`
+- `console_holds`
+- `hold_release`
+- `freeze_release`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
@@ -434,6 +437,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_fix_round` | script | [LIB] CI回のpr_fixの共通部品 |
 | `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
+| `f/factory/lib/console_holds_support` | script | [LIB] Consoleの保留と凍結の画面の整形と解除の共通部品 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
 | `f/factory/lib/console_support` | script | [LIB] Consoleの通知の重要度 |
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |
@@ -544,6 +548,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
+| `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
@@ -551,6 +556,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
+| `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |
+| `f/factory/freeze_release` | script | [OP-2-5] 凍結を解除 |
 | `f/factory/poll_issues` | script | [SF-1-1] Issueを巡回して担当を確定 |
 | `f/factory/poll_prs` | script | [SF-1-2] PRを巡回してレビュー / 修正を起動 |
 | `f/factory/poll_dependabot` | script | [SF-1-3] dependabotのPRを巡回して自動マージを起動 |

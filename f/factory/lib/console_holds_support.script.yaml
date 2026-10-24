@@ -1,0 +1,9 @@
+summary: '[LIB] Consoleの保留と凍結の画面の整形と解除の共通部品'
+description: 内部ライブラリです。直接実行するものではありません。保留と凍結の表示用の整形、読めない源の失敗の表現、解除の通知の文を作る関数です。
+lock: '!inline f/factory/lib/console_holds_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

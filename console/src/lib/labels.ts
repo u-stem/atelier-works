@@ -86,6 +86,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["review_gated_prolonged", "レビューを投稿しない状態の継続"],
   ["dependabot_merge_held", "マージの保留による待ち"],
   ["dependabot_merge_hold_unreadable", "マージの保留を読めない状態"],
+  ["hold_released", "保留の解除"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */
@@ -175,3 +176,99 @@ export function workItemRef(workItemId: number): string {
 export function attemptRef(attempt: number): string {
   return `試行 ${attempt}`;
 }
+
+export const UNKNOWN_HOLD_SCOPE_LABEL = "不明な種類の保留";
+export const UNKNOWN_HOLDER_LABEL = "不明な主体";
+
+const HOLD_SCOPE_LABELS: ReadonlyMap<string, string> = new Map([
+  ["merge", "マージの保留"],
+  ["claim", "Issueの取り込みの保留(止める処理なし)"],
+]);
+
+const HOLDER_KIND_LABELS: ReadonlyMap<string, string> = new Map([
+  ["session", "ローカルのセッション"],
+  ["human", "人"],
+  ["factory", "Factory"],
+]);
+
+/** 保留の範囲の日本語。表に無い範囲は`UNKNOWN_HOLD_SCOPE_LABEL`にする。 */
+export function holdScopeLabel(scope: string): string {
+  return HOLD_SCOPE_LABELS.get(scope) ?? UNKNOWN_HOLD_SCOPE_LABEL;
+}
+
+/** 保留や凍結を置いた主体の種類の日本語。表に無い種類は`UNKNOWN_HOLDER_LABEL`にする。 */
+export function holderKindLabel(kind: string): string {
+  return HOLDER_KIND_LABELS.get(kind) ?? UNKNOWN_HOLDER_LABEL;
+}
+
+/** 保留と凍結の画面の文言。信頼できない文字列は含まず、固定の文だけを置く。 */
+export const HOLDS_TEXT = {
+  sectionTitle: "保留と凍結",
+  sectionDescription:
+    "Factoryのマージと反映を、期限つきで止めている保留と凍結です。解除できます。置く操作はこの画面にはありません。",
+  holdsCardTitle: "保留",
+  holdsCardNote: "マージを止める保留の一覧です。",
+  freezesCardTitle: "凍結とdeployの保留",
+  freezesCardNote:
+    "スケジュールの更新を止める凍結と、反映全体を止めるdeployの保留の一覧です。",
+  holdsEmpty: "有効な保留はありません",
+  freezesEmpty: "有効な凍結とdeployの保留はありません",
+  placeHint: "保留を置くときは mise run hold:place を使います。",
+  scheduleFreezeLabel: "スケジュールの凍結",
+  deployFreezeLabel: "deployの保留",
+  deployTarget: "反映全体(self_update、push、migration)",
+  claimNote: "この範囲を読む処理は無いので、何も止めていません。",
+  expired: "期限切れ",
+  release: "解除",
+  releasing: "解除中",
+  confirmRelease: "解除する",
+  holdDialogTitle: "この保留を解除しますか",
+  freezeDialogTitle: "この凍結を解除しますか",
+  deployDialogTitle: "このdeployの保留を解除しますか",
+  retry: "もう一度取得する",
+  reasonSummary: "理由",
+  kindField: "種類",
+  targetField: "対象",
+  reasonField: "理由",
+  holderField: "置いた主体",
+  expiryField: "期限",
+} as const;
+
+/** 解除の効果の文。置いた主体と関係なく、行の種類で決まる。 */
+export const HOLD_EFFECT_TEXT = {
+  merge:
+    "解除すると、このリポジトリのdependabotの自動マージとローカルのセッションのマージが、次の取得から再開します。",
+  claim:
+    "この範囲を読む処理は無いので、解除しても動作は変わりません。表の掃除として解除できます。",
+  deploy:
+    "解除すると、self_updateが次の回から反映を再開し、見送っていた変更をまとめて反映します。",
+  schedule:
+    "解除すると、次の反映(self_updateの追従)で、このスケジュールがリポジトリの定義に戻ります。",
+  unknown:
+    "この種類の保留が何を止めているか、この画面は知りません。置いた理由を確かめてから解除してください。",
+} as const;
+
+/** 読めないときの文言。読めないことを「保留なし」と取り違えさせないため、止まる旨を添える。 */
+export const HOLDS_FAILURE_TEXT = {
+  missingTable: {
+    title: "保留の表がありません",
+    detail:
+      "migrationが未反映です。この間、dependabotの自動マージとローカルのマージは止まります。",
+  },
+  readFailed: {
+    title: "保留を読めませんでした",
+    detail:
+      "読めない間、dependabotの自動マージとローカルのマージは止まります。",
+  },
+  corrupt: {
+    title: "保留の表に壊れた行があるため、一覧を出せません",
+    detail:
+      "読めない間、dependabotの自動マージとローカルのマージは止まります。",
+    hint: "有効な保留は、ホストの端末でmise run hold:listを実行して確かめてください。壊れた行は、理由に書かれた手順で直します。",
+  },
+  freezes: {
+    title: "凍結とdeployの保留を読めません",
+    detail:
+      "反映が要る回のself_updateは、凍結を読めない間、反映せずに止まります。",
+  },
+} as const;

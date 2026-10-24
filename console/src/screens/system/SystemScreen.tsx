@@ -1,10 +1,10 @@
+import { useHolds } from "../../api/holdsQueries.ts";
 import { useDeployments, useSummary } from "../../api/queries.ts";
 import {
   SYSTEM_STATUS_LIMIT,
   useSystemStatus,
 } from "../../api/systemQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { refreshStatusOfAll } from "../../app/refreshStatus.ts";
 import { FLOW_GRAPH } from "../../lib/flowGraphData.ts";
 import {
   auditFailureLimitNote,
@@ -14,9 +14,11 @@ import {
 } from "../../lib/systemView.ts";
 import { AuditFailureList, OrphanFailureList } from "./FailureLists.tsx";
 import { FlowGraphSection } from "./FlowGraphSection.tsx";
+import { HoldsSection } from "./HoldsSection.tsx";
 import { InfoNoticeList, ResolvedNoticeList } from "./NoticeLists.tsx";
 import { ReleaseStatus } from "./ReleaseStatus.tsx";
 import { SystemSection } from "./SystemSection.tsx";
+import { refreshStatusOfSystem } from "./systemRefresh.ts";
 import { UpdateHistory } from "./UpdateHistory.tsx";
 import { WorkerLoadCard } from "./WorkerLoadCard.tsx";
 
@@ -173,20 +175,27 @@ function OrphanFailureSection({ status }: { status: StatusQuery }) {
 
 /**
  * システムの画面。Software Factoryの自分自身の状態を、節に分けて出す。
- * 3つの取得は画面が持ち、同じ取得を読む節は結果を分け合う。
- * 見出しの更新ボタンが3つを取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
+ * 4つの取得は画面が持ち、同じ取得を読む節は結果を分け合う。
+ * 見出しの更新ボタンが4つを取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
  * 起動の関係の節だけは、取得を持たない静的なデータを図にする。
- * 読み取り専用で、操作は起こさない。通知の解決は、要対応の画面の詳細で行う。
+ * 書き込みは「保留と凍結」の節の解除だけで、ほかの節は読むだけである。通知の解決は、要対応の画面の詳細で行う。
  */
 export function SystemScreen() {
   const status = useSystemStatus();
   const deployments = useDeployments();
   const summary = useSummary();
-  const refresh = refreshStatusOfAll([status, deployments, summary]);
+  const holds = useHolds();
+  const refresh = refreshStatusOfSystem({
+    status,
+    deployments,
+    summary,
+    holds,
+  });
   return (
     <>
       <PageHeader title="システム" refresh={refresh} />
       <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
+        <HoldsSection holds={holds} />
         <ReleaseSection status={status} />
         <UpdateHistorySection deployments={deployments} />
         <WorkerLoadSection status={status} />

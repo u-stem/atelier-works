@@ -152,6 +152,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`tests/scripts/hold_wiring.test.ts`)、`holds.ts`の振る舞いのテスト(`tests/lib/holds.test.ts`、
  * `tests/lib/holds_db.test.ts`)、実DBで表の制約を確かめる`scripts/test-db-holds.ts`も、同じ理由で守る。
  * 書き換えられると、参照の混入の検出が外れ、保留の期限の上限が外れる。
+ * Consoleから保留と凍結を解除するscript(`hold_release.ts`、`freeze_release.ts`)とその部品(`lib/console_holds_support.ts`)、
+ * そのテスト(`tests/scripts/hold_release.test.ts`、`tests/scripts/freeze_release.test.ts`)も守る。
+ * 解除の書き手は、書き換えられると、他の主体の保留を無条件に外せるためである(CLIを守るのと同じ理由)。
+ * 読み取りだけの`console_holds.ts`は守らない。置く操作を持たず、保留の表を書く名前を読み込めないことは
+ * `tests/scripts/hold_wiring.test.ts`が固定する。
  * 保留のCLI(`scripts/hold.ts`)とpsqlの経路(`scripts/hold_psql.ts`)、そのテスト(`tests/scripts/hold.test.ts`、
  * `tests/scripts/hold_psql.test.ts`)も守る。CLIは保留を置く・解除する入口で、psqlの経路は接続先のデータベースと
  * 読み取り専用の設定を決める。書き換えられると、置く主体の確認や、実DBの検査が使い捨てのデータベースだけに書く保証が外れる。
@@ -239,6 +244,14 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/ci_metadata_rehash.script.yaml",
   "f/factory/lib/holds.ts",
   "f/factory/lib/holds.script.yaml",
+  "f/factory/hold_release.ts",
+  "f/factory/hold_release.script.yaml",
+  "f/factory/freeze_release.ts",
+  "f/factory/freeze_release.script.yaml",
+  "f/factory/lib/console_holds_support.ts",
+  "f/factory/lib/console_holds_support.script.yaml",
+  "tests/scripts/hold_release.test.ts",
+  "tests/scripts/freeze_release.test.ts",
   "tests/lib/holds.test.ts",
   "tests/lib/holds_db.test.ts",
   "tests/scripts/hold_wiring.test.ts",

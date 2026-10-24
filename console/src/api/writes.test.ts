@@ -6,6 +6,8 @@ import {
   decideApproval,
   kickoffAudit,
   MAX_REASON_LENGTH,
+  releaseFreeze,
+  releaseHold,
   resolveNotice,
   retryWorkItem,
   submitManualIntake,
@@ -329,5 +331,101 @@ describe("submitManualIntake", () => {
     const { fetchFn, calls } = respondWith({ error: { message: "boom" } }, 500);
     await submitManualIntake(INPUT, { fetchFn }).catch(() => undefined);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("releaseHold", () => {
+  const RELEASED = {
+    ok: true,
+    status: "released",
+    hold_id: 12,
+    was_active: true,
+    audit: "recorded",
+  } as const;
+
+  test("calls hold_release with the hold id only", async () => {
+    const { fetchFn, calls } = respondWith(RELEASED);
+    await releaseHold(12, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/hold_release",
+      body: { hold_id: 12 },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(RELEASED);
+    expect(await releaseHold(12, { fetchFn })).toEqual(RELEASED);
+  });
+
+  test("returns a hold that was already released as a result", async () => {
+    const already = {
+      ok: true,
+      status: "already_released",
+      hold_id: 12,
+      was_active: false,
+    } as const;
+    const { fetchFn } = respondWith(already);
+    expect(await releaseHold(12, { fetchFn })).toEqual(already);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ ok: true, status: "released" });
+    expect(await failureOf(releaseHold(12, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+
+  test("fails with unauthorized on a 401", async () => {
+    const { fetchFn } = respondWith("Unauthorized", 401);
+    expect(await failureOf(releaseHold(12, { fetchFn }))).toEqual({
+      kind: "unauthorized",
+    });
+  });
+
+  test("does not retry after a failure", async () => {
+    const { fetchFn, calls } = respondWith("boom", 500);
+    await failureOf(releaseHold(12, { fetchFn }));
+    expect(calls.length).toBe(1);
+  });
+});
+
+describe("releaseFreeze", () => {
+  const RELEASED = {
+    ok: true,
+    status: "released",
+    freeze_id: "0a1b2c3d",
+    scope: "schedule",
+    audit: "recorded",
+  } as const;
+
+  test("calls freeze_release with the freeze id only", async () => {
+    const { fetchFn, calls } = respondWith(RELEASED);
+    await releaseFreeze("0a1b2c3d", { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/freeze_release",
+      body: { freeze_id: "0a1b2c3d" },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(RELEASED);
+    expect(await releaseFreeze("0a1b2c3d", { fetchFn })).toEqual(RELEASED);
+  });
+
+  test("returns a release that could not be confirmed as a result", async () => {
+    const unconfirmed = {
+      ok: true,
+      status: "unconfirmed",
+      freeze_id: "0a1b2c3d",
+    } as const;
+    const { fetchFn } = respondWith(unconfirmed);
+    expect(await releaseFreeze("0a1b2c3d", { fetchFn })).toEqual(unconfirmed);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ ok: true, status: "released" });
+    expect(await failureOf(releaseFreeze("0a1b2c3d", { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
   });
 });

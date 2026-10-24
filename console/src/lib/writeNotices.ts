@@ -1,10 +1,13 @@
 // 書き込みが成功したときに画面へ出す知らせ(トースト)の文。
 // 失敗の文は`describeWriteFailure`が作るので、ここでは作らない。
 
+import type { WriteOutcome } from "../api/executeWrite.ts";
 import type {
   ApprovalDecideResult,
   AuditKickoffResult,
   AuditSkipReason,
+  FreezeReleaseResult,
+  HoldReleaseResult,
   NoticeResolveResult,
   RetryWorkItemResult,
 } from "../api/guards/writeResults.ts";
@@ -86,4 +89,84 @@ export function describeNoticeResult(result: NoticeResolveResult): WriteNotice {
         ? "解決済みにしました。"
         : "すでに解決済みです。",
   };
+}
+
+/** 解除の結果を知らせるトーストの文。書き込みの失敗は`error`にする。 */
+export type ReleaseNotice = {
+  readonly tone: "success" | "info" | "warning" | "error";
+  readonly message: string;
+};
+
+const AUDIT_FAILED_NOTE =
+  "ただし、解除の記録(通知)を残せませんでした。誰が解除したかは、ジョブの記録で確かめてください。";
+
+/**
+ * 保留の解除の結果。解除済みの保留は、何も変えなかった正常な結果として伝える。
+ * 期限切れの行を片付けただけのときは、通知を残さないので、記録の失敗の注意も付けない。
+ */
+export function describeHoldReleaseResult(
+  result: HoldReleaseResult,
+): WriteNotice {
+  if (result.status === "already_released") {
+    return { tone: "info", message: "すでに解除されています。" };
+  }
+  if (result.active_unknown === true) {
+    return {
+      tone: "warning",
+      message: `保留を解除しました。ただし、解除の前に有効だったかは確認できませんでした。${result.audit === "failed" ? AUDIT_FAILED_NOTE : ""}`,
+    };
+  }
+  if (!result.was_active) {
+    return { tone: "success", message: "期限切れの保留を片付けました。" };
+  }
+  if (result.audit === "failed") {
+    return {
+      tone: "warning",
+      message: `保留を解除しました。${AUDIT_FAILED_NOTE}`,
+    };
+  }
+  return { tone: "success", message: "保留を解除しました。" };
+}
+
+/**
+ * 凍結かdeployの保留の解除の結果。
+ * `unconfirmed`は、解除が効いたか分からないので警告にし、一覧で確かめさせる。
+ */
+export function describeFreezeReleaseResult(
+  result: FreezeReleaseResult,
+): WriteNotice {
+  switch (result.status) {
+    case "already_ended":
+      return {
+        tone: "info",
+        message: "すでに終わっています(解除済みか期限切れです)。",
+      };
+    case "unconfirmed":
+      return {
+        tone: "warning",
+        message:
+          "解除を確認できませんでした。一覧を取り直して確かめてください。",
+      };
+    case "released": {
+      const subject = result.scope === "deploy" ? "deployの保留" : "凍結";
+      if (result.audit === "failed") {
+        return {
+          tone: "warning",
+          message: `${subject}を解除しました。${AUDIT_FAILED_NOTE}`,
+        };
+      }
+      return { tone: "success", message: `${subject}を解除しました。` };
+    }
+  }
+}
+
+/** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */
+export function releaseNotice<T>(
+  outcome: WriteOutcome<T>,
+  describe: (result: T) => WriteNotice,
+): ReleaseNotice {
+  if (outcome.kind === "failed") {
+    return { tone: "error", message: outcome.message };
+  }
+  return describe(outcome.result);
 }

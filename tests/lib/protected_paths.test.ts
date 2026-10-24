@@ -1122,6 +1122,7 @@ describe("dependency-free lib locks", () => {
     "metadata_git_ports",
     "ci_metadata_rehash",
     "holds",
+    "console_holds_support",
   ].map((name) => `f/factory/lib/${name}`);
   const LOCKS = LIBS.map((base) => `${base}.script.lock`);
 
@@ -1446,6 +1447,40 @@ describe("hold command files", () => {
 
   test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+});
+
+// Consoleから保留と凍結を解除するscriptと、その部品、テストは、書き換えられると、他の主体の保留を
+// 無条件に外せる。CLIを守っているのと同じ理由で守る。読み取りだけの`console_holds.ts`は守らない。
+describe("console release files", () => {
+  const PATHS = [
+    "f/factory/hold_release.ts",
+    "f/factory/hold_release.script.yaml",
+    "f/factory/freeze_release.ts",
+    "f/factory/freeze_release.script.yaml",
+    "f/factory/lib/console_holds_support.ts",
+    "f/factory/lib/console_holds_support.script.yaml",
+    "tests/scripts/hold_release.test.ts",
+    "tests/scripts/freeze_release.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/console_holds.ts",
+    "f/factory/console_holds.script.yaml",
+  ])("matchesForbiddenPath does not match the read-only %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
   });
 });
 

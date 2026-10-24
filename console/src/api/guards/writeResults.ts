@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`の戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscriptの戻りに合わせる。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
 
@@ -163,4 +163,80 @@ export function isManualIntakeSubmitResult(
     return isManualIntakeRefusalReason(value.reason);
   }
   return value.refused === false && isString(value.flow_job_id);
+}
+
+type ReleaseAudit = "recorded" | "failed";
+
+const isReleaseAudit: Guard<ReleaseAudit> = isOneOf(["recorded", "failed"]);
+
+/** 通知を試みなかった解除では`audit`が欠ける。 */
+function isOptionalAudit(value: unknown): boolean {
+  return value === undefined || isReleaseAudit(value);
+}
+
+/**
+ * 保留の解除の結果。`was_active`は解除する前に有効だったか。
+ * 期限切れの行を片付けただけのときは偽で、通知を残さないので`audit`が欠ける。
+ * `active_unknown`は、有効な保留の一覧を読めず、有効だったかを確かめられなかったときだけ付く。
+ */
+export type HoldReleaseResult = {
+  readonly ok: true;
+  readonly status: "released" | "already_released";
+  readonly hold_id: number;
+  readonly was_active: boolean;
+  readonly active_unknown?: true;
+  readonly audit?: ReleaseAudit;
+};
+
+const isHoldReleaseStatus: Guard<"released" | "already_released"> = isOneOf([
+  "released",
+  "already_released",
+]);
+
+export function isHoldReleaseResult(
+  value: unknown,
+): value is HoldReleaseResult {
+  return (
+    isRecord(value) &&
+    value.ok === true &&
+    isHoldReleaseStatus(value.status) &&
+    isPositiveInteger(value.hold_id) &&
+    isBoolean(value.was_active) &&
+    (value.active_unknown === undefined || value.active_unknown === true) &&
+    isOptionalAudit(value.audit)
+  );
+}
+
+/**
+ * 凍結かdeployの保留の解除の結果。`unconfirmed`は、書いた後に読み直した変数に解除が残っていなかったこと。
+ * `scope`と`audit`は`released`のときだけ付く。
+ */
+export type FreezeReleaseResult = {
+  readonly ok: true;
+  readonly status: "released" | "already_ended" | "unconfirmed";
+  readonly freeze_id: string;
+  readonly scope?: "schedule" | "deploy";
+  readonly audit?: ReleaseAudit;
+};
+
+const isFreezeReleaseStatus: Guard<
+  "released" | "already_ended" | "unconfirmed"
+> = isOneOf(["released", "already_ended", "unconfirmed"]);
+
+const isFreezeScope: Guard<"schedule" | "deploy"> = isOneOf([
+  "schedule",
+  "deploy",
+]);
+
+export function isFreezeReleaseResult(
+  value: unknown,
+): value is FreezeReleaseResult {
+  return (
+    isRecord(value) &&
+    value.ok === true &&
+    isFreezeReleaseStatus(value.status) &&
+    isString(value.freeze_id) &&
+    (value.scope === undefined || isFreezeScope(value.scope)) &&
+    isOptionalAudit(value.audit)
+  );
 }

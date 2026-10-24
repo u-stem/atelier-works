@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   describeApprovalResult,
   describeAuditResult,
+  describeFreezeReleaseResult,
+  describeHoldReleaseResult,
   describeNoticeResult,
   describeRetryResult,
+  releaseNotice,
   STALE_LIST_NOTICE,
 } from "./writeNotices.ts";
 
@@ -131,5 +134,162 @@ describe("describeNoticeResult", () => {
         notice_id: 4,
       }),
     ).toEqual({ tone: "success", message: "すでに解決済みです。" });
+  });
+});
+
+describe("describeHoldReleaseResult", () => {
+  const RELEASED = {
+    ok: true,
+    status: "released",
+    hold_id: 12,
+    was_active: true,
+    audit: "recorded",
+  } as const;
+
+  test("reports a release as a success", () => {
+    expect(describeHoldReleaseResult(RELEASED)).toEqual({
+      tone: "success",
+      message: "保留を解除しました。",
+    });
+  });
+
+  test("warns that the record of the release could not be left", () => {
+    expect(describeHoldReleaseResult({ ...RELEASED, audit: "failed" })).toEqual(
+      {
+        tone: "warning",
+        message:
+          "保留を解除しました。ただし、解除の記録(通知)を残せませんでした。誰が解除したかは、ジョブの記録で確かめてください。",
+      },
+    );
+  });
+
+  test("reports the clean-up of an expired row", () => {
+    expect(
+      describeHoldReleaseResult({
+        ok: true,
+        status: "released",
+        hold_id: 12,
+        was_active: false,
+      }),
+    ).toEqual({ tone: "success", message: "期限切れの保留を片付けました。" });
+  });
+
+  test("says that it could not tell whether the hold was active", () => {
+    expect(
+      describeHoldReleaseResult({
+        ok: true,
+        status: "released",
+        hold_id: 12,
+        was_active: false,
+        active_unknown: true,
+        audit: "recorded",
+      }),
+    ).toEqual({
+      tone: "warning",
+      message:
+        "保留を解除しました。ただし、解除の前に有効だったかは確認できませんでした。",
+    });
+  });
+
+  test("reports a hold that was already released as information", () => {
+    expect(
+      describeHoldReleaseResult({
+        ok: true,
+        status: "already_released",
+        hold_id: 12,
+        was_active: false,
+      }),
+    ).toEqual({ tone: "info", message: "すでに解除されています。" });
+  });
+});
+
+describe("describeFreezeReleaseResult", () => {
+  const RELEASED = {
+    ok: true,
+    status: "released",
+    freeze_id: "0a1b2c3d",
+    scope: "schedule",
+    audit: "recorded",
+  } as const;
+
+  test("reports the release of a schedule freeze", () => {
+    expect(describeFreezeReleaseResult(RELEASED)).toEqual({
+      tone: "success",
+      message: "凍結を解除しました。",
+    });
+  });
+
+  test("reports the release of a deploy freeze", () => {
+    expect(
+      describeFreezeReleaseResult({ ...RELEASED, scope: "deploy" }),
+    ).toEqual({ tone: "success", message: "deployの保留を解除しました。" });
+  });
+
+  test("warns that the record of the release could not be left", () => {
+    expect(
+      describeFreezeReleaseResult({ ...RELEASED, audit: "failed" }),
+    ).toEqual({
+      tone: "warning",
+      message:
+        "凍結を解除しました。ただし、解除の記録(通知)を残せませんでした。誰が解除したかは、ジョブの記録で確かめてください。",
+    });
+  });
+
+  test("reports a freeze that already ended as information", () => {
+    expect(
+      describeFreezeReleaseResult({
+        ok: true,
+        status: "already_ended",
+        freeze_id: "0a1b2c3d",
+      }),
+    ).toEqual({
+      tone: "info",
+      message: "すでに終わっています(解除済みか期限切れです)。",
+    });
+  });
+
+  test("warns that the release could not be confirmed", () => {
+    expect(
+      describeFreezeReleaseResult({
+        ok: true,
+        status: "unconfirmed",
+        freeze_id: "0a1b2c3d",
+      }),
+    ).toEqual({
+      tone: "warning",
+      message: "解除を確認できませんでした。一覧を取り直して確かめてください。",
+    });
+  });
+});
+
+describe("releaseNotice", () => {
+  test("describes a finished release", () => {
+    expect(
+      releaseNotice(
+        {
+          kind: "done",
+          result: {
+            ok: true,
+            status: "already_released",
+            hold_id: 1,
+            was_active: false,
+          },
+        },
+        describeHoldReleaseResult,
+      ),
+    ).toEqual({ tone: "info", message: "すでに解除されています。" });
+  });
+
+  test("shows a failure as an error with its message", () => {
+    expect(
+      releaseNotice(
+        {
+          kind: "failed",
+          error: { kind: "forbidden" },
+          message: "権限がありません。",
+        },
+        describeHoldReleaseResult,
+      ),
+    ).toEqual({ tone: "error", message: "権限がありません。" });
   });
 });

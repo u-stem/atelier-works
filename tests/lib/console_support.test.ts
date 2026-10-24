@@ -111,6 +111,16 @@ describe("merge hold notices", () => {
   });
 });
 
+describe("hold release notices", () => {
+  test("the notice that a person released a hold needs no action", () => {
+    expect(noticeSeverity("hold_released")).toBe("info");
+  });
+
+  test("the notice that a person released a hold can be resolved from the Console", () => {
+    expect(isNoticeResolvable("hold_released")).toBe(true);
+  });
+});
+
 describe("INFO_NOTICE_KINDS", () => {
   test("lists exactly the kinds whose severity is info", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual(
@@ -121,7 +131,7 @@ describe("INFO_NOTICE_KINDS", () => {
     );
   });
 
-  test("contains the eleven kinds that need no action", () => {
+  test("contains the twelve kinds that need no action", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual([
       "approval_notify_failed",
       "claim_race_lost",
@@ -129,6 +139,7 @@ describe("INFO_NOTICE_KINDS", () => {
       "dependabot_merge_held",
       "fix_feedback_association_excluded",
       "fork_head_denied",
+      "hold_released",
       "implement_needs_human",
       "labeler_denied",
       "supersede_failed",

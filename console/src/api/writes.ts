@@ -13,8 +13,12 @@ import type { Guard } from "./guards/primitives.ts";
 import {
   type ApprovalDecideResult,
   type AuditKickoffResult,
+  type FreezeReleaseResult,
+  type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isFreezeReleaseResult,
+  isHoldReleaseResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
@@ -163,6 +167,35 @@ export function submitManualIntake(
       acceptance_criteria: input.acceptanceCriteria,
     },
     isManualIntakeSubmitResult,
+    options,
+  );
+}
+
+/**
+ * 保留を1件、人として解除する。解除済みの保留は、そのまま成功として返る。
+ * 解除する主体は引数に取らない。scriptが固定し、操作者をジョブの実行文脈から導く。
+ */
+export function releaseHold(
+  holdId: number,
+  options: RunScriptOptions = {},
+): Promise<HoldReleaseResult> {
+  return callWrite(
+    "hold_release",
+    { hold_id: holdId },
+    isHoldReleaseResult,
+    options,
+  );
+}
+
+/** 凍結かdeployの保留を1件、人として解除する。終わっている行は、そのまま成功として返る。 */
+export function releaseFreeze(
+  freezeId: string,
+  options: RunScriptOptions = {},
+): Promise<FreezeReleaseResult> {
+  return callWrite(
+    "freeze_release",
+    { freeze_id: freezeId },
+    isFreezeReleaseResult,
     options,
   );
 }

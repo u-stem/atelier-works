@@ -1,0 +1,12 @@
+summary: '[OP-0-2] 保留と凍結を取得'
+description: Factory
+  Consoleの保留と凍結の画面が表示する、有効な保留と凍結を読み取り専用で取得します。保留の表と凍結の変数は別々に読み、片方が読めなくても、もう片方を返します。読めなかった側は、空の一覧ではなく失敗の種類と理由で返します。
+lock: '!inline f/factory/console_holds.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+tag: console
+timeout: 30

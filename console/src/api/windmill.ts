@@ -5,14 +5,20 @@
 
 import { classifyRunResponse, type RunResult } from "./errors.ts";
 
-/** Consoleが呼んでよいscript。キーが呼び出し側の名前、値がWindmillのパス。 */
+/**
+ * Consoleが呼んでよいscript。キーが呼び出し側の名前、値がWindmillのパス。
+ * 保留を置くscriptは持たない。Consoleは保留と凍結を読み、解除するだけである。
+ */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
+  console_holds: "f/factory/console_holds",
   approval_decide: "f/factory/approval_decide",
   retry_work_item: "f/factory/retry_work_item",
   audit_kickoff: "f/factory/audit_kickoff",
   manual_intake_submit: "f/factory/manual_intake_submit",
   notice_resolve: "f/factory/notice_resolve",
+  hold_release: "f/factory/hold_release",
+  freeze_release: "f/factory/freeze_release",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;

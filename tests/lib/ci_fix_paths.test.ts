@@ -819,6 +819,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
   "f/factory/lib/console_support.ts":
     "通知の重要度と対象の定数。通知の種類を足す変更が日常的に触れる。競合の通知の種類を読むだけで、判断には使わない",
+  "f/factory/lib/approver.ts":
+    "操作者をジョブの実行文脈から導く31行の関数。承認の記録と、Consoleの解除が使う。導けないときに拒否する(何も変えない)挙動は、使う側のテストが固定する。CI回が変えても影響は操作者の名前に限られ、レビューが受け皿になる",
   "f/factory/lib/owner_id_notice.ts":
     "owner_idの照合のnoticeの種類と本文を組み立てるだけで、通信と判定を持たない。poll_support.tsが再エクスポートし、PRのポーリングでも使う。CI回が変えても影響はnoticeの文面と解決の照合に限られ、レビューが受け皿になる",
 };

@@ -4,6 +4,8 @@ import {
   approvalStatusLabel,
   attemptRef,
   deploymentResultLabel,
+  holderKindLabel,
+  holdScopeLabel,
   hostActionLabel,
   noticeKindLabel,
   pullRequestOriginLabel,
@@ -137,6 +139,10 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the release of a hold", () => {
+    expect(noticeKindLabel("hold_released")).toBe("保留の解除");
+  });
+
   test("names the unreadable merge holds", () => {
     expect(noticeKindLabel("dependabot_merge_hold_unreadable")).toBe(
       "マージの保留を読めない状態",
@@ -245,5 +251,39 @@ describe("references", () => {
 
   test("formats an attempt reference", () => {
     expect(attemptRef(1)).toBe("試行 1");
+  });
+});
+
+describe("holdScopeLabel", () => {
+  test("names a merge hold", () => {
+    expect(holdScopeLabel("merge")).toBe("マージの保留");
+  });
+
+  test("names a claim hold as one that stops nothing", () => {
+    expect(holdScopeLabel("claim")).toBe(
+      "Issueの取り込みの保留(止める処理なし)",
+    );
+  });
+
+  test("does not leak an unknown scope", () => {
+    expect(holdScopeLabel("brand_new_scope")).toBe("不明な種類の保留");
+  });
+
+  test("does not take a name of the prototype for a scope", () => {
+    expect(holdScopeLabel("constructor")).toBe("不明な種類の保留");
+  });
+});
+
+describe("holderKindLabel", () => {
+  test.each([
+    ["session", "ローカルのセッション"],
+    ["human", "人"],
+    ["factory", "Factory"],
+  ])("names %s", (kind, label) => {
+    expect(holderKindLabel(kind)).toBe(label);
+  });
+
+  test("does not leak an unknown holder kind", () => {
+    expect(holderKindLabel("robot")).toBe("不明な主体");
   });
 });

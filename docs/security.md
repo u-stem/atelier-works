@@ -1004,7 +1004,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
 | 旧Consoleのリンクを固定の行き先に飛ばす | 廃止した旧ConsoleのURL(`/apps/get/f/factory/factory_console`と`/apps_raw/get/f/factory/factory_console`、配下を含む)は、パスとクエリによらず固定の`/console/`へ302で飛ばす。行き先を要求から作らないので、オープンリダイレクトにならない。`Cache-Control: no-store`を付け、ブラウザに転送を覚えさせない |
 | 他のサイトからAPIを呼ばせない | `/api/*`への要求は、次の4つをCaddyが403にする。`Sec-Fetch-Site`が`cross-site`か`same-site`のもの。`Origin`がブラウザの開いたオリジンと一致しないもの。ジョブを起動するGET(`run_wait_result`、`run_and_stream`、`slack_approval`、`teams_approval`、`move_s3_file`)を、fetchとXHR以外(`Sec-Fetch-Dest`が`empty`でないもの)で呼んだもの。GETとHEAD以外の要求を、ページの移動(`Sec-Fetch-Mode`が`navigate`か`nested-navigate`)で送ったもの。副作用のあるGETも、`Sec-Fetch-Mode`が`navigate`のときは止める。`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らないCLIは通す |
-| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの6つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決、手動投入の受付)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
+| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの9つ(読み取りの2つと、承認、再実行、監査の起動、通知の解決、手動投入の受付、保留の解除、凍結の解除)だけである。保留や凍結を置くscriptは無い。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
 | 秘密を配信物に入れない | Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない |
 
@@ -1141,6 +1141,8 @@ tag`console`がsuperadminでない主体にも許されていても、フォル�
 Consoleから押せる書き込みには、読むsecret変数の上限を決める。
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
 `audit_kickoff`、`notice_resolve`、`manual_intake_submit`は、どのsecret変数も読まない。
+保留と凍結の3つ(`console_holds`、`hold_release`、`freeze_release`)も、どのsecret変数も読まない。
+保留と凍結の3つは、`discord_webhook_url`も読めないので、Discordへは送らない。解除の記録は情報の通知に残す。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。
@@ -1153,7 +1155,12 @@ tag`console`のscriptがimportでたどれるソースを数える契約テス�
 - `.name("literal")`の形の呼び出しで説明できない、`getVariable`と`getResource`の出現。添字アクセス、分割代入、名前付きimport、別名への代入、引数が変数の呼び出し、注入された関数の呼び出しが当たる
 
 script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ちる。
-例外は2件で、どちらも読み取りを依存として注入するため、引数が変数になる。`console_query`は`deployed_sha`の読み取りで、`loadConfig`は設定のリソースの読み取りである。呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
+例外は3件で、いずれも読み取りを依存として注入するため、引数が変数になる。
+`console_query`は`deployed_sha`の読み取りである。
+`loadConfig`は設定のリソースの読み取りである。
+凍結の変数の入出力(`freeze_apply.ts`)は、注入されたSDKの読み取りである。
+凍結の変数`f/factory/freezes`は、書き込みのときに`isSecretIfNotExist`へ`false`を渡すので、secretではない。
+呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
 テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`、文字列の中に隠したコードである。これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
@@ -2650,6 +2657,21 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   知らない版の`self_update`は、保留を効かせない。
   作業の途中で落ちた保留は、開始時の確認では検知できない。
   運用手順に、作業の直前と終わりに`freeze:list`で確かめる手順を置いているため、受け入れる。
+- Consoleから凍結とdeployの保留を解除できる。
+  ログインした管理者は、変数に直接書ける権限をすでに持つので、権限は増えない。
+  1回の呼び出しで届く道が増える。
+  解除は止めが外れる向きだが、期限で必ず終わり、置き直せるため、受け入れる。
+  解除した操作者は変数の行に残らないので、情報の通知とジョブの記録に残す。
+  通知の書き込みが失敗しても、解除は取り消さず、画面が知らせる。
+- `freeze_release`は、書いた後に変数を読み直す。
+  解除が残っていないとき、または書いた時点で有効だった行が欠けているときは、確認できなかったと返す。
+  変数の読み直しと書き込みは排他しない。
+  Console用のworkerは1つ(`replicas: 1`)で動くので、Consoleのジョブ同士は重ならない。
+  CLIや`self_update`と重なると、他の行を黙って消すか、解除を巻き戻すことがある。
+  読み直しで気づけない順序が2つある。
+  - CLIの`place`が、Consoleの読みの後に、読み直しより前の状態を書き、Consoleが最後に書く。
+  - Consoleの読み直しの後に、別の書き手が書いて、解除が巻き戻る。
+  窓は秒単位で、運用手順に止める直前の`freeze:list`による確認を置いているため、受け入れる。
 - `session`は、deployの保留を確認なしで置ける。
   上限は120分で、この区別は誤操作を防ぐためのもので、境界ではない。
   subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`と`freeze:release`を拒否する。
@@ -2755,6 +2777,29 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   解除の可否を決める`canRelease`は名乗りを信じるので、権限の境界ではない。
   BashとDockerを持つ主体は、`psql`で他の主体の保留を解除でき、削除でき、制約も外せる。
   止めが外れる向きでも、区別は境界ではない。
+- Consoleから保留を解除できる。
+  Windmillにログインした管理者(ワークスペースの管理者)は、Consoleでなくても、APIとpsqlで同じことができる。
+  scriptを足しても権限は増えないが、1回の呼び出しで届く道が増える。
+  解除は止めが外れる向きだが、保留は止めるための補助で、元の保護が残るため、受け入れる。
+- Consoleの解除は、`session`や`factory`が置いた保留も、人(`human`)として解除する。
+  操作者の名前は`released_by`に書けず(`human`の`holder`は`human`に限る)、情報の通知とジョブの記録に残る。
+  通知の書き込みが失敗しても解除は取り消さず、画面が知らせる。
+- Consoleの確認は、`yes`の入力を求めない。
+  ログインした管理者が、対象、期限、効果の文を見て押す操作で、フォーカスの既定が「取り消す」にある。
+  解除は止めが外れる向きだが、保留は期限で必ず終わるため、受け入れる。
+- Consoleで解除するscriptの名前は、各scriptと許可リストの外に出さない。
+  `f/`のほかのファイルが名前を持つと、自動のコードから解除scriptを起動できる。
+  `tests/scripts/hold_wiring.test.ts`が、`f/`のすべてのファイル(`.lock`とflowの定義を含む)を走査して固定する。
+  名前を組み立てる形は、検出できない。
+- Consoleの解除は、`f/`で`releaseHold`を読み込める唯一のファイルである(`HOLD_RELEASERS`)。
+  `placeHold`を読み込むファイルは、`f/`のどこにも無い。表示だけの読み手(`HOLD_VIEWERS`)は`listActiveHolds`だけを読み込み、読んで止まる主体の一覧(`HOLD_READERS`)には入れない。
+  3つの分類は、読み込む名前の一覧が、実際のimportと一致することで固定する。
+  解除のscriptとその部品、テストは保護パスに入れる。書き換えられると、他の主体の保留を無条件に外せるためである。
+- 保留の表の壊れた行が1つでもあると、Consoleは一覧を出さない(`corrupt`)。
+  回復はpsqlで行う。読めない間は、dependabotの自動マージが止まる側に倒れる。
+- 画面の時計とDBの`now()`のずれで、期限の境界に数秒の誤差が出る。
+  解除はidで行い、idは再利用されないので、別の保留を解除することはない。
+  idは、migrationをdownしてからupすると振り直されるが、運用では行わない。
 - 偽造した保留の影響は、対象の進みが遅れることに限られる。
   許可に使わない限り、保留が権限を増やすことはない。
 - 保留を読めないとき、dependabotの自動マージは止まる。
@@ -2830,6 +2875,42 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   フックのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
   miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)の保護は、Factoryのpr_fixとimplementのフローにだけ効く。
   ローカルのsubagentが、そこに書いて実行する形は止めない。
+- Consoleの解除scriptを1コマンドで呼ぶ形は、`hold-guard.ts`が、主セッションを含むすべてのセッションで拒否する。
+  ローカルの主セッションはCLIでは`session`として扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らないためである。
+  解除scriptの名前を軸に、拒否を既定にする。
+  プログラムを問わず、コマンドの語、変数代入の値、標準入力の文字列に、名前、名前に当たりうるglob、ブレースの形があれば拒否する。
+  標準入力の文字列は、ヒアドキュメント、ヒアストリング、パイプの連鎖の`echo`と`printf`である。
+  実行系が包む形(`npx windmill-cli`、`bunx windmill-cli@<版>`、`bun x`、`pnpm dlx`、`deno run npm:`)も同じである。
+  `curl`のURLのglobとブレース(`?`や`#`が続く形を含む)と、`xargs`が標準入力から受ける名前も同じである。
+  シェルは、`-c`の直後の文字列を再帰で別に調べる。
+  それ以外の語(位置引数、`$0`、スクリプトのオペランド)と標準入力の文字列は、名前に当たれば拒否する。
+  `git`、`gh`、`grep`、`rg`、`cat`などの読み取りのプログラムと、検査の道具(`bun test`、`bunx biome`)は、名前だけでは通す。
+  ただし、同じコマンドの語、変数代入の値、標準入力の文字列に、実行を表す語が並ぶと拒否する。
+  実行を表す語は、`wmill`、`windmill-cli`、`curl`、`wget`、`http`、`xh`、`npx`、`bunx`、`pnpm`、`yarn`、`deno`、`bun`、`node`、`python`、`sh`、`bash`、`zsh`、`run_wait_result`、`/jobs/run`である。
+  変数代入の値に名前があれば、プログラムを問わず拒否する。
+  `git`は、`-c`、`--config-env`、`rebase`、`bisect`、`submodule`、`difftool`、`mergetool`、`filter-branch`、`--ext-diff`、`--upload-pack`、`grep -O`のとき、名前があれば拒否する。
+  `gh`は`alias set`と`extension`、`rg`は`--pre`も同じである。
+  `sed`、`bat`、`ag`は、名前がファイルのパスの形の語にあるときだけ通す。
+  `awk`は名前を含む検索も拒否するので、名前を探すときは`grep`、`rg`、Readツールを使う。
+  `wmill`の副コマンドのうち、解除scriptを実行せずに読む・配るもの(`script get`、`script push`、`job list`など)は通す。
+  名前が語に現れない`wmill jobs push`は、名前なしで拒否する。
+  凍結の変数を書く`wmill variable add/push`と、変数を書くURLの経路(globを含む)も拒否する。
+  コミットメッセージやPR本文に、名前と実行を表す語を並べると、読み取りのプログラムでも拒否する。
+  本文はファイルに書き、`git commit -F <ファイル>`や`gh pr create --body-file <ファイル>`で渡す。
+  ファイルはWriteツールで書く。Bashのヒアドキュメント(`cat <<'EOF' > ファイル`)で並べると、拒否される。
+  パイプの上流の語にある名前は、`wmill`、実行するプログラム、`xargs`が受ける読み取りのプログラムに当てる。
+  下流に名前がある読み取り(`wmill job list ... | grep hold_release`)は通す。
+  ベストエフォートで、止めない形は次のとおりである。
+  - ハッシュでの呼び出し(`run_wait_result/h/<hash>`)、パーセント符号化したパス、変数で組んだ名前。
+  - ファイルに書いた設定(`curl -K config`)や、ファイルから名前を読む`xargs`のように、名前が語にも標準入力の文字列にも現れない形。
+  - 別のファイルに解除scriptの呼び出しを書いて実行する形、本文をファイルで渡す`wmill script preview`の呼び出し。
+  - 実行を表す語の一覧に無いプログラム(`perl`、`ruby`、`php`など)に、名前を渡す読み取りのプログラム。
+  - 名前をシェルの変数に束ねてから実行する形。
+    `for x in f/factory/hold_release; do wmill script run "$x"; done`、`select`、`printf -v`、`$_`である。
+    変数で組んだ名前と同じ類として、コードでは追わない。
+    `for`と`select`を止めると、正規のループ(`for f in tests/...; do bun test $f; done`)も止まるためである。
+  - ソースは、ReadツールかGitの`git show`で読む。名前を含むURLの取得は、読み取りでも拒否する。
+  解除は、人がConsoleの画面で行う。ログイン済みのブラウザの自動操作は、Bashのフックの外で解除のボタンを押せるので、実機の解除の操作は人が行う。
 - `mise run hold:list -- '<文字列>'`で余分な引数を渡しても、シェルの文としては解釈されない。
   実機で確かめた。miseは追加の引数を引用符で囲んでコマンドに続け、CLIは`list`の後ろの引数を拒否する。
   置く・解除する操作と違い、`hold:list`は標準入力を使わないので、`raw`にしない。
@@ -2930,6 +3011,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)と凍結の解除(`freeze:release`、`scripts/freeze.ts release`)。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除すると保留を外せる。subagentには、確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
+| 主セッションを含むすべてのClaudeのセッションの、Consoleの解除scriptを呼びうる操作。コマンドの語か標準入力の文字列に、解除script(`hold_release`と`freeze_release`)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
 | subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
@@ -4485,6 +4567,9 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
 - 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。
   CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。
   受け入れた一覧と理由は、テストが固定する。
+- 受け入れた共有モジュールに`approver.ts`がある。
+  31行で安定しており、承認の`approval_decide`が以前から同じ依存を持つ。
+  CI回が変えても影響は操作者の名前に限られ、Consoleの解除は導けないときに拒否する。
 - ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`、`.gitignore`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。
   PRがすでに変更していれば、CI回のClaudeが書き換えられる。
   影響は、マージの後か、人の対話セッションで読まれたときに現れる。

@@ -33,11 +33,14 @@ describe("SCRIPT_PATHS", () => {
   test("allows only the scripts the console calls", () => {
     expect(Object.keys(SCRIPT_PATHS)).toEqual([
       "console_query",
+      "console_holds",
       "approval_decide",
       "retry_work_item",
       "audit_kickoff",
       "manual_intake_submit",
       "notice_resolve",
+      "hold_release",
+      "freeze_release",
     ]);
   });
 
@@ -49,6 +52,9 @@ describe("SCRIPT_PATHS", () => {
       audit_kickoff: "f/factory/audit_kickoff",
       manual_intake_submit: "f/factory/manual_intake_submit",
       notice_resolve: "f/factory/notice_resolve",
+      console_holds: "f/factory/console_holds",
+      hold_release: "f/factory/hold_release",
+      freeze_release: "f/factory/freeze_release",
     });
   });
 });
@@ -60,6 +66,9 @@ describe("isScriptName", () => {
     "retry_work_item",
     "audit_kickoff",
     "notice_resolve",
+    "console_holds",
+    "hold_release",
+    "freeze_release",
   ])("accepts the allowed name %s", (name) => {
     expect(isScriptName(name)).toBe(true);
   });
@@ -72,6 +81,8 @@ describe("isScriptName", () => {
     "f/factory/steps/console_query",
     "f/factory/approval_decide",
     "cleanup_db",
+    "hold_place",
+    "placeHold",
     "",
   ])("rejects %s", (name) => {
     expect(isScriptName(name)).toBe(false);

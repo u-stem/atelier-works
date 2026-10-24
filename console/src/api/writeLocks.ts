@@ -4,7 +4,7 @@
 // ロックは画面の部品をまたいで共有する。一覧と詳細の両方のボタンが、同じ対象で止まるためである。
 
 /** 書き込みの対象の種類。キーの接頭辞になる。 */
-type WriteTargetKind = "approval" | "work_item" | "notice";
+type WriteTargetKind = "approval" | "work_item" | "notice" | "hold" | "freeze";
 
 /** 監査の起動は対象を持たないので、キーを1つに固定する。 */
 export const AUDIT_WRITE_KEY = "audit";
@@ -15,8 +15,14 @@ export const AUDIT_WRITE_KEY = "audit";
  */
 export const MANUAL_INTAKE_WRITE_KEY = "manual_intake";
 
-/** 対象の種類とIDから、ロックのキーを作る。承認の承認と却下は同じキーで止める。 */
-export function writeTargetKey(kind: WriteTargetKind, id: number): string {
+/**
+ * 対象の種類とIDから、ロックのキーを作る。承認の承認と却下は同じキーで止める。
+ * 凍結のIDは文字列で、保留のIDは数値である。
+ */
+export function writeTargetKey(
+  kind: WriteTargetKind,
+  id: number | string,
+): string {
   return `${kind}:${String(id)}`;
 }
 

@@ -153,6 +153,20 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells that the hold can be released from the system screen", () => {
+    expect(noticeGuide("dependabot_merge_held").action).toContain(
+      "システムの画面",
+    );
+  });
+
+  test("explains who released the hold in a notice of the release", () => {
+    expect(noticeGuide("hold_released").meaning).toContain("解除");
+  });
+
+  test("tells that a release needs no action", () => {
+    expect(noticeGuide("hold_released").action).toContain("心当たり");
+  });
+
   test("tells that the waiting pull requests resume by themselves", () => {
     expect(noticeGuide("dependabot_merge_held").note).toContain("自動で再開");
   });

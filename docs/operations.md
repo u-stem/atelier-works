@@ -3539,6 +3539,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 - `unsandboxed_check_commands`
 - `implement_needs_human`
 - `dependabot_merge_held`
+- `hold_released`
 
 | 種類 | 意味 | 人がすること |
 | --- | --- | --- |
@@ -3589,8 +3590,9 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `pr_ci_check_denied` | 対象リポジトリのPRかCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのPRのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される([PATの権限](security.md#githubのpat)) |
 | `config_misfit` | 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。収まらない設定では自動修正を起動できないので、CIの失敗の自動修正を保留している。設定全体で1件だけ残り、失敗中のPRの数には依らない。本文に見直す項目が載る。Discordにも1回届く | `claude_timeout_sec`を小さくするか、`allowed_check_commands`の数を減らす。直すと、次の巡回で保留が外れて起動し直し、この通知も自動で解決される。自動修正だけを無効にした場合も、次の巡回で解決される。監視を無効にした場合は、修正中の行も通知を保留した行も無いと残るので、人が解決する |
 | `pr_conflict` | Factoryが作ったPRが、ベースブランチとマージできない競合の状態である。本文は`<owner>/<repo>#<PR番号>:`で始まり、次の操作とPRのリンクが載る。Discordにも届く | 本文の「次の操作」に従う。PRのブランチにベースブランチをmergeして競合を解消し、pushする。競合が解けたとき、PRを閉じたときは、自動で解決される。競合が続く間は、PRのコミットが進んでも通知は重ならない |
-| `dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが待っている。取得の1周ごとに1件にまとめ、本文に件数は載せない。件数は取得のログに残る。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、[保留を確かめる](#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
+| `dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが待っている。取得の1周ごとに1件にまとめ、本文に件数は載せない。件数は取得のログに残る。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、Consoleのシステムの画面の「保留と凍結」から解除するか、[保留を確かめる](#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
 | `dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開し、この通知も自動で解決される。`corrupt`と`error`は、本文の先頭にリポジトリが載り、そのリポジトリを読めた周回で解決される。候補のPRが無い周回も読むので、PRが閉じても解決される |
+| `hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
 
 ### Console用のworkerの検知を確かめる
 
@@ -5425,13 +5427,20 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 仕様は[保留の内部仕様](internals/holds.md)にある。
 Claudeが保留を置く・解除する手順は、[保留のスキル](../.claude/skills/hold/SKILL.md)にある。
 
-保留の操作は、ホストの端末で、`mise run`のタスクから行う。
+保留の一覧は、Consoleのシステムの画面の「保留と凍結」でも見られる。
+置く操作は、ホストの端末で、`mise run`のタスクから行う。
+解除は、端末のタスクのほかに、Consoleの画面からもできる。
 
 | 操作 | コマンド |
 | --- | --- |
 | 一覧 | `mise run hold:list` |
 | 置く | `mise run hold:place -- --scope merge --target <owner>/<repo> --minutes <分> --reason <理由>` |
 | 解除 | `mise run hold:release -- <id>` |
+
+Consoleでは、行の「解除」を押し、確認のダイアログで種類、対象、理由、置いた主体、期限、効果を読んでから確定する。
+Consoleの解除は、`yes`の入力を求めず、誰が置いた保留も解除できる。
+解除した操作者は、情報の通知`hold_released`に残る。
+凍結とdeployの保留も、同じ画面から解除できる。
 
 タスクは、チェックアウトを更新した端末で使える。
 タスクが見つからないときは、`mise exec -- bun ./scripts/hold.ts <list|place|release>`を直接実行する。
@@ -5460,7 +5469,7 @@ gh pr list --repo <owner>/<repo> --json number,autoMergeRequest --jq '.[] | sele
 ### 保留で止まったdependabotのPRを再開する
 
 1. `mise run hold:list`で、保留の理由と期限を確かめる。
-2. 解除してよければ、`mise run hold:release -- <id>`で解除する。
+2. 解除してよければ、Consoleのシステムの画面の「保留と凍結」の「解除」か、`mise run hold:release -- <id>`で解除する。
 3. 取得が待たせていたPRは、次の取得(10分ごと)に自動で再開する。
 4. 終了のステップで止まった作業項目は、再開しない。
    作業項目は人の対応待ちで終わり、理由は`dependabot merge held by a hold`である。
@@ -5475,7 +5484,9 @@ Claudeのセッションのマージ(`gh pr merge`など)と、`wmill sync push`
 
 1. 拒否の文に載るidと期限を、`mise run hold:list`と`mise run freeze:list`で確かめる。
 2. 置いた主体が解除するか、期限が切れるのを待つ。
-   解除してよければ、人が`mise run hold:release -- <id>`か`mise run freeze:release -- <id>`で解除する。
+   解除してよければ、人が解除する。
+   Consoleのシステムの画面の「保留と凍結」から解除する。
+   端末では、`mise run hold:release -- <id>`か`mise run freeze:release -- <id>`を実行する。
 3. 保留を読めないという拒否は、保留が無いことを意味しない。
    スタックが止まっていれば`mise run up`で起動して、同じコマンドをやり直す。
    ツールが無いと出たら`mise install`を実行する。
@@ -5494,6 +5505,10 @@ subagentは保留を置かず、解除もしない。
 deployの保留を置くことと、凍結の解除も同じである。
 主セッションか人に頼む。
 一覧(`mise run hold:list`、`mise run freeze:list`)と、スケジュールの凍結を置くことは、subagentも使える。
+Consoleの解除script(`hold_release`と`freeze_release`)の名前を含むコマンドは、実行系の包み方やglobを問わず、フックが拒否する。
+ソースを読むときは、Readツールか`git show`を使う。
+subagentだけでなく、主セッションを含むすべてのClaudeのセッションが対象である。
+解除は、人がConsoleの画面で行う。
 
 ### 凍結と合わせて確かめる
 

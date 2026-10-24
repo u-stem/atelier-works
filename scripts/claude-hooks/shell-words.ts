@@ -1411,28 +1411,36 @@ class Parser {
 /**
  * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
  * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
- * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、空の配列を返して通す。
+ * パイプの連鎖は上流まですべて辿る。間に`cat`、`tee`、`sed`などが挟まっても、
+ * 上流の`echo`の文字列とヒアドキュメントの本文は、途中で変わりうる入力として含める。
+ * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、読める文字列が無ければ空の配列を返して通す。
  * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
  */
 export function literalShellInputs(
   command: SimpleCommand,
 ): readonly string[] | null {
-  if (command.inputs.length > 0)
-    return command.inputs.map((input) => input.text);
-  const source = command.pipedFrom;
-  if (source === null) return [];
-  const { words } = stripWrappers(source.words);
-  const program = baseName(words[0]?.text ?? "");
-  if (program !== "echo" && program !== "printf") return [];
-  let args = words.slice(1);
-  if (program === "echo") {
-    const first = args.findIndex((word) => !/^-[neE]+$/.test(word.text));
-    args = first === -1 ? [] : args.slice(first);
+  const texts = command.inputs.map((input) => input.text);
+  for (
+    let source = command.pipedFrom;
+    source !== null;
+    source = source.pipedFrom
+  ) {
+    texts.push(...source.inputs.map((input) => input.text));
+    const { words } = stripWrappers(source.words);
+    const program = baseName(words[0]?.text ?? "");
+    if (program !== "echo" && program !== "printf") continue;
+    let args = words.slice(1);
+    if (program === "echo") {
+      const first = args.findIndex((word) => !/^-[neE]+$/.test(word.text));
+      args = first === -1 ? [] : args.slice(first);
+    }
+    if (args.some((word) => word.dynamic)) return null;
+    // `\n`や`\t`は、echoとprintfが改行や区切りに直す。
+    const written = args.map((word) =>
+      word.text.replace(/\\n/g, "\n").replace(/\\t/g, " "),
+    );
+    if (program === "echo") texts.push(written.join(" "));
+    else texts.push(...written);
   }
-  if (args.some((word) => word.dynamic)) return null;
-  // `\n`や`\t`は、echoとprintfが改行や区切りに直す。
-  const texts = args.map((word) =>
-    word.text.replace(/\\n/g, "\n").replace(/\\t/g, " "),
-  );
-  return program === "echo" ? [texts.join(" ")] : texts;
+  return texts;
 }
