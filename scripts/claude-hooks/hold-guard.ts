@@ -10,16 +10,23 @@
 // - 実行系(`bun`、`bunx`、`node`、`tsx`、`ts-node`、`deno`、`npx`、`npm`、`pnpm`、`pnpx`、`yarn`)と、
 //   スクリプトを直接実行する形: 語のどれかが保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省略できる)を指していれば拒否する。
 //   `bun`は拡張子の無いパスを`hold.ts`に解決するので、拡張子の有無は区別しない。
-//   引用符の外のglob(`scripts/hol?.ts`、`scripts/hol[d].ts`、`scripts/*`)は、保留のコードの名前に当たりうれば拒否する。
+//   引用符の外のglob(`scripts/hol?.ts`、`scripts/hol[d].ts`、`scripts/*`)は、ファイル名の部分が保留のコードの名前に当たりうれば拒否する。
+//   ディレクトリは見ない。POSIXの文字クラス(`[[:lower:]]`)は読み解かず、当たりうるものとして扱う。
+//   ブレース(`{hold.ts,place}`)は、展開した綴りと、空白に置き換えた綴りの両方で判定する。
+//   NULを含む`$'...'`の語は、切り詰めた綴りと、切り詰めない綴り(`variants`)の両方で判定する。
 //   `-e`などの文字列と標準入力で渡すコードに含まれる場合も同じである。
 //   許すのは次の2つだけである。
 //   (a) `hold`を指す語の直後の語が`list`である。
 //   (b) 最初のオペランドが検査の道具(`test`、`biome`、`@biomejs/biome`、`tsc`、`scripts/lint-*.ts`)である。
 //       実行ではなく検査なので、`bunx biome check scripts/hold.ts`は止めない。
+//       版付きの名前(`@biomejs/biome@1.9.4`)と、実行系のオプション(`--bun`、`--yes`、`-y`)の後ろも同じに扱う。
 // - `mise`: 全体オプション(`-q`、`-C <dir>`など)を読み飛ばしたあとの、何かを実行するサブコマンド
 //   (`run`、`r`、`tasks run`、`watch`、`w`、`exec`、`x`)かタスク名(コロンを含む語)があるコマンド行に、
 //   `hold:place`か`hold:release`を指しうる語が1つでもあれば、位置を問わず拒否する。
 //   `hold:`で始まる`hold:list`以外の語、globや文字クラスが当たる語、実行時に決まる語、ブレースを含む語が、これに当たる。
+//   `--`より後ろはタスクへの引数なので、glob、ブレース、実行時に決まる語は見ない。`hold:`で名指しする語は見る。
+//   一覧に無い長いオプション(`=`の無いもの)があれば、サブコマンドの位置が決まらないので、コマンド全体を拒否する。
+//   `exec`か`x`が語にあれば、位置を問わず、その後ろを実行系のコマンドとして判定する。
 //   `mise exec`の中のコマンドは、呼び出し側が前置きを外したあとの語として判定する。
 // - `docker`、`docker-compose`、`psql`: 語か標準入力の文字列に`holds`を含めば拒否する。
 //
@@ -32,10 +39,14 @@
 // - subagentが新しいファイルを書いて実行する形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
 
-import { baseName, skipMiseGlobalOptions, type Word } from "./shell-words.ts";
+import { baseName, scanMiseGlobalOptions, type Word } from "./shell-words.ts";
 
-/** 拒否の種類。`dynamic`は、実行時に決まる語のせいで判定できないこと。 */
-export type HoldFinding = "operation" | "dynamic";
+/**
+ * 拒否の種類。
+ * `dynamic`は、実行時に決まる語のせいで判定できないこと。
+ * `option`は、`mise`の知らないオプションのせいで、サブコマンドの位置が決まらないこと。
+ */
+export type HoldFinding = "operation" | "dynamic" | "option";
 
 /** スクリプトを実行するプログラム。 */
 const RUNNERS: ReadonlySet<string> = new Set([
@@ -73,13 +84,13 @@ const HOLD_FILE_NAMES: readonly string[] = [
   "holds.ts",
 ];
 
-/** 保留のコードが置かれるディレクトリの末尾(`scripts`と`f/factory/lib`)。 */
-const HOLD_DIRECTORY = /(?:^|\/)(?:scripts|lib)$/;
-
-/** 作業ディレクトリを指すだけのディレクトリ部分(空、`.`、`..`、`../..`など)。 */
-const CURRENT_DIRECTORY = /^(?:\.{1,2}(?:\/\.{1,2})*)?$/;
-
 const GLOB_CHARACTERS = /[*?[]/;
+
+/** 版の接尾辞(`@1.9.4`)。先頭の`@`(スコープ)には当たらない。 */
+const VERSION_SUFFIX = /(?<=.)@[^@/]*$/;
+
+/** 検査の道具の前に置ける、実行系のオプション。 */
+const RUNNER_FLAGS: ReadonlySet<string> = new Set(["--bun", "--yes", "-y"]);
 
 /** 最初のオペランドとして許す、検査の道具。 */
 const INSPECTION_TOOLS: ReadonlySet<string> = new Set([
@@ -170,6 +181,8 @@ function globMatches(
   candidate: string,
   ignoreCase = false,
 ): boolean {
+  // `[[:lower:]]`、`[[=o=]]`、`[[.o.]]`は読み解かず、当たりうるものとして扱う。
+  if (pattern.includes("[[")) return true;
   try {
     return globToRegExp(pattern, ignoreCase).test(candidate);
   } catch {
@@ -177,37 +190,106 @@ function globMatches(
   }
 }
 
-/** 語が保留のコードを指すか、引用符の外のglobが保留のコードの名前に当たりうるなら真。 */
-function pointsAtHoldCode(word: Word): boolean {
-  if (HOLD_MENTION.test(word.text)) return true;
-  if (!word.glob) return false;
-  const slash = word.text.lastIndexOf("/");
-  const directory = word.text.slice(0, Math.max(slash, 0));
-  const file = word.text.slice(slash + 1);
-  if (!HOLD_FILE_NAMES.some((name) => globMatches(file, name, true))) {
-    return false;
+/** `{a,b}`の最初の組を、`{`の位置、`}`の位置、候補に分ける。カンマの無い組は展開されないので、飛ばす。 */
+function findBraceGroup(
+  text: string,
+): { start: number; end: number; parts: string[] } | null {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text.charAt(start) !== "{") continue;
+    let depth = 0;
+    let from = start + 1;
+    const parts: string[] = [];
+    for (let at = start; at < text.length; at += 1) {
+      const char = text.charAt(at);
+      if (char === "{") {
+        depth += 1;
+      } else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          if (parts.length === 0) break;
+          parts.push(text.slice(from, at));
+          return { start, end: at, parts };
+        }
+      } else if (char === "," && depth === 1) {
+        parts.push(text.slice(from, at));
+        from = at + 1;
+      }
+    }
   }
-  if (GLOB_CHARACTERS.test(directory)) return true;
-  return CURRENT_DIRECTORY.test(directory) || HOLD_DIRECTORY.test(directory);
+  return null;
+}
+
+/** ブレース展開した綴りを返す。数が増えすぎないよう、上限で切る。 */
+function expandBraces(text: string, limit = 64): string[] {
+  const group = findBraceGroup(text);
+  if (group === null) return [text];
+  const out: string[] = [];
+  for (const part of group.parts) {
+    const replaced =
+      text.slice(0, group.start) + part + text.slice(group.end + 1);
+    for (const expanded of expandBraces(replaced, limit)) {
+      out.push(expanded);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * 語が取りうる綴りをすべて返す。
+ * NULを含んでいた語の別の綴り(`variants`)と、ブレースを含む語の展開した綴りを足す。
+ * ブレースは、`{`、`}`、`,`を空白に置き換えた形も足す。語を分けるシェルの展開があるためである。
+ */
+function spellings(word: Word): string[] {
+  const base = [word.text, ...(word.variants ?? [])];
+  const braced = base
+    .filter((text) => text.includes("{"))
+    .flatMap((text) => [text.replace(/[{},]/g, " "), ...expandBraces(text)]);
+  return [...base, ...braced];
+}
+
+/** 語が保留のコードを指すか、引用符の外のglobが保留のコードの名前に当たりうるなら真。ディレクトリは問わない。 */
+function pointsAtHoldCode(word: Word): boolean {
+  const all = spellings(word);
+  if (all.some((text) => HOLD_MENTION.test(text))) return true;
+  if (!word.glob) return false;
+  return all.some((text) => {
+    const file = text.slice(text.lastIndexOf("/") + 1);
+    return HOLD_FILE_NAMES.some((name) => globMatches(file, name, true));
+  });
+}
+
+/** miseのコマンド行の語が、置く・解除するタスクを名前で指すなら真。 */
+function namesHoldTask(word: Word): boolean {
+  return spellings(word).some(
+    (text) => text.startsWith("hold:") && text !== "hold:list",
+  );
 }
 
 /** miseのコマンド行の語が、置く・解除するタスクを指しうるなら真。 */
 function namesHoldWriteTask(word: Word): boolean {
-  if (word.dynamic || word.text.includes("{")) return true;
-  const text = word.text;
-  if (GLOB_CHARACTERS.test(text)) {
-    return HOLD_WRITE_TASKS.some((task) => globMatches(text, task));
-  }
-  return text.startsWith("hold:") && text !== "hold:list";
+  const all = spellings(word);
+  if (word.dynamic || all.some((text) => text.includes("{"))) return true;
+  return all.some((text) =>
+    GLOB_CHARACTERS.test(text)
+      ? HOLD_WRITE_TASKS.some((task) => globMatches(text, task))
+      : text.startsWith("hold:") && text !== "hold:list",
+  );
 }
 
-/** 最初のオペランドが検査の道具なら真。`bun`自身の`--bun`と、`run`や`x`などの1語は読み飛ばす。 */
+/**
+ * 最初のオペランドが検査の道具なら真。
+ * 実行系のオプション(`--bun`、`--yes`、`-y`)と、`run`や`x`などの語は読み飛ばす。
+ * `@biomejs/biome@1.9.4`のような版の付いた名前は、版を落として比べる。
+ */
 function startsWithInspectionTool(args: readonly Word[]): boolean {
   let index = 0;
-  if (args[index]?.text === "--bun") index += 1;
-  if (RUNNER_SUBCOMMANDS.has(args[index]?.text ?? "")) index += 1;
-  if (args[index]?.text === "--bun") index += 1;
-  const first = args[index]?.text ?? "";
+  while (index < 4) {
+    const text = args[index]?.text ?? "";
+    if (!RUNNER_FLAGS.has(text) && !RUNNER_SUBCOMMANDS.has(text)) break;
+    index += 1;
+  }
+  const first = (args[index]?.text ?? "").replace(VERSION_SUFFIX, "");
   return INSPECTION_TOOLS.has(first) || LINT_SCRIPT.test(first);
 }
 
@@ -232,10 +314,23 @@ function runnerTouchesHolds(
   return inInput || !mentionsOnlyList(args);
 }
 
-function miseFinding(words: readonly Word[]): HoldFinding | null {
-  const args = words.slice(skipMiseGlobalOptions(words, 1));
+function miseFinding(
+  words: readonly Word[],
+  inputs: () => readonly string[] | null,
+): HoldFinding | null {
+  const scan = scanMiseGlobalOptions(words, 1);
+  // 知らないオプションが値を取ると、サブコマンドの位置が決まらない。コマンド全体を拒否する。
+  if (scan.unknown) return "option";
+  const args = words.slice(scan.next);
   const subcommand = args[0];
   if (subcommand === undefined) return null;
+  // `exec`と`x`があれば、位置を問わず、その後ろをコマンドとして判定する。
+  const execAt = args.findIndex(
+    (word) => word.text === "exec" || word.text === "x",
+  );
+  if (execAt !== -1 && runnerTouchesHolds(args.slice(execAt + 1), inputs)) {
+    return "operation";
+  }
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
   const running =
     args.some((word) => MISE_RUNNING_WORDS.has(word.text)) ||
@@ -243,7 +338,14 @@ function miseFinding(words: readonly Word[]): HoldFinding | null {
     namesHoldWriteTask(subcommand) ||
     (!inTasks && args.some((word) => word.text.includes(":")));
   if (!running) return null;
-  const named = args.filter(namesHoldWriteTask);
+  // `--`より後ろはタスクへの引数なので、globや実行時に決まる語は見ない。`hold:`で名指しする語だけ見る。
+  const dashAt = args.findIndex((word) => word.text === "--");
+  const taskWords = dashAt === -1 ? args : args.slice(0, dashAt);
+  const argWords = dashAt === -1 ? [] : args.slice(dashAt + 1);
+  const named = [
+    ...taskWords.filter(namesHoldWriteTask),
+    ...argWords.filter(namesHoldTask),
+  ];
   if (named.length === 0) return null;
   return named.some((word) => !word.dynamic) ? "operation" : "dynamic";
 }
@@ -269,7 +371,7 @@ export function findHoldOperation(
 ): HoldFinding | null {
   const first = words[0]?.text ?? "";
   const program = baseName(first);
-  if (program === "mise") return miseFinding(words);
+  if (program === "mise") return miseFinding(words, inputs);
   if (RUNNERS.has(program)) {
     return runnerTouchesHolds(words.slice(1), inputs) ? "operation" : null;
   }

@@ -46,6 +46,7 @@ import {
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
   type MiseExec,
+  miseOptionTakesNext,
   parseCommandLine,
   type SimpleCommand,
   shellArguments,
@@ -125,24 +126,6 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
 
-/** サブコマンドの前に置ける、値を取るグローバルオプション。`--help`に出ない隠しオプションを含む。 */
-const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  "-C",
-  "--cd",
-  "-E",
-  "--env",
-  "-j",
-  "--jobs",
-  "-P",
-  "--profile",
-  "--log-level",
-  "--output",
-  "-s",
-  "--shell",
-  "-t",
-  "--tool",
-]);
-
 /** `mise set`の書き込む形が持ってよい、値を取るオプション。 */
 const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-C",
@@ -166,18 +149,6 @@ const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
 
 /** `mise set`と、その別名。 */
 const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
-
-/**
- * グローバルオプションの語が、次の語を値として取るなら真。
- * `-qE x`のように束ねた短いオプションは、値を取る文字が最初に現れる位置が末尾のときだけ、次の語を取る。
- */
-function miseOptionTakesNext(text: string): boolean {
-  if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) return true;
-  if (!/^-[A-Za-z]{2,}$/.test(text)) return false;
-  const letters = text.slice(1);
-  const at = letters.search(/[CEjPst]/);
-  return at !== -1 && at === letters.length - 1;
-}
 
 /** 実行時に語が増えるか変わる語なら真。引用符の外の展開、glob、ブレースである。 */
 function isUnstable(word: Word): boolean {
@@ -411,6 +382,8 @@ export const REASONS = {
     "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Any mise generate with a path under .git/hooks, .git/config, or .github/workflows, or with a word built from a variable, is denied too, because an option such as --output can write there. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
   subagentHold:
     "Subagents must not place or release holds: a hold stops merges, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place or mise run hold:release. Listing with mise run hold:list is fine. A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
+  subagentHoldOption:
+    "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value. Subagents must not place or release holds.",
   subagentHoldDynamic:
     "This mise command has a word built from a variable or a command substitution, so it cannot be told apart from mise run hold:place or mise run hold:release. Write the task name and the arguments out as literal text. Subagents must not place or release holds.",
 } as const;
@@ -602,6 +575,7 @@ function checkSimpleCommand(
       ? null
       : findHoldOperation(words, () => literalShellInputs(command));
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
+  if (hold === "option") return deny(REASONS.subagentHoldOption);
   if (hold !== null) return deny(REASONS.subagentHold);
   if (isLefthookUninstall(words)) {
     return deny(REASONS.lefthookUninstall);
@@ -779,8 +753,17 @@ function touchesGitInternals(
   return args.some((word) => GIT_INTERNALS.test(word.text));
 }
 
-/** 生成の書き先にしてはならないパス。`.git/hooks`、`.git/config`、`.github/workflows`。 */
-const PROTECTED_GENERATE_PATH = /\.git\/(?:hooks|config)\b|\.github\/workflows/;
+/**
+ * 生成の書き先にしてはならないパス。`.git/hooks`、`.git/config`、`.github/workflows`。
+ * 照合の前に、`//`と`/./`を`/`にまとめる。大文字小文字は区別しない。
+ * 既存の`GIT_INTERNALS`と同じく、`cd`やシンボリックリンクを使った別名の書き方は見ない。
+ */
+const PROTECTED_GENERATE_PATH =
+  /\.git\/(?:hooks|config)\b|\.github\/workflows/i;
+
+function normalizeGeneratePath(text: string): string {
+  return text.replace(/\/(?:\.?\/)+/g, "/");
+}
 
 /** `mise generate`の別名。 */
 const GENERATE_NAMES: ReadonlySet<string> = new Set(["generate", "gen", "g"]);
@@ -809,8 +792,13 @@ function writesGeneratedFiles(
   if (generate === -1) return false;
   const rest = args.slice(generate + 1);
   // `--output`などで、どの生成先からでも書き込める。書き先が守る対象のパスか、実行時に決まる語は拒否する。
+  // `generate`の前の`-C`と`--cd`の値も、書き先の基準になるので見る。
   if (
-    rest.some((word) => word.dynamic || PROTECTED_GENERATE_PATH.test(word.text))
+    args.some(
+      (word) =>
+        word.dynamic ||
+        PROTECTED_GENERATE_PATH.test(normalizeGeneratePath(word.text)),
+    )
   ) {
     return true;
   }

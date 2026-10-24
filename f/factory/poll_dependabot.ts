@@ -23,6 +23,7 @@ import {
   hasDependabotItemForHead,
   insertDependabotWorkItemUnlessActive,
   listActive,
+  listUnresolvedNoticesByKind,
   type NewDependabotWorkItem,
   readGhRepoOpenPullRequests,
   recordFailure,
@@ -903,6 +904,8 @@ export type PollSession = {
   >;
   /** 保留で待ったPRの通知を、通知の表に残す。1周で、種類ごとに1回だけ呼ぶ。 */
   readonly recordHoldNotice: (notice: HoldNotice) => Promise<void>;
+  /** 未解決の、保留を読めない通知の本文を返す。 */
+  readonly listUnresolvedHoldNotices: () => Promise<readonly string[]>;
   /** 保留を読めない通知のうち、本文が`messagePrefixes`のどれかで始まるものを解決済みにする。 */
   readonly resolveHoldUnreadableNotices: (
     messagePrefixes: readonly string[],
@@ -996,7 +999,7 @@ export async function pollDependabot(
   const deps: PollDependabotDeps = {
     ...session.deps,
     listMergeHolds: async (owner, repo) => {
-      const repository = `${owner}/${repo}`;
+      const repository = `${owner}/${repo}`.toLowerCase();
       try {
         const outcome = await session.deps.listMergeHolds(owner, repo);
         if (outcome.ok) {
@@ -1203,7 +1206,7 @@ export async function pollDependabot(
         const failure = outcome.check.failure;
         // 壊れた行と想定外の失敗は、リポジトリごとの通知にする。
         const repository = holdFailureIsPerRepository(failure)
-          ? `${candidate.owner}/${candidate.repo}`
+          ? `${candidate.owner}/${candidate.repo}`.toLowerCase()
           : null;
         const noticeKey = `${failure}\t${repository ?? ""}`;
         const known = unreadablePrs.get(noticeKey);
@@ -1244,6 +1247,9 @@ export async function pollDependabot(
       });
     }
   }
+  // 候補のPRが無いために読まなかったリポジトリも、未解決の通知があれば読む。
+  await readHoldsForUnresolvedNotices(session, deps, targets, holdReads);
+
   // 保留を読めない通知を解決する。
   // 表そのものの通知は、読めて、読めない読み取りが1件も無い周回で解決する。
   // リポジトリごとの通知は、その周回でそのリポジトリを読めたときだけ解決する。
@@ -1283,6 +1289,65 @@ export async function pollDependabot(
   };
 }
 
+/** リポジトリごとの通知の本文の先頭(`owner/repo: `)。 */
+const HOLD_NOTICE_REPOSITORY = /^([^\s/:]+\/[^\s/:]+): /;
+
+/**
+ * 未解決の、保留を読めない通知があるのに、その周回で保留を読んでいなければ、保留を読む。
+ * 候補のPRが無い周回でも、読めた時点で通知を解決できるようにするためである。
+ * リポジトリごとの通知は、そのリポジトリを読む。表そのものの通知は、周回でまだ何も読んでいなければ、1つのリポジトリを読む。
+ * 読んだ結果は、周回の数え上げに入る。この読み取りでは、通知を新しく残さない。
+ */
+async function readHoldsForUnresolvedNotices(
+  session: PollSession,
+  deps: PollDependabotDeps,
+  targets: readonly { readonly owner: string; readonly repo: string }[],
+  holdReads: {
+    ok: number;
+    failed: number;
+    okRepos: ReadonlySet<string>;
+    failedRepos: ReadonlySet<string>;
+  },
+): Promise<void> {
+  let messages: readonly string[];
+  try {
+    messages = await session.listUnresolvedHoldNotices();
+  } catch (err) {
+    session.warn("failed to list the hold notices", {
+      error: errorMessage(err),
+    });
+    return;
+  }
+  const repositories = new Set<string>();
+  let aboutTable = false;
+  for (const message of messages) {
+    const repository = HOLD_NOTICE_REPOSITORY.exec(message)?.[1];
+    if (repository !== undefined) repositories.add(repository.toLowerCase());
+    else if (message.startsWith(HOLD_UNREADABLE_TABLE_PREFIX))
+      aboutTable = true;
+  }
+  const readOne = async (target: {
+    readonly owner: string;
+    readonly repo: string;
+  }): Promise<void> => {
+    try {
+      await deps.listMergeHolds(target.owner, target.repo);
+    } catch {
+      // 数え上げは、読み取りを包む側が行う。通知は残ったままになる。
+    }
+  };
+  for (const target of targets) {
+    const key = `${target.owner}/${target.repo}`.toLowerCase();
+    if (!repositories.has(key)) continue;
+    if (holdReads.okRepos.has(key) || holdReads.failedRepos.has(key)) continue;
+    await readOne(target);
+  }
+  const first = targets[0];
+  if (aboutTable && holdReads.ok + holdReads.failed === 0 && first) {
+    await readOne(first);
+  }
+}
+
 /** 保留で待ったPRについて、周回ごとに1件にまとめて残す通知の内容。 */
 export type HoldNotice =
   | { readonly kind: "held"; readonly prCount: number }
@@ -1304,9 +1369,12 @@ function holdFailureIsPerRepository(failure: MergeHoldFailure): boolean {
   return failure === "corrupt" || failure === "error";
 }
 
-/** リポジトリごとの通知の本文の接頭辞。`acme/app: `は`acme/app2: `に当たらない。 */
+/**
+ * リポジトリごとの通知の本文の接頭辞。`acme/app: `は`acme/app2: `に当たらない。
+ * GitHubの名前は大文字小文字を区別しないので、小文字にそろえる。
+ */
 function holdUnreadableRepositoryPrefix(repository: string): string {
-  return `${repository}: `;
+  return `${repository.toLowerCase()}: `;
 }
 
 /** 保留を読めない通知の、最初に確かめることの説明。 */
@@ -1408,6 +1476,10 @@ export async function main(): Promise<PollDependabotResult> {
         recordHoldNotice: async (notice) => {
           await addNoticeUnlessUnresolved(holdNoticeRecord(notice));
         },
+        listUnresolvedHoldNotices: async () =>
+          (await listUnresolvedNoticesByKind(HOLD_UNREADABLE_NOTICE_KIND)).map(
+            (notice) => notice.message,
+          ),
         resolveHoldUnreadableNotices: async (messagePrefixes) => {
           let resolved = 0;
           for (const messagePrefix of messagePrefixes) {

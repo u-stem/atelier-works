@@ -1782,6 +1782,8 @@ describe("bash-guard denies a subagent that builds the hold code with a pattern"
     "bun scripts/{hold,x}.ts place",
     "bun run {scripts/hold.ts,x}",
     "bun {a,scripts/hold}.ts place",
+    "bun h{old,x}.ts place",
+    "bun scripts/ho{ld,x}.ts place",
     "=bun scripts/hold.ts place",
     "=mise run hold:place",
     "=env bun scripts/hold.ts place",

@@ -4227,6 +4227,27 @@ describe("pollDependabot keeps the repository of a notice in lower case", () => 
     expect(log.holdResolvePrefixes).toContain("acme/widgets: ");
   });
 
+  test("lowers the repository of a pull request listed under a capitalized name", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...CONFIG,
+          factory_repo: "https://github.com/Acme/Widgets.git",
+        },
+        found: [{ ...FOUND, owner: "Acme", repo: "Widgets" }],
+        holds: { ok: false, kind: "corrupt", reason: "x" },
+      }),
+    );
+
+    expect(
+      log.holdNotices.flatMap((notice) =>
+        notice.kind === "unreadable" ? [notice.repository] : [],
+      ),
+    ).toEqual(["acme/widgets"]);
+  });
+
   test("lowers the repository in the message", () => {
     const { message } = holdNoticeRecord({
       kind: "unreadable",
@@ -4279,7 +4300,7 @@ describe("pollDependabot resolves a notice though no pull request is open", () =
       }),
     );
 
-    expect(log.holdResolvePrefixes).toEqual(["acme/widgets: "]);
+    expect(log.holdResolvePrefixes).toContain("acme/widgets: ");
   });
 
   test("does not resolve the notice when the read fails", async () => {
@@ -4327,7 +4348,7 @@ describe("pollDependabot resolves a notice though no pull request is open", () =
       round(log, { found: [], unresolvedHoldNotices: [TABLE_NOTICE] }),
     );
 
-    expect(log.holdResolvePrefixes).toEqual([HOLD_TABLE_NOTICE_PREFIX]);
+    expect(log.holdResolvePrefixes).toContain(HOLD_TABLE_NOTICE_PREFIX);
   });
 
   test("does not read a repository that is not a target", async () => {

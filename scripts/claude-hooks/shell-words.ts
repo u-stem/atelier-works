@@ -127,8 +127,8 @@ const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--env",
 ]);
 
-/** `mise`の全体オプションのうち、値を取るもの。サブコマンドの前に置ける。 */
-const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+/** サブコマンドの前に置ける、値を取るグローバルオプション。`--help`に出ない隠しオプションを含む。 */
+export const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-C",
   "--cd",
   "-E",
@@ -137,15 +137,34 @@ const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--jobs",
   "-P",
   "--profile",
+  "--log-level",
+  "--output",
+  "-s",
+  "--shell",
+  "-t",
+  "--tool",
 ]);
 
-/** 短いオプションの束(`-qC`)で、最後に置くと次の語を値に取る文字。 */
-const MISE_GLOBAL_VALUE_LETTERS: ReadonlySet<string> = new Set([
-  "C",
-  "E",
-  "j",
-  "P",
+/** グローバルオプションのうち、値を取らない長いもの。 */
+const MISE_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  "--quiet",
+  "--verbose",
+  "--yes",
+  "--no-config",
+  "--no-env",
+  "--no-hooks",
+  "--raw",
+  "--locked",
+  "--silent",
+  "--help",
+  "--version",
 ]);
+
+/** 束ねた短いオプションで、値を取る文字。 */
+const MISE_VALUE_LETTERS = /[CEjPst]/;
+
+/** 知っている短いグローバルオプションの文字。これ以外の文字を含む束は、知らないオプションとして扱う。 */
+const MISE_SHORT_LETTERS = /^-[qvyhVCEjPst]+$/;
 
 /** 前置きのコマンドと、その値を取るオプション。値の語も一緒に外す。 */
 const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
@@ -200,16 +219,16 @@ function leadingDigits(
  * `from`はバックスラッシュの次の位置で、展開した文字列と、次に読む位置を返す。
  * 文字コードで書いた語(`\x64`、`\144`、`\u0064`)を文字にするのは、
  * 語の字面で判定するフックが、文字コードに隠された名前を見落とさないためである。
- * NULは語を切り詰めるので、空にして残りを判定に使う。
+ * NUL(`\0`、`\x00`、`\u0000`)に当たったときは`nul`を真にする。bashは、NULで語を切り詰める。
  */
 function decodeAnsiCEscape(
   source: string,
   from: number,
-): { readonly text: string; readonly next: number } {
+): { readonly text: string; readonly next: number; readonly nul: boolean } {
   const char = source.charAt(from);
-  if (char === "") return { text: "\\", next: from };
+  if (char === "") return { text: "\\", next: from, nul: false };
   const simple = ANSI_C_SIMPLE_ESCAPES.get(char);
-  if (simple !== undefined) return { text: simple, next: from + 1 };
+  if (simple !== undefined) return { text: simple, next: from + 1, nul: false };
   const numeric: Readonly<
     Record<string, { digits: RegExp; max: number; radix: number }>
   > = {
@@ -220,20 +239,24 @@ function decodeAnsiCEscape(
   const spec = numeric[char];
   if (spec !== undefined) {
     const digits = leadingDigits(source, from + 1, spec.digits, spec.max);
-    if (digits === "") return { text: `\\${char}`, next: from + 1 };
+    if (digits === "") return { text: `\\${char}`, next: from + 1, nul: false };
+    const code = Number.parseInt(digits, spec.radix);
     return {
-      text: codePointText(Number.parseInt(digits, spec.radix)),
+      text: codePointText(code),
       next: from + 1 + digits.length,
+      nul: code === 0,
     };
   }
   if (/[0-7]/.test(char)) {
     const digits = leadingDigits(source, from, /[0-7]/, 3);
+    const code = Number.parseInt(digits, 8) % 256;
     return {
-      text: codePointText(Number.parseInt(digits, 8) % 256),
+      text: codePointText(code),
       next: from + digits.length,
+      nul: code === 0,
     };
   }
-  return { text: `\\${char}`, next: from + 1 };
+  return { text: `\\${char}`, next: from + 1, nul: false };
 }
 
 function codePointText(code: number): string {
@@ -271,7 +294,7 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
   while (index < words.length) {
     const word = words[index];
     if (word === undefined) break;
-    const text = word.text;
+    const text = zshCommandName(word.text);
     // 絶対パスで書いた前置き(`/usr/bin/env`)も、名前で見分ける。
     const name = baseName(text);
     const transparent = TRANSPARENT_OPTIONS.get(text);
@@ -285,41 +308,74 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
     } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
       wrappers.push(name);
       index = skipWrapperOptions(words, index + 1, name);
-    } else if (
-      name === "mise" &&
-      isMiseExec(words[skipMiseGlobalOptions(words, index + 1)])
-    ) {
+    } else if (name === "mise" && miseExecAt(words, index) !== -1) {
       wrappers.push(text);
-      const subcommand = skipMiseGlobalOptions(words, index + 1);
-      const read = readMiseExec(words, subcommand + 1);
+      const read = readMiseExec(words, miseExecAt(words, index) + 1);
       mise ??= read.mise;
       index = read.next;
     } else {
       break;
     }
   }
-  return { assignments, words: words.slice(index), wrappers, mise };
+  const rest = words.slice(index);
+  const first = rest[0];
+  if (first !== undefined && zshCommandName(first.text) !== first.text) {
+    rest[0] = { ...first, text: zshCommandName(first.text) };
+  }
+  return { assignments, words: rest, wrappers, mise };
+}
+
+/** zshは、コマンドの位置の`=名前`を、その名前のコマンドのパスに展開する。展開後の名前を返す。 */
+function zshCommandName(text: string): string {
+  return /^=[A-Za-z_][A-Za-z0-9_.+-]*$/.test(text) ? text.slice(1) : text;
+}
+
+/**
+ * グローバルオプションの語が、次の語を値として取るなら真。
+ * `-qE x`のように束ねた短いオプションは、値を取る文字が最初に現れる位置が末尾のときだけ、次の語を取る。
+ * `-EC`は、`-E`が値`C`を取る1語である。
+ */
+export function miseOptionTakesNext(text: string): boolean {
+  if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) return true;
+  if (!/^-[A-Za-z]{2,}$/.test(text)) return false;
+  const letters = text.slice(1);
+  const at = letters.search(MISE_VALUE_LETTERS);
+  return at !== -1 && at === letters.length - 1;
 }
 
 /**
  * `mise`の後ろの全体オプション(`-q`、`-C <dir>`、`--cd=<dir>`など)を読み飛ばし、
- * サブコマンドの位置を返す。知らないオプションは、値を取らないものとして1語だけ飛ばす。
+ * サブコマンドの位置を`next`に返す。
+ * 一覧に無い長いオプション(`=`の無いもの)と、知らない文字を含む短いオプションは、値を取るか分からない。
+ * 値を取るなら、サブコマンドの位置がずれるので、`unknown`を真にして呼び出し側に知らせる。
  */
-export function skipMiseGlobalOptions(
+export function scanMiseGlobalOptions(
   words: readonly Word[],
   start: number,
-): number {
+): { readonly next: number; readonly unknown: boolean } {
   let index = start;
+  let unknown = false;
   while (index < words.length) {
     const text = words[index]?.text ?? "";
     if (text === "--" || text === "-" || !text.startsWith("-")) break;
-    const bundle = /^-[A-Za-z]+$/.test(text);
-    const takesValue =
-      MISE_GLOBAL_VALUE_OPTIONS.has(text) ||
-      (bundle && MISE_GLOBAL_VALUE_LETTERS.has(text.slice(-1)));
-    index += takesValue ? 2 : 1;
+    if (miseOptionTakesNext(text)) {
+      index += 2;
+      continue;
+    }
+    const knownLong = text.includes("=") || MISE_GLOBAL_FLAGS.has(text);
+    const knownShort = MISE_SHORT_LETTERS.test(text);
+    if (text.startsWith("--") ? !knownLong : !knownShort) unknown = true;
+    index += 1;
   }
-  return index;
+  return { next: index, unknown };
+}
+
+/** `exec`の位置を返す。全体オプションを読み飛ばしてもサブコマンドが見つからず、知らないオプションがあれば、後ろで最初の`exec`を探す。無ければ-1。 */
+function miseExecAt(words: readonly Word[], miseIndex: number): number {
+  const scan = scanMiseGlobalOptions(words, miseIndex + 1);
+  if (isMiseExec(words[scan.next])) return scan.next;
+  if (!scan.unknown) return -1;
+  return words.findIndex((word, at) => at > scan.next && isMiseExec(word));
 }
 
 function isMiseExec(word: Word | undefined): boolean {
@@ -471,6 +527,8 @@ class Parser {
   private redirectOperator = "";
   private redirectWrites = false;
   private text = "";
+  /** NULを含む`$'...'`を読んだ語の、別の綴り。無ければnull。 */
+  private variantText: string | null = null;
   private inWord = false;
   private dynamic = false;
   private glob = false;
@@ -618,6 +676,18 @@ class Parser {
 
   private append(value: string): void {
     this.text += value;
+    if (this.variantText !== null) this.variantText += value;
+    this.inWord = true;
+  }
+
+  /** 語に`kept`を足す。`full`と違うときは、`full`を足した綴りを`variants`に残す。 */
+  private appendWithVariant(kept: string, full: string): void {
+    if (kept === full) {
+      this.append(kept);
+      return;
+    }
+    this.variantText = (this.variantText ?? this.text) + full;
+    this.text += kept;
     this.inWord = true;
   }
 
@@ -628,6 +698,7 @@ class Parser {
 
   private resetWord(): void {
     this.text = "";
+    this.variantText = null;
     this.inWord = false;
     this.dynamic = false;
     this.glob = false;
@@ -641,6 +712,7 @@ class Parser {
       dynamic:
         this.dynamic && !CURRENT_BRANCH_SUBSTITUTIONS.includes(this.text),
       glob: this.glob,
+      ...(this.variantText === null ? {} : { variants: [this.variantText] }),
     };
     if (this.hereStringNextWord) {
       this.hereStringNextWord = false;
@@ -928,6 +1000,11 @@ class Parser {
 
   private readDollar(inDoubleQuotes: boolean): void {
     const next = this.peek(1);
+    if (next === '"' && !inDoubleQuotes) {
+      // `$"..."`は、ロケールの翻訳を除けば、ふつうの二重引用符である。
+      this.position += 1;
+      return;
+    }
     if (next === "(") {
       if (this.peek(2) === "(") {
         this.skipArithmetic();
@@ -1033,23 +1110,32 @@ class Parser {
     throw new ShellSyntaxError("unterminated $((");
   }
 
+  /**
+   * `$'...'`を読む。NULに達したら、bashと同じに、閉じの`'`までを捨てる。
+   * 捨てる前の綴り(NULだけを除いたもの)は、語の`variants`に残す。切り詰めないシェルのためである。
+   */
   private readAnsiCQuoted(): void {
     let at = this.position + 2;
-    let value = "";
+    let kept = "";
+    let full = "";
+    let cut = false;
     while (at < this.source.length) {
       const char = this.source.charAt(at);
       if (char === "\\") {
         const decoded = decodeAnsiCEscape(this.source, at + 1);
-        value += decoded.text;
+        if (decoded.nul) cut = true;
+        full += decoded.text;
+        if (!cut) kept += decoded.text;
         at = decoded.next;
         continue;
       }
       if (char === "'") {
-        this.append(value);
+        this.appendWithVariant(kept, full);
         this.position = at + 1;
         return;
       }
-      value += char;
+      full += char;
+      if (!cut) kept += char;
       at += 1;
     }
     throw new ShellSyntaxError("unterminated $' quote");
@@ -1077,17 +1163,4 @@ class Parser {
     }
     throw new ShellSyntaxError("unterminated backquote");
   }
-}
-
-/** 値を取るオプションか判定する(実装は別のコミットで書く)。 */
-export function miseOptionTakesNext(_text: string): boolean {
-  return false;
-}
-
-/** 全体オプションを読み飛ばす(実装は別のコミットで書く)。 */
-export function scanMiseGlobalOptions(
-  _words: readonly Word[],
-  start: number,
-): { readonly next: number; readonly unknown: boolean } {
-  return { next: start, unknown: false };
 }
