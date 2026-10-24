@@ -4,7 +4,8 @@
 // 導く(`deriveApprover`)。導けないときは何も変えずに拒否する。
 // 変数への書き込みは`mutateFreezeState`だけが行い、書く直前に読み直した状態へ解除を当てる。
 // 凍結の行は解除した主体を残さないので、操作者は情報の通知とジョブの記録に残す。
-// 変数の読み書きは排他しない。書いた後に読み直し、解除が残っていなければ`unconfirmed`を返す。
+// 変数の読み書きは排他しない。書いた後に読み直し、解除が残っていないか、書いた時点で有効だった行が欠けていれば
+// `unconfirmed`を返す。終わった行が片付けられても、`unconfirmed`にしない。
 // 同じ行への重複した呼び出しは、終わった行として成功を返す。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
@@ -15,6 +16,7 @@ import {
   HUMAN_RELEASER,
   type ReleaseAudit,
   readFreezeState,
+  recordRelease,
   releaseNoticeMessage,
 } from "./lib/console_holds_support.ts";
 import { addNoticeUnlessUnresolved } from "./lib/db.ts";
@@ -35,8 +37,6 @@ import { logger } from "./lib/log.ts";
 import type { NoticeRecord } from "./lib/types.ts";
 
 const FREEZE_ID_PATTERN = /^[0-9a-f]{8}$/;
-const NOTICE_KIND = "hold_released";
-
 /**
  * 解除の結果。`unconfirmed`は、書いた後に読み直した変数に解除が残っていなかったこと(別の書き手と競合した)。
  * `scope`と`audit`は`released`のときだけ付く。`audit`は通知を残せたか。
@@ -57,11 +57,14 @@ export type FreezeReleaseDeps = {
   readonly warn: (message: string, fields?: Record<string, unknown>) => void;
 };
 
-/** 書く直前に読んだ状態から見た、解除する行と、ほかの行のid。 */
+/**
+ * 書く直前に読んだ状態から見た、解除する行と、ほかの行。
+ * `others`は、書いた時点で有効だった行だけである。終わった行は、別の書き手が片付けてよいので数えない。
+ */
 type Seen = {
   readonly scope: "schedule" | "deploy";
   readonly target: string | null;
-  readonly otherIds: readonly string[];
+  readonly others: readonly { readonly id: string; readonly expiresAt: Date }[];
 };
 
 function rowOf(
@@ -77,16 +80,37 @@ function rowOf(
   return deploy === undefined ? null : { row: deploy, scope: "deploy" };
 }
 
-function allIds(state: FreezeState): string[] {
-  return [...state.freezes, ...state.deploy_freezes].map((entry) => entry.id);
+function allRows(state: FreezeState): (FreezeEntry | DeployFreezeEntry)[] {
+  return [...state.freezes, ...state.deploy_freezes];
 }
 
-/** 書いた後の状態に、解除が残り、ほかの行が欠けていないか。 */
-function confirmed(after: FreezeState, id: string, seen: Seen): boolean {
+/** 書いた時点で有効だった、解除する行以外の行。 */
+function activeOthers(
+  state: FreezeState,
+  id: string,
+  now: Date,
+): Seen["others"] {
+  return allRows(state)
+    .filter((entry) => entry.id !== id && isActive(entry, now))
+    .map((entry) => ({ id: entry.id, expiresAt: new Date(entry.expires_at) }));
+}
+
+/**
+ * 書いた後の状態に、解除が残り、書いた時点で有効だった行が欠けていないか。
+ * 読み直しの時点で期限が過ぎた行は、片付けられていてよい。
+ */
+function confirmed(
+  after: FreezeState,
+  id: string,
+  seen: Seen,
+  now: Date,
+): boolean {
   const found = rowOf(after, id);
   if (found === null || found.row.released_at === null) return false;
-  const ids = new Set(allIds(after));
-  return seen.otherIds.every((other) => ids.has(other));
+  const ids = new Set(allRows(after).map((entry) => entry.id));
+  return seen.others.every(
+    (other) => ids.has(other.id) || other.expiresAt.getTime() <= now.getTime(),
+  );
 }
 
 /**
@@ -125,7 +149,7 @@ export async function releaseFreezeFromConsole(
       observed.seen = {
         scope: found.scope,
         target: "target" in found.row ? found.row.target : null,
-        otherIds: allIds(state).filter((id) => id !== freezeId),
+        others: activeOthers(state, freezeId, now),
       };
       return releaseFreeze(state, freezeId, HUMAN_RELEASER, now);
     });
@@ -146,7 +170,7 @@ export async function releaseFreezeFromConsole(
   }
 
   const after = await readFreezeState(deps.ports);
-  if (!after.ok || !confirmed(after.value, freezeId, seen)) {
+  if (!after.ok || !confirmed(after.value, freezeId, seen, deps.ports.now())) {
     deps.warn("freeze_release: could not confirm the release", {
       freeze_id: freezeId,
     });
@@ -154,14 +178,12 @@ export async function releaseFreezeFromConsole(
   }
 
   const audit = await recordRelease(
-    {
-      kind: NOTICE_KIND,
-      message: releaseNoticeMessage(
-        freezeSubject(freezeId, seen.target),
-        operator,
-        deps.ports.now(),
-      ),
-    },
+    "freeze_release",
+    releaseNoticeMessage(
+      freezeSubject(freezeId, seen.target),
+      operator,
+      deps.ports.now(),
+    ),
     deps,
   );
   return {
@@ -171,21 +193,6 @@ export async function releaseFreezeFromConsole(
     scope: seen.scope,
     audit,
   };
-}
-
-async function recordRelease(
-  record: NoticeRecord,
-  deps: Pick<FreezeReleaseDeps, "addNotice" | "warn">,
-): Promise<ReleaseAudit> {
-  try {
-    await deps.addNotice(record);
-    return "recorded";
-  } catch (err) {
-    deps.warn("freeze_release: could not record the release notice", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return "failed";
-  }
 }
 
 /** Consoleから凍結かdeployの保留を1件解除する。操作者はジョブの実行文脈から導く。 */

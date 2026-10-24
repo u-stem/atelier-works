@@ -20,6 +20,7 @@ import type {
   HoldRow,
   HoldScope,
 } from "./holds.ts";
+import type { NoticeRecord } from "./types.ts";
 
 /** 画面に返す文字数の上限(コードポイント)。画面が同じ無害化をやり直すので、ここで先に落とす。 */
 export const REASON_DISPLAY_MAX = 200;
@@ -76,6 +77,32 @@ export type HoldsSnapshot = {
 
 /** 解除の通知を残せたか。残せなくても解除は取り消さない。 */
 export type ReleaseAudit = "recorded" | "failed";
+
+/** 解除の通知の種類。 */
+export const RELEASE_NOTICE_KIND = "hold_released";
+
+/**
+ * 解除の通知を残す。書けなくても解除は取り消さず、`failed`を返して警告に書く。
+ * 警告には`reason`と`holder`を載せない。`script`は警告の接頭辞である。
+ */
+export async function recordRelease(
+  script: string,
+  message: string,
+  deps: {
+    readonly addNotice: (record: NoticeRecord) => Promise<unknown>;
+    readonly warn: (message: string, fields?: Record<string, unknown>) => void;
+  },
+): Promise<ReleaseAudit> {
+  try {
+    await deps.addNotice({ kind: RELEASE_NOTICE_KIND, message });
+    return "recorded";
+  } catch (err) {
+    deps.warn(`${script}: could not record the release notice`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "failed";
+  }
+}
 
 /**
  * Consoleの解除が名乗る主体。
@@ -206,6 +233,19 @@ export function releaseNoticeMessage(
 ): string {
   const operator = clipDisplay(actor, OPERATOR_NAME_MAX);
   return `${subject}を${operator}が解除しました。(${formatJstSecond(now)} JST)`;
+}
+
+/**
+ * 解除の前に有効だったかを確認できなかったときの通知の本文。
+ * 解除の操作は行ったが、有効な保留を外したとは言い切れないので、「解除しました」とは書かない。
+ */
+export function releaseUnverifiedNoticeMessage(
+  subject: string,
+  actor: string,
+  now: Date,
+): string {
+  const operator = clipDisplay(actor, OPERATOR_NAME_MAX);
+  return `${subject}の解除の操作を${operator}が行いました。解除の前に有効だったかは確認できませんでした。(${formatJstSecond(now)} JST)`;
 }
 
 /** 保留の行を指す句。対象は行を読めたときだけ載せる。 */

@@ -177,12 +177,14 @@ function isOptionalAudit(value: unknown): boolean {
 /**
  * 保留の解除の結果。`was_active`は解除する前に有効だったか。
  * 期限切れの行を片付けただけのときは偽で、通知を残さないので`audit`が欠ける。
+ * `active_unknown`は、有効な保留の一覧を読めず、有効だったかを確かめられなかったときだけ付く。
  */
 export type HoldReleaseResult = {
   readonly ok: true;
   readonly status: "released" | "already_released";
   readonly hold_id: number;
   readonly was_active: boolean;
+  readonly active_unknown?: true;
   readonly audit?: ReleaseAudit;
 };
 
@@ -200,6 +202,7 @@ export function isHoldReleaseResult(
     isHoldReleaseStatus(value.status) &&
     isPositiveInteger(value.hold_id) &&
     isBoolean(value.was_active) &&
+    (value.active_unknown === undefined || value.active_unknown === true) &&
     isOptionalAudit(value.audit)
   );
 }

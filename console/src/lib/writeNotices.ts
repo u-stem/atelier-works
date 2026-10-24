@@ -110,6 +110,12 @@ export function describeHoldReleaseResult(
   if (result.status === "already_released") {
     return { tone: "info", message: "すでに解除されています。" };
   }
+  if (result.active_unknown === true) {
+    return {
+      tone: "warning",
+      message: `保留を解除しました。ただし、解除の前に有効だったかは確認できませんでした。${result.audit === "failed" ? AUDIT_FAILED_NOTE : ""}`,
+    };
+  }
   if (!result.was_active) {
     return { tone: "success", message: "期限切れの保留を片付けました。" };
   }

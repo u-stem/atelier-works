@@ -419,7 +419,7 @@ describe("releaseHoldFromConsole notice", () => {
     await releaseHoldFromConsole(12, h.deps);
 
     expect(h.notices[0]?.message).toBe(
-      "保留(id 12)をoperatorが解除しました。(2026-10-24 12:04:05 JST)",
+      "保留(id 12)の解除の操作をoperatorが行いました。解除の前に有効だったかは確認できませんでした。(2026-10-24 12:04:05 JST)",
     );
   });
 
