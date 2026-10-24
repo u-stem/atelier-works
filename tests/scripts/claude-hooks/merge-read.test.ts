@@ -575,6 +575,25 @@ describe("runChild", () => {
     expect(finished.stderr).not.toContain("hunter2hunter2");
   });
 
+  test.each([
+    ["a colon", 'password: "hunter two words"', "password=***"],
+    ["spaces around the equals sign", "TOKEN = abc123abc123", "TOKEN=***"],
+    ["a single quoted value", "api_key: 'a b c'", "api_key=***"],
+    [
+      "a double quoted value",
+      'DB_PASSWORD="a b c" rest',
+      "DB_PASSWORD=*** rest",
+    ],
+  ])("masks the value after %s", async (_name, text, expected) => {
+    const finished = await runChild({
+      argv: ["/bin/sh", "-c", 'printf "%s\\n" "$MASK_INPUT" >&2'],
+      stdin: "",
+      timeoutMs: 5000,
+      env: { MASK_INPUT: text, PATH: "/usr/bin:/bin" },
+    });
+    expect(finished.stderr).toBe(`${expected}\n`);
+  });
+
   test("keeps the rest of the standard error readable", async () => {
     const finished = await runChild({
       argv: ["/bin/sh", "-c", "echo DB_PASSWORD=hunter2hunter2 is wrong >&2"],

@@ -57,6 +57,23 @@ describe("gh pr merge", () => {
     ['gh pr "$SUB" 1', [MERGE_ANY]],
     ['gh "$GROUP" merge 1', [MERGE_ANY]],
     ["gh pr unknown-subcommand 1", [MERGE_ANY]],
+    ["gh pr merge 1 --help=false", [MERGE_ANY]],
+    ["gh pr merge 1 -h=false", [MERGE_ANY]],
+    ["gh pr merge 1 -sh=false", [MERGE_ANY]],
+    ["gh pr merge 1 --disable-auto=false", [MERGE_ANY]],
+    ["gh pr merge 1 --disable-auto=0", [MERGE_ANY]],
+    ["gh pr merge 1 --disable-auto=true --squash", [MERGE_ANY]],
+    ["gh -R o/r pr merge 1", [MERGE_ANY]],
+    ["gh --repo o/r pr merge 1", [MERGE_ANY]],
+    ["gh -X PUT api repos/o/r/pulls/1/merge", [MERGE_ANY]],
+    ["gh --method PUT api repos/o/r/pulls/1/merge", [MERGE_ANY]],
+    [
+      "gh --hostname github.com api -X PUT repos/o/r/pulls/1/merge",
+      [MERGE_ANY],
+    ],
+    ["gh -f query=x api graphql", [MERGE_ANY]],
+    ["gh pr --squash view merge", [MERGE_ANY]],
+    ["gh pr -dR o/r view 1", [MERGE_ANY]],
     ["env -S 'gh pr merge 1 -R o/held'", [merge("o/held")]],
   ])("finds %s", (command, expected) => {
     expect(findGuardedOperations(command)).toEqual(expected);
@@ -95,7 +112,13 @@ describe("gh pr merge", () => {
     "gh pr merge --help",
     "gh pr merge -h",
     "gh pr view 1",
+    "gh --version",
+    "gh --help",
+    "gh pr co 1",
+    "gh pr ls",
+    "gh pr new --title t",
     "gh pr view 1 --repo o/held",
+    "gh pr -R o/r view 1",
     "gh pr list",
     "gh pr list --search 'merge'",
     "gh pr checks 1",
@@ -187,6 +210,72 @@ describe("gh pr merge behind a wrapper or a nested shell", () => {
   });
 });
 
+describe("a wrapper that takes an option value", () => {
+  test.each([
+    "env -P /opt/homebrew/bin gh pr merge 1",
+    'env -iS "gh pr merge 1"',
+    'env -vS"gh pr merge 1"',
+    "echo 1 | xargs -J % gh pr merge %",
+    "echo 1 | xargs -R 1 -I % gh pr merge %",
+    "echo 1 | xargs -S 255 -I % gh pr merge %",
+    "echo 1 | xargs --max-args 1 gh pr merge",
+    "echo 1 | xargs --max-procs 2 gh pr merge",
+    "echo 1 | xargs -n 1 -P 2 gh pr merge",
+    "sudo -iu root gh pr merge 1",
+  ])("finds %s", (command) => {
+    expect(findGuardedOperations(command)).toEqual([MERGE_ANY]);
+  });
+
+  test("treats a leftover gh word behind an unknown option as a merge", () => {
+    expect(
+      findGuardedOperations("xargs --unknown-flag x gh pr view 1"),
+    ).toEqual([MERGE_ANY]);
+  });
+
+  test("treats a leftover wmill word as both deployments", () => {
+    expect(
+      findGuardedOperations("xargs --unknown-flag x wmill sync pull"),
+    ).toEqual([SYNC_PUSH, MIGRATE]);
+  });
+
+  test("treats a leftover word that starts with gh as a merge", () => {
+    expect(
+      findGuardedOperations("xargs --unknown-flag x 'gh pr view 1'"),
+    ).toEqual([MERGE_ANY]);
+  });
+
+  test("leaves a wrapper around another program alone", () => {
+    expect(findGuardedOperations("timeout 5 git status")).toEqual([]);
+  });
+});
+
+describe("env -S", () => {
+  test.each<[string, GuardedOperation[]]>([
+    ["env -S 'gh pr merge 1 -R o/r --subject a;b'", [merge("o/r")]],
+    ["env -S 'sh -c \"gh pr merge 1\"'", [MERGE_ANY]],
+    ["env -S 'FOO=1 gh pr merge 1 -R o/r'", [merge("o/r")]],
+    ["env -S 'gh pr merge 1 | cat'", [MERGE_ANY]],
+    ["env -S 'wmill sync push'", [SYNC_PUSH]],
+  ])("finds %s", (command, expected) => {
+    expect(findGuardedOperations(command)).toEqual(expected);
+  });
+
+  test.each(['env -S "$CMD"', "env -S 'gh pr merge \"1'", "env -S 'echo \\'"])(
+    "treats %s, which cannot be read, as every operation",
+    (command) => {
+      expect(findGuardedOperations(command)).toEqual([
+        MERGE_ANY,
+        SYNC_PUSH,
+        MIGRATE,
+      ]);
+    },
+  );
+
+  test("leaves a split string of another program alone", () => {
+    expect(findGuardedOperations("env -S 'git status;x'")).toEqual([]);
+  });
+});
+
 describe("a command started by xargs", () => {
   test.each([
     "echo merge 1 | xargs gh pr",
@@ -248,8 +337,6 @@ describe("gh api that is not a plain read", () => {
     ['gh api -X PUT "repos/$R/pulls/$N/merge"', [MERGE_ANY]],
     ['gh api -X PUT "$ENDPOINT"', [MERGE_ANY]],
     ["gh api -X PUT repos/o/r/../x/pulls/1/merge", [MERGE_ANY]],
-    ["gh api repos/o/r/pulls/1/merge", [merge("o/r")]],
-    ["gh api repos/o/r/pulls/1/merge -X GET", [merge("o/r")]],
     ["gh api -X POST repos/o/r/pulls/1/merge", [merge("o/r")]],
     ["gh api -X PUT repos/o/r/issues/1/labels", [merge("o/r")]],
     ["gh api -X DELETE repos/o/r/git/refs/heads/x", [merge("o/r")]],
@@ -262,6 +349,8 @@ describe("gh api that is not a plain read", () => {
 
   test.each([
     "gh api repos/o/r/pulls/1",
+    "gh api repos/o/r/pulls/1/merge",
+    "gh api repos/o/r/pulls/1/merge -X GET",
     "gh api repos/o/r/pulls/1 -X GET",
     "gh api repos/o/r/issues/1/comments",
     "gh api repos/o/r/pulls --paginate",
@@ -294,6 +383,15 @@ describe("gh api graphql", () => {
     ["a field without a name", '-f "$FIELD"'],
     ["an input file", "--input q.json"],
     ["a field that holds no query", "-f owner=o"],
+    [
+      "mergeBranch",
+      "-f query='mutation { mergeBranch(input: {}) { clientMutationId } }'",
+    ],
+    [
+      "updateRef",
+      "-f query='mutation { updateRef(input: {}) { clientMutationId } }'",
+    ],
+    ["an upper case keyword", "-f query='MUTATION { x }'"],
     ["a bundled short field with an equals sign", "-F=query=@m.graphql"],
   ])("finds a mutation: %s", (_name, fields) => {
     expect(findGuardedOperations(`gh api graphql ${fields}`)).toEqual([
@@ -317,7 +415,6 @@ describe("gh api graphql", () => {
     "-f owner=o -f query='query { viewer { login } }'",
     "-f query='query { viewer { login } }' -F number=\"$N\"",
     "-i -f query='query { viewer { login } }'",
-    "-f query='mutation { mergeBranch(input: {}) { clientMutationId } }'",
   ])("does not find a query without the three mutations: %s", (fields) => {
     expect(findGuardedOperations(`gh api graphql ${fields}`)).toEqual([]);
   });
@@ -359,6 +456,9 @@ describe("wmill", () => {
     ["wmill datatable migrate up", [MIGRATE]],
     ["wmill datatable migrate down", [MIGRATE]],
     ["wmill datatable migrate up --datatable main", [MIGRATE]],
+    ["wmill workspace merge", [SYNC_PUSH]],
+    ["wmill profile merge", [SYNC_PUSH]],
+    ["wmill --workspace foo workspace merge", [SYNC_PUSH]],
     ["wmill sync push -i --dry-run", [SYNC_PUSH]],
     ["wmill sync push --includes --dry-run", [SYNC_PUSH]],
     ["wmill sync push -e --dry-run", [SYNC_PUSH]],

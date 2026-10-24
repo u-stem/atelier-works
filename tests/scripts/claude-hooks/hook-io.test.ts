@@ -4,6 +4,7 @@ import {
   deny,
   parseBashHookInput,
   runHook,
+  writeAndWait,
 } from "../../../scripts/claude-hooks/hook-io.ts";
 
 function bashInput(extra: Record<string, unknown> = {}): string {
@@ -149,5 +150,34 @@ describe("runHook", () => {
       10,
     );
     expect(result.stderr).toContain("did not finish");
+  });
+});
+
+describe("writeAndWait", () => {
+  test("reports success when the write finishes", async () => {
+    const stream = { write: (_text: string, done: () => void) => done() };
+    expect(await writeAndWait(stream, "x", 100)).toBe(true);
+  });
+
+  test("reports failure when the write never finishes", async () => {
+    const stream = { write: () => {} };
+    expect(await writeAndWait(stream, "x", 20)).toBe(false);
+  });
+
+  test("reports failure when the write returns an error", async () => {
+    const stream = {
+      write: (_text: string, done: (error?: Error | null) => void) =>
+        done(new Error("EPIPE")),
+    };
+    expect(await writeAndWait(stream, "x", 100)).toBe(false);
+  });
+
+  test("reports success without writing an empty text", async () => {
+    const stream = {
+      write: () => {
+        throw new Error("must not write");
+      },
+    };
+    expect(await writeAndWait(stream, "", 100)).toBe(true);
   });
 });

@@ -133,20 +133,15 @@ export function isEntryPoint(moduleUrl: string): boolean {
   }
 }
 
-/** ストリームに書き、書き終わるまで待つ。書き込みが終わらなくても、`limitMs`で諦める。 */
-function writeAndWait(
-  stream: NodeJS.WriteStream,
-  text: string,
-  limitMs: number,
-): Promise<void> {
-  if (text === "") return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, limitMs);
-    stream.write(text, () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
+/** 暫定の実装。常に成功を返す。 */
+export function writeAndWait(
+  _stream: {
+    write: (text: string, done: (error?: Error | null) => void) => unknown;
+  },
+  _text: string,
+  _limitMs: number,
+): Promise<boolean> {
+  return Promise.resolve(true);
 }
 
 /** 出力を書き終えるまで待つ上限(ミリ秒)。 */
@@ -168,9 +163,7 @@ export async function runHookMain(
     process.exitCode = result.exitCode;
     return;
   }
-  await Promise.all([
-    writeAndWait(process.stdout, result.stdout, FLUSH_LIMIT_MS),
-    writeAndWait(process.stderr, result.stderr, FLUSH_LIMIT_MS),
-  ]);
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
   process.exit(result.exitCode);
 }

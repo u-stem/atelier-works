@@ -51,6 +51,10 @@ export type StrippedCommand = {
   readonly wrappers: readonly string[];
   /** 最初に見つけた`mise exec`。無ければnull。 */
   readonly mise: MiseExec | null;
+  /** `env -S`の文字列を語に分けて差し込んだときは真。暫定の実装で、常に偽。 */
+  readonly expanded: boolean;
+  /** `env -S`の文字列を読めなかったときは真。暫定の実装で、常に偽。 */
+  readonly opaque: boolean;
 };
 
 /** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
@@ -333,7 +337,14 @@ export function stripWrappers(input: readonly Word[]): StrippedCommand {
   if (first !== undefined && zshCommandName(first.text) !== first.text) {
     rest[0] = { ...first, text: zshCommandName(first.text) };
   }
-  return { assignments, words: rest, wrappers, mise };
+  return {
+    assignments,
+    words: rest,
+    wrappers,
+    mise,
+    expanded: false,
+    opaque: false,
+  };
 }
 
 /**

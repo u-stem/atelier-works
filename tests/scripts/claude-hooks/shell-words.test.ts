@@ -835,4 +835,87 @@ describe("stripWrappers with env -S", () => {
   test("leaves a split string decided at run time as it is", () => {
     expect(stripped('env -S "$CMD"')).toEqual([]);
   });
+
+  test("keeps a semicolon inside a word of the split string", () => {
+    expect(stripped("env -S 'gh pr merge 1 --subject a;b'")).toEqual([
+      "gh",
+      "pr",
+      "merge",
+      "1",
+      "--subject",
+      "a;b",
+    ]);
+  });
+
+  test("keeps a quoted word of the split string together", () => {
+    expect(stripped("env -S 'echo \"a b\" c'")).toEqual(["echo", "a b", "c"]);
+  });
+
+  test("does not treat a pipe as an operator", () => {
+    expect(stripped("env -S 'git push | cat'")).toEqual([
+      "git",
+      "push",
+      "|",
+      "cat",
+    ]);
+  });
+
+  test("reads a bundled option before the split string", () => {
+    expect(stripped('env -iS "git push -f"')).toEqual(["git", "push", "-f"]);
+  });
+
+  test("reads a bundled option with the string attached", () => {
+    expect(stripped('env -vS"git push -f"')).toEqual(["git", "push", "-f"]);
+  });
+
+  test("marks an unterminated quote as opaque", () => {
+    expect(opaque("env -S 'git push \"x'")).toBe(true);
+  });
+
+  test("marks a string decided at run time as opaque", () => {
+    expect(opaque('env -S "$CMD"')).toBe(true);
+  });
+
+  test("does not mark a readable string as opaque", () => {
+    expect(opaque("env -S 'git push'")).toBe(false);
+  });
+
+  test("tells that the words came from a split string", () => {
+    const result = parseCommandLine("env -S 'git push'");
+    const first = result.ok ? result.commands[0] : undefined;
+    expect(first && stripWrappers(first.words).expanded).toBe(true);
+  });
+});
+
+function opaque(line: string): boolean {
+  const result = parseCommandLine(line);
+  if (!result.ok) throw new Error(result.error);
+  const first = result.commands[0];
+  if (first === undefined) throw new Error("no command");
+  return stripWrappers(first.words).opaque;
+}
+
+describe("stripWrappers with options that take a value", () => {
+  function stripped(line: string): string[] {
+    const result = parseCommandLine(line);
+    if (!result.ok) throw new Error(result.error);
+    const first = result.commands[0];
+    if (first === undefined) throw new Error("no command");
+    return stripWrappers(first.words).words.map((word) => word.text);
+  }
+
+  test.each([
+    ["env -P /usr/bin git status", ["git", "status"]],
+    ["xargs -J % git status", ["git", "status"]],
+    ["xargs -R 1 git status", ["git", "status"]],
+    ["xargs -S 255 git status", ["git", "status"]],
+    ["xargs --max-args 1 git status", ["git", "status"]],
+    ["xargs --max-procs 2 git status", ["git", "status"]],
+    ["xargs -n 1 -P 2 git status", ["git", "status"]],
+    ["sudo -iu root git status", ["git", "status"]],
+    ["env -uFOO git status", ["git", "status"]],
+    ["env -iu FOO git status", ["git", "status"]],
+  ])("skips the value in %s", (line, expected) => {
+    expect(stripped(line)).toEqual(expected);
+  });
 });

@@ -2117,4 +2117,26 @@ describe("bash-guard reads the command in env -S", () => {
   test("allows an ordinary command", async () => {
     expect(await decide("env -S 'git status'")).toBe("allow");
   });
+
+  test.each([
+    "env -S 'git push --force origin feature;x'",
+    "env -S 'sh -c \"git push --force origin feature\"'",
+    "env -iS 'git push --force origin feature'",
+    "env -vS'git push origin main'",
+    "env -S 'LEFTHOOK=0 git commit -m x'",
+    "env -S 'git commit --no-verify -m x | cat'",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(['env -S "$CMD"', "env -S 'git push \"x'"])(
+    "denies %s, which cannot be read",
+    async (command) => {
+      expect(await decide(command)).toBe("deny");
+    },
+  );
+
+  test("says why a string that cannot be read is denied", async () => {
+    expect(await denyReason('env -S "$CMD"')).toContain("env -S");
+  });
 });
