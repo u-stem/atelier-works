@@ -2736,6 +2736,9 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
 - フックが保留を読んでからマージを要求するまでの間は、保留が置かれても止まらない。
   人の承認を待つ間は、分単位に延びうる。
   待つ間にマージが要る作業は、保留を置いた主体と調整するため、受け入れる。
+- `gh api`の書き込み(POST、PUT、PATCH、DELETE)と、`gh pr`の読み取りと編集以外のサブコマンドは、マージとして扱う。
+  コメントの投稿や、ラベルの変更なども、保留が有効な間と保留を読めないときは止まる。
+  止めすぎは、綴りの漏れを追い続けないために、受け入れる。
 - リポジトリが決まらないマージは、どのリポジトリの保留でも止まる。
   `--repo`が無い、値が食い違う、実行時に決まるときが当たる。
   他のリポジトリの保留で止めすぎるが、安全側に倒すため、受け入れる。
@@ -2880,7 +2883,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)と凍結の解除(`freeze:release`、`scripts/freeze.ts release`)。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除すると保留を外せる。subagentには、確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
 | subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
-| マージ(`gh pr merge`、`gh api`のPUTのマージ、GraphQLのマージのmutation、マージを含む`gh alias`)。対象のリポジトリのマージの保留が有効なとき、保留を読めないとき。リポジトリが決まらないマージは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。読めないときに通すと、保留を置いた意味が外れる |
+| `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
 | `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること。追記(`+=`)は、追記後の値を判定できないので、値によらず拒否する | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
@@ -2907,7 +2910,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 
 - 変数名の組み立てと、スクリプトファイルを経由した代入。
 - 代入以外で変数を設定する組み込み(`read`、`printf -v`、`declare -n`)と、`set -a`に続く`source`。
-- `env -S`と`--split-string`。
+- 値が実行時に決まる`env -S`と`--split-string`。
 - ブレース展開(`CHECK_IDLE_FORCE{,}=1`)。
 - フックが外さない前置き(`stdbuf`、`caffeinate`、`bunx`、`npx cross-env`など)。
 - 標準入力から渡る値(`xargs`)。
@@ -2915,7 +2918,8 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 - 添字付きの代入(`CHECK_IDLE_FORCE[1]=1`)。
 - `mise set CHECK_IDLE_FORCE=1`による`mise.toml`の`[env]`への書き込み。`mise.toml`は保護パスなので、差分はレビューされる。
 
-`env -S`と添字付きの代入(`LEFTHOOK[1]=0`)は、`LEFTHOOK`の拒否にも当たる、既存の穴である。
+値が実行時に決まる`env -S`と添字付きの代入(`LEFTHOOK[1]=0`)は、`LEFTHOOK`の拒否にも当たる、既存の穴である。
+文字どおりの`env -S`の文字列は、読み直して判定する。
 
 `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
 リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
@@ -3007,7 +3011,7 @@ Claude Codeは終了コード2以外のフックの失敗ではツールの呼�
 対象に当たらないコマンドは、何も読まずに許可する。
 
 実行環境が無いときは、警告を出して通す。
-実行環境が無いのは、次の2つの場合である。
+実行環境が無いのは、次の3つの場合である。
 
 - 動くbunも、24以上のnodeも無いとき。依存を入れる前のコンテナが当たる。PATHにあってもshimの中身が無いbunや、24未満のnodeは、動かないものとして扱う
 - 起動スクリプトが無いとき。`CLAUDE_PROJECT_DIR`が空のときが当たる
@@ -3053,7 +3057,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - 変数に入れたパスやコマンド(`cat "$FILE"`、`"$GIT" push`、`eval $CMD`、`bash -c "$X"`)
 - 値が実行時に決まるオプション名(`git push ${X:---force}`など)
 - シェルのエイリアスと関数
-- `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
+- `find -exec`、値が実行時に決まる`env -S`、標準入力から名前を読む`xargs`(`git push`、`git commit`、`gh`、`wmill`を除く)
 - `mise`のほかのサブコマンドによる秘密値の出力(`mise env`、`mise config`、`mise hook-env`、`mise en`、`mise direnv exec`、`mise mcp`)
 - サブコマンドの前にグローバルオプションを置くと、設定の前方一致の拒否が外れる(`mise -E local env`など)
 - `mise run`の`-s`と`--shell`、`mise exec`の`-c`の位置と束ねた形、`xargs`から起動する`mise`
@@ -3086,7 +3090,8 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - マージと反映の判定が追わない形。残るリスクは「保留」に書く。
   - 別名と関数、変数や連結で組んだ語、スクリプトのファイルの中の呼び出し
   - `curl`、`python`、`hub`、GitHubのMCP
-  - RESTの`repos/<owner>/<repo>/merges`と、GraphQLの`mergeBranch`
+  - GraphQLの`mergeBranch`
+  - `find -exec`、`parallel`、`watch`の後ろのコマンド
   - `bunx wmill`、`npx wmill`、`wmill script push`などの個別のpush、`wmill schedule enable`
 - wmill CLIによる秘密値の読み取り
   - secret変数だけではない

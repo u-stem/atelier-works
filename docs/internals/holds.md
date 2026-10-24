@@ -313,28 +313,61 @@ CLIは本番のデータベースを渡し、実DBの検査は使い捨てのデ
 
 ### 止める操作
 
+`gh`の判定は、安全と確かめられた形だけを対象外にし、それ以外はマージとして扱う。
+綴りを列挙してマージを見つける方式は、列挙に無い綴りで破られるためである。
+マージとして扱っても、止まるのは保留が有効なときと、保留を読めないときだけである。
+
 | 操作 | 止める条件 |
 | --- | --- |
-| `gh pr merge`(`--auto`、`--admin`を含む) | 対象のリポジトリのマージの保留が有効 |
-| `gh api`のPUTで、パスに`/pulls/`と`merge`を含むもの | 同上 |
-| `gh api graphql`で、`mergePullRequest`、`enablePullRequestAutoMerge`、`enqueuePullRequest`を含むもの | どのリポジトリでもマージの保留が有効 |
-| `gh api graphql`で、queryが実行時に決まるか、ファイルから読むか、`--input`で渡すもの | 同上 |
-| 語に`merge`を含む`gh alias set`と`gh alias import` | 同上 |
+| `gh pr`のうち、対象外の形以外 | `merge`はリポジトリが決まれば、そのリポジトリのマージの保留が有効なとき。決まらないものと`merge`以外は、どのリポジトリでもマージの保留が有効なとき |
+| `gh api`のうち、対象外の形以外 | パスから`repos/<owner>/<repo>/`が決まれば、そのリポジトリの保留。決まらなければ、どのリポジトリでも |
+| 語に`merge`を含む`gh alias set`と`gh alias import` | どのリポジトリでもマージの保留が有効 |
+| `xargs`の後ろの`gh pr`、`gh api`、`gh alias`、`wmill` | `gh`はどのリポジトリでもマージの保留が有効。`wmill`は反映の保留かスケジュールの凍結が有効 |
 | `wmill sync push`(`--dry-run`を除く) | deployの保留かスケジュールの凍結が有効 |
 | `wmill datatable migrate up`と`migrate down` | deployの保留が有効 |
 
-`gh pr merge --disable-auto`と`--help`は対象にしない。
+`gh pr`が対象外になるのは、サブコマンドが文字どおり次のどれかのときである。
+`view`、`list`、`checks`、`create`、`diff`、`comment`、`status`、`edit`、`ready`、`review`、`checkout`、`reopen`、`close`、`lock`、`unlock`である。
+`merge`は、`--help`と`-h`、`--auto`の無い`--disable-auto`のときだけ対象外になる。
+サブコマンドが実行時に決まる、または上記以外(`merge`を含む)なら、マージとして扱う。
+
+`gh api`が対象外になるのは、次の条件をすべて満たすときである。
+
+- メソッドが文字どおりのGETか、指定が無い。
+- 本文を送る指定(`--input`、メソッドを指定しない`-f`と`-F`)が無い。
+- エンドポイントが`graphql`でなく、`merge`を含まない。
+
+エンドポイントは、スキームとホスト、先頭と末尾の`/`、クエリ、GHESの`api/v3/`を外した形で見る。
+`..`を含むパスは、リポジトリを決めない。
+GraphQLは、queryが文字どおりで、マージを要求する3つのmutationを含まないと確かめられたときだけ対象外になる。
+次のqueryは、マージとして扱う。
+
+- queryが無い。
+- 実行時に決まる。
+- ファイルから読む。
+- `--input`で渡す。
+
+コメントの投稿などの書き込みのメソッドも、保留が有効な間は止まる。
+安全側に倒すので、止めすぎは受け入れる。
+
+オプションの値は、読み飛ばしてから判定する。
+短いオプションは、pflagと同じに読む。
+束ねた文字(`-dR o/held`、`-iXPUT`)は、1文字ずつ見る。
+値を取る文字に当たったら、その後ろを値にする。
+後ろが空なら次の語が値で、先頭の`=`は落とす(`-X=PUT`)。
+`gh pr merge 1 --body --disable-auto`では、`--disable-auto`は本文の値なので、マージとして扱う。
+`wmill sync push -i --dry-run`では、`--dry-run`は`-i`の値なので、pushとして扱う。
+`wmill`で値を取るオプションは、`-i`と`-e`、およびそれぞれの長い形(`--includes`、`--excludes`)である。
+`--extra-includes`、`--message`、`--workspace`、`--token`、`--base-url`、`--config-dir`、`--datatable`も値を取る。
 `--dry-run=false`のように値を付けた形は、`--dry-run`とみなさず、対象にする。
-メソッドが実行時に決まる`gh api`のPUTも、マージとして扱う。
-`wmill`の前後のグローバルオプション(`--workspace`、`--token`、`--base-url`、`--config-dir`)は、値を読み飛ばして判定する。
 `mise run push`のようなラッパーは対象にしない。
 ラッパーの中で、凍結の入口(`scripts/freeze.ts`)が止める。
 
 コマンド行は、字句に分けてから見る。
-`sh -c`、`eval`、`$(...)`、`env`、`timeout`、`xargs`、`mise exec --`、絶対パスは外して判定する。
+`sh -c`、`eval`、`$(...)`、`env`、`env -S`の文字列、`timeout`、`xargs`、`mise exec --`、絶対パスは外して判定する。
 標準入力でシェルに渡す文字列(`echo '...' | sh`、ヒアドキュメント)は、深さ4まで読み直す。
 字句に分けられないコマンド行は、何も見つけない。`bash-guard`が拒否するためである。
-実行する名前が実行時に決まる語(`"$GH" pr merge 1`)は、文字どおりの`merge`があればマージとして扱う。
+実行する名前や、`gh`のグループとサブコマンドが実行時に決まる語は、マージとして扱う。
 
 ### 対象のリポジトリ
 
@@ -414,7 +447,8 @@ deployの保留の文は、期限まで待つか、置いた人に頼むこと�
 
 - 別名や関数、変数や連結で組んだ語、スクリプトのファイルの中の呼び出し。
 - `curl`、`python`、`hub`、GitHubのMCPによるマージ。
-- RESTの`repos/<owner>/<repo>/merges`と、GraphQLの`mergeBranch`。
+- GraphQLの`mergeBranch`。
+- `find -exec`、`parallel`、`watch`の後ろに書いたコマンド。`xargs`は追う。
 - `bunx wmill`、`npx wmill`、`wmill script push`などの個別のpush、`wmill schedule enable`。
 - 保留を置く前から有効だった自動マージ。
 
