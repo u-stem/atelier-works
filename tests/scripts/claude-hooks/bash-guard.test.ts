@@ -2104,3 +2104,17 @@ describe("bash-guard denies mise generate whose write path is a pattern", () => 
     expect(await decide(command)).toBe("deny");
   });
 });
+
+describe("bash-guard reads the command in env -S", () => {
+  test.each([
+    "env -S 'git push --force origin feature'",
+    "env -S'git push origin main'",
+    "env --split-string='git commit --no-verify -m x'",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("allows an ordinary command", async () => {
+    expect(await decide("env -S 'git status'")).toBe("allow");
+  });
+});

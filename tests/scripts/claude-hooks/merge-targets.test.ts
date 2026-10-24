@@ -46,6 +46,18 @@ describe("gh pr merge", () => {
     ["GH_REPO=o/r gh pr merge 1 --repo o/r", [merge("o/r")]],
     ["gh pr merge 1 --repo o/r.git", [merge("o/r")]],
     ["gh pr merge 1 --repo github.com/o/r", [merge("o/r")]],
+    ["gh pr merge 1 --repo o/other -dR o/held", [MERGE_ANY]],
+    ["gh pr merge 1 -dRo/held", [merge("o/held")]],
+    ["gh pr merge 1 -sR o/held", [merge("o/held")]],
+    ["gh pr merge 1 --squash --body --disable-auto", [MERGE_ANY]],
+    ["gh pr merge 3 -R foo/bar -t --disable-auto", [merge("foo/bar")]],
+    ["gh pr merge 1 -s -t --help", [MERGE_ANY]],
+    ["gh pr merge 1 --body-file --help", [MERGE_ANY]],
+    ["gh pr $(echo merge) 1", [MERGE_ANY]],
+    ['gh pr "$SUB" 1', [MERGE_ANY]],
+    ['gh "$GROUP" merge 1', [MERGE_ANY]],
+    ["gh pr unknown-subcommand 1", [MERGE_ANY]],
+    ["env -S 'gh pr merge 1 -R o/held'", [merge("o/held")]],
   ])("finds %s", (command, expected) => {
     expect(findGuardedOperations(command)).toEqual(expected);
   });
@@ -79,13 +91,30 @@ describe("gh pr merge", () => {
 
   test.each([
     "gh pr merge --disable-auto 1",
+    "gh pr merge 1 --repo o/r --disable-auto",
     "gh pr merge --help",
     "gh pr merge -h",
     "gh pr view 1",
+    "gh pr view 1 --repo o/held",
     "gh pr list",
+    "gh pr list --search 'merge'",
     "gh pr checks 1",
     "gh pr comment 1 --body merge",
+    "gh pr create --title t --body b",
+    "gh pr diff 1",
+    "gh pr status",
+    "gh pr edit 1 --title t",
+    "gh pr ready 1",
+    "gh pr review 1 --approve",
+    "gh pr checkout 1",
+    "gh pr reopen 1",
+    "gh pr close 1",
+    "gh pr lock 1",
+    "gh pr unlock 1",
     "gh issue list",
+    "mise run check",
+    "bun test",
+    "git push origin feature",
     "git merge main",
     "git commit -m 'gh pr merge 1'",
     'echo "gh pr merge 1"',
@@ -158,6 +187,28 @@ describe("gh pr merge behind a wrapper or a nested shell", () => {
   });
 });
 
+describe("a command started by xargs", () => {
+  test.each([
+    "echo merge 1 | xargs gh pr",
+    "echo 1 | xargs gh pr view",
+    "echo repos/o/held/pulls/1/merge | xargs gh api -X PUT",
+    "echo x | xargs gh alias set",
+  ])("treats %s as a merge of an unknown repository", (command) => {
+    expect(findGuardedOperations(command)).toEqual([MERGE_ANY]);
+  });
+
+  test("treats wmill as both deployments", () => {
+    expect(findGuardedOperations("echo sync push | xargs wmill")).toEqual([
+      SYNC_PUSH,
+      MIGRATE,
+    ]);
+  });
+
+  test("leaves another program alone", () => {
+    expect(findGuardedOperations("echo x | xargs git status")).toEqual([]);
+  });
+});
+
 describe("a program name that is decided at run time", () => {
   test("treats a literal merge word as a merge", () => {
     expect(findGuardedOperations('"$GH" pr merge 1')).toEqual([MERGE_ANY]);
@@ -168,15 +219,22 @@ describe("a program name that is decided at run time", () => {
   });
 });
 
-describe("gh api with PUT", () => {
+describe("gh api that is not a plain read", () => {
   test.each<[string, GuardedOperation[]]>([
     ["gh api -X PUT repos/o/r/pulls/1/merge", [merge("o/r")]],
     ["gh api --method PUT repos/o/r/pulls/1/merge", [merge("o/r")]],
     ["gh api --method=put repos/o/r/pulls/1/merge", [merge("o/r")]],
     ["gh api -XPUT repos/o/r/pulls/1/merge", [merge("o/r")]],
+    ["gh api -X=PUT repos/o/held/pulls/1/merge", [merge("o/held")]],
+    ["gh api -iXPUT repos/o/held/pulls/1/merge", [merge("o/held")]],
+    ["gh api -iX PUT repos/o/held/pulls/1/merge", [merge("o/held")]],
     ["gh api /repos/o/r/pulls/1/merge -X PUT", [merge("o/r")]],
     [
       "gh api https://api.github.com/repos/O/R/pulls/1/merge -X PUT",
+      [merge("o/r")],
+    ],
+    [
+      "gh api https://ghe.example.com/api/v3/repos/O/R/pulls/1/merge -X PUT",
       [merge("o/r")],
     ],
     ["gh api 'repos/o/r/pulls/1/merge?x=1' -X PUT", [merge("o/r")]],
@@ -189,17 +247,28 @@ describe("gh api with PUT", () => {
     ["gh api -X PUT 'repos/{owner}/{repo}/pulls/1/merge'", [MERGE_ANY]],
     ['gh api -X PUT "repos/$R/pulls/$N/merge"', [MERGE_ANY]],
     ['gh api -X PUT "$ENDPOINT"', [MERGE_ANY]],
+    ["gh api -X PUT repos/o/r/../x/pulls/1/merge", [MERGE_ANY]],
+    ["gh api repos/o/r/pulls/1/merge", [merge("o/r")]],
+    ["gh api repos/o/r/pulls/1/merge -X GET", [merge("o/r")]],
+    ["gh api -X POST repos/o/r/pulls/1/merge", [merge("o/r")]],
+    ["gh api -X PUT repos/o/r/issues/1/labels", [merge("o/r")]],
+    ["gh api -X DELETE repos/o/r/git/refs/heads/x", [merge("o/r")]],
+    ["gh api -X PATCH repos/o/r/pulls/1 -f title=t", [merge("o/r")]],
+    ["gh api repos/o/r/issues/1/comments -f body=x", [merge("o/r")]],
+    ["gh api repos/o/r/pulls/1 --input body.json", [merge("o/r")]],
   ])("finds %s", (command, expected) => {
     expect(findGuardedOperations(command)).toEqual(expected);
   });
 
   test.each([
-    "gh api repos/o/r/pulls/1/merge",
-    "gh api repos/o/r/pulls/1/merge -X GET",
     "gh api repos/o/r/pulls/1",
-    "gh api -X PUT repos/o/r/issues/1/labels",
-    "gh api -X POST repos/o/r/pulls/1/merge",
+    "gh api repos/o/r/pulls/1 -X GET",
+    "gh api repos/o/r/issues/1/comments",
+    "gh api repos/o/r/pulls --paginate",
+    "gh api -X GET search/issues -f q=merge",
     "gh api user",
+    "gh api -i user",
+    "gh api repos/o/r/pulls -q '.[].number'",
   ])("does not find %s", (command) => {
     expect(findGuardedOperations(command)).toEqual([]);
   });
@@ -224,6 +293,8 @@ describe("gh api graphql", () => {
     ["a query read from a file", "-F query=@q.graphql"],
     ["a field without a name", '-f "$FIELD"'],
     ["an input file", "--input q.json"],
+    ["a field that holds no query", "-f owner=o"],
+    ["a bundled short field with an equals sign", "-F=query=@m.graphql"],
   ])("finds a mutation: %s", (_name, fields) => {
     expect(findGuardedOperations(`gh api graphql ${fields}`)).toEqual([
       MERGE_ANY,
@@ -231,9 +302,21 @@ describe("gh api graphql", () => {
   });
 
   test.each([
+    "gh api /graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'",
+    "gh api https://api.github.com/graphql --input body.json",
+    "gh api graphql/ -F query=@m.graphql",
+    "gh api https://ghe.example.com/api/v3/graphql -F query=@m.graphql",
+    "gh api -F=query=@m.graphql graphql",
+    "gh api -X POST graphql -F query=@m.graphql",
+  ])("finds %s", (command) => {
+    expect(findGuardedOperations(command)).toEqual([MERGE_ANY]);
+  });
+
+  test.each([
     "-f query='query { viewer { login } }'",
     "-f owner=o -f query='query { viewer { login } }'",
     "-f query='query { viewer { login } }' -F number=\"$N\"",
+    "-i -f query='query { viewer { login } }'",
     "-f query='mutation { mergeBranch(input: {}) { clientMutationId } }'",
   ])("does not find a query without the three mutations: %s", (fields) => {
     expect(findGuardedOperations(`gh api graphql ${fields}`)).toEqual([]);
@@ -275,6 +358,15 @@ describe("wmill", () => {
     ["sh -c 'wmill sync push'", [SYNC_PUSH]],
     ["wmill datatable migrate up", [MIGRATE]],
     ["wmill datatable migrate down", [MIGRATE]],
+    ["wmill datatable migrate up --datatable main", [MIGRATE]],
+    ["wmill sync push -i --dry-run", [SYNC_PUSH]],
+    ["wmill sync push --includes --dry-run", [SYNC_PUSH]],
+    ["wmill sync push -e --dry-run", [SYNC_PUSH]],
+    ["wmill sync push --excludes --dry-run", [SYNC_PUSH]],
+    ["wmill sync push --extra-includes --dry-run", [SYNC_PUSH]],
+    ["wmill sync push --message --dry-run", [SYNC_PUSH]],
+    ["wmill sync push --workspace --dry-run", [SYNC_PUSH]],
+    ["wmill sync push --message=--dry-run", [SYNC_PUSH]],
     ["wmill --workspace foo datatable migrate up", [MIGRATE]],
   ])("finds %s", (command, expected) => {
     expect(findGuardedOperations(command)).toEqual(expected);
@@ -282,7 +374,10 @@ describe("wmill", () => {
 
   test.each([
     "wmill sync push --dry-run",
+    "wmill sync push -i 'f/**' --dry-run",
+    "wmill sync push --message m --dry-run --yes",
     "wmill sync pull",
+    "wmill datatable migrate new add_x",
     "wmill script push f/factory/x.ts",
     "wmill datatable migrate status",
     "wmill variable get f/factory/freezes --json",

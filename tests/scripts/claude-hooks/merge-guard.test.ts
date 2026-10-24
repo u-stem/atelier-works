@@ -155,6 +155,20 @@ describe("commands that are not guarded", () => {
     "wmill sync push --dry-run",
     'gh pr merge 1 "unterminated',
     "mise run push",
+    "mise run check",
+    "bun test",
+    "git push origin feature",
+    "git merge main",
+    "gh pr create --title t --body b",
+    "gh pr list",
+    "gh pr checks 1",
+    "gh pr diff 1",
+    "gh pr comment 1 --body ok",
+    "gh pr status",
+    "gh api repos/o/r/pulls/1",
+    "gh api repos/o/r/issues/1/comments",
+    "wmill sync pull",
+    "wmill datatable migrate new add_x",
   ])("allows %s without reading anything", async (command) => {
     const outcome = await run(command, { holds: HELD, freezes: DEPLOY_FREEZE });
     expect({

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -672,3 +674,77 @@ function isAlive(pid: number): boolean {
     return false;
   }
 }
+
+describe("the mask of the standard error", () => {
+  async function maskedStderr(secret: string): Promise<string> {
+    const finished = await runChild({
+      argv: ["/bin/sh", "-c", `echo "failed with ${secret} here" >&2`],
+      stdin: "",
+      timeoutMs: 5000,
+    });
+    return finished.stderr;
+  }
+
+  test.each([
+    ["a fine-grained token", `github_pat_${"A".repeat(40)}`],
+    ["a classic token", `ghp_${"a".repeat(36)}`],
+    ["an Anthropic key", `sk-ant-api03-${"b".repeat(30)}`],
+    [
+      "a Discord webhook URL",
+      `https://discord.com/api/webhooks/123456789/${"c".repeat(40)}`,
+    ],
+  ])("hides %s", async (_name, secret) => {
+    expect(await maskedStderr(secret)).toBe("failed with *** here\n");
+  });
+
+  test("has as many token patterns as the shared log module", () => {
+    const count = (path: string, marker: RegExp): number => {
+      const source = readFileSync(join(ROOT_OF_REPO, path), "utf8");
+      const body = marker.exec(source)?.[1] ?? "";
+      return body.split("\n").filter((line) => /^\s*\/[^/]/.test(line)).length;
+    };
+    expect(
+      count(
+        "scripts/claude-hooks/merge-read.ts",
+        /TOKEN_PATTERNS: readonly RegExp\[\] = \[([\s\S]*?)\n\];/,
+      ),
+    ).toBe(
+      count(
+        "f/factory/lib/log.ts",
+        /SECRET_PATTERNS: readonly RegExp\[\] = \[([\s\S]*?)\n\];/,
+      ),
+    );
+  });
+});
+
+const ROOT_OF_REPO = join(import.meta.dir, "../../..");
+
+describe("a child that is still running when the process exits", () => {
+  test("is killed with its group", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "merge-read-exit-"));
+    try {
+      const pidFile = join(directory, "pid");
+      const module = join(ROOT_OF_REPO, "scripts/claude-hooks/merge-read.ts");
+      const code = `
+        import { runChild } from ${JSON.stringify(module)};
+        void runChild({
+          argv: ["/bin/sh", "-c", "sleep 34 & echo $! > " + ${JSON.stringify(pidFile)} + "; wait"],
+          stdin: "",
+          timeoutMs: 60000,
+        });
+        await Bun.sleep(500);
+        process.exit(0);
+      `;
+      const child = Bun.spawn([process.execPath, "-e", code], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      await child.exited;
+      await Bun.sleep(300);
+      const pid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

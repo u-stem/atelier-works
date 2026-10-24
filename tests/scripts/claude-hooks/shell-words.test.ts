@@ -790,3 +790,49 @@ describe("literalShellInputs", () => {
     ]);
   });
 });
+
+describe("stripWrappers with env -S", () => {
+  function stripped(line: string): string[] {
+    const result = parseCommandLine(line);
+    if (!result.ok) throw new Error(result.error);
+    const first = result.commands[0];
+    if (first === undefined) throw new Error("no command");
+    return stripWrappers(first.words).words.map((word) => word.text);
+  }
+
+  test("reads the command in the split string", () => {
+    expect(stripped("env -S 'git push --force'")).toEqual([
+      "git",
+      "push",
+      "--force",
+    ]);
+  });
+
+  test("reads the long option", () => {
+    expect(stripped("env --split-string='git push -f'")).toEqual([
+      "git",
+      "push",
+      "-f",
+    ]);
+  });
+
+  test("reads an attached value", () => {
+    expect(stripped("env -S'git push -f'")).toEqual(["git", "push", "-f"]);
+  });
+
+  test("keeps the words after the split string", () => {
+    expect(stripped("env -S 'git push' --force")).toEqual([
+      "git",
+      "push",
+      "--force",
+    ]);
+  });
+
+  test("skips the options before the split string", () => {
+    expect(stripped("env -i -S 'git push -f'")).toEqual(["git", "push", "-f"]);
+  });
+
+  test("leaves a split string decided at run time as it is", () => {
+    expect(stripped('env -S "$CMD"')).toEqual([]);
+  });
+});
