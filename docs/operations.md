@@ -3589,8 +3589,8 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `pr_ci_check_denied` | 対象リポジトリのPRかCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのPRのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される([PATの権限](security.md#githubのpat)) |
 | `config_misfit` | 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。収まらない設定では自動修正を起動できないので、CIの失敗の自動修正を保留している。設定全体で1件だけ残り、失敗中のPRの数には依らない。本文に見直す項目が載る。Discordにも1回届く | `claude_timeout_sec`を小さくするか、`allowed_check_commands`の数を減らす。直すと、次の巡回で保留が外れて起動し直し、この通知も自動で解決される。自動修正だけを無効にした場合も、次の巡回で解決される。監視を無効にした場合は、修正中の行も通知を保留した行も無いと残るので、人が解決する |
 | `pr_conflict` | Factoryが作ったPRが、ベースブランチとマージできない競合の状態である。本文は`<owner>/<repo>#<PR番号>:`で始まり、次の操作とPRのリンクが載る。Discordにも届く | 本文の「次の操作」に従う。PRのブランチにベースブランチをmergeして競合を解消し、pushする。競合が解けたとき、PRを閉じたときは、自動で解決される。競合が続く間は、PRのコミットが進んでも通知は重ならない |
-| `dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが自動マージを待っている。取得の1周ごとに、待ったPRの数を1件にまとめる。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、[保留を確かめる](#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
-| `dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開する。通知は自動では解決されないので、確かめた後に人が解決する |
+| `dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが待っている。取得の1周ごとに1件にまとめ、本文に件数は載せない。件数は取得のログに残る。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、[保留を確かめる](#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
+| `dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開し、この通知も自動で解決される |
 
 ### Console用のworkerの検知を確かめる
 
@@ -5390,13 +5390,17 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 
 タスクは、チェックアウトを更新した端末で使える。
 タスクが見つからないときは、`mise exec -- bun ./scripts/hold.ts <list|place|release>`を直接実行する。
-置く操作と解除は、端末で`yes`を入力して確かめる。
+人が端末で実行する置く操作と解除は、`yes`の入力で確かめる。
+`CLAUDECODE`があるClaude Codeのセッションは、確認なしで通る。
+セッションは、自分の`holder`(`session:<ブランチ>`)の保留だけ解除できる。
 期限は最長24時間で、延長は無い。
 続けるときは、解除して置き直す。
 置き直しの回数に上限は無いので、続けて置くと保留は続く。
 `hold:list`で、期限の切れた行と、有効の条件を満たさない行(`invalid`)も確かめられる。
 
-保留が止めるのは、`dependabot_merge_enabled`が真のときの、dependabotの自動マージである。
+保留が止めるのは、dependabotのPRの評価と自動マージである。
+取得は、`dependabot_merge_enabled`が偽の試運転中も、保留のあるリポジトリのPRを待たせる。
+マージの直前の最後の確認が働くのは、`dependabot_merge_enabled`が真のときだけである。
 `gh pr merge`による手のマージは止めない。
 範囲`claim`は読む処理が無いので、置けない。
 

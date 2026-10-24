@@ -265,8 +265,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、自動で直さなかった理由(あるときだけ)、次の操作、PRのリンク |
 | `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加)、閾値、システムの画面のリンク、次の操作 |
 | `review_gated_prolonged` | `notify_daily_summary` | 投稿しない状態が続く日数、作業項目の画面のリンク、次の操作 |
-| `dependabot_merge_held` | `poll_dependabot` | 保留で待ったPRの数、一覧と解除の操作。取得の1周ごとに1件にまとめる |
-| `dependabot_merge_hold_unreadable` | `poll_dependabot` | 保留を読めない原因の種類と、最初に確かめること。PRの数は載せず、原因ごとに1件に保つ |
+| `dependabot_merge_held` | `poll_dependabot` | 一覧と解除の操作。取得の1周ごとに1件にまとめ、PRの数は載せない |
+| `dependabot_merge_hold_unreadable` | `poll_dependabot` | 保留を読めない原因の種類と、最初に確かめること。PRの数は載せない。保留を読めた周回で自動で解決する |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。

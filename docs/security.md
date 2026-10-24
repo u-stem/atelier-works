@@ -2640,12 +2640,10 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
   migrationの動的SQL(`EXECUTE format(...)`、文字列の連結、カタログを引くループ)では、スキーマ無しの`holds`の規則も塞げない。
   `PGOPTIONS=-csearch_path=factory`や`set_config('search_'||'path', ...)`のように、語を分ける形もある。
   これらは例であり、すべてではない。
-- `wmill.datatable()`の接続の既定の`search_path`に`factory`が入っていないことは、確かめていない。
-  psqlのpostgresロールでは、mainの`9dae4761`を反映したスタックで確かめた。
-  既定は`"$user", public`で、スキーマ無しの`holds`は解決しない。
-  Windmillの接続としては、ワークスペースで流す検証が要る。
+- `wmill.datatable()`の接続の既定の`search_path`は`"$user", public`で、`factory`は入っていない。
+  mainの`9dae4761`を反映したスタックで確かめた。スキーマ無しの`holds`は解決しない。
   入っていれば、スキーマ無しの`holds`が`factory.holds`を指す。
-  参照の検出の動詞の規則が、その場合も働く。
+  参照の検出の動詞の規則は、その場合も働く。
 - `scripts/test-db.sh`は守らない。
   日常的に直すファイルなので、守ると正当な変更を止める。
   実DBの検査を呼ぶ位置の検査は、`exit 0`を足すか、呼び出しを`if false; then ... fi`で囲むと、迂回できる。
@@ -2672,20 +2670,25 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 - 保留を読んでからマージを要求するまでの数秒は、保留が置かれても止まらない。
   保留は止めるだけの補助で、元の保護が残るので、受け入れる。
 - `gh pr merge`は、保留で止まらない。
-  ローカルのセッションの手前で止めるフックは、後の段で入れる。
-- subagentの保留の操作は、`scripts/claude-hooks/hold-guard.ts`が拒否する。
+  ローカルのセッションの手前で止めるフックは、未実装である。
+- subagentの保留の操作は、`scripts/claude-hooks/hold-guard.ts`が、拒否を既定にして拒否する。
+  保留のコードを指す語を含む呼び出しは、`list`と検査の道具の2つの形だけを許す。
   拒否はベストエフォートで、境界ではない。
   別名の呼び出し、変数で組んだパス、`docker compose exec db psql`に渡す語を組み立てて書く形、新しいファイルを書いて実行する形は止めない。
   BashとDockerを持つ主体は、psqlで保留を直接書ける。
   止めるのは、誤操作と、拒否を知らない呼び出しである。
-  フックと、miseのタスクのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
+  フックのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
+  miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)の保護は、Factoryのpr_fixとimplementのフローにだけ効く。
+  ローカルのsubagentが、そこに書いて実行する形は止めない。
 - CLIの接続先のデータベースは、`scripts/hold.ts`の定数だけに書く。
   実DBの検査は、使い捨てのデータベースだけを渡す。
   テストが、この2つを固定する。
 - 保留の`reason`と`holder`は、psqlのプロセスの引数に現れ、一覧に表示される。
   秘密を書かない前提である。
-- 保留で待つPRが増えると、取得が周回ごとに通知を残す。
-  待つ間は情報の通知を1件に保ち、PRごとには出さない。
+  一覧は、`target`、`reason`、`holder`の制御文字を空白にして表示する。
+- 保留で待つPRが増えても、取得の通知は周回ごとに種類ごとの1件に保つ。
+  本文にPRの数を載せないので、数が変わっても別の行は並ばない。
+  保留を読めない通知は、保留を読めた周回に解決する。
   保留は1行が最長24時間なので、受け入れる。
 - 止め方が、スケジュールの凍結(変数)と、保留(表)に分かれる。
   範囲が違うので、同じ対象に二重にはならない。
@@ -2769,7 +2772,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec) | 公開した履歴を書き換えると、ほかの作業やFactoryの`pr_fix`の変更を消しうる |
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
-| subagentの保留を置く・解除する操作。`scripts/hold.ts`の`list`以外、`hold:place`と`hold:release`のタスク、`holds`を語に含む`docker`と`psql`、保留のモジュールを読み込む`bun -e`などのコード | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
+| subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
 | `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること。追記(`+=`)は、追記後の値を判定できないので、値によらず拒否する | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
 | `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くことと、追記(`+=`) | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
@@ -2785,7 +2788,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
 | `/proc/<pid>/environ`(`task/<tid>`の下を含む)を引数やリダイレクトに含むコマンド | プロセスの環境変数がそのまま入っている |
 | 書き込む形(`KEY=VALUE`、または`--stdin`と鍵1つ)を持たない`mise set` | `mise.local.toml`の値を一覧する |
-| `mise generate git-pre-commit`の`--write`と`--hook`、`mise generate github-action`の`--write` | `.git/hooks`と`.github/workflows`へ書き、lefthookのフックやCIの検査を上書きできる |
+| `mise generate git-pre-commit`(別名`pre-commit`)と`mise generate github-action`の`--write`(`-w`を含む短いフラグの束を含む)。`generate`の別名`gen`と`g`も同じ | `.git/hooks`と`.github/workflows`へ書き、lefthookのフックやCIの検査を上書きできる。`--hook`と`--task`は単独では書かないので拒否しない |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
@@ -2950,7 +2953,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
   - 別名の呼び出し(`cp scripts/hold.ts /tmp/h.ts`の後に実行する形)
   - 変数や文字列の連結で組んだパス、動的なimport
   - `docker compose exec db psql`に渡す語を、組み立てて書く形
-  - 新しいファイルを書いて実行する形。`mise-tasks/`と`.mise-tasks/`は保護パスなので、PRの差分で見える
+  - 新しいファイルを書いて実行する形。`mise-tasks/`と`.mise-tasks/`は保護パスだが、止めるのはFactoryのフローだけで、ローカルのsubagentには効かない
 - wmill CLIによる秘密値の読み取り
   - secret変数だけではない
   - `wmill instance get-config --show-secrets`はインスタンスの設定を出す
