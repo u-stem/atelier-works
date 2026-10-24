@@ -490,7 +490,10 @@ type DeployedShaAdvance = {
 };
 
 /**
- * 変更パスを列挙して分類し、`deployed_sha`を更新する。
+ * `deployed_sha`を更新し、そのあとで変更パスを列挙して分類する。
+ * 更新を先に行うのは、`deployed_sha`が clone に無い値などの誤った値のとき、列挙が失敗し続けて
+ * 同じ範囲のpushとmigrationと失敗の記録が2分ごとに繰り返されるのを、1回の失敗で`HEAD`に進めて止めるため。
+ * 更新できたら`onUpdated`を呼ぶ。更新の後に列挙が失敗すると、host actionの通知と`changed_paths`が欠ける。
  */
 export async function advanceDeployedSha(deps: {
   readonly setSha: () => Promise<void>;
@@ -498,13 +501,13 @@ export async function advanceDeployedSha(deps: {
   readonly listChangedPaths: () => Promise<string[]>;
   readonly hostSectionsChanged: () => Promise<boolean>;
 }): Promise<DeployedShaAdvance> {
+  await deps.setSha();
+  deps.onUpdated();
   const changedPaths = await deps.listChangedPaths();
   const miseChanged = changedPaths.includes(MISE_TOML_PATH)
     ? await deps.hostSectionsChanged()
     : false;
   const classification = classifyChangedPaths(changedPaths, miseChanged);
-  await deps.setSha();
-  deps.onUpdated();
   return { changedPaths, classification };
 }
 
