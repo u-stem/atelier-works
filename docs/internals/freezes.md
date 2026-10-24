@@ -184,9 +184,13 @@ pushとmigrationの間に保留が置かれても、migrationは続く。
 
 ## self_updateの見送り
 
-保留が有効なあいだ、`self_update`は反映が要る回の途中で戻る。
+保留が有効なあいだ、`self_update`は反映が要る回で、トークンの取得より前に戻る。
 `wmill sync push`、`wmill datatable migrate up`、`deployed_sha`の更新、`deployments`への記録、通知をしない。
 戻り値は`held`で、理由は`deploy_freeze`である。
+保留の判定は、凍結の変数を読めた直後に行う。
+凍結の読み取りは、self cloneの更新と`wmill.yaml`の読み込みの後なので、これより前には移せない。
+判定は失敗の行を足す処理の外にあるので、トークンの取得などの例外で、見送った回に失敗の行は足されない。
+凍結を読めない回は、保留があるかを判定できないので、反映が要る回は失敗の行を足す。
 ログには、保留のidと期限だけを出す。
 `reason`と`holder`は信頼できない文字列なので、出さない。
 

@@ -1094,6 +1094,21 @@ async function updateSelf(
     return { outcome: "unchanged" };
   }
 
+  // deployの保留が有効なあいだは反映全体(push、migration、`deployed_sha`の更新)を待つ。
+  // 凍結を読めたときだけ判定する。読めない回は、下で失敗として記録する。
+  // 失敗の行を足す`try`の前で戻るので、トークンの取得などの例外でも、見送った回に失敗の行は足さない。
+  // `deployed_sha`を進めないので、保留が切れた最初の回が同じ範囲をそのまま反映する。
+  // `reason`と`holder`は信頼できない文字列なので、ログにはidと期限だけを出す。
+  if (freeze.ok && shouldHoldDeploy(freeze.value)) {
+    log.info("a deploy freeze is active, deferring the deployment", {
+      freezes: freeze.value.deployFreezes,
+      sha_from: deployedSha,
+      sha_to: currentSha,
+    });
+    await resolveHostActionNotices();
+    return { outcome: "held", reason: "deploy_freeze" };
+  }
+
   log.info(
     reconcileOnly
       ? "schedule freezes ended, pushing again"
@@ -1134,19 +1149,6 @@ async function updateSelf(
     }
     const plan = freeze.value;
     for (const warning of plan.warnings) log.warn(warning);
-
-    // deployの保留が有効なあいだは反映全体(push、migration、`deployed_sha`の更新)を待つ。
-    // `deployed_sha`を進めないので、保留が切れた最初の回が同じ範囲をそのまま反映する。
-    // 失敗の行も通知も足さない。`reason`と`holder`は信頼できない文字列なので、ログにはidと期限だけを出す。
-    if (shouldHoldDeploy(plan)) {
-      log.info("a deploy freeze is active, deferring the deployment", {
-        freezes: plan.deployFreezes,
-        sha_from: deployedSha,
-        sha_to: currentSha,
-      });
-      await resolveHostActionNotices();
-      return { outcome: "held", reason: "deploy_freeze" };
-    }
 
     await runWmillCli(
       buildWmillArgv(

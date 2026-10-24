@@ -145,7 +145,7 @@ locks:
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: 76d3e4d499c16736c3d9695bd894dcb7940d1d2d3e0d1e74c0cc92c4a7ddb7ef
+  f/factory/self_update: 4cfbf6a41cda8abd668c2f82d40959d73811171f58491f46cabdfc2da1650c4b
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: 675145294823ee2282219ddc2c8c9d82cb521227e72eafae2ab7333c962b6dd2

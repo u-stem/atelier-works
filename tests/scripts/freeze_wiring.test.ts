@@ -247,7 +247,7 @@ describe("self_update deploy freeze", () => {
   test("decides to hold only once", async () => {
     const text = await source();
 
-    expect(text.match(/shouldHoldDeploy\(plan\)/g)?.length).toBe(1);
+    expect(text.match(/shouldHoldDeploy\(freeze\.value\)/g)?.length).toBe(1);
   });
 
   test("returns held before the deployed sha update", async () => {
