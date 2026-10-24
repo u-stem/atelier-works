@@ -28,7 +28,12 @@ function render(label: string | null = null): string {
 const REFRESH_BUTTON = 'aria-label="この画面を更新"';
 const ACTIONS = "<span>操作</span>";
 
+// actionsがあるときに、右側の塊を開くタグ。右端への寄せはこの塊のクラスで決まる。
+const ACTIONS_BLOCK_OPEN =
+  '<div class="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">';
+
 // 題を含む左のブロックの閉じタグの直後の位置。
+// childrenにdivを含む要素を渡すと、先に現れる閉じタグを拾って誤るので、divを含まないchildrenだけで使う。
 function titleBlockEnd(markup: string): number {
   return markup.indexOf("</div>", markup.indexOf("</h1>")) + "</div>".length;
 }
@@ -110,19 +115,21 @@ describe("PageHeader", () => {
     );
   });
 
-  test("pushes the block holding the actions to the right edge", () => {
+  test("opens the right edge block just before the actions", () => {
     const markup = renderWith({ actions: <span>操作</span> });
 
-    expect(markup).toContain("ml-auto");
+    expect(markup).toContain(`${ACTIONS_BLOCK_OPEN}${ACTIONS}`);
   });
 
-  test("right aligns the contents of the block holding the actions", () => {
+  test("opens the right edge block just before the refresh block", () => {
     const markup = renderWith({
       refresh: REFRESH,
       actions: <span>操作</span>,
     });
 
-    expect(markup).toContain("justify-end");
+    expect(markup).toContain(
+      `${ACTIONS_BLOCK_OPEN}<div class="flex items-center gap-2`,
+    );
   });
 
   test("does not push the refresh block to the right edge without actions", () => {
