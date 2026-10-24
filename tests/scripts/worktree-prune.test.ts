@@ -1056,8 +1056,29 @@ describe("worktree-prune.sh", () => {
       path = addMergedWorktree("docs-old", "docs/old");
     });
 
+    // 2回目の`git status`が始まる前に`hook`(シェルの行)を実行する偽のgit。
+    // 最初の検査の後、削除の直前の検査が始まる前に、worktreeが変わる状況を作る。
+    function writeStatusHook(hook: string): void {
+      const counter = join(root, "hook-status-count");
+      writeFileSync(
+        join(fakeBin, "git"),
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$3" = "status" ]; then',
+          `  n=$(cat "${counter}" 2>/dev/null || echo 0)`,
+          "  n=$((n + 1))",
+          `  echo "$n" > "${counter}"`,
+          `  if [ "$n" -eq 2 ]; then ${hook}; fi`,
+          "fi",
+          `exec "${requireBin("git")}" "$@"`,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fakeBin, "git"), 0o755);
+    }
+
     test("keeps a worktree that became dirty after the first check", () => {
-      writeLsofChanging("p1\nn/", "p1\nn/", `echo x > "${path}/new.txt"`);
+      writeStatusHook(`echo x > "${path}/new.txt"`);
 
       run(["--apply"]);
 
@@ -1065,7 +1086,7 @@ describe("worktree-prune.sh", () => {
     });
 
     test("keeps a worktree that became recent after the first check", () => {
-      writeLsofChanging("p1\nn/", "p1\nn/", `touch "${path}/README.md"`);
+      writeStatusHook(`touch "${path}/README.md"`);
 
       run(["--apply"]);
 
@@ -1081,9 +1102,7 @@ describe("worktree-prune.sh", () => {
     });
 
     test("keeps a worktree whose branch moved after the first check", () => {
-      writeLsofChanging(
-        "p1\nn/",
-        "p1\nn/",
+      writeStatusHook(
         `git -C "${path}" commit -q --allow-empty --no-gpg-sign -m moved`,
       );
 
@@ -1093,11 +1112,37 @@ describe("worktree-prune.sh", () => {
     });
 
     test("keeps the branch of a worktree that became dirty after the first check", () => {
-      writeLsofChanging("p1\nn/", "p1\nn/", `echo x > "${path}/new.txt"`);
+      writeStatusHook(`echo x > "${path}/new.txt"`);
 
       run(["--apply"]);
 
       expect(branchExists("docs/old")).toBe(true);
+    });
+
+    test("reports dirty for a worktree that became dirty after the first check", () => {
+      writeStatusHook(`echo x > "${path}/new.txt"`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): dirty`);
+    });
+
+    test("reports recent for a worktree that became recent after the first check", () => {
+      writeStatusHook(`touch "${path}/README.md"`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): recent`);
+    });
+
+    test("reports branch moved for a worktree whose branch moved after the first check", () => {
+      writeStatusHook(
+        `git -C "${path}" commit -q --allow-empty --no-gpg-sign -m moved`,
+      );
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): branch moved`);
     });
 
     test("reports the reason for keeping a worktree that came into use", () => {
