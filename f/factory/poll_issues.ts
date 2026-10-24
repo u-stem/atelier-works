@@ -231,6 +231,7 @@ async function checkDeployedSha(
           sha,
           DEPLOYED_SHA_RESOLVER,
         ),
+      isDeployHeld: () => Promise.resolve(false),
       nowMs: () => Date.now(),
       log,
     });

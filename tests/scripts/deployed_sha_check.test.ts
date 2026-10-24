@@ -261,6 +261,7 @@ function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
       resolveCalls += 1;
       return Promise.resolve(1);
     },
+    isDeployHeld: () => Promise.resolve(false),
     nowMs: () => T0 + DEPLOYED_SHA_GRACE_MS + 1,
     log,
     ...overrides,
@@ -598,5 +599,90 @@ describe("runDeployedShaCheck", () => {
     });
     await runDeployedShaCheck(h.deps);
     expect(h.resolveCalls()).toBe(1);
+  });
+});
+
+describe("runDeployedShaCheck with a deploy freeze", () => {
+  const held = { isDeployHeld: () => Promise.resolve(true) };
+
+  test("waits instead of notifying past the grace period", async () => {
+    const h = harness(held);
+    expect(await runDeployedShaCheck(h.deps)).toBe("waiting");
+  });
+
+  test("does not add a notice", async () => {
+    const h = harness(held);
+    await runDeployedShaCheck(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("waits when the state cannot be written and the check would notify at once", async () => {
+    const h = harness({
+      ...held,
+      getState: () => Promise.reject(new Error("no state")),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("waiting");
+  });
+
+  test("still resolves the notices from before the successful deployment", async () => {
+    const h = harness(held);
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(1);
+  });
+
+  test("logs that the check was held by a deploy freeze", async () => {
+    const h = harness(held);
+    await runDeployedShaCheck(h.deps);
+    expect(
+      h.logs.some(
+        (l) => l.message === "deployed_sha_mismatch held by a deploy freeze",
+      ),
+    ).toBe(true);
+  });
+
+  test("notifies when the freezes cannot be read", async () => {
+    const h = harness({
+      isDeployHeld: () => Promise.reject(new Error("variable down")),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("notified");
+  });
+
+  test("warns when the freezes cannot be read", async () => {
+    const h = harness({
+      isDeployHeld: () => Promise.reject(new Error("variable down")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.warnings).toContain("deploy freeze read failed");
+  });
+
+  test("notifies when no deploy freeze is active", async () => {
+    const h = harness({ isDeployHeld: () => Promise.resolve(false) });
+    expect(await runDeployedShaCheck(h.deps)).toBe("notified");
+  });
+
+  test("does not read the freezes inside the grace period", async () => {
+    let reads = 0;
+    const h = harness({
+      nowMs: () => T0 + 1000,
+      isDeployHeld: () => {
+        reads += 1;
+        return Promise.resolve(true);
+      },
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(reads).toBe(0);
+  });
+
+  test("does not read the freezes when the shas match", async () => {
+    let reads = 0;
+    const h = harness({
+      deployedSha: "aaa",
+      isDeployHeld: () => {
+        reads += 1;
+        return Promise.resolve(true);
+      },
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(reads).toBe(0);
   });
 });

@@ -313,6 +313,8 @@ export type DeployedShaCheckDeps = {
    * 時刻はどちらもDBの`now()`で決まる。成功の記録が無ければ何も解決しない。
    */
   readonly resolveNotices: (deployedSha: string) => Promise<number>;
+  /** 有効なdeployの保留があるか。読めないときは例外を投げる。 */
+  readonly isDeployHeld: () => Promise<boolean>;
   readonly nowMs: () => number;
   readonly log: Logger;
 };

@@ -215,6 +215,27 @@ describe("self_update deploy freeze", () => {
   });
 });
 
+describe("poll_issues deploy freeze", () => {
+  async function source(): Promise<string> {
+    return await Bun.file("f/factory/poll_issues.ts").text();
+  }
+
+  test("passes the deploy freeze check to the deployed sha check", async () => {
+    expect(await source()).toContain("isDeployHeld:");
+  });
+
+  test("reads only the deploy freezes", async () => {
+    expect(await source()).toContain("readActiveDeployFreezes(");
+  });
+
+  test("bounds the read of the freeze variable", async () => {
+    const text = await source();
+    const at = text.indexOf("readActiveDeployFreezes(");
+
+    expect(at >= 0 && text.lastIndexOf("withCallTimeout(", at) > 0).toBe(true);
+  });
+});
+
 describe("self_update", () => {
   test("builds the push arguments from the freeze plan", async () => {
     const source = await Bun.file("f/factory/self_update.ts").text();
