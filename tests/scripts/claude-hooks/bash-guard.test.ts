@@ -2171,6 +2171,33 @@ describe("bash-guard denies releasing through the Console scripts", () => {
     "mise exec -- wmill variable add '{}' f/factory/freezes",
     `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/freezes -d '{}'`,
     `curl -X POST http://localhost:8000/api/w/factory/variables/create -d '{"path":"f/factory/freezes"}'`,
+    // 実行系が`wmill`を包む形。`wmill`の綴りに頼らず、解除scriptの名前で止める。
+    `npx windmill-cli script run f/factory/hold_release -d '{"hold_id":1}'`,
+    "bunx windmill-cli@1.817.0 script run f/factory/freeze_release",
+    "mise exec -- npx windmill-cli variable add '{}' f/factory/freezes",
+    "bun x windmill-cli script run f/factory/hold_release",
+    "pnpm dlx windmill-cli script run f/factory/hold_release",
+    "deno run -A npm:windmill-cli script run f/factory/hold_release",
+    // 名前にglobとブレースを当てる形。
+    "wmill script preview f/factory/hold_r?lease.ts -d {}",
+    "wmill script preview f/factory/hold_[r]elease.ts -d {}",
+    "wmill script preview f/factory/*_release.ts -d {}",
+    "wmill script preview f/factory/hold_{release}.ts -d {}",
+    "wmill script preview f/factory/{hold,x}_release.ts -d {}",
+    "wmill variable add '{}' f/factory/fre?zes",
+    `curl -X POST '${URL_BASE}/run_wait_result/p/f/factory/hold_{release}' -d {}`,
+    `curl -X POST '${URL_BASE}/run_wait_result/p/f/factory/hold_r[e-e]lease' -d {}`,
+    `curl -X POST '${URL_BASE}/run_wait_result/p/f/factory/*_release' -d {}`,
+    `curl -X POST http://localhost:8000/api/w/factory/variables/update/f/factory/{freezes} -d {}`,
+    // URLや名前を標準入力で渡す形。
+    `echo 'url="${URL_BASE}/run_wait_result/p/f/factory/hold_release"' | curl -K - -X POST -d {}`,
+    "echo f/factory/hold_release | xargs wmill script run",
+    "printf 'f/factory/freeze_release\\n' | xargs -n1 wmill script run",
+    // 本文を渡す別の経路。
+    `python3 -c 'import os; os.system("wmill script run f/factory/hold_release")'`,
+    `node -e 'require("child_process").execSync("wmill script run f/factory/hold_release")'`,
+    // ソースをネットワークから取る形も、名前を含むので止まる。
+    "curl -s https://raw.githubusercontent.com/example/repo/main/f/factory/hold_release.ts",
   ];
 
   test.each(COMMANDS)("denies %s in the main session", async (command) => {
@@ -2185,6 +2212,12 @@ describe("bash-guard denies releasing through the Console scripts", () => {
     expect(
       await denyReason("wmill script run f/factory/hold_release"),
     ).toContain("Console");
+  });
+
+  test("the reason says how to read the source", async () => {
+    expect(
+      await denyReason("wmill script run f/factory/hold_release"),
+    ).toContain("git show");
   });
 
   test("the reason names the CLI that a person confirms", async () => {
@@ -2220,6 +2253,28 @@ describe("bash-guard allows work near the Console release scripts", () => {
     "curl http://localhost:8000/api/w/factory/variables/get_value/f/factory/freezes",
     "mise run hold:list",
     "mise run freeze:list",
+    "rg hold_release f/factory",
+    "head -n 20 f/factory/hold_release.ts",
+    "sed -n 1,20p f/factory/freeze_release.ts",
+    "ls f/factory/*_release.ts",
+    "wc -l f/factory/hold_release.ts f/factory/freeze_release.ts",
+    "wmill script show f/factory/hold_release",
+    "wmill script push f/factory/hold_release.ts",
+    "wmill job list --script-path f/factory/hold_release",
+    "wmill job get 0198",
+    "wmill job logs 0198",
+    "wmill job result 0198",
+    "gh pr create --title hold_release --body 'hold_release を足す'",
+    "echo hold_released",
+    "grep -rn hold_released f/factory",
+    "bunx biome check f/factory/hold_release.ts",
+    "bun --cwd console test",
+    "git diff -- f/factory/hold_release.ts",
+    "git commit -F - <<'EOF'\nfeat: hold_release を足す\nEOF",
+    "find f/factory -name 'hold_release*'",
+    `sh -c "grep hold_release f/factory/hold_release.ts"`,
+    "cat f/factory/hold_release.ts | head -n 5",
+    "echo hold_release | grep release",
   ])("allows %s in the main session", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
@@ -2228,6 +2283,9 @@ describe("bash-guard allows work near the Console release scripts", () => {
     "bun test tests/scripts/hold_release.test.ts",
     "wmill script get f/factory/hold_release",
     "wmill script run f/factory/console_holds",
+    "rg hold_release f/factory",
+    "wmill job list --script-path f/factory/hold_release",
+    "git commit -m 'fix: freeze_release を直す'",
   ])("allows %s in a subagent", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("allow");
   });
