@@ -75,6 +75,8 @@ export type ReadOptions = {
   readonly now?: () => Date;
 };
 
+export type MergeHoldReading = HoldReadOutcome<readonly HoldRow[]>;
+
 export type FreezeReading =
   | {
       readonly ok: true;
