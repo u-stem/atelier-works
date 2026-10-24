@@ -527,7 +527,7 @@ worktreeを作るフックと、既存のブランチを使う経路(worktreeの
   確かめるには、`failures`を2以上にした状態で`worktree:new`を実行し、標準エラーを見る。
 - 再検査から削除までに、短い時間差がある。
   `lsof`を取り直して`git worktree remove`の直前に寄せているが、時間差はゼロではない。
-- 許可済みの`mise run worktree:new`は、そのチェックアウトにある`worktree-prune.sh`を、確認なしの削除として起動する。
+- 許可済みの`mise run worktree:new`とWorktreeCreateフックは、そのチェックアウトにある`worktree-prune.sh`を、確認なしの削除として起動する。
   編集中やレビュー前の版も、無人で走る。
   止める手段は、セッションの起動時に`WORKTREE_AUTO_PRUNE=0`をexportしておくことだけである。
   コマンドへの前置きは、許可の確認を求められる場合がある。
