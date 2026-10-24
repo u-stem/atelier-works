@@ -67,7 +67,7 @@ async function readState(ports: FreezePorts): Promise<Outcome<FreezeState>> {
       reason: `could not read the freeze variable: ${errorMessage(err)}`,
     };
   }
-  const parsed = parseFreezeState(raw);
+  const parsed = parseFreezeState(raw, ports.now());
   return parsed.ok
     ? parsed
     : { ok: false, reason: `${parsed.reason} (${FREEZE_RECOVERY_HINT})` };

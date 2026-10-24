@@ -169,14 +169,32 @@ function parseEntry(value: unknown): Outcome<FreezeEntry> {
   return ok({ id, target, reason, holder_kind, holder, ...times });
 }
 
+/** 作成の時刻が現在より先でもよい幅。時計のずれを許す。 */
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * 現在時刻に照らして、ありえない行なら理由を返す。
+ * 作成が未来の行や、期限が遠い先の行は、手で書いた行か書き手の誤りで、有効な期間を延ばせてしまう。
+ */
+function impossibleTime(entry: DeployFreezeEntry, now: Date): string | null {
+  if (Date.parse(entry.created_at) > now.getTime() + CLOCK_SKEW_MS) {
+    return `freeze ${entry.id} was created in the future`;
+  }
+  if (Date.parse(entry.expires_at) - now.getTime() > FREEZE_MAX_TTL_MS) {
+    return `freeze ${entry.id} expires too far ahead`;
+  }
+  return null;
+}
+
 /**
  * 変数の値を状態に変える。`null`は変数が無いと確かめられたときで、空の状態として扱う。
  * 構造が崩れていれば失敗にする(呼び出し側は反映しない)。知らないキーは無視する。
  * `deploy_freezes`が無ければ空として読む。idは2つの配列をまたいで一意でなければならない。
+ * `now`を渡すと、作成が5分より先の行と、期限が24時間より先の行を失敗にする。
  */
 export function parseFreezeState(
   text: string | null,
-  _now?: Date,
+  now?: Date,
 ): Outcome<FreezeState> {
   if (text === null) return ok(emptyFreezeState());
   let parsed: unknown;
@@ -202,6 +220,8 @@ export function parseFreezeState(
   for (const raw of parsed.freezes) {
     const entry = parseEntry(raw);
     if (!entry.ok) return fail(entry.reason);
+    const bad = now === undefined ? null : impossibleTime(entry.value, now);
+    if (bad !== null) return fail(bad);
     if (ids.has(entry.value.id)) return fail("duplicate freeze id");
     ids.add(entry.value.id);
     freezes.push(entry.value);
@@ -209,6 +229,8 @@ export function parseFreezeState(
   for (const raw of rawDeploy) {
     const entry = parseDeployEntry(raw);
     if (!entry.ok) return fail(entry.reason);
+    const bad = now === undefined ? null : impossibleTime(entry.value, now);
+    if (bad !== null) return fail(bad);
     if (ids.has(entry.value.id)) return fail("duplicate freeze id");
     ids.add(entry.value.id);
     deploy.push(entry.value);
