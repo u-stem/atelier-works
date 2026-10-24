@@ -1116,6 +1116,58 @@ describe("worktree-prune.sh", () => {
       expect(existsSync(path)).toBe(false);
     });
 
+    // 2回目の`git status`が始まった後にだけ、`afterOutput`を返す偽のlsofと、
+    // 2回目の`git status`の印を付ける偽のgit。削除の直前の検査で、lsofが
+    // `git status`より後に呼ばれるかを確かめる。
+    function writeLateProcess(beforeOutput: string, afterOutput: string): void {
+      const counter = join(root, "status-count");
+      const marker = join(root, "second-status");
+      writeFileSync(
+        join(fakeBin, "git"),
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$3" = "status" ]; then',
+          `  n=$(cat "${counter}" 2>/dev/null || echo 0)`,
+          "  n=$((n + 1))",
+          `  echo "$n" > "${counter}"`,
+          `  if [ "$n" -ge 2 ]; then : > "${marker}"; fi`,
+          "fi",
+          `exec "${requireBin("git")}" "$@"`,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fakeBin, "git"), 0o755);
+      writeFileSync(
+        join(fakeBin, "lsof"),
+        [
+          "#!/usr/bin/env bash",
+          `if [ -e "${marker}" ]; then`,
+          `  cat <<'EOF'\n${afterOutput}\nEOF`,
+          "else",
+          `  cat <<'EOF'\n${beforeOutput}\nEOF`,
+          "fi",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(fakeBin, "lsof"), 0o755);
+    }
+
+    test("keeps a worktree whose process appeared while the re-check ran", () => {
+      writeLateProcess("p1\nn/", `p1\nn${path}`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("reports in use for a process that appeared while the re-check ran", () => {
+      writeLateProcess("p1\nn/", `p1\nn${path}`);
+
+      const result = run(["--apply"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/old): in use`);
+    });
+
     test("does not call lsof again in the dry run", () => {
       writeLsofChanging("p1\nn/", `p1\nn${path}`);
 
@@ -1605,6 +1657,28 @@ describe("worktree-prune.sh", () => {
         writeGh(`echo called >> "${calls}"\nsleep 1`);
         return calls;
       }
+
+      // `git status`の前に`seconds`秒眠る偽のgit。候補の間の処理が長い状況を作る。
+      function writeSlowStatusGit(seconds: number): void {
+        writeFileSync(
+          join(fakeBin, "git"),
+          `#!/usr/bin/env bash\nif [ "$3" = "status" ]; then sleep ${seconds}; fi\nexec "${requireBin("git")}" "$@"\n`,
+        );
+        chmodSync(join(fakeBin, "git"), 0o755);
+      }
+
+      test("--auto does not count the time between candidates against the gh limit", () => {
+        const calls = join(root, "gh-calls");
+        for (const n of [1, 2, 3]) {
+          addSquashWorktree(`feat-sq${n}`, `feat/sq${n}`);
+        }
+        writeGh(`echo called >> "${calls}"\nsleep 1`);
+        writeSlowStatusGit(5);
+
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "10" } });
+
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(3);
+      }, 60_000);
 
       test("--auto stops asking gh once the total time reaches the limit", () => {
         const calls = addSlowCandidates();
