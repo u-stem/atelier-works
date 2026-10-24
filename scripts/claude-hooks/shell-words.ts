@@ -1205,3 +1205,13 @@ class Parser {
     throw new ShellSyntaxError("unterminated backquote");
   }
 }
+
+/**
+ * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
+ * 暫定の実装で、常に空の配列を返す。
+ */
+export function literalShellInputs(
+  _command: SimpleCommand,
+): readonly string[] | null {
+  return [];
+}

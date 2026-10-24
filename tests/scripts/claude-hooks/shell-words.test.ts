@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CURRENT_BRANCH_SUBSTITUTIONS,
+  literalShellInputs,
   miseOptionTakesNext,
   parseCommandLine,
   scanMiseGlobalOptions,
@@ -728,5 +729,64 @@ describe("global options of mise", () => {
       words("mise", "--future", "v", "x", "--", "env"),
     );
     expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
+  });
+});
+
+/** 最後の単純コマンドに結び付いた、標準入力で渡る文字列を返す。 */
+function shellInputsOf(line: string): readonly string[] | null {
+  const result = parseCommandLine(line);
+  if (!result.ok) throw new Error(result.error);
+  const last = result.commands.at(-1);
+  if (last === undefined) throw new Error("no command");
+  return literalShellInputs(last);
+}
+
+describe("literalShellInputs", () => {
+  test("returns the body of a here-document", () => {
+    expect(shellInputsOf("sh <<'EOF'\ngh pr merge 1\nEOF\n")).toEqual([
+      "gh pr merge 1\n",
+    ]);
+  });
+
+  test("returns the text of a here-string", () => {
+    expect(shellInputsOf('sh <<< "gh pr merge 1"')).toEqual(["gh pr merge 1"]);
+  });
+
+  test("returns the text that echo writes", () => {
+    expect(shellInputsOf("echo 'gh pr merge 1' | sh")).toEqual([
+      "gh pr merge 1",
+    ]);
+  });
+
+  test("skips the options of echo", () => {
+    expect(shellInputsOf("echo -n 'gh pr merge 1' | sh")).toEqual([
+      "gh pr merge 1",
+    ]);
+  });
+
+  test("returns every argument that printf writes", () => {
+    expect(shellInputsOf("printf '%s\\n' 'a' | sh")).toEqual(["%s\n", "a"]);
+  });
+
+  test("turns a backslash n of echo into a newline", () => {
+    expect(shellInputsOf("echo 'a\\nb' | sh")).toEqual(["a\nb"]);
+  });
+
+  test("returns null when echo writes a variable", () => {
+    expect(shellInputsOf('echo "$X" | sh')).toBeNull();
+  });
+
+  test("returns nothing readable for a pipe from another program", () => {
+    expect(shellInputsOf("curl example.test | sh")).toEqual([]);
+  });
+
+  test("returns nothing without a pipe or an input", () => {
+    expect(shellInputsOf("sh")).toEqual([]);
+  });
+
+  test("looks through a wrapper before the echo", () => {
+    expect(shellInputsOf("env echo 'gh pr merge 1' | sh")).toEqual([
+      "gh pr merge 1",
+    ]);
   });
 });
