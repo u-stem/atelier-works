@@ -50,6 +50,8 @@ export type FreezeEntry = {
   readonly released_at: string | null;
 };
 
+export type DeployFreezeEntry = Omit<FreezeEntry, "target">;
+
 export type FreezeState = {
   readonly version: 1;
   readonly freezes: readonly FreezeEntry[];
@@ -420,4 +422,33 @@ export function sessionHolderFromBranch(branch: string): string {
   const cleaned = branch.trim().replace(/[^A-Za-z0-9._/-]/g, "-");
   const name = cleaned.length === 0 ? "detached" : cleaned;
   return `session:${name}`.slice(0, HOLDER_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// deployの保留
+// ---------------------------------------------------------------------------
+
+export const DEPLOY_FREEZE_MAX_TTL_MS = 0;
+
+export type DeployPlaceInput = {
+  readonly id: string;
+  readonly minutes: number;
+  readonly reason: string;
+  readonly holder_kind: FreezeHolderKind;
+  readonly holder: string;
+};
+
+export function activeDeployFreezes(
+  _state: FreezeState,
+  _now: Date,
+): readonly DeployFreezeEntry[] {
+  return [];
+}
+
+export function placeDeployFreeze(
+  _state: FreezeState,
+  _input: DeployPlaceInput,
+  _now: Date,
+): Outcome<FreezeState> {
+  return fail("not implemented");
 }

@@ -1,16 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import {
+  activeDeployFreezes,
   activeFreezes,
   buildExcludes,
+  DEPLOY_FREEZE_MAX_TTL_MS,
+  type DeployFreezeEntry,
   emptyFreezeState,
   endedFreezes,
   excludesArg,
+  FREEZE_ID_IN_USE,
+  FREEZE_MAX_ENTRIES,
   FREEZE_MAX_TTL_MS,
   type FreezeEntry,
   type FreezeState,
   isActive,
   parseFreezeState,
   parseWmillExcludes,
+  placeDeployFreeze,
   placeFreeze,
   releaseFreeze,
   removeFreezes,
@@ -46,7 +52,40 @@ function entry(overrides: Partial<FreezeEntry> = {}): FreezeEntry {
 }
 
 function state(...freezes: FreezeEntry[]): FreezeState {
-  return { version: 1, freezes };
+  return { version: 1, freezes, deploy_freezes: [] };
+}
+
+function deployEntry(
+  overrides: Partial<DeployFreezeEntry> = {},
+): DeployFreezeEntry {
+  return {
+    id: "d0a1b2c3",
+    reason: "migrate the database",
+    holder_kind: "session",
+    holder: "session:feat-x",
+    created_at: new Date(NOW.getTime() - HOUR).toISOString(),
+    expires_at: new Date(NOW.getTime() + HOUR).toISOString(),
+    released_at: null,
+    ...overrides,
+  };
+}
+
+function stateWith(
+  freezes: readonly FreezeEntry[],
+  deploy: readonly DeployFreezeEntry[],
+): FreezeState {
+  return { version: 1, freezes, deploy_freezes: deploy };
+}
+
+function deployInput(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "aaaa1111",
+    minutes: 60,
+    reason: "migrate the database",
+    holder_kind: "session" as const,
+    holder: "session:feat-x",
+    ...overrides,
+  };
 }
 
 function placeInput(overrides: Record<string, unknown> = {}) {
@@ -424,6 +463,468 @@ describe("removeFreezes", () => {
     ]);
 
     expect(next.freezes.map((e) => e.id)).toEqual(["bbbb2222"]);
+  });
+});
+
+describe("parseFreezeState with deploy_freezes", () => {
+  test("reads a variable without deploy_freezes as an empty list", () => {
+    const text = JSON.stringify({ version: 1, freezes: [entry()] });
+
+    const parsed = parseFreezeState(text);
+
+    expect(parsed.ok && parsed.value.deploy_freezes).toEqual([]);
+  });
+
+  test("reads a deploy freeze row", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [deployEntry()],
+    });
+
+    const parsed = parseFreezeState(text);
+
+    expect(parsed.ok && parsed.value.deploy_freezes).toEqual([deployEntry()]);
+  });
+
+  test("rejects deploy_freezes that is not an array", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: {},
+    });
+
+    expect(parseFreezeState(text).ok).toBe(false);
+  });
+
+  test("rejects a deploy freeze row that is malformed", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [deployEntry({ holder: "" })],
+    });
+
+    expect(parseFreezeState(text).ok).toBe(false);
+  });
+
+  test("rejects a deploy freeze row whose ttl exceeds the reader limit", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [
+        deployEntry({
+          created_at: NOW.toISOString(),
+          expires_at: new Date(
+            NOW.getTime() + FREEZE_MAX_TTL_MS + 1,
+          ).toISOString(),
+        }),
+      ],
+    });
+
+    expect(parseFreezeState(text).ok).toBe(false);
+  });
+
+  test("accepts a deploy freeze row longer than the placing limit", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [
+        deployEntry({
+          created_at: NOW.toISOString(),
+          expires_at: new Date(NOW.getTime() + 5 * HOUR).toISOString(),
+        }),
+      ],
+    });
+
+    expect(parseFreezeState(text).ok).toBe(true);
+  });
+
+  test("rejects an id used in both arrays", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [entry({ id: "d0a1b2c3" })],
+      deploy_freezes: [deployEntry()],
+    });
+
+    expect(parseFreezeState(text).ok).toBe(false);
+  });
+
+  test("rejects an id used twice in deploy_freezes", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [deployEntry(), deployEntry()],
+    });
+
+    expect(parseFreezeState(text).ok).toBe(false);
+  });
+
+  test("ignores a target key on a deploy freeze row", () => {
+    const text = JSON.stringify({
+      version: 1,
+      freezes: [],
+      deploy_freezes: [{ ...deployEntry(), target: "anything" }],
+    });
+
+    expect(parseFreezeState(text).ok).toBe(true);
+  });
+});
+
+describe("serializeFreezeState with deploy_freezes", () => {
+  test("omits the key when there are no deploy freezes", () => {
+    expect(serializeFreezeState(state(entry()))).not.toContain(
+      "deploy_freezes",
+    );
+  });
+
+  test("keeps the key when there is a deploy freeze", () => {
+    const text = serializeFreezeState(stateWith([], [deployEntry()]));
+
+    expect(text).toContain("deploy_freezes");
+  });
+
+  test("round-trips a state with a deploy freeze", () => {
+    const original = stateWith([entry()], [deployEntry()]);
+
+    expect(parseFreezeState(serializeFreezeState(original))).toEqual({
+      ok: true,
+      value: original,
+    });
+  });
+});
+
+describe("activeDeployFreezes", () => {
+  test("keeps only the live deploy freezes", () => {
+    const expired = deployEntry({
+      id: "bbbb2222",
+      expires_at: new Date(NOW.getTime() - 1).toISOString(),
+    });
+    const released = deployEntry({
+      id: "cccc3333",
+      released_at: new Date(NOW.getTime() - HOUR).toISOString(),
+    });
+
+    const live = activeDeployFreezes(
+      stateWith([], [expired, released, deployEntry()]),
+      NOW,
+    );
+
+    expect(live.map((e) => e.id)).toEqual(["d0a1b2c3"]);
+  });
+
+  test("does not count schedule freezes", () => {
+    expect(activeDeployFreezes(state(entry()), NOW)).toEqual([]);
+  });
+});
+
+describe("placeDeployFreeze", () => {
+  test("appends the entry with the expiry from the minutes", () => {
+    const result = placeDeployFreeze(emptyFreezeState(), deployInput(), NOW);
+
+    expect(result.ok && result.value.deploy_freezes[0]?.expires_at).toBe(
+      new Date(NOW.getTime() + HOUR).toISOString(),
+    );
+  });
+
+  test("limits the placing time to 120 minutes", () => {
+    expect(DEPLOY_FREEZE_MAX_TTL_MS).toBe(120 * 60_000);
+  });
+
+  test("accepts 120 minutes", () => {
+    expect(
+      placeDeployFreeze(emptyFreezeState(), deployInput({ minutes: 120 }), NOW)
+        .ok,
+    ).toBe(true);
+  });
+
+  test("rejects 121 minutes", () => {
+    expect(
+      placeDeployFreeze(emptyFreezeState(), deployInput({ minutes: 121 }), NOW)
+        .ok,
+    ).toBe(false);
+  });
+
+  test("rejects zero minutes", () => {
+    expect(
+      placeDeployFreeze(emptyFreezeState(), deployInput({ minutes: 0 }), NOW)
+        .ok,
+    ).toBe(false);
+  });
+
+  test("rejects fractional minutes", () => {
+    expect(
+      placeDeployFreeze(emptyFreezeState(), deployInput({ minutes: 1.5 }), NOW)
+        .ok,
+    ).toBe(false);
+  });
+
+  test("rejects an empty reason", () => {
+    expect(
+      placeDeployFreeze(emptyFreezeState(), deployInput({ reason: "" }), NOW)
+        .ok,
+    ).toBe(false);
+  });
+
+  test("rejects a second active freeze by the same holder", () => {
+    const current = stateWith([], [deployEntry()]);
+
+    expect(
+      placeDeployFreeze(current, deployInput({ id: "eeee5555" }), NOW).ok,
+    ).toBe(false);
+  });
+
+  test("lets another holder overlap an active deploy freeze", () => {
+    const current = stateWith([], [deployEntry()]);
+
+    const result = placeDeployFreeze(
+      current,
+      deployInput({ id: "eeee5555", holder: "session:other" }),
+      NOW,
+    );
+
+    expect(result.ok && result.value.deploy_freezes.length).toBe(2);
+  });
+
+  test("lets the same holder place again after the earlier one expired", () => {
+    const old = deployEntry({
+      expires_at: new Date(NOW.getTime() - 1).toISOString(),
+    });
+
+    expect(
+      placeDeployFreeze(
+        stateWith([], [old]),
+        deployInput({ id: "eeee5555" }),
+        NOW,
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("lets the same holder place again after the earlier one was released", () => {
+    const old = deployEntry({
+      released_at: new Date(NOW.getTime() - 1).toISOString(),
+    });
+
+    expect(
+      placeDeployFreeze(
+        stateWith([], [old]),
+        deployInput({ id: "eeee5555" }),
+        NOW,
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("treats a human and a session as different holders", () => {
+    const current = stateWith([], [deployEntry()]);
+
+    expect(
+      placeDeployFreeze(
+        current,
+        deployInput({
+          id: "eeee5555",
+          holder_kind: "human",
+          holder: "human",
+        }),
+        NOW,
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("reports an id used in deploy_freezes as in use", () => {
+    const result = placeDeployFreeze(
+      stateWith([], [deployEntry({ id: "aaaa1111" })]),
+      deployInput({ holder: "session:other" }),
+      NOW,
+    );
+
+    expect(!result.ok && result.reason).toBe(FREEZE_ID_IN_USE);
+  });
+
+  test("reports an id used in freezes as in use", () => {
+    const result = placeDeployFreeze(
+      state(entry({ id: "aaaa1111" })),
+      deployInput(),
+      NOW,
+    );
+
+    expect(!result.ok && result.reason).toBe(FREEZE_ID_IN_USE);
+  });
+
+  test("keeps the schedule freezes", () => {
+    const result = placeDeployFreeze(state(entry()), deployInput(), NOW);
+
+    expect(result.ok && result.value.freezes).toEqual([entry()]);
+  });
+
+  test("refuses when the two arrays together reach the limit", () => {
+    const schedule = Array.from({ length: FREEZE_MAX_ENTRIES - 1 }, (_, i) =>
+      entry({
+        id: `a000${i.toString(16).padStart(4, "0")}`,
+        target: `f/t${i}`,
+      }),
+    );
+    const current = stateWith(schedule, [deployEntry({ holder: "session:o" })]);
+
+    expect(placeDeployFreeze(current, deployInput(), NOW).ok).toBe(false);
+  });
+
+  test("drops deploy rows that ended more than a day ago", () => {
+    const stale = deployEntry({
+      id: "bbbb2222",
+      holder: "session:old",
+      created_at: new Date(NOW.getTime() - 40 * HOUR).toISOString(),
+      expires_at: new Date(NOW.getTime() - 30 * HOUR).toISOString(),
+    });
+
+    const result = placeDeployFreeze(
+      stateWith([], [stale]),
+      deployInput(),
+      NOW,
+    );
+
+    expect(result.ok && result.value.deploy_freezes.map((e) => e.id)).toEqual([
+      "aaaa1111",
+    ]);
+  });
+});
+
+describe("state transitions keep deploy_freezes", () => {
+  const withDeploy = stateWith([entry()], [deployEntry()]);
+
+  test("placeFreeze keeps the deploy rows", () => {
+    const result = placeFreeze(
+      withDeploy,
+      placeInput({ target: "f/factory/poll_issues", id: "eeee5555" }),
+      KNOWN,
+      NOW,
+    );
+
+    expect(result.ok && result.value.deploy_freezes).toEqual([deployEntry()]);
+  });
+
+  test("placeFreeze refuses an id used by a deploy row", () => {
+    const result = placeFreeze(
+      withDeploy,
+      placeInput({ target: "f/factory/poll_issues", id: "d0a1b2c3" }),
+      KNOWN,
+      NOW,
+    );
+
+    expect(!result.ok && result.reason).toBe(FREEZE_ID_IN_USE);
+  });
+
+  test("placeFreeze counts the deploy rows toward the limit", () => {
+    const deploy = Array.from({ length: FREEZE_MAX_ENTRIES }, (_, i) =>
+      deployEntry({
+        id: `b000${i.toString(16).padStart(4, "0")}`,
+        holder: `session:h${i}`,
+      }),
+    );
+
+    const result = placeFreeze(
+      stateWith([], deploy),
+      placeInput({ id: "eeee5555" }),
+      KNOWN,
+      NOW,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  test("placeFreeze drops deploy rows that ended more than a day ago", () => {
+    const stale = deployEntry({
+      created_at: new Date(NOW.getTime() - 40 * HOUR).toISOString(),
+      expires_at: new Date(NOW.getTime() - 30 * HOUR).toISOString(),
+    });
+
+    const result = placeFreeze(
+      stateWith([], [stale]),
+      placeInput({ id: "eeee5555" }),
+      KNOWN,
+      NOW,
+    );
+
+    expect(result.ok && result.value.deploy_freezes).toEqual([]);
+  });
+
+  test("releaseFreeze keeps the deploy rows", () => {
+    const result = releaseFreeze(
+      withDeploy,
+      "0a1b2c3d",
+      { kind: "human", holder: "human" },
+      NOW,
+    );
+
+    expect(result.ok && result.value.deploy_freezes).toEqual([deployEntry()]);
+  });
+
+  test("removeFreezes keeps the deploy rows", () => {
+    expect(removeFreezes(withDeploy, ["0a1b2c3d"]).deploy_freezes).toEqual([
+      deployEntry(),
+    ]);
+  });
+});
+
+describe("releaseFreeze for a deploy freeze", () => {
+  const current = stateWith([], [deployEntry()]);
+
+  test("lets a human release it", () => {
+    const result = releaseFreeze(
+      current,
+      "d0a1b2c3",
+      { kind: "human", holder: "human" },
+      NOW,
+    );
+
+    expect(result.ok && result.value.deploy_freezes[0]?.released_at).toBe(
+      NOW.toISOString(),
+    );
+  });
+
+  test("lets a session release its own", () => {
+    expect(
+      releaseFreeze(
+        current,
+        "d0a1b2c3",
+        { kind: "session", holder: "session:feat-x" },
+        NOW,
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("refuses a session releasing another holder's", () => {
+    expect(
+      releaseFreeze(
+        current,
+        "d0a1b2c3",
+        { kind: "session", holder: "session:other" },
+        NOW,
+      ).ok,
+    ).toBe(false);
+  });
+
+  test("refuses one that is no longer active", () => {
+    const old = stateWith(
+      [],
+      [deployEntry({ expires_at: new Date(NOW.getTime() - 1).toISOString() })],
+    );
+
+    expect(
+      releaseFreeze(old, "d0a1b2c3", { kind: "human", holder: "human" }, NOW)
+        .ok,
+    ).toBe(false);
+  });
+
+  test("keeps the schedule freezes", () => {
+    const both = stateWith([entry()], [deployEntry()]);
+
+    const result = releaseFreeze(
+      both,
+      "d0a1b2c3",
+      { kind: "human", holder: "human" },
+      NOW,
+    );
+
+    expect(result.ok && result.value.freezes).toEqual([entry()]);
   });
 });
 
