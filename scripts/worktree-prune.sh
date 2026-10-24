@@ -281,10 +281,83 @@ read_failures() {
   fi
 }
 
+# `gh`の時間の上限(秒)。`timeout`はmacOSに無いので、別のプロセスグループで動かして自分で測る。
+# 環境変数は、1以上30以下の数字のときだけ使う。延ばせないのは、無人の実行が
+# 10分のロックの期限を超えないようにするため。短くするのはテスト用。
+gh_limit=30
+if [[ "${WORKTREE_PRUNE_GH_TIMEOUT-}" =~ ^[0-9]{1,2}$ ]]; then
+  gh_limit_env=$((10#$WORKTREE_PRUNE_GH_TIMEOUT))
+  if [ "$gh_limit_env" -ge 1 ] && [ "$gh_limit_env" -le 30 ]; then
+    gh_limit="$gh_limit_env"
+  fi
+fi
+
+gh_pid=""
+gh_out=""
+gh_out_file=""
+# 1件でも時間切れになったら、その実行の残りの候補はghに聞かずに打ち切る。
+gh_timed_out=0
+gh_asked=0
+gh_unavailable=0
+
+# 動いているghを、プロセスグループごと止める。
+stop_gh() {
+  if [ -n "$gh_pid" ]; then
+    kill -TERM -- "-$gh_pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$gh_pid" 2>/dev/null || true
+    wait "$gh_pid" 2>/dev/null || true
+    gh_pid=""
+  fi
+}
+
+# `wt_branch`のマージ済みPRの先頭のcommitを`gh_out`に入れる。成功なら0を返す。
+# --autoでは、時間の上限を課す。上限を超えたらプロセスグループごと止めて、1を返す。
+ask_gh() {
+  local waited=0 status=0
+  gh_out=""
+  if [ "$auto" -ne 1 ]; then
+    gh_out="$(gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || status=$?
+    return "$status"
+  fi
+  if [ "$gh_timed_out" -eq 1 ]; then
+    return 1
+  fi
+  gh_out_file="$(mktemp "$state_dir/.tmp.XXXXXX")" || return 1
+  set -m
+  gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' \
+    >"$gh_out_file" 2>/dev/null </dev/null &
+  gh_pid=$!
+  set +m
+  while kill -0 "$gh_pid" 2>/dev/null; do
+    if [ "$waited" -ge "$gh_limit" ]; then
+      gh_timed_out=1
+      stop_gh
+      rm -f -- "$gh_out_file"
+      gh_out_file=""
+      return 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$gh_pid" || status=$?
+  gh_pid=""
+  if [ "$status" -eq 0 ]; then
+    gh_out="$(cat -- "$gh_out_file")"
+  fi
+  rm -f -- "$gh_out_file"
+  gh_out_file=""
+  return "$status"
+}
+
 # --autoの終了時の後始末。終了コードは常に0にする。
 auto_cleanup() {
   trap '' INT TERM
   trap - EXIT
+  stop_gh
+  if [ -n "$gh_out_file" ]; then
+    rm -f -- "$gh_out_file"
+  fi
   release_lock
   exit 0
 }
@@ -321,7 +394,7 @@ if [ "$auto" -eq 1 ]; then
     exit 0
   fi
   write_state "$failures_file" "$(($(read_failures) + 1))" || true
-  log_line "start"
+  log_line "start (gh time limit ${gh_limit}s)"
 fi
 
 # lsofの実行ファイル。`WORKTREE_PRUNE_LSOF`は差し替える(テスト用)。
@@ -568,9 +641,9 @@ consider() {
     how="ancestor of origin/main"
     reach_target="refs/remotes/origin/main"
   else
-    local gh_status=0 gh_out=""
-    gh_out="$(gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || gh_status=$?
-    if [ "$gh_status" -ne 0 ]; then
+    gh_asked=$((gh_asked + 1))
+    if ! ask_gh; then
+      gh_unavailable=$((gh_unavailable + 1))
       keep "gh unavailable"
       return
     fi
@@ -640,6 +713,11 @@ while IFS= read -r line; do
       ;;
   esac
 done <<<"$list"$'\n'
+
+# マージ済みかもしれない候補が、すべてghに聞けずに残ったときは、失敗として数える。
+if [ "$auto" -eq 1 ] && [ "$gh_asked" -gt 0 ] && [ "$gh_unavailable" -eq "$gh_asked" ]; then
+  fail_run "gh was unavailable for every candidate that might be merged"
+fi
 
 if [ "$apply" -eq 1 ]; then
   emit "removed $removed, kept $kept"
