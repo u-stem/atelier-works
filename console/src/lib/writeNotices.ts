@@ -1,10 +1,13 @@
 // 書き込みが成功したときに画面へ出す知らせ(トースト)の文。
 // 失敗の文は`describeWriteFailure`が作るので、ここでは作らない。
 
+import type { WriteOutcome } from "../api/executeWrite.ts";
 import type {
   ApprovalDecideResult,
   AuditKickoffResult,
   AuditSkipReason,
+  FreezeReleaseResult,
+  HoldReleaseResult,
   NoticeResolveResult,
   RetryWorkItemResult,
 } from "../api/guards/writeResults.ts";
@@ -86,4 +89,29 @@ export function describeNoticeResult(result: NoticeResolveResult): WriteNotice {
         ? "解決済みにしました。"
         : "すでに解決済みです。",
   };
+}
+
+/** 解除の結果を知らせるトーストの文。失敗を含む。 */
+export type ReleaseNotice = {
+  readonly tone: "success" | "info" | "warning" | "error";
+  readonly message: string;
+};
+
+export function describeHoldReleaseResult(
+  _result: HoldReleaseResult,
+): WriteNotice {
+  return { tone: "info", message: "" };
+}
+
+export function describeFreezeReleaseResult(
+  _result: FreezeReleaseResult,
+): WriteNotice {
+  return { tone: "info", message: "" };
+}
+
+export function releaseNotice<T>(
+  _outcome: WriteOutcome<T>,
+  _describe: (result: T) => WriteNotice,
+): ReleaseNotice {
+  return { tone: "info", message: "" };
 }

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isFreezeReleaseResult,
+  isHoldReleaseResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
@@ -186,5 +188,119 @@ describe("isManualIntakeSubmitResult", () => {
 
   test("rejects null", () => {
     expect(isManualIntakeSubmitResult(null)).toBe(false);
+  });
+});
+
+describe("isHoldReleaseResult", () => {
+  const RELEASED = {
+    ok: true,
+    status: "released",
+    hold_id: 12,
+    was_active: true,
+    audit: "recorded",
+  };
+
+  test("accepts a release with its audit", () => {
+    expect(isHoldReleaseResult(RELEASED)).toBe(true);
+  });
+
+  test("accepts a release whose audit failed", () => {
+    expect(isHoldReleaseResult({ ...RELEASED, audit: "failed" })).toBe(true);
+  });
+
+  test("accepts a release without an audit, as for an expired row", () => {
+    const { audit: _omitted, ...rest } = RELEASED;
+    expect(isHoldReleaseResult({ ...rest, was_active: false })).toBe(true);
+  });
+
+  test("accepts a hold that was already released", () => {
+    expect(
+      isHoldReleaseResult({
+        ok: true,
+        status: "already_released",
+        hold_id: 12,
+        was_active: false,
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects an unknown status", () => {
+    expect(isHoldReleaseResult({ ...RELEASED, status: "gone" })).toBe(false);
+  });
+
+  test("rejects a result without was_active", () => {
+    const { was_active: _omitted, ...rest } = RELEASED;
+    expect(isHoldReleaseResult(rest)).toBe(false);
+  });
+
+  test("rejects a zero hold id", () => {
+    expect(isHoldReleaseResult({ ...RELEASED, hold_id: 0 })).toBe(false);
+  });
+
+  test("rejects an unknown audit", () => {
+    expect(isHoldReleaseResult({ ...RELEASED, audit: "maybe" })).toBe(false);
+  });
+
+  test("rejects ok false", () => {
+    expect(isHoldReleaseResult({ ...RELEASED, ok: false })).toBe(false);
+  });
+});
+
+describe("isFreezeReleaseResult", () => {
+  const RELEASED = {
+    ok: true,
+    status: "released",
+    freeze_id: "0a1b2c3d",
+    scope: "schedule",
+    audit: "recorded",
+  };
+
+  test("accepts a release of a schedule freeze", () => {
+    expect(isFreezeReleaseResult(RELEASED)).toBe(true);
+  });
+
+  test("accepts a release of a deploy freeze", () => {
+    expect(isFreezeReleaseResult({ ...RELEASED, scope: "deploy" })).toBe(true);
+  });
+
+  test("accepts a freeze that already ended", () => {
+    expect(
+      isFreezeReleaseResult({
+        ok: true,
+        status: "already_ended",
+        freeze_id: "0a1b2c3d",
+      }),
+    ).toBe(true);
+  });
+
+  test("accepts a release that could not be confirmed", () => {
+    expect(
+      isFreezeReleaseResult({
+        ok: true,
+        status: "unconfirmed",
+        freeze_id: "0a1b2c3d",
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a result without the freeze id", () => {
+    const { freeze_id: _omitted, ...rest } = RELEASED;
+    expect(isFreezeReleaseResult(rest)).toBe(false);
+  });
+
+  test("rejects an unknown status", () => {
+    expect(isFreezeReleaseResult({ ...RELEASED, status: "gone" })).toBe(false);
+  });
+
+  test("rejects an unknown scope", () => {
+    expect(isFreezeReleaseResult({ ...RELEASED, scope: "all" })).toBe(false);
+  });
+
+  test("rejects an unknown audit", () => {
+    expect(isFreezeReleaseResult({ ...RELEASED, audit: "maybe" })).toBe(false);
+  });
+
+  test("rejects a numeric freeze id", () => {
+    expect(isFreezeReleaseResult({ ...RELEASED, freeze_id: 3 })).toBe(false);
   });
 });

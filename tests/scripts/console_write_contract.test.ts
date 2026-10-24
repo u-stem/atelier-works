@@ -10,8 +10,12 @@ import { Glob } from "bun";
 import {
   AUDIT_SKIP_REASONS,
   type AuditSkipReason,
+  type FreezeReleaseResult,
+  type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isFreezeReleaseResult,
+  isHoldReleaseResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
@@ -30,10 +34,13 @@ import * as consoleWrites from "../../console/src/api/writes.ts";
 import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
+import * as freezeRelease from "../../f/factory/freeze_release.ts";
+import * as holdRelease from "../../f/factory/hold_release.ts";
 import {
   type AuditKickoffSkip,
   decideAuditKickoff,
 } from "../../f/factory/lib/audit_support.ts";
+import type { HoldRow, Outcome } from "../../f/factory/lib/holds.ts";
 import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.ts";
 import type { Notice } from "../../f/factory/lib/types.ts";
 import * as manualIntakeSubmit from "../../f/factory/manual_intake_submit.ts";
@@ -45,7 +52,9 @@ type WriteScript =
   | "retry_work_item"
   | "audit_kickoff"
   | "manual_intake_submit"
-  | "notice_resolve";
+  | "notice_resolve"
+  | "hold_release"
+  | "freeze_release";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -53,6 +62,8 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "audit_kickoff",
   "manual_intake_submit",
   "notice_resolve",
+  "hold_release",
+  "freeze_release",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -121,13 +132,24 @@ const WRAPPER_CALLS: Readonly<
       { fetchFn },
     ),
   notice_resolve: (fetchFn) => consoleWrites.resolveNotice(4, { fetchFn }),
+  hold_release: (fetchFn) => consoleWrites.releaseHold(12, { fetchFn }),
+  freeze_release: (fetchFn) =>
+    consoleWrites.releaseFreeze("0a1b2c3d", { fetchFn }),
 };
 
 describe("allowlist", () => {
-  test("holds the query and the five write scripts", () => {
+  test("holds the two read scripts and the seven write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
-      ["console_query", ...WRITE_SCRIPTS].sort(),
+      ["console_query", "console_holds", ...WRITE_SCRIPTS].sort(),
     );
+  });
+
+  test("has no way to place a hold", () => {
+    expect(
+      [...Object.keys(SCRIPT_PATHS), ...Object.values(SCRIPT_PATHS)].filter(
+        (text) => /place/i.test(text),
+      ),
+    ).toEqual([]);
   });
 
   test.each(Object.entries(SCRIPT_PATHS))(
@@ -211,6 +233,21 @@ describe("what the typed calls send", () => {
   test("notice_resolve has no input that names the resolver", async () => {
     const { properties } = await schemaOf(SCRIPT_PATHS.notice_resolve);
     expect(properties).toEqual(["notice_id"]);
+  });
+
+  test("hold_release has no input that names the releaser", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.hold_release);
+    expect(properties).toEqual(["hold_id"]);
+  });
+
+  test("freeze_release has no input that names the releaser", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.freeze_release);
+    expect(properties).toEqual(["freeze_id"]);
+  });
+
+  test("console_holds takes no input", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_holds);
+    expect(properties).toEqual([]);
   });
 
   test("manual_intake_submit has no input that names the actor", async () => {
@@ -404,6 +441,137 @@ describe("what the scripts return", () => {
     );
   });
 
+  const ACTIVE_HOLD: HoldRow = {
+    id: 12,
+    scope: "merge",
+    target: "octo/repo",
+    reason: "r",
+    holder_kind: "session",
+    holder: "session:x",
+    created_at: "2026-10-24T02:00:00.000Z",
+    expires_at: "2026-10-24T04:00:00.000Z",
+    released_at: null,
+    released_by: null,
+  };
+
+  function holdDeps(
+    active: readonly HoldRow[],
+    release: Outcome<{ readonly id: number }>,
+    noticeFails = false,
+  ): holdRelease.HoldReleaseDeps {
+    return {
+      deriveApprover: () => "operator",
+      listActiveHolds: () => Promise.resolve({ ok: true, value: active }),
+      releaseHold: () => Promise.resolve(release),
+      addNotice: () =>
+        noticeFails ? Promise.reject(new Error("down")) : Promise.resolve(1),
+      now: () => new Date("2026-10-24T03:00:00.000Z"),
+      warn: () => undefined,
+    };
+  }
+
+  test.each([
+    ["released", [ACTIVE_HOLD], { ok: true, value: { id: 12 } }, false],
+    [
+      "released with a failed audit",
+      [ACTIVE_HOLD],
+      { ok: true, value: { id: 12 } },
+      true,
+    ],
+    [
+      "released from an expired row",
+      [],
+      { ok: true, value: { id: 12 } },
+      false,
+    ],
+    [
+      "already released",
+      [ACTIVE_HOLD],
+      { ok: false, reason: holdRelease.ALREADY_RELEASED_REASON },
+      false,
+    ],
+  ] as const)(
+    "hold_release's result for %s passes the guard",
+    async (_name, active, release, noticeFails) => {
+      const result = await holdRelease.releaseHoldFromConsole(
+        12,
+        holdDeps(active, release, noticeFails),
+      );
+      expect(isHoldReleaseResult(JSON.parse(JSON.stringify(result)))).toBe(
+        true,
+      );
+    },
+  );
+
+  function freezeDeps(
+    variable: string | null,
+  ): freezeRelease.FreezeReleaseDeps {
+    let value = variable;
+    return {
+      deriveApprover: () => "operator",
+      ports: {
+        readVariable: () => Promise.resolve(value),
+        writeVariable: (next) => {
+          value = next;
+          return Promise.resolve();
+        },
+        now: () => new Date("2026-10-24T03:00:00.000Z"),
+      },
+      addNotice: () => Promise.resolve(1),
+      warn: () => undefined,
+    };
+  }
+
+  const FREEZE_VARIABLE = JSON.stringify({
+    version: 1,
+    freezes: [
+      {
+        id: "0a1b2c3d",
+        target: "f/factory/poll_issues",
+        reason: "r",
+        holder_kind: "session",
+        holder: "session:x",
+        created_at: "2026-10-24T02:00:00.000Z",
+        expires_at: "2026-10-24T04:00:00.000Z",
+        released_at: null,
+      },
+    ],
+  });
+
+  test("freeze_release's result for a release passes the guard", async () => {
+    const result = await freezeRelease.releaseFreezeFromConsole(
+      "0a1b2c3d",
+      freezeDeps(FREEZE_VARIABLE),
+    );
+    expect(isFreezeReleaseResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("freeze_release's result for a row that ended passes the guard", async () => {
+    const result = await freezeRelease.releaseFreezeFromConsole(
+      "0a1b2c3d",
+      freezeDeps(null),
+    );
+    expect(isFreezeReleaseResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test("freeze_release's result for a release that could not be confirmed passes the guard", async () => {
+    const deps = freezeDeps(FREEZE_VARIABLE);
+    const result = await freezeRelease.releaseFreezeFromConsole("0a1b2c3d", {
+      ...deps,
+      ports: {
+        ...deps.ports,
+        writeVariable: () => Promise.resolve(),
+      },
+    });
+    expect(isFreezeReleaseResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
   test("a started audit passes the guard", () => {
     const started: auditKickoff.AuditKickoffResult = {
       skipped: false,
@@ -448,6 +616,17 @@ describe("types", () => {
 
   test("the console notice result is the backend notice result", () => {
     const equal: Equal<NoticeResolveResult, noticeResolve.NoticeResolveResult> =
+      true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console hold release result is the backend result", () => {
+    const equal: Equal<HoldReleaseResult, holdRelease.HoldReleaseResult> = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console freeze release result is the backend result", () => {
+    const equal: Equal<FreezeReleaseResult, freezeRelease.FreezeReleaseResult> =
       true;
     expect(equal).toBe(true);
   });
@@ -540,5 +719,36 @@ describe("api boundary", () => {
       if (reexport) offenders.push(file);
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+// Consoleの解除scriptの名前は、許可リストと、その結果を型と関数に結ぶ少数のファイルだけに出る。
+// 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
+describe("console release script names", () => {
+  const NAME =
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release)(?![A-Za-z0-9_])/;
+  const MAY_NAME_THEM = [
+    "console/src/api/windmill.ts",
+    "console/src/api/writes.ts",
+    "console/src/api/guards/writeResults.ts",
+  ];
+
+  test("only the allowlist and the typed writes name them", async () => {
+    const offenders: string[] = [];
+    for await (const file of new Glob("console/src/**/*.{ts,tsx}").scan(".")) {
+      if (isTestFile(file) || MAY_NAME_THEM.includes(file)) continue;
+      if (NAME.test(await Bun.file(file).text())) offenders.push(file);
+    }
+    expect(offenders.sort()).toEqual([]);
+  });
+
+  test("the allowlist names them", async () => {
+    expect(
+      NAME.test(await Bun.file("console/src/api/windmill.ts").text()),
+    ).toBe(true);
+  });
+
+  test("does not take the notice kind for the name", () => {
+    expect(NAME.test("hold_released")).toBe(false);
   });
 });

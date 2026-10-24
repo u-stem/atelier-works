@@ -164,3 +164,31 @@ export function isManualIntakeSubmitResult(
   }
   return value.refused === false && isString(value.flow_job_id);
 }
+
+export type HoldReleaseResult = {
+  readonly ok: true;
+  readonly status: "released" | "already_released";
+  readonly hold_id: number;
+  readonly was_active: boolean;
+  readonly audit?: "recorded" | "failed";
+};
+
+export function isHoldReleaseResult(
+  _value: unknown,
+): _value is HoldReleaseResult {
+  return false;
+}
+
+export type FreezeReleaseResult = {
+  readonly ok: true;
+  readonly status: "released" | "already_ended" | "unconfirmed";
+  readonly freeze_id: string;
+  readonly scope?: "schedule" | "deploy";
+  readonly audit?: "recorded" | "failed";
+};
+
+export function isFreezeReleaseResult(
+  _value: unknown,
+): _value is FreezeReleaseResult {
+  return false;
+}

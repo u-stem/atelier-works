@@ -176,3 +176,11 @@ export function workItemRef(workItemId: number): string {
 export function attemptRef(attempt: number): string {
   return `試行 ${attempt}`;
 }
+
+export function holdScopeLabel(_scope: string): string {
+  return "";
+}
+
+export function holderKindLabel(_kind: string): string {
+  return "";
+}

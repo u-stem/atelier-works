@@ -13,6 +13,8 @@ import type { Guard } from "./guards/primitives.ts";
 import {
   type ApprovalDecideResult,
   type AuditKickoffResult,
+  type FreezeReleaseResult,
+  type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
   isManualIntakeSubmitResult,
@@ -165,4 +167,27 @@ export function submitManualIntake(
     isManualIntakeSubmitResult,
     options,
   );
+}
+
+export function releaseHold(
+  holdId: number,
+  _options: RunScriptOptions = {},
+): Promise<HoldReleaseResult> {
+  return Promise.resolve({
+    ok: true,
+    status: "already_released",
+    hold_id: holdId,
+    was_active: false,
+  });
+}
+
+export function releaseFreeze(
+  freezeId: string,
+  _options: RunScriptOptions = {},
+): Promise<FreezeReleaseResult> {
+  return Promise.resolve({
+    ok: true,
+    status: "already_ended",
+    freeze_id: freezeId,
+  });
 }

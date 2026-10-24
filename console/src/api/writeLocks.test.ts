@@ -308,3 +308,17 @@ describe("writeTargetKey", () => {
     expect(AUDIT_WRITE_KEY).toBe("audit");
   });
 });
+
+describe("writeTargetKey", () => {
+  test("keys a hold by its numeric id", () => {
+    expect(writeTargetKey("hold", 12)).toBe("hold:12");
+  });
+
+  test("keys a freeze by its string id", () => {
+    expect(writeTargetKey("freeze", "0a1b2c3d")).toBe("freeze:0a1b2c3d");
+  });
+
+  test("keeps a hold and a freeze apart even when the ids read the same", () => {
+    expect(writeTargetKey("hold", 12)).not.toBe(writeTargetKey("freeze", "12"));
+  });
+});
