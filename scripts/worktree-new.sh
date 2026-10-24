@@ -10,6 +10,9 @@
 # 既にブランチ(ローカルとorigin)かディレクトリがあれば、何も変えずに非ゼロで終わる。
 # ただしフックは、登録済みで期待するブランチのworktreeが既にあれば、依存を入れ直して再利用し、
 # ブランチだけがあってディレクトリが無ければ、そのブランチをチェックアウトして使う。
+# 新しいworktreeを作れたときは、`worktree-prune.sh --auto`をバックグラウンドで起動して、
+# マージ済みのworktreeを片付ける(既存を再利用したときは起動しない)。
+# 環境変数`WORKTREE_AUTO_PRUNE`が未設定か`1`のときだけ起動する。止めるには`0`にする。
 set -euo pipefail
 
 usage() {
@@ -24,7 +27,12 @@ types='feat|fix|docs|refactor|test|chore'
 # 消えているディレクトリから呼ばれたときは空になり、起動のときにメインのcheckoutで代える。
 caller_dir="$(pwd -P 2>/dev/null)" || caller_dir=""
 # 相対パスで呼ばれても、後のcdで見失わないよう、このスクリプトのあるディレクトリを控える。
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# PATHが空でも先の検査(jqの有無など)の報告まで届くよう、外部コマンドを使わず、失敗しても止めない。
+script_dir="."
+case "${BASH_SOURCE[0]}" in
+  */*) script_dir="${BASH_SOURCE[0]%/*}" ;;
+esac
+script_dir="$(cd "$script_dir" 2>/dev/null && pwd -P)" || script_dir=""
 hook=0
 hook_cwd=""
 # 追加のgitの引数。フックのときだけ、通信の待ちを制限する。
