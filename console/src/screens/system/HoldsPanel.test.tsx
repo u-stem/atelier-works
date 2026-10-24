@@ -148,6 +148,11 @@ describe("HoldsPanel release buttons", () => {
     expect(render(FULL, { now: later })).toContain("期限切れ");
   });
 
+  test("shows the time of an expired hold, not a countdown that repeats the word", () => {
+    const later = Date.parse("2026-10-24T04:00:01.000Z");
+    expect(render(FULL, { now: later })).not.toContain(">期限切れ</time>");
+  });
+
   test("disables the button of a row that is being released", () => {
     expect(render(FULL, { locked: ["hold:7"] })).toMatch(
       /<button(?=[^>]*data-release="hold:7")(?=[^>]*\sdisabled="")[^>]*>/,

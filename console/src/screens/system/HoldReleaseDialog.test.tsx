@@ -103,6 +103,10 @@ describe("HoldReleaseDialog body", () => {
     expect(render(MERGE_ITEM)).toContain("id 12");
   });
 
+  test("does not give the id a row of its own that repeats the word id", () => {
+    expect(render(MERGE_ITEM)).not.toContain(">id</dt>");
+  });
+
   test("shows the id of a freeze", () => {
     expect(render(SCHEDULE_ITEM)).toContain("id 0a1b2c3d");
   });
