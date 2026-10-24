@@ -550,3 +550,69 @@ describe("more shells", () => {
     ]);
   });
 });
+
+describe("ANSI-C quoted words", () => {
+  test.each([
+    ["echo $'a\\x62c'", "abc"],
+    ["echo $'a\\x6z'", "a\u0006z"],
+    ["echo $'a\\142c'", "abc"],
+    ["echo $'a\\0c'", "ac"],
+    ["echo $'a\\u0062c'", "abc"],
+    ["echo $'a\\U00000062c'", "abc"],
+    ["echo $'a\\u3042c'", "aあc"],
+    ["echo $'a\\nb'", "a\nb"],
+    ["echo $'a\\tb'", "a\tb"],
+    ["echo $'a\\eb'", "a\u001bb"],
+    ["echo $'a\\\\b'", "a\\b"],
+    ["echo $'a\\'b'", "a'b"],
+    ["echo $'a\\\"b'", 'a"b'],
+    ["echo $'a\\qb'", "a\\qb"],
+    ["echo $'a\\x00b'", "ab"],
+  ])("%s expands to one word", (line, expected) => {
+    expect(commandTexts(line)).toEqual([["echo", expected]]);
+  });
+
+  test("keeps a word that joins an escape with plain text", () => {
+    expect(commandTexts("echo pre$'\\x66'ix")).toEqual([["echo", "prefix"]]);
+  });
+});
+
+describe("stripWrappers with global options of mise", () => {
+  test.each([
+    ["-q"],
+    ["-v"],
+    ["-vv"],
+    ["-y"],
+    ["-qy"],
+    ["--quiet"],
+    ["--no-config"],
+    ["--cd=/repo"],
+    ["-C", "/repo"],
+    ["--cd", "/repo"],
+    ["-E", "ci"],
+    ["--env", "ci"],
+    ["-P", "dev"],
+    ["-qC", "/repo"],
+    ["-q", "-C", "/repo", "-E", "ci"],
+  ])("reads the command that follows mise %p exec --", (...options) => {
+    const stripped = stripWrappers(
+      words("mise", ...options, "exec", "--", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("reads the command of x with a global option", () => {
+    const stripped = stripWrappers(words("mise", "-q", "x", "--", "env"));
+    expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
+  });
+
+  test("leaves mise alone when run follows the global options", () => {
+    const stripped = stripWrappers(words("mise", "-q", "run", "check"));
+    expect(stripped.words.map((word) => word.text)).toEqual([
+      "mise",
+      "-q",
+      "run",
+      "check",
+    ]);
+  });
+});
