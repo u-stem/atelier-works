@@ -163,9 +163,9 @@ describe("noticeGuide", () => {
     );
   });
 
-  test("tells that the unreadable notice does not resolve by itself", () => {
+  test("tells that the unreadable notice resolves by itself", () => {
     expect(noticeGuide("dependabot_merge_hold_unreadable").note).toContain(
-      "人が解決",
+      "自動で解決",
     );
   });
 

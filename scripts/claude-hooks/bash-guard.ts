@@ -11,7 +11,7 @@
 // - `--no-verify`、`git commit -n`: lefthookの検査が落ちたとき、直さずに迂回する。
 // - `core.hooksPath`、`LEFTHOOK*`、`GIT_CONFIG_*`、`include.*`、`.git/hooks`と`.git/config`の書き換え: 同じ迂回を、設定の裏から行う。
 // - `remote.*.push`、`push.default`、`alias.*`: pushの行き先や中身を、別の名前や設定に隠す。
-// - `mise generate`の`git-pre-commit --write`、`--hook`、`github-action --write`: 同じフックとワークフローを、生成の書き込みで上書きする。
+// - `mise generate`の`git-pre-commit --write`と`github-action --write`: 同じフックとワークフローを、生成の書き込みで上書きする。
 // - xargsや標準入力から渡すgit push、シェルのコード: 渡された引数やコードを判定できないまま実行する。
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
 // - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
@@ -408,7 +408,7 @@ export const REASONS = {
   shellStdin:
     "Shell code built from variables and passed through stdin cannot be checked. Pass literal text (echo 'git status' | sh), use sh -c '...', or run a script file.",
   miseGenerate:
-    "mise generate git-pre-commit with --write or --hook writes into .git/hooks, and mise generate github-action with --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Print to stdout (without those options) and review the output instead.",
+    "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
   subagentHold:
     "Subagents must not place or release holds: a hold stops merges, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place or mise run hold:release. Listing with mise run hold:list is fine.",
 } as const;
@@ -777,13 +777,22 @@ function touchesGitInternals(
   return args.some((word) => GIT_INTERNALS.test(word.text));
 }
 
-/** `mise generate git-pre-commit`が、フックのファイルへ書くオプション。 */
-const GENERATE_HOOK_WRITE_OPTIONS = /^(--write|-w|--hook(=.*)?|-t)$/;
+/** `mise generate`の別名。 */
+const GENERATE_NAMES: ReadonlySet<string> = new Set(["generate", "gen", "g"]);
+
+/** ファイルへ書く`--write`を持つ生成先。`pre-commit`は`git-pre-commit`の別名である。 */
+const GENERATE_WRITABLE_TARGETS: ReadonlySet<string> = new Set([
+  "git-pre-commit",
+  "pre-commit",
+  "github-action",
+]);
 
 /**
- * `mise generate git-pre-commit`の`--write`と`--hook`は`.git/hooks`へ、
+ * `mise generate git-pre-commit`の`--write`は`.git/hooks`へ、
  * `mise generate github-action`の`--write`は`.github/workflows`へ書く。
- * 書き込み先は字面で決まるので、この形だけを拒否する。標準出力へ出す形は拒否しない。
+ * `--write`(`-w`)だけが書く。`--hook`と`-t`(`--task`)は、書く先や中身を選ぶだけで、単独では書かない(実機で確かめた)。
+ * 短いフラグの束(`-wt`、`-wn`)は、`w`を含めば書く形として拒否する。
+ * 標準出力へ出す形は拒否しない。
  */
 function writesGeneratedFiles(
   program: string,
@@ -791,22 +800,16 @@ function writesGeneratedFiles(
 ): boolean {
   if (program !== "mise") return false;
   const args = words.slice(1);
-  const generate = args.findIndex(
-    (word) => word.text === "generate" || word.text === "g",
-  );
+  const generate = args.findIndex((word) => GENERATE_NAMES.has(word.text));
   if (generate === -1) return false;
   const rest = args.slice(generate + 1);
-  const target = rest.find((word) => !word.text.startsWith("-"))?.text;
-  const options = rest.filter((word) => word.text.startsWith("-"));
-  if (target === "git-pre-commit") {
-    return options.some((word) => GENERATE_HOOK_WRITE_OPTIONS.test(word.text));
+  if (!rest.some((word) => GENERATE_WRITABLE_TARGETS.has(word.text))) {
+    return false;
   }
-  if (target === "github-action") {
-    return options.some(
-      (word) => word.text === "--write" || word.text === "-w",
-    );
-  }
-  return false;
+  return rest.some(
+    (word) =>
+      word.text === "--write" || /^-[A-Za-z]*w[A-Za-z]*$/.test(word.text),
+  );
 }
 
 /** `cp`、`rsync`、`install`の行き先を返す。`-t`か`--target-directory`があればその値、無ければ最後の引数。 */

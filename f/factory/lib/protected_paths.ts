@@ -155,6 +155,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 保留のCLI(`scripts/hold.ts`)とpsqlの経路(`scripts/hold_psql.ts`)、そのテスト(`tests/scripts/hold.test.ts`、
  * `tests/scripts/hold_psql.test.ts`)も守る。CLIは保留を置く・解除する入口で、psqlの経路は接続先のデータベースと
  * 読み取り専用の設定を決める。書き換えられると、置く主体の確認や、実DBの検査が使い捨てのデータベースだけに書く保証が外れる。
+ * CLIが実行時に読み込む`scripts/freeze.ts`と、それが読み込む`lib/freezes.ts`、`lib/freeze_apply.ts`も守る。
+ * `hold:list`の凍結の件数を読むために、CLIが起動のたびに実行するコードで、書き換えられると、CLIの実行に任意の処理を足せる。
+ * 読み込む先を足すと、`tests/lib/protected_paths.test.ts`が、CLIのimportの連鎖がすべて保護パスに入っているかを確かめて失敗する。
  * `scripts/ci-scope.ts`はすでに守っている。psqlの経路は、実DBの検査が読み込むファイルとして、そこに載せる。
  * 一方、`holds.script.lock`は守らない。依存の無いlibのlockと同じ扱いである。
  * `scripts/test-db-holds.ts`が使う`scripts/test-db-sql.ts`も守らない。ほかの実DBの検査も使う部品で、
@@ -242,6 +245,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",
+  "scripts/freeze.ts",
+  "f/factory/lib/freezes.ts",
+  "f/factory/lib/freeze_apply.ts",
   "tests/scripts/hold.test.ts",
   "tests/scripts/hold_psql.test.ts",
   "migrations/datatable/main/20261023131355_holds.up.sql",

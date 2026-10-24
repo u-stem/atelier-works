@@ -61,7 +61,7 @@ export const WIRED_SCOPES: readonly HoldScope[] = ["merge"];
 
 /** 保留が止める経路の説明。`list`と`place`が表示する。 */
 const COVERAGE_NOTE =
-  "note: a merge hold stops only the Factory dependabot auto-merge, and only while dependabot_merge_enabled is true; gh pr merge is not stopped yet";
+  "note: a merge hold stops the Factory dependabot from assessing the pull requests of the repository, even in a dry run; its last check before the merge matters only while dependabot_merge_enabled is true; gh pr merge is not stopped";
 
 const HOLDER_MAX = 100;
 
@@ -205,7 +205,7 @@ function describeHold(hold: HoldRow, status: "active" | "invalid"): string {
     String(hold.id),
     status,
     hold.scope,
-    hold.target,
+    sanitizeHoldText(hold.target),
     `until ${formatJst(hold.expires_at)}`,
     `${hold.holder_kind} "${sanitizeHoldText(hold.holder)}"`,
     `reason "${sanitizeHoldText(hold.reason)}"`,
@@ -251,14 +251,15 @@ async function runList(deps: CliDeps): Promise<number> {
     return 1;
   }
   const invalid = await listInvalidHolds({}, deps.read);
+  // 有効な保留は、無効な行を読めなくても先に出す。有効な保留を見落とさないためである。
+  if (active.value.length === 0 && invalid.ok && invalid.value.length === 0) {
+    deps.print("no holds");
+  }
+  for (const hold of active.value) deps.print(describeHold(hold, "active"));
   if (!invalid.ok) {
     deps.print(`failed: ${invalid.reason}`);
     return 1;
   }
-  if (active.value.length === 0 && invalid.value.length === 0) {
-    deps.print("no holds");
-  }
-  for (const hold of active.value) deps.print(describeHold(hold, "active"));
   for (const hold of invalid.value) deps.print(describeHold(hold, "invalid"));
   try {
     const count = await deps.activeFreezeCount();

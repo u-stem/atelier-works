@@ -346,6 +346,8 @@ type HarnessOptions = {
   readonly holds?: HoldReadOutcome<readonly HoldRow[]>;
   /** マージの保留の読み取りが投げる例外。 */
   readonly holdsError?: Error;
+  /** 読み取りの回ごとの結果。`holds`より優先する。 */
+  readonly holdsSequence?: readonly HoldReadOutcome<readonly HoldRow[]>[];
 };
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -371,7 +373,8 @@ function harness(options: HarnessOptions = {}): Harness {
     listMergeHolds: async (owner, repo) => {
       holdReads.push(`${owner}/${repo}`);
       if (options.holdsError !== undefined) throw options.holdsError;
-      return options.holds ?? { ok: true, value: [] };
+      const sequenced = options.holdsSequence?.[holdReads.length - 1];
+      return sequenced ?? options.holds ?? { ok: true, value: [] };
     },
     collect: async () => {
       calls.collect += 1;
@@ -1768,6 +1771,7 @@ type RoundOptions = {
   readonly ownerGate?: RepoOwnerGateResult;
   readonly holds?: HoldReadOutcome<readonly HoldRow[]>;
   readonly holdsError?: Error;
+  readonly holdsSequence?: readonly HoldReadOutcome<readonly HoldRow[]>[];
   /** 保留の通知を残す処理が投げる例外。 */
   readonly holdNoticeError?: Error;
   /** 保留を読めない通知を解決する処理が投げる例外。 */
@@ -1828,6 +1832,9 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
         ...(options.holdsError === undefined
           ? {}
           : { holdsError: options.holdsError }),
+        ...(options.holdsSequence === undefined
+          ? {}
+          : { holdsSequence: options.holdsSequence }),
       });
       return {
         viewerLogin: "factory-bot",
@@ -3828,6 +3835,23 @@ describe("pollDependabot resolves the unreadable notice once the holds can be re
 
     await pollDependabot(
       round(log, { holds: { ok: false, kind: "read_failed", reason: "x" } }),
+    );
+
+    expect(log.holdResolves).toBe(0);
+  });
+
+  test("does not resolve it when one read succeeded and another failed", async () => {
+    const log = emptyLog();
+    const second: DependabotPrCandidate = { ...FOUND, number: 13 };
+
+    await pollDependabot(
+      round(log, {
+        found: [FOUND, second],
+        holdsSequence: [
+          { ok: true, value: [] },
+          { ok: false, kind: "read_failed", reason: "x" },
+        ],
+      }),
     );
 
     expect(log.holdResolves).toBe(0);

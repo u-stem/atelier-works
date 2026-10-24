@@ -619,7 +619,7 @@ class Parser {
     this.expandNested(command);
   }
 
-  /** `sh -c '...'`と`eval ...`の引数を、別のコマンド行として読む。 */
+  /** `sh -c '...'`、`bun exec '...'`、`eval ...`の引数を、別のコマンド行として読む。 */
   private expandNested(command: SimpleCommand): void {
     const { words } = stripWrappers(command.words);
     const program = words[0];
@@ -630,6 +630,11 @@ class Parser {
       const script = shellScriptArgument(shellArgs);
       if (script !== null)
         collectCommands(script.text, this.out, this.depth + 1);
+    } else if (name === "bun" && words[1]?.text === "exec") {
+      // `bun exec '<シェルの文字列>'`は、文字列をbunのシェルで実行する。`sh -c`と同じく、別のコマンド行として読む。
+      for (const word of words.slice(2)) {
+        collectCommands(word.text, this.out, this.depth + 1);
+      }
     } else if (name === "eval") {
       const line = words
         .slice(1)

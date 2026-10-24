@@ -1530,6 +1530,8 @@ describe("bash-guard denies a subagent that hides a hold operation behind option
     "mise t run hold:place",
     "mise watch hold:place",
     "mise w hold:place",
+    'mise watch "$TASK"',
+    'mise t run "$TASK"',
     "mise run lint hold:place",
     "mise run test -- hold:place",
     "mise x -- mise run -o keep hold:release 1",
