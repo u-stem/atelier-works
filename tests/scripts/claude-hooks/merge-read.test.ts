@@ -564,6 +564,24 @@ describe("runChild", () => {
     expect(finished.stderr).not.toContain(token);
   });
 
+  test("masks a password assignment in the standard error", async () => {
+    const finished = await runChild({
+      argv: ["/bin/sh", "-c", "echo DB_PASSWORD=hunter2hunter2 is wrong >&2"],
+      stdin: "",
+      timeoutMs: 5000,
+    });
+    expect(finished.stderr).not.toContain("hunter2hunter2");
+  });
+
+  test("keeps the rest of the standard error readable", async () => {
+    const finished = await runChild({
+      argv: ["/bin/sh", "-c", "echo DB_PASSWORD=hunter2hunter2 is wrong >&2"],
+      stdin: "",
+      timeoutMs: 5000,
+    });
+    expect(finished.stderr).toBe("DB_PASSWORD=*** is wrong\n");
+  });
+
   test("rejects when the program does not exist", async () => {
     await expect(
       runChild({ argv: ["/nonexistent/program"], stdin: "", timeoutMs: 5000 }),

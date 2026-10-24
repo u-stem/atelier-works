@@ -130,6 +130,80 @@ describe("run.sh", () => {
   });
 });
 
+const PLAIN_COMMAND = JSON.stringify({
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command: "git status" },
+  cwd: "/repo",
+});
+
+describe("run.sh with the merge guard", () => {
+  test("allows an ordinary command with no output", () => {
+    const result = launch(["merge-guard"], PLAIN_COMMAND, PATH_WITH_BUN);
+    expect(result.stdout.toString()).toBe("");
+  });
+
+  test("exits with 0 for an ordinary command", () => {
+    expect(launch(["merge-guard"], PLAIN_COMMAND, PATH_WITH_BUN).exitCode).toBe(
+      0,
+    );
+  });
+
+  test("exits with 2 when the hook fails", () => {
+    expect(launch(["merge-guard"], "not json", PATH_WITH_BUN).exitCode).toBe(2);
+  });
+
+  test("allows the tool call when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["merge-guard"], PLAIN_COMMAND, directory),
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("tells the user that merges and deployments were not checked when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["merge-guard"], PLAIN_COMMAND, directory),
+    );
+    const output: unknown = JSON.parse(result.stdout.toString());
+    expect(output).toEqual({
+      systemMessage: expect.stringMatching(
+        /merge guard.*did not run.*merges and deploys/,
+      ),
+    });
+  });
+
+  test("does not mention the deny rules of settings.json for the merge guard", () => {
+    const result = withTempDir((directory) =>
+      launch(["merge-guard"], PLAIN_COMMAND, directory),
+    );
+    expect(result.stdout.toString()).not.toContain("deny rules");
+  });
+
+  test("names the hook on stderr when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["merge-guard"], PLAIN_COMMAND, directory),
+    );
+    expect(result.stderr.toString()).toContain("merge-guard");
+  });
+
+  test("keeps the bash guard message about the deny rules", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], PLAIN_COMMAND, directory),
+    );
+    expect(result.stdout.toString()).toContain("The bash guard hook");
+  });
+
+  test.skipIf(!nodeRunsTypeScript())(
+    "runs the merge guard with node when bun is not on PATH",
+    () => {
+      const result = withNodeOnly((path) =>
+        launch(["merge-guard"], PLAIN_COMMAND, path),
+      );
+      expect(result?.exitCode).toBe(0);
+    },
+  );
+});
+
 /** `body`を中身にした実行ファイル`name`を`directory`に作る。 */
 function writeExecutable(directory: string, name: string, body: string) {
   writeFileSync(join(directory, name), `#!/bin/sh\n${body}\n`);

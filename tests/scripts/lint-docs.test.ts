@@ -13,6 +13,7 @@ describe("isTargetDoc", () => {
     [".claude/skills/factory-fix/SKILL.md", true],
     [".claude/skills/windmill-script/SKILL.md", true],
     [".claude/skills/review-loop/SKILL.md", true],
+    [".claude/skills/hold/SKILL.md", true],
     [".claude/agents/implementer.md", true],
     [".claude/agents/notes/draft.md", false],
     [".claude/skills/factory-requirements/template.md", false],

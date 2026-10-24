@@ -143,6 +143,22 @@ describe("scripts/bootstrap.sh full mode", () => {
     ).toBe(true);
   });
 
+  test("does not call run_wmill with datatable migrate", async () => {
+    const lines = await commandLines();
+
+    expect(
+      lines.some((line) => /run_wmill\s+datatable\s+migrate/.test(line)),
+    ).toBe(false);
+  });
+
+  test("migrates through the freeze wrapper", async () => {
+    const lines = await commandLines();
+
+    expect(
+      lines.some((line) => line.includes("./scripts/freeze.ts migrate")),
+    ).toBe(true);
+  });
+
   test("keeps remote-only items by not passing --prune", async () => {
     const lines = await commandLines();
 
