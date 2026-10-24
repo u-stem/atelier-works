@@ -645,11 +645,12 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
-2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
+2. 反映が要るときに、deployの保留が有効なら、3から5を見送る。`deployed_sha`は進めず、保留が切れた最初の回が同じ範囲を反映する([凍結とdeployの保留の内部仕様](internals/freezes.md))。
+3. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
    凍結中のスケジュールはpushから除く。
-   凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す([スケジュールの凍結の仕様](internals/freezes.md))。
-3. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
-4. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
+   凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す。
+4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
+5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
 記録には、前回の版から今回の版までの間にmainへマージされたPRの番号、題名、作り手、リンクを含める。
 PRは、self cloneの`git log --first-parent`にあるマージのコミットから取り出す。
@@ -717,6 +718,7 @@ gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、�
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
 凍結の2段は、凍結の変数とファイルの読み取りと、終わった行を消す書き込みである。
 各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
+deployの保留の判定は読み取りの段の中で済ませるので、段は増えず、見送る回は`wmill`のCLIを呼ばない。
 ローカルのgitの9回は、ホストの印の確認である。
 コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
