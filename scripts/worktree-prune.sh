@@ -45,20 +45,42 @@ set -euo pipefail
 
 usage() {
   echo "usage: scripts/worktree-prune.sh [--apply] [--min-idle-minutes N]" >&2
+  echo "       scripts/worktree-prune.sh --auto --ancestors <pid,pid,...>" >&2
   echo "  without --apply, only prints what would be removed" >&2
   echo "  --min-idle-minutes N: keep worktrees with files changed within N minutes (default 120)" >&2
+  echo "  --auto: unattended mode started by worktree-new.sh; cannot be combined with --apply or --min-idle-minutes" >&2
 }
 
 # 作ったまま使っていないworktreeを放置とみなす時間(分)。
 abandoned_minutes=1440
 
 apply=0
+apply_given=0
+auto=0
+ancestors=""
+ancestors_given=0
 idle_minutes=120
+idle_given=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --apply)
       apply=1
+      apply_given=1
       shift
+      ;;
+    --auto)
+      auto=1
+      shift
+      ;;
+    --ancestors)
+      # 値の検査は、`--auto`の実行の中で行う。不正な値は、何も消さずに失敗として数える。
+      if [ "$#" -lt 2 ]; then
+        usage
+        exit 2
+      fi
+      ancestors="$2"
+      ancestors_given=1
+      shift 2
       ;;
     --min-idle-minutes)
       if [ "$#" -lt 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
@@ -66,6 +88,7 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       idle_minutes="$2"
+      idle_given=1
       shift 2
       ;;
     *)
@@ -74,6 +97,17 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+# `--auto`は`--apply`を含み、`recent`の閾値を既定に固定する。
+if [ "$auto" -eq 1 ]; then
+  if [ "$apply_given" -eq 1 ] || [ "$idle_given" -eq 1 ]; then
+    usage
+    exit 2
+  fi
+  apply=1
+elif [ "$ancestors_given" -eq 1 ]; then
+  usage
+  exit 2
+fi
 
 # 消す対象が、実行したディレクトリを含むかを後で調べるので、先に控える。
 invoked_from="$(pwd -P)"
