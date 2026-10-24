@@ -1377,6 +1377,8 @@ describe("bash-guard denies a subagent that places or releases a hold", () => {
     'mise run hold:"$ACTION"',
     "bun -e \"import {placeHold} from './f/factory/lib/holds.ts'; import {createHoldPsqlClient} from './scripts/hold_psql.ts'; console.log(placeHold, createHoldPsqlClient)\"",
     "bun -e \"import './scripts/hold_psql.ts'\"",
+    "bun run - < scripts/hold.ts",
+    "bun run - place < ./scripts/hold.ts",
     "bun --eval \"await import('./f/factory/lib/holds.ts')\"",
     "node -e \"require('./scripts/hold_psql.ts')\"",
     "deno eval \"import './scripts/hold.ts'\"",
@@ -1521,6 +1523,10 @@ describe("bash-guard denies a subagent that places a deploy freeze or releases a
     "bun -e \"await Bun.spawn(['bun','scripts/freeze.ts','release','1'])\"",
     "bun run - <<'EOF'\nimport './scripts/freeze.ts'; process.argv.push('release');\nEOF",
     "echo 'release 1' | bun scripts/freeze.ts $(cat)",
+    "bun run - list < scripts/freeze.ts",
+    "bun run - list < ./scripts/freeze.ts",
+    "bun run - < scripts/fre?ze.ts",
+    "node - < scripts/freeze.ts",
   ])("%s", async (command) => {
     expect(await decide(command, { subagent: true })).toBe("deny");
   });
@@ -1553,6 +1559,11 @@ describe("bash-guard allows a subagent to place a schedule freeze and to list fr
     "bun scripts/freeze.ts list",
     "bun scripts/freeze.ts check",
     "bun scripts/freeze.ts -- list",
+    'bun test tests/scripts/freeze.test.ts -t "deploy freeze"',
+    "bun test --test-name-pattern 'deploy freeze'",
+    'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "deploy freeze"',
+    'bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason "release the freeze.ts later"',
+    "bun run - < /tmp/input.ts",
     "bunx biome check scripts/fre?ze.ts",
     "bun -e \"import './scripts/freeze.ts'\"",
     "bun scripts/freeze.ts place --target f/factory/collect_github --minutes 5 --reason r",
