@@ -39,6 +39,22 @@ import {
 /** 読み1回の全体の上限(ミリ秒)。 */
 export const READ_TIMEOUT_MS = 6000;
 
+/**
+ * 起動してまだ終わっていない子のプロセスグループ。
+ * フックはプロセスを終了する前に、これらを終了する。読みが終わる前に拒否を決めても、子を残さないためである。
+ */
+const liveGroups = new Set<number>();
+
+process.on("exit", () => {
+  for (const group of liveGroups) {
+    try {
+      process.kill(-group, "SIGKILL");
+    } catch {
+      // グループがすでに無ければ、止める相手がいない。
+    }
+  }
+});
+
 /** 子が終わってから、標準出力と標準エラーが閉じるのを待つ時間(ミリ秒)。 */
 const STREAM_GRACE_MS = 250;
 
@@ -68,6 +84,7 @@ const AUTO_INSTALL_SETTINGS: readonly string[] = [
 const TOKEN_PATTERNS: readonly RegExp[] = [
   /github_pat_[A-Za-z0-9_]{20,}/g,
   /gh[oprsu]_[A-Za-z0-9]{20,}/g,
+  /sk-ant-oat[A-Za-z0-9_-]{10,}/g,
   /sk-ant-[A-Za-z0-9_-]{10,}/g,
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
 ];
@@ -189,8 +206,10 @@ export function runChild(request: ChildRequest): Promise<HoldPsqlResult> {
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let grace: ReturnType<typeof setTimeout> | undefined;
+    if (child.pid !== undefined) liveGroups.add(child.pid);
     const stopGroup = (): void => {
       if (child.pid === undefined) return;
+      liveGroups.delete(child.pid);
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch {

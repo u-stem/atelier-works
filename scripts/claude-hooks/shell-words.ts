@@ -295,7 +295,8 @@ export function baseName(path: string): string {
  * 先頭の変数代入、`env`や`sudo`などの前置きのコマンド、制御構文の語を外し、
  * 実際に起動するプログラムからの語を返す。外した変数代入は`assignments`に入れる。
  */
-export function stripWrappers(words: readonly Word[]): StrippedCommand {
+export function stripWrappers(input: readonly Word[]): StrippedCommand {
+  let words = input;
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
@@ -316,6 +317,7 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
       index = skipTransparentOptions(words, index + 1, transparent);
     } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
       wrappers.push(name);
+      if (name === "env") words = expandEnvSplitString(words, index);
       index = skipWrapperOptions(words, index + 1, name);
     } else if (name === "mise" && miseExecAt(words, index) !== -1) {
       wrappers.push(text);
@@ -332,6 +334,46 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
     rest[0] = { ...first, text: zshCommandName(first.text) };
   }
   return { assignments, words: rest, wrappers, mise };
+}
+
+/**
+ * `env -S '<コマンド>'`(`--split-string`)の文字列を語に分け、その位置に差し込んだ語の並びを返す。
+ * `env`は、この文字列を空白で分けて、コマンドとして実行するためである。
+ * 文字列が実行時に決まるとき、複数のコマンドに分かれるとき、読めないときは、語をそのまま返す。
+ */
+function expandEnvSplitString(
+  words: readonly Word[],
+  envIndex: number,
+): readonly Word[] {
+  for (let at = envIndex + 1; at < words.length; at += 1) {
+    const word = words[at];
+    const text = word?.text ?? "";
+    if (word === undefined || text === "--" || text === "-") return words;
+    if (!text.startsWith("-")) return words;
+    let value: Word | undefined;
+    let end = at + 1;
+    if (text === "-S" || text === "--split-string") {
+      value = words[at + 1];
+      end = at + 2;
+    } else if (text.startsWith("--split-string=")) {
+      value = { ...word, text: text.slice("--split-string=".length) };
+    } else if (text.startsWith("-S")) {
+      value = { ...word, text: text.slice(2) };
+    } else if (WRAPPER_VALUE_OPTIONS.get("env")?.has(text) === true) {
+      at += 1;
+      continue;
+    } else {
+      continue;
+    }
+    if (value === undefined || value.dynamic) return words;
+    const parsed = parseCommandLine(value.text);
+    const only = parsed.ok ? parsed.commands[0] : undefined;
+    if (!parsed.ok || parsed.commands.length !== 1 || only === undefined) {
+      return words;
+    }
+    return [...words.slice(0, at), ...only.words, ...words.slice(end)];
+  }
+  return words;
 }
 
 /** zshは、コマンドの位置の`=名前`を、その名前のコマンドのパスに展開する。展開後の名前を返す。 */

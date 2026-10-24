@@ -2,26 +2,34 @@
 // 保留(hold)と凍結(freeze)が止める操作を、実行する前に見分けるための判定である。
 // 読むのはコマンドの語だけで、DBにも変数にも触れない。
 //
-// 見つける形:
-// - マージ: `gh pr merge`(`--auto`、`--admin`を含む)、`gh api`のPUTでパスが`/pulls/`と`merge`を含むもの、
-//   `gh api graphql`のうち`mergePullRequest`、`enablePullRequestAutoMerge`、`enqueuePullRequest`を含むか、
-//   query が実行時に決まる、ファイルから読む、`--input`で渡すもの、語に`merge`を含む`gh alias set|import`。
-//   `gh pr merge --disable-auto`と`--help`は対象にしない。
+// `gh`の判定は、安全と確認できる形だけを対象外にし、それ以外はマージとして扱う。
+// 綴りを列挙してマージを見つける方式は、列挙に無い綴りで破られるためである。
+// マージとして扱うと、保留が有効なときか保留を読めないときだけ、通常の作業を止める。
+// - `gh pr`: サブコマンドが文字どおり読み取りか編集の語(`view`、`list`、`create`など)のときだけ対象外にする。
+//   `merge`のうち`--disable-auto`(`--auto`が無いとき)と`--help`だけを対象外にする。
+//   これらは、値を取るオプションの値を読み飛ばした後で判定する。
+// - `gh api`: メソッドが文字どおりのGETか指定が無く、本文もフィールドも`--input`も無く、
+//   エンドポイントが`graphql`でも`merge`を含むものでもないときだけ対象外にする。
+//   GraphQLは、queryが文字どおりで、マージを要求する3つのmutationを含まないと確かめられたときだけ対象外にする。
+// - `gh alias set|import`で語に`merge`を含むもの。
 // - 反映: `--dry-run`の無い`wmill sync push`、`wmill datatable migrate up|down`。
-//   `--dry-run=...`の形は`--dry-run`として扱わず、対象にする。
+//   `--dry-run`は、値を取るオプションの値を読み飛ばした後で見る。`--dry-run=...`の形は対象にする。
+// `xargs`の後ろの`gh pr|api|alias`と`wmill`は、引数を標準入力から受けるので、常に対象にする。
 //
 // 対象のリポジトリは、`--repo`、`-R`、`GH_REPO`の前置き、PRのURL、`gh api`のパスをすべて集めて決める。
 // 値が食い違う、`owner/repo`の形に合わない、実行時に決まるときは、決まらない(null)として返す。
 // 決まらないマージは、呼び出し側がどのリポジトリの保留でも止める。
 //
-// 前置き(`env`、`timeout`、`xargs`、`mise exec --`、絶対パス)と、`sh -c`、`eval`、`$(...)`は、
+// 短いオプションは、pflagと同じに読む。束ねた文字を1つずつ見て、値を取る文字に当たったら、
+// 後ろの文字(先頭の`=`は落とす)を値にし、後ろが空なら次の語を値にする。
+// 前置き(`env`、`env -S`、`timeout`、`xargs`、`mise exec --`、絶対パス)と、`sh -c`、`eval`、`$(...)`は、
 // `shell-words.ts`が外す。標準入力でシェルに渡す文字列は、深さ4まで読み直す。
 // 字句に分けられないコマンド行は、何も返さない。bash-guardが拒否するので、二重にしない。
-// 実行する名前が実行時に決まる語(`"$GH" pr merge 1`)は、文字どおりの`merge`があればマージとして扱う。
+// 実行する名前や、`gh`のグループとサブコマンドが実行時に決まる語は、マージとして扱う。
 //
 // ベストエフォートの判定で、境界ではない。次は追わない。
 // 別名や関数、変数や連結で組んだ語、スクリプトのファイルの中の呼び出し、`curl`や`python`、`hub`、
-// GitHubのMCP、REST の`repos/<owner>/<repo>/merges`、GraphQL の`mergeBranch`、
+// GitHubのMCP、GraphQLの`mergeBranch`、`find -exec`と`parallel`と`watch`の後ろのコマンド、
 // `bunx wmill`と`npx wmill`、`wmill script push`などの個別のpush、`wmill schedule enable`。
 
 import { shellInputSource } from "./env-exposure.ts";
@@ -44,6 +52,8 @@ export type GuardedOperation =
   | { readonly kind: "deploy"; readonly via: "sync_push" | "migrate" };
 
 const MERGE_ANY: GuardedOperation = { kind: "merge", repo: null };
+const SYNC_PUSH: GuardedOperation = { kind: "deploy", via: "sync_push" };
+const MIGRATE: GuardedOperation = { kind: "deploy", via: "migrate" };
 
 /** 標準入力でシェルに渡る文字列を読み直す深さの上限。bash-guardの上限と同じにする。 */
 const MAX_INPUT_DEPTH = 4;
@@ -54,52 +64,150 @@ const NAME = /^[a-z0-9._-]+$/;
 const MERGE_MUTATIONS =
   /mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest/;
 
-/** `gh pr merge`の、値を取るオプション。 */
-const PR_MERGE_VALUE_FLAGS: ReadonlySet<string> = new Set([
-  "-b",
-  "--body",
-  "-F",
-  "--body-file",
-  "-t",
-  "--subject",
-  "-A",
-  "--author-email",
-  "--match-head-commit",
+/** マージを要求しないと分かっている`gh pr`のサブコマンド。 */
+const SAFE_PR_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "view",
+  "list",
+  "checks",
+  "create",
+  "diff",
+  "comment",
+  "status",
+  "edit",
+  "ready",
+  "review",
+  "checkout",
+  "reopen",
+  "close",
+  "lock",
+  "unlock",
 ]);
 
-/** `gh api`の、値を取るオプション。 */
-const API_VALUE_FLAGS: ReadonlySet<string> = new Set([
-  "-X",
-  "--method",
-  "-f",
-  "--raw-field",
-  "-F",
-  "--field",
-  "-H",
-  "--header",
-  "--input",
-  "-q",
-  "--jq",
-  "-t",
-  "--template",
-  "--hostname",
-  "--cache",
-  "-p",
-  "--preview",
-]);
+/** オプションの読み方。値を取る短い文字と、値を取る長い名前。 */
+type OptionSpec = {
+  readonly shortValue: string;
+  readonly longValue: ReadonlySet<string>;
+};
 
-/** `gh api`の、値を取る短いオプションの文字。`-XPUT`のように値が続きに付く。 */
-const API_SHORT_VALUE_LETTERS = "XfFHqtp";
+/** `gh pr`のオプション。`merge`の本文や件名の値も、ほかのサブコマンドの値も含める。 */
+const PR_OPTIONS: OptionSpec = {
+  shortValue: "RbFtA",
+  longValue: new Set([
+    "--repo",
+    "--body",
+    "--body-file",
+    "--subject",
+    "--author-email",
+    "--match-head-commit",
+  ]),
+};
 
-/** `wmill`の、サブコマンドの前後に置ける、値を取るグローバルオプション。 */
-const WMILL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  "--workspace",
-  "--token",
-  "--base-url",
-  "--config-dir",
-]);
+/** `gh api`のオプション。 */
+const API_OPTIONS: OptionSpec = {
+  shortValue: "XfFHqtp",
+  longValue: new Set([
+    "--method",
+    "--field",
+    "--raw-field",
+    "--header",
+    "--input",
+    "--jq",
+    "--template",
+    "--preview",
+    "--cache",
+    "--hostname",
+  ]),
+};
+
+/** `wmill`のオプション。サブコマンドの前後のどこにも置ける。 */
+const WMILL_OPTIONS: OptionSpec = {
+  shortValue: "ie",
+  longValue: new Set([
+    "--workspace",
+    "--token",
+    "--base-url",
+    "--config-dir",
+    "--includes",
+    "--excludes",
+    "--extra-includes",
+    "--message",
+    "--parallel",
+    "--repository",
+    "--branch",
+    "--env",
+    "--datatable",
+  ]),
+};
 
 type Value = { readonly text: string; readonly dynamic: boolean };
+
+/** 読んだオプション。`name`は`-R`や`--repo`の形で、`value`は値(値を取らなければnull)である。 */
+type ParsedOption = { readonly name: string; readonly value: Value | null };
+
+type ParsedArgs = {
+  readonly options: readonly ParsedOption[];
+  readonly positionals: readonly Word[];
+};
+
+/**
+ * 引数をオプションと位置引数に分ける。
+ * 長いオプションは、名前が`longValue`にあれば次の語を値にし、`--name=値`の形は値をその場で読む。
+ * 短いオプションは、束ねた文字を1つずつ見て、値を取る文字に当たった位置から後ろを値にする。
+ * `--`より後ろは位置引数である。値を取るオプションの値は、`-`で始まる語でも値として読む。
+ */
+function parseArgs(args: readonly Word[], spec: OptionSpec): ParsedArgs {
+  const options: ParsedOption[] = [];
+  const positionals: Word[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index];
+    if (word === undefined) break;
+    const text = word.text;
+    if (text === "--") {
+      positionals.push(...args.slice(index + 1));
+      break;
+    }
+    if (text.startsWith("--")) {
+      const equals = text.indexOf("=");
+      if (equals !== -1) {
+        options.push({
+          name: text.slice(0, equals),
+          value: { text: text.slice(equals + 1), dynamic: word.dynamic },
+        });
+      } else if (spec.longValue.has(text)) {
+        const next = args[index + 1];
+        options.push({ name: text, value: next ?? null });
+        index += 1;
+      } else {
+        options.push({ name: text, value: null });
+      }
+      continue;
+    }
+    if (text.startsWith("-") && text !== "-") {
+      for (let at = 1; at < text.length; at += 1) {
+        const letter = text.charAt(at);
+        if (!spec.shortValue.includes(letter)) {
+          options.push({ name: `-${letter}`, value: null });
+          continue;
+        }
+        const rest = text.slice(at + 1).replace(/^=/, "");
+        if (rest !== "") {
+          options.push({
+            name: `-${letter}`,
+            value: { text: rest, dynamic: word.dynamic },
+          });
+        } else {
+          const next = args[index + 1];
+          options.push({ name: `-${letter}`, value: next ?? null });
+          index += 1;
+        }
+        break;
+      }
+      continue;
+    }
+    positionals.push(word);
+  }
+  return { options, positionals };
+}
 
 /**
  * `owner/repo`、`HOST/owner/repo`の値を、小文字の`owner/repo`にする。
@@ -125,10 +233,6 @@ function resolveRepo(candidates: readonly (string | null)[]): string | null {
   return candidates.every((candidate) => candidate === first) ? first : null;
 }
 
-function isFlag(text: string): boolean {
-  return text.startsWith("-") && text !== "-";
-}
-
 /** 語がPRのURL(`https://<host>/<owner>/<repo>/pull/<n>`)全体なら、リポジトリの候補にする。 */
 function repoOfPullUrl(word: Word): string | null | undefined {
   const match =
@@ -142,197 +246,114 @@ function repoOfPullUrl(word: Word): string | null | undefined {
   });
 }
 
-/**
- * `-R <値>`、`--repo <値>`、`--repo=<値>`、`-R<値>`、`-R=<値>`の、値の語を返す。
- * 該当しなければnull。`skip`は、値の語まで読み飛ばす数。
- */
-function repoOption(
-  words: readonly Word[],
-  index: number,
-): { readonly value: Value; readonly skip: number } | null {
-  const word = words[index];
-  if (word === undefined) return null;
-  const text = word.text;
-  if (text === "-R" || text === "--repo") {
-    const next = words[index + 1];
-    return {
-      value: next ?? { text: "", dynamic: false },
-      skip: next === undefined ? 0 : 1,
-    };
-  }
-  if (text.startsWith("--repo=")) {
-    return {
-      value: { text: text.slice("--repo=".length), dynamic: word.dynamic },
-      skip: 0,
-    };
-  }
-  if (text.startsWith("-R") && !text.startsWith("--")) {
-    return {
-      value: {
-        text: text.slice(2).replace(/^=/, ""),
-        dynamic: word.dynamic,
-      },
-      skip: 0,
-    };
-  }
-  return null;
+/** `-R`と`--repo`の値から、リポジトリの候補を作る。値が無いときは決まらない候補にする。 */
+function repoCandidates(options: readonly ParsedOption[]): (string | null)[] {
+  return options
+    .filter((option) => option.name === "-R" || option.name === "--repo")
+    .map((option) =>
+      option.value === null ? null : normalizeRepo(option.value),
+    );
 }
 
-/** `gh pr`の、`merge`より前のオプションを読む。`merge`の位置と、そこまでのリポジトリの候補を返す。 */
-function readPrPrefix(args: readonly Word[]): {
-  readonly mergeAt: number;
-  readonly candidates: (string | null)[];
-} | null {
-  const candidates: (string | null)[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const word = args[index];
-    if (word === undefined) break;
-    const option = repoOption(args, index);
-    if (option !== null) {
-      candidates.push(normalizeRepo(option.value));
-      index += option.skip;
-      continue;
-    }
-    if (isFlag(word.text)) continue;
-    return word.text === "merge" && !word.dynamic
-      ? { mergeAt: index, candidates }
-      : null;
-  }
-  return null;
+function hasOption(
+  options: readonly ParsedOption[],
+  ...names: readonly string[]
+): boolean {
+  return options.some((option) => names.includes(option.name));
 }
 
-/** `gh pr merge`の引数から、マージとして扱う対象を返す。マージの要求でなければnullを返す。 */
-function ghPrMerge(
+/** `gh pr`の引数から、マージとして扱う対象を返す。安全と確かめられたらnullを返す。 */
+function ghPr(
   args: readonly Word[],
   environment: string | null | undefined,
 ): GuardedOperation | null {
-  const prefix = readPrPrefix(args);
-  if (prefix === null) return null;
-  const rest = args.slice(prefix.mergeAt + 1);
-  const texts = rest.map((word) => word.text);
-  if (texts.includes("--help") || texts.includes("-h")) return null;
-  if (texts.includes("--disable-auto") && !texts.includes("--auto")) {
+  const { options, positionals } = parseArgs(args, PR_OPTIONS);
+  const [subcommand, ...selectors] = positionals;
+  if (subcommand === undefined) return null;
+  if (subcommand.dynamic) return MERGE_ANY;
+  if (SAFE_PR_SUBCOMMANDS.has(subcommand.text)) return null;
+  if (subcommand.text !== "merge") return MERGE_ANY;
+  if (hasOption(options, "--help", "-h")) return null;
+  if (hasOption(options, "--disable-auto") && !hasOption(options, "--auto")) {
     return null;
   }
-  const candidates = [...prefix.candidates];
+  const candidates = repoCandidates(options);
   if (environment !== undefined) candidates.push(environment);
-  let literalOnly = false;
-  for (let index = 0; index < rest.length; index += 1) {
-    const word = rest[index];
-    if (word === undefined) break;
-    if (word.text === "--") literalOnly = true;
-    const option = literalOnly ? null : repoOption(rest, index);
-    if (option !== null) {
-      candidates.push(normalizeRepo(option.value));
-      index += option.skip;
-      continue;
-    }
-    if (!literalOnly && isFlag(word.text)) {
-      if (PR_MERGE_VALUE_FLAGS.has(word.text)) index += 1;
-      continue;
-    }
-    if (word.text === "--") continue;
+  for (const selector of selectors) {
     // 位置引数は、PRの番号、ブランチ、URLのどれか。実行時に決まる語はURLかもしれない。
-    if (word.dynamic) {
+    if (selector.dynamic) {
       candidates.push(null);
       continue;
     }
-    const fromUrl = repoOfPullUrl(word);
+    const fromUrl = repoOfPullUrl(selector);
     if (fromUrl !== undefined) candidates.push(fromUrl);
   }
   return { kind: "merge", repo: resolveRepo(candidates) };
 }
 
-type ApiRequest = {
-  readonly method: Value | null;
-  readonly endpoint: Word | null;
-  readonly fields: readonly Value[];
-  readonly hasInput: boolean;
-};
-
-/** `gh api`の引数を、メソッド、エンドポイント、フィールド、`--input`の有無に分ける。 */
-function readApiRequest(args: readonly Word[]): ApiRequest {
-  let method: Value | null = null;
-  let endpoint: Word | null = null;
-  const fields: Value[] = [];
-  let hasInput = false;
-  const take = (flag: string, value: Value): void => {
-    if (flag === "-X" || flag === "--method") method = value;
-    else if (
-      flag === "-f" ||
-      flag === "--raw-field" ||
-      flag === "-F" ||
-      flag === "--field"
-    ) {
-      fields.push(value);
-    } else if (flag === "--input") {
-      hasInput = true;
-    }
-  };
-  for (let index = 0; index < args.length; index += 1) {
-    const word = args[index];
-    if (word === undefined) break;
-    const text = word.text;
-    if (API_VALUE_FLAGS.has(text)) {
-      const next = args[index + 1];
-      if (next !== undefined) take(text, next);
-      index += 1;
-      continue;
-    }
-    const long = /^(--[a-z-]+)=([\s\S]*)$/.exec(text);
-    if (long !== null && API_VALUE_FLAGS.has(long[1] ?? "")) {
-      take(long[1] ?? "", { text: long[2] ?? "", dynamic: word.dynamic });
-      continue;
-    }
-    if (
-      text.length > 2 &&
-      text.startsWith("-") &&
-      !text.startsWith("--") &&
-      API_SHORT_VALUE_LETTERS.includes(text.charAt(1))
-    ) {
-      take(text.slice(0, 2), { text: text.slice(2), dynamic: word.dynamic });
-      continue;
-    }
-    if (isFlag(text)) continue;
-    endpoint ??= word;
-  }
-  return { method, endpoint, fields, hasInput };
+/**
+ * `gh api`のエンドポイントを、スキームとホスト、先頭と末尾の`/`、クエリ、GHESの`api/v3/`を外した形にする。
+ */
+function normalizeEndpoint(text: string): string {
+  return text
+    .replace(/^https?:\/\/[^/]+/i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/^\/+/, "")
+    .replace(/^api\/v3\//i, "")
+    .replace(/\/+$/, "");
 }
 
 /** GraphQLの呼び出しが、マージを要求する(または、要求でないと言い切れない)なら真。 */
-function graphqlMayMerge(request: ApiRequest): boolean {
-  if (request.hasInput) return true;
-  return request.fields.some((field) => {
+function graphqlMayMerge(fields: readonly Value[], hasInput: boolean): boolean {
+  if (hasInput) return true;
+  let queryFound = false;
+  for (const field of fields) {
     const at = field.text.indexOf("=");
     const key = at === -1 ? field.text : field.text.slice(0, at);
     const value = at === -1 ? "" : field.text.slice(at + 1);
     if (MERGE_MUTATIONS.test(field.text)) return true;
-    if (field.dynamic) {
-      return at === -1 || key === "query" || /[$`]/.test(key);
+    if (field.dynamic && (at === -1 || key === "query" || /[$`]/.test(key))) {
+      return true;
     }
-    return key === "query" && value.startsWith("@");
-  });
+    if (key === "query") {
+      queryFound = true;
+      if (value.startsWith("@")) return true;
+    }
+  }
+  return !queryFound;
 }
 
-/** `gh api`の引数から、マージとして扱う対象を返す。マージの要求でなければnullを返す。 */
+/** `gh api`の引数から、マージとして扱う対象を返す。安全と確かめられたらnullを返す。 */
 function ghApi(args: readonly Word[]): GuardedOperation | null {
-  const request = readApiRequest(args);
-  const endpoint = request.endpoint;
-  if (endpoint === null) return null;
-  if (!endpoint.dynamic && endpoint.text === "graphql") {
-    return graphqlMayMerge(request) ? MERGE_ANY : null;
+  const { options, positionals } = parseArgs(args, API_OPTIONS);
+  const endpoint = positionals[0];
+  if (endpoint === undefined) return null;
+  const methods = options.filter(
+    (option) => option.name === "-X" || option.name === "--method",
+  );
+  const method = methods.at(-1)?.value ?? null;
+  const fields = options.flatMap((option) =>
+    ["-f", "-F", "--field", "--raw-field"].includes(option.name) &&
+    option.value !== null
+      ? [option.value]
+      : [],
+  );
+  const hasInput = hasOption(options, "--input");
+  const path = normalizeEndpoint(endpoint.text);
+  if (!endpoint.dynamic && path.toLowerCase() === "graphql") {
+    return graphqlMayMerge(fields, hasInput) ? MERGE_ANY : null;
   }
-  const method = request.method;
-  const writes =
-    method !== null && (method.dynamic || method.text.toUpperCase() === "PUT");
-  if (!writes) return null;
-  const lower = endpoint.text.toLowerCase();
-  const isMergePath = lower.includes("/pulls/") && lower.includes("merge");
-  if (!isMergePath && !endpoint.dynamic) return null;
-  const path = endpoint.text.replace(/^https?:\/\/[^/]+\//i, "");
-  const match = /(?:^|\/)repos\/([^/]+)\/([^/?#]+)/i.exec(path);
+  const explicitGet =
+    method !== null && !method.dynamic && method.text.toUpperCase() === "GET";
+  const reads = method === null || explicitGet;
+  // 指定の無いメソッドは、フィールドを渡すとPOSTになる。明示したGETのフィールドは検索条件である。
+  const hasBody = hasInput || (fields.length > 0 && !explicitGet);
+  const mentionsMerge = path.toLowerCase().includes("merge");
+  if (reads && !hasBody && !mentionsMerge) return null;
+  const segments = path.split("/");
+  const match = /^repos\/([^/]+)\/([^/]+)(?:\/|$)/i.exec(path);
   const repo =
-    match === null
+    endpoint.dynamic || segments.includes("..") || match === null
       ? null
       : normalizeRepo({
           text: `${match[1] ?? ""}/${match[2] ?? ""}`,
@@ -343,59 +364,64 @@ function ghApi(args: readonly Word[]): GuardedOperation | null {
 
 /** `gh alias set|import`が、語に`merge`を含むなら、マージを別名に隠す形として扱う。 */
 function ghAlias(args: readonly Word[]): GuardedOperation | null {
-  const [subcommand, ...rest] = args.filter((word) => !isFlag(word.text));
+  const [subcommand, ...rest] = args.filter(
+    (word) => !word.text.startsWith("-"),
+  );
   if (subcommand?.text !== "set" && subcommand?.text !== "import") return null;
   return rest.some((word) => word.text.toLowerCase().includes("merge"))
     ? MERGE_ANY
     : null;
 }
 
+/**
+ * `gh`の引数から、マージとして扱う対象を返す。
+ * `viaXargs`が真なら、引数を標準入力から受けるので、`pr`と`api`と`alias`を常にマージとして扱う。
+ */
 function ghOperation(
   args: readonly Word[],
   environment: string | null | undefined,
+  viaXargs: boolean,
 ): GuardedOperation | null {
-  const groupAt = args.findIndex((word) => !isFlag(word.text));
+  const groupAt = args.findIndex((word) => !word.text.startsWith("-"));
   const group = args[groupAt];
   if (group === undefined) return null;
+  if (group.dynamic) return MERGE_ANY;
   const rest = args.slice(groupAt + 1);
   switch (group.text) {
     case "pr":
-      return ghPrMerge(rest, environment);
+      return viaXargs ? MERGE_ANY : ghPr(rest, environment);
     case "api":
-      return ghApi(rest);
+      return viaXargs ? MERGE_ANY : ghApi(rest);
     case "alias":
-      return ghAlias(rest);
+      return viaXargs ? MERGE_ANY : ghAlias(rest);
     default:
       return null;
   }
 }
 
 /** `wmill`の引数から、反映の操作を返す。 */
-function wmillOperation(args: readonly Word[]): GuardedOperation | null {
-  const positionals: string[] = [];
-  let dryRun = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (WMILL_VALUE_OPTIONS.has(text)) {
-      index += 1;
-    } else if (text === "--dry-run") {
-      dryRun = true;
-    } else if (!isFlag(text)) {
-      positionals.push(text);
-    }
-  }
-  const [first, second, third] = positionals;
+function wmillOperation(
+  args: readonly Word[],
+  viaXargs: boolean,
+): readonly GuardedOperation[] {
+  if (viaXargs) return [SYNC_PUSH, MIGRATE];
+  const { options, positionals } = parseArgs(args, WMILL_OPTIONS);
+  const [first, second, third] = positionals.map((word) => word.text);
   if (first === "sync" && second === "push") {
-    return dryRun ? null : { kind: "deploy", via: "sync_push" };
+    // `--dry-run=false`のように値を付けた形は、`--dry-run`とみなさない。
+    const dryRun = options.some(
+      (option) => option.name === "--dry-run" && option.value === null,
+    );
+    return dryRun ? [] : [SYNC_PUSH];
   }
   if (
     first === "datatable" &&
     second === "migrate" &&
     (third === "up" || third === "down")
   ) {
-    return { kind: "deploy", via: "migrate" };
+    return [MIGRATE];
   }
-  return null;
+  return [];
 }
 
 /** 実行する名前が実行時に決まるコマンドの、文字どおりの語から、マージとして扱うか決める。 */
@@ -425,18 +451,28 @@ function repoFromEnvironment(
   return found;
 }
 
-function commandOperation(command: SimpleCommand): GuardedOperation | null {
-  const { assignments, words } = stripWrappers(command.words);
+function commandOperations(command: SimpleCommand): GuardedOperation[] {
+  const { assignments, words, wrappers } = stripWrappers(command.words);
   const first = words[0];
-  if (first === undefined) return null;
-  if (first.dynamic) return dynamicProgramOperation(words.slice(1));
+  if (first === undefined) return [];
+  if (first.dynamic) {
+    const operation = dynamicProgramOperation(words.slice(1));
+    return operation === null ? [] : [operation];
+  }
+  const viaXargs = wrappers.includes("xargs");
   switch (baseName(first.text)) {
-    case "gh":
-      return ghOperation(words.slice(1), repoFromEnvironment(assignments));
+    case "gh": {
+      const operation = ghOperation(
+        words.slice(1),
+        repoFromEnvironment(assignments),
+        viaXargs,
+      );
+      return operation === null ? [] : [operation];
+    }
     case "wmill":
-      return wmillOperation(words.slice(1));
+      return [...wmillOperation(words.slice(1), viaXargs)];
     default:
-      return null;
+      return [];
   }
 }
 
@@ -445,8 +481,7 @@ function scan(line: string, depth: number): GuardedOperation[] {
   if (!parsed.ok) return [];
   const found: GuardedOperation[] = [];
   for (const command of parsed.commands) {
-    const operation = commandOperation(command);
-    if (operation !== null) found.push(operation);
+    found.push(...commandOperations(command));
     if (depth >= MAX_INPUT_DEPTH) continue;
     const { words } = stripWrappers(command.words);
     const shellArgs = shellArguments(words);
