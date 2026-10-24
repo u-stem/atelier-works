@@ -47,7 +47,10 @@ function Body({
   return (
     <>
       <dl className="flex flex-col gap-1">
-        <Field label={HOLDS_TEXT.kindField} value={item.kindLabel} />
+        <Field
+          label={HOLDS_TEXT.kindField}
+          value={`${item.kindLabel}(id ${String(item.target.id)})`}
+        />
         <Field label={HOLDS_TEXT.targetField} value={item.targetText} />
         <Field label={HOLDS_TEXT.reasonField} value={item.reasonText} />
         <Field
@@ -57,10 +60,6 @@ function Body({
         <Field
           label={HOLDS_TEXT.expiryField}
           value={`${formatAbsoluteIso(item.expiresAt)}(${remainingText(item.expiresAt, now)})`}
-        />
-        <Field
-          label={HOLDS_TEXT.idField}
-          value={`id ${String(item.target.id)}`}
         />
       </dl>
       <p className="text-body">{effectText(item, otherDeployCount)}</p>

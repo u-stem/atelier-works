@@ -101,7 +101,9 @@ function Row({
         <p className="text-small text-subtle">
           {`${HOLDS_TEXT.expiryField}: `}
           <time dateTime={item.expiresAt} title={absolute}>
-            {remainingText(item.expiresAt, now)}
+            {isExpiredAt(item.expiresAt, now)
+              ? absolute
+              : remainingText(item.expiresAt, now)}
           </time>
           <span className="sr-only">({absolute})</span>
         </p>

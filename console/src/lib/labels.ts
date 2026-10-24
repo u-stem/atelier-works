@@ -232,7 +232,6 @@ export const HOLDS_TEXT = {
   reasonField: "理由",
   holderField: "置いた主体",
   expiryField: "期限",
-  idField: "id",
 } as const;
 
 /** 解除の効果の文。置いた主体と関係なく、行の種類で決まる。 */
