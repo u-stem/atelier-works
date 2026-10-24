@@ -1,6 +1,11 @@
 // subagentが保留(hold)を置く・解除する操作を見分ける。
 // 保留は、Factoryの自動マージなどを止める印である。subagentは置かず、解除もしない。
 // 主セッションか人に頼む。許すのは一覧(`list`)と、保留のコードの検査だけである。
+// 凍結のCLI(`freeze:place`、`freeze:release`、`scripts/freeze.ts`)も、次の2つは同じ扱いにする。
+// - deployの保留を置く操作(`place`の`--scope deploy`)。反映全体を止めるためである。
+//   スケジュールの凍結を置く操作(`--scope`が無いか`schedule`)は許す。
+// - 凍結の解除(`release`)。deployの保留を外せるためである。
+// `--scope`の値が実行時に決まる形(変数、コマンド置換、glob)は、`deploy`かを判定できないので拒否する。
 //
 // 拒否を既定にする。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -71,6 +76,13 @@ const RUNNERS: ReadonlySet<string> = new Set([
 const HOLD_MENTION =
   /(?:^|[/'"\s(=])(?:hold|hold_psql|holds)(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
+/**
+ * 凍結のCLIを指すパスの末尾。保留のコードと同じ区切りの直後の`freeze`で、拡張子は省略できる。
+ * `freeze.test.ts`、`freezes.ts`、`freeze_apply.ts`のような別のファイルには当たらない。
+ */
+const FREEZE_MENTION =
+  /(?:^|[/'"\s(=])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+
 /** `hold`だけを指すパス(`hold_psql`と`holds`は含まない)。 */
 const HOLD_CLI = /^(?:.*\/)?hold(?:\.[cm]?[jt]sx?)?$/i;
 
@@ -113,6 +125,10 @@ const LINT_SCRIPT = /^(?:\.\/)?scripts\/lint-[a-z-]+\.ts$/;
 
 /** 置く・解除するmiseのタスク。 */
 const HOLD_WRITE_TASKS: readonly string[] = ["hold:place", "hold:release"];
+
+/** 凍結を置くmiseのタスク(`--scope deploy`のときだけ拒否する)と、解除するタスク(常に拒否する)。 */
+const FREEZE_PLACE_TASK = "freeze:place";
+const FREEZE_RELEASE_TASK = "freeze:release";
 
 /** `mise`で何かを実行するサブコマンドとその別名。 */
 const MISE_RUNNING_WORDS: ReadonlySet<string> = new Set([
@@ -314,6 +330,98 @@ function runnerTouchesHolds(
   return inInput || !mentionsOnlyList(args);
 }
 
+/** 語がちょうど`deploy`(大文字小文字を問わない)なら真。 */
+function isDeployWord(word: Word): boolean {
+  return spellings(word).some((text) => /^deploy$/i.test(text));
+}
+
+/**
+ * `freeze:place`か`freeze.ts place`に渡す語が、deployの保留を置く形なら`operation`を返す。
+ * `--scope`の値(`--scope=deploy`の形も)が`deploy`のときである。
+ * 語が実行時に決まるか引用符の外のglobを含むと、`--scope`の値かを判定できないので`dynamic`を返す。
+ */
+function deployScopeFinding(words: readonly Word[]): HoldFinding | null {
+  if (words.some((word) => word.dynamic || word.glob)) return "dynamic";
+  for (const [index, word] of words.entries()) {
+    const all = spellings(word);
+    const inline = all.find((text) => text.startsWith("--scope="));
+    if (inline !== undefined) {
+      if (/^deploy$/i.test(inline.slice("--scope=".length))) return "operation";
+      continue;
+    }
+    const next = words[index + 1];
+    if (all.includes("--scope") && next !== undefined && isDeployWord(next)) {
+      return "operation";
+    }
+  }
+  return null;
+}
+
+/** miseのタスク名の語が、`task`を指しうる(綴りが同じか、globが当たる)なら真。 */
+function namesTask(word: Word, task: string): boolean {
+  return spellings(word).some((text) =>
+    GLOB_CHARACTERS.test(text) ? globMatches(text, task) : text === task,
+  );
+}
+
+/**
+ * miseのコマンド行のうち、凍結を解除するタスクか、deployの保留を置くタスクの呼び出しを見分ける。
+ * `taskWords`は`--`より前の語、`args`はmiseの全体オプションの後ろの全部の語である。
+ */
+function miseFreezeFinding(
+  taskWords: readonly Word[],
+  args: readonly Word[],
+): HoldFinding | null {
+  if (taskWords.some((word) => namesTask(word, FREEZE_RELEASE_TASK))) {
+    return "operation";
+  }
+  const place = taskWords.find((word) => namesTask(word, FREEZE_PLACE_TASK));
+  if (place === undefined) return null;
+  const after = args.slice(args.indexOf(place) + 1);
+  return deployScopeFinding(after.filter((word) => word.text !== "--"));
+}
+
+/**
+ * 実行系の引数が、凍結のCLI(`scripts/freeze.ts`)で解除するか、deployの保留を置く形なら拒否の種類を返す。
+ * 凍結のCLIを指す語の直後の語が副コマンドである。実行時に決まるときは判定できないので`dynamic`を返す。
+ */
+function freezeCliFinding(args: readonly Word[]): HoldFinding | null {
+  const at = args.findIndex((word) =>
+    spellings(word).some((text) => FREEZE_MENTION.test(text)),
+  );
+  if (at === -1) return null;
+  const rest = args.slice(at + 1);
+  const subcommand = rest[0];
+  if (subcommand === undefined) return null;
+  if (
+    subcommand.dynamic ||
+    subcommand.glob ||
+    spellings(subcommand).some((text) => text.includes("{"))
+  ) {
+    return "dynamic";
+  }
+  if (subcommand.text === "release") return "operation";
+  if (subcommand.text === "place") return deployScopeFinding(rest.slice(1));
+  return null;
+}
+
+/** 先頭の語が凍結のCLIのパスなら真。 */
+function direct0IsFreezeCli(words: readonly Word[]): boolean {
+  const first = words[0];
+  return (
+    first !== undefined && spellings(first).some((t) => FREEZE_MENTION.test(t))
+  );
+}
+
+/** 実行系の引数が、保留か凍結のCLIを呼ぶ拒否の対象なら、その種類を返す。 */
+function runnerFinding(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+): HoldFinding | null {
+  if (runnerTouchesHolds(args, inputs)) return "operation";
+  return freezeCliFinding(args);
+}
+
 function miseFinding(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
@@ -328,8 +436,9 @@ function miseFinding(
   const execAt = args.findIndex(
     (word) => word.text === "exec" || word.text === "x",
   );
-  if (execAt !== -1 && runnerTouchesHolds(args.slice(execAt + 1), inputs)) {
-    return "operation";
+  if (execAt !== -1) {
+    const finding = runnerFinding(args.slice(execAt + 1), inputs);
+    if (finding !== null) return finding;
   }
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
   const running =
@@ -346,7 +455,7 @@ function miseFinding(
     ...taskWords.filter(namesHoldWriteTask),
     ...argWords.filter(namesHoldTask),
   ];
-  if (named.length === 0) return null;
+  if (named.length === 0) return miseFreezeFinding(taskWords, args);
   return named.some((word) => !word.dynamic) ? "operation" : "dynamic";
 }
 
@@ -372,12 +481,12 @@ export function findHoldOperation(
   const first = words[0]?.text ?? "";
   const program = baseName(first);
   if (program === "mise") return miseFinding(words, inputs);
-  if (RUNNERS.has(program)) {
-    return runnerTouchesHolds(words.slice(1), inputs) ? "operation" : null;
-  }
+  if (RUNNERS.has(program)) return runnerFinding(words.slice(1), inputs);
   if (SQL_PROGRAMS.has(program)) {
     return sqlTouchesHolds(words, inputs) ? "operation" : null;
   }
+  // `./scripts/freeze.ts release`のように、凍結のCLIを直接実行する形。
+  if (direct0IsFreezeCli(words)) return freezeCliFinding(words);
   // `./scripts/hold.ts place`のように、スクリプトを直接実行する形。
   const direct = words[0];
   if (direct !== undefined && pointsAtHoldCode(direct)) {

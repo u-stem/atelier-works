@@ -381,11 +381,11 @@ export const REASONS = {
   miseGenerate:
     "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Any mise generate with a path under .git/hooks, .git/config, or .github/workflows, or with a word built from a variable, is denied too, because an option such as --output can write there. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
   subagentHold:
-    "Subagents must not place or release holds: a hold stops merges, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place or mise run hold:release. Listing with mise run hold:list is fine. A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
+    "Subagents must not place or release holds, place a deploy freeze, or release a freeze: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
   subagentHoldOption:
     "This mise command has an option that is not in the list this hook knows, and an option can take a value that shifts the subcommand, so it cannot be told apart from mise run hold:place or mise run hold:release. Use only known options of mise (-q, -v, -y, -C <dir>, -E <env>, --log-level <level> ...), or write the option as --name=value. Subagents must not place or release holds.",
   subagentHoldDynamic:
-    "This mise command has a word built from a variable or a command substitution, so it cannot be told apart from mise run hold:place or mise run hold:release. Write the task name and the arguments out as literal text. Subagents must not place or release holds.",
+    "This command has a word built from a variable, a command substitution, or a glob, so it cannot be told apart from mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Write the task name and the arguments out as literal text. Subagents must not place or release holds, place a deploy freeze, or release a freeze.",
 } as const;
 
 const DOCKER_REASONS = {
