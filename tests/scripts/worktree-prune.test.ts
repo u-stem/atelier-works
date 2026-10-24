@@ -75,10 +75,20 @@ describe("worktree-prune.sh", () => {
     chmodSync(join(fakeBin, "gh"), 0o755);
   }
 
-  function run(args: string[] = [], cwd: string = mainDir): Run {
+  function run(
+    args: string[] = [],
+    cwd: string = mainDir,
+    env: Record<string, string> = {},
+  ): Run {
     const result = Bun.spawnSync([BASH, SCRIPT, ...args], {
       cwd,
-      env: { ...cleanEnv(), PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+      env: {
+        ...cleanEnv(),
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        // 偽のlsofを使わせる。本物の絶対パスが優先されるのを避けるため。
+        WORKTREE_PRUNE_LSOF: join(fakeBin, "lsof"),
+        ...env,
+      },
     });
     return {
       exitCode: result.exitCode,
@@ -1008,6 +1018,56 @@ describe("worktree-prune.sh", () => {
       const result = run();
 
       expect(result.stdout).toContain(`kept: ${mainDir} (main): outside`);
+    });
+  });
+
+  describe("--auto usage", () => {
+    test("--auto rejects --min-idle-minutes", () => {
+      const result = run(["--auto", "--min-idle-minutes", "10"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--auto rejects --apply", () => {
+      const result = run(["--auto", "--apply"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--auto rejects --min-idle-minutes given before it", () => {
+      const result = run(["--min-idle-minutes", "10", "--auto"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--ancestors without --auto is rejected", () => {
+      const result = run(["--ancestors", "1"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--ancestors without a value is rejected", () => {
+      const result = run(["--auto", "--ancestors"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("--auto with --ancestors is accepted", () => {
+      const result = run(["--auto", "--ancestors", "4242"]);
+
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("--auto without --ancestors is accepted", () => {
+      const result = run(["--auto"]);
+
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("--auto accepts an empty --ancestors value", () => {
+      const result = run(["--auto", "--ancestors", ""]);
+
+      expect(result.exitCode).toBe(0);
     });
   });
 
