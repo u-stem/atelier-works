@@ -39,7 +39,14 @@ export type FrozenPushPlan = {
   readonly excludedTargets: readonly string[];
   /** この回の開始より前に終わっていた行。pushが成功したら消す。 */
   readonly readyIds: readonly string[];
+  /** 有効なdeployの保留。あるあいだ、反映全体を待つ。 */
+  readonly deployFreezes: readonly ActiveDeployFreeze[];
   readonly warnings: readonly string[];
+};
+
+export type ActiveDeployFreeze = {
+  readonly id: string;
+  readonly expires_at: string;
 };
 
 /** 失敗の文言に載せる、回復の手順。`reason`と`holder`は載せない。 */
@@ -96,9 +103,22 @@ export async function prepareFrozenPush(
       excludesArg: excludesArg(excludes.value),
       excludedTargets: targets,
       readyIds: endedFreezes(state.value, now).map((e) => e.id),
+      deployFreezes: [],
       warnings,
     },
   };
+}
+
+export async function readActiveDeployFreezes(
+  _ports: FreezePorts,
+): Promise<Outcome<readonly ActiveDeployFreeze[]>> {
+  return { ok: true, value: [] };
+}
+
+export function shouldHoldDeploy(
+  _plan: Pick<FrozenPushPlan, "deployFreezes">,
+): boolean {
+  return false;
 }
 
 export type FreezeAction = "skip" | "reconcile" | "deploy";
