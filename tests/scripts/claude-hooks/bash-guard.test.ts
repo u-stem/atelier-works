@@ -1905,3 +1905,47 @@ describe("bash-guard compares the write path of mise generate loosely", () => {
     );
   });
 });
+
+// 括弧の中のPOSIX文字クラスと、zshのglobのまとまりと、生成先のglobで、拒否を逃れない。
+describe("bash-guard denies a subagent that hides the hold code in a class or a group", () => {
+  test.each([
+    "bun scripts/hol[![:upper:]].ts place",
+    "bun scripts/hol[^[:upper:]].ts place",
+    "bun scripts/[![=x=]]old.ts place",
+    "bun scripts/hol[a[.d.]].ts place",
+    "mise run hold:[!a[:upper:]]*",
+    "bun scripts/(ho)ld.ts place",
+    "bun scripts/hol(d).ts place",
+    "bun (ho)ld.ts place",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard keeps allowing parentheses that are not a glob group", () => {
+  test.each([
+    "arr=(a b)",
+    "f() { :; }",
+    "f () { :; }",
+    "(echo hi && ls)",
+    "if (true); then echo hi; fi",
+    "! (false)",
+    "for ((i=0;i<3;i++)); do :; done",
+    "echo $(date)",
+    "diff <(echo a) <(echo b)",
+    "echo a | (cat)",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard denies mise generate whose write path is a pattern", () => {
+  test.each([
+    "mise generate task-docs -o docs/*.md",
+    "mise generate task-docs -o docs/{a,b}.md",
+    "mise generate task-docs -o .g?t/hooks/pre-commit",
+    "mise generate task-docs --output=.git/hook[s]/pre-commit",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
