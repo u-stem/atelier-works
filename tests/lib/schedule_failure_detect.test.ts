@@ -58,6 +58,10 @@ type World = {
   baselineResult: unknown;
   /** 失敗の一覧のページ。 */
   failurePages: unknown[][];
+  /** 設定すると、失敗の一覧をこの集合から、開始の古い順に、問い合わせの絞り込みどおりに返す。 */
+  failureJobs: unknown[] | null;
+  /** `true`なら、サーバーが開始時刻の絞り込みを無視する。 */
+  ignoreStartedAfter: boolean;
   /** scriptごとの履歴(新しい順)。 */
   history: Record<string, unknown>;
   /** 15分以内に見えるジョブ。 */
@@ -86,6 +90,8 @@ function newWorld(): World {
     },
     baselineResult: { processed_until: iso(BASELINE) },
     failurePages: [[]],
+    failureJobs: null,
+    ignoreStartedAfter: false,
     history: {},
     recentVisible: [{ script_path: POLL, schedule_path: POLL }],
     wideVisible: [{ script_path: POLL, schedule_path: POLL }],
@@ -142,6 +148,24 @@ function harness(world: World): Harness {
       }
       if (query.success === false) {
         if (world.listFailuresError !== null) throw world.listFailuresError;
+        if (world.failureJobs !== null) {
+          const after = Date.parse(query.startedAfter ?? "");
+          const page = query.page ?? 1;
+          const size = query.perPage ?? 100;
+          return world.failureJobs
+            .filter(
+              (job) =>
+                world.ignoreStartedAfter ||
+                Date.parse(String(Reflect.get(Object(job), "started_at"))) >
+                  after,
+            )
+            .sort(
+              (a, b) =>
+                Date.parse(String(Reflect.get(Object(a), "started_at"))) -
+                Date.parse(String(Reflect.get(Object(b), "started_at"))),
+            )
+            .slice((page - 1) * size, page * size);
+        }
         return world.failurePages[(query.page ?? 1) - 1] ?? [];
       }
       if (query.scriptPathExact !== undefined) {
@@ -174,6 +198,7 @@ function harness(world: World): Harness {
     recordFailure: async (record, jobIds) => {
       events.push(`record:${record.job_id}`);
       if (world.recordError !== null) throw world.recordError;
+      world.recorded.add(record.job_id);
       records.push({ record, jobIds });
       return records.length;
     },
@@ -556,22 +581,140 @@ describe("detectScheduleFailures: more failures than the pages hold", () => {
     expect(result.truncated).toBe(true);
   });
 
-  test("continues from the last failure it processed", async () => {
+  test("keeps the baseline for the completion filter of the next scan", async () => {
     const world = saturated();
     const result = await detectScheduleFailures(harness(world).deps);
-    expect(result.processed_until).toBe(iso(BASELINE + 4100 * 1000));
+    expect(result.processed_until).toBe(iso(BASELINE));
   });
 
-  test("fails when the pages hold nothing newer than the baseline", async () => {
+  test("hands over the latest start it read, to be used as is by the next scan", async () => {
+    const world = saturated();
+    const result = await detectScheduleFailures(harness(world).deps);
+    // 開始は完了の1分前。最後に読んだジョブの完了は BASELINE + 4100 秒。
+    expect(result.scan_started_after).toBe(iso(BASELINE + 4100 * 1000 - MIN));
+  });
+
+  test("leaves scan_started_after empty when the whole window was read", async () => {
+    const result = await detectScheduleFailures(harness(newWorld()).deps);
+    expect(result.scan_started_after).toBeNull();
+  });
+
+  test("moves on when the pages hold only failures that completed before the baseline", async () => {
     const world = newWorld();
     world.failurePages = [0, 1, 2, 3, 4].map((p) =>
       Array.from({ length: SCAN_PAGE_SIZE }, (_, i) =>
         failedJob(p * 1000 + i, BASELINE - 1000 - i),
       ),
     );
+    const result = await detectScheduleFailures(harness(world).deps);
+    expect(result.scan_started_after).not.toBeNull();
+  });
+
+  test("fails when the server ignores the start filter and the pages hold nothing newer than the one asked for", async () => {
+    const world = newWorld();
+    world.failureJobs = Array.from({ length: 520 }, (_, i) =>
+      failedJob(i + 1, BASELINE - 10 * HOUR - i * 1000),
+    );
+    world.ignoreStartedAfter = true;
     await expect(detectScheduleFailures(harness(world).deps)).rejects.toThrow(
       "no progress",
     );
+  });
+});
+
+describe("detectScheduleFailures: a backlog larger than one run reads", () => {
+  /** 20個は500件の上限の外に残る。0番は長く走って最後に失敗し、完了が最も遅い。 */
+  function backlog(): World {
+    const world = newWorld();
+    world.baselineResult = { processed_until: iso(NOW - 3 * HOUR) };
+    const start = NOW - 2 * HOUR;
+    const jobs: unknown[] = [];
+    jobs.push(failedJob(1, NOW - MIN, POLL, { started_at: iso(start - 1000) }));
+    for (let i = 0; i < 519; i += 1) {
+      jobs.push(
+        failedJob(i + 2, start + i * 1000 + 10_000, POLL, {
+          started_at: iso(start + i * 1000),
+        }),
+      );
+    }
+    world.failureJobs = jobs;
+    return world;
+  }
+
+  /** 1回目の結果を前回の成功した実行の結果として、2回目を動かす。 */
+  async function twoRuns(): Promise<{
+    first: Awaited<ReturnType<typeof detectScheduleFailures>>;
+    second: Awaited<ReturnType<typeof detectScheduleFailures>>;
+    world: World;
+    secondQueries: ListCompletedJobsData[];
+  }> {
+    const world = backlog();
+    const first = await detectScheduleFailures(harness(world).deps);
+    world.baselineResult = first;
+    const h = harness(world);
+    const second = await detectScheduleFailures(h.deps);
+    return { first, second, world, secondQueries: h.queries };
+  }
+
+  test("the first run stops at the limit", async () => {
+    expect((await twoRuns()).first.truncated).toBe(true);
+  });
+
+  test("the second run finishes the backlog", async () => {
+    expect((await twoRuns()).second.truncated).toBe(false);
+  });
+
+  test("no failure is dropped across the two runs", async () => {
+    expect((await twoRuns()).world.recorded.size).toBe(520);
+  });
+
+  test("the second run records only what the first did not", async () => {
+    const { first, second } = await twoRuns();
+    expect(first.recorded + second.recorded).toBe(520);
+  });
+
+  test("the second run starts after the latest start the first run read, without the lookback", async () => {
+    const { first, secondQueries } = await twoRuns();
+    const query = secondQueries.find((q) => q.success === false);
+    expect(query?.startedAfter).toBe(first.scan_started_after);
+  });
+
+  test("a job that started later and completed earlier than the long one is not dropped", async () => {
+    const { world } = await twoRuns();
+    expect(world.recorded.has(jobIdOf(520))).toBe(true);
+  });
+
+  test("the long running job is recorded", async () => {
+    const { world } = await twoRuns();
+    expect(world.recorded.has(jobIdOf(1))).toBe(true);
+  });
+
+  test("the second run does not throw even though the first one read the newest failure", async () => {
+    await expect(twoRuns()).resolves.toBeDefined();
+  });
+
+  test("a scan point older than a day falls back to the window of a day", async () => {
+    const world = newWorld();
+    world.baselineResult = {
+      processed_until: iso(NOW - 3 * HOUR),
+      scan_started_after: iso(NOW - 40 * HOUR),
+    };
+    const h = harness(world);
+    await detectScheduleFailures(h.deps);
+    const query = h.queries.find((q) => q.success === false);
+    expect(query?.startedAfter).toBe(iso(NOW - SCAN_MAX_WINDOW_MS));
+  });
+
+  test("a scan point that is not a date is ignored", async () => {
+    const world = newWorld();
+    world.baselineResult = {
+      processed_until: iso(BASELINE),
+      scan_started_after: "soon",
+    };
+    const h = harness(world);
+    await detectScheduleFailures(h.deps);
+    const query = h.queries.find((q) => q.success === false);
+    expect(query?.startedAfter).toBe(iso(BASELINE - SCAN_LOOKBACK_MS));
   });
 });
 
@@ -884,5 +1027,104 @@ describe("detectScheduleFailures: failures that continue", () => {
     const h = harness(world);
     await detectScheduleFailures(h.deps);
     expect(h.notices).toEqual([SCHEDULE_FAILING_CHECK_FAILED_NOTICE]);
+  });
+});
+
+describe("detectScheduleFailures: the visibility check after a long stop", () => {
+  function stoppedForLong(): World {
+    const world = newWorld();
+    world.baselineResult = { processed_until: iso(NOW - 30 * HOUR) };
+    world.recentVisible = [];
+    world.wideVisible = [];
+    return world;
+  }
+
+  test("succeeds when nothing is visible in a day but the last scan is older than a day", async () => {
+    const result = await detectScheduleFailures(harness(stoppedForLong()).deps);
+    expect(result.mode).toBe("scan");
+  });
+
+  test("warns instead of failing", async () => {
+    const h = harness(stoppedForLong());
+    await detectScheduleFailures(h.deps);
+    expect(h.warnings).toContain(
+      "no job of another schedule is visible in the last 24 hours; continuing because the last scan is older than a day",
+    );
+  });
+
+  test("still fails when the last scan is within a day", async () => {
+    const world = stoppedForLong();
+    world.baselineResult = { processed_until: iso(NOW - 2 * HOUR) };
+    await expect(detectScheduleFailures(harness(world).deps)).rejects.toThrow(
+      "no job of another schedule is visible",
+    );
+  });
+});
+
+describe("detectScheduleFailures: the result of the previous run cannot be read", () => {
+  function oldBaselineRun(): World {
+    const world = newWorld();
+    world.baselineRun = {
+      ...(world.baselineRun ?? {}),
+      started_at: iso(NOW - 30 * HOUR),
+    };
+    world.baselineResultError = new Error("result api down");
+    return world;
+  }
+
+  test("fails when the previous run is recent, so that the next run retries", async () => {
+    const world = newWorld();
+    world.baselineResultError = new Error("result api down");
+    await expect(detectScheduleFailures(harness(world).deps)).rejects.toThrow(
+      "result api down",
+    );
+  });
+
+  test("falls back to the window of a day once the previous run is older than a day", async () => {
+    const h = harness(oldBaselineRun());
+    await detectScheduleFailures(h.deps);
+    const query = h.queries.find((q) => q.success === false);
+    expect(query?.startedAfter).toBe(
+      iso(NOW - SCAN_MAX_WINDOW_MS - SCAN_LOOKBACK_MS),
+    );
+  });
+
+  test("warns when it falls back", async () => {
+    const h = harness(oldBaselineRun());
+    await detectScheduleFailures(h.deps);
+    expect(h.warnings).toContain(
+      "could not read the result of the previous run, which is older than a day; scanning the last day only",
+    );
+  });
+});
+
+describe("detectScheduleFailures: the announcement comes right after the records of its script", () => {
+  function twoScripts(): World {
+    const world = newWorld();
+    world.failurePages = [
+      [failedJob(1, NOW - 20 * MIN, POLL), failedJob(2, NOW - 10 * MIN, OTHER)],
+    ];
+    return world;
+  }
+
+  test("announces a script before it records the next one", async () => {
+    const h = harness(twoScripts());
+    await detectScheduleFailures(h.deps);
+    expect(h.events.indexOf(`send:${jobIdOf(1)}`)).toBeLessThan(
+      h.events.indexOf(`record:${jobIdOf(2)}`),
+    );
+  });
+
+  test("keeps the announcement of a script whose records finished when a later script cannot be recorded", async () => {
+    const h = harness(twoScripts());
+    const deps: ScheduleFailureDetectDeps = {
+      ...h.deps,
+      recordFailure: async (record, jobIds) => {
+        if (record.flow_path === OTHER) throw new Error("db down");
+        return await h.deps.recordFailure(record, jobIds);
+      },
+    };
+    await detectScheduleFailures(deps).catch(() => undefined);
+    expect(h.sent.map((s) => s.flowPath)).toEqual([POLL]);
   });
 });

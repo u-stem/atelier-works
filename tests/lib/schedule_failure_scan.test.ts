@@ -9,8 +9,10 @@ import {
   findBaselineRun,
   groupByScript,
   hasOtherScheduleJob,
+  latestStartedAtMs,
   nextProcessedUntil,
   readProcessedUntil,
+  readScanStartedAfter,
   SCAN_LOOKBACK_MS,
   SCAN_MAX_PAGES,
   SCAN_MAX_WINDOW_MS,
@@ -85,6 +87,10 @@ describe("baselineRunsQuery", () => {
   test("asks for the newest runs first", () => {
     expect(baselineRunsQuery("factory").orderDesc).toBe(true);
   });
+
+  test("leaves out skipped runs", () => {
+    expect(baselineRunsQuery("factory").isSkipped).toBe(false);
+  });
 });
 
 describe("findBaselineRun", () => {
@@ -127,6 +133,10 @@ describe("findBaselineRun", () => {
     expect(
       findBaselineRun([run({ schedule_path: "f/factory/poll_prs" })]),
     ).toBeNull();
+  });
+
+  test("skips a skipped run, whose success value is not a real success", () => {
+    expect(findBaselineRun([run({ is_skipped: true })])).toBeNull();
   });
 
   test("skips a run that did not succeed", () => {
@@ -211,6 +221,82 @@ describe("scanWindow", () => {
 
   test("treats a baseline in the future as now", () => {
     expect(scanWindow(NOW + HOUR, NOW).baselineMs).toBe(NOW);
+  });
+});
+
+describe("scanWindow after a scan that stopped at the page limit", () => {
+  const CONT = NOW - 2 * HOUR;
+
+  test("starts at the given scan point as is, without the lookback", () => {
+    expect(scanWindow(NOW - HOUR, NOW, CONT).startedAfterMs).toBe(CONT);
+  });
+
+  test("does not filter by completion time", () => {
+    expect(scanWindow(NOW - HOUR, NOW, CONT).completedFromMs).toBe(0);
+  });
+
+  test("filters by the baseline without a scan point", () => {
+    expect(scanWindow(NOW - HOUR, NOW).completedFromMs).toBe(NOW - HOUR);
+  });
+
+  test("starts a day before now when the scan point is older than a day", () => {
+    expect(scanWindow(NOW - HOUR, NOW, NOW - 40 * HOUR).startedAfterMs).toBe(
+      NOW - SCAN_MAX_WINDOW_MS,
+    );
+  });
+
+  test("reports the clamp of an old scan point", () => {
+    expect(scanWindow(NOW - HOUR, NOW, NOW - 40 * HOUR).clamped).toBe(true);
+  });
+
+  test("does not clamp a scan point within a day", () => {
+    expect(scanWindow(NOW - HOUR, NOW, CONT).clamped).toBe(false);
+  });
+});
+
+describe("latestStartedAtMs", () => {
+  test("is the latest start among the jobs, whatever their order", () => {
+    expect(
+      latestStartedAtMs([
+        { started_at: "2026-10-25T10:00:00.000Z" },
+        { started_at: "2026-10-25T11:00:00.000Z" },
+        { started_at: "2026-10-25T10:30:00.000Z" },
+      ]),
+    ).toBe(Date.parse("2026-10-25T11:00:00.000Z"));
+  });
+
+  test("counts jobs that the failure filter drops", () => {
+    expect(
+      latestStartedAtMs([
+        { started_at: "2026-10-25T10:00:00.000Z", is_skipped: true },
+      ]),
+    ).toBe(Date.parse("2026-10-25T10:00:00.000Z"));
+  });
+
+  test("ignores elements without a readable start", () => {
+    expect(
+      latestStartedAtMs([null, { started_at: "soon" }, { id: "x" }]),
+    ).toBeNull();
+  });
+});
+
+describe("readScanStartedAfter", () => {
+  test("reads scan_started_after of the result", () => {
+    expect(
+      readScanStartedAfter({ scan_started_after: "2026-10-25T11:00:00.000Z" }),
+    ).toBe(Date.parse("2026-10-25T11:00:00.000Z"));
+  });
+
+  test("is null when it is empty", () => {
+    expect(readScanStartedAfter({ scan_started_after: null })).toBeNull();
+  });
+
+  test("is null when it is not a date", () => {
+    expect(readScanStartedAfter({ scan_started_after: "soon" })).toBeNull();
+  });
+
+  test("is null when the result is not an object", () => {
+    expect(readScanStartedAfter("done")).toBeNull();
   });
 });
 
@@ -529,6 +615,32 @@ describe("describeJobError", () => {
     );
   });
 
+  test("removes a NUL character, which a text column cannot hold", () => {
+    expect(
+      describeJobError({ result: { error: { message: "a\u0000b" } } }),
+    ).toBe("ab");
+  });
+
+  test("removes other control characters", () => {
+    expect(
+      describeJobError({
+        result: { error: { message: "a\u0001b\u001bc\u007fd" } },
+      }),
+    ).toBe("abcd");
+  });
+
+  test("keeps a line break and a tab", () => {
+    expect(
+      describeJobError({ result: { error: { message: "a\nb\tc" } } }),
+    ).toBe("a\nb\tc");
+  });
+
+  test("removes control characters from the cancel reason too", () => {
+    expect(
+      describeJobError({ canceled: true, canceled_reason: "x\u0000y" }),
+    ).toBe("canceled: xy");
+  });
+
   test("cuts a long message", () => {
     const long = "x".repeat(ERROR_MAX_CHARS + 500);
     expect(
@@ -621,30 +733,11 @@ describe("collectPages", () => {
 });
 
 describe("nextProcessedUntil", () => {
-  const f = (completedAtMs: number) => ({
-    id: String(completedAtMs),
-    scriptPath: "x",
-    completedAtMs,
-    completedAt: new Date(completedAtMs).toISOString(),
-    canceledByTimeout: false,
-  });
   const BASELINE = NOW - 30 * MIN;
 
   test("overlaps the previous scan by the margin when the whole window was read", () => {
     expect(
       nextProcessedUntil({
-        failures: [f(NOW - 10 * MIN)],
-        baselineMs: BASELINE,
-        runStartedAtMs: NOW,
-        truncated: false,
-      }),
-    ).toBe(NOW - SCAN_OVERLAP_MS);
-  });
-
-  test("moves past a failure that completed long before the run", () => {
-    expect(
-      nextProcessedUntil({
-        failures: [f(BASELINE)],
         baselineMs: BASELINE,
         runStartedAtMs: NOW,
         truncated: false,
@@ -655,7 +748,6 @@ describe("nextProcessedUntil", () => {
   test("never moves back before the baseline", () => {
     expect(
       nextProcessedUntil({
-        failures: [],
         baselineMs: NOW,
         runStartedAtMs: NOW,
         truncated: false,
@@ -663,21 +755,9 @@ describe("nextProcessedUntil", () => {
     ).toBe(NOW);
   });
 
-  test("is the completion of the last failure when the pages ran out", () => {
+  test("stays at the baseline when the pages ran out, because the next scan resumes from a start time", () => {
     expect(
       nextProcessedUntil({
-        failures: [f(NOW - 20 * MIN), f(NOW - 10 * MIN)],
-        baselineMs: BASELINE,
-        runStartedAtMs: NOW,
-        truncated: true,
-      }),
-    ).toBe(NOW - 10 * MIN);
-  });
-
-  test("stays at the baseline when the pages ran out without a failure", () => {
-    expect(
-      nextProcessedUntil({
-        failures: [],
         baselineMs: BASELINE,
         runStartedAtMs: NOW,
         truncated: true,

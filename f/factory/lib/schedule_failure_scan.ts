@@ -87,6 +87,7 @@ export type ScanWindow = {
   readonly startedAfterMs: number;
   /** 続きの位置が古すぎて、`SCAN_MAX_WINDOW_MS`に切り詰めたか。 */
   readonly clamped: boolean;
+  readonly completedFromMs: number;
 };
 
 /** 検出器自身の、成功した実行を新しい順に頼む問い合わせ。 */
@@ -152,7 +153,11 @@ export function readProcessedUntil(result: unknown, run: BaselineRun): number {
  * 前回の続きの位置から、今回読む範囲を決める。
  * 続きの位置が未来(時計のずれ)なら現在とし、`SCAN_MAX_WINDOW_MS`より古ければその時間前に切り詰める。
  */
-export function scanWindow(baselineMs: number, nowMs: number): ScanWindow {
+export function scanWindow(
+  baselineMs: number,
+  nowMs: number,
+  _scanStartedAfterMs: number | null = null,
+): ScanWindow {
   const bounded = Math.min(baselineMs, nowMs);
   const floor = nowMs - SCAN_MAX_WINDOW_MS;
   const baseline = Math.max(bounded, floor);
@@ -160,6 +165,7 @@ export function scanWindow(baselineMs: number, nowMs: number): ScanWindow {
     baselineMs: baseline,
     startedAfterMs: baseline - SCAN_LOOKBACK_MS,
     clamped: bounded < floor,
+    completedFromMs: -1,
   };
 }
 
@@ -418,4 +424,12 @@ export function nextProcessedUntil(input: {
     return last === undefined ? input.baselineMs : last.completedAtMs;
   }
   return Math.max(input.baselineMs, input.runStartedAtMs - SCAN_OVERLAP_MS);
+}
+
+export function latestStartedAtMs(_jobs: readonly unknown[]): number | null {
+  return 0;
+}
+
+export function readScanStartedAfter(_result: unknown): number | null {
+  return 0;
 }

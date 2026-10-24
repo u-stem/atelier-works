@@ -446,6 +446,24 @@ describe("checkScheduleDetector: the detector has not succeeded for long", () =>
   });
 });
 
+describe("checkScheduleDetector: a skipped run", () => {
+  test("is not a success", async () => {
+    const world = newWorld();
+    world.successes = lastSuccess(NOW - 5 * MIN).map((run) => ({
+      ...run,
+      is_skipped: true,
+    }));
+    world.schedule = { enabled: true, edited_at: iso(NOW - 24 * 60 * MIN) };
+    expect(await checkScheduleDetector(harness(world).deps)).toBe("stalled");
+  });
+
+  test("asks for runs that were not skipped", async () => {
+    const h = harness(newWorld());
+    await checkScheduleDetector(h.deps);
+    expect(h.queries[0]?.isSkipped).toBe(false);
+  });
+});
+
 describe("checkScheduleDetector: the detector never succeeded", () => {
   function never(): World {
     const world = newWorld();
