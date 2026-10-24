@@ -640,6 +640,10 @@ class Parser {
         return;
       case "(":
         this.rejectGlobGroup();
+        // `< <(...)`のプロセス置換は、標準入力の出どころが実行時に決まる。内側のコマンドは別に読む。
+        if (this.redirectNextWord && !this.redirectWrites) {
+          this.redirects.push({ text: "<(", dynamic: true, glob: false });
+        }
         this.endCommand();
         this.subshellDepth += 1;
         this.position += 1;

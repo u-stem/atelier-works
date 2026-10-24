@@ -494,18 +494,99 @@ function direct0IsFreezeCli(words: readonly Word[]): boolean {
   return first !== undefined && pointsAtFreezeCode(first);
 }
 
+/**
+ * 実行系の標準入力に流れ込むものの出どころ。
+ * `redirects`はリダイレクトの先の語、`upstream`はパイプの前のコマンドの語(直前から順に)、
+ * `dynamicInput`はヒアストリングやリダイレクトの先が実行時に決まることを表す。
+ */
+export type HoldStdin = {
+  readonly redirects: readonly Word[];
+  readonly upstream: readonly (readonly Word[])[];
+  readonly dynamicInput: boolean;
+};
+
+const NO_STDIN: HoldStdin = {
+  redirects: [],
+  upstream: [],
+  dynamicInput: false,
+};
+
+/** 標準入力をコードとして読む形のオペランド。 */
+function readsCodeFromStdin(args: readonly Word[]): boolean {
+  return args.some((word) => word.text === "-" || word.text === "/dev/stdin");
+}
+
+/** パイプの前に置いてよい、中身を語から読めるプログラム。 */
+const PLAIN_UPSTREAM: ReadonlySet<string> = new Set(["cat"]);
+
+/** 語が保留か凍結のコードを指す、実行時に決まる、またはglobなら真。 */
+function opaqueOrHoldCode(word: Word): boolean {
+  return (
+    word.dynamic ||
+    word.glob ||
+    pointsAtHoldCode(word) ||
+    pointsAtFreezeCode(word)
+  );
+}
+
+/**
+ * 実行系が標準入力をコードとして読む形(`bun run -`)の入力元を調べる。
+ * 保留や凍結のコードを流し込むファイル、実行時に決まる入力、中身を読めないパイプの前のコマンドは拒否する。
+ * 中身を読めるのは、`echo`と`printf`(`inputs`が文字列を返す)と、静的なファイルだけを渡す`cat`である。
+ * 入力が凍結のCLIを指すときは、`-`の後ろを副コマンドとして判定する。
+ */
+function stdinCodeFinding(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+  stdin: HoldStdin,
+): HoldFinding | null {
+  if (!readsCodeFromStdin(args) || startsWithInspectionTool(args)) return null;
+  if (stdin.dynamicInput) return "dynamic";
+  const literal = inputs();
+  if (literal === null) return "dynamic";
+  for (const command of stdin.upstream) {
+    const program = baseName(command[0]?.text ?? "");
+    if (program === "echo" || program === "printf") continue;
+    if (
+      !PLAIN_UPSTREAM.has(program) ||
+      command.slice(1).some(opaqueOrHoldCode)
+    ) {
+      return "operation";
+    }
+  }
+  if (literal.some((text) => FREEZE_MENTION.test(text))) {
+    const dash = args.findIndex(
+      (word) => word.text === "-" || word.text === "/dev/stdin",
+    );
+    return freezeSubcommandFinding(args.slice(dash + 1));
+  }
+  return null;
+}
+
 /** 実行系の引数が、保留か凍結のCLIを呼ぶ拒否の対象なら、その種類を返す。 */
 function runnerFinding(
   args: readonly Word[],
   inputs: () => readonly string[] | null,
+  stdin: HoldStdin = NO_STDIN,
 ): HoldFinding | null {
+  // `bun run - < scripts/freeze.ts`のように、標準入力で流し込んだコードも実行される。
+  if (
+    stdin.redirects.some(
+      (word) => pointsAtHoldCode(word) || pointsAtFreezeCode(word),
+    )
+  ) {
+    return "operation";
+  }
   if (runnerTouchesHolds(args, inputs)) return "operation";
+  const fromStdin = stdinCodeFinding(args, inputs, stdin);
+  if (fromStdin !== null) return fromStdin;
   return freezeCliFinding(args, inputs);
 }
 
 function miseFinding(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
+  stdin: HoldStdin = NO_STDIN,
 ): HoldFinding | null {
   const scan = scanMiseGlobalOptions(words, 1);
   // 知らないオプションが値を取ると、サブコマンドの位置が決まらない。コマンド全体を拒否する。
@@ -518,7 +599,7 @@ function miseFinding(
     (word) => word.text === "exec" || word.text === "x",
   );
   if (execAt !== -1) {
-    const finding = runnerFinding(args.slice(execAt + 1), inputs);
+    const finding = runnerFinding(args.slice(execAt + 1), inputs, stdin);
     if (finding !== null) return finding;
   }
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
@@ -553,28 +634,19 @@ function sqlTouchesHolds(
  * 単純コマンドが、保留を置く・解除する操作なら、拒否の種類を返す。そうでなければnullを返す。
  * `words`は、変数代入と前置き(`env`、`timeout`、`mise exec --`など)を外した語である。
  * `inputs`は、標準入力に渡る文字列(ヒアドキュメントと、パイプの前の`echo`など)を返す。
- * `redirects`は、リダイレクトの先の語である。実行系の標準入力に流し込むファイルが、保留か凍結のコードなら拒否する。
+ * `stdin`は、標準入力に流れ込むものの出どころ(リダイレクト、パイプの前のコマンド、動的な入力)である。
+ * 実行系が標準入力をコードとして読む形で、出どころが保留か凍結のコード、または読めないものなら拒否する。
  * 読めないときはnullを返す。呼ばれるのは、必要になったときだけである。
  */
 export function findHoldOperation(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
-  redirects: readonly Word[] = [],
+  stdin: HoldStdin = NO_STDIN,
 ): HoldFinding | null {
   const first = words[0]?.text ?? "";
   const program = baseName(first);
-  if (program === "mise") return miseFinding(words, inputs);
-  if (RUNNERS.has(program)) {
-    // `bun run - < scripts/freeze.ts`のように、標準入力で流し込んだコードも実行される。
-    if (
-      redirects.some(
-        (word) => pointsAtHoldCode(word) || pointsAtFreezeCode(word),
-      )
-    ) {
-      return "operation";
-    }
-    return runnerFinding(words.slice(1), inputs);
-  }
+  if (program === "mise") return miseFinding(words, inputs, stdin);
+  if (RUNNERS.has(program)) return runnerFinding(words.slice(1), inputs, stdin);
   if (SQL_PROGRAMS.has(program)) {
     return sqlTouchesHolds(words, inputs) ? "operation" : null;
   }

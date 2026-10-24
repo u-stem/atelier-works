@@ -2612,7 +2612,15 @@ deployの保留は、migrationのような作業の間、反映全体を待た�
   subagentは、`hold-guard.ts`が`freeze:place`の`--scope deploy`と`freeze:release`を拒否する。
   ベストエフォートの規則で、保留の拒否と同じ限界を持つ。
   `bun run - list < scripts/freeze.ts`のように標準入力へ流し込む形は、作業ツリーの`scripts/`で実行すると動くことを実測した。
-  実行系の標準入力に流し込むファイルが保留か凍結のコードなら、拒否する。
+  `mise run -- freeze:release 1`は、mise 2026.9.13で実測すると、`--`より後ろをタスク`default`への引数として扱い、実行しない。
+  保留の側は`--`より後ろの`hold:`を名指しする語も拒否するが、凍結の側はこの形を見ない。実行されないためである。
+  実行系が標準入力をコードとして読む形(オペランドが`-`か`/dev/stdin`)では、入力元を調べる。
+  次の形は拒否する。
+  - リダイレクトの先、またはパイプの前の`cat`の引数が、保留か凍結のコードである。
+  - パイプの前が`echo`、`printf`、静的な引数の`cat`以外である。
+  - ヒアストリング、リダイレクトの先、プロセス置換が実行時に決まる。
+  - 入力が凍結のCLIを指し、`-`の後ろの副コマンドが`release`か`place --scope deploy`である。
+  `echo`や静的なファイルの`cat`で無害なコードを流す形は許す。
 - 人が手で打つ`wmill datatable migrate up`と`wmill sync push`は、保留で止まらない。
   `scripts/bootstrap.sh`の全手順のモードのmigration、ホストの実行役(`scripts/host_apply/`)も止まらない。
   これらは人が意図して実行する経路であり、第5段で覆いを広げるまで受け入れる。

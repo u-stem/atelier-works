@@ -32,7 +32,7 @@ import {
   shellInputSource,
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
-import { findHoldOperation } from "./hold-guard.ts";
+import { findHoldOperation, type HoldStdin } from "./hold-guard.ts";
 import {
   ALLOW,
   type BashToolInput,
@@ -543,6 +543,25 @@ function directoryAfter(
   return resolveFrom(directory, target.text);
 }
 
+/** 標準入力に流れ込むものの出どころ。保留と凍結のコードを実行系へ流し込む形を見分けるために渡す。 */
+function holdStdin(command: SimpleCommand): HoldStdin {
+  const upstream: Word[][] = [];
+  for (
+    let source = command.pipedFrom;
+    source !== null;
+    source = source.pipedFrom
+  ) {
+    upstream.push([...stripWrappers(source.words).words]);
+  }
+  return {
+    redirects: command.redirects,
+    upstream,
+    dynamicInput:
+      command.inputs.some((word) => word.dynamic) ||
+      command.redirects.some((word) => word.dynamic),
+  };
+}
+
 function checkSimpleCommand(
   command: SimpleCommand,
   directory: string | null,
@@ -576,7 +595,7 @@ function checkSimpleCommand(
       : findHoldOperation(
           words,
           () => literalShellInputs(command),
-          command.redirects,
+          holdStdin(command),
         );
   if (hold === "dynamic") return deny(REASONS.subagentHoldDynamic);
   if (hold === "option") return deny(REASONS.subagentHoldOption);
