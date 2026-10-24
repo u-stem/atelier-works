@@ -137,6 +137,10 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the release of a hold", () => {
+    expect(noticeKindLabel("hold_released")).toBe("保留の解除");
+  });
+
   test("names the unreadable merge holds", () => {
     expect(noticeKindLabel("dependabot_merge_hold_unreadable")).toBe(
       "マージの保留を読めない状態",
