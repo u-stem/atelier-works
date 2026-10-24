@@ -156,16 +156,18 @@ export function readProcessedUntil(result: unknown, run: BaselineRun): number {
 /**
  * 前回の続きの位置から、今回読む範囲を決める。
  * 続きの位置が未来(時計のずれ)なら現在とし、`SCAN_MAX_WINDOW_MS`より古ければその時間前に切り詰める。
- * `scanStartedAfterMs`は、前回がページの上限で打ち切られたときの、読んだ最後の開始時刻である。
- * 渡されたときは、その値をそのまま開始時刻の下限にする(遡りを引かない)。完了時刻では絞らず、重なりは記録済みの除外で吸収する。
- * 完了時刻で絞ると、開始が遅く完了が早い未読の失敗を落とすためである。
+ * `scanStartedAfterMs`は、前回がページの上限で打ち切られたときの、次の回の開始時刻の下限である。
+ * 渡されたときは、その値をそのまま開始時刻の下限にする(遡りを引かない)。重なりは記録済みの除外で吸収する。
+ * 完了時刻の下限は、打ち切った最初の回が使った基準(`scanCompletedFromMs`)を引き継ぐ。
+ * 0にすると、基準を作った直後に打ち切られたとき、過去の失敗をさかのぼって記録する。
+ * 渡されないときは`baselineMs`を使う。
  * 古すぎるときは、`SCAN_MAX_WINDOW_MS`前を下限にするので、止まった検出器の続きが必ず24時間で抜ける。
  */
 export function scanWindow(
   baselineMs: number,
   nowMs: number,
   scanStartedAfterMs: number | null = null,
-  _scanCompletedFromMs: number | null = null,
+  scanCompletedFromMs: number | null = null,
 ): ScanWindow {
   const bounded = Math.min(baselineMs, nowMs);
   const floor = nowMs - SCAN_MAX_WINDOW_MS;
@@ -174,7 +176,10 @@ export function scanWindow(
     return {
       baselineMs: baseline,
       startedAfterMs: Math.max(Math.min(scanStartedAfterMs, nowMs), floor),
-      completedFromMs: 0,
+      completedFromMs: Math.max(
+        Math.min(scanCompletedFromMs ?? baseline, nowMs),
+        floor,
+      ),
       clamped: scanStartedAfterMs < floor,
     };
   }
@@ -384,10 +389,11 @@ function truncate(text: string): string {
 /**
  * 失敗したジョブ(`JobService.getJob`の応答)から、記録するエラー文を作る。
  * 結果のエラー、取り消しの理由、時間切れの順に読み、どれも無ければ読めなかったことを示す固定の文にする。
- * 秘密情報をマスクし、制御文字を落とし、`ERROR_MAX_CHARS`文字に切る。
+ * 制御文字を落とし、秘密情報をマスクし、`ERROR_MAX_CHARS`文字に切る。この順にする。
+ * 秘密情報の途中に制御文字があると、先にマスクしても一致せずに外れるためである。
  */
 export function describeJobError(job: unknown): string {
-  return truncate(stripControlCharacters(maskSecrets(rawJobError(job))));
+  return truncate(maskSecrets(stripControlCharacters(rawJobError(job))));
 }
 
 function rawJobError(job: unknown): string {
@@ -438,17 +444,25 @@ export async function collectPages(
 }
 
 /**
- * 一覧の要素のうち、最も遅い開始時刻をエポックミリ秒で返す。読める開始時刻が無ければ`null`を返す。
+ * 一覧の要素のうち、最も遅い作成時刻をエポックミリ秒で返す。作成時刻が無い要素は開始時刻で数える。
+ * 読める時刻が無ければ`null`を返す。
+ * 次の回は、この値を開始時刻の下限にそのまま使う(`scan_started_after`)。
+ * 一覧の並び順のキーが開始時刻か作成時刻かは実機で未確認なので、どちらでも安全な作成時刻を取る。
+ * 読んでいないジョブの開始時刻は、作成時刻以降であり、並びのキーで読んだ分より後になる。
  * 失敗の絞り込みで落とす要素も数える。落とした要素だけで1ページが埋まっても、位置が進むようにするためである。
  * 並び順に頼らないよう、最後の要素ではなく最大を取る。
  */
 export function latestScanPointMs(jobs: readonly unknown[]): number | null {
   let latest: number | null = null;
   for (const job of jobs) {
-    if (!isRecord(job) || !isString(job.started_at)) {
+    if (!isRecord(job)) {
       continue;
     }
-    const ms = Date.parse(job.started_at);
+    const raw = isString(job.created_at) ? job.created_at : job.started_at;
+    if (!isString(raw)) {
+      continue;
+    }
+    const ms = Date.parse(raw);
     if (!Number.isNaN(ms) && (latest === null || ms > latest)) {
       latest = ms;
     }
@@ -461,21 +475,16 @@ export function latestScanPointMs(jobs: readonly unknown[]): number | null {
  * 無い、または日時として読めないときは`null`を返す。
  */
 export function readScanStartedAfter(result: unknown): number | null {
-  if (isRecord(result) && isString(result.scan_started_after)) {
-    const ms = Date.parse(result.scan_started_after);
-    if (!Number.isNaN(ms)) {
-      return ms;
-    }
-  }
-  return null;
+  return readTime(result, "scan_started_after");
 }
 
 /**
  * 次の回の`processed_until`を返す。
- * 全件を読み終えたときは、この回の開始から`SCAN_OVERLAP_MS`手前(`baselineMs`より戻さない)にする。
+ * 通常の回は、読み終えたか打ち切ったかによらず、この回の開始から`SCAN_OVERLAP_MS`手前(`baselineMs`より戻さない)にする。
  * 最後の失敗の完了時刻に留めると、その後に失敗が無い間、位置が進まず、同じ範囲を読み直し続けるためである。
- * ページの上限で打ち切ったときは、`baselineMs`のままにする。続きは`scan_started_after`(開始時刻)で読むので、
- * 完了時刻の位置は使わない。
+ * 打ち切った回の時点で実行中だったジョブの失敗は、続きの回が読む開始時刻の下限より前に開始している。
+ * その失敗は、続きを読み終えた後の通常の回が、この位置と遡りで読み直して拾う。
+ * 続きの回(`continued`)は、位置を進めずに`baselineMs`のまま返す。進めると、その失敗が下限の外に出るためである。
  */
 export function nextProcessedUntil(input: {
   readonly baselineMs: number;
@@ -483,12 +492,29 @@ export function nextProcessedUntil(input: {
   readonly truncated: boolean;
   readonly continued: boolean;
 }): number {
-  if (input.truncated) {
+  if (input.continued) {
     return input.baselineMs;
   }
   return Math.max(input.baselineMs, input.runStartedAtMs - SCAN_OVERLAP_MS);
 }
 
-export function readScanCompletedFrom(_result: unknown): number | null {
-  return 0;
+function readTime(result: unknown, key: string): number | null {
+  if (isRecord(result)) {
+    const value = result[key];
+    if (isString(value)) {
+      const ms = Date.parse(value);
+      if (!Number.isNaN(ms)) {
+        return ms;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 前回の実行の結果から、打ち切った回の続きの完了時刻の下限(`scan_completed_from`)を読む。
+ * 打ち切った最初の回が使った基準である。無い、または日時として読めないときは`null`を返す。
+ */
+export function readScanCompletedFrom(result: unknown): number | null {
+  return readTime(result, "scan_completed_from");
 }

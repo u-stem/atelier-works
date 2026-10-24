@@ -24,6 +24,7 @@ import {
   latestScanPointMs,
   nextProcessedUntil,
   readProcessedUntil,
+  readScanCompletedFrom,
   readScanStartedAfter,
   SCAN_MAX_WINDOW_MS,
   SCAN_PAGE_SIZE,
@@ -79,10 +80,15 @@ export type ScheduleFailureDetectResult = {
   readonly mode: "bootstrap" | "scan";
   readonly processed_until: string;
   /**
-   * ページの上限で打ち切ったときだけ、次の回が開始時刻の下限にそのまま使う値(読んだ最後の開始時刻)。
+   * ページの上限で打ち切ったときだけ、次の回が開始時刻の下限にそのまま使う値(読んだジョブの作成時刻の最大)。
    * 打ち切っていないときは`null`。
    */
   readonly scan_started_after: string | null;
+  /**
+   * 打ち切った回の続きが、完了時刻の下限にそのまま使う値(打ち切った最初の回の基準)。
+   * 打ち切っていないときは`null`。
+   */
+  readonly scan_completed_from: string | null;
   /** 読んだ範囲で見つけた、新しい失敗の数。記録済みのものを含む。 */
   readonly found: number;
   /** 今回記録した数。 */
@@ -100,6 +106,8 @@ type Baseline = {
   readonly processedUntilMs: number;
   /** 前回がページの上限で打ち切られたときの、開始時刻の下限。 */
   readonly scanStartedAfterMs: number | null;
+  /** 続きの回が完了時刻の下限に引き継ぐ、打ち切った最初の回の基準。 */
+  readonly scanCompletedFromMs: number | null;
 };
 
 /**
@@ -139,6 +147,7 @@ async function readBaseline(
   return {
     processedUntilMs: readProcessedUntil(result, run),
     scanStartedAfterMs: readScanStartedAfter(result),
+    scanCompletedFromMs: readScanCompletedFrom(result),
   };
 }
 
@@ -328,6 +337,7 @@ export async function detectScheduleFailures(
       mode: "bootstrap",
       processed_until: new Date(startedAtMs).toISOString(),
       scan_started_after: null,
+      scan_completed_from: null,
       found: 0,
       recorded: 0,
       truncated: false,
@@ -338,6 +348,7 @@ export async function detectScheduleFailures(
     baseline.processedUntilMs,
     startedAtMs,
     baseline.scanStartedAfterMs,
+    baseline.scanCompletedFromMs,
   );
   await verifyVisibility(deps, startedAtMs, window.clamped);
   if (window.clamped) {
@@ -360,24 +371,28 @@ export async function detectScheduleFailures(
       count: malformed,
     });
   }
+  const continued = baseline.scanStartedAfterMs !== null;
   let scanStartedAfter: string | null = null;
+  let scanCompletedFrom: string | null = null;
   if (truncated) {
     deps.log.warn("the failure list reached the page limit", {
       pages: Math.ceil(jobs.length / SCAN_PAGE_SIZE),
     });
-    // 次の回は、読んだ最後の開始時刻から続ける。要求した下限から進めないときだけ、本当に進めない。
+    // 次の回は、読んだ作成時刻の最大から続ける。要求した下限から進めないときだけ、本当に進めない。
     const latest = latestScanPointMs(jobs);
     if (latest === null || latest <= window.startedAfterMs) {
       throw new Error(
-        "the failure list reached the page limit with no progress: it holds no job that started after the lower bound",
+        "the failure list reached the page limit with no progress: it holds no job created after the lower bound",
       );
     }
     scanStartedAfter = new Date(latest).toISOString();
+    scanCompletedFrom = new Date(window.completedFromMs).toISOString();
   }
   const processedUntilMs = nextProcessedUntil({
     baselineMs: window.baselineMs,
     runStartedAtMs: startedAtMs,
     truncated,
+    continued,
   });
 
   const recordedIds = await deps.listRecordedJobIds(
@@ -400,6 +415,7 @@ export async function detectScheduleFailures(
     mode: "scan",
     processed_until: new Date(processedUntilMs).toISOString(),
     scan_started_after: scanStartedAfter,
+    scan_completed_from: scanCompletedFrom,
     found: failures.length,
     recorded,
     truncated,
