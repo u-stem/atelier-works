@@ -96,7 +96,7 @@ deployの保留を置いた後は、置く前に始まった`self_update`の回�
 ## しないこと
 
 - subagentは、保留を置かず、解除もしない。主セッションに報告して終える。
-- Consoleの解除script(`hold_release`と`freeze_release`)を、`wmill script run`や`curl`などで呼ばない。凍結の変数を`wmill variable`で書かない。端末での人の確認を通らずに、他の主体の保留を外すためで、フックが主セッションにも拒否する。名前を含むコマンドは、読むだけでも拒否するので、ソースはReadツールか`git show`で読む。解除は、人がConsoleの画面で行う。
+- Consoleの解除script(`hold_release`と`freeze_release`)を、`wmill script run`や`curl`などで呼ばない。凍結の変数を`wmill variable`で書かない。端末での人の確認を通らずに、他の主体の保留を外すためで、フックが主セッションにも拒否する。名前を含むコマンドは、読むだけでも拒否するので、ソースはReadツールか`git show`で読む。コミットメッセージやPR本文のファイルは、Bashのヒアドキュメントでなく、Writeツールで書く。解除は、人がConsoleの画面で行う。
 - 保留で止められたマージを、別の経路(GitHubのWeb UI、MCP、APIの別の呼び出し)で通さない。
 - クラウドのセッションは、保留を読めない。マージと反映は人に頼む。
 - 理由に秘密を書かない。

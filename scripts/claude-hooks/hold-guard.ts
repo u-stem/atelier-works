@@ -18,6 +18,7 @@
 // 読み取りなどのプログラム(`git`、`grep`、`cat`など)は、名前だけでは通す。同じコマンドに実行を表す語(`wmill`、`curl`、`npx`、`sh`など)が
 // 並ぶとき、実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
 // `wmill`が解除scriptを実行せずに読む・配る副コマンド(`script get`、`job list`、`script push`など)は通す。
+// パイプの上流の語にある名前は、`xargs`が受ける読み取りのプログラムと、`wmill`と、実行するプログラムに当てる。
 // `wmill jobs push`は、待ち行列のファイルからジョブを積み、名前が語に現れないので、名前なしで拒否する。
 // 凍結の変数`f/factory/freezes`は、`variable add/push`の語と、変数を書くURLの経路に、そのパスが当たるときに拒否する。
 // 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。
@@ -887,6 +888,8 @@ export type ReleaseCallContext = {
   readonly inputs: () => readonly string[] | null;
   readonly assignments: readonly Word[];
   readonly upstream: readonly Word[];
+  /** `xargs`が前置きにあり、標準入力の語を引数に足して実行する。 */
+  readonly viaXargs: boolean;
 };
 
 /**
@@ -1176,12 +1179,16 @@ export function findConsoleReleaseCall(
     const positional = wmillPositional(args);
     if (pushesJobs(positional)) return "script";
     const named =
-      anyWord(args, mentionsRelease) || literal.some(mentionsRelease);
+      anyWord(args, mentionsRelease) ||
+      anyWord(context.upstream, mentionsRelease) ||
+      literal.some(mentionsRelease);
     return named && !wmillReadsOnly(positional) ? "script" : null;
   }
   const kind = readerKind(program, words);
   const named =
-    anyWord(words, mentionsRelease) || literal.some(mentionsRelease);
+    anyWord(words, mentionsRelease) ||
+    literal.some(mentionsRelease) ||
+    (context.viaXargs && anyWord(context.upstream, mentionsRelease));
   if (kind !== null) {
     return named && readerRefuses(kind, program, words, context, literal)
       ? "script"

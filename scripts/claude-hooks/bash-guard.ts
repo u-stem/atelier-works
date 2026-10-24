@@ -629,6 +629,7 @@ function checkSimpleCommand(
       inputs: () => literalShellInputs(command),
       assignments,
       upstream: upstreamWords(command),
+      viaXargs: wrappers.includes("xargs"),
     }) !== null
   ) {
     return deny(REASONS.consoleRelease);
