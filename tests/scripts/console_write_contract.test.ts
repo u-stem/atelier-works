@@ -454,14 +454,20 @@ describe("what the scripts return", () => {
     released_by: null,
   };
 
+  /** `active`が`null`のときは、有効な保留の一覧を読めない。 */
   function holdDeps(
-    active: readonly HoldRow[],
+    active: readonly HoldRow[] | null,
     release: Outcome<{ readonly id: number }>,
     noticeFails = false,
   ): holdRelease.HoldReleaseDeps {
     return {
       deriveApprover: () => "operator",
-      listActiveHolds: () => Promise.resolve({ ok: true, value: active }),
+      listActiveHolds: () =>
+        Promise.resolve(
+          active === null
+            ? { ok: false, kind: "read_failed", reason: "down" }
+            : { ok: true, value: active },
+        ),
       releaseHold: () => Promise.resolve(release),
       addNotice: () =>
         noticeFails ? Promise.reject(new Error("down")) : Promise.resolve(1),
@@ -489,6 +495,13 @@ describe("what the scripts return", () => {
       [ACTIVE_HOLD],
       { ok: false, reason: holdRelease.ALREADY_RELEASED_REASON },
       false,
+    ],
+    ["an unreadable list", null, { ok: true, value: { id: 12 } }, false],
+    [
+      "an unreadable list with a failed audit",
+      null,
+      { ok: true, value: { id: 12 } },
+      true,
     ],
   ] as const)(
     "hold_release's result for %s passes the guard",

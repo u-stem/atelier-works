@@ -784,6 +784,22 @@ describe("literalShellInputs", () => {
     expect(shellInputsOf("sh")).toEqual([]);
   });
 
+  test("follows a pipe chain back to the echo", () => {
+    expect(
+      shellInputsOf("echo 'gh pr merge 1' | cat | tee /dev/null | sh"),
+    ).toEqual(["gh pr merge 1"]);
+  });
+
+  test("returns the here-document of a command earlier in the chain", () => {
+    expect(shellInputsOf("cat <<'EOF' | sh\ngh pr merge 1\nEOF\n")).toEqual([
+      "gh pr merge 1\n",
+    ]);
+  });
+
+  test("returns null when an echo earlier in the chain writes a variable", () => {
+    expect(shellInputsOf('echo "$X" | cat | sh')).toBeNull();
+  });
+
   test("looks through a wrapper before the echo", () => {
     expect(shellInputsOf("env echo 'gh pr merge 1' | sh")).toEqual([
       "gh pr merge 1",

@@ -232,7 +232,7 @@ describe("releaseHoldFromConsole release", () => {
     expect(h.notices[0]?.message).toContain("確認できませんでした");
   });
 
-  test("names the operator and the id in that notice", async () => {
+  test("names the operator in that notice", async () => {
     const h = harness({
       active: { ok: false, kind: "read_failed", reason: "down" },
     });
@@ -240,6 +240,16 @@ describe("releaseHoldFromConsole release", () => {
     await releaseHoldFromConsole(12, h.deps);
 
     expect(h.notices[0]?.message).toContain("operator");
+  });
+
+  test("names the id in that notice", async () => {
+    const h = harness({
+      active: { ok: false, kind: "read_failed", reason: "down" },
+    });
+
+    await releaseHoldFromConsole(12, h.deps);
+
+    expect(h.notices[0]?.message).toContain("id 12");
   });
 
   test("reports the audit when the list cannot be read", async () => {

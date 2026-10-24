@@ -440,6 +440,52 @@ describe("releaseFreezeFromConsole confirmation", () => {
     );
   });
 
+  test("accepts the loss of a row whose expiry passed between the write and the read", async () => {
+    const soon = deploy({
+      expires_at: new Date(NOW.getTime() + 1000).toISOString(),
+    });
+    const h = harness(text([schedule()], [soon]), {
+      afterWrite: (store) => {
+        store.value = text([schedule({ released_at: NOW.toISOString() })]);
+      },
+    });
+    let ticks = 0;
+    const deps: FreezeReleaseDeps = {
+      ...h.deps,
+      ports: {
+        ...h.deps.ports,
+        now: () => new Date(NOW.getTime() + 2000 * ticks++),
+      },
+    };
+
+    expect((await releaseFreezeFromConsole("0a1b2c3d", deps)).status).toBe(
+      "released",
+    );
+  });
+
+  test("returns unconfirmed when a row that is still valid disappeared", async () => {
+    const later = deploy({
+      expires_at: new Date(NOW.getTime() + 10 * HOUR).toISOString(),
+    });
+    const h = harness(text([schedule()], [later]), {
+      afterWrite: (store) => {
+        store.value = text([schedule({ released_at: NOW.toISOString() })]);
+      },
+    });
+    let ticks = 0;
+    const deps: FreezeReleaseDeps = {
+      ...h.deps,
+      ports: {
+        ...h.deps.ports,
+        now: () => new Date(NOW.getTime() + 2000 * ticks++),
+      },
+    };
+
+    expect((await releaseFreezeFromConsole("0a1b2c3d", deps)).status).toBe(
+      "unconfirmed",
+    );
+  });
+
   test("accepts a row that another writer added after the release", async () => {
     const h = harness(text([schedule()]), {
       afterWrite: (store) => {
