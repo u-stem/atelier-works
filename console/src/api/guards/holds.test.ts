@@ -108,9 +108,12 @@ describe("isHoldsSnapshot accepts", () => {
 });
 
 describe("isHoldsSnapshot rejects", () => {
-  test.each([null, undefined, "x", 1, [], {}])("the value %p", (value) => {
-    expect(isHoldsSnapshot(value)).toBe(false);
-  });
+  test.each([[null], [undefined], ["x"], [1], [[]], [{}]])(
+    "the value %p",
+    (value) => {
+      expect(isHoldsSnapshot(value)).toBe(false);
+    },
+  );
 
   test("a snapshot without the freezes", () => {
     expect(isHoldsSnapshot({ holds: SNAPSHOT.holds })).toBe(false);

@@ -150,7 +150,7 @@ describe("HoldsPanel release buttons", () => {
 
   test("disables the button of a row that is being released", () => {
     expect(render(FULL, { locked: ["hold:7"] })).toMatch(
-      /<button(?=[^>]*data-release="hold:7")(?=[^>]*\bdisabled\b)[^>]*>/,
+      /<button(?=[^>]*data-release="hold:7")(?=[^>]*\sdisabled="")[^>]*>/,
     );
   });
 
@@ -160,7 +160,7 @@ describe("HoldsPanel release buttons", () => {
 
   test("leaves the other rows enabled", () => {
     expect(render(FULL, { locked: ["hold:7"] })).not.toMatch(
-      /<button(?=[^>]*data-release="freeze:0a1b2c3d")(?=[^>]*\bdisabled\b)[^>]*>/,
+      /<button(?=[^>]*data-release="freeze:0a1b2c3d")(?=[^>]*\sdisabled="")[^>]*>/,
     );
   });
 });

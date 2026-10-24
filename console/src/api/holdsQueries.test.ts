@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "./errors.ts";
+import type { HoldsSnapshot } from "./guards/holds.ts";
 import {
   fetchHolds,
   HOLDS_STALE_MS,
@@ -9,7 +10,7 @@ import {
 import { SUMMARY_REFRESH_MS } from "./queries.ts";
 import type { FetchLike } from "./windmill.ts";
 
-const SNAPSHOT = {
+const SNAPSHOT: HoldsSnapshot = {
   holds: { ok: true, rows: [] },
   freezes: { ok: true, schedule: [], deploy: [] },
 };

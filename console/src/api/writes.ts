@@ -17,6 +17,8 @@ import {
   type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isFreezeReleaseResult,
+  isHoldReleaseResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
@@ -169,25 +171,31 @@ export function submitManualIntake(
   );
 }
 
+/**
+ * 保留を1件、人として解除する。解除済みの保留は、そのまま成功として返る。
+ * 解除する主体は引数に取らない。scriptが固定し、操作者をジョブの実行文脈から導く。
+ */
 export function releaseHold(
   holdId: number,
-  _options: RunScriptOptions = {},
+  options: RunScriptOptions = {},
 ): Promise<HoldReleaseResult> {
-  return Promise.resolve({
-    ok: true,
-    status: "already_released",
-    hold_id: holdId,
-    was_active: false,
-  });
+  return callWrite(
+    "hold_release",
+    { hold_id: holdId },
+    isHoldReleaseResult,
+    options,
+  );
 }
 
+/** 凍結かdeployの保留を1件、人として解除する。終わっている行は、そのまま成功として返る。 */
 export function releaseFreeze(
   freezeId: string,
-  _options: RunScriptOptions = {},
+  options: RunScriptOptions = {},
 ): Promise<FreezeReleaseResult> {
-  return Promise.resolve({
-    ok: true,
-    status: "already_ended",
-    freeze_id: freezeId,
-  });
+  return callWrite(
+    "freeze_release",
+    { freeze_id: freezeId },
+    isFreezeReleaseResult,
+    options,
+  );
 }
