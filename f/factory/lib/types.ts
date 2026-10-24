@@ -842,6 +842,8 @@ export type FailureRecord = {
   job_id: string;
   step: string | null;
   error: string;
+  /** 失敗が起きた時刻(ISO 8601)。省略するとDBの現在時刻になる。 */
+  occurred_at?: string;
 };
 
 /**

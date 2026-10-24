@@ -2066,6 +2066,13 @@ export async function getLatestScheduleFailure(
       };
 }
 
+export async function listRecordedScheduleFailureJobIds(
+  _jobIds: readonly string[],
+  _sql: SqlClient = defaultSqlClient,
+): Promise<ReadonlySet<string>> {
+  return new Set();
+}
+
 // ---------------------------------------------------------------------------
 // notices
 // ---------------------------------------------------------------------------

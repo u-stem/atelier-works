@@ -248,7 +248,7 @@ describe("recordFailure before the job link migration", () => {
     expect(calls[1]?.text).not.toContain("root_job_id");
   });
 
-  test("passes the same five values to the insert of the retry", async () => {
+  test("passes the same values except the root job id to the insert of the retry", async () => {
     const { sql, calls } = createFailingFirstSqlClient(MISSING_COLUMN);
     await recordFailure(FAILURE, sql, JOBS, createWarnCollector().log);
     expect(calls[1]?.values).toEqual([
@@ -257,7 +257,19 @@ describe("recordFailure before the job link migration", () => {
       "unknown",
       null,
       "boom",
+      null,
     ]);
+  });
+
+  test("keeps the occurrence time in the insert of the retry", async () => {
+    const { sql, calls } = createFailingFirstSqlClient(MISSING_COLUMN);
+    await recordFailure(
+      { ...FAILURE, occurred_at: "2026-10-25T01:02:03.000Z" },
+      sql,
+      JOBS,
+      createWarnCollector().log,
+    );
+    expect(calls[1]?.values).toContain("2026-10-25T01:02:03.000Z");
   });
 
   test("warns once when it falls back", async () => {
