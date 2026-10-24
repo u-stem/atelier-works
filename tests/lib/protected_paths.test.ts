@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, normalize } from "node:path";
 import { isDeniedPath } from "../../f/factory/lib/ci_fix_paths.ts";
 import { EMPTY_LOCK_REFERENCE } from "../../f/factory/lib/metadata_patch_verify.ts";
 import { readSourceShape } from "../../f/factory/lib/metadata_signature.ts";
@@ -1446,9 +1447,55 @@ describe("hold command files", () => {
   test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
   });
+});
 
-  test("does not protect scripts/freeze.ts, which a hold does not depend on", () => {
-    expect(matchesForbiddenPath("scripts/freeze.ts")).toBe(false);
+// 保留のCLIが実行時に読み込むファイルは、書き換えられるとCLIの実行に任意の処理を足せる。
+describe("files that the hold command imports", () => {
+  const PATHS = [
+    "scripts/freeze.ts",
+    "f/factory/lib/freezes.ts",
+    "f/factory/lib/freeze_apply.ts",
+  ];
+
+  /** `scripts/hold.ts`が実行時に読み込むリポジトリ内のファイルを、importの連鎖でたどる。 */
+  function importClosure(entry: string): string[] {
+    const seen = new Set<string>();
+    const queue = [entry];
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (current === undefined || seen.has(current)) continue;
+      seen.add(current);
+      const source = readFileSync(current, "utf8");
+      for (const match of source.matchAll(/(?:from|import)\s+"(\.[^"]+)"/g)) {
+        const next = normalize(join(dirname(current), match[1] ?? ""));
+        if (existsSync(next)) queue.push(next);
+      }
+    }
+    return [...seen].sort();
+  }
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("finds the files that scripts/hold.ts imports, so that the check below is not empty", () => {
+    expect(importClosure("scripts/hold.ts")).toContain("scripts/freeze.ts");
+  });
+
+  test("every file that scripts/hold.ts imports is a protected path", () => {
+    const unprotected = importClosure("scripts/hold.ts").filter(
+      (path) => !matchesForbiddenPath(path),
+    );
+
+    expect(unprotected).toEqual([]);
   });
 });
 

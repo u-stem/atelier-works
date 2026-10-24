@@ -560,6 +560,75 @@ describe("list", () => {
     ]).toEqual([1, true]);
   });
 
+  test("turns an escape sequence in the target into spaces, so that a row cannot forge a line", async () => {
+    const { lines } = await run(
+      { kind: "list" },
+      {
+        db: {
+          active: [holdRow({ target: "acme/wid\u001b[2Kgets" })],
+        },
+      },
+    );
+
+    expect(lines.join("\n")).not.toContain("\u001b");
+  });
+
+  test("turns a newline in the target into a space, so that it stays one line", async () => {
+    const { lines } = await run(
+      { kind: "list" },
+      {
+        db: {
+          invalid: [holdRow({ id: 9, target: "acme/a\n99  active  merge  x" })],
+        },
+      },
+    );
+
+    expect(lines.filter((line) => line.startsWith("9"))).toHaveLength(1);
+  });
+
+  test("shows the active holds before it reports that the invalid rows cannot be read", async () => {
+    const base = fakeSql({ active: [holdRow()] });
+    const read: HoldSqlClient = (strings, ...values) => {
+      if (strings.join("?").includes("NOT (created_at")) {
+        return {
+          fetch: async () => {
+            throw new Error("boom");
+          },
+          execute: async () => {},
+        };
+      }
+      return base.sql(strings, ...values);
+    };
+    const lines: string[] = [];
+    const code = await runCommand(
+      { kind: "list" },
+      {
+        read,
+        write: base.sql,
+        branch: async () => "feat/x",
+        env: {},
+        confirm: async () => true,
+        print: (line) => {
+          lines.push(line);
+        },
+        activeFreezeCount: async () => 0,
+      },
+    );
+
+    expect([
+      code,
+      lines.findIndex((line) => line.startsWith("7")) <
+        lines.findIndex((line) => line.startsWith("failed:")),
+      lines.some((line) => line.startsWith("7")),
+    ]).toEqual([1, true, true]);
+  });
+
+  test("says in the note that a dry run still makes the poll wait", async () => {
+    const { lines } = await run({ kind: "list" });
+
+    expect(lines.find((l) => l.startsWith("note:"))).toContain("dry run");
+  });
+
   test("fails when the invalid rows cannot be read", async () => {
     let calls = 0;
     const base = fakeSql({});

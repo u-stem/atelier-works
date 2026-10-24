@@ -1475,13 +1475,18 @@ describe("bash-guard denies mise generate that writes hook or workflow files", (
   test.each([
     "mise generate git-pre-commit --write",
     "mise generate git-pre-commit -w",
-    "mise generate git-pre-commit --hook pre-commit",
-    "mise generate git-pre-commit --hook=pre-commit",
-    "mise generate git-pre-commit -t pre-push",
     "mise generate github-action --write",
     "mise generate github-action -w --name ci",
     "mise -q generate github-action --write",
     "mise g git-pre-commit --write",
+    "mise gen git-pre-commit --write",
+    "mise generate pre-commit --write",
+    "mise generate pre-commit -w",
+    "mise generate git-pre-commit -wt pre-push",
+    "mise generate git-pre-commit --hook pre-push --write",
+    "mise generate github-action -wn ci",
+    "mise generate github-action -tw ci",
+    "mise gen github-action --write",
     "sh -c 'mise generate git-pre-commit --write'",
     "mise exec -- mise generate git-pre-commit --write",
   ])("%s", async (command) => {
@@ -1501,8 +1506,92 @@ describe("bash-guard allows mise generate that only prints", () => {
     "mise generate github-action",
     "mise generate task-docs",
     "mise generate github-action --name ci",
+    "mise generate git-pre-commit --hook pre-push",
+    "mise generate git-pre-commit -t pre-commit",
+    "mise generate github-action -t ci",
+    "mise generate --help",
+    "mise generate git-pre-commit --help",
+    "mise generate github-action --help",
+    "mise gen pre-commit",
     "mise run check",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
+});
+
+// 値を取るオプションを読み飛ばさずに、保留の操作を拒否する。
+describe("bash-guard denies a subagent that hides a hold operation behind options", () => {
+  test.each([
+    "mise run --timeout 5m hold:release -- 3",
+    "mise run -o prefix hold:place",
+    "mise run --unknown-option hold:place",
+    "mise run -j 2 hold:release 4",
+    "mise tasks run -j 2 hold:place",
+    "mise t run hold:place",
+    "mise watch hold:place",
+    "mise w hold:place",
+    "mise run lint hold:place",
+    "mise run test -- hold:place",
+    "mise x -- mise run -o keep hold:release 1",
+    "bun --preload ./x.ts scripts/hold.ts place --scope merge",
+    "bun --preload test scripts/hold.ts place",
+    "bun --bun scripts/hold.ts place",
+    "bun --silent run scripts/hold.ts release 1",
+    "tsx --tsconfig tsconfig.json scripts/hold.ts release 1",
+    "deno run --import-map map.json scripts/hold.ts place",
+    "node --import tsx scripts/hold.ts place",
+    "bunx --bun tsx scripts/hold.ts place",
+    "bun exec 'bun scripts/hold.ts place --scope merge'",
+    'bun exec "mise run hold:place"',
+    "bun run scripts/hold place --scope merge --target a/b --minutes 5 --reason x",
+    "bun scripts/hold place",
+    "bun ./scripts/hold release 1",
+    "bun run scripts/hold_psql",
+    "bun scripts/hold_psql.ts",
+    "bun run f/factory/lib/holds",
+    "bun scripts/hold.ts --verbose list",
+    "./scripts/hold.ts place",
+    "scripts/hold.ts release 1",
+    "bun -e \"import './scripts/hold'\"",
+    "bun -e \"await import('../f/factory/lib/holds')\"",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("deny");
+  });
+});
+
+describe("bash-guard keeps allowing inspection of the hold code", () => {
+  test.each([
+    "bun scripts/hold list",
+    "bun run scripts/hold list",
+    "bun test tests/scripts/hold.test.ts",
+    "bun test tests/lib/holds.test.ts tests/lib/holds_db.test.ts",
+    "bunx biome check scripts/hold.ts",
+    "bunx --bun biome check scripts/hold.ts scripts/hold_psql.ts",
+    "bunx tsc --noEmit scripts/hold.ts",
+    "bun run scripts/lint-no-type-assertions.ts scripts/hold.ts",
+    "bun run scripts/lint-docs.ts docs/internals/holds.md",
+    "mise -C /repo run check",
+    "mise run lint ::: typecheck",
+    "mise run hold:list",
+    "mise watch check",
+  ])("%s", async (command) => {
+    expect(await decide(command, { subagent: true })).toBe("allow");
+  });
+});
+
+describe("bash-guard reads the script of bun exec as shell input", () => {
+  test.each([
+    "bun exec 'git push --force origin feature'",
+    "bun exec 'git push origin main'",
+    'bun exec "git commit --no-verify -m x"',
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(["bun exec 'echo hello'", "bun exec 'git status'"])(
+    "%s",
+    async (command) => {
+      expect(await decide(command)).toBe("allow");
+    },
+  );
 });

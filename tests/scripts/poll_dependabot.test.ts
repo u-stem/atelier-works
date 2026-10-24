@@ -1744,6 +1744,8 @@ type RoundLog = {
   warnings: { message: string; fields: Record<string, unknown> }[];
   /** 保留で待った周回の通知として残そうとした内容。 */
   holdNotices: HoldNotice[];
+  /** 保留を読めない通知を解決しようとした回数。 */
+  holdResolves: number;
 };
 
 type RoundOptions = {
@@ -1768,6 +1770,8 @@ type RoundOptions = {
   readonly holdsError?: Error;
   /** 保留の通知を残す処理が投げる例外。 */
   readonly holdNoticeError?: Error;
+  /** 保留を読めない通知を解決する処理が投げる例外。 */
+  readonly holdResolveError?: Error;
 };
 
 function emptyLog(): RoundLog {
@@ -1781,6 +1785,7 @@ function emptyLog(): RoundLog {
     read: [],
     warnings: [],
     holdNotices: [],
+    holdResolves: 0,
   };
 }
 
@@ -1848,6 +1853,13 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
             : options.readRepoPrs(owner, repo);
         },
         listActive: async () => options.active ?? [],
+        resolveHoldUnreadableNotices: async () => {
+          log.holdResolves += 1;
+          if (options.holdResolveError !== undefined) {
+            throw options.holdResolveError;
+          }
+          return 1;
+        },
         recordHoldNotice: async (notice) => {
           log.holdNotices.push(notice);
           if (options.holdNoticeError !== undefined) {
@@ -3692,9 +3704,16 @@ describe("holdNoticeRecord", () => {
     );
   });
 
-  test("puts the number of pull requests in the held notice", () => {
-    expect(holdNoticeRecord({ kind: "held", prCount: 2 }).message).toContain(
-      "2件",
+  test("leaves the count out of the held notice, so that a changing count does not make a new line", () => {
+    const one = holdNoticeRecord({ kind: "held", prCount: 1 });
+    const three = holdNoticeRecord({ kind: "held", prCount: 3 });
+
+    expect(one.message).toBe(three.message);
+  });
+
+  test("has no digit in the held notice", () => {
+    expect(holdNoticeRecord({ kind: "held", prCount: 12 }).message).not.toMatch(
+      /[0-9]/,
     );
   });
 
@@ -3751,5 +3770,139 @@ describe("holdNoticeRecord", () => {
     expect(
       holdNoticeRecord({ kind: "unreadable", failure, prCount: 1 }).message,
     ).toContain(hint);
+  });
+});
+
+describe("processDependabotPr reads the holds after the throttle", () => {
+  test("does not read the holds while the head is throttled", async () => {
+    const { h } = await run(
+      { holds: HELD },
+      { waits: waited({ nextCheckAtMs: NOW_MS + 1 }) },
+    );
+
+    expect(h.holdReads).toEqual([]);
+  });
+
+  test("keeps the earlier wait record of a throttled head, as it did before", async () => {
+    const { outcome } = await run(
+      { holds: HELD },
+      { waits: waited({ nextCheckAtMs: NOW_MS + 1 }) },
+    );
+
+    expect(waitOf(outcome)).toEqual({
+      firstWaitAtMs: NOW_MS - DAY_MS,
+      waitCount: 1,
+      nextCheckAtMs: NOW_MS + 1,
+    });
+  });
+
+  test("reads the holds once the throttle has passed", async () => {
+    const { outcome } = await run(
+      { holds: HELD },
+      { waits: waited({ nextCheckAtMs: NOW_MS }) },
+    );
+
+    expect(outcome.kind).toBe("held");
+  });
+});
+
+describe("pollDependabot resolves the unreadable notice once the holds can be read", () => {
+  test("resolves it when a hold was read and none failed", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log));
+
+    expect(log.holdResolves).toBe(1);
+  });
+
+  test("resolves it when the holds were read and one is active", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { holds: HELD }));
+
+    expect(log.holdResolves).toBe(1);
+  });
+
+  test("does not resolve it when a read failed", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { holds: { ok: false, kind: "read_failed", reason: "x" } }),
+    );
+
+    expect(log.holdResolves).toBe(0);
+  });
+
+  test("does not resolve it when a read threw", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { holdsError: new Error("boom") }));
+
+    expect(log.holdResolves).toBe(0);
+  });
+
+  test("does not resolve it when no hold was read in the round", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { found: [] }));
+
+    expect(log.holdResolves).toBe(0);
+  });
+
+  test("does not resolve it when dependabot is disabled", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...CONFIG, dependabot_enabled: false } }),
+    );
+
+    expect(log.holdResolves).toBe(0);
+  });
+
+  test("still finishes the round when the resolution fails", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { holdResolveError: new Error("db down") }),
+    );
+
+    expect(result.started).toBe(1);
+  });
+
+  test("warns when the resolution fails", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { holdResolveError: new Error("db down") }),
+    );
+
+    expect(log.warnings.map((w) => w.message)).toContain(
+      "failed to resolve the hold notice",
+    );
+  });
+
+  test("logs the count of pull requests that wait for a hold", async () => {
+    const log = emptyLog();
+    const second: DependabotPrCandidate = { ...FOUND, number: 13 };
+
+    await pollDependabot(round(log, { holds: HELD, found: [FOUND, second] }));
+
+    expect(
+      log.warnings.find(
+        (w) => w.message === "pull requests wait for merge holds",
+      )?.fields,
+    ).toEqual({ held: 2, unreadable: {} });
+  });
+
+  test("logs the count of pull requests that wait because the holds cannot be read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { holds: { ok: false, kind: "corrupt", reason: "x" } }),
+    );
+
+    expect(
+      log.warnings.find(
+        (w) => w.message === "pull requests wait for merge holds",
+      )?.fields,
+    ).toEqual({ held: 0, unreadable: { corrupt: 1 } });
   });
 });
