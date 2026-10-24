@@ -14,8 +14,9 @@
 // `human`の置く・解除は、端末(TTY)で`yes`を入力して確かめる。`session`は自分の`holder`の保留だけ解除できる。
 // この区別は誤操作を防ぐためのもので、権限の境界ではない。迂回のための環境変数は設けない。
 //
-// 置けるのは、読み手のある範囲だけである。今は`merge`(Factoryのdependabotの自動マージと、ローカルのセッションのフック)だけで、
-// `claim`は読み手がなく何も止めないので、置く操作を拒否する。`list`と`release`は両方の範囲を扱う。
+// 置けるのは、読み手のある`merge`(Factoryのdependabotの自動マージと、ローカルのセッションのフック)だけである。
+// `claim`は読み手が無く、設ける予定もないので、置いても何も守らない。置く操作は拒否する。
+// `list`と`release`は両方の範囲を扱う。
 // `merge`の保留が止めるのは、Factoryのdependabotの自動マージと、ローカルのClaudeのセッションの
 // `gh pr merge`など(`scripts/claude-hooks/merge-guard.ts`)である。
 // 人の端末、GitHubのWeb UI、クラウドのセッションのGitHubのMCPによるマージは止まらない。
@@ -61,7 +62,7 @@ export type Command =
 /** CLIが読み書きするデータベース。使い捨てのデータベースを渡すのは、実DBの検査だけである。 */
 export const HOLD_DATABASE = "datatable_db";
 
-/** 置く操作を受け付ける範囲。読み手が配線済みの範囲だけを入れる。 */
+/** 置く操作を受け付ける範囲。読み手のある範囲だけを入れる。 */
 export const WIRED_SCOPES: readonly HoldScope[] = ["merge"];
 
 /** 保留が止める経路の説明。`list`と`place`が表示する。 */
@@ -284,11 +285,11 @@ async function runPlace(
   command: Extract<Command, { kind: "place" }>,
   deps: CliDeps,
 ): Promise<number> {
-  // 読み手の無い範囲は、DBに触れる前に拒否する。置いても何も止まらず、守られていると誤解させるため。
+  // 読み手の無い範囲は、DBに触れる前に拒否する。置いても何も守らず、守られていると誤解させるため。
   const known = HOLD_SCOPES.some((scope) => scope === command.scope);
   if (known && !WIRED_SCOPES.some((scope) => scope === command.scope)) {
     deps.print(
-      `refused: nothing reads ${sanitizeHoldText(command.scope)} holds yet, so a hold would not protect anything; it takes effect once a reader is wired`,
+      `refused: ${sanitizeHoldText(command.scope)} holds have no reader and none is planned, so a hold would not protect anything`,
     );
     return 1;
   }
