@@ -50,6 +50,13 @@ export type Command =
       readonly minutes: number;
       readonly reason: string;
     }
+  | {
+      readonly kind: "place_deploy";
+      readonly minutes: number;
+      readonly reason: string;
+    }
+  | { readonly kind: "migrate" }
+  | { readonly kind: "apply" }
   | { readonly kind: "list" }
   | { readonly kind: "release"; readonly id: string }
   | { readonly kind: "check" }
@@ -241,6 +248,9 @@ export type CliDeps = {
   readonly confirm: (message: string) => Promise<boolean>;
   readonly print: (line: string) => void;
   readonly newId: () => string;
+  readonly runMigrate: (argv: readonly string[]) => Promise<number>;
+  /** `check`が変数を読む待ちの上限(ミリ秒)。 */
+  readonly checkReadTimeoutMs: number;
 };
 
 /**
@@ -250,6 +260,9 @@ export type CliDeps = {
  */
 const IN_FLIGHT_PUSH_WAIT_MINUTES = 7;
 const PLACE_ID_ATTEMPTS = 5;
+
+/** `check`が変数を読む待ちの上限。凍結の読む段(`self_update`)と同じ10秒にする。 */
+const CHECK_READ_TIMEOUT_MS = 10_000;
 
 function formatJst(date: Date): string {
   const text = new Intl.DateTimeFormat("sv-SE", {
@@ -312,6 +325,10 @@ export async function runCommand(
       return await runPush(command, actor, deps);
     case "reset":
       return await runReset(actor, deps);
+    case "place_deploy":
+    case "migrate":
+    case "apply":
+      return 0;
   }
 }
 
@@ -579,6 +596,8 @@ async function main(): Promise<number> {
     ),
     loadInputs: () => loadFreezeInputs(root),
     runPush: (argv) => runInherited(argv, root),
+    runMigrate: (argv) => runInherited(argv, root),
+    checkReadTimeoutMs: CHECK_READ_TIMEOUT_MS,
     branch: currentBranch,
     env: process.env,
     confirm: confirmOnTerminal,
