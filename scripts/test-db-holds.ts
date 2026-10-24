@@ -506,6 +506,15 @@ check(
   psqlActive,
 );
 
+// merge-guardは、対象を絞らずに有効なマージの保留をすべて読み、リポジトリの照合はメモリ上で行う。
+const psqlAllMerge = await listActiveHolds({ scope: "merge" }, psqlRead);
+check(
+  "psql: every active merge hold is read without a target",
+  psqlAllMerge.ok &&
+    psqlAllMerge.value.some((hold) => hold.target === PSQL_TARGET),
+  psqlAllMerge,
+);
+
 const psqlMinutes = await psqlRead`
   SELECT id, (expires_at - created_at = interval '90 minutes') AS exact
   FROM factory.holds WHERE target = ${PSQL_TARGET}

@@ -33,7 +33,11 @@ const READ_ONLY_AGENTS = [
   "triage",
 ];
 const FACTORY_DOCS_PRELOADED = ["implementer", "code-reviewer", "doc-writer"];
-const OWNED_DIRS = [".claude/agents", ".claude/skills/review-loop"];
+const OWNED_DIRS = [
+  ".claude/agents",
+  ".claude/skills/review-loop",
+  ".claude/skills/hold",
+];
 const MODELS = ["sonnet", "opus", "haiku", "fable", "inherit"];
 // 方針: 設計・判断・反証・監査と、その仕分けはopus。実装・コードレビュー・文書の追従はsonnet。
 const EXPECTED_MODELS: [string, string][] = [

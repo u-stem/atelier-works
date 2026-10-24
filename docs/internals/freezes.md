@@ -161,7 +161,8 @@ deployの保留の判定は読む段の中で済ませるので、段は増え�
 | `mise run migrate` | 拒否する | 拒否する |
 | `mise run deploy` | 先頭の確認で拒否する。通った後は、`freeze.ts apply`も拒否する | 先頭の確認は警告で通る。`freeze.ts apply`は拒否する |
 | `mise run up` | コンテナに触れる前の確認で拒否する | 警告で通す |
-| `scripts/bootstrap.sh`の全手順のモード | pushで止まる | pushで止まる |
+| `scripts/bootstrap.sh`の全手順のモード | pushとmigrationで止まる | pushとmigrationで止まる |
+| ローカルのClaudeのセッションの手動の`wmill sync push`と`wmill datatable migrate` | フックが拒否する | フックが拒否する |
 
 `up`と`deploy`の確認(`freeze.ts check`)は、読めないときに警告だけで通す。
 Windmillが止まっていると変数を読めず、スタックを起こせなくなるためである。
@@ -174,11 +175,17 @@ Windmillが止まっていると変数を読めず、スタックを起こせな
 `apply`は`set -e`の中にあるので、タスクは中断する。
 保留を解除してから`mise run deploy`をやり直す。
 
+ローカルのClaudeのセッションが打つ手動の`wmill sync push`と`wmill datatable migrate`は、フック(`merge-guard.ts`)が止める。
+仕様は[保留の内部仕様](holds.md)の「ローカルのセッションのフック」にある。
+保留が有効なとき、または読めないときに拒否する。
+スケジュールの凍結だけが有効なときも、除外を付けない手動の`wmill sync push`は拒否する。
+`--dry-run`の無い形が対象で、その間のpushは`mise run push`を使う。
+`scripts/bootstrap.sh`の全手順のモードも、migrationを`freeze.ts migrate`で実行するので、保留中は止まる。
+
 覆わない経路がある。
 
-- 人が手で打つ`wmill sync push`と`wmill datatable migrate up`。
-- `scripts/bootstrap.sh`の全手順のモードのmigration。pushは`freeze.ts push`を通るので保留中に止まる。
-- ホストの実行役(`scripts/host_apply/`)。
+- 人の端末で打つ`wmill sync push`と`wmill datatable migrate up`。プロンプトの`!`で実行する形を含む。
+- ホストの実行役(`scripts/host_apply/`)。実行役は承認の門を別に持つ。
 
 `freeze.ts apply`は、変数を1回読んで、pushに続けてmigrationを実行する。
 pushとmigrationの間に保留が置かれても、migrationは続く。
@@ -284,7 +291,8 @@ mise run freeze:reset
 `mise run deploy`は、`scripts/freeze.ts apply`を通る。
 このラッパーが除外を作って`wmill sync push`を実行する。
 `mise run migrate`は、`scripts/freeze.ts migrate`を通る。
-`scripts/bootstrap.sh`の全手順のモード(`mise run bootstrap`)も、同じラッパーを通してpushする。
+`scripts/bootstrap.sh`の全手順のモード(`mise run bootstrap`)も、同じラッパーを通してpushし、migrationも`freeze.ts migrate`で実行する。
 凍結の変数がまだ無い初回は、一覧で無いと確かめられたときだけ、凍結なしとして進む。
 変数を読めないとき、壊れているとき、`wmill.yaml`の除外が欠けているときは、bootstrapもpushの手順で止まる。
+deployの保留が有効なときと、変数を読めないときは、migrationの手順で止まる。
 止まった後の回復は「失敗の回復」と同じである。
