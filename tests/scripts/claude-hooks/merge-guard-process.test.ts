@@ -16,7 +16,15 @@ const ROOT = join(import.meta.dir, "../../..");
 const HOOKS = join(ROOT, "scripts/claude-hooks");
 const RUN = join(HOOKS, "run.sh");
 const BUN_DIR = dirname(process.execPath);
-const NODE = Bun.which("node");
+const NODE_ON_PATH = Bun.which("node");
+
+/** miseのshimではなく、実際のnodeの実行ファイル。環境変数の無い子から呼んでも動く。 */
+const NODE =
+  NODE_ON_PATH === null
+    ? null
+    : Bun.spawnSync([NODE_ON_PATH, "-p", "process.execPath"])
+        .stdout.toString()
+        .trim();
 
 function nodeRunsTypeScript(): boolean {
   if (NODE === null) return false;
@@ -99,10 +107,7 @@ async function launch(
     stdin: new TextEncoder().encode(hookInput(command)),
     stdout: "pipe",
     stderr: "pipe",
-    env: {
-      PATH: `${directory}:${BUN_DIR}:/usr/bin:/bin`,
-      HOME: directory,
-    },
+    env: { PATH: `${directory}:${BUN_DIR}:/usr/bin:/bin` },
   });
   const [stdout, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
