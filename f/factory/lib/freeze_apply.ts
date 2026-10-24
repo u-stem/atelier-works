@@ -1,4 +1,4 @@
-// 凍結の状態を読み、`wmill sync push`へ渡す除外を作り、追従が済んだ行を消す手順。
+// 凍結の状態を読み、`wmill sync push`へ渡す除外とdeployの保留を求め、追従が済んだ行を消す手順。
 // 変数の読み書きは注入された入出力で行い、`self_update`と`scripts/freeze.ts`が同じ手順を使う。
 //
 // 変数は人の端末(`place`と`release`)と`self_update`(追従が済んだ行の削除)が書く。
@@ -7,6 +7,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  activeDeployFreezes,
   activeFreezes,
   buildExcludes,
   endedFreezes,
@@ -39,7 +40,14 @@ export type FrozenPushPlan = {
   readonly excludedTargets: readonly string[];
   /** この回の開始より前に終わっていた行。pushが成功したら消す。 */
   readonly readyIds: readonly string[];
+  /** 有効なdeployの保留。あるあいだ、反映全体を待つ。 */
+  readonly deployFreezes: readonly ActiveDeployFreeze[];
   readonly warnings: readonly string[];
+};
+
+export type ActiveDeployFreeze = {
+  readonly id: string;
+  readonly expires_at: string;
 };
 
 /** 失敗の文言に載せる、回復の手順。`reason`と`holder`は載せない。 */
@@ -59,7 +67,7 @@ async function readState(ports: FreezePorts): Promise<Outcome<FreezeState>> {
       reason: `could not read the freeze variable: ${errorMessage(err)}`,
     };
   }
-  const parsed = parseFreezeState(raw);
+  const parsed = parseFreezeState(raw, ports.now());
   return parsed.ok
     ? parsed
     : { ok: false, reason: `${parsed.reason} (${FREEZE_RECOVERY_HINT})` };
@@ -96,9 +104,42 @@ export async function prepareFrozenPush(
       excludesArg: excludesArg(excludes.value),
       excludedTargets: targets,
       readyIds: endedFreezes(state.value, now).map((e) => e.id),
+      deployFreezes: toActiveDeployFreezes(state.value, now),
       warnings,
     },
   };
+}
+
+function toActiveDeployFreezes(
+  state: FreezeState,
+  now: Date,
+): readonly ActiveDeployFreeze[] {
+  return activeDeployFreezes(state, now).map(({ id, expires_at }) => ({
+    id,
+    expires_at,
+  }));
+}
+
+/**
+ * 有効なdeployの保留だけを読む。`migrate`のように、除外の和を要らない呼び出しが使う。
+ * 読めない、壊れているときは失敗にする(呼び出し側は反映しない)。
+ */
+export async function readActiveDeployFreezes(
+  ports: FreezePorts,
+): Promise<Outcome<readonly ActiveDeployFreeze[]>> {
+  const state = await readState(ports);
+  if (!state.ok) return state;
+  return {
+    ok: true,
+    value: toActiveDeployFreezes(state.value, ports.now()),
+  };
+}
+
+/** deployの保留が有効なら、反映全体(push、migration、`deployed_sha`の更新)を待つ。 */
+export function shouldHoldDeploy(
+  plan: Pick<FrozenPushPlan, "deployFreezes">,
+): boolean {
+  return plan.deployFreezes.length > 0;
 }
 
 export type FreezeAction = "skip" | "reconcile" | "deploy";

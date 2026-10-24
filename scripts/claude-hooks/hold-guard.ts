@@ -1,6 +1,14 @@
 // subagentが保留(hold)を置く・解除する操作を見分ける。
 // 保留は、Factoryの自動マージなどを止める印である。subagentは置かず、解除もしない。
 // 主セッションか人に頼む。許すのは一覧(`list`)と、保留のコードの検査だけである。
+// 凍結のCLI(`freeze:place`、`freeze:release`、`scripts/freeze.ts`)も、次の2つは同じ扱いにする。
+// - deployの保留を置く操作(`place`の`--scope deploy`)。反映全体を止めるためである。
+//   スケジュールの凍結を置く操作(`--scope`が無いか`schedule`)は許す。
+// - 凍結の解除(`release`)。deployの保留を外せるためである。
+// `--scope`の値が実行時に決まる形(変数、コマンド置換、glob)は、`deploy`かを判定できないので拒否する。
+// 凍結のCLIを指す語は、直後の`--`を読み飛ばして副コマンドを決め、globは凍結のファイル名に当たるかで判定する。
+// `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
+// 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
 // 拒否を既定にする。コマンドの語にオプションの値や実行の前置きが混ざる形は無数にあり、
 // 値を取るオプションの一覧を読み飛ばす方式は、一覧に無いオプションで破られるためである。
@@ -71,6 +79,13 @@ const RUNNERS: ReadonlySet<string> = new Set([
 const HOLD_MENTION =
   /(?:^|[/'"\s(=])(?:hold|hold_psql|holds)(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
 
+/**
+ * 凍結のCLIを指すパスの末尾。保留のコードと同じ区切りの直後の`freeze`で、拡張子は省略できる。
+ * `freeze.test.ts`、`freezes.ts`、`freeze_apply.ts`のような別のファイルには当たらない。
+ */
+const FREEZE_MENTION =
+  /(?:^|[/'"\s(=])freeze(?:\.[cm]?[jt]sx?)?(?![A-Za-z0-9_.-])/i;
+
 /** `hold`だけを指すパス(`hold_psql`と`holds`は含まない)。 */
 const HOLD_CLI = /^(?:.*\/)?hold(?:\.[cm]?[jt]sx?)?$/i;
 
@@ -113,6 +128,10 @@ const LINT_SCRIPT = /^(?:\.\/)?scripts\/lint-[a-z-]+\.ts$/;
 
 /** 置く・解除するmiseのタスク。 */
 const HOLD_WRITE_TASKS: readonly string[] = ["hold:place", "hold:release"];
+
+/** 凍結を置くmiseのタスク(`--scope deploy`のときだけ拒否する)と、解除するタスク(常に拒否する)。 */
+const FREEZE_PLACE_TASK = "freeze:place";
+const FREEZE_RELEASE_TASK = "freeze:release";
 
 /** `mise`で何かを実行するサブコマンドとその別名。 */
 const MISE_RUNNING_WORDS: ReadonlySet<string> = new Set([
@@ -314,9 +333,283 @@ function runnerTouchesHolds(
   return inInput || !mentionsOnlyList(args);
 }
 
+/** 語がちょうど`deploy`(大文字小文字を問わない)なら真。 */
+function isDeployWord(word: Word): boolean {
+  return spellings(word).some((text) => /^deploy$/i.test(text));
+}
+
+/**
+ * `freeze:place`か`freeze.ts place`に渡す語が、deployの保留を置く形なら`operation`を返す。
+ * `--scope`の値(`--scope=deploy`の形も)が`deploy`のときである。
+ * 語が実行時に決まるか引用符の外のglobを含むと、`--scope`の値かを判定できないので`dynamic`を返す。
+ */
+function deployScopeFinding(words: readonly Word[]): HoldFinding | null {
+  if (words.some((word) => word.dynamic || word.glob)) return "dynamic";
+  for (const [index, word] of words.entries()) {
+    const all = spellings(word);
+    const inline = all.find((text) => text.startsWith("--scope="));
+    if (inline !== undefined) {
+      if (/^deploy$/i.test(inline.slice("--scope=".length))) return "operation";
+      continue;
+    }
+    const next = words[index + 1];
+    if (all.includes("--scope") && next !== undefined && isDeployWord(next)) {
+      return "operation";
+    }
+  }
+  return null;
+}
+
+/** miseのタスク名の語が、`task`を指しうる(綴りが同じか、globが当たる)なら真。 */
+function namesTask(word: Word, task: string): boolean {
+  return spellings(word).some((text) =>
+    GLOB_CHARACTERS.test(text) ? globMatches(text, task) : text === task,
+  );
+}
+
+/**
+ * miseのコマンド行のうち、凍結を解除するタスクか、deployの保留を置くタスクの呼び出しを見分ける。
+ * `taskWords`は`--`より前の語、`args`はmiseの全体オプションの後ろの全部の語である。
+ */
+function miseFreezeFinding(
+  taskWords: readonly Word[],
+  args: readonly Word[],
+): HoldFinding | null {
+  if (taskWords.some((word) => namesTask(word, FREEZE_RELEASE_TASK))) {
+    return "operation";
+  }
+  const place = taskWords.find((word) => namesTask(word, FREEZE_PLACE_TASK));
+  if (place === undefined) return null;
+  const after = args.slice(args.indexOf(place) + 1);
+  return deployScopeFinding(after.filter((word) => word.text !== "--"));
+}
+
+/** 凍結のCLIのファイル名。globが当たるかを見る対象である。 */
+const FREEZE_FILE_NAMES: readonly string[] = [
+  "freeze",
+  "freeze.ts",
+  "freezes",
+  "freezes.ts",
+  "freeze_apply",
+  "freeze_apply.ts",
+];
+
+/**
+ * 語が凍結のCLIを指すか、引用符の外のglobが凍結のコードの名前に当たりうるなら真。
+ * 保留のコードと同じく、ファイル名の部分だけを見て、ディレクトリは問わない。
+ */
+function pointsAtFreezeCode(word: Word): boolean {
+  const all = spellings(word);
+  if (all.some((text) => FREEZE_MENTION.test(text))) return true;
+  if (!word.glob) return false;
+  return all.some((text) => {
+    const file = text.slice(text.lastIndexOf("/") + 1);
+    return FREEZE_FILE_NAMES.some((name) => globMatches(file, name, true));
+  });
+}
+
+/** 次の語をコードとして実行する実行系のオプションと副コマンド。 */
+const CODE_FLAGS: ReadonlySet<string> = new Set([
+  "-e",
+  "--eval",
+  "-p",
+  "--print",
+  "-c",
+  "--command",
+  "eval",
+]);
+
+/**
+ * 実行系の引数のうち、コードとして実行される文字列。
+ * `-e`などの直後の語と、`--eval=<コード>`の値である。
+ * `-t`の値や凍結のCLIの`--reason`の値のように、コードでない文字列は読まない。
+ */
+function codeStrings(args: readonly Word[]): string[] {
+  const codes: string[] = [];
+  for (const [index, word] of args.entries()) {
+    for (const text of spellings(word)) {
+      const inline = /^--(?:eval|print|command)=([\s\S]*)$/.exec(text);
+      if (inline?.[1] !== undefined) codes.push(inline[1]);
+    }
+    if (CODE_FLAGS.has(word.text)) {
+      const next = args[index + 1];
+      if (next !== undefined) codes.push(...spellings(next));
+    }
+  }
+  return codes;
+}
+
+/** コードの文字列が、凍結のCLIを指しながら、解除かdeployの保留を書いているなら真。 */
+function codeTouchesFreezeRelease(text: string): boolean {
+  return FREEZE_MENTION.test(text) && /\b(?:release|deploy)\b/i.test(text);
+}
+
+/**
+ * 凍結のCLIを指す語の後ろの語から、副コマンドを決めて判定する。
+ * CLIの直後の`--`は、任意個数を読み飛ばす。
+ */
+function freezeSubcommandFinding(rest: readonly Word[]): HoldFinding | null {
+  const start = rest.findIndex((word) => word.text !== "--");
+  if (start === -1) return null;
+  const words = rest.slice(start);
+  const subcommand = words[0];
+  if (subcommand === undefined) return null;
+  if (
+    subcommand.dynamic ||
+    subcommand.glob ||
+    spellings(subcommand).some((text) => text.includes("{"))
+  ) {
+    return "dynamic";
+  }
+  if (subcommand.text === "release") return "operation";
+  if (subcommand.text === "place") return deployScopeFinding(words.slice(1));
+  return null;
+}
+
+/**
+ * 実行系の引数が、凍結のCLI(`scripts/freeze.ts`)で解除するか、deployの保留を置く形なら拒否の種類を返す。
+ * 凍結のCLIを指す語は、すべて調べる。直後の語が副コマンドである。
+ * 実行時に決まるときは判定できないので`dynamic`を返す。
+ * `-e`などの直後の文字列と標準入力で渡すコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
+ */
+function freezeCliFinding(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+): HoldFinding | null {
+  const codes = [...(inputs() ?? []), ...codeStrings(args)];
+  if (codes.some(codeTouchesFreezeRelease)) return "operation";
+  let found: HoldFinding | null = null;
+  for (const [at, word] of args.entries()) {
+    if (!pointsAtFreezeCode(word)) continue;
+    const finding = freezeSubcommandFinding(args.slice(at + 1));
+    if (finding === "operation") return finding;
+    found = found ?? finding;
+  }
+  return found;
+}
+
+/** 先頭の語が凍結のコードを指すなら真。 */
+function direct0IsFreezeCli(words: readonly Word[]): boolean {
+  const first = words[0];
+  return first !== undefined && pointsAtFreezeCode(first);
+}
+
+/**
+ * 実行系の標準入力に流れ込むものの出どころ。
+ * `redirects`はリダイレクトの先の語、`upstream`はパイプの前のコマンドの語(直前から順に)、
+ * `dynamicInput`はヒアストリングやリダイレクトの先が実行時に決まることを表す。
+ */
+export type HoldStdin = {
+  readonly redirects: readonly Word[];
+  readonly upstream: readonly HoldUpstream[];
+  readonly dynamicInput: boolean;
+};
+
+/** パイプの前のコマンド。語に加えて、そのコマンド自身の標準入力の出どころを持つ。 */
+export type HoldUpstream = {
+  readonly words: readonly Word[];
+  readonly redirects: readonly Word[];
+  readonly inputs: readonly Word[];
+};
+
+const NO_STDIN: HoldStdin = {
+  redirects: [],
+  upstream: [],
+  dynamicInput: false,
+};
+
+/** 標準入力をコードとして読む形のオペランド。 */
+const STDIN_OPERANDS: ReadonlySet<string> = new Set([
+  "-",
+  "/dev/stdin",
+  "/dev/fd/0",
+  "/proc/self/fd/0",
+]);
+
+function readsCodeFromStdin(args: readonly Word[]): boolean {
+  return args.some((word) => STDIN_OPERANDS.has(word.text));
+}
+
+/** パイプの前に置いてよい、中身を語から読めるプログラム。 */
+const PLAIN_UPSTREAM: ReadonlySet<string> = new Set(["cat"]);
+
+/** 語が保留か凍結のコードを指す、実行時に決まる、またはglobなら真。 */
+function opaqueOrHoldCode(word: Word): boolean {
+  return (
+    word.dynamic ||
+    word.glob ||
+    pointsAtHoldCode(word) ||
+    pointsAtFreezeCode(word)
+  );
+}
+
+/**
+ * 実行系が標準入力をコードとして読む形(`bun run -`)の入力元を調べる。
+ * 保留や凍結のコードを流し込むファイル、実行時に決まる入力、中身を読めないパイプの前のコマンドは拒否する。
+ * 中身を読めるのは、`echo`と`printf`(`inputs`が文字列を返す)と、静的なファイルだけを渡す`cat`である。
+ * 入力が凍結のCLIを指すときは、`-`の後ろを副コマンドとして判定する。
+ */
+function stdinCodeFinding(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+  stdin: HoldStdin,
+): HoldFinding | null {
+  if (startsWithInspectionTool(args)) return null;
+  // `<(...)`は入力元が実行時に決まる。`-`が無くても、`/dev/fd/N`などで読めるので拒否に倒す。
+  if (stdin.redirects.some((word) => word.text === "<(")) return "dynamic";
+  if (!readsCodeFromStdin(args)) return null;
+  if (stdin.dynamicInput) return "dynamic";
+  const literal = inputs();
+  if (literal === null) return "dynamic";
+  for (const command of stdin.upstream) {
+    const program = baseName(command.words[0]?.text ?? "");
+    if (program === "echo" || program === "printf") continue;
+    if (
+      !PLAIN_UPSTREAM.has(program) ||
+      command.words.slice(1).some(opaqueOrHoldCode) ||
+      // `cat < scripts/freeze.ts`や`cat <<< "$(...)"`のように、catも標準入力から読める。
+      command.redirects.some(opaqueOrHoldCode) ||
+      command.inputs.some(
+        (word) =>
+          word.dynamic ||
+          FREEZE_MENTION.test(word.text) ||
+          HOLD_MENTION.test(word.text),
+      )
+    ) {
+      return "operation";
+    }
+  }
+  if (literal.some((text) => FREEZE_MENTION.test(text))) {
+    const dash = args.findIndex((word) => STDIN_OPERANDS.has(word.text));
+    return freezeSubcommandFinding(args.slice(dash + 1));
+  }
+  return null;
+}
+
+/** 実行系の引数が、保留か凍結のCLIを呼ぶ拒否の対象なら、その種類を返す。 */
+function runnerFinding(
+  args: readonly Word[],
+  inputs: () => readonly string[] | null,
+  stdin: HoldStdin = NO_STDIN,
+): HoldFinding | null {
+  // `bun run - < scripts/freeze.ts`のように、標準入力で流し込んだコードも実行される。
+  if (
+    stdin.redirects.some(
+      (word) => pointsAtHoldCode(word) || pointsAtFreezeCode(word),
+    )
+  ) {
+    return "operation";
+  }
+  if (runnerTouchesHolds(args, inputs)) return "operation";
+  const fromStdin = stdinCodeFinding(args, inputs, stdin);
+  if (fromStdin !== null) return fromStdin;
+  return freezeCliFinding(args, inputs);
+}
+
 function miseFinding(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
+  stdin: HoldStdin = NO_STDIN,
 ): HoldFinding | null {
   const scan = scanMiseGlobalOptions(words, 1);
   // 知らないオプションが値を取ると、サブコマンドの位置が決まらない。コマンド全体を拒否する。
@@ -328,8 +621,9 @@ function miseFinding(
   const execAt = args.findIndex(
     (word) => word.text === "exec" || word.text === "x",
   );
-  if (execAt !== -1 && runnerTouchesHolds(args.slice(execAt + 1), inputs)) {
-    return "operation";
+  if (execAt !== -1) {
+    const finding = runnerFinding(args.slice(execAt + 1), inputs, stdin);
+    if (finding !== null) return finding;
   }
   const inTasks = MISE_TASKS_WORDS.has(subcommand.text);
   const running =
@@ -346,7 +640,7 @@ function miseFinding(
     ...taskWords.filter(namesHoldWriteTask),
     ...argWords.filter(namesHoldTask),
   ];
-  if (named.length === 0) return null;
+  if (named.length === 0) return miseFreezeFinding(taskWords, args);
   return named.some((word) => !word.dynamic) ? "operation" : "dynamic";
 }
 
@@ -363,21 +657,24 @@ function sqlTouchesHolds(
  * 単純コマンドが、保留を置く・解除する操作なら、拒否の種類を返す。そうでなければnullを返す。
  * `words`は、変数代入と前置き(`env`、`timeout`、`mise exec --`など)を外した語である。
  * `inputs`は、標準入力に渡る文字列(ヒアドキュメントと、パイプの前の`echo`など)を返す。
+ * `stdin`は、標準入力に流れ込むものの出どころ(リダイレクト、パイプの前のコマンド、動的な入力)である。
+ * 実行系が標準入力をコードとして読む形で、出どころが保留か凍結のコード、または読めないものなら拒否する。
  * 読めないときはnullを返す。呼ばれるのは、必要になったときだけである。
  */
 export function findHoldOperation(
   words: readonly Word[],
   inputs: () => readonly string[] | null,
+  stdin: HoldStdin = NO_STDIN,
 ): HoldFinding | null {
   const first = words[0]?.text ?? "";
   const program = baseName(first);
-  if (program === "mise") return miseFinding(words, inputs);
-  if (RUNNERS.has(program)) {
-    return runnerTouchesHolds(words.slice(1), inputs) ? "operation" : null;
-  }
+  if (program === "mise") return miseFinding(words, inputs, stdin);
+  if (RUNNERS.has(program)) return runnerFinding(words.slice(1), inputs, stdin);
   if (SQL_PROGRAMS.has(program)) {
     return sqlTouchesHolds(words, inputs) ? "operation" : null;
   }
+  // `./scripts/freeze.ts release`のように、凍結のCLIを直接実行する形。
+  if (direct0IsFreezeCli(words)) return freezeCliFinding(words, inputs);
   // `./scripts/hold.ts place`のように、スクリプトを直接実行する形。
   const direct = words[0];
   if (direct !== undefined && pointsAtHoldCode(direct)) {

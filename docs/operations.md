@@ -2827,7 +2827,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   `repo_allowlist`が空でない間の無効は、収集の通知を出さず、残った通知を自己更新が解決する。
 - スケジュールを止めるには、`collect_github.schedule.yaml`の`enabled`を`false`にする修正のPRを出す。
   `self_update`が`sync push`するので、Windmillの画面で止めても上書きされうる。
-  確認のために画面で止めるときは、先に凍結を置く([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
+  確認のために画面で止めるときは、先に凍結を置く([凍結とdeployの保留の内部仕様](internals/freezes.md)の「運用手順」)。
   スケジュールだけを止めると、収集が成功しなくなるので、閾値の後に通知が出る。
   止めるつもりなら、`repo_allowlist`に必要なリポジトリを並べてから、`gh_collect_enabled`も`false`にする。
 - migrationのdownは自動では走らない。
@@ -3106,7 +3106,7 @@ dependabotの対象は明示したリポジトリだけで、一覧の読み取�
 影響調査のステップも、無効ならClaudeを起動しない。
 スケジュールは、Windmillの画面で無効にして止めない。
 `mise run push`と自己更新がリポジトリの定義で有効に戻すためである。
-確認のために止めるときは、先に凍結を置く([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
+確認のために止めるときは、先に凍結を置く([凍結とdeployの保留の内部仕様](internals/freezes.md)の「運用手順」)。
 
 ### 人に回ったとき
 
@@ -4522,7 +4522,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 3. ホスト側のcheckoutで`git pull --ff-only`を実行する。
    続けて`mise run push`と`mise run migrate`を実行し、自己更新が済ませるはずだった反映を手で行う。
    `mise run push`は`--keep-deleted`付きなので、削除は反映しない。
-   凍結中のスケジュールは、pushから除かれる([スケジュールの凍結の仕様](internals/freezes.md))。
+   凍結中のスケジュールは、pushから除かれる([凍結とdeployの保留の内部仕様](internals/freezes.md))。
 4. 次の回で自己更新が成功することを見る。
    次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
 
@@ -4660,7 +4660,7 @@ miseの自動インストールが`mise run`の前に不足分を入れるかは
 そのため、通知の手順に`mise install`を含める。
 
 `mise.toml`の`windmill-cli`の版を上げる変更では、反映の前に`mise run push:dry`を実行し、`deployed_sha`と凍結中のスケジュールが変更に出ないことを確かめる。
-凍結の除外は、CLIの`--excludes`の挙動に依存するためである([セキュリティ](security.md)の「スケジュールの凍結」)。
+凍結の除外は、CLIの`--excludes`の挙動に依存するためである([セキュリティ](security.md)の「凍結とdeployの保留」)。
 
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
@@ -4716,7 +4716,7 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
-1. 凍結の状態の確認。壊れていれば失敗し、読めなければ警告だけで進む([スケジュールの凍結の仕様](internals/freezes.md)の「失敗の回復」)
+1. 凍結とdeployの保留の確認。deployの保留が有効なら止まる。壊れていれば失敗し、読めなければ警告だけで進む([凍結とdeployの保留の内部仕様](internals/freezes.md)の「失敗の回復」)
 2. ホスト側のcheckoutで`git pull --ff-only`
 3. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
 4. イメージの取得と、ビルドの対象のイメージ(`windmill_worker`と`console_fetcher`)のビルド
@@ -4724,9 +4724,8 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 6. 実行中の仕事の確認。workerが作り直されるときに、実行中の仕事があれば止まる
 7. 取得とビルドを省いた`docker compose up -d`
 8. Caddyの再起動と、動いているCaddyでの`caddy validate`
-9. `wmill sync push`(凍結中のスケジュールを除く)
-10. migrationの実行
-11. 反映したHEADの記録
+9. `wmill sync push`(凍結中のスケジュールを除く)に続けて、migrationの実行。1回の読み取りで続け、deployの保留が有効か、凍結を読めなければ止まる
+10. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査と、実行中の仕事の確認を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
@@ -4738,6 +4737,11 @@ composeはファイル全体を補間するので、未設定の必須変数が1
 pullは済んでいて、次の起動でmiseが新しい`[env]`を読むので、`mise run up`か`mise run deploy`をもう一度実行すれば通る。
 
 `mise run push`と`mise run deploy`は、凍結中のスケジュールを除くラッパー(`scripts/freeze.ts`)を通る。
+`mise run migrate`も同じラッパーを通り、deployの保留が有効か、凍結を読めなければ止まる。
+`mise run up`は、Dockerの版の検査の後、コンテナを変える前に保留を確かめ、有効なら止まる。
+凍結の変数が壊れていると、`mise run up`と`mise run deploy`の確認は失敗して止まる。
+壊れた状態のまま反映すると、凍結を無視して上書きするおそれがあるためである。
+人が`mise run freeze:reset`で変数を空に戻してから、実行し直す。
 ラッパーは`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
 理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。
@@ -4750,6 +4754,46 @@ workerのコンテナが作り直されるので、実装中(`implementing`)の�
 作り直しの直後は、停止したコンテナの行が`ping_at`の絞りに5分残るので、5分待ってから数える。
 反映の後に、古い本文で残った`console_worker_missing`と`worker_load_high`の未解決の通知を解決する。
 本文が変わると、同じ原因の通知が2件目として記録されうるためである。
+
+### migrationの前にdeployを保留する
+
+migrationのように、反映を待たせたい作業の間は、deployの保留を置く。
+保留が有効なあいだ、`self_update`は反映全体を見送り、`mise run push`、`push:prune`、`migrate`、`deploy`、`up`は、反映の前に止まる。
+仕様と残るリスクは、[凍結とdeployの保留の内部仕様](internals/freezes.md)と[セキュリティ](security.md)の「凍結とdeployの保留」にある。
+
+1. `f/factory/deployed_sha`が、保留の仕組みを含むコミットに進んでいることを確かめる。
+   進んでいないと、古い`self_update`は保留を無視する。
+2. 保留を置く。上限は120分である。
+
+   ```bash
+   mise run freeze:place -- --scope deploy --minutes <n> --reason <text>
+   ```
+
+3. `mise run freeze:list`で、自分の行が残っていることを確かめる。
+   この仕組みを知らない版の書き手が、保留を落とすことがあるためである。
+4. `place`が表示する時刻(13分後)まで待つ。
+   置く前に始まった`self_update`の回が、pushとmigrationを終えるまでの目安である。
+5. 作業する。
+   作業の直前と終わりにも`freeze:list`で、保留が残っていたことを確かめる。
+   作業の途中で保留が落ちていたら、その間に反映が進んだかを`deployments`と`deployed_sha`で確かめる。
+6. 保留を解除する。
+   解除を忘れても、期限で無効になる。
+
+   ```bash
+   mise run freeze:release -- <id>
+   ```
+
+7. 次の`self_update`の回(2分以内)が、見送った範囲を反映する。
+   `deployed_sha`がHEADに進み、`deployments`に成功の行が1件入ることを確かめる。
+
+保留中に`deployed_sha`がHEADに追いつかないのは正常である。
+版の食い違いの通知(`deployed_sha_mismatch`)は出ない。
+見送りは通知せず、ログに`a deploy freeze is active, deferring the deployment`が出る。
+
+`mise run deploy`は、先頭の確認を通った後に別の主体が保留を置くと、workerを作り直した後の反映で止まる。
+保留を解除してから、`mise run deploy`をやり直す。
+この仕組みを取り込む最初の`mise run deploy`は、`git pull`の前のタスク定義で動くので、古い`migrate up`が走る。
+先に`git pull --ff-only`を実行してから、`mise run deploy`を実行する。
 
 ### 反映の計画を確かめる
 
@@ -5423,15 +5467,16 @@ mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 値はプロセスの引数に現れ、一覧に表示される。
 
 subagentは保留を置かず、解除もしない。
+deployの保留を置くことと、凍結の解除も同じである。
 主セッションか人に頼む。
-一覧(`mise run hold:list`)だけ、subagentも使える。
+一覧(`mise run hold:list`、`mise run freeze:list`)と、スケジュールの凍結を置くことは、subagentも使える。
 
 ### 凍結と合わせて確かめる
 
 対象を止める仕組みは、保留のほかに、スケジュールの凍結がある。
 凍結は変数に置くので、保留の表には現れない。
-`mise run hold:list`は、有効な凍結の件数も表示する。
-スケジュールを止めている凍結は、`mise run freeze:list`で確かめる([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
+`mise run hold:list`は、有効なスケジュールの凍結とdeployの保留の件数も表示する。
+スケジュールを止めている凍結とdeployの保留は、`mise run freeze:list`で確かめる([凍結とdeployの保留の内部仕様](internals/freezes.md)の「運用手順」)。
 
 ## 秘密をローテーションする
 
