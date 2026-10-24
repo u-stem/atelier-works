@@ -21,8 +21,11 @@ import {
   findBaselineRun,
   groupByScript,
   hasOtherScheduleJob,
+  latestStartedAtMs,
   nextProcessedUntil,
   readProcessedUntil,
+  readScanStartedAfter,
+  SCAN_MAX_WINDOW_MS,
   SCAN_PAGE_SIZE,
   type ScheduleFailureJob,
   scanWindow,
@@ -75,6 +78,11 @@ export type ScheduleFailureDetectResult = {
   /** `bootstrap`は前回の成功が無く、基準だけを作った回。何も記録しない。 */
   readonly mode: "bootstrap" | "scan";
   readonly processed_until: string;
+  /**
+   * ページの上限で打ち切ったときだけ、次の回が開始時刻の下限にそのまま使う値(読んだ最後の開始時刻)。
+   * 打ち切っていないときは`null`。
+   */
+  readonly scan_started_after: string | null;
   /** 読んだ範囲で見つけた、新しい失敗の数。記録済みのものを含む。 */
   readonly found: number;
   /** 今回記録した数。 */
@@ -87,13 +95,24 @@ function errorText(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
+/** 前回の成功した実行の結果から読んだ、続きの位置。 */
+type Baseline = {
+  readonly processedUntilMs: number;
+  /** 前回がページの上限で打ち切られたときの、開始時刻の下限。 */
+  readonly scanStartedAfterMs: number | null;
+};
+
 /**
  * 前回の続きの位置を読む。前回の成功した実行が無ければ`null`を返す。
  * 一覧が配列でないときは例外を投げる。基準を無かったことにして、拾えない範囲を作らないためである。
+ * 前回の実行の結果を読めないときも例外を投げ、次の回に任せる。打ち切った回の未処理を飛び越えないためである。
+ * ただし前回の実行が`SCAN_MAX_WINDOW_MS`より古いときは、読めないまま24時間の窓に切り詰めて続ける。
+ * 読めない状態が続いても、止まり続けずに抜けるためである。
  */
 async function readBaseline(
   deps: ScheduleFailureDetectDeps,
-): Promise<number | null> {
+  nowMs: number,
+): Promise<Baseline | null> {
   const response = await deps.listCompletedJobs(
     baselineRunsQuery(deps.workspace),
   );
@@ -104,17 +123,35 @@ async function readBaseline(
   if (run === null) {
     return null;
   }
-  return readProcessedUntil(await deps.getCompletedJobResult(run.id), run);
+  let result: unknown;
+  try {
+    result = await deps.getCompletedJobResult(run.id);
+  } catch (err) {
+    if (nowMs - run.startedAtMs <= SCAN_MAX_WINDOW_MS) {
+      throw err;
+    }
+    deps.log.warn(
+      "could not read the result of the previous run, which is older than a day; scanning the last day only",
+      { error: errorText(err) },
+    );
+    result = undefined;
+  }
+  return {
+    processedUntilMs: readProcessedUntil(result, run),
+    scanStartedAfterMs: readScanStartedAfter(result),
+  };
 }
 
 /**
  * 他のscheduleのジョブが見えていることを確かめる。
  * 権限が足りないと一覧は黙って空になり、失敗が無いことと区別できないためである。
  * 直近の範囲で見えなくても、広い範囲で見えれば、スリープ明けなどとして警告だけにする。
+ * 前回の続きの位置が24時間より古い回(`windowClamped`)は、24時間でも見えなくて当然なので、警告だけで続ける。
  */
 async function verifyVisibility(
   deps: ScheduleFailureDetectDeps,
   nowMs: number,
+  windowClamped: boolean,
 ): Promise<void> {
   const recent = await deps.listCompletedJobs(
     visibilityQuery(deps.workspace, nowMs - VISIBILITY_RECENT_MS),
@@ -127,6 +164,12 @@ async function verifyVisibility(
     visibilityQuery(deps.workspace, nowMs - VISIBILITY_WIDE_MS),
   );
   if (!hasOtherScheduleJob(wide)) {
+    if (windowClamped) {
+      deps.log.warn(
+        "no job of another schedule is visible in the last 24 hours; continuing because the last scan is older than a day",
+      );
+      return;
+    }
     throw new Error(
       "no job of another schedule is visible in the last 24 hours; the job list may be hidden by missing permissions",
     );
@@ -277,24 +320,30 @@ export async function detectScheduleFailures(
   deps: ScheduleFailureDetectDeps,
 ): Promise<ScheduleFailureDetectResult> {
   const startedAtMs = deps.now();
-  const baselineMs = await readBaseline(deps);
-  await verifyVisibility(deps, startedAtMs);
-  if (baselineMs === null) {
+  const baseline = await readBaseline(deps, startedAtMs);
+  if (baseline === null) {
+    await verifyVisibility(deps, startedAtMs, false);
     deps.log.info("no previous run; made the baseline only");
     return {
       mode: "bootstrap",
       processed_until: new Date(startedAtMs).toISOString(),
+      scan_started_after: null,
       found: 0,
       recorded: 0,
       truncated: false,
     };
   }
 
-  const window = scanWindow(baselineMs, startedAtMs);
+  const window = scanWindow(
+    baseline.processedUntilMs,
+    startedAtMs,
+    baseline.scanStartedAfterMs,
+  );
+  await verifyVisibility(deps, startedAtMs, window.clamped);
   if (window.clamped) {
     deps.log.warn(
       "the last scan is older than the maximum window; scanning the last day only",
-      { baseline: new Date(baselineMs).toISOString() },
+      { baseline: new Date(baseline.processedUntilMs).toISOString() },
     );
   }
   const { jobs, truncated } = await collectPages((page) =>
@@ -304,29 +353,32 @@ export async function detectScheduleFailures(
   );
   const { failures, malformed } = extractScheduleFailures(
     jobs,
-    window.baselineMs,
+    window.completedFromMs,
   );
   if (malformed > 0) {
     deps.log.warn("the failure list has elements that could not be read", {
       count: malformed,
     });
   }
-  const processedUntilMs = nextProcessedUntil({
-    failures,
-    baselineMs: window.baselineMs,
-    runStartedAtMs: startedAtMs,
-    truncated,
-  });
+  let scanStartedAfter: string | null = null;
   if (truncated) {
     deps.log.warn("the failure list reached the page limit", {
       pages: Math.ceil(jobs.length / SCAN_PAGE_SIZE),
     });
-    if (processedUntilMs <= window.baselineMs) {
+    // 次の回は、読んだ最後の開始時刻から続ける。要求した下限から進めないときだけ、本当に進めない。
+    const latest = latestStartedAtMs(jobs);
+    if (latest === null || latest <= window.startedAfterMs) {
       throw new Error(
-        "the failure list reached the page limit with no progress: it holds no failure newer than the baseline",
+        "the failure list reached the page limit with no progress: it holds no job that started after the lower bound",
       );
     }
+    scanStartedAfter = new Date(latest).toISOString();
   }
+  const processedUntilMs = nextProcessedUntil({
+    baselineMs: window.baselineMs,
+    runStartedAtMs: startedAtMs,
+    truncated,
+  });
 
   const recordedIds = await deps.listRecordedJobIds(
     failures.map((failure) => failure.id),
@@ -347,6 +399,7 @@ export async function detectScheduleFailures(
   const result: ScheduleFailureDetectResult = {
     mode: "scan",
     processed_until: new Date(processedUntilMs).toISOString(),
+    scan_started_after: scanStartedAfter,
     found: failures.length,
     recorded,
     truncated,

@@ -81,13 +81,14 @@ export type BaselineRun = {
 
 /** 読む範囲。 */
 export type ScanWindow = {
-  /** 完了時刻がこれ以降のジョブを新しい失敗とする。 */
+  /** 続きの位置。次の回の`processed_until`の下限になる。 */
   readonly baselineMs: number;
   /** 一覧に頼む開始時刻の下限。 */
   readonly startedAfterMs: number;
+  /** 完了時刻がこれ以降のジョブを新しい失敗とする。打ち切った回の続きでは0で、完了時刻では絞らない。 */
+  readonly completedFromMs: number;
   /** 続きの位置が古すぎて、`SCAN_MAX_WINDOW_MS`に切り詰めたか。 */
   readonly clamped: boolean;
-  readonly completedFromMs: number;
 };
 
 /** 検出器自身の、成功した実行を新しい順に頼む問い合わせ。 */
@@ -97,6 +98,7 @@ export function baselineRunsQuery(workspace: string): ListCompletedJobsData {
     schedulePath: SCHEDULE_DETECTOR_PATH,
     scriptPathExact: SCHEDULE_DETECTOR_PATH,
     success: true,
+    isSkipped: false,
     orderDesc: true,
     perPage: BASELINE_PER_PAGE,
   };
@@ -104,7 +106,8 @@ export function baselineRunsQuery(workspace: string): ListCompletedJobsData {
 
 /**
  * 一覧の応答(新しい順)から、検出器のscheduleが起こした成功した実行の先頭を返す。無ければ`null`を返す。
- * サーバーが絞り込みを無視しても、手動の実行やpreviewを数えないよう、クライアントでも確かめる。
+ * サーバーが絞り込みを無視しても、手動の実行やpreview、飛ばされた実行を数えないよう、クライアントでも確かめる。
+ * 飛ばされた実行は、`success`の値が実機で未確認なので、成功に数えない。
  */
 export function findBaselineRun(response: unknown): BaselineRun | null {
   if (!Array.isArray(response)) {
@@ -114,6 +117,7 @@ export function findBaselineRun(response: unknown): BaselineRun | null {
     if (
       !isRecord(run) ||
       run.success !== true ||
+      run.is_skipped === true ||
       run.schedule_path !== SCHEDULE_DETECTOR_PATH ||
       !isString(run.id) ||
       !isString(run.started_at)
@@ -152,20 +156,32 @@ export function readProcessedUntil(result: unknown, run: BaselineRun): number {
 /**
  * 前回の続きの位置から、今回読む範囲を決める。
  * 続きの位置が未来(時計のずれ)なら現在とし、`SCAN_MAX_WINDOW_MS`より古ければその時間前に切り詰める。
+ * `scanStartedAfterMs`は、前回がページの上限で打ち切られたときの、読んだ最後の開始時刻である。
+ * 渡されたときは、その値をそのまま開始時刻の下限にする(遡りを引かない)。完了時刻では絞らず、重なりは記録済みの除外で吸収する。
+ * 完了時刻で絞ると、開始が遅く完了が早い未読の失敗を落とすためである。
+ * 古すぎるときは、`SCAN_MAX_WINDOW_MS`前を下限にするので、止まった検出器の続きが必ず24時間で抜ける。
  */
 export function scanWindow(
   baselineMs: number,
   nowMs: number,
-  _scanStartedAfterMs: number | null = null,
+  scanStartedAfterMs: number | null = null,
 ): ScanWindow {
   const bounded = Math.min(baselineMs, nowMs);
   const floor = nowMs - SCAN_MAX_WINDOW_MS;
   const baseline = Math.max(bounded, floor);
+  if (scanStartedAfterMs !== null) {
+    return {
+      baselineMs: baseline,
+      startedAfterMs: Math.max(Math.min(scanStartedAfterMs, nowMs), floor),
+      completedFromMs: 0,
+      clamped: scanStartedAfterMs < floor,
+    };
+  }
   return {
     baselineMs: baseline,
     startedAfterMs: baseline - SCAN_LOOKBACK_MS,
+    completedFromMs: baseline,
     clamped: bounded < floor,
-    completedFromMs: -1,
   };
 }
 
@@ -344,6 +360,19 @@ function errorFromResult(result: unknown): string | null {
   return stringify(error === undefined ? result : error);
 }
 
+/** 制御文字を落とす。改行と復帰とタブは残す。NULは、textの列に入らず、記録が毎回失敗するためである。 */
+function stripControlCharacters(text: string): string {
+  let out = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    const control = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    if (!control || code === 0x09 || code === 0x0a || code === 0x0d) {
+      out += char;
+    }
+  }
+  return out;
+}
+
 function truncate(text: string): string {
   const chars = Array.from(text);
   return chars.length <= ERROR_MAX_CHARS
@@ -354,10 +383,10 @@ function truncate(text: string): string {
 /**
  * 失敗したジョブ(`JobService.getJob`の応答)から、記録するエラー文を作る。
  * 結果のエラー、取り消しの理由、時間切れの順に読み、どれも無ければ読めなかったことを示す固定の文にする。
- * 秘密情報をマスクし、`ERROR_MAX_CHARS`文字に切る。
+ * 秘密情報をマスクし、制御文字を落とし、`ERROR_MAX_CHARS`文字に切る。
  */
 export function describeJobError(job: unknown): string {
-  return truncate(maskSecrets(rawJobError(job)));
+  return truncate(stripControlCharacters(maskSecrets(rawJobError(job))));
 }
 
 function rawJobError(job: unknown): string {
@@ -408,28 +437,52 @@ export async function collectPages(
 }
 
 /**
- * 次の回が読み始める位置を返す。
+ * 一覧の要素のうち、最も遅い開始時刻をエポックミリ秒で返す。読める開始時刻が無ければ`null`を返す。
+ * 失敗の絞り込みで落とす要素も数える。落とした要素だけで1ページが埋まっても、位置が進むようにするためである。
+ * 並び順に頼らないよう、最後の要素ではなく最大を取る。
+ */
+export function latestStartedAtMs(jobs: readonly unknown[]): number | null {
+  let latest: number | null = null;
+  for (const job of jobs) {
+    if (!isRecord(job) || !isString(job.started_at)) {
+      continue;
+    }
+    const ms = Date.parse(job.started_at);
+    if (!Number.isNaN(ms) && (latest === null || ms > latest)) {
+      latest = ms;
+    }
+  }
+  return latest;
+}
+
+/**
+ * 前回の実行の結果から、ページの上限で打ち切った回の続きの位置(`scan_started_after`)を読む。
+ * 無い、または日時として読めないときは`null`を返す。
+ */
+export function readScanStartedAfter(result: unknown): number | null {
+  if (isRecord(result) && isString(result.scan_started_after)) {
+    const ms = Date.parse(result.scan_started_after);
+    if (!Number.isNaN(ms)) {
+      return ms;
+    }
+  }
+  return null;
+}
+
+/**
+ * 次の回の`processed_until`を返す。
  * 全件を読み終えたときは、この回の開始から`SCAN_OVERLAP_MS`手前(`baselineMs`より戻さない)にする。
  * 最後の失敗の完了時刻に留めると、その後に失敗が無い間、位置が進まず、同じ範囲を読み直し続けるためである。
- * ページの上限で打ち切ったときは、読めた最後の失敗の完了時刻にする。それより後は次の回が読む。
+ * ページの上限で打ち切ったときは、`baselineMs`のままにする。続きは`scan_started_after`(開始時刻)で読むので、
+ * 完了時刻の位置は使わない。
  */
 export function nextProcessedUntil(input: {
-  readonly failures: readonly ScheduleFailureJob[];
   readonly baselineMs: number;
   readonly runStartedAtMs: number;
   readonly truncated: boolean;
 }): number {
   if (input.truncated) {
-    const last = input.failures[input.failures.length - 1];
-    return last === undefined ? input.baselineMs : last.completedAtMs;
+    return input.baselineMs;
   }
   return Math.max(input.baselineMs, input.runStartedAtMs - SCAN_OVERLAP_MS);
-}
-
-export function latestStartedAtMs(_jobs: readonly unknown[]): number | null {
-  return 0;
-}
-
-export function readScanStartedAfter(_result: unknown): number | null {
-  return 0;
 }

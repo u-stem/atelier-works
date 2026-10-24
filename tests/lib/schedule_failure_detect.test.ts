@@ -676,7 +676,7 @@ describe("detectScheduleFailures: a backlog larger than one run reads", () => {
   test("the second run starts after the latest start the first run read, without the lookback", async () => {
     const { first, secondQueries } = await twoRuns();
     const query = secondQueries.find((q) => q.success === false);
-    expect(query?.startedAfter).toBe(first.scan_started_after);
+    expect(query?.startedAfter).toBe(first.scan_started_after ?? undefined);
   });
 
   test("a job that started later and completed earlier than the long one is not dropped", async () => {
