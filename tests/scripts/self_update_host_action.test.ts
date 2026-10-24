@@ -50,7 +50,7 @@ describe("self_update host action wiring", () => {
 
   test("resolves notices before the held return", async () => {
     const source = await selfUpdateSource();
-    const held = source.indexOf('outcome: "held"');
+    const held = source.indexOf('return { outcome: "held"');
     const start = source.indexOf("shouldHoldDeploy(plan)");
 
     expect(

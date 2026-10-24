@@ -62,6 +62,7 @@ import {
   loadFreezeInputs,
   prepareFrozenPush,
   sdkFreezePorts,
+  shouldHoldDeploy,
 } from "./lib/freeze_apply.ts";
 import type { Outcome } from "./lib/freezes.ts";
 import {
@@ -727,6 +728,7 @@ export const SELF_UPDATE_WORST_CASE_MS =
 export type SelfUpdateResult =
   | { readonly outcome: "unchanged" }
   | { readonly outcome: "skipped"; readonly reason: "factory_repo_id" }
+  | { readonly outcome: "held"; readonly reason: "deploy_freeze" }
   | {
       readonly outcome: "updated";
       readonly sha_from: string | null;
@@ -1103,6 +1105,19 @@ async function updateSelf(
     }
     const plan = freeze.value;
     for (const warning of plan.warnings) log.warn(warning);
+
+    // deployの保留が有効なあいだは反映全体(push、migration、`deployed_sha`の更新)を待つ。
+    // `deployed_sha`を進めないので、保留が切れた最初の回が同じ範囲をそのまま反映する。
+    // 失敗の行も通知も足さない。`reason`と`holder`は信頼できない文字列なので、ログにはidと期限だけを出す。
+    if (shouldHoldDeploy(plan)) {
+      log.info("a deploy freeze is active, deferring the deployment", {
+        freezes: plan.deployFreezes,
+        sha_from: deployedSha,
+        sha_to: currentSha,
+      });
+      await resolveHostActionNotices();
+      return { outcome: "held", reason: "deploy_freeze" };
+    }
 
     await runWmillCli(
       buildWmillArgv(

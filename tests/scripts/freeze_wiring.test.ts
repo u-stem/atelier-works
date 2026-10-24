@@ -159,7 +159,7 @@ describe("self_update deploy freeze", () => {
   async function heldBlock(): Promise<string> {
     const text = await source();
     const start = at(text, "shouldHoldDeploy(plan)");
-    return text.slice(start, at(text, 'outcome: "held"'));
+    return text.slice(start, at(text, 'return { outcome: "held"'));
   }
 
   test("decides to hold before the first wmill call", async () => {
@@ -179,7 +179,7 @@ describe("self_update deploy freeze", () => {
   test("returns held before the deployed sha update", async () => {
     const text = await source();
 
-    expect(at(text, 'outcome: "held"')).toBeLessThan(
+    expect(at(text, 'return { outcome: "held"')).toBeLessThan(
       at(text, "await setDeployedSha("),
     );
   });
