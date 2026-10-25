@@ -18,6 +18,7 @@ import {
   SCHEDULE_DETECTOR_PATH,
 } from "../../f/factory/lib/schedule_failure_scan.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import { listedCompletedJob } from "../fixtures/windmill_completed_job.ts";
 
 const MIN = 60 * 1000;
 const NOW = Date.parse("2026-10-25T12:00:00.000Z");
@@ -39,25 +40,29 @@ type World = {
   hang: boolean;
 };
 
+/** 実機の形の、検出器の成功した実行。`completed_at`は無く、完了は開始の1秒後。 */
 function lastSuccess(completedAtMs: number) {
   return [
-    {
+    listedCompletedJob({
       id: "run-1",
       success: true,
-      schedule_path: SCHEDULE_DETECTOR_PATH,
-      started_at: iso(completedAtMs - 1000),
-      completed_at: iso(completedAtMs),
-    },
+      scriptPath: SCHEDULE_DETECTOR_PATH,
+      schedulePath: SCHEDULE_DETECTOR_PATH,
+      startedAtMs: completedAtMs - 1000,
+      durationMs: 1000,
+    }),
   ];
 }
 
 function watchRun(n: number) {
-  return {
+  return listedCompletedJob({
     id: `watch-${String(n)}`,
-    schedule_path: SCHEDULE_DETECTOR_WATCH_PATH,
-    script_path: SCHEDULE_DETECTOR_WATCH_PATH,
-    completed_at: iso(NOW - n * MIN),
-  };
+    success: true,
+    scriptPath: SCHEDULE_DETECTOR_WATCH_PATH,
+    schedulePath: SCHEDULE_DETECTOR_WATCH_PATH,
+    startedAtMs: NOW - n * MIN - 1000,
+    durationMs: 1000,
+  });
 }
 
 function newWorld(): World {
@@ -209,10 +214,8 @@ describe("findBaselineRun completion time", () => {
     expect(findBaselineRun(lastSuccess(NOW))?.completedAtMs).toBe(NOW);
   });
 
-  test("leaves the completion time empty when the run has none", () => {
-    const run = lastSuccess(NOW).map(
-      ({ completed_at: _omit, ...rest }) => rest,
-    );
+  test("leaves the completion time empty when the run has no duration", () => {
+    const run = lastSuccess(NOW).map(({ duration_ms: _omit, ...rest }) => rest);
     expect(findBaselineRun(run)?.completedAtMs).toBeNull();
   });
 });

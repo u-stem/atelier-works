@@ -18,6 +18,10 @@ import {
   SCHEDULE_DETECTOR_PATH,
 } from "../../f/factory/lib/schedule_failure_scan.ts";
 import type { FailureRecord, NoticeRecord } from "../../f/factory/lib/types.ts";
+import {
+  listedCompletedJob,
+  listedCompletionMs,
+} from "../fixtures/windmill_completed_job.ts";
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -28,25 +32,36 @@ const OTHER = "f/factory/watch_pr_ci";
 
 const iso = (ms: number): string => new Date(ms).toISOString();
 
-/** 失敗した実行の一覧の1件。IDは決まった形で、`n`ごとに異なる。 */
+/**
+ * 失敗した実行の一覧の1件。IDは決まった形で、`n`ごとに異なる。
+ * 実機の形で、`completed_at`は無い。`extra`が`started_at`を持つときは、完了時刻に合うよう所要時間を求める。
+ */
 function failedJob(
   n: number,
   completedAtMs: number,
   scriptPath: string = POLL,
   extra: Record<string, unknown> = {},
 ) {
-  return {
-    id: `0198a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
-    success: false,
-    script_path: scriptPath,
-    schedule_path: scriptPath,
-    completed_at: iso(completedAtMs),
-    started_at: iso(completedAtMs - MIN),
-    created_at: iso(completedAtMs - 2 * MIN),
-    canceled: false,
-    is_skipped: false,
-    ...extra,
-  };
+  const startedAtMs =
+    typeof extra.started_at === "string"
+      ? Date.parse(extra.started_at)
+      : completedAtMs - MIN;
+  const createdAtMs =
+    typeof extra.created_at === "string"
+      ? Date.parse(extra.created_at)
+      : completedAtMs - 2 * MIN;
+  return listedCompletedJob(
+    {
+      id: `0198a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
+      success: false,
+      scriptPath,
+      schedulePath: scriptPath,
+      startedAtMs,
+      durationMs: completedAtMs - startedAtMs,
+      createdAtMs,
+    },
+    extra,
+  );
 }
 
 function jobIdOf(n: number): string {
@@ -83,14 +98,21 @@ type World = {
   noticeError: boolean;
 };
 
+/** 実機の形の、検出器の成功した実行。 */
+function baselineRunJob(startedAtMs: number): Record<string, unknown> {
+  return listedCompletedJob({
+    id: "baseline-run",
+    success: true,
+    scriptPath: SCHEDULE_DETECTOR_PATH,
+    schedulePath: SCHEDULE_DETECTOR_PATH,
+    startedAtMs,
+    durationMs: 2000,
+  });
+}
+
 function newWorld(): World {
   return {
-    baselineRun: {
-      id: "baseline-run",
-      success: true,
-      schedule_path: SCHEDULE_DETECTOR_PATH,
-      started_at: iso(NOW - 5 * MIN),
-    },
+    baselineRun: baselineRunJob(NOW - 5 * MIN),
     baselineResult: { processed_until: iso(BASELINE) },
     failurePages: [[]],
     failureJobs: null,
@@ -120,6 +142,7 @@ type Harness = {
   readonly sent: { flowPath: string; jobId: string; error: string }[];
   readonly events: string[];
   readonly warnings: string[];
+  readonly warnFields: Record<string, unknown>[];
   readonly errors: string[];
   readonly getJobIds: string[];
 };
@@ -131,12 +154,14 @@ function harness(world: World): Harness {
   const sent: { flowPath: string; jobId: string; error: string }[] = [];
   const events: string[] = [];
   const warnings: string[] = [];
+  const warnFields: Record<string, unknown>[] = [];
   const errors: string[] = [];
   const getJobIds: string[] = [];
   const log: Logger = {
     info: () => undefined,
-    warn: (message) => {
+    warn: (message, fields) => {
       warnings.push(message);
+      warnFields.push({ message, ...fields });
     },
     error: (message) => {
       errors.push(message);
@@ -159,16 +184,15 @@ function harness(world: World): Harness {
           return world.failureJobs
             .filter(
               (job) =>
-                Date.parse(String(Reflect.get(Object(job), "completed_at"))) <=
-                  world.nowMs &&
+                listedCompletionMs(Object(job)) <= world.nowMs &&
                 (world.ignoreStartedAfter ||
                   Date.parse(String(Reflect.get(Object(job), "started_at"))) >
                     after),
             )
             .sort(
               (a, b) =>
-                Date.parse(String(Reflect.get(Object(a), "started_at"))) -
-                Date.parse(String(Reflect.get(Object(b), "started_at"))),
+                Date.parse(String(Reflect.get(Object(a), "created_at"))) -
+                Date.parse(String(Reflect.get(Object(b), "created_at"))),
             )
             .slice((page - 1) * size, page * size);
         }
@@ -230,6 +254,7 @@ function harness(world: World): Harness {
     sent,
     events,
     warnings,
+    warnFields,
     errors,
     getJobIds,
   };
@@ -481,6 +506,45 @@ describe("detectScheduleFailures: recording", () => {
     const h = harness(world);
     await detectScheduleFailures(h.deps);
     expect(h.warnings).toContain("could not read the error of a failed job");
+  });
+
+  test("names the id and the missing fields of an element it cannot read, without values", async () => {
+    const world = newWorld();
+    world.failurePages = [
+      [failedJob(1, NOW - 10 * MIN, POLL, { duration_ms: undefined })],
+    ];
+    const h = harness(world);
+    await detectScheduleFailures(h.deps);
+    expect(
+      h.warnFields.find(
+        (f) =>
+          f.message === "the failure list has elements that could not be read",
+      ),
+    ).toEqual({
+      message: "the failure list has elements that could not be read",
+      count: 1,
+      samples: [{ id: jobIdOf(1), missing: ["completed_at", "duration_ms"] }],
+    });
+  });
+
+  test("records a failure of the shape the server returns, which has no completed_at", async () => {
+    const world = newWorld();
+    world.failurePages = [[failedJob(1, NOW - 10 * MIN)]];
+    const h = harness(world);
+    await detectScheduleFailures(h.deps);
+    expect(h.records[0]?.record.occurred_at).toBe(iso(NOW - 10 * MIN));
+  });
+
+  test("asks for the jobs of the periodic worker when it checks that jobs are visible", async () => {
+    const h = harness(newWorld());
+    await detectScheduleFailures(h.deps);
+    const visibility = h.queries.filter(
+      (q) =>
+        q.success === undefined &&
+        q.schedulePath === undefined &&
+        q.scriptPathExact === undefined,
+    );
+    expect(visibility.map((q) => q.tag)).toEqual(["periodic"]);
   });
 
   test("warns about an element it cannot read", async () => {
@@ -1248,12 +1312,7 @@ describe("detectScheduleFailures: a scan that stops at the page limit right afte
       }),
     );
     const bootstrap = await detectScheduleFailures(harness(w).deps);
-    w.baselineRun = {
-      id: "baseline-run",
-      success: true,
-      schedule_path: SCHEDULE_DETECTOR_PATH,
-      started_at: iso(NOW),
-    };
+    w.baselineRun = baselineRunJob(NOW);
     w.baselineResult = bootstrap;
     w.nowMs = NOW + 5 * MIN;
     const first = await detectScheduleFailures(harness(w).deps);
