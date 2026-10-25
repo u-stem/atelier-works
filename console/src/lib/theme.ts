@@ -33,3 +33,25 @@ export function parseThemePreference(value: unknown): ThemePreference {
 export function themePreferenceLabel(preference: ThemePreference): string {
   return LABELS[preference];
 }
+
+/**
+ * 選択をhtmlに写すときの属性。値は`system`、`light`、`dark`のどれか。
+ * 実際の配色は`data-theme`が決め、OSに合わせている間も`light`か`dark`を付ける。
+ * OSの設定の変更を受けたときに、この属性で「OSに合わせる」かを見分ける。
+ */
+export const THEME_PREFERENCE_ATTRIBUTE = "data-theme-preference";
+
+/**
+ * 選択から、実際に付けるdata-themeの値を決める。
+ * 「OSに合わせる」は、OSの配色の設定をここで解決する。
+ * メディアクエリに色を任せると、OSの設定が変わったとき、遷移を止めるより先に色が替わり始める。
+ */
+export function resolveTheme(
+  preference: ThemePreference,
+  prefersDark: boolean,
+): "light" | "dark" {
+  if (preference === "system") {
+    return prefersDark ? "dark" : "light";
+  }
+  return preference;
+}
