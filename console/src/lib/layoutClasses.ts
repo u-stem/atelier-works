@@ -17,3 +17,9 @@ export const SCROLL_BODY_CLASS =
  */
 export const APP_MAIN_CLASS =
   "relative flex min-w-0 flex-1 flex-col overflow-hidden";
+
+/** ページ送りの帯のclass。 */
+export const PAGINATION_BAR_CLASS = "";
+
+/** ページ送りの帯の中のボタンに付けるclass。 */
+export const PAGINATION_BUTTON_CLASS = "";

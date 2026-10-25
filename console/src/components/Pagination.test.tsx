@@ -102,6 +102,10 @@ describe("Pagination", () => {
     expect(navClasses(render(0, 60))).toContain("z-10");
   });
 
+  test("cancels the scroll padding for the buttons so focusing one does not scroll", () => {
+    expect(buttonTag(render(0, 60), "次へ")).toContain("-scroll-mb-28");
+  });
+
   test("draws the buttons as type button", () => {
     expect(buttonTag(render(0, 60), "次へ")).toContain('type="button"');
   });
