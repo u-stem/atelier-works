@@ -1,13 +1,19 @@
 import { Link } from "react-router";
 import type { NoticeRow } from "../../api/guards/notices.ts";
 import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
+import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { FAILURE_TEXT_LIMIT } from "../../lib/failureView.ts";
+import { pageSlice } from "../../lib/pagination.ts";
 import {
   describeInfoNotice,
   describeResolvedNotice,
 } from "../../lib/systemView.ts";
+import { usePagination } from "../../lib/usePagination.ts";
 import { EmptyNote } from "./SystemSection.tsx";
+
+/** 1ページに出す通知の数。 */
+const PAGE_SIZE = 10;
 
 const LINK_CLASS =
   "shrink-0 rounded-sm text-small font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -20,47 +26,59 @@ const LINK_CLASS =
 export function InfoNoticeList({
   notices,
   now,
+  initialPage,
 }: {
   notices: readonly NoticeRow[];
   now: number;
+  /** 最初に出すページ(0から数える)。省略すると先頭。 */
   initialPage?: number | undefined;
 }) {
+  const pager = usePagination(notices.length, PAGE_SIZE, initialPage);
   if (notices.length === 0) {
     return <EmptyNote>情報の通知はありません</EmptyNote>;
   }
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-      {notices.map((notice) => {
-        const row = describeInfoNotice(notice);
-        return (
-          <li
-            key={row.noticeId}
-            className="flex items-baseline gap-3 px-5 py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="flex flex-wrap items-baseline gap-x-3">
-                <span className="text-body font-medium">{row.title}</span>
-                <span className="text-small text-subtle">
-                  <TimeText iso={row.createdAt} now={now} />
-                </span>
-              </p>
-              {row.preview === "" ? null : (
-                <p
-                  dir="ltr"
-                  className="mt-0.5 text-small break-words text-muted-foreground [unicode-bidi:isolate]"
-                >
-                  {row.preview}
+    <div ref={pager.anchorRef} className="flex flex-col gap-3">
+      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+        {pageSlice(notices, pager.page, PAGE_SIZE).map((notice) => {
+          const row = describeInfoNotice(notice);
+          return (
+            <li
+              key={row.noticeId}
+              className="flex items-baseline gap-3 px-5 py-3"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="flex flex-wrap items-baseline gap-x-3">
+                  <span className="text-body font-medium">{row.title}</span>
+                  <span className="text-small text-subtle">
+                    <TimeText iso={row.createdAt} now={now} />
+                  </span>
                 </p>
-              )}
-            </div>
-            <Link to={row.href} className={LINK_CLASS}>
-              詳細
-              {row.canResolve ? "と解決" : ""}
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
+                {row.preview === "" ? null : (
+                  <p
+                    dir="ltr"
+                    className="mt-0.5 text-small break-words text-muted-foreground [unicode-bidi:isolate]"
+                  >
+                    {row.preview}
+                  </p>
+                )}
+              </div>
+              <Link to={row.href} className={LINK_CLASS}>
+                詳細
+                {row.canResolve ? "と解決" : ""}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      <Pagination
+        page={pager.page}
+        total={notices.length}
+        size={PAGE_SIZE}
+        onPageChange={pager.change}
+        label="情報の通知のページ送り"
+      />
+    </div>
   );
 }
 
@@ -117,19 +135,31 @@ function ResolvedItem({
 export function ResolvedNoticeList({
   notices,
   now,
+  initialPage,
 }: {
   notices: readonly SystemResolvedNotice[];
   now: number;
+  /** 最初に出すページ(0から数える)。省略すると先頭。 */
   initialPage?: number | undefined;
 }) {
+  const pager = usePagination(notices.length, PAGE_SIZE, initialPage);
   if (notices.length === 0) {
     return <EmptyNote>解決済みの通知はありません</EmptyNote>;
   }
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-      {notices.map((notice) => (
-        <ResolvedItem key={notice.notice_id} notice={notice} now={now} />
-      ))}
-    </ul>
+    <div ref={pager.anchorRef} className="flex flex-col gap-3">
+      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+        {pageSlice(notices, pager.page, PAGE_SIZE).map((notice) => (
+          <ResolvedItem key={notice.notice_id} notice={notice} now={now} />
+        ))}
+      </ul>
+      <Pagination
+        page={pager.page}
+        total={notices.length}
+        size={PAGE_SIZE}
+        onPageChange={pager.change}
+        label="解決済みの通知のページ送り"
+      />
+    </div>
   );
 }

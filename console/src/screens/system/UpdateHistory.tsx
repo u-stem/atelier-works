@@ -2,6 +2,7 @@ import type {
   DeploymentEntry,
   DeploymentPullRequest,
 } from "../../api/guards/deployments.ts";
+import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
 import {
@@ -9,6 +10,7 @@ import {
   hostActionLabel,
   pullRequestOriginLabel,
 } from "../../lib/labels.ts";
+import { pageSlice } from "../../lib/pagination.ts";
 import {
   failureReasonText,
   isPullRequestListTruncated,
@@ -17,6 +19,7 @@ import {
   pullRequestTruncationNote,
   versionText,
 } from "../../lib/updateHistory.ts";
+import { usePagination } from "../../lib/usePagination.ts";
 
 function resultVariant(result: string): BadgeProps["variant"] {
   switch (result) {
@@ -123,19 +126,26 @@ function DeploymentItem({
   );
 }
 
+/** 1ページに出す反映の数。 */
+const PAGE_SIZE = 10;
+
 /**
  * 反映の履歴。新しい順に並べ、反映ごとに日時、版、結果、ホストの作業の要否、含まれるPRを出す。
  * 失敗した反映には、理由の先頭部分を文字としてだけ出す。
  * PRごとに、Software Factoryが作ったか、人が作ったか、不明かを示す。
+ * 渡された反映を10件ずつのページに分け、画面の中で送る。
  */
 export function UpdateHistory({
   entries,
   now,
+  initialPage,
 }: {
   entries: readonly DeploymentEntry[];
   now: number;
+  /** 最初に出すページ(0から数える)。省略すると先頭。 */
   initialPage?: number | undefined;
 }) {
+  const pager = usePagination(entries.length, PAGE_SIZE, initialPage);
   if (entries.length === 0) {
     return (
       <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
@@ -144,10 +154,19 @@ export function UpdateHistory({
     );
   }
   return (
-    <ul className="flex flex-col gap-3">
-      {entries.map((entry) => (
-        <DeploymentItem key={entry.deployment_id} entry={entry} now={now} />
-      ))}
-    </ul>
+    <div ref={pager.anchorRef} className="flex flex-col gap-3">
+      <ul className="flex flex-col gap-3">
+        {pageSlice(entries, pager.page, PAGE_SIZE).map((entry) => (
+          <DeploymentItem key={entry.deployment_id} entry={entry} now={now} />
+        ))}
+      </ul>
+      <Pagination
+        page={pager.page}
+        total={entries.length}
+        size={PAGE_SIZE}
+        onPageChange={pager.change}
+        label="更新履歴のページ送り"
+      />
+    </div>
   );
 }
