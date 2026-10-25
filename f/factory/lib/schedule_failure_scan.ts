@@ -129,14 +129,22 @@ function completionOf(
       return { ms, iso: job.completed_at };
     }
   }
-  if (isString(job.started_at) && isFiniteNumber(job.duration_ms)) {
+  if (isString(job.started_at) && isUsableDuration(job.duration_ms)) {
     const startedAtMs = Date.parse(job.started_at);
     if (!Number.isNaN(startedAtMs)) {
-      const ms = startedAtMs + job.duration_ms;
-      return { ms, iso: new Date(ms).toISOString() };
+      // 小数のミリ秒は切り捨て、時刻と文字列がずれないようにする。
+      const ms = startedAtMs + Math.trunc(job.duration_ms);
+      // Dateの範囲を超えると文字列にできないので、読めない要素として扱う。
+      if (Number.isFinite(new Date(ms).getTime())) {
+        return { ms, iso: new Date(ms).toISOString() };
+      }
     }
   }
   return null;
+}
+
+function isUsableDuration(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -149,7 +157,7 @@ function missingForCompletion(job: Record<string, unknown>): string[] {
   if (!isString(job.started_at) || Number.isNaN(Date.parse(job.started_at))) {
     missing.push("started_at");
   }
-  if (!isFiniteNumber(job.duration_ms)) {
+  if (!isUsableDuration(job.duration_ms)) {
     missing.push("duration_ms");
   }
   return missing;
@@ -515,8 +523,8 @@ export async function collectPages(
  * 一覧の要素のうち、最も遅い作成時刻をエポックミリ秒で返す。作成時刻が無い要素は開始時刻で数える。
  * 読める時刻が無ければ`null`を返す。
  * 次の回は、この値を開始時刻の下限にそのまま使う(`scan_started_after`)。
- * 一覧の並び順のキーが開始時刻か作成時刻かは実機で未確認なので、どちらでも安全な作成時刻を取る。
- * 読んでいないジョブの開始時刻は、作成時刻以降であり、並びのキーで読んだ分より後になる。
+ * 一覧は作成時刻の昇順で返ることを、実機で確かめた(開始時刻の順には並ばない)。
+ * 読んでいないジョブの作成時刻は、読んだ最大の作成時刻以降で、開始時刻はさらにその後になる。
  * 失敗の絞り込みで落とす要素も数える。落とした要素だけで1ページが埋まっても、位置が進むようにするためである。
  * 並び順に頼らないよう、最後の要素ではなく最大を取る。
  */

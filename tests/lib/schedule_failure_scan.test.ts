@@ -527,6 +527,24 @@ describe("extractScheduleFailures", () => {
     expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
   });
 
+  test("counts a failure with a negative duration as malformed", () => {
+    const job = failed("a", T1, { duration_ms: -5 });
+    expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
+  });
+
+  test("counts a failure whose end is out of the date range as malformed", () => {
+    const job = failed("a", T1, { duration_ms: 9e15 });
+    expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
+  });
+
+  test("truncates a fractional duration so the time and its text agree", () => {
+    const job = failed("a", T1, { duration_ms: 1500.9 });
+    const [failure] = extractScheduleFailures([job], BASE).failures;
+    expect(Date.parse(failure?.completedAt ?? "")).toBe(
+      failure?.completedAtMs ?? Number.NaN,
+    );
+  });
+
   test("counts a failure without a duration as malformed", () => {
     const job = failed("a", T1, { duration_ms: undefined });
     expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
