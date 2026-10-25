@@ -22,7 +22,7 @@ locks:
   f/factory/freeze_release: eea20528af4a7e9fc136add7dce194ae1a703c30a3d41f09b4ebfed7baba0467
   f/factory/hold_release: 8d52fe914fb1312e62c55e3d1d59c5c0098fcb656cb79de678b368097c52ea54
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/lib/approval_support: 9c73dd50de48f717cbfd05829ac87676e3351ffcd1471757b5c018e7358db9fe
+  f/factory/lib/approval_support: c83d07755a7a3a2478eb413ae4480b62567672de1fb001eb72e84a220f7596b0
   f/factory/lib/approver: 1c82cf702f2bb7ac29d81bf9a5d439ced908228a3ee8229b415118a13619c300
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: 5aa75b51fa92d650753b4a0b4e02d72f10d43ea7d4c69015c53df5ea4ecb6653

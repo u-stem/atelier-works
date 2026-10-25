@@ -127,6 +127,8 @@ export function ItemsScreen() {
         >
           <PipelineSection
             pipeline={pipeline}
+            scope="active"
+            onScopeChange={() => undefined}
             actionableCount={
               summary.data === undefined ? null : actionableTotal(summary.data)
             }

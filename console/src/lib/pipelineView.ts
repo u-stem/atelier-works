@@ -246,6 +246,31 @@ export function actionableNote(count: number | null): string {
 export const PR_OPEN_NOTE =
   "状態がPR作成済みのものです。マージ済みかどうかは一覧から分からないので、マージ待ちの目安です。";
 
+export function parsePipelineScope(_value: string | null): PipelineScope {
+  return "active";
+}
+
+export function withPipelineScope(
+  current: URLSearchParams,
+  _scope: PipelineScope,
+): URLSearchParams {
+  return current;
+}
+
+export function outOfScopeMatchCount(
+  _rows: readonly PipelineRow[],
+  _filter: PipelineFilter,
+): number {
+  return 0;
+}
+
+export function effectivePipelineSort(
+  sort: PipelineSort,
+  _showRepo: boolean,
+): PipelineSort {
+  return sort;
+}
+
 /**
  * 検索の対象にする文字列。画面に出す語(題名、ブランチ、リポジトリ、番号、状態、種別)だけを並べる。
  * 題名とブランチは、画面に出すときと同じ整形を通す。見えない文字が検索に当たらないようにするため。

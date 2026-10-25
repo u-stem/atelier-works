@@ -371,6 +371,13 @@ function PipelineRowView({
 /** 1ページに出す行の数。 */
 const PAGE_SIZE = 25;
 
+export function NoMatchNotice(_props: {
+  hiddenMatches: number;
+  onShowAll: () => void;
+}) {
+  return null;
+}
+
 /**
  * 絞り込んだ後の行から、表とカードそれぞれの1ページ分を取り出す。
  * 表は選んだ並びで区切る。
@@ -405,18 +412,20 @@ export function PipelineTable({
   rows,
   now,
   initialPage,
-  initialScope,
+  scope,
 }: {
   rows: readonly PipelineRow[];
   now: number;
   /** 最初に出すページ(0から数える)。省略すると先頭。 */
   initialPage?: number | undefined;
-  /** 最初に出す範囲。省略すると進行中。 */
-  initialScope?: PipelineScope | undefined;
+  /** 表に出す範囲。 */
+  scope: PipelineScope;
+  /** 範囲を替えたときに呼ぶ。 */
+  onScopeChange: (scope: PipelineScope) => void;
 }) {
   const [chosen, setFilter] = useState<PipelineFilter>({
     ...EMPTY_PIPELINE_FILTER,
-    scope: initialScope ?? EMPTY_PIPELINE_FILTER.scope,
+    scope,
   });
   const filter = reconcilePipelineFilter(chosen, rows);
   const scopedRows = rowsInScope(rows, filter.scope);

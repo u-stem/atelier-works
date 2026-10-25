@@ -135,7 +135,10 @@ export function buildAuditConsoleUrl(
 }
 
 /** Consoleの作業項目の画面のURL(`/console/items`)を返す。 */
-export function buildItemsConsoleUrl(windmillPublicUrl: string): string {
+export function buildItemsConsoleUrl(
+  windmillPublicUrl: string,
+  _options: { readonly scope?: "all" } = {},
+): string {
   return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}items`;
 }
 

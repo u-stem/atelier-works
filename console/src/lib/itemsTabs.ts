@@ -63,3 +63,33 @@ export function itemsTabMark(
 ): string | undefined {
   return tab !== selected && failed[tab] ? FETCH_FAILED_MARK : undefined;
 }
+
+export const ITEMS_ID_PREFIX = "";
+
+export function itemsPanelHidden(
+  _panel: ItemsTabId,
+  _selected: ItemsTabId,
+): boolean {
+  return false;
+}
+
+export function itemsPanelAttrs(
+  _panel: ItemsTabId,
+  _selected: ItemsTabId,
+): { id: string; labelledBy: string; hidden: boolean } {
+  return { id: "", labelledBy: "", hidden: false };
+}
+
+export function itemsTabSpecs(
+  _selected: ItemsTabId,
+  _failed: Readonly<Record<ItemsTabId, boolean>>,
+  _requirementsCount: number | undefined,
+): {
+  id: ItemsTabId;
+  label: string;
+  panelId: string;
+  count: number | undefined;
+  mark: string | undefined;
+}[] {
+  return [];
+}

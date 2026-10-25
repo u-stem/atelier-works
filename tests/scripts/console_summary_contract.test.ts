@@ -20,11 +20,13 @@ import {
   workItemStatusLabel,
 } from "../../console/src/lib/labels.ts";
 import { legacyDeepLinkTarget } from "../../console/src/lib/legacyDeepLink.ts";
+import { parsePipelineScope } from "../../console/src/lib/pipelineView.ts";
 import { parseAttemptParam } from "../../console/src/lib/requirementsView.ts";
 import {
   buildApprovalConsoleUrl,
   buildAuditConsoleUrl,
   buildConsoleUrl,
+  buildItemsConsoleUrl,
 } from "../../f/factory/lib/approval_support.ts";
 import { NOTICE_SEVERITY } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
@@ -282,6 +284,13 @@ describe("console links built by the approval flow", () => {
       buildApprovalConsoleUrl(CONSOLE_PUBLIC_URL, 9),
     );
     expect(parseSelection(searchParams)).toEqual({ type: "approval", id: 9 });
+  });
+
+  test("the work items link carries the scope that the screen reads", () => {
+    const { searchParams } = new URL(
+      buildItemsConsoleUrl(CONSOLE_PUBLIC_URL, { scope: "all" }),
+    );
+    expect(parsePipelineScope(searchParams.get("scope"))).toBe("all");
   });
 
   test("the requirements link carries the attempt that the screen reads", () => {

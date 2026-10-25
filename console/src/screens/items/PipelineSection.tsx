@@ -11,7 +11,11 @@ import {
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { INBOX_PATH } from "../../lib/inboxView.ts";
-import { actionableNote, pipelineScopeNote } from "../../lib/pipelineView.ts";
+import {
+  actionableNote,
+  type PipelineScope,
+  pipelineScopeNote,
+} from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
 
@@ -61,8 +65,14 @@ function FailureState({
 export function PipelineSection({
   pipeline,
   actionableCount = null,
+  scope,
+  onScopeChange,
 }: {
   pipeline: SectionQuery<PipelineRow[]>;
+  /** 表に出す範囲。 */
+  scope: PipelineScope;
+  /** 範囲を替えたときに呼ぶ。 */
+  onScopeChange: (scope: PipelineScope) => void;
   /** 要対応にある件数。分からないときは`null`か省略。 */
   actionableCount?: number | null | undefined;
 }) {
@@ -108,7 +118,12 @@ export function PipelineSection({
                 }}
               />
             ) : null}
-            <PipelineTable rows={pipeline.data} now={now} />
+            <PipelineTable
+              rows={pipeline.data}
+              now={now}
+              scope={scope}
+              onScopeChange={onScopeChange}
+            />
           </>
         )}
       </LoadingGate>

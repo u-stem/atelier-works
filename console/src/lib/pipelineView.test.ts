@@ -5,13 +5,16 @@ import {
   clearPipelineFilter,
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
+  effectivePipelineSort,
   filterPipelineRows,
   isActiveStatus,
   isPipelineFilterActive,
   itemDetailPath,
   itemRequirementsPath,
   nextPipelineSort,
+  outOfScopeMatchCount,
   PIPELINE_SCOPES,
+  parsePipelineScope,
   pipelineScopeNote,
   pipelineStatusLabel,
   pipelineStatusVariant,
@@ -26,6 +29,7 @@ import {
   showsRequirementsLink,
   sortPipelineRows,
   statusOptions,
+  withPipelineScope,
 } from "./pipelineView.ts";
 
 const T0 = "2026-10-08T00:00:00.000Z";
@@ -613,10 +617,10 @@ const ACTIVE_STATUSES = [
   "fixing",
   "auditing",
   "blocked",
+  "approved",
 ];
 
 const SETTLED_STATUSES = [
-  "approved",
   "rejected",
   "needs_human",
   "failed",
@@ -673,10 +677,11 @@ describe("rowsInScope", () => {
     row({ work_item_id: 3, status: "failed" }),
     row({ work_item_id: 4, status: "blocked" }),
     row({ work_item_id: 5, status: "reviewed" }),
+    row({ work_item_id: 6, status: "approved" }),
   ];
 
-  test("keeps the active rows and the blocked rows for active", () => {
-    expect(ids(rowsInScope(rows, "active"))).toEqual([1, 4]);
+  test("keeps the active, blocked and approved rows for active", () => {
+    expect(ids(rowsInScope(rows, "active"))).toEqual([1, 4, 6]);
   });
 
   test("keeps only the pr_open rows for pr_open", () => {
@@ -684,7 +689,7 @@ describe("rowsInScope", () => {
   });
 
   test("keeps every row for all", () => {
-    expect(ids(rowsInScope(rows, "all"))).toEqual([1, 2, 3, 4, 5]);
+    expect(ids(rowsInScope(rows, "all"))).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   test("keeps the order of the rows", () => {
@@ -815,5 +820,115 @@ describe("actionableNote", () => {
     expect(actionableNote(0)).toBe(
       "対応が必要なものは『要対応』にあります(0件)",
     );
+  });
+});
+
+describe("parsePipelineScope", () => {
+  test.each(["active", "pr_open", "all"] as const)(
+    "reads the scope %s",
+    (scope) => {
+      expect(parsePipelineScope(scope)).toBe(scope);
+    },
+  );
+
+  test("falls back to active when there is no value", () => {
+    expect(parsePipelineScope(null)).toBe("active");
+  });
+
+  test.each(["", "ALL", "pr-open", "bogus", "all "])(
+    "falls back to active for %j",
+    (value) => {
+      expect(parsePipelineScope(value)).toBe("active");
+    },
+  );
+});
+
+describe("withPipelineScope", () => {
+  test("sets the scope name", () => {
+    expect(withPipelineScope(new URLSearchParams(), "all").get("scope")).toBe(
+      "all",
+    );
+  });
+
+  test("leaves the default scope out of the query", () => {
+    expect(
+      withPipelineScope(new URLSearchParams("scope=all"), "active").has(
+        "scope",
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps the other parameters", () => {
+    expect(
+      withPipelineScope(new URLSearchParams("tab=requirements"), "pr_open").get(
+        "tab",
+      ),
+    ).toBe("requirements");
+  });
+
+  test("does not change the parameters it was given", () => {
+    const current = new URLSearchParams("tab=requirements");
+    withPipelineScope(current, "all");
+    expect(current.has("scope")).toBe(false);
+  });
+});
+
+describe("outOfScopeMatchCount", () => {
+  const rows = [
+    row({ work_item_id: 1, status: "implementing", title: "alpha" }),
+    row({ work_item_id: 2, status: "failed", title: "alpha two" }),
+    row({ work_item_id: 3, status: "pr_open", title: "beta" }),
+    row({ work_item_id: 4, status: "failed", title: "alpha", repo: "other" }),
+  ];
+  const search = (text: string, scope: "active" | "pr_open" | "all") => ({
+    ...EMPTY_PIPELINE_FILTER,
+    scope,
+    text,
+  });
+
+  test("counts the matches that the scope hides", () => {
+    expect(outOfScopeMatchCount(rows, search("alpha", "active"))).toBe(2);
+  });
+
+  test("does not count the matches inside the scope", () => {
+    expect(outOfScopeMatchCount(rows, search("実装中", "active"))).toBe(0);
+  });
+
+  test("counts nothing when no hidden row matches", () => {
+    expect(outOfScopeMatchCount(rows, search("zzz", "active"))).toBe(0);
+  });
+
+  test("counts nothing for the all scope", () => {
+    expect(outOfScopeMatchCount(rows, search("alpha", "all"))).toBe(0);
+  });
+
+  test("applies the repository choice to the hidden rows", () => {
+    expect(
+      outOfScopeMatchCount(rows, {
+        ...search("alpha", "active"),
+        repo: "o/other",
+      }),
+    ).toBe(1);
+  });
+
+  test("counts against the pr_open scope too", () => {
+    expect(outOfScopeMatchCount(rows, search("alpha", "pr_open"))).toBe(3);
+  });
+});
+
+describe("effectivePipelineSort", () => {
+  const BY_REPO = { key: "repo", direction: "desc" } as const;
+  const BY_STATUS = { key: "status", direction: "asc" } as const;
+
+  test("keeps a sort by repository while the column is shown", () => {
+    expect(effectivePipelineSort(BY_REPO, true)).toBe(BY_REPO);
+  });
+
+  test("falls back to the default sort when the repository column is gone", () => {
+    expect(effectivePipelineSort(BY_REPO, false)).toBe(DEFAULT_PIPELINE_SORT);
+  });
+
+  test("keeps a sort by another column without the repository column", () => {
+    expect(effectivePipelineSort(BY_STATUS, false)).toBe(BY_STATUS);
   });
 });

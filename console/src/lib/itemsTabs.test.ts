@@ -1,13 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   FETCH_FAILED_MARK,
+  ITEMS_ID_PREFIX,
   ITEMS_TABS,
+  itemsPanelAttrs,
+  itemsPanelHidden,
   itemsPanelId,
   itemsTabMark,
   itemsTabPath,
+  itemsTabSpecs,
   parseItemsTab,
   withItemsTab,
 } from "./itemsTabs.ts";
+import { tabDomId } from "./tabs.ts";
 
 describe("ITEMS_TABS", () => {
   test("lists progress first and requirements second", () => {
@@ -123,5 +128,87 @@ describe("itemsTabMark", () => {
 
   test("states the failure in words", () => {
     expect(FETCH_FAILED_MARK).toContain("失敗");
+  });
+});
+
+describe("itemsPanelHidden", () => {
+  test("shows the panel of the selected tab", () => {
+    expect(itemsPanelHidden("progress", "progress")).toBe(false);
+  });
+
+  test("hides the panel of the other tab", () => {
+    expect(itemsPanelHidden("requirements", "progress")).toBe(true);
+  });
+
+  test("hides the progress panel while requirements is open", () => {
+    expect(itemsPanelHidden("progress", "requirements")).toBe(true);
+  });
+});
+
+describe("itemsPanelAttrs", () => {
+  test("gives the panel the id that its tab points at", () => {
+    expect(itemsPanelAttrs("requirements", "progress").id).toBe(
+      itemsPanelId("requirements"),
+    );
+  });
+
+  test("labels the panel by its own tab", () => {
+    expect(itemsPanelAttrs("requirements", "progress").labelledBy).toBe(
+      tabDomId(ITEMS_ID_PREFIX, "requirements"),
+    );
+  });
+
+  test("hides the panel that is not selected", () => {
+    expect(itemsPanelAttrs("requirements", "progress").hidden).toBe(true);
+  });
+
+  test("keeps the selected panel shown", () => {
+    expect(itemsPanelAttrs("progress", "progress").hidden).toBe(false);
+  });
+});
+
+describe("itemsTabSpecs", () => {
+  const FINE = { progress: false, requirements: false };
+
+  test("lists both tabs in order", () => {
+    expect(
+      itemsTabSpecs("progress", FINE, undefined).map((tab) => tab.id),
+    ).toEqual(["progress", "requirements"]);
+  });
+
+  test("points each tab at its own panel", () => {
+    expect(
+      itemsTabSpecs("progress", FINE, undefined).map((tab) => tab.panelId),
+    ).toEqual([itemsPanelId("progress"), itemsPanelId("requirements")]);
+  });
+
+  test("adds the count to the requirements tab only", () => {
+    expect(itemsTabSpecs("progress", FINE, 12).map((tab) => tab.count)).toEqual(
+      [undefined, 12],
+    );
+  });
+
+  test("leaves the count out while it is unknown", () => {
+    expect(
+      itemsTabSpecs("progress", FINE, undefined).map((tab) => tab.count),
+    ).toEqual([undefined, undefined]);
+  });
+
+  test("marks the hidden tab whose fetch failed", () => {
+    expect(
+      itemsTabSpecs("progress", { progress: false, requirements: true }, 3).map(
+        (tab) => tab.mark,
+      ),
+    ).toEqual([undefined, FETCH_FAILED_MARK]);
+  });
+
+  test("leaves the selected tab unmarked even when its fetch failed", () => {
+    expect(
+      itemsTabSpecs(
+        "requirements",
+        { progress: false, requirements: true },
+        3,
+      ).map((tab) => tab.mark),
+    ).toEqual([undefined, undefined]);
   });
 });

@@ -8,7 +8,11 @@ import {
   type PipelineScope,
   sortPipelineRows,
 } from "../../lib/pipelineView.ts";
-import { PipelineTable, pipelinePageRows } from "./PipelineTable.tsx";
+import {
+  NoMatchNotice,
+  PipelineTable,
+  pipelinePageRows,
+} from "./PipelineTable.tsx";
 
 const NOW = Date.parse("2026-10-08T01:00:00.000Z");
 
@@ -34,12 +38,17 @@ function row(overrides: Partial<PipelineRow> = {}): PipelineRow {
 
 function render(
   rows: readonly PipelineRow[],
-  initialScope?: PipelineScope,
+  scope: PipelineScope = "active",
 ): string {
   return renderToStaticMarkup(
     <MemoryRouter>
       <TooltipProvider>
-        <PipelineTable rows={rows} now={NOW} initialScope={initialScope} />
+        <PipelineTable
+          rows={rows}
+          now={NOW}
+          scope={scope}
+          onScopeChange={() => undefined}
+        />
       </TooltipProvider>
     </MemoryRouter>,
   );
@@ -324,6 +333,44 @@ describe("PipelineTable without an active work item", () => {
   });
 });
 
+describe("NoMatchNotice", () => {
+  function renderNotice(hiddenMatches: number): string {
+    return renderToStaticMarkup(
+      <NoMatchNotice
+        hiddenMatches={hiddenMatches}
+        onShowAll={() => undefined}
+      />,
+    );
+  }
+
+  test("says that no work item matches", () => {
+    expect(renderNotice(0)).toContain("条件に合う作業項目はありません");
+  });
+
+  test("offers to search the whole list with the number of matches", () => {
+    expect(renderNotice(4)).toContain("すべてで探す(4件)");
+  });
+
+  test("does not offer the whole list when nothing is hidden", () => {
+    expect(renderNotice(0)).not.toContain("すべてで探す");
+  });
+});
+
+describe("PipelineTable with a chosen scope", () => {
+  const rows = [
+    row({ work_item_id: 1, status: "implementing" }),
+    row({ work_item_id: 2, status: "failed" }),
+  ];
+
+  test("shows the failed row for the all scope", () => {
+    expect(render(rows, "all")).toContain('href="/items/2"');
+  });
+
+  test("hides the failed row for the active scope", () => {
+    expect(render(rows, "active")).not.toContain('href="/items/2"');
+  });
+});
+
 describe("PipelineTable with one repository", () => {
   test("hides the repository filter", () => {
     expect(render([row()])).not.toMatch(/<label [^>]*>リポジトリ/);
@@ -385,6 +432,8 @@ function renderPage(count: number, initialPage?: number): string {
         <PipelineTable
           rows={manyRows(count)}
           now={NOW}
+          scope="active"
+          onScopeChange={() => undefined}
           initialPage={initialPage}
         />
       </TooltipProvider>

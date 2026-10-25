@@ -152,13 +152,25 @@ describe("the statuses that the console treats as settled", () => {
   });
 
   test.each([...WORK_ITEM_STATUSES])(
-    "classify %s as active unless it is terminal and not blocked",
+    "classify %s as active unless it is terminal, not blocked and not approved",
     (status) => {
       const settled =
-        TERMINAL_WORK_ITEM_STATUSES.includes(status) && status !== "blocked";
+        TERMINAL_WORK_ITEM_STATUSES.includes(status) &&
+        status !== "blocked" &&
+        status !== "approved";
       expect(isActiveStatus(status)).toBe(!settled);
     },
   );
+
+  // `implement_enabled`が偽の間、承認された要件定義は`approved`のまま残る。
+  // 要対応にもPR待ちにも出ないので、進行中で見えるようにする。
+  test("keep approved visible, since it stays while implement is disabled", () => {
+    expect(isActiveStatus("approved")).toBe(true);
+  });
+
+  test("keep approved out of the actionable statuses of the inbox", () => {
+    expect(ACTIONABLE_WORK_ITEM_STATUSES).not.toContain("approved");
+  });
 
   test("keep blocked out of the actionable statuses of the inbox", () => {
     expect(ACTIONABLE_WORK_ITEM_STATUSES).not.toContain("blocked");

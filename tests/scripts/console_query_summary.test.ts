@@ -245,6 +245,38 @@ describe("runConsoleSummary queries", () => {
     );
   });
 
+  test("takes the end of the previous report from the audits before the failed one", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "SELECT max(pr.period_end) FROM factory.work_items p JOIN factory.audit_reports pr ON pr.work_item_id = p.id WHERE p.kind = 'audit' AND p.id < wi.id",
+    );
+  });
+
+  test("requires the later report to start no later than the previous report ends", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "ar.period_start <= coalesce(",
+    );
+  });
+
+  test("treats a missing previous report as covered", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "'infinity'::timestamptz",
+    );
+  });
+
+  test("does not compare the repository of the previous report either", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).not.toMatch(
+      /\b(p|pr)\.(owner|repo)/,
+    );
+  });
+
   test("keeps the superseded rows in the list", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);

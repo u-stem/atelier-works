@@ -21,17 +21,39 @@ function render(element: ReactElement): string {
 describe("PipelineSection", () => {
   test("says the rows are stale after a failed refetch", () => {
     const query = staleQuery(NO_ROWS, new ApiFailure({ kind: "network" }));
-    expect(render(<PipelineSection pipeline={query} />)).toContain(NOTICE);
+    expect(
+      render(
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={query}
+        />,
+      ),
+    ).toContain(NOTICE);
   });
 
   test("does not say the rows are stale for a 401", () => {
     const query = staleQuery(NO_ROWS, new ApiFailure({ kind: "unauthorized" }));
-    expect(render(<PipelineSection pipeline={query} />)).not.toContain(NOTICE);
+    expect(
+      render(
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={query}
+        />,
+      ),
+    ).not.toContain(NOTICE);
   });
 
   test("does not say the rows are stale without a failure", () => {
     expect(
-      render(<PipelineSection pipeline={freshQuery(NO_ROWS)} />),
+      render(
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={freshQuery(NO_ROWS)}
+        />,
+      ),
     ).not.toContain(NOTICE);
   });
 });
@@ -39,13 +61,25 @@ describe("PipelineSection", () => {
 describe("PipelineSection while loading", () => {
   test("shows only the frame in the first moment", () => {
     expect(
-      render(<PipelineSection pipeline={loadingQuery<PipelineRow[]>()} />),
+      render(
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={loadingQuery<PipelineRow[]>()}
+        />,
+      ),
     ).not.toContain("読み込み中");
   });
 
   test("holds the height of the table in the first moment", () => {
     expect(
-      render(<PipelineSection pipeline={loadingQuery<PipelineRow[]>()} />),
+      render(
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={loadingQuery<PipelineRow[]>()}
+        />,
+      ),
     ).toContain("h-12");
   });
 });
@@ -56,7 +90,12 @@ describe("PipelineSection pointer to the inbox", () => {
   test("says how many items need action", () => {
     expect(
       render(
-        <PipelineSection pipeline={freshQuery(NO_ROWS)} actionableCount={3} />,
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={freshQuery(NO_ROWS)}
+          actionableCount={3}
+        />,
       ),
     ).toContain(`${NOTE}(3件)`);
   });
@@ -64,7 +103,12 @@ describe("PipelineSection pointer to the inbox", () => {
   test("links to the inbox", () => {
     expect(
       render(
-        <PipelineSection pipeline={freshQuery(NO_ROWS)} actionableCount={3} />,
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={freshQuery(NO_ROWS)}
+          actionableCount={3}
+        />,
       ),
     ).toMatch(/<a [^>]*href="\/"[^>]*>対応が必要なもの/);
   });
@@ -73,6 +117,8 @@ describe("PipelineSection pointer to the inbox", () => {
     expect(
       render(
         <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
           pipeline={freshQuery(NO_ROWS)}
           actionableCount={null}
         />,
@@ -84,6 +130,8 @@ describe("PipelineSection pointer to the inbox", () => {
     expect(
       render(
         <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
           pipeline={loadingQuery<PipelineRow[]>()}
           actionableCount={2}
         />,
@@ -95,7 +143,13 @@ describe("PipelineSection pointer to the inbox", () => {
 describe("PipelineSection heading", () => {
   test("leaves out the heading that repeats the tab name", () => {
     expect(
-      render(<PipelineSection pipeline={freshQuery(NO_ROWS)} />),
+      render(
+        <PipelineSection
+          scope="active"
+          onScopeChange={() => undefined}
+          pipeline={freshQuery(NO_ROWS)}
+        />,
+      ),
     ).not.toContain("<h2");
   });
 });
