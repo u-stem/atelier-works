@@ -33,28 +33,6 @@ export async function fetchSystemStatus(
   return result.value;
 }
 
-/** 取得からこの時間(ミリ秒)以内のデータは、画面を開いたときに取り直さない。 */
-export const SYSTEM_STATUS_REUSE_MS = 5_000;
-
-/**
- * 画面を開いたときに取り直すかを決める。
- * 通知の解決は要対応の画面で行われ、この取得のキャッシュを更新しない。
- * 解決した通知を未解決のまま出さないよう、画面を開くたびに取り直す(`"always"`)。
- * ただし、取得から`SYSTEM_STATUS_REUSE_MS`以内は取り直さない。
- * サイドバーの先読みは画面を開く直前に走るので、すぐ取り直すと先読みが無駄になる。
- * この時間以内のデータは、取り直しとほぼ同じ新しさである。
- * この時間を`staleTime`より短くするのは、通知を解決した直後に開いたとき、古い通知が残る時間を数秒に抑えるためである。
- * 取得したことがない(`dataUpdatedAt`が0)ときは、初回の読み込みが取得するので、`"always"`を返してよい。
- */
-export function refetchSystemStatusOnMount(
-  dataUpdatedAt: number,
-  now: number,
-): false | "always" {
-  return dataUpdatedAt > 0 && now - dataUpdatedAt < SYSTEM_STATUS_REUSE_MS
-    ? false
-    : "always";
-}
-
 /** システムの状態の取得の設定。画面の取得と、サイドバーの先読みが同じ値を使う。 */
 export function systemStatusQueryOptions() {
   return {
@@ -62,14 +40,14 @@ export function systemStatusQueryOptions() {
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       fetchSystemStatus({ signal }),
     staleTime: SYSTEM_STATUS_STALE_MS,
-    refetchOnMount: (query: { state: { dataUpdatedAt: number } }) =>
-      refetchSystemStatusOnMount(query.state.dataUpdatedAt, Date.now()),
   };
 }
 
 /**
  * システムの状態を取る。定期には取り直さず、画面の更新ボタンで取り直す。
- * 画面を開いたときの取り直しは`refetchSystemStatusOnMount`が決める。
+ * 通知の解決は書き込みの側が読み直す(`NOTICE_RESOLVE_INVALIDATES`)ので、
+ * 画面を開くときの取り直しは`staleTime`に任せる。
+ * 保留と凍結の解除も、この取得を読み直す。
  */
 export function useSystemStatus(): UseQueryResult<SystemStatus, Error> {
   return useQuery(systemStatusQueryOptions());

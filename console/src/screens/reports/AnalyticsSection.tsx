@@ -1,20 +1,25 @@
 import type { ReactNode } from "react";
 import { isBannerError } from "../../api/errors.ts";
-import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
+import {
+  LoadingGate,
+  type LoadingShape,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
-function LoadingState() {
-  return (
-    <div className="flex flex-col gap-3" role="status">
-      <span className="sr-only">読み込み中</span>
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "flex flex-col gap-3",
+  node: (
+    <>
       <Skeleton className="h-40 w-full rounded-xl" />
       <Skeleton className="h-24 w-full rounded-xl" />
-    </div>
-  );
-}
+    </>
+  ),
+};
 
 /**
  * 取得に失敗して表示できる値が無いときの表示。
@@ -73,8 +78,8 @@ export function AnalyticsSection<T>({
       <h3 id={id} className="mb-4 text-lead font-semibold">
         {title}
       </h3>
-      {rows === undefined ? (
-        query.isError ? (
+      <LoadingGate phase={loadPhaseOf(query)} shape={LOADING_SHAPE}>
+        {rows === undefined ? (
           <FailureState
             title={failureTitle}
             error={query.error}
@@ -83,28 +88,26 @@ export function AnalyticsSection<T>({
             }}
           />
         ) : (
-          <LoadingState />
-        )
-      ) : (
-        <div className="flex flex-col gap-6">
-          {query.isError ? (
-            <StaleDataNotice
-              error={query.error}
-              isFetching={query.isFetching}
-              onRetry={() => {
-                void query.refetch();
-              }}
-            />
-          ) : null}
-          {rows.length === 0 ? (
-            <p className="max-w-3xl rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-              {emptyMessage}
-            </p>
-          ) : (
-            children(rows)
-          )}
-        </div>
-      )}
+          <div className="flex flex-col gap-6">
+            {query.isError ? (
+              <StaleDataNotice
+                error={query.error}
+                isFetching={query.isFetching}
+                onRetry={() => {
+                  void query.refetch();
+                }}
+              />
+            ) : null}
+            {rows.length === 0 ? (
+              <p className="max-w-3xl rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+                {emptyMessage}
+              </p>
+            ) : (
+              children(rows)
+            )}
+          </div>
+        )}
+      </LoadingGate>
     </section>
   );
 }

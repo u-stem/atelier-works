@@ -3,10 +3,16 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import { SUMMARY_REFRESH_MS, useSummary } from "../../api/queries.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useMediaQuery } from "../../app/useMediaQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
@@ -50,10 +56,11 @@ import { UnlistedCards } from "./UnlistedCards.tsx";
 /** 一覧と詳細を並べる幅(Tailwindのlg)。これ未満では1画面ずつ出す。 */
 const WIDE_QUERY = "(min-width: 64rem)";
 
-function LoadingState() {
-  return (
-    <div className="flex min-h-0 flex-1" role="status">
-      <span className="sr-only">読み込み中</span>
+/** 読み込み中の形。一覧と詳細の2つの面を、出る内容と同じ幅で並べる。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "flex min-h-0 flex-1",
+  node: (
+    <>
       <div className="w-full shrink-0 border-border lg:w-80 lg:border-r xl:w-[28rem]">
         {["a", "b", "c", "d"].map((key) => (
           <div
@@ -73,9 +80,9 @@ function LoadingState() {
         <Skeleton className="h-8 w-2/3" />
         <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
       </div>
-    </div>
-  );
-}
+    </>
+  ),
+};
 
 /**
  * 取得に失敗して表示できるデータが無いときの表示。
@@ -128,6 +135,7 @@ const INBOX_REFRESH_LABEL = "一覧を更新";
  */
 export function InboxScreen() {
   const summary = useSummary();
+  const loadingDisplay = useLoadingDisplay(loadPhaseOf(summary));
   const now = useNow();
   const [searchParams, setSearchParams] = useSearchParams();
   const [chip, setChip] = useState<InboxChip>("all");
@@ -212,7 +220,8 @@ export function InboxScreen() {
     }
   };
 
-  if (summary.data === undefined) {
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (summary.data === undefined || loadingDisplay !== "content") {
     return (
       <>
         <PageHeader
@@ -220,10 +229,10 @@ export function InboxScreen() {
           refresh={refresh}
           refreshLabel={INBOX_REFRESH_LABEL}
         />
-        {summary.isError ? (
-          <FailureState error={summary.error} onRetry={refresh.onRefresh} />
+        {loadingDisplay !== "content" ? (
+          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
         ) : (
-          <LoadingState />
+          <FailureState error={summary.error} onRetry={refresh.onRefresh} />
         )}
       </>
     );

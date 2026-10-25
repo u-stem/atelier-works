@@ -103,12 +103,29 @@ export type DelayedTimerEnv = {
   dispatch(event: DelayedEvent): void;
 };
 
+/**
+ * 状態が時刻で変わるとき、その時刻に`tick`を送るタイマーを張る。戻り値の関数でタイマーを外す。
+ * 時刻とタイマーは引数で受けるので、フックを描画せずにタイマーの結びつきを確かめられる。
+ * タイマーは期限より早く着くことがある。着いた時点で期限が来たものとして、期限以降の時刻を送る。
+ */
 export function scheduleDelayedWake(
-  _state: DelayedState,
-  _options: DelayedOptions,
-  _env: DelayedTimerEnv,
+  state: DelayedState,
+  options: DelayedOptions,
+  env: DelayedTimerEnv,
 ): () => void {
-  return () => undefined;
+  const wake = nextDelayedWake(state, options);
+  if (wake === null) {
+    return () => undefined;
+  }
+  const timer = env.setTimer(
+    () => {
+      env.dispatch({ type: "tick", at: Math.max(env.now(), wake) });
+    },
+    Math.max(0, wake - env.now()),
+  );
+  return () => {
+    env.clearTimer(timer);
+  };
 }
 
 /**
@@ -130,20 +147,20 @@ export function useDelayedVisible(
     dispatch({ type: active ? "activate" : "deactivate", at: Date.now() });
   }, [active]);
 
-  useEffect(() => {
-    const wake = nextDelayedWake(state, options);
-    if (wake === null) {
-      return undefined;
-    }
-    const timer = setTimeout(
-      () => {
-        // タイマーは早く着くことがある。着いた時点で期限が来たものとして扱う。
-        dispatch({ type: "tick", at: Math.max(Date.now(), wake) });
-      },
-      Math.max(0, wake - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [state, options]);
+  useEffect(
+    () =>
+      scheduleDelayedWake(state, options, {
+        now: () => Date.now(),
+        setTimer: (callback, ms) => window.setTimeout(callback, ms),
+        clearTimer: (handle) => {
+          if (typeof handle === "number") {
+            window.clearTimeout(handle);
+          }
+        },
+        dispatch,
+      }),
+    [state, options],
+  );
 
   return isDelayedVisible(state);
 }

@@ -9,11 +9,23 @@ import {
 } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import { isNoticeRows, type NoticeRow } from "./guards/notices.ts";
+import { summaryQueryKey } from "./queries.ts";
+import { systemStatusQueryKey } from "./systemQueries.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
 export const noticesQueryKey = ["console", "notices"] as const;
 
-export const NOTICE_RESOLVE_INVALIDATES: readonly QueryKey[] = [];
+/**
+ * 通知の解決の後に読み直す取得。
+ * 一覧(summary)と未解決の通知に加え、システムの状態を読み直す。
+ * システムの状態は、情報の通知と解決済みの通知を持つ。読み直さないと、解決した通知を未解決のまま出す。
+ * 書き込みの側で無効にするので、システムの画面が開いていない間も古い値を残さない。
+ */
+export const NOTICE_RESOLVE_INVALIDATES: readonly QueryKey[] = [
+  summaryQueryKey,
+  noticesQueryKey,
+  systemStatusQueryKey,
+];
 
 /**
  * 取る件数の上限。backendが受ける最大に合わせる。

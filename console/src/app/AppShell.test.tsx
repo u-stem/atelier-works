@@ -25,7 +25,7 @@ describe("AppMain", () => {
   });
 
   test("leaves the landmark unnamed without a screen name", () => {
-    expect(render(null)).not.toContain("aria-label");
+    expect(render(null)).not.toMatch(/aria-label="/);
   });
 
   test("draws no focus ring around the whole area", () => {

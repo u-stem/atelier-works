@@ -3,7 +3,7 @@
 
 import { useEffect } from "react";
 import { useMatches } from "react-router";
-import type { RouteParams } from "./screens.ts";
+import type { RouteParams, RouteTitle } from "./screens.ts";
 
 export const DOCUMENT_TITLE_SUFFIX = "Factory Console";
 
@@ -20,11 +20,9 @@ export function documentTitle(name: string | null): string {
     : `${name} - ${DOCUMENT_TITLE_SUFFIX}`;
 }
 
-type TitleHandle = {
-  readonly title: string | ((params: RouteParams) => string);
-};
-
-function isTitleHandle(value: unknown): value is TitleHandle {
+function isTitleHandle(
+  value: unknown,
+): value is { readonly title: RouteTitle } {
   if (typeof value !== "object" || value === null || !("title" in value)) {
     return false;
   }

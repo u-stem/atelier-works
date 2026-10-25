@@ -1,8 +1,16 @@
 // テーマの切り替えの間だけ、全要素の遷移(transition)を止める。
 // 遷移が残ると、`transition-colors`を持つ一部の要素だけが遅れて変わり、ちらついて見える。
 // 切り替えの入口は`beginThemeSwitch`の1つで、ThemeSwitchの操作とOSの設定の変更の両方がこれを呼ぶ。
+// 色の切り替えもJavaScriptが起こす。「OSに合わせる」のときも`data-theme`を常に付け、
+// OSの設定の変更を受けたら、遷移を止めてから`data-theme`を替える。
+// メディアクエリに色を任せると、変更のイベントが届く前に色の再計算が始まり、遷移を止められない。
 
 import { useEffect } from "react";
+import {
+  parseThemePreference,
+  resolveTheme,
+  THEME_PREFERENCE_ATTRIBUTE,
+} from "./theme.ts";
 
 /** 切り替えの間だけhtmlに付ける属性。index.cssが、この属性の下で遷移を止める。 */
 export const THEME_SWITCHING_ATTRIBUTE = "data-theme-switching";
@@ -47,27 +55,42 @@ export function createThemeSwitchGuard(
   };
 }
 
-/**
- * OSの配色の設定が変わるたびに`onChange`を呼ぶ。戻り値の関数で購読をやめる。
- * Strict Modeの購読、解除、購読の順でも、リスナーが1つだけ残る。
- */
 export type ThemeRoot = SwitchRoot & {
   getAttribute(name: string): string | null;
 };
 
+/**
+ * OSの配色の設定が変わったとき、「OSに合わせる」ならdata-themeを替える。
+ * 遷移を止めてから替える。明示した選択(ライトとダーク)は動かさない。
+ * 選択を記録していないときは、theme-initが動かなかった場合なので、OSに合わせる。
+ */
 export function followColorSchemeChange(
-  _root: ThemeRoot,
-  _beginSwitch: () => void,
-  _prefersDark: boolean,
-): void {}
+  root: ThemeRoot,
+  beginSwitch: () => void,
+  prefersDark: boolean,
+): void {
+  const preference = parseThemePreference(
+    root.getAttribute(THEME_PREFERENCE_ATTRIBUTE),
+  );
+  if (preference !== "system") {
+    return;
+  }
+  beginSwitch();
+  root.setAttribute("data-theme", resolveTheme(preference, prefersDark));
+}
 
+/**
+ * OSの配色の設定が変わるたびに`onChange`を呼び、変わった後に暗いかどうかを渡す。
+ * 戻り値の関数で購読をやめる。
+ * Strict Modeの購読、解除、購読の順でも、リスナーが1つだけ残る。
+ */
 export function watchColorScheme(
   match: (query: string) => MediaQueryLike,
   onChange: (prefersDark: boolean) => void,
 ): () => void {
   const list = match(COLOR_SCHEME_QUERY);
   const listener = (): void => {
-    onChange(false);
+    onChange(list.matches);
   };
   list.addEventListener("change", listener);
   return () => {
@@ -94,8 +117,7 @@ let documentGuard: { begin(): void } | null = null;
 
 /**
  * 画面全体の遷移を止めて、テーマの切り替えを始める。切り替えの直前に呼ぶ。
- * OSの設定の変更が、スタイルの再計算より後に届く環境では、この呼び出しが間に合わない。
- * そのときは、OSの設定をJavaScriptで解決して`data-theme`を常に付ける形に替える。入口はここだけである。
+ * 解除は2フレーム後に行う。
  */
 export function beginThemeSwitch(): void {
   documentGuard ??= createThemeSwitchGuard(
@@ -106,13 +128,22 @@ export function beginThemeSwitch(): void {
 }
 
 /**
- * OSの設定の変更で、遷移を止める。外枠に1つだけ置く。
+ * OSの設定が変わったら、「OSに合わせる」のときだけ、遷移を止めてdata-themeを替える。外枠に1つだけ置く。
  * ThemeSwitchは広い画面のサイドバーと狭い画面のドロワーの2か所に描かれるので、購読はそれぞれに置かない。
  */
 export function useColorSchemeSwitchGuard(): void {
   useEffect(
     () =>
-      watchColorScheme((query) => window.matchMedia(query), beginThemeSwitch),
+      watchColorScheme(
+        (query) => window.matchMedia(query),
+        (prefersDark) => {
+          followColorSchemeChange(
+            document.documentElement,
+            beginThemeSwitch,
+            prefersDark,
+          );
+        },
+      ),
     [],
   );
 }

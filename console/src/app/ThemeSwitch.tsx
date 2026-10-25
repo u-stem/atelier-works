@@ -9,7 +9,9 @@ import { cn } from "../lib/cn.ts";
 import { SELECTED_STYLE } from "../lib/selectedStyle.ts";
 import {
   parseThemePreference,
+  resolveTheme,
   THEME_OPTIONS,
+  THEME_PREFERENCE_ATTRIBUTE,
   THEME_STORAGE_KEY,
   type ThemePreference,
 } from "../lib/theme.ts";
@@ -43,6 +45,7 @@ export type ThemeEnv = {
 
 /**
  * 選択をhtmlのdata-themeに反映し、保存領域に残す。
+ * 「OSに合わせる」のときも、OSの設定を解決してdata-themeを付ける。保存するのは選択(system、light、dark)で、解決した配色は保存しない。
  * 替える直前に遷移を止め、一部の要素だけが遅れて変わるのを防ぐ。
  * 保存できない環境(プライベートブラウズなど)でも、表示の切り替えは行う。
  */
@@ -51,11 +54,11 @@ export function applyThemePreference(
   env: ThemeEnv,
 ): void {
   env.beginSwitch();
-  if (preference === "system") {
-    env.root.removeAttribute("data-theme");
-  } else {
-    env.root.setAttribute("data-theme", preference);
-  }
+  env.root.setAttribute(
+    "data-theme",
+    resolveTheme(preference, env.prefersDark()),
+  );
+  env.root.setAttribute(THEME_PREFERENCE_ATTRIBUTE, preference);
   try {
     if (preference === "system") {
       env.storage?.removeItem(THEME_STORAGE_KEY);

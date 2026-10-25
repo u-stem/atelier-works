@@ -8,7 +8,7 @@ import type { RouteTitle, Screen, ScreenRoute } from "./screens.ts";
  * 経路の`handle`に載せる画面の名前。
  * タブの題と本文の名前は、一致した経路の中でいちばん深いものの名前から決める。
  */
-function titleHandle(title: RouteTitle): { title: RouteTitle } {
+export function titleHandle(title: RouteTitle): { title: RouteTitle } {
   return { title };
 }
 

@@ -1,7 +1,13 @@
 import { TriangleAlert } from "lucide-react";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import { useIntakeSnapshot } from "../../api/queries.ts";
-import type { LoadingDisplay } from "../../components/LoadingState.tsx";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
+import {
+  LoadingBody,
+  type LoadingDisplay,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import {
   Alert,
@@ -13,7 +19,10 @@ import { displayableIssueText } from "../../lib/intakeText.ts";
 
 /** 描画する状態。取得の結果を、描画に要る形だけにしたもの。 */
 export type IntakeSnapshotViewState =
-  | { readonly status: "loading"; readonly display: LoadingDisplay }
+  | {
+      readonly status: "loading";
+      readonly display: Exclude<LoadingDisplay, "content">;
+    }
   | {
       readonly status: "error";
       readonly error: unknown;
@@ -93,6 +102,17 @@ function SnapshotBody({ snapshot }: { snapshot: IntakeSnapshot }) {
   );
 }
 
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-2 px-5 py-4",
+  node: (
+    <>
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-24 w-full" />
+    </>
+  ),
+};
+
 /**
  * 取り込み時点のIssueの枠。状態に応じて、読み込み中、取得の失敗、該当なし、内容を出す。
  * 実装のClaudeは、GitHub上の現在のIssueではなく、この内容を受け取る。
@@ -117,11 +137,7 @@ export function IntakeSnapshotView({
         </p>
       </header>
       {state.status === "loading" ? (
-        <div className="space-y-2 px-5 py-4" role="status">
-          <span className="sr-only">読み込み中</span>
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-24 w-full" />
-        </div>
+        <LoadingBody display={state.display} shape={LOADING_SHAPE} />
       ) : state.status === "error" ? (
         <div className="px-5 py-4">
           <QueryFailureAlert
@@ -150,10 +166,13 @@ export function IntakeSnapshotPanel({
   approvalRequestId: number;
 }) {
   const snapshot = useIntakeSnapshot(workItemId, approvalRequestId);
+  const display = useLoadingDisplay(loadPhaseOf(snapshot));
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (display !== "content") {
+    return <IntakeSnapshotView state={{ status: "loading", display }} />;
+  }
   if (snapshot.isPending) {
-    return (
-      <IntakeSnapshotView state={{ status: "loading", display: "skeleton" }} />
-    );
+    return null;
   }
   if (snapshot.isError) {
     return (

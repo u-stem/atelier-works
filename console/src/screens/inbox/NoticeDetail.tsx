@@ -5,8 +5,7 @@ import type { WriteOutcome } from "../../api/executeWrite.ts";
 import type { SummaryNotice } from "../../api/guards/summary.ts";
 import type { NoticeResolveResult } from "../../api/guards/writeResults.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
-import { noticesQueryKey } from "../../api/noticeQueries.ts";
-import { summaryQueryKey } from "../../api/queries.ts";
+import { NOTICE_RESOLVE_INVALIDATES } from "../../api/noticeQueries.ts";
 import { writeTargetKey } from "../../api/writeLocks.ts";
 import { resolveNotice } from "../../api/writes.ts";
 import { Badge } from "../../components/ui/badge.tsx";
@@ -48,7 +47,8 @@ function announce(notice: {
 /**
  * 通知の解決。確認のダイアログは出さない。
  * 解決した通知は履歴に残り、状況が続けば新しい通知が出るので、取り返しのつかない操作ではない。
- * summaryに加えて、未解決の通知の取得も読み直す。選んだ通知が一覧に無いときの詳細が、古い値を出さないためである。
+ * summary、未解決の通知、システムの状態を読み直す(`NOTICE_RESOLVE_INVALIDATES`)。
+ * 選んだ通知が一覧に無いときの詳細と、システムの画面の通知が、古い値を出さないためである。
  */
 const RESOLVE_CONFIG = {
   keyOf: (noticeId: number) => writeTargetKey("notice", noticeId),
@@ -64,7 +64,7 @@ const RESOLVE_CONFIG = {
   onStale: (): void => {
     announce(STALE_LIST_NOTICE);
   },
-  invalidates: [summaryQueryKey, noticesQueryKey],
+  invalidates: NOTICE_RESOLVE_INVALIDATES,
 } as const;
 
 /**

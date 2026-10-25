@@ -55,11 +55,11 @@ export function PageHeader({
   return (
     <header className="flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8">
       <div className="min-w-0">
-        {/* 遷移の後にフォーカスを受ける。Tabの順には入れず、輪も描かない。 */}
+        {/* 遷移の後にフォーカスを受ける。Tabの順には入れない。キーボードで移ったときだけ、移った先が分かるよう細い輪を描く。マウスの操作の後には描かない。 */}
         <h1
           id={PAGE_HEADING_ID}
           tabIndex={-1}
-          className="truncate text-title font-semibold tracking-tight outline-none"
+          className="truncate rounded-sm text-title font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {title}
         </h1>

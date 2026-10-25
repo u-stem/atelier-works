@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Outlet } from "react-router";
 import { cn } from "../lib/cn.ts";
 import { APP_MAIN_CLASS } from "../lib/layoutClasses.ts";
-import { MAIN_ID } from "../lib/routeFocus.ts";
+import { MAIN_ID, PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { useColorSchemeSwitchGuard } from "../lib/themeSwitching.ts";
 import { ReloadBanner } from "../ReloadBanner.tsx";
 import { useReleaseWatch } from "../useReleaseWatch.ts";
@@ -17,7 +17,8 @@ import { useRouteFocus } from "./useRouteFocus.ts";
  * 画面を出す本文の領域。
  * 見出しが無い画面でも、遷移後のフォーカスと本文へのスキップの移し先になるよう、プログラムからだけフォーカスできる。
  * 領域全体にフォーカスの輪は描かない。輪が出ると、画面の中の操作の輪と紛れる。
- * 名前には画面の名前を付け、移った先を読み上げで伝える。
+ * 名前は見出し(h1)から取る。見出しが無い画面では、`aria-labelledby`の参照先が無いので、画面の名前(`aria-label`)を使う。
+ * 「メイン、作業項目」と「見出し1、作業項目」のように、同じ名前を別の名前で重ねて読ませないためである。
  */
 export function AppMain({
   name,
@@ -30,6 +31,7 @@ export function AppMain({
     <main
       id={MAIN_ID}
       tabIndex={-1}
+      aria-labelledby={PAGE_HEADING_ID}
       {...(name === null ? {} : { "aria-label": name })}
       className={cn(APP_MAIN_CLASS, "outline-none")}
     >

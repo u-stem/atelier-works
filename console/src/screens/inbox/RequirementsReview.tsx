@@ -3,6 +3,12 @@ import { Link } from "react-router";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useIntakeSnapshot, useRequirementsDoc } from "../../api/queries.ts";
+import type { SectionFetchStatus } from "../../api/sectionQuery.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   approvalLinks,
@@ -51,6 +57,17 @@ function PanelShell({
   );
 }
 
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-2 px-5 py-4",
+  node: (
+    <>
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-24 w-full" />
+    </>
+  ),
+};
+
 function PanelNote({ children }: { children: string }) {
   return (
     <p className="px-5 py-4 text-small text-muted-foreground">{children}</p>
@@ -83,6 +100,7 @@ function DocPanel({
   query: {
     readonly data: RequirementsDoc | null | undefined;
     readonly error: Error | null;
+    readonly fetchStatus: SectionFetchStatus;
     readonly refetch: () => unknown;
   };
   state: DocReadiness;
@@ -92,9 +110,17 @@ function DocPanel({
     () => (doc === undefined || doc === null ? null : prepareDoc(doc)),
     [doc],
   );
+  const display = useLoadingDisplay(
+    state === "loading"
+      ? query.fetchStatus === "paused"
+        ? "paused"
+        : "loading"
+      : "loaded",
+  );
   const heading = `承認対象の要件定義書(${attemptRef(attempt)})`;
   const link = approvalLinks(approval).requirements;
   let body: ReactNode;
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
   if (state === "failed") {
     body = (
       <div className="p-4">
@@ -109,14 +135,8 @@ function DocPanel({
         />
       </div>
     );
-  } else if (state === "loading") {
-    body = (
-      <div className="space-y-2 px-5 py-4" role="status">
-        <span className="sr-only">読み込み中</span>
-        <Skeleton className="h-4 w-2/3" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    );
+  } else if (display !== "content") {
+    body = <LoadingBody display={display} shape={LOADING_SHAPE} />;
   } else if (state === "missing") {
     body = <PanelNote>承認する試行の要件定義書が見つかりません。</PanelNote>;
   } else if (state === "mismatch" || doc === undefined || doc === null) {

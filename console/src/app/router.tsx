@@ -6,7 +6,7 @@ import {
 import { AppShell } from "./AppShell.tsx";
 import { RouteError } from "./RouteError.tsx";
 import { RouteFallback } from "./RouteFallback.tsx";
-import { buildScreenRoutes } from "./routeTable.ts";
+import { buildScreenRoutes, titleHandle } from "./routeTable.ts";
 import { SCREENS } from "./screens.ts";
 
 /** `vite.config.ts`の`base`と、Caddyが配信する経路に合わせる。 */
@@ -26,7 +26,7 @@ export const ROUTES: RouteObject[] = [
       ...buildScreenRoutes(SCREENS, RouteError),
       {
         path: "*",
-        handle: { title: "ページが見つかりません" },
+        handle: titleHandle("ページが見つかりません"),
         ErrorBoundary: RouteError,
         lazy: () =>
           import("../screens/NotFoundScreen.tsx").then((module) => ({

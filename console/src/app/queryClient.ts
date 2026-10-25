@@ -29,7 +29,17 @@ export function createQueryClient(authStore: AuthStore): QueryClient {
   });
 }
 
+/**
+ * ブラウザが接続なしで始まったことを、`onlineManager`に一度だけ伝える。
+ * `onlineManager`は接続中として始まり、`online`と`offline`のイベントでだけ切り替わる。
+ * 接続なしで開くとイベントが来ず、取得が失敗するまで状態が合わない。
+ * 帯と取得が見る状態の元は引き続き`onlineManager`だけで、`navigator.onLine`は起動時にここで一度読む。
+ */
 export function syncInitialOnlineState(
-  _manager: { setOnline(online: boolean): void },
-  _navigator: { readonly onLine?: boolean },
-): void {}
+  manager: { setOnline(online: boolean): void },
+  navigator: { readonly onLine?: boolean },
+): void {
+  if (typeof navigator.onLine === "boolean") {
+    manager.setOnline(navigator.onLine);
+  }
+}

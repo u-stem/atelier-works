@@ -1,13 +1,13 @@
 // 画面の遷移の後に、フォーカスを新しい画面の見出しへ移す。判定と手順は`lib/routeFocus.ts`にある。
 
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import {
+  createRouteFocusTracker,
   type FocusEnv,
   MAIN_ID,
   moveFocusAfterNavigation,
   PAGE_HEADING_ID,
-  shouldMoveFocus,
 } from "../lib/routeFocus.ts";
 
 /** メニューのドロワーの`<dialog>`を見つける。`NavDrawer`が付ける`data-nav-drawer`で選ぶ。 */
@@ -39,13 +39,11 @@ const BROWSER_ENV: FocusEnv = {
  */
 export function useRouteFocus(): void {
   const { pathname } = useLocation();
-  const previous = useRef<string | null>(null);
+  const [track] = useState(createRouteFocusTracker);
   useEffect(() => {
-    const before = previous.current;
-    previous.current = pathname;
-    if (!shouldMoveFocus(before, pathname)) {
+    if (!track(pathname)) {
       return undefined;
     }
     return moveFocusAfterNavigation(BROWSER_ENV);
-  }, [pathname]);
+  }, [track, pathname]);
 }

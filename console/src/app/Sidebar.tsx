@@ -29,8 +29,10 @@ import {
 } from "../lib/navigation.ts";
 import {
   createPrefetchScheduler,
+  handlePrefetchEvent,
   PREFETCH_COOLDOWN_MS,
   PREFETCH_DELAY_MS,
+  type PrefetchEvent,
 } from "../lib/prefetchSchedule.ts";
 import { NavDrawer } from "./NavDrawer.tsx";
 import { SCREENS, type ScreenId } from "./screens.ts";
@@ -83,12 +85,14 @@ function ReleaseInfo() {
 }
 
 /**
- * 入口に触れた(focusかpointerdown)とき、その画面の初回の取得を先読みする関数を返す。
+ * 入口への操作から、その画面の初回の取得を先読みする関数を返す。
+ * focusは100ms待ち、blurで取り下げる。押下は待たずに先読みする。
  * hoverでは先読みしない。通り過ぎただけの入口で、Windmillのジョブを増やさないためである。
+ * 判定は`lib/prefetchSchedule.ts`の純関数が行う。
  * 先読みは、各画面の取得と同じ設定(キー、関数、`staleTime`)で行う。
- * 新しいデータは取り直さず、走っている取得には重ねないので、同じ入口へ続けて触れても取得は増えない。
+ * 新しいデータは取り直さず、走っている取得には重ねない。
  */
-function usePrefetchOnIntent(): (id: ScreenId) => void {
+function usePrefetchOnIntent(): (id: ScreenId, event: PrefetchEvent) => void {
   const client = useQueryClient();
   const scheduler = useMemo(
     () =>
@@ -114,7 +118,9 @@ function usePrefetchOnIntent(): (id: ScreenId) => void {
     [client],
   );
   useEffect(() => () => scheduler.cancelAll(), [scheduler]);
-  return scheduler.request;
+  return (id, event) => {
+    handlePrefetchEvent(scheduler, id, event);
+  };
 }
 
 /**
@@ -169,10 +175,20 @@ function NavList({
                 className={navLinkClass(collapsed)}
                 onClick={onNavigate}
                 onFocus={() => {
-                  prefetchScreen(screen.id);
+                  prefetchScreen(screen.id, { type: "focus" });
                 }}
-                onPointerDown={() => {
-                  prefetchScreen(screen.id);
+                onBlur={() => {
+                  prefetchScreen(screen.id, { type: "blur" });
+                }}
+                onPointerDown={(event) => {
+                  prefetchScreen(screen.id, {
+                    type: "pointerdown",
+                    button: event.button,
+                    ctrlKey: event.ctrlKey,
+                    metaKey: event.metaKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                  });
                 }}
               >
                 <span className="relative inline-flex shrink-0">

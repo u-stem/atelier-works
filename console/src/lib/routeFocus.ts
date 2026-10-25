@@ -53,6 +53,16 @@ export function moveFocusAfterNavigation(env: FocusEnv): () => void {
   return drawer.onceClosed(move);
 }
 
+/**
+ * 呼ぶたびに、フォーカスを移すかを返す追跡器を作る。直前に渡した`pathname`を覚える。
+ * 同じ`pathname`をもう一度渡しても移さない。Strict Modeの効果の再実行が、遷移に見えないためである。
+ * 最初の1回は移さない。
+ */
 export function createRouteFocusTracker(): (pathname: string) => boolean {
-  return () => false;
+  let previous: string | null = null;
+  return (pathname) => {
+    const move = shouldMoveFocus(previous, pathname);
+    previous = pathname;
+    return move;
+  };
 }

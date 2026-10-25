@@ -13,7 +13,7 @@ export type RowsShape = {
   readonly gapClassName?: string;
 };
 
-/** 画面ごとの形。 */
+/** 画面ごとに組んだ形。`className`は枠の余白や高さ。 */
 export type NodeShape = {
   readonly node: ReactNode;
   readonly className?: string;
@@ -22,28 +22,38 @@ export type NodeShape = {
 /** 読み込み中の表示の形。高さを、内容の目安の高さにそろえる。 */
 export type LoadingShape = RowsShape | NodeShape;
 
+export const OFFLINE_WAIT_TEXT = "オフラインのため、取得を待っています";
+
 /** 読み込みの段階に応じて出すもの。 */
 export type LoadingDisplay = "content" | "frame" | "skeleton" | "offline";
 
+/**
+ * 読み込みの段階と、遅延表示の状態から、出すものを決める。
+ * `visible`は遅延表示が「出している」状態で、取得が終わった後の残す時間も含む。
+ * 残す時間の間は、値が揃っていても、スケルトンを出し続ける。
+ * オフラインで止まった取得は、スケルトンでなく、待っていることを伝える。
+ */
 export function loadingDisplayOf(
-  _phase: LoadPhase,
-  _visible: boolean,
+  phase: LoadPhase,
+  visible: boolean,
 ): LoadingDisplay {
-  return "content";
+  if (phase === "paused") {
+    return "offline";
+  }
+  if (visible) {
+    return "skeleton";
+  }
+  return phase === "loading" ? "frame" : "content";
 }
 
-export function useLoadingDisplay(_phase: LoadPhase): LoadingDisplay {
-  return "content";
+/**
+ * 読み込みの段階から、出すものを返す。画面が早期に別の表示へ切り替えても、
+ * 残す時間が続くよう、フックは画面の先頭で呼ぶ。
+ */
+export function useLoadingDisplay(phase: LoadPhase): LoadingDisplay {
+  const visible = useDelayedVisible(phase === "loading");
+  return loadingDisplayOf(phase, visible);
 }
-
-export function LoadingBody(_props: {
-  display: LoadingDisplay;
-  shape: LoadingShape;
-}): ReactNode {
-  return null;
-}
-
-export const OFFLINE_WAIT_TEXT = "オフラインのため、取得を待っています";
 
 /**
  * スケルトンの枠。`visible`が偽の間は、同じ高さの空の領域として残す。
@@ -57,24 +67,59 @@ export function LoadingStateView({
   visible: boolean;
   shape: LoadingShape;
 }) {
-  if ("node" in shape) {
-    return null;
-  }
-  const rows = Array.from({ length: shape.rows }, (_unused, index) => index);
+  const className =
+    "node" in shape
+      ? shape.className
+      : cn("flex flex-col", shape.gapClassName ?? "gap-3");
+  const body =
+    "node" in shape
+      ? shape.node
+      : Array.from({ length: shape.rows }, (_unused, index) => (
+          // 行は並びが変わらない固定の数で、入れ替えも挿入もない。
+          // biome-ignore lint/suspicious/noArrayIndexKey: 同上。
+          <Skeleton key={index} className={shape.rowClassName} />
+        ));
   return (
     <div
       {...(visible ? { role: "status" } : {})}
-      className={cn("flex flex-col", shape.gapClassName ?? "gap-3")}
+      className={cn(className, visible ? null : "invisible")}
     >
       {visible ? <span className="sr-only">読み込み中</span> : null}
-      {rows.map((row) => (
-        <Skeleton
-          key={row}
-          className={cn(shape.rowClassName, visible ? null : "invisible")}
-        />
-      ))}
+      {body}
     </div>
   );
+}
+
+/** 待っていることを伝える文。 */
+function OfflineWait() {
+  return (
+    <p
+      role="status"
+      className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground"
+    >
+      {OFFLINE_WAIT_TEXT}
+    </p>
+  );
+}
+
+/** `display`に応じた読み込み中の表示。内容は出さない(`content`では何も描かない)。 */
+export function LoadingBody({
+  display,
+  shape,
+}: {
+  display: LoadingDisplay;
+  shape: LoadingShape;
+}) {
+  switch (display) {
+    case "content":
+      return null;
+    case "offline":
+      return <OfflineWait />;
+    case "frame":
+      return <LoadingStateView visible={false} shape={shape} />;
+    case "skeleton":
+      return <LoadingStateView visible shape={shape} />;
+  }
 }
 
 /**
@@ -92,20 +137,9 @@ export function LoadingGate({
   shape: LoadingShape;
   children: ReactNode;
 }) {
-  const loading = phase === "loading";
-  const visible = useDelayedVisible(loading);
-  if (phase === "paused") {
-    return (
-      <p
-        role="status"
-        className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground"
-      >
-        {OFFLINE_WAIT_TEXT}
-      </p>
-    );
+  const display = useLoadingDisplay(phase);
+  if (display === "content") {
+    return children;
   }
-  if (loading || visible) {
-    return <LoadingStateView visible={visible} shape={shape} />;
-  }
-  return children;
+  return <LoadingBody display={display} shape={shape} />;
 }
