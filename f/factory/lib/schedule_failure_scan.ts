@@ -4,6 +4,7 @@
 
 import type { ListCompletedJobsData } from "windmill-client@1.817.0";
 import { maskSecrets } from "./log.ts";
+import { PERIODIC_WORKER_TAG } from "./periodic_worker.ts";
 import { SCHEDULE_FAILING_FETCH_COUNT } from "./schedule_failing.ts";
 import { isRecord, isString } from "./types.ts";
 
@@ -57,8 +58,17 @@ export const ERROR_MAX_CHARS = 2000;
 
 const UNREADABLE_ERROR = "the job failed without a readable error";
 
+/** 読めなかった要素の記録に載せる最大の件数。 */
+const MALFORMED_SAMPLE_MAX = 5;
+
 /** 取り消しの`canceled_by`がこの値のとき、時間切れによる取り消しとみなす。 */
 const TIMEOUT_CANCELED_BY = "timeout";
+
+/** 読めなかった要素の記録。IDと、欠けている項目の名前だけで、値は含めない。 */
+export type MalformedSample = {
+  readonly id: string | null;
+  readonly missing: readonly string[];
+};
 
 /** 検出器が拾った、scheduleが起こしたジョブの失敗。 */
 export type ScheduleFailureJob = {
@@ -66,7 +76,7 @@ export type ScheduleFailureJob = {
   /** 失敗したscriptまたはflowのpath。`schedule_failing`の履歴と同じ値である。 */
   readonly scriptPath: string;
   readonly completedAtMs: number;
-  /** 一覧が返した完了時刻の文字列。記録の発生時刻に使う。 */
+  /** 完了時刻のISO文字列。記録の発生時刻に使う。 */
   readonly completedAt: string;
   readonly canceledByTimeout: boolean;
 };
@@ -75,7 +85,7 @@ export type ScheduleFailureJob = {
 export type BaselineRun = {
   readonly id: string;
   readonly startedAtMs: number;
-  /** 完了時刻。応答に無い、または読めないときは`null`。 */
+  /** 完了時刻。開始時刻と所要時間から求める。求められないときは`null`。 */
   readonly completedAtMs: number | null;
 };
 
@@ -105,6 +115,47 @@ export function baselineRunsQuery(workspace: string): ListCompletedJobsData {
 }
 
 /**
+ * 一覧の要素の完了時刻を返す。求められなければ`null`を返す。
+ * 実機の一覧の要素には`completed_at`が無く、`created_at`、`started_at`、`duration_ms`(ミリ秒の数値)がある。
+ * そのため完了時刻は、`started_at`に`duration_ms`を足して求める。
+ * `completed_at`があれば、それを使う。
+ */
+function completionOf(
+  job: Record<string, unknown>,
+): { readonly ms: number; readonly iso: string } | null {
+  if (isString(job.completed_at)) {
+    const ms = Date.parse(job.completed_at);
+    if (!Number.isNaN(ms)) {
+      return { ms, iso: job.completed_at };
+    }
+  }
+  if (isString(job.started_at) && isFiniteNumber(job.duration_ms)) {
+    const startedAtMs = Date.parse(job.started_at);
+    if (!Number.isNaN(startedAtMs)) {
+      const ms = startedAtMs + job.duration_ms;
+      return { ms, iso: new Date(ms).toISOString() };
+    }
+  }
+  return null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** 完了時刻を求められない要素について、欠けている、または読めない項目の名前を返す。値は含めない。 */
+function missingForCompletion(job: Record<string, unknown>): string[] {
+  const missing = ["completed_at"];
+  if (!isString(job.started_at) || Number.isNaN(Date.parse(job.started_at))) {
+    missing.push("started_at");
+  }
+  if (!isFiniteNumber(job.duration_ms)) {
+    missing.push("duration_ms");
+  }
+  return missing;
+}
+
+/**
  * 一覧の応答(新しい順)から、検出器のscheduleが起こした成功した実行の先頭を返す。無ければ`null`を返す。
  * サーバーが絞り込みを無視しても、手動の実行やpreview、飛ばされた実行を数えないよう、クライアントでも確かめる。
  * 飛ばされた実行は、`success`の値が実機で未確認なので、成功に数えない。
@@ -126,13 +177,10 @@ export function findBaselineRun(response: unknown): BaselineRun | null {
     }
     const startedAtMs = Date.parse(run.started_at);
     if (!Number.isNaN(startedAtMs)) {
-      const completedAtMs = isString(run.completed_at)
-        ? Date.parse(run.completed_at)
-        : Number.NaN;
       return {
         id: run.id,
         startedAtMs,
-        completedAtMs: Number.isNaN(completedAtMs) ? null : completedAtMs,
+        completedAtMs: completionOf(run)?.ms ?? null,
       };
     }
   }
@@ -219,19 +267,31 @@ export function failuresQuery(
  * 除くもの: scheduleが起こしていない実行、飛ばされた実行、人が取り消した実行、失敗でない実行、
  * `baselineMs`より前に完了した実行。時間切れによる取り消し(`canceled_by`が`timeout`)は失敗に数える。
  * 完了時刻が`baselineMs`と同じ実行は残す。重なりは記録済みのジョブとして飛ばす。
- * 形の違う要素は`malformed`に数える。
+ * 完了時刻は`completionOf`で求める。
+ * 形の違う要素は`malformed`に数え、最初の数件は、IDと欠けている項目の名前を`malformedSamples`に残す(値は残さない)。
  */
 export function extractScheduleFailures(
   jobs: readonly unknown[],
   baselineMs: number,
-): { failures: ScheduleFailureJob[]; malformed: number } {
+): {
+  failures: ScheduleFailureJob[];
+  malformed: number;
+  malformedSamples: MalformedSample[];
+} {
   const failures: ScheduleFailureJob[] = [];
   // ページのずれで、同じジョブが2回出ることがある。
   const seen = new Set<string>();
   let malformed = 0;
+  const malformedSamples: MalformedSample[] = [];
+  const reject = (id: string | null, missing: string[]): void => {
+    malformed += 1;
+    if (malformedSamples.length < MALFORMED_SAMPLE_MAX) {
+      malformedSamples.push({ id, missing });
+    }
+  };
   for (const job of jobs) {
     if (!isRecord(job)) {
-      malformed += 1;
+      reject(null, ["object"]);
       continue;
     }
     if (!isString(job.schedule_path) || job.schedule_path.length === 0) {
@@ -245,28 +305,28 @@ export function extractScheduleFailures(
     if (job.canceled === true && !canceledByTimeout) {
       continue;
     }
+    const completion = completionOf(job);
     if (
       !isString(job.id) ||
       !isString(job.script_path) ||
-      !isString(job.completed_at)
+      completion === null
     ) {
-      malformed += 1;
+      const missing: string[] = [];
+      if (!isString(job.id)) missing.push("id");
+      if (!isString(job.script_path)) missing.push("script_path");
+      if (completion === null) missing.push(...missingForCompletion(job));
+      reject(isString(job.id) ? job.id : null, missing);
       continue;
     }
-    const completedAtMs = Date.parse(job.completed_at);
-    if (Number.isNaN(completedAtMs)) {
-      malformed += 1;
-      continue;
-    }
-    if (completedAtMs < baselineMs || seen.has(job.id)) {
+    if (completion.ms < baselineMs || seen.has(job.id)) {
       continue;
     }
     seen.add(job.id);
     failures.push({
       id: job.id,
       scriptPath: job.script_path,
-      completedAtMs,
-      completedAt: job.completed_at,
+      completedAtMs: completion.ms,
+      completedAt: completion.iso,
       canceledByTimeout,
     });
   }
@@ -275,7 +335,7 @@ export function extractScheduleFailures(
       a.completedAtMs - b.completedAtMs ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
-  return { failures, malformed };
+  return { failures, malformed, malformedSamples };
 }
 
 /** 失敗をscriptごとにまとめる。まとまりの順は最初に現れた順で、まとまりの中は渡された順である。 */
@@ -294,7 +354,11 @@ export function groupByScript(
   return groups;
 }
 
-/** 他のscheduleのジョブが見えているかを確かめる、`sinceMs`以降に開始した根のジョブの問い合わせ。 */
+/**
+ * 他のscheduleのジョブが見えているかを確かめる、`sinceMs`以降に開始した根のジョブの問い合わせ。
+ * tagを定期ジョブ用のworkerのものに絞る。絞らないと、新しい20件が`console_query`などのscheduleの無いジョブで埋まり、
+ * scheduleのジョブが見えないと誤って判定するためである。
+ */
 export function visibilityQuery(
   workspace: string,
   sinceMs: number,
@@ -303,6 +367,7 @@ export function visibilityQuery(
     workspace,
     hasNullParent: true,
     scriptPathStart: SCAN_SCRIPT_PATH_PREFIX,
+    tag: PERIODIC_WORKER_TAG,
     startedAfter: new Date(sinceMs).toISOString(),
     orderDesc: true,
     perPage: VISIBILITY_PER_PAGE,
