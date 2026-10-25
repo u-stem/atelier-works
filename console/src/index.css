@@ -171,3 +171,15 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * テーマの切り替えの間だけ、全要素の遷移を止める。
+ * 一部の要素だけがtransition-colorsを持つので、止めないと、遅れて変わる要素が混じってちらつく。
+ * htmlへの印は、lib/themeSwitching.tsが付けて外す。
+ */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: 各要素のtransitionの指定より優先させる。 */
+  transition: none !important;
+}

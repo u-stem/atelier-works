@@ -140,13 +140,22 @@ export async function fetchDeployments(
   return result.value;
 }
 
+/**
+ * 反映の履歴の取得の設定。画面の取得と、サイドバーの先読みが同じ値を使う。
+ * 値が食い違うと、先読みで入れたデータを、画面が新しさの違いで取り直す。
+ */
+export function deploymentsQueryOptions() {
+  return {
+    queryKey: deploymentsQueryKey,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchDeployments({ signal }),
+    staleTime: DEPLOYMENTS_STALE_MS,
+  };
+}
+
 /** 反映の履歴を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function useDeployments(): UseQueryResult<DeploymentEntry[], Error> {
-  return useQuery({
-    queryKey: deploymentsQueryKey,
-    queryFn: ({ signal }) => fetchDeployments({ signal }),
-    staleTime: DEPLOYMENTS_STALE_MS,
-  });
+  return useQuery(deploymentsQueryOptions());
 }
 
 /** 作業項目の一覧が見る期間(日)と件数の上限。 */
@@ -176,13 +185,18 @@ export async function fetchPipeline(
   return result.value;
 }
 
+/** 作業項目の進捗の取得の設定。画面の取得と、サイドバーの先読みが同じ値を使う。 */
+export function pipelineQueryOptions() {
+  return {
+    queryKey: pipelineQueryKey,
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchPipeline({ signal }),
+    staleTime: PIPELINE_STALE_MS,
+  };
+}
+
 /** 作業項目の進捗を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function usePipeline(): UseQueryResult<PipelineRow[], Error> {
-  return useQuery({
-    queryKey: pipelineQueryKey,
-    queryFn: ({ signal }) => fetchPipeline({ signal }),
-    staleTime: PIPELINE_STALE_MS,
-  });
+  return useQuery(pipelineQueryOptions());
 }
 
 /** 要件定義の一覧が見る期間(日)と件数の上限。backendの上限と同じにして、古い作業項目も開けるようにする。 */
@@ -219,16 +233,22 @@ export async function fetchRequirementsIndex(
   return result.value;
 }
 
+/** 要件定義の一覧の取得の設定。画面の取得と、サイドバーの先読みが同じ値を使う。 */
+export function requirementsIndexQueryOptions() {
+  return {
+    queryKey: requirementsIndexQueryKey,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchRequirementsIndex({ signal }),
+    staleTime: REQUIREMENTS_STALE_MS,
+  };
+}
+
 /** 要件定義の一覧を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function useRequirementsIndex(): UseQueryResult<
   readonly RequirementsIndexRow[],
   Error
 > {
-  return useQuery({
-    queryKey: requirementsIndexQueryKey,
-    queryFn: ({ signal }) => fetchRequirementsIndex({ signal }),
-    staleTime: REQUIREMENTS_STALE_MS,
-  });
+  return useQuery(requirementsIndexQueryOptions());
 }
 
 /**
@@ -278,32 +298,4 @@ export function useRequirementsDoc(
       fetchRequirementsDoc(workItemId, attempt, { signal }),
     staleTime: REQUIREMENTS_STALE_MS,
   });
-}
-
-const NO_KEY: readonly string[] = [];
-
-export function deploymentsQueryOptions() {
-  return {
-    queryKey: NO_KEY,
-    queryFn: ({ signal }: { signal: AbortSignal }) =>
-      fetchDeployments({ signal }),
-    staleTime: 0,
-  };
-}
-
-export function pipelineQueryOptions() {
-  return {
-    queryKey: NO_KEY,
-    queryFn: ({ signal }: { signal: AbortSignal }) => fetchPipeline({ signal }),
-    staleTime: 0,
-  };
-}
-
-export function requirementsIndexQueryOptions() {
-  return {
-    queryKey: NO_KEY,
-    queryFn: ({ signal }: { signal: AbortSignal }) =>
-      fetchRequirementsIndex({ signal }),
-    staleTime: 0,
-  };
 }

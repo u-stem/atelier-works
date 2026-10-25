@@ -11,6 +11,8 @@ const WIDE_QUERY = "(min-width: 48rem)";
  * 閉じる操作はすべて`onClose`を呼ぶ。`open`を偽にして閉じたときは呼ばない。
  * 画面が広がって横並びのメニューに切り替わったら、背面を操作できるよう自分で閉じる。
  * 中身は`dialog`の高さいっぱいの枠で包む。中の空きを押しても、背景の押下と見分けられるようにするためである。
+ * `data-nav-drawer`は、画面の遷移後にフォーカスを移す側が、このドロワーの閉じ終わりを待つ目印である。
+ * `dialog.close()`は、開く前にフォーカスのあった要素へフォーカスを戻す。
  */
 export function NavDrawer({
   open,
@@ -50,6 +52,7 @@ export function NavDrawer({
     // biome-ignore lint/a11y/useKeyWithClickEvents: 背景の押下で閉じる操作は補助である。キーボードではEscと閉じるボタンで同じことができる。
     <dialog
       ref={ref}
+      data-nav-drawer=""
       aria-label={label}
       onClose={() => {
         // 親が`open`を偽にして閉じたときは、親がすでに知っているので知らせない。

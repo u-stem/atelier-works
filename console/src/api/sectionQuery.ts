@@ -25,7 +25,13 @@ export type SectionQuery<T> = {
 export type LoadPhase = "loaded" | "failed" | "paused" | "loading";
 
 export function loadPhaseOf(
-  _query: Pick<SectionQuery<unknown>, "data" | "isError" | "fetchStatus">,
+  query: Pick<SectionQuery<unknown>, "data" | "isError" | "fetchStatus">,
 ): LoadPhase {
-  return "loaded";
+  if (query.data !== undefined) {
+    return "loaded";
+  }
+  if (query.isError) {
+    return "failed";
+  }
+  return query.fetchStatus === "paused" ? "paused" : "loading";
 }

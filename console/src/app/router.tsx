@@ -26,6 +26,7 @@ export const ROUTES: RouteObject[] = [
       ...buildScreenRoutes(SCREENS, RouteError),
       {
         path: "*",
+        handle: { title: "ページが見つかりません" },
         ErrorBoundary: RouteError,
         lazy: () =>
           import("../screens/NotFoundScreen.tsx").then((module) => ({

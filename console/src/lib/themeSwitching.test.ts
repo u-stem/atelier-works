@@ -158,7 +158,7 @@ describe("index.css", () => {
 
   test("stops every transition while the root is switching", () => {
     expect(css).toMatch(
-      /\[data-theme-switching\]\s*\*,[\s\S]*?\*::before,[\s\S]*?\*::after\s*\{\s*transition:\s*none\s*!important;/,
+      /\[data-theme-switching\]\s*\*,[\s\S]*?\*::before,[\s\S]*?\*::after\s*\{(?:\s|\/\*[\s\S]*?\*\/)*transition:\s*none\s*!important;/,
     );
   });
 });

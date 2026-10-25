@@ -1,10 +1,19 @@
 // 読み込み中の表示を出す時機を決める。短い取得でスケルトンが一瞬だけ出るのを避ける。
+// 状態の遷移は純関数で、時刻は引数で受ける。フックは、その遷移にタイマーを結ぶだけである。
+
+import { useEffect, useReducer } from "react";
 
 export type DelayedOptions = {
+  /** 取得が続いてから表示を出すまでの待ち。これより短い取得では出さない。 */
   readonly delayMs: number;
+  /** 一度出した表示を残す最低の時間。出してすぐ消えると、かえってちらつく。 */
   readonly minMs: number;
 };
 
+/**
+ * 画面の切り替えの取得は、約200msで終わる。
+ * 終わる時刻の付近で出し入れしないよう、待ちを300msにする。
+ */
 export const DEFAULT_DELAYED_OPTIONS: DelayedOptions = {
   delayMs: 300,
   minMs: 200,
@@ -14,6 +23,7 @@ export type DelayedState =
   | { readonly phase: "hidden" }
   | { readonly phase: "pending"; readonly since: number }
   | { readonly phase: "shown"; readonly shownAt: number }
+  /** 取得は終わったが、最低の時間が過ぎるまで表示を残している。 */
   | { readonly phase: "lingering"; readonly shownAt: number };
 
 export type DelayedEvent =
@@ -21,28 +31,104 @@ export type DelayedEvent =
   | { readonly type: "deactivate"; readonly at: number }
   | { readonly type: "tick"; readonly at: number };
 
-export function initialDelayedState(
-  _active: boolean,
-  _at: number,
-): DelayedState {
-  return { phase: "hidden" };
+/** 描画の最初の状態。取得が走っていれば、描画した時刻から待ちを数える。 */
+export function initialDelayedState(active: boolean, at: number): DelayedState {
+  return active ? { phase: "pending", since: at } : { phase: "hidden" };
 }
 
 export function reduceDelayed(
   state: DelayedState,
-  _event: DelayedEvent,
-  _options: DelayedOptions,
+  event: DelayedEvent,
+  options: DelayedOptions,
 ): DelayedState {
-  return state;
+  switch (event.type) {
+    case "activate":
+      if (state.phase === "hidden") {
+        return { phase: "pending", since: event.at };
+      }
+      if (state.phase === "lingering") {
+        return { phase: "shown", shownAt: state.shownAt };
+      }
+      return state;
+    case "deactivate":
+      if (state.phase === "pending") {
+        return { phase: "hidden" };
+      }
+      if (state.phase === "shown") {
+        return event.at - state.shownAt >= options.minMs
+          ? { phase: "hidden" }
+          : { phase: "lingering", shownAt: state.shownAt };
+      }
+      return state;
+    case "tick":
+      if (
+        state.phase === "pending" &&
+        event.at - state.since >= options.delayMs
+      ) {
+        return { phase: "shown", shownAt: event.at };
+      }
+      if (
+        state.phase === "lingering" &&
+        event.at - state.shownAt >= options.minMs
+      ) {
+        return { phase: "hidden" };
+      }
+      return state;
+  }
 }
 
-export function isDelayedVisible(_state: DelayedState): boolean {
-  return false;
+export function isDelayedVisible(state: DelayedState): boolean {
+  return state.phase === "shown" || state.phase === "lingering";
 }
 
+/** 次に`tick`を送る時刻。時刻で状態が変わらないときは`null`。 */
 export function nextDelayedWake(
-  _state: DelayedState,
-  _options: DelayedOptions,
+  state: DelayedState,
+  options: DelayedOptions,
 ): number | null {
-  return null;
+  switch (state.phase) {
+    case "pending":
+      return state.since + options.delayMs;
+    case "lingering":
+      return state.shownAt + options.minMs;
+    default:
+      return null;
+  }
+}
+
+/**
+ * `active`が続くときだけ、待ちの後に`true`を返す。
+ * `active`が偽になっても、一度出していれば最低の時間は`true`のままにする。
+ */
+export function useDelayedVisible(
+  active: boolean,
+  options: DelayedOptions = DEFAULT_DELAYED_OPTIONS,
+): boolean {
+  const [state, dispatch] = useReducer(
+    (current: DelayedState, event: DelayedEvent) =>
+      reduceDelayed(current, event, options),
+    undefined,
+    () => initialDelayedState(active, Date.now()),
+  );
+
+  useEffect(() => {
+    dispatch({ type: active ? "activate" : "deactivate", at: Date.now() });
+  }, [active]);
+
+  useEffect(() => {
+    const wake = nextDelayedWake(state, options);
+    if (wake === null) {
+      return undefined;
+    }
+    const timer = setTimeout(
+      () => {
+        // タイマーは早く着くことがある。着いた時点で期限が来たものとして扱う。
+        dispatch({ type: "tick", at: Math.max(Date.now(), wake) });
+      },
+      Math.max(0, wake - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [state, options]);
+
+  return isDelayedVisible(state);
 }

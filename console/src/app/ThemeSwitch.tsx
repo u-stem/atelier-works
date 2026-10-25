@@ -13,6 +13,7 @@ import {
   THEME_STORAGE_KEY,
   type ThemePreference,
 } from "../lib/theme.ts";
+import { beginThemeSwitch } from "../lib/themeSwitching.ts";
 
 const ICONS = { light: Sun, dark: Moon, system: Monitor } as const;
 
@@ -24,44 +25,59 @@ function readStoredPreference(): ThemePreference {
   }
 }
 
-/**
- * 選択をhtmlのdata-themeに反映し、保存領域に残す。
- * 保存できない環境(プライベートブラウズなど)でも、表示の切り替えは行う。
- */
-function applyPreference(preference: ThemePreference): void {
-  const root = document.documentElement;
-  if (preference === "system") {
-    root.removeAttribute("data-theme");
-  } else {
-    root.dataset.theme = preference;
-  }
-  try {
-    if (preference === "system") {
-      window.localStorage.removeItem(THEME_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(THEME_STORAGE_KEY, preference);
-    }
-  } catch {
-    // 保存できなくても、この画面の表示はすでに切り替わっている。
-  }
-}
-
 export type ThemeEnv = {
+  /** 全要素の遷移を止める。テーマを替える直前に呼ぶ。 */
   beginSwitch(): void;
   root: {
     setAttribute(name: string, value: string): void;
     removeAttribute(name: string): void;
   };
+  /** 保存領域。使えない環境では`null`。 */
   storage: {
     setItem(key: string, value: string): void;
     removeItem(key: string): void;
   } | null;
 };
 
+/**
+ * 選択をhtmlのdata-themeに反映し、保存領域に残す。
+ * 替える直前に遷移を止め、一部の要素だけが遅れて変わるのを防ぐ。
+ * 保存できない環境(プライベートブラウズなど)でも、表示の切り替えは行う。
+ */
 export function applyThemePreference(
-  _preference: ThemePreference,
-  _env: ThemeEnv,
-): void {}
+  preference: ThemePreference,
+  env: ThemeEnv,
+): void {
+  env.beginSwitch();
+  if (preference === "system") {
+    env.root.removeAttribute("data-theme");
+  } else {
+    env.root.setAttribute("data-theme", preference);
+  }
+  try {
+    if (preference === "system") {
+      env.storage?.removeItem(THEME_STORAGE_KEY);
+    } else {
+      env.storage?.setItem(THEME_STORAGE_KEY, preference);
+    }
+  } catch {
+    // 保存できなくても、この画面の表示はすでに切り替わっている。
+  }
+}
+
+function browserEnv(): ThemeEnv {
+  let storage: ThemeEnv["storage"] = null;
+  try {
+    storage = window.localStorage;
+  } catch {
+    // 保存領域に触れない環境では、保存せずに切り替える。
+  }
+  return {
+    beginSwitch: beginThemeSwitch,
+    root: document.documentElement,
+    storage,
+  };
+}
 
 /** テーマの選択肢のボタンのクラス。選択中は、他の切り替えと同じ表し方にする。 */
 export function themeOptionClass(pressed: boolean): string {
@@ -90,7 +106,7 @@ export function ThemeSwitch() {
                 aria-label={option.label}
                 className={themeOptionClass(pressed)}
                 onClick={() => {
-                  applyPreference(option.value);
+                  applyThemePreference(option.value, browserEnv());
                   setPreference(option.value);
                 }}
               >

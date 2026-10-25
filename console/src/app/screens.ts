@@ -10,6 +10,15 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { SummaryCounts } from "../api/guards/summary.ts";
+import { holdsQueryOptions } from "../api/holdsQueries.ts";
+import {
+  deploymentsQueryOptions,
+  pipelineQueryOptions,
+  requirementsIndexQueryOptions,
+} from "../api/queries.ts";
+import { systemStatusQueryOptions } from "../api/systemQueries.ts";
+import { workItemRef } from "../lib/labels.ts";
+import { parseIdParam } from "../lib/routeParams.ts";
 import { SYSTEM_PATH } from "./paths.ts";
 
 /** 画面の部品を必要になってから読み込む関数。react-routerの`lazy`にそのまま渡す。 */
@@ -63,6 +72,17 @@ export type Screen = {
 const noBadge = (): number => 0;
 const noPrefetch = (): readonly PrefetchOptions[] => [];
 
+/**
+ * 作業項目の番号を含む名前。番号が読めないときは、番号の無い名前にする。
+ * 番号は経路の引数から決まり、取得を待たずに分かる。
+ */
+function workItemTitle(suffix: string, fallback: string): RouteTitle {
+  return (params) => {
+    const id = parseIdParam(params.id);
+    return id === null ? fallback : `${workItemRef(id)}${suffix}`;
+  };
+}
+
 export const SCREENS: readonly Screen[] = [
   {
     id: "inbox",
@@ -89,7 +109,8 @@ export const SCREENS: readonly Screen[] = [
     label: "作業項目",
     icon: ListChecks,
     badge: noBadge,
-    prefetch: noPrefetch,
+    // 一覧の2つの取得を先読みする。件数のsummaryはサイドバーが常に持つので含めない。
+    prefetch: () => [pipelineQueryOptions(), requirementsIndexQueryOptions()],
     lazy: () =>
       import("../screens/items/ItemsScreen.tsx").then((module) => ({
         Component: module.ItemsScreen,
@@ -97,6 +118,7 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "items/new",
+        title: "新規投入",
         lazy: () =>
           import("../screens/items/NewItemScreen.tsx").then((module) => ({
             Component: module.NewItemScreen,
@@ -104,6 +126,7 @@ export const SCREENS: readonly Screen[] = [
       },
       {
         path: "items/:id/requirements",
+        title: workItemTitle("の要件定義", "要件定義"),
         lazy: () =>
           import("../screens/items/ItemRequirementsScreen.tsx").then(
             (module) => ({ Component: module.ItemRequirementsScreen }),
@@ -111,6 +134,7 @@ export const SCREENS: readonly Screen[] = [
       },
       {
         path: "items/:id",
+        title: workItemTitle("", "作業項目"),
         lazy: () =>
           import("../screens/items/ItemDetailScreen.tsx").then((module) => ({
             Component: module.ItemDetailScreen,
@@ -132,6 +156,7 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "reports/audit/:id",
+        title: workItemTitle("の監査レポート", "監査レポート"),
         lazy: () =>
           import("../screens/reports/AuditReportScreen.tsx").then((module) => ({
             Component: module.AuditReportScreen,
@@ -145,7 +170,13 @@ export const SCREENS: readonly Screen[] = [
     label: "システム",
     icon: Server,
     badge: noBadge,
-    prefetch: noPrefetch,
+    // 画面が開く直後に走る3つの取得を先読みする。summaryはサイドバーが常に持つので含めない。
+    // 入口1つが走らせるジョブは、workerが直列に処理するので、この3つに限る。
+    prefetch: () => [
+      systemStatusQueryOptions(),
+      deploymentsQueryOptions(),
+      holdsQueryOptions(),
+    ],
     lazy: () =>
       import("../screens/system/SystemScreen.tsx").then((module) => ({
         Component: module.SystemScreen,

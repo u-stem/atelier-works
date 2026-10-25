@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
+import { PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { AutoRefreshNote } from "./AutoRefreshNote.tsx";
 import type { RefreshStatus } from "./refreshStatus.ts";
 import { useNow } from "./useNow.ts";
@@ -20,6 +21,7 @@ import { useNow } from "./useNow.ts";
  * 画面のすべての取得が自動で取り直されるときは、最終更新の脇に間隔を示す。
  * 更新は取得し直すだけで、画面の選択や絞り込みは変えない。
  * 画面の主要な操作は、題の下の`children`でなく`actions`に渡す。
+ * 題(h1)は、画面の遷移の後にフォーカスの移し先になる。ページには見出しを1つだけ置く。
  */
 export function PageHeader({
   title,
@@ -53,7 +55,12 @@ export function PageHeader({
   return (
     <header className="flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8">
       <div className="min-w-0">
-        <h1 className="truncate text-title font-semibold tracking-tight">
+        {/* 遷移の後にフォーカスを受ける。Tabの順には入れず、輪も描かない。 */}
+        <h1
+          id={PAGE_HEADING_ID}
+          tabIndex={-1}
+          className="truncate text-title font-semibold tracking-tight outline-none"
+        >
           {title}
         </h1>
         {subtitle === undefined || subtitle === null ? null : (

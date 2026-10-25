@@ -1,5 +1,12 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
-import { type KeyboardEvent, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
 import { useSummary } from "../api/queries.ts";
@@ -20,8 +27,12 @@ import {
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
 } from "../lib/navigation.ts";
+import {
+  createPrefetchScheduler,
+  PREFETCH_DELAY_MS,
+} from "../lib/prefetchSchedule.ts";
 import { NavDrawer } from "./NavDrawer.tsx";
-import { SCREENS } from "./screens.ts";
+import { SCREENS, type ScreenId } from "./screens.ts";
 import { ThemeSwitch } from "./ThemeSwitch.tsx";
 import { useNow } from "./useNow.ts";
 
@@ -71,6 +82,39 @@ function ReleaseInfo() {
 }
 
 /**
+ * 入口に触れた(focusかpointerdown)とき、その画面の初回の取得を先読みする関数を返す。
+ * hoverでは先読みしない。通り過ぎただけの入口で、Windmillのジョブを増やさないためである。
+ * 先読みは、各画面の取得と同じ設定(キー、関数、`staleTime`)で行う。
+ * 新しいデータは取り直さず、走っている取得には重ねないので、同じ入口へ続けて触れても取得は増えない。
+ */
+function usePrefetchOnIntent(): (id: ScreenId) => void {
+  const client = useQueryClient();
+  const scheduler = useMemo(
+    () =>
+      createPrefetchScheduler<ScreenId>({
+        delayMs: PREFETCH_DELAY_MS,
+        run: (id) => {
+          const screen = SCREENS.find((candidate) => candidate.id === id);
+          for (const options of screen?.prefetch() ?? []) {
+            void client.prefetchQuery(options);
+          }
+        },
+        timers: {
+          set: (callback, ms) => window.setTimeout(callback, ms),
+          clear: (handle) => {
+            if (typeof handle === "number") {
+              window.clearTimeout(handle);
+            }
+          },
+        },
+      }),
+    [client],
+  );
+  useEffect(() => () => scheduler.cancelAll(), [scheduler]);
+  return scheduler.request;
+}
+
+/**
  * 4つの入口と件数のリスト。入口の間は、上下の矢印とHome・Endで移れる。
  * `onNavigate`は、入口を選んだときに呼ぶ。ドロワーを閉じるために使う。
  */
@@ -83,6 +127,7 @@ function NavList({
 }) {
   const summary = useSummary();
   const navRef = useRef<HTMLElement>(null);
+  const prefetchScreen = usePrefetchOnIntent();
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     const links = Array.from(navRef.current?.querySelectorAll("a") ?? []);
@@ -120,6 +165,12 @@ function NavList({
                 end={screen.path === "/"}
                 className={navLinkClass(collapsed)}
                 onClick={onNavigate}
+                onFocus={() => {
+                  prefetchScreen(screen.id);
+                }}
+                onPointerDown={() => {
+                  prefetchScreen(screen.id);
+                }}
               >
                 <span className="relative inline-flex shrink-0">
                   <Icon aria-hidden="true" className="size-[18px]" />

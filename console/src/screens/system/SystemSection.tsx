@@ -1,23 +1,50 @@
 import type { ReactNode } from "react";
-import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
-import type { LoadingShape } from "../../components/LoadingState.tsx";
+import {
+  LoadingGate,
+  type LoadingShape,
+} from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
-export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {};
+/** 内容が未知の節の読み込み中の形。 */
+const DEFAULT_SKELETON: LoadingShape = {
+  rows: 3,
+  rowClassName: "h-16 w-full rounded-xl",
+};
 
-function LoadingState() {
-  return (
-    <div className="flex flex-col gap-3" role="status">
-      <span className="sr-only">読み込み中</span>
-      {["a", "b", "c"].map((key) => (
-        <Skeleton key={key} className="h-16 w-full rounded-xl" />
-      ))}
-    </div>
-  );
-}
+/** 1つの枠にまとまる一覧の目安。通知と失敗の行3つ分(1行は約4.25rem)。 */
+const LIST_SKELETON: LoadingShape = {
+  rows: 1,
+  rowClassName: "h-[12.75rem] w-full rounded-xl",
+};
+
+/**
+ * 節ごとの読み込み中の形。節の見出しのidで引く。
+ * 高さは、内容が出たときに下の節が動かないよう、内容の目安にそろえる。
+ * 値は、行の余白と文字の高さから見積もった。実機で測り直して合わせる。
+ */
+export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {
+  // 有効な保留がなければ1行にたたまれる。
+  "holds-heading": { rows: 1, rowClassName: "h-16 w-full rounded-xl" },
+  // 3行の表(1行は約3rem)。
+  "release-heading": { rows: 1, rowClassName: "h-36 w-full rounded-xl" },
+  // 反映1件の枠(約7rem)を3つ。
+  "update-history-heading": {
+    rows: 3,
+    rowClassName: "h-28 w-full rounded-xl",
+  },
+  // 注記1行と8行の表(1行は約3rem)。
+  "worker-load-heading": {
+    rows: 1,
+    rowClassName: "h-[25rem] w-full rounded-xl",
+  },
+  "info-notices-heading": LIST_SKELETON,
+  "resolved-notices-heading": LIST_SKELETON,
+  "audit-failures-heading": LIST_SKELETON,
+  "orphan-failures-heading": LIST_SKELETON,
+};
 
 /**
  * システムの画面の1つの節。見出し、取得の状態、本文を持つ。
@@ -52,8 +79,11 @@ export function SystemSection<T>({
         </h2>
         <div className="text-small text-muted-foreground">{description}</div>
       </div>
-      {query.data === undefined ? (
-        query.isError ? (
+      <LoadingGate
+        phase={loadPhaseOf(query)}
+        shape={SYSTEM_SKELETONS[id] ?? DEFAULT_SKELETON}
+      >
+        {query.data === undefined ? (
           <QueryFailure
             compact
             title={`${title}を取得できませんでした`}
@@ -64,22 +94,20 @@ export function SystemSection<T>({
             }}
           />
         ) : (
-          <LoadingState />
-        )
-      ) : (
-        <>
-          {query.isError ? (
-            <StaleDataNotice
-              isFetching={query.isFetching}
-              error={query.error}
-              onRetry={() => {
-                void query.refetch();
-              }}
-            />
-          ) : null}
-          {children(query.data, now)}
-        </>
-      )}
+          <>
+            {query.isError ? (
+              <StaleDataNotice
+                isFetching={query.isFetching}
+                error={query.error}
+                onRetry={() => {
+                  void query.refetch();
+                }}
+              />
+            ) : null}
+            {children(query.data, now)}
+          </>
+        )}
+      </LoadingGate>
     </section>
   );
 }
