@@ -1,9 +1,11 @@
 import { useId, useState } from "react";
 import { Link } from "react-router";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
+import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Input } from "../../components/ui/input.tsx";
+import { pageSlice } from "../../lib/pagination.ts";
 import {
   emptyFilterMessage,
   filterRequirementsRows,
@@ -13,6 +15,7 @@ import {
   requirementsStatusTone,
   toneBadgeVariant,
 } from "../../lib/requirementsView.ts";
+import { usePagination } from "../../lib/usePagination.ts";
 
 function IndexRow({ row, now }: { row: RequirementsIndexRow; now: number }) {
   const summary = requirementsRowSummary(row);
@@ -43,20 +46,28 @@ function IndexRow({ row, now }: { row: RequirementsIndexRow; now: number }) {
   );
 }
 
+/** 1ページに出す行の数。 */
+const PAGE_SIZE = 10;
+
 /**
  * 要件定義がある作業項目の一覧。作業項目の番号で絞り込める。
  * 行を選ぶと、その作業項目の最新の要件定義書へ移る。
+ * 絞り込んだ行を10件ずつのページに分け、番号の絞り込みを変えると先頭のページへ戻る。
  */
 export function RequirementsIndexList({
   rows,
   now,
+  initialPage,
 }: {
   rows: readonly RequirementsIndexRow[];
   now: number;
+  /** 最初に出すページ(0から数える)。省略すると先頭。 */
+  initialPage?: number | undefined;
 }) {
   const [filter, setFilter] = useState("");
   const inputId = useId();
   const visible = filterRequirementsRows(rows, filter);
+  const pager = usePagination(visible.length, PAGE_SIZE, initialPage);
   return (
     <div className="flex w-full flex-col gap-4">
       <div className="flex items-center gap-3">
@@ -70,7 +81,10 @@ export function RequirementsIndexList({
           autoComplete="off"
           placeholder="空欄で全件"
           value={filter}
-          onChange={(event) => setFilter(event.target.value)}
+          onChange={(event) => {
+            setFilter(event.target.value);
+            pager.reset();
+          }}
           className="w-40"
         />
       </div>
@@ -83,14 +97,23 @@ export function RequirementsIndexList({
           {emptyFilterMessage(filter)}
         </p>
       ) : (
-        <ul
-          aria-label="要件定義の一覧"
-          className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
-        >
-          {visible.map((row) => (
-            <IndexRow key={row.work_item_id} row={row} now={now} />
-          ))}
-        </ul>
+        <div ref={pager.anchorRef} className="flex flex-col gap-3">
+          <ul
+            aria-label="要件定義の一覧"
+            className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
+          >
+            {pageSlice(visible, pager.page, PAGE_SIZE).map((row) => (
+              <IndexRow key={row.work_item_id} row={row} now={now} />
+            ))}
+          </ul>
+          <Pagination
+            page={pager.page}
+            total={visible.length}
+            size={PAGE_SIZE}
+            onPageChange={pager.change}
+            label="要件定義の一覧のページ送り"
+          />
+        </div>
       )}
     </div>
   );

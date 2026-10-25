@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import type { SummaryFailure } from "../../api/guards/summary.ts";
 import type { SystemOrphanFailure } from "../../api/guards/systemStatus.ts";
 import { JobLink } from "../../components/JobLink.tsx";
+import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
@@ -9,8 +10,13 @@ import {
   FAILURE_TEXT_LIMIT,
   workItemPath,
 } from "../../lib/failureView.ts";
+import { pageSlice } from "../../lib/pagination.ts";
 import { describeOrphanFailure } from "../../lib/systemView.ts";
+import { usePagination } from "../../lib/usePagination.ts";
 import { EmptyNote } from "./SystemSection.tsx";
+
+/** 1ページに出す失敗の数。 */
+const PAGE_SIZE = 10;
 
 const LINK_CLASS =
   "rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -86,23 +92,36 @@ function AuditFailureItem({
 export function AuditFailureList({
   failures,
   now,
+  initialPage,
 }: {
   failures: readonly SummaryFailure[];
   now: number;
+  /** 最初に出すページ(0から数える)。省略すると先頭。 */
+  initialPage?: number | undefined;
 }) {
+  const pager = usePagination(failures.length, PAGE_SIZE, initialPage);
   if (failures.length === 0) {
     return <EmptyNote>失敗した監査はありません</EmptyNote>;
   }
   return (
-    <ul className="flex flex-col gap-3">
-      {failures.map((failure) => (
-        <AuditFailureItem
-          key={failure.work_item_id}
-          failure={failure}
-          now={now}
-        />
-      ))}
-    </ul>
+    <div ref={pager.anchorRef} className="flex flex-col gap-3">
+      <ul className="flex flex-col gap-3">
+        {pageSlice(failures, pager.page, PAGE_SIZE).map((failure) => (
+          <AuditFailureItem
+            key={failure.work_item_id}
+            failure={failure}
+            now={now}
+          />
+        ))}
+      </ul>
+      <Pagination
+        page={pager.page}
+        total={failures.length}
+        size={PAGE_SIZE}
+        onPageChange={pager.change}
+        label="監査の失敗のページ送り"
+      />
+    </div>
   );
 }
 
@@ -137,22 +156,35 @@ function OrphanFailureItem({
 export function OrphanFailureList({
   failures,
   now,
+  initialPage,
 }: {
   failures: readonly SystemOrphanFailure[];
   now: number;
+  /** 最初に出すページ(0から数える)。省略すると先頭。 */
+  initialPage?: number | undefined;
 }) {
+  const pager = usePagination(failures.length, PAGE_SIZE, initialPage);
   if (failures.length === 0) {
     return <EmptyNote>作業項目に紐づかない失敗はありません</EmptyNote>;
   }
   return (
-    <ul className="flex flex-col gap-3">
-      {failures.map((failure) => (
-        <OrphanFailureItem
-          key={failure.job_failure_id}
-          failure={failure}
-          now={now}
-        />
-      ))}
-    </ul>
+    <div ref={pager.anchorRef} className="flex flex-col gap-3">
+      <ul className="flex flex-col gap-3">
+        {pageSlice(failures, pager.page, PAGE_SIZE).map((failure) => (
+          <OrphanFailureItem
+            key={failure.job_failure_id}
+            failure={failure}
+            now={now}
+          />
+        ))}
+      </ul>
+      <Pagination
+        page={pager.page}
+        total={failures.length}
+        size={PAGE_SIZE}
+        onPageChange={pager.change}
+        label="作業項目に紐づかない失敗のページ送り"
+      />
+    </div>
   );
 }
