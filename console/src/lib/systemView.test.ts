@@ -422,8 +422,18 @@ describe("auditFailureLimitNote", () => {
   });
 
   test("warns that older audit failures may be missing", () => {
-    expect(auditFailureLimitNote({ counts: 3, listed: 2 })).toBe(
-      "取得の上限を超えた失敗があるので、古い監査の失敗は表示していない場合があります。",
+    expect(auditFailureLimitNote({ counts: 3, listed: 2 })).toContain(
+      "古い監査の失敗は表示していない場合があります。",
     );
+  });
+
+  test("explains why the count in the inbox may be larger than this list", () => {
+    expect(auditFailureLimitNote({ counts: 3, listed: 2 })).toContain(
+      "要対応の「監査の失敗」の件数は、表示していない分も数えるので、この一覧より多いことがあります。",
+    );
+  });
+
+  test("gives no explanation about the count when the list is complete", () => {
+    expect(auditFailureLimitNote({ counts: 2, listed: 2 })).toBeNull();
   });
 });

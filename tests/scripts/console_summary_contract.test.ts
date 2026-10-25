@@ -6,6 +6,11 @@ import { describe, expect, test } from "bun:test";
 import { isConsoleSummary } from "../../console/src/api/guards/summary.ts";
 import { parseSelection } from "../../console/src/lib/inboxSelection.ts";
 import {
+  actionableCounts,
+  openAuditFailureCount,
+  unlistedCounts,
+} from "../../console/src/lib/inboxView.ts";
+import {
   approvalKindLabel,
   approvalStatusLabel,
   noticeKindLabel,
@@ -15,11 +20,13 @@ import {
   workItemStatusLabel,
 } from "../../console/src/lib/labels.ts";
 import { legacyDeepLinkTarget } from "../../console/src/lib/legacyDeepLink.ts";
+import { parsePipelineScope } from "../../console/src/lib/pipelineView.ts";
 import { parseAttemptParam } from "../../console/src/lib/requirementsView.ts";
 import {
   buildApprovalConsoleUrl,
   buildAuditConsoleUrl,
   buildConsoleUrl,
+  buildItemsConsoleUrl,
 } from "../../f/factory/lib/approval_support.ts";
 import { NOTICE_SEVERITY } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
@@ -96,7 +103,9 @@ const FAILURE_ROW: SqlRow = {
   step: "generate",
   error: "boom",
   occurred_at: new Date(T0),
+  superseded: false,
   total_count: 4,
+  audit_open_count: 0,
 };
 
 const FAILURE_WITHOUT_RECORD_ROW: SqlRow = {
@@ -154,6 +163,112 @@ describe("summary contract between console_query and the console guard", () => {
   });
 });
 
+/** 監査の失敗の行。`superseded`は、後の監査が報告を作ったときに真になる。 */
+function auditFailureRow(id: number, superseded: boolean): SqlRow {
+  return {
+    ...FAILURE_ROW,
+    work_item_id: id,
+    kind: "audit",
+    issue_number: null,
+    issue_url: null,
+    title: null,
+    superseded,
+  };
+}
+
+/** 監査の失敗2件(古い方は後の監査で解消済み)と、再実行できる失敗1件。DBが数えた件数を添える。 */
+async function mixedAuditSummary(): Promise<unknown> {
+  const open = { audit_open_count: 1, total_count: 3 };
+  return summaryAsDelivered([
+    [],
+    [
+      { ...auditFailureRow(30, false), ...open },
+      { ...auditFailureRow(20, true), ...open },
+      { ...FAILURE_ROW, ...open },
+    ],
+    [],
+  ]);
+}
+
+describe("audit failures that a later audit resolved", () => {
+  test("pass the console guard", async () => {
+    expect(isConsoleSummary(await mixedAuditSummary())).toBe(true);
+  });
+
+  test("stay in the delivered list", async () => {
+    const delivered = await mixedAuditSummary();
+    expect(isConsoleSummary(delivered) ? delivered.failures.length : 0).toBe(3);
+  });
+
+  test("carry the flag that the console reads", async () => {
+    const delivered = await mixedAuditSummary();
+    expect(
+      isConsoleSummary(delivered)
+        ? delivered.failures.map((failure) => failure.superseded)
+        : [],
+    ).toEqual([false, true, false]);
+  });
+
+  test("leave the count of the unresolved audit failures to the database", async () => {
+    const delivered = await mixedAuditSummary();
+    expect(
+      isConsoleSummary(delivered) ? openAuditFailureCount(delivered) : -1,
+    ).toBe(1);
+  });
+
+  test("still count in the failures that the badge leaves out", async () => {
+    const delivered = await mixedAuditSummary();
+    expect(
+      isConsoleSummary(delivered) ? actionableCounts(delivered).failures : -1,
+    ).toBe(1);
+  });
+
+  test("leave only the unresolved ones in the audit card of the inbox", async () => {
+    const delivered = await mixedAuditSummary();
+    const cards = isConsoleSummary(delivered)
+      ? unlistedCounts(
+          delivered.counts,
+          [],
+          delivered.failures.filter((failure) => failure.kind === "audit")
+            .length,
+          openAuditFailureCount(delivered),
+        )
+      : [];
+    expect(cards.find((card) => card.cause === "audit")?.count).toBe(1);
+  });
+
+  test("are not carried by a summary from an older backend", async () => {
+    const delivered = await mixedAuditSummary();
+    const older = JSON.parse(
+      JSON.stringify(delivered, (key, value) =>
+        key === "superseded" || key === "audit_failures_open"
+          ? undefined
+          : value,
+      ),
+    );
+    expect(isConsoleSummary(older)).toBe(true);
+  });
+
+  test("count every audit failure as open for an older backend", async () => {
+    const delivered = await mixedAuditSummary();
+    const older = JSON.parse(
+      JSON.stringify(delivered, (key, value) =>
+        key === "superseded" || key === "audit_failures_open"
+          ? undefined
+          : value,
+      ),
+    );
+    expect(isConsoleSummary(older) ? openAuditFailureCount(older) : -1).toBe(2);
+  });
+
+  test("count a delivered number, which the guard demands to be an integer", async () => {
+    const delivered = await mixedAuditSummary();
+    expect(
+      isConsoleSummary(delivered) ? delivered.counts.audit_failures_open : null,
+    ).toBe(1);
+  });
+});
+
 describe("timestamps in the delivered summary", () => {
   test("carry a UTC offset so that the browser reads them as absolute times", async () => {
     const delivered = await summaryAsDelivered([[APPROVAL_ROW], [], []]);
@@ -169,6 +284,13 @@ describe("console links built by the approval flow", () => {
       buildApprovalConsoleUrl(CONSOLE_PUBLIC_URL, 9),
     );
     expect(parseSelection(searchParams)).toEqual({ type: "approval", id: 9 });
+  });
+
+  test("the work items link carries the scope that the screen reads", () => {
+    const { searchParams } = new URL(
+      buildItemsConsoleUrl(CONSOLE_PUBLIC_URL, { scope: "all" }),
+    );
+    expect(parsePipelineScope(searchParams.get("scope"))).toBe("all");
   });
 
   test("the requirements link carries the attempt that the screen reads", () => {

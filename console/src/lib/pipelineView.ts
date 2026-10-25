@@ -14,7 +14,7 @@ import { safeGitHubUrl } from "./safeUrl.ts";
  * 状態を作業の進む順に並べた一覧。選択肢と並び替えの順になる。
  * ここに無い状態(backendが先に足した新しい値)は、既知の状態の後ろに回す。
  */
-const STATUS_ORDER: readonly string[] = [
+export const STATUS_ORDER: readonly string[] = [
   "picked",
   "requirements_generating",
   "awaiting_approval",
@@ -65,7 +65,12 @@ export function repoOptions(rows: readonly PipelineRow[]): string[] {
   return Array.from(new Set(rows.map(repoName))).sort();
 }
 
+/** 表に出す範囲。状態の絞り込みとは別の欄で持つ。 */
+export type PipelineScope = "active" | "pr_open" | "all";
+
 export type PipelineFilter = {
+  /** 表に出す範囲。 */
+  readonly scope: PipelineScope;
   /** 選んだ状態。`null`はすべて。 */
   readonly status: string | null;
   /** 選んだリポジトリ(`owner/repo`)。`null`はすべて。 */
@@ -75,6 +80,7 @@ export type PipelineFilter = {
 };
 
 export const EMPTY_PIPELINE_FILTER: PipelineFilter = {
+  scope: "active",
   status: null,
   repo: null,
   text: "",
@@ -104,6 +110,8 @@ export function pipelineStatusLabel(status: string): string {
  * 選択肢から消えた状態とリポジトリの選択を、「すべて」に戻した絞り込みを返す。
  * 再読み込みで行が入れ替わると、選んでいた値が表から消えうる。
  * そのまま残すと、選択肢の表示は「すべて」なのに絞り込みだけが効き続け、行が出ない理由が見えなくなる。
+ * 状態の選択肢は範囲の中の行から作るので、状態は範囲の中の行で照合する。リポジトリは全行で照合する。
+ * 範囲は照合せず、そのまま引き継ぐ。
  * 戻すものが無ければ、渡された絞り込みをそのまま返す。検索の文字列は変えない。
  */
 export function reconcilePipelineFilter(
@@ -111,15 +119,186 @@ export function reconcilePipelineFilter(
   rows: readonly PipelineRow[],
 ): PipelineFilter {
   const statusGone =
-    filter.status !== null && !rows.some((row) => row.status === filter.status);
+    filter.status !== null &&
+    !rowsInScope(rows, filter.scope).some(
+      (row) => row.status === filter.status,
+    );
   const repoGone =
     filter.repo !== null && !rows.some((row) => repoName(row) === filter.repo);
   if (!statusGone && !repoGone) return filter;
   return {
+    scope: filter.scope,
     status: statusGone ? null : filter.status,
     repo: repoGone ? null : filter.repo,
     text: filter.text,
   };
+}
+
+/**
+ * 終端の状態。backendの`TERMINAL_WORK_ITEM_STATUSES`と同じ内容で、契約テストが一致を確かめる。
+ * 終端でも、`blocked`だけは要対応に載らないので、進行中の範囲に含める(`isActiveStatus`)。
+ */
+export const TERMINAL_PIPELINE_STATUSES: readonly string[] = [
+  "approved",
+  "rejected",
+  "needs_human",
+  "failed",
+  "expired",
+  "cancelled",
+  "reviewed",
+  "rereview_requested",
+  "blocked",
+  "audited",
+  "pr_open",
+];
+
+/** 範囲の切り替えに並べる選択肢。 */
+export const PIPELINE_SCOPES: readonly {
+  readonly id: PipelineScope;
+  readonly label: string;
+}[] = [
+  { id: "active", label: "進行中" },
+  { id: "pr_open", label: "PR待ち" },
+  { id: "all", label: "すべて" },
+];
+
+/**
+ * 進行中の範囲に入る状態か。終端でない状態と、`blocked`と`approved`が入る。
+ * 失敗、人の対応待ち、期限切れは要対応の画面にあるので入れない。
+ * `blocked`は要対応に載らないので、ここで見えるようにする。
+ * `approved`は、実装を有効にしていない間、承認された要件定義が次の工程へ進まずに残る状態で、
+ * 要対応にもPR待ちにも出ないので、ここで見えるようにする。
+ * backendが先に足した知らない状態は、終端でないものとして入れる。
+ */
+export function isActiveStatus(status: string): boolean {
+  return (
+    status === "blocked" ||
+    status === "approved" ||
+    !TERMINAL_PIPELINE_STATUSES.includes(status)
+  );
+}
+
+/** `status`が`scope`の範囲に入るか。 */
+function statusInScope(status: string, scope: PipelineScope): boolean {
+  switch (scope) {
+    case "active":
+      return isActiveStatus(status);
+    case "pr_open":
+      return status === "pr_open";
+    case "all":
+      return true;
+  }
+}
+
+/**
+ * `scope`の範囲に入る行を、元の順序のまま返す。
+ * PR待ちの範囲は、マージ待ちの目安である。一覧の行にマージ済みかどうかの情報は無い。
+ */
+export function rowsInScope(
+  rows: readonly PipelineRow[],
+  scope: PipelineScope,
+): PipelineRow[] {
+  return rows.filter((row) => statusInScope(row.status, scope));
+}
+
+/**
+ * 状態・リポジトリ・検索を消した絞り込みを返す。範囲は変えない。
+ * 範囲は絞り込みの条件でなく表の見方なので、条件を消しても戻さない。
+ */
+export function clearPipelineFilter(filter: PipelineFilter): PipelineFilter {
+  return { ...EMPTY_PIPELINE_FILTER, scope: filter.scope };
+}
+
+/**
+ * 状態を選んだ絞り込みを返す。
+ * 選んだ状態が今の範囲の外なら、範囲を「すべて」にする。範囲の外の状態で絞ると、行が出ないためである。
+ */
+export function selectPipelineStatus(
+  filter: PipelineFilter,
+  status: string | null,
+): PipelineFilter {
+  const leavesScope = status !== null && !statusInScope(status, filter.scope);
+  return {
+    ...filter,
+    status,
+    scope: leavesScope ? "all" : filter.scope,
+  };
+}
+
+/** リポジトリが2つ以上あるときだけ、リポジトリの欄と絞り込みを出す。1つなら同じ名前の繰り返しになる。 */
+export function showsRepository(rows: readonly PipelineRow[]): boolean {
+  return repoOptions(rows).length > 1;
+}
+
+/** 範囲に行が無いときの文。 */
+export function scopeEmptyMessage(scope: PipelineScope): string {
+  switch (scope) {
+    case "active":
+      return "進行中の作業項目はありません";
+    case "pr_open":
+      return "PR待ちの作業項目はありません";
+    case "all":
+      return "作業項目はまだありません";
+  }
+}
+
+/** 進捗から要対応へ案内する文。件数はsummaryから取り、分からないときは添えない。 */
+export function actionableNote(count: number | null): string {
+  const base = "対応が必要なものは『要対応』にあります";
+  return count === null ? base : `${base}(${count}件)`;
+}
+
+/** PR待ちの範囲の注記。一覧の行にマージ済みかどうかの情報が無いための断りである。 */
+export const PR_OPEN_NOTE =
+  "状態がPR作成済みのものです。マージ済みかどうかは一覧から分からないので、マージ待ちの目安です。";
+
+/** URLのクエリのうち、範囲を持つ名前。 */
+const SCOPE_PARAM = "scope";
+
+/** URLの`?scope=`から範囲を決める。無い値と知らない値は進行中にする。 */
+export function parsePipelineScope(value: string | null): PipelineScope {
+  return PIPELINE_SCOPES.find((scope) => scope.id === value)?.id ?? "active";
+}
+
+/**
+ * 範囲を選んだ後のクエリを、新しいオブジェクトで返す。他のクエリは残す。
+ * 既定の進行中は名前を消す。名前の無いURLと同じ画面になるためである。
+ */
+export function withPipelineScope(
+  current: URLSearchParams,
+  scope: PipelineScope,
+): URLSearchParams {
+  const next = new URLSearchParams(current);
+  if (scope === "active") {
+    next.delete(SCOPE_PARAM);
+  } else {
+    next.set(SCOPE_PARAM, scope);
+  }
+  return next;
+}
+
+/**
+ * 範囲の外にあり、状態・リポジトリ・検索の条件に当たる行の数。範囲が「すべて」なら0。
+ * 範囲の中で0件になったとき、範囲を広げれば見つかるかを伝えるために使う。
+ */
+export function outOfScopeMatchCount(
+  rows: readonly PipelineRow[],
+  filter: PipelineFilter,
+): number {
+  if (filter.scope === "all") return 0;
+  const hidden = rows.filter((row) => !statusInScope(row.status, filter.scope));
+  return filterPipelineRows(hidden, filter).length;
+}
+
+/**
+ * 表が実際に使う並び。リポジトリの列が無いときに、リポジトリで並べた状態を既定の並びに戻す。
+ * 列が無いと見出しを押せず、並びを戻す手段が見えないためである。
+ */
+export function effectivePipelineSort(
+  sort: PipelineSort,
+  showRepo: boolean,
+): PipelineSort {
+  return !showRepo && sort.key === "repo" ? DEFAULT_PIPELINE_SORT : sort;
 }
 
 /**
@@ -325,6 +504,32 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
   return row.kind === "issue";
 }
 
+/** 取得した件数が上限に達したか。達したときは、古い行を取得できていない場合がある。 */
+export function pipelineReachedLimit(count: number, limit: number): boolean {
+  return count >= limit;
+}
+
+/**
+ * 範囲の中に行が無いときに、空の文へ添える注記。
+ * 取得は新しい順に上限まで読み、範囲で絞るのはその後なので、上限に達していると、
+ * 取得できなかった古い行に、範囲の中の行があるかもしれない。
+ * 「すべて」の範囲は絞らないので、注記は無い。
+ */
+export function scopeEmptyNote(
+  scope: PipelineScope,
+  limitReached: boolean,
+): string | null {
+  if (!limitReached) return null;
+  switch (scope) {
+    case "active":
+      return "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。";
+    case "pr_open":
+      return "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。";
+    case "all":
+      return null;
+  }
+}
+
 /**
  * 表が見ている範囲の注記。
  * 取得の上限に達したときは、古い行が漏れているかもしれないので、件数の上限も添える。
@@ -334,7 +539,7 @@ export function pipelineScopeNote(
   limit: number,
   days: number,
 ): string {
-  return count >= limit
+  return pipelineReachedLimit(count, limit)
     ? `直近${days}日に更新された作業項目を、新しい順に${limit}件まで取得しています。`
     : `直近${days}日に更新された作業項目を表示しています。`;
 }

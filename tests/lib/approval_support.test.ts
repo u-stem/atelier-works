@@ -161,6 +161,12 @@ describe("buildItemsConsoleUrl", () => {
       "http://127.0.0.1:8080/console/items",
     );
   });
+
+  test("can open the whole list, which includes the finished work items", () => {
+    expect(
+      buildItemsConsoleUrl("http://127.0.0.1:8080", { scope: "all" }),
+    ).toBe("http://127.0.0.1:8080/console/items?scope=all");
+  });
 });
 
 describe("buildSystemConsoleUrl", () => {

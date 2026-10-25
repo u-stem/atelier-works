@@ -62,6 +62,11 @@ export type SummaryFailure = {
   readonly step: string | null;
   readonly error: string | null;
   readonly occurred_at: string | null;
+  /**
+   * 後の監査が報告を作り、この失敗の期間を扱った監査の失敗か。
+   * 古いbackendは送らないので、欠けたときは偽として扱う。
+   */
+  readonly superseded?: boolean;
 };
 
 /** 要対応の通知の1行。 */
@@ -79,6 +84,11 @@ export type SummaryCounts = {
   readonly approvals: number;
   readonly failures: number;
   readonly notices: number;
+  /**
+   * 後の監査で報告済みになっていない監査の失敗の件数。
+   * 古いbackendは送らないので、欠けたときは監査の失敗の全件として扱う。
+   */
+  readonly audit_failures_open?: number;
 };
 
 /** "summary"ビューの結果。件数は、一覧の上限を超えた分も数えている。 */
@@ -112,6 +122,22 @@ function isSummaryApproval(value: unknown): value is SummaryApproval {
   );
 }
 
+/** 項目が無いか、あれば真偽値か。古いbackendが送らない項目を受け入れるために使う。 */
+function isOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in record) || isBoolean(record[key]);
+}
+
+/** 項目が無いか、あれば0以上の整数か。古いbackendが送らない項目を受け入れるために使う。 */
+function isOptionalCount(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in record) || isNonNegativeInteger(record[key]);
+}
+
 function isSummaryFailure(value: unknown): value is SummaryFailure {
   return (
     isRecord(value) &&
@@ -132,7 +158,8 @@ function isSummaryFailure(value: unknown): value is SummaryFailure {
     isNullableString(value.job_id) &&
     isNullableString(value.step) &&
     isNullableString(value.error) &&
-    isNullableIsoTimestamp(value.occurred_at)
+    isNullableIsoTimestamp(value.occurred_at) &&
+    isOptionalBoolean(value, "superseded")
   );
 }
 
@@ -154,7 +181,8 @@ function isSummaryCounts(value: unknown): value is SummaryCounts {
     isRecord(value) &&
     isNonNegativeInteger(value.approvals) &&
     isNonNegativeInteger(value.failures) &&
-    isNonNegativeInteger(value.notices)
+    isNonNegativeInteger(value.notices) &&
+    isOptionalCount(value, "audit_failures_open")
   );
 }
 

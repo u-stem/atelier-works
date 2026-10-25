@@ -101,10 +101,29 @@ export function auditFailureCount(summary: ConsoleSummary): number {
  */
 export function actionableCounts(summary: ConsoleSummary): SummaryCounts {
   return {
-    ...summary.counts,
+    approvals: summary.counts.approvals,
     failures: Math.max(0, summary.counts.failures - auditFailureCount(summary)),
+    notices: summary.counts.notices,
   };
 }
+
+/**
+ * 後の監査で報告済みになっていない監査の失敗の数。要対応の「監査の失敗」のカードに出す。
+ * 古いbackendは件数を送らないので、そのときは監査の失敗の全件を返す。
+ * 再実行できる失敗の数を求める引き算(`actionableCounts`)には使わない。報告済みの監査も失敗の件数に含まれるためである。
+ */
+export function openAuditFailureCount(summary: ConsoleSummary): number {
+  return summary.counts.audit_failures_open ?? auditFailureCount(summary);
+}
+
+/** バッジの合計。要対応の入口に出す件数と同じ。 */
+export function actionableTotal(summary: ConsoleSummary): number {
+  const counts = actionableCounts(summary);
+  return counts.approvals + counts.failures + counts.notices;
+}
+
+/** 要対応の画面のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
+export const INBOX_PATH = "/";
 
 export function selectionOf(item: InboxItem): InboxSelection {
   return { type: item.type, id: itemId(item) };
@@ -652,11 +671,14 @@ export function unlistedPath(entry: UnlistedCount): string | null {
  * 一覧に出ていない要対応の件数を、種類ごとに返す。無ければ空の配列。
  * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
  * 承認、失敗、通知とも、一覧にない分は取得の上限を超えた分である(監査の失敗は別に数える)。
+ * `auditFailures`は監査の失敗の全件で、再実行できる失敗の件数から引く。
+ * `auditFailuresOpen`は後の監査で報告済みになっていないもので、監査のカードに出す。省略すると全件と同じにする。
  */
 export function unlistedCounts(
   counts: SummaryCounts,
   items: readonly InboxItem[],
   auditFailures = 0,
+  auditFailuresOpen: number = auditFailures,
 ): UnlistedCount[] {
   const listed = chipCounts(items);
   const entries: UnlistedCount[] = [
@@ -673,7 +695,7 @@ export function unlistedCounts(
     {
       type: "failure",
       label: "監査の失敗",
-      count: auditFailures,
+      count: auditFailuresOpen,
       cause: "audit",
     },
     {

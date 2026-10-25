@@ -22,11 +22,18 @@ const ROW: PipelineRow = {
   updated_at: "2026-10-11T00:00:00.000Z",
 };
 
-function render(rows: readonly PipelineRow[] = [ROW]): string {
+function render(
+  rows: readonly PipelineRow[] = [ROW],
+  showRepository?: boolean,
+): string {
   return renderToStaticMarkup(
     <MemoryRouter>
       <TooltipProvider>
-        <PipelineCards rows={rows} now={Date.parse("2026-10-11T01:00:00Z")} />
+        <PipelineCards
+          rows={rows}
+          now={Date.parse("2026-10-11T01:00:00Z")}
+          showRepository={showRepository}
+        />
       </TooltipProvider>
     </MemoryRouter>,
   );
@@ -43,6 +50,16 @@ describe("PipelineCards", () => {
 
   test("shows the repository", () => {
     expect(render()).toContain("acme/widgets");
+  });
+
+  test("hides the repository when asked to", () => {
+    expect(render([{ ...ROW, owner: "zowner" }], false)).not.toContain(
+      "zowner",
+    );
+  });
+
+  test("hides the repository label when asked to", () => {
+    expect(render([ROW], false)).not.toContain("リポジトリ");
   });
 
   test("links to the pull request", () => {

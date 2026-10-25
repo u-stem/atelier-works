@@ -1,16 +1,18 @@
-import { ArrowLeft, FileQuestion } from "lucide-react";
+import { FileQuestion } from "lucide-react";
 import { useMemo } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 import { useRequirementsDoc, useRequirementsIndex } from "../../api/queries.ts";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
   LoadingBody,
   type LoadingShape,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import { itemRequirementsCrumbs } from "../../lib/breadcrumbs.ts";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
 import {
   confirmedLatestAttempt,
@@ -21,18 +23,6 @@ import { parseIdParam } from "../../lib/routeParams.ts";
 import { SCROLL_ROOT_PROPS } from "../../lib/scrollRoot.ts";
 import { QueryFailure } from "./QueryFailure.tsx";
 import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
-
-function BackLink() {
-  return (
-    <Link
-      to="/items"
-      className="mt-1 inline-flex items-center gap-1 rounded-sm text-small text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <ArrowLeft aria-hidden="true" className="size-3.5" />
-      作業項目の一覧
-    </Link>
-  );
-}
 
 function Message({ children }: { children: string }) {
   return (
@@ -83,7 +73,7 @@ function ItemRequirements({
     return (
       <>
         <PageHeader title={requested} refresh={refresh}>
-          <BackLink />
+          <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
           <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
@@ -102,7 +92,7 @@ function ItemRequirements({
     return (
       <>
         <PageHeader title={requested} refresh={refresh}>
-          <BackLink />
+          <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
         <Message>{`${requested}は見つかりませんでした。`}</Message>
       </>
@@ -121,7 +111,7 @@ function ItemRequirements({
         subtitle={`${workItemRef(doc.work_item_id)}・${attemptRef(doc.attempt)}`}
         refresh={refresh}
       >
-        <BackLink />
+        <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
       </PageHeader>
       <div {...SCROLL_ROOT_PROPS} className="min-h-0 flex-1 overflow-y-auto">
         <RequirementsDocumentView
@@ -147,7 +137,7 @@ export function ItemRequirementsScreen() {
     return (
       <>
         <PageHeader title="要件定義">
-          <BackLink />
+          <Breadcrumb items={itemRequirementsCrumbs(null)} />
         </PageHeader>
         <Message>作業項目の番号が正しくありません。</Message>
       </>
@@ -157,7 +147,7 @@ export function ItemRequirementsScreen() {
     return (
       <>
         <PageHeader title="要件定義">
-          <BackLink />
+          <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
         <Message>試行の番号が正しくありません。</Message>
       </>

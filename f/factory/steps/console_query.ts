@@ -1132,6 +1132,19 @@ export type SummaryFailureRow = {
   readonly step: string | null;
   readonly error: string | null;
   readonly occurred_at: string | null;
+  /**
+   * 監査の失敗で、後の監査で報告済みなら真。
+   * 後の監査は`id`が大きい監査で、報告(`audit_reports`)を持つもの。
+   * 報告済みとは、その報告の開始が、失敗した監査より前の報告の終わりの最大値以前であること。
+   * 前の報告が無いとき(初回と、保持期間の削除で前の報告が消えた後)は、後の監査があれば真にする。
+   * 次の監査は前回の報告の終わりから始まるが、報告を作らずに失敗が続くと、
+   * `max_lookback_days`で始まりが切り詰められ、報告の開始が前の報告の終わりより後になる。そのときは偽で、
+   * 作業項目が保持期間で消えるまで要対応に残る。
+   * 報告を保存した後に失敗した監査は、自分の報告があっても、後の報告の開始が前の報告の終わりより後なら偽になる。
+   * 失敗した監査自身の期間は記録が無い(監査の作業項目に期間の列が無い)ので、前の報告の終わりから導く。
+   * 監査以外の行は常に偽。
+   */
+  readonly superseded: boolean;
 };
 
 function toSummaryFailureRow(row: SqlRow): SummaryFailureRow {
@@ -1157,6 +1170,7 @@ function toSummaryFailureRow(row: SqlRow): SummaryFailureRow {
     step: asNullableStr(row.step, "step"),
     error: asNullableStr(row.error, "error"),
     occurred_at: asNullableIsoDate(row.occurred_at, "occurred_at"),
+    superseded: asBool(row.superseded, "superseded"),
   };
 }
 
@@ -1164,6 +1178,12 @@ export type ConsoleSummaryCounts = {
   readonly approvals: number;
   readonly failures: number;
   readonly notices: number;
+  /**
+   * `failures`のうち、後の監査で報告済みになっていない監査の失敗の件数。
+   * 要対応の「監査の失敗」のカードはこの件数を出す。
+   * 再実行できる失敗の件数を求める引き算には使わない(その引き算は監査の全件を引く)。
+   */
+  readonly audit_failures_open: number;
 };
 
 /**
@@ -1192,6 +1212,8 @@ function totalCount(rows: readonly SqlRow[]): number {
  *   同じIssueに新しいcycleがある作業項目は、そのcycleが引き継ぐので除く。
  *   PRのレビューと修正は、ラベルの付け直しで同じPRに新しい行(cycleは1から)ができるので、
  *   同じ種類・リポジトリ・PR番号で`id`が大きい行がある作業項目を除く。
+ *   監査の失敗は一覧から除かず、後の監査で報告済みのものに`superseded`の印を付ける。
+ *   `audit_failures_open`は印が偽の件数である。
  * - 通知: 未解決で、重要度が`action`のもの。
  *
  * `error`、`message`、状態の注記は`SUMMARY_TEXT_LIMIT`字に切り詰める。
@@ -1223,8 +1245,22 @@ export async function runConsoleSummary(
       jf.id AS job_failure_id, jf.flow_path, jf.job_id, jf.step,
       left(jf.error, ${SUMMARY_TEXT_LIMIT}::integer) AS error,
       jf.occurred_at,
-      count(*) OVER () AS total_count
+      sup.superseded,
+      count(*) OVER () AS total_count,
+      count(*) FILTER (WHERE wi.kind = 'audit' AND NOT sup.superseded) OVER () AS audit_open_count
     FROM factory.work_items wi
+    LEFT JOIN LATERAL (
+      SELECT wi.kind = 'audit' AND EXISTS (
+        SELECT 1
+        FROM factory.work_items n
+        JOIN factory.audit_reports ar ON ar.work_item_id = n.id
+        WHERE n.kind = 'audit' AND n.id > wi.id
+          AND ar.period_start <= coalesce(
+            (SELECT max(pr.period_end) FROM factory.work_items p JOIN factory.audit_reports pr ON pr.work_item_id = p.id WHERE p.kind = 'audit' AND p.id < wi.id),
+            'infinity'::timestamptz
+          )
+      ) AS superseded
+    ) sup ON true
     LEFT JOIN LATERAL (
       SELECT e.note, e.occurred_at
       FROM factory.work_item_events e
@@ -1277,6 +1313,10 @@ export async function runConsoleSummary(
       approvals: totalCount(approvalRows),
       failures: totalCount(failureRows),
       notices: totalCount(noticeRows),
+      audit_failures_open:
+        failureRows[0] === undefined
+          ? 0
+          : asNumeric(failureRows[0].audit_open_count, "audit_open_count"),
     },
     approvals: approvalRows.map(toSummaryApprovalRow),
     failures: failureRows.map(toSummaryFailureRow),

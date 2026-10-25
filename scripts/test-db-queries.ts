@@ -392,6 +392,153 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// summary: 後の監査に解消された監査の失敗
+// ---------------------------------------------------------------------------
+//
+// 失敗した監査は、`id`が大きい後の監査が報告を持ち、その報告の開始が、失敗した監査より前の報告の終わり以前なら、
+// 期間の先頭を後の報告が覆う(`superseded`)。前の報告が無い(初回)ときは常に覆う。
+// 報告を作らずに失敗が続くと、`max_lookback_days`の切り詰めで、後の報告の開始が前の報告の終わりより後になる。
+// 時刻は、現在からの日数の差で入れる(負が過去)。報告の期間は`period_start < period_end`を満たす。
+
+async function auditItem(
+  tag: string,
+  status: string,
+  source: "schedule" | "manual",
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const rows = await sql`
+    INSERT INTO factory.work_items (kind, source, owner, repo, status, cycle, attempt, title)
+    VALUES ('audit', ${source}, ${owner}, ${repo}, ${status}, 1, 1, ${`qdb-audit-${tag}`})
+    RETURNING id
+  `.fetch();
+  const id = rows[0]?.id;
+  if (typeof id !== "number") {
+    throw new Error(`audit work item ${tag} was not inserted: ${String(id)}`);
+  }
+  return id;
+}
+
+function auditReport(
+  workItemId: number,
+  startDaysAgo: number,
+  endDaysAgo: number,
+): void {
+  execPsql(
+    target,
+    `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
+     VALUES (${String(workItemId)}, now() - interval '${String(startDaysAgo)} days', now() - interval '${String(endDaysAgo)} days', 's', 'm')`,
+  );
+}
+
+// 初回: 前の報告が無いので、後に報告のある監査(a3)がある失敗は覆われる。定期の失敗(a1)も手動の失敗(a2)も同じ。
+const a1 = await auditItem("a1", "failed", "schedule", OWNER, "r");
+const a2 = await auditItem("a2", "failed", "manual", OWNER, "r");
+const a3 = await auditItem("a3", "audited", "schedule", OWNER, "r");
+auditReport(a3, 14, 7);
+// 前の報告(a3、終わりは7日前)につながる後の報告(a6、開始は7日前)がある失敗は覆われる。
+// 後の報告は、別のowner/repoの手動の監査でもよい。
+const a4 = await auditItem("a4", "failed", "schedule", OWNER, "r");
+const a5 = await auditItem("a5", "failed", "schedule", OWNER, "r");
+const a6 = await auditItem("a6", "awaiting_approval", "manual", "qdb2", "r2");
+// 後の報告の開始は、前の報告の終わりと同じ時刻にする(実際の期間の計算も、前の終わりをそのまま始まりにする)。
+execPsql(
+  target,
+  `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
+   VALUES (${String(a6)}, (SELECT period_end FROM factory.audit_reports WHERE work_item_id = ${String(a3)}), now() - interval '1 day', 's', 'm')`,
+);
+// 前の報告の終わりが2つある(a3の7日前とa6の1日前)失敗(a6b)は、前の報告の終わりの最大値(1日前)で比べる。
+// 後の報告(a6c)の開始は3日前で、2つの終わりの間にある。最大値(1日前)以前なので覆われる。最小値(7日前)で比べると偽になる。
+const a6b = await auditItem("a6b", "failed", "schedule", OWNER, "r");
+const a6c = await auditItem("a6c", "audited", "schedule", OWNER, "r");
+auditReport(a6c, 3, 1);
+// 切り詰め: 前の報告(a6、終わりは1日前)より後に報告の開始がある(a8、開始は半日前)と、a7の期間の先頭は覆われない。
+const a7 = await auditItem("a7", "failed", "schedule", OWNER, "r");
+const a8 = await auditItem("a8", "audited", "schedule", OWNER, "r");
+execPsql(
+  target,
+  `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
+   VALUES (${String(a8)}, now() - interval '12 hours', now(), 's', 'm')`,
+);
+// 後の監査が無い失敗(a9)と、後の監査が失敗だけの失敗(a10)は覆われない。
+const a9 = await auditItem("a9", "failed", "schedule", OWNER, "r");
+const a10 = await auditItem("a10", "failed", "schedule", OWNER, "r");
+const a11 = await auditItem("a11", "failed", "schedule", OWNER, "r");
+
+const auditSummary = await runConsoleSummary(500, sql);
+function supersededOf(id: number): boolean | undefined {
+  return auditSummary.failures.find((row) => row.work_item_id === id)
+    ?.superseded;
+}
+check(
+  "audit: an initial failure is covered by a later report",
+  supersededOf(a1) === true,
+  supersededOf(a1),
+);
+check(
+  "audit: a manual failure is covered the same way",
+  supersededOf(a2) === true,
+  supersededOf(a2),
+);
+check(
+  "audit: a failure is covered by a report that continues the previous one, even of another repository and a manual run",
+  supersededOf(a4) === true && supersededOf(a5) === true,
+  [supersededOf(a4), supersededOf(a5)],
+);
+check(
+  "audit: a failure is compared with the latest of the previous report ends, not the earliest",
+  supersededOf(a6b) === true,
+  supersededOf(a6b),
+);
+check(
+  "audit: a failure stays open when the later report starts after the previous report ended",
+  supersededOf(a7) === false,
+  supersededOf(a7),
+);
+check(
+  "audit: a failure without a later audit stays open",
+  supersededOf(a11) === false,
+  supersededOf(a11),
+);
+check(
+  "audit: a failure followed only by a failure stays open",
+  supersededOf(a9) === false && supersededOf(a10) === false,
+  [supersededOf(a9), supersededOf(a10)],
+);
+check(
+  "audit: the audits that have a report are not failures of the list",
+  [a3, a6, a6c, a8].every((id) => supersededOf(id) === undefined),
+);
+check(
+  "audit: the open count is the failures that are not covered",
+  auditSummary.counts.audit_failures_open === 4,
+  auditSummary.counts,
+);
+check(
+  "audit: the covered failures stay in the list",
+  [a1, a2, a4, a5, a6b].every((id) => supersededOf(id) !== undefined),
+);
+const auditNarrow = await runConsoleSummary(2, sql);
+check(
+  "audit: the open count is not cut by the limit",
+  auditNarrow.counts.audit_failures_open === 4 &&
+    auditNarrow.failures.length === 2,
+  auditNarrow.counts,
+);
+check(
+  "audit: the failure count includes every audit failure, covered or not",
+  auditSummary.counts.failures -
+    auditSummary.failures.filter((row) => row.kind !== "audit").length ===
+    9,
+  auditSummary.counts,
+);
+// 後の検査が監査の行を数えないよう、この場面の行を消す(報告は連鎖して消える)。
+execPsql(
+  target,
+  `DELETE FROM factory.work_items WHERE kind = 'audit' AND title LIKE 'qdb-audit-%'`,
+);
+
+// ---------------------------------------------------------------------------
 // system_status
 // ---------------------------------------------------------------------------
 

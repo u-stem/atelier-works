@@ -72,7 +72,9 @@ const FAILURE_ROW: SqlRow = {
   step: "generate",
   error: "boom",
   occurred_at: T0,
+  superseded: false,
   total_count: 4,
+  audit_open_count: 0,
 };
 
 const NOTICE_ROW: SqlRow = {
@@ -83,6 +85,15 @@ const NOTICE_ROW: SqlRow = {
   created_at: T0,
   total_count: 3,
 };
+
+/** 失敗の問い合わせから、解消済みかを決める副問い合わせを取り出す。 */
+function supersededProbe(text: string): string {
+  return (
+    /LEFT JOIN LATERAL \(\s*SELECT wi\.kind = 'audit'[\s\S]*?\) sup ON true/
+      .exec(text)?.[0]
+      .replace(/\s+/g, " ") ?? ""
+  );
+}
 
 describe("runConsoleSummary queries", () => {
   test("runs one query each for approvals, failures and notices", async () => {
@@ -190,6 +201,99 @@ describe("runConsoleSummary queries", () => {
     expect(calls[1]?.text).toContain("left(jf.error,");
   });
 
+  test("takes the supersession from a later audit that has a report", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "JOIN factory.audit_reports ar ON ar.work_item_id = n.id",
+    );
+  });
+
+  test("compares the audits by id, the later one being larger", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "n.kind = 'audit' AND n.id > wi.id",
+    );
+  });
+
+  test("does not compare the repository of the audits", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).not.toMatch(
+      /n\.(owner|repo)/,
+    );
+  });
+
+  test("does not tell a manual audit from a scheduled one", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).not.toContain("source");
+  });
+
+  test("does not look at the status of the later audit", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).not.toContain("status");
+  });
+
+  test("only audit rows can be superseded", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "SELECT wi.kind = 'audit' AND EXISTS",
+    );
+  });
+
+  test("takes the end of the previous report from the audits before the failed one", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "SELECT max(pr.period_end) FROM factory.work_items p JOIN factory.audit_reports pr ON pr.work_item_id = p.id WHERE p.kind = 'audit' AND p.id < wi.id",
+    );
+  });
+
+  test("requires the later report to start no later than the previous report ends", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "ar.period_start <= coalesce(",
+    );
+  });
+
+  test("treats a missing previous report as covered", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).toContain(
+      "'infinity'::timestamptz",
+    );
+  });
+
+  test("does not compare the repository of the previous report either", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(supersededProbe(calls[1]?.text ?? "")).not.toMatch(
+      /\b(p|pr)\.(owner|repo)/,
+    );
+  });
+
+  test("keeps the superseded rows in the list", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    const where = (calls[1]?.text ?? "").slice(
+      (calls[1]?.text ?? "").indexOf("WHERE wi.status"),
+    );
+    expect(where).not.toContain("superseded");
+  });
+
+  test("counts the audit failures that are not superseded in the same window", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect((calls[1]?.text ?? "").replace(/\s+/g, " ")).toContain(
+      "count(*) FILTER (WHERE wi.kind = 'audit' AND NOT sup.superseded) OVER () AS audit_open_count",
+    );
+  });
+
   test("selects only unresolved notices", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);
@@ -227,13 +331,23 @@ describe("runConsoleSummary result", () => {
       [NOTICE_ROW],
     ]);
     const summary = await runConsoleSummary(200, sql);
-    expect(summary.counts).toEqual({ approvals: 5, failures: 4, notices: 3 });
+    expect(summary.counts).toEqual({
+      approvals: 5,
+      failures: 4,
+      notices: 3,
+      audit_failures_open: 0,
+    });
   });
 
   test("returns zero counts for empty lists", async () => {
     const { sql } = createFakeSqlClient([[], [], []]);
     const summary = await runConsoleSummary(200, sql);
-    expect(summary.counts).toEqual({ approvals: 0, failures: 0, notices: 0 });
+    expect(summary.counts).toEqual({
+      approvals: 0,
+      failures: 0,
+      notices: 0,
+      audit_failures_open: 0,
+    });
   });
 
   test("parses an approval row", async () => {
@@ -282,6 +396,7 @@ describe("runConsoleSummary result", () => {
       step: "generate",
       error: "boom",
       occurred_at: T0,
+      superseded: false,
     });
   });
 
@@ -306,6 +421,35 @@ describe("runConsoleSummary result", () => {
       job_failure_id: null,
       error: null,
     });
+  });
+
+  test("reads the count of the unresolved audit failures from the window count", async () => {
+    const { sql } = createFakeSqlClient([
+      [],
+      [{ ...FAILURE_ROW, audit_open_count: "2" }],
+      [],
+    ]);
+    const summary = await runConsoleSummary(200, sql);
+    expect(summary.counts.audit_failures_open).toBe(2);
+  });
+
+  test("reads a failure that a later audit superseded", async () => {
+    const { sql } = createFakeSqlClient([
+      [],
+      [{ ...FAILURE_ROW, kind: "audit", superseded: true }],
+      [],
+    ]);
+    const summary = await runConsoleSummary(200, sql);
+    expect(summary.failures[0]?.superseded).toBe(true);
+  });
+
+  test("rejects a superseded flag that is not a boolean", async () => {
+    const { sql } = createFakeSqlClient([
+      [],
+      [{ ...FAILURE_ROW, superseded: "t" }],
+      [],
+    ]);
+    await expect(runConsoleSummary(200, sql)).rejects.toThrow("superseded");
   });
 
   test("parses a notice row with its severity and resolvable flag", async () => {
