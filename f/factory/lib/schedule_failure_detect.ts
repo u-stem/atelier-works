@@ -362,13 +362,14 @@ export async function detectScheduleFailures(
       failuresQuery(deps.workspace, window.startedAfterMs, page),
     ),
   );
-  const { failures, malformed } = extractScheduleFailures(
+  const { failures, malformed, malformedSamples } = extractScheduleFailures(
     jobs,
     window.completedFromMs,
   );
   if (malformed > 0) {
     deps.log.warn("the failure list has elements that could not be read", {
       count: malformed,
+      samples: malformedSamples,
     });
   }
   const continued = baseline.scanStartedAfterMs !== null;

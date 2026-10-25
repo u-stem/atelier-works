@@ -24,28 +24,29 @@ import {
   scriptHistoryQuery,
   visibilityQuery,
 } from "../../f/factory/lib/schedule_failure_scan.ts";
+import { listedCompletedJob } from "../fixtures/windmill_completed_job.ts";
 
 const NOW = Date.parse("2026-10-25T12:00:00.000Z");
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 
-/** 失敗した実行の一覧の1件。 */
+/** 失敗した実行の一覧の1件。実機の形で、`completed_at`は無く、開始の1分後に完了する。 */
 function failed(
   id: string,
   completedAt: string,
   extra: Record<string, unknown> = {},
 ) {
-  return {
-    id,
-    success: false,
-    script_path: "f/factory/poll_prs",
-    schedule_path: "f/factory/poll_prs",
-    completed_at: completedAt,
-    started_at: "2026-10-25T10:00:00.000Z",
-    canceled: false,
-    is_skipped: false,
-    ...extra,
-  };
+  return listedCompletedJob(
+    {
+      id,
+      success: false,
+      scriptPath: "f/factory/poll_prs",
+      schedulePath: "f/factory/poll_prs",
+      startedAtMs: Date.parse(completedAt) - MIN,
+      durationMs: MIN,
+    },
+    extra,
+  );
 }
 
 describe("the contract constants", () => {
@@ -95,13 +96,18 @@ describe("baselineRunsQuery", () => {
 });
 
 describe("findBaselineRun", () => {
-  const run = (extra: Record<string, unknown> = {}) => ({
-    id: "run-1",
-    success: true,
-    schedule_path: SCHEDULE_DETECTOR_PATH,
-    started_at: "2026-10-25T11:55:00.500Z",
-    ...extra,
-  });
+  const run = (extra: Record<string, unknown> = {}) =>
+    listedCompletedJob(
+      {
+        id: "run-1",
+        success: true,
+        scriptPath: SCHEDULE_DETECTOR_PATH,
+        schedulePath: SCHEDULE_DETECTOR_PATH,
+        startedAtMs: Date.parse("2026-10-25T11:55:00.500Z"),
+        durationMs: 2500,
+      },
+      extra,
+    );
 
   test("returns null for an empty list", () => {
     expect(findBaselineRun([])).toBeNull();
@@ -113,6 +119,18 @@ describe("findBaselineRun", () => {
 
   test("returns the id of the run", () => {
     expect(findBaselineRun([run()])?.id).toBe("run-1");
+  });
+
+  test("derives the completion time from the start and the duration", () => {
+    expect(findBaselineRun([run()])?.completedAtMs).toBe(
+      Date.parse("2026-10-25T11:55:03.000Z"),
+    );
+  });
+
+  test("leaves the completion time empty when the duration is missing", () => {
+    expect(
+      findBaselineRun([run({ duration_ms: undefined })])?.completedAtMs,
+    ).toBeNull();
   });
 
   test("returns the start time of the run in milliseconds", () => {
@@ -504,19 +522,81 @@ describe("extractScheduleFailures", () => {
     expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
   });
 
-  test("counts a failure whose completion time cannot be read as malformed", () => {
-    const job = failed("a", "yesterday");
+  test("counts a failure whose duration is not a number as malformed", () => {
+    const job = failed("a", T1, { duration_ms: "soon" });
     expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
   });
 
-  test("counts a failure without a completion time as malformed", () => {
-    const job = failed("a", T1, { completed_at: undefined });
+  test("counts a failure with a negative duration as malformed", () => {
+    const job = failed("a", T1, { duration_ms: -5 });
+    expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
+  });
+
+  test("counts a failure whose end is out of the date range as malformed", () => {
+    const job = failed("a", T1, { duration_ms: 9e15 });
+    expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
+  });
+
+  test("truncates a fractional duration so the time and its text agree", () => {
+    const job = failed("a", T1, { duration_ms: 1500.9 });
+    const [failure] = extractScheduleFailures([job], BASE).failures;
+    expect(Date.parse(failure?.completedAt ?? "")).toBe(
+      failure?.completedAtMs ?? Number.NaN,
+    );
+  });
+
+  test("counts a failure without a duration as malformed", () => {
+    const job = failed("a", T1, { duration_ms: undefined });
+    expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
+  });
+
+  test("counts a failure whose start cannot be read as malformed", () => {
+    const job = failed("a", T1, { started_at: "yesterday" });
     expect(extractScheduleFailures([job], BASE).malformed).toBe(1);
   });
 
   test("does not count a manual run as malformed", () => {
-    const job = failed("a", "yesterday", { schedule_path: undefined });
+    const job = failed("a", T1, {
+      schedule_path: undefined,
+      duration_ms: undefined,
+    });
     expect(extractScheduleFailures([job], BASE).malformed).toBe(0);
+  });
+
+  test("names the id and the missing fields of a malformed element, without values", () => {
+    const job = failed("a", T1, { duration_ms: undefined });
+    expect(extractScheduleFailures([job], BASE).malformedSamples).toEqual([
+      { id: "a", missing: ["completed_at", "duration_ms"] },
+    ]);
+  });
+
+  test("names the missing id and script path", () => {
+    const job = failed("a", T1, { id: undefined, script_path: undefined });
+    expect(extractScheduleFailures([job], BASE).malformedSamples).toEqual([
+      { id: null, missing: ["id", "script_path"] },
+    ]);
+  });
+
+  test("names an element that is not an object", () => {
+    expect(extractScheduleFailures([null], BASE).malformedSamples).toEqual([
+      { id: null, missing: ["object"] },
+    ]);
+  });
+
+  test("keeps at most five samples", () => {
+    const jobs = Array.from({ length: 8 }, (_, i) =>
+      failed(`j${String(i)}`, T1, { duration_ms: undefined }),
+    );
+    expect(extractScheduleFailures(jobs, BASE).malformedSamples).toHaveLength(
+      5,
+    );
+  });
+
+  test("counts all the malformed elements beyond the samples", () => {
+    const jobs = Array.from({ length: 8 }, (_, i) =>
+      failed(`j${String(i)}`, T1, { duration_ms: undefined }),
+    );
+    expect(extractScheduleFailures(jobs, BASE).malformed).toBe(8);
   });
 
   test("keeps the readable failures next to a malformed element", () => {
@@ -525,11 +605,45 @@ describe("extractScheduleFailures", () => {
     ).toHaveLength(1);
   });
 
-  test("reads a completion time with microseconds", () => {
-    const job = failed("a", "2026-10-25T11:40:00.123456Z");
+  test("derives the completion time from the start and the duration", () => {
+    const job = failed("a", T1, {
+      started_at: "2026-10-25T11:39:00.123456Z",
+      duration_ms: 889,
+    });
     expect(
       extractScheduleFailures([job], BASE).failures[0]?.completedAtMs,
-    ).toBe(Date.parse("2026-10-25T11:40:00.123Z"));
+    ).toBe(Date.parse("2026-10-25T11:39:00.123Z") + 889);
+  });
+
+  test("records the derived completion time as an ISO string", () => {
+    const job = failed("a", T1, {
+      started_at: "2026-10-25T11:39:00.000Z",
+      duration_ms: 1500,
+    });
+    expect(extractScheduleFailures([job], BASE).failures[0]?.completedAt).toBe(
+      "2026-10-25T11:39:01.500Z",
+    );
+  });
+
+  test("sorts by the derived completion time, not by the start", () => {
+    const early = failed("a", T3, {
+      started_at: "2026-10-25T09:00:00.000Z",
+      duration_ms: Date.parse(T3) - Date.parse("2026-10-25T09:00:00.000Z"),
+    });
+    const late = failed("b", T1);
+    expect(
+      extractScheduleFailures([early, late], BASE).failures.map((f) => f.id),
+    ).toEqual(["b", "a"]);
+  });
+
+  test("still reads completed_at when a response has it", () => {
+    const job = failed("a", T1, {
+      completed_at: "2026-10-25T11:41:00.000Z",
+      duration_ms: undefined,
+    });
+    expect(
+      extractScheduleFailures([job], BASE).failures[0]?.completedAtMs,
+    ).toBe(Date.parse("2026-10-25T11:41:00.000Z"));
   });
 });
 
@@ -565,6 +679,10 @@ describe("visibilityQuery", () => {
       scriptPathStart: "f/factory/",
       startedAfter: new Date(NOW - 15 * MIN).toISOString(),
     });
+  });
+
+  test("asks for the jobs of the periodic worker, because the newest root jobs of the folder are otherwise console jobs without a schedule", () => {
+    expect(visibilityQuery("factory", NOW - 15 * MIN).tag).toBe("periodic");
   });
 });
 
