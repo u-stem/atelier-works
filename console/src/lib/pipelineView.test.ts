@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineRow } from "../api/guards/pipeline.ts";
 import {
+  actionableNote,
+  clearPipelineFilter,
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
   filterPipelineRows,
+  isActiveStatus,
   isPipelineFilterActive,
   itemDetailPath,
   itemRequirementsPath,
   nextPipelineSort,
+  PIPELINE_SCOPES,
   pipelineScopeNote,
   pipelineStatusLabel,
   pipelineStatusVariant,
@@ -15,6 +19,10 @@ import {
   reconcilePipelineFilter,
   relatedLinks,
   repoOptions,
+  rowsInScope,
+  scopeEmptyMessage,
+  selectPipelineStatus,
+  showsRepository,
   showsRequirementsLink,
   sortPipelineRows,
   statusOptions,
@@ -104,7 +112,7 @@ describe("filterPipelineRows", () => {
   });
 
   test("combines status and repository", () => {
-    const filter = { status: "failed", repo: "o/r", text: "" };
+    const filter = { ...EMPTY_PIPELINE_FILTER, status: "failed", repo: "o/r" };
     expect(ids(filterPipelineRows(rows, filter))).toEqual([3]);
   });
 
@@ -184,25 +192,27 @@ describe("reconcilePipelineFilter", () => {
     row({ status: "failed", owner: "o", repo: "r" }),
     row({ status: "picked", owner: "o", repo: "other" }),
   ];
+  const ALL = { ...EMPTY_PIPELINE_FILTER, scope: "all" } as const;
 
   test("keeps a filter whose choices are still present", () => {
-    const filter = { status: "failed", repo: "o/r", text: "x" };
+    const filter = { ...ALL, status: "failed", repo: "o/r", text: "x" };
     expect(reconcilePipelineFilter(filter, rows)).toBe(filter);
   });
 
   test("resets a status that is no longer in the rows", () => {
-    const filter = { status: "implementing", repo: null, text: "" };
+    const filter = { ...ALL, status: "implementing" };
     expect(reconcilePipelineFilter(filter, rows).status).toBeNull();
   });
 
   test("resets a repository that is no longer in the rows", () => {
-    const filter = { status: null, repo: "o/gone", text: "" };
+    const filter = { ...ALL, repo: "o/gone" };
     expect(reconcilePipelineFilter(filter, rows).repo).toBeNull();
   });
 
   test("resets only the choice that disappeared", () => {
-    const filter = { status: "implementing", repo: "o/r", text: "x" };
+    const filter = { ...ALL, status: "implementing", repo: "o/r", text: "x" };
     expect(reconcilePipelineFilter(filter, rows)).toEqual({
+      ...ALL,
       status: null,
       repo: "o/r",
       text: "x",
@@ -210,8 +220,27 @@ describe("reconcilePipelineFilter", () => {
   });
 
   test("keeps the text when no rows are left", () => {
-    const filter = { status: "failed", repo: "o/r", text: "x" };
+    const filter = { ...ALL, status: "failed", repo: "o/r", text: "x" };
     expect(reconcilePipelineFilter(filter, []).text).toBe("x");
+  });
+
+  test("keeps the scope when a choice disappeared", () => {
+    const filter = { ...ALL, status: "implementing" };
+    expect(reconcilePipelineFilter(filter, rows).scope).toBe("all");
+  });
+
+  test("keeps the scope when no rows are left", () => {
+    expect(reconcilePipelineFilter(ALL, []).scope).toBe("all");
+  });
+
+  test("resets a status that the scope leaves out", () => {
+    const filter = { ...EMPTY_PIPELINE_FILTER, status: "failed" };
+    expect(reconcilePipelineFilter(filter, rows).status).toBeNull();
+  });
+
+  test("keeps a status that the scope includes", () => {
+    const filter = { ...EMPTY_PIPELINE_FILTER, status: "picked" };
+    expect(reconcilePipelineFilter(filter, rows).status).toBe("picked");
   });
 });
 
@@ -246,6 +275,12 @@ describe("isPipelineFilterActive", () => {
     expect(
       isPipelineFilterActive({ ...EMPTY_PIPELINE_FILTER, status: "failed" }),
     ).toBe(true);
+  });
+
+  test("is false when only the scope differs from the default", () => {
+    expect(
+      isPipelineFilterActive({ ...EMPTY_PIPELINE_FILTER, scope: "all" }),
+    ).toBe(false);
   });
 });
 
@@ -565,6 +600,220 @@ describe("pipelineScopeNote", () => {
   test("states only the period when the list is complete", () => {
     expect(pipelineScopeNote(12, 500, 90)).toBe(
       "直近90日に更新された作業項目を表示しています。",
+    );
+  });
+});
+
+const ACTIVE_STATUSES = [
+  "picked",
+  "requirements_generating",
+  "awaiting_approval",
+  "implementing",
+  "reviewing",
+  "fixing",
+  "auditing",
+  "blocked",
+];
+
+const SETTLED_STATUSES = [
+  "approved",
+  "rejected",
+  "needs_human",
+  "failed",
+  "expired",
+  "cancelled",
+  "reviewed",
+  "rereview_requested",
+  "audited",
+  "pr_open",
+];
+
+describe("EMPTY_PIPELINE_FILTER", () => {
+  test("shows the active work items by default", () => {
+    expect(EMPTY_PIPELINE_FILTER.scope).toBe("active");
+  });
+});
+
+describe("PIPELINE_SCOPES", () => {
+  test("lists the three scopes in the order of the switch", () => {
+    expect(PIPELINE_SCOPES.map((scope) => scope.id)).toEqual([
+      "active",
+      "pr_open",
+      "all",
+    ]);
+  });
+
+  test("names the scopes in Japanese", () => {
+    expect(PIPELINE_SCOPES.map((scope) => scope.label)).toEqual([
+      "進行中",
+      "PR待ち",
+      "すべて",
+    ]);
+  });
+});
+
+describe("isActiveStatus", () => {
+  test.each(ACTIVE_STATUSES)("is true for %s", (status) => {
+    expect(isActiveStatus(status)).toBe(true);
+  });
+
+  test.each(SETTLED_STATUSES)("is false for %s", (status) => {
+    expect(isActiveStatus(status)).toBe(false);
+  });
+
+  test("is true for a status that is not known yet", () => {
+    expect(isActiveStatus("future_status")).toBe(true);
+  });
+});
+
+describe("rowsInScope", () => {
+  const rows = [
+    row({ work_item_id: 1, status: "implementing" }),
+    row({ work_item_id: 2, status: "pr_open" }),
+    row({ work_item_id: 3, status: "failed" }),
+    row({ work_item_id: 4, status: "blocked" }),
+    row({ work_item_id: 5, status: "reviewed" }),
+  ];
+
+  test("keeps the active rows and the blocked rows for active", () => {
+    expect(ids(rowsInScope(rows, "active"))).toEqual([1, 4]);
+  });
+
+  test("keeps only the pr_open rows for pr_open", () => {
+    expect(ids(rowsInScope(rows, "pr_open"))).toEqual([2]);
+  });
+
+  test("keeps every row for all", () => {
+    expect(ids(rowsInScope(rows, "all"))).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("keeps the order of the rows", () => {
+    expect(
+      ids(rowsInScope([rows[3] ?? row(), rows[0] ?? row()], "active")),
+    ).toEqual([4, 1]);
+  });
+});
+
+describe("clearPipelineFilter", () => {
+  const chosen = {
+    scope: "all",
+    status: "failed",
+    repo: "o/r",
+    text: "x",
+  } as const;
+
+  test("clears the status, the repository and the text", () => {
+    expect(clearPipelineFilter(chosen)).toEqual({
+      ...EMPTY_PIPELINE_FILTER,
+      scope: "all",
+    });
+  });
+
+  test("keeps the scope", () => {
+    expect(clearPipelineFilter({ ...chosen, scope: "pr_open" }).scope).toBe(
+      "pr_open",
+    );
+  });
+});
+
+describe("selectPipelineStatus", () => {
+  test("switches to all when a settled status is chosen under active", () => {
+    expect(selectPipelineStatus(EMPTY_PIPELINE_FILTER, "failed").scope).toBe(
+      "all",
+    );
+  });
+
+  test("keeps the active scope for an active status", () => {
+    expect(
+      selectPipelineStatus(EMPTY_PIPELINE_FILTER, "implementing").scope,
+    ).toBe("active");
+  });
+
+  test("keeps the active scope for blocked", () => {
+    expect(selectPipelineStatus(EMPTY_PIPELINE_FILTER, "blocked").scope).toBe(
+      "active",
+    );
+  });
+
+  test("switches to all when another status is chosen under pr_open", () => {
+    expect(
+      selectPipelineStatus(
+        { ...EMPTY_PIPELINE_FILTER, scope: "pr_open" },
+        "failed",
+      ).scope,
+    ).toBe("all");
+  });
+
+  test("keeps the pr_open scope for pr_open", () => {
+    expect(
+      selectPipelineStatus(
+        { ...EMPTY_PIPELINE_FILTER, scope: "pr_open" },
+        "pr_open",
+      ).scope,
+    ).toBe("pr_open");
+  });
+
+  test("keeps the scope when the status is cleared", () => {
+    expect(selectPipelineStatus(EMPTY_PIPELINE_FILTER, null).scope).toBe(
+      "active",
+    );
+  });
+
+  test("records the chosen status", () => {
+    expect(selectPipelineStatus(EMPTY_PIPELINE_FILTER, "failed").status).toBe(
+      "failed",
+    );
+  });
+
+  test("keeps the repository and the text", () => {
+    const filter = { ...EMPTY_PIPELINE_FILTER, repo: "o/r", text: "x" };
+    expect(selectPipelineStatus(filter, "failed")).toMatchObject({
+      repo: "o/r",
+      text: "x",
+    });
+  });
+});
+
+describe("showsRepository", () => {
+  test("is false for a single repository", () => {
+    expect(
+      showsRepository([row({ work_item_id: 1 }), row({ work_item_id: 2 })]),
+    ).toBe(false);
+  });
+
+  test("is true for two repositories", () => {
+    expect(showsRepository([row(), row({ repo: "other" })])).toBe(true);
+  });
+
+  test("is false for no rows", () => {
+    expect(showsRepository([])).toBe(false);
+  });
+});
+
+describe("scopeEmptyMessage", () => {
+  test("says there is no active work item", () => {
+    expect(scopeEmptyMessage("active")).toBe("進行中の作業項目はありません");
+  });
+
+  test("says there is no work item waiting for a merge", () => {
+    expect(scopeEmptyMessage("pr_open")).toBe("PR待ちの作業項目はありません");
+  });
+});
+
+describe("actionableNote", () => {
+  test("points to the inbox with the count", () => {
+    expect(actionableNote(3)).toBe(
+      "対応が必要なものは『要対応』にあります(3件)",
+    );
+  });
+
+  test("points to the inbox without a count while the count is unknown", () => {
+    expect(actionableNote(null)).toBe("対応が必要なものは『要対応』にあります");
+  });
+
+  test("keeps a count of zero", () => {
+    expect(actionableNote(0)).toBe(
+      "対応が必要なものは『要対応』にあります(0件)",
     );
   });
 });

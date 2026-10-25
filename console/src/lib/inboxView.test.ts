@@ -5,8 +5,10 @@ import type {
   SummaryFailure,
   SummaryNotice,
 } from "../api/guards/summary.ts";
+import { SCREENS } from "../app/screens.ts";
 import {
   actionableCounts,
+  actionableTotal,
   auditFailureCount,
   buildInboxItems,
   chipCounts,
@@ -17,11 +19,13 @@ import {
   emptyStateTone,
   filterInboxItems,
   findInboxItem,
+  INBOX_PATH,
   type InboxItem,
   inboxSubtitle,
   itemId,
   missingSelectionMessage,
   omitsKindLabels,
+  openAuditFailureCount,
   selectionAfterFilter,
   selectionOf,
   sortInboxItems,
@@ -801,6 +805,113 @@ describe("actionableCounts", () => {
   });
 });
 
+describe("openAuditFailureCount", () => {
+  test("reads the count of the unresolved audit failures from the counts", () => {
+    expect(
+      openAuditFailureCount(
+        summaryOf({
+          counts: {
+            approvals: 0,
+            failures: 3,
+            notices: 0,
+            audit_failures_open: 1,
+          },
+          failures: [
+            failure({ kind: "audit" }),
+            failure({ kind: "audit", superseded: true }),
+          ],
+        }),
+      ),
+    ).toBe(1);
+  });
+
+  test("counts every audit failure when the backend sends no count", () => {
+    expect(
+      openAuditFailureCount(
+        summaryOf({
+          failures: [
+            failure({ kind: "audit" }),
+            failure({ kind: "audit", superseded: true }),
+          ],
+        }),
+      ),
+    ).toBe(2);
+  });
+
+  test("keeps a count of zero", () => {
+    expect(
+      openAuditFailureCount(
+        summaryOf({
+          counts: {
+            approvals: 0,
+            failures: 1,
+            notices: 0,
+            audit_failures_open: 0,
+          },
+          failures: [failure({ kind: "audit", superseded: true })],
+        }),
+      ),
+    ).toBe(0);
+  });
+});
+
+describe("actionableCounts with superseded audit failures", () => {
+  test("still takes every audit failure out of the failure count", () => {
+    expect(
+      actionableCounts(
+        summaryOf({
+          counts: {
+            approvals: 0,
+            failures: 5,
+            notices: 0,
+            audit_failures_open: 1,
+          },
+          failures: [
+            failure({ kind: "audit" }),
+            failure({ kind: "audit", superseded: true }),
+          ],
+        }),
+      ).failures,
+    ).toBe(3);
+  });
+
+  test("does not carry the audit count into the badge counts", () => {
+    expect(
+      "audit_failures_open" in
+        actionableCounts(
+          summaryOf({
+            counts: {
+              approvals: 0,
+              failures: 1,
+              notices: 0,
+              audit_failures_open: 1,
+            },
+            failures: [failure({ kind: "audit" })],
+          }),
+        ),
+    ).toBe(false);
+  });
+});
+
+describe("actionableTotal", () => {
+  test("adds the approvals, the retryable failures and the notices", () => {
+    expect(
+      actionableTotal(
+        summaryOf({
+          counts: { approvals: 2, failures: 5, notices: 1 },
+          failures: [failure({ kind: "audit" }), failure({ kind: "audit" })],
+        }),
+      ),
+    ).toBe(6);
+  });
+});
+
+describe("INBOX_PATH", () => {
+  test("is the path of the inbox screen", () => {
+    expect(SCREENS.find((s) => s.id === "inbox")?.path).toBe(INBOX_PATH);
+  });
+});
+
 describe("unlistedNote", () => {
   test("says the approvals beyond the limit are not shown, oldest first", () => {
     expect(unlistedNote({ type: "approval", label: "承認", count: 1 })).toBe(
@@ -851,6 +962,41 @@ describe("unlistedCounts with audit failures", () => {
         2,
       ).map((entry) => entry.count),
     ).toEqual([2, 2]);
+  });
+});
+
+describe("unlistedCounts with superseded audit failures", () => {
+  test("shows the open audit failures in the audit entry", () => {
+    expect(
+      unlistedCounts({ approvals: 1, failures: 3, notices: 0 }, [A1, F7], 2, 1),
+    ).toEqual([
+      { type: "failure", label: "監査の失敗", count: 1, cause: "audit" },
+    ]);
+  });
+
+  test("takes every audit failure out of the failures beyond the list", () => {
+    expect(
+      unlistedCounts(
+        { approvals: 1, failures: 5, notices: 0 },
+        [A1, F7],
+        3,
+        1,
+      ).map((entry) => entry.count),
+    ).toEqual([1, 1]);
+  });
+
+  test("drops the audit entry when every audit failure is superseded", () => {
+    expect(
+      unlistedCounts({ approvals: 1, failures: 2, notices: 0 }, [A1], 2, 0),
+    ).toEqual([]);
+  });
+
+  test("treats every audit failure as open when no open count is given", () => {
+    expect(
+      unlistedCounts({ approvals: 1, failures: 2, notices: 0 }, [A1], 2).map(
+        (entry) => entry.count,
+      ),
+    ).toEqual([2]);
   });
 });
 

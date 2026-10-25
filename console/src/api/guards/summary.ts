@@ -62,6 +62,11 @@ export type SummaryFailure = {
   readonly step: string | null;
   readonly error: string | null;
   readonly occurred_at: string | null;
+  /**
+   * 後の監査が報告を作り、この失敗の期間を扱った監査の失敗か。
+   * 古いbackendは送らないので、欠けたときは偽として扱う。
+   */
+  readonly superseded?: boolean;
 };
 
 /** 要対応の通知の1行。 */
@@ -79,6 +84,11 @@ export type SummaryCounts = {
   readonly approvals: number;
   readonly failures: number;
   readonly notices: number;
+  /**
+   * 後の監査に解消されていない監査の失敗の件数。
+   * 古いbackendは送らないので、欠けたときは監査の失敗の全件として扱う。
+   */
+  readonly audit_failures_open?: number;
 };
 
 /** "summary"ビューの結果。件数は、一覧の上限を超えた分も数えている。 */

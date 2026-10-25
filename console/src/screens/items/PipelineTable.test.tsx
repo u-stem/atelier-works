@@ -5,6 +5,7 @@ import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import {
   DEFAULT_PIPELINE_SORT,
+  type PipelineScope,
   sortPipelineRows,
 } from "../../lib/pipelineView.ts";
 import { PipelineTable, pipelinePageRows } from "./PipelineTable.tsx";
@@ -31,14 +32,25 @@ function row(overrides: Partial<PipelineRow> = {}): PipelineRow {
   };
 }
 
-function render(rows: readonly PipelineRow[]): string {
+function render(
+  rows: readonly PipelineRow[],
+  initialScope?: PipelineScope,
+): string {
   return renderToStaticMarkup(
     <MemoryRouter>
       <TooltipProvider>
-        <PipelineTable rows={rows} now={NOW} />
+        <PipelineTable rows={rows} now={NOW} initialScope={initialScope} />
       </TooltipProvider>
     </MemoryRouter>,
   );
+}
+
+/** 2つのリポジトリにまたがる、進行中の行。リポジトリの欄と絞り込みが出る。 */
+function twoRepoRows(): PipelineRow[] {
+  return [
+    row({ work_item_id: 1, repo: "r" }),
+    row({ work_item_id: 2, repo: "other" }),
+  ];
 }
 
 function headerCells(html: string): string[] {
@@ -64,11 +76,11 @@ function bodyCells(html: string): string[] {
   return html.match(/<td [^>]*>.*?<\/td>/g) ?? [];
 }
 
-// 本文の列の並び: 作業項目、題名、種別、状態、リポジトリ、Issue/PR、ブランチ、試行、修正回数、更新、書類。
-const BRANCH_CELL = 6;
-const ATTEMPT_CELL = 7;
-const FIX_ROUND_CELL = 8;
-const UPDATED_CELL = 9;
+// 本文の列の並び(リポジトリが1つのとき): 作業項目、題名、種別、状態、Issue/PR、ブランチ、試行、修正回数、更新、書類。
+const BRANCH_CELL = 5;
+const ATTEMPT_CELL = 6;
+const FIX_ROUND_CELL = 7;
+const UPDATED_CELL = 8;
 const SHOWN_FROM_WIDE = "@[88rem]:table-cell";
 
 /** セルの中の最初の`div`のクラス。最小幅と上限をセルでなく中身に付けているかを見る。 */
@@ -178,7 +190,9 @@ describe("PipelineTable filter labels", () => {
   });
 
   test("ties the repository label to its select", () => {
-    expect(controlOf(render([row()]), "リポジトリ", "select")).not.toBe("");
+    expect(controlOf(render(twoRepoRows()), "リポジトリ", "select")).not.toBe(
+      "",
+    );
   });
 
   test("ties the search label to its input", () => {
@@ -188,7 +202,7 @@ describe("PipelineTable filter labels", () => {
 
 describe("PipelineTable status badge", () => {
   test("draws a cancelled status without a border", () => {
-    const html = render([row({ status: "cancelled" })]);
+    const html = render([row({ status: "cancelled" })], "all");
     const badge = /<span [^>]*data-slot="badge"[^>]*>取消<\/span>/.exec(html);
     expect(badge?.[0]).toContain("border-transparent");
   });
@@ -201,6 +215,154 @@ describe("PipelineTable layout", () => {
 
   test("shows the cards only below a wide container", () => {
     expect(render([row()])).toContain('class="@4xl:hidden"');
+  });
+});
+
+describe("PipelineTable scope", () => {
+  const rows = [
+    row({ work_item_id: 1, status: "implementing" }),
+    row({ work_item_id: 2, status: "failed" }),
+    row({ work_item_id: 3, status: "pr_open" }),
+    row({ work_item_id: 4, status: "blocked" }),
+  ];
+
+  test("shows an active row by default", () => {
+    expect(render(rows)).toContain('href="/items/1"');
+  });
+
+  test("shows a blocked row by default", () => {
+    expect(render(rows)).toContain('href="/items/4"');
+  });
+
+  test("leaves a failed row out by default", () => {
+    expect(render(rows)).not.toContain('href="/items/2"');
+  });
+
+  test("leaves a pr_open row out by default", () => {
+    expect(render(rows)).not.toContain('href="/items/3"');
+  });
+
+  test("shows only the pr_open rows for the pr_open scope", () => {
+    expect(render(rows, "pr_open").match(/<tr class="border-t/g)).toHaveLength(
+      1,
+    );
+  });
+
+  test("shows every row for the all scope", () => {
+    expect(render(rows, "all").match(/<tr class="border-t/g)).toHaveLength(4);
+  });
+
+  test("counts the shown rows against the fetched rows", () => {
+    expect(render(rows)).toContain("2件(全4件)");
+  });
+
+  test("offers the three scopes as a switch", () => {
+    const html = render(rows);
+    expect(
+      ["進行中", "PR待ち", "すべて"].map((label) =>
+        new RegExp(
+          `<button [^>]*aria-pressed="(true|false)"[^>]*>${label}`,
+        ).test(html),
+      ),
+    ).toEqual([true, true, true]);
+  });
+
+  test("marks the default scope as pressed", () => {
+    expect(render(rows)).toMatch(/aria-pressed="true"[^>]*>進行中/);
+  });
+
+  test("marks the chosen initial scope as pressed", () => {
+    expect(render(rows, "all")).toMatch(/aria-pressed="true"[^>]*>すべて/);
+  });
+
+  test("builds the status choices from the rows in the scope", () => {
+    const options = /<select [^>]*>(.*?)<\/select>/.exec(render(rows))?.[1];
+    expect(options).not.toContain("失敗");
+  });
+
+  test("lists a status of the scope among the status choices", () => {
+    const options = /<select [^>]*>(.*?)<\/select>/.exec(render(rows))?.[1];
+    expect(options).toContain("実装中");
+  });
+
+  test("notes that pr_open is a guide to waiting for a merge", () => {
+    expect(render(rows, "pr_open")).toContain("マージ待ちの目安");
+  });
+
+  test("does not add the merge note to the other scopes", () => {
+    expect(render(rows)).not.toContain("マージ待ちの目安");
+  });
+});
+
+describe("PipelineTable without an active work item", () => {
+  const settled = [row({ work_item_id: 2, status: "failed" })];
+
+  test("says that no work item is active", () => {
+    expect(render(settled)).toContain("進行中の作業項目はありません");
+  });
+
+  test("offers the way to the whole list with its count", () => {
+    expect(render(settled)).toContain("すべて(1件)を表示");
+  });
+
+  test("keeps the scope switch", () => {
+    expect(render(settled)).toContain("PR待ち");
+  });
+
+  test("does not say it while a row is active", () => {
+    expect(render([row()])).not.toContain("進行中の作業項目はありません");
+  });
+
+  test("says that no work item waits for a merge", () => {
+    expect(render(settled, "pr_open")).toContain(
+      "PR待ちの作業項目はありません",
+    );
+  });
+
+  test("keeps the empty message for no fetched rows", () => {
+    expect(render([])).toContain("作業項目はまだありません");
+  });
+});
+
+describe("PipelineTable with one repository", () => {
+  test("hides the repository filter", () => {
+    expect(render([row()])).not.toMatch(/<label [^>]*>リポジトリ/);
+  });
+
+  test("hides the repository column header", () => {
+    expect(
+      headerCells(render([row()])).some((c) => c.includes("リポジトリ")),
+    ).toBe(false);
+  });
+
+  test("hides the repository name in the cells", () => {
+    expect(bodyCells(render([row()])).some((c) => c.includes("o/r"))).toBe(
+      false,
+    );
+  });
+
+  test("shows the repository filter for two repositories", () => {
+    expect(render(twoRepoRows())).toMatch(/<label [^>]*>リポジトリ/);
+  });
+
+  test("shows the repository column header for two repositories", () => {
+    expect(
+      headerCells(render(twoRepoRows())).some((c) => c.includes("リポジトリ")),
+    ).toBe(true);
+  });
+
+  test("shows the repository name in the cells for two repositories", () => {
+    expect(
+      bodyCells(render(twoRepoRows())).some((c) => c.includes("o/other")),
+    ).toBe(true);
+  });
+
+  test("keeps the repository choices when the scope hides all but one repository", () => {
+    const rows = [
+      row({ work_item_id: 1, repo: "r" }),
+      row({ work_item_id: 2, repo: "other", status: "failed" }),
+    ];
+    expect(render(rows)).toMatch(/<label [^>]*>リポジトリ/);
   });
 });
 

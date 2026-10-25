@@ -300,3 +300,94 @@ describe("isConsoleSummary", () => {
     ).toBe(false);
   });
 });
+
+describe("isConsoleSummary and the audit resolution fields", () => {
+  const AUDIT_FAILURE = { ...FAILURE, kind: "audit" };
+
+  test("accepts a failure that is superseded", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ failures: [{ ...AUDIT_FAILURE, superseded: true }] }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts a failure that is not superseded", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ failures: [{ ...AUDIT_FAILURE, superseded: false }] }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts a failure without the field, as an older backend sends it", () => {
+    expect(isConsoleSummary(summaryWith({ failures: [AUDIT_FAILURE] }))).toBe(
+      true,
+    );
+  });
+
+  test("rejects a superseded flag that is not a boolean", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ failures: [{ ...AUDIT_FAILURE, superseded: "yes" }] }),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a superseded flag that is null", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ failures: [{ ...AUDIT_FAILURE, superseded: null }] }),
+      ),
+    ).toBe(false);
+  });
+
+  test("accepts the count of the unresolved audit failures", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({
+          counts: {
+            approvals: 1,
+            failures: 1,
+            notices: 1,
+            audit_failures_open: 1,
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts counts without the audit count, as an older backend sends them", () => {
+    expect(isConsoleSummary(summaryWith())).toBe(true);
+  });
+
+  test("rejects a negative audit count", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({
+          counts: {
+            approvals: 1,
+            failures: 1,
+            notices: 1,
+            audit_failures_open: -1,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects an audit count that is not an integer", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({
+          counts: {
+            approvals: 1,
+            failures: 1,
+            notices: 1,
+            audit_failures_open: 1.5,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+});

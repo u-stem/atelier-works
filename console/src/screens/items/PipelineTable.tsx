@@ -21,6 +21,7 @@ import {
   nextPipelineSort,
   type PipelineFilter,
   type PipelineLink,
+  type PipelineScope,
   type PipelineSort,
   type PipelineSortKey,
   pipelineStatusLabel,
@@ -342,6 +343,8 @@ export function PipelineTable({
   now: number;
   /** 最初に出すページ(0から数える)。省略すると先頭。 */
   initialPage?: number | undefined;
+  /** 最初に出す範囲。省略すると進行中。 */
+  initialScope?: PipelineScope | undefined;
 }) {
   const [chosen, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);
   const filter = reconcilePipelineFilter(chosen, rows);

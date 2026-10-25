@@ -78,6 +78,8 @@ export function PipelineCards({
 }: {
   rows: readonly PipelineRow[];
   now: number;
+  /** リポジトリの名前を出すか。省略すると出す。 */
+  showRepository?: boolean | undefined;
 }) {
   return (
     <ul className="divide-y divide-border rounded-xl border border-border bg-card">

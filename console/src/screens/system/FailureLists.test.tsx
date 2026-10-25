@@ -9,9 +9,9 @@ import { AuditFailureList, OrphanFailureList } from "./FailureLists.tsx";
 const NOW = Date.parse("2026-10-11T04:00:00.000Z");
 const OCCURRED = "2026-10-11T03:00:00.000Z";
 
-/** 題名の文字で見分けられる、`count`件の監査の失敗。 */
-function auditFailures(count: number): SummaryFailure[] {
-  return Array.from({ length: count }, (_, index) => ({
+/** 題名の文字で見分けられる、`index`番目の監査の失敗。 */
+function auditFailure(index: number): SummaryFailure {
+  return {
     work_item_id: index + 1,
     kind: "audit",
     owner: "o",
@@ -30,7 +30,12 @@ function auditFailures(count: number): SummaryFailure[] {
     step: null,
     error: "boom",
     occurred_at: OCCURRED,
-  }));
+  };
+}
+
+/** 題名の文字で見分けられる、`count`件の監査の失敗。 */
+function auditFailures(count: number): SummaryFailure[] {
+  return Array.from({ length: count }, (_, index) => auditFailure(index));
 }
 
 /** 失敗した内容の文字で見分けられる、`count`件の作業項目に紐づかない失敗。 */
@@ -72,6 +77,50 @@ function renderOrphan(count: number, initialPage?: number): string {
     </MemoryRouter>,
   );
 }
+
+function renderResolved(failures: readonly SummaryFailure[]): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <TooltipProvider>
+        <AuditFailureList failures={failures} now={NOW} />
+      </TooltipProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("AuditFailureList resolution mark", () => {
+  const base = auditFailure(0);
+
+  test("marks a failure that a later audit resolved", () => {
+    expect(renderResolved([{ ...base, superseded: true }])).toContain(
+      "後の監査で解消",
+    );
+  });
+
+  test("does not mark a failure that is still open", () => {
+    expect(renderResolved([{ ...base, superseded: false }])).not.toContain(
+      "後の監査で解消",
+    );
+  });
+
+  test("does not mark a failure from a backend that sends no flag", () => {
+    expect(renderResolved([base])).not.toContain("後の監査で解消");
+  });
+
+  test("keeps a resolved failure in the list", () => {
+    expect(renderResolved([{ ...base, superseded: true }])).toContain(
+      "audit 001",
+    );
+  });
+
+  test("marks only the resolved one of two failures", () => {
+    const html = renderResolved([
+      { ...auditFailure(0), superseded: true },
+      { ...auditFailure(1), superseded: false },
+    ]);
+    expect(html.match(/後の監査で解消/g)).toHaveLength(1);
+  });
+});
 
 describe("AuditFailureList pagination", () => {
   test("shows the last item of the first page", () => {

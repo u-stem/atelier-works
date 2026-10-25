@@ -14,7 +14,7 @@ import { safeGitHubUrl } from "./safeUrl.ts";
  * 状態を作業の進む順に並べた一覧。選択肢と並び替えの順になる。
  * ここに無い状態(backendが先に足した新しい値)は、既知の状態の後ろに回す。
  */
-const STATUS_ORDER: readonly string[] = [
+export const STATUS_ORDER: readonly string[] = [
   "picked",
   "requirements_generating",
   "awaiting_approval",
@@ -65,7 +65,12 @@ export function repoOptions(rows: readonly PipelineRow[]): string[] {
   return Array.from(new Set(rows.map(repoName))).sort();
 }
 
+/** 表に出す範囲。状態の絞り込みとは別の欄で持つ。 */
+export type PipelineScope = "active" | "pr_open" | "all";
+
 export type PipelineFilter = {
+  /** 表に出す範囲。 */
+  readonly scope: PipelineScope;
   /** 選んだ状態。`null`はすべて。 */
   readonly status: string | null;
   /** 選んだリポジトリ(`owner/repo`)。`null`はすべて。 */
@@ -75,6 +80,7 @@ export type PipelineFilter = {
 };
 
 export const EMPTY_PIPELINE_FILTER: PipelineFilter = {
+  scope: "active",
   status: null,
   repo: null,
   text: "",
@@ -116,10 +122,52 @@ export function reconcilePipelineFilter(
     filter.repo !== null && !rows.some((row) => repoName(row) === filter.repo);
   if (!statusGone && !repoGone) return filter;
   return {
+    scope: "active",
     status: statusGone ? null : filter.status,
     repo: repoGone ? null : filter.repo,
     text: filter.text,
   };
+}
+
+export const TERMINAL_PIPELINE_STATUSES: readonly string[] = [];
+
+export const PIPELINE_SCOPES: readonly {
+  readonly id: PipelineScope;
+  readonly label: string;
+}[] = [];
+
+export function isActiveStatus(_status: string): boolean {
+  return false;
+}
+
+export function rowsInScope(
+  _rows: readonly PipelineRow[],
+  _scope: PipelineScope,
+): PipelineRow[] {
+  return [];
+}
+
+export function clearPipelineFilter(_filter: PipelineFilter): PipelineFilter {
+  return EMPTY_PIPELINE_FILTER;
+}
+
+export function selectPipelineStatus(
+  filter: PipelineFilter,
+  status: string | null,
+): PipelineFilter {
+  return { ...filter, status };
+}
+
+export function showsRepository(_rows: readonly PipelineRow[]): boolean {
+  return false;
+}
+
+export function scopeEmptyMessage(_scope: PipelineScope): string {
+  return "";
+}
+
+export function actionableNote(_count: number | null): string {
+  return "";
 }
 
 /**

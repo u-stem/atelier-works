@@ -106,6 +106,16 @@ export function actionableCounts(summary: ConsoleSummary): SummaryCounts {
   };
 }
 
+export function openAuditFailureCount(_summary: ConsoleSummary): number {
+  return 0;
+}
+
+export function actionableTotal(_summary: ConsoleSummary): number {
+  return 0;
+}
+
+export const INBOX_PATH = "";
+
 export function selectionOf(item: InboxItem): InboxSelection {
   return { type: item.type, id: itemId(item) };
 }
@@ -657,6 +667,7 @@ export function unlistedCounts(
   counts: SummaryCounts,
   items: readonly InboxItem[],
   auditFailures = 0,
+  _auditFailuresOpen: number = auditFailures,
 ): UnlistedCount[] {
   const listed = chipCounts(items);
   const entries: UnlistedCount[] = [

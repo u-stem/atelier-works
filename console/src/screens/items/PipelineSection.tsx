@@ -60,6 +60,8 @@ export function PipelineSection({
   pipeline,
 }: {
   pipeline: SectionQuery<PipelineRow[]>;
+  /** 要対応にある件数。分からないときは`null`か省略。 */
+  actionableCount?: number | null | undefined;
 }) {
   const now = useNow();
 

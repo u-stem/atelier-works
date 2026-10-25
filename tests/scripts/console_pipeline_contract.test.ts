@@ -10,12 +10,18 @@ import {
   workItemStatusLabel,
 } from "../../console/src/lib/labels.ts";
 import {
+  isActiveStatus,
   prLink,
   relatedLinks,
+  rowsInScope,
+  STATUS_ORDER,
   sortPipelineRows,
+  TERMINAL_PIPELINE_STATUSES,
 } from "../../console/src/lib/pipelineView.ts";
+import { ACTIONABLE_WORK_ITEM_STATUSES } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
+  TERMINAL_WORK_ITEM_STATUSES,
   WORK_ITEM_KINDS,
   WORK_ITEM_STATUSES,
 } from "../../f/factory/lib/types.ts";
@@ -135,5 +141,69 @@ describe("label tables cover the backend values", () => {
     }));
     const sorted = sortPipelineRows(rows, { key: "status", direction: "asc" });
     expect(sorted.at(-1)?.status).toBe("0-unknown");
+  });
+});
+
+describe("the statuses that the console treats as settled", () => {
+  test("are the terminal statuses of the backend", () => {
+    expect([...TERMINAL_PIPELINE_STATUSES].sort()).toEqual(
+      [...TERMINAL_WORK_ITEM_STATUSES].sort(),
+    );
+  });
+
+  test.each([...WORK_ITEM_STATUSES])(
+    "classify %s as active unless it is terminal and not blocked",
+    (status) => {
+      const settled =
+        TERMINAL_WORK_ITEM_STATUSES.includes(status) && status !== "blocked";
+      expect(isActiveStatus(status)).toBe(!settled);
+    },
+  );
+
+  test("keep blocked out of the actionable statuses of the inbox", () => {
+    expect(ACTIONABLE_WORK_ITEM_STATUSES).not.toContain("blocked");
+  });
+
+  test("treat blocked as active", () => {
+    expect(isActiveStatus("blocked")).toBe(true);
+  });
+
+  test.each([...ACTIONABLE_WORK_ITEM_STATUSES])(
+    "leave the actionable status %s to the inbox",
+    (status) => {
+      expect(isActiveStatus(status)).toBe(false);
+    },
+  );
+
+  test("make the pr_open scope the pr_open status", () => {
+    const rows = WORK_ITEM_STATUSES.map((status, index) => ({
+      work_item_id: index + 1,
+      owner: "o",
+      repo: "r",
+      issue_number: null,
+      issue_url: null,
+      title: null,
+      status,
+      attempt: 1,
+      kind: "issue",
+      pr_number: null,
+      fix_round: 0,
+      branch: null,
+      pr_url: null,
+      updated_at: T0,
+    }));
+    expect(rowsInScope(rows, "pr_open").map((row) => row.status)).toEqual([
+      "pr_open",
+    ]);
+  });
+});
+
+describe("the status order of the console", () => {
+  test("lists every status of the backend", () => {
+    expect([...STATUS_ORDER].sort()).toEqual([...WORK_ITEM_STATUSES].sort());
+  });
+
+  test("lists each status once", () => {
+    expect(new Set(STATUS_ORDER).size).toBe(STATUS_ORDER.length);
   });
 });
