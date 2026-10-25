@@ -14,6 +14,12 @@ function render(page: number, total: number, size = 25): string {
   );
 }
 
+/** `nav`のclass属性を空白で分けた一覧。 */
+function navClasses(html: string): string[] {
+  const value = /<nav [^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
+  return value.split(/\s+/);
+}
+
 /** `前へ`か`次へ`のボタンの開始タグ。 */
 function buttonTag(html: string, text: string): string {
   return new RegExp(`<button [^>]*>${text}</button>`).exec(html)?.[0] ?? "";
@@ -74,6 +80,30 @@ describe("Pagination", () => {
 
   test("does not use the disabled attribute so focus stays on the button", () => {
     expect(buttonTag(render(0, 60), "前へ")).toMatch(NO_DISABLED);
+  });
+
+  test("sticks to the bottom of the scroll container", () => {
+    expect(navClasses(render(0, 60))).toContain("sticky");
+  });
+
+  test("offsets the bottom edge by the padding of the scroll container", () => {
+    expect(navClasses(render(0, 60))).toContain("-bottom-6");
+  });
+
+  test("paints the page background so the list does not show through", () => {
+    expect(navClasses(render(0, 60))).toContain("bg-background");
+  });
+
+  test("separates the navigation from the list with a top border", () => {
+    expect(navClasses(render(0, 60))).toContain("border-t");
+  });
+
+  test("keeps the navigation above the list that scrolls under it", () => {
+    expect(navClasses(render(0, 60))).toContain("z-10");
+  });
+
+  test("cancels the scroll padding for the buttons so focusing one does not scroll", () => {
+    expect(buttonTag(render(0, 60), "次へ")).toContain("-scroll-mb-28");
   });
 
   test("draws the buttons as type button", () => {

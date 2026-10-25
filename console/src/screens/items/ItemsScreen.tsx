@@ -3,6 +3,7 @@ import { usePipeline, useRequirementsIndex } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOfAll } from "../../app/refreshStatus.ts";
 import { Button } from "../../components/ui/button.tsx";
+import { SCROLL_BODY_CLASS } from "../../lib/layoutClasses.ts";
 import { PipelineSection } from "./PipelineSection.tsx";
 import { RequirementsSection } from "./RequirementsSection.tsx";
 
@@ -26,7 +27,7 @@ export function ItemsScreen() {
           </Button>
         }
       />
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
+      <div className={SCROLL_BODY_CLASS}>
         <PipelineSection pipeline={pipeline} />
         <RequirementsSection index={requirements} />
       </div>

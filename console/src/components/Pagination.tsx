@@ -1,4 +1,8 @@
 import {
+  PAGINATION_BAR_CLASS,
+  PAGINATION_BUTTON_CLASS,
+} from "../lib/layoutClasses.ts";
+import {
   clampPage,
   pageCount,
   pageRangeNote,
@@ -13,6 +17,10 @@ import { Button } from "./ui/button.tsx";
  * `disabled`にすると、押した直後にフォーカスが失われ、キーボードの操作が途切れるためである。
  * ページ番号は0から数える。範囲の外の`page`は、最後のページとして描く。
  * 状態は持たず、移動先を`onPageChange`に渡す。
+ * スクロール枠の下端に貼り付き、長い一覧の先頭でも押せる。
+ * 帯とボタンのclassは、枠の余白に依存するので、枠のclassと対にして`layoutClasses.ts`に置く。
+ * 貼り付く範囲は親の要素の中なので、親は一覧とこの要素だけを含み、`overflow`を持たない包みにする。
+ * 背景と上の境界線で、下をくぐる一覧と重ならずに読める。
  */
 export function Pagination({
   page,
@@ -35,10 +43,7 @@ export function Pagination({
   const previous = pageStep("prev", page, total, size);
   const following = pageStep("next", page, total, size);
   return (
-    <nav
-      aria-label={label}
-      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-small text-muted-foreground"
-    >
+    <nav aria-label={label} className={PAGINATION_BAR_CLASS}>
       <p aria-live="polite" className="tabular-nums">
         {pageRangeNote(page, total, size)}
       </p>
@@ -47,6 +52,7 @@ export function Pagination({
           type="button"
           variant="outline"
           size="sm"
+          className={PAGINATION_BUTTON_CLASS}
           aria-disabled={previous === null ? "true" : undefined}
           onClick={previous === null ? undefined : () => onPageChange(previous)}
         >
@@ -59,6 +65,7 @@ export function Pagination({
           type="button"
           variant="outline"
           size="sm"
+          className={PAGINATION_BUTTON_CLASS}
           aria-disabled={following === null ? "true" : undefined}
           onClick={
             following === null ? undefined : () => onPageChange(following)

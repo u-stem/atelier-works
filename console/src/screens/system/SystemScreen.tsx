@@ -6,6 +6,7 @@ import {
 } from "../../api/systemQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { FLOW_GRAPH } from "../../lib/flowGraphData.ts";
+import { SCROLL_BODY_CLASS } from "../../lib/layoutClasses.ts";
 import {
   auditFailureLimitNote,
   auditFailuresOf,
@@ -194,7 +195,7 @@ export function SystemScreen() {
   return (
     <>
       <PageHeader title="システム" refresh={refresh} />
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
+      <div className={SCROLL_BODY_CLASS}>
         <HoldsSection holds={holds} />
         <ReleaseSection status={status} />
         <UpdateHistorySection deployments={deployments} />

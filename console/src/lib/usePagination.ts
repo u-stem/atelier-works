@@ -1,5 +1,7 @@
 import { type RefObject, useRef, useState } from "react";
 import { clampPage } from "./pagination.ts";
+import { findScrollRoot } from "./scrollRoot.ts";
+import { scrollToAnchorIn } from "./scrollTarget.ts";
 
 /**
  * 一覧のページ番号を持つ。ページは0から数える。
@@ -9,10 +11,12 @@ import { clampPage } from "./pagination.ts";
  * 呼び出し側は、一覧が空のときの早期returnより前で呼ぶ。呼ぶ数が変わるとReactが例外を投げる。
  * `initialPage`は最初のページで、既定は先頭である。
  *
- * - `change`: 「前へ」「次へ」で呼ぶ。一覧の先頭が見えるようにスクロールしてから、ページを移す。
+ * - `change`: 「前へ」「次へ」で呼ぶ。一覧の先頭が見えるように、スクロール枠だけを動かしてから、ページを移す。
+ *   windowは動かさない。動かすと、画面の上の見出しの帯が外れて、下に空白が出るためである。
  * - `reset`: 絞り込みや並び替えを変えたときに呼び、先頭へ戻す。スクロールはしない。
- * - `anchorRef`: 一覧を包む要素に付ける。`change`はこの要素の上端へスクロールする。
- *   スクロールするのは、画面の本文を包む`overflow-y-auto`の枠である。
+ * - `anchorRef`: スクロールで先頭に合わせる要素に付ける。`change`はこの要素の上端を枠の上端に合わせる。
+ *   絞り込み欄などの操作も見せたいときは、それらも包む要素に付ける。
+ *   枠は、この要素を包む最も近い縦のスクロール枠(`findScrollRoot`)で、無ければ何も動かさない。
  */
 export function usePagination(
   total: number,
@@ -33,7 +37,7 @@ export function usePagination(
   return {
     page,
     change: (next) => {
-      anchorRef.current?.scrollIntoView({ block: "start" });
+      scrollToAnchorIn(anchorRef.current, findScrollRoot);
       setChosen(clampPage(next, total, size));
     },
     reset: () => setChosen(0),
