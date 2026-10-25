@@ -30,8 +30,7 @@ importは相対パスにし、型アサーションは外す。
 ## 見た目の体系
 
 色の定義は`src/index.css`の変数だけにする。
-値は`light-dark()`で書き、`html`の`data-theme`が配色を決める。
-`data-theme`が無いときだけ、OSの設定に従う。
+値は`light-dark()`で書き、OSの設定と`data-theme`の両方に従う。
 文字と背景の組はWCAG AAの4.5:1以上、入力欄の境界と点のような図形は3:1以上を保つ。
 
 | 区分 | 決まり |
@@ -44,7 +43,7 @@ importは相対パスにし、型アサーションは外す。
 | 文字の大きさ | 12、13、14、16、20、24pxの6段(`text-caption`、`text-small`、`text-body`、`text-lead`、`text-title`、`text-display`)。本文の行間は1.7 |
 | 書体 | Hiragino Sans、Noto Sans JP、system-uiの順。Webフォントを読み込まない。CSPが外部のファイルを拒むためである |
 | 数字 | 件数や時刻は`tabular-nums`で桁をそろえる |
-| 動き | 選択とhoverの遷移は150ms。テーマの切り替えの間は、全要素の遷移を止める。動きを減らす設定の利用者には、アニメーションと遷移をほぼ止める |
+| 動き | 選択とhoverの遷移は150ms。動きを減らす設定の利用者には、アニメーションと遷移をほぼ止める |
 
 通知の点は、図形用の`notice-mark`で描く。
 図形の基準(3:1)で足りるため、文字の`warning`と色を分ける。
@@ -471,41 +470,6 @@ Console用workerのscriptが読むsecret変数は、`tests/scripts/console_worke
 値がある節は、止まっていても値を出す。
 
 ## ちらつきの抑え方
-
-### テーマの切り替え
-
-`transition-colors`を持つ要素は一部だけなので、テーマを替えると、それらだけが遅れて変わり、ちらついて見える。
-切り替えの間だけ、`html`に`data-theme-switching`を付け、全要素の遷移を止める(`index.css`)。
-印を付ける入口は`beginThemeSwitch`の1つで、次の2つの操作が呼ぶ。
-
-- `ThemeSwitch`でテーマを選ぶ。
-- 「OSに合わせる」のとき、OSの配色の設定(`matchMedia`の`change`)が変わる。
-
-色の切り替えも、JavaScriptが起こす。
-「OSに合わせる」のときも、`html`に`data-theme`を常に`light`か`dark`で付ける。
-OSの設定が変わると、`change`を受けて、遷移を止めてから`data-theme`を替える。
-メディアクエリに色を任せると、`change`が届くより前に色の再計算が始まり、遷移を止められないためである。
-`change`はスタイルの再計算より後に届くため、メディアクエリに任せた色の切り替えでは、遷移を止める前に遷移が始まる。
-
-保存する設定は、`system`、`light`、`dark`のままである。
-解決した配色は保存しない。
-選択は、`html`の`data-theme-preference`にも残す。
-OSの設定の変更を受けたとき、これで「OSに合わせる」かを見分ける。
-保存領域に触れない環境でも、選んだ配色をOSの設定の変更で上書きしないためである。
-`resolveTheme`が、選択とOSの設定から`data-theme`の値を決める。
-
-`data-theme`は、描画の前に`theme-init`のscriptが付ける。
-このscriptも、保存した選択を読み、「OSに合わせる」ならOSの設定を解決する。
-OSの設定を読めないときだけ、`data-theme`を付けず、`color-scheme`の既定でOSの設定に従う。
-このscriptは`public/assets/`にあり、名前に内容のハッシュを含む。
-内容を変えたら、名前を`contentHashedName`が返す名前に替え、`index.html`の参照も替える。
-`console/scripts/public-assets.test.ts`が、名前と内容の対応を確かめる。
-
-印は、2フレーム後に外す。
-外す予約は番号で管理し、先の予約が、後の切り替えの途中で印を外さない。
-OSの設定の購読は、外枠に1つだけ置く。
-`ThemeSwitch`は、広い画面のサイドバーと狭い画面のドロワーに2つ描かれるためである。
-購読は、Strict Modeの購読、解除、購読の順でも、リスナーが1つだけ残る。
 
 ### 画面の切り替え
 

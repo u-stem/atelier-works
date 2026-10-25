@@ -3,7 +3,6 @@ import { Outlet } from "react-router";
 import { cn } from "../lib/cn.ts";
 import { APP_MAIN_CLASS } from "../lib/layoutClasses.ts";
 import { MAIN_ID, PAGE_HEADING_ID } from "../lib/routeFocus.ts";
-import { useColorSchemeSwitchGuard } from "../lib/themeSwitching.ts";
 import { ReloadBanner } from "../ReloadBanner.tsx";
 import { useReleaseWatch } from "../useReleaseWatch.ts";
 import { AuthBanner } from "./AuthBanner.tsx";
@@ -50,7 +49,6 @@ export function AppShell() {
   const name = usePageName();
   usePageTitle(name);
   useRouteFocus();
-  useColorSchemeSwitchGuard();
 
   return (
     <div className="flex h-dvh flex-col">

@@ -2,9 +2,8 @@
 
 /*
  * 色の定義はここの変数だけにする。light-dark()は、要素のcolor-schemeに従って値を選ぶ。
- * htmlのdata-themeが色を決める。theme-initのscriptとテーマの切り替えが、「OSに合わせる」のときもlightかdarkを付ける。
- * OSの設定の変更もJavaScriptが受けて付け替えるので、遷移を止めてから色が替わる。
- * data-themeが無い(scriptが動かない)ときだけ、color-schemeの既定でOSの設定に従う。
+ * 既定はOSの設定に従い、htmlにdata-themeがあればその色に固定する。
+ * data-themeは、theme-initのscriptとテーマの切り替えが設定する。
  *
  * 面は背景、面(card)、浮いた面(popover)の3段で重ねる。ダークは明るさの差、ライトは影と線で階層を出す。
  * アクセントは藍(primary)の1色で、選択中の帯、主要な操作、フォーカスの輪に使う。
@@ -171,16 +170,4 @@ body {
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     transition-duration: 0.01ms !important;
   }
-}
-
-/*
- * テーマの切り替えの間だけ、全要素の遷移を止める。
- * 一部の要素だけがtransition-colorsを持つので、止めないと、遅れて変わる要素が混じってちらつく。
- * htmlへの印は、lib/themeSwitching.tsが付けて外す。
- */
-:root[data-theme-switching] *,
-:root[data-theme-switching] *::before,
-:root[data-theme-switching] *::after {
-  /* biome-ignore lint/complexity/noImportantStyles: 各要素のtransitionの指定より優先させる。 */
-  transition: none !important;
 }
