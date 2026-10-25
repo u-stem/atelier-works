@@ -1,5 +1,6 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
-import { type KeyboardEvent, useRef, useState } from "react";
+import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
 import { useSummary } from "../api/queries.ts";
@@ -20,8 +21,14 @@ import {
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
 } from "../lib/navigation.ts";
+import {
+  createPrefetchScheduler,
+  handlePress,
+  PREFETCH_COOLDOWN_MS,
+  type PressEvent,
+} from "../lib/prefetchSchedule.ts";
 import { NavDrawer } from "./NavDrawer.tsx";
-import { SCREENS } from "./screens.ts";
+import { SCREENS, type ScreenId } from "./screens.ts";
 import { ThemeSwitch } from "./ThemeSwitch.tsx";
 import { useNow } from "./useNow.ts";
 
@@ -71,6 +78,35 @@ function ReleaseInfo() {
 }
 
 /**
+ * 入口の押下で、その画面の初回の取得を先読みする関数を返す。
+ * 押してから離すまでの時間を、取得に使う。
+ * focusとhoverでは先読みしない。矢印やTabで入口をたどるだけで、Windmillのジョブが溜まるためである。
+ * 判定は`lib/prefetchSchedule.ts`の純関数が行う。
+ * 先読みは、各画面の取得と同じ設定(キー、関数、`staleTime`)で行う。
+ * 新しいデータは取り直さず、走っている取得には重ねない。
+ */
+function usePrefetchOnPress(): (id: ScreenId, event: PressEvent) => void {
+  const client = useQueryClient();
+  const scheduler = useMemo(
+    () =>
+      createPrefetchScheduler<ScreenId>({
+        cooldownMs: PREFETCH_COOLDOWN_MS,
+        now: () => Date.now(),
+        run: (id) => {
+          const screen = SCREENS.find((candidate) => candidate.id === id);
+          for (const options of screen?.prefetch() ?? []) {
+            void client.prefetchQuery(options);
+          }
+        },
+      }),
+    [client],
+  );
+  return (id, event) => {
+    handlePress(scheduler, id, event);
+  };
+}
+
+/**
  * 4つの入口と件数のリスト。入口の間は、上下の矢印とHome・Endで移れる。
  * `onNavigate`は、入口を選んだときに呼ぶ。ドロワーを閉じるために使う。
  */
@@ -83,6 +119,7 @@ function NavList({
 }) {
   const summary = useSummary();
   const navRef = useRef<HTMLElement>(null);
+  const prefetchScreen = usePrefetchOnPress();
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     const links = Array.from(navRef.current?.querySelectorAll("a") ?? []);
@@ -120,6 +157,16 @@ function NavList({
                 end={screen.path === "/"}
                 className={navLinkClass(collapsed)}
                 onClick={onNavigate}
+                onPointerDown={(event) => {
+                  prefetchScreen(screen.id, {
+                    pointerType: event.pointerType,
+                    button: event.button,
+                    ctrlKey: event.ctrlKey,
+                    metaKey: event.metaKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                  });
+                }}
               >
                 <span className="relative inline-flex shrink-0">
                   <Icon aria-hidden="true" className="size-[18px]" />

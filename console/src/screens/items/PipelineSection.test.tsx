@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
-import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
+import {
+  freshQuery,
+  loadingQuery,
+  staleQuery,
+} from "../../api/fakeSectionQuery.testing.ts";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { PipelineSection } from "./PipelineSection.tsx";
 
@@ -27,5 +31,23 @@ describe("PipelineSection", () => {
     expect(
       renderToStaticMarkup(<PipelineSection pipeline={freshQuery(NO_ROWS)} />),
     ).not.toContain(NOTICE);
+  });
+});
+
+describe("PipelineSection while loading", () => {
+  test("shows only the frame in the first moment", () => {
+    expect(
+      renderToStaticMarkup(
+        <PipelineSection pipeline={loadingQuery<PipelineRow[]>()} />,
+      ),
+    ).not.toContain("読み込み中");
+  });
+
+  test("holds the height of the table in the first moment", () => {
+    expect(
+      renderToStaticMarkup(
+        <PipelineSection pipeline={loadingQuery<PipelineRow[]>()} />,
+      ),
+    ).toContain("h-12");
   });
 });

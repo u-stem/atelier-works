@@ -118,6 +118,20 @@ export function classifyRunResponse(status: number, body: string): RunResult {
   });
 }
 
+/**
+ * Windmillに届かなかった失敗か。
+ * 応答が無いネットワークの失敗と、転送が返す502と503である。
+ * ConsoleのAPIはCaddyがWindmillへ転送するので、Windmillだけが止まると、Caddyが502か503を返す。
+ * 504は含めない。転送先の待ちの上限でも、Windmillの待ちの上限でも出て、見分けられないためである。
+ * 401、4xx、500、ジョブの失敗、待ちの上限は、Windmillが答えたものなので、届いている。
+ */
+export function isUnreachableError(error: ApiError): boolean {
+  return (
+    error.kind === "network" ||
+    (error.kind === "http" && (error.status === 502 || error.status === 503))
+  );
+}
+
 /** 画面全体のバナーが知らせる失敗か。一覧の側では同じ内容を繰り返さない。 */
 export function isBannerError(error: ApiError): boolean {
   return error.kind === "unauthorized";

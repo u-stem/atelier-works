@@ -1,5 +1,11 @@
 import { MousePointerClick } from "lucide-react";
 import { useNotices } from "../../api/noticeQueries.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { NoticeDetail } from "./NoticeDetail.tsx";
@@ -14,6 +20,18 @@ function Message({ children }: { children: string }) {
     </div>
   );
 }
+
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-4 p-8",
+  node: (
+    <>
+      <Skeleton className="h-5 w-20" />
+      <Skeleton className="h-8 w-2/3" />
+      <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
+    </>
+  ),
+};
 
 /**
  * 選んだ通知が要対応の一覧に無いときの詳細。未解決の通知の一覧から探して出す。
@@ -31,15 +49,12 @@ export function NoticeLookup({
 }) {
   const notices = useNotices();
   // 取得中は、前に読んだ一覧を使わない。解決した通知を、未解決のまま出さないためである。
-  if (notices.isFetching) {
-    return (
-      <div className="space-y-4 p-8" role="status">
-        <span className="sr-only">読み込み中</span>
-        <Skeleton className="h-5 w-20" />
-        <Skeleton className="h-8 w-2/3" />
-        <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
-      </div>
-    );
+  // 取得の最初の間は空の枠を出し、前に読んだ一覧も隠す。
+  const display = useLoadingDisplay(
+    notices.isFetching ? "loading" : loadPhaseOf(notices),
+  );
+  if (display !== "content") {
+    return <LoadingBody display={display} shape={LOADING_SHAPE} />;
   }
   if (notices.isError || notices.data === undefined) {
     return (

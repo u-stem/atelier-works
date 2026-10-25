@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import type { RunResult } from "./errors.ts";
 import {
   type FetchLike,
   isScriptName,
   runScript,
   SCRIPT_PATHS,
+  setConnectionReporter,
 } from "./windmill.ts";
 
 type Recorded = { input: string; init: RequestInit };
@@ -193,5 +195,96 @@ describe("runScript result", () => {
     await expect(
       runScript("console_query", {}, { fetchFn, signal: controller.signal }),
     ).rejects.toThrow("aborted");
+  });
+});
+
+describe("runScript connection report", () => {
+  async function reported(
+    response: Response | Error,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<RunResult[]> {
+    const results: RunResult[] = [];
+    setConnectionReporter((result) => {
+      results.push(result);
+    });
+    try {
+      await runScript(
+        "console_query",
+        {},
+        {
+          fetchFn: recordingFetch(response).fetchFn,
+          ...options,
+        },
+      ).catch(() => undefined);
+    } finally {
+      setConnectionReporter(null);
+    }
+    return results;
+  }
+
+  test("reports a success", async () => {
+    expect((await reported(jsonResponse([]))).map((r) => r.ok)).toEqual([true]);
+  });
+
+  test("reports a network failure as a failure of kind network", async () => {
+    const results = await reported(new TypeError("Failed to fetch"));
+    expect(results.map((r) => (r.ok ? "ok" : r.error.kind))).toEqual([
+      "network",
+    ]);
+  });
+
+  test("reports a 502 from the proxy as an http failure", async () => {
+    const results = await reported(
+      new Response("Bad Gateway", { status: 502 }),
+    );
+    expect(results.map((r) => (r.ok ? "ok" : r.error.kind))).toEqual(["http"]);
+  });
+
+  test("reports a 401 so the connection state can tell Windmill answered", async () => {
+    const results = await reported(new Response("no", { status: 401 }));
+    expect(results.map((r) => (r.ok ? "ok" : r.error.kind))).toEqual([
+      "unauthorized",
+    ]);
+  });
+
+  test("does not report an aborted call", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const results = await reported(new DOMException("aborted", "AbortError"), {
+      signal: controller.signal,
+    });
+    expect(results).toEqual([]);
+  });
+
+  test("reports to the reporter set last", async () => {
+    const first: RunResult[] = [];
+    setConnectionReporter((result) => {
+      first.push(result);
+    });
+    const second: RunResult[] = [];
+    setConnectionReporter((result) => {
+      second.push(result);
+    });
+    await runScript(
+      "console_query",
+      {},
+      {
+        fetchFn: recordingFetch(jsonResponse([])).fetchFn,
+      },
+    );
+    setConnectionReporter(null);
+    expect([first.length, second.length]).toEqual([0, 1]);
+  });
+
+  test("runs without a reporter", async () => {
+    setConnectionReporter(null);
+    const result = await runScript(
+      "console_query",
+      {},
+      {
+        fetchFn: recordingFetch(jsonResponse([])).fetchFn,
+      },
+    );
+    expect(result.ok).toBe(true);
   });
 });

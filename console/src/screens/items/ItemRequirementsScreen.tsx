@@ -2,8 +2,14 @@ import { ArrowLeft, FileQuestion } from "lucide-react";
 import { useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { useRequirementsDoc, useRequirementsIndex } from "../../api/queries.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
 import {
@@ -39,19 +45,17 @@ function Message({ children }: { children: string }) {
   );
 }
 
-function LoadingState() {
-  return (
-    <div
-      className="mx-auto w-full max-w-[75rem] space-y-4 px-8 py-6"
-      role="status"
-    >
-      <span className="sr-only">読み込み中</span>
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "mx-auto w-full max-w-[75rem] space-y-4 px-8 py-6",
+  node: (
+    <>
       <Skeleton className="h-8 w-full max-w-[47.5rem] rounded-md" />
       <Skeleton className="h-5 w-2/3 max-w-[47.5rem]" />
       <Skeleton className="h-32 w-full max-w-[47.5rem]" />
-    </div>
-  );
-}
+    </>
+  ),
+};
 
 function ItemRequirements({
   workItemId,
@@ -61,6 +65,7 @@ function ItemRequirements({
   attempt: number | null;
 }) {
   const query = useRequirementsDoc(workItemId, attempt);
+  const loadingDisplay = useLoadingDisplay(loadPhaseOf(query));
   const index = useRequirementsIndex();
   const refresh = refreshStatusOf(query);
   const doc = query.data;
@@ -73,21 +78,22 @@ function ItemRequirements({
       ? `${workItemRef(workItemId)}の要件定義`
       : `${workItemRef(workItemId)}の要件定義(${attemptRef(attempt)})`;
 
-  if (doc === undefined) {
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (doc === undefined || loadingDisplay !== "content") {
     return (
       <>
         <PageHeader title={requested} refresh={refresh}>
           <BackLink />
         </PageHeader>
-        {query.isError ? (
+        {loadingDisplay !== "content" ? (
+          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+        ) : (
           <QueryFailure
             title="要件定義書を取得できませんでした"
             loginHint="上のバナーからログインすると、要件定義書を表示します。"
             error={query.error}
             onRetry={refresh.onRefresh}
           />
-        ) : (
-          <LoadingState />
         )}
       </>
     );

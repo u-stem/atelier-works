@@ -2,8 +2,13 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import type { AuditIndexRow } from "../../api/guards/audit.ts";
-import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
@@ -52,6 +57,19 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
   );
 }
 
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-2 px-6 py-4",
+  node: (
+    <>
+      <Skeleton className="h-4 w-1/2" />
+      <Skeleton className="h-3 w-4/5" />
+      <Skeleton className="h-4 w-1/2" />
+      <Skeleton className="h-3 w-4/5" />
+    </>
+  ),
+};
+
 /**
  * 一覧の本体。取得中、失敗、空、行ありを出し分ける。
  * 前回の一覧があるときは、取り直しに失敗しても一覧を出したまま、古いことを先頭に添える。
@@ -63,19 +81,13 @@ export function AuditListState({
   query: SectionQuery<AuditIndexRow[]>;
   now: number;
 }) {
+  const display = useLoadingDisplay(loadPhaseOf(query));
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (display !== "content") {
+    return <LoadingBody display={display} shape={LOADING_SHAPE} />;
+  }
   const rows = query.data;
   if (rows === undefined) {
-    if (!query.isError) {
-      return (
-        <div className="space-y-2 px-6 py-4" role="status">
-          <span className="sr-only">読み込み中</span>
-          <Skeleton className="h-4 w-1/2" />
-          <Skeleton className="h-3 w-4/5" />
-          <Skeleton className="h-4 w-1/2" />
-          <Skeleton className="h-3 w-4/5" />
-        </div>
-      );
-    }
     const apiError = apiErrorOf(query.error);
     // 401は画面上部のバナーが知らせるので、同じ内容を重ねない。
     if (apiError !== null && isBannerError(apiError)) {

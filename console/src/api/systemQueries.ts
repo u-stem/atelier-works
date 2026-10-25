@@ -33,15 +33,22 @@ export async function fetchSystemStatus(
   return result.value;
 }
 
+/** システムの状態の取得の設定。画面の取得と、サイドバーの先読みが同じ値を使う。 */
+export function systemStatusQueryOptions() {
+  return {
+    queryKey: systemStatusQueryKey,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchSystemStatus({ signal }),
+    staleTime: SYSTEM_STATUS_STALE_MS,
+  };
+}
+
 /**
  * システムの状態を取る。定期には取り直さず、画面の更新ボタンで取り直す。
- * 要対応の画面で通知を解決した後に戻っても、解決した通知を未解決のまま出さないよう、画面を開くたびに取り直す。
+ * 通知の解決は書き込みの側が読み直す(`NOTICE_RESOLVE_INVALIDATES`)ので、
+ * 画面を開くときの取り直しは`staleTime`に任せる。
+ * 保留と凍結の解除も、この取得を読み直す。
  */
 export function useSystemStatus(): UseQueryResult<SystemStatus, Error> {
-  return useQuery({
-    queryKey: systemStatusQueryKey,
-    queryFn: ({ signal }) => fetchSystemStatus({ signal }),
-    staleTime: SYSTEM_STATUS_STALE_MS,
-    refetchOnMount: "always",
-  });
+  return useQuery(systemStatusQueryOptions());
 }

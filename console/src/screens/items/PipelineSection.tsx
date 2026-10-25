@@ -1,25 +1,27 @@
 import { isBannerError } from "../../api/errors.ts";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { PIPELINE_DAYS, PIPELINE_LIMIT } from "../../api/queries.ts";
-import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import {
+  LoadingGate,
+  type LoadingShape,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { pipelineScopeNote } from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
 
-function LoadingState() {
-  return (
-    <div className="flex flex-col gap-2" role="status">
-      <span className="sr-only">読み込み中</span>
-      {["a", "b", "c", "d", "e"].map((key) => (
-        <Skeleton key={key} className="h-10 w-full rounded-md" />
-      ))}
-    </div>
-  );
-}
+/**
+ * 読み込み中の形。表の1行は約3rem(上下の余白と、題の1〜2行)で、1ページは25行になる。
+ * 画面の高さに入る行の数で目安にする。値は見積もりで、実機で測り直して合わせる。
+ */
+const LOADING_SHAPE: LoadingShape = {
+  rows: 8,
+  rowClassName: "h-12 w-full rounded-md",
+  gapClassName: "gap-2",
+};
 
 /**
  * 取得に失敗して表示できる一覧が無いときの表示。
@@ -77,8 +79,8 @@ export function PipelineSection({
               )}
         </p>
       </div>
-      {pipeline.data === undefined ? (
-        pipeline.isError ? (
+      <LoadingGate phase={loadPhaseOf(pipeline)} shape={LOADING_SHAPE}>
+        {pipeline.data === undefined ? (
           <FailureState
             error={pipeline.error}
             onRetry={() => {
@@ -86,22 +88,20 @@ export function PipelineSection({
             }}
           />
         ) : (
-          <LoadingState />
-        )
-      ) : (
-        <>
-          {pipeline.isError ? (
-            <StaleDataNotice
-              error={pipeline.error}
-              isFetching={pipeline.isFetching}
-              onRetry={() => {
-                void pipeline.refetch();
-              }}
-            />
-          ) : null}
-          <PipelineTable rows={pipeline.data} now={now} />
-        </>
-      )}
+          <>
+            {pipeline.isError ? (
+              <StaleDataNotice
+                error={pipeline.error}
+                isFetching={pipeline.isFetching}
+                onRetry={() => {
+                  void pipeline.refetch();
+                }}
+              />
+            ) : null}
+            <PipelineTable rows={pipeline.data} now={now} />
+          </>
+        )}
+      </LoadingGate>
     </section>
   );
 }

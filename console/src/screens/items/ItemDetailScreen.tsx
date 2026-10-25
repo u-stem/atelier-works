@@ -1,9 +1,15 @@
 import { ArrowLeft, FileQuestion } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { useWorkItemDetail } from "../../api/workItemDetailQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   describeOverview,
@@ -46,22 +52,21 @@ function Message({ children }: { children: string }) {
   );
 }
 
-function LoadingState() {
-  return (
-    <div
-      className="mx-auto w-full max-w-[75rem] space-y-4 px-4 py-6 md:px-8"
-      role="status"
-    >
-      <span className="sr-only">読み込み中</span>
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "mx-auto w-full max-w-[75rem] space-y-4 px-4 py-6 md:px-8",
+  node: (
+    <>
       <Skeleton className="h-40 w-full max-w-[47.5rem] rounded-xl" />
       <Skeleton className="h-5 w-2/3 max-w-[47.5rem]" />
       <Skeleton className="h-32 w-full max-w-[47.5rem]" />
-    </div>
-  );
-}
+    </>
+  ),
+};
 
 function ItemDetail({ workItemId }: { workItemId: number }) {
   const query = useWorkItemDetail(workItemId);
+  const loadingDisplay = useLoadingDisplay(loadPhaseOf(query));
   const refresh = refreshStatusOf(query);
   const now = useNow();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -83,21 +88,22 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
     );
   };
 
-  if (detail === undefined) {
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (detail === undefined || loadingDisplay !== "content") {
     return (
       <>
         <PageHeader title={workItemRef(workItemId)} refresh={refresh}>
           <BackLink />
         </PageHeader>
-        {query.isError ? (
+        {loadingDisplay !== "content" ? (
+          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+        ) : (
           <QueryFailure
             title="作業項目の詳細を取得できませんでした"
             loginHint="上のバナーからログインすると、作業項目の詳細を表示します。"
             error={query.error}
             onRetry={refresh.onRefresh}
           />
-        ) : (
-          <LoadingState />
         )}
       </>
     );

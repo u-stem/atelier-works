@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fetchConsoleStatus } from "./consoleStatus.ts";
-import type { FetchLike } from "./windmill.ts";
+import { type FetchLike, setConnectionReporter } from "./windmill.ts";
 
 const OK = {
   state: "ok",
@@ -45,5 +45,27 @@ describe("fetchConsoleStatus", () => {
     expect(
       await fetchConsoleStatus(() => Promise.reject(new TypeError("offline"))),
     ).toBeNull();
+  });
+});
+
+describe("fetchConsoleStatus and the connection report", () => {
+  test("does not report to the connection state, whether it succeeds", async () => {
+    let reports = 0;
+    setConnectionReporter(() => {
+      reports += 1;
+    });
+    await fetchConsoleStatus(respondWith(JSON.stringify(OK)));
+    setConnectionReporter(null);
+    expect(reports).toBe(0);
+  });
+
+  test("does not report to the connection state when the fetch fails", async () => {
+    let reports = 0;
+    setConnectionReporter(() => {
+      reports += 1;
+    });
+    await fetchConsoleStatus(() => Promise.reject(new TypeError("down")));
+    setConnectionReporter(null);
+    expect(reports).toBe(0);
   });
 });

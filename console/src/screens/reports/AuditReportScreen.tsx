@@ -2,9 +2,15 @@ import { ArrowLeft } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { useAuditDoc } from "../../api/auditQueries.ts";
 import { isBannerError } from "../../api/errors.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { ComingSoon } from "../../components/ComingSoon.tsx";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { auditProposalTotal, auditReportTitle } from "../../lib/auditView.ts";
@@ -25,17 +31,18 @@ function BackToList() {
   );
 }
 
-function Loading() {
-  return (
-    <div className="space-y-3 px-4 py-6 md:px-8" role="status">
-      <span className="sr-only">読み込み中</span>
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-3 px-4 py-6 md:px-8",
+  node: (
+    <>
       <Skeleton className="h-8 w-1/2" />
       <Skeleton className="h-4 w-full max-w-3xl" />
       <Skeleton className="h-4 w-4/5 max-w-3xl" />
       <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
-    </div>
-  );
-}
+    </>
+  ),
+};
 
 /** 監査レポートの本文の画面。作業項目の番号の経路で受ける。 */
 export function AuditReportScreen() {
@@ -56,15 +63,17 @@ export function AuditReportScreen() {
 
 function AuditReportView({ workItemId }: { workItemId: number }) {
   const query = useAuditDoc(workItemId);
+  const loadingDisplay = useLoadingDisplay(loadPhaseOf(query));
   const refresh = refreshStatusOf(query);
 
-  if (query.isPending) {
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (query.isPending || loadingDisplay !== "content") {
     return (
       <>
         <PageHeader title={`${workItemRef(workItemId)}の監査レポート`}>
           <BackToList />
         </PageHeader>
-        <Loading />
+        <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
       </>
     );
   }

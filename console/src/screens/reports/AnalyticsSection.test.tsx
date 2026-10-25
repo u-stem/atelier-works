@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
-import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
+import {
+  freshQuery,
+  loadingQuery,
+  staleQuery,
+} from "../../api/fakeSectionQuery.testing.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { AnalyticsSection } from "./AnalyticsSection.tsx";
 
@@ -54,5 +58,11 @@ describe("AnalyticsSection", () => {
 
   test("does not say the rows are stale without a failure", () => {
     expect(render(freshQuery(["a"]))).not.toContain(NOTICE);
+  });
+});
+
+describe("AnalyticsSection while loading", () => {
+  test("shows only the frame in the first moment", () => {
+    expect(render(loadingQuery<string[]>())).not.toContain("読み込み中");
   });
 });

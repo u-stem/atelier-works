@@ -11,3 +11,18 @@ export type SectionQuery<T> = {
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
 };
+
+/**
+ * 節が出す内容を決める取得の段階。
+ * `loaded`は値がある状態で、取り直しに失敗していても値を出す。
+ */
+export type LoadPhase = "loaded" | "failed" | "loading";
+
+export function loadPhaseOf(
+  query: Pick<SectionQuery<unknown>, "data" | "isError">,
+): LoadPhase {
+  if (query.data !== undefined) {
+    return "loaded";
+  }
+  return query.isError ? "failed" : "loading";
+}

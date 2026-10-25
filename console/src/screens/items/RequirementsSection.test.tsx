@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
-import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
+import {
+  freshQuery,
+  loadingQuery,
+  staleQuery,
+} from "../../api/fakeSectionQuery.testing.ts";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
 import { RequirementsSection } from "./RequirementsSection.tsx";
 
@@ -27,5 +31,27 @@ describe("RequirementsSection", () => {
     expect(
       renderToStaticMarkup(<RequirementsSection index={freshQuery(NO_ROWS)} />),
     ).not.toContain(NOTICE);
+  });
+});
+
+describe("RequirementsSection while loading", () => {
+  test("shows only the frame in the first moment", () => {
+    expect(
+      renderToStaticMarkup(
+        <RequirementsSection
+          index={loadingQuery<readonly RequirementsIndexRow[]>()}
+        />,
+      ),
+    ).not.toContain("読み込み中");
+  });
+
+  test("holds the height of the list in the first moment", () => {
+    expect(
+      renderToStaticMarkup(
+        <RequirementsSection
+          index={loadingQuery<readonly RequirementsIndexRow[]>()}
+        />,
+      ),
+    ).toContain("h-[4.75rem]");
   });
 });

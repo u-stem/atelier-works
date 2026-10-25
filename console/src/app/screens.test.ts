@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { SCREENS } from "./screens.ts";
+import { holdsQueryKey, holdsQueryOptions } from "../api/holdsQueries.ts";
+import {
+  deploymentsQueryKey,
+  deploymentsQueryOptions,
+  pipelineQueryKey,
+  pipelineQueryOptions,
+  requirementsIndexQueryKey,
+  requirementsIndexQueryOptions,
+} from "../api/queries.ts";
+import {
+  systemStatusQueryKey,
+  systemStatusQueryOptions,
+} from "../api/systemQueries.ts";
+import { SCREENS, type ScreenId } from "./screens.ts";
 
 describe("SCREENS", () => {
   test("has the four entrances in order", () => {
@@ -58,5 +71,49 @@ describe("other badges", () => {
         screen.badge({ approvals: 1, failures: 1, notices: 1 }),
       ),
     ).toEqual([0, 0, 0]);
+  });
+});
+
+function prefetchOf(id: ScreenId) {
+  return SCREENS.find((screen) => screen.id === id)?.prefetch() ?? [];
+}
+
+describe("prefetch", () => {
+  test("system prefetches the status, the deployments and the holds", () => {
+    expect(prefetchOf("system").map((options) => options.queryKey)).toEqual([
+      systemStatusQueryKey,
+      deploymentsQueryKey,
+      holdsQueryKey,
+    ]);
+  });
+
+  test("system shares the stale time of the queries the screen runs", () => {
+    expect(prefetchOf("system").map((options) => options.staleTime)).toEqual([
+      systemStatusQueryOptions().staleTime,
+      deploymentsQueryOptions().staleTime,
+      holdsQueryOptions().staleTime,
+    ]);
+  });
+
+  test("items prefetches the pipeline and the requirements index", () => {
+    expect(prefetchOf("items").map((options) => options.queryKey)).toEqual([
+      pipelineQueryKey,
+      requirementsIndexQueryKey,
+    ]);
+  });
+
+  test("items shares the stale time of the queries the screen runs", () => {
+    expect(prefetchOf("items").map((options) => options.staleTime)).toEqual([
+      pipelineQueryOptions().staleTime,
+      requirementsIndexQueryOptions().staleTime,
+    ]);
+  });
+
+  test("inbox prefetches nothing because the sidebar already holds the summary", () => {
+    expect(prefetchOf("inbox")).toEqual([]);
+  });
+
+  test("reports prefetches nothing", () => {
+    expect(prefetchOf("reports")).toEqual([]);
   });
 });

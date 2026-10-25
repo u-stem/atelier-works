@@ -27,3 +27,14 @@ export function freshQuery<T>(data: T): SectionQuery<T> {
     refetch: () => Promise.resolve(undefined),
   };
 }
+
+/** 値がなく、取得が走っている状態。 */
+export function loadingQuery<T>(): SectionQuery<T> {
+  return {
+    data: undefined,
+    isError: false,
+    error: null,
+    isFetching: true,
+    refetch: () => Promise.resolve(undefined),
+  };
+}

@@ -2,12 +2,19 @@ import type { ReactNode } from "react";
 import type { InboxProposal } from "../../api/guards/inboxProposals.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useInboxProposals } from "../../api/inboxQueries.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
+import {
+  LoadingBody,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   factoryLabelChoice,
   proposalOrigin,
 } from "../../lib/approvalDecision.ts";
+import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { ApprovalBar } from "./ApprovalBar.tsx";
 
@@ -59,6 +66,17 @@ function Notice({ children }: { children: ReactNode }) {
   );
 }
 
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-2",
+  node: (
+    <>
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-24 w-full" />
+    </>
+  ),
+};
+
 /**
  * Issue提案の承認。提案の本文を出し、その下に承認バーを置く。
  * 本文とラベルの選択肢は"inbox"ビューから読む。読めないあいだは承認の操作を出さない。
@@ -74,14 +92,11 @@ export function ProposalReview({
   now: number;
 }) {
   const proposals = useInboxProposals();
-  if (proposals.isPending) {
-    return (
-      <div className="space-y-2" role="status">
-        <span className="sr-only">読み込み中</span>
-        <Skeleton className="h-4 w-2/3" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    );
+  // 承認の可否は取得の状態だけで決まる。内容と食い違わないよう、取得が済んだら骨組みを残さず内容を出す。
+  const display = useLoadingDisplay(loadPhaseOf(proposals), NO_LINGER_OPTIONS);
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (proposals.isPending || display !== "content") {
+    return <LoadingBody display={display} shape={LOADING_SHAPE} />;
   }
   if (proposals.isError) {
     return (

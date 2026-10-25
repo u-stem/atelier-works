@@ -3,6 +3,13 @@ import { Link } from "react-router";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useIntakeSnapshot, useRequirementsDoc } from "../../api/queries.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
+import {
+  LoadingBody,
+  type LoadingDisplay,
+  type LoadingShape,
+  useLoadingDisplay,
+} from "../../components/LoadingState.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   approvalLinks,
@@ -11,6 +18,7 @@ import {
   requirementsBlockedReason,
   snapshotReadiness,
 } from "../../lib/approvalDecision.ts";
+import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { attemptRef } from "../../lib/labels.ts";
 import { prepareDoc } from "../../lib/requirementsView.ts";
@@ -51,6 +59,17 @@ function PanelShell({
   );
 }
 
+/** 読み込み中の形。 */
+const LOADING_SHAPE: LoadingShape = {
+  className: "space-y-2 px-5 py-4",
+  node: (
+    <>
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-24 w-full" />
+    </>
+  ),
+};
+
 function PanelNote({ children }: { children: string }) {
   return (
     <p className="px-5 py-4 text-small text-muted-foreground">{children}</p>
@@ -77,6 +96,7 @@ function DocPanel({
   attempt,
   query,
   state,
+  display,
 }: {
   approval: SummaryApproval;
   attempt: number;
@@ -86,6 +106,8 @@ function DocPanel({
     readonly refetch: () => unknown;
   };
   state: DocReadiness;
+  /** 読み込み中の表示。取得が済んでも、骨組みを残す時間の間は`content`にならない。 */
+  display: LoadingDisplay;
 }) {
   const doc = query.data;
   const prepared = useMemo(
@@ -95,7 +117,10 @@ function DocPanel({
   const heading = `承認対象の要件定義書(${attemptRef(attempt)})`;
   const link = approvalLinks(approval).requirements;
   let body: ReactNode;
-  if (state === "failed") {
+  // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
+  if (display !== "content") {
+    body = <LoadingBody display={display} shape={LOADING_SHAPE} />;
+  } else if (state === "failed") {
     body = (
       <div className="p-4">
         <QueryFailure
@@ -107,14 +132,6 @@ function DocPanel({
           }}
           compact
         />
-      </div>
-    );
-  } else if (state === "loading") {
-    body = (
-      <div className="space-y-2 px-5 py-4" role="status">
-        <span className="sr-only">読み込み中</span>
-        <Skeleton className="h-4 w-2/3" />
-        <Skeleton className="h-24 w-full" />
       </div>
     );
   } else if (state === "missing") {
@@ -193,6 +210,7 @@ function ReviewWithDoc({
 }) {
   const query = useRequirementsDoc(approval.work_item_id, attempt);
   const state = docReadiness({ expectedAttempt: attempt, query });
+  const display = useLoadingDisplay(loadPhaseOf(query), NO_LINGER_OPTIONS);
   return (
     <ReviewBody
       approval={approval}
@@ -205,6 +223,7 @@ function ReviewWithDoc({
           attempt={attempt}
           query={query}
           state={state}
+          display={display}
         />
       }
     />
@@ -229,11 +248,17 @@ function ReviewBody({
     approval.work_item_id,
     approval.approval_request_id,
   );
+  // 承認の可否は取得の状態だけで決まる。内容と食い違わないよう、取得が済んだら骨組みを残さず内容を出す。
+  const snapshotDisplay = useLoadingDisplay(
+    loadPhaseOf(snapshot),
+    NO_LINGER_OPTIONS,
+  );
   return (
     <>
       <IntakeSnapshotPanel
         workItemId={approval.work_item_id}
         approvalRequestId={approval.approval_request_id}
+        display={snapshotDisplay}
       />
       {docPanel}
       <ApprovalBar
