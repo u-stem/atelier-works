@@ -61,7 +61,7 @@ function AuditFailureItem({
           {description.statusLabel}
         </Badge>
         {failure.superseded === true ? (
-          <Badge variant="success">後の監査で解消</Badge>
+          <Badge variant="success">後の監査の報告が期間を覆う</Badge>
         ) : null}
         <span className="text-small text-subtle">
           <TimeText
@@ -90,7 +90,7 @@ function AuditFailureItem({
 
 /**
  * 失敗した監査の一覧。再実行できないので、操作は置かず、題名、時刻、失敗の内容、ジョブへのリンクだけを出す。
- * 後の監査が報告を作った失敗は一覧に残し、「後の監査で解消」の印を付ける。
+ * 後の監査の報告が期間の先頭を覆う失敗は一覧に残し、「後の監査の報告が期間を覆う」の印を付ける。
  * 失敗の内容は実行の出力で、プレーンテキストで描く。
  */
 export function AuditFailureList({

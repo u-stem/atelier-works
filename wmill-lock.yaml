@@ -22,7 +22,7 @@ locks:
   f/factory/freeze_release: eea20528af4a7e9fc136add7dce194ae1a703c30a3d41f09b4ebfed7baba0467
   f/factory/hold_release: 8d52fe914fb1312e62c55e3d1d59c5c0098fcb656cb79de678b368097c52ea54
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/lib/approval_support: c83d07755a7a3a2478eb413ae4480b62567672de1fb001eb72e84a220f7596b0
+  f/factory/lib/approval_support: 1031f0a3c158f71cedd56d0dcfb6bfc1bcafefb5e00f9c0c9093e898ddc7b698
   f/factory/lib/approver: 1c82cf702f2bb7ac29d81bf9a5d439ced908228a3ee8229b415118a13619c300
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: 5aa75b51fa92d650753b4a0b4e02d72f10d43ea7d4c69015c53df5ea4ecb6653
@@ -143,7 +143,7 @@ locks:
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/manual_intake_submit: a4e2b2497078a00f328de0958837d968a19e68c8eb13db01d1fcd65f982b25d6
   f/factory/notice_resolve: 3794cae7243a5e3efa50091313272a61aae6d8c6930e3a2060d4e8b8c48067ac
-  f/factory/notify_daily_summary: ad37bfc67467997d1aef1e08b5108ac8ea4cc9536f0f51d27396dd046054017f
+  f/factory/notify_daily_summary: 1a4d00fbcb8cf888110381a72872dcf099af5b6b2d972ea884b96b084e038bd7
   f/factory/on_error_flow: fd9a0dc06db3b7bc03909b7d2f2408e62b3de12b1b42607609eaebadaa0a01c8
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_dependabot: 5fc165c01f8ce38bbac2c5d2e9a4a1a9f4b371a43de8eeb6aea82b0b314c3668
@@ -156,7 +156,7 @@ locks:
   f/factory/self_update: 4cfbf6a41cda8abd668c2f82d40959d73811171f58491f46cabdfc2da1650c4b
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
-  f/factory/steps/console_query: e270da1fba5835e31fe140f9de8bcc5aaee183be490a6476888278ed524ad550
+  f/factory/steps/console_query: e2ce491a4ffb1b7258a728cf87d1e839e3f131055db7d6ebbc742dfdf0a56fa7
   f/factory/steps/dependabot_assess: 15c82461f3f283e89e953107be209c1b77e85311033966261245dbb0cfd9c7f6
   f/factory/steps/dependabot_finish: 4af9847578aa1e1b501e73efaf85318244b988100e0d375ef04284319e641391
   f/factory/steps/dependabot_prepare: c7f1d8acb7f22c04ec4103a39bcf6e977a0592d7e0d535ee261c9eba17a486e9

@@ -163,13 +163,19 @@ export const PIPELINE_SCOPES: readonly {
 ];
 
 /**
- * 進行中の範囲に入る状態か。終端でない状態と、`blocked`が入る。
+ * 進行中の範囲に入る状態か。終端でない状態と、`blocked`と`approved`が入る。
  * 失敗、人の対応待ち、期限切れは要対応の画面にあるので入れない。
  * `blocked`は要対応に載らないので、ここで見えるようにする。
+ * `approved`は、実装を有効にしていない間、承認された要件定義が次の工程へ進まずに残る状態で、
+ * 要対応にもPR待ちにも出ないので、ここで見えるようにする。
  * backendが先に足した知らない状態は、終端でないものとして入れる。
  */
 export function isActiveStatus(status: string): boolean {
-  return status === "blocked" || !TERMINAL_PIPELINE_STATUSES.includes(status);
+  return (
+    status === "blocked" ||
+    status === "approved" ||
+    !TERMINAL_PIPELINE_STATUSES.includes(status)
+  );
 }
 
 /** `status`が`scope`の範囲に入るか。 */
@@ -246,29 +252,53 @@ export function actionableNote(count: number | null): string {
 export const PR_OPEN_NOTE =
   "状態がPR作成済みのものです。マージ済みかどうかは一覧から分からないので、マージ待ちの目安です。";
 
-export function parsePipelineScope(_value: string | null): PipelineScope {
-  return "active";
+/** URLのクエリのうち、範囲を持つ名前。 */
+const SCOPE_PARAM = "scope";
+
+/** URLの`?scope=`から範囲を決める。無い値と知らない値は進行中にする。 */
+export function parsePipelineScope(value: string | null): PipelineScope {
+  return PIPELINE_SCOPES.find((scope) => scope.id === value)?.id ?? "active";
 }
 
+/**
+ * 範囲を選んだ後のクエリを、新しいオブジェクトで返す。他のクエリは残す。
+ * 既定の進行中は名前を消す。名前の無いURLと同じ画面になるためである。
+ */
 export function withPipelineScope(
   current: URLSearchParams,
-  _scope: PipelineScope,
+  scope: PipelineScope,
 ): URLSearchParams {
-  return current;
+  const next = new URLSearchParams(current);
+  if (scope === "active") {
+    next.delete(SCOPE_PARAM);
+  } else {
+    next.set(SCOPE_PARAM, scope);
+  }
+  return next;
 }
 
+/**
+ * 範囲の外にあり、状態・リポジトリ・検索の条件に当たる行の数。範囲が「すべて」なら0。
+ * 範囲の中で0件になったとき、範囲を広げれば見つかるかを伝えるために使う。
+ */
 export function outOfScopeMatchCount(
-  _rows: readonly PipelineRow[],
-  _filter: PipelineFilter,
+  rows: readonly PipelineRow[],
+  filter: PipelineFilter,
 ): number {
-  return 0;
+  if (filter.scope === "all") return 0;
+  const hidden = rows.filter((row) => !statusInScope(row.status, filter.scope));
+  return filterPipelineRows(hidden, filter).length;
 }
 
+/**
+ * 表が実際に使う並び。リポジトリの列が無いときに、リポジトリで並べた状態を既定の並びに戻す。
+ * 列が無いと見出しを押せず、並びを戻す手段が見えないためである。
+ */
 export function effectivePipelineSort(
   sort: PipelineSort,
-  _showRepo: boolean,
+  showRepo: boolean,
 ): PipelineSort {
-  return sort;
+  return !showRepo && sort.key === "repo" ? DEFAULT_PIPELINE_SORT : sort;
 }
 
 /**

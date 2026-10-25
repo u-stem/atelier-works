@@ -1133,8 +1133,12 @@ export type SummaryFailureRow = {
   readonly error: string | null;
   readonly occurred_at: string | null;
   /**
-   * 監査の失敗で、`id`が大きい後の監査が報告(`audit_reports`)を作っていれば真。
-   * 次の監査は前回の報告の終わりから始まるので、報告を作った後の監査は、失敗した期間を扱っている。
+   * 監査の失敗で、後の監査の報告が、失敗した期間の先頭を覆っていれば真。
+   * 後の監査は`id`が大きい監査で、報告(`audit_reports`)を持つもの。
+   * 覆うとは、その報告の開始が、失敗した監査より前の報告の終わり以前であること。前の報告が無い(初回)ときは常に覆う。
+   * 次の監査は前回の報告の終わりから始まるが、報告を作らずに失敗が続くと、
+   * `max_lookback_days`で始まりが切り詰められ、報告の開始が前の報告の終わりより後になる。そのときは覆わない。
+   * 失敗した監査自身の期間は記録が無い(監査の作業項目に期間の列が無い)ので、前の報告の終わりから導く。
    * 監査以外の行は常に偽。
    */
   readonly superseded: boolean;
@@ -1205,7 +1209,8 @@ function totalCount(rows: readonly SqlRow[]): number {
  *   同じIssueに新しいcycleがある作業項目は、そのcycleが引き継ぐので除く。
  *   PRのレビューと修正は、ラベルの付け直しで同じPRに新しい行(cycleは1から)ができるので、
  *   同じ種類・リポジトリ・PR番号で`id`が大きい行がある作業項目を除く。
- *   監査の失敗は一覧から除かず、`superseded`の印を付ける。`audit_failures_open`は印が偽の件数である。
+ *   監査の失敗は一覧から除かず、後の報告が期間の先頭を覆うものに`superseded`の印を付ける。
+ *   `audit_failures_open`は印が偽の件数である。
  * - 通知: 未解決で、重要度が`action`のもの。
  *
  * `error`、`message`、状態の注記は`SUMMARY_TEXT_LIMIT`字に切り詰める。
@@ -1247,6 +1252,10 @@ export async function runConsoleSummary(
         FROM factory.work_items n
         JOIN factory.audit_reports ar ON ar.work_item_id = n.id
         WHERE n.kind = 'audit' AND n.id > wi.id
+          AND ar.period_start <= coalesce(
+            (SELECT max(pr.period_end) FROM factory.work_items p JOIN factory.audit_reports pr ON pr.work_item_id = p.id WHERE p.kind = 'audit' AND p.id < wi.id),
+            'infinity'::timestamptz
+          )
       ) AS superseded
     ) sup ON true
     LEFT JOIN LATERAL (

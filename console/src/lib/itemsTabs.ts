@@ -1,6 +1,8 @@
 // 作業項目の画面のタブ(進捗と要件定義)を決める純関数。
 // 開くタブはURLの`?tab=`に持つ。作業項目の詳細のタブと名前をそろえてある。
 
+import { tabDomId } from "./tabs.ts";
+
 export type ItemsTabId = "progress" | "requirements";
 
 export const ITEMS_TABS: readonly {
@@ -64,26 +66,37 @@ export function itemsTabMark(
   return tab !== selected && failed[tab] ? FETCH_FAILED_MARK : undefined;
 }
 
-export const ITEMS_ID_PREFIX = "";
+/** タブの要素の`id`の接頭辞。本体の`aria-labelledby`が指す。 */
+export const ITEMS_ID_PREFIX = "items";
 
+/** 選んでいないタブの本体は、描いたまま隠す。絞り込みやページの状態を保つため、外さない。 */
 export function itemsPanelHidden(
-  _panel: ItemsTabId,
-  _selected: ItemsTabId,
+  panel: ItemsTabId,
+  selected: ItemsTabId,
 ): boolean {
-  return false;
+  return panel !== selected;
 }
 
+/** タブの本体の要素に付ける`id`、`aria-labelledby`、`hidden`。 */
 export function itemsPanelAttrs(
-  _panel: ItemsTabId,
-  _selected: ItemsTabId,
+  panel: ItemsTabId,
+  selected: ItemsTabId,
 ): { id: string; labelledBy: string; hidden: boolean } {
-  return { id: "", labelledBy: "", hidden: false };
+  return {
+    id: itemsPanelId(panel),
+    labelledBy: tabDomId(ITEMS_ID_PREFIX, panel),
+    hidden: itemsPanelHidden(panel, selected),
+  };
 }
 
+/**
+ * 共通の`Tabs`へ渡す、2つのタブの指定。
+ * 件数は要件定義のタブだけに付ける。印は、隠れているタブの取得が失敗したときだけ付く。
+ */
 export function itemsTabSpecs(
-  _selected: ItemsTabId,
-  _failed: Readonly<Record<ItemsTabId, boolean>>,
-  _requirementsCount: number | undefined,
+  selected: ItemsTabId,
+  failed: Readonly<Record<ItemsTabId, boolean>>,
+  requirementsCount: number | undefined,
 ): {
   id: ItemsTabId;
   label: string;
@@ -91,5 +104,10 @@ export function itemsTabSpecs(
   count: number | undefined;
   mark: string | undefined;
 }[] {
-  return [];
+  return ITEMS_TABS.map((tab) => ({
+    ...tab,
+    panelId: itemsPanelId(tab.id),
+    count: tab.id === "requirements" ? requirementsCount : undefined,
+    mark: itemsTabMark(tab.id, selected, failed),
+  }));
 }

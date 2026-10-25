@@ -14,20 +14,22 @@ import { Tabs } from "../../components/Tabs.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { actionableTotal } from "../../lib/inboxView.ts";
 import {
-  ITEMS_TABS,
+  ITEMS_ID_PREFIX,
   type ItemsTabId,
-  itemsPanelId,
-  itemsTabMark,
+  itemsPanelAttrs,
+  itemsTabSpecs,
   parseItemsTab,
   withItemsTab,
 } from "../../lib/itemsTabs.ts";
 import { SCROLL_BODY_CLASS } from "../../lib/layoutClasses.ts";
-import { recalledScroll, rememberScroll, tabDomId } from "../../lib/tabs.ts";
+import {
+  type PipelineScope,
+  parsePipelineScope,
+  withPipelineScope,
+} from "../../lib/pipelineView.ts";
+import { recalledScroll, rememberScroll } from "../../lib/tabs.ts";
 import { PipelineSection } from "./PipelineSection.tsx";
 import { RequirementsSection } from "./RequirementsSection.tsx";
-
-/** タブの`id`の接頭辞。 */
-const ID_PREFIX = "items";
 
 /**
  * 2つのタブの本体が共有するスクロール枠で、タブごとのスクロール位置を覚えて戻す。
@@ -65,7 +67,8 @@ function useTabScroll(tab: ItemsTabId) {
 
 /**
  * 作業項目の画面。進捗と要件定義の2つのタブを持つ。
- * 開くタブはURLの`?tab=`に持ち、選び直しても履歴を積まない。
+ * 開くタブはURLの`?tab=`に、進捗の範囲は`?scope=`に持ち、選び直しても履歴を積まない。
+ * 戻る操作で戻ったときに、タブと範囲が保たれる。
  * 選んでいないタブの本体も描いたまま隠し、絞り込み、並び、ページ、検索の入力を保つ。
  * 2つの取得は画面が持ち、見出しの更新ボタンが両方を取り直す。タブの切り替えでは取得しない。
  * 隠れたタブの取得が失敗したときは、タブの名前に失敗の印を付ける。
@@ -78,6 +81,7 @@ export function ItemsScreen() {
   const refresh = refreshStatusOfAll([pipeline, requirements]);
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = parseItemsTab(searchParams.get("tab"));
+  const scope = parsePipelineScope(searchParams.get("scope"));
   const scroll = useTabScroll(tab);
 
   // 401は上部のバナーが知らせるので、失敗の印には数えない。
@@ -85,15 +89,17 @@ export function ItemsScreen() {
     progress: refreshStatusOf(pipeline).isError,
     requirements: refreshStatusOf(requirements).isError,
   };
-  const tabs = ITEMS_TABS.map((item) => ({
-    ...item,
-    panelId: itemsPanelId(item.id),
-    count: item.id === "requirements" ? requirements.data?.length : undefined,
-    mark: itemsTabMark(item.id, tab, failed),
-  }));
+  const tabs = itemsTabSpecs(tab, failed, requirements.data?.length);
+  const progressPanel = itemsPanelAttrs("progress", tab);
+  const requirementsPanel = itemsPanelAttrs("requirements", tab);
 
   const selectTab = (id: ItemsTabId): void => {
     setSearchParams((current) => withItemsTab(current, id), { replace: true });
+  };
+  const selectScope = (next: PipelineScope): void => {
+    setSearchParams((current) => withPipelineScope(current, next), {
+      replace: true,
+    });
   };
 
   return (
@@ -112,7 +118,7 @@ export function ItemsScreen() {
         selected={tab}
         onSelect={selectTab}
         label="作業項目"
-        idPrefix={ID_PREFIX}
+        idPrefix={ITEMS_ID_PREFIX}
       />
       <div
         ref={scroll.frameRef}
@@ -120,25 +126,25 @@ export function ItemsScreen() {
         className={SCROLL_BODY_CLASS}
       >
         <div
-          id={itemsPanelId("progress")}
+          id={progressPanel.id}
           role="tabpanel"
-          aria-labelledby={tabDomId(ID_PREFIX, "progress")}
-          hidden={tab !== "progress"}
+          aria-labelledby={progressPanel.labelledBy}
+          hidden={progressPanel.hidden}
         >
           <PipelineSection
             pipeline={pipeline}
-            scope="active"
-            onScopeChange={() => undefined}
+            scope={scope}
+            onScopeChange={selectScope}
             actionableCount={
               summary.data === undefined ? null : actionableTotal(summary.data)
             }
           />
         </div>
         <div
-          id={itemsPanelId("requirements")}
+          id={requirementsPanel.id}
           role="tabpanel"
-          aria-labelledby={tabDomId(ID_PREFIX, "requirements")}
-          hidden={tab !== "requirements"}
+          aria-labelledby={requirementsPanel.labelledBy}
+          hidden={requirementsPanel.hidden}
         >
           <RequirementsSection index={requirements} />
         </div>

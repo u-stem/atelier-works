@@ -293,12 +293,14 @@ export function auditFailuresOf(
  * 監査の失敗の一覧に添える注記。無ければ`null`。
  * 要対応の失敗の件数が、取得した一覧の件数より多いときは、取得の上限を超えた分がある。
  * 一覧は新しい順なので、見えないのは古い失敗である。
+ * 要対応の「監査の失敗」のカードは、取得の上限の前の全件から数えるので、
+ * 上限を超えたときは、この一覧に見える件数より多くなりうる。その差の理由も添える。
  */
 export function auditFailureLimitNote(count: {
   readonly counts: number;
   readonly listed: number;
 }): string | null {
   return count.counts > count.listed
-    ? "取得の上限を超えた失敗があるので、古い監査の失敗は表示していない場合があります。"
+    ? "取得の上限を超えた失敗があるので、古い監査の失敗は表示していない場合があります。要対応の「監査の失敗」の件数は、表示していない分も数えるので、この一覧より多いことがあります。"
     : null;
 }

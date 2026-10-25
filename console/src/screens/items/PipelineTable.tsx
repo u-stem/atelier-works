@@ -15,11 +15,13 @@ import {
   clearPipelineFilter,
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
+  effectivePipelineSort,
   filterPipelineRows,
   isPipelineFilterActive,
   itemDetailPath,
   itemRequirementsPath,
   nextPipelineSort,
+  outOfScopeMatchCount,
   PIPELINE_SCOPES,
   type PipelineFilter,
   type PipelineLink,
@@ -371,11 +373,29 @@ function PipelineRowView({
 /** 1ページに出す行の数。 */
 const PAGE_SIZE = 25;
 
-export function NoMatchNotice(_props: {
+/**
+ * 範囲の中に行があり、絞り込みの結果が0件のときの表示。
+ * 範囲の外に条件へ当たる行があれば、範囲を「すべて」に広げて探す導線を添える。
+ * 進行中の範囲で探した語が、終わった作業項目にだけ当たることがあるためである。
+ */
+export function NoMatchNotice({
+  hiddenMatches,
+  onShowAll,
+}: {
+  /** 範囲の外にある、条件に当たる行の数。 */
   hiddenMatches: number;
   onShowAll: () => void;
 }) {
-  return null;
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+      <p>条件に合う作業項目はありません</p>
+      {hiddenMatches > 0 ? (
+        <Button variant="outline" size="sm" onClick={onShowAll}>
+          すべてで探す({hiddenMatches}件)
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -413,6 +433,7 @@ export function PipelineTable({
   now,
   initialPage,
   scope,
+  onScopeChange,
 }: {
   rows: readonly PipelineRow[];
   now: number;
@@ -423,26 +444,29 @@ export function PipelineTable({
   /** 範囲を替えたときに呼ぶ。 */
   onScopeChange: (scope: PipelineScope) => void;
 }) {
-  const [chosen, setFilter] = useState<PipelineFilter>({
-    ...EMPTY_PIPELINE_FILTER,
-    scope,
-  });
-  const filter = reconcilePipelineFilter(chosen, rows);
+  // 範囲は親(URL)が持つ。ここが持つのは状態、リポジトリ、検索の文字である。
+  const [chosen, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);
+  const current: PipelineFilter = { ...chosen, scope };
+  const filter = reconcilePipelineFilter(current, rows);
   const scopedRows = rowsInScope(rows, filter.scope);
   const filtered = filterPipelineRows(scopedRows, filter);
   const showRepo = showsRepository(rows);
   const pager = usePagination(filtered.length, PAGE_SIZE, initialPage);
-  if (filter !== chosen) {
+  if (filter !== current) {
     // 選んだ状態やリポジトリが再読み込みで消えたら、状態も「すべて」に揃える。
     // 描画だけを戻すと、同じ値の行が戻ったときに、操作なしで絞り込みへ戻ってしまう。
     // 絞り込みが変わったので、ページも先頭へ戻す。
     setFilter(filter);
     pager.reset();
   }
-  const [sort, setSort] = useState<PipelineSort>(DEFAULT_PIPELINE_SORT);
+  const [chosenSort, setSort] = useState<PipelineSort>(DEFAULT_PIPELINE_SORT);
+  const sort = effectivePipelineSort(chosenSort, showRepo);
   const { tableRows, cardRows } = pipelinePageRows(filtered, sort, pager.page);
   const onFilterChange = (next: PipelineFilter): void => {
     setFilter(next);
+    if (next.scope !== scope) {
+      onScopeChange(next.scope);
+    }
     pager.reset();
   };
   const onSort = (key: PipelineSortKey): void => {
@@ -489,9 +513,10 @@ export function PipelineTable({
           )}
         </div>
       ) : filtered.length === 0 ? (
-        <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-          条件に合う作業項目はありません
-        </p>
+        <NoMatchNotice
+          hiddenMatches={outOfScopeMatchCount(rows, filter)}
+          onShowAll={() => onFilterChange({ ...filter, scope: "all" })}
+        />
       ) : (
         <div className="flex flex-col gap-3">
           <div className="@container">

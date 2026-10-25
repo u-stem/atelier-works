@@ -346,7 +346,7 @@ export async function main(): Promise<CatchupResult> {
     ),
     {
       notice: gatedProlongedNotice(
-        buildItemsConsoleUrl(config.windmill_public_url),
+        buildItemsConsoleUrl(config.windmill_public_url, { scope: "all" }),
       ),
       hasOpenNotice: async (kind) =>
         (await listUnresolvedNoticesByKind(kind)).length > 0,

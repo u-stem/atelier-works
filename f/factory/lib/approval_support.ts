@@ -134,12 +134,17 @@ export function buildAuditConsoleUrl(
   return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}reports/audit/${String(workItemId)}`;
 }
 
-/** Consoleの作業項目の画面のURL(`/console/items`)を返す。 */
+/**
+ * Consoleの作業項目の画面のURL(`/console/items`)を返す。
+ * 画面は既定で進行中の作業項目だけを出す。
+ * 終わった状態の作業項目を指す案内には、`scope: "all"`を渡して、すべてを開くURL(`?scope=all`)にする。
+ */
 export function buildItemsConsoleUrl(
   windmillPublicUrl: string,
-  _options: { readonly scope?: "all" } = {},
+  options: { readonly scope?: "all" } = {},
 ): string {
-  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}items`;
+  const base = `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}items`;
+  return options.scope === undefined ? base : `${base}?scope=${options.scope}`;
 }
 
 /** Consoleのシステムの画面のURL(`/console/system`)を返す。 */
