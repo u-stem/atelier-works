@@ -116,8 +116,22 @@ describe("IntakeSnapshotView", () => {
     expect(html).toContain("ログインの有効期限が切れました。");
   });
 
-  test("shows a loading state", () => {
-    expect(render({ status: "loading" })).toContain("読み込み中");
+  test("shows a loading state once the delay has passed", () => {
+    expect(render({ status: "loading", display: "skeleton" })).toContain(
+      "読み込み中",
+    );
+  });
+
+  test("shows only the frame in the first moment of loading", () => {
+    expect(render({ status: "loading", display: "frame" })).not.toContain(
+      "読み込み中",
+    );
+  });
+
+  test("tells the user that the fetch waits for the network", () => {
+    expect(render({ status: "loading", display: "offline" })).toContain(
+      "オフラインのため、取得を待っています",
+    );
   });
 
   test("says when there is no snapshot", () => {

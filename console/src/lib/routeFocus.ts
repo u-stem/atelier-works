@@ -52,3 +52,7 @@ export function moveFocusAfterNavigation(env: FocusEnv): () => void {
   }
   return drawer.onceClosed(move);
 }
+
+export function createRouteFocusTracker(): (pathname: string) => boolean {
+  return () => false;
+}

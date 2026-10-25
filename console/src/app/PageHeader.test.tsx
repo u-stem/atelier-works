@@ -159,7 +159,11 @@ describe("PageHeader", () => {
     expect(render()).toContain('tabindex="-1"');
   });
 
-  test("draws no focus ring on the heading", () => {
+  test("draws no outline for a mouse focus", () => {
     expect(render()).toContain("outline-none");
+  });
+
+  test("draws a thin ring on the heading for a keyboard focus", () => {
+    expect(render()).toMatch(/<h1[^>]*focus-visible:ring-2/);
   });
 });

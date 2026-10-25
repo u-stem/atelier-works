@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MAIN_ID } from "../lib/routeFocus.ts";
+import { MAIN_ID, PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { AppMain } from "./AppShell.tsx";
 
 function render(name: string | null): string {
@@ -34,5 +34,15 @@ describe("AppMain", () => {
 
   test("renders the screen inside", () => {
     expect(render("システム")).toContain("<p>本文</p>");
+  });
+
+  test("is named by the heading when the screen has one", () => {
+    expect(render("システム")).toContain(
+      `aria-labelledby="${PAGE_HEADING_ID}"`,
+    );
+  });
+
+  test("is named by the heading even without a screen name", () => {
+    expect(render(null)).toContain(`aria-labelledby="${PAGE_HEADING_ID}"`);
   });
 });

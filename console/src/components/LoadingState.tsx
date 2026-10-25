@@ -4,14 +4,44 @@ import { cn } from "../lib/cn.ts";
 import { useDelayedVisible } from "../lib/delayedVisible.ts";
 import { Skeleton } from "./ui/skeleton.tsx";
 
-/** 読み込み中の表示の形。行の数と高さを、内容の目安の高さにそろえる。 */
-export type LoadingShape = {
+/** 同じ高さの行を並べる形。 */
+export type RowsShape = {
   readonly rows: number;
   /** 1行の高さと角の丸め。 */
   readonly rowClassName: string;
   /** 行の間隔。省略すると`gap-3`。 */
   readonly gapClassName?: string;
 };
+
+/** 画面ごとの形。 */
+export type NodeShape = {
+  readonly node: ReactNode;
+  readonly className?: string;
+};
+
+/** 読み込み中の表示の形。高さを、内容の目安の高さにそろえる。 */
+export type LoadingShape = RowsShape | NodeShape;
+
+/** 読み込みの段階に応じて出すもの。 */
+export type LoadingDisplay = "content" | "frame" | "skeleton" | "offline";
+
+export function loadingDisplayOf(
+  _phase: LoadPhase,
+  _visible: boolean,
+): LoadingDisplay {
+  return "content";
+}
+
+export function useLoadingDisplay(_phase: LoadPhase): LoadingDisplay {
+  return "content";
+}
+
+export function LoadingBody(_props: {
+  display: LoadingDisplay;
+  shape: LoadingShape;
+}): ReactNode {
+  return null;
+}
 
 export const OFFLINE_WAIT_TEXT = "オフラインのため、取得を待っています";
 
@@ -27,6 +57,9 @@ export function LoadingStateView({
   visible: boolean;
   shape: LoadingShape;
 }) {
+  if ("node" in shape) {
+    return null;
+  }
   const rows = Array.from({ length: shape.rows }, (_unused, index) => index);
   return (
     <div

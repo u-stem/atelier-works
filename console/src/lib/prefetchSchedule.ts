@@ -13,13 +13,26 @@ export type PrefetchTimers = {
  * 同じ入口へのfocusとpointerdownは続けて起きるので、待っている間の2回目以降は捨てる。
  * 走らせた後の要求は、また受ける。取得が新しいか走っているかは、取得の側が`staleTime`と実行中の取得で見分ける。
  */
+export const PREFETCH_COOLDOWN_MS = 5_000;
+
+export type PrefetchScheduler<K> = {
+  request(key: K): void;
+  runNow(key: K): void;
+  cancel(key: K): void;
+  cancelAll(): void;
+};
+
 export function createPrefetchScheduler<K>(options: {
   readonly delayMs: number;
+  readonly cooldownMs: number;
+  readonly now: () => number;
   readonly run: (key: K) => void;
   readonly timers: PrefetchTimers;
-}): { request(key: K): void; cancelAll(): void } {
+}): PrefetchScheduler<K> {
   const waiting = new Map<K, unknown>();
   return {
+    runNow: () => undefined,
+    cancel: () => undefined,
     request: (key) => {
       if (waiting.has(key)) {
         return;
@@ -38,3 +51,27 @@ export function createPrefetchScheduler<K>(options: {
     },
   };
 }
+
+export type PrefetchEvent =
+  | { readonly type: "focus" }
+  | { readonly type: "blur" }
+  | {
+      readonly type: "pointerdown";
+      readonly button: number;
+      readonly ctrlKey: boolean;
+      readonly metaKey: boolean;
+      readonly shiftKey: boolean;
+      readonly altKey: boolean;
+    };
+
+export type PrefetchIntent = "later" | "now" | "cancel" | "ignore";
+
+export function prefetchIntentOf(_event: PrefetchEvent): PrefetchIntent {
+  return "ignore";
+}
+
+export function handlePrefetchEvent<K>(
+  _scheduler: PrefetchScheduler<K>,
+  _key: K,
+  _event: PrefetchEvent,
+): void {}

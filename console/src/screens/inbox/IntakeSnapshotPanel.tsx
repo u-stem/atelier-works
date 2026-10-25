@@ -1,6 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import { useIntakeSnapshot } from "../../api/queries.ts";
+import type { LoadingDisplay } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import {
   Alert,
@@ -12,7 +13,7 @@ import { displayableIssueText } from "../../lib/intakeText.ts";
 
 /** 描画する状態。取得の結果を、描画に要る形だけにしたもの。 */
 export type IntakeSnapshotViewState =
-  | { readonly status: "loading" }
+  | { readonly status: "loading"; readonly display: LoadingDisplay }
   | {
       readonly status: "error";
       readonly error: unknown;
@@ -150,7 +151,9 @@ export function IntakeSnapshotPanel({
 }) {
   const snapshot = useIntakeSnapshot(workItemId, approvalRequestId);
   if (snapshot.isPending) {
-    return <IntakeSnapshotView state={{ status: "loading" }} />;
+    return (
+      <IntakeSnapshotView state={{ status: "loading", display: "skeleton" }} />
+    );
   }
   if (snapshot.isError) {
     return (

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "../api/errors.ts";
 import { createAuthStore } from "./authState.ts";
-import { createQueryClient } from "./queryClient.ts";
+import { createQueryClient, syncInitialOnlineState } from "./queryClient.ts";
 
 describe("createQueryClient", () => {
   test("shows the banner when a query gets a 401", async () => {
@@ -59,5 +59,32 @@ describe("createQueryClient", () => {
   test("keeps the default cache lifetime so a revisit shows held data at once", () => {
     const client = createQueryClient(createAuthStore());
     expect(client.getDefaultOptions().queries?.gcTime).toBeUndefined();
+  });
+});
+
+describe("syncInitialOnlineState", () => {
+  function recorded(onLine: boolean | undefined): boolean[] {
+    const calls: boolean[] = [];
+    syncInitialOnlineState(
+      {
+        setOnline: (online) => {
+          calls.push(online);
+        },
+      },
+      onLine === undefined ? {} : { onLine },
+    );
+    return calls;
+  }
+
+  test("tells the manager the browser started offline", () => {
+    expect(recorded(false)).toEqual([false]);
+  });
+
+  test("tells the manager the browser started online", () => {
+    expect(recorded(true)).toEqual([true]);
+  });
+
+  test("leaves the manager alone when the browser does not say", () => {
+    expect(recorded(undefined)).toEqual([]);
   });
 });

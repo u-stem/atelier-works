@@ -29,6 +29,7 @@ import {
 } from "../lib/navigation.ts";
 import {
   createPrefetchScheduler,
+  PREFETCH_COOLDOWN_MS,
   PREFETCH_DELAY_MS,
 } from "../lib/prefetchSchedule.ts";
 import { NavDrawer } from "./NavDrawer.tsx";
@@ -93,6 +94,8 @@ function usePrefetchOnIntent(): (id: ScreenId) => void {
     () =>
       createPrefetchScheduler<ScreenId>({
         delayMs: PREFETCH_DELAY_MS,
+        cooldownMs: PREFETCH_COOLDOWN_MS,
+        now: () => Date.now(),
         run: (id) => {
           const screen = SCREENS.find((candidate) => candidate.id === id);
           for (const options of screen?.prefetch() ?? []) {

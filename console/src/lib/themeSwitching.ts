@@ -19,6 +19,7 @@ export type SwitchRoot = {
 export type Scheduler = (callback: () => void) => () => void;
 
 export type MediaQueryLike = {
+  readonly matches: boolean;
   addEventListener(type: "change", listener: () => void): void;
   removeEventListener(type: "change", listener: () => void): void;
 };
@@ -50,14 +51,27 @@ export function createThemeSwitchGuard(
  * OSの配色の設定が変わるたびに`onChange`を呼ぶ。戻り値の関数で購読をやめる。
  * Strict Modeの購読、解除、購読の順でも、リスナーが1つだけ残る。
  */
+export type ThemeRoot = SwitchRoot & {
+  getAttribute(name: string): string | null;
+};
+
+export function followColorSchemeChange(
+  _root: ThemeRoot,
+  _beginSwitch: () => void,
+  _prefersDark: boolean,
+): void {}
+
 export function watchColorScheme(
   match: (query: string) => MediaQueryLike,
-  onChange: () => void,
+  onChange: (prefersDark: boolean) => void,
 ): () => void {
   const list = match(COLOR_SCHEME_QUERY);
-  list.addEventListener("change", onChange);
+  const listener = (): void => {
+    onChange(false);
+  };
+  list.addEventListener("change", listener);
   return () => {
-    list.removeEventListener("change", onChange);
+    list.removeEventListener("change", listener);
   };
 }
 

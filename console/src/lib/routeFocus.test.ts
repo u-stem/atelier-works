@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createRouteFocusTracker,
   type FocusEnv,
   type FocusTarget,
   moveFocusAfterNavigation,
@@ -146,5 +147,43 @@ describe("moveFocusAfterNavigation", () => {
     headingReady = true;
     drawer.close();
     expect(rec.calls).toEqual(['h1:{"preventScroll":true}']);
+  });
+});
+
+describe("createRouteFocusTracker", () => {
+  test("does not move on the first pathname", () => {
+    expect(createRouteFocusTracker()("/items")).toBe(false);
+  });
+
+  test("does not move again for the same pathname, as in a Strict Mode rerun", () => {
+    const track = createRouteFocusTracker();
+    track("/items");
+    expect(track("/items")).toBe(false);
+  });
+
+  test("moves when the pathname changes", () => {
+    const track = createRouteFocusTracker();
+    track("/items");
+    expect(track("/system")).toBe(true);
+  });
+
+  test("moves back to an earlier pathname", () => {
+    const track = createRouteFocusTracker();
+    track("/items");
+    track("/system");
+    expect(track("/items")).toBe(true);
+  });
+
+  test("does not move for the repeat after a change", () => {
+    const track = createRouteFocusTracker();
+    track("/items");
+    track("/system");
+    expect(track("/system")).toBe(false);
+  });
+
+  test("keeps separate trackers independent", () => {
+    const first = createRouteFocusTracker();
+    first("/items");
+    expect(createRouteFocusTracker()("/system")).toBe(false);
   });
 });

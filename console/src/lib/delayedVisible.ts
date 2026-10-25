@@ -96,6 +96,21 @@ export function nextDelayedWake(
   }
 }
 
+export type DelayedTimerEnv = {
+  now(): number;
+  setTimer(callback: () => void, ms: number): unknown;
+  clearTimer(handle: unknown): void;
+  dispatch(event: DelayedEvent): void;
+};
+
+export function scheduleDelayedWake(
+  _state: DelayedState,
+  _options: DelayedOptions,
+  _env: DelayedTimerEnv,
+): () => void {
+  return () => undefined;
+}
+
 /**
  * `active`が続くときだけ、待ちの後に`true`を返す。
  * `active`が偽になっても、一度出していれば最低の時間は`true`のままにする。

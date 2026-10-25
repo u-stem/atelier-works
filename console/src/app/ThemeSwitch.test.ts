@@ -29,12 +29,13 @@ describe("themeOptionClass", () => {
   });
 });
 
-function fakeEnv(options: { throwOnStore?: boolean } = {}) {
+function fakeEnv(options: { throwOnStore?: boolean; dark?: boolean } = {}) {
   const log: string[] = [];
   const env: ThemeEnv = {
     beginSwitch: () => {
       log.push("begin");
     },
+    prefersDark: () => options.dark === true,
     root: {
       setAttribute: (name, value) => {
         log.push(`set ${name}=${value}`);
@@ -71,10 +72,42 @@ describe("applyThemePreference", () => {
     expect(log[1]).toBe("set data-theme=dark");
   });
 
-  test("removes the fixed theme to follow the OS", () => {
+  test("fixes the theme to dark when following a dark OS", () => {
+    const { env, log } = fakeEnv({ dark: true });
+    applyThemePreference("system", env);
+    expect(log[1]).toBe("set data-theme=dark");
+  });
+
+  test("fixes the theme to light when following a light OS", () => {
+    const { env, log } = fakeEnv({ dark: false });
+    applyThemePreference("system", env);
+    expect(log[1]).toBe("set data-theme=light");
+  });
+
+  test("keeps an explicit choice whatever the OS says", () => {
+    const { env, log } = fakeEnv({ dark: true });
+    applyThemePreference("light", env);
+    expect(log[1]).toBe("set data-theme=light");
+  });
+
+  test("records that the user follows the OS", () => {
     const { env, log } = fakeEnv();
     applyThemePreference("system", env);
-    expect(log[1]).toBe("remove data-theme");
+    expect(log).toContain("set data-theme-preference=system");
+  });
+
+  test("records an explicit choice", () => {
+    const { env, log } = fakeEnv();
+    applyThemePreference("dark", env);
+    expect(log).toContain("set data-theme-preference=dark");
+  });
+
+  test("never removes the theme from the root", () => {
+    const { env, log } = fakeEnv();
+    applyThemePreference("system", env);
+    expect(log.some((line) => line.startsWith("remove data-theme"))).toBe(
+      false,
+    );
   });
 
   test("remembers an explicit choice", () => {

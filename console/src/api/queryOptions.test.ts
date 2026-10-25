@@ -8,8 +8,6 @@ import {
   requirementsIndexQueryOptions,
 } from "./queries.ts";
 import {
-  refetchSystemStatusOnMount,
-  SYSTEM_STATUS_REUSE_MS,
   systemStatusQueryKey,
   systemStatusQueryOptions,
 } from "./systemQueries.ts";
@@ -55,41 +53,7 @@ describe("systemStatusQueryOptions", () => {
     expect(systemStatusQueryOptions().staleTime).toBe(30_000);
   });
 
-  test("decides on every mount whether to refetch", () => {
-    expect(typeof systemStatusQueryOptions().refetchOnMount).toBe("function");
-  });
-});
-
-describe("refetchSystemStatusOnMount", () => {
-  const NOW = 1_000_000;
-
-  test("reuses data fetched just now, such as a prefetch", () => {
-    expect(refetchSystemStatusOnMount(NOW - 1_000, NOW)).toBe(false);
-  });
-
-  test("reuses data one millisecond inside the window", () => {
-    expect(
-      refetchSystemStatusOnMount(NOW - SYSTEM_STATUS_REUSE_MS + 1, NOW),
-    ).toBe(false);
-  });
-
-  test("refetches data exactly at the window", () => {
-    expect(refetchSystemStatusOnMount(NOW - SYSTEM_STATUS_REUSE_MS, NOW)).toBe(
-      "always",
-    );
-  });
-
-  test("refetches old data so a resolved notice does not stay", () => {
-    expect(refetchSystemStatusOnMount(NOW - 20_000, NOW)).toBe("always");
-  });
-
-  test("refetches when nothing has been fetched yet", () => {
-    expect(refetchSystemStatusOnMount(0, NOW)).toBe("always");
-  });
-
-  test("keeps the window shorter than the stale time", () => {
-    expect(SYSTEM_STATUS_REUSE_MS).toBeLessThan(
-      systemStatusQueryOptions().staleTime,
-    );
+  test("leaves the refetch on mount to the stale time", () => {
+    expect("refetchOnMount" in systemStatusQueryOptions()).toBe(false);
   });
 });

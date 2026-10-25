@@ -1,21 +1,18 @@
 import type { ReactNode } from "react";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
-import {
-  LoadingGate,
-  type LoadingShape,
-} from "../../components/LoadingState.tsx";
+import { LoadingGate, type RowsShape } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
 /** 内容が未知の節の読み込み中の形。 */
-const DEFAULT_SKELETON: LoadingShape = {
+const DEFAULT_SKELETON: RowsShape = {
   rows: 3,
   rowClassName: "h-16 w-full rounded-xl",
 };
 
 /** 1つの枠にまとまる一覧の目安。通知と失敗の行3つ分(1行は約4.25rem)。 */
-const LIST_SKELETON: LoadingShape = {
+const LIST_SKELETON: RowsShape = {
   rows: 1,
   rowClassName: "h-[12.75rem] w-full rounded-xl",
 };
@@ -25,7 +22,7 @@ const LIST_SKELETON: LoadingShape = {
  * 高さは、内容が出たときに下の節が動かないよう、内容の目安にそろえる。
  * 値は、行の余白と文字の高さから見積もった。実機で測り直して合わせる。
  */
-export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {
+export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
   // 有効な保留がなければ1行にたたまれる。
   "holds-heading": { rows: 1, rowClassName: "h-16 w-full rounded-xl" },
   // 3行の表(1行は約3rem)。

@@ -2,12 +2,18 @@
 // 重要度が情報の通知と、summaryの上限を超えた通知がそれにあたる。
 // 自動では取り直さず、選んだときと書き込みの後にだけ読む。
 
-import { type UseQueryResult, useQuery } from "@tanstack/react-query";
+import {
+  type QueryKey,
+  type UseQueryResult,
+  useQuery,
+} from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import { isNoticeRows, type NoticeRow } from "./guards/notices.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
 export const noticesQueryKey = ["console", "notices"] as const;
+
+export const NOTICE_RESOLVE_INVALIDATES: readonly QueryKey[] = [];
 
 /**
  * 取る件数の上限。backendが受ける最大に合わせる。

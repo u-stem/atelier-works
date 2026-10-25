@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  LoadingBody,
   LoadingGate,
   type LoadingShape,
   LoadingStateView,
+  loadingDisplayOf,
   OFFLINE_WAIT_TEXT,
 } from "./LoadingState.tsx";
 
@@ -154,5 +156,106 @@ describe("LoadingGate", () => {
 describe("OFFLINE_WAIT_TEXT", () => {
   test("says the fetch is waiting because of the connection", () => {
     expect(OFFLINE_WAIT_TEXT).toBe("オフラインのため、取得を待っています");
+  });
+});
+
+describe("loadingDisplayOf", () => {
+  test("shows the content when loaded and not lingering", () => {
+    expect(loadingDisplayOf("loaded", false)).toBe("content");
+  });
+
+  test("shows the content on a failure so the caller can explain it", () => {
+    expect(loadingDisplayOf("failed", false)).toBe("content");
+  });
+
+  test("holds the frame while loading and the delay has not passed", () => {
+    expect(loadingDisplayOf("loading", false)).toBe("frame");
+  });
+
+  test("shows the skeleton while loading after the delay", () => {
+    expect(loadingDisplayOf("loading", true)).toBe("skeleton");
+  });
+
+  test("keeps the skeleton while lingering after the data arrived", () => {
+    expect(loadingDisplayOf("loaded", true)).toBe("skeleton");
+  });
+
+  test("keeps the skeleton while lingering after a failure", () => {
+    expect(loadingDisplayOf("failed", true)).toBe("skeleton");
+  });
+
+  test("tells about the network while paused", () => {
+    expect(loadingDisplayOf("paused", false)).toBe("offline");
+  });
+
+  test("tells about the network while paused even if the skeleton was shown", () => {
+    expect(loadingDisplayOf("paused", true)).toBe("offline");
+  });
+});
+
+const NODE_SHAPE: LoadingShape = {
+  node: <p>画面の形</p>,
+  className: "min-h-40",
+};
+
+describe("LoadingStateView with a screen shape", () => {
+  test("draws the given node", () => {
+    expect(
+      renderToStaticMarkup(<LoadingStateView visible shape={NODE_SHAPE} />),
+    ).toContain("画面の形");
+  });
+
+  test("uses the given class on the frame", () => {
+    expect(
+      renderToStaticMarkup(<LoadingStateView visible shape={NODE_SHAPE} />),
+    ).toContain("min-h-40");
+  });
+
+  test("announces loading when visible", () => {
+    expect(
+      renderToStaticMarkup(<LoadingStateView visible shape={NODE_SHAPE} />),
+    ).toContain('role="status"');
+  });
+
+  test("keeps the node but hides it while still waiting", () => {
+    expect(
+      renderToStaticMarkup(
+        <LoadingStateView visible={false} shape={NODE_SHAPE} />,
+      ),
+    ).toContain("invisible");
+  });
+
+  test("does not announce loading while still waiting", () => {
+    expect(
+      renderToStaticMarkup(
+        <LoadingStateView visible={false} shape={NODE_SHAPE} />,
+      ),
+    ).not.toContain("読み込み中");
+  });
+});
+
+describe("LoadingBody", () => {
+  test("draws nothing for the content", () => {
+    expect(
+      renderToStaticMarkup(<LoadingBody display="content" shape={SHAPE} />),
+    ).toBe("");
+  });
+
+  test("announces loading for the skeleton", () => {
+    expect(
+      renderToStaticMarkup(<LoadingBody display="skeleton" shape={SHAPE} />),
+    ).toContain("読み込み中");
+  });
+
+  test("keeps the frame silent", () => {
+    expect(
+      renderToStaticMarkup(<LoadingBody display="frame" shape={SHAPE} />),
+    ).not.toContain("読み込み中");
+  });
+
+  test("tells about the network for offline", () => {
+    expect(
+      renderToStaticMarkup(<LoadingBody display="offline" shape={SHAPE} />),
+    ).toContain(OFFLINE_WAIT_TEXT);
   });
 });

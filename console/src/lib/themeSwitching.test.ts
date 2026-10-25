@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { THEME_PREFERENCE_ATTRIBUTE } from "./theme.ts";
 import {
   COLOR_SCHEME_QUERY,
   createThemeSwitchGuard,
+  followColorSchemeChange,
   type MediaQueryLike,
   THEME_SWITCHING_ATTRIBUTE,
   watchColorScheme,
@@ -90,10 +92,14 @@ describe("createThemeSwitchGuard", () => {
   });
 });
 
-function fakeMedia() {
+function fakeMedia(initialDark = false) {
   const listeners = new Set<() => void>();
   const queries: string[] = [];
+  const state = { dark: initialDark };
   const list: MediaQueryLike = {
+    get matches() {
+      return state.dark;
+    },
     addEventListener: (_type, listener) => {
       listeners.add(listener);
     },
@@ -104,7 +110,8 @@ function fakeMedia() {
   return {
     listeners,
     queries,
-    emit: () => {
+    emit: (dark = state.dark) => {
+      state.dark = dark;
       for (const listener of [...listeners]) {
         listener();
       }
@@ -133,6 +140,26 @@ describe("watchColorScheme", () => {
     expect(calls).toBe(1);
   });
 
+  test("tells whether the OS is dark now", () => {
+    const media = fakeMedia();
+    const seen: boolean[] = [];
+    watchColorScheme(media.match, (dark) => {
+      seen.push(dark);
+    });
+    media.emit(true);
+    expect(seen).toEqual([true]);
+  });
+
+  test("tells that the OS went back to light", () => {
+    const media = fakeMedia(true);
+    const seen: boolean[] = [];
+    watchColorScheme(media.match, (dark) => {
+      seen.push(dark);
+    });
+    media.emit(false);
+    expect(seen).toEqual([false]);
+  });
+
   test("stops calling back after the cleanup", () => {
     const media = fakeMedia();
     let calls = 0;
@@ -150,6 +177,74 @@ describe("watchColorScheme", () => {
     first();
     watchColorScheme(media.match, () => undefined);
     expect(media.listeners.size).toBe(1);
+  });
+});
+
+function themeRoot(preference: string | null) {
+  const log: string[] = [];
+  return {
+    log,
+    root: {
+      getAttribute: (name: string) =>
+        name === THEME_PREFERENCE_ATTRIBUTE ? preference : null,
+      setAttribute: (name: string, value: string) => {
+        log.push(`set ${name}=${value}`);
+      },
+      removeAttribute: (name: string) => {
+        log.push(`remove ${name}`);
+      },
+    },
+  };
+}
+
+describe("followColorSchemeChange", () => {
+  test("stops transitions before changing the theme", () => {
+    const { root, log } = themeRoot("system");
+    followColorSchemeChange(
+      root,
+      () => {
+        log.push("begin");
+      },
+      true,
+    );
+    expect(log[0]).toBe("begin");
+  });
+
+  test("fixes the theme to dark when the OS turns dark", () => {
+    const { root, log } = themeRoot("system");
+    followColorSchemeChange(root, () => undefined, true);
+    expect(log).toEqual(["set data-theme=dark"]);
+  });
+
+  test("fixes the theme to light when the OS turns light", () => {
+    const { root, log } = themeRoot("system");
+    followColorSchemeChange(root, () => undefined, false);
+    expect(log).toEqual(["set data-theme=light"]);
+  });
+
+  test("follows the OS when the preference was never recorded", () => {
+    const { root, log } = themeRoot(null);
+    followColorSchemeChange(root, () => undefined, true);
+    expect(log).toEqual(["set data-theme=dark"]);
+  });
+
+  test("leaves an explicit light choice alone", () => {
+    const { root, log } = themeRoot("light");
+    followColorSchemeChange(root, () => undefined, true);
+    expect(log).toEqual([]);
+  });
+
+  test("does not stop transitions for an explicit choice", () => {
+    const { root } = themeRoot("dark");
+    let began = false;
+    followColorSchemeChange(
+      root,
+      () => {
+        began = true;
+      },
+      false,
+    );
+    expect(began).toBe(false);
   });
 });
 

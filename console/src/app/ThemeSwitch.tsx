@@ -13,7 +13,7 @@ import {
   THEME_STORAGE_KEY,
   type ThemePreference,
 } from "../lib/theme.ts";
-import { beginThemeSwitch } from "../lib/themeSwitching.ts";
+import { beginThemeSwitch, COLOR_SCHEME_QUERY } from "../lib/themeSwitching.ts";
 
 const ICONS = { light: Sun, dark: Moon, system: Monitor } as const;
 
@@ -28,6 +28,8 @@ function readStoredPreference(): ThemePreference {
 export type ThemeEnv = {
   /** 全要素の遷移を止める。テーマを替える直前に呼ぶ。 */
   beginSwitch(): void;
+  /** OSの配色の設定が暗いか。 */
+  prefersDark(): boolean;
   root: {
     setAttribute(name: string, value: string): void;
     removeAttribute(name: string): void;
@@ -74,6 +76,7 @@ function browserEnv(): ThemeEnv {
   }
   return {
     beginSwitch: beginThemeSwitch,
+    prefersDark: () => window.matchMedia(COLOR_SCHEME_QUERY).matches,
     root: document.documentElement,
     storage,
   };

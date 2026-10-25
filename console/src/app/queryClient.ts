@@ -28,3 +28,8 @@ export function createQueryClient(authStore: AuthStore): QueryClient {
     },
   });
 }
+
+export function syncInitialOnlineState(
+  _manager: { setOnline(online: boolean): void },
+  _navigator: { readonly onLine?: boolean },
+): void {}
