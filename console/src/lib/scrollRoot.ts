@@ -11,8 +11,8 @@ export const SCROLL_ROOT_PROPS: Record<string, string> = {
 export const SCROLL_ROOT_SELECTOR = `[${SCROLL_ROOT_ATTRIBUTE}]`;
 
 /** 縦のoverflowの値が、その要素をスクロール枠にするかどうか。 */
-export function isScrollingOverflow(_value: string): boolean {
-  return false;
+export function isScrollingOverflow(value: string): boolean {
+  return value === "auto" || value === "scroll" || value === "overlay";
 }
 
 /** 親をたどれる要素。 */
@@ -25,9 +25,14 @@ export interface Climbable<T> {
  * 無ければ`null`を返す。
  */
 export function findAncestor<T extends Climbable<T>>(
-  _start: T,
-  _matches: (element: T) => boolean,
+  start: T,
+  matches: (element: T) => boolean,
 ): T | null {
+  for (let at = start.parentElement; at !== null; at = at.parentElement) {
+    if (matches(at)) {
+      return at;
+    }
+  }
   return null;
 }
 
@@ -36,6 +41,11 @@ export function findAncestor<T extends Climbable<T>>(
  * 枠は、`SCROLL_ROOT_PROPS`を付けた要素か、縦にスクロールするoverflowを持つ要素である。
  * 無ければ`null`を返す。windowは枠に数えない。
  */
-export function findScrollRoot(_start: Element): Element | null {
-  return null;
+export function findScrollRoot(start: Element): Element | null {
+  return findAncestor(
+    start,
+    (element) =>
+      element.matches(SCROLL_ROOT_SELECTOR) ||
+      isScrollingOverflow(getComputedStyle(element).overflowY),
+  );
 }

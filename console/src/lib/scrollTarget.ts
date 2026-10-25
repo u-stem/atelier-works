@@ -13,16 +13,31 @@ export interface ScrollTargetRoot extends ScrollTargetBox {
  * 対象の上端が枠の上端に来る`scrollTop`を返す。
  * 枠の中身より先へは動けないので、負の値にはならない。
  */
-export function scrollTargetTop(_input: {
+export function scrollTargetTop({
+  containerTop,
+  targetTop,
+  scrollTop,
+}: {
   containerTop: number;
   targetTop: number;
   scrollTop: number;
 }): number {
-  return 0;
+  return Math.max(0, scrollTop + targetTop - containerTop);
 }
 
-/** 枠だけをスクロールして、対象の上端を枠の上端に合わせる。 */
+/**
+ * 枠だけをスクロールして、対象の上端を枠の上端に合わせる。
+ * `scrollIntoView`は祖先のすべて(windowを含む)を動かし、見出しの帯を画面の外へ押し出すので使わない。
+ */
 export function scrollToAnchor(
-  _root: ScrollTargetRoot,
-  _anchor: ScrollTargetBox,
-): void {}
+  root: ScrollTargetRoot,
+  anchor: ScrollTargetBox,
+): void {
+  root.scrollTo({
+    top: scrollTargetTop({
+      containerTop: root.getBoundingClientRect().top,
+      targetTop: anchor.getBoundingClientRect().top,
+      scrollTop: root.scrollTop,
+    }),
+  });
+}

@@ -374,7 +374,7 @@ export function PipelineTable({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div ref={pager.anchorRef} className="flex flex-col gap-3">
       <FilterBar rows={rows} filter={filter} onChange={onFilterChange} />
       <p className="text-small text-muted-foreground tabular-nums">
         {filtered.length === rows.length
@@ -386,7 +386,7 @@ export function PipelineTable({
           条件に合う作業項目はありません
         </p>
       ) : (
-        <div ref={pager.anchorRef} className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3">
           <div className="@container">
             <div className="@4xl:hidden">
               <PipelineCards rows={cardRows} now={now} />
