@@ -29,13 +29,24 @@ describe("themeOptionClass", () => {
   });
 });
 
-function fakeEnv(options: { throwOnStore?: boolean; dark?: boolean } = {}) {
+function fakeEnv(
+  options: {
+    throwOnStore?: boolean;
+    dark?: boolean;
+    mediaUnavailable?: boolean;
+  } = {},
+) {
   const log: string[] = [];
   const env: ThemeEnv = {
     beginSwitch: () => {
       log.push("begin");
     },
-    prefersDark: () => options.dark === true,
+    prefersDark: () => {
+      if (options.mediaUnavailable === true) {
+        throw new Error("matchMedia is not available");
+      }
+      return options.dark === true;
+    },
     root: {
       setAttribute: (name, value) => {
         log.push(`set ${name}=${value}`);
@@ -132,5 +143,35 @@ describe("applyThemePreference", () => {
     const { env, log } = fakeEnv();
     applyThemePreference("dark", { ...env, storage: null });
     expect(log).toContain("set data-theme=dark");
+  });
+
+  test("still switches an explicit choice when matchMedia is unavailable", () => {
+    const { env, log } = fakeEnv({ mediaUnavailable: true });
+    applyThemePreference("dark", env);
+    expect(log).toContain("set data-theme=dark");
+  });
+
+  test("still remembers an explicit choice when matchMedia is unavailable", () => {
+    const { env, log } = fakeEnv({ mediaUnavailable: true });
+    applyThemePreference("light", env);
+    expect(log).toContain(`store ${THEME_STORAGE_KEY}=light`);
+  });
+
+  test("does not fix a theme when following an OS it cannot read", () => {
+    const { env, log } = fakeEnv({ mediaUnavailable: true });
+    applyThemePreference("system", env);
+    expect(log.some((line) => line.startsWith("set data-theme="))).toBe(false);
+  });
+
+  test("drops the earlier theme when following an OS it cannot read", () => {
+    const { env, log } = fakeEnv({ mediaUnavailable: true });
+    applyThemePreference("system", env);
+    expect(log).toContain("remove data-theme");
+  });
+
+  test("records that the user follows an OS it cannot read", () => {
+    const { env, log } = fakeEnv({ mediaUnavailable: true });
+    applyThemePreference("system", env);
+    expect(log).toContain("set data-theme-preference=system");
   });
 });
