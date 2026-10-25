@@ -12,7 +12,8 @@ Vite、React、TypeScript、Tailwind CSS、shadcn/uiの部品で作る。
 経路はReact Router、データの取得はTanStack Queryで扱う。
 画面の判定は純関数に切り出して`bun test`で確かめる。
 画面の部品は、`renderToStaticMarkup`で静的に描いたHTMLを`bun test`で確かめる。
-DOMを動かすテストは書かない。クリックなどの操作の結果は、判定を純関数に切り出して確かめる。
+`bun test`にDOMの環境が無いため、DOMを動かすテストは書かない。
+クリックなどの操作の結果は、判定を純関数に切り出して確かめる。
 
 | ディレクトリ | 役割 |
 | --- | --- |
