@@ -66,40 +66,8 @@ export function parseDetailTab(value: string | null): ItemDetailTabId {
   return ITEM_DETAIL_TABS.find((tab) => tab.id === value)?.id ?? "overview";
 }
 
-/**
- * タブの並びでキーを押したときに移る先の位置。端では反対側へ回る。
- * 矢印とHomeとEnd以外のキーは`null`にして、既定の動作に任せる。
- */
-export function nextTabIndex(
-  current: number,
-  key: string,
-  count: number,
-): number | null {
-  switch (key) {
-    case "ArrowRight":
-      return (current + 1) % count;
-    case "ArrowLeft":
-      return (current - 1 + count) % count;
-    case "Home":
-      return 0;
-    case "End":
-      return count - 1;
-    default:
-      return null;
-  }
-}
-
-/**
- * キー操作に修飾キーが付いているか。
- * Alt+矢印(戻る・進む)やCtrl+Homeなどのブラウザの操作を、タブの移動で奪わないために使う。
- */
-export function hasModifierKey(event: {
-  readonly altKey: boolean;
-  readonly ctrlKey: boolean;
-  readonly metaKey: boolean;
-}): boolean {
-  return event.altKey || event.ctrlKey || event.metaKey;
-}
+// キーで移る先と修飾キーの判定は、タブの共通部品が使う`tabs.ts`にある。
+export { hasModifierKey, nextTabIndex } from "./tabs.ts";
 
 // ---------------------------------------------------------------------------
 // 件数の上限

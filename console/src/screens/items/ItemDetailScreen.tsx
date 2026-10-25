@@ -1,16 +1,18 @@
-import { ArrowLeft, FileQuestion } from "lucide-react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { FileQuestion } from "lucide-react";
+import { useParams, useSearchParams } from "react-router";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { useWorkItemDetail } from "../../api/workItemDetailQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
+import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
   LoadingBody,
   type LoadingShape,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import { itemDetailCrumbs } from "../../lib/breadcrumbs.ts";
 import {
   describeOverview,
   type ItemDetailTabId,
@@ -28,18 +30,6 @@ import { OverviewTab } from "./detail/OverviewTab.tsx";
 import { RequirementsTab } from "./detail/RequirementsTab.tsx";
 import { RoundsTab } from "./detail/RoundsTab.tsx";
 import { QueryFailure } from "./QueryFailure.tsx";
-
-function BackLink() {
-  return (
-    <Link
-      to="/items"
-      className="mt-1 inline-flex items-center gap-1 rounded-sm text-small text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <ArrowLeft aria-hidden="true" className="size-3.5" />
-      作業項目の一覧
-    </Link>
-  );
-}
 
 function Message({ children }: { children: string }) {
   return (
@@ -93,7 +83,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
     return (
       <>
         <PageHeader title={workItemRef(workItemId)} refresh={refresh}>
-          <BackLink />
+          <Breadcrumb items={itemDetailCrumbs(workItemId)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
           <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
@@ -112,7 +102,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
     return (
       <>
         <PageHeader title={workItemRef(workItemId)} refresh={refresh}>
-          <BackLink />
+          <Breadcrumb items={itemDetailCrumbs(workItemId)} />
         </PageHeader>
         <Message>{`${workItemRef(workItemId)}は見つかりませんでした。番号を確かめてください。`}</Message>
       </>
@@ -127,7 +117,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         subtitle={`${workItemRef(workItemId)}・${overview.kindLabel}`}
         refresh={refresh}
       >
-        <BackLink />
+        <Breadcrumb items={itemDetailCrumbs(workItemId)} />
       </PageHeader>
       <ItemDetailTabs selected={tab} onSelect={selectTab} />
       <div
@@ -161,7 +151,7 @@ export function ItemDetailScreen() {
     return (
       <>
         <PageHeader title="作業項目">
-          <BackLink />
+          <Breadcrumb items={itemDetailCrumbs(null)} />
         </PageHeader>
         <Message>作業項目の番号が正しくありません。</Message>
       </>

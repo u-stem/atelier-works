@@ -336,7 +336,8 @@ describe("PipelineTable with one repository", () => {
   });
 
   test("hides the repository name in the cells", () => {
-    expect(bodyCells(render([row()])).some((c) => c.includes("o/r"))).toBe(
+    const rows = [row({ owner: "zowner", repo: "zrepo" })];
+    expect(bodyCells(render(rows)).some((c) => c.includes("zowner"))).toBe(
       false,
     );
   });
@@ -353,7 +354,7 @@ describe("PipelineTable with one repository", () => {
 
   test("shows the repository name in the cells for two repositories", () => {
     expect(
-      bodyCells(render(twoRepoRows())).some((c) => c.includes("o/other")),
+      bodyCells(render(twoRepoRows())).some((c) => c.includes("other")),
     ).toBe(true);
   });
 

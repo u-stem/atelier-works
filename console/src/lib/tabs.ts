@@ -35,34 +35,47 @@ export function hasModifierKey(event: {
   return event.altKey || event.ctrlKey || event.metaKey;
 }
 
+/**
+ * キー操作で移る先のタブの位置。移さないときは`null`。
+ * 修飾キーが付いているときは、ブラウザの操作を奪わないよう移さない。
+ */
 export function tabKeyTarget(
-  _event: {
+  event: {
     readonly key: string;
     readonly altKey: boolean;
     readonly ctrlKey: boolean;
     readonly metaKey: boolean;
   },
-  _current: number,
-  _count: number,
+  current: number,
+  count: number,
 ): number | null {
-  return null;
+  if (hasModifierKey(event)) {
+    return null;
+  }
+  return nextTabIndex(current, event.key, count);
 }
 
-export function tabDomId(_idPrefix: string, _id: string): string {
-  return "";
+/** タブの要素の`id`。本体の`aria-labelledby`が指す。 */
+export function tabDomId(idPrefix: string, id: string): string {
+  return `${idPrefix}-tab-${id}`;
 }
 
+/**
+ * タブを離れるときのスクロール位置を覚えた、新しい記憶を返す。渡された記憶は変えない。
+ * 2つのタブの本体が1つのスクロール枠を共有するとき、タブごとの位置を戻すために使う。
+ */
 export function rememberScroll<Id extends string>(
   memory: ReadonlyMap<Id, number>,
-  _id: Id,
-  _top: number,
+  id: Id,
+  top: number,
 ): ReadonlyMap<Id, number> {
-  return memory;
+  return new Map(memory).set(id, top);
 }
 
+/** タブに戻るときのスクロール位置。まだ離れたことのないタブと、負の位置は先頭(0)にする。 */
 export function recalledScroll<Id extends string>(
-  _memory: ReadonlyMap<Id, number>,
-  _id: Id,
+  memory: ReadonlyMap<Id, number>,
+  id: Id,
 ): number {
-  return -1;
+  return Math.max(0, memory.get(id) ?? 0);
 }

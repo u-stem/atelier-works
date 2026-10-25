@@ -53,7 +53,9 @@ describe("PipelineCards", () => {
   });
 
   test("hides the repository when asked to", () => {
-    expect(render([ROW], false)).not.toContain("acme/widgets");
+    expect(render([{ ...ROW, owner: "zowner" }], false)).not.toContain(
+      "zowner",
+    );
   });
 
   test("hides the repository label when asked to", () => {

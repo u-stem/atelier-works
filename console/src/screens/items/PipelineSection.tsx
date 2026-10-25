@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { PIPELINE_DAYS, PIPELINE_LIMIT } from "../../api/queries.ts";
@@ -9,7 +10,8 @@ import {
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { pipelineScopeNote } from "../../lib/pipelineView.ts";
+import { INBOX_PATH } from "../../lib/inboxView.ts";
+import { actionableNote, pipelineScopeNote } from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
 
@@ -52,12 +54,13 @@ function FailureState({
 }
 
 /**
- * 作業項目の進捗の節。見出し、取得の状態、表を持つ。
+ * 進捗のタブの本体。範囲の注記、要対応への案内、取得の状態、表を持つ。
  * 取得は画面が持ち、更新ボタンも画面の見出しにある。この節は失敗したときの「もう一度取得する」だけを持つ。
  * 読み取り専用で、操作は起こさない。
  */
 export function PipelineSection({
   pipeline,
+  actionableCount = null,
 }: {
   pipeline: SectionQuery<PipelineRow[]>;
   /** 要対応にある件数。分からないときは`null`か省略。 */
@@ -66,11 +69,8 @@ export function PipelineSection({
   const now = useNow();
 
   return (
-    <section aria-labelledby="pipeline-heading" className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <div>
-        <h2 id="pipeline-heading" className="text-lead font-semibold">
-          進捗
-        </h2>
         <p className="text-small text-muted-foreground">
           {pipeline.data === undefined
             ? "作業項目の状態、ブランチ、PRを一覧します。"
@@ -79,6 +79,14 @@ export function PipelineSection({
                 PIPELINE_LIMIT,
                 PIPELINE_DAYS,
               )}
+        </p>
+        <p className="text-small">
+          <Link
+            to={INBOX_PATH}
+            className="rounded-sm text-primary underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {actionableNote(actionableCount)}
+          </Link>
         </p>
       </div>
       <LoadingGate phase={loadPhaseOf(pipeline)} shape={LOADING_SHAPE}>
@@ -104,6 +112,6 @@ export function PipelineSection({
           </>
         )}
       </LoadingGate>
-    </section>
+    </div>
   );
 }

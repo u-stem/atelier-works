@@ -12,6 +12,7 @@ import { cn } from "../../lib/cn.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import { pageSlice } from "../../lib/pagination.ts";
 import {
+  clearPipelineFilter,
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
   filterPipelineRows,
@@ -19,20 +20,27 @@ import {
   itemDetailPath,
   itemRequirementsPath,
   nextPipelineSort,
+  PIPELINE_SCOPES,
   type PipelineFilter,
   type PipelineLink,
   type PipelineScope,
   type PipelineSort,
   type PipelineSortKey,
+  PR_OPEN_NOTE,
   pipelineStatusLabel,
   pipelineStatusVariant,
   reconcilePipelineFilter,
   relatedLinks,
   repoOptions,
+  rowsInScope,
+  scopeEmptyMessage,
+  selectPipelineStatus,
+  showsRepository,
   showsRequirementsLink,
   sortPipelineRows,
   statusOptions,
 } from "../../lib/pipelineView.ts";
+import { SELECTED_STYLE } from "../../lib/selectedStyle.ts";
 import { usePagination } from "../../lib/usePagination.ts";
 import { PipelineCards } from "./PipelineCards.tsx";
 import { PlainText } from "./PipelineParts.tsx";
@@ -155,12 +163,52 @@ function PlainHeader({
   );
 }
 
+/** 範囲の切り替え。押した範囲の行だけを表に出す。 */
+function ScopeSwitch({
+  scope,
+  onChange,
+}: {
+  scope: PipelineScope;
+  onChange: (next: PipelineScope) => void;
+}) {
+  return (
+    <fieldset className="m-0 inline-flex w-fit min-w-0 gap-0.5 rounded-lg border-0 bg-muted p-0.5">
+      <legend className="sr-only">表に出す範囲</legend>
+      {PIPELINE_SCOPES.map((item) => {
+        const pressed = item.id === scope;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            aria-pressed={pressed}
+            className={cn(
+              "inline-flex h-7 items-center rounded-md border border-transparent px-3 text-small text-muted-foreground outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted motion-reduce:transition-none",
+              pressed && SELECTED_STYLE,
+            )}
+            onClick={() => {
+              onChange(item.id);
+            }}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </fieldset>
+  );
+}
+
 function FilterBar({
   rows,
+  scopedRows,
+  showRepo,
   filter,
   onChange,
 }: {
+  /** 取得した行すべて。リポジトリの選択肢を作る。 */
   rows: readonly PipelineRow[];
+  /** 範囲に入る行。状態の選択肢を作る。 */
+  scopedRows: readonly PipelineRow[];
+  showRepo: boolean;
   filter: PipelineFilter;
   onChange: (next: PipelineFilter) => void;
 }) {
@@ -168,6 +216,10 @@ function FilterBar({
   const id = useId();
   return (
     <div className="flex flex-wrap items-end gap-4">
+      <ScopeSwitch
+        scope={filter.scope}
+        onChange={(scope) => onChange({ ...filter, scope })}
+      />
       <label
         htmlFor={`${id}-status`}
         className="flex flex-col gap-1 text-small text-muted-foreground"
@@ -177,43 +229,47 @@ function FilterBar({
           id={`${id}-status`}
           value={filter.status ?? ""}
           onChange={(event) =>
-            onChange({
-              ...filter,
-              status: event.target.value === "" ? null : event.target.value,
-            })
+            onChange(
+              selectPipelineStatus(
+                filter,
+                event.target.value === "" ? null : event.target.value,
+              ),
+            )
           }
         >
           <option value="">すべて</option>
-          {statusOptions(rows).map((status) => (
+          {statusOptions(scopedRows).map((status) => (
             <option key={status} value={status}>
               {pipelineStatusLabel(status)}
             </option>
           ))}
         </Select>
       </label>
-      <label
-        htmlFor={`${id}-repo`}
-        className="flex flex-col gap-1 text-small text-muted-foreground"
-      >
-        リポジトリ
-        <Select
-          id={`${id}-repo`}
-          value={filter.repo ?? ""}
-          onChange={(event) =>
-            onChange({
-              ...filter,
-              repo: event.target.value === "" ? null : event.target.value,
-            })
-          }
+      {showRepo ? (
+        <label
+          htmlFor={`${id}-repo`}
+          className="flex flex-col gap-1 text-small text-muted-foreground"
         >
-          <option value="">すべて</option>
-          {repoOptions(rows).map((repo) => (
-            <option key={repo} value={repo}>
-              {repo}
-            </option>
-          ))}
-        </Select>
-      </label>
+          リポジトリ
+          <Select
+            id={`${id}-repo`}
+            value={filter.repo ?? ""}
+            onChange={(event) =>
+              onChange({
+                ...filter,
+                repo: event.target.value === "" ? null : event.target.value,
+              })
+            }
+          >
+            <option value="">すべて</option>
+            {repoOptions(rows).map((repo) => (
+              <option key={repo} value={repo}>
+                {repo}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : null}
       <label
         htmlFor={`${id}-text`}
         className="flex min-w-56 flex-1 flex-col gap-1 text-small text-muted-foreground"
@@ -233,7 +289,7 @@ function FilterBar({
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => onChange(EMPTY_PIPELINE_FILTER)}
+          onClick={() => onChange(clearPipelineFilter(filter))}
         >
           条件を消す
         </Button>
@@ -242,7 +298,15 @@ function FilterBar({
   );
 }
 
-function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
+function PipelineRowView({
+  row,
+  now,
+  showRepo,
+}: {
+  row: PipelineRow;
+  now: number;
+  showRepo: boolean;
+}) {
   return (
     <tr className="border-t border-border align-top">
       <td className="px-3 py-2 tabular-nums">
@@ -266,9 +330,11 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
           {pipelineStatusLabel(row.status)}
         </Badge>
       </td>
-      <td className="whitespace-nowrap px-3 py-2">
-        {row.owner}/{row.repo}
-      </td>
+      {showRepo ? (
+        <td className="whitespace-nowrap px-3 py-2">
+          {row.owner}/{row.repo}
+        </td>
+      ) : null}
       <td className="whitespace-nowrap px-3 py-2">
         <ExternalLinks links={relatedLinks(row)} />
       </td>
@@ -327,17 +393,19 @@ export function pipelinePageRows(
 }
 
 /**
- * 作業項目の進捗の表。状態、リポジトリ、検索の文字で絞り込み、見出しを押して並べ替える。
+ * 作業項目の進捗の表。範囲(進行中、PR待ち、すべて)を選び、状態、リポジトリ、検索の文字で絞り込み、見出しを押して並べ替える。
  * 絞り込みと並び替えの規則は`lib/pipelineView.ts`の純関数にある。
  * 行の番号は作業項目の詳細へ、「要件定義」は要件定義書へ移る。
  * 絞り込んだ行を25件ずつのページに分ける。
- * 状態、リポジトリ、検索の文字、並び替えのどれを変えても、先頭のページへ戻る。
+ * 範囲、状態、リポジトリ、検索の文字、並び替えのどれを変えても、先頭のページへ戻る。
+ * リポジトリが1つだけのときは、リポジトリの欄と絞り込みを出さない。
  * 取得は持たず、渡された行だけを描く。
  */
 export function PipelineTable({
   rows,
   now,
   initialPage,
+  initialScope,
 }: {
   rows: readonly PipelineRow[];
   now: number;
@@ -346,9 +414,14 @@ export function PipelineTable({
   /** 最初に出す範囲。省略すると進行中。 */
   initialScope?: PipelineScope | undefined;
 }) {
-  const [chosen, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);
+  const [chosen, setFilter] = useState<PipelineFilter>({
+    ...EMPTY_PIPELINE_FILTER,
+    scope: initialScope ?? EMPTY_PIPELINE_FILTER.scope,
+  });
   const filter = reconcilePipelineFilter(chosen, rows);
-  const filtered = filterPipelineRows(rows, filter);
+  const scopedRows = rowsInScope(rows, filter.scope);
+  const filtered = filterPipelineRows(scopedRows, filter);
+  const showRepo = showsRepository(rows);
   const pager = usePagination(filtered.length, PAGE_SIZE, initialPage);
   if (filter !== chosen) {
     // 選んだ状態やリポジトリが再読み込みで消えたら、状態も「すべて」に揃える。
@@ -378,13 +451,35 @@ export function PipelineTable({
 
   return (
     <div ref={pager.anchorRef} className="flex flex-col gap-3">
-      <FilterBar rows={rows} filter={filter} onChange={onFilterChange} />
+      <FilterBar
+        rows={rows}
+        scopedRows={scopedRows}
+        showRepo={showRepo}
+        filter={filter}
+        onChange={onFilterChange}
+      />
       <p className="text-small text-muted-foreground tabular-nums">
         {filtered.length === rows.length
           ? `${rows.length}件`
           : `${filtered.length}件(全${rows.length}件)`}
       </p>
-      {filtered.length === 0 ? (
+      {filter.scope === "pr_open" ? (
+        <p className="text-small text-muted-foreground">{PR_OPEN_NOTE}</p>
+      ) : null}
+      {scopedRows.length === 0 ? (
+        <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+          <p>{scopeEmptyMessage(filter.scope)}</p>
+          {filter.scope === "all" ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onFilterChange({ ...filter, scope: "all" })}
+            >
+              すべて({rows.length}件)を表示
+            </Button>
+          )}
+        </div>
+      ) : filtered.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
           条件に合う作業項目はありません
         </p>
@@ -392,7 +487,11 @@ export function PipelineTable({
         <div className="flex flex-col gap-3">
           <div className="@container">
             <div className="@4xl:hidden">
-              <PipelineCards rows={cardRows} now={now} />
+              <PipelineCards
+                rows={cardRows}
+                now={now}
+                showRepository={showRepo}
+              />
             </div>
             <div className="@container hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
               <table className="w-full border-collapse text-body">
@@ -415,12 +514,14 @@ export function PipelineTable({
                       sort={sort}
                       onSort={onSort}
                     />
-                    <SortableHeader
-                      label="リポジトリ"
-                      sortKey="repo"
-                      sort={sort}
-                      onSort={onSort}
-                    />
+                    {showRepo ? (
+                      <SortableHeader
+                        label="リポジトリ"
+                        sortKey="repo"
+                        sort={sort}
+                        onSort={onSort}
+                      />
+                    ) : null}
                     <PlainHeader label="Issue/PR" />
                     <PlainHeader label="ブランチ" className={NARROW_HIDDEN} />
                     <SortableHeader
@@ -454,6 +555,7 @@ export function PipelineTable({
                       key={row.work_item_id}
                       row={row}
                       now={now}
+                      showRepo={showRepo}
                     />
                   ))}
                 </tbody>

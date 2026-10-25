@@ -20,7 +20,7 @@ const LOADING_SHAPE: LoadingShape = {
 };
 
 /**
- * 要件定義の節。要件定義がある作業項目を新しい順に並べ、行から要件定義書へ移る。
+ * 要件定義のタブの本体。要件定義がある作業項目を新しい順に並べ、行から要件定義書へ移る。
  * 取得は画面が持ち、更新ボタンも画面の見出しにある。この節は失敗したときの「もう一度取得する」だけを持つ。
  * 読み取り専用で、操作は起こさない。
  */
@@ -32,14 +32,8 @@ export function RequirementsSection({
   const now = useNow();
   const rows = index.data;
   return (
-    <section
-      aria-labelledby="requirements-heading"
-      className="flex flex-col gap-3"
-    >
+    <div className="flex flex-col gap-3">
       <div>
-        <h2 id="requirements-heading" className="text-lead font-semibold">
-          要件定義
-        </h2>
         <p className="text-small text-muted-foreground">
           {rows === undefined
             ? "要件定義がある作業項目を一覧します。"
@@ -72,6 +66,6 @@ export function RequirementsSection({
           />
         )}
       </LoadingGate>
-    </section>
+    </div>
   );
 }

@@ -1,10 +1,10 @@
-import { ArrowLeft } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { useParams } from "react-router";
 import { useAuditDoc } from "../../api/auditQueries.ts";
 import { isBannerError } from "../../api/errors.ts";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { ComingSoon } from "../../components/ComingSoon.tsx";
 import {
   LoadingBody,
@@ -14,22 +14,11 @@ import {
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { auditProposalTotal, auditReportTitle } from "../../lib/auditView.ts";
+import { auditReportCrumbs } from "../../lib/breadcrumbs.ts";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
 import { AuditMarkdown } from "./AuditMarkdown.tsx";
-
-function BackToList() {
-  return (
-    <Link
-      to="/reports"
-      className="mt-1 inline-flex items-center gap-1 rounded-sm text-small text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <ArrowLeft aria-hidden="true" className="size-3.5" />
-      レポートの一覧へ
-    </Link>
-  );
-}
 
 /** 読み込み中の形。 */
 const LOADING_SHAPE: LoadingShape = {
@@ -52,7 +41,7 @@ export function AuditReportScreen() {
     return (
       <>
         <PageHeader title="監査レポート">
-          <BackToList />
+          <Breadcrumb items={auditReportCrumbs(null)} />
         </PageHeader>
         <ComingSoon>作業項目の番号が正しくありません。</ComingSoon>
       </>
@@ -71,7 +60,7 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
     return (
       <>
         <PageHeader title={`${workItemRef(workItemId)}の監査レポート`}>
-          <BackToList />
+          <Breadcrumb items={auditReportCrumbs(workItemId)} />
         </PageHeader>
         <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
       </>
@@ -86,7 +75,7 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
           title={`${workItemRef(workItemId)}の監査レポート`}
           refresh={refresh}
         >
-          <BackToList />
+          <Breadcrumb items={auditReportCrumbs(workItemId)} />
         </PageHeader>
         <div className="p-8">
           {apiError !== null && isBannerError(apiError) ? (
@@ -113,7 +102,7 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
           title={`${workItemRef(workItemId)}の監査レポート`}
           refresh={refresh}
         >
-          <BackToList />
+          <Breadcrumb items={auditReportCrumbs(workItemId)} />
         </PageHeader>
         <ComingSoon>
           この作業項目の監査レポートは見つかりません。監査がまだ終わっていないか、監査の作業項目ではありません。
@@ -129,7 +118,7 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
         subtitle={`${workItemStatusLabel(doc.work_item_status)} ・ ${auditProposalTotal(doc)} ・ ${workItemRef(doc.work_item_id)}`}
         refresh={refresh}
       >
-        <BackToList />
+        <Breadcrumb items={auditReportCrumbs(workItemId)} />
       </PageHeader>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
         <article className="max-w-3xl rounded-xl border border-border bg-card px-4 py-6 text-body md:px-8">
