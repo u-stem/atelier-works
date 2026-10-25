@@ -504,15 +504,30 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
   return row.kind === "issue";
 }
 
-export function pipelineReachedLimit(_count: number, _limit: number): boolean {
-  return false;
+/** 取得した件数が上限に達したか。達したときは、古い行を取得できていない場合がある。 */
+export function pipelineReachedLimit(count: number, limit: number): boolean {
+  return count >= limit;
 }
 
+/**
+ * 範囲の中に行が無いときに、空の文へ添える注記。
+ * 取得は新しい順に上限まで読み、範囲で絞るのはその後なので、上限に達していると、
+ * 取得できなかった古い行に、範囲の中の行があるかもしれない。
+ * 「すべて」の範囲は絞らないので、注記は無い。
+ */
 export function scopeEmptyNote(
-  _scope: PipelineScope,
-  _limitReached: boolean,
+  scope: PipelineScope,
+  limitReached: boolean,
 ): string | null {
-  return null;
+  if (!limitReached) return null;
+  switch (scope) {
+    case "active":
+      return "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。";
+    case "pr_open":
+      return "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。";
+    case "all":
+      return null;
+  }
 }
 
 /**
@@ -524,7 +539,7 @@ export function pipelineScopeNote(
   limit: number,
   days: number,
 ): string {
-  return count >= limit
+  return pipelineReachedLimit(count, limit)
     ? `直近${days}日に更新された作業項目を、新しい順に${limit}件まで取得しています。`
     : `直近${days}日に更新された作業項目を表示しています。`;
 }

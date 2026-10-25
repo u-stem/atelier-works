@@ -19,10 +19,12 @@ function PipelineCard({
   row,
   now,
   showRepository,
+  backState,
 }: {
   row: PipelineRow;
   now: number;
   showRepository: boolean;
+  backState: { itemsBack: string } | undefined;
 }) {
   const links = relatedLinks(row);
   return (
@@ -30,6 +32,7 @@ function PipelineCard({
       <div className="flex items-start justify-between gap-3">
         <Link
           to={itemDetailPath(row.work_item_id)}
+          state={backState}
           className="rounded-sm font-medium tabular-nums underline underline-offset-2"
         >
           #{row.work_item_id}
@@ -89,11 +92,14 @@ export function PipelineCards({
   rows,
   now,
   showRepository = true,
+  backState,
 }: {
   rows: readonly PipelineRow[];
   now: number;
   /** リポジトリの名前を出すか。省略すると出す。 */
   showRepository?: boolean | undefined;
+  /** 詳細のパンくずが一覧へ戻るときの経路(`itemsBackState`)。省略すると既定の`/items`へ戻る。 */
+  backState?: { itemsBack: string } | undefined;
 }) {
   return (
     <ul className="divide-y divide-border rounded-xl border border-border bg-card">
@@ -103,6 +109,7 @@ export function PipelineCards({
           row={row}
           now={now}
           showRepository={showRepository}
+          backState={backState}
         />
       ))}
     </ul>

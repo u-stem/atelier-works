@@ -14,6 +14,7 @@ import { INBOX_PATH } from "../../lib/inboxView.ts";
 import {
   actionableNote,
   type PipelineScope,
+  pipelineReachedLimit,
   pipelineScopeNote,
 } from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
@@ -123,6 +124,10 @@ export function PipelineSection({
               now={now}
               scope={scope}
               onScopeChange={onScopeChange}
+              limitReached={pipelineReachedLimit(
+                pipeline.data.length,
+                PIPELINE_LIMIT,
+              )}
             />
           </>
         )}

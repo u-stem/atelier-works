@@ -329,8 +329,15 @@ export async function runDailySummary(
   return assertAllDelivered(result, plan.yesterday);
 }
 
+/**
+ * 投稿しない状態が続いていることを知らせるnotice。
+ * 本文のリンクは、作業項目の画面のすべて(`?scope=all`)を指す。
+ * 投稿しなかったレビューの作業項目は終わった状態にあり、画面の既定の進行中に出ないためである。
+ */
 export function gatedNoticeRecord(windmillPublicUrl: string): NoticeRecord {
-  return gatedProlongedNotice(buildItemsConsoleUrl(windmillPublicUrl));
+  return gatedProlongedNotice(
+    buildItemsConsoleUrl(windmillPublicUrl, { scope: "all" }),
+  );
 }
 
 export async function main(): Promise<CatchupResult> {
@@ -349,9 +356,7 @@ export async function main(): Promise<CatchupResult> {
       log,
     ),
     {
-      notice: gatedProlongedNotice(
-        buildItemsConsoleUrl(config.windmill_public_url, { scope: "all" }),
-      ),
+      notice: gatedNoticeRecord(config.windmill_public_url),
       hasOpenNotice: async (kind) =>
         (await listUnresolvedNoticesByKind(kind)).length > 0,
       addNotice: (record) => addNoticeUnlessUnresolved(record),

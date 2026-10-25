@@ -99,7 +99,8 @@ describe("parseItemsBack", () => {
     expect(parseItemsBack({ itemsBack: path })).toBeNull();
   });
 
-  test.each([null, undefined, "x", 3, [], {}, { itemsBack: 3 }])(
+  // 配列の要素は引数の並びとして展開されるので、1つずつ配列で包む。
+  test.each([[null], [undefined], ["x"], [3], [[]], [{}], [{ itemsBack: 3 }]])(
     "rejects the state %j",
     (state) => {
       expect(parseItemsBack(state)).toBeNull();

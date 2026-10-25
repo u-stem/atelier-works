@@ -108,9 +108,9 @@ export function actionableCounts(summary: ConsoleSummary): SummaryCounts {
 }
 
 /**
- * 後の監査に解消されていない監査の失敗の数。要対応の「監査の失敗」のカードに出す。
+ * 後の監査で報告済みになっていない監査の失敗の数。要対応の「監査の失敗」のカードに出す。
  * 古いbackendは件数を送らないので、そのときは監査の失敗の全件を返す。
- * 再実行できる失敗の数を求める引き算(`actionableCounts`)には使わない。解消済みの監査も失敗の件数に含まれるためである。
+ * 再実行できる失敗の数を求める引き算(`actionableCounts`)には使わない。報告済みの監査も失敗の件数に含まれるためである。
  */
 export function openAuditFailureCount(summary: ConsoleSummary): number {
   return summary.counts.audit_failures_open ?? auditFailureCount(summary);
@@ -672,7 +672,7 @@ export function unlistedPath(entry: UnlistedCount): string | null {
  * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
  * 承認、失敗、通知とも、一覧にない分は取得の上限を超えた分である(監査の失敗は別に数える)。
  * `auditFailures`は監査の失敗の全件で、再実行できる失敗の件数から引く。
- * `auditFailuresOpen`は後の監査に解消されていないもので、監査のカードに出す。省略すると全件と同じにする。
+ * `auditFailuresOpen`は後の監査で報告済みになっていないもので、監査のカードに出す。省略すると全件と同じにする。
  */
 export function unlistedCounts(
   counts: SummaryCounts,

@@ -8,6 +8,7 @@ import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
+import { itemsBackState } from "../../lib/breadcrumbs.ts";
 import { cn } from "../../lib/cn.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import { pageSlice } from "../../lib/pagination.ts";
@@ -36,6 +37,7 @@ import {
   repoOptions,
   rowsInScope,
   scopeEmptyMessage,
+  scopeEmptyNote,
   selectPipelineStatus,
   showsRepository,
   showsRequirementsLink,
@@ -304,16 +306,19 @@ function PipelineRowView({
   row,
   now,
   showRepo,
+  backState,
 }: {
   row: PipelineRow;
   now: number;
   showRepo: boolean;
+  backState: { itemsBack: string };
 }) {
   return (
     <tr className="border-t border-border align-top">
       <td className="px-3 py-2 tabular-nums">
         <Link
           to={itemDetailPath(row.work_item_id)}
+          state={backState}
           className="rounded-sm font-medium underline underline-offset-2"
         >
           #{row.work_item_id}
@@ -434,6 +439,7 @@ export function PipelineTable({
   initialPage,
   scope,
   onScopeChange,
+  limitReached = false,
 }: {
   rows: readonly PipelineRow[];
   now: number;
@@ -461,6 +467,13 @@ export function PipelineTable({
     setFilter(filter);
     pager.reset();
   }
+  // 範囲はURLが持つので、サイドバーやパンくずからの遷移でも変わる。変わったら先頭のページへ戻る。
+  const [seenScope, setSeenScope] = useState(scope);
+  if (seenScope !== scope) {
+    setSeenScope(scope);
+    pager.reset();
+  }
+  const backState = itemsBackState(scope);
   const [chosenSort, setSort] = useState<PipelineSort>(DEFAULT_PIPELINE_SORT);
   const sort = effectivePipelineSort(chosenSort, showRepo);
   const { tableRows, cardRows } = pipelinePageRows(filtered, sort, pager.page);
@@ -504,6 +517,9 @@ export function PipelineTable({
       {scopedRows.length === 0 ? (
         <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
           <p>{scopeEmptyMessage(filter.scope)}</p>
+          {scopeEmptyNote(filter.scope, limitReached) === null ? null : (
+            <p>{scopeEmptyNote(filter.scope, limitReached)}</p>
+          )}
           {filter.scope === "all" ? null : (
             <Button
               variant="outline"
@@ -527,6 +543,7 @@ export function PipelineTable({
                 rows={cardRows}
                 now={now}
                 showRepository={showRepo}
+                backState={backState}
               />
             </div>
             <div className="@container hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
@@ -592,6 +609,7 @@ export function PipelineTable({
                       row={row}
                       now={now}
                       showRepo={showRepo}
+                      backState={backState}
                     />
                   ))}
                 </tbody>

@@ -85,7 +85,7 @@ export type SummaryCounts = {
   readonly failures: number;
   readonly notices: number;
   /**
-   * 後の監査に解消されていない監査の失敗の件数。
+   * 後の監査で報告済みになっていない監査の失敗の件数。
    * 古いbackendは送らないので、欠けたときは監査の失敗の全件として扱う。
    */
   readonly audit_failures_open?: number;
