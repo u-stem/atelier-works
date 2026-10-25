@@ -51,9 +51,11 @@ export function watchConnectionRecovery(
     const recovered = unreachable && !now;
     unreachable = now;
     if (recovered) {
-      void client.invalidateQueries({
-        predicate: (query) => query.state.status === "error",
-      });
+      // 帯が消えた報告は、再取得の成功と同じ処理の中で届く。進行中の取得を打ち切って同じ取得をやり直さないよう、取り消さない。
+      void client.invalidateQueries(
+        { predicate: (query) => query.state.status === "error" },
+        { cancelRefetch: false },
+      );
     }
   });
 }
