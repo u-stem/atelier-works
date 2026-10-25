@@ -47,6 +47,14 @@ export function scrollToAnchor(
  * 対象か枠が無いときは何も動かさない。windowや祖先を代わりに動かすことはない。
  */
 export function scrollToAnchorIn<A extends ScrollTargetBox>(
-  _anchor: A | null,
-  _findRoot: (anchor: A) => ScrollTargetRoot | null,
-): void {}
+  anchor: A | null,
+  findRoot: (anchor: A) => ScrollTargetRoot | null,
+): void {
+  if (anchor === null) {
+    return;
+  }
+  const root = findRoot(anchor);
+  if (root !== null) {
+    scrollToAnchor(root, anchor);
+  }
+}

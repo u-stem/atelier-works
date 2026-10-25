@@ -1,7 +1,7 @@
 import { type RefObject, useRef, useState } from "react";
 import { clampPage } from "./pagination.ts";
 import { findScrollRoot } from "./scrollRoot.ts";
-import { scrollToAnchor } from "./scrollTarget.ts";
+import { scrollToAnchorIn } from "./scrollTarget.ts";
 
 /**
  * 一覧のページ番号を持つ。ページは0から数える。
@@ -37,11 +37,7 @@ export function usePagination(
   return {
     page,
     change: (next) => {
-      const anchor = anchorRef.current;
-      const root = anchor === null ? null : findScrollRoot(anchor);
-      if (anchor !== null && root !== null) {
-        scrollToAnchor(root, anchor);
-      }
+      scrollToAnchorIn(anchorRef.current, findScrollRoot);
       setChosen(clampPage(next, total, size));
     },
     reset: () => setChosen(0),

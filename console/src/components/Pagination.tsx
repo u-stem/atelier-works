@@ -14,6 +14,8 @@ import { Button } from "./ui/button.tsx";
  * ページ番号は0から数える。範囲の外の`page`は、最後のページとして描く。
  * 状態は持たず、移動先を`onPageChange`に渡す。
  * スクロール枠の下端に貼り付き、長い一覧の先頭でも押せる。
+ * 枠が下に持つ余白(`py-6`の1.5rem)の分だけ下げて、貼り付いた帯の下に次の項目が見えないようにする。
+ * この値は枠の余白に依存する(`SCROLL_BODY_CLASS`)。
  * 貼り付く範囲は親の要素の中なので、親は一覧とこの要素だけを含み、`overflow`を持たない包みにする。
  * 背景と上の境界線で、下をくぐる一覧と重ならずに読める。
  */
@@ -40,7 +42,7 @@ export function Pagination({
   return (
     <nav
       aria-label={label}
-      className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border bg-background py-3 text-small text-muted-foreground"
+      className="sticky -bottom-6 z-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border bg-background py-3 text-small text-muted-foreground"
     >
       <p aria-live="polite" className="tabular-nums">
         {pageRangeNote(page, total, size)}

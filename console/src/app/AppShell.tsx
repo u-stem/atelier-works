@@ -1,4 +1,5 @@
 import { Outlet } from "react-router";
+import { APP_MAIN_CLASS } from "../lib/layoutClasses.ts";
 import { ReloadBanner } from "../ReloadBanner.tsx";
 import { useReleaseWatch } from "../useReleaseWatch.ts";
 import { AuthBanner } from "./AuthBanner.tsx";
@@ -17,7 +18,7 @@ export function AppShell() {
       <AuthBanner />
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <Sidebar />
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main className={APP_MAIN_CLASS}>
           <Outlet />
         </main>
       </div>
