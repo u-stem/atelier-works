@@ -133,7 +133,7 @@ function AuditFailureSection({
     <SystemSection
       id="audit-failures-heading"
       title="監査の失敗"
-      description="失敗した監査です。再実行できません。次の定期の監査が、失敗した期間を扱います。"
+      description="失敗した監査です。再実行できません。次の監査が、失敗した期間を扱います。後の監査が報告を作ったものには「後の監査で解消」を付けます。"
       query={summary}
       loginHint="上のバナーからログインすると、監査の失敗を表示します。"
     >

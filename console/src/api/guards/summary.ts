@@ -122,6 +122,22 @@ function isSummaryApproval(value: unknown): value is SummaryApproval {
   );
 }
 
+/** 項目が無いか、あれば真偽値か。古いbackendが送らない項目を受け入れるために使う。 */
+function isOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in record) || isBoolean(record[key]);
+}
+
+/** 項目が無いか、あれば0以上の整数か。古いbackendが送らない項目を受け入れるために使う。 */
+function isOptionalCount(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in record) || isNonNegativeInteger(record[key]);
+}
+
 function isSummaryFailure(value: unknown): value is SummaryFailure {
   return (
     isRecord(value) &&
@@ -142,7 +158,8 @@ function isSummaryFailure(value: unknown): value is SummaryFailure {
     isNullableString(value.job_id) &&
     isNullableString(value.step) &&
     isNullableString(value.error) &&
-    isNullableIsoTimestamp(value.occurred_at)
+    isNullableIsoTimestamp(value.occurred_at) &&
+    isOptionalBoolean(value, "superseded")
   );
 }
 
@@ -164,7 +181,8 @@ function isSummaryCounts(value: unknown): value is SummaryCounts {
     isRecord(value) &&
     isNonNegativeInteger(value.approvals) &&
     isNonNegativeInteger(value.failures) &&
-    isNonNegativeInteger(value.notices)
+    isNonNegativeInteger(value.notices) &&
+    isOptionalCount(value, "audit_failures_open")
   );
 }
 

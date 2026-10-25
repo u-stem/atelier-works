@@ -40,6 +40,7 @@ import {
   findInboxItem,
   type InboxChip,
   inboxSubtitle,
+  openAuditFailureCount,
   selectionAfterFilter,
   sortInboxItems,
   unlistedCounts,
@@ -242,6 +243,7 @@ export function InboxScreen() {
     summary.data.counts,
     items,
     auditFailureCount(summary.data),
+    openAuditFailureCount(summary.data),
   );
   const header = (
     <PageHeader
