@@ -30,7 +30,8 @@ importは相対パスにし、型アサーションは外す。
 ## 見た目の体系
 
 色の定義は`src/index.css`の変数だけにする。
-値は`light-dark()`で書き、OSの設定と`data-theme`の両方に従う。
+値は`light-dark()`で書き、`html`の`data-theme`が配色を決める。
+`data-theme`が無いときだけ、OSの設定に従う。
 文字と背景の組はWCAG AAの4.5:1以上、入力欄の境界と点のような図形は3:1以上を保つ。
 
 | 区分 | 決まり |
@@ -43,7 +44,7 @@ importは相対パスにし、型アサーションは外す。
 | 文字の大きさ | 12、13、14、16、20、24pxの6段(`text-caption`、`text-small`、`text-body`、`text-lead`、`text-title`、`text-display`)。本文の行間は1.7 |
 | 書体 | Hiragino Sans、Noto Sans JP、system-uiの順。Webフォントを読み込まない。CSPが外部のファイルを拒むためである |
 | 数字 | 件数や時刻は`tabular-nums`で桁をそろえる |
-| 動き | 選択とhoverの遷移は150ms。動きを減らす設定の利用者には、アニメーションと遷移をほぼ止める |
+| 動き | 選択とhoverの遷移は150ms。テーマの切り替えの間は、全要素の遷移を止める([テーマの切り替え](#テーマの切り替え))。動きを減らす設定の利用者には、アニメーションと遷移をほぼ止める |
 
 通知の点は、図形用の`notice-mark`で描く。
 図形の基準(3:1)で足りるため、文字の`warning`と色を分ける。
@@ -63,6 +64,67 @@ importは相対パスにし、型アサーションは外す。
 画面は、状態や種類の生のコードを出さない。
 表に無い値は、元の文字列ではなく決まった文言で出す。
 backendの値が表から漏れていないことは、`tests/scripts/console_summary_contract.test.ts`が確かめる。
+
+## テーマの切り替え
+
+テーマの選択は、ライト、ダーク、OSに合わせる(`system`)の3つである。
+保存するのは選択だけで、保存先は`localStorage`のキー`factory-console.theme`である。
+「OSに合わせる」を選んだときは、保存したキーを消す。
+知らない値と読めない値は、「OSに合わせる」として扱う。
+`resolveTheme`が、選択とOSの設定から`data-theme`の値を決める。
+「OSに合わせる」で解決した配色は保存しない。
+
+### OS設定の解決
+
+`html`の`data-theme`は、「OSに合わせる」のときも、常に`light`か`dark`で付ける。
+OSの配色の設定が変わると、JavaScriptが`matchMedia`の`change`を受けて、`data-theme`を付け替える。
+メディアクエリに色を任せると、`change`が届くより前にスタイルの再計算が始まるためである。
+この順では、遷移を止める前に、`transition-colors`を持つ要素が途中の色を経由し始める。
+
+選択は`html`の`data-theme-preference`にも残す。
+OSの設定が変わったとき、この属性で「OSに合わせる」かを見分ける。
+ライトとダークを明示した選択は、OSの設定が変わっても動かさない。
+属性が無いときは、`theme-init`が動かなかった場合なので、「OSに合わせる」として扱う。
+
+OSの設定を読めない環境(`matchMedia`が無い、または例外を投げる)では、`data-theme`を付けず、購読もしない。
+その環境では`index.css`の`color-scheme: light dark`が、OSの設定に従う。
+
+### 描画前の設定
+
+`data-theme`と`data-theme-preference`は、描画の前に`public/assets/`の`theme-init`のscriptが付ける。
+描画の後に付けると、最初の表示で配色が替わるためである。
+保存した値は`light`と`dark`に完全一致するときだけ受け入れる。
+CSPがインラインのscriptを拒むので、scriptは外部のファイルにして、`index.html`の`head`から古典的なscriptとして読む。
+
+ファイル名には内容のハッシュを含む。
+配信は`immutable`なので、中身を変えて名前を変えないと、ブラウザが古い中身を使い続けるためである。
+内容を変えたら、名前を`contentHashedName`が返す名前に替え、`index.html`の参照も替える。
+`console/scripts/public-assets.test.ts`が、名前と内容の対応と、`index.html`の参照を確かめる。
+
+`console/public/`と`console/index.html`は保護パスである。
+どちらもバンドルを通らずにそのまま配信され、書き換えられると、全画面で任意のコードが動くためである。
+変更を含むPRは人がレビューし、Factoryは自動でマージしない。
+一覧は[セキュリティ](../security.md#保護パスの変更を止める)にある。
+
+### 切り替えの間の遷移の停止
+
+`transition-colors`を持つ要素は一部だけなので、テーマを替えると、それらだけが遅れて変わり、ちらついて見える。
+切り替えの間だけ、`html`に`data-theme-switching`を付け、全要素の遷移を止める(`index.css`)。
+印を付ける入口は`beginThemeSwitch`の1つで、次の2つの操作が呼ぶ。
+
+- `ThemeSwitch`でテーマを選ぶ(`applyThemePreference`)。
+- 「OSに合わせる」のとき、OSの配色の設定が変わる(`followColorSchemeChange`)。
+
+どちらも、遷移を止めてから`data-theme`を替える。
+印は2フレーム後に外す。印を付けたのと同じフレームで、スタイルの再計算が終わっているようにするためである。
+外す予約は番号で管理し、先の予約が、後の切り替えの途中で印を外さない。
+背景のタブではフレームが進まず、印は表示に戻るまで残る。残っても遷移が止まるだけである。
+
+OSの設定の購読(`useColorSchemeSwitchGuard`)は、`AppProviders`に1つだけ置く。
+`ThemeSwitch`が、広い画面のサイドバーと狭い画面のドロワーの2か所に描かれ、それぞれに置くと購読が重なるためである。
+外枠(`AppShell`)には置かない。
+ルートのErrorBoundaryが外枠を置き換えた画面でも、OSの設定の変更に追従するためである。
+購読は、Strict Modeの購読、解除、購読の順でも、リスナーが1つだけ残る。
 
 ## 経路
 
