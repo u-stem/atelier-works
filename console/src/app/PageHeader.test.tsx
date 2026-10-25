@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
+import { PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import type { RefreshStatus } from "./refreshStatus.ts";
 
@@ -148,5 +149,17 @@ describe("PageHeader", () => {
     const markup = renderWith({ children: <p>子</p> });
 
     expect(markup.indexOf("<p>子</p>")).toBeGreaterThan(markup.indexOf("題"));
+  });
+
+  test("gives the heading the id the route focus looks for", () => {
+    expect(render()).toContain(`<h1 id="${PAGE_HEADING_ID}"`);
+  });
+
+  test("lets a script focus the heading without adding it to the Tab order", () => {
+    expect(render()).toContain('tabindex="-1"');
+  });
+
+  test("draws no focus ring on the heading", () => {
+    expect(render()).toContain("outline-none");
   });
 });

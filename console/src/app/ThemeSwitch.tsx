@@ -46,6 +46,23 @@ function applyPreference(preference: ThemePreference): void {
   }
 }
 
+export type ThemeEnv = {
+  beginSwitch(): void;
+  root: {
+    setAttribute(name: string, value: string): void;
+    removeAttribute(name: string): void;
+  };
+  storage: {
+    setItem(key: string, value: string): void;
+    removeItem(key: string): void;
+  } | null;
+};
+
+export function applyThemePreference(
+  _preference: ThemePreference,
+  _env: ThemeEnv,
+): void {}
+
 /** テーマの選択肢のボタンのクラス。選択中は、他の切り替えと同じ表し方にする。 */
 export function themeOptionClass(pressed: boolean): string {
   return cn(

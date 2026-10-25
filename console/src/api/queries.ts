@@ -279,3 +279,31 @@ export function useRequirementsDoc(
     staleTime: REQUIREMENTS_STALE_MS,
   });
 }
+
+const NO_KEY: readonly string[] = [];
+
+export function deploymentsQueryOptions() {
+  return {
+    queryKey: NO_KEY,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchDeployments({ signal }),
+    staleTime: 0,
+  };
+}
+
+export function pipelineQueryOptions() {
+  return {
+    queryKey: NO_KEY,
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchPipeline({ signal }),
+    staleTime: 0,
+  };
+}
+
+export function requirementsIndexQueryOptions() {
+  return {
+    queryKey: NO_KEY,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchRequirementsIndex({ signal }),
+    staleTime: 0,
+  };
+}

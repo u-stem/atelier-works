@@ -55,4 +55,9 @@ describe("createQueryClient", () => {
     const client = createQueryClient(createAuthStore());
     expect(client.getDefaultOptions().mutations?.retry).toBe(0);
   });
+
+  test("keeps the default cache lifetime so a revisit shows held data at once", () => {
+    const client = createQueryClient(createAuthStore());
+    expect(client.getDefaultOptions().queries?.gcTime).toBeUndefined();
+  });
 });

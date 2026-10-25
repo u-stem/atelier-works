@@ -1,9 +1,19 @@
+import type { ReactNode } from "react";
 import { Outlet } from "react-router";
 import { APP_MAIN_CLASS } from "../lib/layoutClasses.ts";
 import { ReloadBanner } from "../ReloadBanner.tsx";
 import { useReleaseWatch } from "../useReleaseWatch.ts";
 import { AuthBanner } from "./AuthBanner.tsx";
 import { Sidebar } from "./Sidebar.tsx";
+
+export function AppMain({
+  children,
+}: {
+  name: string | null;
+  children: ReactNode;
+}) {
+  return <main className={APP_MAIN_CLASS}>{children}</main>;
+}
 
 /**
  * 全画面に共通の外枠。上に帯(版の更新とログイン切れ)、残りに画面を出す。

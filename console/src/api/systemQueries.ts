@@ -45,3 +45,25 @@ export function useSystemStatus(): UseQueryResult<SystemStatus, Error> {
     refetchOnMount: "always",
   });
 }
+
+const NO_KEY: readonly string[] = [];
+
+/** 取得から`SYSTEM_STATUS_REUSE_MS`の間は、画面を開いたときに取り直さない。 */
+export const SYSTEM_STATUS_REUSE_MS = 5_000;
+
+export function refetchSystemStatusOnMount(
+  _dataUpdatedAt: number,
+  _now: number,
+): false | "always" {
+  return "always";
+}
+
+export function systemStatusQueryOptions() {
+  return {
+    queryKey: NO_KEY,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchSystemStatus({ signal }),
+    staleTime: 0,
+    refetchOnMount: "always" as const,
+  };
+}

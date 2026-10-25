@@ -1,9 +1,12 @@
 import type { ReactNode } from "react";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import type { LoadingShape } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
+
+export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {};
 
 function LoadingState() {
   return (

@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
-import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
+import {
+  freshQuery,
+  loadingQuery,
+  pausedQuery,
+  staleQuery,
+} from "../../api/fakeSectionQuery.testing.ts";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
+import { OFFLINE_WAIT_TEXT } from "../../components/LoadingState.tsx";
 import { RequirementsSection } from "./RequirementsSection.tsx";
 
 const NOTICE = "前回取得した値を表示しています";
@@ -27,5 +33,37 @@ describe("RequirementsSection", () => {
     expect(
       renderToStaticMarkup(<RequirementsSection index={freshQuery(NO_ROWS)} />),
     ).not.toContain(NOTICE);
+  });
+});
+
+describe("RequirementsSection while loading", () => {
+  test("shows only the frame in the first moment", () => {
+    expect(
+      renderToStaticMarkup(
+        <RequirementsSection
+          index={loadingQuery<readonly RequirementsIndexRow[]>()}
+        />,
+      ),
+    ).not.toContain("読み込み中");
+  });
+
+  test("holds the height of the list in the first moment", () => {
+    expect(
+      renderToStaticMarkup(
+        <RequirementsSection
+          index={loadingQuery<readonly RequirementsIndexRow[]>()}
+        />,
+      ),
+    ).toContain("h-[4.75rem]");
+  });
+
+  test("tells the user that the fetch waits for the network", () => {
+    expect(
+      renderToStaticMarkup(
+        <RequirementsSection
+          index={pausedQuery<readonly RequirementsIndexRow[]>()}
+        />,
+      ),
+    ).toContain(OFFLINE_WAIT_TEXT);
   });
 });

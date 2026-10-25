@@ -15,6 +15,19 @@ import { SYSTEM_PATH } from "./paths.ts";
 /** 画面の部品を必要になってから読み込む関数。react-routerの`lazy`にそのまま渡す。 */
 export type LazyScreen = () => Promise<{ Component: ComponentType }>;
 
+/** 経路の引数。`:id`のような動的な部分の値を、名前で引く。 */
+export type RouteParams = Readonly<Record<string, string | undefined>>;
+
+/** 画面の名前。引数から決まる名前は関数で渡す。 */
+export type RouteTitle = string | ((params: RouteParams) => string);
+
+/** サイドバーの入口に触れたときに先読みする取得。各取得の設定と同じ値を共有する。 */
+export type PrefetchOptions = {
+  readonly queryKey: readonly unknown[];
+  readonly queryFn: (context: { signal: AbortSignal }) => Promise<unknown>;
+  readonly staleTime: number;
+};
+
 export type ScreenId = "inbox" | "items" | "reports" | "system";
 
 /**
@@ -26,6 +39,7 @@ export type ScreenId = "inbox" | "items" | "reports" | "system";
  */
 export type ScreenRoute = {
   readonly path: string;
+  readonly title?: RouteTitle;
   readonly lazy: LazyScreen;
   readonly ErrorBoundary?: ComponentType;
   readonly children?: readonly ScreenRoute[];
@@ -39,12 +53,15 @@ export type Screen = {
   readonly icon: LucideIcon;
   /** サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。 */
   readonly badge: (counts: SummaryCounts | undefined) => number;
+  /** 入口に触れたときに先読みする取得。 */
+  readonly prefetch: () => readonly PrefetchOptions[];
   readonly lazy: LazyScreen;
   readonly ErrorBoundary?: ComponentType;
   readonly children: readonly ScreenRoute[];
 };
 
 const noBadge = (): number => 0;
+const noPrefetch = (): readonly PrefetchOptions[] => [];
 
 export const SCREENS: readonly Screen[] = [
   {
@@ -59,6 +76,7 @@ export const SCREENS: readonly Screen[] = [
       (counts?.approvals ?? 0) +
       (counts?.failures ?? 0) +
       (counts?.notices ?? 0),
+    prefetch: noPrefetch,
     lazy: () =>
       import("../screens/inbox/InboxScreen.tsx").then((module) => ({
         Component: module.InboxScreen,
@@ -71,6 +89,7 @@ export const SCREENS: readonly Screen[] = [
     label: "作業項目",
     icon: ListChecks,
     badge: noBadge,
+    prefetch: noPrefetch,
     lazy: () =>
       import("../screens/items/ItemsScreen.tsx").then((module) => ({
         Component: module.ItemsScreen,
@@ -105,6 +124,7 @@ export const SCREENS: readonly Screen[] = [
     label: "レポート",
     icon: ChartColumn,
     badge: noBadge,
+    prefetch: noPrefetch,
     lazy: () =>
       import("../screens/reports/ReportsScreen.tsx").then((module) => ({
         Component: module.ReportsScreen,
@@ -125,6 +145,7 @@ export const SCREENS: readonly Screen[] = [
     label: "システム",
     icon: Server,
     badge: noBadge,
+    prefetch: noPrefetch,
     lazy: () =>
       import("../screens/system/SystemScreen.tsx").then((module) => ({
         Component: module.SystemScreen,

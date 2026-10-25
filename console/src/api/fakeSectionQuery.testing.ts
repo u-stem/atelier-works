@@ -27,3 +27,27 @@ export function freshQuery<T>(data: T): SectionQuery<T> {
     refetch: () => Promise.resolve(undefined),
   };
 }
+
+/** 値がなく、取得が走っている状態。 */
+export function loadingQuery<T>(): SectionQuery<T> {
+  return {
+    data: undefined,
+    isError: false,
+    error: null,
+    isFetching: true,
+    fetchStatus: "fetching",
+    refetch: () => Promise.resolve(undefined),
+  };
+}
+
+/** 値がなく、オフラインで取得が止まっている状態。 */
+export function pausedQuery<T>(): SectionQuery<T> {
+  return {
+    data: undefined,
+    isError: false,
+    error: null,
+    isFetching: true,
+    fetchStatus: "paused",
+    refetch: () => Promise.resolve(undefined),
+  };
+}
