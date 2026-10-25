@@ -43,21 +43,40 @@ export type ThemeEnv = {
   } | null;
 };
 
+/** 付けるdata-themeの値を返す。「OSに合わせる」でOSの設定を読めないときは`null`。 */
+function resolveForRoot(
+  preference: ThemePreference,
+  env: ThemeEnv,
+): "light" | "dark" | null {
+  if (preference !== "system") {
+    return resolveTheme(preference, false);
+  }
+  try {
+    return resolveTheme(preference, env.prefersDark());
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 選択をhtmlのdata-themeに反映し、保存領域に残す。
  * 「OSに合わせる」のときも、OSの設定を解決してdata-themeを付ける。保存するのは選択(system、light、dark)で、解決した配色は保存しない。
  * 替える直前に遷移を止め、一部の要素だけが遅れて変わるのを防ぐ。
  * 保存できない環境(プライベートブラウズなど)でも、表示の切り替えは行う。
+ * OSの設定を読むのは「OSに合わせる」のときだけで、読めなければdata-themeを外し、スタイルシートの既定に任せる。
+ * 明示した選択は、OSの設定を読めなくても切り替わり、保存される。
  */
 export function applyThemePreference(
   preference: ThemePreference,
   env: ThemeEnv,
 ): void {
   env.beginSwitch();
-  env.root.setAttribute(
-    "data-theme",
-    resolveTheme(preference, env.prefersDark()),
-  );
+  const theme = resolveForRoot(preference, env);
+  if (theme === null) {
+    env.root.removeAttribute("data-theme");
+  } else {
+    env.root.setAttribute("data-theme", theme);
+  }
   env.root.setAttribute(THEME_PREFERENCE_ATTRIBUTE, preference);
   try {
     if (preference === "system") {

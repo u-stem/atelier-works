@@ -76,7 +76,7 @@ backendの値が表から漏れていないことは、`tests/scripts/console_su
 
 ### OS設定の解決
 
-`html`の`data-theme`は、「OSに合わせる」のときも、常に`light`か`dark`で付ける。
+`html`の`data-theme`は、「OSに合わせる」のときも、OSの設定を読めるかぎり`light`か`dark`で付ける。
 OSの配色の設定が変わると、JavaScriptが`matchMedia`の`change`を受けて、`data-theme`を付け替える。
 メディアクエリに色を任せると、`change`が届くより前にスタイルの再計算が始まるためである。
 この順では、遷移を止める前に、`transition-colors`を持つ要素が途中の色を経由し始める。
@@ -86,8 +86,10 @@ OSの設定が変わったとき、この属性で「OSに合わせる」かを�
 ライトとダークを明示した選択は、OSの設定が変わっても動かさない。
 属性が無いときは、`theme-init`が動かなかった場合なので、「OSに合わせる」として扱う。
 
-OSの設定を読めない環境(`matchMedia`が無い、または例外を投げる)では、`data-theme`を付けず、購読もしない。
+OSの設定を読めない環境(`matchMedia`が無い、または例外を投げる)では、「OSに合わせる」の`data-theme`を付けず、購読もしない。
+`ThemeSwitch`で「OSに合わせる」を選んだ場合は、それまでの`data-theme`を外す。
 その環境では`index.css`の`color-scheme: light dark`が、OSの設定に従う。
+ライトとダークを明示した選択は、OSの設定を読まないので、読めない環境でも切り替わり、保存される。
 
 ### 描画前の設定
 
