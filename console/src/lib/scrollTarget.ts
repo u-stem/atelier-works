@@ -41,3 +41,12 @@ export function scrollToAnchor(
     }),
   });
 }
+
+/**
+ * 対象に合う枠を探し、見つかったときだけスクロールする。
+ * 対象か枠が無いときは何も動かさない。windowや祖先を代わりに動かすことはない。
+ */
+export function scrollToAnchorIn<A extends ScrollTargetBox>(
+  _anchor: A | null,
+  _findRoot: (anchor: A) => ScrollTargetRoot | null,
+): void {}

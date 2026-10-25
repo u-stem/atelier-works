@@ -86,8 +86,8 @@ describe("Pagination", () => {
     expect(navClasses(render(0, 60))).toContain("sticky");
   });
 
-  test("pins the navigation at the bottom edge with no offset", () => {
-    expect(navClasses(render(0, 60))).toContain("bottom-0");
+  test("offsets the bottom edge by the padding of the scroll container", () => {
+    expect(navClasses(render(0, 60))).toContain("-bottom-6");
   });
 
   test("paints the page background so the list does not show through", () => {

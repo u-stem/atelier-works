@@ -3,6 +3,7 @@ import {
   type ScrollTargetRoot,
   scrollTargetTop,
   scrollToAnchor,
+  scrollToAnchorIn,
 } from "./scrollTarget.ts";
 
 describe("scrollTargetTop", () => {
@@ -58,5 +59,43 @@ describe("scrollToAnchor", () => {
     scrollToAnchor(root, { getBoundingClientRect: () => ({ top: -4400 }) });
 
     expect(calls).toEqual([{ top: 528 }]);
+  });
+});
+
+describe("scrollToAnchorIn", () => {
+  test("scrolls the root found for the anchor", () => {
+    const { root, calls } = fakeRoot(72, 5000);
+
+    scrollToAnchorIn(
+      { getBoundingClientRect: () => ({ top: -4400 }) },
+      () => root,
+    );
+
+    expect(calls).toEqual([{ top: 528 }]);
+  });
+
+  test("does not call scrollIntoView when no root is found", () => {
+    let scrollIntoViewCalls = 0;
+    const anchor = {
+      getBoundingClientRect: () => ({ top: 0 }),
+      scrollIntoView: () => {
+        scrollIntoViewCalls += 1;
+      },
+    };
+
+    scrollToAnchorIn(anchor, () => null);
+
+    expect(scrollIntoViewCalls).toBe(0);
+  });
+
+  test("looks for no root when there is no anchor", () => {
+    let lookups = 0;
+
+    scrollToAnchorIn(null, () => {
+      lookups += 1;
+      return null;
+    });
+
+    expect(lookups).toBe(0);
   });
 });

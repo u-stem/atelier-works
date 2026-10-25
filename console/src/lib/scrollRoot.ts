@@ -36,6 +36,23 @@ export function findAncestor<T extends Climbable<T>>(
   return null;
 }
 
+/** 枠かどうかを調べられる要素。 */
+export interface ScrollRootCandidate<T> extends Climbable<T> {
+  matches(selector: string): boolean;
+}
+
+/**
+ * 要素を包む、最も近いスクロール枠を返す。縦のoverflowの値は`overflowOf`で読む。
+ * 枠は、`SCROLL_ROOT_PROPS`を付けた要素か、縦にスクロールするoverflowを持つ要素である。
+ * 無ければ`null`を返す。windowは枠に数えない。
+ */
+export function findScrollRootWith<T extends ScrollRootCandidate<T>>(
+  _start: T,
+  _overflowOf: (element: T) => string,
+): T | null {
+  return null;
+}
+
 /**
  * 要素を包む、最も近いスクロール枠を返す。
  * 枠は、`SCROLL_ROOT_PROPS`を付けた要素か、縦にスクロールするoverflowを持つ要素である。
