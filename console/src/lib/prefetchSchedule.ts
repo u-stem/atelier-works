@@ -42,11 +42,14 @@ export type PressEvent = {
 };
 
 /**
- * 先読みの対象にする押下か。主ボタンで修飾キーが無い押下に限る。
+ * 先読みの対象にする押下か。主ボタンで修飾キーが無い、タッチでない押下に限る。
  * 中クリックとCtrl+クリックは、この画面に移らず、新しいタブで開く操作だからである。
+ * タッチの押下は、スクロールの始まりでも起きる。移る操作かが、押した時点では分からない。
+ * タッチでも、移った後の取得は画面が自分で行う。
  */
 export function isPrimaryPress(event: PressEvent): boolean {
   return (
+    event.pointerType !== "touch" &&
     event.button === 0 &&
     !event.ctrlKey &&
     !event.metaKey &&

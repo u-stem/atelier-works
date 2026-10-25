@@ -33,13 +33,14 @@ export type LoadingDisplay = "content" | "frame" | "skeleton";
  * 読み込みの段階と、遅延表示の状態から、出すものを決める。
  * `visible`は遅延表示が「出している」状態で、取得が終わった後の残す時間も含む。
  * 残す時間の間は、値が揃っていても、スケルトンを出し続ける。
+ * `lingers`が偽のときは残さず、取得が済んだらすぐ内容を出す。
  */
 export function loadingDisplayOf(
   phase: LoadPhase,
   visible: boolean,
-  _lingers = true,
+  lingers = true,
 ): LoadingDisplay {
-  if (visible) {
+  if (visible && (lingers || phase === "loading")) {
     return "skeleton";
   }
   return phase === "loading" ? "frame" : "content";

@@ -19,10 +19,14 @@ export const DEFAULT_DELAYED_OPTIONS: DelayedOptions = {
   minMs: 200,
 };
 
-/** 取得が済んだら残さず内容に替える形。出す前の待ちだけを持つ。 */
+/**
+ * 取得が済んだら残さず内容に替える形。出す前の待ちだけを持つ。
+ * 承認が載る面で使う。承認の可否は取得の状態だけで決まるので、
+ * 内容が揃った後に骨組みを残すと、承認を押せるのに内容が見えない時間ができる。
+ */
 export const NO_LINGER_OPTIONS: DelayedOptions = {
   delayMs: 300,
-  minMs: 200,
+  minMs: 0,
 };
 
 export type DelayedState =

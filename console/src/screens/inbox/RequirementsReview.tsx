@@ -15,10 +15,10 @@ import {
   approvalLinks,
   type DocReadiness,
   docReadiness,
-  holdWhileLoadingShown,
   requirementsBlockedReason,
   snapshotReadiness,
 } from "../../lib/approvalDecision.ts";
+import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { attemptRef } from "../../lib/labels.ts";
 import { prepareDoc } from "../../lib/requirementsView.ts";
@@ -210,13 +210,13 @@ function ReviewWithDoc({
 }) {
   const query = useRequirementsDoc(approval.work_item_id, attempt);
   const state = docReadiness({ expectedAttempt: attempt, query });
-  const display = useLoadingDisplay(loadPhaseOf(query));
+  const display = useLoadingDisplay(loadPhaseOf(query), NO_LINGER_OPTIONS);
   return (
     <ReviewBody
       approval={approval}
       title={title}
       now={now}
-      docState={holdWhileLoadingShown(state, display !== "content")}
+      docState={state}
       docPanel={
         <DocPanel
           approval={approval}
@@ -248,8 +248,11 @@ function ReviewBody({
     approval.work_item_id,
     approval.approval_request_id,
   );
-  // 骨組みを残している間は、取得が済んでいても、読み込み中として承認を止める。
-  const snapshotDisplay = useLoadingDisplay(loadPhaseOf(snapshot));
+  // 承認の可否は取得の状態だけで決まる。内容と食い違わないよう、取得が済んだら骨組みを残さず内容を出す。
+  const snapshotDisplay = useLoadingDisplay(
+    loadPhaseOf(snapshot),
+    NO_LINGER_OPTIONS,
+  );
   return (
     <>
       <IntakeSnapshotPanel
@@ -264,10 +267,7 @@ function ReviewBody({
         subject={displayableIssueText(title).text}
         factoryLabel={null}
         approveBlockedReason={requirementsBlockedReason(
-          holdWhileLoadingShown(
-            snapshotReadiness(snapshot),
-            snapshotDisplay !== "content",
-          ),
+          snapshotReadiness(snapshot),
           docState,
         )}
         refreshed={snapshot.data?.refreshed === true}

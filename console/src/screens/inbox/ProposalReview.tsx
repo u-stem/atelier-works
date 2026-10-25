@@ -14,6 +14,7 @@ import {
   factoryLabelChoice,
   proposalOrigin,
 } from "../../lib/approvalDecision.ts";
+import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { ApprovalBar } from "./ApprovalBar.tsx";
 
@@ -91,7 +92,8 @@ export function ProposalReview({
   now: number;
 }) {
   const proposals = useInboxProposals();
-  const display = useLoadingDisplay(loadPhaseOf(proposals));
+  // 承認の可否は取得の状態だけで決まる。内容と食い違わないよう、取得が済んだら骨組みを残さず内容を出す。
+  const display = useLoadingDisplay(loadPhaseOf(proposals), NO_LINGER_OPTIONS);
   // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
   if (proposals.isPending || display !== "content") {
     return <LoadingBody display={display} shape={LOADING_SHAPE} />;

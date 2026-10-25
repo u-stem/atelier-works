@@ -26,10 +26,10 @@ export function OfflineBannerView({ unreachable }: { unreachable: boolean }) {
 }
 
 /**
- * 帯の元は、Windmillへの取得の結果だけである(`connectionState.ts`)。
- * 直近の取得がネットワークの失敗なら出し、次の取得の成功で消す。
+ * 帯の元は、Windmillを呼ぶ`runScript`の結果だけである(`connectionState.ts`)。
+ * 直近の呼び出しが届かなかった失敗(ネットワークの失敗、転送が返す502と503)なら出し、次に応答を得たら消す。
  * ブラウザの接続状態は見ない。他のネットワークが切れていても、同じ端末のWindmillには届くためである。
- * 取り直しは、ウィンドウに戻ったときの取得(`refetchOnWindowFocus`)と、各取得の再試行に任せる。
+ * 帯が消えるとき、失敗した取得は読み直される(`watchConnectionRecovery`)。
  */
 export function OfflineBanner() {
   return <OfflineBannerView unreachable={useConnectionState().unreachable} />;
