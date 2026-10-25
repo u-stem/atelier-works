@@ -14,13 +14,7 @@ describe("loadPhaseOf", () => {
     expect(loadPhaseOf({ data: undefined, isError: true })).toBe("failed");
   });
 
-  test("is loading when there is no data and the fetch is running", () => {
-    expect(
-      loadPhaseOf({ data: undefined, isError: false, fetchStatus: "fetching" }),
-    ).toBe("loading");
-  });
-
-  test("is loading when there is no data and the status is unknown", () => {
+  test("is loading when there is no data and no failure", () => {
     expect(loadPhaseOf({ data: undefined, isError: false })).toBe("loading");
   });
 });

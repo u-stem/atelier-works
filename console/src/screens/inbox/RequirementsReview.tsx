@@ -3,9 +3,10 @@ import { Link } from "react-router";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useIntakeSnapshot, useRequirementsDoc } from "../../api/queries.ts";
-import type { SectionFetchStatus } from "../../api/sectionQuery.ts";
+import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import {
   LoadingBody,
+  type LoadingDisplay,
   type LoadingShape,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
@@ -14,6 +15,7 @@ import {
   approvalLinks,
   type DocReadiness,
   docReadiness,
+  holdWhileLoadingShown,
   requirementsBlockedReason,
   snapshotReadiness,
 } from "../../lib/approvalDecision.ts";
@@ -94,34 +96,31 @@ function DocPanel({
   attempt,
   query,
   state,
+  display,
 }: {
   approval: SummaryApproval;
   attempt: number;
   query: {
     readonly data: RequirementsDoc | null | undefined;
     readonly error: Error | null;
-    readonly fetchStatus: SectionFetchStatus;
     readonly refetch: () => unknown;
   };
   state: DocReadiness;
+  /** 読み込み中の表示。取得が済んでも、骨組みを残す時間の間は`content`にならない。 */
+  display: LoadingDisplay;
 }) {
   const doc = query.data;
   const prepared = useMemo(
     () => (doc === undefined || doc === null ? null : prepareDoc(doc)),
     [doc],
   );
-  const display = useLoadingDisplay(
-    state === "loading"
-      ? query.fetchStatus === "paused"
-        ? "paused"
-        : "loading"
-      : "loaded",
-  );
   const heading = `承認対象の要件定義書(${attemptRef(attempt)})`;
   const link = approvalLinks(approval).requirements;
   let body: ReactNode;
   // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
-  if (state === "failed") {
+  if (display !== "content") {
+    body = <LoadingBody display={display} shape={LOADING_SHAPE} />;
+  } else if (state === "failed") {
     body = (
       <div className="p-4">
         <QueryFailure
@@ -135,8 +134,6 @@ function DocPanel({
         />
       </div>
     );
-  } else if (display !== "content") {
-    body = <LoadingBody display={display} shape={LOADING_SHAPE} />;
   } else if (state === "missing") {
     body = <PanelNote>承認する試行の要件定義書が見つかりません。</PanelNote>;
   } else if (state === "mismatch" || doc === undefined || doc === null) {
@@ -213,18 +210,20 @@ function ReviewWithDoc({
 }) {
   const query = useRequirementsDoc(approval.work_item_id, attempt);
   const state = docReadiness({ expectedAttempt: attempt, query });
+  const display = useLoadingDisplay(loadPhaseOf(query));
   return (
     <ReviewBody
       approval={approval}
       title={title}
       now={now}
-      docState={state}
+      docState={holdWhileLoadingShown(state, display !== "content")}
       docPanel={
         <DocPanel
           approval={approval}
           attempt={attempt}
           query={query}
           state={state}
+          display={display}
         />
       }
     />
@@ -249,11 +248,14 @@ function ReviewBody({
     approval.work_item_id,
     approval.approval_request_id,
   );
+  // 骨組みを残している間は、取得が済んでいても、読み込み中として承認を止める。
+  const snapshotDisplay = useLoadingDisplay(loadPhaseOf(snapshot));
   return (
     <>
       <IntakeSnapshotPanel
         workItemId={approval.work_item_id}
         approvalRequestId={approval.approval_request_id}
+        display={snapshotDisplay}
       />
       {docPanel}
       <ApprovalBar
@@ -262,7 +264,10 @@ function ReviewBody({
         subject={displayableIssueText(title).text}
         factoryLabel={null}
         approveBlockedReason={requirementsBlockedReason(
-          snapshotReadiness(snapshot),
+          holdWhileLoadingShown(
+            snapshotReadiness(snapshot),
+            snapshotDisplay !== "content",
+          ),
           docState,
         )}
         refreshed={snapshot.data?.refreshed === true}

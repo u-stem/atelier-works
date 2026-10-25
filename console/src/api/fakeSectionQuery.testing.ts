@@ -35,7 +35,6 @@ export function loadingQuery<T>(): SectionQuery<T> {
     isError: false,
     error: null,
     isFetching: true,
-    fetchStatus: "fetching",
     refetch: () => Promise.resolve(undefined),
   };
 }

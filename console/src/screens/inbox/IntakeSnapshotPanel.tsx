@@ -1,12 +1,10 @@
 import { TriangleAlert } from "lucide-react";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import { useIntakeSnapshot } from "../../api/queries.ts";
-import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import {
   LoadingBody,
   type LoadingDisplay,
   type LoadingShape,
-  useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import {
@@ -161,12 +159,14 @@ export function IntakeSnapshotView({
 export function IntakeSnapshotPanel({
   workItemId,
   approvalRequestId,
+  display,
 }: {
   workItemId: number;
   approvalRequestId: number;
+  /** 読み込み中の表示。承認バーの判定と同じ状態を使うため、呼び出し側が決める。 */
+  display: LoadingDisplay;
 }) {
   const snapshot = useIntakeSnapshot(workItemId, approvalRequestId);
-  const display = useLoadingDisplay(loadPhaseOf(snapshot));
   // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
   if (display !== "content") {
     return <IntakeSnapshotView state={{ status: "loading", display }} />;

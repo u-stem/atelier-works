@@ -22,24 +22,18 @@ export type NodeShape = {
 /** 読み込み中の表示の形。高さを、内容の目安の高さにそろえる。 */
 export type LoadingShape = RowsShape | NodeShape;
 
-export const OFFLINE_WAIT_TEXT = "オフラインのため、取得を待っています";
-
 /** 読み込みの段階に応じて出すもの。 */
-export type LoadingDisplay = "content" | "frame" | "skeleton" | "offline";
+export type LoadingDisplay = "content" | "frame" | "skeleton";
 
 /**
  * 読み込みの段階と、遅延表示の状態から、出すものを決める。
  * `visible`は遅延表示が「出している」状態で、取得が終わった後の残す時間も含む。
  * 残す時間の間は、値が揃っていても、スケルトンを出し続ける。
- * オフラインで止まった取得は、スケルトンでなく、待っていることを伝える。
  */
 export function loadingDisplayOf(
   phase: LoadPhase,
   visible: boolean,
 ): LoadingDisplay {
-  if (phase === "paused") {
-    return "offline";
-  }
   if (visible) {
     return "skeleton";
   }
@@ -90,18 +84,6 @@ export function LoadingStateView({
   );
 }
 
-/** 待っていることを伝える文。 */
-function OfflineWait() {
-  return (
-    <p
-      role="status"
-      className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground"
-    >
-      {OFFLINE_WAIT_TEXT}
-    </p>
-  );
-}
-
 /** `display`に応じた読み込み中の表示。内容は出さない(`content`では何も描かない)。 */
 export function LoadingBody({
   display,
@@ -113,8 +95,6 @@ export function LoadingBody({
   switch (display) {
     case "content":
       return null;
-    case "offline":
-      return <OfflineWait />;
     case "frame":
       return <LoadingStateView visible={false} shape={shape} />;
     case "skeleton":
@@ -125,7 +105,6 @@ export function LoadingBody({
 /**
  * 節の読み込み中の出し分け。
  * 取得が300ms続くまでは、スケルトンでなく同じ高さの空の枠を出し、一度出したら200ms以上残す。
- * オフラインで止まった取得は、スケルトンを出さず、待っていることを伝える。
  * 値が揃った、または失敗したときは`children`を出す。失敗の説明は`children`が持つ。
  */
 export function LoadingGate({
