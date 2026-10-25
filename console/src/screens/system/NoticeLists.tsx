@@ -23,6 +23,7 @@ export function InfoNoticeList({
 }: {
   notices: readonly NoticeRow[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   if (notices.length === 0) {
     return <EmptyNote>情報の通知はありません</EmptyNote>;
@@ -119,6 +120,7 @@ export function ResolvedNoticeList({
 }: {
   notices: readonly SystemResolvedNotice[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   if (notices.length === 0) {
     return <EmptyNote>解決済みの通知はありません</EmptyNote>;

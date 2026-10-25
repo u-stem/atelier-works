@@ -83,3 +83,58 @@ describe("UpdateHistory", () => {
     expect(render([success])).not.toContain("理由");
   });
 });
+
+/** 理由の文字で見分けられる、`count`件の反映。 */
+function manyEntries(count: number): DeploymentEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...FAILED,
+    deployment_id: index + 1,
+    error: `reason ${String(index + 1).padStart(3, "0")}`,
+  }));
+}
+
+function renderPage(count: number, initialPage?: number): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <UpdateHistory
+        entries={manyEntries(count)}
+        now={NOW}
+        initialPage={initialPage}
+      />
+    </TooltipProvider>,
+  );
+}
+
+describe("UpdateHistory pagination", () => {
+  test("shows the last item of the first page", () => {
+    expect(renderPage(11)).toContain("reason 010");
+  });
+
+  test("leaves the item after the first page out of the first page", () => {
+    expect(renderPage(11)).not.toContain("reason 011");
+  });
+
+  test("shows the item after the first page on the second page", () => {
+    expect(renderPage(11, 1)).toContain("reason 011");
+  });
+
+  test("leaves the first page items out of the second page", () => {
+    expect(renderPage(11, 1)).not.toContain("reason 010");
+  });
+
+  test("shows the last page for a page past the end", () => {
+    expect(renderPage(11, 9)).toContain("reason 011");
+  });
+
+  test("shows the range of the page", () => {
+    expect(renderPage(11, 1)).toContain("11–11件目 / 11件");
+  });
+
+  test("draws no page navigation for a single page", () => {
+    expect(renderPage(10)).not.toContain("<nav");
+  });
+
+  test("keeps the empty message for no entries", () => {
+    expect(renderPage(0)).toContain("反映の記録はまだありません");
+  });
+});

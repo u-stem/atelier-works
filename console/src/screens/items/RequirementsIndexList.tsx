@@ -53,6 +53,7 @@ export function RequirementsIndexList({
 }: {
   rows: readonly RequirementsIndexRow[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   const [filter, setFilter] = useState("");
   const inputId = useId();

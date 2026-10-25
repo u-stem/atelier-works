@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
-import { PipelineTable } from "./PipelineTable.tsx";
+import {
+  DEFAULT_PIPELINE_SORT,
+  sortPipelineRows,
+} from "../../lib/pipelineView.ts";
+import { PipelineTable, pipelinePageRows } from "./PipelineTable.tsx";
 
 const NOW = Date.parse("2026-10-08T01:00:00.000Z");
 
@@ -197,5 +201,127 @@ describe("PipelineTable layout", () => {
 
   test("shows the cards only below a wide container", () => {
     expect(render([row()])).toContain('class="@4xl:hidden"');
+  });
+});
+
+/** 更新が番号の順に新しくなる、`count`件の行。既定の順(更新が新しい順)では、番号が大きい行が先になる。 */
+function manyRows(count: number): PipelineRow[] {
+  return Array.from({ length: count }, (_, index) =>
+    row({
+      work_item_id: index + 1,
+      title: `item ${String(index + 1).padStart(3, "0")}`,
+      updated_at: new Date(Date.UTC(2026, 9, 1, 0, index)).toISOString(),
+    }),
+  );
+}
+
+function renderPage(count: number, initialPage?: number): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <TooltipProvider>
+        <PipelineTable
+          rows={manyRows(count)}
+          now={NOW}
+          initialPage={initialPage}
+        />
+      </TooltipProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("PipelineTable pagination", () => {
+  test("draws 25 table rows on the first page", () => {
+    expect(renderPage(26).match(/<tr class="border-t/g)).toHaveLength(25);
+  });
+
+  test("leaves the oldest item out of the first page", () => {
+    expect(renderPage(26)).not.toContain('href="/items/1"');
+  });
+
+  test("draws the oldest item on the second page", () => {
+    expect(renderPage(26, 1)).toContain('href="/items/1"');
+  });
+
+  test("leaves the newest item out of the second page", () => {
+    expect(renderPage(26, 1)).not.toContain('href="/items/26"');
+  });
+
+  test("draws one table row on the second page", () => {
+    expect(renderPage(26, 1).match(/<tr class="border-t/g)).toHaveLength(1);
+  });
+
+  test("draws the last page for a page past the end", () => {
+    expect(renderPage(26, 9)).toContain('href="/items/1"');
+  });
+
+  test("shows the range of the page", () => {
+    expect(renderPage(26, 1)).toContain("26–26件目 / 26件");
+  });
+
+  test("draws the page navigation once", () => {
+    expect(renderPage(26).match(/<nav/g)).toHaveLength(1);
+  });
+
+  test("draws no page navigation for a single page", () => {
+    expect(renderPage(25)).not.toContain("<nav");
+  });
+
+  test("keeps the count line", () => {
+    expect(renderPage(26)).toContain("26件");
+  });
+});
+
+describe("pipelinePageRows", () => {
+  const ASC_BY_ID = { key: "work_item_id", direction: "asc" } as const;
+
+  function ids(rows: readonly PipelineRow[]): number[] {
+    return rows.map((r) => r.work_item_id);
+  }
+
+  test("slices the table rows in the chosen sort order", () => {
+    expect(ids(pipelinePageRows(manyRows(26), ASC_BY_ID, 1).tableRows)).toEqual(
+      [26],
+    );
+  });
+
+  test("takes the first table page from the head of the chosen sort", () => {
+    expect(ids(pipelinePageRows(manyRows(26), ASC_BY_ID, 0).tableRows)[0]).toBe(
+      1,
+    );
+  });
+
+  test("slices the card rows in the default order whatever the sort", () => {
+    expect(ids(pipelinePageRows(manyRows(26), ASC_BY_ID, 0).cardRows)[0]).toBe(
+      26,
+    );
+  });
+
+  test("gives the first 25 of the default order to the first card page", () => {
+    const rows = manyRows(30).map((r, index) => ({
+      ...r,
+      status: index % 2 === 0 ? "pr_open" : "failed",
+    }));
+    const byStatus = { key: "status", direction: "asc" } as const;
+    const expected = ids(sortPipelineRows(rows, DEFAULT_PIPELINE_SORT)).slice(
+      0,
+      25,
+    );
+    expect(ids(pipelinePageRows(rows, byStatus, 0).cardRows)).toEqual(expected);
+  });
+
+  test("gives the rest of the default order to the second card page", () => {
+    expect(ids(pipelinePageRows(manyRows(26), ASC_BY_ID, 1).cardRows)).toEqual([
+      1,
+    ]);
+  });
+
+  test("slices both lists for a page past the end as the last page", () => {
+    const pages = pipelinePageRows(manyRows(26), ASC_BY_ID, 9);
+    expect([ids(pages.tableRows), ids(pages.cardRows)]).toEqual([[26], [1]]);
+  });
+
+  test("returns empty lists for no rows", () => {
+    const pages = pipelinePageRows([], ASC_BY_ID, 0);
+    expect([pages.tableRows, pages.cardRows]).toEqual([[], []]);
   });
 });

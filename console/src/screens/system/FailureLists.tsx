@@ -89,6 +89,7 @@ export function AuditFailureList({
 }: {
   failures: readonly SummaryFailure[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   if (failures.length === 0) {
     return <EmptyNote>失敗した監査はありません</EmptyNote>;
@@ -140,6 +141,7 @@ export function OrphanFailureList({
 }: {
   failures: readonly SystemOrphanFailure[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   if (failures.length === 0) {
     return <EmptyNote>作業項目に紐づかない失敗はありません</EmptyNote>;

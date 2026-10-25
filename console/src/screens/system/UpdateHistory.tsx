@@ -134,6 +134,7 @@ export function UpdateHistory({
 }: {
   entries: readonly DeploymentEntry[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   if (entries.length === 0) {
     return (

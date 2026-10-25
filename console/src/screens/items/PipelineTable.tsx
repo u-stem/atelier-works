@@ -298,6 +298,15 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
   );
 }
 
+/** 仮の実装。 */
+export function pipelinePageRows(
+  _filtered: readonly PipelineRow[],
+  _sort: PipelineSort,
+  _page: number,
+): { tableRows: PipelineRow[]; cardRows: PipelineRow[] } {
+  return { tableRows: [], cardRows: [] };
+}
+
 /**
  * 作業項目の進捗の表。状態、リポジトリ、検索の文字で絞り込み、見出しを押して並べ替える。
  * 絞り込みと並び替えの規則は`lib/pipelineView.ts`の純関数にある。
@@ -310,6 +319,7 @@ export function PipelineTable({
 }: {
   rows: readonly PipelineRow[];
   now: number;
+  initialPage?: number | undefined;
 }) {
   const [chosen, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);
   const filter = reconcilePipelineFilter(chosen, rows);
