@@ -404,15 +404,3 @@ export function approvalLinks(
         : null,
   };
 }
-
-/**
- * 読み込み中の表示(骨組みと空の枠)を出している間は、取得が済んでいても`loading`として扱う。
- * 骨組みを残している間は、承認者が内容をまだ見られない。
- * 見られない内容の承認を、有効にしないためである。
- */
-export function holdWhileLoadingShown<T extends string>(
-  readiness: T,
-  shown: boolean,
-): T | "loading" {
-  return shown ? "loading" : readiness;
-}
