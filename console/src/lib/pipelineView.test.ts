@@ -15,6 +15,7 @@ import {
   outOfScopeMatchCount,
   PIPELINE_SCOPES,
   parsePipelineScope,
+  pipelineReachedLimit,
   pipelineScopeNote,
   pipelineStatusLabel,
   pipelineStatusVariant,
@@ -24,6 +25,7 @@ import {
   repoOptions,
   rowsInScope,
   scopeEmptyMessage,
+  scopeEmptyNote,
   selectPipelineStatus,
   showsRepository,
   showsRequirementsLink,
@@ -820,6 +822,60 @@ describe("actionableNote", () => {
     expect(actionableNote(0)).toBe(
       "対応が必要なものは『要対応』にあります(0件)",
     );
+  });
+});
+
+describe("pipelineReachedLimit", () => {
+  test("is true at the limit", () => {
+    expect(pipelineReachedLimit(500, 500)).toBe(true);
+  });
+
+  test("is false below the limit", () => {
+    expect(pipelineReachedLimit(499, 500)).toBe(false);
+  });
+});
+
+describe("scopeEmptyNote", () => {
+  test("warns that old active items may be missing at the limit", () => {
+    expect(scopeEmptyNote("active", true)).toBe(
+      "取得が上限に達しているため、古い進行中の作業項目が表に出ていない場合があります。",
+    );
+  });
+
+  test("warns that old items waiting for a merge may be missing at the limit", () => {
+    expect(scopeEmptyNote("pr_open", true)).toBe(
+      "取得が上限に達しているため、古いPR待ちの作業項目が表に出ていない場合があります。",
+    );
+  });
+
+  test("says nothing below the limit", () => {
+    expect(scopeEmptyNote("active", false)).toBeNull();
+  });
+
+  test("says nothing for the all scope", () => {
+    expect(scopeEmptyNote("all", true)).toBeNull();
+  });
+});
+
+describe("reconcilePipelineFilter when the scope moves", () => {
+  const rows = [
+    row({ work_item_id: 1, status: "implementing" }),
+    row({ work_item_id: 2, status: "failed" }),
+  ];
+
+  test("drops a status that the new scope leaves out", () => {
+    const chosenUnderAll = { ...EMPTY_PIPELINE_FILTER, status: "failed" };
+    expect(
+      reconcilePipelineFilter({ ...chosenUnderAll, scope: "active" }, rows)
+        .status,
+    ).toBeNull();
+  });
+
+  test("keeps a status that the new scope still includes", () => {
+    const chosen = { ...EMPTY_PIPELINE_FILTER, status: "implementing" };
+    expect(
+      reconcilePipelineFilter({ ...chosen, scope: "all" }, rows).status,
+    ).toBe("implementing");
   });
 });
 

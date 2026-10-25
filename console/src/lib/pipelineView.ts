@@ -504,6 +504,17 @@ export function showsRequirementsLink(row: Pick<PipelineRow, "kind">): boolean {
   return row.kind === "issue";
 }
 
+export function pipelineReachedLimit(_count: number, _limit: number): boolean {
+  return false;
+}
+
+export function scopeEmptyNote(
+  _scope: PipelineScope,
+  _limitReached: boolean,
+): string | null {
+  return null;
+}
+
 /**
  * 表が見ている範囲の注記。
  * 取得の上限に達したときは、古い行が漏れているかもしれないので、件数の上限も添える。

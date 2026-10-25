@@ -15,6 +15,7 @@ import {
   assertAllDelivered,
   CATCHUP_INTERVAL_MS,
   type DailySummaryResult,
+  gatedNoticeRecord,
   readGatedReview,
   readWorkerLoad,
   runDailySummary,
@@ -163,6 +164,24 @@ describe("readGatedReview", () => {
       log,
     );
     expect(lines.join("\n")).toContain("connection refused");
+  });
+});
+
+describe("gatedNoticeRecord", () => {
+  const NOTICE_URL = "http://127.0.0.1:8080/console/items?scope=all";
+
+  test("links the whole list of the work items, since the finished ones are not in the default scope", () => {
+    expect(gatedNoticeRecord("http://127.0.0.1:8080").message).toContain(
+      NOTICE_URL,
+    );
+  });
+
+  test("keeps the fixed prefix that resolves the notice", () => {
+    expect(
+      gatedNoticeRecord("http://127.0.0.1:8080").message.startsWith(
+        GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
+      ),
+    ).toBe(true);
   });
 });
 

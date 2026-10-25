@@ -443,6 +443,8 @@ export function PipelineTable({
   scope: PipelineScope;
   /** 範囲を替えたときに呼ぶ。 */
   onScopeChange: (scope: PipelineScope) => void;
+  /** 取得が上限に達しているか。省略すると達していない。 */
+  limitReached?: boolean | undefined;
 }) {
   // 範囲は親(URL)が持つ。ここが持つのは状態、リポジトリ、検索の文字である。
   const [chosen, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);

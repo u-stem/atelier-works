@@ -2,6 +2,7 @@
 
 import { itemsTabPath } from "./itemsTabs.ts";
 import { workItemRef } from "./labels.ts";
+import type { PipelineScope } from "./pipelineView.ts";
 
 export type Crumb = {
   readonly label: string;
@@ -11,8 +12,21 @@ export type Crumb = {
 
 const ITEMS_CRUMB: Crumb = { label: "作業項目", to: itemsTabPath("progress") };
 
+export function itemsBackState(_scope: PipelineScope): {
+  itemsBack: string;
+} {
+  return { itemsBack: "/items" };
+}
+
+export function parseItemsBack(_state: unknown): string | null {
+  return null;
+}
+
 /** 作業項目の詳細。番号が正しくないときは、番号を含まない名前にする。 */
-export function itemDetailCrumbs(workItemId: number | null): Crumb[] {
+export function itemDetailCrumbs(
+  workItemId: number | null,
+  _back: string | null = null,
+): Crumb[] {
   return [
     ITEMS_CRUMB,
     { label: workItemId === null ? "作業項目の詳細" : workItemRef(workItemId) },

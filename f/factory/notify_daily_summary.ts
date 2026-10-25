@@ -329,6 +329,10 @@ export async function runDailySummary(
   return assertAllDelivered(result, plan.yesterday);
 }
 
+export function gatedNoticeRecord(windmillPublicUrl: string): NoticeRecord {
+  return gatedProlongedNotice(buildItemsConsoleUrl(windmillPublicUrl));
+}
+
 export async function main(): Promise<CatchupResult> {
   const log = logger("notify_daily_summary");
   const config = await loadConfig(() =>

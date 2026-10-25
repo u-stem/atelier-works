@@ -93,18 +93,18 @@ describe("AuditFailureList resolution mark", () => {
 
   test("marks a failure that a later audit resolved", () => {
     expect(renderResolved([{ ...base, superseded: true }])).toContain(
-      "後の監査の報告が期間を覆う",
+      "後の監査で報告済み",
     );
   });
 
   test("does not mark a failure that is still open", () => {
     expect(renderResolved([{ ...base, superseded: false }])).not.toContain(
-      "後の監査の報告が期間を覆う",
+      "後の監査で報告済み",
     );
   });
 
   test("does not mark a failure from a backend that sends no flag", () => {
-    expect(renderResolved([base])).not.toContain("後の監査の報告が期間を覆う");
+    expect(renderResolved([base])).not.toContain("後の監査で報告済み");
   });
 
   test("keeps a resolved failure in the list", () => {
@@ -118,7 +118,7 @@ describe("AuditFailureList resolution mark", () => {
       { ...auditFailure(0), superseded: true },
       { ...auditFailure(1), superseded: false },
     ]);
-    expect(html.match(/後の監査の報告が期間を覆う/g)).toHaveLength(1);
+    expect(html.match(/後の監査で報告済み/g)).toHaveLength(1);
   });
 });
 

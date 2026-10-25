@@ -447,6 +447,11 @@ execPsql(
   `INSERT INTO factory.audit_reports (work_item_id, period_start, period_end, summary, markdown)
    VALUES (${String(a6)}, (SELECT period_end FROM factory.audit_reports WHERE work_item_id = ${String(a3)}), now() - interval '1 day', 's', 'm')`,
 );
+// 前の報告の終わりが2つある(a3の7日前とa6の1日前)失敗(a6b)は、前の報告の終わりの最大値(1日前)で比べる。
+// 後の報告(a6c)の開始は3日前で、2つの終わりの間にある。最大値(1日前)以前なので覆われる。最小値(7日前)で比べると偽になる。
+const a6b = await auditItem("a6b", "failed", "schedule", OWNER, "r");
+const a6c = await auditItem("a6c", "audited", "schedule", OWNER, "r");
+auditReport(a6c, 3, 1);
 // 切り詰め: 前の報告(a6、終わりは1日前)より後に報告の開始がある(a8、開始は半日前)と、a7の期間の先頭は覆われない。
 const a7 = await auditItem("a7", "failed", "schedule", OWNER, "r");
 const a8 = await auditItem("a8", "audited", "schedule", OWNER, "r");
@@ -481,6 +486,11 @@ check(
   [supersededOf(a4), supersededOf(a5)],
 );
 check(
+  "audit: a failure is compared with the latest of the previous report ends, not the earliest",
+  supersededOf(a6b) === true,
+  supersededOf(a6b),
+);
+check(
   "audit: a failure stays open when the later report starts after the previous report ended",
   supersededOf(a7) === false,
   supersededOf(a7),
@@ -497,7 +507,7 @@ check(
 );
 check(
   "audit: the audits that have a report are not failures of the list",
-  [a3, a6, a8].every((id) => supersededOf(id) === undefined),
+  [a3, a6, a6c, a8].every((id) => supersededOf(id) === undefined),
 );
 check(
   "audit: the open count is the failures that are not covered",
@@ -506,7 +516,7 @@ check(
 );
 check(
   "audit: the covered failures stay in the list",
-  [a1, a2, a4, a5].every((id) => supersededOf(id) !== undefined),
+  [a1, a2, a4, a5, a6b].every((id) => supersededOf(id) !== undefined),
 );
 const auditNarrow = await runConsoleSummary(2, sql);
 check(
@@ -519,7 +529,7 @@ check(
   "audit: the failure count includes every audit failure, covered or not",
   auditSummary.counts.failures -
     auditSummary.failures.filter((row) => row.kind !== "audit").length ===
-    8,
+    9,
   auditSummary.counts,
 );
 // 後の検査が監査の行を数えないよう、この場面の行を消す(報告は連鎖して消える)。

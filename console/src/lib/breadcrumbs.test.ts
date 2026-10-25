@@ -3,6 +3,8 @@ import {
   auditReportCrumbs,
   itemDetailCrumbs,
   itemRequirementsCrumbs,
+  itemsBackState,
+  parseItemsBack,
 } from "./breadcrumbs.ts";
 
 describe("itemDetailCrumbs", () => {
@@ -36,6 +38,73 @@ describe("itemRequirementsCrumbs", () => {
       to: "/items?tab=requirements",
     });
   });
+});
+
+describe("itemDetailCrumbs with a way back", () => {
+  test("returns to the path that the list was opened with", () => {
+    expect(itemDetailCrumbs(7, "/items?scope=all")[0]).toEqual({
+      label: "作業項目",
+      to: "/items?scope=all",
+    });
+  });
+
+  test("falls back to the bare list without a way back", () => {
+    expect(itemDetailCrumbs(7, null)[0]?.to).toBe("/items");
+  });
+
+  test("keeps the current page as the last crumb", () => {
+    expect(itemDetailCrumbs(7, "/items?scope=all")[1]).toEqual({
+      label: "作業項目 #7",
+    });
+  });
+});
+
+describe("itemsBackState", () => {
+  test("carries the path of the list with the scope", () => {
+    expect(itemsBackState("pr_open")).toEqual({
+      itemsBack: "/items?scope=pr_open",
+    });
+  });
+
+  test("leaves the default scope out of the path", () => {
+    expect(itemsBackState("active")).toEqual({ itemsBack: "/items" });
+  });
+
+  test("is read back by parseItemsBack", () => {
+    expect(parseItemsBack(itemsBackState("all"))).toBe("/items?scope=all");
+  });
+});
+
+describe("parseItemsBack", () => {
+  test.each([
+    "/items",
+    "/items?scope=all",
+    "/items?tab=requirements&scope=all",
+  ])("accepts the internal path %s", (path) => {
+    expect(parseItemsBack({ itemsBack: path })).toBe(path);
+  });
+
+  test.each([
+    "//evil.example/items",
+    "https://evil.example/items",
+    "/items/new",
+    "/itemsx",
+    "/items#frag",
+    "/reports",
+    "items",
+    "",
+    "/items?x=\\evil",
+    "/items?a=1\n",
+  ])("rejects %j", (path) => {
+    expect(parseItemsBack({ itemsBack: path })).toBeNull();
+  });
+
+  test.each([null, undefined, "x", 3, [], {}, { itemsBack: 3 }])(
+    "rejects the state %j",
+    (state) => {
+      expect(parseItemsBack(state)).toBeNull();
+    },
+  );
 });
 
 describe("auditReportCrumbs", () => {
