@@ -33,6 +33,7 @@ export function createPrefetchScheduler<K>(options: {
 
 /** 入口のリンクの押下のうち、先読みの判定に読むものだけ。 */
 export type PressEvent = {
+  readonly pointerType: string;
   readonly button: number;
   readonly ctrlKey: boolean;
   readonly metaKey: boolean;

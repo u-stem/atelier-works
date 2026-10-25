@@ -59,6 +59,7 @@ describe("createPrefetchScheduler runNow", () => {
 });
 
 const PRIMARY_PRESS: PressEvent = {
+  pointerType: "mouse",
   button: 0,
   ctrlKey: false,
   metaKey: false,
@@ -69,6 +70,16 @@ const PRIMARY_PRESS: PressEvent = {
 describe("isPrimaryPress", () => {
   test("accepts a primary press without modifiers", () => {
     expect(isPrimaryPress(PRIMARY_PRESS)).toBe(true);
+  });
+
+  test("accepts a pen press", () => {
+    expect(isPrimaryPress({ ...PRIMARY_PRESS, pointerType: "pen" })).toBe(true);
+  });
+
+  test("rejects a touch press, which may be the start of a scroll", () => {
+    expect(isPrimaryPress({ ...PRIMARY_PRESS, pointerType: "touch" })).toBe(
+      false,
+    );
   });
 
   test("rejects a middle click", () => {

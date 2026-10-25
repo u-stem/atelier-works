@@ -4,6 +4,7 @@ import {
   classifyRunResponse,
   describeWriteFailure,
   isBannerError,
+  isUnreachableError,
 } from "./errors.ts";
 
 describe("classifyRunResponse on success", () => {
@@ -368,5 +369,59 @@ describe("ApiFailure", () => {
 
   test("is an Error", () => {
     expect(new ApiFailure({ kind: "network" })).toBeInstanceOf(Error);
+  });
+});
+
+describe("isUnreachableError", () => {
+  test("treats a network failure as unreachable", () => {
+    expect(isUnreachableError({ kind: "network" })).toBe(true);
+  });
+
+  test("treats a 502 from the proxy as unreachable", () => {
+    expect(isUnreachableError({ kind: "http", status: 502, detail: "" })).toBe(
+      true,
+    );
+  });
+
+  test("treats a 503 from the proxy as unreachable", () => {
+    expect(isUnreachableError({ kind: "http", status: 503, detail: "" })).toBe(
+      true,
+    );
+  });
+
+  test("treats a 500 as reached", () => {
+    expect(isUnreachableError({ kind: "http", status: 500, detail: "" })).toBe(
+      false,
+    );
+  });
+
+  test("treats a 404 as reached", () => {
+    expect(isUnreachableError({ kind: "http", status: 404, detail: "" })).toBe(
+      false,
+    );
+  });
+
+  test("treats a job failure as reached", () => {
+    expect(isUnreachableError({ kind: "job_failed", message: "x" })).toBe(
+      false,
+    );
+  });
+
+  test("treats unauthorized as reached", () => {
+    expect(isUnreachableError({ kind: "unauthorized" })).toBe(false);
+  });
+
+  test("treats a timeout as reached, because a 504 cannot tell the proxy from Windmill", () => {
+    expect(isUnreachableError({ kind: "timeout_or_unknown" })).toBe(false);
+  });
+
+  test("reads a 502 response body as unreachable", () => {
+    const result = classifyRunResponse(502, "<html>Bad Gateway</html>");
+    expect(!result.ok && isUnreachableError(result.error)).toBe(true);
+  });
+
+  test("reads a 504 response as reached, because it cannot be told from a Windmill timeout", () => {
+    const result = classifyRunResponse(504, "");
+    expect(!result.ok && isUnreachableError(result.error)).toBe(false);
   });
 });

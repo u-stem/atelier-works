@@ -1,7 +1,11 @@
 import type { ReactNode } from "react";
 import type { LoadPhase } from "../api/sectionQuery.ts";
 import { cn } from "../lib/cn.ts";
-import { useDelayedVisible } from "../lib/delayedVisible.ts";
+import {
+  DEFAULT_DELAYED_OPTIONS,
+  type DelayedOptions,
+  useDelayedVisible,
+} from "../lib/delayedVisible.ts";
 import { Skeleton } from "./ui/skeleton.tsx";
 
 /** 同じ高さの行を並べる形。 */
@@ -33,6 +37,7 @@ export type LoadingDisplay = "content" | "frame" | "skeleton";
 export function loadingDisplayOf(
   phase: LoadPhase,
   visible: boolean,
+  _lingers = true,
 ): LoadingDisplay {
   if (visible) {
     return "skeleton";
@@ -44,9 +49,12 @@ export function loadingDisplayOf(
  * 読み込みの段階から、出すものを返す。画面が早期に別の表示へ切り替えても、
  * 残す時間が続くよう、フックは画面の先頭で呼ぶ。
  */
-export function useLoadingDisplay(phase: LoadPhase): LoadingDisplay {
-  const visible = useDelayedVisible(phase === "loading");
-  return loadingDisplayOf(phase, visible);
+export function useLoadingDisplay(
+  phase: LoadPhase,
+  options: DelayedOptions = DEFAULT_DELAYED_OPTIONS,
+): LoadingDisplay {
+  const visible = useDelayedVisible(phase === "loading", options);
+  return loadingDisplayOf(phase, visible, options.minMs > 0);
 }
 
 /**

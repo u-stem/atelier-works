@@ -1,17 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ApiFailure } from "../api/errors.ts";
 import { connectionStore } from "./connectionState.ts";
 import { OfflineBanner, OfflineBannerView } from "./OfflineBanner.tsx";
 
 function withUnreachable<T>(unreachable: boolean, run: () => T): T {
   if (unreachable) {
-    connectionStore.reportError(new ApiFailure({ kind: "network" }));
+    connectionStore.report({ ok: false, error: { kind: "network" } });
   }
   try {
     return run();
   } finally {
-    connectionStore.reportSuccess();
+    connectionStore.report({ ok: true, value: [] });
   }
 }
 

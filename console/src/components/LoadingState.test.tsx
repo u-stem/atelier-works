@@ -153,6 +153,18 @@ describe("loadingDisplayOf", () => {
     expect(loadingDisplayOf("loaded", true)).toBe("skeleton");
   });
 
+  test("drops the skeleton at once when lingering is off and the data arrived", () => {
+    expect(loadingDisplayOf("loaded", true, false)).toBe("content");
+  });
+
+  test("drops the skeleton at once when lingering is off and the fetch failed", () => {
+    expect(loadingDisplayOf("failed", true, false)).toBe("content");
+  });
+
+  test("still shows the skeleton while loading when lingering is off", () => {
+    expect(loadingDisplayOf("loading", true, false)).toBe("skeleton");
+  });
+
   test("keeps the skeleton while lingering after a failure", () => {
     expect(loadingDisplayOf("failed", true)).toBe("skeleton");
   });

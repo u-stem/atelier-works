@@ -1,10 +1,7 @@
 import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
 import { shouldRetryQuery } from "../api/queryPolicy.ts";
 import type { AuthStore } from "./authState.ts";
-import {
-  type ConnectionStore,
-  createConnectionStore,
-} from "./connectionState.ts";
+import type { ConnectionStore } from "./connectionState.ts";
 
 /**
  * 取得と書き込みの結果をログインの状態に反映するQueryClientを作る。
@@ -18,17 +15,15 @@ import {
  */
 export function createQueryClient(
   authStore: AuthStore,
-  connection: ConnectionStore = createConnectionStore(),
+  _connection?: ConnectionStore,
 ): QueryClient {
   return new QueryClient({
     queryCache: new QueryCache({
       onError: (error) => {
         authStore.reportError(error);
-        connection.reportError(error);
       },
       onSuccess: () => {
         authStore.reportSuccess();
-        connection.reportSuccess();
       },
     }),
     mutationCache: new MutationCache({
@@ -41,4 +36,11 @@ export function createQueryClient(
       mutations: { retry: 0 },
     },
   });
+}
+
+export function watchConnectionRecovery(
+  _store: ConnectionStore,
+  _client: Pick<QueryClient, "invalidateQueries">,
+): () => void {
+  return () => undefined;
 }

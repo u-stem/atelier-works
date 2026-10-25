@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { ApiFailure } from "../api/errors.ts";
+import type { InvalidateQueryFilters } from "@tanstack/react-query";
+import { ApiFailure, type RunResult } from "../api/errors.ts";
 import { createAuthStore } from "./authState.ts";
 import { createConnectionStore } from "./connectionState.ts";
-import { createQueryClient } from "./queryClient.ts";
+import { createQueryClient, watchConnectionRecovery } from "./queryClient.ts";
 
 describe("createQueryClient", () => {
   test("shows the banner when a query gets a 401", async () => {
@@ -68,59 +69,85 @@ describe("createQueryClient", () => {
   });
 });
 
-describe("createQueryClient connection state", () => {
-  function setup() {
-    const connection = createConnectionStore();
-    const client = createQueryClient(createAuthStore(), connection);
-    return { connection, client };
-  }
+describe("watchConnectionRecovery", () => {
+  const NETWORK: RunResult = { ok: false, error: { kind: "network" } };
+  const OK: RunResult = { ok: true, value: [] };
 
-  test("marks Windmill unreachable when a query fails with a network error", async () => {
-    const { connection, client } = setup();
-    await client
+  async function setup() {
+    const store = createConnectionStore();
+    const real = createQueryClient(createAuthStore());
+    await real
       .fetchQuery({
-        queryKey: ["net"],
-        queryFn: () => Promise.reject(new ApiFailure({ kind: "network" })),
-      })
-      .catch(() => undefined);
-    expect(connection.getSnapshot().unreachable).toBe(true);
-  });
-
-  test("clears the mark when the next query succeeds", async () => {
-    const { connection, client } = setup();
-    await client
-      .fetchQuery({
-        queryKey: ["net"],
-        queryFn: () => Promise.reject(new ApiFailure({ kind: "network" })),
-      })
-      .catch(() => undefined);
-    await client.fetchQuery({ queryKey: ["ok"], queryFn: () => 1 });
-    expect(connection.getSnapshot().unreachable).toBe(false);
-  });
-
-  test("does not mark Windmill unreachable for a failure Windmill answered", async () => {
-    const { connection, client } = setup();
-    await client
-      .fetchQuery({
-        queryKey: ["http"],
+        queryKey: ["failed"],
         queryFn: () =>
           Promise.reject(
             new ApiFailure({ kind: "http", status: 500, detail: "" }),
           ),
+        retry: false,
       })
       .catch(() => undefined);
-    expect(connection.getSnapshot().unreachable).toBe(false);
+    await real.fetchQuery({ queryKey: ["fine"], queryFn: () => 1 });
+    const filters: (InvalidateQueryFilters | undefined)[] = [];
+    const stop = watchConnectionRecovery(store, {
+      invalidateQueries: (given) => {
+        filters.push(given);
+        return Promise.resolve();
+      },
+    });
+    const selects = (key: string): boolean => {
+      const query = real.getQueryCache().find({ queryKey: [key] });
+      const predicate = filters[0]?.predicate;
+      return query !== undefined && predicate?.(query) === true;
+    };
+    return { store, filters, stop, selects };
+  }
+
+  test("reads the queries again when Windmill becomes reachable", async () => {
+    const { store, filters } = await setup();
+    store.report(NETWORK);
+    store.report(OK);
+    expect(filters).toHaveLength(1);
   });
 
-  test("does not mark Windmill unreachable for a mutation failure", async () => {
-    const { connection, client } = setup();
-    await client
-      .getMutationCache()
-      .build(client, {
-        mutationFn: () => Promise.reject(new ApiFailure({ kind: "network" })),
-      })
-      .execute(undefined)
-      .catch(() => undefined);
-    expect(connection.getSnapshot().unreachable).toBe(false);
+  test("selects the queries that failed", async () => {
+    const { store, selects } = await setup();
+    store.report(NETWORK);
+    store.report(OK);
+    expect(selects("failed")).toBe(true);
+  });
+
+  test("leaves the queries that succeeded alone", async () => {
+    const { store, selects } = await setup();
+    store.report(NETWORK);
+    store.report(OK);
+    expect(selects("fine")).toBe(false);
+  });
+
+  test("reads nothing again while Windmill stays unreachable", async () => {
+    const { store, filters } = await setup();
+    store.report(NETWORK);
+    expect(filters).toHaveLength(0);
+  });
+
+  test("reads nothing again when Windmill was never unreachable", async () => {
+    const { store, filters } = await setup();
+    store.report(OK);
+    expect(filters).toHaveLength(0);
+  });
+
+  test("reads once for a run of successes after the recovery", async () => {
+    const { store, filters } = await setup();
+    store.report(NETWORK);
+    store.report(OK);
+    store.report(OK);
+    expect(filters).toHaveLength(1);
+  });
+
+  test("stops watching after the cleanup", async () => {
+    const { store, filters, stop } = await setup();
+    stop();
+    store.report(NETWORK);
+    store.report(OK);
+    expect(filters).toHaveLength(0);
   });
 });

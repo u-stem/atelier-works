@@ -31,6 +31,12 @@ export function isScriptName(name: string): name is ScriptName {
   return Object.hasOwn(SCRIPT_PATHS, name);
 }
 
+export type ConnectionReporter = (result: RunResult) => void;
+
+export function setConnectionReporter(
+  _reporter: ConnectionReporter | null,
+): void {}
+
 /** テストで差し替えられるよう、`fetch`の形を絞った型。 */
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 

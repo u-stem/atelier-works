@@ -118,6 +118,10 @@ export function classifyRunResponse(status: number, body: string): RunResult {
   });
 }
 
+export function isUnreachableError(_error: ApiError): boolean {
+  return false;
+}
+
 /** 画面全体のバナーが知らせる失敗か。一覧の側では同じ内容を繰り返さない。 */
 export function isBannerError(error: ApiError): boolean {
   return error.kind === "unauthorized";

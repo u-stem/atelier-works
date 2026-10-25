@@ -19,6 +19,12 @@ export const DEFAULT_DELAYED_OPTIONS: DelayedOptions = {
   minMs: 200,
 };
 
+/** 取得が済んだら残さず内容に替える形。出す前の待ちだけを持つ。 */
+export const NO_LINGER_OPTIONS: DelayedOptions = {
+  delayMs: 300,
+  minMs: 200,
+};
+
 export type DelayedState =
   | { readonly phase: "hidden" }
   | { readonly phase: "pending"; readonly since: number }

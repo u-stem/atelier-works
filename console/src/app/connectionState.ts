@@ -4,7 +4,7 @@
 // ConsoleはWindmillを同じ端末(127.0.0.1)で配信するので、他のネットワークが切れていても、Windmillには届く。
 
 import { useSyncExternalStore } from "react";
-import { type ApiError, ApiFailure } from "../api/errors.ts";
+import type { ApiError, RunResult } from "../api/errors.ts";
 
 export type ConnectionState = { readonly unreachable: boolean };
 
@@ -38,8 +38,7 @@ export function reduceConnection(
 export type ConnectionStore = {
   readonly getSnapshot: () => ConnectionState;
   readonly subscribe: (listener: () => void) => () => void;
-  readonly reportError: (error: unknown) => void;
-  readonly reportSuccess: () => void;
+  readonly report: (result: RunResult) => void;
 };
 
 /** `reduceConnection`の状態を持ち、変わったときだけ購読者に知らせる。 */
@@ -66,13 +65,8 @@ export function createConnectionStore(): ConnectionStore {
         listeners.delete(listener);
       };
     },
-    reportError: (error) => {
-      if (error instanceof ApiFailure) {
-        dispatch({ type: "failed", error: error.apiError });
-      }
-    },
-    reportSuccess: () => {
-      dispatch({ type: "succeeded" });
+    report: () => {
+      void dispatch;
     },
   };
 }

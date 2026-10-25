@@ -5,6 +5,7 @@ import {
   type DelayedState,
   initialDelayedState,
   isDelayedVisible,
+  NO_LINGER_OPTIONS,
   nextDelayedWake,
   reduceDelayed,
   scheduleDelayedWake,
@@ -249,5 +250,27 @@ describe("scheduleDelayedWake", () => {
     const { env } = timerEnv(1000);
     const cleanup = scheduleDelayedWake({ phase: "hidden" }, OPTIONS, env);
     expect(() => cleanup()).not.toThrow();
+  });
+});
+
+describe("NO_LINGER_OPTIONS", () => {
+  test("keeps the delay before showing", () => {
+    expect(NO_LINGER_OPTIONS.delayMs).toBe(300);
+  });
+
+  test("has no minimum time, so an approval panel shows the content as soon as it arrives", () => {
+    expect(NO_LINGER_OPTIONS.minMs).toBe(0);
+  });
+
+  test("hides at once when the fetch ends right after the skeleton appeared", () => {
+    const events: DelayedEvent[] = [
+      { type: "tick", at: 1300 },
+      { type: "deactivate", at: 1301 },
+    ];
+    const state = events.reduce<DelayedState>(
+      (current, event) => reduceDelayed(current, event, NO_LINGER_OPTIONS),
+      PENDING_AT_1000,
+    );
+    expect(isDelayedVisible(state)).toBe(false);
   });
 });

@@ -159,6 +159,7 @@ function NavList({
                 onClick={onNavigate}
                 onPointerDown={(event) => {
                   prefetchScreen(screen.id, {
+                    pointerType: event.pointerType,
                     button: event.button,
                     ctrlKey: event.ctrlKey,
                     metaKey: event.metaKey,
