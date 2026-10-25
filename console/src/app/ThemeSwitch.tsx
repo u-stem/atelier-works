@@ -24,6 +24,24 @@ function readStoredPreference(): ThemePreference {
   }
 }
 
+export type ThemeEnv = {
+  beginSwitch(): void;
+  prefersDark(): boolean;
+  root: {
+    setAttribute(name: string, value: string): void;
+    removeAttribute(name: string): void;
+  };
+  storage: {
+    setItem(key: string, value: string): void;
+    removeItem(key: string): void;
+  } | null;
+};
+
+export function applyThemePreference(
+  _preference: ThemePreference,
+  _env: ThemeEnv,
+): void {}
+
 /**
  * 選択をhtmlのdata-themeに反映し、保存領域に残す。
  * 保存できない環境(プライベートブラウズなど)でも、表示の切り替えは行う。

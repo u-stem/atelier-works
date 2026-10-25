@@ -33,3 +33,14 @@ export function parseThemePreference(value: unknown): ThemePreference {
 export function themePreferenceLabel(preference: ThemePreference): string {
   return LABELS[preference];
 }
+
+/** 選択をhtmlに写すときの属性。 */
+export const THEME_PREFERENCE_ATTRIBUTE = "";
+
+/** 選択とOSの設定から、実際に付けるdata-themeの値を決める。 */
+export function resolveTheme(
+  _preference: ThemePreference,
+  _prefersDark: boolean,
+): "light" | "dark" {
+  return "light";
+}
