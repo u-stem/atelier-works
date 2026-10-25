@@ -1,12 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
-import {
-  type KeyboardEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
 import { useSummary } from "../api/queries.ts";
@@ -29,10 +23,9 @@ import {
 } from "../lib/navigation.ts";
 import {
   createPrefetchScheduler,
-  handlePrefetchEvent,
+  handlePress,
   PREFETCH_COOLDOWN_MS,
-  PREFETCH_DELAY_MS,
-  type PrefetchEvent,
+  type PressEvent,
 } from "../lib/prefetchSchedule.ts";
 import { NavDrawer } from "./NavDrawer.tsx";
 import { SCREENS, type ScreenId } from "./screens.ts";
@@ -85,19 +78,18 @@ function ReleaseInfo() {
 }
 
 /**
- * 入口への操作から、その画面の初回の取得を先読みする関数を返す。
- * focusは100ms待ち、blurで取り下げる。押下は待たずに先読みする。
- * hoverでは先読みしない。通り過ぎただけの入口で、Windmillのジョブを増やさないためである。
+ * 入口の押下で、その画面の初回の取得を先読みする関数を返す。
+ * 押してから離すまでの時間を、取得に使う。
+ * focusとhoverでは先読みしない。矢印やTabで入口をたどるだけで、Windmillのジョブが溜まるためである。
  * 判定は`lib/prefetchSchedule.ts`の純関数が行う。
  * 先読みは、各画面の取得と同じ設定(キー、関数、`staleTime`)で行う。
  * 新しいデータは取り直さず、走っている取得には重ねない。
  */
-function usePrefetchOnIntent(): (id: ScreenId, event: PrefetchEvent) => void {
+function usePrefetchOnPress(): (id: ScreenId, event: PressEvent) => void {
   const client = useQueryClient();
   const scheduler = useMemo(
     () =>
       createPrefetchScheduler<ScreenId>({
-        delayMs: PREFETCH_DELAY_MS,
         cooldownMs: PREFETCH_COOLDOWN_MS,
         now: () => Date.now(),
         run: (id) => {
@@ -106,20 +98,11 @@ function usePrefetchOnIntent(): (id: ScreenId, event: PrefetchEvent) => void {
             void client.prefetchQuery(options);
           }
         },
-        timers: {
-          set: (callback, ms) => window.setTimeout(callback, ms),
-          clear: (handle) => {
-            if (typeof handle === "number") {
-              window.clearTimeout(handle);
-            }
-          },
-        },
       }),
     [client],
   );
-  useEffect(() => () => scheduler.cancelAll(), [scheduler]);
   return (id, event) => {
-    handlePrefetchEvent(scheduler, id, event);
+    handlePress(scheduler, id, event);
   };
 }
 
@@ -136,7 +119,7 @@ function NavList({
 }) {
   const summary = useSummary();
   const navRef = useRef<HTMLElement>(null);
-  const prefetchScreen = usePrefetchOnIntent();
+  const prefetchScreen = usePrefetchOnPress();
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     const links = Array.from(navRef.current?.querySelectorAll("a") ?? []);
@@ -174,15 +157,8 @@ function NavList({
                 end={screen.path === "/"}
                 className={navLinkClass(collapsed)}
                 onClick={onNavigate}
-                onFocus={() => {
-                  prefetchScreen(screen.id, { type: "focus" });
-                }}
-                onBlur={() => {
-                  prefetchScreen(screen.id, { type: "blur" });
-                }}
                 onPointerDown={(event) => {
                   prefetchScreen(screen.id, {
-                    type: "pointerdown",
                     button: event.button,
                     ctrlKey: event.ctrlKey,
                     metaKey: event.metaKey,

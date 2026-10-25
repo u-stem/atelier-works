@@ -5,12 +5,10 @@ import { ApiFailure } from "../../api/errors.ts";
 import {
   freshQuery,
   loadingQuery,
-  pausedQuery,
   staleQuery,
 } from "../../api/fakeSectionQuery.testing.ts";
 import type { AuditIndexRow } from "../../api/guards/audit.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
-import { OFFLINE_WAIT_TEXT } from "../../components/LoadingState.tsx";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { AuditListState } from "./AuditReports.tsx";
 
@@ -88,9 +86,5 @@ describe("AuditListState", () => {
 describe("AuditListState while loading", () => {
   test("shows only the frame in the first moment", () => {
     expect(render(loadingQuery<AuditIndexRow[]>())).not.toContain("読み込み中");
-  });
-
-  test("tells the user that the fetch waits for the network", () => {
-    expect(render(pausedQuery<AuditIndexRow[]>())).toContain(OFFLINE_WAIT_TEXT);
   });
 });

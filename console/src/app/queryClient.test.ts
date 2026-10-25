@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "../api/errors.ts";
 import { createAuthStore } from "./authState.ts";
-import { createQueryClient, syncInitialOnlineState } from "./queryClient.ts";
+import { createConnectionStore } from "./connectionState.ts";
+import { createQueryClient } from "./queryClient.ts";
 
 describe("createQueryClient", () => {
   test("shows the banner when a query gets a 401", async () => {
@@ -60,31 +61,66 @@ describe("createQueryClient", () => {
     const client = createQueryClient(createAuthStore());
     expect(client.getDefaultOptions().queries?.gcTime).toBeUndefined();
   });
+
+  test("runs queries whatever the browser says about the connection", () => {
+    const client = createQueryClient(createAuthStore());
+    expect(client.getDefaultOptions().queries?.networkMode).toBe("always");
+  });
 });
 
-describe("syncInitialOnlineState", () => {
-  function recorded(onLine: boolean | undefined): boolean[] {
-    const calls: boolean[] = [];
-    syncInitialOnlineState(
-      {
-        setOnline: (online) => {
-          calls.push(online);
-        },
-      },
-      onLine === undefined ? {} : { onLine },
-    );
-    return calls;
+describe("createQueryClient connection state", () => {
+  function setup() {
+    const connection = createConnectionStore();
+    const client = createQueryClient(createAuthStore(), connection);
+    return { connection, client };
   }
 
-  test("tells the manager the browser started offline", () => {
-    expect(recorded(false)).toEqual([false]);
+  test("marks Windmill unreachable when a query fails with a network error", async () => {
+    const { connection, client } = setup();
+    await client
+      .fetchQuery({
+        queryKey: ["net"],
+        queryFn: () => Promise.reject(new ApiFailure({ kind: "network" })),
+      })
+      .catch(() => undefined);
+    expect(connection.getSnapshot().unreachable).toBe(true);
   });
 
-  test("tells the manager the browser started online", () => {
-    expect(recorded(true)).toEqual([true]);
+  test("clears the mark when the next query succeeds", async () => {
+    const { connection, client } = setup();
+    await client
+      .fetchQuery({
+        queryKey: ["net"],
+        queryFn: () => Promise.reject(new ApiFailure({ kind: "network" })),
+      })
+      .catch(() => undefined);
+    await client.fetchQuery({ queryKey: ["ok"], queryFn: () => 1 });
+    expect(connection.getSnapshot().unreachable).toBe(false);
   });
 
-  test("leaves the manager alone when the browser does not say", () => {
-    expect(recorded(undefined)).toEqual([]);
+  test("does not mark Windmill unreachable for a failure Windmill answered", async () => {
+    const { connection, client } = setup();
+    await client
+      .fetchQuery({
+        queryKey: ["http"],
+        queryFn: () =>
+          Promise.reject(
+            new ApiFailure({ kind: "http", status: 500, detail: "" }),
+          ),
+      })
+      .catch(() => undefined);
+    expect(connection.getSnapshot().unreachable).toBe(false);
+  });
+
+  test("does not mark Windmill unreachable for a mutation failure", async () => {
+    const { connection, client } = setup();
+    await client
+      .getMutationCache()
+      .build(client, {
+        mutationFn: () => Promise.reject(new ApiFailure({ kind: "network" })),
+      })
+      .execute(undefined)
+      .catch(() => undefined);
+    expect(connection.getSnapshot().unreachable).toBe(false);
   });
 });

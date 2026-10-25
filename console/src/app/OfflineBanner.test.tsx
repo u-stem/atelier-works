@@ -1,51 +1,56 @@
 import { describe, expect, test } from "bun:test";
-import { onlineManager } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { ApiFailure } from "../api/errors.ts";
+import { connectionStore } from "./connectionState.ts";
 import { OfflineBanner, OfflineBannerView } from "./OfflineBanner.tsx";
 
-function withOnline<T>(online: boolean, run: () => T): T {
-  onlineManager.setOnline(online);
+function withUnreachable<T>(unreachable: boolean, run: () => T): T {
+  if (unreachable) {
+    connectionStore.reportError(new ApiFailure({ kind: "network" }));
+  }
   try {
     return run();
   } finally {
-    onlineManager.setOnline(true);
+    connectionStore.reportSuccess();
   }
 }
 
 describe("OfflineBannerView", () => {
-  test("shows nothing while online", () => {
-    expect(renderToStaticMarkup(<OfflineBannerView online />)).toBe("");
+  test("shows nothing while Windmill is reachable", () => {
+    expect(
+      renderToStaticMarkup(<OfflineBannerView unreachable={false} />),
+    ).toBe("");
   });
 
-  test("tells the user the connection is lost while offline", () => {
-    expect(
-      renderToStaticMarkup(<OfflineBannerView online={false} />),
-    ).toContain("オフラインです");
+  test("tells the user that Windmill cannot be reached", () => {
+    expect(renderToStaticMarkup(<OfflineBannerView unreachable />)).toContain(
+      "Windmillに接続できません",
+    );
   });
 
   test("says that fetching resumes by itself", () => {
-    expect(
-      renderToStaticMarkup(<OfflineBannerView online={false} />),
-    ).toContain("接続が戻ると、自動で取り直します");
+    expect(renderToStaticMarkup(<OfflineBannerView unreachable />)).toContain(
+      "接続が戻ると、自動で取り直します",
+    );
   });
 
   test("is announced politely", () => {
-    expect(
-      renderToStaticMarkup(<OfflineBannerView online={false} />),
-    ).toContain('role="status"');
+    expect(renderToStaticMarkup(<OfflineBannerView unreachable />)).toContain(
+      'role="status"',
+    );
   });
 });
 
 describe("OfflineBanner", () => {
-  test("follows the online state of the query client", () => {
+  test("follows the connection state of the fetches", () => {
     expect(
-      withOnline(false, () => renderToStaticMarkup(<OfflineBanner />)),
-    ).toContain("オフラインです");
+      withUnreachable(true, () => renderToStaticMarkup(<OfflineBanner />)),
+    ).toContain("Windmillに接続できません");
   });
 
-  test("shows nothing once the query client is online again", () => {
+  test("shows nothing once a fetch has succeeded again", () => {
     expect(
-      withOnline(true, () => renderToStaticMarkup(<OfflineBanner />)),
+      withUnreachable(false, () => renderToStaticMarkup(<OfflineBanner />)),
     ).toBe("");
   });
 });

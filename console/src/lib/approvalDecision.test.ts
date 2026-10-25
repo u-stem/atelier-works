@@ -9,6 +9,7 @@ import {
   EXPIRED_MESSAGE,
   FULL_CHECK_MESSAGE,
   factoryLabelChoice,
+  holdWhileLoadingShown,
   isDecidable,
   proposalOrigin,
   reasonCounter,
@@ -607,5 +608,50 @@ describe("requirementsBlockedReason", () => {
     expect(requirementsBlockedReason("failed", "loading")).toContain(
       "取り込み時点のIssue",
     );
+  });
+});
+
+describe("holdWhileLoadingShown", () => {
+  test("treats a ready document as loading while the skeleton is still shown", () => {
+    expect(holdWhileLoadingShown("ready", true)).toBe("loading");
+  });
+
+  test("keeps a ready document ready once the skeleton is gone", () => {
+    expect(holdWhileLoadingShown("ready", false)).toBe("ready");
+  });
+
+  test("treats a failure as loading while the skeleton is still shown", () => {
+    expect(holdWhileLoadingShown("failed", true)).toBe("loading");
+  });
+
+  test("keeps a failure once the skeleton is gone", () => {
+    expect(holdWhileLoadingShown("failed", false)).toBe("failed");
+  });
+
+  test("keeps a missing snapshot as it is when nothing is shown", () => {
+    expect(holdWhileLoadingShown("empty", false)).toBe("empty");
+  });
+
+  test("blocks the approval with the loading reason while the document skeleton is shown", () => {
+    expect(
+      requirementsBlockedReason("ready", holdWhileLoadingShown("ready", true)),
+    ).toBe("要件定義書を読み込み中です。表示されるまで承認できません。");
+  });
+
+  test("blocks the approval with the loading reason while the snapshot skeleton is shown", () => {
+    expect(
+      requirementsBlockedReason(holdWhileLoadingShown("ready", true), "ready"),
+    ).toBe(
+      "取り込み時点のIssueを読み込み中です。表示されるまで承認できません。",
+    );
+  });
+
+  test("lets the approval through once nothing is shown", () => {
+    expect(
+      requirementsBlockedReason(
+        holdWhileLoadingShown("ready", false),
+        holdWhileLoadingShown("ready", false),
+      ),
+    ).toBeNull();
   });
 });

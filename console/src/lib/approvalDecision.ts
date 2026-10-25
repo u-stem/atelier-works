@@ -404,3 +404,10 @@ export function approvalLinks(
         : null,
   };
 }
+
+export function holdWhileLoadingShown<T extends string>(
+  readiness: T,
+  _shown: boolean,
+): T | "loading" {
+  return readiness;
+}

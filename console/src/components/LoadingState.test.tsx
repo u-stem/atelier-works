@@ -6,7 +6,6 @@ import {
   type LoadingShape,
   LoadingStateView,
   loadingDisplayOf,
-  OFFLINE_WAIT_TEXT,
 } from "./LoadingState.tsx";
 
 const SHAPE: LoadingShape = { rows: 3, rowClassName: "h-12 rounded-md" };
@@ -131,32 +130,6 @@ describe("LoadingGate", () => {
       ),
     ).not.toContain("読み込み中");
   });
-
-  test("tells the user that the fetch waits for the network", () => {
-    expect(
-      renderToStaticMarkup(
-        <LoadingGate phase="paused" shape={SHAPE}>
-          <p>内容</p>
-        </LoadingGate>,
-      ),
-    ).toContain(OFFLINE_WAIT_TEXT);
-  });
-
-  test("shows no skeleton while the fetch waits for the network", () => {
-    expect(
-      renderToStaticMarkup(
-        <LoadingGate phase="paused" shape={SHAPE}>
-          <p>内容</p>
-        </LoadingGate>,
-      ),
-    ).not.toContain('data-slot="skeleton"');
-  });
-});
-
-describe("OFFLINE_WAIT_TEXT", () => {
-  test("says the fetch is waiting because of the connection", () => {
-    expect(OFFLINE_WAIT_TEXT).toBe("オフラインのため、取得を待っています");
-  });
 });
 
 describe("loadingDisplayOf", () => {
@@ -182,14 +155,6 @@ describe("loadingDisplayOf", () => {
 
   test("keeps the skeleton while lingering after a failure", () => {
     expect(loadingDisplayOf("failed", true)).toBe("skeleton");
-  });
-
-  test("tells about the network while paused", () => {
-    expect(loadingDisplayOf("paused", false)).toBe("offline");
-  });
-
-  test("tells about the network while paused even if the skeleton was shown", () => {
-    expect(loadingDisplayOf("paused", true)).toBe("offline");
   });
 });
 
@@ -251,11 +216,5 @@ describe("LoadingBody", () => {
     expect(
       renderToStaticMarkup(<LoadingBody display="frame" shape={SHAPE} />),
     ).not.toContain("読み込み中");
-  });
-
-  test("tells about the network for offline", () => {
-    expect(
-      renderToStaticMarkup(<LoadingBody display="offline" shape={SHAPE} />),
-    ).toContain(OFFLINE_WAIT_TEXT);
   });
 });

@@ -4,11 +4,9 @@ import { ApiFailure } from "../../api/errors.ts";
 import {
   freshQuery,
   loadingQuery,
-  pausedQuery,
   staleQuery,
 } from "../../api/fakeSectionQuery.testing.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
-import { OFFLINE_WAIT_TEXT } from "../../components/LoadingState.tsx";
 import { AnalyticsSection } from "./AnalyticsSection.tsx";
 
 const NOTICE = "前回取得した値を表示しています";
@@ -66,9 +64,5 @@ describe("AnalyticsSection", () => {
 describe("AnalyticsSection while loading", () => {
   test("shows only the frame in the first moment", () => {
     expect(render(loadingQuery<string[]>())).not.toContain("読み込み中");
-  });
-
-  test("tells the user that the fetch waits for the network", () => {
-    expect(render(pausedQuery<string[]>())).toContain(OFFLINE_WAIT_TEXT);
   });
 });

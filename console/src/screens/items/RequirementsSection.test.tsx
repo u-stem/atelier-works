@@ -4,11 +4,9 @@ import { ApiFailure } from "../../api/errors.ts";
 import {
   freshQuery,
   loadingQuery,
-  pausedQuery,
   staleQuery,
 } from "../../api/fakeSectionQuery.testing.ts";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
-import { OFFLINE_WAIT_TEXT } from "../../components/LoadingState.tsx";
 import { RequirementsSection } from "./RequirementsSection.tsx";
 
 const NOTICE = "前回取得した値を表示しています";
@@ -55,15 +53,5 @@ describe("RequirementsSection while loading", () => {
         />,
       ),
     ).toContain("h-[4.75rem]");
-  });
-
-  test("tells the user that the fetch waits for the network", () => {
-    expect(
-      renderToStaticMarkup(
-        <RequirementsSection
-          index={pausedQuery<readonly RequirementsIndexRow[]>()}
-        />,
-      ),
-    ).toContain(OFFLINE_WAIT_TEXT);
   });
 });

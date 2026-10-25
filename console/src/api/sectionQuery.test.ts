@@ -10,20 +10,8 @@ describe("loadPhaseOf", () => {
     expect(loadPhaseOf({ data: [], isError: true })).toBe("loaded");
   });
 
-  test("is loaded when there is data even while paused", () => {
-    expect(
-      loadPhaseOf({ data: [], isError: false, fetchStatus: "paused" }),
-    ).toBe("loaded");
-  });
-
   test("is failed when there is no data and the fetch failed", () => {
     expect(loadPhaseOf({ data: undefined, isError: true })).toBe("failed");
-  });
-
-  test("is paused when there is no data and the fetch waits for the network", () => {
-    expect(
-      loadPhaseOf({ data: undefined, isError: false, fetchStatus: "paused" }),
-    ).toBe("paused");
   });
 
   test("is loading when there is no data and the fetch is running", () => {

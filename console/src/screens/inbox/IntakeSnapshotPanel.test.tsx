@@ -128,12 +128,6 @@ describe("IntakeSnapshotView", () => {
     );
   });
 
-  test("tells the user that the fetch waits for the network", () => {
-    expect(render({ status: "loading", display: "offline" })).toContain(
-      "オフラインのため、取得を待っています",
-    );
-  });
-
   test("says when there is no snapshot", () => {
     expect(render({ status: "empty" })).toContain(
       "取り込み時点のIssueはありません",
