@@ -187,11 +187,52 @@ describe("redactLog truncation", () => {
     const raw = `filler line\ntail ${GH_TOKEN} end\nlast\n`;
     const limit =
       new TextEncoder().encode(`${GH_TOKEN} end\nlast\n`).length - 8;
-    expect(redactLog(raw, limit).text).toBe("last\n");
+    expect(redactLog(raw, limit).text).not.toContain("0123456789abcdef");
+  });
+
+  test("masks before it cuts, so the token is masked whole when it fits after masking", () => {
+    const raw = `filler line\ntail ${GH_TOKEN} end\nlast\n`;
+    const limit =
+      new TextEncoder().encode(`${GH_TOKEN} end\nlast\n`).length - 8;
+    expect(redactLog(raw, limit).text).toBe(
+      "filler line\ntail *** end\nlast\n",
+    );
   });
 
   test("returns an empty text when the kept tail has no line break", () => {
-    expect(redactLog("x".repeat(100), 10).text).toBe("");
+    expect(redactLog("x ".repeat(50), 10).text).toBe("");
+  });
+
+  test("masks a PEM block whose BEGIN line was cut away by the coarse cut", () => {
+    const body = Array.from(
+      { length: 10 },
+      (_, i) => `Zq9${String(i)}/abcdefghijklmnopqrstuvwxyz01234\n`,
+    ).join("");
+    const raw = `-----BEGIN PRIVATE KEY-----\n${body}-----END PRIVATE KEY-----\ntail line\n`;
+    expect(redactLog(raw, 110).text).not.toContain("Zq9");
+  });
+
+  test("keeps the line after a PEM block whose BEGIN line was cut away", () => {
+    const body = Array.from(
+      { length: 10 },
+      (_, i) => `Zq9${String(i)}/abcdefghijklmnopqrstuvwxyz01234\n`,
+    ).join("");
+    const raw = `-----BEGIN PRIVATE KEY-----\n${body}-----END PRIVATE KEY-----\ntail line\n`;
+    expect(redactLog(raw, 110).text.endsWith("tail line\n")).toBe(true);
+  });
+
+  test("does not show the END line of a block whose BEGIN line was cut away", () => {
+    const body = Array.from(
+      { length: 10 },
+      (_, i) => `Zq9${String(i)}/abcdefghijklmnopqrstuvwxyz01234\n`,
+    ).join("");
+    const raw = `-----BEGIN PRIVATE KEY-----\n${body}-----END PRIVATE KEY-----\ntail line\n`;
+    expect(redactLog(raw, 110).text).not.toContain("-----END");
+  });
+
+  test("masks a token that the final cut would have split", () => {
+    const raw = `head line\nkey ${GH_TOKEN}\nlast line\n`;
+    expect(redactLog(raw, 40).text).not.toContain("0123456789abcdef");
   });
 
   test("uses the documented default limit", () => {
@@ -295,7 +336,17 @@ describe("redactResult", () => {
 
   test("masks a token before the cut, so no part of it is left", () => {
     const value = `${"x ".repeat(5)}${GH_TOKEN}`;
-    expect(redactResult(value, 20).text).toBe("x x x x x ***");
+    expect(redactResult(value, 100).text).toBe("x x x x x ***");
+  });
+
+  test("leaves no piece of a token that the coarse cut would have split", () => {
+    const value = `${"word ".repeat(10)}${GH_TOKEN}`;
+    expect(redactResult(value, 35).text).not.toContain("ghp_");
+  });
+
+  test("masks before the final cut, so a token inside the limit is masked whole", () => {
+    const value = `${"x ".repeat(5)}${GH_TOKEN} tail`;
+    expect(redactResult(value, 100).text).toBe("x x x x x *** tail");
   });
 
   test("uses the documented default limit", () => {
@@ -310,6 +361,55 @@ describe("redactText", () => {
 
   test("keeps plain text", () => {
     expect(redactText("plain text").text).toBe("plain text");
+  });
+});
+
+describe("adversarial input", () => {
+  /** 敵対的な入力でも、伏せ字が1秒未満で終わること。正規表現の計算量が膨らむと超える。 */
+  function secondsToRedactLog(body: string): number {
+    const started = performance.now();
+    redactLog(`\n${body}\n`);
+    return (performance.now() - started) / 1000;
+  }
+
+  test.each([
+    ["many PEM BEGIN markers", "-----BEGIN X-----".repeat(15000)],
+    ["a dotted chain that looks like a scheme", "a.".repeat(131072)],
+    ["a repeated JWT head without a dot", "eyJab-".repeat(43690)],
+    ["a repeated scheme separator", "://".repeat(85000)],
+    ["a repeated key word", "TOKEN".repeat(50000)],
+    ["a repeated Bearer", "Bearer ".repeat(36000)],
+    ["a repeated JWT head with dots", "eyJabcde.abcdeabcde.".repeat(13000)],
+  ])("redactLog finishes %s in under a second", (_name, body) => {
+    expect(secondsToRedactLog(body)).toBeLessThan(1);
+  });
+
+  test("redactResult finishes a 500KB result in under a second", () => {
+    const started = performance.now();
+    redactResult("a. ".repeat(170000));
+    expect((performance.now() - started) / 1000).toBeLessThan(1);
+  });
+
+  test("redactResult finishes a 500KB object result in under a second", () => {
+    const value = {
+      items: Array.from({ length: 6000 }, (_, i) => ({
+        id: i,
+        note: "some words ".repeat(7),
+      })),
+    };
+    const started = performance.now();
+    redactResult(value);
+    expect((performance.now() - started) / 1000).toBeLessThan(1);
+  });
+
+  test("redactLog keeps the text before a flood of BEGIN markers", () => {
+    const text = redactLog(`before\n${"-----BEGIN X-----\n".repeat(200)}`).text;
+    expect(text.startsWith("before\n")).toBe(true);
+  });
+
+  test("redactLog shows none of a flood of BEGIN markers", () => {
+    const raw = `before\n${"-----BEGIN X-----\nSECRETBODY\n".repeat(200)}`;
+    expect(redactLog(raw).text).not.toContain("SECRETBODY");
   });
 });
 
