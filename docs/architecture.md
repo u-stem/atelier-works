@@ -96,6 +96,7 @@ flowchart TD
 ```
 
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
+設計フロー(`f/factory/design`)は、承認済みの要件定義から設計書を作り、同じ形で承認依頼を記録して終わる。入口が閉じていて、本番では動かない。仕組みは[設計書の生成](internals/design.md)に書く。
 
 `owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
 1つは、発見の入口である`poll_issues`と`poll_prs`である。
@@ -123,8 +124,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
-| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。今のコードはこの状態へ遷移させない | issue | |
-| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。今のコードはこの状態へ遷移させない | issue | |
+| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。設計書を生成している。遷移させるコードは入っているが、入口が閉じていて本番では動かない | issue | |
+| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。設計フローが`designing`から移すコードは入っているが、入口が閉じていて本番では動かない | issue | |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
 | `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
@@ -142,8 +143,10 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 
 pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
 
-設計工程の2状態(`designing`、`awaiting_design_approval`)は、状態の値と制約だけがあり、遷移を起こすコードは無い。
+設計工程の2状態(`designing`、`awaiting_design_approval`)は、設計フローが前者から後者へ移すコードまでが入っている。
+ただし、設計フローの入口が閉じていて、本番の作業項目はこの2状態にならない。
 そのため、下の状態遷移の図に載せない。
+設計フローは[設計書の生成](internals/design.md)に書く。
 
 終端の一覧はコードとDBのviewの2か所にある。そろえ方は[作業項目の状態とリース](internals/work-items.md)に書く。
 
@@ -240,7 +243,8 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
-| `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
+| `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
+| `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)を記録するコードは入っているが、本番では作られない |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
@@ -926,7 +930,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
-- 設計工程(状態と承認依頼の種類だけが定義済みで、フローは無い)
+- 設計工程の動作。生成側のフローは入っているが、入口が閉じている。承認の反映、期限切れ、実装の関門、Consoleは無い
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。
