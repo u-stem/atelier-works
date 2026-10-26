@@ -10,6 +10,7 @@ import type {
 import type { WorkerLoad } from "../api/guards/workerLoad.ts";
 import {
   auditBandRow,
+  BAND_LOADING_TEXT,
   type BandLevel,
   type BandSource,
   bandLevelInfo,
@@ -18,6 +19,7 @@ import {
   fetcherBandRow,
   holdsBandRow,
   infoBandRow,
+  isBandRowLoading,
   orphanBandRow,
   summaryBandRows,
   workerBandRow,
@@ -781,5 +783,27 @@ describe("summaryBandRows", () => {
       NOW,
     );
     expect(rows.map((row) => row.updatedAt)).toEqual([1, 2, 2, 3, 2, 2, 2]);
+  });
+});
+
+describe("isBandRowLoading", () => {
+  test("is true for a row whose fetch has not returned", () => {
+    expect(isBandRowLoading(holdsBandRow(LOADING, NOW))).toBe(true);
+  });
+
+  test("is false for a row whose fetch failed", () => {
+    expect(isBandRowLoading(holdsBandRow(FAILED, NOW))).toBe(false);
+  });
+
+  test("is false for a row with a value", () => {
+    expect(isBandRowLoading(holdsBandRow(loaded(NO_HOLDS), NOW))).toBe(false);
+  });
+
+  test("is false for a row that has no judgment but has a value", () => {
+    expect(isBandRowLoading(workerBandRow(loaded(status())))).toBe(false);
+  });
+
+  test("uses the words of the loading row", () => {
+    expect(holdsBandRow(LOADING, NOW).text).toBe(BAND_LOADING_TEXT);
   });
 });

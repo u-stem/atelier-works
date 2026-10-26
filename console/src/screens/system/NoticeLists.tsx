@@ -130,6 +130,18 @@ function ResolvedItem({
 }
 
 /**
+ * 情報の通知の一覧を、件数を添えてたたむ。通知が無いときは、たたまずに空の旨を出す。
+ * 人の行動が要らない通知なので、失敗と通知のタブを短くするために、開くまで一覧を見せない。
+ */
+export function InfoNoticeDisclosure(_props: {
+  notices: readonly NoticeRow[];
+  now: number;
+  initiallyOpen?: boolean | undefined;
+}) {
+  return null;
+}
+
+/**
  * 解決済みの通知の履歴を、件数を添えてたたむ。
  * 履歴は参照用で、普段は読まないので、開くまで本文の一覧を見せない。
  */

@@ -5,6 +5,7 @@ import type { NoticeRow } from "../../api/guards/notices.ts";
 import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import {
+  InfoNoticeDisclosure,
   InfoNoticeList,
   ResolvedNoticeDisclosure,
   ResolvedNoticeList,
@@ -167,5 +168,53 @@ describe("ResolvedNoticeDisclosure", () => {
 
   test("keeps the list inside", () => {
     expect(renderDisclosure(3)).toContain("resolved 001");
+  });
+});
+
+function renderInfoDisclosure(count: number, initiallyOpen?: boolean): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <TooltipProvider>
+        <InfoNoticeDisclosure
+          notices={infoNotices(count)}
+          now={NOW}
+          initiallyOpen={initiallyOpen}
+        />
+      </TooltipProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("InfoNoticeDisclosure", () => {
+  test("folds the notices, which need no action", () => {
+    expect(renderInfoDisclosure(3)).toMatch(/^<details/);
+  });
+
+  test("starts closed", () => {
+    expect(renderInfoDisclosure(3)).not.toMatch(/^<details[^>]* open/);
+  });
+
+  test("shows the count in the summary line", () => {
+    expect(renderInfoDisclosure(6)).toMatch(/<summary[^>]*>.*6件/);
+  });
+
+  test("opens when a link jumps to the section", () => {
+    expect(renderInfoDisclosure(3)).toContain('data-jump-open=""');
+  });
+
+  test("can start open", () => {
+    expect(renderInfoDisclosure(3, true)).toMatch(/^<details[^>]* open/);
+  });
+
+  test("keeps the list and its pagination inside", () => {
+    expect(renderInfoDisclosure(11)).toContain("<nav");
+  });
+
+  test("draws no fold when there is no notice", () => {
+    expect(renderInfoDisclosure(0)).not.toContain("<details");
+  });
+
+  test("keeps the empty message when there is no notice", () => {
+    expect(renderInfoDisclosure(0)).toContain("情報の通知はありません");
   });
 });

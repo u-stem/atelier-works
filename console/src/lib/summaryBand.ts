@@ -66,6 +66,14 @@ const LEVEL_INFO: Readonly<
   none: { label: "判定なし", symbol: "minus", rank: 0 },
 };
 
+/** 取得中の行の文。 */
+export const BAND_LOADING_TEXT = "取得中です";
+
+/** 取得の待ちで値がまだ無い行か。取得に失敗した行は含まない。 */
+export function isBandRowLoading(_row: BandRow): boolean {
+  return false;
+}
+
 /** 段の日本語と、色だけに頼らない記号の名前。 */
 export function bandLevelInfo(level: BandLevel): {
   readonly label: string;

@@ -144,3 +144,42 @@ describe("SummaryBand", () => {
     expect(render([row("holds", "normal")])).toContain("ほかの節");
   });
 });
+
+describe("SummaryBand while a fetch is pending", () => {
+  const LOADING_ROW = row("holds", "none", {
+    text: "取得中です",
+    updatedAt: 0,
+  });
+
+  test("keeps the loading words out of sight before the delay", () => {
+    expect(render([LOADING_ROW])).not.toMatch(
+      /<span(?![^>]*invisible)[^>]*>取得中です/,
+    );
+  });
+
+  test("keeps the frame of the row, so nothing moves when the value arrives", () => {
+    expect(render([LOADING_ROW])).toContain("invisible");
+  });
+
+  test("hides the frame from screen readers", () => {
+    expect(render([LOADING_ROW])).toMatch(
+      /<span[^>]*aria-hidden="true"[^>]*>.*取得中です/,
+    );
+  });
+
+  test("still shows the label of the row", () => {
+    expect(render([LOADING_ROW])).toContain("ラベル holds");
+  });
+
+  test("shows a failed fetch at once", () => {
+    expect(
+      render([
+        row("holds", "none", { text: "取得できませんでした", updatedAt: 0 }),
+      ]),
+    ).toContain("取得できませんでした");
+  });
+
+  test("shows a value at once", () => {
+    expect(render([row("holds", "normal")])).not.toContain("invisible");
+  });
+});
