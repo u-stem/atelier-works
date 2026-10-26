@@ -60,7 +60,7 @@ locks:
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
   f/factory/lib/dependabot_support: f0faecb544ce7a33dac1f1901035711a3b432e1858efba6b0a48b7554da348aa
   f/factory/lib/design_doc: 39e65ecf8d275747851dc4c37e554886830c8ed6cfff7ac65ba161162aa12aef
-  f/factory/lib/design_launch_support: 4c1919e3dc4a98a9b1ec9d80c2e4d2e1d7e402f3b7840cab660c484734df658e
+  f/factory/lib/design_launch_support: aaf9846cfbf2aad2b278d9551e0dd90ea51be4d3b0f3f891e24e28bd75484642
   f/factory/lib/design_template: 76572145d96ff112e2054f03f4d62b9b6d24859c59bafa75318a1a6c8d7d9570
   f/factory/lib/discord: f8229c2816e488f0a28ef2c2d9525ebe8d38c3ea0f9b0de266fad1bc446b6110
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
@@ -182,7 +182,7 @@ locks:
   f/factory/steps/pr_review_post: b2ea0351363d6a1e95fc4f021f4f35fd3970db46fc5f8cd0aed86c2c3830ee98
   f/factory/steps/pr_review_prepare: 08e09697d6989fcfcb82502f39ca37847d1891f94153ad23a08db3ae07e30b8f
   f/factory/steps/pr_workflow_support: bba3a6891f6bfb510b68f4676ded3dbde2cd4d8619c313484404c915d0940117
-  f/factory/steps/requirements_apply: 394ed74dde5c4d8fffaaaaf46043cc6e60c52484bcf7ac8e98d8cbb9e2ce4dda
+  f/factory/steps/requirements_apply: 2255d7073110708fa83143f85c4995b9321b6dc456f8c54380a0866d9f47c76d
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: 2391a93c4071c6b45a07daa6f387c562d2184b462864718cfca832426d5afe22
   f/factory/watch_pr_conflicts: 309b8dae5bc06e21b9a0f4dd199220b9b4ec8eefaa5aa4a72db2d3903a43e704

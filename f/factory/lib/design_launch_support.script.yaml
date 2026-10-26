@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 設計フローの起動'
+description: 内部ライブラリです。直接実行するものではありません。要件定義の承認後に設計フローを起動してジョブIDを記録し、失敗したときは作業項目を人の対応待ちへ戻す共通処理です。
 lock: '!inline f/factory/lib/design_launch_support.script.lock'
 kind: script
 schema:

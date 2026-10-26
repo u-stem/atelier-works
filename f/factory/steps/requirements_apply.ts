@@ -16,7 +16,12 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
-import type { StartDesignOutcome } from "../lib/design_launch_support.ts";
+import {
+  type DesignLaunchDeps,
+  designFlowInput,
+  type StartDesignOutcome,
+  startDesign,
+} from "../lib/design_launch_support.ts";
 import { notify, notifyBestEffort } from "../lib/discord.ts";
 import {
   commentIssue,
@@ -37,7 +42,7 @@ import {
   refreshIntakeFromIssue,
 } from "../lib/intake_refresh.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
-import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
+import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
@@ -82,6 +87,7 @@ export function buildApprovedComment(
 
 /**
  * 承認コメントをIssueに投稿できなかったときに残すnoticeの本文を作る。副作用は無い。
+ * `next`は承認の後に起動するフローで、noticeに「そのフローの起動は続ける」ことを書く。
  * コメントを自動で投稿し直す処理は無いので、必要なら人が投稿するよう伝え、載せるConsoleのリンクを添える。
  * URLは末尾に置く。直後に句読点が続くと、リンクに変換するときにURLに含まれてしまうため。
  */
@@ -94,9 +100,10 @@ export function buildApprovalCommentFailedMessage(
   },
   consoleUrl: string,
   reason: string,
-  _next: "implement" | "design" = "implement",
+  next: "implement" | "design" = "implement",
 ): string {
-  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認のコメントをIssueに投稿できませんでした(${reason})。要件定義は承認済みで、implementフローの起動は続けます。必要なら、次のリンクを載せたコメントをIssueに人が投稿してください。要件定義のConsole: ${consoleUrl}`;
+  const nextFlow = next === "design" ? "設計フロー" : "implementフロー";
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認のコメントをIssueに投稿できませんでした(${reason})。要件定義は承認済みで、${nextFlow}の起動は続けます。必要なら、次のリンクを載せたコメントをIssueに人が投稿してください。要件定義のConsole: ${consoleUrl}`;
 }
 
 /**
@@ -137,71 +144,34 @@ export type ApprovedSideEffectsDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
-export type ApprovedBranchDeps = ApprovedSideEffectsDeps & {
-  readonly casToApproved: () => Promise<boolean>;
-  readonly casToDesigning: () => Promise<boolean>;
-  readonly startDesign: (() => Promise<StartDesignOutcome>) | null;
-};
-
-export async function applyApprovedBranch(
-  _deps: ApprovedBranchDeps,
-): Promise<RequirementsApplyResult> {
-  return { outcome: "no_op" };
-}
-
-export type ApprovedBranchContext = {
-  readonly workItem: WorkItem;
-  readonly issueNumber: number;
-  readonly attempt: number;
-  readonly client: GhClient;
-  readonly viewerLogin: string;
-  readonly webhookUrl: string;
-  readonly log: Logger;
-};
-
-export function buildApprovedBranchDeps(
-  _config: Pick<
-    FactoryConfig,
-    "implement_enabled" | "windmill_public_url" | "instance_name"
-  >,
-  _ctx: ApprovedBranchContext,
-): ApprovedBranchDeps {
-  return {
-    casToApproved: async () => false,
-    casToDesigning: async () => false,
-    commentIssue: async () => {},
-    addCommentFailedNotice: async () => {},
-    notifyApproved: async () => {},
-    removeWorktree: async () => {},
-    startImplement: null,
-    startDesign: async () => "launch_failed",
-    log: () => {},
-  };
-}
-
 function messageOf(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 /**
- * 作業項目を`approved`へ移した後の副作用を、コメント・通知・worktreeの片付け・implementフローの起動の順に行う。
+ * 作業項目を`approved`か`designing`へ移した後の副作用を、コメント・通知・worktreeの片付け・次のフローの起動の順に行う。
+ * 次のフローは、`startDesign`があれば設計フロー、無ければimplementフローである。両方は起動しない。
  * 副作用ごとに失敗を捕まえ、1つが失敗しても後続を飛ばさない。
  * 作業項目はもう`awaiting_approval`ではなく、`requirements_apply`を起動し直しても何もしないため、
- * ここで例外を投げると、implementフローが起動されないまま残る。
+ * ここで例外を投げると、次のフローが起動されないまま残る。
  * コメントの失敗だけは、Issueに承認が伝わらないので、noticeに残して人に知らせる。
  * 他の失敗はwarnのログだけ残す。
- * `startImplement`は例外を投げず、結果を戻り値で返すので、ここでは捕まえない。
+ * `startImplement`と`startDesign`は例外を投げず、結果を戻り値で返すので、ここでは捕まえない。
  */
 export async function applyApprovedSideEffects(
   deps: ApprovedSideEffectsDeps,
 ): Promise<RequirementsApplyResult> {
+  const startDesignFlow = deps.startDesign ?? null;
   try {
     await deps.commentIssue();
   } catch (err) {
     const reason = messageOf(err);
     deps.log("failed to post the approval comment", { error: reason });
     try {
-      await deps.addCommentFailedNotice(reason);
+      await deps.addCommentFailedNotice(
+        reason,
+        startDesignFlow === null ? "implement" : "design",
+      );
     } catch (noticeErr) {
       deps.log("failed to record the approval comment notice", {
         error: messageOf(noticeErr),
@@ -220,6 +190,14 @@ export async function applyApprovedSideEffects(
       error: messageOf(err),
     });
   }
+  if (startDesignFlow !== null) {
+    const designed = await startDesignFlow();
+    return {
+      outcome: "approved",
+      implement_started: false,
+      design_started: designed === "started",
+    };
+  }
   if (deps.startImplement === null)
     return { outcome: "approved", implement_started: false };
   const launched = await deps.startImplement();
@@ -228,6 +206,244 @@ export async function applyApprovedSideEffects(
     implement_started:
       launched === "started" || launched === "started_without_job_id",
   };
+}
+
+export type ApprovedBranchDeps = ApprovedSideEffectsDeps & {
+  /** `updateStatusIfCurrent`で`awaiting_approval`から`approved`へ移す。移せなければ`false`。 */
+  readonly casToApproved: () => Promise<boolean>;
+  /**
+   * `updateStatusIfCurrentClearingFlowJobId`で`awaiting_approval`から`designing`へ移し、`flow_job_id`を空にする。
+   * 移せなければ`false`。
+   */
+  readonly casToDesigning: () => Promise<boolean>;
+  /** 設計フローを起動する(`startDesign`)。設計工程を開けていないなら`null`。 */
+  readonly startDesign: (() => Promise<StartDesignOutcome>) | null;
+};
+
+/**
+ * 承認の分岐。`startDesign`があれば作業項目を`designing`へ、無ければ今のとおり`approved`へ、
+ * どちらも副作用より前に比較交換で移す。移せなければ何もせず`no_op`を返す。
+ * 移せたら`applyApprovedSideEffects`を行う。設計へ進むときは、implementフローを起動しない。
+ * 行き先を比較交換の前に選ぶのは、副作用の後に作業項目を動かすと、副作用が失敗した後の再起動が何もしないためである。
+ * `approved`を経由しないので、設計へ進むときは承認の行(`approval_requests`の`approved`)が、
+ * 要件定義が承認されたことの唯一の根拠になる。
+ */
+export async function applyApprovedBranch(
+  deps: ApprovedBranchDeps,
+): Promise<RequirementsApplyResult> {
+  const toDesign = deps.startDesign !== null;
+  const moved = toDesign
+    ? await deps.casToDesigning()
+    : await deps.casToApproved();
+  if (!moved) return { outcome: "no_op" };
+  return applyApprovedSideEffects(
+    toDesign ? { ...deps, startImplement: null } : deps,
+  );
+}
+
+export type ApprovedBranchContext = {
+  readonly workItem: WorkItem;
+  readonly issueNumber: number;
+  /** 承認された要件定義の試行。 */
+  readonly attempt: number;
+  readonly client: GhClient;
+  readonly viewerLogin: string;
+  readonly webhookUrl: string;
+  readonly log: Logger;
+};
+
+/**
+ * 承認の分岐の本番の依存を組み立てる。呼ぶだけでは、DB・GitHub・Windmillに触れない。
+ * 設計フローは起動しない(`startDesign: null`)。設計工程の承認の反映と期限切れを受け持つコードが入るまで、
+ * 作業項目を`designing`にしないためである。開けるときは、`startDesign`に`buildStartDesign`の結果を渡す。
+ */
+export function buildApprovedBranchDeps(
+  config: Pick<
+    FactoryConfig,
+    "implement_enabled" | "windmill_public_url" | "instance_name"
+  >,
+  ctx: ApprovedBranchContext,
+): ApprovedBranchDeps {
+  const { workItem, issueNumber, attempt, client, viewerLogin, log } = ctx;
+  const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
+    work_item_id: workItem.id,
+    attempt,
+  });
+  const noticeTarget = {
+    owner: workItem.owner,
+    repo: workItem.repo,
+    issue_number: issueNumber,
+    work_item_id: workItem.id,
+  };
+  const launchImplement = (): Promise<StartImplementOutcome> =>
+    startImplement({
+      casToImplementing: () =>
+        updateStatusIfCurrentClearingFlowJobId(
+          workItem.id,
+          "approved",
+          "implementing",
+          null,
+        ),
+      launchFlow: () =>
+        wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, {
+          work_item_id: workItem.id,
+        }),
+      recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+      moveToNeedsHuman: (reason) =>
+        updateStatusIfLeaseHolder(
+          workItem.id,
+          "implementing",
+          "needs_human",
+          null,
+          reason,
+        ),
+      recordFailure: async (reason, step) => {
+        await recordFailure({
+          work_item_id: workItem.id,
+          flow_path: IMPLEMENT_FLOW_PATH,
+          job_id: process.env.WM_JOB_ID ?? "unknown",
+          step,
+          error: reason,
+        });
+      },
+      addNotice: async (reason) => {
+        await addNoticeUnlessUnresolved({
+          kind: "implement_launch_failed",
+          message: buildImplementLaunchNoticeMessage(noticeTarget, reason),
+        });
+      },
+      notifyNeedsHuman: (reason) =>
+        notifyNeedsHumanBestEffort(ctx, config, reason, "implement"),
+      log: (message, fields) =>
+        log.warn(message, { work_item_id: workItem.id, ...fields }),
+    });
+  return {
+    casToApproved: () =>
+      updateStatusIfCurrent(workItem.id, "awaiting_approval", "approved", null),
+    casToDesigning: () =>
+      updateStatusIfCurrentClearingFlowJobId(
+        workItem.id,
+        "awaiting_approval",
+        "designing",
+        null,
+      ),
+    commentIssue: async () => {
+      await commentIssue(
+        client,
+        workItem.owner,
+        workItem.repo,
+        issueNumber,
+        `issue-approved-${String(attempt)}`,
+        workItem.id,
+        buildApprovedComment(consoleUrl, workItem.id),
+        viewerLogin,
+      );
+    },
+    addCommentFailedNotice: async (reason, next) => {
+      await addNoticeUnlessUnresolved({
+        kind: "approval_comment_failed",
+        message: buildApprovalCommentFailedMessage(
+          noticeTarget,
+          consoleUrl,
+          reason,
+          next,
+        ),
+      });
+    },
+    notifyApproved: async () => {
+      await notifyBestEffort(
+        ctx.webhookUrl,
+        {
+          kind: "requirements_approved",
+          instance_name: config.instance_name,
+          owner: workItem.owner,
+          repo: workItem.repo,
+          issue_number: issueNumber,
+          issue_url: workItem.issue_url ?? "",
+          title: workItem.title ?? "",
+          console_url: consoleUrl,
+        },
+        log,
+      );
+    },
+    removeWorktree: () => removeReqWorktree(workItem),
+    startImplement: config.implement_enabled ? launchImplement : null,
+    startDesign: null,
+    log: (message, fields) =>
+      log.warn(message, { work_item_id: workItem.id, ...fields }),
+  };
+}
+
+/** `needs_human`のDiscord通知を、失敗しても例外を投げずに送る。 */
+async function notifyNeedsHumanBestEffort(
+  ctx: ApprovedBranchContext,
+  config: Pick<FactoryConfig, "instance_name">,
+  reason: string,
+  flow: "implement" | "design",
+): Promise<void> {
+  await notifyBestEffort(
+    ctx.webhookUrl,
+    {
+      kind: "needs_human",
+      instance_name: config.instance_name,
+      owner: ctx.workItem.owner,
+      repo: ctx.workItem.repo,
+      url: ctx.workItem.issue_url ?? "",
+      reason: describeReason(reason),
+      target: { kind: "issue", number: ctx.issueNumber },
+      next_action: nextActionFor(
+        reason,
+        flow === "implement" ? "implement" : undefined,
+      ),
+    },
+    ctx.log,
+  );
+}
+
+/**
+ * 設計フローを起動する手順の本番の依存を組み立てる(`startDesign`に渡す)。
+ * 本番の配線(`buildApprovedBranchDeps`)はまだ渡さない。呼ぶだけでは、DB・GitHub・Windmillに触れない。
+ */
+export function buildStartDesign(
+  config: Pick<FactoryConfig, "instance_name">,
+  ctx: ApprovedBranchContext,
+): () => Promise<StartDesignOutcome> {
+  const { workItem, issueNumber, log } = ctx;
+  const deps: DesignLaunchDeps = {
+    launchFlow: () =>
+      wmill.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem)),
+    recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+    moveToNeedsHuman: (reason) =>
+      updateStatusIfLeaseHolder(
+        workItem.id,
+        "designing",
+        "needs_human",
+        null,
+        reason,
+      ),
+    recordFailure: async (reason, step) => {
+      await recordFailure({
+        work_item_id: workItem.id,
+        flow_path: DESIGN_FLOW_PATH,
+        job_id: process.env.WM_JOB_ID ?? "unknown",
+        step,
+        error: reason,
+      });
+    },
+    // 作業項目は`needs_human`になってConsoleの要対応に出るので、noticeは足さずにログへ残す。
+    addNotice: async (reason) => {
+      log.warn("design flow could not be started", {
+        work_item_id: workItem.id,
+        issue_number: issueNumber,
+        error: reason,
+      });
+    },
+    notifyNeedsHuman: (reason) =>
+      notifyNeedsHumanBestEffort(ctx, config, reason, "design"),
+    log: (message, fields) =>
+      log.warn(message, { work_item_id: workItem.id, ...fields }),
+  };
+  return () => startDesign(deps);
 }
 
 export type RejectedOutcome = "retry" | "needs_human";
@@ -489,136 +705,23 @@ async function run(
   const attempt = readRequestAttempt(request.payload, workItem.attempt);
 
   if (request.status === "approved") {
-    const updated = await updateStatusIfCurrent(
-      workItem.id,
-      "awaiting_approval",
-      "approved",
-      null,
+    const result = await applyApprovedBranch(
+      buildApprovedBranchDeps(config, {
+        workItem,
+        issueNumber: workItem.issue_number,
+        attempt,
+        client,
+        viewerLogin: viewer.login,
+        webhookUrl,
+        log,
+      }),
     );
-    if (!updated) {
+    if (result.outcome === "no_op") {
       log.info("work item moved on before approval could be finalized", {
         work_item_id: workItem.id,
       });
-      return { outcome: "no_op" };
     }
-    const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
-      work_item_id: workItem.id,
-      attempt,
-    });
-    const issueNumber = workItem.issue_number;
-    const launchImplement = (): Promise<StartImplementOutcome> =>
-      startImplement({
-        casToImplementing: () =>
-          updateStatusIfCurrentClearingFlowJobId(
-            workItem.id,
-            "approved",
-            "implementing",
-            null,
-          ),
-        launchFlow: () =>
-          wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, {
-            work_item_id: workItem.id,
-          }),
-        recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
-        moveToNeedsHuman: (reason) =>
-          updateStatusIfLeaseHolder(
-            workItem.id,
-            "implementing",
-            "needs_human",
-            null,
-            reason,
-          ),
-        recordFailure: async (reason, step) => {
-          await recordFailure({
-            work_item_id: workItem.id,
-            flow_path: IMPLEMENT_FLOW_PATH,
-            job_id: process.env.WM_JOB_ID ?? "unknown",
-            step,
-            error: reason,
-          });
-        },
-        addNotice: async (reason) => {
-          await addNoticeUnlessUnresolved({
-            kind: "implement_launch_failed",
-            message: buildImplementLaunchNoticeMessage(
-              {
-                owner: workItem.owner,
-                repo: workItem.repo,
-                issue_number: issueNumber,
-                work_item_id: workItem.id,
-              },
-              reason,
-            ),
-          });
-        },
-        notifyNeedsHuman: async (reason) => {
-          await notifyBestEffort(
-            webhookUrl,
-            {
-              kind: "needs_human",
-              instance_name: config.instance_name,
-              owner: workItem.owner,
-              repo: workItem.repo,
-              url: workItem.issue_url ?? "",
-              reason: describeReason(reason),
-              target: { kind: "issue", number: issueNumber },
-              next_action: nextActionFor(reason, "implement"),
-            },
-            log,
-          );
-        },
-        log: (message, fields) =>
-          log.warn(message, { work_item_id: workItem.id, ...fields }),
-      });
-    return await applyApprovedSideEffects({
-      commentIssue: async () => {
-        await commentIssue(
-          client,
-          workItem.owner,
-          workItem.repo,
-          issueNumber,
-          `issue-approved-${String(attempt)}`,
-          workItem.id,
-          buildApprovedComment(consoleUrl, workItem.id),
-          viewer.login,
-        );
-      },
-      addCommentFailedNotice: async (reason) => {
-        await addNoticeUnlessUnresolved({
-          kind: "approval_comment_failed",
-          message: buildApprovalCommentFailedMessage(
-            {
-              owner: workItem.owner,
-              repo: workItem.repo,
-              issue_number: issueNumber,
-              work_item_id: workItem.id,
-            },
-            consoleUrl,
-            reason,
-          ),
-        });
-      },
-      notifyApproved: async () => {
-        await notifyBestEffort(
-          webhookUrl,
-          {
-            kind: "requirements_approved",
-            instance_name: config.instance_name,
-            owner: workItem.owner,
-            repo: workItem.repo,
-            issue_number: issueNumber,
-            issue_url: workItem.issue_url ?? "",
-            title: workItem.title ?? "",
-            console_url: consoleUrl,
-          },
-          log,
-        );
-      },
-      removeWorktree: () => removeReqWorktree(workItem),
-      startImplement: config.implement_enabled ? launchImplement : null,
-      log: (message, fields) =>
-        log.warn(message, { work_item_id: workItem.id, ...fields }),
-    });
+    return result;
   }
 
   // ここからは却下のとき。

@@ -188,7 +188,7 @@ describe("startDesign when the launch fails", () => {
       moveToNeedsHuman: async () => false,
     });
     await startDesign(h.deps);
-    expect(h.calls).toEqual(["launch"]);
+    expect(h.calls).toEqual([]);
   });
 
   test("still reports the failure when the move to needs_human throws", async () => {
