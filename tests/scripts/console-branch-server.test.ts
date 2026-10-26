@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  consoleSecurityHeaders,
+  isAllowedProxyRequest,
+  isOwnOrigin,
+  isTrustedHost,
   parseArgs,
+  READ_ONLY_SCRIPT_PATHS,
   routeFor,
   startServer,
   toClientResponseHeaders,
@@ -133,12 +138,222 @@ describe("parseArgs", () => {
   test("rejects an unknown flag", () => {
     expect(parseArgs(["--dist", "d", "--bogus", "1"]).ok).toBe(false);
   });
+
+  test("does not allow writes by default", () => {
+    const parsed = parseArgs(["--dist", "d"]);
+
+    expect(parsed.ok && parsed.config.allowWrites).toBe(false);
+  });
+
+  test("allows writes only with the explicit flag", () => {
+    const parsed = parseArgs(["--dist", "d", "--allow-writes"]);
+
+    expect(parsed.ok && parsed.config.allowWrites).toBe(true);
+  });
+
+  test("does not take a value for the writes flag", () => {
+    expect(parseArgs(["--dist", "d", "--allow-writes=false"]).ok).toBe(false);
+  });
+});
+
+describe("READ_ONLY_SCRIPT_PATHS", () => {
+  test("lists the five read scripts of the console", () => {
+    expect([...READ_ONLY_SCRIPT_PATHS].sort()).toEqual([
+      "f/factory/console_config",
+      "f/factory/console_holds",
+      "f/factory/console_jobs",
+      "f/factory/console_schedules",
+      "f/factory/steps/console_query",
+    ]);
+  });
+});
+
+describe("isAllowedProxyRequest", () => {
+  const RUN = "/api/w/factory/jobs/run_wait_result/p";
+
+  test("allows a GET", () => {
+    expect(isAllowedProxyRequest("GET", "/api/version", false)).toBe(true);
+  });
+
+  test("allows a HEAD", () => {
+    expect(isAllowedProxyRequest("HEAD", "/api/version", false)).toBe(true);
+  });
+
+  test("allows an OPTIONS", () => {
+    expect(isAllowedProxyRequest("OPTIONS", "/api/version", false)).toBe(true);
+  });
+
+  test("allows a POST that runs a read script", () => {
+    expect(
+      isAllowedProxyRequest("POST", `${RUN}/f/factory/console_query`, false),
+    ).toBe(true);
+  });
+
+  test("allows a POST that runs the read script under steps", () => {
+    expect(
+      isAllowedProxyRequest(
+        "POST",
+        `${RUN}/f/factory/steps/console_query`,
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  test("refuses a POST that runs a write script", () => {
+    expect(
+      isAllowedProxyRequest("POST", `${RUN}/f/factory/approval_decide`, false),
+    ).toBe(false);
+  });
+
+  test("refuses a POST to a path that only starts with a read script", () => {
+    expect(
+      isAllowedProxyRequest(
+        "POST",
+        `${RUN}/f/factory/console_query_extra`,
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses a POST to another API path", () => {
+    expect(
+      isAllowedProxyRequest("POST", "/api/w/factory/jobs/run/p/f/x", false),
+    ).toBe(false);
+  });
+
+  test("refuses a PUT", () => {
+    expect(isAllowedProxyRequest("PUT", "/api/anything", false)).toBe(false);
+  });
+
+  test("refuses a DELETE", () => {
+    expect(isAllowedProxyRequest("DELETE", "/api/anything", false)).toBe(false);
+  });
+
+  test("allows a write script when writes are enabled", () => {
+    expect(
+      isAllowedProxyRequest("POST", `${RUN}/f/factory/approval_decide`, true),
+    ).toBe(true);
+  });
+});
+
+describe("isTrustedHost", () => {
+  test("accepts the loopback address with the port", () => {
+    expect(isTrustedHost("127.0.0.1:5174", 5174)).toBe(true);
+  });
+
+  test("accepts localhost with the port", () => {
+    expect(isTrustedHost("localhost:5174", 5174)).toBe(true);
+  });
+
+  test("refuses another host name", () => {
+    expect(isTrustedHost("evil.example:5174", 5174)).toBe(false);
+  });
+
+  test("refuses the loopback address with another port", () => {
+    expect(isTrustedHost("127.0.0.1:8080", 5174)).toBe(false);
+  });
+
+  test("refuses a missing host", () => {
+    expect(isTrustedHost(null, 5174)).toBe(false);
+  });
+});
+
+describe("isOwnOrigin", () => {
+  test("accepts this server's origin", () => {
+    expect(isOwnOrigin("http://127.0.0.1:5174", 5174)).toBe(true);
+  });
+
+  test("accepts this server's origin written with localhost", () => {
+    expect(isOwnOrigin("http://localhost:5174", 5174)).toBe(true);
+  });
+
+  test("refuses the upstream's origin", () => {
+    expect(isOwnOrigin("http://127.0.0.1:8080", 5174)).toBe(false);
+  });
+
+  test("refuses another site", () => {
+    expect(isOwnOrigin("https://evil.example", 5174)).toBe(false);
+  });
+
+  test("refuses the opaque origin", () => {
+    expect(isOwnOrigin("null", 5174)).toBe(false);
+  });
+});
+
+async function caddyPolicy(
+  marker: string,
+  until: string | null,
+  origin: string,
+): Promise<string> {
+  const caddyfile = await Bun.file(
+    new URL("../../infra/Caddyfile", import.meta.url).pathname,
+  ).text();
+  const start = caddyfile.indexOf(marker);
+  const block = caddyfile.slice(
+    start,
+    until === null ? undefined : caddyfile.indexOf(until),
+  );
+  const line = block
+    .split("\n")
+    .find((l) => l.trim().startsWith("Content-Security-Policy "));
+  return (line ?? "")
+    .trim()
+    .replace(/^Content-Security-Policy "/, "")
+    .replace(/"$/, "")
+    .replaceAll("{http.request.scheme}://{http.request.hostport}", origin);
+}
+
+describe("consoleSecurityHeaders", () => {
+  const ORIGIN = "http://127.0.0.1:5174";
+
+  test("restricts the console scripts to the assets directory", () => {
+    const csp = consoleSecurityHeaders(ORIGIN, "console").get(
+      "content-security-policy",
+    );
+
+    expect(csp).toContain(`script-src ${ORIGIN}/console/assets/;`);
+  });
+
+  test("forbids embedding the console", () => {
+    expect(
+      consoleSecurityHeaders(ORIGIN, "console").get("x-frame-options"),
+    ).toBe("DENY");
+  });
+
+  test("sandboxes the draw.io page", () => {
+    const csp = consoleSecurityHeaders(ORIGIN, "drawio").get(
+      "content-security-policy",
+    );
+
+    expect(csp).toContain("sandbox allow-scripts");
+  });
+
+  test("matches the policy the Caddyfile sends for the console", async () => {
+    expect(
+      consoleSecurityHeaders(ORIGIN, "console").get("content-security-policy"),
+    ).toBe(await caddyPolicy("(console_headers)", "(drawio_headers)", ORIGIN));
+  });
+
+  test("matches the policy the Caddyfile sends for the draw.io page", async () => {
+    expect(
+      consoleSecurityHeaders(ORIGIN, "drawio").get("content-security-policy"),
+    ).toBe(await caddyPolicy("(drawio_headers)", null, ORIGIN));
+  });
 });
 
 describe("toUpstreamRequestHeaders", () => {
-  test("drops the origin header", () => {
+  test("replaces this server's origin with the upstream origin", () => {
     const headers = toUpstreamRequestHeaders(
       new Headers({ origin: "http://127.0.0.1:5174" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.get("origin")).toBe("http://127.0.0.1:8080");
+  });
+
+  test("adds no origin when the request has none", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers(),
       "http://127.0.0.1:8080",
     );
 
@@ -211,23 +426,27 @@ describe("startServer", () => {
     body: string;
   };
 
+  const RUN = "/api/w/factory/jobs/run_wait_result/p";
   let root: string;
   let upstream: ReturnType<typeof Bun.serve>;
   let server: { port: number; stop(): void };
+  let writer: { port: number; stop(): void };
   const seen: Seen[] = [];
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "console-branch-"));
     mkdirSync(join(root, "assets"));
     writeFileSync(join(root, "index.html"), "<html>branch index</html>");
+    writeFileSync(join(root, "drawio.html"), "<html>drawio</html>");
     writeFileSync(join(root, "assets", "app.js"), "console.log('branch');");
     upstream = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       async fetch(req) {
+        const url = new URL(req.url);
         seen.push({
           method: req.method,
-          url: new URL(req.url).pathname + new URL(req.url).search,
+          url: url.pathname + url.search,
           cookie: req.headers.get("cookie"),
           origin: req.headers.get("origin"),
           body: await req.text(),
@@ -235,21 +454,24 @@ describe("startServer", () => {
         return new Response("upstream reply", { status: 201 });
       },
     });
-    server = startServer({
+    const base = {
       dist: root,
       port: 0,
       upstream: `http://127.0.0.1:${upstream.port}`,
-    });
+    };
+    server = startServer({ ...base, allowWrites: false });
+    writer = startServer({ ...base, allowWrites: true });
   });
 
   afterAll(() => {
     server.stop();
+    writer.stop();
     upstream.stop(true);
     rmSync(root, { recursive: true, force: true });
   });
 
-  function url(path: string): string {
-    return `http://127.0.0.1:${server.port}${path}`;
+  function url(path: string, target = server): string {
+    return `http://127.0.0.1:${target.port}${path}`;
   }
 
   test("serves the built index at the console root", async () => {
@@ -282,23 +504,35 @@ describe("startServer", () => {
     expect(response.status).toBe(400);
   });
 
-  test("forwards an API call to the upstream with the response status", async () => {
-    const response = await fetch(url("/api/w/factory/jobs/x"), {
+  test("sends the console security policy with the index", async () => {
+    const response = await fetch(url("/console/"));
+
+    expect(response.headers.get("content-security-policy")).toContain(
+      `script-src http://127.0.0.1:${server.port}/console/assets/;`,
+    );
+  });
+
+  test("sends the sandbox policy with the draw.io page", async () => {
+    const response = await fetch(url("/console/drawio.html"));
+
+    expect(response.headers.get("content-security-policy")).toContain(
+      "sandbox allow-scripts",
+    );
+  });
+
+  test("relays a read script call with the upstream status", async () => {
+    const response = await fetch(url(`${RUN}/f/factory/console_query`), {
       method: "POST",
-      headers: {
-        cookie: "token=abc",
-        origin: `http://127.0.0.1:${server.port}`,
-      },
-      body: '{"a":1}',
+      body: '{"view":"summary"}',
     });
 
     expect(response.status).toBe(201);
   });
 
-  test("forwards the method, path, cookie, and body to the upstream", async () => {
+  test("relays the method, path, cookie, and body of a read call", async () => {
     seen.length = 0;
 
-    await fetch(url("/api/w/factory/jobs/y?z=1"), {
+    await fetch(url(`${RUN}/f/factory/console_jobs?z=1`), {
       method: "POST",
       headers: {
         cookie: "token=abc",
@@ -309,10 +543,100 @@ describe("startServer", () => {
 
     expect(seen[0]).toEqual({
       method: "POST",
-      url: "/api/w/factory/jobs/y?z=1",
+      url: `${RUN}/f/factory/console_jobs?z=1`,
       cookie: "token=abc",
-      origin: null,
+      origin: `http://127.0.0.1:${upstream.port}`,
       body: '{"b":2}',
     });
+  });
+
+  test("relays a GET", async () => {
+    const response = await fetch(url("/api/version"));
+
+    expect(response.status).toBe(201);
+  });
+
+  test("refuses a write script call by default", async () => {
+    const response = await fetch(url(`${RUN}/f/factory/approval_decide`), {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("does not reach the upstream with a refused write", async () => {
+    seen.length = 0;
+
+    await fetch(url(`${RUN}/f/factory/notice_resolve`), {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(seen).toEqual([]);
+  });
+
+  test("refuses a DELETE by default", async () => {
+    const response = await fetch(url("/api/w/factory/variables/delete/x"), {
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("refuses a request with another host name", async () => {
+    const response = await fetch(url("/api/version"), {
+      headers: { host: "evil.example" },
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("accepts the localhost host name with this port", async () => {
+    const response = await fetch(url("/api/version"), {
+      headers: { host: `localhost:${server.port}` },
+    });
+
+    expect(response.status).toBe(201);
+  });
+
+  test("refuses a request from another origin", async () => {
+    const response = await fetch(url("/api/version"), {
+      headers: { origin: "https://evil.example" },
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("refuses a request the browser marks as cross-site", async () => {
+    const response = await fetch(url("/api/version"), {
+      headers: { "sec-fetch-site": "cross-site" },
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("relays a write script call when writes are enabled", async () => {
+    seen.length = 0;
+
+    const response = await fetch(
+      url(`${RUN}/f/factory/approval_decide`, writer),
+      { method: "POST", body: "{}" },
+    );
+
+    expect(response.status).toBe(201);
+  });
+
+  test("reaches the upstream with an enabled write", async () => {
+    seen.length = 0;
+
+    await fetch(url(`${RUN}/f/factory/notice_resolve`, writer), {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(seen.map((entry) => entry.url)).toEqual([
+      `${RUN}/f/factory/notice_resolve`,
+    ]);
   });
 });

@@ -36,7 +36,35 @@ export type Config = {
   readonly dist: string;
   readonly port: number;
   readonly upstream: string;
+  /** 書き込みを中継するか。人が`--allow-writes`を付けたときだけ真にする。 */
+  readonly allowWrites: boolean;
 };
+
+// スタブ。実装は次のコミットで書く。
+export const READ_ONLY_SCRIPT_PATHS: readonly string[] = [];
+
+export function isAllowedProxyRequest(
+  _method: string,
+  _pathname: string,
+  _allowWrites: boolean,
+): boolean {
+  return true;
+}
+
+export function isTrustedHost(_host: string | null, _port: number): boolean {
+  return true;
+}
+
+export function isOwnOrigin(_origin: string, _port: number): boolean {
+  return true;
+}
+
+export function consoleSecurityHeaders(
+  _origin: string,
+  _kind: "console" | "drawio",
+): Headers {
+  return new Headers();
+}
 
 export type ParsedArgs =
   | { readonly ok: true; readonly config: Config }
@@ -151,7 +179,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
   }
   if (dist === null) return { ok: false, message: "--dist is required" };
-  return { ok: true, config: { dist, port, upstream } };
+  return { ok: true, config: { dist, port, upstream, allowWrites: false } };
 }
 
 /** 中継先へ送るヘッダー。Originを外し、Hostを中継先にして、同一オリジンの検査を通す。 */
