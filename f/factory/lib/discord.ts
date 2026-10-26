@@ -54,6 +54,7 @@ export type NotifyEvent =
       inbox_url: string;
     }
   | {
+      /** 承認済みの要件定義から作った設計書の承認依頼。`approval_requested`と同じく、ログインを求めるConsoleのURLだけを入れる。 */
       kind: "design_approval_requested";
       instance_name: string;
       owner: string;
@@ -429,10 +430,14 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "design_approval_requested":
       return {
-        title: "",
-        description: "",
-        url: null,
-        fields: [],
+        title: `設計の承認待ち: #${event.issue_number} ${event.title}`,
+        description: "設計書のドラフトが確認待ちです。",
+        url: event.inbox_url,
+        fields: [
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
+          { name: "Issue", value: event.issue_url },
+        ],
       };
     case "requirements_approved":
       return {
