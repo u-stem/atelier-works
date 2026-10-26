@@ -385,8 +385,9 @@ async function notifyNeedsHumanBestEffort(
   config: Pick<FactoryConfig, "instance_name">,
   reason: string,
   flow: "implement" | "design",
+  send: StartDesignPorts["notifyBestEffort"] = notifyBestEffort,
 ): Promise<void> {
-  await notifyBestEffort(
+  await send(
     ctx.webhookUrl,
     {
       kind: "needs_human",
@@ -396,10 +397,7 @@ async function notifyNeedsHumanBestEffort(
       url: ctx.workItem.issue_url ?? "",
       reason: describeReason(reason),
       target: { kind: "issue", number: ctx.issueNumber },
-      next_action: nextActionFor(
-        reason,
-        flow === "implement" ? "implement" : undefined,
-      ),
+      next_action: nextActionFor(reason, flow),
     },
     ctx.log,
   );
@@ -427,12 +425,69 @@ export type StartDesignPorts = {
   ) => Promise<unknown>;
 };
 
+const REAL_START_DESIGN_PORTS: StartDesignPorts = {
+  runFlowAsync: (path, args) => wmill.runFlowAsync(path, args),
+  setFlowJobIdIfUnset: (id, jobId) => setFlowJobIdIfUnset(id, jobId),
+  updateStatusIfLeaseHolder: (id, expectedFrom, to, expectedFlowJobId, note) =>
+    updateStatusIfLeaseHolder(id, expectedFrom, to, expectedFlowJobId, note),
+  recordFailure: (record) => recordFailure(record),
+  notifyBestEffort: (webhookUrl, event, log) =>
+    notifyBestEffort(webhookUrl, event, log),
+};
+
+/**
+ * 設計フローを起動する手順の本番の依存を組み立てる(`startDesign`に渡す)。
+ * 本番の配線(`buildApprovedBranchDeps`)はまだ渡さない。返した関数を呼ぶまでは、DB・GitHub・Windmillに触れない。
+ * 起動先は設計フロー、入力は作業項目の次の設計の試行で、起動か記録に失敗したら`needs_human`へ戻す(`startDesign`)。
+ * `ports`は呼び出しの入出力で、テストが差し替える。
+ */
 export function buildStartDesign(
-  _config: Pick<FactoryConfig, "instance_name">,
-  _ctx: ApprovedBranchContext,
-  _ports?: StartDesignPorts,
+  config: Pick<FactoryConfig, "instance_name">,
+  ctx: ApprovedBranchContext,
+  ports: StartDesignPorts = REAL_START_DESIGN_PORTS,
 ): () => Promise<StartDesignOutcome> {
-  return async () => "launch_failed";
+  const { workItem, issueNumber, log } = ctx;
+  const deps: DesignLaunchDeps = {
+    launchFlow: () =>
+      ports.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem)),
+    recordFlowJobId: (jobId) => ports.setFlowJobIdIfUnset(workItem.id, jobId),
+    moveToNeedsHuman: (reason) =>
+      ports.updateStatusIfLeaseHolder(
+        workItem.id,
+        "designing",
+        "needs_human",
+        null,
+        reason,
+      ),
+    recordFailure: async (reason, step) => {
+      await ports.recordFailure({
+        work_item_id: workItem.id,
+        flow_path: DESIGN_FLOW_PATH,
+        job_id: process.env.WM_JOB_ID ?? "unknown",
+        step,
+        error: reason,
+      });
+    },
+    // 作業項目は`needs_human`になってConsoleの要対応に出るので、noticeは足さずにログへ残す。
+    addNotice: async (reason) => {
+      log.warn("design flow could not be started", {
+        work_item_id: workItem.id,
+        issue_number: issueNumber,
+        error: reason,
+      });
+    },
+    notifyNeedsHuman: (reason) =>
+      notifyNeedsHumanBestEffort(
+        ctx,
+        config,
+        reason,
+        "design",
+        ports.notifyBestEffort,
+      ),
+    log: (message, fields) =>
+      log.warn(message, { work_item_id: workItem.id, ...fields }),
+  };
+  return () => startDesign(deps);
 }
 
 export type RejectedOutcome = "retry" | "needs_human";
