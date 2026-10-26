@@ -174,7 +174,7 @@ locks:
   f/factory/steps/pr_fix_collect: b9723400e73863da7ca8bcc831bd84de95514e8c54393929ee508e20a5513f92
   f/factory/steps/pr_fix_finish: 286e5f439258c67a4bc88ff42e79689bca0483c28436f705b3fb52e58c2f7fd6
   f/factory/steps/pr_fix_prepare: 36d3a1151bb6a61d160c90b3b685bbd7522caf865f6a22671da9602b68737542
-  f/factory/steps/pr_fix_verify: f986336a7a44e2368f8890de98c28861da3a3308fb5086d3f4ca54d3e20ddb47
+  f/factory/steps/pr_fix_verify: 8743824a94b091907bd43b6d7d68e173ecd4f9d56ecd438aa6b11b719beaf187
   f/factory/steps/pr_review_generate: eb116cae89512a05ce41de2818489ae2ea8ffee2036807d3cceb0e90bed0caaf
   f/factory/steps/pr_review_post: b2ea0351363d6a1e95fc4f021f4f35fd3970db46fc5f8cd0aed86c2c3830ee98
   f/factory/steps/pr_review_prepare: 08e09697d6989fcfcb82502f39ca37847d1891f94153ad23a08db3ae07e30b8f

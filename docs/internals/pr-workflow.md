@@ -1175,6 +1175,13 @@ Claudeが直せる検査の失敗ではないので、Sonnetの失敗として�
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+検査コマンドの実行ファイルを起動できなかったときも、環境の問題なので、Claudeの修正を再実行せずに`guard_blocked`を返し、作業項目は`blocked`になる。
+検査コマンドは非特権のuidへ切り替える`setpriv`を通して動く。
+`setpriv`が実行ファイルを見つけられないか実行できないと、終了コードは127か126になり、出力は`setpriv: failed to execute`で始まる1行だけになる。
+この2つがそろうときだけ、環境の問題として扱う。
+理由は`check command could not run: <コマンド>: <setprivの出力>`になる。
+実装フローと判定を共有する([実装フロー](implement.md#ループの終わり方))。
+競合を直す回も同じである。
 イメージが古くて止まった`blocked`は、通知の自動の解決の後に、自動で`fixing`へ戻って再開する([実装フロー](implement.md#イメージが古くて止まったとき))。
 CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す回))。
 
