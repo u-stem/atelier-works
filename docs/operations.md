@@ -2847,12 +2847,12 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 `wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に2回打つ。
 承認の記録を失わないために、承認依頼側が先に戻る。
 
-1. 設計のフローが動いていないことを確かめ、動かないよう止める。
-   戻した後に`designing`や`design`の依頼を作ると、戻した制約に違反して失敗するためである。
-2. 1回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
-3. 2回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
+1. 1回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
+2. 2回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
    `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
 
+今のコードは、設計工程の状態と種類を書き込まない。
+戻す前に止めるものは無い。
 1回目が失敗したときは、種類が`design`の承認依頼が残っている。
 制約を足し直せないので、migrationはそこで止まる。
 `approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、1回目をやり直す。

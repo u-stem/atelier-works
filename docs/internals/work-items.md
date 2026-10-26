@@ -338,7 +338,9 @@ IssueかPRが閉じられていれば、ジョブの状態にかかわらず作�
 
 ### 承認待ちの作業項目
 
-承認待ち(`awaiting_approval`)と設計の承認待ち(`awaiting_design_approval`)の作業項目は、フローのジョブが完了したまま人の決定を待つ。そのためreconcileは、この2状態にはジョブの生死と猶予による孤児の判定をしない。IssueとPRのcloseだけを確かめる。
+承認待ち(`awaiting_approval`)と設計の承認待ち(`awaiting_design_approval`)の作業項目は、フローのジョブが完了したまま人の決定を待つ。
+そのためreconcileは、この2状態にはジョブの生死と猶予による孤児の判定をしない。
+IssueとPRのcloseだけを確かめる。
 
 ### 要対応の終端の取り消し
 
