@@ -10,15 +10,25 @@ export type TabPanelAttrs = {
 /**
  * タブの本体。選んでいないときは`hidden`で隠す。
  * `mounted`が偽の間は、枠だけを描き、中身を描かない。
+ * 枠は常に描く。タブの`aria-controls`が指す要素を、中身が無い間も残すためである。
  */
 export function TabPanel({
-  attrs: _attrs,
-  mounted: _mounted = true,
-  children: _children,
+  attrs,
+  mounted = true,
+  children,
 }: {
   attrs: TabPanelAttrs;
   mounted?: boolean;
   children: ReactNode;
 }) {
-  return null;
+  return (
+    <div
+      id={attrs.id}
+      role="tabpanel"
+      aria-labelledby={attrs.labelledBy}
+      hidden={attrs.hidden}
+    >
+      {mounted ? children : null}
+    </div>
+  );
 }

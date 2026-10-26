@@ -1,42 +1,58 @@
 // レポートの画面のタブ(監査レポートと分析)。
 // 開くタブはURLの`?tab=`に持ち、監査レポートは名前を持たない。
 
-import type { ResolvedTabSpec, TabSet } from "./tabSet.ts";
+import {
+  parseTab,
+  type ResolvedTabSpec,
+  type TabSet,
+  tabPanelAttrs,
+  tabSpecs,
+  withTab,
+} from "./tabSet.ts";
 
 export type ReportsTabId = "audit" | "analytics";
 
 export const REPORTS_TABS: TabSet<ReportsTabId> = {
-  tabs: [],
+  tabs: [
+    { id: "audit", label: "監査レポート" },
+    { id: "analytics", label: "分析" },
+  ],
   defaultTab: "audit",
   idPrefix: "reports",
 };
 
 /** URLの`?tab=`から開くタブを決める。無い値と知らない値は監査レポートにする。 */
-export function parseReportsTab(_value: string | null): ReportsTabId {
-  return "audit";
+export function parseReportsTab(value: string | null): ReportsTabId {
+  return parseTab(REPORTS_TABS, value);
 }
 
 /** タブを選んだ後のクエリを返す。他のクエリは残す。 */
 export function withReportsTab(
   current: URLSearchParams,
-  _tab: ReportsTabId,
+  tab: ReportsTabId,
 ): URLSearchParams {
-  return new URLSearchParams(current);
+  return withTab(REPORTS_TABS, current, tab);
 }
 
 /** タブの本体の要素に付ける`id`、`aria-labelledby`、`hidden`。 */
 export function reportsPanelAttrs(
-  _panel: ReportsTabId,
-  _selected: ReportsTabId,
+  panel: ReportsTabId,
+  selected: ReportsTabId,
 ): { id: string; labelledBy: string; hidden: boolean } {
-  return { id: "", labelledBy: "", hidden: false };
+  return tabPanelAttrs(REPORTS_TABS, panel, selected);
 }
 
-/** 共通の`Tabs`へ渡す、2つのタブの指定。 */
+/**
+ * 共通の`Tabs`へ渡す、2つのタブの指定。
+ * 件数は監査レポートのタブだけに付ける。印は、隠れているタブの取得が失敗したときだけ付く。
+ */
 export function reportsTabSpecs(
-  _selected: ReportsTabId,
-  _failed: Readonly<Record<ReportsTabId, boolean>>,
-  _auditCount: number | undefined,
+  selected: ReportsTabId,
+  failed: Readonly<Record<ReportsTabId, boolean>>,
+  auditCount: number | undefined,
 ): ResolvedTabSpec<ReportsTabId>[] {
-  return [];
+  return tabSpecs(REPORTS_TABS, selected, {
+    failed,
+    counts: { audit: auditCount },
+  });
 }

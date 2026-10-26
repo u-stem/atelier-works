@@ -1,6 +1,8 @@
 // 複数の画面が共有する、タブの組を扱う純関数。
 // 開くタブはURLの`?tab=`に持ち、既定のタブは名前を持たない。
 
+import { tabDomId } from "./tabs.ts";
+
 /** タブ1つの定義。 */
 export type TabDef<Id extends string> = {
   readonly id: Id;
@@ -37,47 +39,77 @@ export type TabSpecInput<Id extends string> = {
   readonly attention?: Readonly<Partial<Record<Id, string | undefined>>>;
 };
 
+/** URLのクエリのうち、開くタブを持つ名前。作業項目の詳細のタブと名前をそろえる。 */
+const TAB_PARAM = "tab";
+
 /** URLの`?tab=`から開くタブを決める。無い値と知らない値は既定にする。 */
 export function parseTab<Id extends string>(
   set: TabSet<Id>,
-  _value: string | null,
+  value: string | null,
 ): Id {
-  return set.defaultTab;
+  return set.tabs.find((tab) => tab.id === value)?.id ?? set.defaultTab;
 }
 
-/** タブを選んだ後のクエリを、新しいオブジェクトで返す。他のクエリは残す。 */
+/**
+ * タブを選んだ後のクエリを、新しいオブジェクトで返す。他のクエリは残す。
+ * 既定のタブは名前を消す。URLを短く保ち、名前の無いURLと同じ画面になるためである。
+ */
 export function withTab<Id extends string>(
-  _set: TabSet<Id>,
+  set: TabSet<Id>,
   current: URLSearchParams,
-  _tab: Id,
+  tab: Id,
 ): URLSearchParams {
-  return new URLSearchParams(current);
+  const next = new URLSearchParams(current);
+  if (tab === set.defaultTab) {
+    next.delete(TAB_PARAM);
+  } else {
+    next.set(TAB_PARAM, tab);
+  }
+  return next;
 }
 
 /** タブが指す本体の`id`。 */
 export function tabPanelId<Id extends string>(
-  _set: TabSet<Id>,
-  _tab: Id,
+  set: TabSet<Id>,
+  tab: Id,
 ): string {
-  return "";
+  return `${set.idPrefix}-panel-${tab}`;
 }
 
 /** タブの本体の要素に付ける`id`、`aria-labelledby`、`hidden`。 */
 export function tabPanelAttrs<Id extends string>(
-  _set: TabSet<Id>,
-  _panel: Id,
-  _selected: Id,
+  set: TabSet<Id>,
+  panel: Id,
+  selected: Id,
 ): { id: string; labelledBy: string; hidden: boolean } {
-  return { id: "", labelledBy: "", hidden: false };
+  return {
+    id: tabPanelId(set, panel),
+    labelledBy: tabDomId(set.idPrefix, panel),
+    hidden: panel !== selected,
+  };
 }
 
-/** 共通の`Tabs`へ渡す、タブの指定。 */
+/**
+ * 共通の`Tabs`へ渡す、タブの指定。
+ * 取得の失敗の印は、選んでいるタブには付けない。本体が失敗を伝えるためである。
+ * 注意の印は、選んでいるかにかかわらず付ける。本体を開いていない間も、見落とさせないためである。
+ */
 export function tabSpecs<Id extends string>(
-  _set: TabSet<Id>,
-  _selected: Id,
-  _input: TabSpecInput<Id> = {},
+  set: TabSet<Id>,
+  selected: Id,
+  input: TabSpecInput<Id> = {},
 ): ResolvedTabSpec<Id>[] {
-  return [];
+  return set.tabs.map((tab) => ({
+    id: tab.id,
+    label: tab.label,
+    panelId: tabPanelId(set, tab.id),
+    count: input.counts?.[tab.id],
+    mark:
+      input.attention?.[tab.id] ??
+      (tab.id !== selected && input.failed?.[tab.id] === true
+        ? FETCH_FAILED_MARK
+        : undefined),
+  }));
 }
 
 /**
@@ -86,7 +118,7 @@ export function tabSpecs<Id extends string>(
  */
 export function visitedTabsWith<Id extends string>(
   visited: ReadonlySet<Id>,
-  _selected: Id,
+  selected: Id,
 ): ReadonlySet<Id> {
-  return visited;
+  return visited.has(selected) ? visited : new Set(visited).add(selected);
 }
