@@ -1748,15 +1748,37 @@ const DOC_HASH_COLUMN_PATTERN =
 
 /**
  * 例外が、`requirement_drafts.doc_hash`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
- * 判定は`isMissingModelUsageColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
+ * エラーコード42703は、どの列が無くても同じコードなので、コードだけでは別の列の欠落を取り違える。
+ * そのため、エラーの文(messageとbody)があるときは、文が`doc_hash`を含むときだけ真にする。
+ * 文が無い(どちらも空)ときは、確かめる手段が無いので、コードだけで真にする。
+ * コードが無い例外は、列と表の名前を含む文が完全に一致するときだけ真にする。
  */
 export function isMissingDocHashColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  if (Reflect.get(err, "code") === "42703") return true;
-  if (DOC_HASH_COLUMN_PATTERN.test(err.message)) return true;
   const body: unknown = Reflect.get(err, "body");
-  return typeof body === "string" && DOC_HASH_COLUMN_PATTERN.test(body);
+  const statements = [err.message, typeof body === "string" ? body : ""].filter(
+    (statement) => statement.length > 0,
+  );
+  if (Reflect.get(err, "code") === "42703") {
+    return (
+      statements.length === 0 ||
+      statements.some((statement) => statement.includes("doc_hash"))
+    );
+  }
+  return statements.some((statement) =>
+    DOC_HASH_COLUMN_PATTERN.test(statement),
+  );
 }
+
+/** `doc_hash`の列が無い間に基準値なしで下書きを保存したときに残す通知の種類。 */
+export const DOC_HASH_COLUMN_MISSING_NOTICE_KIND = "doc_hash_column_missing";
+
+/**
+ * 本文は下書きに依らず固定する。同じ本文の未解決の通知は1件にまとまるため、
+ * 列が無い間に何件保存しても、通知は重ならない。
+ */
+const DOC_HASH_COLUMN_MISSING_NOTICE_MESSAGE =
+  "requirement_drafts.doc_hash の列が無いため、要件定義の下書きを基準値なしで保存しました。この下書きは、承認の後の書き換えを検出できません。datatableのmigrationが反映されたことを確かめ、守りたい要件定義は作り直してください";
 
 /**
  * `factory.requirement_drafts`に行を挿入し、そのIDを返す。
@@ -1799,6 +1821,23 @@ export async function saveDraft(
       RETURNING id
     `;
     row = await fetchOneRow(legacy, "saveDraft");
+    // 下書きを保存した後に、基準値が無い下書きができたことを、解決するまで残る通知にする。ログだけでは流れて見落とされる。
+    try {
+      await addNoticeUnlessUnresolved(
+        {
+          kind: DOC_HASH_COLUMN_MISSING_NOTICE_KIND,
+          message: DOC_HASH_COLUMN_MISSING_NOTICE_MESSAGE,
+        },
+        sql,
+      );
+    } catch (noticeErr) {
+      log.warn("doc_hash_column_missing notice could not be recorded", {
+        work_item_id: draft.work_item_id,
+        error: maskSecrets(
+          noticeErr instanceof Error ? noticeErr.message : String(noticeErr),
+        ),
+      });
+    }
   }
   return parseId(row.id, "id");
 }

@@ -57,9 +57,9 @@ locks:
   f/factory/lib/console_known_paths: 1ee700ed37220d0c8664a6f4e9404279873146b75c7f800a6a91b0ab1dfe2e9a
   f/factory/lib/console_redact: 3cd5957139b0097e4b9c140b62ead54ba33fa6e9be84a09f6d1737b7c4532a0a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
-  f/factory/lib/console_support: d29a7121916d0a645d763289053c2b664a22b21ca4cd70b646a9d211f10e0102
+  f/factory/lib/console_support: 92aff0984011046777473050118c6b392083e125ad044df33746ea960cb6b418
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/db: 0a6b00aa037fb36c68adcf0abcdc1be61807e3f847b4f2d0e17ba518b7f1e18e
+  f/factory/lib/db: 9484f62393089f2eb4c6536b2be5faf3fd1dd057b524fd6a4149ca96166d13f0
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
