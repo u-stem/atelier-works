@@ -417,6 +417,32 @@ export function checkEnv(input: {
   };
 }
 
+/** 検査用のHOMEに置く、gitのグローバルの設定ファイルの名前。 */
+export const CHECK_GITCONFIG_NAME = ".gitconfig";
+
+/**
+ * 検査用のHOMEの`.gitconfig`の本文を返す。そのworktreeだけを`safe.directory`にする。
+ * 検査コマンドの中のテストは、子のgitを起動するときに`GIT_`で始まる環境変数をすべて外すことがあり、
+ * `checkEnv`の`GIT_CONFIG_*`だけでは、そのgitがrootの所有のmain cloneの`.git`を所有者の違いで拒む。
+ * HOMEの設定は環境変数を外した子にも効く。
+ * 後始末でrootが動かすgitは、この設定を読まない。HOMEを使う検査用のuidのプロセスだけが読み、
+ * 書き換えられても影響は検査用のuidのgitに限られる。
+ * パスは1つの引用符つきの値に収める。絶対パスで、制御文字(改行を含む)とワイルドカード(`*`)が無いものに限る。
+ * 改行は設定の行を増やして別の設定を注入でき、`*`は信頼するディレクトリを広げるためである。
+ * 引用符とバックスラッシュはエスケープする。
+ */
+export function checkGitConfig(worktreeDir: string): string {
+  if (
+    !worktreeDir.startsWith("/") ||
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を拒む判定である
+    /[\u0000-\u001f\u007f*]/.test(worktreeDir)
+  ) {
+    throw new Error("check sandbox: refusing a worktree path for .gitconfig");
+  }
+  const quoted = worktreeDir.replace(/["\\]/g, (char) => `\\${char}`);
+  return `[safe]\n\tdirectory = "${quoted}"\n`;
+}
+
 /** 正規化された絶対パスで、最上位の1段ではないかを返す。 */
 function isNestedAbsolutePath(dir: string): boolean {
   const segments = dir.split("/").filter((part) => part !== "");

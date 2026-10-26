@@ -656,6 +656,8 @@ networkとworkerの資源を共有するので、Issueを信頼できる人だ�
 検査の間、worktreeと`HOME`の所有者は、取った枠のユーザーである。
 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。
 `TMPDIR`は`HOME`の下を指すので、一時ファイルは他の枠から読めない。
+`HOME`の`.gitconfig`は、worktreeだけを`safe.directory`にする。
+検査の中のテストが`GIT_`で始まる環境変数を外してgitを起動しても、枠のユーザーがrootの所有のmain cloneの`.git`を読めるようにするためである。
 検査が終わると、worktreeの所有者はrootに戻り、`HOME`は消える。
 枠は別のリポジトリの検査に使い回すので、枠を取るたびに、前の実行がそのuidで残したものを消してから使う。
 同時に動く検査は1つなので、枠が全部埋まることは通常ない。埋まっていれば、空くのを最大5分待つ。

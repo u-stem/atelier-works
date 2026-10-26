@@ -2293,3 +2293,28 @@ suite("a run whose symlink scan was cut off", () => {
     expect(names).toContain("ok");
   });
 });
+
+suite("git in a check that drops the GIT_ variables", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let results: Awaited<ReturnType<typeof runChecks>> = [];
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    const worktree = fx.addWorktree("dropped");
+    // テストの中で子のgitを起動する検査は、`GIT_`で始まる環境変数を外す。
+    results = await runChecks(
+      worktree,
+      [
+        "/usr/bin/env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 git ls-files",
+      ],
+      sandboxIn(lockDir, POOL),
+    );
+  }, 60_000);
+
+  afterAll(() => fx.cleanup());
+
+  test("git lists the files of the worktree", () => {
+    expect(results[0]?.output).toBe("tracked.txt");
+  });
+});

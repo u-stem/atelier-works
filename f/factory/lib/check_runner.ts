@@ -3,11 +3,13 @@
 // 許可リストの環境変数だけで実行する。
 // 呼び出し側(`implement_verify`、`pr_fix_verify`)は、実行するコマンドのランナーを注入する。
 
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  CHECK_GITCONFIG_NAME,
   type CheckSandbox,
   checkEnv,
+  checkGitConfig,
   checkTmpDir,
   type EscapingSymlinksReport,
 } from "./check_sandbox.ts";
@@ -150,7 +152,24 @@ export type CheckHomeDir = {
   readonly cleanup: () => Promise<void>;
 };
 
-export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
+export type CreateCheckHomeDir = (input: {
+  readonly worktreeDir: string;
+}) => Promise<CheckHomeDir>;
+
+/** `createCheckHomeDir`が使うファイル操作。テストで失敗を差し込むために注入できる。 */
+export type CheckHomeDirOps = {
+  readonly mkdtemp: (prefix: string) => Promise<string>;
+  readonly mkdir: (path: string, options: { mode: number }) => Promise<unknown>;
+  readonly writeFile: (
+    path: string,
+    data: string,
+    options: { mode: number },
+  ) => Promise<void>;
+  readonly rm: (
+    path: string,
+    options: { recursive: boolean; force: boolean },
+  ) => Promise<void>;
+};
 
 /**
  * `runAllowedCheckCommands`の1回の呼び出し用に、新しい非公開の一時ディレクトリを作る。
@@ -164,17 +183,39 @@ export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
  * 同じuidを次に使う別のリポジトリの検査から読めるためである。
  * 置き場所は`os.tmpdir()`(`TMPDIR`)ではなく、固定の`/tmp`にする。
  * ジョブの`TMPDIR`は検査用のuidが入れない0700の下を指し、そこに作るとHOMEにたどり着けないためである。
+ * 直下に、worktreeだけを`safe.directory`にする`.gitconfig`(`checkGitConfig`)を置く。
+ * 検査コマンドの中のテストが`GIT_`の環境変数を外してgitを起動しても、検査用のuidがrootの所有のmain cloneの`.git`を読めるようにするためである。
+ * 本文はrootが書き、実行の前の受け渡しで検査用のuidの所有になる。
+ * 本文を作れないパスは、HOMEを作る前に拒み、消し残しを作らない。
  */
-const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
-  const dir = await mkdtemp(join(CHECK_HOME_PARENT, "factory-check-home-"));
-  await mkdir(checkTmpDir(dir), { mode: 0o700 });
+const defaultHomeDirOps: CheckHomeDirOps = { mkdtemp, mkdir, writeFile, rm };
+
+export async function createCheckHomeDir(
+  { worktreeDir }: { readonly worktreeDir: string },
+  ops: CheckHomeDirOps = defaultHomeDirOps,
+): Promise<CheckHomeDir> {
+  const gitConfig = checkGitConfig(worktreeDir);
+  const dir = await ops.mkdtemp(join(CHECK_HOME_PARENT, "factory-check-home-"));
+  try {
+    await ops.mkdir(checkTmpDir(dir), { mode: 0o700 });
+    await ops.writeFile(join(dir, CHECK_GITCONFIG_NAME), gitConfig, {
+      mode: 0o600,
+    });
+  } catch (error) {
+    // 掃除の失敗で、元のエラーを隠さない。
+    await ops.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
   return {
     path: dir,
     cleanup: async () => {
-      await rm(dir, { recursive: true, force: true });
+      await ops.rm(dir, { recursive: true, force: true });
     },
   };
-};
+}
+
+const defaultCreateCheckHomeDir: CreateCheckHomeDir = (input) =>
+  createCheckHomeDir(input);
 
 const ESCAPING_SYMLINKS_COMMAND = "check sandbox: symlink scan";
 const ESCAPING_SYMLINKS_LISTED = 20;
@@ -209,6 +250,7 @@ function escapingSymlinksResult(
  * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
  * 環境変数は許可リスト(`checkEnv`。固定のPATH(`CHECK_COMMAND_PATH`)、新しい非公開のHOMEとその下のTMPDIR、ロケール、
  * worktreeだけを信頼するgitの設定)で作り、workerの秘密は引き継がない。
+ * HOMEの`.gitconfig`にも、同じgitの設定を書く。
  * 終わったらHOMEのディレクトリを消す。`docs/internals/pr-workflow.md`の「検査コマンドの実行」に書く。
  * `sandbox`があれば、コマンドを検査用の非特権uidに落として実行する(`setpriv`)。
  * 実行の前にworktreeとHOMEをそのuidに渡し、コマンドごとに残ったプロセスを止め、
@@ -240,7 +282,7 @@ export async function runAllowedCheckCommands(
   path: string = CHECK_COMMAND_PATH,
   sandbox: CheckSandbox | null = null,
 ): Promise<CheckCommandResult[]> {
-  const homeDir = await createHomeDir();
+  const homeDir = await createHomeDir({ worktreeDir: cwd });
   const dirs = { worktreeDir: cwd, homeDir: homeDir.path };
   const results: CheckCommandResult[] = [];
   let released = true;

@@ -35,6 +35,7 @@ import {
   CheckSlotsBusyError,
   checkEnv,
   checkEnvironmentError,
+  checkGitConfig,
   checkImageGate,
   checkImageProblems,
   chownToArgv,
@@ -407,6 +408,108 @@ describe("checkEnv", () => {
       if (before === undefined) delete process.env.WM_TOKEN;
       else process.env.WM_TOKEN = before;
     }
+  });
+});
+
+/** `.gitconfig`の本文を実際のgitに読ませ、`config --list`の出力を返す。 */
+function listGitConfig(body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "check-gitconfig-"));
+  try {
+    const file = join(dir, ".gitconfig");
+    writeFileSync(file, body);
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+    );
+    const result = Bun.spawnSync(["git", "config", "--file", file, "--list"], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return result.exitCode === 0
+      ? result.stdout.toString()
+      : `git failed: ${result.stderr.toString()}`;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("checkGitConfig", () => {
+  test("trusts only the worktree", () => {
+    expect(listGitConfig(checkGitConfig("/workspaces/a/b/c"))).toBe(
+      "safe.directory=/workspaces/a/b/c\n",
+    );
+  });
+
+  test("keeps a path with a closing bracket as one value", () => {
+    expect(listGitConfig(checkGitConfig("/w/a]b"))).toBe(
+      "safe.directory=/w/a]b\n",
+    );
+  });
+
+  test("keeps a path with a quote as one value", () => {
+    expect(listGitConfig(checkGitConfig('/w/a"b'))).toBe(
+      'safe.directory=/w/a"b\n',
+    );
+  });
+
+  test("keeps a path with a backslash as one value", () => {
+    expect(listGitConfig(checkGitConfig("/w/a\\b"))).toBe(
+      "safe.directory=/w/a\\b\n",
+    );
+  });
+
+  test("keeps a path with a comment mark as one value", () => {
+    expect(listGitConfig(checkGitConfig("/w/a#b;c"))).toBe(
+      "safe.directory=/w/a#b;c\n",
+    );
+  });
+
+  test("keeps a path with a section header look-alike as one value", () => {
+    expect(listGitConfig(checkGitConfig("/w/[core] x"))).toBe(
+      "safe.directory=/w/[core] x\n",
+    );
+  });
+
+  test("refuses a path with a newline", () => {
+    expect(() => checkGitConfig('/w/a\n[core]\n\tfsmonitor = "x"')).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
+  });
+
+  test("refuses a path with a carriage return", () => {
+    expect(() => checkGitConfig("/w/a\r[core]")).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
+  });
+
+  test("refuses a path with a NUL", () => {
+    expect(() => checkGitConfig("/w/a\0b")).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
+  });
+
+  test("refuses a path that starts with a dash", () => {
+    expect(() => checkGitConfig("-c core.x=y")).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
+  });
+
+  test("refuses a relative path", () => {
+    expect(() => checkGitConfig("w/a")).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
+  });
+
+  test("refuses a wildcard, which would trust every directory", () => {
+    expect(() => checkGitConfig("*")).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
+  });
+
+  test("refuses a path that ends with a wildcard, which would trust the directories under it", () => {
+    expect(() => checkGitConfig("/workspaces/*")).toThrow(
+      "check sandbox: refusing a worktree path",
+    );
   });
 });
 
