@@ -730,6 +730,14 @@ function failureRowOf(row: unknown): FailureRow | null {
   };
 }
 
+/** 実装前のスタブ。 */
+export function getJobRequest(
+  workspace: string,
+  id: string,
+): { workspace: string; id: string; noLogs?: boolean } {
+  return { workspace, id };
+}
+
 function sdkPorts(): JobsPorts {
   const workspace = wmillDefault.getWorkspace();
   return {

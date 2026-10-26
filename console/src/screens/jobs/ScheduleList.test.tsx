@@ -254,6 +254,10 @@ describe("ScheduleList notes", () => {
 });
 
 describe("ScheduleList pause and runs", () => {
+  test("names a run that did not succeed as failed or canceled, since the two cannot be told apart", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain("失敗・取消");
+  });
+
   const run = (n: number) => ({
     job_id: `0190a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
     success: true,

@@ -507,11 +507,10 @@ export function configQueryOptions() {
  * ログと結果の取得中は取り直さない。Console用workerの枠が1つなので、2つの詳細の取得を重ねないためである。
  */
 export function shouldPollJobStatus(
-  output: JobDetailView | undefined,
-  outputFetching: boolean,
+  _latest: JobSummaryView | null,
+  _outputFetching: boolean,
 ): boolean {
-  if (outputFetching || output === undefined || !output.found) return false;
-  return isActiveJobState(output.job.state);
+  return false;
 }
 
 /** 履歴の2ページ目以降のキャッシュのキーか。先頭のページは`before`が空である。 */
@@ -661,4 +660,29 @@ export function jobsHoldsQueryOptions() {
     refetchOnWindowFocus: false as const,
     refetchOnReconnect: false as const,
   };
+}
+
+/** 表示する詳細のステップ。ログと結果の取得と状態の取得のうち、新しい方のステップにする。 */
+export function currentSteps(
+  _output: DetailSnapshot,
+  _status: DetailSnapshot,
+): readonly StepViewData[] {
+  return [];
+}
+
+/** ログと結果の取り直しを、このidでこれから始めるか。同じidでは1回しか始めない。 */
+export function shouldStartOutputRefetch(
+  _finished: boolean,
+  _doneFor: string | null,
+  _id: string,
+): boolean {
+  return false;
+}
+
+/** 詳細の取得の失敗から、取り直す取得を、実行する順に返す。2つを同時に走らせない。 */
+export function failedDetailReads(
+  _outputFailed: boolean,
+  _statusFailed: boolean,
+): readonly ("output" | "status")[] {
+  return [];
 }

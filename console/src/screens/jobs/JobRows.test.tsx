@@ -63,7 +63,7 @@ describe("JobStateBadge", () => {
     ["failure", "失敗"],
     ["running", "実行中"],
     ["queued", "待ち"],
-    ["canceled", "取消"],
+    ["canceled", "取消・時間切れ"],
   ])("says %s in words", (state, word) => {
     expect(render(<JobStateBadge state={state} />)).toContain(word);
   });

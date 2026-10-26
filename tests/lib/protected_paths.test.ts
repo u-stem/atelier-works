@@ -588,6 +588,14 @@ describe("hold files", () => {
     "migrations/datatable/main/20261023131355_holds.down.sql",
   ];
 
+  // 描画の部品は、2bと2cで必ず直す。契約テストが全体を走査するので、保護の上乗せは小さい。
+  test.each([
+    "console/src/screens/jobs/JobDetailParts.tsx",
+    "console/src/screens/system/ConfigSection.tsx",
+  ])("FORBIDDEN_EXACT_PATHS does not list the rendering part %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
+  });
+
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
     expect(FORBIDDEN_EXACT_PATHS).toContain(path);
   });
@@ -1486,8 +1494,9 @@ describe("console job viewing files", () => {
     "tests/scripts/console_worker_boundary.test.ts",
     "tests/scripts/console_script_tags.test.ts",
     "tests/scripts/worker_boundary_scan.ts",
-    "console/src/screens/jobs/JobDetailParts.tsx",
-    "console/src/screens/system/ConfigSection.tsx",
+    "console/src/lib/safeText.ts",
+    "console/src/lib/safeText.test.ts",
+    "console/src/screens/jobs/safeTextCoverage.test.tsx",
     "migrations/datatable/main/20261026140000_console_actions.up.sql",
     "migrations/datatable/main/20261026140000_console_actions.down.sql",
   ];

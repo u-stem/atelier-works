@@ -652,6 +652,64 @@ describe("JobDetailParts hidden characters", () => {
   });
 });
 
+describe("JobDetailParts causes that may not be saved yet", () => {
+  const empty = { ok: true, items: [] } as const;
+
+  test("says the causes may not be saved yet, with the detection interval", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={empty}
+          now={NOW}
+          back={undefined}
+          maybePending
+        />,
+      ),
+    ).toContain("まだ保存されていない場合があります(検知は5分ごとです)");
+  });
+
+  test("does not claim there is no cause while they may not be saved", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={empty}
+          now={NOW}
+          back={undefined}
+          maybePending
+        />,
+      ),
+    ).not.toContain("保存された失敗の原因はありません");
+  });
+
+  test("says there is no cause when the detection had its chance", () => {
+    expect(
+      render(<FailureCauses failures={empty} now={NOW} back={undefined} />),
+    ).toContain("保存された失敗の原因はありません");
+  });
+
+  test("says the causes were not read when both apply, since that comes first", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={empty}
+          now={NOW}
+          back={undefined}
+          unread
+          maybePending
+        />,
+      ),
+    ).toContain("まだ読んでいません");
+  });
+});
+
+describe("JobDetailParts hidden characters in the type of an argument", () => {
+  test("replaces them", () => {
+    expect(
+      render(<ArgList args={[{ key: "body", type: "a\u202Eb" }]} />),
+    ).not.toContain("\u202E");
+  });
+});
+
 describe("JobDetailParts sections that were not read yet", () => {
   test("says the saved causes were not read, not that there are none", () => {
     expect(

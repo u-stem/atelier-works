@@ -6,7 +6,9 @@ import type {
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
 import {
+  CAUSE_DETECTION_INTERVAL_MIN,
   CONFIG_REFERENCE_LABEL,
+  causesPending,
   describeArg,
   describeConfigValue,
   describeSchedule,
@@ -20,6 +22,7 @@ import {
   jobScriptName,
   jobStateInfo,
   jobsBackState,
+  logScrollTop,
   outputNotes,
   parseHistoryScript,
   parseHistoryStatus,
@@ -27,7 +30,6 @@ import {
   pausedLabel,
   REDACTION_LIMIT_NOTE,
   relatedWorkItemId,
-  safeText,
   stepIterationsLabel,
   upcomingLabel,
   withHistoryScript,
@@ -44,7 +46,7 @@ describe("jobStateInfo", () => {
     ["running", "実行中"],
     ["queued", "待ち"],
     ["scheduled", "予定"],
-    ["canceled", "取消"],
+    ["canceled", "取消・時間切れ"],
     ["skipped", "スキップ"],
     ["waiting", "待機中"],
   ])("names %s in Japanese", (state, label) => {
@@ -57,6 +59,10 @@ describe("jobStateInfo", () => {
 
   test("treats a waiting step like a queued job", () => {
     expect(jobStateInfo("waiting").kind).toBe("queued");
+  });
+
+  test("replaces hidden characters in the raw value of a state it does not know", () => {
+    expect(jobStateInfo("a\u202Eb").label).toBe("不明(a\uFFFDb)");
   });
 
   test("shows the raw value of a state it does not know", () => {
@@ -552,7 +558,7 @@ describe("describeSchedule", () => {
     expect(describeSchedule(SCHEDULE, new Set()).recentRuns[0]).toEqual({
       jobId: ID,
       success: false,
-      label: "失敗",
+      label: "失敗・取消",
       durationLabel: "2秒",
     });
   });
@@ -767,16 +773,39 @@ describe("isFinishedJobState", () => {
   );
 });
 
-describe("safeText", () => {
-  test("replaces a character that reorders the text", () => {
-    expect(safeText("a\u202Eb")).toBe("a\uFFFDb");
+describe("causesPending", () => {
+  const at = (minutesAgo: number) =>
+    new Date(NOW - minutesAgo * 60_000).toISOString();
+
+  test("names the detection interval as five minutes", () => {
+    expect(CAUSE_DETECTION_INTERVAL_MIN).toBe(5);
   });
 
-  test("replaces the escape of an ANSI sequence", () => {
-    expect(safeText("\u001b[31mred")).toBe("\uFFFD[31mred");
+  test.each([
+    ["just finished", 0, true],
+    ["finished a minute ago", 1, true],
+    ["finished just under the interval ago", 4.9, true],
+    ["finished at the interval", 5, false],
+    ["finished long ago", 60, false],
+  ])("is %s", (_name, minutesAgo, expected) => {
+    expect(causesPending(at(minutesAgo), NOW)).toBe(expected);
   });
 
-  test("keeps a plain string", () => {
-    expect(safeText("f/factory/self_update")).toBe("f/factory/self_update");
+  test("is false without a completion time", () => {
+    expect(causesPending(null, NOW)).toBe(false);
+  });
+
+  test("is false for a time it cannot read", () => {
+    expect(causesPending("not a time", NOW)).toBe(false);
+  });
+});
+
+describe("logScrollTop", () => {
+  test("is the distance to the end of a long log", () => {
+    expect(logScrollTop(1000, 400)).toBe(600);
+  });
+
+  test("is zero when the log fits in the frame", () => {
+    expect(logScrollTop(300, 400)).toBe(0);
   });
 });

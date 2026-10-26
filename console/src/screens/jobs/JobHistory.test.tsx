@@ -257,6 +257,12 @@ describe("JobHistory states", () => {
 });
 
 describe("JobHistory lead", () => {
+  test("leaves the timeout to the name of the status option", () => {
+    expect(render(data([page(1, 1)]))).not.toContain(
+      "時間切れで止められたジョブ",
+    );
+  });
+
   test("does not repeat that the list is not refreshed by itself", () => {
     expect(render(data([page(1, 1)]))).not.toContain("自動では更新しません");
   });

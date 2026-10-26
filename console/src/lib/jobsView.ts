@@ -418,3 +418,22 @@ export function pausedLabel(
 export function safeText(text: string): string {
   return displayableIssueText(text).text;
 }
+
+/** 失敗の原因を保存する検知の間隔(分)。スケジュールのジョブの原因は、この間隔で保存される。 */
+export const CAUSE_DETECTION_INTERVAL_MIN = 5;
+
+/** 終了から検知の間隔以内で、原因がまだ保存されていない場合があるか。 */
+export function causesPending(
+  _completedAt: string | null,
+  _nowMs: number,
+): boolean {
+  return false;
+}
+
+/** ログの枠を末尾までスクロールしたときの`scrollTop`。 */
+export function logScrollTop(
+  _scrollHeight: number,
+  _clientHeight: number,
+): number {
+  return -1;
+}

@@ -33,12 +33,28 @@ function summary(state: string): JobSummaryView {
   };
 }
 
-function detail(state: string): JobDetailView {
+type DetailOptions = {
+  readonly steps?: readonly string[];
+  readonly completedAt?: string;
+  readonly scriptPath?: string;
+};
+
+function detail(state: string, options: DetailOptions = {}): JobDetailView {
+  const base = summary(state);
   return {
     found: true,
-    job: summary(state),
+    job: {
+      ...base,
+      completed_at: options.completedAt ?? base.completed_at,
+      script_path: options.scriptPath ?? base.script_path,
+    },
     args: [{ key: "work_item_id", type: "number", value: 7 }],
-    steps: [],
+    steps: (options.steps ?? []).map((id) => ({
+      id,
+      state: "success",
+      job_id: null,
+      iterations: null,
+    })),
     log: { text: "log line", truncated: false, masked: false, nonJsonLines: 0 },
     result: null,
     result_error: null,
@@ -157,7 +173,9 @@ describe("JobDetailScreen from the cache", () => {
 
   test("offers one button for the log, which is the only way to reread it", () => {
     expect(
-      render(`/jobs/${ID}`, { output: detail("failure") }).match(/ログを更新/g),
+      render(`/jobs/${ID}`, { output: detail("failure") }).match(
+        /ログと原因を更新/g,
+      ),
     ).toHaveLength(1);
   });
 
@@ -182,8 +200,10 @@ describe("JobDetailScreen when the job finished after the output was read", () =
     );
   });
 
-  test("tells the state changed", () => {
-    expect(render(`/jobs/${ID}`, seed)).toContain("ジョブの状態が変わりました");
+  test("leaves the notice to the sections that were not read yet", () => {
+    expect(render(`/jobs/${ID}`, seed)).not.toContain(
+      "ジョブの状態が変わりました",
+    );
   });
 
   test("says the saved causes were not read yet, not that there are none", () => {
@@ -213,6 +233,68 @@ describe("JobDetailScreen when the job finished after the output was read", () =
         statusAt: Date.now() - 3000,
       }),
     ).not.toContain("まだ読んでいません");
+  });
+});
+
+describe("JobDetailScreen while a flow is running", () => {
+  const running = (steps: string[]) => detail("running", { steps });
+
+  test("shows the steps that the newer status read has, so progress is visible", () => {
+    expect(
+      render(`/jobs/${ID}`, {
+        output: running(["prepare"]),
+        outputAt: Date.now() - 20_000,
+        status: running(["prepare", "generate"]),
+        statusAt: Date.now() - 1000,
+      }),
+    ).toContain("generate");
+  });
+
+  test("shows the steps of the log read when it is newer", () => {
+    expect(
+      render(`/jobs/${ID}`, {
+        output: running(["prepare", "generate"]),
+        outputAt: Date.now() - 1000,
+        status: running(["prepare"]),
+        statusAt: Date.now() - 20_000,
+      }),
+    ).toContain("generate");
+  });
+});
+
+describe("JobDetailScreen for a job that is waiting for its time", () => {
+  test("does not say the status refreshes every 15 seconds", () => {
+    expect(
+      render(`/jobs/${ID}`, { output: detail("scheduled") }),
+    ).not.toContain("15秒ごとに更新します");
+  });
+});
+
+describe("JobDetailScreen for a failure whose cause may not be saved yet", () => {
+  const soon = new Date(Date.now() - 60_000).toISOString();
+
+  test("says the cause may not be saved yet", () => {
+    expect(
+      render(`/jobs/${ID}`, {
+        output: detail("failure", { completedAt: soon }),
+      }),
+    ).toContain("まだ保存されていない場合があります");
+  });
+
+  test("says there is no cause once the detection had its chance", () => {
+    expect(render(`/jobs/${ID}`, { output: detail("failure") })).toContain(
+      "保存された失敗の原因はありません",
+    );
+  });
+});
+
+describe("JobDetailScreen hidden characters in the title", () => {
+  test("replaces them in the heading", () => {
+    expect(
+      render(`/jobs/${ID}`, {
+        output: detail("failure", { scriptPath: "f/factory/a\u202Eb" }),
+      }),
+    ).not.toContain("\u202E");
   });
 });
 
@@ -251,7 +333,7 @@ describe("JobDetailScreen while the status is being fetched", () => {
         status: detail("running"),
         statusFetching: true,
       }),
-    ).toMatch(/aria-disabled="true"[^>]*>ログを更新/);
+    ).toMatch(/aria-disabled="true"[^>]*>ログと原因を更新/);
   });
 
   test("leaves the log button alone when nothing is being fetched", () => {
@@ -260,6 +342,6 @@ describe("JobDetailScreen while the status is being fetched", () => {
         output: detail("running"),
         status: detail("running"),
       }),
-    ).not.toMatch(/aria-disabled="true"[^>]*>ログを更新/);
+    ).not.toMatch(/aria-disabled="true"[^>]*>ログと原因を更新/);
   });
 });

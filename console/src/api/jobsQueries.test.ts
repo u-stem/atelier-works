@@ -10,6 +10,8 @@ import {
   configQueryKey,
   configQueryOptions,
   currentJob,
+  currentSteps,
+  failedDetailReads,
   fetchActiveJobs,
   fetchConfig,
   fetchJobDetail,
@@ -37,6 +39,7 @@ import {
   seedJobStatus,
   shouldPollJobStatus,
   shouldRefetchOutputAfterFinish,
+  shouldStartOutputRefetch,
 } from "./jobsQueries.ts";
 import type { FetchLike } from "./windmill.ts";
 
@@ -530,31 +533,27 @@ describe("the query options", () => {
 });
 
 describe("shouldPollJobStatus", () => {
-  function detailIn(state: string): JobDetailView {
-    return DETAIL.found ? { ...DETAIL, job: { ...DETAIL.job, state } } : DETAIL;
+  function jobIn(state: string): JobSummaryView {
+    return { ...JOB, state };
   }
 
   test.each(["running", "queued"])("polls a %s job", (state) => {
-    expect(shouldPollJobStatus(detailIn(state), false)).toBe(true);
+    expect(shouldPollJobStatus(jobIn(state), false)).toBe(true);
   });
 
   test.each(["success", "failure", "canceled", "skipped", "scheduled"])(
-    "does not poll a %s job",
+    "does not poll a %s job, which a schedule may start hours later",
     (state) => {
-      expect(shouldPollJobStatus(detailIn(state), false)).toBe(false);
+      expect(shouldPollJobStatus(jobIn(state), false)).toBe(false);
     },
   );
 
-  test("does not poll a job that was not found", () => {
-    expect(shouldPollJobStatus({ found: false }, false)).toBe(false);
-  });
-
-  test("does not poll before the first fetch", () => {
-    expect(shouldPollJobStatus(undefined, false)).toBe(false);
+  test("does not poll a job that was not found or not fetched", () => {
+    expect(shouldPollJobStatus(null, false)).toBe(false);
   });
 
   test("does not poll while the log is being fetched, so two fetches never overlap", () => {
-    expect(shouldPollJobStatus(detailIn("running"), true)).toBe(false);
+    expect(shouldPollJobStatus(jobIn("running"), true)).toBe(false);
   });
 });
 
@@ -622,6 +621,24 @@ describe("currentJob", () => {
     ).toBe("running");
   });
 
+  test("does not go back from finished to running when an older status arrives late", () => {
+    expect(
+      currentJob(
+        { data: running("success"), updatedAt: 2000 },
+        { data: running("running"), updatedAt: 3000 },
+      )?.state,
+    ).toBe("success");
+  });
+
+  test("does not go back from failed to queued either", () => {
+    expect(
+      currentJob(
+        { data: running("failure"), updatedAt: 2000 },
+        { data: running("queued"), updatedAt: 3000 },
+      )?.state,
+    ).toBe("failure");
+  });
+
   test("is nothing when the log fetch did not find the job", () => {
     expect(
       currentJob(
@@ -639,6 +656,94 @@ describe("currentJob", () => {
       ),
     ).toBeNull();
   });
+});
+
+describe("currentSteps", () => {
+  const withSteps = (ids: string[]): JobDetailView =>
+    DETAIL.found
+      ? {
+          ...DETAIL,
+          steps: ids.map((id) => ({
+            id,
+            state: "success",
+            job_id: null,
+            iterations: null,
+          })),
+        }
+      : DETAIL;
+  const idsOf = (steps: readonly { id: string }[]) => steps.map((s) => s.id);
+
+  test("are the steps of the status fetch when it is newer, so a running flow shows its progress", () => {
+    expect(
+      idsOf(
+        currentSteps(
+          { data: withSteps(["a"]), updatedAt: 1000 },
+          { data: withSteps(["a", "b"]), updatedAt: 2000 },
+        ),
+      ),
+    ).toEqual(["a", "b"]);
+  });
+
+  test("are the steps of the log fetch when it is newer", () => {
+    expect(
+      idsOf(
+        currentSteps(
+          { data: withSteps(["a", "b", "c"]), updatedAt: 3000 },
+          { data: withSteps(["a", "b"]), updatedAt: 2000 },
+        ),
+      ),
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  test("are the steps of the log fetch when the status says the job was not found", () => {
+    expect(
+      idsOf(
+        currentSteps(
+          { data: withSteps(["a"]), updatedAt: 1000 },
+          { data: { found: false }, updatedAt: 2000 },
+        ),
+      ),
+    ).toEqual(["a"]);
+  });
+
+  test("are none before the first fetch", () => {
+    expect(
+      currentSteps(
+        { data: undefined, updatedAt: 0 },
+        { data: undefined, updatedAt: 0 },
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("shouldStartOutputRefetch", () => {
+  test.each([
+    ["a finished job that was not refetched yet", true, null, true],
+    ["a finished job that was refetched for another id", true, "other", true],
+    [
+      "a finished job that was already refetched, even if that failed",
+      true,
+      ID,
+      false,
+    ],
+    ["a job that has not finished", false, null, false],
+  ])("for %s", (_name, finished, doneFor, expected) => {
+    expect(shouldStartOutputRefetch(finished, doneFor, ID)).toBe(expected);
+  });
+});
+
+describe("failedDetailReads", () => {
+  test.each([
+    [false, false, []],
+    [true, false, ["output"]],
+    [false, true, ["status"]],
+    [true, true, ["output", "status"]],
+  ])(
+    "for output failed %p and status failed %p",
+    (output, status, expected) => {
+      expect(failedDetailReads(output, status)).toEqual(expected);
+    },
+  );
 });
 
 function runningDetail(state = "running"): JobDetailView {
@@ -782,6 +887,16 @@ describe("shouldRefetchOutputAfterFinish", () => {
     ).toBe(true);
   });
 
+  test("refetches once a scheduled job that a manual refresh found running is seen finished", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("scheduled"),
+        runningDetail("success"),
+        idle,
+      ),
+    ).toBe(true);
+  });
+
   test("refetches once a queued job is seen finished", () => {
     expect(
       shouldRefetchOutputAfterFinish(
@@ -888,6 +1003,35 @@ describe("the detail reads against a real QueryClient", () => {
       close();
       open(client)();
       await settle();
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("a status read subscribed after the seed does not fetch", async () => {
+    const { calls } = await withFakeFetch(async () => {
+      const client = new QueryClient();
+      seedJobStatus(client, ID, { data: DETAIL, updatedAt: Date.now() });
+      const observer = new QueryObserver(client, {
+        ...jobDetailQueryOptions(ID, { includeOutput: false }),
+        enabled: true,
+      });
+      const close = observer.subscribe(() => undefined);
+      await settle();
+      close();
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("a status read without the seed fetches once", async () => {
+    const { calls } = await withFakeFetch(async () => {
+      const client = new QueryClient();
+      const observer = new QueryObserver(client, {
+        ...jobDetailQueryOptions(ID, { includeOutput: false }),
+        enabled: true,
+      });
+      const close = observer.subscribe(() => undefined);
+      await settle();
+      close();
     });
     expect(calls).toBe(1);
   });

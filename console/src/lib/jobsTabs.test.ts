@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   JOBS_TABS,
   type JobsTabId,
-  jobsFetchPlan,
   jobsPanelAttrs,
   jobsTabSpecs,
   parseJobsTab,
@@ -133,31 +132,5 @@ describe("jobsTabSpecs", () => {
         activeCountAtLeast: false,
       })[1]?.mark,
     ).toBeUndefined();
-  });
-});
-
-describe("jobsFetchPlan", () => {
-  test("fetches only the tab that was opened", () => {
-    expect(jobsFetchPlan(new Set<JobsTabId>(["history"]))).toEqual({
-      active: false,
-      history: true,
-      schedules: false,
-    });
-  });
-
-  test("fetches every tab that was opened once", () => {
-    expect(jobsFetchPlan(new Set<JobsTabId>(["active", "schedules"]))).toEqual({
-      active: true,
-      history: false,
-      schedules: true,
-    });
-  });
-
-  test("fetches nothing before a tab is opened", () => {
-    expect(jobsFetchPlan(new Set<JobsTabId>())).toEqual({
-      active: false,
-      history: false,
-      schedules: false,
-    });
   });
 });
