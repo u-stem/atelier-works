@@ -198,6 +198,10 @@ mise run test
 mise run console:check
 """
 
+[tasks."check:changed"]
+description = "Run the checks narrowed to the diff against origin/main (CI still runs the full suite)"
+run = "bun run scripts/check-changed.ts"
+
 [tasks."console:check"]
 description = "Check the console lockfile policy, then type-check, test, and build the console"
 run = """

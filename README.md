@@ -86,6 +86,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
 | `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
 | `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する |
+| `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ、`test:changed`は差分がMarkdownだけなら省き、`console:check`はConsoleと共有のlibに触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
