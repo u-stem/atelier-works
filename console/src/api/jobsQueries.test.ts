@@ -725,11 +725,13 @@ describe("jobsHoldsQueryOptions", () => {
 
 describe("seedJobStatus", () => {
   const statusKey = jobDetailQueryKey(ID, { includeOutput: false });
+  const statusData = (client: QueryClient): unknown =>
+    client.getQueryData(statusKey);
 
   test("fills the status read with the output read", () => {
     const client = new QueryClient();
     seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
-    expect(client.getQueryData(statusKey)).toEqual(runningDetail());
+    expect(statusData(client)).toEqual(runningDetail());
   });
 
   test("keeps the time of the output read", () => {
@@ -744,26 +746,26 @@ describe("seedJobStatus", () => {
       updatedAt: 3000,
     });
     seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
-    expect(client.getQueryData(statusKey)).toEqual(runningDetail("success"));
+    expect(statusData(client)).toEqual(runningDetail("success"));
   });
 
   test("overwrites an older status", () => {
     const client = new QueryClient();
     client.setQueryData(statusKey, runningDetail("queued"), { updatedAt: 500 });
     seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
-    expect(client.getQueryData(statusKey)).toEqual(runningDetail());
+    expect(statusData(client)).toEqual(runningDetail());
   });
 
   test("does not seed a job that was not found", () => {
     const client = new QueryClient();
     seedJobStatus(client, ID, { data: { found: false }, updatedAt: 1000 });
-    expect(client.getQueryData(statusKey)).toBeUndefined();
+    expect(statusData(client)).toBeUndefined();
   });
 
   test("does not seed before the output read", () => {
     const client = new QueryClient();
     seedJobStatus(client, ID, { data: undefined, updatedAt: 0 });
-    expect(client.getQueryData(statusKey)).toBeUndefined();
+    expect(statusData(client)).toBeUndefined();
   });
 });
 
