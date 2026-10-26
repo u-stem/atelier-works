@@ -1185,6 +1185,10 @@ describe("checkImageProblems", () => {
     });
   });
 
+  test("requires bunx, which the check commands of the repositories call", () => {
+    expect(REQUIRED_TOOL_PATHS).toContain("/usr/bin/bunx");
+  });
+
   test.each([...REQUIRED_TOOL_PATHS])("reports a missing %s", async (path) => {
     expect(
       (await checkImageProblems([20000], image({ missing: [path] }))).image,

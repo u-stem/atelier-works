@@ -5,6 +5,8 @@ import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   CHECK_COMMAND_PATH,
   type CreateCheckHomeDir,
+  firstUnrunnableCheckReason,
+  isCheckUnrunnable,
   runAllowedCheckCommands,
 } from "../../f/factory/lib/check_runner.ts";
 import {
@@ -737,5 +739,101 @@ describe("runAllowedCheckCommands with a sandbox", () => {
     expect(calls[0]?.options?.env).toEqual(
       checkEnv({ path: "/usr/bin", home: "/home-x", worktreeDir: "/work" }),
     );
+  });
+});
+
+describe("isCheckUnrunnable", () => {
+  const MISSING = "setpriv: failed to execute bunx: No such file or directory";
+  const base = {
+    command: "bunx --bun tsc --noEmit",
+    ok: false,
+    exitCode: 127,
+    output: MISSING,
+  };
+
+  test("is true when setpriv could not find a program searched in PATH", () => {
+    expect(isCheckUnrunnable(base)).toBe(true);
+  });
+
+  test("is true for exit 126", () => {
+    expect(isCheckUnrunnable({ ...base, exitCode: 126 })).toBe(true);
+  });
+
+  test("is false for a successful result", () => {
+    expect(isCheckUnrunnable({ ...base, ok: true, exitCode: 0 })).toBe(false);
+  });
+
+  test("is false for another exit code", () => {
+    expect(isCheckUnrunnable({ ...base, exitCode: 1 })).toBe(false);
+  });
+
+  test("is false without an exit code", () => {
+    expect(isCheckUnrunnable({ ...base, exitCode: undefined })).toBe(false);
+  });
+
+  test("is false when the setpriv line is not the first line of the output", () => {
+    expect(
+      isCheckUnrunnable({ ...base, output: `running tests\n${MISSING}` }),
+    ).toBe(false);
+  });
+
+  test("is false for the own failure of a program with exit 127", () => {
+    expect(
+      isCheckUnrunnable({ ...base, output: "sh: 1: foo: not found" }),
+    ).toBe(false);
+  });
+
+  test("is false for a program given by a relative path, which the code can delete or make non-executable", () => {
+    expect(
+      isCheckUnrunnable({
+        ...base,
+        command: "scripts/check.sh",
+        output:
+          "setpriv: failed to execute scripts/check.sh: Permission denied",
+      }),
+    ).toBe(false);
+  });
+
+  test("is false for a program given by an absolute path", () => {
+    expect(
+      isCheckUnrunnable({
+        ...base,
+        command: "/work/scripts/check.sh --fast",
+        output:
+          "setpriv: failed to execute /work/scripts/check.sh: No such file or directory",
+      }),
+    ).toBe(false);
+  });
+
+  test("looks only at the first word of the command", () => {
+    expect(
+      isCheckUnrunnable({ ...base, command: "bunx --bun ./local.ts" }),
+    ).toBe(true);
+  });
+});
+
+describe("firstUnrunnableCheckReason", () => {
+  const MISSING = "setpriv: failed to execute bunx: No such file or directory";
+
+  test("returns null when every check ran", () => {
+    expect(
+      firstUnrunnableCheckReason([
+        { command: "bun test", ok: true, exitCode: 0, output: "" },
+      ]),
+    ).toBeNull();
+  });
+
+  test("names the first command that could not run and the setpriv line", () => {
+    expect(
+      firstUnrunnableCheckReason([
+        { command: "bun test", ok: true, exitCode: 0, output: "" },
+        {
+          command: "bunx --bun tsc --noEmit",
+          ok: false,
+          exitCode: 127,
+          output: MISSING,
+        },
+      ]),
+    ).toBe(`check command could not run: bunx --bun tsc --noEmit: ${MISSING}`);
   });
 });

@@ -1359,6 +1359,35 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(h)).exit).toBe("checks_passed");
   });
 
+  test("starts a fix round when the setpriv line is not the first line of the output", async () => {
+    const output = `running tests\n${SETPRIV_MISSING.output}`;
+    const h = harness({
+      checks: [[{ ...SETPRIV_MISSING, output, outputTail: output }], [PASS]],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h)).exit).toBe("checks_passed");
+  });
+
+  test("starts a fix round when a program given by a relative path could not run", async () => {
+    const output =
+      "setpriv: failed to execute scripts/check.sh: Permission denied";
+    const h = harness({
+      checks: [
+        [
+          {
+            ...SETPRIV_NOT_EXECUTABLE,
+            command: "scripts/check.sh",
+            output,
+            outputTail: output,
+          },
+        ],
+        [PASS],
+      ],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h)).exit).toBe("checks_passed");
+  });
+
   test("starts a fix round when the setpriv message comes with another exit code", async () => {
     const h = harness({
       checks: [[{ ...SETPRIV_MISSING, exitCode: 1 }], [PASS]],
