@@ -532,3 +532,13 @@ export function sdkViolationsReachableFrom(
   }
   return found;
 }
+
+/** `process.env`の使い方。`keys`は名前で読んだキー、`problems`は禁じる形。 */
+export type EnvUses = {
+  readonly keys: readonly string[];
+  readonly problems: readonly string[];
+};
+
+export function envUses(_source: string): EnvUses {
+  return { keys: [], problems: [] };
+}

@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   codeOf,
   DISCORD_WEBHOOK_URL,
+  envUses,
   GITHUB_TOKEN,
   mentions,
   nonLiteralVariableReads,
@@ -102,7 +105,16 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
     "deployed_shaの読み取りの依存(deps.getVariable)。呼び出し側は定数DEPLOYED_SHA_VARIABLEだけを渡す",
   "f/factory/lib/freeze_apply.ts":
     "注入されたsdkの呼び出し(sdk.getVariable)。呼び出し側は定数FREEZE_VARIABLE_PATHだけを渡す。変数f/factory/freezesはsecretではない",
+  "f/factory/console_config.ts":
+    "getResourceValueの1回の呼び出し。引数をリテラルのf/factory/factory_configに固定することは、sdkFindingsが確かめる",
 };
+
+/**
+ * `process.env`を読んでよいファイルと、読んでよいキー。
+ * ジョブ、schedule、設定を読む3つのscriptと、importでたどれるファイルは、ここに無いキーを読まない。
+ * 環境全体の列挙、添字の読み取り、`process`の別名は、表に関わらず禁じる。
+ */
+const ENV_ALLOWED: Readonly<Record<string, readonly string[]>> = {};
 
 async function consoleScripts(): Promise<string[]> {
   const paths: string[] = [];
@@ -236,6 +248,30 @@ describe("the variable read scan", () => {
   test("flags a destructuring of getVariable", () => {
     expect(
       nonLiteralVariableReads("const { getVariable } = wmill; getVariable(p);"),
+    ).not.toEqual([]);
+  });
+
+  test("flags getVariableValue on a service", () => {
+    expect(
+      nonLiteralVariableReads(
+        "await sdk.VariableService.getVariableValue({path:p});",
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags getResourceValueInterpolated", () => {
+    expect(
+      nonLiteralVariableReads(
+        "await sdk.ResourceService.getResourceValueInterpolated({path:p});",
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags getResourceValue, so that every use is listed with a reason", () => {
+    expect(
+      nonLiteralVariableReads(
+        'await sdk.ResourceService.getResourceValue({path:"f/factory/factory_config"});',
+      ),
     ).not.toEqual([]);
   });
 
@@ -467,6 +503,163 @@ describe("the SDK use scan", () => {
       sdkFindings(`${JOB}const s = "wmill.VariableService.getVariable";`).used,
     ).toEqual([]);
   });
+
+  test("flags a namespace re-export of the client", () => {
+    expect(
+      sdkFindings('export * as sdk from "windmill-client@1.817.0";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a star re-export of the client", () => {
+    expect(
+      sdkFindings('export * from "windmill-client@1.817.0";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a named re-export of the client", () => {
+    expect(
+      sdkFindings('export { VariableService } from "windmill-client@1.817.0";')
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts one namespace import next to the allowed default import", () => {
+    expect(
+      sdkFindings(
+        'import wmillDefault, * as wmill from "windmill-client@1.817.0";',
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags a named import that reaches the client through a re-exporting file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sdk-reexport-"));
+    try {
+      writeFileSync(
+        join(dir, "entry.ts"),
+        'import { VariableService } from "./reexport.ts";\nVariableService.getVariable({});\n',
+      );
+      writeFileSync(
+        join(dir, "reexport.ts"),
+        'export * from "windmill-client@1.817.0";\n',
+      );
+      expect(
+        sdkViolationsReachableFrom(join(dir, "entry"), {
+          services: [],
+          members: [],
+        }),
+      ).not.toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("flags global.fetch", () => {
+    expect(sdkFindings('await global.fetch("x", {});').problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags a fetch name that is built from pieces on global", () => {
+    expect(
+      sdkFindings('await global["fe" + "tch"]("x", {});').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags self.fetch", () => {
+    expect(sdkFindings('await self.fetch("x", {});').problems).not.toEqual([]);
+  });
+
+  test("flags window.fetch", () => {
+    expect(sdkFindings('await window.fetch("x", {});').problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("does not flag a property that is named self", () => {
+    expect(sdkFindings("const a = job.self;").problems).toEqual([]);
+  });
+
+  test("flags a spread that overrides the resource path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ ...opts, workspace, path: "f/factory/factory_config" });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a spread after the resource path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ workspace, path: "f/factory/factory_config", ...opts });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a second path key that overrides the first", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ path: "f/factory/factory_config", workspace, path: other });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a key the call does not need", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ workspace, path: "f/factory/factory_config", extra: 1 });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+});
+
+describe("the process environment scan", () => {
+  test("lists a key that is read by name", () => {
+    expect(envUses("const u = process.env.WM_USERNAME;").keys).toEqual([
+      "WM_USERNAME",
+    ]);
+  });
+
+  test("accepts a key that is read by name", () => {
+    expect(envUses("const u = process.env.WM_USERNAME;").problems).toEqual([]);
+  });
+
+  test("flags the whole environment passed to a function", () => {
+    expect(envUses("Object.values(process.env);").problems).not.toEqual([]);
+  });
+
+  test("flags a bracket access", () => {
+    expect(envUses('const t = process.env["WM_TOKEN"];').problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags an alias of process", () => {
+    expect(envUses("const p = process; p.env.X;").problems).not.toEqual([]);
+  });
+
+  test("flags a destructuring of the environment", () => {
+    expect(envUses("const { WM_TOKEN } = process.env;").problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags Bun.env", () => {
+    expect(envUses("const x = Bun.env.WM_TOKEN;").problems).not.toEqual([]);
+  });
+
+  test("does not count a mention in a comment", () => {
+    expect(envUses("// process.env.X\nconst a = 1;")).toEqual({
+      keys: [],
+      problems: [],
+    });
+  });
+
+  test("does not count a mention in a string", () => {
+    expect(envUses('const s = "process.env.X";')).toEqual({
+      keys: [],
+      problems: [],
+    });
+  });
 });
 
 describe("the comment handling", () => {
@@ -648,8 +841,51 @@ describe("the scripts restricted to an SDK allowance", () => {
     expect(codeOf(source)).not.toContain("getResourceValueInterpolated");
   });
 
-  test("the config script has no variable or resource read the scan cannot explain", () => {
+  test("the only read of the config script that the name scan cannot explain is its fixed getResourceValue", () => {
     const source = readFileSync("f/factory/console_config.ts", "utf8");
-    expect(nonLiteralVariableReads(source)).toEqual([]);
+    expect(nonLiteralVariableReads(source)).toEqual(["1 unexplained"]);
   });
+
+  test.each(RESTRICTED)(
+    "%s reads no process environment but the listed keys",
+    (path) => {
+      const offenders: string[] = [];
+      for (const [file, source] of sourcesReachableFrom(path)) {
+        const found = envUses(source);
+        const allowed = ENV_ALLOWED[relative(file)] ?? [];
+        for (const problem of found.problems) {
+          offenders.push(`${relative(file)}: ${problem}`);
+        }
+        for (const key of found.keys) {
+          if (!allowed.includes(key))
+            offenders.push(`${relative(file)}: ${key}`);
+        }
+      }
+      expect(offenders).toEqual([]);
+    },
+  );
+
+  test.each(RESTRICTED)(
+    "%s reaches no SQL that writes or changes the schema",
+    (path) => {
+      // 大文字のSQLの語は単独で、小文字でも書ける形は語の組で数える。文章中の英単語を数えないため。
+      const upper =
+        /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
+      const phrases =
+        /\b(?:insert\s+into|delete\s+from|drop\s+(?:table|index|view|schema)|alter\s+table|create\s+(?:table|index|view|schema|function)|update\s+[\w."]+\s+set)\b/i;
+      const writes = {
+        test: (text: string) => upper.test(text) || phrases.test(text),
+      };
+      const offenders: string[] = [];
+      for (const [file, source] of sourcesReachableFrom(path)) {
+        const templates = [
+          ...codeOf(source).matchAll(/`((?:[^`\\]|\\.)*)`/g),
+        ].map((match) => match[1] ?? "");
+        for (const text of templates) {
+          if (writes.test(text)) offenders.push(relative(file));
+        }
+      }
+      expect([...new Set(offenders)]).toEqual([]);
+    },
+  );
 });
