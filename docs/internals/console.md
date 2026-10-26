@@ -419,9 +419,9 @@ backendの型との一致は、`tests/scripts/console_jobs_contract.test.ts`が�
 | script | 入力 | 戻り |
 | --- | --- | --- |
 | `console_jobs`の`active` | なし | 実行中、待ち、予定のジョブ。フローのステップは含めず、この順に並べる |
-| `console_jobs`の`history` | `status`、`script_path`、`before`、`include_console`、`limit` | 完了したルートのジョブを、新しい順に1ページ(50件まで)。次のページの`before`を`next_before`で返す |
-| `console_jobs`の`detail` | `job_id`、`include_output` | ジョブ1件。許可した項目、引数、フローのステップの一覧、ログ、結果、失敗の保存済みの原因 |
-| `console_schedules` | なし | `f/factory/`のscheduleの状態。有効/無効、cron、次回の予定、直近5件の実行、リポジトリの定義との差異 |
+| `console_jobs`の`history` | `status`、`script_path`、`before`、`include_console`、`limit` | 完了したルートのジョブを、新しい順に1ページ(50件まで)。次のページのカーソルを`next_before`で返す。累積が200件に達したら、カーソルは`null`になる |
+| `console_jobs`の`detail` | `job_id`、`include_output` | ジョブ1件。許可した項目、引数、フローのステップの一覧、ログ、結果、結果を読めなかった理由、失敗の保存済みの原因 |
+| `console_schedules` | なし | `f/factory/`のscheduleの状態。有効/無効、cron、次回の予定、直近5件の実行、リポジトリの定義との差異。全ページを読む(最大10ページ) |
 | `console_config` | なし | `factory_config`の全項目。参照を含む値は、値の代わりに参照の印 |
 
 一覧は、既定でtag`console`のジョブ(Consoleの呼び出し自身)を除く。
@@ -430,14 +430,20 @@ Windmillの一覧のAPIが、tagの否定(`!console`)を受けるためである
 外れた値は、取得せずに`filter_rejected`で返す。
 定数は`scripts/gen-console-known-paths.ts`で作り直す。
 リポジトリの定義との一致は、`tests/scripts/console_known_paths.test.ts`が確かめる。
+履歴のカーソルは、`<時刻>|<これまでに返した件数>`の形である。
+形の違うカーソルは、先頭のページとして扱う。
+件数が200に達したら、scriptは取得せずに空の一覧を返す。最後のページは、残りの件数に絞って取る。
 履歴のAPIは、`created_before`を含む境界で返すので、前のページの最後のジョブが再び返る。
 scriptは、境界の時刻と同じジョブを落とす。
+200件で止まる契約は、`tests/scripts/console_jobs.test.ts`が確かめる。
 
 詳細は、ジョブの取得、パスと種類の確認、ログと結果の取得の順に呼ぶ。
 確認を通らないジョブは`{ found: false }`で返す。
 存在しないid、UUIDの形でないid、`f/factory/`の外のジョブ、プレビューなど許可していない種類のジョブが当たる。
 フローのルートのログは短く、ステップの出力は子のジョブにある。
 そのため、ステップの一覧に子のジョブのidを添え、画面は子の詳細へ移る。
+詳細の親のジョブは、`f/factory/`の許可した種類のジョブと確かめられたものだけを返す。
+結果の取得が404のときは結果なしとし、ほかの失敗は読めなかった理由(`result_error`)で返す。ログと失敗の原因は、結果の失敗に関わらず返す。
 失敗したジョブと取り消したジョブには、失敗の検知が保存した原因(`job_failures`)も添える。
 保存済みの原因は伏せてあるが、返すときにもう一度伏せる。
 読めなかったときは、原因の欄だけが失敗を示し、詳細の全体は返る。
@@ -458,6 +464,7 @@ Console用のworkerの枠は1つなので、読み取りの重さは承認など
 | 履歴の最大の実ログ | 8KB(直近の8000件のジョブ。`self_update`) |
 | その取得と伏せ字 | 取得が約3ミリ秒、伏せ字が約2ミリ秒 |
 | 256KBに切る入力(600KBの合成ログ)の伏せ字 | 約15ミリ秒 |
+| 敵対的な入力(250KB)の伏せ字 | 最大で約50ミリ秒(ローカルのbunで、JWTの先頭を繰り返す入力)。上限は1秒未満で、テストが固定する |
 | 3000件の配列を持つ結果の伏せ字 | 約13ミリ秒 |
 | Console用workerの常駐メモリ | 60MB(上限は1024M) |
 | 新しいscriptを流している間の`summary`と`console_holds`の待ち | 単独より約140〜180ミリ秒長い(最大で約265ミリ秒) |
