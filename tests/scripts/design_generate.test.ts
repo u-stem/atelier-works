@@ -16,8 +16,6 @@ import {
   type DesignClaudeResult,
   type DesignGenerateDeps,
   type DesignGenerateFs,
-  type DirectoryEntryIo,
-  hashDirectoryTree,
   runDesignGenerate,
 } from "../../f/factory/steps/design_generate.ts";
 
@@ -1412,95 +1410,5 @@ describe("runDesignGenerate when the requirements have a gap", () => {
     const h = gapHarness({ recordPipeline: async () => false });
     await runDesignGenerate(h.deps, INPUT);
     expect(h.rollbacks).toEqual([]);
-  });
-});
-
-describe("hashDirectoryTree", () => {
-  function io(files: Record<string, string>): DirectoryEntryIo {
-    return {
-      readDir: async (dir) => {
-        const prefix = `${dir}/`;
-        const names = new Map<string, boolean>();
-        for (const path of Object.keys(files)) {
-          if (!path.startsWith(prefix)) continue;
-          const rest = path.slice(prefix.length);
-          const [first] = rest.split("/");
-          if (first === undefined) continue;
-          names.set(first, rest.includes("/"));
-        }
-        if (names.size === 0) throw new Error("ENOENT");
-        return [...names].map(([name, isDirectory]) => ({ name, isDirectory }));
-      },
-      readFile: async (path) => {
-        const content = files[path];
-        if (content === undefined) throw new Error("ENOENT");
-        return new TextEncoder().encode(content);
-      },
-    };
-  }
-
-  const BASE = { "/d/a.md": "A", "/d/b.drawio": "B", "/d/sub/c.txt": "C" };
-
-  test("returns the same hash for the same tree", async () => {
-    expect(await hashDirectoryTree("/d", io(BASE))).toBe(
-      await hashDirectoryTree("/d", io({ ...BASE })),
-    );
-  });
-
-  test("does not depend on the order of the files", async () => {
-    const reversed = {
-      "/d/sub/c.txt": "C",
-      "/d/b.drawio": "B",
-      "/d/a.md": "A",
-    };
-    expect(await hashDirectoryTree("/d", io(reversed))).toBe(
-      await hashDirectoryTree("/d", io(BASE)),
-    );
-  });
-
-  test("changes when a file changes", async () => {
-    expect(
-      await hashDirectoryTree("/d", io({ ...BASE, "/d/a.md": "A2" })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
-  });
-
-  test("changes when a file is added", async () => {
-    expect(
-      await hashDirectoryTree("/d", io({ ...BASE, "/d/new": "N" })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
-  });
-
-  test("changes when a file is removed", async () => {
-    const { "/d/b.drawio": _removed, ...rest } = BASE;
-    expect(await hashDirectoryTree("/d", io(rest))).not.toBe(
-      await hashDirectoryTree("/d", io(BASE)),
-    );
-  });
-
-  test("changes when a file is renamed", async () => {
-    const { "/d/a.md": content, ...rest } = BASE;
-    expect(
-      await hashDirectoryTree("/d", io({ ...rest, "/d/z.md": content })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
-  });
-
-  test("changes when a file in a subdirectory changes", async () => {
-    expect(
-      await hashDirectoryTree("/d", io({ ...BASE, "/d/sub/c.txt": "C2" })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
-  });
-
-  test("does not confuse the end of a name with the start of the content", async () => {
-    expect(await hashDirectoryTree("/d", io({ "/d/ab": "c" }))).not.toBe(
-      await hashDirectoryTree("/d", io({ "/d/a": "bc" })),
-    );
-  });
-
-  test("returns null for a directory that does not exist", async () => {
-    expect(await hashDirectoryTree("/missing", io(BASE))).toBeNull();
-  });
-
-  test("returns a hex digest", async () => {
-    expect(await hashDirectoryTree("/d", io(BASE))).toMatch(/^[0-9a-f]{64}$/);
   });
 });

@@ -2,15 +2,7 @@
 // 手続きの流れは`design_generate.test.ts`が偽の依存で確かめる。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdir,
-  mkdtemp,
-  realpath,
-  rm,
-  symlink,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -25,11 +17,7 @@ import type {
   CommandResult,
   CommandRunner,
 } from "../../f/factory/lib/workspace.ts";
-import {
-  hashDirectoryTree,
-  lockedDesignRun,
-  realDirectoryIo,
-} from "../../f/factory/steps/design_generate.ts";
+import { lockedDesignRun } from "../../f/factory/steps/design_generate.ts";
 
 let base: string;
 
@@ -156,92 +144,5 @@ describe("lockedDesignRun", () => {
     await expect(run(["claude"])).rejects.toBeInstanceOf(
       WorktreeLockHeldInRunError,
     );
-  });
-});
-
-describe("realDirectoryIo with hashDirectoryTree", () => {
-  const hashOf = (dir: string) => hashDirectoryTree(dir, realDirectoryIo);
-
-  async function tree(): Promise<string> {
-    const dir = join(base, "tree");
-    await mkdir(join(dir, "sub"), { recursive: true });
-    await writeFile(join(dir, "a.md"), "A");
-    await writeFile(join(dir, "sub", "c.txt"), "C");
-    return dir;
-  }
-
-  test("returns a hex digest for an existing directory", async () => {
-    expect(await hashOf(await tree())).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  test("returns null when the root does not exist", async () => {
-    expect(await hashOf(join(base, "missing"))).toBeNull();
-  });
-
-  test("returns the same hash when nothing changed", async () => {
-    const dir = await tree();
-    const first = await hashOf(dir);
-    expect(await hashOf(dir)).toBe(first);
-  });
-
-  test("changes the hash when a regular file is added", async () => {
-    const dir = await tree();
-    const before = await hashOf(dir);
-    await writeFile(join(dir, "new.md"), "N");
-    expect(await hashOf(dir)).not.toBe(before);
-  });
-
-  test("changes the hash when the content of a file changes", async () => {
-    const dir = await tree();
-    const before = await hashOf(dir);
-    await writeFile(join(dir, "a.md"), "A2");
-    expect(await hashOf(dir)).not.toBe(before);
-  });
-
-  test("changes the hash when a symbolic link is added", async () => {
-    const dir = await tree();
-    const before = await hashOf(dir);
-    await symlink("a.md", join(dir, "link"));
-    expect(await hashOf(dir)).not.toBe(before);
-  });
-
-  test("changes the hash when a symbolic link is pointed at another target", async () => {
-    const dir = await tree();
-    await symlink("a.md", join(dir, "link"));
-    const before = await hashOf(dir);
-    await unlink(join(dir, "link"));
-    await symlink("sub/c.txt", join(dir, "link"));
-    expect(await hashOf(dir)).not.toBe(before);
-  });
-
-  test("changes the hash when a symbolic link to a directory is pointed at another directory", async () => {
-    const dir = await tree();
-    const outside = join(base, "outside");
-    const other = join(base, "other");
-    await mkdir(outside);
-    await mkdir(other);
-    await symlink(outside, join(dir, "dirlink"));
-    const before = await hashOf(dir);
-    await unlink(join(dir, "dirlink"));
-    await symlink(other, join(dir, "dirlink"));
-    expect(await hashOf(dir)).not.toBe(before);
-  });
-
-  test("does not follow a symbolic link to a directory", async () => {
-    const dir = await tree();
-    const outside = join(base, "outside");
-    await mkdir(outside);
-    await writeFile(join(outside, "x.txt"), "X");
-    await symlink(outside, join(dir, "dirlink"));
-    const before = await hashOf(dir);
-    await writeFile(join(outside, "x.txt"), "changed");
-    expect(await hashOf(dir)).toBe(before);
-  });
-
-  test("changes the hash when a special file is added", async () => {
-    const dir = await tree();
-    const before = await hashOf(dir);
-    Bun.spawnSync(["mkfifo", join(dir, "pipe")]);
-    expect(await hashOf(dir)).not.toBe(before);
   });
 });

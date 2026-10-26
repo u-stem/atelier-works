@@ -8,7 +8,7 @@
 // Claudeの実行の失敗と生成後の検証の失敗は、例外を投げて`on_error_flow`に任せる。
 
 import * as wmill from "windmill-client@1.817.0";
-import { lstat, mkdtemp, readdir, readFile, readlink } from "node:fs/promises";
+import { lstat, mkdtemp } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   buildSystemPrompt,
@@ -37,6 +37,11 @@ import {
   DESIGN_TEMPLATE_RELATIVE_PATH,
 } from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
+import {
+  hashDirectoryTree,
+  REQUIREMENTS_MODIFIED_REASON,
+  realDirectoryIo,
+} from "../lib/doc_tree_hash.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
@@ -117,10 +122,6 @@ const DESIGN_ALLOWED_TOOLS: readonly string[] = ["Write", "Edit"];
  */
 export const DESIGN_REVIEW_RETRY_NOTE =
   "前回書いたファイルがカレントディレクトリに残っているので、作り直さずにそれを編集して直してください。";
-
-/** 承認済みの要件定義のディレクトリが、設計の実行の間に書き換わったときの`needs_human`の理由。 */
-export const REQUIREMENTS_MODIFIED_REASON =
-  "approved requirements were modified during design";
 
 export type DesignGenerateInput = {
   readonly work_item_id: number;
@@ -764,90 +765,6 @@ async function relaunchRequirements(
     });
   }
 }
-
-// ---------------------------------------------------------------------------
-// 要件定義のディレクトリのハッシュ
-// ---------------------------------------------------------------------------
-
-/** `hashDirectoryTree`が使うディレクトリの読み取り。テストでは差し替える。 */
-export type DirectoryEntryIo = {
-  readonly readDir: (
-    dir: string,
-  ) => Promise<{ readonly name: string; readonly isDirectory: boolean }[]>;
-  readonly readFile: (path: string) => Promise<Uint8Array>;
-};
-
-function isMissingError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  return (
-    Reflect.get(err, "code") === "ENOENT" || err.message.includes("ENOENT")
-  );
-}
-
-/**
- * `dir`以下の内容(相対パスの一覧と、ファイルの中身)のSHA-256を16進で返す。ディレクトリが無ければ`null`を返す。
- * 名前の一覧は並べ替えて数え、名前と中身は長さを前置きして区切る。名前の終わりと中身の始まりが紛れないようにするため。
- * 実行の前後で比べ、承認済みの要件定義の書き換え(変更、追加、削除、改名)を検出する。
- */
-export async function hashDirectoryTree(
-  dir: string,
-  io: DirectoryEntryIo,
-): Promise<string | null> {
-  const hasher = new Bun.CryptoHasher("sha256");
-  const walk = async (
-    path: string,
-    prefix: string,
-    listed: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>,
-  ): Promise<void> => {
-    const entries = [...listed].sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    );
-    for (const entry of entries) {
-      const relative = `${prefix}${entry.name}`;
-      if (entry.isDirectory) {
-        hasher.update(`D${String(relative.length)}:${relative}\n`);
-        await walk(
-          `${path}/${entry.name}`,
-          `${relative}/`,
-          await io.readDir(`${path}/${entry.name}`),
-        );
-        continue;
-      }
-      const content = await io.readFile(`${path}/${entry.name}`);
-      hasher.update(
-        `F${String(relative.length)}:${relative}\n${String(content.length)}:`,
-      );
-      hasher.update(content);
-    }
-  };
-  // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外は、書き換えとして呼び出し側に伝える。
-  let root: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>;
-  try {
-    root = await io.readDir(dir);
-  } catch (err) {
-    if (isMissingError(err)) return null;
-    throw err;
-  }
-  await walk(dir, "", root);
-  return hasher.digest("hex");
-}
-
-/** 本番で`hashDirectoryTree`に渡す読み取り。シンボリックリンクはたどらず、リンク先の文字列を中身として扱う。 */
-export const realDirectoryIo: DirectoryEntryIo = {
-  readDir: async (dir) =>
-    (await readdir(dir, { withFileTypes: true })).map((entry) => ({
-      name: entry.name,
-      isDirectory: entry.isDirectory(),
-    })),
-  readFile: async (path) => {
-    const stat = await lstat(path);
-    if (stat.isSymbolicLink()) {
-      return new TextEncoder().encode(`symlink:${await readlink(path)}`);
-    }
-    if (!stat.isFile()) return new TextEncoder().encode("special");
-    return new Uint8Array(await readFile(path));
-  },
-};
 
 /**
  * 設計用のworktreeのロックを持ったままコマンドを起動するランナーを返す。
