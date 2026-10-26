@@ -48,7 +48,7 @@ const REASON_TEXT_MAX_CHARS = 200;
 
 /**
  * 理由に入れる文字列を整える。ANSIのエスケープシーケンスと制御文字(NULを含む)を取り除き、
- * `"; "`を置き換え、長さを切る。理由は`work_items.status_reason`に入り、PostgreSQLの`text`はNULを受け付けず、
+ * 秘密値をマスクし、`"; "`を置き換え、長さを切る。理由は`work_items.status_reason`に入り、PostgreSQLの`text`はNULを受け付けず、
  * 検査コマンドの出力はコードが決めるためである。
  */
 function reasonText(text: string): string {
@@ -72,8 +72,9 @@ function reasonText(text: string): string {
     if (code < 0x20 || code === 0x7f) continue;
     kept += char;
   }
+  // 制御文字で分けられた秘密値が、取り除いた後につながるので、取り除いた後にマスクする。切る前にマスクして、秘密値を途中で切って残さない。
   return escapeReasonSeparator(
-    [...kept].slice(0, REASON_TEXT_MAX_CHARS).join(""),
+    [...maskSecrets(kept)].slice(0, REASON_TEXT_MAX_CHARS).join(""),
   );
 }
 

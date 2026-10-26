@@ -199,6 +199,11 @@ export type PrFixVerifyDeps = {
   readonly reportCheckImageStale: (
     error: CheckEnvironmentError,
   ) => Promise<void>;
+  /**
+   * CIの失敗を直す回が、検査を実行できなかった理由を外へ出す前に、秘密値を検査する(`guardCiRoundReasons`)。
+   * 無ければ検査しない。
+   */
+  readonly scanText?: CiTextScanner;
 };
 
 export type PrFixVerifyInput = {
@@ -343,6 +348,20 @@ export async function runPrFixVerify(
     outcome: "guard_blocked",
   });
 
+  /** 実行ファイルを起動できなかった理由は検査コマンドの出力を含むので、CI回では外へ出す前に秘密値を検査する。 */
+  const guardedUnrunnable = async (
+    reason: string,
+    summary: string,
+    replies: FixReply[],
+  ): Promise<PrFixVerifyResult> => {
+    const scan = deps.scanText;
+    if (!ciRound || scan === undefined) {
+      return unrunnable(reason, summary, replies);
+    }
+    const [safe] = await guardCiRoundReasons([reason], scan);
+    return unrunnable(safe ?? reason, summary, replies);
+  };
+
   const firstChecks = await runChecks();
   if (firstChecks instanceof CheckEnvironmentError) {
     return unrunnable(
@@ -353,7 +372,7 @@ export async function runPrFixVerify(
   }
   const firstUnrunnable = firstUnrunnableCheckReason(firstChecks);
   if (firstUnrunnable !== null) {
-    return unrunnable(
+    return await guardedUnrunnable(
       firstUnrunnable,
       input.apply.summary,
       input.apply.replies,
@@ -445,7 +464,11 @@ export async function runPrFixVerify(
   }
   const secondUnrunnable = firstUnrunnableCheckReason(secondChecks);
   if (secondUnrunnable !== null) {
-    return unrunnable(secondUnrunnable, output.summary, output.replies);
+    return await guardedUnrunnable(
+      secondUnrunnable,
+      output.summary,
+      output.replies,
+    );
   }
   if (!secondChecks.every((result) => result.ok)) {
     return blocked(
@@ -610,7 +633,9 @@ export async function runConflictFixVerify(
   }
   const unrunnableReason = firstUnrunnableCheckReason(results);
   if (unrunnableReason !== null) {
-    return { ...blocked(unrunnableReason), outcome: "guard_blocked" };
+    // 理由は検査コマンドの出力を含むので、他の理由と同じく外へ出す前に秘密値を検査する。
+    const [safe] = await guardCiRoundReasons([unrunnableReason], deps.scanText);
+    return { ...blocked(safe ?? unrunnableReason), outcome: "guard_blocked" };
   }
   if (!results.every((result) => result.ok)) {
     deps.warn("repository checks failed in a conflict round", {
@@ -1080,6 +1105,7 @@ export async function main(
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
       reportCheckImageStale,
+      scanText: ciTextScanner(runCommand),
     },
     {
       worktreeGitPointer: worktree_git_pointer,
