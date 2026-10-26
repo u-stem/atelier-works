@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # migrationのmediumテスト。composeのPostgresのコンテナ内の使い捨ての
-# `factory_test`データベースに`migrations/datatable/main/*.up.sql`をすべて
+# `factory_test_<パスのハッシュ>`データベースに`migrations/datatable/main/*.up.sql`をすべて
 # 適用し、`factory`スキーマの各ビューからSELECTしてビューが成り立つことを
 # 確かめる。次に対応する`*.down.sql`を新しい順に適用し、戻せることを確かめる。
 # あわせて、最小の行を入れて`scripts/test-db-queries.ts`が、アプリのコードが組み立てるSQL文を実行する。
@@ -16,7 +16,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 COMPOSE_FILE="${REPO_ROOT}/infra/docker-compose.yml"
 MIGRATIONS_DIR="${REPO_ROOT}/migrations/datatable/main"
-SCRATCH_DB="factory_test"
+# 使い捨てのデータベースの名前は、作業ツリーのパスから決める。複数のworktreeが同時に流しても、
+# 互いのデータベースを消さないためである。
+SCRATCH_DB="factory_test_$(printf '%s' "${REPO_ROOT}" | cksum | cut -d' ' -f1)"
 
 log() { printf '[test-db] %s\n' "$*" >&2; }
 die() {
