@@ -361,6 +361,23 @@ describe("loadJobDetail response", () => {
     expect((await detailOf(queuedJob())).job.state).toBe("queued");
   });
 
+  test("reads a queue entry that has no type field as a waiting job", async () => {
+    const entry = queuedJob({ type: undefined, running: false });
+    expect((await detailOf(entry)).job.state).toBe("queued");
+  });
+
+  test("reads a queue entry that has no type field and is running as running", async () => {
+    const entry = queuedJob({ type: undefined, running: true });
+    expect((await detailOf(entry)).job.state).toBe("running");
+  });
+
+  test("does not read a record that is neither completed nor in the queue", async () => {
+    const entry = queuedJob({ type: undefined, running: undefined });
+    expect(
+      await loadJobDetail(ports({ job: entry }), ID, { includeOutput: true }),
+    ).toEqual({ found: false });
+  });
+
   test("maps a job scheduled for later", async () => {
     const job = queuedJob({ scheduled_for: "2026-10-26T07:00:00Z" });
     expect((await detailOf(job)).job.state).toBe("scheduled");
@@ -499,6 +516,17 @@ describe("loadActiveJobs", () => {
       includeConsole: false,
     });
     expect(list.jobs.map((job) => job.id)).toEqual(["soon", "late"]);
+  });
+
+  test("lists the entries of the queue, which carry no type field", async () => {
+    const queue = [
+      queuedJob({ id: "q1", type: undefined, running: false }),
+      queuedJob({ id: "q2", type: undefined, running: true }),
+    ];
+    const list = await loadActiveJobs(ports({ queue }), {
+      includeConsole: false,
+    });
+    expect(list.jobs.map((job) => job.id)).toEqual(["q2", "q1"]);
   });
 
   test("leaves out the steps of a flow", async () => {
