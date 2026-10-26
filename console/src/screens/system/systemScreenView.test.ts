@@ -17,7 +17,13 @@ const UNAUTHORIZED: FailureQuery = {
   error: new ApiFailure({ kind: "unauthorized" }),
 };
 
-const FINE = { status: OK, holds: OK, summary: OK, deployments: OK };
+const FINE = {
+  status: OK,
+  holds: OK,
+  summary: OK,
+  deployments: OK,
+  config: OK,
+};
 
 describe("systemFailedTabs", () => {
   test("is false everywhere when every fetch is fine", () => {
@@ -25,6 +31,7 @@ describe("systemFailedTabs", () => {
       status: false,
       failures: false,
       history: false,
+      config: false,
     });
   });
 
@@ -42,6 +49,7 @@ describe("systemFailedTabs", () => {
       status: false,
       failures: true,
       history: false,
+      config: false,
     });
   });
 
@@ -50,6 +58,7 @@ describe("systemFailedTabs", () => {
       status: false,
       failures: false,
       history: true,
+      config: false,
     });
   });
 
@@ -58,6 +67,7 @@ describe("systemFailedTabs", () => {
       status: true,
       failures: true,
       history: true,
+      config: false,
     });
   });
 
@@ -66,6 +76,7 @@ describe("systemFailedTabs", () => {
       status: false,
       failures: false,
       history: false,
+      config: false,
     });
   });
 
@@ -74,6 +85,27 @@ describe("systemFailedTabs", () => {
       systemFailedTabs({ ...FINE, summary: { ...NETWORK, isError: true } })
         .failures,
     ).toBe(true);
+  });
+});
+
+describe("systemFailedTabs for the config", () => {
+  test("blames the config fetch on the config tab only", () => {
+    expect(systemFailedTabs({ ...FINE, config: NETWORK })).toEqual({
+      status: false,
+      failures: false,
+      history: false,
+      config: true,
+    });
+  });
+
+  test("does not blame the status fetch on the config tab", () => {
+    expect(systemFailedTabs({ ...FINE, status: NETWORK }).config).toBe(false);
+  });
+
+  test("leaves a login failure of the config to the banner", () => {
+    expect(systemFailedTabs({ ...FINE, config: UNAUTHORIZED }).config).toBe(
+      false,
+    );
   });
 });
 

@@ -22,7 +22,7 @@ import {
   type StartDesignOutcome,
   startDesign,
 } from "../lib/design_launch_support.ts";
-import { notify, notifyBestEffort } from "../lib/discord.ts";
+import { type NotifyEvent, notify, notifyBestEffort } from "../lib/discord.ts";
 import {
   commentIssue,
   type GhClient,
@@ -43,7 +43,12 @@ import {
 } from "../lib/intake_refresh.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
-import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
+import {
+  type FactoryConfig,
+  type FailureRecord,
+  isNumber,
+  type WorkItem,
+} from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
@@ -380,8 +385,9 @@ async function notifyNeedsHumanBestEffort(
   config: Pick<FactoryConfig, "instance_name">,
   reason: string,
   flow: "implement" | "design",
+  send: StartDesignPorts["notifyBestEffort"] = notifyBestEffort,
 ): Promise<void> {
-  await notifyBestEffort(
+  await send(
     ctx.webhookUrl,
     {
       kind: "needs_human",
@@ -391,30 +397,62 @@ async function notifyNeedsHumanBestEffort(
       url: ctx.workItem.issue_url ?? "",
       reason: describeReason(reason),
       target: { kind: "issue", number: ctx.issueNumber },
-      next_action: nextActionFor(
-        reason,
-        flow === "implement" ? "implement" : undefined,
-      ),
+      next_action: nextActionFor(reason, flow),
     },
     ctx.log,
   );
 }
 
+/** `buildStartDesign`が使うDB・Windmill・Discordの呼び出し。テストでは差し替える。 */
+export type StartDesignPorts = {
+  readonly runFlowAsync: (
+    path: string,
+    args: Record<string, unknown>,
+  ) => Promise<string>;
+  readonly setFlowJobIdIfUnset: (id: number, jobId: string) => Promise<boolean>;
+  readonly updateStatusIfLeaseHolder: (
+    id: number,
+    expectedFrom: WorkItem["status"],
+    to: WorkItem["status"],
+    expectedFlowJobId: string | null,
+    note: string | null,
+  ) => Promise<boolean>;
+  readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
+  readonly notifyBestEffort: (
+    webhookUrl: string,
+    event: NotifyEvent,
+    log: Logger,
+  ) => Promise<unknown>;
+};
+
+const REAL_START_DESIGN_PORTS: StartDesignPorts = {
+  runFlowAsync: (path, args) => wmill.runFlowAsync(path, args),
+  setFlowJobIdIfUnset: (id, jobId) => setFlowJobIdIfUnset(id, jobId),
+  updateStatusIfLeaseHolder: (id, expectedFrom, to, expectedFlowJobId, note) =>
+    updateStatusIfLeaseHolder(id, expectedFrom, to, expectedFlowJobId, note),
+  recordFailure: (record) => recordFailure(record),
+  notifyBestEffort: (webhookUrl, event, log) =>
+    notifyBestEffort(webhookUrl, event, log),
+};
+
 /**
  * 設計フローを起動する手順の本番の依存を組み立てる(`startDesign`に渡す)。
- * 本番の配線(`buildApprovedBranchDeps`)はまだ渡さない。呼ぶだけでは、DB・GitHub・Windmillに触れない。
+ * 本番の配線(`buildApprovedBranchDeps`)はまだ渡さない。返した関数を呼ぶまでは、DB・GitHub・Windmillに触れない。
+ * 起動先は設計フロー、入力は作業項目の次の設計の試行で、起動か記録に失敗したら`needs_human`へ戻す(`startDesign`)。
+ * `ports`は呼び出しの入出力で、テストが差し替える。
  */
 export function buildStartDesign(
   config: Pick<FactoryConfig, "instance_name">,
   ctx: ApprovedBranchContext,
+  ports: StartDesignPorts = REAL_START_DESIGN_PORTS,
 ): () => Promise<StartDesignOutcome> {
   const { workItem, issueNumber, log } = ctx;
   const deps: DesignLaunchDeps = {
     launchFlow: () =>
-      wmill.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem)),
-    recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+      ports.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem)),
+    recordFlowJobId: (jobId) => ports.setFlowJobIdIfUnset(workItem.id, jobId),
     moveToNeedsHuman: (reason) =>
-      updateStatusIfLeaseHolder(
+      ports.updateStatusIfLeaseHolder(
         workItem.id,
         "designing",
         "needs_human",
@@ -422,7 +460,7 @@ export function buildStartDesign(
         reason,
       ),
     recordFailure: async (reason, step) => {
-      await recordFailure({
+      await ports.recordFailure({
         work_item_id: workItem.id,
         flow_path: DESIGN_FLOW_PATH,
         job_id: process.env.WM_JOB_ID ?? "unknown",
@@ -439,7 +477,13 @@ export function buildStartDesign(
       });
     },
     notifyNeedsHuman: (reason) =>
-      notifyNeedsHumanBestEffort(ctx, config, reason, "design"),
+      notifyNeedsHumanBestEffort(
+        ctx,
+        config,
+        reason,
+        "design",
+        ports.notifyBestEffort,
+      ),
     log: (message, fields) =>
       log.warn(message, { work_item_id: workItem.id, ...fields }),
   };

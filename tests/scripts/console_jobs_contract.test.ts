@@ -155,7 +155,6 @@ describe("what the typed calls send", () => {
           status: "failure",
           scriptPath: "f/factory/pipeline",
           before: "2026-10-26T05:00:00.000000Z",
-          includeConsole: true,
         },
         { fetchFn },
       ),

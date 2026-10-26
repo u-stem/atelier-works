@@ -35,6 +35,10 @@ const WAIT_FOR_UPDATE_STEP =
 const SELF_UPDATE_STEP =
   "反映が失敗していれば、Windmillでself_updateのジョブのログを確かめてください。";
 
+/** サイドバーの版は、取り込みの状態(`status.json`)を読めないと出ない。 */
+const SIDEBAR_WITHOUT_VERSION_STEP =
+  "サイドバーに版が出ないときは、取り込みの状態を読めていないので、反映が失敗していないかを先に確かめてください。";
+
 /** `queryFn`が投げた値から、分類した失敗を取り出す。分類されていなければ`null`。 */
 export function apiErrorOf(error: unknown): ApiError | null {
   return error instanceof ApiFailure ? error.apiError : null;
@@ -64,14 +68,15 @@ export function isViewMismatch(error: ApiError): boolean {
 
 /**
  * 版のずれの案内。反映は定期的に走るので、まず待つ。
- * 直らなければ、システムの画面で版を見比べ、反映が失敗していればログを見る。
+ * 直らなければ、システムの画面の「反映した版」と、サイドバーの下部の版を見比べ、反映が失敗していればログを見る。
+ * サイドバーはたたむと版が見えないので、開くよう添える。版が出ないときは、取り込みの状態を読めていない。
  * システムの画面も同じ`view`で取得するので、それが断られたときは案内先にならない。
  */
 function versionMismatchNextStep(text: string): string {
   const requested = REQUESTED_VIEW.exec(text)?.[1];
   return requested === SYSTEM_VIEW
     ? `${WAIT_FOR_UPDATE_STEP}直らないときは、Windmillでself_updateのジョブのログを確かめてください。`
-    : `${WAIT_FOR_UPDATE_STEP}直らないときは、システムの画面で「反映した版」と「Consoleの取り込み」の版を見比べ、${SELF_UPDATE_STEP}`;
+    : `${WAIT_FOR_UPDATE_STEP}直らないときは、システムの画面の「反映した版」と、サイドバーを開いて下部の版を見比べ、${SELF_UPDATE_STEP}${SIDEBAR_WITHOUT_VERSION_STEP}`;
 }
 
 /**

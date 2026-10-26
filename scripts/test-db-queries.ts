@@ -36,8 +36,10 @@ import {
   getNoticeById,
   getPrConflictCheckById,
   getPreviousMainCiRun,
+  getRequirementDraft,
   getWorkItem,
   hasDependabotItemForHead,
+  hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
   hasNewerMainCiRun,
@@ -115,6 +117,7 @@ import {
   revertIssueProposalToPending,
   saveDesignDraftIfLeaseHolder,
   saveDraft,
+  setAttemptIfLeaseHolder,
   setDesignAttemptIfLeaseHolder,
   setIssueProposalCreatedIssue,
   setPrCiFixHold,
@@ -8703,6 +8706,30 @@ check(
   designRequest > 0,
   designRequest,
 );
+// Consoleに設計の承認の画面が入るまで、Inboxとサマリーは設計の依頼を取得しない。取得しても一覧が落ちない。
+let designInboxRows: Awaited<ReturnType<typeof runConsoleQuery>> = [];
+const designInboxError = await errorOf(async () => {
+  designInboxRows = await runConsoleQuery("inbox", 500, 30, sql);
+});
+check(
+  "design stage: the inbox loads while a design request is pending",
+  designInboxError === null,
+  String(designInboxError),
+);
+check(
+  "design stage: the inbox does not list the design request",
+  !designInboxRows.some(
+    (row) =>
+      "approval_request_id" in row && row.approval_request_id === designRequest,
+  ),
+);
+const designSummary = await runConsoleSummary(500, sql);
+check(
+  "design stage: the summary does not list the design request",
+  !designSummary.approvals.some(
+    (row) => row.approval_request_id === designRequest,
+  ),
+);
 
 // 設計書の下書き: 承認済みの要件定義の下書きと同じ作業項目にだけ結べ、設計の試行は1以上で、
 // 同じ組を複数挿せて最新が引け、作業項目の削除で消える。リースを失った実行は挿せない。
@@ -8716,6 +8743,7 @@ async function requirementDraftFor(workItemId: number): Promise<number> {
       diagrams: [],
       open_questions: [],
       doc_dir: null,
+      doc_hash: null,
     },
     sql,
   );
@@ -8926,6 +8954,86 @@ check(
   "design drafts: a work item that awaits the design approval counts as approved or later",
   (await findApprovedWorkItemForIssue(OWNER, "r", 9314, sql))?.id ===
     ddDesigningForIssue,
+);
+
+// 要件定義のディレクトリのハッシュの基準値: 保存して読み戻せ、基準値なしでも保存できる。
+const dhHash = "e".repeat(64);
+const dhItem = await issueWorkItem(9321, 1, "designing", "qdb doc hash");
+const dhWithHash = await saveDraft(
+  {
+    work_item_id: dhItem,
+    attempt: 1,
+    summary: "qdb doc hash",
+    markdown: "qdb doc hash",
+    diagrams: [],
+    open_questions: [],
+    doc_dir: "/qdb/requirements/doc-hash",
+    doc_hash: dhHash,
+  },
+  sql,
+);
+check(
+  "doc hash: the baseline is stored and read back",
+  (await getRequirementDraft(dhWithHash, sql))?.doc_hash === dhHash,
+);
+const dhWithoutHash = await saveDraft(
+  {
+    work_item_id: dhItem,
+    attempt: 1,
+    summary: "qdb doc hash",
+    markdown: "qdb doc hash",
+    diagrams: [],
+    open_questions: [],
+    doc_dir: null,
+    doc_hash: null,
+  },
+  sql,
+);
+check(
+  "doc hash: a draft without a baseline is read back as null",
+  (await getRequirementDraft(dhWithoutHash, sql))?.doc_hash === null,
+);
+
+// attemptを進めるリース保持者の更新は、同じ文でdesign_attemptを0へ戻す。リースを失った実行は何も書かない。
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-e', design_attempt = 2 WHERE id = ${String(dhItem)}`,
+);
+check(
+  "attempt: a run that lost the lease writes neither attempt nor design_attempt",
+  !(await setAttemptIfLeaseHolder(dhItem, 5, "qdb-job-x", sql)) &&
+    (await getWorkItem(dhItem, sql))?.attempt === 1 &&
+    (await getWorkItem(dhItem, sql))?.design_attempt === 2,
+);
+check(
+  "attempt: the lease holder advances attempt and resets design_attempt together",
+  (await setAttemptIfLeaseHolder(dhItem, 5, "qdb-job-e", sql)) &&
+    (await getWorkItem(dhItem, sql))?.attempt === 5 &&
+    (await getWorkItem(dhItem, sql))?.design_attempt === 0,
+);
+
+// 同じdoc_dirの設計の下書きの有無。
+const dhDesignDir = "/qdb/requirements/design-doc-hash";
+check(
+  "design drafts by doc dir: none before a draft is saved",
+  !(await hasDesignDraftForDocDir(dhDesignDir, sql)),
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'designing', flow_job_id = 'qdb-job-e' WHERE id = ${String(dhItem)}`,
+);
+const dhDesign = await saveDesignDraftIfLeaseHolder(
+  { ...draftInput(dhItem, dhWithHash, 1), doc_dir: dhDesignDir },
+  "qdb-job-e",
+  sql,
+);
+check(
+  "design drafts by doc dir: a saved draft is found by its doc dir",
+  dhDesign !== null && (await hasDesignDraftForDocDir(dhDesignDir, sql)),
+);
+check(
+  "design drafts by doc dir: another doc dir is not found",
+  !(await hasDesignDraftForDocDir(`${dhDesignDir}-other`, sql)),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

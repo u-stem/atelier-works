@@ -87,6 +87,12 @@ describe("screen names of the real table", () => {
     ["items/:id/requirements", { id: "12" }, "作業項目 #12の要件定義"],
     ["reports", {}, "レポート"],
     ["reports/audit/:id", { id: "5" }, "作業項目 #5の監査レポート"],
+    ["jobs", {}, "ジョブ"],
+    [
+      "jobs/:id",
+      { id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b" },
+      "ジョブの詳細",
+    ],
     ["system", {}, "システム"],
   ] as const)("names %s", (path, params, expected) => {
     expect(nameAt(path, params)).toBe(expected);

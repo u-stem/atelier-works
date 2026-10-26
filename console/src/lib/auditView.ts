@@ -27,10 +27,3 @@ export function auditReportPath(workItemId: number): string {
 export function auditReportTitle(periodLabel: string): string {
   return `監査レポート ${periodLabel}`;
 }
-
-/** 一覧の見出しに添える、件数の文。 */
-export function auditIndexSubtitle(count: number): string {
-  return count === 0
-    ? "監査レポートはまだありません"
-    : `監査レポート ${String(count)}件`;
-}

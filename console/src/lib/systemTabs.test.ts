@@ -6,9 +6,6 @@ import type {
   BandTarget,
 } from "./summaryBand.ts";
 import {
-  FAILURES_COUNT_LABEL,
-  failuresTabCount,
-  failuresTabCountAtLeast,
   parseSystemTab,
   SYSTEM_TABS,
   type SystemTabId,
@@ -67,14 +64,20 @@ function withRow(rows: BandRow[], replacement: BandRow): BandRow[] {
   );
 }
 
-const NO_FAILED = { status: false, failures: false, history: false };
+const NO_FAILED = {
+  status: false,
+  failures: false,
+  history: false,
+  config: false,
+};
 
 describe("SYSTEM_TABS", () => {
-  test("lists the status first, then failures, then history", () => {
+  test("lists the status first, then failures, history and the config", () => {
     expect(SYSTEM_TABS.tabs.map((tab) => tab.id)).toEqual([
       "status",
       "failures",
       "history",
+      "config",
     ]);
   });
 
@@ -83,6 +86,7 @@ describe("SYSTEM_TABS", () => {
       "状態",
       "失敗と通知",
       "履歴と構成",
+      "設定",
     ]);
   });
 });
@@ -94,6 +98,10 @@ describe("parseSystemTab", () => {
 
   test("opens the history tab for its name", () => {
     expect(parseSystemTab("history")).toBe("history");
+  });
+
+  test("opens the config tab for its name", () => {
+    expect(parseSystemTab("config")).toBe("config");
   });
 
   test("opens the status tab without a name", () => {
@@ -166,46 +174,6 @@ describe("systemPanelAttrs", () => {
   });
 });
 
-describe("failuresTabCount", () => {
-  test("is the count of the failures chip", () => {
-    expect(
-      failuresTabCount(withRow(calmRows(), row("failures", "caution", 7))),
-    ).toBe(7);
-  });
-
-  test("is zero when there is no failure", () => {
-    expect(failuresTabCount(calmRows())).toBe(0);
-  });
-
-  test("is unknown when a part of the count is not known", () => {
-    expect(
-      failuresTabCount(withRow(calmRows(), row("failures", "none", null))),
-    ).toBeUndefined();
-  });
-
-  test("is unknown without the chip", () => {
-    expect(failuresTabCount([])).toBeUndefined();
-  });
-});
-
-describe("failuresTabCountAtLeast", () => {
-  test("follows the failures chip", () => {
-    expect(
-      failuresTabCountAtLeast(
-        withRow(calmRows(), row("failures", "none", 200, true)),
-      ),
-    ).toBe(true);
-  });
-
-  test("is false for an exact count", () => {
-    expect(failuresTabCountAtLeast(calmRows())).toBe(false);
-  });
-
-  test("is false without the chip", () => {
-    expect(failuresTabCountAtLeast([])).toBe(false);
-  });
-});
-
 describe("systemTabSpecs", () => {
   function marks(rows: BandRow[], selected: SystemTabId = "status") {
     return systemTabSpecs(selected, { rows, failed: NO_FAILED }).map(
@@ -219,43 +187,30 @@ describe("systemTabSpecs", () => {
     );
   }
 
-  test("lists the three tabs in order", () => {
+  test("lists the four tabs in order", () => {
     expect(
       systemTabSpecs("status", { rows: calmRows(), failed: NO_FAILED }).map(
         (tab) => tab.id,
       ),
-    ).toEqual(["status", "failures", "history"]);
+    ).toEqual(["status", "failures", "history", "config"]);
   });
 
-  test("shows the count on the failures tab only", () => {
+  test("shows no count on any tab, since the failures chip of the band has it", () => {
     expect(
       systemTabSpecs("status", {
         rows: withRow(calmRows(), row("failures", "caution", 2)),
         failed: NO_FAILED,
       }).map((tab) => tab.count),
-    ).toEqual([undefined, 2, undefined]);
+    ).toEqual([undefined, undefined, undefined, undefined]);
   });
 
-  test("reads the count as failures, not as the notices or what needs checking", () => {
-    expect(
-      systemTabSpecs("status", {
-        rows: withRow(calmRows(), row("failures", "caution", 2)),
-        failed: NO_FAILED,
-      }).map((tab) => tab.countLabel),
-    ).toEqual([undefined, FAILURES_COUNT_LABEL, undefined]);
-  });
-
-  test("names that meaning failures", () => {
-    expect(FAILURES_COUNT_LABEL).toBe("失敗");
-  });
-
-  test("passes a lower bound count on to the tab", () => {
+  test("does not read a count as a lower bound on any tab", () => {
     expect(
       systemTabSpecs("status", {
         rows: withRow(calmRows(), row("failures", "none", 200, true)),
         failed: NO_FAILED,
       }).map((tab) => tab.countAtLeast),
-    ).toEqual([false, true, false]);
+    ).toEqual([false, false, false, false]);
   });
 
   test("marks the failures tab for an open audit failure while another tab is open", () => {

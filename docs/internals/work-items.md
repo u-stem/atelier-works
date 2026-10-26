@@ -305,6 +305,11 @@ pipelineの各ステップは、`flow_job_id`が自分のルートジョブIDで
 同じ文で`design_attempt`を0に、`flow_job_id`を空にする。`attempt`は、続けて起動するpipelineが進める。
 手順と失敗時の扱いは[設計書の生成](design.md)の「要件の不足」に書く。
 
+`attempt`を進める更新(`setAttemptIfLeaseHolder`)も、同じ文で`design_attempt`を0に戻す。
+設計の試行は、要件定義の`attempt`ごとに数え直すためである。
+`attempt`を進める経路は、設計と実装の要件の不足、PR修正の差し戻し、要件定義の却下、再実行のどれもこの更新を通る。
+`design_attempt`は必須の列として読み、列が無い行を0とは扱わない。
+
 設計フローも、リースを持たない実行はClaudeの実行、保存、worktreeの削除をしない。
 `design_request_approval`は、承認依頼を記録する前に、リースと最新の下書きを確かめる。
 承認待ちへの比較交換が一致しなければ、記録した依頼を期限切れにする。

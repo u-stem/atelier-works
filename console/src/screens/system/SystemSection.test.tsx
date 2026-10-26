@@ -68,23 +68,12 @@ function renderWithTime(updatedAt: number | undefined): string {
 }
 
 describe("SystemSection time of the fetch", () => {
-  test("shows when the values were fetched, next to the heading", () => {
-    expect(renderWithTime(Date.now() - 3 * 3_600_000)).toMatch(
-      /<time[^>]*>取得 [23]時間前/,
-    );
+  test("leaves out the time that repeats the header", () => {
+    expect(renderWithTime(Date.now() - 3 * 3_600_000)).not.toContain("<time");
   });
 
-  test("shows nothing before the first fetch", () => {
-    expect(renderWithTime(0)).not.toContain("取得 ");
-  });
-
-  test("shows nothing when the query does not report a time", () => {
-    expect(renderWithTime(undefined)).not.toContain("取得 ");
-  });
-
-  test("puts the time before the body", () => {
-    const html = renderWithTime(Date.now() - 3 * 3_600_000);
-    expect(html.indexOf("取得 ")).toBeLessThan(html.indexOf("<p>値"));
+  test("leaves out the prefix of the time", () => {
+    expect(renderWithTime(Date.now() - 3 * 3_600_000)).not.toContain("取得 ");
   });
 });
 

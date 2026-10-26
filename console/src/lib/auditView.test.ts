@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  auditIndexSubtitle,
   auditProposalBreakdown,
   auditProposalTotal,
   auditReportPath,
@@ -44,15 +43,5 @@ describe("auditReportTitle", () => {
     expect(auditReportTitle("2026-09-28〜2026-10-04")).toBe(
       "監査レポート 2026-09-28〜2026-10-04",
     );
-  });
-});
-
-describe("auditIndexSubtitle", () => {
-  test("counts the reports", () => {
-    expect(auditIndexSubtitle(3)).toBe("監査レポート 3件");
-  });
-
-  test("says there is none when the list is empty", () => {
-    expect(auditIndexSubtitle(0)).toBe("監査レポートはまだありません");
   });
 });

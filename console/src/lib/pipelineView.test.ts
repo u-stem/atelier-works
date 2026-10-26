@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineRow } from "../api/guards/pipeline.ts";
 import {
-  actionableNote,
   clearPipelineFilter,
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
@@ -830,24 +829,6 @@ describe("scopeEmptyMessage", () => {
 
   test("says there is no work item waiting for a merge", () => {
     expect(scopeEmptyMessage("pr_open")).toBe("PR待ちの作業項目はありません");
-  });
-});
-
-describe("actionableNote", () => {
-  test("points to the inbox with the count", () => {
-    expect(actionableNote(3)).toBe(
-      "対応が必要なものは『要対応』にあります(3件)",
-    );
-  });
-
-  test("points to the inbox without a count while the count is unknown", () => {
-    expect(actionableNote(null)).toBe("対応が必要なものは『要対応』にあります");
-  });
-
-  test("keeps a count of zero", () => {
-    expect(actionableNote(0)).toBe(
-      "対応が必要なものは『要対応』にあります(0件)",
-    );
   });
 });
 

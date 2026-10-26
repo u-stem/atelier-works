@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { Glob } from "bun";
 import {
+  HISTORY_FILTER_PATHS,
   KNOWN_FLOW_PATHS,
   KNOWN_SCRIPT_PATHS,
   REPO_SCHEDULES,
@@ -131,5 +132,79 @@ describe("the generated known paths", () => {
   test("render the same text for the same input", async () => {
     const known = await collectKnownPaths(".");
     expect(renderKnownPaths(known)).toBe(renderKnownPaths(known));
+  });
+});
+
+/** scriptの定義の`tag`。無ければ`null`。 */
+async function tagOf(path: string): Promise<string | null> {
+  const parsed: unknown = Bun.YAML.parse(
+    await Bun.file(`${path}.script.yaml`).text(),
+  );
+  if (typeof parsed !== "object" || parsed === null || !("tag" in parsed)) {
+    return null;
+  }
+  return typeof parsed.tag === "string" ? parsed.tag : null;
+}
+
+// Consoleの履歴の絞り込みに出す一覧。ルートのジョブとして動くscriptとフローだけにする。
+// フローのステップ、失敗ハンドラ、tag consoleのscriptは、履歴に出ないので、選ぶと常に0件になる。
+describe("the history filter paths", () => {
+  test("do not list a step of a flow", () => {
+    expect(
+      HISTORY_FILTER_PATHS.filter((path) =>
+        path.startsWith("f/factory/steps/"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("do not list the error handler", () => {
+    expect(HISTORY_FILTER_PATHS).not.toContain("f/factory/on_error_flow");
+  });
+
+  test("do not list a script that runs on the Console worker", async () => {
+    const onConsole: string[] = [];
+    for (const path of KNOWN_SCRIPT_PATHS) {
+      if ((await tagOf(path)) === "console") onConsole.push(path);
+    }
+    expect(
+      HISTORY_FILTER_PATHS.filter((path) => onConsole.includes(path)),
+    ).toEqual([]);
+  });
+
+  test("list every script that runs as a root job", async () => {
+    const expected: string[] = [];
+    for (const path of KNOWN_SCRIPT_PATHS) {
+      if (path.startsWith("f/factory/steps/")) continue;
+      if (path === "f/factory/on_error_flow") continue;
+      if ((await tagOf(path)) === "console") continue;
+      expected.push(path);
+    }
+    expect(
+      HISTORY_FILTER_PATHS.filter((path) => !KNOWN_FLOW_PATHS.includes(path)),
+    ).toEqual(expected);
+  });
+
+  test("list every flow", () => {
+    expect(
+      HISTORY_FILTER_PATHS.filter((path) => KNOWN_FLOW_PATHS.includes(path)),
+    ).toEqual([...KNOWN_FLOW_PATHS]);
+  });
+
+  test("list only known paths", () => {
+    expect(
+      HISTORY_FILTER_PATHS.filter(
+        (path) =>
+          !KNOWN_SCRIPT_PATHS.includes(path) &&
+          !KNOWN_FLOW_PATHS.includes(path),
+      ),
+    ).toEqual([]);
+  });
+
+  test("are sorted, so the options keep their order", () => {
+    expect([...HISTORY_FILTER_PATHS]).toEqual([...HISTORY_FILTER_PATHS].sort());
+  });
+
+  test("are not empty", () => {
+    expect(HISTORY_FILTER_PATHS.length).toBeGreaterThan(10);
   });
 });

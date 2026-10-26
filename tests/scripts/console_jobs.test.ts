@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_PAGE_SIZE,
   type FailureRow,
+  getJobRequest,
   isJobId,
   type JobsPorts,
   type JobsQuery,
@@ -1383,5 +1384,19 @@ describe("runJobsView", () => {
 
   test("throws for a view it does not know", async () => {
     await expect(runJobsView(ports(), { view: "cancel" })).rejects.toThrow();
+  });
+});
+
+describe("the request that reads a job", () => {
+  test("leaves the logs out, which the detail reads apart with getJobLogs", () => {
+    expect(getJobRequest("factory", ID).noLogs).toBe(true);
+  });
+
+  test("names the workspace", () => {
+    expect(getJobRequest("factory", ID).workspace).toBe("factory");
+  });
+
+  test("names the job", () => {
+    expect(getJobRequest("factory", ID).id).toBe(ID);
   });
 });

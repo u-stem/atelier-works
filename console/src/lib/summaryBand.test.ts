@@ -22,7 +22,6 @@ import {
   bandLevelRank,
   HOST_ACTION_NOTICE_KIND,
   isBandRowLoading,
-  oldestUpdatedAt,
   summaryBandRows,
 } from "./summaryBand.ts";
 import { noticeDetailPath } from "./systemView.ts";
@@ -967,23 +966,5 @@ describe("isBandRowLoading", () => {
       text: BAND_LOADING_TEXT,
     };
     expect(isBandRowLoading(fake)).toBe(false);
-  });
-});
-
-describe("oldestUpdatedAt", () => {
-  test("takes the smallest time", () => {
-    expect(oldestUpdatedAt([300, 100, 200])).toBe(100);
-  });
-
-  test("skips a fetch that has not returned yet", () => {
-    expect(oldestUpdatedAt([300, 0, 200])).toBe(200);
-  });
-
-  test("is zero when no fetch has returned", () => {
-    expect(oldestUpdatedAt([0, 0])).toBe(0);
-  });
-
-  test("is zero without any fetch", () => {
-    expect(oldestUpdatedAt([])).toBe(0);
   });
 });

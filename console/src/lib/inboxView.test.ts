@@ -1046,14 +1046,12 @@ describe("unlistedCounts", () => {
 });
 
 describe("inboxSubtitle", () => {
-  test("counts the listed approvals", () => {
-    expect(inboxSubtitle([A1, A1], [])).toBe("承認 2件");
+  test("does not repeat the count of the chips when items are listed", () => {
+    expect(inboxSubtitle([A1, A1], [])).toBeNull();
   });
 
-  test("lists each kind that has items", () => {
-    expect(inboxSubtitle([A1, F7, F7, N21], [])).toBe(
-      "承認 1件、失敗 2件、通知 1件",
-    );
+  test("does not list the kinds with their counts", () => {
+    expect(inboxSubtitle([A1, F7, F7, N21], [])).toBeNull();
   });
 
   test("says everything is done when nothing is left anywhere", () => {

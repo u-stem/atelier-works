@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import type { NewDesignDraft } from "../../f/factory/lib/db.ts";
+import {
+  DESIGN_DOC_DIR_IN_USE_REASON,
+  DESIGN_OPEN_QUESTION_MAX_CHARS,
+  DESIGN_OPEN_QUESTIONS_MAX_COUNT,
+  DESIGN_SUMMARY_MAX_CHARS,
+  designGapExhaustedReason,
+} from "../../f/factory/lib/design_template.ts";
+import {
+  DocTreeRootSymlinkError,
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+  REQUIREMENTS_MODIFIED_REASON,
+} from "../../f/factory/lib/doc_tree_hash.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import {
   AUTOMATED_FEEDBACK_MARKER,
@@ -16,9 +29,8 @@ import {
   type DesignClaudeResult,
   type DesignGenerateDeps,
   type DesignGenerateFs,
-  type DirectoryEntryIo,
-  hashDirectoryTree,
   runDesignGenerate,
+  sanitizeModelText,
 } from "../../f/factory/steps/design_generate.ts";
 
 const LEASE = "0191f1a2-0000-7000-8000-000000000001";
@@ -161,6 +173,7 @@ function requirementDraft(
     diagrams: [{ name: "flow", file: "flow.drawio" }],
     open_questions: [],
     doc_dir: REQUIREMENTS_DIR,
+    doc_hash: null,
     created_at: DATE,
     ...overrides,
   };
@@ -224,6 +237,20 @@ function memoryFs(initial: Record<string, string>) {
       if (keys.length === 0) return null;
       return keys.map((key) => `${key}\0${files.get(key)}`).join("\n");
     },
+    copyFilesWithHash: async (source, destination, names) => {
+      const copied: string[] = [];
+      for (const name of names) {
+        const content = files.get(`${source}/${name}`);
+        if (content === undefined) continue;
+        copies.push({
+          source: `${source}/${name}`,
+          destination: `${destination}/${name}`,
+        });
+        files.set(`${destination}/${name}`, content);
+        copied.push(name);
+      }
+      return { hash: await fs.hashTree(source), copied };
+    },
   };
   return { fs, files, removedPaths, copies, under };
 }
@@ -243,6 +270,8 @@ type Options = {
   readonly recordPipeline?: () => Promise<boolean>;
   readonly rollbackAccepted?: boolean;
   readonly removeWorktree?: () => Promise<void>;
+  /** 試行ディレクトリと同じ`doc_dir`の設計の下書きが保存済みか。 */
+  readonly docDirHasDraft?: boolean;
 };
 
 type Context = {
@@ -327,6 +356,10 @@ function harness(options: Options = {}) {
     },
     loadApprovedRequirements: async () => approved,
     latestDesignDraft: async () => options.previous ?? null,
+    hasDesignDraftForDocDir: async () => {
+      calls.push("has_draft");
+      return options.docDirHasDraft ?? false;
+    },
     openFactory: async () => {
       opens += 1;
       return {
@@ -961,18 +994,22 @@ describe("runDesignGenerate when Claude fails", () => {
 });
 
 describe("runDesignGenerate and the approved requirements on disk", () => {
-  test("hashes the requirements directory before and after Claude", async () => {
-    const hashed: (string | null)[] = [];
+  test("hashes the requirements directory before and after Claude, taking the hash before from the copy", async () => {
+    const hashed: string[] = [];
     const h = harness();
     const fs: DesignGenerateFs = {
       ...h.deps.fs,
       hashTree: async (dir) => {
-        if (dir === REQUIREMENTS_DIR) hashed.push(dir);
+        if (dir === REQUIREMENTS_DIR) hashed.push("hashTree");
         return h.deps.fs.hashTree(dir);
+      },
+      copyFilesWithHash: async (source, destination, names) => {
+        if (source === REQUIREMENTS_DIR) hashed.push("copy");
+        return h.deps.fs.copyFilesWithHash(source, destination, names);
       },
     };
     await runDesignGenerate({ ...h.deps, fs }, INPUT);
-    expect(hashed).toHaveLength(2);
+    expect(hashed).toEqual(["copy", "hashTree"]);
   });
 
   test("saves when the requirements are untouched", async () => {
@@ -1295,7 +1332,7 @@ describe("runDesignGenerate when the requirements have a gap", () => {
     expect(h.moves).toEqual([
       {
         to: "needs_human",
-        reason: "design requirements_gap after max_attempts 2",
+        reason: designGapExhaustedReason(2),
       },
     ]);
   });
@@ -1304,7 +1341,7 @@ describe("runDesignGenerate when the requirements have a gap", () => {
     const h = gapHarness({ maxAttempts: 2 });
     expect(await runDesignGenerate(h.deps, INPUT)).toEqual({
       outcome: "needs_human",
-      reason: "design requirements_gap after max_attempts 2",
+      reason: designGapExhaustedReason(2),
     });
   });
 
@@ -1415,92 +1452,773 @@ describe("runDesignGenerate when the requirements have a gap", () => {
   });
 });
 
-describe("hashDirectoryTree", () => {
-  function io(files: Record<string, string>): DirectoryEntryIo {
+/** 既定の要件定義のファイルが置かれた直後のディレクトリのハッシュ。承認時に保存された基準値にあたる。 */
+async function baselineHash(): Promise<string> {
+  const memory = memoryFs({
+    [`${REQUIREMENTS_DIR}/requirements.md`]: "REQUIREMENTS_FILE",
+    [`${REQUIREMENTS_DIR}/flow.drawio`]: DRAWIO,
+    [`${REQUIREMENTS_DIR}/other.drawio`]: DRAWIO,
+  });
+  const hash = await memory.fs.hashTree(REQUIREMENTS_DIR);
+  if (hash === null) throw new Error("the fixture directory must exist");
+  return hash;
+}
+
+describe("runDesignGenerate and the baseline of the approved requirements", () => {
+  async function withBaseline(options: Options = {}) {
+    return harness({
+      ...options,
+      approved: requirementDraft({ doc_hash: await baselineHash() }),
+    });
+  }
+
+  /** `dir`のハッシュを呼び出しごとに`answer`に決めさせる`fs`。 */
+  function hashing(
+    h: ReturnType<typeof harness>,
+    answer: (call: number, real: string | null) => string | null,
+  ): DesignGenerateFs {
+    let call = 0;
     return {
-      readDir: async (dir) => {
-        const prefix = `${dir}/`;
-        const names = new Map<string, boolean>();
-        for (const path of Object.keys(files)) {
-          if (!path.startsWith(prefix)) continue;
-          const rest = path.slice(prefix.length);
-          const [first] = rest.split("/");
-          if (first === undefined) continue;
-          names.set(first, rest.includes("/"));
-        }
-        if (names.size === 0) throw new Error("ENOENT");
-        return [...names].map(([name, isDirectory]) => ({ name, isDirectory }));
-      },
-      readFile: async (path) => {
-        const content = files[path];
-        if (content === undefined) throw new Error("ENOENT");
-        return new TextEncoder().encode(content);
+      ...h.deps.fs,
+      hashTree: async (dir) => {
+        const real = await h.deps.fs.hashTree(dir);
+        if (dir !== REQUIREMENTS_DIR) return real;
+        call += 1;
+        return answer(call, real);
       },
     };
   }
 
-  const BASE = { "/d/a.md": "A", "/d/b.drawio": "B", "/d/sub/c.txt": "C" };
-
-  test("returns the same hash for the same tree", async () => {
-    expect(await hashDirectoryTree("/d", io(BASE))).toBe(
-      await hashDirectoryTree("/d", io({ ...BASE })),
-    );
+  test("saves when the requirements match the baseline", async () => {
+    const h = await withBaseline();
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved).toHaveLength(1);
   });
 
-  test("does not depend on the order of the files", async () => {
-    const reversed = {
-      "/d/sub/c.txt": "C",
-      "/d/b.drawio": "B",
-      "/d/a.md": "A",
+  test("hashes the requirements before the copy, after the copy and after Claude", async () => {
+    const h = await withBaseline();
+    const calls: number[] = [];
+    await runDesignGenerate(
+      {
+        ...h.deps,
+        fs: hashing(h, (call, real) => {
+          calls.push(call);
+          return real;
+        }),
+      },
+      INPUT,
+    );
+    expect(calls).toEqual([1, 2, 3]);
+  });
+
+  test("stops with needs_human when the requirements differ from the baseline before the run", async () => {
+    const h = harness({
+      approved: requirementDraft({ doc_hash: "a stale baseline" }),
+    });
+    expect(await runDesignGenerate(h.deps, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+    });
+  });
+
+  test("does not start Claude when the requirements differ from the baseline", async () => {
+    const h = harness({
+      approved: requirementDraft({ doc_hash: "a stale baseline" }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.calls).not.toContain("claude");
+  });
+
+  test("does not copy any file when the requirements differ from the baseline", async () => {
+    const h = harness({
+      approved: requirementDraft({ doc_hash: "a stale baseline" }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.memory.copies).toEqual([]);
+  });
+
+  test("moves to needs_human with the reason before design", async () => {
+    const h = harness({
+      approved: requirementDraft({ doc_hash: "a stale baseline" }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.moves).toEqual([
+      { to: "needs_human", reason: REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON },
+    ]);
+  });
+
+  test("stops again with the same reason when the same approved draft is run again", async () => {
+    const approved = requirementDraft({ doc_hash: "a stale baseline" });
+    await runDesignGenerate(harness({ approved }).deps, INPUT);
+    const again = harness({ approved });
+    expect(await runDesignGenerate(again.deps, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+    });
+  });
+
+  test("stops without starting Claude when the requirements change while the diagrams are copied", async () => {
+    const h = await withBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async (source, destination, names) => {
+        const result = await h.deps.fs.copyFilesWithHash(
+          source,
+          destination,
+          names,
+        );
+        h.memory.files.set(`${REQUIREMENTS_DIR}/requirements.md`, "changed");
+        return result;
+      },
     };
-    expect(await hashDirectoryTree("/d", io(reversed))).toBe(
-      await hashDirectoryTree("/d", io(BASE)),
+    const result = await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect([result, h.calls.includes("claude")]).toEqual([
+      {
+        outcome: "needs_human",
+        reason: REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+      },
+      false,
+    ]);
+  });
+
+  /** 図の複製が返すハッシュ(複製が読んだバイト列のハッシュ)を決める`fs`。 */
+  function copying(
+    h: ReturnType<typeof harness>,
+    hash: string | null,
+  ): DesignGenerateFs {
+    return {
+      ...h.deps.fs,
+      copyFilesWithHash: async (source, destination, names) => ({
+        ...(await h.deps.fs.copyFilesWithHash(source, destination, names)),
+        hash,
+      }),
+    };
+  }
+
+  test("copies only the declared diagrams through the hashing copy", async () => {
+    const h = await withBaseline();
+    const asked: (readonly string[])[] = [];
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async (source, destination, names) => {
+        asked.push(names);
+        return h.deps.fs.copyFilesWithHash(source, destination, names);
+      },
+    };
+    await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect(asked).toEqual([["flow.drawio"]]);
+  });
+
+  test("stops without starting Claude when the bytes that were copied differ from the baseline", async () => {
+    const h = await withBaseline();
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: copying(h, "bytes that were swapped during the copy") },
+      INPUT,
+    );
+    expect([result, h.calls.includes("claude")]).toEqual([
+      {
+        outcome: "needs_human",
+        reason: REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+      },
+      false,
+    ]);
+  });
+
+  test("stops with the missing reason when the directory vanished during the copy", async () => {
+    const h = await withBaseline();
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: copying(h, null) },
+      INPUT,
+    );
+    expect(result).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("removes the copy of the diagrams when the copied bytes differ from the baseline", async () => {
+    const h = await withBaseline();
+    await runDesignGenerate(
+      { ...h.deps, fs: copying(h, "bytes that were swapped during the copy") },
+      INPUT,
+    );
+    expect(h.memory.removedPaths).toContain("/job-tmp/copy-1");
+  });
+
+  test("uses the bytes that were copied as the hash before the run when the draft has no baseline", async () => {
+    const h = harness({ approved: requirementDraft({ doc_hash: null }) });
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: copying(h, "bytes that were swapped during the copy") },
+      INPUT,
+    );
+    expect(result).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
+  });
+
+  test("stops without saving when Claude changes the requirements", async () => {
+    const h = await withBaseline({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${REQUIREMENTS_DIR}/requirements.md`, "changed");
+        return { outcome: "success", output: DESIGNED };
+      },
+    });
+    const result = await runDesignGenerate(h.deps, INPUT);
+    expect([result, h.saved.length]).toEqual([
+      { outcome: "needs_human", reason: REQUIREMENTS_MODIFIED_REASON },
+      0,
+    ]);
+  });
+
+  test("stops with the missing reason when the directory is gone before the run", async () => {
+    const h = await withBaseline();
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: hashing(h, () => null) },
+      INPUT,
+    );
+    expect(result).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("does not start Claude when the directory is gone", async () => {
+    const h = await withBaseline();
+    await runDesignGenerate({ ...h.deps, fs: hashing(h, () => null) }, INPUT);
+    expect(h.calls).not.toContain("claude");
+  });
+
+  test("stops with the missing reason when the directory disappears during the run", async () => {
+    const h = await withBaseline();
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: hashing(h, (call, real) => (call < 3 ? real : null)) },
+      INPUT,
+    );
+    expect(result).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("does not save when the directory disappears during the run", async () => {
+    const h = await withBaseline();
+    await runDesignGenerate(
+      { ...h.deps, fs: hashing(h, (call, real) => (call < 3 ? real : null)) },
+      INPUT,
+    );
+    expect(h.saved).toEqual([]);
+  });
+
+  test("keeps the comparison of before and after when the draft has no baseline", async () => {
+    const h = harness({
+      approved: requirementDraft({ doc_hash: null }),
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${REQUIREMENTS_DIR}/requirements.md`, "changed");
+        return { outcome: "success", output: DESIGNED };
+      },
+    });
+    expect(await runDesignGenerate(h.deps, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
+  });
+
+  test("logs that the draft has no baseline", async () => {
+    const h = harness({ approved: requirementDraft({ doc_hash: null }) });
+    const messages: string[] = [];
+    await runDesignGenerate(
+      { ...h.deps, log: (message) => messages.push(message) },
+      INPUT,
+    );
+    expect(messages).toContain(
+      "the approved requirements have no baseline hash; comparing only before and after the run",
     );
   });
 
-  test("changes when a file changes", async () => {
-    expect(
-      await hashDirectoryTree("/d", io({ ...BASE, "/d/a.md": "A2" })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
+  test("does not log a missing baseline when the draft has one", async () => {
+    const h = await withBaseline();
+    const messages: string[] = [];
+    await runDesignGenerate(
+      { ...h.deps, log: (message) => messages.push(message) },
+      INPUT,
+    );
+    expect(messages).toEqual([]);
+  });
+});
+
+describe("runDesignGenerate and the output of Claude", () => {
+  function claudeSays(output: Partial<DesignOutput>) {
+    return harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return { outcome: "success", output: { ...DESIGNED, ...output } };
+      },
+    });
+  }
+
+  test("masks a secret in the summary", async () => {
+    const h = claudeSays({ summary: `token ${GITHUB_TOKEN}` });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).not.toContain(GITHUB_TOKEN);
   });
 
-  test("changes when a file is added", async () => {
-    expect(
-      await hashDirectoryTree("/d", io({ ...BASE, "/d/new": "N" })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
-  });
-
-  test("changes when a file is removed", async () => {
-    const { "/d/b.drawio": _removed, ...rest } = BASE;
-    expect(await hashDirectoryTree("/d", io(rest))).not.toBe(
-      await hashDirectoryTree("/d", io(BASE)),
+  test("cuts the summary at the limit in code points", async () => {
+    const h = claudeSays({
+      summary: "あ".repeat(DESIGN_SUMMARY_MAX_CHARS + 5),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(Array.from(h.saved[0]?.summary ?? "")).toHaveLength(
+      DESIGN_SUMMARY_MAX_CHARS,
     );
   });
 
-  test("changes when a file is renamed", async () => {
-    const { "/d/a.md": content, ...rest } = BASE;
-    expect(
-      await hashDirectoryTree("/d", io({ ...rest, "/d/z.md": content })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
+  test("does not leave the head of a secret that the cut would have split", async () => {
+    const h = claudeSays({
+      summary: `${"x".repeat(DESIGN_SUMMARY_MAX_CHARS - 10)}${GITHUB_TOKEN}`,
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).not.toContain("ghp_");
   });
 
-  test("changes when a file in a subdirectory changes", async () => {
-    expect(
-      await hashDirectoryTree("/d", io({ ...BASE, "/d/sub/c.txt": "C2" })),
-    ).not.toBe(await hashDirectoryTree("/d", io(BASE)));
+  test("removes a NUL character from the summary", async () => {
+    const h = claudeSays({ summary: "a\u0000b" });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).toBe("ab");
   });
 
-  test("does not confuse the end of a name with the start of the content", async () => {
-    expect(await hashDirectoryTree("/d", io({ "/d/ab": "c" }))).not.toBe(
-      await hashDirectoryTree("/d", io({ "/d/a": "bc" })),
+  test("keeps a newline in the summary", async () => {
+    const h = claudeSays({ summary: "a\nb" });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).toBe("a\nb");
+  });
+
+  test("limits the number of open questions", async () => {
+    const h = claudeSays({
+      open_questions: Array.from(
+        { length: DESIGN_OPEN_QUESTIONS_MAX_COUNT + 5 },
+        () => "q",
+      ),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions).toHaveLength(
+      DESIGN_OPEN_QUESTIONS_MAX_COUNT,
     );
   });
 
-  test("returns null for a directory that does not exist", async () => {
-    expect(await hashDirectoryTree("/missing", io(BASE))).toBeNull();
+  test("masks a secret in an open question", async () => {
+    const h = claudeSays({ open_questions: [`q ${GITHUB_TOKEN}`] });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions.join("\n")).not.toContain(GITHUB_TOKEN);
   });
 
-  test("returns a hex digest", async () => {
-    expect(await hashDirectoryTree("/d", io(BASE))).toMatch(/^[0-9a-f]{64}$/);
+  test("cuts an open question at the limit in code points", async () => {
+    const h = claudeSays({
+      open_questions: ["い".repeat(DESIGN_OPEN_QUESTION_MAX_CHARS + 3)],
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(Array.from(h.saved[0]?.open_questions[0] ?? "")).toHaveLength(
+      DESIGN_OPEN_QUESTION_MAX_CHARS,
+    );
+  });
+
+  test("removes a NUL character from an open question", async () => {
+    const h = claudeSays({ open_questions: ["a\u0000b"] });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions).toEqual(["ab"]);
+  });
+
+  test("removes a NUL character from the report of a gap", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput("a\u0000gap"),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes).toEqual(["design gap: agap"]);
+  });
+});
+
+describe("sanitizeModelText", () => {
+  /** 秘密情報の途中に、見えない文字を挟んだ文字列。 */
+  function splitToken(invisible: string): string {
+    const middle = Math.floor(GITHUB_TOKEN.length / 2);
+    return `${GITHUB_TOKEN.slice(0, middle)}${invisible}${GITHUB_TOKEN.slice(middle)}`;
+  }
+
+  test("masks a token with a zero width space in the middle", () => {
+    expect(sanitizeModelText(splitToken("\u{200B}"), 1000)).not.toContain(
+      "ghp_",
+    );
+  });
+
+  test("masks a token with a zero width joiner in the middle", () => {
+    expect(sanitizeModelText(splitToken("\u{200D}"), 1000)).not.toContain(
+      "ghp_",
+    );
+  });
+
+  test("masks a token with a word joiner in the middle", () => {
+    expect(sanitizeModelText(splitToken("\u{2060}"), 1000)).not.toContain(
+      "ghp_",
+    );
+  });
+
+  test("masks a token with a C1 control character in the middle", () => {
+    expect(sanitizeModelText(splitToken("\u0085"), 1000)).not.toContain("ghp_");
+  });
+
+  test("masks a token with a byte order mark in the middle", () => {
+    expect(sanitizeModelText(splitToken("\u{FEFF}"), 1000)).not.toContain(
+      "ghp_",
+    );
+  });
+
+  test.each([
+    ["a variation selector", "\u{FE0F}"],
+    ["a combining grapheme joiner", "\u{034F}"],
+    ["a Hangul choseong filler", "\u{115F}"],
+    ["a Hangul jungseong filler", "\u{1160}"],
+    ["a Hangul filler", "\u{3164}"],
+    ["a halfwidth Hangul filler", "\u{FFA0}"],
+    ["a braille pattern blank", "\u{2800}"],
+    ["a variation selector supplement", "\u{E0100}"],
+    ["a combining enclosing mark", "\u{20DD}"],
+    ["a Mongolian free variation selector", "\u{180B}"],
+  ])("masks a token with %s in the middle", (_name, invisible) => {
+    expect(sanitizeModelText(splitToken(invisible), 1000)).toBe("***");
+  });
+
+  test("masks a token with several invisible characters in the middle", () => {
+    expect(
+      sanitizeModelText(splitToken("\u{FE0F}\u{200B}\u{3164}\u{2800}"), 1000),
+    ).toBe("***");
+  });
+
+  test("masks a token that is followed by text with an invisible character", () => {
+    expect(sanitizeModelText(`前${splitToken("\u{FE0F}")}後`, 1000)).toBe(
+      "前***後",
+    );
+  });
+
+  test("keeps the combining voiced sound marks of Japanese text", () => {
+    expect(sanitizeModelText("か\u{3099}き\u{309A}", 1000)).toBe(
+      "か\u{3099}き\u{309A}",
+    );
+  });
+
+  test("keeps an ideographic variation sequence", () => {
+    expect(sanitizeModelText("葛\u{E0100}城", 1000)).toBe("葛\u{E0100}城");
+  });
+
+  test("keeps an emoji variation selector", () => {
+    expect(sanitizeModelText("\u{2764}\u{FE0F}", 1000)).toBe(
+      "\u{2764}\u{FE0F}",
+    );
+  });
+
+  test("removes a right to left override", () => {
+    expect(sanitizeModelText("a\u{202E}b", 1000)).toBe("ab");
+  });
+
+  test("removes the other bidirectional controls", () => {
+    expect(
+      sanitizeModelText(
+        "a\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{2066}\u{2069}b",
+        1000,
+      ),
+    ).toBe("ab");
+  });
+
+  test("removes a C1 control character at both ends of its range", () => {
+    expect(sanitizeModelText("a\u0080\u009Fb", 1000)).toBe("ab");
+  });
+
+  test("removes a soft hyphen", () => {
+    expect(sanitizeModelText("a\u{00AD}b", 1000)).toBe("ab");
+  });
+
+  test("removes a delete character", () => {
+    expect(sanitizeModelText("a\u007Fb", 1000)).toBe("ab");
+  });
+
+  test("keeps Japanese text, a newline and a tab", () => {
+    expect(sanitizeModelText("設計\n方針\t要約", 1000)).toBe(
+      "設計\n方針\t要約",
+    );
+  });
+
+  test("keeps the no-break space, which is a space and not a format character", () => {
+    expect(sanitizeModelText("a\u{00A0}b", 1000)).toBe("a\u{00A0}b");
+  });
+});
+
+describe("runDesignGenerate and the invisible characters in the output of Claude", () => {
+  const SPLIT_TOKEN = `${GITHUB_TOKEN.slice(0, 20)}\u{200B}${GITHUB_TOKEN.slice(20)}`;
+
+  test("masks a split token in the summary", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, summary: SPLIT_TOKEN },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).not.toContain("ghp_");
+  });
+
+  test("masks a split token in an open question", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, open_questions: [SPLIT_TOKEN] },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions.join("")).not.toContain("ghp_");
+  });
+
+  test("masks a split token in the report of a gap that goes to the next requirements", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput(SPLIT_TOKEN),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes.join("")).not.toContain("ghp_");
+  });
+
+  const SELECTOR_TOKEN = `${GITHUB_TOKEN.slice(0, 20)}\u{FE0F}${GITHUB_TOKEN.slice(20)}`;
+
+  test("masks a token split by a variation selector in the summary", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, summary: SELECTOR_TOKEN },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).toBe("***");
+  });
+
+  test("masks a token split by a variation selector in an open question", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, open_questions: [SELECTOR_TOKEN] },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions).toEqual(["***"]);
+  });
+
+  test("masks a token split by a variation selector in the report of a gap", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput(SELECTOR_TOKEN),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes).toEqual(["design gap: ***"]);
+  });
+
+  test("removes a right to left override from the report of a gap", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput("a\u{202E}gap"),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes).toEqual(["design gap: agap"]);
+  });
+});
+
+describe("runDesignGenerate and a requirements directory replaced by a link when the draft has no baseline", () => {
+  const LINKED = new DocTreeRootSymlinkError(REQUIREMENTS_DIR);
+
+  function noBaseline(options: Options = {}) {
+    return harness({
+      approved: requirementDraft({ doc_hash: null }),
+      ...options,
+    });
+  }
+
+  test("stops with needs_human when the copy of the diagrams meets the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async () => {
+        throw LINKED;
+      },
+    };
+    expect(await runDesignGenerate({ ...h.deps, fs }, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
+  });
+
+  test("does not start Claude when the copy of the diagrams meets the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async () => {
+        throw LINKED;
+      },
+    };
+    await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect(h.calls).not.toContain("claude");
+  });
+
+  test("stops with needs_human when the hash before the run meets the link", async () => {
+    const h = noBaseline({
+      approved: requirementDraft({ doc_hash: null, diagrams: [] }),
+    });
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      hashTree: async () => {
+        throw LINKED;
+      },
+    };
+    expect(await runDesignGenerate({ ...h.deps, fs }, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
+  });
+
+  test("stops with needs_human and saves nothing when the hash after the run meets the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      hashTree: async (dir) => {
+        if (dir === REQUIREMENTS_DIR) throw LINKED;
+        return h.deps.fs.hashTree(dir);
+      },
+    };
+    const result = await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect([result, h.saved.length]).toEqual([
+      { outcome: "needs_human", reason: REQUIREMENTS_MODIFIED_REASON },
+      0,
+    ]);
+  });
+
+  test("still throws an error that is not the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async () => {
+        throw new Error("disk failure");
+      },
+    };
+    await expect(runDesignGenerate({ ...h.deps, fs }, INPUT)).rejects.toThrow(
+      "disk failure",
+    );
+  });
+});
+
+describe("runDesignGenerate and a directory that already holds a saved draft", () => {
+  const SAVED_FILE = `${DESIGN_DIR}/data-flow.drawio`;
+
+  test("stops with needs_human", async () => {
+    const h = harness({ docDirHasDraft: true });
+    expect(await runDesignGenerate(h.deps, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: DESIGN_DOC_DIR_IN_USE_REASON,
+    });
+  });
+
+  test("keeps the files of the saved draft", async () => {
+    const h = harness({
+      docDirHasDraft: true,
+      files: { [SAVED_FILE]: "SAVED" },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.memory.files.get(SAVED_FILE)).toBe("SAVED");
+  });
+
+  test("does not start Claude", async () => {
+    const h = harness({ docDirHasDraft: true });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.calls).not.toContain("claude");
+  });
+
+  test("empties the directory when no draft was saved", async () => {
+    const h = harness({ files: { [SAVED_FILE]: "STALE" } });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.memory.files.get(SAVED_FILE)).toBe(DRAWIO);
+  });
+});
+
+// mainはWindmillの変数・リソースとDBを直接使うので、依存の結線はソースの文面で固定する。
+// 結線を取り違えると、ロックの持ち主タグや、図の保護や、試行の記録が別の値になる。
+describe("the wiring of design_generate main", () => {
+  async function source(): Promise<string> {
+    return Bun.file(
+      new URL("../../f/factory/steps/design_generate.ts", import.meta.url),
+    ).text();
+  }
+
+  /** mainの中の`buildDesignRunClaude({`から、対応する閉じ括弧までの呼び出しを返す。 */
+  async function runClaudeCall(): Promise<string> {
+    const text = await source();
+    const start = text.indexOf("runClaude: buildDesignRunClaude({");
+    if (start < 0) return "";
+    const end = text.indexOf("}),", start);
+    return end < 0 ? "" : text.slice(start, end);
+  }
+
+  test.each([
+    ["workItemId", "workItemId: work_item_id,"],
+    ["designAttempt", "designAttempt: design_attempt,"],
+    ["worktreeDir", "worktreeDir: worktree_dir,"],
+    ["leaseJobId", "leaseJobId,"],
+  ])("passes %s to the Claude run of the design", async (_name, line) => {
+    expect(await runClaudeCall()).toContain(line);
+  });
+
+  test("passes the check for a saved draft of the same directory", async () => {
+    expect(await source()).toContain(
+      "hasDesignDraftForDocDir: (docDir) => hasDesignDraftForDocDir(docDir),",
+    );
+  });
+
+  test("hashes the directory with the real hash function", async () => {
+    expect(await source()).toContain(
+      "hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),",
+    );
+  });
+
+  test("copies the diagrams with the real hashing copy", async () => {
+    expect(await source()).toMatch(
+      /copyFilesWithHash:\s*\(from, to, names\)\s*=>\s*copyFilesWithHash\(from, to, names\)/,
+    );
+  });
+
+  test("launches the pipeline flow of the requirements again", async () => {
+    expect(await source()).toContain(
+      "wmill.runFlowAsync(PIPELINE_FLOW_PATH, pipelineInput)",
+    );
   });
 });

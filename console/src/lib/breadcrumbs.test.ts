@@ -4,6 +4,7 @@ import {
   itemDetailCrumbs,
   itemRequirementsCrumbs,
   itemsBackState,
+  jobDetailCrumbs,
   parseItemsBack,
 } from "./breadcrumbs.ts";
 
@@ -120,6 +121,22 @@ describe("auditReportCrumbs", () => {
     expect(auditReportCrumbs(null)).toEqual([
       { label: "レポート", to: "/reports" },
       { label: "監査レポート" },
+    ]);
+  });
+});
+
+describe("jobDetailCrumbs", () => {
+  test("goes back to the job list", () => {
+    expect(jobDetailCrumbs(null)).toEqual([
+      { label: "ジョブ", to: "/jobs" },
+      { label: "ジョブの詳細" },
+    ]);
+  });
+
+  test("goes back to the list with its tab and filters", () => {
+    expect(jobDetailCrumbs("/jobs?tab=history&status=failure")).toEqual([
+      { label: "ジョブ", to: "/jobs?tab=history&status=failure" },
+      { label: "ジョブの詳細" },
     ]);
   });
 });

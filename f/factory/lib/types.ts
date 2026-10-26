@@ -433,6 +433,12 @@ export type RequirementDraft = {
    * この列ができる前(2026-09-27より前)に生成された行では`null`。
    */
   doc_dir: string | null;
+  /**
+   * 承認の前に保存した、`doc_dir`の内容のハッシュ(`lib/doc_tree_hash.ts`の`hashDirectoryTree`)。
+   * 設計の生成と実装の関門が、承認された内容が書き換わっていないことをこの値と比べて確かめる。
+   * 基準値が無い下書き(この列ができる前の行、列が無い間に保存した行)では`null`で、照合は飛ばす。
+   */
+  doc_hash: string | null;
   created_at: Date;
 };
 

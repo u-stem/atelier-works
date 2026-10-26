@@ -13,7 +13,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | GitHub | Issue、PR、コメントのやり取り先。Factoryはここに成果物だけを書く |
 | Windmillのserverとworker | フローとスケジュールの実行基盤 |
 | Data Tables | 作業の状態、要件定義ドラフト、承認依頼、実行ログ、失敗記録を持つPostgresのテーブル群 |
-| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、保留と凍結の確認と解除、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
+| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、保留と凍結の確認と解除、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、ジョブ(実行中と待ち、履歴、スケジュール、ログと結果)の閲覧、システムの状態と設定の閲覧を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
 | Discord | 拾い上げ、承認待ち、承認、要対応、失敗などのイベントをWebhookで通知する |
 
 Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く。
@@ -244,7 +244,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | --- | --- |
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
-| `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
+| `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)を記録するコードは入っているが、本番では作られない |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
@@ -575,6 +575,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/auto_retry_reasons` | script | [LIB] 自動で再開してよい止まった理由 |
 | `f/factory/lib/self_update_support` | script | [LIB] 自己更新の純粋ロジック |
 | `f/factory/lib/requirements_template` | script | [LIB] 要件定義テンプレートの定義 |
+| `f/factory/lib/doc_tree_hash` | script | [LIB] 要件定義のディレクトリのハッシュと基準値の照合 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |

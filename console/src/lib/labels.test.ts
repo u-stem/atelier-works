@@ -108,6 +108,12 @@ describe("approvalStatusLabel", () => {
 });
 
 describe("noticeKindLabel", () => {
+  test("names the draft saved without the baseline hash", () => {
+    expect(noticeKindLabel("doc_hash_column_missing")).toBe(
+      "要件定義の基準値の列の欠落",
+    );
+  });
+
   test("names the stopped schedule detector", () => {
     expect(noticeKindLabel("schedule_detector_stale")).toBe(
       "scheduleの失敗の検出器の停止",

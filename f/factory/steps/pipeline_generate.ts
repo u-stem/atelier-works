@@ -19,6 +19,7 @@ import {
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
+import { hashDirectoryTree, realDirectoryIo } from "../lib/doc_tree_hash.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
@@ -173,6 +174,35 @@ function failGeneration(reason: string, detail: string): never {
 }
 
 /**
+ * 保存する内容の取得(`snapshotDocDir`)の失敗を、Claudeの実行の失敗とは別の書き方で投げる。
+ * 原因はClaudeの実行ではなくディスクの内容なので、`runClaude failed`と書かない。
+ * `failGeneration`と同じく例外として投げ、終端の処理はWindmillの再試行と`on_error_flow`に任せる。
+ */
+function failSnapshot(reason: string, detail: string): never {
+  throw new Error(
+    maskSecrets(
+      `pipeline_generate: doc snapshot failed (${reason}): ${detail}`,
+    ),
+  );
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** `io.hashTree`を呼び、例外は`failSnapshot`で保存する内容の取得の失敗として投げ直す。 */
+async function hashOrFail(
+  io: SnapshotIo,
+  docDir: string,
+): Promise<string | null> {
+  try {
+    return await io.hashTree(docDir);
+  } catch (err) {
+    return failSnapshot("doc_hash_failed", errorMessage(err));
+  }
+}
+
+/**
  * Claudeがdoc dirに残すはずのファイルを1つ読んで返す。
  * ファイルが無い、または読めない(消された、ファイル名のディレクトリがある)ときは、
  * 他の生成の失敗と同じ書き方の例外を投げる。
@@ -238,6 +268,77 @@ async function collectDocIssues(docDir: string): Promise<string[]> {
   ];
 }
 
+export type SnapshotIo = {
+  /** `dir`の内容のハッシュ。ディレクトリが無ければ`null`。 */
+  readonly hashTree: (dir: string) => Promise<string | null>;
+  readonly readDir: (dir: string) => Promise<string[]>;
+  readonly readText: (path: string) => Promise<string>;
+  /**
+   * 最初のハッシュと2回目のハッシュの間に行う、ディレクトリの内容の検査。
+   * 問題があれば例外を投げる。窓の外で検査すると、検査の後に足されたファイルが、
+   * 検査を受けないまま基準値に入るためである。
+   */
+  readonly inspect: () => Promise<void>;
+};
+
+export type DocSnapshot = {
+  /** 人が見るために`requirement_drafts.markdown`へ保存する本文。基準値のハッシュに入る内容と同じ時点のもの。 */
+  readonly markdown: string;
+  readonly diagramFiles: string[];
+  /** 承認の後の照合で基準値になる、ディレクトリの内容のハッシュ。 */
+  readonly docHash: string;
+};
+
+/**
+ * 保存する下書きの本文と図の一覧と、照合の基準値になるハッシュを、同じ時点の内容から取る。
+ * ハッシュ、検査(`io.inspect`)、`requirements.md`と図の一覧の読み取り、ハッシュの順に行い、前後が違えば保存させない。
+ * 本文だけを先に読むと、DBの本文とディスクの内容が別の時点のものになり、基準値が人の見た内容を指さなくなるためである。
+ * 検査とハッシュと本文の読み取りは、別々にファイルを読む。窓の中で起きた追加と削除は、前後のハッシュの違いで検出する。
+ * Claudeの終了の後も動き続けて、doc dirに書ける者による入れ替えは、検出できない。
+ * 一覧に`requirements.md`と図以外の項目があれば、想定外のファイルの削除の後に足されたものなので、失敗させる。
+ * ハッシュを取れない(ディレクトリが無い)ときも、基準値を持たない下書きを作らないために失敗させる。
+ * ハッシュの計算と一覧の取得が投げた例外も、同じ`doc snapshot failed`の印を付けて投げ直す。
+ */
+export async function snapshotDocDir(
+  docDir: string,
+  io: SnapshotIo,
+): Promise<DocSnapshot> {
+  const before = await hashOrFail(io, docDir);
+  if (before === null) {
+    failSnapshot(
+      "doc_hash_unavailable",
+      `the requirements directory does not exist, so there is no baseline hash to save: ${docDir}`,
+    );
+  }
+  await io.inspect();
+  let entries: string[];
+  try {
+    entries = await io.readDir(docDir);
+  } catch (err) {
+    failSnapshot("doc_list_failed", errorMessage(err));
+  }
+  const { diagramFiles, stray } = classifyDocDirEntries(entries);
+  if (stray.length > 0) {
+    failSnapshot(
+      "unexpected_entry",
+      `the requirements directory has entries other than ${REQUIREMENTS_MD_FILENAME} and the diagrams: ${stray.join(", ")}`,
+    );
+  }
+  const markdown = await readDocFile(
+    docDir,
+    REQUIREMENTS_MD_FILENAME,
+    io.readText,
+  );
+  const after = await hashOrFail(io, docDir);
+  if (after !== before) {
+    failSnapshot(
+      "doc_changed_during_save",
+      `the requirements directory changed while it was being saved: ${docDir}`,
+    );
+  }
+  return { markdown, diagramFiles, docHash: before };
+}
+
 /**
  * 要件定義を生成して下書きとして保存する。
  * 最初と下書きの保存の直前にpipelineのリースを確かめ、持っていなければ何も書かずに
@@ -262,6 +363,8 @@ async function collectDocIssues(docDir: string): Promise<string[]> {
  * `factory.requirement_drafts.diagrams`には図ごとに`{name, file}`を保存し、XMLは保存しない。
  * doc dir自体も`doc_dir`に記録し、後で読む側(`cleanup_db.ts`など)が
  * ファイルを見つけられるようにする。
+ * 承認の後に書き換えを検出できるよう、保存する本文と同じ時点のdoc dirの内容のハッシュを
+ * `doc_hash`に基準値として保存する(`snapshotDocDir`)。
  */
 export async function main(
   work_item_id: number,
@@ -414,20 +517,22 @@ export async function main(
       await removePath(`${docDir}/${stray}`);
     }
 
-    const markdown = await readDocFile(
-      docDir,
-      REQUIREMENTS_MD_FILENAME,
-      readTextFile,
-    );
-
-    const issues = await collectDocIssues(docDir);
-    if (issues.length > 0) {
-      failGeneration(
-        "invalid_structured_output",
-        buildGenerateFailureMessage(issues),
-      );
-    }
-    const registerIssues = documentRegisterIssues(markdown);
+    // 図の検査は、基準値のハッシュを数える窓の中で行う。検査の後に足された内容が、検査を受けないまま基準値に入らないようにするため。
+    const snapshot = await snapshotDocDir(docDir, {
+      hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
+      readDir: readDirEntries,
+      readText: readTextFile,
+      inspect: async () => {
+        const issues = await collectDocIssues(docDir);
+        if (issues.length > 0) {
+          failGeneration(
+            "invalid_structured_output",
+            buildGenerateFailureMessage(issues),
+          );
+        }
+      },
+    });
+    const registerIssues = documentRegisterIssues(snapshot.markdown);
     if (registerIssues.length > 0) {
       log.warn("requirements document breaks the writing rules", {
         work_item_id,
@@ -437,7 +542,7 @@ export async function main(
       });
     }
 
-    const diagrams: Diagram[] = classified.diagramFiles.map((file) => ({
+    const diagrams: Diagram[] = snapshot.diagramFiles.map((file) => ({
       name: diagramNameFromFile(file),
       file,
     }));
@@ -457,10 +562,11 @@ export async function main(
       work_item_id,
       attempt,
       summary: result.structuredOutput.summary,
-      markdown,
+      markdown: snapshot.markdown,
       diagrams,
       open_questions: result.structuredOutput.open_questions,
       doc_dir: docDir,
+      doc_hash: snapshot.docHash,
     });
 
     return { outcome: "success" };

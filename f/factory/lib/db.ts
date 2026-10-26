@@ -383,11 +383,7 @@ function toWorkItem(row: SqlRow): WorkItem {
       "conflict_check_id",
     ),
     conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
-    // コードの反映はmigrationより先なので、列を足す前の行は`design_attempt`を持たない。
-    design_attempt:
-      row.design_attempt === undefined
-        ? 0
-        : parseRequiredNumber(row.design_attempt, "design_attempt"),
+    design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -1743,24 +1739,111 @@ export type NewRequirementDraft = {
   open_questions: string[];
   /** `RequirementDraft.doc_dir`(`types.ts`)を参照。 */
   doc_dir: string | null;
+  /** `RequirementDraft.doc_hash`(`types.ts`)を参照。 */
+  doc_hash: string | null;
 };
 
-/** `factory.requirement_drafts`に行を挿入し、そのIDを返す。 */
+const DOC_HASH_COLUMN_PATTERN =
+  /column "doc_hash" of relation "requirement_drafts" does not exist/;
+
+/**
+ * 例外が、`requirement_drafts.doc_hash`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * エラーコード42703は、どの列が無くても同じコードなので、コードだけでは別の列の欠落を取り違える。
+ * そのため、エラーの文(messageとbody)があるときは、文が`doc_hash`を含むときだけ真にする。
+ * 文が無い(どちらも空)ときは、確かめる手段が無いので、コードだけで真にする。
+ * コードが無い例外は、列と表の名前を含む文が完全に一致するときだけ真にする。
+ *
+ * 判定の根拠は、PostgreSQLの文言(`column "doc_hash" of relation "requirement_drafts" does not exist`)とコード42703である。
+ * 本番の`wmill.datatable()`が列の欠落をどの形で返すか(コードの有無、文の形、bodyの引用符のエスケープ)は、実機では確かめていない。
+ * bodyはJSONの文字列として返りうるので、引用符のエスケープ(`\"`)は`"`に戻してから照合する。
+ * 実機の形が違えば、列が無いときの保存が失敗に倒れる(基準値なしの保存に切り替わらない)ので、通知の欠落ではなくジョブの失敗として見える。
+ */
+export function isMissingDocHashColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const body: unknown = Reflect.get(err, "body");
+  const statements = [err.message, typeof body === "string" ? body : ""]
+    .map((statement) => statement.replace(/\\+"/g, '"'))
+    .filter((statement) => statement.length > 0);
+  if (Reflect.get(err, "code") === "42703") {
+    return (
+      statements.length === 0 ||
+      statements.some((statement) => statement.includes("doc_hash"))
+    );
+  }
+  return statements.some((statement) =>
+    DOC_HASH_COLUMN_PATTERN.test(statement),
+  );
+}
+
+/** `doc_hash`の列が無い間に基準値なしで下書きを保存したときに残す通知の種類。 */
+export const DOC_HASH_COLUMN_MISSING_NOTICE_KIND = "doc_hash_column_missing";
+
+/**
+ * 本文は下書きに依らず固定する。同じ本文の未解決の通知は1件にまとまるため、
+ * 列が無い間に何件保存しても、通知は重ならない。
+ */
+const DOC_HASH_COLUMN_MISSING_NOTICE_MESSAGE =
+  "requirement_drafts.doc_hashの列が無いため、要件定義の下書きを基準値なしで保存しました。この下書きは、承認の後の書き換えを検出できません。datatableのmigrationが反映されたことを確かめ、守りたい要件定義は作り直してください";
+
+/**
+ * `factory.requirement_drafts`に行を挿入し、そのIDを返す。
+ * 基準値の列を足すmigrationより先に、この関数を含むコードが反映されると、列が無いエラーになる。
+ * そのときだけ、`doc_hash`を除いた文で保存し直し、基準値が無い下書きになったことを警告に残す。
+ * 下書きが保存されないと要件定義の承認に進めないためである。ほかのエラーは投げる。
+ */
 export async function saveDraft(
   draft: NewRequirementDraft,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.requirement_drafts (
-      work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir
+      work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir, doc_hash
     ) VALUES (
       ${draft.work_item_id}::bigint, ${draft.attempt}::integer, ${draft.summary}, ${draft.markdown},
       ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb,
-      ${draft.doc_dir}
+      ${draft.doc_dir}, ${draft.doc_hash}::text
     )
     RETURNING id
   `;
-  const row = await fetchOneRow(statement, "saveDraft");
+  let row: SqlRow;
+  try {
+    row = await fetchOneRow(statement, "saveDraft");
+  } catch (err) {
+    if (!isMissingDocHashColumnError(err)) throw err;
+    log.warn(
+      "requirement_drafts.doc_hash is missing; saved the draft without the baseline hash (the datatable migration has not run yet)",
+      { work_item_id: draft.work_item_id },
+    );
+    const legacy = sql`
+      INSERT INTO factory.requirement_drafts (
+        work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir
+      ) VALUES (
+        ${draft.work_item_id}::bigint, ${draft.attempt}::integer, ${draft.summary}, ${draft.markdown},
+        ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb,
+        ${draft.doc_dir}
+      )
+      RETURNING id
+    `;
+    row = await fetchOneRow(legacy, "saveDraft");
+    // 下書きを保存した後に、基準値が無い下書きができたことを、解決するまで残る通知にする。ログだけでは流れて見落とされる。
+    try {
+      await addNoticeUnlessUnresolved(
+        {
+          kind: DOC_HASH_COLUMN_MISSING_NOTICE_KIND,
+          message: DOC_HASH_COLUMN_MISSING_NOTICE_MESSAGE,
+        },
+        sql,
+      );
+    } catch (noticeErr) {
+      log.warn("doc_hash_column_missing notice could not be recorded", {
+        work_item_id: draft.work_item_id,
+        error: maskSecrets(
+          noticeErr instanceof Error ? noticeErr.message : String(noticeErr),
+        ),
+      });
+    }
+  }
   return parseId(row.id, "id");
 }
 
@@ -1775,6 +1858,11 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
     diagrams: parseDiagrams(row.diagrams, "diagrams"),
     open_questions: parseOpenQuestions(row.open_questions, "open_questions"),
     doc_dir: parseNullableString(row.doc_dir, "doc_dir"),
+    // 列を足すmigrationより先にコードが反映された間は、`SELECT *`の行に列が無い。基準値が無い下書きとして読む。
+    doc_hash:
+      row.doc_hash === undefined
+        ? null
+        : parseNullableString(row.doc_hash, "doc_hash"),
     created_at: parseDate(row.created_at, "created_at"),
   };
 }
@@ -3023,6 +3111,8 @@ export async function setFixRound(
  * (`retry_work_item.ts`の`workItem.attempt + 1`など)が、
  * 2回目以降の要件定義の生成で古い値を見てしまう。
  * リースを条件にするのは、リースを失った古い実行が新しい実行のattemptを戻さないため。
+ * 同じ文で`design_attempt`を0へ戻す。`attempt`を進める経路(設計と実装の要件の不足、pr_fixの差し戻し、
+ * 要件定義の却下、再実行)はどれもこの更新を通り、設計の試行は`attempt`ごとに数え直すため。
  * 終端の状態かどうかは見ない。終端になった作業項目を進めないのは、続く状態の比較交換の役目である。
  */
 export async function setAttemptIfLeaseHolder(
@@ -3033,7 +3123,7 @@ export async function setAttemptIfLeaseHolder(
 ): Promise<boolean> {
   const rows = await sql`
     UPDATE factory.work_items
-    SET attempt = ${attempt}::integer, updated_at = now()
+    SET attempt = ${attempt}::integer, design_attempt = 0, updated_at = now()
     WHERE id = ${id} AND flow_job_id = ${leaseJobId}
     RETURNING id
   `.fetch();
@@ -3529,6 +3619,22 @@ export async function latestDesignDraft(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toDesignDraft(row);
+}
+
+/**
+ * `docDir`を`doc_dir`に持つ設計書の下書きがあるかを返す。
+ * 設計書の生成は試行のディレクトリを空にしてから書くので、保存済みの下書きと同じディレクトリを空にする前に確かめる。
+ */
+export async function hasDesignDraftForDocDir(
+  docDir: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT id FROM factory.design_drafts
+    WHERE doc_dir = ${docDir}::text
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 /**

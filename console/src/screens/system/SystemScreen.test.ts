@@ -52,12 +52,8 @@ describe("the place of the band and the tabs", () => {
     expect(SOURCE).not.toContain("useMediaQuery");
   });
 
-  test("gives the band the oldest time of fetch", () => {
-    expect(BODY).toContain("updatedAt={oldestUpdatedAt(");
-  });
-
-  test("gives the band the current time", () => {
-    expect(BODY).toMatch(/<SummaryBand[^>]*now=\{now\}/s);
+  test("gives the band no time of fetch, which the page header shows", () => {
+    expect(BODY).not.toContain("updatedAt");
   });
 });
 
@@ -80,5 +76,33 @@ describe("the jump from a chip", () => {
 describe("the host action of the release section", () => {
   test("counts it from the unresolved notices of the summary", () => {
     expect(BODY).toMatch(/<ReleaseSection[^>]*summary=\{summary\}/s);
+  });
+});
+
+describe("the config tab", () => {
+  test("reads the config only after the tab was opened", () => {
+    expect(BODY).toMatch(/useConfig\([^)]*visited\.has\("config"\)/);
+  });
+
+  test("puts the config in its own panel", () => {
+    expect(BODY).toContain('systemPanelAttrs("config", tab)');
+  });
+
+  test("draws the config section", () => {
+    expect(BODY).toContain("<ConfigSection");
+  });
+
+  test("starts the config after the four fetches of the other tabs", () => {
+    expect(BODY.indexOf("useDeployments()")).toBeLessThan(
+      BODY.indexOf("useConfig("),
+    );
+  });
+});
+
+describe("the worker load note", () => {
+  test("says the list of workers cannot be read here and a stop is notified", () => {
+    expect(SOURCE).toContain(
+      "workerの一覧は、ここでは読めません。止まったときは通知で知らせます。",
+    );
   });
 });

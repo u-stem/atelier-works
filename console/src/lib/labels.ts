@@ -90,6 +90,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["dependabot_merge_held", "マージの保留による待ち"],
   ["dependabot_merge_hold_unreadable", "マージの保留を読めない状態"],
   ["hold_released", "保留の解除"],
+  ["doc_hash_column_missing", "要件定義の基準値の列の欠落"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */

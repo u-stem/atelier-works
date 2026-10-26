@@ -3,7 +3,6 @@ import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { LoadingGate, type RowsShape } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { TimeText } from "../../components/TimeText.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
 /** 内容が未知の節の読み込み中の形。 */
@@ -52,13 +51,19 @@ export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
     rows: 1,
     rowClassName: "h-9 w-full rounded-xl",
   },
+  // 検索欄と、項目の行(見積もり。実機で測り直す)。
+  "config-heading": {
+    rows: 6,
+    rowClassName: "h-12 w-full rounded-md",
+    gapClassName: "gap-2",
+  },
 };
 
 /**
  * システムの画面の1つの節。見出し、取得の状態、本文を持つ。
  * 取得は画面が持ち、更新ボタンも画面の見出しにある。この節は失敗したときの「もう一度取得する」だけを持つ。
  * 同じ取得を読む節は、結果を分け合う。
- * 見出しの横に、その取得の最終取得時刻を出す。取得ごとに鮮度が違うためである。
+ * 取得の時刻は出さない。画面の見出しの「最終更新」が、設定を除く、定期に取り直す取得のうち最も古い時刻を示す。
  * 節の枠は操作を持たない。操作を持つ節は、本文の側で書き込みを結ぶ。
  */
 export function SystemSection<T>({
@@ -67,11 +72,14 @@ export function SystemSection<T>({
   description,
   query,
   loginHint,
+  visuallyHiddenTitle = false,
   children,
 }: {
   /** 見出しの要素のid。節の`aria-labelledby`が指す。 */
   id: string;
   title: string;
+  /** 見出しが、開いているタブの名前と重なるとき、画面には出さず、読み上げにだけ残す。 */
+  visuallyHiddenTitle?: boolean;
   description: ReactNode;
   query: SectionQuery<T>;
   /** 401で取得できないときに、ログイン後に何が出るかを伝える文。 */
@@ -80,29 +88,21 @@ export function SystemSection<T>({
   children: (data: T, now: number) => ReactNode;
 }) {
   const now = useNow();
-  const updatedAt = query.dataUpdatedAt;
   return (
     <section aria-labelledby={id} className="flex max-w-3xl flex-col gap-3">
       <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline gap-x-3">
-          {/* 要約の帯のリンクで移った後にフォーカスを受ける。Tabの順には入れない。 */}
-          <h2
-            id={id}
-            tabIndex={-1}
-            className="scroll-mt-4 rounded-sm text-lead font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {title}
-          </h2>
-          {updatedAt === undefined || updatedAt <= 0 ? null : (
-            <span className="text-small text-subtle">
-              <TimeText
-                iso={new Date(updatedAt).toISOString()}
-                now={now}
-                prefix="取得 "
-              />
-            </span>
-          )}
-        </div>
+        {/* 要約の帯のリンクで移った後にフォーカスを受ける。Tabの順には入れない。 */}
+        <h2
+          id={id}
+          tabIndex={-1}
+          className={
+            visuallyHiddenTitle
+              ? "sr-only"
+              : "scroll-mt-4 rounded-sm text-lead font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          }
+        >
+          {title}
+        </h2>
         <div className="text-small text-muted-foreground">{description}</div>
       </div>
       <LoadingGate

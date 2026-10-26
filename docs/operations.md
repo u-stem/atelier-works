@@ -450,8 +450,10 @@ FactoryがIssueを作成し、ラベルで投入したときと同じ要件定�
 投入されていたのに再送すると、Issue、作業項目、pipelineが重複するためである。
 
 1. Windmillのジョブ一覧で、`manual_intake_submit`のジョブが待ち状態か実行中ではないか。
-   待っている間は、`manual_intake`のジョブとIssueが無い
-2. Windmillのジョブ一覧に、`manual_intake`のジョブがあるか
+   待っている間は、`manual_intake`のジョブとIssueが無い。
+   `manual_intake_submit`はtag`console`のscriptなので、Consoleのジョブの画面には出ない
+2. Consoleのジョブの画面の履歴で、scriptを`manual_intake`に絞り、投入のジョブがあるか。
+   投入のジョブの詳細に、フローが動いたか、失敗したかが出る
 3. 対象リポジトリのIssueに、送った題名と同じIssueがあるか
 
 投入されていなければ「確かめたので再送する」を押して、もう一度投入する。
@@ -642,7 +644,8 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
    ```
 
    大小文字を変えたラベル名でも件数が等しいことと、カンマを含む名前が複数のラベルの指定として読まれないことを見る。
-4. 続く3回の`poll_issues`の結果を、WindmillのRunsで確かめる。
+4. 続く3回の`poll_issues`の結果を、Consoleのジョブの画面で確かめる。
+   履歴をscriptで絞り、各ジョブの結果を読む。
    `collect_disabled`が`false`、`failed`が0であることを見る。
    `candidates`は、手順2の表の候補の数と近いはずである。
    `dropped`は、0か、古い行で説明できる値になる。
@@ -828,7 +831,7 @@ stateを書けない間は、毎周回先頭から選ぶ。
    手順5で、自然に付いた依頼とラベルの着手までの遅れを記録して補う。
    `different`なら、収集の周回の遅れ(5分以内)か、上の変化で説明できるかを確かめ、数分後に読み直す。
    説明できなければ、収集の不具合として調べる。
-4. 続く3回の`poll_prs`の結果を、WindmillのRunsで確かめる。
+4. 続く3回の`poll_prs`の結果を、Consoleのジョブの画面で確かめる。
    `collect_disabled`が`false`、`failed`が0であることを見る。
    `candidates`は、手順2の`target`と`maybe`と`team`の合計と近いはずである。
    `dropped`は、0か、古い行で説明できる値になる。
@@ -1575,6 +1578,12 @@ checkoutは新しい版で、コンテナは古い版のままである。
 止まるときのメッセージにも、この旨が1行出る。
 ジョブの様子は、Windmillの画面か`wmill job list`で見る。作業項目はConsoleで見る。
 一覧が定期のジョブだけのときは、ジョブが終わらず詰まっていないかを、Windmillの画面で確かめる。
+Consoleのジョブの画面の実行中と待ちは、補助に使える。
+ただし、`f/factory/`のscriptとフローだけを、キューの1ページ(100件)まで読み、待ちも含む。
+一方`check-idle`は、defaultのworkerの枠で実行中のジョブだけを数える。
+待ちは数えない。フローの親ジョブと、他のworkerが受けるtagのジョブも数えない。
+そのため、件数は食い違うことがある。
+止めるかどうかの確認には、Consoleの画面を使わない。
 
 確認だけを手で実行するには、次を使う。
 
@@ -1590,7 +1599,7 @@ Claudeが実行するときは、Bashの10分の上限に収めるため、`run_
 `CHECK_IDLE_FORCE=1`を付けると、確認を飛ばす。
 付けるのは人だけで、次のどちらかを確かめたときである。
 
-- 一覧のジョブが無いことを、Windmillの画面を見て自分で確かめた。作業項目が実装中などのまま残っていても、対応するジョブが無ければ、動いていない。
+- 一覧のジョブが無いことを、`wmill job list`か、`check-idle`が出すジョブのidをWindmillの画面で開いて、自分で確かめた。作業項目が実装中などのまま残っていても、対応するジョブが無ければ、動いていない。
   残った作業項目は、更新から10分たてば警告にとどまり、止めない。10分以内に止まるときは、この残った作業項目の場合がある。
   - Windmillの画面を開けないときは、一覧の開始時刻(`started`)と、workerの状態を照らし合わせる。
     workerの状態は、`mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker`で見る。
@@ -2075,7 +2084,7 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
    `poll_issues`や`poll_prs`など、ほかのフローの対象も同じ範囲に狭まる。
 3. [人のPRの失敗を通知する](#人のprの失敗を通知する)の手順で、`pr_ci_watch_human_prs`を`true`にする。
    有効にする前の`pr_ci_check_denied`の未解決の件数を控える。手順5の比較の基準になる。
-4. 続く3回の`watch_pr_ci`の結果を、WindmillのRunsで確かめる。
+4. 続く3回の`watch_pr_ci`の結果を、Consoleのジョブの画面で確かめる。
    `errors`が0、`human_collect_disabled`が`false`、`human_deferred`が0であることを見る。
    `human_rest_lists`は、表が使えない明示リポジトリの数で、`owners`に無いオーナーの`factory_repo`の分だけのはずである。
    `human_table_candidates`は、手順2の表の候補の数と近いはずである。
@@ -2110,7 +2119,7 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
 
 反映後は、次の2つを確かめる。
 
-- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。WindmillのRunsで失敗を見て、次の周回で成功に戻ることを確かめる。
+- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。Consoleのジョブの画面の履歴で失敗を見て、次の周回で成功に戻ることを確かめる。
 - `watch_pr_ci`の発見の元を選んでいた項目を、手で消す。
   `pr_ci_watch_human_prs`が真なら、実ジョブで手順4の結果を確かめた後に消す。
   偽の間は、表と一覧を読まないので、反映後の1周回が成功し、`errors`が0であることを確かめた後に消す。偽のままでも消してよい。
@@ -2426,7 +2435,7 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
    それ以外の差は、収集の周回の遅れ(5分以内)か、archive済みのリポジトリで説明できるかを確かめ、数分後に読み直す。
    `repo_allowlist`が空の構成では、PATのアカウントが開いているPRを持つリポジトリのうち、`gh_repos`に行の無いものがないことも確かめる。
    あれば、そのリポジトリのFactoryのPRは、作業項目か競合の行に載るまで見つからない。
-3. 続く3回の`watch_pr_conflicts`の結果を、WindmillのRunsで確かめる。
+3. 続く3回の`watch_pr_conflicts`の結果を、Consoleのジョブの画面で確かめる。
    `collect_disabled`が`false`、`errors`が0であることを見る。
    `table_repos`は、表から列挙したリポジトリの数で、対象のうち記録が新しいものの数と近いはずである。
    `tracked`と`conflicted`は、直前の周回と同じか、その間のPRの開閉で説明できる値になる。
@@ -2453,7 +2462,7 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
 
 反映後は、次の2つを確かめる。
 
-- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。WindmillのRunsで失敗を見て、次の周回で成功に戻ることを確かめる。
+- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。Consoleのジョブの画面の履歴で失敗を見て、次の周回で成功に戻ることを確かめる。
 - 実ジョブで手順3の結果を確かめた後に、`watch_pr_conflicts`の発見の元を選んでいた項目を、手で消す。
   対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
   消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
@@ -2874,24 +2883,59 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 ### 設計工程のmigrationを戻す
 
 設計工程のmigrationを戻す手順である。
-`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に3回打つ。
-設計の下書きが先に戻り、承認の記録を失わないために、承認依頼側がその次に戻る。
+`wmill datatable migrate down`は1回に最新の1つだけを戻し、途中のmigrationを飛ばす指定は無い。
+新しい順に打つので、設計工程のmigrationに届くまでに、設計工程より新しいmigrationも戻ることになる。
 
-1. 1回目の`migrate down`で、設計の下書きの表(`design_drafts`)と、要件定義の下書きの複合の一意制約が戻る(`20261026130000_design_drafts`)。
-2. 2回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
-3. 3回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
-   `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
+1. 設計工程より新しいmigrationを、新しい順にすべて戻す。
+   何があるかは`ls migrations/datatable/main`で確かめ、`20261026130000_design_drafts`より新しい名前を数える。
+2. 次の表の3つを、上から順に戻す。
 
-1回目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
+| 順 | migration | 戻る内容 |
+| --- | --- | --- |
+| 1 | `20261026130000_design_drafts` | 設計の下書きの表(`design_drafts`)と、要件定義の下書きの複合の一意制約が戻る |
+| 2 | `20261026120100_design_stage_approval_kind` | 承認依頼の種類の制約から`design`が外れる |
+| 3 | `20261026120000_design_stage_work_items` | 作業項目の列(`design_attempt`)、状態の制約、一意インデックスが戻る |
+
+設計の下書きが先に戻り、承認の記録を失わないために、承認依頼の制約がその次に戻る。
+表の3行目では、`designing`と`awaiting_design_approval`の作業項目が人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
+
+#### 戻す前に反映するコード
+
+最初の`migrate down`を打つ前に、戻す列や表を読み書きしないコードを反映する。
+設計工程より新しいmigrationにも、同じ確認が要る。
+`ls`で見つけたmigrationのdownを読み、戻す列や表を使うコードを先に外す。
+
+- `design_attempt`は、作業項目を読むコードが必須の列として読む。
+  列を先に消すと、作業項目を読むすべての経路が例外になる。
+- 設計中の作業項目のジョブが動いている間に表の3行目を戻すと、フローの後の状態の書き込みが制約に当たって失敗する。
+  戻す前に設計フローを止める。
+- 要件定義の下書きの基準値の列(`doc_hash`)は、列が無ければ基準値の無い下書きとして保存し、読む。
+  例外にはならないが、基準値が空になり、承認済みの要件定義の書き換えの照合が飛ぶ。
+  列を消した後に`migrate up`で当て直しても、既存の下書きの基準値は空のままである。
+  列を消した後に下書きを保存すると、通知`doc_hash_column_missing`(要対応)が残る。対応は[通知の種類](#通知の種類)の表に書く。
+- Consoleの操作の記録の表(`console_actions`)は、操作の記録を書くコードが残っていると、表が無いエラーで記録の挿入が失敗し、Consoleの書き込みの操作が拒否される。
+
+`doc_hash`と`console_actions`は、どちらも設計工程のmigrationではなく、設計工程より新しいmigrationが足す。
+
+#### 新しいmigrationも戻ること
+
+`migrate down`に飛ばす指定が無いので、設計工程だけを戻すことはできない。
+表の1行目に届くまでに、設計工程より新しいmigrationが戻り、その内容は失われる。
+`doc_hash`の列が消え、`console_actions`の操作の記録が失われる。
+これらを残すなら、設計工程のmigrationは戻さない。
+
+#### 失敗したとき
+
+表の1行目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
 トランザクションごと戻るので、表と制約は残る。
 設計の下書きを、行があるまま失わないためである。
-行の扱いを決めて消してから、1回目をやり直す。
+行の扱いを決めて消してから、1行目をやり直す。
 
 設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。
-そのため、通常は1回目と2回目で止まらない。
-2回目が失敗したときは、種類が`design`の承認依頼が残っている。
+そのため、通常は表の1行目と2行目で止まらない。
+2行目が失敗したときは、種類が`design`の承認依頼が残っている。
 制約を足し直せないので、migrationはそこで止まる。
-`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、2回目をやり直す。
+`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、2行目をやり直す。
 
 ### 5分の境目の403を数える
 
@@ -3028,7 +3072,7 @@ dependabotの対象は、baseが`main`のPRに限る。
 1つずつ確かめてから進める。
 設定を一度に変えると、問題が起きたときに原因を切り分けられないためである。
 
-1. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、WindmillのRunsで確かめる。
+1. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、Consoleのジョブの画面で確かめる。
 2. [有効化の前の確認](security.md#有効化の前の確認)の、試運転の前に単独の実験で確かめる項目を確かめる。
    フローは使わない。
    満たさなければ、試運転を始めない。
@@ -3107,7 +3151,7 @@ dependabotの対象は、baseが`main`のPRに限る。
    ```
 
    周回の遅れ(5分以内)で説明できない差があれば、収集の不具合として調べる。
-3. 続く3回の`poll_dependabot`の結果を、WindmillのRunsで確かめる。
+3. 続く3回の`poll_dependabot`の結果を、Consoleのジョブの画面で確かめる。
    `enabled`が`true`、`paused`が`false`、`failed`が0であることを見る。
 4. `fallback_lists`が0であることを確かめる。
    1以上なら、`fallback_reasons`の語で原因を読む。
@@ -3146,7 +3190,7 @@ dependabotの対象は明示したリポジトリだけで、一覧の読み取�
 
 ### 初回の実機で確かめること
 
-試運転とマージの最初の数件は、次の点を作業項目の結果とWindmillのRunsで確かめる。
+試運転とマージの最初の数件は、次の点を作業項目の結果とConsoleのジョブの画面で確かめる。
 
 - 隔離したインストールが、npm registryに届き、`--frozen-lockfile`で成功する。
 - インストールが、準備のステップのtimeout(3600秒)の中で終わる。
@@ -3654,6 +3698,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `dependabot_merge_held` | リポジトリにマージの保留があるため、dependabotの更新PRが待っている。取得の1周ごとに1件にまとめ、本文に件数は載せない。件数は取得のログに残る。「情報」で、保留の`reason`と`holder`は載せない | 保留が意図したものなら、何もしない。解除してよければ、Consoleのシステムの画面の「保留と凍結」から解除するか、[保留を確かめる](#保留を確かめる)の手順で解除する。解けると、次の取得で自動で再開する |
 | `dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開し、この通知も自動で解決される。`corrupt`と`error`は、本文の先頭にリポジトリが載り、そのリポジトリを読めた周回で解決される。候補のPRが無い周回も読むので、PRが閉じても解決される |
 | `hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
+| `doc_hash_column_missing` | 要件定義の下書きの基準値の列(`requirement_drafts.doc_hash`)が無いまま、基準値なしで下書きを保存した。列を足すmigrationより先に、コードが反映されたときに残る。この下書きは、承認の後の書き換えを検出できない。本文は固定で、未解決は1件にまとまる | 列を足すmigrationは、自己更新が自動で反映する。デプロイの記録で、反映が成功していることを確かめる。失敗しているときは、自己更新のジョブのログで原因を確かめる。書き換えから守りたい要件定義は作り直す。列が足されても、通知は自動では解決されない。基準値なしで保存された承認済みの要件定義が残ること自体が、書き換えからの守りの欠落であり、列が足されたことだけでは消えないためである。人が、その要件定義の扱いを確かめ終えてから解決する |
 
 ### Console用のworkerの検知を確かめる
 

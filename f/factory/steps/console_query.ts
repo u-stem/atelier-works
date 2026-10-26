@@ -1194,6 +1194,7 @@ export type ConsoleSummaryCounts = {
 /**
  * "summary"ビューの結果。サイドバーの件数と、要対応の一覧に使う。
  * 件数は、一覧の件数の上限(`limit`)を超えた分も数える。
+ * 承認待ちは、Inboxと同じく、画面が扱える種類(`requirements`と`issue_proposal`)だけを取る。
  */
 export type ConsoleSummary = {
   readonly counts: ConsoleSummaryCounts;
@@ -1235,8 +1236,9 @@ export async function runConsoleSummary(
       proposal_title, created_issue_number, origin,
       count(*) OVER () AS total_count
     FROM factory.v_approval_requests
-    WHERE status = 'pending'
-      OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL)
+    WHERE kind IN ('requirements', 'issue_proposal')
+      AND (status = 'pending'
+        OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL))
     ORDER BY requested_at DESC
     LIMIT ${limit}::integer
   `.fetch();
@@ -2324,6 +2326,8 @@ export async function runConsoleQuery(
       // Issueがまだ作られていない"approved"のIssue提案も含める。
       // 承認の記録はIssueの作成より先に行うため、その間で失敗する(GitHubがエラーを返すなど)と、
       // `status = 'pending'`だけを選ぶ条件では、その行が人から永久に見えなくなる。
+      // 取得する種類は、画面が扱えるものを並べる。除外する書き方だと、種類を足したときに
+      // 画面の用意が無いまま行が届き、一覧全体が落ちる。設計の承認依頼は、設計の承認の画面を入れるときに足す。
       const rows = await sql`
         SELECT
           id AS approval_request_id, kind, status, work_item_id, owner, repo,
@@ -2332,8 +2336,9 @@ export async function runConsoleQuery(
           proposal_status, created_issue_number, created_issue_url, claimed_by,
           origin, audit_report_id, payload
         FROM factory.v_approval_requests
-        WHERE status = 'pending'
-          OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL)
+        WHERE kind IN ('requirements', 'issue_proposal')
+          AND (status = 'pending'
+            OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL))
         ORDER BY requested_at DESC
         LIMIT ${limit}::integer
       `.fetch();

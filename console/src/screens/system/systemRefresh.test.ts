@@ -86,3 +86,56 @@ describe("refreshStatusOfSystem", () => {
     ).toBeNull();
   });
 });
+
+describe("refreshStatusOfSystem with the config", () => {
+  const base = {
+    status: fake({ dataUpdatedAt: 3000 }),
+    deployments: fake({ dataUpdatedAt: 3000 }),
+    summary: fake({ dataUpdatedAt: 3000 }),
+    holds: fake({ dataUpdatedAt: 3000 }),
+  };
+
+  test("refreshes the config with the other queries", () => {
+    const config = fake();
+    refreshStatusOfSystem({ ...base, config }).onRefresh();
+    expect(config.refetched()).toBe(1);
+  });
+
+  test("does not let the config, which is never refetched by itself, hold the oldest update", () => {
+    expect(
+      refreshStatusOfSystem({ ...base, config: fake({ dataUpdatedAt: 1000 }) })
+        .updatedAt,
+    ).toBe(3000);
+  });
+
+  test("is fetching while only the config is fetching", () => {
+    expect(
+      refreshStatusOfSystem({ ...base, config: fake({ isFetching: true }) })
+        .isFetching,
+    ).toBe(true);
+  });
+
+  test("shows the status as the oldest while the auto refreshed queries are newer", () => {
+    expect(
+      refreshStatusOfSystem({
+        ...base,
+        status: fake({ dataUpdatedAt: 1000 }),
+        holds: fake({ dataUpdatedAt: 9000 }),
+        summary: fake({ dataUpdatedAt: 9000 }),
+      }).updatedAt,
+    ).toBe(1000);
+  });
+
+  test("leaves out a config that was never fetched", () => {
+    expect(
+      refreshStatusOfSystem({ ...base, config: fake({ dataUpdatedAt: 0 }) })
+        .updatedAt,
+    ).toBe(3000);
+  });
+
+  test("does not refetch a config that the screen does not read yet", () => {
+    const config = fake();
+    refreshStatusOfSystem({ ...base, config: null }).onRefresh();
+    expect(config.refetched()).toBe(0);
+  });
+});

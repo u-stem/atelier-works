@@ -3966,6 +3966,8 @@ const LOCK_HELD_PR_FIX_PROCEDURE =
 function worktreeLockHeldInRunNextAction(
   flow: NextActionFlow | undefined,
 ): string {
+  if (flow === "design")
+    return `設計のClaudeが残したプロセスがないか確かめ、残っていればworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}(設計の準備は何も止めません)`;
   if (flow === "implement")
     return `検査コマンドが常駐プロセスを残していないか確かめてから、${RETRY_WORK_ITEM_ACTION}(残ったプロセスは再実行の準備ステップが止めます)`;
   if (flow === "pr_fix")
@@ -4236,6 +4238,75 @@ function ciRoundStopAction(match: RegExpMatchArray): string {
     ? CI_ROUND_NEXT_ACTION
     : prCiFixHoldInfo(hold).stopAction;
 }
+
+/**
+ * 承認済みの要件定義のディレクトリが、承認時の内容と違う、または無いときの次の操作。
+ * 基準値が残るので、同じ作業項目を再実行しても同じ検出で止まる。新しいサイクルで要件定義を作り直す。
+ */
+const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
+  "承認済みの要件定義のディレクトリを確かめ、`factory`ラベルを付け直して要件定義を作り直してください(この作業項目を再実行しても同じ理由で止まります)";
+
+/**
+ * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
+ * `lib/design_launch_support.ts`の定数と関数が作る文字列と同じにする。
+ * この表は設計の定数をimportしない。importするとpr_workflow_support.tsの依存が増えるため、文字列をここに直接書く。
+ * `tests/scripts/pr_workflow_support_design.test.ts`が、定数と関数の出力を表と突き合わせて食い違いを検出する。
+ */
+const DESIGN_REASON_RULES: readonly ReasonRule[] = [
+  {
+    pattern: /^design flow could not be started(?:: ([\s\S]+))?$/,
+    describe: (m) =>
+      m[1] === undefined
+        ? "設計フローを起動できませんでした"
+        : `設計フローを起動できませんでした(${m[1]})`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^design requires approved requirements for attempt (\d+)$/,
+    describe: (m) =>
+      `要件定義の試行${m[1]}回目に承認済みの要件定義が無いため、設計を始められませんでした`,
+    nextAction: () =>
+      "Consoleで要件定義の承認の状態を確かめ、承認が無ければ`factory`ラベルを付け直して要件定義を作り直してください",
+  },
+  {
+    pattern: /^design requirements_gap after max_attempts (\d+)$/,
+    describe: (m) =>
+      `設計が要件の不足を報告しましたが、要件定義の試行回数が上限(${m[1]})に達しました`,
+    nextAction: () =>
+      "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
+  },
+  {
+    pattern: /^approved requirements were modified before design$/,
+    describe: () =>
+      "承認済みの要件定義のディレクトリが、設計を始める前に承認時の内容と異なっていました",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: /^approved requirements were modified during design$/,
+    describe: () =>
+      "承認済みの要件定義のディレクトリが、設計の実行中に書き換わりました",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: /^approved requirements were modified before implementation$/,
+    describe: () =>
+      "承認済みの要件定義のディレクトリが、実装の準備かClaudeの実行の前後で承認時の内容と異なっていました",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: /^approved requirements directory is missing$/,
+    describe: () =>
+      "承認済みの要件定義のディレクトリがありません(workerやボリュームを作り直した可能性があります)",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: /^design document directory already holds a saved draft$/,
+    describe: () =>
+      "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
+    nextAction: () =>
+      `Consoleで保存済みの設計書の下書きを確かめてから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+];
 
 export const REASON_RULES: readonly ReasonRule[] = [
   // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
@@ -4707,6 +4778,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
   },
+  ...DESIGN_REASON_RULES,
   {
     pattern: /^implement flow could not be started: ([\s\S]+)$/,
     describe: (m) => `実装フローを起動できませんでした: ${m[1]}`,
@@ -5098,6 +5170,20 @@ export function nextActionFor(reason: string, flow?: NextActionFlow): string {
   return flow === "dependabot"
     ? DEPENDABOT_MANUAL_NEXT_ACTION
     : GENERIC_NEXT_ACTION;
+}
+
+/**
+ * 設計工程の`needs_human`の通知に載せる、理由の訳と次の操作。
+ * 設計のフローが残したプロセスの案内など、フローで操作が変わる理由に、設計向けの案内を使う。
+ */
+export function designNeedsHumanFields(reason: string): {
+  readonly reason: string;
+  readonly next_action: string;
+} {
+  return {
+    reason: describeReason(reason),
+    next_action: nextActionFor(reason, "design"),
+  };
 }
 
 // ---------------------------------------------------------------------------

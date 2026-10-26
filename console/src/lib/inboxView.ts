@@ -719,19 +719,15 @@ export function emptyStateTone(
 }
 
 /**
- * 画面の見出しの副題。一覧にある項目を種類ごとの件数で伝える。
- * 一覧が空で、ほかの種類の件数も残っていなければ「すべて片付いています」にする。
+ * 画面の見出しの副題。何も残っていないときだけ「すべて片付いています」にする。
+ * 種類ごとの件数は、切り替えのチップの横が示すので、副題では繰り返さない。
  * 一覧が空でほかの種類が残っているときは、本文が伝えるので副題を出さない。
  */
 export function inboxSubtitle(
   items: readonly InboxItem[],
   unlisted: readonly UnlistedCount[],
 ): string | null {
-  if (items.length === 0) {
-    return unlisted.length === 0 ? "すべて片付いています" : null;
-  }
-  const counts = chipCounts(items);
-  return INBOX_KINDS.filter((kind) => counts[kind] > 0)
-    .map((kind) => `${CHIP_LABELS[kind]} ${counts[kind]}件`)
-    .join("、");
+  return items.length === 0 && unlisted.length === 0
+    ? "すべて片付いています"
+    : null;
 }

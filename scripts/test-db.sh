@@ -72,6 +72,7 @@ GH_COLLECT_DETAIL_MIGRATION="20261018100000_gh_collect_detail.up.sql"
 DESIGN_STAGE_ITEMS_MIGRATION="20261026120000_design_stage_work_items.up.sql"
 DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
 DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
+DOC_HASH_MIGRATION="20261026150000_requirement_drafts_doc_hash.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -800,6 +801,44 @@ SQL
   log "design_drafts refuses to roll back over a design draft without dropping the table, and round-trips"
 }
 
+# 要件定義の下書きの基準値の列を足すmigrationを、値の入った行ごと戻して当て直す。
+# 戻すと列と値が消え、当て直した列は既存の行でnullになることを確かめる。全downを当てる検査の前に呼ぶ。
+verify_doc_hash_rollback() {
+  local up="${MIGRATIONS_DIR}/${DOC_HASH_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${DOC_HASH_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  hash_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  hash_columns() {
+    hash_scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'requirement_drafts' AND column_name = 'doc_hash'"
+  }
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the requirement draft with a doc hash"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
+  (1, 'issue', 'issue', 'hashprobe', 'r', 1, 'https://github.com/hashprobe/r/issues/1', 't', 'awaiting_approval');
+INSERT INTO factory.requirement_drafts (work_item_id, attempt, summary, markdown, doc_hash)
+  SELECT id, 1, 's', 'm', repeat('a', 64) FROM factory.work_items WHERE owner = 'hashprobe';
+SQL
+  [ "$(hash_columns)" = "1" ] || die "expected the doc_hash column"
+
+  log "rolling back requirement_drafts_doc_hash"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back requirement_drafts_doc_hash"
+  [ "$(hash_columns)" = "0" ] || die "expected the doc_hash column to be dropped by the rollback"
+
+  log "re-applying requirement_drafts_doc_hash"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply requirement_drafts_doc_hash"
+  [ "$(hash_columns)" = "1" ] || die "expected the doc_hash column after re-applying"
+  [ "$(hash_scalar "SELECT count(*) FROM factory.requirement_drafts d JOIN factory.work_items w ON w.id = d.work_item_id WHERE w.owner = 'hashprobe' AND d.doc_hash IS NULL")" = "1" ] \
+    || die "expected the existing draft to have no doc hash after re-applying"
+  printf "DELETE FROM factory.work_items WHERE owner = 'hashprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "requirement_drafts_doc_hash round-trips and leaves existing drafts without a baseline"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -934,6 +973,7 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
 
 verify_design_stage_rollback
 verify_design_drafts_rollback
+verify_doc_hash_rollback
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
