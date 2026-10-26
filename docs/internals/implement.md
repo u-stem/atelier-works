@@ -128,6 +128,7 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 - `.git`の書き換え(`git_pointer_modified`)
 - 変更の判定とgitleaksの検査の間のworktreeの変化(`worktree_changed`)
 - workerが検査の前提を満たさず、検査コマンドを実行できない(`check_image_stale`)。イメージが古いときと、稼働中のworkerの問題のときの両方である
+- 検査コマンドの実行ファイルを起動できない(`check_unrunnable`)
 - Claudeの実行の失敗(`claude_error`)
 - リースの喪失(`lease_lost`)
 
@@ -144,12 +145,22 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 記録すると、Sonnetの失敗として数えられ(`countImplementFailedRounds`)、`heavy_model`への切り替えを早めるためである。
 Claudeが直せる検査の失敗ではないので、修正のラウンドに進まず、作業項目は人の対応待ちになる。
 
-どちらで止まっても、理由と要対応の通知は次のとおりである。
+検査コマンドの実行ファイルを起動できないときも、同じ扱いにする。
+検査コマンドは、非特権のuidへ切り替える`setpriv`を通して動く。
+`setpriv`が実行ファイルを見つけられないか実行できないと、終了コードは127か126になり、出力は`setpriv: failed to execute`で始まる1行だけになる。
+この2つがそろうときだけ、環境の問題として止める。
+検査コマンド自身が127を返したときや、出力に同じ語が混じるだけのときは、コードの失敗なので修正のラウンドに進む。
+修正のラウンドを回しても、Claudeはworkerの環境を直せず、差分も検査の出力も変わらないまま、停滞で止まるだけだからである。
+このときもラウンドは記録しない。
+理由は`implement check command could not run: <コマンド>: <setprivの出力>`になり、要対応の通知で停滞と区別できる。
+
+止まったときの理由と要対応の通知は次のとおりである。
 
 | 原因 | 理由の先頭 | 要対応の通知 |
 | --- | --- | --- |
 | イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
 | 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+| 検査コマンドの実行ファイルを起動できない | `implement check command could not run:` | `implement_needs_human`([運用](../operations.md#人の対応待ちになったら)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
@@ -342,7 +353,7 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 
-`check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。実装フローは`allowed_check_commands`を使わない。
+`check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。実装フローは`allowed_check_commands`を使わない。
 
 1つのIssueにかかる費用の上限は、`implement_max_rounds × implement_max_budget_usd_per_run`が目安である。Claudeの不正な出力への再試行は、その実行の費用の上限をもう1回使うので、最悪でその2倍になる。
 
