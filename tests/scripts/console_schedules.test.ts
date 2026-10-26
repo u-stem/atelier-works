@@ -62,11 +62,25 @@ function ports(
     withJobs?: unknown[];
     queue?: unknown[];
     queueQueries?: QueueQuery[];
+    /** 取得したページの番号を残す。 */
+    pages?: number[];
+    /** 真なら、どのページも100件の満杯で返す。 */
+    endless?: boolean;
   } = {},
 ): SchedulesPorts {
+  const all = options.schedules ?? [schedule()];
   return {
-    listSchedules: async () => options.schedules ?? [schedule()],
-    listSchedulesWithJobs: async () => options.withJobs ?? [],
+    listSchedules: async (page) => {
+      options.pages?.push(page);
+      if (options.endless === true) {
+        return Array.from({ length: 100 }, (_, i) =>
+          schedule({ path: `f/factory/e${String(page)}_${String(i)}` }),
+        );
+      }
+      return all.slice((page - 1) * 100, page * 100);
+    },
+    listSchedulesWithJobs: async (page) =>
+      (options.withJobs ?? []).slice((page - 1) * 100, page * 100),
     listQueue: async (query) => {
       options.queueQueries?.push(query);
       return options.queue ?? [];
@@ -248,6 +262,73 @@ describe("loadSchedules", () => {
       { job_id: "job-3", success: false, duration_ms: 103 },
       { job_id: "job-4", success: true, duration_ms: 104 },
     ]);
+  });
+
+  function manySchedules(count: number): unknown[] {
+    return Array.from({ length: count }, (_, i) =>
+      schedule({
+        path: `f/factory/s${String(i).padStart(3, "0")}`,
+        script_path: `f/factory/s${String(i).padStart(3, "0")}`,
+      }),
+    );
+  }
+
+  test("reads every page of the schedules", async () => {
+    const view = await loadSchedules(
+      ports({ schedules: manySchedules(250) }),
+      REPO,
+    );
+    expect(view.schedules).toHaveLength(250);
+  });
+
+  test("asks for the next page only while the page is full", async () => {
+    const pages: number[] = [];
+    await loadSchedules(ports({ schedules: manySchedules(150), pages }), REPO);
+    expect(pages).toEqual([1, 2]);
+  });
+
+  test("does not ask for another page when the first is not full", async () => {
+    const pages: number[] = [];
+    await loadSchedules(ports({ schedules: manySchedules(3), pages }), REPO);
+    expect(pages).toEqual([1]);
+  });
+
+  test("stops after ten pages", async () => {
+    const pages: number[] = [];
+    await loadSchedules(ports({ endless: true, pages }), REPO);
+    expect(pages).toHaveLength(10);
+  });
+
+  test("does not call a schedule missing when it is on a later page", async () => {
+    const schedules = [
+      ...manySchedules(100),
+      schedule({
+        path: "f/factory/self_update",
+        script_path: "f/factory/self_update",
+      }),
+      schedule(),
+    ];
+    const view = await loadSchedules(ports({ schedules }), REPO);
+    expect(view.missing_in_workspace).toEqual([]);
+  });
+
+  test("reads the recent runs from a later page", async () => {
+    const withJobs = [
+      ...Array.from({ length: 100 }, (_, i) => ({
+        path: `f/factory/x${String(i)}`,
+        jobs: [],
+      })),
+      {
+        path: "f/factory/collect_github",
+        jobs: [{ id: "late", success: true, duration_ms: 1 }],
+      },
+    ];
+    const schedules = [...manySchedules(100), schedule()];
+    const view = await loadSchedules(ports({ schedules, withJobs }), REPO);
+    expect(
+      view.schedules.find((item) => item.path === "f/factory/collect_github")
+        ?.recent_runs,
+    ).toEqual([{ job_id: "late", success: true, duration_ms: 1 }]);
   });
 
   test("masks a token in the error of a schedule", async () => {

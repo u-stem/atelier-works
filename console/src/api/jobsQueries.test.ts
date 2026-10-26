@@ -64,6 +64,7 @@ const DETAIL: JobDetailView = {
   steps: [{ id: "prepare", state: "success", job_id: ID, iterations: null }],
   log: { text: "line", truncated: false, masked: false, nonJsonLines: 1 },
   result: { text: "{}", truncated: false, masked: false },
+  result_error: null,
   failures: {
     ok: true,
     items: [
@@ -171,6 +172,25 @@ describe("isJobDetail", () => {
 
   test("accepts a detail without log and result", () => {
     expect(isJobDetail({ ...DETAIL, log: null, result: null })).toBe(true);
+  });
+
+  test("accepts a reason the result could not be read", () => {
+    expect(
+      isJobDetail({
+        ...DETAIL,
+        result: null,
+        result_error: "could not read the result: boom",
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a detail without the field of the result error", () => {
+    const { result_error: _omitted, ...rest } = DETAIL;
+    expect(isJobDetail(rest)).toBe(false);
+  });
+
+  test("rejects a result error that is not a string", () => {
+    expect(isJobDetail({ ...DETAIL, result_error: 1 })).toBe(false);
   });
 
   test("accepts a failure to read the saved causes", () => {

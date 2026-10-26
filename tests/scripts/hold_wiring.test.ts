@@ -1172,6 +1172,35 @@ describe("scripts/test-db.sh", () => {
   test("runs the holds check before the rollback of the migrations", () => {
     expect(holdsIndex).toBeLessThan(rollbackIndex);
   });
+
+  // 操作の記録の表の検査も、保留の検査と同じ形で固定する。呼び出しが外れると、表の制約が確かめられなくなる。
+  const actionsIndex = lines.findIndex((line) =>
+    line.includes("scripts/test-db-console-actions.ts"),
+  );
+
+  test("runs the console actions check", () => {
+    expect(actionsIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  test("stops when the console actions check fails", () => {
+    const call = lines.slice(actionsIndex, actionsIndex + 3).join("\n");
+
+    expect(call).toMatch(/\|\| die /);
+  });
+
+  test("runs the console actions check after the application queries", () => {
+    expect(actionsIndex).toBeGreaterThan(queriesIndex);
+  });
+
+  test("runs the console actions check before the rollback of the migrations", () => {
+    expect(actionsIndex).toBeLessThan(rollbackIndex);
+  });
+
+  test("passes the compose file and the scratch database to the console actions check", () => {
+    const call = lines.slice(actionsIndex - 2, actionsIndex + 1).join("\n");
+
+    expect(call).toMatch(/COMPOSE_FILE=.*SCRATCH_DB=/s);
+  });
 });
 
 // 表を作るmigration以外が、表の中身や定義に触れないことを確かめる。
@@ -1615,11 +1644,9 @@ describe("the names of the console release scripts", () => {
     ).toBe(true);
   });
 
-  // 保護パスの一覧と、リポジトリの定義から生成した既知pathの定数は、パスの文字列を並べるだけで、scriptを呼ばない。
-  const ONLY_LISTS_PATHS = [
-    "f/factory/lib/protected_paths.ts",
-    "f/factory/lib/console_known_paths.ts",
-  ];
+  // 保護パスの一覧は、パスの文字列を並べるだけで、scriptを呼ばない。
+  // 生成した既知pathの定数(`console_known_paths.ts`)は、解除のscriptの名前を持たないよう生成で除くので、免除しない。
+  const ONLY_LISTS_PATHS = ["f/factory/lib/protected_paths.ts"];
 
   test.each(["hold_release", "freeze_release"])(
     "no file under f/ but the files of %s names it",

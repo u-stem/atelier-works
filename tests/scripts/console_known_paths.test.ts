@@ -27,12 +27,38 @@ describe("the generated known paths", () => {
     expect(await Bun.file(FILE).text()).toBe(rendered);
   });
 
-  test("list every script definition outside lib", async () => {
+  // 解除のscriptは、Consoleの履歴の絞り込みに要らない(tag consoleのジョブは既定で一覧に出ない)。
+  // 名前を`f/`の他のファイルに持たせない検査(`hold_wiring.test.ts`)を、定数が破らないよう除く。
+  const WITHHELD = ["f/factory/hold_release", "f/factory/freeze_release"];
+
+  test("list every script definition outside lib, but the release scripts", async () => {
     const expected = (await glob("f/factory/**/*.script.yaml"))
       .map((file) => file.replace(/\.script\.yaml$/, ""))
       .filter((path) => !path.startsWith("f/factory/lib/"))
+      .filter((path) => !WITHHELD.includes(path))
       .sort();
     expect([...KNOWN_SCRIPT_PATHS].sort()).toEqual(expected);
+  });
+
+  test("do not list the release scripts", () => {
+    expect(
+      KNOWN_SCRIPT_PATHS.filter((path) => WITHHELD.includes(path)),
+    ).toEqual([]);
+  });
+
+  test("are imported by the job and schedule scripts only", async () => {
+    const importers: string[] = [];
+    for (const file of await glob("f/**/*.ts")) {
+      if (file === "f/factory/lib/console_known_paths.ts") continue;
+      const source = await Bun.file(file).text();
+      if (/from\s+["'][^"']*console_known_paths/.test(source)) {
+        importers.push(file);
+      }
+    }
+    expect(importers).toEqual([
+      "f/factory/console_jobs.ts",
+      "f/factory/console_schedules.ts",
+    ]);
   });
 
   test("do not list a lib module as a script", () => {

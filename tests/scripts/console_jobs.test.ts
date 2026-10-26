@@ -15,6 +15,7 @@ import {
 const NOW = new Date("2026-10-26T06:00:00.000Z");
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const CHILD = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
+const PARENT = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d";
 const GH_TOKEN = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyzAB"}`;
 
 type Calls = string[];
@@ -75,6 +76,9 @@ function ports(
     getJobError?: unknown;
     logs?: string;
     result?: unknown;
+    resultError?: unknown;
+    /** idごとに別の応答を返すジョブ。値が`Error`なら、そのidの取得は例外にする。 */
+    otherJobs?: Readonly<Record<string, unknown>>;
     queue?: unknown[];
     jobs?: unknown[];
     failures?: readonly FailureRow[] | Error;
@@ -86,8 +90,11 @@ function ports(
   const calls = options.calls ?? [];
   return {
     now: () => NOW,
-    getJob: async () => {
+    getJob: async (id) => {
       calls.push("getJob");
+      const other = options.otherJobs?.[id];
+      if (other instanceof Error) throw other;
+      if (other !== undefined) return other;
       if (options.getJobError !== undefined) throw options.getJobError;
       return options.job ?? completedJob();
     },
@@ -97,6 +104,7 @@ function ports(
     },
     getCompletedJobResult: async () => {
       calls.push("getCompletedJobResult");
+      if (options.resultError !== undefined) throw options.resultError;
       return options.result ?? null;
     },
     listQueue: async (query) => {
@@ -401,9 +409,124 @@ describe("loadJobDetail response", () => {
     expect(detail.found && detail.result?.masked).toBe(true);
   });
 
+  test("returns no error for a result that was read", async () => {
+    const detail = await loadJobDetail(ports({ result: { a: 1 } }), ID, {
+      includeOutput: true,
+    });
+    expect(detail.found && detail.result_error).toBeNull();
+  });
+
+  test("returns no result and no error when the API says the result is missing", async () => {
+    const detail = await loadJobDetail(
+      ports({ resultError: { status: 404 } }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(detail.found && [detail.result, detail.result_error]).toEqual([
+      null,
+      null,
+    ]);
+  });
+
+  test("says that the result could not be read when the API fails otherwise", async () => {
+    const detail = await loadJobDetail(
+      ports({ resultError: new Error("boom") }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(detail.found && detail.result_error).toBe(
+      "could not read the result: boom",
+    );
+  });
+
+  test("masks a token in the reason the result could not be read", async () => {
+    const detail = await loadJobDetail(
+      ports({ resultError: new Error(`failed ${GH_TOKEN}`) }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(detail.found && detail.result_error).toBe(
+      "could not read the result: failed ***",
+    );
+  });
+
+  test("still returns the log when the result could not be read", async () => {
+    const detail = await loadJobDetail(
+      ports({ logs: "line", resultError: new Error("boom") }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(detail.found && detail.log?.text).toBe("line");
+  });
+
   test("returns neither log nor result when the output is not wanted", async () => {
     const detail = await loadJobDetail(ports(), ID, { includeOutput: false });
     expect(detail.found && [detail.log, detail.result]).toEqual([null, null]);
+  });
+
+  test("shows the parent of a job when the parent is inside f/factory/", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: { [PARENT]: completedJob({ id: PARENT, job_kind: "flow" }) },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found && detail.job.parent_job).toBe(PARENT);
+  });
+
+  test("hides the parent of a job when the parent is outside f/factory/", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: {
+          [PARENT]: completedJob({ id: PARENT, script_path: "u/x/flow" }),
+        },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found && detail.job.parent_job).toBeNull();
+  });
+
+  test("hides the parent of a job when the parent cannot be read", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({ job, otherJobs: { [PARENT]: new Error("gone") } }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found && detail.job.parent_job).toBeNull();
+  });
+
+  test("hides a parent whose id is not a UUID, without reading it", async () => {
+    const calls: Calls = [];
+    const job = completedJob({ parent_job: "../x", is_flow_step: true });
+    const detail = await loadJobDetail(ports({ job, calls }), ID, {
+      includeOutput: false,
+    });
+    expect([detail.found && detail.job.parent_job, calls]).toEqual([
+      null,
+      ["getJob"],
+    ]);
+  });
+
+  test("checks the parent before it reads the log", async () => {
+    const calls: Calls = [];
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    await loadJobDetail(
+      ports({
+        job,
+        calls,
+        otherJobs: { [PARENT]: completedJob({ id: PARENT }) },
+      }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(calls.slice(0, 3)).toEqual(["getJob", "getJob", "getJobLogs"]);
   });
 
   test("returns no step for a script job", async () => {
@@ -627,12 +750,84 @@ describe("loadJobHistory", () => {
     expect([list.jobs, list.filter_rejected]).toEqual([[], true]);
   });
 
-  test("uses the cursor as the creation time to start before", async () => {
+  test("uses the time of the cursor as the creation time to start before", async () => {
     const { query } = await history({
       includeConsole: false,
-      before: "2026-10-26T05:00:00.000000Z",
+      before: "2026-10-26T05:00:00.000000Z|50",
     });
     expect(query?.createdBefore).toBe("2026-10-26T05:00:00.000000Z");
+  });
+
+  test.each([
+    "2026-10-26T05:00:00.000000Z",
+    "2026-10-26T05:00:00.000000Z|",
+    "2026-10-26T05:00:00.000000Z|-1",
+    "2026-10-26T05:00:00.000000Z|201",
+    "2026-10-26T05:00:00.000000Z|50|1",
+    "garbage|50",
+  ])("ignores the cursor %j, which is not time|count", async (before) => {
+    const { query } = await history({ includeConsole: false, before });
+    expect(query?.createdBefore).toBeUndefined();
+  });
+
+  test("asks only for the rest of the 200 jobs on the last page", async () => {
+    const { query } = await history({
+      includeConsole: false,
+      before: "2026-10-26T05:00:00.000000Z|190",
+    });
+    expect(query?.perPage).toBe(10);
+  });
+
+  test("asks nothing when 200 jobs were already returned", async () => {
+    const { calls } = await history({
+      includeConsole: false,
+      before: "2026-10-26T05:00:00.000000Z|200",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("returns an empty list with no cursor when 200 jobs were already returned", async () => {
+    const { list } = await history({
+      includeConsole: false,
+      before: "2026-10-26T05:00:00.000000Z|200",
+    });
+    expect([list.jobs, list.next_before]).toEqual([[], null]);
+  });
+
+  test("gives no cursor when the page reaches the 200th job", async () => {
+    const jobs = Array.from({ length: 50 }, (_, i) =>
+      completedJob({
+        id: `job-${String(i)}`,
+        created_at: `2026-10-26T04:${String(i).padStart(2, "0")}:00.000000Z`,
+      }),
+    );
+    const { list } = await history(
+      {
+        includeConsole: false,
+        before: "2026-10-26T05:00:00.000000Z|150",
+        limit: 50,
+      },
+      jobs,
+    );
+    expect(list.next_before).toBeNull();
+  });
+
+  test("counts the jobs returned so far in the cursor", async () => {
+    const jobs = Array.from({ length: 2 }, (_, i) =>
+      completedJob({
+        id: `job-${String(i)}`,
+        created_at: `2026-10-26T04:0${String(i)}:00.000000Z`,
+      }),
+    );
+    const { list } = await history(
+      {
+        includeConsole: false,
+        before: "2026-10-26T05:00:00.000000Z|50",
+        limit: 2,
+      },
+      jobs,
+    );
+    expect(list.next_before).toBe("2026-10-26T04:01:00.000000Z|52");
   });
 
   test("drops the job at the cursor, which the API returns again", async () => {
@@ -645,7 +840,7 @@ describe("loadJobHistory", () => {
       created_at: "2026-10-26T04:00:00.000000Z",
     });
     const { list } = await history(
-      { includeConsole: false, before: "2026-10-26T05:00:00.000000Z" },
+      { includeConsole: false, before: "2026-10-26T05:00:00.000000Z|50" },
       [at, older],
     );
     expect(list.jobs.map((job) => job.id)).toEqual(["older"]);
@@ -669,7 +864,7 @@ describe("loadJobHistory", () => {
       }),
     );
     const { list } = await history({ includeConsole: false, limit: 2 }, jobs);
-    expect(list.next_before).toBe("2026-10-26T05:01:00.000000Z");
+    expect(list.next_before).toBe("2026-10-26T05:01:00.000000Z|2");
   });
 
   test("gives no cursor when the page is not full", async () => {
