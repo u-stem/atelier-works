@@ -1665,12 +1665,26 @@ backendが制御文字と書式文字を空白にして切り詰め(理由は200
 | `/console/*` | `console/dist`を返し、無いパスはSPAの`index.html`に落とし、assets、draw.ioのファイル、`status.json`は無ければ404にし、Caddyと同じCSPなどのヘッダーを付ける |
 | `/console` | `/console/`へ308で飛ばす |
 | 符号化した区切りと`..`を含む`/console/`のパス | 400にする |
-| GET、HEAD、OPTIONS | `--upstream`(既定は`http://127.0.0.1:8080`)へ中継する |
+| `/api/`の外のGET、HEAD、OPTIONS | `--upstream`(既定は`http://127.0.0.1:8080`)へ中継する(ログインの画面と静的な資源が当たる) |
+| `/api/`の下の読み取りのGET、HEAD、OPTIONS | 許可リストにある経路だけ中継する(`/api/version`、`/api/users/whoami`、ジョブ1件を読む`jobs_u`の経路) |
 | 読み取りの5つのscriptを実行するPOST | 中継する |
-| ほかのPOSTなどの書き込み | 403にし、人が`--allow-writes`を付けたときだけ中継する |
+| ほかの要求 | 403にし、人が`--allow-writes`を付けたときだけ中継する |
+
+Windmillは、GETでもscriptを同期で実行できる(`GET /api/w/{workspace}/jobs/run_wait_result/p/{path}`)。
+`windmill-client` 1.817.0のOpenAPIに、この経路がGETとPOSTの両方で載っている。
+そのため、GETとHEADも許可リストで絞る。
+実行、再開、取り消し、再実行、ストリーム、エンドポイントの経路(`/api/r/`)、webhookを含むパスは、メソッドを問わず403にする。
+ConsoleがWindmillを呼ぶのは、読み取りのscriptを実行するPOSTと、`/console/status.json`のGETだけである。
+`/api/`のGETは使わない。
 
 読み取りの5つは、`console_query`、`console_holds`、`console_jobs`、`console_schedules`、`console_config`である。
-どれもソースにSQLの書き込みとWindmillの書き込みのAPIが無く、`tests/scripts/console-branch-server.test.ts`が固定する。
+`tests/scripts/console-branch-server-readonly.test.ts`が、次を固定する。
+
+- 5つが相対importで辿るファイルに、SQLの書き込みとWindmillの書き込みや実行のAPIが無い。
+- 書き込みと読み取りが同居する共有の部品(`lib/db.ts`、`lib/holds.ts`、`lib/freeze_apply.ts`)から取り込む名前が、読み取りの関数に限られる。
+- 呼ぶ関数(`fetchDeploymentRows`、`sumAgentCostSince`、`listActiveHolds`、`readFreezeState`)の本文に、書き込みが無い。
+- `console_holds`は、凍結の変数の書き込みの口(`writeVariable`)を組み立てるが、読む経路は`readVariable`だけを呼ぶ。
+
 `console_holds`は、保留と凍結を読むだけで、解除は別のscriptが行う。
 
 要求は、次の検査も通る。
@@ -1680,8 +1694,15 @@ backendが制御文字と書式文字を空白にして切り詰め(理由は200
 - Originは、このサーバー自身のオリジンのときだけ、中継先のオリジンに置き換えて中継する。
   ほかは403にする。
 - 中継の要求の`Sec-Fetch-Site`が`cross-site`か`same-site`なら403にする。
+- 転送元を名乗るヘッダー(`Forwarded`、`X-Forwarded-*`、`X-Real-IP`)とhop-by-hopのヘッダー(`Connection`が名指しするものを含む)は、中継先へ渡さない。
+- 中継先の`Location`は、このサーバーのパスに直す。
+  `//host`のようなプロトコル相対の形にならないよう、先頭の`/`を1つにそろえる。
 - Bunのfetchは、渡した`Sec-Fetch-*`を落とさずに中継先へ送る(模擬の中継先で実測した)。
   ブラウザが付けた値のまま、中継先のCaddyの規則に届く。
+
+`--allow-writes`は、端末で人が「yes」と入力したときだけ有効になる。
+標準入力が端末でないとき(agentの起動やパイプ)は、起動に失敗する。
+有効な間は、起動時に目立つ警告を標準出力に出し、全応答に`x-branch-server-writes: on`を付ける。
 
 反映後の実機と違う点は、`status.json`を配信しないことである。
 そのため、サイドバーの版の情報は出ない。
