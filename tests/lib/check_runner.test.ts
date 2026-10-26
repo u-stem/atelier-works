@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   CHECK_COMMAND_PATH,
@@ -10,9 +10,11 @@ import {
   runAllowedCheckCommands,
 } from "../../f/factory/lib/check_runner.ts";
 import {
+  CHECK_GITCONFIG_NAME,
   type CheckDirs,
   type CheckSandbox,
   checkEnv,
+  checkGitConfig,
   newCheckIdentity,
   setprivArgv,
 } from "../../f/factory/lib/check_sandbox.ts";
@@ -222,6 +224,60 @@ describe("runAllowedCheckCommands", () => {
       else process.env.TMPDIR = before;
     }
     expect(dirname(calls[0]?.options?.env?.HOME ?? "")).toBe("/tmp");
+  });
+
+  test("the real default createHomeDir writes a .gitconfig that trusts the worktree into the HOME", async () => {
+    let body = "";
+    const run: CommandRunner = async (_argv, options) => {
+      const home = options?.env?.HOME;
+      body =
+        home === undefined
+          ? ""
+          : readFileSync(join(home, CHECK_GITCONFIG_NAME), "utf8");
+      return ok("");
+    };
+    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    expect(body).toBe(checkGitConfig("/work"));
+  });
+
+  test("the real default createHomeDir keeps the .gitconfig private to its owner", async () => {
+    let mode = -1;
+    const run: CommandRunner = async (_argv, options) => {
+      const home = options?.env?.HOME;
+      mode =
+        home === undefined
+          ? -1
+          : statSync(join(home, CHECK_GITCONFIG_NAME)).mode & 0o777;
+      return ok("");
+    };
+    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    expect(mode).toBe(0o600);
+  });
+
+  test("refuses a worktree path that would break the .gitconfig", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    await expect(
+      runAllowedCheckCommands(run, "/work\n[core]", ["true"], 1000),
+    ).rejects.toThrow("check sandbox: refusing a worktree path");
+  });
+
+  test("runs no command for a worktree path that would break the .gitconfig", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await runAllowedCheckCommands(run, "/work\n[core]", ["true"], 1000).catch(
+      () => undefined,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  test("passes the worktree to createHomeDir", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    let seen = "";
+    const factory: CreateCheckHomeDir = async (input) => {
+      seen = input.worktreeDir;
+      return { path: "/fake-check-home", cleanup: async () => {} };
+    };
+    await runAllowedCheckCommands(run, "/work", ["true"], 1000, factory);
+    expect(seen).toBe("/work");
   });
 
   test("two runs using the real default createHomeDir get different HOME dirs", async () => {

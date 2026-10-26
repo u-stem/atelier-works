@@ -417,6 +417,14 @@ export function checkEnv(input: {
   };
 }
 
+/** 検査用のHOMEに置く、gitのグローバルの設定ファイルの名前。 */
+export const CHECK_GITCONFIG_NAME = ".gitconfig";
+
+/** 検査用のHOMEの設定ファイルの本文を返す。 */
+export function checkGitConfig(_worktreeDir: string): string {
+  return "";
+}
+
 /** 正規化された絶対パスで、最上位の1段ではないかを返す。 */
 function isNestedAbsolutePath(dir: string): boolean {
   const segments = dir.split("/").filter((part) => part !== "");
