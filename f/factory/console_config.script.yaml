@@ -1,5 +1,6 @@
-summary: ''
-description: ''
+summary: '[OP-0-5] factory_configを取得'
+description: Factory
+  Consoleのシステム画面が表示する、factory_configの全項目を読み取り専用で取得します。変数やresourceへの参照を含む値は、値を出さずに参照の印で返します。補間しない生の値を読みます。
 lock: '!inline f/factory/console_config.script.lock'
 kind: script
 schema:
@@ -7,3 +8,5 @@ schema:
   type: object
   properties: {}
   required: []
+tag: console
+timeout: 30

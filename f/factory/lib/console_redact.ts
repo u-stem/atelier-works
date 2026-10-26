@@ -299,10 +299,15 @@ export function redactResult(
   return { text: head.text, truncated: head.truncated, masked: counter.masked };
 }
 
-/** 構造を保ったまま値を伏せる(スタブ)。 */
-export function redactValue(_value: unknown): {
+/**
+ * 構造を保ったまま、値を伏せる。設定の値のように、構造のまま画面に出したいものに使う。
+ * 文字列は制御文字を落とした上で文字列の規則をかけ、キー名が秘密を指す項目は丸ごと置き換える。
+ */
+export function redactValue(value: unknown): {
   readonly value: unknown;
   readonly masked: boolean;
 } {
-  return { value: undefined, masked: false };
+  const counter: Counter = { masked: false };
+  const masked = maskValue(value, counter);
+  return { value: masked, masked: counter.masked };
 }
