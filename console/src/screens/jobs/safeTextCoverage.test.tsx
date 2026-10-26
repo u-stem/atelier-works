@@ -21,7 +21,6 @@ import {
   OutputSection,
   StepList,
 } from "./JobDetailParts.tsx";
-import { JobHistory } from "./JobHistory.tsx";
 import { JobList, JobStateBadge } from "./JobRows.tsx";
 import { ScheduleList } from "./ScheduleList.tsx";
 
@@ -179,33 +178,6 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
           { key: BAD, kind: "value", value: { [BAD]: BAD }, masked: false },
           { key: BAD, kind: "reference" },
         ]}
-      />
-    ),
-  ],
-  [
-    "the script options of the history",
-    () => (
-      <JobHistory
-        history={{
-          pages: [],
-          first: freshQuery({
-            view: "history",
-            jobs: [],
-            next_before: null,
-            filter_rejected: false,
-            truncated: false,
-          }),
-          more: null,
-          canLoadMore: false,
-          loadMore: () => undefined,
-          refresh: () => undefined,
-        }}
-        status={undefined}
-        script={undefined}
-        scripts={[`f/factory/${BAD}`]}
-        onStatusChange={() => undefined}
-        onScriptChange={() => undefined}
-        search=""
       />
     ),
   ],

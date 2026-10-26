@@ -69,13 +69,21 @@ function between(code: string, from: string, to?: string): string {
  */
 const LINK_TAG = /<(a|Link|NavLink|JobLink|WindmillJobLink)(\s|>|\/)/;
 
+/** サーバー由来の文字列の項目名。 */
+const FIELDS =
+  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name";
+
+/** 項目名だけの式。`item.key`のように、呼び出しや演算を含まない。 */
+const FIELD_EXPRESSION = String.raw`\{\s*[A-Za-z_][\w.]*\.(${FIELDS})\s*\}`;
+
 /**
  * サーバー由来の文字列の項目を、JSXにそのまま埋め込む形。
- * 項目名だけの式(`{item.key}`)に当たり、`safeText(...)`の呼び出しには当たらない。
- * Reactの`key`属性は、画面に出ないので除く。
+ * 子の位置の式(`<dt>{item.key}</dt>`)と、画面に出る属性(`title`、`subtitle`、`label`、`aria-label`、`alt`)に当たる。
+ * `safeText(...)`の呼び出しと、`key`や`error`のような値を渡す属性には当たらない。
  */
-const RAW_FIELD_IN_JSX =
-  /(?<!key=)\{\s*[A-Za-z_][\w.]*\.(script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name)\s*\}/;
+const RAW_FIELD_IN_JSX = new RegExp(
+  String.raw`(?<!=)${FIELD_EXPRESSION}|\b(title|subtitle|label|aria-label|alt)=${FIELD_EXPRESSION}`,
+);
 
 type Forbidden = {
   readonly name: string;
@@ -227,7 +235,8 @@ describe("the checks themselves", () => {
   test.each([
     ["a field of an item", "<dt>{item.key}</dt>"],
     ["a field of a job", "<span>{job.script_path}</span>"],
-    ["an attribute", "<h1 title={job.script_path}>x</h1>"],
+    ["a title attribute", "<h1 title={job.script_path}>x</h1>"],
+    ["a subtitle attribute", "<PageHeader subtitle={job.id} />"],
     ["a nested field", "<p>{failures.reason}</p>"],
     ["a field with spaces", "<p>{ row.error }</p>"],
   ])("the raw field pattern catches %s", (_name, sample) => {
@@ -237,6 +246,8 @@ describe("the checks themselves", () => {
   test.each([
     ["a wrapped field", "<dt>{safeText(item.key)}</dt>"],
     ["a React key", "<li key={item.key}>x</li>"],
+    ["a prop that passes an object", "<Alert error={query.error} />"],
+    ["a prop that passes an id", "<Link jobId={job.id} />"],
     ["a field that is not text", "<span>{step.iterations}</span>"],
     ["a local name", "<span>{label}</span>"],
   ])("the raw field pattern leaves %s alone", (_name, sample) => {

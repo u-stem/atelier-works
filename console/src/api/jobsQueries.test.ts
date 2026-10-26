@@ -741,7 +741,9 @@ describe("failedDetailReads", () => {
   ])(
     "for output failed %p and status failed %p",
     (output, status, expected) => {
-      expect(failedDetailReads(output, status)).toEqual(expected);
+      expect(failedDetailReads(output, status).join(",")).toBe(
+        expected.join(","),
+      );
     },
   );
 });
