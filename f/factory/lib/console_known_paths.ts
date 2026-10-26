@@ -34,6 +34,9 @@ export const KNOWN_SCRIPT_PATHS: readonly string[] = [
   "f/factory/steps/dependabot_assess",
   "f/factory/steps/dependabot_finish",
   "f/factory/steps/dependabot_prepare",
+  "f/factory/steps/design_generate",
+  "f/factory/steps/design_prepare",
+  "f/factory/steps/design_request_approval",
   "f/factory/steps/implement_finish",
   "f/factory/steps/implement_generate",
   "f/factory/steps/implement_prepare",
@@ -62,6 +65,7 @@ export const KNOWN_SCRIPT_PATHS: readonly string[] = [
 export const KNOWN_FLOW_PATHS: readonly string[] = [
   "f/factory/audit",
   "f/factory/dependabot",
+  "f/factory/design",
   "f/factory/implement",
   "f/factory/manual_intake",
   "f/factory/pipeline",

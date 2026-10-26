@@ -54,7 +54,7 @@ locks:
   f/factory/lib/conflict_fix_verify: 4a244c4da1dacfe86bed6878d2b41e1a6586268091c6c2b1aaf6616cff48f83a
   f/factory/lib/console_actions: 2d619077ae8897d4691d14bcabd0c9cb91e7cf8e41cd5cf88fdf8ccc238a289b
   f/factory/lib/console_holds_support: e1bc3ceca3eb31bac7337d720fb707e36d6c502272ce6c31757f97e2271665b9
-  f/factory/lib/console_known_paths: a9ad74ffa715a86ee1c421221b829d8f57c83c661cb3796bda33eb87c336a0f6
+  f/factory/lib/console_known_paths: 1ee700ed37220d0c8664a6f4e9404279873146b75c7f800a6a91b0ab1dfe2e9a
   f/factory/lib/console_redact: 3cd5957139b0097e4b9c140b62ead54ba33fa6e9be84a09f6d1737b7c4532a0a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d29a7121916d0a645d763289053c2b664a22b21ca4cd70b646a9d211f10e0102
