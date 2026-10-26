@@ -924,3 +924,36 @@ describe("infra/docker-compose.yml docker socket", () => {
     expect(JSON.stringify(compose())).not.toContain("docker.sock");
   });
 });
+
+// `mise run up`と`mise run deploy`は、このラベルが付いた宙に浮いたイメージだけを消す。
+// ラベルを付け忘れた自前ビルドのサービスは、旧イメージが静かに残り続けるため、
+// `build`を持つサービスはすべてラベルを持つことを固定する。
+describe("infra/docker-compose.yml prune label", () => {
+  const LABEL = "com.atelier-works.prune";
+
+  function buildServiceNames(): string[] {
+    const parsed = compose();
+    const names = isRecord(parsed.services) ? Object.keys(parsed.services) : [];
+    return names.filter((name) => service(name).build !== undefined);
+  }
+
+  function buildLabel(name: string): unknown {
+    const build = service(name).build;
+    const labels = isRecord(build) ? build.labels : undefined;
+    return isRecord(labels) ? labels[LABEL] : undefined;
+  }
+
+  test("builds the two services that the stack builds itself", () => {
+    expect(buildServiceNames()).toEqual(
+      expect.arrayContaining(["windmill_worker", "console_fetcher"]),
+    );
+  });
+
+  test("every service with a build carries the prune label", () => {
+    const unlabeled = buildServiceNames().filter(
+      (name) => buildLabel(name) !== "true",
+    );
+
+    expect(unlabeled).toEqual([]);
+  });
+});

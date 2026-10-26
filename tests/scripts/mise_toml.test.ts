@@ -72,21 +72,52 @@ describe("mise.toml stack tasks", () => {
 
   // ホスト側の作業が要る反映の通知は、この印で自動で解決される。
   // 起動のたびに印を書かないと、通知が残り続ける。
-  test("up records the applied version as its last step", () => {
-    expect(taskRuns().get("up")?.at(-1)).toBe("scripts/record-host-applied.sh");
-  });
+  // 印の後に続けてよいのは、旧イメージの掃除の1行だけにする。
+  // 掃除は付随の処理なので、印の後に置き、失敗しても反映の記録に影響させない。
+  const RECORD = "scripts/record-host-applied.sh";
+  const PRUNE: Record<string, string> = {
+    up: 'docker image prune -f --filter label=com.atelier-works.prune=true || echo "up: image prune failed (ignored)" >&2',
+    deploy:
+      'docker image prune -f --filter label=com.atelier-works.prune=true || echo "deploy: image prune failed (ignored)" >&2',
+  };
 
-  test("deploy records the applied version as its last step", () => {
-    expect(taskRuns().get("deploy")?.at(-1)).toBe(
-      "scripts/record-host-applied.sh",
-    );
-  });
+  for (const task of ["up", "deploy"]) {
+    const pruneLine = PRUNE[task] ?? "";
+
+    test(`${task} records the applied version right before the image prune`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.slice(-2)).toEqual([RECORD, pruneLine]);
+    });
+
+    test(`${task} runs the image prune only once`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.filter((line) => line.includes("prune"))).toEqual([
+        pruneLine,
+      ]);
+    });
+
+    test(`${task} limits the image prune to the labeled images`, () => {
+      const last = taskRuns().get(task)?.at(-1) ?? "";
+      expect(last).toContain(
+        "docker image prune -f --filter label=com.atelier-works.prune=true",
+      );
+    });
+
+    test(`${task} does not run a broad prune`, () => {
+      const last = taskRuns().get(task)?.at(-1) ?? "";
+      expect(last).not.toMatch(/\s-a\b|--all|volume|system|builder/);
+    });
+
+    test(`${task} ignores a failed image prune`, () => {
+      const last = taskRuns().get(task)?.at(-1) ?? "";
+      expect(last).toMatch(/ \|\| echo "[^"]+" >&2$/);
+    });
+  }
 
   // Caddyfileは単一ファイルのbind mountなので、`up -d`はcaddyを作り直さない。
   // 再起動をはさまないと、古い設定のまま印が書かれ、通知が解決されてしまう。
   const RESTART_CADDY =
     "docker compose -f infra/docker-compose.yml restart caddy";
-  const RECORD = "scripts/record-host-applied.sh";
   // `restart`はコンテナを起動できれば0を返す。Caddyfileの誤りで直後に落ちても印が書かれないよう、
   // 再起動の後に、動いているCaddyが設定を読めることを確かめて、失敗したら止める。
   const VALIDATE_CADDY =
