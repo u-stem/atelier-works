@@ -71,7 +71,7 @@ const LINK_TAG = /<(a|Link|NavLink|JobLink|WindmillJobLink)(\s|>|\/)/;
 
 /** サーバー由来の文字列の項目名。 */
 const FIELDS =
-  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name";
+  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name|tag|state|job_kind|parent_job|summary";
 
 /** 項目名だけの式。`item.key`のように、呼び出しや演算を含まない。 */
 const FIELD_EXPRESSION = String.raw`\{\s*[A-Za-z_][\w.]*\.(${FIELDS})\s*\}`;
@@ -79,10 +79,16 @@ const FIELD_EXPRESSION = String.raw`\{\s*[A-Za-z_][\w.]*\.(${FIELDS})\s*\}`;
 /**
  * サーバー由来の文字列の項目を、JSXにそのまま埋め込む形。
  * 子の位置の式(`<dt>{item.key}</dt>`)と、画面に出る属性(`title`、`subtitle`、`label`、`aria-label`、`alt`)に当たる。
+ * 画面に出る属性が、項目を関数に渡して組み立てた値(`title={jobScriptName(job.script_path)}`)も、`safeText`を通していなければ当たる。
  * `safeText(...)`の呼び出しと、`key`や`error`のような値を渡す属性には当たらない。
  */
 const RAW_FIELD_IN_JSX = new RegExp(
-  String.raw`(?<!=)${FIELD_EXPRESSION}|\b(title|subtitle|label|aria-label|alt)=${FIELD_EXPRESSION}`,
+  [
+    String.raw`(?<!=)${FIELD_EXPRESSION}`,
+    String.raw`\b(title|subtitle|label|aria-label|alt)=${FIELD_EXPRESSION}`,
+    // 画面に出る属性に、`safeText`を通さず、項目を関数へ渡して組み立てた値を入れる形。
+    String.raw`\b(title|subtitle|label|aria-label|alt)=\{(?![^{}]*safeText\()[^{}]*\.(${FIELDS})\b[^{}]*\}`,
+  ].join("|"),
 );
 
 type Forbidden = {
@@ -187,10 +193,20 @@ describe("the renderers of the job screens", () => {
 });
 
 describe("the sanitizing part", () => {
-  test("wraps displayableIssueText, so the renderers have one way in", async () => {
-    expect(codeOf(await textOf("console/src/lib/safeText.ts"))).toContain(
-      "displayableIssueText(",
+  test("does not lean on a file outside the protected paths", async () => {
+    expect(codeOf(await textOf("console/src/lib/safeText.ts"))).not.toMatch(
+      /intakeText/,
     );
+  });
+
+  test.each([
+    "\\p{Cf}",
+    "\\p{Cc}",
+    "\\p{Zl}",
+    "\\p{Zp}",
+    "\\p{Variation_Selector}",
+  ])("holds the pattern of the class %s itself", async (cls) => {
+    expect(codeOf(await textOf("console/src/lib/safeText.ts"))).toContain(cls);
   });
 
   test.each(SAFE_TEXT_USERS)("is imported by %s", async (file) => {
@@ -238,6 +254,12 @@ describe("the checks themselves", () => {
     ["a title attribute", "<h1 title={job.script_path}>x</h1>"],
     ["a subtitle attribute", "<PageHeader subtitle={job.id} />"],
     ["a nested field", "<p>{failures.reason}</p>"],
+    ["a tag of the job", "<span>{job.tag}</span>"],
+    ["a state of the job", "<span>{job.state}</span>"],
+    [
+      "a title built from a field without safeText",
+      "<PageHeader title={jobScriptName(job.script_path)} />",
+    ],
     ["a field with spaces", "<p>{ row.error }</p>"],
   ])("the raw field pattern catches %s", (_name, sample) => {
     expect(sample).toMatch(RAW_FIELD_IN_JSX);
@@ -245,6 +267,10 @@ describe("the checks themselves", () => {
 
   test.each([
     ["a wrapped field", "<dt>{safeText(item.key)}</dt>"],
+    [
+      "a title that is wrapped",
+      "<PageHeader title={safeText(jobScriptName(job.script_path))} />",
+    ],
     ["a React key", "<li key={item.key}>x</li>"],
     ["a prop that passes an object", "<Alert error={query.error} />"],
     ["a prop that passes an id", "<Link jobId={job.id} />"],

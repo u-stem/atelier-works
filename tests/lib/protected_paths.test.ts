@@ -588,14 +588,6 @@ describe("hold files", () => {
     "migrations/datatable/main/20261023131355_holds.down.sql",
   ];
 
-  // 描画の部品は、2bと2cで必ず直す。契約テストが全体を走査するので、保護の上乗せは小さい。
-  test.each([
-    "console/src/screens/jobs/JobDetailParts.tsx",
-    "console/src/screens/system/ConfigSection.tsx",
-  ])("FORBIDDEN_EXACT_PATHS does not list the rendering part %s", (path) => {
-    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
-  });
-
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
     expect(FORBIDDEN_EXACT_PATHS).toContain(path);
   });
@@ -1462,6 +1454,15 @@ describe("hold command files", () => {
 // 書き換えられると、Consoleに返す項目が増えたり、ログの伏せ字が外れたり、記録の順序が崩れたりする。
 // 返す項目と境界の検査も、同じ理由で守る。
 describe("console job viewing files", () => {
+  // 描画の部品は、2bと2cで必ず直す。契約テストが`screens/jobs/`の全体を走査するので、保護の上乗せは小さい。
+  // 保護するのは、無害化の入口(`safeText.ts`)と、網羅テストと、契約テストである。
+  test.each([
+    "console/src/screens/jobs/JobDetailParts.tsx",
+    "console/src/screens/system/ConfigSection.tsx",
+  ])("FORBIDDEN_EXACT_PATHS does not list the rendering part %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
+  });
+
   const PATHS = [
     "f/factory/console_jobs.ts",
     "f/factory/console_jobs.script.yaml",
