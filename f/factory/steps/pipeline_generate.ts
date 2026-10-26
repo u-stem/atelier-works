@@ -273,6 +273,12 @@ export type SnapshotIo = {
   readonly hashTree: (dir: string) => Promise<string | null>;
   readonly readDir: (dir: string) => Promise<string[]>;
   readonly readText: (path: string) => Promise<string>;
+  /**
+   * 最初のハッシュと2回目のハッシュの間に行う、ディレクトリの内容の検査。
+   * 問題があれば例外を投げる。窓の外で検査すると、検査の後に足されたファイルが、
+   * 検査を受けないまま基準値に入るためである。
+   */
+  readonly inspect: () => Promise<void>;
 };
 
 export type DocSnapshot = {
@@ -285,8 +291,10 @@ export type DocSnapshot = {
 
 /**
  * 保存する下書きの本文と図の一覧と、照合の基準値になるハッシュを、同じ時点の内容から取る。
- * ハッシュ、`requirements.md`と図の一覧の読み取り、ハッシュの順に行い、前後が違えば保存させない。
+ * ハッシュ、検査(`io.inspect`)、`requirements.md`と図の一覧の読み取り、ハッシュの順に行い、前後が違えば保存させない。
  * 本文だけを先に読むと、DBの本文とディスクの内容が別の時点のものになり、基準値が人の見た内容を指さなくなるためである。
+ * 検査を窓の中に入れるので、基準値に入る内容はすべて検査を受けたものになる。
+ * 一覧に`requirements.md`と図以外の項目があれば、想定外のファイルの削除の後に足されたものなので、失敗させる。
  * ハッシュを取れない(ディレクトリが無い)ときも、基準値を持たない下書きを作らないために失敗させる。
  * ハッシュの計算と一覧の取得が投げた例外も、同じ`doc snapshot failed`の印を付けて投げ直す。
  */
@@ -301,13 +309,20 @@ export async function snapshotDocDir(
       `the requirements directory does not exist, so there is no baseline hash to save: ${docDir}`,
     );
   }
+  await io.inspect();
   let entries: string[];
   try {
     entries = await io.readDir(docDir);
   } catch (err) {
     failSnapshot("doc_list_failed", errorMessage(err));
   }
-  const diagramFiles = listDiagramFiles(entries);
+  const { diagramFiles, stray } = classifyDocDirEntries(entries);
+  if (stray.length > 0) {
+    failSnapshot(
+      "unexpected_entry",
+      `the requirements directory has entries other than ${REQUIREMENTS_MD_FILENAME} and the diagrams: ${stray.join(", ")}`,
+    );
+  }
   const markdown = await readDocFile(
     docDir,
     REQUIREMENTS_MD_FILENAME,
@@ -501,18 +516,20 @@ export async function main(
       await removePath(`${docDir}/${stray}`);
     }
 
-    const issues = await collectDocIssues(docDir);
-    if (issues.length > 0) {
-      failGeneration(
-        "invalid_structured_output",
-        buildGenerateFailureMessage(issues),
-      );
-    }
-    // 出力ディレクトリの守りを済ませた後の内容を、基準値と保存する本文の両方に使う。
+    // 図の検査は、基準値のハッシュを数える窓の中で行う。検査の後に足された内容が、検査を受けないまま基準値に入らないようにするため。
     const snapshot = await snapshotDocDir(docDir, {
       hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
       readDir: readDirEntries,
       readText: readTextFile,
+      inspect: async () => {
+        const issues = await collectDocIssues(docDir);
+        if (issues.length > 0) {
+          failGeneration(
+            "invalid_structured_output",
+            buildGenerateFailureMessage(issues),
+          );
+        }
+      },
     });
     const registerIssues = documentRegisterIssues(snapshot.markdown);
     if (registerIssues.length > 0) {
