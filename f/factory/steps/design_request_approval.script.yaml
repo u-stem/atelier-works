@@ -1,9 +1,19 @@
-summary: ''
-description: ''
+summary: '[SF-2-3/3] 設計の承認依頼'
+description: 生成した設計書の承認を依頼するステップです。承認依頼(approval_requests)を記録して作業項目を設計の承認待ちの状態にし、Discordへ承認依頼を通知したうえで、待機せずに終了します。
 lock: '!inline f/factory/steps/design_request_approval.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
-  properties: {}
-  required: []
+  properties:
+    design_attempt:
+      type: number
+      description: ''
+      default: null
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - design_attempt
