@@ -193,13 +193,16 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 画面は、取得の`queries.ts`と書き込みの`writes.ts`にある型付きの関数だけを使う。
 `src/api/`の外が`windmill.ts`をimportしないことは、契約テストが確かめる。
 
-呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の9つだけである。
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の12個だけである。
 どれもtag`console`を持ち、Console用のworkerで動く。
 
 | 名前 | 用途 | 型付きの関数 |
 | --- | --- | --- |
 | `console_query` | 読み取り | `fetchSummary`など(`queries.ts`) |
 | `console_holds` | 有効な保留と凍結の読み取り | `fetchHolds`(`holdsQueries.ts`) |
+| `console_jobs` | ジョブの一覧と詳細の読み取り | `fetchActiveJobs`、`fetchJobHistory`、`fetchJobDetail`(`jobsQueries.ts`) |
+| `console_schedules` | scheduleの状態の読み取り | `fetchSchedules`(`jobsQueries.ts`) |
+| `console_config` | 設定の全項目の読み取り | `fetchConfig`(`jobsQueries.ts`) |
 | `approval_decide` | 承認依頼への承認か却下の記録 | `decideApproval` |
 | `retry_work_item` | 止まった作業項目の再開 | `retryWorkItem` |
 | `audit_kickoff` | 監査の手動起動 | `kickoffAudit` |
@@ -405,6 +408,76 @@ Issueに由来する文字は、`displayableIssueText`(`src/lib/intakeText.ts`)�
 
 Console用workerのscriptが読むsecret変数は、`tests/scripts/console_worker_boundary.test.ts`が数える。
 走査がたどれない形と、見ないものは、[セキュリティ](../security.md)の「Console用workerの境界」に書く。
+
+### ジョブ、schedule、設定の読み取り
+
+ジョブの画面とシステムの画面が読む3つのscriptは、読み取り専用である。
+型と型ガード、取得、クエリのキーと設定は`src/api/jobsQueries.ts`にある。
+backendの型との一致は、`tests/scripts/console_jobs_contract.test.ts`が確かめる。
+返す項目の絞り方と、ログと結果の伏せ字は、[セキュリティ](../security.md)の「ジョブのログと結果の読み取り」に書く。
+
+| script | 入力 | 戻り |
+| --- | --- | --- |
+| `console_jobs`の`active` | なし | 実行中、待ち、予定のジョブ。フローのステップは含めず、この順に並べる |
+| `console_jobs`の`history` | `status`、`script_path`、`before`、`include_console`、`limit` | 完了したルートのジョブを、新しい順に1ページ(50件まで)。次のページの`before`を`next_before`で返す |
+| `console_jobs`の`detail` | `job_id`、`include_output` | ジョブ1件。許可した項目、引数、フローのステップの一覧、ログ、結果、失敗の保存済みの原因 |
+| `console_schedules` | なし | `f/factory/`のscheduleの状態。有効/無効、cron、次回の予定、直近5件の実行、リポジトリの定義との差異 |
+| `console_config` | なし | `factory_config`の全項目。参照を含む値は、値の代わりに参照の印 |
+
+一覧は、既定でtag`console`のジョブ(Consoleの呼び出し自身)を除く。
+Windmillの一覧のAPIが、tagの否定(`!console`)を受けるためである。
+`script_path`は、リポジトリの定義から生成した定数(`lib/console_known_paths.ts`)にあるscriptかフローに限る。
+外れた値は、取得せずに`filter_rejected`で返す。
+定数は`scripts/gen-console-known-paths.ts`で作り直す。
+リポジトリの定義との一致は、`tests/scripts/console_known_paths.test.ts`が確かめる。
+履歴のAPIは、`created_before`を含む境界で返すので、前のページの最後のジョブが再び返る。
+scriptは、境界の時刻と同じジョブを落とす。
+
+詳細は、ジョブの取得、パスと種類の確認、ログと結果の取得の順に呼ぶ。
+確認を通らないジョブは`{ found: false }`で返す。
+存在しないid、UUIDの形でないid、`f/factory/`の外のジョブ、プレビューなど許可していない種類のジョブが当たる。
+フローのルートのログは短く、ステップの出力は子のジョブにある。
+そのため、ステップの一覧に子のジョブのidを添え、画面は子の詳細へ移る。
+失敗したジョブと取り消したジョブには、失敗の検知が保存した原因(`job_failures`)も添える。
+保存済みの原因は伏せてあるが、返すときにもう一度伏せる。
+読めなかったときは、原因の欄だけが失敗を示し、詳細の全体は返る。
+
+`include_output`を偽にすると、ログと結果とDBの読み取りを省く。
+実行中のジョブの状態の取り直しに使い、ログを取り直さないためである。
+一覧は、開いたときと更新の操作のときだけ取り、自動では取り直さない。
+詳細は、ログと結果を含む取得を1回だけ行う。
+実行中か待ちのジョブの状態だけを、タブが見えている間、15秒ごとに取り直す。
+
+### 取得の負荷
+
+Console用のworkerの枠は1つなので、読み取りの重さは承認などの呼び出しの待ちに表れる。
+実機(ローカルのWindmill)で測った値は次のとおりである。
+
+| 項目 | 値 |
+| --- | --- |
+| 履歴の最大の実ログ | 8KB(直近の8000件のジョブ。`self_update`) |
+| その取得と伏せ字 | 取得が約3ミリ秒、伏せ字が約2ミリ秒 |
+| 256KBに切る入力(600KBの合成ログ)の伏せ字 | 約15ミリ秒 |
+| 3000件の配列を持つ結果の伏せ字 | 約13ミリ秒 |
+| Console用workerの常駐メモリ | 60MB(上限は1024M) |
+| 新しいscriptを流している間の`summary`と`console_holds`の待ち | 単独より約140〜180ミリ秒長い(最大で約265ミリ秒) |
+
+待ちの増分は、デプロイ前のscriptをプレビューした値である。毎回のコンパイルを含む。
+デプロイ後は、これより短い。
+いずれも、設計の上限の1秒を下回る。
+
+実ログのAPIは、末尾だけを取る形を持たない。
+scriptは全文を受け取ってから、末尾を切って伏せる。
+このため、取得の大きさはログの全文で決まる。
+実ログの最大が小さい間は問題にならない。
+大きなログを持つジョブが増えたら、取得と伏せ字の時間を測り直す。
+
+### workerの生死の取得
+
+workerの一覧(`WorkerService`)は、ワークスペースの管理者のジョブトークンで呼ぶと403になる。
+そのため、Consoleは、workerの生死とグループを読まない。
+停止は、既存の通知で知る。
+Console用workerの停止は`console_worker_missing`、defaultのworkerの停止は`default_worker_watch`、負荷は`worker_load`が知らせる。
 
 ## ログイン切れの扱い
 

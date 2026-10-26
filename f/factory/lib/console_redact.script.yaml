@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] ジョブのログと結果の伏せ字'
+description: 内部ライブラリです。直接実行するものではありません。Consoleに返すジョブのログと結果から、秘密値らしい部分を伏せる共通処理です。
 lock: '!inline f/factory/lib/console_redact.script.lock'
 kind: script
 schema:
