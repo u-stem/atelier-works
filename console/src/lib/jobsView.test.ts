@@ -25,6 +25,7 @@ import {
   REDACTION_LIMIT_NOTE,
   relatedWorkItemId,
   stepIterationsLabel,
+  upcomingLabel,
   withHistoryScript,
   withHistoryStatus,
 } from "./jobsView.ts";
@@ -652,5 +653,29 @@ describe("describeConfigValue", () => {
         masked: false,
       }),
     ).toEqual({ kind: "scalar", text: "a�b" });
+  });
+});
+
+describe("upcomingLabel", () => {
+  test("shows the time in Japan time with the time left", () => {
+    expect(upcomingLabel("2026-10-26T05:05:00.000Z", NOW)).toBe(
+      "10/26 14:05(残り5分)",
+    );
+  });
+
+  test("does not call a time in the future just now", () => {
+    expect(upcomingLabel("2026-10-26T05:00:30.000Z", NOW)).not.toContain(
+      "たった今",
+    );
+  });
+
+  test("says when the time has passed and nothing ran", () => {
+    expect(upcomingLabel("2026-10-26T04:55:00.000Z", NOW)).toBe(
+      "10/26 13:55(予定時刻を過ぎています)",
+    );
+  });
+
+  test("says it does not know a time it cannot read", () => {
+    expect(upcomingLabel("not a time", NOW)).toBe("時刻不明");
   });
 });

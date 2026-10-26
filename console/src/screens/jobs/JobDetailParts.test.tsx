@@ -83,6 +83,25 @@ describe("JobOverview", () => {
     expect(html).toContain("Windmillで開く");
   });
 
+  test("says how long until a scheduled job is due", () => {
+    expect(
+      render(
+        <JobOverview
+          job={{
+            ...JOB,
+            state: "scheduled",
+            started_at: null,
+            completed_at: null,
+            scheduled_for: "2099-10-26T06:00:00.000000Z",
+          }}
+          now={NOW}
+          relatedItemId={null}
+          back={undefined}
+        />,
+      ),
+    ).toMatch(/予定[\s\S]*残り/);
+  });
+
   test("shows no work item link without an id", () => {
     expect(
       render(

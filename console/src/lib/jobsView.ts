@@ -355,3 +355,12 @@ export function describeConfigValue(item: ConfigItemView): ConfigValueText {
   }
   return { kind: "scalar", text: displayableIssueText(String(value)).text };
 }
+
+/**
+ * これから来る時刻の表示。「10/26 14:05(残り5分)」の形にする。
+ * 相対時刻の共通の表示は、未来の時刻を「たった今」とするので、予定には使わない。
+ * 予定の時刻を過ぎていて、まだ実行されていないときは、そのことを書く。
+ */
+export function upcomingLabel(_iso: string, _nowMs: number): string {
+  return "";
+}

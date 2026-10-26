@@ -112,6 +112,10 @@ describe("ScheduleList rows", () => {
     );
   });
 
+  test("says how long until the next run, not just now", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toMatch(/次回[^<]*残り/);
+  });
+
   test("says there is no next run when none is queued", () => {
     expect(
       render(freshQuery(snapshot([schedule({ next_run_at: null })]))),
