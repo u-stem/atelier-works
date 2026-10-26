@@ -870,6 +870,18 @@ describe("firstUnrunnableCheckReason", () => {
     );
   });
 
+  test("masks a secret that control characters split, once they are removed", () => {
+    const token = `ghp_${"a".repeat(30)}`;
+    const reason = firstUnrunnableCheckReason(
+      unrunnable(
+        `setpriv: failed to execute ${token.slice(0, 10)}\u0007${token.slice(10)}: No such file`,
+      ),
+    );
+    expect(reason).toBe(
+      "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute ***: No such file",
+    );
+  });
+
   test("removes ANSI escape sequences from the reason", () => {
     const reason = firstUnrunnableCheckReason(
       unrunnable(

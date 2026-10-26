@@ -8,6 +8,7 @@ import {
   CheckImageStaleError,
   CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
+import { CI_ROUND_REASONS_WITHHELD } from "../../f/factory/lib/ci_fix_round.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
@@ -727,6 +728,40 @@ describe("runPrFixVerify: a check command that could not run", () => {
   test("gives the reason when it shows up after the retry", async () => {
     const h = harness({ checks: [false, "unrunnable"] });
     expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(REASON);
+  });
+
+  test("withholds the reason in a CI round when the scan finds a secret", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      scanText: async () => ({ ok: false, output: "leak" }),
+    };
+    const result = await runPrFixVerify(deps, { ...INPUT, ciRound: true });
+    expect(result.reason).toBe(CI_ROUND_REASONS_WITHHELD);
+  });
+
+  test("keeps the reason in a CI round when the scan finds nothing", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      scanText: async (text) => ({ ok: true, output: text }),
+    };
+    const result = await runPrFixVerify(deps, { ...INPUT, ciRound: true });
+    expect(result.reason).toBe(REASON);
+  });
+
+  test("does not scan the reason outside a CI round", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    let scans = 0;
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      scanText: async (text) => {
+        scans += 1;
+        return { ok: true, output: text };
+      },
+    };
+    await runPrFixVerify(deps, INPUT);
+    expect(scans).toBe(0);
   });
 
   test("retries with Claude when the setpriv line is not the first line of the output", async () => {

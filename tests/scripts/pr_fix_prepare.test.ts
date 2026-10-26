@@ -854,7 +854,25 @@ describe("describeReason (implement flow)", () => {
         "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
       ),
     ).toBe(
-      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): `bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory`",
+    );
+  });
+
+  test("shows a link-like detail of the unrunnable check as code, not as a link", () => {
+    expect(
+      describeReason(
+        "check command could not run: x: setpriv: failed to execute [open](https://evil.example/x)",
+      ),
+    ).toBe(
+      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): `x: setpriv: failed to execute [open](https://evil.example/x)`",
+    );
+  });
+
+  test("replaces the backticks of the unrunnable check so that the code span stays closed", () => {
+    expect(
+      describeReason("check command could not run: a`b: setpriv: failed"),
+    ).toBe(
+      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): `a'b: setpriv: failed`",
     );
   });
 

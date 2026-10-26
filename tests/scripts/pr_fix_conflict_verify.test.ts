@@ -445,6 +445,24 @@ describe("runConflictFixVerify: the check commands", () => {
     ]);
   });
 
+  test("scans the reason of a check that could not run once", async () => {
+    const { deps, calls } = harness({ checks: ["unrunnable"] });
+    await runConflictFixVerify(deps, INPUT);
+    expect(calls.filter((call) => call === "scanText")).toHaveLength(1);
+  });
+
+  test("withholds the reason of a check that could not run when the scan finds a secret", async () => {
+    const { deps } = harness({
+      checks: ["unrunnable"],
+      scan: async () => ({ ok: false, output: "leak" }),
+    });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect([result.outcome, result.reason]).toEqual([
+      "guard_blocked",
+      CI_ROUND_REASONS_WITHHELD,
+    ]);
+  });
+
   test("returns blocked with the fixed reason when a check fails by itself", async () => {
     const { deps } = harness({ checks: [false] });
     expect((await runConflictFixVerify(deps, INPUT)).outcome).toBe("blocked");
