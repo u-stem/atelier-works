@@ -1528,6 +1528,45 @@ describe("console job viewing files", () => {
   });
 });
 
+// Consoleからジョブを取り消すscriptと、操作の記録を足した既存の書き込みのscript、拒否フックの一覧は、
+// 書き換えられると、取り消せるフローが増えたり、記録の順序や拒否が外れたりする。
+// 記録の配線と取消の許可表を固定するテストも、同じ理由で守る。
+describe("console job write files", () => {
+  const PATHS = [
+    "f/factory/console_job_cancel.ts",
+    "f/factory/console_job_cancel.script.yaml",
+    "f/factory/retry_work_item.ts",
+    "f/factory/retry_work_item.script.yaml",
+    "f/factory/manual_intake_submit.ts",
+    "f/factory/manual_intake_submit.script.yaml",
+    "scripts/claude-hooks/console-scripts.ts",
+    "tests/scripts/console_cancel.test.ts",
+    "tests/scripts/console_write_audit.test.ts",
+    "tests/scripts/cleanup_db_console_actions.test.ts",
+    "tests/scripts/claude-hooks/console-scripts.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS or a prefix lists %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each([
+    "f/factory/console_job_cancel.script.lock",
+    "f/factory/retry_work_item.script.lock",
+    "f/factory/manual_intake_submit.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // Consoleから保留と凍結を解除するscriptと、その部品、テストは、書き換えられると、他の主体の保留を
 // 無条件に外せる。CLIを守っているのと同じ理由で守る。読み取りだけの`console_holds.ts`は守らない。
 describe("console release files", () => {
