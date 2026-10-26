@@ -302,9 +302,16 @@ export async function runDesignPrepare(
  * 何も止めない。使用中のworktreeを消さないためである。
  */
 export async function ensureDesignWorktreeLockFree(
-  _dir: string,
-  _deps: { readonly run: CommandRunner; readonly lockDeps: LockReleaseDeps },
-): Promise<void> {}
+  dir: string,
+  deps: { readonly run: CommandRunner; readonly lockDeps: LockReleaseDeps },
+): Promise<void> {
+  await ensureWorktreeLockFree({
+    run: deps.run,
+    lock: worktreeLockFor(dir),
+    policy: null,
+    deps: deps.lockDeps,
+  });
+}
 
 /**
  * 設計の準備ステップ。本番の依存を組み立てて`runDesignPrepare`を呼ぶ。
@@ -369,14 +376,11 @@ export async function main(
           (await listWorktrees({ run: runCommand, repoDir })).some(
             (entry) => entry.path === dir,
           ),
-        ensureLockFree: async (dir) => {
-          await ensureWorktreeLockFree({
+        ensureLockFree: (dir) =>
+          ensureDesignWorktreeLockFree(dir, {
             run: runCommand,
-            lock: worktreeLockFor(dir),
-            policy: null,
-            deps: defaultLockReleaseDeps(),
-          });
-        },
+            lockDeps: defaultLockReleaseDeps(),
+          }),
         remove: (repoDir, dir) =>
           removeWorktree({ run: runCommand, repoDir, dir, force: true }),
         add: async (repoDir, dir, sha) => {
