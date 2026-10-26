@@ -42,6 +42,25 @@ export function canCancelJob(job: CancelCandidate): boolean {
   );
 }
 
+export type CancelDialogHandlers = {
+  readonly onOpen: () => void;
+  readonly onConfirm: () => void;
+  readonly onDismiss: () => void;
+};
+
+/** 確認のダイアログの操作を、画面の状態から切り離して決める部品。実装は後で入れる。 */
+export function cancelDialogHandlers(_input: {
+  readonly jobId: string;
+  readonly setOpen: (open: boolean) => void;
+  readonly submit: (jobId: string) => void;
+}): CancelDialogHandlers {
+  return {
+    onOpen: () => undefined,
+    onConfirm: () => undefined,
+    onDismiss: () => undefined,
+  };
+}
+
 /**
  * 確認のダイアログに並べる文。効果、元に戻せないこと、残るものを書く。
  * 子プロセスは、中止してもすぐには止まらない。作業項目は、次の照合が失敗にする。

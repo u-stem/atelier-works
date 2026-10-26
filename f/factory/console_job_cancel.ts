@@ -123,6 +123,12 @@ export type CancelTarget =
       };
     };
 
+/**
+ * 予定の時刻が先のジョブとみなすまでの猶予(ミリ秒)。
+ * Windmillとworkerの時計のずれで、もうすぐ始まる待ちのジョブを「先」と誤らないための幅である。
+ */
+export const SCHEDULED_FOR_LATER_GRACE_MS = 10_000;
+
 const JOB_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

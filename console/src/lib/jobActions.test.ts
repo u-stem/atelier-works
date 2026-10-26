@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CANCELABLE_FLOW_PATHS,
   canCancelJob,
+  cancelDialogHandlers,
   cancelDialogLines,
   DEPENDABOT_FLOW_PATH,
 } from "./jobActions.ts";
@@ -73,46 +74,173 @@ describe("canCancelJob", () => {
   });
 });
 
+function lines(flowPath: string, state: "running" | "queued" = "running") {
+  return cancelDialogLines(flowPath, state).join("\n");
+}
+
 describe("cancelDialogLines", () => {
   test("says that the cancel cannot be undone", () => {
-    expect(cancelDialogLines("f/factory/implement").join("\n")).toContain(
-      "元に戻せません",
-    );
+    expect(lines("f/factory/implement")).toContain("元に戻せません");
   });
 
   test("says that child processes can keep running", () => {
-    expect(cancelDialogLines("f/factory/implement").join("\n")).toContain(
-      "子プロセス",
+    expect(lines("f/factory/implement")).toContain("子プロセス");
+  });
+
+  test("says that the cost of the leftover Claude may escape the daily budget", () => {
+    expect(lines("f/factory/implement")).toContain(
+      "日次予算に数えられないことがあります",
     );
   });
 
   test("says when the child processes are cleaned up", () => {
-    expect(cancelDialogLines("f/factory/implement").join("\n")).toContain(
-      "翌日03:00の掃除",
+    expect(lines("f/factory/implement")).toContain("毎日03:00の掃除");
+  });
+
+  test("says that the cleanup only stops what outlived the time limit", () => {
+    expect(lines("f/factory/implement")).toContain(
+      "実行の上限時間に5分を足した時間を過ぎたものだけ",
     );
   });
 
+  test("does not promise that the cleanup stops the processes the next day", () => {
+    expect(lines("f/factory/implement")).not.toContain("翌日");
+  });
+
+  test("says that the next run of the implement flow stops the leftover processes", () => {
+    expect(lines("f/factory/implement")).toContain("準備のステップ");
+  });
+
+  test("keeps the implement sentence out of the dialog of another flow", () => {
+    expect(lines("f/factory/design")).not.toContain("準備のステップ");
+  });
+
   test("says that the work item fails at the next check", () => {
-    expect(cancelDialogLines("f/factory/implement").join("\n")).toContain(
-      "次の照合で失敗",
+    expect(lines("f/factory/implement")).toContain("次の照合");
+  });
+
+  test("says that a work item that waits for approval does not fail", () => {
+    expect(lines("f/factory/pipeline")).toContain(
+      "承認待ちの作業項目は失敗にならず、承認待ちのまま残ります",
+    );
+  });
+
+  test("warns that the notice of a waiting approval may not arrive", () => {
+    expect(lines("f/factory/pipeline")).toContain(
+      "承認依頼の通知は届かないことがあります",
     );
   });
 
   test("does not mention the dependabot rule for another flow", () => {
-    expect(cancelDialogLines("f/factory/implement").join("\n")).not.toContain(
-      "dependabot",
-    );
+    expect(lines("f/factory/implement")).not.toContain("dependabot");
   });
 
   test("adds the dependabot rule for the dependabot flow", () => {
-    expect(cancelDialogLines(DEPENDABOT_FLOW_PATH).join("\n")).toContain(
-      "再実行できません",
-    );
+    expect(lines(DEPENDABOT_FLOW_PATH)).toContain("再実行できません");
   });
 
   test("tells the person to merge the pull request by hand for dependabot", () => {
-    expect(cancelDialogLines(DEPENDABOT_FLOW_PATH).join("\n")).toContain(
-      "人の手",
+    expect(lines(DEPENDABOT_FLOW_PATH)).toContain("人の手");
+  });
+
+  test("names the job that waits for a worker as a waiting flow", () => {
+    expect(lines("f/factory/implement", "queued")).toContain("待ちのフロー");
+  });
+
+  test("leaves the child processes out for a flow that has not started", () => {
+    expect(lines("f/factory/implement", "queued")).not.toContain("子プロセス");
+  });
+
+  test("leaves the cleanup out for a flow that has not started", () => {
+    expect(lines("f/factory/implement", "queued")).not.toContain("03:00");
+  });
+
+  test("still says that the work item fails at the next check for a waiting flow", () => {
+    expect(lines("f/factory/implement", "queued")).toContain("次の照合");
+  });
+
+  test("says that the running flow is stopped", () => {
+    expect(lines("f/factory/implement", "running")).toContain("実行中のフロー");
+  });
+
+  test("says that a stopped pull request fix starts again by itself", () => {
+    expect(lines("f/factory/pr_fix")).toContain(
+      "次のポーリングが新しい修正を自動で始めます",
     );
+  });
+
+  test("names the pending label that starts the fix again", () => {
+    expect(lines("f/factory/pr_fix")).toContain("factory:fix");
+  });
+
+  test("says that the watch of the CI starts the fix of the same pull request again", () => {
+    expect(lines("f/factory/pr_fix")).toContain("CIの監視");
+  });
+
+  test("warns that a leftover process can block the next fix", () => {
+    expect(lines("f/factory/pr_fix")).toContain("worktree");
+  });
+
+  test("leaves the worktree conflict out for a pull request fix that has not started", () => {
+    expect(lines("f/factory/pr_fix", "queued")).not.toContain("worktree");
+  });
+
+  test("keeps the pull request fix sentences out of the dialog of another flow", () => {
+    expect(lines("f/factory/implement")).not.toContain("factory:fix");
+  });
+});
+
+describe("cancelDialogHandlers", () => {
+  const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+  function setup() {
+    const opened: boolean[] = [];
+    const submitted: string[] = [];
+    const handlers = cancelDialogHandlers({
+      jobId: JOB,
+      setOpen: (open) => {
+        opened.push(open);
+      },
+      submit: (id) => {
+        submitted.push(id);
+      },
+    });
+    return { handlers, opened, submitted };
+  }
+
+  test("opens the dialog when the button is pressed", () => {
+    const { handlers, opened } = setup();
+    handlers.onOpen();
+    expect(opened).toEqual([true]);
+  });
+
+  test("does not stop the job when the dialog only opens", () => {
+    const { handlers, submitted } = setup();
+    handlers.onOpen();
+    expect(submitted).toEqual([]);
+  });
+
+  test("stops the job once when the person confirms", () => {
+    const { handlers, submitted } = setup();
+    handlers.onConfirm();
+    expect(submitted).toEqual([JOB]);
+  });
+
+  test("closes the dialog when the person confirms", () => {
+    const { handlers, opened } = setup();
+    handlers.onConfirm();
+    expect(opened).toEqual([false]);
+  });
+
+  test("does not stop the job when the person dismisses the dialog", () => {
+    const { handlers, submitted } = setup();
+    handlers.onDismiss();
+    expect(submitted).toEqual([]);
+  });
+
+  test("closes the dialog when the person dismisses it", () => {
+    const { handlers, opened } = setup();
+    handlers.onDismiss();
+    expect(opened).toEqual([false]);
   });
 });

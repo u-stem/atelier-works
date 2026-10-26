@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { JobSummaryView } from "../../api/jobsQueries.ts";
-import { CancelDialog, JobActions } from "./JobActions.tsx";
+import { CancelDialog, JobActions, OpenCancelButton } from "./JobActions.tsx";
 
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -42,7 +42,6 @@ function renderDialog(
     <CancelDialog
       job={target}
       workItemId={workItemId}
-      busy={false}
       onConfirm={() => undefined}
       onCancel={() => undefined}
     />,
@@ -94,12 +93,24 @@ describe("CancelDialog", () => {
     expect(renderDialog(job())).toContain(ID);
   });
 
-  test("names the work item", () => {
-    expect(renderDialog(job(), 7)).toContain("作業項目 #7");
+  test("names the work item by its number", () => {
+    expect(renderDialog(job(), 7)).toContain(">#7<");
+  });
+
+  test("does not repeat the words work item in the value", () => {
+    expect(renderDialog(job(), 7)).not.toContain("作業項目 #7");
   });
 
   test("leaves the work item out when the job has none", () => {
-    expect(renderDialog(job(), null)).not.toContain("作業項目 #");
+    expect(renderDialog(job(), null)).not.toContain(">作業項目</dt>");
+  });
+
+  test("leaves the child processes out for a flow that waits for a worker", () => {
+    expect(renderDialog(job({ state: "queued" }))).not.toContain("子プロセス");
+  });
+
+  test("names a flow that waits for a worker as a waiting flow", () => {
+    expect(renderDialog(job({ state: "queued" }))).toContain("待ちのフロー");
   });
 
   test("says that the stop cannot be undone", () => {
@@ -131,5 +142,63 @@ describe("CancelDialog", () => {
   test("hides characters that change how the text reads", () => {
     const hostile = job({ script_path: "f/factory/impl‮ement" });
     expect(renderDialog(hostile)).not.toContain("‮");
+  });
+});
+
+describe("the parts that carry the operation", () => {
+  test("opens the dialog when the button is pressed", () => {
+    const calls: string[] = [];
+    OpenCancelButton({
+      locked: false,
+      onOpen: () => {
+        calls.push("open");
+      },
+    }).props.onClick();
+    expect(calls).toEqual(["open"]);
+  });
+
+  test("keeps the button off while the job is being stopped", () => {
+    const element = OpenCancelButton({ locked: true, onOpen: () => undefined });
+    expect(element.props.disabled).toBe(true);
+  });
+
+  test("leaves the button on when nothing is running", () => {
+    const element = OpenCancelButton({
+      locked: false,
+      onOpen: () => undefined,
+    });
+    expect(element.props.disabled).toBe(false);
+  });
+
+  test("hands the confirmation of the dialog to the confirm handler", () => {
+    const onConfirm = () => undefined;
+    const element = CancelDialog({
+      job: job(),
+      workItemId: 7,
+      onConfirm,
+      onCancel: () => undefined,
+    });
+    expect(element.props.onConfirm).toBe(onConfirm);
+  });
+
+  test("hands both the cancel button and Esc of the dialog to the dismiss handler", () => {
+    const onCancel = () => undefined;
+    const element = CancelDialog({
+      job: job(),
+      workItemId: 7,
+      onConfirm: () => undefined,
+      onCancel,
+    });
+    expect(element.props.onCancel).toBe(onCancel);
+  });
+
+  test("opens the dialog only for a job", () => {
+    const element = CancelDialog({
+      job: null,
+      workItemId: null,
+      onConfirm: () => undefined,
+      onCancel: () => undefined,
+    });
+    expect(element.props.open).toBe(false);
   });
 });

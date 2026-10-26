@@ -363,6 +363,16 @@ describe("isJobCancelResult", () => {
     },
   );
 
+  test("accepts the refusal of a job that is already stopping", () => {
+    expect(
+      isJobCancelResult({
+        found: true,
+        refused: true,
+        reason: "already_canceling",
+      }),
+    ).toBe(true);
+  });
+
   test("rejects a refusal with a reason it does not know", () => {
     expect(
       isJobCancelResult({ found: true, refused: true, reason: "other" }),

@@ -479,3 +479,26 @@ describe("the scripts that record", () => {
     expect(readFileSync(file, "utf8")).toContain("runRecordedAs");
   });
 });
+
+describe("the entry point of each script that records", () => {
+  const ENTRY_POINTS: readonly (readonly [string, RegExp])[] = [
+    ["f/factory/retry_work_item.ts", /return await retryWorkItemRecorded\(/],
+    ["f/factory/hold_release.ts", /await releaseHoldRecorded\(/],
+    ["f/factory/freeze_release.ts", /await releaseFreezeRecorded\(/],
+    ["f/factory/manual_intake_submit.ts", /await submitManualIntakeRecorded\(/],
+  ];
+
+  /** `main`の宣言から後ろ。`main`の外に同じ呼び出しがあっても、配線の証拠にしない。 */
+  function mainOf(file: string): string {
+    const source = readFileSync(file, "utf8");
+    const start = source.indexOf("export async function main(");
+    return start === -1 ? "" : source.slice(start);
+  }
+
+  test.each(ENTRY_POINTS)(
+    "main of %s calls the recorded form",
+    (file, call) => {
+      expect(mainOf(file)).toMatch(call);
+    },
+  );
+});

@@ -107,6 +107,18 @@ export function CancelDialog({
   );
 }
 
+/** 確認のダイアログを開くボタン。実装は後で入れる。 */
+export function OpenCancelButton(_props: {
+  locked: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <Button variant="outline" size="sm" disabled={false} onClick={() => {}}>
+      ジョブを中止
+    </Button>
+  );
+}
+
 /**
  * 中止の書き込みを、共通の流れに載せる設定。ジョブごとにロックし、中止の後は、そのジョブの詳細と実行中の一覧を読み直す。
  * 詳細は、ログと結果を含む取得だけを読み直す。状態の取得は、その値で初期化される。2つを同時に走らせないためである。

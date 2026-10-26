@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { Glob } from "bun";
 import * as consoleView from "../../console/src/lib/jobActions.ts";
 import {
@@ -9,6 +10,7 @@ import {
   DEPENDABOT_FLOW_PATH,
   evaluateCancelTarget,
   NOT_CANCELABLE_FLOW_PATHS,
+  SCHEDULED_FOR_LATER_GRACE_MS,
 } from "../../f/factory/console_job_cancel.ts";
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 
@@ -40,7 +42,6 @@ describe("evaluateCancelTarget", () => {
       job: {
         id: ID,
         flow_path: "f/factory/implement",
-        state: "running",
         work_item_id: 7,
       },
     });
@@ -48,10 +49,7 @@ describe("evaluateCancelTarget", () => {
 
   test("accepts a flow that waits for a worker", () => {
     const waiting = runningFlow({ running: false });
-    expect(evaluateCancelTarget(waiting, NOW)).toMatchObject({
-      kind: "ok",
-      job: { state: "queued" },
-    });
+    expect(evaluateCancelTarget(waiting, NOW).kind).toBe("ok");
   });
 
   test("reads the work item id given as a numeric string", () => {
@@ -147,8 +145,16 @@ describe("evaluateCancelTarget", () => {
     });
   });
 
-  test("refuses a job that is already canceled", () => {
+  test("tells a job that is stopping apart from one that has finished", () => {
     const job = runningFlow({ canceled: true });
+    expect(evaluateCancelTarget(job, NOW)).toEqual({
+      kind: "refused",
+      reason: "already_canceling",
+    });
+  });
+
+  test("calls a canceled job that has left the queue finished", () => {
+    const job = runningFlow({ type: "CompletedJob", canceled: true });
     expect(evaluateCancelTarget(job, NOW)).toEqual({
       kind: "refused",
       reason: "already_finished",
@@ -159,6 +165,48 @@ describe("evaluateCancelTarget", () => {
     const job = runningFlow({
       running: false,
       scheduled_for: "2026-10-27T04:00:00Z",
+    });
+    expect(evaluateCancelTarget(job, NOW)).toEqual({
+      kind: "refused",
+      reason: "scheduled_for_later",
+    });
+  });
+
+  test("accepts a job that starts within a few seconds", () => {
+    const job = runningFlow({
+      running: false,
+      scheduled_for: "2026-10-27T03:00:09Z",
+    });
+    expect(evaluateCancelTarget(job, NOW).kind).toBe("ok");
+  });
+
+  test("refuses a job that starts a little after the grace", () => {
+    const job = runningFlow({
+      running: false,
+      scheduled_for: "2026-10-27T03:00:11Z",
+    });
+    expect(evaluateCancelTarget(job, NOW)).toEqual({
+      kind: "refused",
+      reason: "scheduled_for_later",
+    });
+  });
+
+  test("accepts a job that starts exactly at the end of the grace", () => {
+    const job = runningFlow({
+      running: false,
+      scheduled_for: new Date(
+        NOW.getTime() + SCHEDULED_FOR_LATER_GRACE_MS,
+      ).toISOString(),
+    });
+    expect(evaluateCancelTarget(job, NOW).kind).toBe("ok");
+  });
+
+  test("refuses a job that starts one millisecond after the grace", () => {
+    const job = runningFlow({
+      running: false,
+      scheduled_for: new Date(
+        NOW.getTime() + SCHEDULED_FOR_LATER_GRACE_MS + 1,
+      ).toISOString(),
     });
     expect(evaluateCancelTarget(job, NOW)).toEqual({
       kind: "refused",
@@ -544,9 +592,19 @@ describe("the refusal reasons", () => {
       "flow_not_allowed",
       "not_a_root_flow",
       "already_finished",
+      "already_canceling",
       "scheduled_for_later",
       "actor_unknown",
       "audit_unavailable",
     ]);
+  });
+});
+
+describe("the script entry point", () => {
+  test("hands the job to the cancel with the ports built from the SDK", () => {
+    const source = readFileSync("f/factory/console_job_cancel.ts", "utf8");
+    expect(source).toMatch(
+      /return await cancelJobFromConsole\(job_id,\s*sdkPorts\(\)\)/,
+    );
   });
 });

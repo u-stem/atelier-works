@@ -308,6 +308,78 @@ describe("describeJobCancelResult", () => {
     ).toContain("読めませんでした");
   });
 
+  test.each(["running", "queued"])(
+    "starts by saying the stop was asked for while the job is still %s",
+    (job_state) => {
+      expect(
+        describeJobCancelResult({ ...CANCELED, job_state }).message,
+      ).toStartWith("中止を依頼しました。");
+    },
+  );
+
+  test("says that the job has not stopped yet while it is still running", () => {
+    expect(
+      describeJobCancelResult({ ...CANCELED, job_state: "running" }).message,
+    ).toContain("まだ止まっていません");
+  });
+
+  test("does not say the job was stopped while it is still running", () => {
+    expect(
+      describeJobCancelResult({ ...CANCELED, job_state: "running" }).message,
+    ).not.toContain("中止しました");
+  });
+
+  test("warns while the job is still running", () => {
+    expect(
+      describeJobCancelResult({ ...CANCELED, job_state: "running" }).tone,
+    ).toBe("warning");
+  });
+
+  test("starts by saying the job was stopped once it has stopped", () => {
+    expect(describeJobCancelResult(CANCELED).message).toStartWith(
+      "ジョブを中止しました。",
+    );
+  });
+
+  test.each(["awaiting_approval", "awaiting_design_approval"])(
+    "says that a work item in %s does not fail and stays waiting",
+    (status) => {
+      const waiting = {
+        ...CANCELED,
+        work_item: { id: 7, status, lease_held: true },
+      };
+      expect(describeJobCancelResult(waiting).message).toContain(
+        "失敗にはならず、承認待ちのまま残ります",
+      );
+    },
+  );
+
+  test("warns that the notice of a waiting approval may not have arrived", () => {
+    const waiting = {
+      ...CANCELED,
+      work_item: { id: 7, status: "awaiting_approval", lease_held: true },
+    };
+    expect(describeJobCancelResult(waiting).message).toContain(
+      "承認依頼の通知は届かないことがあります",
+    );
+  });
+
+  test("does not promise a failure for a work item that waits for a person", () => {
+    const waiting = {
+      ...CANCELED,
+      work_item: { id: 7, status: "awaiting_approval", lease_held: true },
+    };
+    expect(describeJobCancelResult(waiting).message).not.toContain(
+      "次の照合で失敗",
+    );
+  });
+
+  test("does not mention an approval notice for a work item that is not waiting", () => {
+    expect(describeJobCancelResult(CANCELED).message).not.toContain(
+      "承認依頼の通知",
+    );
+  });
+
   test("warns when the record could not be written", () => {
     expect(
       describeJobCancelResult({ ...CANCELED, action_audit: "failed" }).tone,
@@ -331,6 +403,7 @@ describe("describeJobCancelResult", () => {
     ["flow_not_allowed", "中止できない"],
     ["not_a_root_flow", "中止できない"],
     ["already_finished", "すでに終わっています"],
+    ["already_canceling", "すでに中止済みです。止まるまで少しかかります"],
     ["scheduled_for_later", "予定の時刻"],
     ["actor_unknown", "操作者"],
     ["audit_unavailable", "記録"],
