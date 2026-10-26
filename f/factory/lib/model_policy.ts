@@ -19,6 +19,7 @@ export type ModelStage =
 /** 試行の回数にかかわらず`heavy_model`を使う工程。やり直しが高くつく判断を含むため。 */
 const ALWAYS_HEAVY_STAGES: readonly ModelStage[] = [
   "requirements",
+  "design",
   "pr_review",
   "audit",
   "dependabot",
@@ -30,8 +31,8 @@ const SONNET_FAILURES_BEFORE_ESCALATION = 2;
 /**
  * `stage`で使うモデル名を返す。
  * `sonnetFailures`は、同じ作業で直近に`model`が続けて失敗した回数である。
- * 要件定義の生成、PRのレビュー、監査、dependabotの更新の影響調査は、回数にかかわらず`heavy_model`を使う。
- * この4工程の呼び出しは、回数が使われないことを示すために0を渡す。
+ * 要件定義の生成、設計書の生成、PRのレビュー、監査、dependabotの更新の影響調査は、回数にかかわらず`heavy_model`を使う。
+ * この5工程の呼び出しは、回数が使われないことを示すために0を渡す。
  * dependabotの影響調査は、結果が自動のマージの判断に使われ、見落としが取り返しにくいため、常に重いモデルで行う。
  */
 export function modelFor(
