@@ -97,3 +97,20 @@ describe("Tabs", () => {
     expect(render("one")).not.toContain("失敗");
   });
 });
+
+/** `role="tablist"`の開始タグ。 */
+function tablistTag(html: string): string {
+  return /<div [^>]*role="tablist"[^>]*>/.exec(html)?.[0] ?? "";
+}
+
+describe("Tabs height", () => {
+  test("keeps the tablist from scrolling vertically", () => {
+    expect(tablistTag(render("one"))).toContain("overflow-y-hidden");
+  });
+
+  test("keeps each tab inside the tablist box", () => {
+    expect(tabTags(render("one")).some((tag) => tag.includes("-mb-px"))).toBe(
+      false,
+    );
+  });
+});
