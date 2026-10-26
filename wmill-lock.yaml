@@ -107,7 +107,7 @@ locks:
   f/factory/lib/model_policy: 25fed2a9c1db353e6dd08d6bac7d51335740d88ac1826b57d6a6bbaf2d16de6b
   f/factory/lib/owner_id_notice: a60fb6ea53ecdb7f1e613f94c1702ca8189b4b35000aae04faba452d97afa1a2
   f/factory/lib/periodic_worker: 5babda25b9b699d5d66fac8fe4ab312645b72a686040e0816264004be145e378
-  f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
+  f/factory/lib/pipeline_lease: c4fcddf03e71e633ee74b7610d6dd95c732da297b27025cfe57ab7e6aa895f54
   f/factory/lib/poll_source: 7eeea6ab24974ab76fcb6b10ae84b09fb79a0e4515ae2ba76f20896a09e895ec
   f/factory/lib/poll_support: fc2bb0684cfeddc84687afc97865afea8acf337162e4b0255b60ae88463b5a8e
   f/factory/lib/pr_ci_fix_claim: 3f34d3752aa2d1dcf8fa0b54f43c095bf6577e709895aeca0d57555351326420
