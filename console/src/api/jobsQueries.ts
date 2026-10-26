@@ -493,3 +493,17 @@ export function shouldPollJobStatus(
 export function isLaterHistoryPage(_queryKey: readonly unknown[]): boolean {
   return false;
 }
+
+/** 詳細の取得の結果のうち、表示するジョブの選択に読む項目。 */
+export type DetailSnapshot = {
+  readonly data: JobDetailView | undefined;
+  readonly updatedAt: number;
+};
+
+/** 表示するジョブ。ログと結果の取得と状態の取得のうち、新しい方のジョブにする。 */
+export function currentJob(
+  _output: DetailSnapshot,
+  _status: DetailSnapshot,
+): JobSummaryView | null {
+  return null;
+}

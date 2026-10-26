@@ -4,6 +4,7 @@ import {
   type ConfigSnapshotView,
   configQueryKey,
   configQueryOptions,
+  currentJob,
   fetchActiveJobs,
   fetchConfig,
   fetchJobDetail,
@@ -565,5 +566,64 @@ describe("isLaterHistoryPage", () => {
     expect(
       isLaterHistoryPage(jobDetailQueryKey(ID, { includeOutput: true })),
     ).toBe(false);
+  });
+});
+
+describe("currentJob", () => {
+  const running = (state: string): JobDetailView =>
+    DETAIL.found ? { ...DETAIL, job: { ...DETAIL.job, state } } : DETAIL;
+
+  test("is the job of the log fetch while no status was fetched", () => {
+    expect(
+      currentJob(
+        { data: running("running"), updatedAt: 1000 },
+        { data: undefined, updatedAt: 0 },
+      )?.state,
+    ).toBe("running");
+  });
+
+  test("is the job of the status fetch when it is newer", () => {
+    expect(
+      currentJob(
+        { data: running("running"), updatedAt: 1000 },
+        { data: running("success"), updatedAt: 2000 },
+      )?.state,
+    ).toBe("success");
+  });
+
+  test("is the job of the log fetch when it is newer than the status", () => {
+    expect(
+      currentJob(
+        { data: running("success"), updatedAt: 3000 },
+        { data: running("running"), updatedAt: 2000 },
+      )?.state,
+    ).toBe("success");
+  });
+
+  test("keeps the job of the log fetch when the status says it was not found", () => {
+    expect(
+      currentJob(
+        { data: running("running"), updatedAt: 1000 },
+        { data: { found: false }, updatedAt: 2000 },
+      )?.state,
+    ).toBe("running");
+  });
+
+  test("is nothing when the log fetch did not find the job", () => {
+    expect(
+      currentJob(
+        { data: { found: false }, updatedAt: 1000 },
+        { data: running("running"), updatedAt: 2000 },
+      ),
+    ).toBeNull();
+  });
+
+  test("is nothing before the first fetch", () => {
+    expect(
+      currentJob(
+        { data: undefined, updatedAt: 0 },
+        { data: undefined, updatedAt: 0 },
+      ),
+    ).toBeNull();
   });
 });
