@@ -7,10 +7,11 @@
 -- 下書きを消さずに止める役をこの文が持つ。NOT VALID は付けない。
 -- 止まったら、運用者が下書きを手で扱ってから、もう一度戻す。
 -- 行が無ければ制約は検証を通り、後続の DROP TABLE が表ごと制約を消す。
+-- 最初のロックは、挿入側が design_drafts を先に持って requirement_drafts を読む順に合わせ、2表を1文で取る。
 BEGIN;
 
 SET LOCAL lock_timeout = '30s';
-LOCK TABLE factory.requirement_drafts IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE factory.design_drafts, factory.requirement_drafts IN ACCESS EXCLUSIVE MODE;
 
 ALTER TABLE factory.design_drafts ADD CONSTRAINT design_drafts_must_be_empty CHECK (false);
 
