@@ -589,6 +589,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/pipeline_request_approval` | script | [SF-2-1/3] 承認依頼 |
 | `f/factory/steps/requirements_apply` | script | [SF-2-2] 要件定義の承認結果を反映 |
 | `f/factory/steps/design_prepare` | script | [SF-2-3/1] 設計用の作業領域の準備 |
+| `f/factory/steps/design_generate` | script | [SF-2-3/2] 設計書の生成(Claude) |
 | `f/factory/pr_review` | flow | [SF-3-1] PRの自動レビュー |
 | `f/factory/steps/pr_review_prepare` | script | [SF-3-1/1] PRの取得と検証 |
 | `f/factory/steps/pr_review_generate` | script | [SF-3-1/2] レビューの生成(Claude) |
