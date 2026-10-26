@@ -1778,7 +1778,7 @@ export const DOC_HASH_COLUMN_MISSING_NOTICE_KIND = "doc_hash_column_missing";
  * 列が無い間に何件保存しても、通知は重ならない。
  */
 const DOC_HASH_COLUMN_MISSING_NOTICE_MESSAGE =
-  "requirement_drafts.doc_hash の列が無いため、要件定義の下書きを基準値なしで保存しました。この下書きは、承認の後の書き換えを検出できません。datatableのmigrationが反映されたことを確かめ、守りたい要件定義は作り直してください";
+  "requirement_drafts.doc_hashの列が無いため、要件定義の下書きを基準値なしで保存しました。この下書きは、承認の後の書き換えを検出できません。datatableのmigrationが反映されたことを確かめ、守りたい要件定義は作り直してください";
 
 /**
  * `factory.requirement_drafts`に行を挿入し、そのIDを返す。

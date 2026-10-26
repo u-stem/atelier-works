@@ -102,8 +102,8 @@ describe("host_action_required", () => {
 });
 
 describe("doc_hash_column_missing", () => {
-  test("is registered in the severity table as an action notice", () => {
-    expect(NOTICE_SEVERITY.doc_hash_column_missing).toBe("action");
+  test("is an action notice, which is the severity of a kind that the table does not list", () => {
+    expect(noticeSeverity("doc_hash_column_missing")).toBe("action");
   });
 
   test("can be resolved from the Console", () => {
