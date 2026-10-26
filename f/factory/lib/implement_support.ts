@@ -370,6 +370,14 @@ function omissionMarker(omittedBytes: number): string {
  * `insertImplementRound`の前に渡す。
  * プロンプト向けの末尾(`runAllowedCheckCommands`の`outputTail`)ではない。
  */
+export function truncateCheckSections(
+  _failed: readonly string[],
+  _passed: readonly string[],
+  _maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
+): string {
+  return "";
+}
+
 export function truncateCheckOutput(
   text: string,
   maxBytes: number = CHECK_OUTPUT_MAX_BYTES,

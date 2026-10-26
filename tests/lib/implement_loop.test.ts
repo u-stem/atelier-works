@@ -858,6 +858,25 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(harness())).final_output).toEqual(DONE);
   });
 
+  test("keeps the tail of a failed check in the record when a large passed output follows", async () => {
+    const failedOutput = `${"warn: noisy log\n".repeat(3000)}FAIL: the failing test\n3 fail\n`;
+    const passedOutput = "ok: checked a file\n".repeat(3000);
+    const h = harness({
+      checks: [
+        [
+          {
+            ...FAIL,
+            output: failedOutput,
+            outputTail: failedOutput.slice(-2000),
+          },
+          { ...LINT_FAIL, ok: true, output: passedOutput, outputTail: "" },
+        ],
+      ],
+    });
+    await run(h, loopInput(outputRound(), { maxRounds: 1 }));
+    expect(h.recorded[0]?.check_output).toContain("FAIL: the failing test");
+  });
+
   test("lists gitleaks and the commands in the check summary", async () => {
     expect((await run(harness())).checks).toEqual({
       kind: "ran",
@@ -1357,6 +1376,24 @@ describe("runImplementVerifyLoop", () => {
       fingerprints: [FP_1, FP_2],
     });
     expect((await run(h)).exit).toBe("checks_passed");
+  });
+
+  test("is unrunnable for a program given by an absolute path", async () => {
+    const output =
+      "setpriv: failed to execute /usr/bin/foo: No such file or directory";
+    const h = harness({
+      checks: [
+        [
+          {
+            ...SETPRIV_MISSING,
+            command: "/usr/bin/foo",
+            output,
+            outputTail: output,
+          },
+        ],
+      ],
+    });
+    expect((await run(h)).exit).toBe("check_unrunnable");
   });
 
   test("starts a fix round when the setpriv line is not the first line of the output", async () => {
