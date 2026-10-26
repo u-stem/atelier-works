@@ -1,38 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
+// 取得の条件は、`jobsFetchPlan`と`jobsHoldsQueryOptions`が決める(それぞれ単体のテストがある)。
+// ここでは、画面がその2つを使い、自分では取り直しの間隔を持たないことだけを確かめる。
+// 描画は`JobsScreen.render.test.tsx`が確かめる。
 const SOURCE = readFileSync(
   new URL("./JobsScreen.tsx", import.meta.url),
   "utf8",
 );
 const BODY = SOURCE.slice(SOURCE.indexOf("export function JobsScreen"));
 
-describe("the fetches of the job list screen", () => {
-  test("fetches a tab only after it was opened", () => {
-    expect(BODY).toContain("useVisitedTabs(tab)");
+describe("the wiring of the job list screen", () => {
+  test("asks the plan which tabs to fetch", () => {
+    expect(BODY).toContain("jobsFetchPlan(visited)");
   });
 
-  test("never refetches by itself", () => {
-    expect(SOURCE).not.toMatch(/refetchInterval: (?!false)/);
+  test("reads the holds with the options that never poll", () => {
+    expect(BODY).toContain("jobsHoldsQueryOptions()");
   });
 
-  test("refreshes only the tab that is open", () => {
-    expect(BODY).toMatch(/tab === "history"/);
+  test("does not set a refetch interval of its own", () => {
+    expect(SOURCE).not.toContain("refetchInterval");
   });
 
-  test("reads the holds without polling, for the freezes of the schedules", () => {
-    expect(BODY).toContain("refetchInterval: false");
-  });
-
-  test("keeps the open tab and the filters in the URL", () => {
-    expect(BODY).toContain("useSearchParams()");
-  });
-
-  test("checks the script filter against the known scripts", () => {
-    expect(BODY).toContain("parseHistoryScript(");
-  });
-
-  test("draws the three tabs in panels that stay mounted once opened", () => {
-    expect(BODY.match(/<TabPanel/g)).toHaveLength(3);
+  test("does not set a refetch on focus of its own", () => {
+    expect(SOURCE).not.toContain("refetchOnWindowFocus");
   });
 });

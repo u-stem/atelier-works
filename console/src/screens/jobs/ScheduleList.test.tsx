@@ -252,3 +252,87 @@ describe("ScheduleList notes", () => {
     );
   });
 });
+
+describe("ScheduleList pause and runs", () => {
+  const run = (n: number) => ({
+    job_id: `0190a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
+    success: true,
+    duration_ms: 1000,
+  });
+
+  test("says a paused schedule is paused", () => {
+    expect(
+      render(
+        freshQuery(
+          snapshot([schedule({ paused_until: "2099-10-26T06:00:00.000Z" })]),
+        ),
+      ),
+    ).toContain("一時停止中");
+  });
+
+  test("does not say a schedule is paused when it is not", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).not.toContain(
+      "一時停止中",
+    );
+  });
+
+  test("links the three newest runs", () => {
+    expect(
+      render(
+        freshQuery(
+          snapshot([
+            schedule({ recent_runs: [run(1), run(2), run(3), run(4)] }),
+          ]),
+        ),
+      ).match(/href="\/jobs\//g),
+    ).toHaveLength(3);
+  });
+});
+
+describe("ScheduleList hidden characters", () => {
+  const BIDI = "a\u202Eb";
+
+  test("replaces them in the error of the schedule", () => {
+    expect(
+      render(freshQuery(snapshot([schedule({ error: BIDI })]))),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the cron", () => {
+    expect(
+      render(freshQuery(snapshot([schedule({ schedule: BIDI })]))),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the time zone", () => {
+    expect(
+      render(freshQuery(snapshot([schedule({ timezone: BIDI })]))),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the path of a missing schedule", () => {
+    expect(
+      render(freshQuery(snapshot([], { missing_in_workspace: [BIDI] }))),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the name of the schedule", () => {
+    expect(
+      render(freshQuery(snapshot([schedule({ path: `f/factory/${BIDI}` })]))),
+    ).not.toContain("\u202E");
+  });
+
+  test("clips the error so stacked marks cannot spill out", () => {
+    expect(render(freshQuery(snapshot([schedule({ error: "x" })])))).toMatch(
+      /overflow-hidden[^>]*>x</,
+    );
+  });
+});
+
+describe("ScheduleList lead", () => {
+  test("does not repeat that the list is not refreshed by itself", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).not.toContain(
+      "自動では更新しません",
+    );
+  });
+});

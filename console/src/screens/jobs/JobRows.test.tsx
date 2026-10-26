@@ -283,9 +283,43 @@ describe("ActiveJobs", () => {
     ).not.toContain("読み込み中");
   });
 
-  test("tells that the list is not refreshed by itself", () => {
-    expect(render(<ActiveJobs query={freshQuery(list([]))} />)).toContain(
+  test("does not repeat that the list is not refreshed by itself, which the header time tells", () => {
+    expect(render(<ActiveJobs query={freshQuery(list([]))} />)).not.toContain(
       "自動では更新しません",
     );
+  });
+
+  test("tells that the Console's own calls are left out", () => {
+    expect(render(<ActiveJobs query={freshQuery(list([]))} />)).toContain(
+      "Consoleの呼び出し(tag console)は含みません",
+    );
+  });
+});
+
+describe("JobList hidden characters", () => {
+  test("replaces them in the name of the script", () => {
+    expect(
+      render(
+        <JobList
+          jobs={[job({ script_path: "f/factory/a\u202Eb" })]}
+          now={NOW}
+          back=""
+          time="history"
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the schedule", () => {
+    expect(
+      render(
+        <JobList
+          jobs={[job({ schedule_path: "f/factory/a\u202Eb" })]}
+          now={NOW}
+          back=""
+          time="history"
+        />,
+      ),
+    ).not.toContain("\u202E");
   });
 });

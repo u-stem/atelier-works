@@ -369,3 +369,26 @@ export function upcomingLabel(iso: string, nowMs: number): string {
     atMs > nowMs ? formatRemainingTime(atMs, nowMs) : "予定時刻を過ぎています";
   return `${formatShortAbsoluteIso(iso)}(${left})`;
 }
+
+/** 実行中か待ちの状態か。状態の取り直しを続ける対象である。 */
+export function isActiveJobState(_state: string): boolean {
+  return false;
+}
+
+/** 終わった状態か。成功、失敗、取消、スキップである。 */
+export function isFinishedJobState(_state: string): boolean {
+  return false;
+}
+
+/** 一時停止中のscheduleの印の文言。停止の期限が過ぎているか無いときは`null`。 */
+export function pausedLabel(
+  _pausedUntil: string | null,
+  _nowMs: number,
+): string | null {
+  return "";
+}
+
+/** サーバーが返す表示用の文字列を、画面に出せる形にする。見えない文字と並びを入れ替える文字を代替文字にする。 */
+export function safeText(text: string): string {
+  return text;
+}

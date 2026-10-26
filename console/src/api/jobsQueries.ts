@@ -7,7 +7,11 @@
 // Console用workerの枠が1つで、ジョブの一覧の取得が承認などの呼び出しを待たせるため。
 // 詳細は、ログと結果を含む取得を1回だけ行い、実行中のジョブの状態だけを15秒ごとに取り直す。
 
-import { type UseQueryResult, useQuery } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  type UseQueryResult,
+  useQuery,
+} from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
   type Guard,
@@ -21,6 +25,7 @@ import {
   isRecord,
   isString,
 } from "./guards/primitives.ts";
+import { holdsQueryOptions } from "./holdsQueries.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
 export type JobSummaryView = {
@@ -564,4 +569,27 @@ export function useJobDetail(id: string): {
     enabled: shouldPollJobStatus(output.data, output.isFetching),
   });
   return { output, status };
+}
+
+/** 状態の取得を、ログと結果の取得の値で初期化する。 */
+export function seedJobStatus(
+  _client: QueryClient,
+  _id: string,
+  _output: DetailSnapshot,
+): void {
+  // 実装前のスタブ。
+}
+
+/** 実行中だったジョブが終わったとき、ログと結果を1回取り直すか。 */
+export function shouldRefetchOutputAfterFinish(
+  _output: JobDetailView | undefined,
+  _status: JobDetailView | undefined,
+  _busy: { readonly outputFetching: boolean; readonly statusFetching: boolean },
+): boolean {
+  return false;
+}
+
+/** ジョブの画面が、スケジュールの凍結の突き合わせに使う保留と凍結の取得の設定。 */
+export function jobsHoldsQueryOptions() {
+  return holdsQueryOptions();
 }

@@ -1481,10 +1481,13 @@ describe("console job viewing files", () => {
     "tests/scripts/console_known_paths.test.ts",
     "tests/scripts/console_actions_migration.test.ts",
     "tests/scripts/console_jobs_contract.test.ts",
+    "tests/scripts/console_jobs_render_contract.test.ts",
     "tests/scripts/console_write_contract.test.ts",
     "tests/scripts/console_worker_boundary.test.ts",
     "tests/scripts/console_script_tags.test.ts",
     "tests/scripts/worker_boundary_scan.ts",
+    "console/src/screens/jobs/JobDetailParts.tsx",
+    "console/src/screens/system/ConfigSection.tsx",
     "migrations/datatable/main/20261026140000_console_actions.up.sql",
     "migrations/datatable/main/20261026140000_console_actions.down.sql",
   ];

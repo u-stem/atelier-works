@@ -233,6 +233,8 @@ export function OutputSection({
   onRefresh?: () => void;
   refreshLabel?: string;
   refreshing?: boolean;
+  /** 取得の後でジョブが終わり、この出力をまだ読んでいない。 */
+  unread?: boolean;
 }) {
   return (
     <DetailSection
@@ -299,6 +301,8 @@ export function FailureCauses({
   failures: Extract<JobDetailView, { found: true }>["failures"];
   now: number;
   back: BackState;
+  /** 取得の後でジョブが終わり、保存された原因をまだ読んでいない。 */
+  unread?: boolean;
 }) {
   if (!failures.ok) {
     return (

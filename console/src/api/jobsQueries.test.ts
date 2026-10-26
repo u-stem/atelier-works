@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import {
+  focusManager,
+  QueryClient,
+  QueryObserver,
+} from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
   type ConfigSnapshotView,
@@ -25,10 +30,13 @@ import {
   jobsActiveQueryKey,
   jobsActiveQueryOptions,
   jobsHistoryQueryKey,
+  jobsHoldsQueryOptions,
   type SchedulesSnapshotView,
   schedulesQueryKey,
   schedulesQueryOptions,
+  seedJobStatus,
   shouldPollJobStatus,
+  shouldRefetchOutputAfterFinish,
 } from "./jobsQueries.ts";
 import type { FetchLike } from "./windmill.ts";
 
@@ -317,17 +325,22 @@ describe("the fetchers", () => {
     });
   });
 
-  test("fetchJobHistory sends the cursor and the Console switch", async () => {
+  test("fetchJobHistory sends the cursor", async () => {
     const { fetchFn, sent } = recording(LIST);
     await fetchJobHistory(
-      { before: "2026-10-26T05:00:00.000000Z", includeConsole: true },
+      { before: "2026-10-26T05:00:00.000000Z" },
       { fetchFn },
     );
     expect(sent[0]?.body).toEqual({
       view: "history",
       before: "2026-10-26T05:00:00.000000Z",
-      include_console: true,
     });
+  });
+
+  test("fetchJobHistory never asks for the Console's own jobs", async () => {
+    const { fetchFn, sent } = recording(LIST);
+    await fetchJobHistory({ status: "canceled" }, { fetchFn });
+    expect(Object.keys(sent[0]?.body ?? {})).not.toContain("include_console");
   });
 
   test("fetchJobDetail sends the id and whether to read the output", async () => {
@@ -625,5 +638,270 @@ describe("currentJob", () => {
         { data: undefined, updatedAt: 0 },
       ),
     ).toBeNull();
+  });
+});
+
+function runningDetail(state = "running"): JobDetailView {
+  return DETAIL.found ? { ...DETAIL, job: { ...DETAIL.job, state } } : DETAIL;
+}
+
+describe("the detail query options", () => {
+  const output = jobDetailQueryOptions(ID, { includeOutput: true });
+  const status = jobDetailQueryOptions(ID, { includeOutput: false });
+
+  test("the read with the output never goes stale", () => {
+    expect(output.staleTime).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test.each([
+    ["output", output],
+    ["status", status],
+  ])("the %s read does not refetch when the window gets the focus", (_n, o) => {
+    expect(o.refetchOnWindowFocus).toBe(false);
+  });
+
+  test.each([
+    ["output", output],
+    ["status", status],
+  ])("the %s read does not refetch when the network comes back", (_n, o) => {
+    expect(o.refetchOnReconnect).toBe(false);
+  });
+
+  test("the read with the output does not refetch when the screen opens again", () => {
+    expect(output.refetchOnMount).toBe(false);
+  });
+
+  test("the status read is fresh for one interval, so it does not refetch right after the output", () => {
+    expect(status.staleTime).toBe(JOB_DETAIL_REFRESH_MS);
+  });
+
+  test("the lists do not refetch when the network comes back", () => {
+    expect(
+      [
+        jobsActiveQueryOptions(),
+        jobHistoryQueryOptions({}),
+        schedulesQueryOptions(),
+        configQueryOptions(),
+      ].map((options) => options.refetchOnReconnect),
+    ).toEqual([false, false, false, false]);
+  });
+
+  test("the status of a running job keeps refreshing after its first fetch failed", () => {
+    const options = jobDetailQueryOptions(ID, {
+      includeOutput: false,
+      expectActive: true,
+    });
+    expect(options.refetchInterval({ state: { data: undefined } })).toBe(
+      JOB_DETAIL_REFRESH_MS,
+    );
+  });
+
+  test("the status does not refresh without data unless the job is expected to run", () => {
+    expect(status.refetchInterval({ state: { data: undefined } })).toBe(false);
+  });
+
+  test("the data of the status read wins over the expectation", () => {
+    const options = jobDetailQueryOptions(ID, {
+      includeOutput: false,
+      expectActive: true,
+    });
+    expect(options.refetchInterval({ state: { data: DETAIL } })).toBe(false);
+  });
+});
+
+describe("jobsHoldsQueryOptions", () => {
+  test("does not poll", () => {
+    expect(jobsHoldsQueryOptions().refetchInterval).toBe(false);
+  });
+
+  test("does not refetch when the window gets the focus", () => {
+    expect(jobsHoldsQueryOptions().refetchOnWindowFocus).toBe(false);
+  });
+
+  test("does not refetch when the network comes back", () => {
+    expect(jobsHoldsQueryOptions().refetchOnReconnect).toBe(false);
+  });
+});
+
+describe("seedJobStatus", () => {
+  const statusKey = jobDetailQueryKey(ID, { includeOutput: false });
+
+  test("fills the status read with the output read", () => {
+    const client = new QueryClient();
+    seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
+    expect(client.getQueryData(statusKey)).toEqual(runningDetail());
+  });
+
+  test("keeps the time of the output read", () => {
+    const client = new QueryClient();
+    seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
+    expect(client.getQueryState(statusKey)?.dataUpdatedAt).toBe(1000);
+  });
+
+  test("does not overwrite a newer status", () => {
+    const client = new QueryClient();
+    client.setQueryData(statusKey, runningDetail("success"), {
+      updatedAt: 3000,
+    });
+    seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
+    expect(client.getQueryData(statusKey)).toEqual(runningDetail("success"));
+  });
+
+  test("overwrites an older status", () => {
+    const client = new QueryClient();
+    client.setQueryData(statusKey, runningDetail("queued"), { updatedAt: 500 });
+    seedJobStatus(client, ID, { data: runningDetail(), updatedAt: 1000 });
+    expect(client.getQueryData(statusKey)).toEqual(runningDetail());
+  });
+
+  test("does not seed a job that was not found", () => {
+    const client = new QueryClient();
+    seedJobStatus(client, ID, { data: { found: false }, updatedAt: 1000 });
+    expect(client.getQueryData(statusKey)).toBeUndefined();
+  });
+
+  test("does not seed before the output read", () => {
+    const client = new QueryClient();
+    seedJobStatus(client, ID, { data: undefined, updatedAt: 0 });
+    expect(client.getQueryData(statusKey)).toBeUndefined();
+  });
+});
+
+describe("shouldRefetchOutputAfterFinish", () => {
+  const idle = { outputFetching: false, statusFetching: false };
+
+  test("refetches once a running job is seen finished", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("running"),
+        runningDetail("success"),
+        idle,
+      ),
+    ).toBe(true);
+  });
+
+  test("refetches once a queued job is seen finished", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("queued"),
+        runningDetail("failure"),
+        idle,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not refetch while the job still runs", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("running"),
+        runningDetail("running"),
+        idle,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refetch when the output was read after the job finished", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("success"),
+        runningDetail("success"),
+        idle,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refetch without a status", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(runningDetail("running"), undefined, idle),
+    ).toBe(false);
+  });
+
+  test("does not refetch when the status says the job was not found", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("running"),
+        { found: false },
+        idle,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refetch while the output is being fetched", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("running"),
+        runningDetail("success"),
+        { outputFetching: true, statusFetching: false },
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refetch while the status is being fetched", () => {
+    expect(
+      shouldRefetchOutputAfterFinish(
+        runningDetail("running"),
+        runningDetail("success"),
+        { outputFetching: false, statusFetching: true },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("the detail reads against a real QueryClient", () => {
+  async function withFakeFetch<T>(
+    body: () => Promise<T>,
+  ): Promise<{ result: T; calls: number }> {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = Object.assign(
+      () => {
+        calls += 1;
+        return Promise.resolve(new Response(JSON.stringify(DETAIL)));
+      },
+      { preconnect: () => undefined },
+    );
+    try {
+      const result = await body();
+      return { result, calls };
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  function open(client: QueryClient) {
+    const observer = new QueryObserver(
+      client,
+      jobDetailQueryOptions(ID, { includeOutput: true }),
+    );
+    return observer.subscribe(() => undefined);
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  test("opening the same job again reads it only once", async () => {
+    const { calls } = await withFakeFetch(async () => {
+      const client = new QueryClient();
+      const close = open(client);
+      await settle();
+      close();
+      open(client)();
+      await settle();
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("getting the focus back does not read the output again", async () => {
+    const { calls } = await withFakeFetch(async () => {
+      const client = new QueryClient();
+      client.mount();
+      const close = open(client);
+      await settle();
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await settle();
+      close();
+      client.unmount();
+    });
+    expect(calls).toBe(1);
   });
 });

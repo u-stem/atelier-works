@@ -67,7 +67,7 @@ function data(
 
 function render(
   history: HistoryData,
-  props: { status?: "success" | "failure"; script?: string } = {},
+  props: { status?: "success" | "failure" | "canceled"; script?: string } = {},
 ): string {
   const element: ReactElement = (
     <JobHistory
@@ -105,7 +105,14 @@ describe("JobHistory filters", () => {
       "すべて",
       "成功",
       "失敗",
+      "取消・時間切れ",
     ]);
+  });
+
+  test("selects the canceled status of the filter", () => {
+    expect(
+      selectOf(render(data([page(1, 1)]), { status: "canceled" }), "状態"),
+    ).toMatch(/<option[^>]*value="canceled"[^>]*selected/);
   });
 
   test("selects the status of the filter", () => {
@@ -246,5 +253,11 @@ describe("JobHistory states", () => {
     expect(
       render(data([], { first: loadingQuery<JobListView>() })),
     ).not.toContain("読み込み中");
+  });
+});
+
+describe("JobHistory lead", () => {
+  test("does not repeat that the list is not refreshed by itself", () => {
+    expect(render(data([page(1, 1)]))).not.toContain("自動では更新しません");
   });
 });

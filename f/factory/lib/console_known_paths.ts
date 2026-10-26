@@ -247,3 +247,5 @@ export const REPO_SCHEDULES: readonly RepoSchedule[] = [
     no_flow_overlap: true,
   },
 ];
+
+export const HISTORY_FILTER_PATHS: readonly string[] = [];

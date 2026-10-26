@@ -8,6 +8,7 @@ import { ReleaseStatus } from "./ReleaseStatus.tsx";
 const NOW = Date.parse("2026-10-26T03:00:00.000Z");
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
+const SHA_FETCHED = "c".repeat(40);
 
 function statusWith(needsHostAction: boolean): SystemStatus {
   return {
@@ -23,7 +24,7 @@ function statusWith(needsHostAction: boolean): SystemStatus {
     fetcher: {
       availability: "available",
       state: "ok",
-      sha: SHA_B,
+      sha: SHA_FETCHED,
       checked_at: "2026-10-26T02:55:00.000Z",
       error: null,
       assessment: "ok",
@@ -79,5 +80,19 @@ describe("ReleaseStatus host action badge", () => {
 
   test("falls back to the record when the summary cannot be read", () => {
     expect(render(true, null)).toContain("ホストの作業が必要");
+  });
+});
+
+describe("ReleaseStatus fetcher row", () => {
+  test("says the state of the fetch", () => {
+    expect(render(false, NO_NOTICE)).toContain("取り込み済み");
+  });
+
+  test("does not repeat the fetched version that the sidebar shows", () => {
+    expect(render(false, NO_NOTICE)).not.toContain("ccccccc");
+  });
+
+  test("does not repeat the time of the last check that the sidebar shows", () => {
+    expect(render(false, NO_NOTICE)).not.toContain("確認");
   });
 });

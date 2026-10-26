@@ -104,7 +104,7 @@ describe("describeQueryFailure for a view mismatch", () => {
 
   test("tells the operator to compare the two versions", () => {
     expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
-      "「反映した版」と「Consoleの取り込み」の版を見比べ",
+      "「反映した版」と、サイドバー下部の版を見比べ",
     );
   });
 
@@ -223,7 +223,7 @@ describe("describeQueryFailure", () => {
   test("points an invalid response to the version check", () => {
     expect(
       describeQueryFailure({ kind: "invalid_response" }).nextStep,
-    ).toContain("「反映した版」と「Consoleの取り込み」の版を見比べ");
+    ).toContain("「反映した版」と、サイドバー下部の版を見比べ");
   });
 
   test("points a failed job to the job log through the detail", () => {

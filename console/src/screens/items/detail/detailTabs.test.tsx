@@ -115,6 +115,11 @@ describe("OverviewTab", () => {
     expect(html).not.toContain(`>${PR_URL}</p>`);
   });
 
+  test("does not repeat the kind that the page subtitle shows", () => {
+    const html = render(<OverviewTab detail={detail()} now={NOW} />);
+    expect(html).not.toContain("種別");
+  });
+
   test("keeps the pull request link in its row", () => {
     const html = render(<OverviewTab detail={detail()} now={NOW} />);
     expect(html).toContain(`href="${PR_URL}"`);

@@ -60,8 +60,12 @@ describe("describeFetcher", () => {
     expect(describeFetcher(FETCHER_OK).label).toBe("取り込み済み");
   });
 
-  test("shortens the fetched version", () => {
-    expect(describeFetcher(FETCHER_OK).versionLabel).toBe("0123456");
+  test("leaves the fetched version to the sidebar", () => {
+    expect("versionLabel" in describeFetcher(FETCHER_OK)).toBe(false);
+  });
+
+  test("leaves the time of the last check to the sidebar", () => {
+    expect("checkedAt" in describeFetcher(FETCHER_OK)).toBe(false);
   });
 
   test("reports a failed assessment as a failure", () => {
@@ -120,12 +124,6 @@ describe("describeFetcher", () => {
   test("replaces hidden characters in the error code", () => {
     expect(describeFetcher({ ...FETCHER_OK, error: "a‮b" }).errorCode).toBe(
       "a�b",
-    );
-  });
-
-  test("leaves the version out when the fetcher has none", () => {
-    expect(describeFetcher({ ...FETCHER_OK, sha: null }).versionLabel).toBe(
-      null,
     );
   });
 });

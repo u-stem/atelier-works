@@ -107,3 +107,45 @@ describe("ConfigSection", () => {
     ).toContain("前回取得した値を表示しています");
   });
 });
+
+describe("ConfigSection heading and hidden characters", () => {
+  test("hides the heading that repeats the name of the tab", () => {
+    expect(renderSection()).toMatch(
+      /<h2 id="config-heading"[^>]*class="[^"]*sr-only[^"]*"[^>]*>設定<\/h2>/,
+    );
+  });
+
+  test("replaces them in the key of an item", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[{ key: "a\u202Eb", kind: "value", value: 1, masked: false }]}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces the escape of an ANSI sequence in a value", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[
+            { key: "k", kind: "value", value: "\u001b[31mred", masked: false },
+          ]}
+        />,
+      ),
+    ).not.toContain("\u001b");
+  });
+
+  test("replaces them in a value inside a structure", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={[
+            { key: "k", kind: "value", value: ["a\u202Eb"], masked: false },
+          ]}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+});

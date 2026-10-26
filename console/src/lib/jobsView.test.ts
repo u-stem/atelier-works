@@ -15,6 +15,8 @@ import {
   frozenScheduleTargets,
   historyEndNote,
   historyTotal,
+  isActiveJobState,
+  isFinishedJobState,
   jobScriptName,
   jobStateInfo,
   jobsBackState,
@@ -22,8 +24,10 @@ import {
   parseHistoryScript,
   parseHistoryStatus,
   parseJobsBack,
+  pausedLabel,
   REDACTION_LIMIT_NOTE,
   relatedWorkItemId,
+  safeText,
   stepIterationsLabel,
   upcomingLabel,
   withHistoryScript,
@@ -96,11 +100,14 @@ describe("jobScriptName", () => {
 });
 
 describe("parseHistoryStatus", () => {
-  test.each(["success", "failure"] as const)("accepts %s", (value) => {
-    expect(parseHistoryStatus(value)).toBe(value);
-  });
+  test.each(["success", "failure", "canceled"] as const)(
+    "accepts %s",
+    (value) => {
+      expect(parseHistoryStatus(value)).toBe(value);
+    },
+  );
 
-  test.each([null, "", "all", "canceled", "Success"])(
+  test.each([null, "", "all", "timeout", "Success"])(
     "reads %p as all",
     (value) => {
       expect(parseHistoryStatus(value)).toBeUndefined();
@@ -542,7 +549,7 @@ describe("describeSchedule", () => {
   });
 
   test("describes the last run", () => {
-    expect(describeSchedule(SCHEDULE, new Set()).lastRun).toEqual({
+    expect(describeSchedule(SCHEDULE, new Set()).recentRuns[0]).toEqual({
       jobId: ID,
       success: false,
       label: "失敗",
@@ -552,8 +559,8 @@ describe("describeSchedule", () => {
 
   test("has no last run before the first run", () => {
     expect(
-      describeSchedule({ ...SCHEDULE, recent_runs: [] }, new Set()).lastRun,
-    ).toBeNull();
+      describeSchedule({ ...SCHEDULE, recent_runs: [] }, new Set()).recentRuns,
+    ).toEqual([]);
   });
 });
 
@@ -677,5 +684,99 @@ describe("upcomingLabel", () => {
 
   test("says it does not know a time it cannot read", () => {
     expect(upcomingLabel("not a time", NOW)).toBe("時刻不明");
+  });
+});
+
+describe("describeSchedule recent runs", () => {
+  const run = (n: number) => ({
+    job_id: `0190a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
+    success: n % 2 === 0,
+    duration_ms: 1000,
+  });
+
+  test("keeps the newest first", () => {
+    expect(
+      describeSchedule(
+        { ...SCHEDULE, recent_runs: [run(1), run(2), run(3)] },
+        new Set(),
+      ).recentRuns.map((r) => r.jobId.slice(-1)),
+    ).toEqual(["1", "2", "3"]);
+  });
+
+  test("shows no more than three runs", () => {
+    expect(
+      describeSchedule(
+        { ...SCHEDULE, recent_runs: [run(1), run(2), run(3), run(4), run(5)] },
+        new Set(),
+      ).recentRuns,
+    ).toHaveLength(3);
+  });
+});
+
+describe("pausedLabel", () => {
+  test("says until when a schedule is paused", () => {
+    expect(pausedLabel("2026-10-26T06:00:00.000Z", NOW)).toBe(
+      "一時停止中(10/26 15:00まで)",
+    );
+  });
+
+  test("says nothing once the pause is over", () => {
+    expect(pausedLabel("2026-10-26T04:00:00.000Z", NOW)).toBeNull();
+  });
+
+  test("says nothing for a schedule that is not paused", () => {
+    expect(pausedLabel(null, NOW)).toBeNull();
+  });
+
+  test("says nothing for a time it cannot read", () => {
+    expect(pausedLabel("not a time", NOW)).toBeNull();
+  });
+});
+
+describe("isActiveJobState", () => {
+  test.each(["running", "queued"])("is true for %s", (state) => {
+    expect(isActiveJobState(state)).toBe(true);
+  });
+
+  test.each([
+    "success",
+    "failure",
+    "canceled",
+    "skipped",
+    "scheduled",
+    "waiting",
+    "x",
+  ])("is false for %s", (state) => {
+    expect(isActiveJobState(state)).toBe(false);
+  });
+});
+
+describe("isFinishedJobState", () => {
+  test.each(["success", "failure", "canceled", "skipped"])(
+    "is true for %s",
+    (state) => {
+      expect(isFinishedJobState(state)).toBe(true);
+    },
+  );
+
+  test.each(["running", "queued", "scheduled", "waiting", "x"])(
+    "is false for %s",
+    (state) => {
+      expect(isFinishedJobState(state)).toBe(false);
+    },
+  );
+});
+
+describe("safeText", () => {
+  test("replaces a character that reorders the text", () => {
+    expect(safeText("a\u202Eb")).toBe("a\uFFFDb");
+  });
+
+  test("replaces the escape of an ANSI sequence", () => {
+    expect(safeText("\u001b[31mred")).toBe("\uFFFD[31mred");
+  });
+
+  test("keeps a plain string", () => {
+    expect(safeText("f/factory/self_update")).toBe("f/factory/self_update");
   });
 });

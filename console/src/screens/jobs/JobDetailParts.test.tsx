@@ -490,3 +490,224 @@ describe("FailureCauses", () => {
     ).toContain("保存された原因を読めませんでした");
   });
 });
+
+describe("JobDetailParts hidden characters", () => {
+  const BIDI = "a\u202Eb";
+
+  test("replaces them in the value of an argument", () => {
+    expect(
+      render(<ArgList args={[{ key: "repo", type: "string", value: BIDI }]} />),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the key of an argument", () => {
+    expect(
+      render(<ArgList args={[{ key: BIDI, type: "string" }]} />),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the module id of a step", () => {
+    expect(
+      render(
+        <StepList
+          steps={[
+            { id: BIDI, state: "success", job_id: null, iterations: null },
+          ]}
+          back={undefined}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the saved cause", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{
+            ok: true,
+            items: [
+              {
+                step: null,
+                error: `x\u001b[31m${BIDI}`,
+                occurred_at: "2026-10-26T05:00:02.000Z",
+                job_id: null,
+              },
+            ],
+          }}
+          now={NOW}
+          back={undefined}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces the escape of an ANSI sequence in the saved cause", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{
+            ok: true,
+            items: [
+              {
+                step: null,
+                error: "x\u001b[31mred",
+                occurred_at: "2026-10-26T05:00:02.000Z",
+                job_id: null,
+              },
+            ],
+          }}
+          now={NOW}
+          back={undefined}
+        />,
+      ),
+    ).not.toContain("\u001b");
+  });
+
+  test("replaces them in the step of a saved cause", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{
+            ok: true,
+            items: [
+              {
+                step: BIDI,
+                error: "boom",
+                occurred_at: "2026-10-26T05:00:02.000Z",
+                job_id: null,
+              },
+            ],
+          }}
+          now={NOW}
+          back={undefined}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the reason the causes could not be read", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{ ok: false, reason: BIDI }}
+          now={NOW}
+          back={undefined}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the reason the result could not be read", () => {
+    expect(
+      render(
+        <OutputSection
+          id="r"
+          title="結果"
+          kind="result"
+          output={null}
+          error={BIDI}
+          emptyText="結果はありません"
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("replaces them in the script and the schedule of the overview", () => {
+    expect(
+      render(
+        <JobOverview
+          job={{
+            ...JOB,
+            script_path: `f/factory/${BIDI}`,
+            schedule_path: BIDI,
+          }}
+          now={NOW}
+          relatedItemId={null}
+          back={undefined}
+        />,
+      ),
+    ).not.toContain("\u202E");
+  });
+
+  test("clips a saved cause, so stacked marks cannot spill out", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{
+            ok: true,
+            items: [
+              {
+                step: null,
+                error: "boom",
+                occurred_at: "2026-10-26T05:00:02.000Z",
+                job_id: null,
+              },
+            ],
+          }}
+          now={NOW}
+          back={undefined}
+        />,
+      ),
+    ).toMatch(/overflow-hidden[^>]*>boom</);
+  });
+});
+
+describe("JobDetailParts sections that were not read yet", () => {
+  test("says the saved causes were not read, not that there are none", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{ ok: true, items: [] }}
+          now={NOW}
+          back={undefined}
+          unread
+        />,
+      ),
+    ).toContain("まだ読んでいません");
+  });
+
+  test("does not claim there is no cause while they were not read", () => {
+    expect(
+      render(
+        <FailureCauses
+          failures={{ ok: true, items: [] }}
+          now={NOW}
+          back={undefined}
+          unread
+        />,
+      ),
+    ).not.toContain("保存された失敗の原因はありません");
+  });
+
+  test("says the result was not read, not that there is none", () => {
+    expect(
+      render(
+        <OutputSection
+          id="r"
+          title="結果"
+          kind="result"
+          output={null}
+          error={null}
+          emptyText="結果はありません"
+          unread
+        />,
+      ),
+    ).toContain("まだ読んでいません");
+  });
+
+  test("does not claim there is no result while it was not read", () => {
+    expect(
+      render(
+        <OutputSection
+          id="r"
+          title="結果"
+          kind="result"
+          output={null}
+          error={null}
+          emptyText="結果はありません"
+          unread
+        />,
+      ),
+    ).not.toContain("結果はありません");
+  });
+});

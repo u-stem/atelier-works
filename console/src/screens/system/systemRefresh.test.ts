@@ -101,11 +101,18 @@ describe("refreshStatusOfSystem with the config", () => {
     expect(config.refetched()).toBe(1);
   });
 
-  test("shows the oldest update, which may be the config", () => {
+  test("does not let the config, which is never refetched by itself, hold the oldest update", () => {
     expect(
       refreshStatusOfSystem({ ...base, config: fake({ dataUpdatedAt: 1000 }) })
         .updatedAt,
-    ).toBe(1000);
+    ).toBe(3000);
+  });
+
+  test("is fetching while only the config is fetching", () => {
+    expect(
+      refreshStatusOfSystem({ ...base, config: fake({ isFetching: true }) })
+        .isFetching,
+    ).toBe(true);
   });
 
   test("shows the status as the oldest while the auto refreshed queries are newer", () => {
