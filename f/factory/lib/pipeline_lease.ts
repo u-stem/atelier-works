@@ -1,13 +1,13 @@
-// 要件定義のpipelineフローが、作業項目を書き換えてよい実行かを判定する。
-// 作業項目の`flow_job_id`に起動側が記録したジョブIDを、pipelineのリースとして扱う。
+// 要件定義のpipelineフローと設計フローが、作業項目を書き換えてよい実行かを判定する。
+// 作業項目の`flow_job_id`に起動側が記録したジョブIDを、リースとして扱う。
 
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItem } from "./types.ts";
 
 /** 要件定義のフローのパス。起動側と、フローごとに扱いを変える`on_error_flow`・`retry_work_item`が使う。 */
 export const PIPELINE_FLOW_PATH = "f/factory/pipeline";
 
-/** 設計のフローのパス。 */
-export const DESIGN_FLOW_PATH = "";
+/** 設計のフローのパス。起動側と、フローごとに扱いを変える`on_error_flow`が使う。 */
+export const DESIGN_FLOW_PATH = "f/factory/design";
 
 /** pipelineのステップがリースを持っていないときの理由。ステップは何も変えずに終わるので、人への通知には使わない。 */
 export const PIPELINE_LEASE_LOST_REASON =
