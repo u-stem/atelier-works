@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type ActionSqlClient,
+  actionSqlClientFrom,
   CONSOLE_ACTIONS_RETENTION_DAYS,
   consoleActionsCutoff,
   deleteExpiredActions,
@@ -8,6 +9,7 @@ import {
   recordAttempt,
   recordOutcome,
   runRecorded,
+  runRecordedAs,
   validateAttempt,
 } from "../../f/factory/lib/console_actions.ts";
 
@@ -425,6 +427,150 @@ describe("runRecorded", () => {
       },
     ).catch(() => undefined);
     expect(calls[1]?.values[0]).toBe("failed");
+  });
+});
+
+describe("runRecordedAs", () => {
+  const OPERATION = async () =>
+    ({ outcome: "succeeded", changes: {}, value: "done" }) as const;
+  const WITHOUT_ACTOR = {
+    action: ATTEMPT.action,
+    target: ATTEMPT.target,
+    changes: ATTEMPT.changes,
+  };
+  const NO_OPERATOR = () => {
+    throw new Error("no operator");
+  };
+
+  test("records the operator that the function derives as the actor", async () => {
+    const calls: Call[] = [];
+    await runRecordedAs(() => "alice", WITHOUT_ACTOR, OPERATION, {
+      sql: fakeSql([[{ id: 3 }], [{ id: 3 }]], calls),
+      onUnrecordable: "refuse",
+    });
+    expect(calls[0]?.values[0]).toBe("alice");
+  });
+
+  test("returns the recorded result when the operator is known", async () => {
+    const result = await runRecordedAs(
+      () => "alice",
+      WITHOUT_ACTOR,
+      OPERATION,
+      {
+        sql: fakeSql([[{ id: 3 }], [{ id: 3 }]]),
+        onUnrecordable: "refuse",
+      },
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: "done",
+      audit: "recorded",
+      actionId: 3,
+    });
+  });
+
+  test("refuses when the operator cannot be derived, in refuse mode", async () => {
+    const result = await runRecordedAs(NO_OPERATOR, WITHOUT_ACTOR, OPERATION, {
+      sql: fakeSql([]),
+      onUnrecordable: "refuse",
+    });
+    expect(result.ok === false && result.kind).toBe("invalid");
+  });
+
+  test("does not run the operation when the operator cannot be derived, in refuse mode", async () => {
+    let ran = false;
+    await runRecordedAs(
+      NO_OPERATOR,
+      WITHOUT_ACTOR,
+      async () => {
+        ran = true;
+        return { outcome: "succeeded", changes: {}, value: 1 };
+      },
+      { sql: fakeSql([]), onUnrecordable: "refuse" },
+    );
+    expect(ran).toBe(false);
+  });
+
+  test("runs the operation without a record when the operator cannot be derived, in proceed mode", async () => {
+    const result = await runRecordedAs(NO_OPERATOR, WITHOUT_ACTOR, OPERATION, {
+      sql: fakeSql([]),
+      onUnrecordable: "proceed",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: "done",
+      audit: "failed",
+      actionId: null,
+    });
+  });
+
+  test("writes nothing when the operator cannot be derived", async () => {
+    const calls: Call[] = [];
+    await runRecordedAs(NO_OPERATOR, WITHOUT_ACTOR, OPERATION, {
+      sql: fakeSql([], calls),
+      onUnrecordable: "proceed",
+    });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("actionSqlClientFrom", () => {
+  function tag(rows: unknown, seen: Call[] = []) {
+    return (strings: TemplateStringsArray, ...values: unknown[]) => {
+      seen.push({ text: strings.join("?").trim(), values });
+      return {
+        fetch: async () => rows,
+        execute: async () => undefined,
+      };
+    };
+  }
+
+  test("passes the statement and its values to the opened tag", async () => {
+    const seen: Call[] = [];
+    const sql = actionSqlClientFrom(() => tag([], seen));
+    await sql`SELECT ${1}`.fetch();
+    expect(seen).toEqual([{ text: "SELECT ?", values: [1] }]);
+  });
+
+  test("returns the rows", async () => {
+    const sql = actionSqlClientFrom(() => tag([{ id: 1 }]));
+    expect(await sql`SELECT 1`.fetch()).toEqual([{ id: 1 }]);
+  });
+
+  test("opens the tag again for every statement", async () => {
+    let opened = 0;
+    const sql = actionSqlClientFrom(() => {
+      opened += 1;
+      return tag([]);
+    });
+    await sql`SELECT 1`.fetch();
+    await sql`SELECT 2`.fetch();
+    expect(opened).toBe(2);
+  });
+
+  test("throws when the result is not a list of rows", async () => {
+    const sql = actionSqlClientFrom(() => tag("nope"));
+    await expect(sql`SELECT 1`.fetch()).rejects.toThrow("rows");
+  });
+
+  test("throws when a row is not an object", async () => {
+    const sql = actionSqlClientFrom(() => tag([1]));
+    await expect(sql`SELECT 1`.fetch()).rejects.toThrow("row");
+  });
+
+  test("runs a statement that returns nothing", async () => {
+    let executed = false;
+    const sql = actionSqlClientFrom(() => (strings: TemplateStringsArray) => {
+      void strings;
+      return {
+        fetch: async () => [],
+        execute: async () => {
+          executed = true;
+        },
+      };
+    });
+    await sql`DELETE FROM x`.execute();
+    expect(executed).toBe(true);
   });
 });
 

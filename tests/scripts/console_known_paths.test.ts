@@ -9,6 +9,7 @@ import {
   KNOWN_SCRIPT_PATHS,
   REPO_SCHEDULES,
 } from "../../f/factory/lib/console_known_paths.ts";
+import { WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES } from "../../scripts/claude-hooks/console-scripts.ts";
 import {
   collectKnownPaths,
   renderKnownPaths,
@@ -28,11 +29,21 @@ describe("the generated known paths", () => {
     expect(await Bun.file(FILE).text()).toBe(rendered);
   });
 
-  // 解除のscriptは、Consoleの履歴の絞り込みに要らない(tag consoleのジョブは既定で一覧に出ない)。
-  // 名前を`f/`の他のファイルに持たせない検査(`hold_wiring.test.ts`)を、定数が破らないよう除く。
-  const WITHHELD = ["f/factory/hold_release", "f/factory/freeze_release"];
+  // 名前を`f/`の他のファイルに持たせない書き込みのscript(解除と取消)は、Consoleの履歴の絞り込みに要らない
+  // (tag consoleのジョブは既定で一覧に出ない)。名前を持たせない検査(`hold_wiring.test.ts`)を、定数が破らないよう除く。
+  const WITHHELD = WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES.map(
+    (name) => `f/factory/${name}`,
+  );
 
-  test("list every script definition outside lib, but the release scripts", async () => {
+  test("withhold the release scripts and the job cancel script", () => {
+    expect([...WITHHELD].sort()).toEqual([
+      "f/factory/console_job_cancel",
+      "f/factory/freeze_release",
+      "f/factory/hold_release",
+    ]);
+  });
+
+  test("list every script definition outside lib, but the withheld scripts", async () => {
     const expected = (await glob("f/factory/**/*.script.yaml"))
       .map((file) => file.replace(/\.script\.yaml$/, ""))
       .filter((path) => !path.startsWith("f/factory/lib/"))
@@ -41,7 +52,7 @@ describe("the generated known paths", () => {
     expect([...KNOWN_SCRIPT_PATHS].sort()).toEqual(expected);
   });
 
-  test("do not list the release scripts", () => {
+  test("do not list the withheld scripts", () => {
     expect(
       KNOWN_SCRIPT_PATHS.filter((path) => WITHHELD.includes(path)),
     ).toEqual([]);
@@ -146,15 +157,29 @@ async function tagOf(path: string): Promise<string | null> {
   return typeof parsed.tag === "string" ? parsed.tag : null;
 }
 
-// Consoleの履歴の絞り込みに出す一覧。ルートのジョブとして動くscriptとフローだけにする。
+// 承認のハンドラは、承認のscriptが起動するので親のジョブを持つが、フローのステップではなく、履歴に出る。
+const APPROVAL_HANDLERS = [
+  "f/factory/steps/issue_proposal_apply",
+  "f/factory/steps/requirements_apply",
+];
+
+// Consoleの履歴の絞り込みに出す一覧。ルートのジョブか承認のハンドラとして動くscriptとフローだけにする。
 // フローのステップ、失敗ハンドラ、tag consoleのscriptは、履歴に出ないので、選ぶと常に0件になる。
 describe("the history filter paths", () => {
-  test("do not list a step of a flow", () => {
+  test("do not list a step of a flow, but the approval handlers", () => {
     expect(
-      HISTORY_FILTER_PATHS.filter((path) =>
-        path.startsWith("f/factory/steps/"),
+      HISTORY_FILTER_PATHS.filter(
+        (path) =>
+          path.startsWith("f/factory/steps/") &&
+          !APPROVAL_HANDLERS.includes(path),
       ),
     ).toEqual([]);
+  });
+
+  test("list the approval handlers", () => {
+    expect(
+      HISTORY_FILTER_PATHS.filter((path) => APPROVAL_HANDLERS.includes(path)),
+    ).toEqual(APPROVAL_HANDLERS);
   });
 
   test("do not list the error handler", () => {
@@ -171,10 +196,15 @@ describe("the history filter paths", () => {
     ).toEqual([]);
   });
 
-  test("list every script that runs as a root job", async () => {
+  test("list every script that runs as a root job or an approval handler", async () => {
     const expected: string[] = [];
     for (const path of KNOWN_SCRIPT_PATHS) {
-      if (path.startsWith("f/factory/steps/")) continue;
+      if (
+        path.startsWith("f/factory/steps/") &&
+        !APPROVAL_HANDLERS.includes(path)
+      ) {
+        continue;
+      }
       if (path === "f/factory/on_error_flow") continue;
       if ((await tagOf(path)) === "console") continue;
       expected.push(path);

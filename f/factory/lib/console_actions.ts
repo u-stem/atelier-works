@@ -310,3 +310,33 @@ export async function runRecorded<T>(
     actionId,
   };
 }
+
+/** 検査の前の入力から、操作者を除いた形。操作者は`runRecordedAs`が導く。 */
+export type RawAttemptWithoutActor = Omit<RawAttempt, "actor">;
+
+export async function runRecordedAs<T>(
+  _deriveActor: () => string,
+  _attempt: RawAttemptWithoutActor,
+  _operation: () => Promise<RecordedOperation<T>>,
+  _options: RunRecordedOptions,
+): Promise<RecordedResult<T>> {
+  return { ok: false, kind: "invalid", reason: "" };
+}
+
+/** `wmill.datatable()`が返すタグ付きテンプレートのうち、使う部分の形。 */
+export type DatatableTag = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => {
+  fetch(): Promise<unknown>;
+  execute(): Promise<unknown>;
+};
+
+export function actionSqlClientFrom(
+  _open: () => DatatableTag,
+): ActionSqlClient {
+  return () => ({
+    fetch: async () => [],
+    execute: async () => undefined,
+  });
+}
