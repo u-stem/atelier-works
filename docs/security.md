@@ -1145,6 +1145,7 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 `audit_kickoff`、`notice_resolve`、`manual_intake_submit`は、どのsecret変数も読まない。
 保留と凍結の3つ(`console_holds`、`hold_release`、`freeze_release`)も、どのsecret変数も読まない。
 保留と凍結の3つは、`discord_webhook_url`も読めないので、Discordへは送らない。解除の記録は情報の通知に残す。
+ジョブを取り消す`console_job_cancel`も、どのsecret変数も読まず、SDKの呼び出しを許可表に絞る([ジョブの取消](#ジョブの取消))。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。
@@ -1344,6 +1345,39 @@ ENDが窓に無いときは、BEGINと、その後ろの鍵の本文らしい並
 切ったときは`truncated`で示す。
 Windmillのジョブトークンは、一般形の規則に当たる。
 
+### ジョブの取消
+
+ジョブを取り消す`console_job_cancel`は、tag`console`で動かす書き込みのscriptである。
+運用者がConsoleの確認のダイアログを通した後にだけ呼ぶ。
+ローカルのClaudeのセッションは、拒否フックが呼べなくする([Claude Codeのフック](#claude-codeのフック))。
+取り消せる対象を、次のとおりに絞る。
+
+| 絞る対象 | 内容 |
+| --- | --- |
+| 対象のジョブ | パスが`f/factory/`で始まるジョブだけを扱う。外のジョブと、UUIDの形でないidは、存在しないジョブと同じ応答にする。存在を返さないためである |
+| 取り消せるフロー | `job_kind`が`flow`で、親のジョブが無く、フローのステップでなく、パスが許可した7つのフロー(audit、dependabot、design、implement、pipeline、pr_fix、pr_review)のどれかと完全に一致するものだけ。前方一致にしない |
+| 取り消さないもの | `self_update`、migrationを走らせるscript、`cleanup_*`などのscriptのジョブ、tag`console`のジョブ、予定の時刻が未来のジョブ、終わったか取り消し済みのジョブ、子のステップ、作業項目を持たない手動投入のフロー。許可したフローの外は、すべて取り消さない |
+| 許可表の保守 | 許可表はフローの名前で列挙し、生成した既知のpathの定数とは別に持つ。リポジトリのフローが、許可したか、理由つきで除いたかのどちらかであることを、契約テストが固定する。新しいフローは、決めるまで取り消せない。許可したフローは、作業項目のidを入力に取ることも、契約テストが確かめる |
+| 呼び出しの順序 | ジョブの取得、対象の判定、操作者の導出、記録(`attempted`)、取り消し、記録(結果)、ジョブと作業項目の読み直しの順に固定する。操作者を導けないときと、記録を書けないときは、取り消さずに断る |
+| SDKの呼び出し | `JobService.getJob`、`JobService.cancelQueuedJob`、`wmill.getWorkspace`、`wmill.datatable`だけ。境界テストの許可表に載せ、importでたどれるファイルの和に当てる |
+| SQL | 読むのは作業項目の1行(`id`、`status`、`flow_job_id`)だけ。書くのは記録の部品だけで、書く表は`factory.console_actions`に限る。境界テストが、書く文の表の名前まで確かめる |
+| 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
+
+取り消しは、Windmillにジョブを止めさせるだけである。作業項目の行は書き換えない。
+リースがそのジョブを指したまま残り、次の照合(`poll_issues`、5分ごと)が、終わった取り消し済みのジョブを見つけて失敗にする。
+取り消した後に、ジョブの状態と作業項目の行を読み直して返す。読めなければ`null`にして、取り消しの結果は隠さない。
+
+実機のWindmillで、tag`console`のscriptのジョブトークンが、待ちのジョブと、実行中のフローを取り消せることを確かめた。
+取り消した主体(`canceled_by`)は、Consoleを呼んだユーザーになる。
+
+次のことは、この操作では守れない。
+
+- 子プロセス(Claudeと検査コマンド)は、取り消しで止まらない。次の実行の確認か、翌日03:00の作業領域の掃除まで、動き続けることがある。確認のダイアログが、この旨を伝える。
+- 対象の判定と取り消しの間にジョブが終わると、取り消しのAPIは404を返すので、終わったジョブとして断る。
+- 管理者は、Windmillの画面か`wmill job cancel`で、許可表の外のジョブも取り消せる。その取り消しは操作の記録に残らない。
+- ローカルのClaudeのセッションは、`wmill`でこのscriptを呼べない。
+- 作業項目の行を書き換えないので、照合が失敗にするまでの間は、作業項目が進行中に見える。
+
 ### 操作の記録
 
 Consoleから行う書き込みの操作は、表`factory.console_actions`に記録する。
@@ -1353,11 +1387,27 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 1. 操作の前に、結果が`attempted`の行を入れる。
 2. 行を入れられなければ、新しい書き込みの操作は拒否する。記録の無い操作を通さないためである。
 3. 操作の後に、結果を`succeeded`か`failed`に更新する。複数の段の操作で途中まで進んだときは`partial`にし、段ごとの結果を`changes`に入れる。
-4. 更新に失敗しても、操作は取り消さない。戻りに記録の失敗を載せる。
+4. 更新に失敗しても、操作は取り消さない。戻りに記録の失敗(`action_audit`が`failed`)を載せる。
 
 既存の操作に記録を足すときは、1の失敗で拒否せず、操作を通して記録の失敗を戻す。
 データベースの障害が、記録と無関係な変数だけを書く操作まで止めないためである。
+操作者を導けないときも、記録を書かずに操作を通し、記録の失敗を戻す。
 更新されないまま残った`attempted`の行は、不明として扱う。
+
+記録を書く操作は、次のとおりである。
+
+| 操作 | 記録の名前 | 記録を書けないとき |
+| --- | --- | --- |
+| ジョブの取消 | `job_cancel` | 取り消さずに断る |
+| 作業項目の再実行 | `retry_work_item` | 通す |
+| 保留の解除 | `hold_release` | 通す |
+| 凍結とdeployの保留の解除 | `freeze_release` | 通す |
+| 手動投入 | `manual_intake_submit` | 通す |
+
+解除の戻りにある`audit`は、解除の通知(`hold_released`)を書けたかを示す。
+`action_audit`は、この表への記録を書けたかを示し、別である。
+通知は人への知らせで、記録は監査のためなので、両方を残す。
+手動投入の記録に入れるのは、リポジトリ(`owner/repo`)だけで、題名と本文は入れない。
 
 `changes`には、変えたキーと値だけを入れる。
 値は、数値、真偽値、`null`、空白を含まない識別子の形の文字列に限る。
@@ -1366,7 +1416,7 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 
 保持は、固定の90日である。設定の項目にしない。
 定義は`lib/console_actions.ts`にあり、保護パスで守る。
-この表を消す処理は、記録を書く操作が現れるまで`cleanup_db`に入れない。書く操作が無く、行が増えないためである。
+`cleanup_db`が毎日、90日を過ぎた行を消す。消せなかったときは、`cleanup_db_failed`の通知を残す。件数はログに残す。
 
 この表は、defaultのworkerと管理者が書けるので、改ざんに耐えない。
 誤操作を後から追うための記録であり、不正の証拠には使えない。
@@ -2983,8 +3033,9 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
 - Consoleの確認は、`yes`の入力を求めない。
   ログインした管理者が、対象、期限、効果の文を見て押す操作で、フォーカスの既定が「取り消す」にある。
   解除は止めが外れる向きだが、保留は期限で必ず終わるため、受け入れる。
-- Consoleで解除するscriptの名前は、各scriptと許可リストの外に出さない。
-  `f/`のほかのファイルが名前を持つと、自動のコードから解除scriptを起動できる。
+- Consoleで解除するscriptと、ジョブを取り消すscriptの名前は、各scriptと許可リストの外に出さない。
+  `f/`のほかのファイルが名前を持つと、自動のコードから、解除や取消のscriptを起動できる。
+  生成した既知pathの定数(`lib/console_known_paths.ts`)も、この名前を持たないよう、生成で除く。
   `tests/scripts/hold_wiring.test.ts`が、`f/`のすべてのファイル(`.lock`とflowの定義を含む)を走査して固定する。
   名前を組み立てる形は、検出できない。
 - Consoleの解除は、`f/`で`releaseHold`を読み込める唯一のファイルである(`HOLD_RELEASERS`)。
@@ -3071,9 +3122,14 @@ Issueの取り込みの範囲(`claim`)は、読み手が無く設ける予定も
   フックのディレクトリは保護パスなので、拒否を外す変更はPRの差分で見える。
   miseのタスクのディレクトリ(`mise-tasks/`と`.mise-tasks/`)の保護は、Factoryのpr_fixとimplementのフローにだけ効く。
   ローカルのsubagentが、そこに書いて実行する形は止めない。
-- Consoleの解除scriptを1コマンドで呼ぶ形は、`hold-guard.ts`が、主セッションを含むすべてのセッションで拒否する。
+- Consoleの書き込みのscriptを1コマンドで呼ぶ形は、`hold-guard.ts`が、主セッションを含むすべてのセッションで拒否する。
+  書き込みのscriptは、tag`console`のscriptのうち、読み取りの一覧に無いものすべてである。
+  一覧は`scripts/claude-hooks/console-scripts.ts`の1か所に置き、拒否する名前はこの一覧から導く。
+  tag`console`の新しいscriptがどちらの一覧にも無い間は、`tests/scripts/claude-hooks/console-scripts.test.ts`が落ちる。
+  そのため、足す人が分類を選ぶ。
   ローカルの主セッションはCLIでは`session`として扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らないためである。
-  解除scriptの名前を軸に、拒否を既定にする。
+  取消などの書き込みも、運用者がConsoleの確認のダイアログを通す操作なので、セッションが直接呼ぶと、その確認を通らない。
+  書き込みのscriptの名前を軸に、拒否を既定にする。
   プログラムを問わず、コマンドの語、変数代入の値、標準入力の文字列に、名前、名前に当たりうるglob、ブレースの形があれば拒否する。
   標準入力の文字列は、ヒアドキュメント、ヒアストリング、パイプの連鎖の`echo`と`printf`である。
   実行系が包む形(`npx windmill-cli`、`bunx windmill-cli@<版>`、`bun x`、`pnpm dlx`、`deno run npm:`)も同じである。
@@ -3207,7 +3263,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)と凍結の解除(`freeze:release`、`scripts/freeze.ts release`)。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除すると保留を外せる。subagentには、確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
-| 主セッションを含むすべてのClaudeのセッションの、Consoleの解除scriptを呼びうる操作。コマンドの語か標準入力の文字列に、解除script(`hold_release`と`freeze_release`)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
+| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
 | subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |
