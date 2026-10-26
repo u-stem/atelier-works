@@ -605,7 +605,8 @@ describe("the tag passed by code", () => {
     for (const file of await scan("f/**/*.ts")) {
       const code = codeOf(readFileSync(file, "utf8"));
       if (
-        /\bJobService\s*\.\s*run\w*|\btag_override\b|\btag\s*:\s*["'`]/.test(
+        // 先頭が`!`のtagは、一覧のAPIの絞り込み(`!console`でConsole自身のジョブを除く)で、ジョブの振り分け先ではない。
+        /\bJobService\s*\.\s*run\w*|\btag_override\b|\btag\s*:\s*["'`](?!!)/.test(
           code,
         )
       ) {

@@ -1615,8 +1615,11 @@ describe("the names of the console release scripts", () => {
     ).toBe(true);
   });
 
-  // 保護パスの一覧は、パスの文字列を並べるだけで、scriptを呼ばない。
-  const ONLY_LISTS_PATHS = ["f/factory/lib/protected_paths.ts"];
+  // 保護パスの一覧と、リポジトリの定義から生成した既知pathの定数は、パスの文字列を並べるだけで、scriptを呼ばない。
+  const ONLY_LISTS_PATHS = [
+    "f/factory/lib/protected_paths.ts",
+    "f/factory/lib/console_known_paths.ts",
+  ];
 
   test.each(["hold_release", "freeze_release"])(
     "no file under f/ but the files of %s names it",
