@@ -14,6 +14,8 @@ import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
+  type RunClaudeOptions,
+  type RunClaudeResult,
   recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
@@ -21,6 +23,7 @@ import { loadConfig } from "../lib/config.ts";
 import {
   getRequirementDraft,
   getWorkItem,
+  hasDesignDraftForDocDir,
   latestDesignDraft,
   latestRequirementsApproval,
   type NewDesignDraft,
@@ -71,6 +74,7 @@ import {
 import { documentRegisterIssues } from "../lib/requirements_doc.ts";
 import { REQUIREMENTS_BASE_DIR } from "../lib/requirements_template.ts";
 import type {
+  AgentRunRecord,
   DesignDraft,
   Diagram,
   FactoryConfig,
@@ -205,6 +209,8 @@ export type DesignGenerateDeps = {
     item: WorkItem,
   ) => Promise<RequirementDraft | null>;
   readonly latestDesignDraft: (id: number) => Promise<DesignDraft | null>;
+  /** 試行ディレクトリと同じ`doc_dir`を持つ設計書の下書きが保存済みか。 */
+  readonly hasDesignDraftForDocDir: (docDir: string) => Promise<boolean>;
   /** Factory自身のcloneを開き、スキルを連結したシステムプロンプトのファイルを作る。 */
   readonly openFactory: () => Promise<{
     readonly systemPromptFile: string;
@@ -787,6 +793,31 @@ export function lockedDesignRun(
   );
 }
 
+export type DesignRunClaudeEnv = {
+  /** ロックで包む前のコマンドの実行(本番は`runCommand`)。 */
+  readonly run: CommandRunner;
+  readonly prepareLockFile?: (path: string) => Promise<void>;
+  readonly runClaude: (
+    options: RunClaudeOptions<DesignOutput>,
+  ) => Promise<RunClaudeResult<DesignOutput>>;
+  readonly recordAgentRun: (record: AgentRunRecord) => Promise<number>;
+  readonly getOauthToken: () => Promise<string>;
+  readonly config: Pick<
+    FactoryConfig,
+    "max_turns" | "max_budget_usd_per_run" | "claude_timeout_sec"
+  >;
+  readonly workItemId: number;
+  readonly designAttempt: number;
+  readonly worktreeDir: string;
+  readonly leaseJobId: string;
+};
+
+export function buildDesignRunClaude(
+  _env: DesignRunClaudeEnv,
+): DesignGenerateDeps["runClaude"] {
+  return async () => ({ outcome: "failure", reason: "", detail: "" });
+}
+
 // ---------------------------------------------------------------------------
 // ステップの本体
 // ---------------------------------------------------------------------------
@@ -853,6 +884,7 @@ export async function main(
         return getRequirementDraft(approval.draft_id);
       },
       latestDesignDraft: (id) => latestDesignDraft(id),
+      hasDesignDraftForDocDir: (docDir) => hasDesignDraftForDocDir(docDir),
       openFactory: async () => {
         const clone = await openFactoryClone(config, {
           run: runCommand,
