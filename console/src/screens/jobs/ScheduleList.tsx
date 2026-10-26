@@ -7,7 +7,6 @@ import type {
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { JobLink } from "../../components/JobLink.tsx";
-import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
@@ -17,7 +16,7 @@ import {
   SCHEDULES_TRUNCATED_NOTE,
 } from "../../lib/jobsView.ts";
 import { EmptyNote } from "../system/SystemSection.tsx";
-import { JobsQueryGate, LIST_LOADING_SHAPE } from "./JobRows.tsx";
+import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
 
 const BACK = jobsBackState("?tab=schedules");
 
@@ -54,7 +53,7 @@ function ScheduleRow({
           <span>次回の予定はありません</span>
         ) : (
           <span>
-            <TimeText iso={row.nextRunAt} now={now} prefix="次回 " />
+            <UpcomingTime iso={row.nextRunAt} now={now} prefix="次回 " />
           </span>
         )}
         {row.lastRun === null ? (

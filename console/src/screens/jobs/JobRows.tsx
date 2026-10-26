@@ -31,6 +31,7 @@ import {
   jobScriptName,
   jobStateInfo,
   jobsBackState,
+  upcomingLabel,
 } from "../../lib/jobsView.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 import { EmptyNote } from "../system/SystemSection.tsx";
@@ -67,25 +68,46 @@ export function JobStateBadge({ state }: { state: string }) {
   );
 }
 
+/**
+ * これから来る時刻。「10/26 14:05(残り5分)」の形で出す。
+ * 相対時刻の共通の表示は未来を「たった今」とするので、予定の時刻には使わない。
+ */
+export function UpcomingTime({
+  iso,
+  now,
+  prefix = "",
+}: {
+  iso: string;
+  now: number;
+  prefix?: string;
+}) {
+  return (
+    <time dateTime={iso} className="tabular-nums">
+      {prefix}
+      {upcomingLabel(iso, now)}
+    </time>
+  );
+}
+
 /** 一覧の1行に添える時刻。実行中と待ちの一覧は状態に合う時刻を、履歴は完了の時刻を出す。 */
 function timeOf(
   job: JobSummaryView,
   time: "active" | "history",
-): { iso: string; prefix: string } | null {
+): { iso: string; prefix: string; upcoming: boolean } | null {
   if (time === "history") {
     return job.completed_at === null
       ? null
-      : { iso: job.completed_at, prefix: "完了 " };
+      : { iso: job.completed_at, prefix: "完了 ", upcoming: false };
   }
   if (job.state === "running" && job.started_at !== null) {
-    return { iso: job.started_at, prefix: "開始 " };
+    return { iso: job.started_at, prefix: "開始 ", upcoming: false };
   }
   if (job.state === "scheduled" && job.scheduled_for !== null) {
-    return { iso: job.scheduled_for, prefix: "予定 " };
+    return { iso: job.scheduled_for, prefix: "予定 ", upcoming: true };
   }
   return job.created_at === null
     ? null
-    : { iso: job.created_at, prefix: "登録 " };
+    : { iso: job.created_at, prefix: "登録 ", upcoming: false };
 }
 
 function JobRow({
@@ -124,7 +146,11 @@ function JobRow({
       <p className="flex flex-wrap gap-x-4 gap-y-0.5 text-small text-muted-foreground tabular-nums">
         {at === null ? null : (
           <span>
-            <TimeText iso={at.iso} now={now} prefix={at.prefix} />
+            {at.upcoming ? (
+              <UpcomingTime iso={at.iso} now={now} prefix={at.prefix} />
+            ) : (
+              <TimeText iso={at.iso} now={now} prefix={at.prefix} />
+            )}
           </span>
         )}
         {job.duration_ms === null ? null : (

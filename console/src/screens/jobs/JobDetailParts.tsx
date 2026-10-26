@@ -20,7 +20,7 @@ import {
 } from "../../lib/jobsView.ts";
 import { workItemRef } from "../../lib/labels.ts";
 import { itemDetailPath } from "../../lib/pipelineView.ts";
-import { JobStateBadge } from "./JobRows.tsx";
+import { JobStateBadge, UpcomingTime } from "./JobRows.tsx";
 
 /** 詳細のパンくずが、一覧の範囲へ戻るための履歴の`state`。 */
 export type BackState = { readonly jobsBack: string } | undefined;
@@ -95,7 +95,7 @@ export function JobOverview({
         )}
         {job.scheduled_for === null ? null : (
           <Row label="予定">
-            <TimeText iso={job.scheduled_for} now={now} />
+            <UpcomingTime iso={job.scheduled_for} now={now} />
           </Row>
         )}
         {job.started_at === null ? null : (

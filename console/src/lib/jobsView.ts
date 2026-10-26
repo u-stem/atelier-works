@@ -10,6 +10,7 @@ import type {
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
 import { displayableIssueText } from "./intakeText.ts";
+import { formatRemainingTime, formatShortAbsoluteIso } from "./relativeTime.ts";
 import { parseIdParam } from "./routeParams.ts";
 
 /** ジョブの画面の入口のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
@@ -361,6 +362,10 @@ export function describeConfigValue(item: ConfigItemView): ConfigValueText {
  * 相対時刻の共通の表示は、未来の時刻を「たった今」とするので、予定には使わない。
  * 予定の時刻を過ぎていて、まだ実行されていないときは、そのことを書く。
  */
-export function upcomingLabel(_iso: string, _nowMs: number): string {
-  return "";
+export function upcomingLabel(iso: string, nowMs: number): string {
+  const atMs = Date.parse(iso);
+  if (Number.isNaN(atMs)) return "時刻不明";
+  const left =
+    atMs > nowMs ? formatRemainingTime(atMs, nowMs) : "予定時刻を過ぎています";
+  return `${formatShortAbsoluteIso(iso)}(${left})`;
 }
