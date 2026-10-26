@@ -55,10 +55,6 @@ describe("the place of the band and the tabs", () => {
   test("gives the band no time of fetch, which the page header shows", () => {
     expect(BODY).not.toContain("updatedAt");
   });
-
-  test("gives the band the current time", () => {
-    expect(BODY).toMatch(/<SummaryBand[^>]*now=\{now\}/s);
-  });
 });
 
 describe("the jump from a chip", () => {

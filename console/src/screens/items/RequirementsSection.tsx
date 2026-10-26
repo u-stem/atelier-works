@@ -33,13 +33,6 @@ export function RequirementsSection({
   const rows = index.data;
   return (
     <div className="flex flex-col gap-3">
-      <div>
-        <p className="text-small text-muted-foreground">
-          {rows === undefined
-            ? "要件定義がある作業項目を一覧します。"
-            : `要件定義がある作業項目 ${rows.length}件`}
-        </p>
-      </div>
       <LoadingGate phase={loadPhaseOf(index)} shape={LOADING_SHAPE}>
         {rows !== undefined ? (
           <>

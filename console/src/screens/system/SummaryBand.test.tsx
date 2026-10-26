@@ -9,7 +9,6 @@ import type {
 } from "../../lib/summaryBand.ts";
 import { SummaryBand } from "./SummaryBand.tsx";
 
-const NOW = Date.parse("2026-10-26T03:00:00.000Z");
 const FETCHED_AT = Date.parse("2026-10-26T02:57:00.000Z");
 
 function row(
@@ -36,12 +35,7 @@ function render(rows: BandRow[], extra: object = {}): string {
   return renderToStaticMarkup(
     <MemoryRouter>
       <TooltipProvider>
-        <SummaryBand
-          rows={rows}
-          onJump={() => undefined}
-          now={NOW}
-          {...extra}
-        />
+        <SummaryBand rows={rows} onJump={() => undefined} {...extra} />
       </TooltipProvider>
     </MemoryRouter>,
   );

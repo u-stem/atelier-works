@@ -16,7 +16,6 @@ import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
-  auditIndexSubtitle,
   auditProposalBreakdown,
   auditReportPath,
 } from "../../lib/auditView.ts";
@@ -157,7 +156,6 @@ export function AuditReports({
   const now = useNow();
   const [confirming, setConfirming] = useState(false);
   const kickoff = useAuditKickoff();
-  const rowCount = query.data?.length ?? 0;
 
   return (
     <section
@@ -165,15 +163,10 @@ export function AuditReports({
       className="rounded-xl border border-border bg-card"
     >
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
-        <div>
-          <h2 id="audit-reports-heading" className="sr-only">
-            監査
-          </h2>
-          <p className="text-small text-muted-foreground tabular-nums">
-            {query.data === undefined ? "" : auditIndexSubtitle(rowCount)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+        <h2 id="audit-reports-heading" className="sr-only">
+          監査
+        </h2>
+        <div className="ml-auto flex items-center gap-2">
           <Button
             size="sm"
             disabled={kickoff.locked}

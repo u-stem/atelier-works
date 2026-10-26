@@ -18,7 +18,7 @@ import {
 } from "../../lib/layoutClasses.ts";
 import { STICKY_HEADER_PROPS } from "../../lib/scrollRoot.ts";
 import { jumpToSection } from "../../lib/sectionJump.ts";
-import { oldestUpdatedAt, summaryBandRows } from "../../lib/summaryBand.ts";
+import { summaryBandRows } from "../../lib/summaryBand.ts";
 import {
   parseSystemTab,
   SYSTEM_TABS,
@@ -311,16 +311,7 @@ export function SystemScreen() {
       >
         <div {...STICKY_HEADER_PROPS} className={STICKY_HEADER_CLASS}>
           <div className="px-4 py-3 md:px-8">
-            <SummaryBand
-              rows={rows}
-              onJump={onJump}
-              now={now}
-              updatedAt={oldestUpdatedAt([
-                holds.dataUpdatedAt,
-                status.dataUpdatedAt,
-                summary.dataUpdatedAt,
-              ])}
-            />
+            <SummaryBand rows={rows} onJump={onJump} />
           </div>
           <Tabs
             tabs={tabs}
