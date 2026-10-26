@@ -37,8 +37,21 @@ export const APP_MAIN_CLASS =
 export const PAGINATION_BAR_CLASS =
   "sticky -bottom-6 z-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border bg-background py-3 text-small text-muted-foreground";
 
-/** 本文の枠の上端に貼り付く部分のclass。 */
-export const STICKY_HEADER_CLASS = "";
+/**
+ * 本文の枠の上端に貼り付く部分のclass。要約の帯とタブを、スクロールしても見える位置に置く。
+ *
+ * - `[@media(min-width:48rem)_and_(min-height:40rem)]:sticky`: 幅と高さの両方に余裕があるときだけ貼り付く。
+ *   狭いか低い画面では、帯とタブが画面の大半を占め、本文が読めなくなるため、本文と一緒にスクロールさせる。
+ *   条件はCSSの媒体条件で書く。スクリプトで親を入れ替えると、切り替えのたびに本文を描き直し、スクロール位置を失うためである。
+ * - `-top-6`: 枠の上端に貼り付く。貼り付く位置は枠の余白の内側から測るので、`py-6`の分だけ上げて枠の上端に合わせる。
+ *   `PAGINATION_BAR_CLASS`の`-bottom-6`と同じ理由である。
+ * - `-mt-6`: `py-6`の分だけ上げ、枠の上端から始める。
+ * - `-mx-4`、`md:-mx-8`: 枠の左右の余白(`px-4`、`md:px-8`)を打ち消し、枠の幅いっぱいに広げる。
+ * - `bg-background`: 下をくぐる本文が透けないようにする。
+ * - `z-10`: 下をくぐる本文より上に置く。
+ */
+export const STICKY_HEADER_CLASS =
+  "[@media(min-width:48rem)_and_(min-height:40rem)]:sticky -top-6 z-10 -mx-4 -mt-6 bg-background md:-mx-8";
 
 /**
  * ページ送りの帯の中のボタンに付けるclass。

@@ -148,7 +148,6 @@ export function InfoNoticeDisclosure({
   return (
     <Disclosure
       summary={`一覧を表示(${String(notices.length)}件)`}
-      jumpOpen
       initiallyOpen={initiallyOpen}
     >
       <InfoNoticeList notices={notices} now={now} />
@@ -172,7 +171,6 @@ export function ResolvedNoticeDisclosure({
   return (
     <Disclosure
       summary={`履歴を表示(${String(notices.length)}件)`}
-      jumpOpen
       initiallyOpen={initiallyOpen}
     >
       <ResolvedNoticeList notices={notices} now={now} />

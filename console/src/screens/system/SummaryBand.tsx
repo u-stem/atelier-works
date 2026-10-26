@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { MouseEvent, ReactNode } from "react";
 import { Link } from "react-router";
+import { TimeText } from "../../components/TimeText.tsx";
 import { cn } from "../../lib/cn.ts";
 import { useDelayedVisible } from "../../lib/delayedVisible.ts";
 import {
@@ -63,12 +64,12 @@ function ChipBody({ row, hidden }: { row: BandRow; hidden: boolean }) {
         {...hiddenProps}
       >
         <LevelIcon aria-hidden="true" className="size-4" />
-        <span className="sr-only">{info.label}</span>
       </span>
       <span className="font-medium">{row.label}</span>
       <span className={cn("tabular-nums break-words", hide)} {...hiddenProps}>
         {row.text}
       </span>
+      {hidden ? null : <span className="sr-only">{info.label}</span>}
       {row.stale ? (
         <span className="text-caption text-muted-foreground">
           前の値(取得に失敗)
@@ -118,14 +119,17 @@ function Chip({
 
 /**
  * システムの画面の先頭の要約の帯。チップごとに結論と段を出し、押すと関係する節か、要対応の画面へ移る。
- * タブと一緒に本文のスクロール枠の外に置き、タブを替えても見える。失敗の件数はここに必ず出る。
- * 取得の時刻と注記は、チップに置かず、各節の見出しが持つ。
+ * タブと一緒に本文のスクロール枠の先頭に置き、幅と高さに余裕があるときは貼り付けて、タブを替えても見える。失敗の件数はここに必ず出る。
+ * 読み上げは「ラベル、結論、段」の順で、結論を先に聞かせる。
+ * 帯が読む取得のうち最も古い時刻を、「最終取得」として1つだけ添える。各節の取得の時刻と注記は、節の見出しが持つ。
  * 取得中でも値が無いチップは、300msを超えて待つまでは枠だけを置く。
  * 取り直しに失敗して前の値を出すときは、前の値だと書く。
  */
 export function SummaryBand({
   rows,
   onJump,
+  now,
+  updatedAt,
 }: {
   rows: readonly BandRow[];
   onJump: (tab: SystemTabId, targetId: string) => void;
@@ -141,12 +145,21 @@ export function SummaryBand({
       <h2 id="summary-band-heading" className="sr-only">
         要約
       </h2>
-      <ul className="flex flex-wrap gap-2">
+      <ul className="flex flex-wrap items-center gap-2">
         {rows.map((row) => (
           <li key={row.id}>
             <Chip row={row} onJump={onJump} pendingVisible={pendingVisible} />
           </li>
         ))}
+        {updatedAt > 0 ? (
+          <li className="text-caption text-subtle">
+            <TimeText
+              iso={new Date(updatedAt).toISOString()}
+              now={now}
+              prefix="最終取得 "
+            />
+          </li>
+        ) : null}
       </ul>
     </nav>
   );

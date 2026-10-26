@@ -2,12 +2,18 @@
 // 各チップは、画面の節が使う既存の判定の写像である。新しいしきい値は作らない。
 // 判定は3段(正常、注意、要対応)で、読めないチップは「判定なし」にする。
 // 失敗が隠れないよう、失敗の件数は必ずチップの文に出す。
+// 取得の上限で切れた件数は「以上」と書き、少なく見せない。
 
 import type { HoldsSnapshot } from "../api/guards/holds.ts";
 import type { ConsoleSummary } from "../api/guards/summary.ts";
 import type { SystemStatus } from "../api/guards/systemStatus.ts";
+import { SYSTEM_STATUS_LIMIT } from "../api/systemQueries.ts";
 import { isExpiredAt } from "./holdsView.ts";
-import { HOST_ACTION_NOTICE_KIND } from "./hostActionNotices.ts";
+import {
+  type HostActionNotices,
+  hostActionNotices,
+  isHostActionKnown,
+} from "./hostActionNotices.ts";
 import {
   actionableTotal,
   INBOX_PATH,
@@ -17,6 +23,7 @@ import type { SystemTabId } from "./systemTabs.ts";
 import {
   describeFetcher,
   describeLatestDeployment,
+  noticeDetailPath,
   type Tone,
 } from "./systemView.ts";
 
@@ -67,8 +74,9 @@ export type BandSource<T> = {
 export { HOST_ACTION_NOTICE_KIND } from "./hostActionNotices.ts";
 
 /** 取得の時刻(ミリ秒)のうち、最も古いもの。まだ取得できていない(0以下)ものは数えない。無ければ0。 */
-export function oldestUpdatedAt(_times: readonly number[]): number {
-  return 0;
+export function oldestUpdatedAt(times: readonly number[]): number {
+  const fetched = times.filter((time) => time > 0);
+  return fetched.length === 0 ? 0 : Math.min(...fetched);
 }
 
 /** 取得中のチップの文。 */
@@ -200,12 +208,13 @@ function unavailable(
   });
 }
 
-function levelOfTone(tone: Tone): BandLevel {
+/** 色調を段に写す。警告の色調を、呼び出し側が決めた段にする。 */
+function levelOfTone(tone: Tone, warning: BandLevel): BandLevel {
   switch (tone) {
     case "success":
       return "normal";
     case "warning":
-      return "caution";
+      return warning;
     case "failure":
       return "action";
   }
@@ -226,11 +235,21 @@ function actionableRow(summary: BandSource<ConsoleSummary>): BandRow {
   });
 }
 
-/** 保留と凍結のチップ。期限切れは要対応、有効な行があれば注意、読めない源は要対応にする。 */
+/**
+ * 保留と凍結のチップ。有効な行があれば注意、読めない源は要対応にする。
+ * 期限切れの行は何も止めないので、有効な件数から外し、段に影響させない。
+ * 取得が丸ごと失敗したときも、一部を読めないときと同じく要対応にする。判定なしにすると、止まっているかを分からなくするためである。
+ */
 function holdsRow(source: BandSource<HoldsSnapshot>, now: number): BandRow {
   const data = source.data;
   if (data === undefined) {
-    return unavailable("holds", source);
+    return source.isError
+      ? build("holds", {
+          level: "action",
+          text: FETCH_FAILED_TEXT,
+          state: "error",
+        })
+      : unavailable("holds", source);
   }
   const stale = isStale(source);
   const { holds, freezes } = data;
@@ -246,45 +265,31 @@ function holdsRow(source: BandSource<HoldsSnapshot>, now: number): BandRow {
       stale,
     });
   }
-  const expiries = [...holds.rows, ...freezes.schedule, ...freezes.deploy].map(
-    (row) => row.expires_at,
-  );
-  const expired = expiries.filter((at) => isExpiredAt(at, now)).length;
-  const active = expiries.length - expired;
-  if (expired > 0) {
-    return build("holds", {
-      level: "action",
-      text: `期限切れ${String(expired)}件、有効${String(active)}件`,
-      count: active,
-      stale,
-    });
-  }
-  if (active > 0) {
-    return build("holds", {
-      level: "caution",
-      text: `有効${String(active)}件`,
-      count: active,
-      stale,
-    });
-  }
-  return build("holds", {
-    level: "normal",
-    text: "なし",
-    count: 0,
-    stale,
-  });
+  const active = [...holds.rows, ...freezes.schedule, ...freezes.deploy].filter(
+    (row) => !isExpiredAt(row.expires_at, now),
+  ).length;
+  return active > 0
+    ? build("holds", {
+        level: "caution",
+        text: `有効${String(active)}件`,
+        count: active,
+        stale,
+      })
+    : build("holds", { level: "normal", text: "なし", count: 0, stale });
 }
 
-/** 未解決の、ホスト側の作業を知らせる通知の数。 */
-function hostActionNoticeCount(summary: ConsoleSummary): number {
-  return summary.notices.filter((n) => n.kind === HOST_ACTION_NOTICE_KIND)
-    .length;
+/** 「N件」「N件以上」。一覧が上限で切れているときは下限として書く。 */
+function noticeCountText(notices: HostActionNotices): string {
+  return `${String(notices.count)}件${notices.complete ? "" : "以上"}`;
 }
 
 /**
  * 直近の反映のチップ。反映が失敗したら要対応にする。
  * ホストの作業が残っているかは、未解決の通知で決める。反映の記録の印は、作業が済んでも残るためである。
- * 通知が1件以上なら注意にする。通知を読めないときは、反映の記録の印で代える。
+ * 通知が1件以上なら注意にし、行き先を要対応の画面のその通知にする。
+ * 通知を数えられないときだけ、反映の記録の印で代える。
+ * 通知の取得が失敗したときと、一覧が上限で切れて作業の通知が見えないときである。
+ * 通知を取得中のときは代えず、待つ。待つ間に記録の印を出すと、作業が済んでいても注意に見えるためである。
  */
 function deploymentRow(
   statusSource: BandSource<SystemStatus>,
@@ -295,10 +300,13 @@ function deploymentRow(
     return unavailable("deployment", statusSource);
   }
   const stale = isStale(statusSource, summarySource);
-  const noticeCount =
+  const summaryLoading =
+    summarySource.data === undefined && !summarySource.isError;
+  const notices =
     summarySource.data === undefined
       ? null
-      : hostActionNoticeCount(summarySource.data);
+      : hostActionNotices(summarySource.data);
+  const known = notices !== null && isHostActionKnown(notices);
   const deployment =
     status.deployment === null
       ? null
@@ -307,24 +315,40 @@ function deploymentRow(
     return build("deployment", {
       level: "action",
       text:
-        noticeCount !== null && noticeCount > 0
-          ? `失敗。ホストの作業${String(noticeCount)}件も残っています`
+        known && notices.count > 0
+          ? `失敗。ホストの作業${noticeCountText(notices)}も残っています`
           : "失敗",
       stale,
     });
   }
-  if (noticeCount !== null && noticeCount > 0) {
+  if (summaryLoading) {
     return build("deployment", {
-      level: "caution",
-      text: `ホストの作業${String(noticeCount)}件が残っています`,
-      count: noticeCount,
+      level: "none",
+      text: BAND_LOADING_TEXT,
+      state: "loading",
       stale,
     });
   }
-  if (noticeCount === null && status.deployment?.needs_host_action === true) {
+  if (known && notices.count > 0) {
     return build("deployment", {
       level: "caution",
-      text: "ホストの作業が必要(通知を確認できません)",
+      text: `ホストの作業${noticeCountText(notices)}が残っています`,
+      count: notices.count,
+      countAtLeast: !notices.complete,
+      stale,
+      target:
+        notices.firstNoticeId === null
+          ? BASES.deployment.target
+          : { kind: "route", to: noticeDetailPath(notices.firstNoticeId) },
+    });
+  }
+  if (!known && status.deployment?.needs_host_action === true) {
+    return build("deployment", {
+      level: "caution",
+      text:
+        notices === null
+          ? "ホストの作業が必要(通知の取得に失敗)"
+          : "ホストの作業が必要(通知を確認できません)",
       stale,
     });
   }
@@ -333,15 +357,23 @@ function deploymentRow(
     : build("deployment", { level: "normal", text: "成功", stale });
 }
 
-/** Consoleの取り込みのチップ。節と同じ判定(`describeFetcher`)の写像にする。 */
+/**
+ * Consoleの取り込みのチップ。文は節と同じ判定(`describeFetcher`)から取る。
+ * 段は、意図した状態(版の固定)だけを注意にし、印を付けない。
+ * 記録が古いときと状態を読めないときは、取り込みが止まっている可能性があるので、要対応にする。
+ */
 function fetcherRow(source: BandSource<SystemStatus>): BandRow {
   const data = source.data;
   if (data === undefined) {
     return unavailable("fetcher", source);
   }
   const fetcher = describeFetcher(data.fetcher);
+  const pinned =
+    data.fetcher.availability === "available" &&
+    data.fetcher.assessment === "ok" &&
+    data.fetcher.state === "pinned";
   return build("fetcher", {
-    level: levelOfTone(fetcher.tone),
+    level: pinned ? "caution" : levelOfTone(fetcher.tone, "action"),
     text: fetcher.label,
     stale: isStale(source),
   });
@@ -349,8 +381,9 @@ function fetcherRow(source: BandSource<SystemStatus>): BandRow {
 
 /**
  * 失敗のチップ。監査の失敗(後の監査で報告済みでないもの)と、作業項目に紐づかない失敗を数える。
- * 判定するのは監査の失敗だけである。紐づかない失敗は、直近7日の窓に残る過去の記録で、
- * 今対応を要するかを決められないので、件数だけを添える。
+ * 段を決めるのは監査の失敗だけである。紐づかない失敗は、直近7日の窓に残る過去の記録で、
+ * 今対応を要するかを決められない。ただし1件でも残るときは「正常」と言わず、判定なしにして件数を添える。
+ * 紐づかない失敗が取得の上限に達したときは、件数を「以上」と書く。
  * 一方の取得が読めなくても、もう一方の件数は出す。失敗を隠さないためである。
  */
 function failuresRow(
@@ -365,13 +398,15 @@ function failuresRow(
     statusSource.data === undefined
       ? null
       : statusSource.data.orphan_failures.length;
+  const orphanAtLeast = orphan !== null && orphan >= SYSTEM_STATUS_LIMIT;
   const part = (
     label: string,
     count: number | null,
     source: BandSource<unknown>,
+    atLeast: boolean,
   ): string =>
     count !== null
-      ? `${label}${String(count)}件`
+      ? `${label}${String(count)}件${atLeast ? "以上" : ""}`
       : `${label} ${source.isError ? "取得できません" : "取得中"}`;
   const target: BandTarget =
     audit === 0 && orphan !== null && orphan > 0
@@ -381,10 +416,19 @@ function failuresRow(
           targetId: "orphan-failures-heading",
         }
       : BASES.failures.target;
+  const level: BandLevel =
+    audit === null
+      ? "none"
+      : audit > 0
+        ? "caution"
+        : orphan === 0
+          ? "normal"
+          : "none";
   return build("failures", {
-    level: audit === null ? "none" : audit > 0 ? "caution" : "normal",
-    text: `${part("監査", audit, summarySource)}、${part("紐づかない", orphan, statusSource)}`,
+    level,
+    text: `${part("監査", audit, summarySource, false)}、${part("紐づかない", orphan, statusSource, orphanAtLeast)}`,
     count: audit !== null && orphan !== null ? audit + orphan : null,
+    countAtLeast: orphanAtLeast,
     state: missingState(summarySource, statusSource),
     stale: isStale(summarySource, statusSource),
     target,

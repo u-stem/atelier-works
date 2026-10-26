@@ -2,10 +2,11 @@ import type { ReactNode } from "react";
 import type { SystemStatus } from "../../api/guards/systemStatus.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
-import type { HostActionNotices } from "../../lib/hostActionNotices.ts";
 import {
   describeFetcher,
+  describeHostAction,
   describeLatestDeployment,
+  type HostActionSource,
 } from "../../lib/systemView.ts";
 import { shortSha } from "../../lib/updateHistory.ts";
 
@@ -24,22 +25,28 @@ const MONO = "font-mono text-small tabular-nums";
 
 /**
  * 反映の状態。反映した版、直近の反映、Consoleの取り込みの状態を出す。
+ * ホストの作業は、未解決の通知の件数で出す。反映の記録の印は、作業が済んでも残るためである。
  * 版が読めないときや、取り込みの状態を読めないときも、ほかの行は出す。
  */
 export function ReleaseStatus({
   status,
   now,
+  hostAction,
 }: {
   status: SystemStatus;
   now: number;
-  /** summaryの未解決の通知から数えた、ホストの作業。summaryを読めないときは`null`。 */
-  hostAction: HostActionNotices | null;
+  /** summaryの未解決の通知から数えた、ホストの作業。取得中は`"pending"`、取得に失敗したときは`null`。 */
+  hostAction: HostActionSource;
 }) {
   const deployment =
     status.deployment === null
       ? null
       : describeLatestDeployment(status.deployment);
   const fetcher = describeFetcher(status.fetcher);
+  const hostActionView = describeHostAction(
+    hostAction,
+    status.deployment?.needs_host_action === true,
+  );
   return (
     <dl className="divide-y divide-border rounded-xl border border-border bg-card">
       <Row label="反映した版">
@@ -65,10 +72,10 @@ export function ReleaseStatus({
             </Badge>
             <Badge
               variant={
-                deployment.hostActionTone === "warning" ? "warning" : "outline"
+                hostActionView.tone === "warning" ? "warning" : "outline"
               }
             >
-              {deployment.hostActionLabel}
+              {hostActionView.label}
             </Badge>
           </>
         )}

@@ -7,14 +7,18 @@ import {
   useSystemStatus,
 } from "../../api/systemQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { useMediaQuery } from "../../app/useMediaQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { TabPanel } from "../../components/TabPanel.tsx";
 import { Tabs } from "../../components/Tabs.tsx";
 import { FLOW_GRAPH } from "../../lib/flowGraphData.ts";
-import { SCROLL_BODY_CLASS } from "../../lib/layoutClasses.ts";
+import { hostActionNotices } from "../../lib/hostActionNotices.ts";
+import {
+  SCROLL_BODY_CLASS,
+  STICKY_HEADER_CLASS,
+} from "../../lib/layoutClasses.ts";
+import { STICKY_HEADER_PROPS } from "../../lib/scrollRoot.ts";
 import { jumpToSection } from "../../lib/sectionJump.ts";
-import { summaryBandRows } from "../../lib/summaryBand.ts";
+import { oldestUpdatedAt, summaryBandRows } from "../../lib/summaryBand.ts";
 import {
   parseSystemTab,
   SYSTEM_TABS,
@@ -26,6 +30,7 @@ import {
 import {
   auditFailureLimitNote,
   auditFailuresOf,
+  type HostActionSource,
   listLimitNote,
   SYSTEM_WINDOW_DAYS,
 } from "../../lib/systemView.ts";
@@ -63,7 +68,23 @@ function LimitNote({ count }: { count: number }) {
 
 type StatusQuery = ReturnType<typeof useSystemStatus>;
 
-function ReleaseSection({ status }: { status: StatusQuery }) {
+/** ホストの作業の通知の取得の結果。取得中は待ち、取得に失敗して値が無いときは`null`にする。 */
+function hostActionSourceOf(
+  summary: ReturnType<typeof useSummary>,
+): HostActionSource {
+  if (summary.data !== undefined) {
+    return hostActionNotices(summary.data);
+  }
+  return summary.isError ? null : "pending";
+}
+
+function ReleaseSection({
+  status,
+  summary,
+}: {
+  status: StatusQuery;
+  summary: ReturnType<typeof useSummary>;
+}) {
   return (
     <SystemSection
       id="release-heading"
@@ -73,7 +94,11 @@ function ReleaseSection({ status }: { status: StatusQuery }) {
       loginHint="上のバナーからログインすると、反映の状態を表示します。"
     >
       {(data, now) => (
-        <ReleaseStatus status={data} now={now} hostAction={null} />
+        <ReleaseStatus
+          status={data}
+          now={now}
+          hostAction={hostActionSourceOf(summary)}
+        />
       )}
     </SystemSection>
   );
@@ -209,16 +234,17 @@ function Sections({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-10">{children}</div>;
 }
 
-/** 帯とタブを本文の枠の外に固定する幅。これより狭いときは、枠の中に置いて一緒にスクロールさせる。 */
-const FIXED_HEADER_QUERY = "(min-width: 768px)";
-
 /**
  * システムの画面。Software Factoryの自分自身の状態を、要約の帯と3つのタブに分けて出す。
- * 帯とタブは、見出しの直下で本文のスクロール枠の外に置く。タブを替えても、本文をスクロールしても、帯が見える。
- * 幅が狭いときは、帯が画面の大半を占めないよう、枠の中に置いて一緒にスクロールさせる。
+ * 帯とタブは、本文のスクロール枠の先頭に置き、幅と高さに余裕があるときは枠の上端に貼り付ける。
+ * タブを替えても、本文をスクロールしても、帯が見える。
+ * 狭いか低い画面では、帯が画面の大半を占めないよう、貼り付けず、本文と一緒にスクロールさせる。
+ * 貼り付ける条件はCSSの媒体条件が持つ。親を入れ替えないので、画面の大きさが変わっても本文は描き直されない。
  * 帯のチップは、結論と段を出し、押すと関係するタブの節か、要対応の画面へ移る。
  * タブは状態、失敗と通知、履歴と構成である。開くタブはURLの`?tab=`に持ち、選び直しても履歴を積まない。
  * 4つの取得は画面が持ち、帯とタブが読む。タブの切り替えでは取得しない。節を分けても取得の数は増えない。
+ * 取得は、保留と凍結、状態、要約、更新履歴の順に始める。
+ * workerは1台で取得を直列に処理する。帯とタブの判定に使う3つを先に済ませ、帯が読まない更新履歴を最後にする。
  * 選んでいないタブは、初めて開くまで描かない。開いた後は隠して残し、スクロール位置を保つ。
  * 失敗が隠れないよう、帯に件数を出し、失敗と通知のタブに件数と印を付ける。
  * 見出しの更新ボタンが4つを取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
@@ -226,10 +252,10 @@ const FIXED_HEADER_QUERY = "(min-width: 768px)";
  * 書き込みは「保留と凍結」の節の解除だけで、ほかの節は読むだけである。通知の解決は、要対応の画面の詳細で行う。
  */
 export function SystemScreen() {
-  const status = useSystemStatus();
-  const deployments = useDeployments();
-  const summary = useSummary();
   const holds = useHolds();
+  const status = useSystemStatus();
+  const summary = useSummary();
+  const deployments = useDeployments();
   const refresh = refreshStatusOfSystem({
     status,
     deployments,
@@ -237,7 +263,6 @@ export function SystemScreen() {
     holds,
   });
   const now = useNow();
-  const fixedHeader = useMediaQuery(FIXED_HEADER_QUERY);
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = parseSystemTab(searchParams.get("tab"));
   const visited = useVisitedTabs(tab);
@@ -276,38 +301,42 @@ export function SystemScreen() {
     setJump({ tab: target, id });
   };
 
-  const header = (
-    <div className={fixedHeader ? undefined : "-mx-4"}>
-      <div className="px-4 py-3 md:px-8">
-        <SummaryBand rows={rows} onJump={onJump} now={now} updatedAt={0} />
-      </div>
-      <Tabs
-        tabs={tabs}
-        selected={tab}
-        onSelect={selectTab}
-        label="システムの節"
-        idPrefix={SYSTEM_TABS.idPrefix}
-      />
-    </div>
-  );
-
   return (
     <>
       <PageHeader title="システム" refresh={refresh} />
-      {fixedHeader ? header : null}
       <div
         ref={scroll.frameRef}
         onScroll={scroll.onScroll}
         className={SCROLL_BODY_CLASS}
       >
-        {fixedHeader ? null : header}
+        <div {...STICKY_HEADER_PROPS} className={STICKY_HEADER_CLASS}>
+          <div className="px-4 py-3 md:px-8">
+            <SummaryBand
+              rows={rows}
+              onJump={onJump}
+              now={now}
+              updatedAt={oldestUpdatedAt([
+                holds.dataUpdatedAt,
+                status.dataUpdatedAt,
+                summary.dataUpdatedAt,
+              ])}
+            />
+          </div>
+          <Tabs
+            tabs={tabs}
+            selected={tab}
+            onSelect={selectTab}
+            label="システムの節"
+            idPrefix={SYSTEM_TABS.idPrefix}
+          />
+        </div>
         <TabPanel
           attrs={systemPanelAttrs("status", tab)}
           mounted={visited.has("status")}
         >
           <Sections>
             <HoldsSection holds={holds} />
-            <ReleaseSection status={status} />
+            <ReleaseSection status={status} summary={summary} />
             <WorkerLoadSection status={status} />
           </Sections>
         </TabPanel>

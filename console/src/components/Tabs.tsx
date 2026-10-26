@@ -1,4 +1,4 @@
-import { TriangleAlert } from "lucide-react";
+import { OctagonAlert, TriangleAlert } from "lucide-react";
 import { type KeyboardEvent, useRef } from "react";
 import { cn } from "../lib/cn.ts";
 import { tabDomId, tabKeyTarget } from "../lib/tabs.ts";
@@ -20,6 +20,33 @@ export type TabSpec<Id extends string> = {
   /** 印の段。注意は三角、要対応は八角で表す。 */
   readonly markLevel?: "caution" | "action" | undefined;
 };
+
+/** 印の段ごとの記号と色。段を形でも区別し、色だけに頼らない。 */
+const MARK_STYLE = {
+  caution: { Icon: TriangleAlert, color: "text-warning" },
+  action: { Icon: OctagonAlert, color: "text-failure" },
+} as const;
+
+function TabMark({
+  text,
+  level,
+}: {
+  text: string;
+  level: "caution" | "action";
+}) {
+  const { Icon, color } = MARK_STYLE[level];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 text-caption font-normal",
+        color,
+      )}
+    >
+      <Icon aria-hidden="true" className="size-3.5" />
+      {text}
+    </span>
+  );
+}
 
 /**
  * タブの並び。矢印キーとHome、Endで移り、移った先を選ぶ。
@@ -101,13 +128,16 @@ export function Tabs<Id extends string>({
                     <span className="sr-only">{tab.countLabel}</span>
                   )}
                   {tab.count}
+                  {tab.countAtLeast === true ? (
+                    <>
+                      <span aria-hidden="true">+</span>
+                      <span className="sr-only">以上</span>
+                    </>
+                  ) : null}
                 </span>
               )}
               {tab.mark === undefined ? null : (
-                <span className="inline-flex items-center gap-1 text-caption font-normal text-failure">
-                  <TriangleAlert aria-hidden="true" className="size-3.5" />
-                  {tab.mark}
-                </span>
+                <TabMark text={tab.mark} level={tab.markLevel ?? "action"} />
               )}
             </button>
           );

@@ -16,11 +16,22 @@ export type HostActionNotices = {
   readonly firstNoticeId: number | null;
 };
 
-export function hostActionNotices(_summary: ConsoleSummary): HostActionNotices {
-  return { count: 0, complete: true, firstNoticeId: null };
+/**
+ * summaryの未解決の通知から、ホスト側の作業の通知を数える。
+ * 一覧が上限で切れているかは、全件の数(`counts.notices`)と一覧の長さの差で分かる。
+ */
+export function hostActionNotices(summary: ConsoleSummary): HostActionNotices {
+  const hostNotices = summary.notices.filter(
+    (notice) => notice.kind === HOST_ACTION_NOTICE_KIND,
+  );
+  return {
+    count: hostNotices.length,
+    complete: summary.counts.notices <= summary.notices.length,
+    firstNoticeId: hostNotices[0]?.notice_id ?? null,
+  };
 }
 
 /** 残っている作業の有無を言い切れるか。通知があるか、一覧が全件のときに言い切れる。 */
-export function isHostActionKnown(_notices: HostActionNotices): boolean {
-  return false;
+export function isHostActionKnown(notices: HostActionNotices): boolean {
+  return notices.count > 0 || notices.complete;
 }

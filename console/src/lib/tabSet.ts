@@ -52,7 +52,7 @@ export type TabSpecInput<Id extends string> = {
   readonly counts?: Readonly<Partial<Record<Id, number | undefined>>>;
   /** 件数が下限のタブ。 */
   readonly countAtLeast?: Readonly<Partial<Record<Id, boolean>>>;
-  /** 件数の意味。例えば「要確認」。 */
+  /** 件数の意味。例えば「失敗」。 */
   readonly countLabels?: Readonly<Partial<Record<Id, string | undefined>>>;
   /** 選んでいるかにかかわらず付ける印。取得も失敗しているときは、失敗の印と並べる。 */
   readonly attention?: Readonly<Partial<Record<Id, TabAttention | undefined>>>;
@@ -114,6 +114,7 @@ export function tabPanelAttrs<Id extends string>(
  * 注意の印は、選んでいるかにかかわらず付ける。本体を開いていない間も、見落とさせないためである。
  * 注意の印を付けるタブの取得が失敗したときは、選んでいても、注意の印に失敗の印を並べる。
  * 値が前の取得のものだと、読み手に伝えるためである。
+ * 印の段は、注意の印があればその段、取得の失敗だけなら要対応にする。
  */
 export function tabSpecs<Id extends string>(
   set: TabSet<Id>,
@@ -123,22 +124,24 @@ export function tabSpecs<Id extends string>(
   return set.tabs.map((tab) => {
     const attention = input.attention?.[tab.id];
     const failed = input.failed?.[tab.id] === true;
+    const mark =
+      attention !== undefined
+        ? failed
+          ? `${attention.label}・${FETCH_FAILED_MARK}`
+          : attention.label
+        : failed && tab.id !== selected
+          ? FETCH_FAILED_MARK
+          : undefined;
     return {
       id: tab.id,
       label: tab.label,
       panelId: tabPanelId(set, tab.id),
       count: input.counts?.[tab.id],
-      countAtLeast: false,
+      countAtLeast: input.countAtLeast?.[tab.id] === true,
       countLabel: input.countLabels?.[tab.id],
-      markLevel: undefined,
-      mark:
-        attention !== undefined
-          ? failed
-            ? `${attention.label}・${FETCH_FAILED_MARK}`
-            : attention.label
-          : failed && tab.id !== selected
-            ? FETCH_FAILED_MARK
-            : undefined,
+      mark,
+      markLevel:
+        mark === undefined ? undefined : (attention?.level ?? "action"),
     };
   });
 }

@@ -1,6 +1,6 @@
 import { type RefObject, useRef, useState } from "react";
 import { clampPage } from "./pagination.ts";
-import { findScrollRoot } from "./scrollRoot.ts";
+import { findScrollRoot, stickyHeaderOffset } from "./scrollRoot.ts";
 import { scrollToAnchorIn } from "./scrollTarget.ts";
 
 /**
@@ -17,6 +17,7 @@ import { scrollToAnchorIn } from "./scrollTarget.ts";
  * - `anchorRef`: スクロールで先頭に合わせる要素に付ける。`change`はこの要素の上端を枠の上端に合わせる。
  *   絞り込み欄などの操作も見せたいときは、それらも包む要素に付ける。
  *   枠は、この要素を包む最も近い縦のスクロール枠(`findScrollRoot`)で、無ければ何も動かさない。
+ *   枠の上端に貼り付く部分があるときは、その下に合わせる。
  */
 export function usePagination(
   total: number,
@@ -37,7 +38,7 @@ export function usePagination(
   return {
     page,
     change: (next) => {
-      scrollToAnchorIn(anchorRef.current, findScrollRoot);
+      scrollToAnchorIn(anchorRef.current, findScrollRoot, stickyHeaderOffset);
       setChosen(clampPage(next, total, size));
     },
     reset: () => setChosen(0),

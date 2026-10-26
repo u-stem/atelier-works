@@ -52,7 +52,6 @@ export function FlowGraphSection({
       ) : (
         <Disclosure
           summary="図を表示"
-          jumpOpen
           initiallyOpen={initiallyOpen === true}
           onToggle={(open) => {
             if (open) {

@@ -128,7 +128,7 @@ describe("Tabs mark", () => {
 
   test("draws the symbol as decoration, with the words beside it", () => {
     expect(withMark("caution")).toMatch(
-      /<svg[^>]*aria-hidden="true"[^>]*><\/svg>注意/,
+      /<svg[^>]*aria-hidden="true"[^>]*>.*<\/svg>注意/,
     );
   });
 });

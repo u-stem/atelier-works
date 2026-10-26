@@ -97,10 +97,14 @@ export interface StickyHeaderScope<T extends StickyHeaderBox> {
  * 部分が無いか、貼り付いていない(`position`が`sticky`でない)ときは0を返す。
  */
 export function stickyHeaderOffsetWith<T extends StickyHeaderBox>(
-  _root: StickyHeaderScope<T>,
-  _positionOf: (element: T) => string,
+  root: StickyHeaderScope<T>,
+  positionOf: (element: T) => string,
 ): number {
-  return 0;
+  const header = root.querySelector(STICKY_HEADER_SELECTOR);
+  if (header === null || positionOf(header) !== "sticky") {
+    return 0;
+  }
+  return header.getBoundingClientRect().height + STICKY_HEADER_GAP;
 }
 
 /** `stickyHeaderOffsetWith`に、描画後の計算済みのスタイルを渡す。 */

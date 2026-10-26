@@ -127,8 +127,6 @@ export type DeploymentDescription = {
   readonly versionLabel: string;
   readonly resultLabel: string;
   readonly resultTone: Tone;
-  readonly hostActionLabel: string;
-  readonly hostActionTone: "warning" | "neutral";
   readonly changedPathCount: number;
   readonly occurredAt: string;
 };
@@ -141,8 +139,6 @@ export function describeLatestDeployment(
     versionLabel: versionText(deployment.sha_from, deployment.sha_to),
     resultLabel: deploymentResultLabel(deployment.result),
     resultTone: deployment.result === "success" ? "success" : "failure",
-    hostActionLabel: hostActionLabel(deployment.needs_host_action),
-    hostActionTone: deployment.needs_host_action ? "warning" : "neutral",
     changedPathCount: deployment.changed_paths.length,
     occurredAt: deployment.occurred_at,
   };
@@ -153,16 +149,41 @@ export type HostActionDescription = {
   readonly tone: "warning" | "neutral";
 };
 
+/** ホストの作業の通知の取得の結果。取得中は`"pending"`、取得に失敗して値が無いときは`null`。 */
+export type HostActionSource = HostActionNotices | "pending" | null;
+
 /**
  * 反映の節に出す、ホストの作業の表示。
  * 残っている作業は、未解決の通知で決める。反映の記録の印は、作業が済んでも残るためである。
- * 通知を読めない(`null`)か、一覧が切れて確かめられないときだけ、記録の印で代える。
+ * 通知の取得に失敗した(`null`)か、一覧が切れて確かめられないときだけ、記録の印で代える。
+ * 通知を取得中のあいだは代えない。作業が済んでいても、済んでいないように見えるためである。
  */
 export function describeHostAction(
-  _hostAction: HostActionNotices | null,
-  _recorded: boolean,
+  hostAction: HostActionSource,
+  recorded: boolean,
 ): HostActionDescription {
-  return { label: "", tone: "neutral" };
+  if (hostAction === "pending") {
+    return { tone: "neutral", label: "ホストの作業を確認中" };
+  }
+  const fallback = {
+    tone: recorded ? "warning" : "neutral",
+  } as const;
+  if (hostAction === null) {
+    return { ...fallback, label: hostActionLabel(recorded) };
+  }
+  if (hostAction.count > 0) {
+    return {
+      tone: "warning",
+      label: `ホストの作業${String(hostAction.count)}件${hostAction.complete ? "" : "以上"}が残っています`,
+    };
+  }
+  if (!hostAction.complete) {
+    return {
+      ...fallback,
+      label: `${hostActionLabel(recorded)}(通知を確認できません)`,
+    };
+  }
+  return { tone: "neutral", label: hostActionLabel(false) };
 }
 
 /** 要対応の画面で通知を選んだ経路。routerの基準(`/console`)からの絶対パスで書く。 */

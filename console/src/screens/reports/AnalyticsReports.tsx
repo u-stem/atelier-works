@@ -213,7 +213,7 @@ export function AnalyticsReports({
         <h2 id="analytics-heading" className="sr-only">
           分析
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <fieldset className="flex gap-1">
             <legend className="sr-only">集計期間</legend>
             {ANALYTICS_PERIOD_DAYS.map((option) => (
