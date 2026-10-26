@@ -1,21 +1,32 @@
 #!/usr/bin/env bun
 // ブランチ版のConsoleを、ローカルのWindmillに繋いで確かめるための検証用サーバー。
 // ビルドしたConsole(`--dist`)を`/console/`で配信し、それ以外のパスは`--upstream`(既定は
-// ローカルのCaddy、`http://127.0.0.1:8080`)へそのまま中継する。
+// ローカルのCaddy、`http://127.0.0.1:8080`)へ中継する。
 // ブラウザから見るとConsoleとWindmillが同じオリジンなので、`/console/`のページは、
 // `--upstream`で入った運用者のCookieのまま、本物のWindmillのAPIを呼べる。
 //
-// 注意: POSTを含む書き込みも中継する。マージ前の変更が、本物のWindmillに書き込める。
-// 承認、却下、再実行、通知の解決、保留と凍結の解除、監査の起動、手動投入のボタンを押すと、
-// 実際に実行される。確認では、読むだけにするか、書き込みを試す前に対象を確かめる。
+// 既定は読み取りだけである。中継するのは、GET、HEAD、OPTIONSと、読み取り専用の5つのscript
+// (`READ_ONLY_SCRIPT_PATHS`)を同期で実行するPOSTだけで、ほかは403にする。
+// 5つが読み取り専用であることは、各scriptのソースにINSERT、UPDATE、DELETEと書き込みのAPIが
+// 無いことで確かめた。承認、却下、再実行、通知の解決、保留と凍結の解除、監査の起動、
+// 手動投入のscriptは、既定では届かない。
+// 人が`--allow-writes`を付けたときだけ、POSTを含む書き込みも中継する。
+// そのとき、マージ前の変更が、本物のWindmillに書き込める。
+//
+// ブラウザが送る要求を、次のように絞る。
+// - Hostは`127.0.0.1:<port>`か`localhost:<port>`だけを通す。DNSリバインディングで別の名前から
+//   届いた要求を断るためである。
+// - Originは、このサーバー自身のオリジンのときだけ中継先のオリジンに置き換える。ほかは403にする。
+// - 中継の要求のSec-Fetch-Siteがcross-siteかsame-siteなら403にする。
 // 待ち受けは127.0.0.1だけで、中継先もこのマシンのアドレスに限る。
 //
-// 配信は、Caddyの`/console/*`のうち動作に必要な部分だけを写す。
+// 配信は、Caddyの`/console/*`を写す。
 // - 無いパスはSPAのindex.htmlに落とす。assets、draw.ioのファイル、status.jsonは落とさず404にする。
 // - 符号化した区切り(`%2f`、`%5c`)と`..`を含むパスは400にする。
-// CSPなどの安全のためのヘッダーは付けない。CSPの確認は、反映した後の実機で行う。
+// - Consoleと同じCSPなどのヘッダーを付ける。値は`infra/Caddyfile`と同じで、テストが一致を確かめる。
 //
-// 使い方: bun run scripts/console-branch-server.ts --dist console/dist [--port 5174] [--upstream http://127.0.0.1:8080]
+// 使い方: bun run scripts/console-branch-server.ts --dist console/dist [--port 5174]
+//   [--upstream http://127.0.0.1:8080] [--allow-writes]
 
 import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -40,30 +51,69 @@ export type Config = {
   readonly allowWrites: boolean;
 };
 
-// スタブ。実装は次のコミットで書く。
-export const READ_ONLY_SCRIPT_PATHS: readonly string[] = [];
+/**
+ * 既定で中継してよい、読み取り専用のscript。Consoleの読み取りの5つと一致する。
+ * どれもSELECTと、読み取りのAPI(ジョブ、schedule、変数、リソースの取得)だけを呼ぶ。
+ */
+export const READ_ONLY_SCRIPT_PATHS: readonly string[] = [
+  "f/factory/steps/console_query",
+  "f/factory/console_holds",
+  "f/factory/console_jobs",
+  "f/factory/console_schedules",
+  "f/factory/console_config",
+];
 
+const RUN_PREFIX = "/api/w/factory/jobs/run_wait_result/p/";
+const SAFE_METHODS: readonly string[] = ["GET", "HEAD", "OPTIONS"];
+
+/** 中継してよい要求か。書き込みは、`allowWrites`のときだけ通す。 */
 export function isAllowedProxyRequest(
-  _method: string,
-  _pathname: string,
-  _allowWrites: boolean,
+  method: string,
+  pathname: string,
+  allowWrites: boolean,
 ): boolean {
-  return true;
+  if (allowWrites || SAFE_METHODS.includes(method)) return true;
+  if (method !== "POST" || !pathname.startsWith(RUN_PREFIX)) return false;
+  return READ_ONLY_SCRIPT_PATHS.includes(pathname.slice(RUN_PREFIX.length));
 }
 
-export function isTrustedHost(_host: string | null, _port: number): boolean {
-  return true;
+/** Hostが、このサーバーのループバックの名前とポートか。 */
+export function isTrustedHost(host: string | null, port: number): boolean {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
-export function isOwnOrigin(_origin: string, _port: number): boolean {
-  return true;
+/** Originが、このサーバー自身のオリジンか。 */
+export function isOwnOrigin(origin: string, port: number): boolean {
+  return (
+    origin === `http://127.0.0.1:${port}` ||
+    origin === `http://localhost:${port}`
+  );
 }
 
+/**
+ * `infra/Caddyfile`の`console_headers`と`drawio_headers`と同じヘッダー。
+ * CSPのscript-srcなどは、ブラウザが使ったオリジンを入れる。
+ */
 export function consoleSecurityHeaders(
-  _origin: string,
-  _kind: "console" | "drawio",
+  origin: string,
+  kind: "console" | "drawio",
 ): Headers {
-  return new Headers();
+  if (kind === "drawio") {
+    return new Headers({
+      "content-security-policy": `default-src 'none'; script-src ${origin}/console/drawio/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors ${origin}; sandbox allow-scripts`,
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+      "x-frame-options": "SAMEORIGIN",
+    });
+  }
+  return new Headers({
+    "content-security-policy": `default-src 'self'; script-src ${origin}/console/assets/; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'self'; frame-ancestors 'none'; worker-src 'none'`,
+    "content-security-policy-report-only": "require-trusted-types-for 'script'",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "same-origin",
+    "x-frame-options": "DENY",
+    "cross-origin-opener-policy": "same-origin",
+  });
 }
 
 export type ParsedArgs =
@@ -146,8 +196,18 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let dist: string | null = null;
   let port = DEFAULT_PORT;
   let upstream = DEFAULT_UPSTREAM;
+  let allowWrites = false;
   let index = 0;
   while (index < argv.length) {
+    const token = argv[index] ?? "";
+    if (token === "--allow-writes") {
+      allowWrites = true;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--allow-writes=")) {
+      return { ok: false, message: "--allow-writes takes no value" };
+    }
     const { name, value, consumed } = flagValue(argv, index);
     index += consumed;
     if (value === null || value === "") {
@@ -179,17 +239,22 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
   }
   if (dist === null) return { ok: false, message: "--dist is required" };
-  return { ok: true, config: { dist, port, upstream, allowWrites: false } };
+  return { ok: true, config: { dist, port, upstream, allowWrites } };
 }
 
-/** 中継先へ送るヘッダー。Originを外し、Hostを中継先にして、同一オリジンの検査を通す。 */
+/**
+ * 中継先へ送るヘッダー。Hostを中継先にする。
+ * Originは、呼び出し側が自身のオリジンだと確かめたものを、中継先のオリジンに置き換える。
+ * 中継先のCaddyが、Originを開いたオリジンと比べて断らないようにするためである。
+ */
 export function toUpstreamRequestHeaders(
   headers: Headers,
   upstream: string,
 ): Headers {
   const result = new Headers(headers);
-  result.delete("origin");
-  result.set("host", new URL(upstream).host);
+  const target = new URL(upstream);
+  if (result.has("origin")) result.set("origin", target.origin);
+  result.set("host", target.host);
   return result;
 }
 
@@ -234,11 +299,27 @@ function serveFile(dist: string, path: string): Response {
     return new Response("Not Found", { status: 404 });
   }
   return new Response(Bun.file(target), {
-    headers: {
-      "cache-control": "no-cache",
-      "x-content-type-options": "nosniff",
-    },
+    headers: { "cache-control": "no-cache" },
   });
+}
+
+/** Consoleの応答に、Caddyが付けるのと同じ安全のためのヘッダーを足す。 */
+function withSecurityHeaders(
+  response: Response,
+  origin: string,
+  path: string,
+): Response {
+  const kind =
+    path === "drawio.html" || path.startsWith("drawio/") ? "drawio" : "console";
+  const headers = new Headers(response.headers);
+  for (const [name, value] of consoleSecurityHeaders(origin, kind)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, { status: response.status, headers });
+}
+
+function refuse(status: number, reason: string): Response {
+  return new Response(reason, { status });
 }
 
 async function proxy(req: Request, upstream: string): Promise<Response> {
@@ -272,22 +353,47 @@ export function startServer(config: Config): { port: number; stop(): void } {
     hostname: "127.0.0.1",
     port: config.port,
     async fetch(req) {
-      const route = routeFor(new URL(req.url).pathname);
-      if (route.kind === "reject") {
-        return new Response("Bad Request", { status: 400 });
+      const url = new URL(req.url);
+      const host = req.headers.get("host");
+      if (!isTrustedHost(host, server.port ?? config.port)) {
+        return refuse(403, "Forbidden host");
       }
+      const origin = req.headers.get("origin");
+      if (origin !== null && !isOwnOrigin(origin, server.port ?? config.port)) {
+        return refuse(403, "Forbidden origin");
+      }
+      const route = routeFor(url.pathname);
+      if (route.kind === "reject") return refuse(400, "Bad Request");
       if (route.kind === "redirect") {
         return Response.redirect(
-          new URL(route.location + new URL(req.url).search, req.url).toString(),
+          new URL(route.location + url.search, req.url).toString(),
           308,
         );
       }
       if (route.kind === "file") {
-        const direct = serveFile(config.dist, route.path);
-        if (direct.status !== 404 || route.fallback === "not-found") {
-          return direct;
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          return refuse(405, "Method Not Allowed");
         }
-        return serveFile(config.dist, "index.html");
+        const direct = serveFile(config.dist, route.path);
+        const found = direct.status !== 404 || route.fallback === "not-found";
+        const served = found ? direct : serveFile(config.dist, "index.html");
+        return withSecurityHeaders(
+          served,
+          `http://${host}`,
+          found ? route.path : "index.html",
+        );
+      }
+      const site = req.headers.get("sec-fetch-site");
+      if (site === "cross-site" || site === "same-site") {
+        return refuse(403, "Forbidden cross-site request");
+      }
+      if (
+        !isAllowedProxyRequest(req.method, url.pathname, config.allowWrites)
+      ) {
+        return refuse(
+          403,
+          "Forbidden: only reads are relayed (start with --allow-writes to relay writes)",
+        );
       }
       return proxy(req, config.upstream);
     },
@@ -300,7 +406,7 @@ function main(): void {
   if (!parsed.ok) {
     console.error(parsed.message);
     console.error(
-      "usage: bun run scripts/console-branch-server.ts --dist <dir> [--port <n>] [--upstream <url>]",
+      "usage: bun run scripts/console-branch-server.ts --dist <dir> [--port <n>] [--upstream <url>] [--allow-writes]",
     );
     process.exit(2);
   }
@@ -315,9 +421,15 @@ function main(): void {
   console.log(
     `Serving ${config.dist} at http://127.0.0.1:${server.port}/console/ and proxying other paths to ${config.upstream}`,
   );
-  console.warn(
-    "Warning: writes (POST) reach the real Windmill. Do not press the action buttons unless you mean it.",
-  );
+  if (config.allowWrites) {
+    console.warn(
+      "Warning: --allow-writes is on. Writes (POST) reach the real Windmill. Do not press the action buttons unless you mean it.",
+    );
+  } else {
+    console.log(
+      "Read-only: GET, HEAD, OPTIONS and the read scripts are relayed. Other requests get 403.",
+    );
+  }
 }
 
 if (import.meta.main) {

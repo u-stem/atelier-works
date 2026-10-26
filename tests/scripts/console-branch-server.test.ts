@@ -185,7 +185,7 @@ describe("isAllowedProxyRequest", () => {
 
   test("allows a POST that runs a read script", () => {
     expect(
-      isAllowedProxyRequest("POST", `${RUN}/f/factory/console_query`, false),
+      isAllowedProxyRequest("POST", `${RUN}/f/factory/console_holds`, false),
     ).toBe(true);
   });
 
@@ -521,7 +521,7 @@ describe("startServer", () => {
   });
 
   test("relays a read script call with the upstream status", async () => {
-    const response = await fetch(url(`${RUN}/f/factory/console_query`), {
+    const response = await fetch(url(`${RUN}/f/factory/steps/console_query`), {
       method: "POST",
       body: '{"view":"summary"}',
     });

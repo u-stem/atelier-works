@@ -72,7 +72,7 @@ description = "Build the console into console/dist"
 run = "bun run --cwd console build"
 
 [tasks."console:branch"]
-description = "Serve this branch's console build on 127.0.0.1:5174 and proxy other paths to the local Windmill (writes reach the real Windmill)"
+description = "Serve this branch's console build on 127.0.0.1:5174 and relay reads to the local Windmill (writes are refused unless --allow-writes is passed)"
 depends = ["console:build"]
 run = "bun run scripts/console-branch-server.ts --dist console/dist"
 
