@@ -55,6 +55,7 @@ import {
   assertPullRequestUrl,
   checkGhRepoDetailWrite,
   type DeploymentRecord,
+  type DesignDraft,
   type Diagram,
   type FailureRecord,
   type FixOutcome,
@@ -3423,6 +3424,63 @@ export async function getRequirementDraft(
     await sql`SELECT * FROM factory.requirement_drafts WHERE id = ${id}`.fetch();
   const row = rows[0];
   return row === undefined ? null : toRequirementDraft(row);
+}
+
+// ---------------------------------------------------------------------------
+// design_drafts
+// ---------------------------------------------------------------------------
+
+export type NewDesignDraft = {
+  work_item_id: number;
+  requirement_draft_id: number;
+  design_attempt: number;
+  summary: string;
+  markdown: string;
+  diagrams: Diagram[];
+  open_questions: string[];
+  doc_dir: string | null;
+  head_sha: string | null;
+};
+
+export async function saveDesignDraftIfLeaseHolder(
+  _draft: NewDesignDraft,
+  _leaseJobId: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  return null;
+}
+
+export async function getDesignDraft(
+  _id: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<DesignDraft | null> {
+  return null;
+}
+
+export async function latestDesignDraft(
+  _workItemId: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<DesignDraft | null> {
+  return null;
+}
+
+export async function setDesignAttemptIfLeaseHolder(
+  _id: number,
+  _designAttempt: number,
+  _leaseJobId: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
+export async function returnToRequirementsIfLeaseHolder(
+  _id: number,
+  _leaseJobId: string,
+  _note: string | null = null,
+  _sql: SqlClient = defaultSqlClient,
+  _jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  return false;
 }
 
 // ---------------------------------------------------------------------------

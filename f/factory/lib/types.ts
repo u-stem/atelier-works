@@ -437,6 +437,32 @@ export type RequirementDraft = {
 };
 
 // ---------------------------------------------------------------------------
+// design_drafts
+// ---------------------------------------------------------------------------
+
+/**
+ * 設計書の下書き1件。承認済みの要件定義(`requirement_draft_id`)から設計工程が生成する。
+ * 図のXMLはDBに保存せず、`doc_dir`の`<name>.drawio`に置く(`RequirementDraft`と同じ)。
+ */
+export type DesignDraft = {
+  id: number;
+  work_item_id: number;
+  /** この設計書の元にした、承認済みの要件定義の下書き。 */
+  requirement_draft_id: number;
+  /** 1から数える設計の試行。要件定義へ戻ると作業項目側は0に戻るが、この列は戻らない。 */
+  design_attempt: number;
+  summary: string;
+  markdown: string;
+  diagrams: Diagram[];
+  open_questions: string[];
+  /** `design.md`とすべての図を置いたworker内のディレクトリ。 */
+  doc_dir: string | null;
+  /** 設計書が読んだ対象リポジトリの既定ブランチの先頭のsha。 */
+  head_sha: string | null;
+  created_at: Date;
+};
+
+// ---------------------------------------------------------------------------
 // approval_requests: 種別を問わない承認待ち。
 // 承認を扱うscriptはすべてこのテーブルを通す。
 // ---------------------------------------------------------------------------
