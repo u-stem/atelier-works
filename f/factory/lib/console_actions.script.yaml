@@ -1,0 +1,9 @@
+summary: '[LIB] Consoleの操作の記録'
+description: 内部ライブラリです。直接実行するものではありません。Consoleから行った操作の記録の表を書く共通処理です。操作の前の記録、結果の更新、保持の日数を持ちます。
+lock: '!inline f/factory/lib/console_actions.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

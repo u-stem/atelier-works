@@ -834,7 +834,7 @@ migrationが失敗すると、`self_update`は次の回で再試行する。
 | `scripts/test-db-holds.ts` | `mise run test:db`が流す。制約、部分一意インデックス、置く操作のSQLを本物のPostgreSQLで確かめる。psqlの経路で値の束縛と読み取り専用の接続も確かめる |
 
 実DBの検査のうち、制約と文の検査は、値を定数として埋め込む検査用のクライアントで流す。
-CLIの経路は、`hold_psql.ts`に使い捨てのデータベース(`factory_test`)を渡して流す。
+CLIの経路は、`hold_psql.ts`に使い捨てのデータベースを渡して流す。
 本番のデータベースには書かない。
 どちらも、`wmill.datatable()`の束縛の経路は通らない。
 

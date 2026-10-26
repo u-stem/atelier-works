@@ -143,7 +143,7 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
 - `timezone`は`Asia/Tokyo`にする。cronはWindmillの6フィールド形式(秒から始まる)で書く。
 - Consoleが呼ぶscriptにだけ、`.script.yaml`に`tag: console`を付ける。
   Console用worker(ワーカーグループ`console`)がこのtagを受ける。
-  対象は次の10本である。
+  対象は次の13本である。
   - `steps/console_query`
   - `approval_decide`
   - `retry_work_item`
@@ -154,13 +154,16 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
   - `console_holds`
   - `hold_release`
   - `freeze_release`
+  - `console_jobs`
+  - `console_schedules`
+  - `console_config`
 
   長いClaudeのジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
   ほかのscriptには付けない。
   付けると、defaultのworkerは受けないので、仕事がqueueに溜まる。
 - `tag: console`を付けたscriptには、`timeout`(秒)も付ける。
   Console用workerの枠は1つしかなく、DBのロック待ちなどで1件止まると、ほかのジョブが待つためである。
-  10本の値は`tests/scripts/console_script_tags.test.ts`が固定する。
+  13本の値は`tests/scripts/console_script_tags.test.ts`が固定する。
   `wmill generate-metadata`は`tag`と`timeout`を消さない。
 - 多重実行の防止にadvisory lockは使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回の実行中はスキップさせる。
 - 複数のインスタンスを同時に運用する場合の排他は、Windmill側ではなくGitHub側のclaimで行う。

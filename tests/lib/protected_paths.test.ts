@@ -1450,6 +1450,71 @@ describe("hold command files", () => {
   });
 });
 
+// ジョブ、schedule、設定を読むscriptと、その許可表、伏せ字の部品、操作の記録の部品は、
+// 書き換えられると、Consoleに返す項目が増えたり、ログの伏せ字が外れたり、記録の順序が崩れたりする。
+// 返す項目と境界の検査も、同じ理由で守る。
+describe("console job viewing files", () => {
+  const PATHS = [
+    "f/factory/console_jobs.ts",
+    "f/factory/console_jobs.script.yaml",
+    "f/factory/console_schedules.ts",
+    "f/factory/console_schedules.script.yaml",
+    "f/factory/console_config.ts",
+    "f/factory/console_config.script.yaml",
+    "f/factory/lib/console_redact.ts",
+    "f/factory/lib/console_redact.script.yaml",
+    "f/factory/lib/console_known_paths.ts",
+    "f/factory/lib/console_known_paths.script.yaml",
+    "f/factory/lib/console_actions.ts",
+    "f/factory/lib/console_actions.script.yaml",
+    "f/factory/lib/approver.ts",
+    "f/factory/lib/approver.script.yaml",
+    "scripts/gen-console-known-paths.ts",
+    "scripts/test-db-console-actions.ts",
+    "console/src/api/windmill.ts",
+    "console/src/api/windmill.test.ts",
+    "tests/lib/console_redact.test.ts",
+    "tests/lib/console_actions.test.ts",
+    "tests/scripts/console_jobs.test.ts",
+    "tests/scripts/console_schedules.test.ts",
+    "tests/scripts/console_config.test.ts",
+    "tests/scripts/console_known_paths.test.ts",
+    "tests/scripts/console_actions_migration.test.ts",
+    "tests/scripts/console_jobs_contract.test.ts",
+    "tests/scripts/console_write_contract.test.ts",
+    "tests/scripts/console_worker_boundary.test.ts",
+    "tests/scripts/console_script_tags.test.ts",
+    "tests/scripts/worker_boundary_scan.ts",
+    "migrations/datatable/main/20261026140000_console_actions.up.sql",
+    "migrations/datatable/main/20261026140000_console_actions.down.sql",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  // windmill-clientを含むlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるので守らない。
+  test.each([
+    "f/factory/console_jobs.script.lock",
+    "f/factory/console_schedules.script.lock",
+    "f/factory/console_config.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // Consoleから保留と凍結を解除するscriptと、その部品、テストは、書き換えられると、他の主体の保留を
 // 無条件に外せる。CLIを守っているのと同じ理由で守る。読み取りだけの`console_holds.ts`は守らない。
 describe("console release files", () => {

@@ -258,6 +258,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `issue_proposals` | Issue化の提案の題名と本文、決定の履歴 |
 | `audit_reports` | 監査1回のレポート。作業項目と1対1に対応する |
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
+| `console_actions` | Consoleから行った操作の記録。操作者、操作の名前、対象、変えたキーと値、結果、時刻を持つ。保持は90日。改ざんに耐えない([セキュリティ](security.md#操作の記録)) |
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
 | `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
@@ -323,7 +324,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の10本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の13本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -335,6 +336,9 @@ Consoleの一覧と集計は次のviewを読む。
 - `console_holds`
 - `hold_release`
 - `freeze_release`
+- `console_jobs`
+- `console_schedules`
+- `console_config`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
@@ -461,6 +465,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
 | `f/factory/lib/console_holds_support` | script | [LIB] Consoleの保留と凍結の画面の整形と解除の共通部品 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
+| `f/factory/lib/console_actions` | script | [LIB] Consoleの操作の記録 |
 | `f/factory/lib/console_support` | script | [LIB] Consoleの通知の重要度 |
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |
 | `f/factory/lib/db` | script | [LIB] Data Tableアクセス |
@@ -512,6 +517,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
+| `f/factory/lib/console_redact` | script | [LIB] ジョブのログと結果の伏せ字 |
 | `f/factory/lib/freezes` | script | [LIB] スケジュールの凍結の純粋ロジック |
 | `f/factory/lib/freeze_apply` | script | [LIB] スケジュールの凍結の読み込みと追従 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
@@ -550,6 +556,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |
 | `f/factory/lib/prose_check` | script | [LIB] 文章の検査 |
+| `f/factory/lib/console_known_paths` | script | [LIB] 既知のscript pathの定数(生成物) |
 | `f/factory/lib/summary_support` | script | [LIB] 日次サマリの集計 |
 | `f/factory/lib/check_runner` | script | [LIB] 検査コマンドの実行 |
 | `f/factory/lib/check_sandbox` | script | [LIB] 検査コマンドの実行ユーザーの切り替え |
@@ -578,6 +585,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
+| `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |
+| `f/factory/console_schedules` | script | [OP-0-4] scheduleの状態を取得 |
+| `f/factory/console_config` | script | [OP-0-5] factory_configを取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |

@@ -43,6 +43,9 @@ describe("SCRIPT_PATHS", () => {
       "notice_resolve",
       "hold_release",
       "freeze_release",
+      "console_jobs",
+      "console_schedules",
+      "console_config",
     ]);
   });
 
@@ -57,6 +60,9 @@ describe("SCRIPT_PATHS", () => {
       console_holds: "f/factory/console_holds",
       hold_release: "f/factory/hold_release",
       freeze_release: "f/factory/freeze_release",
+      console_jobs: "f/factory/console_jobs",
+      console_schedules: "f/factory/console_schedules",
+      console_config: "f/factory/console_config",
     });
   });
 });
@@ -71,6 +77,9 @@ describe("isScriptName", () => {
     "console_holds",
     "hold_release",
     "freeze_release",
+    "console_jobs",
+    "console_schedules",
+    "console_config",
   ])("accepts the allowed name %s", (name) => {
     expect(isScriptName(name)).toBe(true);
   });

@@ -170,6 +170,16 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 単純な誤りでは検査を通らない。
  * `scripts/test-db.sh`は、日常的に直すので守らない。代わりに、`hold_wiring.test.ts`が、
  * `scripts/test-db-holds.ts`を呼ぶ位置を固定する。
+ * ジョブ、schedule、設定を読むscript(`console_jobs.ts`、`console_schedules.ts`、`console_config.ts`)と、
+ * ログと結果の伏せ字の部品(`lib/console_redact.ts`)、リポジトリの定義から生成した既知pathの定数(`lib/console_known_paths.ts`)と
+ * その生成の道具(`scripts/gen-console-known-paths.ts`)、操作の記録の部品(`lib/console_actions.ts`。保持の日数の定数を含む)、
+ * 操作者を導く`lib/approver.ts`、それぞれの`.script.yaml`、記録の表を作るmigration2本も守る。
+ * 返す項目の許可表、伏せ字の規則、記録の順序とfail-closedは、書き換えられるとConsoleに返す内容と、記録の信頼が変わる。
+ * Console用workerの許可リスト(`console/src/api/windmill.ts`)と、その検査(`console/src/api/windmill.test.ts`、
+ * `tests/scripts/console_write_contract.test.ts`、`console_jobs_contract.test.ts`、`console_worker_boundary.test.ts`、
+ * `console_script_tags.test.ts`、`worker_boundary_scan.ts`)、各部品のテストも、同じ理由で守る。
+ * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
+ * 一緒に書き換わるので守らない。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
@@ -265,6 +275,38 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/hold_psql.test.ts",
   "migrations/datatable/main/20261023131355_holds.up.sql",
   "migrations/datatable/main/20261023131355_holds.down.sql",
+  "f/factory/console_jobs.ts",
+  "f/factory/console_jobs.script.yaml",
+  "f/factory/console_schedules.ts",
+  "f/factory/console_schedules.script.yaml",
+  "f/factory/console_config.ts",
+  "f/factory/console_config.script.yaml",
+  "f/factory/lib/console_redact.ts",
+  "f/factory/lib/console_redact.script.yaml",
+  "f/factory/lib/console_known_paths.ts",
+  "f/factory/lib/console_known_paths.script.yaml",
+  "f/factory/lib/console_actions.ts",
+  "f/factory/lib/console_actions.script.yaml",
+  "f/factory/lib/approver.ts",
+  "f/factory/lib/approver.script.yaml",
+  "scripts/gen-console-known-paths.ts",
+  "scripts/test-db-console-actions.ts",
+  "console/src/api/windmill.ts",
+  "console/src/api/windmill.test.ts",
+  "tests/lib/console_redact.test.ts",
+  "tests/lib/console_actions.test.ts",
+  "tests/scripts/console_jobs.test.ts",
+  "tests/scripts/console_schedules.test.ts",
+  "tests/scripts/console_config.test.ts",
+  "tests/scripts/console_known_paths.test.ts",
+  "tests/scripts/console_actions_migration.test.ts",
+  "tests/scripts/console_jobs_contract.test.ts",
+  "tests/scripts/console_write_contract.test.ts",
+  "tests/scripts/console_worker_boundary.test.ts",
+  "tests/scripts/console_script_tags.test.ts",
+  "tests/scripts/worker_boundary_scan.ts",
+  "migrations/datatable/main/20261026140000_console_actions.up.sql",
+  "migrations/datatable/main/20261026140000_console_actions.down.sql",
   "scripts/host-apply.ts",
   "scripts/host-apply.sh",
   "scripts/host-install.sh",
