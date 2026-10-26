@@ -76,7 +76,7 @@ export function describeTriggerEnv(env: JobEnv): TriggerEnvSummary {
 }
 
 // ---------------------------------------------------------------------------
-// assertBranchMatches:ensureFactoryCloneの事後条件の多層防御としての検査
+// assertBranchMatches: ensureFactoryCloneの事後条件の多層防御としての検査
 // ---------------------------------------------------------------------------
 
 /**
