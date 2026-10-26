@@ -75,3 +75,12 @@ export function buildDesignDocDir(
   }
   return `${workItemDir}/design/req-${String(attempt)}/attempt-${String(designAttempt)}`;
 }
+
+/** 設計書が読む対象リポジトリの、読み取り専用のdetachedなworktreeのパスを返す。 */
+export function buildDesignWorktreeDir(
+  _owner: string,
+  _repo: string,
+  _issueNumber: number,
+): string {
+  return "";
+}

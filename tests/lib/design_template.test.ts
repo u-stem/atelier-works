@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildDesignDocDir,
+  buildDesignWorktreeDir,
   DESIGN_ID_PATTERN,
   DESIGN_MD_FILENAME,
   DESIGN_SECTIONS,
@@ -131,5 +132,35 @@ describe("buildDesignDocDir", () => {
 
   test("rejects a non-integer design attempt", () => {
     expect(() => dir({ designAttempt: 1.5 })).toThrow(/designAttempt/);
+  });
+});
+
+describe("buildDesignWorktreeDir", () => {
+  test("builds the design-<issue_number> path next to the main clone", () => {
+    expect(buildDesignWorktreeDir("octo-owner", "atelier-works", 42)).toBe(
+      "/workspaces/octo-owner/atelier-works/design-42",
+    );
+  });
+
+  test("throws on an invalid owner name", () => {
+    expect(() =>
+      buildDesignWorktreeDir("../etc", "atelier-works", 42),
+    ).toThrow();
+  });
+
+  test("throws on an invalid repo name", () => {
+    expect(() => buildDesignWorktreeDir("octo-owner", "a/b", 42)).toThrow();
+  });
+
+  test("rejects a negative issue number", () => {
+    expect(() =>
+      buildDesignWorktreeDir("octo-owner", "atelier-works", -1),
+    ).toThrow(/issueNumber/);
+  });
+
+  test("rejects a non-integer issue number", () => {
+    expect(() =>
+      buildDesignWorktreeDir("octo-owner", "atelier-works", 1.5),
+    ).toThrow(/issueNumber/);
   });
 });
