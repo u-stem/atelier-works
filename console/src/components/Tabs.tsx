@@ -52,53 +52,58 @@ export function Tabs<Id extends string>({
   };
 
   return (
-    <div
-      role="tablist"
-      aria-label={label}
-      className="flex gap-1 overflow-x-auto border-b border-border px-4 md:px-8"
-    >
-      {tabs.map((tab, index) => {
-        const isSelected = tab.id === selected;
-        return (
-          <button
-            key={tab.id}
-            ref={(element) => {
-              refs.current[index] = element;
-            }}
-            id={tabDomId(idPrefix, tab.id)}
-            type="button"
-            role="tab"
-            aria-selected={isSelected}
-            aria-controls={tab.panelId}
-            tabIndex={isSelected ? 0 : -1}
-            onClick={() => {
-              onSelect(tab.id);
-            }}
-            onKeyDown={(event) => {
-              onKeyDown(event, index);
-            }}
-            className={cn(
-              "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 whitespace-nowrap py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isSelected
-                ? "border-primary font-semibold text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {tab.label}
-            {tab.count === undefined ? null : (
-              <span className="rounded-md bg-foreground/10 px-1.5 text-caption font-medium tabular-nums">
-                {tab.count}
-              </span>
-            )}
-            {tab.mark === undefined ? null : (
-              <span className="inline-flex items-center gap-1 text-caption font-normal text-failure">
-                <TriangleAlert aria-hidden="true" className="size-3.5" />
-                {tab.mark}
-              </span>
-            )}
-          </button>
-        );
-      })}
+    // 罫線は外側の要素に引く。タブの下線(2px)を罫線の上に重ねるため、帯を1px下げる。
+    // 帯がスクロール枠(overflow-x)になると、縦の既定もautoになり、はみ出した1pxで縦に動く。
+    // タブ自身を下げずに帯ごと下げて、タブを帯の中に収め、縦はhiddenにする。
+    <div className="border-b border-border px-4 md:px-8">
+      <div
+        role="tablist"
+        aria-label={label}
+        className="-mb-px flex gap-1 overflow-x-auto overflow-y-hidden"
+      >
+        {tabs.map((tab, index) => {
+          const isSelected = tab.id === selected;
+          return (
+            <button
+              key={tab.id}
+              ref={(element) => {
+                refs.current[index] = element;
+              }}
+              id={tabDomId(idPrefix, tab.id)}
+              type="button"
+              role="tab"
+              aria-selected={isSelected}
+              aria-controls={tab.panelId}
+              tabIndex={isSelected ? 0 : -1}
+              onClick={() => {
+                onSelect(tab.id);
+              }}
+              onKeyDown={(event) => {
+                onKeyDown(event, index);
+              }}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 whitespace-nowrap py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                isSelected
+                  ? "border-primary font-semibold text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tab.label}
+              {tab.count === undefined ? null : (
+                <span className="rounded-md bg-foreground/10 px-1.5 text-caption font-medium tabular-nums">
+                  {tab.count}
+                </span>
+              )}
+              {tab.mark === undefined ? null : (
+                <span className="inline-flex items-center gap-1 text-caption font-normal text-failure">
+                  <TriangleAlert aria-hidden="true" className="size-3.5" />
+                  {tab.mark}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
