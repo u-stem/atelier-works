@@ -684,7 +684,8 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 
 `infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
-`mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
+`mise run up`は、Caddyの確認の後に、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
+その後に、ラベルを付けた自前ビルドの使われていない旧イメージを消す([旧イメージの掃除](operations.md#旧イメージの掃除))。
 `self_update`はこのHEADを毎回読み、通知の版を含むか、ホスト側の作業が要るパスの内容が通知の版と同じなら、通知を解決する。
 通知の解決の後に、通知を解決した回と、再開できる候補が残っている回だけ、`auto_retry_stale_image`を別のジョブで起動する。
 候補が無い回に起動しないのは、何もしないジョブが2分ごとにジョブ履歴とqueueを埋めるためである。
