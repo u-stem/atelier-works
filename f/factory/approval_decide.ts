@@ -4,6 +4,7 @@
 // 決定は`decideApprovalRequestIfPending`(不可分な比較交換)で行に記録し、
 // 実際のGitHubやDBへの副作用は、種別ごとのハンドラscript(`handlerPathFor`)に
 // `wmill.runScriptByPathAsync`で任せる。再開を待つ中断中のフローは無い。
+// 処理先は、行を読んだ直後、記録とIssueの確認より前に引く。処理先が無い種別の判断は、記録せずに断る。
 //
 // 記録する承認者は、呼び出し側が渡す文字列ではなく、ジョブのWindmill実行文脈
 // (`WM_USERNAME`、無ければ`WM_EMAIL`。`deriveApprover`を参照)から導く。
@@ -201,31 +202,23 @@ export type ApprovalDecideCall = {
   readonly options: Record<string, unknown>;
 };
 
+/**
+ * 判断を記録し、種別ごとのハンドラを起動する。
+ * 処理先(`handlerPathFor`)は、行を読んだ直後、既存の判断の照合とIssueの確認より前に引く。
+ * 処理先が無い種別(ハンドラを足すまでの`design`)は、判断を記録する前に断る。
+ * 記録した後に処理先が無いと分かると、記録だけが残って反映されない状態になるためで、
+ * 記録済みの依頼の再起動でも同じ位置を通る。
+ */
 export async function decideApproval(
-  _deps: ApprovalDecideDeps,
-  _call: ApprovalDecideCall,
+  deps: ApprovalDecideDeps,
+  call: ApprovalDecideCall,
 ): Promise<ApprovalDecideResult> {
-  return { ok: false, status: "", job_id: "" };
-}
-
-export async function main(
-  approval_request_id: number,
-  decision: string,
-  reason: string,
-  note: string,
-  options: Record<string, unknown> = {},
-): Promise<ApprovalDecideResult> {
-  if (!isOneOf(decision, DECISIONS)) {
-    throw new Error(
-      `approval_decide: "decision" must be "approve" or "reject" (got ${JSON.stringify(decision)})`,
-    );
-  }
-  assertValidApprovalDecideInput({ decision, reason });
-
-  const request = await getApprovalRequest(approval_request_id);
+  const { approval_request_id, decision } = call;
+  const request = await deps.getApprovalRequest(approval_request_id);
   if (request === null) {
     throw new Error(missingApprovalRequestMessage(approval_request_id));
   }
+  const handlerPath = handlerPathFor(request.kind);
 
   const recordedStatus = recordedStatusFor(decision);
 
@@ -248,32 +241,21 @@ export async function main(
   if (initialAction === "record_and_dispatch") {
     // 状態を変える記録の前に、必ず確認を済ませる。断られたときは、記録に進まない。
     if (needsIssueCheck(initialAction, decision, request.kind)) {
-      await assertIssueMatchesIntake(
+      await deps.assertIssueMatchesIntake(
         approval_request_id,
         request.work_item_id,
-        {
-          getWorkItem: (id) => getWorkItem(id),
-          getToken: () => wmill.getVariable("f/factory/github_token"),
-          fetchFn: fetch,
-          warn: (message, fields) =>
-            logger("approval_decide").warn(message, fields),
-        },
       );
     }
-    const approver = deriveApprover({
-      WM_USERNAME: process.env.WM_USERNAME,
-      WM_EMAIL: process.env.WM_EMAIL,
-    });
-    const recorded = await decideApprovalRequestIfPending(approval_request_id, {
+    const recorded = await deps.decideIfPending(approval_request_id, {
       status: recordedStatus,
-      decided_by: approver,
-      reason: buildRecordedReason(reason, note),
-      decision_options: options,
+      decided_by: deps.deriveApprover(),
+      reason: buildRecordedReason(call.reason, call.note),
+      decision_options: call.options,
     });
     if (!recorded) {
       // 上の読み取りとこの書き込みの間に他の呼び出しが記録した。
       // 行を読み直し、現在の状態で分類し直す。
-      const current = await getApprovalRequest(approval_request_id);
+      const current = await deps.getApprovalRequest(approval_request_id);
       if (current === null) {
         throw new Error(
           `approval_decide: approval request ${approval_request_id} disappeared mid-decision`,
@@ -283,9 +265,46 @@ export async function main(
     }
   }
 
-  const jobId = await wmill.runScriptByPathAsync(handlerPathFor(request.kind), {
-    approval_request_id,
-  });
+  const jobId = await deps.runHandler(handlerPath, approval_request_id);
 
   return buildApprovalDecideResult(decision, jobId);
+}
+
+export async function main(
+  approval_request_id: number,
+  decision: string,
+  reason: string,
+  note: string,
+  options: Record<string, unknown> = {},
+): Promise<ApprovalDecideResult> {
+  if (!isOneOf(decision, DECISIONS)) {
+    throw new Error(
+      `approval_decide: "decision" must be "approve" or "reject" (got ${JSON.stringify(decision)})`,
+    );
+  }
+  assertValidApprovalDecideInput({ decision, reason });
+
+  return decideApproval(
+    {
+      getApprovalRequest: (id) => getApprovalRequest(id),
+      assertIssueMatchesIntake: (requestId, workItemId) =>
+        assertIssueMatchesIntake(requestId, workItemId, {
+          getWorkItem: (id) => getWorkItem(id),
+          getToken: () => wmill.getVariable("f/factory/github_token"),
+          fetchFn: fetch,
+          warn: (message, fields) =>
+            logger("approval_decide").warn(message, fields),
+        }),
+      deriveApprover: () =>
+        deriveApprover({
+          WM_USERNAME: process.env.WM_USERNAME,
+          WM_EMAIL: process.env.WM_EMAIL,
+        }),
+      decideIfPending: (id, decided) =>
+        decideApprovalRequestIfPending(id, decided),
+      runHandler: (path, requestId) =>
+        wmill.runScriptByPathAsync(path, { approval_request_id: requestId }),
+    },
+    { approval_request_id, decision, reason, note, options },
+  );
 }
