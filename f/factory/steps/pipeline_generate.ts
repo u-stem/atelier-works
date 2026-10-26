@@ -19,6 +19,7 @@ import {
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
+import { hashDirectoryTree, realDirectoryIo } from "../lib/doc_tree_hash.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
@@ -239,22 +240,51 @@ async function collectDocIssues(docDir: string): Promise<string[]> {
 }
 
 export type SnapshotIo = {
+  /** `dir`の内容のハッシュ。ディレクトリが無ければ`null`。 */
   readonly hashTree: (dir: string) => Promise<string | null>;
   readonly readDir: (dir: string) => Promise<string[]>;
   readonly readText: (path: string) => Promise<string>;
 };
 
 export type DocSnapshot = {
+  /** 人が見るために`requirement_drafts.markdown`へ保存する本文。基準値のハッシュに入る内容と同じ時点のもの。 */
   readonly markdown: string;
   readonly diagramFiles: string[];
+  /** 承認の後の照合で基準値になる、ディレクトリの内容のハッシュ。 */
   readonly docHash: string;
 };
 
+/**
+ * 保存する下書きの本文と図の一覧と、照合の基準値になるハッシュを、同じ時点の内容から取る。
+ * ハッシュ、`requirements.md`と図の一覧の読み取り、ハッシュの順に行い、前後が違えば保存させない。
+ * 本文だけを先に読むと、DBの本文とディスクの内容が別の時点のものになり、基準値が人の見た内容を指さなくなるためである。
+ * ハッシュを取れない(ディレクトリが無い)ときも、基準値を持たない下書きを作らないために失敗させる。
+ */
 export async function snapshotDocDir(
-  _docDir: string,
-  _io: SnapshotIo,
+  docDir: string,
+  io: SnapshotIo,
 ): Promise<DocSnapshot> {
-  return { markdown: "", diagramFiles: [], docHash: "" };
+  const before = await io.hashTree(docDir);
+  if (before === null) {
+    failGeneration(
+      "doc_hash_unavailable",
+      `the requirements directory does not exist, so there is no baseline hash to save: ${docDir}`,
+    );
+  }
+  const diagramFiles = listDiagramFiles(await io.readDir(docDir));
+  const markdown = await readDocFile(
+    docDir,
+    REQUIREMENTS_MD_FILENAME,
+    io.readText,
+  );
+  const after = await io.hashTree(docDir);
+  if (after !== before) {
+    failGeneration(
+      "doc_changed_during_save",
+      `the requirements directory changed while it was being saved: ${docDir}`,
+    );
+  }
+  return { markdown, diagramFiles, docHash: before };
 }
 
 /**
@@ -281,6 +311,8 @@ export async function snapshotDocDir(
  * `factory.requirement_drafts.diagrams`には図ごとに`{name, file}`を保存し、XMLは保存しない。
  * doc dir自体も`doc_dir`に記録し、後で読む側(`cleanup_db.ts`など)が
  * ファイルを見つけられるようにする。
+ * 承認の後に書き換えを検出できるよう、保存する本文と同じ時点のdoc dirの内容のハッシュを
+ * `doc_hash`に基準値として保存する(`snapshotDocDir`)。
  */
 export async function main(
   work_item_id: number,
@@ -433,12 +465,6 @@ export async function main(
       await removePath(`${docDir}/${stray}`);
     }
 
-    const markdown = await readDocFile(
-      docDir,
-      REQUIREMENTS_MD_FILENAME,
-      readTextFile,
-    );
-
     const issues = await collectDocIssues(docDir);
     if (issues.length > 0) {
       failGeneration(
@@ -446,7 +472,13 @@ export async function main(
         buildGenerateFailureMessage(issues),
       );
     }
-    const registerIssues = documentRegisterIssues(markdown);
+    // 出力ディレクトリの守りを済ませた後の内容を、基準値と保存する本文の両方に使う。
+    const snapshot = await snapshotDocDir(docDir, {
+      hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
+      readDir: readDirEntries,
+      readText: readTextFile,
+    });
+    const registerIssues = documentRegisterIssues(snapshot.markdown);
     if (registerIssues.length > 0) {
       log.warn("requirements document breaks the writing rules", {
         work_item_id,
@@ -456,7 +488,7 @@ export async function main(
       });
     }
 
-    const diagrams: Diagram[] = classified.diagramFiles.map((file) => ({
+    const diagrams: Diagram[] = snapshot.diagramFiles.map((file) => ({
       name: diagramNameFromFile(file),
       file,
     }));
@@ -476,11 +508,11 @@ export async function main(
       work_item_id,
       attempt,
       summary: result.structuredOutput.summary,
-      markdown,
+      markdown: snapshot.markdown,
       diagrams,
       open_questions: result.structuredOutput.open_questions,
       doc_dir: docDir,
-      doc_hash: null,
+      doc_hash: snapshot.docHash,
     });
 
     return { outcome: "success" };
