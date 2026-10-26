@@ -238,6 +238,67 @@ describe("realDirectoryIo with hashDirectoryTree", () => {
     Bun.spawnSync(["mkfifo", join(dir, "pipe")]);
     expect(await hashOf(dir)).not.toBe(before);
   });
+
+  test("tells a regular file whose content spells a link apart from the link itself", async () => {
+    const asFile = join(base, "as-file");
+    const asLink = join(base, "as-link");
+    await mkdir(asFile);
+    await mkdir(asLink);
+    await writeFile(join(asFile, "x"), "symlink:/x");
+    await symlink("/x", join(asLink, "x"));
+    expect(await hashOf(asFile)).not.toBe(await hashOf(asLink));
+  });
+
+  test("tells a special file apart from a regular file whose content is the word special", async () => {
+    const asFile = join(base, "as-file");
+    const asSpecial = join(base, "as-special");
+    await mkdir(asFile);
+    await mkdir(asSpecial);
+    await writeFile(join(asFile, "x"), "special");
+    Bun.spawnSync(["mkfifo", join(asSpecial, "x")]);
+    expect(await hashOf(asFile)).not.toBe(await hashOf(asSpecial));
+  });
+
+  test("tells a link apart from a special file", async () => {
+    const asLink = join(base, "as-link");
+    const asSpecial = join(base, "as-special");
+    await mkdir(asLink);
+    await mkdir(asSpecial);
+    await symlink("special", join(asLink, "x"));
+    Bun.spawnSync(["mkfifo", join(asSpecial, "x")]);
+    expect(await hashOf(asLink)).not.toBe(await hashOf(asSpecial));
+  });
+
+  /** `real`と同じ内容の本物のディレクトリを`replica`に作り、`real`を`replica`へのシンボリックリンクに置き換える。 */
+  async function replaceRootWithLink(real: string): Promise<void> {
+    const replica = join(base, "replica");
+    await mkdir(join(replica, "sub"), { recursive: true });
+    await writeFile(join(replica, "a.md"), "A");
+    await writeFile(join(replica, "sub", "c.txt"), "C");
+    await rm(real, { recursive: true, force: true });
+    await symlink(replica, real);
+  }
+
+  test("refuses a root that was replaced with a link to a directory of the same content", async () => {
+    const dir = await tree();
+    await replaceRootWithLink(dir);
+    await expect(hashOf(dir)).rejects.toThrow("symbolic link");
+  });
+
+  test("treats a root replaced with a link as modified, not as a match", async () => {
+    const dir = await tree();
+    const baseline = await hashOf(dir);
+    await replaceRootWithLink(dir);
+    expect(await checkDocTreeHash(dir, baseline, hashOf)).toBe("modified");
+  });
+
+  test("treats a root replaced with a dangling link as modified, not as missing", async () => {
+    const dir = await tree();
+    const baseline = await hashOf(dir);
+    await rm(dir, { recursive: true, force: true });
+    await symlink(join(base, "nowhere"), dir);
+    expect(await checkDocTreeHash(dir, baseline, hashOf)).toBe("modified");
+  });
 });
 
 describe("checkDocTreeHash", () => {
