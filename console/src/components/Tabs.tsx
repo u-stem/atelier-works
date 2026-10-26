@@ -93,6 +93,9 @@ export function Tabs<Id extends string>({
               {tab.label}
               {tab.count === undefined ? null : (
                 <span className="rounded-md bg-foreground/10 px-1.5 text-caption font-medium tabular-nums">
+                  {tab.countLabel === undefined ? null : (
+                    <span className="sr-only">{tab.countLabel}</span>
+                  )}
                   {tab.count}
                 </span>
               )}

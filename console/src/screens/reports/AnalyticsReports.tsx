@@ -210,7 +210,7 @@ export function AnalyticsReports({
   return (
     <section aria-labelledby="analytics-heading">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <h2 id="analytics-heading" className="text-title font-semibold">
+        <h2 id="analytics-heading" className="sr-only">
           分析
         </h2>
         <div className="flex items-center gap-2">

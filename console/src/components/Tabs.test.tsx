@@ -133,7 +133,9 @@ describe("Tabs count label", () => {
   });
 
   test("shows only the number on screen", () => {
-    expect(render("one", WITH_LABEL)).toMatch(/tabular-nums[^>]*>4</);
+    expect(render("one", WITH_LABEL)).toMatch(
+      /tabular-nums[^>]*>(<span[^>]*sr-only[^>]*>要確認<\/span>)?4</,
+    );
   });
 
   test("adds nothing for a count without a meaning", () => {

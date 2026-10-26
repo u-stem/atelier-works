@@ -163,15 +163,19 @@ function OrphanFailureGroupItem({
   group,
   now,
   initialPage,
+  jumpOpen,
 }: {
   group: OrphanFailureGroup;
   now: number;
   initialPage: number | undefined;
+  /** 節へ移るときに開く。 */
+  jumpOpen: boolean;
 }) {
   const pager = usePagination(group.failures.length, PAGE_SIZE, initialPage);
   return (
     <li className="rounded-xl border border-border bg-card px-5 py-3">
       <Disclosure
+        jumpOpen={jumpOpen}
         summary={
           <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <span className="font-mono text-small break-words">
@@ -207,6 +211,7 @@ function OrphanFailureGroupItem({
  * 作業項目に紐づかない失敗を、flowごとにまとめて出す。定期のジョブの失敗で、要対応の一覧には出ない。
  * 組ごとに回数と最新の時刻を出し、開くと失敗を1件ずつ(ステップ、時刻、ジョブ、本文)見られる。
  * 組は最新の失敗が新しい順で、開いた中は10件ずつのページに分ける。操作は置かない。
+ * 節へ移るときは、最新の失敗の組を開く。失敗の本文を、移った先で読めるようにするためである。
  */
 export function OrphanFailureGroups({
   failures,
@@ -228,12 +233,13 @@ export function OrphanFailureGroups({
         {`${String(failures.length)}件、${String(groups.length)}つのflow`}
       </p>
       <ul className="flex flex-col gap-3">
-        {groups.map((group) => (
+        {groups.map((group, index) => (
           <OrphanFailureGroupItem
             key={group.flow}
             group={group}
             now={now}
             initialPage={initialPage}
+            jumpOpen={index === 0}
           />
         ))}
       </ul>

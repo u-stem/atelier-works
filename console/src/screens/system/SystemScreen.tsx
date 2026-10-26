@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useHolds } from "../../api/holdsQueries.ts";
 import { useDeployments, useSummary } from "../../api/queries.ts";
@@ -7,7 +7,7 @@ import {
   useSystemStatus,
 } from "../../api/systemQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import { useMediaQuery } from "../../app/useMediaQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { TabPanel } from "../../components/TabPanel.tsx";
 import { Tabs } from "../../components/Tabs.tsx";
@@ -42,6 +42,12 @@ import { ReleaseStatus } from "./ReleaseStatus.tsx";
 import { SummaryBand } from "./SummaryBand.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { refreshStatusOfSystem } from "./systemRefresh.ts";
+import {
+  needsTabSwitch,
+  type PendingJump,
+  shouldRunJump,
+  systemFailedTabs,
+} from "./systemScreenView.ts";
 import { UpdateHistory } from "./UpdateHistory.tsx";
 import { WorkerLoadCard } from "./WorkerLoadCard.tsx";
 
@@ -201,9 +207,14 @@ function Sections({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-10">{children}</div>;
 }
 
+/** 帯とタブを本文の枠の外に固定する幅。これより狭いときは、枠の中に置いて一緒にスクロールさせる。 */
+const FIXED_HEADER_QUERY = "(min-width: 768px)";
+
 /**
  * システムの画面。Software Factoryの自分自身の状態を、要約の帯と3つのタブに分けて出す。
- * 帯は枠の先頭に置き、タブを替えても見える。各行は結論、段、最終取得時刻を出し、押すと関係するタブの節へ移る。
+ * 帯とタブは、見出しの直下で本文のスクロール枠の外に置く。タブを替えても、本文をスクロールしても、帯が見える。
+ * 幅が狭いときは、帯が画面の大半を占めないよう、枠の中に置いて一緒にスクロールさせる。
+ * 帯のチップは、結論と段を出し、押すと関係するタブの節か、要対応の画面へ移る。
  * タブは状態、失敗と通知、履歴と構成である。開くタブはURLの`?tab=`に持ち、選び直しても履歴を積まない。
  * 4つの取得は画面が持ち、帯とタブが読む。タブの切り替えでは取得しない。節を分けても取得の数は増えない。
  * 選んでいないタブは、初めて開くまで描かない。開いた後は隠して残し、スクロール位置を保つ。
@@ -224,11 +235,11 @@ export function SystemScreen() {
     holds,
   });
   const now = useNow();
+  const fixedHeader = useMediaQuery(FIXED_HEADER_QUERY);
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = parseSystemTab(searchParams.get("tab"));
   const visited = useVisitedTabs(tab);
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const scroll = useTabScroll(tab, () => tabsRef.current?.offsetTop ?? 0);
+  const scroll = useTabScroll(tab);
 
   const rows = summaryBandRows(
     {
@@ -238,61 +249,56 @@ export function SystemScreen() {
     },
     now,
   );
-  // 401は上部のバナーが知らせるので、失敗の印には数えない。
-  const failedOf = (...queries: Parameters<typeof refreshStatusOf>[0][]) =>
-    queries.some((query) => refreshStatusOf(query).isError);
   const tabs = systemTabSpecs(tab, {
     rows,
-    failed: {
-      status: failedOf(status, holds),
-      failures: failedOf(status, summary),
-      history: failedOf(status, deployments),
-    },
+    failed: systemFailedTabs({ status, holds, summary, deployments }),
   });
 
-  // 帯のリンクで移る節。タブを替えて描いた後に移るので、移り先のタブを持つ。
-  const [jump, setJump] = useState<{ tab: SystemTabId; id: string } | null>(
-    null,
-  );
+  // 帯のチップで移る節。タブを替えて描いた後に移るので、移り先のタブを持つ。
+  const [jump, setJump] = useState<PendingJump | null>(null);
   useEffect(() => {
-    if (jump !== null && jump.tab === tab) {
+    if (jump !== null && shouldRunJump(jump, tab)) {
       jumpToSection(jump.id);
       setJump(null);
     }
   }, [jump, tab]);
-  const onJump = (target: SystemTabId, id: string): void => {
-    if (target !== tab) {
-      setSearchParams((current) => withSystemTab(current, target), {
-        replace: true,
-      });
-    }
-    setJump({ tab: target, id });
-  };
-
   const selectTab = (id: SystemTabId): void => {
     setSearchParams((current) => withSystemTab(current, id), {
       replace: true,
     });
   };
+  const onJump = (target: SystemTabId, id: string): void => {
+    if (needsTabSwitch(target, tab)) {
+      selectTab(target);
+    }
+    setJump({ tab: target, id });
+  };
+
+  const header = (
+    <div className={fixedHeader ? undefined : "-mx-4"}>
+      <div className="px-4 py-3 md:px-8">
+        <SummaryBand rows={rows} onJump={onJump} />
+      </div>
+      <Tabs
+        tabs={tabs}
+        selected={tab}
+        onSelect={selectTab}
+        label="システムの節"
+        idPrefix={SYSTEM_TABS.idPrefix}
+      />
+    </div>
+  );
 
   return (
     <>
       <PageHeader title="システム" refresh={refresh} />
+      {fixedHeader ? header : null}
       <div
         ref={scroll.frameRef}
         onScroll={scroll.onScroll}
         className={SCROLL_BODY_CLASS}
       >
-        <SummaryBand rows={rows} onJump={onJump} />
-        <div ref={tabsRef} className="-mx-4 md:-mx-8">
-          <Tabs
-            tabs={tabs}
-            selected={tab}
-            onSelect={selectTab}
-            label="システムの節"
-            idPrefix={SYSTEM_TABS.idPrefix}
-          />
-        </div>
+        {fixedHeader ? null : header}
         <TabPanel
           attrs={systemPanelAttrs("status", tab)}
           mounted={visited.has("status")}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type {
   DeploymentEntry,
   DeploymentPullRequest,
@@ -17,8 +17,6 @@ import { pageSlice } from "../../lib/pagination.ts";
 import {
   failureReasonText,
   HISTORY_PREVIEW_COUNT,
-  hostActionBeyondNote,
-  hostActionBeyondPreview,
   isPullRequestListTruncated,
   pullRequestHref,
   pullRequestTitleText,
@@ -141,9 +139,10 @@ const PAGE_SIZE = 10;
 /**
  * 反映の履歴。新しい順に並べ、反映ごとに日時、版、結果、ホストの作業の要否、含まれるPRを出す。
  * 最初は新しい3件だけを出し、「すべて表示」で全件を開く。全件は10件ずつのページに分け、画面の中で送る。
- * 開く前の3件の外に、ホストの作業が要る反映があるときは、その件数を3件の下に出す。見落とすと、ホストの作業が残るためである。
+ * 切り替えのボタンは1つで、開閉で位置も要素も変えない。作り直すと、押した後にフォーカスが失われるためである。
  * 失敗した反映には、理由の先頭部分を文字としてだけ出す。
  * PRごとに、Software Factoryが作ったか、人が作ったかを示す。作り手が不明なPRには示さない。
+ * ホストの作業が残っているかは、記録の印では分からない(作業が済んでも印は残る)ので、ここでは数えない。
  */
 export function UpdateHistory({
   entries,
@@ -160,6 +159,7 @@ export function UpdateHistory({
 }) {
   const [expanded, setExpanded] = useState(initiallyExpanded);
   const pager = usePagination(entries.length, PAGE_SIZE, initialPage);
+  const baseId = useId();
   if (entries.length === 0) {
     return (
       <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
@@ -168,65 +168,45 @@ export function UpdateHistory({
     );
   }
   const canExpand = entries.length > HISTORY_PREVIEW_COUNT;
-  const beyondNote = hostActionBeyondNote(hostActionBeyondPreview(entries));
-  if (!expanded) {
-    return (
-      <div className="flex flex-col gap-3">
-        <ul className="flex flex-col gap-3">
-          {entries.slice(0, HISTORY_PREVIEW_COUNT).map((entry) => (
-            <DeploymentItem key={entry.deployment_id} entry={entry} now={now} />
-          ))}
-        </ul>
-        {beyondNote === null ? null : (
-          <p className="text-small font-medium text-warning">{beyondNote}</p>
-        )}
-        {canExpand ? (
-          <div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-expanded="false"
-              onClick={() => {
-                setExpanded(true);
-              }}
-            >
-              {`すべて表示(${String(entries.length)}件)`}
-            </Button>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
+  const listId = `${baseId}-list`;
+  const shown = expanded
+    ? pageSlice(entries, pager.page, PAGE_SIZE)
+    : entries.slice(0, HISTORY_PREVIEW_COUNT);
   return (
     <div ref={pager.anchorRef} className="flex flex-col gap-3">
       {canExpand ? (
         <div>
           <Button
+            id={`${baseId}-toggle`}
             type="button"
             variant="outline"
             size="sm"
-            aria-expanded="true"
+            aria-expanded={expanded}
+            aria-controls={listId}
             onClick={() => {
-              setExpanded(false);
+              setExpanded(!expanded);
             }}
           >
-            {`新しい${String(HISTORY_PREVIEW_COUNT)}件だけ表示`}
+            {expanded
+              ? `新しい${String(HISTORY_PREVIEW_COUNT)}件だけ表示`
+              : `すべて表示(${String(entries.length)}件)`}
           </Button>
         </div>
       ) : null}
-      <ul className="flex flex-col gap-3">
-        {pageSlice(entries, pager.page, PAGE_SIZE).map((entry) => (
+      <ul id={listId} className="flex flex-col gap-3">
+        {shown.map((entry) => (
           <DeploymentItem key={entry.deployment_id} entry={entry} now={now} />
         ))}
       </ul>
-      <Pagination
-        page={pager.page}
-        total={entries.length}
-        size={PAGE_SIZE}
-        onPageChange={pager.change}
-        label="更新履歴のページ送り"
-      />
+      {expanded ? (
+        <Pagination
+          page={pager.page}
+          total={entries.length}
+          size={PAGE_SIZE}
+          onPageChange={pager.change}
+          label="更新履歴のページ送り"
+        />
+      ) : null}
     </div>
   );
 }

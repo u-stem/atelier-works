@@ -69,8 +69,8 @@ function renderWithTime(updatedAt: number | undefined): string {
 
 describe("SystemSection time of the fetch", () => {
   test("shows when the values were fetched, next to the heading", () => {
-    expect(renderWithTime(Date.now() - 180_000)).toMatch(
-      /<time[^>]*>取得 3分前/,
+    expect(renderWithTime(Date.now() - 3 * 3_600_000)).toMatch(
+      /<time[^>]*>取得 [23]時間前/,
     );
   });
 
@@ -83,7 +83,7 @@ describe("SystemSection time of the fetch", () => {
   });
 
   test("puts the time before the body", () => {
-    const html = renderWithTime(Date.now() - 180_000);
+    const html = renderWithTime(Date.now() - 3 * 3_600_000);
     expect(html.indexOf("取得 ")).toBeLessThan(html.indexOf("<p>値"));
   });
 });
@@ -137,7 +137,7 @@ describe("SYSTEM_SKELETONS", () => {
 
   test("sizes the update history to its three entries and the button", () => {
     expect(SYSTEM_SKELETONS["update-history-heading"]?.rowClassName).toContain(
-      "h-[35rem]",
+      "h-[33rem]",
     );
   });
 });

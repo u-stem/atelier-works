@@ -97,24 +97,33 @@ export function tabPanelAttrs<Id extends string>(
  * 共通の`Tabs`へ渡す、タブの指定。
  * 取得の失敗の印は、選んでいるタブには付けない。本体が失敗を伝えるためである。
  * 注意の印は、選んでいるかにかかわらず付ける。本体を開いていない間も、見落とさせないためである。
+ * 注意の印を付けるタブの取得が失敗したときは、選んでいても、注意の印に失敗の印を並べる。
+ * 値が前の取得のものだと、読み手に伝えるためである。
  */
 export function tabSpecs<Id extends string>(
   set: TabSet<Id>,
   selected: Id,
   input: TabSpecInput<Id> = {},
 ): ResolvedTabSpec<Id>[] {
-  return set.tabs.map((tab) => ({
-    id: tab.id,
-    label: tab.label,
-    panelId: tabPanelId(set, tab.id),
-    count: input.counts?.[tab.id],
-    countLabel: undefined,
-    mark:
-      input.attention?.[tab.id] ??
-      (tab.id !== selected && input.failed?.[tab.id] === true
-        ? FETCH_FAILED_MARK
-        : undefined),
-  }));
+  return set.tabs.map((tab) => {
+    const attention = input.attention?.[tab.id];
+    const failed = input.failed?.[tab.id] === true;
+    return {
+      id: tab.id,
+      label: tab.label,
+      panelId: tabPanelId(set, tab.id),
+      count: input.counts?.[tab.id],
+      countLabel: input.countLabels?.[tab.id],
+      mark:
+        attention !== undefined
+          ? failed
+            ? `${attention}・${FETCH_FAILED_MARK}`
+            : attention
+          : failed && tab.id !== selected
+            ? FETCH_FAILED_MARK
+            : undefined,
+    };
+  });
 }
 
 /**
