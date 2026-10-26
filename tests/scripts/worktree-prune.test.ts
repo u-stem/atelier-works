@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -59,6 +66,10 @@ function ageFiles(dir: string, minutes: number): void {
     else if (entry.isFile()) utimesSync(path, when, when);
   }
 }
+
+// どのテストも、gitのリポジトリを作ってbashの子プロセスを走らせる。単独でも1件に約1秒かかり、
+// 並列で負荷が高いとbunの既定の5秒を超えて落ちるため、このファイルだけ30秒にする。
+setDefaultTimeout(30_000);
 
 function makeTempRoot(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
