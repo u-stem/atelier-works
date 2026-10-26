@@ -102,8 +102,8 @@ describe("host_action_required", () => {
 });
 
 describe("doc_hash_column_missing", () => {
-  test("is an action notice, which is the severity of a kind that the table does not list", () => {
-    expect(noticeSeverity("doc_hash_column_missing")).toBe("action");
+  test("is listed in the severity table as an action notice", () => {
+    expect(NOTICE_SEVERITY.doc_hash_column_missing).toBe("action");
   });
 
   test("can be resolved from the Console", () => {
@@ -219,6 +219,10 @@ describe("operations.md notice table", () => {
     expect(
       Object.keys(NOTICE_SEVERITY).filter((kind) => !documented.includes(kind)),
     ).toEqual([]);
+  });
+
+  test("documents doc_hash_column_missing", async () => {
+    expect(await documentedNoticeKinds()).toContain("doc_hash_column_missing");
   });
 
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {

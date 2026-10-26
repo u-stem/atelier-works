@@ -306,6 +306,22 @@ describe("noticeGuide", () => {
     ]);
   });
 
+  test("explains the draft saved without the baseline hash", () => {
+    expect(noticeGuide("doc_hash_column_missing")).not.toBe(
+      GENERIC_NOTICE_GUIDE,
+    );
+  });
+
+  test("tells that the self update applies the migration of the baseline column", () => {
+    expect(noticeGuide("doc_hash_column_missing").action).toContain("自己更新");
+  });
+
+  test("tells to recreate the requirements that must be protected", () => {
+    expect(noticeGuide("doc_hash_column_missing").action).toContain(
+      "作り直して",
+    );
+  });
+
   test("has no commands for a kind that needs none", () => {
     expect(noticeGuide("cleanup_db_failed").commands).toEqual([]);
   });
