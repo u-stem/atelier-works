@@ -442,13 +442,16 @@ describe("retention", () => {
   test("deletes the rows older than the cutoff", async () => {
     const calls: Call[] = [];
     const cutoff = new Date("2026-07-28T00:00:00Z");
-    await deleteExpiredActions(cutoff, fakeSql([[{ n: 3 }]], calls));
-    expect(calls[0]?.values).toEqual([cutoff]);
+    await deleteExpiredActions(cutoff, fakeSql([[{ id: 1 }]], calls));
+    expect(calls[0]?.values).toEqual([cutoff.toISOString()]);
   });
 
   test("returns the number of deleted rows", async () => {
-    expect(await deleteExpiredActions(new Date(), fakeSql([[{ n: 3 }]]))).toBe(
-      3,
-    );
+    expect(
+      await deleteExpiredActions(
+        new Date(),
+        fakeSql([[{ id: 1 }, { id: 2 }, { id: 3 }]]),
+      ),
+    ).toBe(3);
   });
 });
