@@ -2,8 +2,8 @@
 // I/Oは持たない。git・wmill CLIのサブプロセス、Data Tableへの記録、
 // Discordへの通知は`self_update.ts`が行う。
 
-import { maskSecrets } from "./log.ts";
-import type { DeploymentRecord } from "./types.ts";
+import { type Logger, maskSecrets } from "./log.ts";
+import type { DeploymentRecord, NoticeRecord } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // decideUpdate: 再デプロイが必要かの判定
@@ -559,3 +559,17 @@ export async function setDeployedSha(
     throw err;
   }
 }
+
+/** 設計の有効化の通知の処理全体の上限(ミリ秒)。 */
+export const DESIGN_NOTICE_CHECK_TIMEOUT_MS = 0;
+
+/** 1回の実行で解決する、設計の有効化の通知の数の上限。 */
+export const DESIGN_NOTICE_RESOLVE_LIMIT = 0;
+
+export async function reconcileDesignEnabledNotice(_deps: {
+  readonly ignored: boolean;
+  readonly addNotice: (record: NoticeRecord) => Promise<unknown>;
+  readonly listUnresolved: () => Promise<readonly { readonly id: number }[]>;
+  readonly resolve: (id: number) => Promise<unknown>;
+  readonly log: Logger;
+}): Promise<void> {}

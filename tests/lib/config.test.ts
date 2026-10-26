@@ -1300,6 +1300,143 @@ describe("pr_conflict_fix_notify_grace_min", () => {
   });
 });
 
+describe("design_enabled", () => {
+  test("defaults to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.design_enabled).toBe(false);
+  });
+
+  test("does not flag the setting as ignored when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.design_enabled_ignored).toBe(false);
+  });
+
+  test("does not flag the setting as ignored when false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: false,
+    });
+    expect(config.design_enabled_ignored).toBe(false);
+  });
+
+  test("reads true as false while the design stage cannot be opened", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+    });
+    expect(config.design_enabled).toBe(false);
+  });
+
+  test("flags a true setting as ignored", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+    });
+    expect(config.design_enabled_ignored).toBe(true);
+  });
+
+  test("does not throw for a true setting", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, design_enabled: true };
+    expect(() => parseFactoryConfig(raw)).not.toThrow();
+  });
+
+  test.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["null", null],
+  ])("throws when design_enabled is %s", (_name, value) => {
+    const raw = { ...LEGACY_RAW_CONFIG, design_enabled: value };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("max_design_attempts", () => {
+  test("defaults to 3 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.max_design_attempts).toBe(3);
+  });
+
+  test("accepts 1", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      max_design_attempts: 1,
+    });
+    expect(config.max_design_attempts).toBe(1);
+  });
+
+  test("accepts 10", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      max_design_attempts: 10,
+    });
+    expect(config.max_design_attempts).toBe(10);
+  });
+
+  test.each([
+    ["zero", 0],
+    ["eleven", 11],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["a string", "3"],
+  ])("throws when max_design_attempts is %s", (_name, value) => {
+    const raw = { ...LEGACY_RAW_CONFIG, max_design_attempts: value };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("checks the range even when design_enabled is false", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: false,
+      max_design_attempts: 0,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("design settings in the resource type", () => {
+  const yaml = readFileSync(
+    join(import.meta.dir, "../../c_factory_config.resource-type.yaml"),
+    "utf8",
+  );
+  const types = readFileSync(join(import.meta.dir, "../../rt.d.ts"), "utf8");
+
+  test("orders design_enabled", () => {
+    expect(yaml).toMatch(/^ {4}- design_enabled$/m);
+  });
+
+  test("orders max_design_attempts", () => {
+    expect(yaml).toMatch(/^ {4}- max_design_attempts$/m);
+  });
+
+  test("defaults design_enabled to false", () => {
+    expect(yaml).toMatch(
+      /^ {4}design_enabled:\n {6}type: boolean\n {6}description: >-\n.*\n {6}default: false$/m,
+    );
+  });
+
+  test("bounds max_design_attempts between 1 and 10 with the default 3", () => {
+    expect(yaml).toMatch(
+      /^ {4}max_design_attempts:\n {6}type: integer\n {6}minimum: 1\n {6}maximum: 10\n {6}description: >-\n.*\n {6}default: 3$/m,
+    );
+  });
+
+  test("does not declare the derived design_enabled_ignored", () => {
+    expect(yaml.includes("design_enabled_ignored")).toBe(false);
+  });
+
+  test("declares design_enabled in the generated types", () => {
+    expect(types).toContain("design_enabled: boolean,");
+  });
+
+  test("declares max_design_attempts in the generated types", () => {
+    expect(types).toContain("max_design_attempts: number,");
+  });
+
+  test("does not declare design_enabled_ignored in the generated types", () => {
+    expect(types.includes("design_enabled_ignored")).toBe(false);
+  });
+});
+
 describe("implement settings (工程3)", () => {
   test("defaults the seven scalar implement settings when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

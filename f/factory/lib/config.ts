@@ -1185,3 +1185,9 @@ export function checkCommandsFor(
   }
   return config.allowed_check_commands;
 }
+
+/** `design_enabled`が偽として読まれたことを知らせる通知の種類。 */
+export const DESIGN_ENABLED_IGNORED_NOTICE_KIND = "";
+
+/** `design_enabled`が偽として読まれたことを知らせる通知の本文。 */
+export const DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE = "";

@@ -322,6 +322,20 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("explains the design setting that is read as false", () => {
+    expect(noticeGuide("design_enabled_ignored")).not.toBe(
+      GENERIC_NOTICE_GUIDE,
+    );
+  });
+
+  test("tells to put design_enabled back to false", () => {
+    expect(noticeGuide("design_enabled_ignored").action).toContain("falseに戻");
+  });
+
+  test("tells that the self update resolves the design setting notice", () => {
+    expect(noticeGuide("design_enabled_ignored").note).toContain("自動で解決");
+  });
+
   test("has no commands for a kind that needs none", () => {
     expect(noticeGuide("cleanup_db_failed").commands).toEqual([]);
   });

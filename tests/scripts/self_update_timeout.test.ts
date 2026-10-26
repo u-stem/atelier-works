@@ -99,10 +99,13 @@ describe("self_update timeout", () => {
     );
     // 凍結の段は、段ごとの1つの上限で包み、区切った呼び出しの数に数えない(最悪の長さに段の数を足す)。
     const freezePhases = count(source, /withCallTimeout\(\s*"freeze /g);
+    // 通知の処理は、全体を1つの上限で包み、区切った呼び出しの数に数えない(最悪の長さに上限を1回足す)。
+    const designNotice = count(source, /withCallTimeout\(\s*"design notice /g);
     const sites =
       count(source, /withCallTimeout\(/g) -
       notify -
-      freezePhases +
+      freezePhases -
+      designNotice +
       (HOST_ACTION_RECONCILE_LIMIT - 1) * resolveSites +
       2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g) +
@@ -159,6 +162,23 @@ describe("self_update timeout", () => {
     const source = await selfUpdateSource();
 
     expect(count(source, /\brunCommand\(/g)).toBe(1);
+  });
+
+  test("the design notice check is bounded once", async () => {
+    const source = await selfUpdateSource();
+
+    expect(count(source, /withCallTimeout\(\s*"design notice /g)).toBe(1);
+  });
+
+  test("the design notice check is counted once in the worst case", async () => {
+    const source = await Bun.file("f/factory/self_update.ts").text();
+    const start = source.indexOf("export const SELF_UPDATE_WORST_CASE_MS");
+
+    expect(
+      source
+        .slice(start, source.indexOf(";", start))
+        .match(/DESIGN_NOTICE_CHECK_TIMEOUT_MS/g)?.length,
+    ).toBe(1);
   });
 
   test("the freeze phase count matches the call sites", async () => {

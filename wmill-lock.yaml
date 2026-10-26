@@ -47,7 +47,7 @@ locks:
   f/factory/lib/claude: c729ad2c468d5b832b27fe65c7d81c5ed9ee22187240c449c299e5c56a91b626
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 3b97f5ee699012babd490ff9a070aa573aeabb45577923723b55760b12af1545
-  f/factory/lib/config: 14a445bb86077fe5cbc1e6b7da80a8da32de00b03b96f290544105d852bf919c
+  f/factory/lib/config: a0232d8c45cb6ae3503496060f475223cae5d2e794dc68c0ea42d63f08c070fc
   f/factory/lib/conflict_fix_apply: 73deb37f4bde7db94d3e03292daba0602cbc0bc72738f8352683add161e9a3bb
   f/factory/lib/conflict_fix_prompt: 5213e3c137bac55c2d77741241d8cc4193547984baf6af59d8ef1887c7aaa23f
   f/factory/lib/conflict_fix_round: 768797a74aa4136b43ffd91fdc8bb6c46a6240778269f6ecdbcabe7ba7057ce7
@@ -145,7 +145,7 @@ locks:
   f/factory/lib/schedule_failure_report: 65ab0dbafe16daed08eea9d29fa0d314264c212dcf87e3e7fdcf1beecd648bc3
   f/factory/lib/schedule_failure_scan: 75af17ce22ab9ed41b7ba4abaecf54d991f5d192ba3dc3bbfc24a00702c62cb7
   f/factory/lib/self_update_pull_requests: b21a5d10d4d5900d7bebaad33b711e71d50461ff3747fd59c54dca63426674d0
-  f/factory/lib/self_update_support: e3c488157695821adfe8f9c210cb8042c7664c10b47ace73740836b5076a218b
+  f/factory/lib/self_update_support: c8ecc98c87bb4c385a4e31b42ea50744ca21a1774b1e4e306a627ca9d649cd1c
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
   f/factory/lib/types: 1226f84422e0fe61a430ef24fbe91d706987131c41f5d00c8b609663514c9da8

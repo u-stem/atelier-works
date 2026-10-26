@@ -111,6 +111,16 @@ describe("doc_hash_column_missing", () => {
   });
 });
 
+describe("design_enabled_ignored", () => {
+  test("is listed in the severity table as an action notice", () => {
+    expect(NOTICE_SEVERITY.design_enabled_ignored).toBe("action");
+  });
+
+  test("cannot be resolved from the Console", () => {
+    expect(isNoticeResolvable("design_enabled_ignored")).toBe(false);
+  });
+});
+
 describe("merge hold notices", () => {
   test("the notice that pull requests wait for a hold needs no action", () => {
     expect(noticeSeverity("dependabot_merge_held")).toBe("info");
@@ -164,20 +174,21 @@ describe("INFO_NOTICE_KINDS", () => {
 });
 
 describe("UNRESOLVABLE_NOTICE_KINDS", () => {
-  test("contains the security-related kinds", () => {
+  test("contains the security-related kinds and the ignored design setting", () => {
     expect([...UNRESOLVABLE_NOTICE_KINDS].sort()).toEqual([
+      "design_enabled_ignored",
       "fix_feedback_association_excluded",
       "labeler_denied",
       "unsandboxed_check_commands",
     ]);
   });
 
-  test("is a subset of the info kinds", () => {
+  test("leaves only the self-resolved design setting outside the info kinds", () => {
     expect(
-      UNRESOLVABLE_NOTICE_KINDS.every((kind) =>
-        INFO_NOTICE_KINDS.includes(kind),
+      UNRESOLVABLE_NOTICE_KINDS.filter(
+        (kind) => !INFO_NOTICE_KINDS.includes(kind),
       ),
-    ).toBe(true);
+    ).toEqual(["design_enabled_ignored"]);
   });
 });
 
@@ -223,6 +234,10 @@ describe("operations.md notice table", () => {
 
   test("documents doc_hash_column_missing", async () => {
     expect(await documentedNoticeKinds()).toContain("doc_hash_column_missing");
+  });
+
+  test("documents design_enabled_ignored", async () => {
+    expect(await documentedNoticeKinds()).toContain("design_enabled_ignored");
   });
 
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {
