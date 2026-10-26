@@ -1,4 +1,4 @@
-import { Snowflake } from "lucide-react";
+import { Pause, Snowflake } from "lucide-react";
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
 import type {
   SchedulesSnapshotView,
@@ -14,6 +14,7 @@ import {
   frozenScheduleTargets,
   jobsBackState,
   SCHEDULES_TRUNCATED_NOTE,
+  safeText,
 } from "../../lib/jobsView.ts";
 import { EmptyNote } from "../system/SystemSection.tsx";
 import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
@@ -29,11 +30,13 @@ function ScheduleRow({
   frozen: ReadonlySet<string> | null;
   now: number;
 }) {
-  const row = describeSchedule(schedule, frozen);
+  const row = describeSchedule(schedule, frozen, now);
   return (
     <li className="flex flex-col gap-1.5 px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="min-w-0 font-medium break-all">{row.name}</span>
+        <span className="min-w-0 font-medium break-all">
+          {safeText(row.name)}
+        </span>
         <Badge variant={row.enabled ? "success" : "muted"}>
           {row.enabledLabel}
         </Badge>
@@ -43,10 +46,16 @@ function ScheduleRow({
             凍結中
           </Badge>
         ) : null}
+        {row.pausedLabel === null ? null : (
+          <Badge variant="warning">
+            <Pause aria-hidden="true" />
+            {row.pausedLabel}
+          </Badge>
+        )}
       </div>
       <p className="font-mono text-small break-all text-muted-foreground">
-        {schedule.schedule}
-        <span className="font-sans"> ({schedule.timezone})</span>
+        {safeText(schedule.schedule)}
+        <span className="font-sans"> ({safeText(schedule.timezone)})</span>
       </p>
       <p className="flex flex-wrap gap-x-4 gap-y-0.5 text-small text-muted-foreground tabular-nums">
         {row.nextRunAt === null ? (
@@ -56,25 +65,32 @@ function ScheduleRow({
             <UpcomingTime iso={row.nextRunAt} now={now} prefix="次回 " />
           </span>
         )}
-        {row.lastRun === null ? (
+        {row.recentRuns.length === 0 ? (
           <span>実行の記録はありません</span>
         ) : (
-          <span className="inline-flex flex-wrap items-center gap-x-2">
+          <span className="inline-flex flex-wrap items-center gap-x-3">
             直近
-            <JobLink
-              jobId={row.lastRun.jobId}
-              label={row.lastRun.label}
-              state={BACK}
-            />
-            <span>{row.lastRun.durationLabel}</span>
+            {row.recentRuns.map((run) => (
+              <span
+                key={run.jobId}
+                className="inline-flex items-center gap-x-1.5"
+              >
+                <JobLink jobId={run.jobId} label={run.label} state={BACK} />
+                <span>{run.durationLabel}</span>
+              </span>
+            ))}
           </span>
         )}
       </p>
       {row.definitionNote === null ? null : (
-        <p className="text-small text-warning">{row.definitionNote}</p>
+        <p className="text-small break-words text-warning">
+          {safeText(row.definitionNote)}
+        </p>
       )}
       {row.error === null ? null : (
-        <p className="text-small break-words text-failure">{row.error}</p>
+        <p className="overflow-hidden text-small break-words text-failure">
+          {safeText(row.error)}
+        </p>
       )}
     </li>
   );
@@ -97,9 +113,6 @@ export function ScheduleList({
   const frozen = frozenScheduleTargets(holds.data, now);
   return (
     <div className="flex max-w-4xl flex-col gap-3">
-      <p className="text-small text-muted-foreground">
-        Windmillのscheduleの状態です。有効か無効か、次回の予定、直近の実行、凍結されているかを示し、定義と違う項目があれば添えます。自動では更新しません。
-      </p>
       <JobsQueryGate
         query={schedules}
         title="スケジュールを取得できませんでした"
@@ -130,7 +143,7 @@ export function ScheduleList({
                   <p>リポジトリにあり、Windmillに無いscheduleがあります。</p>
                   <ul className="list-inside list-disc break-all">
                     {data.missing_in_workspace.map((path) => (
-                      <li key={path}>{path}</li>
+                      <li key={path}>{safeText(path)}</li>
                     ))}
                   </ul>
                 </AlertDescription>

@@ -65,7 +65,11 @@ export function jobsTabSpecs(
 
 /** タブごとに、取得を始めてよいか。開いたことのあるタブだけを取得する。 */
 export function jobsFetchPlan(
-  _visited: ReadonlySet<JobsTabId>,
+  visited: ReadonlySet<JobsTabId>,
 ): Readonly<Record<JobsTabId, boolean>> {
-  return { active: true, history: true, schedules: true };
+  return {
+    active: visited.has("active"),
+    history: visited.has("history"),
+    schedules: visited.has("schedules"),
+  };
 }

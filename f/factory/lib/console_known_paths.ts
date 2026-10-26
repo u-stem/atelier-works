@@ -248,4 +248,30 @@ export const REPO_SCHEDULES: readonly RepoSchedule[] = [
   },
 ];
 
-export const HISTORY_FILTER_PATHS: readonly string[] = [];
+export const HISTORY_FILTER_PATHS: readonly string[] = [
+  "f/factory/audit",
+  "f/factory/auto_retry_pr_review",
+  "f/factory/auto_retry_stale_image",
+  "f/factory/cleanup_db",
+  "f/factory/cleanup_workspaces",
+  "f/factory/collect_github",
+  "f/factory/default_worker_watch",
+  "f/factory/dependabot",
+  "f/factory/design",
+  "f/factory/detect_schedule_failures",
+  "f/factory/drawio_viewer_bump",
+  "f/factory/implement",
+  "f/factory/manual_intake",
+  "f/factory/notify_daily_summary",
+  "f/factory/pipeline",
+  "f/factory/poll_dependabot",
+  "f/factory/poll_issues",
+  "f/factory/poll_prs",
+  "f/factory/pr_fix",
+  "f/factory/pr_review",
+  "f/factory/sample_worker_load",
+  "f/factory/self_update",
+  "f/factory/watch_main_ci",
+  "f/factory/watch_pr_ci",
+  "f/factory/watch_pr_conflicts",
+];

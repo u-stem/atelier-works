@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
+import { HISTORY_FILTER_PATHS } from "../../../../f/factory/lib/console_known_paths.ts";
 import {
-  KNOWN_FLOW_PATHS,
-  KNOWN_SCRIPT_PATHS,
-} from "../../../../f/factory/lib/console_known_paths.ts";
-import { holdsQueryOptions } from "../../api/holdsQueries.ts";
-import { useActiveJobs, useSchedules } from "../../api/jobsQueries.ts";
+  jobsHoldsQueryOptions,
+  useActiveJobs,
+  useSchedules,
+} from "../../api/jobsQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import {
   type RefreshStatus,
@@ -17,6 +17,7 @@ import { Tabs } from "../../components/Tabs.tsx";
 import {
   JOBS_TABS,
   type JobsTabId,
+  jobsFetchPlan,
   jobsPanelAttrs,
   jobsTabSpecs,
   parseJobsTab,
@@ -36,16 +37,11 @@ import { JobHistory, useJobHistory } from "./JobHistory.tsx";
 import { ActiveJobs } from "./JobRows.tsx";
 import { ScheduleList } from "./ScheduleList.tsx";
 
-/** 履歴の絞り込みに出す、既知のscriptとフローのパス。 */
-const KNOWN_PATHS: readonly string[] = [
-  ...KNOWN_SCRIPT_PATHS,
-  ...KNOWN_FLOW_PATHS,
-].sort();
-
 /**
  * ジョブの画面。実行中と待ち、履歴、スケジュールの3つのタブを持つ。
  * 開くタブはURLの`?tab=`に、履歴の絞り込みは`?status=`と`?script=`に持ち、選び直しても履歴を積まない。
- * scriptの値はURLから来るので、既知のscriptの集合と照合し、知らない値は無視する。
+ * scriptの値はURLから来るので、履歴に出るscriptとフローの集合と照合し、知らない値は無視する。
+ * 集合は、ルートのジョブとして動くものだけである。フローのステップや、Consoleの呼び出しを選んでも、常に0件になるためである。
  * どの一覧も自動では取り直さない。Console用workerの枠が1つで、一覧の取得が承認などの呼び出しを待たせるためである。
  * 取得は、タブを初めて開いたときに始める。見出しの更新ボタンは、今開いているタブの取得だけを取り直す。
  * スケジュールの凍結の突き合わせに使う保留と凍結の取得は、定期の取り直しをせず、そのタブの更新で取り直す。
@@ -54,23 +50,26 @@ export function JobsScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = parseJobsTab(searchParams.get("tab"));
   const status = parseHistoryStatus(searchParams.get("status"));
-  const script = parseHistoryScript(searchParams.get("script"), KNOWN_PATHS);
+  const script = parseHistoryScript(
+    searchParams.get("script"),
+    HISTORY_FILTER_PATHS,
+  );
   const visited = useVisitedTabs(tab);
+  const fetching = jobsFetchPlan(visited);
   const scroll = useTabScroll(tab);
 
-  const active = useActiveJobs(visited.has("active"));
+  const active = useActiveJobs(fetching.active);
   const history = useJobHistory(
     {
       ...(status === undefined ? {} : { status }),
       ...(script === undefined ? {} : { scriptPath: script }),
     },
-    visited.has("history"),
+    fetching.history,
   );
-  const schedules = useSchedules(visited.has("schedules"));
+  const schedules = useSchedules(fetching.schedules);
   const holds = useQuery({
-    ...holdsQueryOptions(),
-    refetchInterval: false,
-    enabled: visited.has("schedules"),
+    ...jobsHoldsQueryOptions(),
+    enabled: fetching.schedules,
   });
 
   const historyRefresh: RefreshStatus = refreshStatusOfAll([
@@ -160,7 +159,7 @@ export function JobsScreen() {
             history={history}
             status={status}
             script={script}
-            scripts={KNOWN_PATHS}
+            scripts={HISTORY_FILTER_PATHS}
             onStatusChange={selectStatus}
             onScriptChange={selectScript}
             search={search}

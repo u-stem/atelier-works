@@ -3,7 +3,10 @@ import { useLocation, useParams } from "react-router";
 import { currentJob, useJobDetail } from "../../api/jobsQueries.ts";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import {
+  refreshStatusOf,
+  refreshStatusOfAll,
+} from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
@@ -16,6 +19,9 @@ import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { jobDetailCrumbs } from "../../lib/breadcrumbs.ts";
 import { isJobId } from "../../lib/jobLink.ts";
 import {
+  isActiveJobState,
+  isFinishedJobState,
+  JOB_RETENTION_DAYS,
   jobScriptName,
   parseJobsBack,
   relatedWorkItemId,
@@ -42,7 +48,7 @@ function NotFound({ back }: { back: string | null }) {
           <FileQuestion aria-hidden="true" className="size-6" />
         </span>
         <p className="max-w-sm text-small text-muted-foreground">
-          ジョブが見つかりません。IDを確かめてください。
+          {`ジョブが見つかりません。保持期間(${JOB_RETENTION_DAYS}日)を過ぎたか、IDが違います。`}
         </p>
       </div>
     </>
@@ -61,24 +67,27 @@ const LOADING_SHAPE: LoadingShape = {
   ),
 };
 
-const FINISHED_STATES: readonly string[] = [
-  "success",
-  "failure",
-  "canceled",
-  "skipped",
-];
-
 function JobDetail({ id, back }: { id: string; back: string | null }) {
   const { output, status } = useJobDetail(id);
   const loadingDisplay = useLoadingDisplay(loadPhaseOf(output));
-  const refresh = refreshStatusOf(output);
+  // 見出しの更新は状態の取得を取り直す。ログと結果は、ログの節の操作でだけ取り直す。
+  // 最終更新は、表示している状態を読んだ時刻で、ログと結果の取得の時刻が古くても新しい方を出す。
+  const refresh = refreshStatusOfAll([
+    {
+      dataUpdatedAt: Math.max(output.dataUpdatedAt, status.dataUpdatedAt),
+      isFetching: output.isFetching || status.isFetching,
+      isError: output.isError || status.isError,
+      error: status.isError ? status.error : output.error,
+      refetch: () => status.refetch(),
+    },
+  ]);
   const now = useNow();
   const detail = output.data;
 
   if (detail === undefined || loadingDisplay !== "content") {
     return (
       <>
-        <PageHeader title="ジョブの詳細" refresh={refresh}>
+        <PageHeader title="ジョブの詳細" refresh={refreshStatusOf(output)}>
           <Breadcrumb items={jobDetailCrumbs(back)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
@@ -88,7 +97,9 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
             title="ジョブの詳細を取得できませんでした"
             loginHint="上のバナーからログインすると、ジョブの詳細を表示します。"
             error={output.error}
-            onRetry={refresh.onRefresh}
+            onRetry={() => {
+              void output.refetch();
+            }}
           />
         )}
       </>
@@ -104,10 +115,10 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
       { data: status.data, updatedAt: status.dataUpdatedAt },
     ) ?? detail.job;
   const backState = back === null ? undefined : { jobsBack: back };
-  const active = job.state === "running" || job.state === "queued";
+  const active = isActiveJobState(job.state);
+  // 取得の後でジョブが終わったとき、保存された原因と結果は、まだ読めていない。
   const changed =
-    FINISHED_STATES.includes(job.state) &&
-    !FINISHED_STATES.includes(detail.job.state);
+    isFinishedJobState(job.state) && !isFinishedJobState(detail.job.state);
   const showCauses =
     job.state === "failure" ||
     job.state === "canceled" ||
@@ -120,16 +131,19 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
         title={jobScriptName(job.script_path)}
         subtitle={job.id}
         refresh={refresh}
-        refreshLabel="ログと結果を含めて更新"
+        refreshLabel="状態を更新"
       >
         <Breadcrumb items={jobDetailCrumbs(back)} />
       </PageHeader>
       <div className={SCROLL_BODY_CLASS}>
-        {output.isError ? (
+        {refresh.isError ? (
           <StaleDataNotice
-            isFetching={output.isFetching}
-            error={output.error}
-            onRetry={refresh.onRefresh}
+            isFetching={refresh.isFetching}
+            error={status.isError ? status.error : output.error}
+            onRetry={() => {
+              if (status.isError) void status.refetch();
+              if (output.isError) void output.refetch();
+            }}
           />
         ) : null}
         <DetailSection id="job-overview-heading" title="概要">
@@ -156,6 +170,7 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
               failures={detail.failures}
               now={now}
               back={backState}
+              unread={changed}
             />
           </DetailSection>
         ) : null}
@@ -174,6 +189,7 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
           output={detail.result}
           error={detail.result_error}
           emptyText="結果はありません。"
+          unread={changed}
         />
         <OutputSection
           id="job-log-heading"
@@ -186,7 +202,7 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
             void output.refetch();
           }}
           refreshLabel="ログを更新"
-          refreshing={output.isFetching}
+          refreshing={output.isFetching || status.isFetching}
         />
       </div>
     </>
@@ -198,6 +214,9 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
  * IDがUUIDの形でないときと、サーバーが見つからないと返したときは、同じ「見つかりません」を出す。存在を区別しないためである。
  * ログ、結果、引数、原因は、テキストのノードとしてだけ描く。
  * 実行中か待ちのジョブは、状態だけを15秒ごとに取り直す。ログは「ログを更新」の操作で取り直す。
+ * 実行中のジョブが終わったと分かったときは、ログと結果を1回だけ自動で取り直す。
+ * 取り直すまでは、保存された原因と結果を「まだ読んでいません」と伝える。無いとは言わない。
+ * 2つの取得は重ねない。どちらかの取得中は、ログの更新を押せなくする。
  */
 export function JobDetailScreen() {
   const params = useParams();

@@ -11,11 +11,11 @@ import { JobLink, WindmillJobLink } from "../../components/JobLink.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { displayableIssueText } from "../../lib/intakeText.ts";
 import {
   describeArg,
   formatDuration,
   outputNotes,
+  safeText,
   stepIterationsLabel,
 } from "../../lib/jobsView.ts";
 import { workItemRef } from "../../lib/labels.ts";
@@ -85,7 +85,7 @@ export function JobOverview({
           <JobStateBadge state={job.state} />
         </Row>
         <Row label="script">
-          <span className="font-mono">{job.script_path}</span>
+          <span className="font-mono">{safeText(job.script_path)}</span>
         </Row>
         <Row label="種類">{job.job_kind === "flow" ? "flow" : "script"}</Row>
         {job.created_at === null ? null : (
@@ -110,7 +110,7 @@ export function JobOverview({
         )}
         <Row label="所要時間">{formatDuration(job.duration_ms)}</Row>
         {job.schedule_path === null ? null : (
-          <Row label="スケジュール">{job.schedule_path}</Row>
+          <Row label="スケジュール">{safeText(job.schedule_path)}</Row>
         )}
         {job.parent_job === null ? null : (
           <Row label="親のジョブ">
@@ -151,15 +151,13 @@ export function ArgList({ args }: { args: readonly ArgViewData[] }) {
       {args.map((arg) => {
         const text = describeArg(arg);
         return (
-          <Row key={arg.key} label={text.key}>
+          <Row key={arg.key} label={safeText(text.key)}>
             {text.value === null ? (
               <span className="text-muted-foreground">
                 値は表示しません(型: {text.type})
               </span>
             ) : (
-              <span className="font-mono">
-                {displayableIssueText(text.value).text}
-              </span>
+              <span className="font-mono">{safeText(text.value)}</span>
             )}
           </Row>
         );
@@ -188,7 +186,9 @@ export function StepList({
             key={step.id}
             className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-small"
           >
-            <span className="min-w-0 font-mono break-all">{step.id}</span>
+            <span className="min-w-0 font-mono break-all">
+              {safeText(step.id)}
+            </span>
             <JobStateBadge state={step.state} />
             {iterations === null ? null : (
               <span className="text-muted-foreground">{iterations}</span>
@@ -205,11 +205,15 @@ export function StepList({
   );
 }
 
+/** 取得の後でジョブが終わり、その節をまだ読んでいないときの文。 */
+const UNREAD_TEXT = "まだ読んでいません。";
+
 /**
  * ログか結果の節。本文はテキストのノードとして`<pre>`に描く。
  * Markdown、HTML、ANSIの解釈、自動のリンクは使わない。出力には、defaultのworkerで動いたscriptの出力が含まれうるためである。
  * 見えない文字と、並びの見た目を入れ替える文字は、代替文字にしてから描く。
  * 伏せ字の限界、伏せた、切った、JSONでない行があることを、注記で伝える。
+ * `unread`のときは、取得の後でジョブが終わり、まだ読んでいないと伝える。「結果はありません」とは言わない。
  * `onRefresh`を渡すと、取り直す操作を見出しの横に置く。ログは、この操作のときだけ取り直す。
  */
 export function OutputSection({
@@ -222,6 +226,7 @@ export function OutputSection({
   onRefresh,
   refreshLabel = "更新",
   refreshing = false,
+  unread = false,
 }: {
   id: string;
   title: string;
@@ -264,13 +269,15 @@ export function OutputSection({
         <Alert variant="warning">
           <AlertDescription>
             <p>結果を読めませんでした。</p>
-            <p className="break-words">{displayableIssueText(error).text}</p>
+            <p className="break-words">{safeText(error)}</p>
           </AlertDescription>
         </Alert>
       )}
       {output === null || output.text === "" ? (
         error === null ? (
-          <p className="text-small text-muted-foreground">{emptyText}</p>
+          <p className="text-small text-muted-foreground">
+            {unread ? UNREAD_TEXT : emptyText}
+          </p>
         ) : null
       ) : (
         <section
@@ -281,7 +288,7 @@ export function OutputSection({
           className="max-h-[32rem] overflow-auto rounded-lg border border-border bg-muted/40 p-3 focus-visible:ring-2 focus-visible:ring-ring"
         >
           <pre className="font-mono text-small break-words whitespace-pre-wrap">
-            {displayableIssueText(output.text).text}
+            {safeText(output.text)}
           </pre>
         </section>
       )}
@@ -292,11 +299,13 @@ export function OutputSection({
 /**
  * 失敗の検知が保存した原因。実行のログと別に、検知の時点で伏せて保存した文を出す。
  * 読めなかったときは、原因の欄だけが失敗を示し、詳細の全体は出す。
+ * `unread`のときは、取得の後でジョブが終わったので、原因が無いとは言わず、まだ読んでいないと伝える。
  */
 export function FailureCauses({
   failures,
   now,
   back,
+  unread = false,
 }: {
   failures: Extract<JobDetailView, { found: true }>["failures"];
   now: number;
@@ -309,9 +318,7 @@ export function FailureCauses({
       <Alert variant="warning">
         <AlertDescription>
           <p>保存された原因を読めませんでした。</p>
-          <p className="break-words">
-            {displayableIssueText(failures.reason).text}
-          </p>
+          <p className="break-words">{safeText(failures.reason)}</p>
         </AlertDescription>
       </Alert>
     );
@@ -319,7 +326,7 @@ export function FailureCauses({
   if (failures.items.length === 0) {
     return (
       <p className="text-small text-muted-foreground">
-        保存された失敗の原因はありません。
+        {unread ? UNREAD_TEXT : "保存された失敗の原因はありません。"}
       </p>
     );
   }
@@ -332,7 +339,9 @@ export function FailureCauses({
         >
           <p className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-muted-foreground">
             <span className="font-medium text-foreground">
-              {item.step === null ? "ジョブ全体" : `ステップ ${item.step}`}
+              {item.step === null
+                ? "ジョブ全体"
+                : `ステップ ${safeText(item.step)}`}
             </span>
             <TimeText iso={item.occurred_at} now={now} />
             <JobLink
@@ -341,8 +350,8 @@ export function FailureCauses({
               state={back}
             />
           </p>
-          <p className="break-words whitespace-pre-wrap">
-            {displayableIssueText(item.error).text}
+          <p className="overflow-hidden break-words whitespace-pre-wrap">
+            {safeText(item.error)}
           </p>
         </li>
       ))}

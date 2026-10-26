@@ -31,6 +31,7 @@ import {
   jobScriptName,
   jobStateInfo,
   jobsBackState,
+  safeText,
   upcomingLabel,
 } from "../../lib/jobsView.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
@@ -122,7 +123,7 @@ function JobRow({
   time: "active" | "history";
 }) {
   const to = jobDetailPath(job.id);
-  const name = jobScriptName(job.script_path);
+  const name = safeText(jobScriptName(job.script_path));
   const at = timeOf(job, time);
   return (
     <li className="flex flex-col gap-1 px-4 py-3">
@@ -158,7 +159,7 @@ function JobRow({
         )}
         {job.schedule_path === null ? null : (
           <span className="break-all">
-            スケジュール {jobScriptName(job.schedule_path)}
+            スケジュール {safeText(jobScriptName(job.schedule_path))}
           </span>
         )}
       </p>
@@ -248,7 +249,7 @@ export const LIST_LOADING_SHAPE: LoadingShape = {
 
 /**
  * 実行中と待ちのタブの本体。実行中、待ち、予定のジョブを並べる。
- * 自動では取り直さず、画面の更新ボタンで取り直す。
+ * 自動では取り直さず、画面の更新ボタンで取り直す。その案内は見出しの更新の脇に任せ、ここでは繰り返さない。
  * キューの1ページで切れたときは、全件を読めていないと伝える。
  */
 export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
@@ -256,7 +257,7 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
   return (
     <div className="flex max-w-4xl flex-col gap-3">
       <p className="text-small text-muted-foreground">
-        実行中、待ち、予定のジョブです。自動では更新しません。右上の更新ボタンで取り直します。
+        Consoleの呼び出し(tag console)は含みません。
       </p>
       <JobsQueryGate
         query={query}

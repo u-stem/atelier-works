@@ -6,12 +6,16 @@
 // 一覧は、開いたときと更新の操作のときだけ取る。自動の取り直しはしない。
 // Console用workerの枠が1つで、ジョブの一覧の取得が承認などの呼び出しを待たせるため。
 // 詳細は、ログと結果を含む取得を1回だけ行い、実行中のジョブの状態だけを15秒ごとに取り直す。
+// ログと結果は、フォーカスや再接続、画面を開き直したときにも取り直さない。操作と、終了の検知のときだけ取り直す。
 
 import {
   type QueryClient,
   type UseQueryResult,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { isActiveJobState, isFinishedJobState } from "../lib/jobsView.ts";
 import { ApiFailure } from "./errors.ts";
 import {
   type Guard,
@@ -298,12 +302,16 @@ export type HistoryFilter = {
   readonly status?: string;
   readonly scriptPath?: string;
   readonly before?: string;
-  readonly includeConsole?: boolean;
 };
 
 export type DetailParams = {
   /** ログと結果も取る。実行中の状態の取り直しは偽にして、ログを取り直さない。 */
   readonly includeOutput: boolean;
+  /**
+   * 実行中か待ちのジョブを取り直していると、画面が知っているか。
+   * 状態の取得にまだ値が無いときも、この値が真なら15秒ごとの取り直しを続ける。
+   */
+  readonly expectActive?: boolean;
 };
 
 /** 実行中のジョブの状態を取り直す間隔。 */
@@ -325,7 +333,6 @@ export function jobsHistoryQueryKey(filter: HistoryFilter): readonly string[] {
     filter.status ?? "",
     filter.scriptPath ?? "",
     filter.before ?? "",
-    filter.includeConsole === true ? "console" : "",
   ];
 }
 
@@ -378,7 +385,6 @@ export function fetchJobHistory(
         ? { script_path: filter.scriptPath }
         : {}),
       ...(filter.before !== undefined ? { before: filter.before } : {}),
-      ...(filter.includeConsole === true ? { include_console: true } : {}),
     },
     "console_jobs",
     isJobList,
@@ -447,20 +453,29 @@ export function jobHistoryQueryOptions(filter: HistoryFilter) {
 
 /**
  * ジョブの詳細の取得の設定。
- * ログと結果を含む取得(`includeOutput`)は取り直さない。ログの更新は操作で行う。
+ * ログと結果を含む取得(`includeOutput`)は、古くならず、フォーカス、再接続、画面を開き直したときにも取り直さない。
+ * ログの更新は操作で行い、終了の検知は`useJobDetail`が1回だけ行う。
  * 含まない取得は、ジョブが実行中か待ちのあいだ、タブが見えている間だけ15秒ごとに取り直す。
+ * 15秒は新しいとみなし、ログと結果の取得の直後に重ねて取らない。フォーカスと再接続では取り直さない。
  */
 export function jobDetailQueryOptions(id: string, params: DetailParams) {
   return {
     queryKey: jobDetailQueryKey(id, params),
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       fetchJobDetail(id, params, { signal }),
+    staleTime: params.includeOutput
+      ? Number.POSITIVE_INFINITY
+      : JOB_DETAIL_REFRESH_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: !params.includeOutput,
     refetchInterval: (query: DetailQueryState): number | false => {
       if (params.includeOutput) return false;
       const data = query.state.data;
-      if (data === undefined || !data.found) return false;
-      const state = data.job.state;
-      return state === "running" || state === "queued"
+      if (data === undefined) {
+        return params.expectActive === true ? JOB_DETAIL_REFRESH_MS : false;
+      }
+      return data.found && isActiveJobState(data.job.state)
         ? JOB_DETAIL_REFRESH_MS
         : false;
     },
@@ -496,7 +511,7 @@ export function shouldPollJobStatus(
   outputFetching: boolean,
 ): boolean {
   if (outputFetching || output === undefined || !output.found) return false;
-  return output.job.state === "running" || output.job.state === "queued";
+  return isActiveJobState(output.job.state);
 }
 
 /** 履歴の2ページ目以降のキャッシュのキーか。先頭のページは`before`が空である。 */
@@ -522,11 +537,7 @@ export function currentJob(
   status: DetailSnapshot,
 ): JobSummaryView | null {
   if (output.data === undefined || !output.data.found) return null;
-  if (
-    status.data !== undefined &&
-    status.data.found &&
-    status.updatedAt > output.updatedAt
-  ) {
+  if (status.data?.found === true && status.updatedAt > output.updatedAt) {
     return status.data.job;
   }
   return output.data.job;
@@ -554,42 +565,100 @@ export function useConfig(
 }
 
 /**
+ * 状態の取得を、ログと結果の取得の値で初期化する。
+ * 状態の取得が新しい値を持つときは上書きしない。ログと結果の取得が見つからなかったときと、未取得のときは何もしない。
+ * 初期化した値の時刻は、ログと結果を取った時刻に合わせる。取った直後に、状態を重ねて取らないためである。
+ */
+export function seedJobStatus(
+  client: QueryClient,
+  id: string,
+  output: DetailSnapshot,
+): void {
+  if (output.data === undefined || !output.data.found) return;
+  const key = jobDetailQueryKey(id, { includeOutput: false });
+  const current = client.getQueryState(key);
+  if (
+    current?.data !== undefined &&
+    current.dataUpdatedAt >= output.updatedAt
+  ) {
+    return;
+  }
+  client.setQueryData(key, output.data, { updatedAt: output.updatedAt });
+}
+
+/**
+ * 実行中だったジョブが終わったとき、ログと結果を1回取り直すか。
+ * ログと結果は、実行中のうちに取ったもので、終わった後の出力と原因を読めていないためである。
+ * どちらかの取得中は取り直さない。Console用workerの枠が1つなので、2つの詳細の取得を重ねないためである。
+ */
+export function shouldRefetchOutputAfterFinish(
+  output: JobDetailView | undefined,
+  status: JobDetailView | undefined,
+  busy: { readonly outputFetching: boolean; readonly statusFetching: boolean },
+): boolean {
+  if (busy.outputFetching || busy.statusFetching) return false;
+  if (output === undefined || !output.found) return false;
+  if (status === undefined || !status.found) return false;
+  return (
+    isActiveJobState(output.job.state) && isFinishedJobState(status.job.state)
+  );
+}
+
+/**
  * ジョブの詳細を取る。ログと結果を含む取得を1回行い、実行中か待ちのときだけ、状態の取得を別に持つ。
  * 状態の取得は、ログと結果の取得が終わっている間だけ有効にして、2つが同時に走らないようにする。
- * 有効になった直後に1回取り、その後は15秒ごとに繰り返す。タブが見えない間は止まる。
- * ログは「ログを更新」の操作でだけ取り直す。
+ * 有効になる前に、ログと結果の値で状態の取得を初期化する。直後に同じ内容を取り直さないためである。
+ * その後は15秒ごとに繰り返す。タブが見えない間は止まる。
+ * 実行中だったジョブが終わったと分かったときは、ログと結果を1回だけ取り直す。
+ * ログは「ログを更新」の操作でも取り直せる。
  */
 export function useJobDetail(id: string): {
   readonly output: UseQueryResult<JobDetailView, Error>;
   readonly status: UseQueryResult<JobDetailView, Error>;
 } {
+  const client = useQueryClient();
   const output = useQuery(jobDetailQueryOptions(id, { includeOutput: true }));
+  // 状態の取得の購読より前に初期化する。購読の後だと、値が無いまま1回取ってしまう。
+  useEffect(() => {
+    seedJobStatus(client, id, {
+      data: output.data,
+      updatedAt: output.dataUpdatedAt,
+    });
+  }, [client, id, output.data, output.dataUpdatedAt]);
+  const enabled = shouldPollJobStatus(output.data, output.isFetching);
   const status = useQuery({
-    ...jobDetailQueryOptions(id, { includeOutput: false }),
-    enabled: shouldPollJobStatus(output.data, output.isFetching),
+    ...jobDetailQueryOptions(id, {
+      includeOutput: false,
+      expectActive: enabled,
+    }),
+    enabled,
   });
+
+  const refetchedFor = useRef<string | null>(null);
+  const finished = shouldRefetchOutputAfterFinish(output.data, status.data, {
+    outputFetching: output.isFetching,
+    statusFetching: status.isFetching,
+  });
+  const { refetch } = output;
+  useEffect(() => {
+    if (finished && refetchedFor.current !== id) {
+      refetchedFor.current = id;
+      void refetch();
+    }
+  }, [finished, id, refetch]);
   return { output, status };
 }
 
-/** 状態の取得を、ログと結果の取得の値で初期化する。 */
-export function seedJobStatus(
-  _client: QueryClient,
-  _id: string,
-  _output: DetailSnapshot,
-): void {
-  // 実装前のスタブ。
-}
-
-/** 実行中だったジョブが終わったとき、ログと結果を1回取り直すか。 */
-export function shouldRefetchOutputAfterFinish(
-  _output: JobDetailView | undefined,
-  _status: JobDetailView | undefined,
-  _busy: { readonly outputFetching: boolean; readonly statusFetching: boolean },
-): boolean {
-  return false;
-}
-
-/** ジョブの画面が、スケジュールの凍結の突き合わせに使う保留と凍結の取得の設定。 */
+/**
+ * ジョブの画面が、スケジュールの凍結の突き合わせに使う保留と凍結の取得の設定。
+ * 定期の取り直しも、フォーカスと再接続での取り直しもしない。画面の更新の操作で取り直す。
+ * Console用workerの枠が1つで、取得が承認などの呼び出しを待たせるためである。
+ */
 export function jobsHoldsQueryOptions() {
-  return holdsQueryOptions();
+  return {
+    ...holdsQueryOptions(),
+    refetchInterval: false as const,
+    refetchOnWindowFocus: false as const,
+    refetchOnReconnect: false as const,
+  };
 }

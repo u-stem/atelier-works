@@ -54,7 +54,7 @@ locks:
   f/factory/lib/conflict_fix_verify: 4a244c4da1dacfe86bed6878d2b41e1a6586268091c6c2b1aaf6616cff48f83a
   f/factory/lib/console_actions: 2d619077ae8897d4691d14bcabd0c9cb91e7cf8e41cd5cf88fdf8ccc238a289b
   f/factory/lib/console_holds_support: e1bc3ceca3eb31bac7337d720fb707e36d6c502272ce6c31757f97e2271665b9
-  f/factory/lib/console_known_paths: bb4a8238e6c1389131e8ce38ba77a580f74f59f3385718c3bc9f9b9b29e9e528
+  f/factory/lib/console_known_paths: df5543222d932ce6fefb24e52eb9ca8b87d629970310c87b055d56a366b8993a
   f/factory/lib/console_redact: 3cd5957139b0097e4b9c140b62ead54ba33fa6e9be84a09f6d1737b7c4532a0a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d29a7121916d0a645d763289053c2b664a22b21ca4cd70b646a9d211f10e0102
@@ -134,7 +134,7 @@ locks:
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 348b497807613d9955db7ffb39b31c6160ed8ed62513a865b6af0457be617be2
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 93e9cbde4e857514634601ce688a0ec19e0497cad3b532e2c24b710d038d5647
+  f/factory/lib/protected_paths: 4956d0c108fdef7a0e70a47cf52d9fd4e9528ada7bdc464c42181db88a97dec2
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955

@@ -64,14 +64,14 @@ export function isViewMismatch(error: ApiError): boolean {
 
 /**
  * 版のずれの案内。反映は定期的に走るので、まず待つ。
- * 直らなければ、システムの画面で版を見比べ、反映が失敗していればログを見る。
+ * 直らなければ、システムの画面の「反映した版」と、サイドバー下部の版を見比べ、反映が失敗していればログを見る。
  * システムの画面も同じ`view`で取得するので、それが断られたときは案内先にならない。
  */
 function versionMismatchNextStep(text: string): string {
   const requested = REQUESTED_VIEW.exec(text)?.[1];
   return requested === SYSTEM_VIEW
     ? `${WAIT_FOR_UPDATE_STEP}直らないときは、Windmillでself_updateのジョブのログを確かめてください。`
-    : `${WAIT_FOR_UPDATE_STEP}直らないときは、システムの画面で「反映した版」と「Consoleの取り込み」の版を見比べ、${SELF_UPDATE_STEP}`;
+    : `${WAIT_FOR_UPDATE_STEP}直らないときは、システムの画面の「反映した版」と、サイドバー下部の版を見比べ、${SELF_UPDATE_STEP}`;
 }
 
 /**

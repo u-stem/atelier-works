@@ -25,6 +25,7 @@ const MONO = "font-mono text-small tabular-nums";
 
 /**
  * 反映の状態。反映した版、直近の反映、Consoleの取り込みの状態を出す。
+ * 取り込んだ版と最後に確かめた時刻は、サイドバーの下部が示すので、取り込みの行では繰り返さない。
  * ホストの作業は、未解決の通知の件数で出す。反映の記録の印は、作業が済んでも残るためである。
  * 版が読めないときや、取り込みの状態を読めないときも、ほかの行は出す。
  */
@@ -82,14 +83,6 @@ export function ReleaseStatus({
       </Row>
       <Row label="Consoleの取り込み">
         <Badge variant={fetcher.tone}>{fetcher.label}</Badge>
-        {fetcher.versionLabel === null ? null : (
-          <span className={MONO}>{fetcher.versionLabel}</span>
-        )}
-        {fetcher.checkedAt === null ? null : (
-          <span className="text-small text-muted-foreground">
-            <TimeText iso={fetcher.checkedAt} now={now} prefix="確認 " />
-          </span>
-        )}
       </Row>
       {fetcher.detail === null &&
       fetcher.errorCode === null &&

@@ -15,6 +15,8 @@ import { parseIdParam } from "./routeParams.ts";
 
 /** ジョブの画面の入口のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
 export const JOBS_PATH = "/jobs";
+/** ジョブの記録を、Windmillが残す日数。これを過ぎたジョブは、詳細を開けない。 */
+export const JOB_RETENTION_DAYS = 30;
 /** 一覧が返すジョブのscriptの共通のフォルダ。表示では省く。 */
 export const JOB_SCRIPT_PREFIX = "f/factory/";
 
@@ -53,6 +55,27 @@ export function jobStateInfo(state: string): JobStateInfo {
   return STATES.get(state) ?? { kind: "unknown", label: `不明(${state})` };
 }
 
+/** 実行中か待ちの状態。状態の取り直しを続ける対象である。`waiting`はステップの状態で、ジョブの取り直しには使わない。 */
+const ACTIVE_STATES: ReadonlySet<string> = new Set(["running", "queued"]);
+
+/** 終わった状態。成功、失敗、取消、スキップである。取消には、時間切れで止められたジョブも入る。 */
+const FINISHED_STATES: ReadonlySet<string> = new Set([
+  "success",
+  "failure",
+  "canceled",
+  "skipped",
+]);
+
+/** 実行中か待ちの状態か。 */
+export function isActiveJobState(state: string): boolean {
+  return ACTIVE_STATES.has(state);
+}
+
+/** 終わった状態か。 */
+export function isFinishedJobState(state: string): boolean {
+  return FINISHED_STATES.has(state);
+}
+
 /** 所要時間。1秒未満は「1秒未満」にし、分と時間は大きい単位から出す。値が無ければ「—」。 */
 export function formatDuration(ms: number | null): string {
   if (ms === null) return "—";
@@ -76,13 +99,16 @@ export function jobScriptName(path: string): string {
     : path;
 }
 
-export type HistoryStatus = "success" | "failure";
+/** 履歴の状態の絞り込み。時間切れで止められたジョブは、取消に入る。 */
+export type HistoryStatus = "success" | "failure" | "canceled";
 
 /** URLの`?status=`から絞り込みを決める。無い値と知らない値は「すべて」(`undefined`)にする。 */
 export function parseHistoryStatus(
   value: string | null,
 ): HistoryStatus | undefined {
-  return value === "success" || value === "failure" ? value : undefined;
+  return value === "success" || value === "failure" || value === "canceled"
+    ? value
+    : undefined;
 }
 
 /**
@@ -261,14 +287,20 @@ export type ScheduleRow = {
   /** 定義との関係の注記。一致するときは`null`。 */
   readonly definitionNote: string | null;
   readonly nextRunAt: string | null;
-  readonly lastRun: {
+  /** 一時停止中の印。停止していないか、期限が過ぎていれば`null`。 */
+  readonly pausedLabel: string | null;
+  /** 直近の実行。新しい順で、最大で`RECENT_RUNS_SHOWN`件。 */
+  readonly recentRuns: readonly {
     readonly jobId: string;
     readonly success: boolean;
     readonly label: string;
     readonly durationLabel: string;
-  } | null;
+  }[];
   readonly error: string | null;
 };
+
+/** 一覧に出す直近の実行の件数。 */
+export const RECENT_RUNS_SHOWN = 3;
 
 const DIFFERENCE_LABELS: ReadonlyMap<string, string> = new Map([
   ["script_path", "実行先"],
@@ -297,29 +329,27 @@ function definitionNoteOf(
 export function describeSchedule(
   schedule: ScheduleViewData,
   frozen: ReadonlySet<string> | null,
+  nowMs: number = Date.now(),
 ): ScheduleRow {
   const differences = schedule.differences.map(
     (key) => DIFFERENCE_LABELS.get(key) ?? key,
   );
-  const last = schedule.recent_runs[0];
   return {
     path: schedule.path,
     name: jobScriptName(schedule.path),
     enabled: schedule.enabled,
     enabledLabel: schedule.enabled ? "有効" : "無効",
-    frozen: frozen !== null && frozen.has(schedule.path),
+    frozen: frozen?.has(schedule.path) === true,
     differences,
     definitionNote: definitionNoteOf(schedule.definition, differences),
     nextRunAt: schedule.next_run_at,
-    lastRun:
-      last === undefined
-        ? null
-        : {
-            jobId: last.job_id,
-            success: last.success,
-            label: last.success ? "成功" : "失敗",
-            durationLabel: formatDuration(last.duration_ms),
-          },
+    pausedLabel: pausedLabel(schedule.paused_until, nowMs),
+    recentRuns: schedule.recent_runs.slice(0, RECENT_RUNS_SHOWN).map((run) => ({
+      jobId: run.job_id,
+      success: run.success,
+      label: run.success ? "成功" : "失敗",
+      durationLabel: formatDuration(run.duration_ms),
+    })),
     error: schedule.error,
   };
 }
@@ -370,25 +400,21 @@ export function upcomingLabel(iso: string, nowMs: number): string {
   return `${formatShortAbsoluteIso(iso)}(${left})`;
 }
 
-/** 実行中か待ちの状態か。状態の取り直しを続ける対象である。 */
-export function isActiveJobState(_state: string): boolean {
-  return false;
-}
-
-/** 終わった状態か。成功、失敗、取消、スキップである。 */
-export function isFinishedJobState(_state: string): boolean {
-  return false;
-}
-
-/** 一時停止中のscheduleの印の文言。停止の期限が過ぎているか無いときは`null`。 */
+/** 一時停止中のscheduleの印の文言。停止の期限が過ぎているか、無いか、読めないときは`null`。 */
 export function pausedLabel(
-  _pausedUntil: string | null,
-  _nowMs: number,
+  pausedUntil: string | null,
+  nowMs: number,
 ): string | null {
-  return "";
+  if (pausedUntil === null) return null;
+  const untilMs = Date.parse(pausedUntil);
+  if (Number.isNaN(untilMs) || untilMs <= nowMs) return null;
+  return `一時停止中(${formatShortAbsoluteIso(pausedUntil)}まで)`;
 }
 
-/** サーバーが返す表示用の文字列を、画面に出せる形にする。見えない文字と並びを入れ替える文字を代替文字にする。 */
+/**
+ * サーバーが返す表示用の文字列を、画面に出せる形にする。
+ * 見えない文字と並びを入れ替える文字を、代替文字にする。
+ */
 export function safeText(text: string): string {
-  return text;
+  return displayableIssueText(text).text;
 }

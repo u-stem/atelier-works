@@ -18,6 +18,7 @@ import {
   jobScriptName,
   parseHistoryScript,
   parseHistoryStatus,
+  safeText,
 } from "../../lib/jobsView.ts";
 import { EmptyNote } from "../system/SystemSection.tsx";
 import { JobList, JobsQueryGate, LIST_LOADING_SHAPE } from "./JobRows.tsx";
@@ -115,6 +116,7 @@ const STATUS_OPTIONS: readonly (readonly [HistoryStatus | "", string])[] = [
   ["", "すべて"],
   ["success", "成功"],
   ["failure", "失敗"],
+  ["canceled", "取消・時間切れ"],
 ];
 
 function Filters({
@@ -171,7 +173,7 @@ function Filters({
           <option value="">すべてのscript</option>
           {scripts.map((path) => (
             <option key={path} value={path}>
-              {jobScriptName(path)}
+              {safeText(jobScriptName(path))}
             </option>
           ))}
         </Select>
@@ -182,6 +184,7 @@ function Filters({
 
 /**
  * 履歴のタブの本体。状態とscriptで絞り込み、完了したジョブを新しい順に並べる。
+ * 状態の絞り込みの「取消・時間切れ」は、時間切れで止められたジョブも含む。Windmillは、時間切れのジョブを失敗でなく取消にするためである。
  * 絞り込みはURLに持つので、親が値と変更の関数を渡す。
  * 続きは「さらに読み込む」で足し、累積200件で止まる。止まったときは、絞り込みを変えて探すよう伝える。
  * 2ページ目以降の取得に失敗しても、読み込み済みの行は残す。
@@ -213,8 +216,8 @@ export function JobHistory({
   return (
     <div className="flex max-w-4xl flex-col gap-3">
       <p className="text-small text-muted-foreground">
-        完了したジョブを新しい順に表示します。Consoleの呼び出し(tag
-        console)は含みません。自動では更新しません。
+        Consoleの呼び出し(tag
+        console)は含みません。時間切れで止められたジョブは、取消に入ります。
       </p>
       <Filters
         status={status}

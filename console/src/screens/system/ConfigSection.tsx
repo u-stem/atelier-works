@@ -9,6 +9,7 @@ import {
   CONFIG_REFERENCE_LABEL,
   describeConfigValue,
   filterConfigItems,
+  safeText,
 } from "../../lib/jobsView.ts";
 import { EmptyNote, SystemSection } from "./SystemSection.tsx";
 
@@ -45,7 +46,7 @@ export function ConfigList({ items }: { items: readonly ConfigItemView[] }) {
           key={item.key}
           className="grid gap-1 px-4 py-2.5 text-small sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:gap-x-4"
         >
-          <dt className="font-mono break-all">{item.key}</dt>
+          <dt className="font-mono break-all">{safeText(item.key)}</dt>
           <dd className="min-w-0 tabular-nums">
             <ConfigValue item={item} />
           </dd>
@@ -83,6 +84,7 @@ function ConfigBody({ items }: { items: readonly ConfigItemView[] }) {
 
 /**
  * 設定のタブの節。factory_configの全項目を読むだけで、変更はできない。
+ * 見出しは、タブの名前と重なるので、画面には出さない。
  * 取得は画面が持つ。値は、補間しない生の値で読んだものである。
  */
 export function ConfigSection({
@@ -94,6 +96,7 @@ export function ConfigSection({
     <SystemSection
       id="config-heading"
       title="設定"
+      visuallyHiddenTitle
       description="factory_configの全項目です。参照と伏せた値は「参照(出さない)」と表示します。変更はここではできません。"
       query={query}
       loginHint="上のバナーからログインすると、設定を表示します。"

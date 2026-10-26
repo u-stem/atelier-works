@@ -1,6 +1,6 @@
 // システムの画面のタブ(状態、失敗と通知、履歴と構成、設定)を決める純関数。
 // 開くタブはURLの`?tab=`に持ち、状態は名前を持たない。
-// 失敗が隠れないよう、要約の帯のチップから、タブの件数と印を決める。
+// 失敗が隠れないよう、要約の帯のチップから、タブの印を決める。件数は帯の失敗のチップが示し、タブの名前には付けない。
 // 印の語と記号は、印を付けるチップの段(注意、要対応)から決める。
 
 import {
@@ -33,13 +33,6 @@ export const SYSTEM_TABS: TabSet<SystemTabId> = {
   defaultTab: "status",
   idPrefix: "system",
 };
-
-/**
- * 失敗と通知のタブの件数の意味。
- * 見える数字は、監査の失敗の未解決と、作業項目に紐づかない失敗の件数で、通知の件数ではない。
- * 読み上げには「失敗」と添える。印を付ける段の語(注意、要対応)と区別するためである。
- */
-export const FAILURES_COUNT_LABEL = "失敗";
 
 /**
  * 印を付けるチップが属するタブ。チップの行き先は、要対応の画面の通知へ向くことがあるので、行き先とは別に持つ。
@@ -92,19 +85,6 @@ export function systemTabHref(tab: SystemTabId): string {
   return `?${withSystemTab(new URLSearchParams(), tab).toString()}`;
 }
 
-/**
- * 失敗と通知のタブの件数。監査の失敗の未解決と、作業項目に紐づかない失敗の合計。
- * どちらかが分からなければ`undefined`にする。片方だけの合計は、少なく見せるためである。
- */
-export function failuresTabCount(rows: readonly BandRow[]): number | undefined {
-  return rows.find((row) => row.id === "failures")?.count ?? undefined;
-}
-
-/** 失敗と通知のタブの件数が下限か。取得の上限で切れた件数は、少なく見せないよう「以上」と読ませる。 */
-export function failuresTabCountAtLeast(rows: readonly BandRow[]): boolean {
-  return rows.find((row) => row.id === "failures")?.countAtLeast ?? false;
-}
-
 /** 印を付けるチップが、そのタブにあるか。 */
 function marksTab(row: BandRow, tab: SystemTabId): boolean {
   const from = MARK_FROM[row.id];
@@ -155,7 +135,8 @@ function attentionOf(
 
 /**
  * 共通の`Tabs`へ渡す、4つのタブの指定。
- * 失敗と通知のタブには、失敗の件数と、注意以上のチップがあるときの印を付ける。
+ * 件数は付けない。失敗の件数は、帯の失敗のチップが示す。
+ * 失敗と通知のタブには、注意以上のチップがあるときの印を付ける。
  * 取得が失敗したタブには、取得の失敗の印を付ける。注意の印があれば並べる。
  */
 export function systemTabSpecs(
@@ -167,9 +148,6 @@ export function systemTabSpecs(
 ): ResolvedTabSpec<SystemTabId>[] {
   return tabSpecs(SYSTEM_TABS, selected, {
     failed: input.failed,
-    counts: { failures: failuresTabCount(input.rows) },
-    countAtLeast: { failures: failuresTabCountAtLeast(input.rows) },
-    countLabels: { failures: FAILURES_COUNT_LABEL },
     attention: attentionOf(input.rows),
   });
 }

@@ -178,6 +178,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * Console用workerの許可リスト(`console/src/api/windmill.ts`)と、その検査(`console/src/api/windmill.test.ts`、
  * `tests/scripts/console_write_contract.test.ts`、`console_jobs_contract.test.ts`、`console_worker_boundary.test.ts`、
  * `console_script_tags.test.ts`、`worker_boundary_scan.ts`)、各部品のテストも、同じ理由で守る。
+ * ジョブの画面の出力を描く部品(`console/src/screens/jobs/JobDetailParts.tsx`、`console/src/screens/system/ConfigSection.tsx`)と、
+ * それがログ、結果、引数、設定の値をテキストのノードとしてだけ描くことを固定する検査
+ * (`tests/scripts/console_jobs_render_contract.test.ts`)も守る。これらを書き換えると、出力の描き方が変わるためである。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
  * 一緒に書き換わるので守らない。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
@@ -301,6 +304,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/console_known_paths.test.ts",
   "tests/scripts/console_actions_migration.test.ts",
   "tests/scripts/console_jobs_contract.test.ts",
+  "tests/scripts/console_jobs_render_contract.test.ts",
+  "console/src/screens/jobs/JobDetailParts.tsx",
+  "console/src/screens/system/ConfigSection.tsx",
   "tests/scripts/console_write_contract.test.ts",
   "tests/scripts/console_worker_boundary.test.ts",
   "tests/scripts/console_script_tags.test.ts",

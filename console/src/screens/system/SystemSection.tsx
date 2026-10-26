@@ -72,11 +72,14 @@ export function SystemSection<T>({
   description,
   query,
   loginHint,
+  visuallyHiddenTitle = false,
   children,
 }: {
   /** 見出しの要素のid。節の`aria-labelledby`が指す。 */
   id: string;
   title: string;
+  /** 見出しが、開いているタブの名前と重なるとき、画面には出さず、読み上げにだけ残す。 */
+  visuallyHiddenTitle?: boolean;
   description: ReactNode;
   query: SectionQuery<T>;
   /** 401で取得できないときに、ログイン後に何が出るかを伝える文。 */
@@ -92,7 +95,11 @@ export function SystemSection<T>({
         <h2
           id={id}
           tabIndex={-1}
-          className="scroll-mt-4 rounded-sm text-lead font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={
+            visuallyHiddenTitle
+              ? "sr-only"
+              : "scroll-mt-4 rounded-sm text-lead font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          }
         >
           {title}
         </h2>

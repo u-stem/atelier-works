@@ -35,7 +35,6 @@ function Summary({ detail, now }: { detail: WorkItemDetail; now: number }) {
             )}
           </span>
         </Row>
-        <Row label="種別">{view.kindLabel}</Row>
         <Row label="リポジトリ">{view.repoLabel}</Row>
         <Row label="Issue">
           <TargetLinkView target={view.issue} />
