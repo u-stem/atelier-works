@@ -123,6 +123,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
+| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。今のコードはこの状態へ遷移させない | issue | |
+| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。今のコードはこの状態へ遷移させない | issue | |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
 | `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
@@ -139,6 +141,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `audited` | 監査を終えた | audit | 終端 |
 
 pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
+
+設計工程の2状態(`designing`、`awaiting_design_approval`)は、状態の値と制約だけがあり、遷移を起こすコードは無い。そのため、下の状態遷移の図に載せない。
 
 終端の一覧はコードとDBのviewの2か所にある。そろえ方は[作業項目の状態とリース](internals/work-items.md)に書く。
 
@@ -416,6 +420,7 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
+これらのインデックスの述語は、終端でない状態を列挙する。設計工程の2状態を、Issueの作業項目、PR修正、dependabotの3本の述語に含めるのは、その状態の作業項目も稼働中として数えるためである。
 これらはDBを共有するインスタンスの間で働き、DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
 1つのリポジトリは1つのインスタンスだけで扱う。
 
