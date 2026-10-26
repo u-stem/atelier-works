@@ -119,7 +119,10 @@ export type ApprovedSideEffectsDeps = {
   /** 承認を伝えるコメントをIssueに投稿する(`commentIssue`)。 */
   readonly commentIssue: () => Promise<void>;
   /** コメントを投稿できなかったときに、`approval_comment_failed`のnoticeを残す。引数は失敗の理由。 */
-  readonly addCommentFailedNotice: (reason: string) => Promise<void>;
+  readonly addCommentFailedNotice: (
+    reason: string,
+    next?: "implement" | "design",
+  ) => Promise<void>;
   /** Discordへ`requirements_approved`を通知する(`notifyBestEffort`)。 */
   readonly notifyApproved: () => Promise<void>;
   /**

@@ -799,6 +799,36 @@ describe("applyApprovedBranch with a design flow", () => {
   });
 });
 
+describe("applyApprovedBranch comment failure notice", () => {
+  function recordNextFlow() {
+    const nexts: (string | undefined)[] = [];
+    const deps: Partial<ApprovedBranchDeps> = {
+      commentIssue: boom,
+      addCommentFailedNotice: async (_reason, next) => {
+        nexts.push(next);
+      },
+    };
+    return { nexts, deps };
+  }
+
+  test("tells the notice that the design flow follows", async () => {
+    const recorder = recordNextFlow();
+    const h = branchDeps(recorder.deps);
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(recorder.nexts).toEqual(["design"]);
+  });
+
+  test("tells the notice that the implement flow follows when there is no design flow", async () => {
+    const recorder = recordNextFlow();
+    const h = branchDeps(recorder.deps);
+    await applyApprovedBranch(h.deps);
+    expect(recorder.nexts).toEqual(["implement"]);
+  });
+});
+
 describe("buildApprovedBranchDeps", () => {
   const CONFIG = {
     implement_enabled: true,
