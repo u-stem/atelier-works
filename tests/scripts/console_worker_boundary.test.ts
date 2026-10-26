@@ -8,9 +8,11 @@ import {
   nonLiteralVariableReads,
   relative,
   relativeImports,
+  type SdkAllowance,
   scan,
   sdkFindings,
   sdkViolations,
+  sdkViolationsReachableFrom,
   secretVariablePaths,
   sourcesReachableFrom,
   unfollowableImports,
@@ -21,8 +23,12 @@ import {
 // 境界を保つため、tag: consoleのscriptがどのsecret変数を読むかを、importをたどって数える。
 // - github_tokenを読んでよいのは、approval_decideとretry_work_itemだけ。
 // - その2つも、github_token以外のsecret変数は読まない。
-// - audit_kickoff、notice_resolve、manual_intake_submit、console_holds、hold_release、freeze_releaseは、どのsecret変数も読まない。
+// - audit_kickoff、notice_resolve、manual_intake_submit、console_holds、hold_release、freeze_release、
+//   console_jobs、console_schedules、console_configは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
+// - console_jobs、console_schedules、console_configは、SDKの呼び出しも許可表に絞る。
+//   `<X>Service.<method>`と`wmill.<member>`の使用を、importでたどれるファイルの和に当て、
+//   別名、名前付きimport、fetch、WM_TOKEN、深いパスのimportを禁じる。走査は`worker_boundary_scan.ts`の`sdkFindings`にある。
 //
 // 走査の方法と限界:
 // - 本文はBun.TranspilerでTypeScriptを落としたコードを調べる。コメントと型の中の文字列は数えない。
@@ -49,7 +55,41 @@ const READS_NO_SECRET = [
   "f/factory/console_holds",
   "f/factory/hold_release",
   "f/factory/freeze_release",
+  "f/factory/console_jobs",
+  "f/factory/console_schedules",
+  "f/factory/console_config",
 ];
+
+/**
+ * SDKの呼び出しを、script別の許可表に絞るscript。
+ * ジョブ、schedule、設定を読むscriptは、これ以外のSDKの呼び出しを持たない。
+ * 許可表は、importでたどれるファイルの和に当てる。`datatable`は、失敗の保存済みの原因を読むために使う。
+ * 別名、名前付きimport、`fetch`、`WM_TOKEN`、深いパスのimportなども、この3つには許さない。
+ */
+const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
+  "f/factory/console_jobs": {
+    services: [
+      "JobService.getJob",
+      "JobService.getJobLogs",
+      "JobService.getCompletedJobResult",
+      "JobService.listJobs",
+      "JobService.listQueue",
+    ],
+    members: ["getWorkspace", "datatable"],
+  },
+  "f/factory/console_schedules": {
+    services: [
+      "ScheduleService.listSchedules",
+      "ScheduleService.listSchedulesWithJobs",
+      "JobService.listQueue",
+    ],
+    members: ["getWorkspace"],
+  },
+  "f/factory/console_config": {
+    services: ["ResourceService.getResourceValue"],
+    members: ["getWorkspace"],
+  },
+};
 
 /**
  * 引数が文字列リテラルでないgetVariable()の呼び出しのうち、許すもの。
@@ -562,4 +602,54 @@ describe("console worker boundary", () => {
       expect(await consoleScripts()).toContain(path);
     },
   );
+});
+
+describe("the scripts restricted to an SDK allowance", () => {
+  const RESTRICTED = Object.keys(SDK_ALLOWED);
+
+  test.each(RESTRICTED)(
+    "%s calls nothing of the SDK outside its allowance",
+    (path) => {
+      const allowed = SDK_ALLOWED[path];
+      expect(
+        allowed === undefined
+          ? ["no allowance"]
+          : sdkViolationsReachableFrom(path, allowed),
+      ).toEqual([]);
+    },
+  );
+
+  test.each(RESTRICTED)("%s uses every entry of its allowance", (path) => {
+    const allowed = SDK_ALLOWED[path];
+    const used = new Set<string>();
+    for (const source of sourcesReachableFrom(path).values()) {
+      for (const use of sdkFindings(source).used) used.add(use);
+    }
+    const unused = [
+      ...(allowed?.services ?? []),
+      ...(allowed?.members ?? []),
+    ].filter((entry) => !used.has(entry));
+    expect(unused).toEqual([]);
+  });
+
+  test("every restricted script is on the list of scripts that read no secret", () => {
+    expect(
+      RESTRICTED.filter((path) => !READS_NO_SECRET.includes(path)),
+    ).toEqual([]);
+  });
+
+  test("the config script names its resource path as a literal", () => {
+    const source = readFileSync("f/factory/console_config.ts", "utf8");
+    expect(sdkFindings(source).problems).toEqual([]);
+  });
+
+  test("the config script does not read the config with the interpolating call", () => {
+    const source = readFileSync("f/factory/console_config.ts", "utf8");
+    expect(codeOf(source)).not.toContain("getResourceValueInterpolated");
+  });
+
+  test("the config script has no variable or resource read the scan cannot explain", () => {
+    const source = readFileSync("f/factory/console_config.ts", "utf8");
+    expect(nonLiteralVariableReads(source)).toEqual([]);
+  });
 });
