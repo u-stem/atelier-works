@@ -148,7 +148,7 @@ function movedOn(
  * 4. リポジトリのオーナーの数値IDを照合する。通らなければ`needs_human`にして人に知らせる。
  * 5. Issueが閉じていれば取り消す。worktreeにはまだ触れていない。
  * 6. 設計の試行を保存し、リポジトリのcloneを用意する。
- * 7. リースをもう一度確かめ、持っているときだけ、前の`design-<N>`のworktreeを作り直す。
+ * 7. リースと`designing`の状態をもう一度確かめ、どちらも保たれているときだけ、前の`design-<N>`のworktreeを作り直す。
  *    前の実行のプロセスが使っていれば消さずに例外を投げる。
  */
 export async function runDesignPrepare(
@@ -258,9 +258,15 @@ export async function runDesignPrepare(
 
   // 長い操作の間にリースが移っていれば、持ち主のworktreeを消さないよう、触れる前に確かめ直す。
   const current = await deps.getWorkItem(workItemId);
-  if (current === null || !holdsPipelineLease(current, deps.leaseJobId)) {
+  // 状態が`designing`のままであることも確かめる。リースが残っていても、別の経路が先へ進めていれば手を出さない。
+  if (
+    current === null ||
+    !holdsPipelineLease(current, deps.leaseJobId) ||
+    current.status !== "designing"
+  ) {
     deps.log("design lease lost during prepare, skipping", {
       work_item_id: workItemId,
+      status: current?.status ?? null,
       flow_job_id: current?.flow_job_id ?? null,
       lease_job_id: deps.leaseJobId,
     });
