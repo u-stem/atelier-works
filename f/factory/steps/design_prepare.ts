@@ -14,7 +14,10 @@ import {
   setDesignAttemptIfLeaseHolder,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
-import { buildDesignWorktreeDir } from "../lib/design_template.ts";
+import {
+  buildDesignWorktreeDir,
+  designNoApprovalReason,
+} from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
@@ -49,7 +52,7 @@ import {
   resolveDefaultBranchHeadSha,
   runCommand,
 } from "../lib/workspace.ts";
-import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
+import { designNeedsHumanFields } from "./pr_workflow_support.ts";
 
 export type DesignPrepareResult =
   | { readonly skip: true; readonly reason: string }
@@ -220,9 +223,7 @@ export async function runDesignPrepare(
   // 承認の行が要件定義の承認の唯一の根拠である(`approved`の状態を経由しないため)。
   const approval = await deps.latestRequirementsApproval(workItemId);
   if (!isRequirementsApprovedForAttempt(approval, leased.attempt)) {
-    return stopForHuman(
-      `design requires approved requirements for attempt ${String(leased.attempt)}`,
-    );
+    return stopForHuman(designNoApprovalReason(leased.attempt));
   }
 
   // 対象リポジトリのcloneより前に、オーナーの数値IDを`owners`と照合する。
@@ -402,9 +403,8 @@ export async function main(
             owner: item.owner,
             repo: item.repo,
             url: item.issue_url ?? "",
-            reason: describeReason(reason),
+            ...designNeedsHumanFields(reason),
             target: { kind: "issue", number: item.issue_number ?? 0 },
-            next_action: nextActionFor(reason),
           },
           log,
         );

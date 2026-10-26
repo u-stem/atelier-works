@@ -38,6 +38,18 @@ function isMissingError(err: unknown): boolean {
   );
 }
 
+/** 読んでいる途中で項目が消えた、またはディレクトリがファイルに置き換わった例外か。 */
+function isEntryGoneError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = Reflect.get(err, "code");
+  return (
+    code === "ENOENT" ||
+    code === "ENOTDIR" ||
+    err.message.includes("ENOENT") ||
+    err.message.includes("ENOTDIR")
+  );
+}
+
 /**
  * `dir`以下の内容(相対パスの一覧と、ファイルの中身)のSHA-256を16進で返す。ディレクトリが無ければ`null`を返す。
  * 名前の一覧は並べ替えて数え、名前と中身は長さを前置きして区切る。名前の終わりと中身の始まりが紛れないようにするため。
@@ -74,7 +86,7 @@ export async function hashDirectoryTree(
       hasher.update(content);
     }
   };
-  // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外は、書き換えとして呼び出し側に伝える。
+  // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外はそのまま投げ、`checkDocTreeHash`が書き換えとして扱う。
   let root: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>;
   try {
     root = await io.readDir(dir);
@@ -113,6 +125,7 @@ export type DocHashCheck = "match" | "no_baseline" | "missing" | "modified";
  * `dir`の現在のハッシュを`baseline`と比べる。
  * 基準値が`null`、`undefined`、空文字列なら、ディレクトリを読まずに`no_baseline`を返す。
  * 基準値があるのにディレクトリが無ければ`missing`、内容が違えば`modified`を返す。
+ * ハッシュを数えている途中で項目が消えたか置き換わった例外(ENOENT、ENOTDIR)も`modified`として返す。ほかの例外はそのまま投げる。
  */
 export async function checkDocTreeHash(
   dir: string,
@@ -122,7 +135,14 @@ export async function checkDocTreeHash(
   if (baseline === null || baseline === undefined || baseline.length === 0) {
     return "no_baseline";
   }
-  const current = await hashTree(dir);
+  let current: string | null;
+  try {
+    current = await hashTree(dir);
+  } catch (err) {
+    // 数えている途中で項目が消えたり置き換わったりしたのは、内容が書き換わったということである。
+    if (isEntryGoneError(err)) return "modified";
+    throw err;
+  }
   if (current === null) return "missing";
   return current === baseline ? "match" : "modified";
 }

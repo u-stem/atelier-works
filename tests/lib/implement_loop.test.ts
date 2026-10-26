@@ -364,7 +364,6 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
     options: { pathExists?: boolean; baseline?: string | null } = {},
   ) {
     const events: string[] = [];
-    const warnings: string[] = [];
     const hashed: string[] = [];
     let hashCall = 0;
     const deps: DocDirCopyDeps = {
@@ -386,9 +385,6 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
         hashCall += 1;
         return value === undefined ? null : value;
       },
-      warn: (message) => {
-        warnings.push(message);
-      },
     };
     const run = (
       fn: (copy: string | null) => Promise<string> = async () => "ran",
@@ -403,7 +399,7 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
         guard,
       );
     };
-    return { run, events, warnings, hashed };
+    return { run, events, hashed };
   }
 
   test("hashes the original directory before and after the copy, then runs fn", async () => {
@@ -474,23 +470,15 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
     expect(g.events).toEqual(["copy", "fn", "remove"]);
   });
 
-  // 基準値が無い警告は準備のステップが1回だけ出す。ラウンドごとの複製では出さない。
-  test("does not warn on every round when there is no baseline", async () => {
+  test("does not hash the directory when there is no baseline", async () => {
     const g = guarded([], { baseline: null });
     await g.run();
-    await g.run();
-    expect(g.warnings).toEqual([]);
+    expect(g.hashed).toEqual([]);
   });
 
   test("runs fn with null when there is no baseline and the directory is gone", async () => {
     const g = guarded([], { baseline: null, pathExists: false });
     expect(await g.run(async (copy) => String(copy))).toBe("null");
-  });
-
-  test("does not warn when the draft has a baseline", async () => {
-    const g = guarded([BASELINE, BASELINE]);
-    await g.run();
-    expect(g.warnings).toEqual([]);
   });
 });
 
@@ -511,7 +499,6 @@ describe("runDocDirGuardedRound", () => {
   const guardOf = (hash: string | null): DocDirGuard => ({
     baseline: BASELINE,
     hashTree: async () => hash,
-    warn: () => {},
   });
 
   test("returns the round of Claude when the directory matches", async () => {
@@ -583,10 +570,10 @@ describe("runDocDirGuardedRound", () => {
 
 describe("docDirGuardFor", () => {
   test("takes the baseline from the context", () => {
-    const guard = docDirGuardFor(
-      { ...CONTEXT, requirements_doc_hash: "h".repeat(64) },
-      () => {},
-    );
+    const guard = docDirGuardFor({
+      ...CONTEXT,
+      requirements_doc_hash: "h".repeat(64),
+    });
     expect(guard.baseline).toBe("h".repeat(64));
   });
 
@@ -594,7 +581,7 @@ describe("docDirGuardFor", () => {
     const dir = mkdtempSync(join(tmpdir(), "doc-guard-test-"));
     try {
       writeFileSync(join(dir, "requirements.md"), "R");
-      const guard = docDirGuardFor(CONTEXT, () => {});
+      const guard = docDirGuardFor(CONTEXT);
       expect(await guard.hashTree(dir)).toMatch(/^[0-9a-f]{64}$/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -602,19 +589,12 @@ describe("docDirGuardFor", () => {
   });
 
   test("hashes a directory that does not exist as null", async () => {
-    const guard = docDirGuardFor(CONTEXT, () => {});
+    const guard = docDirGuardFor(CONTEXT);
     expect(await guard.hashTree("/does/not/exist/anywhere")).toBeNull();
   });
 
-  test("hands the warning to the caller's logger", () => {
-    const messages: string[] = [];
-    const guard = docDirGuardFor(CONTEXT, (message) => messages.push(message));
-    guard.warn("w", {});
-    expect(messages).toEqual(["w"]);
-  });
-
   test("treats a context from before the baseline existed as having none", () => {
-    const guard = docDirGuardFor({}, () => {});
+    const guard = docDirGuardFor({});
     expect(guard.baseline ?? null).toBeNull();
   });
 });

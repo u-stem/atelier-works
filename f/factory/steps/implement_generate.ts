@@ -32,7 +32,6 @@ import {
   runImplementGenerateRound,
 } from "../lib/implement_loop.ts";
 import { requireDeadlineAt } from "../lib/implement_support.ts";
-import { logger } from "../lib/log.ts";
 import {
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -69,12 +68,7 @@ export async function main(
       try {
         return await runDocDirGuardedRound(
           context.requirements_doc_dir,
-          docDirGuardFor(context, (message, fields) =>
-            logger("implement_generate").warn(message, {
-              work_item_id,
-              ...fields,
-            }),
-          ),
+          docDirGuardFor(context),
           (docDir) =>
             runImplementClaudeRound(
               { runClaude, recordAgentRun },

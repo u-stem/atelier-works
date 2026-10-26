@@ -174,6 +174,19 @@ function failGeneration(reason: string, detail: string): never {
 }
 
 /**
+ * 保存する内容の取得(`snapshotDocDir`)の失敗を、Claudeの実行の失敗とは別の書き方で投げる。
+ * 原因はClaudeの実行ではなくディスクの内容なので、`runClaude failed`と書かない。
+ * `failGeneration`と同じく例外として投げ、終端の処理はWindmillの再試行と`on_error_flow`に任せる。
+ */
+function failSnapshot(reason: string, detail: string): never {
+  throw new Error(
+    maskSecrets(
+      `pipeline_generate: doc snapshot failed (${reason}): ${detail}`,
+    ),
+  );
+}
+
+/**
  * Claudeがdoc dirに残すはずのファイルを1つ読んで返す。
  * ファイルが無い、または読めない(消された、ファイル名のディレクトリがある)ときは、
  * 他の生成の失敗と同じ書き方の例外を投げる。
@@ -266,7 +279,7 @@ export async function snapshotDocDir(
 ): Promise<DocSnapshot> {
   const before = await io.hashTree(docDir);
   if (before === null) {
-    failGeneration(
+    failSnapshot(
       "doc_hash_unavailable",
       `the requirements directory does not exist, so there is no baseline hash to save: ${docDir}`,
     );
@@ -279,7 +292,7 @@ export async function snapshotDocDir(
   );
   const after = await io.hashTree(docDir);
   if (after !== before) {
-    failGeneration(
+    failSnapshot(
       "doc_changed_during_save",
       `the requirements directory changed while it was being saved: ${docDir}`,
     );

@@ -4248,8 +4248,9 @@ const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
 
 /**
  * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
- * `lib/design_launch_support.ts`の定数と同じで、`tests/scripts/pr_workflow_support_design.test.ts`が食い違いを検出する。
- * 拒否した安全装置の依存を増やさないため、定数はimportせず、文字列をここに書く。
+ * `lib/design_launch_support.ts`の定数と関数が作る文字列と同じにする。
+ * 拒否した安全装置の依存を増やさないため、定数と関数はimportせず、文字列をここに書く。
+ * `tests/scripts/pr_workflow_support_design.test.ts`が、定数と関数の出力を表と突き合わせて食い違いを検出する。
  */
 const DESIGN_REASON_RULES: readonly ReasonRule[] = [
   {
@@ -5171,12 +5172,18 @@ export function nextActionFor(reason: string, flow?: NextActionFlow): string {
     : GENERIC_NEXT_ACTION;
 }
 
-/** 設計工程の`needs_human`の通知に載せる、理由の訳と次の操作。 */
-export function designNeedsHumanFields(_reason: string): {
+/**
+ * 設計工程の`needs_human`の通知に載せる、理由の訳と次の操作。
+ * 設計のフローが残したプロセスの案内など、フローで操作が変わる理由に、設計向けの案内を使う。
+ */
+export function designNeedsHumanFields(reason: string): {
   readonly reason: string;
   readonly next_action: string;
 } {
-  return { reason: "", next_action: "" };
+  return {
+    reason: describeReason(reason),
+    next_action: nextActionFor(reason, "design"),
+  };
 }
 
 // ---------------------------------------------------------------------------

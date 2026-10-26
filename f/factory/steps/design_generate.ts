@@ -42,6 +42,7 @@ import {
   DESIGN_OPEN_QUESTIONS_MAX_COUNT,
   DESIGN_SUMMARY_MAX_CHARS,
   DESIGN_TEMPLATE_RELATIVE_PATH,
+  designGapExhaustedReason,
 } from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import {
@@ -98,7 +99,7 @@ import {
   removeWorktree,
   runCommand,
 } from "../lib/workspace.ts";
-import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
+import { designNeedsHumanFields } from "./pr_workflow_support.ts";
 
 /**
  * 要件の不足の報告(`gap_report`)の長さの上限(文字数)。
@@ -736,7 +737,7 @@ export async function runDesignGenerate(
     if (result.output.outcome === "requirements_gap") {
       const gap = limitGapReport(result.output.gap_report ?? "");
       if (item.attempt >= deps.config.max_attempts) {
-        const reason = `design requirements_gap after max_attempts ${String(deps.config.max_attempts)}`;
+        const reason = designGapExhaustedReason(deps.config.max_attempts);
         return await stopForHuman(reason, { outcome: "needs_human", reason });
       }
       // リースを手放す比較交換の前に、リースを持っている間に後始末を済ませる。
@@ -1018,9 +1019,8 @@ export async function main(
             owner: item.owner,
             repo: item.repo,
             url: item.issue_url ?? "",
-            reason: describeReason(reason),
+            ...designNeedsHumanFields(reason),
             target: { kind: "issue", number: item.issue_number ?? 0 },
-            next_action: nextActionFor(reason),
           },
           log,
         );

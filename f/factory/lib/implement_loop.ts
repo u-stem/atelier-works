@@ -319,25 +319,25 @@ export class RequirementsUntrustedError extends Error {
 
 /** 複製の前後に、元のディレクトリを基準値と照合する設定。 */
 export type DocDirGuard = {
-  /** 承認時に保存した基準値。無いか空なら、警告を残して照合を飛ばす。 */
+  /**
+   * 承認時に保存した基準値。無いか空なら、照合を黙って飛ばす。
+   * 基準値が無い警告は、準備のステップが1回だけ出す。ラウンドごとの複製で出すと、同じ警告が繰り返されるため。
+   */
   readonly baseline: string | null | undefined;
   /** ディレクトリの内容のハッシュ。ディレクトリが無ければ`null`。 */
   readonly hashTree: (dir: string) => Promise<string | null>;
-  readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
 /**
  * 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。
  * 基準値を足す前の準備ステップが作った文脈には項目が無いので、無いものは基準値なしとして扱う。
  */
-export function docDirGuardFor(
-  context: { readonly requirements_doc_hash?: string | null },
-  warn: DocDirGuard["warn"],
-): DocDirGuard {
+export function docDirGuardFor(context: {
+  readonly requirements_doc_hash?: string | null;
+}): DocDirGuard {
   return {
     baseline: context.requirements_doc_hash ?? null,
     hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
-    warn,
   };
 }
 
@@ -350,7 +350,7 @@ export function docDirGuardFor(
  * `guard`に基準値があれば、複製の直前と直後に、元のディレクトリのハッシュを基準値と比べる。
  * 複製のハッシュとは比べない。複製はシンボリックリンクと特殊ファイルを落とすので、元の内容と一致しないためである。
  * 違うか、ディレクトリが無ければ、`fn`を呼ばずに`RequirementsUntrustedError`を投げる。
- * 基準値が無ければ、警告を残して照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
+ * 基準値が無ければ、黙って照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
  */
 export async function withReadOnlyDocDirCopy<T>(
   docDir: string | null,
@@ -364,12 +364,6 @@ export async function withReadOnlyDocDirCopy<T>(
     guard.baseline !== null &&
     guard.baseline !== undefined &&
     guard.baseline.length > 0;
-  if (guard !== undefined && !hasBaseline) {
-    guard.warn(
-      "the approved requirements have no baseline hash; copying without the comparison",
-      { doc_dir: docDir },
-    );
-  }
   const assertTrusted = async (): Promise<void> => {
     if (guard === undefined || !hasBaseline) return;
     const verdict = await checkDocTreeHash(
@@ -471,11 +465,15 @@ export type ImplementClaudeRunRound = Exclude<
   { readonly kind: "lease_lost" } | { readonly kind: "requirements_modified" }
 >;
 
-/** Claudeを実際に実行したラウンドか。 */
+/**
+ * Claudeを実際に実行したラウンドか。
+ * `lease_lost`と`requirements_modified`は、worktreeにも検査にも触れずに検証ループが止まるので、
+ * 検査の告知や期限の確認など、検査を始める前提の処理を飛ばす判断に使う。
+ */
 export function ranClaude(
-  _round: ImplementClaudeRound,
-): _round is ImplementClaudeRunRound {
-  return false;
+  round: ImplementClaudeRound,
+): round is ImplementClaudeRunRound {
+  return round.kind !== "lease_lost" && round.kind !== "requirements_modified";
 }
 
 /** implement_generateがリースを失っていたときに返すラウンド。検証ループは何もせずに`lease_lost`で止まる。 */
