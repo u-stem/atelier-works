@@ -39,6 +39,8 @@ const WITHOUT_CI_ACTION = [
   "^implementation of the branch's work item is running",
   "^implement flow deadline passed",
   "^implement time settings do not fit",
+  "^design ",
+  "^design ",
 ];
 
 describe("REASON_RULES in a CI round", () => {

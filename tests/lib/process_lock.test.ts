@@ -25,6 +25,7 @@ import {
   ensureWorktreeLockFree,
   FLOCK_PATH,
   formatLockHolders,
+  formatLockOwner,
   hasFlockLine,
   isStoppableBy,
   LOCK_OWNER_ENV,
@@ -235,12 +236,37 @@ describe("parseLockOwner", () => {
     expect(parseLockOwner("implement:3:job-a")).toEqual(OTHER_JOB);
   });
 
+  test("parses a design owner", () => {
+    expect(parseLockOwner("design:3:job-a")).toEqual({
+      kind: "design",
+      workItemId: 3,
+      jobId: "job-a",
+    });
+  });
+
+  test("parses a pr_fix owner", () => {
+    expect(parseLockOwner("pr_fix:9:job-c")).toEqual(PR_FIX);
+  });
+
   test("rejects an unknown kind", () => {
     expect(parseLockOwner("review:3:job-a")).toBeNull();
   });
 
   test("rejects a missing job id", () => {
     expect(parseLockOwner("implement:3:")).toBeNull();
+  });
+});
+
+describe("formatLockOwner", () => {
+  test("round-trips a design owner through parseLockOwner", () => {
+    const owner: LockOwner = { kind: "design", workItemId: 5, jobId: "job-d" };
+    expect(parseLockOwner(formatLockOwner(owner))).toEqual(owner);
+  });
+
+  test("writes the kind first", () => {
+    expect(
+      formatLockOwner({ kind: "design", workItemId: 5, jobId: "job-d" }),
+    ).toBe("design:5:job-d");
   });
 });
 
@@ -738,6 +764,30 @@ describe("isStoppableBy", () => {
     expect(isStoppableBy(OTHER_JOB, { ...THIS_JOB, jobId: "unknown" })).toBe(
       false,
     );
+  });
+
+  test("lets an implement run stop an earlier implement run of the same work item", () => {
+    expect(isStoppableBy(OTHER_JOB, THIS_JOB)).toBe(true);
+  });
+
+  test("does not let a design run stop an earlier design run of the same work item", () => {
+    const earlier: LockOwner = {
+      kind: "design",
+      workItemId: 3,
+      jobId: "job-a",
+    };
+    const self: LockOwner = { kind: "design", workItemId: 3, jobId: "job-b" };
+    expect(isStoppableBy(earlier, self)).toBe(false);
+  });
+
+  test("does not let a design run stop an implement run of the same work item", () => {
+    const self: LockOwner = { kind: "design", workItemId: 3, jobId: "job-b" };
+    expect(isStoppableBy(OTHER_JOB, self)).toBe(false);
+  });
+
+  test("does not let an implement run stop a design run of the same work item", () => {
+    const design: LockOwner = { kind: "design", workItemId: 3, jobId: "job-a" };
+    expect(isStoppableBy(design, THIS_JOB)).toBe(false);
   });
 });
 

@@ -77,6 +77,8 @@ export function buildDesignDocDir(
   return `${workItemDir}/design/req-${String(attempt)}/attempt-${String(designAttempt)}`;
 }
 
+export const DESIGN_DOC_DIR_IN_USE_REASON = "";
+
 /**
  * 設計書が読む対象リポジトリの、読み取り専用のdetachedなworktreeのパスを返す。
  * 形式は`/workspaces/<owner>/<repo>/design-<issueNumber>`で、`ensureRepo`のメインのcloneの隣に置く。

@@ -88,7 +88,7 @@ describe("lockedDesignRun", () => {
       async () => {},
     );
     await run(["claude"]);
-    expect(r.calls[0]?.env?.[LOCK_OWNER_ENV]).toBe("implement:7:job-1");
+    expect(r.calls[0]?.env?.[LOCK_OWNER_ENV]).toBe("design:7:job-1");
   });
 
   test("tags the process with the lock file path", async () => {
