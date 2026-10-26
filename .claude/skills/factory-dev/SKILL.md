@@ -41,6 +41,13 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 5. Consoleの**レポート**の分析に、コストとトークン数が出ることを確かめる。
 6. 何かの変更をself cloneに反映させ、`self_update`のスケジュールが最新のSHAを取り込むことを確かめる。
 
+## Consoleの画面を毎日見る目で確かめる
+
+Consoleの画面を作る、直す変更は、動くかと崩れないかに加えて、毎日使う人の目で全画面を読む。
+全経路とすべてのタブを開き、読み飛ばす行と、同じ情報の2か所の表示を探す。
+手順と判断の問いは、[Consoleの画面の表示の原則](../../../docs/console-display.md)にある。
+実機に反映される前は、描画テストの出力を読む。
+
 ## 実装フローをE2Eで確かめる
 
 上の1から4の後で、sandboxで実装フローを確かめる。sandboxには、`factory_config`の`repo_allowlist`にあるsandboxのリポジトリを使う。`f/factory/factory_config`はgitで管理しないので、Windmillの画面で編集する。

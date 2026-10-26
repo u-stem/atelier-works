@@ -136,6 +136,7 @@ atelier-works/
 | [セキュリティ](docs/security.md) | 信頼境界、秘密値の扱い、資格情報の取得手順、各フローの安全策 |
 | [コーディング規約](docs/coding-guidelines.md) | コメント、TypeScript、TDD、テストの分類 |
 | [文書の書き方](docs/writing-guidelines.md) | 文書とFactoryが生成する文章の書き方 |
+| [Consoleの画面の表示の原則](docs/console-display.md) | 表示の要否を問う3点、情報の置き場所、毎日見る目での確認 |
 | [作業項目の仕様](docs/internals/work-items.md) | 作業項目と状態の扱い |
 | [要件定義の仕様](docs/internals/requirements.md) | 要件定義の生成と承認の仕組み |
 | [設計書の生成の仕様](docs/internals/design.md) | 設計書の生成の仕組みと書き込み範囲 |
