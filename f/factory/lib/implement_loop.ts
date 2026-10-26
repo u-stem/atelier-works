@@ -14,6 +14,13 @@ import {
   recordClaudeRuns,
 } from "./claude.ts";
 import {
+  checkDocTreeHash,
+  hashDirectoryTree,
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  realDirectoryIo,
+} from "./doc_tree_hash.ts";
+import {
   IMPLEMENT_FLOW_PATH,
   IMPLEMENT_LEASE_LOST_REASON,
 } from "./implement_launch_support.ts";
@@ -319,14 +326,17 @@ export type DocDirGuard = {
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
-/** 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。 */
+/**
+ * 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。
+ * 基準値を足す前の準備ステップが作った文脈には項目が無いので、無いものは基準値なしとして扱う。
+ */
 export function docDirGuardFor(
   context: { readonly requirements_doc_hash?: string | null },
   warn: DocDirGuard["warn"],
 ): DocDirGuard {
   return {
-    baseline: null,
-    hashTree: async () => null,
+    baseline: context.requirements_doc_hash ?? null,
+    hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
     warn,
   };
 }
@@ -335,20 +345,52 @@ export function docDirGuardFor(
  * `docDir`の新しい複製(`<tmp>/requirements`)を渡して`fn`を実行し、
  * `fn`が成功しても例外を投げても、終わったら複製を削除する。
  * Claudeの実行が複製に何をしても、Consoleが表示する承認済みの下書きには届かない。
- * `docDir`が`null`(`doc_dir`の無い下書き)か、ディスクに無いときは、
- * 複製せずに`null`を渡す。
+ * `docDir`が`null`(`doc_dir`の無い下書き)なら、複製せずに`null`を渡す。
+ *
+ * `guard`に基準値があれば、複製の直前と直後に、元のディレクトリのハッシュを基準値と比べる。
+ * 複製のハッシュとは比べない。複製はシンボリックリンクと特殊ファイルを落とすので、元の内容と一致しないためである。
+ * 違うか、ディレクトリが無ければ、`fn`を呼ばずに`RequirementsUntrustedError`を投げる。
+ * 基準値が無ければ、警告を残して照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
  */
 export async function withReadOnlyDocDirCopy<T>(
   docDir: string | null,
   fn: (copy: string | null) => Promise<T>,
   deps: DocDirCopyDeps = defaultDocDirCopyDeps,
-  _guard?: DocDirGuard,
+  guard?: DocDirGuard,
 ): Promise<T> {
-  if (docDir === null || !(await deps.pathExists(docDir))) return fn(null);
+  if (docDir === null) return fn(null);
+  const hasBaseline =
+    guard !== undefined &&
+    guard.baseline !== null &&
+    guard.baseline !== undefined &&
+    guard.baseline.length > 0;
+  if (guard !== undefined && !hasBaseline) {
+    guard.warn(
+      "the approved requirements have no baseline hash; copying without the comparison",
+      { doc_dir: docDir },
+    );
+  }
+  const assertTrusted = async (): Promise<void> => {
+    if (guard === undefined || !hasBaseline) return;
+    const verdict = await checkDocTreeHash(
+      docDir,
+      guard.baseline,
+      guard.hashTree,
+    );
+    if (verdict === "missing")
+      throw new RequirementsUntrustedError(REQUIREMENTS_DIR_MISSING_REASON);
+    if (verdict === "modified")
+      throw new RequirementsUntrustedError(
+        REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+      );
+  };
+  await assertTrusted();
+  if (!(await deps.pathExists(docDir))) return fn(null);
   const tempDir = await deps.makeTempDir();
   try {
     const copy = join(tempDir, "requirements");
     await deps.copyDir(docDir, copy);
+    await assertTrusted();
     return await fn(copy);
   } finally {
     await deps.removeDir(tempDir);
@@ -358,14 +400,22 @@ export async function withReadOnlyDocDirCopy<T>(
 /**
  * `withReadOnlyDocDirCopy`でClaudeの1回の実行を包み、基準値の照合で止めたときは例外にせず、
  * `requirements_modified`のラウンドとして返す。ほかの例外はそのまま投げる。
+ * 生成の1ラウンド目と修正のラウンドの両方がこれを通る。
  */
 export async function runDocDirGuardedRound(
-  _docDir: string | null,
-  _guard: DocDirGuard,
-  _run: (copy: string | null) => Promise<ImplementClaudeRunRound>,
-  _deps: DocDirCopyDeps = defaultDocDirCopyDeps,
+  docDir: string | null,
+  guard: DocDirGuard,
+  run: (copy: string | null) => Promise<ImplementClaudeRunRound>,
+  deps: DocDirCopyDeps = defaultDocDirCopyDeps,
 ): Promise<ImplementClaudeRound> {
-  return LEASE_LOST_ROUND;
+  try {
+    return await withReadOnlyDocDirCopy(docDir, run, deps, guard);
+  } catch (err) {
+    if (err instanceof RequirementsUntrustedError) {
+      return { kind: "requirements_modified", reason: err.reason };
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -586,6 +636,7 @@ export async function runImplementClaudeRound(
  * 変更の判定とgitleaksの検査の間のworktreeの変化、
  * 検査コマンドの実行ファイルが見つからないなど、検査を実行できなかったこと、
  * Claudeの実行失敗、ラウンドの冒頭か修正ラウンドの前にリースを失っていたこと。
+ * `claude_error`は、承認済みの要件定義のディレクトリが基準値と違うためにClaudeを起動せず止めたときも使う。
  */
 export type ImplementLoopExit =
   | "checks_passed"
@@ -1028,8 +1079,14 @@ export async function runImplementVerifyLoop(
         reason: IMPLEMENT_LEASE_LOST_REASON,
         rounds: round - 1,
       });
+    // Claudeを起動していないので、worktreeには触れず、ラウンドの記録も費用も足さない。
+    // 出口はClaudeを実行できなかったときと同じ`claude_error`で、途中経過をpushしない`needs_human`になる。
     if (current.kind === "requirements_modified")
-      return stopped({ exit: "lease_lost" });
+      return stopped({
+        exit: "claude_error",
+        reason: current.reason,
+        rounds: round - 1,
+      });
     totalCostUsd += current.cost_usd;
     // `.git`ポインタの確認・指紋のためのステージ・ignoredファイルの削除・検査は、どれも
     // worktreeに触れる。リースを失っていれば別の実行が同じworktreeを使っている可能性があるので、その前に止まる。

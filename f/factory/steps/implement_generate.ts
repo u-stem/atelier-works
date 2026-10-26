@@ -22,15 +22,17 @@ import {
   stillHoldsImplementLease,
 } from "../lib/implement_launch_support.ts";
 import {
+  docDirGuardFor,
   IMPLEMENT_SKILL_NAME,
   type ImplementClaudeRound,
   type ImplementContext,
   implementPromptInput,
+  runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementGenerateRound,
-  withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
 import { requireDeadlineAt } from "../lib/implement_support.ts";
+import { logger } from "../lib/log.ts";
 import {
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -65,8 +67,14 @@ export async function main(
         factoryCloneDir: context.factory_clone_dir,
       });
       try {
-        return await withReadOnlyDocDirCopy(
+        return await runDocDirGuardedRound(
           context.requirements_doc_dir,
+          docDirGuardFor(context, (message, fields) =>
+            logger("implement_generate").warn(message, {
+              work_item_id,
+              ...fields,
+            }),
+          ),
           (docDir) =>
             runImplementClaudeRound(
               { runClaude, recordAgentRun },

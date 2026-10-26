@@ -28,6 +28,7 @@ import {
 } from "../lib/implement_launch_support.ts";
 import {
   type ChangeInspection,
+  docDirGuardFor,
   GITLEAKS_TIMEOUT_MS,
   IMPLEMENT_CLAUDE_ROUND_KINDS,
   IMPLEMENT_OUTPUT_CONTRACT_NOTE,
@@ -36,9 +37,9 @@ import {
   type ImplementContext,
   type ImplementLoopResult,
   implementPromptInput,
+  runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementVerifyLoop,
-  withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
 import {
   fixRoundWorstCaseSec,
@@ -228,8 +229,11 @@ export async function main(
             work_item_id,
             context.attempt,
           );
-          return withReadOnlyDocDirCopy(
+          return runDocDirGuardedRound(
             context.requirements_doc_dir,
+            docDirGuardFor(context, (message, fields) =>
+              log.warn(message, { work_item_id, ...fields }),
+            ),
             (docDir) =>
               runImplementClaudeRound(
                 { runClaude, recordAgentRun },
