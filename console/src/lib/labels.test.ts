@@ -4,6 +4,7 @@ import {
   approvalStatusLabel,
   attemptRef,
   deploymentResultLabel,
+  hasPullRequestOrigin,
   holderKindLabel,
   holdScopeLabel,
   hostActionLabel,
@@ -19,6 +20,16 @@ import {
 describe("workItemStatusLabel", () => {
   test("translates a known status", () => {
     expect(workItemStatusLabel("awaiting_approval")).toBe("承認待ち");
+  });
+
+  test("translates the status of a design being generated", () => {
+    expect(workItemStatusLabel("designing")).toBe("設計の生成中");
+  });
+
+  test("translates the status of a design waiting for approval", () => {
+    expect(workItemStatusLabel("awaiting_design_approval")).toBe(
+      "設計の承認待ち",
+    );
   });
 
   test("does not leak an unknown status code", () => {
@@ -43,6 +54,10 @@ describe("workItemKindLabel", () => {
 describe("approvalKindLabel", () => {
   test("labels a requirements approval", () => {
     expect(approvalKindLabel("requirements", null)).toBe("要件定義");
+  });
+
+  test("labels a design approval", () => {
+    expect(approvalKindLabel("design", null)).toBe("設計");
   });
 
   test("labels an issue proposal from an audit as an improvement proposal", () => {
@@ -292,4 +307,17 @@ describe("holderKindLabel", () => {
   test("does not leak an unknown holder kind", () => {
     expect(holderKindLabel("robot")).toBe("不明な主体");
   });
+});
+
+describe("hasPullRequestOrigin", () => {
+  test.each(["factory", "human"])("is true for %s", (origin) => {
+    expect(hasPullRequestOrigin(origin)).toBe(true);
+  });
+
+  test.each(["unknown", "", "robot", "constructor"])(
+    "is false for the origin %j, which the label shows as unknown",
+    (origin) => {
+      expect(hasPullRequestOrigin(origin)).toBe(false);
+    },
+  );
 });

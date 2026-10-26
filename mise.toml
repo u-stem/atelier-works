@@ -44,6 +44,7 @@ docker compose -f infra/docker-compose.yml up -d --pull never --no-build
 docker compose -f infra/docker-compose.yml restart caddy
 docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 scripts/record-host-applied.sh
+docker image prune -f --filter label=com.atelier-works.prune=true || echo "up: image prune failed (ignored)" >&2
 """
 
 [tasks.down]
@@ -91,6 +92,7 @@ docker compose -f infra/docker-compose.yml restart caddy
 docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 bun ./scripts/freeze.ts apply
 scripts/record-host-applied.sh
+docker image prune -f --filter label=com.atelier-works.prune=true || echo "deploy: image prune failed (ignored)" >&2
 """
 
 [tasks.push]
@@ -172,7 +174,11 @@ run = "bunx --bun tsc --noEmit"
 
 [tasks.test]
 description = "Run the test suite (the console has its own suite in console:check)"
-run = "bun test --path-ignore-patterns 'console/**'"
+run = "bun test --parallel --path-ignore-patterns 'console/**'"
+
+[tasks."test:changed"]
+description = "Run only the tests affected by the diff against origin/main (CI still runs the full suite)"
+run = "bun test --parallel --changed=origin/main --path-ignore-patterns 'console/**'"
 
 [tasks."lint:docs"]
 description = "Lint the Markdown documents (repository rules, markdownlint, textlint, generated blocks)"
@@ -191,6 +197,10 @@ mise run typecheck
 mise run test
 mise run console:check
 """
+
+[tasks."check:changed"]
+description = "Run the checks narrowed to the diff against origin/main (CI still runs the full suite)"
+run = "bun run scripts/check-changed.ts"
 
 [tasks."console:check"]
 description = "Check the console lockfile policy, then type-check, test, and build the console"

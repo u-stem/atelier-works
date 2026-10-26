@@ -1,4 +1,4 @@
-import { TriangleAlert } from "lucide-react";
+import { OctagonAlert, TriangleAlert } from "lucide-react";
 import { type KeyboardEvent, useRef } from "react";
 import { cn } from "../lib/cn.ts";
 import { tabDomId, tabKeyTarget } from "../lib/tabs.ts";
@@ -11,9 +11,42 @@ export type TabSpec<Id extends string> = {
   readonly panelId: string;
   /** 名前に添える件数。 */
   readonly count?: number | undefined;
+  /** 件数の意味。読み上げが、件数の前後に添える語として読む。見た目には出さない。 */
+  readonly countLabel?: string | undefined;
+  /** 件数は下限で、これ以上ある可能性があるか。 */
+  readonly countAtLeast?: boolean | undefined;
   /** 名前に添える印の文言。色だけに頼らず、文字と記号で伝える。 */
   readonly mark?: string | undefined;
+  /** 印の段。注意は三角、要対応は八角で表す。 */
+  readonly markLevel?: "caution" | "action" | undefined;
 };
+
+/** 印の段ごとの記号と色。段を形でも区別し、色だけに頼らない。 */
+const MARK_STYLE = {
+  caution: { Icon: TriangleAlert, color: "text-warning" },
+  action: { Icon: OctagonAlert, color: "text-failure" },
+} as const;
+
+function TabMark({
+  text,
+  level,
+}: {
+  text: string;
+  level: "caution" | "action";
+}) {
+  const { Icon, color } = MARK_STYLE[level];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 text-caption font-normal",
+        color,
+      )}
+    >
+      <Icon aria-hidden="true" className="size-3.5" />
+      {text}
+    </span>
+  );
+}
 
 /**
  * タブの並び。矢印キーとHome、Endで移り、移った先を選ぶ。
@@ -52,53 +85,64 @@ export function Tabs<Id extends string>({
   };
 
   return (
-    <div
-      role="tablist"
-      aria-label={label}
-      className="flex gap-1 overflow-x-auto border-b border-border px-4 md:px-8"
-    >
-      {tabs.map((tab, index) => {
-        const isSelected = tab.id === selected;
-        return (
-          <button
-            key={tab.id}
-            ref={(element) => {
-              refs.current[index] = element;
-            }}
-            id={tabDomId(idPrefix, tab.id)}
-            type="button"
-            role="tab"
-            aria-selected={isSelected}
-            aria-controls={tab.panelId}
-            tabIndex={isSelected ? 0 : -1}
-            onClick={() => {
-              onSelect(tab.id);
-            }}
-            onKeyDown={(event) => {
-              onKeyDown(event, index);
-            }}
-            className={cn(
-              "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 whitespace-nowrap py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isSelected
-                ? "border-primary font-semibold text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {tab.label}
-            {tab.count === undefined ? null : (
-              <span className="rounded-md bg-foreground/10 px-1.5 text-caption font-medium tabular-nums">
-                {tab.count}
-              </span>
-            )}
-            {tab.mark === undefined ? null : (
-              <span className="inline-flex items-center gap-1 text-caption font-normal text-failure">
-                <TriangleAlert aria-hidden="true" className="size-3.5" />
-                {tab.mark}
-              </span>
-            )}
-          </button>
-        );
-      })}
+    // 罫線は外側の要素に引く。タブの下線(2px)を罫線の上に重ねるため、帯を1px下げる。
+    // 帯がスクロール枠(overflow-x)になると、縦の既定もautoになり、はみ出した1pxで縦に動く。
+    // タブ自身を下げずに帯ごと下げて、タブを帯の中に収め、縦はhiddenにする。
+    <div className="border-b border-border px-4 md:px-8">
+      <div
+        role="tablist"
+        aria-label={label}
+        className="-mb-px flex gap-1 overflow-x-auto overflow-y-hidden"
+      >
+        {tabs.map((tab, index) => {
+          const isSelected = tab.id === selected;
+          return (
+            <button
+              key={tab.id}
+              ref={(element) => {
+                refs.current[index] = element;
+              }}
+              id={tabDomId(idPrefix, tab.id)}
+              type="button"
+              role="tab"
+              aria-selected={isSelected}
+              aria-controls={tab.panelId}
+              tabIndex={isSelected ? 0 : -1}
+              onClick={() => {
+                onSelect(tab.id);
+              }}
+              onKeyDown={(event) => {
+                onKeyDown(event, index);
+              }}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 whitespace-nowrap py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                isSelected
+                  ? "border-primary font-semibold text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tab.label}
+              {tab.count === undefined ? null : (
+                <span className="rounded-md bg-foreground/10 px-1.5 text-caption font-medium tabular-nums">
+                  {tab.countLabel === undefined ? null : (
+                    <span className="sr-only">{tab.countLabel}</span>
+                  )}
+                  {tab.count}
+                  {tab.countAtLeast === true ? (
+                    <>
+                      <span aria-hidden="true">+</span>
+                      <span className="sr-only">以上</span>
+                    </>
+                  ) : null}
+                </span>
+              )}
+              {tab.mark === undefined ? null : (
+                <TabMark text={tab.mark} level={tab.markLevel ?? "action"} />
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

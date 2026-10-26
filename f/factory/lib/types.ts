@@ -275,7 +275,9 @@ export type WorkItemStatus =
   | "expired"
   | "cancelled"
   | "auditing"
-  | "audited";
+  | "audited"
+  | "designing"
+  | "awaiting_design_approval";
 
 export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "picked",
@@ -296,6 +298,8 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "cancelled",
   "auditing",
   "audited",
+  "designing",
+  "awaiting_design_approval",
 ];
 
 /**
@@ -391,6 +395,11 @@ export type WorkItem = {
   conflict_check_id: number | null;
   /** 直している競合のepisode。`conflict_check_id`と同時に値を持ち、同時に`null`になる。 */
   conflict_episode: number | null;
+  /**
+   * 設計工程で設計書を生成した回数。生成していなければ0。
+   * 列を足すmigrationの反映前の行は、列が無いので0として読む。
+   */
+  design_attempt: number;
   created_at: Date;
   updated_at: Date;
 };
@@ -428,6 +437,32 @@ export type RequirementDraft = {
 };
 
 // ---------------------------------------------------------------------------
+// design_drafts
+// ---------------------------------------------------------------------------
+
+/**
+ * 設計書の下書き1件。承認済みの要件定義(`requirement_draft_id`)から設計工程が生成する。
+ * 図のXMLはDBに保存せず、`doc_dir`の`<name>.drawio`に置く(`RequirementDraft`と同じ)。
+ */
+export type DesignDraft = {
+  id: number;
+  work_item_id: number;
+  /** この設計書の元にした、承認済みの要件定義の下書き。 */
+  requirement_draft_id: number;
+  /** 1から数える設計の試行。要件定義へ戻ると作業項目側は0に戻るが、この列は戻らない。 */
+  design_attempt: number;
+  summary: string;
+  markdown: string;
+  diagrams: Diagram[];
+  open_questions: string[];
+  /** `design.md`とすべての図を置いたworker内のディレクトリ。 */
+  doc_dir: string | null;
+  /** 設計書が読んだ対象リポジトリの既定ブランチの先頭のsha。 */
+  head_sha: string | null;
+  created_at: Date;
+};
+
+// ---------------------------------------------------------------------------
 // approval_requests: 種別を問わない承認待ち。
 // 承認を扱うscriptはすべてこのテーブルを通す。
 // ---------------------------------------------------------------------------
@@ -436,11 +471,13 @@ export type RequirementDraft = {
  * 承認依頼が待っている判断の種類。
  * `subject_id`は、`"requirements"`ならrequirement_drafts、
  * `"issue_proposal"`ならissue_proposalsの対応する行を指す。
+ * `"design"`は設計書の承認依頼で、承認を反映するハンドラーはまだ無い(`handlerPathFor`が例外を投げる)。
  */
-export type ApprovalRequestKind = "requirements" | "issue_proposal";
+export type ApprovalRequestKind = "requirements" | "issue_proposal" | "design";
 export const APPROVAL_REQUEST_KINDS: readonly ApprovalRequestKind[] = [
   "requirements",
   "issue_proposal",
+  "design",
 ];
 
 export type ApprovalRequestStatus =

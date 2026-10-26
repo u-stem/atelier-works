@@ -166,6 +166,18 @@ describe("decideConflictFixRecovery for a temporary stop", () => {
   });
 });
 
+describe("decideConflictFixRecovery for a check command that could not run", () => {
+  test("stops a blocked work item as fix_stopped, so that the row is not started again", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("blocked", {
+          note: "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+});
+
 describe("decideConflictFixRecovery", () => {
   test("releases a row whose work item does not exist, without a hold", () => {
     expect(decideConflictFixRecovery(null)).toEqual({

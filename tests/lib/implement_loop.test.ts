@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkUnrunnableReason } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_IMAGE_STALE_REASON,
   CheckImageStaleError,
@@ -857,6 +858,25 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(harness())).final_output).toEqual(DONE);
   });
 
+  test("keeps the tail of a failed check in the record when a large passed output follows", async () => {
+    const failedOutput = `${"warn: noisy log\n".repeat(3000)}FAIL: the failing test\n3 fail\n`;
+    const passedOutput = "ok: checked a file\n".repeat(3000);
+    const h = harness({
+      checks: [
+        [
+          {
+            ...FAIL,
+            output: failedOutput,
+            outputTail: failedOutput.slice(-2000),
+          },
+          { ...LINT_FAIL, ok: true, output: passedOutput, outputTail: "" },
+        ],
+      ],
+    });
+    await run(h, loopInput(outputRound(), { maxRounds: 1 }));
+    expect(h.recorded[0]?.check_output).toContain("FAIL: the failing test");
+  });
+
   test("lists gitleaks and the commands in the check summary", async () => {
     expect((await run(harness())).checks).toEqual({
       kind: "ran",
@@ -1264,6 +1284,153 @@ describe("runImplementVerifyLoop", () => {
   test("passes another error from the checks through", async () => {
     const h = harness({ checksError: new Error("disk full") });
     await expect(run(h)).rejects.toThrow("disk full");
+  });
+
+  // 検査コマンドが見つからず、setpriv自身が実行に失敗したときは、コードの失敗ではなく環境の問題である。
+  const SETPRIV_MISSING: LoopCheckResult = {
+    command: "bunx --bun biome check .",
+    ok: false,
+    exitCode: 127,
+    output: "setpriv: failed to execute bunx: No such file or directory",
+    outputTail: "setpriv: failed to execute bunx: No such file or directory",
+  };
+  const SETPRIV_NOT_EXECUTABLE: LoopCheckResult = {
+    ...SETPRIV_MISSING,
+    exitCode: 126,
+    output: "setpriv: failed to execute bunx: Permission denied",
+    outputTail: "setpriv: failed to execute bunx: Permission denied",
+  };
+  const UNRUNNABLE_CASES = [
+    { name: "exit 127", result: SETPRIV_MISSING },
+    { name: "exit 126", result: SETPRIV_NOT_EXECUTABLE },
+  ];
+
+  test.each(UNRUNNABLE_CASES)(
+    "exits check_unrunnable when setpriv could not execute a check ($name)",
+    async ({ result }) => {
+      const h = harness({ checks: [[PASS, result]] });
+      expect((await run(h)).exit).toBe("check_unrunnable");
+    },
+  );
+
+  test("gives the command and setpriv's message as the unrunnable reason", async () => {
+    const h = harness({ checks: [[SETPRIV_MISSING]] });
+    expect((await run(h)).reason).toBe(
+      checkUnrunnableReason(
+        "bunx --bun biome check .",
+        "setpriv: failed to execute bunx: No such file or directory",
+      ),
+    );
+  });
+
+  test("builds the unrunnable reason without a reason separator", () => {
+    expect(checkUnrunnableReason("a; b", "c; d")).toBe(
+      "check command could not run: a, b: c, d",
+    );
+  });
+
+  test("builds an unrunnable reason that names the command and the detail", () => {
+    expect(checkUnrunnableReason("bun test", "setpriv: failed")).toBe(
+      "check command could not run: bun test: setpriv: failed",
+    );
+  });
+
+  test("does not start a fix round when a check could not run", async () => {
+    const h = harness({ checks: [[SETPRIV_MISSING]] });
+    await run(h);
+    expect(h.fixRequests).toEqual([]);
+  });
+
+  test("does not record the round whose check could not run, so that it is not counted as a model failure", async () => {
+    const h = harness({ checks: [[SETPRIV_MISSING]] });
+    await run(h);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("records no verified tree when a check could not run", async () => {
+    const h = harness({ checks: [[SETPRIV_MISSING]] });
+    expect((await run(h)).verified_tree_sha).toBeNull();
+  });
+
+  test("keeps the failed rounds before the check that could not run", async () => {
+    const h = harness({ checks: [[FAIL], [SETPRIV_MISSING]] });
+    await run(h);
+    expect(h.recorded.map((record) => record.outcome)).toEqual([
+      "check_failed",
+    ]);
+  });
+
+  test("starts a fix round when the check's own program exits 127", async () => {
+    const h = harness({
+      checks: [
+        [
+          {
+            ...FAIL,
+            exitCode: 127,
+            output: "sh: 1: foo: not found",
+            outputTail: "sh: 1: foo: not found",
+          },
+        ],
+        [PASS],
+      ],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h)).exit).toBe("checks_passed");
+  });
+
+  test("is unrunnable for a program given by an absolute path", async () => {
+    const output =
+      "setpriv: failed to execute /usr/bin/foo: No such file or directory";
+    const h = harness({
+      checks: [
+        [
+          {
+            ...SETPRIV_MISSING,
+            command: "/usr/bin/foo",
+            output,
+            outputTail: output,
+          },
+        ],
+      ],
+    });
+    expect((await run(h)).exit).toBe("check_unrunnable");
+  });
+
+  test("starts a fix round when the setpriv line is not the first line of the output", async () => {
+    const output = `running tests\n${SETPRIV_MISSING.output}`;
+    const h = harness({
+      checks: [[{ ...SETPRIV_MISSING, output, outputTail: output }], [PASS]],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h)).exit).toBe("checks_passed");
+  });
+
+  test("starts a fix round when a program given by a relative path could not run", async () => {
+    const output =
+      "setpriv: failed to execute scripts/check.sh: Permission denied";
+    const h = harness({
+      checks: [
+        [
+          {
+            ...SETPRIV_NOT_EXECUTABLE,
+            command: "scripts/check.sh",
+            output,
+            outputTail: output,
+          },
+        ],
+        [PASS],
+      ],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h)).exit).toBe("checks_passed");
+  });
+
+  test("starts a fix round when the setpriv message comes with another exit code", async () => {
+    const h = harness({
+      checks: [[{ ...SETPRIV_MISSING, exitCode: 1 }], [PASS]],
+      fingerprints: [FP_1, FP_2],
+    });
+    expect((await run(h)).exit).toBe("checks_passed");
   });
 
   test("exits worktree_changed when gitleaks scanned another tree than the inspected one", async () => {

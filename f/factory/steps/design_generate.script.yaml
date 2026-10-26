@@ -1,0 +1,37 @@
+summary: '[SF-2-3/2] 設計書の生成(Claude)'
+description: Claudeを使って、承認済みの要件定義から設計書と図を生成するステップです。生成した内容を検証・保存し、結果を次のステップに渡します。承認済みの要件定義が設計に足りないと分かったときは、要件定義の生成へ戻します。1日あたりの利用上限を超えている場合は、ここで処理を止めます。
+lock: '!inline f/factory/steps/design_generate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    design_attempt:
+      type: number
+      description: ''
+      default: null
+    feedback:
+      type: string
+      description: ''
+      default: null
+      enum: []
+      originalType: enum
+    head_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+    worktree_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - design_attempt
+    - worktree_dir
+    - head_sha

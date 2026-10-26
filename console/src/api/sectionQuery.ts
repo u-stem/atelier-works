@@ -10,6 +10,8 @@ export type SectionQuery<T> = {
   readonly error: unknown;
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
+  /** 最後に取得できた時刻(ミリ秒)。まだ取得できていなければ0。報告しない結果は省く。 */
+  readonly dataUpdatedAt?: number | undefined;
 };
 
 /**

@@ -2,6 +2,7 @@
 // 入出力(gitのworktree操作、`ps`とシグナル、`du`)はあちらのスクリプトが行う。
 
 import { dirname } from "node:path";
+import { buildDesignWorktreeDir } from "./design_template.ts";
 import { isOwnershipRestoreFailure } from "./process_lock.ts";
 import type { FactoryConfig } from "./types.ts";
 import type { WorktreeEntry } from "./workspace.ts";
@@ -70,8 +71,10 @@ export type IssueWorktreeSource = {
 /**
  * Issueの作業項目1件について、`cleanup_workspaces.ts`が削除すべきworktreeのパスを返す。
  * 対象は、一覧にあれば要件定義用のdetachedな`req-<N>`(`requirementsWorktreeDir`)と、
+ * 設計用のdetachedな`design-<N>`(`buildDesignWorktreeDir`)と、
  * 作業項目にブランチがあれば`item.branch`(implementブランチ、`work_items.branch`)を
  * チェックアウトしたworktreeである。
+ * 設計用のworktreeは、設計の実行が強制終了されて後始末が走らなかったときの取りこぼしを、終端になった後に消す。
  * `worktrees`は、そのリポジトリの`git worktree list --porcelain -z`を解析したもの。
  * fetch専用のメインのクローン(`mainRepoDir`)は、たまたまそのブランチにあっても返さない。
  */
@@ -87,6 +90,10 @@ export function issueWorktreePaths(
     const reqDir = requirementsWorktreeDir(owner, repo, item.issue_number);
     if (worktrees.some((entry) => entry.path === reqDir)) {
       paths.push(reqDir);
+    }
+    const designDir = buildDesignWorktreeDir(owner, repo, item.issue_number);
+    if (worktrees.some((entry) => entry.path === designDir)) {
+      paths.push(designDir);
     }
   }
   if (item.branch !== null) {
@@ -113,7 +120,7 @@ export function issueWorktreePaths(
 
 /**
  * 稼働中の作業項目が使っているもの。
- * `issue_number`から決まる`req-<N>`のディレクトリと、`branch`上のworktreeである。
+ * `issue_number`から決まる`req-<N>`と`design-<N>`のディレクトリと、`branch`上のworktreeである。
  * `branch`はIssueの作業項目ならimplementブランチ、pr_fixの作業項目なら
  * 呼び出し側が解決したPRのheadブランチ。
  */
@@ -137,6 +144,7 @@ export function excludeActiveWorktrees(
     if (holder.owner !== owner || holder.repo !== repo) continue;
     if (holder.issue_number !== null) {
       held.add(requirementsWorktreeDir(owner, repo, holder.issue_number));
+      held.add(buildDesignWorktreeDir(owner, repo, holder.issue_number));
     }
     if (holder.branch !== null) {
       for (const entry of worktrees) {

@@ -32,6 +32,7 @@ import {
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
+  truncateCheckSections,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
@@ -506,6 +507,124 @@ describe("truncateCheckOutput", () => {
 
   test("strips NUL characters (Postgres text rejects them)", () => {
     expect(truncateCheckOutput("a\u0000b", 16)).toBe("ab");
+  });
+
+  const LONG = `HEAD-LINE\n${"warn: noisy log\n".repeat(2000)}FAIL: the failing test\n3 fail\n`;
+
+  test("keeps the start of an output that does not fit", () => {
+    expect(truncateCheckOutput(LONG).startsWith("HEAD-LINE\n")).toBe(true);
+  });
+
+  test("keeps the end of an output that does not fit, where the failures are listed", () => {
+    expect(
+      truncateCheckOutput(LONG).endsWith("FAIL: the failing test\n3 fail\n"),
+    ).toBe(true);
+  });
+
+  test("marks the omitted part with its size", () => {
+    expect(truncateCheckOutput(LONG)).toMatch(
+      /\[\.\.\. \d+ bytes omitted \.\.\.\]/,
+    );
+  });
+
+  test("keeps the result of a long output within the ceiling", () => {
+    expect(
+      new TextEncoder().encode(truncateCheckOutput(LONG)).byteLength,
+    ).toBeLessThanOrEqual(CHECK_OUTPUT_MAX_BYTES);
+  });
+
+  test("keeps the result of a long multi-byte output within the ceiling", () => {
+    const text = "あ𠮷".repeat(20000);
+    expect(
+      new TextEncoder().encode(truncateCheckOutput(text, 1000)).byteLength,
+    ).toBeLessThanOrEqual(1000);
+  });
+
+  test("never cuts a multi-byte UTF-8 sequence at either end of the kept parts", () => {
+    const text = "あ𠮷".repeat(20000);
+    expect(truncateCheckOutput(text, 1001)).not.toContain("�");
+  });
+
+  test("reports the number of the omitted bytes", () => {
+    const text = `${"a".repeat(1000)}${"b".repeat(1000)}`;
+    const result = truncateCheckOutput(text, 500);
+    const omitted = Number(/(\d+) bytes omitted/.exec(result)?.[1]);
+    const kept = result.replace(/\n\[\.\.\. \d+ bytes omitted \.\.\.\]\n/, "");
+    expect(kept.length + omitted).toBe(2000);
+  });
+});
+
+describe("truncateCheckSections", () => {
+  const failedBig = `$ bun test\nHEAD-OF-FAILED\n${"warn: noisy log\n".repeat(3000)}FAIL: the failing test\n3 fail\n`;
+  const passedBig = `$ bun run lint\nHEAD-OF-PASSED\n${"ok: checked a file\n".repeat(3000)}TAIL-OF-PASSED\n`;
+
+  test("joins the failed sections before the passed ones when they fit", () => {
+    expect(truncateCheckSections(["$ a\nx"], ["$ b\ny"])).toBe(
+      "$ a\nx\n\n$ b\ny",
+    );
+  });
+
+  test("returns an empty string without sections", () => {
+    expect(truncateCheckSections([], [])).toBe("");
+  });
+
+  test("keeps the tail of a failed output when a large passed output follows", () => {
+    expect(
+      truncateCheckSections([failedBig], [passedBig]).includes(
+        "FAIL: the failing test\n3 fail\n",
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps the start of a failed output when a large passed output follows", () => {
+    expect(
+      truncateCheckSections([failedBig], [passedBig]).includes(
+        "HEAD-OF-FAILED",
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps the command line of a passed output that is cut", () => {
+    expect(
+      truncateCheckSections([failedBig], [passedBig]).includes(
+        "$ bun run lint\nHEAD-OF-PASSED",
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps the result within the ceiling", () => {
+    expect(
+      new TextEncoder().encode(truncateCheckSections([failedBig], [passedBig]))
+        .byteLength,
+    ).toBeLessThanOrEqual(CHECK_OUTPUT_MAX_BYTES);
+  });
+
+  test("keeps the result with many sections within the ceiling", () => {
+    const many = Array.from(
+      { length: 30 },
+      (_, i) => `$ c${i}\n${"あ".repeat(5000)}`,
+    );
+    expect(
+      new TextEncoder().encode(truncateCheckSections(many, many)).byteLength,
+    ).toBeLessThanOrEqual(CHECK_OUTPUT_MAX_BYTES);
+  });
+
+  test("keeps the tail of every large failed section", () => {
+    const first = `$ one\n${"a\n".repeat(20000)}END-OF-ONE\n`;
+    const second = `$ two\n${"b\n".repeat(20000)}END-OF-TWO\n`;
+    const result = truncateCheckSections([first, second], []);
+    expect(result.includes("END-OF-ONE") && result.includes("END-OF-TWO")).toBe(
+      true,
+    );
+  });
+
+  test("gives the passed outputs the room that the failed outputs do not need", () => {
+    const result = truncateCheckSections(["$ a\nFAIL\n"], [passedBig]);
+    expect(result.includes("TAIL-OF-PASSED")).toBe(true);
+  });
+
+  test("strips NUL characters (Postgres text rejects them)", () => {
+    expect(truncateCheckSections(["a\u0000b"], [])).toBe("ab");
   });
 });
 

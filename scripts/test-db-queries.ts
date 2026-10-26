@@ -27,6 +27,7 @@ import {
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
   dependabotGateWaitingCancels,
+  findApprovedWorkItemForIssue,
   findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
   finishGhCollectRun,
@@ -44,15 +45,18 @@ import {
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
   hasSupersedingPrReview,
+  insertApprovalRequest,
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertGhCollectRuns,
   insertWorkerSample,
   insertWorkItem,
+  isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   latestConflictFixSettledAt,
+  latestDesignDraft,
   latestMainCiRunCreatedAt,
   latestStatusEvent,
   listActivePrFixWorkItems,
@@ -107,7 +111,11 @@ import {
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
   restartTransientPrReview,
+  returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
+  saveDesignDraftIfLeaseHolder,
+  saveDraft,
+  setDesignAttemptIfLeaseHolder,
   setIssueProposalCreatedIssue,
   setPrCiFixHold,
   setPrConflictFixHold,
@@ -8628,6 +8636,296 @@ check(
   "recordFailure: records the given occurrence time and falls back to now()",
   sfRows[0]?.given === true && sfRows[1]?.recent === true,
   sfRows,
+);
+
+// 設計工程の土台: 新しい2状態の行を読み書きでき、同じIssueの稼働中の行は1件までで、
+// design_attemptは0で始まり負にできず、designの承認依頼を挿せる。
+const designingItem = await issueWorkItem(
+  9301,
+  1,
+  "designing",
+  "qdb designing",
+);
+check(
+  "design stage: design_attempt starts at 0",
+  (await getWorkItem(designingItem, sql))?.design_attempt === 0,
+);
+let designSecondInsertError: unknown = null;
+try {
+  await issueWorkItem(
+    9301,
+    2,
+    "awaiting_design_approval",
+    "qdb second design item",
+  );
+} catch (err) {
+  designSecondInsertError = err;
+}
+check(
+  "design stage: a second active row for the same issue is rejected by the index",
+  isActiveIssueUniqueViolation(designSecondInsertError),
+  designSecondInsertError,
+);
+let designAttemptError: unknown = null;
+try {
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET design_attempt = -1 WHERE id = ${String(designingItem)}`,
+  );
+} catch (err) {
+  designAttemptError = err;
+}
+check(
+  "design stage: a negative design_attempt is rejected by the check",
+  String(designAttemptError).includes("design_attempt"),
+  designAttemptError,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET design_attempt = 2 WHERE id = ${String(designingItem)}`,
+);
+check(
+  "design stage: a design_attempt of 2 is stored and read back",
+  (await getWorkItem(designingItem, sql))?.design_attempt === 2,
+);
+const designRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: designingItem,
+    subject_id: 1,
+    payload: {},
+    expires_at: null,
+  },
+  sql,
+);
+check(
+  "design stage: an approval request of kind design can be inserted",
+  designRequest > 0,
+  designRequest,
+);
+
+// 設計書の下書き: 承認済みの要件定義の下書きと同じ作業項目にだけ結べ、設計の試行は1以上で、
+// 同じ組を複数挿せて最新が引け、作業項目の削除で消える。リースを失った実行は挿せない。
+async function requirementDraftFor(workItemId: number): Promise<number> {
+  return saveDraft(
+    {
+      work_item_id: workItemId,
+      attempt: 1,
+      summary: "qdb requirements",
+      markdown: "qdb requirements",
+      diagrams: [],
+      open_questions: [],
+      doc_dir: null,
+    },
+    sql,
+  );
+}
+
+function draftInput(
+  workItemId: number,
+  requirementDraftId: number,
+  designAttempt: number,
+) {
+  return {
+    work_item_id: workItemId,
+    requirement_draft_id: requirementDraftId,
+    design_attempt: designAttempt,
+    summary: "qdb design",
+    markdown: "qdb design",
+    diagrams: [{ name: "flow", file: "flow.drawio" }],
+    open_questions: [],
+    doc_dir: null,
+    head_sha: "a".repeat(40),
+  };
+}
+
+async function errorOf(action: () => Promise<unknown>): Promise<unknown> {
+  try {
+    await action();
+  } catch (err) {
+    return err;
+  }
+  return null;
+}
+
+const ddLeasedItem = await issueWorkItem(9311, 1, "designing", "qdb leased");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-a' WHERE id = ${String(ddLeasedItem)}`,
+);
+const ddOtherItem = await issueWorkItem(9312, 1, "designing", "qdb other");
+const ddLeasedRequirements = await requirementDraftFor(ddLeasedItem);
+const ddOtherRequirements = await requirementDraftFor(ddOtherItem);
+
+const ddFirstDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(ddLeasedItem, ddLeasedRequirements, 1),
+  "qdb-job-a",
+  sql,
+);
+check(
+  "design drafts: a draft for the leased work item is inserted",
+  ddFirstDesign !== null && ddFirstDesign > 0,
+  ddFirstDesign,
+);
+const ddForeignKeyError = await errorOf(() =>
+  saveDesignDraftIfLeaseHolder(
+    draftInput(ddLeasedItem, ddOtherRequirements, 1),
+    "qdb-job-a",
+    sql,
+  ),
+);
+check(
+  "design drafts: a requirement draft of another work item is rejected",
+  String(ddForeignKeyError).includes("foreign key"),
+  ddForeignKeyError,
+);
+const ddZeroAttemptError = await errorOf(() =>
+  saveDesignDraftIfLeaseHolder(
+    draftInput(ddLeasedItem, ddLeasedRequirements, 0),
+    "qdb-job-a",
+    sql,
+  ),
+);
+check(
+  "design drafts: a design_attempt of zero is rejected by the check",
+  String(ddZeroAttemptError).includes("design_attempt"),
+  ddZeroAttemptError,
+);
+const ddRepeatedDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(ddLeasedItem, ddLeasedRequirements, 1),
+  "qdb-job-a",
+  sql,
+);
+check(
+  "design drafts: the same pair of work item and design_attempt can be inserted again",
+  ddRepeatedDesign !== null && ddRepeatedDesign !== ddFirstDesign,
+  ddRepeatedDesign,
+);
+check(
+  "design drafts: the latest draft is the one inserted last",
+  (await latestDesignDraft(ddLeasedItem, sql))?.id === ddRepeatedDesign,
+);
+check(
+  "design drafts: a run that lost the lease inserts nothing",
+  (await saveDesignDraftIfLeaseHolder(
+    draftInput(ddLeasedItem, ddLeasedRequirements, 2),
+    "qdb-job-b",
+    sql,
+  )) === null,
+);
+check(
+  "design drafts: a run that lost the lease leaves the count unchanged",
+  (
+    await sql`SELECT count(*) AS n FROM factory.design_drafts WHERE work_item_id = ${ddLeasedItem}`.fetch()
+  )[0]?.n === 2,
+);
+const ddNotDesigning = await issueWorkItem(
+  9313,
+  1,
+  "needs_human",
+  "qdb stopped",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-c' WHERE id = ${String(ddNotDesigning)}`,
+);
+const ddStoppedRequirements = await requirementDraftFor(ddNotDesigning);
+check(
+  "design drafts: a work item that is not designing receives no draft even for the lease holder",
+  (await saveDesignDraftIfLeaseHolder(
+    draftInput(ddNotDesigning, ddStoppedRequirements, 1),
+    "qdb-job-c",
+    sql,
+  )) === null,
+);
+
+check(
+  "design drafts: the lease holder records the design attempt",
+  (await setDesignAttemptIfLeaseHolder(ddLeasedItem, 3, "qdb-job-a", sql)) &&
+    (await getWorkItem(ddLeasedItem, sql))?.design_attempt === 3,
+);
+check(
+  "design drafts: another run cannot record the design attempt",
+  !(await setDesignAttemptIfLeaseHolder(ddLeasedItem, 4, "qdb-job-b", sql)),
+);
+check(
+  "design drafts: a run that lost the lease cannot return the work item to the requirements",
+  !(await returnToRequirementsIfLeaseHolder(
+    ddLeasedItem,
+    "qdb-job-b",
+    "qdb gap",
+    sql,
+  )),
+);
+check(
+  "design drafts: the lease holder returns the work item to the requirements",
+  await returnToRequirementsIfLeaseHolder(
+    ddLeasedItem,
+    "qdb-job-a",
+    "qdb gap",
+    sql,
+  ),
+);
+const ddReturnedItem = await getWorkItem(ddLeasedItem, sql);
+check(
+  "design drafts: the return resets design_attempt, clears the lease and keeps attempt",
+  ddReturnedItem?.status === "requirements_generating" &&
+    ddReturnedItem.design_attempt === 0 &&
+    ddReturnedItem.flow_job_id === null &&
+    ddReturnedItem.attempt === 1,
+  ddReturnedItem,
+);
+const ddReturnEvent = await latestStatusEvent(
+  ddLeasedItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "design drafts: the return is recorded as an event from designing",
+  ddReturnEvent?.from_status === "designing" &&
+    ddReturnEvent.note === "qdb gap",
+  ddReturnEvent,
+);
+check(
+  "design drafts: the work item cannot be returned twice",
+  !(await returnToRequirementsIfLeaseHolder(
+    ddLeasedItem,
+    "qdb-job-a",
+    "qdb gap",
+    sql,
+  )),
+);
+
+execPsql(
+  target,
+  `DELETE FROM factory.work_items WHERE id = ${String(ddOtherItem)}`,
+);
+check(
+  "design drafts: deleting a work item deletes its requirement drafts and design drafts",
+  (
+    await sql`SELECT (SELECT count(*) FROM factory.design_drafts WHERE requirement_draft_id = ${ddOtherRequirements}) + (SELECT count(*) FROM factory.requirement_drafts WHERE id = ${ddOtherRequirements}) AS n`.fetch()
+  )[0]?.n === 0,
+);
+
+const ddDesigningForIssue = await issueWorkItem(
+  9314,
+  1,
+  "designing",
+  "qdb find designing",
+);
+check(
+  "design drafts: a work item that is designing counts as approved or later",
+  (await findApprovedWorkItemForIssue(OWNER, "r", 9314, sql))?.id ===
+    ddDesigningForIssue,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'awaiting_design_approval' WHERE id = ${String(ddDesigningForIssue)}`,
+);
+check(
+  "design drafts: a work item that awaits the design approval counts as approved or later",
+  (await findApprovedWorkItemForIssue(OWNER, "r", 9314, sql))?.id ===
+    ddDesigningForIssue,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -24,6 +24,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- | --- | --- |
 | `issue_claimed` | Issue着手 | `poll_issues`、`manual_intake_register` | Issueを取得し、要件定義の生成を始めた |
 | `approval_requested` | 承認待ち | `pipeline_request_approval` | 要件定義の承認依頼を記録した |
+| `design_approval_requested` | 設計の承認待ち | `design_request_approval` | 設計の承認依頼を記録した。設計フローの入口が閉じていて、本番では送らない |
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
 | `intake_refreshed` | 取り込み内容を更新 | `requirements_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した |
 | `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった。または、Factoryが作ったPRのCIが失敗した |
@@ -48,6 +49,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
+| `design_prepare`、`design_generate` | 承認済みの要件定義が無い、オーナーの照合に落ちた、日次の予算を超えた、設計のClaudeの実行中に要件定義のディレクトリが書き換わった、要件の不足の戻しが試行回数の上限に達した。設計フローの入口が閉じていて、本番では送らない |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
 | `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した結果が分からなかった(理由は`claim ownership could not be determined`) |
 | `poll_prs` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままになった(理由は`claimed pr trigger label was left removed`) |
@@ -70,7 +72,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 
 | 処理 | 送るとき |
 | --- | --- |
-| `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
+| `on_error_flow` | フロー(pipeline、design、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
 | `detect_schedule_failures` | スケジュールのジョブが失敗した。検出器が失敗をジョブ履歴から拾い、記録した後に送る。失敗の発生から通知まで、最大5分遅れる。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。1回の実行で拾った同じscriptの失敗が複数あっても、最新の失敗の内容で1回に収める。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗して、ここで拾われる。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |

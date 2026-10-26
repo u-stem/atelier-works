@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { NoticeRow } from "../../api/guards/notices.ts";
 import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
+import { Disclosure } from "../../components/Disclosure.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { FAILURE_TEXT_LIMIT } from "../../lib/failureView.ts";
@@ -125,6 +126,55 @@ function ResolvedItem({
         </div>
       </details>
     </li>
+  );
+}
+
+/**
+ * 情報の通知の一覧を、件数を添えてたたむ。通知が無いときは、たたまずに空の旨を出す。
+ * 人の行動が要らない通知なので、失敗と通知のタブを短くするために、開くまで一覧を見せない。
+ */
+export function InfoNoticeDisclosure({
+  notices,
+  now,
+  initiallyOpen = false,
+}: {
+  notices: readonly NoticeRow[];
+  now: number;
+  initiallyOpen?: boolean | undefined;
+}) {
+  if (notices.length === 0) {
+    return <InfoNoticeList notices={notices} now={now} />;
+  }
+  return (
+    <Disclosure
+      summary={`一覧を表示(${String(notices.length)}件)`}
+      initiallyOpen={initiallyOpen}
+    >
+      <InfoNoticeList notices={notices} now={now} />
+    </Disclosure>
+  );
+}
+
+/**
+ * 解決済みの通知の履歴を、件数を添えてたたむ。
+ * 履歴は参照用で、普段は読まないので、開くまで本文の一覧を見せない。
+ */
+export function ResolvedNoticeDisclosure({
+  notices,
+  now,
+  initiallyOpen = false,
+}: {
+  notices: readonly SystemResolvedNotice[];
+  now: number;
+  initiallyOpen?: boolean | undefined;
+}) {
+  return (
+    <Disclosure
+      summary={`履歴を表示(${String(notices.length)}件)`}
+      initiallyOpen={initiallyOpen}
+    >
+      <ResolvedNoticeList notices={notices} now={now} />
+    </Disclosure>
   );
 }
 

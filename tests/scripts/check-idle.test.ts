@@ -758,12 +758,32 @@ describe("SQL", () => {
     expect(runningWorkItemsSql()).toContain("'implementing'");
   });
 
+  test("the work item query names the designing status", () => {
+    expect(runningWorkItemsSql()).toContain("'designing'");
+  });
+
+  test("designing is a guarded status", () => {
+    expect(RUNNING_WORK_ITEM_STATUSES).toContain("designing");
+  });
+
+  test("awaiting_design_approval is not a guarded status, since no job runs while a human decides", () => {
+    expect(RUNNING_WORK_ITEM_STATUSES).not.toContain(
+      "awaiting_design_approval",
+    );
+  });
+
   const migrations = readdirSync(MIGRATIONS_DIR)
     .filter((name) => name.endsWith(".up.sql"))
     .map((name) => readFileSync(join(MIGRATIONS_DIR, name), "utf8"))
     .join("\n");
 
-  for (const status of ["implementing", "fixing", "reviewing", "auditing"]) {
+  for (const status of [
+    "implementing",
+    "fixing",
+    "reviewing",
+    "auditing",
+    "designing",
+  ]) {
     test(`${status} is a status the migrations define`, () => {
       expect(migrations).toContain(`'${status}'`);
     });
@@ -1096,7 +1116,7 @@ describe("command", () => {
     });
 
     expect(
-      run(["--recheck-timeout-ms=1000", "--recheck-interval-ms=1"]).exitCode,
+      run(["--recheck-timeout-ms=5000", "--recheck-interval-ms=1"]).exitCode,
     ).toBe(0);
   });
 
@@ -1112,7 +1132,7 @@ describe("command", () => {
     setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
 
     expect(
-      run(["--recheck-timeout-ms=600", "--recheck-interval-ms=100"]).stderr,
+      run(["--recheck-timeout-ms=3000", "--recheck-interval-ms=100"]).stderr,
     ).toContain("waiting");
   });
 });

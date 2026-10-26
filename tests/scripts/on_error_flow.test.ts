@@ -12,6 +12,7 @@ import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_r
 import { DEPENDABOT_FLOW_PATH } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
+import { DESIGN_FLOW_PATH } from "../../f/factory/lib/pipeline_lease.ts";
 import type { FailureRecord, WorkItem } from "../../f/factory/lib/types.ts";
 import {
   type FlowFailureDeps,
@@ -123,6 +124,7 @@ function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
     ci_check_id: null,
     conflict_check_id: null,
     conflict_episode: null,
+    design_attempt: 0,
     created_at: DATE,
     updated_at: DATE,
     ...overrides,
@@ -435,5 +437,92 @@ describe("handleFlowFailure for a transient pr_review failure", () => {
     });
     await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
     expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
+  });
+});
+
+describe("shouldMarkFailed for the design flow", () => {
+  test("marks a design failed when flow_job_id matches the root job id", () => {
+    expect(shouldMarkFailed("job-a", "job-a", DESIGN_FLOW_PATH)).toBe(true);
+  });
+
+  test("does not mark a design failed while no flow_job_id is recorded", () => {
+    expect(shouldMarkFailed(null, "job-a", DESIGN_FLOW_PATH)).toBe(false);
+  });
+
+  test("does not mark a design failed when the root job id is unavailable", () => {
+    expect(shouldMarkFailed("job-a", null, DESIGN_FLOW_PATH)).toBe(false);
+  });
+
+  test("marks a design failed when the root job id differs only in letter case", () => {
+    expect(shouldMarkFailed("job-a", "JOB-A", DESIGN_FLOW_PATH)).toBe(true);
+  });
+
+  test("does not mark a design failed when another run's job id is recorded", () => {
+    expect(shouldMarkFailed("job-b", "job-a", DESIGN_FLOW_PATH)).toBe(false);
+  });
+});
+
+describe("handleFlowFailure for the design flow", () => {
+  function designItem(overrides: Partial<WorkItem> = {}): WorkItem {
+    return workItem({
+      kind: "issue",
+      issue_number: 5,
+      pr_number: null,
+      status: "designing",
+      ...overrides,
+    });
+  }
+
+  function designInput(): FlowFailureInput {
+    return failureInput({
+      path: DESIGN_FLOW_PATH,
+      error: { message: "design failed", step_id: "design_generate" },
+    });
+  }
+
+  test("marks a designing work item failed under this run's lease", async () => {
+    const fake = fakeFailureDeps({ item: designItem() });
+    await handleFlowFailure(fake.deps, designInput());
+    expect(fake.statusCalls).toEqual([
+      {
+        id: 7,
+        from: "designing",
+        to: "failed",
+        flowJobId: ROOT_JOB,
+        note: "design failed",
+      },
+    ]);
+  });
+
+  test("does not fail a work item whose lease belongs to another run", async () => {
+    const fake = fakeFailureDeps({
+      item: designItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, designInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not fail a work item whose lease was cleared for a relaunch", async () => {
+    const fake = fakeFailureDeps({ item: designItem({ flow_job_id: null }) });
+    await handleFlowFailure(fake.deps, designInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("still records the failure of a stale run", async () => {
+    const fake = fakeFailureDeps({
+      item: designItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, designInput());
+    expect(fake.failures.map((record) => record.flow_path)).toEqual([
+      DESIGN_FLOW_PATH,
+    ]);
+  });
+
+  test("still notifies the failure of a stale run", async () => {
+    const fake = fakeFailureDeps({
+      item: designItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, designInput());
+    expect(jobFailed(fake.events)?.flow_path).toBe(DESIGN_FLOW_PATH);
   });
 });

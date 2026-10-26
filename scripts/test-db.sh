@@ -67,6 +67,9 @@ PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
 ACTIVE_PR_FIX_MIGRATION="20261013100500_active_pr_fix_key.up.sql"
 PR_CONFLICT_FIX_MIGRATION="20261015120000_pr_conflict_fix.up.sql"
 GH_COLLECT_DETAIL_MIGRATION="20261018100000_gh_collect_detail.up.sql"
+DESIGN_STAGE_ITEMS_MIGRATION="20261026120000_design_stage_work_items.up.sql"
+DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
+DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -604,6 +607,197 @@ verify_gh_collect_detail() {
   log "gh_collect_detail applies over existing rows and leaves the new columns at their defaults"
 }
 
+# 稼働中の一意インデックス3本の述語が、アプリの終端でない状態の一覧と一致することを確かめる。
+# 一覧は`f/factory/lib/types.ts`から読む。migrationの文面の検査(`tests/scripts/active_*_migration.test.ts`)と違い、
+# PostgreSQLが実際に持つインデックスの定義を読む。全migrationの適用後に呼ぶ。
+verify_active_index_predicates() {
+  local expected
+  expected="$(bun --eval 'import { TERMINAL_WORK_ITEM_STATUSES, WORK_ITEM_STATUSES } from "'"${REPO_ROOT}"'/f/factory/lib/types.ts"; console.log(WORK_ITEM_STATUSES.filter((status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status)).sort().join(","));')" \
+    || die "could not read the non-terminal statuses from types.ts"
+  [ -n "${expected}" ] || die "the non-terminal statuses read from types.ts are empty"
+  local index actual
+  for index in work_items_active_issue_key work_items_active_pr_fix_key work_items_active_dependabot_key; do
+    actual="$(psql_exec "${SCRATCH_DB}" -q -t -A -v index="${index}" <<'SQL' | tr -d '[:space:]'
+SELECT string_agg(m[1], ',' ORDER BY m[1] COLLATE "C")
+FROM (
+  SELECT regexp_matches(substring(indexdef from 'ARRAY\[(.*)\]'), '''([a-z_]+)''', 'g') AS m
+  FROM pg_indexes
+  WHERE schemaname = 'factory' AND indexname = :'index'
+) t
+SQL
+)" || die "could not read the definition of ${index}"
+    [ "${actual}" = "${expected}" ] \
+      || die "the predicate of ${index} differs from the non-terminal statuses: expected '${expected}', got '${actual}'"
+  done
+  log "the active work item indexes list every non-terminal status"
+}
+
+# 設計工程の土台の2つのmigrationを戻す検査。新しい状態の行と`design`の承認依頼を入れてから、downを新しい順に当てる。
+# 1回目は`design`の承認依頼が残っているので、先に走る承認依頼側のdownが、旧い種類の制約を足す文で失敗する。
+# 失敗すると作業項目側のdownは走らないので、作業項目も履歴も変わらないことを確かめる。
+# 2回目は依頼を消してから両方を当て、新状態の行が`needs_human`へ移って元の状態が履歴に残り、旧い定義へ戻ることを確かめる。
+# 最後に両方のupを古い順に当て直す。全downを当てる検査の前に呼ぶ。
+verify_design_stage_rollback() {
+  local items_up="${MIGRATIONS_DIR}/${DESIGN_STAGE_ITEMS_MIGRATION}"
+  local items_down="${MIGRATIONS_DIR}/${DESIGN_STAGE_ITEMS_MIGRATION%.up.sql}.down.sql"
+  local kind_up="${MIGRATIONS_DIR}/${DESIGN_STAGE_KIND_MIGRATION}"
+  local kind_down="${MIGRATIONS_DIR}/${DESIGN_STAGE_KIND_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${items_up}" "${items_down}" "${kind_up}" "${kind_down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  design_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  design_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+  design_columns() {
+    design_scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'work_items' AND column_name = 'design_attempt'"
+  }
+  design_statuses() {
+    design_scalar "SELECT string_agg(issue_number || ':' || status, ',' ORDER BY issue_number) FROM factory.work_items WHERE owner = 'designprobe'"
+  }
+  # 稼働中の一意インデックスの述語に、設計工程の状態が入っている数を返す。
+  design_indexed() {
+    design_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_active_issue_key', 'work_items_active_pr_fix_key', 'work_items_active_dependabot_key') AND indexdef LIKE '%designing%' AND indexdef LIKE '%awaiting_design_approval%'"
+  }
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the design stage rows"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
+  (1, 'issue', 'issue', 'designprobe', 'r', 1, 'https://github.com/designprobe/r/issues/1', 't', 'designing'),
+  (1, 'issue', 'issue', 'designprobe', 'r', 2, 'https://github.com/designprobe/r/issues/2', 't', 'awaiting_design_approval'),
+  (1, 'issue', 'issue', 'designprobe', 'r', 3, 'https://github.com/designprobe/r/issues/3', 't', 'implementing');
+INSERT INTO factory.approval_requests (kind, work_item_id, subject_id, status)
+  SELECT 'design', id, 9001, 'pending' FROM factory.work_items
+  WHERE owner = 'designprobe' AND issue_number = 2;
+SQL
+  [ "$(design_indexed)" = "3" ] || die "expected the design statuses in the three active indexes, found $(design_indexed)"
+
+  # 依頼が残っている間は、承認依頼側のdownが失敗する。`wmill datatable migrate down`と同じく、
+  # 失敗したら作業項目側のdownは当てない。行の状態、履歴、列、インデックスは変わらない。
+  log "rolling back design_stage_approval_kind while a design approval request remains"
+  local refused
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${kind_down}" 2>&1)"; then
+    die "design_stage_approval_kind was rolled back while a design approval request remained"
+  fi
+  case "${refused}" in
+    *approval_requests_kind_check*) ;;
+    *) die "design_stage_approval_kind was refused, but not by approval_requests_kind_check: ${refused}" ;;
+  esac
+  [ "$(design_statuses)" = "1:designing,2:awaiting_design_approval,3:implementing" ] \
+    || die "the refused rollback changed the work item statuses: $(design_statuses)"
+  [ "$(design_scalar "SELECT count(*) FROM factory.work_item_events e JOIN factory.work_items w ON w.id = e.work_item_id WHERE w.owner = 'designprobe'")" = "0" ] \
+    || die "the refused rollback left work item events"
+  [ "$(design_columns)" = "1" ] || die "the refused rollback dropped design_attempt"
+  [ "$(design_indexed)" = "3" ] || die "the refused rollback changed the active indexes"
+
+  # 依頼を消せば戻せる。新状態の行は`needs_human`へ移り、元の状態が履歴に残る。
+  printf "DELETE FROM factory.approval_requests WHERE kind = 'design';\n" | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "could not delete the design approval request"
+  log "rolling back design_stage_approval_kind and design_stage_work_items"
+  psql_exec "${SCRATCH_DB}" -q <"${kind_down}" >/dev/null || die "could not roll back design_stage_approval_kind"
+  psql_exec "${SCRATCH_DB}" -q <"${items_down}" >/dev/null || die "could not roll back design_stage_work_items"
+  [ "$(design_statuses)" = "1:needs_human,2:needs_human,3:implementing" ] \
+    || die "unexpected work item statuses after the rollback: $(design_statuses)"
+  local moved
+  moved="$(design_scalar "SELECT string_agg(w.issue_number || ':' || e.from_status || '>' || e.to_status, ',' ORDER BY w.issue_number) FROM factory.work_item_events e JOIN factory.work_items w ON w.id = e.work_item_id WHERE w.owner = 'designprobe'")"
+  [ "${moved}" = "1:designing>needs_human,2:awaiting_design_approval>needs_human" ] \
+    || die "unexpected events after the rollback: ${moved}"
+  [ "$(design_columns)" = "0" ] || die "expected design_attempt to be dropped by the rollback"
+  [ "$(design_indexed)" = "0" ] || die "expected the design statuses to leave the active indexes after the rollback"
+  design_rejected "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'designprobe', 'r', 4, 'https://github.com/designprobe/r/issues/4', 't', 'designing')" work_items_status_check
+  design_rejected "INSERT INTO factory.approval_requests (kind, work_item_id, subject_id) SELECT 'design', id, 9002 FROM factory.work_items WHERE owner = 'designprobe' AND issue_number = 3" approval_requests_kind_check
+
+  # 戻した後にupを古い順に当て直せる。
+  log "re-applying design_stage_work_items and design_stage_approval_kind"
+  psql_exec "${SCRATCH_DB}" -q <"${items_up}" >/dev/null || die "could not re-apply design_stage_work_items"
+  psql_exec "${SCRATCH_DB}" -q <"${kind_up}" >/dev/null || die "could not re-apply design_stage_approval_kind"
+  [ "$(design_columns)" = "1" ] || die "expected design_attempt after re-applying"
+  [ "$(design_indexed)" = "3" ] || die "expected the design statuses in the active indexes after re-applying"
+  printf "INSERT INTO factory.approval_requests (kind, work_item_id, subject_id) SELECT 'design', id, 9003 FROM factory.work_items WHERE owner = 'designprobe' AND issue_number = 3;\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a design approval request was rejected after re-applying"
+  printf "DELETE FROM factory.work_items WHERE owner = 'designprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "design_stage refuses to roll back over a design request without touching work items, moves design work items to needs_human, and round-trips"
+}
+
+# 設計書の下書きの表のmigrationを戻す検査。下書きの行を入れてから、downを当てる。
+# 1回目は下書きが残っているので、先頭の「行が無ければ通る制約」の追加で失敗する。
+# 失敗すると全体が戻るので、表、行、要件定義の下書きの一意制約が残ることを確かめる。
+# 2回目は下書きを消してから当て、表と一意制約が無くなることを確かめる。
+# 最後にupを当て直す。全downを当てる検査の前に呼ぶ。
+verify_design_drafts_rollback() {
+  local up="${MIGRATIONS_DIR}/${DESIGN_DRAFTS_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${DESIGN_DRAFTS_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  drafts_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  drafts_table() {
+    drafts_scalar "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'factory' AND table_name = 'design_drafts'"
+  }
+  drafts_unique() {
+    drafts_scalar "SELECT count(*) FROM pg_constraint WHERE conrelid = 'factory.requirement_drafts'::regclass AND conname = 'requirement_drafts_id_work_item_id_key'"
+  }
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the design drafts"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
+  (1, 'issue', 'issue', 'draftsprobe', 'r', 1, 'https://github.com/draftsprobe/r/issues/1', 't', 'designing');
+INSERT INTO factory.requirement_drafts (work_item_id, attempt, summary, markdown)
+  SELECT id, 1, 's', 'm' FROM factory.work_items WHERE owner = 'draftsprobe';
+INSERT INTO factory.design_drafts (work_item_id, requirement_draft_id, design_attempt, summary, markdown)
+  SELECT work_item_id, id, 1, 's', 'm' FROM factory.requirement_drafts
+  WHERE work_item_id IN (SELECT id FROM factory.work_items WHERE owner = 'draftsprobe');
+SQL
+  [ "$(drafts_table)" = "1" ] || die "expected the design_drafts table to exist"
+  [ "$(drafts_unique)" = "1" ] || die "expected the unique constraint on requirement_drafts to exist"
+
+  log "rolling back design_drafts while a design draft remains"
+  local refused
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${down}" 2>&1)"; then
+    die "design_drafts was rolled back while a design draft remained"
+  fi
+  case "${refused}" in
+    *design_drafts_must_be_empty*) ;;
+    *) die "design_drafts was refused, but not by design_drafts_must_be_empty: ${refused}" ;;
+  esac
+  [ "$(drafts_table)" = "1" ] || die "the refused rollback dropped the design_drafts table"
+  [ "$(drafts_unique)" = "1" ] || die "the refused rollback dropped the unique constraint on requirement_drafts"
+  [ "$(drafts_scalar "SELECT count(*) FROM factory.design_drafts d JOIN factory.work_items w ON w.id = d.work_item_id WHERE w.owner = 'draftsprobe'")" = "1" ] \
+    || die "the refused rollback changed the design drafts"
+  [ "$(drafts_scalar "SELECT count(*) FROM pg_constraint WHERE conrelid = 'factory.design_drafts'::regclass AND conname = 'design_drafts_must_be_empty'")" = "0" ] \
+    || die "the refused rollback left its check constraint behind"
+
+  printf "DELETE FROM factory.design_drafts;\n" | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "could not delete the design drafts"
+  log "rolling back design_drafts"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back design_drafts"
+  [ "$(drafts_table)" = "0" ] || die "expected the design_drafts table to be dropped by the rollback"
+  [ "$(drafts_unique)" = "0" ] || die "expected the unique constraint on requirement_drafts to be dropped by the rollback"
+
+  log "re-applying design_drafts"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply design_drafts"
+  [ "$(drafts_table)" = "1" ] || die "expected the design_drafts table after re-applying"
+  [ "$(drafts_unique)" = "1" ] || die "expected the unique constraint on requirement_drafts after re-applying"
+  printf "DELETE FROM factory.work_items WHERE owner = 'draftsprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "design_drafts refuses to roll back over a design draft without dropping the table, and round-trips"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -644,6 +838,7 @@ for up_file in "${up_files[@]}"; do
 done
 
 verify_issue_intake
+verify_active_index_predicates
 
 views=(v_inbox v_pipeline v_agent_cost_daily v_agent_usage_daily v_agent_model_usage_daily v_approval_stats v_lead_time v_failures v_notices v_reviews v_fix_rounds v_issue_proposals v_approval_requests)
 for view in "${views[@]}"; do
@@ -728,6 +923,9 @@ log "running the holds checks against '${SCRATCH_DB}'"
 COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-holds.ts" \
   || die "the holds checks failed against the real PostgreSQL"
+
+verify_design_stage_rollback
+verify_design_drafts_rollback
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)

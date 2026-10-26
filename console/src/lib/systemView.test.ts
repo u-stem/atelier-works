@@ -10,11 +10,13 @@ import {
   auditFailureLimitNote,
   auditFailuresOf,
   describeFetcher,
+  describeHostAction,
   describeInfoNotice,
   describeLatestDeployment,
   describeOrphanFailure,
   describeResolvedNotice,
   FETCHER_STALE_MINUTES,
+  groupOrphanFailures,
   listLimitNote,
   messagePreview,
   noticeDetailPath,
@@ -137,6 +139,70 @@ const DEPLOYMENT: SystemDeployment = {
   occurred_at: T0,
 };
 
+describe("describeHostAction", () => {
+  const NONE = { count: 0, complete: true, firstNoticeId: null };
+
+  test("counts the unresolved notices instead of reading the record of the deployment", () => {
+    expect(
+      describeHostAction({ count: 2, complete: true, firstNoticeId: 5 }, false)
+        .label,
+    ).toBe("ホストの作業2件が残っています");
+  });
+
+  test("warns while a notice is unresolved", () => {
+    expect(
+      describeHostAction({ count: 2, complete: true, firstNoticeId: 5 }, false)
+        .tone,
+    ).toBe("warning");
+  });
+
+  test("says none is needed when the notices are all read and none is unresolved", () => {
+    expect(describeHostAction(NONE, true).label).toBe("ホストの作業は不要");
+  });
+
+  test("stays quiet then, even if the record of the deployment says it was needed", () => {
+    expect(describeHostAction(NONE, true).tone).toBe("neutral");
+  });
+
+  test("states a lower bound when the list was cut", () => {
+    expect(
+      describeHostAction({ count: 1, complete: false, firstNoticeId: 5 }, false)
+        .label,
+    ).toBe("ホストの作業1件以上が残っています");
+  });
+
+  test("waits for the notices instead of showing the record while the summary loads", () => {
+    expect(describeHostAction("pending", true).label).toBe(
+      "ホストの作業を確認中",
+    );
+  });
+
+  test("stays quiet while it waits", () => {
+    expect(describeHostAction("pending", true).tone).toBe("neutral");
+  });
+
+  test("falls back to the record when the summary cannot be read", () => {
+    expect(describeHostAction(null, true).label).toBe("ホストの作業が必要");
+  });
+
+  test("warns under that fallback when the record says it was needed", () => {
+    expect(describeHostAction(null, true).tone).toBe("warning");
+  });
+
+  test("stays quiet under that fallback when the record says it was not needed", () => {
+    expect(describeHostAction(null, false).label).toBe("ホストの作業は不要");
+  });
+
+  test("says the notices cannot be checked when the list was cut and holds none", () => {
+    expect(
+      describeHostAction(
+        { count: 0, complete: false, firstNoticeId: null },
+        true,
+      ).label,
+    ).toBe("ホストの作業が必要(通知を確認できません)");
+  });
+});
+
 describe("describeLatestDeployment", () => {
   test("writes the first deployment as from the initial state", () => {
     expect(describeLatestDeployment(DEPLOYMENT).versionLabel).toBe(
@@ -152,10 +218,6 @@ describe("describeLatestDeployment", () => {
     expect(
       describeLatestDeployment({ ...DEPLOYMENT, result: "failed" }).resultTone,
     ).toBe("failure");
-  });
-
-  test("marks a deployment that needs host work as a warning", () => {
-    expect(describeLatestDeployment(DEPLOYMENT).hostActionTone).toBe("warning");
   });
 
   test("counts the changed paths", () => {
@@ -355,6 +417,109 @@ describe("describeOrphanFailure", () => {
   test("replaces hidden characters in the error", () => {
     expect(describeOrphanFailure({ ...ORPHAN, error: "a‮b" }).error.text).toBe(
       "a�b",
+    );
+  });
+
+  test("gives the step alone for a failure with a step", () => {
+    expect(describeOrphanFailure(ORPHAN).stepLabel).toBe("fetch");
+  });
+
+  test("gives no step label without a step", () => {
+    expect(
+      describeOrphanFailure({ ...ORPHAN, step: null }).stepLabel,
+    ).toBeNull();
+  });
+});
+
+function orphanAt(
+  id: number,
+  flow: string,
+  minutesAfterT0: number,
+  step: string | null = null,
+): SystemOrphanFailure {
+  return {
+    ...ORPHAN,
+    job_failure_id: id,
+    flow_path: flow,
+    step,
+    occurred_at: new Date(
+      Date.parse(T0) + minutesAfterT0 * 60_000,
+    ).toISOString(),
+  };
+}
+
+describe("groupOrphanFailures", () => {
+  test("returns no group for no failure", () => {
+    expect(groupOrphanFailures([])).toEqual([]);
+  });
+
+  test("puts the failures of one flow in one group", () => {
+    expect(
+      groupOrphanFailures([orphanAt(1, "f/a", 3), orphanAt(2, "f/a", 2)]).map(
+        (group) => group.flow,
+      ),
+    ).toEqual(["f/a"]);
+  });
+
+  test("counts the failures of a group", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 3),
+        orphanAt(2, "f/b", 2),
+        orphanAt(3, "f/a", 1),
+      ]).map((group) => group.count),
+    ).toEqual([2, 1]);
+  });
+
+  test("gives the time of the latest failure of a group", () => {
+    expect(
+      groupOrphanFailures([orphanAt(1, "f/a", 1), orphanAt(2, "f/a", 9)])[0]
+        ?.latestAt,
+    ).toBe(orphanAt(2, "f/a", 9).occurred_at);
+  });
+
+  test("orders the groups by their latest failure, newest first", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/old", 1),
+        orphanAt(2, "f/new", 9),
+        orphanAt(3, "f/mid", 5),
+      ]).map((group) => group.flow),
+    ).toEqual(["f/new", "f/mid", "f/old"]);
+  });
+
+  test("orders the failures of a group newest first", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 1),
+        orphanAt(2, "f/a", 9),
+        orphanAt(3, "f/a", 5),
+      ])[0]?.failures.map((failure) => failure.id),
+    ).toEqual([2, 3, 1]);
+  });
+
+  test("keeps different steps of one flow in one group", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 2, "fetch"),
+        orphanAt(2, "f/a", 1, "post"),
+      ]).map((group) => group.count),
+    ).toEqual([2]);
+  });
+
+  test("keeps every failure", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 1),
+        orphanAt(2, "f/b", 2),
+        orphanAt(3, "f/a", 3),
+      ]).reduce((total, group) => total + group.failures.length, 0),
+    ).toBe(3);
+  });
+
+  test("replaces hidden characters in the flow name", () => {
+    expect(groupOrphanFailures([orphanAt(1, "f/a‮b", 1)])[0]?.flow).toBe(
+      "f/a�b",
     );
   });
 });

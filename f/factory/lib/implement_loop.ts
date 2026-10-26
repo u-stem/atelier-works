@@ -6,6 +6,7 @@
 
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { firstUnrunnableCheckReason } from "./check_runner.ts";
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import {
   type RunClaudeOptions,
@@ -27,6 +28,7 @@ import {
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
+  truncateCheckSections,
   validateImplementOutput,
 } from "./implement_support.ts";
 import { jobTmpBase } from "./job_tmp.ts";
@@ -516,6 +518,7 @@ export async function runImplementClaudeRound(
  * 検証の前にループ自身が止まる理由を加えたもの。
  * ループ自身が止まる理由は、シンボリックリンク、差分の大きさ、`.git`ポインタの書き換え、
  * 変更の判定とgitleaksの検査の間のworktreeの変化、
+ * 検査コマンドの実行ファイルが見つからないなど、検査を実行できなかったこと、
  * Claudeの実行失敗、ラウンドの冒頭か修正ラウンドの前にリースを失っていたこと。
  */
 export type ImplementLoopExit =
@@ -531,6 +534,7 @@ export type ImplementLoopExit =
   | "git_pointer_modified"
   | "worktree_changed"
   | "check_image_stale"
+  | "check_unrunnable"
   | "claude_error"
   | "lease_lost";
 
@@ -547,6 +551,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "git_pointer_modified",
   "worktree_changed",
   "check_image_stale",
+  "check_unrunnable",
   "claude_error",
   "lease_lost",
 ];
@@ -606,6 +611,8 @@ export type ChangeInspection = {
 export type LoopCheckResult = {
   readonly command: string;
   readonly ok: boolean;
+  /** コマンドの終了コード。`isCheckUnrunnable`が使う。無ければ実行できなかった判定をしない。 */
+  readonly exitCode?: number;
   /** 秘密をマスクした出力の全体(DBに記録する)。 */
   readonly output: string;
   /** プロンプトに載せる抜粋。 */
@@ -733,14 +740,18 @@ type CheckEvaluation = {
   readonly state: "passed" | "failed" | "skipped";
   readonly failures: CheckFailure[];
   readonly contractViolated: boolean;
-  /** 失敗した出力、通った出力の順に並べたもの(`implement_rounds.check_output`)。 */
-  readonly outputText: string;
+  /** 失敗した検査の出力の節(`implement_rounds.check_output`)。 */
+  readonly failedOutputs: readonly string[];
+  /** 通った検査の出力の節。 */
+  readonly passedOutputs: readonly string[];
   /** 失敗した出力と契約違反の理由(停滞検出の指紋の入力)。 */
   readonly stallText: string;
   readonly skipReason: string | null;
   readonly summary: ImplementCheckSummary;
   /** gitleaksが検査したツリーが、変更を判定したツリーと違った。このときは検証コマンドを実行しない。 */
   readonly scannedTreeChanged: boolean;
+  /** 実行ファイルを起動できず実行できなかった最初の検査コマンドの理由。無ければ`null`。 */
+  readonly unrunnableReason: string | null;
 };
 
 function section(name: string, output: string): string {
@@ -774,6 +785,7 @@ async function evaluateChecks(
   // 保護パスで検証を飛ばすときもgitleaksは実行しているので、その結果も理由に含める。
   let summarySkipReason: string | null = null;
   let scannedTreeChanged = false;
+  let unrunnableReason: string | null = null;
   if (facts.noChanges) {
     results.push({ command: NO_CHANGES_CHECK_NAME, ok: false });
     failures.push({
@@ -803,7 +815,9 @@ async function evaluateChecks(
       summarySkipReason = skipReason;
     } else if (!scannedTreeChanged) {
       await deps.removeIgnoredFiles();
-      for (const result of await deps.runChecks()) {
+      const checkResults = await deps.runChecks();
+      unrunnableReason = firstUnrunnableCheckReason(checkResults);
+      for (const result of checkResults) {
         results.push({ command: result.command, ok: result.ok });
         if (result.ok) {
           passedOutputs.push(section(result.command, result.output));
@@ -824,7 +838,8 @@ async function evaluateChecks(
     state: failed ? "failed" : skipReason !== null ? "skipped" : "passed",
     failures,
     contractViolated,
-    outputText: [...failedOutputs, ...passedOutputs].join("\n\n"),
+    failedOutputs,
+    passedOutputs,
     stallText: stallParts.join("\n\n"),
     skipReason,
     summary:
@@ -832,6 +847,7 @@ async function evaluateChecks(
         ? { kind: "skipped", reason: summarySkipReason }
         : { kind: "ran", results },
     scannedTreeChanged,
+    unrunnableReason,
   };
 }
 
@@ -903,6 +919,8 @@ export async function gitPointerStopReason(
  *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
  *    workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  *    そのラウンドを記録せず、修正ラウンドに進まずに`check_image_stale`で止める。イメージが古いときと、稼働中のworkerの問題のときの両方である。
+ *    検査コマンドの実行ファイルを起動できなかったとき(`isCheckUnrunnable`)も、環境の問題なので、
+ *    そのラウンドを記録せず、修正ラウンドに進まずに`check_unrunnable`で止める。
  * 8. 終了を判定する(`decideImplementRoundExit`)。検査に失敗し、期限までの残りが修正ラウンドの最悪の所要時間に足りなければ`deadline`で止める。
  *    差分の指紋には、ステージしたツリーのshaを使う。
  * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。続けて`.git`ポインタを確かめ、変わっていれば止める。
@@ -1071,6 +1089,23 @@ export async function runImplementVerifyLoop(
         changed_paths: changedPaths,
       });
     }
+    // 検査コマンドの実行ファイルを起動できないのは、コードの失敗ではなくworkerの環境の問題で、Claudeには直せない。
+    // 修正ラウンドを回しても同じ出力を繰り返し、停滞で止まるだけなので、直ちに人の対応待ちで止まる。
+    // ラウンドは記録しない。記録すると、モデルの失敗として数えられ、`heavy_model`への切り替えを早めるためである。
+    if (evaluation.unrunnableReason !== null) {
+      deps.log("check command could not run; stopping the loop", {
+        round,
+        reason: evaluation.unrunnableReason,
+      });
+      return stopped({
+        exit: "check_unrunnable",
+        reason: evaluation.unrunnableReason,
+        protected_changes: protectedChanges,
+        checks: evaluation.summary,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
+      });
+    }
     if (evaluation.scannedTreeChanged) {
       const reason = scannedTreeChangedReason(round);
       await deps.recordRound({
@@ -1133,9 +1168,12 @@ export async function runImplementVerifyLoop(
       summary: produced.output.summary,
       gap_report: null,
       check_output:
-        evaluation.outputText.length === 0
+        evaluation.failedOutputs.length + evaluation.passedOutputs.length === 0
           ? null
-          : truncateCheckOutput(evaluation.outputText),
+          : truncateCheckSections(
+              evaluation.failedOutputs,
+              evaluation.passedOutputs,
+            ),
       checks_skipped_reason: evaluation.skipReason,
       protected_changes: protectedChanges,
       diff_stat: fingerprint.diffStat,

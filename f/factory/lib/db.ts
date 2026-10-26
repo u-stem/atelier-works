@@ -55,6 +55,7 @@ import {
   assertPullRequestUrl,
   checkGhRepoDetailWrite,
   type DeploymentRecord,
+  type DesignDraft,
   type Diagram,
   type FailureRecord,
   type FixOutcome,
@@ -383,6 +384,11 @@ function toWorkItem(row: SqlRow): WorkItem {
       "conflict_check_id",
     ),
     conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
+    // コードの反映はmigrationより先なので、列を足す前の行は`design_attempt`を持たない。
+    design_attempt:
+      row.design_attempt === undefined
+        ? 0
+        : parseRequiredNumber(row.design_attempt, "design_attempt"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -3232,13 +3238,15 @@ export async function nextCycleForIssue(
 
 const APPROVED_OR_LATER_STATUSES: readonly WorkItemStatus[] = [
   "approved",
+  "designing",
+  "awaiting_design_approval",
   "implementing",
   "pr_open",
 ];
 
 /**
  * (owner, repo, issueNumber)の`kind = 'issue'`の作業項目のうち、
- * 状態が`approved`以降(`approved` / `implementing` / `pr_open`)に達した
+ * 状態が`approved`以降(`approved` / `designing` / `awaiting_design_approval` / `implementing` / `pr_open`)に達した
  * 最新のもの(cycleの順、同じcycleならIDの順)を返す。無ければ`null`。
  * 人が作ったPRを、親のIssueの承認済みの要件定義に結び付けるのに使う。
  */
@@ -3443,6 +3451,162 @@ export async function getRequirementDraft(
     await sql`SELECT * FROM factory.requirement_drafts WHERE id = ${id}`.fetch();
   const row = rows[0];
   return row === undefined ? null : toRequirementDraft(row);
+}
+
+// ---------------------------------------------------------------------------
+// design_drafts
+// (`migrations/datatable/main/20261026130000_design_drafts.up.sql`)。
+// ---------------------------------------------------------------------------
+
+export type NewDesignDraft = {
+  work_item_id: number;
+  /** 設計書の元にした、承認済みの要件定義の下書き。同じ作業項目の下書きでなければ外部キーが拒む。 */
+  requirement_draft_id: number;
+  /** 1以上。0以下はCHECKが拒む。 */
+  design_attempt: number;
+  summary: string;
+  markdown: string;
+  diagrams: Diagram[];
+  open_questions: string[];
+  doc_dir: string | null;
+  head_sha: string | null;
+};
+
+/**
+ * `factory.design_drafts`に行を挿入し、そのIDを返す。作業項目が`designing`で、
+ * `flow_job_id`が`leaseJobId`のとき(設計フローのリースを持つとき)だけ挿入し、そうでなければ`null`を返す。
+ * リースの確認と挿入を、行を`FOR SHARE`で読むCTEを使った`INSERT ... SELECT`の1文にする。
+ * 確認と挿入を2文にすると、その間にリースが移り、持ち主の下書きより新しい下書きが残りうる。
+ * 共有ロックは、確認した行が挿入の完了まで書き換えられないようにする。
+ */
+export async function saveDesignDraftIfLeaseHolder(
+  draft: NewDesignDraft,
+  leaseJobId: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  const rows = await sql`
+    WITH lease AS (
+      SELECT id FROM factory.work_items
+      WHERE id = ${draft.work_item_id}::bigint AND status = 'designing'
+        AND flow_job_id = ${leaseJobId}::text
+      FOR SHARE
+    )
+    INSERT INTO factory.design_drafts (
+      work_item_id, requirement_draft_id, design_attempt, summary, markdown,
+      diagrams, open_questions, doc_dir, head_sha
+    )
+    SELECT
+      lease.id, ${draft.requirement_draft_id}::bigint, ${draft.design_attempt}::integer,
+      ${draft.summary}::text, ${draft.markdown}::text,
+      ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb,
+      ${draft.doc_dir}::text, ${draft.head_sha}::text
+    FROM lease
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : parseId(row.id, "id");
+}
+
+/** `factory.design_drafts`の行全体を解析する。 */
+export function toDesignDraft(row: SqlRow): DesignDraft {
+  return {
+    id: parseId(row.id, "id"),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    requirement_draft_id: parseId(
+      row.requirement_draft_id,
+      "requirement_draft_id",
+    ),
+    design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
+    summary: parseRequiredString(row.summary, "summary"),
+    markdown: parseRequiredString(row.markdown, "markdown"),
+    diagrams: parseDiagrams(row.diagrams, "diagrams"),
+    open_questions: parseOpenQuestions(row.open_questions, "open_questions"),
+    doc_dir: parseNullableString(row.doc_dir, "doc_dir"),
+    head_sha: parseNullableString(row.head_sha, "head_sha"),
+    created_at: parseDate(row.created_at, "created_at"),
+  };
+}
+
+/** `factory.design_drafts`の行をIDで1件取得する。無ければ`null`を返す。 */
+export async function getDesignDraft(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<DesignDraft | null> {
+  const rows =
+    await sql`SELECT * FROM factory.design_drafts WHERE id = ${id}`.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toDesignDraft(row);
+}
+
+/**
+ * 作業項目の`factory.design_drafts`のうち、最も新しく挿入された行(`id`が最大)を返す。無ければ`null`を返す。
+ * 一意制約が無く、同じ`design_attempt`の行が複数ありうるので、`created_at`ではなく`id`で決める。
+ */
+export async function latestDesignDraft(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<DesignDraft | null> {
+  const rows = await sql`
+    SELECT * FROM factory.design_drafts
+    WHERE work_item_id = ${workItemId}::bigint
+    ORDER BY id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toDesignDraft(row);
+}
+
+/**
+ * 作業項目が`designing`で`flow_job_id`が`leaseJobId`のときだけ`work_items.design_attempt`を更新し、更新したら`true`を返す。
+ * 設計フローの準備ステップがリースを確かめた直後に呼ぶ。
+ * リースを条件にするのは、リースを失った古い実行が新しい実行の値を戻さないため。
+ */
+export async function setDesignAttemptIfLeaseHolder(
+  id: number,
+  designAttempt: number,
+  leaseJobId: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.work_items
+    SET design_attempt = ${designAttempt}::integer, updated_at = now()
+    WHERE id = ${id} AND status = 'designing' AND flow_job_id = ${leaseJobId}
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 設計が要件の不足を報告したとき、作業項目を要件定義の生成へ戻す比較交換。
+ * 作業項目が`designing`で`flow_job_id`が`leaseJobId`のときだけ、1文で次をそろえて行い、対応する
+ * `factory.work_item_events`の行も記録する。
+ * - `status`を`requirements_generating`にする。
+ * - `design_attempt`を0に戻す。
+ * - `flow_job_id`を空にする。次の要件定義のフローが、起動側の記録した値でリースを取れるようにするため。
+ * `attempt`は書かない。次の`pipeline`の実行が`flow_input.attempt`で進める。
+ * 条件に合わなければ何も書かずに`false`を返す。
+ */
+export async function returnToRequirementsIfLeaseHolder(
+  id: number,
+  leaseJobId: string,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = 'designing' AND flow_job_id = ${leaseJobId}::text
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, 'designing', 'requirements_generating', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

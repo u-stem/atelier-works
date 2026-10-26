@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  APPROVAL_REQUEST_KINDS,
   assertBranchName,
   assertGitHubName,
   assertPullRequestUrl,
@@ -181,6 +182,30 @@ describe("TERMINAL_WORK_ITEM_STATUSES", () => {
     // `poll_issues`の照合は終端でない行だけを調べる。
     // ここに含めないと、完了した`pr_fix`の行を孤立した行として失敗にしてしまう。
     expect(TERMINAL_WORK_ITEM_STATUSES).toContain("rereview_requested");
+  });
+});
+
+describe("design stage vocabulary", () => {
+  test("designing is a status", () => {
+    expect(WORK_ITEM_STATUSES).toContain("designing");
+  });
+
+  test("awaiting_design_approval is a status", () => {
+    expect(WORK_ITEM_STATUSES).toContain("awaiting_design_approval");
+  });
+
+  test("designing is not terminal", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).not.toContain("designing");
+  });
+
+  test("awaiting_design_approval is not terminal", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).not.toContain(
+      "awaiting_design_approval",
+    );
+  });
+
+  test("design is an approval request kind", () => {
+    expect(APPROVAL_REQUEST_KINDS).toContain("design");
   });
 });
 

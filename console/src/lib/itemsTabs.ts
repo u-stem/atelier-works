@@ -1,9 +1,24 @@
 // 作業項目の画面のタブ(進捗と要件定義)を決める純関数。
 // 開くタブはURLの`?tab=`に持つ。作業項目の詳細のタブと名前をそろえてある。
+// タブの組に共通の規則は`tabSet.ts`にあり、ここは作業項目の画面の定義と呼び出しだけを持つ。
 
-import { tabDomId } from "./tabs.ts";
+import {
+  FETCH_FAILED_MARK,
+  parseTab,
+  type ResolvedTabSpec,
+  type TabSet,
+  tabPanelAttrs,
+  tabPanelId,
+  tabSpecs,
+  withTab,
+} from "./tabSet.ts";
+
+export { FETCH_FAILED_MARK };
 
 export type ItemsTabId = "progress" | "requirements";
+
+/** タブの要素の`id`の接頭辞。本体の`aria-labelledby`が指す。 */
+export const ITEMS_ID_PREFIX = "items";
 
 export const ITEMS_TABS: readonly {
   readonly id: ItemsTabId;
@@ -13,45 +28,34 @@ export const ITEMS_TABS: readonly {
   { id: "requirements", label: "要件定義" },
 ];
 
-/** URLのクエリのうち、開くタブを持つ名前。 */
-const TAB_PARAM = "tab";
-
-/** 既定で開くタブ。URLに名前を持たない。 */
-const DEFAULT_TAB: ItemsTabId = "progress";
-
-/** タブの取得が失敗したときに、タブの名前に添える文言。色だけに頼らず文字で伝える。 */
-export const FETCH_FAILED_MARK = "取得に失敗";
+const ITEMS_TAB_SET: TabSet<ItemsTabId> = {
+  tabs: ITEMS_TABS,
+  defaultTab: "progress",
+  idPrefix: ITEMS_ID_PREFIX,
+};
 
 /** URLの`?tab=`から開くタブを決める。無い値と知らない値は進捗にする。 */
 export function parseItemsTab(value: string | null): ItemsTabId {
-  return ITEMS_TABS.find((tab) => tab.id === value)?.id ?? DEFAULT_TAB;
+  return parseTab(ITEMS_TAB_SET, value);
 }
 
 /** タブを開く経路。routerの基準(`/console`)からの絶対パスで書く。進捗は名前を持たない。 */
 export function itemsTabPath(tab: ItemsTabId): string {
-  return tab === DEFAULT_TAB ? "/items" : `/items?${TAB_PARAM}=${tab}`;
+  const query = withTab(ITEMS_TAB_SET, new URLSearchParams(), tab).toString();
+  return query === "" ? "/items" : `/items?${query}`;
 }
 
-/**
- * タブを選んだ後のクエリを、新しいオブジェクトで返す。他のクエリは残す。
- * 進捗は名前を消す。URLを短く保ち、名前の無いURLと同じ画面になるためである。
- */
+/** タブを選んだ後のクエリを、新しいオブジェクトで返す。他のクエリは残す。 */
 export function withItemsTab(
   current: URLSearchParams,
   tab: ItemsTabId,
 ): URLSearchParams {
-  const next = new URLSearchParams(current);
-  if (tab === DEFAULT_TAB) {
-    next.delete(TAB_PARAM);
-  } else {
-    next.set(TAB_PARAM, tab);
-  }
-  return next;
+  return withTab(ITEMS_TAB_SET, current, tab);
 }
 
 /** タブが指す本体の`id`。 */
 export function itemsPanelId(tab: ItemsTabId): string {
-  return `items-panel-${tab}`;
+  return tabPanelId(ITEMS_TAB_SET, tab);
 }
 
 /**
@@ -63,11 +67,10 @@ export function itemsTabMark(
   selected: ItemsTabId,
   failed: Readonly<Record<ItemsTabId, boolean>>,
 ): string | undefined {
-  return tab !== selected && failed[tab] ? FETCH_FAILED_MARK : undefined;
+  return tabSpecs(ITEMS_TAB_SET, selected, { failed }).find(
+    (spec) => spec.id === tab,
+  )?.mark;
 }
-
-/** タブの要素の`id`の接頭辞。本体の`aria-labelledby`が指す。 */
-export const ITEMS_ID_PREFIX = "items";
 
 /** 選んでいないタブの本体は、描いたまま隠す。絞り込みやページの状態を保つため、外さない。 */
 export function itemsPanelHidden(
@@ -82,11 +85,7 @@ export function itemsPanelAttrs(
   panel: ItemsTabId,
   selected: ItemsTabId,
 ): { id: string; labelledBy: string; hidden: boolean } {
-  return {
-    id: itemsPanelId(panel),
-    labelledBy: tabDomId(ITEMS_ID_PREFIX, panel),
-    hidden: itemsPanelHidden(panel, selected),
-  };
+  return tabPanelAttrs(ITEMS_TAB_SET, panel, selected);
 }
 
 /**
@@ -97,17 +96,9 @@ export function itemsTabSpecs(
   selected: ItemsTabId,
   failed: Readonly<Record<ItemsTabId, boolean>>,
   requirementsCount: number | undefined,
-): {
-  id: ItemsTabId;
-  label: string;
-  panelId: string;
-  count: number | undefined;
-  mark: string | undefined;
-}[] {
-  return ITEMS_TABS.map((tab) => ({
-    ...tab,
-    panelId: itemsPanelId(tab.id),
-    count: tab.id === "requirements" ? requirementsCount : undefined,
-    mark: itemsTabMark(tab.id, selected, failed),
-  }));
+): ResolvedTabSpec<ItemsTabId>[] {
+  return tabSpecs(ITEMS_TAB_SET, selected, {
+    failed,
+    counts: { requirements: requirementsCount },
+  });
 }

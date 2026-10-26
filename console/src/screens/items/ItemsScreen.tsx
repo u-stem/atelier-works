@@ -1,4 +1,3 @@
-import { useLayoutEffect, useRef } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
   usePipeline,
@@ -10,6 +9,7 @@ import {
   refreshStatusOf,
   refreshStatusOfAll,
 } from "../../app/refreshStatus.ts";
+import { TabPanel } from "../../components/TabPanel.tsx";
 import { Tabs } from "../../components/Tabs.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { actionableTotal } from "../../lib/inboxView.ts";
@@ -27,43 +27,9 @@ import {
   parsePipelineScope,
   withPipelineScope,
 } from "../../lib/pipelineView.ts";
-import { recalledScroll, rememberScroll } from "../../lib/tabs.ts";
+import { useTabScroll } from "../../lib/useTabScroll.ts";
 import { PipelineSection } from "./PipelineSection.tsx";
 import { RequirementsSection } from "./RequirementsSection.tsx";
-
-/**
- * 2つのタブの本体が共有するスクロール枠で、タブごとのスクロール位置を覚えて戻す。
- * 枠は1つなので、何もしないと、片方で下までスクロールした位置がもう片方に残る。
- * 位置はスクロールのたびに今のタブへ記録し、タブが変わった直後(描画の前)に、移った先の位置へ戻す。
- */
-function useTabScroll(tab: ItemsTabId) {
-  const frameRef = useRef<HTMLDivElement>(null);
-  const memory = useRef<ReadonlyMap<ItemsTabId, number>>(new Map());
-  const current = useRef(tab);
-
-  useLayoutEffect(() => {
-    current.current = tab;
-    const frame = frameRef.current;
-    if (frame !== null) {
-      frame.scrollTop = recalledScroll(memory.current, tab);
-    }
-  }, [tab]);
-
-  return {
-    frameRef,
-    /** スクロールのたびに、今のタブの位置を覚える。 */
-    onScroll: () => {
-      const frame = frameRef.current;
-      if (frame !== null) {
-        memory.current = rememberScroll(
-          memory.current,
-          current.current,
-          frame.scrollTop,
-        );
-      }
-    },
-  };
-}
 
 /**
  * 作業項目の画面。進捗と要件定義の2つのタブを持つ。
@@ -90,8 +56,6 @@ export function ItemsScreen() {
     requirements: refreshStatusOf(requirements).isError,
   };
   const tabs = itemsTabSpecs(tab, failed, requirements.data?.length);
-  const progressPanel = itemsPanelAttrs("progress", tab);
-  const requirementsPanel = itemsPanelAttrs("requirements", tab);
 
   const selectTab = (id: ItemsTabId): void => {
     setSearchParams((current) => withItemsTab(current, id), { replace: true });
@@ -125,12 +89,7 @@ export function ItemsScreen() {
         onScroll={scroll.onScroll}
         className={SCROLL_BODY_CLASS}
       >
-        <div
-          id={progressPanel.id}
-          role="tabpanel"
-          aria-labelledby={progressPanel.labelledBy}
-          hidden={progressPanel.hidden}
-        >
+        <TabPanel attrs={itemsPanelAttrs("progress", tab)}>
           <PipelineSection
             pipeline={pipeline}
             scope={scope}
@@ -139,15 +98,10 @@ export function ItemsScreen() {
               summary.data === undefined ? null : actionableTotal(summary.data)
             }
           />
-        </div>
-        <div
-          id={requirementsPanel.id}
-          role="tabpanel"
-          aria-labelledby={requirementsPanel.labelledBy}
-          hidden={requirementsPanel.hidden}
-        >
+        </TabPanel>
+        <TabPanel attrs={itemsPanelAttrs("requirements", tab)}>
           <RequirementsSection index={requirements} />
-        </div>
+        </TabPanel>
       </div>
     </>
   );

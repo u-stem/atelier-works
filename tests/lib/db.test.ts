@@ -29,6 +29,7 @@ import {
   findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
   getApprovalRequest,
+  getDesignDraft,
   getIssueProposal,
   getLatestDeployment,
   getLatestPrCiCheck,
@@ -67,6 +68,7 @@ import {
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
   latestConflictFixSettledAt,
+  latestDesignDraft,
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
@@ -118,11 +120,14 @@ import {
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
   restartTransientPrReview,
+  returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
+  saveDesignDraftIfLeaseHolder,
   saveDraft,
   setAttemptIfLeaseHolder,
+  setDesignAttemptIfLeaseHolder,
   setFixRound,
   setFlowJobId,
   setFlowJobIdIfUnset,
@@ -1311,6 +1316,20 @@ describe("getWorkItem", () => {
     const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
     const item = await getWorkItem(1, sql);
     expect(item?.conflict_check_id).toBeNull();
+  });
+
+  test("reads a missing design attempt as 0", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.design_attempt).toBe(0);
+  });
+
+  test("parses the design attempt of a row that has the column", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, design_attempt: 2 }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.design_attempt).toBe(2);
   });
 
   test("parses branch and pr_url (工程3 columns)", async () => {
@@ -7893,5 +7912,276 @@ describe("transient pr_review restart", () => {
     };
     await restartTransientPrReview(params, sql, NO_JOBS);
     expect(calls[0]?.values).toContain("github_transient: ");
+  });
+});
+
+describe("findApprovedWorkItemForIssue with the design stage", () => {
+  function statusList(
+    calls: { values: unknown[] }[],
+  ): readonly unknown[] | undefined {
+    return calls[0]?.values.find((value) => Array.isArray(value));
+  }
+
+  test("treats a work item that is designing as approved or later", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findApprovedWorkItemForIssue("octo-owner", "atelier-works", 42, sql);
+    expect(statusList(calls)).toContain("designing");
+  });
+
+  test("treats a work item that awaits the design approval as approved or later", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findApprovedWorkItemForIssue("octo-owner", "atelier-works", 42, sql);
+    expect(statusList(calls)).toContain("awaiting_design_approval");
+  });
+});
+
+const NEW_DESIGN_DRAFT = {
+  work_item_id: 1,
+  requirement_draft_id: 5,
+  design_attempt: 2,
+  summary: "s",
+  markdown: "m",
+  diagrams: [{ name: "flow", file: "flow.drawio" }],
+  open_questions: ["q"],
+  doc_dir: "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/design",
+  head_sha: "a".repeat(40),
+};
+
+const DESIGN_DRAFT_ROW: SqlRow = {
+  id: 9,
+  work_item_id: 1,
+  requirement_draft_id: 5,
+  design_attempt: 2,
+  summary: "s",
+  markdown: "m",
+  diagrams: [{ name: "flow", file: "flow.drawio" }],
+  open_questions: ["q"],
+  doc_dir: "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/design",
+  head_sha: "a".repeat(40),
+  created_at: NOW.toISOString(),
+};
+
+describe("saveDesignDraftIfLeaseHolder", () => {
+  test("inserts into factory.design_drafts", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.design_drafts");
+  });
+
+  test("checks the lease and inserts in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("reads the lease with a share lock so that the holder cannot change before the insert commits", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.text).toContain("FOR SHARE");
+  });
+
+  test("passes the lease job id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.values).toContain("job-1");
+  });
+
+  test("requires the work item to be designing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.text).toContain("status = 'designing'");
+  });
+
+  test("selects the inserted row from the lease check", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.text).toContain("FROM lease");
+  });
+
+  test("serializes diagrams as a JSON array parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.values).toContainEqual(
+      JSON.stringify([{ name: "flow", file: "flow.drawio" }]),
+    );
+  });
+
+  test("casts the numeric columns to their real types", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    const text = calls[0]?.text ?? "";
+    expect(text.includes("::bigint") && text.includes("::integer")).toBe(true);
+  });
+
+  test("casts the json columns to jsonb", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql);
+    expect(calls[0]?.text).toContain("::jsonb");
+  });
+
+  test("returns the id of the inserted row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql),
+    ).toBe(9);
+  });
+
+  test("returns null when another run holds the lease", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await saveDesignDraftIfLeaseHolder(NEW_DESIGN_DRAFT, "job-1", sql),
+    ).toBeNull();
+  });
+});
+
+describe("getDesignDraft", () => {
+  test("parses the row into a design draft", async () => {
+    const { sql } = createFakeSqlClient([[DESIGN_DRAFT_ROW]]);
+    expect((await getDesignDraft(9, sql))?.requirement_draft_id).toBe(5);
+  });
+
+  test("returns null when the row does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getDesignDraft(9, sql)).toBeNull();
+  });
+
+  test("selects by id from factory.design_drafts", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getDesignDraft(9, sql);
+    expect(calls[0]?.text).toContain("FROM factory.design_drafts WHERE id");
+  });
+});
+
+describe("latestDesignDraft", () => {
+  test("orders by id descending", async () => {
+    const { sql, calls } = createFakeSqlClient([[DESIGN_DRAFT_ROW]]);
+    await latestDesignDraft(1, sql);
+    expect(calls[0]?.text).toContain("ORDER BY id DESC");
+  });
+
+  test("returns null when the work item has no design draft", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await latestDesignDraft(1, sql)).toBeNull();
+  });
+
+  test("parses design_attempt", async () => {
+    const { sql } = createFakeSqlClient([[DESIGN_DRAFT_ROW]]);
+    expect((await latestDesignDraft(1, sql))?.design_attempt).toBe(2);
+  });
+
+  test("parses diagrams", async () => {
+    const { sql } = createFakeSqlClient([[DESIGN_DRAFT_ROW]]);
+    expect((await latestDesignDraft(1, sql))?.diagrams).toEqual([
+      { name: "flow", file: "flow.drawio" },
+    ]);
+  });
+
+  test("parses a null head_sha", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...DESIGN_DRAFT_ROW, head_sha: null }],
+    ]);
+    expect((await latestDesignDraft(1, sql))?.head_sha).toBeNull();
+  });
+});
+
+describe("setDesignAttemptIfLeaseHolder", () => {
+  test("updates design_attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.text).toContain("SET design_attempt");
+  });
+
+  test("guards the update with the lease holder's flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.text).toContain("AND flow_job_id =");
+  });
+
+  test("passes the attempt, the id and the job id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.values).toEqual([2, 1, "job-1"]);
+  });
+
+  test("casts design_attempt to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.text).toContain("::integer");
+  });
+
+  test("returns true when the lease holder's row was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql)).toBe(true);
+  });
+
+  test("returns false when another run holds the lease", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql)).toBe(false);
+  });
+});
+
+describe("returnToRequirementsIfLeaseHolder", () => {
+  const WON_ROWS = [{ work_item_id: 1 }];
+
+  test("moves the work item back in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("resets design_attempt to zero", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("design_attempt = 0");
+  });
+
+  test("clears the flow job id so that the next run can record its own", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("does not write attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).not.toMatch(/\battempt\s*=/);
+  });
+
+  test("moves from designing to requirements_generating", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("status = 'requirements_generating'");
+  });
+
+  test("requires the work item to be designing", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("status = 'designing'");
+  });
+
+  test("passes the lease job id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.values).toContain("job-1");
+  });
+
+  test("records the transition in work_item_events", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("returns true when the transition was recorded", async () => {
+    const { sql } = createFakeSqlClient([WON_ROWS]);
+    expect(
+      await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS),
+    ).toBe(true);
+  });
+
+  test("returns false when the lease was lost", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS),
+    ).toBe(false);
   });
 });
