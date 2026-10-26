@@ -7,6 +7,7 @@
 
 import { dirname } from "node:path";
 import { buildRequirementsDocDir } from "./requirements_template.ts";
+import { assertGitHubName } from "./types.ts";
 
 /**
  * 設計書テンプレートの`##`見出しを、並び順どおりに並べたもの。
@@ -76,11 +77,24 @@ export function buildDesignDocDir(
   return `${workItemDir}/design/req-${String(attempt)}/attempt-${String(designAttempt)}`;
 }
 
-/** 設計書が読む対象リポジトリの、読み取り専用のdetachedなworktreeのパスを返す。 */
+/**
+ * 設計書が読む対象リポジトリの、読み取り専用のdetachedなworktreeのパスを返す。
+ * 形式は`/workspaces/<owner>/<repo>/design-<issueNumber>`で、`ensureRepo`のメインのcloneの隣に置く。
+ * 要件定義用の`req-<N>`とは別のパスにする。要件定義の承認の反映が`req-<N>`を消すので、共有すると設計の途中で消えるため。
+ * `owner`と`repo`は`assertGitHubName`で検証し、不正なら例外を投げる。
+ * `issueNumber`が0以上の整数でないときも例外を投げる。
+ */
 export function buildDesignWorktreeDir(
-  _owner: string,
-  _repo: string,
-  _issueNumber: number,
+  owner: string,
+  repo: string,
+  issueNumber: number,
 ): string {
-  return "";
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  if (!Number.isInteger(issueNumber) || issueNumber < 0) {
+    throw new Error(
+      `buildDesignWorktreeDir: issueNumber must be a non-negative integer (got ${String(issueNumber)})`,
+    );
+  }
+  return `/workspaces/${owner}/${repo}/design-${String(issueNumber)}`;
 }
