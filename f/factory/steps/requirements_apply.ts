@@ -16,6 +16,7 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
+import type { StartDesignOutcome } from "../lib/design_launch_support.ts";
 import { notify, notifyBestEffort } from "../lib/discord.ts";
 import {
   commentIssue,
@@ -51,6 +52,8 @@ export type RequirementsApplyResult = {
   readonly outcome: RequirementsApplyOutcome;
   /** 承認したときだけ入る。implementフローを起動したかどうか。 */
   readonly implement_started?: boolean;
+  /** 設計フローへ進めたときだけ入る。設計フローを起動できたかどうか。 */
+  readonly design_started?: boolean;
 };
 
 /**
@@ -91,6 +94,7 @@ export function buildApprovalCommentFailedMessage(
   },
   consoleUrl: string,
   reason: string,
+  _next: "implement" | "design" = "implement",
 ): string {
   return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認のコメントをIssueに投稿できませんでした(${reason})。要件定義は承認済みで、implementフローの起動は続けます。必要なら、次のリンクを載せたコメントをIssueに人が投稿してください。要件定義のConsole: ${consoleUrl}`;
 }
@@ -125,8 +129,52 @@ export type ApprovedSideEffectsDeps = {
   readonly removeWorktree: () => Promise<void>;
   /** implementフローを起動する(`startImplement`)。`implement_enabled`が偽なら`null`。 */
   readonly startImplement: (() => Promise<StartImplementOutcome>) | null;
+  /** 設計フローを起動する(`startDesign`)。無いか`null`なら起動しない。 */
+  readonly startDesign?: (() => Promise<StartDesignOutcome>) | null;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
+
+export type ApprovedBranchDeps = ApprovedSideEffectsDeps & {
+  readonly casToApproved: () => Promise<boolean>;
+  readonly casToDesigning: () => Promise<boolean>;
+  readonly startDesign: (() => Promise<StartDesignOutcome>) | null;
+};
+
+export async function applyApprovedBranch(
+  _deps: ApprovedBranchDeps,
+): Promise<RequirementsApplyResult> {
+  return { outcome: "no_op" };
+}
+
+export type ApprovedBranchContext = {
+  readonly workItem: WorkItem;
+  readonly issueNumber: number;
+  readonly attempt: number;
+  readonly client: GhClient;
+  readonly viewerLogin: string;
+  readonly webhookUrl: string;
+  readonly log: Logger;
+};
+
+export function buildApprovedBranchDeps(
+  _config: Pick<
+    FactoryConfig,
+    "implement_enabled" | "windmill_public_url" | "instance_name"
+  >,
+  _ctx: ApprovedBranchContext,
+): ApprovedBranchDeps {
+  return {
+    casToApproved: async () => false,
+    casToDesigning: async () => false,
+    commentIssue: async () => {},
+    addCommentFailedNotice: async () => {},
+    notifyApproved: async () => {},
+    removeWorktree: async () => {},
+    startImplement: null,
+    startDesign: async () => "launch_failed",
+    log: () => {},
+  };
+}
 
 function messageOf(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
