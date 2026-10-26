@@ -1,9 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PIPELINE_LEASE_LOST_REASON } from "../../f/factory/lib/pipeline_lease.ts";
+import {
+  type LockProcess,
+  type LockReleaseDeps,
+  WORKTREE_LOCK_BUSY_EXIT_CODE,
+  WorktreeBusyError,
+  type WorktreeLock,
+} from "../../f/factory/lib/process_lock.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
+import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   DESIGN_PREPARE_MOVED_ON_REASON,
   type DesignPrepareDeps,
+  ensureDesignWorktreeLockFree,
   runDesignPrepare,
 } from "../../f/factory/steps/design_prepare.ts";
 
@@ -497,5 +509,116 @@ describe("runDesignPrepare and the worktree", () => {
       issue_number: 42,
       head_sha: HEAD_SHA,
     });
+  });
+});
+
+describe("ensureDesignWorktreeLockFree", () => {
+  let base: string;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), "design-prepare-lock-"));
+  });
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const busyResult: CommandResult = {
+    stdout: "",
+    stderr: "",
+    exitCode: WORKTREE_LOCK_BUSY_EXIT_CODE,
+    timedOut: false,
+  };
+  const freeResult: CommandResult = {
+    stdout: "",
+    stderr: "",
+    exitCode: 0,
+    timedOut: false,
+  };
+
+  /** Claudeのプロセスがworktreeのロックを握っている状態。 */
+  function holder(lockPath: string): LockProcess {
+    return {
+      pid: 100,
+      ppid: 1,
+      pgid: 100,
+      startTime: "1",
+      elapsedSec: 5,
+      command: "claude",
+      owner: { kind: "implement", workItemId: 7, jobId: "job-old" },
+      lockPath,
+      holdsLock: true,
+      uninspectable: false,
+    };
+  }
+
+  function lockDeps(scanned: (lock: WorktreeLock) => readonly LockProcess[]) {
+    const stopped: LockProcess[][] = [];
+    const deps: LockReleaseDeps = {
+      scan: async (lock) => scanned(lock),
+      stop: async (targets) => {
+        stopped.push([...targets]);
+      },
+      sleep: async () => {},
+    };
+    return { deps, stopped };
+  }
+
+  test("throws when a process of an earlier run still holds the lock", async () => {
+    const { deps } = lockDeps((lock) => [holder(lock.lockPath)]);
+    await expect(
+      ensureDesignWorktreeLockFree(join(base, "design-42"), {
+        run: async () => busyResult,
+        lockDeps: deps,
+      }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("does not stop the process that holds the lock", async () => {
+    const { deps, stopped } = lockDeps((lock) => [holder(lock.lockPath)]);
+    await ensureDesignWorktreeLockFree(join(base, "design-42"), {
+      run: async () => busyResult,
+      lockDeps: deps,
+    }).catch(() => {});
+    expect(stopped).toEqual([]);
+  });
+
+  test("returns when nothing holds the lock", async () => {
+    const { deps } = lockDeps(() => []);
+    await expect(
+      ensureDesignWorktreeLockFree(join(base, "design-42"), {
+        run: async () => freeResult,
+        lockDeps: deps,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("keeps the old worktree in the whole preparation while the lock is held", async () => {
+    const { deps } = lockDeps((lock) => [holder(lock.lockPath)]);
+    const h = harness({
+      worktreeExists: true,
+      lockFree: () =>
+        ensureDesignWorktreeLockFree(join(base, "design-42"), {
+          run: async () => busyResult,
+          lockDeps: deps,
+        }),
+    });
+    await runDesignPrepare(h.deps, INPUT).catch(() => {});
+    expect(h.calls).not.toContain("worktree_remove");
+  });
+
+  test("throws from the whole preparation while the lock is held", async () => {
+    const { deps } = lockDeps((lock) => [holder(lock.lockPath)]);
+    const h = harness({
+      worktreeExists: true,
+      lockFree: () =>
+        ensureDesignWorktreeLockFree(join(base, "design-42"), {
+          run: async () => busyResult,
+          lockDeps: deps,
+        }),
+    });
+    await expect(runDesignPrepare(h.deps, INPUT)).rejects.toBeInstanceOf(
+      WorktreeBusyError,
+    );
   });
 });

@@ -1107,12 +1107,22 @@ describe("runDesignGenerate and losing the lease while Claude runs", () => {
     expect(h.removedWorktrees).toEqual([]);
   });
 
-  test("does not remove the copy of the diagrams", async () => {
+  test("still removes the copy of the diagrams, which only this job uses", async () => {
     const h = losing();
     await runDesignGenerate(h.deps, INPUT);
-    expect(
-      h.memory.removedPaths.some((path) => path.startsWith("/job-tmp/")),
-    ).toBe(false);
+    expect(h.memory.removedPaths).toContain("/job-tmp/copy-1");
+  });
+
+  test("removes the copy of the diagrams when Claude fails after the lease moved on", async () => {
+    const h = harness({
+      claude: async (_request, ctx) => {
+        if (ctx.world.item !== null)
+          ctx.world.item = { ...ctx.world.item, flow_job_id: OTHER };
+        throw new Error("claude crashed");
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT).catch(() => {});
+    expect(h.memory.removedPaths).toContain("/job-tmp/copy-1");
   });
 
   test("still removes the system prompt file", async () => {

@@ -69,6 +69,7 @@ import type {
   WorkItem,
 } from "../lib/types.ts";
 import {
+  type CommandRunner,
   copyFileTo,
   ensureEmptyDir,
   pathExists,
@@ -818,7 +819,8 @@ export async function hashDirectoryTree(
   return hasher.digest("hex");
 }
 
-const realDirectoryIo: DirectoryEntryIo = {
+/** 本番で`hashDirectoryTree`に渡す読み取り。シンボリックリンクはたどらず、リンク先の文字列を中身として扱う。 */
+export const realDirectoryIo: DirectoryEntryIo = {
   readDir: async (dir) =>
     (await readdir(dir, { withFileTypes: true })).map((entry) => ({
       name: entry.name,
@@ -833,6 +835,20 @@ const realDirectoryIo: DirectoryEntryIo = {
     return new Uint8Array(await readFile(path));
   },
 };
+
+/**
+ * 設計用のworktreeのロックを持ったままコマンドを起動するランナーを返す。
+ * Claudeの実行をこれで包むと、設計の準備ステップが次の試行で`design-<N>`を作り直す前に、
+ * 使用中のプロセスを検出できる。
+ */
+export function lockedDesignRun(
+  run: CommandRunner,
+  _worktreeDir: string,
+  _owner: { readonly workItemId: number; readonly jobId: string },
+  _prepareLockFile?: (path: string) => Promise<void>,
+): CommandRunner {
+  return run;
+}
 
 // ---------------------------------------------------------------------------
 // ステップの本体

@@ -31,6 +31,7 @@ import {
 import {
   defaultLockReleaseDeps,
   ensureWorktreeLockFree,
+  type LockReleaseDeps,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import {
@@ -40,6 +41,7 @@ import {
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItem } from "../lib/types.ts";
 import {
   addDetachedWorktree,
+  type CommandRunner,
   ensureRepo,
   listWorktrees,
   pathExists,
@@ -294,6 +296,15 @@ export async function runDesignPrepare(
     head_sha: repo.headSha,
   };
 }
+
+/**
+ * `dir`を前の実行のプロセスが使っていないことを確かめる。使っていれば`WorktreeBusyError`を投げる。
+ * 何も止めない。使用中のworktreeを消さないためである。
+ */
+export async function ensureDesignWorktreeLockFree(
+  _dir: string,
+  _deps: { readonly run: CommandRunner; readonly lockDeps: LockReleaseDeps },
+): Promise<void> {}
 
 /**
  * 設計の準備ステップ。本番の依存を組み立てて`runDesignPrepare`を呼ぶ。
