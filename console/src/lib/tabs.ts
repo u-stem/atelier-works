@@ -79,3 +79,16 @@ export function recalledScroll<Id extends string>(
 ): number {
   return Math.max(0, memory.get(id) ?? 0);
 }
+
+/**
+ * タブに戻るときのスクロール位置。まだ離れたことのないタブは`fallback`にする。
+ * 先頭でなく、タブの帯が枠の上端に来る位置のように、画面ごとの始点を渡せる。
+ * 負の位置は先頭(0)にする。
+ */
+export function recalledScrollOr<Id extends string>(
+  _memory: ReadonlyMap<Id, number>,
+  _id: Id,
+  _fallback: number,
+): number {
+  return 0;
+}
