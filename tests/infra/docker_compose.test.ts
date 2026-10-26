@@ -925,7 +925,7 @@ describe("infra/docker-compose.yml docker socket", () => {
   });
 });
 
-// `mise run up`と`mise run deploy`は、このラベルが付いた宙に浮いたイメージだけを消す。
+// `mise run up`と`mise run deploy`は、このラベルが付いたタグの無い旧イメージだけを消す。
 // ラベルを付け忘れた自前ビルドのサービスは、旧イメージが静かに残り続けるため、
 // `build`を持つサービスはすべてラベルを持つことを固定する。
 describe("infra/docker-compose.yml prune label", () => {

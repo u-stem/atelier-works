@@ -72,7 +72,7 @@ services:
     # `./worker/Dockerfile`を参照。
     build:
       context: ./worker
-      # `mise run up`と`mise run deploy`は、このラベルが付いた宙に浮いた旧イメージだけを消す。
+      # `mise run up`と`mise run deploy`は、このラベルが付いたタグの無い旧イメージだけを消す。
       # 自前でビルドするサービスには、同じラベルを付ける。
       labels:
         com.atelier-works.prune: "true"
