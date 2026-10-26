@@ -24,6 +24,8 @@ const STATUS_LABELS: ReadonlyMap<string, string> = new Map([
   ["cancelled", "取消"],
   ["auditing", "監査中"],
   ["audited", "監査完了"],
+  ["designing", "設計の生成中"],
+  ["awaiting_design_approval", "設計の承認待ち"],
 ]);
 
 const WORK_ITEM_KIND_LABELS: ReadonlyMap<string, string> = new Map([
@@ -110,6 +112,9 @@ export function approvalKindLabel(kind: string, origin: string | null): string {
   }
   if (kind === "issue_proposal") {
     return origin === "audit" ? "改善提案" : "Issue化提案";
+  }
+  if (kind === "design") {
+    return "設計";
   }
   return "承認依頼";
 }

@@ -382,6 +382,11 @@ function toWorkItem(row: SqlRow): WorkItem {
       "conflict_check_id",
     ),
     conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
+    // コードの反映はmigrationより先なので、列を足す前の行は`design_attempt`を持たない。
+    design_attempt:
+      row.design_attempt === undefined
+        ? 0
+        : parseRequiredNumber(row.design_attempt, "design_attempt"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };

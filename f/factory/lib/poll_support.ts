@@ -1067,7 +1067,10 @@ export function reconcileNotifies(
  * フローが正常に終わり、作業項目が人の判断(Consoleの要対応の承認)を待っている状態。
  * 実行中のジョブが無いので、孤立の猶予による検査を当ててはいけない。
  */
-const HUMAN_WAIT_STATUSES: readonly WorkItemStatus[] = ["awaiting_approval"];
+const HUMAN_WAIT_STATUSES: readonly WorkItemStatus[] = [
+  "awaiting_approval",
+  "awaiting_design_approval",
+];
 
 export function isWaitingForHuman(status: WorkItemStatus): boolean {
   return HUMAN_WAIT_STATUSES.includes(status);

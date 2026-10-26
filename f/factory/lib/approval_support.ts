@@ -156,6 +156,7 @@ export function buildSystemConsoleUrl(windmillPublicUrl: string): string {
  * 判断が記録された承認依頼を処理するstepスクリプトのパスを、種類ごとに返す。
  * `approval_decide.ts`は判断を記録した後、
  * `wmill.runScriptByPathAsync`でこのパスのスクリプトを起動する。
+ * `design`にはハンドラーがまだ無いので例外を投げる。
  */
 export function handlerPathFor(kind: ApprovalRequestKind): string {
   switch (kind) {
@@ -163,6 +164,8 @@ export function handlerPathFor(kind: ApprovalRequestKind): string {
       return "f/factory/steps/requirements_apply";
     case "issue_proposal":
       return "f/factory/steps/issue_proposal_apply";
+    case "design":
+      throw new Error("approval_support: no approval handler for kind design");
   }
 }
 

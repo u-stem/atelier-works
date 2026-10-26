@@ -449,6 +449,11 @@ function toInboxRow(row: SqlRow): InboxRow {
         ? null
         : asIsoDate(row.expires_at, "expires_at"),
   };
+  if (kind === "design") {
+    throw new Error(
+      "console_query: approval kind design is not handled yet by the inbox",
+    );
+  }
   if (kind === "requirements") {
     return {
       ...base,
