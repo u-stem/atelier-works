@@ -168,6 +168,24 @@ describe("READ_ONLY_SCRIPT_PATHS", () => {
   });
 });
 
+describe("the read-only scripts", () => {
+  // SQLの書き込みと、Windmillの書き込みのAPIの呼び出し。
+  const WRITE =
+    /\b(?:insert\s+into|update\s+[\w.]+\s+set|delete\s+from|truncate\s|drop\s+table|alter\s+table)\b|\b(?:createVariable|updateVariable|deleteVariable|createJob|runScriptByPath|runFlowByPath|cancelQueuedJob|createSchedule|updateSchedule|deleteSchedule|setScheduleEnabled)\b/i;
+
+  test("contain no SQL write and no Windmill write call", async () => {
+    const writers: string[] = [];
+    for (const path of READ_ONLY_SCRIPT_PATHS) {
+      const source = await Bun.file(
+        new URL(`../../${path}.ts`, import.meta.url).pathname,
+      ).text();
+      if (WRITE.test(source)) writers.push(path);
+    }
+
+    expect(writers).toEqual([]);
+  });
+});
+
 describe("isAllowedProxyRequest", () => {
   const RUN = "/api/w/factory/jobs/run_wait_result/p";
 
