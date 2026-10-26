@@ -39,8 +39,10 @@ const KEY_VALUE = new RegExp(
 const AUTHORIZATION_VALUE =
   /(\bAuthorization["']?\s*[=:]\s*)(?:(?:Bearer|Basic|Token)\s+)?[^\s,;"']+/gi;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi;
-const JWT = /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g;
+// 上限を置くのは、点やハイフンが続くだけの長い入力で、照合の失敗が入力長の二乗に膨らむのを避けるため。
+const URL_USERINFO = /(\b[a-z][a-z0-9+.-]{0,30}:\/\/)[^\s/?#@]{1,512}@/gi;
+const JWT =
+  /\beyJ[A-Za-z0-9_-]{5,2000}\.[A-Za-z0-9_-]{5,2000}\.[A-Za-z0-9_-]{0,2000}/g;
 const AWS_KEY_ID =
   /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b/g;
 // PEMは、改行がJSONの`\n`や`\\n`のまま残った形も、`[\s\S]`が文字として読む。
@@ -96,11 +98,29 @@ function replaceCounting(
   });
 }
 
+/** BEGINの出現がこの数を超える入力は、鍵の並びとして読まず、最初のBEGINから後ろを丸ごと伏せる。 */
+const PEM_BEGIN_MAX = 32;
+
+/**
+ * PEMのブロックを伏せる。ENDの無いBEGINは、その後ろの本文らしい部分までを伏せる。
+ * BEGINが多すぎる入力は、照合が膨らむのを避けるため、最初のBEGINから後ろを丸ごと伏せる。
+ */
+function maskPem(input: string, counter: Counter): string {
+  const first = input.indexOf("-----BEGIN ");
+  if (first === -1) {
+    return input;
+  }
+  if (input.split("-----BEGIN ").length - 1 > PEM_BEGIN_MAX) {
+    counter.masked = true;
+    return input.slice(0, first) + MASK;
+  }
+  const closed = replaceCounting(input, PEM_BLOCK, MASK, counter);
+  return replaceCounting(closed, PEM_OPEN, MASK, counter);
+}
+
 /** 文字列の規則(既知の形、キー=値、一般形)を当てる。制御文字は先に落としてある前提。 */
 function maskString(input: string, counter: Counter): string {
-  let text = input;
-  text = replaceCounting(text, PEM_BLOCK, MASK, counter);
-  text = replaceCounting(text, PEM_OPEN, MASK, counter);
+  let text = maskPem(input, counter);
   const afterKnown = maskSecrets(text);
   if (afterKnown !== text) {
     counter.masked = true;
@@ -148,9 +168,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const MAX_DEPTH = 64;
 
 /** 値をたどって伏せる。キー名が秘密を指す項目は、値の型を問わず丸ごと置き換える。 */
-function maskValue(value: unknown, counter: Counter, depth = 0): unknown {
+function maskValue(
+  value: unknown,
+  counter: Counter,
+  depth = 0,
+  rules = true,
+): unknown {
   if (typeof value === "string") {
-    return maskString(stripControl(value), counter);
+    const clean = stripControl(value);
+    return rules ? maskString(clean, counter) : clean;
   }
   if (typeof value !== "object" || value === null) {
     return value;
@@ -160,7 +186,7 @@ function maskValue(value: unknown, counter: Counter, depth = 0): unknown {
     return MASK;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => maskValue(item, counter, depth + 1));
+    return value.map((item) => maskValue(item, counter, depth + 1, rules));
   }
   if (!isRecord(value)) {
     return value;
@@ -172,7 +198,7 @@ function maskValue(value: unknown, counter: Counter, depth = 0): unknown {
       counter.masked = true;
       out[cleanKey] = MASK;
     } else {
-      out[cleanKey] = maskValue(child, counter, depth + 1);
+      out[cleanKey] = maskValue(child, counter, depth + 1, rules);
     }
   }
   return out;
@@ -240,8 +266,29 @@ export function redactText(text: string): Redacted {
   };
 }
 
+/** 伏せる前に粗く切る大きさは、上限のこの倍数。入力が巨大でも、伏せ字の所要時間を抑えるため。 */
+const COARSE_FACTOR = 2;
+
+/**
+ * 粗く切った先頭にBEGINの無い`-----END ...-----`があれば、先頭からそのENDまでを伏せる。
+ * 切り口が鍵の本文の途中に当たると、BEGINが落ちて本文だけが残るため。
+ */
+function maskOrphanPemEnd(text: string, counter: Counter): string {
+  const end = /-----END [A-Z0-9 ]{1,40}-----/.exec(text);
+  if (end === null) {
+    return text;
+  }
+  if (text.slice(0, end.index).includes("-----BEGIN ")) {
+    return text;
+  }
+  counter.masked = true;
+  return MASK + text.slice(end.index + end[0].length);
+}
+
 /**
  * ジョブのログを、末尾の`limitBytes`バイトだけ残して伏せる。
+ * 伏せてから切る。入力が上限の数倍を超えるときだけ、伏せる前に末尾を粗く切る。
+ * 粗い切り口で鍵のBEGINが落ちた場合は、先頭からENDまでを伏せる。
  * 1行ずつJSONとして読み、読めた行は値をたどって伏せる。読めない行(Windmill自身の行、
  * 子プロセスの出力)は文字列の規則だけをかけ、その行数を返す。
  */
@@ -249,10 +296,13 @@ export function redactLog(
   raw: string,
   limitBytes: number = LOG_LIMIT_BYTES,
 ): RedactedLog {
-  const kept = keepTail(raw, limitBytes);
+  const kept = keepTail(stripControl(raw), limitBytes * COARSE_FACTOR);
   const counter: Counter = { masked: false };
   // 複数行にまたがるPEMは行に分ける前に伏せる。
-  const whole = maskPemAcrossLines(stripControl(kept.text), counter);
+  const whole = maskPem(
+    kept.truncated ? maskOrphanPemEnd(kept.text, counter) : kept.text,
+    counter,
+  );
   let nonJsonLines = 0;
   const lines = whole.split("\n").map((line) => {
     if (line.length === 0) {
@@ -274,14 +324,16 @@ export function redactLog(
   };
 }
 
-function maskPemAcrossLines(text: string, counter: Counter): string {
-  const closed = replaceCounting(text, PEM_BLOCK, MASK, counter);
-  return replaceCounting(closed, PEM_OPEN, MASK, counter);
+/** 粗い切り口に残った、途中で切れたかもしれない末尾の語を落とす。秘密の断片を残さないため。 */
+function dropPartialTail(text: string): string {
+  return text.replace(/[A-Za-z0-9_.+/=-]+$/, "");
 }
 
 /**
  * ジョブの結果を、先頭の`limitBytes`バイトだけ残して伏せる。
  * 文字列の結果はそのまま、それ以外はJSONの文字列にして返す。
+ * 伏せてから切る。文字列にした後、上限の数倍を超えるときだけ、伏せる前に先頭を粗く切る。
+ * 粗い切り口の末尾の語は落とす。キー名の規則は、文字列にする前の構造に当てる。
  */
 export function redactResult(
   value: unknown,
@@ -290,13 +342,24 @@ export function redactResult(
   const counter: Counter = { masked: false };
   let text: string;
   if (typeof value === "string") {
-    text = maskString(stripControl(value), counter);
+    text = stripControl(value);
   } else {
-    const serialized = JSON.stringify(maskValue(value, counter), null, 2);
-    text = serialized === undefined ? "" : maskString(serialized, counter);
+    const serialized = JSON.stringify(
+      maskValue(value, counter, 0, false),
+      null,
+      2,
+    );
+    text = serialized === undefined ? "" : serialized;
   }
-  const head = keepHead(stripControl(text), limitBytes);
-  return { text: head.text, truncated: head.truncated, masked: counter.masked };
+  const coarse = keepHead(text, limitBytes * COARSE_FACTOR);
+  const prepared = coarse.truncated ? dropPartialTail(coarse.text) : text;
+  const masked = stripControl(maskString(prepared, counter));
+  const head = keepHead(masked, limitBytes);
+  return {
+    text: head.text,
+    truncated: coarse.truncated || head.truncated,
+    masked: counter.masked,
+  };
 }
 
 /**
