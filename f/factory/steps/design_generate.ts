@@ -53,6 +53,10 @@ import {
   PIPELINE_FLOW_PATH,
 } from "../lib/pipeline_lease.ts";
 import {
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
+import {
   automatedFeedback,
   DESIGN_SCHEMA,
   type DesignOutput,
@@ -72,7 +76,6 @@ import {
   type CommandRunner,
   copyFileTo,
   ensureEmptyDir,
-  pathExists,
   readDirEntries,
   readTextFile,
   removePath,
@@ -167,7 +170,6 @@ export type DesignGenerateFs = {
   readonly readDir: (dir: string) => Promise<string[]>;
   readonly readText: (path: string) => Promise<string>;
   readonly removePath: (path: string) => Promise<void>;
-  readonly pathExists: (path: string) => Promise<boolean>;
   /** 複製を置く、ジョブごとの一時ディレクトリを作る。 */
   readonly makeTempDir: () => Promise<string>;
   /** `dir`の内容(名前の一覧と中身)のハッシュ。ディレクトリが無ければ`null`。 */
@@ -400,8 +402,10 @@ async function copyDeclaredDiagrams(
  * リースを条件にした1文で要件定義の生成へ戻し(`design_attempt`は0、`flow_job_id`は空)、
  * pipelineを次の試行で起動してジョブIDを記録する。起動か記録に失敗したら、リースが空のときだけ`needs_human`に戻して例外を投げる。
  *
- * 後始末は`finally`で、リースを持っているときだけworktreeと一時の複製を消す。
+ * 後始末は`finally`で行う。worktreeはリースを持っているときだけ消す。
  * リースを失った実行は、新しい実行が同じパスを使っているかもしれないので消さない。
+ * 図の複製はこのジョブだけの一時ディレクトリなので、リースに関係なく消す。
+ * Claudeを`lockedDesignRun`で起動し、設計の準備が使用中のworktreeを消さないようにする。
  * Claudeの実行の後に`design-<N>`の中でgitを実行しない。
  */
 export async function runDesignGenerate(
@@ -441,7 +445,25 @@ export async function runDesignGenerate(
   let workspaceCleaned = false;
 
   /**
-   * リースを持っているときだけ、worktreeと一時の複製を消す。2回目以降は何もしない。
+   * 図の複製を消す。複製はこのジョブだけの一時ディレクトリで、新しい実行と共有しないので、リースに関係なく消す。
+   * 失敗してもログに残すだけで、結果を隠さない。
+   */
+  const removeCopyDir = async (): Promise<void> => {
+    if (copyDir === null) return;
+    const target = copyDir;
+    copyDir = null;
+    try {
+      await deps.fs.removePath(target);
+    } catch (err) {
+      deps.log("failed to remove the copy of the requirements diagrams", {
+        work_item_id: workItemId,
+        error: messageOf(err),
+      });
+    }
+  };
+
+  /**
+   * リースを持っているときだけ、worktreeを消す。2回目以降は何もしない。
    * 失敗してもログに残すだけで、結果を隠さない。
    */
   const cleanupWorkspace = async (): Promise<void> => {
@@ -465,16 +487,6 @@ export async function runDesignGenerate(
         work_item_id: workItemId,
         error: messageOf(err),
       });
-    }
-    if (copyDir !== null) {
-      try {
-        await deps.fs.removePath(copyDir);
-      } catch (err) {
-        deps.log("failed to remove the copy of the requirements diagrams", {
-          work_item_id: workItemId,
-          error: messageOf(err),
-        });
-      }
     }
   };
 
@@ -684,6 +696,7 @@ export async function runDesignGenerate(
       }
     }
     await cleanupWorkspace();
+    await removeCopyDir();
   }
 }
 
@@ -843,11 +856,18 @@ export const realDirectoryIo: DirectoryEntryIo = {
  */
 export function lockedDesignRun(
   run: CommandRunner,
-  _worktreeDir: string,
-  _owner: { readonly workItemId: number; readonly jobId: string },
-  _prepareLockFile?: (path: string) => Promise<void>,
+  worktreeDir: string,
+  owner: { readonly workItemId: number; readonly jobId: string },
+  prepareLockFile?: (path: string) => Promise<void>,
 ): CommandRunner {
-  return run;
+  // 持ち主の種別は、実装フローと同じ`implement`を使う。ロックファイルはworktreeごとに別なので、
+  // 実装のworktreeのロックとは混ざらない。設計の準備は何も止めず、保持者がいれば引き返すだけである。
+  return withWorktreeProcessLock(
+    run,
+    worktreeLockFor(worktreeDir),
+    { kind: "implement", workItemId: owner.workItemId, jobId: owner.jobId },
+    prepareLockFile,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -943,7 +963,6 @@ export async function main(
         readDir: (dir) => readDirEntries(dir),
         readText: (path) => readTextFile(path),
         removePath: (path) => removePath(path),
-        pathExists: (path) => pathExists(path),
         makeTempDir: () =>
           mkdtemp(join(jobTmpBase(), "factory-design-diagrams-")),
         hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
@@ -953,7 +972,10 @@ export async function main(
           "f/factory/claude_oauth_token",
         );
         const result = await runClaude<DesignOutput>({
-          run: runCommand,
+          run: lockedDesignRun(runCommand, worktree_dir, {
+            workItemId: work_item_id,
+            jobId: leaseJobId,
+          }),
           workItemId: work_item_id,
           stage: "generate_design",
           attempt: design_attempt,

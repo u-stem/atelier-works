@@ -215,7 +215,6 @@ function memoryFs(initial: Record<string, string>) {
       files.delete(path);
       for (const key of under(path)) files.delete(key);
     },
-    pathExists: async (path) => files.has(path) || under(path).length > 0,
     makeTempDir: async () => {
       temps += 1;
       return `/job-tmp/copy-${String(temps)}`;
