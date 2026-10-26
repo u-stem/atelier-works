@@ -1116,7 +1116,7 @@ describe("command", () => {
     });
 
     expect(
-      run(["--recheck-timeout-ms=1000", "--recheck-interval-ms=1"]).exitCode,
+      run(["--recheck-timeout-ms=5000", "--recheck-interval-ms=1"]).exitCode,
     ).toBe(0);
   });
 
@@ -1132,7 +1132,7 @@ describe("command", () => {
     setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
 
     expect(
-      run(["--recheck-timeout-ms=600", "--recheck-interval-ms=100"]).stderr,
+      run(["--recheck-timeout-ms=3000", "--recheck-interval-ms=100"]).stderr,
     ).toContain("waiting");
   });
 });

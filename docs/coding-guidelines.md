@@ -109,7 +109,7 @@ if (!isClaudeResult(parsed)) {
 
 | サイズ | 対象 | 実行 |
 | --- | --- | --- |
-| small | DB、ネットワーク、コンテナを使わない単体テスト。`f/factory/lib/**`の大半がここに入り、外部プロセスの起動や`fetch`は注入したダミーに差し替える | `mise run test`(`bun test`) |
+| small | DB、ネットワーク、コンテナを使わない単体テスト。`f/factory/lib/**`の大半がここに入り、外部プロセスの起動や`fetch`は注入したダミーに差し替える | `mise run test`(`bun test --parallel`) |
 | medium | composeのPostgresを使うSQLのスモークテストや、workerのイメージの使い捨てのコンテナで実際のsetpriv・flock・chownを使う検査コマンドの境界のテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db`、`mise run test:check-sandbox` |
 | large | 実際にIssueを起票して確かめるE2E | `factory-dev`スキルの「E2Eの動作確認」の手順 |
 
@@ -149,7 +149,9 @@ PRを出す前に必ず通す。
 gitのpre-pushは全体の`check`を実行しない。理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
-- `test`は`bun test`で、`console/`を除く。
+- `test`は`bun test --parallel`で、`console/`を除く。
+- `test:changed`は`origin/main`との差分が影響するテストだけを実行する。importの解析で選ぶので、コードから読まない設定や資産の変更は拾えない。全件の確認はCIが行う。
+- `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。重いのは`lint:docs`(全件で約77秒)なので、差分のMarkdownだけを検査する。絞り方を変えるときは`tests/scripts/check-changed.test.ts`を直す。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。
 
 依存は、ルートの`bun.lock`と、Console(`console/`)の`console/bun.lock`に分けて固定する。

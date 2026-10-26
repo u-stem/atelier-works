@@ -4628,6 +4628,17 @@ export const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) => `${m[1]}ラウンド修正しても検査に通りませんでした`,
     nextAction: () => CHECK_COMMAND_NEXT_ACTION,
   },
+  // `lib/check_runner.ts`の`checkUnrunnableReason`(実装フローとPR修正のフロー)。検査コマンドの実行ファイルを起動できなかった環境の問題で、
+  // Claudeに直させても変わらないので、停滞とは別に案内する。
+  {
+    pattern: /^check command could not run: ([\s\S]+)$/,
+    // コマンドと検査の出力はコードが決めるので、Discordのリンクや強調にならないよう、インラインコードで囲む。
+    describe: (m) =>
+      `検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): \`${(m[1] ?? "").replaceAll("`", "'")}\``,
+    ...procedureThenRerun(
+      "workerのイメージに検査コマンドの実行ファイルがあるか確認し、無ければイメージを直してから、",
+    ),
+  },
   {
     pattern: /^implement stalled after round (\d+)$/,
     describe: (m) =>

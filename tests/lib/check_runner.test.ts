@@ -5,6 +5,8 @@ import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   CHECK_COMMAND_PATH,
   type CreateCheckHomeDir,
+  firstUnrunnableCheckReason,
+  isCheckUnrunnable,
   runAllowedCheckCommands,
 } from "../../f/factory/lib/check_runner.ts";
 import {
@@ -737,5 +739,180 @@ describe("runAllowedCheckCommands with a sandbox", () => {
     expect(calls[0]?.options?.env).toEqual(
       checkEnv({ path: "/usr/bin", home: "/home-x", worktreeDir: "/work" }),
     );
+  });
+});
+
+describe("isCheckUnrunnable", () => {
+  const MISSING = "setpriv: failed to execute bunx: No such file or directory";
+  const base = {
+    command: "bunx --bun tsc --noEmit",
+    ok: false,
+    exitCode: 127,
+    output: MISSING,
+  };
+
+  test("is true when setpriv could not find a program searched in PATH", () => {
+    expect(isCheckUnrunnable(base)).toBe(true);
+  });
+
+  test("is true for exit 126", () => {
+    expect(isCheckUnrunnable({ ...base, exitCode: 126 })).toBe(true);
+  });
+
+  test("is false for a successful result", () => {
+    expect(isCheckUnrunnable({ ...base, ok: true, exitCode: 0 })).toBe(false);
+  });
+
+  test("is false for another exit code", () => {
+    expect(isCheckUnrunnable({ ...base, exitCode: 1 })).toBe(false);
+  });
+
+  test("is false without an exit code", () => {
+    expect(isCheckUnrunnable({ ...base, exitCode: undefined })).toBe(false);
+  });
+
+  test("is false when the setpriv line is not the first line of the output", () => {
+    expect(
+      isCheckUnrunnable({ ...base, output: `running tests\n${MISSING}` }),
+    ).toBe(false);
+  });
+
+  test("is false for the own failure of a program with exit 127", () => {
+    expect(
+      isCheckUnrunnable({ ...base, output: "sh: 1: foo: not found" }),
+    ).toBe(false);
+  });
+
+  test("is false for a program given by a relative path, which the code can delete or make non-executable", () => {
+    expect(
+      isCheckUnrunnable({
+        ...base,
+        command: "scripts/check.sh",
+        output:
+          "setpriv: failed to execute scripts/check.sh: Permission denied",
+      }),
+    ).toBe(false);
+  });
+
+  test("is false for a program given by a relative path with a directory", () => {
+    expect(
+      isCheckUnrunnable({
+        ...base,
+        command: "work/scripts/check.sh --fast",
+        output:
+          "setpriv: failed to execute work/scripts/check.sh: No such file or directory",
+      }),
+    ).toBe(false);
+  });
+
+  test("is false for a program given by a path that starts with a dot", () => {
+    expect(
+      isCheckUnrunnable({
+        ...base,
+        command: "./check.sh",
+        output: "setpriv: failed to execute ./check.sh: Permission denied",
+      }),
+    ).toBe(false);
+  });
+
+  test("is true for a program given by an absolute path, which points outside the worktree", () => {
+    expect(
+      isCheckUnrunnable({
+        ...base,
+        command: "/usr/bin/foo --fast",
+        output:
+          "setpriv: failed to execute /usr/bin/foo: No such file or directory",
+      }),
+    ).toBe(true);
+  });
+
+  test("looks only at the first word of the command", () => {
+    expect(
+      isCheckUnrunnable({ ...base, command: "bunx --bun ./local.ts" }),
+    ).toBe(true);
+  });
+});
+
+describe("firstUnrunnableCheckReason", () => {
+  const MISSING = "setpriv: failed to execute bunx: No such file or directory";
+
+  test("returns null when every check ran", () => {
+    expect(
+      firstUnrunnableCheckReason([
+        { command: "bun test", ok: true, exitCode: 0, output: "" },
+      ]),
+    ).toBeNull();
+  });
+
+  const unrunnable = (output: string) => [
+    { command: "bunx --bun tsc --noEmit", ok: false, exitCode: 127, output },
+  ];
+
+  test("leaves no NUL or other control character in the reason, which Postgres text rejects", () => {
+    const reason = firstUnrunnableCheckReason(
+      unrunnable(
+        "setpriv: failed to execute b\u0000unx\u0007: No such file or directory",
+      ),
+    );
+    const hasControl = [...(reason ?? "")].some((char) => {
+      const code = char.charCodeAt(0);
+      return code < 0x20 || code === 0x7f;
+    });
+    expect(hasControl).toBe(false);
+  });
+
+  test("still makes a reason from a first line with a NUL", () => {
+    const reason = firstUnrunnableCheckReason(
+      unrunnable("setpriv: failed to execute b\u0000unx: No such file"),
+    );
+    expect(reason).toBe(
+      "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file",
+    );
+  });
+
+  test("masks a secret that control characters split, once they are removed", () => {
+    const token = `ghp_${"a".repeat(30)}`;
+    const reason = firstUnrunnableCheckReason(
+      unrunnable(
+        `setpriv: failed to execute ${token.slice(0, 10)}\u0007${token.slice(10)}: No such file`,
+      ),
+    );
+    expect(reason).toBe(
+      "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute ***: No such file",
+    );
+  });
+
+  test("removes ANSI escape sequences from the reason", () => {
+    const reason = firstUnrunnableCheckReason(
+      unrunnable(
+        "setpriv: failed to execute \u001b[31mbunx\u001b[0m: No such file",
+      ),
+    );
+    expect(reason).toBe(
+      "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file",
+    );
+  });
+
+  test("cuts the detail of the reason to 200 characters", () => {
+    const reason = firstUnrunnableCheckReason(
+      unrunnable(`setpriv: failed to execute ${"x".repeat(1000)}`),
+    );
+    expect(reason?.length).toBe(
+      "check command could not run: bunx --bun tsc --noEmit: ".length + 200,
+    );
+  });
+
+  test("names the first command that could not run and the setpriv line", () => {
+    expect(
+      firstUnrunnableCheckReason([
+        { command: "bun test", ok: true, exitCode: 0, output: "" },
+        {
+          command: "bunx --bun tsc --noEmit",
+          ok: false,
+          exitCode: 127,
+          output: MISSING,
+        },
+      ]),
+    ).toBe(`check command could not run: bunx --bun tsc --noEmit: ${MISSING}`);
   });
 });
