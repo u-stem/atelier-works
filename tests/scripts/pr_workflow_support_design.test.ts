@@ -145,32 +145,94 @@ describe("nextActionFor for the design stage", () => {
   });
 });
 
-// 理由の表は、拒否した安全装置の依存を増やさないために、理由の文字列を直接書く。
+// この表は設計の定数をimportしない。importするとpr_workflow_support.tsの依存が増えるため、理由の文字列を直接書く。
 // 生成する側の関数と定数の出力を表と突き合わせて、食い違いを検出する。
 describe("the reason table and the reasons that the design stage produces", () => {
-  const PRODUCED: [string, string][] = [
-    ["a design flow that could not be started", DESIGN_START_FAILED_REASON],
-    ["a missing approval", designNoApprovalReason(2)],
-    ["an exhausted requirements gap", designGapExhaustedReason(3)],
-    ["a change before design", REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON],
-    ["a change during design", REQUIREMENTS_MODIFIED_REASON],
-    [
-      "a change before implementation",
-      REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
-    ],
-    ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
-    ["a directory that holds a draft", DESIGN_DOC_DIR_IN_USE_REASON],
-  ];
+  /** 生成する側の識別子と、その理由の例。新しい理由を足したら、ここと表の両方に載せる。 */
+  const PRODUCED: Record<string, string> = {
+    DESIGN_START_FAILED_REASON,
+    designNoApprovalReason: designNoApprovalReason(2),
+    designGapExhaustedReason: designGapExhaustedReason(3),
+    REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+    REQUIREMENTS_MODIFIED_REASON,
+    REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    REQUIREMENTS_DIR_MISSING_REASON,
+    DESIGN_DOC_DIR_IN_USE_REASON,
+  };
 
-  test.each(PRODUCED)("translates the reason for %s", (_name, reason) => {
-    expect(describeReason(reason)).not.toBe(reason);
+  /** 設計の理由の定数を持つファイル。 */
+  const CONSTANT_SOURCES = [
+    "design_launch_support.ts",
+    "design_template.ts",
+    "doc_tree_hash.ts",
+  ];
+  // 理由を返す関数は、設計の定数の置き場の2つだけを数える。
+  // design_launch_supportの関数が返すのは、起動の失敗の詳細であり、`needs_human`の理由ではない。
+  const FUNCTION_SOURCES = ["design_template.ts", "doc_tree_hash.ts"];
+
+  async function exportedNames(
+    files: string[],
+    pattern: RegExp,
+  ): Promise<string[]> {
+    const names: string[] = [];
+    for (const file of files) {
+      const text = await Bun.file(
+        new URL(`../../f/factory/lib/${file}`, import.meta.url),
+      ).text();
+      for (const match of text.matchAll(pattern)) {
+        const name = match[1];
+        if (name !== undefined) names.push(name);
+      }
+    }
+    return names;
+  }
+
+  test("lists every exported reason constant of the design stage", async () => {
+    const constants = await exportedNames(
+      CONSTANT_SOURCES,
+      /^export const ([A-Z_]+_REASON)\b/gm,
+    );
+    expect(constants.filter((name) => !(name in PRODUCED))).toEqual([]);
   });
 
+  test("lists every exported function that returns a reason of the design stage", async () => {
+    const functions = await exportedNames(
+      FUNCTION_SOURCES,
+      /^export function (\w+Reason)\(/gm,
+    );
+    expect(functions.filter((name) => !(name in PRODUCED))).toEqual([]);
+  });
+
+  test("finds the exported reasons in the sources", async () => {
+    const constants = await exportedNames(
+      CONSTANT_SOURCES,
+      /^export const ([A-Z_]+_REASON)\b/gm,
+    );
+    expect(constants.length).toBeGreaterThanOrEqual(6);
+  });
+
+  test("finds the exported reason functions in the sources", async () => {
+    const functions = await exportedNames(
+      FUNCTION_SOURCES,
+      /^export function (\w+Reason)\(/gm,
+    );
+    expect(functions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test.each(Object.entries(PRODUCED))(
+    "translates the reason of %s",
+    (_name, reason) => {
+      expect(describeReason(reason)).not.toBe(reason);
+    },
+  );
+
   // 起動の失敗の案内は、ほかの失敗と同じ一般の手順なので、固有の案内の突き合わせから外す。
-  const WITH_OWN_ACTION = PRODUCED.slice(1);
+  const WITH_OWN_ACTION = Object.entries(PRODUCED).filter(
+    ([name]) => name !== "DESIGN_START_FAILED_REASON",
+  );
 
   test.each(WITH_OWN_ACTION)(
-    "guides the next action for %s",
+    "guides the next action of %s",
     (_name, reason) => {
       expect(nextActionFor(reason, "design")).not.toBe(
         nextActionFor("a reason that no rule describes", "design"),
@@ -203,13 +265,27 @@ describe("designNeedsHumanFields", () => {
 
 // 通知の組み立てはWindmillの入出力を含むmainの中にあるので、結線はソースの文面で固定する。
 describe("the wiring of the design notifications", () => {
+  /** コメントを除いたソース。コメントに書いた文字列を、結線として数えないため。 */
+  async function stepSource(name: string): Promise<string> {
+    const text = await Bun.file(
+      new URL(`../../f/factory/steps/${name}`, import.meta.url),
+    ).text();
+    return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  }
+
   test.each(["design_generate.ts", "design_prepare.ts"])(
     "%s builds the reason and next action through the design flow",
     async (name) => {
-      const text = await Bun.file(
-        new URL(`../../f/factory/steps/${name}`, import.meta.url),
-      ).text();
-      expect(text).toMatch(/\.\.\.designNeedsHumanFields\(reason\)/);
+      expect(await stepSource(name)).toMatch(
+        /\.\.\.designNeedsHumanFields\(reason\)/,
+      );
+    },
+  );
+
+  test.each(["design_generate.ts", "design_prepare.ts"])(
+    "%s does not write next_action over the one of the design flow",
+    async (name) => {
+      expect(await stepSource(name)).not.toMatch(/next_action\s*:/);
     },
   );
 });

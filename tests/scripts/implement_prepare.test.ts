@@ -340,11 +340,22 @@ describe("requirementsGateReason", () => {
 
 // mainはWindmillとDBを直接使うので、関門の結線はソースの文面で固定する。
 describe("the wiring of the requirements gate in implement_prepare main", () => {
+  /** コメントを除いたソース。コメントに書いた呼び出しの名前を、順序の比較に混ぜないため。 */
   async function source(): Promise<string> {
-    return Bun.file(
+    const text = await Bun.file(
       new URL("../../f/factory/steps/implement_prepare.ts", import.meta.url),
     ).text();
+    return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   }
+
+  /** `needle`がちょうど1回だけ出現するときにその位置を返す。0回か複数回なら-1を返す。 */
+  function onlyIndex(text: string, needle: string): number {
+    const first = text.indexOf(needle);
+    if (first < 0) return -1;
+    return text.indexOf(needle, first + needle.length) < 0 ? first : -1;
+  }
+
+  const GATE = "await requirementsGateReason(";
 
   test("hashes the approved directory with the real hash function", async () => {
     expect(await source()).toMatch(
@@ -358,18 +369,22 @@ describe("the wiring of the requirements gate in implement_prepare main", () => 
     );
   });
 
+  test("calls the gate exactly once", async () => {
+    expect(onlyIndex(await source(), GATE)).toBeGreaterThanOrEqual(0);
+  });
+
   test("checks the gate before it looks at the branch", async () => {
     const text = await source();
-    const gate = text.indexOf("await requirementsGateReason(");
-    const branch = text.indexOf("await findOpenPullRequestByHead(");
-    expect(gate >= 0 && gate < branch).toBe(true);
+    const gate = onlyIndex(text, GATE);
+    const branch = onlyIndex(text, "await findOpenPullRequestByHead(");
+    expect(gate >= 0 && branch >= 0 && gate < branch).toBe(true);
   });
 
   test("checks the gate before it prepares the worktree", async () => {
     const text = await source();
-    const gate = text.indexOf("await requirementsGateReason(");
-    const worktree = text.indexOf("await prepareImplementWorktree(");
-    expect(gate >= 0 && gate < worktree).toBe(true);
+    const gate = onlyIndex(text, GATE);
+    const worktree = onlyIndex(text, "await prepareImplementWorktree(");
+    expect(gate >= 0 && worktree >= 0 && gate < worktree).toBe(true);
   });
 
   test("carries the baseline of the draft into the context", async () => {

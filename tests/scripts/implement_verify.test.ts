@@ -5,10 +5,12 @@
 
 import { describe, expect, test } from "bun:test";
 
+/** コメントを除いたソース。コメントに書いた呼び出しの名前や条件を、結線として数えないため。 */
 async function source(): Promise<string> {
-  return Bun.file(
+  const text = await Bun.file(
     new URL("../../f/factory/steps/implement_verify.ts", import.meta.url),
   ).text();
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
 /** `needle`の出現回数。 */
@@ -30,11 +32,27 @@ describe("the requirements check around the copy in implement_verify", () => {
   test("does not copy the directory without the check", async () => {
     expect(await source()).not.toContain("withReadOnlyDocDirCopy");
   });
+
+  test("calls the guarded round exactly once", async () => {
+    expect(count(await source(), "runDocDirGuardedRound(")).toBe(1);
+  });
+
+  test("calls the Claude round exactly once, inside the guarded round", async () => {
+    expect(count(await source(), "runImplementClaudeRound(")).toBe(1);
+  });
 });
 
 describe("the first round that never reaches the checks in implement_verify", () => {
-  test("decides the deadline check and the notice from the same test", async () => {
-    expect(count(await source(), "ranClaude(first_round)")).toBe(2);
+  test("checks the deadline only when the first round ran Claude", async () => {
+    expect(await source()).toMatch(
+      /const deadlineAt = ranClaude\(first_round\)\s*\?\s*requireDeadlineAt\(/,
+    );
+  });
+
+  test("adds the notice of the checks only when the first round ran Claude", async () => {
+    expect(await source()).toMatch(
+      /commands\.length > 0 && ranClaude\(first_round\)\)/,
+    );
   });
 
   test("does not decide from the lease alone", async () => {

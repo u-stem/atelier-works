@@ -229,6 +229,48 @@ describe("snapshotDocDir", () => {
     );
   });
 
+  test("reports a hash that throws before the read as a snapshot failure", async () => {
+    const h = io([HASH, HASH]);
+    const deps: SnapshotIo = {
+      ...h.deps,
+      hashTree: async () => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    await expect(snapshotDocDir("/doc", deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (doc_hash_failed): EACCES: permission denied",
+    );
+  });
+
+  test("reports a hash that throws after the read as a snapshot failure", async () => {
+    const h = io([HASH, HASH]);
+    let call = 0;
+    const deps: SnapshotIo = {
+      ...h.deps,
+      hashTree: async () => {
+        call += 1;
+        if (call === 2) throw new Error("ENOENT: entry vanished");
+        return HASH;
+      },
+    };
+    await expect(snapshotDocDir("/doc", deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (doc_hash_failed): ENOENT: entry vanished",
+    );
+  });
+
+  test("reports a listing that throws as a snapshot failure", async () => {
+    const h = io([HASH, HASH]);
+    const deps: SnapshotIo = {
+      ...h.deps,
+      readDir: async () => {
+        throw new Error("EIO: i/o error");
+      },
+    };
+    await expect(snapshotDocDir("/doc", deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (doc_list_failed): EIO: i/o error",
+    );
+  });
+
   test("does not report a snapshot failure as a failed Claude run", async () => {
     const h = io([null, null]);
     await expect(snapshotDocDir("/doc", h.deps)).rejects.not.toThrow(

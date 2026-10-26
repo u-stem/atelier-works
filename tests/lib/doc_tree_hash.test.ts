@@ -118,6 +118,39 @@ describe("hashDirectoryTree", () => {
   test("returns a hex digest", async () => {
     expect(await hashDirectoryTree("/d", io(BASE))).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  /** ルートを読む呼び出しが投げる例外を差し込んだ読み取り。 */
+  function rootFails(err: Error): DirectoryEntryIo {
+    return {
+      readDir: async () => {
+        throw err;
+      },
+      readFile: async () => new Uint8Array(),
+    };
+  }
+
+  test("returns null when the root is missing (code ENOENT only)", async () => {
+    const err = new Error("operation failed");
+    Reflect.set(err, "code", "ENOENT");
+    expect(await hashDirectoryTree("/d", rootFails(err))).toBeNull();
+  });
+
+  test("returns null when the root is missing (message only, no code)", async () => {
+    expect(
+      await hashDirectoryTree(
+        "/d",
+        rootFails(new Error("ENOENT: no such file or directory, scandir")),
+      ),
+    ).toBeNull();
+  });
+
+  test("rethrows an error with another code even when the root's name spells ENOENT", async () => {
+    const err = new Error("EACCES: permission denied, scandir '/d/ENOENT.md'");
+    Reflect.set(err, "code", "EACCES");
+    await expect(hashDirectoryTree("/d", rootFails(err))).rejects.toThrow(
+      "EACCES",
+    );
+  });
 });
 
 describe("realDirectoryIo with hashDirectoryTree", () => {
@@ -253,35 +286,187 @@ describe("checkDocTreeHash", () => {
     );
   });
 
-  /** `code`だけを持つ、ファイルシステムの例外に似せた例外。 */
-  function fsError(code: string): Error {
-    const err = new Error(`${code}: operation failed, open '/d/x'`);
+  /** `code`だけを持ち、messageには種類を書かない、ファイルシステムの例外に似せた例外。 */
+  function codeOnlyError(code: string): Error {
+    const err = new Error("operation failed");
     Reflect.set(err, "code", code);
     return err;
   }
 
-  test("returns modified when an entry vanished while hashing (ENOENT)", async () => {
+  /** messageだけに種類を書き、`code`を持たない例外。 */
+  function messageOnlyError(message: string): Error {
+    return new Error(message);
+  }
+
+  const ROOT_EXISTS = async () => true;
+  const ROOT_MISSING = async () => false;
+
+  test("returns modified when an entry vanished while hashing (code ENOENT)", async () => {
     expect(
-      await checkDocTreeHash("/d", HASH, async () => {
-        throw fsError("ENOENT");
-      }),
+      await checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw codeOnlyError("ENOENT");
+        },
+        ROOT_EXISTS,
+      ),
     ).toBe("modified");
   });
 
-  test("returns modified when a directory was replaced by a file while hashing (ENOTDIR)", async () => {
+  test("returns modified when a directory was replaced by a file while hashing (code ENOTDIR)", async () => {
     expect(
-      await checkDocTreeHash("/d", HASH, async () => {
-        throw fsError("ENOTDIR");
-      }),
+      await checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw codeOnlyError("ENOTDIR");
+        },
+        ROOT_EXISTS,
+      ),
     ).toBe("modified");
+  });
+
+  test("returns modified for an error that only names ENOENT in its message and has no code", async () => {
+    expect(
+      await checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw messageOnlyError("ENOENT: no such file or directory, open");
+        },
+        ROOT_EXISTS,
+      ),
+    ).toBe("modified");
+  });
+
+  test("returns modified for an error that only names ENOTDIR in its message and has no code", async () => {
+    expect(
+      await checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw messageOnlyError("ENOTDIR: not a directory, scandir");
+        },
+        ROOT_EXISTS,
+      ),
+    ).toBe("modified");
+  });
+
+  test("rethrows an error with another code even when a file name in its message spells ENOENT", async () => {
+    const err = new Error("EACCES: permission denied, open '/d/ENOENT.md'");
+    Reflect.set(err, "code", "EACCES");
+    await expect(
+      checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw err;
+        },
+        ROOT_EXISTS,
+      ),
+    ).rejects.toThrow("EACCES");
+  });
+
+  test("rethrows an error with another code even when a file name in its message spells ENOTDIR", async () => {
+    const err = new Error("EIO: i/o error, open '/d/ENOTDIR.md'");
+    Reflect.set(err, "code", "EIO");
+    await expect(
+      checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw err;
+        },
+        ROOT_EXISTS,
+      ),
+    ).rejects.toThrow("EIO");
   });
 
   test("rethrows an error that is not about a vanished entry", async () => {
     await expect(
-      checkDocTreeHash("/d", HASH, async () => {
-        throw fsError("EACCES");
+      checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw codeOnlyError("EACCES");
+        },
+        ROOT_EXISTS,
+      ),
+    ).rejects.toThrow("operation failed");
+  });
+
+  test("returns missing when an entry vanished because the root is gone (ENOENT)", async () => {
+    expect(
+      await checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw codeOnlyError("ENOENT");
+        },
+        ROOT_MISSING,
+      ),
+    ).toBe("missing");
+  });
+
+  test("returns missing when a directory vanished because the root is gone (ENOTDIR)", async () => {
+    expect(
+      await checkDocTreeHash(
+        "/d",
+        HASH,
+        async () => {
+          throw codeOnlyError("ENOTDIR");
+        },
+        ROOT_MISSING,
+      ),
+    ).toBe("missing");
+  });
+
+  test("looks for the root at the directory that it checks", async () => {
+    const asked: string[] = [];
+    await checkDocTreeHash(
+      "/d",
+      HASH,
+      async () => {
+        throw codeOnlyError("ENOENT");
+      },
+      async (dir) => {
+        asked.push(dir);
+        return true;
+      },
+    );
+    expect(asked).toEqual(["/d"]);
+  });
+
+  test("does not look for the root when the hash is available", async () => {
+    const asked: string[] = [];
+    await checkDocTreeHash(
+      "/d",
+      HASH,
+      async () => HASH,
+      async (dir) => {
+        asked.push(dir);
+        return true;
+      },
+    );
+    expect(asked).toEqual([]);
+  });
+
+  test("uses the real file system to tell a vanished root from a vanished entry", async () => {
+    const root = join(base, "gone");
+    expect(
+      await checkDocTreeHash(root, HASH, async () => {
+        throw codeOnlyError("ENOENT");
       }),
-    ).rejects.toThrow("EACCES");
+    ).toBe("missing");
+  });
+
+  test("finds an existing root on the real file system", async () => {
+    expect(
+      await checkDocTreeHash(base, HASH, async () => {
+        throw codeOnlyError("ENOENT");
+      }),
+    ).toBe("modified");
   });
 });
 

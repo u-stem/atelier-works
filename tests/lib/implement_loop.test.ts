@@ -482,6 +482,179 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
   });
 });
 
+describe("withReadOnlyDocDirCopy and a context that has no baseline item", () => {
+  const deps: DocDirCopyDeps = {
+    pathExists: async () => true,
+    makeTempDir: async () => "/tmp/fake-req",
+    copyDir: async () => {},
+    removeDir: async () => {},
+  };
+
+  /** 警告を控える照合の設定。`baseline`が`undefined`なら項目が無い文脈を表す。 */
+  function guardOf(baseline: string | null | undefined) {
+    const warnings: string[] = [];
+    const guard: DocDirGuard = {
+      baseline,
+      hashTree: async () => null,
+      warn: (message) => {
+        warnings.push(message);
+      },
+    };
+    return { guard, warnings };
+  }
+
+  test("warns once per call when the context has no baseline item", async () => {
+    const g = guardOf(undefined);
+    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
+    expect(g.warnings).toHaveLength(1);
+  });
+
+  test("warns once for each call, not once for the guard", async () => {
+    const g = guardOf(undefined);
+    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
+    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
+    expect(g.warnings).toHaveLength(2);
+  });
+
+  test("still runs fn when the context has no baseline item", async () => {
+    const g = guardOf(undefined);
+    expect(
+      await withReadOnlyDocDirCopy(DOC_DIR, async () => "ran", deps, g.guard),
+    ).toBe("ran");
+  });
+
+  test("stays silent for a null baseline, which the prepare step already warned about", async () => {
+    const g = guardOf(null);
+    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
+    expect(g.warnings).toHaveLength(0);
+  });
+
+  test("stays silent for an empty baseline", async () => {
+    const g = guardOf("");
+    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
+    expect(g.warnings).toHaveLength(0);
+  });
+
+  test("stays silent for a baseline that is set", async () => {
+    const g = guardOf("a".repeat(64));
+    g.guard.hashTree = async () => "a".repeat(64);
+    await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
+    expect(g.warnings).toHaveLength(0);
+  });
+
+  test("does not need a warn function", async () => {
+    const guard: DocDirGuard = {
+      baseline: undefined,
+      hashTree: async () => null,
+    };
+    expect(
+      await withReadOnlyDocDirCopy(DOC_DIR, async () => "ran", deps, guard),
+    ).toBe("ran");
+  });
+
+  test("does not warn when the directory is not copied at all", async () => {
+    const g = guardOf(undefined);
+    await withReadOnlyDocDirCopy(null, async () => "x", deps, g.guard);
+    expect(g.warnings).toHaveLength(0);
+  });
+});
+
+describe("withReadOnlyDocDirCopy and the reasons that the guard hands over", () => {
+  const BASELINE = "a".repeat(64);
+  const deps: DocDirCopyDeps = {
+    pathExists: async () => true,
+    makeTempDir: async () => "/tmp/fake-req",
+    copyDir: async () => {},
+    removeDir: async () => {},
+  };
+  const REASONS = {
+    modified: "approved designs were modified before implementation",
+    missing: "approved designs directory is missing",
+  };
+
+  /** 呼び出しごとに`hashes`を順に返す照合の設定。 */
+  function guardOf(
+    hashes: (string | null)[],
+    reasons?: DocDirGuard["reasons"],
+  ): DocDirGuard {
+    let call = 0;
+    return {
+      baseline: BASELINE,
+      hashTree: async () => {
+        const value = hashes[call];
+        call += 1;
+        return value === undefined ? null : value;
+      },
+      ...(reasons === undefined ? {} : { reasons }),
+    };
+  }
+
+  test("uses the reason of the requirements for a change when the guard gives none", async () => {
+    await expect(
+      withReadOnlyDocDirCopy(
+        DOC_DIR,
+        async () => "x",
+        deps,
+        guardOf(["b".repeat(64)]),
+      ),
+    ).rejects.toMatchObject({
+      reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    });
+  });
+
+  test("uses the reason of the requirements for a missing directory when the guard gives none", async () => {
+    await expect(
+      withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, guardOf([null])),
+    ).rejects.toMatchObject({ reason: REQUIREMENTS_DIR_MISSING_REASON });
+  });
+
+  test("uses the reason of the guard for a change before the copy", async () => {
+    await expect(
+      withReadOnlyDocDirCopy(
+        DOC_DIR,
+        async () => "x",
+        deps,
+        guardOf(["b".repeat(64)], REASONS),
+      ),
+    ).rejects.toMatchObject({ reason: REASONS.modified });
+  });
+
+  test("uses the reason of the guard for a change during the copy", async () => {
+    await expect(
+      withReadOnlyDocDirCopy(
+        DOC_DIR,
+        async () => "x",
+        deps,
+        guardOf([BASELINE, "b".repeat(64)], REASONS),
+      ),
+    ).rejects.toMatchObject({ reason: REASONS.modified });
+  });
+
+  test("uses the missing reason of the guard when the directory is gone", async () => {
+    await expect(
+      withReadOnlyDocDirCopy(
+        DOC_DIR,
+        async () => "x",
+        deps,
+        guardOf([null], REASONS),
+      ),
+    ).rejects.toMatchObject({ reason: REASONS.missing });
+  });
+
+  test("hands the reason of the guard to the round that stops", async () => {
+    expect(
+      await runDocDirGuardedRound(
+        DOC_DIR,
+        guardOf(["b".repeat(64)], REASONS),
+        async () => {
+          throw new Error("must not run");
+        },
+        deps,
+      ),
+    ).toEqual({ kind: "requirements_modified", reason: REASONS.modified });
+  });
+});
+
 describe("runDocDirGuardedRound", () => {
   const ROUND: ImplementClaudeRunRound = {
     kind: "output",
@@ -593,9 +766,19 @@ describe("docDirGuardFor", () => {
     expect(await guard.hashTree("/does/not/exist/anywhere")).toBeNull();
   });
 
-  test("treats a context from before the baseline existed as having none", () => {
+  test("keeps a context from before the baseline existed apart from a null baseline", () => {
     const guard = docDirGuardFor({});
-    expect(guard.baseline ?? null).toBeNull();
+    expect(guard.baseline).toBeUndefined();
+  });
+
+  test("keeps a null baseline of the context as null", () => {
+    const guard = docDirGuardFor({ requirements_doc_hash: null });
+    expect(guard.baseline).toBeNull();
+  });
+
+  test("hands over a function that logs the warning", () => {
+    const guard = docDirGuardFor({});
+    expect(typeof guard.warn).toBe("function");
   });
 });
 
