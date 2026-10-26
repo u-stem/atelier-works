@@ -12,6 +12,7 @@ import {
   isConfigSnapshot,
   isJobDetail,
   isJobList,
+  isLaterHistoryPage,
   isSchedulesSnapshot,
   JOB_DETAIL_REFRESH_MS,
   type JobDetailView,
@@ -26,6 +27,7 @@ import {
   type SchedulesSnapshotView,
   schedulesQueryKey,
   schedulesQueryOptions,
+  shouldPollJobStatus,
 } from "./jobsQueries.ts";
 import type { FetchLike } from "./windmill.ts";
 
@@ -509,6 +511,59 @@ describe("the query options", () => {
     expect(
       jobDetailQueryOptions(ID, { includeOutput: false })
         .refetchIntervalInBackground,
+    ).toBe(false);
+  });
+});
+
+describe("shouldPollJobStatus", () => {
+  function detailIn(state: string): JobDetailView {
+    return DETAIL.found ? { ...DETAIL, job: { ...DETAIL.job, state } } : DETAIL;
+  }
+
+  test.each(["running", "queued"])("polls a %s job", (state) => {
+    expect(shouldPollJobStatus(detailIn(state), false)).toBe(true);
+  });
+
+  test.each(["success", "failure", "canceled", "skipped", "scheduled"])(
+    "does not poll a %s job",
+    (state) => {
+      expect(shouldPollJobStatus(detailIn(state), false)).toBe(false);
+    },
+  );
+
+  test("does not poll a job that was not found", () => {
+    expect(shouldPollJobStatus({ found: false }, false)).toBe(false);
+  });
+
+  test("does not poll before the first fetch", () => {
+    expect(shouldPollJobStatus(undefined, false)).toBe(false);
+  });
+
+  test("does not poll while the log is being fetched, so two fetches never overlap", () => {
+    expect(shouldPollJobStatus(detailIn("running"), true)).toBe(false);
+  });
+});
+
+describe("isLaterHistoryPage", () => {
+  test("is true for a page after the first", () => {
+    expect(isLaterHistoryPage(jobsHistoryQueryKey({ before: "x|50|y" }))).toBe(
+      true,
+    );
+  });
+
+  test("is false for the first page", () => {
+    expect(isLaterHistoryPage(jobsHistoryQueryKey({ status: "failure" }))).toBe(
+      false,
+    );
+  });
+
+  test("is false for the active jobs", () => {
+    expect(isLaterHistoryPage(jobsActiveQueryKey)).toBe(false);
+  });
+
+  test("is false for a detail", () => {
+    expect(
+      isLaterHistoryPage(jobDetailQueryKey(ID, { includeOutput: true })),
     ).toBe(false);
   });
 });

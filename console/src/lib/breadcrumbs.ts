@@ -80,3 +80,8 @@ export function auditReportCrumbs(workItemId: number | null): Crumb[] {
     },
   ];
 }
+
+/** ジョブの詳細。`back`は一覧へ戻る経路(タブと絞り込みを含む)で、無ければ`/jobs`にする。 */
+export function jobDetailCrumbs(_back: string | null): Crumb[] {
+  return [];
+}

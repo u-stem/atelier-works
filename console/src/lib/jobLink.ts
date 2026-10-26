@@ -19,3 +19,8 @@ export function jobRunUrl(jobId: unknown): string | null {
   }
   return `/run/${jobId.toLowerCase()}`;
 }
+
+/** Consoleのジョブの詳細の相対パス。`jobId`がUUIDの形でなければ`null`を返す。 */
+export function jobDetailPath(_jobId: unknown): string | null {
+  return "";
+}

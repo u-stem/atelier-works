@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { holdsQueryKey, holdsQueryOptions } from "../api/holdsQueries.ts";
 import {
+  jobsActiveQueryKey,
+  jobsActiveQueryOptions,
+} from "../api/jobsQueries.ts";
+import {
   deploymentsQueryKey,
   deploymentsQueryOptions,
   pipelineQueryKey,
@@ -15,11 +19,12 @@ import {
 import { SCREENS, type ScreenId } from "./screens.ts";
 
 describe("SCREENS", () => {
-  test("has the four entrances in order", () => {
+  test("has the five entrances in order", () => {
     expect(SCREENS.map((screen) => screen.id)).toEqual([
       "inbox",
       "items",
       "reports",
+      "jobs",
       "system",
     ]);
   });
@@ -39,6 +44,7 @@ describe("SCREENS", () => {
       "要対応",
       "作業項目",
       "レポート",
+      "ジョブ",
       "システム",
     ]);
   });
@@ -65,12 +71,12 @@ describe("inbox badge", () => {
 });
 
 describe("other badges", () => {
-  test("show nothing for items, reports and system", () => {
+  test("show nothing for items, reports, jobs and system", () => {
     expect(
       SCREENS.slice(1).map((screen) =>
         screen.badge({ approvals: 1, failures: 1, notices: 1 }),
       ),
-    ).toEqual([0, 0, 0]);
+    ).toEqual([0, 0, 0, 0]);
   });
 });
 
@@ -115,5 +121,31 @@ describe("prefetch", () => {
 
   test("reports prefetches nothing", () => {
     expect(prefetchOf("reports")).toEqual([]);
+  });
+});
+
+describe("jobs entrance", () => {
+  test("points to the job list", () => {
+    expect(SCREENS.find((screen) => screen.id === "jobs")?.path).toBe("/jobs");
+  });
+
+  test("has the job detail as its child route", () => {
+    expect(
+      SCREENS.find((screen) => screen.id === "jobs")?.children.map(
+        (child) => child.path,
+      ),
+    ).toEqual(["jobs/:id"]);
+  });
+
+  test("prefetches only the active jobs, never the history or the schedules", () => {
+    expect(prefetchOf("jobs").map((options) => options.queryKey)).toEqual([
+      jobsActiveQueryKey,
+    ]);
+  });
+
+  test("shares the stale time of the query the screen runs", () => {
+    expect(prefetchOf("jobs").map((options) => options.staleTime)).toEqual([
+      jobsActiveQueryOptions().staleTime,
+    ]);
   });
 });

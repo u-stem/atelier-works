@@ -480,3 +480,16 @@ export function configQueryOptions() {
     ...LIST_POLICY,
   };
 }
+
+/** 実行中か待ちのジョブの状態を取り直すか。ログと結果の取得中は取り直さず、2つの取得が重ならないようにする。 */
+export function shouldPollJobStatus(
+  _output: JobDetailView | undefined,
+  _outputFetching: boolean,
+): boolean {
+  return false;
+}
+
+/** 履歴の2ページ目以降のキャッシュのキーか。 */
+export function isLaterHistoryPage(_queryKey: readonly unknown[]): boolean {
+  return false;
+}

@@ -1,6 +1,14 @@
 import { ExternalLink } from "lucide-react";
 import { jobRunUrl } from "../lib/jobLink.ts";
 
+/** WindmillのジョブのUIへの副次のリンク。 */
+export function WindmillJobLink(_props: {
+  jobId: string | null;
+  label: string;
+}) {
+  return null;
+}
+
 /**
  * Windmillのジョブの画面へのリンク。`jobId`がUUIDの形でなければ何も出さない。
  * ジョブの画面はWindmillのログインが要るので、別のタブで開く。

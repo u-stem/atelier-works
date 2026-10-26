@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isJobId, jobRunUrl } from "./jobLink.ts";
+import { isJobId, jobDetailPath, jobRunUrl } from "./jobLink.ts";
 
 const JOB_ID = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -44,5 +44,27 @@ describe("jobRunUrl", () => {
 
   test("returns null for a missing id", () => {
     expect(jobRunUrl(null)).toBeNull();
+  });
+});
+
+describe("jobDetailPath", () => {
+  test("builds a path inside the Console", () => {
+    expect(jobDetailPath(JOB_ID)).toBe(`/jobs/${JOB_ID}`);
+  });
+
+  test("lowercases the job id", () => {
+    expect(jobDetailPath(JOB_ID.toUpperCase())).toBe(`/jobs/${JOB_ID}`);
+  });
+
+  test("returns null for an id that is not a UUID", () => {
+    expect(jobDetailPath("../../user/logout")).toBeNull();
+  });
+
+  test("returns null for the placeholder unknown", () => {
+    expect(jobDetailPath("unknown")).toBeNull();
+  });
+
+  test("returns null for a missing id", () => {
+    expect(jobDetailPath(null)).toBeNull();
   });
 });

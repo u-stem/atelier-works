@@ -67,14 +67,20 @@ function withRow(rows: BandRow[], replacement: BandRow): BandRow[] {
   );
 }
 
-const NO_FAILED = { status: false, failures: false, history: false };
+const NO_FAILED = {
+  status: false,
+  failures: false,
+  history: false,
+  config: false,
+};
 
 describe("SYSTEM_TABS", () => {
-  test("lists the status first, then failures, then history", () => {
+  test("lists the status first, then failures, history and the config", () => {
     expect(SYSTEM_TABS.tabs.map((tab) => tab.id)).toEqual([
       "status",
       "failures",
       "history",
+      "config",
     ]);
   });
 
@@ -83,6 +89,7 @@ describe("SYSTEM_TABS", () => {
       "状態",
       "失敗と通知",
       "履歴と構成",
+      "設定",
     ]);
   });
 });
@@ -94,6 +101,10 @@ describe("parseSystemTab", () => {
 
   test("opens the history tab for its name", () => {
     expect(parseSystemTab("history")).toBe("history");
+  });
+
+  test("opens the config tab for its name", () => {
+    expect(parseSystemTab("config")).toBe("config");
   });
 
   test("opens the status tab without a name", () => {
@@ -219,12 +230,12 @@ describe("systemTabSpecs", () => {
     );
   }
 
-  test("lists the three tabs in order", () => {
+  test("lists the four tabs in order", () => {
     expect(
       systemTabSpecs("status", { rows: calmRows(), failed: NO_FAILED }).map(
         (tab) => tab.id,
       ),
-    ).toEqual(["status", "failures", "history"]);
+    ).toEqual(["status", "failures", "history", "config"]);
   });
 
   test("shows the count on the failures tab only", () => {
@@ -233,7 +244,7 @@ describe("systemTabSpecs", () => {
         rows: withRow(calmRows(), row("failures", "caution", 2)),
         failed: NO_FAILED,
       }).map((tab) => tab.count),
-    ).toEqual([undefined, 2, undefined]);
+    ).toEqual([undefined, 2, undefined, undefined]);
   });
 
   test("reads the count as failures, not as the notices or what needs checking", () => {
@@ -242,7 +253,7 @@ describe("systemTabSpecs", () => {
         rows: withRow(calmRows(), row("failures", "caution", 2)),
         failed: NO_FAILED,
       }).map((tab) => tab.countLabel),
-    ).toEqual([undefined, FAILURES_COUNT_LABEL, undefined]);
+    ).toEqual([undefined, FAILURES_COUNT_LABEL, undefined, undefined]);
   });
 
   test("names that meaning failures", () => {
@@ -255,7 +266,7 @@ describe("systemTabSpecs", () => {
         rows: withRow(calmRows(), row("failures", "none", 200, true)),
         failed: NO_FAILED,
       }).map((tab) => tab.countAtLeast),
-    ).toEqual([false, true, false]);
+    ).toEqual([false, true, false, false]);
   });
 
   test("marks the failures tab for an open audit failure while another tab is open", () => {
