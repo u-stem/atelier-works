@@ -314,13 +314,32 @@ export async function runRecorded<T>(
 /** 検査の前の入力から、操作者を除いた形。操作者は`runRecordedAs`が導く。 */
 export type RawAttemptWithoutActor = Omit<RawAttempt, "actor">;
 
+/**
+ * 操作者を導いてから`runRecorded`を呼ぶ。
+ * 操作者を導けないときは、操作者の無い行は書けないので、記録を書かない。
+ * `refuse`なら操作を流さずに`invalid`で拒否し、`proceed`なら操作だけを流して`audit`を`failed`にする。
+ */
 export async function runRecordedAs<T>(
-  _deriveActor: () => string,
-  _attempt: RawAttemptWithoutActor,
-  _operation: () => Promise<RecordedOperation<T>>,
-  _options: RunRecordedOptions,
+  deriveActor: () => string,
+  attempt: RawAttemptWithoutActor,
+  operation: () => Promise<RecordedOperation<T>>,
+  options: RunRecordedOptions,
 ): Promise<RecordedResult<T>> {
-  return { ok: false, kind: "invalid", reason: "" };
+  let actor: string;
+  try {
+    actor = deriveActor();
+  } catch {
+    if (options.onUnrecordable === "refuse") {
+      return {
+        ok: false,
+        kind: "invalid",
+        reason: "the operator could not be determined",
+      };
+    }
+    const outcome = await operation();
+    return { ok: true, value: outcome.value, audit: "failed", actionId: null };
+  }
+  return await runRecorded({ ...attempt, actor }, operation, options);
 }
 
 /** `wmill.datatable()`が返すタグ付きテンプレートのうち、使う部分の形。 */
@@ -332,11 +351,34 @@ export type DatatableTag = (
   execute(): Promise<unknown>;
 };
 
-export function actionSqlClientFrom(
-  _open: () => DatatableTag,
-): ActionSqlClient {
-  return () => ({
-    fetch: async () => [],
-    execute: async () => undefined,
+function isRow(value: unknown): value is ActionSqlRow {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function rowsOf(value: unknown): ActionSqlRow[] {
+  if (!Array.isArray(value)) {
+    throw new Error("the sql client did not return rows");
+  }
+  return value.map((row: unknown) => {
+    if (!isRow(row)) {
+      throw new Error("the sql client returned a row that is not an object");
+    }
+    return row;
   });
+}
+
+/**
+ * `wmill.datatable()`を開く関数から、記録の部品が使う接続を作る。
+ * 文ごとに開き直す。戻りの行は、オブジェクトの配列として検査する。
+ */
+export function actionSqlClientFrom(open: () => DatatableTag): ActionSqlClient {
+  return (strings, ...values) => {
+    const statement = open()(strings, ...values);
+    return {
+      fetch: async () => rowsOf(await statement.fetch()),
+      execute: async () => {
+        await statement.execute();
+      },
+    };
+  };
 }

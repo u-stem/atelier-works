@@ -179,7 +179,8 @@ export type JobsQuery = {
   readonly scriptPathStart: string;
   readonly perPage: number;
   readonly jobKinds: string;
-  readonly hasNullParent: boolean;
+  /** 偽にすると、フローのステップを除く。親のジョブを持つ承認のハンドラなどは残る。 */
+  readonly isFlowStep: boolean;
   readonly completedBefore: string;
   readonly tag?: string;
   readonly createdBefore?: string;
@@ -601,7 +602,8 @@ function parseHistoryCursor(
 }
 
 /**
- * 完了したルートのジョブを、新しい順に1ページ返す。ページは`before`(前のページの`next_before`)で送る。
+ * 完了したジョブを、新しい順に1ページ返す。ページは`before`(前のページの`next_before`)で送る。
+ * フローのステップは、APIの側で除く。承認のハンドラのように、親のジョブを持つがステップでないジョブは含める。
  * カーソルは時刻と、これまでに返した件数と、境界の時刻で返したジョブのidを持つ。
  * 累積が200件に達したら、次のページを返さない。
  * APIは`createdBefore`の時刻を含めて返すので、カーソルのidのジョブだけを落とす。同じ時刻の別のジョブは残す。
@@ -642,7 +644,7 @@ export async function loadJobHistory(
   const raw = await ports.listJobs({
     scriptPathStart: JOB_PATH_PREFIX,
     perPage,
-    hasNullParent: true,
+    isFlowStep: false,
     jobKinds: LIST_JOB_KINDS,
     completedBefore: now.toISOString(),
     ...(options.includeConsole ? {} : { tag: "!console" }),
