@@ -1169,14 +1169,11 @@ async function updateSelf(
     );
     if (choice.action === "skip") {
       await markDeployed();
-      log.info(
-        "the same range was already deployed, skipping the deployment",
-        {
-          sha_from: deployedSha,
-          sha_to: currentSha,
-          trigger: resolveTriggerKind(process.env),
-        },
-      );
+      log.info("the same range was already deployed, skipping the deployment", {
+        sha_from: deployedSha,
+        sha_to: currentSha,
+        trigger: resolveTriggerKind(process.env),
+      });
       await resolveHostActionNotices();
       return {
         outcome: "skipped",

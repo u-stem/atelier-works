@@ -36,9 +36,7 @@ async function choose(h: Harness): Promise<string> {
   return choice.action;
 }
 
-function harness(
-  read: () => Promise<LatestSuccessDeployment | null>,
-): Harness {
+function harness(read: () => Promise<LatestSuccessDeployment | null>): Harness {
   let reads = 0;
   const errors: unknown[] = [];
   return {

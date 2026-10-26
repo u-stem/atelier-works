@@ -79,24 +79,19 @@ export async function chooseDeployOrSkip(
 
 export type TriggerKind = "schedule" | "manual" | "unknown";
 
-export type TriggerEnv = {
-  readonly WM_JOB_ID?: string | undefined;
-  readonly WM_SCHEDULE_PATH?: string | undefined;
-};
-
 /**
  * Windmillがジョブに与える環境変数から、起動の種類を決める。
  * `WM_SCHEDULE_PATH`があればスケジュールからの起動(`schedule`)、無ければ手動実行(`manual`)とする。
  * フローやAPIからの起動も`manual`に含まれる。
  * `WM_JOB_ID`が無いときはジョブの外で、種類を判別できないので`unknown`にする。
  */
-export function resolveTriggerKind(env: TriggerEnv): TriggerKind {
-  if (env.WM_JOB_ID === undefined || env.WM_JOB_ID.length === 0) {
-    return "unknown";
-  }
-  return env.WM_SCHEDULE_PATH === undefined || env.WM_SCHEDULE_PATH.length === 0
-    ? "manual"
-    : "schedule";
+export function resolveTriggerKind(
+  env: Readonly<Record<string, string | undefined>>,
+): TriggerKind {
+  const jobId = env.WM_JOB_ID ?? "";
+  if (jobId.length === 0) return "unknown";
+  const schedulePath = env.WM_SCHEDULE_PATH ?? "";
+  return schedulePath.length === 0 ? "manual" : "schedule";
 }
 
 // ---------------------------------------------------------------------------
