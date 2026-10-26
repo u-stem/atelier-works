@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
 import { Link } from "react-router";
 import type {
   ArgViewData,
@@ -12,14 +12,16 @@ import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
+  CAUSE_DETECTION_INTERVAL_MIN,
   describeArg,
   formatDuration,
+  logScrollTop,
   outputNotes,
-  safeText,
   stepIterationsLabel,
 } from "../../lib/jobsView.ts";
 import { workItemRef } from "../../lib/labels.ts";
 import { itemDetailPath } from "../../lib/pipelineView.ts";
+import { safeText } from "../../lib/safeText.ts";
 import { JobStateBadge, UpcomingTime } from "./JobRows.tsx";
 
 /** 詳細のパンくずが、一覧の範囲へ戻るための履歴の`state`。 */
@@ -154,7 +156,7 @@ export function ArgList({ args }: { args: readonly ArgViewData[] }) {
           <Row key={arg.key} label={safeText(text.key)}>
             {text.value === null ? (
               <span className="text-muted-foreground">
-                値は表示しません(型: {text.type})
+                値は表示しません(型: {safeText(text.type)})
               </span>
             ) : (
               <span className="font-mono">{safeText(text.value)}</span>
@@ -205,6 +207,9 @@ export function StepList({
   );
 }
 
+/** 終了の直後で、検知がまだ原因を書いていないかもしれないときの文。 */
+const PENDING_TEXT = `まだ保存されていない場合があります(検知は${CAUSE_DETECTION_INTERVAL_MIN}分ごとです)。`;
+
 /** 取得の後でジョブが終わり、その節をまだ読んでいないときの文。 */
 const UNREAD_TEXT = "まだ読んでいません。";
 
@@ -215,6 +220,7 @@ const UNREAD_TEXT = "まだ読んでいません。";
  * 伏せ字の限界、伏せた、切った、JSONでない行があることを、注記で伝える。
  * `unread`のときは、取得の後でジョブが終わり、まだ読んでいないと伝える。「結果はありません」とは言わない。
  * `onRefresh`を渡すと、取り直す操作を見出しの横に置く。ログは、この操作のときだけ取り直す。
+ * ログは、表示するときと内容が変わったときに、枠の末尾までスクロールする。
  */
 export function OutputSection({
   id,
@@ -241,6 +247,15 @@ export function OutputSection({
   /** 取得の後でジョブが終わり、この出力をまだ読んでいない。 */
   unread?: boolean;
 }) {
+  const frameRef = useRef<HTMLElement | null>(null);
+  const text = output?.text ?? "";
+  // ログは末尾が残り、原因は最後にあることが多い。表示するときと、内容が変わったときに、末尾へ送る。
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (kind === "log" && frame !== null && text !== "") {
+      frame.scrollTop = logScrollTop(frame.scrollHeight, frame.clientHeight);
+    }
+  }, [kind, text]);
   return (
     <DetailSection
       id={id}
@@ -281,6 +296,7 @@ export function OutputSection({
         ) : null
       ) : (
         <section
+          ref={frameRef}
           // スクロールできる領域は、キーボードで焦点を当てないと読み進められない。
           // biome-ignore lint/a11y/noNoninteractiveTabindex: 同上。
           tabIndex={0}
@@ -300,18 +316,22 @@ export function OutputSection({
  * 失敗の検知が保存した原因。実行のログと別に、検知の時点で伏せて保存した文を出す。
  * 読めなかったときは、原因の欄だけが失敗を示し、詳細の全体は出す。
  * `unread`のときは、取得の後でジョブが終わったので、原因が無いとは言わず、まだ読んでいないと伝える。
+ * `maybePending`のときは、検知がまだ書いていないかもしれないので、原因が無いとは言わない。
  */
 export function FailureCauses({
   failures,
   now,
   back,
   unread = false,
+  maybePending = false,
 }: {
   failures: Extract<JobDetailView, { found: true }>["failures"];
   now: number;
   back: BackState;
   /** 取得の後でジョブが終わり、保存された原因をまだ読んでいない。 */
   unread?: boolean;
+  /** 終了から検知の間隔より前で、原因がまだ保存されていない場合がある。 */
+  maybePending?: boolean;
 }) {
   if (!failures.ok) {
     return (
@@ -326,7 +346,11 @@ export function FailureCauses({
   if (failures.items.length === 0) {
     return (
       <p className="text-small text-muted-foreground">
-        {unread ? UNREAD_TEXT : "保存された失敗の原因はありません。"}
+        {unread
+          ? UNREAD_TEXT
+          : maybePending
+            ? PENDING_TEXT
+            : "保存された失敗の原因はありません。"}
       </p>
     );
   }

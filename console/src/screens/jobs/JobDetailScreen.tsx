@@ -1,6 +1,11 @@
 import { FileQuestion } from "lucide-react";
 import { useLocation, useParams } from "react-router";
-import { currentJob, useJobDetail } from "../../api/jobsQueries.ts";
+import {
+  currentJob,
+  currentSteps,
+  failedDetailReads,
+  useJobDetail,
+} from "../../api/jobsQueries.ts";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import {
@@ -19,6 +24,7 @@ import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { jobDetailCrumbs } from "../../lib/breadcrumbs.ts";
 import { isJobId } from "../../lib/jobLink.ts";
 import {
+  causesPending,
   isActiveJobState,
   isFinishedJobState,
   JOB_RETENTION_DAYS,
@@ -27,6 +33,7 @@ import {
   relatedWorkItemId,
 } from "../../lib/jobsView.ts";
 import { SCROLL_BODY_CLASS } from "../../lib/layoutClasses.ts";
+import { safeText } from "../../lib/safeText.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 import {
   ArgList,
@@ -109,16 +116,22 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
     return <NotFound back={back} />;
   }
 
-  const job =
-    currentJob(
-      { data: output.data, updatedAt: output.dataUpdatedAt },
-      { data: status.data, updatedAt: status.dataUpdatedAt },
-    ) ?? detail.job;
+  const outputRead = { data: output.data, updatedAt: output.dataUpdatedAt };
+  const statusRead = { data: status.data, updatedAt: status.dataUpdatedAt };
+  const job = currentJob(outputRead, statusRead) ?? detail.job;
+  // ステップは、状態の取得も持つ。実行中のフローの進み具合を、15秒ごとの取得で更新する。
+  const steps = currentSteps(outputRead, statusRead);
   const backState = back === null ? undefined : { jobsBack: back };
   const active = isActiveJobState(job.state);
   // 取得の後でジョブが終わったとき、保存された原因と結果は、まだ読めていない。
   const changed =
     isFinishedJobState(job.state) && !isFinishedJobState(detail.job.state);
+  // 失敗した取得だけを、1つずつ取り直す。2つを同時に走らせない。
+  const retryFailedReads = async (): Promise<void> => {
+    for (const read of failedDetailReads(output.isError, status.isError)) {
+      await (read === "output" ? output.refetch() : status.refetch());
+    }
+  };
   const showCauses =
     job.state === "failure" ||
     job.state === "canceled" ||
@@ -128,8 +141,8 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
   return (
     <>
       <PageHeader
-        title={jobScriptName(job.script_path)}
-        subtitle={job.id}
+        title={safeText(jobScriptName(job.script_path))}
+        subtitle={safeText(job.id)}
         refresh={refresh}
         refreshLabel="状態を更新"
       >
@@ -141,20 +154,14 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
             isFetching={refresh.isFetching}
             error={status.isError ? status.error : output.error}
             onRetry={() => {
-              if (status.isError) void status.refetch();
-              if (output.isError) void output.refetch();
+              void retryFailedReads();
             }}
           />
         ) : null}
         <DetailSection id="job-overview-heading" title="概要">
           {active ? (
             <p className="text-small text-muted-foreground">
-              状態は15秒ごとに更新します。ログと結果は、「ログを更新」で読み込み直します。
-            </p>
-          ) : null}
-          {changed ? (
-            <p className="text-small text-warning">
-              ジョブの状態が変わりました。「ログを更新」で、ログと結果も読み込み直せます。
+              状態は15秒ごとに更新します。ログと原因は、「ログと原因を更新」で読み込み直します。
             </p>
           ) : null}
           <JobOverview
@@ -171,12 +178,13 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
               now={now}
               back={backState}
               unread={changed}
+              maybePending={causesPending(job.completed_at, now)}
             />
           </DetailSection>
         ) : null}
-        {detail.steps.length === 0 ? null : (
+        {steps.length === 0 ? null : (
           <DetailSection id="job-steps-heading" title="ステップ">
-            <StepList steps={detail.steps} back={backState} />
+            <StepList steps={steps} back={backState} />
           </DetailSection>
         )}
         <DetailSection id="job-args-heading" title="引数">
@@ -201,7 +209,7 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
           onRefresh={() => {
             void output.refetch();
           }}
-          refreshLabel="ログを更新"
+          refreshLabel="ログと原因を更新"
           refreshing={output.isFetching || status.isFetching}
         />
       </div>
@@ -213,10 +221,12 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
  * ジョブの詳細の画面。状態、script、時刻、引数、結果、ログ、フローのステップ、関連する作業項目、失敗の原因を出す。
  * IDがUUIDの形でないときと、サーバーが見つからないと返したときは、同じ「見つかりません」を出す。存在を区別しないためである。
  * ログ、結果、引数、原因は、テキストのノードとしてだけ描く。
- * 実行中か待ちのジョブは、状態だけを15秒ごとに取り直す。ログは「ログを更新」の操作で取り直す。
- * 実行中のジョブが終わったと分かったときは、ログと結果を1回だけ自動で取り直す。
+ * 実行中か待ちのジョブは、状態だけを15秒ごとに取り直す。予定のジョブは自動では取り直さない。
+ * ログと保存済みの原因は「ログと原因を更新」の操作で取り直す。
+ * 終わっていなかったジョブが終わったと分かったときは、ログと結果を1回だけ自動で取り直す。
  * 取り直すまでは、保存された原因と結果を「まだ読んでいません」と伝える。無いとは言わない。
- * 2つの取得は重ねない。どちらかの取得中は、ログの更新を押せなくする。
+ * 2つの取得は重ねない。どちらかの取得中は、ログと原因の更新を押せなくする。
+ * 終了の直後は、保存済みの原因が検知の間隔の分だけ遅れて書かれるので、無いとは言い切らない。
  */
 export function JobDetailScreen() {
   const params = useParams();

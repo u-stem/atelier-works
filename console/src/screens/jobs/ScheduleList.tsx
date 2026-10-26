@@ -14,8 +14,8 @@ import {
   frozenScheduleTargets,
   jobsBackState,
   SCHEDULES_TRUNCATED_NOTE,
-  safeText,
 } from "../../lib/jobsView.ts";
+import { safeText } from "../../lib/safeText.ts";
 import { EmptyNote } from "../system/SystemSection.tsx";
 import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
 

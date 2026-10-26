@@ -31,9 +31,9 @@ import {
   jobScriptName,
   jobStateInfo,
   jobsBackState,
-  safeText,
   upcomingLabel,
 } from "../../lib/jobsView.ts";
+import { safeText } from "../../lib/safeText.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 import { EmptyNote } from "../system/SystemSection.tsx";
 

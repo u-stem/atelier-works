@@ -17,7 +17,6 @@ import { Tabs } from "../../components/Tabs.tsx";
 import {
   JOBS_TABS,
   type JobsTabId,
-  jobsFetchPlan,
   jobsPanelAttrs,
   jobsTabSpecs,
   parseJobsTab,
@@ -55,21 +54,20 @@ export function JobsScreen() {
     HISTORY_FILTER_PATHS,
   );
   const visited = useVisitedTabs(tab);
-  const fetching = jobsFetchPlan(visited);
   const scroll = useTabScroll(tab);
 
-  const active = useActiveJobs(fetching.active);
+  const active = useActiveJobs(visited.has("active"));
   const history = useJobHistory(
     {
       ...(status === undefined ? {} : { status }),
       ...(script === undefined ? {} : { scriptPath: script }),
     },
-    fetching.history,
+    visited.has("history"),
   );
-  const schedules = useSchedules(fetching.schedules);
+  const schedules = useSchedules(visited.has("schedules"));
   const holds = useQuery({
     ...jobsHoldsQueryOptions(),
-    enabled: fetching.schedules,
+    enabled: visited.has("schedules"),
   });
 
   const historyRefresh: RefreshStatus = refreshStatusOfAll([

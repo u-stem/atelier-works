@@ -503,14 +503,16 @@ export function configQueryOptions() {
 }
 
 /**
- * 実行中か待ちのジョブの状態を取り直すか。
+ * 状態を15秒ごとに取り直すか。最新の状態が実行中か待ちのときだけ取り直す。
+ * 予定のジョブは取り直さない。実行が数時間先のことがあり、15秒ごとの取得が無駄になるためである。
+ * 手動の更新で実行中になったときは、そのとき取り直しの対象になる。
  * ログと結果の取得中は取り直さない。Console用workerの枠が1つなので、2つの詳細の取得を重ねないためである。
  */
 export function shouldPollJobStatus(
-  _latest: JobSummaryView | null,
-  _outputFetching: boolean,
+  latest: JobSummaryView | null,
+  outputFetching: boolean,
 ): boolean {
-  return false;
+  return !outputFetching && latest !== null && isActiveJobState(latest.state);
 }
 
 /** 履歴の2ページ目以降のキャッシュのキーか。先頭のページは`before`が空である。 */
@@ -530,16 +532,41 @@ export type DetailSnapshot = {
   readonly updatedAt: number;
 };
 
+/**
+ * 表示する詳細。ログと結果の取得と状態の取得のうち、新しい方にする。
+ * 終了した状態から、実行中か待ちの状態へは戻さない。
+ * 接続の復帰で2つを同時に読み直すと、先に出した状態の応答が後から届くことがあるためである。
+ */
+function currentDetail(
+  output: DetailSnapshot,
+  status: DetailSnapshot,
+): Extract<JobDetailView, { found: true }> | null {
+  if (output.data === undefined || !output.data.found) return null;
+  const newer =
+    status.data?.found === true && status.updatedAt > output.updatedAt;
+  const regress =
+    status.data?.found === true &&
+    isFinishedJobState(output.data.job.state) &&
+    isActiveJobState(status.data.job.state);
+  return newer && !regress && status.data?.found === true
+    ? status.data
+    : output.data;
+}
+
 /** 表示するジョブ。ログと結果の取得と状態の取得のうち、新しい方のジョブにする。 */
 export function currentJob(
   output: DetailSnapshot,
   status: DetailSnapshot,
 ): JobSummaryView | null {
-  if (output.data === undefined || !output.data.found) return null;
-  if (status.data?.found === true && status.updatedAt > output.updatedAt) {
-    return status.data.job;
-  }
-  return output.data.job;
+  return currentDetail(output, status)?.job ?? null;
+}
+
+/** 表示するステップ。ジョブと同じく、新しい方の取得から取る。状態の取得は、ステップも持っている。 */
+export function currentSteps(
+  output: DetailSnapshot,
+  status: DetailSnapshot,
+): readonly StepViewData[] {
+  return currentDetail(output, status)?.steps ?? [];
 }
 
 /** 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。 */
@@ -586,8 +613,9 @@ export function seedJobStatus(
 }
 
 /**
- * 実行中だったジョブが終わったとき、ログと結果を1回取り直すか。
- * ログと結果は、実行中のうちに取ったもので、終わった後の出力と原因を読めていないためである。
+ * ジョブが終わったと分かったとき、ログと結果を取り直すか。
+ * ログと結果を取った時点で終わっていなかったので、終わった後の出力と原因を読めていないためである。
+ * 予定のジョブが、手動の更新で実行中になり、終わったときも同じである。
  * どちらかの取得中は取り直さない。Console用workerの枠が1つなので、2つの詳細の取得を重ねないためである。
  */
 export function shouldRefetchOutputAfterFinish(
@@ -599,17 +627,43 @@ export function shouldRefetchOutputAfterFinish(
   if (output === undefined || !output.found) return false;
   if (status === undefined || !status.found) return false;
   return (
-    isActiveJobState(output.job.state) && isFinishedJobState(status.job.state)
+    !isFinishedJobState(output.job.state) &&
+    isFinishedJobState(status.job.state)
   );
 }
 
+/** ログと結果の取り直しを、このidでこれから始めるか。同じidでは1回しか始めない。失敗しても、取り直し続けない。 */
+export function shouldStartOutputRefetch(
+  finished: boolean,
+  doneFor: string | null,
+  id: string,
+): boolean {
+  return finished && doneFor !== id;
+}
+
 /**
- * ジョブの詳細を取る。ログと結果を含む取得を1回行い、実行中か待ちのときだけ、状態の取得を別に持つ。
+ * 詳細の取得の失敗から、取り直す取得を、実行する順に返す。
+ * 失敗した取得だけを返し、ログと結果を先にする。
+ * Console用workerの枠が1つなので、2つを同時に走らせないためである。
+ */
+export function failedDetailReads(
+  outputFailed: boolean,
+  statusFailed: boolean,
+): readonly ("output" | "status")[] {
+  return [
+    ...(outputFailed ? (["output"] as const) : []),
+    ...(statusFailed ? (["status"] as const) : []),
+  ];
+}
+
+/**
+ * ジョブの詳細を取る。ログと結果を含む取得を1回行い、最新の状態が実行中か待ちのときだけ、状態の取得を別に持つ。
  * 状態の取得は、ログと結果の取得が終わっている間だけ有効にして、2つが同時に走らないようにする。
+ * 予定のジョブは自動では取り直さない。手動の更新で実行中になったら、取り直しの対象になる。
  * 有効になる前に、ログと結果の値で状態の取得を初期化する。直後に同じ内容を取り直さないためである。
  * その後は15秒ごとに繰り返す。タブが見えない間は止まる。
- * 実行中だったジョブが終わったと分かったときは、ログと結果を1回だけ取り直す。
- * ログは「ログを更新」の操作でも取り直せる。
+ * 終わっていなかったジョブが終わったと分かったときは、ログと結果を1回だけ取り直す。失敗しても繰り返さない。
+ * ログと原因は「ログと原因を更新」の操作でも取り直せる。
  */
 export function useJobDetail(id: string): {
   readonly output: UseQueryResult<JobDetailView, Error>;
@@ -624,13 +678,22 @@ export function useJobDetail(id: string): {
       updatedAt: output.dataUpdatedAt,
     });
   }, [client, id, output.data, output.dataUpdatedAt]);
-  const enabled = shouldPollJobStatus(output.data, output.isFetching);
+  const outputJob =
+    output.data !== undefined && output.data.found ? output.data.job : null;
+  // 有効かどうかは、最新の状態から決める。状態の取得の値が新しければ、そちらを見る。
   const status = useQuery({
     ...jobDetailQueryOptions(id, {
       includeOutput: false,
-      expectActive: enabled,
+      expectActive: outputJob !== null && isActiveJobState(outputJob.state),
     }),
-    enabled,
+    enabled: (query) =>
+      shouldPollJobStatus(
+        currentJob(
+          { data: output.data, updatedAt: output.dataUpdatedAt },
+          { data: query.state.data, updatedAt: query.state.dataUpdatedAt },
+        ),
+        output.isFetching,
+      ),
   });
 
   const refetchedFor = useRef<string | null>(null);
@@ -640,7 +703,7 @@ export function useJobDetail(id: string): {
   });
   const { refetch } = output;
   useEffect(() => {
-    if (finished && refetchedFor.current !== id) {
+    if (shouldStartOutputRefetch(finished, refetchedFor.current, id)) {
       refetchedFor.current = id;
       void refetch();
     }
@@ -660,29 +723,4 @@ export function jobsHoldsQueryOptions() {
     refetchOnWindowFocus: false as const,
     refetchOnReconnect: false as const,
   };
-}
-
-/** 表示する詳細のステップ。ログと結果の取得と状態の取得のうち、新しい方のステップにする。 */
-export function currentSteps(
-  _output: DetailSnapshot,
-  _status: DetailSnapshot,
-): readonly StepViewData[] {
-  return [];
-}
-
-/** ログと結果の取り直しを、このidでこれから始めるか。同じidでは1回しか始めない。 */
-export function shouldStartOutputRefetch(
-  _finished: boolean,
-  _doneFor: string | null,
-  _id: string,
-): boolean {
-  return false;
-}
-
-/** 詳細の取得の失敗から、取り直す取得を、実行する順に返す。2つを同時に走らせない。 */
-export function failedDetailReads(
-  _outputFailed: boolean,
-  _statusFailed: boolean,
-): readonly ("output" | "status")[] {
-  return [];
 }

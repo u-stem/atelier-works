@@ -18,8 +18,8 @@ import {
   jobScriptName,
   parseHistoryScript,
   parseHistoryStatus,
-  safeText,
 } from "../../lib/jobsView.ts";
+import { safeText } from "../../lib/safeText.ts";
 import { EmptyNote } from "../system/SystemSection.tsx";
 import { JobList, JobsQueryGate, LIST_LOADING_SHAPE } from "./JobRows.tsx";
 
@@ -216,8 +216,7 @@ export function JobHistory({
   return (
     <div className="flex max-w-4xl flex-col gap-3">
       <p className="text-small text-muted-foreground">
-        Consoleの呼び出し(tag
-        console)は含みません。時間切れで止められたジョブは、取消に入ります。
+        Consoleの呼び出し(tag console)は含みません。
       </p>
       <Filters
         status={status}

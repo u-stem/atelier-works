@@ -9,9 +9,9 @@ import type {
   OutputViewData,
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
-import { displayableIssueText } from "./intakeText.ts";
 import { formatRemainingTime, formatShortAbsoluteIso } from "./relativeTime.ts";
 import { parseIdParam } from "./routeParams.ts";
+import { safeText } from "./safeText.ts";
 
 /** ジョブの画面の入口のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
 export const JOBS_PATH = "/jobs";
@@ -46,13 +46,15 @@ const STATES: ReadonlyMap<string, JobStateInfo> = new Map([
   ["running", { kind: "running", label: "実行中" }],
   ["queued", { kind: "queued", label: "待ち" }],
   ["scheduled", { kind: "scheduled", label: "予定" }],
-  ["canceled", { kind: "canceled", label: "取消" }],
+  ["canceled", { kind: "canceled", label: "取消・時間切れ" }],
   ["skipped", { kind: "skipped", label: "スキップ" }],
   ["waiting", { kind: "queued", label: "待機中" }],
 ]);
 
 export function jobStateInfo(state: string): JobStateInfo {
-  return STATES.get(state) ?? { kind: "unknown", label: `不明(${state})` };
+  return (
+    STATES.get(state) ?? { kind: "unknown", label: `不明(${safeText(state)})` }
+  );
 }
 
 /** 実行中か待ちの状態。状態の取り直しを続ける対象である。`waiting`はステップの状態で、ジョブの取り直しには使わない。 */
@@ -347,7 +349,7 @@ export function describeSchedule(
     recentRuns: schedule.recent_runs.slice(0, RECENT_RUNS_SHOWN).map((run) => ({
       jobId: run.job_id,
       success: run.success,
-      label: run.success ? "成功" : "失敗",
+      label: run.success ? "成功" : "失敗・取消",
       durationLabel: formatDuration(run.duration_ms),
     })),
     error: schedule.error,
@@ -382,9 +384,9 @@ export function describeConfigValue(item: ConfigItemView): ConfigValueText {
   const value = item.value;
   if (typeof value === "object" && value !== null) {
     const text = JSON.stringify(value, null, 2) ?? String(value);
-    return { kind: "structure", text: displayableIssueText(text).text };
+    return { kind: "structure", text: safeText(text) };
   }
-  return { kind: "scalar", text: displayableIssueText(String(value)).text };
+  return { kind: "scalar", text: safeText(String(value)) };
 }
 
 /**
@@ -411,29 +413,27 @@ export function pausedLabel(
   return `一時停止中(${formatShortAbsoluteIso(pausedUntil)}まで)`;
 }
 
-/**
- * サーバーが返す表示用の文字列を、画面に出せる形にする。
- * 見えない文字と並びを入れ替える文字を、代替文字にする。
- */
-export function safeText(text: string): string {
-  return displayableIssueText(text).text;
-}
-
 /** 失敗の原因を保存する検知の間隔(分)。スケジュールのジョブの原因は、この間隔で保存される。 */
 export const CAUSE_DETECTION_INTERVAL_MIN = 5;
 
-/** 終了から検知の間隔以内で、原因がまだ保存されていない場合があるか。 */
+/**
+ * 終了から検知の間隔より前で、原因がまだ保存されていない場合があるか。
+ * scheduleのジョブの原因は、検知が周期で書く。終了の直後は、原因が無いのでなく、まだ書かれていないことがある。
+ */
 export function causesPending(
-  _completedAt: string | null,
-  _nowMs: number,
+  completedAt: string | null,
+  nowMs: number,
 ): boolean {
-  return false;
+  if (completedAt === null) return false;
+  const completedMs = Date.parse(completedAt);
+  if (Number.isNaN(completedMs)) return false;
+  return nowMs - completedMs < CAUSE_DETECTION_INTERVAL_MIN * 60_000;
 }
 
-/** ログの枠を末尾までスクロールしたときの`scrollTop`。 */
+/** ログの枠を末尾までスクロールしたときの`scrollTop`。ログは末尾が残り、原因は最後にあることが多い。 */
 export function logScrollTop(
-  _scrollHeight: number,
-  _clientHeight: number,
+  scrollHeight: number,
+  clientHeight: number,
 ): number {
-  return -1;
+  return Math.max(0, scrollHeight - clientHeight);
 }

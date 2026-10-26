@@ -9,8 +9,8 @@ import {
   CONFIG_REFERENCE_LABEL,
   describeConfigValue,
   filterConfigItems,
-  safeText,
 } from "../../lib/jobsView.ts";
+import { safeText } from "../../lib/safeText.ts";
 import { EmptyNote, SystemSection } from "./SystemSection.tsx";
 
 function ConfigValue({ item }: { item: ConfigItemView }) {
@@ -21,11 +21,11 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
         <span className="text-muted-foreground">{CONFIG_REFERENCE_LABEL}</span>
       );
     case "scalar":
-      return <span className="break-words">{value.text}</span>;
+      return <span className="break-words">{safeText(value.text)}</span>;
     case "structure":
       return (
         <pre className="font-mono text-small break-words whitespace-pre-wrap">
-          {value.text}
+          {safeText(value.text)}
         </pre>
       );
   }

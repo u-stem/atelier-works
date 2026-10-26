@@ -62,14 +62,3 @@ export function jobsTabSpecs(
     countAtLeast: { active: input.activeCountAtLeast },
   });
 }
-
-/** タブごとに、取得を始めてよいか。開いたことのあるタブだけを取得する。 */
-export function jobsFetchPlan(
-  visited: ReadonlySet<JobsTabId>,
-): Readonly<Record<JobsTabId, boolean>> {
-  return {
-    active: visited.has("active"),
-    history: visited.has("history"),
-    schedules: visited.has("schedules"),
-  };
-}

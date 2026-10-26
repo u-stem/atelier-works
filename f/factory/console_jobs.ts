@@ -730,19 +730,23 @@ function failureRowOf(row: unknown): FailureRow | null {
   };
 }
 
-/** 実装前のスタブ。 */
+/**
+ * ジョブ1件を読む要求。ログを含めない。
+ * 詳細のログは`getJobLogs`で別に読み、状態だけの取得は`getJob`の戻りのログを使わない。
+ * 含めると、状態を15秒ごとに読むたびに、ログがWindmillからworkerへ転送される。
+ */
 export function getJobRequest(
   workspace: string,
   id: string,
-): { workspace: string; id: string; noLogs?: boolean } {
-  return { workspace, id };
+): { workspace: string; id: string; noLogs: boolean } {
+  return { workspace, id, noLogs: true };
 }
 
 function sdkPorts(): JobsPorts {
   const workspace = wmillDefault.getWorkspace();
   return {
     now: () => new Date(),
-    getJob: (id) => wmill.JobService.getJob({ workspace, id }),
+    getJob: (id) => wmill.JobService.getJob(getJobRequest(workspace, id)),
     getJobLogs: (id) => wmill.JobService.getJobLogs({ workspace, id }),
     getCompletedJobResult: (id) =>
       wmill.JobService.getCompletedJobResult({ workspace, id }),
