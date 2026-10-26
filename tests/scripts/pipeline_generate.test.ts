@@ -166,14 +166,72 @@ describe("snapshotDocDir", () => {
         events.push("readText");
         return "# body";
       },
+      inspect: async () => {
+        events.push("inspect");
+      },
     };
     return { deps, events };
   }
 
-  test("hashes, reads the markdown and the diagram list, then hashes again", async () => {
+  test("hashes, inspects, reads the markdown and the diagram list, then hashes again", async () => {
     const h = io([HASH, HASH], ["requirements.md", "flow.drawio"]);
     await snapshotDocDir("/doc", h.deps);
-    expect(h.events).toEqual(["hash", "readDir", "readText", "hash"]);
+    expect(h.events).toEqual([
+      "hash",
+      "inspect",
+      "readDir",
+      "readText",
+      "hash",
+    ]);
+  });
+
+  test("does not inspect a directory that does not exist", async () => {
+    const h = io([null, null]);
+    await snapshotDocDir("/doc", h.deps).catch(() => undefined);
+    expect(h.events).toEqual(["hash"]);
+  });
+
+  test("lets the failure of the inspection through as it is", async () => {
+    const h = io([HASH, HASH]);
+    const deps: SnapshotIo = {
+      ...h.deps,
+      inspect: async () => {
+        throw new Error("invalid diagram");
+      },
+    };
+    await expect(snapshotDocDir("/doc", deps)).rejects.toThrow(
+      "invalid diagram",
+    );
+  });
+
+  test("does not read the markdown after an inspection that fails", async () => {
+    const h = io([HASH, HASH]);
+    const deps: SnapshotIo = {
+      ...h.deps,
+      inspect: async () => {
+        h.events.push("inspect");
+        throw new Error("invalid diagram");
+      },
+    };
+    await snapshotDocDir("/doc", deps).catch(() => undefined);
+    expect(h.events).toEqual(["hash", "inspect"]);
+  });
+
+  test("fails when an entry other than the markdown and the diagrams appeared after the cleanup", async () => {
+    const h = io([HASH, HASH], ["requirements.md", "flow.drawio", "notes.txt"]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (unexpected_entry)",
+    );
+  });
+
+  test("names the unexpected entry", async () => {
+    const h = io([HASH, HASH], ["requirements.md", "notes.txt"]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow("notes.txt");
+  });
+
+  test("accepts a directory of only the markdown and diagrams", async () => {
+    const h = io([HASH, HASH], ["requirements.md", "a.drawio", "b.drawio"]);
+    expect((await snapshotDocDir("/doc", h.deps)).docHash).toBe(HASH);
   });
 
   test("returns the hash as the baseline", async () => {
@@ -290,6 +348,20 @@ describe("the wiring of pipeline_generate main", () => {
   test("saves the draft with the baseline hash of the snapshot", async () => {
     expect(await stepSource()).toMatch(
       /await saveDraft\(\{[^}]*doc_hash: snapshot\.docHash,?\s*\}\)/,
+    );
+  });
+
+  test("inspects the diagrams inside the window of the snapshot", async () => {
+    expect(await stepSource()).toMatch(
+      /snapshotDocDir\(docDir, \{[\s\S]*inspect: async \(\) => \{[\s\S]*collectDocIssues\(docDir\)[\s\S]*\},\s*\}\)/,
+    );
+  });
+
+  test("does not inspect the diagrams before the snapshot", async () => {
+    const text = await stepSource();
+    const beforeSnapshot = text.slice(0, text.indexOf("await snapshotDocDir("));
+    expect(beforeSnapshot).not.toMatch(
+      /const issues = await collectDocIssues\(docDir\);/,
     );
   });
 
