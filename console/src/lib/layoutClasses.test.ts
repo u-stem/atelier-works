@@ -85,8 +85,10 @@ describe("STICKY_HEADER_CLASS", () => {
     expect(classesOf(STICKY_HEADER_CLASS)).not.toContain("sticky");
   });
 
-  test("sticks to the top edge of the scroll container", () => {
-    expect(classesOf(STICKY_HEADER_CLASS)).toContain("top-0");
+  test("sticks above the top padding of the scroll body, which the sticky offset is measured inside", () => {
+    expect(amountOf(STICKY_HEADER_CLASS, "top")).toBe(
+      -(amountOf(SCROLL_BODY_CLASS, "py") ?? Number.NaN),
+    );
   });
 
   test("covers what scrolls under it, with a background that is not transparent", () => {
