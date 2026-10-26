@@ -1,0 +1,50 @@
+summary: '[OP-0-3] ジョブの一覧と詳細を取得'
+description: Factory
+  Consoleのジョブの画面が表示する、f/factory/のジョブの一覧と詳細を読み取り専用で取得します。viewはactive(実行中と待ち)、history(完了した履歴)、detail(1件の詳細。job_idが必須)のいずれかです。返す項目は許可した項目だけで、ログと結果は秘密値らしい部分を伏せてから返します。対象外のジョブは、存在しないジョブと同じ応答にします。
+lock: '!inline f/factory/console_jobs.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    before:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    include_console:
+      type: boolean
+      description: ''
+      default: null
+    include_output:
+      type: boolean
+      description: ''
+      default: null
+    job_id:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    limit:
+      type: number
+      description: ''
+      default: null
+    script_path:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    status:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    view:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - view
+tag: console
+timeout: 60

@@ -614,6 +614,7 @@ WORKTREE_AUTO_PRUNE=0 mise run worktree:new -- <type>/<name>
 
 | 症状 | 原因と対処 |
 | --- | --- |
+| `mise run test:db`が強制終了などで中断され、`factory_test_<数字>`のデータベースが残った | 使い捨てのデータベースの名前は、作業ツリーのパスから決まる。同じ作業ツリーで次に実行すると、開始時に自分の名前のデータベースを消して作り直す。ほかの作業ツリーの分は残る。一覧は`mise exec -- docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -d windmill -c '\l factory_test_*'`で見る。消すときは、`mise run test:db`が動いていないことを確かめて、同じコマンドの`-c`を`'DROP DATABASE factory_test_<数字>'`にする。`windmill`と`datatable_db`は消さない。worktreeの片付けは、このデータベースに触れない |
 | ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定し、`wmill.yaml`の`workspaces.factory.baseUrl`も`http://127.0.0.1:`の後に新しいポートを付けたURLへ手元で合わせて(コミットしない)、`mise run up`をやり直す。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする。`bootstrap`と`doctor`は、`WM_BASE_URL`を使わず、このポートに合わせて宛先を決める |
 | `bootstrap`が「did not answer as Windmill」と出て止まる | `WM_HTTP_PORT`のポートで、Windmillの形の応答が無い。資格情報は送られていない。そのポートを使うプロセスを止めるか、`WM_HTTP_PORT`を別のポートにして`mise run up`をやり直す |
 | `bootstrap`が「may still be starting」と出て止まる | `WM_HTTP_PORT`のポートが5xxを返した。Windmillが起動の途中のことがある。資格情報は送られていない。数十秒待ってから実行し直す。続くなら、別のプロセスがそのポートを使っていないかを確かめる |

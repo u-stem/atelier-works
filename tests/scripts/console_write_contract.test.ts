@@ -138,9 +138,16 @@ const WRAPPER_CALLS: Readonly<
 };
 
 describe("allowlist", () => {
-  test("holds the two read scripts and the seven write scripts", () => {
+  test("holds the five read scripts and the seven write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
-      ["console_query", "console_holds", ...WRITE_SCRIPTS].sort(),
+      [
+        "console_query",
+        "console_holds",
+        "console_jobs",
+        "console_schedules",
+        "console_config",
+        ...WRITE_SCRIPTS,
+      ].sort(),
     );
   });
 

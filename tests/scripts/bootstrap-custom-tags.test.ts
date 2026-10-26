@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import {
   chmodSync,
   mkdirSync,
@@ -10,6 +17,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+
+// このファイルのテストは、bashの子プロセスを走らせる。並列で負荷が高いとbunの既定の5秒を
+// 超えることがあるため、このファイルだけ30秒にする。
+setDefaultTimeout(30_000);
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const BOOTSTRAP = join(REPO_ROOT, "scripts/bootstrap.sh");

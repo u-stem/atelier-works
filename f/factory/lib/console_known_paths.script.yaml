@@ -1,0 +1,9 @@
+summary: '[LIB] 既知のscript pathの定数(生成物)'
+description: 内部ライブラリです。直接実行するものではありません。リポジトリのscriptの定義、フロー、スケジュールから生成した定数で、Console用workerが照合に使います。
+lock: '!inline f/factory/lib/console_known_paths.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -59,6 +66,10 @@ function ageFiles(dir: string, minutes: number): void {
     else if (entry.isFile()) utimesSync(path, when, when);
   }
 }
+
+// どのテストも、gitのリポジトリを作ってbashの子プロセスを走らせる。単独でも1件に約1秒かかり、
+// 並列で負荷が高いとbunの既定の5秒を超えて落ちるため、このファイルだけ30秒にする。
+setDefaultTimeout(30_000);
 
 function makeTempRoot(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -1748,16 +1759,18 @@ describe("worktree-prune.sh", () => {
         const childPid = join(root, "gh-child-pid");
         writeGh(`sleep 47 &\necho $! > "${childPid}"\nwait`);
 
-        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "1" } });
-        await Bun.sleep(300);
+        // 上限は最初のgitの処理から数える。負荷でghを呼ぶ前に上限へ達しないよう、余裕を持たせる。
+        runAuto({ env: { WORKTREE_PRUNE_GH_TIMEOUT: "5" } });
 
-        const alive = Bun.spawnSync([
-          "kill",
-          "-0",
-          readFileSync(childPid, "utf8").trim(),
-        ]);
-        expect(alive.exitCode).not.toBe(0);
-      });
+        const pid = readFileSync(childPid, "utf8").trim();
+        // 子の終了は、シグナルを送った後の非同期の処理なので、終わるまで待つ。
+        let alive = true;
+        for (let waited = 0; alive && waited < 5000; waited += 100) {
+          alive = Bun.spawnSync(["kill", "-0", pid]).exitCode === 0;
+          if (alive) await Bun.sleep(100);
+        }
+        expect(alive).toBe(false);
+      }, 30_000);
 
       test("--auto counts a gh timeout as a failure", () => {
         addSquashWorktree("feat-sq", "feat/sq");

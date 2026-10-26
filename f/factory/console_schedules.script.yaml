@@ -1,0 +1,12 @@
+summary: '[OP-0-4] scheduleの状態を取得'
+description: Factory
+  Consoleのジョブの画面が表示する、f/factory/のscheduleの状態(有効/無効、cron、次回、直近の実行)と、リポジトリの定義との差異を読み取り専用で取得します。argsやemailなど、許可していない項目は返しません。
+lock: '!inline f/factory/console_schedules.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+tag: console
+timeout: 60

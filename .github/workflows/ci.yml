@@ -182,7 +182,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # 使い捨て専用の値。`migrations/datatable/main/*.{up,down}.sql`は、
-      # `scripts/test-db.sh`が終了時に削除する`factory_test`データベースに適用する。
+      # `scripts/test-db.sh`が終了時に削除する`factory_test_<数字>`データベース(作業ツリーのパスから決まる名前)に適用する。
       # このパスワードが守る本物の`windmill`データベースには触れない。
       # 本物の秘密ではないので、CIに存在しない`mise.local.toml`を通さず直書きしてよい。
       DB_PASSWORD: ci-dummy-password

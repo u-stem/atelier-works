@@ -8,6 +8,8 @@ import { classifyRunResponse, type RunResult } from "./errors.ts";
 /**
  * Consoleが呼んでよいscript。キーが呼び出し側の名前、値がWindmillのパス。
  * 保留を置くscriptは持たない。Consoleは保留と凍結を読み、解除するだけである。
+ * ジョブ、schedule、設定を読む3本(`console_jobs`、`console_schedules`、`console_config`)は読み取り専用で、
+ * 書き込みは持たない。
  */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
@@ -19,6 +21,9 @@ export const SCRIPT_PATHS = {
   notice_resolve: "f/factory/notice_resolve",
   hold_release: "f/factory/hold_release",
   freeze_release: "f/factory/freeze_release",
+  console_jobs: "f/factory/console_jobs",
+  console_schedules: "f/factory/console_schedules",
+  console_config: "f/factory/console_config",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;
