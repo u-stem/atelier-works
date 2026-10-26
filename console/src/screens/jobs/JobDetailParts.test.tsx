@@ -371,6 +371,17 @@ describe("OutputSection", () => {
     ).toContain("timeout");
   });
 
+  test("does not say there is no result next to the reason it could not be read", () => {
+    expect(
+      section("", {
+        kind: "result",
+        output: null,
+        error: "timeout",
+        emptyText: "結果はありません",
+      }),
+    ).not.toContain("結果はありません");
+  });
+
   test("writes the reason as text", () => {
     expect(
       section("", { kind: "result", output: null, error: "<b>x</b>" }),
