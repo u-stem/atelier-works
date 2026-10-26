@@ -2,6 +2,10 @@
 // I/Oは持たない。git・wmill CLIのサブプロセス、Data Tableへの記録、
 // Discordへの通知は`self_update.ts`が行う。
 
+import {
+  DESIGN_ENABLED_IGNORED_NOTICE_KIND,
+  DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE,
+} from "./config.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { DeploymentRecord, NoticeRecord } from "./types.ts";
 
@@ -560,16 +564,81 @@ export async function setDeployedSha(
   }
 }
 
-/** 設計の有効化の通知の処理全体の上限(ミリ秒)。 */
-export const DESIGN_NOTICE_CHECK_TIMEOUT_MS = 0;
+// ---------------------------------------------------------------------------
+// reconcileDesignEnabledNotice: 偽として読んだ`design_enabled`の通知
+// ---------------------------------------------------------------------------
 
-/** 1回の実行で解決する、設計の有効化の通知の数の上限。 */
-export const DESIGN_NOTICE_RESOLVE_LIMIT = 0;
+/**
+ * 設計の有効化の通知の処理全体の上限(ミリ秒)。
+ * 処理の中の呼び出し(通知の挿入、一覧、解決)は、この1つの上限で包む。
+ * 通知はDBへの3回までの呼び出しで、5秒で足りる。ジョブの`timeout`の余裕に収めるため、これより大きくしない。
+ */
+export const DESIGN_NOTICE_CHECK_TIMEOUT_MS = 5_000;
 
-export async function reconcileDesignEnabledNotice(_deps: {
+/**
+ * 1回の実行で解決する、設計の有効化の通知の数の上限。古いものから解決する。
+ * 数を固定して最悪の長さを抑える。残りは次の回に解決する。
+ * 未解決の通知は同じ本文で1件にまとまるので、ふだんは0〜1件である。
+ */
+export const DESIGN_NOTICE_RESOLVE_LIMIT = 3;
+
+const DESIGN_ENABLED_IGNORED_WARNING =
+  "design_enabled is true but the design stage cannot be opened yet; reading it as false";
+
+function errorFields(err: unknown): { error: string } {
+  return {
+    error: maskSecrets(err instanceof Error ? err.message : String(err)),
+  };
+}
+
+/**
+ * 偽として読んだ`design_enabled`の通知を整える。例外は投げない。
+ * `ignored`が真なら警告を1件ログに残し、通知を記録する。未解決の通知が既にあれば、
+ * `addNotice`(`addNoticeUnlessUnresolved`)が1件にまとめる。
+ * `ignored`が偽なら、未解決の通知を`DESIGN_NOTICE_RESOLVE_LIMIT`件まで解決する。
+ * 設定が直ったことが、通知を解決してよい印だからである。
+ * どの呼び出しが失敗しても、ログに残して続ける。設計の設定の通知のために、自己更新を止めないためである。
+ */
+export async function reconcileDesignEnabledNotice(deps: {
   readonly ignored: boolean;
   readonly addNotice: (record: NoticeRecord) => Promise<unknown>;
   readonly listUnresolved: () => Promise<readonly { readonly id: number }[]>;
   readonly resolve: (id: number) => Promise<unknown>;
   readonly log: Logger;
-}): Promise<void> {}
+}): Promise<void> {
+  if (deps.ignored) {
+    deps.log.warn(DESIGN_ENABLED_IGNORED_WARNING);
+    try {
+      await deps.addNotice({
+        kind: DESIGN_ENABLED_IGNORED_NOTICE_KIND,
+        message: DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE,
+      });
+    } catch (err) {
+      deps.log.warn(
+        "design_enabled_ignored notice could not be recorded",
+        errorFields(err),
+      );
+    }
+    return;
+  }
+  let unresolved: readonly { readonly id: number }[];
+  try {
+    unresolved = await deps.listUnresolved();
+  } catch (err) {
+    deps.log.warn(
+      "design_enabled_ignored notices could not be listed",
+      errorFields(err),
+    );
+    return;
+  }
+  for (const notice of unresolved.slice(0, DESIGN_NOTICE_RESOLVE_LIMIT)) {
+    try {
+      await deps.resolve(notice.id);
+    } catch (err) {
+      deps.log.warn("design_enabled_ignored notice could not be resolved", {
+        notice_id: notice.id,
+        ...errorFields(err),
+      });
+    }
+  }
+}

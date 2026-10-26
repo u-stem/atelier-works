@@ -10,7 +10,7 @@ locks:
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/auto_retry_pr_review: c6108817e2ef3dec835aa0a9b1c3e259e95aa07018f9781c05c119de9facc4f4
   f/factory/auto_retry_stale_image: ecd33f885e1731f2cd91349764550c30c93d7753fa1051f38aa2881fc2ba3671
-  f/factory/cleanup_db: abe1e0c719ea5f58e0621ccacdea41e5277a632703fe26516e173f6b84a56382
+  f/factory/cleanup_db: a0fbcd84c3e7b9402372f73c45731c33ec564f02e793031a8e274cae22047654
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
   f/factory/collect_github: 150e44bca16d65aec9a05b899337db653f12622632d3c3b56f50bae83877f81d
   f/factory/console_config: 6a39c62b6fa1d8ecdcc746709191d847b1ad26d7295726bd4ae367423210eb23
@@ -47,7 +47,7 @@ locks:
   f/factory/lib/claude: c729ad2c468d5b832b27fe65c7d81c5ed9ee22187240c449c299e5c56a91b626
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 3b97f5ee699012babd490ff9a070aa573aeabb45577923723b55760b12af1545
-  f/factory/lib/config: a0232d8c45cb6ae3503496060f475223cae5d2e794dc68c0ea42d63f08c070fc
+  f/factory/lib/config: 6c9af009bb1fe772e5a9acd61f14116c6d0b596754e5da007f5a211d81922351
   f/factory/lib/conflict_fix_apply: 73deb37f4bde7db94d3e03292daba0602cbc0bc72738f8352683add161e9a3bb
   f/factory/lib/conflict_fix_prompt: 5213e3c137bac55c2d77741241d8cc4193547984baf6af59d8ef1887c7aaa23f
   f/factory/lib/conflict_fix_round: 768797a74aa4136b43ffd91fdc8bb6c46a6240778269f6ecdbcabe7ba7057ce7
@@ -57,7 +57,7 @@ locks:
   f/factory/lib/console_known_paths: df5543222d932ce6fefb24e52eb9ca8b87d629970310c87b055d56a366b8993a
   f/factory/lib/console_redact: 3cd5957139b0097e4b9c140b62ead54ba33fa6e9be84a09f6d1737b7c4532a0a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
-  f/factory/lib/console_support: 92aff0984011046777473050118c6b392083e125ad044df33746ea960cb6b418
+  f/factory/lib/console_support: a0b40648f6e53d5cc92bd9de620e2d9bf6eb77ddfb442cea5f83a708d7bb45a3
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/db: 0e92325d3925625e5c4d1dcf42ab7b37cfa5402096d9fbeeca8504fae3fe947a
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
@@ -145,10 +145,10 @@ locks:
   f/factory/lib/schedule_failure_report: 65ab0dbafe16daed08eea9d29fa0d314264c212dcf87e3e7fdcf1beecd648bc3
   f/factory/lib/schedule_failure_scan: 75af17ce22ab9ed41b7ba4abaecf54d991f5d192ba3dc3bbfc24a00702c62cb7
   f/factory/lib/self_update_pull_requests: b21a5d10d4d5900d7bebaad33b711e71d50461ff3747fd59c54dca63426674d0
-  f/factory/lib/self_update_support: c8ecc98c87bb4c385a4e31b42ea50744ca21a1774b1e4e306a627ca9d649cd1c
+  f/factory/lib/self_update_support: e1f7016a6238d611b7fe2824fc03dc7d9447ad0325162cb86daba9993a341fdd
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 1226f84422e0fe61a430ef24fbe91d706987131c41f5d00c8b609663514c9da8
+  f/factory/lib/types: d9983ac89bc26de51a8b3b9d468a5ff76130f25a8c8767e7896159c19349bcc3
   f/factory/lib/worker_load_support: b68337109b6233aacd50be93bf977391910fcaf328a7a7ae6ba01be1269fe00c
   f/factory/lib/workspace: 4586bbeb2ef59260d2cac673043b58ecc9918231931a37be886f1f76c6090006
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -164,7 +164,7 @@ locks:
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: bb311e06aedf909f94a937a0fb521ca5190754ca9b61165dfff01ba4bd2afc11
+  f/factory/self_update: 513e6e70056145527caf3fa664eb120631e7cfb20103f8fced9f088ed8828e04
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: 32ce6bd61b4dcc608e78b084ad8fb0d592392cb920fe0b4c8cb05d6ca9459e88

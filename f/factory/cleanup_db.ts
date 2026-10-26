@@ -293,7 +293,8 @@ async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
 /**
  * 保持期間を過ぎた未解決の`info`の通知を、削除せず解決済みにする。
  * `info`の通知はConsoleの一覧から7日で外れ、誰も解決しないので、溜まり続けないようにここで解決済みにする。
- * 解決できない種類の通知(`UNRESOLVABLE_NOTICE_KINDS`)は`info`なので、この対象に入る。
+ * 解決できない種類の通知(`UNRESOLVABLE_NOTICE_KINDS`)は、`design_enabled_ignored`(`action`)を除いて`info`なので、この対象に入る。
+ * `design_enabled_ignored`は`action`なのでこの対象に入らず、設定が直ると自己更新が解決する。
  * 痕跡を解決済みの履歴に残し、その後は`cleanupNotices`が通常の保持期間で消す。
  * `cleanupNotices`とは別に呼び、片方が失敗してももう片方の件数を捨てない。
  */

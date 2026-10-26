@@ -27,7 +27,10 @@ import {
   hasRetryableCandidate,
   shouldStartStaleImageRetry,
 } from "./lib/auto_retry.ts";
-import { loadConfig } from "./lib/config.ts";
+import {
+  DESIGN_ENABLED_IGNORED_NOTICE_KIND,
+  loadConfig,
+} from "./lib/config.ts";
 import {
   CONSOLE_WORKER_CHECK_TIMEOUT_MS,
   consoleQueueQuery,
@@ -103,6 +106,7 @@ import {
   buildWmillArgv,
   buildWmillEnv,
   classifyChangedPaths,
+  DESIGN_NOTICE_CHECK_TIMEOUT_MS,
   decideUpdate,
   deploymentFailureMessage,
   describeTriggerEnv,
@@ -110,6 +114,7 @@ import {
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   readDeployedSha,
+  reconcileDesignEnabledNotice,
   recordFailedDeployment,
   recordSuccessDeployment,
   resolveTriggerKind,
@@ -731,6 +736,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - 定期ジョブ用workerの確認
  * - 凍結の段(読む段と書く段。各段を`FREEZE_PHASE_TIMEOUT_MS`の1つの上限で包み、区切った呼び出しの回数には数えない)
  * - 収集の鮮度の確認(全体の上限を1回。中の区切った呼び出しは、区切った呼び出しの回数から除く)
+ * - 設計の有効化の通知の処理(全体の上限を1回。中の呼び出しは、`withCallTimeout`の1つの区切りに包み、区切った呼び出しの回数には数えない)
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
 export const SELF_UPDATE_WORST_CASE_MS =
@@ -748,7 +754,8 @@ export const SELF_UPDATE_WORST_CASE_MS =
   SELF_UPDATE_FREEZE_PHASE_COUNT * FREEZE_PHASE_TIMEOUT_MS +
   CONSOLE_WORKER_CHECK_TIMEOUT_MS +
   PERIODIC_WORKER_CHECK_TIMEOUT_MS +
-  GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS;
+  GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS +
+  DESIGN_NOTICE_CHECK_TIMEOUT_MS;
 
 // ---------------------------------------------------------------------------
 // main
@@ -787,6 +794,33 @@ export async function main(): Promise<SelfUpdateResult> {
       wmill.getResource("f/factory/factory_config"),
     ),
   );
+  // `design_enabled`が偽として読まれたことの通知を整える。更新の前に、全体を1つの上限で包んで行う。
+  // 失敗しても時間切れでも、更新と検知は止めない。
+  try {
+    await withCallTimeout(
+      "design notice check",
+      () =>
+        reconcileDesignEnabledNotice({
+          ignored: config.design_enabled_ignored,
+          addNotice: (record) => addNoticeUnlessUnresolved(record),
+          listUnresolved: () =>
+            listUnresolvedNoticesByKind(DESIGN_ENABLED_IGNORED_NOTICE_KIND),
+          resolve: (id) =>
+            resolveNoticeIfUnresolved(
+              id,
+              DESIGN_ENABLED_IGNORED_NOTICE_KIND,
+              "self_update",
+              [],
+            ),
+          log,
+        }),
+      DESIGN_NOTICE_CHECK_TIMEOUT_MS,
+    );
+  } catch (err) {
+    log.warn("design notice check failed", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
   try {
     return await updateSelf(log, config);
   } finally {

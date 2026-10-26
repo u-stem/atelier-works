@@ -1769,6 +1769,19 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
+  // 設計工程。リソース型ではどちらも省略可能で、既定値がある。
+  /**
+   * 設計工程を有効にするか。既定は`false`。
+   * 設計工程を有効にできるようになるまで、リソースに`true`を書いても`false`として読む。そのとき`design_enabled_ignored`が真になる。
+   */
+  design_enabled: boolean;
+  /**
+   * `design_enabled`に`true`が書かれているのに、偽として読んだか。リソースの項目ではなく、読み込みの結果として導く。
+   * 真の間、自己更新が通知`design_enabled_ignored`を残す。
+   */
+  design_enabled_ignored: boolean;
+  /** 1つの要件定義の下で、設計を試せる回数の上限。1以上10以下の整数で、既定は3。 */
+  max_design_attempts: number;
   // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。
   /** dependabotのセキュリティ更新PRを自動で処理するか。既定は`false`。 */
   dependabot_enabled: boolean;

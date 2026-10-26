@@ -67,6 +67,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   review_gated_prolonged: "action",
   dependabot_merge_hold_unreadable: "action",
   doc_hash_column_missing: "action",
+  design_enabled_ignored: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */
@@ -78,11 +79,14 @@ export const INFO_NOTICE_KINDS: readonly string[] = Object.entries(
  * Consoleから解決できない種類。
  * 設定や権限の問題を示す通知は、運用者が内容を確かめないまま消せてしまうと、
  * 安全策が外れていることが見えなくなるため。
+ * `design_enabled_ignored`は「要対応」で、設定を直すと自己更新だけが解決する。
+ * 画面から消せると、設定が直らないまま通知だけが消えるため。
  */
 export const UNRESOLVABLE_NOTICE_KINDS: readonly string[] = [
   "unsandboxed_check_commands",
   "labeler_denied",
   "fix_feedback_association_excluded",
+  "design_enabled_ignored",
 ];
 
 /**
