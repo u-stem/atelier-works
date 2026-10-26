@@ -8706,6 +8706,30 @@ check(
   designRequest > 0,
   designRequest,
 );
+// Consoleに設計の承認の画面が入るまで、Inboxとサマリーは設計の依頼を取得しない。取得しても一覧が落ちない。
+let designInboxRows: Awaited<ReturnType<typeof runConsoleQuery>> = [];
+const designInboxError = await errorOf(async () => {
+  designInboxRows = await runConsoleQuery("inbox", 500, 30, sql);
+});
+check(
+  "design stage: the inbox loads while a design request is pending",
+  designInboxError === null,
+  String(designInboxError),
+);
+check(
+  "design stage: the inbox does not list the design request",
+  !designInboxRows.some(
+    (row) =>
+      "approval_request_id" in row && row.approval_request_id === designRequest,
+  ),
+);
+const designSummary = await runConsoleSummary(500, sql);
+check(
+  "design stage: the summary does not list the design request",
+  !designSummary.approvals.some(
+    (row) => row.approval_request_id === designRequest,
+  ),
+);
 
 // 設計書の下書き: 承認済みの要件定義の下書きと同じ作業項目にだけ結べ、設計の試行は1以上で、
 // 同じ組を複数挿せて最新が引け、作業項目の削除で消える。リースを失った実行は挿せない。
