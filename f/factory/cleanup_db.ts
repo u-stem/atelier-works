@@ -9,6 +9,7 @@
 // 収集の実行の`gh_collect_runs`も保持期間で削除する(所有者ごとの直近の成功と、`finished_at`のある直近の実行は残す)。件数はログだけに残す。
 // 収集の詳細のうち、閉じたPRと一覧から外れたIssueの行も、`written_at`から保持期間を過ぎたものを削除する。開いている行は、古くても削除しない。件数はログだけに残す。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
+// Consoleの操作の記録`console_actions`は、設定ではなく固定の保持日数(90日)で削除する。件数はログだけに残す。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
@@ -31,10 +32,15 @@ import {
   summarizeCleanup,
 } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
+import {
+  consoleActionsCutoff,
+  deleteExpiredActions,
+} from "./lib/console_actions.ts";
 import { INFO_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
   addNoticeUnlessUnresolved,
   type DeletedWorkItemRef,
+  defaultSqlClient,
   deleteClosedGhDetailRowsBefore,
   deleteDeploymentsBefore,
   deleteGhCollectRunsBefore,
@@ -273,6 +279,30 @@ async function cleanupWorkerSamples(
   }
 }
 
+/**
+ * Consoleの操作の記録を、記録した時刻から固定の保持日数(`CONSOLE_ACTIONS_RETENTION_DAYS`)を過ぎたものだけ削除する。
+ * 保持日数は設定の項目にしない。記録を短くすると、誤操作の追跡が効かなくなるためである。
+ * 件数は`cleanup_runs`に記録せず、ログに残す。
+ */
+async function cleanupConsoleActions(now: Date, log: Logger): Promise<number> {
+  try {
+    return await deleteExpiredActions(
+      consoleActionsCutoff(now),
+      defaultSqlClient,
+    );
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete console_actions", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `Consoleの操作の記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** 解決済みの通知を、解決の時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   try {
@@ -369,6 +399,8 @@ export async function main(): Promise<CleanupCounts> {
     log,
   );
 
+  const consoleActionsDeleted = await cleanupConsoleActions(new Date(), log);
+
   const counts: CleanupCounts = {
     work_items_deleted: workItems.work_items_deleted,
     approval_requests_deleted: workItems.approval_requests_deleted,
@@ -388,6 +420,7 @@ export async function main(): Promise<CleanupCounts> {
     pr_conflict_checks_deleted: prConflictChecksDeleted,
     gh_collect_runs_deleted: ghCollectRunsDeleted,
     gh_detail_rows_deleted: ghDetailRowsDeleted,
+    console_actions_deleted: consoleActionsDeleted,
   });
   return counts;
 }

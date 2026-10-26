@@ -10,7 +10,11 @@
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
-import type { ActionAudit, ActionSqlClient } from "./lib/console_actions.ts";
+import {
+  type ActionAudit,
+  type ActionSqlClient,
+  runRecordedAs,
+} from "./lib/console_actions.ts";
 import {
   clipDisplay,
   freezeSubject,
@@ -20,7 +24,7 @@ import {
   recordRelease,
   releaseNoticeMessage,
 } from "./lib/console_holds_support.ts";
-import { addNoticeUnlessUnresolved } from "./lib/db.ts";
+import { addNoticeUnlessUnresolved, defaultSqlClient } from "./lib/db.ts";
 import {
   type FreezePorts,
   mutateFreezeState,
@@ -198,38 +202,81 @@ export async function releaseFreezeFromConsole(
   };
 }
 
+/**
+ * 解除を、操作の記録(`factory.console_actions`)で包む。通知(`hold_released`)とは別の記録である。
+ * 操作の前に`attempted`の行を入れ、操作の後に結果を更新する。書いた後に解除を確認できなかったときは`partial`にする。
+ * 記録を書けなくても解除は通し、戻りの`action_audit`を`failed`にする。
+ * 解除が例外を投げたときは、行を`failed`にして投げ直す。
+ */
 export async function releaseFreezeRecorded(
   freezeId: string,
   deps: FreezeReleaseDeps,
-  _sql: ActionSqlClient,
+  sql: ActionSqlClient,
 ): Promise<FreezeReleaseResult> {
-  return await releaseFreezeFromConsole(freezeId, deps);
+  const recorded = await runRecordedAs(
+    deps.deriveApprover,
+    {
+      action: "freeze_release",
+      target: `freeze:${freezeId}`,
+      changes: { freeze_id: freezeId },
+    },
+    async () => {
+      const value = await releaseFreezeFromConsole(freezeId, deps);
+      return {
+        outcome:
+          value.status === "unconfirmed"
+            ? ("partial" as const)
+            : ("succeeded" as const),
+        changes: {
+          status: value.status,
+          ...(value.scope === undefined ? {} : { scope: value.scope }),
+        },
+        value,
+      };
+    },
+    { sql, onUnrecordable: "proceed" },
+  );
+  if (!recorded.ok) {
+    throw new Error(`freeze_release: ${recorded.reason}`);
+  }
+  return { ...recorded.value, action_audit: recorded.audit };
 }
 
 /** Consoleから凍結かdeployの保留を1件解除する。操作者はジョブの実行文脈から導く。 */
 export async function main(freeze_id: string): Promise<FreezeReleaseResult> {
   const log = logger("freeze_release");
   let operator = "";
-  const result = await releaseFreezeFromConsole(freeze_id, {
-    deriveApprover: () => {
-      operator = deriveApprover({
-        WM_USERNAME: process.env.WM_USERNAME,
-        WM_EMAIL: process.env.WM_EMAIL,
-      });
-      return operator;
+  const result = await releaseFreezeRecorded(
+    freeze_id,
+    {
+      deriveApprover: () => {
+        operator = deriveApprover({
+          WM_USERNAME: process.env.WM_USERNAME,
+          WM_EMAIL: process.env.WM_EMAIL,
+        });
+        return operator;
+      },
+      ports: sdkFreezePorts(
+        wmill,
+        wmillDefault.getWorkspace(),
+        () => new Date(),
+      ),
+      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      warn: (message, fields) => {
+        log.warn(message, fields);
+      },
     },
-    ports: sdkFreezePorts(wmill, wmillDefault.getWorkspace(), () => new Date()),
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
-    warn: (message, fields) => {
-      log.warn(message, fields);
-    },
-  });
+    defaultSqlClient,
+  );
   log.info("freeze release finished", {
     operator: clipDisplay(operator, 100),
     freeze_id: result.freeze_id,
     status: result.status,
     ...(result.scope === undefined ? {} : { scope: result.scope }),
     ...(result.audit === undefined ? {} : { audit: result.audit }),
+    ...(result.action_audit === undefined
+      ? {}
+      : { action_audit: result.action_audit }),
   });
   return result;
 }

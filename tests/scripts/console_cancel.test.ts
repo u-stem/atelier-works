@@ -68,7 +68,7 @@ describe("evaluateCancelTarget", () => {
     });
   });
 
-  test.each(CANCELABLE_FLOW_PATHS)("accepts the flow %s", (path) => {
+  test.each([...CANCELABLE_FLOW_PATHS])("accepts the flow %s", (path) => {
     expect(
       evaluateCancelTarget(runningFlow({ script_path: path }), NOW).kind,
     ).toBe("ok");

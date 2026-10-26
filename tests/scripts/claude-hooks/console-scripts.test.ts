@@ -70,7 +70,7 @@ describe("the classification of the console scripts", () => {
 });
 
 describe("bash-guard denies running a Console write script", () => {
-  test.each(CONSOLE_WRITE_SCRIPTS)(
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
     "denies wmill script run on %s in the main session",
     async (name) => {
       expect(await decide(`wmill script run f/factory/${name} -d '{}'`)).toBe(
@@ -79,7 +79,7 @@ describe("bash-guard denies running a Console write script", () => {
     },
   );
 
-  test.each(CONSOLE_WRITE_SCRIPTS)(
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
     "denies wmill script run on %s in a subagent",
     async (name) => {
       expect(
@@ -90,7 +90,7 @@ describe("bash-guard denies running a Console write script", () => {
     },
   );
 
-  test.each(CONSOLE_WRITE_SCRIPTS)("denies a curl to %s", async (name) => {
+  test.each([...CONSOLE_WRITE_SCRIPTS])("denies a curl to %s", async (name) => {
     expect(
       await decide(
         `curl -X POST ${URL_BASE}/run_wait_result/p/f/factory/${name}`,
@@ -98,13 +98,16 @@ describe("bash-guard denies running a Console write script", () => {
     ).toBe("deny");
   });
 
-  test.each(CONSOLE_WRITE_SCRIPTS)("denies a preview of %s", async (name) => {
-    expect(await decide(`wmill script preview f/factory/${name}.ts`)).toBe(
-      "deny",
-    );
-  });
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
+    "denies a preview of %s",
+    async (name) => {
+      expect(await decide(`wmill script preview f/factory/${name}.ts`)).toBe(
+        "deny",
+      );
+    },
+  );
 
-  test.each(CONSOLE_WRITE_SCRIPTS)(
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
     "denies a script name that is built with a glob for %s",
     async (name) => {
       const glob = `${name.slice(0, -2)}[${name.slice(-2, -1)}]${name.slice(-1)}`;
@@ -140,42 +143,45 @@ describe("bash-guard denies running a Console write script", () => {
 });
 
 describe("bash-guard allows work near the Console write scripts", () => {
-  test.each(CONSOLE_READ_SCRIPTS)(
+  test.each([...CONSOLE_READ_SCRIPTS])(
     "allows wmill script run on %s",
     async (name) => {
       expect(await decide(`wmill script run f/factory/${name}`)).toBe("allow");
     },
   );
 
-  test.each(CONSOLE_READ_SCRIPTS)("allows a curl to %s", async (name) => {
+  test.each([...CONSOLE_READ_SCRIPTS])("allows a curl to %s", async (name) => {
     expect(
       await decide(`curl ${URL_BASE}/run_wait_result/p/f/factory/${name}`),
     ).toBe("allow");
   });
 
-  test.each(CONSOLE_WRITE_SCRIPTS)(
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
     "allows reading the source of %s",
     async (name) => {
       expect(await decide(`wmill script get f/factory/${name}`)).toBe("allow");
     },
   );
 
-  test.each(CONSOLE_WRITE_SCRIPTS)("allows testing %s", async (name) => {
+  test.each([...CONSOLE_WRITE_SCRIPTS])("allows testing %s", async (name) => {
     expect(await decide(`bun test tests/scripts/${name}.test.ts`)).toBe(
       "allow",
     );
   });
 
-  test.each(CONSOLE_WRITE_SCRIPTS)(
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
     "allows adding %s to a commit",
     async (name) => {
       expect(await decide(`git add f/factory/${name}.ts`)).toBe("allow");
     },
   );
 
-  test.each(CONSOLE_WRITE_SCRIPTS)("allows searching for %s", async (name) => {
-    expect(await decide(`rg ${name} docs`)).toBe("allow");
-  });
+  test.each([...CONSOLE_WRITE_SCRIPTS])(
+    "allows searching for %s",
+    async (name) => {
+      expect(await decide(`rg ${name} docs`)).toBe("allow");
+    },
+  );
 
   test("does not take a longer name for the job cancel script", async () => {
     expect(

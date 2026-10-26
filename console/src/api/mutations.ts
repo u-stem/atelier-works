@@ -31,7 +31,12 @@ export function useWriteMutation<TInput, TResult>(
 ): WriteMutation<TInput> {
   const queryClient = useQueryClient();
   const locks = config.locks ?? writeLocks;
-  const held = useSyncExternalStore(locks.subscribe, locks.getSnapshot);
+  // サーバー側の描画(`renderToStaticMarkup`)でも、同じ集合を返す。ロックは画面を開いたタブの中の状態である。
+  const held = useSyncExternalStore(
+    locks.subscribe,
+    locks.getSnapshot,
+    locks.getSnapshot,
+  );
 
   const mutation = useMutation({
     networkMode: "always",

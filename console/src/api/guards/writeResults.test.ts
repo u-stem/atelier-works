@@ -354,11 +354,14 @@ describe("isJobCancelResult", () => {
     );
   });
 
-  test.each(JOB_CANCEL_REFUSAL_REASONS)("accepts the refusal %s", (reason) => {
-    expect(isJobCancelResult({ found: true, refused: true, reason })).toBe(
-      true,
-    );
-  });
+  test.each([...JOB_CANCEL_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isJobCancelResult({ found: true, refused: true, reason })).toBe(
+        true,
+      );
+    },
+  );
 
   test("rejects a refusal with a reason it does not know", () => {
     expect(

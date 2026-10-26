@@ -2,7 +2,9 @@
 // 入力を検証して、既存のフロー`f/factory/manual_intake`を起動するだけの薄い入口である。
 // Issueの作成、オーナーIDの照合、作業項目の登録、pipelineの起動は、フローのステップが行う。
 //
-// Console用workerで動くので、どのsecret変数も読まず、DBにも書かない。
+// Console用workerで動くので、どのsecret変数も読まない。DBに書くのは、操作の記録(`factory.console_actions`)だけである。
+// 記録は、フローを起動する前に`attempted`の行を入れ、起動した後に結果を更新する。書けなくても投入は通し、
+// 戻りの`action_audit`を`failed`にする。記録にはリポジトリだけを入れ、題名と本文は入れない。
 // フローは呼び出した主体の権限で起動する(`on_behalf_of_email`を置かない)。
 // このため、投入できる主体はWindmillのUIから同じフローを実行できる主体と同じになる。
 // 実行者はジョブの実行文脈から導き、ログに残す。導けなければ断る。
@@ -11,7 +13,12 @@
 import * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
 import { loadConfig } from "./lib/config.ts";
-import type { ActionAudit, ActionSqlClient } from "./lib/console_actions.ts";
+import {
+  type ActionAudit,
+  type ActionSqlClient,
+  runRecordedAs,
+} from "./lib/console_actions.ts";
+import { defaultSqlClient } from "./lib/db.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import {
@@ -97,12 +104,44 @@ export async function submitManualIntake(
   return { refused: false, flow_job_id: flowJobId };
 }
 
+/**
+ * 投入を、操作の記録(`factory.console_actions`)で包む。記録するのは、フローを起動する操作だけである。
+ * 検証で断った投入は、何も起動しないので記録しない。
+ * 操作の前に`attempted`の行を入れ、フローを起動した後に結果を更新する。
+ * 記録を書けなくても投入は通し、戻りの`action_audit`を`failed`にする。
+ * 記録には、リポジトリ(`owner/repo`)だけを入れ、題名と本文は入れない。
+ */
 export async function submitManualIntakeRecorded(
   input: ManualIntakeFields,
   deps: ManualIntakeSubmitDeps,
-  _sql: ActionSqlClient,
+  sql: ActionSqlClient,
 ): Promise<ManualIntakeSubmitResult> {
-  return await submitManualIntake(input, deps);
+  const state: { audit: ActionAudit } = { audit: "failed" };
+  const result = await submitManualIntake(input, {
+    ...deps,
+    runFlow: async (path, args) => {
+      const recorded = await runRecordedAs(
+        deps.deriveActor,
+        {
+          action: "manual_intake_submit",
+          target: `${input.owner}/${input.repo}`,
+          changes: { owner: input.owner, repo: input.repo },
+        },
+        async () => ({
+          outcome: "succeeded" as const,
+          changes: {},
+          value: await deps.runFlow(path, args),
+        }),
+        { sql, onUnrecordable: "proceed" },
+      );
+      if (!recorded.ok) {
+        throw new Error(`manual_intake_submit: ${recorded.reason}`);
+      }
+      state.audit = recorded.audit;
+      return recorded.value;
+    },
+  });
+  return result.refused ? result : { ...result, action_audit: state.audit };
 }
 
 /** Consoleの新規投入。実行者はジョブの実行文脈から導く。 */
@@ -113,7 +152,7 @@ export async function main(
   body: string,
   acceptance_criteria: string = "",
 ): Promise<ManualIntakeSubmitResult> {
-  return await submitManualIntake(
+  return await submitManualIntakeRecorded(
     { owner, repo, title, body, acceptance_criteria },
     {
       loadConfig: () =>
@@ -126,5 +165,6 @@ export async function main(
       runFlow: (path, args) => wmill.runFlowAsync(path, args),
       log: logger("manual_intake_submit"),
     },
+    defaultSqlClient,
   );
 }

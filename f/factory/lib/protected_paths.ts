@@ -181,6 +181,12 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * ジョブの画面の出力の描き方を固定する検査(`tests/scripts/console_jobs_render_contract.test.ts`)と、
  * サーバー由来の文字列を無害化する部品(`console/src/lib/safeText.ts`)、そのテストと、全項目への適用を確かめるテスト
  * (`console/src/screens/jobs/safeTextCoverage.test.tsx`)も守る。これらを書き換えると、出力の描き方が変わるためである。
+ * ジョブを取り消すscript(`console_job_cancel.ts`)と、操作の記録を足した既存の書き込みのscript(`retry_work_item.ts`、
+ * `manual_intake_submit.ts`。`hold_release.ts`と`freeze_release.ts`は上で守っている)も、それぞれの`.script.yaml`とともに守る。
+ * 取消の許可表(取り消せるフローの名前)と、記録の順序は、書き換えられると、取り消せる対象が増えたり、記録なしで操作できたりする。
+ * 記録の配線と取消の許可表を固定するテスト(`tests/scripts/console_write_audit.test.ts`、`console_cancel.test.ts`、
+ * `cleanup_db_console_actions.test.ts`)も守る。拒否フックの一覧(`scripts/claude-hooks/console-scripts.ts`)とそのテストは、
+ * `scripts/claude-hooks/`と`tests/scripts/claude-hooks/`の接頭辞で、すでに守っている。
  * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)は守らない。契約テストが画面のソース全体を走査するので、
  * 保護の上乗せの保証が小さく、後続のPRで必ず直すので、毎回人の確認が要るのを避ける。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
@@ -294,6 +300,15 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/console_actions.script.yaml",
   "f/factory/lib/approver.ts",
   "f/factory/lib/approver.script.yaml",
+  "f/factory/console_job_cancel.ts",
+  "f/factory/console_job_cancel.script.yaml",
+  "f/factory/retry_work_item.ts",
+  "f/factory/retry_work_item.script.yaml",
+  "f/factory/manual_intake_submit.ts",
+  "f/factory/manual_intake_submit.script.yaml",
+  "tests/scripts/console_cancel.test.ts",
+  "tests/scripts/console_write_audit.test.ts",
+  "tests/scripts/cleanup_db_console_actions.test.ts",
   "scripts/gen-console-known-paths.ts",
   "scripts/test-db-console-actions.ts",
   "console/src/api/windmill.ts",

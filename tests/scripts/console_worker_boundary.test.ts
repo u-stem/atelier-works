@@ -1193,7 +1193,7 @@ describe("the SQL that the console scripts reach", () => {
   const WRITE_WORDS =
     /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
 
-  test.each(SQL_WRITERS_ALLOWED)(
+  test.each([...SQL_WRITERS_ALLOWED])(
     "%s writes only the table of the action record",
     (file) => {
       const stray = templatesOf(file)
@@ -1203,7 +1203,7 @@ describe("the SQL that the console scripts reach", () => {
     },
   );
 
-  test.each(SQL_WRITERS_ALLOWED)(
+  test.each([...SQL_WRITERS_ALLOWED])(
     "%s names no table but the action record in a statement that writes",
     (file) => {
       const others = templatesOf(file)

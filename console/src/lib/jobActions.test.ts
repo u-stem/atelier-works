@@ -27,7 +27,7 @@ describe("canCancelJob", () => {
     expect(canCancelJob(job({ state: "queued" }))).toBe(true);
   });
 
-  test.each(CANCELABLE_FLOW_PATHS)("allows the flow %s", (path) => {
+  test.each([...CANCELABLE_FLOW_PATHS])("allows the flow %s", (path) => {
     expect(canCancelJob(job({ script_path: path }))).toBe(true);
   });
 

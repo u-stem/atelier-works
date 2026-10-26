@@ -3,11 +3,13 @@
 
 import type { WriteOutcome } from "../api/executeWrite.ts";
 import type {
+  ActionAudit,
   ApprovalDecideResult,
   AuditKickoffResult,
   AuditSkipReason,
   FreezeReleaseResult,
   HoldReleaseResult,
+  JobCancelRefusalReason,
   JobCancelResult,
   NoticeResolveResult,
   RetryWorkItemResult,
@@ -34,6 +36,26 @@ export const STALE_LIST_NOTICE: WriteNotice = {
     "一覧を読み直せませんでした。一覧が更新されるまで、この対象は操作できません。",
 };
 
+const ACTION_AUDIT_FAILED_NOTE =
+  "ただし、操作の記録を残せませんでした。誰が操作したかは、ジョブのログで確かめてください。";
+
+/**
+ * 操作の記録(`factory.console_actions`)を書けなかったときに、注意を添えて警告にする。
+ * 操作は済んでいるので、成功の文は消さない。解除の通知の記録(`audit`)とは別である。
+ */
+function noteActionAudit(
+  notice: WriteNotice,
+  audit: ActionAudit | undefined,
+): WriteNotice {
+  if (audit !== "failed") {
+    return notice;
+  }
+  return {
+    tone: "warning",
+    message: `${notice.message}${ACTION_AUDIT_FAILED_NOTE}`,
+  };
+}
+
 export function describeApprovalResult(
   result: ApprovalDecideResult,
 ): WriteNotice {
@@ -49,16 +71,22 @@ export function describeApprovalResult(
  */
 export function describeRetryResult(result: RetryWorkItemResult): WriteNotice {
   if (!result.ok) {
-    return {
-      tone: "warning",
-      message:
-        "別の実行が先に作業項目を押さえていたため、起動したジョブは記録されていません。一覧を読み直して状態を確かめてください。",
-    };
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message:
+          "別の実行が先に作業項目を押さえていたため、起動したジョブは記録されていません。一覧を読み直して状態を確かめてください。",
+      },
+      result.action_audit,
+    );
   }
-  return {
-    tone: "success",
-    message: `再実行を始めました(状態: ${workItemStatusLabel(result.status)})。`,
-  };
+  return noteActionAudit(
+    {
+      tone: "success",
+      message: `再実行を始めました(状態: ${workItemStatusLabel(result.status)})。`,
+    },
+    result.action_audit,
+  );
 }
 
 const AUDIT_SKIP_MESSAGES: Readonly<Record<AuditSkipReason, string>> = {
@@ -112,21 +140,33 @@ export function describeHoldReleaseResult(
     return { tone: "info", message: "すでに解除されています。" };
   }
   if (result.active_unknown === true) {
-    return {
-      tone: "warning",
-      message: `保留を解除しました。ただし、解除の前に有効だったかは確認できませんでした。${result.audit === "failed" ? AUDIT_FAILED_NOTE : ""}`,
-    };
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message: `保留を解除しました。ただし、解除の前に有効だったかは確認できませんでした。${result.audit === "failed" ? AUDIT_FAILED_NOTE : ""}`,
+      },
+      result.action_audit,
+    );
   }
   if (!result.was_active) {
-    return { tone: "success", message: "期限切れの保留を片付けました。" };
+    return noteActionAudit(
+      { tone: "success", message: "期限切れの保留を片付けました。" },
+      result.action_audit,
+    );
   }
   if (result.audit === "failed") {
-    return {
-      tone: "warning",
-      message: `保留を解除しました。${AUDIT_FAILED_NOTE}`,
-    };
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message: `保留を解除しました。${AUDIT_FAILED_NOTE}`,
+      },
+      result.action_audit,
+    );
   }
-  return { tone: "success", message: "保留を解除しました。" };
+  return noteActionAudit(
+    { tone: "success", message: "保留を解除しました。" },
+    result.action_audit,
+  );
 }
 
 /**
@@ -143,26 +183,68 @@ export function describeFreezeReleaseResult(
         message: "すでに終わっています(解除済みか期限切れです)。",
       };
     case "unconfirmed":
-      return {
-        tone: "warning",
-        message:
-          "解除を確認できませんでした。一覧を取り直して確かめてください。",
-      };
+      return noteActionAudit(
+        {
+          tone: "warning",
+          message:
+            "解除を確認できませんでした。一覧を取り直して確かめてください。",
+        },
+        result.action_audit,
+      );
     case "released": {
       const subject = result.scope === "deploy" ? "deployの保留" : "凍結";
       if (result.audit === "failed") {
-        return {
-          tone: "warning",
-          message: `${subject}を解除しました。${AUDIT_FAILED_NOTE}`,
-        };
+        return noteActionAudit(
+          {
+            tone: "warning",
+            message: `${subject}を解除しました。${AUDIT_FAILED_NOTE}`,
+          },
+          result.action_audit,
+        );
       }
-      return { tone: "success", message: `${subject}を解除しました。` };
+      return noteActionAudit(
+        { tone: "success", message: `${subject}を解除しました。` },
+        result.action_audit,
+      );
     }
   }
 }
 
-export function describeJobCancelResult(_result: JobCancelResult): WriteNotice {
-  return { tone: "info", message: "" };
+const JOB_CANCEL_REFUSALS: Readonly<Record<JobCancelRefusalReason, string>> = {
+  flow_not_allowed: "このフローのジョブは、中止できない対象です。",
+  not_a_root_flow:
+    "フローの子のステップや、scriptのジョブは、中止できない対象です。",
+  already_finished: "すでに終わっています。",
+  scheduled_for_later: "予定の時刻が先のジョブは、中止できません。",
+  actor_unknown: "操作者を確認できないため、中止しませんでした。",
+  audit_unavailable: "操作の記録を残せないため、中止しませんでした。",
+};
+
+/**
+ * ジョブの中止の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 中止の後に読み直した作業項目の状態を添える。リースがそのジョブを指したままなら、次の照合で失敗になることも伝える。
+ * 中止の反映が遅れて、ジョブがまだ実行中か待ちに見えるときは、状態を更新するよう伝える。
+ */
+export function describeJobCancelResult(result: JobCancelResult): WriteNotice {
+  if (!result.found) {
+    return { tone: "info", message: "ジョブが見つかりません。" };
+  }
+  if (result.refused) {
+    return { tone: "info", message: JOB_CANCEL_REFUSALS[result.reason] };
+  }
+  const workItem =
+    result.work_item === null
+      ? "作業項目の状態は読めませんでした。"
+      : `作業項目 #${String(result.work_item.id)} の状態: ${workItemStatusLabel(result.work_item.status)}。${result.work_item.lease_held ? "リースがこのジョブを指したままなので、次の照合で失敗になります。" : ""}`;
+  const pending =
+    result.job_state === "running" || result.job_state === "queued"
+      ? "ジョブはまだ止まっていません。少し待って、状態を更新してください。"
+      : "";
+  const notice: WriteNotice = {
+    tone: pending === "" ? "success" : "warning",
+    message: `ジョブを中止しました。${workItem}${pending}`,
+  };
+  return noteActionAudit(notice, result.action_audit);
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

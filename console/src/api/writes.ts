@@ -19,6 +19,7 @@ import {
   isAuditKickoffResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
+  isJobCancelResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
@@ -188,11 +189,21 @@ export function releaseHold(
   );
 }
 
-export async function cancelJob(
-  _jobId: string,
-  _options: RunScriptOptions = {},
+/**
+ * 実行中か待ちの作業項目のフローのジョブを1件、中止(取消)する。
+ * 対象外のジョブ、すでに終わったジョブ、予定が未来のジョブなどは、止めずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 操作者は引数に取らない。scriptがジョブの実行文脈から導く。
+ */
+export function cancelJob(
+  jobId: string,
+  options: RunScriptOptions = {},
 ): Promise<JobCancelResult> {
-  return { found: false };
+  return callWrite(
+    "console_job_cancel",
+    { job_id: jobId },
+    isJobCancelResult,
+    options,
+  );
 }
 
 /** 凍結かdeployの保留を1件、人として解除する。終わっている行は、そのまま成功として返る。 */
