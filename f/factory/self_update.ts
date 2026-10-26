@@ -20,6 +20,7 @@
 // `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
+import { isRequirementsApprovedForAttempt } from "./lib/approval_gate.ts";
 import { buildNoticeConsoleUrl } from "./lib/approval_support.ts";
 import {
   AUTO_RETRY_LIST_LIMIT,
@@ -89,7 +90,6 @@ import {
   reconcileHostActionNotices,
   recordHostAction,
 } from "./lib/host_action.ts";
-import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {

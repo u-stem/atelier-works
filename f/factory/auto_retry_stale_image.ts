@@ -4,6 +4,7 @@
 // 状態の交換は、止まった理由を条件にした比較と交換なので、人が先に`retry_work_item`で再開していたり、
 // 二重に起動したりしても、同じ作業項目を二度起動しない。
 import * as wmill from "windmill-client@1.817.0";
+import { isRequirementsApprovedForAttempt } from "./lib/approval_gate.ts";
 import {
   AUTO_RETRY_LIST_LIMIT,
   AUTO_RETRY_MAX_RESTARTS,
@@ -27,7 +28,6 @@ import {
   HOST_ACTION_RESOLVER,
   STALE_IMAGE_NOTICE_MARKER,
 } from "./lib/host_action.ts";
-import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger } from "./lib/log.ts";
 import { readJobState } from "./lib/poll_support.ts";
 

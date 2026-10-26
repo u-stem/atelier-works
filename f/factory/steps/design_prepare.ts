@@ -6,6 +6,7 @@
 // 作業項目とworktreeに触れるのは、リースを確かめた後だけ。リースを持たない実行は、何も書かず何も消さずに終わる。
 
 import * as wmill from "windmill-client@1.817.0";
+import { isRequirementsApprovedForAttempt } from "../lib/approval_gate.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -22,7 +23,6 @@ import { notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
-import { isRequirementsApprovedForAttempt } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
 import {
   awaitPipelineLease,

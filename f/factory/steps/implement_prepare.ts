@@ -6,6 +6,7 @@
 // GitHubのIssueはopen判定と、取り込み時点のURLが空のときのURLにだけ使う。
 
 import * as wmill from "windmill-client@1.817.0";
+import { isRequirementsApprovedForAttempt } from "../lib/approval_gate.ts";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import {
   CheckEnvironmentError,
@@ -63,7 +64,6 @@ import {
   buildImplementBranchName,
   implementDeadlineAt,
   implementTimeoutMisfit,
-  isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
 import {

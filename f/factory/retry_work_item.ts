@@ -21,6 +21,7 @@
 // 見つけ直す。したがって再開はフローを直接起動するだけで、GitHubには
 // 何の副作用も無い。新しいサイクルを始めるのは、人がラベルを付け直したときだけ。
 import * as wmill from "windmill-client@1.817.0";
+import { isRequirementsApprovedForAttempt } from "./lib/approval_gate.ts";
 import { ciRoundRetryRefusal } from "./lib/ci_fix_round.ts";
 import { loadConfig } from "./lib/config.ts";
 import { conflictRoundRetryRefusal } from "./lib/conflict_fix_round.ts";
@@ -50,7 +51,6 @@ import {
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
-import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import {
   buildIntakeRefreshedNoticeMessage,
   INTAKE_REFRESHED_NOTICE_KIND,
