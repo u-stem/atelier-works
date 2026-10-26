@@ -44,10 +44,11 @@ export function unfollowableImports(source: string): string[] {
   return found;
 }
 
-const VARIABLE_NAME = /\b(?:getVariable|getResource)\b/g;
+// `getVariableValue`や`getResourceValueInterpolated`のように、名前が続くSDKの関数も数える。
+const VARIABLE_NAME = /\b(?:getVariable|getResource)\w*/g;
 const LITERAL_CALL =
   /\.\s*(?:getVariable|getResource)\s*\(\s*(?:""|``)\s*[,)]/g;
-const NAME_ONLY_STRING = /^["'](?:getVariable|getResource)["']$/;
+const NAME_ONLY_STRING = /^["'](?:getVariable|getResource)\w*["']$/;
 const REGEX_PRECEDER =
   /(?:^|[(,=:[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case|in|of))\s*$/;
 
@@ -403,6 +404,7 @@ const CLIENT_IMPORT_CLAUSE =
   /\bimport\s+([^;"']*?)\s*\bfrom\s*["']windmill-client[^"']*["']/g;
 const IMPORT_STATEMENT = /\bimport\s+[^;"']*?\bfrom\s*""/g;
 const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
+const GLOBAL_OBJECT = /(?<![.\w$])(?:globalThis|global|self|window)(?![\w$])/;
 const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
 
 /** パスをリテラルに固定するSDKの呼び出しと、そのパス。 */
@@ -487,18 +489,29 @@ export function sdkFindings(source: string): SdkFindings {
       }
     }
   }
+  // windmill-clientを指すimportの数と、許可した形の数が合わなければ、再エクスポートがある。
+  const clientStatements = [
+    ...code.matchAll(/\bfrom\s*["']windmill-client[^"']*["']/g),
+  ].length;
+  if (clientStatements !== [...code.matchAll(CLIENT_IMPORT_CLAUSE)].length) {
+    problems.push("re-export of windmill-client");
+  }
   if (FETCH_REFERENCE.test(skeleton)) problems.push("use of fetch");
-  if (/\bglobalThis\b/.test(skeleton)) problems.push("use of globalThis");
+  const globalObject = GLOBAL_OBJECT.exec(skeleton)?.[0];
+  if (globalObject !== undefined) problems.push(`use of ${globalObject}`);
   const forbidden = FORBIDDEN_NAMES.exec(code)?.[0];
   if (forbidden !== undefined) problems.push(`mention of ${forbidden}`);
   for (const [call, path] of Object.entries(BOUND_PATH_CALLS)) {
     const [service, method] = call.split(".");
     const opening = new RegExp(`\\b${service}\\s*\\.\\s*${method}\\s*\\(`, "g");
+    // 引数は`{ workspace, path: "<定数>" }`の形だけを許す(更新は`requestBody`を続けてよい)。
+    // スプレッド、別のキー、`path`の上書きは認めない。
+    const bound = new RegExp(
+      `^\\(\\s*\\{\\s*workspace\\s*,\\s*path\\s*:\\s*"${path.replaceAll("/", "\\/")}"\\s*(?:,\\s*requestBody\\s*:[\\s\\S]*?)?,?\\s*\\}\\s*\\)$`,
+    );
     for (const match of code.matchAll(opening)) {
       const args = balancedArguments(code, match.index + match[0].length - 1);
-      const pathKeys = [...args.matchAll(/\bpath\b/g)].length;
-      const literal = args.includes(`path: "${path}"`);
-      if (pathKeys !== 1 || !literal) {
+      if (!bound.test(args)) {
         problems.push(`${call} is not bound to the literal ${path}`);
       }
     }
@@ -539,6 +552,30 @@ export type EnvUses = {
   readonly problems: readonly string[];
 };
 
-export function envUses(_source: string): EnvUses {
-  return { keys: [], problems: [] };
+/**
+ * 環境変数の使い方を数える。`process.env.NAME`の形だけを、キー名つきで認める。
+ * 環境全体を渡す形、添字の読み取り、分割代入、`process`の別名、`Bun.env`、`import.meta.env`は禁じる。
+ * 環境変数にはジョブのトークンなどが入るので、読むキーを名前で固定するためである。
+ * 文字列とコメントの中の言及は数えない。
+ */
+export function envUses(source: string): EnvUses {
+  const skeleton = codeSkeleton(codeOf(source));
+  const keys: string[] = [];
+  const problems: string[] = [];
+  for (const match of skeleton.matchAll(/(?<![.\w$])process(?![\w$])/g)) {
+    const after = skeleton.slice(match.index + "process".length);
+    const key = /^\s*\.\s*env\s*\.\s*([A-Za-z_$][\w$]*)/.exec(after)?.[1];
+    if (key === undefined) {
+      problems.push("process is used other than as process.env.NAME");
+    } else {
+      keys.push(key);
+    }
+  }
+  if (/(?<![.\w$])Bun\s*\.\s*env(?![\w$])/.test(skeleton)) {
+    problems.push("use of Bun.env");
+  }
+  if (/import\s*\.\s*meta\s*\.\s*env/.test(skeleton)) {
+    problems.push("use of import.meta.env");
+  }
+  return { keys: [...new Set(keys)].sort(), problems };
 }
