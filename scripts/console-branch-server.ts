@@ -66,26 +66,63 @@ export const READ_ONLY_SCRIPT_PATHS: readonly string[] = [
 const RUN_PREFIX = "/api/w/factory/jobs/run_wait_result/p/";
 const SAFE_METHODS: readonly string[] = ["GET", "HEAD", "OPTIONS"];
 
-/** 中継してよい要求か。書き込みは、`allowWrites`のときだけ通す。 */
+// メソッドを問わず、書き込みを許さないときに断る経路。
+// WindmillはGETでもscriptを同期で実行できる(`GET /api/w/{ws}/jobs/run_wait_result/p/{path}`)。
+// そのため、実行、再開、取り消し、再実行、ストリーム、エンドポイントの経路とwebhookは、
+// GETとHEADでも断る。
+const EXECUTING_PATHS: readonly RegExp[] = [
+  /\/jobs(?:_u)?\/(?:run|run_wait_result|run_and_stream|run_inline|resume|cancel|restart|openai_sync|flow\/resume|flow\/resume_suspended|queue\/cancel|queue\/cancel_persistent|queue\/force_cancel)(?:\/|$)/i,
+  /^\/api\/r\//i,
+  /webhook/i,
+];
+
+// `/api/`の下で、GETとHEADとOPTIONSを通す読み取りの経路。
+// Consoleの画面が使うのは、読み取りのscriptを実行するPOSTと`/console/status.json`だけで、
+// `/api/`のGETは使わない。ここに挙げるのは、ログイン後の画面の確認と、ジョブの画面が読む経路である。
+const READABLE_API_PATHS: readonly RegExp[] = [
+  /^\/api\/version$/,
+  /^\/api\/users\/whoami$/,
+  /^\/api\/w\/[^/]+\/jobs_u\/(?:get|get_logs|get_args|getupdate|getupdate_sse|get_root_job_id|get_completed_logs_tail)\/[^/]+$/,
+  /^\/api\/w\/[^/]+\/jobs_u\/completed\/(?:get|get_result|get_result_maybe|get_timing)\/[^/]+$/,
+];
+
+/**
+ * 中継してよい要求か。書き込みは、`allowWrites`のときだけ通す。
+ * 書き込みを許さないときは、次の順で決める。
+ * 1. 読み取りの5つのscriptを実行するPOSTは通す。
+ * 2. 実行などの経路は、メソッドを問わず断る。
+ * 3. GET、HEAD、OPTIONSは、`/api/`の外か、読み取りの経路だけを通す。
+ */
 export function isAllowedProxyRequest(
   method: string,
   pathname: string,
   allowWrites: boolean,
 ): boolean {
-  if (allowWrites || SAFE_METHODS.includes(method)) return true;
-  if (method !== "POST" || !pathname.startsWith(RUN_PREFIX)) return false;
-  return READ_ONLY_SCRIPT_PATHS.includes(pathname.slice(RUN_PREFIX.length));
+  if (allowWrites) return true;
+  if (method === "POST" && pathname.startsWith(RUN_PREFIX)) {
+    return READ_ONLY_SCRIPT_PATHS.includes(pathname.slice(RUN_PREFIX.length));
+  }
+  if (EXECUTING_PATHS.some((pattern) => pattern.test(pathname))) return false;
+  if (!SAFE_METHODS.includes(method)) return false;
+  if (!pathname.startsWith("/api/")) return true;
+  return READABLE_API_PATHS.some((pattern) => pattern.test(pathname));
+}
+
+/**
+ * `--allow-writes`を有効にしてよいか。
+ * 人が端末で「yes」と入力したときだけ有効にする。
+ * 端末でない入力(agentの起動やパイプ)では、確認できないので有効にしない。
+ */
+export function decideWriteConfirmation(
+  isTty: boolean,
+  answer: string | null,
+): "confirmed" | "not-interactive" | "declined" {
+  if (!isTty) return "not-interactive";
+  return answer !== null && answer.trim() === "yes" ? "confirmed" : "declined";
 }
 
 /** Hostが、このサーバーのループバックの名前とポートか。 */
-// スタブ。実装は次のコミットで書く。
-export function decideWriteConfirmation(
-  _isTty: boolean,
-  _answer: string | null,
-): "confirmed" | "not-interactive" | "declined" {
-  return "confirmed";
-}
-
+/** Hostが、このサーバーのループバックの名前とポートか。 */
 export function isTrustedHost(host: string | null, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
@@ -250,16 +287,44 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   return { ok: true, config: { dist, port, upstream, allowWrites } };
 }
 
+// 中継先に渡さないヘッダー。転送元の偽装に使われる名前と、hop-by-hopのヘッダーである。
+const DROPPED_REQUEST_HEADERS: readonly string[] = [
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-port",
+  "x-forwarded-server",
+  "x-real-ip",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
 /**
  * 中継先へ送るヘッダー。Hostを中継先にする。
  * Originは、呼び出し側が自身のオリジンだと確かめたものを、中継先のオリジンに置き換える。
  * 中継先のCaddyが、Originを開いたオリジンと比べて断らないようにするためである。
+ * 転送元を名乗るヘッダーとhop-by-hopのヘッダーは外す。`Connection`が名指しするヘッダーも外す。
  */
 export function toUpstreamRequestHeaders(
   headers: Headers,
   upstream: string,
 ): Headers {
   const result = new Headers(headers);
+  const named = (headers.get("connection") ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter((name) => name !== "");
+  for (const name of [...DROPPED_REQUEST_HEADERS, ...named]) {
+    result.delete(name);
+  }
   const target = new URL(upstream);
   if (result.has("origin")) result.set("origin", target.origin);
   result.set("host", target.host);
@@ -284,10 +349,9 @@ export function toClientResponseHeaders(
     try {
       const target = new URL(location);
       if (target.origin === new URL(upstream).origin) {
-        result.set(
-          "location",
-          `${target.pathname}${target.search}${target.hash}`,
-        );
+        // 先頭の`/`を1つにそろえる。`//host`はプロトコル相対になり、別のサイトへ飛ぶため。
+        const path = target.pathname.replace(/^[/\\]+/, "/");
+        result.set("location", `${path}${target.search}${target.hash}`);
       }
     } catch {
       // 相対のLocationはそのまま返す。
@@ -355,58 +419,103 @@ async function proxy(req: Request, upstream: string): Promise<Response> {
   }
 }
 
+/** 書き込みを許しているサーバーの応答に、その印を付ける。 */
+function markWrites(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-branch-server-writes", "on");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 /** サーバーを起動する。待ち受けは127.0.0.1だけにする。 */
 export function startServer(config: Config): { port: number; stop(): void } {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: config.port,
     async fetch(req) {
-      const url = new URL(req.url);
-      const host = req.headers.get("host");
-      if (!isTrustedHost(host, server.port ?? config.port)) {
-        return refuse(403, "Forbidden host");
-      }
-      const origin = req.headers.get("origin");
-      if (origin !== null && !isOwnOrigin(origin, server.port ?? config.port)) {
-        return refuse(403, "Forbidden origin");
-      }
-      const route = routeFor(url.pathname);
-      if (route.kind === "reject") return refuse(400, "Bad Request");
-      if (route.kind === "redirect") {
-        return Response.redirect(
-          new URL(route.location + url.search, req.url).toString(),
-          308,
-        );
-      }
-      if (route.kind === "file") {
-        if (req.method !== "GET" && req.method !== "HEAD") {
-          return refuse(405, "Method Not Allowed");
-        }
-        const direct = serveFile(config.dist, route.path);
-        const found = direct.status !== 404 || route.fallback === "not-found";
-        const served = found ? direct : serveFile(config.dist, "index.html");
-        return withSecurityHeaders(
-          served,
-          `http://${host}`,
-          found ? route.path : "index.html",
-        );
-      }
-      const site = req.headers.get("sec-fetch-site");
-      if (site === "cross-site" || site === "same-site") {
-        return refuse(403, "Forbidden cross-site request");
-      }
-      if (
-        !isAllowedProxyRequest(req.method, url.pathname, config.allowWrites)
-      ) {
-        return refuse(
-          403,
-          "Forbidden: only reads are relayed (start with --allow-writes to relay writes)",
-        );
-      }
-      return proxy(req, config.upstream);
+      const response = await handle(req);
+      return config.allowWrites ? markWrites(response) : response;
     },
   });
+
+  async function handle(req: Request): Promise<Response> {
+    const port = server.port ?? config.port;
+    const url = new URL(req.url);
+    const host = req.headers.get("host");
+    if (!isTrustedHost(host, port)) return refuse(403, "Forbidden host");
+    const origin = req.headers.get("origin");
+    if (origin !== null && !isOwnOrigin(origin, port)) {
+      return refuse(403, "Forbidden origin");
+    }
+    const route = routeFor(url.pathname);
+    if (route.kind === "reject") return refuse(400, "Bad Request");
+    if (route.kind === "redirect") {
+      return Response.redirect(
+        new URL(route.location + url.search, req.url).toString(),
+        308,
+      );
+    }
+    if (route.kind === "file") {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        return refuse(405, "Method Not Allowed");
+      }
+      const direct = serveFile(config.dist, route.path);
+      const found = direct.status !== 404 || route.fallback === "not-found";
+      const served = found ? direct : serveFile(config.dist, "index.html");
+      return withSecurityHeaders(
+        served,
+        `http://${host}`,
+        found ? route.path : "index.html",
+      );
+    }
+    const site = req.headers.get("sec-fetch-site");
+    if (site === "cross-site" || site === "same-site") {
+      return refuse(403, "Forbidden cross-site request");
+    }
+    if (!isAllowedProxyRequest(req.method, url.pathname, config.allowWrites)) {
+      return refuse(
+        403,
+        "Forbidden: only reads are relayed (start with --allow-writes to relay writes)",
+      );
+    }
+    return proxy(req, config.upstream);
+  }
+
   return { port: server.port ?? config.port, stop: () => server.stop(true) };
+}
+
+const WRITES_BANNER = [
+  "============================================================",
+  "  --allow-writes: WRITES REACH THE REAL WINDMILL",
+  "  Approve, reject, retry, resolve, release, kickoff, and intake",
+  "  buttons in the branch build will run for real.",
+  "============================================================",
+].join("\n");
+
+/** `--allow-writes`を、端末で人が確認したときだけ有効にする。確認できなければ終了する。 */
+function confirmWrites(): void {
+  const isTty = process.stdin.isTTY === true;
+  let answer: string | null = null;
+  if (isTty) {
+    console.warn(WRITES_BANNER);
+    answer = prompt('Type "yes" to relay writes to the real Windmill:');
+  }
+  const decision = decideWriteConfirmation(isTty, answer);
+  if (decision === "not-interactive") {
+    console.error(
+      "--allow-writes needs an interactive terminal: stdin is not a terminal, so a person cannot confirm it.",
+    );
+    process.exit(2);
+  }
+  if (decision === "declined") {
+    console.error(
+      "Writes were not confirmed. Start again without --allow-writes, or answer yes.",
+    );
+    process.exit(2);
+  }
 }
 
 function main(): void {
@@ -425,17 +534,19 @@ function main(): void {
     );
     process.exit(1);
   }
+  if (config.allowWrites) confirmWrites();
   const server = startServer(config);
   console.log(
     `Serving ${config.dist} at http://127.0.0.1:${server.port}/console/ and proxying other paths to ${config.upstream}`,
   );
   if (config.allowWrites) {
+    console.warn(WRITES_BANNER);
     console.warn(
-      "Warning: --allow-writes is on. Writes (POST) reach the real Windmill. Do not press the action buttons unless you mean it.",
+      "Every response carries the header x-branch-server-writes: on.",
     );
   } else {
     console.log(
-      "Read-only: GET, HEAD, OPTIONS and the read scripts are relayed. Other requests get 403.",
+      "Read-only: GET, HEAD, OPTIONS on listed read paths and the read scripts are relayed. Other requests get 403.",
     );
   }
 }
