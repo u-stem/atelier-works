@@ -18,6 +18,11 @@ const CHILD = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
 const PARENT = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d";
 const GH_TOKEN = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyzAB"}`;
 
+/** テスト用に番号から作るUUIDの形のid。 */
+function uuid(n: number): string {
+  return `0190a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`;
+}
+
 type Calls = string[];
 
 function completedJob(overrides: Record<string, unknown> = {}) {
@@ -478,7 +483,7 @@ describe("loadJobDetail response", () => {
   });
 
   test("hides the parent of a job when the parent is outside f/factory/", async () => {
-    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const job = completedJob({ parent_job: PARENT, is_flow_step: false });
     const detail = await loadJobDetail(
       ports({
         job,
@@ -493,7 +498,7 @@ describe("loadJobDetail response", () => {
   });
 
   test("hides the parent of a job when the parent cannot be read", async () => {
-    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const job = completedJob({ parent_job: PARENT, is_flow_step: false });
     const detail = await loadJobDetail(
       ports({ job, otherJobs: { [PARENT]: new Error("gone") } }),
       ID,
@@ -504,7 +509,7 @@ describe("loadJobDetail response", () => {
 
   test("hides a parent whose id is not a UUID, without reading it", async () => {
     const calls: Calls = [];
-    const job = completedJob({ parent_job: "../x", is_flow_step: true });
+    const job = completedJob({ parent_job: "../x", is_flow_step: false });
     const detail = await loadJobDetail(ports({ job, calls }), ID, {
       includeOutput: false,
     });
@@ -512,6 +517,214 @@ describe("loadJobDetail response", () => {
       null,
       ["getJob"],
     ]);
+  });
+
+  test("answers a flow step whose parent is a flow preview like a missing job", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: {
+          [PARENT]: completedJob({ id: PARENT, job_kind: "flowpreview" }),
+        },
+      }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(detail.found).toBe(false);
+  });
+
+  test("reads neither the log nor the result of a flow step under a flow preview", async () => {
+    const calls: Calls = [];
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    await loadJobDetail(
+      ports({
+        job,
+        calls,
+        otherJobs: {
+          [PARENT]: completedJob({ id: PARENT, job_kind: "flowpreview" }),
+        },
+      }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(calls).toEqual(["getJob", "getJob"]);
+  });
+
+  test("answers a flow step whose root is a flow preview two levels up like a missing job", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: {
+          [PARENT]: completedJob({
+            id: PARENT,
+            job_kind: "flow",
+            is_flow_step: true,
+            parent_job: CHILD,
+          }),
+          [CHILD]: completedJob({ id: CHILD, job_kind: "flowpreview" }),
+        },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found).toBe(false);
+  });
+
+  test("shows a flow step whose chain of parents ends at a flow of f/factory/", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: {
+          [PARENT]: completedJob({
+            id: PARENT,
+            job_kind: "flow",
+            is_flow_step: true,
+            parent_job: CHILD,
+          }),
+          [CHILD]: completedJob({ id: CHILD, job_kind: "flow" }),
+        },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found && detail.job.parent_job).toBe(PARENT);
+  });
+
+  test("answers a flow step whose parent is missing like a missing job", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: {
+          [PARENT]: Object.assign(new Error("gone"), { status: 404 }),
+        },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found).toBe(false);
+  });
+
+  test("throws again when the parent of a flow step cannot be read for another reason", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    await expect(
+      loadJobDetail(
+        ports({
+          job,
+          otherJobs: {
+            [PARENT]: Object.assign(new Error("boom"), { status: 500 }),
+          },
+        }),
+        ID,
+        { includeOutput: false },
+      ),
+    ).rejects.toThrow("boom");
+  });
+
+  test("answers a flow step whose chain of parents loops like a missing job", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: true });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: {
+          [PARENT]: completedJob({
+            id: PARENT,
+            job_kind: "flow",
+            is_flow_step: true,
+            parent_job: PARENT,
+          }),
+        },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found).toBe(false);
+  });
+
+  test("answers a flow step without a parent like a missing job", async () => {
+    const job = completedJob({ parent_job: null, is_flow_step: true });
+    const detail = await loadJobDetail(ports({ job }), ID, {
+      includeOutput: false,
+    });
+    expect(detail.found).toBe(false);
+  });
+
+  test("cuts the saved cause of a failure at 2000 characters", async () => {
+    const failure: FailureRow = {
+      step: "generate",
+      error: "word ".repeat(1000),
+      occurred_at: "2026-10-26T05:00:02.000Z",
+      job_id: ID,
+    };
+    const detail = await loadJobDetail(
+      ports({ job: completedJob({ success: false }), failures: [failure] }),
+      ID,
+      { includeOutput: true },
+    );
+    const item = detail.found && detail.failures.ok && detail.failures.items[0];
+    expect(item && item.error.length).toBeLessThanOrEqual(2001);
+  });
+
+  test("keeps a saved cause of 2000 characters or less whole", async () => {
+    const failure: FailureRow = {
+      step: "generate",
+      error: "word ".repeat(300),
+      occurred_at: "2026-10-26T05:00:02.000Z",
+      job_id: ID,
+    };
+    const detail = await loadJobDetail(
+      ports({ job: completedJob({ success: false }), failures: [failure] }),
+      ID,
+      { includeOutput: true },
+    );
+    const item = detail.found && detail.failures.ok && detail.failures.items[0];
+    expect(item && item.error).toBe("word ".repeat(300));
+  });
+
+  test("masks a token before it cuts the saved cause", async () => {
+    const failure: FailureRow = {
+      step: "generate",
+      error: `${"x ".repeat(998)}${GH_TOKEN}`,
+      occurred_at: "2026-10-26T05:00:02.000Z",
+      job_id: ID,
+    };
+    const detail = await loadJobDetail(
+      ports({ job: completedJob({ success: false }), failures: [failure] }),
+      ID,
+      { includeOutput: true },
+    );
+    const item = detail.found && detail.failures.ok && detail.failures.items[0];
+    expect(item && item.error).not.toContain("ghp_");
+  });
+
+  test("cuts the reason the result could not be read at 300 characters", async () => {
+    const detail = await loadJobDetail(
+      ports({ resultError: new Error("err ".repeat(500)) }),
+      ID,
+      { includeOutput: true },
+    );
+    expect(detail.found && detail.result_error?.length).toBeLessThanOrEqual(
+      "could not read the result: ".length + 301,
+    );
+  });
+
+  test("cuts the reason the saved causes could not be read at 300 characters", async () => {
+    const detail = await loadJobDetail(
+      ports({
+        job: completedJob({ success: false }),
+        failures: new Error("err ".repeat(500)),
+      }),
+      ID,
+      { includeOutput: true },
+    );
+    const reason =
+      detail.found && !detail.failures.ok && detail.failures.reason;
+    expect(reason && reason.length).toBeLessThanOrEqual(
+      "could not read the saved causes: ".length + 301,
+    );
   });
 
   test("checks the parent before it reads the log", async () => {
@@ -599,6 +812,31 @@ describe("loadJobDetail response", () => {
 });
 
 describe("loadActiveJobs", () => {
+  test("says that the list is complete when the queue returned less than a full page", async () => {
+    const queue = Array.from({ length: 99 }, (_, i) =>
+      queuedJob({ id: uuid(i + 1) }),
+    );
+    const list = await loadActiveJobs(ports({ queue }), {
+      includeConsole: false,
+    });
+    expect(list.truncated).toBe(false);
+  });
+
+  test("says that the list may be cut when the queue returned a full page", async () => {
+    const queue = Array.from({ length: 100 }, (_, i) =>
+      queuedJob({ id: uuid(i + 1) }),
+    );
+    const list = await loadActiveJobs(ports({ queue }), {
+      includeConsole: false,
+    });
+    expect(list.truncated).toBe(true);
+  });
+
+  test("says that a history page is not cut by the queue", async () => {
+    const list = await loadJobHistory(ports(), { includeConsole: false });
+    expect(list.truncated).toBe(false);
+  });
+
   test("excludes the Console's own jobs by default", async () => {
     const queueQueries: QueueQuery[] = [];
     await loadActiveJobs(ports({ queueQueries }), { includeConsole: false });
@@ -697,7 +935,7 @@ describe("loadJobHistory", () => {
     const { query } = await history({ includeConsole: false });
     expect(query).toEqual({
       scriptPathStart: "f/factory/",
-      perPage: DEFAULT_PAGE_SIZE,
+      perPage: DEFAULT_PAGE_SIZE + 1,
       hasNullParent: true,
       jobKinds: "script,flow",
       completedBefore: NOW.toISOString(),
@@ -753,35 +991,42 @@ describe("loadJobHistory", () => {
   test("uses the time of the cursor as the creation time to start before", async () => {
     const { query } = await history({
       includeConsole: false,
-      before: "2026-10-26T05:00:00.000000Z|50",
+      before: `2026-10-26T05:00:00.000000Z|50|${uuid(1)}`,
     });
     expect(query?.createdBefore).toBe("2026-10-26T05:00:00.000000Z");
   });
 
   test.each([
     "2026-10-26T05:00:00.000000Z",
-    "2026-10-26T05:00:00.000000Z|",
-    "2026-10-26T05:00:00.000000Z|-1",
-    "2026-10-26T05:00:00.000000Z|201",
-    "2026-10-26T05:00:00.000000Z|50|1",
-    "garbage|50",
-  ])("ignores the cursor %j, which is not time|count", async (before) => {
+    "2026-10-26T05:00:00.000000Z|50",
+    `2026-10-26T05:00:00.000000Z||${uuid(1)}`,
+    `2026-10-26T05:00:00.000000Z|-1|${uuid(1)}`,
+    `2026-10-26T05:00:00.000000Z|201|${uuid(1)}`,
+    "2026-10-26T05:00:00.000000Z|50|not-an-id",
+    `2026-10-26T05:00:00.000000Z|50|${uuid(1)},`,
+    `garbage|50|${uuid(1)}`,
+  ])("ignores the cursor %j, which is not time|count|ids", async (before) => {
     const { query } = await history({ includeConsole: false, before });
     expect(query?.createdBefore).toBeUndefined();
   });
 
-  test("asks only for the rest of the 200 jobs on the last page", async () => {
+  test("asks for the rest of the 200 jobs, one more to see whether there is a next page, and the boundary job", async () => {
     const { query } = await history({
       includeConsole: false,
-      before: "2026-10-26T05:00:00.000000Z|190",
+      before: `2026-10-26T05:00:00.000000Z|190|${uuid(1)}`,
     });
-    expect(query?.perPage).toBe(10);
+    expect(query?.perPage).toBe(12);
+  });
+
+  test("asks for one more than the page when there is no cursor", async () => {
+    const { query } = await history({ includeConsole: false, limit: 5 });
+    expect(query?.perPage).toBe(6);
   });
 
   test("asks nothing when 200 jobs were already returned", async () => {
     const { calls } = await history({
       includeConsole: false,
-      before: "2026-10-26T05:00:00.000000Z|200",
+      before: `2026-10-26T05:00:00.000000Z|200|${uuid(1)}`,
     });
     expect(calls).toEqual([]);
   });
@@ -789,22 +1034,22 @@ describe("loadJobHistory", () => {
   test("returns an empty list with no cursor when 200 jobs were already returned", async () => {
     const { list } = await history({
       includeConsole: false,
-      before: "2026-10-26T05:00:00.000000Z|200",
+      before: `2026-10-26T05:00:00.000000Z|200|${uuid(1)}`,
     });
     expect([list.jobs, list.next_before]).toEqual([[], null]);
   });
 
   test("gives no cursor when the page reaches the 200th job", async () => {
-    const jobs = Array.from({ length: 50 }, (_, i) =>
+    const jobs = Array.from({ length: 52 }, (_, i) =>
       completedJob({
-        id: `job-${String(i)}`,
+        id: uuid(i + 10),
         created_at: `2026-10-26T04:${String(i).padStart(2, "0")}:00.000000Z`,
       }),
     );
     const { list } = await history(
       {
         includeConsole: false,
-        before: "2026-10-26T05:00:00.000000Z|150",
+        before: `2026-10-26T05:00:00.000000Z|150|${uuid(1)}`,
         limit: 50,
       },
       jobs,
@@ -813,58 +1058,104 @@ describe("loadJobHistory", () => {
   });
 
   test("counts the jobs returned so far in the cursor", async () => {
-    const jobs = Array.from({ length: 2 }, (_, i) =>
+    const jobs = Array.from({ length: 4 }, (_, i) =>
       completedJob({
-        id: `job-${String(i)}`,
+        id: uuid(i + 10),
         created_at: `2026-10-26T04:0${String(i)}:00.000000Z`,
       }),
     );
     const { list } = await history(
       {
         includeConsole: false,
-        before: "2026-10-26T05:00:00.000000Z|50",
+        before: `2026-10-26T05:00:00.000000Z|50|${uuid(1)}`,
         limit: 2,
       },
       jobs,
     );
-    expect(list.next_before).toBe("2026-10-26T04:01:00.000000Z|52");
+    expect(list.next_before).toBe(`2026-10-26T04:01:00.000000Z|52|${uuid(11)}`);
   });
 
-  test("drops the job at the cursor, which the API returns again", async () => {
-    const at = completedJob({
-      id: "at",
-      created_at: "2026-10-26T05:00:00.000000Z",
-    });
-    const older = completedJob({
-      id: "older",
-      created_at: "2026-10-26T04:00:00.000000Z",
-    });
-    const { list } = await history(
-      { includeConsole: false, before: "2026-10-26T05:00:00.000000Z|50" },
-      [at, older],
-    );
-    expect(list.jobs.map((job) => job.id)).toEqual(["older"]);
-  });
-
-  test("clamps the page size to the maximum", async () => {
-    const { query } = await history({ includeConsole: false, limit: 500 });
-    expect(query?.perPage).toBe(50);
-  });
-
-  test("clamps the page size to at least one", async () => {
-    const { query } = await history({ includeConsole: false, limit: 0 });
-    expect(query?.perPage).toBe(1);
-  });
-
-  test("gives the cursor for the next page when the page is full", async () => {
-    const jobs = Array.from({ length: 2 }, (_, i) =>
+  test("returns at most the page size", async () => {
+    const jobs = Array.from({ length: 3 }, (_, i) =>
       completedJob({
-        id: `job-${String(i)}`,
-        created_at: `2026-10-26T05:0${String(i)}:00.000000Z`,
+        id: uuid(i + 10),
+        created_at: `2026-10-26T04:0${String(i)}:00.000000Z`,
       }),
     );
     const { list } = await history({ includeConsole: false, limit: 2 }, jobs);
-    expect(list.next_before).toBe("2026-10-26T05:01:00.000000Z|2");
+    expect(list.jobs.length).toBe(2);
+  });
+
+  test("drops only the job of the cursor that the API returns again", async () => {
+    const at = completedJob({
+      id: uuid(1),
+      created_at: "2026-10-26T05:00:00.000000Z",
+    });
+    const sameTime = completedJob({
+      id: uuid(2),
+      created_at: "2026-10-26T05:00:00.000000Z",
+    });
+    const older = completedJob({
+      id: uuid(3),
+      created_at: "2026-10-26T04:00:00.000000Z",
+    });
+    const { list } = await history(
+      {
+        includeConsole: false,
+        before: `2026-10-26T05:00:00.000000Z|50|${uuid(1)}`,
+      },
+      [at, sameTime, older],
+    );
+    expect(list.jobs.map((job) => job.id)).toEqual([uuid(2), uuid(3)]);
+  });
+
+  test("keeps a job of the same time whose id is not in the cursor", async () => {
+    const sameTime = completedJob({
+      id: uuid(2),
+      created_at: "2026-10-26T05:00:00.000000Z",
+    });
+    const { list } = await history(
+      {
+        includeConsole: false,
+        before: `2026-10-26T05:00:00.000000Z|50|${uuid(1)}`,
+      },
+      [sameTime],
+    );
+    expect(list.jobs.map((job) => job.id)).toEqual([uuid(2)]);
+  });
+
+  test("clamps the page to the maximum, and asks for one more", async () => {
+    const { query } = await history({ includeConsole: false, limit: 500 });
+    expect(query?.perPage).toBe(51);
+  });
+
+  test("clamps the page to at least one, and asks for one more", async () => {
+    const { query } = await history({ includeConsole: false, limit: 0 });
+    expect(query?.perPage).toBe(2);
+  });
+
+  test("gives the cursor for the next page when there is one more job", async () => {
+    const jobs = Array.from({ length: 3 }, (_, i) =>
+      completedJob({
+        id: uuid(i + 10),
+        created_at: `2026-10-26T05:0${String(3 - i)}:00.000000Z`,
+      }),
+    );
+    const { list } = await history({ includeConsole: false, limit: 2 }, jobs);
+    expect(list.next_before).toBe(`2026-10-26T05:02:00.000000Z|2|${uuid(11)}`);
+  });
+
+  test("lists every id of the same time in the cursor", async () => {
+    const jobs = Array.from({ length: 3 }, (_, i) =>
+      completedJob({
+        id: uuid(i + 10),
+        created_at: "2026-10-26T05:00:00.000000Z",
+      }),
+    );
+    const { list } = await history({ includeConsole: false, limit: 2 }, jobs);
+    expect(list.next_before).toBe(
+      `2026-10-26T05:00:00.000000Z|2|${uuid(10)},${uuid(11)}`,
+    );
   });
 
   test("gives no cursor when the page is not full", async () => {
@@ -879,6 +1170,100 @@ describe("loadJobHistory", () => {
       completedJob({ script_path: "u/x/y" }),
     ]);
     expect(list.jobs).toEqual([]);
+  });
+});
+
+describe("loadJobHistory against an API that returns the boundary job again", () => {
+  /** `createdBefore`を含み、新しい順に`perPage`件を返す偽のAPI。同じ時刻の順序は固定する。 */
+  function fakeApi(all: readonly Record<string, unknown>[]): JobsPorts {
+    const sorted = [...all].sort((a, b) => {
+      const left = String(a.created_at);
+      const right = String(b.created_at);
+      if (left !== right) return left < right ? 1 : -1;
+      return String(a.id) < String(b.id) ? -1 : 1;
+    });
+    return {
+      ...ports(),
+      listJobs: async (query) =>
+        sorted
+          .filter(
+            (job) =>
+              query.createdBefore === undefined ||
+              String(job.created_at) <= query.createdBefore,
+          )
+          .slice(0, query.perPage),
+    };
+  }
+
+  /** カーソルをたどって、返ったidを集める。 */
+  async function walk(
+    all: readonly Record<string, unknown>[],
+    limit: number,
+  ): Promise<string[]> {
+    const api = fakeApi(all);
+    const ids: string[] = [];
+    let before: string | undefined;
+    for (let guard = 0; guard < 1000; guard += 1) {
+      const list = await loadJobHistory(api, {
+        includeConsole: false,
+        limit,
+        ...(before !== undefined ? { before } : {}),
+      });
+      ids.push(...list.jobs.map((job) => job.id));
+      if (list.next_before === null) return ids;
+      before = list.next_before;
+    }
+    throw new Error("the cursor never ended");
+  }
+
+  function distinctTimes(count: number) {
+    return Array.from({ length: count }, (_, i) =>
+      completedJob({
+        id: uuid(i + 1),
+        created_at: new Date(Date.UTC(2026, 9, 26, 4, 0, 0) - i * 1000)
+          .toISOString()
+          .replace(".000Z", ".000000Z"),
+      }),
+    );
+  }
+
+  test("reaches the 200th job with a page size of one", async () => {
+    expect((await walk(distinctTimes(300), 1)).length).toBe(200);
+  });
+
+  test("reaches the 200th job with a page size of fifty", async () => {
+    expect((await walk(distinctTimes(300), 50)).length).toBe(200);
+  });
+
+  test("returns a job once when the pages end at distinct times", async () => {
+    const ids = await walk(distinctTimes(300), 7);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("returns all jobs when there are fewer than 200", async () => {
+    expect((await walk(distinctTimes(23), 5)).length).toBe(23);
+  });
+
+  test("loses no job that shares its time with the last job of a page", async () => {
+    const same = Array.from({ length: 5 }, (_, i) =>
+      completedJob({
+        id: uuid(i + 1),
+        created_at: "2026-10-26T05:00:00.000000Z",
+      }),
+    );
+    const ids = await walk(same, 1);
+    expect(new Set(ids)).toEqual(new Set(same.map((job) => String(job.id))));
+  });
+
+  test("returns a job once when five jobs share one time", async () => {
+    const same = Array.from({ length: 5 }, (_, i) =>
+      completedJob({
+        id: uuid(i + 1),
+        created_at: "2026-10-26T05:00:00.000000Z",
+      }),
+    );
+    const ids = await walk(same, 2);
+    expect(ids.length).toBe(5);
   });
 });
 

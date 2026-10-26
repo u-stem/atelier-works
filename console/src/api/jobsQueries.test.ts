@@ -52,6 +52,7 @@ const LIST: JobListView = {
   jobs: [JOB],
   next_before: "2026-10-26T05:00:00.000000Z",
   filter_rejected: false,
+  truncated: false,
 };
 
 const DETAIL: JobDetailView = {
@@ -98,6 +99,7 @@ const SCHEDULES: SchedulesSnapshotView = {
     },
   ],
   missing_in_workspace: [],
+  truncated: false,
 };
 
 const CONFIG: ConfigSnapshotView = {
@@ -154,6 +156,15 @@ describe("isJobList", () => {
   test("rejects a list without the cursor", () => {
     const { next_before: _omitted, ...rest } = LIST;
     expect(isJobList(rest)).toBe(false);
+  });
+
+  test("rejects a list without the truncation flag", () => {
+    const { truncated: _omitted, ...rest } = LIST;
+    expect(isJobList(rest)).toBe(false);
+  });
+
+  test("accepts a list that was cut", () => {
+    expect(isJobList({ ...LIST, truncated: true })).toBe(true);
   });
 
   test("rejects an array", () => {
@@ -223,6 +234,17 @@ describe("isJobDetail", () => {
 
   test("rejects a detail that says found without a job", () => {
     expect(isJobDetail({ found: true })).toBe(false);
+  });
+});
+
+describe("isSchedulesSnapshot truncation", () => {
+  test("rejects a snapshot without the truncation flag", () => {
+    const { truncated: _omitted, ...rest } = SCHEDULES;
+    expect(isSchedulesSnapshot(rest)).toBe(false);
+  });
+
+  test("accepts a snapshot that was cut", () => {
+    expect(isSchedulesSnapshot({ ...SCHEDULES, truncated: true })).toBe(true);
   });
 });
 

@@ -299,6 +299,47 @@ describe("loadSchedules", () => {
     expect(pages).toHaveLength(10);
   });
 
+  test("says that the read is complete when every list ended before the limit", async () => {
+    const view = await loadSchedules(
+      ports({ schedules: manySchedules(150) }),
+      REPO,
+    );
+    expect(view.truncated).toBe(false);
+  });
+
+  test("says that the read is cut when the schedules ran into the page limit", async () => {
+    const view = await loadSchedules(ports({ endless: true }), REPO);
+    expect(view.truncated).toBe(true);
+  });
+
+  test("says that the read is cut when the recent runs ran into the page limit", async () => {
+    const withJobs = Array.from({ length: 1000 }, (_, i) =>
+      schedule({ path: `f/factory/w${String(i)}`, jobs: [] }),
+    );
+    const view = await loadSchedules(ports({ withJobs }), REPO);
+    expect(view.truncated).toBe(true);
+  });
+
+  test("says that the read is cut when the queue returned a full page", async () => {
+    const queue = Array.from({ length: 100 }, (_, i) => ({
+      id: `q${String(i)}`,
+      schedule_path: "f/factory/collect_github",
+      scheduled_for: "2026-10-26T09:00:00Z",
+    }));
+    const view = await loadSchedules(ports({ queue }), REPO);
+    expect(view.truncated).toBe(true);
+  });
+
+  test("says that the read is complete when the queue returned less than a full page", async () => {
+    const queue = Array.from({ length: 99 }, (_, i) => ({
+      id: `q${String(i)}`,
+      schedule_path: "f/factory/collect_github",
+      scheduled_for: "2026-10-26T09:00:00Z",
+    }));
+    const view = await loadSchedules(ports({ queue }), REPO);
+    expect(view.truncated).toBe(false);
+  });
+
   test("does not call a schedule missing when it is on a later page", async () => {
     const schedules = [
       ...manySchedules(100),
