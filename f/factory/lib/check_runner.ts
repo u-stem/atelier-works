@@ -40,7 +40,41 @@ export const CHECK_UNRUNNABLE_REASON_PREFIX = "check command could not run: ";
  * 実装フローとPR修正のフローが共有する。
  */
 export function checkUnrunnableReason(command: string, detail: string): string {
-  return `${CHECK_UNRUNNABLE_REASON_PREFIX}${escapeReasonSeparator(command)}: ${escapeReasonSeparator(detail)}`;
+  return `${CHECK_UNRUNNABLE_REASON_PREFIX}${reasonText(command)}: ${reasonText(detail)}`;
+}
+
+/** 理由に入れる文字列の長さの上限(コードポイント数)。 */
+const REASON_TEXT_MAX_CHARS = 200;
+
+/**
+ * 理由に入れる文字列を整える。ANSIのエスケープシーケンスと制御文字(NULを含む)を取り除き、
+ * `"; "`を置き換え、長さを切る。理由は`work_items.status_reason`に入り、PostgreSQLの`text`はNULを受け付けず、
+ * 検査コマンドの出力はコードが決めるためである。
+ */
+function reasonText(text: string): string {
+  const chars = [...text];
+  let kept = "";
+  for (let i = 0; i < chars.length; i += 1) {
+    const char = chars[i] ?? "";
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 0x1b) {
+      // CSI(`ESC [`、パラメータとオプションの後に、0x40から0x7eの終端の1文字)を読み飛ばす。
+      if (chars[i + 1] === "[") {
+        i += 2;
+        while (i < chars.length) {
+          const next = chars[i]?.codePointAt(0) ?? 0;
+          if (next >= 0x40 && next <= 0x7e) break;
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (code < 0x20 || code === 0x7f) continue;
+    kept += char;
+  }
+  return escapeReasonSeparator(
+    [...kept].slice(0, REASON_TEXT_MAX_CHARS).join(""),
+  );
 }
 
 /**
@@ -62,14 +96,17 @@ type CheckOutcome = {
  * 検査コマンドの結果が、コードの失敗ではなく、実行ファイルを起動できなかったことを表すかを返す。
  * `setpriv`が起動に失敗すると、何も実行されず、出力は`setpriv`のその1行だけになる。
  * 検査コマンド自身が127を返した場合や、出力に同じ語を含むだけの場合は、Claudeが直せる失敗なので当てはまらない。
- * 先頭の語が`/`を含むコマンドも当てはまらない。固定のPATHで探したのではなく、worktreeの中を指す実行ファイルを、
+ * 先頭の語が相対パスで`/`を含むコマンドも当てはまらない。worktreeの中を指す実行ファイルを、
  * コードが消したか実行権を落とした失敗を、環境の問題と取り違えないためである。
+ * 絶対パスは、worktreeの外のイメージの道具を指すので、当てはまる。
  */
 export function isCheckUnrunnable(result: CheckOutcome): boolean {
   const program = result.command.trim().split(/\s+/)[0] ?? "";
+  // 相対パスで`/`を含むものは、worktreeの中を指す。絶対パスは、worktreeの外のイメージの道具を指す。
+  const insideWorktree = program.includes("/") && !program.startsWith("/");
   return (
     !result.ok &&
-    !program.includes("/") &&
+    !insideWorktree &&
     result.exitCode !== undefined &&
     SETPRIV_EXEC_FAILURE_EXIT_CODES.includes(result.exitCode) &&
     result.output.startsWith(SETPRIV_EXEC_FAILURE_PREFIX)

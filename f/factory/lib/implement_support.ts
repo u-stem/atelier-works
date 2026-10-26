@@ -343,6 +343,9 @@ export const IMPLEMENT_CHECK_SKIP_REASONS = {
 
 export const CHECK_OUTPUT_MAX_BYTES = 16 * 1024;
 
+/** 検査コマンドごとの出力の節の区切り。 */
+const SECTION_SEPARATOR = "\n\n";
+
 /** 先頭に割く、残せるバイト数の割合の分母。残りを末尾に割く。 */
 const HEAD_SHARE_DENOMINATOR = 3;
 
@@ -370,14 +373,6 @@ function omissionMarker(omittedBytes: number): string {
  * `insertImplementRound`の前に渡す。
  * プロンプト向けの末尾(`runAllowedCheckCommands`の`outputTail`)ではない。
  */
-export function truncateCheckSections(
-  _failed: readonly string[],
-  _passed: readonly string[],
-  _maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
-): string {
-  return "";
-}
-
 export function truncateCheckOutput(
   text: string,
   maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
@@ -410,6 +405,72 @@ export function truncateCheckOutput(
   const tail = bytes.subarray(tailStart);
   const omitted = bytes.byteLength - head.byteLength - tail.byteLength;
   return `${decoder.decode(head)}${omissionMarker(omitted)}${decoder.decode(tail)}`;
+}
+
+/**
+ * `sections`を、合わせて`budget`バイト以内に収める。短い節はそのまま残し、余りを長い節で等分する。
+ * 長い節は、それぞれ`truncateCheckOutput`で先頭と末尾を残す。
+ */
+function truncateEach(sections: readonly string[], budget: number): string[] {
+  const encoder = new TextEncoder();
+  const order = sections
+    .map((section, index) => ({
+      index,
+      size: encoder.encode(section).byteLength,
+    }))
+    .sort((a, b) => a.size - b.size);
+  const allocation = new Map<number, number>();
+  let remaining = Math.max(budget, 0);
+  order.forEach((entry, position) => {
+    const share = Math.floor(remaining / (order.length - position));
+    const given = Math.min(entry.size, share);
+    allocation.set(entry.index, given);
+    remaining -= given;
+  });
+  return sections.map((section, index) =>
+    truncateCheckOutput(section, allocation.get(index) ?? 0),
+  );
+}
+
+/**
+ * 検査コマンドごとの出力の節を、`maxBytes`バイト以内の1つの文字列にして返す。
+ * 失敗した検査の節を先に、通った検査の節を後に並べる。
+ * 収まらないときは、節ごとに`truncateCheckOutput`で先頭と末尾を残す。
+ * 失敗した検査に厚く割り、通った検査は薄くする。通った検査には、失敗した検査が使わない余りも回す。
+ * 連結した全体を一度に切ると、後ろに並ぶ通った検査の出力が末尾の枠を使い、
+ * 失敗した検査の末尾(失敗の一覧)が省かれるためである。
+ */
+export function truncateCheckSections(
+  failed: readonly string[],
+  passed: readonly string[],
+  maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
+): string {
+  const encoder = new TextEncoder();
+  const clean = (sections: readonly string[]): string[] =>
+    sections.map((section) => section.replaceAll("\u0000", ""));
+  const failedSections = clean(failed);
+  const passedSections = clean(passed);
+  const all = [...failedSections, ...passedSections];
+  const joined = all.join(SECTION_SEPARATOR);
+  if (encoder.encode(joined).byteLength <= maxBytes) return joined;
+  const sizeOf = (sections: readonly string[]): number =>
+    sections.reduce(
+      (total, section) => total + encoder.encode(section).byteLength,
+      0,
+    );
+  const available =
+    maxBytes - (all.length - 1) * encoder.encode(SECTION_SEPARATOR).byteLength;
+  const failedNeed = sizeOf(failedSections);
+  const passedNeed = sizeOf(passedSections);
+  const passedBudget = Math.min(
+    passedNeed,
+    Math.max(Math.floor(available / 4), available - failedNeed),
+  );
+  const failedBudget = available - passedBudget;
+  return [
+    ...truncateEach(failedSections, failedBudget),
+    ...truncateEach(passedSections, passedBudget),
+  ].join(SECTION_SEPARATOR);
 }
 
 // ---------------------------------------------------------------------------

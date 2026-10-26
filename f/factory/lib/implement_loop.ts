@@ -28,6 +28,7 @@ import {
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
+  truncateCheckSections,
   validateImplementOutput,
 } from "./implement_support.ts";
 import { jobTmpBase } from "./job_tmp.ts";
@@ -739,8 +740,10 @@ type CheckEvaluation = {
   readonly state: "passed" | "failed" | "skipped";
   readonly failures: CheckFailure[];
   readonly contractViolated: boolean;
-  /** 失敗した出力、通った出力の順に並べたもの(`implement_rounds.check_output`)。 */
-  readonly outputText: string;
+  /** 失敗した検査の出力の節(`implement_rounds.check_output`)。 */
+  readonly failedOutputs: readonly string[];
+  /** 通った検査の出力の節。 */
+  readonly passedOutputs: readonly string[];
   /** 失敗した出力と契約違反の理由(停滞検出の指紋の入力)。 */
   readonly stallText: string;
   readonly skipReason: string | null;
@@ -835,7 +838,8 @@ async function evaluateChecks(
     state: failed ? "failed" : skipReason !== null ? "skipped" : "passed",
     failures,
     contractViolated,
-    outputText: [...failedOutputs, ...passedOutputs].join("\n\n"),
+    failedOutputs,
+    passedOutputs,
     stallText: stallParts.join("\n\n"),
     skipReason,
     summary:
@@ -1164,9 +1168,12 @@ export async function runImplementVerifyLoop(
       summary: produced.output.summary,
       gap_report: null,
       check_output:
-        evaluation.outputText.length === 0
+        evaluation.failedOutputs.length + evaluation.passedOutputs.length === 0
           ? null
-          : truncateCheckOutput(evaluation.outputText),
+          : truncateCheckSections(
+              evaluation.failedOutputs,
+              evaluation.passedOutputs,
+            ),
       checks_skipped_reason: evaluation.skipReason,
       protected_changes: protectedChanges,
       diff_stat: fingerprint.diffStat,
