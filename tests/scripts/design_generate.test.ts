@@ -8,6 +8,7 @@ import {
   designGapExhaustedReason,
 } from "../../f/factory/lib/design_template.ts";
 import {
+  DocTreeRootSymlinkError,
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
   REQUIREMENTS_MODIFIED_REASON,
@@ -1850,15 +1851,21 @@ describe("sanitizeModelText", () => {
   }
 
   test("masks a token with a zero width space in the middle", () => {
-    expect(sanitizeModelText(splitToken("​"), 1000)).not.toContain("ghp_");
+    expect(sanitizeModelText(splitToken("\u{200B}"), 1000)).not.toContain(
+      "ghp_",
+    );
   });
 
   test("masks a token with a zero width joiner in the middle", () => {
-    expect(sanitizeModelText(splitToken("‍"), 1000)).not.toContain("ghp_");
+    expect(sanitizeModelText(splitToken("\u{200D}"), 1000)).not.toContain(
+      "ghp_",
+    );
   });
 
   test("masks a token with a word joiner in the middle", () => {
-    expect(sanitizeModelText(splitToken("⁠"), 1000)).not.toContain("ghp_");
+    expect(sanitizeModelText(splitToken("\u{2060}"), 1000)).not.toContain(
+      "ghp_",
+    );
   });
 
   test("masks a token with a C1 control character in the middle", () => {
@@ -1866,15 +1873,65 @@ describe("sanitizeModelText", () => {
   });
 
   test("masks a token with a byte order mark in the middle", () => {
-    expect(sanitizeModelText(splitToken("﻿"), 1000)).not.toContain("ghp_");
+    expect(sanitizeModelText(splitToken("\u{FEFF}"), 1000)).not.toContain(
+      "ghp_",
+    );
+  });
+
+  test.each([
+    ["a variation selector", "\u{FE0F}"],
+    ["a combining grapheme joiner", "\u{034F}"],
+    ["a Hangul choseong filler", "\u{115F}"],
+    ["a Hangul jungseong filler", "\u{1160}"],
+    ["a Hangul filler", "\u{3164}"],
+    ["a halfwidth Hangul filler", "\u{FFA0}"],
+    ["a braille pattern blank", "\u{2800}"],
+    ["a variation selector supplement", "\u{E0100}"],
+    ["a combining enclosing mark", "\u{20DD}"],
+    ["a Mongolian free variation selector", "\u{180B}"],
+  ])("masks a token with %s in the middle", (_name, invisible) => {
+    expect(sanitizeModelText(splitToken(invisible), 1000)).toBe("***");
+  });
+
+  test("masks a token with several invisible characters in the middle", () => {
+    expect(
+      sanitizeModelText(splitToken("\u{FE0F}\u{200B}\u{3164}\u{2800}"), 1000),
+    ).toBe("***");
+  });
+
+  test("masks a token that is followed by text with an invisible character", () => {
+    expect(sanitizeModelText(`前${splitToken("\u{FE0F}")}後`, 1000)).toBe(
+      "前***後",
+    );
+  });
+
+  test("keeps the combining voiced sound marks of Japanese text", () => {
+    expect(sanitizeModelText("か\u{3099}き\u{309A}", 1000)).toBe(
+      "か\u{3099}き\u{309A}",
+    );
+  });
+
+  test("keeps an ideographic variation sequence", () => {
+    expect(sanitizeModelText("葛\u{E0100}城", 1000)).toBe("葛\u{E0100}城");
+  });
+
+  test("keeps an emoji variation selector", () => {
+    expect(sanitizeModelText("\u{2764}\u{FE0F}", 1000)).toBe(
+      "\u{2764}\u{FE0F}",
+    );
   });
 
   test("removes a right to left override", () => {
-    expect(sanitizeModelText("a‮b", 1000)).toBe("ab");
+    expect(sanitizeModelText("a\u{202E}b", 1000)).toBe("ab");
   });
 
   test("removes the other bidirectional controls", () => {
-    expect(sanitizeModelText("a‎‏‪‫‬‭⁦⁩b", 1000)).toBe("ab");
+    expect(
+      sanitizeModelText(
+        "a\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{2066}\u{2069}b",
+        1000,
+      ),
+    ).toBe("ab");
   });
 
   test("removes a C1 control character at both ends of its range", () => {
@@ -1882,7 +1939,7 @@ describe("sanitizeModelText", () => {
   });
 
   test("removes a soft hyphen", () => {
-    expect(sanitizeModelText("a­b", 1000)).toBe("ab");
+    expect(sanitizeModelText("a\u{00AD}b", 1000)).toBe("ab");
   });
 
   test("removes a delete character", () => {
@@ -1896,12 +1953,12 @@ describe("sanitizeModelText", () => {
   });
 
   test("keeps the no-break space, which is a space and not a format character", () => {
-    expect(sanitizeModelText("a b", 1000)).toBe("a b");
+    expect(sanitizeModelText("a\u{00A0}b", 1000)).toBe("a\u{00A0}b");
   });
 });
 
 describe("runDesignGenerate and the invisible characters in the output of Claude", () => {
-  const SPLIT_TOKEN = `${GITHUB_TOKEN.slice(0, 20)}​${GITHUB_TOKEN.slice(20)}`;
+  const SPLIT_TOKEN = `${GITHUB_TOKEN.slice(0, 20)}\u{200B}${GITHUB_TOKEN.slice(20)}`;
 
   test("masks a split token in the summary", async () => {
     const h = harness({
@@ -1944,15 +2001,140 @@ describe("runDesignGenerate and the invisible characters in the output of Claude
     expect(h.returnNotes.join("")).not.toContain("ghp_");
   });
 
+  const SELECTOR_TOKEN = `${GITHUB_TOKEN.slice(0, 20)}\u{FE0F}${GITHUB_TOKEN.slice(20)}`;
+
+  test("masks a token split by a variation selector in the summary", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, summary: SELECTOR_TOKEN },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).toBe("***");
+  });
+
+  test("masks a token split by a variation selector in an open question", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, open_questions: [SELECTOR_TOKEN] },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions).toEqual(["***"]);
+  });
+
+  test("masks a token split by a variation selector in the report of a gap", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput(SELECTOR_TOKEN),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes).toEqual(["design gap: ***"]);
+  });
+
   test("removes a right to left override from the report of a gap", async () => {
     const h = harness({
       claude: async () => ({
         outcome: "success",
-        output: gapOutput("a‮gap"),
+        output: gapOutput("a\u{202E}gap"),
       }),
     });
     await runDesignGenerate(h.deps, INPUT);
     expect(h.returnNotes).toEqual(["design gap: agap"]);
+  });
+});
+
+describe("runDesignGenerate and a requirements directory replaced by a link when the draft has no baseline", () => {
+  const LINKED = new DocTreeRootSymlinkError(REQUIREMENTS_DIR);
+
+  function noBaseline(options: Options = {}) {
+    return harness({
+      approved: requirementDraft({ doc_hash: null }),
+      ...options,
+    });
+  }
+
+  test("stops with needs_human when the copy of the diagrams meets the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async () => {
+        throw LINKED;
+      },
+    };
+    expect(await runDesignGenerate({ ...h.deps, fs }, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
+  });
+
+  test("does not start Claude when the copy of the diagrams meets the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async () => {
+        throw LINKED;
+      },
+    };
+    await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect(h.calls).not.toContain("claude");
+  });
+
+  test("stops with needs_human when the hash before the run meets the link", async () => {
+    const h = noBaseline({
+      approved: requirementDraft({ doc_hash: null, diagrams: [] }),
+    });
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      hashTree: async () => {
+        throw LINKED;
+      },
+    };
+    expect(await runDesignGenerate({ ...h.deps, fs }, INPUT)).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
+  });
+
+  test("stops with needs_human and saves nothing when the hash after the run meets the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      hashTree: async (dir) => {
+        if (dir === REQUIREMENTS_DIR) throw LINKED;
+        return h.deps.fs.hashTree(dir);
+      },
+    };
+    const result = await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect([result, h.saved.length]).toEqual([
+      { outcome: "needs_human", reason: REQUIREMENTS_MODIFIED_REASON },
+      0,
+    ]);
+  });
+
+  test("still throws an error that is not the link", async () => {
+    const h = noBaseline();
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async () => {
+        throw new Error("disk failure");
+      },
+    };
+    await expect(runDesignGenerate({ ...h.deps, fs }, INPUT)).rejects.toThrow(
+      "disk failure",
+    );
   });
 });
 

@@ -1841,6 +1841,71 @@ describe("isMissingDocHashColumnError", () => {
     ).toBe(false);
   });
 
+  test("accepts the PostgreSQL statement without a code", () => {
+    expect(
+      isMissingDocHashColumnError(
+        new Error(
+          'column "doc_hash" of relation "requirement_drafts" does not exist',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the statement with escaped quotes in the message", () => {
+    expect(
+      isMissingDocHashColumnError(
+        new Error(
+          'column \\"doc_hash\\" of relation \\"requirement_drafts\\" does not exist',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the statement with escaped quotes in the body", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error("query failed"), {
+          body: 'column \\"doc_hash\\" of relation \\"requirement_drafts\\" does not exist',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the statement inside a JSON body", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error("query failed"), {
+          body: JSON.stringify({
+            error: {
+              message:
+                'column "doc_hash" of relation "requirement_drafts" does not exist',
+            },
+          }),
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects the escaped statement of another relation", () => {
+    expect(
+      isMissingDocHashColumnError(
+        new Error(
+          'column \\"doc_hash\\" of relation \\"design_drafts\\" does not exist',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  test("accepts the undefined column code with an escaped statement that names doc_hash", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error('column \\"doc_hash\\" does not exist'), {
+          code: "42703",
+        }),
+      ),
+    ).toBe(true);
+  });
+
   test("rejects another error code that names doc_hash", () => {
     expect(
       isMissingDocHashColumnError(
