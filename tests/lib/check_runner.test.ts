@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   CHECK_COMMAND_PATH,
+  type CheckHomeDirOps,
   type CreateCheckHomeDir,
+  createCheckHomeDir,
   firstUnrunnableCheckReason,
   isCheckUnrunnable,
   runAllowedCheckCommands,
@@ -267,6 +269,19 @@ describe("runAllowedCheckCommands", () => {
       () => undefined,
     );
     expect(calls).toEqual([]);
+  });
+
+  test("leaves no HOME dir behind for a worktree path that would break the .gitconfig", async () => {
+    const homes = () =>
+      readdirSync("/tmp").filter((name) =>
+        name.startsWith("factory-check-home-"),
+      );
+    const before = homes().length;
+    const { run } = createFakeCommandRunner([ok("")]);
+    await runAllowedCheckCommands(run, "/work\n[core]", ["true"], 1000).catch(
+      () => undefined,
+    );
+    expect(homes().length).toBe(before);
   });
 
   test("passes the worktree to createHomeDir", async () => {
@@ -970,5 +985,80 @@ describe("firstUnrunnableCheckReason", () => {
         },
       ]),
     ).toBe(`check command could not run: bunx --bun tsc --noEmit: ${MISSING}`);
+  });
+});
+
+/** 失敗の差し込みと呼び出しの記録ができるファイル操作。 */
+function fakeHomeOps(failure: {
+  readonly mkdir?: Error;
+  readonly writeFile?: Error;
+  readonly rm?: Error;
+}): { readonly ops: CheckHomeDirOps; readonly calls: string[] } {
+  const calls: string[] = [];
+  const ops: CheckHomeDirOps = {
+    mkdtemp: async (prefix) => {
+      calls.push("mkdtemp");
+      return `${prefix}fake`;
+    },
+    mkdir: async () => {
+      calls.push("mkdir");
+      if (failure.mkdir !== undefined) throw failure.mkdir;
+    },
+    writeFile: async () => {
+      calls.push("writeFile");
+      if (failure.writeFile !== undefined) throw failure.writeFile;
+    },
+    rm: async (path) => {
+      calls.push(`rm ${path}`);
+      if (failure.rm !== undefined) throw failure.rm;
+    },
+  };
+  return { ops, calls };
+}
+
+describe("createCheckHomeDir", () => {
+  test("does not create the HOME for a worktree path it refuses", async () => {
+    const { ops, calls } = fakeHomeOps({});
+    await createCheckHomeDir({ worktreeDir: "/work\n[core]" }, ops).catch(
+      () => undefined,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  test("removes the HOME when writing the .gitconfig fails", async () => {
+    const { ops, calls } = fakeHomeOps({ writeFile: new Error("disk full") });
+    await createCheckHomeDir({ worktreeDir: "/work" }, ops).catch(
+      () => undefined,
+    );
+    expect(calls.filter((call) => call.startsWith("rm "))).toEqual([
+      "rm /tmp/factory-check-home-fake",
+    ]);
+  });
+
+  test("removes the HOME when making the TMPDIR fails", async () => {
+    const { ops, calls } = fakeHomeOps({ mkdir: new Error("no space") });
+    await createCheckHomeDir({ worktreeDir: "/work" }, ops).catch(
+      () => undefined,
+    );
+    expect(calls.filter((call) => call.startsWith("rm "))).toEqual([
+      "rm /tmp/factory-check-home-fake",
+    ]);
+  });
+
+  test("throws the original error when writing fails", async () => {
+    const { ops } = fakeHomeOps({ writeFile: new Error("disk full") });
+    await expect(
+      createCheckHomeDir({ worktreeDir: "/work" }, ops),
+    ).rejects.toThrow("disk full");
+  });
+
+  test("throws the original error even when the cleanup also fails", async () => {
+    const { ops } = fakeHomeOps({
+      writeFile: new Error("disk full"),
+      rm: new Error("rm failed"),
+    });
+    await expect(
+      createCheckHomeDir({ worktreeDir: "/work" }, ops),
+    ).rejects.toThrow("disk full");
   });
 });

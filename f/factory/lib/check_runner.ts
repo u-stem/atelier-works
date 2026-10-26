@@ -156,6 +156,28 @@ export type CreateCheckHomeDir = (input: {
   readonly worktreeDir: string;
 }) => Promise<CheckHomeDir>;
 
+/** `createCheckHomeDir`が使うファイル操作。テストで失敗を差し込むために注入できる。 */
+export type CheckHomeDirOps = {
+  readonly mkdtemp: (prefix: string) => Promise<string>;
+  readonly mkdir: (path: string, options: { mode: number }) => Promise<unknown>;
+  readonly writeFile: (
+    path: string,
+    data: string,
+    options: { mode: number },
+  ) => Promise<void>;
+  readonly rm: (
+    path: string,
+    options: { recursive: boolean; force: boolean },
+  ) => Promise<void>;
+};
+
+export async function createCheckHomeDir(
+  _input: { readonly worktreeDir: string },
+  _ops?: CheckHomeDirOps,
+): Promise<CheckHomeDir> {
+  return { path: "", cleanup: async () => {} };
+}
+
 /**
  * `runAllowedCheckCommands`の1回の呼び出し用に、新しい非公開の一時ディレクトリを作る。
  * 検査コマンドは信頼できない対象リポジトリのコードを、コンテナの分離なしに実行する。
