@@ -9,4 +9,4 @@ schema:
   type: object
   properties: {}
   required: []
-timeout: 3130
+timeout: 3100

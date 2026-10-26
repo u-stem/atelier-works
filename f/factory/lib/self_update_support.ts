@@ -3,7 +3,7 @@
 // Discordへの通知は`self_update.ts`が行う。
 
 import { maskSecrets } from "./log.ts";
-import type { DeploymentRecord, LatestSuccessDeployment } from "./types.ts";
+import type { DeploymentRecord } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // decideUpdate: 再デプロイが必要かの判定
@@ -29,55 +29,17 @@ export function decideUpdate(
 }
 
 // ---------------------------------------------------------------------------
-// 同じ範囲の反映の見送り
-// ---------------------------------------------------------------------------
-
-/**
- * 反映前の版と反映後の版の組が、直近の成功の記録と同じかを返す。
- * 反映前の版が無い(`shaFrom`が`null`)初回の反映は、同じとみなさない。
- */
-export function isSameDeploymentRange(
-  latestSuccess: LatestSuccessDeployment | null,
-  shaFrom: string | null,
-  shaTo: string,
-): boolean {
-  if (latestSuccess === null || shaFrom === null) return false;
-  return latestSuccess.sha_from === shaFrom && latestSuccess.sha_to === shaTo;
-}
-
-export type DeployChoice = { readonly action: "deploy" | "skip" };
-
-/**
- * 反映を始める前に、直近の成功の記録の範囲と今回の範囲を比べ、反映するか見送るかを決める。
- * 初回の反映(`shaFrom`が`null`)は、記録を読まずに反映する。
- * 記録を読めなかったとき(時間切れを含む)は、`onReadError`に理由を渡し、見送らずに反映する。
- * 見送って反映が漏れるより、同じ範囲をもう一度反映するほうが害が小さいためである。
- */
-export async function chooseDeployOrSkip(
-  deps: {
-    readonly readLatestSuccess: () => Promise<LatestSuccessDeployment | null>;
-    readonly onReadError: (err: unknown) => void;
-  },
-  range: { readonly shaFrom: string | null; readonly shaTo: string },
-): Promise<DeployChoice> {
-  if (range.shaFrom === null) return { action: "deploy" };
-  let latestSuccess: LatestSuccessDeployment | null;
-  try {
-    latestSuccess = await deps.readLatestSuccess();
-  } catch (err) {
-    deps.onReadError(err);
-    return { action: "deploy" };
-  }
-  return isSameDeploymentRange(latestSuccess, range.shaFrom, range.shaTo)
-    ? { action: "skip" }
-    : { action: "deploy" };
-}
-
-// ---------------------------------------------------------------------------
 // resolveTriggerKind: 自己更新の起動の種類
 // ---------------------------------------------------------------------------
 
 export type TriggerKind = "schedule" | "manual" | "unknown";
+
+type JobEnv = Readonly<Record<string, string | undefined>>;
+
+/** 環境変数が空でない値を持つか。 */
+function hasValue(env: JobEnv, name: string): boolean {
+  return (env[name] ?? "").length > 0;
+}
 
 /**
  * Windmillがジョブに与える環境変数から、起動の種類を決める。
@@ -85,13 +47,9 @@ export type TriggerKind = "schedule" | "manual" | "unknown";
  * フローやAPIからの起動も`manual`に含まれる。
  * `WM_JOB_ID`が無いときはジョブの外で、種類を判別できないので`unknown`にする。
  */
-export function resolveTriggerKind(
-  env: Readonly<Record<string, string | undefined>>,
-): TriggerKind {
-  const jobId = env.WM_JOB_ID ?? "";
-  if (jobId.length === 0) return "unknown";
-  const schedulePath = env.WM_SCHEDULE_PATH ?? "";
-  return schedulePath.length === 0 ? "manual" : "schedule";
+export function resolveTriggerKind(env: JobEnv): TriggerKind {
+  if (!hasValue(env, "WM_JOB_ID")) return "unknown";
+  return hasValue(env, "WM_SCHEDULE_PATH") ? "schedule" : "manual";
 }
 
 export type TriggerEnvSummary = {
@@ -101,14 +59,19 @@ export type TriggerEnvSummary = {
   readonly has_root_flow_job: boolean;
 };
 
-export function describeTriggerEnv(
-  _env: Readonly<Record<string, string | undefined>>,
-): TriggerEnvSummary {
+/**
+ * 起動の種類の判定が実機で外れたときに、原因を切り分けるための生の入力を返す。
+ * 値を返すのは、秘密でないスケジュールのパスだけである。
+ * ほかの変数は、空でない値があるかだけを返す。
+ */
+export function describeTriggerEnv(env: JobEnv): TriggerEnvSummary {
   return {
-    schedule_path: null,
-    has_job_kind: false,
-    has_parent_job: false,
-    has_root_flow_job: false,
+    schedule_path: hasValue(env, "WM_SCHEDULE_PATH")
+      ? (env.WM_SCHEDULE_PATH ?? null)
+      : null,
+    has_job_kind: hasValue(env, "WM_JOB_KIND"),
+    has_parent_job: hasValue(env, "WM_PARENT_JOB"),
+    has_root_flow_job: hasValue(env, "WM_ROOT_FLOW_JOB_ID"),
   };
 }
 

@@ -4668,7 +4668,7 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(3130秒)がある。
+`self_update`のジョブには、全体の上限(3100秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
 通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
@@ -4711,9 +4711,9 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 手順は次のとおりである。
 
 1. `self_update`の上限が反映されていることを確かめる。
-   `wmill script get f/factory/self_update`の出力で、`timeout`が3130であることを見る。
-   3130秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
-   `job_default_timeout`は21600秒以上にする決まりなので、3130秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が3100であることを見る。
+   3100秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、3100秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `f/factory/_probe_timeout`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
@@ -4806,6 +4806,24 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
    凍結中のスケジュールは、pushから除かれる([凍結とdeployの保留の内部仕様](internals/freezes.md))。
 4. 次の回で自己更新が成功することを見る。
    次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
+
+### 自己更新の起動の種類を確かめる
+
+自己更新は、実行のたびに最初のログ(`self_update started`)へ、起動の種類(`trigger`)を出す。
+値は`schedule`、`manual`、`unknown`のいずれかで、判定は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+判定は、実機の定期のジョブでWindmillが`WM_SCHEDULE_PATH`を与えることを前提にする。
+この前提は、コードの試験では確かめられないので、反映の後に次の手順で確かめる。
+
+1. 反映の後の定期の回を`wmill job list --script-path f/factory/self_update`で見つけ、`wmill job logs <id>`でログを読む。
+   `self_update started`の`trigger`が`schedule`で、`schedule_path`にスケジュールのパスが入っていることを見る。
+2. `wmill script run f/factory/self_update`で手動の回を走らせ、同じログの`trigger`が`manual`であることを見る。
+3. 食い違うときは、同じログの`schedule_path`、`has_job_kind`、`has_parent_job`、`has_root_flow_job`を見る。
+   判定の入力に使うべき環境変数を、この値から探す。
+
+同じ範囲(反映前の版と反映後の版が同じ)の成功が`factory.deployments`に2件記録されたときは、ジョブ履歴で2つの実行の開始時刻の重なりと起動元を確かめる。
+起動元が定期と手動のどちらなのかは、このログの`trigger`で切り分ける。
+原因の1つは、手動と定期の2つの実行が重なり、どちらも成功の記録の前に反映を始めたことである。
+`deployed_sha`を直前の版に戻して再反映した運用の結果であれば、同じ範囲が2件になっても異常ではない。
 
 ### 区切った呼び出しが時間切れになったとき
 

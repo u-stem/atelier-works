@@ -109,7 +109,6 @@ import {
   isStoredRefName,
   isString,
   type LatestDeployment,
-  type LatestSuccessDeployment,
   type Notice,
   type NoticeRecord,
   type RequirementDraft,
@@ -2046,30 +2045,6 @@ export async function getLatestDeployment(
   }
   return {
     result: parseRequiredString(row.result, "result"),
-    sha_to: parseRequiredString(row.sha_to, "sha_to"),
-  };
-}
-
-/**
- * `factory.deployments`の成功の行のうち最も新しい1行の、反映前と反映後の版を返す。成功の行が無ければ`null`を返す。
- * 自己更新が、同じ範囲の反映を繰り返さないかを確かめるために使う。
- */
-export async function getLatestSuccessDeployment(
-  sql: SqlClient = defaultSqlClient,
-): Promise<LatestSuccessDeployment | null> {
-  const rows = await sql`
-    SELECT sha_from, sha_to
-    FROM factory.deployments
-    WHERE result = 'success'
-    ORDER BY occurred_at DESC, id DESC
-    LIMIT 1
-  `.fetch();
-  const row = rows[0];
-  if (row === undefined) {
-    return null;
-  }
-  return {
-    sha_from: parseNullableString(row.sha_from, "sha_from"),
     sha_to: parseRequiredString(row.sha_to, "sha_to"),
   };
 }
