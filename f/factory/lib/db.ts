@@ -55,6 +55,7 @@ import {
   assertPullRequestUrl,
   checkGhRepoDetailWrite,
   type DeploymentRecord,
+  type DesignApprovalRef,
   type DesignDraft,
   type Diagram,
   type FailureRecord,
@@ -3935,6 +3936,13 @@ export async function latestRequirementsApproval(
       "status",
     ),
   };
+}
+
+export async function latestDesignApproval(
+  _workItemId: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<DesignApprovalRef | null> {
+  return null;
 }
 
 // ---------------------------------------------------------------------------

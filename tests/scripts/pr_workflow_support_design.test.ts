@@ -1,6 +1,12 @@
 // 設計工程が`needs_human`にする理由を、通知が日本語で訳し、次の操作を案内することを確かめる。
 
 import { describe, expect, test } from "bun:test";
+import {
+  DESIGN_APPROVAL_INCONSISTENT_REASON,
+  DESIGN_STALE_REQUIREMENTS_REASON,
+  designGateReason,
+  noApprovedDesignReason,
+} from "../../f/factory/lib/approval_gate.ts";
 import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_support.ts";
 import {
   DESIGN_DOC_DIR_IN_USE_REASON,
@@ -78,6 +84,24 @@ describe("describeReason for the design stage", () => {
   test("translates a design directory that already holds a draft", () => {
     expect(describeReason(DESIGN_DOC_DIR_IN_USE_REASON)).toContain("下書き");
   });
+
+  test("translates a missing design approval for the attempt", () => {
+    expect(describeReason(noApprovedDesignReason(2))).toBe(
+      "設計の試行2回目に承認済みの設計書が無いため、実装を始められませんでした",
+    );
+  });
+
+  test("translates a design that does not match the approved requirements", () => {
+    expect(describeReason(DESIGN_STALE_REQUIREMENTS_REASON)).toBe(
+      "承認済みの設計書が、承認済みの要件定義と食い違っています",
+    );
+  });
+
+  test("translates an inconsistent design approval record", () => {
+    expect(describeReason(DESIGN_APPROVAL_INCONSISTENT_REASON)).toBe(
+      "設計の承認の記録が、設計書と食い違っています",
+    );
+  });
 });
 
 describe("nextActionFor for the design stage", () => {
@@ -115,6 +139,25 @@ describe("nextActionFor for the design stage", () => {
 
   test("tells how to retry a design directory that already holds a draft", () => {
     expect(nextActionFor(DESIGN_DOC_DIR_IN_USE_REASON)).toContain(RETRY);
+  });
+
+  test.each([
+    ["a missing design approval", noApprovedDesignReason(2)],
+    ["a stale design", DESIGN_STALE_REQUIREMENTS_REASON],
+  ])("tells to retry from the design for %s", (_name, reason) => {
+    expect(nextActionFor(reason)).toContain(
+      `${RETRY}\`を作業項目のIDで実行してください(設計から再開します)`,
+    );
+  });
+
+  test("tells to check the approval record before the retry of an inconsistent design approval", () => {
+    expect(nextActionFor(DESIGN_APPROVAL_INCONSISTENT_REASON)).toContain(
+      "承認の記録を確かめ",
+    );
+  });
+
+  test("tells how to retry an inconsistent design approval", () => {
+    expect(nextActionFor(DESIGN_APPROVAL_INCONSISTENT_REASON)).toContain(RETRY);
   });
 
   test("tells how to retry when a process the design run left holds the worktree lock", () => {
@@ -158,17 +201,26 @@ describe("the reason table and the reasons that the design stage produces", () =
     REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
     REQUIREMENTS_DIR_MISSING_REASON,
     DESIGN_DOC_DIR_IN_USE_REASON,
+    noApprovedDesignReason: noApprovedDesignReason(2),
+    designGateReason: designGateReason({ kind: "inconsistent" }, 1),
+    DESIGN_STALE_REQUIREMENTS_REASON,
+    DESIGN_APPROVAL_INCONSISTENT_REASON,
   };
 
   /** 設計の理由の定数を持つファイル。 */
   const CONSTANT_SOURCES = [
+    "approval_gate.ts",
     "design_launch_support.ts",
     "design_template.ts",
     "doc_tree_hash.ts",
   ];
   // 理由を返す関数は、設計の定数の置き場の2つだけを数える。
   // design_launch_supportの関数が返すのは、起動の失敗の詳細であり、`needs_human`の理由ではない。
-  const FUNCTION_SOURCES = ["design_template.ts", "doc_tree_hash.ts"];
+  const FUNCTION_SOURCES = [
+    "approval_gate.ts",
+    "design_template.ts",
+    "doc_tree_hash.ts",
+  ];
 
   async function exportedNames(
     files: string[],
@@ -208,7 +260,7 @@ describe("the reason table and the reasons that the design stage produces", () =
       CONSTANT_SOURCES,
       /^export const ([A-Z_]+_REASON)\b/gm,
     );
-    expect(constants.length).toBeGreaterThanOrEqual(6);
+    expect(constants.length).toBeGreaterThanOrEqual(8);
   });
 
   test("finds the exported reason functions in the sources", async () => {
@@ -216,7 +268,7 @@ describe("the reason table and the reasons that the design stage produces", () =
       FUNCTION_SOURCES,
       /^export function (\w+Reason)\(/gm,
     );
-    expect(functions.length).toBeGreaterThanOrEqual(2);
+    expect(functions.length).toBeGreaterThanOrEqual(4);
   });
 
   test.each(Object.entries(PRODUCED))(

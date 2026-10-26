@@ -58,6 +58,7 @@ import {
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   latestConflictFixSettledAt,
+  latestDesignApproval,
   latestDesignDraft,
   latestMainCiRunCreatedAt,
   latestStatusEvent,
@@ -9034,6 +9035,136 @@ check(
 check(
   "design drafts by doc dir: another doc dir is not found",
   !(await hasDesignDraftForDocDir(`${dhDesignDir}-other`, sql)),
+);
+
+// 設計の承認の照合: 最新の設計の承認依頼だけを読み、その依頼が指す設計書を結合する。
+// 最新の依頼が指す設計書が引けないとき(存在しない、別の作業項目のもの)に、古い承認へ落ちない。
+const daItem = await issueWorkItem(9321, 1, "designing", "qdb design approval");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-da' WHERE id = ${String(daItem)}`,
+);
+const daRequirements = await requirementDraftFor(daItem);
+const daFirstDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(daItem, daRequirements, 1),
+  "qdb-job-da",
+  sql,
+);
+const daSecondDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(daItem, daRequirements, 2),
+  "qdb-job-da",
+  sql,
+);
+const daOtherItem = await issueWorkItem(
+  9322,
+  1,
+  "designing",
+  "qdb other design",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-db' WHERE id = ${String(daOtherItem)}`,
+);
+const daOtherRequirements = await requirementDraftFor(daOtherItem);
+const daOtherDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(daOtherItem, daOtherRequirements, 1),
+  "qdb-job-db",
+  sql,
+);
+check(
+  "design approval: a work item without a request has none",
+  (await latestDesignApproval(daItem, sql)) === null,
+);
+const daApprovedRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: daFirstDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(daApprovedRequest)}`,
+);
+const daApproved = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: the approved request is read with the design draft and the integers of the payload",
+  daApproved?.approval_request_id === daApprovedRequest &&
+    daApproved.status === "approved" &&
+    daApproved.design_draft_id === daFirstDesign &&
+    daApproved.payload_attempt === 1 &&
+    daApproved.payload_design_attempt === 1 &&
+    daApproved.draft?.design_attempt === 1 &&
+    daApproved.draft.requirement_draft_id === daRequirements,
+  daApproved,
+);
+const daPendingRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: daSecondDesign ?? 0,
+    payload: { attempt: 1, design_attempt: "2" },
+    expires_at: null,
+  },
+  sql,
+);
+const daPending = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: a newer pending request hides the older approved one",
+  daPending?.approval_request_id === daPendingRequest &&
+    daPending.status === "pending",
+  daPending,
+);
+check(
+  "design approval: a payload value that is not an integer is read as null",
+  daPending?.payload_design_attempt === null && daPending.payload_attempt === 1,
+  daPending,
+);
+const daMissingRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: 2147483000,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(daMissingRequest)}`,
+);
+const daMissing = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: a newest request whose design draft does not exist has no draft and does not fall back to the older approval",
+  daMissing?.approval_request_id === daMissingRequest &&
+    daMissing.status === "approved" &&
+    daMissing.draft === null,
+  daMissing,
+);
+const daForeignRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: daOtherDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+const daForeign = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: a newest request that points at a design draft of another work item has no draft",
+  daForeign?.approval_request_id === daForeignRequest &&
+    daForeign.draft === null,
+  daForeign,
+);
+check(
+  "design approval: the other work item is not affected",
+  (await latestDesignApproval(daOtherItem, sql)) === null,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

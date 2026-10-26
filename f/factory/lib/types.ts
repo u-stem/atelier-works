@@ -468,6 +468,29 @@ export type DesignDraft = {
   created_at: Date;
 };
 
+/**
+ * 作業項目の最新の`kind = 'design'`の承認依頼と、それが指す設計書。
+ * 実装の関門と再実行と自動再開が、設計の承認が現在の状態に一致するかを照合するのに使う。
+ */
+export type DesignApprovalRef = {
+  readonly approval_request_id: number;
+  /** `approval_requests.subject_id`(= `design_drafts.id`)。 */
+  readonly design_draft_id: number;
+  readonly status: ApprovalRequestStatus;
+  /** 依頼を作った時点の写し`payload.attempt`。無い、整数でない、負のときは`null`。 */
+  readonly payload_attempt: number | null;
+  /** 依頼を作った時点の写し`payload.design_attempt`。無い、整数でない、負のときは`null`。 */
+  readonly payload_design_attempt: number | null;
+  /**
+   * 依頼が指す設計書。同じ作業項目の行に結合できなければ`null`
+   * (設計書が無い、または別の作業項目のもの)。
+   */
+  readonly draft: {
+    readonly design_attempt: number;
+    readonly requirement_draft_id: number;
+  } | null;
+};
+
 // ---------------------------------------------------------------------------
 // approval_requests: 種別を問わない承認待ち。
 // 承認を扱うscriptはすべてこのテーブルを通す。

@@ -69,6 +69,7 @@ import {
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
   latestConflictFixSettledAt,
+  latestDesignApproval,
   latestDesignDraft,
   latestDraft,
   latestFixRound,
@@ -5121,6 +5122,116 @@ describe("latestRequirementsApproval", () => {
   test("casts work_item_id to ::bigint", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
     await latestRequirementsApproval(1, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "ar.work_item_id = ? ::bigint",
+    );
+  });
+});
+
+describe("latestDesignApproval", () => {
+  const ROW: SqlRow = {
+    approval_request_id: "41",
+    subject_id: 8,
+    status: "approved",
+    payload: { attempt: 2, design_attempt: 1 },
+    dd_design_attempt: 1,
+    dd_requirement_draft_id: 5,
+  };
+
+  test("returns null when the work item has no design approval request", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await latestDesignApproval(1, sql)).toBeNull();
+  });
+
+  test("parses the newest request with the design draft it points at", async () => {
+    const { sql } = createFakeSqlClient([[ROW]]);
+    expect(await latestDesignApproval(1, sql)).toEqual({
+      approval_request_id: 41,
+      design_draft_id: 8,
+      status: "approved",
+      payload_attempt: 2,
+      payload_design_attempt: 1,
+      draft: { design_attempt: 1, requirement_draft_id: 5 },
+    });
+  });
+
+  test("returns a null draft when the design draft cannot be joined", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, dd_design_attempt: null, dd_requirement_draft_id: null }],
+    ]);
+    expect((await latestDesignApproval(1, sql))?.draft).toBeNull();
+  });
+
+  test("reads the payload of a JSON string", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, payload: '{"attempt":3,"design_attempt":2}' }],
+    ]);
+    const ref = await latestDesignApproval(1, sql);
+    expect([ref?.payload_attempt, ref?.payload_design_attempt]).toEqual([3, 2]);
+  });
+
+  test.each([
+    ["a missing key", { attempt: 2 }],
+    ["a string", { attempt: 2, design_attempt: "1" }],
+    ["a fraction", { attempt: 2, design_attempt: 1.5 }],
+    ["a negative number", { attempt: 2, design_attempt: -1 }],
+    ["null", { attempt: 2, design_attempt: null }],
+  ])("reads payload_design_attempt as null for %s", async (_name, payload) => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, payload }]]);
+    expect((await latestDesignApproval(1, sql))?.payload_design_attempt).toBe(
+      null,
+    );
+  });
+
+  test("reads payload_attempt as null for a fraction", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, payload: { attempt: 2.5, design_attempt: 1 } }],
+    ]);
+    expect((await latestDesignApproval(1, sql))?.payload_attempt).toBe(null);
+  });
+
+  test.each([
+    ["an array", []],
+    ["null", null],
+    ["a number", 7],
+    ["a broken JSON string", "{"],
+  ])(
+    "reads both payload values as null for %s, without throwing",
+    async (_name, payload) => {
+      const { sql } = createFakeSqlClient([[{ ...ROW, payload }]]);
+      const ref = await latestDesignApproval(1, sql);
+      expect([ref?.payload_attempt, ref?.payload_design_attempt]).toEqual([
+        null,
+        null,
+      ]);
+    },
+  );
+
+  test("restricts to kind = 'design'", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestDesignApproval(1, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain("ar.kind = 'design'");
+  });
+
+  test("joins the design draft with LEFT JOIN on the same work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestDesignApproval(1, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "LEFT JOIN factory.design_drafts dd ON dd.id = ar.subject_id AND dd.work_item_id = ar.work_item_id",
+    );
+  });
+
+  test("orders by requested_at DESC and takes one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestDesignApproval(1, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "ORDER BY ar.requested_at DESC, ar.id DESC LIMIT 1",
+    );
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestDesignApproval(1, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "ar.work_item_id = ? ::bigint",
     );

@@ -956,6 +956,44 @@ describe("files of the conflict round", () => {
   });
 });
 
+describe("files of the implement gate", () => {
+  test.each([
+    "f/factory/lib/approval_gate.ts",
+    "f/factory/lib/approval_gate.script.yaml",
+    "f/factory/lib/approval_gate.script.lock",
+    "f/factory/lib/doc_tree_hash.ts",
+    "f/factory/lib/doc_tree_hash.script.yaml",
+    "f/factory/lib/doc_tree_hash.script.lock",
+    "f/factory/lib/model_text.ts",
+    "f/factory/lib/model_text.script.yaml",
+    "f/factory/lib/model_text.script.lock",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/lib/implement_support.ts",
+    "f/factory/lib/implement_loop.ts",
+  ])("keeps %s open to the fix of the implement flow", (path) => {
+    expect(isDeniedPath(path)).toBe(false);
+  });
+
+  test("names the three files in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(
+      ["approval_gate", "doc_tree_hash", "model_text"].filter(
+        (name) => !doc.includes(`\`${name}\``),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("countMeaningfulLines", () => {
   test("counts a line of code", () => {
     expect(countMeaningfulLines(["expect(a).toBe(1);"])).toBe(1);
