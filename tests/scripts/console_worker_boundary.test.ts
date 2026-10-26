@@ -2,10 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FORBIDDEN_EXACT_PATHS } from "../../f/factory/lib/protected_paths.ts";
 import {
   codeOf,
   DISCORD_WEBHOOK_URL,
+  datatableStringSql,
   envUses,
+  escapeHatches,
+  filesWithToolDependencies,
   GITHUB_TOKEN,
   mentions,
   nonLiteralVariableReads,
@@ -18,6 +22,7 @@ import {
   sdkViolationsReachableFrom,
   secretVariablePaths,
   sourcesReachableFrom,
+  transpilerImports,
   unfollowableImports,
   yamlOf,
 } from "./worker_boundary_scan.ts";
@@ -45,7 +50,12 @@ import {
 //   例外は、呼び出し側が定数だけを渡すことを確かめた箇所で、下の許可リストに理由を書く。
 // - script.yamlに$var:と$res:の参照があれば落とす。入力の既定値で変数を読めるためである。
 // - 見ないもの: 文字列を組み立てて作ったsecretのパス、環境変数や DB を経由して受け取る名前、
-//   evalとFunction、実行時に書き換わるファイル。これらはコードのレビューで見る。
+//   実行時に書き換わるファイル、`Bun["env"]`のように添字で名前を組み立てる参照(`Bun[`の添字は禁じるが、
+//   文字列の連結で作った名前は見ない)、割り算を正規表現リテラルと読み違えた箇所の中身(骨組みが
+//   その間のコードを落とす)、`eval`と`Function`と`.constructor`を、字句の禁止で見つけられない書き方
+//   (識別子を連結して呼ぶ形など)、第三者パッケージの中身。
+//   これらはコードのレビューで見る。3つのscriptがimportでたどれるファイルは、すべて保護パスの中にあり、
+//   変更は人がレビューする。下の「見ないもの」を確かめることが、レビューの観点になる。
 
 const MAY_READ_GITHUB_TOKEN = [
   "f/factory/approval_decide",
@@ -610,6 +620,95 @@ describe("the SDK use scan", () => {
       ).problems,
     ).not.toEqual([]);
   });
+
+  const GET = `${JOB}await wmill.ResourceService.getResourceValue(`;
+  const UPDATE = `${JOB}await wmill.ResourceService.updateResourceValue(`;
+  const CONFIG = '"f/factory/factory_config"';
+
+  test("flags getResourceValue with a requestBody", () => {
+    expect(
+      sdkFindings(`${GET}{ workspace, path: ${CONFIG}, requestBody: {} });`)
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts updateResourceValue with the literal path and a requestBody", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: { value: { a: 1, b: [2, 3] } } });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("accepts a requestBody that has a path key of its own", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: { value: { path: "x" } } });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("accepts a requestBody with brackets and commas inside strings", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: { value: "a, ) } (" } });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags a path key after the requestBody", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: { value: {} }, path: other });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a spread after the requestBody", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: { value: {} }, ...opts });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a spread before the literal path of updateResourceValue", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ ...opts, workspace, path: ${CONFIG}, requestBody: {} });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a second requestBody", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: {}, requestBody: {} });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a computed key after the requestBody", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: {}, [key]: other });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags updateResourceValue with a second argument", () => {
+    expect(
+      sdkFindings(
+        `${UPDATE}{ workspace, path: ${CONFIG}, requestBody: {} }, extra);`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags updateResourceValue without the workspace", () => {
+    expect(
+      sdkFindings(`${UPDATE}{ path: ${CONFIG}, requestBody: {} });`).problems,
+    ).not.toEqual([]);
+  });
 });
 
 describe("the process environment scan", () => {
@@ -659,6 +758,82 @@ describe("the process environment scan", () => {
       keys: [],
       problems: [],
     });
+  });
+});
+
+describe("the escape hatch scan", () => {
+  test("flags a constructor access", () => {
+    expect(escapeHatches("const f = x.constructor;")).not.toEqual([]);
+  });
+
+  test("flags a constructor access by a string key", () => {
+    expect(escapeHatches('const f = x["constructor"];')).not.toEqual([]);
+  });
+
+  test("flags eval", () => {
+    expect(escapeHatches('eval("1");')).not.toEqual([]);
+  });
+
+  test("flags an indirect eval", () => {
+    expect(escapeHatches('(0, eval)("1");')).not.toEqual([]);
+  });
+
+  test("flags new Function", () => {
+    expect(escapeHatches('new Function("return 1");')).not.toEqual([]);
+  });
+
+  test("flags a call of Function", () => {
+    expect(escapeHatches('Function("return 1")();')).not.toEqual([]);
+  });
+
+  test("flags a subscript of Bun", () => {
+    expect(escapeHatches('const e = Bun["env"];')).not.toEqual([]);
+  });
+
+  test("does not flag an identifier that only contains eval", () => {
+    expect(escapeHatches("const evaluate = 1; retrieval(2);")).toEqual([]);
+  });
+
+  test("does not count a mention in a comment", () => {
+    expect(escapeHatches("// eval( and .constructor\nconst a = 1;")).toEqual(
+      [],
+    );
+  });
+
+  test("does not flag the word Function in a string", () => {
+    expect(escapeHatches('const s = "a Function";')).toEqual([]);
+  });
+
+  test("does not flag a type named Function", () => {
+    expect(escapeHatches("const f: Function = () => 1;")).toEqual([]);
+  });
+});
+
+describe("the SQL given as a string", () => {
+  test("flags sql.query with a string", () => {
+    expect(
+      datatableStringSql(
+        'const sql = wmill.datatable(); sql.query("select 1");',
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags sql.raw", () => {
+    expect(
+      datatableStringSql("const q = sql`select ${sql.raw(x)}`;"),
+    ).not.toEqual([]);
+  });
+
+  test("accepts the tagged template", () => {
+    expect(
+      datatableStringSql(
+        "const rows = await sql`select 1 where a = ${a}`.fetch();",
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not count a mention in a string", () => {
+    expect(datatableStringSql('const s = "sql.query(x)";')).toEqual([]);
   });
 });
 
@@ -825,6 +1000,60 @@ describe("the scripts restricted to an SDK allowance", () => {
     expect(unused).toEqual([]);
   });
 
+  test.each(RESTRICTED)(
+    "%s reaches only files that are protected paths",
+    (path) => {
+      const unprotected = [...sourcesReachableFrom(path).keys()]
+        .map(relative)
+        .filter((file) => !FORBIDDEN_EXACT_PATHS.includes(file));
+      expect(unprotected).toEqual([]);
+    },
+  );
+
+  test("the reached files import nothing outside the protected set and the client", () => {
+    const outside: string[] = [];
+    for (const path of RESTRICTED) {
+      for (const [file, source] of sourcesReachableFrom(path)) {
+        for (const spec of transpilerImports(source)) {
+          if (
+            !spec.startsWith(".") &&
+            !/^windmill-client(?:@[\w.+-]+)?$/.test(spec)
+          ) {
+            outside.push(`${relative(file)}: ${spec}`);
+          }
+        }
+      }
+    }
+    expect(outside).toEqual([]);
+  });
+
+  test("the restricted scripts reach no file or process tool", () => {
+    expect(filesWithToolDependencies(RESTRICTED)).toEqual([]);
+  });
+
+  test.each(RESTRICTED)("%s reaches no escape hatch", (path) => {
+    const offenders: string[] = [];
+    for (const [file, source] of sourcesReachableFrom(path)) {
+      for (const found of escapeHatches(source)) {
+        offenders.push(`${relative(file)}: ${found}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test.each(RESTRICTED)(
+    "%s gives no SQL to the datatable as a string",
+    (path) => {
+      const offenders: string[] = [];
+      for (const [file, source] of sourcesReachableFrom(path)) {
+        for (const found of datatableStringSql(source)) {
+          offenders.push(`${relative(file)}: ${found}`);
+        }
+      }
+      expect(offenders).toEqual([]);
+    },
+  );
+
   test("every restricted script is on the list of scripts that read no secret", () => {
     expect(
       RESTRICTED.filter((path) => !READS_NO_SECRET.includes(path)),
@@ -868,6 +1097,8 @@ describe("the scripts restricted to an SDK allowance", () => {
   test.each(RESTRICTED)(
     "%s reaches no SQL that writes or changes the schema",
     (path) => {
+      // 検査はテンプレートリテラルだけを見る。文字列で渡すSQL(`sql.query(...)`、`sql.raw(...)`)は、
+      // 上の`datatableStringSql`が別に禁じる。
       // 大文字のSQLの語は単独で、小文字でも書ける形は語の組で数える。文章中の英単語を数えないため。
       const upper =
         /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;

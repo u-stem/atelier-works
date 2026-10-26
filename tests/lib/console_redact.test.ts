@@ -457,6 +457,22 @@ describe("redactResult", () => {
   });
 });
 
+describe("redactText with the known short shapes", () => {
+  // 32字に満たないので、一般形の規則には当たらず、既知の形の規則だけが伏せる。
+  test.each([
+    ["a classic GitHub token", `ghp_${"abcdefghij0123456789"}`],
+    ["a fine-grained GitHub token", `github_pat_${"abcdefghij0123456789"}`],
+    ["a Claude OAuth token", `sk-ant-oat${"abcdefghij"}`],
+    ["an Anthropic key", `sk-ant-${"abcdefghij"}`],
+    [
+      "a Discord webhook URL",
+      `https://discord.com/api/webhooks/${"123456"}/${"abcdef_ghij"}`,
+    ],
+  ])("masks %s", (_name, secret) => {
+    expect(redactText(`x ${secret} y`).text).toBe("x *** y");
+  });
+});
+
 describe("redactText", () => {
   test("masks a known token", () => {
     expect(redactText(`x ${GH_TOKEN}`).text).toBe("x ***");

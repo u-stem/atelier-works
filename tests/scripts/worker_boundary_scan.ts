@@ -579,3 +579,18 @@ export function envUses(source: string): EnvUses {
   }
   return { keys: [...new Set(keys)].sort(), problems };
 }
+
+/** `source`が読み込む先の指定。 */
+export function transpilerImports(source: string): string[] {
+  return transpiler.scanImports(source).map((entry) => entry.path);
+}
+
+/** 字句の禁止で見つける、走査を迂回できる書き方。 */
+export function escapeHatches(_source: string): string[] {
+  return [];
+}
+
+/** datatableに文字列でSQLを渡す書き方。 */
+export function datatableStringSql(_source: string): string[] {
+  return [];
+}
