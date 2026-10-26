@@ -564,6 +564,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
+| `f/factory/lib/design_template` | script | [LIB] 設計書テンプレートの定義 |
+| `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |

@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 設計書ファイルの検査'
+description: 内部ライブラリです。直接実行するものではありません。生成された設計書を章立て・ID・禁止記法・分量・図の整合性の観点で機械検査する共通処理です。
 lock: '!inline f/factory/lib/design_doc.script.lock'
 kind: script
 schema:
