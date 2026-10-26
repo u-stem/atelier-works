@@ -44,12 +44,14 @@ import {
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
   hasSupersedingPrReview,
+  insertApprovalRequest,
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertGhCollectRuns,
   insertWorkerSample,
   insertWorkItem,
+  isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   latestConflictFixSettledAt,
@@ -8628,6 +8630,72 @@ check(
   "recordFailure: records the given occurrence time and falls back to now()",
   sfRows[0]?.given === true && sfRows[1]?.recent === true,
   sfRows,
+);
+
+// 設計工程の土台: 新しい2状態の行を読み書きでき、同じIssueの稼働中の行は1件までで、
+// design_attemptは0で始まり負にできず、designの承認依頼を挿せる。
+const designingItem = await issueWorkItem(
+  9301,
+  1,
+  "designing",
+  "qdb designing",
+);
+check(
+  "design stage: design_attempt starts at 0",
+  (await getWorkItem(designingItem, sql))?.design_attempt === 0,
+);
+let designSecondInsertError: unknown = null;
+try {
+  await issueWorkItem(
+    9301,
+    2,
+    "awaiting_design_approval",
+    "qdb second design item",
+  );
+} catch (err) {
+  designSecondInsertError = err;
+}
+check(
+  "design stage: a second active row for the same issue is rejected by the index",
+  isActiveIssueUniqueViolation(designSecondInsertError),
+  designSecondInsertError,
+);
+let designAttemptError: unknown = null;
+try {
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET design_attempt = -1 WHERE id = ${String(designingItem)}`,
+  );
+} catch (err) {
+  designAttemptError = err;
+}
+check(
+  "design stage: a negative design_attempt is rejected by the check",
+  String(designAttemptError).includes("design_attempt"),
+  designAttemptError,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET design_attempt = 2 WHERE id = ${String(designingItem)}`,
+);
+check(
+  "design stage: a design_attempt of 2 is stored and read back",
+  (await getWorkItem(designingItem, sql))?.design_attempt === 2,
+);
+const designRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: designingItem,
+    subject_id: 1,
+    payload: {},
+    expires_at: null,
+  },
+  sql,
+);
+check(
+  "design stage: an approval request of kind design can be inserted",
+  designRequest > 0,
+  designRequest,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -123,6 +123,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
+| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。今のコードはこの状態へ遷移させない | issue | |
+| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。今のコードはこの状態へ遷移させない | issue | |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
 | `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
@@ -139,6 +141,9 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `audited` | 監査を終えた | audit | 終端 |
 
 pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
+
+設計工程の2状態(`designing`、`awaiting_design_approval`)は、状態の値と制約だけがあり、遷移を起こすコードは無い。
+そのため、下の状態遷移の図に載せない。
 
 終端の一覧はコードとDBのviewの2か所にある。そろえ方は[作業項目の状態とリース](internals/work-items.md)に書く。
 
@@ -416,6 +421,10 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
+これらのインデックスの述語は、終端でない状態を列挙する。
+設計工程の2状態は、Issueの`work_items_active_issue_key`と、PR修正の`work_items_active_pr_fix_key`の述語に含める。
+dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕様](internals/dependabot.md))の述語にも含める。
+その状態の間も、同じIssueやPRの作業項目を重ねて作らせないためである。
 これらはDBを共有するインスタンスの間で働き、DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
 1つのリポジトリは1つのインスタンスだけで扱う。
 
@@ -684,7 +693,8 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 
 `infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
-`mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
+`mise run up`は、Caddyの確認の後に、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
+その後に、ラベルを付けた自前ビルドの使われていない旧イメージを消す([旧イメージの掃除](operations.md#旧イメージの掃除))。
 `self_update`はこのHEADを毎回読み、通知の版を含むか、ホスト側の作業が要るパスの内容が通知の版と同じなら、通知を解決する。
 通知の解決の後に、通知を解決した回と、再開できる候補が残っている回だけ、`auto_retry_stale_image`を別のジョブで起動する。
 候補が無い回に起動しないのは、何もしないジョブが2分ごとにジョブ履歴とqueueを埋めるためである。
@@ -908,6 +918,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
+- 設計工程(状態と承認依頼の種類だけが定義済みで、フローは無い)
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

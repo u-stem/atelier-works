@@ -62,7 +62,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | --- | --- |
 | `mise run setup` | miseで管理するツール、`bun install --frozen-lockfile --ignore-scripts`、`bun install --cwd console --frozen-lockfile --ignore-scripts`、`lefthook install`をまとめて入れる |
 | `mise run doctor` | 環境を診断し、項目ごとにOKかNGを出す |
-| `mise run up` | ローカルのWindmillのスタックを、ビルドしてから起動する。ホストのcheckoutからビルドするので、先にmainをpullする。deployの保留が有効なあいだは止まる |
+| `mise run up` | ローカルのWindmillのスタックを、ビルドしてから起動する。ホストのcheckoutからビルドするので、先にmainをpullする。終わりに、自前でビルドした使われていない旧イメージを消す。deployの保留が有効なあいだは止まる |
 | `mise run down` | スタックを止める |
 | `mise run build` | workerのイメージだけをビルドする |
 | `mise run logs` | スタックのログを追う |

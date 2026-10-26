@@ -24,6 +24,8 @@ const STATUS_LABELS: ReadonlyMap<string, string> = new Map([
   ["cancelled", "取消"],
   ["auditing", "監査中"],
   ["audited", "監査完了"],
+  ["designing", "設計の生成中"],
+  ["awaiting_design_approval", "設計の承認待ち"],
 ]);
 
 const WORK_ITEM_KIND_LABELS: ReadonlyMap<string, string> = new Map([
@@ -111,6 +113,9 @@ export function approvalKindLabel(kind: string, origin: string | null): string {
   if (kind === "issue_proposal") {
     return origin === "audit" ? "改善提案" : "Issue化提案";
   }
+  if (kind === "design") {
+    return "設計";
+  }
   return "承認依頼";
 }
 
@@ -163,6 +168,11 @@ export function pullRequestOriginLabel(origin: string): string {
   return PULL_REQUEST_ORIGIN_LABELS.get(origin) ?? "不明";
 }
 
+/** PRの作り手を確かめられたか。確かめられないとき(「不明」と書く値)は偽にする。 */
+export function hasPullRequestOrigin(origin: string): boolean {
+  return PULL_REQUEST_ORIGIN_LABELS.has(origin);
+}
+
 /** 反映にホスト側の作業(`infra/`と`mise.toml`の変更の反映)が要るかの日本語。 */
 export function hostActionLabel(needsHostAction: boolean): string {
   return needsHostAction ? "ホストの作業が必要" : "ホストの作業は不要";
@@ -212,6 +222,7 @@ export const HOLDS_TEXT = {
   freezesCardTitle: "凍結とdeployの保留",
   freezesCardNote:
     "スケジュールの更新を止める凍結と、反映全体を止めるdeployの保留の一覧です。",
+  noneActive: "有効な保留と凍結はありません",
   holdsEmpty: "有効な保留はありません",
   freezesEmpty: "有効な凍結とdeployの保留はありません",
   placeHint: "保留を置くときは mise run hold:place を使います。",

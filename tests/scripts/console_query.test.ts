@@ -435,6 +435,25 @@ describe("runConsoleQuery", () => {
     ]);
   });
 
+  test("inbox: rejects a design row, which the inbox does not handle yet", async () => {
+    const row: SqlRow = {
+      approval_request_id: 9,
+      kind: "design",
+      status: "pending",
+      work_item_id: 1,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      title: "Add feature",
+      requested_at: NOW.toISOString(),
+      expires_at: null,
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    await expect(runConsoleQuery("inbox", 200, 30, sql)).rejects.toThrow(
+      "approval kind design is not handled yet",
+    );
+  });
+
   test("inbox: parses an issue_proposal row", async () => {
     const row: SqlRow = {
       approval_request_id: 5,

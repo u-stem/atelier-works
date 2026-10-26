@@ -20,6 +20,8 @@ export const STATUS_ORDER: readonly string[] = [
   "awaiting_approval",
   "approved",
   "rejected",
+  "designing",
+  "awaiting_design_approval",
   "implementing",
   "pr_open",
   "reviewing",
@@ -444,7 +446,8 @@ const FAILURE_STATUSES: ReadonlySet<string> = new Set([
  * 色だけに頼らず、状態の名前を隣に出す。
  */
 export function pipelineStatusVariant(status: string): PipelineStatusVariant {
-  if (status === "awaiting_approval") return "warning";
+  if (status === "awaiting_approval" || status === "awaiting_design_approval")
+    return "warning";
   if (SUCCESS_STATUSES.has(status)) return "success";
   if (FAILURE_STATUSES.has(status)) return "failure";
   return "muted";

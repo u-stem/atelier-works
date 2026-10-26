@@ -86,3 +86,6 @@ export function isPullRequestListTruncated(count: number): boolean {
 export function pullRequestTruncationNote(): string {
   return `${String(PULL_REQUEST_RECORD_LIMIT)}件に達したので、これより古いPRは表示していない場合があります。`;
 }
+
+/** 更新履歴を最初に出す反映の数。残りは「すべて表示」で開く。 */
+export const HISTORY_PREVIEW_COUNT = 3;

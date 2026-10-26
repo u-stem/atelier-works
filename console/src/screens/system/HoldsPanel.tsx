@@ -271,6 +271,18 @@ function FreezesCard(props: PanelProps) {
  * 期限は画面の時計で判定し、取得の間に期限が来た行は、解除のボタンを外して「期限切れ」と出す。
  */
 export function HoldsPanel(props: PanelProps) {
+  const { holds, freezes } = props.data;
+  if (
+    holds.ok &&
+    holds.rows.length === 0 &&
+    freezes.ok &&
+    freezes.schedule.length + freezes.deploy.length === 0
+  ) {
+    // 何も有効でないときは、2つの空のカードを1行にたたむ。
+    return (
+      <EmptyNote>{`${HOLDS_TEXT.noneActive}。${HOLDS_TEXT.placeHint}`}</EmptyNote>
+    );
+  }
   return (
     <div className="flex flex-col gap-6">
       <HoldsCard {...props} />

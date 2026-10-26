@@ -1312,6 +1312,20 @@ describe("getWorkItem", () => {
     expect(item?.conflict_check_id).toBeNull();
   });
 
+  test("reads a missing design attempt as 0", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.design_attempt).toBe(0);
+  });
+
+  test("parses the design attempt of a row that has the column", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, design_attempt: 2 }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.design_attempt).toBe(2);
+  });
+
   test("parses branch and pr_url (工程3 columns)", async () => {
     const { sql } = createFakeSqlClient([
       [

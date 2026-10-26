@@ -34,7 +34,9 @@ type RefreshOptions = {
 };
 
 /** 401は画面上部のバナーが知らせるので、見出しの失敗には数えない。 */
-function isHeaderError(query: RefreshableQuery): boolean {
+export function isHeaderError(
+  query: Pick<RefreshableQuery, "isError" | "error">,
+): boolean {
   return (
     query.isError &&
     !(query.error instanceof ApiFailure && isBannerError(query.error.apiError))

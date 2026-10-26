@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { WorkerLoad } from "../api/guards/workerLoad.ts";
-import { describeWorkerLoad, formatMebibytes } from "./workerLoadView.ts";
+import {
+  describeWorkerLoad,
+  describeWorkerLoadHeadline,
+  formatMebibytes,
+} from "./workerLoadView.ts";
 
 const GIB = 1024 * 1024 * 1024;
 const MIB = 1024 * 1024;
@@ -153,5 +157,30 @@ describe("describeWorkerLoad memory", () => {
 describe("describeWorkerLoad coverage", () => {
   test("states how many of the expected samples were recorded", () => {
     expect(describeWorkerLoad(LOAD).coverage).toBe("直近24時間: 700/720件");
+  });
+});
+
+describe("describeWorkerLoadHeadline", () => {
+  test("lines up the busy samples, the late samples, the memory share and the record count", () => {
+    expect(describeWorkerLoadHeadline(LOAD)).toBe(
+      "枠が塞がっていた記録7件、開始が遅れた記録10件、メモリの最大4%、記録700/720件",
+    );
+  });
+
+  test("shows an unreadable memory share as unknown", () => {
+    const unknown = { ...LOAD, max: { ...LOAD.max, mem_anon_ratio: null } };
+    expect(describeWorkerLoadHeadline(unknown)).toContain("メモリの最大不明");
+  });
+
+  test("shows zero counts as zero", () => {
+    const calm = { ...LOAD, busy_samples: 0, lag_over_samples: 0 };
+    expect(describeWorkerLoadHeadline(calm)).toContain(
+      "枠が塞がっていた記録0件、開始が遅れた記録0件",
+    );
+  });
+
+  test("shows a share that rounds to zero with a decimal", () => {
+    const tiny = { ...LOAD, max: { ...LOAD.max, mem_anon_ratio: 0.004 } };
+    expect(describeWorkerLoadHeadline(tiny)).toContain("メモリの最大0.4%");
   });
 });

@@ -2,8 +2,9 @@
 // 部分一意インデックスの述語は、終端でない状態の一覧をSQLに書き写したものである。
 // `TERMINAL_WORK_ITEM_STATUSES`を変えたのにmigrationを足さないと、
 // 新しく稼働中になる状態がインデックスの対象から漏れる。
-// 述語の検査は、この1つのmigrationのファイルだけを読む。後のmigrationがこのインデックスを
-// 作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
+// 述語の検査は、インデックスを最後に作り直した`20261026120000_design_stage_work_items`のmigrationを読む。
+// 後のmigrationがこのインデックスをまた作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
+// 述語以外の検査は、最初に作ったmigrationのファイルを読む。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -14,6 +15,8 @@ import {
 const UP = "migrations/datatable/main/20261009120000_active_issue_key.up.sql";
 const DOWN =
   "migrations/datatable/main/20261009120000_active_issue_key.down.sql";
+const INDEXES_UP =
+  "migrations/datatable/main/20261026120000_design_stage_work_items.up.sql";
 
 async function upSql(): Promise<string> {
   return Bun.file(UP).text();
@@ -42,9 +45,9 @@ describe("20261009120000_active_issue_key.up.sql", () => {
     const nonTerminal = WORK_ITEM_STATUSES.filter(
       (status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status),
     );
-    expect(indexPredicateStatuses(await upSql()).sort()).toEqual(
-      [...nonTerminal].sort(),
-    );
+    expect(
+      indexPredicateStatuses(await Bun.file(INDEXES_UP).text()).sort(),
+    ).toEqual([...nonTerminal].sort());
   });
 
   test("cancels older duplicate active rows before creating the index", async () => {
