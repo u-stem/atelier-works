@@ -252,6 +252,23 @@ describe("runDesignPrepare and the lease", () => {
   });
 });
 
+describe("runDesignPrepare and a status that changes during the preparation", () => {
+  const movedOnItem = (call: number): WorkItem =>
+    workItem({ status: call < 2 ? "designing" : "awaiting_design_approval" });
+
+  test("skips when the work item leaves designing during the preparation although the lease is still held", async () => {
+    const h = harness({ item: movedOnItem });
+    const result = await runDesignPrepare(h.deps, INPUT);
+    expect(result).toEqual({ skip: true, reason: PIPELINE_LEASE_LOST_REASON });
+  });
+
+  test("does not touch a worktree when the work item leaves designing during the preparation", async () => {
+    const h = harness({ item: movedOnItem, worktreeExists: true });
+    await runDesignPrepare(h.deps, INPUT);
+    expect(touchedWorktree(h.calls)).toBe(false);
+  });
+});
+
 describe("runDesignPrepare and the approved requirements", () => {
   test.each([
     ["none", null],
