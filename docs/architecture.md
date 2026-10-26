@@ -269,7 +269,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `round` | 作業項目の中の連番。`(work_item_id, round)`で一意 |
 | `mode` | `implement`か`fix` |
 | `outcome` | `done`、`requirements_gap`、`check_failed`、`checks_skipped`、`stalled`、`error`のいずれか |
-| `check_output` | 検査の出力の先頭16KB |
+| `check_output` | 検査の出力。16KBに収まらないときは先頭と末尾 |
 | `protected_changes` | 保護パスの変更の一覧(jsonb) |
 | `diff_stat` | 差分の量。`{files, added, deleted}`の形のjsonb |
 
