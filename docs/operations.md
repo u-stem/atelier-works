@@ -4807,6 +4807,24 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 4. 次の回で自己更新が成功することを見る。
    次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
 
+### 自己更新の起動の種類を確かめる
+
+自己更新は、実行のたびに最初のログ(`self_update started`)へ、起動の種類(`trigger`)を出す。
+値は`schedule`、`manual`、`unknown`のいずれかで、判定は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+判定は、実機の定期のジョブでWindmillが`WM_SCHEDULE_PATH`を与えることを前提にする。
+この前提は、コードの試験では確かめられないので、反映の後に次の手順で確かめる。
+
+1. 反映の後の定期の回を`wmill job list --script-path f/factory/self_update`で見つけ、`wmill job logs <id>`でログを読む。
+   `self_update started`の`trigger`が`schedule`で、`schedule_path`にスケジュールのパスが入っていることを見る。
+2. `wmill script run f/factory/self_update`で手動の回を走らせ、同じログの`trigger`が`manual`であることを見る。
+3. 食い違うときは、同じログの`schedule_path`、`has_job_kind`、`has_parent_job`、`has_root_flow_job`を見る。
+   判定の入力に使うべき環境変数を、この値から探す。
+
+同じ範囲(反映前の版と反映後の版が同じ)の成功が`factory.deployments`に2件記録されたときは、ジョブ履歴で2つの実行の開始時刻の重なりと起動元を確かめる。
+起動元が定期と手動のどちらなのかは、このログの`trigger`で切り分ける。
+原因の1つは、手動と定期の2つの実行が重なり、どちらも成功の記録の前に反映を始めたことである。
+`deployed_sha`を直前の版に戻して再反映した運用の結果であれば、同じ範囲が2件になっても異常ではない。
+
 ### 区切った呼び出しが時間切れになったとき
 
 `self_update`の区切った呼び出しが30秒で終わらないと、例外にする。

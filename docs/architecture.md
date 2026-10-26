@@ -692,12 +692,22 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
+毎回のログ(`self_update started`)には、起動の種類(`trigger`)を出す。
+Windmillのジョブの環境変数に`WM_SCHEDULE_PATH`があれば`schedule`、無ければ`manual`とする。
+ジョブの外で`WM_JOB_ID`も無いときは`unknown`とする。
+フローやAPIからの起動も`manual`に含まれる。
+判定の入力も添える。
+スケジュールのパス(`schedule_path`)は値を出す。
+`WM_JOB_KIND`、`WM_PARENT_JOB`、`WM_ROOT_FLOW_JOB_ID`は、値の有無だけを出す。
+出す名前は`has_job_kind`、`has_parent_job`、`has_root_flow_job`である。
+起動の種類は`deployments`には残さず、判定が実機で正しいかの確かめ方は[運用](operations.md)の「自己更新の起動の種類を確かめる」に書く。
+
 記録には、前回の版から今回の版までの間にmainへマージされたPRの番号、題名、作り手、リンクを含める。
 PRは、self cloneの`git log --first-parent`にあるマージのコミットから取り出す。
 件名は`Merge pull request #<N> from <owner>/<branch>`の形で、題名は本文の1行目である。
 GitHubのAPIは呼ばないので、Console用のworkerのネットワークとトークンの権限は広がらない。
 作り手は、ブランチの名前から決める。
-ownerがFactoryのリポジトリと同じで、ブランチが実装ブランチ(`factory/issue-<N>-wi-<id>`)なら`factory`、それ以外のブランチなら`human`にする。
+ownerがFactoryのリポジトリと同じで、実装ブランチ(`factory/issue-<N>-wi-<id>`)の形のブランチなら`factory`、それ以外のブランチなら`human`にする。
 squashでマージされて件名の末尾が`(#<N>)`の形のPRは、ブランチが分からないので`unknown`にする。
 前回の反映が無い初回は、履歴の全体を数えないよう、PRを記録しない。
 題名の取り出しは、GitHubのUIでマージしたコミットの形(本文の1行目がPRの題名)を前提にする。別の形でマージしたコミットは、題名が空になるか、PRとして記録されない。
@@ -712,7 +722,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 `self_update`はこのHEADを毎回読み、通知の版を含むか、ホスト側の作業が要るパスの内容が通知の版と同じなら、通知を解決する。
 通知の解決の後に、通知を解決した回と、再開できる候補が残っている回だけ、`auto_retry_stale_image`を別のジョブで起動する。
 候補が無い回に起動しないのは、何もしないジョブが2分ごとにジョブ履歴とqueueを埋めるためである。
-このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
+このscriptは、イメージの版が古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
 CIの失敗を直す回は再開しない。
 反映した時点でそうなっていれば、通知を出さない。
 
