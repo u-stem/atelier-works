@@ -70,7 +70,7 @@ locks:
   f/factory/lib/design_launch_support: aaf9846cfbf2aad2b278d9551e0dd90ea51be4d3b0f3f891e24e28bd75484642
   f/factory/lib/design_template: 99361cb75e2d5255136200a3d9fa821043b1017ef90032e0a99ca7faaeb1ecf3
   f/factory/lib/discord: f8229c2816e488f0a28ef2c2d9525ebe8d38c3ea0f9b0de266fad1bc446b6110
-  f/factory/lib/doc_tree_hash: 0972364c7078fd03691fbf1a493e5170fff5f7cb2f354ec7af4147c3990df883
+  f/factory/lib/doc_tree_hash: b63ec5138d3ca3dd31336a195211e67916107c27529a86cb5e2d40a10206cfd5
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
   f/factory/lib/drawio_viewer_bump_github: f7b0dc429c460b479e61efaaf2a3a85532aea8fb455cc592f78b344f7a2978ae

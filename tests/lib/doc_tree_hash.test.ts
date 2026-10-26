@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -11,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   checkDocTreeHash,
+  copyDirectoryTreeWithHash,
+  copyFilesWithHash,
   type DirectoryEntryIo,
   hashDirectoryTree,
   REQUIREMENTS_DIR_MISSING_REASON,
@@ -300,6 +303,197 @@ describe("realDirectoryIo with hashDirectoryTree", () => {
     await rm(dir, { recursive: true, force: true });
     await symlink(join(base, "nowhere"), dir);
     expect(await checkDocTreeHash(dir, baseline, hashOf)).toBe("modified");
+  });
+});
+
+describe("copyDirectoryTreeWithHash", () => {
+  const hashOf = (dir: string) => hashDirectoryTree(dir, realDirectoryIo);
+
+  async function tree(): Promise<string> {
+    const dir = join(base, "tree");
+    await mkdir(join(dir, "sub"), { recursive: true });
+    await writeFile(join(dir, "a.md"), "A");
+    await writeFile(join(dir, "sub", "c.txt"), "C");
+    return dir;
+  }
+
+  /** 1回読んだ直後に、元のファイルを別の内容に書き換える読み取り。複製の最中だけ書き換える攻撃に似せる。 */
+  function swapAfterRead(path: string, replacement: string): DirectoryEntryIo {
+    return {
+      ...realDirectoryIo,
+      readFile: async (target) => {
+        const read = await realDirectoryIo.readFile(target);
+        if (target === path) await writeFile(path, replacement);
+        return read;
+      },
+    };
+  }
+
+  test("returns the same hash as hashing the source", async () => {
+    const dir = await tree();
+    const copy = join(base, "copy");
+    expect(await copyDirectoryTreeWithHash(dir, copy)).toBe(await hashOf(dir));
+  });
+
+  test("writes the files of the source into the destination", async () => {
+    const dir = await tree();
+    const copy = join(base, "copy");
+    await copyDirectoryTreeWithHash(dir, copy);
+    expect(await Bun.file(join(copy, "sub", "c.txt")).text()).toBe("C");
+  });
+
+  test("returns a hash that the copy itself reproduces", async () => {
+    const dir = await tree();
+    const copy = join(base, "copy");
+    const hash = await copyDirectoryTreeWithHash(dir, copy);
+    expect(await hashOf(copy)).toBe(hash);
+  });
+
+  test("writes the bytes that it hashed even when the source is swapped right after the read", async () => {
+    const dir = await tree();
+    const copy = join(base, "copy");
+    await copyDirectoryTreeWithHash(
+      dir,
+      copy,
+      swapAfterRead(join(dir, "a.md"), "SWAPPED"),
+    );
+    expect(await Bun.file(join(copy, "a.md")).text()).toBe("A");
+  });
+
+  test("returns the hash of the bytes that it wrote, which the swapped source no longer has", async () => {
+    const dir = await tree();
+    const before = await hashOf(dir);
+    const copy = join(base, "copy");
+    const hash = await copyDirectoryTreeWithHash(
+      dir,
+      copy,
+      swapAfterRead(join(dir, "a.md"), "SWAPPED"),
+    );
+    expect([hash === before, (await hashOf(dir)) === before]).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  test("does not copy a symbolic link but still hashes it", async () => {
+    const dir = await tree();
+    await symlink("a.md", join(dir, "link"));
+    const copy = join(base, "copy");
+    const hash = await copyDirectoryTreeWithHash(dir, copy);
+    expect([
+      hash === (await hashOf(dir)),
+      existsSync(join(copy, "link")),
+    ]).toEqual([true, false]);
+  });
+
+  test("does not copy a special file", async () => {
+    const dir = await tree();
+    Bun.spawnSync(["mkfifo", join(dir, "pipe")]);
+    const copy = join(base, "copy");
+    await copyDirectoryTreeWithHash(dir, copy);
+    expect(existsSync(join(copy, "pipe"))).toBe(false);
+  });
+
+  test("returns null when the source does not exist", async () => {
+    expect(
+      await copyDirectoryTreeWithHash(
+        join(base, "missing"),
+        join(base, "copy"),
+      ),
+    ).toBeNull();
+  });
+
+  test("refuses a source that is a symbolic link", async () => {
+    const dir = await tree();
+    const link = join(base, "link-root");
+    await symlink(dir, link);
+    await expect(
+      copyDirectoryTreeWithHash(link, join(base, "copy")),
+    ).rejects.toThrow("symbolic link");
+  });
+});
+
+describe("copyFilesWithHash", () => {
+  const hashOf = (dir: string) => hashDirectoryTree(dir, realDirectoryIo);
+
+  async function source(): Promise<string> {
+    const dir = join(base, "source");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "requirements.md"), "R");
+    await writeFile(join(dir, "flow.drawio"), "FLOW");
+    await writeFile(join(dir, "other.drawio"), "OTHER");
+    return dir;
+  }
+
+  async function destination(): Promise<string> {
+    const dir = join(base, "destination");
+    await mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  test("hashes the whole source, not only the files it copies", async () => {
+    const dir = await source();
+    const result = await copyFilesWithHash(dir, await destination(), [
+      "flow.drawio",
+    ]);
+    expect(result.hash).toBe(await hashOf(dir));
+  });
+
+  test("copies only the named files", async () => {
+    const dir = await source();
+    const dest = await destination();
+    await copyFilesWithHash(dir, dest, ["flow.drawio"]);
+    expect([
+      existsSync(join(dest, "flow.drawio")),
+      existsSync(join(dest, "other.drawio")),
+      existsSync(join(dest, "requirements.md")),
+    ]).toEqual([true, false, false]);
+  });
+
+  test("lists the files that it copied", async () => {
+    const dir = await source();
+    const result = await copyFilesWithHash(dir, await destination(), [
+      "flow.drawio",
+      "absent.drawio",
+    ]);
+    expect(result.copied).toEqual(["flow.drawio"]);
+  });
+
+  test("does not copy a named file that is a symbolic link", async () => {
+    const dir = await source();
+    await rm(join(dir, "flow.drawio"));
+    await symlink("/etc/hosts", join(dir, "flow.drawio"));
+    const dest = await destination();
+    const result = await copyFilesWithHash(dir, dest, ["flow.drawio"]);
+    expect([result.copied, existsSync(join(dest, "flow.drawio"))]).toEqual([
+      [],
+      false,
+    ]);
+  });
+
+  test("writes the bytes that it hashed even when the source is swapped right after the read", async () => {
+    const dir = await source();
+    const dest = await destination();
+    const target = join(dir, "flow.drawio");
+    const io: DirectoryEntryIo = {
+      ...realDirectoryIo,
+      readFile: async (path) => {
+        const read = await realDirectoryIo.readFile(path);
+        if (path === target) await writeFile(target, "SWAPPED");
+        return read;
+      },
+    };
+    await copyFilesWithHash(dir, dest, ["flow.drawio"], io);
+    expect(await Bun.file(join(dest, "flow.drawio")).text()).toBe("FLOW");
+  });
+
+  test("returns null as the hash when the source does not exist", async () => {
+    const result = await copyFilesWithHash(
+      join(base, "missing"),
+      await destination(),
+      ["flow.drawio"],
+    );
+    expect(result.hash).toBeNull();
   });
 });
 

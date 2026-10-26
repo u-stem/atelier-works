@@ -235,6 +235,20 @@ function memoryFs(initial: Record<string, string>) {
       if (keys.length === 0) return null;
       return keys.map((key) => `${key}\0${files.get(key)}`).join("\n");
     },
+    copyFilesWithHash: async (source, destination, names) => {
+      const copied: string[] = [];
+      for (const name of names) {
+        const content = files.get(`${source}/${name}`);
+        if (content === undefined) continue;
+        copies.push({
+          source: `${source}/${name}`,
+          destination: `${destination}/${name}`,
+        });
+        files.set(`${destination}/${name}`, content);
+        copied.push(name);
+      }
+      return { hash: await fs.hashTree(source), copied };
+    },
   };
   return { fs, files, removedPaths, copies, under };
 }
@@ -1541,11 +1555,14 @@ describe("runDesignGenerate and the baseline of the approved requirements", () =
     const h = await withBaseline();
     const fs: DesignGenerateFs = {
       ...h.deps.fs,
-      copyFile: async (source, destination) => {
-        await h.deps.fs.copyFile(source, destination);
-        if (source.startsWith(`${REQUIREMENTS_DIR}/`)) {
-          h.memory.files.set(`${REQUIREMENTS_DIR}/requirements.md`, "changed");
-        }
+      copyFilesWithHash: async (source, destination, names) => {
+        const result = await h.deps.fs.copyFilesWithHash(
+          source,
+          destination,
+          names,
+        );
+        h.memory.files.set(`${REQUIREMENTS_DIR}/requirements.md`, "changed");
+        return result;
       },
     };
     const result = await runDesignGenerate({ ...h.deps, fs }, INPUT);
@@ -1556,6 +1573,82 @@ describe("runDesignGenerate and the baseline of the approved requirements", () =
       },
       false,
     ]);
+  });
+
+  /** 図の複製が返すハッシュ(複製が読んだバイト列のハッシュ)を決める`fs`。 */
+  function copying(
+    h: ReturnType<typeof harness>,
+    hash: string | null,
+  ): DesignGenerateFs {
+    return {
+      ...h.deps.fs,
+      copyFilesWithHash: async (source, destination, names) => ({
+        ...(await h.deps.fs.copyFilesWithHash(source, destination, names)),
+        hash,
+      }),
+    };
+  }
+
+  test("copies only the declared diagrams through the hashing copy", async () => {
+    const h = await withBaseline();
+    const asked: (readonly string[])[] = [];
+    const fs: DesignGenerateFs = {
+      ...h.deps.fs,
+      copyFilesWithHash: async (source, destination, names) => {
+        asked.push(names);
+        return h.deps.fs.copyFilesWithHash(source, destination, names);
+      },
+    };
+    await runDesignGenerate({ ...h.deps, fs }, INPUT);
+    expect(asked).toEqual([["flow.drawio"]]);
+  });
+
+  test("stops without starting Claude when the bytes that were copied differ from the baseline", async () => {
+    const h = await withBaseline();
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: copying(h, "bytes that were swapped during the copy") },
+      INPUT,
+    );
+    expect([result, h.calls.includes("claude")]).toEqual([
+      {
+        outcome: "needs_human",
+        reason: REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+      },
+      false,
+    ]);
+  });
+
+  test("stops with the missing reason when the directory vanished during the copy", async () => {
+    const h = await withBaseline();
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: copying(h, null) },
+      INPUT,
+    );
+    expect(result).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("removes the copy of the diagrams when the copied bytes differ from the baseline", async () => {
+    const h = await withBaseline();
+    await runDesignGenerate(
+      { ...h.deps, fs: copying(h, "bytes that were swapped during the copy") },
+      INPUT,
+    );
+    expect(h.memory.removedPaths).toContain("/job-tmp/copy-1");
+  });
+
+  test("uses the bytes that were copied as the hash before the run when the draft has no baseline", async () => {
+    const h = harness({ approved: requirementDraft({ doc_hash: null }) });
+    const result = await runDesignGenerate(
+      { ...h.deps, fs: copying(h, "bytes that were swapped during the copy") },
+      INPUT,
+    );
+    expect(result).toEqual({
+      outcome: "needs_human",
+      reason: REQUIREMENTS_MODIFIED_REASON,
+    });
   });
 
   test("stops without saving when Claude changes the requirements", async () => {
@@ -1813,6 +1906,12 @@ describe("the wiring of design_generate main", () => {
   test("hashes the directory with the real hash function", async () => {
     expect(await source()).toContain(
       "hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),",
+    );
+  });
+
+  test("copies the diagrams with the real hashing copy", async () => {
+    expect(await source()).toMatch(
+      /copyFilesWithHash:\s*\(from, to, names\)\s*=>\s*copyFilesWithHash\(from, to, names\)/,
     );
   });
 

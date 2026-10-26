@@ -482,6 +482,115 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
   });
 });
 
+describe("withReadOnlyDocDirCopy and the hash of the copied bytes", () => {
+  const BASELINE = "a".repeat(64);
+
+  /**
+   * 元のディレクトリのハッシュは常に基準値と合い、複製が返すハッシュだけを`copied`で変える。
+   * 複製の最中だけ書き換えて戻す攻撃は、元のハッシュには現れず、複製のハッシュにだけ現れる。
+   */
+  function guardedCopy(
+    copied: string | null,
+    options: { baseline?: string | null } = {},
+  ) {
+    const events: string[] = [];
+    const deps: DocDirCopyDeps = {
+      pathExists: async () => true,
+      makeTempDir: async () => "/tmp/fake-req",
+      copyDir: async () => {
+        events.push("copyDir");
+      },
+      removeDir: async () => {
+        events.push("remove");
+      },
+    };
+    const guard: DocDirGuard = {
+      baseline: options.baseline === undefined ? BASELINE : options.baseline,
+      hashTree: async () => {
+        events.push("hash");
+        return BASELINE;
+      },
+      copyAndHash: async (source, destination) => {
+        events.push(`copyAndHash:${source}:${destination}`);
+        return copied;
+      },
+    };
+    const run = () =>
+      withReadOnlyDocDirCopy(
+        DOC_DIR,
+        async (copy) => {
+          events.push("fn");
+          return copy;
+        },
+        deps,
+        guard,
+      );
+    return { run, events };
+  }
+
+  test("copies with the hashing copy instead of the plain copy", async () => {
+    const g = guardedCopy(BASELINE);
+    await g.run();
+    expect(g.events).toEqual([
+      "hash",
+      `copyAndHash:${DOC_DIR}:/tmp/fake-req/requirements`,
+      "hash",
+      "fn",
+      "remove",
+    ]);
+  });
+
+  test("hands the copy's path to fn when the copied bytes match the baseline", async () => {
+    const g = guardedCopy(BASELINE);
+    expect(await g.run()).toBe("/tmp/fake-req/requirements");
+  });
+
+  test("throws the modified reason when the copied bytes differ from the baseline", async () => {
+    const g = guardedCopy("b".repeat(64));
+    await expect(g.run()).rejects.toMatchObject({
+      reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    });
+  });
+
+  test("does not run fn and removes the copy when the copied bytes differ from the baseline", async () => {
+    const g = guardedCopy("b".repeat(64));
+    await g.run().catch(() => undefined);
+    expect(g.events).toEqual([
+      "hash",
+      `copyAndHash:${DOC_DIR}:/tmp/fake-req/requirements`,
+      "remove",
+    ]);
+  });
+
+  test("throws the missing reason when the directory vanished during the copy", async () => {
+    const g = guardedCopy(null);
+    await expect(g.run()).rejects.toMatchObject({
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("uses the plain copy when there is no baseline", async () => {
+    const g = guardedCopy(null, { baseline: null });
+    await g.run();
+    expect(g.events).toEqual(["copyDir", "fn", "remove"]);
+  });
+
+  test("copies the real directory and hands fn the same bytes that the baseline names", async () => {
+    const source = mkdtempSync(join(tmpdir(), "guard-source-"));
+    writeFileSync(join(source, "requirements.md"), "R");
+    const baseline = await docDirGuardFor({}).hashTree(source);
+    const seen = await withReadOnlyDocDirCopy(
+      source,
+      async (copy) =>
+        copy === null ? null : Bun.file(join(copy, "requirements.md")).text(),
+      defaultDocDirCopyDeps,
+      docDirGuardFor({ requirements_doc_hash: baseline }),
+    );
+    rmSync(source, { recursive: true, force: true });
+    expect(seen).toBe("R");
+  });
+});
+
 describe("withReadOnlyDocDirCopy and a context that has no baseline item", () => {
   const deps: DocDirCopyDeps = {
     pathExists: async () => true,
@@ -781,6 +890,26 @@ describe("docDirGuardFor", () => {
   test("hands over a function that logs the warning", () => {
     const guard = docDirGuardFor({});
     expect(typeof guard.warn).toBe("function");
+  });
+
+  test("hands over a copy that hashes the bytes it writes", () => {
+    const guard = docDirGuardFor({});
+    expect(typeof guard.copyAndHash).toBe("function");
+  });
+
+  test("copies a real directory and returns the hash that hashTree gives", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "doc-guard-copy-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "doc-guard-dest-"));
+    try {
+      writeFileSync(join(dir, "requirements.md"), "R");
+      const guard = docDirGuardFor(CONTEXT);
+      expect(await guard.copyAndHash?.(dir, join(elsewhere, "copy"))).toBe(
+        await guard.hashTree(dir),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 });
 

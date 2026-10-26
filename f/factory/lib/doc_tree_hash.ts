@@ -219,3 +219,26 @@ export async function checkDocTreeHash(
   if (current === null) return "missing";
   return current === baseline ? "match" : "modified";
 }
+
+/** 複製の書き出し。テストでは差し替える。 */
+export type CopiedFiles = {
+  readonly hash: string | null;
+  readonly copied: readonly string[];
+};
+
+export async function copyDirectoryTreeWithHash(
+  _source: string,
+  _destination: string,
+  _io: DirectoryEntryIo = realDirectoryIo,
+): Promise<string | null> {
+  return null;
+}
+
+export async function copyFilesWithHash(
+  _source: string,
+  _destination: string,
+  _files: readonly string[],
+  _io: DirectoryEntryIo = realDirectoryIo,
+): Promise<CopiedFiles> {
+  return { hash: null, copied: [] };
+}
