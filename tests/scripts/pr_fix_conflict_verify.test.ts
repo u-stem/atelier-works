@@ -19,7 +19,22 @@ const CLEAN: ForbiddenChangeResult = { blocked: false, reasons: [] };
 const TREE_1 = "1".repeat(40);
 const TREE_2 = "2".repeat(40);
 
-function check(ok: boolean): CheckCommandResult {
+const SETPRIV_MISSING =
+  "setpriv: failed to execute bunx: No such file or directory";
+
+/** `"unrunnable"`は、`setpriv`が検査コマンドの実行ファイルを起動できなかった結果を表す。 */
+function check(state: boolean | "unrunnable"): CheckCommandResult {
+  if (state === "unrunnable") {
+    return {
+      command: "bunx --bun tsc --noEmit",
+      ok: false,
+      exitCode: 127,
+      timedOut: false,
+      outputTail: SETPRIV_MISSING,
+      output: SETPRIV_MISSING,
+    };
+  }
+  const ok = state;
   return {
     command: "mise run check",
     ok,
@@ -49,7 +64,7 @@ type Options = {
   readonly inspections?: readonly ForbiddenChangeResult[];
   readonly resolutions?: readonly (readonly string[])[];
   readonly treeShas?: readonly string[];
-  readonly checks?: readonly boolean[];
+  readonly checks?: readonly (boolean | "unrunnable")[];
   readonly checksError?: Error;
   readonly scan?: ConflictFixVerifyDeps["scanText"];
 };
@@ -100,9 +115,9 @@ function harness(options: Options = {}): {
     runChecks: async () => {
       calls.push("runChecks");
       if (options.checksError !== undefined) throw options.checksError;
-      const ok = options.checks?.[checkIndex] ?? true;
+      const state = options.checks?.[checkIndex] ?? true;
       checkIndex += 1;
-      return [check(ok)];
+      return [check(state)];
     },
     scanText:
       options.scan ??
@@ -419,6 +434,20 @@ describe("runConflictFixVerify: the check commands", () => {
     expect(
       calls.filter((call) => call.startsWith("reportCheckImageStale")),
     ).toEqual([`reportCheckImageStale:${stale.message}`]);
+  });
+
+  test("returns guard_blocked with the command and setpriv's message when a check could not run", async () => {
+    const { deps } = harness({ checks: ["unrunnable"] });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect([result.outcome, result.reason]).toEqual([
+      "guard_blocked",
+      `check command could not run: bunx --bun tsc --noEmit: ${SETPRIV_MISSING}`,
+    ]);
+  });
+
+  test("returns blocked with the fixed reason when a check fails by itself", async () => {
+    const { deps } = harness({ checks: [false] });
+    expect((await runConflictFixVerify(deps, INPUT)).outcome).toBe("blocked");
   });
 
   test("lets another error of the checks through", async () => {
