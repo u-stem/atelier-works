@@ -77,16 +77,38 @@ function withHold(overrides: Record<string, unknown>): HoldsSnapshot {
 }
 
 describe("HoldsPanel when nothing is active", () => {
-  test("says that no hold is active", () => {
-    expect(render(EMPTY)).toContain("有効な保留はありません");
+  test("says in one line that no hold or freeze is active", () => {
+    expect(render(EMPTY)).toContain("有効な保留と凍結はありません");
   });
 
-  test("says that no freeze or deploy hold is active", () => {
-    expect(render(EMPTY)).toContain("有効な凍結とdeployの保留はありません");
+  test("folds the two empty cards into that one line", () => {
+    expect(render(EMPTY)).not.toContain("<h3");
   });
 
   test("tells how to place a hold", () => {
     expect(render(EMPTY)).toContain("mise run hold:place");
+  });
+
+  test("draws a single paragraph", () => {
+    expect(render(EMPTY).match(/<p[ >]/g)).toHaveLength(1);
+  });
+
+  test("keeps the cards when only the holds are empty", () => {
+    expect(render({ ...FULL, holds: { ok: true, rows: [] } })).toContain(
+      "有効な保留はありません",
+    );
+  });
+
+  test("keeps the cards when only the freezes are empty", () => {
+    expect(
+      render({ ...FULL, freezes: { ok: true, schedule: [], deploy: [] } }),
+    ).toContain("有効な凍結とdeployの保留はありません");
+  });
+
+  test("keeps the cards when a source cannot be read", () => {
+    expect(
+      render({ ...EMPTY, freezes: { ok: false, reason: "down" } }),
+    ).toContain("凍結とdeployの保留を読めません");
   });
 });
 

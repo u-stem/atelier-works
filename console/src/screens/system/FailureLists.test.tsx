@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router";
 import type { SummaryFailure } from "../../api/guards/summary.ts";
 import type { SystemOrphanFailure } from "../../api/guards/systemStatus.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
-import { AuditFailureList, OrphanFailureList } from "./FailureLists.tsx";
+import { AuditFailureList, OrphanFailureGroups } from "./FailureLists.tsx";
 
 const NOW = Date.parse("2026-10-11T04:00:00.000Z");
 const OCCURRED = "2026-10-11T03:00:00.000Z";
@@ -68,7 +68,7 @@ function renderOrphan(count: number, initialPage?: number): string {
   return renderToStaticMarkup(
     <MemoryRouter>
       <TooltipProvider>
-        <OrphanFailureList
+        <OrphanFailureGroups
           failures={orphanFailures(count)}
           now={NOW}
           initialPage={initialPage}
@@ -152,7 +152,7 @@ describe("AuditFailureList pagination", () => {
   });
 });
 
-describe("OrphanFailureList pagination", () => {
+describe("OrphanFailureGroups pagination inside a group", () => {
   test("shows the last item of the first page", () => {
     expect(renderOrphan(11)).toContain("orphan 010");
   });
@@ -179,5 +179,117 @@ describe("OrphanFailureList pagination", () => {
 
   test("keeps the empty message for no failures", () => {
     expect(renderOrphan(0)).toContain("作業項目に紐づかない失敗はありません");
+  });
+});
+
+/** 流れごとに回数を変えた、失敗の並び。`flow`の順に`times`回ずつ、時刻は新しい順に並べる。 */
+function orphansOf(flows: Record<string, number>): SystemOrphanFailure[] {
+  let id = 0;
+  return Object.entries(flows).flatMap(([flow, times]) =>
+    Array.from({ length: times }, (_, index) => {
+      id += 1;
+      return {
+        job_failure_id: id,
+        flow_path: flow,
+        job_id: "x",
+        step: null,
+        error: `${flow} #${String(index + 1)}`,
+        occurred_at: new Date(
+          Date.parse(OCCURRED) - (id + index) * 60_000,
+        ).toISOString(),
+      };
+    }),
+  );
+}
+
+function renderGroups(failures: SystemOrphanFailure[]): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <TooltipProvider>
+        <OrphanFailureGroups failures={failures} now={NOW} />
+      </TooltipProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("OrphanFailureGroups", () => {
+  test("draws one fold for each flow", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2 })).match(/<details/g),
+    ).toHaveLength(2);
+  });
+
+  test("names the flow in the summary line", () => {
+    expect(renderGroups(orphansOf({ "f/a": 3 }))).toMatch(
+      /<summary[^>]*>.*f\/a/,
+    );
+  });
+
+  test("tells how many times the flow failed in the summary line", () => {
+    expect(renderGroups(orphansOf({ "f/a": 3 }))).toMatch(
+      /<summary[^>]*>.*3回/,
+    );
+  });
+
+  test("tells the time of the latest failure in the summary line", () => {
+    expect(renderGroups(orphansOf({ "f/a": 3 }))).toMatch(
+      /<summary[^>]*>.*最新/,
+    );
+  });
+
+  test("folds the groups by default", () => {
+    expect(renderGroups(orphansOf({ "f/a": 3 }))).not.toMatch(
+      /<details[^>]* open/,
+    );
+  });
+
+  test("keeps each failure inside its fold", () => {
+    expect(renderGroups(orphansOf({ "f/a": 3 }))).toContain("f/a #2");
+  });
+
+  test("shows the failure text as plain text", () => {
+    expect(
+      renderGroups(
+        orphansOf({ "f/a": 1 }).map((failure) => ({
+          ...failure,
+          error: "<b>x</b>",
+        })),
+      ),
+    ).toContain("&lt;b&gt;x&lt;/b&gt;");
+  });
+
+  test("puts the flow with the newest failure first", () => {
+    const html = renderGroups(orphansOf({ "f/new": 1, "f/old": 1 }).reverse());
+    expect(html.indexOf("f/new")).toBeLessThan(html.indexOf("f/old"));
+  });
+
+  test("opens only the group with the newest failure when a link jumps here", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2, "f/c": 1 })).match(
+        /data-jump-open/g,
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("puts the jump attribute on the first group", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2 })).split("<details")[1],
+    ).toContain("data-jump-open");
+  });
+
+  test("does not put the jump attribute on the second group", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2 })).split("<details")[2],
+    ).not.toContain("data-jump-open");
+  });
+
+  test("keeps the empty message for no failures", () => {
+    expect(renderGroups([])).toContain("作業項目に紐づかない失敗はありません");
+  });
+
+  test("states the number of failures and flows ahead of the list", () => {
+    expect(renderGroups(orphansOf({ "f/a": 3, "f/b": 2 }))).toContain(
+      "5件、2つのflow",
+    );
   });
 });

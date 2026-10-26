@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FAILURE_REASON_HEAD_LENGTH,
   failureReasonText,
+  HISTORY_PREVIEW_COUNT,
   isPullRequestListTruncated,
   PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
@@ -157,5 +158,11 @@ describe("pullRequestTruncationNote", () => {
     expect(pullRequestTruncationNote()).toContain(
       "表示していない場合があります",
     );
+  });
+});
+
+describe("HISTORY_PREVIEW_COUNT", () => {
+  test("shows three entries first", () => {
+    expect(HISTORY_PREVIEW_COUNT).toBe(3);
   });
 });

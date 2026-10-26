@@ -66,3 +66,51 @@ export function findScrollRoot(start: Element): Element | null {
     (element) => getComputedStyle(element).overflowY,
   );
 }
+
+/** 枠の上端に貼り付く部分を示す属性。 */
+const STICKY_HEADER_ATTRIBUTE = "data-sticky-header";
+
+/** 枠の上端に貼り付く部分に展開して付ける属性。 */
+export const STICKY_HEADER_PROPS: Record<string, string> = {
+  [STICKY_HEADER_ATTRIBUTE]: "",
+};
+
+/** 貼り付く部分を探す選択子。 */
+export const STICKY_HEADER_SELECTOR = `[${STICKY_HEADER_ATTRIBUTE}]`;
+
+/** 貼り付く部分の下に空ける余白(px)。 */
+export const STICKY_HEADER_GAP = 16;
+
+/** 高さを測れる要素。 */
+export interface StickyHeaderBox {
+  getBoundingClientRect(): { height: number };
+}
+
+/** 貼り付く部分を探せる枠。 */
+export interface StickyHeaderScope<T extends StickyHeaderBox> {
+  querySelector(selector: string): T | null;
+}
+
+/**
+ * 枠の上端に貼り付く部分が覆う高さに、余白を足して返す。
+ * 対象をスクロールで枠の上端へ寄せるときに、貼り付く部分の下へ止めるために使う。
+ * 部分が無いか、貼り付いていない(`position`が`sticky`でない)ときは0を返す。
+ */
+export function stickyHeaderOffsetWith<T extends StickyHeaderBox>(
+  root: StickyHeaderScope<T>,
+  positionOf: (element: T) => string,
+): number {
+  const header = root.querySelector(STICKY_HEADER_SELECTOR);
+  if (header === null || positionOf(header) !== "sticky") {
+    return 0;
+  }
+  return header.getBoundingClientRect().height + STICKY_HEADER_GAP;
+}
+
+/** `stickyHeaderOffsetWith`に、描画後の計算済みのスタイルを渡す。 */
+export function stickyHeaderOffset(root: Element): number {
+  return stickyHeaderOffsetWith(
+    root,
+    (element) => getComputedStyle(element).position,
+  );
+}
