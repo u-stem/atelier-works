@@ -423,7 +423,7 @@ export const CHECK_GITCONFIG_NAME = ".gitconfig";
 /**
  * 検査用のHOMEの`.gitconfig`の本文を返す。そのworktreeだけを`safe.directory`にする。
  * 検査コマンドの中のテストは、子のgitを起動するときに`GIT_`で始まる環境変数をすべて外すことがあり、
- * `checkEnv`の`GIT_CONFIG_*`だけでは、検査用のuidがrootのworktreeを読むgitが所有者の違いで拒まれる。
+ * `checkEnv`の`GIT_CONFIG_*`だけでは、そのgitがrootの所有のmain cloneの`.git`を所有者の違いで拒む。
  * HOMEの設定は環境変数を外した子にも効く。
  * 後始末でrootが動かすgitは、この設定を読まない。HOMEを使う検査用のuidのプロセスだけが読み、
  * 書き換えられても影響は検査用のuidのgitに限られる。

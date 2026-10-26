@@ -171,13 +171,6 @@ export type CheckHomeDirOps = {
   ) => Promise<void>;
 };
 
-export async function createCheckHomeDir(
-  _input: { readonly worktreeDir: string },
-  _ops?: CheckHomeDirOps,
-): Promise<CheckHomeDir> {
-  return { path: "", cleanup: async () => {} };
-}
-
 /**
  * `runAllowedCheckCommands`の1回の呼び出し用に、新しい非公開の一時ディレクトリを作る。
  * 検査コマンドは信頼できない対象リポジトリのコードを、コンテナの分離なしに実行する。
@@ -191,31 +184,38 @@ export async function createCheckHomeDir(
  * 置き場所は`os.tmpdir()`(`TMPDIR`)ではなく、固定の`/tmp`にする。
  * ジョブの`TMPDIR`は検査用のuidが入れない0700の下を指し、そこに作るとHOMEにたどり着けないためである。
  * 直下に、worktreeだけを`safe.directory`にする`.gitconfig`(`checkGitConfig`)を置く。
- * 検査コマンドの中のテストが`GIT_`の環境変数を外してgitを起動しても、検査用のuidがworktreeを読めるようにするためである。
+ * 検査コマンドの中のテストが`GIT_`の環境変数を外してgitを起動しても、検査用のuidがrootの所有のmain cloneの`.git`を読めるようにするためである。
  * 本文はrootが書き、実行の前の受け渡しで検査用のuidの所有になる。
  * 本文を作れないパスは、HOMEを作る前に拒み、消し残しを作らない。
  */
-const defaultCreateCheckHomeDir: CreateCheckHomeDir = async ({
-  worktreeDir,
-}) => {
+const defaultHomeDirOps: CheckHomeDirOps = { mkdtemp, mkdir, writeFile, rm };
+
+export async function createCheckHomeDir(
+  { worktreeDir }: { readonly worktreeDir: string },
+  ops: CheckHomeDirOps = defaultHomeDirOps,
+): Promise<CheckHomeDir> {
   const gitConfig = checkGitConfig(worktreeDir);
-  const dir = await mkdtemp(join(CHECK_HOME_PARENT, "factory-check-home-"));
+  const dir = await ops.mkdtemp(join(CHECK_HOME_PARENT, "factory-check-home-"));
   try {
-    await mkdir(checkTmpDir(dir), { mode: 0o700 });
-    await writeFile(join(dir, CHECK_GITCONFIG_NAME), gitConfig, {
+    await ops.mkdir(checkTmpDir(dir), { mode: 0o700 });
+    await ops.writeFile(join(dir, CHECK_GITCONFIG_NAME), gitConfig, {
       mode: 0o600,
     });
   } catch (error) {
-    await rm(dir, { recursive: true, force: true });
+    // 掃除の失敗で、元のエラーを隠さない。
+    await ops.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
   return {
     path: dir,
     cleanup: async () => {
-      await rm(dir, { recursive: true, force: true });
+      await ops.rm(dir, { recursive: true, force: true });
     },
   };
-};
+}
+
+const defaultCreateCheckHomeDir: CreateCheckHomeDir = (input) =>
+  createCheckHomeDir(input);
 
 const ESCAPING_SYMLINKS_COMMAND = "check sandbox: symlink scan";
 const ESCAPING_SYMLINKS_LISTED = 20;
