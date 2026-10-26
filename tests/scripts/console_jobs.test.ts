@@ -482,7 +482,7 @@ describe("loadJobDetail response", () => {
     expect(detail.found && detail.job.parent_job).toBe(PARENT);
   });
 
-  test("hides the parent of a job when the parent is outside f/factory/", async () => {
+  test("answers a job whose parent is outside f/factory/ like a missing job", async () => {
     const job = completedJob({ parent_job: PARENT, is_flow_step: false });
     const detail = await loadJobDetail(
       ports({
@@ -494,29 +494,100 @@ describe("loadJobDetail response", () => {
       ID,
       { includeOutput: false },
     );
-    expect(detail.found && detail.job.parent_job).toBeNull();
+    expect(detail.found).toBe(false);
   });
 
-  test("hides the parent of a job when the parent cannot be read", async () => {
-    const job = completedJob({ parent_job: PARENT, is_flow_step: false });
+  test("answers a job with a parent like a missing job when the step flag is absent", async () => {
+    const { is_flow_step: _omitted, ...rest } = completedJob({
+      parent_job: PARENT,
+    });
     const detail = await loadJobDetail(
-      ports({ job, otherJobs: { [PARENT]: new Error("gone") } }),
+      ports({
+        job: rest,
+        otherJobs: {
+          [PARENT]: completedJob({ id: PARENT, job_kind: "flowpreview" }),
+        },
+      }),
       ID,
       { includeOutput: false },
     );
-    expect(detail.found && detail.job.parent_job).toBeNull();
+    expect(detail.found).toBe(false);
   });
 
-  test("hides a parent whose id is not a UUID, without reading it", async () => {
+  test("shows the parent of a job that is not a flow step when the parent is a flow", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: false });
+    const detail = await loadJobDetail(
+      ports({
+        job,
+        otherJobs: { [PARENT]: completedJob({ id: PARENT, job_kind: "flow" }) },
+      }),
+      ID,
+      { includeOutput: false },
+    );
+    expect(detail.found && detail.job.parent_job).toBe(PARENT);
+  });
+
+  test("throws again when the parent of a job cannot be read", async () => {
+    const job = completedJob({ parent_job: PARENT, is_flow_step: false });
+    await expect(
+      loadJobDetail(
+        ports({ job, otherJobs: { [PARENT]: new Error("gone") } }),
+        ID,
+        { includeOutput: false },
+      ),
+    ).rejects.toThrow("gone");
+  });
+
+  test("answers a job whose parent id is not a UUID like a missing job, without reading it", async () => {
     const calls: Calls = [];
     const job = completedJob({ parent_job: "../x", is_flow_step: false });
     const detail = await loadJobDetail(ports({ job, calls }), ID, {
       includeOutput: false,
     });
-    expect([detail.found && detail.job.parent_job, calls]).toEqual([
-      null,
-      ["getJob"],
-    ]);
+    expect([detail.found, calls]).toEqual([false, ["getJob"]]);
+  });
+
+  /** `count`段の親を持つジョブと、その親の連鎖。連鎖の先頭はflowで、その親は無い。 */
+  function chainOf(count: number) {
+    const ids = Array.from({ length: count }, (_, i) => uuid(100 + i));
+    const otherJobs: Record<string, unknown> = {};
+    ids.forEach((id, i) => {
+      otherJobs[id] = completedJob({
+        id,
+        job_kind: "flow",
+        is_flow_step: i < count - 1,
+        parent_job: ids[i + 1] ?? null,
+      });
+    });
+    return {
+      job: completedJob({ parent_job: ids[0], is_flow_step: true }),
+      otherJobs,
+    };
+  }
+
+  test("shows a flow step that has eight parents up to the root", async () => {
+    const { job, otherJobs } = chainOf(8);
+    const detail = await loadJobDetail(ports({ job, otherJobs }), ID, {
+      includeOutput: false,
+    });
+    expect(detail.found).toBe(true);
+  });
+
+  test("answers a flow step that has nine parents like a missing job", async () => {
+    const { job, otherJobs } = chainOf(9);
+    const detail = await loadJobDetail(ports({ job, otherJobs }), ID, {
+      includeOutput: false,
+    });
+    expect(detail.found).toBe(false);
+  });
+
+  test("reads no more than eight parents", async () => {
+    const calls: Calls = [];
+    const { job, otherJobs } = chainOf(12);
+    await loadJobDetail(ports({ job, otherJobs, calls }), ID, {
+      includeOutput: false,
+    });
+    expect(calls.length).toBe(9);
   });
 
   test("answers a flow step whose parent is a flow preview like a missing job", async () => {
@@ -833,6 +904,24 @@ describe("loadActiveJobs", () => {
       includeConsole: false,
     });
     expect(list.truncated).toBe(true);
+  });
+
+  test("does not return the parent id of a job in the queue", async () => {
+    const queue = [queuedJob({ parent_job: PARENT, is_flow_step: false })];
+    const list = await loadActiveJobs(ports({ queue }), {
+      includeConsole: false,
+    });
+    expect(list.jobs.map((job) => job.parent_job)).toEqual([null]);
+  });
+
+  test("does not return the parent id of a job in the history", async () => {
+    const list = await loadJobHistory(
+      ports({
+        jobs: [completedJob({ parent_job: PARENT, is_flow_step: false })],
+      }),
+      { includeConsole: false },
+    );
+    expect(list.jobs.map((job) => job.parent_job)).toEqual([null]);
   });
 
   test("says that a history page is not cut by the queue", async () => {

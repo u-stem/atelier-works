@@ -9,7 +9,7 @@
  * Windmill APIトークンのように形式が公開されていないトークンは、
  * 完全一致でマスクするため`secrets`で明示的に渡す必要がある。
  */
-const SECRET_PATTERNS: readonly RegExp[] = [
+export const SECRET_PATTERNS: readonly RegExp[] = [
   // GitHubのfine-grained PAT。`github_pat_`の後に約82字の英数字と`_`が続く。
   /github_pat_[A-Za-z0-9_]{20,}/g,
   // GitHubのclassic PAT、OAuth、app、refreshトークンの接頭辞。

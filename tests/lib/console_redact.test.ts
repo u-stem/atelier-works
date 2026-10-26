@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isRecord,
   LOG_LIMIT_BYTES,
   RESULT_LIMIT_BYTES,
   redactLog,
@@ -7,6 +8,8 @@ import {
   redactText,
   redactValue,
 } from "../../f/factory/lib/console_redact.ts";
+import { SECRET_PATTERNS } from "../../f/factory/lib/log.ts";
+import * as types from "../../f/factory/lib/types.ts";
 
 // 形だけが本物らしい偽の値。実在の鍵ではない。
 const GH_TOKEN = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyzAB"}`;
@@ -144,6 +147,32 @@ describe("redactLog with a line that is not JSON", () => {
   });
 });
 
+describe("redactLog with escaped quotes", () => {
+  test("masks a password inside a JSON string in an error line", () => {
+    const raw = 'Error: {"body":"{\\"password\\":\\"hunter2\\"}"}';
+    expect(redactLog(raw).text).not.toContain("hunter2");
+  });
+
+  test("masks a token pair whose quotes are escaped", () => {
+    const raw = 'request failed token=\\"abc123\\" retry';
+    expect(redactLog(raw).text).not.toContain("abc123");
+  });
+
+  test("keeps the text around an escaped pair", () => {
+    const raw = 'request failed token=\\"abc123\\" retry';
+    expect(redactLog(raw).text).toContain("retry");
+  });
+
+  test("masks a pair with single quotes that are escaped", () => {
+    const raw = "x password=\\'hunter2\\' y";
+    expect(redactLog(raw).text).not.toContain("hunter2");
+  });
+
+  test("reports that it masked an escaped pair", () => {
+    expect(redactLog('token=\\"abc123\\"').masked).toBe(true);
+  });
+});
+
 describe("redactLog flags", () => {
   test("reports that it masked something", () => {
     expect(redactLog(`x ${GH_TOKEN}`).masked).toBe(true);
@@ -275,6 +304,36 @@ describe("redactLog with many PEM markers", () => {
     const raw =
       "-----BEGIN PRIVATE KEY-----\nZq9abcdefghijklmnopqrstuvwxyz0123\n";
     expect(redactLog(raw).text).not.toContain("Zq9abcdef");
+  });
+
+  test("masks the headers and the body of an encrypted legacy key without an END marker", () => {
+    const raw = [
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "Proc-Type: 4,ENCRYPTED",
+      "DEK-Info: AES-128-CBC,0123456789ABCDEF",
+      "",
+      "Zq9abcdefghijklmnopqrstuvwxyz0123",
+      "",
+    ].join("\n");
+    const text = redactLog(raw).text;
+    expect([text.includes("DEK-Info"), text.includes("Zq9abc")]).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  test("masks the body of a key whose lines carry a prefix, without an END marker", () => {
+    const raw = [
+      "[stderr] -----BEGIN PRIVATE KEY-----",
+      "[stderr] MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+      "[stderr] KCAQEAx9zabcdefghijklmnopqrstuv",
+      "",
+    ].join("\n");
+    const text = redactLog(raw).text;
+    expect([text.includes("MIIEvQ"), text.includes("KCAQEA")]).toEqual([
+      false,
+      false,
+    ]);
   });
 
   test("hides at most 16384 characters after an unclosed BEGIN marker", () => {
@@ -423,6 +482,23 @@ describe("redactResult", () => {
     expect(out.text).not.toContain("s3cr3tvalue");
   });
 
+  test("masks a password inside a JSON string of a string result", () => {
+    const raw = 'Error: {"body":"{\\"password\\":\\"hunter2\\"}"}';
+    expect(redactResult(raw).text).not.toContain("hunter2");
+  });
+
+  test("masks an escaped token pair in a string result", () => {
+    expect(redactResult('failed token=\\"abc123\\"').text).not.toContain(
+      "abc123",
+    );
+  });
+
+  test("masks an escaped token pair in a leaf", () => {
+    expect(
+      redactResult({ out: 'failed token=\\"abc123\\"' }).text,
+    ).not.toContain("abc123");
+  });
+
   test("masks a bearer header in a string leaf", () => {
     const out = redactResult({ header: "Authorization: Bearer abcdef123456" });
     expect(out.text).not.toContain("abcdef123456");
@@ -515,15 +591,38 @@ describe("adversarial input", () => {
   });
 
   // 入力を倍にしたとき、所要時間が入力長の二乗の増え方(4倍)にならないこと。
-  // 所要時間が数十ミリ秒に満たないときは、測定の揺れを避けるため下限で比べる。
+  // 各サイズを3回測って最小値で比べ、並列の負荷による揺れを避ける。
+  // 所要時間が0.2秒に満たないときは、測定の揺れを避けるため下限で比べる。
+  function minSeconds(unit: string, bytes: number): number {
+    return Math.min(...[1, 2, 3].map(() => secondsToRedactLog(unit, bytes)));
+  }
+
   test.each(CASES)(
     "redactLog does not grow quadratically on %s",
     (_name, unit) => {
-      const half = secondsToRedactLog(unit, 256 * KB);
-      const full = secondsToRedactLog(unit, 512 * KB);
-      expect(full).toBeLessThan(3 * Math.max(half, 0.05));
+      const half = minSeconds(unit, 256 * KB);
+      const full = minSeconds(unit, 512 * KB);
+      expect(full).toBeLessThan(3 * Math.max(half, 0.2));
     },
   );
+
+  test("redactLog finishes a single 512KB line of JWT heads in under a second", () => {
+    const started = performance.now();
+    redactLog("eyJ-".repeat(131072));
+    expect((performance.now() - started) / 1000).toBeLessThan(1);
+  });
+
+  test("redactLog finishes a JSON line that wraps 512KB of JWT heads in under a second", () => {
+    const started = performance.now();
+    redactLog(`{"a":"${"eyJ-".repeat(131072)}"}`);
+    expect((performance.now() - started) / 1000).toBeLessThan(1);
+  });
+
+  test("redactLog finishes a JSON line that wraps 256KB of JWT heads in under a second", () => {
+    const started = performance.now();
+    redactLog(`{"a":"${"eyJ-".repeat(65536)}"}`);
+    expect((performance.now() - started) / 1000).toBeLessThan(1);
+  });
 
   test("redactResult finishes a 500KB result in a few seconds", () => {
     const started = performance.now();
@@ -574,5 +673,54 @@ describe("redactValue", () => {
 
   test("reports that it masked nothing", () => {
     expect(redactValue({ a: "plain" }).masked).toBe(false);
+  });
+});
+
+describe("the copies of the known shapes", () => {
+  // log.tsの`SECRET_PATTERNS`と同じ順の見本。パターンが増えたら、ここも増やす。
+  const SAMPLES: readonly string[] = [
+    ["github_pat_", "A".repeat(22)].join(""),
+    ["ghp_", "A".repeat(22)].join(""),
+    ["sk-ant-oat", "A".repeat(12)].join(""),
+    ["sk-ant-", "A".repeat(12)].join(""),
+    ["https://discord.com/api/webhooks/", "123456", "/", "abcdef_ghij"].join(
+      "",
+    ),
+  ];
+
+  test("has a sample for every pattern of log.ts", () => {
+    expect(SAMPLES.length).toBe(SECRET_PATTERNS.length);
+  });
+
+  test.each(SAMPLES.map((sample, index): [number, string] => [index, sample]))(
+    "sample %i is a match of its pattern",
+    (index, sample) => {
+      const pattern = SECRET_PATTERNS[index];
+      expect(
+        pattern !== undefined && new RegExp(pattern.source).test(sample),
+      ).toBe(true);
+    },
+  );
+
+  test.each(SAMPLES.map((sample, index): [number, string] => [index, sample]))(
+    "redactText masks sample %i",
+    (_index, sample) => {
+      expect(redactText(`x ${sample} y`).text).toBe("x *** y");
+    },
+  );
+});
+
+describe("isRecord of the redact module", () => {
+  test.each([
+    ["null", null],
+    ["an array", []],
+    ["an empty object", {}],
+    ["a string", "x"],
+    ["a number", 1],
+    ["undefined", undefined],
+    ["a date", new Date(0)],
+    ["a null prototype object", Object.create(null)],
+  ])("answers like lib/types.ts for %s", (_name, value) => {
+    expect(isRecord(value)).toBe(types.isRecord(value));
   });
 });

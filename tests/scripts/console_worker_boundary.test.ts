@@ -589,6 +589,46 @@ describe("the SDK use scan", () => {
     expect(sdkFindings("const a = job.self;").problems).toEqual([]);
   });
 
+  test("flags require held in a variable", () => {
+    expect(
+      sdkFindings('const load = require; load("node:child_process");').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a call of require", () => {
+    expect(sdkFindings('const fs = require("node:fs");').problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags require taken from import.meta", () => {
+    expect(
+      sdkFindings("const { require: load } = import.meta;").problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags import.meta.env", () => {
+    expect(sdkFindings("const t = import.meta.env.X;").problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags import.meta by itself", () => {
+    expect(sdkFindings("const m = import.meta;").problems).not.toEqual([]);
+  });
+
+  test("flags new Worker", () => {
+    expect(sdkFindings('new Worker("w.js");').problems).not.toEqual([]);
+  });
+
+  test("does not flag a key that is named require", () => {
+    expect(sdkFindings("const a = { require: 1 };").problems).toEqual([]);
+  });
+
+  test("does not flag a property that is named Worker", () => {
+    expect(sdkFindings("const a = job.Worker;").problems).toEqual([]);
+  });
+
   test("flags a spread that overrides the resource path", () => {
     expect(
       sdkFindings(
@@ -798,6 +838,10 @@ describe("the escape hatch scan", () => {
     expect(escapeHatches("// eval( and .constructor\nconst a = 1;")).toEqual(
       [],
     );
+  });
+
+  test("does not flag a property that is named Function", () => {
+    expect(escapeHatches("const f = job.Function;")).toEqual([]);
   });
 
   test("does not flag the word Function in a string", () => {
