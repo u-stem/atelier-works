@@ -2352,6 +2352,7 @@ Markdown、HTML、`innerHTML`、ANSIの解釈、自動のリンクを使わな�
 出力にはdefaultのworkerで動いたscriptの出力が含まれ、Issueに由来する値も混じるためである。
 `tests/scripts/console_jobs_render_contract.test.ts`が、部品のソースにこれらの経路が無いことを確かめる。
 見えない文字と、並びの見た目を入れ替える文字は、`src/lib/safeText.ts`の`safeText`で代替文字に置き換える。
+置き換える文字の範囲は`displayableIssueText`と同じで、この入口が自分で持つ。保護パスの外のファイルに頼らないためである。
 描画の部品は、`displayableIssueText`を直接呼ばず、この入口を通す。
 置き換えは、ログと結果のほかにもかける。
 対象は、引数のキー、値、型、ステップのid、保存された原因のステップ、文、読めなかった理由である。
