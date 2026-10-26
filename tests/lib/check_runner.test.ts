@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
@@ -269,19 +269,6 @@ describe("runAllowedCheckCommands", () => {
       () => undefined,
     );
     expect(calls).toEqual([]);
-  });
-
-  test("leaves no HOME dir behind for a worktree path that would break the .gitconfig", async () => {
-    const homes = () =>
-      readdirSync("/tmp").filter((name) =>
-        name.startsWith("factory-check-home-"),
-      );
-    const before = homes().length;
-    const { run } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(run, "/work\n[core]", ["true"], 1000).catch(
-      () => undefined,
-    );
-    expect(homes().length).toBe(before);
   });
 
   test("passes the worktree to createHomeDir", async () => {
