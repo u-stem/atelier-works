@@ -162,6 +162,7 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * メタデータのパッチの検査と`wmill-lock.yaml`のhashの再計算(`metadata_`で始まる部品)、
  * GitHubの収集(宛先を固定したGraphQLの通信の`gh_graphql`、照合と`gone`の判定の`gh_collect`で始まる部品、それを呼ぶ`collect_github`)、
  * 自動で再開してよい止まった理由の一覧(`auto_retry_reasons`)、
+ * 実装の関門の承認の判定(`approval_gate`)、要件定義の基準値の照合(`doc_tree_hash`)、モデル出力の整形(`model_text`)、
  * 検査の前提が古いときの理由(`check_sandbox_reasons`)、GitHubの呼び出しの失敗の型(`github_errors`)である。
  * 一覧は、CI回と競合回の回復が「待たずに保留なしで外す回」を決め、競合回の数え方が「数えない回」を決める。
  * 広い接頭辞を足されると、競合回の上限が効かなくなる。
@@ -188,6 +189,9 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/process_lock.",
   "f/factory/lib/factory_repo_gate.",
   "f/factory/lib/auto_retry_reasons.",
+  "f/factory/lib/approval_gate.",
+  "f/factory/lib/doc_tree_hash.",
+  "f/factory/lib/model_text.",
   "f/factory/lib/ci_",
   "f/factory/lib/pr_ci_",
   "f/factory/lib/pr_conflict_",

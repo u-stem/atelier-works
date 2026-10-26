@@ -532,6 +532,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/metadata_patch_download` | script | [LIB] メタデータのパッチの取得 |
 | `f/factory/lib/metadata_patch_manifest` | script | [LIB] メタデータのパッチの検査 |
 | `f/factory/lib/metadata_patch_verify` | script | [LIB] メタデータのパッチの適用条件の検査 |
+| `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
@@ -545,6 +546,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_ci_fix_recovery` | script | [LIB] 失敗を直した行の回復 |
 | `f/factory/lib/periodic_worker` | script | [LIB] 定期ジョブ用workerの停止の検知 |
 | `f/factory/lib/gh_graphql` | script | [LIB] 宛先を固定したGitHubのGraphQLクライアント |
+| `f/factory/lib/approval_gate` | script | [LIB] 実装の関門が読む承認の判定 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |

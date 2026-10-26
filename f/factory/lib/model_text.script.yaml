@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] モデルの出力の文字列の整形'
+description: 内部ライブラリです。直接実行するものではありません。モデルの出力から制御文字と書式文字を除き、秘密情報をマスクして、長さを絞る共通処理です。
 lock: '!inline f/factory/lib/model_text.script.lock'
 kind: script
 schema:

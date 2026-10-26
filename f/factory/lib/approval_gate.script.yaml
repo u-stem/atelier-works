@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 実装の関門が読む承認の判定'
+description: 内部ライブラリです。直接実行するものではありません。要件定義と設計書の承認が、作業項目の現在の状態に一致するかを判定し、関門が止めるときの理由を返す共通処理です。
 lock: '!inline f/factory/lib/approval_gate.script.lock'
 kind: script
 schema:

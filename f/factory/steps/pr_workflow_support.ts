@@ -4248,7 +4248,7 @@ const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
 
 /**
  * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
- * `lib/design_launch_support.ts`の定数と関数が作る文字列と同じにする。
+ * `lib/design_launch_support.ts`、`lib/approval_gate.ts`の定数と関数が作る文字列と同じにする。
  * この表は設計の定数をimportしない。importするとpr_workflow_support.tsの依存が増えるため、文字列をここに直接書く。
  * `tests/scripts/pr_workflow_support_design.test.ts`が、定数と関数の出力を表と突き合わせて食い違いを検出する。
  */
@@ -4298,6 +4298,25 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "承認済みの要件定義のディレクトリがありません(workerやボリュームを作り直した可能性があります)",
     nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: /^no approved design for design attempt (\d+)$/,
+    describe: (m) =>
+      `設計の試行${m[1]}回目に承認済みの設計書が無いため、実装を始められませんでした`,
+    nextAction: () =>
+      `Consoleで設計書の承認の状態を確かめ、${RETRY_WORK_ITEM_ACTION}(設計から再開します)`,
+  },
+  {
+    pattern: /^approved design does not match the approved requirements$/,
+    describe: () => "承認済みの設計書が、承認済みの要件定義と食い違っています",
+    nextAction: () =>
+      `Consoleで設計書と要件定義の承認の状態を確かめ、${RETRY_WORK_ITEM_ACTION}(設計から再開します)`,
+  },
+  {
+    pattern: /^design approval record is inconsistent$/,
+    describe: () => "設計の承認の記録が、設計書と食い違っています",
+    nextAction: () =>
+      `Consoleで設計の承認の記録を確かめた上で、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^design document directory already holds a saved draft$/,

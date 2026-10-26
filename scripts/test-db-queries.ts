@@ -9039,7 +9039,7 @@ check(
 
 // 設計の承認の照合: 最新の設計の承認依頼だけを読み、その依頼が指す設計書を結合する。
 // 最新の依頼が指す設計書が引けないとき(存在しない、別の作業項目のもの)に、古い承認へ落ちない。
-const daItem = await issueWorkItem(9321, 1, "designing", "qdb design approval");
+const daItem = await issueWorkItem(9331, 1, "designing", "qdb design approval");
 execPsql(
   target,
   `UPDATE factory.work_items SET flow_job_id = 'qdb-job-da' WHERE id = ${String(daItem)}`,
@@ -9056,7 +9056,7 @@ const daSecondDesign = await saveDesignDraftIfLeaseHolder(
   sql,
 );
 const daOtherItem = await issueWorkItem(
-  9322,
+  9332,
   1,
   "designing",
   "qdb other design",

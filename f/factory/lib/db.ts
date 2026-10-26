@@ -3938,11 +3938,87 @@ export async function latestRequirementsApproval(
   };
 }
 
+/**
+ * `payload`の`key`を、0以上の整数として読む。
+ * `payload`はjsonbで、オブジェクトか、その文字列かのどちらで届いても読む。
+ * オブジェクトでない、キーが無い、整数でない、負のときは`null`を返し、例外は投げない。
+ * 書き換えられた行で読み取りが落ちると、関門が理由を残せないため、読めない値は`inconsistent`の判定に任せる。
+ */
+function payloadInteger(payload: unknown, key: string): number | null {
+  let object: unknown = payload;
+  if (isString(payload)) {
+    try {
+      object = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (!isRecord(object)) {
+    return null;
+  }
+  const value = object[key];
+  return isNumber(value) && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/**
+ * `workItemId`の`kind = 'design'`の`factory.approval_requests`のうち、
+ * 最も新しく依頼された行と、その依頼が指す設計書を返す。設計の承認を一度も依頼していなければ`null`を返す。
+ * 最新の1件を先に決めてから、設計書を結合する。設計書が引けない最新の依頼を読み飛ばすと、
+ * 古い承認に落ちて、書き換えられた最新の依頼の代わりに古い承認が効いてしまうためである。
+ * 設計書は、依頼の`subject_id`で引き、同じ作業項目の行だけを結ぶ。最新の設計書は読まない。
+ * 状態は問わない。照合は`designApprovalVerdict`が行う。
+ */
 export async function latestDesignApproval(
-  _workItemId: number,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<DesignApprovalRef | null> {
-  return null;
+  const rows = await sql`
+    SELECT ar.id AS approval_request_id, ar.subject_id, ar.status, ar.payload,
+           dd.design_attempt AS dd_design_attempt,
+           dd.requirement_draft_id AS dd_requirement_draft_id
+    FROM factory.approval_requests ar
+    LEFT JOIN factory.design_drafts dd ON dd.id = ar.subject_id AND dd.work_item_id = ar.work_item_id
+    WHERE ar.kind = 'design' AND ar.work_item_id = ${workItemId}::bigint
+    ORDER BY ar.requested_at DESC, ar.id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const hasDraft =
+    row.dd_design_attempt !== null &&
+    row.dd_design_attempt !== undefined &&
+    row.dd_requirement_draft_id !== null &&
+    row.dd_requirement_draft_id !== undefined;
+  return {
+    approval_request_id: parseId(
+      row.approval_request_id,
+      "approval_request_id",
+    ),
+    design_draft_id: parseId(row.subject_id, "subject_id"),
+    status: parseEnum<ApprovalRequestStatus>(
+      row.status,
+      APPROVAL_REQUEST_STATUSES,
+      "status",
+    ),
+    payload_attempt: payloadInteger(row.payload, "attempt"),
+    payload_design_attempt: payloadInteger(row.payload, "design_attempt"),
+    draft: hasDraft
+      ? {
+          design_attempt: parseRequiredNumber(
+            row.dd_design_attempt,
+            "dd_design_attempt",
+          ),
+          requirement_draft_id: parseId(
+            row.dd_requirement_draft_id,
+            "dd_requirement_draft_id",
+          ),
+        }
+      : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
