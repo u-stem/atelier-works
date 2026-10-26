@@ -274,18 +274,25 @@ function resolveFeedback(feedback: string | null | undefined): string | null {
     : null;
 }
 
-/** 保存してよい制御文字。改行とタブは本文に使う。 */
+/** 書式文字(ゼロ幅スペース、双方向の制御、バイトオーダーマークなど)。表示に現れず、文字列の見かけと中身を食い違わせる。 */
+const FORMAT_CHARACTER_PATTERN = /^\p{Cf}$/u;
+
+/**
+ * 保存してよい文字か。改行とタブは本文に使う。
+ * C0制御文字、DEL、C1制御文字(U+0080〜U+009F)、書式文字(`\p{Cf}`)は保存しない。
+ */
 function isAllowedCharacter(char: string): boolean {
   const code = char.codePointAt(0);
   if (code === undefined) return false;
   if (code === 0x09 || code === 0x0a || code === 0x0d) return true;
-  return code >= 0x20 && code !== 0x7f;
+  if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return false;
+  return !FORMAT_CHARACTER_PATTERN.test(char);
 }
 
 /**
  * Claudeの出力の文字列を、保存してよい形にする。信頼できない入力を読んだClaudeの出力で、DBと次の工程に渡るため。
- * 制御文字(NULを含む。PostgreSQLのtextとjsonbが拒む)を除き、秘密情報をマスクしてから、コードポイントの途中で切らずに`maxChars`に収める。
- * 制御文字を先に除くのは、秘密情報の途中に挟まれた制御文字でマスクをすり抜けさせないためで、
+ * 制御文字(NULを含む。PostgreSQLのtextとjsonbが拒む)と書式文字を除き、秘密情報をマスクしてから、コードポイントの途中で切らずに`maxChars`に収める。
+ * 制御文字と書式文字を先に除くのは、秘密情報の途中に挟まれた見えない文字でマスクをすり抜けさせないためで、
  * マスクを先に行うのは、切った末尾に秘密情報の一部が残らないようにするためである。
  */
 export function sanitizeModelText(text: string, maxChars: number): string {
