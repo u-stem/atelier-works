@@ -296,6 +296,7 @@ const FAKE_REQUIREMENTS: RequirementDraft = {
   diagrams: [],
   open_questions: [],
   doc_dir: null,
+  doc_hash: null,
   created_at: new Date("2026-01-01"),
 };
 

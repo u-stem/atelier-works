@@ -28,6 +28,7 @@ import {
 } from "../lib/implement_launch_support.ts";
 import {
   type ChangeInspection,
+  docDirGuardFor,
   GITLEAKS_TIMEOUT_MS,
   IMPLEMENT_CLAUDE_ROUND_KINDS,
   IMPLEMENT_OUTPUT_CONTRACT_NOTE,
@@ -36,9 +37,10 @@ import {
   type ImplementContext,
   type ImplementLoopResult,
   implementPromptInput,
+  ranClaude,
+  runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementVerifyLoop,
-  withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
 import {
   fixRoundWorstCaseSec,
@@ -130,11 +132,10 @@ export async function main(
       `implement_verify: unexpected round kind "${String(first_round.kind)}"`,
     );
   }
-  // generateがリースを失っていたらループは何もせずに止まるので、期限は検証しない。
-  const deadlineAt =
-    first_round.kind === "lease_lost"
-      ? 0
-      : requireDeadlineAt(context.deadline_at, Date.now());
+  // generateがリースを失っているか、要件定義の照合で止めていたら、ループは何もせずに止まるので、期限は検証しない。
+  const deadlineAt = ranClaude(first_round)
+    ? requireDeadlineAt(context.deadline_at, Date.now())
+    : 0;
   const log = logger("implement_verify");
   // buildSystemPromptの前に取る。投げた場合にsystemPromptの後始末を飛ばさないため。
   const leaseJobId = rootFlowJobId(process.env);
@@ -160,8 +161,8 @@ export async function main(
   // `pr_fix_verify`と同じ常設リスクの告知。
   // 検査コマンドは、対象リポジトリの検証されていないコードを、
   // workerのコンテナの中で、コンテナの分離なしに実行する。
-  // generateがリースを失っていたときは検査を実行しないので告知しない。
-  if (commands.length > 0 && first_round.kind !== "lease_lost") {
+  // generateがリースを失っているか、要件定義の照合で止めていたときは検査を実行しないので告知しない。
+  if (commands.length > 0 && ranClaude(first_round)) {
     await addNoticeUnlessUnresolved({
       kind: "unsandboxed_check_commands",
       message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
@@ -228,8 +229,9 @@ export async function main(
             work_item_id,
             context.attempt,
           );
-          return withReadOnlyDocDirCopy(
+          return runDocDirGuardedRound(
             context.requirements_doc_dir,
+            docDirGuardFor(context),
             (docDir) =>
               runImplementClaudeRound(
                 { runClaude, recordAgentRun },

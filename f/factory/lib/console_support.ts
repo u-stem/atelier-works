@@ -66,6 +66,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   worker_load_high: "action",
   review_gated_prolonged: "action",
   dependabot_merge_hold_unreadable: "action",
+  doc_hash_column_missing: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */

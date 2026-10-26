@@ -1263,6 +1263,7 @@ describe("fixPrompt requirements wiring (retry pass)", () => {
       diagrams: [],
       open_questions: [],
       doc_dir: null,
+      doc_hash: null,
       created_at: new Date("2026-01-01"),
     };
     return fixPrompt({

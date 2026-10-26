@@ -123,6 +123,14 @@ describe("runConsoleSummary queries", () => {
     expect(calls[0]?.text).toContain("FROM factory.v_approval_requests");
   });
 
+  test("selects only the kinds that the summary can show", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[0]?.text).toContain(
+      "kind IN ('requirements', 'issue_proposal')",
+    );
+  });
+
   test("includes approved issue proposals whose issue was not created", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);

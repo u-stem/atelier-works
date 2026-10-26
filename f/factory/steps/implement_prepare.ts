@@ -27,6 +27,13 @@ import {
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
+import {
+  checkDocTreeHash,
+  hashDirectoryTree,
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  realDirectoryIo,
+} from "../lib/doc_tree_hash.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import {
   findOpenPullRequestByHead,
@@ -118,7 +125,7 @@ export type BuildImplementContextInput = {
   readonly issue: Pick<Issue, "title" | "body" | "htmlUrl">;
   readonly draft: Pick<
     RequirementDraft,
-    "attempt" | "markdown" | "diagrams" | "doc_dir"
+    "attempt" | "markdown" | "diagrams" | "doc_dir" | "doc_hash"
   >;
   readonly branch: string;
   readonly baseBranch: string;
@@ -176,6 +183,7 @@ export function buildImplementContext(
     requirements_markdown: input.draft.markdown,
     requirements_diagrams: input.draft.diagrams,
     requirements_doc_dir: input.draft.doc_dir,
+    requirements_doc_hash: input.draft.doc_hash,
     requirements_console_url: buildConsoleUrl(
       input.config.windmill_public_url,
       { work_item_id: workItem.id, attempt: input.draft.attempt },
@@ -193,6 +201,37 @@ export function buildImplementContext(
   };
 }
 
+/**
+ * 承認済みの要件定義のディレクトリが、承認時の基準値と合うかを確かめる。
+ * 合わないか無ければ、`needs_human`の理由を返す。合うか、確かめる対象が無ければ`null`を返す。
+ */
+export async function requirementsGateReason(
+  draft: Pick<RequirementDraft, "doc_dir" | "doc_hash">,
+  hashTree: (dir: string) => Promise<string | null>,
+  warn: (message: string, fields: Record<string, unknown>) => void,
+): Promise<string | null> {
+  if (draft.doc_dir === null) return null;
+  const verdict = await checkDocTreeHash(
+    draft.doc_dir,
+    draft.doc_hash,
+    hashTree,
+  );
+  switch (verdict) {
+    case "match":
+      return null;
+    case "no_baseline":
+      warn(
+        "the approved requirements have no baseline hash; skipping the comparison",
+        { doc_dir: draft.doc_dir },
+      );
+      return null;
+    case "missing":
+      return REQUIREMENTS_DIR_MISSING_REASON;
+    case "modified":
+      return REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON;
+  }
+}
+
 function stop(
   outcome: Exclude<ImplementPrepareOutcome, "proceed">,
   reason: string,
@@ -207,6 +246,9 @@ function stop(
  * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのPR(閉じたものを含む)で終端でないpr_fix / pr_reviewが無いか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
+ * 承認済みの下書きに基準値(`doc_hash`)があれば、要件定義のディレクトリの現在のハッシュと比べ、
+ * 違うか無ければ、worktreeに触れる前に`needs_human`で止める。基準値が無ければ警告を残して飛ばす。
+ * 基準値は文脈に載せ、Claudeの実行ごとの複製の前後の照合(`implement_generate`と`implement_verify`)に使う。
  * 作業項目の種類と状態の確認の次に、flow_job_idのリースを取る(`acquireImplementLease`)。
  * 取れなければ`skip`を返し、worktreeには触れない。
  *
@@ -332,6 +374,17 @@ export async function main(
     return stop("needs_human", noApproval);
   const draft = await getRequirementDraft(approval.draft_id);
   if (draft === null) return stop("needs_human", noApproval);
+  // 承認後に要件定義のディレクトリが書き換わっていれば、ブランチにもworktreeにも触れる前に止める。
+  const untrusted = await requirementsGateReason(
+    draft,
+    (dir) => hashDirectoryTree(dir, realDirectoryIo),
+    (message, fields) =>
+      logger("implement_prepare").warn(message, {
+        work_item_id,
+        ...fields,
+      }),
+  );
+  if (untrusted !== null) return stop("needs_human", untrusted);
 
   // ブランチのPR(閉じたものを含む)で、pr_fix / pr_reviewが同じworktreeを使っていることがある。
   // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に、

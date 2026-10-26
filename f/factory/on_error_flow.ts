@@ -117,14 +117,16 @@ export const UNKNOWN_INSTANCE_NAME = "unknown";
 /**
  * 失敗したフローの通知に載せる次の操作を返す。専用の案内が無いフローは`undefined`を返す。
  * dependabotの作業項目は`retry_work_item`が再開しないので、再実行を案内しない規則(`nextActionFor`の`"dependabot"`)を使う。
+ * 設計のフローは、worktreeのロックの案内のようにフローで操作が変わる理由に、設計向けの案内(`"design"`)を使う。
  */
 export function failureNextAction(
   path: string | null,
   message: string,
 ): string | undefined {
-  return path === DEPENDABOT_FLOW_PATH
-    ? nextActionFor(message, "dependabot")
-    : undefined;
+  if (path === DEPENDABOT_FLOW_PATH)
+    return nextActionFor(message, "dependabot");
+  if (path === DESIGN_FLOW_PATH) return nextActionFor(message, "design");
+  return undefined;
 }
 
 /**

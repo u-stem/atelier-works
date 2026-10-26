@@ -1,0 +1,9 @@
+summary: '[LIB] 要件定義のディレクトリのハッシュと基準値の照合'
+description: 内部ライブラリです。直接実行するものではありません。ディレクトリの内容のハッシュを取り、承認時に保存した基準値と比べて、承認済みの要件定義の書き換えを検出する共通処理です。
+lock: '!inline f/factory/lib/doc_tree_hash.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

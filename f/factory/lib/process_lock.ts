@@ -122,9 +122,9 @@ export function worktreeLockFor(
 }
 
 export type LockOwner = {
-  readonly kind: "implement" | "pr_fix";
+  readonly kind: "implement" | "pr_fix" | "design";
   readonly workItemId: number;
-  /** 実装フローではリースの値(ルートジョブID)、pr_fixでは`WM_ROOT_FLOW_JOB_ID`。 */
+  /** 実装フローと設計フローではリースの値(ルートジョブID)、pr_fixでは`WM_ROOT_FLOW_JOB_ID`。 */
   readonly jobId: string;
 };
 
@@ -132,13 +132,18 @@ export function formatLockOwner(owner: LockOwner): string {
   return `${owner.kind}:${String(owner.workItemId)}:${owner.jobId}`;
 }
 
-/** `formatLockOwner`の形の文字列を解析する。形が違えばnullを返す。 */
+/**
+ * `formatLockOwner`の形の文字列を解析する。形が違えばnullを返す。
+ * 種別を足す前のコードは、足した後の種別のタグを読めずにnullを返し、その持ち主を使用中として扱う。
+ */
 export function parseLockOwner(value: string): LockOwner | null {
-  const match = /^(implement|pr_fix):([1-9]\d*):([0-9A-Za-z-]+)$/.exec(value);
+  const match = /^(implement|pr_fix|design):([1-9]\d*):([0-9A-Za-z-]+)$/.exec(
+    value,
+  );
   if (match === null) return null;
   const [, kind, id, jobId] = match;
   if (
-    (kind !== "implement" && kind !== "pr_fix") ||
+    (kind !== "implement" && kind !== "pr_fix" && kind !== "design") ||
     id === undefined ||
     jobId === undefined
   )
@@ -708,6 +713,7 @@ export async function scanLockProcesses(
 /**
  * `owner`を`self`が止めてよいかを返す。
  * 止めてよいのは、同じ作業項目の実装フローで、ジョブIDが自分と異なるもの(終わった実行の生き残り)だけである。
+ * 設計フローの持ち主は、自分が設計でも実装でも止めない。設計の準備は何も止めず、残ったプロセスがあれば引き返す。
  * 自分は作業項目のリースを持つので、同じ作業項目の別のジョブはいま正当に動いていない。
  * どちらかのジョブIDが"unknown"なら止めない。ジョブを特定できないタグ同士では、別のジョブかを判断できないため。
  */

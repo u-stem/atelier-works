@@ -244,7 +244,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | --- | --- |
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
-| `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
+| `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)を記録するコードは入っているが、本番では作られない |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
@@ -575,6 +575,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/auto_retry_reasons` | script | [LIB] 自動で再開してよい止まった理由 |
 | `f/factory/lib/self_update_support` | script | [LIB] 自己更新の純粋ロジック |
 | `f/factory/lib/requirements_template` | script | [LIB] 要件定義テンプレートの定義 |
+| `f/factory/lib/doc_tree_hash` | script | [LIB] 要件定義のディレクトリのハッシュと基準値の照合 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |

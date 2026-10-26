@@ -435,6 +435,20 @@ describe("runConsoleQuery", () => {
     ]);
   });
 
+  test("inbox: selects only the kinds that it can show", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await runConsoleQuery("inbox", 200, 30, sql);
+    expect(calls[0]?.text).toContain(
+      "kind IN ('requirements', 'issue_proposal')",
+    );
+  });
+
+  test("inbox: does not select design requests by name", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await runConsoleQuery("inbox", 200, 30, sql);
+    expect(calls[0]?.text).not.toContain("design");
+  });
+
   test("inbox: rejects a design row, which the inbox does not handle yet", async () => {
     const row: SqlRow = {
       approval_request_id: 9,

@@ -101,6 +101,16 @@ describe("host_action_required", () => {
   });
 });
 
+describe("doc_hash_column_missing", () => {
+  test("is listed in the severity table as an action notice", () => {
+    expect(NOTICE_SEVERITY.doc_hash_column_missing).toBe("action");
+  });
+
+  test("can be resolved from the Console", () => {
+    expect(isNoticeResolvable("doc_hash_column_missing")).toBe(true);
+  });
+});
+
 describe("merge hold notices", () => {
   test("the notice that pull requests wait for a hold needs no action", () => {
     expect(noticeSeverity("dependabot_merge_held")).toBe("info");
@@ -209,6 +219,10 @@ describe("operations.md notice table", () => {
     expect(
       Object.keys(NOTICE_SEVERITY).filter((kind) => !documented.includes(kind)),
     ).toEqual([]);
+  });
+
+  test("documents doc_hash_column_missing", async () => {
+    expect(await documentedNoticeKinds()).toContain("doc_hash_column_missing");
   });
 
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {

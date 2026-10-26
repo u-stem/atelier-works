@@ -78,6 +78,32 @@ export function buildDesignDocDir(
 }
 
 /**
+ * 試行ディレクトリに、保存済みの設計書の下書きが指すものと同じパスの下書きがあるときの`needs_human`の理由。
+ * 設計書の生成はディレクトリを空にして書くので、保存済みの下書きの図を消さないために止める。
+ */
+export const DESIGN_DOC_DIR_IN_USE_REASON =
+  "design document directory already holds a saved draft";
+
+/** 設計の開始時に、要件定義の試行に承認が無いときの`needs_human`の理由。 */
+export function designNoApprovalReason(attempt: number): string {
+  return `design requires approved requirements for attempt ${String(attempt)}`;
+}
+
+/** 設計が要件の不足を報告したが、要件定義の試行が上限に達したときの`needs_human`の理由。 */
+export function designGapExhaustedReason(maxAttempts: number): string {
+  return `design requirements_gap after max_attempts ${String(maxAttempts)}`;
+}
+
+/** 設計の構造化出力の`summary`の長さの上限(コードポイント)。 */
+export const DESIGN_SUMMARY_MAX_CHARS = 1000;
+
+/** 設計の構造化出力の`open_questions`の件数の上限。 */
+export const DESIGN_OPEN_QUESTIONS_MAX_COUNT = 30;
+
+/** 設計の構造化出力の`open_questions`の1要素の長さの上限(コードポイント)。 */
+export const DESIGN_OPEN_QUESTION_MAX_CHARS = 1000;
+
+/**
  * 設計書が読む対象リポジトリの、読み取り専用のdetachedなworktreeのパスを返す。
  * 形式は`/workspaces/<owner>/<repo>/design-<issueNumber>`で、`ensureRepo`のメインのcloneの隣に置く。
  * 要件定義用の`req-<N>`とは別のパスにする。要件定義の承認の反映が`req-<N>`を消すので、共有すると設計の途中で消えるため。

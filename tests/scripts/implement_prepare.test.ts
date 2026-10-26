@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+} from "../../f/factory/lib/doc_tree_hash.ts";
+import {
   type BuildImplementContextInput,
   buildImplementContext,
+  requirementsGateReason,
 } from "../../f/factory/steps/implement_prepare.ts";
 
 const BASE = "b".repeat(40);
@@ -28,6 +33,7 @@ const INPUT: BuildImplementContextInput = {
     diagrams: [],
     doc_dir:
       "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2",
+    doc_hash: "c".repeat(64),
   },
   branch: "factory/issue-7-wi-3",
   baseBranch: "main",
@@ -212,5 +218,178 @@ describe("buildImplementContext", () => {
         },
       }).issue_url,
     ).toBe("https://github.com/acme/moved/issues/1");
+  });
+
+  test("carries the baseline hash of the approved requirements", () => {
+    expect(buildImplementContext(INPUT).requirements_doc_hash).toBe(
+      "c".repeat(64),
+    );
+  });
+
+  test("carries a missing baseline as null", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        draft: { ...INPUT.draft, doc_hash: null },
+      }).requirements_doc_hash,
+    ).toBeNull();
+  });
+});
+
+describe("requirementsGateReason", () => {
+  const DIR =
+    "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2";
+  const HASH = "d".repeat(64);
+
+  function warnings() {
+    const messages: string[] = [];
+    return {
+      messages,
+      warn: (message: string) => {
+        messages.push(message);
+      },
+    };
+  }
+
+  test("returns null when the directory matches the baseline", async () => {
+    const w = warnings();
+    expect(
+      await requirementsGateReason(
+        { doc_dir: DIR, doc_hash: HASH },
+        async () => HASH,
+        w.warn,
+      ),
+    ).toBeNull();
+  });
+
+  test("hashes the approved directory", async () => {
+    const w = warnings();
+    const hashed: string[] = [];
+    await requirementsGateReason(
+      { doc_dir: DIR, doc_hash: HASH },
+      async (dir) => {
+        hashed.push(dir);
+        return HASH;
+      },
+      w.warn,
+    );
+    expect(hashed).toEqual([DIR]);
+  });
+
+  test("returns the reason for a modified directory", async () => {
+    const w = warnings();
+    expect(
+      await requirementsGateReason(
+        { doc_dir: DIR, doc_hash: HASH },
+        async () => "e".repeat(64),
+        w.warn,
+      ),
+    ).toBe(REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON);
+  });
+
+  test("returns the reason for a missing directory apart from a modified one", async () => {
+    const w = warnings();
+    expect(
+      await requirementsGateReason(
+        { doc_dir: DIR, doc_hash: HASH },
+        async () => null,
+        w.warn,
+      ),
+    ).toBe(REQUIREMENTS_DIR_MISSING_REASON);
+  });
+
+  test("skips the check and warns when there is no baseline", async () => {
+    const w = warnings();
+    const reason = await requirementsGateReason(
+      { doc_dir: DIR, doc_hash: null },
+      async () => "anything",
+      w.warn,
+    );
+    expect([reason, w.messages]).toEqual([
+      null,
+      [
+        "the approved requirements have no baseline hash; skipping the comparison",
+      ],
+    ]);
+  });
+
+  test("does not hash a draft that has no baseline", async () => {
+    const w = warnings();
+    const hashed: string[] = [];
+    await requirementsGateReason(
+      { doc_dir: DIR, doc_hash: null },
+      async (dir) => {
+        hashed.push(dir);
+        return HASH;
+      },
+      w.warn,
+    );
+    expect(hashed).toEqual([]);
+  });
+
+  test("returns null without a warning when the draft has no directory", async () => {
+    const w = warnings();
+    const reason = await requirementsGateReason(
+      { doc_dir: null, doc_hash: null },
+      async () => HASH,
+      w.warn,
+    );
+    expect([reason, w.messages]).toEqual([null, []]);
+  });
+});
+
+// mainはWindmillとDBを直接使うので、関門の結線はソースの文面で固定する。
+describe("the wiring of the requirements gate in implement_prepare main", () => {
+  /** コメントを除いたソース。コメントに書いた呼び出しの名前を、順序の比較に混ぜないため。 */
+  async function source(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/implement_prepare.ts", import.meta.url),
+    ).text();
+    return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  }
+
+  /** `needle`がちょうど1回だけ出現するときにその位置を返す。0回か複数回なら-1を返す。 */
+  function onlyIndex(text: string, needle: string): number {
+    const first = text.indexOf(needle);
+    if (first < 0) return -1;
+    return text.indexOf(needle, first + needle.length) < 0 ? first : -1;
+  }
+
+  const GATE = "await requirementsGateReason(";
+
+  test("hashes the approved directory with the real hash function", async () => {
+    expect(await source()).toMatch(
+      /await requirementsGateReason\(\s*draft,\s*\(dir\) => hashDirectoryTree\(dir, realDirectoryIo\),/,
+    );
+  });
+
+  test("stops for a person with the reason of the gate", async () => {
+    expect(await source()).toContain(
+      'if (untrusted !== null) return stop("needs_human", untrusted);',
+    );
+  });
+
+  test("calls the gate exactly once", async () => {
+    expect(onlyIndex(await source(), GATE)).toBeGreaterThanOrEqual(0);
+  });
+
+  test("checks the gate before it looks at the branch", async () => {
+    const text = await source();
+    const gate = onlyIndex(text, GATE);
+    const branch = onlyIndex(text, "await findOpenPullRequestByHead(");
+    expect(gate >= 0 && branch >= 0 && gate < branch).toBe(true);
+  });
+
+  test("checks the gate before it prepares the worktree", async () => {
+    const text = await source();
+    const gate = onlyIndex(text, GATE);
+    const worktree = onlyIndex(text, "await prepareImplementWorktree(");
+    expect(gate >= 0 && worktree >= 0 && gate < worktree).toBe(true);
+  });
+
+  test("carries the baseline of the draft into the context", async () => {
+    expect(await source()).toContain(
+      "requirements_doc_hash: input.draft.doc_hash,",
+    );
   });
 });
