@@ -78,6 +78,14 @@ export function isAllowedProxyRequest(
 }
 
 /** Hostが、このサーバーのループバックの名前とポートか。 */
+// スタブ。実装は次のコミットで書く。
+export function decideWriteConfirmation(
+  _isTty: boolean,
+  _answer: string | null,
+): "confirmed" | "not-interactive" | "declined" {
+  return "confirmed";
+}
+
 export function isTrustedHost(host: string | null, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }

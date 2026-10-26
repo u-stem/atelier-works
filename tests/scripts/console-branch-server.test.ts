@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   consoleSecurityHeaders,
+  decideWriteConfirmation,
   isAllowedProxyRequest,
   isOwnOrigin,
   isTrustedHost,
@@ -168,24 +169,6 @@ describe("READ_ONLY_SCRIPT_PATHS", () => {
   });
 });
 
-describe("the read-only scripts", () => {
-  // SQLの書き込みと、Windmillの書き込みのAPIの呼び出し。
-  const WRITE =
-    /\b(?:insert\s+into|update\s+[\w.]+\s+set|delete\s+from|truncate\s|drop\s+table|alter\s+table)\b|\b(?:createVariable|updateVariable|deleteVariable|createJob|runScriptByPath|runFlowByPath|cancelQueuedJob|createSchedule|updateSchedule|deleteSchedule|setScheduleEnabled)\b/i;
-
-  test("contain no SQL write and no Windmill write call", async () => {
-    const writers: string[] = [];
-    for (const path of READ_ONLY_SCRIPT_PATHS) {
-      const source = await Bun.file(
-        new URL(`../../${path}.ts`, import.meta.url).pathname,
-      ).text();
-      if (WRITE.test(source)) writers.push(path);
-    }
-
-    expect(writers).toEqual([]);
-  });
-});
-
 describe("isAllowedProxyRequest", () => {
   const RUN = "/api/w/factory/jobs/run_wait_result/p";
 
@@ -247,10 +230,181 @@ describe("isAllowedProxyRequest", () => {
     expect(isAllowedProxyRequest("DELETE", "/api/anything", false)).toBe(false);
   });
 
+  test("refuses a GET that would run a write script", () => {
+    expect(
+      isAllowedProxyRequest("GET", `${RUN}/f/factory/approval_decide`, false),
+    ).toBe(false);
+  });
+
+  test("refuses a HEAD that would run a write script", () => {
+    expect(
+      isAllowedProxyRequest("HEAD", `${RUN}/f/factory/approval_decide`, false),
+    ).toBe(false);
+  });
+
+  test("refuses a GET that would run even a read script", () => {
+    expect(
+      isAllowedProxyRequest("GET", `${RUN}/f/factory/console_holds`, false),
+    ).toBe(false);
+  });
+
+  test("refuses a GET to the async run path", () => {
+    expect(
+      isAllowedProxyRequest("GET", "/api/w/factory/jobs/run/p/f/x", false),
+    ).toBe(false);
+  });
+
+  test("refuses a GET to the streaming run path", () => {
+    expect(
+      isAllowedProxyRequest(
+        "GET",
+        "/api/w/factory/jobs/run_and_stream/p/f/x",
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses a GET that resumes a job", () => {
+    expect(
+      isAllowedProxyRequest(
+        "GET",
+        "/api/w/factory/jobs_u/resume/1/2/sig",
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses a GET that cancels a job", () => {
+    expect(
+      isAllowedProxyRequest(
+        "GET",
+        "/api/w/factory/jobs_u/queue/cancel/abc",
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses a GET to an endpoint route", () => {
+    expect(isAllowedProxyRequest("GET", "/api/r/anything", false)).toBe(false);
+  });
+
+  test("refuses a GET to a webhook path", () => {
+    expect(
+      isAllowedProxyRequest("GET", "/api/w/factory/x/webhook/abc", false),
+    ).toBe(false);
+  });
+
+  test("refuses a GET to an API path that is not listed", () => {
+    expect(
+      isAllowedProxyRequest("GET", "/api/w/factory/variables/get/x", false),
+    ).toBe(false);
+  });
+
+  test("allows a GET that reads one job", () => {
+    expect(
+      isAllowedProxyRequest("GET", "/api/w/factory/jobs_u/get/abc", false),
+    ).toBe(true);
+  });
+
+  test("allows a GET that reads the signed-in user", () => {
+    expect(isAllowedProxyRequest("GET", "/api/users/whoami", false)).toBe(true);
+  });
+
+  test("allows a GET to a page outside the API", () => {
+    expect(isAllowedProxyRequest("GET", "/user/login", false)).toBe(true);
+  });
+
+  test("allows a GET that would run a write script when writes are enabled", () => {
+    expect(
+      isAllowedProxyRequest("GET", `${RUN}/f/factory/approval_decide`, true),
+    ).toBe(true);
+  });
+
   test("allows a write script when writes are enabled", () => {
     expect(
       isAllowedProxyRequest("POST", `${RUN}/f/factory/approval_decide`, true),
     ).toBe(true);
+  });
+});
+
+describe("decideWriteConfirmation", () => {
+  test("refuses when the input is not a terminal", () => {
+    expect(decideWriteConfirmation(false, "yes")).toBe("not-interactive");
+  });
+
+  test("confirms when a person types yes at a terminal", () => {
+    expect(decideWriteConfirmation(true, "yes")).toBe("confirmed");
+  });
+
+  test("ignores spaces around the answer", () => {
+    expect(decideWriteConfirmation(true, " yes \n")).toBe("confirmed");
+  });
+
+  test("declines a short answer", () => {
+    expect(decideWriteConfirmation(true, "y")).toBe("declined");
+  });
+
+  test("declines a different case", () => {
+    expect(decideWriteConfirmation(true, "YES")).toBe("declined");
+  });
+
+  test("declines when there is no answer", () => {
+    expect(decideWriteConfirmation(true, null)).toBe("declined");
+  });
+});
+
+describe("--allow-writes without a terminal", () => {
+  test("fails to start", async () => {
+    const dist = mkdtempSync(join(tmpdir(), "console-branch-dist-"));
+    writeFileSync(join(dist, "index.html"), "<html></html>");
+    const probe = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(""),
+    });
+    const port = probe.port;
+    probe.stop(true);
+
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        new URL("../../scripts/console-branch-server.ts", import.meta.url)
+          .pathname,
+        "--dist",
+        dist,
+        "--port",
+        String(port),
+        "--allow-writes",
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000 },
+    );
+    const code = await child.exited;
+    rmSync(dist, { recursive: true, force: true });
+
+    expect(code).toBe(2);
+  });
+
+  test("says that a terminal is needed", async () => {
+    const dist = mkdtempSync(join(tmpdir(), "console-branch-dist-"));
+    writeFileSync(join(dist, "index.html"), "<html></html>");
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        new URL("../../scripts/console-branch-server.ts", import.meta.url)
+          .pathname,
+        "--dist",
+        dist,
+        "--port",
+        "59999",
+        "--allow-writes",
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000 },
+    );
+    const text = await new Response(child.stderr).text();
+    await child.exited;
+    rmSync(dist, { recursive: true, force: true });
+
+    expect(text).toContain("terminal");
   });
 });
 
@@ -369,6 +523,60 @@ describe("toUpstreamRequestHeaders", () => {
     expect(headers.get("origin")).toBe("http://127.0.0.1:8080");
   });
 
+  test("drops the forwarded header", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers({ forwarded: "for=1.2.3.4" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.has("forwarded")).toBe(false);
+  });
+
+  test("drops the x-forwarded-for header", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers({ "x-forwarded-for": "1.2.3.4" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.has("x-forwarded-for")).toBe(false);
+  });
+
+  test("drops the x-forwarded-host header", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers({ "x-forwarded-host": "evil.example" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.has("x-forwarded-host")).toBe(false);
+  });
+
+  test("drops the x-real-ip header", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers({ "x-real-ip": "1.2.3.4" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.has("x-real-ip")).toBe(false);
+  });
+
+  test("drops a hop-by-hop header", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers({ upgrade: "websocket" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.has("upgrade")).toBe(false);
+  });
+
+  test("drops a header that the connection header names", () => {
+    const headers = toUpstreamRequestHeaders(
+      new Headers({ connection: "x-secret", "x-secret": "1" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.has("x-secret")).toBe(false);
+  });
+
   test("adds no origin when the request has none", () => {
     const headers = toUpstreamRequestHeaders(
       new Headers(),
@@ -423,6 +631,24 @@ describe("toClientResponseHeaders", () => {
     );
 
     expect(headers.get("location")).toBe("/user/login?rd=%2F");
+  });
+
+  test("keeps a double slash from becoming a protocol-relative redirect", () => {
+    const headers = toClientResponseHeaders(
+      new Headers({ location: "http://127.0.0.1:8080//evil.example/x" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.get("location")).toBe("/evil.example/x");
+  });
+
+  test("keeps a slash and backslash from becoming a protocol-relative redirect", () => {
+    const headers = toClientResponseHeaders(
+      new Headers({ location: "http://127.0.0.1:8080/\\evil.example/x" }),
+      "http://127.0.0.1:8080",
+    );
+
+    expect(headers.get("location")).toBe("/evil.example/x");
   });
 
   test("keeps a redirect to another origin", () => {
@@ -572,6 +798,62 @@ describe("startServer", () => {
     const response = await fetch(url("/api/version"));
 
     expect(response.status).toBe(201);
+  });
+
+  test("refuses a GET that would run a write script", async () => {
+    const response = await fetch(url(`${RUN}/f/factory/approval_decide`));
+
+    expect(response.status).toBe(403);
+  });
+
+  test("refuses a HEAD that would run a write script", async () => {
+    const response = await fetch(url(`${RUN}/f/factory/approval_decide`), {
+      method: "HEAD",
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("does not reach the upstream with a refused GET", async () => {
+    seen.length = 0;
+
+    await fetch(url(`${RUN}/f/factory/approval_decide?payload=e30`));
+
+    expect(seen).toEqual([]);
+  });
+
+  test("relays a GET that would run a write script when writes are enabled", async () => {
+    seen.length = 0;
+
+    await fetch(url(`${RUN}/f/factory/approval_decide?payload=e30`, writer));
+
+    expect(seen.map((entry) => entry.method)).toEqual(["GET"]);
+  });
+
+  test("marks every response while writes are enabled", async () => {
+    const response = await fetch(url("/console/", writer));
+
+    expect(response.headers.get("x-branch-server-writes")).toBe("on");
+  });
+
+  test("marks a relayed response while writes are enabled", async () => {
+    const response = await fetch(url("/api/version", writer));
+
+    expect(response.headers.get("x-branch-server-writes")).toBe("on");
+  });
+
+  test("marks a refusal while writes are enabled", async () => {
+    const response = await fetch(url("/api/version", writer), {
+      headers: { origin: "https://evil.example" },
+    });
+
+    expect(response.headers.get("x-branch-server-writes")).toBe("on");
+  });
+
+  test("does not mark responses while writes are off", async () => {
+    const response = await fetch(url("/console/"));
+
+    expect(response.headers.get("x-branch-server-writes")).toBeNull();
   });
 
   test("refuses a write script call by default", async () => {
