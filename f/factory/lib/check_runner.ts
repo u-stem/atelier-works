@@ -11,7 +11,7 @@ import {
   checkTmpDir,
   type EscapingSymlinksReport,
 } from "./check_sandbox.ts";
-import { maskSecrets } from "./log.ts";
+import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 export type CheckCommandResult = {
@@ -30,6 +30,58 @@ export type CheckCommandResult = {
 };
 
 const CHECK_OUTPUT_TAIL_CHARS = 2000;
+
+/**
+ * 検査コマンドを実行できなかった(環境の問題)ときの理由を返す(describeReasonが訳す)。
+ * コマンドと詳細は`"; "`を含みうるので、別の理由に見えないよう置き換える。
+ * 実装フローとPR修正のフローが共有する。
+ */
+export function checkUnrunnableReason(command: string, detail: string): string {
+  return `check command could not run: ${escapeReasonSeparator(command)}: ${escapeReasonSeparator(detail)}`;
+}
+
+/**
+ * `setpriv`が検査コマンドの実行ファイルを起動できなかったときの終了コード。
+ * 見つからない(ENOENT)が127、実行できない(EACCES)が126である。
+ */
+const SETPRIV_EXEC_FAILURE_EXIT_CODES: readonly number[] = [126, 127];
+const SETPRIV_EXEC_FAILURE_PREFIX = "setpriv: failed to execute ";
+
+/** 検査コマンドの結果のうち、実行できなかったかの判定に使う部分。 */
+type CheckOutcome = {
+  readonly ok: boolean;
+  readonly exitCode?: number;
+  readonly output: string;
+};
+
+/**
+ * 検査コマンドの結果が、コードの失敗ではなく、実行ファイルを起動できなかったことを表すかを返す。
+ * `setpriv`が起動に失敗すると、何も実行されず、出力は`setpriv`のその1行だけになる。
+ * 検査コマンド自身が127を返した場合や、出力に同じ語を含むだけの場合は、Claudeが直せる失敗なので当てはまらない。
+ */
+export function isCheckUnrunnable(result: CheckOutcome): boolean {
+  return (
+    !result.ok &&
+    result.exitCode !== undefined &&
+    SETPRIV_EXEC_FAILURE_EXIT_CODES.includes(result.exitCode) &&
+    result.output.startsWith(SETPRIV_EXEC_FAILURE_PREFIX)
+  );
+}
+
+/**
+ * 結果のうち、最初に実行できなかった検査コマンドの理由を返す(`checkUnrunnableReason`)。
+ * 無ければ`null`を返す。
+ */
+export function firstUnrunnableCheckReason(
+  results: readonly (CheckOutcome & { readonly command: string })[],
+): string | null {
+  const unrunnable = results.find(isCheckUnrunnable);
+  if (unrunnable === undefined) return null;
+  return checkUnrunnableReason(
+    unrunnable.command,
+    unrunnable.output.split("\n", 1)[0] ?? "",
+  );
+}
 
 export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 

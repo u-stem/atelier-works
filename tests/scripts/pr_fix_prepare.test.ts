@@ -851,7 +851,7 @@ describe("describeReason (implement flow)", () => {
   test("translates the unrunnable check as an environment problem", () => {
     expect(
       describeReason(
-        "implement check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+        "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
       ),
     ).toBe(
       "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
@@ -861,7 +861,7 @@ describe("describeReason (implement flow)", () => {
   test("asks for the worker image to be fixed when a check could not run", () => {
     expect(
       nextActionFor(
-        "implement check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+        "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
         "implement",
       ),
     ).toContain("workerのイメージ");

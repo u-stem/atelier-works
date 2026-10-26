@@ -152,7 +152,7 @@ Claudeが直せる検査の失敗ではないので、修正のラウンドに�
 検査コマンド自身が127を返したときや、出力に同じ語が混じるだけのときは、コードの失敗なので修正のラウンドに進む。
 修正のラウンドを回しても、Claudeはworkerの環境を直せず、差分も検査の出力も変わらないまま、停滞で止まるだけだからである。
 このときもラウンドは記録しない。
-理由は`implement check command could not run: <コマンド>: <setprivの出力>`になり、要対応の通知で停滞と区別できる。
+理由は`check command could not run: <コマンド>: <setprivの出力>`になり、要対応の通知で停滞と区別できる。
 
 止まったときの理由と要対応の通知は次のとおりである。
 
@@ -160,7 +160,7 @@ Claudeが直せる検査の失敗ではないので、修正のラウンドに�
 | --- | --- | --- |
 | イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
 | 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
-| 検査コマンドの実行ファイルを起動できない | `implement check command could not run:` | `implement_needs_human`([運用](../operations.md#人の対応待ちになったら)) |
+| 検査コマンドの実行ファイルを起動できない | `check command could not run:` | `implement_needs_human`([運用](../operations.md#人の対応待ちになったら)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。

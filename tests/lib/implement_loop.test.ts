@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkUnrunnableReason } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_IMAGE_STALE_REASON,
   CheckImageStaleError,
@@ -21,7 +22,6 @@ import { IMPLEMENT_LEASE_LOST_REASON } from "../../f/factory/lib/implement_launc
 import {
   buildImplementClaudeOptions,
   type ChangeInspection,
-  checkUnrunnableReason,
   type DocDirCopyDeps,
   type DocEntryFs,
   deadlinePassedReason,
@@ -1306,13 +1306,13 @@ describe("runImplementVerifyLoop", () => {
 
   test("builds the unrunnable reason without a reason separator", () => {
     expect(checkUnrunnableReason("a; b", "c; d")).toBe(
-      "implement check command could not run: a, b: c, d",
+      "check command could not run: a, b: c, d",
     );
   });
 
   test("builds an unrunnable reason that names the command and the detail", () => {
     expect(checkUnrunnableReason("bun test", "setpriv: failed")).toBe(
-      "implement check command could not run: bun test: setpriv: failed",
+      "check command could not run: bun test: setpriv: failed",
     );
   });
 

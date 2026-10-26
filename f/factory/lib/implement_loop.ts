@@ -6,6 +6,7 @@
 
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { firstUnrunnableCheckReason } from "./check_runner.ts";
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import {
   type RunClaudeOptions,
@@ -556,35 +557,6 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
 
-/**
- * 検査コマンドを実行できなかった(環境の問題)ときの理由を返す(describeReasonが訳す)。
- * コマンドと詳細は`"; "`を含みうるので、別の理由に見えないよう置き換える。
- */
-export function checkUnrunnableReason(command: string, detail: string): string {
-  return `implement check command could not run: ${escapeReasonSeparator(command)}: ${escapeReasonSeparator(detail)}`;
-}
-
-/**
- * `setpriv`が検査コマンドの実行ファイルを起動できなかったときの終了コード。
- * 見つからない(ENOENT)が127、実行できない(EACCES)が126である。
- */
-const SETPRIV_EXEC_FAILURE_EXIT_CODES: readonly number[] = [126, 127];
-const SETPRIV_EXEC_FAILURE_PREFIX = "setpriv: failed to execute ";
-
-/**
- * 検査コマンドの結果が、コードの失敗ではなく、実行ファイルを起動できなかったことを表すかを返す。
- * `setpriv`が起動に失敗すると、何も実行されず、出力は`setpriv`のその1行だけになる。
- * 検査コマンド自身が127を返した場合や、出力に同じ語を含むだけの場合は、Claudeが直せる失敗なので当てはまらない。
- */
-export function isCheckUnrunnable(result: LoopCheckResult): boolean {
-  return (
-    !result.ok &&
-    result.exitCode !== undefined &&
-    SETPRIV_EXEC_FAILURE_EXIT_CODES.includes(result.exitCode) &&
-    result.output.startsWith(SETPRIV_EXEC_FAILURE_PREFIX)
-  );
-}
-
 /** 期限までに次の修正ラウンドを終える時間が残っておらず、修正をやめたときの理由を返す(describeReasonが訳す)。 */
 export function deadlineReason(round: number): string {
   return `implement flow deadline reached after round ${String(round)}`;
@@ -840,14 +812,10 @@ async function evaluateChecks(
       summarySkipReason = skipReason;
     } else if (!scannedTreeChanged) {
       await deps.removeIgnoredFiles();
-      for (const result of await deps.runChecks()) {
+      const checkResults = await deps.runChecks();
+      unrunnableReason = firstUnrunnableCheckReason(checkResults);
+      for (const result of checkResults) {
         results.push({ command: result.command, ok: result.ok });
-        if (unrunnableReason === null && isCheckUnrunnable(result)) {
-          unrunnableReason = checkUnrunnableReason(
-            result.command,
-            firstLineOf(result.output),
-          );
-        }
         if (result.ok) {
           passedOutputs.push(section(result.command, result.output));
         } else {
@@ -877,10 +845,6 @@ async function evaluateChecks(
     scannedTreeChanged,
     unrunnableReason,
   };
-}
-
-function firstLineOf(text: string): string {
-  return text.split("\n", 1)[0] ?? "";
 }
 
 function blockingStop(
@@ -1125,7 +1089,7 @@ export async function runImplementVerifyLoop(
     // 修正ラウンドを回しても同じ出力を繰り返し、停滞で止まるだけなので、直ちに人の対応待ちで止まる。
     // ラウンドは記録しない。記録すると、モデルの失敗として数えられ、`heavy_model`への切り替えを早めるためである。
     if (evaluation.unrunnableReason !== null) {
-      deps.log("implement check command could not run; stopping the loop", {
+      deps.log("check command could not run; stopping the loop", {
         round,
         reason: evaluation.unrunnableReason,
       });
