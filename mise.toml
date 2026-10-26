@@ -174,7 +174,11 @@ run = "bunx --bun tsc --noEmit"
 
 [tasks.test]
 description = "Run the test suite (the console has its own suite in console:check)"
-run = "bun test --path-ignore-patterns 'console/**'"
+run = "bun test --parallel --path-ignore-patterns 'console/**'"
+
+[tasks."test:changed"]
+description = "Run only the tests affected by the diff against origin/main (CI still runs the full suite)"
+run = "bun test --parallel --changed=origin/main --path-ignore-patterns 'console/**'"
 
 [tasks."lint:docs"]
 description = "Lint the Markdown documents (repository rules, markdownlint, textlint, generated blocks)"
