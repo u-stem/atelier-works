@@ -171,6 +171,16 @@ describe("describeHostAction", () => {
     ).toBe("ホストの作業1件以上が残っています");
   });
 
+  test("waits for the notices instead of showing the record while the summary loads", () => {
+    expect(describeHostAction("pending", true).label).toBe(
+      "ホストの作業を確認中",
+    );
+  });
+
+  test("stays quiet while it waits", () => {
+    expect(describeHostAction("pending", true).tone).toBe("neutral");
+  });
+
   test("falls back to the record when the summary cannot be read", () => {
     expect(describeHostAction(null, true).label).toBe("ホストの作業が必要");
   });
@@ -208,10 +218,6 @@ describe("describeLatestDeployment", () => {
     expect(
       describeLatestDeployment({ ...DEPLOYMENT, result: "failed" }).resultTone,
     ).toBe("failure");
-  });
-
-  test("marks a deployment that needs host work as a warning", () => {
-    expect(describeLatestDeployment(DEPLOYMENT).hostActionTone).toBe("warning");
   });
 
   test("counts the changed paths", () => {

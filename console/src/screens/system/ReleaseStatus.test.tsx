@@ -39,7 +39,7 @@ function statusWith(needsHostAction: boolean): SystemStatus {
 
 function render(
   needsHostAction: boolean,
-  hostAction: HostActionNotices | null,
+  hostAction: HostActionNotices | "pending" | null,
 ): string {
   return renderToStaticMarkup(
     <TooltipProvider>
@@ -71,6 +71,10 @@ describe("ReleaseStatus host action badge", () => {
 
   test("does not repeat the stale record then", () => {
     expect(render(true, NO_NOTICE)).not.toContain("ホストの作業が必要");
+  });
+
+  test("does not show the record while the summary loads", () => {
+    expect(render(true, "pending")).not.toContain("ホストの作業が必要");
   });
 
   test("falls back to the record when the summary cannot be read", () => {
