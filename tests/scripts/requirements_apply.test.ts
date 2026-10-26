@@ -3,10 +3,15 @@ import {
   implementCasFailureReason,
   implementLaunchFailureReason,
 } from "../../f/factory/lib/implement_launch_support.ts";
+import type { WorkItem } from "../../f/factory/lib/types.ts";
 import {
+  type ApprovedBranchContext,
+  type ApprovedBranchDeps,
   type ApprovedSideEffectsDeps,
+  applyApprovedBranch,
   applyApprovedSideEffects,
   buildApprovalCommentFailedMessage,
+  buildApprovedBranchDeps,
   buildApprovedComment,
   buildImplementLaunchNoticeMessage,
   decideRejectedOutcome,
@@ -552,5 +557,359 @@ describe("readRequestAttempt", () => {
 
   test("falls back when attempt is not a number", () => {
     expect(readRequestAttempt({ attempt: "2" }, 1)).toBe(1);
+  });
+});
+
+describe("buildApprovalCommentFailedMessage when the design flow follows", () => {
+  const TARGET = {
+    owner: "octo",
+    repo: "widgets",
+    issue_number: 42,
+    work_item_id: 7,
+  };
+  const CONSOLE_URL = "http://127.0.0.1:8080/console/items/7/requirements";
+
+  test("says that the design flow launch continues", () => {
+    expect(
+      buildApprovalCommentFailedMessage(TARGET, CONSOLE_URL, "boom", "design"),
+    ).toContain("設計フローの起動は続けます");
+  });
+
+  test("does not mention the implement flow", () => {
+    expect(
+      buildApprovalCommentFailedMessage(TARGET, CONSOLE_URL, "boom", "design"),
+    ).not.toContain("implementフロー");
+  });
+
+  test("still ends with the console url", () => {
+    expect(
+      buildApprovalCommentFailedMessage(
+        TARGET,
+        CONSOLE_URL,
+        "boom",
+        "design",
+      ).endsWith(CONSOLE_URL),
+    ).toBe(true);
+  });
+});
+
+/** 分岐の偽の依存を作る。呼び出しを`calls`に記録し、`overrides`で個別に差し替える。 */
+function branchDeps(overrides: Partial<ApprovedBranchDeps> = {}): {
+  deps: ApprovedBranchDeps;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const deps: ApprovedBranchDeps = {
+    casToApproved: async () => {
+      calls.push("cas_approved");
+      return true;
+    },
+    casToDesigning: async () => {
+      calls.push("cas_designing");
+      return true;
+    },
+    commentIssue: async () => {
+      calls.push("comment");
+    },
+    addCommentFailedNotice: async () => {
+      calls.push("notice");
+    },
+    notifyApproved: async () => {
+      calls.push("notify");
+    },
+    removeWorktree: async () => {
+      calls.push("remove_worktree");
+    },
+    startImplement: async () => {
+      calls.push("implement");
+      return "started";
+    },
+    startDesign: null,
+    log: () => {},
+    ...overrides,
+  };
+  return { deps, calls };
+}
+
+const startDesignOk = (calls: string[]) => async (): Promise<"started"> => {
+  calls.push("design");
+  return "started";
+};
+
+describe("applyApprovedBranch without a design flow", () => {
+  test("moves the work item to approved before any side effect", async () => {
+    const h = branchDeps();
+    await applyApprovedBranch(h.deps);
+    expect(h.calls).toEqual([
+      "cas_approved",
+      "comment",
+      "notify",
+      "remove_worktree",
+      "implement",
+    ]);
+  });
+
+  test("never moves the work item to designing", async () => {
+    const h = branchDeps();
+    await applyApprovedBranch(h.deps);
+    expect(h.calls).not.toContain("cas_designing");
+  });
+
+  test("reports that implement started, as before", async () => {
+    const result = await applyApprovedBranch(branchDeps().deps);
+    expect(result).toEqual({ outcome: "approved", implement_started: true });
+  });
+
+  test("does nothing else when the work item moved on", async () => {
+    const h = branchDeps({ casToApproved: async () => false });
+    await applyApprovedBranch(h.deps);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("reports a no-op when the work item moved on", async () => {
+    const h = branchDeps({ casToApproved: async () => false });
+    expect(await applyApprovedBranch(h.deps)).toEqual({ outcome: "no_op" });
+  });
+});
+
+describe("applyApprovedBranch with a design flow", () => {
+  test("moves the work item to designing before any side effect", async () => {
+    const h = branchDeps();
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).toEqual([
+      "cas_designing",
+      "comment",
+      "notify",
+      "remove_worktree",
+      "design",
+    ]);
+  });
+
+  test("never moves the work item to approved", async () => {
+    const h = branchDeps();
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).not.toContain("cas_approved");
+  });
+
+  test("does not start implement even when implement is enabled", async () => {
+    const h = branchDeps();
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).not.toContain("implement");
+  });
+
+  test("keeps the outcome approved and reports that the design started", async () => {
+    const h = branchDeps();
+    const result = await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(result).toEqual({
+      outcome: "approved",
+      implement_started: false,
+      design_started: true,
+    });
+  });
+
+  test("reports that the design did not start when the launch failed", async () => {
+    const h = branchDeps();
+    const result = await applyApprovedBranch({
+      ...h.deps,
+      startDesign: async () => "launch_failed",
+    });
+    expect(result.design_started).toBe(false);
+  });
+
+  test("reports that the design did not start when the job id could not be recorded", async () => {
+    const h = branchDeps();
+    const result = await applyApprovedBranch({
+      ...h.deps,
+      startDesign: async () => "record_failed",
+    });
+    expect(result.design_started).toBe(false);
+  });
+
+  test("does not launch the design when the work item moved on", async () => {
+    const h = branchDeps({ casToDesigning: async () => false });
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("launches the design when the comment fails", async () => {
+    const h = branchDeps({ commentIssue: boom });
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).toContain("design");
+  });
+
+  test("launches the design when the notification throws", async () => {
+    const h = branchDeps({ notifyApproved: boom });
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).toContain("design");
+  });
+
+  test("launches the design when the worktree removal throws", async () => {
+    const h = branchDeps({ removeWorktree: boom });
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls).toContain("design");
+  });
+
+  test("does not throw when every side effect fails", async () => {
+    const h = branchDeps({
+      commentIssue: boom,
+      addCommentFailedNotice: boom,
+      notifyApproved: boom,
+      removeWorktree: boom,
+    });
+    const result = await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(result.outcome).toBe("approved");
+  });
+
+  test("removes the requirements worktree before the design flow starts", async () => {
+    const h = branchDeps();
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(h.calls.indexOf("remove_worktree")).toBeLessThan(
+      h.calls.indexOf("design"),
+    );
+  });
+});
+
+describe("applyApprovedBranch comment failure notice", () => {
+  function recordNextFlow() {
+    const nexts: (string | undefined)[] = [];
+    const deps: Partial<ApprovedBranchDeps> = {
+      commentIssue: boom,
+      addCommentFailedNotice: async (_reason, next) => {
+        nexts.push(next);
+      },
+    };
+    return { nexts, deps };
+  }
+
+  test("tells the notice that the design flow follows", async () => {
+    const recorder = recordNextFlow();
+    const h = branchDeps(recorder.deps);
+    await applyApprovedBranch({
+      ...h.deps,
+      startDesign: startDesignOk(h.calls),
+    });
+    expect(recorder.nexts).toEqual(["design"]);
+  });
+
+  test("tells the notice that the implement flow follows when there is no design flow", async () => {
+    const recorder = recordNextFlow();
+    const h = branchDeps(recorder.deps);
+    await applyApprovedBranch(h.deps);
+    expect(recorder.nexts).toEqual(["implement"]);
+  });
+});
+
+describe("buildApprovedBranchDeps", () => {
+  const CONFIG = {
+    implement_enabled: true,
+    windmill_public_url: "http://127.0.0.1:8080",
+    instance_name: "local",
+  };
+  const NO_LOG = { info() {}, warn() {}, error() {} };
+  const WORK_ITEM: WorkItem = {
+    id: 7,
+    cycle: 1,
+    source: "issue",
+    kind: "issue",
+    owner: "octo",
+    repo: "widgets",
+    issue_number: 42,
+    issue_url: "https://github.com/octo/widgets/issues/42",
+    pr_number: null,
+    title: "t",
+    body: "b",
+    status: "awaiting_approval",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 0,
+    parent_work_item_id: null,
+    branch: null,
+    pr_url: null,
+    ci_check_id: null,
+    conflict_check_id: null,
+    conflict_episode: null,
+    design_attempt: 0,
+    created_at: new Date("2026-10-26T00:00:00Z"),
+    updated_at: new Date("2026-10-26T00:00:00Z"),
+  };
+  const CONTEXT: ApprovedBranchContext = {
+    workItem: WORK_ITEM,
+    issueNumber: 42,
+    attempt: 1,
+    client: {
+      run: async () => {
+        throw new Error("the builder must not call GitHub");
+      },
+      ghToken: "token",
+    },
+    viewerLogin: "factory-bot",
+    webhookUrl: "",
+    log: NO_LOG,
+  };
+
+  test("leaves the design flow unwired in production", () => {
+    expect(buildApprovedBranchDeps(CONFIG, CONTEXT).startDesign).toBeNull();
+  });
+
+  test("leaves the design flow unwired when implement is disabled", () => {
+    const deps = buildApprovedBranchDeps(
+      { ...CONFIG, implement_enabled: false },
+      CONTEXT,
+    );
+    expect(deps.startDesign).toBeNull();
+  });
+
+  test("wires the implement flow when implement is enabled", () => {
+    expect(
+      buildApprovedBranchDeps(CONFIG, CONTEXT).startImplement,
+    ).not.toBeNull();
+  });
+
+  test("wires no implement flow when implement is disabled", () => {
+    const deps = buildApprovedBranchDeps(
+      { ...CONFIG, implement_enabled: false },
+      CONTEXT,
+    );
+    expect(deps.startImplement).toBeNull();
   });
 });

@@ -96,6 +96,9 @@ flowchart TD
 ```
 
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
+設計フロー(`f/factory/design`)は、承認済みの要件定義から設計書を作り、同じ形で承認依頼を記録して終わる。
+入口が閉じていて、本番では動かない。
+仕組みは[設計書の生成](internals/design.md)に書く。
 
 `owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
 1つは、発見の入口である`poll_issues`と`poll_prs`である。
@@ -123,8 +126,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
-| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。今のコードはこの状態へ遷移させない | issue | |
-| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。今のコードはこの状態へ遷移させない | issue | |
+| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。設計書を生成している。遷移させるコードは入っているが、入口が閉じていて本番では動かない | issue | |
+| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。設計フローが`designing`から移すコードは入っているが、入口が閉じていて本番では動かない | issue | |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
 | `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
@@ -142,8 +145,10 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 
 pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
 
-設計工程の2状態(`designing`、`awaiting_design_approval`)は、状態の値と制約だけがあり、遷移を起こすコードは無い。
+設計工程の2状態(`designing`、`awaiting_design_approval`)は、設計フローが前者から後者へ移すコードまでが入っている。
+ただし、設計フローの入口が閉じていて、本番の作業項目はこの2状態にならない。
 そのため、下の状態遷移の図に載せない。
+設計フローは[設計書の生成](internals/design.md)に書く。
 
 終端の一覧はコードとDBのviewの2か所にある。そろえ方は[作業項目の状態とリース](internals/work-items.md)に書く。
 
@@ -240,7 +245,8 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
-| `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
+| `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
+| `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)を記録するコードは入っているが、本番では作られない |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
@@ -340,7 +346,8 @@ Consoleの一覧と集計は次のviewを読む。
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
-| `pipeline` | `implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
+| `pipeline` | `design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
+| `design` | `requirements_apply`(Consoleの承認と却下) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
 | `implement` | `auto_retry_stale_image`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
@@ -403,7 +410,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | スケジュール | 処理の対象 |
 | --- | --- |
 | `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
-| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
+| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、`design-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `sample_worker_load` | defaultのworkerの枠の占有、queueの待ち、コンテナのcgroupのメモリ。読めない値は空のまま記録し、例外は投げない。完全には記録できない回をWindmillのstateに数え、続いたときだけnoticeにする。記録の直後に直近の記録を読み、メモリが設定の割合を超えたか、OOMが増えたら、原因ごとにnoticeを残す。待ちと枠の塞がりは通知にしない |
 | `notify_daily_summary` | 集計の対象の日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する。最後に出した日をWindmillのstateに残し、飛んだ日は古い順に追い付いて出す |
@@ -564,6 +571,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
+| `f/factory/lib/design_launch_support` | script | [LIB] 設計フローの起動 |
+| `f/factory/lib/design_template` | script | [LIB] 設計書テンプレートの定義 |
+| `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
@@ -585,6 +595,10 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/pipeline_generate` | script | [SF-2-1/2] 要件定義の生成(Claude) |
 | `f/factory/steps/pipeline_request_approval` | script | [SF-2-1/3] 承認依頼 |
 | `f/factory/steps/requirements_apply` | script | [SF-2-2] 要件定義の承認結果を反映 |
+| `f/factory/design` | flow | [SF-2-3] 設計書の生成と承認 |
+| `f/factory/steps/design_prepare` | script | [SF-2-3/1] 設計用の作業領域の準備 |
+| `f/factory/steps/design_generate` | script | [SF-2-3/2] 設計書の生成(Claude) |
+| `f/factory/steps/design_request_approval` | script | [SF-2-3/3] 設計の承認依頼 |
 | `f/factory/pr_review` | flow | [SF-3-1] PRの自動レビュー |
 | `f/factory/steps/pr_review_prepare` | script | [SF-3-1/1] PRの取得と検証 |
 | `f/factory/steps/pr_review_generate` | script | [SF-3-1/2] レビューの生成(Claude) |
@@ -918,7 +932,9 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
-- 設計工程(状態と承認依頼の種類だけが定義済みで、フローは無い)
+- 設計工程の動作。
+  生成側のフローは入っているが、入口が閉じている。
+  承認の反映、期限切れ、実装の関門、Consoleは無い
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

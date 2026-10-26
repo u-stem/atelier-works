@@ -1,0 +1,1033 @@
+// f/factory/designフローの3ステップ中2番目(設計書の生成)。
+// 日次予算を確かめてから、headlessのClaudeに試行ごとのディレクトリへ設計書と図を書かせ、
+// 検証して下書きとして保存する。承認済みの要件定義が設計に足りないと分かったときは、要件定義の生成へ戻す。
+// 設計フローのリース(`flow_job_id`がこのフローのジョブID)を持たなければ、何も書かず何も消さずに終わる。
+//
+// このステップのフローには`retry`を付けない。Windmillの再試行はステップ全体を呼び直すので、
+// 要件定義へ戻す遷移や、起動したpipelineの記録が、再試行と競合するためである。
+// Claudeの実行の失敗と生成後の検証の失敗は、例外を投げて`on_error_flow`に任せる。
+
+import * as wmill from "windmill-client@1.817.0";
+import { lstat, mkdtemp, readdir, readFile, readlink } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  buildSystemPrompt,
+  type DailyBudgetStatus,
+  dailyBudgetStatus,
+  recordClaudeRuns,
+  runClaude,
+} from "../lib/claude.ts";
+import { loadConfig } from "../lib/config.ts";
+import {
+  getRequirementDraft,
+  getWorkItem,
+  latestDesignDraft,
+  latestRequirementsApproval,
+  type NewDesignDraft,
+  recordAgentRun,
+  returnToRequirementsIfLeaseHolder,
+  saveDesignDraftIfLeaseHolder,
+  setFlowJobIdIfUnset,
+  updateStatusIfLeaseHolder,
+} from "../lib/db.ts";
+import { validateDesignDoc } from "../lib/design_doc.ts";
+import {
+  buildDesignDocDir,
+  DESIGN_MD_FILENAME,
+  DESIGN_TEMPLATE_RELATIVE_PATH,
+} from "../lib/design_template.ts";
+import { notifyBestEffort } from "../lib/discord.ts";
+import { validateDrawioXml } from "../lib/drawio.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
+import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
+import {
+  parseFlowJobId,
+  rootFlowJobId,
+} from "../lib/implement_launch_support.ts";
+import { isRequirementsApprovedForAttempt } from "../lib/implement_support.ts";
+import { jobTmpBase } from "../lib/job_tmp.ts";
+import { logger, maskSecrets } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
+import {
+  holdsPipelineLease,
+  PIPELINE_FLOW_PATH,
+} from "../lib/pipeline_lease.ts";
+import {
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
+import {
+  automatedFeedback,
+  DESIGN_SCHEMA,
+  type DesignOutput,
+  designPrompt,
+  isDesignOutput,
+} from "../lib/prompts.ts";
+import { documentRegisterIssues } from "../lib/requirements_doc.ts";
+import { REQUIREMENTS_BASE_DIR } from "../lib/requirements_template.ts";
+import type {
+  DesignDraft,
+  Diagram,
+  FactoryConfig,
+  RequirementDraft,
+  WorkItem,
+} from "../lib/types.ts";
+import {
+  type CommandRunner,
+  copyFileTo,
+  ensureEmptyDir,
+  readDirEntries,
+  readTextFile,
+  removePath,
+  removeWorktree,
+  runCommand,
+} from "../lib/workspace.ts";
+import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
+
+/**
+ * 要件の不足の報告(`gap_report`)の長さの上限(文字数)。
+ * 報告は信頼できない入力を読んだClaudeの出力で、要件定義の生成の入力に渡るので、長さを絞る。
+ */
+export const DESIGN_GAP_REPORT_MAX_CHARS = 2000;
+
+/**
+ * 複製して設計のClaudeに見せる要件定義の図のファイル名の規則。
+ * `steps/console_query.ts`の`DIAGRAM_FILE_PATTERN`と同じ内容を複製している。
+ * `steps/`配下のPathScriptは、`pr_workflow_support.ts`を除いて互いのファイルをimportしないため。
+ * 壊れた`requirement_drafts.diagrams`の`file`(`../x.drawio`など)を、パスの連結に届かせない。
+ */
+const DIAGRAM_FILE_PATTERN = /^[a-z0-9-]{1,64}\.drawio$/;
+
+/** 設計書の試行ディレクトリで`*.drawio`として扱うファイル。 */
+const DRAWIO_EXTENSION_PATTERN = /\.drawio$/;
+
+const DESIGN_TOOLS: readonly string[] = [
+  "Read",
+  "Glob",
+  "Grep",
+  "Write",
+  "Edit",
+];
+const DESIGN_ALLOWED_TOOLS: readonly string[] = ["Write", "Edit"];
+
+/**
+ * 設計書が検査に通らずに再試行するとき、問題の一覧の前に付け足す文。
+ * 再試行は新しいセッションで動くので、前回書いたファイルが残っていることを伝え、
+ * テンプレートから書き直させずに直させる。
+ */
+export const DESIGN_REVIEW_RETRY_NOTE =
+  "前回書いたファイルがカレントディレクトリに残っているので、作り直さずにそれを編集して直してください。";
+
+/** 承認済みの要件定義のディレクトリが、設計の実行の間に書き換わったときの`needs_human`の理由。 */
+export const REQUIREMENTS_MODIFIED_REASON =
+  "approved requirements were modified during design";
+
+export type DesignGenerateInput = {
+  readonly work_item_id: number;
+  readonly design_attempt: number;
+  /** 前回の設計書の差し戻しの理由。無いか空なら、フィードバック無しとして扱う。 */
+  readonly feedback: string | null | undefined;
+  /** 設計の準備ステップが用意した、対象リポジトリの読み取り専用のworktree。 */
+  readonly worktree_dir: string;
+  /** 設計の準備ステップが求めた、worktreeが指す既定ブランチの先頭のsha。 */
+  readonly head_sha: string;
+};
+
+export type DesignGenerateResult =
+  | { readonly outcome: "success" }
+  | { readonly outcome: "requirements_gap" }
+  | { readonly outcome: "needs_human"; readonly reason: string }
+  | { readonly outcome: "budget_exceeded" }
+  | { readonly outcome: "lease_lost" };
+
+/** Claudeの1回の実行の依頼。`runClaude`の引数のうち、このステップが決める部分。 */
+export type DesignClaudeRequest = {
+  readonly model: string;
+  readonly prompt: string;
+  readonly systemPromptFile: string;
+  readonly cwd: string;
+  readonly addDirs: readonly string[];
+  readonly tools: readonly string[];
+  readonly allowedTools: readonly string[];
+  /** 形の検査に通った出力の内容を確かめ、直すべき点を返す(無ければ空)。 */
+  readonly reviewOutput: (output: DesignOutput) => Promise<readonly string[]>;
+};
+
+export type DesignClaudeResult =
+  | { readonly outcome: "success"; readonly output: DesignOutput }
+  | {
+      readonly outcome: "failure";
+      readonly reason: string;
+      readonly detail: string;
+    };
+
+/** このステップが使うファイル操作。テストでは差し替える。 */
+export type DesignGenerateFs = {
+  /** `dir`を空のディレクトリにする。 */
+  readonly ensureEmptyDir: (dir: string) => Promise<void>;
+  readonly copyFile: (source: string, destination: string) => Promise<void>;
+  /** `dir`の直下の項目の名前を返す。 */
+  readonly readDir: (dir: string) => Promise<string[]>;
+  readonly readText: (path: string) => Promise<string>;
+  readonly removePath: (path: string) => Promise<void>;
+  /** 複製を置く、ジョブごとの一時ディレクトリを作る。 */
+  readonly makeTempDir: () => Promise<string>;
+  /** `dir`の内容(名前の一覧と中身)のハッシュ。ディレクトリが無ければ`null`。 */
+  readonly hashTree: (dir: string) => Promise<string | null>;
+};
+
+export type DesignGenerateDeps = {
+  readonly config: Pick<
+    FactoryConfig,
+    "model" | "heavy_model" | "max_attempts"
+  >;
+  /** このフローのルートジョブID。リースの値。 */
+  readonly leaseJobId: string;
+  readonly getWorkItem: (id: number) => Promise<WorkItem | null>;
+  readonly dailyBudget: () => Promise<DailyBudgetStatus>;
+  /**
+   * リースを条件にした比較交換で、作業項目を`designing`から`needs_human`へ移す。
+   * 一致しなければ`false`を返す。
+   */
+  readonly moveFromDesigning: (
+    to: "needs_human",
+    reason: string,
+  ) => Promise<boolean>;
+  /**
+   * リースを条件にした1文の比較交換で、`designing`から`requirements_generating`へ戻し、
+   * `design_attempt`を0に、`flow_job_id`を空にする。一致しなければ`false`を返す。
+   */
+  readonly returnToRequirements: (note: string) => Promise<boolean>;
+  readonly notifyNeedsHuman: (item: WorkItem, reason: string) => Promise<void>;
+  /** 作業項目の現在の試行に対して承認された要件定義の下書き。承認が無ければ`null`。 */
+  readonly loadApprovedRequirements: (
+    item: WorkItem,
+  ) => Promise<RequirementDraft | null>;
+  readonly latestDesignDraft: (id: number) => Promise<DesignDraft | null>;
+  /** Factory自身のcloneを開き、スキルを連結したシステムプロンプトのファイルを作る。 */
+  readonly openFactory: () => Promise<{
+    readonly systemPromptFile: string;
+    readonly templatePath: string;
+    readonly cleanup: () => Promise<void>;
+  }>;
+  readonly fs: DesignGenerateFs;
+  /** Claudeを実行し、実行の記録まで済ませる。 */
+  readonly runClaude: (
+    request: DesignClaudeRequest,
+  ) => Promise<DesignClaudeResult>;
+  /** リースを条件にした1文で下書きを保存する。リースを失っていれば`null`を返す。 */
+  readonly saveDesignDraft: (draft: NewDesignDraft) => Promise<number | null>;
+  /** `runFlowAsync(PIPELINE_FLOW_PATH, ...)`の戻り値をそのまま返す。ジョブIDの解析はこのステップが行う。 */
+  readonly launchPipeline: (input: {
+    readonly work_item_id: number;
+    readonly attempt: number;
+    readonly feedback: string;
+  }) => Promise<string>;
+  /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
+  readonly recordPipelineJobId: (jobId: string) => Promise<boolean>;
+  /** リースが空のときだけ`requirements_generating`から`needs_human`へ移す。 */
+  readonly moveRequirementsToNeedsHuman: (reason: string) => Promise<boolean>;
+  /** 設計用のworktreeを消す。 */
+  readonly removeWorktree: (dir: string) => Promise<void>;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+function messageOf(err: unknown): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * `feedback`を正規化する。null、undefined、空文字列はどれも「フィードバック無し」としてnullを返す。
+ * フロースキーマの`default: ''`は`wmill.runFlowAsync`やAPIからの起動では効かないため。
+ */
+function resolveFeedback(feedback: string | null | undefined): string | null {
+  return feedback !== null && feedback !== undefined && feedback.length > 0
+    ? feedback
+    : null;
+}
+
+/** 長い報告を、コードポイントの途中で切らずに`DESIGN_GAP_REPORT_MAX_CHARS`に収める。 */
+function limitGapReport(report: string): string {
+  const points = Array.from(report);
+  return points.length <= DESIGN_GAP_REPORT_MAX_CHARS
+    ? report
+    : points.slice(0, DESIGN_GAP_REPORT_MAX_CHARS).join("");
+}
+
+/**
+ * 承認済みの要件定義のディレクトリを、`..`を字面で解決した後に`REQUIREMENTS_BASE_DIR`の下であることを確かめて返す。
+ * 解決はシンボリックリンクをたどらない。`doc_dir`はDBの行から読んだ値で、
+ * `buildRequirementsDocDir`が書いた値のはずだが、パスに使う前に防御的に確かめ直す。
+ * 基準の外か相対パスなら例外を投げる。
+ */
+function resolveRequirementsDocDir(docDir: string): string {
+  const dir = isAbsolute(docDir) ? resolve(docDir) : "";
+  if (!dir.startsWith(`${REQUIREMENTS_BASE_DIR}/`)) {
+    throw new Error(
+      `design_generate: doc_dir of the approved requirements is outside the requirements base directory: ${maskSecrets(docDir)}`,
+    );
+  }
+  return dir;
+}
+
+/**
+ * 生成の失敗を、秘密情報をマスクした例外として投げる。
+ * 状態の遷移と通知はここでは一切しない。終端の処理は、`on_error_flow`が持つ。
+ * 設計フローには`retry`が無いので、この例外はそのまま`failure_module`に届く。
+ */
+function failGeneration(reason: string, detail: string): never {
+  throw new Error(
+    maskSecrets(`design_generate: runClaude failed (${reason}): ${detail}`),
+  );
+}
+
+/** 検査で見つかった問題をつなぎ、`failGeneration`に渡す1つの失敗メッセージにする。 */
+function buildGenerateFailureMessage(issues: readonly string[]): string {
+  return `design document failed validation: ${issues.join("; ")}`;
+}
+
+/** 試行ディレクトリのファイルを1つ読む。読めないときは、ファイル名を含む例外を投げる。 */
+async function readDocFile(
+  fs: DesignGenerateFs,
+  docDir: string,
+  fileName: string,
+): Promise<string> {
+  try {
+    return await fs.readText(`${docDir}/${fileName}`);
+  } catch (err) {
+    throw new Error(
+      `設計書ファイル「${fileName}」を読めませんでした: ${messageOf(err)}`,
+    );
+  }
+}
+
+/** 試行ディレクトリの項目を、検証して保存する図と、警告して消す想定外のものに分ける。 */
+function classifyDocDirEntries(entries: readonly string[]): {
+  readonly diagramFiles: string[];
+  readonly stray: string[];
+} {
+  const diagramFiles = entries.filter((entry) =>
+    DRAWIO_EXTENSION_PATTERN.test(entry),
+  );
+  const diagramSet = new Set(diagramFiles);
+  const stray = entries.filter(
+    (entry) => entry !== DESIGN_MD_FILENAME && !diagramSet.has(entry),
+  );
+  return { diagramFiles, stray };
+}
+
+/**
+ * 試行ディレクトリの設計書と図を読み、検査で見つかった問題を返す(無ければ空)。
+ * 図のXMLの検査と`validateDesignDoc`をまとめて行う。
+ * 再試行でClaudeがどのファイルを直せばよいか分かるよう、設計書の問題にはファイル名を前置きする。
+ */
+async function collectDocIssues(
+  fs: DesignGenerateFs,
+  docDir: string,
+): Promise<string[]> {
+  const classified = classifyDocDirEntries(await fs.readDir(docDir));
+  const markdown = await readDocFile(fs, docDir, DESIGN_MD_FILENAME);
+  const diagramIssues: string[] = [];
+  for (const diagramFile of classified.diagramFiles) {
+    const xml = await readDocFile(fs, docDir, diagramFile);
+    const validation = validateDrawioXml(xml);
+    if (!validation.valid) {
+      diagramIssues.push(
+        `図「${diagramFile}」のXMLが不正です: ${validation.reason}`,
+      );
+    }
+  }
+  const docValidation = validateDesignDoc(markdown, classified.diagramFiles);
+  const docIssues = docValidation.ok ? [] : docValidation.issues;
+  return [
+    ...diagramIssues,
+    ...docIssues.map((issue) => `${DESIGN_MD_FILENAME}: ${issue}`),
+  ];
+}
+
+/**
+ * 承認済みの要件定義の図のうち、宣言されていて名前の規則に合うものだけを、`copyDir`に複製する。
+ * 複製できたものの`Diagram`を返す。元のファイルが読めないものは、警告して飛ばす。
+ * Claudeには元のディレクトリを見せず、この複製だけを渡す。書き込み境界が確認できていない間に、
+ * 承認済みの要件定義を書き換えさせないためである。
+ */
+async function copyDeclaredDiagrams(
+  deps: DesignGenerateDeps,
+  requirementsDir: string,
+  diagrams: readonly Diagram[],
+  copyDir: string,
+): Promise<Diagram[]> {
+  const copied: Diagram[] = [];
+  for (const diagram of diagrams) {
+    if (!DIAGRAM_FILE_PATTERN.test(diagram.file)) {
+      deps.log("skipping a declared diagram with a malformed file name", {
+        name: diagram.name,
+        file: diagram.file,
+      });
+      continue;
+    }
+    try {
+      await deps.fs.copyFile(
+        `${requirementsDir}/${diagram.file}`,
+        `${copyDir}/${diagram.file}`,
+      );
+      copied.push(diagram);
+    } catch (err) {
+      deps.log("skipping a declared diagram that cannot be copied", {
+        name: diagram.name,
+        error: messageOf(err),
+      });
+    }
+  }
+  return copied;
+}
+
+/**
+ * 設計書を生成して下書きとして保存する。
+ *
+ * 最初に設計フローのリースを確かめ、持っていなければ何も書かず何も消さずに"lease_lost"を返す(例外は投げない)。
+ * 以後、作業項目の状態を書くのは、すべてリースを条件にした比較交換である。一致しなければ"lease_lost"を返す。
+ * 日次予算を超えていればClaudeを起動せず、`needs_human`にして通知し、"budget_exceeded"を返す。
+ *
+ * 承認済みの要件定義の本文はDBから読んでプロンプトの区切りの中に渡し、図は宣言されていて名前の規則に合うものだけを
+ * 一時ディレクトリへ複製して、その複製だけをClaudeの`addDirs`に入れる。元のディレクトリは`addDirs`にも`cwd`にも入れない。
+ * 実行の前後で元のディレクトリの内容のハッシュを比べ、一致しなければ保存せず`needs_human`にする。
+ * 書き込み境界が確認できていない間の、防ぐのではなく検出して止める補いである。
+ *
+ * 試行ディレクトリ(`buildDesignDocDir`)を空にしてテンプレートを`design.md`として複製し、そこをClaudeの`cwd`にする。
+ * 実行の後、`design.md`と`*.drawio`以外の項目を警告して消し、各図を`validateDrawioXml`で検査する。
+ * 検査に通らなければ例外を投げる。
+ *
+ * 設計が要件の不足を報告したときは、`max_attempts`に達していれば`needs_human`、そうでなければ
+ * リースを条件にした1文で要件定義の生成へ戻し(`design_attempt`は0、`flow_job_id`は空)、
+ * pipelineを次の試行で起動してジョブIDを記録する。起動か記録に失敗したら、リースが空のときだけ`needs_human`に戻して例外を投げる。
+ *
+ * 後始末は`finally`で行う。worktreeはリースを持っているときだけ消す。
+ * リースを失った実行は、新しい実行が同じパスを使っているかもしれないので消さない。
+ * 図の複製はこのジョブだけの一時ディレクトリなので、リースに関係なく消す。
+ * Claudeを`lockedDesignRun`で起動し、設計の準備が使用中のworktreeを消さないようにする。
+ * Claudeの実行の後に`design-<N>`の中でgitを実行しない。
+ */
+export async function runDesignGenerate(
+  deps: DesignGenerateDeps,
+  input: DesignGenerateInput,
+): Promise<DesignGenerateResult> {
+  const workItemId = input.work_item_id;
+  const item = await deps.getWorkItem(workItemId);
+  if (item === null) {
+    throw new Error(`design_generate: no work item with id ${workItemId}`);
+  }
+  const issueNumber = item.issue_number;
+  if (issueNumber === null) {
+    throw new Error(
+      `design_generate: work item ${workItemId} has no issue_number`,
+    );
+  }
+  const holdsLease = (current: WorkItem | null): boolean =>
+    current !== null &&
+    current.status === "designing" &&
+    holdsPipelineLease(current, deps.leaseJobId);
+
+  // 取り消しに失敗して残った古い実行が、持ち主の試行ディレクトリを空にしないよう、触れる前に確かめる。
+  if (!holdsLease(item)) {
+    deps.log("design lease not held, skipping", {
+      work_item_id: workItemId,
+      status: item.status,
+      flow_job_id: item.flow_job_id,
+      lease_job_id: deps.leaseJobId,
+    });
+    return { outcome: "lease_lost" };
+  }
+
+  let factory: Awaited<ReturnType<DesignGenerateDeps["openFactory"]>> | null =
+    null;
+  let copyDir: string | null = null;
+  let workspaceCleaned = false;
+
+  /**
+   * 図の複製を消す。複製はこのジョブだけの一時ディレクトリで、新しい実行と共有しないので、リースに関係なく消す。
+   * 失敗してもログに残すだけで、結果を隠さない。
+   */
+  const removeCopyDir = async (): Promise<void> => {
+    if (copyDir === null) return;
+    const target = copyDir;
+    copyDir = null;
+    try {
+      await deps.fs.removePath(target);
+    } catch (err) {
+      deps.log("failed to remove the copy of the requirements diagrams", {
+        work_item_id: workItemId,
+        error: messageOf(err),
+      });
+    }
+  };
+
+  /**
+   * リースを持っているときだけ、worktreeを消す。2回目以降は何もしない。
+   * 失敗してもログに残すだけで、結果を隠さない。
+   */
+  const cleanupWorkspace = async (): Promise<void> => {
+    if (workspaceCleaned) return;
+    let current: WorkItem | null = null;
+    try {
+      current = await deps.getWorkItem(workItemId);
+    } catch (err) {
+      deps.log("could not read the work item before the cleanup", {
+        work_item_id: workItemId,
+        error: messageOf(err),
+      });
+      return;
+    }
+    if (!holdsLease(current)) return;
+    workspaceCleaned = true;
+    try {
+      await deps.removeWorktree(input.worktree_dir);
+    } catch (err) {
+      deps.log("failed to remove the design worktree", {
+        work_item_id: workItemId,
+        error: messageOf(err),
+      });
+    }
+  };
+
+  /** 作業項目を`needs_human`にして通知し、結果を返す。移せなければ`lease_lost`を返す。 */
+  const stopForHuman = async (
+    reason: string,
+    result: DesignGenerateResult,
+  ): Promise<DesignGenerateResult> => {
+    // リースを手放す遷移の前に、リースを持っている間に後始末を済ませる。
+    await cleanupWorkspace();
+    if (!(await deps.moveFromDesigning("needs_human", reason))) {
+      return { outcome: "lease_lost" };
+    }
+    // 状態は`needs_human`に記録済みなので、通知が届かなくてもステップを失敗させない。
+    try {
+      await deps.notifyNeedsHuman(item, reason);
+    } catch (err) {
+      deps.log("failed to notify needs_human", {
+        work_item_id: workItemId,
+        error: messageOf(err),
+      });
+    }
+    return result;
+  };
+
+  try {
+    const budget = await deps.dailyBudget();
+    if (budget.exceeded) {
+      deps.log("daily budget exceeded, not starting claude", {
+        work_item_id: workItemId,
+        spent_usd: budget.spent_usd,
+        limit_usd: budget.limit_usd,
+      });
+      return await stopForHuman(
+        `daily budget exceeded ($${budget.spent_usd.toFixed(2)} >= $${budget.limit_usd.toFixed(2)})`,
+        { outcome: "budget_exceeded" },
+      );
+    }
+
+    const approved = await deps.loadApprovedRequirements(item);
+    if (approved === null) {
+      throw new Error(
+        `design_generate: work item ${workItemId} has no approved requirements for attempt ${String(item.attempt)}`,
+      );
+    }
+    const requirementsDir =
+      approved.doc_dir === null
+        ? null
+        : resolveRequirementsDocDir(approved.doc_dir);
+
+    factory = await deps.openFactory();
+    const docDir = buildDesignDocDir(
+      REQUIREMENTS_BASE_DIR,
+      item.owner,
+      item.repo,
+      issueNumber,
+      workItemId,
+      item.attempt,
+      input.design_attempt,
+    );
+    await deps.fs.ensureEmptyDir(docDir);
+    await deps.fs.copyFile(
+      factory.templatePath,
+      `${docDir}/${DESIGN_MD_FILENAME}`,
+    );
+
+    let copiedDiagrams: Diagram[] = [];
+    if (requirementsDir !== null && approved.diagrams.length > 0) {
+      copyDir = await deps.fs.makeTempDir();
+      copiedDiagrams = await copyDeclaredDiagrams(
+        deps,
+        requirementsDir,
+        approved.diagrams,
+        copyDir,
+      );
+      if (copiedDiagrams.length === 0) {
+        await deps.fs.removePath(copyDir);
+        copyDir = null;
+      }
+    }
+
+    const before =
+      requirementsDir === null ? null : await deps.fs.hashTree(requirementsDir);
+
+    const previous = await deps.latestDesignDraft(workItemId);
+    const prompt = designPrompt({
+      issue: {
+        owner: item.owner,
+        repo: item.repo,
+        number: issueNumber,
+        url: item.issue_url ?? "",
+      },
+      requirements: { markdown: approved.markdown, diagrams: copiedDiagrams },
+      requirementsDiagramDir: copyDir,
+      attempt: item.attempt,
+      designAttempt: input.design_attempt,
+      targetRepoDir: input.worktree_dir,
+      feedback: resolveFeedback(input.feedback),
+      previousDraft:
+        previous !== null && previous.requirement_draft_id === approved.id
+          ? previous.markdown
+          : null,
+    });
+
+    const result = await deps.runClaude({
+      model: modelFor(deps.config, "design", 0),
+      prompt,
+      systemPromptFile: factory.systemPromptFile,
+      cwd: docDir,
+      addDirs:
+        copyDir === null ? [input.worktree_dir] : [input.worktree_dir, copyDir],
+      tools: DESIGN_TOOLS,
+      allowedTools: DESIGN_ALLOWED_TOOLS,
+      reviewOutput: async (output) =>
+        output.outcome === "designed" ? collectDocIssues(deps.fs, docDir) : [],
+    });
+
+    // 失敗や要件の不足の報告でも、先に書き換えを確かめる。書き換えられた要件定義を元にした結果は採らない。
+    const after =
+      requirementsDir === null ? null : await deps.fs.hashTree(requirementsDir);
+    if (before !== after) {
+      deps.log("approved requirements changed during design", {
+        work_item_id: workItemId,
+      });
+      return await stopForHuman(REQUIREMENTS_MODIFIED_REASON, {
+        outcome: "needs_human",
+        reason: REQUIREMENTS_MODIFIED_REASON,
+      });
+    }
+
+    if (result.outcome === "failure") {
+      failGeneration(result.reason, result.detail);
+    }
+
+    if (result.output.outcome === "requirements_gap") {
+      const gap = limitGapReport(maskSecrets(result.output.gap_report ?? ""));
+      if (item.attempt >= deps.config.max_attempts) {
+        const reason = `design requirements_gap after max_attempts ${String(deps.config.max_attempts)}`;
+        return await stopForHuman(reason, { outcome: "needs_human", reason });
+      }
+      // リースを手放す比較交換の前に、リースを持っている間に後始末を済ませる。
+      await cleanupWorkspace();
+      if (!(await deps.returnToRequirements(`design gap: ${gap}`))) {
+        return { outcome: "lease_lost" };
+      }
+      await relaunchRequirements(deps, item, gap);
+      return { outcome: "requirements_gap" };
+    }
+
+    const entries = await deps.fs.readDir(docDir);
+    const classified = classifyDocDirEntries(entries);
+    for (const stray of classified.stray) {
+      deps.log("design_generate: removing unexpected entry in doc dir", {
+        work_item_id: workItemId,
+        entry: stray,
+      });
+      await deps.fs.removePath(`${docDir}/${stray}`);
+    }
+    const markdown = await readDocFile(deps.fs, docDir, DESIGN_MD_FILENAME);
+    const issues = await collectDocIssues(deps.fs, docDir);
+    if (issues.length > 0) {
+      failGeneration(
+        "invalid_structured_output",
+        buildGenerateFailureMessage(issues),
+      );
+    }
+    const registerIssues = documentRegisterIssues(markdown);
+    if (registerIssues.length > 0) {
+      deps.log("design document breaks the writing rules", {
+        work_item_id: workItemId,
+        issues: registerIssues.map(
+          (issue) => `${DESIGN_MD_FILENAME}: ${issue}`,
+        ),
+      });
+    }
+
+    const saved = await deps.saveDesignDraft({
+      work_item_id: workItemId,
+      requirement_draft_id: approved.id,
+      design_attempt: input.design_attempt,
+      summary: result.output.summary,
+      markdown,
+      diagrams: classified.diagramFiles.map((file) => ({
+        name: file.slice(0, -".drawio".length),
+        file,
+      })),
+      open_questions: result.output.open_questions,
+      doc_dir: docDir,
+      head_sha: input.head_sha,
+    });
+    if (saved === null) {
+      deps.log("design lease lost before the draft was saved", {
+        work_item_id: workItemId,
+        lease_job_id: deps.leaseJobId,
+      });
+      return { outcome: "lease_lost" };
+    }
+    return { outcome: "success" };
+  } finally {
+    if (factory !== null) {
+      try {
+        await factory.cleanup();
+      } catch (err) {
+        deps.log("failed to remove the system prompt file", {
+          error: messageOf(err),
+        });
+      }
+    }
+    await cleanupWorkspace();
+    await removeCopyDir();
+  }
+}
+
+/**
+ * 要件定義の生成を次の試行で起動し、ジョブIDを記録する。
+ * 作業項目はすでに`requirements_generating`へ戻り、`flow_job_id`は空である。
+ * 起動に失敗したか、ジョブIDを記録できなかった(記録が例外を投げた)ときは、
+ * リースが空のときだけ`needs_human`へ戻してから例外を投げる。
+ * 記録されないpipelineは準備ステップで何もせずに終わるので、戻さないと動くジョブの無いまま残るためである。
+ * 例外は`on_error_flow`が`job_failures`に記録して通知する。
+ * 記録が`false`を返す(別の実行がリースを持つ)ときは、その実行が進めているので、ログだけ残す。
+ * 報告は`AUTOMATED_FEEDBACK_MARKER`で始めて渡し、要件定義の生成が人の差し戻しの理由として扱わないようにする。
+ */
+async function relaunchRequirements(
+  deps: DesignGenerateDeps,
+  item: WorkItem,
+  gap: string,
+): Promise<void> {
+  const rollBack = async (failure: string): Promise<Error> => {
+    let rolledBack: boolean;
+    try {
+      rolledBack = await deps.moveRequirementsToNeedsHuman(
+        REQUIREMENTS_REGENERATION_FAILED_REASON,
+      );
+    } catch (err) {
+      deps.log("needs_human rollback after a failed relaunch failed", {
+        work_item_id: item.id,
+        error: messageOf(err),
+      });
+      return new Error(failure);
+    }
+    if (rolledBack) return new Error(failure);
+    return new Error(
+      `${failure}; another run holds the lease or the work item moved on, so it was not moved to needs_human`,
+    );
+  };
+
+  let jobId: string;
+  try {
+    jobId = parseFlowJobId(
+      await deps.launchPipeline({
+        work_item_id: item.id,
+        attempt: item.attempt + 1,
+        feedback: automatedFeedback(gap),
+      }),
+      "runFlowAsync",
+    );
+  } catch (err) {
+    throw await rollBack(
+      `design_generate: ${PIPELINE_FLOW_PATH} could not be started: ${messageOf(err)}`,
+    );
+  }
+  let recorded: boolean;
+  try {
+    recorded = await deps.recordPipelineJobId(jobId);
+  } catch (err) {
+    throw await rollBack(
+      `design_generate: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${messageOf(err)}`,
+    );
+  }
+  if (!recorded) {
+    deps.log("pipeline flow job id not recorded; another run holds the lease", {
+      work_item_id: item.id,
+      started_job_id: jobId,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 要件定義のディレクトリのハッシュ
+// ---------------------------------------------------------------------------
+
+/** `hashDirectoryTree`が使うディレクトリの読み取り。テストでは差し替える。 */
+export type DirectoryEntryIo = {
+  readonly readDir: (
+    dir: string,
+  ) => Promise<{ readonly name: string; readonly isDirectory: boolean }[]>;
+  readonly readFile: (path: string) => Promise<Uint8Array>;
+};
+
+function isMissingError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    Reflect.get(err, "code") === "ENOENT" || err.message.includes("ENOENT")
+  );
+}
+
+/**
+ * `dir`以下の内容(相対パスの一覧と、ファイルの中身)のSHA-256を16進で返す。ディレクトリが無ければ`null`を返す。
+ * 名前の一覧は並べ替えて数え、名前と中身は長さを前置きして区切る。名前の終わりと中身の始まりが紛れないようにするため。
+ * 実行の前後で比べ、承認済みの要件定義の書き換え(変更、追加、削除、改名)を検出する。
+ */
+export async function hashDirectoryTree(
+  dir: string,
+  io: DirectoryEntryIo,
+): Promise<string | null> {
+  const hasher = new Bun.CryptoHasher("sha256");
+  const walk = async (
+    path: string,
+    prefix: string,
+    listed: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>,
+  ): Promise<void> => {
+    const entries = [...listed].sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    );
+    for (const entry of entries) {
+      const relative = `${prefix}${entry.name}`;
+      if (entry.isDirectory) {
+        hasher.update(`D${String(relative.length)}:${relative}\n`);
+        await walk(
+          `${path}/${entry.name}`,
+          `${relative}/`,
+          await io.readDir(`${path}/${entry.name}`),
+        );
+        continue;
+      }
+      const content = await io.readFile(`${path}/${entry.name}`);
+      hasher.update(
+        `F${String(relative.length)}:${relative}\n${String(content.length)}:`,
+      );
+      hasher.update(content);
+    }
+  };
+  // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外は、書き換えとして呼び出し側に伝える。
+  let root: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>;
+  try {
+    root = await io.readDir(dir);
+  } catch (err) {
+    if (isMissingError(err)) return null;
+    throw err;
+  }
+  await walk(dir, "", root);
+  return hasher.digest("hex");
+}
+
+/** 本番で`hashDirectoryTree`に渡す読み取り。シンボリックリンクはたどらず、リンク先の文字列を中身として扱う。 */
+export const realDirectoryIo: DirectoryEntryIo = {
+  readDir: async (dir) =>
+    (await readdir(dir, { withFileTypes: true })).map((entry) => ({
+      name: entry.name,
+      isDirectory: entry.isDirectory(),
+    })),
+  readFile: async (path) => {
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink()) {
+      return new TextEncoder().encode(`symlink:${await readlink(path)}`);
+    }
+    if (!stat.isFile()) return new TextEncoder().encode("special");
+    return new Uint8Array(await readFile(path));
+  },
+};
+
+/**
+ * 設計用のworktreeのロックを持ったままコマンドを起動するランナーを返す。
+ * Claudeの実行をこれで包むと、設計の準備ステップが次の試行で`design-<N>`を作り直す前に、
+ * 使用中のプロセスを検出できる。
+ */
+export function lockedDesignRun(
+  run: CommandRunner,
+  worktreeDir: string,
+  owner: { readonly workItemId: number; readonly jobId: string },
+  prepareLockFile?: (path: string) => Promise<void>,
+): CommandRunner {
+  // 持ち主の種別は、実装フローと同じ`implement`を使う。ロックファイルはworktreeごとに別なので、
+  // 実装のworktreeのロックとは混ざらない。設計の準備は何も止めず、保持者がいれば引き返すだけである。
+  return withWorktreeProcessLock(
+    run,
+    worktreeLockFor(worktreeDir),
+    { kind: "implement", workItemId: owner.workItemId, jobId: owner.jobId },
+    prepareLockFile,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ステップの本体
+// ---------------------------------------------------------------------------
+
+/**
+ * 設計書を生成するステップ。本番の依存を組み立てて`runDesignGenerate`を呼ぶ。
+ * フローのルートジョブIDを得られないときは例外を投げる。
+ */
+export async function main(
+  work_item_id: number,
+  design_attempt: number,
+  feedback: string | null | undefined,
+  worktree_dir: string,
+  head_sha: string,
+): Promise<DesignGenerateResult> {
+  const log = logger("design_generate");
+  const config = await loadConfig(() =>
+    wmill.getResource("f/factory/factory_config"),
+  );
+  const ghToken = await wmill.getVariable("f/factory/github_token");
+  const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
+  const leaseJobId = rootFlowJobId(process.env);
+
+  return runDesignGenerate(
+    {
+      config,
+      leaseJobId,
+      getWorkItem: (id) => getWorkItem(id),
+      dailyBudget: () => dailyBudgetStatus(config),
+      moveFromDesigning: (to, reason) =>
+        updateStatusIfLeaseHolder(
+          work_item_id,
+          "designing",
+          to,
+          leaseJobId,
+          reason,
+        ),
+      returnToRequirements: (note) =>
+        returnToRequirementsIfLeaseHolder(work_item_id, leaseJobId, note),
+      notifyNeedsHuman: async (item, reason) => {
+        await notifyBestEffort(
+          webhookUrl,
+          {
+            kind: "needs_human",
+            instance_name: config.instance_name,
+            owner: item.owner,
+            repo: item.repo,
+            url: item.issue_url ?? "",
+            reason: describeReason(reason),
+            target: { kind: "issue", number: item.issue_number ?? 0 },
+            next_action: nextActionFor(reason),
+          },
+          log,
+        );
+      },
+      loadApprovedRequirements: async (item) => {
+        const approval = await latestRequirementsApproval(item.id);
+        if (
+          approval === null ||
+          !isRequirementsApprovedForAttempt(approval, item.attempt)
+        ) {
+          return null;
+        }
+        return getRequirementDraft(approval.draft_id);
+      },
+      latestDesignDraft: (id) => latestDesignDraft(id),
+      openFactory: async () => {
+        const clone = await openFactoryClone(config, {
+          run: runCommand,
+          ghToken,
+        });
+        const systemPrompt = await buildSystemPrompt({
+          skillNames: ["factory-design", "drawio-diagram"],
+          factoryCloneDir: clone.dir,
+        });
+        return {
+          systemPromptFile: systemPrompt.path,
+          templatePath: `${clone.dir}/${DESIGN_TEMPLATE_RELATIVE_PATH}`,
+          cleanup: systemPrompt.cleanup,
+        };
+      },
+      fs: {
+        ensureEmptyDir: (dir) => ensureEmptyDir(dir),
+        copyFile: async (source, destination) => {
+          const stat = await lstat(source);
+          if (!stat.isFile()) {
+            throw new Error(`${source} is not a regular file`);
+          }
+          await copyFileTo(source, destination);
+        },
+        readDir: (dir) => readDirEntries(dir),
+        readText: (path) => readTextFile(path),
+        removePath: (path) => removePath(path),
+        makeTempDir: () =>
+          mkdtemp(join(jobTmpBase(), "factory-design-diagrams-")),
+        hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
+      },
+      runClaude: async (request) => {
+        const oauthToken = await wmill.getVariable(
+          "f/factory/claude_oauth_token",
+        );
+        const result = await runClaude<DesignOutput>({
+          run: lockedDesignRun(runCommand, worktree_dir, {
+            workItemId: work_item_id,
+            jobId: leaseJobId,
+          }),
+          workItemId: work_item_id,
+          stage: "generate_design",
+          attempt: design_attempt,
+          model: request.model,
+          prompt: request.prompt,
+          appendSystemPromptFile: request.systemPromptFile,
+          jsonSchema: DESIGN_SCHEMA,
+          isStructuredOutput: isDesignOutput,
+          tools: request.tools,
+          allowedTools: request.allowedTools,
+          permissionMode: "dontAsk",
+          settingSources: ["user"],
+          maxTurns: config.max_turns,
+          maxBudgetUsd: config.max_budget_usd_per_run,
+          cwd: request.cwd,
+          addDirs: request.addDirs,
+          oauthToken,
+          timeoutMs: config.claude_timeout_sec * 1000,
+          reviewOutput: request.reviewOutput,
+          reviewRetryNote: DESIGN_REVIEW_RETRY_NOTE,
+        });
+        await recordClaudeRuns(result, recordAgentRun);
+        return result.outcome === "success"
+          ? { outcome: "success", output: result.structuredOutput }
+          : {
+              outcome: "failure",
+              reason: result.reason,
+              detail: result.detail,
+            };
+      },
+      saveDesignDraft: (draft) =>
+        saveDesignDraftIfLeaseHolder(draft, leaseJobId),
+      launchPipeline: (pipelineInput) =>
+        wmill.runFlowAsync(PIPELINE_FLOW_PATH, pipelineInput),
+      recordPipelineJobId: (jobId) => setFlowJobIdIfUnset(work_item_id, jobId),
+      moveRequirementsToNeedsHuman: (reason) =>
+        updateStatusIfLeaseHolder(
+          work_item_id,
+          "requirements_generating",
+          "needs_human",
+          null,
+          reason,
+        ),
+      removeWorktree: (dir) =>
+        removeWorktree({
+          run: runCommand,
+          repoDir: join(dirname(dir), "main"),
+          dir,
+          force: true,
+        }),
+      log: (message, fields) => log.warn(message, fields),
+    },
+    { work_item_id, design_attempt, feedback, worktree_dir, head_sha },
+  );
+}

@@ -39,6 +39,8 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "retry_work_item", to: "pr_fix", kind: "script" },
   { from: "steps/requirements_apply", to: "implement", kind: "script" },
   { from: "steps/requirements_apply", to: "pipeline", kind: "script" },
+  { from: "steps/requirements_apply", to: "design", kind: "script" },
+  { from: "steps/design_generate", to: "pipeline", kind: "script" },
   { from: "steps/manual_intake_register", to: "pipeline", kind: "script" },
   { from: "steps/pr_fix_finish", to: "pipeline", kind: "script" },
   { from: "steps/implement_finish", to: "pipeline", kind: "script" },

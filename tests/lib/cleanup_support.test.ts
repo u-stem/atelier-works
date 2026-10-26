@@ -568,3 +568,82 @@ describe("lockFileDirs", () => {
     ]);
   });
 });
+
+describe("the design worktree", () => {
+  const OWNER = "octo-owner";
+  const REPO = "atelier-works";
+  const entry = (path: string, branch: string | null) => ({
+    path,
+    headSha: "abc1234",
+    branch,
+    bare: false,
+    detached: branch === null,
+  });
+  const MAIN = entry("/workspaces/octo-owner/atelier-works/main", "main");
+  const REQ = entry("/workspaces/octo-owner/atelier-works/req-42", null);
+  const DESIGN = entry("/workspaces/octo-owner/atelier-works/design-42", null);
+  const DESIGN_DIR = "/workspaces/octo-owner/atelier-works/design-42";
+  const ITEM = { issue_number: 42, branch: null };
+
+  test("issueWorktreePaths returns the design-<N> worktree when it is listed", () => {
+    expect(issueWorktreePaths(OWNER, REPO, ITEM, [MAIN, DESIGN])).toEqual([
+      DESIGN_DIR,
+    ]);
+  });
+
+  test("issueWorktreePaths returns nothing for design-<N> when it is not listed", () => {
+    expect(issueWorktreePaths(OWNER, REPO, ITEM, [MAIN])).toEqual([]);
+  });
+
+  test("issueWorktreePaths returns the requirements worktree before the design worktree", () => {
+    expect(issueWorktreePaths(OWNER, REPO, ITEM, [MAIN, DESIGN, REQ])).toEqual([
+      "/workspaces/octo-owner/atelier-works/req-42",
+      DESIGN_DIR,
+    ]);
+  });
+
+  test("issueWorktreePaths does not return the design worktree of another issue", () => {
+    expect(
+      issueWorktreePaths(OWNER, REPO, { issue_number: 43, branch: null }, [
+        MAIN,
+        DESIGN,
+      ]),
+    ).toEqual([]);
+  });
+
+  test("excludeActiveWorktrees drops the design-<N> dir of an active issue work item", () => {
+    expect(
+      excludeActiveWorktrees(
+        [DESIGN_DIR],
+        [{ owner: OWNER, repo: REPO, issue_number: 42, branch: null }],
+        [],
+        OWNER,
+        REPO,
+      ),
+    ).toEqual([]);
+  });
+
+  test("excludeActiveWorktrees keeps the design-<N> dir when only another issue is active", () => {
+    expect(
+      excludeActiveWorktrees(
+        [DESIGN_DIR],
+        [{ owner: OWNER, repo: REPO, issue_number: 43, branch: null }],
+        [],
+        OWNER,
+        REPO,
+      ),
+    ).toEqual([DESIGN_DIR]);
+  });
+
+  test("excludeActiveWorktrees keeps the design-<N> dir when the active issue is in another repo", () => {
+    expect(
+      excludeActiveWorktrees(
+        [DESIGN_DIR],
+        [{ owner: OWNER, repo: "other", issue_number: 42, branch: null }],
+        [],
+        OWNER,
+        REPO,
+      ),
+    ).toEqual([DESIGN_DIR]);
+  });
+});

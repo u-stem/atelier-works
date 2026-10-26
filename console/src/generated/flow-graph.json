@@ -121,6 +121,12 @@
       "note": ""
     },
     {
+      "id": "script:steps/design_generate",
+      "kind": "script",
+      "label": "steps/design_generate",
+      "note": ""
+    },
+    {
       "id": "script:steps/implement_finish",
       "kind": "script",
       "label": "steps/implement_finish",
@@ -167,6 +173,12 @@
       "kind": "flow",
       "label": "dependabot",
       "note": "依存の更新PRの検査と自動マージ"
+    },
+    {
+      "id": "flow:design",
+      "kind": "flow",
+      "label": "design",
+      "note": "設計書の生成と承認"
     },
     {
       "id": "flow:implement",
@@ -326,6 +338,11 @@
       "kind": "run"
     },
     {
+      "from": "script:steps/design_generate",
+      "to": "flow:pipeline",
+      "kind": "run"
+    },
+    {
       "from": "script:steps/implement_finish",
       "to": "flow:pipeline",
       "kind": "run"
@@ -338,6 +355,11 @@
     {
       "from": "script:steps/pr_fix_finish",
       "to": "flow:pipeline",
+      "kind": "run"
+    },
+    {
+      "from": "script:steps/requirements_apply",
+      "to": "flow:design",
       "kind": "run"
     },
     {
@@ -359,6 +381,11 @@
       "from": "script:watch_pr_conflicts",
       "to": "flow:pr_fix",
       "kind": "run"
+    },
+    {
+      "from": "flow:design",
+      "to": "script:steps/design_generate",
+      "kind": "step"
     },
     {
       "from": "flow:implement",

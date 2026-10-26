@@ -2855,19 +2855,25 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 ### 設計工程のmigrationを戻す
 
-設計工程の状態と種類を足したmigrationを戻す手順である。
-`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に2回打つ。
-承認の記録を失わないために、承認依頼側が先に戻る。
+設計工程のmigrationを戻す手順である。
+`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に3回打つ。
+設計の下書きが先に戻り、承認の記録を失わないために、承認依頼側がその次に戻る。
 
-1. 1回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
-2. 2回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
+1. 1回目の`migrate down`で、設計の下書きの表(`design_drafts`)と、要件定義の下書きの複合の一意制約が戻る(`20261026130000_design_drafts`)。
+2. 2回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
+3. 3回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
    `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
 
-今のコードは、設計工程の状態と種類を書き込まない。
-戻す前に止めるものは無い。
-1回目が失敗したときは、種類が`design`の承認依頼が残っている。
+1回目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
+トランザクションごと戻るので、表と制約は残る。
+設計の下書きを、行があるまま失わないためである。
+行の扱いを決めて消してから、1回目をやり直す。
+
+設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。
+そのため、通常は1回目と2回目で止まらない。
+2回目が失敗したときは、種類が`design`の承認依頼が残っている。
 制約を足し直せないので、migrationはそこで止まる。
-`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、1回目をやり直す。
+`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、2回目をやり直す。
 
 ### 5分の境目の403を数える
 

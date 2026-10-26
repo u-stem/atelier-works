@@ -1021,6 +1021,49 @@ describe("buildEmbed", () => {
     });
   });
 
+  describe("design_approval_requested", () => {
+    const EVENT: NotifyEvent = {
+      kind: "design_approval_requested",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      inbox_url: "http://127.0.0.1:8080/console/?approval=9",
+    };
+
+    test("titles the embed with the issue and says that the design is awaiting approval", () => {
+      expect(buildEmbed(EVENT).title).toBe("設計の承認待ち: #42 Add feature");
+    });
+
+    test("describes the design draft as awaiting review", () => {
+      expect(buildEmbed(EVENT).description).toBe(
+        "設計書のドラフトが確認待ちです。",
+      );
+    });
+
+    test("links the embed to the inbox url, not a resume/cancel capability url", () => {
+      expect(buildEmbed(EVENT).url).toBe(
+        "http://127.0.0.1:8080/console/?approval=9",
+      );
+    });
+
+    test("includes the instance, the repository and the issue url as fields", () => {
+      expect(buildEmbed(EVENT).fields.map((field) => field.value)).toEqual([
+        "local",
+        "octo-owner/atelier-works",
+        "https://github.com/octo-owner/atelier-works/issues/42",
+      ]);
+    });
+
+    test("is sent through the common webhook route", async () => {
+      const discord = fakeDiscord([ok]);
+      await notify(WEBHOOK_URL, EVENT, discord.deps);
+      expect(discord.requestCount()).toBe(1);
+    });
+  });
+
   test("links the intake_refreshed embed to the issue and asks for a check", () => {
     const embed = buildEmbed({
       kind: "intake_refreshed",

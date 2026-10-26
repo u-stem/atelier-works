@@ -33,6 +33,9 @@ PRは終端になってもラベルが変わらないので、収集の表でも
 
 要件定義の承認を反映する`requirements_apply`は、まず承認の副作用を実行する。副作用はIssueへのコメント、Discordへの通知、要件定義用のworktree(`req-<N>`)の削除の3つである。どれかが失敗しても次へ進む。コメントの失敗は、Consoleの要対応事項(`approval_comment_failed`)に残す。
 
+設計フローを起動する依存が空でないときは、承認済みを経ずに設計中へ移す。
+本番では空なので、この経路は動かない([設計書の生成](design.md)の「入口が閉じていること」)。
+
 続けて、`implement_enabled`が真なら実装フローを起動する(`startImplement`)。手順は次のとおり。
 
 1. 作業項目を承認済み(`approved`)から実装中(`implementing`)へ比較交換で移す。同じ文で`flow_job_id`を空にする。
@@ -246,7 +249,9 @@ Windmillの保持期間のほうが短いと、古い行のリンクは開けな
 
 ## リース
 
-作業項目の`flow_job_id`は、その作業項目を書き換えてよいフローの実行を表すリースである。値はフローのルートジョブID(`WM_ROOT_FLOW_JOB_ID`)で、起動側が記録する`runFlowAsync`の戻り値と一致する。リースは要件定義のフロー(pipeline)と実装フローが使う。
+作業項目の`flow_job_id`は、その作業項目を書き換えてよいフローの実行を表すリースである。
+値はフローのルートジョブID(`WM_ROOT_FLOW_JOB_ID`)で、起動側が記録する`runFlowAsync`の戻り値と一致する。
+リースは要件定義のフロー(pipeline)、設計フロー、実装フローが使う。
 
 起動側は、記録済みの値がジョブIDの形でなければ、ジョブの状態を問い合わせずに記録が無いときと同じに扱う。HTTPエラーの応答本文をジョブIDとして記録しないためである。
 
@@ -283,6 +288,27 @@ pipelineの各ステップは、`flow_job_id`が自分のルートジョブIDで
 
 起動側が記録に失敗したまま残った作業項目は、reconcileが孤児として扱う。
 
+### 設計フローのリース
+
+設計フロー(`f/factory/design`)のリースは、pipelineと同じ規則である。
+起動側は`requirements_apply`の承認の分岐で、入口が開いているときだけ設計フローを起動し、ジョブIDを`flow_job_id`に記録する。
+本番では開いていない。
+設計の各ステップは、状態が設計中(`designing`)で、`flow_job_id`が自分のルートジョブIDのときだけ作業項目を書き換える。
+
+| ステップ | 比較交換で行う書き換え |
+| --- | --- |
+| `design_prepare` | `design_attempt`の保存(`setDesignAttemptIfLeaseHolder`)、取り消し、人の対応待ちへの遷移 |
+| `design_generate` | 下書きの保存(`saveDesignDraftIfLeaseHolder`)、人の対応待ちへの遷移、要件定義の生成中への戻し |
+| `design_request_approval` | 設計の承認待ちへの遷移 |
+
+設計が要件の不足を返したときの戻しは、リースを条件にした1文で、設計中から要件定義の生成中へ移す。
+同じ文で`design_attempt`を0に、`flow_job_id`を空にする。`attempt`は、続けて起動するpipelineが進める。
+手順と失敗時の扱いは[設計書の生成](design.md)の「要件の不足」に書く。
+
+設計フローも、リースを持たない実行はClaudeの実行、保存、worktreeの削除をしない。
+`design_request_approval`は、承認依頼を記録する前に、リースと最新の下書きを確かめる。
+承認待ちへの比較交換が一致しなければ、記録した依頼を期限切れにする。
+
 ### 実装フローのリース
 
 実装フローでは、準備ステップ(`implement_prepare`)が自分でリースを取る。worktreeを触る前、次の条件を満たすときだけ、`flow_job_id`へ自分のIDを書き込む。
@@ -309,9 +335,9 @@ Issueのcloseによる取り消しなどで、実行中にリースが別の実�
 | `retry_work_item` | 記録されたジョブがまだ動いているか、状態を読めなければ再実行を拒否する |
 | `poll_issues`のreconcile | 読み取った時点の`flow_job_id`が変わっていないときだけ、失敗か取り消しにする |
 | `poll_issues`の要対応の取り消し | 読み取った時点の状態と`flow_job_id`が変わっていないときだけ、取り消しにする。`retry_work_item`との競合では、先に書いた方だけが成功する |
-| `on_error_flow` | 読み取った時点の`flow_job_id`が変わっていないときだけ失敗にする。pipelineでは、`flow_job_id`が自分のルートジョブIDと一致するときに限る。空のときも書き換えない |
+| `on_error_flow` | 読み取った時点の`flow_job_id`が変わっていないときだけ失敗にする。pipelineと設計フローでは、`flow_job_id`が自分のルートジョブIDと一致するときに限る。空のときも書き換えない |
 | Windmillのrerun | 新しいジョブIDで最初から走る。実装フローでは、準備ステップがリースを取れずに何もせず終わる |
-| Windmillのrerunか画面からの直接の実行(pipeline) | ジョブIDが`flow_job_id`に記録されないので、準備ステップが何もせずに終わる。作業項目が終端ならすぐ終わり、そうでなければ記録を最大60秒待ってから終わる |
+| Windmillのrerunか画面からの直接の実行(pipelineと設計フロー) | ジョブIDが`flow_job_id`に記録されないので、準備ステップが何もせずに終わる。作業項目が終端ならすぐ終わり、そうでなければ記録を最大60秒待ってから終わる |
 | Windmillのrestart | 途中のステップから新しいジョブIDで走るので、再開したステップの最初のリースの確認で何もせずに終わる |
 
 rerunとrestartのどちらも、元の実行で進行中のClaudeの実行や検査を中断しない。再実行には`retry_work_item`を使う。

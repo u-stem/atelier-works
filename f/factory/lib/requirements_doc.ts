@@ -50,18 +50,26 @@ export function extractH2Headings(markdown: string): string[] {
   return headings;
 }
 
+/** `markdown`の`##`見出しが、順序も含めて`REQUIREMENTS_SECTIONS`と完全に一致するかを検査する(`checkSectionList`)。 */
+export function checkSections(markdown: string): string[] {
+  return checkSectionList(markdown, REQUIREMENTS_SECTIONS);
+}
+
 /**
- * `markdown`の`##`見出しが、順序も含めて`REQUIREMENTS_SECTIONS`と
- * 完全に一致するかを検査する。
+ * `markdown`の`##`見出しが、順序も含めて`expected`と完全に一致するかを検査する。
+ * 要件定義書と設計書が、それぞれの章立てで共有する。
  * 見出しの欠落、余分な見出し、順序の違いをそれぞれ区別して報告する。
  */
-export function checkSections(markdown: string): string[] {
+export function checkSectionList(
+  markdown: string,
+  expected: readonly string[],
+): string[] {
   const actual = extractH2Headings(markdown);
-  const expectedSet = new Set(REQUIREMENTS_SECTIONS);
+  const expectedSet = new Set(expected);
   const actualSet = new Set(actual);
   const issues: string[] = [];
 
-  for (const heading of REQUIREMENTS_SECTIONS) {
+  for (const heading of expected) {
     if (!actualSet.has(heading)) {
       issues.push(`章が見つかりません: 「${heading}」`);
     }
@@ -74,13 +82,11 @@ export function checkSections(markdown: string): string[] {
 
   if (issues.length === 0) {
     const inOrder =
-      actual.length === REQUIREMENTS_SECTIONS.length &&
-      actual.every(
-        (heading, index) => heading === REQUIREMENTS_SECTIONS[index],
-      );
+      actual.length === expected.length &&
+      actual.every((heading, index) => heading === expected[index]);
     if (!inOrder) {
       issues.push(
-        `章の順序が規定と一致しません(期待: ${REQUIREMENTS_SECTIONS.join(" > ")} / 実際: ${actual.join(" > ")})`,
+        `章の順序が規定と一致しません(期待: ${expected.join(" > ")} / 実際: ${actual.join(" > ")})`,
       );
     }
   }
@@ -121,8 +127,9 @@ function isTableSeparatorRow(cells: readonly string[]): boolean {
 /**
  * `body`の中の`| a | b |`形式の表を解析し、データ行だけを返す
  * (見出し行と区切り行は落とす)。セルの値は前後の空白を除く。
+ * 設計書の検査(`design_doc.ts`)も使うためexportしている。
  */
-function extractTableRows(body: string): string[][] {
+export function extractTableRows(body: string): string[][] {
   const tableLines = body
     .split("\n")
     .filter((line) => line.trim().startsWith("|"));
