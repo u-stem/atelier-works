@@ -61,7 +61,7 @@ locks:
   f/factory/lib/dependabot_support: f0faecb544ce7a33dac1f1901035711a3b432e1858efba6b0a48b7554da348aa
   f/factory/lib/design_doc: 39e65ecf8d275747851dc4c37e554886830c8ed6cfff7ac65ba161162aa12aef
   f/factory/lib/design_template: 76572145d96ff112e2054f03f4d62b9b6d24859c59bafa75318a1a6c8d7d9570
-  f/factory/lib/discord: 9213d112d8c3801a9888f9ba798e08c9ab85f59ccfadc5ddb886d78b4403f108
+  f/factory/lib/discord: 75bd4ac1655e7a54604a30063f181cc2e8cf7f94b7137eba9524028c91a56a49
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
   f/factory/lib/drawio_viewer_bump_github: f7b0dc429c460b479e61efaaf2a3a85532aea8fb455cc592f78b344f7a2978ae

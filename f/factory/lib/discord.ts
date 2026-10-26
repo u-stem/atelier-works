@@ -54,6 +54,16 @@ export type NotifyEvent =
       inbox_url: string;
     }
   | {
+      kind: "design_approval_requested";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      issue_number: number;
+      issue_url: string;
+      title: string;
+      inbox_url: string;
+    }
+  | {
       kind: "requirements_approved";
       instance_name: string;
       owner: string;
@@ -416,6 +426,13 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           repoField(event.owner, event.repo),
           { name: "Issue", value: event.issue_url },
         ],
+      };
+    case "design_approval_requested":
+      return {
+        title: "",
+        description: "",
+        url: null,
+        fields: [],
       };
     case "requirements_approved":
       return {
