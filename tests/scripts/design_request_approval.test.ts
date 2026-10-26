@@ -89,7 +89,11 @@ type Options = {
     attempt: number;
   } | null;
   readonly moved?: boolean;
+  /** 設定すると、作業項目を動かす呼び出しがこのエラーを投げる。 */
+  readonly moveError?: Error;
   readonly withdrawn?: boolean;
+  /** 設定すると、依頼の取り下げがこのエラーを投げる。 */
+  readonly withdrawError?: Error;
   readonly notify?: NotifyBestEffortResult;
   readonly recordNotice?: () => Promise<void>;
 };
@@ -122,11 +126,13 @@ function harness(options: Options = {}) {
     },
     moveToAwaitingDesignApproval: async () => {
       calls.push("move");
+      if (options.moveError !== undefined) throw options.moveError;
       return options.moved ?? true;
     },
     withdrawRequest: async (id) => {
       calls.push("withdraw");
       withdrawn.push(id);
+      if (options.withdrawError !== undefined) throw options.withdrawError;
       return options.withdrawn ?? true;
     },
     notify: async (event) => {
@@ -339,6 +345,35 @@ describe("runDesignRequestApproval when the work item cannot move", () => {
     const h = harness({ moved: false, withdrawn: false });
     await runDesignRequestApproval(h.deps, INPUT);
     expect(h.calls).not.toContain("notify");
+  });
+});
+
+describe("runDesignRequestApproval when moving the work item throws", () => {
+  const failure = new Error("database is down");
+
+  test("rethrows the error", async () => {
+    const h = harness({ moveError: failure });
+    await expect(runDesignRequestApproval(h.deps, INPUT)).rejects.toBe(failure);
+  });
+
+  test("expires the request that it recorded", async () => {
+    const h = harness({ moveError: failure });
+    await runDesignRequestApproval(h.deps, INPUT).catch(() => {});
+    expect(h.withdrawn).toEqual([33]);
+  });
+
+  test("does not notify", async () => {
+    const h = harness({ moveError: failure });
+    await runDesignRequestApproval(h.deps, INPUT).catch(() => {});
+    expect(h.calls).not.toContain("notify");
+  });
+
+  test("rethrows the original error when the expiry throws too", async () => {
+    const h = harness({
+      moveError: failure,
+      withdrawError: new Error("still down"),
+    });
+    await expect(runDesignRequestApproval(h.deps, INPUT)).rejects.toBe(failure);
   });
 });
 
