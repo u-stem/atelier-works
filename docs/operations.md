@@ -450,8 +450,10 @@ FactoryがIssueを作成し、ラベルで投入したときと同じ要件定�
 投入されていたのに再送すると、Issue、作業項目、pipelineが重複するためである。
 
 1. Windmillのジョブ一覧で、`manual_intake_submit`のジョブが待ち状態か実行中ではないか。
-   待っている間は、`manual_intake`のジョブとIssueが無い
-2. Windmillのジョブ一覧に、`manual_intake`のジョブがあるか
+   待っている間は、`manual_intake`のジョブとIssueが無い。
+   `manual_intake_submit`はtag`console`のscriptなので、Consoleのジョブの画面には出ない
+2. Consoleのジョブの画面の履歴で、scriptを`manual_intake`に絞り、投入のジョブがあるか。
+   投入のジョブの詳細に、フローが動いたか、失敗したかが出る
 3. 対象リポジトリのIssueに、送った題名と同じIssueがあるか
 
 投入されていなければ「確かめたので再送する」を押して、もう一度投入する。
@@ -642,7 +644,8 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
    ```
 
    大小文字を変えたラベル名でも件数が等しいことと、カンマを含む名前が複数のラベルの指定として読まれないことを見る。
-4. 続く3回の`poll_issues`の結果を、WindmillのRunsで確かめる。
+4. 続く3回の`poll_issues`の結果を、Consoleのジョブの画面で確かめる。
+   履歴をscriptで絞り、各ジョブの結果を読む。
    `collect_disabled`が`false`、`failed`が0であることを見る。
    `candidates`は、手順2の表の候補の数と近いはずである。
    `dropped`は、0か、古い行で説明できる値になる。
@@ -828,7 +831,7 @@ stateを書けない間は、毎周回先頭から選ぶ。
    手順5で、自然に付いた依頼とラベルの着手までの遅れを記録して補う。
    `different`なら、収集の周回の遅れ(5分以内)か、上の変化で説明できるかを確かめ、数分後に読み直す。
    説明できなければ、収集の不具合として調べる。
-4. 続く3回の`poll_prs`の結果を、WindmillのRunsで確かめる。
+4. 続く3回の`poll_prs`の結果を、Consoleのジョブの画面で確かめる。
    `collect_disabled`が`false`、`failed`が0であることを見る。
    `candidates`は、手順2の`target`と`maybe`と`team`の合計と近いはずである。
    `dropped`は、0か、古い行で説明できる値になる。
@@ -1575,6 +1578,12 @@ checkoutは新しい版で、コンテナは古い版のままである。
 止まるときのメッセージにも、この旨が1行出る。
 ジョブの様子は、Windmillの画面か`wmill job list`で見る。作業項目はConsoleで見る。
 一覧が定期のジョブだけのときは、ジョブが終わらず詰まっていないかを、Windmillの画面で確かめる。
+Consoleのジョブの画面の実行中と待ちは、補助に使える。
+ただし、`f/factory/`のscriptとフローだけを、キューの1ページ(100件)まで読み、待ちも含む。
+一方`check-idle`は、defaultのworkerの枠で実行中のジョブだけを数える。
+待ちは数えない。フローの親ジョブと、他のworkerが受けるtagのジョブも数えない。
+そのため、件数は食い違うことがある。
+止めるかどうかの確認には、Consoleの画面を使わない。
 
 確認だけを手で実行するには、次を使う。
 
@@ -1590,7 +1599,7 @@ Claudeが実行するときは、Bashの10分の上限に収めるため、`run_
 `CHECK_IDLE_FORCE=1`を付けると、確認を飛ばす。
 付けるのは人だけで、次のどちらかを確かめたときである。
 
-- 一覧のジョブが無いことを、Windmillの画面を見て自分で確かめた。作業項目が実装中などのまま残っていても、対応するジョブが無ければ、動いていない。
+- 一覧のジョブが無いことを、`wmill job list`か、`check-idle`が出すジョブのidをWindmillの画面で開いて、自分で確かめた。作業項目が実装中などのまま残っていても、対応するジョブが無ければ、動いていない。
   残った作業項目は、更新から10分たてば警告にとどまり、止めない。10分以内に止まるときは、この残った作業項目の場合がある。
   - Windmillの画面を開けないときは、一覧の開始時刻(`started`)と、workerの状態を照らし合わせる。
     workerの状態は、`mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker`で見る。
@@ -2075,7 +2084,7 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
    `poll_issues`や`poll_prs`など、ほかのフローの対象も同じ範囲に狭まる。
 3. [人のPRの失敗を通知する](#人のprの失敗を通知する)の手順で、`pr_ci_watch_human_prs`を`true`にする。
    有効にする前の`pr_ci_check_denied`の未解決の件数を控える。手順5の比較の基準になる。
-4. 続く3回の`watch_pr_ci`の結果を、WindmillのRunsで確かめる。
+4. 続く3回の`watch_pr_ci`の結果を、Consoleのジョブの画面で確かめる。
    `errors`が0、`human_collect_disabled`が`false`、`human_deferred`が0であることを見る。
    `human_rest_lists`は、表が使えない明示リポジトリの数で、`owners`に無いオーナーの`factory_repo`の分だけのはずである。
    `human_table_candidates`は、手順2の表の候補の数と近いはずである。
@@ -2110,7 +2119,7 @@ PRの読み直し、作者とforkとブランチの確認、記録するhead、�
 
 反映後は、次の2つを確かめる。
 
-- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。WindmillのRunsで失敗を見て、次の周回で成功に戻ることを確かめる。
+- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。Consoleのジョブの画面の履歴で失敗を見て、次の周回で成功に戻ることを確かめる。
 - `watch_pr_ci`の発見の元を選んでいた項目を、手で消す。
   `pr_ci_watch_human_prs`が真なら、実ジョブで手順4の結果を確かめた後に消す。
   偽の間は、表と一覧を読まないので、反映後の1周回が成功し、`errors`が0であることを確かめた後に消す。偽のままでも消してよい。
@@ -2426,7 +2435,7 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
    それ以外の差は、収集の周回の遅れ(5分以内)か、archive済みのリポジトリで説明できるかを確かめ、数分後に読み直す。
    `repo_allowlist`が空の構成では、PATのアカウントが開いているPRを持つリポジトリのうち、`gh_repos`に行の無いものがないことも確かめる。
    あれば、そのリポジトリのFactoryのPRは、作業項目か競合の行に載るまで見つからない。
-3. 続く3回の`watch_pr_conflicts`の結果を、WindmillのRunsで確かめる。
+3. 続く3回の`watch_pr_conflicts`の結果を、Consoleのジョブの画面で確かめる。
    `collect_disabled`が`false`、`errors`が0であることを見る。
    `table_repos`は、表から列挙したリポジトリの数で、対象のうち記録が新しいものの数と近いはずである。
    `tracked`と`conflicted`は、直前の周回と同じか、その間のPRの開閉で説明できる値になる。
@@ -2453,7 +2462,7 @@ PRごとの読み直し、競合の判定、通知、起動の判断は、どの
 
 反映後は、次の2つを確かめる。
 
-- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。WindmillのRunsで失敗を見て、次の周回で成功に戻ることを確かめる。
+- 反映直後の1周回は、新旧の版が混ざると`TypeError`でジョブごと失敗し、`job_failures`に残らないことがある。Consoleのジョブの画面の履歴で失敗を見て、次の周回で成功に戻ることを確かめる。
 - 実ジョブで手順3の結果を確かめた後に、`watch_pr_conflicts`の発見の元を選んでいた項目を、手で消す。
   対象は、同期の対象外のresource-type(ルートの`c_factory_config.resource-type.yaml`)のスキーマである。
   消すまでUIに説明が残るが、その項目の値を変えても何も起きない。
@@ -3063,7 +3072,7 @@ dependabotの対象は、baseが`main`のPRに限る。
 1つずつ確かめてから進める。
 設定を一度に変えると、問題が起きたときに原因を切り分けられないためである。
 
-1. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、WindmillのRunsで確かめる。
+1. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、Consoleのジョブの画面で確かめる。
 2. [有効化の前の確認](security.md#有効化の前の確認)の、試運転の前に単独の実験で確かめる項目を確かめる。
    フローは使わない。
    満たさなければ、試運転を始めない。
@@ -3142,7 +3151,7 @@ dependabotの対象は、baseが`main`のPRに限る。
    ```
 
    周回の遅れ(5分以内)で説明できない差があれば、収集の不具合として調べる。
-3. 続く3回の`poll_dependabot`の結果を、WindmillのRunsで確かめる。
+3. 続く3回の`poll_dependabot`の結果を、Consoleのジョブの画面で確かめる。
    `enabled`が`true`、`paused`が`false`、`failed`が0であることを見る。
 4. `fallback_lists`が0であることを確かめる。
    1以上なら、`fallback_reasons`の語で原因を読む。
@@ -3181,7 +3190,7 @@ dependabotの対象は明示したリポジトリだけで、一覧の読み取�
 
 ### 初回の実機で確かめること
 
-試運転とマージの最初の数件は、次の点を作業項目の結果とWindmillのRunsで確かめる。
+試運転とマージの最初の数件は、次の点を作業項目の結果とConsoleのジョブの画面で確かめる。
 
 - 隔離したインストールが、npm registryに届き、`--frozen-lockfile`で成功する。
 - インストールが、準備のステップのtimeout(3600秒)の中で終わる。

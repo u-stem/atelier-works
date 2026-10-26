@@ -88,3 +88,13 @@ describe("AuditListState while loading", () => {
     expect(render(loadingQuery<AuditIndexRow[]>())).not.toContain("読み込み中");
   });
 });
+
+const REPORTS_SOURCE = await Bun.file(
+  new URL("./AuditReports.tsx", import.meta.url),
+).text();
+
+describe("AuditReports header", () => {
+  test("leaves out the count that repeats the tab name", () => {
+    expect(REPORTS_SOURCE).not.toContain("auditIndexSubtitle");
+  });
+});

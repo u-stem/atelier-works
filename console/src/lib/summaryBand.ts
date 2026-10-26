@@ -73,12 +73,6 @@ export type BandSource<T> = {
 
 export { HOST_ACTION_NOTICE_KIND } from "./hostActionNotices.ts";
 
-/** 取得の時刻(ミリ秒)のうち、最も古いもの。まだ取得できていない(0以下)ものは数えない。無ければ0。 */
-export function oldestUpdatedAt(times: readonly number[]): number {
-  const fetched = times.filter((time) => time > 0);
-  return fetched.length === 0 ? 0 : Math.min(...fetched);
-}
-
 /** 取得中のチップの文。 */
 export const BAND_LOADING_TEXT = "取得中です";
 

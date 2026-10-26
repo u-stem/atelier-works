@@ -19,7 +19,7 @@ import {
   hostActionLabel,
   noticeKindLabel,
 } from "./labels.ts";
-import { shortSha, versionText } from "./updateHistory.ts";
+import { versionText } from "./updateHistory.ts";
 
 export type Tone = "success" | "warning" | "failure";
 
@@ -48,10 +48,6 @@ export type FetcherDescription = {
   readonly label: string;
   /** 状態の補足。無ければ`null`。 */
   readonly detail: string | null;
-  /** 取り込んだ版の短い形。分からなければ`null`。 */
-  readonly versionLabel: string | null;
-  /** 最後に確かめた時刻(ISO文字列)。状態を読めないときは`null`。 */
-  readonly checkedAt: string | null;
   /** 取り込みが記録した失敗の分類。無ければ`null`。 */
   readonly errorCode: string | null;
   /** 運用者の次の操作。無ければ`null`。 */
@@ -102,8 +98,6 @@ export function describeFetcher(fetcher: SystemFetcher): FetcherDescription {
       detail:
         UNAVAILABLE_DETAILS.get(fetcher.reason) ??
         "取り込みの状態を読めません。",
-      versionLabel: null,
-      checkedAt: null,
       errorCode: null,
       nextAction: null,
     };
@@ -112,8 +106,6 @@ export function describeFetcher(fetcher: SystemFetcher): FetcherDescription {
     tone: fetcherTone(fetcher.state, fetcher.assessment),
     label: fetcherLabel(fetcher.state, fetcher.assessment),
     detail: fetcher.assessment === "stale" ? STALE_DETAIL : null,
-    versionLabel: fetcher.sha === null ? null : shortSha(fetcher.sha),
-    checkedAt: fetcher.checked_at,
     errorCode:
       fetcher.error === null ? null : displayableIssueText(fetcher.error).text,
     nextAction:

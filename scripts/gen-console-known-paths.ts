@@ -21,6 +21,8 @@ export type KnownPaths = {
   readonly scripts: readonly string[];
   readonly flows: readonly string[];
   readonly schedules: readonly RepoSchedule[];
+  /** 履歴の絞り込みに出すscriptとフローのパス。並べ替え済み。 */
+  readonly historyFilter: readonly string[];
 };
 
 const OUTPUT = "f/factory/lib/console_known_paths.ts";
@@ -75,6 +77,37 @@ const WITHHELD: readonly string[] = [
 ];
 
 /**
+ * 履歴の絞り込みに出さないscript。
+ * フローのステップ(`f/factory/steps/`)と失敗ハンドラは、フローの中のジョブで、履歴のルートのジョブに出ない。
+ * Consoleのworker(tag console)のscriptは、履歴に出さない既定である。選んでも常に0件になる。
+ */
+const HISTORY_FILTER_EXCLUDED: readonly string[] = ["f/factory/on_error_flow"];
+const HISTORY_FILTER_EXCLUDED_PREFIX = "f/factory/steps/";
+const CONSOLE_TAG = "console";
+
+async function readTag(root: string, path: string): Promise<string | null> {
+  const parsed: unknown = Bun.YAML.parse(
+    await Bun.file(join(root, `${path}.script.yaml`)).text(),
+  );
+  return isRecord(parsed) && typeof parsed.tag === "string" ? parsed.tag : null;
+}
+
+async function historyFilterOf(
+  root: string,
+  scripts: readonly string[],
+  flows: readonly string[],
+): Promise<string[]> {
+  const roots: string[] = [];
+  for (const path of scripts) {
+    if (path.startsWith(HISTORY_FILTER_EXCLUDED_PREFIX)) continue;
+    if (HISTORY_FILTER_EXCLUDED.includes(path)) continue;
+    if ((await readTag(root, path)) === CONSOLE_TAG) continue;
+    roots.push(path);
+  }
+  return [...roots, ...flows].sort();
+}
+
+/**
  * `root`の下のscriptの定義(libと除外を除く)、フロー、スケジュールを集める。
  * フローのパスは、`<名前>__flow`のディレクトリから`f/factory/<名前>`と導く。
  */
@@ -90,7 +123,12 @@ export async function collectKnownPaths(root: string): Promise<KnownPaths> {
   for (const file of await scan(root, "f/factory/*.schedule.yaml")) {
     schedules.push(await readSchedule(root, file));
   }
-  return { scripts, flows, schedules };
+  return {
+    scripts,
+    flows,
+    schedules,
+    historyFilter: await historyFilterOf(root, scripts, flows),
+  };
 }
 
 function stringList(name: string, values: readonly string[]): string {
@@ -134,6 +172,7 @@ export function renderKnownPaths(known: KnownPaths): string {
       "  readonly no_flow_overlap: boolean;\n" +
       "};\n",
     scheduleList(known.schedules),
+    stringList("HISTORY_FILTER_PATHS", known.historyFilter),
   ].join("\n");
 }
 

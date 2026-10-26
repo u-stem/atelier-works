@@ -16,7 +16,7 @@ locks:
   f/factory/console_config: 6a39c62b6fa1d8ecdcc746709191d847b1ad26d7295726bd4ae367423210eb23
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
   f/factory/console_holds: d57c433b693d24ce7fa9d3fd3fa55fb05eaf36a29d4affbdbe721e7a77a41f0c
-  f/factory/console_jobs: 9945b44e4d45d592056c75ced314681eaac1af8b08b53c1d0a370a7ab988b793
+  f/factory/console_jobs: 6a0073d1b9c6019ad53e79783bbe0214b266fd2d68eb955accf2b0be28e62acd
   f/factory/console_schedules: ab9ceb349e00f028b5d7ee3e0f1d51d51f75585833b1df39e9dec46d8e27d77b
   f/factory/default_worker_watch: c7c6f58b46abdad2bf2e84de1a37ab021ba88cd2011036275d8a8ead259d60ad
   f/factory/dependabot__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -54,7 +54,7 @@ locks:
   f/factory/lib/conflict_fix_verify: 4a244c4da1dacfe86bed6878d2b41e1a6586268091c6c2b1aaf6616cff48f83a
   f/factory/lib/console_actions: 2d619077ae8897d4691d14bcabd0c9cb91e7cf8e41cd5cf88fdf8ccc238a289b
   f/factory/lib/console_holds_support: e1bc3ceca3eb31bac7337d720fb707e36d6c502272ce6c31757f97e2271665b9
-  f/factory/lib/console_known_paths: 1ee700ed37220d0c8664a6f4e9404279873146b75c7f800a6a91b0ab1dfe2e9a
+  f/factory/lib/console_known_paths: df5543222d932ce6fefb24e52eb9ca8b87d629970310c87b055d56a366b8993a
   f/factory/lib/console_redact: 3cd5957139b0097e4b9c140b62ead54ba33fa6e9be84a09f6d1737b7c4532a0a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 92aff0984011046777473050118c6b392083e125ad044df33746ea960cb6b418
@@ -135,7 +135,7 @@ locks:
   f/factory/lib/process_lock: 6b49498e491ae04a2b6a2b2c11d016770c93b48e71d0f56318d65df21ca28cef
   f/factory/lib/prompts: 348b497807613d9955db7ffb39b31c6160ed8ed62513a865b6af0457be617be2
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 93e9cbde4e857514634601ce688a0ec19e0497cad3b532e2c24b710d038d5647
+  f/factory/lib/protected_paths: 9a000b4b76709dbf37d34de9b678e3f56abae2cf5251db7f408d820cf248c5dc
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955

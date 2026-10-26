@@ -12,6 +12,7 @@ export type FailureQuery = {
 /**
  * 節のタブごとに、取得の失敗を持つか。ログイン切れ(401)は上のバナーが知らせるので数えない。
  * 状態は保留と状態、失敗と通知は状態と失敗の一覧、履歴と構成は状態と更新履歴の取得を読む。
+ * 設定は、設定の取得だけを読む。タブを開くまで取得しないので、取得が無いあいだは失敗に数えない。
  * 取り直しに失敗して前の値が残っているときも、失敗に数える。
  */
 export function systemFailedTabs(queries: {
@@ -19,6 +20,7 @@ export function systemFailedTabs(queries: {
   readonly holds: FailureQuery;
   readonly summary: FailureQuery;
   readonly deployments: FailureQuery;
+  readonly config?: FailureQuery;
 }): Record<SystemTabId, boolean> {
   const failed = (...group: readonly FailureQuery[]): boolean =>
     group.some(isHeaderError);
@@ -26,6 +28,7 @@ export function systemFailedTabs(queries: {
     status: failed(queries.status, queries.holds),
     failures: failed(queries.status, queries.summary),
     history: failed(queries.status, queries.deployments),
+    config: queries.config !== undefined && failed(queries.config),
   };
 }
 

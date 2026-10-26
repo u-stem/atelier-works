@@ -1454,6 +1454,15 @@ describe("hold command files", () => {
 // 書き換えられると、Consoleに返す項目が増えたり、ログの伏せ字が外れたり、記録の順序が崩れたりする。
 // 返す項目と境界の検査も、同じ理由で守る。
 describe("console job viewing files", () => {
+  // 描画の部品は、2bと2cで必ず直す。契約テストが`screens/jobs/`の全体を走査するので、保護の上乗せは小さい。
+  // 保護するのは、無害化の入口(`safeText.ts`)と、網羅テストと、契約テストである。
+  test.each([
+    "console/src/screens/jobs/JobDetailParts.tsx",
+    "console/src/screens/system/ConfigSection.tsx",
+  ])("FORBIDDEN_EXACT_PATHS does not list the rendering part %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
+  });
+
   const PATHS = [
     "f/factory/console_jobs.ts",
     "f/factory/console_jobs.script.yaml",
@@ -1481,10 +1490,14 @@ describe("console job viewing files", () => {
     "tests/scripts/console_known_paths.test.ts",
     "tests/scripts/console_actions_migration.test.ts",
     "tests/scripts/console_jobs_contract.test.ts",
+    "tests/scripts/console_jobs_render_contract.test.ts",
     "tests/scripts/console_write_contract.test.ts",
     "tests/scripts/console_worker_boundary.test.ts",
     "tests/scripts/console_script_tags.test.ts",
     "tests/scripts/worker_boundary_scan.ts",
+    "console/src/lib/safeText.ts",
+    "console/src/lib/safeText.test.ts",
+    "console/src/screens/jobs/safeTextCoverage.test.tsx",
     "migrations/datatable/main/20261026140000_console_actions.up.sql",
     "migrations/datatable/main/20261026140000_console_actions.down.sql",
   ];

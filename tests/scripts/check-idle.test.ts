@@ -1129,10 +1129,14 @@ describe("command", () => {
   });
 
   test("prints a waiting message while it rechecks", () => {
-    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+    setup({
+      "windmill.out.1": `${JOB_LINE}\n`,
+      "windmill.out": "",
+      "datatable_db.out": "",
+    });
 
     expect(
-      run(["--recheck-timeout-ms=3000", "--recheck-interval-ms=100"]).stderr,
+      run(["--recheck-timeout-ms=20000", "--recheck-interval-ms=1"]).stderr,
     ).toContain("waiting");
   });
 });

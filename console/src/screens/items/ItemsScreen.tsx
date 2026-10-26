@@ -1,9 +1,5 @@
 import { Link, useSearchParams } from "react-router";
-import {
-  usePipeline,
-  useRequirementsIndex,
-  useSummary,
-} from "../../api/queries.ts";
+import { usePipeline, useRequirementsIndex } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import {
   refreshStatusOf,
@@ -12,7 +8,6 @@ import {
 import { TabPanel } from "../../components/TabPanel.tsx";
 import { Tabs } from "../../components/Tabs.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { actionableTotal } from "../../lib/inboxView.ts";
 import {
   ITEMS_ID_PREFIX,
   type ItemsTabId,
@@ -43,7 +38,6 @@ import { RequirementsSection } from "./RequirementsSection.tsx";
 export function ItemsScreen() {
   const pipeline = usePipeline();
   const requirements = useRequirementsIndex();
-  const summary = useSummary();
   const refresh = refreshStatusOfAll([pipeline, requirements]);
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = parseItemsTab(searchParams.get("tab"));
@@ -94,9 +88,6 @@ export function ItemsScreen() {
             pipeline={pipeline}
             scope={scope}
             onScopeChange={selectScope}
-            actionableCount={
-              summary.data === undefined ? null : actionableTotal(summary.data)
-            }
           />
         </TabPanel>
         <TabPanel attrs={itemsPanelAttrs("requirements", tab)}>

@@ -1,6 +1,7 @@
 // パンくずの並びを決める純関数。最後の1つが今の画面で、その前が戻り先になる。
 
 import { itemsTabPath } from "./itemsTabs.ts";
+import { JOBS_PATH } from "./jobsView.ts";
 import { workItemRef } from "./labels.ts";
 import type { PipelineScope } from "./pipelineView.ts";
 
@@ -78,5 +79,13 @@ export function auditReportCrumbs(workItemId: number | null): Crumb[] {
           ? "監査レポート"
           : `${workItemRef(workItemId)}の監査レポート`,
     },
+  ];
+}
+
+/** ジョブの詳細。`back`は一覧へ戻る経路(タブと絞り込みを含む)で、無ければ`/jobs`にする。 */
+export function jobDetailCrumbs(back: string | null): Crumb[] {
+  return [
+    { label: "ジョブ", to: back ?? JOBS_PATH },
+    { label: "ジョブの詳細" },
   ];
 }

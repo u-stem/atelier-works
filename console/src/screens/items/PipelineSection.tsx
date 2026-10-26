@@ -1,4 +1,3 @@
-import { Link } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { PIPELINE_DAYS, PIPELINE_LIMIT } from "../../api/queries.ts";
@@ -10,9 +9,7 @@ import {
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { INBOX_PATH } from "../../lib/inboxView.ts";
 import {
-  actionableNote,
   type PipelineScope,
   pipelineReachedLimit,
   pipelineScopeNote,
@@ -59,13 +56,12 @@ function FailureState({
 }
 
 /**
- * 進捗のタブの本体。範囲の注記、要対応への案内、取得の状態、表を持つ。
+ * 進捗のタブの本体。範囲の注記、取得の状態、表を持つ。
  * 取得は画面が持ち、更新ボタンも画面の見出しにある。この節は失敗したときの「もう一度取得する」だけを持つ。
  * 読み取り専用で、操作は起こさない。
  */
 export function PipelineSection({
   pipeline,
-  actionableCount = null,
   scope,
   onScopeChange,
 }: {
@@ -74,32 +70,20 @@ export function PipelineSection({
   scope: PipelineScope;
   /** 範囲を替えたときに呼ぶ。 */
   onScopeChange: (scope: PipelineScope) => void;
-  /** 要対応にある件数。分からないときは`null`か省略。 */
-  actionableCount?: number | null | undefined;
 }) {
   const now = useNow();
 
   return (
     <div className="flex flex-col gap-3">
-      <div>
-        <p className="text-small text-muted-foreground">
-          {pipeline.data === undefined
-            ? "作業項目の状態、ブランチ、PRを一覧します。"
-            : pipelineScopeNote(
-                pipeline.data.length,
-                PIPELINE_LIMIT,
-                PIPELINE_DAYS,
-              )}
-        </p>
-        <p className="text-small">
-          <Link
-            to={INBOX_PATH}
-            className="rounded-sm text-primary underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {actionableNote(actionableCount)}
-          </Link>
-        </p>
-      </div>
+      <p className="text-small text-muted-foreground">
+        {pipeline.data === undefined
+          ? "作業項目の状態、ブランチ、PRを一覧します。"
+          : pipelineScopeNote(
+              pipeline.data.length,
+              PIPELINE_LIMIT,
+              PIPELINE_DAYS,
+            )}
+      </p>
       <LoadingGate phase={loadPhaseOf(pipeline)} shape={LOADING_SHAPE}>
         {pipeline.data === undefined ? (
           <FailureState

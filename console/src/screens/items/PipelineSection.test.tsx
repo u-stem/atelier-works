@@ -85,58 +85,28 @@ describe("PipelineSection while loading", () => {
 });
 
 describe("PipelineSection pointer to the inbox", () => {
-  const NOTE = "対応が必要なものは『要対応』にあります";
-
-  test("says how many items need action", () => {
+  test("leaves out the pointer that repeats the sidebar badge", () => {
     expect(
       render(
         <PipelineSection
           scope="active"
           onScopeChange={() => undefined}
           pipeline={freshQuery(NO_ROWS)}
-          actionableCount={3}
         />,
       ),
-    ).toContain(`${NOTE}(3件)`);
+    ).not.toContain("対応が必要なもの");
   });
 
-  test("links to the inbox", () => {
-    expect(
-      render(
-        <PipelineSection
-          scope="active"
-          onScopeChange={() => undefined}
-          pipeline={freshQuery(NO_ROWS)}
-          actionableCount={3}
-        />,
-      ),
-    ).toMatch(/<a [^>]*href="\/"[^>]*>対応が必要なもの/);
-  });
-
-  test("leaves the count out while it is unknown", () => {
-    expect(
-      render(
-        <PipelineSection
-          scope="active"
-          onScopeChange={() => undefined}
-          pipeline={freshQuery(NO_ROWS)}
-          actionableCount={null}
-        />,
-      ),
-    ).not.toContain("件)");
-  });
-
-  test("shows the pointer while the rows load", () => {
+  test("leaves out the pointer while the rows load", () => {
     expect(
       render(
         <PipelineSection
           scope="active"
           onScopeChange={() => undefined}
           pipeline={loadingQuery<PipelineRow[]>()}
-          actionableCount={2}
         />,
       ),
-    ).toContain(NOTE);
+    ).not.toContain("対応が必要なもの");
   });
 });
 

@@ -244,12 +244,6 @@ export function scopeEmptyMessage(scope: PipelineScope): string {
   }
 }
 
-/** 進捗から要対応へ案内する文。件数はsummaryから取り、分からないときは添えない。 */
-export function actionableNote(count: number | null): string {
-  const base = "対応が必要なものは『要対応』にあります";
-  return count === null ? base : `${base}(${count}件)`;
-}
-
 /** PR待ちの範囲の注記。一覧の行にマージ済みかどうかの情報が無いための断りである。 */
 export const PR_OPEN_NOTE =
   "状態がPR作成済みのものです。マージ済みかどうかは一覧から分からないので、マージ待ちの目安です。";
