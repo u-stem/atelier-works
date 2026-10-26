@@ -82,6 +82,8 @@ const STATUS_TONES: ReadonlyMap<string, StatusTone> = new Map([
   ["pr_open", "success"],
   ["awaiting_approval", "warning"],
   ["requirements_generating", "warning"],
+  ["awaiting_design_approval", "warning"],
+  ["designing", "warning"],
   ["rejected", "failure"],
   ["needs_human", "failure"],
   ["failed", "failure"],

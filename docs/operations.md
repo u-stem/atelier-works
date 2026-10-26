@@ -1472,7 +1472,10 @@ workerを作り直すと、実行中のジョブは10秒の猶予で止められ
 確認は読み取りだけで、次のどちらかがあると終了コード1で止まり、一覧を出す。
 
 - defaultのworkerの枠で実行中のジョブ。フローの親ジョブと、Console用、定期ジョブ用、nativeのworkerが受けるtagのジョブは数えない。受けるworkerが分からないtagのジョブは数える。数え漏らして実行中のジョブを止めるより、余分に止めるほうが安全なためである。
-- 実行中の状態の作業項目。要件定義の生成中(`requirements_generating`)、実装中(`implementing`)、レビュー中(`reviewing`)、修正中(`fixing`)、監査中(`auditing`)である。ジョブの一覧に載らない合間も拾うために、両方を見る。
+- 実行中の状態の作業項目。
+  要件定義の生成中(`requirements_generating`)、設計中(`designing`)、実装中(`implementing`)である。
+  レビュー中(`reviewing`)、修正中(`fixing`)、監査中(`auditing`)も含む。
+  ジョブの一覧に載らない合間も拾うために、両方を見る。
 
 実行中の状態の作業項目のうち、動いているジョブが付いていないものは、ジョブが死んで状態だけが残ったものとして、警告にとどめて通す。
 残りと判定するのは、最後の更新から10分以上たっていて、次のどちらかのときだけである。
@@ -2837,6 +2840,22 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   止めるつもりなら、`repo_allowlist`に必要なリポジトリを並べてから、`gh_collect_enabled`も`false`にする。
 - migrationのdownは自動では走らない。
   表は残るが、害は無い。
+
+### 設計工程のmigrationを戻す
+
+設計工程の状態と種類を足したmigrationを戻す手順である。
+`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に2回打つ。
+承認の記録を失わないために、承認依頼側が先に戻る。
+
+1. 1回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
+2. 2回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
+   `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
+
+今のコードは、設計工程の状態と種類を書き込まない。
+戻す前に止めるものは無い。
+1回目が失敗したときは、種類が`design`の承認依頼が残っている。
+制約を足し直せないので、migrationはそこで止まる。
+`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、1回目をやり直す。
 
 ### 5分の境目の403を数える
 

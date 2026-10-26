@@ -145,6 +145,14 @@ describe("requirementsStatusTone", () => {
     expect(requirementsStatusTone("awaiting_approval")).toBe("warning");
   });
 
+  test("marks an item waiting for design approval as warning", () => {
+    expect(requirementsStatusTone("awaiting_design_approval")).toBe("warning");
+  });
+
+  test("marks an item being designed as warning", () => {
+    expect(requirementsStatusTone("designing")).toBe("warning");
+  });
+
   test("marks a rejected item as failure", () => {
     expect(requirementsStatusTone("rejected")).toBe("failure");
   });

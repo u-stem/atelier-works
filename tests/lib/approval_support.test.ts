@@ -189,6 +189,12 @@ describe("handlerPathFor", () => {
       "f/factory/steps/issue_proposal_apply",
     );
   });
+
+  test("throws for design, which has no handler yet", () => {
+    expect(() => handlerPathFor("design")).toThrow(
+      "no approval handler for kind design",
+    );
+  });
 });
 
 describe("expiredRequirementsRequests", () => {

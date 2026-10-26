@@ -22,6 +22,16 @@ describe("workItemStatusLabel", () => {
     expect(workItemStatusLabel("awaiting_approval")).toBe("承認待ち");
   });
 
+  test("translates the status of a design being generated", () => {
+    expect(workItemStatusLabel("designing")).toBe("設計の生成中");
+  });
+
+  test("translates the status of a design waiting for approval", () => {
+    expect(workItemStatusLabel("awaiting_design_approval")).toBe(
+      "設計の承認待ち",
+    );
+  });
+
   test("does not leak an unknown status code", () => {
     expect(workItemStatusLabel("brand_new_state")).toBe(UNKNOWN_STATUS_LABEL);
   });
@@ -44,6 +54,10 @@ describe("workItemKindLabel", () => {
 describe("approvalKindLabel", () => {
   test("labels a requirements approval", () => {
     expect(approvalKindLabel("requirements", null)).toBe("要件定義");
+  });
+
+  test("labels a design approval", () => {
+    expect(approvalKindLabel("design", null)).toBe("設計");
   });
 
   test("labels an issue proposal from an audit as an improvement proposal", () => {

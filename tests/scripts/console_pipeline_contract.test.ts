@@ -117,6 +117,13 @@ describe("label tables cover the backend values", () => {
     expect(workItemStatusLabel(status)).not.toBe(UNKNOWN_STATUS_LABEL);
   });
 
+  test.each([...WORK_ITEM_STATUSES])(
+    "orders status %s explicitly",
+    (status) => {
+      expect(STATUS_ORDER).toContain(status);
+    },
+  );
+
   test.each([...WORK_ITEM_KINDS])("labels kind %s", (kind) => {
     expect(workItemKindLabel(kind)).not.toBe("その他");
   });
