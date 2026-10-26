@@ -118,7 +118,7 @@ export type BuildImplementContextInput = {
   readonly issue: Pick<Issue, "title" | "body" | "htmlUrl">;
   readonly draft: Pick<
     RequirementDraft,
-    "attempt" | "markdown" | "diagrams" | "doc_dir"
+    "attempt" | "markdown" | "diagrams" | "doc_dir" | "doc_hash"
   >;
   readonly branch: string;
   readonly baseBranch: string;
@@ -176,6 +176,7 @@ export function buildImplementContext(
     requirements_markdown: input.draft.markdown,
     requirements_diagrams: input.draft.diagrams,
     requirements_doc_dir: input.draft.doc_dir,
+    requirements_doc_hash: null,
     requirements_console_url: buildConsoleUrl(
       input.config.windmill_public_url,
       { work_item_id: workItem.id, attempt: input.draft.attempt },
@@ -191,6 +192,18 @@ export function buildImplementContext(
       input.config.implement_flow_timeout_sec,
     ),
   };
+}
+
+/**
+ * 承認済みの要件定義のディレクトリが、承認時の基準値と合うかを確かめる。
+ * 合わないか無ければ、`needs_human`の理由を返す。合うか、確かめる対象が無ければ`null`を返す。
+ */
+export async function requirementsGateReason(
+  _draft: Pick<RequirementDraft, "doc_dir" | "doc_hash">,
+  _hashTree: (dir: string) => Promise<string | null>,
+  _warn: (message: string, fields: Record<string, unknown>) => void,
+): Promise<string | null> {
+  return null;
 }
 
 function stop(

@@ -18,18 +18,26 @@ import type {
   ClaudeRunResult,
   RunClaudeResult,
 } from "../../f/factory/lib/claude.ts";
+import {
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+} from "../../f/factory/lib/doc_tree_hash.ts";
 import { IMPLEMENT_LEASE_LOST_REASON } from "../../f/factory/lib/implement_launch_support.ts";
 import {
   buildImplementClaudeOptions,
   type ChangeInspection,
   type DocDirCopyDeps,
+  type DocDirGuard,
   type DocEntryFs,
   deadlinePassedReason,
   defaultDocDirCopyDeps,
+  docDirGuardFor,
   type FixRoundRequest,
   GITLEAKS_CHECK_NAME,
+  IMPLEMENT_CLAUDE_ROUND_KINDS,
   type ImplementClaudeRound,
   type ImplementClaudeRunInput,
+  type ImplementClaudeRunRound,
   type ImplementContext,
   type ImplementLoopDeps,
   type ImplementLoopInput,
@@ -39,6 +47,8 @@ import {
   type LoopCheckResult,
   NO_CHANGES_CHECK_NAME,
   prepareImplementWorktree,
+  RequirementsUntrustedError,
+  runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementGenerateRound,
   runImplementVerifyLoop,
@@ -105,6 +115,7 @@ const CONTEXT: ImplementContext = {
     "# 要件定義\n\n## 受入条件\n\n| ID | 条件 |\n| --- | --- |\n| AC-001 | CSVを出力できる |\n",
   requirements_diagrams: [],
   requirements_doc_dir: DOC_DIR,
+  requirements_doc_hash: null,
   requirements_console_url:
     "http://127.0.0.1:8080/console/items/3/requirements",
   is_factory_repo: false,
@@ -339,6 +350,263 @@ describe("withReadOnlyDocDirCopy", () => {
     const h = copyDeps();
     await withReadOnlyDocDirCopy(null, async () => "x", h.deps);
     expect(h.copied).toEqual([]);
+  });
+});
+
+describe("withReadOnlyDocDirCopy and the baseline of the approved requirements", () => {
+  const BASELINE = "a".repeat(64);
+
+  /** 呼び出しの順を控える偽の依存。`hashes`は呼び出しごとに順に返す。 */
+  function guarded(
+    hashes: (string | null)[],
+    options: { pathExists?: boolean; baseline?: string | null } = {},
+  ) {
+    const events: string[] = [];
+    const warnings: string[] = [];
+    const hashed: string[] = [];
+    let hashCall = 0;
+    const deps: DocDirCopyDeps = {
+      pathExists: async () => options.pathExists ?? true,
+      makeTempDir: async () => "/tmp/fake-req",
+      copyDir: async () => {
+        events.push("copy");
+      },
+      removeDir: async () => {
+        events.push("remove");
+      },
+    };
+    const guard: DocDirGuard = {
+      baseline: options.baseline === undefined ? BASELINE : options.baseline,
+      hashTree: async (dir) => {
+        events.push("hash");
+        hashed.push(dir);
+        const value = hashes[hashCall];
+        hashCall += 1;
+        return value === undefined ? null : value;
+      },
+      warn: (message) => {
+        warnings.push(message);
+      },
+    };
+    const run = (
+      fn: (copy: string | null) => Promise<string> = async () => "ran",
+    ) => {
+      return withReadOnlyDocDirCopy(
+        DOC_DIR,
+        async (copy) => {
+          events.push("fn");
+          return fn(copy);
+        },
+        deps,
+        guard,
+      );
+    };
+    return { run, events, warnings, hashed };
+  }
+
+  test("hashes the original directory before and after the copy, then runs fn", async () => {
+    const g = guarded([BASELINE, BASELINE]);
+    await g.run();
+    expect(g.events).toEqual(["hash", "copy", "hash", "fn", "remove"]);
+  });
+
+  test("hashes the original directory, not the copy", async () => {
+    const g = guarded([BASELINE, BASELINE]);
+    await g.run();
+    expect(g.hashed).toEqual([DOC_DIR, DOC_DIR]);
+  });
+
+  test("returns what fn returns when both hashes match", async () => {
+    const g = guarded([BASELINE, BASELINE]);
+    expect(await g.run()).toBe("ran");
+  });
+
+  test("throws the reason before implementation when the directory differs before the copy", async () => {
+    const g = guarded(["b".repeat(64)]);
+    await expect(g.run()).rejects.toMatchObject({
+      reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    });
+  });
+
+  test("does not copy or run fn when the directory differs before the copy", async () => {
+    const g = guarded(["b".repeat(64)]);
+    await g.run().catch(() => undefined);
+    expect(g.events).toEqual(["hash"]);
+  });
+
+  test("throws the reason before implementation when the directory changes during the copy", async () => {
+    const g = guarded([BASELINE, "b".repeat(64)]);
+    await expect(g.run()).rejects.toMatchObject({
+      reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    });
+  });
+
+  test("does not run fn and removes the copy when the directory changes during the copy", async () => {
+    const g = guarded([BASELINE, "b".repeat(64)]);
+    await g.run().catch(() => undefined);
+    expect(g.events).toEqual(["hash", "copy", "hash", "remove"]);
+  });
+
+  test("throws the missing reason when the directory is gone", async () => {
+    const g = guarded([null], { pathExists: false });
+    await expect(g.run()).rejects.toMatchObject({
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("throws the missing reason when the directory disappears during the copy", async () => {
+    const g = guarded([BASELINE, null]);
+    await expect(g.run()).rejects.toMatchObject({
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("throws an error that callers can tell apart", async () => {
+    const g = guarded(["b".repeat(64)]);
+    await expect(g.run()).rejects.toBeInstanceOf(RequirementsUntrustedError);
+  });
+
+  test("skips the comparison and warns when there is no baseline", async () => {
+    const g = guarded([], { baseline: null });
+    await g.run();
+    expect([g.events, g.warnings]).toEqual([
+      ["copy", "fn", "remove"],
+      [
+        "the approved requirements have no baseline hash; copying without the comparison",
+      ],
+    ]);
+  });
+
+  test("runs fn with null when there is no baseline and the directory is gone", async () => {
+    const g = guarded([], { baseline: null, pathExists: false });
+    expect(await g.run(async (copy) => String(copy))).toBe("null");
+  });
+
+  test("does not warn when the draft has a baseline", async () => {
+    const g = guarded([BASELINE, BASELINE]);
+    await g.run();
+    expect(g.warnings).toEqual([]);
+  });
+});
+
+describe("runDocDirGuardedRound", () => {
+  const ROUND: ImplementClaudeRunRound = {
+    kind: "output",
+    output: DONE,
+    agent_run_id: 7,
+    cost_usd: 0.5,
+  };
+  const BASELINE = "a".repeat(64);
+  const deps: DocDirCopyDeps = {
+    pathExists: async () => true,
+    makeTempDir: async () => "/tmp/fake-req",
+    copyDir: async () => {},
+    removeDir: async () => {},
+  };
+  const guardOf = (hash: string | null): DocDirGuard => ({
+    baseline: BASELINE,
+    hashTree: async () => hash,
+    warn: () => {},
+  });
+
+  test("returns the round of Claude when the directory matches", async () => {
+    expect(
+      await runDocDirGuardedRound(
+        DOC_DIR,
+        guardOf(BASELINE),
+        async () => ROUND,
+        deps,
+      ),
+    ).toEqual(ROUND);
+  });
+
+  test("returns a requirements_modified round with the reason when the directory differs", async () => {
+    expect(
+      await runDocDirGuardedRound(
+        DOC_DIR,
+        guardOf("b".repeat(64)),
+        async () => ROUND,
+        deps,
+      ),
+    ).toEqual({
+      kind: "requirements_modified",
+      reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    });
+  });
+
+  test("returns a requirements_modified round with the missing reason when the directory is gone", async () => {
+    expect(
+      await runDocDirGuardedRound(
+        DOC_DIR,
+        guardOf(null),
+        async () => ROUND,
+        deps,
+      ),
+    ).toEqual({
+      kind: "requirements_modified",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("does not run Claude when the directory differs", async () => {
+    let ran = false;
+    await runDocDirGuardedRound(
+      DOC_DIR,
+      guardOf("b".repeat(64)),
+      async () => {
+        ran = true;
+        return ROUND;
+      },
+      deps,
+    );
+    expect(ran).toBe(false);
+  });
+
+  test("rethrows any other error", async () => {
+    await expect(
+      runDocDirGuardedRound(
+        DOC_DIR,
+        guardOf(BASELINE),
+        async () => {
+          throw new Error("boom");
+        },
+        deps,
+      ),
+    ).rejects.toThrow("boom");
+  });
+});
+
+describe("docDirGuardFor", () => {
+  test("takes the baseline from the context", () => {
+    const guard = docDirGuardFor(
+      { ...CONTEXT, requirements_doc_hash: "h".repeat(64) },
+      () => {},
+    );
+    expect(guard.baseline).toBe("h".repeat(64));
+  });
+
+  test("hashes a real directory as a sha-256 digest", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "doc-guard-test-"));
+    writeFileSync(join(dir, "requirements.md"), "R");
+    const guard = docDirGuardFor(CONTEXT, () => {});
+    expect(await guard.hashTree(dir)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("hashes a directory that does not exist as null", async () => {
+    const guard = docDirGuardFor(CONTEXT, () => {});
+    expect(await guard.hashTree("/does/not/exist/anywhere")).toBeNull();
+  });
+
+  test("hands the warning to the caller's logger", () => {
+    const messages: string[] = [];
+    const guard = docDirGuardFor(CONTEXT, (message) => messages.push(message));
+    guard.warn("w", {});
+    expect(messages).toEqual(["w"]);
+  });
+
+  test("treats a context from before the baseline existed as having none", () => {
+    const guard = docDirGuardFor({}, () => {});
+    expect(guard.baseline ?? null).toBeNull();
   });
 });
 
@@ -1866,6 +2134,91 @@ describe("runImplementVerifyLoop", () => {
       (await run(harness(), loopInput(LEASE_LOST_ROUND, { deadlineAt: 0 })))
         .exit,
     ).toBe("lease_lost");
+  });
+});
+
+describe("runImplementVerifyLoop and a requirements directory that cannot be trusted", () => {
+  const UNTRUSTED: ImplementClaudeRound = {
+    kind: "requirements_modified",
+    reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  };
+
+  test("lists the kind among the rounds that the flow accepts", () => {
+    expect(IMPLEMENT_CLAUDE_ROUND_KINDS).toContain("requirements_modified");
+  });
+
+  test("stops the first round with claude_error", async () => {
+    expect((await run(harness(), loopInput(UNTRUSTED))).exit).toBe(
+      "claude_error",
+    );
+  });
+
+  test("carries the reason of the round", async () => {
+    expect((await run(harness(), loopInput(UNTRUSTED))).reason).toBe(
+      REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    );
+  });
+
+  test("does not count a round that never ran Claude", async () => {
+    expect((await run(harness(), loopInput(UNTRUSTED))).rounds).toBe(0);
+  });
+
+  test("does not touch the worktree in the first round", async () => {
+    const h = harness();
+    await run(h, loopInput(UNTRUSTED));
+    expect(h.events.filter((event) => event !== "lease")).toEqual([]);
+  });
+
+  test("records no round for the first round", async () => {
+    const h = harness();
+    await run(h, loopInput(UNTRUSTED));
+    expect(h.recorded).toEqual([]);
+  });
+
+  const FAILING_CHECK: LoopCheckResult = {
+    command: "bun test",
+    ok: false,
+    output: "FAIL",
+    outputTail: "FAIL",
+  };
+
+  test("stops a fix round with claude_error too", async () => {
+    const h = harness({ checks: [[FAILING_CHECK]], fixRounds: [UNTRUSTED] });
+    expect((await run(h)).exit).toBe("claude_error");
+  });
+
+  test("carries the reason of a fix round", async () => {
+    const h = harness({ checks: [[FAILING_CHECK]], fixRounds: [UNTRUSTED] });
+    expect((await run(h)).reason).toBe(
+      REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    );
+  });
+
+  test("counts only the rounds that ran Claude when a fix round stops", async () => {
+    const h = harness({ checks: [[FAILING_CHECK]], fixRounds: [UNTRUSTED] });
+    expect((await run(h)).rounds).toBe(1);
+  });
+
+  test("records only the first round when a fix round stops", async () => {
+    const h = harness({ checks: [[FAILING_CHECK]], fixRounds: [UNTRUSTED] });
+    await run(h);
+    expect(h.recorded.map((record) => record.mode)).toEqual(["implement"]);
+  });
+
+  test("does not verify the worktree again after a fix round stops", async () => {
+    const h = harness({ checks: [[FAILING_CHECK]], fixRounds: [UNTRUSTED] });
+    await run(h);
+    expect(h.calls.checks).toBe(1);
+  });
+
+  test("carries the missing reason", async () => {
+    const missing: ImplementClaudeRound = {
+      kind: "requirements_modified",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    };
+    expect((await run(harness(), loopInput(missing))).reason).toBe(
+      REQUIREMENTS_DIR_MISSING_REASON,
+    );
   });
 });
 

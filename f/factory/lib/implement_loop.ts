@@ -122,6 +122,13 @@ export type ImplementContext = {
    * Claudeの実行ごとに新しい複製を渡す(`withReadOnlyDocDirCopy`)。
    */
   readonly requirements_doc_dir: string | null;
+  /**
+   * 承認済みの下書きの`doc_hash`(承認時に保存したディレクトリの内容のハッシュ)。
+   * Claudeの実行ごとの複製の前後に、`requirements_doc_dir`の現在のハッシュをこれと比べる。
+   * 基準値が無い下書きでは`null`で、照合は飛ばす。
+   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱う。
+   */
+  readonly requirements_doc_hash: string | null;
   readonly requirements_console_url: string;
   /**
    * 対象がFactory自身のリポジトリなら`true`。
@@ -291,6 +298,40 @@ export const defaultDocDirCopyDeps: DocDirCopyDeps = {
 };
 
 /**
+ * 承認済みの要件定義のディレクトリが基準値と違う、または無いために、Claudeを起動せずに止めるときの例外。
+ * `reason`は`doc_tree_hash.ts`の理由の定数で、そのまま`needs_human`の理由になる。
+ */
+export class RequirementsUntrustedError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.name = "RequirementsUntrustedError";
+    this.reason = reason;
+  }
+}
+
+/** 複製の前後に、元のディレクトリを基準値と照合する設定。 */
+export type DocDirGuard = {
+  /** 承認時に保存した基準値。無いか空なら、警告を残して照合を飛ばす。 */
+  readonly baseline: string | null | undefined;
+  /** ディレクトリの内容のハッシュ。ディレクトリが無ければ`null`。 */
+  readonly hashTree: (dir: string) => Promise<string | null>;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/** 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。 */
+export function docDirGuardFor(
+  context: { readonly requirements_doc_hash?: string | null },
+  warn: DocDirGuard["warn"],
+): DocDirGuard {
+  return {
+    baseline: null,
+    hashTree: async () => null,
+    warn,
+  };
+}
+
+/**
  * `docDir`の新しい複製(`<tmp>/requirements`)を渡して`fn`を実行し、
  * `fn`が成功しても例外を投げても、終わったら複製を削除する。
  * Claudeの実行が複製に何をしても、Consoleが表示する承認済みの下書きには届かない。
@@ -301,6 +342,7 @@ export async function withReadOnlyDocDirCopy<T>(
   docDir: string | null,
   fn: (copy: string | null) => Promise<T>,
   deps: DocDirCopyDeps = defaultDocDirCopyDeps,
+  _guard?: DocDirGuard,
 ): Promise<T> {
   if (docDir === null || !(await deps.pathExists(docDir))) return fn(null);
   const tempDir = await deps.makeTempDir();
@@ -311,6 +353,19 @@ export async function withReadOnlyDocDirCopy<T>(
   } finally {
     await deps.removeDir(tempDir);
   }
+}
+
+/**
+ * `withReadOnlyDocDirCopy`でClaudeの1回の実行を包み、基準値の照合で止めたときは例外にせず、
+ * `requirements_modified`のラウンドとして返す。ほかの例外はそのまま投げる。
+ */
+export async function runDocDirGuardedRound(
+  _docDir: string | null,
+  _guard: DocDirGuard,
+  _run: (copy: string | null) => Promise<ImplementClaudeRunRound>,
+  _deps: DocDirCopyDeps = defaultDocDirCopyDeps,
+): Promise<ImplementClaudeRound> {
+  return LEASE_LOST_ROUND;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,15 +399,26 @@ export type ImplementClaudeRound =
       readonly agent_run_id: number;
       readonly cost_usd: number;
     }
-  | { readonly kind: "lease_lost" };
+  | { readonly kind: "lease_lost" }
+  /**
+   * 承認済みの要件定義のディレクトリが基準値と違う(または無い)ので、Claudeを起動せずに止めたことを表す。
+   * `reason`は`doc_tree_hash.ts`の理由の定数で、そのまま`needs_human`の理由になる。
+   */
+  | { readonly kind: "requirements_modified"; readonly reason: string };
 
 export const IMPLEMENT_CLAUDE_ROUND_KINDS: readonly ImplementClaudeRound["kind"][] =
-  ["output", "invalid_output", "claude_failed", "lease_lost"];
+  [
+    "output",
+    "invalid_output",
+    "claude_failed",
+    "lease_lost",
+    "requirements_modified",
+  ];
 
-/** Claudeを実際に実行したラウンド(`lease_lost`以外)。 */
+/** Claudeを実際に実行したラウンド(`lease_lost`と`requirements_modified`以外)。 */
 export type ImplementClaudeRunRound = Exclude<
   ImplementClaudeRound,
-  { readonly kind: "lease_lost" }
+  { readonly kind: "lease_lost" } | { readonly kind: "requirements_modified" }
 >;
 
 /** implement_generateがリースを失っていたときに返すラウンド。検証ループは何もせずに`lease_lost`で止まる。 */
@@ -733,7 +799,9 @@ export type ImplementLoopResult = {
 
 type ProducedRound = Exclude<
   ImplementClaudeRound,
-  { readonly kind: "claude_failed" } | { readonly kind: "lease_lost" }
+  | { readonly kind: "claude_failed" }
+  | { readonly kind: "lease_lost" }
+  | { readonly kind: "requirements_modified" }
 >;
 
 type CheckEvaluation = {
@@ -960,6 +1028,8 @@ export async function runImplementVerifyLoop(
         reason: IMPLEMENT_LEASE_LOST_REASON,
         rounds: round - 1,
       });
+    if (current.kind === "requirements_modified")
+      return stopped({ exit: "lease_lost" });
     totalCostUsd += current.cost_usd;
     // `.git`ポインタの確認・指紋のためのステージ・ignoredファイルの削除・検査は、どれも
     // worktreeに触れる。リースを失っていれば別の実行が同じworktreeを使っている可能性があるので、その前に止まる。
