@@ -75,6 +75,7 @@ export type JobDetailView =
       readonly steps: readonly StepViewData[];
       readonly log: LogViewData | null;
       readonly result: OutputViewData | null;
+      readonly result_error: string | null;
       readonly failures:
         | { readonly ok: true; readonly items: readonly FailureViewData[] }
         | { readonly ok: false; readonly reason: string };
@@ -223,6 +224,7 @@ export function isJobDetail(value: unknown): value is JobDetailView {
     isArrayOf(isStepView)(value.steps) &&
     isNullable(isLogView)(value.log) &&
     isNullable(isOutputView)(value.result) &&
+    isNullableString(value.result_error) &&
     isFailures(value.failures)
   );
 }

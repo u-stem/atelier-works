@@ -15,6 +15,10 @@ import { isRecord } from "./lib/types.ts";
 
 const PATH_PREFIX = "f/factory/";
 const QUEUE_PAGE_SIZE = 100;
+/** 1ページの件数。Windmillの上限でもある。 */
+const PAGE_SIZE = 100;
+/** たどるページ数の上限。上限に達しても、全件を読めたことにはしない。 */
+const PAGES_MAX = 10;
 const RECENT_RUNS_MAX = 5;
 
 export type QueueQuery = {
@@ -23,8 +27,9 @@ export type QueueQuery = {
 };
 
 export type SchedulesPorts = {
-  readonly listSchedules: () => Promise<readonly unknown[]>;
-  readonly listSchedulesWithJobs: () => Promise<readonly unknown[]>;
+  /** 1から数えるページの番号を渡す。1ページは100件まで。 */
+  readonly listSchedules: (page: number) => Promise<readonly unknown[]>;
+  readonly listSchedulesWithJobs: (page: number) => Promise<readonly unknown[]>;
   readonly listQueue: (query: QueueQuery) => Promise<readonly unknown[]>;
 };
 
@@ -115,8 +120,21 @@ function nextRunsOf(queue: readonly unknown[]): Map<string, string> {
   return next;
 }
 
+/** 満杯のページが続くあいだ、次のページを読む。 */
+async function readAllPages(
+  list: (page: number) => Promise<readonly unknown[]>,
+): Promise<unknown[]> {
+  const all: unknown[] = [];
+  for (let page = 1; page <= PAGES_MAX; page += 1) {
+    const rows = await list(page);
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
 /**
- * scheduleの状態を、パスの順に返す。`repo`はリポジトリの定義で、実際の状態との差異を出すために使う。
+ * scheduleの状態を、パスの順に返す。全ページを読む(最大10ページ)。`repo`はリポジトリの定義で、実際の状態との差異を出すために使う。
  * 実際の状態の読み取りが失敗したときは例外を投げる。
  */
 export async function loadSchedules(
@@ -124,8 +142,8 @@ export async function loadSchedules(
   repo: readonly RepoSchedule[] = REPO_SCHEDULES,
 ): Promise<SchedulesSnapshot> {
   const [schedules, withJobs, queue] = await Promise.all([
-    ports.listSchedules(),
-    ports.listSchedulesWithJobs(),
+    readAllPages(ports.listSchedules),
+    readAllPages(ports.listSchedulesWithJobs),
     ports.listQueue({ scriptPathStart: PATH_PREFIX, perPage: QUEUE_PAGE_SIZE }),
   ]);
   const runsByPath = new Map<string, RecentRun[]>();
@@ -186,10 +204,19 @@ export async function loadSchedules(
 export async function main(): Promise<SchedulesSnapshot> {
   const workspace = wmillDefault.getWorkspace();
   return await loadSchedules({
-    listSchedules: () =>
-      wmill.ScheduleService.listSchedules({ workspace, perPage: 100 }),
-    listSchedulesWithJobs: () =>
-      wmill.ScheduleService.listSchedulesWithJobs({ workspace, perPage: 100 }),
+    listSchedules: (page) =>
+      wmill.ScheduleService.listSchedules({
+        workspace,
+        perPage: PAGE_SIZE,
+        page,
+        pathStart: PATH_PREFIX,
+      }),
+    listSchedulesWithJobs: (page) =>
+      wmill.ScheduleService.listSchedulesWithJobs({
+        workspace,
+        perPage: PAGE_SIZE,
+        page,
+      }),
     listQueue: (query) => wmill.JobService.listQueue({ workspace, ...query }),
   });
 }

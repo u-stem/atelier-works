@@ -65,13 +65,24 @@ async function readSchedule(root: string, file: string): Promise<RepoSchedule> {
 }
 
 /**
- * `root`の下のscriptの定義(libを除く)、フロー、スケジュールを集める。
+ * 定数に入れないscript。保留と凍結を解除するscriptは、Consoleの履歴の絞り込みに要らない。
+ * tag consoleのジョブは既定で一覧に出ない。名前を`f/`の他のファイルに持たせない検査
+ * (`tests/scripts/hold_wiring.test.ts`)を、生成した定数が破らないようにするためでもある。
+ */
+const WITHHELD: readonly string[] = [
+  "f/factory/hold_release",
+  "f/factory/freeze_release",
+];
+
+/**
+ * `root`の下のscriptの定義(libと除外を除く)、フロー、スケジュールを集める。
  * フローのパスは、`<名前>__flow`のディレクトリから`f/factory/<名前>`と導く。
  */
 export async function collectKnownPaths(root: string): Promise<KnownPaths> {
   const scripts = (await scan(root, "f/factory/**/*.script.yaml"))
     .map((file) => file.replace(/\.script\.yaml$/, ""))
-    .filter((path) => !path.startsWith("f/factory/lib/"));
+    .filter((path) => !path.startsWith("f/factory/lib/"))
+    .filter((path) => !WITHHELD.includes(path));
   const flows = (await scan(root, "f/factory/*__flow/flow.yaml")).map((file) =>
     file.replace(/__flow\/flow\.yaml$/, ""),
   );

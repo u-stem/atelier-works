@@ -18,8 +18,6 @@ export const KNOWN_SCRIPT_PATHS: readonly string[] = [
   "f/factory/default_worker_watch",
   "f/factory/detect_schedule_failures",
   "f/factory/drawio_viewer_bump",
-  "f/factory/freeze_release",
-  "f/factory/hold_release",
   "f/factory/manual_intake_submit",
   "f/factory/notice_resolve",
   "f/factory/notify_daily_summary",

@@ -57,7 +57,11 @@ const HISTORY_STATUSES = ["success", "failure", "canceled"] as const;
 
 const JOB_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/;
+/** 履歴のカーソル。`<時刻>|<これまでに返した件数>`の形。 */
+const HISTORY_CURSOR =
+  /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,3})$/;
+/** 履歴を続けて返す累積の上限。Console用workerの枠を、長い取得で占めないため。 */
+export const HISTORY_TOTAL_MAX = 200;
 
 export type JobState =
   | "running"
@@ -124,6 +128,8 @@ export type JobDetail =
       readonly steps: readonly StepView[];
       readonly log: LogView | null;
       readonly result: OutputView | null;
+      /** 結果を読めなかった理由。結果が無いだけ(404)のときと、読んでいないときは`null`。 */
+      readonly result_error: string | null;
       readonly failures:
         | { readonly ok: true; readonly items: readonly FailureView[] }
         | { readonly ok: false; readonly reason: string };
@@ -340,12 +346,38 @@ const EMPTY_LOG: LogView = {
   nonJsonLines: 0,
 };
 
+/** 結果を読む。404は結果なし。ほかの失敗は、読めなかった理由として返す。 */
 async function readResult(
   ports: JobsPorts,
   id: string,
-): Promise<OutputView | null> {
+): Promise<{ result: OutputView | null; error: string | null }> {
   try {
-    return redactResult(await ports.getCompletedJobResult(id));
+    return {
+      result: redactResult(await ports.getCompletedJobResult(id)),
+      error: null,
+    };
+  } catch (err) {
+    if (isNotFound(err)) {
+      return { result: null, error: null };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      result: null,
+      error: `could not read the result: ${redactText(message).text}`,
+    };
+  }
+}
+
+/** 親のジョブのidを、親が`f/factory/`の許可した種類のジョブと確かめられたときだけ返す。 */
+async function visibleParent(
+  ports: JobsPorts,
+  parent: string | null,
+): Promise<string | null> {
+  if (parent === null || !isJobId(parent)) return null;
+  try {
+    return projectJob(await ports.getJob(parent), ports.now()) === null
+      ? null
+      : parent;
   } catch {
     return null;
   }
@@ -398,8 +430,13 @@ export async function loadJobDetail(
     if (isNotFound(err)) return { found: false };
     throw err;
   }
-  const job = projectJob(raw, ports.now());
-  if (job === null || !isRecord(raw)) return { found: false };
+  const projected = projectJob(raw, ports.now());
+  if (projected === null || !isRecord(raw)) return { found: false };
+  // 親のパスを確かめ、`f/factory/`の外の親のidは出さない。
+  const job = {
+    ...projected,
+    parent_job: await visibleParent(ports, projected.parent_job),
+  };
   const args = projectArgs(raw);
   const steps = projectSteps(raw);
   if (!options.includeOutput) {
@@ -410,19 +447,29 @@ export async function loadJobDetail(
       steps,
       log: null,
       result: null,
+      result_error: null,
       failures: { ok: true, items: [] },
     };
   }
   const started = job.state !== "queued" && job.state !== "scheduled";
   const log = started ? redactLog(await ports.getJobLogs(id)) : EMPTY_LOG;
-  const result = FINISHED_STATES.includes(job.state)
+  const read = FINISHED_STATES.includes(job.state)
     ? await readResult(ports, id)
-    : null;
+    : { result: null, error: null };
   const failed = job.state === "failure" || job.state === "canceled";
   const failures = failed
     ? await readFailureViews(ports, id)
     : { ok: true as const, items: [] };
-  return { found: true, job, args, steps, log, result, failures };
+  return {
+    found: true,
+    job,
+    args,
+    steps,
+    log,
+    result: read.result,
+    result_error: read.error,
+    failures,
+  };
 }
 
 const STATE_RANK: Readonly<Record<JobState, number>> = {
@@ -483,8 +530,20 @@ function historyStatusOf(
   return HISTORY_STATUSES.find((candidate) => candidate === status);
 }
 
+function parseHistoryCursor(
+  cursor: string | undefined,
+): { time: string; count: number } | undefined {
+  const match = cursor === undefined ? null : HISTORY_CURSOR.exec(cursor);
+  if (match === null || match[1] === undefined || match[2] === undefined) {
+    return undefined;
+  }
+  const count = Number(match[2]);
+  return count <= HISTORY_TOTAL_MAX ? { time: match[1], count } : undefined;
+}
+
 /**
  * 完了したルートのジョブを、新しい順に1ページ返す。ページは`before`(前のページの`next_before`)で送る。
+ * カーソルは時刻と、これまでに返した件数を持つ。累積が200件に達したら、次のページを返さない。
  * `script_path`は既知のscriptかフローのパスに限り、外れたものは取得せずに`filter_rejected`で返す。
  */
 export async function loadJobHistory(
@@ -506,15 +565,23 @@ export async function loadJobHistory(
       filter_rejected: true,
     };
   }
-  const before =
-    options.before !== undefined && ISO_TIMESTAMP.test(options.before)
-      ? options.before
-      : undefined;
+  const cursor = parseHistoryCursor(options.before);
+  const before = cursor?.time;
+  const fetched = cursor?.count ?? 0;
+  if (fetched >= HISTORY_TOTAL_MAX) {
+    return {
+      view: "history",
+      jobs: [],
+      next_before: null,
+      filter_rejected: false,
+    };
+  }
+  const pageSize = Math.min(limit, HISTORY_TOTAL_MAX - fetched);
   const status = historyStatusOf(options.status);
   const now = ports.now();
   const raw = await ports.listJobs({
     scriptPathStart: JOB_PATH_PREFIX,
-    perPage: limit,
+    perPage: pageSize,
     hasNullParent: true,
     jobKinds: LIST_JOB_KINDS,
     completedBefore: now.toISOString(),
@@ -528,11 +595,16 @@ export async function loadJobHistory(
   // createdBeforeは境界を含むので、前のページの最後のジョブが再び返る。
   const jobs = summaries(raw, now).filter((job) => job.created_at !== before);
   const last = jobs[jobs.length - 1];
+  const total = fetched + jobs.length;
   return {
     view: "history",
     jobs,
     next_before:
-      raw.length >= limit && last?.created_at != null ? last.created_at : null,
+      raw.length >= pageSize &&
+      last?.created_at != null &&
+      total < HISTORY_TOTAL_MAX
+        ? `${last.created_at}|${String(total)}`
+        : null,
     filter_rejected: false,
   };
 }
