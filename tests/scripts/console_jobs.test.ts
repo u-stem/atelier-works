@@ -664,7 +664,8 @@ describe("loadJobDetail response", () => {
       ID,
       { includeOutput: true },
     );
-    const item = detail.found && detail.failures.ok && detail.failures.items[0];
+    const item =
+      detail.found && detail.failures.ok ? detail.failures.items[0] : undefined;
     expect(item?.error.length).toBeLessThanOrEqual(2001);
   });
 
@@ -680,7 +681,8 @@ describe("loadJobDetail response", () => {
       ID,
       { includeOutput: true },
     );
-    const item = detail.found && detail.failures.ok && detail.failures.items[0];
+    const item =
+      detail.found && detail.failures.ok ? detail.failures.items[0] : undefined;
     expect(item?.error).toBe("word ".repeat(300));
   });
 
@@ -696,7 +698,8 @@ describe("loadJobDetail response", () => {
       ID,
       { includeOutput: true },
     );
-    const item = detail.found && detail.failures.ok && detail.failures.items[0];
+    const item =
+      detail.found && detail.failures.ok ? detail.failures.items[0] : undefined;
     expect(item?.error).not.toContain("ghp_");
   });
 
