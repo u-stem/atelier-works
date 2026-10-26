@@ -34,7 +34,10 @@ import { useVisitedTabs } from "../../lib/useVisitedTabs.ts";
 import { AuditFailureList, OrphanFailureGroups } from "./FailureLists.tsx";
 import { FlowGraphSection } from "./FlowGraphSection.tsx";
 import { HoldsSection } from "./HoldsSection.tsx";
-import { InfoNoticeList, ResolvedNoticeDisclosure } from "./NoticeLists.tsx";
+import {
+  InfoNoticeDisclosure,
+  ResolvedNoticeDisclosure,
+} from "./NoticeLists.tsx";
 import { ReleaseStatus } from "./ReleaseStatus.tsx";
 import { SummaryBand } from "./SummaryBand.tsx";
 import { SystemSection } from "./SystemSection.tsx";
@@ -110,13 +113,13 @@ function InfoNoticeSection({ status }: { status: StatusQuery }) {
     <SystemSection
       id="info-notices-heading"
       title="情報の通知"
-      description={`人の行動が要らない通知です。要対応の一覧には出ません。直近${String(SYSTEM_WINDOW_DAYS)}日の未解決のものを表示します。`}
+      description={`人の行動が要らない通知です。要対応の一覧には出ません。直近${String(SYSTEM_WINDOW_DAYS)}日の未解決のものを、たたんで表示します。`}
       query={status}
       loginHint="上のバナーからログインすると、情報の通知を表示します。"
     >
       {(data, now) => (
         <>
-          <InfoNoticeList notices={data.info_notices} now={now} />
+          <InfoNoticeDisclosure notices={data.info_notices} now={now} />
           <LimitNote count={data.info_notices.length} />
         </>
       )}

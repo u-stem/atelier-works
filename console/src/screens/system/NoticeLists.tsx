@@ -133,12 +133,27 @@ function ResolvedItem({
  * 情報の通知の一覧を、件数を添えてたたむ。通知が無いときは、たたまずに空の旨を出す。
  * 人の行動が要らない通知なので、失敗と通知のタブを短くするために、開くまで一覧を見せない。
  */
-export function InfoNoticeDisclosure(_props: {
+export function InfoNoticeDisclosure({
+  notices,
+  now,
+  initiallyOpen = false,
+}: {
   notices: readonly NoticeRow[];
   now: number;
   initiallyOpen?: boolean | undefined;
 }) {
-  return null;
+  if (notices.length === 0) {
+    return <InfoNoticeList notices={notices} now={now} />;
+  }
+  return (
+    <Disclosure
+      summary={`一覧を表示(${String(notices.length)}件)`}
+      jumpOpen
+      initiallyOpen={initiallyOpen}
+    >
+      <InfoNoticeList notices={notices} now={now} />
+    </Disclosure>
+  );
 }
 
 /**

@@ -2,10 +2,12 @@ import { CircleCheck, Minus, OctagonAlert, TriangleAlert } from "lucide-react";
 import type { MouseEvent } from "react";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
+import { useDelayedVisible } from "../../lib/delayedVisible.ts";
 import {
   type BandLevel,
   type BandRow,
   bandLevelInfo,
+  isBandRowLoading,
 } from "../../lib/summaryBand.ts";
 import {
   SYSTEM_OTHER_SECTIONS,
@@ -79,12 +81,19 @@ function BandItem({
   row,
   now,
   onJump,
+  pendingVisible,
 }: {
   row: BandRow;
   now: number;
   onJump: (tab: SystemTabId, targetId: string) => void;
+  /** 取得中の行を、「取得中です」と出してよいか。 */
+  pendingVisible: boolean;
 }) {
   const info = bandLevelInfo(row.level);
+  // 取得中の行は、待ちの間は枠だけにする。値が届くとき、行の高さが動かず、短い取得で文が一瞬だけ出ないため。
+  const hidden = isBandRowLoading(row) && !pendingVisible;
+  const hiddenProps = hidden ? { "aria-hidden": true } : {};
+  const hide = hidden ? " invisible" : "";
   return (
     <li className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-3">
       <span className="w-full sm:w-44 sm:shrink-0">
@@ -92,14 +101,24 @@ function BandItem({
           {row.label}
         </JumpLink>
       </span>
-      <Badge variant={LEVEL_VARIANT[row.level]}>
+      <Badge
+        variant={LEVEL_VARIANT[row.level]}
+        className={hidden ? "invisible" : ""}
+        {...hiddenProps}
+      >
         <LevelSymbol level={row.level} />
         {info.label}
       </Badge>
-      <span className="min-w-0 flex-1 text-body break-words tabular-nums">
+      <span
+        className={`min-w-0 flex-1 text-body break-words tabular-nums${hide}`}
+        {...hiddenProps}
+      >
         {row.text}
       </span>
-      <span className="shrink-0 text-small text-subtle">
+      <span
+        className={`shrink-0 text-small text-subtle${hide}`}
+        {...hiddenProps}
+      >
         {row.updatedAt > 0 ? (
           <TimeText
             iso={new Date(row.updatedAt).toISOString()}
@@ -122,6 +141,7 @@ function BandItem({
  * タブの上に置き、タブを替えても見える。失敗の件数はここに必ず出る。目次の役も兼ねる。
  * 帯に行を持たない節は、帯の下のリンクで開く。
  * 行の取得は別々なので、取得の時刻も行ごとに出す。
+ * 取得の待ちで値が無い行は、300msを超えて待つまでは枠だけを置く。
  */
 export function SummaryBand({
   rows,
@@ -132,6 +152,8 @@ export function SummaryBand({
   now: number;
   onJump: (tab: SystemTabId, targetId: string) => void;
 }) {
+  // 取得中の行は、待ちが長引いたときだけ文を出す(画面の切り替えのスケルトンと同じ規則)。
+  const pendingVisible = useDelayedVisible(rows.some(isBandRowLoading));
   return (
     <nav
       aria-labelledby="summary-band-heading"
@@ -142,7 +164,13 @@ export function SummaryBand({
       </h2>
       <ul className="divide-y divide-border rounded-xl border border-border bg-card">
         {rows.map((row) => (
-          <BandItem key={row.id} row={row} now={now} onJump={onJump} />
+          <BandItem
+            key={row.id}
+            row={row}
+            now={now}
+            onJump={onJump}
+            pendingVisible={pendingVisible}
+          />
         ))}
       </ul>
       <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-small text-muted-foreground">

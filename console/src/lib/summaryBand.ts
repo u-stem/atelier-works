@@ -70,8 +70,8 @@ const LEVEL_INFO: Readonly<
 export const BAND_LOADING_TEXT = "取得中です";
 
 /** 取得の待ちで値がまだ無い行か。取得に失敗した行は含まない。 */
-export function isBandRowLoading(_row: BandRow): boolean {
-  return false;
+export function isBandRowLoading(row: BandRow): boolean {
+  return row.level === "none" && row.text === BAND_LOADING_TEXT;
 }
 
 /** 段の日本語と、色だけに頼らない記号の名前。 */
@@ -159,7 +159,7 @@ function build(
 function unavailable(id: BandRowId, source: BandSource<unknown>): BandRow {
   return build(id, source, {
     level: "none",
-    text: source.isError ? "取得できませんでした" : "取得中です",
+    text: source.isError ? "取得できませんでした" : BAND_LOADING_TEXT,
   });
 }
 

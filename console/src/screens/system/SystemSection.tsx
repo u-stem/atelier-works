@@ -11,12 +11,6 @@ const DEFAULT_SKELETON: RowsShape = {
   rowClassName: "h-16 w-full rounded-xl",
 };
 
-/** 通知の行3つ分の一覧の目安(1行は約4.25rem)。 */
-const LIST_SKELETON: RowsShape = {
-  rows: 1,
-  rowClassName: "h-[12.75rem] w-full rounded-xl",
-};
-
 /**
  * 節ごとの読み込み中の形。節の見出しのidで引く。
  * 高さは、内容が出たときに下の節が動かないよう、実機で測った本文の高さ(説明の下から節の終わりまで)にそろえる。
@@ -37,8 +31,11 @@ export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
     rows: 1,
     rowClassName: "h-[35rem] w-full rounded-xl",
   },
-  // 通知の行3つ分。
-  "info-notices-heading": LIST_SKELETON,
+  // 一覧を開く1行(36px)。通知が無いときは空の旨の1行(63px)になる。
+  "info-notices-heading": {
+    rows: 1,
+    rowClassName: "h-9 w-full rounded-xl",
+  },
   // 失敗1件の枠(約137px)。件数はたいてい少ない。
   "audit-failures-heading": {
     rows: 1,
