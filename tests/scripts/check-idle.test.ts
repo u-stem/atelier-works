@@ -1128,13 +1128,15 @@ describe("command", () => {
     ).toBe(1);
   });
 
+  // 上限は最初の読み取りの開始から数える。最初の読み取りが負荷で上限の近くまでかかると、
+  // 待ちの行を出す前に上限へ達するため、最初の読み取りが2秒かかっても行が出る上限にする。
   test("prints a waiting message while it rechecks", () => {
     setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
 
     expect(
-      run(["--recheck-timeout-ms=600", "--recheck-interval-ms=100"]).stderr,
+      run(["--recheck-timeout-ms=3000", "--recheck-interval-ms=1000"]).stderr,
     ).toContain("waiting");
-  });
+  }, 30_000);
 });
 
 const idleSnapshot: Snapshot = {
