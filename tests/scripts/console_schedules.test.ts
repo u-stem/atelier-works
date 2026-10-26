@@ -86,7 +86,6 @@ describe("loadSchedules", () => {
         "error",
         "is_flow",
         "next_run_at",
-        "no_flow_overlap",
         "path",
         "paused_until",
         "recent_runs",
@@ -143,6 +142,14 @@ describe("loadSchedules", () => {
 
   test("says that a schedule that equals its definition matches", async () => {
     const view = await loadSchedules(ports(), REPO);
+    expect(view.schedules[0]?.definition).toBe("matches");
+  });
+
+  test("does not compare no_flow_overlap, which the API does not report for a script", async () => {
+    const view = await loadSchedules(
+      ports({ schedules: [schedule({ no_flow_overlap: undefined })] }),
+      REPO,
+    );
     expect(view.schedules[0]?.definition).toBe("matches");
   });
 
