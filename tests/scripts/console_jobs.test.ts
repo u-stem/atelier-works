@@ -665,7 +665,7 @@ describe("loadJobDetail response", () => {
       { includeOutput: true },
     );
     const item = detail.found && detail.failures.ok && detail.failures.items[0];
-    expect(item && item.error.length).toBeLessThanOrEqual(2001);
+    expect(item?.error.length).toBeLessThanOrEqual(2001);
   });
 
   test("keeps a saved cause of 2000 characters or less whole", async () => {
@@ -681,7 +681,7 @@ describe("loadJobDetail response", () => {
       { includeOutput: true },
     );
     const item = detail.found && detail.failures.ok && detail.failures.items[0];
-    expect(item && item.error).toBe("word ".repeat(300));
+    expect(item?.error).toBe("word ".repeat(300));
   });
 
   test("masks a token before it cuts the saved cause", async () => {
@@ -697,7 +697,7 @@ describe("loadJobDetail response", () => {
       { includeOutput: true },
     );
     const item = detail.found && detail.failures.ok && detail.failures.items[0];
-    expect(item && item.error).not.toContain("ghp_");
+    expect(item?.error).not.toContain("ghp_");
   });
 
   test("cuts the reason the result could not be read at 300 characters", async () => {

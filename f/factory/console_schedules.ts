@@ -63,6 +63,8 @@ export type SchedulesSnapshot = {
   readonly schedules: readonly ScheduleView[];
   /** リポジトリが定義していて、Windmillに無いscheduleのパス。 */
   readonly missing_in_workspace: readonly string[];
+  /** ページの上限か、キューの1ページに達した。全件を読めたとは限らず、欠けたscheduleがあるかもしれない。 */
+  readonly truncated: boolean;
 };
 
 type Fields = Record<string, unknown>;
@@ -119,17 +121,17 @@ function nextRunsOf(queue: readonly unknown[]): Map<string, string> {
   return next;
 }
 
-/** 満杯のページが続くあいだ、次のページを読む。 */
+/** 満杯のページが続くあいだ、次のページを読む。上限のページまで満杯だったときは`truncated`を真にする。 */
 async function readAllPages(
   list: (page: number) => Promise<readonly unknown[]>,
-): Promise<unknown[]> {
-  const all: unknown[] = [];
+): Promise<{ readonly rows: unknown[]; readonly truncated: boolean }> {
+  const rows: unknown[] = [];
   for (let page = 1; page <= PAGES_MAX; page += 1) {
-    const rows = await list(page);
-    all.push(...rows);
-    if (rows.length < PAGE_SIZE) break;
+    const got = await list(page);
+    rows.push(...got);
+    if (got.length < PAGE_SIZE) return { rows, truncated: false };
   }
-  return all;
+  return { rows, truncated: true };
 }
 
 /**
@@ -140,13 +142,14 @@ export async function loadSchedules(
   ports: SchedulesPorts,
   repo: readonly RepoSchedule[] = REPO_SCHEDULES,
 ): Promise<SchedulesSnapshot> {
-  const [schedules, withJobs, queue] = await Promise.all([
+  const [read, readWithJobs, queue] = await Promise.all([
     readAllPages(ports.listSchedules),
     readAllPages(ports.listSchedulesWithJobs),
     ports.listQueue({ scriptPathStart: PATH_PREFIX, perPage: QUEUE_PAGE_SIZE }),
   ]);
+  const schedules = read.rows;
   const runsByPath = new Map<string, RecentRun[]>();
-  for (const entry of withJobs) {
+  for (const entry of readWithJobs.rows) {
     if (!isRecord(entry)) continue;
     const path = stringOf(entry, "path");
     if (path !== null) runsByPath.set(path, recentRunsOf(entry.jobs));
@@ -196,6 +199,10 @@ export async function loadSchedules(
       .map((item) => item.path)
       .filter((path) => !present.has(path))
       .sort(),
+    truncated:
+      read.truncated ||
+      readWithJobs.truncated ||
+      queue.length >= QUEUE_PAGE_SIZE,
   };
 }
 

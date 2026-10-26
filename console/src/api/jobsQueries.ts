@@ -86,6 +86,7 @@ export type JobListView = {
   readonly jobs: readonly JobSummaryView[];
   readonly next_before: string | null;
   readonly filter_rejected: boolean;
+  readonly truncated: boolean;
 };
 
 export type RecentRunView = {
@@ -114,6 +115,7 @@ export type ScheduleViewData = {
 export type SchedulesSnapshotView = {
   readonly schedules: readonly ScheduleViewData[];
   readonly missing_in_workspace: readonly string[];
+  readonly truncated: boolean;
 };
 
 export type ConfigItemView =
@@ -210,7 +212,8 @@ export function isJobList(value: unknown): value is JobListView {
     isOneOf(["active", "history"] as const)(value.view) &&
     isArrayOf(isJobSummary)(value.jobs) &&
     isNullableString(value.next_before) &&
-    isBoolean(value.filter_rejected)
+    isBoolean(value.filter_rejected) &&
+    isBoolean(value.truncated)
   );
 }
 
@@ -263,7 +266,8 @@ export function isSchedulesSnapshot(
   return (
     isRecord(value) &&
     isArrayOf(isScheduleView)(value.schedules) &&
-    isArrayOf(isString)(value.missing_in_workspace)
+    isArrayOf(isString)(value.missing_in_workspace) &&
+    isBoolean(value.truncated)
   );
 }
 

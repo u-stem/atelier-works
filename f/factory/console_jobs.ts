@@ -61,11 +61,29 @@ const HISTORY_STATUSES = ["success", "failure", "canceled"] as const;
 
 const JOB_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** 履歴のカーソル。`<時刻>|<これまでに返した件数>`の形。 */
-const HISTORY_CURSOR =
-  /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,3})$/;
-/** 履歴を続けて返す累積の上限。Console用workerの枠を、長い取得で占めないため。 */
+const UUID_SOURCE =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/**
+ * 履歴のカーソル。`<時刻>|<これまでに返した件数>|<時刻が境界と同じで、返したジョブのid(カンマ区切り)>`の形。
+ * APIは`createdBefore`を含めて返すので、境界の時刻のジョブが再び返る。idで見分けて落とす。
+ */
+const HISTORY_CURSOR = new RegExp(
+  `^(\\d{4}-\\d{2}-\\d{2}T[\\d:.]+(?:Z|[+-]\\d{2}:\\d{2}))\\|(\\d{1,3})\\|(${UUID_SOURCE}(?:,${UUID_SOURCE})*)$`,
+  "i",
+);
+/** カーソルに入れるidの数の上限。同じ時刻のジョブが多くても、取得の件数が膨らまないようにする。 */
+const HISTORY_SEEN_MAX = 20;
+/**
+ * 履歴を続けて返す累積の上限。画面が読み進める範囲の上限で、Console用workerの枠を長い取得で占めないためでもある。
+ * カーソルを偽造すれば数え直せるので、悪意のある呼び出しには効かない。1回の要求は50件までに限る。
+ */
 export const HISTORY_TOTAL_MAX = 200;
+/** 保存済みの失敗の原因として返す、伏せた後の長さの上限。 */
+const FAILURE_ERROR_MAX = 2000;
+/** 読めなかった理由として返す、伏せた後の長さの上限。 */
+const REASON_MAX = 300;
+/** フローのステップの親をたどる深さの上限。 */
+const ANCESTORS_MAX = 8;
 
 export type JobState =
   | "running"
@@ -146,6 +164,8 @@ export type JobList = {
   readonly next_before: string | null;
   /** 履歴の`script_path`が既知の集合に無く、取得しなかった。 */
   readonly filter_rejected: boolean;
+  /** 実行中の一覧が、キューの1ページ(100件)に達した。全件を読めたとは限らない。 */
+  readonly truncated: boolean;
 };
 
 export type QueueQuery = {
@@ -350,6 +370,11 @@ const EMPTY_LOG: LogView = {
   nonJsonLines: 0,
 };
 
+/** 伏せた後の文字列を、`max`字で切る。切ったときは末尾に`…`を付ける。 */
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
 /** 結果を読む。404は結果なし。ほかの失敗は、読めなかった理由として返す。 */
 async function readResult(
   ports: JobsPorts,
@@ -367,7 +392,7 @@ async function readResult(
     const message = err instanceof Error ? err.message : String(err);
     return {
       result: null,
-      error: `could not read the result: ${redactText(message).text}`,
+      error: `could not read the result: ${clip(redactText(message).text, REASON_MAX)}`,
     };
   }
 }
@@ -387,6 +412,34 @@ async function visibleParent(
   }
 }
 
+/**
+ * フローのステップの親をルートまでたどり、すべてが許可した種類のジョブか確かめる。
+ * プレビューのフローの子は、ステップ自身の種類がscriptになり、パスも`f/factory/`になるので、
+ * 親をたどらないと実行したフローの一部と見分けられない。
+ * 親が存在しない、許可した種類でない、深すぎる、親が無いステップは`false`を返す。読み取りの失敗は投げ直す。
+ */
+async function stepChainVisible(
+  ports: JobsPorts,
+  parent: string | null,
+): Promise<boolean> {
+  let current = parent;
+  for (let depth = 0; depth < ANCESTORS_MAX; depth += 1) {
+    if (current === null) return depth > 0;
+    if (!isJobId(current)) return false;
+    let raw: unknown;
+    try {
+      raw = await ports.getJob(current);
+    } catch (err) {
+      if (isNotFound(err)) return false;
+      throw err;
+    }
+    const projected = projectJob(raw, ports.now());
+    if (projected === null) return false;
+    current = projected.parent_job;
+  }
+  return false;
+}
+
 async function readFailureViews(
   ports: JobsPorts,
   id: string,
@@ -400,14 +453,14 @@ async function readFailureViews(
       ok: true,
       items: rows.map((row) => ({
         ...row,
-        error: redactText(row.error).text,
+        error: clip(redactText(row.error).text, FAILURE_ERROR_MAX),
       })),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
-      reason: `could not read the saved causes: ${redactText(message).text}`,
+      reason: `could not read the saved causes: ${clip(redactText(message).text, REASON_MAX)}`,
     };
   }
 }
@@ -436,11 +489,18 @@ export async function loadJobDetail(
   }
   const projected = projectJob(raw, ports.now());
   if (projected === null || !isRecord(raw)) return { found: false };
-  // 親のパスを確かめ、`f/factory/`の外の親のidは出さない。
-  const job = {
-    ...projected,
-    parent_job: await visibleParent(ports, projected.parent_job),
-  };
+  // フローのステップは、ルートまでの親がすべて許可した種類のときだけ返す。
+  // ステップでないジョブは、親が許可した種類のときだけ、親のidを出す。
+  let parentJob: string | null;
+  if (projected.is_flow_step) {
+    if (!(await stepChainVisible(ports, projected.parent_job))) {
+      return { found: false };
+    }
+    parentJob = projected.parent_job;
+  } else {
+    parentJob = await visibleParent(ports, projected.parent_job);
+  }
+  const job = { ...projected, parent_job: parentJob };
   const args = projectArgs(raw);
   const steps = projectSteps(raw);
   if (!options.includeOutput) {
@@ -520,6 +580,7 @@ export async function loadActiveJobs(
     jobs: summaries(raw, ports.now()).sort(byStateThenTime),
     next_before: null,
     filter_rejected: false,
+    truncated: raw.length >= QUEUE_PAGE_SIZE,
   };
 }
 
@@ -534,20 +595,33 @@ function historyStatusOf(
   return HISTORY_STATUSES.find((candidate) => candidate === status);
 }
 
+type HistoryCursor = {
+  readonly time: string;
+  readonly count: number;
+  readonly seen: readonly string[];
+};
+
 function parseHistoryCursor(
   cursor: string | undefined,
-): { time: string; count: number } | undefined {
+): HistoryCursor | undefined {
   const match = cursor === undefined ? null : HISTORY_CURSOR.exec(cursor);
   if (match === null || match[1] === undefined || match[2] === undefined) {
     return undefined;
   }
   const count = Number(match[2]);
-  return count <= HISTORY_TOTAL_MAX ? { time: match[1], count } : undefined;
+  const seen = (match[3] ?? "").split(",");
+  if (count > HISTORY_TOTAL_MAX || seen.length > HISTORY_SEEN_MAX) {
+    return undefined;
+  }
+  return { time: match[1], count, seen };
 }
 
 /**
  * 完了したルートのジョブを、新しい順に1ページ返す。ページは`before`(前のページの`next_before`)で送る。
- * カーソルは時刻と、これまでに返した件数を持つ。累積が200件に達したら、次のページを返さない。
+ * カーソルは時刻と、これまでに返した件数と、境界の時刻で返したジョブのidを持つ。
+ * 累積が200件に達したら、次のページを返さない。
+ * APIは`createdBefore`の時刻を含めて返すので、カーソルのidのジョブだけを落とす。同じ時刻の別のジョブは残す。
+ * 落とす分と、次のページがあるかを見る1件を足して取る。
  * `script_path`は既知のscriptかフローのパスに限り、外れたものは取得せずに`filter_rejected`で返す。
  */
 export async function loadJobHistory(
@@ -556,60 +630,67 @@ export async function loadJobHistory(
 ): Promise<JobList> {
   const limit = clampPageSize(options.limit);
   const scriptPath = options.scriptPath;
+  const empty: JobList = {
+    view: "history",
+    jobs: [],
+    next_before: null,
+    filter_rejected: false,
+    truncated: false,
+  };
   if (
     scriptPath !== undefined &&
     scriptPath !== "" &&
     !KNOWN_SCRIPT_PATHS.includes(scriptPath) &&
     !KNOWN_FLOW_PATHS.includes(scriptPath)
   ) {
-    return {
-      view: "history",
-      jobs: [],
-      next_before: null,
-      filter_rejected: true,
-    };
+    return { ...empty, filter_rejected: true };
   }
   const cursor = parseHistoryCursor(options.before);
-  const before = cursor?.time;
   const fetched = cursor?.count ?? 0;
   if (fetched >= HISTORY_TOTAL_MAX) {
-    return {
-      view: "history",
-      jobs: [],
-      next_before: null,
-      filter_rejected: false,
-    };
+    return empty;
   }
-  const pageSize = Math.min(limit, HISTORY_TOTAL_MAX - fetched);
+  const seen = cursor?.seen ?? [];
+  const want = Math.min(limit, HISTORY_TOTAL_MAX - fetched);
+  const perPage = want + 1 + seen.length;
   const status = historyStatusOf(options.status);
   const now = ports.now();
   const raw = await ports.listJobs({
     scriptPathStart: JOB_PATH_PREFIX,
-    perPage: pageSize,
+    perPage,
     hasNullParent: true,
     jobKinds: LIST_JOB_KINDS,
     completedBefore: now.toISOString(),
     ...(options.includeConsole ? {} : { tag: "!console" }),
-    ...(before !== undefined ? { createdBefore: before } : {}),
+    ...(cursor !== undefined ? { createdBefore: cursor.time } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(scriptPath !== undefined && scriptPath !== ""
       ? { scriptPathExact: scriptPath }
       : {}),
   });
-  // createdBeforeは境界を含むので、前のページの最後のジョブが再び返る。
-  const jobs = summaries(raw, now).filter((job) => job.created_at !== before);
+  const fresh = summaries(raw, now).filter(
+    (job) => !(job.created_at === cursor?.time && seen.includes(job.id)),
+  );
+  const jobs = fresh.slice(0, want);
   const last = jobs[jobs.length - 1];
   const total = fetched + jobs.length;
+  const more =
+    (fresh.length > want || raw.length >= perPage) &&
+    last?.created_at != null &&
+    total < HISTORY_TOTAL_MAX;
+  if (!more || last?.created_at == null) {
+    return { ...empty, jobs };
+  }
+  const lastTime = last.created_at;
+  const returnedAtLastTime = jobs
+    .filter((job) => job.created_at === lastTime)
+    .map((job) => job.id);
+  const carried = lastTime === cursor?.time ? seen : [];
+  const ids = [...carried, ...returnedAtLastTime].slice(-HISTORY_SEEN_MAX);
   return {
-    view: "history",
+    ...empty,
     jobs,
-    next_before:
-      raw.length >= pageSize &&
-      last?.created_at != null &&
-      total < HISTORY_TOTAL_MAX
-        ? `${last.created_at}|${String(total)}`
-        : null,
-    filter_rejected: false,
+    next_before: `${lastTime}|${String(total)}|${ids.join(",")}`,
   };
 }
 
