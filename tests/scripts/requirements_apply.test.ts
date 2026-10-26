@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_support.ts";
+import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   implementCasFailureReason,
   implementLaunchFailureReason,
 } from "../../f/factory/lib/implement_launch_support.ts";
+import { DESIGN_FLOW_PATH } from "../../f/factory/lib/pipeline_lease.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
+import {
+  describeReason,
+  nextActionFor,
+} from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   type ApprovedBranchContext,
   type ApprovedBranchDeps,
@@ -14,10 +21,12 @@ import {
   buildApprovedBranchDeps,
   buildApprovedComment,
   buildImplementLaunchNoticeMessage,
+  buildStartDesign,
   decideRejectedOutcome,
   type RejectedRetryDeps,
   readRequestAttempt,
   relaunchPipelineAfterRejection,
+  type StartDesignPorts,
   shouldProceed,
 } from "../../f/factory/steps/requirements_apply.ts";
 
@@ -911,5 +920,236 @@ describe("buildApprovedBranchDeps", () => {
       CONTEXT,
     );
     expect(deps.startImplement).toBeNull();
+  });
+});
+
+describe("buildStartDesign", () => {
+  const CONFIG = { instance_name: "local" };
+  const NO_LOG = { info() {}, warn() {}, error() {} };
+  const WORK_ITEM: WorkItem = {
+    id: 7,
+    cycle: 1,
+    source: "issue",
+    kind: "issue",
+    owner: "octo",
+    repo: "widgets",
+    issue_number: 42,
+    issue_url: "https://github.com/octo/widgets/issues/42",
+    pr_number: null,
+    title: "t",
+    body: "b",
+    status: "designing",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 0,
+    parent_work_item_id: null,
+    branch: null,
+    pr_url: null,
+    ci_check_id: null,
+    conflict_check_id: null,
+    conflict_episode: null,
+    design_attempt: 2,
+    created_at: new Date("2026-10-26T00:00:00Z"),
+    updated_at: new Date("2026-10-26T00:00:00Z"),
+  };
+  const CONTEXT: ApprovedBranchContext = {
+    workItem: WORK_ITEM,
+    issueNumber: 42,
+    attempt: 1,
+    client: {
+      run: async () => {
+        throw new Error("the builder must not call GitHub");
+      },
+      ghToken: "token",
+    },
+    viewerLogin: "factory-bot",
+    webhookUrl: "https://discord.example/webhook",
+    log: NO_LOG,
+  };
+
+  type Launch = { path: string; args: Record<string, unknown> };
+  type Move = {
+    id: number;
+    from: string;
+    to: string;
+    lease: string | null;
+    note: string | null;
+  };
+
+  /** 呼び出しを控える偽の入出力。`overrides`で個別に差し替える。 */
+  function ports(overrides: Partial<StartDesignPorts> = {}) {
+    const launches: Launch[] = [];
+    const recordedJobs: { id: number; jobId: string }[] = [];
+    const moves: Move[] = [];
+    const failures: {
+      flow_path: string;
+      step: string | null;
+      error: string;
+    }[] = [];
+    const notifications: NotifyEvent[] = [];
+    const value: StartDesignPorts = {
+      runFlowAsync: async (path, args) => {
+        launches.push({ path, args });
+        return JOB_A;
+      },
+      setFlowJobIdIfUnset: async (id, jobId) => {
+        recordedJobs.push({ id, jobId });
+        return true;
+      },
+      updateStatusIfLeaseHolder: async (id, from, to, lease, note) => {
+        moves.push({ id, from, to, lease, note });
+        return true;
+      },
+      recordFailure: async (record) => {
+        failures.push({
+          flow_path: record.flow_path,
+          step: record.step,
+          error: record.error,
+        });
+      },
+      notifyBestEffort: async (_url, event) => {
+        notifications.push(event);
+      },
+      ...overrides,
+    };
+    return { value, launches, recordedJobs, moves, failures, notifications };
+  }
+
+  test("does nothing until the start function is called", () => {
+    const p = ports();
+    buildStartDesign(CONFIG, CONTEXT, p.value);
+    expect(p.launches).toEqual([]);
+  });
+
+  test("starts the design flow", async () => {
+    const p = ports();
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.launches[0]?.path).toBe(DESIGN_FLOW_PATH);
+  });
+
+  test("passes the work item, the next design attempt and no feedback", async () => {
+    const p = ports();
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.launches[0]?.args).toEqual({
+      work_item_id: 7,
+      design_attempt: 3,
+      feedback: "",
+    });
+  });
+
+  test("records the job id of the flow it started", async () => {
+    const p = ports();
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.recordedJobs).toEqual([{ id: 7, jobId: JOB_A }]);
+  });
+
+  test("reports that the flow started", async () => {
+    const p = ports();
+    expect(await buildStartDesign(CONFIG, CONTEXT, p.value)()).toBe("started");
+  });
+
+  test("does not move the work item when the flow started", async () => {
+    const p = ports();
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.moves).toEqual([]);
+  });
+
+  test("moves the work item from designing to needs_human without a lease when the start fails", async () => {
+    const p = ports({
+      runFlowAsync: async () => {
+        throw new Error("windmill is down");
+      },
+    });
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.moves).toEqual([
+      {
+        id: 7,
+        from: "designing",
+        to: "needs_human",
+        lease: null,
+        note: DESIGN_START_FAILED_REASON,
+      },
+    ]);
+  });
+
+  test("reports a failed launch", async () => {
+    const p = ports({
+      runFlowAsync: async () => {
+        throw new Error("windmill is down");
+      },
+    });
+    expect(await buildStartDesign(CONFIG, CONTEXT, p.value)()).toBe(
+      "launch_failed",
+    );
+  });
+
+  test("records the failure against the design flow at the launch step", async () => {
+    const p = ports({
+      runFlowAsync: async () => {
+        throw new Error("windmill is down");
+      },
+    });
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect([p.failures[0]?.flow_path, p.failures[0]?.step]).toEqual([
+      DESIGN_FLOW_PATH,
+      "launch",
+    ]);
+  });
+
+  test("moves the work item back when the job id cannot be recorded", async () => {
+    const p = ports({
+      setFlowJobIdIfUnset: async () => {
+        throw new Error("db down");
+      },
+    });
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.moves.map((move) => move.to)).toEqual(["needs_human"]);
+  });
+
+  test("reports a job id that cannot be recorded", async () => {
+    const p = ports({
+      setFlowJobIdIfUnset: async () => {
+        throw new Error("db down");
+      },
+    });
+    expect(await buildStartDesign(CONFIG, CONTEXT, p.value)()).toBe(
+      "record_failed",
+    );
+  });
+
+  test("notifies a person of a design flow that could not be started", async () => {
+    const p = ports({
+      runFlowAsync: async () => {
+        throw new Error("windmill is down");
+      },
+    });
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.notifications[0]).toMatchObject({
+      kind: "needs_human",
+      reason: describeReason(DESIGN_START_FAILED_REASON),
+      next_action: nextActionFor(DESIGN_START_FAILED_REASON, "design"),
+    });
+  });
+
+  test("does not move the work item when another run already holds the lease", async () => {
+    const p = ports({
+      runFlowAsync: async () => {
+        throw new Error("windmill is down");
+      },
+      updateStatusIfLeaseHolder: async () => false,
+    });
+    expect(await buildStartDesign(CONFIG, CONTEXT, p.value)()).toBe(
+      "flow_holds_lease",
+    );
   });
 });

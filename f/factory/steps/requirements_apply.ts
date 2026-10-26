@@ -22,7 +22,7 @@ import {
   type StartDesignOutcome,
   startDesign,
 } from "../lib/design_launch_support.ts";
-import { notify, notifyBestEffort } from "../lib/discord.ts";
+import { type NotifyEvent, notify, notifyBestEffort } from "../lib/discord.ts";
 import {
   commentIssue,
   type GhClient,
@@ -43,7 +43,12 @@ import {
 } from "../lib/intake_refresh.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
-import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
+import {
+  type FactoryConfig,
+  type FailureRecord,
+  isNumber,
+  type WorkItem,
+} from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
@@ -400,50 +405,34 @@ async function notifyNeedsHumanBestEffort(
   );
 }
 
-/**
- * 設計フローを起動する手順の本番の依存を組み立てる(`startDesign`に渡す)。
- * 本番の配線(`buildApprovedBranchDeps`)はまだ渡さない。呼ぶだけでは、DB・GitHub・Windmillに触れない。
- */
+/** `buildStartDesign`が使うDB・Windmill・Discordの呼び出し。テストでは差し替える。 */
+export type StartDesignPorts = {
+  readonly runFlowAsync: (
+    path: string,
+    args: Record<string, unknown>,
+  ) => Promise<string>;
+  readonly setFlowJobIdIfUnset: (id: number, jobId: string) => Promise<boolean>;
+  readonly updateStatusIfLeaseHolder: (
+    id: number,
+    expectedFrom: WorkItem["status"],
+    to: WorkItem["status"],
+    expectedFlowJobId: string | null,
+    note: string | null,
+  ) => Promise<boolean>;
+  readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
+  readonly notifyBestEffort: (
+    webhookUrl: string,
+    event: NotifyEvent,
+    log: Logger,
+  ) => Promise<unknown>;
+};
+
 export function buildStartDesign(
-  config: Pick<FactoryConfig, "instance_name">,
-  ctx: ApprovedBranchContext,
+  _config: Pick<FactoryConfig, "instance_name">,
+  _ctx: ApprovedBranchContext,
+  _ports?: StartDesignPorts,
 ): () => Promise<StartDesignOutcome> {
-  const { workItem, issueNumber, log } = ctx;
-  const deps: DesignLaunchDeps = {
-    launchFlow: () =>
-      wmill.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem)),
-    recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
-    moveToNeedsHuman: (reason) =>
-      updateStatusIfLeaseHolder(
-        workItem.id,
-        "designing",
-        "needs_human",
-        null,
-        reason,
-      ),
-    recordFailure: async (reason, step) => {
-      await recordFailure({
-        work_item_id: workItem.id,
-        flow_path: DESIGN_FLOW_PATH,
-        job_id: process.env.WM_JOB_ID ?? "unknown",
-        step,
-        error: reason,
-      });
-    },
-    // 作業項目は`needs_human`になってConsoleの要対応に出るので、noticeは足さずにログへ残す。
-    addNotice: async (reason) => {
-      log.warn("design flow could not be started", {
-        work_item_id: workItem.id,
-        issue_number: issueNumber,
-        error: reason,
-      });
-    },
-    notifyNeedsHuman: (reason) =>
-      notifyNeedsHumanBestEffort(ctx, config, reason, "design"),
-    log: (message, fields) =>
-      log.warn(message, { work_item_id: workItem.id, ...fields }),
-  };
-  return () => startDesign(deps);
+  return async () => "launch_failed";
 }
 
 export type RejectedOutcome = "retry" | "needs_human";
