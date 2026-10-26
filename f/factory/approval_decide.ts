@@ -35,6 +35,7 @@ import {
 } from "./lib/approval_support.ts";
 import { deriveApprover } from "./lib/approver.ts";
 import {
+  type ApprovalRequestDecisionInput,
   decideApprovalRequestIfPending,
   getApprovalRequest,
   getWorkItem,
@@ -42,7 +43,7 @@ import {
 import { type FetchLike, fetchIssueContent } from "./lib/github.ts";
 import { issueChangedSinceIntake } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
-import { isOneOf, type WorkItem } from "./lib/types.ts";
+import { type ApprovalRequest, isOneOf, type WorkItem } from "./lib/types.ts";
 
 const DECISIONS = ["approve", "reject"] as const;
 type Decision = (typeof DECISIONS)[number];
@@ -171,6 +172,40 @@ export function buildApprovalDecideResult(
   jobId: string,
 ): ApprovalDecideResult {
   return { ok: true, status: recordedStatusFor(decision), job_id: jobId };
+}
+
+export type ApprovalDecideDeps = {
+  readonly getApprovalRequest: (id: number) => Promise<ApprovalRequest | null>;
+  /** 承認の記録の前にIssueが取り込み時点と同じかを確かめ、違えば例外を投げる。 */
+  readonly assertIssueMatchesIntake: (
+    approvalRequestId: number,
+    workItemId: number,
+  ) => Promise<void>;
+  readonly deriveApprover: () => string;
+  readonly decideIfPending: (
+    id: number,
+    decision: ApprovalRequestDecisionInput,
+  ) => Promise<boolean>;
+  /** 種別ごとのハンドラscriptを非同期に起動し、ジョブIDを返す。 */
+  readonly runHandler: (
+    path: string,
+    approvalRequestId: number,
+  ) => Promise<string>;
+};
+
+export type ApprovalDecideCall = {
+  readonly approval_request_id: number;
+  readonly decision: Decision;
+  readonly reason: string;
+  readonly note: string;
+  readonly options: Record<string, unknown>;
+};
+
+export async function decideApproval(
+  _deps: ApprovalDecideDeps,
+  _call: ApprovalDecideCall,
+): Promise<ApprovalDecideResult> {
+  return { ok: false, status: "", job_id: "" };
 }
 
 export async function main(

@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type ApprovalDecideDeps,
   assertIssueMatchesIntake,
   assertValidApprovalDecideInput,
   checkIssueAgainstIntake,
+  decideApproval,
   type IssueCheckDeps,
+  missingApprovalRequestMessage,
 } from "../../f/factory/approval_decide.ts";
 import type { FetchLike } from "../../f/factory/lib/github.ts";
+import type { ApprovalRequest } from "../../f/factory/lib/types.ts";
 
 const SNAPSHOT = {
   owner: "o",
@@ -250,5 +254,180 @@ describe("assertValidApprovalDecideInput", () => {
     expect(() =>
       assertValidApprovalDecideInput({ decision: "reject", reason: "   " }),
     ).toThrow();
+  });
+});
+
+function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: 5,
+    kind: "requirements",
+    work_item_id: 9,
+    subject_id: 1,
+    status: "pending",
+    payload: {},
+    decision_options: {},
+    requested_at: new Date("2026-10-26T00:00:00Z"),
+    expires_at: null,
+    decided_at: null,
+    decided_by: null,
+    reason: null,
+    ...overrides,
+  };
+}
+
+/** 呼び出しの順を控える偽の依存。 */
+function decideHarness(
+  row: ApprovalRequest | null,
+  overrides: Partial<ApprovalDecideDeps> = {},
+) {
+  const events: string[] = [];
+  const deps: ApprovalDecideDeps = {
+    getApprovalRequest: async () => {
+      events.push("get");
+      return row;
+    },
+    assertIssueMatchesIntake: async () => {
+      events.push("issue_check");
+    },
+    deriveApprover: () => "alice",
+    decideIfPending: async () => {
+      events.push("decide");
+      return true;
+    },
+    runHandler: async (path) => {
+      events.push(`run:${path}`);
+      return "job-1";
+    },
+    ...overrides,
+  };
+  return { deps, events };
+}
+
+const APPROVE = {
+  approval_request_id: 5,
+  decision: "approve",
+  reason: "",
+  note: "",
+  options: {},
+} as const;
+
+const REJECT = { ...APPROVE, decision: "reject", reason: "no" } as const;
+
+describe("decideApproval and the handler of the kind", () => {
+  test("refuses a pending design request without recording the decision", async () => {
+    const h = decideHarness(request({ kind: "design" }));
+    await decideApproval(h.deps, APPROVE).catch(() => undefined);
+    expect(h.events).toEqual(["get"]);
+  });
+
+  test("names the missing handler when it refuses a design request", async () => {
+    const h = decideHarness(request({ kind: "design" }));
+    await expect(decideApproval(h.deps, APPROVE)).rejects.toThrow(
+      "no approval handler for kind design",
+    );
+  });
+
+  test("refuses a design request that was already decided before it dispatches again", async () => {
+    const h = decideHarness(request({ kind: "design", status: "approved" }));
+    await decideApproval(h.deps, APPROVE).catch(() => undefined);
+    expect(h.events).toEqual(["get"]);
+  });
+
+  test("looks up the handler before it compares the recorded decision", async () => {
+    const h = decideHarness(request({ kind: "design", status: "approved" }));
+    await expect(decideApproval(h.deps, REJECT)).rejects.toThrow(
+      "no approval handler for kind design",
+    );
+  });
+
+  test("does not check the issue for a design request", async () => {
+    const h = decideHarness(request({ kind: "design" }));
+    await decideApproval(h.deps, APPROVE).catch(() => undefined);
+    expect(h.events).not.toContain("issue_check");
+  });
+});
+
+describe("decideApproval for the kinds that have a handler", () => {
+  test("checks the issue, records the decision, then starts the handler for an approval of requirements", async () => {
+    const h = decideHarness(request());
+    await decideApproval(h.deps, APPROVE);
+    expect(h.events).toEqual([
+      "get",
+      "issue_check",
+      "decide",
+      "run:f/factory/steps/requirements_apply",
+    ]);
+  });
+
+  test("does not check the issue for a rejection of requirements", async () => {
+    const h = decideHarness(request());
+    await decideApproval(h.deps, REJECT);
+    expect(h.events).toEqual([
+      "get",
+      "decide",
+      "run:f/factory/steps/requirements_apply",
+    ]);
+  });
+
+  test("starts the handler of an issue proposal", async () => {
+    const h = decideHarness(request({ kind: "issue_proposal" }));
+    await decideApproval(h.deps, APPROVE);
+    expect(h.events).toEqual([
+      "get",
+      "decide",
+      "run:f/factory/steps/issue_proposal_apply",
+    ]);
+  });
+
+  test("starts the handler again without recording when the same decision is already recorded", async () => {
+    const h = decideHarness(request({ status: "approved" }));
+    await decideApproval(h.deps, APPROVE);
+    expect(h.events).toEqual(["get", "run:f/factory/steps/requirements_apply"]);
+  });
+
+  test("refuses a different decision than the recorded one", async () => {
+    const h = decideHarness(request({ status: "approved" }));
+    await expect(decideApproval(h.deps, REJECT)).rejects.toThrow(
+      "refusing to overwrite it",
+    );
+  });
+
+  test("does not start the handler when the issue check refuses", async () => {
+    const h = decideHarness(request(), {
+      assertIssueMatchesIntake: async () => {
+        throw new Error("issue changed");
+      },
+    });
+    await decideApproval(h.deps, APPROVE).catch(() => undefined);
+    expect(h.events).toEqual(["get"]);
+  });
+
+  test("reads the row again and classifies it when another call recorded first", async () => {
+    let reads = 0;
+    const h = decideHarness(request(), {
+      getApprovalRequest: async () => {
+        reads += 1;
+        return reads === 1 ? request() : request({ status: "approved" });
+      },
+      decideIfPending: async () => false,
+    });
+    await decideApproval(h.deps, APPROVE);
+    expect(reads).toBe(2);
+  });
+
+  test("returns the status that was recorded and the job id", async () => {
+    const h = decideHarness(request());
+    expect(await decideApproval(h.deps, APPROVE)).toEqual({
+      ok: true,
+      status: "approved",
+      job_id: "job-1",
+    });
+  });
+
+  test("throws when the request does not exist", async () => {
+    const h = decideHarness(null);
+    await expect(decideApproval(h.deps, APPROVE)).rejects.toThrow(
+      missingApprovalRequestMessage(5),
+    );
   });
 });
