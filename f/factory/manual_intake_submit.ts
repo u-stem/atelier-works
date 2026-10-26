@@ -11,6 +11,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
 import { loadConfig } from "./lib/config.ts";
+import type { ActionAudit, ActionSqlClient } from "./lib/console_actions.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import {
@@ -27,7 +28,12 @@ export type ManualIntakeSubmitResult =
       readonly refused: true;
       readonly reason: ManualIntakeRefusalReason;
     }
-  | { readonly refused: false; readonly flow_job_id: string };
+  | {
+      readonly refused: false;
+      readonly flow_job_id: string;
+      /** 操作の記録を書けたか。`submitManualIntakeRecorded`が付ける。 */
+      readonly action_audit?: ActionAudit;
+    };
 
 /** `submitManualIntake`が使う外部の操作。テストでは差し替える。 */
 export type ManualIntakeSubmitDeps = {
@@ -89,6 +95,14 @@ export async function submitManualIntake(
     flow_job_id: flowJobId,
   });
   return { refused: false, flow_job_id: flowJobId };
+}
+
+export async function submitManualIntakeRecorded(
+  input: ManualIntakeFields,
+  deps: ManualIntakeSubmitDeps,
+  _sql: ActionSqlClient,
+): Promise<ManualIntakeSubmitResult> {
+  return await submitManualIntake(input, deps);
 }
 
 /** Consoleの新規投入。実行者はジョブの実行文脈から導く。 */

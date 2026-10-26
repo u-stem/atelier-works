@@ -244,12 +244,14 @@ export type RecordedOperation<T> = {
   readonly value: T;
 };
 
+/** 操作の記録が書けたか。`failed`でも操作は済んでいる。 */
+export type ActionAudit = "recorded" | "failed";
+
 export type RecordedResult<T> =
   | {
       readonly ok: true;
       readonly value: T;
-      /** 記録が書けたか。`failed`でも操作は済んでいる。 */
-      readonly audit: "recorded" | "failed";
+      readonly audit: ActionAudit;
       readonly actionId: number | null;
     }
   | {

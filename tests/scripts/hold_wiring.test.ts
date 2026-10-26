@@ -6,6 +6,7 @@ import {
   matchesForbiddenPath,
   matchesImplementProtectedPath,
 } from "../../f/factory/lib/protected_paths.ts";
+import { WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES } from "../../scripts/claude-hooks/console-scripts.ts";
 
 // 保留の表`factory.holds`の読み書きは、`f/factory/lib/holds.ts`の関数を通す。
 // このテストは、`holds.ts`の外にある表への参照と、保留のモジュールの書く関数の読み込みを検出する。
@@ -1610,11 +1611,19 @@ describe("the freeze variable", () => {
   });
 });
 
-describe("the names of the console release scripts", () => {
+describe("the names of the console write scripts that only their own files name", () => {
   /** 名前の前後が英数字と`_`でないときだけ数える。通知の種類`hold_released`を取り違えない。 */
   function mentionsReleaseScript(text: string, name: string): boolean {
     return new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(text);
   }
+
+  test("are the two release scripts and the job cancel script", () => {
+    expect([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES]).toEqual([
+      "hold_release",
+      "freeze_release",
+      "console_job_cancel",
+    ]);
+  });
 
   test.each([
     "f/factory/hold_release",
@@ -1634,6 +1643,12 @@ describe("the names of the console release scripts", () => {
     expect(mentionsReleaseScript(text, "hold_release")).toBe(false);
   });
 
+  test("does not take the read script for the job cancel script", () => {
+    expect(
+      mentionsReleaseScript("f/factory/console_jobs", "console_job_cancel"),
+    ).toBe(false);
+  });
+
   const everything = listFiles("f");
 
   test("scans the locks and the flow definitions too", () => {
@@ -1648,7 +1663,7 @@ describe("the names of the console release scripts", () => {
   // 生成した既知pathの定数(`console_known_paths.ts`)は、解除のscriptの名前を持たないよう生成で除くので、免除しない。
   const ONLY_LISTS_PATHS = ["f/factory/lib/protected_paths.ts"];
 
-  test.each(["hold_release", "freeze_release"])(
+  test.each([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES])(
     "no file under f/ but the files of %s names it",
     (name) => {
       const offenders = everything
@@ -1660,14 +1675,14 @@ describe("the names of the console release scripts", () => {
     },
   );
 
-  test.each(["hold_release", "freeze_release"])(
+  test.each([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES])(
     "the script %s exists, so that the scan above has an owner",
     (name) => {
       expect(everything).toContain(`f/factory/${name}.ts`);
     },
   );
 
-  test.each(["hold_release", "freeze_release"])(
+  test.each([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES])(
     "no file under f/ imports %s",
     (name) => {
       const importers = everything

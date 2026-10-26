@@ -4,6 +4,7 @@ import {
   describeAuditResult,
   describeFreezeReleaseResult,
   describeHoldReleaseResult,
+  describeJobCancelResult,
   describeNoticeResult,
   describeRetryResult,
   releaseNotice,
@@ -259,6 +260,164 @@ describe("describeFreezeReleaseResult", () => {
       tone: "warning",
       message: "解除を確認できませんでした。一覧を取り直して確かめてください。",
     });
+  });
+});
+
+describe("describeJobCancelResult", () => {
+  const CANCELED = {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    flow_path: "f/factory/implement",
+    job_state: "canceled",
+    work_item: { id: 7, status: "implementing", lease_held: true },
+    action_audit: "recorded",
+  } as const;
+
+  test("reports the cancel as a stop of the job", () => {
+    expect(describeJobCancelResult(CANCELED).message).toContain("中止しました");
+  });
+
+  test("reports a cancel as a success", () => {
+    expect(describeJobCancelResult(CANCELED).tone).toBe("success");
+  });
+
+  test("names the status of the work item", () => {
+    expect(describeJobCancelResult(CANCELED).message).toContain("実装中");
+  });
+
+  test("says that the work item fails at the next check while the lease points at the job", () => {
+    expect(describeJobCancelResult(CANCELED).message).toContain(
+      "次の照合で失敗",
+    );
+  });
+
+  test("does not promise a failure when the lease no longer points at the job", () => {
+    const moved = {
+      ...CANCELED,
+      work_item: { id: 7, status: "failed", lease_held: false },
+    };
+    expect(describeJobCancelResult(moved).message).not.toContain(
+      "次の照合で失敗",
+    );
+  });
+
+  test("says that the work item could not be read", () => {
+    expect(
+      describeJobCancelResult({ ...CANCELED, work_item: null }).message,
+    ).toContain("読めませんでした");
+  });
+
+  test("warns when the record could not be written", () => {
+    expect(
+      describeJobCancelResult({ ...CANCELED, action_audit: "failed" }).tone,
+    ).toBe("warning");
+  });
+
+  test("says that the record could not be written", () => {
+    expect(
+      describeJobCancelResult({ ...CANCELED, action_audit: "failed" }).message,
+    ).toContain("操作の記録を残せませんでした");
+  });
+
+  test("reports a job that does not exist as information", () => {
+    expect(describeJobCancelResult({ found: false })).toEqual({
+      tone: "info",
+      message: "ジョブが見つかりません。",
+    });
+  });
+
+  test.each([
+    ["flow_not_allowed", "中止できない"],
+    ["not_a_root_flow", "中止できない"],
+    ["already_finished", "すでに終わっています"],
+    ["scheduled_for_later", "予定の時刻"],
+    ["actor_unknown", "操作者"],
+    ["audit_unavailable", "記録"],
+  ] as const)("explains the refusal %s", (reason, word) => {
+    expect(
+      describeJobCancelResult({ found: true, refused: true, reason }).message,
+    ).toContain(word);
+  });
+
+  test("reports a refusal as information, not as a success", () => {
+    expect(
+      describeJobCancelResult({
+        found: true,
+        refused: true,
+        reason: "already_finished",
+      }).tone,
+    ).toBe("info");
+  });
+});
+
+describe("the action audit in the other notices", () => {
+  const NOTE = "操作の記録を残せませんでした";
+
+  test("a restart warns when the record could not be written", () => {
+    const notice = describeRetryResult({
+      ok: true,
+      status: "implementing",
+      started_job_id: JOB,
+      flow_job_id: JOB,
+      action_audit: "failed",
+    });
+    expect([notice.tone, notice.message.includes(NOTE)]).toEqual([
+      "warning",
+      true,
+    ]);
+  });
+
+  test("a restart says nothing about a record that was written", () => {
+    const notice = describeRetryResult({
+      ok: true,
+      status: "implementing",
+      started_job_id: JOB,
+      flow_job_id: JOB,
+      action_audit: "recorded",
+    });
+    expect(notice.message).not.toContain(NOTE);
+  });
+
+  test("a hold release warns when the record could not be written", () => {
+    const notice = describeHoldReleaseResult({
+      ok: true,
+      status: "released",
+      hold_id: 12,
+      was_active: true,
+      audit: "recorded",
+      action_audit: "failed",
+    });
+    expect([notice.tone, notice.message.includes(NOTE)]).toEqual([
+      "warning",
+      true,
+    ]);
+  });
+
+  test("a hold that was already released stays information", () => {
+    const notice = describeHoldReleaseResult({
+      ok: true,
+      status: "already_released",
+      hold_id: 12,
+      was_active: false,
+      action_audit: "failed",
+    });
+    expect(notice.tone).toBe("info");
+  });
+
+  test("a freeze release warns when the record could not be written", () => {
+    const notice = describeFreezeReleaseResult({
+      ok: true,
+      status: "released",
+      freeze_id: "0a1b2c3d",
+      scope: "schedule",
+      audit: "recorded",
+      action_audit: "failed",
+    });
+    expect([notice.tone, notice.message.includes(NOTE)]).toEqual([
+      "warning",
+      true,
+    ]);
   });
 });
 

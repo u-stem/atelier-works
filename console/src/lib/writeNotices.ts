@@ -8,6 +8,7 @@ import type {
   AuditSkipReason,
   FreezeReleaseResult,
   HoldReleaseResult,
+  JobCancelResult,
   NoticeResolveResult,
   RetryWorkItemResult,
 } from "../api/guards/writeResults.ts";
@@ -158,6 +159,10 @@ export function describeFreezeReleaseResult(
       return { tone: "success", message: `${subject}を解除しました。` };
     }
   }
+}
+
+export function describeJobCancelResult(_result: JobCancelResult): WriteNotice {
+  return { tone: "info", message: "" };
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

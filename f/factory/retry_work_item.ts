@@ -24,6 +24,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { ciRoundRetryRefusal } from "./lib/ci_fix_round.ts";
 import { loadConfig } from "./lib/config.ts";
 import { conflictRoundRetryRefusal } from "./lib/conflict_fix_round.ts";
+import type { ActionAudit, ActionSqlClient } from "./lib/console_actions.ts";
 import {
   addNoticeUnlessUnresolved,
   getWorkItem,
@@ -473,6 +474,8 @@ export type RetryWorkItemResult = {
   readonly status: WorkItemStatus;
   readonly started_job_id: string;
   readonly flow_job_id: string | null;
+  /** 操作の記録を書けたか。`main`が付ける。 */
+  readonly action_audit?: ActionAudit;
 };
 
 /** recordedがfalse(別の実行が先にリースを取っていた)なら、okをfalse、flow_job_idをnullにする。 */
@@ -536,6 +539,15 @@ export function shouldRefreshIntakeOnRestart(
     workItem.issue_number !== null &&
     plan.toStatus === "requirements_generating"
   );
+}
+
+export async function retryWorkItemRecorded(
+  _workItemId: number,
+  restart: () => Promise<RetryWorkItemResult>,
+  _deriveActor: () => string,
+  _sql: ActionSqlClient,
+): Promise<RetryWorkItemResult> {
+  return await restart();
 }
 
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {

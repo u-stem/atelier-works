@@ -8,6 +8,7 @@
 // 同じ保留への重複した呼び出しは、解除済みとして成功を返す。
 
 import { deriveApprover } from "./lib/approver.ts";
+import type { ActionAudit, ActionSqlClient } from "./lib/console_actions.ts";
 import {
   clipDisplay,
   HUMAN_RELEASER,
@@ -45,6 +46,8 @@ export type HoldReleaseResult = {
   readonly was_active: boolean;
   readonly active_unknown?: true;
   readonly audit?: ReleaseAudit;
+  /** 操作の記録(`factory.console_actions`)を書けたか。`audit`は通知の記録で、別である。 */
+  readonly action_audit?: ActionAudit;
 };
 
 /** `releaseHoldFromConsole`が使う外部の操作。テストでは差し替える。 */
@@ -126,6 +129,14 @@ export async function releaseHoldFromConsole(
     was_active: true,
     audit,
   };
+}
+
+export async function releaseHoldRecorded(
+  holdId: number,
+  deps: HoldReleaseDeps,
+  _sql: ActionSqlClient,
+): Promise<HoldReleaseResult> {
+  return await releaseHoldFromConsole(holdId, deps);
 }
 
 /** Consoleから保留を1件解除する。操作者はジョブの実行文脈から導く。 */

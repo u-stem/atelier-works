@@ -46,6 +46,7 @@ export type RetryWorkItemResult = {
   readonly status: string;
   readonly started_job_id: string;
   readonly flow_job_id: string | null;
+  readonly action_audit?: ActionAudit;
 };
 
 export function isRetryWorkItemResult(
@@ -147,7 +148,11 @@ export type ManualIntakeSubmitResult =
       readonly refused: true;
       readonly reason: ManualIntakeRefusalReason;
     }
-  | { readonly refused: false; readonly flow_job_id: string };
+  | {
+      readonly refused: false;
+      readonly flow_job_id: string;
+      readonly action_audit?: ActionAudit;
+    };
 
 const isManualIntakeRefusalReason: Guard<ManualIntakeRefusalReason> = isOneOf(
   MANUAL_INTAKE_REFUSAL_REASONS,
@@ -164,6 +169,9 @@ export function isManualIntakeSubmitResult(
   }
   return value.refused === false && isString(value.flow_job_id);
 }
+
+/** 操作の記録(`factory.console_actions`)を書けたか。`failed`でも操作は済んでいる。 */
+export type ActionAudit = "recorded" | "failed";
 
 type ReleaseAudit = "recorded" | "failed";
 
@@ -186,6 +194,7 @@ export type HoldReleaseResult = {
   readonly was_active: boolean;
   readonly active_unknown?: true;
   readonly audit?: ReleaseAudit;
+  readonly action_audit?: ActionAudit;
 };
 
 const isHoldReleaseStatus: Guard<"released" | "already_released"> = isOneOf([
@@ -217,6 +226,7 @@ export type FreezeReleaseResult = {
   readonly freeze_id: string;
   readonly scope?: "schedule" | "deploy";
   readonly audit?: ReleaseAudit;
+  readonly action_audit?: ActionAudit;
 };
 
 const isFreezeReleaseStatus: Guard<
@@ -239,4 +249,36 @@ export function isFreezeReleaseResult(
     (value.scope === undefined || isFreezeScope(value.scope)) &&
     isOptionalAudit(value.audit)
   );
+}
+
+/** ジョブを中止した結果。`job_state`と`work_item`は、中止の後に読み直せなかったときに`null`になる。 */
+export type JobCancelResult =
+  | { readonly found: false }
+  | {
+      readonly found: true;
+      readonly refused: true;
+      readonly reason: JobCancelRefusalReason;
+    }
+  | {
+      readonly found: true;
+      readonly refused: false;
+      readonly job_id: string;
+      readonly flow_path: string;
+      readonly job_state: string | null;
+      readonly work_item: JobCancelWorkItem | null;
+      readonly action_audit: ActionAudit;
+    };
+
+export const JOB_CANCEL_REFUSAL_REASONS: readonly string[] = [];
+
+export type JobCancelRefusalReason = string;
+
+export type JobCancelWorkItem = {
+  readonly id: number;
+  readonly status: string;
+  readonly lease_held: boolean;
+};
+
+export function isJobCancelResult(_value: unknown): _value is JobCancelResult {
+  return false;
 }

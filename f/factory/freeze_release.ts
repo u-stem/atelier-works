@@ -10,6 +10,7 @@
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
+import type { ActionAudit, ActionSqlClient } from "./lib/console_actions.ts";
 import {
   clipDisplay,
   freezeSubject,
@@ -47,6 +48,8 @@ export type FreezeReleaseResult = {
   readonly freeze_id: string;
   readonly scope?: "schedule" | "deploy";
   readonly audit?: ReleaseAudit;
+  /** 操作の記録(`factory.console_actions`)を書けたか。`audit`は通知の記録で、別である。 */
+  readonly action_audit?: ActionAudit;
 };
 
 /** `releaseFreezeFromConsole`が使う外部の操作。テストでは差し替える。 */
@@ -193,6 +196,14 @@ export async function releaseFreezeFromConsole(
     scope: seen.scope,
     audit,
   };
+}
+
+export async function releaseFreezeRecorded(
+  freezeId: string,
+  deps: FreezeReleaseDeps,
+  _sql: ActionSqlClient,
+): Promise<FreezeReleaseResult> {
+  return await releaseFreezeFromConsole(freezeId, deps);
 }
 
 /** Consoleから凍結かdeployの保留を1件解除する。操作者はジョブの実行文脈から導く。 */

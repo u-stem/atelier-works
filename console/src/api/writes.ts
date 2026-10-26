@@ -22,6 +22,7 @@ import {
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  type JobCancelResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
@@ -185,6 +186,13 @@ export function releaseHold(
     isHoldReleaseResult,
     options,
   );
+}
+
+export async function cancelJob(
+  _jobId: string,
+  _options: RunScriptOptions = {},
+): Promise<JobCancelResult> {
+  return { found: false };
 }
 
 /** 凍結かdeployの保留を1件、人として解除する。終わっている行は、そのまま成功として返る。 */

@@ -3,6 +3,7 @@ import { ApiFailure } from "./errors.ts";
 import type { FetchLike } from "./windmill.ts";
 import {
   CONSOLE_DECISION_NOTE,
+  cancelJob,
   decideApproval,
   kickoffAudit,
   MAX_REASON_LENGTH,
@@ -427,5 +428,66 @@ describe("releaseFreeze", () => {
     expect(await failureOf(releaseFreeze("0a1b2c3d", { fetchFn }))).toEqual({
       kind: "invalid_response",
     });
+  });
+});
+
+describe("cancelJob", () => {
+  const CANCELED = {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    flow_path: "f/factory/implement",
+    job_state: "canceled",
+    work_item: { id: 7, status: "failed", lease_held: true },
+    action_audit: "recorded",
+  } as const;
+
+  test("calls the cancel script with the job id only", async () => {
+    const { fetchFn, calls } = respondWith(CANCELED);
+    await cancelJob(JOB, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/console_job_cancel",
+      body: { job_id: JOB },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(CANCELED);
+    expect(await cancelJob(JOB, { fetchFn })).toEqual(CANCELED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const refusal = {
+      found: true,
+      refused: true,
+      reason: "flow_not_allowed",
+    } as const;
+    const { fetchFn } = respondWith(refusal);
+    expect(await cancelJob(JOB, { fetchFn })).toEqual(refusal);
+  });
+
+  test("returns a job that does not exist as a result", async () => {
+    const { fetchFn } = respondWith({ found: false });
+    expect(await cancelJob(JOB, { fetchFn })).toEqual({ found: false });
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ found: true, refused: false });
+    expect(await failureOf(cancelJob(JOB, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+
+  test("fails with unauthorized on a 401", async () => {
+    const { fetchFn } = respondWith("Unauthorized", 401);
+    expect(await failureOf(cancelJob(JOB, { fetchFn }))).toEqual({
+      kind: "unauthorized",
+    });
+  });
+
+  test("does not retry after a failure", async () => {
+    const { fetchFn, calls } = respondWith("boom", 500);
+    await failureOf(cancelJob(JOB, { fetchFn }));
+    expect(calls.length).toBe(1);
   });
 });
