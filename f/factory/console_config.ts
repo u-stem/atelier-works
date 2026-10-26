@@ -6,8 +6,7 @@
 // 値は`lib/console_redact.ts`で伏せてから返す。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
-import { redactValue } from "./lib/console_redact.ts";
-import { isRecord } from "./lib/types.ts";
+import { isRecord, redactValue } from "./lib/console_redact.ts";
 
 export const CONFIG_RESOURCE_PATH = "f/factory/factory_config";
 

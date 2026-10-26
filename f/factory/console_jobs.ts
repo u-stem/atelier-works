@@ -12,8 +12,12 @@ import {
   KNOWN_FLOW_PATHS,
   KNOWN_SCRIPT_PATHS,
 } from "./lib/console_known_paths.ts";
-import { redactLog, redactResult, redactText } from "./lib/console_redact.ts";
-import { isRecord } from "./lib/types.ts";
+import {
+  isRecord,
+  redactLog,
+  redactResult,
+  redactText,
+} from "./lib/console_redact.ts";
 
 export const JOB_PATH_PREFIX = "f/factory/";
 

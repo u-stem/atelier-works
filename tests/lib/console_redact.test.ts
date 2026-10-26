@@ -267,8 +267,8 @@ describe("redactLog with many PEM markers", () => {
   });
 
   test("keeps the line after a BEGIN marker that has no body", () => {
-    const raw = `${"-----BEGIN X-----\n".repeat(50)}error: after the markers\n`;
-    expect(redactLog(raw).text).toContain("error: after the markers");
+    const raw = `${"-----BEGIN X-----\n".repeat(50)}[error] after the markers\n`;
+    expect(redactLog(raw).text).toContain("[error] after the markers");
   });
 
   test("masks the body that follows an unclosed BEGIN marker", () => {
@@ -486,11 +486,15 @@ describe("redactText", () => {
 describe("adversarial input", () => {
   const KB = 1024;
 
-  /** `unit`を繰り返して`bytes`バイトほどにした入力で、伏せ字の所要時間(秒)を測る。 */
+  /**
+   * `unit`を繰り返した約1KBの行を並べて`bytes`バイトほどにした入力で、伏せ字の所要時間(秒)を測る。
+   * 行に分けるのは、粗い切りが行の頭に揃うため(改行の無い入力は、切ると空になる)。
+   */
   function secondsToRedactLog(unit: string, bytes: number): number {
-    const body = unit.repeat(Math.ceil(bytes / unit.length));
+    const line = `${unit.repeat(Math.ceil(1000 / unit.length))}\n`;
+    const body = line.repeat(Math.ceil(bytes / line.length));
     const started = performance.now();
-    redactLog(`\n${body}\n`);
+    redactLog(body);
     return (performance.now() - started) / 1000;
   }
 
@@ -507,7 +511,7 @@ describe("adversarial input", () => {
   ];
 
   test.each(CASES)("redactLog finishes %s in a few seconds", (_name, unit) => {
-    expect(secondsToRedactLog(unit, 512 * KB)).toBeLessThan(3);
+    expect(secondsToRedactLog(unit, 1024 * KB)).toBeLessThan(3);
   });
 
   // 入力を倍にしたとき、所要時間が入力長の二乗の増え方(4倍)にならないこと。

@@ -407,23 +407,183 @@ const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
 const GLOBAL_OBJECT = /(?<![.\w$])(?:globalThis|global|self|window)(?![\w$])/;
 const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
 
-/** パスをリテラルに固定するSDKの呼び出しと、そのパス。 */
-const BOUND_PATH_CALLS: Readonly<Record<string, string>> = {
-  "ResourceService.getResourceValue": "f/factory/factory_config",
-  "ResourceService.updateResourceValue": "f/factory/factory_config",
+/**
+ * パスをリテラルに固定するSDKの呼び出し。`requestBody`を続けてよいのは、更新の呼び出しだけである。
+ * 読み取りの呼び出しが本文を受け取る形は、固定したパス以外を読ませる抜け道になりうる。
+ */
+const BOUND_PATH_CALLS: Readonly<
+  Record<string, { readonly path: string; readonly requestBody: boolean }>
+> = {
+  "ResourceService.getResourceValue": {
+    path: "f/factory/factory_config",
+    requestBody: false,
+  },
+  "ResourceService.updateResourceValue": {
+    path: "f/factory/factory_config",
+    requestBody: true,
+  },
 };
 
-/** `code`の`open`にある丸括弧に対応する閉じ括弧までの本文。閉じていなければ末尾まで。 */
-function balancedArguments(code: string, open: number): string {
-  let depth = 0;
-  for (let i = open; i < code.length; i += 1) {
-    if (code[i] === "(") depth += 1;
-    if (code[i] === ")") {
+/** `text`の`index`にある引用符で始まる文字列の、次の位置。閉じていなければ`undefined`。 */
+function skipQuoted(text: string, index: number): number | undefined {
+  const quote = text[index];
+  for (let i = index + 1; i < text.length; i += 1) {
+    if (text[i] === "\\") i += 1;
+    else if (text[i] === quote) return i + 1;
+  }
+  return undefined;
+}
+
+/** `${`の直後の`from`から、対応する`}`の次の位置。 */
+function skipBraces(text: string, from: number): number | undefined {
+  let depth = 1;
+  let i = from;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'") {
+      const next = skipQuoted(text, i);
+      if (next === undefined) return undefined;
+      i = next;
+      continue;
+    }
+    if (ch === "`") {
+      const next = skipTemplate(text, i);
+      if (next === undefined) return undefined;
+      i = next;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
       depth -= 1;
-      if (depth === 0) return code.slice(open, i + 1);
+      if (depth === 0) return i + 1;
+    }
+    i += 1;
+  }
+  return undefined;
+}
+
+/** バッククォートで始まるテンプレートの、次の位置。`${}`の中の括弧を数える。 */
+function skipTemplate(text: string, index: number): number | undefined {
+  let i = index + 1;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\\") {
+      i += 2;
+    } else if (ch === "`") {
+      return i + 1;
+    } else if (ch === "$" && text[i + 1] === "{") {
+      const next = skipBraces(text, i + 2);
+      if (next === undefined) return undefined;
+      i = next;
+    } else {
+      i += 1;
     }
   }
-  return code.slice(open);
+  return undefined;
+}
+
+/**
+ * `text`を、括弧の外側(最上位)のカンマで分ける。文字列とテンプレートの中の括弧とカンマは数えない。
+ * 括弧が合わない、文字列が閉じていないなど、読み切れないときは`undefined`を返す。
+ */
+function splitTopLevel(text: string): string[] | undefined {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const next = ch === "`" ? skipTemplate(text, i) : skipQuoted(text, i);
+      if (next === undefined) return undefined;
+      i = next;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+    if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+      if (depth < 0) return undefined;
+    }
+    if (ch === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+    i += 1;
+  }
+  if (depth !== 0) return undefined;
+  parts.push(text.slice(start));
+  return parts;
+}
+
+/** `code`の`open`にある丸括弧に対応する閉じ括弧までの、括弧の内側の本文。閉じていなければ`undefined`。 */
+function callArguments(code: string, open: number): string | undefined {
+  let depth = 0;
+  let i = open;
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const next = ch === "`" ? skipTemplate(code, i) : skipQuoted(code, i);
+      if (next === undefined) return undefined;
+      i = next;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+    if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+      if (depth === 0) return code.slice(open + 1, i);
+    }
+    i += 1;
+  }
+  return undefined;
+}
+
+/** 末尾のカンマが作る空の要素を落とす。 */
+function withoutTrailingBlank(parts: string[]): string[] {
+  const last = parts[parts.length - 1];
+  return parts.length > 1 && last !== undefined && last.trim() === ""
+    ? parts.slice(0, -1)
+    : parts;
+}
+
+/**
+ * 固定するSDKの呼び出しの引数が、`{ workspace, path: "<定数>" }`と、許された`requestBody`だけでできているか。
+ * 引数の最上位のキーを数え、スプレッド、別のキー、重複したキー、計算したキーを禁じる。
+ * `requestBody`の本文の中身は見ない。本文の外側に`path`を置く形は、最上位のキーとして数える。
+ * 違反の理由を返し、合っていれば`undefined`を返す。
+ */
+function boundArgumentsProblem(
+  args: string | undefined,
+  path: string,
+  allowRequestBody: boolean,
+): string | undefined {
+  const argumentList = args === undefined ? undefined : splitTopLevel(args);
+  if (argumentList === undefined) return "arguments cannot be read";
+  const calls = withoutTrailingBlank(argumentList);
+  const object = calls[0]?.trim();
+  if (calls.length !== 1 || object === undefined) {
+    return "arguments are not a single object";
+  }
+  if (!object.startsWith("{") || !object.endsWith("}")) {
+    return "the argument is not an object literal";
+  }
+  const properties = splitTopLevel(object.slice(1, -1));
+  if (properties === undefined) return "properties cannot be read";
+  const seen = { workspace: 0, path: 0, requestBody: 0 };
+  for (const raw of withoutTrailingBlank(properties)) {
+    const property = raw.trim();
+    if (property === "workspace") {
+      seen.workspace += 1;
+    } else if (property === `path: ${JSON.stringify(path)}`) {
+      seen.path += 1;
+    } else if (allowRequestBody && /^requestBody\s*:/.test(property)) {
+      seen.requestBody += 1;
+    } else {
+      return `unexpected property ${property.slice(0, 24)}`;
+    }
+  }
+  return seen.workspace === 1 && seen.path === 1 && seen.requestBody <= 1
+    ? undefined
+    : "workspace, path and requestBody must each appear once";
 }
 
 function clientBindings(code: string, problems: string[]): string[] {
@@ -501,18 +661,16 @@ export function sdkFindings(source: string): SdkFindings {
   if (globalObject !== undefined) problems.push(`use of ${globalObject}`);
   const forbidden = FORBIDDEN_NAMES.exec(code)?.[0];
   if (forbidden !== undefined) problems.push(`mention of ${forbidden}`);
-  for (const [call, path] of Object.entries(BOUND_PATH_CALLS)) {
+  for (const [call, bound] of Object.entries(BOUND_PATH_CALLS)) {
     const [service, method] = call.split(".");
     const opening = new RegExp(`\\b${service}\\s*\\.\\s*${method}\\s*\\(`, "g");
     // 引数は`{ workspace, path: "<定数>" }`の形だけを許す(更新は`requestBody`を続けてよい)。
-    // スプレッド、別のキー、`path`の上書きは認めない。
-    const bound = new RegExp(
-      `^\\(\\s*\\{\\s*workspace\\s*,\\s*path\\s*:\\s*"${path.replaceAll("/", "\\/")}"\\s*(?:,\\s*requestBody\\s*:[\\s\\S]*?)?,?\\s*\\}\\s*\\)$`,
-    );
     for (const match of code.matchAll(opening)) {
-      const args = balancedArguments(code, match.index + match[0].length - 1);
-      if (!bound.test(args)) {
-        problems.push(`${call} is not bound to the literal ${path}`);
+      const args = callArguments(code, match.index + match[0].length - 1);
+      if (
+        boundArgumentsProblem(args, bound.path, bound.requestBody) !== undefined
+      ) {
+        problems.push(`${call} is not bound to the literal ${bound.path}`);
       }
     }
   }
@@ -585,12 +743,39 @@ export function transpilerImports(source: string): string[] {
   return transpiler.scanImports(source).map((entry) => entry.path);
 }
 
-/** 字句の禁止で見つける、走査を迂回できる書き方。 */
-export function escapeHatches(_source: string): string[] {
-  return [];
+/**
+ * 字句の禁止で見つける、走査を迂回できる書き方。
+ * - `constructor`の言及。文字列の中の言及も数える。`x["constructor"]`は、文字列を組み立てずに書ける。
+ * - `eval`と`Function`の使用。コメントと文字列の中の言及は数えない。
+ * - `Bun`の添字アクセス(`Bun["env"]`)。
+ * 連結した名前で組み立てる参照、割り算を正規表現リテラルと読み違えた範囲の中身は、見つけられない。
+ * それらは、保護した部品の変更をレビューするときの観点にする。
+ */
+export function escapeHatches(source: string): string[] {
+  const code = codeOf(source);
+  const skeleton = codeSkeleton(code);
+  const found: string[] = [];
+  if (/constructor/.test(code)) found.push("mention of constructor");
+  if (/(?<![\w$])eval(?![\w$])/.test(skeleton)) found.push("use of eval");
+  if (/(?<![\w$])Function(?![\w$])/.test(skeleton)) {
+    found.push("use of Function");
+  }
+  if (/(?<![.\w$])Bun\s*\[/.test(skeleton)) {
+    found.push("subscript of Bun");
+  }
+  return found;
 }
 
-/** datatableに文字列でSQLを渡す書き方。 */
-export function datatableStringSql(_source: string): string[] {
-  return [];
+/**
+ * datatableに文字列でSQLを渡す書き方(`sql.query(...)`、`sql.raw(...)`)。
+ * タグ付きテンプレートの`${}`は引数として渡るが、この2つは文字列がそのままSQLになる。
+ */
+export function datatableStringSql(source: string): string[] {
+  const skeleton = codeSkeleton(codeOf(source));
+  const found: string[] = [];
+  for (const match of skeleton.matchAll(/\.\s*(query|raw)\s*\(/g)) {
+    found.push(`call of .${match[1] ?? ""}()`);
+  }
+  if (/\bRawSql\b/.test(skeleton)) found.push("use of RawSql");
+  return found;
 }

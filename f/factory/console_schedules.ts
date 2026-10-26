@@ -10,8 +10,7 @@ import {
   REPO_SCHEDULES,
   type RepoSchedule,
 } from "./lib/console_known_paths.ts";
-import { redactText } from "./lib/console_redact.ts";
-import { isRecord } from "./lib/types.ts";
+import { isRecord, redactText } from "./lib/console_redact.ts";
 
 const PATH_PREFIX = "f/factory/";
 const QUEUE_PAGE_SIZE = 100;

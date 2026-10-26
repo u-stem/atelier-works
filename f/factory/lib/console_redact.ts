@@ -7,8 +7,10 @@
 //
 // 処理の順序は、JSONを解く、値をたどって伏せる、直列化した後にもう一度伏せる、
 // 制御文字を落とす、切る。ログは末尾を、結果は先頭を残す。
-
-import { maskSecrets } from "./log.ts";
+//
+// このファイルは、Console用workerのscriptがimportでたどれる範囲の部品である。
+// 範囲のファイルをすべて保護パスに閉じるため、`lib/log.ts`や`lib/types.ts`には頼らず、
+// 既知の形と型ガードをここに持つ。
 
 export const LOG_LIMIT_BYTES = 256 * 1024;
 export const RESULT_LIMIT_BYTES = 64 * 1024;
@@ -26,6 +28,29 @@ export type RedactedLog = Redacted & {
 };
 
 const MASK = "***";
+
+/**
+ * 値を教わらなくても形だけで判別できる秘密の正規表現。`lib/log.ts`の`maskSecrets`の形の複製で、
+ * 一般形の規則(32字以上の連続)に当たらない短い形を伏せる。
+ */
+const KNOWN_SHAPES: readonly RegExp[] = [
+  /github_pat_[A-Za-z0-9_]{20,}/g,
+  /gh[oprsu]_[A-Za-z0-9]{20,}/g,
+  /sk-ant-[A-Za-z0-9_-]{10,}/g,
+  /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
+];
+
+function maskKnownShapes(text: string): string {
+  let masked = text;
+  for (const pattern of KNOWN_SHAPES) {
+    masked = masked.replace(pattern, MASK);
+  }
+  return masked;
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 const SECRET_WORDS =
   "TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|CREDENTIAL|AUTHORIZATION";
 const SECRET_KEY = new RegExp(SECRET_WORDS, "i");
@@ -45,11 +70,6 @@ const JWT =
   /\beyJ[A-Za-z0-9_-]{5,2000}\.[A-Za-z0-9_-]{5,2000}\.[A-Za-z0-9_-]{0,2000}/g;
 const AWS_KEY_ID =
   /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b/g;
-// PEMは、改行がJSONの`\n`や`\\n`のまま残った形も、`[\s\S]`が文字として読む。
-// 範囲に上限を置くのは、ENDの無いBEGINが並ぶ入力で照合が膨らむのを避けるため。
-const PEM_BLOCK =
-  /-----BEGIN [A-Z0-9 ]{1,40}-----[\s\S]{0,16384}?-----END [A-Z0-9 ]{1,40}-----/g;
-const PEM_OPEN = /-----BEGIN [A-Z0-9 ]{1,40}-----[A-Za-z0-9+/=\\\s]{0,16384}/g;
 const LONG_RUN = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g;
 const HEX_ONLY = /^[0-9a-fA-F]+$/;
 const UUID =
@@ -98,30 +118,69 @@ function replaceCounting(
   });
 }
 
-/** BEGINの出現がこの数を超える入力は、鍵の並びとして読まず、最初のBEGINから後ろを丸ごと伏せる。 */
-const PEM_BEGIN_MAX = 32;
+/** BEGINごとに伏せる範囲の上限。ENDを探す窓でもある。 */
+const PEM_WINDOW = 16384;
+const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]{1,40}-----/g;
+const PEM_END = /-----END [A-Z0-9 ]{1,40}-----/g;
+const PEM_BODY = /[A-Za-z0-9+/=\\\s]{0,16384}/y;
+
+/** `from`以降で最初のENDの位置と長さ。無ければ`undefined`。 */
+function findPemEnd(
+  text: string,
+  from: number,
+): { index: number; length: number } | undefined {
+  PEM_END.lastIndex = from;
+  const found = PEM_END.exec(text);
+  return found === null
+    ? undefined
+    : { index: found.index, length: found[0].length };
+}
 
 /**
- * PEMのブロックを伏せる。ENDの無いBEGINは、その後ろの本文らしい部分までを伏せる。
- * BEGINが多すぎる入力は、照合が膨らむのを避けるため、最初のBEGINから後ろを丸ごと伏せる。
+ * PEMのブロックを伏せる。入力を前から1度だけ走査し、`-----BEGIN NAME-----`の形ごとに、
+ * 窓(16384字)の中のENDまでを伏せる。ENDが窓に無いときは、BEGINとその後ろの鍵の本文らしい並びだけを伏せる。
+ * 伏せた範囲の終わりから走査を続けるので、BEGINがいくつ並んでも、後ろの行は残る。
  */
 function maskPem(input: string, counter: Counter): string {
-  const first = input.indexOf("-----BEGIN ");
-  if (first === -1) {
+  if (!input.includes("-----BEGIN ")) {
     return input;
   }
-  if (input.split("-----BEGIN ").length - 1 > PEM_BEGIN_MAX) {
+  let out = "";
+  let position = 0;
+  let nextEnd: { index: number; length: number } | undefined;
+  let endSearchedFrom = -1;
+  PEM_BEGIN.lastIndex = 0;
+  for (let begin = PEM_BEGIN.exec(input); begin !== null; ) {
+    const bodyStart = begin.index + begin[0].length;
+    // 次のENDの位置は、窓をまたいで使い回す。走査は全体で1回分に収まる。
+    if (
+      endSearchedFrom === -1 ||
+      (nextEnd !== undefined && nextEnd.index < bodyStart)
+    ) {
+      nextEnd = findPemEnd(input, bodyStart);
+      endSearchedFrom = bodyStart;
+    }
+    let cut: number;
+    if (nextEnd !== undefined && nextEnd.index - bodyStart <= PEM_WINDOW) {
+      cut = nextEnd.index + nextEnd.length;
+    } else {
+      PEM_BODY.lastIndex = bodyStart;
+      const body = PEM_BODY.exec(input)?.[0] ?? "";
+      cut = bodyStart + Math.min(body.length, PEM_WINDOW);
+    }
     counter.masked = true;
-    return input.slice(0, first) + MASK;
+    out += input.slice(position, begin.index) + MASK;
+    position = cut;
+    PEM_BEGIN.lastIndex = cut;
+    begin = PEM_BEGIN.exec(input);
   }
-  const closed = replaceCounting(input, PEM_BLOCK, MASK, counter);
-  return replaceCounting(closed, PEM_OPEN, MASK, counter);
+  return out + input.slice(position);
 }
 
 /** 文字列の規則(既知の形、キー=値、一般形)を当てる。制御文字は先に落としてある前提。 */
 function maskString(input: string, counter: Counter): string {
   let text = maskPem(input, counter);
-  const afterKnown = maskSecrets(text);
+  const afterKnown = maskKnownShapes(text);
   if (afterKnown !== text) {
     counter.masked = true;
     text = afterKnown;
@@ -160,23 +219,35 @@ function maskString(input: string, counter: Counter): string {
   });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** たどる入れ子の深さの上限。超えた枝は、中身を見ずに丸ごと伏せる。再帰の溢れでscriptを落とさないため。 */
 const MAX_DEPTH = 64;
 
-/** 値をたどって伏せる。キー名が秘密を指す項目は、値の型を問わず丸ごと置き換える。 */
+/** 葉の文字列に使える文字数の残り。使い切ったら、以降の葉は空にする。 */
+type LeafBudget = { remaining: number };
+
+/**
+ * 値をたどって伏せる。キー名が秘密を指す項目は、値の型を問わず丸ごと置き換える。
+ * 葉の文字列には、直列化の前に値の規則をかける。`budget`があるときは、葉の合計がそれを超えた分を捨てる。
+ */
 function maskValue(
   value: unknown,
   counter: Counter,
   depth = 0,
-  rules = true,
+  budget?: LeafBudget,
 ): unknown {
   if (typeof value === "string") {
-    const clean = stripControl(value);
-    return rules ? maskString(clean, counter) : clean;
+    if (budget === undefined) {
+      return maskString(stripControl(value), counter);
+    }
+    if (budget.remaining <= 0) {
+      return "";
+    }
+    const cut = value.length > budget.remaining;
+    const leaf = cut
+      ? dropPartialTail(value.slice(0, budget.remaining))
+      : value;
+    budget.remaining -= cut ? budget.remaining : value.length;
+    return maskString(stripControl(leaf), counter);
   }
   if (typeof value !== "object" || value === null) {
     return value;
@@ -186,7 +257,7 @@ function maskValue(
     return MASK;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => maskValue(item, counter, depth + 1, rules));
+    return value.map((item) => maskValue(item, counter, depth + 1, budget));
   }
   if (!isRecord(value)) {
     return value;
@@ -198,7 +269,7 @@ function maskValue(
       counter.masked = true;
       out[cleanKey] = MASK;
     } else {
-      out[cleanKey] = maskValue(child, counter, depth + 1, rules);
+      out[cleanKey] = maskValue(child, counter, depth + 1, budget);
     }
   }
   return out;
@@ -274,11 +345,14 @@ const COARSE_FACTOR = 2;
  * 切り口が鍵の本文の途中に当たると、BEGINが落ちて本文だけが残るため。
  */
 function maskOrphanPemEnd(text: string, counter: Counter): string {
-  const end = /-----END [A-Z0-9 ]{1,40}-----/.exec(text);
+  // 切り口の近く(窓の中)のENDだけを対象にする。遠いENDまで伏せると、間の普通の行を失う。
+  const nearCut = text.slice(0, PEM_WINDOW + 64);
+  PEM_END.lastIndex = 0;
+  const end = PEM_END.exec(nearCut);
   if (end === null) {
     return text;
   }
-  if (text.slice(0, end.index).includes("-----BEGIN ")) {
+  if (nearCut.slice(0, end.index).includes("-----BEGIN ")) {
     return text;
   }
   counter.masked = true;
@@ -333,7 +407,8 @@ function dropPartialTail(text: string): string {
  * ジョブの結果を、先頭の`limitBytes`バイトだけ残して伏せる。
  * 文字列の結果はそのまま、それ以外はJSONの文字列にして返す。
  * 伏せてから切る。文字列にした後、上限の数倍を超えるときだけ、伏せる前に先頭を粗く切る。
- * 粗い切り口の末尾の語は落とす。キー名の規則は、文字列にする前の構造に当てる。
+ * 粗い切り口の末尾の語は落とす。キー名の規則と、葉の文字列への値の規則は、文字列にする前の構造に当てる。
+ * 直列化した後の文字列にも、もう一度値の規則をかける。
  */
 export function redactResult(
   value: unknown,
@@ -344,8 +419,11 @@ export function redactResult(
   if (typeof value === "string") {
     text = stripControl(value);
   } else {
+    // 葉の文字列には、直列化の前に値の規則をかける。直列化すると引用符が`\"`に変わり、
+    // `password="x"`のような対が規則に当たらなくなるため。葉の合計は、粗い切りと同じ大きさまでに限る。
+    const budget: LeafBudget = { remaining: limitBytes * COARSE_FACTOR };
     const serialized = JSON.stringify(
-      maskValue(value, counter, 0, false),
+      maskValue(value, counter, 0, budget),
       null,
       2,
     );
