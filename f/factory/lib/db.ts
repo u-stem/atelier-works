@@ -3531,6 +3531,13 @@ export async function latestDesignDraft(
   return row === undefined ? null : toDesignDraft(row);
 }
 
+export async function hasDesignDraftForDocDir(
+  _docDir: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
 /**
  * 作業項目が`designing`で`flow_job_id`が`leaseJobId`のときだけ`work_items.design_attempt`を更新し、更新したら`true`を返す。
  * 設計フローの準備ステップがリースを確かめた直後に呼ぶ。

@@ -41,6 +41,7 @@ import {
   getRequirementDraft,
   getWorkItem,
   hasDependabotItemForHead,
+  hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
   hasNewerMainCiRun,
@@ -217,6 +218,7 @@ const WORK_ITEM_ROW: SqlRow = {
   observed_review_comment_id: null,
   fix_round: 0,
   parent_work_item_id: null,
+  design_attempt: 0,
   created_at: NOW.toISOString(),
   updated_at: NOW.toISOString(),
 };
@@ -1317,10 +1319,16 @@ describe("getWorkItem", () => {
     expect(item?.conflict_check_id).toBeNull();
   });
 
-  test("reads a missing design attempt as 0", async () => {
+  test("parses a design attempt of 0", async () => {
     const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
     const item = await getWorkItem(1, sql);
     expect(item?.design_attempt).toBe(0);
+  });
+
+  test("rejects a row without design_attempt", async () => {
+    const { design_attempt: _omitted, ...withoutDesignAttempt } = WORK_ITEM_ROW;
+    const { sql } = createFakeSqlClient([[withoutDesignAttempt]]);
+    await expect(getWorkItem(1, sql)).rejects.toThrow("design_attempt");
   });
 
   test("parses the design attempt of a row that has the column", async () => {
@@ -1581,7 +1589,165 @@ describe("saveDraft", () => {
   });
 });
 
+describe("saveDraft and the doc_hash baseline", () => {
+  const HASH = "c".repeat(64);
+  const DRAFT = {
+    work_item_id: 1,
+    attempt: 1,
+    summary: "s",
+    markdown: "m",
+    diagrams: [],
+    open_questions: [],
+    doc_dir:
+      "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
+    doc_hash: HASH,
+  };
+
+  /** 1回目の文は渡した失敗で落ち、2回目以降は成功する。文の本文と値を控える。 */
+  function failFirstThenOk(failure: Error | null): {
+    sql: SqlClient;
+    calls: FakeCall[];
+  } {
+    const calls: FakeCall[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      const first = calls.length === 1;
+      return {
+        fetch: () =>
+          first && failure !== null
+            ? Promise.reject(failure)
+            : Promise.resolve([{ id: 3 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, calls };
+  }
+
+  test("writes the doc_hash column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls[0]?.text).toContain("doc_hash");
+  });
+
+  test("passes the doc_hash as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls[0]?.values).toContain(HASH);
+  });
+
+  test("casts a null doc_hash to text so that it does not bind as another type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft({ ...DRAFT, doc_hash: null }, sql, SILENT_LOG);
+    expect(calls[0]?.text).toContain("::text");
+  });
+
+  test("saves again without doc_hash when the column is missing (code 42703)", async () => {
+    const { sql, calls } = failFirstThenOk(
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    );
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls[1]?.text).not.toContain("doc_hash");
+  });
+
+  test("saves again when the message names the missing doc_hash column", async () => {
+    const { sql, calls } = failFirstThenOk(
+      new Error(
+        'column "doc_hash" of relation "requirement_drafts" does not exist',
+      ),
+    );
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("keeps the other columns in the statement it saves again", async () => {
+    const { sql, calls } = failFirstThenOk(
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    );
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls[1]?.values).toContain(DRAFT.doc_dir);
+  });
+
+  test("returns the id of the draft it saved again", async () => {
+    const { sql } = failFirstThenOk(
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    );
+    expect(await saveDraft(DRAFT, sql, SILENT_LOG)).toBe(3);
+  });
+
+  test("warns that the draft has no baseline when it saves again", async () => {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn: (message) => warnings.push(message),
+      error() {},
+    };
+    const { sql } = failFirstThenOk(
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    );
+    await saveDraft(DRAFT, sql, log);
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("rethrows a failure other than a missing column", async () => {
+    const { sql } = failFirstThenOk(new Error("db down"));
+    await expect(saveDraft(DRAFT, sql, SILENT_LOG)).rejects.toThrow("db down");
+  });
+
+  test("does not save again when the insert succeeds", async () => {
+    const { sql, calls } = failFirstThenOk(null);
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("toRequirementDraft", () => {
+  test("parses doc_hash", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [],
+      open_questions: [],
+      doc_dir: null,
+      doc_hash: "d".repeat(64),
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.doc_hash).toBe("d".repeat(64));
+  });
+
+  test("parses a null doc_hash (a draft saved without a baseline)", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [],
+      open_questions: [],
+      doc_dir: null,
+      doc_hash: null,
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.doc_hash).toBeNull();
+  });
+
+  test("reads a row without the doc_hash column as no baseline (the window before the migration)", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [],
+      open_questions: [],
+      doc_dir: null,
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.doc_hash).toBeNull();
+  });
+
   test("parses diagrams and open_questions from a jsonb row", () => {
     const draft = toRequirementDraft({
       id: 3,
@@ -3525,6 +3691,18 @@ describe("setAttemptIfLeaseHolder", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
     expect(calls[0]?.text).toContain("::integer");
+  });
+
+  test("resets design_attempt to zero in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.text).toContain("design_attempt = 0");
+  });
+
+  test("writes attempt and design_attempt in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls).toHaveLength(1);
   });
 
   test("returns true when the lease holder's row was updated", async () => {
@@ -8084,6 +8262,44 @@ describe("setDesignAttemptIfLeaseHolder", () => {
   test("returns false when another run holds the lease", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await setDesignAttemptIfLeaseHolder(1, 2, "job-1", sql)).toBe(false);
+  });
+});
+
+describe("hasDesignDraftForDocDir", () => {
+  const DOC_DIR = "/var/lib/factory/requirements/acme/widgets/design-1";
+
+  test("returns true when a design draft has the doc dir", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(await hasDesignDraftForDocDir(DOC_DIR, sql)).toBe(true);
+  });
+
+  test("returns false when no design draft has the doc dir", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasDesignDraftForDocDir(DOC_DIR, sql)).toBe(false);
+  });
+
+  test("looks in factory.design_drafts", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDesignDraftForDocDir(DOC_DIR, sql);
+    expect(calls[0]?.text).toContain("FROM factory.design_drafts");
+  });
+
+  test("passes the doc dir as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDesignDraftForDocDir(DOC_DIR, sql);
+    expect(calls[0]?.values).toContain(DOC_DIR);
+  });
+
+  test("casts the doc dir to text", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDesignDraftForDocDir(DOC_DIR, sql);
+    expect(calls[0]?.text).toContain("::text");
+  });
+
+  test("reads at most one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDesignDraftForDocDir(DOC_DIR, sql);
+    expect(calls[0]?.text).toContain("LIMIT 1");
   });
 });
 

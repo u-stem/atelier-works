@@ -1,0 +1,1 @@
+-- up migration: requirement_drafts_doc_hash (stub)
