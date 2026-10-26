@@ -382,3 +382,34 @@ export async function secretsOutside(
   }
   return [...found].sort();
 }
+
+/** script別に許すSDKの呼び出し。`services`は`JobService.getJob`の形、`members`は`wmill.<member>`の関数名。 */
+export type SdkAllowance = {
+  readonly services: readonly string[];
+  readonly members: readonly string[];
+};
+
+export type SdkFindings = {
+  /** `wmill.<X>Service.<method>`と`wmill.<member>`の使用。 */
+  readonly used: readonly string[];
+  /** 許可表に関わらず禁じる形(別名、名前付きimport、fetch、深いパスのimportなど)。 */
+  readonly problems: readonly string[];
+};
+
+export function sdkFindings(_source: string): SdkFindings {
+  return { used: [], problems: [] };
+}
+
+export function sdkViolations(
+  _source: string,
+  _allowed: SdkAllowance,
+): string[] {
+  return [];
+}
+
+export function sdkViolationsReachableFrom(
+  _entry: string,
+  _allowed: SdkAllowance,
+): string[] {
+  return [];
+}

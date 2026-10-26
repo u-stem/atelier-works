@@ -9,6 +9,8 @@ import {
   relative,
   relativeImports,
   scan,
+  sdkFindings,
+  sdkViolations,
   secretVariablePaths,
   sourcesReachableFrom,
   unfollowableImports,
@@ -201,6 +203,229 @@ describe("the variable read scan", () => {
     expect(
       nonLiteralVariableReads("const read = wmill.getVariable; read(p);"),
     ).not.toEqual([]);
+  });
+});
+
+describe("the SDK use scan", () => {
+  const ALLOWED = {
+    services: ["JobService.getJob", "ResourceService.getResourceValue"],
+    members: ["getWorkspace", "datatable"],
+  };
+  const JOB = 'import * as wmill from "windmill-client@1.817.0";\n';
+
+  test("reads a service call through the namespace import", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.JobService.getJob({ id });`).used,
+    ).toEqual(["JobService.getJob"]);
+  });
+
+  test("reads a function call through the default import", () => {
+    expect(
+      sdkFindings(
+        'import wmillDefault, * as wmill from "windmill-client@1.817.0";\nwmillDefault.getWorkspace();',
+      ).used,
+    ).toEqual(["getWorkspace"]);
+  });
+
+  test("accepts an allowed service call", () => {
+    expect(
+      sdkViolations(`${JOB}await wmill.JobService.getJob({ id });`, ALLOWED),
+    ).toEqual([]);
+  });
+
+  test("flags a service call that is not on the allowance", () => {
+    expect(
+      sdkViolations(
+        `${JOB}await wmill.JobService.cancelQueuedJob({});`,
+        ALLOWED,
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags every VariableService call", () => {
+    expect(
+      sdkViolations(
+        `${JOB}await wmill.VariableService.getVariable({ path: "x" });`,
+        ALLOWED,
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags a function that is not on the allowance", () => {
+    expect(
+      sdkViolations(`${JOB}await wmill.getVariable("f/factory/x");`, ALLOWED),
+    ).not.toEqual([]);
+  });
+
+  test("flags the interpolating resource read", () => {
+    expect(
+      sdkViolations(
+        `${JOB}await wmill.ResourceService.getResourceValueInterpolated({ path: "f/factory/factory_config" });`,
+        ALLOWED,
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("flags an alias of the namespace import", () => {
+    expect(
+      sdkFindings(`${JOB}const w = wmill;\nawait w.JobService.getJob({});`)
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a service kept in a variable", () => {
+    expect(
+      sdkFindings(`${JOB}const jobs = wmill.JobService;`).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a bracket access on the namespace", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill["VariableService"].getVariable({});`)
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags an optional chain on the namespace", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill?.JobService.getJob({});`).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags the namespace passed to another function", () => {
+    expect(sdkFindings(`${JOB}ports(wmill);`).problems).not.toEqual([]);
+  });
+
+  test("flags a named import from the client", () => {
+    expect(
+      sdkFindings(
+        'import { getVariable } from "windmill-client@1.817.0";\ngetVariable("x");',
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a named import next to the default import", () => {
+    expect(
+      sdkFindings(
+        'import wmillDefault, { JobService } from "windmill-client@1.817.0";\nJobService.getJob({});',
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a deep path import of the client", () => {
+    expect(
+      sdkFindings(
+        'import * as s from "windmill-client@1.817.0/dist/services.gen";',
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of another package", () => {
+    expect(
+      sdkFindings('import { readFileSync } from "node:fs";').problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts a relative import", () => {
+    expect(sdkFindings('import { x } from "./lib/x.ts";').problems).toEqual([]);
+  });
+
+  test("flags a dynamic import of the client", () => {
+    expect(
+      sdkFindings('const m = await import("windmill-client@1.817.0");')
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags a call to fetch", () => {
+    expect(
+      sdkFindings('const r = await fetch("http://x/api");').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags fetch reached through globalThis", () => {
+    expect(
+      sdkFindings('const r = await globalThis.fetch("http://x");').problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts the fetch method of a statement handle", () => {
+    expect(
+      sdkFindings("const rows = await statement.fetch();").problems,
+    ).toEqual([]);
+  });
+
+  test("accepts a fetch property in an object literal", () => {
+    expect(
+      sdkFindings("const handle = { fetch: async () => [] };").problems,
+    ).toEqual([]);
+  });
+
+  test("flags WM_TOKEN, even when it is only a string", () => {
+    expect(
+      sdkFindings('const t = process.env["WM_TOKEN"];').problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags BASE_INTERNAL_URL", () => {
+    expect(
+      sdkFindings("const u = process.env.BASE_INTERNAL_URL;").problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags BASE_URL", () => {
+    expect(sdkFindings("const u = process.env.BASE_URL;").problems).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags OpenAPI", () => {
+    expect(sdkFindings("OpenAPI.TOKEN = 'x';").problems).not.toEqual([]);
+  });
+
+  test("accepts the literal config path for getResourceValue", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ workspace, path: "f/factory/factory_config" });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags getResourceValue with another literal path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ workspace, path: "f/factory/other" });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags getResourceValue with a path in a variable", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.getResourceValue({ workspace, path });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags updateResourceValue with a path in a variable", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.ResourceService.updateResourceValue({ workspace, path, requestBody: {} });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("does not count a mention in a comment", () => {
+    expect(
+      sdkFindings(`${JOB}// wmill.VariableService.getVariable and fetch(url)\n`)
+        .problems,
+    ).toEqual([]);
+  });
+
+  test("does not count a mention in a string", () => {
+    expect(
+      sdkFindings(`${JOB}const s = "wmill.VariableService.getVariable";`).used,
+    ).toEqual([]);
   });
 });
 
