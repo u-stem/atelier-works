@@ -10,6 +10,10 @@ const DOWN = `${DIR}/20261026130000_design_drafts.down.sql`;
 const OPENING =
   "BEGIN; SET LOCAL lock_timeout = '30s'; LOCK TABLE factory.requirement_drafts IN ACCESS EXCLUSIVE MODE;";
 
+// downは、挿入側が持つ順(design_draftsを先に、requirement_draftsを読む)に合わせて2表を1文で取る。
+const DOWN_OPENING =
+  "BEGIN; SET LOCAL lock_timeout = '30s'; LOCK TABLE factory.design_drafts, factory.requirement_drafts IN ACCESS EXCLUSIVE MODE;";
+
 /** 行コメントを除き、空白を1つにまとめたSQLの文面。 */
 function code(sql: string): string {
   return sql.replace(/--.*$/gm, "").replace(/\s+/g, " ").trim();
@@ -76,8 +80,10 @@ describe("20261026130000_design_drafts.up.sql", () => {
 });
 
 describe("20261026130000_design_drafts.down.sql", () => {
-  test("opens with the lock timeout and one lock on requirement_drafts", async () => {
-    expect(code(await Bun.file(DOWN).text()).startsWith(OPENING)).toBe(true);
+  test("opens with the lock timeout and one lock on design_drafts then requirement_drafts", async () => {
+    expect(code(await Bun.file(DOWN).text()).startsWith(DOWN_OPENING)).toBe(
+      true,
+    );
   });
 
   test("does not use a DO block", async () => {
@@ -99,7 +105,7 @@ describe("20261026130000_design_drafts.down.sql", () => {
   test("first adds a check that no row can satisfy, validated at once", async () => {
     expect(
       code(await Bun.file(DOWN).text()).startsWith(
-        `${OPENING} ALTER TABLE factory.design_drafts ADD CONSTRAINT design_drafts_must_be_empty CHECK (false);`,
+        `${DOWN_OPENING} ALTER TABLE factory.design_drafts ADD CONSTRAINT design_drafts_must_be_empty CHECK (false);`,
       ),
     ).toBe(true);
   });
