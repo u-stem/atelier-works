@@ -91,7 +91,8 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run lint:docs` | Markdownの文書を検査する |
 | `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)を作り直す |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
-| `mise run test` | `bun test`でsmallのテストを実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
+| `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
+| `mise run test:changed` | `origin/main`との差分が影響するテストだけを実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
