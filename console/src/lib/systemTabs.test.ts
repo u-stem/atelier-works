@@ -300,6 +300,18 @@ describe("systemTabSpecs", () => {
     ).toEqual(["注意", undefined, undefined]);
   });
 
+  test("marks the status tab even when the deployment chip leads to a notice in another screen", () => {
+    expect(
+      marks(
+        withRow(calmRows(), {
+          ...row("deployment", "caution"),
+          target: { kind: "route", to: "/?type=notice&id=7" },
+        }),
+        "failures",
+      ),
+    ).toEqual(["注意", undefined, undefined]);
+  });
+
   test("gives the status mark the caution level then", () => {
     expect(
       levels(withRow(calmRows(), row("deployment", "caution")), "failures"),
