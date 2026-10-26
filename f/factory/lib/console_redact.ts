@@ -51,14 +51,16 @@ function maskKnownShapes(text: string): string {
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
 const SECRET_WORDS =
   "TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|CREDENTIAL|AUTHORIZATION";
 const SECRET_KEY = new RegExp(SECRET_WORDS, "i");
 
 // 後ろに続く識別子の文字数に上限を置くのは、キーワードの繰り返しだけの長い入力で、
 // 照合の失敗が入力長の二乗に膨らむのを避けるため。
+// JSONの文字列に埋め込まれた`\"password\":\"x\"`の形も当たるよう、引用符の前の`\`を8個まで許す。
 const KEY_VALUE = new RegExp(
-  `(${SECRET_WORDS})([A-Za-z0-9_.-]{0,64}["']?\\s*[=:]\\s*)("[^"\\n]*"|'[^'\\n]*'|[^\\s,;&"']+)`,
+  `(${SECRET_WORDS})([A-Za-z0-9_.-]{0,64}\\\\{0,8}["']?\\s*[=:]\\s*)(\\\\{1,8}"[^"\\\\\\n]*\\\\{1,8}"|\\\\{1,8}'[^'\\\\\\n]*\\\\{1,8}'|"[^"\\n]*"|'[^'\\n]*'|[^\\s,;&"']+)`,
   "gi",
 );
 const AUTHORIZATION_VALUE =
@@ -122,7 +124,9 @@ function replaceCounting(
 const PEM_WINDOW = 16384;
 const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]{1,40}-----/g;
 const PEM_END = /-----END [A-Z0-9 ]{1,40}-----/g;
-const PEM_BODY = /[A-Za-z0-9+/=\\\s]{0,16384}/y;
+// 鍵の本文らしい並び。暗号化した旧形式の見出し(`Proc-Type: 4,ENCRYPTED`)と、
+// 行ごとの接頭辞(`[stderr] `)の文字を含む。ENDの無い鍵が、見出しや接頭辞の行で残らないようにするため。
+const PEM_BODY = /[A-Za-z0-9+/=\\\s:,[\]-]{0,16384}/y;
 
 /** `from`以降で最初のENDの位置と長さ。無ければ`undefined`。 */
 function findPemEnd(
@@ -204,8 +208,8 @@ function maskString(input: string, counter: Counter): string {
     text,
     KEY_VALUE,
     (_m, word = "", middle = "", value = "") => {
-      const quote =
-        value.startsWith('"') || value.startsWith("'") ? value[0] : "";
+      // 値を囲む引用符(エスケープされた`\"`を含む)は、そのまま残す。
+      const quote = /^\\*["']/.exec(value)?.[0] ?? "";
       return `${word}${middle}${quote}${MASK}${quote}`;
     },
     counter,

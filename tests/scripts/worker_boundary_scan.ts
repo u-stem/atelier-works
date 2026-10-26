@@ -404,6 +404,10 @@ const CLIENT_IMPORT_CLAUSE =
   /\bimport\s+([^;"']*?)\s*\bfrom\s*["']windmill-client[^"']*["']/g;
 const IMPORT_STATEMENT = /\bimport\s+[^;"']*?\bfrom\s*""/g;
 const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
+// `require`は呼び出しの形に限らず、変数に入れる形も禁じる。`import.meta`は`env`や`require`を持つ。
+const REQUIRE_REFERENCE = /(?<![.\w$])require(?![\w$])(?!\s*:)/;
+const IMPORT_META = /(?<![.\w$])import\s*\.\s*meta(?![\w$])/;
+const WORKER_REFERENCE = /(?<![.\w$])Worker(?![\w$])(?!\s*:)/;
 const GLOBAL_OBJECT = /(?<![.\w$])(?:globalThis|global|self|window)(?![\w$])/;
 const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
 
@@ -615,7 +619,7 @@ function importProblems(source: string, problems: string[]): void {
  * windmill-clientのnamespaceとdefaultの束縛を見つけ、束縛の出現をすべて数える。
  * `<束縛>.<member>`と`<束縛>.<X>Service.<method>`の形で説明できない出現(別名、添字、optional chain、
  * 引数への受け渡し)は禁じる。名前付きimport、windmill-client以外の外部のimportと深いパスのimport、
- * `fetch`、`globalThis`、`WM_TOKEN`などの名前も禁じる。
+ * `fetch`、`require`(変数に入れる形も)、`import.meta`、`Worker`、`globalThis`、`WM_TOKEN`などの名前も禁じる。
  * 文字列とコメントの中の言及は数えない。ただし`WM_TOKEN`などの名前は、文字列でも禁じる。
  * パスをリテラルに固定する呼び出し(`BOUND_PATH_CALLS`)は、その定数以外のパスを禁じる。
  */
@@ -657,6 +661,9 @@ export function sdkFindings(source: string): SdkFindings {
     problems.push("re-export of windmill-client");
   }
   if (FETCH_REFERENCE.test(skeleton)) problems.push("use of fetch");
+  if (REQUIRE_REFERENCE.test(skeleton)) problems.push("use of require");
+  if (IMPORT_META.test(skeleton)) problems.push("use of import.meta");
+  if (WORKER_REFERENCE.test(skeleton)) problems.push("use of Worker");
   const globalObject = GLOBAL_OBJECT.exec(skeleton)?.[0];
   if (globalObject !== undefined) problems.push(`use of ${globalObject}`);
   const forbidden = FORBIDDEN_NAMES.exec(code)?.[0];
@@ -757,7 +764,7 @@ export function escapeHatches(source: string): string[] {
   const found: string[] = [];
   if (/constructor/.test(code)) found.push("mention of constructor");
   if (/(?<![\w$])eval(?![\w$])/.test(skeleton)) found.push("use of eval");
-  if (/(?<![\w$])Function(?![\w$])/.test(skeleton)) {
+  if (/(?<![.\w$])Function(?![\w$])/.test(skeleton)) {
     found.push("use of Function");
   }
   if (/(?<![.\w$])Bun\s*\[/.test(skeleton)) {

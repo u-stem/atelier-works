@@ -296,8 +296,8 @@ describe("redactLog with many PEM markers", () => {
   });
 
   test("keeps the line after a BEGIN marker that has no body", () => {
-    const raw = `${"-----BEGIN X-----\n".repeat(50)}[error] after the markers\n`;
-    expect(redactLog(raw).text).toContain("[error] after the markers");
+    const raw = `${"-----BEGIN X-----\n".repeat(50)}(error) after the markers\n`;
+    expect(redactLog(raw).text).toContain("(error) after the markers");
   });
 
   test("masks the body that follows an unclosed BEGIN marker", () => {

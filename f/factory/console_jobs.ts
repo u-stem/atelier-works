@@ -397,35 +397,21 @@ async function readResult(
   }
 }
 
-/** 親のジョブのidを、親が`f/factory/`の許可した種類のジョブと確かめられたときだけ返す。 */
-async function visibleParent(
-  ports: JobsPorts,
-  parent: string | null,
-): Promise<string | null> {
-  if (parent === null || !isJobId(parent)) return null;
-  try {
-    return projectJob(await ports.getJob(parent), ports.now()) === null
-      ? null
-      : parent;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * フローのステップの親をルートまでたどり、すべてが許可した種類のジョブか確かめる。
+ * 親をルートまでたどり、すべてが許可した種類のジョブか確かめる。
  * プレビューのフローの子は、ステップ自身の種類がscriptになり、パスも`f/factory/`になるので、
  * 親をたどらないと実行したフローの一部と見分けられない。
- * 親が存在しない、許可した種類でない、深すぎる、親が無いステップは`false`を返す。読み取りの失敗は投げ直す。
+ * 親が存在しない、許可した種類でない、`ANCESTORS_MAX`段より深い、親が無いステップは`false`を返す。
+ * 読み取りの失敗は投げ直す。親の確認を通らないジョブの親のidは、返さないためである。
  */
-async function stepChainVisible(
+async function ancestorsVisible(
   ports: JobsPorts,
   parent: string | null,
 ): Promise<boolean> {
   let current = parent;
-  for (let depth = 0; depth < ANCESTORS_MAX; depth += 1) {
+  for (let depth = 0; ; depth += 1) {
     if (current === null) return depth > 0;
-    if (!isJobId(current)) return false;
+    if (depth >= ANCESTORS_MAX || !isJobId(current)) return false;
     let raw: unknown;
     try {
       raw = await ports.getJob(current);
@@ -437,7 +423,6 @@ async function stepChainVisible(
     if (projected === null) return false;
     current = projected.parent_job;
   }
-  return false;
 }
 
 async function readFailureViews(
@@ -489,18 +474,15 @@ export async function loadJobDetail(
   }
   const projected = projectJob(raw, ports.now());
   if (projected === null || !isRecord(raw)) return { found: false };
-  // フローのステップは、ルートまでの親がすべて許可した種類のときだけ返す。
-  // ステップでないジョブは、親が許可した種類のときだけ、親のidを出す。
-  let parentJob: string | null;
-  if (projected.is_flow_step) {
-    if (!(await stepChainVisible(ports, projected.parent_job))) {
-      return { found: false };
-    }
-    parentJob = projected.parent_job;
-  } else {
-    parentJob = await visibleParent(ports, projected.parent_job);
+  // 親を持つジョブと、フローのステップは、ルートまでの親がすべて許可した種類のときだけ返す。
+  // ステップの印は、欠けたり名前が変わったりしても親の確認が外れないよう、親の有無でも判定する。
+  if (
+    (projected.is_flow_step || projected.parent_job !== null) &&
+    !(await ancestorsVisible(ports, projected.parent_job))
+  ) {
+    return { found: false };
   }
-  const job = { ...projected, parent_job: parentJob };
+  const job = projected;
   const args = projectArgs(raw);
   const steps = projectSteps(raw);
   if (!options.includeOutput) {
@@ -559,7 +541,9 @@ function summaries(raw: readonly unknown[], now: Date): JobSummary[] {
   const jobs: JobSummary[] = [];
   for (const item of raw) {
     const job = projectJob(item, now);
-    if (job !== null && !job.is_flow_step) jobs.push(job);
+    // 一覧は親のidを確かめずに返さない。親は詳細で、ルートまでの確認を通ったときだけ返す。
+    if (job !== null && !job.is_flow_step)
+      jobs.push({ ...job, parent_job: null });
   }
   return jobs;
 }
