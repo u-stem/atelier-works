@@ -232,21 +232,9 @@ export function SystemScreen() {
 
   const rows = summaryBandRows(
     {
-      holds: {
-        data: holds.data,
-        isError: holds.isError,
-        updatedAt: holds.dataUpdatedAt,
-      },
-      status: {
-        data: status.data,
-        isError: status.isError,
-        updatedAt: status.dataUpdatedAt,
-      },
-      summary: {
-        data: summary.data,
-        isError: summary.isError,
-        updatedAt: summary.dataUpdatedAt,
-      },
+      holds: { data: holds.data, isError: holds.isError },
+      status: { data: status.data, isError: status.isError },
+      summary: { data: summary.data, isError: summary.isError },
     },
     now,
   );
@@ -295,7 +283,7 @@ export function SystemScreen() {
         onScroll={scroll.onScroll}
         className={SCROLL_BODY_CLASS}
       >
-        <SummaryBand rows={rows} now={now} onJump={onJump} />
+        <SummaryBand rows={rows} onJump={onJump} />
         <div ref={tabsRef} className="-mx-4 md:-mx-8">
           <Tabs
             tabs={tabs}

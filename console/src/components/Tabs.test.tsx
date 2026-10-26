@@ -114,3 +114,29 @@ describe("Tabs height", () => {
     );
   });
 });
+
+describe("Tabs count label", () => {
+  const WITH_LABEL: readonly TabSpec<Id>[] = [
+    { id: "one", label: "最初", panelId: "p" },
+    { id: "two", label: "次", panelId: "q", count: 4, countLabel: "要確認" },
+  ];
+
+  test("tells assistive technology what the count means", () => {
+    expect(render("one", WITH_LABEL)).toMatch(
+      /<span[^>]*sr-only[^>]*>要確認<\/span>/,
+    );
+  });
+
+  test("puts the meaning next to the count", () => {
+    const html = render("one", WITH_LABEL);
+    expect(html.indexOf("要確認")).toBeLessThan(html.indexOf(">4<"));
+  });
+
+  test("shows only the number on screen", () => {
+    expect(render("one", WITH_LABEL)).toMatch(/tabular-nums[^>]*>4</);
+  });
+
+  test("adds nothing for a count without a meaning", () => {
+    expect(render("one")).not.toContain("sr-only");
+  });
+});

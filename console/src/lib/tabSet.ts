@@ -27,6 +27,8 @@ export type ResolvedTabSpec<Id extends string> = {
   label: string;
   panelId: string;
   count: number | undefined;
+  /** 件数の意味。読み上げが、件数の前後に添える語として読む。 */
+  countLabel: string | undefined;
   mark: string | undefined;
 };
 
@@ -35,7 +37,9 @@ export type TabSpecInput<Id extends string> = {
   readonly failed?: Readonly<Partial<Record<Id, boolean>>>;
   /** 名前に添える件数。 */
   readonly counts?: Readonly<Partial<Record<Id, number | undefined>>>;
-  /** 選んでいるかにかかわらず付ける印の文言。取得の失敗の印より優先する。 */
+  /** 件数の意味。例えば「要確認」。 */
+  readonly countLabels?: Readonly<Partial<Record<Id, string | undefined>>>;
+  /** 選んでいるかにかかわらず付ける印の文言。取得も失敗しているときは、失敗の印と並べる。 */
   readonly attention?: Readonly<Partial<Record<Id, string | undefined>>>;
 };
 
@@ -104,6 +108,7 @@ export function tabSpecs<Id extends string>(
     label: tab.label,
     panelId: tabPanelId(set, tab.id),
     count: input.counts?.[tab.id],
+    countLabel: undefined,
     mark:
       input.attention?.[tab.id] ??
       (tab.id !== selected && input.failed?.[tab.id] === true

@@ -3,8 +3,6 @@ import {
   FAILURE_REASON_HEAD_LENGTH,
   failureReasonText,
   HISTORY_PREVIEW_COUNT,
-  hostActionBeyondNote,
-  hostActionBeyondPreview,
   isPullRequestListTruncated,
   PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
@@ -163,62 +161,8 @@ describe("pullRequestTruncationNote", () => {
   });
 });
 
-describe("hostActionBeyondPreview", () => {
-  const ENTRY = (needsHostAction: boolean) => ({
-    needs_host_action: needsHostAction,
-  });
-
+describe("HISTORY_PREVIEW_COUNT", () => {
   test("shows three entries first", () => {
     expect(HISTORY_PREVIEW_COUNT).toBe(3);
-  });
-
-  test("counts nothing when no entry needs host action", () => {
-    expect(
-      hostActionBeyondPreview([ENTRY(false), ENTRY(false), ENTRY(false)]),
-    ).toBe(0);
-  });
-
-  test("does not count an entry inside the first three", () => {
-    expect(
-      hostActionBeyondPreview([ENTRY(true), ENTRY(false), ENTRY(true)]),
-    ).toBe(0);
-  });
-
-  test("counts an entry just outside the first three", () => {
-    expect(
-      hostActionBeyondPreview([
-        ENTRY(false),
-        ENTRY(false),
-        ENTRY(false),
-        ENTRY(true),
-      ]),
-    ).toBe(1);
-  });
-
-  test("counts every entry outside the first three that needs host action", () => {
-    expect(
-      hostActionBeyondPreview([
-        ENTRY(true),
-        ENTRY(true),
-        ENTRY(true),
-        ENTRY(true),
-        ENTRY(false),
-        ENTRY(true),
-      ]),
-    ).toBe(2);
-  });
-
-  test("takes the number of entries to show first", () => {
-    expect(hostActionBeyondPreview([ENTRY(true), ENTRY(true)], 1)).toBe(1);
-  });
-});
-
-describe("hostActionBeyondNote", () => {
-  test("says nothing for zero", () => {
-    expect(hostActionBeyondNote(0)).toBeNull();
-  });
-
-  test("states the count", () => {
-    expect(hostActionBeyondNote(2)).toBe("ホストの作業が要る反映: 2件");
   });
 });

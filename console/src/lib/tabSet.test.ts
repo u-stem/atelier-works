@@ -161,12 +161,39 @@ describe("tabSpecs", () => {
     ).toEqual([undefined, "要確認", undefined]);
   });
 
-  test("prefers the attention mark over the failed-fetch mark", () => {
+  test("shows both marks when a tab needs attention and its fetch failed", () => {
     expect(
       tabSpecs(SET, "first", {
         failed: { second: true },
         attention: { second: "要確認" },
       }).map((tab) => tab.mark),
+    ).toEqual([undefined, "要確認・取得に失敗", undefined]);
+  });
+
+  test("shows both marks on the selected tab too", () => {
+    expect(
+      tabSpecs(SET, "second", {
+        failed: { second: true },
+        attention: { second: "要確認" },
+      }).map((tab) => tab.mark),
+    ).toEqual([undefined, "要確認・取得に失敗", undefined]);
+  });
+
+  test("keeps the attention mark alone when the fetch is fine", () => {
+    expect(
+      tabSpecs(SET, "first", {
+        failed: { second: false },
+        attention: { second: "要確認" },
+      }).map((tab) => tab.mark),
+    ).toEqual([undefined, "要確認", undefined]);
+  });
+
+  test("gives the count a meaning for assistive technology", () => {
+    expect(
+      tabSpecs(SET, "first", {
+        counts: { second: 4 },
+        countLabels: { second: "要確認" },
+      }).map((tab) => tab.countLabel),
     ).toEqual([undefined, "要確認", undefined]);
   });
 });

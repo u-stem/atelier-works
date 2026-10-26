@@ -11,6 +11,8 @@ export type TabSpec<Id extends string> = {
   readonly panelId: string;
   /** 名前に添える件数。 */
   readonly count?: number | undefined;
+  /** 件数の意味。読み上げが、件数の前後に添える語として読む。見た目には出さない。 */
+  readonly countLabel?: string | undefined;
   /** 名前に添える印の文言。色だけに頼らず、文字と記号で伝える。 */
   readonly mark?: string | undefined;
 };

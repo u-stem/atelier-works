@@ -184,36 +184,83 @@ describe("UpdateHistory folded", () => {
   });
 });
 
-describe("UpdateHistory host action beyond the first three", () => {
-  function withHostActionAt(position: number): DeploymentEntry[] {
-    return manyEntries(6).map((entry, index) => ({
-      ...entry,
-      needs_host_action: index === position,
-    }));
-  }
+function renderExpanded(count: number): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <UpdateHistory entries={manyEntries(count)} now={NOW} initiallyExpanded />
+    </TooltipProvider>,
+  );
+}
 
-  test("tells how many entries outside the first three need host action", () => {
-    expect(renderFolded(withHostActionAt(4))).toContain(
-      "ホストの作業が要る反映: 1件",
+/** 切り替えのボタンの開始タグ。 */
+function toggleTag(html: string): string {
+  return /<button [^>]*aria-expanded[^>]*>/.exec(html)?.[0] ?? "";
+}
+
+describe("UpdateHistory toggle", () => {
+  test("draws one toggle button when folded", () => {
+    expect(renderFolded(manyEntries(5)).match(/aria-expanded/g)).toHaveLength(
+      1,
     );
   });
 
-  test("says nothing when the entry needing host action is among the first three", () => {
-    expect(renderFolded(withHostActionAt(1))).not.toContain(
-      "ホストの作業が要る反映",
+  test("draws one toggle button when expanded", () => {
+    expect(renderExpanded(5).match(/aria-expanded/g)).toHaveLength(1);
+  });
+
+  test("tells the button state: closed when folded", () => {
+    expect(toggleTag(renderFolded(manyEntries(5)))).toContain(
+      'aria-expanded="false"',
     );
   });
 
-  test("says nothing once everything is expanded", () => {
+  test("tells the button state: open when expanded", () => {
+    expect(toggleTag(renderExpanded(5))).toContain('aria-expanded="true"');
+  });
+
+  test("keeps the same id on the button in both states, so focus stays on it", () => {
+    const id = (html: string) => /\sid="([^"]+)"/.exec(toggleTag(html))?.[1];
+    expect(id(renderFolded(manyEntries(5)))).toBe(id(renderExpanded(5)));
+  });
+
+  test("gives the button an id", () => {
+    expect(/\sid="[^"]+"/.test(toggleTag(renderFolded(manyEntries(5))))).toBe(
+      true,
+    );
+  });
+
+  test("puts the button before the list in both states, so it does not move", () => {
+    const before = (html: string) =>
+      html.indexOf("aria-expanded") < html.indexOf("<ul");
+    expect([
+      before(renderFolded(manyEntries(5))),
+      before(renderExpanded(5)),
+    ]).toEqual([true, true]);
+  });
+
+  test("points the button at the list it controls", () => {
+    const html = renderFolded(manyEntries(5));
+    const controls = /aria-controls="([^"]+)"/.exec(toggleTag(html))?.[1];
+    expect(html).toContain(`id="${controls}"`);
+  });
+
+  test("points the button at a list that exists when expanded", () => {
+    const html = renderExpanded(5);
+    const controls = /aria-controls="([^"]+)"/.exec(toggleTag(html))?.[1];
+    expect(html).toContain(`id="${controls}"`);
+  });
+
+  test("labels the button to fold back when expanded", () => {
+    expect(renderExpanded(12)).toContain("新しい3件だけ表示");
+  });
+
+  test("says nothing about host action, which the history cannot count", () => {
     expect(
-      renderToStaticMarkup(
-        <TooltipProvider>
-          <UpdateHistory
-            entries={withHostActionAt(4)}
-            now={NOW}
-            initiallyExpanded
-          />
-        </TooltipProvider>,
+      renderFolded(
+        manyEntries(6).map((entry, index) => ({
+          ...entry,
+          needs_host_action: index === 4,
+        })),
       ),
     ).not.toContain("ホストの作業が要る反映");
   });

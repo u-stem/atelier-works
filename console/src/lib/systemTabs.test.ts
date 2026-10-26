@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type { BandLevel, BandRow, BandRowId } from "./summaryBand.ts";
+import type {
+  BandLevel,
+  BandRow,
+  BandRowId,
+  BandTarget,
+} from "./summaryBand.ts";
 import {
   FAILURES_ATTENTION_MARK,
+  FAILURES_COUNT_LABEL,
   failuresTabCount,
   parseSystemTab,
   STATUS_ATTENTION_MARK,
-  SYSTEM_OTHER_SECTIONS,
   SYSTEM_TABS,
   type SystemTabId,
   systemPanelAttrs,
@@ -15,14 +20,16 @@ import {
 } from "./systemTabs.ts";
 import { FETCH_FAILED_MARK } from "./tabSet.ts";
 
-const TABS_OF_ROW: Record<BandRowId, SystemTabId> = {
-  holds: "status",
-  deployment: "status",
-  fetcher: "status",
-  audit: "failures",
-  info: "failures",
-  orphan: "failures",
-  worker: "status",
+const TARGETS: Record<BandRowId, BandTarget> = {
+  actionable: { kind: "route", to: "/" },
+  holds: { kind: "section", tab: "status", targetId: "holds-heading" },
+  deployment: { kind: "section", tab: "status", targetId: "release-heading" },
+  fetcher: { kind: "section", tab: "status", targetId: "release-heading" },
+  failures: {
+    kind: "section",
+    tab: "failures",
+    targetId: "audit-failures-heading",
+  },
 };
 
 function row(
@@ -36,23 +43,20 @@ function row(
     level,
     text: "t",
     count,
-    note: null,
-    tab: TABS_OF_ROW[id],
-    targetId: `${id}-heading`,
-    updatedAt: 1,
+    state: "ready",
+    stale: false,
+    target: TARGETS[id],
   };
 }
 
-/** 全行が正常で、監査の失敗が0件、紐づかない失敗が0件の帯。 */
+/** 全チップが正常で、失敗が0件の帯。 */
 function calmRows(): BandRow[] {
   return [
-    row("holds"),
+    row("actionable", "normal", 0),
+    row("holds", "normal", 0),
     row("deployment"),
     row("fetcher"),
-    row("audit", "normal", 0),
-    row("info", "none", 0),
-    row("orphan", "none", 0),
-    row("worker", "none"),
+    row("failures", "normal", 0),
   ];
 }
 
@@ -161,48 +165,25 @@ describe("systemPanelAttrs", () => {
   });
 });
 
-describe("SYSTEM_OTHER_SECTIONS", () => {
-  test("lists the three sections that have no row in the band", () => {
-    expect(SYSTEM_OTHER_SECTIONS.map((section) => section.targetId)).toEqual([
-      "update-history-heading",
-      "resolved-notices-heading",
-      "flow-graph-heading",
-    ]);
-  });
-
-  test("keeps all of them in the history tab", () => {
-    expect(
-      SYSTEM_OTHER_SECTIONS.every((section) => section.tab === "history"),
-    ).toBe(true);
-  });
-});
-
 describe("failuresTabCount", () => {
-  test("adds the open audit failures and the failures without a work item", () => {
+  test("is the count of the failures chip", () => {
     expect(
-      failuresTabCount(
-        withRow(
-          withRow(calmRows(), row("audit", "caution", 2)),
-          row("orphan", "none", 5),
-        ),
-      ),
+      failuresTabCount(withRow(calmRows(), row("failures", "caution", 7))),
     ).toBe(7);
   });
 
-  test("is zero when both are zero", () => {
+  test("is zero when there is no failure", () => {
     expect(failuresTabCount(calmRows())).toBe(0);
   });
 
-  test("is unknown when the audit failures are not known", () => {
+  test("is unknown when a part of the count is not known", () => {
     expect(
-      failuresTabCount(withRow(calmRows(), row("audit", "none", null))),
+      failuresTabCount(withRow(calmRows(), row("failures", "none", null))),
     ).toBeUndefined();
   });
 
-  test("is unknown when the failures without a work item are not known", () => {
-    expect(
-      failuresTabCount(withRow(calmRows(), row("orphan", "none", null))),
-    ).toBeUndefined();
+  test("is unknown without the chip", () => {
+    expect(failuresTabCount([])).toBeUndefined();
   });
 });
 
@@ -224,21 +205,30 @@ describe("systemTabSpecs", () => {
   test("shows the count on the failures tab only", () => {
     expect(
       systemTabSpecs("status", {
-        rows: withRow(calmRows(), row("audit", "caution", 2)),
+        rows: withRow(calmRows(), row("failures", "caution", 2)),
         failed: NO_FAILED,
       }).map((tab) => tab.count),
     ).toEqual([undefined, 2, undefined]);
   });
 
+  test("says what the count means, so it is not read as the notices", () => {
+    expect(
+      systemTabSpecs("status", {
+        rows: withRow(calmRows(), row("failures", "caution", 2)),
+        failed: NO_FAILED,
+      }).map((tab) => tab.countLabel),
+    ).toEqual([undefined, FAILURES_COUNT_LABEL, undefined]);
+  });
+
   test("marks the failures tab for an open audit failure while another tab is open", () => {
     expect(
-      marks(withRow(calmRows(), row("audit", "caution", 1)), "status"),
+      marks(withRow(calmRows(), row("failures", "caution", 1)), "status"),
     ).toEqual([undefined, FAILURES_ATTENTION_MARK, undefined]);
   });
 
   test("keeps the mark on the failures tab while it is open", () => {
     expect(
-      marks(withRow(calmRows(), row("audit", "caution", 1)), "failures"),
+      marks(withRow(calmRows(), row("failures", "caution", 1)), "failures"),
     ).toEqual([undefined, FAILURES_ATTENTION_MARK, undefined]);
   });
 
@@ -246,20 +236,15 @@ describe("systemTabSpecs", () => {
     expect(marks(calmRows())).toEqual([undefined, undefined, undefined]);
   });
 
-  test("does not mark the failures tab for counts that carry no judgment", () => {
-    expect(
-      marks(
-        withRow(
-          withRow(calmRows(), row("info", "none", 9)),
-          row("orphan", "none", 40),
-        ),
-      ),
-    ).toEqual([undefined, undefined, undefined]);
-  });
-
-  test("marks the status tab when a row there needs action", () => {
+  test("marks the status tab when the deployment chip needs action", () => {
     expect(
       marks(withRow(calmRows(), row("deployment", "action")), "failures"),
+    ).toEqual([STATUS_ATTENTION_MARK, undefined, undefined]);
+  });
+
+  test("marks the status tab while host action is left, which is a caution", () => {
+    expect(
+      marks(withRow(calmRows(), row("deployment", "caution")), "failures"),
     ).toEqual([STATUS_ATTENTION_MARK, undefined, undefined]);
   });
 
@@ -267,6 +252,24 @@ describe("systemTabSpecs", () => {
     expect(
       marks(withRow(calmRows(), row("holds", "caution", 1)), "failures"),
     ).toEqual([undefined, undefined, undefined]);
+  });
+
+  test("marks the status tab when a hold has expired", () => {
+    expect(
+      marks(withRow(calmRows(), row("holds", "action", 1)), "failures"),
+    ).toEqual([STATUS_ATTENTION_MARK, undefined, undefined]);
+  });
+
+  test("does not mark the status tab for a pinned fetch, which is a caution", () => {
+    expect(
+      marks(withRow(calmRows(), row("fetcher", "caution")), "failures"),
+    ).toEqual([undefined, undefined, undefined]);
+  });
+
+  test("does not mark a tab for the actionable chip, which has no tab", () => {
+    expect(marks(withRow(calmRows(), row("actionable", "caution", 4)))).toEqual(
+      [undefined, undefined, undefined],
+    );
   });
 
   test("marks a hidden tab whose fetch failed", () => {
@@ -278,7 +281,16 @@ describe("systemTabSpecs", () => {
     ).toEqual([undefined, undefined, FETCH_FAILED_MARK]);
   });
 
-  test("states the failure marks in words", () => {
+  test("shows the attention and the failed fetch together on the failures tab", () => {
+    expect(
+      systemTabSpecs("status", {
+        rows: withRow(calmRows(), row("failures", "caution", 1)),
+        failed: { ...NO_FAILED, failures: true },
+      }).map((tab) => tab.mark),
+    ).toEqual([undefined, "要確認・取得に失敗", undefined]);
+  });
+
+  test("states the attention marks in words", () => {
     expect([FAILURES_ATTENTION_MARK, STATUS_ATTENTION_MARK]).toEqual([
       "要確認",
       "要対応",

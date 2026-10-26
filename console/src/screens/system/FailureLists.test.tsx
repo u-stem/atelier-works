@@ -263,6 +263,26 @@ describe("OrphanFailureGroups", () => {
     expect(html.indexOf("f/new")).toBeLessThan(html.indexOf("f/old"));
   });
 
+  test("opens only the group with the newest failure when a link jumps here", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2, "f/c": 1 })).match(
+        /data-jump-open/g,
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("puts the jump attribute on the first group", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2 })).split("<details")[1],
+    ).toContain("data-jump-open");
+  });
+
+  test("does not put the jump attribute on the second group", () => {
+    expect(
+      renderGroups(orphansOf({ "f/a": 3, "f/b": 2 })).split("<details")[2],
+    ).not.toContain("data-jump-open");
+  });
+
   test("keeps the empty message for no failures", () => {
     expect(renderGroups([])).toContain("作業項目に紐づかない失敗はありません");
   });

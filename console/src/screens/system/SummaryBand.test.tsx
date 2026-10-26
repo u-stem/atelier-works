@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TooltipProvider } from "../../components/ui/tooltip.tsx";
-import type { BandLevel, BandRow } from "../../lib/summaryBand.ts";
+import { MemoryRouter } from "react-router";
+import type {
+  BandLevel,
+  BandRow,
+  BandRowState,
+} from "../../lib/summaryBand.ts";
 import { SummaryBand } from "./SummaryBand.tsx";
-
-const NOW = Date.parse("2026-10-26T03:00:00.000Z");
-const FETCHED = Date.parse("2026-10-26T02:57:00.000Z");
 
 function row(
   id: BandRow["id"],
@@ -18,19 +19,18 @@ function row(
     level,
     text: `結論 ${id}`,
     count: null,
-    note: null,
-    tab: "status",
-    targetId: `${id}-heading`,
-    updatedAt: FETCHED,
+    state: "ready",
+    stale: false,
+    target: { kind: "section", tab: "status", targetId: `${id}-heading` },
     ...overrides,
   };
 }
 
 function render(rows: BandRow[]): string {
   return renderToStaticMarkup(
-    <TooltipProvider>
-      <SummaryBand rows={rows} now={NOW} onJump={() => undefined} />
-    </TooltipProvider>,
+    <MemoryRouter>
+      <SummaryBand rows={rows} onJump={() => undefined} />
+    </MemoryRouter>,
   );
 }
 
@@ -41,45 +41,54 @@ describe("SummaryBand", () => {
     );
   });
 
-  test("has a heading of the second level", () => {
+  test("has a heading that only assistive technology reads", () => {
     expect(render([row("holds", "normal")])).toMatch(
-      /<h2 id="summary-band-heading"[^>]*>要約/,
+      /<h2 id="summary-band-heading"[^>]*class="[^"]*sr-only[^"]*"[^>]*>要約/,
     );
   });
 
-  test("lists one item for each row", () => {
+  test("lists one item for each chip", () => {
     expect(
-      render([row("holds", "normal"), row("audit", "caution")]).match(
+      render([row("holds", "normal"), row("failures", "caution")]).match(
         /<li[ >]/g,
       ),
     ).toHaveLength(2);
   });
 
-  test("links each row to its tab", () => {
-    expect(render([row("audit", "caution", { tab: "failures" })])).toContain(
-      'href="?tab=failures"',
-    );
+  test("links a chip to its tab", () => {
+    expect(
+      render([
+        row("failures", "caution", {
+          target: {
+            kind: "section",
+            tab: "failures",
+            targetId: "audit-failures-heading",
+          },
+        }),
+      ]),
+    ).toContain('href="?tab=failures"');
   });
 
-  test("shows the label of the row inside the link", () => {
-    expect(render([row("holds", "normal")])).toMatch(
-      /<a [^>]*>ラベル holds<\/a>/,
-    );
+  test("links a chip that leaves the screen to its route", () => {
+    expect(
+      render([
+        row("actionable", "caution", { target: { kind: "route", to: "/" } }),
+      ]),
+    ).toMatch(/<a [^>]*href="\/"/);
   });
 
-  test("shows the conclusion of the row", () => {
+  test("shows the label of the chip", () => {
+    expect(render([row("holds", "normal")])).toContain("ラベル holds");
+  });
+
+  test("shows the conclusion of the chip", () => {
     expect(render([row("holds", "normal")])).toContain("結論 holds");
   });
 
   test("shows the count of failures in words, never hiding them", () => {
     expect(
-      render([
-        row("audit", "caution", {
-          text: "未解決の失敗が2件あります",
-          tab: "failures",
-        }),
-      ]),
-    ).toContain("未解決の失敗が2件あります");
+      render([row("failures", "caution", { text: "監査2件、紐づかない5件" })]),
+    ).toContain("監査2件、紐づかない5件");
   });
 
   test.each([
@@ -87,9 +96,14 @@ describe("SummaryBand", () => {
     ["caution", "注意"],
     ["action", "要対応"],
     ["none", "判定なし"],
-  ] as const)("names the level %s in words", (level, label) => {
-    expect(render([row("holds", level)])).toContain(label);
-  });
+  ] as const)(
+    "names the level %s in words for screen readers",
+    (level, label) => {
+      expect(render([row("holds", level)])).toMatch(
+        new RegExp(`<span[^>]*sr-only[^>]*>${label}</span>`),
+      );
+    },
+  );
 
   test.each(["normal", "caution", "action", "none"] as const)(
     "draws a symbol for the level %s that screen readers skip",
@@ -100,83 +114,71 @@ describe("SummaryBand", () => {
     },
   );
 
-  test("colors an action row as a failure", () => {
+  test("colors the symbol of an action chip as a failure", () => {
     expect(render([row("holds", "action")])).toContain("text-failure");
   });
 
-  test("colors a caution row as a warning", () => {
+  test("colors the symbol of a caution chip as a warning", () => {
     expect(render([row("holds", "caution")])).toContain("text-warning");
   });
 
-  test("colors a normal row as a success", () => {
+  test("colors the symbol of a normal chip as a success", () => {
     expect(render([row("holds", "normal")])).toContain("text-success");
   });
 
-  test("shows when the row was fetched", () => {
-    expect(render([row("holds", "normal")])).toMatch(/<time[^>]*>取得 3分前/);
+  test("shows no time of fetch and no note, which belong to the sections", () => {
+    expect(render([row("holds", "normal")])).not.toMatch(/取得 |<time/);
   });
 
-  test("says so when the row has not been fetched", () => {
-    expect(render([row("holds", "none", { updatedAt: 0 })])).toContain(
-      "未取得",
+  test("has no list of other sections", () => {
+    expect(render([row("holds", "normal")])).not.toContain("ほかの節");
+  });
+
+  test("tells that a value is the previous one when a refetch failed", () => {
+    expect(render([row("holds", "caution", { stale: true })])).toContain(
+      "前の値(取得に失敗)",
     );
   });
 
-  test("shows the note of a row", () => {
-    expect(
-      render([row("orphan", "none", { note: "200件に達したので" })]),
-    ).toContain("200件に達したので");
-  });
-
-  test("shows no note without one", () => {
-    expect(render([row("orphan", "none")])).not.toContain("200件");
-  });
-
-  test("lists the sections that have no row as links", () => {
-    expect(render([row("holds", "normal")])).toContain("更新履歴");
-  });
-
-  test("links the other sections to the history tab", () => {
-    expect(render([row("holds", "normal")])).toContain('href="?tab=history"');
-  });
-
-  test("names the list of other sections", () => {
-    expect(render([row("holds", "normal")])).toContain("ほかの節");
+  test("does not say so for a fresh value", () => {
+    expect(render([row("holds", "caution")])).not.toContain("前の値");
   });
 });
 
 describe("SummaryBand while a fetch is pending", () => {
-  const LOADING_ROW = row("holds", "none", {
-    text: "取得中です",
-    updatedAt: 0,
-  });
+  function pending(state: BandRowState): BandRow {
+    return row("holds", "none", {
+      state,
+      text: state === "loading" ? "取得中です" : "取得できませんでした",
+    });
+  }
 
   test("keeps the loading words out of sight before the delay", () => {
-    expect(render([LOADING_ROW])).not.toMatch(
+    expect(render([pending("loading")])).not.toMatch(
       /<span(?![^>]*invisible)[^>]*>取得中です/,
     );
   });
 
-  test("keeps the frame of the row, so nothing moves when the value arrives", () => {
-    expect(render([LOADING_ROW])).toContain("invisible");
+  test("keeps the frame of the chip, so nothing moves when the value arrives", () => {
+    expect(render([pending("loading")])).toContain("invisible");
   });
 
   test("hides the frame from screen readers", () => {
-    expect(render([LOADING_ROW])).toMatch(
+    expect(render([pending("loading")])).toMatch(
       /<span[^>]*aria-hidden="true"[^>]*>.*取得中です/,
     );
   });
 
-  test("still shows the label of the row", () => {
-    expect(render([LOADING_ROW])).toContain("ラベル holds");
+  test("still shows the label of the chip", () => {
+    expect(render([pending("loading")])).toContain("ラベル holds");
   });
 
   test("shows a failed fetch at once", () => {
-    expect(
-      render([
-        row("holds", "none", { text: "取得できませんでした", updatedAt: 0 }),
-      ]),
-    ).toContain("取得できませんでした");
+    expect(render([pending("error")])).toContain("取得できませんでした");
+  });
+
+  test("does not hide a failed fetch", () => {
+    expect(render([pending("error")])).not.toContain("invisible");
   });
 
   test("shows a value at once", () => {

@@ -1,39 +1,38 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import type { HoldRowView, HoldsSnapshot } from "../api/guards/holds.ts";
-import type { ConsoleSummary, SummaryFailure } from "../api/guards/summary.ts";
+import type {
+  ConsoleSummary,
+  SummaryFailure,
+  SummaryNotice,
+} from "../api/guards/summary.ts";
 import type {
   SystemDeployment,
   SystemFetcher,
   SystemOrphanFailure,
   SystemStatus,
 } from "../api/guards/systemStatus.ts";
-import type { WorkerLoad } from "../api/guards/workerLoad.ts";
 import {
-  auditBandRow,
   BAND_LOADING_TEXT,
   type BandLevel,
+  type BandRow,
+  type BandRowId,
   type BandSource,
   bandLevelInfo,
   bandLevelRank,
-  deploymentBandRow,
-  fetcherBandRow,
-  holdsBandRow,
-  infoBandRow,
+  HOST_ACTION_NOTICE_KIND,
   isBandRowLoading,
-  orphanBandRow,
   summaryBandRows,
-  workerBandRow,
 } from "./summaryBand.ts";
 
 const NOW = Date.parse("2026-10-26T03:00:00.000Z");
-const FETCHED = Date.parse("2026-10-26T02:58:00.000Z");
 const FUTURE = "2026-10-26T04:00:00.000Z";
 const PAST = "2026-10-26T02:00:00.000Z";
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 
 function loaded<T>(data: T): BandSource<T> {
-  return { data, isError: false, updatedAt: FETCHED };
+  return { data, isError: false };
 }
 
 function holdRow(expiresAt: string, id = 1): HoldRowView {
@@ -87,40 +86,12 @@ const ORPHAN: SystemOrphanFailure = {
   occurred_at: PAST,
 };
 
-const MIB = 1024 * 1024;
-
-const WORKER_LOAD: WorkerLoad = {
-  window_hours: 24,
-  sample_count: 700,
-  expected_count: 720,
-  latest: {
-    sampled_at: PAST,
-    slots: 3,
-    running_jobs: 1,
-    waiting_jobs: 0,
-    max_wait_seconds: 0,
-    lag_seconds: 1,
-    mem_current_bytes: 309 * MIB,
-    mem_anon_bytes: 76 * MIB,
-    mem_working_set_bytes: 261 * MIB,
-    mem_peak_bytes: 1307 * MIB,
-    mem_limit_bytes: 4096 * MIB,
-  },
-  max: {
-    running_jobs: 2,
-    waiting_jobs: 3,
-    max_wait_seconds: 45,
-    lag_seconds: 12,
-    mem_current_bytes: 400 * MIB,
-    mem_anon_bytes: 172 * MIB,
-    mem_anon_ratio: 0.042,
-    mem_working_set_bytes: 190 * MIB,
-    mem_peak_bytes: 1307 * MIB,
-  },
-  running_readable_samples: 690,
-  busy_samples: 7,
-  lag_over_samples: 10,
-};
+function orphans(count: number): SystemOrphanFailure[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...ORPHAN,
+    job_failure_id: index + 1,
+  }));
+}
 
 function status(overrides: Partial<SystemStatus> = {}): SystemStatus {
   return {
@@ -130,7 +101,7 @@ function status(overrides: Partial<SystemStatus> = {}): SystemStatus {
     orphan_failures: [],
     info_notices: [],
     resolved_notices: [],
-    worker_load: WORKER_LOAD,
+    worker_load: null,
     ...overrides,
   };
 }
@@ -163,27 +134,62 @@ function auditFailure(
   };
 }
 
+function notice(id: number, kind: string): SummaryNotice {
+  return {
+    notice_id: id,
+    kind,
+    message: "m",
+    resolved: false,
+    created_at: PAST,
+    severity: "action",
+    resolvable: true,
+  };
+}
+
 function summary(
   failures: SummaryFailure[],
   auditFailuresOpen?: number,
+  notices: SummaryNotice[] = [],
 ): ConsoleSummary {
   return {
     counts: {
       approvals: 0,
       failures: failures.length,
-      notices: 0,
+      notices: notices.length,
       ...(auditFailuresOpen === undefined
         ? {}
         : { audit_failures_open: auditFailuresOpen }),
     },
     approvals: [],
     failures,
-    notices: [],
+    notices,
   };
 }
 
-const LOADING = { data: undefined, isError: false, updatedAt: 0 };
-const FAILED = { data: undefined, isError: true, updatedAt: 0 };
+const LOADING = { data: undefined, isError: false };
+const FAILED = { data: undefined, isError: true };
+
+type Sources = {
+  holds: BandSource<HoldsSnapshot>;
+  status: BandSource<SystemStatus>;
+  summary: BandSource<ConsoleSummary>;
+};
+
+const CALM: Sources = {
+  holds: loaded(NO_HOLDS),
+  status: loaded(status()),
+  summary: loaded(summary([], 0)),
+};
+
+function rowOf(id: BandRowId, sources: Partial<Sources> = {}): BandRow {
+  const row = summaryBandRows({ ...CALM, ...sources }, NOW).find(
+    (candidate) => candidate.id === id,
+  );
+  if (row === undefined) {
+    throw new Error(`no row ${id}`);
+  }
+  return row;
+}
 
 describe("bandLevelInfo", () => {
   const LEVELS: BandLevel[] = ["normal", "caution", "action", "none"];
@@ -219,25 +225,109 @@ describe("bandLevelInfo", () => {
   });
 });
 
-describe("holdsBandRow", () => {
+describe("summaryBandRows", () => {
+  test("lists the chips in order", () => {
+    expect(summaryBandRows(CALM, NOW).map((row) => row.id)).toEqual([
+      "actionable",
+      "holds",
+      "deployment",
+      "fetcher",
+      "failures",
+    ]);
+  });
+
+  test("leaves out the info notices and the worker load, which no action follows", () => {
+    expect(
+      summaryBandRows(CALM, NOW).some((row) =>
+        ["info", "worker", "orphan", "audit"].includes(row.id),
+      ),
+    ).toBe(false);
+  });
+
+  test("gives every chip a label", () => {
+    expect(
+      summaryBandRows(CALM, NOW).every((row) => row.label.length > 0),
+    ).toBe(true);
+  });
+
+  test("is ready and fresh when every fetch has a value", () => {
+    expect(
+      summaryBandRows(CALM, NOW).map((row) => [row.state, row.stale]),
+    ).toEqual(Array.from({ length: 5 }, () => ["ready", false]));
+  });
+});
+
+describe("the actionable chip", () => {
+  test("is normal without items that need action", () => {
+    expect(rowOf("actionable").level).toBe("normal");
+  });
+
+  test("says there is none", () => {
+    expect(rowOf("actionable").text).toBe("なし");
+  });
+
+  test("counts the approvals, the failures and the notices of the inbox", () => {
+    const withApproval: ConsoleSummary = {
+      ...summary([], 0),
+      counts: { approvals: 2, failures: 0, notices: 1, audit_failures_open: 0 },
+      approvals: [],
+      notices: [notice(1, "main_ci_failed")],
+    };
+    expect(rowOf("actionable", { summary: loaded(withApproval) }).count).toBe(
+      3,
+    );
+  });
+
+  test("is a caution when something needs action", () => {
+    expect(
+      rowOf("actionable", {
+        summary: loaded(summary([], 0, [notice(1, "main_ci_failed")])),
+      }).level,
+    ).toBe("caution");
+  });
+
+  test("states the count", () => {
+    expect(
+      rowOf("actionable", {
+        summary: loaded(summary([], 0, [notice(1, "main_ci_failed")])),
+      }).text,
+    ).toBe("1件");
+  });
+
+  test("does not count an audit failure that a later audit reported", () => {
+    expect(
+      rowOf("actionable", {
+        summary: loaded(summary([auditFailure(1, true)], 0)),
+      }).count,
+    ).toBe(0);
+  });
+
+  test("opens the inbox screen", () => {
+    expect(rowOf("actionable").target).toEqual({ kind: "route", to: "/" });
+  });
+
+  test("is undecided while loading", () => {
+    expect(rowOf("actionable", { summary: LOADING }).level).toBe("none");
+  });
+});
+
+describe("the holds chip", () => {
   test("is normal when nothing is held", () => {
-    expect(holdsBandRow(loaded(NO_HOLDS), NOW).level).toBe("normal");
+    expect(rowOf("holds").level).toBe("normal");
   });
 
   test("states that nothing is held", () => {
-    expect(holdsBandRow(loaded(NO_HOLDS), NOW).text).toBe(
-      "有効な保留と凍結はありません",
-    );
+    expect(rowOf("holds").text).toBe("なし");
   });
 
   test("counts zero active holds", () => {
-    expect(holdsBandRow(loaded(NO_HOLDS), NOW).count).toBe(0);
+    expect(rowOf("holds").count).toBe(0);
   });
 
   test("is a caution for one active hold", () => {
-    expect(holdsBandRow(loaded(holdsWith([holdRow(FUTURE)])), NOW).level).toBe(
-      "caution",
-    );
+    expect(
+      rowOf("holds", { holds: loaded(holdsWith([holdRow(FUTURE)])) }).level,
+    ).toBe("caution");
   });
 
   test("counts a hold, a schedule freeze and a deploy hold together", () => {
@@ -268,35 +358,36 @@ describe("holdsBandRow", () => {
         ],
       },
     };
-    expect(holdsBandRow(loaded(data), NOW).count).toBe(3);
+    expect(rowOf("holds", { holds: loaded(data) }).count).toBe(3);
   });
 
   test("states the active count", () => {
     expect(
-      holdsBandRow(
-        loaded(holdsWith([holdRow(FUTURE), holdRow(FUTURE, 2)])),
-        NOW,
-      ).text,
-    ).toBe("有効な保留と凍結が2件あります");
+      rowOf("holds", {
+        holds: loaded(holdsWith([holdRow(FUTURE), holdRow(FUTURE, 2)])),
+      }).text,
+    ).toBe("有効2件");
   });
 
   test("needs action when a hold has expired", () => {
-    expect(holdsBandRow(loaded(holdsWith([holdRow(PAST)])), NOW).level).toBe(
-      "action",
-    );
+    expect(
+      rowOf("holds", { holds: loaded(holdsWith([holdRow(PAST)])) }).level,
+    ).toBe("action");
   });
 
   test("needs action for an expired hold even next to an active one", () => {
     expect(
-      holdsBandRow(loaded(holdsWith([holdRow(PAST), holdRow(FUTURE, 2)])), NOW)
-        .level,
+      rowOf("holds", {
+        holds: loaded(holdsWith([holdRow(PAST), holdRow(FUTURE, 2)])),
+      }).level,
     ).toBe("action");
   });
 
   test("states the expired and active counts", () => {
     expect(
-      holdsBandRow(loaded(holdsWith([holdRow(PAST), holdRow(FUTURE, 2)])), NOW)
-        .text,
+      rowOf("holds", {
+        holds: loaded(holdsWith([holdRow(PAST), holdRow(FUTURE, 2)])),
+      }).text,
     ).toBe("期限切れ1件、有効1件");
   });
 
@@ -305,7 +396,7 @@ describe("holdsBandRow", () => {
       ...NO_HOLDS,
       holds: { ok: false, kind: "read_failed", reason: "boom" },
     };
-    expect(holdsBandRow(loaded(data), NOW).level).toBe("action");
+    expect(rowOf("holds", { holds: loaded(data) }).level).toBe("action");
   });
 
   test("names the holds table when only it cannot be read", () => {
@@ -313,7 +404,9 @@ describe("holdsBandRow", () => {
       ...NO_HOLDS,
       holds: { ok: false, kind: "read_failed", reason: "boom" },
     };
-    expect(holdsBandRow(loaded(data), NOW).text).toBe("保留の表を読めません");
+    expect(rowOf("holds", { holds: loaded(data) }).text).toBe(
+      "保留の表を読めません",
+    );
   });
 
   test("needs action when the freezes cannot be read", () => {
@@ -321,7 +414,7 @@ describe("holdsBandRow", () => {
       ...NO_HOLDS,
       freezes: { ok: false, reason: "boom" },
     };
-    expect(holdsBandRow(loaded(data), NOW).level).toBe("action");
+    expect(rowOf("holds", { holds: loaded(data) }).level).toBe("action");
   });
 
   test("names the freezes when only they cannot be read", () => {
@@ -329,7 +422,9 @@ describe("holdsBandRow", () => {
       ...NO_HOLDS,
       freezes: { ok: false, reason: "boom" },
     };
-    expect(holdsBandRow(loaded(data), NOW).text).toBe("凍結の変数を読めません");
+    expect(rowOf("holds", { holds: loaded(data) }).text).toBe(
+      "凍結の変数を読めません",
+    );
   });
 
   test("names both when neither can be read", () => {
@@ -337,7 +432,9 @@ describe("holdsBandRow", () => {
       holds: { ok: false, kind: "corrupt", reason: "boom" },
       freezes: { ok: false, reason: "boom" },
     };
-    expect(holdsBandRow(loaded(data), NOW).text).toBe("保留と凍結を読めません");
+    expect(rowOf("holds", { holds: loaded(data) }).text).toBe(
+      "保留と凍結を読めません",
+    );
   });
 
   test("has no count when a source cannot be read", () => {
@@ -345,465 +442,433 @@ describe("holdsBandRow", () => {
       ...NO_HOLDS,
       freezes: { ok: false, reason: "boom" },
     };
-    expect(holdsBandRow(loaded(data), NOW).count).toBeNull();
+    expect(rowOf("holds", { holds: loaded(data) }).count).toBeNull();
   });
 
-  test("is undecided while loading", () => {
-    expect(holdsBandRow(LOADING, NOW).level).toBe("none");
+  test("is loading while the fetch has not returned", () => {
+    expect(rowOf("holds", { holds: LOADING }).state).toBe("loading");
   });
 
   test("says it is loading", () => {
-    expect(holdsBandRow(LOADING, NOW).text).toBe("取得中です");
+    expect(rowOf("holds", { holds: LOADING }).text).toBe(BAND_LOADING_TEXT);
   });
 
   test("is undecided when the fetch failed", () => {
-    expect(holdsBandRow(FAILED, NOW).level).toBe("none");
+    expect(rowOf("holds", { holds: FAILED }).level).toBe("none");
+  });
+
+  test("is in error when the fetch failed", () => {
+    expect(rowOf("holds", { holds: FAILED }).state).toBe("error");
   });
 
   test("says the fetch failed", () => {
-    expect(holdsBandRow(FAILED, NOW).text).toBe("取得できませんでした");
+    expect(rowOf("holds", { holds: FAILED }).text).toBe("取得できませんでした");
   });
 
-  test("keeps the previous values when a refetch failed", () => {
-    expect(
-      holdsBandRow(
-        { ...loaded(holdsWith([holdRow(FUTURE)])), isError: true },
-        NOW,
-      ).level,
-    ).toBe("caution");
+  test("shows the previous value, marked stale, when a refetch failed", () => {
+    const row = rowOf("holds", {
+      holds: { data: holdsWith([holdRow(FUTURE)]), isError: true },
+    });
+    expect([row.level, row.state, row.stale]).toEqual([
+      "caution",
+      "ready",
+      true,
+    ]);
   });
 
   test("points at the holds section of the status tab", () => {
-    const row = holdsBandRow(loaded(NO_HOLDS), NOW);
-    expect([row.tab, row.targetId]).toEqual(["status", "holds-heading"]);
-  });
-
-  test("carries the time of its fetch", () => {
-    expect(holdsBandRow(loaded(NO_HOLDS), NOW).updatedAt).toBe(FETCHED);
+    expect(rowOf("holds").target).toEqual({
+      kind: "section",
+      tab: "status",
+      targetId: "holds-heading",
+    });
   });
 });
 
-describe("deploymentBandRow", () => {
-  test("is normal for a success", () => {
-    expect(deploymentBandRow(loaded(status())).level).toBe("normal");
+describe("the deployment chip", () => {
+  const WITH_HOST_ACTION = summary([], 0, [
+    notice(1, HOST_ACTION_NOTICE_KIND),
+    notice(2, HOST_ACTION_NOTICE_KIND),
+    notice(3, "main_ci_failed"),
+  ]);
+
+  test("is normal for a success with no host action left", () => {
+    expect(rowOf("deployment").level).toBe("normal");
   });
 
-  test("is a caution for a success that needs host action", () => {
+  test("states a success", () => {
+    expect(rowOf("deployment").text).toBe("成功");
+  });
+
+  test("is a caution while a host action notice is unresolved", () => {
     expect(
-      deploymentBandRow(
-        loaded(
+      rowOf("deployment", { summary: loaded(WITH_HOST_ACTION) }).level,
+    ).toBe("caution");
+  });
+
+  test("counts only the host action notices", () => {
+    expect(
+      rowOf("deployment", { summary: loaded(WITH_HOST_ACTION) }).text,
+    ).toBe("ホストの作業2件が残っています");
+  });
+
+  test("does not take the latest deployment's host action flag as still open", () => {
+    expect(
+      rowOf("deployment", {
+        status: loaded(
           status({ deployment: { ...DEPLOYMENT, needs_host_action: true } }),
         ),
-      ).level,
-    ).toBe("caution");
+      }).level,
+    ).toBe("normal");
   });
 
   test("needs action for a failure", () => {
     expect(
-      deploymentBandRow(
-        loaded(status({ deployment: { ...DEPLOYMENT, result: "failed" } })),
-      ).level,
-    ).toBe("action");
-  });
-
-  test("needs action for a failure that also needs host action", () => {
-    expect(
-      deploymentBandRow(
-        loaded(
-          status({
-            deployment: {
-              ...DEPLOYMENT,
-              result: "failed",
-              needs_host_action: true,
-            },
-          }),
+      rowOf("deployment", {
+        status: loaded(
+          status({ deployment: { ...DEPLOYMENT, result: "failed" } }),
         ),
-      ).level,
+      }).level,
     ).toBe("action");
-  });
-
-  test("needs action for a result it does not know", () => {
-    expect(
-      deploymentBandRow(
-        loaded(status({ deployment: { ...DEPLOYMENT, result: "weird" } })),
-      ).level,
-    ).toBe("action");
-  });
-
-  test("is undecided without a record", () => {
-    expect(deploymentBandRow(loaded(status({ deployment: null }))).level).toBe(
-      "none",
-    );
-  });
-
-  test("says there is no record", () => {
-    expect(deploymentBandRow(loaded(status({ deployment: null }))).text).toBe(
-      "記録なし",
-    );
-  });
-
-  test("states a success", () => {
-    expect(deploymentBandRow(loaded(status())).text).toBe("直近の反映は成功");
-  });
-
-  test("states the host action next to a success", () => {
-    expect(
-      deploymentBandRow(
-        loaded(
-          status({ deployment: { ...DEPLOYMENT, needs_host_action: true } }),
-        ),
-      ).text,
-    ).toBe("直近の反映は成功。ホストの作業が必要");
   });
 
   test("states a failure", () => {
     expect(
-      deploymentBandRow(
-        loaded(status({ deployment: { ...DEPLOYMENT, result: "failed" } })),
-      ).text,
-    ).toBe("直近の反映は失敗");
-  });
-
-  test("states both a failure and the host action", () => {
-    expect(
-      deploymentBandRow(
-        loaded(
-          status({
-            deployment: {
-              ...DEPLOYMENT,
-              result: "failed",
-              needs_host_action: true,
-            },
-          }),
+      rowOf("deployment", {
+        status: loaded(
+          status({ deployment: { ...DEPLOYMENT, result: "failed" } }),
         ),
-      ).text,
-    ).toBe("直近の反映は失敗。ホストの作業も必要");
+      }).text,
+    ).toBe("失敗");
   });
 
-  test("is undecided while loading", () => {
-    expect(deploymentBandRow(LOADING).level).toBe("none");
+  test("states a failure together with the host action left", () => {
+    expect(
+      rowOf("deployment", {
+        status: loaded(
+          status({ deployment: { ...DEPLOYMENT, result: "failed" } }),
+        ),
+        summary: loaded(WITH_HOST_ACTION),
+      }).text,
+    ).toBe("失敗。ホストの作業2件も残っています");
+  });
+
+  test("needs action for a result it does not know", () => {
+    expect(
+      rowOf("deployment", {
+        status: loaded(
+          status({ deployment: { ...DEPLOYMENT, result: "weird" } }),
+        ),
+      }).level,
+    ).toBe("action");
+  });
+
+  test("is undecided without a record and without a host action notice", () => {
+    expect(
+      rowOf("deployment", { status: loaded(status({ deployment: null })) })
+        .level,
+    ).toBe("none");
+  });
+
+  test("says there is no record", () => {
+    expect(
+      rowOf("deployment", { status: loaded(status({ deployment: null })) })
+        .text,
+    ).toBe("記録なし");
+  });
+
+  test("is a caution for a host action notice even without a deployment record", () => {
+    expect(
+      rowOf("deployment", {
+        status: loaded(status({ deployment: null })),
+        summary: loaded(WITH_HOST_ACTION),
+      }).level,
+    ).toBe("caution");
+  });
+
+  test("falls back to the deployment flag when the summary is not available", () => {
+    expect(
+      rowOf("deployment", {
+        status: loaded(
+          status({ deployment: { ...DEPLOYMENT, needs_host_action: true } }),
+        ),
+        summary: LOADING,
+      }).text,
+    ).toBe("ホストの作業が必要(通知を確認できません)");
+  });
+
+  test("is a caution under that fallback", () => {
+    expect(
+      rowOf("deployment", {
+        status: loaded(
+          status({ deployment: { ...DEPLOYMENT, needs_host_action: true } }),
+        ),
+        summary: FAILED,
+      }).level,
+    ).toBe("caution");
+  });
+
+  test("is normal under the fallback when no host action is flagged", () => {
+    expect(rowOf("deployment", { summary: LOADING }).level).toBe("normal");
+  });
+
+  test("is loading while the status has not returned", () => {
+    expect(rowOf("deployment", { status: LOADING }).state).toBe("loading");
+  });
+
+  test("is stale when the summary refetch failed", () => {
+    expect(
+      rowOf("deployment", {
+        summary: { data: summary([], 0), isError: true },
+      }).stale,
+    ).toBe(true);
   });
 
   test("points at the release section of the status tab", () => {
-    const row = deploymentBandRow(loaded(status()));
-    expect([row.tab, row.targetId]).toEqual(["status", "release-heading"]);
+    expect(rowOf("deployment").target).toEqual({
+      kind: "section",
+      tab: "status",
+      targetId: "release-heading",
+    });
   });
 
-  test("carries the time of its fetch", () => {
-    expect(deploymentBandRow(loaded(status())).updatedAt).toBe(FETCHED);
+  test("uses the same notice kind as the backend", () => {
+    const source = readFileSync(
+      new URL("../../../f/factory/lib/auto_retry_reasons.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain(
+      `HOST_ACTION_NOTICE_KIND = "${HOST_ACTION_NOTICE_KIND}"`,
+    );
   });
 });
 
-describe("fetcherBandRow", () => {
+describe("the fetcher chip", () => {
+  function withFetcher(fetcher: SystemFetcher): Partial<Sources> {
+    return { status: loaded(status({ fetcher })) };
+  }
+
   test("is normal for a fetch that is up to date", () => {
-    expect(fetcherBandRow(loaded(status())).level).toBe("normal");
+    expect(rowOf("fetcher").level).toBe("normal");
   });
 
   test("needs action for a failed fetch", () => {
     expect(
-      fetcherBandRow(
-        loaded(status({ fetcher: { ...FETCHER_OK, state: "failed" } })),
-      ).level,
+      rowOf("fetcher", withFetcher({ ...FETCHER_OK, state: "failed" })).level,
     ).toBe("action");
   });
 
   test("needs action when the judgment itself is a failure", () => {
     expect(
-      fetcherBandRow(
-        loaded(status({ fetcher: { ...FETCHER_OK, assessment: "failed" } })),
-      ).level,
+      rowOf("fetcher", withFetcher({ ...FETCHER_OK, assessment: "failed" }))
+        .level,
     ).toBe("action");
   });
 
   test("is a caution for a pinned version", () => {
     expect(
-      fetcherBandRow(
-        loaded(status({ fetcher: { ...FETCHER_OK, state: "pinned" } })),
-      ).level,
+      rowOf("fetcher", withFetcher({ ...FETCHER_OK, state: "pinned" })).level,
     ).toBe("caution");
   });
 
   test("is a caution for a stale record", () => {
     expect(
-      fetcherBandRow(
-        loaded(status({ fetcher: { ...FETCHER_OK, assessment: "stale" } })),
-      ).level,
+      rowOf("fetcher", withFetcher({ ...FETCHER_OK, assessment: "stale" }))
+        .level,
     ).toBe("caution");
   });
 
   test("is a caution when the status file cannot be read", () => {
     expect(
-      fetcherBandRow(
-        loaded(
-          status({
-            fetcher: { availability: "unavailable", reason: "missing" },
-          }),
-        ),
+      rowOf(
+        "fetcher",
+        withFetcher({ availability: "unavailable", reason: "missing" }),
       ).level,
     ).toBe("caution");
   });
 
   test("uses the label of the fetch as the text", () => {
-    expect(fetcherBandRow(loaded(status())).text).toBe("取り込み済み");
+    expect(rowOf("fetcher").text).toBe("取り込み済み");
   });
 
   test("says the state cannot be read", () => {
     expect(
-      fetcherBandRow(
-        loaded(
-          status({
-            fetcher: { availability: "unavailable", reason: "missing" },
-          }),
-        ),
+      rowOf(
+        "fetcher",
+        withFetcher({ availability: "unavailable", reason: "missing" }),
       ).text,
     ).toBe("状態を読めません");
   });
 
-  test("is undecided while loading", () => {
-    expect(fetcherBandRow(LOADING).level).toBe("none");
+  test("is loading while the status has not returned", () => {
+    expect(rowOf("fetcher", { status: LOADING }).state).toBe("loading");
   });
 
   test("points at the release section of the status tab", () => {
-    const row = fetcherBandRow(loaded(status()));
-    expect([row.tab, row.targetId]).toEqual(["status", "release-heading"]);
+    expect(rowOf("fetcher").target).toEqual({
+      kind: "section",
+      tab: "status",
+      targetId: "release-heading",
+    });
   });
 });
 
-describe("auditBandRow", () => {
-  test("is normal without an open failure", () => {
-    expect(auditBandRow(loaded(summary([], 0))).level).toBe("normal");
+describe("the failures chip", () => {
+  test("is normal with no failure", () => {
+    expect(rowOf("failures").level).toBe("normal");
   });
 
-  test("is a caution for one open failure", () => {
+  test("states both counts", () => {
+    expect(rowOf("failures").text).toBe("監査0件、紐づかない0件");
+  });
+
+  test("is a caution for one open audit failure", () => {
     expect(
-      auditBandRow(loaded(summary([auditFailure(1, false)], 1))).level,
+      rowOf("failures", {
+        summary: loaded(summary([auditFailure(1, false)], 1)),
+      }).level,
     ).toBe("caution");
   });
 
-  test("shows the open count in words", () => {
+  test("states the open audit failures in words, never hiding them", () => {
     expect(
-      auditBandRow(loaded(summary([auditFailure(1, false)], 1))).text,
-    ).toBe("未解決の失敗が1件あります");
+      rowOf("failures", {
+        summary: loaded(summary([auditFailure(1, false)], 1)),
+      }).text,
+    ).toBe("監査1件、紐づかない0件");
   });
 
-  test("has the open count as its count", () => {
+  test("adds the audit failures and the failures without a work item", () => {
     expect(
-      auditBandRow(loaded(summary([auditFailure(1, false)], 3))).count,
-    ).toBe(3);
+      rowOf("failures", {
+        summary: loaded(summary([auditFailure(1, false)], 2)),
+        status: loaded(status({ orphan_failures: orphans(5) })),
+      }).count,
+    ).toBe(7);
+  });
+
+  test("does not judge the failures without a work item", () => {
+    expect(
+      rowOf("failures", {
+        status: loaded(status({ orphan_failures: orphans(40) })),
+      }).level,
+    ).toBe("normal");
+  });
+
+  test("still states the failures without a work item", () => {
+    expect(
+      rowOf("failures", {
+        status: loaded(status({ orphan_failures: orphans(40) })),
+      }).text,
+    ).toBe("監査0件、紐づかない40件");
   });
 
   test("uses the open count from the backend over the listed rows", () => {
     expect(
-      auditBandRow(
-        loaded(summary([auditFailure(1, false), auditFailure(2, true)], 1)),
-      ).count,
-    ).toBe(1);
+      rowOf("failures", {
+        summary: loaded(
+          summary([auditFailure(1, false), auditFailure(2, true)], 1),
+        ),
+      }).text,
+    ).toContain("監査1件");
   });
 
   test("counts every audit failure when the backend sends no open count", () => {
     expect(
-      auditBandRow(
-        loaded(
+      rowOf("failures", {
+        summary: loaded(
           summary([
             auditFailure(1),
             auditFailure(2, true),
             auditFailure(3, false, "issue"),
           ]),
         ),
-      ).count,
-    ).toBe(2);
+      }).text,
+    ).toContain("監査2件");
   });
 
-  test("is normal when every failure was reported by a later audit", () => {
+  test("is normal when every audit failure was reported by a later audit", () => {
     expect(
-      auditBandRow(loaded(summary([auditFailure(1, true)], 0))).level,
+      rowOf("failures", {
+        summary: loaded(summary([auditFailure(1, true)], 0)),
+      }).level,
     ).toBe("normal");
   });
 
-  test("is undecided while loading", () => {
-    expect(auditBandRow(LOADING).level).toBe("none");
+  test("opens the audit failures when there is one", () => {
+    expect(
+      rowOf("failures", {
+        summary: loaded(summary([auditFailure(1, false)], 1)),
+      }).target,
+    ).toEqual({
+      kind: "section",
+      tab: "failures",
+      targetId: "audit-failures-heading",
+    });
   });
 
-  test("points at the audit failures of the failures tab", () => {
-    const row = auditBandRow(loaded(summary([], 0)));
-    expect([row.tab, row.targetId]).toEqual([
-      "failures",
-      "audit-failures-heading",
+  test("opens the failures without a work item when only they exist", () => {
+    expect(
+      rowOf("failures", {
+        status: loaded(status({ orphan_failures: orphans(3) })),
+      }).target,
+    ).toEqual({
+      kind: "section",
+      tab: "failures",
+      targetId: "orphan-failures-heading",
+    });
+  });
+
+  test("keeps showing the audit failures when the status cannot be read", () => {
+    const row = rowOf("failures", {
+      summary: loaded(summary([auditFailure(1, false)], 1)),
+      status: FAILED,
+    });
+    expect([row.level, row.text, row.count, row.state]).toEqual([
+      "caution",
+      "監査1件、紐づかない 取得できません",
+      null,
+      "error",
     ]);
   });
 
-  test("carries the time of the summary fetch", () => {
-    expect(auditBandRow(loaded(summary([], 0))).updatedAt).toBe(FETCHED);
-  });
-});
-
-describe("infoBandRow and orphanBandRow", () => {
-  const FIVE = Array.from({ length: 5 }, (_, index) => ({
-    ...ORPHAN,
-    job_failure_id: index + 1,
-  }));
-
-  test("count the unresolved info notices without judging them", () => {
-    const notice = {
-      notice_id: 1,
-      kind: "info_deploy_done",
-      message: "m",
-      resolved: false,
-      created_at: PAST,
-      severity: "info",
-      resolvable: true,
-    };
-    const row = infoBandRow(loaded(status({ info_notices: [notice] })));
-    expect([row.level, row.count, row.text]).toEqual(["none", 1, "1件"]);
-  });
-
-  test("count the failures without a work item without judging them", () => {
-    const row = orphanBandRow(loaded(status({ orphan_failures: FIVE })));
-    expect([row.level, row.count, row.text]).toEqual(["none", 5, "5件"]);
-  });
-
-  test("show zero as a count", () => {
-    expect(orphanBandRow(loaded(status())).text).toBe("0件");
-  });
-
-  test("add no note below the limit", () => {
-    expect(
-      orphanBandRow(loaded(status({ orphan_failures: FIVE }))).note,
-    ).toBeNull();
-  });
-
-  test("add the limit note at the limit", () => {
-    const atLimit = Array.from({ length: 200 }, (_, index) => ({
-      ...ORPHAN,
-      job_failure_id: index + 1,
-    }));
-    expect(
-      orphanBandRow(loaded(status({ orphan_failures: atLimit }))).note,
-    ).toBe(
-      "200件に達したので、これより古いものは表示していない場合があります。",
+  test("names the failures without a work item as loading while the status loads", () => {
+    expect(rowOf("failures", { status: LOADING }).text).toBe(
+      "監査0件、紐づかない 取得中",
     );
   });
 
-  test("point at their own sections of the failures tab", () => {
-    expect([
-      infoBandRow(loaded(status())).targetId,
-      orphanBandRow(loaded(status())).targetId,
-    ]).toEqual(["info-notices-heading", "orphan-failures-heading"]);
+  test("is undecided when the summary cannot be read", () => {
+    expect(rowOf("failures", { summary: FAILED }).level).toBe("none");
   });
 
-  test("are undecided while loading", () => {
-    expect([infoBandRow(LOADING).text, orphanBandRow(LOADING).text]).toEqual([
-      "取得中です",
-      "取得中です",
-    ]);
-  });
-});
-
-describe("workerBandRow", () => {
-  test("never judges the load", () => {
-    expect(workerBandRow(loaded(status())).level).toBe("none");
-  });
-
-  test("shows the busy samples", () => {
-    expect(workerBandRow(loaded(status())).text).toContain(
-      "枠が塞がっていた記録7件",
-    );
-  });
-
-  test("shows the late samples", () => {
-    expect(workerBandRow(loaded(status())).text).toContain(
-      "開始が遅れた記録10件",
-    );
-  });
-
-  test("shows the largest memory share", () => {
-    expect(workerBandRow(loaded(status())).text).toContain("メモリの最大4%");
-  });
-
-  test("shows how many samples were recorded", () => {
-    expect(workerBandRow(loaded(status())).text).toContain("記録700/720件");
-  });
-
-  test("says there is no record without a load", () => {
-    expect(workerBandRow(loaded(status({ worker_load: null }))).text).toBe(
-      "記録なし",
-    );
-  });
-
-  test("says there is no record for a load from an older backend", () => {
-    const { worker_load: _omitted, ...older } = status();
-    expect(workerBandRow(loaded(older)).text).toBe("記録なし");
-  });
-
-  test("says there is no record for a load of a different shape", () => {
+  test("is stale when a refetch failed but a value remains", () => {
     expect(
-      workerBandRow(loaded(status({ worker_load: { sample_count: "x" } })))
-        .text,
-    ).toBe("記録なし");
-  });
-
-  test("points at the worker load of the status tab", () => {
-    const row = workerBandRow(loaded(status()));
-    expect([row.tab, row.targetId]).toEqual(["status", "worker-load-heading"]);
-  });
-});
-
-describe("summaryBandRows", () => {
-  const SOURCES = {
-    holds: loaded(NO_HOLDS),
-    status: loaded(status()),
-    summary: loaded(summary([], 0)),
-  };
-
-  test("lists the rows in the order of the screen", () => {
-    expect(summaryBandRows(SOURCES, NOW).map((row) => row.id)).toEqual([
-      "holds",
-      "deployment",
-      "fetcher",
-      "audit",
-      "info",
-      "orphan",
-      "worker",
-    ]);
-  });
-
-  test("gives every row a label", () => {
-    expect(
-      summaryBandRows(SOURCES, NOW).every((row) => row.label.length > 0),
+      rowOf("failures", {
+        status: { data: status(), isError: true },
+      }).stale,
     ).toBe(true);
-  });
-
-  test("gives each row the time of its own fetch", () => {
-    const rows = summaryBandRows(
-      {
-        holds: { ...loaded(NO_HOLDS), updatedAt: 1 },
-        status: { ...loaded(status()), updatedAt: 2 },
-        summary: { ...loaded(summary([], 0)), updatedAt: 3 },
-      },
-      NOW,
-    );
-    expect(rows.map((row) => row.updatedAt)).toEqual([1, 2, 2, 3, 2, 2, 2]);
   });
 });
 
 describe("isBandRowLoading", () => {
-  test("is true for a row whose fetch has not returned", () => {
-    expect(isBandRowLoading(holdsBandRow(LOADING, NOW))).toBe(true);
+  test("is true for a chip whose fetch has not returned", () => {
+    expect(isBandRowLoading(rowOf("holds", { holds: LOADING }))).toBe(true);
   });
 
-  test("is false for a row whose fetch failed", () => {
-    expect(isBandRowLoading(holdsBandRow(FAILED, NOW))).toBe(false);
+  test("is false for a chip whose fetch failed", () => {
+    expect(isBandRowLoading(rowOf("holds", { holds: FAILED }))).toBe(false);
   });
 
-  test("is false for a row with a value", () => {
-    expect(isBandRowLoading(holdsBandRow(loaded(NO_HOLDS), NOW))).toBe(false);
+  test("is false for a chip with a value", () => {
+    expect(isBandRowLoading(rowOf("holds"))).toBe(false);
   });
 
-  test("is false for a row that has no judgment but has a value", () => {
-    expect(isBandRowLoading(workerBandRow(loaded(status())))).toBe(false);
-  });
-
-  test("uses the words of the loading row", () => {
-    expect(holdsBandRow(LOADING, NOW).text).toBe(BAND_LOADING_TEXT);
+  test("does not depend on the words of the chip", () => {
+    const fake: BandRow = {
+      ...rowOf("holds"),
+      text: BAND_LOADING_TEXT,
+    };
+    expect(isBandRowLoading(fake)).toBe(false);
   });
 });

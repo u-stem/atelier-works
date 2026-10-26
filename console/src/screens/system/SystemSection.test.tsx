@@ -8,6 +8,7 @@ import {
   staleQuery,
 } from "../../api/fakeSectionQuery.testing.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { SYSTEM_SKELETONS, SystemSection } from "./SystemSection.tsx";
 
 function render(query: SectionQuery<string>): string {
@@ -47,6 +48,43 @@ describe("SystemSection", () => {
     expect(render(freshQuery("前の値"))).not.toContain(
       "前回取得した値を表示しています",
     );
+  });
+});
+
+function renderWithTime(updatedAt: number | undefined): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <SystemSection
+        id="x-heading"
+        title="節"
+        description="説明"
+        query={{ ...freshQuery("値"), dataUpdatedAt: updatedAt }}
+        loginHint="ログインしてください"
+      >
+        {(data) => <p>{data}</p>}
+      </SystemSection>
+    </TooltipProvider>,
+  );
+}
+
+describe("SystemSection time of the fetch", () => {
+  test("shows when the values were fetched, next to the heading", () => {
+    expect(renderWithTime(Date.now() - 180_000)).toMatch(
+      /<time[^>]*>取得 3分前/,
+    );
+  });
+
+  test("shows nothing before the first fetch", () => {
+    expect(renderWithTime(0)).not.toContain("取得 ");
+  });
+
+  test("shows nothing when the query does not report a time", () => {
+    expect(renderWithTime(undefined)).not.toContain("取得 ");
+  });
+
+  test("puts the time before the body", () => {
+    const html = renderWithTime(Date.now() - 180_000);
+    expect(html.indexOf("取得 ")).toBeLessThan(html.indexOf("<p>値"));
   });
 });
 

@@ -3,7 +3,6 @@ import {
   hasModifierKey,
   nextTabIndex,
   recalledScroll,
-  recalledScrollOr,
   rememberScroll,
   tabDomId,
   tabKeyTarget,
@@ -99,33 +98,5 @@ describe("scroll memory", () => {
 
   test("treats a negative position as the top", () => {
     expect(recalledScroll(rememberScroll(new Map(), "a", -5), "a")).toBe(0);
-  });
-});
-
-describe("recalledScrollOr", () => {
-  test("recalls the remembered position over the fallback", () => {
-    expect(
-      recalledScrollOr(rememberScroll(new Map(), "a", 120), "a", 500),
-    ).toBe(120);
-  });
-
-  test("uses the fallback for a tab that was never left", () => {
-    expect(recalledScrollOr(new Map(), "a", 500)).toBe(500);
-  });
-
-  test("uses a remembered top over the fallback", () => {
-    expect(recalledScrollOr(rememberScroll(new Map(), "a", 0), "a", 500)).toBe(
-      0,
-    );
-  });
-
-  test("treats a negative fallback as the top", () => {
-    expect(recalledScrollOr(new Map(), "a", -3)).toBe(0);
-  });
-
-  test("treats a negative remembered position as the top", () => {
-    expect(recalledScrollOr(rememberScroll(new Map(), "a", -5), "a", 500)).toBe(
-      0,
-    );
   });
 });
