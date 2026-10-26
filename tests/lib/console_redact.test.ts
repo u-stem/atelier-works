@@ -173,7 +173,7 @@ describe("redactLog truncation", () => {
   });
 
   test("drops the partial line at the cut", () => {
-    const out = redactLog("alpha\nbravo\ncharlie\ndelta\n", 14);
+    const out = redactLog("alpha\nbravo\ncharlie\ndelta\n", 16);
     expect(out.text).toBe("charlie\ndelta\n");
   });
 
@@ -228,6 +228,19 @@ describe("control characters", () => {
   });
 });
 
+describe("deeply nested input", () => {
+  test("does not overflow the stack on a deeply nested log line", () => {
+    const deep = `${"[".repeat(5000)}${"]".repeat(5000)}`;
+    expect(redactLog(deep).masked).toBe(true);
+  });
+
+  test("does not overflow the stack on a deeply nested result", () => {
+    let deep: unknown = "leaf";
+    for (let i = 0; i < 5000; i += 1) deep = [deep];
+    expect(redactResult(deep).masked).toBe(true);
+  });
+});
+
 describe("redactResult", () => {
   test("returns an object as JSON text", () => {
     expect(JSON.parse(redactResult({ a: 1, b: ["x"] }).text)).toEqual({
@@ -265,13 +278,13 @@ describe("redactResult", () => {
   });
 
   test("reports truncation for a result longer than the limit", () => {
-    const out = redactResult(`${"a".repeat(10)}${"b".repeat(100)}`, 20);
+    const out = redactResult("word ".repeat(40), 20);
     expect(out.truncated).toBe(true);
   });
 
   test("keeps the head of a long result", () => {
-    expect(redactResult(`head-${"z".repeat(100)}`, 20).text).toBe(
-      "head-zzzzzzzzzzzzzzz",
+    expect(redactResult(`head ${"word ".repeat(40)}`, 20).text).toBe(
+      "head word word word ",
     );
   });
 
