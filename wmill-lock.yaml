@@ -165,6 +165,7 @@ locks:
   f/factory/steps/dependabot_prepare: c7f1d8acb7f22c04ec4103a39bcf6e977a0592d7e0d535ee261c9eba17a486e9
   f/factory/steps/design_generate: 8778d283d460fea6caaebadfdd68859bc146f8ce504af7bc31170a5b4ae3b5d5
   f/factory/steps/design_prepare: 9281bf40de241c31cbd63deb99bda9862021405e2ca52cd22feb0638f0215c19
+  f/factory/steps/design_request_approval: 2690fc5022a4693c6d0a8365d26f3f3640c34411d9c51330fe347941d7ea15fd
   f/factory/steps/implement_finish: 99a6367cbfc55d0ead0704e492b482caa0ece1fda2f25704e569c7d224f3de9b
   f/factory/steps/implement_generate: 0671a360eef104568c2efaf753c42348a779005d3185c64e26fea5aeb15a36c1
   f/factory/steps/implement_prepare: a3856a352b58ed770c1c38628621febddb509f03915d92772ee16ebb175748fa
