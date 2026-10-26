@@ -368,7 +368,10 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 
-`check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。実装フローは`allowed_check_commands`を使わない。
+`check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --no-install --bun tsc --noEmit`や`bunx --no-install --bun biome check .`である。
+`--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[運用](../operations.md#検査コマンドを設定する)にある。
+workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
+実装フローは`allowed_check_commands`を使わない。
 
 1つのIssueにかかる費用の上限は、`implement_max_rounds × implement_max_budget_usd_per_run`が目安である。Claudeの不正な出力への再試行は、その実行の費用の上限をもう1回使うので、最悪でその2倍になる。
 

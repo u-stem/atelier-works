@@ -1176,8 +1176,18 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 
 - エントリが無いリポジトリでは、検査コマンドを実行しない。PRの修正で使う`allowed_check_commands`は、実装では使わない。
 - 検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`など)を消す。そのため先頭で依存関係をインストールする。
-- workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
-  workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。`bunx`などの実行ファイルが無いと検査コマンドを実行できず、修正のラウンドを回さずに人の対応待ちで止まる。
+- workerのイメージにmiseは無い。worker内で直接動くコマンドにする。
+  例は次のとおり。
+  - `bun install --frozen-lockfile`
+  - `bun test`
+  - `bunx --no-install --bun tsc --noEmit`
+  - `bunx --no-install --bun biome check .`
+  workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
+  `bunx`などの実行ファイルが無いと検査コマンドを実行できず、修正のラウンドを回さずに人の対応待ちで止まる。
+- `bunx`は、先頭の`bun install --frozen-lockfile`でlockfileから入れた実行ファイルにだけ使う。
+  入っていないと、`bunx`は版を固定しないままレジストリから取得し、検査用のuidで実行するためである。
+  `--no-install`を付けると、入っていないときは取得せずに止まる。
+  この指定は、実機のbunの`bunx --help`にある。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
 - 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。main cloneの`.git`に書けないので、`git add`、`git commit`、`git stash`、lint-stagedのように`.git`へ書き込む検査コマンドは失敗する。検査コマンドには使わない。
 - 検査コマンドの`TMPDIR`は`HOME`の下を指す。共有の一時ディレクトリに置いたものは、並行して動く別の検査から読めることがある。
