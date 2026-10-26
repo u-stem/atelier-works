@@ -992,18 +992,22 @@ describe("runDesignGenerate when Claude fails", () => {
 });
 
 describe("runDesignGenerate and the approved requirements on disk", () => {
-  test("hashes the requirements directory before and after Claude", async () => {
-    const hashed: (string | null)[] = [];
+  test("hashes the requirements directory before and after Claude, taking the hash before from the copy", async () => {
+    const hashed: string[] = [];
     const h = harness();
     const fs: DesignGenerateFs = {
       ...h.deps.fs,
       hashTree: async (dir) => {
-        if (dir === REQUIREMENTS_DIR) hashed.push(dir);
+        if (dir === REQUIREMENTS_DIR) hashed.push("hashTree");
         return h.deps.fs.hashTree(dir);
+      },
+      copyFilesWithHash: async (source, destination, names) => {
+        if (source === REQUIREMENTS_DIR) hashed.push("copy");
+        return h.deps.fs.copyFilesWithHash(source, destination, names);
       },
     };
     await runDesignGenerate({ ...h.deps, fs }, INPUT);
-    expect(hashed).toHaveLength(2);
+    expect(hashed).toEqual(["copy", "hashTree"]);
   });
 
   test("saves when the requirements are untouched", async () => {

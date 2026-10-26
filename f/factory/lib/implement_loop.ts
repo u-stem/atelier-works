@@ -15,6 +15,8 @@ import {
 } from "./claude.ts";
 import {
   checkDocTreeHash,
+  copyDirectoryTreeWithHash,
+  type DocHashCheck,
   hashDirectoryTree,
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
@@ -342,6 +344,17 @@ export type DocDirGuard = {
   readonly baseline: string | null | undefined;
   /** ディレクトリの内容のハッシュ。ディレクトリが無ければ`null`。 */
   readonly hashTree: (dir: string) => Promise<string | null>;
+  /**
+   * `source`を`destination`へ複製し、複製に書いたバイト列のハッシュを返す。`source`が無ければ`null`。
+   * 基準値があるときは、`DocDirCopyDeps.copyDir`の代わりに使う。
+   * 各ファイルを1回だけ読み、読んだバイト列でハッシュを数えて同じバイト列を書くので、
+   * 返ったハッシュが基準値と一致すれば、複製の内容は承認された内容と一致する。
+   * 省略すると、`copyDir`で複製して、前後の元のディレクトリの照合だけを行う。
+   */
+  readonly copyAndHash?: (
+    source: string,
+    destination: string,
+  ) => Promise<string | null>;
   /** 照合が合わないときの理由。省略すると要件定義の理由を使う。 */
   readonly reasons?: DocDirGuardReasons;
   /** 基準値の項目が無い文脈の警告の出力先。省略すると警告を出さない。 */
@@ -360,6 +373,8 @@ export function docDirGuardFor(context: {
   return {
     baseline: context.requirements_doc_hash,
     hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
+    copyAndHash: (source, destination) =>
+      copyDirectoryTreeWithHash(source, destination),
     warn: (message, fields) => log.warn(message, fields),
   };
 }
@@ -371,7 +386,9 @@ export function docDirGuardFor(context: {
  * `docDir`が`null`(`doc_dir`の無い下書き)なら、複製せずに`null`を渡す。
  *
  * `guard`に基準値があれば、複製の直前と直後に、元のディレクトリのハッシュを基準値と比べる。
- * 複製のハッシュとは比べない。複製はシンボリックリンクと特殊ファイルを落とすので、元の内容と一致しないためである。
+ * `guard.copyAndHash`があれば、`deps.copyDir`の代わりにそれで複製し、複製に書いたバイト列のハッシュを基準値と比べる。
+ * 照合した内容と複製に入った内容が、同じバイト列になる。複製の最中だけ元を書き換えて戻しても、複製には入らない。
+ * 複製の後に複製のディレクトリを読み直したハッシュとは比べない。複製はシンボリックリンクと特殊ファイルを落とすので、元の内容と一致しないためである。
  * 違うか、ディレクトリが無ければ、`fn`を呼ばずに`RequirementsUntrustedError`を投げる。理由は`guard.reasons`で、省略すると要件定義の理由になる。
  * 基準値が無ければ、照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
  * 基準値の項目自体が無い(`undefined`)ときは、この呼び出しで1回、`guard.warn`に警告を渡す。
@@ -395,24 +412,34 @@ export async function withReadOnlyDocDirCopy<T>(
     guard.baseline !== null &&
     guard.baseline !== undefined &&
     guard.baseline.length > 0;
-  const assertTrusted = async (): Promise<void> => {
-    if (guard === undefined || !hasBaseline) return;
-    const verdict = await checkDocTreeHash(
-      docDir,
-      guard.baseline,
-      guard.hashTree,
-    );
+  const throwUnlessMatch = (verdict: DocHashCheck): void => {
     if (verdict === "missing")
       throw new RequirementsUntrustedError(reasons.missing);
     if (verdict === "modified")
       throw new RequirementsUntrustedError(reasons.modified);
+  };
+  const assertTrusted = async (): Promise<void> => {
+    if (guard === undefined || !hasBaseline) return;
+    throwUnlessMatch(
+      await checkDocTreeHash(docDir, guard.baseline, guard.hashTree),
+    );
   };
   await assertTrusted();
   if (!(await deps.pathExists(docDir))) return fn(null);
   const tempDir = await deps.makeTempDir();
   try {
     const copy = join(tempDir, "requirements");
-    await deps.copyDir(docDir, copy);
+    const copyAndHash = guard?.copyAndHash;
+    if (guard !== undefined && copyAndHash !== undefined && hasBaseline) {
+      // 複製に書いたバイト列のハッシュを基準値と比べ、複製の内容が承認された内容かを複製そのもので確かめる。
+      throwUnlessMatch(
+        await checkDocTreeHash(docDir, guard.baseline, (source) =>
+          copyAndHash(source, copy),
+        ),
+      );
+    } else {
+      await deps.copyDir(docDir, copy);
+    }
     await assertTrusted();
     return await fn(copy);
   } finally {

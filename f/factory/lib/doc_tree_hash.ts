@@ -2,7 +2,15 @@
 // 承認された要件定義が、承認の後に書き換わっていないことを確かめるために、
 // 要件定義の保存、設計の生成、実装の関門が共有する。
 
-import { lstat, readdir, readFile, readlink } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
 
 /** 設計の実行の前に、承認済みの要件定義のディレクトリが基準値と違ったときの`needs_human`の理由。 */
 export const REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON =
@@ -104,11 +112,13 @@ async function realRootExists(dir: string): Promise<boolean> {
  * 通常のファイル、シンボリックリンク、特殊ファイルは、種類の印(`F`、`L`、`S`)を前置きして数える。
  * 中身が`symlink:/x`の通常のファイルと、`/x`へのリンクが、同じハッシュにならないようにするため。
  * `dir`自体がシンボリックリンクなら、たどらずに`DocTreeRootSymlinkError`を投げる。
+ * `sink`を渡すと、数えた項目を、数えたのと同じバイト列で受け取れる(`DirectoryTreeSink`)。複製しながら数えるために使う。
  * 保存した基準値や実行の前後と比べ、承認済みの要件定義の書き換え(変更、追加、削除、改名)を検出する。
  */
 export async function hashDirectoryTree(
   dir: string,
   io: DirectoryEntryIo,
+  sink?: DirectoryTreeSink,
 ): Promise<string | null> {
   const hasher = new Bun.CryptoHasher("sha256");
   const walk = async (
@@ -123,6 +133,7 @@ export async function hashDirectoryTree(
       const relative = `${prefix}${entry.name}`;
       if (entry.isDirectory) {
         hasher.update(`D${String(relative.length)}:${relative}\n`);
+        await sink?.directory?.(relative);
         await walk(
           `${path}/${entry.name}`,
           `${relative}/`,
@@ -135,6 +146,7 @@ export async function hashDirectoryTree(
         `${ENTRY_KIND_MARKS[kind]}${String(relative.length)}:${relative}\n${String(content.length)}:`,
       );
       hasher.update(content);
+      if (kind === "file") await sink?.file?.(relative, content);
     }
   };
   // ルートがリンクなら、中身を読む前に止める。リンクの先の内容は、ルートの内容として数えない。
@@ -220,25 +232,69 @@ export async function checkDocTreeHash(
   return current === baseline ? "match" : "modified";
 }
 
-/** 複製の書き出し。テストでは差し替える。 */
+/**
+ * `hashDirectoryTree`が数えた項目を、数えたのと同じバイト列で受け取る受け皿。
+ * 通常のファイルとディレクトリだけが渡る。シンボリックリンクと特殊ファイルは、ハッシュには入るが渡らない。
+ */
+export type DirectoryTreeSink = {
+  /** ディレクトリを数えた直後に呼ぶ。`relative`はルートからの相対パス。 */
+  readonly directory?: (relative: string) => Promise<void>;
+  /** 通常のファイルを読んで数えた直後に呼ぶ。`content`はハッシュに入れたバイト列そのもの。 */
+  readonly file?: (relative: string, content: Uint8Array) => Promise<void>;
+};
+
+/** `copyFilesWithHash`の結果。 */
 export type CopiedFiles = {
+  /** 元のディレクトリ全体のハッシュ。複製しなかった項目も含む。ディレクトリが無ければ`null`。 */
   readonly hash: string | null;
+  /** 実際に書き出したファイル。 */
   readonly copied: readonly string[];
 };
 
+/**
+ * `source`を`destination`へ複製しながら、複製に書いたバイト列のハッシュを返す。ディレクトリが無ければ`null`を返す。
+ * 各ファイルは1回だけ読み、読んだバイト列でハッシュを数え、同じバイト列を書き出す。
+ * 複製の最中だけ元のファイルを書き換えて戻しても、ハッシュと複製の内容は同じものを指す。
+ * 戻り値を保存した基準値と比べれば、複製の内容が承認された内容と一致すると言える。
+ * シンボリックリンクと特殊ファイルは、ハッシュには入れるが複製しない。
+ * `source`自体がシンボリックリンクなら`DocTreeRootSymlinkError`を投げる。
+ */
 export async function copyDirectoryTreeWithHash(
-  _source: string,
-  _destination: string,
-  _io: DirectoryEntryIo = realDirectoryIo,
+  source: string,
+  destination: string,
+  io: DirectoryEntryIo = realDirectoryIo,
 ): Promise<string | null> {
-  return null;
+  await mkdir(destination, { recursive: true });
+  return hashDirectoryTree(source, io, {
+    directory: async (relative) => {
+      await mkdir(join(destination, relative), { recursive: true });
+    },
+    file: async (relative, content) => {
+      await writeFile(join(destination, relative), content, { flag: "wx" });
+    },
+  });
 }
 
+/**
+ * `source`の直下の`files`のうち、通常のファイルだけを`destination`へ複製しながら、`source`全体のハッシュを返す。
+ * 読み方と保証は`copyDirectoryTreeWithHash`と同じで、複製するのが名前を挙げたファイルだけである点が違う。
+ * 名前を挙げても、通常のファイルでないもの(シンボリックリンク、特殊ファイル)と、無いものは複製しない。
+ * 複製に入ったファイルは`copied`に挙げる。
+ */
 export async function copyFilesWithHash(
-  _source: string,
-  _destination: string,
-  _files: readonly string[],
-  _io: DirectoryEntryIo = realDirectoryIo,
+  source: string,
+  destination: string,
+  files: readonly string[],
+  io: DirectoryEntryIo = realDirectoryIo,
 ): Promise<CopiedFiles> {
-  return { hash: null, copied: [] };
+  const wanted = new Set(files);
+  const copied: string[] = [];
+  const hash = await hashDirectoryTree(source, io, {
+    file: async (relative, content) => {
+      if (!wanted.has(relative)) return;
+      await writeFile(join(destination, relative), content, { flag: "wx" });
+      copied.push(relative);
+    },
+  });
+  return { hash, copied };
 }

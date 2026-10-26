@@ -46,7 +46,10 @@ import {
 } from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import {
+  type CopiedFiles,
   checkDocTreeHash,
+  copyFilesWithHash,
+  type DocHashCheck,
   hashDirectoryTree,
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -187,6 +190,16 @@ export type DesignGenerateFs = {
   readonly makeTempDir: () => Promise<string>;
   /** `dir`の内容(名前の一覧と中身)のハッシュ。ディレクトリが無ければ`null`。 */
   readonly hashTree: (dir: string) => Promise<string | null>;
+  /**
+   * `source`の直下の`files`のうち通常のファイルだけを`destination`へ複製し、`source`全体のハッシュを返す。
+   * 各ファイルは1回だけ読み、読んだバイト列でハッシュを数えて同じバイト列を書くので、
+   * 返ったハッシュが基準値と一致すれば、複製の内容は承認された内容と一致する。
+   */
+  readonly copyFilesWithHash: (
+    source: string,
+    destination: string,
+    files: readonly string[],
+  ) => Promise<CopiedFiles>;
 };
 
 export type DesignGenerateDeps = {
@@ -389,9 +402,19 @@ async function collectDocIssues(
   ];
 }
 
+/** 図の複製の結果。 */
+type DiagramCopy = {
+  /** 複製に入った図。 */
+  readonly diagrams: Diagram[];
+  /** 複製が読んだバイト列を含む、元のディレクトリ全体のハッシュ。ディレクトリが無ければ`null`。 */
+  readonly hash: string | null;
+};
+
 /**
  * 承認済みの要件定義の図のうち、宣言されていて名前の規則に合うものだけを、`copyDir`に複製する。
- * 複製できたものの`Diagram`を返す。元のファイルが読めないものは、警告して飛ばす。
+ * 複製に入った図の`Diagram`と、複製が読んだバイト列を含むディレクトリ全体のハッシュを返す。
+ * 通常のファイルでない図(シンボリックリンクなど)と、元に無い図は、警告して飛ばす。
+ * ハッシュと複製は同じバイト列から作るので、ハッシュを基準値と比べれば、複製の内容を承認された内容と照合したことになる。
  * Claudeには元のディレクトリを見せず、この複製だけを渡す。書き込み境界が確認できていない間に、
  * 承認済みの要件定義を書き換えさせないためである。
  */
@@ -400,30 +423,29 @@ async function copyDeclaredDiagrams(
   requirementsDir: string,
   diagrams: readonly Diagram[],
   copyDir: string,
-): Promise<Diagram[]> {
-  const copied: Diagram[] = [];
-  for (const diagram of diagrams) {
-    if (!DIAGRAM_FILE_PATTERN.test(diagram.file)) {
-      deps.log("skipping a declared diagram with a malformed file name", {
-        name: diagram.name,
-        file: diagram.file,
-      });
-      continue;
-    }
-    try {
-      await deps.fs.copyFile(
-        `${requirementsDir}/${diagram.file}`,
-        `${copyDir}/${diagram.file}`,
-      );
-      copied.push(diagram);
-    } catch (err) {
-      deps.log("skipping a declared diagram that cannot be copied", {
-        name: diagram.name,
-        error: messageOf(err),
-      });
-    }
-  }
-  return copied;
+): Promise<DiagramCopy> {
+  const wellFormed = diagrams.filter((diagram) => {
+    if (DIAGRAM_FILE_PATTERN.test(diagram.file)) return true;
+    deps.log("skipping a declared diagram with a malformed file name", {
+      name: diagram.name,
+      file: diagram.file,
+    });
+    return false;
+  });
+  const result = await deps.fs.copyFilesWithHash(
+    requirementsDir,
+    copyDir,
+    wellFormed.map((diagram) => diagram.file),
+  );
+  const copied = new Set(result.copied);
+  const kept = wellFormed.filter((diagram) => {
+    if (copied.has(diagram.file)) return true;
+    deps.log("skipping a declared diagram that cannot be copied", {
+      name: diagram.name,
+    });
+    return false;
+  });
+  return { diagrams: kept, hash: result.hash };
 }
 
 /**
@@ -599,16 +621,11 @@ export async function runDesignGenerate(
         { work_item_id: workItemId },
       );
     }
-    /** 基準値との照合が合わなければ、作業項目を`needs_human`にして止めた結果を返す。合えば`null`。 */
-    const stopIfNotBaseline = async (
+    /** 照合の結果が合わなければ、作業項目を`needs_human`にして止めた結果を返す。合えば`null`。 */
+    const stopForVerdict = async (
+      verdict: DocHashCheck,
       modifiedReason: string,
     ): Promise<DesignGenerateResult | null> => {
-      if (requirementsDir === null || baseline === null) return null;
-      const verdict = await checkDocTreeHash(
-        requirementsDir,
-        baseline,
-        deps.fs.hashTree,
-      );
       if (verdict === "match" || verdict === "no_baseline") return null;
       const reason =
         verdict === "missing"
@@ -619,6 +636,16 @@ export async function runDesignGenerate(
         verdict,
       });
       return stopForHuman(reason, { outcome: "needs_human", reason });
+    };
+    /** 元のディレクトリのハッシュを基準値と比べ、合わなければ止めた結果を返す。合えば`null`。 */
+    const stopIfNotBaseline = async (
+      modifiedReason: string,
+    ): Promise<DesignGenerateResult | null> => {
+      if (requirementsDir === null || baseline === null) return null;
+      return stopForVerdict(
+        await checkDocTreeHash(requirementsDir, baseline, deps.fs.hashTree),
+        modifiedReason,
+      );
     };
     const modifiedBeforeRun = await stopIfNotBaseline(
       REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -652,14 +679,36 @@ export async function runDesignGenerate(
     );
 
     let copiedDiagrams: Diagram[] = [];
+    // 複製が読んだバイト列のハッシュ。複製しなかったときは`undefined`。
+    let copiedHash: string | null | undefined;
     if (requirementsDir !== null && approved.diagrams.length > 0) {
       copyDir = await deps.fs.makeTempDir();
-      copiedDiagrams = await copyDeclaredDiagrams(
-        deps,
-        requirementsDir,
-        approved.diagrams,
-        copyDir,
-      );
+      const targetDir = requirementsDir;
+      const targetCopyDir = copyDir;
+      const copyOnce = (): Promise<DiagramCopy> =>
+        copyDeclaredDiagrams(deps, targetDir, approved.diagrams, targetCopyDir);
+      const made: { copy: DiagramCopy | null } = { copy: null };
+      if (baseline === null) {
+        made.copy = await copyOnce();
+      } else {
+        // 複製が読んだバイト列のハッシュを基準値と比べる。照合した内容と複製に入った内容が同じになる。
+        const verdict = await checkDocTreeHash(
+          targetDir,
+          baseline,
+          async () => {
+            const copy = await copyOnce();
+            made.copy = copy;
+            return copy.hash;
+          },
+        );
+        const modifiedByCopy = await stopForVerdict(
+          verdict,
+          REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+        );
+        if (modifiedByCopy !== null) return modifiedByCopy;
+      }
+      copiedDiagrams = made.copy?.diagrams ?? [];
+      copiedHash = made.copy?.hash;
       if (copiedDiagrams.length === 0) {
         await deps.fs.removePath(copyDir);
         copyDir = null;
@@ -670,11 +719,13 @@ export async function runDesignGenerate(
       REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
     );
     if (modifiedDuringCopy !== null) return modifiedDuringCopy;
-    // 基準値が無いときは、複製の後の内容を実行の後と比べる。
+    // 基準値が無いときは、複製が読んだバイト列(複製しなかったときは複製の後の内容)を実行の後と比べる。
     const before =
       requirementsDir === null || baseline !== null
         ? null
-        : await deps.fs.hashTree(requirementsDir);
+        : copiedHash !== undefined
+          ? copiedHash
+          : await deps.fs.hashTree(requirementsDir);
 
     const previous = await deps.latestDesignDraft(workItemId);
     const prompt = designPrompt({
@@ -1067,6 +1118,8 @@ export async function main(
         makeTempDir: () =>
           mkdtemp(join(jobTmpBase(), "factory-design-diagrams-")),
         hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
+        copyFilesWithHash: (from, to, names) =>
+          copyFilesWithHash(from, to, names),
       },
       runClaude: buildDesignRunClaude({
         run: runCommand,
