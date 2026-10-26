@@ -29,6 +29,7 @@ import {
   type DesignGenerateDeps,
   type DesignGenerateFs,
   runDesignGenerate,
+  sanitizeModelText,
 } from "../../f/factory/steps/design_generate.ts";
 
 const LEASE = "0191f1a2-0000-7000-8000-000000000001";
@@ -1834,6 +1835,120 @@ describe("runDesignGenerate and the output of Claude", () => {
       claude: async () => ({
         outcome: "success",
         output: gapOutput("a\u0000gap"),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes).toEqual(["design gap: agap"]);
+  });
+});
+
+describe("sanitizeModelText", () => {
+  /** 秘密情報の途中に、見えない文字を挟んだ文字列。 */
+  function splitToken(invisible: string): string {
+    const middle = Math.floor(GITHUB_TOKEN.length / 2);
+    return `${GITHUB_TOKEN.slice(0, middle)}${invisible}${GITHUB_TOKEN.slice(middle)}`;
+  }
+
+  test("masks a token with a zero width space in the middle", () => {
+    expect(sanitizeModelText(splitToken("​"), 1000)).not.toContain("ghp_");
+  });
+
+  test("masks a token with a zero width joiner in the middle", () => {
+    expect(sanitizeModelText(splitToken("‍"), 1000)).not.toContain("ghp_");
+  });
+
+  test("masks a token with a word joiner in the middle", () => {
+    expect(sanitizeModelText(splitToken("⁠"), 1000)).not.toContain("ghp_");
+  });
+
+  test("masks a token with a C1 control character in the middle", () => {
+    expect(sanitizeModelText(splitToken("\u0085"), 1000)).not.toContain("ghp_");
+  });
+
+  test("masks a token with a byte order mark in the middle", () => {
+    expect(sanitizeModelText(splitToken("﻿"), 1000)).not.toContain("ghp_");
+  });
+
+  test("removes a right to left override", () => {
+    expect(sanitizeModelText("a‮b", 1000)).toBe("ab");
+  });
+
+  test("removes the other bidirectional controls", () => {
+    expect(sanitizeModelText("a‎‏‪‫‬‭⁦⁩b", 1000)).toBe("ab");
+  });
+
+  test("removes a C1 control character at both ends of its range", () => {
+    expect(sanitizeModelText("a\u0080\u009Fb", 1000)).toBe("ab");
+  });
+
+  test("removes a soft hyphen", () => {
+    expect(sanitizeModelText("a­b", 1000)).toBe("ab");
+  });
+
+  test("removes a delete character", () => {
+    expect(sanitizeModelText("a\u007Fb", 1000)).toBe("ab");
+  });
+
+  test("keeps Japanese text, a newline and a tab", () => {
+    expect(sanitizeModelText("設計\n方針\t要約", 1000)).toBe(
+      "設計\n方針\t要約",
+    );
+  });
+
+  test("keeps the no-break space, which is a space and not a format character", () => {
+    expect(sanitizeModelText("a b", 1000)).toBe("a b");
+  });
+});
+
+describe("runDesignGenerate and the invisible characters in the output of Claude", () => {
+  const SPLIT_TOKEN = `${GITHUB_TOKEN.slice(0, 20)}​${GITHUB_TOKEN.slice(20)}`;
+
+  test("masks a split token in the summary", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, summary: SPLIT_TOKEN },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.summary).not.toContain("ghp_");
+  });
+
+  test("masks a split token in an open question", async () => {
+    const h = harness({
+      claude: async (request, ctx) => {
+        ctx.memory.files.set(`${request.cwd}/design.md`, VALID_DOC);
+        ctx.memory.files.set(`${request.cwd}/data-flow.drawio`, DRAWIO);
+        return {
+          outcome: "success",
+          output: { ...DESIGNED, open_questions: [SPLIT_TOKEN] },
+        };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.saved[0]?.open_questions.join("")).not.toContain("ghp_");
+  });
+
+  test("masks a split token in the report of a gap that goes to the next requirements", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput(SPLIT_TOKEN),
+      }),
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(h.returnNotes.join("")).not.toContain("ghp_");
+  });
+
+  test("removes a right to left override from the report of a gap", async () => {
+    const h = harness({
+      claude: async () => ({
+        outcome: "success",
+        output: gapOutput("a‮gap"),
       }),
     });
     await runDesignGenerate(h.deps, INPUT);
