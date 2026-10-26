@@ -67,6 +67,7 @@ import {
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
+  isMissingDocHashColumnError,
   latestConflictFixSettledAt,
   latestDesignDraft,
   latestDraft,
@@ -1607,24 +1608,48 @@ describe("saveDraft and the doc_hash baseline", () => {
     doc_hash: HASH,
   };
 
-  /** 1回目の文は渡した失敗で落ち、2回目以降は成功する。文の本文と値を控える。 */
-  function failFirstThenOk(failure: Error | null): {
+  /**
+   * 1回目の文は渡した失敗で落ち、2回目以降は成功する。文の本文と値を控える。
+   * 通知の挿入は、挿入できた行を返す。`failNotice`が真なら通知の挿入だけが落ちる。
+   */
+  function failFirstThenOk(
+    failure: Error | null,
+    failNotice = false,
+  ): {
     sql: SqlClient;
     calls: FakeCall[];
   } {
     const calls: FakeCall[] = [];
     const sql: SqlClient = (strings, ...values) => {
-      calls.push({ text: strings.join(" ? "), values });
+      const text = strings.join(" ? ");
+      calls.push({ text, values });
       const first = calls.length === 1;
+      const isNotice = text.includes("factory.notices");
       return {
-        fetch: () =>
-          first && failure !== null
+        fetch: () => {
+          if (isNotice) {
+            return failNotice
+              ? Promise.reject(new Error("notice insert failed"))
+              : Promise.resolve([{ id: 9, inserted: true }]);
+          }
+          return first && failure !== null
             ? Promise.reject(failure)
-            : Promise.resolve([{ id: 3 }]),
+            : Promise.resolve([{ id: 3 }]);
+        },
         execute: () => Promise.resolve(),
       };
     };
     return { sql, calls };
+  }
+
+  /** 列が無いときにPostgreSQLが返す例外。エラーコードと、列と表の名前を含む文を持つ。 */
+  function missingDocHashColumn(): Error {
+    return Object.assign(
+      new Error(
+        'column "doc_hash" of relation "requirement_drafts" does not exist',
+      ),
+      { code: "42703" },
+    );
   }
 
   test("writes the doc_hash column", async () => {
@@ -1646,9 +1671,7 @@ describe("saveDraft and the doc_hash baseline", () => {
   });
 
   test("saves again without doc_hash when the column is missing (code 42703)", async () => {
-    const { sql, calls } = failFirstThenOk(
-      Object.assign(new Error("undefined column"), { code: "42703" }),
-    );
+    const { sql, calls } = failFirstThenOk(missingDocHashColumn());
     await saveDraft(DRAFT, sql, SILENT_LOG);
     expect(calls[1]?.text).not.toContain("doc_hash");
   });
@@ -1660,21 +1683,17 @@ describe("saveDraft and the doc_hash baseline", () => {
       ),
     );
     await saveDraft(DRAFT, sql, SILENT_LOG);
-    expect(calls).toHaveLength(2);
+    expect(calls[1]?.text).not.toContain("doc_hash");
   });
 
   test("keeps the other columns in the statement it saves again", async () => {
-    const { sql, calls } = failFirstThenOk(
-      Object.assign(new Error("undefined column"), { code: "42703" }),
-    );
+    const { sql, calls } = failFirstThenOk(missingDocHashColumn());
     await saveDraft(DRAFT, sql, SILENT_LOG);
     expect(calls[1]?.values).toContain(DRAFT.doc_dir);
   });
 
   test("returns the id of the draft it saved again", async () => {
-    const { sql } = failFirstThenOk(
-      Object.assign(new Error("undefined column"), { code: "42703" }),
-    );
+    const { sql } = failFirstThenOk(missingDocHashColumn());
     expect(await saveDraft(DRAFT, sql, SILENT_LOG)).toBe(3);
   });
 
@@ -1685,9 +1704,7 @@ describe("saveDraft and the doc_hash baseline", () => {
       warn: (message) => warnings.push(message),
       error() {},
     };
-    const { sql } = failFirstThenOk(
-      Object.assign(new Error("undefined column"), { code: "42703" }),
-    );
+    const { sql } = failFirstThenOk(missingDocHashColumn());
     await saveDraft(DRAFT, sql, log);
     expect(warnings).toHaveLength(1);
   });
@@ -1701,6 +1718,139 @@ describe("saveDraft and the doc_hash baseline", () => {
     const { sql, calls } = failFirstThenOk(null);
     await saveDraft(DRAFT, sql, SILENT_LOG);
     expect(calls).toHaveLength(1);
+  });
+
+  test("rethrows an undefined column that is not doc_hash", async () => {
+    const { sql } = failFirstThenOk(
+      Object.assign(
+        new Error(
+          'column "summary" of relation "requirement_drafts" does not exist',
+        ),
+        { code: "42703" },
+      ),
+    );
+    await expect(saveDraft(DRAFT, sql, SILENT_LOG)).rejects.toThrow("summary");
+  });
+
+  test("saves again for the undefined column code when the failure carries no statement", async () => {
+    const { sql, calls } = failFirstThenOk(
+      Object.assign(new Error(""), { code: "42703" }),
+    );
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls[1]?.text).not.toContain("doc_hash");
+  });
+
+  test("leaves a notice that stays until it is resolved when it saves again", async () => {
+    const { sql, calls } = failFirstThenOk(missingDocHashColumn());
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect([
+      calls[2]?.text.includes("factory.notices"),
+      calls[2]?.text.includes("resolved = false"),
+      calls[2]?.values[0],
+    ]).toEqual([true, true, "doc_hash_column_missing"]);
+  });
+
+  test("saves the draft first and leaves the notice after it", async () => {
+    const { sql, calls } = failFirstThenOk(missingDocHashColumn());
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls[1]?.text).toContain("INSERT INTO factory.requirement_drafts");
+  });
+
+  test("words the notice without the draft so that every draft shares one notice", async () => {
+    const first = failFirstThenOk(missingDocHashColumn());
+    const second = failFirstThenOk(missingDocHashColumn());
+    await saveDraft(DRAFT, first.sql, SILENT_LOG);
+    await saveDraft({ ...DRAFT, work_item_id: 2 }, second.sql, SILENT_LOG);
+    expect([
+      typeof first.calls[2]?.values[1],
+      first.calls[2]?.values[1] === second.calls[2]?.values[1],
+    ]).toEqual(["string", true]);
+  });
+
+  test("names the column and the missing protection in the notice", async () => {
+    const { sql, calls } = failFirstThenOk(missingDocHashColumn());
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(String(calls[2]?.values[1])).toContain("doc_hash");
+  });
+
+  test("does not leave a notice when the insert succeeds", async () => {
+    const { sql, calls } = failFirstThenOk(null);
+    await saveDraft(DRAFT, sql, SILENT_LOG);
+    expect(calls.some((call) => call.text.includes("factory.notices"))).toBe(
+      false,
+    );
+  });
+
+  test("still returns the id when the notice cannot be recorded", async () => {
+    const { sql } = failFirstThenOk(missingDocHashColumn(), true);
+    expect(await saveDraft(DRAFT, sql, SILENT_LOG)).toBe(3);
+  });
+
+  test("logs when the notice cannot be recorded", async () => {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn: (message) => warnings.push(message),
+      error() {},
+    };
+    const { sql } = failFirstThenOk(missingDocHashColumn(), true);
+    await saveDraft(DRAFT, sql, log);
+    expect(warnings).toContain(
+      "doc_hash_column_missing notice could not be recorded",
+    );
+  });
+});
+
+describe("isMissingDocHashColumnError", () => {
+  test("accepts the undefined column code with a statement that names doc_hash", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error('column "doc_hash" does not exist'), {
+          code: "42703",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the undefined column code without a statement", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error(""), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects the undefined column code with a statement that names another column", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error('column "doc_dir" does not exist'), {
+          code: "42703",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("reads the statement from the body when the message is empty", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error(""), {
+          code: "42703",
+          body: 'column "doc_dir" does not exist',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects another error code that names doc_hash", () => {
+    expect(
+      isMissingDocHashColumnError(
+        Object.assign(new Error("doc_hash is not unique"), { code: "23505" }),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects a value that is not an error", () => {
+    expect(isMissingDocHashColumnError("42703")).toBe(false);
   });
 });
 
