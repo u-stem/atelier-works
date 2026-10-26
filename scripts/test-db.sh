@@ -856,6 +856,12 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-holds.ts" \
   || die "the holds checks failed against the real PostgreSQL"
 
+# 操作の記録の表の制約と、`lib/console_actions.ts`が組み立てるSQL文を、本物のPostgreSQLで確かめる。
+log "running the console actions checks against '${SCRATCH_DB}'"
+COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
+  bun run "${REPO_ROOT}/scripts/test-db-console-actions.ts" \
+  || die "the console actions checks failed against the real PostgreSQL"
+
 verify_design_stage_rollback
 
 shopt -s nullglob
