@@ -777,12 +777,12 @@ export function lockedDesignRun(
   owner: { readonly workItemId: number; readonly jobId: string },
   prepareLockFile?: (path: string) => Promise<void>,
 ): CommandRunner {
-  // 持ち主の種別は、実装フローと同じ`implement`を使う。ロックファイルはworktreeごとに別なので、
-  // 実装のworktreeのロックとは混ざらない。設計の準備は何も止めず、保持者がいれば引き返すだけである。
+  // 持ち主の種別は`design`にする。`isStoppableBy`は設計の持ち主を止めないので、
+  // 設計の準備は何も止めず、保持者がいれば引き返すだけである。
   return withWorktreeProcessLock(
     run,
     worktreeLockFor(worktreeDir),
-    { kind: "implement", workItemId: owner.workItemId, jobId: owner.jobId },
+    { kind: "design", workItemId: owner.workItemId, jobId: owner.jobId },
     prepareLockFile,
   );
 }

@@ -77,7 +77,21 @@ export function buildDesignDocDir(
   return `${workItemDir}/design/req-${String(attempt)}/attempt-${String(designAttempt)}`;
 }
 
-export const DESIGN_DOC_DIR_IN_USE_REASON = "";
+/**
+ * 試行ディレクトリに、保存済みの設計書の下書きが指すものと同じパスの下書きがあるときの`needs_human`の理由。
+ * 設計書の生成はディレクトリを空にして書くので、保存済みの下書きの図を消さないために止める。
+ */
+export const DESIGN_DOC_DIR_IN_USE_REASON =
+  "design document directory already holds a saved draft";
+
+/** 設計の構造化出力の`summary`の長さの上限(コードポイント)。 */
+export const DESIGN_SUMMARY_MAX_CHARS = 1000;
+
+/** 設計の構造化出力の`open_questions`の件数の上限。 */
+export const DESIGN_OPEN_QUESTIONS_MAX_COUNT = 30;
+
+/** 設計の構造化出力の`open_questions`の1要素の長さの上限(コードポイント)。 */
+export const DESIGN_OPEN_QUESTION_MAX_CHARS = 1000;
 
 /**
  * 設計書が読む対象リポジトリの、読み取り専用のdetachedなworktreeのパスを返す。

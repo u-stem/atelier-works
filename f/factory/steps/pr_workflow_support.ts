@@ -32,6 +32,14 @@ import {
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
+import { DESIGN_START_FAILED_REASON } from "../lib/design_launch_support.ts";
+import { DESIGN_DOC_DIR_IN_USE_REASON } from "../lib/design_template.ts";
+import {
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  REQUIREMENTS_MODIFIED_REASON,
+} from "../lib/doc_tree_hash.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   endsWithMarkerLine,
@@ -3966,6 +3974,8 @@ const LOCK_HELD_PR_FIX_PROCEDURE =
 function worktreeLockHeldInRunNextAction(
   flow: NextActionFlow | undefined,
 ): string {
+  if (flow === "design")
+    return `設計のClaudeが残したプロセスがないか確かめ、残っていればworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}(設計の準備は何も止めません)`;
   if (flow === "implement")
     return `検査コマンドが常駐プロセスを残していないか確かめてから、${RETRY_WORK_ITEM_ACTION}(残ったプロセスは再実行の準備ステップが止めます)`;
   if (flow === "pr_fix")
@@ -4236,6 +4246,70 @@ function ciRoundStopAction(match: RegExpMatchArray): string {
     ? CI_ROUND_NEXT_ACTION
     : prCiFixHoldInfo(hold).stopAction;
 }
+
+/**
+ * 承認済みの要件定義のディレクトリが、承認時の内容と違う、または無いときの次の操作。
+ * 基準値が残るので、同じ作業項目を再実行しても同じ検出で止まる。新しいサイクルで要件定義を作り直す。
+ */
+const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
+  "承認済みの要件定義のディレクトリを確かめ、`factory`ラベルを付け直して要件定義を作り直してください(この作業項目を再実行しても同じ理由で止まります)";
+
+/** 設計工程が`needs_human`にする理由の規則。設計の理由はどれも`design`か、承認済みの要件定義の確認で始まる。 */
+const DESIGN_REASON_RULES: readonly ReasonRule[] = [
+  {
+    pattern: reasonPattern(DESIGN_START_FAILED_REASON, "(?:: ([\\s\\S]+))?$"),
+    describe: (m) =>
+      m[1] === undefined
+        ? "設計フローを起動できませんでした"
+        : `設計フローを起動できませんでした(${m[1]})`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^design requires approved requirements for attempt (\d+)$/,
+    describe: (m) =>
+      `要件定義の試行${m[1]}回目に承認済みの要件定義が無いため、設計を始められませんでした`,
+    nextAction: () =>
+      "Consoleで要件定義の承認の状態を確かめ、承認が無ければ`factory`ラベルを付け直して要件定義を作り直してください",
+  },
+  {
+    pattern: /^design requirements_gap after max_attempts (\d+)$/,
+    describe: (m) =>
+      `設計が要件の不足を報告しましたが、要件定義の試行回数が上限(${m[1]})に達しました`,
+    nextAction: () =>
+      "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
+  },
+  {
+    pattern: reasonPattern(REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON, "$"),
+    describe: () =>
+      "承認済みの要件定義のディレクトリが、設計を始める前に承認時の内容と異なっていました",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(REQUIREMENTS_MODIFIED_REASON, "$"),
+    describe: () =>
+      "承認済みの要件定義のディレクトリが、設計の実行中に書き換わりました",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON, "$"),
+    describe: () =>
+      "承認済みの要件定義のディレクトリが、実装の準備かClaudeの実行の前後で承認時の内容と異なっていました",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(REQUIREMENTS_DIR_MISSING_REASON, "$"),
+    describe: () =>
+      "承認済みの要件定義のディレクトリがありません(workerやボリュームを作り直した可能性があります)",
+    nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(DESIGN_DOC_DIR_IN_USE_REASON, "$"),
+    describe: () =>
+      "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
+    nextAction: () =>
+      `Consoleで保存済みの設計書の下書きを確かめてから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+];
 
 export const REASON_RULES: readonly ReasonRule[] = [
   // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
@@ -4707,6 +4781,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
   },
+  ...DESIGN_REASON_RULES,
   {
     pattern: /^implement flow could not be started: ([\s\S]+)$/,
     describe: (m) => `実装フローを起動できませんでした: ${m[1]}`,
