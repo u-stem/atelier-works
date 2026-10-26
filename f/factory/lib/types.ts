@@ -927,6 +927,12 @@ export type LatestDeployment = {
   readonly sha_to: string;
 };
 
+/** `factory.deployments`の成功の行のうち最も新しいものの、反映前と反映後の版。 */
+export type LatestSuccessDeployment = {
+  readonly sha_from: string | null;
+  readonly sha_to: string;
+};
+
 /** `db.addNoticeUnlessUnresolved`に渡す、`factory.notices`の1行。 */
 export type NoticeRecord = {
   kind: string;

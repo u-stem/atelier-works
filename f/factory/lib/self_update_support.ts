@@ -3,7 +3,7 @@
 // Discordへの通知は`self_update.ts`が行う。
 
 import { maskSecrets } from "./log.ts";
-import type { DeploymentRecord } from "./types.ts";
+import type { DeploymentRecord, LatestSuccessDeployment } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // decideUpdate: 再デプロイが必要かの判定
@@ -26,6 +26,77 @@ export function decideUpdate(
   return currentSha === deployedSha
     ? { outcome: "unchanged" }
     : { outcome: "update" };
+}
+
+// ---------------------------------------------------------------------------
+// 同じ範囲の反映の見送り
+// ---------------------------------------------------------------------------
+
+/**
+ * 反映前の版と反映後の版の組が、直近の成功の記録と同じかを返す。
+ * 反映前の版が無い(`shaFrom`が`null`)初回の反映は、同じとみなさない。
+ */
+export function isSameDeploymentRange(
+  latestSuccess: LatestSuccessDeployment | null,
+  shaFrom: string | null,
+  shaTo: string,
+): boolean {
+  if (latestSuccess === null || shaFrom === null) return false;
+  return latestSuccess.sha_from === shaFrom && latestSuccess.sha_to === shaTo;
+}
+
+export type DeployChoice = { readonly action: "deploy" | "skip" };
+
+/**
+ * 反映を始める前に、直近の成功の記録の範囲と今回の範囲を比べ、反映するか見送るかを決める。
+ * 初回の反映(`shaFrom`が`null`)は、記録を読まずに反映する。
+ * 記録を読めなかったとき(時間切れを含む)は、`onReadError`に理由を渡し、見送らずに反映する。
+ * 見送って反映が漏れるより、同じ範囲をもう一度反映するほうが害が小さいためである。
+ */
+export async function chooseDeployOrSkip(
+  deps: {
+    readonly readLatestSuccess: () => Promise<LatestSuccessDeployment | null>;
+    readonly onReadError: (err: unknown) => void;
+  },
+  range: { readonly shaFrom: string | null; readonly shaTo: string },
+): Promise<DeployChoice> {
+  if (range.shaFrom === null) return { action: "deploy" };
+  let latestSuccess: LatestSuccessDeployment | null;
+  try {
+    latestSuccess = await deps.readLatestSuccess();
+  } catch (err) {
+    deps.onReadError(err);
+    return { action: "deploy" };
+  }
+  return isSameDeploymentRange(latestSuccess, range.shaFrom, range.shaTo)
+    ? { action: "skip" }
+    : { action: "deploy" };
+}
+
+// ---------------------------------------------------------------------------
+// resolveTriggerKind: 自己更新の起動の種類
+// ---------------------------------------------------------------------------
+
+export type TriggerKind = "schedule" | "manual" | "unknown";
+
+export type TriggerEnv = {
+  readonly WM_JOB_ID?: string | undefined;
+  readonly WM_SCHEDULE_PATH?: string | undefined;
+};
+
+/**
+ * Windmillがジョブに与える環境変数から、起動の種類を決める。
+ * `WM_SCHEDULE_PATH`があればスケジュールからの起動(`schedule`)、無ければ手動実行(`manual`)とする。
+ * フローやAPIからの起動も`manual`に含まれる。
+ * `WM_JOB_ID`が無いときはジョブの外で、種類を判別できないので`unknown`にする。
+ */
+export function resolveTriggerKind(env: TriggerEnv): TriggerKind {
+  if (env.WM_JOB_ID === undefined || env.WM_JOB_ID.length === 0) {
+    return "unknown";
+  }
+  return env.WM_SCHEDULE_PATH === undefined || env.WM_SCHEDULE_PATH.length === 0
+    ? "manual"
+    : "schedule";
 }
 
 // ---------------------------------------------------------------------------

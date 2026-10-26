@@ -36,6 +36,7 @@ import {
 } from "./lib/console_worker.ts";
 import {
   addNoticeUnlessUnresolved,
+  getLatestSuccessDeployment,
   latestRequirementsApproval,
   listAutoRetryCandidates,
   listGhCollectFreshness,
@@ -102,6 +103,7 @@ import {
   assertBranchMatches,
   buildWmillArgv,
   buildWmillEnv,
+  chooseDeployOrSkip,
   classifyChangedPaths,
   decideUpdate,
   deploymentFailureMessage,
@@ -111,6 +113,7 @@ import {
   readDeployedSha,
   recordFailedDeployment,
   recordSuccessDeployment,
+  resolveTriggerKind,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
   setDeployedSha,
@@ -675,9 +678,10 @@ export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 8;
 /**
  * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
  * - config(`getResource`): 1
- * - 更新: github_token、deployed_sha、deployed_shaの読み取りが失敗したときの存在の確認、wmill_token、
+ * - 更新: github_token、deployed_sha、deployed_shaの読み取りが失敗したときの存在の確認、
+ *   直近の成功の記録の読み取り(同じ範囲の反映の見送りの判断)、wmill_token、
  *   `setVariable`、`setVariable`が時間切れのときの読み直し、
- *   `recordDeployment`の成功、`recordDeployment`の失敗: 8
+ *   `recordDeployment`の成功、`recordDeployment`の失敗: 9
  *   (成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので両方を数える)
  * - finally(Console用workerの確認): stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  * - finally(定期ジョブ用workerの確認): noticeの挿入、noticeの解決、通知先の取得: 3
@@ -693,7 +697,7 @@ export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 8;
  *   (最悪の長さでは、この箇所を除いて確認全体の上限を数える)
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT =
-  13 +
+  14 +
   4 +
   3 +
   HOST_ACTION_RECONCILE_LIMIT +
@@ -756,6 +760,12 @@ export type SelfUpdateResult =
   | { readonly outcome: "unchanged" }
   | { readonly outcome: "skipped"; readonly reason: "factory_repo_id" }
   | { readonly outcome: "held"; readonly reason: "deploy_freeze" }
+  | {
+      readonly outcome: "skipped";
+      readonly reason: "same_range";
+      readonly sha_from: string;
+      readonly sha_to: string;
+    }
   | {
       readonly outcome: "updated";
       readonly sha_from: string | null;
@@ -967,6 +977,12 @@ async function updateSelf(
   log: Logger,
   config: FactoryConfig,
 ): Promise<SelfUpdateResult> {
+  // 同じ範囲の反映が重なったとき、どの起動が重なったかを後から追えるよう、起動の種類を毎回残す。
+  log.info("self_update started", {
+    trigger: resolveTriggerKind(process.env),
+    job_id: process.env.WM_JOB_ID ?? "unknown",
+  });
+
   const ghToken = await withCallTimeout("getVariable github_token", () =>
     wmill.getVariable("f/factory/github_token"),
   );
@@ -1109,6 +1125,68 @@ async function updateSelf(
     return { outcome: "held", reason: "deploy_freeze" };
   }
 
+  const markDeployed = () =>
+    setDeployedSha(
+      {
+        set: () =>
+          wmill.setVariable(
+            "f/factory/deployed_sha",
+            currentSha,
+            false,
+            "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+          ),
+        get: () => wmill.getVariable("f/factory/deployed_sha"),
+      },
+      currentSha,
+    );
+
+  // 直近の成功と同じ範囲なら、反映、migration、成功の記録をしない。
+  // 反映は直近の成功で済んでいるので、`deployed_sha`だけを今回の版へ進める
+  // (進めないと、次の回以降も見送りが2分ごとに繰り返される)。
+  // 記録を読めなかった回は、見送らずに反映する。
+  if (!reconcileOnly) {
+    const choice = await chooseDeployOrSkip(
+      {
+        readLatestSuccess: () =>
+          withCallTimeout("getLatestSuccessDeployment", () =>
+            getLatestSuccessDeployment(),
+          ),
+        onReadError: (err) => {
+          log.warn(
+            "could not read the latest successful deployment, deploying",
+            {
+              error: maskSecrets(
+                err instanceof Error ? err.message : String(err),
+              ),
+            },
+          );
+        },
+      },
+      {
+        shaFrom: deployedSha.length > 0 ? deployedSha : null,
+        shaTo: currentSha,
+      },
+    );
+    if (choice.action === "skip") {
+      await markDeployed();
+      log.info(
+        "the same range was already deployed, skipping the deployment",
+        {
+          sha_from: deployedSha,
+          sha_to: currentSha,
+          trigger: resolveTriggerKind(process.env),
+        },
+      );
+      await resolveHostActionNotices();
+      return {
+        outcome: "skipped",
+        reason: "same_range",
+        sha_from: deployedSha,
+        sha_to: currentSha,
+      };
+    }
+  }
+
   log.info(
     reconcileOnly
       ? "schedule freezes ended, pushing again"
@@ -1181,20 +1259,7 @@ async function updateSelf(
     );
 
     const { changedPaths, classification } = await advanceDeployedSha({
-      setSha: () =>
-        setDeployedSha(
-          {
-            set: () =>
-              wmill.setVariable(
-                "f/factory/deployed_sha",
-                currentSha,
-                false,
-                "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
-              ),
-            get: () => wmill.getVariable("f/factory/deployed_sha"),
-          },
-          currentSha,
-        ),
+      setSha: markDeployed,
       onUpdated: () => {
         deployedShaUpdated = true;
       },

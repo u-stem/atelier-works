@@ -4631,7 +4631,7 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(3100秒)がある。
+`self_update`のジョブには、全体の上限(3130秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
 通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
@@ -4674,9 +4674,9 @@ Windmillのジョブ履歴が元なので、検出器は成功を偽れない。
 手順は次のとおりである。
 
 1. `self_update`の上限が反映されていることを確かめる。
-   `wmill script get f/factory/self_update`の出力で、`timeout`が3100であることを見る。
-   3100秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
-   `job_default_timeout`は21600秒以上にする決まりなので、3100秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が3130であることを見る。
+   3130秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、3130秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `f/factory/_probe_timeout`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
