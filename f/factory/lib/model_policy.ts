@@ -9,6 +9,7 @@ import type { FactoryConfig } from "./types.ts";
 /** モデルの選択に関わる工程。`agent_runs.stage`とは別の、割り当て上の区分である。 */
 export type ModelStage =
   | "requirements"
+  | "design"
   | "pr_review"
   | "audit"
   | "implement"

@@ -8,12 +8,15 @@ import {
 const CONFIG = { model: "light-model", heavy_model: "heavy-model" };
 
 describe("modelFor", () => {
-  test.each(["requirements", "pr_review", "audit", "dependabot"] as const)(
-    "uses heavy_model for %s with no failures",
-    (stage) => {
-      expect(modelFor(CONFIG, stage, 0)).toBe("heavy-model");
-    },
-  );
+  test.each([
+    "requirements",
+    "design",
+    "pr_review",
+    "audit",
+    "dependabot",
+  ] as const)("uses heavy_model for %s with no failures", (stage) => {
+    expect(modelFor(CONFIG, stage, 0)).toBe("heavy-model");
+  });
 
   test("uses model for implement with no failures", () => {
     expect(modelFor(CONFIG, "implement", 0)).toBe("light-model");

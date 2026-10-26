@@ -158,6 +158,54 @@ export const REQUIREMENTS_SCHEMA = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// designPrompt
+// ---------------------------------------------------------------------------
+
+export const AUTOMATED_FEEDBACK_MARKER = "";
+
+export function automatedFeedback(report: string): string {
+  return report;
+}
+
+export type DesignPromptInput = {
+  issue: Pick<PromptIssue, "owner" | "repo" | "number" | "url">;
+  requirements: Pick<RequirementDraft, "markdown" | "diagrams">;
+  requirementsDiagramDir: string | null;
+  attempt: number;
+  designAttempt: number;
+  targetRepoDir: string;
+  feedback: string | null;
+  previousDraft: string | null;
+};
+
+export function designPrompt(
+  _input: DesignPromptInput,
+  _deps: PromptDeps = {},
+): string {
+  return "";
+}
+
+const NO_VALUES: string[] = [];
+
+export const DESIGN_SCHEMA = {
+  type: "object",
+  properties: { outcome: { type: "string", enum: NO_VALUES } },
+  required: NO_VALUES,
+  additionalProperties: true,
+};
+
+export type DesignOutput = {
+  readonly outcome: "designed" | "requirements_gap";
+  readonly summary: string;
+  readonly open_questions: string[];
+  readonly gap_report: string | null;
+};
+
+export function isDesignOutput(_value: unknown): _value is DesignOutput {
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // reviewPrompt
 // ---------------------------------------------------------------------------
 
