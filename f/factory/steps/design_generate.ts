@@ -36,12 +36,19 @@ import {
 import { validateDesignDoc } from "../lib/design_doc.ts";
 import {
   buildDesignDocDir,
+  DESIGN_DOC_DIR_IN_USE_REASON,
   DESIGN_MD_FILENAME,
+  DESIGN_OPEN_QUESTION_MAX_CHARS,
+  DESIGN_OPEN_QUESTIONS_MAX_COUNT,
+  DESIGN_SUMMARY_MAX_CHARS,
   DESIGN_TEMPLATE_RELATIVE_PATH,
 } from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import {
+  checkDocTreeHash,
   hashDirectoryTree,
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
   REQUIREMENTS_MODIFIED_REASON,
   realDirectoryIo,
 } from "../lib/doc_tree_hash.ts";
@@ -253,12 +260,41 @@ function resolveFeedback(feedback: string | null | undefined): string | null {
     : null;
 }
 
-/** 長い報告を、コードポイントの途中で切らずに`DESIGN_GAP_REPORT_MAX_CHARS`に収める。 */
+/** 保存してよい制御文字。改行とタブは本文に使う。 */
+function isAllowedCharacter(char: string): boolean {
+  const code = char.codePointAt(0);
+  if (code === undefined) return false;
+  if (code === 0x09 || code === 0x0a || code === 0x0d) return true;
+  return code >= 0x20 && code !== 0x7f;
+}
+
+/**
+ * Claudeの出力の文字列を、保存してよい形にする。信頼できない入力を読んだClaudeの出力で、DBと次の工程に渡るため。
+ * 制御文字(NULを含む。PostgreSQLのtextとjsonbが拒む)を除き、秘密情報をマスクしてから、コードポイントの途中で切らずに`maxChars`に収める。
+ * 制御文字を先に除くのは、秘密情報の途中に挟まれた制御文字でマスクをすり抜けさせないためで、
+ * マスクを先に行うのは、切った末尾に秘密情報の一部が残らないようにするためである。
+ */
+export function sanitizeModelText(text: string, maxChars: number): string {
+  const cleaned = Array.from(text).filter(isAllowedCharacter).join("");
+  const points = Array.from(maskSecrets(cleaned));
+  return points.length <= maxChars
+    ? points.join("")
+    : points.slice(0, maxChars).join("");
+}
+
+/** 要件の不足の報告を保存してよい形にする。 */
 function limitGapReport(report: string): string {
-  const points = Array.from(report);
-  return points.length <= DESIGN_GAP_REPORT_MAX_CHARS
-    ? report
-    : points.slice(0, DESIGN_GAP_REPORT_MAX_CHARS).join("");
+  return sanitizeModelText(report, DESIGN_GAP_REPORT_MAX_CHARS);
+}
+
+/** 設計の構造化出力の`open_questions`を、件数と各要素の長さを絞った、空でない要素だけにする。 */
+function sanitizeOpenQuestions(questions: readonly string[]): string[] {
+  return questions
+    .slice(0, DESIGN_OPEN_QUESTIONS_MAX_COUNT)
+    .map((question) =>
+      sanitizeModelText(question, DESIGN_OPEN_QUESTION_MAX_CHARS),
+    )
+    .filter((question) => question.trim().length > 0);
 }
 
 /**
@@ -398,8 +434,12 @@ async function copyDeclaredDiagrams(
  *
  * 承認済みの要件定義の本文はDBから読んでプロンプトの区切りの中に渡し、図は宣言されていて名前の規則に合うものだけを
  * 一時ディレクトリへ複製して、その複製だけをClaudeの`addDirs`に入れる。元のディレクトリは`addDirs`にも`cwd`にも入れない。
- * 実行の前後で元のディレクトリの内容のハッシュを比べ、一致しなければ保存せず`needs_human`にする。
+ * 承認時に保存した基準値(`doc_hash`)があれば、Claudeを起動する前の図の複製の前後と、実行の後に、
+ * 元のディレクトリの内容のハッシュを基準値と比べ、違えば保存せず`needs_human`にする(ディレクトリが無いときは別の理由)。
+ * 基準値が無い下書きは、複製の後と実行の後のハッシュを比べるだけにする。
  * 書き込み境界が確認できていない間の、防ぐのではなく検出して止める補いである。
+ * 保存する`summary`と`open_questions`は、制御文字を除き、秘密情報をマスクし、上限に切ってから保存する。
+ * 保存済みの設計書の下書きと同じ試行ディレクトリがあれば、空にせず`needs_human`にする。
  *
  * 試行ディレクトリ(`buildDesignDocDir`)を空にしてテンプレートを`design.md`として複製し、そこをClaudeの`cwd`にする。
  * 実行の後、`design.md`と`*.drawio`以外の項目を警告して消し、各図を`validateDrawioXml`で検査する。
@@ -544,6 +584,46 @@ export async function runDesignGenerate(
         ? null
         : resolveRequirementsDocDir(approved.doc_dir);
 
+    // 承認時に保存した基準値があれば、Claudeを起動する前に、図の複製の前後で現在のディレクトリと比べる。
+    // 基準値が無い下書き(保存前に作られたもの)は、実行の前後の比較だけを行う。
+    const baseline =
+      requirementsDir !== null &&
+      approved.doc_hash !== null &&
+      approved.doc_hash.length > 0
+        ? approved.doc_hash
+        : null;
+    if (requirementsDir !== null && baseline === null) {
+      deps.log(
+        "the approved requirements have no baseline hash; comparing only before and after the run",
+        { work_item_id: workItemId },
+      );
+    }
+    /** 基準値との照合が合わなければ、作業項目を`needs_human`にして止めた結果を返す。合えば`null`。 */
+    const stopIfNotBaseline = async (
+      modifiedReason: string,
+    ): Promise<DesignGenerateResult | null> => {
+      if (requirementsDir === null || baseline === null) return null;
+      const verdict = await checkDocTreeHash(
+        requirementsDir,
+        baseline,
+        deps.fs.hashTree,
+      );
+      if (verdict === "match" || verdict === "no_baseline") return null;
+      const reason =
+        verdict === "missing"
+          ? REQUIREMENTS_DIR_MISSING_REASON
+          : modifiedReason;
+      deps.log("approved requirements do not match the baseline", {
+        work_item_id: workItemId,
+        verdict,
+      });
+      return stopForHuman(reason, { outcome: "needs_human", reason });
+    };
+    const modifiedBeforeRun = await stopIfNotBaseline(
+      REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+    );
+    if (modifiedBeforeRun !== null) return modifiedBeforeRun;
+
     factory = await deps.openFactory();
     const docDir = buildDesignDocDir(
       REQUIREMENTS_BASE_DIR,
@@ -554,6 +634,16 @@ export async function runDesignGenerate(
       item.attempt,
       input.design_attempt,
     );
+    // 保存済みの下書きの図が、このディレクトリに残っている。空にして書き直すと消えるので、触れずに止める。
+    if (await deps.hasDesignDraftForDocDir(docDir)) {
+      deps.log("a saved design draft already uses this directory", {
+        work_item_id: workItemId,
+      });
+      return await stopForHuman(DESIGN_DOC_DIR_IN_USE_REASON, {
+        outcome: "needs_human",
+        reason: DESIGN_DOC_DIR_IN_USE_REASON,
+      });
+    }
     await deps.fs.ensureEmptyDir(docDir);
     await deps.fs.copyFile(
       factory.templatePath,
@@ -575,8 +665,15 @@ export async function runDesignGenerate(
       }
     }
 
+    const modifiedDuringCopy = await stopIfNotBaseline(
+      REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+    );
+    if (modifiedDuringCopy !== null) return modifiedDuringCopy;
+    // 基準値が無いときは、複製の後の内容を実行の後と比べる。
     const before =
-      requirementsDir === null ? null : await deps.fs.hashTree(requirementsDir);
+      requirementsDir === null || baseline !== null
+        ? null
+        : await deps.fs.hashTree(requirementsDir);
 
     const previous = await deps.latestDesignDraft(workItemId);
     const prompt = designPrompt({
@@ -612,16 +709,24 @@ export async function runDesignGenerate(
     });
 
     // 失敗や要件の不足の報告でも、先に書き換えを確かめる。書き換えられた要件定義を元にした結果は採らない。
-    const after =
-      requirementsDir === null ? null : await deps.fs.hashTree(requirementsDir);
-    if (before !== after) {
-      deps.log("approved requirements changed during design", {
-        work_item_id: workItemId,
-      });
-      return await stopForHuman(REQUIREMENTS_MODIFIED_REASON, {
-        outcome: "needs_human",
-        reason: REQUIREMENTS_MODIFIED_REASON,
-      });
+    const modifiedDuringRun = await stopIfNotBaseline(
+      REQUIREMENTS_MODIFIED_REASON,
+    );
+    if (modifiedDuringRun !== null) return modifiedDuringRun;
+    if (baseline === null) {
+      const after =
+        requirementsDir === null
+          ? null
+          : await deps.fs.hashTree(requirementsDir);
+      if (before !== after) {
+        deps.log("approved requirements changed during design", {
+          work_item_id: workItemId,
+        });
+        return await stopForHuman(REQUIREMENTS_MODIFIED_REASON, {
+          outcome: "needs_human",
+          reason: REQUIREMENTS_MODIFIED_REASON,
+        });
+      }
     }
 
     if (result.outcome === "failure") {
@@ -629,7 +734,7 @@ export async function runDesignGenerate(
     }
 
     if (result.output.outcome === "requirements_gap") {
-      const gap = limitGapReport(maskSecrets(result.output.gap_report ?? ""));
+      const gap = limitGapReport(result.output.gap_report ?? "");
       if (item.attempt >= deps.config.max_attempts) {
         const reason = `design requirements_gap after max_attempts ${String(deps.config.max_attempts)}`;
         return await stopForHuman(reason, { outcome: "needs_human", reason });
@@ -674,13 +779,16 @@ export async function runDesignGenerate(
       work_item_id: workItemId,
       requirement_draft_id: approved.id,
       design_attempt: input.design_attempt,
-      summary: result.output.summary,
+      summary: sanitizeModelText(
+        result.output.summary,
+        DESIGN_SUMMARY_MAX_CHARS,
+      ),
       markdown,
       diagrams: classified.diagramFiles.map((file) => ({
         name: file.slice(0, -".drawio".length),
         file,
       })),
-      open_questions: result.output.open_questions,
+      open_questions: sanitizeOpenQuestions(result.output.open_questions),
       doc_dir: docDir,
       head_sha: input.head_sha,
     });
@@ -812,10 +920,54 @@ export type DesignRunClaudeEnv = {
   readonly leaseJobId: string;
 };
 
+/**
+ * 設計書を書かせるClaudeの1回の実行を、本番の設定で組み立てる。
+ * 実行は`lockedDesignRun`で包み、設計の準備が次の試行で`design-<N>`を作り直す前に、使用中のプロセスを検出できるようにする。
+ * 出力の形は`DESIGN_SCHEMA`と`isDesignOutput`で縛り、依頼の`tools`と`allowedTools`と`addDirs`はそのまま渡す。
+ * 実行の記録(`agent_runs`)まで済ませてから、成功か失敗を返す。
+ */
 export function buildDesignRunClaude(
-  _env: DesignRunClaudeEnv,
+  env: DesignRunClaudeEnv,
 ): DesignGenerateDeps["runClaude"] {
-  return async () => ({ outcome: "failure", reason: "", detail: "" });
+  return async (request) => {
+    const oauthToken = await env.getOauthToken();
+    const result = await env.runClaude({
+      run: lockedDesignRun(
+        env.run,
+        env.worktreeDir,
+        { workItemId: env.workItemId, jobId: env.leaseJobId },
+        env.prepareLockFile,
+      ),
+      workItemId: env.workItemId,
+      stage: "generate_design",
+      attempt: env.designAttempt,
+      model: request.model,
+      prompt: request.prompt,
+      appendSystemPromptFile: request.systemPromptFile,
+      jsonSchema: DESIGN_SCHEMA,
+      isStructuredOutput: isDesignOutput,
+      tools: request.tools,
+      allowedTools: request.allowedTools,
+      permissionMode: "dontAsk",
+      settingSources: ["user"],
+      maxTurns: env.config.max_turns,
+      maxBudgetUsd: env.config.max_budget_usd_per_run,
+      cwd: request.cwd,
+      addDirs: request.addDirs,
+      oauthToken,
+      timeoutMs: env.config.claude_timeout_sec * 1000,
+      reviewOutput: request.reviewOutput,
+      reviewRetryNote: DESIGN_REVIEW_RETRY_NOTE,
+    });
+    await recordClaudeRuns(result, env.recordAgentRun);
+    return result.outcome === "success"
+      ? { outcome: "success", output: result.structuredOutput }
+      : {
+          outcome: "failure",
+          reason: result.reason,
+          detail: result.detail,
+        };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -916,45 +1068,17 @@ export async function main(
           mkdtemp(join(jobTmpBase(), "factory-design-diagrams-")),
         hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
       },
-      runClaude: async (request) => {
-        const oauthToken = await wmill.getVariable(
-          "f/factory/claude_oauth_token",
-        );
-        const result = await runClaude<DesignOutput>({
-          run: lockedDesignRun(runCommand, worktree_dir, {
-            workItemId: work_item_id,
-            jobId: leaseJobId,
-          }),
-          workItemId: work_item_id,
-          stage: "generate_design",
-          attempt: design_attempt,
-          model: request.model,
-          prompt: request.prompt,
-          appendSystemPromptFile: request.systemPromptFile,
-          jsonSchema: DESIGN_SCHEMA,
-          isStructuredOutput: isDesignOutput,
-          tools: request.tools,
-          allowedTools: request.allowedTools,
-          permissionMode: "dontAsk",
-          settingSources: ["user"],
-          maxTurns: config.max_turns,
-          maxBudgetUsd: config.max_budget_usd_per_run,
-          cwd: request.cwd,
-          addDirs: request.addDirs,
-          oauthToken,
-          timeoutMs: config.claude_timeout_sec * 1000,
-          reviewOutput: request.reviewOutput,
-          reviewRetryNote: DESIGN_REVIEW_RETRY_NOTE,
-        });
-        await recordClaudeRuns(result, recordAgentRun);
-        return result.outcome === "success"
-          ? { outcome: "success", output: result.structuredOutput }
-          : {
-              outcome: "failure",
-              reason: result.reason,
-              detail: result.detail,
-            };
-      },
+      runClaude: buildDesignRunClaude({
+        run: runCommand,
+        runClaude,
+        recordAgentRun,
+        getOauthToken: () => wmill.getVariable("f/factory/claude_oauth_token"),
+        config,
+        workItemId: work_item_id,
+        designAttempt: design_attempt,
+        worktreeDir: worktree_dir,
+        leaseJobId,
+      }),
       saveDesignDraft: (draft) =>
         saveDesignDraftIfLeaseHolder(draft, leaseJobId),
       launchPipeline: (pipelineInput) =>
