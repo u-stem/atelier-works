@@ -244,7 +244,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | --- | --- |
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
-| `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
+| `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)を記録するコードは入っているが、本番では作られない |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |

@@ -49,7 +49,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
-| `design_prepare`、`design_generate` | 承認済みの要件定義が無い、オーナーの照合に落ちた、日次の予算を超えた、設計のClaudeの実行中に要件定義のディレクトリが書き換わった、要件の不足の戻しが試行回数の上限に達した。設計フローの入口が閉じていて、本番では送らない |
+| `design_prepare`、`design_generate` | 承認済みの要件定義が無い、オーナーの照合に落ちた、日次の予算を超えた、承認済みの要件定義のディレクトリが基準値と違う(設計の前、または設計のClaudeの実行中の書き換え)か無い、同じ試行の設計書の下書きが保存済みである、要件の不足の戻しが試行回数の上限に達した。設計フローの入口が閉じていて、本番では送らない |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
 | `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した結果が分からなかった(理由は`claim ownership could not be determined`) |
 | `poll_prs` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままになった(理由は`claimed pr trigger label was left removed`) |

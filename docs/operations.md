@@ -2874,24 +2874,48 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 ### 設計工程のmigrationを戻す
 
 設計工程のmigrationを戻す手順である。
-`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に3回打つ。
-設計の下書きが先に戻り、承認の記録を失わないために、承認依頼側がその次に戻る。
+`wmill datatable migrate down`は1回に最新の1つだけを戻し、途中のmigrationを飛ばす指定は無い。
+新しい順に打つので、設計工程のmigrationに届くまでに、別の機能のmigrationも戻ることになる。
 
-1. 1回目の`migrate down`で、設計の下書きの表(`design_drafts`)と、要件定義の下書きの複合の一意制約が戻る(`20261026130000_design_drafts`)。
-2. 2回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
-3. 3回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
-   `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
+| 順 | migration | 戻る内容 |
+| --- | --- | --- |
+| 1 | `20261026150000_requirement_drafts_doc_hash` | 要件定義の下書きの基準値の列(`doc_hash`)が消える |
+| 2 | `20261026140000_console_actions` | Consoleの操作の記録の表(`console_actions`)が消える。設計工程のmigrationではない |
+| 3 | `20261026130000_design_drafts` | 設計の下書きの表(`design_drafts`)と、要件定義の下書きの複合の一意制約が戻る |
+| 4 | `20261026120100_design_stage_approval_kind` | 承認依頼の種類の制約から`design`が外れる |
+| 5 | `20261026120000_design_stage_work_items` | 作業項目の列(`design_attempt`)、状態の制約、一意インデックスが戻る |
 
-1回目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
+設計の下書きが先に戻り、承認の記録を失わないために、承認依頼の制約がその次に戻る。
+5番目では、`designing`と`awaiting_design_approval`の作業項目が人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
+
+#### 戻す前に反映するコード
+
+最初の`migrate down`を打つ前に、戻す列を読み書きしないコードを反映する。
+
+- `design_attempt`は、作業項目を読むコードが必須の列として読む。列を先に消すと、作業項目を読むすべての経路が例外になる。
+- `doc_hash`は、列が無ければ基準値の無い下書きとして保存し、読む。例外にはならないが、基準値が空になり、承認済みの要件定義の書き換えの照合が飛ぶ。
+  列を消した後に`migrate up`で当て直しても、既存の下書きの基準値は空のままである。
+- `console_actions`は、操作の記録を書くコードが残っていると、表が無いエラーで記録の挿入が失敗し、Consoleの書き込みの操作が拒否される。
+
+#### 操作の記録のmigrationを挟むこと
+
+`migrate down`に飛ばす指定が無いので、設計工程だけを戻すことはできない。
+3番目から先に進むには、2番目の`console_actions`も戻す。
+戻すと、操作の記録は失われる。
+操作の記録を残すなら、設計工程のmigrationは戻さない。
+
+#### 失敗したとき
+
+3番目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
 トランザクションごと戻るので、表と制約は残る。
 設計の下書きを、行があるまま失わないためである。
-行の扱いを決めて消してから、1回目をやり直す。
+行の扱いを決めて消してから、3番目をやり直す。
 
 設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。
-そのため、通常は1回目と2回目で止まらない。
-2回目が失敗したときは、種類が`design`の承認依頼が残っている。
+そのため、通常は3番目と4番目で止まらない。
+4番目が失敗したときは、種類が`design`の承認依頼が残っている。
 制約を足し直せないので、migrationはそこで止まる。
-`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、2回目をやり直す。
+`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、4番目をやり直す。
 
 ### 5分の境目の403を数える
 
