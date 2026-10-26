@@ -34,7 +34,6 @@ import {
   getLatestDeployment,
   getLatestPrCiCheck,
   getLatestScheduleFailure,
-  getLatestSuccessDeployment,
   getMainCiStateBySha,
   getNoticeById,
   getPrCiCheckById,
@@ -4957,38 +4956,6 @@ describe("getLatestDeployment", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getLatestDeployment(sql);
     expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC");
-  });
-});
-
-describe("getLatestSuccessDeployment", () => {
-  test("returns null when there is no successful deployment", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await getLatestSuccessDeployment(sql)).toBeNull();
-  });
-
-  test("returns the source and target shas of the newest row", async () => {
-    const { sql } = createFakeSqlClient([[{ sha_from: "aaa", sha_to: "bbb" }]]);
-    expect(await getLatestSuccessDeployment(sql)).toEqual({
-      sha_from: "aaa",
-      sha_to: "bbb",
-    });
-  });
-
-  test("returns a null source for a first deployment", async () => {
-    const { sql } = createFakeSqlClient([[{ sha_from: null, sha_to: "bbb" }]]);
-    expect((await getLatestSuccessDeployment(sql))?.sha_from).toBeNull();
-  });
-
-  test("reads only the successful rows", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getLatestSuccessDeployment(sql);
-    expect(calls[0]?.text).toContain("result = 'success'");
-  });
-
-  test("orders by newest first", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getLatestSuccessDeployment(sql);
-    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
   });
 });
 

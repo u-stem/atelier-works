@@ -94,8 +94,26 @@ export function resolveTriggerKind(
   return schedulePath.length === 0 ? "manual" : "schedule";
 }
 
+export type TriggerEnvSummary = {
+  readonly schedule_path: string | null;
+  readonly has_job_kind: boolean;
+  readonly has_parent_job: boolean;
+  readonly has_root_flow_job: boolean;
+};
+
+export function describeTriggerEnv(
+  _env: Readonly<Record<string, string | undefined>>,
+): TriggerEnvSummary {
+  return {
+    schedule_path: null,
+    has_job_kind: false,
+    has_parent_job: false,
+    has_root_flow_job: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// assertBranchMatches: ensureFactoryCloneの事後条件の多層防御としての検査
+// assertBranchMatches:ensureFactoryCloneの事後条件の多層防御としての検査
 // ---------------------------------------------------------------------------
 
 /**
