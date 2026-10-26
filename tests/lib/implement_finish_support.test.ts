@@ -147,6 +147,13 @@ describe("decideImplementFinishAction", () => {
     });
   });
 
+  test("waits for a person and keeps nothing when a check command could not run", () => {
+    expect(decideImplementFinishAction("check_unrunnable")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
+    });
+  });
+
   test("keeps nothing after the worktree's .git pointer changed", () => {
     expect(decideImplementFinishAction("git_pointer_modified")).toEqual({
       kind: "needs_human",

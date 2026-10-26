@@ -184,6 +184,23 @@ describe("infra/worker/Dockerfile check user", () => {
     );
   });
 
+  test("links bunx to bun in /usr/bin", () => {
+    const linked = startingWith("RUN").some((line) =>
+      /ln -sf? bun \/usr\/bin\/bunx(\s|$)/.test(line),
+    );
+    expect(linked).toBe(true);
+  });
+
+  test("verifies at build time that bunx runs", () => {
+    expect(verification()).toContain("bun --version && bunx --version");
+  });
+
+  test("verifies at build time that bunx resolves from the check uid of every slot", () => {
+    expect(verification()).toContain(
+      'setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- bunx --version',
+    );
+  });
+
   test("fails the build when a slot does not verify", () => {
     expect(verification()).toContain("|| exit 1");
   });

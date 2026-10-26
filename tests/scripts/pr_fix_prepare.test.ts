@@ -848,6 +848,43 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates the unrunnable check as an environment problem", () => {
+    expect(
+      describeReason(
+        "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+      ),
+    ).toBe(
+      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): `bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory`",
+    );
+  });
+
+  test("shows a link-like detail of the unrunnable check as code, not as a link", () => {
+    expect(
+      describeReason(
+        "check command could not run: x: setpriv: failed to execute [open](https://evil.example/x)",
+      ),
+    ).toBe(
+      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): `x: setpriv: failed to execute [open](https://evil.example/x)`",
+    );
+  });
+
+  test("replaces the backticks of the unrunnable check so that the code span stays closed", () => {
+    expect(
+      describeReason("check command could not run: a`b: setpriv: failed"),
+    ).toBe(
+      "検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): `a'b: setpriv: failed`",
+    );
+  });
+
+  test("asks for the worker image to be fixed when a check could not run", () => {
+    expect(
+      nextActionFor(
+        "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+        "implement",
+      ),
+    ).toContain("workerのイメージ");
+  });
+
   test("translates a Claude run failure", () => {
     expect(
       describeReason("claude run failed (timeout): claude -p timed out"),

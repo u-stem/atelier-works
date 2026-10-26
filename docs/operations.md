@@ -1176,7 +1176,18 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 
 - エントリが無いリポジトリでは、検査コマンドを実行しない。PRの修正で使う`allowed_check_commands`は、実装では使わない。
 - 検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`など)を消す。そのため先頭で依存関係をインストールする。
-- workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
+- workerのイメージにmiseは無い。worker内で直接動くコマンドにする。
+  例は次のとおり。
+  - `bun install --frozen-lockfile`
+  - `bun test`
+  - `bunx --no-install --bun tsc --noEmit`
+  - `bunx --no-install --bun biome check .`
+  workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
+  `bunx`などの実行ファイルが無いと検査コマンドを実行できず、修正のラウンドを回さずに人の対応待ちで止まる。
+- `bunx`は、先頭の`bun install --frozen-lockfile`でlockfileから入れた実行ファイルにだけ使う。
+  入っていないと、`bunx`は版を固定しないままレジストリから取得し、検査用のuidで実行するためである。
+  `--no-install`を付けると、入っていないときは取得せずに止まる。
+  この指定は、実機のbunの`bunx --help`にある。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
 - 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。main cloneの`.git`に書けないので、`git add`、`git commit`、`git stash`、lint-stagedのように`.git`へ書き込む検査コマンドは失敗する。検査コマンドには使わない。
 - 検査コマンドの`TMPDIR`は`HOME`の下を指す。共有の一時ディレクトリに置いたものは、並行して動く別の検査から読めることがある。
@@ -1426,6 +1437,7 @@ Discordの通知の「次の操作」に従う。主な場合は次のとおり�
 | commitしたツリーが、検査したツリーと違う | pushしない | 検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめてから再実行する |
 | 途中経過では秘密情報の検査の後に、最終のcommitでは検証の後に、worktreeが変わった(「秘密情報の検査の後にworktreeが変更されました」、「検証の後にworktreeが変更されました」) | pushしない | 同上 |
 | 検証のラウンドで、変更の判定と秘密情報の検査の間にworktreeが変わった | そのラウンドで止め、pushしない | 同上 |
+| 検査コマンドの実行ファイルを起動できなかった(理由が「検査コマンドを実行できませんでした」で、`setpriv: failed to execute`が載る) | pushしない | 載った実行ファイルをworkerのイメージに足すか、検査コマンドを直す。イメージを変えたときは[f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)に従う。自動の再開はイメージが古い理由だけなので、この理由では自動で再開しない。直した後に再実行する |
 
 完了時に新しい変更が無くても、ブランチに分岐点より先のコミット(途中経過のコミットなど)があれば、FactoryはそれでPRを作るか更新する。ブランチに分岐点より先のものが何も無いときだけ、変更を生まなかったとして止まる。
 
@@ -5196,6 +5208,7 @@ bun --no-env-file ./scripts/host-apply.ts plan --repo . --applied <適用済み�
 
 `f/`の変更が、新しいworkerのイメージを前提にすることがある。
 例えば、検査コマンドを枠のユーザー(`factory-check-N`)で動かす`f/`は、イメージの`acl`、`procps`、`prlimit`と枠のユーザーを前提にする。
+検査コマンドの設定が使う`bunx`(`/usr/bin/bunx`)も前提で、無いイメージは古いイメージとして止まる。
 ベースのイメージが誰でも書き込めるようにしている`/usr/src/app`と`/tmp/.cache`を、イメージが閉じていることも前提にする。
 マージすると、自己更新が2分以内に`f/`を反映するが、イメージは人が`mise run up`するまで古いままである。
 
@@ -5243,6 +5256,9 @@ CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md
 人の再実行は要らない。
 同じ作業項目の自動の再開は3回までで、上限に達したときは、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行する。
 版が載らない通知は自動では解決されず、自動の再開も起きないので、`mise run up`の後に人が解決し、止まった作業項目を`retry_work_item`で再実行する。
+自動の再開の対象は、イメージが古い理由で止まった作業項目だけである。
+検査コマンドの実行ファイルを起動できずに止まった作業項目(理由は`check command could not run:`で始まる)は、イメージが前提を満たしていても止まるので、自動では再開しない。
+実行ファイルを足すか検査コマンドを直した後に、人が`retry_work_item`で再実行する。
 
 `/usr/src/app`か`/tmp/.cache`の下に誰でも書けるものがあれば、ベースのイメージが置いたものでも`check_runtime_unsafe`に載る。
 この通知は`mise run up`の後も自動では解決されない。
