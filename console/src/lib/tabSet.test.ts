@@ -155,46 +155,79 @@ describe("tabSpecs", () => {
 
   test("marks the tab that needs attention even when it is selected", () => {
     expect(
-      tabSpecs(SET, "second", { attention: { second: "要確認" } }).map(
-        (tab) => tab.mark,
+      tabSpecs(SET, "second", {
+        attention: { second: { label: "注意", level: "caution" } },
+      }).map((tab) => tab.mark),
+    ).toEqual([undefined, "注意", undefined]);
+  });
+
+  test("keeps the level of the attention mark", () => {
+    expect(
+      tabSpecs(SET, "first", {
+        attention: { second: { label: "要対応", level: "action" } },
+      }).map((tab) => tab.markLevel),
+    ).toEqual([undefined, "action", undefined]);
+  });
+
+  test("gives a failed fetch the action level", () => {
+    expect(
+      tabSpecs(SET, "first", { failed: { second: true } }).map(
+        (tab) => tab.markLevel,
       ),
-    ).toEqual([undefined, "要確認", undefined]);
+    ).toEqual([undefined, "action", undefined]);
   });
 
   test("shows both marks when a tab needs attention and its fetch failed", () => {
     expect(
       tabSpecs(SET, "first", {
         failed: { second: true },
-        attention: { second: "要確認" },
+        attention: { second: { label: "注意", level: "caution" } },
       }).map((tab) => tab.mark),
-    ).toEqual([undefined, "要確認・取得に失敗", undefined]);
+    ).toEqual([undefined, "注意・取得に失敗", undefined]);
   });
 
   test("shows both marks on the selected tab too", () => {
     expect(
       tabSpecs(SET, "second", {
         failed: { second: true },
-        attention: { second: "要確認" },
+        attention: { second: { label: "注意", level: "caution" } },
       }).map((tab) => tab.mark),
-    ).toEqual([undefined, "要確認・取得に失敗", undefined]);
+    ).toEqual([undefined, "注意・取得に失敗", undefined]);
   });
 
   test("keeps the attention mark alone when the fetch is fine", () => {
     expect(
       tabSpecs(SET, "first", {
         failed: { second: false },
-        attention: { second: "要確認" },
+        attention: { second: { label: "注意", level: "caution" } },
       }).map((tab) => tab.mark),
-    ).toEqual([undefined, "要確認", undefined]);
+    ).toEqual([undefined, "注意", undefined]);
   });
 
   test("gives the count a meaning for assistive technology", () => {
     expect(
       tabSpecs(SET, "first", {
         counts: { second: 4 },
-        countLabels: { second: "要確認" },
+        countLabels: { second: "失敗" },
       }).map((tab) => tab.countLabel),
-    ).toEqual([undefined, "要確認", undefined]);
+    ).toEqual([undefined, "失敗", undefined]);
+  });
+
+  test("marks a count that is a lower bound", () => {
+    expect(
+      tabSpecs(SET, "first", {
+        counts: { second: 200 },
+        countAtLeast: { second: true },
+      }).map((tab) => tab.countAtLeast),
+    ).toEqual([false, true, false]);
+  });
+
+  test("does not mark an exact count", () => {
+    expect(
+      tabSpecs(SET, "first", { counts: { second: 4 } }).map(
+        (tab) => tab.countAtLeast,
+      ),
+    ).toEqual([false, false, false]);
   });
 });
 

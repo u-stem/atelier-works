@@ -21,15 +21,28 @@ export type TabSet<Id extends string> = {
 /** タブの取得が失敗したときに、タブの名前に添える文言。色だけに頼らず文字で伝える。 */
 export const FETCH_FAILED_MARK = "取得に失敗";
 
+/** 印の段。注意は三角、要対応は八角で表す。 */
+export type MarkLevel = "caution" | "action";
+
+/** 注意の印。文言と段を持つ。 */
+export type TabAttention = {
+  readonly label: string;
+  readonly level: MarkLevel;
+};
+
 /** 共通の`Tabs`へ渡す、タブ1つ分の指定。 */
 export type ResolvedTabSpec<Id extends string> = {
   id: Id;
   label: string;
   panelId: string;
   count: number | undefined;
+  /** 件数は下限で、これ以上ある可能性があるか。 */
+  countAtLeast: boolean;
   /** 件数の意味。読み上げが、件数の前後に添える語として読む。 */
   countLabel: string | undefined;
   mark: string | undefined;
+  /** 印の段。記号と色を決める。印が無ければ`undefined`。 */
+  markLevel: MarkLevel | undefined;
 };
 
 export type TabSpecInput<Id extends string> = {
@@ -37,10 +50,12 @@ export type TabSpecInput<Id extends string> = {
   readonly failed?: Readonly<Partial<Record<Id, boolean>>>;
   /** 名前に添える件数。 */
   readonly counts?: Readonly<Partial<Record<Id, number | undefined>>>;
+  /** 件数が下限のタブ。 */
+  readonly countAtLeast?: Readonly<Partial<Record<Id, boolean>>>;
   /** 件数の意味。例えば「要確認」。 */
   readonly countLabels?: Readonly<Partial<Record<Id, string | undefined>>>;
-  /** 選んでいるかにかかわらず付ける印の文言。取得も失敗しているときは、失敗の印と並べる。 */
-  readonly attention?: Readonly<Partial<Record<Id, string | undefined>>>;
+  /** 選んでいるかにかかわらず付ける印。取得も失敗しているときは、失敗の印と並べる。 */
+  readonly attention?: Readonly<Partial<Record<Id, TabAttention | undefined>>>;
 };
 
 /** URLのクエリのうち、開くタブを持つ名前。作業項目の詳細のタブと名前をそろえる。 */
@@ -113,12 +128,14 @@ export function tabSpecs<Id extends string>(
       label: tab.label,
       panelId: tabPanelId(set, tab.id),
       count: input.counts?.[tab.id],
+      countAtLeast: false,
       countLabel: input.countLabels?.[tab.id],
+      markLevel: undefined,
       mark:
         attention !== undefined
           ? failed
-            ? `${attention}・${FETCH_FAILED_MARK}`
-            : attention
+            ? `${attention.label}・${FETCH_FAILED_MARK}`
+            : attention.label
           : failed && tab.id !== selected
             ? FETCH_FAILED_MARK
             : undefined,

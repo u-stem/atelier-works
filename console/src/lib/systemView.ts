@@ -10,6 +10,7 @@ import type {
   SystemResolvedNotice,
 } from "../api/guards/systemStatus.ts";
 import { FAILURE_TEXT_LIMIT } from "./failureView.ts";
+import type { HostActionNotices } from "./hostActionNotices.ts";
 import { withSelection } from "./inboxSelection.ts";
 import { displayableIssueText } from "./intakeText.ts";
 import { isJobId } from "./jobLink.ts";
@@ -145,6 +146,23 @@ export function describeLatestDeployment(
     changedPathCount: deployment.changed_paths.length,
     occurredAt: deployment.occurred_at,
   };
+}
+
+export type HostActionDescription = {
+  readonly label: string;
+  readonly tone: "warning" | "neutral";
+};
+
+/**
+ * 反映の節に出す、ホストの作業の表示。
+ * 残っている作業は、未解決の通知で決める。反映の記録の印は、作業が済んでも残るためである。
+ * 通知を読めない(`null`)か、一覧が切れて確かめられないときだけ、記録の印で代える。
+ */
+export function describeHostAction(
+  _hostAction: HostActionNotices | null,
+  _recorded: boolean,
+): HostActionDescription {
+  return { label: "", tone: "neutral" };
 }
 
 /** 要対応の画面で通知を選んだ経路。routerの基準(`/console`)からの絶対パスで書く。 */

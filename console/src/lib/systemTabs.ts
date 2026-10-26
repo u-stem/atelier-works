@@ -11,6 +11,7 @@ import {
 import {
   parseTab,
   type ResolvedTabSpec,
+  type TabAttention,
   type TabSet,
   tabPanelAttrs,
   tabSpecs,
@@ -88,6 +89,11 @@ export function failuresTabCount(rows: readonly BandRow[]): number | undefined {
   return rows.find((row) => row.id === "failures")?.count ?? undefined;
 }
 
+/** 失敗と通知のタブの件数が下限か。 */
+export function failuresTabCountAtLeast(_rows: readonly BandRow[]): boolean {
+  return false;
+}
+
 /** 印を付けるチップが、そのタブにあるか。 */
 function marksTab(row: BandRow, tab: SystemTabId): boolean {
   const from = MARK_FROM[row.id];
@@ -102,13 +108,13 @@ function marksTab(row: BandRow, tab: SystemTabId): boolean {
 /** タブに付ける注意の印。選んでいるかにかかわらず付ける。 */
 function attentionOf(
   rows: readonly BandRow[],
-): Partial<Record<SystemTabId, string>> {
+): Partial<Record<SystemTabId, TabAttention>> {
   return {
     ...(rows.some((row) => marksTab(row, "failures"))
-      ? { failures: FAILURES_ATTENTION_MARK }
+      ? { failures: { label: FAILURES_ATTENTION_MARK, level: "caution" } }
       : {}),
     ...(rows.some((row) => marksTab(row, "status"))
-      ? { status: STATUS_ATTENTION_MARK }
+      ? { status: { label: STATUS_ATTENTION_MARK, level: "action" } }
       : {}),
   };
 }

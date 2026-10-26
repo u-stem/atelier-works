@@ -33,10 +33,10 @@ describe("FlowGraphSection", () => {
     );
   });
 
-  test("opens the fold when a link jumps to the section", () => {
-    expect(renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />)).toContain(
-      'data-jump-open=""',
-    );
+  test("stays closed on a jump, since no chip leads here", () => {
+    expect(
+      renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />),
+    ).not.toContain("data-jump-open");
   });
 
   test("can start open", () => {

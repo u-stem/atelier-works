@@ -13,8 +13,12 @@ export type TabSpec<Id extends string> = {
   readonly count?: number | undefined;
   /** 件数の意味。読み上げが、件数の前後に添える語として読む。見た目には出さない。 */
   readonly countLabel?: string | undefined;
+  /** 件数は下限で、これ以上ある可能性があるか。 */
+  readonly countAtLeast?: boolean | undefined;
   /** 名前に添える印の文言。色だけに頼らず、文字と記号で伝える。 */
   readonly mark?: string | undefined;
+  /** 印の段。注意は三角、要対応は八角で表す。 */
+  readonly markLevel?: "caution" | "action" | undefined;
 };
 
 /**

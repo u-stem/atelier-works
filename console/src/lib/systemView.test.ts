@@ -10,6 +10,7 @@ import {
   auditFailureLimitNote,
   auditFailuresOf,
   describeFetcher,
+  describeHostAction,
   describeInfoNotice,
   describeLatestDeployment,
   describeOrphanFailure,
@@ -137,6 +138,60 @@ const DEPLOYMENT: SystemDeployment = {
   needs_host_action: true,
   occurred_at: T0,
 };
+
+describe("describeHostAction", () => {
+  const NONE = { count: 0, complete: true, firstNoticeId: null };
+
+  test("counts the unresolved notices instead of reading the record of the deployment", () => {
+    expect(
+      describeHostAction({ count: 2, complete: true, firstNoticeId: 5 }, false)
+        .label,
+    ).toBe("ホストの作業2件が残っています");
+  });
+
+  test("warns while a notice is unresolved", () => {
+    expect(
+      describeHostAction({ count: 2, complete: true, firstNoticeId: 5 }, false)
+        .tone,
+    ).toBe("warning");
+  });
+
+  test("says none is needed when the notices are all read and none is unresolved", () => {
+    expect(describeHostAction(NONE, true).label).toBe("ホストの作業は不要");
+  });
+
+  test("stays quiet then, even if the record of the deployment says it was needed", () => {
+    expect(describeHostAction(NONE, true).tone).toBe("neutral");
+  });
+
+  test("states a lower bound when the list was cut", () => {
+    expect(
+      describeHostAction({ count: 1, complete: false, firstNoticeId: 5 }, false)
+        .label,
+    ).toBe("ホストの作業1件以上が残っています");
+  });
+
+  test("falls back to the record when the summary cannot be read", () => {
+    expect(describeHostAction(null, true).label).toBe("ホストの作業が必要");
+  });
+
+  test("warns under that fallback when the record says it was needed", () => {
+    expect(describeHostAction(null, true).tone).toBe("warning");
+  });
+
+  test("stays quiet under that fallback when the record says it was not needed", () => {
+    expect(describeHostAction(null, false).label).toBe("ホストの作業は不要");
+  });
+
+  test("says the notices cannot be checked when the list was cut and holds none", () => {
+    expect(
+      describeHostAction(
+        { count: 0, complete: false, firstNoticeId: null },
+        true,
+      ).label,
+    ).toBe("ホストの作業が必要(通知を確認できません)");
+  });
+});
 
 describe("describeLatestDeployment", () => {
   test("writes the first deployment as from the initial state", () => {

@@ -72,7 +72,9 @@ function ReleaseSection({ status }: { status: StatusQuery }) {
       query={status}
       loginHint="上のバナーからログインすると、反映の状態を表示します。"
     >
-      {(data, now) => <ReleaseStatus status={data} now={now} />}
+      {(data, now) => (
+        <ReleaseStatus status={data} now={now} hostAction={null} />
+      )}
     </SystemSection>
   );
 }
@@ -277,7 +279,7 @@ export function SystemScreen() {
   const header = (
     <div className={fixedHeader ? undefined : "-mx-4"}>
       <div className="px-4 py-3 md:px-8">
-        <SummaryBand rows={rows} onJump={onJump} />
+        <SummaryBand rows={rows} onJump={onJump} now={now} updatedAt={0} />
       </div>
       <Tabs
         tabs={tabs}

@@ -129,6 +129,10 @@ export function SummaryBand({
 }: {
   rows: readonly BandRow[];
   onJump: (tab: SystemTabId, targetId: string) => void;
+  /** 「最終取得」の相対表記の基準にする現在時刻(ミリ秒)。 */
+  now: number;
+  /** 帯が読む取得のうち、最も古い取得の時刻(ミリ秒)。まだ無ければ0。 */
+  updatedAt: number;
 }) {
   // 画面の切り替えのスケルトンと同じ規則で、待ちが長引いたときだけ文を出す。
   const pendingVisible = useDelayedVisible(rows.some(isBandRowLoading));

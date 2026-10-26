@@ -21,6 +21,8 @@ export function scrollTargetTop({
   containerTop: number;
   targetTop: number;
   scrollTop: number;
+  /** 枠の上端に重なる固定の部分の高さ。対象をその下に止める。 */
+  offset?: number;
 }): number {
   return Math.max(0, scrollTop + targetTop - containerTop);
 }
@@ -32,6 +34,7 @@ export function scrollTargetTop({
 export function scrollToAnchor(
   root: ScrollTargetRoot,
   anchor: ScrollTargetBox,
+  _offset = 0,
 ): void {
   root.scrollTo({
     top: scrollTargetTop({
@@ -49,6 +52,7 @@ export function scrollToAnchor(
 export function scrollToAnchorIn<A extends ScrollTargetBox>(
   anchor: A | null,
   findRoot: (anchor: A) => ScrollTargetRoot | null,
+  _offsetOf?: (root: ScrollTargetRoot) => number,
 ): void {
   if (anchor === null) {
     return;

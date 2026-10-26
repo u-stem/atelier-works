@@ -7,6 +7,7 @@ import type { HoldsSnapshot } from "../api/guards/holds.ts";
 import type { ConsoleSummary } from "../api/guards/summary.ts";
 import type { SystemStatus } from "../api/guards/systemStatus.ts";
 import { isExpiredAt } from "./holdsView.ts";
+import { HOST_ACTION_NOTICE_KIND } from "./hostActionNotices.ts";
 import {
   actionableTotal,
   INBOX_PATH,
@@ -49,6 +50,8 @@ export type BandRow = {
   readonly text: string;
   /** 件数を持つチップの件数。持たないチップと、読めないチップは`null`。 */
   readonly count: number | null;
+  /** 件数は下限で、これ以上ある可能性があるか(取得の上限で切れたとき)。 */
+  readonly countAtLeast: boolean;
   readonly state: BandRowState;
   /** 値は前の取得のもので、取り直しに失敗しているか。 */
   readonly stale: boolean;
@@ -61,8 +64,12 @@ export type BandSource<T> = {
   readonly isError: boolean;
 };
 
-/** ホスト側の作業を知らせる未解決の通知の種類。`f/factory/lib/auto_retry_reasons.ts`と同じ値にする。 */
-export const HOST_ACTION_NOTICE_KIND = "host_action_required";
+export { HOST_ACTION_NOTICE_KIND } from "./hostActionNotices.ts";
+
+/** 取得の時刻(ミリ秒)のうち、最も古いもの。まだ取得できていない(0以下)ものは数えない。無ければ0。 */
+export function oldestUpdatedAt(_times: readonly number[]): number {
+  return 0;
+}
 
 /** 取得中のチップの文。 */
 export const BAND_LOADING_TEXT = "取得中です";
@@ -144,6 +151,7 @@ function build(
     readonly level: BandLevel;
     readonly text: string;
     readonly count?: number | null;
+    readonly countAtLeast?: boolean;
     readonly state?: BandRowState;
     readonly stale?: boolean;
     readonly target?: BandTarget;
@@ -156,6 +164,7 @@ function build(
     level: body.level,
     text: body.text,
     count: body.count ?? null,
+    countAtLeast: body.countAtLeast ?? false,
     state: body.state ?? "ready",
     stale: body.stale ?? false,
     target: body.target ?? base.target,

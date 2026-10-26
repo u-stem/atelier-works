@@ -158,8 +158,8 @@ describe("ResolvedNoticeDisclosure", () => {
     expect(renderDisclosure(0)).toMatch(/<summary[^>]*>.*0件/);
   });
 
-  test("opens when asked to jump to the section", () => {
-    expect(renderDisclosure(3)).toContain('data-jump-open=""');
+  test("stays closed on a jump, since no chip leads here", () => {
+    expect(renderDisclosure(3)).not.toContain("data-jump-open");
   });
 
   test("can start open", () => {
@@ -198,8 +198,8 @@ describe("InfoNoticeDisclosure", () => {
     expect(renderInfoDisclosure(6)).toMatch(/<summary[^>]*>.*6件/);
   });
 
-  test("opens when a link jumps to the section", () => {
-    expect(renderInfoDisclosure(3)).toContain('data-jump-open=""');
+  test("stays closed on a jump, since no chip leads here", () => {
+    expect(renderInfoDisclosure(3)).not.toContain("data-jump-open");
   });
 
   test("can start open", () => {

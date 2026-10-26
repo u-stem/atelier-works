@@ -37,6 +37,9 @@ export const APP_MAIN_CLASS =
 export const PAGINATION_BAR_CLASS =
   "sticky -bottom-6 z-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border bg-background py-3 text-small text-muted-foreground";
 
+/** 本文の枠の上端に貼り付く部分のclass。 */
+export const STICKY_HEADER_CLASS = "";
+
 /**
  * ページ送りの帯の中のボタンに付けるclass。
  * 帯は枠の下端から`scroll-pb-28`の内側にあり、そのままでは、フォーカスのたびに枠がその分スクロールする。

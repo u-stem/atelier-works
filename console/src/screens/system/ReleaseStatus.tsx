@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { SystemStatus } from "../../api/guards/systemStatus.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import type { HostActionNotices } from "../../lib/hostActionNotices.ts";
 import {
   describeFetcher,
   describeLatestDeployment,
@@ -31,6 +32,8 @@ export function ReleaseStatus({
 }: {
   status: SystemStatus;
   now: number;
+  /** summaryの未解決の通知から数えた、ホストの作業。summaryを読めないときは`null`。 */
+  hostAction: HostActionNotices | null;
 }) {
   const deployment =
     status.deployment === null

@@ -33,3 +33,16 @@ describe("the headings of the report tabs", () => {
     );
   });
 });
+
+// 見出しを隠すと、行に残る要素は期間のボタンだけになる。`justify-between`では左端に寄るので、右端に寄せる。
+describe("the period buttons of the analytics", () => {
+  test("stay at the right edge once the heading is hidden", () => {
+    const source = readFileSync(
+      new URL("./AnalyticsReports.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(/<div className="([^"]*)">\s*<fieldset/.exec(source)?.[1]).toContain(
+      "ml-auto",
+    );
+  });
+});

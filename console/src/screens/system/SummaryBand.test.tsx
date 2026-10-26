@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
+import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import { formatAbsoluteIso } from "../../lib/relativeTime.ts";
 import type {
   BandLevel,
   BandRow,
   BandRowState,
 } from "../../lib/summaryBand.ts";
 import { SummaryBand } from "./SummaryBand.tsx";
+
+const NOW = Date.parse("2026-10-26T03:00:00.000Z");
+const FETCHED_AT = Date.parse("2026-10-26T02:57:00.000Z");
 
 function row(
   id: BandRow["id"],
@@ -19,6 +24,7 @@ function row(
     level,
     text: `結論 ${id}`,
     count: null,
+    countAtLeast: false,
     state: "ready",
     stale: false,
     target: { kind: "section", tab: "status", targetId: `${id}-heading` },
@@ -26,10 +32,17 @@ function row(
   };
 }
 
-function render(rows: BandRow[]): string {
+function render(rows: BandRow[], updatedAt = 0): string {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <SummaryBand rows={rows} onJump={() => undefined} />
+      <TooltipProvider>
+        <SummaryBand
+          rows={rows}
+          onJump={() => undefined}
+          now={NOW}
+          updatedAt={updatedAt}
+        />
+      </TooltipProvider>
     </MemoryRouter>,
   );
 }
@@ -126,8 +139,42 @@ describe("SummaryBand", () => {
     expect(render([row("holds", "normal")])).toContain("text-success");
   });
 
-  test("shows no time of fetch and no note, which belong to the sections", () => {
-    expect(render([row("holds", "normal")])).not.toMatch(/取得 |<time/);
+  test("links a chip to the notice in the inbox screen", () => {
+    expect(
+      render([
+        row("deployment", "caution", {
+          target: { kind: "route", to: "/?type=notice&id=7" },
+        }),
+      ]),
+    ).toContain('href="/?type=notice&amp;id=7"');
+  });
+
+  test("puts the word of the level after the label and the conclusion", () => {
+    const html = render([row("holds", "caution")]);
+    const levelAt = html.search(/<span[^>]*sr-only[^>]*>注意<\/span>/);
+    expect(levelAt).toBeGreaterThan(html.indexOf("結論 holds"));
+  });
+
+  test("shows the oldest time of fetch once, in the band", () => {
+    expect(render([row("holds", "normal")], FETCHED_AT)).toContain(
+      "最終取得 3分前",
+    );
+  });
+
+  test("gives the time of fetch in Japan time for assistive technology", () => {
+    expect(render([row("holds", "normal")], FETCHED_AT)).toContain(
+      `(${formatAbsoluteIso(new Date(FETCHED_AT).toISOString())})`,
+    );
+  });
+
+  test("shows no time of fetch before any fetch has returned", () => {
+    expect(render([row("holds", "normal")], 0)).not.toContain("最終取得");
+  });
+
+  test("has no note, which belongs to the sections", () => {
+    expect(render([row("holds", "normal")], FETCHED_AT)).not.toContain(
+      "前回取得",
+    );
   });
 
   test("has no list of other sections", () => {

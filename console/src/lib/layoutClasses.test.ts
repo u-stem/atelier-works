@@ -4,6 +4,7 @@ import {
   PAGINATION_BAR_CLASS,
   PAGINATION_BUTTON_CLASS,
   SCROLL_BODY_CLASS,
+  STICKY_HEADER_CLASS,
 } from "./layoutClasses.ts";
 
 function classesOf(value: string): string[] {
@@ -70,6 +71,50 @@ describe("PAGINATION_BAR_CLASS", () => {
     expect(amountOf(PAGINATION_BAR_CLASS, "bottom")).toBe(
       -(amountOf(SCROLL_BODY_CLASS, "py") ?? Number.NaN),
     );
+  });
+});
+
+describe("STICKY_HEADER_CLASS", () => {
+  test("sticks only when the screen is wide and tall enough, by a CSS media condition", () => {
+    expect(classesOf(STICKY_HEADER_CLASS)).toContain(
+      "[@media(min-width:48rem)_and_(min-height:40rem)]:sticky",
+    );
+  });
+
+  test("does not stick unconditionally", () => {
+    expect(classesOf(STICKY_HEADER_CLASS)).not.toContain("sticky");
+  });
+
+  test("sticks to the top edge of the scroll container", () => {
+    expect(classesOf(STICKY_HEADER_CLASS)).toContain("top-0");
+  });
+
+  test("covers what scrolls under it, with a background that is not transparent", () => {
+    expect(classesOf(STICKY_HEADER_CLASS)).toContain("bg-background");
+  });
+
+  test("stays above the content that scrolls under it", () => {
+    expect(classesOf(STICKY_HEADER_CLASS)).toContain("z-10");
+  });
+
+  test("is raised by the top padding of the scroll body, so it starts at the top edge", () => {
+    expect(amountOf(STICKY_HEADER_CLASS, "mt")).toBe(
+      -(amountOf(SCROLL_BODY_CLASS, "py") ?? Number.NaN),
+    );
+  });
+
+  test("reaches the side padding of the scroll body, so it spans the width", () => {
+    expect(amountOf(STICKY_HEADER_CLASS, "mx")).toBe(
+      -(amountOf(SCROLL_BODY_CLASS, "px") ?? Number.NaN),
+    );
+  });
+
+  test("reaches the wider side padding from the md width on", () => {
+    expect(classesOf(STICKY_HEADER_CLASS)).toContain("md:-mx-8");
+  });
+
+  test("is the same width as the md side padding of the scroll body", () => {
+    expect(classesOf(SCROLL_BODY_CLASS)).toContain("md:px-8");
   });
 });
 

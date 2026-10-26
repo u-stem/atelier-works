@@ -98,6 +98,75 @@ describe("Tabs", () => {
   });
 });
 
+describe("Tabs mark", () => {
+  function withMark(markLevel: "caution" | "action" | undefined): string {
+    return render("one", [
+      { id: "one", label: "最初", panelId: "p" },
+      { id: "two", label: "次", panelId: "q", mark: "注意", markLevel },
+    ]);
+  }
+
+  test("draws a triangle for a caution", () => {
+    expect(withMark("caution")).toContain("lucide-triangle-alert");
+  });
+
+  test("colors a caution as a warning", () => {
+    expect(withMark("caution")).toContain("text-warning");
+  });
+
+  test("draws an octagon for an action", () => {
+    expect(withMark("action")).toContain("lucide-octagon-alert");
+  });
+
+  test("colors an action as a failure", () => {
+    expect(withMark("action")).toContain("text-failure");
+  });
+
+  test("draws no triangle for an action", () => {
+    expect(withMark("action")).not.toContain("lucide-triangle-alert");
+  });
+
+  test("draws the symbol as decoration, with the words beside it", () => {
+    expect(withMark("caution")).toMatch(
+      /<svg[^>]*aria-hidden="true"[^>]*><\/svg>注意/,
+    );
+  });
+});
+
+describe("Tabs count as a lower bound", () => {
+  function withCount(countAtLeast: boolean): string {
+    return render("one", [
+      { id: "one", label: "最初", panelId: "p" },
+      {
+        id: "two",
+        label: "次",
+        panelId: "q",
+        count: 200,
+        countAtLeast,
+        countLabel: "失敗",
+      },
+    ]);
+  }
+
+  test("shows a plus after the number", () => {
+    expect(withCount(true)).toMatch(
+      /200<span[^>]*aria-hidden="true"[^>]*>\+<\/span>/,
+    );
+  });
+
+  test("reads the lower bound as at least", () => {
+    expect(withCount(true)).toMatch(/<span[^>]*sr-only[^>]*>以上<\/span>/);
+  });
+
+  test("shows no plus for an exact count", () => {
+    expect(withCount(false)).not.toContain("+");
+  });
+
+  test("reads an exact count without at least", () => {
+    expect(withCount(false)).not.toContain("以上");
+  });
+});
+
 /** `role="tablist"`の開始タグ。 */
 function tablistTag(html: string): string {
   return /<div [^>]*role="tablist"[^>]*>/.exec(html)?.[0] ?? "";

@@ -4,6 +4,10 @@ import {
   findScrollRootWith,
   isScrollingOverflow,
   SCROLL_ROOT_SELECTOR,
+  STICKY_HEADER_GAP,
+  STICKY_HEADER_PROPS,
+  STICKY_HEADER_SELECTOR,
+  stickyHeaderOffsetWith,
 } from "./scrollRoot.ts";
 
 interface Node {
@@ -130,5 +134,55 @@ describe("findScrollRootWith", () => {
     const start = box("start", box("plain", null));
 
     expect(findScrollRootWith(start, overflowOf)).toBeNull();
+  });
+});
+
+describe("stickyHeaderOffsetWith", () => {
+  function headerOf(height: number): {
+    getBoundingClientRect(): { height: number };
+  } {
+    return { getBoundingClientRect: () => ({ height }) };
+  }
+
+  function scopeOf(header: ReturnType<typeof headerOf> | null) {
+    return { querySelector: () => header };
+  }
+
+  test("looks for the part marked as sticky", () => {
+    const asked: string[] = [];
+    stickyHeaderOffsetWith(
+      {
+        querySelector: (selector) => {
+          asked.push(selector);
+          return null;
+        },
+      },
+      () => "static",
+    );
+    expect(asked).toEqual([STICKY_HEADER_SELECTOR]);
+  });
+
+  test("adds the gap to the height of the part that is stuck", () => {
+    expect(stickyHeaderOffsetWith(scopeOf(headerOf(139)), () => "sticky")).toBe(
+      139 + STICKY_HEADER_GAP,
+    );
+  });
+
+  test("is zero when the part does not stick, as on a narrow or short screen", () => {
+    expect(stickyHeaderOffsetWith(scopeOf(headerOf(139)), () => "static")).toBe(
+      0,
+    );
+  });
+
+  test("is zero without the part", () => {
+    expect(stickyHeaderOffsetWith(scopeOf(null), () => "sticky")).toBe(0);
+  });
+});
+
+describe("STICKY_HEADER_PROPS", () => {
+  test("marks the part so the selector finds it", () => {
+    expect(Object.keys(STICKY_HEADER_PROPS).map((name) => `[${name}]`)).toEqual(
+      [STICKY_HEADER_SELECTOR],
+    );
   });
 });

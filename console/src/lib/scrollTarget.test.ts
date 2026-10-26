@@ -30,6 +30,28 @@ describe("scrollTargetTop", () => {
       scrollTargetTop({ containerTop: 72, targetTop: -900, scrollTop: 100 }),
     ).toBe(0);
   });
+
+  test("stops short of the top by the offset, so a fixed header does not cover the target", () => {
+    expect(
+      scrollTargetTop({
+        containerTop: 72,
+        targetTop: 372,
+        scrollTop: 100,
+        offset: 140,
+      }),
+    ).toBe(260);
+  });
+
+  test("still never goes above the start of the content with an offset", () => {
+    expect(
+      scrollTargetTop({
+        containerTop: 72,
+        targetTop: 80,
+        scrollTop: 0,
+        offset: 140,
+      }),
+    ).toBe(0);
+  });
 });
 
 function fakeRoot(
@@ -60,6 +82,18 @@ describe("scrollToAnchor", () => {
 
     expect(calls).toEqual([{ top: 528 }]);
   });
+
+  test("leaves room for the offset above the anchor", () => {
+    const { root, calls } = fakeRoot(72, 5000);
+
+    scrollToAnchor(
+      root,
+      { getBoundingClientRect: () => ({ top: -4400 }) },
+      140,
+    );
+
+    expect(calls).toEqual([{ top: 388 }]);
+  });
 });
 
 describe("scrollToAnchorIn", () => {
@@ -72,6 +106,18 @@ describe("scrollToAnchorIn", () => {
     );
 
     expect(calls).toEqual([{ top: 528 }]);
+  });
+
+  test("asks for the offset of the root it found", () => {
+    const { root, calls } = fakeRoot(72, 5000);
+
+    scrollToAnchorIn(
+      { getBoundingClientRect: () => ({ top: -4400 }) },
+      () => root,
+      () => 100,
+    );
+
+    expect(calls).toEqual([{ top: 428 }]);
   });
 
   test("does not call scrollIntoView when no root is found", () => {
