@@ -129,6 +129,18 @@ function ResolvedItem({
 }
 
 /**
+ * 解決済みの通知の履歴を、件数を添えてたたむ。
+ * 履歴は参照用で、普段は読まないので、開くまで本文の一覧を見せない。
+ */
+export function ResolvedNoticeDisclosure(_props: {
+  notices: readonly SystemResolvedNotice[];
+  now: number;
+  initiallyOpen?: boolean | undefined;
+}) {
+  return null;
+}
+
+/**
  * 解決済みの通知の履歴。人が解決したものを先に、DBの掃除が解決したものを後に、それぞれ解決の新しい順で並べて返ってくる。
  * 行を開くと本文の全文を読める。履歴なので、再び開く操作は無い。
  */

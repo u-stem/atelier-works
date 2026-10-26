@@ -15,6 +15,7 @@ import {
   describeOrphanFailure,
   describeResolvedNotice,
   FETCHER_STALE_MINUTES,
+  groupOrphanFailures,
   listLimitNote,
   messagePreview,
   noticeDetailPath,
@@ -355,6 +356,109 @@ describe("describeOrphanFailure", () => {
   test("replaces hidden characters in the error", () => {
     expect(describeOrphanFailure({ ...ORPHAN, error: "a‮b" }).error.text).toBe(
       "a�b",
+    );
+  });
+
+  test("gives the step alone for a failure with a step", () => {
+    expect(describeOrphanFailure(ORPHAN).stepLabel).toBe("fetch");
+  });
+
+  test("gives no step label without a step", () => {
+    expect(
+      describeOrphanFailure({ ...ORPHAN, step: null }).stepLabel,
+    ).toBeNull();
+  });
+});
+
+function orphanAt(
+  id: number,
+  flow: string,
+  minutesAfterT0: number,
+  step: string | null = null,
+): SystemOrphanFailure {
+  return {
+    ...ORPHAN,
+    job_failure_id: id,
+    flow_path: flow,
+    step,
+    occurred_at: new Date(
+      Date.parse(T0) + minutesAfterT0 * 60_000,
+    ).toISOString(),
+  };
+}
+
+describe("groupOrphanFailures", () => {
+  test("returns no group for no failure", () => {
+    expect(groupOrphanFailures([])).toEqual([]);
+  });
+
+  test("puts the failures of one flow in one group", () => {
+    expect(
+      groupOrphanFailures([orphanAt(1, "f/a", 3), orphanAt(2, "f/a", 2)]).map(
+        (group) => group.flow,
+      ),
+    ).toEqual(["f/a"]);
+  });
+
+  test("counts the failures of a group", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 3),
+        orphanAt(2, "f/b", 2),
+        orphanAt(3, "f/a", 1),
+      ]).map((group) => group.count),
+    ).toEqual([2, 1]);
+  });
+
+  test("gives the time of the latest failure of a group", () => {
+    expect(
+      groupOrphanFailures([orphanAt(1, "f/a", 1), orphanAt(2, "f/a", 9)])[0]
+        ?.latestAt,
+    ).toBe(orphanAt(2, "f/a", 9).occurred_at);
+  });
+
+  test("orders the groups by their latest failure, newest first", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/old", 1),
+        orphanAt(2, "f/new", 9),
+        orphanAt(3, "f/mid", 5),
+      ]).map((group) => group.flow),
+    ).toEqual(["f/new", "f/mid", "f/old"]);
+  });
+
+  test("orders the failures of a group newest first", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 1),
+        orphanAt(2, "f/a", 9),
+        orphanAt(3, "f/a", 5),
+      ])[0]?.failures.map((failure) => failure.id),
+    ).toEqual([2, 3, 1]);
+  });
+
+  test("keeps different steps of one flow in one group", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 2, "fetch"),
+        orphanAt(2, "f/a", 1, "post"),
+      ]).map((group) => group.count),
+    ).toEqual([2]);
+  });
+
+  test("keeps every failure", () => {
+    expect(
+      groupOrphanFailures([
+        orphanAt(1, "f/a", 1),
+        orphanAt(2, "f/b", 2),
+        orphanAt(3, "f/a", 3),
+      ]).reduce((total, group) => total + group.failures.length, 0),
+    ).toBe(3);
+  });
+
+  test("replaces hidden characters in the flow name", () => {
+    expect(groupOrphanFailures([orphanAt(1, "f/a‮b", 1)])[0]?.flow).toBe(
+      "f/a�b",
     );
   });
 });

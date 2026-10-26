@@ -86,3 +86,19 @@ export function isPullRequestListTruncated(count: number): boolean {
 export function pullRequestTruncationNote(): string {
   return `${String(PULL_REQUEST_RECORD_LIMIT)}件に達したので、これより古いPRは表示していない場合があります。`;
 }
+
+/** 更新履歴を最初に出す反映の数。残りは「すべて表示」で開く。 */
+export const HISTORY_PREVIEW_COUNT = 3;
+
+/** 最初に出す反映の外にある、ホストの作業が要る反映の数。 */
+export function hostActionBeyondPreview(
+  _entries: readonly { readonly needs_host_action: boolean }[],
+  _previewCount: number = HISTORY_PREVIEW_COUNT,
+): number {
+  return 0;
+}
+
+/** 最初に出す反映の外にあるホストの作業を知らせる文。無ければ`null`。 */
+export function hostActionBeyondNote(_count: number): string | null {
+  return null;
+}

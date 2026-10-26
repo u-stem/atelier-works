@@ -100,6 +100,7 @@ function renderPage(count: number, initialPage?: number): string {
         entries={manyEntries(count)}
         now={NOW}
         initialPage={initialPage}
+        initiallyExpanded
       />
     </TooltipProvider>,
   );
@@ -136,5 +137,107 @@ describe("UpdateHistory pagination", () => {
 
   test("keeps the empty message for no entries", () => {
     expect(renderPage(0)).toContain("反映の記録はまだありません");
+  });
+});
+
+function renderFolded(entries: readonly DeploymentEntry[]): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <UpdateHistory entries={entries} now={NOW} />
+    </TooltipProvider>,
+  );
+}
+
+describe("UpdateHistory folded", () => {
+  test("shows the newest three entries first", () => {
+    expect(renderFolded(manyEntries(5))).toContain("reason 003");
+  });
+
+  test("leaves the fourth entry out until it is expanded", () => {
+    expect(renderFolded(manyEntries(5))).not.toContain("reason 004");
+  });
+
+  test("offers to show all entries when there are more than three", () => {
+    expect(renderFolded(manyEntries(4))).toContain("すべて表示");
+  });
+
+  test("tells how many entries there are on the button", () => {
+    expect(renderFolded(manyEntries(12))).toContain("すべて表示(12件)");
+  });
+
+  test("offers nothing when the three entries are all there is", () => {
+    expect(renderFolded(manyEntries(3))).not.toContain("すべて表示");
+  });
+
+  test("draws no page navigation while folded", () => {
+    expect(renderFolded(manyEntries(30))).not.toContain("<nav");
+  });
+
+  test("keeps the button reachable by keyboard", () => {
+    expect(renderFolded(manyEntries(5))).toMatch(/<button[^>]*>すべて表示/);
+  });
+
+  test("tells the button state to assistive technology", () => {
+    expect(renderFolded(manyEntries(5))).toMatch(
+      /<button[^>]*aria-expanded="false"[^>]*>すべて表示/,
+    );
+  });
+});
+
+describe("UpdateHistory host action beyond the first three", () => {
+  function withHostActionAt(position: number): DeploymentEntry[] {
+    return manyEntries(6).map((entry, index) => ({
+      ...entry,
+      needs_host_action: index === position,
+    }));
+  }
+
+  test("tells how many entries outside the first three need host action", () => {
+    expect(renderFolded(withHostActionAt(4))).toContain(
+      "ホストの作業が要る反映: 1件",
+    );
+  });
+
+  test("says nothing when the entry needing host action is among the first three", () => {
+    expect(renderFolded(withHostActionAt(1))).not.toContain(
+      "ホストの作業が要る反映",
+    );
+  });
+
+  test("says nothing once everything is expanded", () => {
+    expect(
+      renderToStaticMarkup(
+        <TooltipProvider>
+          <UpdateHistory
+            entries={withHostActionAt(4)}
+            now={NOW}
+            initiallyExpanded
+          />
+        </TooltipProvider>,
+      ),
+    ).not.toContain("ホストの作業が要る反映");
+  });
+});
+
+describe("UpdateHistory pull request origin", () => {
+  function withOrigin(origin: string): DeploymentEntry[] {
+    return [
+      {
+        ...FAILED,
+        pull_requests: [{ number: 7, title: "題名", origin, url: null }],
+      },
+    ];
+  }
+
+  test("shows the badge of a known origin", () => {
+    expect(renderFolded(withOrigin("human"))).toContain("人");
+  });
+
+  test("shows no badge when the origin is unknown", () => {
+    expect(renderFolded(withOrigin("unknown"))).not.toContain("不明");
+  });
+
+  test("still shows the title and the number when the origin is unknown", () => {
+    expect(renderFolded(withOrigin("unknown"))).toContain("題名");
   });
 });

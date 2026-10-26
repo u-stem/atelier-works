@@ -100,6 +100,11 @@ function currentAndPeak(load: WorkerLoad): string {
   return `${formatMebibytes(latest.mem_current_bytes)} / ${formatMebibytes(latest.mem_peak_bytes)}(キャッシュを含む)`;
 }
 
+/** 結論の1行。枠が塞がっていた記録、開始が遅れた記録、メモリの最大の割合、記録の数を並べる。判定はしない。 */
+export function describeWorkerLoadHeadline(_load: WorkerLoad): string {
+  return "";
+}
+
 /** 直近の窓の負荷を、画面に出す行にする。 */
 export function describeWorkerLoad(load: WorkerLoad): WorkerLoadDescription {
   return {

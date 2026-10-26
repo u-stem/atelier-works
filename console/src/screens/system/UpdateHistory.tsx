@@ -139,11 +139,14 @@ export function UpdateHistory({
   entries,
   now,
   initialPage,
+  initiallyExpanded: _initiallyExpanded,
 }: {
   entries: readonly DeploymentEntry[];
   now: number;
   /** 最初に出すページ(0から数える)。省略すると先頭。 */
   initialPage?: number | undefined;
+  /** 最初から全件を開く。省略すると、新しい3件だけを出す。 */
+  initiallyExpanded?: boolean | undefined;
 }) {
   const pager = usePagination(entries.length, PAGE_SIZE, initialPage);
   if (entries.length === 0) {

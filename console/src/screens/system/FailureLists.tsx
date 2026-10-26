@@ -192,3 +192,15 @@ export function OrphanFailureList({
     </div>
   );
 }
+
+/**
+ * 作業項目に紐づかない失敗を、flowごとにまとめる。
+ * 組ごとに回数と最新の時刻を出し、開くと失敗を1件ずつ見られる。
+ */
+export function OrphanFailureGroups(_props: {
+  failures: readonly SystemOrphanFailure[];
+  now: number;
+  initialPage?: number | undefined;
+}) {
+  return null;
+}

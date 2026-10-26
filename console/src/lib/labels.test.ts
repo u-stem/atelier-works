@@ -4,6 +4,7 @@ import {
   approvalStatusLabel,
   attemptRef,
   deploymentResultLabel,
+  hasPullRequestOrigin,
   holderKindLabel,
   holdScopeLabel,
   hostActionLabel,
@@ -292,4 +293,17 @@ describe("holderKindLabel", () => {
   test("does not leak an unknown holder kind", () => {
     expect(holderKindLabel("robot")).toBe("不明な主体");
   });
+});
+
+describe("hasPullRequestOrigin", () => {
+  test.each(["factory", "human"])("is true for %s", (origin) => {
+    expect(hasPullRequestOrigin(origin)).toBe(true);
+  });
+
+  test.each(["unknown", "", "robot", "constructor"])(
+    "is false for the origin %j, which the label shows as unknown",
+    (origin) => {
+      expect(hasPullRequestOrigin(origin)).toBe(false);
+    },
+  );
 });

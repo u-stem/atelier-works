@@ -15,9 +15,39 @@ describe("FlowGraphSection", () => {
     );
   });
 
-  test("draws the graph in a titled frame", () => {
+  test("draws the graph in a titled frame once it is opened", () => {
+    expect(
+      renderToStaticMarkup(<FlowGraphSection graph={GRAPH} initiallyOpen />),
+    ).toContain('title="起動の関係の図"');
+  });
+
+  test("does not draw the frame while the graph is folded", () => {
+    expect(
+      renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />),
+    ).not.toContain("<iframe");
+  });
+
+  test("folds the graph", () => {
+    expect(renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />)).toMatch(
+      /<details(?![^>]* open)/,
+    );
+  });
+
+  test("opens the fold when a link jumps to the section", () => {
     expect(renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />)).toContain(
-      'title="起動の関係の図"',
+      'data-jump-open=""',
+    );
+  });
+
+  test("can start open", () => {
+    expect(
+      renderToStaticMarkup(<FlowGraphSection graph={GRAPH} initiallyOpen />),
+    ).toMatch(/<details[^>]* open/);
+  });
+
+  test("lets a heading link land on the heading", () => {
+    expect(renderToStaticMarkup(<FlowGraphSection graph={GRAPH} />)).toMatch(
+      /<h2 id="flow-graph-heading" tabindex="-1"/,
     );
   });
 

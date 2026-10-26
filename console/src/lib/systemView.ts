@@ -256,6 +256,8 @@ export type OrphanFailureDescription = {
   readonly id: number;
   /** フローと、あればステップ。 */
   readonly flowLabel: string;
+  /** ステップだけ。無ければ`null`。フローごとにまとめた中で、行を見分けるために使う。 */
+  readonly stepLabel: string | null;
   /** ジョブIDの形のものだけで、そうでなければ`null`。 */
   readonly jobId: string | null;
   readonly occurredAt: string;
@@ -269,6 +271,7 @@ export function describeOrphanFailure(
   const flow = displayableIssueText(failure.flow_path).text;
   return {
     id: failure.job_failure_id,
+    stepLabel: null,
     flowLabel:
       failure.step === null
         ? flow
@@ -280,6 +283,29 @@ export function describeOrphanFailure(
       truncated: [...failure.error].length >= FAILURE_TEXT_LIMIT,
     },
   };
+}
+
+/** 作業項目に紐づかない失敗を、フローごとにまとめた1組。 */
+export type OrphanFailureGroup = {
+  /** フローのパス。組の見分けに使う。 */
+  readonly flow: string;
+  /** 失敗の回数。 */
+  readonly count: number;
+  /** 最新の失敗の時刻(ISO文字列)。 */
+  readonly latestAt: string;
+  /** 新しい順の失敗。 */
+  readonly failures: readonly OrphanFailureDescription[];
+};
+
+/**
+ * 作業項目に紐づかない失敗を、フローごとにまとめる。
+ * 組は最新の失敗が新しい順に、組の中の失敗も新しい順に並べる。
+ * まとめるのはフローのパスで、ステップは分けない。
+ */
+export function groupOrphanFailures(
+  _failures: readonly SystemOrphanFailure[],
+): OrphanFailureGroup[] {
+  return [];
 }
 
 /** 要対応の失敗のうち、監査のものを元の順で返す。監査は再実行できないので、要対応の一覧に出さない。 */

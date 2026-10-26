@@ -50,6 +50,20 @@ describe("SystemSection", () => {
   });
 });
 
+describe("SystemSection heading", () => {
+  test("can take the focus when a link jumps to the section", () => {
+    expect(render(freshQuery("値"))).toMatch(
+      /<h2 id="x-heading"[^>]*tabindex="-1"/,
+    );
+  });
+
+  test("leaves room above the heading when scrolled to", () => {
+    expect(render(freshQuery("値"))).toMatch(
+      /<h2 id="x-heading"[^>]*class="[^"]*scroll-mt-/,
+    );
+  });
+});
+
 describe("SystemSection while loading", () => {
   test("shows only the frame in the first moment", () => {
     expect(render(loadingQuery<string>())).not.toContain("読み込み中");

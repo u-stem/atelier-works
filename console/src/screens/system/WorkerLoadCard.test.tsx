@@ -69,3 +69,42 @@ describe("WorkerLoadCard", () => {
     );
   });
 });
+
+const HEADLINE =
+  "枠が塞がっていた記録7件、開始が遅れた記録10件、メモリの最大4%、記録700/720件";
+
+function renderCard(): string {
+  return renderToStaticMarkup(<WorkerLoadCard load={LOAD} />);
+}
+
+describe("WorkerLoadCard headline", () => {
+  test("states the conclusion in one line", () => {
+    expect(renderCard()).toContain(HEADLINE);
+  });
+
+  test("puts the conclusion before the fold", () => {
+    expect(renderCard().indexOf(HEADLINE)).toBeLessThan(
+      renderCard().indexOf("<details"),
+    );
+  });
+
+  test("folds the rows", () => {
+    expect(renderCard()).toMatch(/<details(?![^>]* open)/);
+  });
+
+  test("keeps the rows inside the fold", () => {
+    expect(renderCard().indexOf("309MiB / 1307MiB")).toBeGreaterThan(
+      renderCard().indexOf("<details"),
+    );
+  });
+
+  test("names what the fold holds", () => {
+    expect(renderCard()).toMatch(/<summary[^>]*>.*内訳/);
+  });
+
+  test("draws no fold when there is no sample", () => {
+    expect(renderToStaticMarkup(<WorkerLoadCard load={null} />)).not.toContain(
+      "<details",
+    );
+  });
+});

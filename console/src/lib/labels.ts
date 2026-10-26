@@ -163,6 +163,11 @@ export function pullRequestOriginLabel(origin: string): string {
   return PULL_REQUEST_ORIGIN_LABELS.get(origin) ?? "不明";
 }
 
+/** PRの作り手を確かめられたか。確かめられないとき(「不明」と書く値)は偽にする。 */
+export function hasPullRequestOrigin(_origin: string): boolean {
+  return true;
+}
+
 /** 反映にホスト側の作業(`infra/`と`mise.toml`の変更の反映)が要るかの日本語。 */
 export function hostActionLabel(needsHostAction: boolean): string {
   return needsHostAction ? "ホストの作業が必要" : "ホストの作業は不要";

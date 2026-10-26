@@ -9,7 +9,13 @@ import { flowGraphToDrawioXml } from "../../lib/flowGraphXml.ts";
  * そのため`SystemSection`(取得の状態を持つ節)は使わず、同じ見た目の見出しだけを持つ。
  * 図の幅は広いので、ほかの節より広く取る。
  */
-export function FlowGraphSection({ graph }: { graph: FlowGraph | null }) {
+export function FlowGraphSection({
+  graph,
+  initiallyOpen: _initiallyOpen,
+}: {
+  graph: FlowGraph | null;
+  initiallyOpen?: boolean | undefined;
+}) {
   // 再描画のたびに組み立て直すと、DrawioFrameがXMLの変更とみなしてiframeを作り直す。
   const xml = useMemo(
     () => (graph === null ? null : flowGraphToDrawioXml(graph)),
