@@ -617,7 +617,7 @@ verify_active_index_predicates() {
   local index actual
   for index in work_items_active_issue_key work_items_active_pr_fix_key work_items_active_dependabot_key; do
     actual="$(psql_exec "${SCRATCH_DB}" -q -t -A -v index="${index}" <<'SQL' | tr -d '[:space:]'
-SELECT string_agg(m[1], ',' ORDER BY m[1])
+SELECT string_agg(m[1], ',' ORDER BY m[1] COLLATE "C")
 FROM (
   SELECT regexp_matches(substring(indexdef from 'ARRAY\[(.*)\]'), '''([a-z_]+)''', 'g') AS m
   FROM pg_indexes

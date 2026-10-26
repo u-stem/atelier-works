@@ -93,8 +93,8 @@ export type Verdict = {
  * `picked`は、claimした直後で、次のステップはqueueに積まれていて、止まっても新しいworkerが続けるので入れない。
  * 監査とdependabotでは作業項目を作った直後の状態でもあり、途中で止まった行が残りうる。
  * `approved`は終端の状態で、実装を無効にしている間はそのまま残るので、入れると確認が永久に止まる。
- * `designing`は設計書を生成するジョブが動いている間の状態で、止まるとジョブが最初からやり直しになるので入れる。
- * 人の承認を待つ`awaiting_design_approval`は、ジョブが動いていないので入れない。
+ * `designing`は設計書を生成するジョブが動いている間の状態なので入れる。
+ * `awaiting_design_approval`は人の承認を待つ状態なので入れない。
  */
 export const RUNNING_WORK_ITEM_STATUSES: readonly string[] = [
   "requirements_generating",
