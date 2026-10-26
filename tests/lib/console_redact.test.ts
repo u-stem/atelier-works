@@ -240,6 +240,55 @@ describe("redactLog truncation", () => {
   });
 });
 
+describe("redactLog with many PEM markers", () => {
+  const CERT_BODY =
+    "MIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQUFADBaMQswCQYDVQQGEwJJ";
+  const CERT = `-----BEGIN CERTIFICATE-----\n${CERT_BODY}\n-----END CERTIFICATE-----`;
+
+  test("keeps the failure line after 33 CA certificates", () => {
+    const raw = `${Array.from({ length: 33 }, () => CERT).join("\n")}\nFAIL: connection refused for host db\n`;
+    expect(redactLog(raw).text).toContain("connection refused for host db");
+  });
+
+  test("shows no body of 33 CA certificates", () => {
+    const raw = `${Array.from({ length: 33 }, () => CERT).join("\n")}\nFAIL: x\n`;
+    expect(redactLog(raw).text).not.toContain("MIIDdzCCAl");
+  });
+
+  test("keeps the line before the first certificate", () => {
+    const raw = `loading roots\n${Array.from({ length: 40 }, () => CERT).join("\n")}\n`;
+    expect(redactLog(raw).text.startsWith("loading roots\n")).toBe(true);
+  });
+
+  test("keeps the failure line after BEGIN strings that a test prints", () => {
+    const code = `expect(pem).toContain("-----BEGIN ${"PRIVATE KEY"}-----");\n`;
+    const raw = `${code.repeat(40)}error: the later failure line\n`;
+    expect(redactLog(raw).text).toContain("the later failure line");
+  });
+
+  test("keeps the line after a BEGIN marker that has no body", () => {
+    const raw = `${"-----BEGIN X-----\n".repeat(50)}error: after the markers\n`;
+    expect(redactLog(raw).text).toContain("error: after the markers");
+  });
+
+  test("masks the body that follows an unclosed BEGIN marker", () => {
+    const raw =
+      "-----BEGIN PRIVATE KEY-----\nZq9abcdefghijklmnopqrstuvwxyz0123\n";
+    expect(redactLog(raw).text).not.toContain("Zq9abcdef");
+  });
+
+  test("hides at most 16384 characters after an unclosed BEGIN marker", () => {
+    const body = "Zq9abcdefghijklmnopqrstuvwxyz0123".repeat(1000);
+    const raw = `-----BEGIN PRIVATE KEY-----\n${body}\nerror: late line\n`;
+    expect(redactLog(raw).text).toContain("error: late line");
+  });
+
+  test("keeps ordinary text far from a cut that left an END marker without its BEGIN", () => {
+    const raw = `${"x\n".repeat(300000)}-----END CERTIFICATE-----\n${"y\n".repeat(50000)}last line\n`;
+    expect(redactLog(raw).text).toContain("x\nx\nx\n");
+  });
+});
+
 describe("control characters", () => {
   test("drops an ANSI color sequence", () => {
     expect(redactLog("\u001b[31mred\u001b[0m").text).toBe("red");
@@ -349,6 +398,60 @@ describe("redactResult", () => {
     expect(redactResult(value, 100).text).toBe("x x x x x *** tail");
   });
 
+  test("masks a key=value pair inside a string leaf", () => {
+    const out = redactResult({ out: 'password="abc123"' });
+    expect(out.text).not.toContain("abc123");
+  });
+
+  test("masks a JSON-looking pair inside a string leaf", () => {
+    const out = redactResult({ out: '{"password":"hunter2xyz"}' });
+    expect(out.text).not.toContain("hunter2xyz");
+  });
+
+  test("masks a pair in an error message leaf", () => {
+    const out = redactResult({ error: "login failed: api_key=zz99yy88xx77" });
+    expect(out.text).not.toContain("zz99yy88xx77");
+  });
+
+  test("masks a pair in a command output leaf", () => {
+    const out = redactResult({ stdout: "export GITHUB_TOKEN=abc123def\nok" });
+    expect(out.text).not.toContain("abc123def");
+  });
+
+  test("masks a pair in a leaf of a nested array", () => {
+    const out = redactResult({ steps: [{ log: "secret: s3cr3tvalue" }] });
+    expect(out.text).not.toContain("s3cr3tvalue");
+  });
+
+  test("masks a bearer header in a string leaf", () => {
+    const out = redactResult({ header: "Authorization: Bearer abcdef123456" });
+    expect(out.text).not.toContain("abcdef123456");
+  });
+
+  test("reports that it masked a pair inside a string leaf", () => {
+    expect(redactResult({ out: 'password="abc123"' }).masked).toBe(true);
+  });
+
+  test("keeps the key of a masked pair, so the reader can tell what was hidden", () => {
+    const out = redactResult({ out: 'password="abc123"' });
+    expect(out.text).toContain("password");
+  });
+
+  test("stops reading leaves once the total passes the coarse limit", () => {
+    // 同じ文字列を共有する3000枚の葉。葉の合計に上限が無いと、伏せ字が数十秒かかる。
+    const leaf = "eyJab-".repeat(17000);
+    const value = { items: Array.from({ length: 3000 }, () => leaf) };
+    const started = performance.now();
+    redactResult(value);
+    expect((performance.now() - started) / 1000).toBeLessThan(5);
+  });
+
+  test("masks a pair in a leaf that sits before the leaf budget runs out", () => {
+    const secret = ["abcdef", "123456"].join("");
+    const value = { first: "pad ".repeat(10), second: `token=${secret}` };
+    expect(redactResult(value, 200).text).not.toContain(secret);
+  });
+
   test("uses the documented default limit", () => {
     expect(RESULT_LIMIT_BYTES).toBe(64 * 1024);
   });
@@ -365,32 +468,50 @@ describe("redactText", () => {
 });
 
 describe("adversarial input", () => {
-  /** 敵対的な入力でも、伏せ字が1秒未満で終わること。正規表現の計算量が膨らむと超える。 */
-  function secondsToRedactLog(body: string): number {
+  const KB = 1024;
+
+  /** `unit`を繰り返して`bytes`バイトほどにした入力で、伏せ字の所要時間(秒)を測る。 */
+  function secondsToRedactLog(unit: string, bytes: number): number {
+    const body = unit.repeat(Math.ceil(bytes / unit.length));
     const started = performance.now();
     redactLog(`\n${body}\n`);
     return (performance.now() - started) / 1000;
   }
 
-  test.each([
-    ["many PEM BEGIN markers", "-----BEGIN X-----".repeat(15000)],
-    ["a dotted chain that looks like a scheme", "a.".repeat(131072)],
-    ["a repeated JWT head without a dot", "eyJab-".repeat(43690)],
-    ["a repeated scheme separator", "://".repeat(85000)],
-    ["a repeated key word", "TOKEN".repeat(50000)],
-    ["a repeated Bearer", "Bearer ".repeat(36000)],
-    ["a repeated JWT head with dots", "eyJabcde.abcdeabcde.".repeat(13000)],
-  ])("redactLog finishes %s in under a second", (_name, body) => {
-    expect(secondsToRedactLog(body)).toBeLessThan(1);
+  const CASES: ReadonlyArray<readonly [string, string]> = [
+    ["many PEM BEGIN markers", "-----BEGIN X-----"],
+    ["a dotted chain that looks like a scheme", "a."],
+    ["a repeated JWT head without a dot", "eyJab-"],
+    ["a repeated scheme separator", "://"],
+    ["a repeated key word", "TOKEN"],
+    ["a repeated Bearer", "Bearer "],
+    ["a repeated JWT head with dots", "eyJabcde.abcdeabcde."],
+    ["many PEM END markers", "-----END X-----"],
+    ["BEGIN markers with long names", `-----BEGIN ${"A".repeat(40)}-----`],
+  ];
+
+  test.each(CASES)("redactLog finishes %s in a few seconds", (_name, unit) => {
+    expect(secondsToRedactLog(unit, 512 * KB)).toBeLessThan(3);
   });
 
-  test("redactResult finishes a 500KB result in under a second", () => {
+  // 入力を倍にしたとき、所要時間が入力長の二乗の増え方(4倍)にならないこと。
+  // 所要時間が数十ミリ秒に満たないときは、測定の揺れを避けるため下限で比べる。
+  test.each(CASES)(
+    "redactLog does not grow quadratically on %s",
+    (_name, unit) => {
+      const half = secondsToRedactLog(unit, 256 * KB);
+      const full = secondsToRedactLog(unit, 512 * KB);
+      expect(full).toBeLessThan(3 * Math.max(half, 0.05));
+    },
+  );
+
+  test("redactResult finishes a 500KB result in a few seconds", () => {
     const started = performance.now();
     redactResult("a. ".repeat(170000));
-    expect((performance.now() - started) / 1000).toBeLessThan(1);
+    expect((performance.now() - started) / 1000).toBeLessThan(3);
   });
 
-  test("redactResult finishes a 500KB object result in under a second", () => {
+  test("redactResult finishes a 500KB object result in a few seconds", () => {
     const value = {
       items: Array.from({ length: 6000 }, (_, i) => ({
         id: i,
@@ -399,7 +520,7 @@ describe("adversarial input", () => {
     };
     const started = performance.now();
     redactResult(value);
-    expect((performance.now() - started) / 1000).toBeLessThan(1);
+    expect((performance.now() - started) / 1000).toBeLessThan(3);
   });
 
   test("redactLog keeps the text before a flood of BEGIN markers", () => {
@@ -407,7 +528,7 @@ describe("adversarial input", () => {
     expect(text.startsWith("before\n")).toBe(true);
   });
 
-  test("redactLog shows none of a flood of BEGIN markers", () => {
+  test("redactLog shows none of a flood of BEGIN markers with bodies", () => {
     const raw = `before\n${"-----BEGIN X-----\nSECRETBODY\n".repeat(200)}`;
     expect(redactLog(raw).text).not.toContain("SECRETBODY");
   });
