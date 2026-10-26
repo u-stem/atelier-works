@@ -396,20 +396,139 @@ export type SdkFindings = {
   readonly problems: readonly string[];
 };
 
-export function sdkFindings(_source: string): SdkFindings {
-  return { used: [], problems: [] };
+const CLIENT_IMPORT = /^windmill-client(?:@[\w.+-]+)?$/;
+const FORBIDDEN_NAMES =
+  /\b(?:WM_TOKEN|BASE_INTERNAL_URL|BASE_URL|OpenAPI|XMLHttpRequest|WebSocket|EventSource)\b/;
+const CLIENT_IMPORT_CLAUSE =
+  /\bimport\s+([^;"']*?)\s*\bfrom\s*["']windmill-client[^"']*["']/g;
+const IMPORT_STATEMENT = /\bimport\s+[^;"']*?\bfrom\s*""/g;
+const FETCH_REFERENCE = /(?<![.\w$])fetch(?![\w$])(?!\s*:)/;
+const MEMBER_ACCESS = /^\s*\.\s*([A-Za-z_$][\w$]*)/;
+
+/** パスをリテラルに固定するSDKの呼び出しと、そのパス。 */
+const BOUND_PATH_CALLS: Readonly<Record<string, string>> = {
+  "ResourceService.getResourceValue": "f/factory/factory_config",
+  "ResourceService.updateResourceValue": "f/factory/factory_config",
+};
+
+/** `code`の`open`にある丸括弧に対応する閉じ括弧までの本文。閉じていなければ末尾まで。 */
+function balancedArguments(code: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < code.length; i += 1) {
+    if (code[i] === "(") depth += 1;
+    if (code[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return code.slice(open, i + 1);
+    }
+  }
+  return code.slice(open);
 }
 
-export function sdkViolations(
-  _source: string,
-  _allowed: SdkAllowance,
-): string[] {
-  return [];
+function clientBindings(code: string, problems: string[]): string[] {
+  const bindings: string[] = [];
+  for (const match of code.matchAll(CLIENT_IMPORT_CLAUSE)) {
+    const clause = match[1] ?? "";
+    if (clause.includes("{")) {
+      problems.push("named import from windmill-client");
+    }
+    const namespace = /\*\s*as\s+([\w$]+)/.exec(clause)?.[1];
+    if (namespace !== undefined) bindings.push(namespace);
+    const fallback = /^([\w$]+)\s*(?:,|$)/.exec(clause.trim())?.[1];
+    if (fallback !== undefined) bindings.push(fallback);
+  }
+  return bindings;
 }
 
+function importProblems(source: string, problems: string[]): void {
+  for (const entry of transpiler.scanImports(source)) {
+    const path = entry.path;
+    if (path.startsWith(".")) continue;
+    if (CLIENT_IMPORT.test(path) && entry.kind !== "dynamic-import") continue;
+    problems.push(`import of ${path}`);
+  }
+}
+
+/**
+ * 1つのソースが使うSDKの呼び出し(`used`)と、許可表に関わらず禁じる形(`problems`)。
+ * windmill-clientのnamespaceとdefaultの束縛を見つけ、束縛の出現をすべて数える。
+ * `<束縛>.<member>`と`<束縛>.<X>Service.<method>`の形で説明できない出現(別名、添字、optional chain、
+ * 引数への受け渡し)は禁じる。名前付きimport、windmill-client以外の外部のimportと深いパスのimport、
+ * `fetch`、`globalThis`、`WM_TOKEN`などの名前も禁じる。
+ * 文字列とコメントの中の言及は数えない。ただし`WM_TOKEN`などの名前は、文字列でも禁じる。
+ * パスをリテラルに固定する呼び出し(`BOUND_PATH_CALLS`)は、その定数以外のパスを禁じる。
+ */
+export function sdkFindings(source: string): SdkFindings {
+  const problems: string[] = [];
+  const used = new Set<string>();
+  const code = codeOf(source);
+  importProblems(source, problems);
+  const bindings = clientBindings(code, problems);
+  const skeleton = codeSkeleton(code).replace(IMPORT_STATEMENT, "");
+  for (const binding of bindings) {
+    const escaped = binding.replaceAll("$", "\\$");
+    const occurrence = new RegExp(`(?<![\\w$.])${escaped}(?![\\w$])`, "g");
+    for (const match of skeleton.matchAll(occurrence)) {
+      const after = skeleton.slice(match.index + binding.length);
+      const member = MEMBER_ACCESS.exec(after);
+      if (member === null || member[1] === undefined) {
+        problems.push(`${binding} is used without a member access`);
+        continue;
+      }
+      const name = member[1];
+      if (!name.endsWith("Service")) {
+        used.add(name);
+        continue;
+      }
+      const method = MEMBER_ACCESS.exec(after.slice(member[0].length))?.[1];
+      if (method === undefined) {
+        problems.push(`${name} is used without a method`);
+      } else {
+        used.add(`${name}.${method}`);
+      }
+    }
+  }
+  if (FETCH_REFERENCE.test(skeleton)) problems.push("use of fetch");
+  if (/\bglobalThis\b/.test(skeleton)) problems.push("use of globalThis");
+  const forbidden = FORBIDDEN_NAMES.exec(code)?.[0];
+  if (forbidden !== undefined) problems.push(`mention of ${forbidden}`);
+  for (const [call, path] of Object.entries(BOUND_PATH_CALLS)) {
+    const [service, method] = call.split(".");
+    const opening = new RegExp(`\\b${service}\\s*\\.\\s*${method}\\s*\\(`, "g");
+    for (const match of code.matchAll(opening)) {
+      const args = balancedArguments(code, match.index + match[0].length - 1);
+      const pathKeys = [...args.matchAll(/\bpath\b/g)].length;
+      const literal = args.includes(`path: "${path}"`);
+      if (pathKeys !== 1 || !literal) {
+        problems.push(`${call} is not bound to the literal ${path}`);
+      }
+    }
+  }
+  return { used: [...used].sort(), problems };
+}
+
+/** `sdkFindings`の問題と、許可表に無い使用。 */
+export function sdkViolations(source: string, allowed: SdkAllowance): string[] {
+  const findings = sdkFindings(source);
+  const violations = [...findings.problems];
+  for (const use of findings.used) {
+    const permitted = use.includes(".")
+      ? allowed.services.includes(use)
+      : allowed.members.includes(use);
+    if (!permitted) violations.push(`${use} is not on the allowance`);
+  }
+  return violations;
+}
+
+/** `entry`がimportでたどれるファイルの和に、許可表を当てる。違反はファイルの相対パスを添える。 */
 export function sdkViolationsReachableFrom(
-  _entry: string,
-  _allowed: SdkAllowance,
+  entry: string,
+  allowed: SdkAllowance,
 ): string[] {
-  return [];
+  const found: string[] = [];
+  for (const [file, source] of sourcesReachableFrom(entry)) {
+    for (const violation of sdkViolations(source, allowed)) {
+      found.push(`${relative(file)}: ${violation}`);
+    }
+  }
+  return found;
 }
