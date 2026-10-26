@@ -266,6 +266,21 @@ describe("self_update same range wiring", () => {
     );
   });
 
+  test("a deployed run pushes, migrates and records one success after the decision", async () => {
+    const source = await selfUpdateSource();
+    const decision = source.indexOf("await chooseDeployOrSkip(");
+    const after = source.slice(
+      source.indexOf('reason: "same_range"', decision),
+    );
+
+    expect([
+      after.match(/await runWmillCli\(/g)?.length,
+      after.includes('"wmill sync push"'),
+      after.includes('"wmill datatable migrate up"'),
+      after.match(/result: "success"/g)?.length,
+    ]).toEqual([2, true, true, 1]);
+  });
+
   test("logs the trigger kind at the start of every run", async () => {
     const source = await selfUpdateSource();
     const start = source.indexOf("async function updateSelf(");
