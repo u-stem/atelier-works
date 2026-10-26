@@ -298,3 +298,11 @@ export function redactResult(
   const head = keepHead(stripControl(text), limitBytes);
   return { text: head.text, truncated: head.truncated, masked: counter.masked };
 }
+
+/** 構造を保ったまま値を伏せる(スタブ)。 */
+export function redactValue(_value: unknown): {
+  readonly value: unknown;
+  readonly masked: boolean;
+} {
+  return { value: undefined, masked: false };
+}

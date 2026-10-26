@@ -5,6 +5,7 @@ import {
   redactLog,
   redactResult,
   redactText,
+  redactValue,
 } from "../../f/factory/lib/console_redact.ts";
 
 // 形だけが本物らしい偽の値。実在の鍵ではない。
@@ -309,5 +310,28 @@ describe("redactText", () => {
 
   test("keeps plain text", () => {
     expect(redactText("plain text").text).toBe("plain text");
+  });
+});
+
+describe("redactValue", () => {
+  test("keeps the structure and masks a token inside", () => {
+    expect(redactValue({ list: [`x ${GH_TOKEN}`], n: 1 }).value).toEqual({
+      list: ["x ***"],
+      n: 1,
+    });
+  });
+
+  test("replaces the value under a secret key", () => {
+    expect(redactValue({ discord_webhook: "http://x" }).value).toEqual({
+      discord_webhook: "***",
+    });
+  });
+
+  test("reports that it masked something", () => {
+    expect(redactValue({ a: GH_TOKEN }).masked).toBe(true);
+  });
+
+  test("reports that it masked nothing", () => {
+    expect(redactValue({ a: "plain" }).masked).toBe(false);
   });
 });

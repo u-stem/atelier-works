@@ -1,0 +1,47 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/console_jobs.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _before:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _include_console:
+      type: boolean
+      description: ''
+      default: null
+    _include_output:
+      type: boolean
+      description: ''
+      default: null
+    _job_id:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _limit:
+      type: number
+      description: ''
+      default: null
+    _script_path:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _status:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _view:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - _view
