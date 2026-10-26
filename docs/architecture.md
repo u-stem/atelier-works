@@ -568,6 +568,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/auto_retry_reasons` | script | [LIB] 自動で再開してよい止まった理由 |
 | `f/factory/lib/self_update_support` | script | [LIB] 自己更新の純粋ロジック |
 | `f/factory/lib/requirements_template` | script | [LIB] 要件定義テンプレートの定義 |
+| `f/factory/lib/doc_tree_hash` | script | [LIB] 要件定義のディレクトリのハッシュと基準値の照合 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
