@@ -1,9 +1,19 @@
-summary: ''
-description: ''
+summary: '[SF-2-3/1] 設計用の作業領域の準備'
+description: 設計書の生成の準備を行うステップです。作業項目と承認済みの要件定義を確かめ、設計の試行を保存し、対象リポジトリを取得して設計書が読む専用の作業用ディレクトリを用意します。用意したディレクトリの場所を次のステップに渡します。
 lock: '!inline f/factory/steps/design_prepare.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
-  properties: {}
-  required: []
+  properties:
+    design_attempt:
+      type: number
+      description: ''
+      default: null
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - design_attempt
