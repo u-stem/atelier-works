@@ -267,7 +267,9 @@ export function OutputSection({
         </Alert>
       )}
       {output === null || output.text === "" ? (
-        <p className="text-small text-muted-foreground">{emptyText}</p>
+        error === null ? (
+          <p className="text-small text-muted-foreground">{emptyText}</p>
+        ) : null
       ) : (
         <section
           // スクロールできる領域は、キーボードで焦点を当てないと読み進められない。
