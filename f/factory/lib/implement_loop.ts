@@ -471,6 +471,13 @@ export type ImplementClaudeRunRound = Exclude<
   { readonly kind: "lease_lost" } | { readonly kind: "requirements_modified" }
 >;
 
+/** Claudeを実際に実行したラウンドか。 */
+export function ranClaude(
+  _round: ImplementClaudeRound,
+): _round is ImplementClaudeRunRound {
+  return false;
+}
+
 /** implement_generateがリースを失っていたときに返すラウンド。検証ループは何もせずに`lease_lost`で止まる。 */
 export const LEASE_LOST_ROUND: ImplementClaudeRound = { kind: "lease_lost" };
 

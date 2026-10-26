@@ -5,6 +5,7 @@ import {
   DESIGN_OPEN_QUESTION_MAX_CHARS,
   DESIGN_OPEN_QUESTIONS_MAX_COUNT,
   DESIGN_SUMMARY_MAX_CHARS,
+  designGapExhaustedReason,
 } from "../../f/factory/lib/design_template.ts";
 import {
   REQUIREMENTS_DIR_MISSING_REASON,
@@ -1311,7 +1312,7 @@ describe("runDesignGenerate when the requirements have a gap", () => {
     expect(h.moves).toEqual([
       {
         to: "needs_human",
-        reason: "design requirements_gap after max_attempts 2",
+        reason: designGapExhaustedReason(2),
       },
     ]);
   });
@@ -1320,7 +1321,7 @@ describe("runDesignGenerate when the requirements have a gap", () => {
     const h = gapHarness({ maxAttempts: 2 });
     expect(await runDesignGenerate(h.deps, INPUT)).toEqual({
       outcome: "needs_human",
-      reason: "design requirements_gap after max_attempts 2",
+      reason: designGapExhaustedReason(2),
     });
   });
 
@@ -1773,5 +1774,51 @@ describe("runDesignGenerate and a directory that already holds a saved draft", (
     const h = harness({ files: { [SAVED_FILE]: "STALE" } });
     await runDesignGenerate(h.deps, INPUT);
     expect(h.memory.files.get(SAVED_FILE)).toBe(DRAWIO);
+  });
+});
+
+// mainはWindmillの変数・リソースとDBを直接使うので、依存の結線はソースの文面で固定する。
+// 結線を取り違えると、ロックの持ち主タグや、図の保護や、試行の記録が別の値になる。
+describe("the wiring of design_generate main", () => {
+  async function source(): Promise<string> {
+    return Bun.file(
+      new URL("../../f/factory/steps/design_generate.ts", import.meta.url),
+    ).text();
+  }
+
+  /** mainの中の`buildDesignRunClaude({`から、対応する閉じ括弧までの呼び出しを返す。 */
+  async function runClaudeCall(): Promise<string> {
+    const text = await source();
+    const start = text.indexOf("runClaude: buildDesignRunClaude({");
+    if (start < 0) return "";
+    const end = text.indexOf("}),", start);
+    return end < 0 ? "" : text.slice(start, end);
+  }
+
+  test.each([
+    ["workItemId", "workItemId: work_item_id,"],
+    ["designAttempt", "designAttempt: design_attempt,"],
+    ["worktreeDir", "worktreeDir: worktree_dir,"],
+    ["leaseJobId", "leaseJobId,"],
+  ])("passes %s to the Claude run of the design", async (_name, line) => {
+    expect(await runClaudeCall()).toContain(line);
+  });
+
+  test("passes the check for a saved draft of the same directory", async () => {
+    expect(await source()).toContain(
+      "hasDesignDraftForDocDir: (docDir) => hasDesignDraftForDocDir(docDir),",
+    );
+  });
+
+  test("hashes the directory with the real hash function", async () => {
+    expect(await source()).toContain(
+      "hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),",
+    );
+  });
+
+  test("launches the pipeline flow of the requirements again", async () => {
+    expect(await source()).toContain(
+      "wmill.runFlowAsync(PIPELINE_FLOW_PATH, pipelineInput)",
+    );
   });
 });

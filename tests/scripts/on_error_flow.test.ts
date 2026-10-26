@@ -17,6 +17,7 @@ import type { FailureRecord, WorkItem } from "../../f/factory/lib/types.ts";
 import {
   type FlowFailureDeps,
   type FlowFailureInput,
+  failureNextAction,
   failureWorkItemRef,
   handleFlowFailure,
   shouldMarkFailed,
@@ -524,5 +525,25 @@ describe("handleFlowFailure for the design flow", () => {
     });
     await handleFlowFailure(fake.deps, designInput());
     expect(jobFailed(fake.events)?.flow_path).toBe(DESIGN_FLOW_PATH);
+  });
+});
+
+describe("failureNextAction for the design flow", () => {
+  const LOCK_HELD = "worktree lock is held by a process this run left behind";
+
+  test("gives the next action of the design flow", () => {
+    expect(failureNextAction(DESIGN_FLOW_PATH, LOCK_HELD)).toBe(
+      nextActionFor(LOCK_HELD, "design"),
+    );
+  });
+
+  test("mentions the design run when a process it left holds the worktree lock", () => {
+    expect(failureNextAction(DESIGN_FLOW_PATH, LOCK_HELD) ?? "").toContain(
+      "設計",
+    );
+  });
+
+  test("leaves the notification of another flow without a dedicated action", () => {
+    expect(failureNextAction("f/factory/implement", LOCK_HELD)).toBeUndefined();
   });
 });

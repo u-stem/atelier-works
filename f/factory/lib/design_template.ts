@@ -84,6 +84,16 @@ export function buildDesignDocDir(
 export const DESIGN_DOC_DIR_IN_USE_REASON =
   "design document directory already holds a saved draft";
 
+/** 設計の開始時に、要件定義の試行に承認が無いときの`needs_human`の理由。 */
+export function designNoApprovalReason(_attempt: number): string {
+  return "";
+}
+
+/** 設計が要件の不足を報告したが、要件定義の試行が上限に達したときの`needs_human`の理由。 */
+export function designGapExhaustedReason(_maxAttempts: number): string {
+  return "";
+}
+
 /** 設計の構造化出力の`summary`の長さの上限(コードポイント)。 */
 export const DESIGN_SUMMARY_MAX_CHARS = 1000;
 

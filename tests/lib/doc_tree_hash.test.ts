@@ -252,6 +252,37 @@ describe("checkDocTreeHash", () => {
       "no_baseline",
     );
   });
+
+  /** `code`だけを持つ、ファイルシステムの例外に似せた例外。 */
+  function fsError(code: string): Error {
+    const err = new Error(`${code}: operation failed, open '/d/x'`);
+    Reflect.set(err, "code", code);
+    return err;
+  }
+
+  test("returns modified when an entry vanished while hashing (ENOENT)", async () => {
+    expect(
+      await checkDocTreeHash("/d", HASH, async () => {
+        throw fsError("ENOENT");
+      }),
+    ).toBe("modified");
+  });
+
+  test("returns modified when a directory was replaced by a file while hashing (ENOTDIR)", async () => {
+    expect(
+      await checkDocTreeHash("/d", HASH, async () => {
+        throw fsError("ENOTDIR");
+      }),
+    ).toBe("modified");
+  });
+
+  test("rethrows an error that is not about a vanished entry", async () => {
+    await expect(
+      checkDocTreeHash("/d", HASH, async () => {
+        throw fsError("EACCES");
+      }),
+    ).rejects.toThrow("EACCES");
+  });
 });
 
 describe("the reasons for a requirements directory that cannot be trusted", () => {

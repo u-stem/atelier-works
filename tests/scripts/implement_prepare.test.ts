@@ -337,3 +337,44 @@ describe("requirementsGateReason", () => {
     expect([reason, w.messages]).toEqual([null, []]);
   });
 });
+
+// mainはWindmillとDBを直接使うので、関門の結線はソースの文面で固定する。
+describe("the wiring of the requirements gate in implement_prepare main", () => {
+  async function source(): Promise<string> {
+    return Bun.file(
+      new URL("../../f/factory/steps/implement_prepare.ts", import.meta.url),
+    ).text();
+  }
+
+  test("hashes the approved directory with the real hash function", async () => {
+    expect(await source()).toMatch(
+      /await requirementsGateReason\(\s*draft,\s*\(dir\) => hashDirectoryTree\(dir, realDirectoryIo\),/,
+    );
+  });
+
+  test("stops for a person with the reason of the gate", async () => {
+    expect(await source()).toContain(
+      'if (untrusted !== null) return stop("needs_human", untrusted);',
+    );
+  });
+
+  test("checks the gate before it looks at the branch", async () => {
+    const text = await source();
+    const gate = text.indexOf("await requirementsGateReason(");
+    const branch = text.indexOf("await findOpenPullRequestByHead(");
+    expect(gate >= 0 && gate < branch).toBe(true);
+  });
+
+  test("checks the gate before it prepares the worktree", async () => {
+    const text = await source();
+    const gate = text.indexOf("await requirementsGateReason(");
+    const worktree = text.indexOf("await prepareImplementWorktree(");
+    expect(gate >= 0 && gate < worktree).toBe(true);
+  });
+
+  test("carries the baseline of the draft into the context", async () => {
+    expect(await source()).toContain(
+      "requirements_doc_hash: input.draft.doc_hash,",
+    );
+  });
+});

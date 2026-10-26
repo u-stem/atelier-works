@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { designNoApprovalReason } from "../../f/factory/lib/design_template.ts";
 import { PIPELINE_LEASE_LOST_REASON } from "../../f/factory/lib/pipeline_lease.ts";
 import {
   type LockProcess,
@@ -299,24 +300,20 @@ describe("runDesignPrepare and the approved requirements", () => {
   test("names the attempt in the reason", async () => {
     const h = harness({ approval: null });
     await runDesignPrepare(h.deps, INPUT);
-    expect(h.moves[0]?.reason).toBe(
-      "design requires approved requirements for attempt 2",
-    );
+    expect(h.moves[0]?.reason).toBe(designNoApprovalReason(2));
   });
 
   test("notifies the person", async () => {
     const h = harness({ approval: null });
     await runDesignPrepare(h.deps, INPUT);
-    expect(h.notified).toEqual([
-      "design requires approved requirements for attempt 2",
-    ]);
+    expect(h.notified).toEqual([designNoApprovalReason(2)]);
   });
 
   test("skips with the reason", async () => {
     const h = harness({ approval: null });
     expect(await runDesignPrepare(h.deps, INPUT)).toEqual({
       skip: true,
-      reason: "design requires approved requirements for attempt 2",
+      reason: designNoApprovalReason(2),
     });
   });
 

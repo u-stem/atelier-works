@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
@@ -1035,6 +1036,21 @@ describe("buildStartDesign", () => {
     const p = ports();
     await buildStartDesign(CONFIG, CONTEXT, p.value)();
     expect(p.launches[0]?.path).toBe(DESIGN_FLOW_PATH);
+  });
+
+  // 定数どうしの比較では、定数ごと書き換わったときに気づけない。起動先の文字列を直接固定する。
+  test("starts the flow at the path of the workspace", async () => {
+    const p = ports();
+    await buildStartDesign(CONFIG, CONTEXT, p.value)();
+    expect(p.launches[0]?.path).toBe("f/factory/design");
+  });
+
+  test("starts a flow that exists in the repository", () => {
+    expect(
+      existsSync(
+        new URL("../../f/factory/design__flow/flow.yaml", import.meta.url),
+      ),
+    ).toBe(true);
   });
 
   test("passes the work item, the next design attempt and no feedback", async () => {

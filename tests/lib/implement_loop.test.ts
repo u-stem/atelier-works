@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -48,6 +49,7 @@ import {
   NO_CHANGES_CHECK_NAME,
   prepareImplementWorktree,
   RequirementsUntrustedError,
+  ranClaude,
   runDocDirGuardedRound,
   runImplementClaudeRound,
   runImplementGenerateRound,
@@ -466,15 +468,18 @@ describe("withReadOnlyDocDirCopy and the baseline of the approved requirements",
     await expect(g.run()).rejects.toBeInstanceOf(RequirementsUntrustedError);
   });
 
-  test("skips the comparison and warns when there is no baseline", async () => {
+  test("skips the comparison when there is no baseline", async () => {
     const g = guarded([], { baseline: null });
     await g.run();
-    expect([g.events, g.warnings]).toEqual([
-      ["copy", "fn", "remove"],
-      [
-        "the approved requirements have no baseline hash; copying without the comparison",
-      ],
-    ]);
+    expect(g.events).toEqual(["copy", "fn", "remove"]);
+  });
+
+  // 基準値が無い警告は準備のステップが1回だけ出す。ラウンドごとの複製では出さない。
+  test("does not warn on every round when there is no baseline", async () => {
+    const g = guarded([], { baseline: null });
+    await g.run();
+    await g.run();
+    expect(g.warnings).toEqual([]);
   });
 
   test("runs fn with null when there is no baseline and the directory is gone", async () => {
@@ -587,9 +592,13 @@ describe("docDirGuardFor", () => {
 
   test("hashes a real directory as a sha-256 digest", async () => {
     const dir = mkdtempSync(join(tmpdir(), "doc-guard-test-"));
-    writeFileSync(join(dir, "requirements.md"), "R");
-    const guard = docDirGuardFor(CONTEXT, () => {});
-    expect(await guard.hashTree(dir)).toMatch(/^[0-9a-f]{64}$/);
+    try {
+      writeFileSync(join(dir, "requirements.md"), "R");
+      const guard = docDirGuardFor(CONTEXT, () => {});
+      expect(await guard.hashTree(dir)).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("hashes a directory that does not exist as null", async () => {
@@ -2251,5 +2260,21 @@ describe("runImplementGenerateRound", () => {
         runRound: async () => outputRound(DONE, 7),
       }),
     ).toEqual(outputRound(DONE, 7));
+  });
+});
+
+describe("ranClaude", () => {
+  test("is true for a round with an output", () => {
+    expect(ranClaude(outputRound(DONE, 7))).toBe(true);
+  });
+
+  test("is false for a round that lost the lease", () => {
+    expect(ranClaude({ kind: "lease_lost" })).toBe(false);
+  });
+
+  test("is false for a round stopped by the requirements check", () => {
+    expect(ranClaude({ kind: "requirements_modified", reason: "r" })).toBe(
+      false,
+    );
   });
 });

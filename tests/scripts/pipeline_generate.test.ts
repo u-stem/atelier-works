@@ -214,4 +214,46 @@ describe("snapshotDocDir", () => {
       "changed while it was being saved",
     );
   });
+
+  test("reports a missing baseline as a snapshot failure", async () => {
+    const h = io([null, null]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (doc_hash_unavailable)",
+    );
+  });
+
+  test("reports a change during the read as a snapshot failure", async () => {
+    const h = io([HASH, "0".repeat(64)]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow(
+      "pipeline_generate: doc snapshot failed (doc_changed_during_save)",
+    );
+  });
+
+  test("does not report a snapshot failure as a failed Claude run", async () => {
+    const h = io([null, null]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.not.toThrow(
+      "runClaude failed",
+    );
+  });
+});
+
+// mainはWindmillとDBを直接使うので、基準値の受け渡しはソースの文面で固定する。
+describe("the wiring of pipeline_generate main", () => {
+  async function stepSource(): Promise<string> {
+    return Bun.file(
+      new URL("../../f/factory/steps/pipeline_generate.ts", import.meta.url),
+    ).text();
+  }
+
+  test("saves the draft with the baseline hash of the snapshot", async () => {
+    expect(await stepSource()).toMatch(
+      /await saveDraft\(\{[^}]*doc_hash: snapshot\.docHash,?\s*\}\)/,
+    );
+  });
+
+  test("saves the markdown of the same snapshot", async () => {
+    expect(await stepSource()).toMatch(
+      /await saveDraft\(\{[^}]*markdown: snapshot\.markdown,/,
+    );
+  });
 });

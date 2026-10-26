@@ -5171,6 +5171,14 @@ export function nextActionFor(reason: string, flow?: NextActionFlow): string {
     : GENERIC_NEXT_ACTION;
 }
 
+/** 設計工程の`needs_human`の通知に載せる、理由の訳と次の操作。 */
+export function designNeedsHumanFields(_reason: string): {
+  readonly reason: string;
+  readonly next_action: string;
+} {
+  return { reason: "", next_action: "" };
+}
+
 // ---------------------------------------------------------------------------
 // I/O: `workspace.ts`が公開していないgitの補助
 // ---------------------------------------------------------------------------
