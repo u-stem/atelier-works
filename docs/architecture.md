@@ -340,7 +340,8 @@ Consoleの一覧と集計は次のviewを読む。
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
-| `pipeline` | `implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
+| `pipeline` | `design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
+| `design` | `requirements_apply`(Consoleの承認と却下) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
 | `implement` | `auto_retry_stale_image`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
@@ -588,6 +589,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/pipeline_generate` | script | [SF-2-1/2] 要件定義の生成(Claude) |
 | `f/factory/steps/pipeline_request_approval` | script | [SF-2-1/3] 承認依頼 |
 | `f/factory/steps/requirements_apply` | script | [SF-2-2] 要件定義の承認結果を反映 |
+| `f/factory/design` | flow | [SF-2-3] 設計書の生成と承認 |
 | `f/factory/steps/design_prepare` | script | [SF-2-3/1] 設計用の作業領域の準備 |
 | `f/factory/steps/design_generate` | script | [SF-2-3/2] 設計書の生成(Claude) |
 | `f/factory/steps/design_request_approval` | script | [SF-2-3/3] 設計の承認依頼 |
