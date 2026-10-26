@@ -55,3 +55,21 @@ describe("RequirementsSection while loading", () => {
     ).toContain("h-[4.75rem]");
   });
 });
+
+describe("RequirementsSection heading", () => {
+  test("leaves out the count that repeats the tab name", () => {
+    expect(
+      renderToStaticMarkup(<RequirementsSection index={freshQuery(NO_ROWS)} />),
+    ).not.toContain("要件定義がある作業項目");
+  });
+
+  test("leaves out the lead sentence while the rows load", () => {
+    expect(
+      renderToStaticMarkup(
+        <RequirementsSection
+          index={loadingQuery<readonly RequirementsIndexRow[]>()}
+        />,
+      ),
+    ).not.toContain("要件定義がある作業項目");
+  });
+});

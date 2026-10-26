@@ -52,8 +52,8 @@ describe("the place of the band and the tabs", () => {
     expect(SOURCE).not.toContain("useMediaQuery");
   });
 
-  test("gives the band the oldest time of fetch", () => {
-    expect(BODY).toContain("updatedAt={oldestUpdatedAt(");
+  test("gives the band no time of fetch, which the page header shows", () => {
+    expect(BODY).not.toContain("updatedAt");
   });
 
   test("gives the band the current time", () => {

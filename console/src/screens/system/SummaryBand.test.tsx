@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
-import { formatAbsoluteIso } from "../../lib/relativeTime.ts";
 import type {
   BandLevel,
   BandRow,
@@ -32,7 +31,8 @@ function row(
   };
 }
 
-function render(rows: BandRow[], updatedAt = 0): string {
+/** 帯が取得の時刻を受け取らないことを確かめるため、型に無い属性を展開で渡す。 */
+function render(rows: BandRow[], extra: object = {}): string {
   return renderToStaticMarkup(
     <MemoryRouter>
       <TooltipProvider>
@@ -40,7 +40,7 @@ function render(rows: BandRow[], updatedAt = 0): string {
           rows={rows}
           onJump={() => undefined}
           now={NOW}
-          updatedAt={updatedAt}
+          {...extra}
         />
       </TooltipProvider>
     </MemoryRouter>,
@@ -155,26 +155,20 @@ describe("SummaryBand", () => {
     expect(levelAt).toBeGreaterThan(html.indexOf("結論 holds"));
   });
 
-  test("shows the oldest time of fetch once, in the band", () => {
-    expect(render([row("holds", "normal")], FETCHED_AT)).toContain(
-      "最終取得 3分前",
-    );
+  test("shows no time of fetch, which the page header owns", () => {
+    expect(
+      render([row("holds", "normal")], { updatedAt: FETCHED_AT }),
+    ).not.toContain("最終取得");
   });
 
-  test("gives the time of fetch in Japan time for assistive technology", () => {
-    expect(render([row("holds", "normal")], FETCHED_AT)).toContain(
-      `(${formatAbsoluteIso(new Date(FETCHED_AT).toISOString())})`,
-    );
-  });
-
-  test("shows no time of fetch before any fetch has returned", () => {
-    expect(render([row("holds", "normal")], 0)).not.toContain("最終取得");
+  test("renders no time element", () => {
+    expect(
+      render([row("holds", "normal")], { updatedAt: FETCHED_AT }),
+    ).not.toContain("<time");
   });
 
   test("has no note, which belongs to the sections", () => {
-    expect(render([row("holds", "normal")], FETCHED_AT)).not.toContain(
-      "前回取得",
-    );
+    expect(render([row("holds", "normal")])).not.toContain("前回取得");
   });
 
   test("has no list of other sections", () => {
