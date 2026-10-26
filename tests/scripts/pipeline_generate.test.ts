@@ -7,6 +7,8 @@ import {
   listDiagramFiles,
   readDocFile,
   resolveFeedback,
+  type SnapshotIo,
+  snapshotDocDir,
 } from "../../f/factory/steps/pipeline_generate.ts";
 
 describe("resolveFeedback", () => {
@@ -139,5 +141,77 @@ describe("readDocFile", () => {
         throw new Error("ENOENT");
       }),
     ).rejects.toThrow(/requirements\.md/);
+  });
+});
+
+describe("snapshotDocDir", () => {
+  const HASH = "f".repeat(64);
+
+  /** 呼び出しの順を控える偽の依存。`hashes`は呼び出しごとに順に返す。 */
+  function io(hashes: (string | null)[], entries: string[] = []) {
+    const events: string[] = [];
+    let hashCall = 0;
+    const deps: SnapshotIo = {
+      hashTree: async () => {
+        events.push("hash");
+        const value = hashes[hashCall];
+        hashCall += 1;
+        return value === undefined ? null : value;
+      },
+      readDir: async () => {
+        events.push("readDir");
+        return entries;
+      },
+      readText: async () => {
+        events.push("readText");
+        return "# body";
+      },
+    };
+    return { deps, events };
+  }
+
+  test("hashes, reads the markdown and the diagram list, then hashes again", async () => {
+    const h = io([HASH, HASH], ["requirements.md", "flow.drawio"]);
+    await snapshotDocDir("/doc", h.deps);
+    expect(h.events).toEqual(["hash", "readDir", "readText", "hash"]);
+  });
+
+  test("returns the hash as the baseline", async () => {
+    const h = io([HASH, HASH]);
+    expect((await snapshotDocDir("/doc", h.deps)).docHash).toBe(HASH);
+  });
+
+  test("returns the markdown that was read between the two hashes", async () => {
+    const h = io([HASH, HASH]);
+    expect((await snapshotDocDir("/doc", h.deps)).markdown).toBe("# body");
+  });
+
+  test("returns the diagram files of the listing", async () => {
+    const h = io([HASH, HASH], ["requirements.md", "a.drawio", "b.drawio"]);
+    expect((await snapshotDocDir("/doc", h.deps)).diagramFiles).toEqual([
+      "a.drawio",
+      "b.drawio",
+    ]);
+  });
+
+  test("fails when the directory changed while it was read", async () => {
+    const h = io([HASH, "0".repeat(64)]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow(
+      "changed while it was being saved",
+    );
+  });
+
+  test("fails when the directory does not exist before the read", async () => {
+    const h = io([null, null]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow(
+      "no baseline hash",
+    );
+  });
+
+  test("fails when the directory disappears during the read", async () => {
+    const h = io([HASH, null]);
+    await expect(snapshotDocDir("/doc", h.deps)).rejects.toThrow(
+      "changed while it was being saved",
+    );
   });
 });

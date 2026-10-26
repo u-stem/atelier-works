@@ -238,6 +238,25 @@ async function collectDocIssues(docDir: string): Promise<string[]> {
   ];
 }
 
+export type SnapshotIo = {
+  readonly hashTree: (dir: string) => Promise<string | null>;
+  readonly readDir: (dir: string) => Promise<string[]>;
+  readonly readText: (path: string) => Promise<string>;
+};
+
+export type DocSnapshot = {
+  readonly markdown: string;
+  readonly diagramFiles: string[];
+  readonly docHash: string;
+};
+
+export async function snapshotDocDir(
+  _docDir: string,
+  _io: SnapshotIo,
+): Promise<DocSnapshot> {
+  return { markdown: "", diagramFiles: [], docHash: "" };
+}
+
 /**
  * 要件定義を生成して下書きとして保存する。
  * 最初と下書きの保存の直前にpipelineのリースを確かめ、持っていなければ何も書かずに
