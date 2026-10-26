@@ -32,14 +32,6 @@ import {
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
-import { DESIGN_START_FAILED_REASON } from "../lib/design_launch_support.ts";
-import { DESIGN_DOC_DIR_IN_USE_REASON } from "../lib/design_template.ts";
-import {
-  REQUIREMENTS_DIR_MISSING_REASON,
-  REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
-  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
-  REQUIREMENTS_MODIFIED_REASON,
-} from "../lib/doc_tree_hash.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   endsWithMarkerLine,
@@ -4254,10 +4246,14 @@ function ciRoundStopAction(match: RegExpMatchArray): string {
 const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
   "承認済みの要件定義のディレクトリを確かめ、`factory`ラベルを付け直して要件定義を作り直してください(この作業項目を再実行しても同じ理由で止まります)";
 
-/** 設計工程が`needs_human`にする理由の規則。設計の理由はどれも`design`か、承認済みの要件定義の確認で始まる。 */
+/**
+ * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
+ * `lib/design_launch_support.ts`の定数と同じで、`tests/scripts/pr_workflow_support_design.test.ts`が食い違いを検出する。
+ * 拒否した安全装置の依存を増やさないため、定数はimportせず、文字列をここに書く。
+ */
 const DESIGN_REASON_RULES: readonly ReasonRule[] = [
   {
-    pattern: reasonPattern(DESIGN_START_FAILED_REASON, "(?:: ([\\s\\S]+))?$"),
+    pattern: /^design flow could not be started(?:: ([\s\S]+))?$/,
     describe: (m) =>
       m[1] === undefined
         ? "設計フローを起動できませんでした"
@@ -4279,31 +4275,31 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
   },
   {
-    pattern: reasonPattern(REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON, "$"),
+    pattern: /^approved requirements were modified before design$/,
     describe: () =>
       "承認済みの要件定義のディレクトリが、設計を始める前に承認時の内容と異なっていました",
     nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
   },
   {
-    pattern: reasonPattern(REQUIREMENTS_MODIFIED_REASON, "$"),
+    pattern: /^approved requirements were modified during design$/,
     describe: () =>
       "承認済みの要件定義のディレクトリが、設計の実行中に書き換わりました",
     nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
   },
   {
-    pattern: reasonPattern(REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON, "$"),
+    pattern: /^approved requirements were modified before implementation$/,
     describe: () =>
       "承認済みの要件定義のディレクトリが、実装の準備かClaudeの実行の前後で承認時の内容と異なっていました",
     nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
   },
   {
-    pattern: reasonPattern(REQUIREMENTS_DIR_MISSING_REASON, "$"),
+    pattern: /^approved requirements directory is missing$/,
     describe: () =>
       "承認済みの要件定義のディレクトリがありません(workerやボリュームを作り直した可能性があります)",
     nextAction: () => REQUIREMENTS_UNTRUSTED_NEXT_ACTION,
   },
   {
-    pattern: reasonPattern(DESIGN_DOC_DIR_IN_USE_REASON, "$"),
+    pattern: /^design document directory already holds a saved draft$/,
     describe: () =>
       "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
     nextAction: () =>
