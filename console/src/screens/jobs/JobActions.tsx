@@ -11,7 +11,11 @@ import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { cancelJob } from "../../api/writes.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { canCancelJob, cancelDialogLines } from "../../lib/jobActions.ts";
+import {
+  canCancelJob,
+  cancelDialogHandlers,
+  cancelDialogLines,
+} from "../../lib/jobActions.ts";
 import { jobScriptName } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import {
@@ -55,19 +59,17 @@ function Field({ label, value }: { label: string; value: string }) {
 /**
  * ジョブを中止する前の確認。確認のボタンは破壊的な色にする。止めたジョブは元に戻せないためである。
  * 対象(フローとジョブのid、作業項目)と、効果、残るもの(子プロセス、作業項目の失敗)を並べる。
- * 初期のフォーカスは、取り消しのボタンにある(`ConfirmDialog`)。
+ * 初期のフォーカスは、操作をやめる「取り消す」ボタンにある(`ConfirmDialog`)。
  * 行の文字列は信頼できないので、`safeText`を通して文字としてだけ描く。
  */
 export function CancelDialog({
   job,
   workItemId,
-  busy,
   onConfirm,
   onCancel,
 }: {
   job: JobSummaryView | null;
   workItemId: number | null;
-  busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -77,7 +79,6 @@ export function CancelDialog({
       title={job === null ? "" : "このジョブを中止しますか"}
       confirmLabel="中止する"
       destructive
-      busy={busy}
       onConfirm={onConfirm}
       onCancel={onCancel}
     >
@@ -90,13 +91,10 @@ export function CancelDialog({
             />
             <Field label="ジョブ" value={safeText(job.id)} />
             {workItemId === null ? null : (
-              <Field
-                label="作業項目"
-                value={`作業項目 #${String(workItemId)}`}
-              />
+              <Field label="作業項目" value={`#${String(workItemId)}`} />
             )}
           </dl>
-          {cancelDialogLines(job.script_path).map((line) => (
+          {cancelDialogLines(job.script_path, job.state).map((line) => (
             <p key={line} className="text-body">
               {line}
             </p>
@@ -107,13 +105,16 @@ export function CancelDialog({
   );
 }
 
-/** 確認のダイアログを開くボタン。実装は後で入れる。 */
-export function OpenCancelButton(_props: {
+/** 確認のダイアログを開くボタン。同じジョブの中止が実行中(`locked`)の間は押せない。 */
+export function OpenCancelButton({
+  locked,
+  onOpen,
+}: {
   locked: boolean;
   onOpen: () => void;
 }) {
   return (
-    <Button variant="outline" size="sm" disabled={false} onClick={() => {}}>
+    <Button variant="outline" size="sm" disabled={locked} onClick={onOpen}>
       ジョブを中止
     </Button>
   );
@@ -160,30 +161,22 @@ export function JobActions({
   if (!canCancelJob(job)) {
     return null;
   }
-  const locked = cancel.isLocked(job.id);
+  const handlers = cancelDialogHandlers({
+    jobId: job.id,
+    setOpen,
+    submit: cancel.submit,
+  });
   return (
     <>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={locked}
-        onClick={() => {
-          setOpen(true);
-        }}
-      >
-        ジョブを中止
-      </Button>
+      <OpenCancelButton
+        locked={cancel.isLocked(job.id)}
+        onOpen={handlers.onOpen}
+      />
       <CancelDialog
         job={open ? job : null}
         workItemId={workItemId}
-        busy={false}
-        onConfirm={() => {
-          setOpen(false);
-          cancel.submit(job.id);
-        }}
-        onCancel={() => {
-          setOpen(false);
-        }}
+        onConfirm={handlers.onConfirm}
+        onCancel={handlers.onDismiss}
       />
     </>
   );

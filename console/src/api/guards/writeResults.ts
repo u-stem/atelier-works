@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを取り消すscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
@@ -270,13 +270,14 @@ export function isFreezeReleaseResult(
 }
 
 /**
- * ジョブを中止(取消)できなかった理由。`f/factory/console_job_cancel.ts`の`CANCEL_REFUSAL_REASONS`と
+ * ジョブを中止できなかった理由。`f/factory/console_job_cancel.ts`の`CANCEL_REFUSAL_REASONS`と
  * 同じ並びで、契約テストが突き合わせる。画面は日本語の固定文に直す(`lib/writeNotices.ts`)。
  */
 export const JOB_CANCEL_REFUSAL_REASONS = [
   "flow_not_allowed",
   "not_a_root_flow",
   "already_finished",
+  "already_canceling",
   "scheduled_for_later",
   "actor_unknown",
   "audit_unavailable",

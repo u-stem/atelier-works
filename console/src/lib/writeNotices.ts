@@ -11,6 +11,7 @@ import type {
   HoldReleaseResult,
   JobCancelRefusalReason,
   JobCancelResult,
+  JobCancelWorkItem,
   NoticeResolveResult,
   RetryWorkItemResult,
 } from "../api/guards/writeResults.ts";
@@ -215,15 +216,36 @@ const JOB_CANCEL_REFUSALS: Readonly<Record<JobCancelRefusalReason, string>> = {
   not_a_root_flow:
     "フローの子のステップや、scriptのジョブは、中止できない対象です。",
   already_finished: "すでに終わっています。",
+  already_canceling: "すでに中止済みです。止まるまで少しかかります。",
   scheduled_for_later: "予定の時刻が先のジョブは、中止できません。",
   actor_unknown: "操作者を確認できないため、中止しませんでした。",
   audit_unavailable: "操作の記録を残せないため、中止しませんでした。",
 };
 
+/** 人の判断を待つ作業項目の状態。照合は、この状態の作業項目を失敗にしない。 */
+const WAITING_FOR_PERSON_STATUSES: readonly string[] = [
+  "awaiting_approval",
+  "awaiting_design_approval",
+];
+
+/** 中止の後に読み直した作業項目について伝える文。状態で、照合が失敗にするかが分かれる。 */
+function describeCanceledWorkItem(workItem: JobCancelWorkItem | null): string {
+  if (workItem === null) {
+    return "作業項目の状態は読めませんでした。";
+  }
+  const head = `作業項目 #${String(workItem.id)} の状態: ${workItemStatusLabel(workItem.status)}。`;
+  if (WAITING_FOR_PERSON_STATUSES.includes(workItem.status)) {
+    return `${head}失敗にはならず、承認待ちのまま残ります。承認依頼の通知は届かないことがあります。`;
+  }
+  return workItem.lease_held
+    ? `${head}リースがこのジョブを指したままなので、次の照合で失敗になります。`
+    : head;
+}
+
 /**
  * ジョブの中止の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
- * 中止の後に読み直した作業項目の状態を添える。リースがそのジョブを指したままなら、次の照合で失敗になることも伝える。
- * 中止の反映が遅れて、ジョブがまだ実行中か待ちに見えるときは、状態を更新するよう伝える。
+ * 中止の依頼は済んでいても、ジョブがまだ実行中か待ちに見えるときは、止まったとは言わず、状態を更新するよう伝える。
+ * 中止の後に読み直した作業項目の状態を添える。承認待ちの作業項目は照合が失敗にしないので、失敗になるとは言わない。
  */
 export function describeJobCancelResult(result: JobCancelResult): WriteNotice {
   if (!result.found) {
@@ -232,18 +254,15 @@ export function describeJobCancelResult(result: JobCancelResult): WriteNotice {
   if (result.refused) {
     return { tone: "info", message: JOB_CANCEL_REFUSALS[result.reason] };
   }
-  const workItem =
-    result.work_item === null
-      ? "作業項目の状態は読めませんでした。"
-      : `作業項目 #${String(result.work_item.id)} の状態: ${workItemStatusLabel(result.work_item.status)}。${result.work_item.lease_held ? "リースがこのジョブを指したままなので、次の照合で失敗になります。" : ""}`;
-  const pending =
-    result.job_state === "running" || result.job_state === "queued"
-      ? "ジョブはまだ止まっていません。少し待って、状態を更新してください。"
-      : "";
-  const notice: WriteNotice = {
-    tone: pending === "" ? "success" : "warning",
-    message: `ジョブを中止しました。${workItem}${pending}`,
-  };
+  const workItem = describeCanceledWorkItem(result.work_item);
+  const notStopped =
+    result.job_state === "running" || result.job_state === "queued";
+  const notice: WriteNotice = notStopped
+    ? {
+        tone: "warning",
+        message: `中止を依頼しました。ジョブはまだ止まっていません。少し待って、状態を更新してください。${workItem}`,
+      }
+    : { tone: "success", message: `ジョブを中止しました。${workItem}` };
   return noteActionAudit(notice, result.action_audit);
 }
 

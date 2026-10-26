@@ -1,16 +1,18 @@
-// Consoleから、実行中か待ちの作業項目のフローを1件取り消すscript。
+// Consoleから、実行中か待ちの作業項目のフローを1件中止するscript。
 //
-// 取り消せるのは、親のジョブを持たないフロー(`job_kind`が`flow`)で、パスが`CANCELABLE_FLOW_PATHS`のどれかと
+// 中止できるのは、親のジョブを持たないフロー(`job_kind`が`flow`)で、パスが`CANCELABLE_FLOW_PATHS`のどれかと
 // 完全に一致するものだけである(前方一致にしない)。子のステップ、scriptのジョブ、tag consoleのジョブ、
-// 予定の時刻が未来のジョブ、すでに終わったジョブは取り消さない。`f/factory/`の外のジョブは、存在しないジョブと
-// 同じ応答にする(存在を返さない)。
-// 取り消しは、Windmillにジョブを止めさせるだけである。フローが起動した子プロセス(Claudeと検査)は、
-// 次の実行の確認か、翌日03:00の作業領域の掃除まで動き続けることがある。作業項目の状態は書き換えない。
+// 予定の時刻が先のジョブ、すでに終わったジョブ、停止処理中のジョブは中止しない。`f/factory/`の外のジョブは、
+// 存在しないジョブと同じ応答にする(存在を返さない)。
+// 中止は、Windmillにジョブを止めさせるだけである。フローが起動した子プロセス(Claudeと検査)は止まらない。
+// Claudeは上限まで動き続けることがあり、毎日03:00の作業領域の掃除が止めるのは、実行の上限時間に5分を足した時間を
+// 過ぎたものだけである。作業項目の状態は書き換えない。
 // 作業項目は、リースがこのジョブを指したまま残り、次の照合(`poll_issues`)が失敗にする。
-// 取り消しの後に、ジョブの状態と作業項目の行を読み直して返す。読めなければ`null`にする。
+// ただし、人の判断を待つ状態(承認待ち)の作業項目は、照合が失敗にしない。
+// 中止の後に、ジョブの状態と作業項目の行を読み直して返す。読めなければ`null`にする。
 //
-// 操作の記録(`factory.console_actions`)は、取り消しの前に`attempted`の行を入れ、後で結果を更新する。
-// 行を入れられなければ、取り消さずに断る。更新に失敗しても取り消しは戻さず、`action_audit`を`failed`にする。
+// 操作の記録(`factory.console_actions`)は、中止の前に`attempted`の行を入れ、後で結果を更新する。
+// 行を入れられなければ、中止せずに断る。更新に失敗しても中止は戻さず、`action_audit`を`failed`にする。
 // 操作者は、ジョブのWindmill実行文脈から導く(`deriveApprover`)。導けなければ断る。引数に操作者は取らない。
 //
 // Console用workerで動くので、どのsecret変数も読まない。SDKの呼び出しは、境界テストの許可表に収める。
@@ -28,16 +30,16 @@ import {
 
 const JOB_PATH_PREFIX = "f/factory/";
 
-/** 取り消しの理由としてWindmillに残す固定の文。操作者はWindmillが取り消した主体として残す。 */
+/** 中止の理由としてWindmillに残す固定の文。操作者はWindmillが取り消した主体として残す。 */
 const CANCEL_REASON = "canceled from the Factory Console";
 
 /** dependabotのフロー。作業項目を再実行できず、PRを人の手でマージするので、確認の文を分ける。 */
 export const DEPENDABOT_FLOW_PATH = "f/factory/dependabot";
 
 /**
- * 取り消してよいフロー。どれも作業項目を入力に取り、作業項目の行が`flow_job_id`でそのジョブを指す。
- * 取り消すと、次の照合が作業項目を失敗にする。
- * 新しいフローは、ここに足すか、`NOT_CANCELABLE_FLOW_PATHS`に理由つきで置くまで、取り消せない。
+ * 中止してよいフロー。どれも作業項目を入力に取り、作業項目の行が`flow_job_id`でそのジョブを指す。
+ * 中止すると、次の照合が作業項目を失敗にする(承認待ちを除く)。
+ * 新しいフローは、ここに足すか、`NOT_CANCELABLE_FLOW_PATHS`に理由つきで置くまで、中止できない。
  * 契約テスト(`tests/scripts/console_cancel.test.ts`)が、リポジトリのフローとの差を固定する。
  */
 export const CANCELABLE_FLOW_PATHS: readonly string[] = [
@@ -50,17 +52,21 @@ export const CANCELABLE_FLOW_PATHS: readonly string[] = [
   "f/factory/pr_review",
 ];
 
-/** 取り消さないフローと、その理由。 */
+/** 中止しないフローと、その理由。 */
 export const NOT_CANCELABLE_FLOW_PATHS: Readonly<Record<string, string>> = {
   "f/factory/manual_intake":
     "作業項目を持たない。途中で止めると、Issueだけが作られて工程に乗らないことがある",
 };
 
-/** 断る理由。画面は日本語の固定文に直す。 */
+/**
+ * 断る理由。画面は日本語の固定文に直す。
+ * `already_canceling`は、中止の依頼が済んでいて、ジョブがまだ止まる途中のもの。終わったジョブ(`already_finished`)と分ける。
+ */
 export const CANCEL_REFUSAL_REASONS = [
   "flow_not_allowed",
   "not_a_root_flow",
   "already_finished",
+  "already_canceling",
   "scheduled_for_later",
   "actor_unknown",
   "audit_unavailable",
@@ -68,7 +74,7 @@ export const CANCEL_REFUSAL_REASONS = [
 
 export type CancelRefusalReason = (typeof CANCEL_REFUSAL_REASONS)[number];
 
-/** 取り消しの後に読み直した作業項目。`lease_held`は、リースがまだこのジョブを指しているか。 */
+/** 中止の後に読み直した作業項目。`lease_held`は、リースがまだこのジョブを指しているか。 */
 export type JobCancelWorkItem = {
   readonly id: number;
   readonly status: string;
@@ -87,7 +93,7 @@ export type JobCancelResult =
       readonly refused: false;
       readonly job_id: string;
       readonly flow_path: string;
-      /** 取り消しの後に読み直したジョブの状態。読めなければ`null`。 */
+      /** 中止の後に読み直したジョブの状態。読めなければ`null`。 */
       readonly job_state: string | null;
       readonly work_item: JobCancelWorkItem | null;
       readonly action_audit: ActionAudit;
@@ -118,7 +124,6 @@ export type CancelTarget =
       readonly job: {
         readonly id: string;
         readonly flow_path: string;
-        readonly state: "running" | "queued";
         readonly work_item_id: number | null;
       };
     };
@@ -160,9 +165,10 @@ function workItemIdOf(raw: Record<string, unknown>): number | null {
 }
 
 /**
- * `getJob`の応答が、取り消してよいジョブか判定する。
+ * `getJob`の応答が、中止してよいジョブか判定する。
  * `f/factory/`の外のジョブと、形が違う応答は`not_found`にする。存在を返さないためである。
- * 判定の順は、ルートのフローか、許可したフローか、終わっていないか、予定が未来でないか、である。
+ * 判定の順は、ルートのフローか、許可したフローか、終わっていないか、停止処理中でないか、予定が先でないか、である。
+ * 予定の時刻は、`SCHEDULED_FOR_LATER_GRACE_MS`を超えて先のときだけ「先」とみなす。
  */
 export function evaluateCancelTarget(raw: unknown, now: Date): CancelTarget {
   if (!isRecord(raw)) return { kind: "not_found" };
@@ -184,14 +190,19 @@ export function evaluateCancelTarget(raw: unknown, now: Date): CancelTarget {
   ) {
     return { kind: "refused", reason: "flow_not_allowed" };
   }
-  if (raw.type === "CompletedJob" || raw.canceled === true) {
+  if (raw.type === "CompletedJob") {
     return { kind: "refused", reason: "already_finished" };
   }
   if (raw.type !== "QueuedJob") return { kind: "not_found" };
-  const running = raw.running === true;
-  if (!running) {
+  if (raw.canceled === true) {
+    return { kind: "refused", reason: "already_canceling" };
+  }
+  if (raw.running !== true) {
     const scheduled = stringOf(raw, "scheduled_for");
-    if (scheduled !== null && Date.parse(scheduled) > now.getTime()) {
+    if (
+      scheduled !== null &&
+      Date.parse(scheduled) > now.getTime() + SCHEDULED_FOR_LATER_GRACE_MS
+    ) {
       return { kind: "refused", reason: "scheduled_for_later" };
     }
   }
@@ -200,13 +211,12 @@ export function evaluateCancelTarget(raw: unknown, now: Date): CancelTarget {
     job: {
       id,
       flow_path: path,
-      state: running ? "running" : "queued",
       work_item_id: workItemIdOf(raw),
     },
   };
 }
 
-/** 取り消しの後に読み直したジョブの状態。読み取れない形なら`null`。 */
+/** 中止の後に読み直したジョブの状態。読み取れない形なら`null`。 */
 function stateOf(raw: unknown, now: Date): string | null {
   if (!isRecord(raw)) return null;
   if (raw.type === "CompletedJob") {
@@ -223,7 +233,7 @@ function stateOf(raw: unknown, now: Date): string | null {
     : "queued";
 }
 
-/** 取り消しの後の読み直し。失敗は`null`にして、取り消しの結果を隠さない。 */
+/** 中止の後の読み直し。失敗は`null`にして、中止の結果を隠さない。 */
 async function readBack<T>(read: () => Promise<T>): Promise<T | null> {
   try {
     return await read();
@@ -233,10 +243,10 @@ async function readBack<T>(read: () => Promise<T>): Promise<T | null> {
 }
 
 /**
- * ジョブ`jobId`を取り消す。呼び出しの順序は、ジョブの取得、対象の判定、操作者の導出、
- * 記録(`attempted`)、取り消し、記録(結果)、ジョブと作業項目の読み直しに固定する。
+ * ジョブ`jobId`を中止する。呼び出しの順序は、ジョブの取得、対象の判定、操作者の導出、
+ * 記録(`attempted`)、中止、記録(結果)、ジョブと作業項目の読み直しに固定する。
  * 形の違うid、存在しないジョブ、`f/factory/`の外のジョブは`{ found: false }`を返す。
- * 取り消し(`cancelJob`)が404を返したときは、取り消す前に終わっていたので、断りとして返す。
+ * 中止(`cancelJob`)が404を返したときは、中止の前に終わっていたので、断りとして返す。
  * ほかの失敗は、記録を`failed`にして投げ直す。
  */
 export async function cancelJobFromConsole(
@@ -367,7 +377,7 @@ function sdkPorts(): CancelPorts {
   };
 }
 
-/** Consoleから、作業項目のフローのジョブを1件取り消す。操作者はジョブの実行文脈から導く。 */
+/** Consoleから、作業項目のフローのジョブを1件中止する。操作者はジョブの実行文脈から導く。 */
 export async function main(job_id: string): Promise<JobCancelResult> {
   return await cancelJobFromConsole(job_id, sdkPorts());
 }
