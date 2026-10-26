@@ -482,6 +482,7 @@ describe("loadActiveJobs", () => {
     expect(queueQueries[0]).toEqual({
       scriptPathStart: "f/factory/",
       perPage: 100,
+      jobKinds: "script,flow",
       tag: "!console",
     });
   });
@@ -492,6 +493,7 @@ describe("loadActiveJobs", () => {
     expect(queueQueries[0]).toEqual({
       scriptPathStart: "f/factory/",
       perPage: 100,
+      jobKinds: "script,flow",
     });
   });
 
@@ -574,6 +576,7 @@ describe("loadJobHistory", () => {
       scriptPathStart: "f/factory/",
       perPage: DEFAULT_PAGE_SIZE,
       hasNullParent: true,
+      jobKinds: "script,flow",
       completedBefore: NOW.toISOString(),
       tag: "!console",
     });
