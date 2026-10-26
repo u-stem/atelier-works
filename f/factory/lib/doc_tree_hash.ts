@@ -23,13 +23,46 @@ export const REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON =
 export const REQUIREMENTS_DIR_MISSING_REASON =
   "approved requirements directory is missing";
 
+/**
+ * ディレクトリ以外の項目の種類。
+ * 通常のファイルとシンボリックリンクと特殊ファイルを、中身が同じ文字列でも別のものとして数えるために、ハッシュに種類の印を入れる。
+ */
+export type DirectoryEntryKind = "file" | "link" | "special";
+
+/** 種類ごとの印。ハッシュに入れる。 */
+const ENTRY_KIND_MARKS: Readonly<Record<DirectoryEntryKind, string>> = {
+  file: "F",
+  link: "L",
+  special: "S",
+};
+
 /** `hashDirectoryTree`が使うディレクトリの読み取り。テストでは差し替える。 */
 export type DirectoryEntryIo = {
   readonly readDir: (
     dir: string,
   ) => Promise<{ readonly name: string; readonly isDirectory: boolean }[]>;
-  readonly readFile: (path: string) => Promise<Uint8Array>;
+  /**
+   * ディレクトリ以外の項目の種類と中身を返す。
+   * リンクの中身はリンク先の文字列で、特殊ファイルの中身は空である。
+   */
+  readonly readFile: (path: string) => Promise<{
+    readonly kind: DirectoryEntryKind;
+    readonly content: Uint8Array;
+  }>;
+  /** `path`自体がシンボリックリンクか。`path`が無ければ`false`を返す。 */
+  readonly isSymbolicLink: (path: string) => Promise<boolean>;
 };
+
+/**
+ * 基準のルートのディレクトリが、シンボリックリンクに置き換えられていたときの例外。
+ * リンクの先に同じ内容のディレクトリを置くと、中身のハッシュは基準値と一致してしまうため、読まずに止める。
+ */
+export class DocTreeRootSymlinkError extends Error {
+  constructor(dir: string) {
+    super(`the requirements directory is a symbolic link: ${dir}`);
+    this.name = "DocTreeRootSymlinkError";
+  }
+}
 
 /**
  * 例外が`codes`のどれかを表すか。
@@ -68,6 +101,9 @@ async function realRootExists(dir: string): Promise<boolean> {
 /**
  * `dir`以下の内容(相対パスの一覧と、ファイルの中身)のSHA-256を16進で返す。ディレクトリが無ければ`null`を返す。
  * 名前の一覧は並べ替えて数え、名前と中身は長さを前置きして区切る。名前の終わりと中身の始まりが紛れないようにするため。
+ * 通常のファイル、シンボリックリンク、特殊ファイルは、種類の印(`F`、`L`、`S`)を前置きして数える。
+ * 中身が`symlink:/x`の通常のファイルと、`/x`へのリンクが、同じハッシュにならないようにするため。
+ * `dir`自体がシンボリックリンクなら、たどらずに`DocTreeRootSymlinkError`を投げる。
  * 保存した基準値や実行の前後と比べ、承認済みの要件定義の書き換え(変更、追加、削除、改名)を検出する。
  */
 export async function hashDirectoryTree(
@@ -94,13 +130,15 @@ export async function hashDirectoryTree(
         );
         continue;
       }
-      const content = await io.readFile(`${path}/${entry.name}`);
+      const { kind, content } = await io.readFile(`${path}/${entry.name}`);
       hasher.update(
-        `F${String(relative.length)}:${relative}\n${String(content.length)}:`,
+        `${ENTRY_KIND_MARKS[kind]}${String(relative.length)}:${relative}\n${String(content.length)}:`,
       );
       hasher.update(content);
     }
   };
+  // ルートがリンクなら、中身を読む前に止める。リンクの先の内容は、ルートの内容として数えない。
+  if (await io.isSymbolicLink(dir)) throw new DocTreeRootSymlinkError(dir);
   // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外はそのまま投げ、`checkDocTreeHash`がルートの有無を調べ直して、書き換えか欠落かに分ける。
   let root: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>;
   try {
@@ -123,10 +161,21 @@ export const realDirectoryIo: DirectoryEntryIo = {
   readFile: async (path) => {
     const stat = await lstat(path);
     if (stat.isSymbolicLink()) {
-      return new TextEncoder().encode(`symlink:${await readlink(path)}`);
+      return {
+        kind: "link",
+        content: new TextEncoder().encode(await readlink(path)),
+      };
     }
-    if (!stat.isFile()) return new TextEncoder().encode("special");
-    return new Uint8Array(await readFile(path));
+    if (!stat.isFile()) return { kind: "special", content: new Uint8Array() };
+    return { kind: "file", content: new Uint8Array(await readFile(path)) };
+  },
+  isSymbolicLink: async (path) => {
+    try {
+      return (await lstat(path)).isSymbolicLink();
+    } catch (err) {
+      if (isEntryGoneError(err)) return false;
+      throw err;
+    }
   },
 };
 
@@ -143,6 +192,7 @@ export type DocHashCheck = "match" | "no_baseline" | "missing" | "modified";
  * ハッシュを数えている途中で項目が消えたか置き換わった例外(ENOENT、ENOTDIR)を受けたときは、
  * ルートのディレクトリを調べ直す(`rootExists`)。ルートが無ければ`missing`、あれば`modified`を返す。
  * 数える途中でルートごと消えた場合を、中の項目の書き換えと区別するためである。
+ * ルートがシンボリックリンクに置き換わっていたときも`modified`を返す。
  * ほかの例外はそのまま投げる。
  */
 export async function checkDocTreeHash(
@@ -158,6 +208,8 @@ export async function checkDocTreeHash(
   try {
     current = await hashTree(dir);
   } catch (err) {
+    // ルートがリンクに置き換わったのは、内容の書き換えである。
+    if (err instanceof DocTreeRootSymlinkError) return "modified";
     // 数えている途中で項目が消えたり置き換わったりしたのは、ルートが残っていれば内容が書き換わったということである。
     if (isEntryGoneError(err)) {
       return (await rootExists(dir)) ? "modified" : "missing";

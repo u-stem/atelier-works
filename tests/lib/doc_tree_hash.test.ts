@@ -49,8 +49,9 @@ describe("hashDirectoryTree", () => {
       readFile: async (path) => {
         const content = files[path];
         if (content === undefined) throw new Error("ENOENT");
-        return new TextEncoder().encode(content);
+        return { kind: "file", content: new TextEncoder().encode(content) };
       },
+      isSymbolicLink: async () => false,
     };
   }
 
@@ -125,7 +126,8 @@ describe("hashDirectoryTree", () => {
       readDir: async () => {
         throw err;
       },
-      readFile: async () => new Uint8Array(),
+      readFile: async () => ({ kind: "file", content: new Uint8Array() }),
+      isSymbolicLink: async () => false,
     };
   }
 
