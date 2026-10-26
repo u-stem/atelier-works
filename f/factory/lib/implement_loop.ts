@@ -553,6 +553,14 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
 
+/** 検査コマンドを実行できなかった(環境の問題)ときの理由を返す(describeReasonが訳す)。 */
+export function checkUnrunnableReason(
+  _command: string,
+  _detail: string,
+): string {
+  return "";
+}
+
 /** 期限までに次の修正ラウンドを終える時間が残っておらず、修正をやめたときの理由を返す(describeReasonが訳す)。 */
 export function deadlineReason(round: number): string {
   return `implement flow deadline reached after round ${String(round)}`;

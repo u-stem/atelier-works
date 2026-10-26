@@ -82,7 +82,7 @@ locks:
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
-  f/factory/lib/implement_loop: 669edc3e953ac1199e0818b6be03a8dada588418fde285fdc3eb828a7928b1db
+  f/factory/lib/implement_loop: e9e660b772aa4e5ec37da03621144473f9782fe8839ec96d8dd74d36789e933a
   f/factory/lib/implement_support: 2859bc7392a96837abeb40cbdafe769ce903b60d0878f33fc164e22f34064d97
   f/factory/lib/intake_refresh: 10bf958e6d3a3a18d0b3e867f271b7974b66aad6e621bf193f735a30c6e88cf3
   f/factory/lib/job_ids: f11c9a38be9492f5776fdf950f87c51f0162028142640a2017f0f2dafba49432
