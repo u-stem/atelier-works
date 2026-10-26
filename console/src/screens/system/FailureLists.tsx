@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { SummaryFailure } from "../../api/guards/summary.ts";
 import type { SystemOrphanFailure } from "../../api/guards/systemStatus.ts";
+import { Disclosure } from "../../components/Disclosure.tsx";
 import { JobLink } from "../../components/JobLink.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
@@ -11,7 +12,11 @@ import {
   workItemPath,
 } from "../../lib/failureView.ts";
 import { pageSlice } from "../../lib/pagination.ts";
-import { describeOrphanFailure } from "../../lib/systemView.ts";
+import {
+  groupOrphanFailures,
+  type OrphanFailureDescription,
+  type OrphanFailureGroup,
+} from "../../lib/systemView.ts";
 import { usePagination } from "../../lib/usePagination.ts";
 import { EmptyNote } from "./SystemSection.tsx";
 
@@ -130,19 +135,20 @@ export function AuditFailureList({
 }
 
 function OrphanFailureItem({
-  failure,
+  row,
   now,
 }: {
-  failure: SystemOrphanFailure;
+  row: OrphanFailureDescription;
   now: number;
 }) {
-  const row = describeOrphanFailure(failure);
   return (
-    <li className="rounded-xl border border-border bg-card p-5">
+    <li className="rounded-lg border border-border bg-background p-4">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-mono text-small break-words">
-          {row.flowLabel}
-        </span>
+        {row.stepLabel === null ? null : (
+          <span className="font-mono text-small break-words">
+            {row.stepLabel}
+          </span>
+        )}
         <span className="text-small text-subtle">
           <TimeText iso={row.occurredAt} now={now} prefix="失敗 " />
         </span>
@@ -153,54 +159,84 @@ function OrphanFailureItem({
   );
 }
 
+function OrphanFailureGroupItem({
+  group,
+  now,
+  initialPage,
+}: {
+  group: OrphanFailureGroup;
+  now: number;
+  initialPage: number | undefined;
+}) {
+  const pager = usePagination(group.failures.length, PAGE_SIZE, initialPage);
+  return (
+    <li className="rounded-xl border border-border bg-card px-5 py-3">
+      <Disclosure
+        summary={
+          <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="font-mono text-small break-words">
+              {group.flow}
+            </span>
+            <Badge variant="muted">{`${String(group.count)}回`}</Badge>
+            <span className="text-small text-subtle">
+              <TimeText iso={group.latestAt} now={now} prefix="最新 " />
+            </span>
+          </span>
+        }
+      >
+        <div ref={pager.anchorRef} className="flex flex-col gap-3">
+          <ul className="flex flex-col gap-3">
+            {pageSlice(group.failures, pager.page, PAGE_SIZE).map((row) => (
+              <OrphanFailureItem key={row.id} row={row} now={now} />
+            ))}
+          </ul>
+          <Pagination
+            page={pager.page}
+            total={group.failures.length}
+            size={PAGE_SIZE}
+            onPageChange={pager.change}
+            label={`${group.flow}の失敗のページ送り`}
+          />
+        </div>
+      </Disclosure>
+    </li>
+  );
+}
+
 /**
- * 作業項目に紐づかない失敗の一覧。定期のジョブの失敗で、要対応の一覧には出ない。
- * 新しい順に並べて返ってくる。操作は置かない。
+ * 作業項目に紐づかない失敗を、flowごとにまとめて出す。定期のジョブの失敗で、要対応の一覧には出ない。
+ * 組ごとに回数と最新の時刻を出し、開くと失敗を1件ずつ(ステップ、時刻、ジョブ、本文)見られる。
+ * 組は最新の失敗が新しい順で、開いた中は10件ずつのページに分ける。操作は置かない。
  */
-export function OrphanFailureList({
+export function OrphanFailureGroups({
   failures,
   now,
   initialPage,
 }: {
   failures: readonly SystemOrphanFailure[];
   now: number;
-  /** 最初に出すページ(0から数える)。省略すると先頭。 */
+  /** 最初に出すページ(0から数える)。省略すると先頭。組の全部に効く。 */
   initialPage?: number | undefined;
 }) {
-  const pager = usePagination(failures.length, PAGE_SIZE, initialPage);
   if (failures.length === 0) {
     return <EmptyNote>作業項目に紐づかない失敗はありません</EmptyNote>;
   }
+  const groups = groupOrphanFailures(failures);
   return (
-    <div ref={pager.anchorRef} className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
+      <p className="text-small text-muted-foreground">
+        {`${String(failures.length)}件、${String(groups.length)}つのflow`}
+      </p>
       <ul className="flex flex-col gap-3">
-        {pageSlice(failures, pager.page, PAGE_SIZE).map((failure) => (
-          <OrphanFailureItem
-            key={failure.job_failure_id}
-            failure={failure}
+        {groups.map((group) => (
+          <OrphanFailureGroupItem
+            key={group.flow}
+            group={group}
             now={now}
+            initialPage={initialPage}
           />
         ))}
       </ul>
-      <Pagination
-        page={pager.page}
-        total={failures.length}
-        size={PAGE_SIZE}
-        onPageChange={pager.change}
-        label="作業項目に紐づかない失敗のページ送り"
-      />
     </div>
   );
-}
-
-/**
- * 作業項目に紐づかない失敗を、flowごとにまとめる。
- * 組ごとに回数と最新の時刻を出し、開くと失敗を1件ずつ見られる。
- */
-export function OrphanFailureGroups(_props: {
-  failures: readonly SystemOrphanFailure[];
-  now: number;
-  initialPage?: number | undefined;
-}) {
-  return null;
 }

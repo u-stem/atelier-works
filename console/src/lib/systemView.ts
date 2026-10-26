@@ -271,7 +271,8 @@ export function describeOrphanFailure(
   const flow = displayableIssueText(failure.flow_path).text;
   return {
     id: failure.job_failure_id,
-    stepLabel: null,
+    stepLabel:
+      failure.step === null ? null : displayableIssueText(failure.step).text,
     flowLabel:
       failure.step === null
         ? flow
@@ -303,9 +304,36 @@ export type OrphanFailureGroup = {
  * まとめるのはフローのパスで、ステップは分けない。
  */
 export function groupOrphanFailures(
-  _failures: readonly SystemOrphanFailure[],
+  failures: readonly SystemOrphanFailure[],
 ): OrphanFailureGroup[] {
-  return [];
+  const newestFirst = [...failures].sort(
+    (left, right) =>
+      Date.parse(right.occurred_at) - Date.parse(left.occurred_at),
+  );
+  const groups = new Map<
+    string,
+    { latestAt: string; failures: OrphanFailureDescription[] }
+  >();
+  for (const failure of newestFirst) {
+    const description = describeOrphanFailure(failure);
+    const flow = displayableIssueText(failure.flow_path).text;
+    const group = groups.get(flow);
+    if (group === undefined) {
+      // 新しい順に読むので、組を作る失敗が、その組の最新である。
+      groups.set(flow, {
+        latestAt: failure.occurred_at,
+        failures: [description],
+      });
+    } else {
+      group.failures.push(description);
+    }
+  }
+  return [...groups].map(([flow, group]) => ({
+    flow,
+    count: group.failures.length,
+    latestAt: group.latestAt,
+    failures: group.failures,
+  }));
 }
 
 /** 要対応の失敗のうち、監査のものを元の順で返す。監査は再実行できないので、要対応の一覧に出さない。 */

@@ -91,9 +91,15 @@ describe("SYSTEM_SKELETONS", () => {
     expect(SYSTEM_SKELETONS[id]).toBeDefined();
   });
 
-  test("sizes the worker load card to its eight rows", () => {
+  test("sizes the worker load card to its headline and the fold", () => {
     expect(SYSTEM_SKELETONS["worker-load-heading"]?.rowClassName).toContain(
-      "h-[25rem]",
+      "h-[6.125rem]",
+    );
+  });
+
+  test("sizes the update history to its three entries and the button", () => {
+    expect(SYSTEM_SKELETONS["update-history-heading"]?.rowClassName).toContain(
+      "h-[35rem]",
     );
   });
 });

@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { NoticeRow } from "../../api/guards/notices.ts";
 import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
+import { Disclosure } from "../../components/Disclosure.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { FAILURE_TEXT_LIMIT } from "../../lib/failureView.ts";
@@ -132,12 +133,24 @@ function ResolvedItem({
  * 解決済みの通知の履歴を、件数を添えてたたむ。
  * 履歴は参照用で、普段は読まないので、開くまで本文の一覧を見せない。
  */
-export function ResolvedNoticeDisclosure(_props: {
+export function ResolvedNoticeDisclosure({
+  notices,
+  now,
+  initiallyOpen = false,
+}: {
   notices: readonly SystemResolvedNotice[];
   now: number;
   initiallyOpen?: boolean | undefined;
 }) {
-  return null;
+  return (
+    <Disclosure
+      summary={`履歴を表示(${String(notices.length)}件)`}
+      jumpOpen
+      initiallyOpen={initiallyOpen}
+    >
+      <ResolvedNoticeList notices={notices} now={now} />
+    </Disclosure>
+  );
 }
 
 /**

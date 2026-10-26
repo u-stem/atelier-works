@@ -86,9 +86,9 @@ export function recalledScroll<Id extends string>(
  * 負の位置は先頭(0)にする。
  */
 export function recalledScrollOr<Id extends string>(
-  _memory: ReadonlyMap<Id, number>,
-  _id: Id,
-  _fallback: number,
+  memory: ReadonlyMap<Id, number>,
+  id: Id,
+  fallback: number,
 ): number {
-  return 0;
+  return Math.max(0, memory.get(id) ?? fallback);
 }

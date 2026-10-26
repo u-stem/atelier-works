@@ -92,13 +92,14 @@ export const HISTORY_PREVIEW_COUNT = 3;
 
 /** 最初に出す反映の外にある、ホストの作業が要る反映の数。 */
 export function hostActionBeyondPreview(
-  _entries: readonly { readonly needs_host_action: boolean }[],
-  _previewCount: number = HISTORY_PREVIEW_COUNT,
+  entries: readonly { readonly needs_host_action: boolean }[],
+  previewCount: number = HISTORY_PREVIEW_COUNT,
 ): number {
-  return 0;
+  return entries.slice(previewCount).filter((entry) => entry.needs_host_action)
+    .length;
 }
 
 /** 最初に出す反映の外にあるホストの作業を知らせる文。無ければ`null`。 */
-export function hostActionBeyondNote(_count: number): string | null {
-  return null;
+export function hostActionBeyondNote(count: number): string | null {
+  return count > 0 ? `ホストの作業が要る反映: ${String(count)}件` : null;
 }

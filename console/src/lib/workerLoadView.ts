@@ -101,8 +101,10 @@ function currentAndPeak(load: WorkerLoad): string {
 }
 
 /** 結論の1行。枠が塞がっていた記録、開始が遅れた記録、メモリの最大の割合、記録の数を並べる。判定はしない。 */
-export function describeWorkerLoadHeadline(_load: WorkerLoad): string {
-  return "";
+export function describeWorkerLoadHeadline(load: WorkerLoad): string {
+  const ratio = load.max.mem_anon_ratio;
+  const memory = ratio === null ? UNKNOWN : percent(ratio);
+  return `枠が塞がっていた記録${String(load.busy_samples)}件、開始が遅れた記録${String(load.lag_over_samples)}件、メモリの最大${memory}、記録${String(load.sample_count)}/${String(load.expected_count)}件`;
 }
 
 /** 直近の窓の負荷を、画面に出す行にする。 */

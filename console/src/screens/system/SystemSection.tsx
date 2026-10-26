@@ -11,7 +11,7 @@ const DEFAULT_SKELETON: RowsShape = {
   rowClassName: "h-16 w-full rounded-xl",
 };
 
-/** 1つの枠にまとまる一覧の目安。通知と失敗の行3つ分(1行は約4.25rem)。 */
+/** 通知の行3つ分の一覧の目安(1行は約4.25rem)。 */
 const LIST_SKELETON: RowsShape = {
   rows: 1,
   rowClassName: "h-[12.75rem] w-full rounded-xl",
@@ -19,28 +19,41 @@ const LIST_SKELETON: RowsShape = {
 
 /**
  * 節ごとの読み込み中の形。節の見出しのidで引く。
- * 高さは、内容が出たときに下の節が動かないよう、内容の目安にそろえる。
- * 値は、行の余白と文字の高さから見積もった。実機で測り直して合わせる。
+ * 高さは、内容が出たときに下の節が動かないよう、実機で測った本文の高さ(説明の下から節の終わりまで)にそろえる。
+ * 一覧は件数で変わるので、よくある件数の高さにそろえる。測った内容は、各行のコメントに書く。
  */
 export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
-  // 有効な保留がなければ1行にたたまれる。
+  // 有効な保留がなければ1行にたたまれる(63px)。
   "holds-heading": { rows: 1, rowClassName: "h-16 w-full rounded-xl" },
-  // 3行の表(1行は約3rem)。
+  // 3行の表(145px)。
   "release-heading": { rows: 1, rowClassName: "h-36 w-full rounded-xl" },
-  // 反映1件の枠(約7rem)を3つ。
-  "update-history-heading": {
-    rows: 3,
-    rowClassName: "h-28 w-full rounded-xl",
-  },
-  // 注記1行と8行の表(1行は約3rem)。
+  // 結論の1行の枠と、「内訳を表示」の1行(98px)。
   "worker-load-heading": {
     rows: 1,
-    rowClassName: "h-[25rem] w-full rounded-xl",
+    rowClassName: "h-[6.125rem] w-full rounded-xl",
   },
+  // 新しい3件の枠と、注記と、「すべて表示」のボタン(12件で561px)。
+  "update-history-heading": {
+    rows: 1,
+    rowClassName: "h-[35rem] w-full rounded-xl",
+  },
+  // 通知の行3つ分。
   "info-notices-heading": LIST_SKELETON,
-  "resolved-notices-heading": LIST_SKELETON,
-  "audit-failures-heading": LIST_SKELETON,
-  "orphan-failures-heading": LIST_SKELETON,
+  // 失敗1件の枠(約137px)。件数はたいてい少ない。
+  "audit-failures-heading": {
+    rows: 1,
+    rowClassName: "h-[8.6rem] w-full rounded-xl",
+  },
+  // 件数の行と、flow4つの折りたたみ(317px)。
+  "orphan-failures-heading": {
+    rows: 1,
+    rowClassName: "h-[19.8rem] w-full rounded-xl",
+  },
+  // 履歴を開く1行(36px)。
+  "resolved-notices-heading": {
+    rows: 1,
+    rowClassName: "h-9 w-full rounded-xl",
+  },
 };
 
 /**
@@ -71,7 +84,12 @@ export function SystemSection<T>({
   return (
     <section aria-labelledby={id} className="flex max-w-3xl flex-col gap-3">
       <div className="min-w-0">
-        <h2 id={id} className="text-lead font-semibold">
+        {/* 要約の帯のリンクで移った後にフォーカスを受ける。Tabの順には入れない。 */}
+        <h2
+          id={id}
+          tabIndex={-1}
+          className="scroll-mt-4 rounded-sm text-lead font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {title}
         </h2>
         <div className="text-small text-muted-foreground">{description}</div>
