@@ -338,20 +338,32 @@ export const IMPLEMENT_CHECK_SKIP_REASONS = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// truncateCheckOutput: `implement_rounds.check_output`には先頭16KBだけを残す
+// truncateCheckOutput: `implement_rounds.check_output`には先頭と末尾を残す
 // ---------------------------------------------------------------------------
 
 export const CHECK_OUTPUT_MAX_BYTES = 16 * 1024;
+
+/** 先頭に割く、残せるバイト数の割合の分母。残りを末尾に割く。 */
+const HEAD_SHARE_DENOMINATOR = 3;
 
 /** `byte`がUTF-8の継続バイト(`10xxxxxx`)かを返す。 */
 function isContinuationByte(byte: number): boolean {
   return (byte & 0b1100_0000) === 0b1000_0000;
 }
 
+/** 省略の目印。省略したバイト数を載せる。 */
+function omissionMarker(omittedBytes: number): string {
+  return `\n[... ${String(omittedBytes)} bytes omitted ...]\n`;
+}
+
 /**
- * `text`の先頭`maxBytes`バイトを、正しいUTF-8の文字列として返す。
+ * `text`を`maxBytes`バイト以内の、正しいUTF-8の文字列にして返す。
+ * 収まらないときは、先頭と末尾を残して間を省略の目印に置き換える。
+ * 先頭は約3分の1、末尾は約3分の2を残す。テストの失敗の一覧のように、人が読みたい内容は出力の末尾にあることが多く、
+ * 先頭だけを残すと、先頭の警告やログで上限を使い切ってしまうためである。
  * バイトの境界がマルチバイト文字を分断するときは、その文字ごと捨てる。
  * 列の上限はバイト数で決めているため、UTF-16のコード単位ではなくバイトで測る。
+ * 上限が省略の目印すら入らないほど小さいときは、先頭だけを残す。
  * PostgreSQLの`text`列はNUL文字を受け付けないので、先にNULを取り除く。
  *
  * 呼び出し側は、`maskSecrets`を適用した後の検証コマンドの出力全体を、
@@ -363,13 +375,33 @@ export function truncateCheckOutput(
   maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
 ): string {
   const clean = text.replaceAll("\u0000", "");
-  const bytes = new TextEncoder().encode(clean);
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(clean);
   if (bytes.byteLength <= maxBytes) return clean;
-  let end = maxBytes;
-  while (end > 0 && isContinuationByte(bytes[end] ?? 0)) {
-    end -= 1;
+  const decoder = new TextDecoder();
+  // 目印の桁数は、全体のバイト数の桁数を超えない。
+  const markerBytes = encoder.encode(
+    omissionMarker(bytes.byteLength),
+  ).byteLength;
+  const budget = maxBytes - markerBytes;
+  const headLimit =
+    budget > 0 ? Math.floor(budget / HEAD_SHARE_DENOMINATOR) : maxBytes;
+  let headEnd = headLimit;
+  while (headEnd > 0 && isContinuationByte(bytes[headEnd] ?? 0)) {
+    headEnd -= 1;
   }
-  return new TextDecoder().decode(bytes.subarray(0, end));
+  const head = bytes.subarray(0, headEnd);
+  if (budget <= 0) return decoder.decode(head);
+  let tailStart = bytes.byteLength - (budget - headLimit);
+  while (
+    tailStart < bytes.byteLength &&
+    isContinuationByte(bytes[tailStart] ?? 0)
+  ) {
+    tailStart += 1;
+  }
+  const tail = bytes.subarray(tailStart);
+  const omitted = bytes.byteLength - head.byteLength - tail.byteLength;
+  return `${decoder.decode(head)}${omissionMarker(omitted)}${decoder.decode(tail)}`;
 }
 
 // ---------------------------------------------------------------------------

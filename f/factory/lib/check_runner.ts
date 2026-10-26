@@ -31,13 +31,16 @@ export type CheckCommandResult = {
 
 const CHECK_OUTPUT_TAIL_CHARS = 2000;
 
+/** `checkUnrunnableReason`が返す理由の先頭。回復の処理が、理由の先頭一致で保留に写す。 */
+export const CHECK_UNRUNNABLE_REASON_PREFIX = "check command could not run: ";
+
 /**
  * 検査コマンドを実行できなかった(環境の問題)ときの理由を返す(describeReasonが訳す)。
  * コマンドと詳細は`"; "`を含みうるので、別の理由に見えないよう置き換える。
  * 実装フローとPR修正のフローが共有する。
  */
 export function checkUnrunnableReason(command: string, detail: string): string {
-  return `check command could not run: ${escapeReasonSeparator(command)}: ${escapeReasonSeparator(detail)}`;
+  return `${CHECK_UNRUNNABLE_REASON_PREFIX}${escapeReasonSeparator(command)}: ${escapeReasonSeparator(detail)}`;
 }
 
 /**
@@ -49,8 +52,9 @@ const SETPRIV_EXEC_FAILURE_PREFIX = "setpriv: failed to execute ";
 
 /** 検査コマンドの結果のうち、実行できなかったかの判定に使う部分。 */
 type CheckOutcome = {
+  readonly command: string;
   readonly ok: boolean;
-  readonly exitCode?: number;
+  readonly exitCode?: number | undefined;
   readonly output: string;
 };
 
@@ -58,10 +62,14 @@ type CheckOutcome = {
  * 検査コマンドの結果が、コードの失敗ではなく、実行ファイルを起動できなかったことを表すかを返す。
  * `setpriv`が起動に失敗すると、何も実行されず、出力は`setpriv`のその1行だけになる。
  * 検査コマンド自身が127を返した場合や、出力に同じ語を含むだけの場合は、Claudeが直せる失敗なので当てはまらない。
+ * 先頭の語が`/`を含むコマンドも当てはまらない。固定のPATHで探したのではなく、worktreeの中を指す実行ファイルを、
+ * コードが消したか実行権を落とした失敗を、環境の問題と取り違えないためである。
  */
 export function isCheckUnrunnable(result: CheckOutcome): boolean {
+  const program = result.command.trim().split(/\s+/)[0] ?? "";
   return (
     !result.ok &&
+    !program.includes("/") &&
     result.exitCode !== undefined &&
     SETPRIV_EXEC_FAILURE_EXIT_CODES.includes(result.exitCode) &&
     result.output.startsWith(SETPRIV_EXEC_FAILURE_PREFIX)
@@ -73,7 +81,7 @@ export function isCheckUnrunnable(result: CheckOutcome): boolean {
  * 無ければ`null`を返す。
  */
 export function firstUnrunnableCheckReason(
-  results: readonly (CheckOutcome & { readonly command: string })[],
+  results: readonly CheckOutcome[],
 ): string | null {
   const unrunnable = results.find(isCheckUnrunnable);
   if (unrunnable === undefined) return null;

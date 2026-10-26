@@ -84,8 +84,13 @@ export const IPCRM_PATH = "/usr/bin/ipcrm";
 export const KILL_PATH = "/usr/bin/kill";
 export const GETFACL_PATH = "/usr/bin/getfacl";
 export const SETFACL_PATH = "/usr/bin/setfacl";
+/** 対象リポジトリの検査コマンドが`bunx --bun ...`で呼ぶ。bunへのsymlinkで、イメージが置く。 */
+export const BUNX_PATH = "/usr/bin/bunx";
 
-/** 検査と後始末が呼ぶ道具の一覧。`prepare`は、1つでも無ければ何にも触れずに失敗する。 */
+/**
+ * 検査と後始末が呼ぶ道具の一覧。`prepare`は、1つでも無ければ何にも触れずに失敗する。
+ * `bunx`は検査コマンドの設定が使うので、含める。足りないイメージは古いイメージとして、Claudeを動かす前に止める。
+ */
 export const REQUIRED_TOOL_PATHS = [
   SETPRIV_PATH,
   PRLIMIT_PATH,
@@ -98,6 +103,7 @@ export const REQUIRED_TOOL_PATHS = [
   KILL_PATH,
   GETFACL_PATH,
   SETFACL_PATH,
+  BUNX_PATH,
 ] as const;
 
 /**
