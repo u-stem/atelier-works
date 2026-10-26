@@ -160,6 +160,14 @@ describe("isWaitingForHuman", () => {
   test("requirements_generating does not", () => {
     expect(isWaitingForHuman("requirements_generating")).toBe(false);
   });
+
+  test("awaiting_design_approval waits for a human decision", () => {
+    expect(isWaitingForHuman("awaiting_design_approval")).toBe(true);
+  });
+
+  test("designing does not, since a job is running", () => {
+    expect(isWaitingForHuman("designing")).toBe(false);
+  });
 });
 
 describe("decideClosureOnly", () => {

@@ -758,12 +758,26 @@ describe("SQL", () => {
     expect(runningWorkItemsSql()).toContain("'implementing'");
   });
 
+  test("the work item query names the designing status", () => {
+    expect(runningWorkItemsSql()).toContain("'designing'");
+  });
+
+  test("designing is a guarded status", () => {
+    expect(RUNNING_WORK_ITEM_STATUSES).toContain("designing");
+  });
+
   const migrations = readdirSync(MIGRATIONS_DIR)
     .filter((name) => name.endsWith(".up.sql"))
     .map((name) => readFileSync(join(MIGRATIONS_DIR, name), "utf8"))
     .join("\n");
 
-  for (const status of ["implementing", "fixing", "reviewing", "auditing"]) {
+  for (const status of [
+    "implementing",
+    "fixing",
+    "reviewing",
+    "auditing",
+    "designing",
+  ]) {
     test(`${status} is a status the migrations define`, () => {
       expect(migrations).toContain(`'${status}'`);
     });

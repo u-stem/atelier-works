@@ -2,8 +2,9 @@
 // 部分一意インデックスの述語は、終端でない状態の一覧をSQLに書き写したものである。
 // `TERMINAL_WORK_ITEM_STATUSES`を変えたのにmigrationを足さないと、
 // 新しく稼働中になる状態がインデックスの対象から漏れる。
-// 述語の検査は、この1つのmigrationのファイルだけを読む。後のmigrationがこのインデックスを
-// 作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
+// 述語の検査は、インデックスを最後に作り直した`20261026120000_design_stage`のmigrationを読む。
+// 後のmigrationがこのインデックスをまた作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
+// 述語以外の検査は、最初に作ったmigrationのファイルを読む。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -15,8 +16,8 @@ const UP =
   "migrations/datatable/main/20261013100101_active_dependabot_key.up.sql";
 const DOWN =
   "migrations/datatable/main/20261013100101_active_dependabot_key.down.sql";
-const ISSUE_UP =
-  "migrations/datatable/main/20261009120000_active_issue_key.up.sql";
+const INDEXES_UP =
+  "migrations/datatable/main/20261026120000_design_stage.up.sql";
 
 function indexPredicateStatuses(sql: string, indexName: string): string[] {
   const match = sql.match(
@@ -47,23 +48,19 @@ describe("20261013100101_active_dependabot_key.up.sql", () => {
     );
     expect(
       indexPredicateStatuses(
-        await Bun.file(UP).text(),
+        await Bun.file(INDEXES_UP).text(),
         "work_items_active_dependabot_key",
       ).sort(),
     ).toEqual([...nonTerminal].sort());
   });
 
   test("lists the same statuses as the active issue index", async () => {
-    const issue = indexPredicateStatuses(
-      await Bun.file(ISSUE_UP).text(),
-      "work_items_active_issue_key",
-    ).sort();
+    const sql = await Bun.file(INDEXES_UP).text();
     expect(
-      indexPredicateStatuses(
-        await Bun.file(UP).text(),
-        "work_items_active_dependabot_key",
-      ).sort(),
-    ).toEqual(issue);
+      indexPredicateStatuses(sql, "work_items_active_dependabot_key").sort(),
+    ).toEqual(
+      indexPredicateStatuses(sql, "work_items_active_issue_key").sort(),
+    );
   });
 
   test("only adds the index so that nothing is rewritten", async () => {

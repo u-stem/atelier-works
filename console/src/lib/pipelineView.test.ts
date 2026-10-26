@@ -71,6 +71,22 @@ describe("statusOptions", () => {
     ).toEqual(["picked", "failed"]);
   });
 
+  test("places the design statuses between rejected and implementing", () => {
+    expect(
+      statusOptions([
+        row({ status: "implementing" }),
+        row({ status: "awaiting_design_approval" }),
+        row({ status: "designing" }),
+        row({ status: "rejected" }),
+      ]),
+    ).toEqual([
+      "rejected",
+      "designing",
+      "awaiting_design_approval",
+      "implementing",
+    ]);
+  });
+
   test("puts a status that is not known yet after the known ones", () => {
     expect(
       statusOptions([row({ status: "zeta" }), row({ status: "audited" })]),
@@ -448,6 +464,14 @@ describe("pipelineStatusVariant", () => {
     expect(pipelineStatusVariant("awaiting_approval")).toBe("warning");
   });
 
+  test("marks a status that waits for design approval as a warning", () => {
+    expect(pipelineStatusVariant("awaiting_design_approval")).toBe("warning");
+  });
+
+  test("leaves the designing status muted", () => {
+    expect(pipelineStatusVariant("designing")).toBe("muted");
+  });
+
   test("marks a status that has an open pull request as a success", () => {
     expect(pipelineStatusVariant("pr_open")).toBe("success");
   });
@@ -614,6 +638,8 @@ const ACTIVE_STATUSES = [
   "picked",
   "requirements_generating",
   "awaiting_approval",
+  "designing",
+  "awaiting_design_approval",
   "implementing",
   "reviewing",
   "fixing",
