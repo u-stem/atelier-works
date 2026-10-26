@@ -91,6 +91,7 @@ function notifyFailedMessage(
  * 承認依頼を作る前に例外を投げる。古い下書きを人が承認できないようにするためである。
  * 記録の後に作業項目を動かせなかったとき(リースが移った、状態が先へ進んだ)は、記録した依頼を期限切れにし、
  * 通知せずに`ok: false`を返す。期限切れにする前に人が判断していたときも、通知せずに`ok: false`を返す。
+ * 動かす処理が例外を投げたときも、依頼を期限切れにしてから同じ例外を投げ直す。
  * 通知が届かなくても失敗せず、Consoleにnoticeを残す。承認依頼は記録済みで、Consoleから判断できるため。
  */
 export async function runDesignRequestApproval(
@@ -149,7 +150,24 @@ export async function runDesignRequestApproval(
     expires_at: computeExpiresAt(deps.now()),
   });
 
-  if (!(await deps.moveToAwaitingDesignApproval())) {
+  let moved: boolean;
+  try {
+    moved = await deps.moveToAwaitingDesignApproval();
+  } catch (err) {
+    // 動かせたか分からないまま依頼をpendingで残すと、古い下書きを人が承認できてしまう。
+    // 取り下げに失敗しても、元のエラーを隠さずに投げ直す。
+    try {
+      await deps.withdrawRequest(approvalRequestId);
+    } catch (withdrawErr) {
+      deps.log("failed to expire the approval request after a failed move", {
+        work_item_id: workItemId,
+        approval_request_id: approvalRequestId,
+        error: maskSecrets(String(withdrawErr)),
+      });
+    }
+    throw err;
+  }
+  if (!moved) {
     // 依頼をpendingのまま残すと、古い下書きを人が承認できてしまう。
     if (await deps.withdrawRequest(approvalRequestId)) {
       deps.log("work item moved on before design approval could be requested", {
