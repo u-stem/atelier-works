@@ -7,6 +7,7 @@
 // Console用workerの枠が1つで、ジョブの一覧の取得が承認などの呼び出しを待たせるため。
 // 詳細は、ログと結果を含む取得を1回だけ行い、実行中のジョブの状態だけを15秒ごとに取り直す。
 
+import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
   type Guard,
@@ -481,17 +482,27 @@ export function configQueryOptions() {
   };
 }
 
-/** 実行中か待ちのジョブの状態を取り直すか。ログと結果の取得中は取り直さず、2つの取得が重ならないようにする。 */
+/**
+ * 実行中か待ちのジョブの状態を取り直すか。
+ * ログと結果の取得中は取り直さない。Console用workerの枠が1つなので、2つの詳細の取得を重ねないためである。
+ */
 export function shouldPollJobStatus(
-  _output: JobDetailView | undefined,
-  _outputFetching: boolean,
+  output: JobDetailView | undefined,
+  outputFetching: boolean,
 ): boolean {
-  return false;
+  if (outputFetching || output === undefined || !output.found) return false;
+  return output.job.state === "running" || output.job.state === "queued";
 }
 
-/** 履歴の2ページ目以降のキャッシュのキーか。 */
-export function isLaterHistoryPage(_queryKey: readonly unknown[]): boolean {
-  return false;
+/** 履歴の2ページ目以降のキャッシュのキーか。先頭のページは`before`が空である。 */
+export function isLaterHistoryPage(queryKey: readonly unknown[]): boolean {
+  return (
+    queryKey[0] === "console" &&
+    queryKey[1] === "jobs" &&
+    queryKey[2] === "history" &&
+    typeof queryKey[5] === "string" &&
+    queryKey[5] !== ""
+  );
 }
 
 /** 詳細の取得の結果のうち、表示するジョブの選択に読む項目。 */
@@ -502,8 +513,54 @@ export type DetailSnapshot = {
 
 /** 表示するジョブ。ログと結果の取得と状態の取得のうち、新しい方のジョブにする。 */
 export function currentJob(
-  _output: DetailSnapshot,
-  _status: DetailSnapshot,
+  output: DetailSnapshot,
+  status: DetailSnapshot,
 ): JobSummaryView | null {
-  return null;
+  if (output.data === undefined || !output.data.found) return null;
+  if (
+    status.data !== undefined &&
+    status.data.found &&
+    status.updatedAt > output.updatedAt
+  ) {
+    return status.data.job;
+  }
+  return output.data.job;
+}
+
+/** 実行中と待ちのジョブを取る。`enabled`が偽の間は取らない(開いていないタブの取得を避ける)。 */
+export function useActiveJobs(
+  enabled: boolean,
+): UseQueryResult<JobListView, Error> {
+  return useQuery({ ...jobsActiveQueryOptions(), enabled });
+}
+
+/** scheduleの状態を取る。`enabled`が偽の間は取らない。 */
+export function useSchedules(
+  enabled: boolean,
+): UseQueryResult<SchedulesSnapshotView, Error> {
+  return useQuery({ ...schedulesQueryOptions(), enabled });
+}
+
+/** 設定の全項目を取る。`enabled`が偽の間は取らない。 */
+export function useConfig(
+  enabled: boolean,
+): UseQueryResult<ConfigSnapshotView, Error> {
+  return useQuery({ ...configQueryOptions(), enabled });
+}
+
+/**
+ * ジョブの詳細を取る。ログと結果を含む取得を1回行い、実行中か待ちのときだけ、状態の取得を別に持つ。
+ * 状態の取得は、ログと結果の取得が終わっている間だけ有効にして、2つが同時に走らないようにする。
+ * 状態の取得は15秒ごとに繰り返し、タブが見えない間は止まる。ログは「ログを更新」の操作でだけ取り直す。
+ */
+export function useJobDetail(id: string): {
+  readonly output: UseQueryResult<JobDetailView, Error>;
+  readonly status: UseQueryResult<JobDetailView, Error>;
+} {
+  const output = useQuery(jobDetailQueryOptions(id, { includeOutput: true }));
+  const status = useQuery({
+    ...jobDetailQueryOptions(id, { includeOutput: false }),
+    enabled: shouldPollJobStatus(output.data, output.isFetching),
+  });
+  return { output, status };
 }

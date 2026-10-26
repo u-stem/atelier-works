@@ -13,7 +13,7 @@ describe("the fetches of the job list screen", () => {
   });
 
   test("never refetches by itself", () => {
-    expect(SOURCE).not.toContain("refetchInterval");
+    expect(SOURCE).not.toMatch(/refetchInterval: (?!false)/);
   });
 
   test("refreshes only the tab that is open", () => {

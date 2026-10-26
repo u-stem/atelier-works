@@ -51,6 +51,12 @@ export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
     rows: 1,
     rowClassName: "h-9 w-full rounded-xl",
   },
+  // 検索欄と、項目の行(見積もり。実機で測り直す)。
+  "config-heading": {
+    rows: 6,
+    rowClassName: "h-12 w-full rounded-md",
+    gapClassName: "gap-2",
+  },
 };
 
 /**

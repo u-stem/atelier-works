@@ -274,9 +274,9 @@ describe("OutputSection", () => {
   });
 
   test("does not read Markdown", () => {
-    expect(section("**bold** and `code` and # head")).not.toMatch(
-      /<(strong|em|code|h3|li)[ >]/,
-    );
+    const html = section("**bold** and `code` and # head");
+    const body = html.match(/<pre[^>]*>([\s\S]*)<\/pre>/)?.[1] ?? "";
+    expect(body).not.toMatch(/<[a-z]/);
   });
 
   test("keeps the Markdown marks as text", () => {

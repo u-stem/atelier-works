@@ -2,6 +2,7 @@
 // 画面を足すときは、この表に1行足し、画面は`screens/`の下に置く。
 
 import {
+  Activity,
   ChartColumn,
   Inbox,
   ListChecks,
@@ -11,12 +12,14 @@ import {
 import type { ComponentType } from "react";
 import type { SummaryCounts } from "../api/guards/summary.ts";
 import { holdsQueryOptions } from "../api/holdsQueries.ts";
+import { jobsActiveQueryOptions } from "../api/jobsQueries.ts";
 import {
   deploymentsQueryOptions,
   pipelineQueryOptions,
   requirementsIndexQueryOptions,
 } from "../api/queries.ts";
 import { systemStatusQueryOptions } from "../api/systemQueries.ts";
+import { JOBS_PATH } from "../lib/jobsView.ts";
 import { workItemRef } from "../lib/labels.ts";
 import { parseIdParam } from "../lib/routeParams.ts";
 import { SYSTEM_PATH } from "./paths.ts";
@@ -37,7 +40,7 @@ export type PrefetchOptions = {
   readonly staleTime: number;
 };
 
-export type ScreenId = "inbox" | "items" | "reports" | "system";
+export type ScreenId = "inbox" | "items" | "reports" | "jobs" | "system";
 
 /**
  * 入口の下で受ける経路。
@@ -160,6 +163,30 @@ export const SCREENS: readonly Screen[] = [
         lazy: () =>
           import("../screens/reports/AuditReportScreen.tsx").then((module) => ({
             Component: module.AuditReportScreen,
+          })),
+      },
+    ],
+  },
+  {
+    id: "jobs",
+    path: JOBS_PATH,
+    label: "ジョブ",
+    icon: Activity,
+    badge: noBadge,
+    // 実行中と待ちの一覧だけを先読みする。履歴とscheduleは、タブを開いたときに取る。
+    // 先読みが走らせるジョブは、Console用workerの枠を使うので、最初に見る1つに限る。
+    prefetch: () => [jobsActiveQueryOptions()],
+    lazy: () =>
+      import("../screens/jobs/JobsScreen.tsx").then((module) => ({
+        Component: module.JobsScreen,
+      })),
+    children: [
+      {
+        path: "jobs/:id",
+        title: "ジョブの詳細",
+        lazy: () =>
+          import("../screens/jobs/JobDetailScreen.tsx").then((module) => ({
+            Component: module.JobDetailScreen,
           })),
       },
     ],

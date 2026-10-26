@@ -1,4 +1,4 @@
-// システムの画面のタブ(状態、失敗と通知、履歴と構成)を決める純関数。
+// システムの画面のタブ(状態、失敗と通知、履歴と構成、設定)を決める純関数。
 // 開くタブはURLの`?tab=`に持ち、状態は名前を持たない。
 // 失敗が隠れないよう、要約の帯のチップから、タブの件数と印を決める。
 // 印の語と記号は、印を付けるチップの段(注意、要対応)から決める。
@@ -21,13 +21,14 @@ import {
   withTab,
 } from "./tabSet.ts";
 
-export type SystemTabId = "status" | "failures" | "history";
+export type SystemTabId = "status" | "failures" | "history" | "config";
 
 export const SYSTEM_TABS: TabSet<SystemTabId> = {
   tabs: [
     { id: "status", label: "状態" },
     { id: "failures", label: "失敗と通知" },
     { id: "history", label: "履歴と構成" },
+    { id: "config", label: "設定" },
   ],
   defaultTab: "status",
   idPrefix: "system",
@@ -153,7 +154,7 @@ function attentionOf(
 }
 
 /**
- * 共通の`Tabs`へ渡す、3つのタブの指定。
+ * 共通の`Tabs`へ渡す、4つのタブの指定。
  * 失敗と通知のタブには、失敗の件数と、注意以上のチップがあるときの印を付ける。
  * 取得が失敗したタブには、取得の失敗の印を付ける。注意の印があれば並べる。
  */

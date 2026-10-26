@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useHolds } from "../../api/holdsQueries.ts";
+import { useConfig } from "../../api/jobsQueries.ts";
 import { useDeployments, useSummary } from "../../api/queries.ts";
 import {
   SYSTEM_STATUS_LIMIT,
@@ -36,6 +37,7 @@ import {
 } from "../../lib/systemView.ts";
 import { useTabScroll } from "../../lib/useTabScroll.ts";
 import { useVisitedTabs } from "../../lib/useVisitedTabs.ts";
+import { ConfigSection } from "./ConfigSection.tsx";
 import { AuditFailureList, OrphanFailureGroups } from "./FailureLists.tsx";
 import { FlowGraphSection } from "./FlowGraphSection.tsx";
 import { HoldsSection } from "./HoldsSection.tsx";
@@ -109,7 +111,12 @@ function WorkerLoadSection({ status }: { status: StatusQuery }) {
     <SystemSection
       id="worker-load-heading"
       title="workerの負荷"
-      description="defaultのworkerの枠の使用、queueの待ち、メモリの直近24時間です。2分ごとの記録の最大と、最新の値を出します。"
+      description={
+        <>
+          defaultのworkerの枠の使用、queueの待ち、メモリの直近24時間です。2分ごとの記録の最大と、最新の値を出します。
+          workerの一覧は、ここでは読めません。止まったときは通知で知らせます。
+        </>
+      }
       query={status}
       loginHint="上のバナーからログインすると、workerの負荷を表示します。"
     >
@@ -241,31 +248,35 @@ function Sections({ children }: { children: ReactNode }) {
  * 狭いか低い画面では、帯が画面の大半を占めないよう、貼り付けず、本文と一緒にスクロールさせる。
  * 貼り付ける条件はCSSの媒体条件が持つ。親を入れ替えないので、画面の大きさが変わっても本文は描き直されない。
  * 帯のチップは、結論と段を出し、押すと関係するタブの節か、要対応の画面へ移る。
- * タブは状態、失敗と通知、履歴と構成である。開くタブはURLの`?tab=`に持ち、選び直しても履歴を積まない。
+ * タブは状態、失敗と通知、履歴と構成、設定である。開くタブはURLの`?tab=`に持ち、選び直しても履歴を積まない。
  * 4つの取得は画面が持ち、帯とタブが読む。タブの切り替えでは取得しない。節を分けても取得の数は増えない。
+ * 設定の取得だけは、設定のタブを開いた後に始め、見出しの更新ボタンにも、その後から含める。
  * 取得は、保留と凍結、状態、要約、更新履歴の順に始める。
  * workerは1台で取得を直列に処理する。帯とタブの判定に使う3つを先に済ませ、帯が読まない更新履歴を最後にする。
  * 選んでいないタブは、初めて開くまで描かない。開いた後は隠して残し、スクロール位置を保つ。
  * 失敗が隠れないよう、帯に件数を出し、失敗と通知のタブに件数と印を付ける。
  * 見出しの更新ボタンが4つを取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
  * 起動の関係の節だけは、取得を持たない静的なデータを図にする。
- * 書き込みは「保留と凍結」の節の解除だけで、ほかの節は読むだけである。通知の解決は、要対応の画面の詳細で行う。
+ * 書き込みは「保留と凍結」の節の解除だけで、ほかの節は読むだけである。通知の解決は、要対応の画面の詳細で行う。設定も読むだけで、変更はできない。
  */
 export function SystemScreen() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = parseSystemTab(searchParams.get("tab"));
+  const visited = useVisitedTabs(tab);
   const holds = useHolds();
   const status = useSystemStatus();
   const summary = useSummary();
   const deployments = useDeployments();
+  // 設定は、タブを開くまで取得しない。承認などの呼び出しと枠を分け合うworkerに、読まない取得を載せないためである。
+  const config = useConfig(visited.has("config"));
   const refresh = refreshStatusOfSystem({
     status,
     deployments,
     summary,
     holds,
+    config: visited.has("config") ? config : null,
   });
   const now = useNow();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const tab = parseSystemTab(searchParams.get("tab"));
-  const visited = useVisitedTabs(tab);
   const scroll = useTabScroll(tab);
 
   const rows = summaryBandRows(
@@ -278,7 +289,7 @@ export function SystemScreen() {
   );
   const tabs = systemTabSpecs(tab, {
     rows,
-    failed: systemFailedTabs({ status, holds, summary, deployments }),
+    failed: systemFailedTabs({ status, holds, summary, deployments, config }),
   });
 
   // 帯のチップで移る節。タブを替えて描いた後に移るので、移り先のタブを持つ。
@@ -349,6 +360,14 @@ export function SystemScreen() {
             <UpdateHistorySection deployments={deployments} />
             <ResolvedNoticeSection status={status} />
             <FlowGraphSection graph={FLOW_GRAPH} />
+          </Sections>
+        </TabPanel>
+        <TabPanel
+          attrs={systemPanelAttrs("config", tab)}
+          mounted={visited.has("config")}
+        >
+          <Sections>
+            <ConfigSection query={config} />
           </Sections>
         </TabPanel>
       </div>

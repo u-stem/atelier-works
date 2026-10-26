@@ -108,7 +108,7 @@ describe("ScheduleList rows", () => {
 
   test("shows when the next run is due", () => {
     expect(render(freshQuery(snapshot([schedule()])))).toContain(
-      'datetime="2099-10-26T05:05:00.000Z"',
+      'dateTime="2099-10-26T05:05:00.000Z"',
     );
   });
 

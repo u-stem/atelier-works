@@ -13,15 +13,21 @@ import {
 export type JobsTabId = "active" | "history" | "schedules";
 
 export const JOBS_TABS: TabSet<JobsTabId> = {
-  tabs: [],
+  tabs: [
+    { id: "active", label: "実行中と待ち" },
+    { id: "history", label: "履歴" },
+    { id: "schedules", label: "スケジュール" },
+  ],
   defaultTab: "active",
   idPrefix: "jobs",
 };
 
+/** URLの`?tab=`から開くタブを決める。無い値と知らない値は実行中と待ちにする。 */
 export function parseJobsTab(value: string | null): JobsTabId {
   return parseTab(JOBS_TABS, value);
 }
 
+/** タブを選んだ後のクエリを返す。履歴の絞り込みなど、他のクエリは残す。 */
 export function withJobsTab(
   current: URLSearchParams,
   tab: JobsTabId,
@@ -29,6 +35,7 @@ export function withJobsTab(
   return withTab(JOBS_TABS, current, tab);
 }
 
+/** タブの本体の要素に付ける`id`、`aria-labelledby`、`hidden`。 */
 export function jobsPanelAttrs(
   panel: JobsTabId,
   selected: JobsTabId,
@@ -36,13 +43,22 @@ export function jobsPanelAttrs(
   return tabPanelAttrs(JOBS_TABS, panel, selected);
 }
 
+/**
+ * 共通の`Tabs`へ渡す、3つのタブの指定。
+ * 件数は実行中と待ちのタブだけに付ける。キューの1ページで切れたときは、下限の印を付ける。
+ * 印は、選んでいないタブの取得が失敗したときだけ付く。
+ */
 export function jobsTabSpecs(
   selected: JobsTabId,
-  _input: {
+  input: {
     readonly failed: Readonly<Record<JobsTabId, boolean>>;
     readonly activeCount: number | undefined;
     readonly activeCountAtLeast: boolean;
   },
 ): ResolvedTabSpec<JobsTabId>[] {
-  return tabSpecs(JOBS_TABS, selected);
+  return tabSpecs(JOBS_TABS, selected, {
+    failed: input.failed,
+    counts: { active: input.activeCount },
+    countAtLeast: { active: input.activeCountAtLeast },
+  });
 }
