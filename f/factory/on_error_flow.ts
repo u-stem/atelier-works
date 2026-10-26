@@ -7,7 +7,7 @@
 // `work_item_id`は`flow_input.work_item_id`から渡す前提で、
 // 引数名と1対1に対応させる。`path`と`job_id`は`job_failures`の文脈として
 // 受け取るが、渡さないフローもあるので省略できる。
-// `path`がpipelineのときは、`flow_job_id`がこの実行のルートジョブIDと一致するときだけ`failed`にする(`shouldMarkFailed`)。
+// `path`がpipelineか設計のときは、`flow_job_id`がこの実行のルートジョブIDと一致するときだけ`failed`にする(`shouldMarkFailed`)。
 //
 // `pipeline_generate`の失敗も、自分で終了処理をせずここに集める。
 // `retry_work_item`が行う状態やラベルの管理と干渉しないため。
@@ -35,7 +35,7 @@ import {
 import { DEPENDABOT_FLOW_PATH } from "./lib/dependabot_flow_support.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
-import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
+import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import {
   decideTransientFailureAction,
   isTransientPrReviewFailure,
@@ -93,8 +93,8 @@ export function failureWorkItemRef(
  * 黙って処理を飛ばし、再生成が失われる。
  * どちらかのidが無い(まだ記録していない、フローの外で動いている)ときは、
  * 食い違う根拠が無いとみなして許可する。
- * ただし`flowPath`がpipeline(`f/factory/pipeline`)のときは、2つのidが一致するときだけ許可する。
- * pipelineの差し戻しは`flow_job_id`を空にしてから起動するので、空の間に、
+ * ただし`flowPath`がpipeline(`f/factory/pipeline`)か設計(`f/factory/design`)のときは、2つのidが一致するときだけ許可する。
+ * どちらの差し戻しも`flow_job_id`を空にしてから起動するので、空の間に、
  * 記録されていない古い実行の失敗が新しい実行の作業項目を`failed`にしうるため。
  * 起動側が記録する前に落ちた作業項目は、reconcileが猶予の後に孤児として扱う。
  * `rootJobId`は小文字にしてから比べる。起動側は`parseFlowJobId`で小文字にした値を記録するため。
@@ -105,7 +105,7 @@ export function shouldMarkFailed(
   flowPath: string | null,
 ): boolean {
   const root = rootJobId?.toLowerCase() ?? null;
-  if (flowPath === PIPELINE_FLOW_PATH)
+  if (flowPath === PIPELINE_FLOW_PATH || flowPath === DESIGN_FLOW_PATH)
     return workItemFlowJobId !== null && workItemFlowJobId === root;
   if (workItemFlowJobId === null || root === null) return true;
   return workItemFlowJobId === root;

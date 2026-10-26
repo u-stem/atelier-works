@@ -105,12 +105,14 @@ import {
   classifyChangedPaths,
   decideUpdate,
   deploymentFailureMessage,
+  describeTriggerEnv,
   MISE_TOML_PATH,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   readDeployedSha,
   recordFailedDeployment,
   recordSuccessDeployment,
+  resolveTriggerKind,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
   setDeployedSha,
@@ -967,6 +969,14 @@ async function updateSelf(
   log: Logger,
   config: FactoryConfig,
 ): Promise<SelfUpdateResult> {
+  // 同じ範囲の反映が重なったとき、どの起動が重なったかを後から追えるよう、起動の種類を毎回残す。
+  // 種類の判定が外れたときに原因を切り分けられるよう、判定の入力も添える。
+  log.info("self_update started", {
+    trigger: resolveTriggerKind(process.env),
+    job_id: process.env.WM_JOB_ID ?? "unknown",
+    ...describeTriggerEnv(process.env),
+  });
+
   const ghToken = await withCallTimeout("getVariable github_token", () =>
     wmill.getVariable("f/factory/github_token"),
   );

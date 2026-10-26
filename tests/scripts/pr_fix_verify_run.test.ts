@@ -8,6 +8,7 @@ import {
   CheckImageStaleError,
   CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
+import { CI_ROUND_REASONS_WITHHELD } from "../../f/factory/lib/ci_fix_round.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
@@ -33,7 +34,54 @@ function forbidden(reason: string): ForbiddenChangeResult {
   return { blocked: true, reasons: [reason] };
 }
 
-function check(ok: boolean): CheckCommandResult {
+const SETPRIV_MISSING =
+  "setpriv: failed to execute bunx: No such file or directory";
+
+type CheckState =
+  | boolean
+  | "unrunnable"
+  | "setpriv-in-output"
+  | "relative-path";
+
+/**
+ * `"unrunnable"`は、`setpriv`が検査コマンドの実行ファイルを起動できなかった結果を表す。
+ * `"setpriv-in-output"`は同じ文が出力の2行目にあるだけの結果、`"relative-path"`は相対パスの実行ファイルの結果である。
+ */
+function check(state: CheckState): CheckCommandResult {
+  if (state === "setpriv-in-output") {
+    const output = `FAIL a.test.ts\n${SETPRIV_MISSING}`;
+    return {
+      command: "bunx --bun tsc --noEmit",
+      ok: false,
+      exitCode: 127,
+      timedOut: false,
+      outputTail: output,
+      output,
+    };
+  }
+  if (state === "relative-path") {
+    const output =
+      "setpriv: failed to execute scripts/check.sh: Permission denied";
+    return {
+      command: "scripts/check.sh",
+      ok: false,
+      exitCode: 126,
+      timedOut: false,
+      outputTail: output,
+      output,
+    };
+  }
+  if (state === "unrunnable") {
+    return {
+      command: "bunx --bun tsc --noEmit",
+      ok: false,
+      exitCode: 127,
+      timedOut: false,
+      outputTail: SETPRIV_MISSING,
+      output: SETPRIV_MISSING,
+    };
+  }
+  const ok = state;
   return {
     command: "mise run check",
     ok,
@@ -80,7 +128,7 @@ type HarnessOptions = {
   /** `inspectChanges`の呼び出しごとの結果。尽きたら`CLEAN`を返す。 */
   readonly inspections?: readonly ForbiddenChangeResult[];
   /** `runChecks`の呼び出しごとの結果。尽きたら成功を返す。 */
-  readonly checks?: readonly boolean[];
+  readonly checks?: readonly CheckState[];
   readonly budgetExceeded?: boolean;
   readonly retry?: PrFixRetryResult;
   /** `runChecks`が、0始まりで`at`回目の呼び出しで投げる例外。 */
@@ -121,9 +169,9 @@ function harness(options: HarnessOptions = {}): Harness {
       calls.push("runChecks");
       if (options.checksError?.at === checkIndex)
         throw options.checksError.error;
-      const ok = options.checks?.[checkIndex] ?? true;
+      const state = options.checks?.[checkIndex] ?? true;
       checkIndex += 1;
-      return [check(ok)];
+      return [check(state)];
     },
     budgetStatus: async () => {
       calls.push("budgetStatus");
@@ -644,6 +692,94 @@ describe("runPrFixVerify: a worker that cannot run the checks", () => {
       checksError: { at: 0, error: new Error("disk full") },
     });
     await expect(runPrFixVerify(h.deps, INPUT)).rejects.toThrow("disk full");
+  });
+});
+
+describe("runPrFixVerify: a check command that could not run", () => {
+  const REASON = `check command could not run: bunx --bun tsc --noEmit: ${SETPRIV_MISSING}`;
+
+  test("blocks with the command and setpriv's message as the reason", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(REASON);
+  });
+
+  test("ends guard_blocked so that the finish step records no fix round to count as a failure", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("guard_blocked");
+  });
+
+  test("does not retry with Claude", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).not.toContain("runRetry");
+  });
+
+  test("does not check the daily budget for a retry", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).not.toContain("budgetStatus");
+  });
+
+  test("ends guard_blocked when it shows up after the retry", async () => {
+    const h = harness({ checks: [false, "unrunnable"] });
+    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("guard_blocked");
+  });
+
+  test("gives the reason when it shows up after the retry", async () => {
+    const h = harness({ checks: [false, "unrunnable"] });
+    expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(REASON);
+  });
+
+  test("withholds the reason in a CI round when the scan finds a secret", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      scanText: async () => ({ ok: false, output: "leak" }),
+    };
+    const result = await runPrFixVerify(deps, { ...INPUT, ciRound: true });
+    expect(result.reason).toBe(CI_ROUND_REASONS_WITHHELD);
+  });
+
+  test("keeps the reason in a CI round when the scan finds nothing", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      scanText: async (text) => ({ ok: true, output: text }),
+    };
+    const result = await runPrFixVerify(deps, { ...INPUT, ciRound: true });
+    expect(result.reason).toBe(REASON);
+  });
+
+  test("does not scan the reason outside a CI round", async () => {
+    const h = harness({ checks: ["unrunnable"] });
+    let scans = 0;
+    const deps: PrFixVerifyDeps = {
+      ...h.deps,
+      scanText: async (text) => {
+        scans += 1;
+        return { ok: true, output: text };
+      },
+    };
+    await runPrFixVerify(deps, INPUT);
+    expect(scans).toBe(0);
+  });
+
+  test("retries with Claude when the setpriv line is not the first line of the output", async () => {
+    const h = harness({ checks: ["setpriv-in-output"] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).toContain("runRetry");
+  });
+
+  test("retries with Claude when a program given by a relative path could not run", async () => {
+    const h = harness({ checks: ["relative-path"] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).toContain("runRetry");
+  });
+
+  test("retries with Claude when a check fails by itself", async () => {
+    const h = harness({ checks: [false] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).toContain("runRetry");
   });
 });
 

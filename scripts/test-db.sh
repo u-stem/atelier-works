@@ -71,6 +71,7 @@ PR_CONFLICT_FIX_MIGRATION="20261015120000_pr_conflict_fix.up.sql"
 GH_COLLECT_DETAIL_MIGRATION="20261018100000_gh_collect_detail.up.sql"
 DESIGN_STAGE_ITEMS_MIGRATION="20261026120000_design_stage_work_items.up.sql"
 DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
+DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -732,6 +733,73 @@ SQL
   log "design_stage refuses to roll back over a design request without touching work items, moves design work items to needs_human, and round-trips"
 }
 
+# 設計書の下書きの表のmigrationを戻す検査。下書きの行を入れてから、downを当てる。
+# 1回目は下書きが残っているので、先頭の「行が無ければ通る制約」の追加で失敗する。
+# 失敗すると全体が戻るので、表、行、要件定義の下書きの一意制約が残ることを確かめる。
+# 2回目は下書きを消してから当て、表と一意制約が無くなることを確かめる。
+# 最後にupを当て直す。全downを当てる検査の前に呼ぶ。
+verify_design_drafts_rollback() {
+  local up="${MIGRATIONS_DIR}/${DESIGN_DRAFTS_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${DESIGN_DRAFTS_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  drafts_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  drafts_table() {
+    drafts_scalar "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'factory' AND table_name = 'design_drafts'"
+  }
+  drafts_unique() {
+    drafts_scalar "SELECT count(*) FROM pg_constraint WHERE conrelid = 'factory.requirement_drafts'::regclass AND conname = 'requirement_drafts_id_work_item_id_key'"
+  }
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the design drafts"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
+  (1, 'issue', 'issue', 'draftsprobe', 'r', 1, 'https://github.com/draftsprobe/r/issues/1', 't', 'designing');
+INSERT INTO factory.requirement_drafts (work_item_id, attempt, summary, markdown)
+  SELECT id, 1, 's', 'm' FROM factory.work_items WHERE owner = 'draftsprobe';
+INSERT INTO factory.design_drafts (work_item_id, requirement_draft_id, design_attempt, summary, markdown)
+  SELECT work_item_id, id, 1, 's', 'm' FROM factory.requirement_drafts
+  WHERE work_item_id IN (SELECT id FROM factory.work_items WHERE owner = 'draftsprobe');
+SQL
+  [ "$(drafts_table)" = "1" ] || die "expected the design_drafts table to exist"
+  [ "$(drafts_unique)" = "1" ] || die "expected the unique constraint on requirement_drafts to exist"
+
+  log "rolling back design_drafts while a design draft remains"
+  local refused
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${down}" 2>&1)"; then
+    die "design_drafts was rolled back while a design draft remained"
+  fi
+  case "${refused}" in
+    *design_drafts_must_be_empty*) ;;
+    *) die "design_drafts was refused, but not by design_drafts_must_be_empty: ${refused}" ;;
+  esac
+  [ "$(drafts_table)" = "1" ] || die "the refused rollback dropped the design_drafts table"
+  [ "$(drafts_unique)" = "1" ] || die "the refused rollback dropped the unique constraint on requirement_drafts"
+  [ "$(drafts_scalar "SELECT count(*) FROM factory.design_drafts d JOIN factory.work_items w ON w.id = d.work_item_id WHERE w.owner = 'draftsprobe'")" = "1" ] \
+    || die "the refused rollback changed the design drafts"
+  [ "$(drafts_scalar "SELECT count(*) FROM pg_constraint WHERE conrelid = 'factory.design_drafts'::regclass AND conname = 'design_drafts_must_be_empty'")" = "0" ] \
+    || die "the refused rollback left its check constraint behind"
+
+  printf "DELETE FROM factory.design_drafts;\n" | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "could not delete the design drafts"
+  log "rolling back design_drafts"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back design_drafts"
+  [ "$(drafts_table)" = "0" ] || die "expected the design_drafts table to be dropped by the rollback"
+  [ "$(drafts_unique)" = "0" ] || die "expected the unique constraint on requirement_drafts to be dropped by the rollback"
+
+  log "re-applying design_drafts"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply design_drafts"
+  [ "$(drafts_table)" = "1" ] || die "expected the design_drafts table after re-applying"
+  [ "$(drafts_unique)" = "1" ] || die "expected the unique constraint on requirement_drafts after re-applying"
+  printf "DELETE FROM factory.work_items WHERE owner = 'draftsprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "design_drafts refuses to roll back over a design draft without dropping the table, and round-trips"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -865,6 +933,7 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   || die "the console actions checks failed against the real PostgreSQL"
 
 verify_design_stage_rollback
+verify_design_drafts_rollback
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)

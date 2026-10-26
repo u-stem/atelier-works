@@ -1,0 +1,90 @@
+summary: '[SF-2-3] 設計書の生成と承認'
+description: 承認済みの要件定義から設計書を生成し、承認を依頼します。要件定義が設計に足りないと分かったときは、要件定義の生成へ戻します。
+value:
+  modules:
+    - id: prepare
+      summary: '[SF-2-3/1] 設計用の作業領域の準備'
+      value:
+        type: script
+        input_transforms:
+          design_attempt:
+            type: javascript
+            expr: flow_input.design_attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/design_prepare
+    - id: generate
+      summary: '[SF-2-3/2] 設計書の生成(Claude)'
+      value:
+        type: script
+        input_transforms:
+          design_attempt:
+            type: javascript
+            expr: flow_input.design_attempt
+          feedback:
+            type: javascript
+            expr: flow_input.feedback
+          head_sha:
+            type: javascript
+            expr: results.prepare.head_sha
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.prepare.worktree_dir
+        path: f/factory/steps/design_generate
+      skip_if:
+        expr: results.prepare.skip === true
+    - id: request_approval
+      summary: '[SF-2-3/3] 設計の承認依頼'
+      value:
+        type: script
+        input_transforms:
+          design_attempt:
+            type: javascript
+            expr: flow_input.design_attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/design_request_approval
+      skip_if:
+        expr: results.prepare.skip === true || results.generate == null ||
+          results.generate.outcome !== "success"
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/design
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+    - design_attempt
+    - feedback
+  properties:
+    design_attempt:
+      type: integer
+      description: 設計書生成の試行回数(1から始まります)。
+      default: 1
+    feedback:
+      type: string
+      description: 差し戻された理由や指摘事項。今回の試行で反映します。無ければ空のままで構いません。
+      default: ''
+    work_item_id:
+      type: integer
+      description: 処理対象の作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
+  required:
+    - work_item_id

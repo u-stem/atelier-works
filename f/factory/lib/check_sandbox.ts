@@ -84,8 +84,13 @@ export const IPCRM_PATH = "/usr/bin/ipcrm";
 export const KILL_PATH = "/usr/bin/kill";
 export const GETFACL_PATH = "/usr/bin/getfacl";
 export const SETFACL_PATH = "/usr/bin/setfacl";
+/** 対象リポジトリの検査コマンドが`bunx --bun ...`で呼ぶ。bunへのsymlinkで、イメージが置く。 */
+export const BUNX_PATH = "/usr/bin/bunx";
 
-/** 検査と後始末が呼ぶ道具の一覧。`prepare`は、1つでも無ければ何にも触れずに失敗する。 */
+/**
+ * 検査と後始末が呼ぶ道具の一覧。`prepare`は、1つでも無ければ何にも触れずに失敗する。
+ * `bunx`は検査コマンドの設定が使うので、含める。足りないイメージは古いイメージとして、Claudeを動かす前に止める。
+ */
 export const REQUIRED_TOOL_PATHS = [
   SETPRIV_PATH,
   PRLIMIT_PATH,
@@ -98,6 +103,7 @@ export const REQUIRED_TOOL_PATHS = [
   KILL_PATH,
   GETFACL_PATH,
   SETFACL_PATH,
+  BUNX_PATH,
 ] as const;
 
 /**
@@ -409,6 +415,32 @@ export function checkEnv(input: {
     GIT_CONFIG_KEY_0: "safe.directory",
     GIT_CONFIG_VALUE_0: input.worktreeDir,
   };
+}
+
+/** 検査用のHOMEに置く、gitのグローバルの設定ファイルの名前。 */
+export const CHECK_GITCONFIG_NAME = ".gitconfig";
+
+/**
+ * 検査用のHOMEの`.gitconfig`の本文を返す。そのworktreeだけを`safe.directory`にする。
+ * 検査コマンドの中のテストは、子のgitを起動するときに`GIT_`で始まる環境変数をすべて外すことがあり、
+ * `checkEnv`の`GIT_CONFIG_*`だけでは、そのgitがrootの所有のmain cloneの`.git`を所有者の違いで拒む。
+ * HOMEの設定は環境変数を外した子にも効く。
+ * 後始末でrootが動かすgitは、この設定を読まない。HOMEを使う検査用のuidのプロセスだけが読み、
+ * 書き換えられても影響は検査用のuidのgitに限られる。
+ * パスは1つの引用符つきの値に収める。絶対パスで、制御文字(改行を含む)とワイルドカード(`*`)が無いものに限る。
+ * 改行は設定の行を増やして別の設定を注入でき、`*`は信頼するディレクトリを広げるためである。
+ * 引用符とバックスラッシュはエスケープする。
+ */
+export function checkGitConfig(worktreeDir: string): string {
+  if (
+    !worktreeDir.startsWith("/") ||
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を拒む判定である
+    /[\u0000-\u001f\u007f*]/.test(worktreeDir)
+  ) {
+    throw new Error("check sandbox: refusing a worktree path for .gitconfig");
+  }
+  const quoted = worktreeDir.replace(/["\\]/g, (char) => `\\${char}`);
+  return `[safe]\n\tdirectory = "${quoted}"\n`;
 }
 
 /** 正規化された絶対パスで、最上位の1段ではないかを返す。 */

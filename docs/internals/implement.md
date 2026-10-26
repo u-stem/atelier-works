@@ -128,6 +128,7 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 - `.git`の書き換え(`git_pointer_modified`)
 - 変更の判定とgitleaksの検査の間のworktreeの変化(`worktree_changed`)
 - workerが検査の前提を満たさず、検査コマンドを実行できない(`check_image_stale`)。イメージが古いときと、稼働中のworkerの問題のときの両方である
+- 検査コマンドの実行ファイルを起動できない(`check_unrunnable`)
 - Claudeの実行の失敗(`claude_error`)
 - リースの喪失(`lease_lost`)
 
@@ -137,6 +138,9 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 準備のステップ(`implement_prepare`)は、検査コマンドを設定したリポジトリでは、Claudeより前に、イメージと実行時の前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
 満たさなければ、Claudeを動かさずに人の対応待ちで止まる。
 前提を満たさないまま進むと、Claudeの1ラウンド分を使ってから検証で止まるためである。
+イメージの前提には、検査コマンドの設定が使う`bunx`(`/usr/bin/bunx`)を含める。
+`bunx`を含めるので、検査コマンドの設定は`bunx`を使える前提で書ける。
+`bunx`の無い古いイメージは、リポジトリを問わず、`mise run up`までイメージが古いとして止まる。
 
 ループも、検査コマンドの準備が同じ前提を確かめ直し、満たさなければ`check_image_stale`で止まる。
 準備から検証までの間に、イメージも稼働中のworkerも変わりうるためである。
@@ -144,12 +148,26 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 記録すると、Sonnetの失敗として数えられ(`countImplementFailedRounds`)、`heavy_model`への切り替えを早めるためである。
 Claudeが直せる検査の失敗ではないので、修正のラウンドに進まず、作業項目は人の対応待ちになる。
 
-どちらで止まっても、理由と要対応の通知は次のとおりである。
+検査コマンドの実行ファイルを起動できないときも、同じ扱いにする。
+検査コマンドは、非特権のuidへ切り替える`setpriv`を通して動く。
+`setpriv`が実行ファイルを見つけられないか実行できないと、終了コードは127か126になり、出力の先頭の行は`setpriv: failed to execute`で始まる。
+この2つがそろい、コマンドの先頭の語が相対パスで`/`を含まないときだけ、環境の問題として止める。
+先頭の語が`bunx`のように名前だけなら、固定のPATHで探す。絶対パスなら、worktreeの外のイメージの道具を指す。どちらも実行ファイルが無いのはコードの失敗ではない。
+`scripts/check.sh`のように相対パスで`/`を含む先頭の語は、worktreeの中を指す。コードが消したか実行権を落とした失敗なので、修正のラウンドに進む。
+検査コマンド自身が127を返したときや、出力の2行目以降に同じ語が混じるだけのときも、コードの失敗なので修正のラウンドに進む。
+修正のラウンドを回しても、Claudeはworkerの環境を直せず、差分も検査の出力も変わらないまま、停滞で止まるだけだからである。
+このときもラウンドは記録しない。
+理由は`check command could not run: <コマンド>: <setprivの出力>`になり、要対応の通知で停滞と区別できる。
+検査コマンド側のコードが同じ文面を出して、この停止を起こすこともできる。
+起こせるのは人の対応待ちで止めることだけで、権限は広がらない。
+
+止まったときの理由と要対応の通知は次のとおりである。
 
 | 原因 | 理由の先頭 | 要対応の通知 |
 | --- | --- | --- |
 | イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
 | 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+| 検査コマンドの実行ファイルを起動できない | `check command could not run:` | `implement_needs_human`([運用](../operations.md#人の対応待ちになったら)) |
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
@@ -253,7 +271,7 @@ Claudeが不正な出力を返したときは、1回の実行につき1回だけ
 | 検査に通った、検査を実行しなかった | コミットしてPRを作成または更新し、PR作成済み(`pr_open`)にする |
 | 要件の不足 | 要件定義を作り直す工程2へ差し戻す |
 | ラウンドの上限、日次予算、期限、停滞、差分の超過 | 途中の変更を残して、人の対応待ちにする |
-| symlinkの変更、Claudeの実行の失敗、`.git`の書き換え、判定と検査の間のworktreeの変化、準備での停止 | 何もpushせずに、人の対応待ちにする |
+| symlinkの変更、Claudeの実行の失敗、`.git`の書き換え、判定と検査の間のworktreeの変化、検査を実行できない環境の問題(`check_image_stale`、`check_unrunnable`)、準備での停止 | 何もpushせずに、人の対応待ちにする |
 
 完了のステップは、作業項目を読んだ直後にリースを確かめる。外への副作用の直前にも確かめ直す。外への副作用は、commitとpush、worktreeとリモートのブランチの削除、PRの作成と更新、`pr_url`の記録、ラベルの付与である。
 
@@ -297,7 +315,15 @@ Consoleの**作業項目**の表は、作業項目のブランチとPRを列に�
 
 PRがあるときは、未検証の変更がPRに入るのでpushしない。理由には「PRがあるため途中の変更はpushせずworktreeに残しました」と載せる。
 
-symlinkの変更、Claudeの実行の失敗、`.git`の書き換え、判定と検査の間のworktreeの変化で止まったときは、検査を終えていない変更なのでpushせずworktreeに残す。worktreeに残った途中の変更は、次の実行の準備で捨てる。
+次の理由で止まったときは、検査を終えていない変更なのでpushせずworktreeに残す。
+
+- symlinkの変更
+- Claudeの実行の失敗
+- `.git`の書き換え
+- 判定と検査の間のworktreeの変化
+- 検査を動かせない環境の問題(`check_image_stale`、`check_unrunnable`)
+
+worktreeに残った途中の変更は、次の実行の準備で捨てる。
 
 途中経過のコミットと、再実行で実装が完了したときのコミットは別のコミットになる。1つのコミットにまとめるのは、途中で止まらなかった場合だけである。
 
@@ -342,7 +368,10 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 
-`check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。実装フローは`allowed_check_commands`を使わない。
+`check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --no-install --bun tsc --noEmit`や`bunx --no-install --bun biome check .`である。
+`--no-install`は、lockfileから入れていない実行ファイルをレジストリから取得しないための指定で、理由は[運用](../operations.md#検査コマンドを設定する)にある。
+workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
+実装フローは`allowed_check_commands`を使わない。
 
 1つのIssueにかかる費用の上限は、`implement_max_rounds × implement_max_budget_usd_per_run`が目安である。Claudeの不正な出力への再試行は、その実行の費用の上限をもう1回使うので、最悪でその2倍になる。
 
@@ -627,6 +656,8 @@ networkとworkerの資源を共有するので、Issueを信頼できる人だ�
 検査の間、worktreeと`HOME`の所有者は、取った枠のユーザーである。
 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。
 `TMPDIR`は`HOME`の下を指すので、一時ファイルは他の枠から読めない。
+`HOME`の`.gitconfig`は、worktreeだけを`safe.directory`にする。
+検査の中のテストが`GIT_`で始まる環境変数を外してgitを起動しても、枠のユーザーがrootの所有のmain cloneの`.git`を読めるようにするためである。
 検査が終わると、worktreeの所有者はrootに戻り、`HOME`は消える。
 枠は別のリポジトリの検査に使い回すので、枠を取るたびに、前の実行がそのuidで残したものを消してから使う。
 同時に動く検査は1つなので、枠が全部埋まることは通常ない。埋まっていれば、空くのを最大5分待つ。
@@ -877,7 +908,15 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 
 ### 検査コマンドの出力の上限
 
-検査コマンドの出力は、ストリームごとに1MiBまでしか保持しない。超えた分は、先頭と末尾を残して間を捨てる。DBには、秘密をマスクした先頭16KBを保存する。失敗した検査の出力を先に並べる。
+検査コマンドの出力は、ストリームごとに1MiBまでしか保持しない。
+超えた分は、先頭と末尾を残して間を捨てる。
+DBには、秘密をマスクした出力を16KB以内で保存する。
+失敗した検査の出力を先に、通った検査の出力を後に並べる。
+16KBに収まらないときは、検査コマンドごとの節で、先頭の約3分の1と末尾の約3分の2を残し、間を省略したバイト数の目印に置き換える。
+失敗した検査に厚く割り、通った検査は薄くする。
+通った検査には、失敗した検査が使わない余りを回す。
+テストの失敗の一覧は出力の末尾に出ることが多く、先頭だけでは先頭の警告やログで上限を使い切る。
+連結した全体を一度に切ると、後ろに並ぶ通った検査の出力が末尾の枠を使うので、節ごとに切る。
 
 ### pushの拒否
 

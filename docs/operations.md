@@ -1176,7 +1176,36 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 
 - エントリが無いリポジトリでは、検査コマンドを実行しない。PRの修正で使う`allowed_check_commands`は、実装では使わない。
 - 検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`など)を消す。そのため先頭で依存関係をインストールする。
-- workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
+- workerのイメージにmiseは無い。worker内で直接動くコマンドにする。
+  例は次のとおり。
+  - `bun install --frozen-lockfile`
+  - `bun test`
+  - `bunx --no-install --bun tsc --noEmit`
+  - `bunx --no-install --bun biome check .`
+  workerのイメージは、`bunx`をbunへのsymlinkとして`/usr/bin`に置く。
+  `bunx`などの実行ファイルが無いと検査コマンドを実行できず、修正のラウンドを回さずに人の対応待ちで止まる。
+- `bunx`は、先頭の`bun install --frozen-lockfile`でlockfileから入れた実行ファイルにだけ使う。
+  入っていないと、`bunx`は版を固定しないままレジストリから取得し、検査用のuidで実行するためである。
+  `--no-install`を付けると、入っていないときは取得せずに止まる。
+  この指定は、実機のbunの`bunx --help`にある。
+- 検査コマンドは、シェルを通さず、空白で区切った引数として実行する。
+  クォートは文字としてそのまま渡り、`*`は展開されない。
+  たとえば`bun test --path-ignore-patterns 'console/**'`の`'`は外し、`console/**`と書く。
+- 依存を別に入れるサブディレクトリがあるリポジトリでは、先頭の`bun install --frozen-lockfile`の直後に、そのサブディレクトリの導入を足す。
+  たとえば`console/`を持つこのリポジトリでは、`bun install --cwd console --frozen-lockfile --ignore-scripts`を足す。
+  足さないと、`tsc`がそのサブディレクトリの型を解決できず、必ず失敗する。
+- 検査は、未コミットの作業ツリーに対して実行する。
+  gitの`HEAD`のコミットからハッシュを計算し直すテストは通らない。
+  このリポジトリでは、`wmill-lock.yaml`のハッシュを確かめる`tests/lib/metadata_*`を除く。
+  `bun test`に`--path-ignore-patterns tests/lib/metadata_*`を付ける。
+  CIは除かずに実行するので、メタデータのずれはCIの`metadata`ジョブが検知する。
+  `wmill-lock.yaml`の再生成(`mise run metadata`)と`lint:docs`は、検査コマンドに含められない。
+  実装のPRが、この2つでCIに落ちたら、人かローカルのセッションが同じブランチに直しを足す。
+- 検査コマンドの数を増やすときは、時間の合計を確かめる。
+  `implement_flow_timeout_sec` + 600 + コマンド数 × (`implement_check_timeout_sec` + 15)が、ステップのtimeoutの21600秒以内でなければ、準備のステップが止める。
+  8件の検査コマンドを置くときは、`implement_check_timeout_sec`を800にする。
+- 検査コマンドの設定を足す、または変えたら、軽い作業項目で実際に流して、検査が通ることを確かめる。
+  検査コマンドが一度も実機で動いていない設定は、初回の実装を止める。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
 - 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。main cloneの`.git`に書けないので、`git add`、`git commit`、`git stash`、lint-stagedのように`.git`へ書き込む検査コマンドは失敗する。検査コマンドには使わない。
 - 検査コマンドの`TMPDIR`は`HOME`の下を指す。共有の一時ディレクトリに置いたものは、並行して動く別の検査から読めることがある。
@@ -1426,6 +1455,7 @@ Discordの通知の「次の操作」に従う。主な場合は次のとおり�
 | commitしたツリーが、検査したツリーと違う | pushしない | 検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめてから再実行する |
 | 途中経過では秘密情報の検査の後に、最終のcommitでは検証の後に、worktreeが変わった(「秘密情報の検査の後にworktreeが変更されました」、「検証の後にworktreeが変更されました」) | pushしない | 同上 |
 | 検証のラウンドで、変更の判定と秘密情報の検査の間にworktreeが変わった | そのラウンドで止め、pushしない | 同上 |
+| 検査コマンドの実行ファイルを起動できなかった(理由が「検査コマンドを実行できませんでした」で、`setpriv: failed to execute`が載る) | pushしない | 載った実行ファイルをworkerのイメージに足すか、検査コマンドを直す。イメージを変えたときは[f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)に従う。自動の再開はイメージが古い理由だけなので、この理由では自動で再開しない。直した後に再実行する |
 
 完了時に新しい変更が無くても、ブランチに分岐点より先のコミット(途中経過のコミットなど)があれば、FactoryはそれでPRを作るか更新する。ブランチに分岐点より先のものが何も無いときだけ、変更を生まなかったとして止まる。
 
@@ -2843,19 +2873,25 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 ### 設計工程のmigrationを戻す
 
-設計工程の状態と種類を足したmigrationを戻す手順である。
-`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に2回打つ。
-承認の記録を失わないために、承認依頼側が先に戻る。
+設計工程のmigrationを戻す手順である。
+`wmill datatable migrate down`は1回に最新の1つだけを戻すので、新しい順に3回打つ。
+設計の下書きが先に戻り、承認の記録を失わないために、承認依頼側がその次に戻る。
 
-1. 1回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
-2. 2回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
+1. 1回目の`migrate down`で、設計の下書きの表(`design_drafts`)と、要件定義の下書きの複合の一意制約が戻る(`20261026130000_design_drafts`)。
+2. 2回目の`migrate down`で、承認依頼の種類の制約から`design`が外れる(`20261026120100_design_stage_approval_kind`)。
+3. 3回目の`migrate down`で、作業項目の列、状態の制約、一意インデックスが戻る(`20261026120000_design_stage_work_items`)。
    `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
 
-今のコードは、設計工程の状態と種類を書き込まない。
-戻す前に止めるものは無い。
-1回目が失敗したときは、種類が`design`の承認依頼が残っている。
+1回目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
+トランザクションごと戻るので、表と制約は残る。
+設計の下書きを、行があるまま失わないためである。
+行の扱いを決めて消してから、1回目をやり直す。
+
+設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。
+そのため、通常は1回目と2回目で止まらない。
+2回目が失敗したときは、種類が`design`の承認依頼が残っている。
 制約を足し直せないので、migrationはそこで止まる。
-`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、1回目をやり直す。
+`approval_requests`で`kind = 'design'`の行を確かめ、扱いを決めてから、2回目をやり直す。
 
 ### 5分の境目の403を数える
 
@@ -4789,6 +4825,24 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 4. 次の回で自己更新が成功することを見る。
    次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
 
+### 自己更新の起動の種類を確かめる
+
+自己更新は、実行のたびに最初のログ(`self_update started`)へ、起動の種類(`trigger`)を出す。
+値は`schedule`、`manual`、`unknown`のいずれかで、判定は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+判定は、実機の定期のジョブでWindmillが`WM_SCHEDULE_PATH`を与えることを前提にする。
+この前提は、コードの試験では確かめられないので、反映の後に次の手順で確かめる。
+
+1. 反映の後の定期の回を`wmill job list --script-path f/factory/self_update`で見つけ、`wmill job logs <id>`でログを読む。
+   `self_update started`の`trigger`が`schedule`で、`schedule_path`にスケジュールのパスが入っていることを見る。
+2. `wmill script run f/factory/self_update`で手動の回を走らせ、同じログの`trigger`が`manual`であることを見る。
+3. 食い違うときは、同じログの`schedule_path`、`has_job_kind`、`has_parent_job`、`has_root_flow_job`を見る。
+   判定の入力に使うべき環境変数を、この値から探す。
+
+同じ範囲(反映前の版と反映後の版が同じ)の成功が`factory.deployments`に2件記録されたときは、ジョブ履歴で2つの実行の開始時刻の重なりと起動元を確かめる。
+起動元が定期と手動のどちらなのかは、このログの`trigger`で切り分ける。
+原因の1つは、手動と定期の2つの実行が重なり、どちらも成功の記録の前に反映を始めたことである。
+`deployed_sha`を直前の版に戻して再反映した運用の結果であれば、同じ範囲が2件になっても異常ではない。
+
 ### 区切った呼び出しが時間切れになったとき
 
 `self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
@@ -5196,6 +5250,7 @@ bun --no-env-file ./scripts/host-apply.ts plan --repo . --applied <適用済み�
 
 `f/`の変更が、新しいworkerのイメージを前提にすることがある。
 例えば、検査コマンドを枠のユーザー(`factory-check-N`)で動かす`f/`は、イメージの`acl`、`procps`、`prlimit`と枠のユーザーを前提にする。
+検査コマンドの設定が使う`bunx`(`/usr/bin/bunx`)も前提で、無いイメージは古いイメージとして止まる。
 ベースのイメージが誰でも書き込めるようにしている`/usr/src/app`と`/tmp/.cache`を、イメージが閉じていることも前提にする。
 マージすると、自己更新が2分以内に`f/`を反映するが、イメージは人が`mise run up`するまで古いままである。
 
@@ -5243,6 +5298,9 @@ CIの失敗を直す回は除く([PRワークフロー](internals/pr-workflow.md
 人の再実行は要らない。
 同じ作業項目の自動の再開は3回までで、上限に達したときは、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行する。
 版が載らない通知は自動では解決されず、自動の再開も起きないので、`mise run up`の後に人が解決し、止まった作業項目を`retry_work_item`で再実行する。
+自動の再開の対象は、イメージが古い理由で止まった作業項目だけである。
+検査コマンドの実行ファイルを起動できずに止まった作業項目(理由は`check command could not run:`で始まる)は、イメージが前提を満たしていても止まるので、自動では再開しない。
+実行ファイルを足すか検査コマンドを直した後に、人が`retry_work_item`で再実行する。
 
 `/usr/src/app`か`/tmp/.cache`の下に誰でも書けるものがあれば、ベースのイメージが置いたものでも`check_runtime_unsafe`に載る。
 この通知は`mise run up`の後も自動では解決されない。

@@ -6,6 +6,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { readFile } from "node:fs/promises";
 import {
   type CheckCommandResult,
+  firstUnrunnableCheckReason,
   runAllowedCheckCommands,
 } from "../lib/check_runner.ts";
 import {
@@ -198,6 +199,11 @@ export type PrFixVerifyDeps = {
   readonly reportCheckImageStale: (
     error: CheckEnvironmentError,
   ) => Promise<void>;
+  /**
+   * CIの失敗を直す回が、検査を実行できなかった理由を外へ出す前に、秘密値を検査する(`guardCiRoundReasons`)。
+   * 無ければ検査しない。
+   */
+  readonly scanText?: CiTextScanner;
 };
 
 export type PrFixVerifyInput = {
@@ -240,6 +246,8 @@ export type PrFixVerifyInput = {
  * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
  * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
+ * 検査コマンドの実行ファイルを起動できなかったときも(`firstUnrunnableCheckReason`)、同じく"guard_blocked"にする。
+ * workerの環境の問題で、Claudeに直させても変わらないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
  * CIの失敗を直す回(`input.ciRound`)は、返信を持つ結果(修正の結果と再実行の結果)を、検査より前に"blocked"にする。
  */
@@ -330,19 +338,45 @@ export async function runPrFixVerify(
     }
   };
 
-  /** workerが前提を満たさず検査を実行できなかったときの結果。 */
-  const staleImage = (
-    error: CheckEnvironmentError,
+  /** 検査を実行できなかった(workerが前提を満たさない、実行ファイルを起動できない)ときの結果。 */
+  const unrunnable = (
+    reason: string,
     summary: string,
     replies: FixReply[],
   ): PrFixVerifyResult => ({
-    ...blocked(error.message, summary, replies),
+    ...blocked(reason, summary, replies),
     outcome: "guard_blocked",
   });
 
+  /** 実行ファイルを起動できなかった理由は検査コマンドの出力を含むので、CI回では外へ出す前に秘密値を検査する。 */
+  const guardedUnrunnable = async (
+    reason: string,
+    summary: string,
+    replies: FixReply[],
+  ): Promise<PrFixVerifyResult> => {
+    const scan = deps.scanText;
+    if (!ciRound || scan === undefined) {
+      return unrunnable(reason, summary, replies);
+    }
+    const [safe] = await guardCiRoundReasons([reason], scan);
+    return unrunnable(safe ?? reason, summary, replies);
+  };
+
   const firstChecks = await runChecks();
   if (firstChecks instanceof CheckEnvironmentError) {
-    return staleImage(firstChecks, input.apply.summary, input.apply.replies);
+    return unrunnable(
+      firstChecks.message,
+      input.apply.summary,
+      input.apply.replies,
+    );
+  }
+  const firstUnrunnable = firstUnrunnableCheckReason(firstChecks);
+  if (firstUnrunnable !== null) {
+    return await guardedUnrunnable(
+      firstUnrunnable,
+      input.apply.summary,
+      input.apply.replies,
+    );
   }
   if (firstChecks.every((result) => result.ok)) {
     const afterChecksReason = await inspect();
@@ -426,7 +460,15 @@ export async function runPrFixVerify(
   }
   const secondChecks = await runChecks();
   if (secondChecks instanceof CheckEnvironmentError) {
-    return staleImage(secondChecks, output.summary, output.replies);
+    return unrunnable(secondChecks.message, output.summary, output.replies);
+  }
+  const secondUnrunnable = firstUnrunnableCheckReason(secondChecks);
+  if (secondUnrunnable !== null) {
+    return await guardedUnrunnable(
+      secondUnrunnable,
+      output.summary,
+      output.replies,
+    );
   }
   if (!secondChecks.every((result) => result.ok)) {
     return blocked(
@@ -509,6 +551,7 @@ export type ConflictFixVerifyInput = {
  * 禁止された変更の理由は、パスにClaudeや検査コマンドが選べる名前が入るので、秘密値の検査を通してから返す。
  * 検査コマンドが失敗したら、固定の理由で"blocked"にする。Claudeは再実行しない。
  * 検査コマンドの失敗は、署名の変更のような意味の競合を表し、競合ファイルだけを直せるClaudeには直せないためである。
+ * 検査コマンドの実行ファイルを起動できなかったときも、環境の問題なので"guard_blocked"にする。
  * workerが検査の前提を満たさず検査を実行できなければ、`reportCheckImageStale`で知らせ、"guard_blocked"にする。
  * 理由は例外の文のまま返す。接頭辞を付けると、イメージが古いことを示す理由の接頭辞が崩れ、自動の再開と回数の除外が働かなくなる。
  */
@@ -587,6 +630,12 @@ export async function runConflictFixVerify(
     if (!(error instanceof CheckEnvironmentError)) throw error;
     await deps.reportCheckImageStale(error);
     return { ...blocked(error.message), outcome: "guard_blocked" };
+  }
+  const unrunnableReason = firstUnrunnableCheckReason(results);
+  if (unrunnableReason !== null) {
+    // 理由は検査コマンドの出力を含むので、他の理由と同じく外へ出す前に秘密値を検査する。
+    const [safe] = await guardCiRoundReasons([unrunnableReason], deps.scanText);
+    return { ...blocked(safe ?? unrunnableReason), outcome: "guard_blocked" };
   }
   if (!results.every((result) => result.ok)) {
     deps.warn("repository checks failed in a conflict round", {
@@ -1056,6 +1105,7 @@ export async function main(
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
       reportCheckImageStale,
+      scanText: ciTextScanner(runCommand),
     },
     {
       worktreeGitPointer: worktree_git_pointer,

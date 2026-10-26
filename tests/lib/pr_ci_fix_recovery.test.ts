@@ -32,6 +32,22 @@ function item(
 }
 
 describe("holdReasonForStoppedItem", () => {
+  test("maps a check command that could not run to a stop, so that the row is not started again", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "check command could not run: bunx --bun tsc --noEmit: setpriv: failed to execute bunx: No such file or directory",
+      ),
+    ).toBe("fix_stopped");
+  });
+
+  test("does not map a note that only contains the words of a check command that could not run", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: claude blocked: check command could not run: x",
+      ),
+    ).toBeNull();
+  });
+
   test("maps the missing marker", () => {
     expect(
       holdReasonForStoppedItem(

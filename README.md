@@ -86,12 +86,14 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
 | `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
 | `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する |
+| `mise run check:changed` | `origin/main`との差分に応じて検査を絞って実行する。`lint`と`typecheck`は常に、`lint:docs`は差分のMarkdownだけ、`test:changed`は差分がMarkdownだけなら省き、`console:check`はConsoleと共有のlibに触れたときだけ実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
 | `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)を作り直す |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
-| `mise run test` | `bun test`でsmallのテストを実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
+| `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
+| `mise run test:changed` | `origin/main`との差分が影響するテストだけを実行する。日常の確認用で、全件の確認はCIが行う |
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
@@ -136,6 +138,7 @@ atelier-works/
 | [文書の書き方](docs/writing-guidelines.md) | 文書とFactoryが生成する文章の書き方 |
 | [作業項目の仕様](docs/internals/work-items.md) | 作業項目と状態の扱い |
 | [要件定義の仕様](docs/internals/requirements.md) | 要件定義の生成と承認の仕組み |
+| [設計書の生成の仕様](docs/internals/design.md) | 設計書の生成の仕組みと書き込み範囲 |
 | [実装フローの仕様](docs/internals/implement.md) | 実装フローの仕組みと安全策の詳細 |
 | [PRワークフローの仕様](docs/internals/pr-workflow.md) | PRのレビューと修正の仕組みと安全策の詳細 |
 | [監査の仕様](docs/internals/audit.md) | 監査と改善提案の仕組み |

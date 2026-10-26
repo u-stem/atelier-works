@@ -29,6 +29,53 @@ export function decideUpdate(
 }
 
 // ---------------------------------------------------------------------------
+// resolveTriggerKind: 自己更新の起動の種類
+// ---------------------------------------------------------------------------
+
+export type TriggerKind = "schedule" | "manual" | "unknown";
+
+type JobEnv = Readonly<Record<string, string | undefined>>;
+
+/** 環境変数が空でない値を持つか。 */
+function hasValue(env: JobEnv, name: string): boolean {
+  return (env[name] ?? "").length > 0;
+}
+
+/**
+ * Windmillがジョブに与える環境変数から、起動の種類を決める。
+ * `WM_SCHEDULE_PATH`があればスケジュールからの起動(`schedule`)、無ければ手動実行(`manual`)とする。
+ * フローやAPIからの起動も`manual`に含まれる。
+ * `WM_JOB_ID`が無いときはジョブの外で、種類を判別できないので`unknown`にする。
+ */
+export function resolveTriggerKind(env: JobEnv): TriggerKind {
+  if (!hasValue(env, "WM_JOB_ID")) return "unknown";
+  return hasValue(env, "WM_SCHEDULE_PATH") ? "schedule" : "manual";
+}
+
+export type TriggerEnvSummary = {
+  readonly schedule_path: string | null;
+  readonly has_job_kind: boolean;
+  readonly has_parent_job: boolean;
+  readonly has_root_flow_job: boolean;
+};
+
+/**
+ * 起動の種類の判定が実機で外れたときに、原因を切り分けるための生の入力を返す。
+ * 値を返すのは、秘密でないスケジュールのパスだけである。
+ * ほかの変数は、空でない値があるかだけを返す。
+ */
+export function describeTriggerEnv(env: JobEnv): TriggerEnvSummary {
+  return {
+    schedule_path: hasValue(env, "WM_SCHEDULE_PATH")
+      ? (env.WM_SCHEDULE_PATH ?? null)
+      : null,
+    has_job_kind: hasValue(env, "WM_JOB_KIND"),
+    has_parent_job: hasValue(env, "WM_PARENT_JOB"),
+    has_root_flow_job: hasValue(env, "WM_ROOT_FLOW_JOB_ID"),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // assertBranchMatches: ensureFactoryCloneの事後条件の多層防御としての検査
 // ---------------------------------------------------------------------------
 

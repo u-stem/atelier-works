@@ -3,6 +3,7 @@
 // I/Oは持たない。読み取りと更新は`pr_ci_watch.ts`が行う。
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
+import { CHECK_UNRUNNABLE_REASON_PREFIX } from "./check_runner.ts";
 import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
@@ -70,6 +71,8 @@ export function holdReasonForStoppedItem(
   if (DRAFT_OR_AUTO_MERGE_REASONS.includes(note)) {
     return "pr_draft_or_auto_merge";
   }
+  // 検査コマンドの実行ファイルを起動できない環境の問題は、同じheadで起動し直しても変わらない。
+  if (note.startsWith(CHECK_UNRUNNABLE_REASON_PREFIX)) return "fix_stopped";
   return null;
 }
 

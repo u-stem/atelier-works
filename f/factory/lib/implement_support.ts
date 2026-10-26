@@ -338,20 +338,35 @@ export const IMPLEMENT_CHECK_SKIP_REASONS = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// truncateCheckOutput: `implement_rounds.check_output`には先頭16KBだけを残す
+// truncateCheckOutput: `implement_rounds.check_output`には先頭と末尾を残す
 // ---------------------------------------------------------------------------
 
 export const CHECK_OUTPUT_MAX_BYTES = 16 * 1024;
+
+/** 検査コマンドごとの出力の節の区切り。 */
+const SECTION_SEPARATOR = "\n\n";
+
+/** 先頭に割く、残せるバイト数の割合の分母。残りを末尾に割く。 */
+const HEAD_SHARE_DENOMINATOR = 3;
 
 /** `byte`がUTF-8の継続バイト(`10xxxxxx`)かを返す。 */
 function isContinuationByte(byte: number): boolean {
   return (byte & 0b1100_0000) === 0b1000_0000;
 }
 
+/** 省略の目印。省略したバイト数を載せる。 */
+function omissionMarker(omittedBytes: number): string {
+  return `\n[... ${String(omittedBytes)} bytes omitted ...]\n`;
+}
+
 /**
- * `text`の先頭`maxBytes`バイトを、正しいUTF-8の文字列として返す。
+ * `text`を`maxBytes`バイト以内の、正しいUTF-8の文字列にして返す。
+ * 収まらないときは、先頭と末尾を残して間を省略の目印に置き換える。
+ * 先頭は約3分の1、末尾は約3分の2を残す。テストの失敗の一覧のように、人が読みたい内容は出力の末尾にあることが多く、
+ * 先頭だけを残すと、先頭の警告やログで上限を使い切ってしまうためである。
  * バイトの境界がマルチバイト文字を分断するときは、その文字ごと捨てる。
  * 列の上限はバイト数で決めているため、UTF-16のコード単位ではなくバイトで測る。
+ * 上限が省略の目印すら入らないほど小さいときは、先頭だけを残す。
  * PostgreSQLの`text`列はNUL文字を受け付けないので、先にNULを取り除く。
  *
  * 呼び出し側は、`maskSecrets`を適用した後の検証コマンドの出力全体を、
@@ -363,13 +378,99 @@ export function truncateCheckOutput(
   maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
 ): string {
   const clean = text.replaceAll("\u0000", "");
-  const bytes = new TextEncoder().encode(clean);
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(clean);
   if (bytes.byteLength <= maxBytes) return clean;
-  let end = maxBytes;
-  while (end > 0 && isContinuationByte(bytes[end] ?? 0)) {
-    end -= 1;
+  const decoder = new TextDecoder();
+  // 目印の桁数は、全体のバイト数の桁数を超えない。
+  const markerBytes = encoder.encode(
+    omissionMarker(bytes.byteLength),
+  ).byteLength;
+  const budget = maxBytes - markerBytes;
+  const headLimit =
+    budget > 0 ? Math.floor(budget / HEAD_SHARE_DENOMINATOR) : maxBytes;
+  let headEnd = headLimit;
+  while (headEnd > 0 && isContinuationByte(bytes[headEnd] ?? 0)) {
+    headEnd -= 1;
   }
-  return new TextDecoder().decode(bytes.subarray(0, end));
+  const head = bytes.subarray(0, headEnd);
+  if (budget <= 0) return decoder.decode(head);
+  let tailStart = bytes.byteLength - (budget - headLimit);
+  while (
+    tailStart < bytes.byteLength &&
+    isContinuationByte(bytes[tailStart] ?? 0)
+  ) {
+    tailStart += 1;
+  }
+  const tail = bytes.subarray(tailStart);
+  const omitted = bytes.byteLength - head.byteLength - tail.byteLength;
+  return `${decoder.decode(head)}${omissionMarker(omitted)}${decoder.decode(tail)}`;
+}
+
+/**
+ * `sections`を、合わせて`budget`バイト以内に収める。短い節はそのまま残し、余りを長い節で等分する。
+ * 長い節は、それぞれ`truncateCheckOutput`で先頭と末尾を残す。
+ */
+function truncateEach(sections: readonly string[], budget: number): string[] {
+  const encoder = new TextEncoder();
+  const order = sections
+    .map((section, index) => ({
+      index,
+      size: encoder.encode(section).byteLength,
+    }))
+    .sort((a, b) => a.size - b.size);
+  const allocation = new Map<number, number>();
+  let remaining = Math.max(budget, 0);
+  order.forEach((entry, position) => {
+    const share = Math.floor(remaining / (order.length - position));
+    const given = Math.min(entry.size, share);
+    allocation.set(entry.index, given);
+    remaining -= given;
+  });
+  return sections.map((section, index) =>
+    truncateCheckOutput(section, allocation.get(index) ?? 0),
+  );
+}
+
+/**
+ * 検査コマンドごとの出力の節を、`maxBytes`バイト以内の1つの文字列にして返す。
+ * 失敗した検査の節を先に、通った検査の節を後に並べる。
+ * 収まらないときは、節ごとに`truncateCheckOutput`で先頭と末尾を残す。
+ * 失敗した検査に厚く割り、通った検査は薄くする。通った検査には、失敗した検査が使わない余りも回す。
+ * 連結した全体を一度に切ると、後ろに並ぶ通った検査の出力が末尾の枠を使い、
+ * 失敗した検査の末尾(失敗の一覧)が省かれるためである。
+ */
+export function truncateCheckSections(
+  failed: readonly string[],
+  passed: readonly string[],
+  maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
+): string {
+  const encoder = new TextEncoder();
+  const clean = (sections: readonly string[]): string[] =>
+    sections.map((section) => section.replaceAll("\u0000", ""));
+  const failedSections = clean(failed);
+  const passedSections = clean(passed);
+  const all = [...failedSections, ...passedSections];
+  const joined = all.join(SECTION_SEPARATOR);
+  if (encoder.encode(joined).byteLength <= maxBytes) return joined;
+  const sizeOf = (sections: readonly string[]): number =>
+    sections.reduce(
+      (total, section) => total + encoder.encode(section).byteLength,
+      0,
+    );
+  const available =
+    maxBytes - (all.length - 1) * encoder.encode(SECTION_SEPARATOR).byteLength;
+  const failedNeed = sizeOf(failedSections);
+  const passedNeed = sizeOf(passedSections);
+  const passedBudget = Math.min(
+    passedNeed,
+    Math.max(Math.floor(available / 4), available - failedNeed),
+  );
+  const failedBudget = available - passedBudget;
+  return [
+    ...truncateEach(failedSections, failedBudget),
+    ...truncateEach(passedSections, passedBudget),
+  ].join(SECTION_SEPARATOR);
 }
 
 // ---------------------------------------------------------------------------
