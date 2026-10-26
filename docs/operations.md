@@ -1188,6 +1188,24 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
   入っていないと、`bunx`は版を固定しないままレジストリから取得し、検査用のuidで実行するためである。
   `--no-install`を付けると、入っていないときは取得せずに止まる。
   この指定は、実機のbunの`bunx --help`にある。
+- 検査コマンドは、シェルを通さず、空白で区切った引数として実行する。
+  クォートは文字としてそのまま渡り、`*`は展開されない。
+  たとえば`bun test --path-ignore-patterns 'console/**'`の`'`は外し、`console/**`と書く。
+- 依存を別に入れるサブディレクトリがあるリポジトリでは、先頭の`bun install --frozen-lockfile`の直後に、そのサブディレクトリの導入を足す。
+  たとえば`console/`を持つこのリポジトリでは、`bun install --cwd console --frozen-lockfile --ignore-scripts`を足す。
+  足さないと、`tsc`がそのサブディレクトリの型を解決できず、必ず失敗する。
+- 検査は、未コミットの作業ツリーに対して実行する。
+  gitの`HEAD`のコミットからハッシュを計算し直すテストは通らない。
+  このリポジトリでは、`wmill-lock.yaml`のハッシュを確かめる`tests/lib/metadata_*`を除く。
+  `bun test`に`--path-ignore-patterns tests/lib/metadata_*`を付ける。
+  CIは除かずに実行するので、メタデータのずれはCIの`metadata`ジョブが検知する。
+  `wmill-lock.yaml`の再生成(`mise run metadata`)と`lint:docs`は、検査コマンドに含められない。
+  実装のPRが、この2つでCIに落ちたら、人かローカルのセッションが同じブランチに直しを足す。
+- 検査コマンドの数を増やすときは、時間の合計を確かめる。
+  `implement_flow_timeout_sec` + 600 + コマンド数 × (`implement_check_timeout_sec` + 15)が、ステップのtimeoutの21600秒以内でなければ、準備のステップが止める。
+  8件の検査コマンドを置くときは、`implement_check_timeout_sec`を800にする。
+- 検査コマンドの設定を足す、または変えたら、軽い作業項目で実際に流して、検査が通ることを確かめる。
+  検査コマンドが一度も実機で動いていない設定は、初回の実装を止める。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
 - 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。main cloneの`.git`に書けないので、`git add`、`git commit`、`git stash`、lint-stagedのように`.git`へ書き込む検査コマンドは失敗する。検査コマンドには使わない。
 - 検査コマンドの`TMPDIR`は`HOME`の下を指す。共有の一時ディレクトリに置いたものは、並行して動く別の検査から読めることがある。
