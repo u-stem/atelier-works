@@ -766,6 +766,12 @@ describe("SQL", () => {
     expect(RUNNING_WORK_ITEM_STATUSES).toContain("designing");
   });
 
+  test("awaiting_design_approval is not a guarded status, since no job runs while a human decides", () => {
+    expect(RUNNING_WORK_ITEM_STATUSES).not.toContain(
+      "awaiting_design_approval",
+    );
+  });
+
   const migrations = readdirSync(MIGRATIONS_DIR)
     .filter((name) => name.endsWith(".up.sql"))
     .map((name) => readFileSync(join(MIGRATIONS_DIR, name), "utf8"))

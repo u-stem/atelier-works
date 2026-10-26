@@ -2,7 +2,7 @@
 // 部分一意インデックスの述語は、終端でない状態の一覧をSQLに書き写したものである。
 // `TERMINAL_WORK_ITEM_STATUSES`を変えたのにmigrationを足さないと、
 // 新しく稼働中になる状態がインデックスの対象から漏れる。
-// 述語の検査は、インデックスを最後に作り直した`20261026120000_design_stage`のmigrationを読む。
+// 述語の検査は、インデックスを最後に作り直した`20261026120000_design_stage_work_items`のmigrationを読む。
 // 後のmigrationがこのインデックスをまた作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
 // 述語以外の検査は、最初に作ったmigrationのファイルを読む。
 
@@ -16,7 +16,7 @@ const UP = "migrations/datatable/main/20261009120000_active_issue_key.up.sql";
 const DOWN =
   "migrations/datatable/main/20261009120000_active_issue_key.down.sql";
 const INDEXES_UP =
-  "migrations/datatable/main/20261026120000_design_stage.up.sql";
+  "migrations/datatable/main/20261026120000_design_stage_work_items.up.sql";
 
 async function upSql(): Promise<string> {
   return Bun.file(UP).text();

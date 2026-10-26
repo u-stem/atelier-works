@@ -67,7 +67,8 @@ PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
 ACTIVE_PR_FIX_MIGRATION="20261013100500_active_pr_fix_key.up.sql"
 PR_CONFLICT_FIX_MIGRATION="20261015120000_pr_conflict_fix.up.sql"
 GH_COLLECT_DETAIL_MIGRATION="20261018100000_gh_collect_detail.up.sql"
-DESIGN_STAGE_MIGRATION="20261026120000_design_stage.up.sql"
+DESIGN_STAGE_ITEMS_MIGRATION="20261026120000_design_stage_work_items.up.sql"
+DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -630,15 +631,20 @@ SQL
   log "the active work item indexes list every non-terminal status"
 }
 
-# 設計工程の土台のmigrationを戻す検査。新しい状態の行と`design`の承認依頼を入れてから、このmigrationのdownを当てる。
-# 1回目は`design`の承認依頼が残っているので、旧い種類の制約を足す文が失敗し、トランザクションごと戻ることを確かめる。
-# 2回目は依頼を消してから当て、新状態の行が`needs_human`へ移って元の状態が履歴に残り、旧い定義へ戻ることを確かめる。
-# 最後にupを当て直す。全downを当てる検査の前に呼ぶ。
+# 設計工程の土台の2つのmigrationを戻す検査。新しい状態の行と`design`の承認依頼を入れてから、downを新しい順に当てる。
+# 1回目は`design`の承認依頼が残っているので、先に走る承認依頼側のdownが、旧い種類の制約を足す文で失敗する。
+# 失敗すると作業項目側のdownは走らないので、作業項目も履歴も変わらないことを確かめる。
+# 2回目は依頼を消してから両方を当て、新状態の行が`needs_human`へ移って元の状態が履歴に残り、旧い定義へ戻ることを確かめる。
+# 最後に両方のupを古い順に当て直す。全downを当てる検査の前に呼ぶ。
 verify_design_stage_rollback() {
-  local up_file="${MIGRATIONS_DIR}/${DESIGN_STAGE_MIGRATION}"
-  local down_file="${MIGRATIONS_DIR}/${DESIGN_STAGE_MIGRATION%.up.sql}.down.sql"
-  [ -f "${up_file}" ] || die "missing migration: ${up_file}"
-  [ -f "${down_file}" ] || die "missing migration: ${down_file}"
+  local items_up="${MIGRATIONS_DIR}/${DESIGN_STAGE_ITEMS_MIGRATION}"
+  local items_down="${MIGRATIONS_DIR}/${DESIGN_STAGE_ITEMS_MIGRATION%.up.sql}.down.sql"
+  local kind_up="${MIGRATIONS_DIR}/${DESIGN_STAGE_KIND_MIGRATION}"
+  local kind_down="${MIGRATIONS_DIR}/${DESIGN_STAGE_KIND_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${items_up}" "${items_down}" "${kind_up}" "${kind_down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
 
   # 値を1つ返すSELECTを実行し、空白を除いて返す。
   design_scalar() {
@@ -677,15 +683,16 @@ INSERT INTO factory.approval_requests (kind, work_item_id, subject_id, status)
 SQL
   [ "$(design_indexed)" = "3" ] || die "expected the design statuses in the three active indexes, found $(design_indexed)"
 
-  # 依頼が残っている間は、戻せない。失敗した後も、行の状態、列、インデックスは変わらない。
-  log "rolling back design_stage while a design approval request remains"
+  # 依頼が残っている間は、承認依頼側のdownが失敗する。`wmill datatable migrate down`と同じく、
+  # 失敗したら作業項目側のdownは当てない。行の状態、履歴、列、インデックスは変わらない。
+  log "rolling back design_stage_approval_kind while a design approval request remains"
   local refused
-  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${down_file}" 2>&1)"; then
-    die "design_stage was rolled back while a design approval request remained"
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${kind_down}" 2>&1)"; then
+    die "design_stage_approval_kind was rolled back while a design approval request remained"
   fi
   case "${refused}" in
     *approval_requests_kind_check*) ;;
-    *) die "design_stage was refused, but not by approval_requests_kind_check: ${refused}" ;;
+    *) die "design_stage_approval_kind was refused, but not by approval_requests_kind_check: ${refused}" ;;
   esac
   [ "$(design_statuses)" = "1:designing,2:awaiting_design_approval,3:implementing" ] \
     || die "the refused rollback changed the work item statuses: $(design_statuses)"
@@ -697,8 +704,9 @@ SQL
   # 依頼を消せば戻せる。新状態の行は`needs_human`へ移り、元の状態が履歴に残る。
   printf "DELETE FROM factory.approval_requests WHERE kind = 'design';\n" | psql_exec "${SCRATCH_DB}" >/dev/null \
     || die "could not delete the design approval request"
-  log "rolling back design_stage"
-  psql_exec "${SCRATCH_DB}" -q <"${down_file}" >/dev/null || die "could not roll back design_stage"
+  log "rolling back design_stage_approval_kind and design_stage_work_items"
+  psql_exec "${SCRATCH_DB}" -q <"${kind_down}" >/dev/null || die "could not roll back design_stage_approval_kind"
+  psql_exec "${SCRATCH_DB}" -q <"${items_down}" >/dev/null || die "could not roll back design_stage_work_items"
   [ "$(design_statuses)" = "1:needs_human,2:needs_human,3:implementing" ] \
     || die "unexpected work item statuses after the rollback: $(design_statuses)"
   local moved
@@ -710,13 +718,16 @@ SQL
   design_rejected "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'designprobe', 'r', 4, 'https://github.com/designprobe/r/issues/4', 't', 'designing')" work_items_status_check
   design_rejected "INSERT INTO factory.approval_requests (kind, work_item_id, subject_id) SELECT 'design', id, 9002 FROM factory.work_items WHERE owner = 'designprobe' AND issue_number = 3" approval_requests_kind_check
 
-  # 戻した後にupを当て直せる。
-  log "re-applying design_stage"
-  psql_exec "${SCRATCH_DB}" -q <"${up_file}" >/dev/null || die "could not re-apply design_stage"
+  # 戻した後にupを古い順に当て直せる。
+  log "re-applying design_stage_work_items and design_stage_approval_kind"
+  psql_exec "${SCRATCH_DB}" -q <"${items_up}" >/dev/null || die "could not re-apply design_stage_work_items"
+  psql_exec "${SCRATCH_DB}" -q <"${kind_up}" >/dev/null || die "could not re-apply design_stage_approval_kind"
   [ "$(design_columns)" = "1" ] || die "expected design_attempt after re-applying"
   [ "$(design_indexed)" = "3" ] || die "expected the design statuses in the active indexes after re-applying"
+  printf "INSERT INTO factory.approval_requests (kind, work_item_id, subject_id) SELECT 'design', id, 9003 FROM factory.work_items WHERE owner = 'designprobe' AND issue_number = 3;\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a design approval request was rejected after re-applying"
   printf "DELETE FROM factory.work_items WHERE owner = 'designprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
-  log "design_stage refuses to roll back over a design request, moves design work items to needs_human, and round-trips"
+  log "design_stage refuses to roll back over a design request without touching work items, moves design work items to needs_human, and round-trips"
 }
 
 for up_file in "${up_files[@]}"; do
