@@ -4628,6 +4628,15 @@ export const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) => `${m[1]}ラウンド修正しても検査に通りませんでした`,
     nextAction: () => CHECK_COMMAND_NEXT_ACTION,
   },
+  // `lib/implement_loop.ts`の`checkUnrunnableReason`。検査コマンドの実行ファイルを起動できなかった環境の問題で、
+  // Claudeに直させても変わらないので、停滞とは別に案内する。
+  {
+    pattern: /^implement check command could not run: ([\s\S]+)$/,
+    describe: (m) =>
+      `検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): ${m[1]}`,
+    nextAction: () =>
+      `workerのイメージに検査コマンドの実行ファイルがあるか確認し、無ければイメージを直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
   {
     pattern: /^implement stalled after round (\d+)$/,
     describe: (m) =>
