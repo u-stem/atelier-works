@@ -4634,8 +4634,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^implement check command could not run: ([\s\S]+)$/,
     describe: (m) =>
       `検査コマンドを実行できませんでした(workerの環境の問題で、コードの失敗ではありません): ${m[1]}`,
-    nextAction: () =>
-      `workerのイメージに検査コマンドの実行ファイルがあるか確認し、無ければイメージを直してから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun(
+      "workerのイメージに検査コマンドの実行ファイルがあるか確認し、無ければイメージを直してから、",
+    ),
   },
   {
     pattern: /^implement stalled after round (\d+)$/,
