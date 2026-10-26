@@ -754,8 +754,8 @@ describe("runAllowedCheckCommands with a sandbox", () => {
     const { sandbox, events } = fakeSandbox();
     const { run } = recordingRunner(events, [ok("")]);
     const home = fakeCheckHomeDir();
-    const factory: CreateCheckHomeDir = async () => {
-      const made = await home.factory();
+    const factory: CreateCheckHomeDir = async (input) => {
+      const made = await home.factory(input);
       return {
         path: made.path,
         cleanup: async () => {
