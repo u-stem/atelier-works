@@ -461,6 +461,7 @@ export async function main(
       diagrams,
       open_questions: result.structuredOutput.open_questions,
       doc_dir: docDir,
+      doc_hash: null,
     });
 
     return { outcome: "success" };

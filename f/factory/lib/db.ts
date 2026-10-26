@@ -383,11 +383,7 @@ function toWorkItem(row: SqlRow): WorkItem {
       "conflict_check_id",
     ),
     conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
-    // コードの反映はmigrationより先なので、列を足す前の行は`design_attempt`を持たない。
-    design_attempt:
-      row.design_attempt === undefined
-        ? 0
-        : parseRequiredNumber(row.design_attempt, "design_attempt"),
+    design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -1743,24 +1739,67 @@ export type NewRequirementDraft = {
   open_questions: string[];
   /** `RequirementDraft.doc_dir`(`types.ts`)を参照。 */
   doc_dir: string | null;
+  /** `RequirementDraft.doc_hash`(`types.ts`)を参照。 */
+  doc_hash: string | null;
 };
 
-/** `factory.requirement_drafts`に行を挿入し、そのIDを返す。 */
+const DOC_HASH_COLUMN_PATTERN =
+  /column "doc_hash" of relation "requirement_drafts" does not exist/;
+
+/**
+ * 例外が、`requirement_drafts.doc_hash`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 判定は`isMissingModelUsageColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
+ */
+export function isMissingDocHashColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (DOC_HASH_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && DOC_HASH_COLUMN_PATTERN.test(body);
+}
+
+/**
+ * `factory.requirement_drafts`に行を挿入し、そのIDを返す。
+ * 基準値の列を足すmigrationより先に、この関数を含むコードが反映されると、列が無いエラーになる。
+ * そのときだけ、`doc_hash`を除いた文で保存し直し、基準値が無い下書きになったことを警告に残す。
+ * 下書きが保存されないと要件定義の承認に進めないためである。ほかのエラーは投げる。
+ */
 export async function saveDraft(
   draft: NewRequirementDraft,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.requirement_drafts (
-      work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir
+      work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir, doc_hash
     ) VALUES (
       ${draft.work_item_id}::bigint, ${draft.attempt}::integer, ${draft.summary}, ${draft.markdown},
       ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb,
-      ${draft.doc_dir}
+      ${draft.doc_dir}, ${draft.doc_hash}::text
     )
     RETURNING id
   `;
-  const row = await fetchOneRow(statement, "saveDraft");
+  let row: SqlRow;
+  try {
+    row = await fetchOneRow(statement, "saveDraft");
+  } catch (err) {
+    if (!isMissingDocHashColumnError(err)) throw err;
+    log.warn(
+      "requirement_drafts.doc_hash is missing; saved the draft without the baseline hash (the datatable migration has not run yet)",
+      { work_item_id: draft.work_item_id },
+    );
+    const legacy = sql`
+      INSERT INTO factory.requirement_drafts (
+        work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir
+      ) VALUES (
+        ${draft.work_item_id}::bigint, ${draft.attempt}::integer, ${draft.summary}, ${draft.markdown},
+        ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb,
+        ${draft.doc_dir}
+      )
+      RETURNING id
+    `;
+    row = await fetchOneRow(legacy, "saveDraft");
+  }
   return parseId(row.id, "id");
 }
 
@@ -1775,6 +1814,11 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
     diagrams: parseDiagrams(row.diagrams, "diagrams"),
     open_questions: parseOpenQuestions(row.open_questions, "open_questions"),
     doc_dir: parseNullableString(row.doc_dir, "doc_dir"),
+    // 列を足すmigrationより先にコードが反映された間は、`SELECT *`の行に列が無い。基準値が無い下書きとして読む。
+    doc_hash:
+      row.doc_hash === undefined
+        ? null
+        : parseNullableString(row.doc_hash, "doc_hash"),
     created_at: parseDate(row.created_at, "created_at"),
   };
 }
@@ -3023,6 +3067,8 @@ export async function setFixRound(
  * (`retry_work_item.ts`の`workItem.attempt + 1`など)が、
  * 2回目以降の要件定義の生成で古い値を見てしまう。
  * リースを条件にするのは、リースを失った古い実行が新しい実行のattemptを戻さないため。
+ * 同じ文で`design_attempt`を0へ戻す。`attempt`を進める経路(設計と実装の要件の不足、pr_fixの差し戻し、
+ * 要件定義の却下、再実行)はどれもこの更新を通り、設計の試行は`attempt`ごとに数え直すため。
  * 終端の状態かどうかは見ない。終端になった作業項目を進めないのは、続く状態の比較交換の役目である。
  */
 export async function setAttemptIfLeaseHolder(
@@ -3033,7 +3079,7 @@ export async function setAttemptIfLeaseHolder(
 ): Promise<boolean> {
   const rows = await sql`
     UPDATE factory.work_items
-    SET attempt = ${attempt}::integer, updated_at = now()
+    SET attempt = ${attempt}::integer, design_attempt = 0, updated_at = now()
     WHERE id = ${id} AND flow_job_id = ${leaseJobId}
     RETURNING id
   `.fetch();
@@ -3531,11 +3577,20 @@ export async function latestDesignDraft(
   return row === undefined ? null : toDesignDraft(row);
 }
 
+/**
+ * `docDir`を`doc_dir`に持つ設計書の下書きがあるかを返す。
+ * 設計書の生成は試行のディレクトリを空にしてから書くので、保存済みの下書きと同じディレクトリを空にする前に確かめる。
+ */
 export async function hasDesignDraftForDocDir(
-  _docDir: string,
-  _sql: SqlClient = defaultSqlClient,
+  docDir: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  const rows = await sql`
+    SELECT id FROM factory.design_drafts
+    WHERE doc_dir = ${docDir}::text
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 /**

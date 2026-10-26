@@ -159,6 +159,7 @@ function requirementDraft(
     diagrams: [{ name: "flow", file: "flow.drawio" }],
     open_questions: [],
     doc_dir: REQUIREMENTS_DIR,
+    doc_hash: null,
     created_at: DATE,
     ...overrides,
   };

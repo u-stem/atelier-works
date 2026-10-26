@@ -1524,6 +1524,7 @@ describe("saveDraft", () => {
         open_questions: [],
         doc_dir:
           "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
+        doc_hash: null,
       },
       sql,
     );
@@ -1541,6 +1542,7 @@ describe("saveDraft", () => {
         diagrams: [{ name: "d1", file: "d1.drawio" }],
         open_questions: [],
         doc_dir: null,
+        doc_hash: null,
       },
       sql,
     );
@@ -1561,6 +1563,7 @@ describe("saveDraft", () => {
         open_questions: [],
         doc_dir:
           "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
+        doc_hash: null,
       },
       sql,
     );
@@ -1580,6 +1583,7 @@ describe("saveDraft", () => {
         diagrams: [],
         open_questions: [],
         doc_dir: null,
+        doc_hash: null,
       },
       sql,
     );
