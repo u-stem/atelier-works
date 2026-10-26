@@ -72,7 +72,7 @@ GH_COLLECT_DETAIL_MIGRATION="20261018100000_gh_collect_detail.up.sql"
 DESIGN_STAGE_ITEMS_MIGRATION="20261026120000_design_stage_work_items.up.sql"
 DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
 DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
-DOC_HASH_MIGRATION="20261026140000_requirement_drafts_doc_hash.up.sql"
+DOC_HASH_MIGRATION="20261026150000_requirement_drafts_doc_hash.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
