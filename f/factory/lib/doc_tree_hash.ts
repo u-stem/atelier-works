@@ -112,6 +112,7 @@ async function realRootExists(dir: string): Promise<boolean> {
  * 通常のファイル、シンボリックリンク、特殊ファイルは、種類の印(`F`、`L`、`S`)を前置きして数える。
  * 中身が`symlink:/x`の通常のファイルと、`/x`へのリンクが、同じハッシュにならないようにするため。
  * `dir`自体がシンボリックリンクなら、たどらずに`DocTreeRootSymlinkError`を投げる。
+ * この検査は、検査の時点で最後の要素がリンクのときだけ拒む。走査の途中の入れ替えと、親の要素のリンクは検出しない。
  * `sink`を渡すと、数えた項目を、数えたのと同じバイト列で受け取れる(`DirectoryTreeSink`)。複製しながら数えるために使う。
  * 保存した基準値や実行の前後と比べ、承認済みの要件定義の書き換え(変更、追加、削除、改名)を検出する。
  */
@@ -150,6 +151,7 @@ export async function hashDirectoryTree(
     }
   };
   // ルートがリンクなら、中身を読む前に止める。リンクの先の内容は、ルートの内容として数えない。
+  // 見るのは、この時点でのルートの最後の要素だけである。以後の入れ替えと、親の要素のリンクは検出しない。
   if (await io.isSymbolicLink(dir)) throw new DocTreeRootSymlinkError(dir);
   // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外はそのまま投げ、`checkDocTreeHash`がルートの有無を調べ直して、書き換えか欠落かに分ける。
   let root: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>;

@@ -50,6 +50,7 @@ import {
   checkDocTreeHash,
   copyFilesWithHash,
   type DocHashCheck,
+  DocTreeRootSymlinkError,
   hashDirectoryTree,
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -290,17 +291,55 @@ function isAllowedCharacter(char: string): boolean {
 }
 
 /**
+ * 表示に現れない、または前の文字に重なる文字。
+ * 結合文字(`\p{Mn}`、`\p{Me}`)、既定で無視される文字(`\p{Default_Ignorable_Code_Point}`。異体字セレクタとハングルのフィラーを含む)、
+ * ハングルのフィラー(U+115F、U+1160、U+3164、U+FFA0)、点字の空白(U+2800)である。
+ * 秘密情報の途中に挟むと、見かけは秘密情報のままで、マスクの正規表現には合わなくなる。
+ */
+const INVISIBLE_PATTERN =
+  /^[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}ᅟᅠㅤﾠ⠀]$/u;
+
+/**
  * Claudeの出力の文字列を、保存してよい形にする。信頼できない入力を読んだClaudeの出力で、DBと次の工程に渡るため。
  * 制御文字(NULを含む。PostgreSQLのtextとjsonbが拒む)と書式文字を除き、秘密情報をマスクしてから、コードポイントの途中で切らずに`maxChars`に収める。
  * 制御文字と書式文字を先に除くのは、秘密情報の途中に挟まれた見えない文字でマスクをすり抜けさせないためで、
  * マスクを先に行うのは、切った末尾に秘密情報の一部が残らないようにするためである。
+ *
+ * 結合文字や異体字セレクタは、日本語の濁点・半濁点の結合や異体字列に使うので、保存する文字列からは除かない。
+ * 代わりに、それらを除いた「影」の文字列にマスクをかけ、影に秘密情報があれば、影をマスクした結果を保存する。
+ * そのとき、結合文字などは保存する文字列から落ちる。影に秘密情報が無ければ、元の文字列をマスクして保存する。
+ * 限界として、見える区切り文字(空白、ハイフン、記号)を秘密情報の途中に挟む意図的な難読化は、マスクでは止められない。
  */
 export function sanitizeModelText(text: string, maxChars: number): string {
   const cleaned = Array.from(text).filter(isAllowedCharacter).join("");
-  const points = Array.from(maskSecrets(cleaned));
+  const shadow = Array.from(cleaned)
+    .filter((char) => !INVISIBLE_PATTERN.test(char))
+    .join("");
+  const maskedShadow = maskSecrets(shadow);
+  const points = Array.from(
+    maskedShadow !== shadow ? maskedShadow : maskSecrets(cleaned),
+  );
   return points.length <= maxChars
     ? points.join("")
     : points.slice(0, maxChars).join("");
+}
+
+/** `unlessRootLinked`が、要件定義のルートがリンクだったことを示す値。 */
+const ROOT_LINKED = Symbol("root linked");
+
+/**
+ * `read`が`DocTreeRootSymlinkError`を投げたときだけ`ROOT_LINKED`を返す。ほかの例外はそのまま投げる。
+ * 基準値なしの経路は`checkDocTreeHash`を通らないので、基準値ありの経路と同じく、リンクを書き換えとして扱うために使う。
+ */
+async function unlessRootLinked<T>(
+  read: () => Promise<T>,
+): Promise<T | typeof ROOT_LINKED> {
+  try {
+    return await read();
+  } catch (err) {
+    if (err instanceof DocTreeRootSymlinkError) return ROOT_LINKED;
+    throw err;
+  }
 }
 
 /** 要件の不足の報告を保存してよい形にする。 */
@@ -466,7 +505,7 @@ async function copyDeclaredDiagrams(
  * 一時ディレクトリへ複製して、その複製だけをClaudeの`addDirs`に入れる。元のディレクトリは`addDirs`にも`cwd`にも入れない。
  * 承認時に保存した基準値(`doc_hash`)があれば、Claudeを起動する前の図の複製の前後と、実行の後に、
  * 元のディレクトリの内容のハッシュを基準値と比べ、違えば保存せず`needs_human`にする(ディレクトリが無いときは別の理由)。
- * 基準値が無い下書きは、複製の後と実行の後のハッシュを比べるだけにする。
+ * 基準値が無い下書きは、複製の後と実行の後のハッシュを比べるだけにする。ルートがリンクに置き換わっていれば、基準値の有無に関わらず書き換えとして止める。
  * 書き込み境界が確認できていない間の、防ぐのではなく検出して止める補いである。
  * 保存する`summary`と`open_questions`は、制御文字を除き、秘密情報をマスクし、上限に切ってから保存する。
  * 保存済みの設計書の下書きと同じ試行ディレクトリがあれば、空にせず`needs_human`にする。
@@ -644,6 +683,16 @@ export async function runDesignGenerate(
       });
       return stopForHuman(reason, { outcome: "needs_human", reason });
     };
+    /** 基準値なしの経路で、要件定義のルートがリンクに置き換わっていたときに、書き換えとして止めた結果を返す。 */
+    const stopForRootLink = async (): Promise<DesignGenerateResult> => {
+      deps.log("the approved requirements directory is a symbolic link", {
+        work_item_id: workItemId,
+      });
+      return await stopForHuman(REQUIREMENTS_MODIFIED_REASON, {
+        outcome: "needs_human",
+        reason: REQUIREMENTS_MODIFIED_REASON,
+      });
+    };
     /** 元のディレクトリのハッシュを基準値と比べ、合わなければ止めた結果を返す。合えば`null`。 */
     const stopIfNotBaseline = async (
       modifiedReason: string,
@@ -696,7 +745,9 @@ export async function runDesignGenerate(
         copyDeclaredDiagrams(deps, targetDir, approved.diagrams, targetCopyDir);
       const made: { copy: DiagramCopy | null } = { copy: null };
       if (baseline === null) {
-        made.copy = await copyOnce();
+        const copy = await unlessRootLinked(copyOnce);
+        if (copy === ROOT_LINKED) return await stopForRootLink();
+        made.copy = copy;
       } else {
         // 複製が読んだバイト列のハッシュを基準値と比べる。照合した内容と複製に入った内容が同じになる。
         const verdict = await checkDocTreeHash(
@@ -727,12 +778,18 @@ export async function runDesignGenerate(
     );
     if (modifiedDuringCopy !== null) return modifiedDuringCopy;
     // 基準値が無いときは、複製が読んだバイト列(複製しなかったときは複製の後の内容)を実行の後と比べる。
-    const before =
-      requirementsDir === null || baseline !== null
-        ? null
-        : copiedHash !== undefined
-          ? copiedHash
-          : await deps.fs.hashTree(requirementsDir);
+    let before: string | null = null;
+    if (requirementsDir !== null && baseline === null) {
+      if (copiedHash !== undefined) {
+        before = copiedHash;
+      } else {
+        const hashed = await unlessRootLinked(() =>
+          deps.fs.hashTree(requirementsDir),
+        );
+        if (hashed === ROOT_LINKED) return await stopForRootLink();
+        before = hashed;
+      }
+    }
 
     const previous = await deps.latestDesignDraft(workItemId);
     const prompt = designPrompt({
@@ -776,7 +833,8 @@ export async function runDesignGenerate(
       const after =
         requirementsDir === null
           ? null
-          : await deps.fs.hashTree(requirementsDir);
+          : await unlessRootLinked(() => deps.fs.hashTree(requirementsDir));
+      if (after === ROOT_LINKED) return await stopForRootLink();
       if (before !== after) {
         deps.log("approved requirements changed during design", {
           work_item_id: workItemId,

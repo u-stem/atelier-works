@@ -1752,13 +1752,18 @@ const DOC_HASH_COLUMN_PATTERN =
  * そのため、エラーの文(messageとbody)があるときは、文が`doc_hash`を含むときだけ真にする。
  * 文が無い(どちらも空)ときは、確かめる手段が無いので、コードだけで真にする。
  * コードが無い例外は、列と表の名前を含む文が完全に一致するときだけ真にする。
+ *
+ * 判定の根拠は、PostgreSQLの文言(`column "doc_hash" of relation "requirement_drafts" does not exist`)とコード42703である。
+ * 本番の`wmill.datatable()`が列の欠落をどの形で返すか(コードの有無、文の形、bodyの引用符のエスケープ)は、実機では確かめていない。
+ * bodyはJSONの文字列として返りうるので、引用符のエスケープ(`\"`)は`"`に戻してから照合する。
+ * 実機の形が違えば、列が無いときの保存が失敗に倒れる(基準値なしの保存に切り替わらない)ので、通知の欠落ではなくジョブの失敗として見える。
  */
 export function isMissingDocHashColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const body: unknown = Reflect.get(err, "body");
-  const statements = [err.message, typeof body === "string" ? body : ""].filter(
-    (statement) => statement.length > 0,
-  );
+  const statements = [err.message, typeof body === "string" ? body : ""]
+    .map((statement) => statement.replace(/\\+"/g, '"'))
+    .filter((statement) => statement.length > 0);
   if (Reflect.get(err, "code") === "42703") {
     return (
       statements.length === 0 ||
