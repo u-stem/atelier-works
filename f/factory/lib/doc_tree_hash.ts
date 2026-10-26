@@ -31,23 +31,38 @@ export type DirectoryEntryIo = {
   readonly readFile: (path: string) => Promise<Uint8Array>;
 };
 
-function isMissingError(err: unknown): boolean {
+/**
+ * 例外が`codes`のどれかを表すか。
+ * ファイルシステムの例外には`code`が付くので、あれば`code`だけで判定する。
+ * messageにはパスが入り、`ENOENT.md`のような名前のファイルで別の例外が起きても部分一致してしまうためである。
+ * `code`が無い(`undefined`)ときだけ、messageの部分一致で判定する。
+ */
+function hasErrorCode(err: unknown, codes: readonly string[]): boolean {
   if (!(err instanceof Error)) return false;
-  return (
-    Reflect.get(err, "code") === "ENOENT" || err.message.includes("ENOENT")
-  );
+  const code = Reflect.get(err, "code");
+  if (code !== undefined)
+    return typeof code === "string" && codes.includes(code);
+  return codes.some((candidate) => err.message.includes(candidate));
+}
+
+function isMissingError(err: unknown): boolean {
+  return hasErrorCode(err, ["ENOENT"]);
 }
 
 /** 読んでいる途中で項目が消えた、またはディレクトリがファイルに置き換わった例外か。 */
 function isEntryGoneError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const code = Reflect.get(err, "code");
-  return (
-    code === "ENOENT" ||
-    code === "ENOTDIR" ||
-    err.message.includes("ENOENT") ||
-    err.message.includes("ENOTDIR")
-  );
+  return hasErrorCode(err, ["ENOENT", "ENOTDIR"]);
+}
+
+/** 本番でルートのディレクトリの有無を調べる。シンボリックリンクはたどらない。消えたか置き換わった例外は「無い」、ほかの例外は投げる。 */
+async function realRootExists(dir: string): Promise<boolean> {
+  try {
+    await lstat(dir);
+    return true;
+  } catch (err) {
+    if (isEntryGoneError(err)) return false;
+    throw err;
+  }
 }
 
 /**
@@ -86,7 +101,7 @@ export async function hashDirectoryTree(
       hasher.update(content);
     }
   };
-  // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外はそのまま投げ、`checkDocTreeHash`が書き換えとして扱う。
+  // ルートのディレクトリが無いときだけ`null`を返す。途中の項目が消えたときの例外はそのまま投げ、`checkDocTreeHash`がルートの有無を調べ直して、書き換えか欠落かに分ける。
   let root: Awaited<ReturnType<DirectoryEntryIo["readDir"]>>;
   try {
     root = await io.readDir(dir);
@@ -125,12 +140,16 @@ export type DocHashCheck = "match" | "no_baseline" | "missing" | "modified";
  * `dir`の現在のハッシュを`baseline`と比べる。
  * 基準値が`null`、`undefined`、空文字列なら、ディレクトリを読まずに`no_baseline`を返す。
  * 基準値があるのにディレクトリが無ければ`missing`、内容が違えば`modified`を返す。
- * ハッシュを数えている途中で項目が消えたか置き換わった例外(ENOENT、ENOTDIR)も`modified`として返す。ほかの例外はそのまま投げる。
+ * ハッシュを数えている途中で項目が消えたか置き換わった例外(ENOENT、ENOTDIR)を受けたときは、
+ * ルートのディレクトリを調べ直す(`rootExists`)。ルートが無ければ`missing`、あれば`modified`を返す。
+ * 数える途中でルートごと消えた場合を、中の項目の書き換えと区別するためである。
+ * ほかの例外はそのまま投げる。
  */
 export async function checkDocTreeHash(
   dir: string,
   baseline: string | null | undefined,
   hashTree: (dir: string) => Promise<string | null>,
+  rootExists: (dir: string) => Promise<boolean> = realRootExists,
 ): Promise<DocHashCheck> {
   if (baseline === null || baseline === undefined || baseline.length === 0) {
     return "no_baseline";
@@ -139,8 +158,10 @@ export async function checkDocTreeHash(
   try {
     current = await hashTree(dir);
   } catch (err) {
-    // 数えている途中で項目が消えたり置き換わったりしたのは、内容が書き換わったということである。
-    if (isEntryGoneError(err)) return "modified";
+    // 数えている途中で項目が消えたり置き換わったりしたのは、ルートが残っていれば内容が書き換わったということである。
+    if (isEntryGoneError(err)) {
+      return (await rootExists(dir)) ? "modified" : "missing";
+    }
     throw err;
   }
   if (current === null) return "missing";

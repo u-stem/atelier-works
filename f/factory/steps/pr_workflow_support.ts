@@ -4249,7 +4249,7 @@ const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
 /**
  * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
  * `lib/design_launch_support.ts`の定数と関数が作る文字列と同じにする。
- * 拒否した安全装置の依存を増やさないため、定数と関数はimportせず、文字列をここに書く。
+ * この表は設計の定数をimportしない。importするとpr_workflow_support.tsの依存が増えるため、文字列をここに直接書く。
  * `tests/scripts/pr_workflow_support_design.test.ts`が、定数と関数の出力を表と突き合わせて食い違いを検出する。
  */
 const DESIGN_REASON_RULES: readonly ReasonRule[] = [

@@ -186,6 +186,22 @@ function failSnapshot(reason: string, detail: string): never {
   );
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** `io.hashTree`を呼び、例外は`failSnapshot`で保存する内容の取得の失敗として投げ直す。 */
+async function hashOrFail(
+  io: SnapshotIo,
+  docDir: string,
+): Promise<string | null> {
+  try {
+    return await io.hashTree(docDir);
+  } catch (err) {
+    return failSnapshot("doc_hash_failed", errorMessage(err));
+  }
+}
+
 /**
  * Claudeがdoc dirに残すはずのファイルを1つ読んで返す。
  * ファイルが無い、または読めない(消された、ファイル名のディレクトリがある)ときは、
@@ -272,25 +288,32 @@ export type DocSnapshot = {
  * ハッシュ、`requirements.md`と図の一覧の読み取り、ハッシュの順に行い、前後が違えば保存させない。
  * 本文だけを先に読むと、DBの本文とディスクの内容が別の時点のものになり、基準値が人の見た内容を指さなくなるためである。
  * ハッシュを取れない(ディレクトリが無い)ときも、基準値を持たない下書きを作らないために失敗させる。
+ * ハッシュの計算と一覧の取得が投げた例外も、同じ`doc snapshot failed`の印を付けて投げ直す。
  */
 export async function snapshotDocDir(
   docDir: string,
   io: SnapshotIo,
 ): Promise<DocSnapshot> {
-  const before = await io.hashTree(docDir);
+  const before = await hashOrFail(io, docDir);
   if (before === null) {
     failSnapshot(
       "doc_hash_unavailable",
       `the requirements directory does not exist, so there is no baseline hash to save: ${docDir}`,
     );
   }
-  const diagramFiles = listDiagramFiles(await io.readDir(docDir));
+  let entries: string[];
+  try {
+    entries = await io.readDir(docDir);
+  } catch (err) {
+    failSnapshot("doc_list_failed", errorMessage(err));
+  }
+  const diagramFiles = listDiagramFiles(entries);
   const markdown = await readDocFile(
     docDir,
     REQUIREMENTS_MD_FILENAME,
     io.readText,
   );
-  const after = await io.hashTree(docDir);
+  const after = await hashOrFail(io, docDir);
   if (after !== before) {
     failSnapshot(
       "doc_changed_during_save",

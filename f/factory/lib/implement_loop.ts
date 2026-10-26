@@ -39,7 +39,7 @@ import {
   validateImplementOutput,
 } from "./implement_support.ts";
 import { jobTmpBase } from "./job_tmp.ts";
-import { escapeReasonSeparator } from "./log.ts";
+import { escapeReasonSeparator, logger } from "./log.ts";
 import { modelFor } from "./model_policy.ts";
 import {
   type CheckFailure,
@@ -133,7 +133,7 @@ export type ImplementContext = {
    * 承認済みの下書きの`doc_hash`(承認時に保存したディレクトリの内容のハッシュ)。
    * Claudeの実行ごとの複製の前後に、`requirements_doc_dir`の現在のハッシュをこれと比べる。
    * 基準値が無い下書きでは`null`で、照合は飛ばす。
-   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱う。
+   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱い、複製の側が警告を出す。
    */
   readonly requirements_doc_hash: string | null;
   readonly requirements_console_url: string;
@@ -317,27 +317,50 @@ export class RequirementsUntrustedError extends Error {
   }
 }
 
+/** 照合が合わなかったときの`needs_human`の理由の組。 */
+export type DocDirGuardReasons = {
+  /** 内容が基準値と違うとき。 */
+  readonly modified: string;
+  /** ディレクトリが無いとき。 */
+  readonly missing: string;
+};
+
+/** 要件定義の照合の理由。`DocDirGuard`が理由を渡さないときの既定。 */
+const REQUIREMENTS_GUARD_REASONS: DocDirGuardReasons = {
+  modified: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  missing: REQUIREMENTS_DIR_MISSING_REASON,
+};
+
 /** 複製の前後に、元のディレクトリを基準値と照合する設定。 */
 export type DocDirGuard = {
   /**
-   * 承認時に保存した基準値。無いか空なら、照合を黙って飛ばす。
-   * 基準値が無い警告は、準備のステップが1回だけ出す。ラウンドごとの複製で出すと、同じ警告が繰り返されるため。
+   * 承認時に保存した基準値。
+   * `null`か空なら、基準値が無い下書きなので照合を黙って飛ばす。警告は準備のステップが1回だけ出す。
+   * `undefined`は、基準値の項目を足す前の準備ステップが作った文脈で、準備のステップが警告を出していない。
+   * このときは、複製の呼び出しごとに1回警告を出して照合を飛ばす。
    */
   readonly baseline: string | null | undefined;
   /** ディレクトリの内容のハッシュ。ディレクトリが無ければ`null`。 */
   readonly hashTree: (dir: string) => Promise<string | null>;
+  /** 照合が合わないときの理由。省略すると要件定義の理由を使う。 */
+  readonly reasons?: DocDirGuardReasons;
+  /** 基準値の項目が無い文脈の警告の出力先。省略すると警告を出さない。 */
+  readonly warn?: (message: string, fields: Record<string, unknown>) => void;
 };
 
 /**
  * 文脈の基準値と本番のハッシュ関数から、複製の照合の設定を作る。
- * 基準値を足す前の準備ステップが作った文脈には項目が無いので、無いものは基準値なしとして扱う。
+ * 基準値の項目が無い文脈(`undefined`)は、基準値が`null`の文脈と区別して渡す。
+ * 前者だけが複製の側で警告を出すためである。
  */
 export function docDirGuardFor(context: {
   readonly requirements_doc_hash?: string | null;
 }): DocDirGuard {
+  const log = logger("implement_loop");
   return {
-    baseline: context.requirements_doc_hash ?? null,
+    baseline: context.requirements_doc_hash,
     hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
+    warn: (message, fields) => log.warn(message, fields),
   };
 }
 
@@ -349,8 +372,9 @@ export function docDirGuardFor(context: {
  *
  * `guard`に基準値があれば、複製の直前と直後に、元のディレクトリのハッシュを基準値と比べる。
  * 複製のハッシュとは比べない。複製はシンボリックリンクと特殊ファイルを落とすので、元の内容と一致しないためである。
- * 違うか、ディレクトリが無ければ、`fn`を呼ばずに`RequirementsUntrustedError`を投げる。
- * 基準値が無ければ、黙って照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
+ * 違うか、ディレクトリが無ければ、`fn`を呼ばずに`RequirementsUntrustedError`を投げる。理由は`guard.reasons`で、省略すると要件定義の理由になる。
+ * 基準値が無ければ、照合を飛ばし、ディスクに無いときは複製せずに`null`を渡す。
+ * 基準値の項目自体が無い(`undefined`)ときは、この呼び出しで1回、`guard.warn`に警告を渡す。
  */
 export async function withReadOnlyDocDirCopy<T>(
   docDir: string | null,
@@ -359,6 +383,13 @@ export async function withReadOnlyDocDirCopy<T>(
   guard?: DocDirGuard,
 ): Promise<T> {
   if (docDir === null) return fn(null);
+  if (guard !== undefined && guard.baseline === undefined) {
+    guard.warn?.(
+      "the context has no baseline item for the approved requirements; skipping the comparison",
+      { doc_dir: docDir },
+    );
+  }
+  const reasons = guard?.reasons ?? REQUIREMENTS_GUARD_REASONS;
   const hasBaseline =
     guard !== undefined &&
     guard.baseline !== null &&
@@ -372,11 +403,9 @@ export async function withReadOnlyDocDirCopy<T>(
       guard.hashTree,
     );
     if (verdict === "missing")
-      throw new RequirementsUntrustedError(REQUIREMENTS_DIR_MISSING_REASON);
+      throw new RequirementsUntrustedError(reasons.missing);
     if (verdict === "modified")
-      throw new RequirementsUntrustedError(
-        REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
-      );
+      throw new RequirementsUntrustedError(reasons.modified);
   };
   await assertTrusted();
   if (!(await deps.pathExists(docDir))) return fn(null);
