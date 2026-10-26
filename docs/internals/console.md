@@ -1655,52 +1655,37 @@ backendが制御文字と書式文字を空白にして切り詰め(理由は200
 
 #### ブランチ版の確認
 
-マージ前の変更は、ブランチ版のConsoleを、ローカルのWindmillに繋いで開いて確かめる。
-`mise run console:branch`が、Consoleを`console/dist`に組み立て、`scripts/console-branch-server.ts`で配信する。
-ブラウザから見るとConsoleとWindmillが同じオリジンになるので、ブランチ版のConsoleが、本物のWindmillのAPIを呼ぶ。
-サーバーは、パスで行き先を分ける。
+検証用サーバー(`scripts/console-branch-server.ts`)は、ブランチ版のConsoleを、ローカルのWindmillに繋いで開かせる。
+操作の手順は、[ブランチ版のConsoleを確かめる](../setup.md#ブランチ版のconsoleを確かめる)にある。
+ブラウザから見るとConsoleとWindmillが同じオリジンになるので、ブランチ版のConsoleが、運用者のCookieのまま本物のWindmillのAPIを呼ぶ。
+既定は読み取りだけで、要求を次のように振り分ける。
 
-| パス | 行き先 |
+| 要求 | 扱い |
 | --- | --- |
-| `/console/*` | `console/dist`。無いパスはSPAの`index.html`に落とす。assets、draw.ioのファイル、`status.json`は、無ければ404にする |
+| `/console/*` | `console/dist`を返し、無いパスはSPAの`index.html`に落とし、assets、draw.ioのファイル、`status.json`は無ければ404にし、Caddyと同じCSPなどのヘッダーを付ける |
 | `/console` | `/console/`へ308で飛ばす |
 | 符号化した区切りと`..`を含む`/console/`のパス | 400にする |
-| それ以外 | `--upstream`(既定は`http://127.0.0.1:8080`)へ、そのまま中継する |
+| GET、HEAD、OPTIONS | `--upstream`(既定は`http://127.0.0.1:8080`)へ中継する |
+| 読み取りの5つのscriptを実行するPOST | 中継する |
+| ほかのPOSTなどの書き込み | 403にし、人が`--allow-writes`を付けたときだけ中継する |
 
-手順は次のとおりである。
+読み取りの5つは、`console_query`、`console_holds`、`console_jobs`、`console_schedules`、`console_config`である。
+どれもソースにSQLの書き込みとWindmillの書き込みのAPIが無く、`tests/scripts/console-branch-server.test.ts`が固定する。
+`console_holds`は、保留と凍結を読むだけで、解除は別のscriptが行う。
 
-1. ローカルのWindmillを起動しておく(`mise run up`)。
-2. 次のコマンドで、組み立てと配信を始める。待ち受けは`127.0.0.1:5174`である。
+要求は、次の検査も通る。
 
-   ```bash
-   mise run console:branch
-   ```
+- Hostは、`127.0.0.1:<port>`か`localhost:<port>`だけを通す。
+  DNSリバインディングで別の名前から届いた要求を断るためである。
+- Originは、このサーバー自身のオリジンのときだけ、中継先のオリジンに置き換えて中継する。
+  ほかは403にする。
+- 中継の要求の`Sec-Fetch-Site`が`cross-site`か`same-site`なら403にする。
+- Bunのfetchは、渡した`Sec-Fetch-*`を落とさずに中継先へ送る(模擬の中継先で実測した)。
+  ブラウザが付けた値のまま、中継先のCaddyの規則に届く。
 
-   ポートと中継先は、`--`の後に引数で渡す。
-   中継先は、このマシンのアドレス(`127.0.0.1`、`localhost`、`[::1]`)に限る。
-
-   ```bash
-   mise run console:branch -- --port 5175 --upstream http://127.0.0.1:8080
-   ```
-
-3. ブラウザで、`http://127.0.0.1:8080`にログインする。
-   Cookieはホストごとに共有されるので、ポートが違う`http://127.0.0.1:5174`でも、ログインが引き継がれる。
-4. `http://127.0.0.1:5174/console/`を開く。
-
-> [!WARNING]
-> POSTを含む書き込みも中継する。
-> マージ前の変更が、本物のWindmillに書き込める。
-> 承認、却下、再実行、通知の解決、解除、監査の起動、手動投入のボタンは、実際に実行される。
-
-次の点は、反映後の実機と違う。
-
-- CSPなどの安全のためのヘッダーを付けない。CSPの確認は、反映した後の実機で行う。
-- `status.json`が無いので、サイドバーの版の情報は出ない。
-
-Playwrightでは、まず`http://127.0.0.1:8080/user/login`にログインする。
-続けて、同じブラウザのコンテキストで`http://127.0.0.1:5174/console/<経路>`を開く。
-経路の表の全経路とすべてのタブで撮影し、[毎日見る目での確認](../console-display.md#毎日見る目での確認)の順に読む。
-撮影した画像はリポジトリに置かない。
+反映後の実機と違う点は、`status.json`を配信しないことである。
+そのため、サイドバーの版の情報は出ない。
+CSPなどのヘッダーは、`infra/Caddyfile`の`console_headers`と`drawio_headers`と同じ値を付け、テストが一致を確かめる。
 
 #### 描画の確認
 
