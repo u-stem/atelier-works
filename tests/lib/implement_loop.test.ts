@@ -491,11 +491,14 @@ describe("withReadOnlyDocDirCopy and a context that has no baseline item", () =>
   };
 
   /** 警告を控える照合の設定。`baseline`が`undefined`なら項目が無い文脈を表す。 */
-  function guardOf(baseline: string | null | undefined) {
+  function guardOf(
+    baseline: string | null | undefined,
+    hash: string | null = null,
+  ) {
     const warnings: string[] = [];
     const guard: DocDirGuard = {
       baseline,
-      hashTree: async () => null,
+      hashTree: async () => hash,
       warn: (message) => {
         warnings.push(message);
       },
@@ -536,8 +539,7 @@ describe("withReadOnlyDocDirCopy and a context that has no baseline item", () =>
   });
 
   test("stays silent for a baseline that is set", async () => {
-    const g = guardOf("a".repeat(64));
-    g.guard.hashTree = async () => "a".repeat(64);
+    const g = guardOf("a".repeat(64), "a".repeat(64));
     await withReadOnlyDocDirCopy(DOC_DIR, async () => "x", deps, g.guard);
     expect(g.warnings).toHaveLength(0);
   });
