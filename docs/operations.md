@@ -2865,7 +2865,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
    `designing`と`awaiting_design_approval`の作業項目は、人の対応待ち(`needs_human`)に移り、元の状態が`work_item_events`に残る。
 
 1回目は、`design_drafts`に行が1件でもあれば、先頭で足す制約の検証に失敗する。
-トランザクションごと戻るので、表と制約は残る。設計の下書きを、行があるまま失わないためである。
+トランザクションごと戻るので、表と制約は残る。
+設計の下書きを、行があるまま失わないためである。
 行の扱いを決めて消してから、1回目をやり直す。
 
 設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。

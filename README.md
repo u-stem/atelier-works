@@ -138,6 +138,7 @@ atelier-works/
 | [文書の書き方](docs/writing-guidelines.md) | 文書とFactoryが生成する文章の書き方 |
 | [作業項目の仕様](docs/internals/work-items.md) | 作業項目と状態の扱い |
 | [要件定義の仕様](docs/internals/requirements.md) | 要件定義の生成と承認の仕組み |
+| [設計書の生成の仕様](docs/internals/design.md) | 設計書の生成の仕組みと書き込み範囲 |
 | [実装フローの仕様](docs/internals/implement.md) | 実装フローの仕組みと安全策の詳細 |
 | [PRワークフローの仕様](docs/internals/pr-workflow.md) | PRのレビューと修正の仕組みと安全策の詳細 |
 | [監査の仕様](docs/internals/audit.md) | 監査と改善提案の仕組み |

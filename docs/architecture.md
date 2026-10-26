@@ -96,7 +96,9 @@ flowchart TD
 ```
 
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
-設計フロー(`f/factory/design`)は、承認済みの要件定義から設計書を作り、同じ形で承認依頼を記録して終わる。入口が閉じていて、本番では動かない。仕組みは[設計書の生成](internals/design.md)に書く。
+設計フロー(`f/factory/design`)は、承認済みの要件定義から設計書を作り、同じ形で承認依頼を記録して終わる。
+入口が閉じていて、本番では動かない。
+仕組みは[設計書の生成](internals/design.md)に書く。
 
 `owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
 1つは、発見の入口である`poll_issues`と`poll_prs`である。
@@ -408,7 +410,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | スケジュール | 処理の対象 |
 | --- | --- |
 | `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
-| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
+| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、`design-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `sample_worker_load` | defaultのworkerの枠の占有、queueの待ち、コンテナのcgroupのメモリ。読めない値は空のまま記録し、例外は投げない。完全には記録できない回をWindmillのstateに数え、続いたときだけnoticeにする。記録の直後に直近の記録を読み、メモリが設定の割合を超えたか、OOMが増えたら、原因ごとにnoticeを残す。待ちと枠の塞がりは通知にしない |
 | `notify_daily_summary` | 集計の対象の日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する。最後に出した日をWindmillのstateに残し、飛んだ日は古い順に追い付いて出す |
@@ -930,7 +932,9 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
-- 設計工程の動作。生成側のフローは入っているが、入口が閉じている。承認の反映、期限切れ、実装の関門、Consoleは無い
+- 設計工程の動作。
+  生成側のフローは入っているが、入口が閉じている。
+  承認の反映、期限切れ、実装の関門、Consoleは無い
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。
