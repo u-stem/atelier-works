@@ -49,6 +49,56 @@ describe("SCREENS", () => {
     ]);
   });
 
+  test("numbers the go-to keys in the order of the side bar", () => {
+    expect(SCREENS.map((screen) => screen.shortcut)).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+    ]);
+  });
+
+  test("keeps the go-to keys distinct", () => {
+    expect(new Set(SCREENS.map((screen) => screen.shortcut)).size).toBe(
+      SCREENS.length,
+    );
+  });
+
+  test("keeps g and ? free for the chord and the help", () => {
+    expect(
+      SCREENS.some(
+        (screen) => screen.shortcut === "g" || screen.shortcut === "?",
+      ),
+    ).toBe(false);
+  });
+
+  test("lists the fixed destinations that the side bar does not reach in one click", () => {
+    expect(
+      SCREENS.flatMap((screen) =>
+        screen.destinations.map((destination) => [
+          destination.label,
+          destination.path,
+        ]),
+      ),
+    ).toEqual([
+      ["作業項目 › 新規投入", "/items/new"],
+      ["作業項目 › 要件定義", "/items?tab=requirements"],
+      ["ジョブ › 履歴", "/jobs?tab=history"],
+      ["ジョブ › スケジュール", "/jobs?tab=schedules"],
+    ]);
+  });
+
+  test("keeps every destination under the path of its screen", () => {
+    expect(
+      SCREENS.flatMap((screen) =>
+        screen.destinations.filter(
+          (destination) => !destination.path.startsWith(screen.path),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
   test("keeps child paths relative to the router base", () => {
     expect(
       SCREENS.flatMap((screen) => screen.children).every(

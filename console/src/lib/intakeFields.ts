@@ -20,6 +20,19 @@ export const EMPTY_FIELDS: IntakeFields = {
 };
 
 /**
+ * 入力中の値を、保存する形にする。リポジトリをまだ選んでいないときは、画面が見せている既定の値を使う。
+ * 保存した値を復元しても、見せていた入力欄と同じ値になる。
+ */
+export function draftForm(fields: IntakeFields, repoText: string): IntakeForm {
+  return {
+    repo: fields.repo ?? repoText,
+    title: fields.title,
+    body: fields.body,
+    acceptanceCriteria: fields.acceptanceCriteria,
+  };
+}
+
+/**
  * 画面を開いたときの入力欄の値。保存した入力があれば復元し、無ければ空にする。
  * 保存した入力は、投入できたときと、破棄したときに消えている。
  */

@@ -13,6 +13,8 @@ function screen(overrides: Partial<Screen> = {}): Screen {
     id: "items",
     path: "/items",
     label: "作業項目",
+    shortcut: "2",
+    destinations: [],
     icon: Inbox,
     badge: () => 0,
     prefetch: () => [],
