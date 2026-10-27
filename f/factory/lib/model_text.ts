@@ -58,3 +58,49 @@ export function sanitizeModelText(text: string, maxChars: number): string {
     ? points.join("")
     : points.slice(0, maxChars).join("");
 }
+
+/** 実装に渡す設計書の上限(コードポイント数)。 */
+export const DESIGN_FOR_IMPLEMENT_MAX_CHARS = 0;
+
+/** `sanitizeModelTextDetailed`の結果。 */
+export type SanitizedModelText = {
+  readonly text: string;
+  readonly chars: number;
+  readonly masked: boolean;
+  readonly dropped_combining: boolean;
+};
+
+/** `sanitizeModelText`と同じ処理で、切る前の本文と、何が変わったかを返す。 */
+export function sanitizeModelTextDetailed(text: string): SanitizedModelText {
+  void text;
+  return { text: "", chars: 0, masked: false, dropped_combining: false };
+}
+
+/** `normalizeDesignForImplement`の結果。 */
+export type NormalizedDesign = {
+  readonly text: string;
+  readonly original_chars: number;
+  readonly kept_chars: number;
+  readonly truncated: boolean;
+  readonly masked: boolean;
+  readonly dropped_combining: boolean;
+  readonly stripped_html_count: number;
+};
+
+/** 設計書を、実装に渡してよい形に整える。 */
+export function normalizeDesignForImplement(
+  markdown: string,
+  maxChars: number,
+): NormalizedDesign {
+  void markdown;
+  void maxChars;
+  return {
+    text: "",
+    original_chars: 0,
+    kept_chars: 0,
+    truncated: false,
+    masked: false,
+    dropped_combining: false,
+    stripped_html_count: 0,
+  };
+}

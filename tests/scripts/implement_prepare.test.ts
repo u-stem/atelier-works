@@ -45,6 +45,7 @@ const INPUT: BuildImplementContextInput = {
   worktreeGitPointer:
     "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
   existingPr: null,
+  designMarkdown: null,
   startedAt: 1_000,
   config: {
     windmill_public_url: "http://127.0.0.1:8080",
@@ -52,6 +53,19 @@ const INPUT: BuildImplementContextInput = {
     implement_flow_timeout_sec: 14_400,
   },
 };
+
+describe("buildImplementContext and the approved design", () => {
+  test("carries no design when the design stage is not used", () => {
+    expect(buildImplementContext(INPUT).design_markdown).toBeNull();
+  });
+
+  test("carries the design the gate handed over", () => {
+    expect(
+      buildImplementContext({ ...INPUT, designMarkdown: "# 設計" })
+        .design_markdown,
+    ).toBe("# 設計");
+  });
+});
 
 describe("buildImplementContext", () => {
   test("has no previous implementation on a fresh branch without a PR", () => {
@@ -459,6 +473,18 @@ describe("the wiring of the design gate in implement_prepare main", () => {
     const design = onlyIndex(text, GATE);
     const worktree = onlyIndex(text, "await prepareImplementWorktree(");
     expect(design >= 0 && worktree >= 0 && design < worktree).toBe(true);
+  });
+
+  test("hands the context the markdown the gate passed", async () => {
+    expect(await source()).toContain(
+      'designMarkdown: gate.kind === "pass" ? gate.markdown : null,',
+    );
+  });
+
+  test("logs the change of the design with the logger of implement_prepare", async () => {
+    expect(await source()).toMatch(
+      /warn: \(message, fields\) =>\s*logger\("implement_prepare"\)\.warn\(message, fields\)/,
+    );
   });
 
   test.each([

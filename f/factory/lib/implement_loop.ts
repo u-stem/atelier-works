@@ -138,6 +138,8 @@ export type ImplementContext = {
    * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱い、複製の側が警告を出す。
    */
   readonly requirements_doc_hash: string | null;
+  /** 承認済みの設計書の本文。設計が無効なら`null`。 */
+  readonly design_markdown: string | null;
   readonly requirements_console_url: string;
   /**
    * 対象がFactory自身のリポジトリなら`true`。
@@ -167,7 +169,9 @@ export type ImplementContext = {
  * プロンプトが示すパスであり、`addDirs`で渡すパスでもある。
  */
 export function implementPromptInput(
-  context: ImplementContext,
+  context: Omit<ImplementContext, "design_markdown"> & {
+    readonly design_markdown?: string | null;
+  },
   docDir: string | null,
 ): ImplementPromptInput {
   return {

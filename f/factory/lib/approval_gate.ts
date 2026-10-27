@@ -203,6 +203,7 @@ export type DesignGateDeps = {
     DesignDraft,
     "work_item_id" | "design_attempt" | "requirement_draft_id" | "markdown"
   > | null>;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
 /**

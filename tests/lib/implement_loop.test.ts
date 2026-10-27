@@ -118,6 +118,7 @@ const CONTEXT: ImplementContext = {
   requirements_diagrams: [],
   requirements_doc_dir: DOC_DIR,
   requirements_doc_hash: null,
+  design_markdown: null,
   requirements_console_url:
     "http://127.0.0.1:8080/console/items/3/requirements",
   is_factory_repo: false,
@@ -232,6 +233,31 @@ describe("implementPromptInput", () => {
         null,
       ).hasPreviousImplementation,
     ).toBe(true);
+  });
+
+  test("carries the approved design", () => {
+    expect(
+      implementPromptInput({ ...CONTEXT, design_markdown: "# 設計" }, null)
+        .design,
+    ).toBe("# 設計");
+  });
+
+  test("carries no design when the context has none", () => {
+    expect(implementPromptInput(CONTEXT, null).design).toBeNull();
+  });
+
+  test("reads a context made before the field existed as having no design", () => {
+    const { design_markdown: _omitted, ...older } = CONTEXT;
+    expect(implementPromptInput(older, null).design).toBeNull();
+  });
+
+  test("hands Claude only the copy of the requirements directory even with a design", () => {
+    expect(
+      implementPromptInput(
+        { ...CONTEXT, design_markdown: "# 設計" },
+        "/tmp/copy/requirements",
+      ).requirements.doc_dir,
+    ).toBe("/tmp/copy/requirements");
   });
 });
 

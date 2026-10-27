@@ -911,6 +911,8 @@ export type ImplementPromptInput = {
    * `targetRepoDir`と同じく平文で渡す。
    */
   requirements: Pick<RequirementDraft, "markdown" | "diagrams" | "doc_dir">;
+  /** 承認済みの設計書の本文。 */
+  design?: string | null;
   /**
    * 実装用のworktree。`runClaude`の`cwd`で、書き込める唯一のディレクトリ。
    * 運用者が決めるパスなので平文で渡す。

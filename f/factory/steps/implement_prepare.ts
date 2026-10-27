@@ -142,6 +142,8 @@ export type BuildImplementContextInput = {
   /** worktreeの用意ができた時点での`readWorktreeGitPointer(worktreeDir).content`。 */
   readonly worktreeGitPointer: string;
   readonly existingPr: PullRequestRef | null;
+  /** 承認済みの設計書の本文。設計が無効なら`null`。 */
+  readonly designMarkdown: string | null;
   /** mainが始まった時刻(epoch ms)。フロー全体の期限の起点。 */
   readonly startedAt: number;
   readonly config: Pick<
@@ -189,6 +191,7 @@ export function buildImplementContext(
     requirements_diagrams: input.draft.diagrams,
     requirements_doc_dir: input.draft.doc_dir,
     requirements_doc_hash: input.draft.doc_hash,
+    design_markdown: null,
     requirements_console_url: buildConsoleUrl(
       input.config.windmill_public_url,
       { work_item_id: workItem.id, attempt: input.draft.attempt },
@@ -398,7 +401,12 @@ export async function main(
       workItem,
       requirementsApproval: approval,
     },
-    { latestDesignApproval, getDesignDraft },
+    {
+      latestDesignApproval,
+      getDesignDraft,
+      warn: (message, fields) =>
+        logger("implement_prepare").warn(message, fields),
+    },
   );
   if (gate.kind === "stop") return stop("needs_human", gate.reason);
 
@@ -572,6 +580,7 @@ export async function main(
       expectedHeadSha,
       worktreeGitPointer,
       existingPr,
+      designMarkdown: null,
       startedAt,
       config,
     }),
