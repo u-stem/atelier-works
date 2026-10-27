@@ -233,7 +233,7 @@ describe("ActiveJobs", () => {
 
   test("says there is nothing running or waiting", () => {
     expect(render(<ActiveJobs query={freshQuery(list([]))} />)).toContain(
-      "実行中と待ちのジョブはありません",
+      "いま実行中・待ちのジョブはありません",
     );
   });
 
@@ -293,6 +293,69 @@ describe("ActiveJobs", () => {
     expect(render(<ActiveJobs query={freshQuery(list([]))} />)).toContain(
       "Consoleの呼び出し(tag console)は含みません",
     );
+  });
+});
+
+/** 本番の例。定期実行の予定が16件あり、実行中と待ちは0件。 */
+function scheduledQueue(): JobSummaryView[] {
+  return Array.from({ length: 16 }, (_, n) =>
+    job({
+      id: `0190a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
+      state: "scheduled",
+      script_path: "f/factory/future_only_job",
+      schedule_path: "f/factory/collect_github",
+      started_at: null,
+      completed_at: null,
+      duration_ms: null,
+      scheduled_for: "2026-10-26T05:15:00.000000Z",
+    }),
+  );
+}
+
+describe("ActiveJobs with scheduled jobs", () => {
+  test("says nothing is running or waiting when only scheduled jobs exist", () => {
+    expect(
+      render(<ActiveJobs query={freshQuery(list(scheduledQueue()))} />),
+    ).toContain("いま実行中・待ちのジョブはありません");
+  });
+
+  test("draws no row for a scheduled job by default", () => {
+    expect(
+      render(<ActiveJobs query={freshQuery(list(scheduledQueue()))} />),
+    ).not.toContain("future_only_job");
+  });
+
+  test("draws the running job next to the hidden scheduled ones", () => {
+    expect(
+      render(
+        <ActiveJobs
+          query={freshQuery(
+            list([
+              job({ state: "running", script_path: "f/factory/run_now" }),
+              ...scheduledQueue(),
+            ]),
+          )}
+        />,
+      ),
+    ).toContain("run_now");
+  });
+
+  test("does not draw the empty note while a job is running", () => {
+    expect(
+      render(
+        <ActiveJobs
+          query={freshQuery(
+            list([job({ state: "running" }), ...scheduledQueue()]),
+          )}
+        />,
+      ),
+    ).not.toContain("いま実行中・待ちのジョブはありません");
+  });
+
+  test("points to the schedules tab for the upcoming runs", () => {
+    expect(
+      render(<ActiveJobs query={freshQuery(list(scheduledQueue()))} />),
+    ).toContain('href="/jobs?tab=schedules"');
   });
 });
 

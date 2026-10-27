@@ -6,6 +6,7 @@ import type {
   ArgViewData,
   ConfigItemView,
   JobListView,
+  JobSummaryView,
   OutputViewData,
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
@@ -71,6 +72,13 @@ const FINISHED_STATES: ReadonlySet<string> = new Set([
 /** 実行中か待ちの状態か。 */
 export function isActiveJobState(state: string): boolean {
   return ACTIVE_STATES.has(state);
+}
+
+/** 実行中と待ちのタブに出すジョブ。 */
+export function currentJobs(
+  _jobs: readonly JobSummaryView[],
+): JobSummaryView[] {
+  return [];
 }
 
 /** 終わった状態か。 */

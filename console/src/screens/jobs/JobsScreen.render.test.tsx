@@ -39,9 +39,12 @@ function list(view: "active" | "history", name: string): JobListView {
   };
 }
 
-function render(search: string): string {
+function render(search: string, active?: JobListView): string {
   const client = new QueryClient();
-  client.setQueryData(jobsActiveQueryKey, list("active", "only_active"));
+  client.setQueryData(
+    jobsActiveQueryKey,
+    active ?? list("active", "only_active"),
+  );
   client.setQueryData(
     jobHistoryQueryOptions({}).queryKey,
     list("history", "only_history"),
@@ -88,5 +91,31 @@ describe("JobsScreen rendered from the cache", () => {
 
   test("names the header refresh after the tab that is open", () => {
     expect(render("?tab=history")).toContain('aria-label="履歴を先頭から更新"');
+  });
+
+  test("counts only the running and waiting jobs on the first tab", () => {
+    const scheduled: JobSummaryView[] = Array.from({ length: 16 }, (_, n) => ({
+      ...job("future_only_job", n),
+      state: "scheduled",
+      completed_at: null,
+      scheduled_for: "2099-01-01T00:00:00.000000Z",
+    }));
+    const running: JobSummaryView = { ...job("run_now", 99), state: "running" };
+    const active: JobListView = {
+      ...list("active", "x"),
+      jobs: [running, ...scheduled],
+    };
+    expect(render("", active)).toMatch(/実行中と待ち<span[^>]*>1</);
+  });
+
+  test("shows a count of zero when only scheduled jobs exist", () => {
+    const scheduled: JobSummaryView[] = Array.from({ length: 16 }, (_, n) => ({
+      ...job("future_only_job", n),
+      state: "scheduled",
+      completed_at: null,
+      scheduled_for: "2099-01-01T00:00:00.000000Z",
+    }));
+    const active: JobListView = { ...list("active", "x"), jobs: scheduled };
+    expect(render("", active)).toMatch(/実行中と待ち<span[^>]*>0</);
   });
 });
