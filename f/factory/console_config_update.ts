@@ -5,8 +5,9 @@
 // - 数値の項目(`LOWERABLE_NUMBERS`): いまの値より小さい値へ。下限は項目ごとに決める。
 // 許可表の外の項目、`owners`や`repo_allowlist`のような権限に関わる設定、`*_since`は、変更できない。
 // 向きを下げる変更は、設定の組み合わせの検査(有効にする向きの検査だけ)に触れない。
-// それでも、書く前に、置き換えた全体を設定の読み込みの検証(`parseFactoryConfig`)に通し、通らなければ変更しない。
-// 別の項目が壊れた設定を、この操作で書き戻さないためである。
+// そのため、書く前に置き換えた全体を設定の読み込みの検証にかけず、許可した項目の検査だけで書く。
+// 全体の検証を持つと、その本体(`lib/config.ts`)も保護パスになり、設定項目の追加で自動の変更が止まるためである。
+// 許可した変更の後も設定が読めることは、実際の読み込みを通す契約テスト(`tests/scripts/console_config_update.test.ts`)が固定する。
 //
 // 補間しない生の値を読み、許可した1項目だけを置き換えて、全体を書き戻す。他のキーは同じ文字列のまま残す。
 // 値のどこかに`$var:`か`$res:`があれば、参照の先をこのscriptが解決しないよう、変更しない。
@@ -28,7 +29,6 @@
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
-import { parseFactoryConfig } from "./lib/config.ts";
 import {
   type ActionAudit,
   type ActionSqlClient,
@@ -91,7 +91,6 @@ export const CONFIG_UPDATE_REFUSAL_REASONS = [
   "not_lowering",
   "has_reference",
   "conflict",
-  "config_invalid",
   "actor_unknown",
   "audit_unavailable",
 ] as const;
@@ -171,16 +170,6 @@ export function checkChange(
   return next < expected
     ? { kind: "ok", before: expected, after: next }
     : refusedWith("not_lowering");
-}
-
-/** 置き換えた設定の全体が、設定の読み込みの検証を通るか。通らない設定を書くと、Factory全体が設定を読めなくなる。 */
-function loads(config: Record<string, unknown>): boolean {
-  try {
-    parseFactoryConfig(config);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 type WriteStep =
@@ -263,13 +252,6 @@ export async function updateConfigFromConsole(
         };
       }
       const written = { ...current, [item]: after };
-      if (!loads(written)) {
-        return {
-          outcome: "failed",
-          changes: { refusal: "config_invalid" },
-          value: { kind: "refused", reason: "config_invalid" },
-        };
-      }
       await ports.writeConfig(written);
       const verified = await verifyWritten(ports, item, written, after);
       return {

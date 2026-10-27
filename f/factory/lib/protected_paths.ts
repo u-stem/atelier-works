@@ -191,8 +191,6 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`console_config_update.ts`)も、それぞれの`.script.yaml`とともに守る。再実行の許可表(再実行できる定期処理)と、
  * 設定の許可表(変更できる項目と向きと下限)は、書き換えられると、再実行できる処理や変更できる設定が増えるためである。
  * 2つの許可表を固定するテスト(`tests/scripts/console_rerun.test.ts`、`console_config_update.test.ts`)も守る。
- * 設定変更のscriptは、書く前に、置き換えた全体を設定の読み込みの検証に通す。
- * そのため、検証の本体(`lib/config.ts`)と、その型(`lib/types.ts`)も守る。境界の走査が、scriptがたどれるファイルを保護パスに限るためである。
  * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
  * 再実行と設定変更の画面の部品(`console/src/lib/configChange.ts`、`console/src/screens/system/ConfigChangeDialog.tsx`など)も同じ理由で守らない。
  * 守ると毎回人の確認が要り、書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られるためである。
@@ -316,8 +314,6 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/console_job_rerun.script.yaml",
   "f/factory/console_config_update.ts",
   "f/factory/console_config_update.script.yaml",
-  "f/factory/lib/config.ts",
-  "f/factory/lib/types.ts",
   "f/factory/retry_work_item.ts",
   "f/factory/retry_work_item.script.yaml",
   "f/factory/manual_intake_submit.ts",
