@@ -107,7 +107,7 @@ describe("ConfigSection", () => {
   });
 
   test("offers to lower a number that is on the list", () => {
-    expect(renderSection()).toContain("下げる");
+    expect(renderSection()).toContain(">下げる<");
   });
 
   test("offers to stop a switch that is on", () => {
@@ -116,7 +116,7 @@ describe("ConfigSection", () => {
         { key: "implement_enabled", kind: "value", value: true, masked: false },
       ]),
     );
-    expect(renderSection(query)).toContain("止める");
+    expect(renderSection(query)).toContain(">止める<");
   });
 
   test("offers nothing for a switch that is already off", () => {
@@ -130,7 +130,7 @@ describe("ConfigSection", () => {
         },
       ]),
     );
-    expect(renderSection(query)).not.toContain("止める");
+    expect(renderSection(query)).not.toContain(">止める<");
   });
 
   test("offers nothing for an item that is not on the list", () => {
@@ -139,7 +139,7 @@ describe("ConfigSection", () => {
         { key: "owners", kind: "value", value: true, masked: false },
       ]),
     );
-    expect(renderSection(query)).not.toContain("止める");
+    expect(renderSection(query)).not.toContain(">止める<");
   });
 
   test("keeps the sentences of the confirmation out of the page until the dialog opens", () => {
