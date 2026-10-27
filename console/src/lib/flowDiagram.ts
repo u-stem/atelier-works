@@ -151,10 +151,9 @@ export function groupEntriesForList(flow: FlowDefinition): ListEntries {
   const launchFlows: string[] = [];
   const reworkFlows: string[] = [];
   const entries: FlowEntry[] = [];
-  for (const entry of flow.entries) {
+  for (const entry of drawnEntries(flow)) {
     if (entry.kind !== "flow") {
       entries.push(entry);
-    } else if (entry.flow === flow.name) {
     } else if (entry.via === "launch") {
       launchFlows.push(entry.flow);
     } else if (entry.via === "rework") {
@@ -166,9 +165,14 @@ export function groupEntriesForList(flow: FlowDefinition): ListEntries {
   return { launchFlows, reworkFlows, entries };
 }
 
-/** 図に描く入口。 */
+/** flow自身からの入口か。却下の作り直しがあたり、同じ戻りを出口が示す。 */
+function isSelfEntry(flow: FlowDefinition, entry: FlowEntry): boolean {
+  return entry.kind === "flow" && entry.flow === flow.name;
+}
+
+/** 図に描く入口。flow自身からの入口は、同じ戻りを出口が示すので描かない。 */
 export function drawnEntries(flow: FlowDefinition): readonly FlowEntry[] {
-  return flow.entries;
+  return flow.entries.filter((entry) => !isSelfEntry(flow, entry));
 }
 
 /** 出口が、そのflow自身へ戻るものか。 */
@@ -249,15 +253,15 @@ const ROW_GAP = 48;
  */
 export function layoutFlowDiagram(model: FlowDiagramModel): DiagramLayout {
   const { flow, steps } = model;
+  const entries = drawnEntries(flow);
   const entriesHeight =
-    flow.entries.length === 0
+    entries.length === 0
       ? 0
-      : flow.entries.length * ENTRY_HEIGHT +
-        (flow.entries.length - 1) * ENTRY_GAP;
+      : entries.length * ENTRY_HEIGHT + (entries.length - 1) * ENTRY_GAP;
   const contentHeight = Math.max(entriesHeight, STEP_HEIGHT);
   const centerY = MARGIN + contentHeight / 2;
   const stepsLeft =
-    MARGIN + (flow.entries.length === 0 ? 0 : ENTRY_WIDTH + COLUMN_GAP);
+    MARGIN + (entries.length === 0 ? 0 : ENTRY_WIDTH + COLUMN_GAP);
   const stepY = centerY - STEP_HEIGHT / 2;
 
   const boxes: DiagramBox[] = [];
@@ -275,7 +279,7 @@ export function layoutFlowDiagram(model: FlowDiagramModel): DiagramLayout {
   });
   const first = stepBoxes[0];
 
-  flow.entries.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     const y = centerY - entriesHeight / 2 + index * (ENTRY_HEIGHT + ENTRY_GAP);
     boxes.push({
       kind: "entry",

@@ -3316,9 +3316,10 @@ URLの値や画面の遷移からは、再実行を起こさない。
 | 元 | 取るもの |
 | --- | --- |
 | `f/factory/*__flow/flow.yaml` | flowの説明、ステップ(モジュールのid、題、script、`skip_if`の有無) |
-| `scripts/launch-graph.ts` | flowを起動する辺。承認を作るステップと承認の結果の表、配線されていない辺の表 |
+| `scripts/launch-graph.ts` | flowを起動する辺。承認を作るステップと承認の結果の表、配線されていない辺の表、差し戻しの辺の表、scriptを呼ぶscriptの表 |
 | `f/factory/*.schedule.yaml` | scheduleの題、実行先、有効かどうか |
 
+scheduleが起動するflowには、そのscheduleのscriptが呼ぶscriptの起動も含める。
 題とflowの説明は、先頭の接頭辞(`[SF-…]`、`[SYS-…]`、`[OP-…]`、`[LIB]`)を`scripts/flow-graph.ts`の`withoutIdPrefix`で除く。
 ステップのidは`modules[].id`と一致するので、実行の状態はidの突き合わせだけで重ねられる。
 `skip_if`は式で日本語に直せないので、条件で飛ぶことがある印だけを持つ。
@@ -3338,6 +3339,8 @@ JSONはViteがそのままバンドルに取り込む。
 入口は、そのflowを起動するものを、左の列へ縦に並べる。
 出口は、ステップが起動する次のflowを、ステップの下の行に並べる。
 出口はクリックで次のflowの図へ移る。
+flow自身からの入口(却下の作り直し)は、同じ戻りを出口が示す。
+そのため、図と一覧のどちらにも描かない。
 
 | 入口の種類 | 内容 |
 | --- | --- |

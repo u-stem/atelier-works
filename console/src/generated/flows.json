@@ -458,7 +458,7 @@
     {
       "name": "self_update",
       "summary": "Software Factory自身を最新化",
-      "flows": []
+      "flows": ["implement", "pr_fix"]
     },
     {
       "name": "watch_main_ci",

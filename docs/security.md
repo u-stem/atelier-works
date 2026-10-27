@@ -1710,7 +1710,8 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 - 網羅テスト(`console/src/screens/jobs/safeTextCoverage.test.tsx`)。全項目に見えない文字を入れて描き、残らないことを確かめる
 - ソースの契約テスト(`tests/scripts/console_jobs_render_contract.test.ts`)
 
-描画の部品(`JobDetailParts.tsx`、`FlowGraphDiagram.tsx`、`ConfigSection.tsx`)は、保護パスに入れない。
+描画の部品は、保護パスに入れない。
+対象は`JobDetailParts.tsx`、`FlowGraphDiagram.tsx`、`FlowDiagram.tsx`、`FlowScreen.tsx`、`ConfigSection.tsx`である。
 契約テストが`screens/jobs/`の全体と設定の節を走査するので、部品を保護しても、上乗せの保証が小さい。
 後続のPRで必ず直す部品なので、保護すると、毎回人の確認が要るためである。
 
@@ -3893,6 +3894,13 @@ SVGに重ねる実行の状態は、ジョブのパスを既知のflowの集合�
 図のSVGは、`dangerouslySetInnerHTML`を使わず、サーバー由来の文字列を属性にも入れない。
 安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
+
+ジョブの画面のflowの図(`console/src/screens/jobs/FlowDiagram.tsx`)も、このiframeを使わず、自前のSVGで描く。
+図のデータ(`console/src/generated/flows.json`)はリポジトリのコードから作ったバンドルの静的なJSONで、信用できない入力を含まない。
+重ねるジョブのステップのidと状態はサーバー由来なので、見えない文字を代替文字にしてから描く。
+子のジョブへのリンクに入れるidは、UUIDの形のときだけhrefに入れる。
+残るリスクとして、`flows.json`は、リポジトリのflow定義の説明と配線を、認証なしのバンドルで公開する。
+秘密値は含まない。起動関係の図のデータ(`flow-graph.json`)と同種である。
 
 | 守ること | 内容 |
 | --- | --- |

@@ -469,7 +469,12 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
             ? [target]
             : []
           : wired
-              .filter((edge) => edge.kind === "script" && edge.from === target)
+              .filter(
+                (edge) =>
+                  edge.kind === "script" &&
+                  (edge.from === target ||
+                    own(input.scriptCallers, edge.from) === target),
+              )
               .map((edge) => edge.to);
       return {
         name: schedule.name,
