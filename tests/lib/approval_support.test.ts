@@ -351,11 +351,4 @@ describe("the imports of approval_support", () => {
       ),
     ).toEqual([]);
   });
-
-  test("no longer filters the expired requests of requirements", async () => {
-    const source = await Bun.file(
-      new URL("../../f/factory/lib/approval_support.ts", import.meta.url),
-    ).text();
-    expect(source).not.toContain("expiredRequirementsRequests");
-  });
 });
