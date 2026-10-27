@@ -363,6 +363,12 @@ describe("the reason of a design approval that timed out", () => {
     );
   });
 
+  test("tells that an approval recorded after the timeout starts the implementation", () => {
+    expect(nextActionFor(DESIGN_APPROVAL_TIMED_OUT_REASON)).toContain(
+      "最新の依頼が承認済みなら実装から始めます",
+    );
+  });
+
   test("does not tell the operator to decide a request that expired", () => {
     expect(nextActionFor(DESIGN_APPROVAL_TIMED_OUT_REASON)).not.toContain(
       "承認または却下してください",

@@ -774,6 +774,12 @@ describe("nextActionFor", () => {
     );
   });
 
+  test("tells the operator that an approval recorded after the timeout starts the later stage", () => {
+    expect(nextActionFor("approval timed out")).toContain(
+      "最新の依頼が承認済みなら、承認の後の工程(設計が有効なら設計、そうでなければ実装)から始めます",
+    );
+  });
+
   test("picks the first segment's action for a semicolon-joined reason", () => {
     expect(nextActionFor("no changes to commit; replies posted")).toBe(
       "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください",
