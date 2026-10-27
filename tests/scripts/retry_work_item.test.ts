@@ -1754,8 +1754,8 @@ describe("buildRestartContext", () => {
       expect(context.feedback).toBe("only reason");
     });
 
-    test("is not passed for a rejection of another attempt", async () => {
-      const context = await build(harness(), {
+    test("is not passed for a rejection of an earlier attempt that a later draft followed", async () => {
+      const context = await build(harness({ draftAfter: true }), {
         requirementsApproval: { ...REQUIREMENTS_REJECTED, attempt: 1 },
       });
       expect(context.feedback).toBeNull();
