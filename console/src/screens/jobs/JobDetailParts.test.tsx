@@ -42,6 +42,48 @@ const JOB: JobSummaryView = {
   is_flow_step: false,
 };
 
+describe("JobOverview: the link to the diagram of the flow", () => {
+  const flowJob: JobSummaryView = { ...JOB, parent_job: null };
+
+  function overview(job: JobSummaryView): string {
+    return render(
+      <JobOverview job={job} now={NOW} relatedItemId={null} back={undefined} />,
+    );
+  }
+
+  test("links a flow job to the diagram of its flow", () => {
+    expect(overview(flowJob)).toContain('href="/jobs/flows/implement"');
+  });
+
+  test("labels the link with flowの図", () => {
+    expect(overview(flowJob)).toContain("flowの図");
+  });
+
+  test("puts no link on the job of a script", () => {
+    expect(overview({ ...flowJob, job_kind: "script" })).not.toContain(
+      "/jobs/flows/",
+    );
+  });
+
+  test("puts no link on a job that has a parent", () => {
+    expect(overview({ ...flowJob, parent_job: PARENT })).not.toContain(
+      "/jobs/flows/",
+    );
+  });
+
+  test("puts no link on a flow that the data does not have", () => {
+    expect(
+      overview({ ...flowJob, script_path: "f/factory/unknown_flow" }),
+    ).not.toContain("/jobs/flows/");
+  });
+
+  test("puts no link on a flow step", () => {
+    expect(overview({ ...flowJob, is_flow_step: true })).not.toContain(
+      "/jobs/flows/",
+    );
+  });
+});
+
 describe("JobOverview", () => {
   const html = render(
     <JobOverview job={JOB} now={NOW} relatedItemId={7} back={undefined} />,

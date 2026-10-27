@@ -92,6 +92,89 @@ function render(
   );
 }
 
+describe("ScheduleList: the description and the diagrams", () => {
+  test("shows the one-line description under the name", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain(
+      "PRを巡回してレビュー / 修正を起動",
+    );
+  });
+
+  test("links a schedule to the diagram of each flow it launches", () => {
+    const html = render(freshQuery(snapshot([schedule()])));
+
+    expect([
+      html.includes('href="/jobs/flows/pr_fix"'),
+      html.includes('href="/jobs/flows/pr_review"'),
+    ]).toEqual([true, true]);
+  });
+
+  test("labels the links with flowの図", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toContain("flowの図");
+  });
+
+  test("shows the description of a schedule that launches no flow, without a link", () => {
+    const html = render(
+      freshQuery(
+        snapshot([
+          schedule({
+            path: "f/factory/cleanup_db",
+            script_path: "f/factory/cleanup_db",
+          }),
+        ]),
+      ),
+    );
+
+    expect([html.includes("DBを掃除"), html.includes("flowの図")]).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  test("shows the flows that a script called by the schedule starts", () => {
+    expect(
+      render(
+        freshQuery(
+          snapshot([
+            schedule({
+              path: "f/factory/self_update",
+              script_path: "f/factory/self_update",
+            }),
+          ]),
+        ),
+      ),
+    ).toContain('href="/jobs/flows/implement"');
+  });
+
+  test("shows nothing of the data for a schedule that the data does not know", () => {
+    const html = render(
+      freshQuery(snapshot([schedule({ path: "f/factory/unknown_schedule" })])),
+    );
+
+    expect(html).not.toContain("flowの図");
+  });
+
+  test("does not make the whole row a link", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).not.toMatch(
+      /<li[^>]*>\s*<a /,
+    );
+  });
+
+  test("keeps the stop control outside the links", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).not.toMatch(
+      /<a [^>]*>(?:(?!<\/a>)[\s\S])*<button/,
+    );
+  });
+
+  test("gives the links the keyboard ring", () => {
+    const html = render(freshQuery(snapshot([schedule()])));
+    const links = (
+      html.match(/<a [^>]*href="\/jobs\/flows\/[^>]*>/g) ?? []
+    ).filter((tag) => !tag.includes("focus-visible"));
+
+    expect(links).toEqual([]);
+  });
+});
+
 describe("ScheduleList rows", () => {
   test("names the schedule and shows its cron", () => {
     expect(render(freshQuery(snapshot([schedule()])))).toContain(

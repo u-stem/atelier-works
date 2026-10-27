@@ -201,6 +201,11 @@ const FLOW: FlowDefinition = {
   unwiredEntries: [{ kind: "flow", flow: "pipeline", via: "approve" }],
 };
 
+const SCHEDULE_FLOWS: FlowsData = {
+  flows: [FLOW],
+  schedules: [{ name: "pipeline_schedule", summary: BAD, flows: ["pipeline"] }],
+};
+
 const FLOWS: FlowsData = { flows: [FLOW], schedules: [] };
 
 /** 定義のステップと、定義に無いステップの両方に、見えない文字を入れたジョブのステップ。 */
@@ -359,23 +364,31 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     "the flow progress of a work item",
     () => (
       <ItemFlowProgressView
-        kind="issue"
-        graph={GRAPH}
+        data={FLOWS}
+        width={900}
+        view={{
+          kind: "steps",
+          jobId: DETAIL_ID,
+          flowPath: "f/factory/pipeline",
+          jobState: BAD,
+          steps: FLOW_STEPS,
+          stale: true,
+        }}
+      />
+    ),
+  ],
+  [
+    "the flow progress of a work item whose flow is not in the data",
+    () => (
+      <ItemFlowProgressView
+        data={FLOWS}
         width={900}
         view={{
           kind: "steps",
           jobId: DETAIL_ID,
           flowPath: `f/factory/${BAD}`,
           jobState: BAD,
-          steps: [
-            {
-              id: BAD,
-              state: BAD,
-              job_id: BAD,
-              iterations: null,
-              skipped: false,
-            },
-          ],
+          steps: FLOW_STEPS,
           stale: true,
         }}
       />
@@ -399,6 +412,20 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
           truncated: false,
         })}
         holds={freshQuery(HOLDS)}
+      />
+    ),
+  ],
+  [
+    "the schedules with a description from the data",
+    () => (
+      <ScheduleList
+        schedules={freshQuery({
+          schedules: [{ ...SCHEDULE, path: "f/factory/pipeline_schedule" }],
+          missing_in_workspace: [],
+          truncated: false,
+        })}
+        holds={freshQuery(HOLDS)}
+        flows={SCHEDULE_FLOWS}
       />
     ),
   ],
@@ -454,6 +481,33 @@ describe("the flow progress of a work item in the coverage", () => {
     expect(found === undefined ? "" : render(found[1]())).toContain(
       "のステップ",
     );
+  });
+
+  test("draws the steps the definition lacks, so the check reaches the id of the unknown step", () => {
+    const found = CASES.find(
+      ([label]) => label === "the flow progress of a work item",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain(
+      "定義に無いステップ",
+    );
+  });
+
+  test("draws the list of steps of a flow that is not in the data", () => {
+    const found = CASES.find(
+      ([label]) =>
+        label ===
+        "the flow progress of a work item whose flow is not in the data",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain("<ol");
+  });
+});
+
+describe("the description of a schedule in the coverage", () => {
+  test("draws the description and the links of a schedule that the data knows", () => {
+    const found = CASES.find(
+      ([label]) => label === "the schedules with a description from the data",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain("flowの図");
   });
 });
 
