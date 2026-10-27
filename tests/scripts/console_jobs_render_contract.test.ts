@@ -34,7 +34,6 @@ const RENDERERS = [
 /** サーバーの文字列を画面に出す部品。無害化の部品を取り込んでいなければならない。 */
 const SAFE_TEXT_USERS = [
   "console/src/screens/jobs/FlowDiagram.tsx",
-  "console/src/screens/jobs/FlowGraphDiagram.tsx",
   "console/src/screens/jobs/FlowScreen.tsx",
   "console/src/screens/jobs/JobDetailParts.tsx",
   "console/src/screens/jobs/JobDetailScreen.tsx",

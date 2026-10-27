@@ -17,13 +17,10 @@ import {
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import { flowDiagramModel } from "../../lib/flowDiagram.ts";
-import type { FlowGraph } from "../../lib/flowGraph.ts";
-import type { FlowGraphState } from "../../lib/flowOverlay.ts";
 import type { FlowDefinition, FlowsData } from "../../lib/flowsData.ts";
 import { ItemFlowProgressView } from "../items/detail/ItemFlowProgress.tsx";
 import { ConfigList } from "../system/ConfigSection.tsx";
 import { FlowDiagramFrame } from "./FlowDiagram.tsx";
-import { FlowGraphDiagram, FlowGraphList } from "./FlowGraphDiagram.tsx";
 import { FlowScreenView } from "./FlowScreen.tsx";
 import {
   ArgList,
@@ -145,34 +142,6 @@ function detailScreen(): ReactElement {
     </QueryClientProvider>
   );
 }
-
-/** 文字列の項目のすべてに`BAD`を入れた起動の関係。ノードのidは既知のflowに合わせる。 */
-const GRAPH: FlowGraph = {
-  nodes: [
-    { id: "schedule:poll_issues", kind: "schedule", label: BAD, note: BAD },
-    { id: "flow:pipeline", kind: "flow", label: BAD, note: BAD },
-  ],
-  edges: [{ from: "schedule:poll_issues", to: "flow:pipeline", kind: "run" }],
-};
-
-const GRAPH_STATE: FlowGraphState = {
-  overlay: {
-    activity: new Map([
-      ["flow:pipeline", { running: 1, queued: 2, runningJobId: DETAIL_ID }],
-    ]),
-    lowerBound: true,
-  },
-  scheduleEntries: new Map([
-    [
-      "schedule:poll_issues",
-      { stopped: false, lastRun: { success: false }, nextRunAt: null },
-    ],
-  ]),
-  activeFailed: false,
-  schedulesFailed: false,
-  activePending: false,
-  schedulesTruncated: false,
-};
 
 /** 文字列の項目のすべてに`BAD`を入れたflowの定義。flowの名前は、リンクに入れるので安全な形にする。 */
 const FLOW: FlowDefinition = {
@@ -353,14 +322,6 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     ),
   ],
   [
-    "flow node label",
-    () => <FlowGraphDiagram graph={GRAPH} state={GRAPH_STATE} />,
-  ],
-  [
-    "flow node label in the list",
-    () => <FlowGraphList graph={GRAPH} state={GRAPH_STATE} />,
-  ],
-  [
     "the flow progress of a work item",
     () => (
       <ItemFlowProgressView
@@ -454,7 +415,7 @@ describe("every string of the server is sanitized when it is drawn", () => {
   });
 });
 
-describe("the cases of the current step and the graph in the coverage", () => {
+describe("the case of the current step in the coverage", () => {
   const draw = (name: string): string => {
     const found = CASES.find(([label]) => label === name);
     return found === undefined ? "" : render(found[1]());
@@ -462,14 +423,6 @@ describe("the cases of the current step and the graph in the coverage", () => {
 
   test("draw the label of the current step, so the check does not pass on an empty row", () => {
     expect(draw("flow progress step id")).toContain("今のステップ");
-  });
-
-  test("draw the running mark of the graph, so the check does not pass on an empty graph", () => {
-    expect(draw("flow node label")).toContain("実行中");
-  });
-
-  test("draw the last run of the schedule entry of the graph", () => {
-    expect(draw("flow node label")).toContain("直近 失敗・取消");
   });
 });
 

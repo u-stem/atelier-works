@@ -3,8 +3,7 @@
 // 設定の取得は、設定のタブを開いた後だけ加える。開くまで取得しないものを、更新で取りに行かないためである。
 // 設定は自動で取り直さないので、最終更新の最小の時刻には入れない。入れると、開いた後は見出しの時刻が設定の時刻で止まる。
 // 取得中と失敗と更新の操作には、設定も含める。
-// 起動の関係の図の取得は、図を開いた後だけ加える。図に重ねた実行の状態は画面に出ているので、最終更新の時刻にも含める。
-// 最終更新は、含めた取得のうち古い方の時刻になる。
+// 最終更新は、設定を除く取得のうち古い方の時刻になる。
 
 import {
   type RefreshStatus,
@@ -20,8 +19,6 @@ export function refreshStatusOfSystem(queries: {
   readonly holds: Refreshable;
   /** 設定の取得。タブをまだ開いていないときは`null`か省略する。 */
   readonly config?: Refreshable | null;
-  /** 起動の関係の図の取得。図を開く前は`null`か省略する。 */
-  readonly flowGraph?: readonly Refreshable[] | null;
 }): RefreshStatus {
   const polled = [
     queries.status,
@@ -33,9 +30,8 @@ export function refreshStatusOfSystem(queries: {
     queries.config === undefined || queries.config === null
       ? []
       : [queries.config];
-  const dated = [...polled, ...(queries.flowGraph ?? [])];
   return {
-    ...refreshStatusOfAll([...dated, ...config]),
-    updatedAt: refreshStatusOfAll(dated).updatedAt,
+    ...refreshStatusOfAll([...polled, ...config]),
+    updatedAt: refreshStatusOfAll(polled).updatedAt,
   };
 }
