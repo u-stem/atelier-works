@@ -23,6 +23,7 @@ import {
   withJobsTab,
 } from "../../lib/jobsTabs.ts";
 import {
+  currentJobs,
   type HistoryStatus,
   parseHistoryScript,
   parseHistoryStatus,
@@ -38,6 +39,7 @@ import { ScheduleList } from "./ScheduleList.tsx";
 
 /**
  * ジョブの画面。実行中と待ち、履歴、スケジュールの3つのタブを持つ。
+ * 実行中と待ちのタブの件数は、予定のジョブを除いた数である。予定は、スケジュールのタブにある。
  * 開くタブはURLの`?tab=`に、履歴の絞り込みは`?status=`と`?script=`に持ち、選び直しても履歴を積まない。
  * scriptの値はURLから来るので、履歴に出るscriptとフローの集合と照合し、知らない値は無視する。
  * 集合は、ルートのジョブとして動くものだけである。フローのステップや、Consoleの呼び出しを選んでも、常に0件になるためである。
@@ -98,7 +100,10 @@ export function JobsScreen() {
   };
   const tabs = jobsTabSpecs(tab, {
     failed,
-    activeCount: active.data?.jobs.length,
+    activeCount:
+      active.data === undefined
+        ? undefined
+        : currentJobs(active.data.jobs).length,
     activeCountAtLeast: active.data?.truncated === true,
   });
 

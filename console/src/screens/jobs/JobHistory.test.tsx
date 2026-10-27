@@ -164,10 +164,8 @@ describe("JobHistory rows", () => {
     );
   });
 
-  test("hides the Console's own calls, and says so", () => {
-    expect(render(data([page(1, 1)]))).toContain(
-      "Consoleの呼び出し(tag console)は含みません",
-    );
+  test("does not add a note about the jobs it leaves out", () => {
+    expect(render(data([page(1, 1)]))).not.toMatch(/含みません/);
   });
 });
 

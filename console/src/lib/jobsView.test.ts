@@ -3,12 +3,14 @@ import type { HoldsSnapshot } from "../api/guards/holds.ts";
 import type {
   ConfigItemView,
   JobListView,
+  JobSummaryView,
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
 import {
   CAUSE_DETECTION_INTERVAL_MIN,
   CONFIG_REFERENCE_LABEL,
   causesPending,
+  currentJobs,
   describeArg,
   describeConfigValue,
   describeSchedule,
@@ -807,5 +809,67 @@ describe("logScrollTop", () => {
 
   test("is zero when the log fits in the frame", () => {
     expect(logScrollTop(300, 400)).toBe(0);
+  });
+});
+
+function summary(overrides: Partial<JobSummaryView>): JobSummaryView {
+  return {
+    id: ID,
+    state: "running",
+    script_path: "f/factory/collect_github",
+    job_kind: "script",
+    created_at: "2026-10-26T04:59:00.000000Z",
+    started_at: null,
+    completed_at: null,
+    scheduled_for: null,
+    duration_ms: null,
+    schedule_path: null,
+    parent_job: null,
+    tag: "periodic",
+    is_flow_step: false,
+    ...overrides,
+  };
+}
+
+describe("currentJobs", () => {
+  test("keeps a running job", () => {
+    expect(currentJobs([summary({ state: "running" })])).toHaveLength(1);
+  });
+
+  test("keeps a job that waits for a worker", () => {
+    expect(currentJobs([summary({ state: "queued" })])).toHaveLength(1);
+  });
+
+  test("drops a job that starts in the future", () => {
+    expect(
+      currentJobs([
+        summary({
+          state: "scheduled",
+          scheduled_for: "2026-10-26T05:05:00.000000Z",
+        }),
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("leaves nothing when all sixteen jobs of the real queue are scheduled", () => {
+    const queue = Array.from({ length: 16 }, (_, n) =>
+      summary({
+        id: `0190a1b2-c3d4-7e5f-8a9b-${String(n).padStart(12, "0")}`,
+        state: "scheduled",
+        schedule_path: "f/factory/collect_github",
+        scheduled_for: "2026-10-26T05:05:00.000000Z",
+      }),
+    );
+    expect(currentJobs(queue)).toHaveLength(0);
+  });
+
+  test("keeps the order of the jobs it keeps", () => {
+    const first = summary({ id: "a", state: "running" });
+    const second = summary({ id: "b", state: "queued" });
+    const later = summary({ id: "c", state: "scheduled" });
+    expect(currentJobs([first, later, second]).map((job) => job.id)).toEqual([
+      "a",
+      "b",
+    ]);
   });
 });
