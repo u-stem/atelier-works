@@ -870,35 +870,26 @@ export async function latestStatusEvent(
 }
 
 /**
- * `latestStatusEvent`の兄弟。遷移元が`fromStatuses`のどれかである、`toStatus`への最新の遷移の記録を返す。無ければ`null`を返す。
- * `retry_work_item`が、要件定義の生成へ戻った理由(遷移元が設計か実装の差し戻し、承認待ちの却下)を読むために使う。
- * 再実行の遷移や、状態の変わらない取り込みの更新の記録が後にあっても、遷移元で絞るので差し戻しの遷移を返す。
+ * `latestStatusEvent`の兄弟。作業項目が`toStatus`へ移った最新の遷移の記録を返す。無ければ`null`を返す。
+ * 取り込みの更新のように状態を変えない行(遷移元と遷移先が同じ)は除く。
+ * 遷移元では絞らない。`retry_work_item`が、要件定義の生成へ戻った理由(設計・実装・PRの修正の差し戻し)を読むために使う。
+ * 再実行の遷移が後にあれば、その遷移を返す。古い差し戻しの理由を、いま戻す理由として渡さないためである。
  */
-export async function latestStatusEventFromAny(
+export async function latestStatusTransition(
   workItemId: number,
   toStatus: WorkItemStatus,
-  fromStatuses: readonly WorkItemStatus[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<StatusEventSummary | null> {
   const rows = await sql`
     SELECT from_status, note FROM factory.work_item_events
     WHERE work_item_id = ${workItemId}::bigint AND to_status = ${toStatus}
-      AND from_status = ANY(${[...fromStatuses]}::text[])
+      AND from_status IS DISTINCT FROM to_status
     ORDER BY occurred_at DESC, id DESC
     LIMIT 1
   `.fetch();
   const row = rows[0];
   if (row === undefined) return null;
-  return parseStatusEventRow(row, "latestStatusEventFromAny");
-}
-
-/** 作業項目が`toStatus`へ移った最新の遷移を返す。状態の変わらない行は除く。 */
-export async function latestStatusTransition(
-  _workItemId: number,
-  _toStatus: WorkItemStatus,
-  _sql: SqlClient = defaultSqlClient,
-): Promise<StatusEventSummary | null> {
-  return null;
+  return parseStatusEventRow(row, "latestStatusTransition");
 }
 
 /**
@@ -3982,13 +3973,14 @@ export type RequirementsApprovalRef = {
  * 状態は問わない(`status === "approved"`と`attempt === workItem.attempt`は
  * 呼び出し側が確かめる)。要件定義の承認を一度も依頼していなければ`null`を返す。
  * 依頼の時刻が同じときは`id DESC`で決める。
+ * 却下の理由は、その行の`reason`から読める。
  */
 export async function latestRequirementsApproval(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<RequirementsApprovalRef | null> {
   const rows = await sql`
-    SELECT ar.id AS approval_request_id, ar.subject_id AS draft_id, rd.attempt, ar.status
+    SELECT ar.id AS approval_request_id, ar.subject_id AS draft_id, rd.attempt, ar.status, ar.reason
     FROM factory.approval_requests ar
     JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id AND rd.work_item_id = ar.work_item_id
     WHERE ar.kind = 'requirements' AND ar.work_item_id = ${workItemId}::bigint
@@ -4011,7 +4003,7 @@ export async function latestRequirementsApproval(
       APPROVAL_REQUEST_STATUSES,
       "status",
     ),
-    reason: null,
+    reason: parseNullableString(row.reason, "reason"),
   };
 }
 

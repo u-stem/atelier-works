@@ -44,7 +44,7 @@ import {
   latestDesignApproval,
   latestRequirementsApproval,
   latestStatusEvent,
-  latestStatusEventFromAny,
+  latestStatusTransition,
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
   newestNewerIssueCycle,
@@ -199,9 +199,17 @@ export type RestartContextDeps = {
   ) => Promise<StatusEventSummary | null>;
 };
 
-/** 再開先を決めるための文脈を組み立てる。 */
+/**
+ * 再開先を決めるための文脈を組み立てる。取得元は次のとおり。
+ * - 設計の承認は、設計が有効で、要件定義が現在の`attempt`で承認済みのときだけ読む。
+ * - 止まった遷移は、取り消す前の状態(`restartStatus`)で引く。要件定義が承認済みのときだけ読む。
+ * - 差し戻しの理由は、要件定義の生成へ戻った後に止まったときだけ、要件定義の生成への最新の遷移の注記から引く。
+ *   再実行の遷移が後にあれば、注記が差し戻しの理由でないので、理由は渡らない。
+ * - 却下の理由は、照合に使った承認依頼の行から引く。最新の承認が現在の`attempt`の却下のときだけ渡す。
+ *   却下が`max_attempts`に達した最後の却下は要件定義の生成への遷移を作らず、遷移の記録には前のサイクルの理由しか無いためである。
+ */
 export async function buildRestartContext(
-  _input: {
+  input: {
     readonly workItem: Pick<WorkItem, "id" | "attempt" | "design_attempt">;
     readonly restartStatus: WorkItemStatus;
     readonly requirementsApproval: Pick<
@@ -211,15 +219,48 @@ export async function buildRestartContext(
     readonly implementEnabled: boolean;
     readonly designEnabled: boolean;
   },
-  _deps: RestartContextDeps,
+  deps: RestartContextDeps,
 ): Promise<RestartContext> {
+  const { workItem, requirementsApproval } = input;
+  const implementReady = isRequirementsApprovedForAttempt(
+    requirementsApproval,
+    workItem.attempt,
+  );
+  const designApproved =
+    input.designEnabled &&
+    implementReady &&
+    requirementsApproval !== null &&
+    isDesignApprovedForAttempt(await deps.latestDesignApproval(workItem.id), {
+      attempt: workItem.attempt,
+      designAttempt: workItem.design_attempt,
+      requirementDraftId: requirementsApproval.draft_id,
+    });
+  const stop = classifyRestartStop(
+    implementReady
+      ? await deps.latestStatusEvent(workItem.id, input.restartStatus)
+      : null,
+  );
+  let feedback: string | null = null;
+  if (stop === "requirements_returned") {
+    const transition = await deps.latestStatusTransition(
+      workItem.id,
+      "requirements_generating",
+    );
+    feedback = feedbackFromGapNote(transition?.note ?? null);
+  } else if (
+    !implementReady &&
+    requirementsApproval?.status === "rejected" &&
+    requirementsApproval.attempt === workItem.attempt
+  ) {
+    feedback = feedbackFromRejection(requirementsApproval.reason);
+  }
   return {
-    implementReady: false,
-    implementEnabled: false,
-    designEnabled: false,
-    designApproved: false,
-    stop: "other",
-    feedback: null,
+    implementReady,
+    implementEnabled: input.implementEnabled,
+    designEnabled: input.designEnabled,
+    designApproved,
+    stop,
+    feedback,
   };
 }
 
@@ -786,60 +827,23 @@ async function restartWorkItem(
     workItem.kind === "issue"
       ? await latestRequirementsApproval(work_item_id)
       : null;
-  const implementReady = isRequirementsApprovedForAttempt(
-    requirementsApproval,
-    workItem.attempt,
-  );
   const restartItem = asBeforeActionableCancel(
     workItem,
     workItem.status === "cancelled"
       ? await latestStatusEvent(work_item_id, "cancelled")
       : null,
   );
-  // 設計の承認は、設計が有効で、要件定義が現在の`attempt`で承認済みのときだけ読む。
-  const designApproved =
-    config.design_enabled &&
-    implementReady &&
-    requirementsApproval !== null &&
-    isDesignApprovedForAttempt(await latestDesignApproval(work_item_id), {
-      attempt: workItem.attempt,
-      designAttempt: workItem.design_attempt,
-      requirementDraftId: requirementsApproval.draft_id,
-    });
-  // 止まった遷移は、取り消された作業項目を取り消す前の状態として扱うため、`restartItem.status`で引く。
-  const stop = classifyRestartStop(
-    implementReady
-      ? await latestStatusEvent(work_item_id, restartItem.status)
-      : null,
+  const context = await buildRestartContext(
+    {
+      workItem,
+      restartStatus: restartItem.status,
+      requirementsApproval,
+      implementEnabled: config.implement_enabled,
+      designEnabled: config.design_enabled,
+    },
+    { latestDesignApproval, latestStatusEvent, latestStatusTransition },
   );
-  let feedback: string | null = null;
-  if (stop === "requirements_returned") {
-    const gap = await latestStatusEventFromAny(
-      work_item_id,
-      "requirements_generating",
-      ["designing", "implementing"],
-    );
-    feedback = feedbackFromGapNote(gap?.note ?? null);
-  } else if (
-    !implementReady &&
-    requirementsApproval?.status === "rejected" &&
-    requirementsApproval.attempt === workItem.attempt
-  ) {
-    const rejection = await latestStatusEventFromAny(
-      work_item_id,
-      "requirements_generating",
-      ["awaiting_approval"],
-    );
-    feedback = feedbackFromRejection(rejection?.note ?? null);
-  }
-  const plan = computeRestartPlan(restartItem, {
-    implementReady,
-    implementEnabled: config.implement_enabled,
-    designEnabled: config.design_enabled,
-    designApproved,
-    stop,
-    feedback,
-  });
+  const plan = computeRestartPlan(restartItem, context);
   const refusal = runningFlowRefusal(
     work_item_id,
     workItem.flow_job_id,
