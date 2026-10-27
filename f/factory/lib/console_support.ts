@@ -183,4 +183,10 @@ export const INTAKE_REFRESHED_NOTE_PREFIX =
  */
 export const TRANSIENT_STALL_NOTE_PREFIX = "auto_retry_stalled: ";
 
-export const APPROVAL_REDISPATCH_NOTE_PREFIX = "";
+/**
+ * 承認の判断を反映する処理を起動し直したことを残す遷移の注記の先頭(`approvalRedispatchNote`)。
+ * 状態は変わらない記録なので、Consoleの「今の状態へ遷移したときの注記」は、これを読み飛ばす。
+ * Consoleのビューが、走査の依存を引かずに読めるよう、ここに置く。
+ */
+export const APPROVAL_REDISPATCH_NOTE_PREFIX =
+  "approval handler restarted for request ";

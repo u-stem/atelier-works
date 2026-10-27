@@ -6,6 +6,7 @@
 // このファイルは`approval_support.ts`を読み込んでよいが、逆はしない。
 
 import { designGateReason } from "./approval_gate.ts";
+import { APPROVAL_REDISPATCH_NOTE_PREFIX } from "./console_support.ts";
 import type { LatestApprovalGuard, LatestApprovalRequest } from "./db.ts";
 import { DESIGN_APPROVAL_TIMED_OUT_REASON } from "./design_template.ts";
 import type {
@@ -64,7 +65,7 @@ export const SWEEP_REDISPATCH_MAX_PER_REQUEST = 3;
  * 記録を数えて上限を判定するので、依頼ごとに固定の文にする。
  */
 export function approvalRedispatchNote(requestId: number): string {
-  return `approval handler restarted for request ${String(requestId)}`;
+  return `${APPROVAL_REDISPATCH_NOTE_PREFIX}${String(requestId)}`;
 }
 
 /** 処理先を起動し直しても判断が作業項目に反映されなかったときの、`needs_human`の理由。 */
