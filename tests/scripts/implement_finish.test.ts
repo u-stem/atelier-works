@@ -119,6 +119,24 @@ describe("transitionResult", () => {
   });
 });
 
+// 再実行は、注記が理由そのまま、または理由 + "; " で始まることで、要件定義の改ざんの停止を見分ける。
+describe("implement_finish needs_human note", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/steps/implement_finish.ts"),
+    "utf8",
+  );
+
+  test("puts the base reason first and joins the notes with a semicolon", () => {
+    expect(source).toContain('[baseReason, ...notes].join("; ")');
+  });
+
+  test("takes the reason of the loop before the reason of the preparation", () => {
+    expect(needsHumanBaseReason("loop reason", "prepare reason")).toBe(
+      "loop reason",
+    );
+  });
+});
+
 describe("implement_finish open_pr ordering", () => {
   const source = readFileSync(
     join(import.meta.dir, "../../f/factory/steps/implement_finish.ts"),

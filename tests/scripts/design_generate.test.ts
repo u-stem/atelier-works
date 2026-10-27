@@ -9,6 +9,7 @@ import {
 } from "../../f/factory/lib/design_template.ts";
 import {
   DocTreeRootSymlinkError,
+  isRequirementsUntrustedReason,
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
   REQUIREMENTS_MODIFIED_REASON,
@@ -1063,6 +1064,20 @@ describe("runDesignGenerate and the approved requirements on disk", () => {
         reason: "approved requirements were modified during design",
       },
     ]);
+  });
+
+  // 再実行は、注記が理由そのままであることで、改ざんの停止を見分ける。
+  test("records a reason the retry recognises as untrusted requirements", async () => {
+    const h = harness({
+      claude: async (_request, ctx) => {
+        ctx.memory.files.set(`${REQUIREMENTS_DIR}/requirements.md`, "changed");
+        return { outcome: "success", output: DESIGNED };
+      },
+    });
+    await runDesignGenerate(h.deps, INPUT);
+    expect(isRequirementsUntrustedReason(h.moves[0]?.reason ?? null)).toBe(
+      true,
+    );
   });
 
   test("notifies the person of the change", async () => {

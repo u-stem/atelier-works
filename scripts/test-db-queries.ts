@@ -62,6 +62,7 @@ import {
   latestDesignDraft,
   latestMainCiRunCreatedAt,
   latestStatusEvent,
+  latestStatusEventFromAny,
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
   listClaimablePrCiChecks,
@@ -133,6 +134,7 @@ import {
   updateStatus,
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
+  updateStatusToRequirementsIfCurrent,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -9165,6 +9167,191 @@ check(
 check(
   "design approval: the other work item is not affected",
   (await latestDesignApproval(daOtherItem, sql)) === null,
+);
+
+// 再実行が差し戻しの理由を読む問い合わせ。遷移元で絞るので、後から再実行や取り込みの更新が記録されても、
+// 差し戻しの遷移の注記を返し、遷移元が違う遷移の注記は返さない。
+const reItem = await issueWorkItem(9341, 1, "implementing", "qdb restart gap");
+check(
+  "restart: the implementation gap moves to the requirements",
+  await updateStatusIfCurrent(
+    reItem,
+    "implementing",
+    "requirements_generating",
+    "gap: first gap",
+    sql,
+  ),
+);
+check(
+  "restart: the failed regeneration moves to needs_human",
+  await updateStatusIfCurrent(
+    reItem,
+    "requirements_generating",
+    "needs_human",
+    "requirements regeneration could not be started",
+    sql,
+  ),
+);
+check(
+  "restart: the earlier restart moves back to the requirements",
+  await updateStatusIfCurrent(
+    reItem,
+    "needs_human",
+    "requirements_generating",
+    "retry_work_item: restarted from needs_human",
+    sql,
+  ),
+);
+const reLatest = await latestStatusEvent(
+  reItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "restart: the plain query returns the restart and not the gap",
+  reLatest?.from_status === "needs_human",
+  reLatest,
+);
+const reImplGap = await latestStatusEventFromAny(
+  reItem,
+  "requirements_generating",
+  ["designing", "implementing"],
+  sql,
+);
+check(
+  "restart: the query by previous status finds the implementation gap behind the restart",
+  reImplGap?.from_status === "implementing" &&
+    reImplGap.note === "gap: first gap",
+  reImplGap,
+);
+check(
+  "restart: the query by previous status skips a transition from another status",
+  (await latestStatusEventFromAny(
+    reItem,
+    "requirements_generating",
+    ["awaiting_approval"],
+    sql,
+  )) === null,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(reItem)}, 'requirements_generating', 'requirements_generating', 'intake refreshed')`,
+);
+const reAfterIntake = await latestStatusEventFromAny(
+  reItem,
+  "requirements_generating",
+  ["designing", "implementing"],
+  sql,
+);
+check(
+  "restart: an event that keeps the status does not hide the gap",
+  reAfterIntake?.note === "gap: first gap",
+  reAfterIntake,
+);
+check(
+  "restart: the design gap moves to the requirements",
+  (await updateStatusIfCurrent(
+    reItem,
+    "requirements_generating",
+    "designing",
+    null,
+    sql,
+  )) &&
+    (await updateStatusIfCurrent(
+      reItem,
+      "designing",
+      "requirements_generating",
+      "design gap: second gap",
+      sql,
+    )),
+);
+const reDesignGap = await latestStatusEventFromAny(
+  reItem,
+  "requirements_generating",
+  ["designing", "implementing"],
+  sql,
+);
+check(
+  "restart: the newest of the matching transitions wins",
+  reDesignGap?.from_status === "designing" &&
+    reDesignGap.note === "design gap: second gap",
+  reDesignGap,
+);
+const reRejectItem = await issueWorkItem(
+  9342,
+  1,
+  "awaiting_approval",
+  "qdb restart rejection",
+);
+check(
+  "restart: the rejection moves to the requirements",
+  await updateStatusIfCurrent(
+    reRejectItem,
+    "awaiting_approval",
+    "requirements_generating",
+    "the scope is too wide",
+    sql,
+  ),
+);
+const reRejection = await latestStatusEventFromAny(
+  reRejectItem,
+  "requirements_generating",
+  ["awaiting_approval"],
+  sql,
+);
+check(
+  "restart: the query by previous status returns the reason of a rejection",
+  reRejection?.from_status === "awaiting_approval" &&
+    reRejection.note === "the scope is too wide",
+  reRejection,
+);
+
+// 再実行が要件定義の生成へ戻す遷移は、同じ文で設計の試行を0へそろえ、リースを空け、遷移を記録する。
+const rtItem = await issueWorkItem(9343, 1, "needs_human", "qdb restart reset");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-rt', design_attempt = 2 WHERE id = ${String(rtItem)}`,
+);
+check(
+  "restart: a stale expected status writes nothing",
+  !(await updateStatusToRequirementsIfCurrent(rtItem, "failed", "x", sql)),
+);
+const rtUntouched = await getWorkItem(rtItem, sql);
+check(
+  "restart: a stale expected status keeps the status, the design attempt and the lease",
+  rtUntouched?.status === "needs_human" &&
+    rtUntouched.design_attempt === 2 &&
+    rtUntouched.flow_job_id === "qdb-job-rt",
+  rtUntouched,
+);
+check(
+  "restart: the expected status moves the work item to the requirements",
+  await updateStatusToRequirementsIfCurrent(
+    rtItem,
+    "needs_human",
+    "retry_work_item: restarted from needs_human",
+    sql,
+  ),
+);
+const rtMoved = await getWorkItem(rtItem, sql);
+check(
+  "restart: the move resets design_attempt, clears the lease and keeps attempt",
+  rtMoved?.status === "requirements_generating" &&
+    rtMoved.design_attempt === 0 &&
+    rtMoved.flow_job_id === null &&
+    rtMoved.attempt === 1,
+  rtMoved,
+);
+const rtEvent = await latestStatusEvent(rtItem, "requirements_generating", sql);
+check(
+  "restart: the move is recorded as an event from the stopped status",
+  rtEvent?.from_status === "needs_human" &&
+    rtEvent.note === "retry_work_item: restarted from needs_human",
+  rtEvent,
+);
+check(
+  "restart: the work item cannot be moved twice",
+  !(await updateStatusToRequirementsIfCurrent(rtItem, "needs_human", "x", sql)),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

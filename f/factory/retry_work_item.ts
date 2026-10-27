@@ -84,15 +84,43 @@ export type RestartPlan = {
   readonly args: Readonly<Record<string, unknown>>;
 };
 
+/** 止まった理由の分類。 */
+export type RestartStop =
+  | "requirements_untrusted"
+  | "requirements_returned"
+  | "other";
+
 /**
- * 再開先を決めるための文脈。どちらも`main`が計算する。
- * `implementReady`は、最新の要件承認が現在の`attempt`に対して承認済みか。
- * `implementEnabled`は`factory_config.implement_enabled`の値。
+ * 再開先を決めるための文脈。すべて`main`が計算する。
  */
 export type RestartContext = {
   readonly implementReady: boolean;
   readonly implementEnabled: boolean;
+  readonly designEnabled: boolean;
+  readonly designApproved: boolean;
+  readonly stop: RestartStop;
+  readonly feedback: string | null;
 };
+
+/** 止まった遷移の記録から、止まった理由を分類する。 */
+export function classifyRestartStop(
+  event: StatusEventSummary | null,
+): RestartStop {
+  void event;
+  return "other";
+}
+
+/** 設計か実装が要件の不足を返した遷移の注記から、要件定義の生成に渡す文を作る。 */
+export function feedbackFromGapNote(note: string | null): string | null {
+  void note;
+  return null;
+}
+
+/** 人が書いた却下の理由の注記から、要件定義の生成に渡す文を作る。 */
+export function feedbackFromRejection(note: string | null): string | null {
+  void note;
+  return null;
+}
 
 /**
  * Issueの作業項目に、より新しいサイクルがあるとき、再開を断る理由を返す。無ければ`null`。
@@ -370,7 +398,10 @@ export async function closedTargetRefusal(
  * - dependabotである(dependabotの作業項目は再開しない)。
  */
 export function computeRestartPlan(
-  workItem: Pick<WorkItem, "id" | "status" | "kind" | "attempt">,
+  workItem: Pick<
+    WorkItem,
+    "id" | "status" | "kind" | "attempt" | "design_attempt"
+  >,
   context: RestartContext,
 ): RestartPlan {
   if (!isOneOf(workItem.status, RESTARTABLE_STATUSES)) {
@@ -580,6 +611,10 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const plan = computeRestartPlan(restartItem, {
     implementReady,
     implementEnabled: config.implement_enabled,
+    designEnabled: config.design_enabled,
+    designApproved: false,
+    stop: "other",
+    feedback: null,
   });
   const refusal = runningFlowRefusal(
     work_item_id,

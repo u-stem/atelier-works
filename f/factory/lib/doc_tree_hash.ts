@@ -32,6 +32,14 @@ export const REQUIREMENTS_DIR_MISSING_REASON =
   "approved requirements directory is missing";
 
 /**
+ * 注記が、承認済みの要件定義の改ざん・欠落の理由か。
+ */
+export function isRequirementsUntrustedReason(note: string | null): boolean {
+  void note;
+  return false;
+}
+
+/**
  * ディレクトリ以外の項目の種類。
  * 通常のファイルとシンボリックリンクと特殊ファイルを、中身が同じ文字列でも別のものとして数えるために、ハッシュに種類の印を入れる。
  */

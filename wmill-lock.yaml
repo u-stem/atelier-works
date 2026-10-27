@@ -60,7 +60,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: a0b40648f6e53d5cc92bd9de620e2d9bf6eb77ddfb442cea5f83a708d7bb45a3
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/db: 92778058bbc4f9e542f0372d0993c51f373e6c4329362e427469981a956a2643
+  f/factory/lib/db: 32cbb9195185a48f800d0a777153272958978ea2c7c0733f23c38a0a464c6d24
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -71,7 +71,7 @@ locks:
   f/factory/lib/design_launch_support: aaf9846cfbf2aad2b278d9551e0dd90ea51be4d3b0f3f891e24e28bd75484642
   f/factory/lib/design_template: 99361cb75e2d5255136200a3d9fa821043b1017ef90032e0a99ca7faaeb1ecf3
   f/factory/lib/discord: f8229c2816e488f0a28ef2c2d9525ebe8d38c3ea0f9b0de266fad1bc446b6110
-  f/factory/lib/doc_tree_hash: c2c4f3c0db67d243a52ff5bc878480fcde428b21ad1ebea30922bab98fa9035c
+  f/factory/lib/doc_tree_hash: 65949930e646379fdcf11feb12bfe2c0ffc0a7c69d8fdc3c2b17943fd1c5e9f7
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
   f/factory/lib/drawio_viewer_bump_github: f7b0dc429c460b479e61efaaf2a3a85532aea8fb455cc592f78b344f7a2978ae
@@ -164,7 +164,7 @@ locks:
   f/factory/poll_prs: 78b464361898a39975d26f11c3ba88b0d1e4e9379cda9b1cfec421669e91ff5e
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/retry_work_item: aeccfe1a4078927c5e844f241966d9c83254fc4fc493378792d8079e9f6f68d5
+  f/factory/retry_work_item: 0074f783eb6e76dbfde66bab38577d01e725ae4265713a48b3658dd155d259b0
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
   f/factory/self_update: 14e6bf9c82a3a0ece255ff321cdb395a6be625df2388d4dd5d208b30c6f7e395
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12

@@ -124,8 +124,22 @@ describe("nextActionFor for the design stage", () => {
     ["during design", REQUIREMENTS_MODIFIED_REASON],
     ["before implementation", REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON],
     ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
-  ])("tells to make the requirements again for %s", (_name, reason) => {
-    expect(nextActionFor(reason)).toContain(RELABEL);
+  ])(
+    "tells to check the directory before the retry for %s",
+    (_name, reason) => {
+      expect(nextActionFor(reason)).toStartWith(
+        "承認済みの要件定義のディレクトリを確かめてから、",
+      );
+    },
+  );
+
+  test.each([
+    ["before design", REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON],
+    ["during design", REQUIREMENTS_MODIFIED_REASON],
+    ["before implementation", REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON],
+    ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
+  ])("tells to retry the work item for %s", (_name, reason) => {
+    expect(nextActionFor(reason)).toContain(RETRY);
   });
 
   test.each([
@@ -133,8 +147,34 @@ describe("nextActionFor for the design stage", () => {
     ["during design", REQUIREMENTS_MODIFIED_REASON],
     ["before implementation", REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON],
     ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
-  ])("does not tell to retry the work item for %s", (_name, reason) => {
-    expect(nextActionFor(reason)).not.toContain(RETRY);
+  ])(
+    "tells that the retry makes the requirements again for %s",
+    (_name, reason) => {
+      expect(nextActionFor(reason)).toContain(
+        "(要件定義を作り直すので、承認し直しが要ります)",
+      );
+    },
+  );
+
+  test.each([
+    ["before design", REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON],
+    ["during design", REQUIREMENTS_MODIFIED_REASON],
+    ["before implementation", REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON],
+    ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
+  ])(
+    "does not say the retry stops for the same reason for %s",
+    (_name, reason) => {
+      expect(nextActionFor(reason)).not.toContain("同じ理由で止まります");
+    },
+  );
+
+  test.each([
+    ["before design", REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON],
+    ["during design", REQUIREMENTS_MODIFIED_REASON],
+    ["before implementation", REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON],
+    ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
+  ])("does not tell to relabel the Issue for %s", (_name, reason) => {
+    expect(nextActionFor(reason)).not.toContain(RELABEL);
   });
 
   test("tells how to retry a design directory that already holds a draft", () => {
@@ -216,6 +256,7 @@ describe("the reason table and the reasons that the design stage produces", () =
   ];
   // 理由を返す関数は、設計の定数の置き場の2つだけを数える。
   // design_launch_supportの関数が返すのは、起動の失敗の詳細であり、`needs_human`の理由ではない。
+  // `is`で始まる名前は、注記が理由かを判定する述語で、理由の文字列を返さないので数えない。
   const FUNCTION_SOURCES = [
     "approval_gate.ts",
     "design_template.ts",
@@ -250,7 +291,7 @@ describe("the reason table and the reasons that the design stage produces", () =
   test("lists every exported function that returns a reason of the design stage", async () => {
     const functions = await exportedNames(
       FUNCTION_SOURCES,
-      /^export function (\w+Reason)\(/gm,
+      /^export function (?!is[A-Z])(\w+Reason)\(/gm,
     );
     expect(functions.filter((name) => !(name in PRODUCED))).toEqual([]);
   });
@@ -266,7 +307,7 @@ describe("the reason table and the reasons that the design stage produces", () =
   test("finds the exported reason functions in the sources", async () => {
     const functions = await exportedNames(
       FUNCTION_SOURCES,
-      /^export function (\w+Reason)\(/gm,
+      /^export function (?!is[A-Z])(\w+Reason)\(/gm,
     );
     expect(functions.length).toBeGreaterThanOrEqual(4);
   });

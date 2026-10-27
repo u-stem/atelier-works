@@ -77,6 +77,7 @@ import {
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
+  latestStatusEventFromAny,
   listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
@@ -156,6 +157,7 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
   updateStatusIfLeaseHolderClearingFlowJobId,
+  updateStatusToRequirementsIfCurrent,
 } from "../../f/factory/lib/db.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
@@ -1085,6 +1087,58 @@ describe("updateStatusIfCurrentClearingFlowJobId", () => {
   });
 });
 
+describe("updateStatusToRequirementsIfCurrent", () => {
+  test("moves the work item to requirements_generating", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.text).toContain("status = 'requirements_generating'");
+  });
+
+  test("resets design_attempt to 0 in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.text).toContain("design_attempt = 0");
+  });
+
+  test("clears flow_job_id in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("guards the update with the expected status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.values).toContain("needs_human");
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("records the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "failed", "a note", sql);
+    expect(calls[0]?.values).toContain("a note");
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(
+      await updateStatusToRequirementsIfCurrent(1, "failed", null, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when the status no longer matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await updateStatusToRequirementsIfCurrent(1, "failed", null, sql),
+    ).toBe(false);
+  });
+});
+
 describe("updateStatusIfLeaseHolder", () => {
   test("guards the update with the expected flow job id", async () => {
     const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
@@ -1416,6 +1470,59 @@ describe("latestStatusEvent", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestStatusEvent(1, "cancelled", sql);
     expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
+  });
+});
+
+describe("latestStatusEventFromAny", () => {
+  const FROM = ["designing", "implementing"] as const;
+
+  test("returns null when no transition matched", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await latestStatusEventFromAny(1, "requirements_generating", FROM, sql),
+    ).toBeNull();
+  });
+
+  test("reads the previous status and the note", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ from_status: "designing", note: "design gap: missing scope" }],
+    ]);
+    expect(
+      await latestStatusEventFromAny(1, "requirements_generating", FROM, sql),
+    ).toEqual({ from_status: "designing", note: "design gap: missing scope" });
+  });
+
+  test("rejects an unknown previous status", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ from_status: "bogus", note: null }],
+    ]);
+    await expect(
+      latestStatusEventFromAny(1, "requirements_generating", FROM, sql),
+    ).rejects.toThrow("unknown status");
+  });
+
+  test("looks at the newest matching transition", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
+  });
+
+  test("restricts the previous status to the given set", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
+    expect(calls[0]?.text).toContain("from_status = ANY(");
+  });
+
+  test("binds the set of previous statuses as one parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
+    expect(calls[0]?.values).toContainEqual(["designing", "implementing"]);
+  });
+
+  test("binds the target status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
+    expect(calls[0]?.values).toContain("requirements_generating");
   });
 });
 

@@ -862,6 +862,22 @@ export async function latestStatusEvent(
 }
 
 /**
+ * `latestStatusEvent`の兄弟。遷移元が`fromStatuses`のどれかである遷移に絞る。
+ */
+export async function latestStatusEventFromAny(
+  workItemId: number,
+  toStatus: WorkItemStatus,
+  fromStatuses: readonly WorkItemStatus[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<StatusEventSummary | null> {
+  void workItemId;
+  void toStatus;
+  void fromStatuses;
+  void sql;
+  return null;
+}
+
+/**
  * PRに紐づく`pr_review`か`pr_fix`の作業項目のうち、終端でないものがあるかを返す。
  * 閉じたPRのworktreeを消す前に、そのPRをまだ使う処理が無いことを確かめるために使う。
  */
@@ -1085,6 +1101,24 @@ export async function updateStatusIfCurrentClearingFlowJobId(
   `;
   const rows = await statement.fetch();
   return rows.length > 0;
+}
+
+/**
+ * 作業項目を要件定義の生成へ戻す比較交換。
+ */
+export async function updateStatusToRequirementsIfCurrent(
+  id: number,
+  expectedFrom: WorkItemStatus,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  void id;
+  void expectedFrom;
+  void note;
+  void sql;
+  void jobIds;
+  return false;
 }
 
 /** 自動で再開できる作業項目の種類。実装の`issue`とPR修正の`pr_fix`である。 */
