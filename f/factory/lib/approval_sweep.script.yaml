@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 承認待ちの走査'
+description: 内部ライブラリです。直接実行するものではありません。承認待ちの作業項目を最新の承認依頼と照合し、期限切れの片付けと、決定済みで反映されなかった依頼の処理先の起動し直しを行います。
 lock: '!inline f/factory/lib/approval_sweep.script.lock'
 kind: script
 schema:

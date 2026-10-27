@@ -4297,22 +4297,47 @@ export async function updateStatusToRequirementsIfLeaseHolder(
   return rows.length > 0;
 }
 
+/**
+ * 承認の判断を反映する処理を起動し直した記録の数を返す。
+ * 記録は、作業項目の遷移の記録のうち、遷移元と遷移先が同じで、注記が`note`と等しい行である(`recordApprovalRedispatch`)。
+ * 状態が変わる遷移は、注記が同じでも数えない。
+ */
 export async function countApprovalRedispatches(
-  _workItemId: number,
-  _note: string,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  note: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  return 0;
+  const rows = await sql`
+    SELECT count(*)::integer AS n FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint
+      AND from_status = to_status AND note = ${note}
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? 0 : parseRequiredNumber(row.n, "n");
 }
 
+/**
+ * 承認の判断を反映する処理を起動し直したことを、作業項目の遷移の記録に残す。
+ * 状態は変えない(遷移元と遷移先に同じ`status`を書き、作業項目の行は更新しない)。
+ * 作業項目が`status`のままのときだけ書き、書けたら`true`を返す。別の経路が先に動かしていれば何も書かずに`false`を返す。
+ * 取り込みの更新と同じく状態を変えない記録なので、最新の遷移を読む問い合わせ(`latestStatusTransition`)は拾わない。
+ */
 export async function recordApprovalRedispatch(
-  _workItemId: number,
-  _status: WorkItemStatus,
-  _note: string,
-  _sql: SqlClient = defaultSqlClient,
-  _jobIds: JobIds = jobIdsFromEnv(process.env),
+  workItemId: number,
+  status: WorkItemStatus,
+  note: string,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
-  return false;
+  const statement = sql`
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT id, status, status, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM factory.work_items
+    WHERE id = ${workItemId}::bigint AND status = ${status}
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

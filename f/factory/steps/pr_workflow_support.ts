@@ -4318,6 +4318,12 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       `Consoleで設計の承認の記録を確かめた上で、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
+    pattern: /^design approval timed out$/,
+    describe: () => "設計の承認がタイムアウトしました",
+    nextAction: () =>
+      `${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。承認済みの要件定義は使います)`,
+  },
+  {
     pattern: /^design document directory already holds a saved draft$/,
     describe: () =>
       "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
@@ -4680,7 +4686,20 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
-    nextAction: () => "Consoleの要対応で承認または却下してください",
+    // 期限切れの依頼は、承認も却下も断られる。再実行が要件定義を作り直し、承認を取り直す。
+    nextAction: () =>
+      `${RETRY_WORK_ITEM_ACTION}(要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます)`,
+  },
+  // 承認の判断を反映する処理を起動し直しても、作業項目に反映されなかった。
+  // 理由の文字列は`lib/approval_sweep.ts`の`approvalApplyStalledReason`が作る。
+  // この表は走査をimportしない(依存が増えるため)ので、`tests/lib/approval_sweep.test.ts`が出力と表を突き合わせる。
+  {
+    pattern:
+      /^approval decision could not be applied after (\d+) restarts of the handler$/,
+    describe: (m) =>
+      `承認の判断を作業項目に反映できませんでした(反映の処理を${m[1]}回起動し直しました)`,
+    nextAction: () =>
+      `Consoleで作業項目の状態と承認の記録を確かめ、${RETRY_WORK_ITEM_ACTION}`,
   },
   // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reportReviewerRequest`の`note`で、
   // 作業項目の`status_reason`に残す文)。

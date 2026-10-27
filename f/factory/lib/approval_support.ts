@@ -170,19 +170,6 @@ export function handlerPathFor(kind: ApprovalRequestKind): string {
 }
 
 /**
- * 承認依頼の一覧から`requirements`の種類だけを取り出す。
- * `poll_issues.ts`の期限切れ処理では、状態の移行やラベルの片付けといった
- * `requirements`固有の副作用をこの部分集合にだけ適用する。
- * `issue_proposal`は`expires_at`を持たないので、そもそも期限切れの一覧に入らない。
- * それでも種類ごとの分岐を、DB側のこの保証とは別にテストできるよう関数にしている。
- */
-export function expiredRequirementsRequests<
-  T extends { kind: ApprovalRequestKind },
->(requests: readonly T[]): T[] {
-  return requests.filter((request) => request.kind === "requirements");
-}
-
-/**
  * Issueの確認の結果。
  * - `match`: 現在のIssueの題名と本文が取り込み時点と同じ。
  * - `changed`: 取り込み後に題名か本文が変わった。

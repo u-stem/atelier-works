@@ -559,6 +559,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/manual_intake_support` | script | [LIB] 手動投入の検証とIssue本文 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
+| `f/factory/lib/approval_sweep` | script | [LIB] 承認待ちの走査 |
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |
 | `f/factory/lib/prose_check` | script | [LIB] 文章の検査 |
 | `f/factory/lib/console_known_paths` | script | [LIB] 既知のscript pathの定数(生成物) |
