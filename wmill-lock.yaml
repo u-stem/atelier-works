@@ -5,7 +5,7 @@ locks:
   f/factory/_smoke_suspend__flow+__flow_hash: c642c40389574e98140d74c6a555ab5e6eeade0d1462c8bb7cfffa3205ecdc37
   f/factory/_smoke_suspend__flow+report_what_resume_produced.ts: dbb0ef9c729a74523bae031d57667cb2595c867000eecba39c033e08e0dd7ae8
   f/factory/_smoke_suspend__flow+request_approval.ts: c56881749f5785c8546f4e79e0f78c7a069735c17873845b4234251c5e9b9729
-  f/factory/approval_decide: ff3c1793b132b43b9b693d5794bd5337b2bfc7830c9d649b47b9188beec0ed27
+  f/factory/approval_decide: 41062cfab5418bae2e0e9836900de5ddf6d196dca83994d567ac44088097e4cd
   f/factory/audit__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/auto_retry_pr_review: c6108817e2ef3dec835aa0a9b1c3e259e95aa07018f9781c05c119de9facc4f4
@@ -30,7 +30,7 @@ locks:
   f/factory/hold_release: cc2424cc77d630c89d77153b159ddd206ed34cb1af1050b1274bfdd36d27a5be
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/lib/approval_gate: ff7bf48551ee4661084cfc92c94108a74fcf93fb71c414b218f8d595acf3789a
-  f/factory/lib/approval_support: 176a70b4371e916f6a43dce4b3f32afb7ab60ce6ec7adb75170d3f767a007f9f
+  f/factory/lib/approval_support: 2207ab643081432a82eac45e456ee2494b3608912a266332923b90d8ceb8aba9
   f/factory/lib/approver: 1c82cf702f2bb7ac29d81bf9a5d439ced908228a3ee8229b415118a13619c300
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: 5aa75b51fa92d650753b4a0b4e02d72f10d43ea7d4c69015c53df5ea4ecb6653

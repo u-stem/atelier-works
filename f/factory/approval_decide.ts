@@ -17,7 +17,7 @@
 // (決定の記録後にハンドラの起動が失敗した場合の冪等な再試行)。
 // 異なる決定が記録済みの行と、期限切れの行は拒否する。
 //
-// 要件定義を承認するときは、記録の前に、現在のIssueの題名と本文が取り込み時点と
+// 要件定義か設計を承認するときは、記録の前に、現在のIssueの題名と本文が取り込み時点と
 // 同じかを確かめ、違うか確かめられなければ承認を拒否する。
 // 承認者が見た内容と、実装のClaudeに渡る内容を一致させるためである。
 // このscriptはConsole用workerで動き、`gh`を起動できない。そのため、GitHubのREST APIを
@@ -44,7 +44,12 @@ import {
 import { type FetchLike, fetchIssueContent } from "./lib/github.ts";
 import { issueChangedSinceIntake } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
-import { type ApprovalRequest, isOneOf, type WorkItem } from "./lib/types.ts";
+import {
+  type ApprovalRequest,
+  type ApprovalRequestKind,
+  isOneOf,
+  type WorkItem,
+} from "./lib/types.ts";
 
 const DECISIONS = ["approve", "reject"] as const;
 type Decision = (typeof DECISIONS)[number];
@@ -125,9 +130,10 @@ export async function assertIssueMatchesIntake(
   approvalRequestId: number,
   workItemId: number,
   deps: IssueCheckDeps,
+  kind: ApprovalRequestKind = "requirements",
 ): Promise<void> {
   const verdict = await checkIssueAgainstIntake(workItemId, deps);
-  const refusal = issueCheckRefusal(verdict, approvalRequestId);
+  const refusal = issueCheckRefusal(verdict, approvalRequestId, kind);
   if (refusal !== null) {
     throw new Error(refusal);
   }
@@ -181,6 +187,7 @@ export type ApprovalDecideDeps = {
   readonly assertIssueMatchesIntake: (
     approvalRequestId: number,
     workItemId: number,
+    kind: ApprovalRequestKind,
   ) => Promise<void>;
   readonly deriveApprover: () => string;
   readonly decideIfPending: (
@@ -244,6 +251,7 @@ export async function decideApproval(
       await deps.assertIssueMatchesIntake(
         approval_request_id,
         request.work_item_id,
+        request.kind,
       );
     }
     const recorded = await deps.decideIfPending(approval_request_id, {
@@ -287,14 +295,19 @@ export async function main(
   return decideApproval(
     {
       getApprovalRequest: (id) => getApprovalRequest(id),
-      assertIssueMatchesIntake: (requestId, workItemId) =>
-        assertIssueMatchesIntake(requestId, workItemId, {
-          getWorkItem: (id) => getWorkItem(id),
-          getToken: () => wmill.getVariable("f/factory/github_token"),
-          fetchFn: fetch,
-          warn: (message, fields) =>
-            logger("approval_decide").warn(message, fields),
-        }),
+      assertIssueMatchesIntake: (requestId, workItemId, kind) =>
+        assertIssueMatchesIntake(
+          requestId,
+          workItemId,
+          {
+            getWorkItem: (id) => getWorkItem(id),
+            getToken: () => wmill.getVariable("f/factory/github_token"),
+            fetchFn: fetch,
+            warn: (message, fields) =>
+              logger("approval_decide").warn(message, fields),
+          },
+          kind,
+        ),
       deriveApprover: () =>
         deriveApprover({
           WM_USERNAME: process.env.WM_USERNAME,
