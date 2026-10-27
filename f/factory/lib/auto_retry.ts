@@ -16,7 +16,8 @@
 // - 同じPRに別の終端でない`pr_fix`がある`pr_fix`は、再開すると一意インデックスに阻まれるので、
 //   候補にも比較交換にも入れない。阻まれた比較交換は失敗ではなく見送りとして数える。
 // - 同じ作業項目の自動の再開は、`AUTO_RETRY_MAX_RESTARTS`回までである。
-// - 要件が承認済みでないIssueと、`implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
+// - 実装フローで再開してよくない(要件定義が承認済みでない、または設計が有効で設計が承認済みでない)Issueと、
+//   `implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
 
 import {
   AUTO_RETRY_REASON_PREFIXES,
@@ -75,7 +76,7 @@ export type AutoRetryPlan = {
 
 /**
  * 再開先を決める。再開しない作業項目には`null`を返す。
- * 実装は、要件が承認済みで`implement_enabled`が有効なときだけ、実装フローで再開する。
+ * 実装は、実装フローで再開してよく(要件定義の承認と、設計が有効なら設計の承認がある)、`implement_enabled`が有効なときだけ、実装フローで再開する。
  * そうでなければ要件定義を作り直す再開になり、人が承認した要件を捨てかねない。
  */
 export function autoRetryPlan(
@@ -108,7 +109,7 @@ export type AutoRetryDeps = {
   readonly implementEnabled: boolean;
   /** 再開の候補を返す(`listAutoRetryCandidates`)。 */
   readonly listCandidates: () => Promise<readonly AutoRetryCandidate[]>;
-  /** Issueの要件が現在の`attempt`で承認済みか。 */
+  /** Issueを実装フローで再開してよいか。要件定義の承認と、設計が有効なら設計の承認がある。 */
   readonly isImplementReady: (
     candidate: AutoRetryCandidate,
   ) => Promise<boolean>;

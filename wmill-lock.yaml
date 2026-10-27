@@ -33,7 +33,7 @@ locks:
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: 5aa75b51fa92d650753b4a0b4e02d72f10d43ea7d4c69015c53df5ea4ecb6653
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
-  f/factory/lib/auto_retry: 34834eb034bbcbc76653528a3b66944271c58651753a4e1638d5414d68f1d3b3
+  f/factory/lib/auto_retry: bdea9a63c486c56f7fc444b625ffed6d944dcf7a3049511497d4493cf74965c3
   f/factory/lib/auto_retry_reasons: 6a2a29d8f0dd66b52bd8247f0e393afad81bf1c3164220080b2068af2f129076
   f/factory/lib/check_runner: b1f2652b764026ea58cb864cd5d9eba08c776daf3113d8491754e3edd8c81ab7
   f/factory/lib/check_sandbox: a0723a0bfa811613eaa3c720efc5ce5547bb9d2144ed88e214a10ded685e3696
