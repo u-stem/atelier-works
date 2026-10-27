@@ -13,12 +13,15 @@ import {
   FREEZE_MAX_ENTRIES,
   FREEZE_MAX_TTL_MS,
   type FreezeEntry,
+  type FreezeIo,
   type FreezeState,
   isActive,
+  mutateFreezeStateVia,
   parseFreezeState,
   parseWmillExcludes,
   placeDeployFreeze,
   placeFreeze,
+  readFreezeStateVia,
   releaseFreeze,
   removeFreezes,
   sanitizeForDisplay,
@@ -1065,5 +1068,111 @@ describe("sessionHolderFromBranch", () => {
 
   test("limits the length", () => {
     expect(sessionHolderFromBranch("a".repeat(300)).length).toBe(100);
+  });
+});
+
+describe("readFreezeStateVia and mutateFreezeStateVia", () => {
+  function io(
+    initial: string | null,
+    options: { readError?: Error } = {},
+  ): { io: FreezeIo; writes: string[] } {
+    const writes: string[] = [];
+    return {
+      writes,
+      io: {
+        now: () => NOW,
+        readVariable: async () => {
+          if (options.readError !== undefined) throw options.readError;
+          return initial;
+        },
+        writeVariable: async (text) => {
+          writes.push(text);
+        },
+      },
+    };
+  }
+
+  test("reads a variable that does not exist as an empty state", async () => {
+    const result = await readFreezeStateVia(io(null).io);
+    expect(result).toEqual({ ok: true, value: emptyFreezeState() });
+  });
+
+  test("reads the rows of the variable", async () => {
+    const text = serializeFreezeState({
+      ...emptyFreezeState(),
+      freezes: [entry()],
+    });
+    const result = await readFreezeStateVia(io(text).io);
+    expect(result.ok && result.value.freezes).toEqual([entry()]);
+  });
+
+  test("fails with the way to recover when the variable is corrupt", async () => {
+    const result = await readFreezeStateVia(io("not json").io);
+    expect(!result.ok && result.reason).toContain("freeze:reset");
+  });
+
+  test("fails when a row was created in the future", async () => {
+    const text = serializeFreezeState({
+      ...emptyFreezeState(),
+      freezes: [entry({ created_at: "2026-10-18T01:00:00.000Z" })],
+    });
+    const result = await readFreezeStateVia(io(text).io);
+    expect(result.ok).toBe(false);
+  });
+
+  test("fails with the reason when the variable cannot be read", async () => {
+    const result = await readFreezeStateVia(
+      io(null, { readError: new Error("api down") }).io,
+    );
+    expect(!result.ok && result.reason).toBe(
+      "could not read the freeze variable: api down",
+    );
+  });
+
+  test("writes the state that the operation returns", async () => {
+    const fake = io(null);
+    await mutateFreezeStateVia(fake.io, (state) => ({
+      ok: true,
+      value: { ...state, freezes: [entry()] },
+    }));
+    expect(fake.writes).toEqual([
+      serializeFreezeState({ ...emptyFreezeState(), freezes: [entry()] }),
+    ]);
+  });
+
+  test("hands the state that it read to the operation", async () => {
+    const text = serializeFreezeState({
+      ...emptyFreezeState(),
+      freezes: [entry()],
+    });
+    const seen: FreezeState[] = [];
+    await mutateFreezeStateVia(io(text).io, (state) => {
+      seen.push(state);
+      return { ok: false, reason: "no" };
+    });
+    expect(seen).toEqual([{ ...emptyFreezeState(), freezes: [entry()] }]);
+  });
+
+  test("writes nothing when the operation fails", async () => {
+    const fake = io(null);
+    await mutateFreezeStateVia(fake.io, () => ({ ok: false, reason: "no" }));
+    expect(fake.writes).toEqual([]);
+  });
+
+  test("returns the reason of the operation", async () => {
+    const result = await mutateFreezeStateVia(io(null).io, () => ({
+      ok: false,
+      reason: "no",
+    }));
+    expect(result).toEqual({ ok: false, reason: "no" });
+  });
+
+  test("writes nothing when the variable cannot be read", async () => {
+    const fake = io(null, { readError: new Error("api down") });
+    await mutateFreezeStateVia(fake.io, (state) => ({
+      ok: true,
+      value: state,
+    }));
+    expect(fake.writes).toEqual([]);
   });
 });

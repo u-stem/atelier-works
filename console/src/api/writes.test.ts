@@ -7,11 +7,13 @@ import {
   decideApproval,
   kickoffAudit,
   MAX_REASON_LENGTH,
+  placeHold,
   releaseFreeze,
   releaseHold,
   rerunJob,
   resolveNotice,
   retryWorkItem,
+  stopSchedule,
   submitManualIntake,
   updateConfig,
 } from "./writes.ts";
@@ -587,6 +589,101 @@ describe("updateConfig", () => {
   test("fails with invalid_response when the result has the wrong shape", async () => {
     const { fetchFn } = respondWith({ refused: false });
     expect(await failureOf(updateConfig(INPUT, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+});
+
+describe("placeHold", () => {
+  const PLACED = {
+    refused: false,
+    kind: "freeze",
+    id: "5e6f7a8b",
+    target: "f/factory/collect_github",
+    created_at: "2026-10-27T03:00:00.000Z",
+    expires_at: "2026-10-27T04:00:00.000Z",
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+  const INPUT = {
+    kind: "freeze",
+    target: "f/factory/collect_github",
+    minutes: 60,
+    reason: "check the workers",
+  } as const;
+
+  test("calls the place script with the kind, the target, the minutes and the reason", async () => {
+    const { fetchFn, calls } = respondWith(PLACED);
+    await placeHold(INPUT, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/console_hold_place",
+      body: {
+        kind: "freeze",
+        target: "f/factory/collect_github",
+        minutes: 60,
+        reason: "check the workers",
+      },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(PLACED);
+    expect(await placeHold(INPUT, { fetchFn })).toEqual(PLACED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const refusal = { refused: true, reason: "already_active" } as const;
+    const { fetchFn } = respondWith(refusal);
+    expect(await placeHold(INPUT, { fetchFn })).toEqual(refusal);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ refused: false });
+    expect(await failureOf(placeHold(INPUT, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+});
+
+describe("stopSchedule", () => {
+  const SCHEDULE = "f/factory/collect_github";
+  const STOPPED = {
+    refused: false,
+    schedule_path: SCHEDULE,
+    freeze_id: "0a1b2c3d",
+    enabled: false,
+    freeze_expires_at: "2026-10-27T05:00:00.000Z",
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+
+  test("calls the stop script with the schedule path only", async () => {
+    const { fetchFn, calls } = respondWith(STOPPED);
+    await stopSchedule(SCHEDULE, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/console_schedule_stop",
+      body: { schedule_path: SCHEDULE },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(STOPPED);
+    expect(await stopSchedule(SCHEDULE, { fetchFn })).toEqual(STOPPED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const refusal = {
+      refused: true,
+      reason: "too_early",
+      ready_at: "2026-10-27T03:07:00.000Z",
+    } as const;
+    const { fetchFn } = respondWith(refusal);
+    expect(await stopSchedule(SCHEDULE, { fetchFn })).toEqual(refusal);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ refused: false });
+    expect(await failureOf(stopSchedule(SCHEDULE, { fetchFn }))).toEqual({
       kind: "invalid_response",
     });
   });

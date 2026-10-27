@@ -428,6 +428,13 @@ const BOUND_PATH_CALLS: Readonly<
   },
 };
 
+/**
+ * パスをリテラルに固定する変数の呼び出し。凍結の変数だけを読み書きしてよい。
+ * `setVariable`は変数が無いときに作るので、秘密の変数として作らないよう、3番目の引数を`false`に固定する。
+ */
+const BOUND_VARIABLE_PATH = "f/factory/freezes";
+const BOUND_VARIABLE_CALLS = ["getVariable", "setVariable"] as const;
+
 /** `text`の`index`にある引用符で始まる文字列の、次の位置。閉じていなければ`undefined`。 */
 function skipQuoted(text: string, index: number): number | undefined {
   const quote = text[index];
@@ -678,6 +685,20 @@ export function sdkFindings(source: string): SdkFindings {
         boundArgumentsProblem(args, bound.path, bound.requestBody) !== undefined
       ) {
         problems.push(`${call} is not bound to the literal ${bound.path}`);
+      }
+    }
+  }
+  for (const name of BOUND_VARIABLE_CALLS) {
+    const opening = new RegExp(`(?<![\\w$])${name}\\s*\\(`, "g");
+    for (const match of code.matchAll(opening)) {
+      const args = callArguments(code, match.index + match[0].length - 1);
+      const parts = args === undefined ? undefined : splitTopLevel(args);
+      if (parts?.[0]?.trim() !== JSON.stringify(BOUND_VARIABLE_PATH)) {
+        problems.push(
+          `${name} is not bound to the literal ${BOUND_VARIABLE_PATH}`,
+        );
+      } else if (name === "setVariable" && parts[2]?.trim() !== "false") {
+        problems.push("setVariable may not create a secret variable");
       }
     }
   }

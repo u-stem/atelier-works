@@ -474,3 +474,80 @@ export function isConfigUpdateResult(
     isActionAudit(value.action_audit)
   );
 }
+
+/**
+ * 保留と凍結を置けなかった理由。`f/factory/console_hold_place.ts`の`PLACE_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。画面は日本語の固定文に直す(`lib/writeNotices.ts`)。
+ */
+export const HOLD_PLACE_REFUSAL_REASONS = [
+  "invalid_kind",
+  "invalid_target",
+  "invalid_minutes",
+  "invalid_reason",
+  "target_not_allowed",
+  "already_active",
+  "other_holder_active",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type HoldPlaceRefusalReason =
+  (typeof HOLD_PLACE_REFUSAL_REASONS)[number];
+
+export type HoldPlaceResult =
+  | { readonly refused: true; readonly reason: HoldPlaceRefusalReason }
+  | {
+      readonly refused: false;
+      readonly kind: "merge" | "deploy" | "freeze";
+      readonly id: string;
+      readonly target: string;
+      readonly created_at: string;
+      readonly expires_at: string;
+      readonly verified: boolean;
+      readonly action_audit: ActionAudit;
+    };
+
+export function isHoldPlaceResult(_value: unknown): _value is HoldPlaceResult {
+  return false;
+}
+
+/**
+ * scheduleを止められなかった理由。`f/factory/console_schedule_stop.ts`の`STOP_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。
+ */
+export const SCHEDULE_STOP_REFUSAL_REASONS = [
+  "not_allowed",
+  "no_freeze",
+  "other_holder_freeze",
+  "too_early",
+  "self_update_running",
+  "schedule_changed",
+  "already_stopped",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type ScheduleStopRefusalReason =
+  (typeof SCHEDULE_STOP_REFUSAL_REASONS)[number];
+
+export type ScheduleStopResult =
+  | {
+      readonly refused: true;
+      readonly reason: ScheduleStopRefusalReason;
+      readonly ready_at: string | null;
+    }
+  | {
+      readonly refused: false;
+      readonly schedule_path: string;
+      readonly freeze_id: string;
+      readonly enabled: boolean;
+      readonly freeze_expires_at: string;
+      readonly verified: boolean;
+      readonly action_audit: ActionAudit;
+    };
+
+export function isScheduleStopResult(
+  _value: unknown,
+): _value is ScheduleStopResult {
+  return false;
+}

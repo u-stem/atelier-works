@@ -15,6 +15,7 @@ import {
   type AuditKickoffResult,
   type ConfigUpdateResult,
   type FreezeReleaseResult,
+  type HoldPlaceResult,
   type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
@@ -31,6 +32,7 @@ import {
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
+  type ScheduleStopResult,
 } from "./guards/writeResults.ts";
 import {
   type RunScriptOptions,
@@ -262,4 +264,30 @@ export function updateConfig(
     isConfigUpdateResult,
     options,
   );
+}
+
+export type HoldPlaceInput = {
+  readonly kind: "merge" | "deploy" | "freeze";
+  /** mergeはowner/repo、freezeはscheduleのパス。deployは空。 */
+  readonly target: string;
+  readonly minutes: number;
+  readonly reason: string;
+};
+
+export function placeHold(
+  _input: HoldPlaceInput,
+  _options: RunScriptOptions = {},
+): Promise<HoldPlaceResult> {
+  return Promise.resolve({ refused: true, reason: "invalid_kind" });
+}
+
+export function stopSchedule(
+  _schedulePath: string,
+  _options: RunScriptOptions = {},
+): Promise<ScheduleStopResult> {
+  return Promise.resolve({
+    refused: true,
+    reason: "not_allowed",
+    ready_at: null,
+  });
 }

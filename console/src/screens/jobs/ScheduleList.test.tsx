@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
@@ -83,9 +84,11 @@ function render(
     <ScheduleList schedules={schedules} holds={holds} />
   );
   return renderToStaticMarkup(
-    <TooltipProvider>
-      <MemoryRouter>{element}</MemoryRouter>
-    </TooltipProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <TooltipProvider>
+        <MemoryRouter>{element}</MemoryRouter>
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -338,5 +341,91 @@ describe("ScheduleList lead", () => {
     expect(render(freshQuery(snapshot([schedule()])))).not.toContain(
       "自動では更新しません",
     );
+  });
+});
+
+describe("ScheduleList stop actions", () => {
+  function frozenAt(createdAt: string): HoldsSnapshot {
+    return {
+      holds: { ok: true, rows: [] },
+      freezes: {
+        ok: true,
+        schedule: [
+          {
+            id: "a1b2c3d4",
+            target: "f/factory/collect_github",
+            reason: "r",
+            holder_kind: "human",
+            holder: "human",
+            created_at: createdAt,
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+        ],
+        deploy: [],
+      },
+    };
+  }
+
+  test("offers the preparation for a schedule that can be stopped and has no freeze", () => {
+    expect(render(freshQuery(snapshot([schedule()])))).toMatch(
+      />止める準備<\/button>/,
+    );
+  });
+
+  test("offers nothing for the schedule that applies the deployment", () => {
+    expect(
+      render(
+        freshQuery(
+          snapshot([
+            schedule({
+              path: "f/factory/self_update",
+              script_path: "f/factory/self_update",
+            }),
+          ]),
+        ),
+      ),
+    ).not.toContain("止める準備");
+  });
+
+  test("offers nothing for a schedule that is already disabled", () => {
+    expect(
+      render(freshQuery(snapshot([schedule({ enabled: false })]))),
+    ).not.toContain("止める準備");
+  });
+
+  test("offers nothing while the freezes could not be read", () => {
+    expect(
+      render(
+        freshQuery(snapshot([schedule()])),
+        freshQuery<HoldsSnapshot>({
+          holds: { ok: true, rows: [] },
+          freezes: { ok: false, reason: "broken" },
+        }),
+      ),
+    ).not.toContain("止める準備");
+  });
+
+  test("waits for the seven minutes after a freeze that was just placed", () => {
+    const html = render(
+      freshQuery(snapshot([schedule()])),
+      freshQuery(frozenAt(new Date(Date.now() - 60_000).toISOString())),
+    );
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>止める<\/button>/);
+  });
+
+  test("offers the stop once the seven minutes have passed", () => {
+    const html = render(
+      freshQuery(snapshot([schedule()])),
+      freshQuery(frozenAt(new Date(Date.now() - 600_000).toISOString())),
+    );
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>止める<\/button>/);
+  });
+
+  test("does not offer the preparation again under a freeze", () => {
+    const html = render(
+      freshQuery(snapshot([schedule()])),
+      freshQuery(frozenAt(new Date(Date.now() - 600_000).toISOString())),
+    );
+    expect(html).not.toContain("止める準備");
   });
 });

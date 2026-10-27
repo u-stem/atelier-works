@@ -1567,6 +1567,35 @@ describe("console job write files", () => {
   });
 });
 
+// 保留と凍結を置くscriptと、scheduleを止めるscriptは、書き換えられると、置ける期限や対象、止められるscheduleが広がる。
+// 止められるscheduleの許可表を固定するテストも、同じ理由で守る。
+describe("console hold place and schedule stop files", () => {
+  const PATHS = [
+    "f/factory/console_hold_place.ts",
+    "f/factory/console_hold_place.script.yaml",
+    "f/factory/console_schedule_stop.ts",
+    "f/factory/console_schedule_stop.script.yaml",
+    "tests/scripts/console_hold_place.test.ts",
+    "tests/scripts/console_schedule_stop.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS or a prefix lists %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  // 凍結の変数を読み書きする共通の部品は、スケジュールの凍結を扱うCLIと自己更新も読み込むので、すでに守っている。
+  test.each(["f/factory/lib/freezes.ts", "tests/lib/freezes.test.ts"])(
+    "matchesForbiddenPath lists the shared freeze file %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+});
+
 // 失敗した定期ジョブを再実行するscriptと、設定を変更するscriptは、書き換えられると、再実行できる定期処理が増えたり、
 // 変更できる設定の項目と向きが広がったりする。許可表を固定するテストも、同じ理由で守る。
 describe("console job rerun and config update files", () => {

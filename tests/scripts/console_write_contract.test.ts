@@ -13,17 +13,21 @@ import {
   CONFIG_UPDATE_REFUSAL_REASONS,
   type ConfigUpdateResult,
   type FreezeReleaseResult,
+  HOLD_PLACE_REFUSAL_REASONS,
+  type HoldPlaceResult,
   type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
   isConfigUpdateResult,
   isFreezeReleaseResult,
+  isHoldPlaceResult,
   isHoldReleaseResult,
   isJobCancelResult,
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  isScheduleStopResult,
   JOB_CANCEL_REFUSAL_REASONS,
   JOB_RERUN_REFUSAL_REASONS,
   type JobCancelResult,
@@ -33,6 +37,8 @@ import {
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
+  SCHEDULE_STOP_REFUSAL_REASONS,
+  type ScheduleStopResult,
 } from "../../console/src/api/guards/writeResults.ts";
 import {
   type FetchLike,
@@ -44,8 +50,10 @@ import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import * as configUpdate from "../../f/factory/console_config_update.ts";
+import * as holdPlace from "../../f/factory/console_hold_place.ts";
 import * as jobCancel from "../../f/factory/console_job_cancel.ts";
 import * as jobRerun from "../../f/factory/console_job_rerun.ts";
+import * as scheduleStop from "../../f/factory/console_schedule_stop.ts";
 import * as freezeRelease from "../../f/factory/freeze_release.ts";
 import * as holdRelease from "../../f/factory/hold_release.ts";
 import {
@@ -69,7 +77,9 @@ type WriteScript =
   | "freeze_release"
   | "console_job_cancel"
   | "console_job_rerun"
-  | "console_config_update";
+  | "console_config_update"
+  | "console_hold_place"
+  | "console_schedule_stop";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -82,6 +92,8 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "console_job_cancel",
   "console_job_rerun",
   "console_config_update",
+  "console_hold_place",
+  "console_schedule_stop",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -126,6 +138,27 @@ function rerunBase() {
     refused: false,
     job_id: JOB,
     script_path: "f/factory/collect_github",
+  };
+}
+function placeBase() {
+  return {
+    refused: false,
+    kind: "merge",
+    id: "31",
+    target: "octo-owner/widgets",
+    created_at: "2026-10-27T03:00:00.000Z",
+    expires_at: "2026-10-27T04:00:00.000Z",
+    verified: true,
+  };
+}
+function stopBase() {
+  return {
+    refused: false,
+    schedule_path: "f/factory/collect_github",
+    freeze_id: "0a1b2c3d",
+    enabled: false,
+    freeze_expires_at: "2026-10-27T05:00:00.000Z",
+    verified: true,
   };
 }
 function configBase() {
@@ -212,10 +245,22 @@ const WRAPPER_CALLS: Readonly<
       { item: "daily_budget_usd", expected: 50, next: 20 },
       { fetchFn },
     ),
+  console_hold_place: (fetchFn) =>
+    consoleWrites.placeHold(
+      {
+        kind: "merge",
+        target: "octo-owner/widgets",
+        minutes: 60,
+        reason: "check the workers",
+      },
+      { fetchFn },
+    ),
+  console_schedule_stop: (fetchFn) =>
+    consoleWrites.stopSchedule("f/factory/collect_github", { fetchFn }),
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the ten write scripts", () => {
+  test("holds the five read scripts and the twelve write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -228,12 +273,12 @@ describe("allowlist", () => {
     );
   });
 
-  test("has no way to place a hold", () => {
+  test("places holds only through the one place script", () => {
     expect(
       [...Object.keys(SCRIPT_PATHS), ...Object.values(SCRIPT_PATHS)].filter(
         (text) => /place/i.test(text),
       ),
-    ).toEqual([]);
+    ).toEqual(["console_hold_place", "f/factory/console_hold_place"]);
   });
 
   test.each(Object.entries(SCRIPT_PATHS))(
@@ -357,6 +402,36 @@ describe("what the typed calls send", () => {
   test("console_config_update requires all three inputs", async () => {
     const { required } = await schemaOf(SCRIPT_PATHS.console_config_update);
     expect([...required].sort()).toEqual(["expected", "item", "next"]);
+  });
+
+  test("console_hold_place takes the kind, the target, the minutes and the reason, and no operator", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_hold_place);
+    expect([...properties].sort()).toEqual([
+      "kind",
+      "minutes",
+      "reason",
+      "target",
+    ]);
+  });
+
+  test("console_hold_place requires all four inputs", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_hold_place);
+    expect([...required].sort()).toEqual([
+      "kind",
+      "minutes",
+      "reason",
+      "target",
+    ]);
+  });
+
+  test("console_schedule_stop takes only the schedule", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_schedule_stop);
+    expect(properties).toEqual(["schedule_path"]);
+  });
+
+  test("console_schedule_stop requires the schedule", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_schedule_stop);
+    expect(required).toEqual(["schedule_path"]);
   });
 
   test("console_holds takes no input", async () => {
@@ -895,6 +970,114 @@ describe("what the scripts return", () => {
     ]);
   });
 
+  function placePorts(): holdPlace.PlacePorts {
+    let variable = JSON.stringify({ version: 1, freezes: [] });
+    return {
+      now: () => new Date("2026-10-27T03:00:00.000Z"),
+      deriveActor: () => "operator",
+      listActiveHolds: () => Promise.resolve({ ok: true, value: [] }),
+      placeHold: () => Promise.resolve({ ok: true, value: { id: 31 } }),
+      freeze: {
+        now: () => new Date("2026-10-27T03:00:00.000Z"),
+        readVariable: () => Promise.resolve(variable),
+        writeVariable: (text) => {
+          variable = text;
+          return Promise.resolve();
+        },
+      },
+      newFreezeId: () => "5e6f7a8b",
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  test("a placed freeze passes the guard", async () => {
+    const result = await holdPlace.placeFromConsole(
+      "freeze",
+      "f/factory/collect_github",
+      60,
+      "check the workers",
+      placePorts(),
+    );
+    expect(isHoldPlaceResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a placed deploy hold passes the guard", async () => {
+    const result = await holdPlace.placeFromConsole(
+      "deploy",
+      "",
+      60,
+      "check the workers",
+      placePorts(),
+    );
+    expect(isHoldPlaceResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a placement refused by the real check passes the guard", async () => {
+    const result = await holdPlace.placeFromConsole(
+      "merge",
+      "not a repo",
+      60,
+      "check the workers",
+      placePorts(),
+    );
+    expect(isHoldPlaceResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test.each([...holdPlace.PLACE_REFUSAL_REASONS])(
+    "the place refusal %s passes the guard",
+    (reason) => {
+      expect(isHoldPlaceResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("the console place refusal reasons are the backend ones", () => {
+    expect([...HOLD_PLACE_REFUSAL_REASONS]).toEqual([
+      ...holdPlace.PLACE_REFUSAL_REASONS,
+    ]);
+  });
+
+  test("a place result that names a kind it does not know fails the guard", () => {
+    expect(isHoldPlaceResult({ ...placeBase(), kind: "claim" })).toBe(false);
+  });
+
+  test.each([...scheduleStop.STOP_REFUSAL_REASONS])(
+    "the stop refusal %s passes the guard",
+    (reason) => {
+      expect(
+        isScheduleStopResult({ refused: true, reason, ready_at: null }),
+      ).toBe(true);
+    },
+  );
+
+  test("a stop refusal that says when the stop becomes possible passes the guard", () => {
+    expect(
+      isScheduleStopResult({
+        refused: true,
+        reason: "too_early",
+        ready_at: "2026-10-27T03:07:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  test("the console stop refusal reasons are the backend ones", () => {
+    expect([...SCHEDULE_STOP_REFUSAL_REASONS]).toEqual([
+      ...scheduleStop.STOP_REFUSAL_REASONS,
+    ]);
+  });
+
+  test("a stop refusal without the time fails the guard", () => {
+    expect(isScheduleStopResult({ refused: true, reason: "too_early" })).toBe(
+      false,
+    );
+  });
+
+  test("a stop result with a freeze that is not an id fails the guard", () => {
+    expect(isScheduleStopResult({ ...stopBase(), freeze_id: 3 })).toBe(false);
+  });
+
   test("a refusal from the real check passes the guard", async () => {
     const result = await jobCancel.cancelJobFromConsole(
       JOB,
@@ -911,6 +1094,8 @@ describe("what the scripts return", () => {
     ["console_job_cancel", isJobCancelResult, cancelBase()],
     ["console_job_rerun", isJobRerunResult, rerunBase()],
     ["console_config_update", isConfigUpdateResult, configBase()],
+    ["console_hold_place", isHoldPlaceResult, placeBase()],
+    ["console_schedule_stop", isScheduleStopResult, stopBase()],
   ] as const)(
     "%s's result with a failed action audit passes the guard",
     (_name, guard, base) => {
@@ -926,6 +1111,8 @@ describe("what the scripts return", () => {
     ["console_job_cancel", isJobCancelResult, cancelBase()],
     ["console_job_rerun", isJobRerunResult, rerunBase()],
     ["console_config_update", isConfigUpdateResult, configBase()],
+    ["console_hold_place", isHoldPlaceResult, placeBase()],
+    ["console_schedule_stop", isScheduleStopResult, stopBase()],
   ] as const)(
     "%s's result with an action audit it does not know fails the guard",
     (_name, guard, base) => {
@@ -999,6 +1186,16 @@ describe("types", () => {
 
   test("the console job rerun result is the backend result", () => {
     const equal: Equal<JobRerunResult, jobRerun.JobRerunResult> = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console hold place result is the backend result", () => {
+    const equal: Equal<HoldPlaceResult, holdPlace.PlaceResult> = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console schedule stop result is the backend result", () => {
+    const equal: Equal<ScheduleStopResult, scheduleStop.StopResult> = true;
     expect(equal).toBe(true);
   });
 
@@ -1103,7 +1300,7 @@ describe("api boundary", () => {
 // 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
 describe("console release script names", () => {
   const NAME =
-    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|console_job_cancel|console_job_rerun|console_config_update)(?![A-Za-z0-9_])/;
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop)(?![A-Za-z0-9_])/;
   const MAY_NAME_THEM = [
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",

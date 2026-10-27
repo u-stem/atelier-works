@@ -10,6 +10,7 @@ import type {
   ConfigUpdateRefusalReason,
   ConfigUpdateResult,
   FreezeReleaseResult,
+  HoldPlaceResult,
   HoldReleaseResult,
   JobCancelRefusalReason,
   JobCancelResult,
@@ -18,6 +19,7 @@ import type {
   JobRerunResult,
   NoticeResolveResult,
   RetryWorkItemResult,
+  ScheduleStopResult,
 } from "../api/guards/writeResults.ts";
 import { workItemStatusLabel } from "./labels.ts";
 import { safeText } from "./safeText.ts";
@@ -347,6 +349,16 @@ export function describeConfigUpdateResult(
       ? `${item}を止めました。`
       : `${item}を${String(result.before)}から${String(result.after)}に下げました。`;
   return noteActionAudit({ tone: "success", message }, result.action_audit);
+}
+
+export function describeHoldPlaceResult(_result: HoldPlaceResult): WriteNotice {
+  return { tone: "info", message: "" };
+}
+
+export function describeScheduleStopResult(
+  _result: ScheduleStopResult,
+): WriteNotice {
+  return { tone: "info", message: "" };
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

@@ -4,11 +4,13 @@ import {
   describeAuditResult,
   describeConfigUpdateResult,
   describeFreezeReleaseResult,
+  describeHoldPlaceResult,
   describeHoldReleaseResult,
   describeJobCancelResult,
   describeJobRerunResult,
   describeNoticeResult,
   describeRetryResult,
+  describeScheduleStopResult,
   releaseNotice,
   STALE_LIST_NOTICE,
 } from "./writeNotices.ts";
@@ -648,6 +650,177 @@ describe("describeConfigUpdateResult", () => {
   test("reports a refusal as information, not as a failure", () => {
     expect(
       describeConfigUpdateResult({ refused: true, reason: "conflict" }).tone,
+    ).toBe("info");
+  });
+});
+
+describe("describeHoldPlaceResult", () => {
+  const PLACED = {
+    refused: false,
+    kind: "merge",
+    id: "31",
+    target: "octo-owner/widgets",
+    created_at: "2026-10-27T03:00:00.000Z",
+    expires_at: "2026-10-27T04:00:00.000Z",
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+
+  test("reports a merge hold as a success", () => {
+    expect(describeHoldPlaceResult(PLACED)).toEqual({
+      tone: "success",
+      message: "マージの保留を置きました。",
+    });
+  });
+
+  test("reports a deploy hold as a success", () => {
+    expect(describeHoldPlaceResult({ ...PLACED, kind: "deploy" })).toEqual({
+      tone: "success",
+      message: "deployの保留を置きました。",
+    });
+  });
+
+  test("reports a freeze of a schedule that cannot be stopped as a success", () => {
+    expect(
+      describeHoldPlaceResult({
+        ...PLACED,
+        kind: "freeze",
+        target: "f/factory/cleanup_db",
+      }),
+    ).toEqual({ tone: "success", message: "凍結を置きました。" });
+  });
+
+  test("tells when a stoppable schedule can be stopped", () => {
+    expect(
+      describeHoldPlaceResult({
+        ...PLACED,
+        kind: "freeze",
+        target: "f/factory/collect_github",
+      }),
+    ).toEqual({
+      tone: "success",
+      message: "凍結を置きました。10/27 12:07 以降に、scheduleを止められます。",
+    });
+  });
+
+  test("warns when the read back did not show the hold", () => {
+    const notice = describeHoldPlaceResult({ ...PLACED, verified: false });
+    expect([notice.tone, notice.message]).toEqual([
+      "warning",
+      "置きましたが、読み直しで確認できませんでした。一覧を取り直して確かめてください。",
+    ]);
+  });
+
+  test("does not tell the time of the stop when the freeze is not confirmed", () => {
+    const notice = describeHoldPlaceResult({
+      ...PLACED,
+      kind: "freeze",
+      target: "f/factory/collect_github",
+      verified: false,
+    });
+    expect(notice.message).not.toContain("止められます");
+  });
+
+  test("warns when the record could not be written", () => {
+    expect(
+      describeHoldPlaceResult({ ...PLACED, action_audit: "failed" }).tone,
+    ).toBe("warning");
+  });
+
+  test.each([
+    ["invalid_kind", "種類"],
+    ["invalid_target", "対象"],
+    ["invalid_minutes", "期限"],
+    ["invalid_reason", "理由"],
+    ["target_not_allowed", "置けない対象"],
+    ["already_active", "すでに"],
+    ["other_holder_active", "別の主体"],
+    ["actor_unknown", "操作者を確認できない"],
+    ["audit_unavailable", "操作の記録を残せない"],
+  ] as const)("explains the refusal %s", (reason, phrase) => {
+    expect(
+      describeHoldPlaceResult({ refused: true, reason }).message,
+    ).toContain(phrase);
+  });
+
+  test("reports a refusal as information, not as a failure", () => {
+    expect(
+      describeHoldPlaceResult({ refused: true, reason: "already_active" }).tone,
+    ).toBe("info");
+  });
+});
+
+describe("describeScheduleStopResult", () => {
+  const STOPPED = {
+    refused: false,
+    schedule_path: "f/factory/collect_github",
+    freeze_id: "0a1b2c3d",
+    enabled: false,
+    freeze_expires_at: "2026-10-27T05:00:00.000Z",
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+
+  test("reports the stop and when the schedule comes back", () => {
+    expect(describeScheduleStopResult(STOPPED)).toEqual({
+      tone: "success",
+      message:
+        "scheduleを止めました。凍結が終わる10/27 14:00以降の自己更新の追従で、有効に戻ります。",
+    });
+  });
+
+  test("warns when the schedule still reads as enabled", () => {
+    const notice = describeScheduleStopResult({
+      ...STOPPED,
+      enabled: true,
+      verified: false,
+    });
+    expect([notice.tone, notice.message]).toEqual([
+      "warning",
+      "止める操作をしましたが、読み直したscheduleがまだ有効です。Windmillで確かめてください。",
+    ]);
+  });
+
+  test("warns when the record could not be written", () => {
+    expect(
+      describeScheduleStopResult({ ...STOPPED, action_audit: "failed" }).tone,
+    ).toBe("warning");
+  });
+
+  test("tells when the stop becomes possible after a refusal for being early", () => {
+    expect(
+      describeScheduleStopResult({
+        refused: true,
+        reason: "too_early",
+        ready_at: "2026-10-27T03:07:00.000Z",
+      }).message,
+    ).toContain("10/27 12:07");
+  });
+
+  test.each([
+    ["not_allowed", "止められない"],
+    ["no_freeze", "凍結がありません"],
+    ["other_holder_freeze", "ローカルのセッション"],
+    ["too_early", "まだ止められません"],
+    ["self_update_running", "自己更新"],
+    ["schedule_changed", "定義が変わった"],
+    ["already_stopped", "すでに"],
+    ["actor_unknown", "操作者を確認できない"],
+    ["audit_unavailable", "操作の記録を残せない"],
+  ] as const)("explains the refusal %s", (reason, phrase) => {
+    expect(
+      describeScheduleStopResult({ refused: true, reason, ready_at: null })
+        .message,
+    ).toContain(phrase);
+  });
+
+  test("reports a refusal as information, not as a failure", () => {
+    expect(
+      describeScheduleStopResult({
+        refused: true,
+        reason: "no_freeze",
+        ready_at: null,
+      }).tone,
     ).toBe("info");
   });
 });

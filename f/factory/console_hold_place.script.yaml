@@ -1,0 +1,35 @@
+summary: '[OP-2-9] 保留と凍結を置く'
+description: Factory
+  Consoleから、マージの保留、deployの保留、scheduleの凍結を1件置きます。置く主体は人に固定し、操作者は実行したユーザーから決まります。期限は分で受け、マージの保留とscheduleの凍結は24時間、deployの保留は120分を超えられません。理由は必須です。別の主体が置いた有効な同種の行があるときは置きません。操作の前に記録を残し、残せなければ置きません。置いた後に読み直して返します。
+lock: '!inline f/factory/console_hold_place.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _kind:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _minutes:
+      type: number
+      description: ''
+      default: null
+    _reason:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _target:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - _kind
+    - _target
+    - _minutes
+    - _reason
+tag: console
+timeout: 30

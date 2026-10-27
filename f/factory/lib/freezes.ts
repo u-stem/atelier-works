@@ -80,6 +80,17 @@ function fail<T>(reason: string): Outcome<T> {
   return { ok: false, reason };
 }
 
+/**
+ * 変数の読み書きの入出力。実体は呼び出し側が渡す。
+ * `freeze_apply.ts`の`FreezePorts`と同じ形で、ファイルを読む部品を取り込まずに使えるよう、このファイルにも持つ。
+ */
+export type FreezeIo = {
+  /** 変数の値。変数が無いと確かめられたときだけ`null`を返す。読めなければ例外を投げる。 */
+  readonly readVariable: () => Promise<string | null>;
+  readonly writeVariable: (text: string) => Promise<void>;
+  readonly now: () => Date;
+};
+
 export function emptyFreezeState(): FreezeState {
   return { version: 1, freezes: [], deploy_freezes: [] };
 }
@@ -593,4 +604,21 @@ export function sessionHolderFromBranch(branch: string): string {
   const cleaned = branch.trim().replace(/[^A-Za-z0-9._/-]/g, "-");
   const name = cleaned.length === 0 ? "detached" : cleaned;
   return `session:${name}`.slice(0, HOLDER_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// 変数の読み書き(入出力は注入する)
+// ---------------------------------------------------------------------------
+
+export async function readFreezeStateVia(
+  _io: FreezeIo,
+): Promise<Outcome<FreezeState>> {
+  return fail("not implemented");
+}
+
+export async function mutateFreezeStateVia(
+  _io: FreezeIo,
+  _operation: (state: FreezeState, now: Date) => Outcome<FreezeState>,
+): Promise<Outcome<FreezeState>> {
+  return fail("not implemented");
 }

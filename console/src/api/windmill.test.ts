@@ -69,6 +69,8 @@ describe("SCRIPT_PATHS", () => {
       console_job_cancel: "f/factory/console_job_cancel",
       console_job_rerun: "f/factory/console_job_rerun",
       console_config_update: "f/factory/console_config_update",
+      console_hold_place: "f/factory/console_hold_place",
+      console_schedule_stop: "f/factory/console_schedule_stop",
     });
   });
 });
@@ -89,6 +91,8 @@ describe("isScriptName", () => {
     "console_job_cancel",
     "console_job_rerun",
     "console_config_update",
+    "console_hold_place",
+    "console_schedule_stop",
   ])("accepts the allowed name %s", (name) => {
     expect(isScriptName(name)).toBe(true);
   });
