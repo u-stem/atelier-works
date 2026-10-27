@@ -191,7 +191,7 @@ export function buildImplementContext(
     requirements_diagrams: input.draft.diagrams,
     requirements_doc_dir: input.draft.doc_dir,
     requirements_doc_hash: input.draft.doc_hash,
-    design_markdown: null,
+    design_markdown: input.designMarkdown,
     requirements_console_url: buildConsoleUrl(
       input.config.windmill_public_url,
       { work_item_id: workItem.id, attempt: input.draft.attempt },
@@ -580,7 +580,7 @@ export async function main(
       expectedHeadSha,
       worktreeGitPointer,
       existingPr,
-      designMarkdown: null,
+      designMarkdown: gate.kind === "pass" ? gate.markdown : null,
       startedAt,
       config,
     }),

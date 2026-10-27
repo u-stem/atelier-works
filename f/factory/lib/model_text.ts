@@ -34,73 +34,148 @@ export function isAllowedCharacter(char: string): boolean {
   return !FORMAT_CHARACTER_PATTERN.test(char);
 }
 
+/** `sanitizeModelTextDetailed`の結果。 */
+export type SanitizedModelText = {
+  /** 整えた本文。長さの上限では切っていない。 */
+  readonly text: string;
+  /** 整えた本文のコードポイント数。 */
+  readonly chars: number;
+  /** 秘密情報をマスクしたか(元の文字列と影の文字列のどちらでも)。 */
+  readonly masked: boolean;
+  /** 見えない文字や結合文字を落とした影の文字列をマスクした結果を、保存する文字列にしたか。 */
+  readonly dropped_combining: boolean;
+};
+
 /**
  * Claudeの出力の文字列を、保存してよい形にする。信頼できない入力を読んだClaudeの出力で、DBと次の工程に渡るため。
- * 制御文字(NULを含む。PostgreSQLのtextとjsonbが拒む)と書式文字を除き、秘密情報をマスクしてから、コードポイントの途中で切らずに`maxChars`に収める。
- * 制御文字と書式文字を先に除くのは、秘密情報の途中に挟まれた見えない文字でマスクをすり抜けさせないためで、
- * マスクを先に行うのは、切った末尾に秘密情報の一部が残らないようにするためである。
+ * 制御文字(NULを含む。PostgreSQLのtextとjsonbが拒む)と書式文字を除き、秘密情報をマスクする。長さの上限では切らない。
+ * 制御文字と書式文字を先に除くのは、秘密情報の途中に挟まれた見えない文字でマスクをすり抜けさせないためである。
  *
  * 結合文字や異体字セレクタは、日本語の濁点・半濁点の結合や異体字列に使うので、保存する文字列からは除かない。
  * 代わりに、それらを除いた「影」の文字列にマスクをかけ、影に秘密情報があれば、影をマスクした結果を保存する。
  * そのとき、結合文字などは保存する文字列から落ちる。影に秘密情報が無ければ、元の文字列をマスクして保存する。
  * 限界として、見える区切り文字(空白、ハイフン、記号)を秘密情報の途中に挟む意図的な難読化は、マスクでは止められない。
  */
-export function sanitizeModelText(text: string, maxChars: number): string {
+export function sanitizeModelTextDetailed(text: string): SanitizedModelText {
   const cleaned = Array.from(text).filter(isAllowedCharacter).join("");
   const shadow = Array.from(cleaned)
     .filter((char) => !INVISIBLE_PATTERN.test(char))
     .join("");
   const maskedShadow = maskSecrets(shadow);
-  const points = Array.from(
-    maskedShadow !== shadow ? maskedShadow : maskSecrets(cleaned),
-  );
+  const shadowHidSecret = maskedShadow !== shadow;
+  const maskedCleaned = shadowHidSecret ? maskedShadow : maskSecrets(cleaned);
+  return {
+    text: maskedCleaned,
+    chars: Array.from(maskedCleaned).length,
+    masked: shadowHidSecret || maskedCleaned !== cleaned,
+    dropped_combining: shadowHidSecret && shadow !== cleaned,
+  };
+}
+
+/**
+ * Claudeの出力の文字列を、保存してよい形にして、コードポイントの途中で切らずに`maxChars`に収める。
+ * 整え方は`sanitizeModelTextDetailed`と同じで、マスクを先に行うのは、切った末尾に秘密情報の一部が残らないようにするためである。
+ */
+export function sanitizeModelText(text: string, maxChars: number): string {
+  const points = Array.from(sanitizeModelTextDetailed(text).text);
   return points.length <= maxChars
     ? points.join("")
     : points.slice(0, maxChars).join("");
 }
 
-/** 実装に渡す設計書の上限(コードポイント数)。 */
-export const DESIGN_FOR_IMPLEMENT_MAX_CHARS = 0;
+/**
+ * 実装に渡す設計書の長さの上限(コードポイント数)。
+ * 設計書の検査(`requirements_template.ts`の`MAX_DOC_CHARS`)と同じ値で、
+ * 正しく生成された設計書は上限以下なので、通常は切れない。この部品が`requirements_template.ts`に依存しないよう、値を持つ。
+ */
+export const DESIGN_FOR_IMPLEMENT_MAX_CHARS = 8000;
 
-/** `sanitizeModelTextDetailed`の結果。 */
-export type SanitizedModelText = {
+/** 切り詰めた設計書の末尾に足す行。 */
+const DESIGN_TRUNCATED_MARK = "[the design was truncated]";
+
+/** HTMLのコメント。閉じていなければ末尾まで。 */
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?(?:-->|$)/g;
+
+/** `script`と`style`の要素。中身を含み、閉じていなければ末尾まで。 */
+const HTML_RAW_TEXT_ELEMENT_PATTERN =
+  /<(script|style)\b[\s\S]*?(?:<\/\1[^>]*>|$)/gi;
+
+/** 開きタグ、閉じタグ、宣言(`<!DOCTYPE`、`<![CDATA[`)。`<`を含めないので、入れ子にして隠したタグも1つずつ除ける。 */
+const HTML_TAG_PATTERN = /<\/?[A-Za-z][^<>]*>|<![A-Za-z[][^<>]*>/g;
+
+/**
+ * Markdownから、承認画面が描かないHTMLの要素を除く。除いた要素の数も返す。
+ * 除くのは、コメント(閉じていない`<!--`は末尾まで)、`script`と`style`の要素(中身を含む)、
+ * ほかの生のHTMLのタグ(`<`と英字で始まる開きタグ、閉じタグ、宣言)である。
+ * 人が見ていない内容を、次の工程に渡さないためである。
+ * 除いた結果に新しい要素ができることがあるので(`<!<!-- x -->-- y -->`)、変わらなくなるまで繰り返す。
+ * 1回ごとに文字列が短くなるので、必ず終わる。
+ */
+function stripHtmlElements(markdown: string): {
   readonly text: string;
-  readonly chars: number;
-  readonly masked: boolean;
-  readonly dropped_combining: boolean;
-};
-
-/** `sanitizeModelText`と同じ処理で、切る前の本文と、何が変わったかを返す。 */
-export function sanitizeModelTextDetailed(text: string): SanitizedModelText {
-  void text;
-  return { text: "", chars: 0, masked: false, dropped_combining: false };
+  readonly count: number;
+} {
+  let text = markdown;
+  let count = 0;
+  const patterns = [
+    HTML_COMMENT_PATTERN,
+    HTML_RAW_TEXT_ELEMENT_PATTERN,
+    HTML_TAG_PATTERN,
+  ];
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const pattern of patterns) {
+      text = text.replace(pattern, () => {
+        count += 1;
+        changed = true;
+        return "";
+      });
+    }
+  }
+  return { text, count };
 }
 
 /** `normalizeDesignForImplement`の結果。 */
 export type NormalizedDesign = {
+  /** 実装に渡す本文。切ったときは末尾に印の行がある。 */
   readonly text: string;
+  /** 整えた(HTMLを除き、`sanitizeModelTextDetailed`を通した)本文の、切る前のコードポイント数。 */
   readonly original_chars: number;
+  /** 本文のうち残したコードポイント数。印の行は含まない。 */
   readonly kept_chars: number;
   readonly truncated: boolean;
   readonly masked: boolean;
   readonly dropped_combining: boolean;
+  /** 除いたHTMLの要素の数。 */
   readonly stripped_html_count: number;
 };
 
-/** 設計書を、実装に渡してよい形に整える。 */
+/**
+ * 設計書のMarkdownを、実装のClaudeに渡してよい形に整える。
+ * 設計書は、信頼できない入力を読んだClaudeの出力で、保存の前に整形を通っていない。
+ * 1. 承認画面が描かないHTMLの要素を除く。
+ * 2. 制御文字と書式文字を除き、秘密情報をマスクする(`sanitizeModelTextDetailed`)。
+ *    HTMLの除去を先に行うのは、コメントやタグを間に挟んで分けた秘密情報が、除去で連結されたまま残るのをマスクで拾うためである。
+ * 3. 整えた本文が`maxChars`を超えるときだけ、コードポイントの境界で切り、末尾に印の行を足す。
+ *    切るかの判定と`original_chars`は、整えた本文で行う。元の本文が上限を超えても、整えた後に上限以下なら切らない。
+ */
 export function normalizeDesignForImplement(
   markdown: string,
   maxChars: number,
 ): NormalizedDesign {
-  void markdown;
-  void maxChars;
+  const stripped = stripHtmlElements(markdown);
+  const sanitized = sanitizeModelTextDetailed(stripped.text);
+  const truncated = sanitized.chars > maxChars;
+  const kept = truncated
+    ? Array.from(sanitized.text).slice(0, maxChars).join("")
+    : sanitized.text;
   return {
-    text: "",
-    original_chars: 0,
-    kept_chars: 0,
-    truncated: false,
-    masked: false,
-    dropped_combining: false,
-    stripped_html_count: 0,
+    text: truncated ? `${kept}\n${DESIGN_TRUNCATED_MARK}` : kept,
+    original_chars: sanitized.chars,
+    kept_chars: truncated ? maxChars : sanitized.chars,
+    truncated,
+    masked: sanitized.masked,
+    dropped_combining: sanitized.dropped_combining,
+    stripped_html_count: stripped.count,
   };
 }

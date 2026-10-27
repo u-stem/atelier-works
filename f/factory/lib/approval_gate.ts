@@ -3,6 +3,10 @@
 // CI回の自動修正が書き換えられない拒否の一覧(`ci_fix_paths.ts`)に入れるためである。
 // DBは読まない。判定に要る値は、呼び出し側が渡す。
 
+import {
+  DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+  normalizeDesignForImplement,
+} from "./model_text.ts";
 import type { DesignApprovalRef, DesignDraft, WorkItem } from "./types.ts";
 
 /**
@@ -203,6 +207,10 @@ export type DesignGateDeps = {
     DesignDraft,
     "work_item_id" | "design_attempt" | "requirement_draft_id" | "markdown"
   > | null>;
+  /**
+   * 設計書を整えて本文が変わったときに1回呼ぶ。`fields`は本文を含まない項目だけにする。
+   * 設計書には秘密情報や隠れた指示が含まれうるので、本文をログに流さない。
+   */
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -210,9 +218,12 @@ export type DesignGateDeps = {
  * 実装の関門の、設計の承認の判定。
  * - 設計が無効なら`skip`を返す。承認の行があっても読まず、設計書も渡さない。
  * - 設計が有効で、承認が照合を通らなければ、理由つきで`stop`を返す。
- * - 照合を通れば、承認依頼が指す設計書を読み直し、`pass`と設計書の本文を返す。最新の設計書は読まない。
+ * - 照合を通れば、承認依頼が指す設計書を読み直し、`pass`と整えた設計書の本文を返す。最新の設計書は読まない。
  *   後から保存された別の設計書が、承認済みの設計書に取って代わって実装に渡らないようにするためである。
  *   読み直した設計書が、照合した値と食い違う、または無いときは、`inconsistent`で止める。
+ * 設計書は信頼できない入力を読んだClaudeの出力なので、渡す前に`normalizeDesignForImplement`を通す。
+ * 整形で本文が変わったとき(切った、マスクした、結合文字を落とした、HTMLを除いた)は、警告を1件残して止めない。
+ * 設計書は要件定義より下位の入力で、切れても要件定義が優先されるためである。
  */
 export async function designGate(
   input: DesignGateInput,
@@ -246,5 +257,29 @@ export async function designGate(
   ) {
     return inconsistent;
   }
-  return { kind: "pass", markdown: draft.markdown };
+  const normalized = normalizeDesignForImplement(
+    draft.markdown,
+    DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+  );
+  if (
+    normalized.truncated ||
+    normalized.masked ||
+    normalized.dropped_combining ||
+    normalized.stripped_html_count > 0
+  ) {
+    deps.warn(
+      "the design was changed before it was handed to the implementation",
+      {
+        work_item_id: workItem.id,
+        design_draft_id: approval.design_draft_id,
+        original_chars: normalized.original_chars,
+        kept_chars: normalized.kept_chars,
+        truncated: normalized.truncated,
+        masked: normalized.masked,
+        dropped_combining: normalized.dropped_combining,
+        stripped_html_count: normalized.stripped_html_count,
+      },
+    );
+  }
+  return { kind: "pass", markdown: normalized.text };
 }

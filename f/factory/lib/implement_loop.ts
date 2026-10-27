@@ -138,7 +138,11 @@ export type ImplementContext = {
    * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱い、複製の側が警告を出す。
    */
   readonly requirements_doc_hash: string | null;
-  /** 承認済みの設計書の本文。設計が無効なら`null`。 */
+  /**
+   * 承認済みの設計書の本文。`designGate`が整えた(HTMLの要素を除き、秘密をマスクし、長さを絞った)ものである。
+   * 設計が無効なら`null`。設計書の図とディレクトリは文脈に載せない。
+   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も`null`として扱う。
+   */
   readonly design_markdown: string | null;
   readonly requirements_console_url: string;
   /**
@@ -190,6 +194,7 @@ export function implementPromptInput(
     },
     worktreeDir: context.worktree_dir,
     branch: context.branch,
+    design: context.design_markdown ?? null,
     hasPreviousImplementation: context.has_previous_implementation,
   };
 }

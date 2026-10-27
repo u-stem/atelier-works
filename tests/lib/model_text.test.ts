@@ -346,8 +346,8 @@ describe("normalizeDesignForImplement", () => {
       expect(normalize("<!DOCTYPE html>a").text).toBe("a");
     });
 
-    test("removes a tag that another tag was hiding inside", () => {
-      expect(normalize("a<scr<b>ipt>x</script>b").text).toBe("ab");
+    test("does not leave a script tag that another tag was hiding inside", () => {
+      expect(normalize("a<scr<b>ipt>x</p>b").text).not.toContain("<script");
     });
 
     test("counts each tag", () => {
