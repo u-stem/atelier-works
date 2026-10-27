@@ -10,8 +10,6 @@ export const RERUNNABLE_SCHEDULES: readonly RerunTarget[] = [];
 
 export const NOT_RERUNNABLE_SCHEDULES: Readonly<Record<string, string>> = {};
 
-export const RERUN_REFUSAL_REASONS = [] as const;
-
 export type RerunRefusalReason =
   | "not_scheduled"
   | "not_allowed"
@@ -24,6 +22,8 @@ export type RerunRefusalReason =
   | "args_have_reference"
   | "actor_unknown"
   | "audit_unavailable";
+
+export const RERUN_REFUSAL_REASONS: readonly RerunRefusalReason[] = [];
 
 export type JobRerunResult =
   | { readonly found: false }

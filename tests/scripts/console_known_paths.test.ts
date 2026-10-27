@@ -35,9 +35,11 @@ describe("the generated known paths", () => {
     (name) => `f/factory/${name}`,
   );
 
-  test("withhold the release scripts and the job cancel script", () => {
+  test("withhold the release scripts and the job write scripts", () => {
     expect([...WITHHELD].sort()).toEqual([
+      "f/factory/console_config_update",
       "f/factory/console_job_cancel",
+      "f/factory/console_job_rerun",
       "f/factory/freeze_release",
       "f/factory/hold_release",
     ]);

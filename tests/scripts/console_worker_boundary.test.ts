@@ -72,6 +72,8 @@ const READS_NO_SECRET = [
   "f/factory/console_schedules",
   "f/factory/console_config",
   "f/factory/console_job_cancel",
+  "f/factory/console_job_rerun",
+  "f/factory/console_config_update",
 ];
 
 /**
@@ -108,6 +110,23 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
     services: ["JobService.getJob", "JobService.cancelQueuedJob"],
     members: ["getWorkspace", "datatable"],
   },
+  // 再実行は、失敗したジョブとキューとscheduleを読み、許可した定期処理を1回起動する。起動は`runScriptByPathAsync`だけを使う。
+  "f/factory/console_job_rerun": {
+    services: [
+      "JobService.getJob",
+      "JobService.listQueue",
+      "ScheduleService.getSchedule",
+    ],
+    members: ["getWorkspace", "datatable", "runScriptByPathAsync"],
+  },
+  // 設定の変更は、factory_configの生の値を読み、書き戻す。パスは走査がリテラルに固定する。
+  "f/factory/console_config_update": {
+    services: [
+      "ResourceService.getResourceValue",
+      "ResourceService.updateResourceValue",
+    ],
+    members: ["getWorkspace", "datatable"],
+  },
 };
 
 /**
@@ -123,6 +142,8 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
     "注入されたsdkの呼び出し(sdk.getVariable)。呼び出し側は定数FREEZE_VARIABLE_PATHだけを渡す。変数f/factory/freezesはsecretではない",
   "f/factory/console_config.ts":
     "getResourceValueの1回の呼び出し。引数をリテラルのf/factory/factory_configに固定することは、sdkFindingsが確かめる",
+  "f/factory/console_config_update.ts":
+    "getResourceValueの1回の呼び出し。引数をリテラルのf/factory/factory_configに固定することは、sdkFindingsが確かめる",
 };
 
 /**
@@ -133,6 +154,8 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
  */
 const ENV_ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "f/factory/console_job_cancel.ts": ["WM_USERNAME", "WM_EMAIL"],
+  "f/factory/console_job_rerun.ts": ["WM_USERNAME", "WM_EMAIL"],
+  "f/factory/console_config_update.ts": ["WM_USERNAME", "WM_EMAIL"],
 };
 
 /**
@@ -1131,6 +1154,41 @@ describe("the scripts restricted to an SDK allowance", () => {
     expect(codeOf(source)).not.toContain("getResourceValueInterpolated");
   });
 
+  test("the config update script names its resource path as a literal", () => {
+    const source = readFileSync("f/factory/console_config_update.ts", "utf8");
+    expect(sdkFindings(source).problems).toEqual([]);
+  });
+
+  test("the config update script does not read the config with the interpolating call", () => {
+    const source = readFileSync("f/factory/console_config_update.ts", "utf8");
+    expect(codeOf(source)).not.toContain("getResourceValueInterpolated");
+  });
+
+  test("the only read of the config update script that the name scan cannot explain is its fixed getResourceValue", () => {
+    const source = readFileSync("f/factory/console_config_update.ts", "utf8");
+    expect(nonLiteralVariableReads(source)).toEqual(["1 unexplained"]);
+  });
+
+  test("the config update script calls both the read and the write of the resource", () => {
+    const source = readFileSync("f/factory/console_config_update.ts", "utf8");
+    expect(sdkFindings(source).used).toEqual(
+      expect.arrayContaining([
+        "ResourceService.getResourceValue",
+        "ResourceService.updateResourceValue",
+      ]),
+    );
+  });
+
+  test("the rerun script starts a script through the client function and no other way", () => {
+    const source = readFileSync("f/factory/console_job_rerun.ts", "utf8");
+    expect(sdkFindings(source).used).toContain("runScriptByPathAsync");
+  });
+
+  test("the rerun script does not start a flow", () => {
+    const source = readFileSync("f/factory/console_job_rerun.ts", "utf8");
+    expect(codeOf(source)).not.toMatch(/runFlow|runScriptByHash|runScript\(/);
+  });
+
   test("the only read of the config script that the name scan cannot explain is its fixed getResourceValue", () => {
     const source = readFileSync("f/factory/console_config.ts", "utf8");
     expect(nonLiteralVariableReads(source)).toEqual(["1 unexplained"]);
@@ -1214,6 +1272,15 @@ describe("the SQL that the console scripts reach", () => {
       expect(others).toEqual([]);
     },
   );
+
+  test.each([
+    "f/factory/console_job_rerun.ts",
+    "f/factory/console_config_update.ts",
+  ])("%s has no SQL of its own", (file) => {
+    expect(
+      templatesOf(file).filter((text) => /\bfactory\./.test(text)),
+    ).toEqual([]);
+  });
 
   test("the job cancel script reads only the work item table with its own SQL", () => {
     const tables = templatesOf("f/factory/console_job_cancel.ts")

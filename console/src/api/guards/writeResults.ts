@@ -349,3 +349,66 @@ export function isJobCancelResult(value: unknown): value is JobCancelResult {
     isActionAudit(value.action_audit)
   );
 }
+
+export type JobRerunRefusalReason =
+  | "not_scheduled"
+  | "not_allowed"
+  | "not_failed"
+  | "not_finished"
+  | "already_running"
+  | "next_run_soon"
+  | "schedule_disabled"
+  | "schedule_changed"
+  | "args_have_reference"
+  | "actor_unknown"
+  | "audit_unavailable";
+
+export const JOB_RERUN_REFUSAL_REASONS: readonly JobRerunRefusalReason[] = [];
+
+export type JobRerunResult =
+  | { readonly found: false }
+  | {
+      readonly found: true;
+      readonly refused: true;
+      readonly reason: JobRerunRefusalReason;
+    }
+  | {
+      readonly found: true;
+      readonly refused: false;
+      readonly job_id: string;
+      readonly script_path: string;
+      readonly action_audit: ActionAudit;
+    };
+
+export function isJobRerunResult(_value: unknown): _value is JobRerunResult {
+  return false;
+}
+
+export type ConfigUpdateRefusalReason =
+  | "item_not_allowed"
+  | "invalid_value"
+  | "not_lowering"
+  | "has_reference"
+  | "conflict"
+  | "actor_unknown"
+  | "audit_unavailable";
+
+export const CONFIG_UPDATE_REFUSAL_REASONS: readonly ConfigUpdateRefusalReason[] =
+  [];
+
+export type ConfigUpdateResult =
+  | { readonly refused: true; readonly reason: ConfigUpdateRefusalReason }
+  | {
+      readonly refused: false;
+      readonly item: string;
+      readonly before: number | boolean;
+      readonly after: number | boolean;
+      readonly verified: boolean;
+      readonly action_audit: ActionAudit;
+    };
+
+export function isConfigUpdateResult(
+  _value: unknown,
+): _value is ConfigUpdateResult {
+  return false;
+}

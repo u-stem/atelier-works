@@ -702,7 +702,7 @@ describe("the list of schedules that can be rerun", () => {
   });
 
   test("lists the refusal reasons that the Console describes", () => {
-    expect([...RERUN_REFUSAL_REASONS].sort()).toEqual(
+    expect<string[]>([...RERUN_REFUSAL_REASONS].sort()).toEqual(
       [
         "actor_unknown",
         "already_running",

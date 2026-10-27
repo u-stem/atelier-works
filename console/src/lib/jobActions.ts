@@ -127,3 +127,11 @@ export function cancelDialogLines(
 }
 
 export const RERUNNABLE_SCHEDULE_PATHS: readonly string[] = [];
+
+export function canRerunJob(_job: Pick<JobSummaryView, "state">): boolean {
+  return false;
+}
+
+export function rerunDialogLines(_scriptPath: string): readonly string[] {
+  return [];
+}

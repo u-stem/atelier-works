@@ -1567,6 +1567,38 @@ describe("console job write files", () => {
   });
 });
 
+// 失敗した定期ジョブを再実行するscriptと、設定を変更するscriptは、書き換えられると、再実行できる定期処理が増えたり、
+// 変更できる設定の項目と向きが広がったりする。許可表を固定するテストも、同じ理由で守る。
+describe("console job rerun and config update files", () => {
+  const PATHS = [
+    "f/factory/console_job_rerun.ts",
+    "f/factory/console_job_rerun.script.yaml",
+    "f/factory/console_config_update.ts",
+    "f/factory/console_config_update.script.yaml",
+    "tests/scripts/console_rerun.test.ts",
+    "tests/scripts/console_config_update.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS or a prefix lists %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each([
+    "f/factory/console_job_rerun.script.lock",
+    "f/factory/console_config_update.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // Consoleから保留と凍結を解除するscriptと、その部品、テストは、書き換えられると、他の主体の保留を
 // 無条件に外せる。CLIを守っているのと同じ理由で守る。読み取りだけの`console_holds.ts`は守らない。
 describe("console release files", () => {

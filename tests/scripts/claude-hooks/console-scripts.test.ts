@@ -51,7 +51,9 @@ describe("the classification of the console scripts", () => {
     expect([...CONSOLE_WRITE_SCRIPTS].sort()).toEqual([
       "approval_decide",
       "audit_kickoff",
+      "console_config_update",
       "console_job_cancel",
+      "console_job_rerun",
       "freeze_release",
       "hold_release",
       "manual_intake_submit",
@@ -129,6 +131,24 @@ describe("bash-guard denies running a Console write script", () => {
     ).toContain("Console");
   });
 
+  test.each(["console_job_rerun", "console_config_update"])(
+    "denies running %s through xargs",
+    async (name) => {
+      expect(
+        await decide(`echo f/factory/${name} | xargs wmill script run`),
+      ).toBe("deny");
+    },
+  );
+
+  test.each(["console_job_rerun", "console_config_update"])(
+    "names %s in the reason",
+    async (name) => {
+      expect(await denyReason(`wmill script run f/factory/${name}`)).toContain(
+        name,
+      );
+    },
+  );
+
   test("names the job cancel script in the reason", async () => {
     expect(
       await denyReason("wmill script run f/factory/console_job_cancel"),
@@ -188,6 +208,13 @@ describe("bash-guard allows work near the Console write scripts", () => {
       await decide("wmill script run f/factory/console_job_cancelled"),
     ).toBe("allow");
   });
+
+  test.each(["console_job_rerun_all", "console_config_updated"])(
+    "does not take the longer name %s",
+    async (name) => {
+      expect(await decide(`wmill script run f/factory/${name}`)).toBe("allow");
+    },
+  );
 
   test("does not take the job list script for the job cancel script", async () => {
     expect(await decide("wmill script run f/factory/console_jobs")).toBe(

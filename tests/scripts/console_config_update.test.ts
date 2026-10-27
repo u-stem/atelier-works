@@ -4,6 +4,8 @@ import {
   BOOLEAN_STOP_ITEMS,
   CONFIG_UPDATE_REFUSAL_REASONS,
   type ConfigUpdatePorts,
+  type ConfigUpdateRefusalReason,
+  type ConfigUpdateResult,
   LOWERABLE_NUMBERS,
   updateConfigFromConsole,
 } from "../../f/factory/console_config_update.ts";
@@ -114,7 +116,10 @@ function harness(
   return { ports, events, sqlCalls, written };
 }
 
-const REFUSED = (reason: string) => ({ refused: true, reason });
+const REFUSED = (reason: ConfigUpdateRefusalReason): ConfigUpdateResult => ({
+  refused: true,
+  reason,
+});
 
 describe("updateConfigFromConsole: what it refuses before it records", () => {
   test.each([
@@ -569,7 +574,7 @@ describe("the list of items that can be changed", () => {
   });
 
   test("lists the refusal reasons that the Console describes", () => {
-    expect([...CONFIG_UPDATE_REFUSAL_REASONS].sort()).toEqual(
+    expect<string[]>([...CONFIG_UPDATE_REFUSAL_REASONS].sort()).toEqual(
       [
         "actor_unknown",
         "audit_unavailable",

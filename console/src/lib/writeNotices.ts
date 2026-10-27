@@ -7,11 +7,13 @@ import type {
   ApprovalDecideResult,
   AuditKickoffResult,
   AuditSkipReason,
+  ConfigUpdateResult,
   FreezeReleaseResult,
   HoldReleaseResult,
   JobCancelRefusalReason,
   JobCancelResult,
   JobCancelWorkItem,
+  JobRerunResult,
   NoticeResolveResult,
   RetryWorkItemResult,
 } from "../api/guards/writeResults.ts";
@@ -264,6 +266,16 @@ export function describeJobCancelResult(result: JobCancelResult): WriteNotice {
       }
     : { tone: "success", message: `ジョブを中止しました。${workItem}` };
   return noteActionAudit(notice, result.action_audit);
+}
+
+export function describeJobRerunResult(_result: JobRerunResult): WriteNotice {
+  return { tone: "info", message: "" };
+}
+
+export function describeConfigUpdateResult(
+  _result: ConfigUpdateResult,
+): WriteNotice {
+  return { tone: "info", message: "" };
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

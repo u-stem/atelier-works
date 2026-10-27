@@ -5,6 +5,7 @@ import type {
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { Input } from "../../components/ui/input.tsx";
+import type { ChangeOffer } from "../../lib/configChange.ts";
 import {
   CONFIG_REFERENCE_LABEL,
   describeConfigValue,
@@ -35,7 +36,12 @@ function ConfigValue({ item }: { item: ConfigItemView }) {
  * 設定の項目の一覧。キー、値の順に並べる。値はテキストのノードとして描く。
  * 参照と、伏せた値は、値を出さずに「参照(出さない)」と表示する。
  */
-export function ConfigList({ items }: { items: readonly ConfigItemView[] }) {
+export function ConfigList({
+  items,
+}: {
+  items: readonly ConfigItemView[];
+  onChoose?: (offer: ChangeOffer) => void;
+}) {
   if (items.length === 0) {
     return <EmptyNote>該当する項目はありません。</EmptyNote>;
   }

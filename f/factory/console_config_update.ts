@@ -10,8 +10,6 @@ export type NumberRule = {
 
 export const LOWERABLE_NUMBERS: Readonly<Record<string, NumberRule>> = {};
 
-export const CONFIG_UPDATE_REFUSAL_REASONS = [] as const;
-
 export type ConfigUpdateRefusalReason =
   | "item_not_allowed"
   | "invalid_value"
@@ -20,6 +18,9 @@ export type ConfigUpdateRefusalReason =
   | "conflict"
   | "actor_unknown"
   | "audit_unavailable";
+
+export const CONFIG_UPDATE_REFUSAL_REASONS: readonly ConfigUpdateRefusalReason[] =
+  [];
 
 export type ConfigUpdateResult =
   | { readonly refused: true; readonly reason: ConfigUpdateRefusalReason }

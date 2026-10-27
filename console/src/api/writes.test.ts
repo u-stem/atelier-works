@@ -9,9 +9,11 @@ import {
   MAX_REASON_LENGTH,
   releaseFreeze,
   releaseHold,
+  rerunJob,
   resolveNotice,
   retryWorkItem,
   submitManualIntake,
+  updateConfig,
 } from "./writes.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -489,5 +491,103 @@ describe("cancelJob", () => {
     const { fetchFn, calls } = respondWith("boom", 500);
     await failureOf(cancelJob(JOB, { fetchFn }));
     expect(calls.length).toBe(1);
+  });
+});
+
+describe("rerunJob", () => {
+  const STARTED = {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    script_path: "f/factory/collect_github",
+    action_audit: "recorded",
+  } as const;
+
+  test("calls the rerun script with the job id only", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    await rerunJob(JOB, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/console_job_rerun",
+      body: { job_id: JOB },
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(STARTED);
+    expect(await rerunJob(JOB, { fetchFn })).toEqual(STARTED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const refusal = {
+      found: true,
+      refused: true,
+      reason: "already_running",
+    } as const;
+    const { fetchFn } = respondWith(refusal);
+    expect(await rerunJob(JOB, { fetchFn })).toEqual(refusal);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ found: true, refused: false });
+    expect(await failureOf(rerunJob(JOB, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+});
+
+describe("updateConfig", () => {
+  const CHANGED = {
+    refused: false,
+    item: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+  const INPUT = { item: "daily_budget_usd", expected: 50, next: 20 } as const;
+
+  test("calls the config script with the item and the two values", async () => {
+    const { fetchFn, calls } = respondWith(CHANGED);
+    await updateConfig(INPUT, { fetchFn });
+    expect(calls[0]).toEqual({
+      url: "/api/w/factory/jobs/run_wait_result/p/f/factory/console_config_update",
+      body: { item: "daily_budget_usd", expected: 50, next: 20 },
+    });
+  });
+
+  test("sends a switch as booleans", async () => {
+    const { fetchFn, calls } = respondWith({
+      ...CHANGED,
+      item: "implement_enabled",
+      before: true,
+      after: false,
+    });
+    await updateConfig(
+      { item: "implement_enabled", expected: true, next: false },
+      { fetchFn },
+    );
+    expect(calls[0]?.body).toEqual({
+      item: "implement_enabled",
+      expected: true,
+      next: false,
+    });
+  });
+
+  test("returns the parsed result", async () => {
+    const { fetchFn } = respondWith(CHANGED);
+    expect(await updateConfig(INPUT, { fetchFn })).toEqual(CHANGED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const refusal = { refused: true, reason: "conflict" } as const;
+    const { fetchFn } = respondWith(refusal);
+    expect(await updateConfig(INPUT, { fetchFn })).toEqual(refusal);
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ refused: false });
+    expect(await failureOf(updateConfig(INPUT, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
   });
 });

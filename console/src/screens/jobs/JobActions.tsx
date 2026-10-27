@@ -120,6 +120,50 @@ export function OpenCancelButton({
   );
 }
 
+export function RerunDialog({
+  job,
+  onConfirm,
+  onCancel,
+}: {
+  job: JobSummaryView | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <ConfirmDialog
+      open={false}
+      title=""
+      confirmLabel=""
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    >
+      {job === null ? null : null}
+    </ConfirmDialog>
+  );
+}
+
+export function OpenRerunButton({
+  locked,
+  onOpen,
+}: {
+  locked: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={!locked && false}
+      onClick={() => {
+        void locked;
+        void onOpen;
+      }}
+    >
+      {""}
+    </Button>
+  );
+}
+
 /**
  * 中止の書き込みを、共通の流れに載せる設定。ジョブごとにロックし、中止の後は、そのジョブの詳細と実行中の一覧を読み直す。
  * 詳細は、ログと結果を含む取得だけを読み直す。状態の取得は、その値で初期化される。2つを同時に走らせないためである。

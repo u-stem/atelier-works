@@ -13,6 +13,7 @@ import type { Guard } from "./guards/primitives.ts";
 import {
   type ApprovalDecideResult,
   type AuditKickoffResult,
+  type ConfigUpdateResult,
   type FreezeReleaseResult,
   type HoldReleaseResult,
   isApprovalDecideResult,
@@ -24,6 +25,7 @@ import {
   isNoticeResolveResult,
   isRetryWorkItemResult,
   type JobCancelResult,
+  type JobRerunResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
@@ -217,4 +219,26 @@ export function releaseFreeze(
     isFreezeReleaseResult,
     options,
   );
+}
+
+/** 失敗した定期ジョブを1件、scheduleの引数で再実行する。 */
+export function rerunJob(
+  _jobId: string,
+  _options: RunScriptOptions = {},
+): Promise<JobRerunResult> {
+  return Promise.resolve({ found: false });
+}
+
+export type ConfigUpdateInput = {
+  readonly item: string;
+  readonly expected: number | boolean;
+  readonly next: number | boolean;
+};
+
+/** factory_configの項目を1つ、止める向きか下げる向きに変更する。 */
+export function updateConfig(
+  _input: ConfigUpdateInput,
+  _options: RunScriptOptions = {},
+): Promise<ConfigUpdateResult> {
+  return Promise.resolve({ refused: true, reason: "conflict" });
 }
