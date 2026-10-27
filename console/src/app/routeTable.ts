@@ -2,7 +2,12 @@
 
 import type { ComponentType } from "react";
 import type { RouteObject } from "react-router";
-import type { RouteTitle, Screen, ScreenRoute } from "./screens.ts";
+import type {
+  RouteTitle,
+  Screen,
+  ScreenRoute,
+  ScreenTrail,
+} from "./screens.ts";
 
 /**
  * 経路の`handle`に載せる画面の名前。
@@ -13,7 +18,10 @@ export function titleHandle(title: RouteTitle): { title: RouteTitle } {
 }
 
 /** 副題の有無から、最初の画面を読み込む間に出す部品を選ぶ関数。 */
-export type HydrateFallbackFor = (hasSubtitle: boolean) => ComponentType;
+export type HydrateFallbackFor = (
+  hasSubtitle: boolean,
+  trail?: ScreenTrail,
+) => ComponentType;
 
 /** 最初の画面を読み込む間に出す部品を、経路に足す。選ぶ関数を渡さなければ足さない。 */
 function withHydrateFallback(

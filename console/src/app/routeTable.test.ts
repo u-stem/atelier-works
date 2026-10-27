@@ -243,6 +243,25 @@ describe("buildScreenRoutes hydrate fallbacks", () => {
     ).toBe(WithSubtitle);
   });
 
+  test("hands the trail mark of a child route to the chooser", () => {
+    const seen: (string | undefined)[] = [];
+    buildScreenRoutes(
+      [
+        screen({
+          children: [
+            { path: "items/new", lazy, subtitle: true, trail: "back" },
+          ],
+        }),
+      ],
+      DefaultBoundary,
+      (_hasSubtitle, trail) => {
+        seen.push(trail);
+        return Plain;
+      },
+    );
+    expect(seen).toEqual([undefined, "back"]);
+  });
+
   test("gives no fallback to a route nested in a child route", () => {
     const routes = buildScreenRoutes(
       [

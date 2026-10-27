@@ -40,6 +40,9 @@ export type PrefetchOptions = {
   readonly staleTime: number;
 };
 
+/** 見出しの帯の題の下に置く、戻り先の行の種類。 */
+export type ScreenTrail = "breadcrumb" | "back";
+
 export type ScreenId = "inbox" | "items" | "reports" | "jobs" | "system";
 
 /**
@@ -59,6 +62,11 @@ export type ScreenRoute = {
    * 取得を待たずに副題が出る画面と、取得後に副題が出る画面のどちらも、副題を持つ画面として印を付ける。
    */
   readonly subtitle?: boolean;
+  /**
+   * 見出しの帯の題の下に、戻り先の行を持つ画面か。最初の画面を読み込む間の骨組みが、帯の高さをそろえるために読む。
+   * `breadcrumb`はパンくず、`back`は一覧への戻りのリンクである。
+   */
+  readonly trail?: ScreenTrail;
   /** 入れ子の経路は、骨組みを持たない。親の経路の骨組みが、子の位置まで描く。 */
   readonly children?: readonly ScreenRoute[];
 };

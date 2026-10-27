@@ -86,6 +86,50 @@ describe("the fallback of a screen with a subtitle", () => {
   });
 });
 
+describe("the fallback of a screen with a breadcrumb", () => {
+  const markup = renderToStaticMarkup(
+    createElement(routeFallbackFor(true, "breadcrumb")),
+  );
+
+  test("draws a trail row under the subtitle", () => {
+    expect(markup).toMatch(/data-part="subtitle"[\s\S]*data-part="trail"/);
+  });
+
+  test("draws the row as tall as a line of the breadcrumb", () => {
+    expect(markup).toMatch(/data-part="trail"[^>]*h-\[1\.3rem\]/);
+  });
+
+  test("is not the fallback with a subtitle only", () => {
+    expect(routeFallbackFor(true, "breadcrumb")).not.toBe(
+      routeFallbackFor(true),
+    );
+  });
+});
+
+describe("the fallback of a screen with a back link", () => {
+  const markup = renderToStaticMarkup(
+    createElement(routeFallbackFor(true, "back")),
+  );
+
+  test("draws the row as tall as the back link with its line box", () => {
+    expect(markup).toMatch(/data-part="trail"[^>]*h-\[1\.575rem\]/);
+  });
+
+  test("is not the fallback with a breadcrumb", () => {
+    expect(routeFallbackFor(true, "back")).not.toBe(
+      routeFallbackFor(true, "breadcrumb"),
+    );
+  });
+});
+
+describe("the fallback without a trail", () => {
+  test("draws no trail row", () => {
+    expect(
+      renderToStaticMarkup(createElement(routeFallbackFor(true))),
+    ).not.toContain('data-part="trail"');
+  });
+});
+
 describe("the first paint of a screen", () => {
   test("draws the sidebar and the header band", () => {
     expect(firstPaint("/items")).toMatch(
@@ -103,33 +147,48 @@ describe("the first paint of a screen", () => {
 
   test("every screen route draws a fallback", () => {
     const screens = allRoutes(ROUTES[0]?.children ?? []);
+    const known = [
+      routeFallbackFor(false),
+      routeFallbackFor(true),
+      routeFallbackFor(true, "breadcrumb"),
+      routeFallbackFor(true, "back"),
+    ];
     expect(
       screens.filter(
         (route) =>
-          route.HydrateFallback !== routeFallbackFor(true) &&
-          route.HydrateFallback !== routeFallbackFor(false),
+          route.HydrateFallback === undefined ||
+          !known.includes(route.HydrateFallback),
       ),
     ).toEqual([]);
   });
 
   test.each([
-    "items/new",
     "items/:id",
     "items/:id/requirements",
     "reports/audit/:id",
     "jobs/:id",
-  ])("the %s screen draws the fallback with a subtitle row", (path) => {
+  ])(
+    "the %s screen draws the fallback with a subtitle and a breadcrumb",
+    (path) => {
+      const route = allRoutes(ROUTES[0]?.children ?? []).find(
+        (candidate) => candidate.path === path,
+      );
+      expect(route?.HydrateFallback).toBe(routeFallbackFor(true, "breadcrumb"));
+    },
+  );
+
+  test("the new item screen draws the fallback with a subtitle and a back link", () => {
     const route = allRoutes(ROUTES[0]?.children ?? []).find(
-      (candidate) => candidate.path === path,
+      (candidate) => candidate.path === "items/new",
     );
-    expect(route?.HydrateFallback).toBe(routeFallbackFor(true));
+    expect(route?.HydrateFallback).toBe(routeFallbackFor(true, "back"));
   });
 
-  test("the inbox, the entrance of the screens with subtitle, draws a subtitle row", () => {
+  test("the inbox draws the fallback without a subtitle row, like its own loading header", () => {
     const inbox = allRoutes(ROUTES[0]?.children ?? []).find(
       (candidate) => candidate.index === true,
     );
-    expect(inbox?.HydrateFallback).toBe(routeFallbackFor(true));
+    expect(inbox?.HydrateFallback).toBe(routeFallbackFor(false));
   });
 
   test.each(["items", "reports", "jobs", "system"])(

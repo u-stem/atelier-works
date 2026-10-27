@@ -28,12 +28,29 @@ describe("the subtitle mark", () => {
 
   test("lists the routes whose page header carries a subtitle", () => {
     expect(marked).toEqual([
-      "/",
       "items/new",
       "items/:id/requirements",
       "items/:id",
       "reports/audit/:id",
       "jobs/:id",
+    ]);
+  });
+
+  test("leaves the inbox unmarked because its subtitle appears only when nothing is left", () => {
+    expect(SCREENS[0]?.subtitle).toBeUndefined();
+  });
+
+  test("lists the routes whose page header carries a breadcrumb or a back link", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children)
+        .filter((child) => child.trail !== undefined)
+        .map((child) => [child.path, child.trail]),
+    ).toEqual([
+      ["items/new", "back"],
+      ["items/:id/requirements", "breadcrumb"],
+      ["items/:id", "breadcrumb"],
+      ["reports/audit/:id", "breadcrumb"],
+      ["jobs/:id", "breadcrumb"],
     ]);
   });
 
