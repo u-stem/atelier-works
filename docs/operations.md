@@ -962,7 +962,7 @@ stateを書けない間は、毎周回先頭から選ぶ。
 
 却下すると、Factoryは却下理由を反映して要件定義を作り直し、もう一度承認待ちにする。作り直すたびに試行回数(attempt)が1つ増える。試行回数が上限(`max_attempts`、既定3)に達した後の却下では、作業項目は人の対応待ち(`needs_human`)になる。
 
-承認依頼には7日の期限がある。期限までに判断しなかった作業項目は期限切れ(`expired`)になり、Discordに人の対応を求める通知が届く。期限切れの作業項目は、[失敗した作業を再実行する](#失敗した作業を再実行する)の手順で作り直せる。
+承認依頼には7日の期限がある。期限までに判断しなかった作業項目は期限切れ(`expired`)になり、Discordに人の対応を求める通知が届く。期限切れの作業項目は、[失敗した作業を再実行する](#失敗した作業を再実行する)の手順で再実行できる。最新の依頼が承認済みなら承認の後の工程から始まり、そうでなければ要件定義を作り直す。作り直した要件定義は、取り込み内容を現在のIssueで更新し、あらためて承認が要る。
 
 ### Windmillから直接承認する
 
@@ -1272,6 +1272,9 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 ## 設計工程の設定を確かめる
 
 `factory_config`の`design_enabled`に`true`を書いても、設計工程は動かない。
+設計フローを起動する配線は、`design_enabled`が真のときだけ結ばれる。
+ただし、コードの定数`DESIGN_STAGE_OPENABLE`が偽の間は、`design_enabled`は偽として読まれる。
+そのため、設定に`true`を書いても配線は結ばれない。
 設定は`false`として読まれ、要対応の通知`design_enabled_ignored`が残る。
 `false`に戻すと、自己更新(2分ごと)が通知を自動で解決する。
 通知は[通知の種類](#通知の種類)に、設定値の一覧は[設計書の生成](internals/design.md)の「設定値」に書く。
@@ -1279,8 +1282,38 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 設定タブは書かれた値をそのまま出すので、`false`として読まれている`true`も`true`と表示される。
 `design_enabled_ignored`が未解決なら、`true`が`false`として読まれている。
 
+`max_design_attempts`は、現在の要件定義の試行で、設計を却下できる回数の上限である。
+上限に達した却下は、作業項目を人の対応待ちにする。
+設計の失敗や期限切れの再実行は、回数に数えない。
+
 `design_enabled`が真偽値でないとき、または`max_design_attempts`が1以上10以下の整数でないときは、設定を読む処理が例外になる。
 このとき自己更新と検知が止まるので、値を直す。
+
+## 設計の承認の反映で止まったとき
+
+設計の承認と却下は、`design_apply`が作業項目に反映する。
+反映が止まった作業項目は、Discordの人の対応待ちの通知か、Consoleの**要対応**に出る。
+理由ごとの手順は次のとおりである。
+どの手順も、作業項目の再実行は[失敗した作業を再実行する](#失敗した作業を再実行する)の操作で行う。
+
+| 理由 | 意味 | 手順 |
+| --- | --- | --- |
+| `design rejected after max_design_attempts N` | 現在の要件定義の試行で、反映できた却下がN回に達した | Consoleの承認の履歴で却下の理由を確かめる。再実行すると設計書を作り直し、直前の却下の理由を渡す。再実行ごとに設計を1回試す |
+| `design approval record is inconsistent`、`approved design does not match the approved requirements`、`no approved design for design attempt N` | 承認の照合が通らなかった。承認の行が書き換えられたか、要件定義が替わった | Consoleで設計の承認の記録と要件定義の承認の状態を確かめてから、再実行する。設計が有効なら設計から再開する |
+| `design requires approved requirements for attempt N` | 設計の承認待ちなのに、要件定義が現在の試行で承認済みでない | Consoleで要件定義の承認の状態を確かめる。承認が無ければ、`factory`ラベルを付け直して要件定義を作り直す |
+| `design approval timed out` | 設計の承認依頼が7日の期限を過ぎた | 再実行する。最新の依頼が承認済みなら実装から始め、そうでなければ設計書を作り直す |
+| `requirements regeneration could not be started` | 設計の却下でIssueが変わっていて、要件定義の作り直しを起動できなかった | 再実行する。要件定義を作り直し、承認し直しが要る。取り込み内容は現在のIssueで更新され、却下の理由は要件定義の生成に渡る |
+| `design flow could not be started` | 設計の却下の後、設計の再生成を起動できなかった | 再実行する。設計書を作り直す |
+| `approval decision could not be applied after 3 restarts of the handler` | 承認の判断を、処理先の起動し直しを3回しても作業項目に反映できなかった | Consoleで作業項目の状態と承認の記録を確かめてから、再実行する |
+
+最後の理由は、設計と要件定義で共通である。
+承認待ちの走査(`poll_issues`が5分ごとに行う)が、決定から5分たっても反映されない依頼の処理先を起動し直す。
+3回起動し直しても作業項目が承認待ちのままなら、人の対応待ちにして通知する。
+処理先の失敗は`job_failures`に残るので、Consoleの失敗の記録で原因を確かめる。
+
+承認の断りで「Issueを比べられなかった」と案内されたときは、しばらく待ってからやり直す。
+Issueが移されたか消されたなら、却下する。
+設計の却下は、Issueを読めないと要件定義へ戻れず、設計の再生成が`max_design_attempts`に達するまで繰り返される。
 
 ## 実装フローを有効にして使う
 
@@ -5392,9 +5425,10 @@ shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は�
    印は照合にだけ使う。次のコマンドで読み、reflogで確かめた値と食い違えば、承認を始めずに原因を調べる。
 
    ```bash
-   docker compose -f infra/docker-compose.yml exec -T windmill_worker cat /var/lib/factory/host_applied_sha | LC_ALL=C grep -xE '[0-9a-f]{40}'
+   mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker cat /var/lib/factory/host_applied_sha | LC_ALL=C grep -xE '[0-9a-f]{40}'
    ```
 
+   `mise exec --`を付けるのは、composeの定義が`DB_PASSWORD`を読むためである。付けないと失敗する。
    `grep`は、40桁の小文字の16進の行だけを通す。印に端末の制御文字が入っていても、端末に出さないためである。
    `grep`が何も出さないときは、印が不正という意味で、reflogと食い違うときと同じに扱う。
 3. リポジトリのトップで、承認するコミットを指定して実行する。

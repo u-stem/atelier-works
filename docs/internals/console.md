@@ -2478,6 +2478,9 @@ Consoleは、接頭辞(`console_query:`)と要求した番号まで合わせて�
 失敗の記録は、フローとステップ、時刻、失敗の文を新しい順に出す。
 失敗の文はbackendが4000文字で切るので、その長さに達したときは切っていると添える。
 状態の遷移は、遷移前後の状態、注記、時刻を新しい順に出す。
+概要に出す状態の注記は、今の状態へ移った最新の記録の注記である。
+ただし、状態を変えない次の3つの記録は読み飛ばす。取り込み内容の更新、自動の再開の停滞、承認の判断を反映する処理の起動し直し(`approval handler restarted for request N`)である。
+読み飛ばさないと、状態の理由が、状態が変わらない記録の注記に置き換わるためである。
 要件定義書へのリンクは、同じ書類を指すものが重ならないよう、試行ごとに1つだけ置く。
 最新の試行のリンクは試行の番号を付けず、常に最新の書類を指す。
 実装のラウンドは、差分の規模をファイル数、追加の行数、削除の行数の言葉で出す。
@@ -2784,7 +2787,8 @@ scriptの値は、履歴の絞り込みの集合(`HISTORY_FILTER_PATHS`)と照�
 URLから来る値なので、サーバーへ渡す前に画面でも確かめる。サーバーは、既知のscriptとフローの全体で照合する。
 画面の集合は、選んでも常に0件になるものを除く。
 除くのは、フローのステップ(`f/factory/steps/`)、失敗ハンドラ(`on_error_flow`)、tag`console`のscriptである。
-承認のハンドラ(`steps/requirements_apply`、`steps/issue_proposal_apply`)は、ステップの置き場にあるが、履歴に出るので集合に入れる。
+承認のハンドラ(`steps/requirements_apply`、`steps/design_apply`、`steps/issue_proposal_apply`)は、ステップの置き場にある。
+履歴に出るので集合に入れる。
 集合は`f/factory/lib/console_known_paths.ts`の定数で、Consoleはこのファイルを直接importする。
 開発サーバー(`bun run --cwd console dev`)でも、このimportは配信される。
 定数は定義から生成するので、画面とサーバーで食い違わない。
@@ -3078,7 +3082,8 @@ URLの値や画面の遷移からは、再実行を起こさない。
 - tag`console`のジョブ。Consoleの呼び出し自身で、一覧の取得が除く
 
 履歴は、親を持つかどうかでは絞らない。
-承認のハンドラ(`steps/requirements_apply`、`steps/issue_proposal_apply`)には、`runScriptByPathAsync`が親のジョブを付ける。
+承認のハンドラには、`runScriptByPathAsync`が親のジョブを付ける。
+ハンドラは、`steps/requirements_apply`、`steps/design_apply`、`steps/issue_proposal_apply`である。
 ただしフローのステップではないので、履歴に出る。
 同じ理由で、scriptが起動した別のscriptのジョブも履歴に出る。
 詳細は、ルートまでの親がすべて許可した種類のときだけ、親を持つジョブを返す。
