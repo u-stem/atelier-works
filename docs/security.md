@@ -3890,7 +3890,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 
 ジョブの画面と作業項目の詳細のflowの図(`console/src/screens/jobs/FlowDiagram.tsx`)と、スケジュールの説明は、iframeを使わない。自前のSVGと文字で描く。
-図のSVGは、`dangerouslySetInnerHTML`を使わず、サーバー由来の文字列を属性にも入れない。
+図のSVGは、`dangerouslySetInnerHTML`を使わず、サーバー由来の文字列を、子のジョブへのリンクのidを除いて属性に入れない。
 図のデータ(`console/src/generated/flows.json`)はリポジトリのコードから作ったバンドルの静的なJSONで、信用できない入力を含まない。
 重ねるジョブのステップのidと状態はサーバー由来なので、見えない文字を代替文字にしてから描く。
 子のジョブへのリンクに入れるidは、UUIDの形のときだけhrefに入れる。
