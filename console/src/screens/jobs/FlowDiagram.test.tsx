@@ -165,7 +165,7 @@ describe("FlowDiagramFrame: the exits", () => {
   });
 
   test("does not say it for a flow that is started", () => {
-    expect(render("implement")).not.toContain("まだ起動されません");
+    expect(render("pr_fix")).not.toContain("まだ起動されません");
   });
 
   test.each(["pipeline", "implement", "pr_fix", "design"])(
