@@ -7,6 +7,7 @@ import {
   bumpWatermarks,
   claimIssueCreation,
   claimPrCiCheckForFix,
+  countAppliedDesignRejections,
   countImplementFailedRounds,
   countPendingIssueProposals,
   countPrCiFixRounds,
@@ -69,6 +70,7 @@ import {
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
+  latestApprovalRequest,
   latestConflictFixSettledAt,
   latestDesignApproval,
   latestDesignDraft,
@@ -102,6 +104,7 @@ import {
   listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
+  listWorkItemsByStatuses,
   markPrCiNotified,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
@@ -156,9 +159,11 @@ import {
   updateStatus,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
+  updateStatusIfLatestApproval,
   updateStatusIfLeaseHolder,
   updateStatusIfLeaseHolderClearingFlowJobId,
   updateStatusToRequirementsIfCurrent,
+  updateStatusToRequirementsIfLeaseHolder,
 } from "../../f/factory/lib/db.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
@@ -5309,6 +5314,7 @@ describe("latestDesignApproval", () => {
     subject_id: 8,
     status: "approved",
     payload: { attempt: 2, design_attempt: 1 },
+    reason: "the design is too complex",
     dd_design_attempt: 1,
     dd_requirement_draft_id: 5,
   };
@@ -5326,8 +5332,20 @@ describe("latestDesignApproval", () => {
       status: "approved",
       payload_attempt: 2,
       payload_design_attempt: 1,
+      reason: "the design is too complex",
       draft: { design_attempt: 1, requirement_draft_id: 5 },
     });
+  });
+
+  test("reads the reason as null when the decision has none", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, reason: null }]]);
+    expect((await latestDesignApproval(1, sql))?.reason).toBeNull();
+  });
+
+  test("selects the reason of the request", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestDesignApproval(1, sql);
+    expect(calls[0]?.text).toContain("ar.reason");
   });
 
   test("returns a null draft when the design draft cannot be joined", async () => {
@@ -5410,6 +5428,327 @@ describe("latestDesignApproval", () => {
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "ar.work_item_id = ? ::bigint",
     );
+  });
+});
+
+describe("latestApprovalRequest", () => {
+  const ROW: SqlRow = {
+    id: "41",
+    status: "pending",
+    payload: { attempt: 2, design_attempt: 1 },
+    expires_at: "2026-10-27T00:00:00.000Z",
+    decided_at: null,
+  };
+
+  test("returns null when the work item has no request of the kind", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await latestApprovalRequest(1, "design", sql)).toBeNull();
+  });
+
+  test("parses the newest request", async () => {
+    const { sql } = createFakeSqlClient([[ROW]]);
+    expect(await latestApprovalRequest(1, "design", sql)).toEqual({
+      id: 41,
+      status: "pending",
+      payload: { attempt: 2, design_attempt: 1 },
+      expires_at: new Date("2026-10-27T00:00:00.000Z"),
+      decided_at: null,
+    });
+  });
+
+  test("reads the payload of a JSON string", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, payload: '{"attempt":3}' }],
+    ]);
+    expect((await latestApprovalRequest(1, "design", sql))?.payload).toEqual({
+      attempt: 3,
+    });
+  });
+
+  test("parses the decision time of a decided request", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, status: "approved", decided_at: "2026-10-26T00:00:00.000Z" }],
+    ]);
+    expect((await latestApprovalRequest(1, "design", sql))?.decided_at).toEqual(
+      new Date("2026-10-26T00:00:00.000Z"),
+    );
+  });
+
+  test("does not join the drafts, so a request without a draft is still the newest", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestApprovalRequest(1, "requirements", sql);
+    expect(calls[0]?.text.toUpperCase()).not.toContain("JOIN");
+  });
+
+  test("passes the kind as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestApprovalRequest(1, "requirements", sql);
+    expect(calls[0]?.values).toContain("requirements");
+  });
+
+  test("orders by requested_at DESC and takes one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestApprovalRequest(1, "design", sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "ORDER BY requested_at DESC, id DESC LIMIT 1",
+    );
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestApprovalRequest(1, "design", sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "work_item_id = ? ::bigint",
+    );
+  });
+});
+
+describe("listWorkItemsByStatuses", () => {
+  test("passes the statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listWorkItemsByStatuses(
+      ["awaiting_approval", "awaiting_design_approval"],
+      sql,
+    );
+    expect(calls[0]?.values[0]).toEqual([
+      "awaiting_approval",
+      "awaiting_design_approval",
+    ]);
+  });
+
+  test("returns only issue work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listWorkItemsByStatuses(["awaiting_approval"], sql);
+    expect(calls[0]?.text).toContain("kind = 'issue'");
+  });
+
+  test("orders by id so the order is stable", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listWorkItemsByStatuses(["awaiting_approval"], sql);
+    expect(calls[0]?.text).toContain("ORDER BY id ASC");
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
+    ]);
+    expect(
+      await listWorkItemsByStatuses(["awaiting_approval"], sql),
+    ).toHaveLength(2);
+  });
+});
+
+describe("countAppliedDesignRejections", () => {
+  const NOTE = "design rejected; regenerating";
+  const PREFIX = "design rejected after max_design_attempts";
+
+  test("returns the count", async () => {
+    const { sql } = createFakeSqlClient([[{ n: "2" }]]);
+    expect(await countAppliedDesignRejections(1, NOTE, PREFIX, sql)).toBe(2);
+  });
+
+  test("returns zero when the query returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countAppliedDesignRejections(1, NOTE, PREFIX, sql)).toBe(0);
+  });
+
+  test("passes the notes from the caller as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.values).toEqual(expect.arrayContaining([NOTE, PREFIX]));
+  });
+
+  test("counts the moves from awaiting_design_approval back to designing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "to_status = 'designing' AND note = ?",
+    );
+  });
+
+  test("counts the moves from awaiting_design_approval to needs_human by the prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "to_status = 'needs_human' AND starts_with(note, ?)",
+    );
+  });
+
+  test("counts only the moves out of awaiting_design_approval", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text).toContain(
+      "from_status = 'awaiting_design_approval'",
+    );
+  });
+
+  test("counts only the records after the latest move into the requirements", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "to_status = 'requirements_generating' AND from_status IS DISTINCT FROM to_status",
+    );
+  });
+
+  test("compares the ids of the records, not the times", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text).toContain("MAX(id)");
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "work_item_id = ? ::bigint",
+    );
+  });
+});
+
+describe("updateStatusIfLatestApproval", () => {
+  const LATEST = {
+    kind: "design",
+    requestId: 41,
+    requestStatus: "pending",
+  } as const;
+
+  function call(sql: SqlClient) {
+    return updateStatusIfLatestApproval(
+      1,
+      "awaiting_design_approval",
+      "expired",
+      "design approval timed out",
+      LATEST,
+      sql,
+      NO_JOBS,
+    );
+  }
+
+  test("guards the update with the expected status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("awaiting_design_approval");
+  });
+
+  test("looks up the newest request of the kind in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "ORDER BY a.requested_at DESC, a.id DESC LIMIT 1",
+    );
+  });
+
+  test("requires the newest request to be the given one", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain(41);
+  });
+
+  test("requires the newest request to have the given status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("pending");
+  });
+
+  test("passes the kind of the request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("design");
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("records the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("design approval timed out");
+  });
+
+  test("keeps the flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).not.toContain("flow_job_id = NULL");
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(await call(sql)).toBe(true);
+  });
+
+  test("returns false when the newest request is another one", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(false);
+  });
+});
+
+describe("updateStatusToRequirementsIfLeaseHolder", () => {
+  function call(sql: SqlClient) {
+    return updateStatusToRequirementsIfLeaseHolder(
+      1,
+      "awaiting_design_approval",
+      "job-1",
+      "a note",
+      sql,
+      NO_JOBS,
+    );
+  }
+
+  test("moves the work item to requirements_generating", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("status = 'requirements_generating'");
+  });
+
+  test("resets design_attempt to 0 in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("design_attempt = 0");
+  });
+
+  test("clears flow_job_id in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("guards the update with the expected flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("flow_job_id IS NOT DISTINCT FROM");
+  });
+
+  test("passes the expected status and flow job id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toEqual([
+      1,
+      "awaiting_design_approval",
+      "job-1",
+      "awaiting_design_approval",
+      "a note",
+      null,
+      null,
+    ]);
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(await call(sql)).toBe(true);
+  });
+
+  test("returns false when the status or flow job id changed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(false);
   });
 });
 

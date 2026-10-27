@@ -57,6 +57,7 @@ function context(overrides: Partial<RestartContext> = {}): RestartContext {
     designApproved: false,
     stop: "other",
     feedback: null,
+    designFeedback: null,
     carriesGap: false,
     ...overrides,
   };
@@ -1345,6 +1346,25 @@ describe("computeRestartPlan — where an issue restarts", () => {
         ).args,
       ).toEqual({ work_item_id: 7, design_attempt: 1, feedback: "" });
     });
+
+    test("passes the rejection reason of the design as the feedback", () => {
+      expect(
+        computeRestartPlan(
+          issue({ design_attempt: 2 }),
+          context({ ...UNAPPROVED, designFeedback: "split the module" }),
+        ).args,
+      ).toEqual({
+        work_item_id: 7,
+        design_attempt: 3,
+        feedback: "split the module",
+      });
+    });
+
+    test("passes an empty feedback when no rejection reason was found", () => {
+      expect(
+        computeRestartPlan(issue(), context({ ...UNAPPROVED })).args,
+      ).toMatchObject({ feedback: "" });
+    });
   });
 
   describe("row 5: the implement flow", () => {
@@ -1455,7 +1475,14 @@ describe("buildRestartContext", () => {
     status: "approved",
     payload_attempt: 2,
     payload_design_attempt: 1,
+    reason: null,
     draft: { design_attempt: 1, requirement_draft_id: 10 },
+  };
+  const DESIGN_REJECTED: DesignApprovalRef = {
+    ...DESIGN_APPROVED,
+    status: "rejected",
+    payload_design_attempt: 3,
+    reason: "the design is too complex",
   };
 
   type Harness = {
@@ -1619,6 +1646,224 @@ describe("buildRestartContext", () => {
 
     test("is not approved without an approval", async () => {
       expect((await build(harness())).designApproved).toBe(false);
+    });
+  });
+
+  describe("the reason of a design rejection", () => {
+    test("is the reason of the rejected design request of the current attempt", async () => {
+      const h = harness({ designApproval: DESIGN_REJECTED });
+      expect((await build(h)).designFeedback).toBe("the design is too complex");
+    });
+
+    test("does not depend on the design attempt of the request", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, payload_design_attempt: 9 },
+      });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 2, design_attempt: 4 },
+      });
+      expect(context.designFeedback).toBe("the design is too complex");
+    });
+
+    test("reads the design approval once", async () => {
+      const h = harness({ designApproval: DESIGN_REJECTED });
+      await build(h);
+      expect(h.designReads).toEqual([7]);
+    });
+
+    test("is not passed for an approval", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test.each([["pending"], ["expired"]] as const)(
+      "is not passed for a request with the status %s",
+      async (status) => {
+        const h = harness({
+          designApproval: { ...DESIGN_REJECTED, status },
+        });
+        expect((await build(h)).designFeedback).toBeNull();
+      },
+    );
+
+    test("is not passed for a rejection of another attempt", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, payload_attempt: 1 },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("is not passed without a design request", async () => {
+      expect((await build(harness())).designFeedback).toBeNull();
+    });
+
+    test("is null for a rejection without a reason", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, reason: null },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("is null for a rejection with a blank reason", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, reason: "  " },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("is not cleaned or cut, as the normal path passes it", async () => {
+      const reason = `use ${GITHUB_TOKEN}\u0000 ${"x".repeat(GAP_REPORT_MAX_CHARS + 50)}`;
+      const h = harness({ designApproval: { ...DESIGN_REJECTED, reason } });
+      expect((await build(h)).designFeedback).toBe(reason);
+    });
+
+    test("is not read when the design is disabled", async () => {
+      const h = harness({ designApproval: DESIGN_REJECTED });
+      expect(
+        (await build(h, { designEnabled: false })).designFeedback,
+      ).toBeNull();
+    });
+
+    test("is not read when the requirements are not ready", async () => {
+      const h = harness({ designApproval: DESIGN_REJECTED });
+      const context = await build(h, {
+        requirementsApproval: REQUIREMENTS_REJECTED,
+      });
+      expect(context.designFeedback).toBeNull();
+    });
+  });
+
+  describe("the reason of a design rejection after the move back to the requirements failed to start", () => {
+    const ISSUE_CHANGED: StatusEventSummary = {
+      from_status: "awaiting_design_approval",
+      note: "design rejected; the issue changed since intake",
+    };
+    const ADVANCED = { id: 7, attempt: 3, design_attempt: 0 };
+
+    test("passes the reason of the rejection to the requirements", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      expect((await build(h)).feedback).toBe("the design is too complex");
+    });
+
+    test("does not mark the reason as an automated report", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      expect((await build(h)).feedback).not.toBe(
+        automatedFeedback("the design is too complex"),
+      );
+    });
+
+    test("carries the reason on to the next restart", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      expect((await build(h)).carriesGap).toBe(true);
+    });
+
+    test("passes the reason although the design is disabled", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      const context = await build(h, { designEnabled: false });
+      expect(context.feedback).toBe("the design is too complex");
+    });
+
+    test("reads the design approval once when the design is enabled", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      await build(h);
+      expect(h.designReads).toEqual([7]);
+    });
+
+    test("reads the design approval once when the design is disabled", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      await build(h, { designEnabled: false });
+      expect(h.designReads).toEqual([7]);
+    });
+
+    test("passes the reason when the attempt moved on and no draft was made", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, payload_attempt: 2 },
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      const context = await build(h, { workItem: ADVANCED });
+      expect(context.feedback).toBe("the design is too complex");
+    });
+
+    test("carries the reason on when the attempt moved on", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, payload_attempt: 2 },
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      const context = await build(h, { workItem: ADVANCED });
+      expect(context.carriesGap).toBe(true);
+    });
+
+    test("does not pass the reason once a draft was made", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, payload_attempt: 2 },
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+        draftAfter: true,
+      });
+      const context = await build(h, { workItem: ADVANCED });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not pass the reason of a request that was not rejected", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("does not pass the reason of a rejection of another attempt that a draft followed", async () => {
+      const h = harness({
+        designApproval: { ...DESIGN_REJECTED, payload_attempt: 1 },
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+        draftAfter: true,
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("does not pass the reason without a design request", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [ISSUE_CHANGED],
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("does not read the design approval for a gap of the implementation when the design is disabled", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [{ from_status: "implementing", note: "gap: X" }],
+      });
+      await build(h, { designEnabled: false });
+      expect(h.designReads).toEqual([]);
     });
   });
 

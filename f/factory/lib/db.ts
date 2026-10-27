@@ -4116,6 +4116,64 @@ export async function latestDesignApproval(
   };
 }
 
+export type LatestApprovalRequest = Pick<
+  ApprovalRequest,
+  "id" | "status" | "payload" | "expires_at" | "decided_at"
+>;
+
+export async function latestApprovalRequest(
+  _workItemId: number,
+  _kind: ApprovalRequestKind,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<LatestApprovalRequest | null> {
+  return null;
+}
+
+export async function listWorkItemsByStatuses(
+  _statuses: readonly WorkItemStatus[],
+  _sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  return [];
+}
+
+export async function countAppliedDesignRejections(
+  _workItemId: number,
+  _regeneratingNote: string,
+  _exhaustedPrefix: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
+}
+
+export type LatestApprovalGuard = {
+  readonly kind: ApprovalRequestKind;
+  readonly requestId: number;
+  readonly requestStatus: ApprovalRequestStatus;
+};
+
+export async function updateStatusIfLatestApproval(
+  _id: number,
+  _expectedFrom: WorkItemStatus,
+  _to: WorkItemStatus,
+  _note: string | null,
+  _latest: LatestApprovalGuard,
+  _sql: SqlClient = defaultSqlClient,
+  _jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  return false;
+}
+
+export async function updateStatusToRequirementsIfLeaseHolder(
+  _id: number,
+  _expectedFrom: WorkItemStatus,
+  _expectedFlowJobId: string | null,
+  _note: string | null = null,
+  _sql: SqlClient = defaultSqlClient,
+  _jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // cleanup_db.ts(DBの保持期間による掃除)が使う削除。
 // 期限の計算と集計の文言は`lib/cleanup_db_support.ts`、

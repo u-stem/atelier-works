@@ -24,6 +24,7 @@ function approval(
     status: "approved",
     payload_attempt: 2,
     payload_design_attempt: 1,
+    reason: null,
     draft: { design_attempt: 1, requirement_draft_id: 10 },
     ...overrides,
   };

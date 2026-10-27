@@ -83,6 +83,20 @@ describe("designFlowInput", () => {
   test("starts with no feedback", () => {
     expect(designFlowInput({ id: 7, design_attempt: 0 }).feedback).toBe("");
   });
+
+  test("carries the feedback it is given", () => {
+    expect(
+      designFlowInput({ id: 7, design_attempt: 1 }, "split the module")
+        .feedback,
+    ).toBe("split the module");
+  });
+
+  test("keeps the attempt when a feedback is given", () => {
+    expect(
+      designFlowInput({ id: 7, design_attempt: 1 }, "split the module")
+        .design_attempt,
+    ).toBe(2);
+  });
 });
 
 describe("startDesign", () => {
