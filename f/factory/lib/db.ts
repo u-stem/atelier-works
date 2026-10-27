@@ -1157,6 +1157,7 @@ export type AutoRetryCandidate = {
   readonly kind: (typeof AUTO_RETRY_KINDS)[number];
   readonly status: WorkItemStatus;
   readonly attempt: number;
+  readonly design_attempt: number;
   readonly flow_job_id: string | null;
 };
 
@@ -1249,6 +1250,7 @@ export async function listAutoRetryCandidates(
     kind: parseEnum(row.kind, AUTO_RETRY_KINDS, "kind"),
     status: parseEnum(row.status, WORK_ITEM_STATUSES, "status"),
     attempt: parseRequiredNumber(row.attempt, "attempt"),
+    design_attempt: 0,
     flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
   }));
 }

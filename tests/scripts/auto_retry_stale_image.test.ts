@@ -56,6 +56,34 @@ describe("auto_retry_stale_image wiring", () => {
     expect(source.match(/resolvedBy: HOST_ACTION_RESOLVER,/g)).toHaveLength(1);
   });
 
+  test("decides whether the work item can restart into the implement flow with the shared check", async () => {
+    const source = await scriptSource();
+
+    expect(source).toContain("isReadyForImplement(");
+  });
+
+  test("tells the shared check whether the design is enabled", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /isReadyForImplement\(\s*candidate,\s*config\.design_enabled,/,
+    );
+  });
+
+  test("gives the shared check the readers of both approvals", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /isReadyForImplement\([\s\S]*?\{\s*latestRequirementsApproval,\s*latestDesignApproval,?\s*\}/,
+    );
+  });
+
+  test("does not judge the requirements approval by itself", async () => {
+    const source = await scriptSource();
+
+    expect(source).not.toContain("isRequirementsApprovedForAttempt(");
+  });
+
   test("restricts the restart to the stale image notice", async () => {
     const source = await scriptSource();
 

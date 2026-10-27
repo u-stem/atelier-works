@@ -26,6 +26,7 @@ const ISSUE: AutoRetryCandidate = {
   kind: "issue",
   status: "needs_human",
   attempt: 2,
+  design_attempt: 0,
   flow_job_id: "old-job",
 };
 const PR_FIX: AutoRetryCandidate = {
@@ -33,6 +34,7 @@ const PR_FIX: AutoRetryCandidate = {
   kind: "pr_fix",
   status: "blocked",
   attempt: 1,
+  design_attempt: 0,
   flow_job_id: "old-job",
 };
 

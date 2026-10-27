@@ -5780,6 +5780,7 @@ describe("listAutoRetryCandidates", () => {
           kind: "pr_fix",
           status: "blocked",
           attempt: 1,
+          design_attempt: 0,
           flow_job_id: "job-1",
         },
       ],
@@ -5790,9 +5791,34 @@ describe("listAutoRetryCandidates", () => {
         kind: "pr_fix",
         status: "blocked",
         attempt: 1,
+        design_attempt: 0,
         flow_job_id: "job-1",
       },
     ]);
+  });
+
+  test("reads the design attempt of the work item", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 8,
+          kind: "issue",
+          status: "needs_human",
+          attempt: 2,
+          design_attempt: "3",
+          flow_job_id: null,
+        },
+      ],
+    ]);
+    expect(
+      (await listAutoRetryCandidates(params, sql))[0]?.design_attempt,
+    ).toBe(3);
+  });
+
+  test("selects the design attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("w.design_attempt");
   });
 
   test("rejects a kind that cannot be restarted automatically", async () => {

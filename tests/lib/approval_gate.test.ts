@@ -3,8 +3,10 @@ import {
   DESIGN_APPROVAL_INCONSISTENT_REASON,
   DESIGN_STALE_REQUIREMENTS_REASON,
   designApprovalVerdict,
+  designGate,
   designGateReason,
   isDesignApprovedForAttempt,
+  isReadyForImplement,
   isRequirementsApprovedForAttempt,
   noApprovedDesignReason,
 } from "../../f/factory/lib/approval_gate.ts";
@@ -264,5 +266,273 @@ describe("the move of isRequirementsApprovedForAttempt", () => {
     expect(await implementSupportSource()).not.toMatch(
       /export \{[^}]*isRequirementsApprovedForAttempt/,
     );
+  });
+});
+
+describe("isReadyForImplement", () => {
+  const ITEM = { id: 7, attempt: 2, design_attempt: 1 };
+  const REQUIREMENTS = { status: "approved", attempt: 2, draft_id: 10 };
+
+  function deps(
+    options: {
+      requirements?: {
+        status: string;
+        attempt: number;
+        draft_id: number;
+      } | null;
+      design?: DesignApprovalRef | null;
+    } = {},
+  ) {
+    const calls: string[] = [];
+    return {
+      calls,
+      deps: {
+        latestRequirementsApproval: async () => {
+          calls.push("requirements");
+          return options.requirements === undefined
+            ? REQUIREMENTS
+            : options.requirements;
+        },
+        latestDesignApproval: async () => {
+          calls.push("design");
+          return options.design === undefined ? approval() : options.design;
+        },
+      },
+    };
+  }
+
+  test("is false without a requirements approval", async () => {
+    expect(
+      await isReadyForImplement(ITEM, false, deps({ requirements: null }).deps),
+    ).toBe(false);
+  });
+
+  test("is false when the requirements approval is for another attempt", async () => {
+    expect(
+      await isReadyForImplement(
+        ITEM,
+        false,
+        deps({ requirements: { ...REQUIREMENTS, attempt: 1 } }).deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the requirements are not approved", async () => {
+    expect(
+      await isReadyForImplement(
+        ITEM,
+        false,
+        deps({ requirements: { ...REQUIREMENTS, status: "rejected" } }).deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("is true with approved requirements when the design is disabled", async () => {
+    expect(await isReadyForImplement(ITEM, false, deps().deps)).toBe(true);
+  });
+
+  test("does not read the design approval when the design is disabled", async () => {
+    const d = deps();
+    await isReadyForImplement(ITEM, false, d.deps);
+    expect(d.calls).toEqual(["requirements"]);
+  });
+
+  test("is true when the design is enabled and the design approval matches", async () => {
+    expect(await isReadyForImplement(ITEM, true, deps().deps)).toBe(true);
+  });
+
+  test("is false when the design is enabled and there is no design approval", async () => {
+    expect(
+      await isReadyForImplement(ITEM, true, deps({ design: null }).deps),
+    ).toBe(false);
+  });
+
+  test("is false when the design is enabled and the design approval is pending", async () => {
+    expect(
+      await isReadyForImplement(
+        ITEM,
+        true,
+        deps({ design: approval({ status: "pending" }) }).deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the design approval is for another design attempt", async () => {
+    expect(
+      await isReadyForImplement(
+        { ...ITEM, design_attempt: 2 },
+        true,
+        deps().deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the design was made from other requirements", async () => {
+    expect(
+      await isReadyForImplement(
+        ITEM,
+        true,
+        deps({ requirements: { ...REQUIREMENTS, draft_id: 11 } }).deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not read the design approval when the requirements are not approved", async () => {
+    const d = deps({ requirements: null });
+    await isReadyForImplement(ITEM, true, d.deps);
+    expect(d.calls).toEqual(["requirements"]);
+  });
+});
+
+describe("designGate", () => {
+  const INPUT = {
+    designEnabled: true,
+    workItem: { id: 7, attempt: 2, design_attempt: 1 },
+    requirementsApproval: { draft_id: 10 },
+  };
+
+  type Draft = {
+    work_item_id: number;
+    design_attempt: number;
+    requirement_draft_id: number;
+    markdown: string;
+  };
+
+  /** 承認が指す設計書(`approval()`の`design_draft_id`の20)。 */
+  const APPROVED_DRAFT: Draft = {
+    work_item_id: 7,
+    design_attempt: 1,
+    requirement_draft_id: 10,
+    markdown: "# approved design",
+  };
+
+  function harness(
+    options: { approval?: DesignApprovalRef | null; draft?: Draft | null } = {},
+  ) {
+    const reads: number[] = [];
+    let approvalReads = 0;
+    return {
+      reads,
+      approvalReads: () => approvalReads,
+      deps: {
+        latestDesignApproval: async () => {
+          approvalReads += 1;
+          return options.approval === undefined ? approval() : options.approval;
+        },
+        getDesignDraft: async (id: number) => {
+          reads.push(id);
+          return options.draft === undefined ? APPROVED_DRAFT : options.draft;
+        },
+      },
+    };
+  }
+
+  test("skips when the design is disabled", async () => {
+    expect(
+      await designGate({ ...INPUT, designEnabled: false }, harness().deps),
+    ).toEqual({ kind: "skip" });
+  });
+
+  test("does not read anything when the design is disabled", async () => {
+    const h = harness();
+    await designGate({ ...INPUT, designEnabled: false }, h.deps);
+    expect([h.approvalReads(), h.reads]).toEqual([0, []]);
+  });
+
+  test("passes with the markdown of the design the approval points at", async () => {
+    expect(await designGate(INPUT, harness().deps)).toEqual({
+      kind: "pass",
+      markdown: "# approved design",
+    });
+  });
+
+  test("reads the design draft by the id of the approval", async () => {
+    const h = harness({ approval: approval({ design_draft_id: 33 }) });
+    await designGate(INPUT, h.deps);
+    expect(h.reads).toEqual([33]);
+  });
+
+  test("stops without an approval", async () => {
+    expect(await designGate(INPUT, harness({ approval: null }).deps)).toEqual({
+      kind: "stop",
+      reason: noApprovedDesignReason(1),
+    });
+  });
+
+  test("stops for a pending approval", async () => {
+    expect(
+      await designGate(
+        INPUT,
+        harness({ approval: approval({ status: "pending" }) }).deps,
+      ),
+    ).toEqual({ kind: "stop", reason: noApprovedDesignReason(1) });
+  });
+
+  test("stops for a design made from other requirements", async () => {
+    expect(
+      await designGate(
+        { ...INPUT, requirementsApproval: { draft_id: 11 } },
+        harness().deps,
+      ),
+    ).toEqual({ kind: "stop", reason: DESIGN_STALE_REQUIREMENTS_REASON });
+  });
+
+  test("stops for an approval whose payload is off", async () => {
+    expect(
+      await designGate(
+        INPUT,
+        harness({ approval: approval({ payload_attempt: null }) }).deps,
+      ),
+    ).toEqual({ kind: "stop", reason: DESIGN_APPROVAL_INCONSISTENT_REASON });
+  });
+
+  test("names the design attempt of the work item in the reason", async () => {
+    expect(
+      await designGate(
+        { ...INPUT, workItem: { id: 7, attempt: 2, design_attempt: 0 } },
+        harness().deps,
+      ),
+    ).toEqual({ kind: "stop", reason: noApprovedDesignReason(0) });
+  });
+
+  test("does not read the design draft when the verdict is not ok", async () => {
+    const h = harness({ approval: null });
+    await designGate(INPUT, h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("stops as inconsistent when the design draft is gone", async () => {
+    expect(await designGate(INPUT, harness({ draft: null }).deps)).toEqual({
+      kind: "stop",
+      reason: DESIGN_APPROVAL_INCONSISTENT_REASON,
+    });
+  });
+
+  test("stops as inconsistent when the draft read again has another design attempt", async () => {
+    expect(
+      await designGate(
+        INPUT,
+        harness({ draft: { ...APPROVED_DRAFT, design_attempt: 2 } }).deps,
+      ),
+    ).toEqual({ kind: "stop", reason: DESIGN_APPROVAL_INCONSISTENT_REASON });
+  });
+
+  test("stops as inconsistent when the draft read again has other requirements", async () => {
+    expect(
+      await designGate(
+        INPUT,
+        harness({ draft: { ...APPROVED_DRAFT, requirement_draft_id: 11 } })
+          .deps,
+      ),
+    ).toEqual({ kind: "stop", reason: DESIGN_APPROVAL_INCONSISTENT_REASON });
+  });
+
+  test("stops as inconsistent when the draft read again belongs to another work item", async () => {
+    expect(
+      await designGate(
+        INPUT,
+        harness({ draft: { ...APPROVED_DRAFT, work_item_id: 8 } }).deps,
+      ),
+    ).toEqual({ kind: "stop", reason: DESIGN_APPROVAL_INCONSISTENT_REASON });
   });
 });

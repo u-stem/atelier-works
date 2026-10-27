@@ -4415,6 +4415,16 @@ check(
     .map((candidate) => candidate.id)
     .includes(stoppedFix),
 );
+execPsql(
+  target,
+  `UPDATE factory.work_items SET design_attempt = 2 WHERE id = ${String(stoppedFix)}`,
+);
+check(
+  "auto retry candidate: the design attempt of the work item is read",
+  (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql)).find(
+    (candidate) => candidate.id === stoppedFix,
+  )?.design_attempt === 2,
+);
 check(
   "active pr_fix: a stopped pr_fix is restarted once the active one ends",
   (await restartStoppedWorkItem(restartParams, sql, NO_JOB_IDS)) === true,

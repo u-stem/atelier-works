@@ -393,3 +393,79 @@ describe("the wiring of the requirements gate in implement_prepare main", () => 
     );
   });
 });
+
+// 設計の承認の判定の実体は`lib/approval_gate.ts`にある。ここには呼び出しと、止める1文だけを残す。
+describe("the wiring of the design gate in implement_prepare main", () => {
+  async function source(): Promise<string> {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/implement_prepare.ts", import.meta.url),
+    ).text();
+    return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  }
+
+  const GATE = "await designGate(";
+
+  /** `needle`がちょうど1回だけ出現するときにその位置を返す。0回か複数回なら-1を返す。 */
+  function onlyIndex(text: string, needle: string): number {
+    const first = text.indexOf(needle);
+    if (first < 0) return -1;
+    return text.indexOf(needle, first + needle.length) < 0 ? first : -1;
+  }
+
+  test("calls the design gate exactly once", async () => {
+    expect(onlyIndex(await source(), GATE)).toBeGreaterThanOrEqual(0);
+  });
+
+  test("tells the gate whether the design is enabled", async () => {
+    expect(await source()).toContain("designEnabled: config.design_enabled,");
+  });
+
+  test("hands the gate the work item and the requirements approval", async () => {
+    expect(await source()).toMatch(
+      /await designGate\(\s*\{[^}]*workItem,[^}]*requirementsApproval: approval,/,
+    );
+  });
+
+  test("reads the design approval and the design draft from the database", async () => {
+    expect(await source()).toMatch(
+      /await designGate\([\s\S]*?latestDesignApproval[\s\S]*?getDesignDraft/,
+    );
+  });
+
+  test("stops for a person with the reason of the gate", async () => {
+    expect(await source()).toContain(
+      'if (gate.kind === "stop") return stop("needs_human", gate.reason);',
+    );
+  });
+
+  test("checks the design gate after the gate of the requirements", async () => {
+    const text = await source();
+    const design = onlyIndex(text, GATE);
+    const requirements = onlyIndex(text, "await requirementsGateReason(");
+    expect(design >= 0 && requirements >= 0 && requirements < design).toBe(
+      true,
+    );
+  });
+
+  test("checks the design gate before it looks at the branch", async () => {
+    const text = await source();
+    const design = onlyIndex(text, GATE);
+    const branch = onlyIndex(text, "await findOpenPullRequestByHead(");
+    expect(design >= 0 && branch >= 0 && design < branch).toBe(true);
+  });
+
+  test("checks the design gate before it prepares the worktree", async () => {
+    const text = await source();
+    const design = onlyIndex(text, GATE);
+    const worktree = onlyIndex(text, "await prepareImplementWorktree(");
+    expect(design >= 0 && worktree >= 0 && design < worktree).toBe(true);
+  });
+
+  test.each([
+    "designApprovalVerdict(",
+    "isDesignApprovedForAttempt(",
+    "designGateReason(",
+  ])("does not hold the body of the verdict (%s)", async (name) => {
+    expect(await source()).not.toContain(name);
+  });
+});

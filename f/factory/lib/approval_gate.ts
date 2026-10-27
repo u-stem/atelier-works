@@ -3,7 +3,7 @@
 // CI回の自動修正が書き換えられない拒否の一覧(`ci_fix_paths.ts`)に入れるためである。
 // DBは読まない。判定に要る値は、呼び出し側が渡す。
 
-import type { DesignApprovalRef } from "./types.ts";
+import type { DesignApprovalRef, DesignDraft, WorkItem } from "./types.ts";
 
 /**
  * `approval`(`db.latestRequirementsApproval`の行か`null`)が、
@@ -132,4 +132,72 @@ export function designGateReason(
     case "inconsistent":
       return DESIGN_APPROVAL_INCONSISTENT_REASON;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 実装の関門と、実装へ再開してよいかの判定
+// ---------------------------------------------------------------------------
+
+/** 判定が読む、要件定義の承認の行。`db.latestRequirementsApproval`の行がそのまま当てはまる。 */
+export type RequirementsApprovalForGate = {
+  readonly status: string;
+  readonly attempt: number;
+  /** 承認依頼が指す要件定義の下書きの`id`。 */
+  readonly draft_id: number;
+};
+
+export type ReadyForImplementDeps = {
+  readonly latestRequirementsApproval: (
+    workItemId: number,
+  ) => Promise<RequirementsApprovalForGate | null>;
+  readonly latestDesignApproval: (
+    workItemId: number,
+  ) => Promise<DesignApprovalRef | null>;
+};
+
+/** 実装へ再開してよいか。 */
+export async function isReadyForImplement(
+  item: Pick<WorkItem, "id" | "attempt" | "design_attempt">,
+  designEnabled: boolean,
+  deps: ReadyForImplementDeps,
+): Promise<boolean> {
+  void item;
+  void designEnabled;
+  void deps;
+  return false;
+}
+
+/** `designGate`の結果。 */
+export type DesignGateResult =
+  | { readonly kind: "skip" }
+  | { readonly kind: "stop"; readonly reason: string }
+  | { readonly kind: "pass"; readonly markdown: string };
+
+export type DesignGateInput = {
+  readonly designEnabled: boolean;
+  readonly workItem: Pick<WorkItem, "id" | "attempt" | "design_attempt">;
+  /** 現在の`attempt`で承認済みの、最新の要件定義の承認。 */
+  readonly requirementsApproval: { readonly draft_id: number };
+};
+
+export type DesignGateDeps = {
+  readonly latestDesignApproval: (
+    workItemId: number,
+  ) => Promise<DesignApprovalRef | null>;
+  readonly getDesignDraft: (
+    id: number,
+  ) => Promise<Pick<
+    DesignDraft,
+    "work_item_id" | "design_attempt" | "requirement_draft_id" | "markdown"
+  > | null>;
+};
+
+/** 実装の関門の、設計の承認の判定。 */
+export async function designGate(
+  input: DesignGateInput,
+  deps: DesignGateDeps,
+): Promise<DesignGateResult> {
+  void input;
+  void deps;
+  return { kind: "skip" };
 }
