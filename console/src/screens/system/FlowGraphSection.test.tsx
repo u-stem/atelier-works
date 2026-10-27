@@ -62,7 +62,9 @@ describe("FlowGraphSection", () => {
   });
 
   test("does not draw the graph while it is folded", () => {
-    expect(render(<FlowGraphSection graph={GRAPH} />)).not.toContain("<svg");
+    expect(render(<FlowGraphSection graph={GRAPH} />)).not.toContain(
+      'aria-label="起動の関係の図"',
+    );
   });
 
   test("folds the graph", () => {

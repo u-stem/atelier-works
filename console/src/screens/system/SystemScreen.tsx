@@ -1,7 +1,11 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useHolds } from "../../api/holdsQueries.ts";
-import { useConfig } from "../../api/jobsQueries.ts";
+import {
+  useActiveJobs,
+  useConfig,
+  useSchedules,
+} from "../../api/jobsQueries.ts";
 import { useDeployments, useSummary } from "../../api/queries.ts";
 import {
   SYSTEM_STATUS_LIMIT,
@@ -257,7 +261,8 @@ function Sections({ children }: { children: ReactNode }) {
  * 選んでいないタブは、初めて開くまで描かない。開いた後は隠して残し、スクロール位置を保つ。
  * 失敗が隠れないよう、帯の失敗のチップに件数を出し、失敗と通知のタブには注意以上のときの印だけを付ける。
  * 見出しの更新ボタンが4つと、開いた後の設定を取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
- * 起動の関係の節だけは、取得を持たない静的なデータを図にする。
+ * 起動の関係の節は、静的なデータを図にする。実行中と待ちのジョブとscheduleは、「図を表示」を開いた後にだけ取得し、図に重ねる。
+ * この2つの取得も見出しの更新に含め、最終更新は古い方の時刻にする。
  * 書き込みは「保留と凍結」の節の解除だけで、ほかの節は読むだけである。通知の解決は、要対応の画面の詳細で行う。設定も読むだけで、変更はできない。
  */
 export function SystemScreen() {
@@ -270,12 +275,17 @@ export function SystemScreen() {
   const deployments = useDeployments();
   // 設定は、タブを開くまで取得しない。承認などの呼び出しと枠を分け合うworkerに、読まない取得を載せないためである。
   const config = useConfig(visited.has("config"));
+  // 起動の関係の図に重ねる実行の状態も、図を表示するまで取得しない。実行中と待ちの一覧は、ジョブの画面と取得を分け合う。
+  const [flowOpened, setFlowOpened] = useState(false);
+  const flowActive = useActiveJobs(flowOpened);
+  const flowSchedules = useSchedules(flowOpened);
   const refresh = refreshStatusOfSystem({
     status,
     deployments,
     summary,
     holds,
     config: visited.has("config") ? config : null,
+    flowGraph: flowOpened ? [flowActive, flowSchedules] : null,
   });
   const now = useNow();
   const scroll = useTabScroll(tab);
@@ -360,7 +370,11 @@ export function SystemScreen() {
           <Sections>
             <UpdateHistorySection deployments={deployments} />
             <ResolvedNoticeSection status={status} />
-            <FlowGraphSection graph={FLOW_GRAPH} />
+            <FlowGraphSection
+              graph={FLOW_GRAPH}
+              reads={{ active: flowActive, schedules: flowSchedules }}
+              onOpen={() => setFlowOpened(true)}
+            />
           </Sections>
         </TabPanel>
         <TabPanel

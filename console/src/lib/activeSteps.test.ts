@@ -11,6 +11,7 @@ import {
   preferDetailState,
   type StepDetails,
   stepLineOf,
+  stepLinesOf,
   stepTargets,
 } from "./activeSteps.ts";
 
@@ -180,6 +181,24 @@ describe("stepLineOf", () => {
 
   test("shows nothing for a job without steps", () => {
     expect(stepLineOf(detail("running"))).toBeNull();
+  });
+});
+
+describe("stepLinesOf", () => {
+  const running: StepDetails = new Map([
+    [ID(1), detail("running", [step("a", "running")])],
+  ]);
+
+  test("keys a line by the id of the job", () => {
+    expect([...stepLinesOf([job(1)], running).keys()]).toEqual([ID(1)]);
+  });
+
+  test("leaves out a job that was not read", () => {
+    expect(stepLinesOf([job(1)], new Map()).size).toBe(0);
+  });
+
+  test("leaves out a script job", () => {
+    expect(stepLinesOf([job(1, { job_kind: "script" })], running).size).toBe(0);
   });
 });
 
