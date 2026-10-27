@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { JobLink } from "../../components/JobLink.tsx";
 import { cn } from "../../lib/cn.ts";
 import {
+  CONDITIONAL_EDGES_NOTE,
   CONDITIONAL_WORD,
   type DiagramBox,
   type DiagramLayout,
@@ -11,12 +12,17 @@ import {
   entryText,
   exitKey,
   exitLinkLabel,
+  exitOriginText,
   exitText,
   type FlowDiagramModel,
+  groupEntriesForList,
+  hasConditionalEdges,
+  isSelfExit,
   layoutFlowDiagram,
   type StepNode,
   stepLinkLabel,
   UNKNOWN_STEPS_HEADING,
+  unwiredText,
 } from "../../lib/flowDiagram.ts";
 import { type GraphPresentation, wrapLines } from "../../lib/flowGraphFit.ts";
 import type { FlowEntry } from "../../lib/flowsData.ts";
@@ -146,9 +152,11 @@ function StateWords({ node, x, y }: { node: StepNode; x: number; y: number }) {
 function StepBody({
   box,
   node,
+  overlay,
 }: {
   box: Extract<DiagramBox, { kind: "step" }>;
   node: StepNode;
+  overlay: boolean;
 }) {
   const x = box.x + PAD_X;
   const summary = wrapLines(safeText(node.step.summary), SUMMARY_EM, 2);
@@ -186,7 +194,7 @@ function StepBody({
       >
         {id}
       </text>
-      {node.step.conditional ? (
+      {overlay && node.step.conditional ? (
         <text
           x={x}
           y={box.y + CONDITIONAL_Y}
@@ -202,7 +210,11 @@ function StepBody({
 
 /** 入口と出口の箱。文を折り返して描く。 */
 function SideBody({ box, text }: { box: DiagramBox; text: string }) {
-  const lines = wrapLines(safeText(text), SIDE_EM, 2);
+  const lines = wrapLines(
+    safeText(text),
+    SIDE_EM,
+    box.kind === "entry" ? 3 : 2,
+  );
   return (
     <>
       <rect
@@ -233,7 +245,7 @@ function SideBody({ box, text }: { box: DiagramBox; text: string }) {
 }
 
 /** 箱1つ。移る先があればリンクにして、キーボードで届くようにする。 */
-function BoxView({ box }: { box: DiagramBox }) {
+function BoxView({ box, overlay }: { box: DiagramBox; overlay: boolean }) {
   if (box.kind === "entry") {
     return (
       <g>
@@ -255,8 +267,8 @@ function BoxView({ box }: { box: DiagramBox }) {
     );
   }
   const to = jobDetailPath(box.node.jobId);
-  const body = <StepBody box={box} node={box.node} />;
-  const name = safeText(stepLinkLabel(box.node.step.id));
+  const body = <StepBody box={box} node={box.node} overlay={overlay} />;
+  const name = safeText(stepLinkLabel(box.node.step));
   return to === null ? (
     <g>{body}</g>
   ) : (
@@ -275,9 +287,11 @@ function BoxView({ box }: { box: DiagramBox }) {
 function FlowDiagram({
   layout,
   label,
+  overlay,
 }: {
   layout: DiagramLayout;
   label: string;
+  overlay: boolean;
 }) {
   const markerId = `flow-arrow-${useId().replace(/:/g, "")}`;
   return (
@@ -315,39 +329,82 @@ function FlowDiagram({
           // biome-ignore lint/suspicious/noArrayIndexKey: 箱は配置の順で決まり、入れ替わらない。
           key={index}
           box={box}
+          overlay={overlay}
         />
       ))}
     </svg>
   );
 }
 
-/** 他のflowのステップから起動される入口か。一覧では、起動元のflowとして1つにまとめる。 */
-function isLaunchEntry(entry: FlowEntry): boolean {
-  return entry.kind === "flow" && entry.via === "launch";
+const SECTION_LABEL = "text-caption font-semibold text-muted-foreground";
+
+const LIST_LINK_CLASS =
+  "rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/** flowの名前。図の画面があればリンクにする。 */
+function FlowNameLink({ name }: { name: string }) {
+  const to = flowDiagramPath(name);
+  const text = safeText(name);
+  return to === null ? (
+    <>{text}</>
+  ) : (
+    <Link to={to} className={LIST_LINK_CLASS}>
+      {text}
+    </Link>
+  );
 }
 
-const SECTION_LABEL = "text-caption font-semibold text-muted-foreground";
+/** 入口1つ。他のflowの承認や却下からの入口は、そのflowの図へのリンクにする。 */
+function EntryItem({ entry }: { entry: FlowEntry }) {
+  const text = safeText(entryText(entry));
+  const to = entry.kind === "flow" ? flowDiagramPath(entry.flow) : null;
+  return to === null ? (
+    <>{text}</>
+  ) : (
+    <Link to={to} className={LIST_LINK_CLASS}>
+      {text}
+    </Link>
+  );
+}
+
+/** flowの名前を「、」でつないで並べる。それぞれ図へのリンクにする。 */
+function FlowNameLinks({ names }: { names: readonly string[] }) {
+  return names.map((name, index) => (
+    <span key={name}>
+      {index === 0 ? "" : "、"}
+      <FlowNameLink name={name} />
+    </span>
+  ));
+}
 
 /**
  * 図が読めない狭い幅の代わりの一覧。入口、ステップ、出口の順に並べる。
- * 他のflowのステップから起動される入口は、起動元のflowとして1行にまとめる。
+ * 他のflowのステップから起動される入口と差し戻しは、起動元のflowとして1行にまとめ、図へのリンクにする。
+ * flow自身へ戻る出口は、同じ図なのでリンクにしない。出口には、つくステップを添える。
  */
 function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
   const { flow } = model;
-  const launchers = flow.entries.flatMap((entry) =>
-    entry.kind === "flow" && entry.via === "launch" ? [entry.flow] : [],
-  );
-  const entries = flow.entries.filter((entry) => !isLaunchEntry(entry));
+  const grouped = groupEntriesForList(flow);
   const name = safeText(flow.name);
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 text-small">
       <p className={SECTION_LABEL}>入口</p>
       <ul aria-label="入口" className="flex flex-col gap-1">
-        {entries.map((entry) => (
-          <li key={JSON.stringify(entry)}>{safeText(entryText(entry))}</li>
+        {grouped.entries.map((entry) => (
+          <li key={JSON.stringify(entry)}>
+            <EntryItem entry={entry} />
+          </li>
         ))}
-        {launchers.length === 0 ? null : (
-          <li>{safeText(`他のflowのステップ: ${launchers.join("、")}`)}</li>
+        {grouped.launchFlows.length === 0 ? null : (
+          <li>
+            他のflowのステップ: <FlowNameLinks names={grouped.launchFlows} />
+          </li>
+        )}
+        {grouped.reworkFlows.length === 0 ? null : (
+          <li>
+            他のflowからの差し戻し:{" "}
+            <FlowNameLinks names={grouped.reworkFlows} />
+          </li>
         )}
       </ul>
       <p className={SECTION_LABEL}>ステップ</p>
@@ -364,7 +421,7 @@ function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
               <span className="font-mono text-caption break-all text-muted-foreground">
                 {safeText(node.step.id)}
               </span>
-              {node.step.conditional ? (
+              {model.overlay && node.step.conditional ? (
                 <span className="text-caption text-muted-foreground">
                   {CONDITIONAL_WORD}
                 </span>
@@ -389,13 +446,13 @@ function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
               const text = safeText(exitText(exit));
               return (
                 <li key={exitKey(exit)}>
-                  {to === null ? (
+                  <span className="text-muted-foreground">
+                    {safeText(exitOriginText(exit))}
+                  </span>{" "}
+                  {to === null || isSelfExit(flow, exit) ? (
                     text
                   ) : (
-                    <Link
-                      to={to}
-                      className="rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
+                    <Link to={to} className={LIST_LINK_CLASS}>
                       {text}
                     </Link>
                   )}
@@ -405,6 +462,25 @@ function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
           </ul>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * 図の下に添える注記。
+ * 設定や試行の上限で起動が決まる辺を持つflowには、起動しない場合があると1文で伝える。
+ * 本番ではまだ起動しない入口があるflowには、そのことを伝える。
+ */
+function Notes({ model }: { model: FlowDiagramModel }) {
+  const { flow } = model;
+  const conditional = hasConditionalEdges(flow);
+  if (!conditional && flow.unwiredEntries.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1 text-small text-muted-foreground">
+      {conditional ? <p>{CONDITIONAL_EDGES_NOTE}</p> : null}
+      {flow.unwiredEntries.map((entry) => (
+        <p key={JSON.stringify(entry)}>{safeText(unwiredText(entry))}</p>
+      ))}
     </div>
   );
 }
@@ -444,7 +520,7 @@ export function FlowDiagramFrame({
       <FlowDiagramList model={model} />
     ) : presentation === "fit" ? (
       <div className="rounded-xl border border-border bg-card p-2">
-        <FlowDiagram layout={layout} label={label} />
+        <FlowDiagram layout={layout} label={label} overlay={model.overlay} />
       </div>
     ) : (
       // 横にスクロールできる領域は、キーボードで焦点を当てないと読み進められない。
@@ -456,12 +532,13 @@ export function FlowDiagramFrame({
         aria-label={`${label}(横にスクロールできます)`}
         className="overflow-x-auto rounded-xl border border-border bg-card p-2 focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <FlowDiagram layout={layout} label={label} />
+        <FlowDiagram layout={layout} label={label} overlay={model.overlay} />
       </div>
     );
   return (
     <div className="flex flex-col gap-3">
       {body}
+      <Notes model={model} />
       <UnknownSteps model={model} />
     </div>
   );

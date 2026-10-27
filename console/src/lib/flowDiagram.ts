@@ -25,6 +25,8 @@ export type StepNode = {
 
 export type FlowDiagramModel = {
   readonly flow: FlowDefinition;
+  /** ジョブの状態を重ねているか。重ねていない静的な図には、実行の中で決まる印を出さない。 */
+  readonly overlay: boolean;
   readonly steps: readonly StepNode[];
   /** 定義に無いidのステップ。ジョブが返した順に並ぶ。 */
   readonly unknownSteps: readonly StepViewData[];
@@ -52,6 +54,7 @@ export function flowDiagramModel(
   const defined = new Set(flow.steps.map((step) => step.id));
   return {
     flow,
+    overlay: progress !== null,
     steps: flow.steps.map((step) => {
       const data = byId.get(step.id);
       return {
@@ -66,6 +69,13 @@ export function flowDiagramModel(
   };
 }
 
+const FLOW_ENTRY_WORDS: Readonly<Record<ExitVia, string>> = {
+  launch: "ステップ",
+  approve: "承認",
+  reject: "却下",
+  rework: "差し戻し",
+};
+
 /** 入口に書く文。 */
 export function entryText(entry: FlowEntry): string {
   switch (entry.kind) {
@@ -74,13 +84,11 @@ export function entryText(entry: FlowEntry): string {
     case "human":
       return entry.label;
     case "script":
-      return `script ${entry.name}`;
+      return entry.caller === null
+        ? `script ${entry.name}`
+        : `script ${entry.name}(${entry.caller}から起動)`;
     case "flow":
-      return entry.via === "launch"
-        ? `${entry.flow}のステップ`
-        : entry.via === "approve"
-          ? `${entry.flow}の承認`
-          : `${entry.flow}の却下`;
+      return `${entry.flow}の${FLOW_ENTRY_WORDS[entry.via]}`;
   }
 }
 
@@ -88,6 +96,7 @@ const EXIT_WORDS: Readonly<Record<ExitVia, string>> = {
   launch: "次に起動",
   approve: "承認の後",
   reject: "却下の後",
+  rework: "差し戻し",
 };
 
 /** 出口に書く、経路の語。 */
@@ -105,43 +114,76 @@ export function diagramLabel(flowName: string): string {
   return `${flowName}の図`;
 }
 
-/** 設定や上限で起動が決まる辺を持つflowの図の下に出す文。 */
-export const CONDITIONAL_EDGES_NOTE = "";
+/** 設定や試行の上限で起動が決まる辺を持つflowの図の下に出す文。 */
+export const CONDITIONAL_EDGES_NOTE =
+  "設定や試行の上限により、起動しない場合があります。";
 
-/** 設定や上限で起動が決まる辺を、入口か出口に持つか。 */
-export function hasConditionalEdges(_flow: FlowDefinition): boolean {
-  return false;
+/**
+ * 設定や試行の上限で起動が決まる辺を、入口か出口に持つか。
+ * 承認(implement_enabledが偽だと起動しない)、却下と差し戻し(試行の上限を超えると起動しない)が当たる。
+ * 辺ごとの印は出さない。図は設定の値を読まないためである。
+ */
+export function hasConditionalEdges(flow: FlowDefinition): boolean {
+  return (
+    flow.exits.some((exit) => exit.via !== "launch") ||
+    flow.entries.some(
+      (entry) => entry.kind === "flow" && entry.via !== "launch",
+    )
+  );
 }
 
 /** 一覧に出す入口の分け方。 */
 export type ListEntries = {
+  /** ステップが起動する他のflow。 */
   readonly launchFlows: readonly string[];
+  /** 差し戻しで戻してくる他のflow。 */
   readonly reworkFlows: readonly string[];
+  /** 上の2つとflow自身からの入口を除いた入口。 */
   readonly entries: readonly FlowEntry[];
 };
 
-export function groupEntriesForList(_flow: FlowDefinition): ListEntries {
-  return { launchFlows: [], reworkFlows: [], entries: [] };
+/**
+ * 狭い幅の一覧に出す入口を分ける。
+ * 他のflowのステップから起動される入口と差し戻しは、起動元のflowとして1行にまとめる。
+ * flow自身からの入口(却下の作り直し)は、同じ戻りを出口が示すので、入口には出さない。
+ */
+export function groupEntriesForList(flow: FlowDefinition): ListEntries {
+  const launchFlows: string[] = [];
+  const reworkFlows: string[] = [];
+  const entries: FlowEntry[] = [];
+  for (const entry of flow.entries) {
+    if (entry.kind !== "flow") {
+      entries.push(entry);
+    } else if (entry.flow === flow.name) {
+    } else if (entry.via === "launch") {
+      launchFlows.push(entry.flow);
+    } else if (entry.via === "rework") {
+      reworkFlows.push(entry.flow);
+    } else {
+      entries.push(entry);
+    }
+  }
+  return { launchFlows, reworkFlows, entries };
 }
 
 /** 出口が、そのflow自身へ戻るものか。 */
-export function isSelfExit(_flow: FlowDefinition, _exit: FlowExit): boolean {
-  return false;
+export function isSelfExit(flow: FlowDefinition, exit: FlowExit): boolean {
+  return exit.flow === flow.name;
 }
 
 /** 一覧で出口に添える、出口がつくステップの文。 */
-export function exitOriginText(_exit: FlowExit): string {
-  return "";
+export function exitOriginText(exit: FlowExit): string {
+  return `${exit.step}から`;
 }
 
-/** まだ起動されない入口の文。 */
-export function unwiredText(_entry: FlowEntry): string {
-  return "";
+/** 本番ではまだ起動しない入口の文。 */
+export function unwiredText(entry: FlowEntry): string {
+  return `${entryText(entry)}からは、まだ起動されません。`;
 }
 
 /** 子のジョブを持つステップのリンクの名前。 */
-export function stepLinkLabel(stepId: string): string {
-  return `${stepId}のログと結果を見る`;
+export function stepLinkLabel(step: FlowStep): string {
+  return `${step.summary}(${step.id})のログと結果を見る`;
 }
 
 /** 出口のリンクの名前。 */
@@ -183,7 +225,7 @@ export type DiagramLayout = {
 
 export const MARGIN = 20;
 export const ENTRY_WIDTH = 172;
-export const ENTRY_HEIGHT = 44;
+export const ENTRY_HEIGHT = 58;
 const ENTRY_GAP = 10;
 export const STEP_WIDTH = 150;
 export const STEP_HEIGHT = 96;
@@ -198,7 +240,7 @@ const ROW_GAP = 48;
  * 図の配置を決める。入口は左の列に縦に並べ、ステップは右へ一列に並べ、出口はステップの下の行に並べる。
  * 出口は、つくステップの真下に置く。同じ行で重なるときは右へずらす。
  * 線は隣り合う列と行の間だけを引くので、他の箱の上を通らない。
- * 箱の幅は、5ステップのflowが、Consoleの本体の最大の幅(1152px)に収まるように決めた。
+ * 箱の幅は、5ステップのflowが、ジョブの画面の本文の最大の幅(1152px)に収まるように決めた。画面の幅がそれより狭いときは、見せ方が横スクロールか一覧になる。
  */
 export function layoutFlowDiagram(model: FlowDiagramModel): DiagramLayout {
   const { flow, steps } = model;

@@ -79,11 +79,14 @@ function FlowBody({
             </Link>
           </p>
         </section>
+        {/* 幅を測る前は描かない。測る前に描くと、描き直しで見せ方が変わり、画面がちらつくため。 */}
         <div ref={widthRef} className="max-w-6xl">
-          <FlowDiagramFrame
-            model={model}
-            presentation={graphPresentation(width, extent)}
-          />
+          {width <= 0 ? null : (
+            <FlowDiagramFrame
+              model={model}
+              presentation={graphPresentation(width, extent)}
+            />
+          )}
         </div>
       </div>
     </>

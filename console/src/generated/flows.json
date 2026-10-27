@@ -28,6 +28,7 @@
           "label": "Consoleの今すぐ監査"
         }
       ],
+      "unwiredEntries": [],
       "exits": []
     },
     {
@@ -60,6 +61,7 @@
           "name": "poll_dependabot"
         }
       ],
+      "unwiredEntries": [],
       "exits": []
     },
     {
@@ -92,11 +94,18 @@
           "label": "Consoleの再実行"
         }
       ],
+      "unwiredEntries": [
+        {
+          "kind": "flow",
+          "flow": "pipeline",
+          "via": "approve"
+        }
+      ],
       "exits": [
         {
           "flow": "pipeline",
           "step": "generate",
-          "via": "launch"
+          "via": "rework"
         }
       ]
     },
@@ -137,7 +146,8 @@
         },
         {
           "kind": "script",
-          "name": "auto_retry_stale_image"
+          "name": "auto_retry_stale_image",
+          "caller": "self_update"
         },
         {
           "kind": "flow",
@@ -145,11 +155,12 @@
           "via": "approve"
         }
       ],
+      "unwiredEntries": [],
       "exits": [
         {
           "flow": "pipeline",
           "step": "implement_finish",
-          "via": "launch"
+          "via": "rework"
         }
       ]
     },
@@ -181,6 +192,7 @@
           "label": "人がフォームから実行"
         }
       ],
+      "unwiredEntries": [],
       "exits": [
         {
           "flow": "pipeline",
@@ -225,12 +237,12 @@
         {
           "kind": "flow",
           "flow": "design",
-          "via": "launch"
+          "via": "rework"
         },
         {
           "kind": "flow",
           "flow": "implement",
-          "via": "launch"
+          "via": "rework"
         },
         {
           "kind": "flow",
@@ -245,9 +257,10 @@
         {
           "kind": "flow",
           "flow": "pr_fix",
-          "via": "launch"
+          "via": "rework"
         }
       ],
+      "unwiredEntries": [],
       "exits": [
         {
           "flow": "implement",
@@ -316,14 +329,16 @@
         },
         {
           "kind": "script",
-          "name": "auto_retry_stale_image"
+          "name": "auto_retry_stale_image",
+          "caller": "self_update"
         }
       ],
+      "unwiredEntries": [],
       "exits": [
         {
           "flow": "pipeline",
           "step": "pr_fix_finish",
-          "via": "launch"
+          "via": "rework"
         }
       ]
     },
@@ -365,6 +380,7 @@
           "label": "Consoleの再実行"
         }
       ],
+      "unwiredEntries": [],
       "exits": []
     }
   ],

@@ -42,6 +42,8 @@ import {
   HUMAN_OPERATIONS,
   LAUNCH_EDGES,
   type LaunchEdge,
+  REWORK_LAUNCH_EDGES,
+  SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
 } from "./launch-graph.ts";
 
@@ -359,31 +361,33 @@ function scheduleDescriptionInputs(): ScheduleDescriptionInput[] {
   });
 }
 
+/** `handlerPathFor`が、承認を処理するscriptの無い種類に投げるエラーの文。 */
+const NO_HANDLER_MESSAGE = /no approval handler for kind/;
+
 /**
  * 承認のステップのscriptごとに、承認を処理するscriptを引く。
- * 処理するscriptが無い種類は、`resolve`が投げる既知のエラーのときだけnullにする。
+ * 処理するscriptが無い種類は、`resolve`がそのエラーを投げたときだけnullにする。
+ * 別のエラーを隠すと、図から承認の出口が黙って消えるため、投げ直す。
  */
 export function resolveApprovalHandlers(
-  _steps: Readonly<Record<string, ApprovalRequestKind>>,
-  _resolve: (kind: ApprovalRequestKind) => string,
+  steps: Readonly<Record<string, ApprovalRequestKind>>,
+  resolve: (kind: ApprovalRequestKind) => string,
 ): FlowsInput["approvalSteps"] {
-  return {};
-}
-
-/** 承認のステップのscriptから、承認を処理するscriptへの対応。 */
-function approvalHandlers(): FlowsInput["approvalSteps"] {
   return Object.fromEntries(
-    Object.entries(APPROVAL_STEPS).map(([script, kind]) => {
+    Object.entries(steps).map(([script, kind]) => {
       try {
-        const handler = handlerPathFor(kind);
+        const handler = resolve(kind);
         return [
           script,
           handler.startsWith(FACTORY_PREFIX)
             ? handler.slice(FACTORY_PREFIX.length)
             : handler,
         ];
-      } catch {
-        return [script, null];
+      } catch (error) {
+        if (error instanceof Error && NO_HANDLER_MESSAGE.test(error.message)) {
+          return [script, null];
+        }
+        throw error;
       }
     }),
   );
@@ -398,9 +402,11 @@ export function renderFlowsFile(): string {
       humanEntryScripts: HUMAN_ENTRY_SCRIPTS,
       schedules: scheduleDescriptionInputs(),
       flows: flowDefinitionInputs(),
-      approvalSteps: approvalHandlers(),
+      approvalSteps: resolveApprovalHandlers(APPROVAL_STEPS, handlerPathFor),
       approvalOutcomes: APPROVAL_OUTCOMES,
       unwiredEdges: UNWIRED_LAUNCH_EDGES,
+      reworkEdges: REWORK_LAUNCH_EDGES,
+      scriptCallers: SCRIPT_CALLERS,
     }),
   );
 }

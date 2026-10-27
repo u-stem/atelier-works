@@ -15,7 +15,11 @@ import type {
   FlowSchedule,
   FlowsData,
 } from "../console/src/lib/flowsData.ts";
-import type { ApprovalOutcome, LaunchEdge } from "./launch-graph.ts";
+import type {
+  ApprovalOutcome,
+  LaunchEdge,
+  ReworkEdge,
+} from "./launch-graph.ts";
 
 export type ScheduleInput = {
   /** `f/factory/<name>.schedule.yaml`の`<name>`。 */
@@ -205,8 +209,12 @@ export type FlowsInput = {
   readonly approvalOutcomes: Readonly<
     Record<string, readonly ApprovalOutcome[]>
   >;
-  /** 表にあるが、本番では起動しない辺。図には描かない。 */
+  /** 表にあるが、本番では起動しない辺。入口と出口には描かず、「まだ起動されない」入口として分ける。 */
   readonly unwiredEdges: readonly LaunchEdge[];
+  /** 差し戻しのときだけ起動する辺。 */
+  readonly reworkEdges: readonly ReworkEdge[];
+  /** flowを起動するscriptを呼ぶscript(呼ばれるscript → 呼ぶscript)。 */
+  readonly scriptCallers: Readonly<Record<string, string>>;
 };
 
 const ENTRY_ORDER: Readonly<Record<FlowEntry["kind"], number>> = {
@@ -220,6 +228,7 @@ const VIA_ORDER: Readonly<Record<ExitVia, number>> = {
   launch: 0,
   approve: 1,
   reject: 2,
+  rework: 3,
 };
 
 function entryKey(entry: FlowEntry): string {
@@ -241,6 +250,8 @@ type ApprovalLink = {
   readonly handler: string;
   readonly to: string;
   readonly via: ExitVia;
+  /** 本番で起動するか。 */
+  readonly wired: boolean;
 };
 
 function sameEdge(a: LaunchEdge, b: LaunchEdge): boolean {
@@ -248,14 +259,27 @@ function sameEdge(a: LaunchEdge, b: LaunchEdge): boolean {
 }
 
 /**
+ * 表を自分のキーだけで引く。scriptやstepの名前が`constructor`のような継承したキーでも、
+ * 表の値と取り違えないためである。
+ */
+function own<T>(
+  table: Readonly<Record<string, T>>,
+  key: string,
+): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+/**
  * flowごとの図のデータを作る。並びは入力の並びに依らない。
  * - ステップは、flowの定義の順に並べる
  * - 入口は、そのflowを起動するスケジュール、人の操作、script、他のflowのステップとする。
- *   ステップから起動されるときは、scriptではなく起動元のflowを入口にする
- * - 出口は、ステップが起動する他のflowとする。承認のステップには、承認の処理が起動するflowを、承認と却下に分けてつける
- * - `unwiredEdges`の辺は、入口にも出口にも描かない
+ *   ステップから起動されるときは、scriptではなく起動元のflowを入口にする。
+ *   スケジュールも人の操作も持たないscriptは、呼ぶscriptがあればそれを添える
+ * - 出口は、ステップが起動する他のflowとする。承認のステップには、承認の処理が起動するflowを、承認と却下に分けてつける。
+ *   差し戻しのときだけ起動する辺は、通常の起動と分ける
+ * - `unwiredEdges`の辺は、入口にも出口にも描かず、起動先のflowの`unwiredEntries`に分ける
  * 起動の辺が存在しないflowを指していれば、例外を投げる。
- * 承認の処理の辺が、`approvalOutcomes`にも`unwiredEdges`にも無ければ、例外を投げる。
+ * 承認の処理の辺が`approvalOutcomes`に無ければ、例外を投げる。
  */
 export function buildFlowsData(input: FlowsInput): FlowsData {
   const flowNames = new Set(input.flows.map((flow) => flow.name));
@@ -264,9 +288,16 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
       throw new Error(`launch edge targets an unknown flow: ${edge.to}`);
     }
   }
-  const wired = input.edges.filter(
-    (edge) => !input.unwiredEdges.some((other) => sameEdge(edge, other)),
-  );
+  const isUnwired = (edge: LaunchEdge): boolean =>
+    input.unwiredEdges.some((other) => sameEdge(edge, other));
+  const wired = input.edges.filter((edge) => !isUnwired(edge));
+  const unwired = input.edges.filter(isUnwired);
+  const launchVia = (edge: LaunchEdge): ExitVia =>
+    input.reworkEdges.some(
+      (other) => other.from === edge.from && other.to === edge.to,
+    )
+      ? "rework"
+      : "launch";
 
   const owners = new Map<string, { flow: string; step: string }[]>();
   const approvalLinks: ApprovalLink[] = [];
@@ -277,11 +308,11 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
         ...(owners.get(script) ?? []),
         { flow: flow.name, step: step.id },
       ]);
-      const handler = input.approvalSteps[script];
+      const handler = own(input.approvalSteps, script);
       if (handler === undefined || handler === null) continue;
-      for (const edge of wired) {
+      for (const edge of input.edges) {
         if (edge.kind !== "script" || edge.from !== handler) continue;
-        const outcome = input.approvalOutcomes[handler]?.find(
+        const outcome = own(input.approvalOutcomes, handler)?.find(
           (candidate) => candidate.to === edge.to,
         );
         if (outcome === undefined) {
@@ -295,30 +326,36 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
           handler,
           to: edge.to,
           via: outcome.outcome,
+          wired: !isUnwired(edge),
         });
       }
     }
   }
 
-  const entriesOf = (flow: string): FlowEntry[] => {
+  const entriesOf = (
+    flow: string,
+    edges: readonly LaunchEdge[],
+    links: readonly ApprovalLink[],
+    direct: boolean,
+  ): FlowEntry[] => {
     const entries = new Map<string, FlowEntry>();
     const add = (entry: FlowEntry): void => {
       entries.set(JSON.stringify(entry), entry);
     };
-    for (const edge of wired) {
+    for (const edge of edges) {
       if (edge.to !== flow) continue;
       if (edge.kind === "human") {
         add({
           kind: "human",
-          label: input.humanOperations[edge.from] ?? edge.from,
+          label: own(input.humanOperations, edge.from) ?? edge.from,
         });
         continue;
       }
-      const links = approvalLinks.filter(
+      const approvals = links.filter(
         (link) => link.handler === edge.from && link.to === flow,
       );
-      if (links.length > 0) {
-        for (const link of links) {
+      if (approvals.length > 0) {
+        for (const link of approvals) {
           add({ kind: "flow", flow: link.flow, via: link.via });
         }
         continue;
@@ -326,7 +363,7 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
       const stepOwners = owners.get(edge.from) ?? [];
       if (stepOwners.length > 0) {
         for (const owner of stepOwners) {
-          add({ kind: "flow", flow: owner.flow, via: "launch" });
+          add({ kind: "flow", flow: owner.flow, via: launchVia(edge) });
         }
         continue;
       }
@@ -339,19 +376,25 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
       for (const schedule of schedules) {
         add({ kind: "schedule", name: schedule.name });
       }
-      const operation = input.humanEntryScripts[edge.from];
+      const operation = own(input.humanEntryScripts, edge.from);
       if (operation !== undefined) add({ kind: "human", label: operation });
       if (schedules.length === 0 && operation === undefined) {
-        add({ kind: "script", name: edge.from });
+        add({
+          kind: "script",
+          name: edge.from,
+          caller: own(input.scriptCallers, edge.from) ?? null,
+        });
       }
     }
-    for (const schedule of input.schedules) {
-      if (
-        schedule.enabled &&
-        schedule.isFlow &&
-        relativeToFactory(schedule.target) === flow
-      ) {
-        add({ kind: "schedule", name: schedule.name });
+    if (direct) {
+      for (const schedule of input.schedules) {
+        if (
+          schedule.enabled &&
+          schedule.isFlow &&
+          relativeToFactory(schedule.target) === flow
+        ) {
+          add({ kind: "schedule", name: schedule.name });
+        }
       }
     }
     return [...entries.values()].sort(
@@ -365,9 +408,9 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
     const exits: FlowExit[] = [];
     for (const step of flow.steps) {
       const script = relativeToFactory(step.path);
-      if (script in input.approvalSteps) {
+      if (Object.hasOwn(input.approvalSteps, script)) {
         for (const link of approvalLinks) {
-          if (link.flow === flow.name && link.step === step.id) {
+          if (link.wired && link.flow === flow.name && link.step === step.id) {
             exits.push({ flow: link.to, step: step.id, via: link.via });
           }
         }
@@ -375,7 +418,7 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
       }
       for (const edge of wired) {
         if (edge.kind === "script" && edge.from === script) {
-          exits.push({ flow: edge.to, step: step.id, via: "launch" });
+          exits.push({ flow: edge.to, step: step.id, via: launchVia(edge) });
         }
       }
     }
@@ -388,20 +431,32 @@ export function buildFlowsData(input: FlowsInput): FlowsData {
     );
   };
 
+  const wiredLinks = approvalLinks.filter((link) => link.wired);
+  const unwiredLinks = approvalLinks.filter((link) => !link.wired);
   const flows: FlowDefinition[] = input.flows
-    .map((flow) => ({
-      name: flow.name,
-      summary: withoutIdPrefix(flow.summary),
-      description: flow.description.trim(),
-      steps: flow.steps.map((step) => ({
-        id: step.id,
-        summary: withoutIdPrefix(step.summary),
-        scriptPath: step.path,
-        conditional: step.conditional,
-      })),
-      entries: entriesOf(flow.name),
-      exits: exitsOf(flow),
-    }))
+    .map((flow) => {
+      const entries = entriesOf(flow.name, wired, wiredLinks, true);
+      const wiredKeys = new Set(entries.map((entry) => JSON.stringify(entry)));
+      return {
+        name: flow.name,
+        summary: withoutIdPrefix(flow.summary),
+        description: flow.description.trim(),
+        steps: flow.steps.map((step) => ({
+          id: step.id,
+          summary: withoutIdPrefix(step.summary),
+          scriptPath: step.path,
+          conditional: step.conditional,
+        })),
+        entries,
+        unwiredEntries: entriesOf(
+          flow.name,
+          unwired,
+          unwiredLinks,
+          false,
+        ).filter((entry) => !wiredKeys.has(JSON.stringify(entry))),
+        exits: exitsOf(flow),
+      };
+    })
     .sort((a, b) => compareText(a.name, b.name));
 
   const schedules: FlowSchedule[] = input.schedules

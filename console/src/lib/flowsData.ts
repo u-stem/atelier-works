@@ -15,14 +15,22 @@ export type FlowStep = {
   readonly conditional: boolean;
 };
 
-/** 出口がflowを起動する経路。承認を介するときは、承認と却下を分ける。 */
-export type ExitVia = "launch" | "approve" | "reject";
+/**
+ * 出口がflowを起動する経路。承認を介するときは、承認と却下を分ける。
+ * 差し戻し(rework)は、要件定義の不足を見つけたときだけ、前のflowへ戻す起動である。
+ */
+export type ExitVia = "launch" | "approve" | "reject" | "rework";
 
 /** flowの入口。 */
 export type FlowEntry =
   | { readonly kind: "schedule"; readonly name: string }
   | { readonly kind: "human"; readonly label: string }
-  | { readonly kind: "script"; readonly name: string }
+  | {
+      readonly kind: "script";
+      readonly name: string;
+      /** このscriptを呼ぶscript。無ければ`null`。 */
+      readonly caller: string | null;
+    }
   | {
       readonly kind: "flow";
       readonly flow: string;
@@ -43,6 +51,8 @@ export type FlowDefinition = {
   readonly description: string;
   readonly steps: readonly FlowStep[];
   readonly entries: readonly FlowEntry[];
+  /** 表にあるが、本番ではまだ起動しない入口。図の入口には描かない。 */
+  readonly unwiredEntries: readonly FlowEntry[];
   readonly exits: readonly FlowExit[];
 };
 
@@ -68,7 +78,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isVia(value: unknown): value is ExitVia {
-  return value === "launch" || value === "approve" || value === "reject";
+  return (
+    value === "launch" ||
+    value === "approve" ||
+    value === "reject" ||
+    value === "rework"
+  );
 }
 
 function isName(value: unknown): value is string {
@@ -90,9 +105,13 @@ function readEntry(value: unknown): FlowEntry | null {
   if (!isRecord(value)) return null;
   switch (value.kind) {
     case "schedule":
-    case "script":
       return typeof value.name === "string"
-        ? { kind: value.kind, name: value.name }
+        ? { kind: "schedule", name: value.name }
+        : null;
+    case "script":
+      return typeof value.name === "string" &&
+        (typeof value.caller === "string" || value.caller === null)
+        ? { kind: "script", name: value.name, caller: value.caller }
         : null;
     case "human":
       return typeof value.label === "string"
@@ -137,12 +156,20 @@ function readFlow(value: unknown): FlowDefinition | null {
   }
   const steps = readList(value.steps, readStep);
   const entries = readList(value.entries, readEntry);
+  const unwiredEntries = readList(value.unwiredEntries, readEntry);
   const exits = readList(value.exits, readExit);
-  if (steps === null || entries === null || exits === null) return null;
+  if (
+    steps === null ||
+    entries === null ||
+    unwiredEntries === null ||
+    exits === null
+  ) {
+    return null;
+  }
   const ids = new Set(steps.map((step) => step.id));
   if (ids.size !== steps.length) return null;
   if (exits.some((exit) => !ids.has(exit.step))) return null;
-  return { name, summary, description, steps, entries, exits };
+  return { name, summary, description, steps, entries, unwiredEntries, exits };
 }
 
 function readSchedule(value: unknown): FlowSchedule | null {
@@ -176,7 +203,7 @@ export function parseFlowsData(value: unknown): FlowsData | null {
   }
   for (const flow of flows) {
     if (flow.exits.some((exit) => !names.has(exit.flow))) return null;
-    const unknownEntry = flow.entries.some(
+    const unknownEntry = [...flow.entries, ...flow.unwiredEntries].some(
       (entry) => entry.kind === "flow" && !names.has(entry.flow),
     );
     if (unknownEntry) return null;

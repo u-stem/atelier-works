@@ -67,6 +67,7 @@ const FLOW: FlowDefinition = {
     },
   ],
   entries: [],
+  unwiredEntries: [],
   exits: [],
 };
 
@@ -268,9 +269,9 @@ describe("the words", () => {
   });
 
   test("writes a script entry with its name", () => {
-    expect(entryText({ kind: "script", name: "auto_retry" })).toBe(
-      "script auto_retry",
-    );
+    expect(
+      entryText({ kind: "script", name: "auto_retry", caller: null }),
+    ).toBe("script auto_retry");
   });
 
   test("writes the entry from the step of another flow", () => {
