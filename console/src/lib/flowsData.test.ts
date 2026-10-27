@@ -296,10 +296,13 @@ describe("flowRouteState", () => {
   );
 
   test("finds a flow by its name", () => {
-    expect(flowRouteState("pipeline", data)).toEqual({
-      kind: "found",
-      flow: data?.flows[0],
-    });
+    expect(flowRouteState("pipeline", data).kind).toBe("found");
+  });
+
+  test("gives the flow that it found", () => {
+    const state = flowRouteState("implement", data);
+
+    expect(state.kind === "found" ? state.flow.name : "").toBe("implement");
   });
 });
 

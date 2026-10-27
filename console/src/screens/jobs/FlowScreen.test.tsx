@@ -44,7 +44,7 @@ describe("FlowScreenView: a known flow", () => {
   });
 
   test("shows the diagram", () => {
-    expect(render()).toContain("<svg");
+    expect(render()).toContain('role="group" aria-label="pipelineの図"');
   });
 
   test("links to the history of the flow", () => {
@@ -64,7 +64,7 @@ describe("FlowScreenView: a known flow", () => {
   });
 
   test("draws a list instead of a diagram in a narrow width", () => {
-    expect(render({ width: 400 })).not.toContain("<svg");
+    expect(render({ width: 400 })).not.toContain('role="group"');
   });
 
   test("shows no state of a job, because the diagram is static", () => {
@@ -78,7 +78,7 @@ describe("FlowScreenView: a flow that is not shown", () => {
   });
 
   test("draws no diagram for an unknown name", () => {
-    expect(render({ name: "missing" })).not.toContain("<svg");
+    expect(render({ name: "missing" })).not.toContain('role="group"');
   });
 
   test("says that the flow was not found for an unsafe name", () => {

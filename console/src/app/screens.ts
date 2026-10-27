@@ -182,6 +182,15 @@ export const SCREENS: readonly Screen[] = [
       })),
     children: [
       {
+        // `flows`をジョブのidと取り違えないよう、`jobs/:id`より前に置く。名前を省くと一覧へ戻す。
+        path: "jobs/flows/:name?",
+        title: "flowの図",
+        lazy: () =>
+          import("../screens/jobs/FlowScreen.tsx").then((module) => ({
+            Component: module.FlowScreen,
+          })),
+      },
+      {
         path: "jobs/:id",
         title: "ジョブの詳細",
         lazy: () =>

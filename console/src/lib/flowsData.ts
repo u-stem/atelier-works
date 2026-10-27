@@ -227,11 +227,19 @@ export type FlowRouteState =
   | { readonly kind: "not_found" }
   | { readonly kind: "found"; readonly flow: FlowDefinition };
 
+/**
+ * 経路の`:name`から、画面の状態を決める。
+ * 名前が無いときは一覧へ戻す。名前があってデータを読めないときは、読めなかったと伝える。
+ * 名前は一覧から探し、データに無い名前と安全でない名前は見つからないとする。
+ */
 export function flowRouteState(
-  _name: string | undefined,
-  _data: FlowsData | null,
+  name: string | undefined,
+  data: FlowsData | null,
 ): FlowRouteState {
-  return { kind: "not_found" };
+  if (name === undefined) return { kind: "redirect" };
+  if (data === null) return { kind: "unreadable" };
+  const flow = NAME_PATTERN.test(name) ? findFlow(data, name) : null;
+  return flow === null ? { kind: "not_found" } : { kind: "found", flow };
 }
 
 /** flowのジョブの履歴の画面のパス。 */

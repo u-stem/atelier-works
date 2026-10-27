@@ -14,7 +14,9 @@ import { type JobStateInfo, stepStateInfo } from "./jobsView.ts";
 /** 定義のステップ1つと、重ねる実行の状態。 */
 export type StepNode = {
   readonly step: FlowStep;
-  /** 重ねるジョブにそのステップが無ければ`null`。 */
+  /** 重ねるジョブが返したそのステップ。無ければ`null`。 */
+  readonly data: StepViewData | null;
+  /** `data`の状態の語。`data`が無ければ`null`。 */
   readonly state: JobStateInfo | null;
   readonly running: boolean;
   /** ステップの子のジョブ。無ければ`null`。 */
@@ -54,6 +56,7 @@ export function flowDiagramModel(
       const data = byId.get(step.id);
       return {
         step,
+        data: data ?? null,
         state: data === undefined ? null : stepStateInfo(data),
         running: data?.state === "running",
         jobId: data?.job_id ?? null,
@@ -95,6 +98,26 @@ export function exitWord(via: ExitVia): string {
 /** 出口に書く文。経路の語と、次のflowの名前を「: 」でつなぐ。 */
 export function exitText(exit: FlowExit): string {
   return `${exitWord(exit.via)}: ${exit.flow}`;
+}
+
+/** 図の読み上げの名前。 */
+export function diagramLabel(flowName: string): string {
+  return `${flowName}の図`;
+}
+
+/** 子のジョブを持つステップのリンクの名前。 */
+export function stepLinkLabel(stepId: string): string {
+  return `${stepId}のログと結果を見る`;
+}
+
+/** 出口のリンクの名前。 */
+export function exitLinkLabel(exit: FlowExit): string {
+  return `${exitText(exit)}の図を開く`;
+}
+
+/** 出口を一覧で並べるときの、重ならない目印。 */
+export function exitKey(exit: FlowExit): string {
+  return `${exit.step} ${exit.via} ${exit.flow}`;
 }
 
 export type Box = {
