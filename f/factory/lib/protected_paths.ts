@@ -204,15 +204,15 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 絞り込みと記録は守ったscript側にある(`docs/security.md`の「ジョブの取消」)。
  * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)も、同じ理由で守らない。
  * 契約テストが画面のソース全体を走査するので、守っても保証の上乗せが小さい。
- * 設計工程の入口が閉じていることを固定する2つのテスト(`tests/scripts/design_stage_closed.test.ts`、
- * `design_entry_origins.test.ts`)も守る。設計フローの配線の門(`DESIGN_STAGE_OPENABLE`)と、設計フローを起動できる元の集合を
- * 固定しているので、書き換えられると、入口が開いても黙って通るためである。`lib/config.ts`は日常的に直すので守らない。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
  * 一緒に書き換わるので守らない。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
  * これらを書き換えてdependabotのフローの判断を変える変更は、PRのレビューで差分を確かめて止める。
+ * 設計工程の入口が閉じていることを固定する2つのテスト(`tests/scripts/design_stage_closed.test.ts`、
+ * `design_entry_origins.test.ts`)は守る。設計フローの配線の門(`DESIGN_STAGE_OPENABLE`)と、設計フローを起動できる元の集合を
+ * 固定しているので、書き換えられると、入口が開いても黙って通るためである。`lib/config.ts`は日常的に直すので守らない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",

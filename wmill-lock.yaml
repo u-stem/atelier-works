@@ -144,7 +144,7 @@ locks:
   f/factory/lib/process_lock: 6b49498e491ae04a2b6a2b2c11d016770c93b48e71d0f56318d65df21ca28cef
   f/factory/lib/prompts: 4ad7a2fbfcc9a7acb584767ad318b343b8d434aac2bff10c493fb448fa1a0fa5
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: d7bec4a60e5b33ab2c06804031a0c7749418d3b496bd61293ec7af4588ae2103
+  f/factory/lib/protected_paths: 1ff3cd98d3bb6ec71835d8fd9d64275e9f6013944c170c209d2d27ac0c4ab3fb
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
@@ -183,7 +183,7 @@ locks:
   f/factory/steps/design_apply: b33396c71093ef3c82869f673809891ba5ae4c1e4b4ecabadb42f330b4574398
   f/factory/steps/design_generate: c04e1eab42fb373c6a2d003747d3d078b8bbf47d08f1076fe84b92840ef4ce1e
   f/factory/steps/design_prepare: 8bef3c8c3fbf955935a67feae8c6b7e4cf42fc2a470e126f5ef353ecea082fa1
-  f/factory/steps/design_request_approval: 9ecbef5c643d750dc8be92cc5f99561f518c0e581cb1725f5880f9b166f6a64b
+  f/factory/steps/design_request_approval: 5263c832493d2c3aa5209ceb43a93fbb150b8ba3673949e4d0a25bb77059f4aa
   f/factory/steps/implement_finish: 99a6367cbfc55d0ead0704e492b482caa0ece1fda2f25704e569c7d224f3de9b
   f/factory/steps/implement_generate: aa77f174fce6a8663f5bbead8b324638c5cb40206e9651f7d267c61c18e94d7b
   f/factory/steps/implement_prepare: 17d4985a53d84fc1c4b5b01b232f621b1e483acb2d7ce7c1156a9b348d96ec63

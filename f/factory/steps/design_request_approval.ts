@@ -246,7 +246,7 @@ export async function runDesignRequestApproval(
   }
   if (requestStatus === "expired") {
     if (await deps.moveToExpired()) {
-      // 作業項目は`expired`へ移った。通知を読む処理が落ちても、ステップを失敗させない。
+      // 作業項目は`expired`へ移った。通知を送る処理が落ちても、ステップを失敗させない。
       try {
         await deps.notifyNeedsHuman(DESIGN_APPROVAL_TIMED_OUT_REASON);
       } catch (err) {
