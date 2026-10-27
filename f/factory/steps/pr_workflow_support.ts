@@ -4303,13 +4303,13 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `設計の試行${m[1]}回目に承認済みの設計書が無いため、実装を始められませんでした`,
     nextAction: () =>
-      `Consoleで設計書の承認の状態を確かめ、${RETRY_WORK_ITEM_ACTION}(設計から再開します)`,
+      `Consoleで設計書の承認の状態を確かめ、${RETRY_WORK_ITEM_ACTION}(設計が有効なら設計から再開します)`,
   },
   {
     pattern: /^approved design does not match the approved requirements$/,
     describe: () => "承認済みの設計書が、承認済みの要件定義と食い違っています",
     nextAction: () =>
-      `Consoleで設計書と要件定義の承認の状態を確かめ、${RETRY_WORK_ITEM_ACTION}(設計から再開します)`,
+      `Consoleで設計書と要件定義の承認の状態を確かめ、${RETRY_WORK_ITEM_ACTION}(設計が有効なら設計から再開します)`,
   },
   {
     pattern: /^design approval record is inconsistent$/,
