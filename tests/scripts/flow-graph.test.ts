@@ -467,7 +467,7 @@ describe("buildFlowsData: entries", () => {
     });
   });
 
-  test("leaves a disabled schedule out of the entries", () => {
+  test("shows the script instead of a disabled schedule as an entry", () => {
     const input: FlowsInput = {
       ...FLOWS_INPUT,
       schedules: FLOWS_INPUT.schedules.map((schedule) => ({
@@ -476,7 +476,9 @@ describe("buildFlowsData: entries", () => {
       })),
     };
 
-    expect(flowOf(input, "pr_fix")?.entries).toEqual([]);
+    expect(flowOf(input, "pr_fix")?.entries).toEqual([
+      { kind: "script", name: "poll_prs" },
+    ]);
   });
 
   test("shows a schedule that runs a flow directly as an entry", () => {
