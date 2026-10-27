@@ -1085,7 +1085,7 @@ describe("readFreezeStateVia and mutateFreezeStateVia", () => {
           if (options.readError !== undefined) throw options.readError;
           return initial;
         },
-        writeVariable: async (text) => {
+        storeVariable: async (text) => {
           writes.push(text);
         },
       },

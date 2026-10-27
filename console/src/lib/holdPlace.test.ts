@@ -194,8 +194,12 @@ describe("checkPlaceForm", () => {
     expect(problemOf({ reason: "あ".repeat(201) })).toBe("reason_too_long");
   });
 
-  test("counts a character outside the basic plane once", () => {
-    expect(problemOf({ reason: "𠮷".repeat(200) })).toBeNull();
+  test("counts the length in UTF-16 units, as the script does", () => {
+    expect(problemOf({ reason: "𠮷".repeat(101) })).toBe("reason_too_long");
+  });
+
+  test("accepts a reason of 200 UTF-16 units made of 100 characters outside the basic plane", () => {
+    expect(problemOf({ reason: "𠮷".repeat(100) })).toBeNull();
   });
 
   test.each(["a\nb", "a\u0007b", "a‮b", "a b"])(

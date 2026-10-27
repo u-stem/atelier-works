@@ -29,7 +29,9 @@ function render(
 
 /** 確認のボタン(取り消すの次のボタン)が押せないか。 */
 function confirmIsDisabled(html: string, label: string): boolean {
-  return new RegExp(`<button[^>]*disabled[^>]*>${label}</button>`).test(html);
+  return new RegExp(`<button[^>]*\\sdisabled=""[^>]*>${label}</button>`).test(
+    html,
+  );
 }
 
 describe("HoldPlaceDialog for any kind", () => {

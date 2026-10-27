@@ -10,6 +10,7 @@ import type {
   ConfigUpdateRefusalReason,
   ConfigUpdateResult,
   FreezeReleaseResult,
+  HoldPlaceRefusalReason,
   HoldPlaceResult,
   HoldReleaseResult,
   JobCancelRefusalReason,
@@ -19,9 +20,12 @@ import type {
   JobRerunResult,
   NoticeResolveResult,
   RetryWorkItemResult,
+  ScheduleStopRefusalReason,
   ScheduleStopResult,
 } from "../api/guards/writeResults.ts";
+import { stopImpactNote, stopReadyAt } from "./holdPlace.ts";
 import { workItemStatusLabel } from "./labels.ts";
+import { formatShortAbsoluteIso } from "./relativeTime.ts";
 import { safeText } from "./safeText.ts";
 
 /**
@@ -351,14 +355,102 @@ export function describeConfigUpdateResult(
   return noteActionAudit({ tone: "success", message }, result.action_audit);
 }
 
-export function describeHoldPlaceResult(_result: HoldPlaceResult): WriteNotice {
-  return { tone: "info", message: "" };
+const HOLD_PLACE_REFUSALS: Readonly<Record<HoldPlaceRefusalReason, string>> = {
+  invalid_kind: "置く種類が正しくないため、置きませんでした。",
+  invalid_target: "対象が正しくないため、置きませんでした。",
+  invalid_minutes: "期限が範囲外のため、置きませんでした。",
+  invalid_reason: "理由が正しくないため、置きませんでした。",
+  target_not_allowed: "このscheduleは、凍結を置けない対象です。",
+  already_active: "同じ対象の有効な行がすでにあります。置きませんでした。",
+  other_holder_active: "別の主体が置いた有効な行があるため、置きませんでした。",
+  actor_unknown: "操作者を確認できないため、置きませんでした。",
+  audit_unavailable: "操作の記録を残せないため、置きませんでした。",
+};
+
+const PLACED_SUBJECTS = {
+  merge: "マージの保留",
+  deploy: "deployの保留",
+  freeze: "凍結",
+} as const;
+
+/**
+ * 保留や凍結を置いた結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 置いた後の読み直しで行が見えなければ、置いたと言い切らず、一覧で確かめるよう伝える。
+ * 止められるscheduleの凍結は、止められるようになる時刻を添える。
+ */
+export function describeHoldPlaceResult(result: HoldPlaceResult): WriteNotice {
+  if (result.refused) {
+    return { tone: "info", message: HOLD_PLACE_REFUSALS[result.reason] };
+  }
+  if (!result.verified) {
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message:
+          "置きましたが、読み直しで確認できませんでした。一覧を取り直して確かめてください。",
+      },
+      result.action_audit,
+    );
+  }
+  const subject = `${PLACED_SUBJECTS[result.kind]}を置きました。`;
+  const stoppable =
+    result.kind === "freeze" && stopImpactNote(result.target) !== null;
+  const message = stoppable
+    ? `${subject}${formatShortAbsoluteIso(new Date(stopReadyAt(result.created_at)).toISOString())} 以降に、scheduleを止められます。`
+    : subject;
+  return noteActionAudit({ tone: "success", message }, result.action_audit);
 }
 
+const SCHEDULE_STOP_REFUSALS: Readonly<
+  Record<ScheduleStopRefusalReason, string>
+> = {
+  not_allowed: "このscheduleは、Consoleから止められない対象です。",
+  no_freeze: "有効な凍結がありません。先に止める準備をしてください。",
+  other_holder_freeze:
+    "ローカルのセッションが置いた凍結のため、止めませんでした。",
+  too_early: "まだ止められません。凍結を置いてから7分待ってください。",
+  self_update_running:
+    "自己更新が実行中です。終わってから、もう一度止めてください。",
+  schedule_changed: "scheduleの定義が変わったため、止めませんでした。",
+  already_stopped: "すでに無効です。",
+  actor_unknown: "操作者を確認できないため、止めませんでした。",
+  audit_unavailable: "操作の記録を残せないため、止めませんでした。",
+};
+
+/**
+ * scheduleを止めた結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 早すぎる断りは、止められるようになる時刻を添える。
+ * 読み直したscheduleが無効になっていなければ、止めたと言い切らず、Windmillで確かめるよう伝える。
+ */
 export function describeScheduleStopResult(
-  _result: ScheduleStopResult,
+  result: ScheduleStopResult,
 ): WriteNotice {
-  return { tone: "info", message: "" };
+  if (result.refused) {
+    if (result.reason === "too_early" && result.ready_at !== null) {
+      return {
+        tone: "info",
+        message: `まだ止められません。${formatShortAbsoluteIso(result.ready_at)} 以降に止められます。`,
+      };
+    }
+    return { tone: "info", message: SCHEDULE_STOP_REFUSALS[result.reason] };
+  }
+  if (!result.verified) {
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message:
+          "止める操作をしましたが、scheduleが無効になったことを確認できませんでした。Windmillで確かめてください。",
+      },
+      result.action_audit,
+    );
+  }
+  return noteActionAudit(
+    {
+      tone: "success",
+      message: `scheduleを止めました。凍結が終わる${formatShortAbsoluteIso(result.freeze_expires_at)}以降の自己更新の追従で、有効に戻ります。`,
+    },
+    result.action_audit,
+  );
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

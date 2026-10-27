@@ -175,7 +175,7 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 `f/factory/hold_release`が保留を、`f/factory/freeze_release`が凍結とdeployの保留([凍結とdeployの保留の内部仕様](freezes.md))を解除する。
 どちらもtag`console`のscriptで、Console用のworkerで動く。
 読み取りは`f/factory/console_holds`が行い、保留の表と凍結の変数を別々に読む。
-置く操作を持つscriptは無い。
+置く操作は、`f/factory/console_hold_place`が持つ(次の「Consoleからの置く操作」)。
 
 `hold_release`は、次の順で解除する。
 
@@ -213,6 +213,39 @@ psqlで送るときも、`-c`に2つの文を渡すと1つのトランザクシ�
 主セッションを含むすべてのセッションで、フックが拒否する([セキュリティ](../security.md)の「保留」)。
 ローカルの主セッションはCLIでは`session`として扱われ、人の解除には端末での確認が要る。
 Consoleのscriptは、その確認を通らずに他の主体の保留を外せるためである。
+
+### Consoleからの置く操作
+
+人は、Consoleのシステムの画面から、マージの保留を置ける([Consoleの仕様](console.md)の「保留と凍結」)。
+`f/factory/console_hold_place`は、マージの保留と、スケジュールの凍結とdeployの保留([凍結とdeployの保留の内部仕様](freezes.md))を置く。
+tag`console`のscriptで、Console用のworkerで動く。
+`placeHold`を読み込んでよい`f/`のファイルは、このscriptだけである。
+読み込む名前は、`placeHold`、`listActiveHolds`、入力の検査の`validatePlaceInput`、置けなかった理由の定数`HOLD_ALREADY_ACTIVE`に限る。
+配線テストが固定する。
+
+マージの保留は、次の順で置く。
+
+1. 入力を`validatePlaceInput`で検査する。種類、対象、期限、理由が正しくなければ、何も読まず、書かず、記録もせずに断る。
+2. 操作者を、ジョブの実行文脈から導く。導けなければ、何も置かずに拒否する。
+3. 操作の記録(`factory.console_actions`)に、`attempted`の行を入れる。入れられなければ、置かずに拒否する。
+4. 対象の有効なマージの保留を読む。人以外の行があれば、置かない。人の行も、重ねない。
+5. `placeHold`を、主体`{kind: "human", holder: "human"}`で呼ぶ。`HOLD_ALREADY_ACTIVE`が返れば、すでに有効な行があるとして断る。
+6. 有効な保留を読み直し、置いたidが見えるかを確かめる。見えなければ、戻りの`verified`を偽にし、記録の結果を`partial`にする。
+
+置く主体は引数に取らず、`human`に固定する。
+`human`の`holder`は`human`に限るので、保留の行に操作者の名前は書けない。
+操作者は、操作の記録に残す。
+記録には、種類、対象、期限(分)、理由の長さ、置いたidだけを入れ、理由は入れない。
+理由は、1文字以上200文字以下で、制御文字を含めない。
+期限は、1分から1440分までの整数である。
+対象は、`owner/repo`の形である。
+対象が`repo_allowlist`の外でも置ける。
+保留は止めるためだけに使い、許可に使わないので、許可の外の対象に置いても害は無い。
+
+同じ人が同じリポジトリに重ねて置けないのは、Consoleの規則である。
+CLIは、別の`holder`であれば重ねて置ける。
+
+戻りと断りの種類は、[凍結とdeployの保留の内部仕様](freezes.md)の「Consoleからの置く操作」にある。
 
 ## 読み取り
 
@@ -794,6 +827,8 @@ datatableの接続の既定の`search_path`には`factory`が入っていない(
   置いたファイルがタスクとして実行されるので、拒否の外から保留を操作できるためである。
 - Consoleの解除scriptとその部品(`hold_release.ts`、`freeze_release.ts`、`lib/console_holds_support.ts`)と、そのテストも入れる。
   書き換えられると、他の主体の保留を無条件に外せるためである。
+- Consoleの置くscript(`console_hold_place.ts`)とscheduleを止めるscript(`console_schedule_stop.ts`)と、そのテストも入れる。
+  書き換えられると、置ける期限の上限が外れたり、止めてはならないscheduleを止められたりするためである。
   読み取りだけの`console_holds.ts`は入れない。置く操作を持たず、読み込める名前を配線テストが固定する。
 - 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。
   ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。

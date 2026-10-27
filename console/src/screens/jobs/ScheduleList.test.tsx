@@ -410,7 +410,7 @@ describe("ScheduleList stop actions", () => {
       freshQuery(snapshot([schedule()])),
       freshQuery(frozenAt(new Date(Date.now() - 60_000).toISOString())),
     );
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>止める<\/button>/);
+    expect(html).toMatch(/<button[^>]*\sdisabled=""[^>]*>止める<\/button>/);
   });
 
   test("offers the stop once the seven minutes have passed", () => {
@@ -418,7 +418,7 @@ describe("ScheduleList stop actions", () => {
       freshQuery(snapshot([schedule()])),
       freshQuery(frozenAt(new Date(Date.now() - 600_000).toISOString())),
     );
-    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>止める<\/button>/);
+    expect(html).toMatch(/<button(?![^>]*\sdisabled="")[^>]*>止める<\/button>/);
   });
 
   test("does not offer the preparation again under a freeze", () => {

@@ -6,7 +6,7 @@
 // `f/`の他のファイルが読み込んでよい関数は、役割ごとに決まっている。
 // 読み取りの`listActiveHolds`と`listInvalidHolds`は、保留を読んで止まる主体と、人に見せるだけの主体が読み込む。
 // 解除の`releaseHold`は、人の操作で解除する書き手(Consoleの解除script)だけが読み込む。
-// `placeHold`は、`f/`のどのファイルも読み込まない。
+// `placeHold`は、人の操作で保留を置く書き手(Consoleの置くscript)だけが読み込む。
 // この決まりを守らせるのは、`tests/scripts/hold_wiring.test.ts`の参照の検出だけである。
 // `sql`に既定値を持たせないのは、呼び出し側に接続を選ばせるためで、書き込みを止める仕組みではない。
 // Windmillのscriptは同じdatatableの接続を持つので、検出をすり抜けるコードは表を読み書きできる。

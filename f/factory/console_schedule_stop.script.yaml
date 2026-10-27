@@ -7,12 +7,12 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    _schedule_path:
+    schedule_path:
       type: string
       description: ''
       default: null
       originalType: string
   required:
-    - _schedule_path
+    - schedule_path
 tag: console
 timeout: 30

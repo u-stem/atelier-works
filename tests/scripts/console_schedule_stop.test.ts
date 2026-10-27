@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import {
+  STOP_READY_AFTER_MINUTES,
+  STOP_TARGETS,
+} from "../../console/src/lib/holdPlace.ts";
+import {
   NOT_STOPPABLE_SCHEDULES,
   STOP_REFUSAL_REASONS,
   STOP_SETTLE_MINUTES,
@@ -12,7 +16,7 @@ import {
 } from "../../f/factory/console_schedule_stop.ts";
 import {
   FREEZE_FORBIDDEN_TARGET,
-  type FreezeIo,
+  type FreezeReadIo,
 } from "../../f/factory/lib/freezes.ts";
 
 const SCHEDULE = "f/factory/collect_github";
@@ -100,15 +104,12 @@ function harness(options: Options = {}) {
   const sqlCalls: Call[] = [];
   const enabledCalls: { path: string; enabled: boolean }[] = [];
   let scheduleReads = 0;
-  const freeze: FreezeIo = {
+  const freeze: FreezeReadIo = {
     now: () => options.now ?? NOW,
     readVariable: async () => {
       events.push("read-freeze");
       if (options.readError !== undefined) throw options.readError;
       return options.variable === undefined ? freezeText() : options.variable;
-    },
-    writeVariable: async () => {
-      events.push("write-freeze");
     },
   };
   const ports: StopPorts = {
@@ -547,5 +548,13 @@ describe("the contract of the stop script", () => {
       "actor_unknown",
       "audit_unavailable",
     ]);
+  });
+
+  test("the Console offers the same schedules", () => {
+    expect([...STOP_TARGETS].sort()).toEqual([...STOPPABLE_SCHEDULES].sort());
+  });
+
+  test("the Console waits as long before it offers the stop", () => {
+    expect(STOP_READY_AFTER_MINUTES).toBe(STOP_SETTLE_MINUTES);
   });
 });

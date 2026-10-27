@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
@@ -8,6 +8,8 @@
 import {
   type Guard,
   isBoolean,
+  isIsoTimestamp,
+  isNullableIsoTimestamp,
   isNullableString,
   isOneOf,
   isPositiveInteger,
@@ -507,8 +509,33 @@ export type HoldPlaceResult =
       readonly action_audit: ActionAudit;
     };
 
-export function isHoldPlaceResult(_value: unknown): _value is HoldPlaceResult {
-  return false;
+const isHoldPlaceRefusalReason: Guard<HoldPlaceRefusalReason> = isOneOf(
+  HOLD_PLACE_REFUSAL_REASONS,
+);
+
+const isPlaceKind: Guard<"merge" | "deploy" | "freeze"> = isOneOf([
+  "merge",
+  "deploy",
+  "freeze",
+]);
+
+export function isHoldPlaceResult(value: unknown): value is HoldPlaceResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isHoldPlaceRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isPlaceKind(value.kind) &&
+    isString(value.id) &&
+    isString(value.target) &&
+    isIsoTimestamp(value.created_at) &&
+    isIsoTimestamp(value.expires_at) &&
+    isBoolean(value.verified) &&
+    isActionAudit(value.action_audit)
+  );
 }
 
 /**
@@ -546,8 +573,29 @@ export type ScheduleStopResult =
       readonly action_audit: ActionAudit;
     };
 
+const isScheduleStopRefusalReason: Guard<ScheduleStopRefusalReason> = isOneOf(
+  SCHEDULE_STOP_REFUSAL_REASONS,
+);
+
 export function isScheduleStopResult(
-  _value: unknown,
-): _value is ScheduleStopResult {
-  return false;
+  value: unknown,
+): value is ScheduleStopResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return (
+      isScheduleStopRefusalReason(value.reason) &&
+      isNullableIsoTimestamp(value.ready_at)
+    );
+  }
+  return (
+    value.refused === false &&
+    isString(value.schedule_path) &&
+    isString(value.freeze_id) &&
+    isBoolean(value.enabled) &&
+    isIsoTimestamp(value.freeze_expires_at) &&
+    isBoolean(value.verified) &&
+    isActionAudit(value.action_audit)
+  );
 }

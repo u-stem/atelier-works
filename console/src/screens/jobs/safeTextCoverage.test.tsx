@@ -51,9 +51,11 @@ const NOW = Date.parse("2026-10-26T05:10:00.000Z");
 
 function render(element: ReactElement): string {
   return renderToStaticMarkup(
-    <TooltipProvider>
-      <MemoryRouter>{element}</MemoryRouter>
-    </TooltipProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <TooltipProvider>
+        <MemoryRouter>{element}</MemoryRouter>
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 

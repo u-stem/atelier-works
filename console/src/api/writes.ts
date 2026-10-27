@@ -21,12 +21,14 @@ import {
   isAuditKickoffResult,
   isConfigUpdateResult,
   isFreezeReleaseResult,
+  isHoldPlaceResult,
   isHoldReleaseResult,
   isJobCancelResult,
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  isScheduleStopResult,
   type JobCancelResult,
   type JobRerunResult,
   type ManualIntakeSubmitResult,
@@ -274,20 +276,41 @@ export type HoldPlaceInput = {
   readonly reason: string;
 };
 
+/**
+ * 保留、deployの保留、scheduleの凍結を1件置く。置く主体は人に固定され、引数に取らない。操作者はscriptがジョブの実行文脈から導く。
+ * 期限の上限を超える、別の主体の有効な行がある、すでに有効な行があるなどのときは、置かずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 理由はscriptが保留の行にだけ置き、操作の記録には長さだけを残す。
+ */
 export function placeHold(
-  _input: HoldPlaceInput,
-  _options: RunScriptOptions = {},
+  input: HoldPlaceInput,
+  options: RunScriptOptions = {},
 ): Promise<HoldPlaceResult> {
-  return Promise.resolve({ refused: true, reason: "invalid_kind" });
+  return callWrite(
+    "console_hold_place",
+    {
+      kind: input.kind,
+      target: input.target,
+      minutes: input.minutes,
+      reason: input.reason,
+    },
+    isHoldPlaceResult,
+    options,
+  );
 }
 
+/**
+ * 凍結を置いたscheduleを1件止める(無効にする)。止められるのは、名前で列挙したscheduleだけである。
+ * 凍結が無い、置いて7分が過ぎていない、自己更新が実行中などのときは、止めずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 有効に戻す操作は無い。凍結が終わるか解除されると、次の自己更新の追従が戻す。
+ */
 export function stopSchedule(
-  _schedulePath: string,
-  _options: RunScriptOptions = {},
+  schedulePath: string,
+  options: RunScriptOptions = {},
 ): Promise<ScheduleStopResult> {
-  return Promise.resolve({
-    refused: true,
-    reason: "not_allowed",
-    ready_at: null,
-  });
+  return callWrite(
+    "console_schedule_stop",
+    { schedule_path: schedulePath },
+    isScheduleStopResult,
+    options,
+  );
 }

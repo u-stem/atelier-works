@@ -217,7 +217,7 @@ export function holderKindLabel(kind: string): string {
 export const HOLDS_TEXT = {
   sectionTitle: "保留と凍結",
   sectionDescription:
-    "Factoryのマージと反映を、期限つきで止めている保留と凍結です。解除できます。置く操作はこの画面にはありません。",
+    "Factoryのマージと反映を、期限つきで止めている保留と凍結です。置くことも、解除することもできます。",
   holdsCardTitle: "保留",
   holdsCardNote: "マージを止める保留の一覧です。",
   freezesCardTitle: "凍結とdeployの保留",
@@ -226,7 +226,7 @@ export const HOLDS_TEXT = {
   noneActive: "有効な保留と凍結はありません",
   holdsEmpty: "有効な保留はありません",
   freezesEmpty: "有効な凍結とdeployの保留はありません",
-  placeHint: "保留を置くときは mise run hold:place を使います。",
+  placeHint: "Issueの取り込みの保留は、mise run hold:place で置きます。",
   scheduleFreezeLabel: "スケジュールの凍結",
   deployFreezeLabel: "deployの保留",
   deployTarget: "反映全体(self_update、push、migration)",

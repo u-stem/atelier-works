@@ -38,8 +38,10 @@ describe("the generated known paths", () => {
   test("withhold the release scripts and the job write scripts", () => {
     expect([...WITHHELD].sort()).toEqual([
       "f/factory/console_config_update",
+      "f/factory/console_hold_place",
       "f/factory/console_job_cancel",
       "f/factory/console_job_rerun",
+      "f/factory/console_schedule_stop",
       "f/factory/freeze_release",
       "f/factory/hold_release",
     ]);
@@ -60,7 +62,7 @@ describe("the generated known paths", () => {
     ).toEqual([]);
   });
 
-  test("are imported by the job and schedule scripts only", async () => {
+  test("are imported by the job, schedule and place scripts only", async () => {
     const importers: string[] = [];
     for (const file of await glob("f/**/*.ts")) {
       if (file === "f/factory/lib/console_known_paths.ts") continue;
@@ -70,6 +72,7 @@ describe("the generated known paths", () => {
       }
     }
     expect(importers).toEqual([
+      "f/factory/console_hold_place.ts",
       "f/factory/console_jobs.ts",
       "f/factory/console_schedules.ts",
     ]);

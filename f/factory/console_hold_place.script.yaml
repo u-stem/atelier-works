@@ -7,29 +7,29 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    _kind:
+    kind:
       type: string
       description: ''
       default: null
       originalType: string
-    _minutes:
+    minutes:
       type: number
       description: ''
       default: null
-    _reason:
+    reason:
       type: string
       description: ''
       default: null
       originalType: string
-    _target:
+    target:
       type: string
       description: ''
       default: null
       originalType: string
   required:
-    - _kind
-    - _target
-    - _minutes
-    - _reason
+    - kind
+    - target
+    - minutes
+    - reason
 tag: console
 timeout: 30

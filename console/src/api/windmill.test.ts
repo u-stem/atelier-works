@@ -49,6 +49,8 @@ describe("SCRIPT_PATHS", () => {
       "console_job_cancel",
       "console_job_rerun",
       "console_config_update",
+      "console_hold_place",
+      "console_schedule_stop",
     ]);
   });
 

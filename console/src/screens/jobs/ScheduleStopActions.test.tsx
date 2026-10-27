@@ -43,7 +43,7 @@ describe("ScheduleStopControl", () => {
 
   test("keeps the preparation off while the write runs", () => {
     expect(control({ kind: "prepare" }, true)).toMatch(
-      /<button[^>]*disabled[^>]*>止める準備<\/button>/,
+      /<button[^>]*\sdisabled=""[^>]*>止める準備<\/button>/,
     );
   });
 
@@ -54,20 +54,20 @@ describe("ScheduleStopControl", () => {
       freeze: FREEZE,
     });
     expect([
-      /<button[^>]*disabled[^>]*>止める<\/button>/.test(html),
+      /<button[^>]*\sdisabled=""[^>]*>止める<\/button>/.test(html),
       html.includes("10/27 12:07"),
     ]).toEqual([true, true]);
   });
 
   test("offers the stop when the wait is over", () => {
     expect(control({ kind: "ready", freeze: FREEZE })).toMatch(
-      /<button(?![^>]*disabled)[^>]*aria-label="f\/factory\/collect_githubを止める"[^>]*>止める<\/button>/,
+      /<button(?![^>]*\sdisabled="")[^>]*aria-label="f\/factory\/collect_githubを止める"[^>]*>止める<\/button>/,
     );
   });
 
   test("keeps the stop off while the write runs", () => {
     expect(control({ kind: "ready", freeze: FREEZE }, true)).toMatch(
-      /<button[^>]*disabled[^>]*>止める<\/button>/,
+      /<button[^>]*\sdisabled=""[^>]*>止める<\/button>/,
     );
   });
 });

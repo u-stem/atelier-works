@@ -10,14 +10,29 @@ import { JobLink } from "../../components/JobLink.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
+  type ScheduleFreeze,
+  type ScheduleStopState,
+  scheduleStopState,
+} from "../../lib/holdPlace.ts";
+import {
   describeSchedule,
   frozenScheduleTargets,
   jobsBackState,
   SCHEDULES_TRUNCATED_NOTE,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
+import { HoldPlaceDialog } from "../system/HoldPlaceDialog.tsx";
 import { EmptyNote } from "../system/SystemSection.tsx";
+import {
+  initialPlaceForm,
+  usePlaceHold,
+  useScheduleStop,
+} from "../system/usePlacement.ts";
 import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
+import {
+  ScheduleStopControl,
+  ScheduleStopDialog,
+} from "./ScheduleStopActions.tsx";
 
 const BACK = jobsBackState("?tab=schedules");
 
@@ -25,10 +40,18 @@ function ScheduleRow({
   schedule,
   frozen,
   now,
+  stop,
+  locked,
+  onPrepare,
+  onStop,
 }: {
   schedule: ScheduleViewData;
   frozen: ReadonlySet<string> | null;
   now: number;
+  stop: ScheduleStopState;
+  locked: boolean;
+  onPrepare: (path: string) => void;
+  onStop: (path: string, freeze: ScheduleFreeze) => void;
 }) {
   const row = describeSchedule(schedule, frozen, now);
   return (
@@ -52,6 +75,15 @@ function ScheduleRow({
             {row.pausedLabel}
           </Badge>
         )}
+        <span className="ml-auto">
+          <ScheduleStopControl
+            path={schedule.path}
+            state={stop}
+            locked={locked}
+            onPrepare={onPrepare}
+            onStop={onStop}
+          />
+        </span>
       </div>
       <p className="font-mono text-small break-all text-muted-foreground">
         {safeText(schedule.schedule)}
@@ -111,6 +143,8 @@ export function ScheduleList({
 }) {
   const now = useNow();
   const frozen = frozenScheduleTargets(holds.data, now);
+  const place = usePlaceHold();
+  const stop = useScheduleStop();
   return (
     <div className="flex max-w-4xl flex-col gap-3">
       <JobsQueryGate
@@ -159,6 +193,20 @@ export function ScheduleList({
                     schedule={schedule}
                     frozen={frozen}
                     now={now}
+                    stop={scheduleStopState(
+                      schedule.path,
+                      schedule.enabled,
+                      holds.data,
+                      now,
+                    )}
+                    locked={
+                      place.isFreezeLocked(schedule.path) ||
+                      stop.isLocked(schedule.path)
+                    }
+                    onPrepare={(path) => {
+                      place.begin("stop_prepare", path);
+                    }}
+                    onStop={stop.choose}
                   />
                 ))}
               </ul>
@@ -166,6 +214,19 @@ export function ScheduleList({
           </>
         )}
       </JobsQueryGate>
+      <HoldPlaceDialog
+        open={place.dialog !== null}
+        variant={place.dialog?.variant ?? "stop_prepare"}
+        form={place.dialog?.form ?? initialPlaceForm("stop_prepare")}
+        onChange={place.change}
+        onConfirm={place.confirm}
+        onCancel={place.dismiss}
+      />
+      <ScheduleStopDialog
+        target={stop.target}
+        onConfirm={stop.confirm}
+        onCancel={stop.dismiss}
+      />
     </div>
   );
 }

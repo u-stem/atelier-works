@@ -46,8 +46,14 @@ const HOLD_RELEASERS: Readonly<Record<string, readonly string[]>> = {
   "f/factory/hold_release.ts": ["listActiveHolds", "releaseHold"],
 };
 // - 置く書き手(`HOLD_PLACERS`): 人の操作で保留を置く。`placeHold`を読み込んでよい`f/`のファイルは、これだけである。
+//   入力の検査(`validatePlaceInput`)と、置けなかった理由の定数(`HOLD_ALREADY_ACTIVE`)も、置く書き手が読み込む。
 const HOLD_PLACERS: Readonly<Record<string, readonly string[]>> = {
-  "f/factory/console_hold_place.ts": ["listActiveHolds", "placeHold"],
+  "f/factory/console_hold_place.ts": [
+    "HOLD_ALREADY_ACTIVE",
+    "listActiveHolds",
+    "placeHold",
+    "validatePlaceInput",
+  ],
 };
 
 // 表を作るmigration。走査から外すので、保護パスに入れてあることを下で確かめる。
@@ -1111,7 +1117,7 @@ describe("files under f/", () => {
       const allowed = Object.keys(HOLD_RELEASERS).includes(path)
         ? [...READ_ONLY_NAMES, "releaseHold"]
         : Object.keys(HOLD_PLACERS).includes(path)
-          ? [...READ_ONLY_NAMES, "placeHold"]
+          ? [...READ_ONLY_NAMES, ...(HOLD_PLACERS[path] ?? [])]
           : READ_ONLY_NAMES;
       return disallowedHoldsReferences(source, allowed).map(
         (reference) =>

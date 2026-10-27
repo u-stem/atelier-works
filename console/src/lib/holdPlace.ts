@@ -1,25 +1,31 @@
-// 保留と凍結を置く操作と、scheduleを止める操作の、入力の検査と確認の文。(スタブ)
+// 保留と凍結を置く操作と、scheduleを止める操作の、入力の検査と確認の文。
+// 期限の上限、止められるschedule、止めるまでの待ちは、backendの置くscriptと止めるscriptが持つ値と同じで、
+// `tests/scripts/`にある、それぞれのscriptのテストが突き合わせる。
+// 画面が出す操作の絞り込みと入力の案内で、権限の境界ではない。境界はscriptが同じ表と検査で確かめる。
 
 import type { HoldsSnapshot } from "../api/guards/holds.ts";
 import type { HoldPlaceInput } from "../api/writes.ts";
+import { formatShortAbsoluteIso } from "./relativeTime.ts";
 
 export type PlaceKind = "merge" | "deploy" | "freeze";
 
-export const PLACE_KINDS: readonly PlaceKind[] = [];
+export const PLACE_KINDS: readonly PlaceKind[] = ["merge", "deploy", "freeze"];
 
 export const PLACE_KIND_LABELS: Readonly<Record<PlaceKind, string>> = {
-  merge: "",
-  deploy: "",
-  freeze: "",
+  merge: "マージの保留",
+  deploy: "deployの保留",
+  freeze: "scheduleの凍結",
 };
 
+/** 置ける期限の上限(分)。置いた時刻から数える。 */
 export const MAX_MINUTES: Readonly<Record<PlaceKind, number>> = {
-  merge: 0,
-  deploy: 0,
-  freeze: 0,
+  merge: 24 * 60,
+  deploy: 120,
+  freeze: 24 * 60,
 };
 
-export const REASON_MAX_LENGTH = 0;
+/** 理由の長さの上限。scriptがUTF-16の単位で数えるので、同じ数え方をする。 */
+export const REASON_MAX_LENGTH = 200;
 
 export type PlaceForm = {
   readonly kind: PlaceKind;
@@ -43,35 +49,144 @@ export type PlaceCheck =
   | { readonly ok: true; readonly input: HoldPlaceInput }
   | { readonly ok: false; readonly problem: PlaceProblem };
 
-export function checkPlaceForm(_form: PlaceForm): PlaceCheck {
-  return { ok: false, problem: "target_empty" };
+const REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const SCHEDULE_PATH = /^f\/[a-z0-9_]+(?:\/[a-z0-9_]+)*$/;
+const DIGITS = /^\d+$/;
+/** 制御文字に加え、表示の並びを偽装できる書式文字(双方向制御など)と行・段落の区切り。scriptの検査と同じ範囲。 */
+const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+function targetProblem(kind: PlaceKind, target: string): PlaceProblem | null {
+  if (kind === "deploy") return null;
+  if (target === "") return "target_empty";
+  const shape = kind === "merge" ? REPOSITORY : SCHEDULE_PATH;
+  return shape.test(target) ? null : "target_invalid";
 }
 
+function minutesProblem(
+  kind: PlaceKind,
+  text: string,
+): { problem: PlaceProblem } | { minutes: number } {
+  if (text === "") return { problem: "minutes_empty" };
+  if (!DIGITS.test(text)) return { problem: "minutes_not_integer" };
+  const minutes = Number(text);
+  if (minutes < 1) return { problem: "minutes_too_small" };
+  if (minutes > MAX_MINUTES[kind]) return { problem: "minutes_too_large" };
+  return { minutes };
+}
+
+function reasonProblem(reason: string): PlaceProblem | null {
+  if (reason === "") return "reason_empty";
+  if (CONTROL_CHARS.test(reason)) return "reason_has_control";
+  return reason.length > REASON_MAX_LENGTH ? "reason_too_long" : null;
+}
+
+/**
+ * 入力欄の内容を、scriptへ渡す入力にする。前後の空白は除く。
+ * 問題があれば、最初の1つを返す。順は、対象、期限、理由である。
+ * deployの保留は対象を持たないので、入力欄に何があっても空にする。
+ */
+export function checkPlaceForm(form: PlaceForm): PlaceCheck {
+  const target = form.kind === "deploy" ? "" : form.target.trim();
+  const problemOfTarget = targetProblem(form.kind, target);
+  if (problemOfTarget !== null) return { ok: false, problem: problemOfTarget };
+  const minutes = minutesProblem(form.kind, form.minutesText.trim());
+  if ("problem" in minutes) return { ok: false, problem: minutes.problem };
+  const reason = form.reason.trim();
+  const problemOfReason = reasonProblem(reason);
+  if (problemOfReason !== null) return { ok: false, problem: problemOfReason };
+  return {
+    ok: true,
+    input: { kind: form.kind, target, minutes: minutes.minutes, reason },
+  };
+}
+
+/** 入力の問題を伝える文。 */
 export function placeProblemMessage(
-  _problem: PlaceProblem,
-  _kind: PlaceKind,
+  problem: PlaceProblem,
+  kind: PlaceKind,
 ): string {
-  return "";
+  switch (problem) {
+    case "target_empty":
+      return "対象を入力してください。";
+    case "target_invalid":
+      return kind === "merge"
+        ? "owner/repo の形で入力してください。"
+        : "f/factory/名前 の形で、scheduleのパスを入力してください。";
+    case "minutes_empty":
+      return "期限を分で入力してください。";
+    case "minutes_not_integer":
+      return "期限は整数の分で入力してください。";
+    case "minutes_too_small":
+      return "期限は1分以上にしてください。";
+    case "minutes_too_large":
+      return `期限は最大${String(MAX_MINUTES[kind])}分です。`;
+    case "reason_empty":
+      return "理由を入力してください。";
+    case "reason_too_long":
+      return `理由は${String(REASON_MAX_LENGTH)}文字までです。`;
+    case "reason_has_control":
+      return "理由に改行や制御文字は使えません。";
+  }
 }
 
-export function placeEffectLines(_kind: PlaceKind): readonly string[] {
-  return [];
+/** 置いたときの効果と、終わり方を伝える文。 */
+export function placeEffectLines(kind: PlaceKind): readonly string[] {
+  switch (kind) {
+    case "merge":
+      return [
+        "このリポジトリのdependabotの自動マージと、ローカルのセッションのマージを、次の取得から止めます。",
+        "期限が来ると、保留は終わります。早く外すときは、この節の一覧から解除します。",
+      ];
+    case "deploy":
+      return [
+        "反映全体(自己更新の反映、push、migration)を、期限まで見送ります。置く前に始まった反映は、最大で約13分続くことがあります。",
+        "期限が来ると、見送っていた変更をまとめて反映します。早く外すときは、この節の一覧から解除します。",
+      ];
+    case "freeze":
+      return [
+        "自己更新とmise run pushが、このscheduleの定義を上書きしないようにします。scheduleそのものは止まりません。",
+        "期限が来るか解除すると、次の自己更新の追従で、scheduleはリポジトリの定義に戻ります。早く外すときは、この節の一覧から解除します。",
+      ];
+  }
 }
 
-/** 止められるscheduleのパス。 */
-export const STOP_TARGETS: readonly string[] = [];
+/**
+ * 止めると何が起きるかの文。止められるscheduleと同じ並びで、止められないscheduleは持たない。
+ * 止めたときに出る通知と、黙る処理を、対象ごとに書く。
+ */
+const STOP_IMPACT: Readonly<Record<string, string>> = {
+  "f/factory/auto_retry_pr_review":
+    "GitHubの一時的な失敗で止まったPRレビューを、自動では再開しなくなります。通知は出ません。",
+  "f/factory/collect_github":
+    "GitHubの収集が止まります。約18分後に、自己更新が「GitHubの収集が止まっています」の通知を出します。PRのCIとコンフリクトの判断は、古い記録のままになります。",
+  "f/factory/drawio_viewer_bump":
+    "draw.ioのビューアの版を上げるPRを作らなくなります。通知は出ません。",
+  "f/factory/notify_daily_summary":
+    "日次サマリが届かなくなります。再開した後、予定が飛んだ日を最大7日分まとめて出します。",
+  "f/factory/poll_prs":
+    "トリガーのラベルを付けたPRを、作業項目に取り込まなくなります。通知は出ません。",
+  "f/factory/watch_main_ci": "mainのCIの失敗を、通知しなくなります。",
+  "f/factory/watch_pr_ci":
+    "FactoryのPRのCIの失敗を、通知しなくなります。CIの失敗を直す作業項目も起動しません。",
+  "f/factory/watch_pr_conflicts": "PRのコンフリクトの検知と通知が止まります。",
+};
+
+/** 止められるschedule。 */
+export const STOP_TARGETS: readonly string[] = Object.keys(STOP_IMPACT);
 
 /** 止めたときの影響を伝える文。止められないscheduleは`null`。 */
-export function stopImpactNote(_path: string): string | null {
-  return null;
+export function stopImpactNote(path: string): string | null {
+  return Object.hasOwn(STOP_IMPACT, path) ? (STOP_IMPACT[path] ?? null) : null;
 }
 
 /** 凍結を置いてから、止められるまでの待ち(分)。 */
-export const STOP_READY_AFTER_MINUTES = 0;
+export const STOP_READY_AFTER_MINUTES = 7;
+
+const MINUTE_MS = 60_000;
 
 /** 凍結を置いた時刻から、止められるようになる時刻(ミリ秒)。 */
-export function stopReadyAt(_createdAtIso: string): number {
-  return 0;
+export function stopReadyAt(createdAtIso: string): number {
+  return Date.parse(createdAtIso) + STOP_READY_AFTER_MINUTES * MINUTE_MS;
 }
 
 export type ScheduleFreeze = {
@@ -80,6 +195,13 @@ export type ScheduleFreeze = {
   readonly expiresAt: string;
 };
 
+/**
+ * scheduleの行に出す、止める操作の段階。
+ * - none: 何も出さない。止められないschedule、すでに無効、凍結を読めない、ローカルのセッションが置いた凍結。
+ * - prepare: 凍結がまだ無い。「止める準備」を出す。
+ * - waiting: 凍結を置いて7分が過ぎていない。「止める」を押せない状態で、押せる時刻を出す。
+ * - ready: 「止める」を押せる。
+ */
 export type ScheduleStopState =
   | { readonly kind: "none" }
   | { readonly kind: "prepare" }
@@ -90,22 +212,64 @@ export type ScheduleStopState =
     }
   | { readonly kind: "ready"; readonly freeze: ScheduleFreeze };
 
+const NONE: ScheduleStopState = { kind: "none" };
+
+/**
+ * schedule`path`の行に出す段階を決める。凍結を読めないときは、凍結が無いと言い切らず、何も出さない。
+ * 有効な凍結が複数あれば、最も新しいものの時刻から待つ。置いたのが人でない凍結が1つでもあれば、何も出さない。
+ */
 export function scheduleStopState(
-  _path: string,
-  _enabled: boolean,
-  _holds: HoldsSnapshot | undefined,
-  _nowMs: number,
+  path: string,
+  enabled: boolean,
+  holds: HoldsSnapshot | undefined,
+  nowMs: number,
 ): ScheduleStopState {
-  return { kind: "none" };
+  if (stopImpactNote(path) === null || !enabled) return NONE;
+  if (holds === undefined || !holds.freezes.ok) return NONE;
+  const active = holds.freezes.schedule.filter(
+    (row) => row.target === path && Date.parse(row.expires_at) > nowMs,
+  );
+  const newest = active.reduce<(typeof active)[number] | null>(
+    (latest, row) =>
+      latest === null ||
+      Date.parse(row.created_at) > Date.parse(latest.created_at)
+        ? row
+        : latest,
+    null,
+  );
+  if (newest === null) return { kind: "prepare" };
+  if (active.some((row) => row.holder_kind !== "human")) return NONE;
+  const freeze: ScheduleFreeze = {
+    id: newest.id,
+    createdAt: newest.created_at,
+    expiresAt: newest.expires_at,
+  };
+  const readyAt = stopReadyAt(newest.created_at);
+  return nowMs < readyAt
+    ? { kind: "waiting", readyAt, freeze }
+    : { kind: "ready", freeze };
 }
 
+/** 止める準備(凍結を置く)の確認に並べる、効果と終わり方。 */
+export function prepareDialogLines(path: string): readonly string[] {
+  const impact = stopImpactNote(path);
+  return [
+    `凍結を置き、約${String(STOP_READY_AFTER_MINUTES)}分後に「止める」を押せるようにします。置く前に始まった自己更新の反映が、終わるまでの時間です。`,
+    "凍結を置いただけでは、まだ止まりません。",
+    ...(impact === null ? [] : [`止めると: ${impact}`]),
+    "凍結は、期限が来るか解除すると終わります。終わると、次の自己更新の追従で、scheduleはリポジトリの定義(有効)に戻ります。",
+  ];
+}
+
+/** 止める確認に並べる、影響と、有効に戻る時期。 */
 export function stopDialogLines(
-  _path: string,
-  _freezeExpiresAt: string,
+  path: string,
+  freezeExpiresAt: string,
 ): readonly string[] {
-  return [];
-}
-
-export function prepareDialogLines(_path: string): readonly string[] {
-  return [];
+  const impact = stopImpactNote(path);
+  return [
+    ...(impact === null ? [] : [impact]),
+    `凍結が終わる${formatShortAbsoluteIso(freezeExpiresAt)}以降の自己更新の追従で、scheduleは有効に戻ります。凍結を解除すると、次の追従で戻ります。`,
+    "Consoleからは有効に戻せません。",
+  ];
 }

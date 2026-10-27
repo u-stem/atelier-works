@@ -1,5 +1,6 @@
-// スケジュールの凍結の純粋関数群。I/Oは持たない。
-// 状態の読み書きは`./freeze_apply.ts`、人の端末のCLIは`scripts/freeze.ts`が行う。
+// スケジュールの凍結の純粋関数群。変数の読み書きは、呼び出し側が渡す入出力(`FreezeIo`)で行い、自分では何も呼ばない。
+// 反映の側の読み書きは`./freeze_apply.ts`、人の端末のCLIは`scripts/freeze.ts`が行う。
+// Consoleの置く操作と止める操作は、ファイルを読む部品を取り込まないよう、このファイルの入出力の関数を使う。
 //
 // 凍結は「このスケジュールを`wmill sync push`で書き換えないで」を、期限つきで伝える。
 // 同じ変数は、反映全体(push、migration、`deployed_sha`の更新)を待たせるdeployの保留も持つ。
@@ -81,14 +82,21 @@ function fail<T>(reason: string): Outcome<T> {
 }
 
 /**
- * 変数の読み書きの入出力。実体は呼び出し側が渡す。
+ * 変数の読み取りの入出力。実体は呼び出し側が渡す。
  * `freeze_apply.ts`の`FreezePorts`と同じ形で、ファイルを読む部品を取り込まずに使えるよう、このファイルにも持つ。
  */
-export type FreezeIo = {
+export type FreezeReadIo = {
   /** 変数の値。変数が無いと確かめられたときだけ`null`を返す。読めなければ例外を投げる。 */
   readonly readVariable: () => Promise<string | null>;
-  readonly writeVariable: (text: string) => Promise<void>;
   readonly now: () => Date;
+};
+
+/**
+ * 変数の読み書きの入出力。書く関数の名前は、読み取り専用のscriptが取り込むこのファイルに、
+ * 書き込みの語を持ち込まないよう、`FreezePorts`と変えている。
+ */
+export type FreezeIo = FreezeReadIo & {
+  readonly storeVariable: (text: string) => Promise<void>;
 };
 
 export function emptyFreezeState(): FreezeState {
@@ -610,15 +618,43 @@ export function sessionHolderFromBranch(branch: string): string {
 // 変数の読み書き(入出力は注入する)
 // ---------------------------------------------------------------------------
 
-export async function readFreezeStateVia(
-  _io: FreezeIo,
-): Promise<Outcome<FreezeState>> {
-  return fail("not implemented");
+/** 変数が壊れているときの回復の手順。`freeze_apply.ts`の`FREEZE_RECOVERY_HINT`と同じ文である。 */
+const RECOVERY_HINT = `the freeze variable ${FREEZE_VARIABLE_PATH} is corrupt; a human can run "mise run freeze:reset" to clear it`;
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
-export async function mutateFreezeStateVia(
-  _io: FreezeIo,
-  _operation: (state: FreezeState, now: Date) => Outcome<FreezeState>,
+/**
+ * 変数を読んで解析する。時刻の検査(未来の作成、遠い期限)も行う。
+ * 読めない、壊れているときは、回復の手順を含む理由で失敗を返す。例外は投げない。
+ */
+export async function readFreezeStateVia(
+  io: FreezeReadIo,
 ): Promise<Outcome<FreezeState>> {
-  return fail("not implemented");
+  let raw: string | null;
+  try {
+    raw = await io.readVariable();
+  } catch (err) {
+    return fail(`could not read the freeze variable: ${errorMessage(err)}`);
+  }
+  const parsed = parseFreezeState(raw, io.now());
+  return parsed.ok ? parsed : fail(`${parsed.reason} (${RECOVERY_HINT})`);
+}
+
+/**
+ * 読み直した状態に操作を当てて書く。操作が失敗を返したときは、何も書かずにその理由を返す。
+ * 読めないときは、書かずに失敗を返す。書き込みの失敗は投げる。
+ * 読み直しから書き込みまでは排他しないので、別の書き手と重なると、書く前に読んだ状態を上書きしうる。
+ */
+export async function mutateFreezeStateVia(
+  io: FreezeIo,
+  operation: (state: FreezeState, now: Date) => Outcome<FreezeState>,
+): Promise<Outcome<FreezeState>> {
+  const state = await readFreezeStateVia(io);
+  if (!state.ok) return state;
+  const next = operation(state.value, io.now());
+  if (!next.ok) return next;
+  await io.storeVariable(serializeFreezeState(next.value));
+  return next;
 }

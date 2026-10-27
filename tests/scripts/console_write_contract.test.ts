@@ -980,7 +980,7 @@ describe("what the scripts return", () => {
       freeze: {
         now: () => new Date("2026-10-27T03:00:00.000Z"),
         readVariable: () => Promise.resolve(variable),
-        writeVariable: (text) => {
+        storeVariable: (text) => {
           variable = text;
           return Promise.resolve();
         },

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as holdPlaceView from "../../console/src/lib/holdPlace.ts";
 import {
   PLACE_KINDS,
   PLACE_REFUSAL_REASONS,
@@ -9,11 +10,15 @@ import {
 } from "../../f/factory/console_hold_place.ts";
 import type { ActionSqlClient } from "../../f/factory/lib/console_actions.ts";
 import {
+  DEPLOY_FREEZE_MAX_TTL_MS,
+  FREEZE_MAX_TTL_MS,
   type FreezeIo,
   parseFreezeState,
 } from "../../f/factory/lib/freezes.ts";
 import {
   HOLD_ALREADY_ACTIVE,
+  HOLD_MAX_TTL_MINUTES,
+  HOLD_REASON_MAX,
   type HoldReadOutcome,
   type HoldRow,
   type Outcome,
@@ -141,7 +146,7 @@ function harness(options: Options = {}): Harness {
       }
       return variable;
     },
-    writeVariable: async (text) => {
+    storeVariable: async (text) => {
       events.push("write-variable");
       writes.push(text);
       variable = text;
@@ -770,5 +775,27 @@ describe("the contract of the place script", () => {
       "actor_unknown",
       "audit_unavailable",
     ]);
+  });
+
+  test("the Console offers the same kinds", () => {
+    expect([...holdPlaceView.PLACE_KINDS]).toEqual([...PLACE_KINDS]);
+  });
+
+  test("the Console allows a merge hold as long as the hold module does", () => {
+    expect(holdPlaceView.MAX_MINUTES.merge).toBe(HOLD_MAX_TTL_MINUTES);
+  });
+
+  test("the Console allows a deploy hold as long as the freeze module does", () => {
+    expect(holdPlaceView.MAX_MINUTES.deploy).toBe(
+      DEPLOY_FREEZE_MAX_TTL_MS / 60_000,
+    );
+  });
+
+  test("the Console allows a freeze as long as the freeze module does", () => {
+    expect(holdPlaceView.MAX_MINUTES.freeze).toBe(FREEZE_MAX_TTL_MS / 60_000);
+  });
+
+  test("the Console allows a reason as long as the hold module does", () => {
+    expect(holdPlaceView.REASON_MAX_LENGTH).toBe(HOLD_REASON_MAX);
   });
 });

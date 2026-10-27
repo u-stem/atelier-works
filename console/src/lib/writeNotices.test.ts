@@ -777,7 +777,7 @@ describe("describeScheduleStopResult", () => {
     });
     expect([notice.tone, notice.message]).toEqual([
       "warning",
-      "止める操作をしましたが、読み直したscheduleがまだ有効です。Windmillで確かめてください。",
+      "止める操作をしましたが、scheduleが無効になったことを確認できませんでした。Windmillで確かめてください。",
     ]);
   });
 
