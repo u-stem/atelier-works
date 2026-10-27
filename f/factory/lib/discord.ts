@@ -431,7 +431,8 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "design_approval_requested":
       return {
         title: `設計の承認待ち: #${event.issue_number} ${event.title}`,
-        description: "設計書のドラフトが確認待ちです。",
+        description:
+          "設計書のドラフトが確認待ちです。リンク先のConsoleで承認または却下してください。",
         url: event.inbox_url,
         fields: [
           instanceField(event.instance_name),

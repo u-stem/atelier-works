@@ -464,7 +464,10 @@ const PR_CONFLICT_FIX_MAX_ROUNDS_PER_PR_RANGE = { min: 2, max: 10 } as const;
 /** `pr_conflict_fix_notify_grace_min`の範囲(分)。0は猶予なしを表す。 */
 const PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE = { min: 0, max: 1440 } as const;
 
-/** `max_design_attempts`の範囲。設計の却下の反映と要件の不足の差し戻しが数える上限なので、書き損じで際限なく増えないようにする。 */
+/**
+ * `max_design_attempts`の範囲。現在の要件定義の試行で、設計を却下できる回数(反映できた却下の数)の上限である。
+ * 書き損じで際限なく増えないようにする。
+ */
 const MAX_DESIGN_ATTEMPTS_RANGE = { min: 1, max: 10 } as const;
 
 /**
