@@ -76,11 +76,25 @@ export type ScreenRoute = {
   readonly children?: readonly ScreenRoute[];
 };
 
+/** パレットの固定の行き先。 */
+export type Destination = {
+  readonly label: string;
+  /** routerの基準(`/console`)からの絶対パス。タブは`?tab=`で指す。 */
+  readonly path: string;
+};
+
 export type Screen = {
   readonly id: ScreenId;
   /** リンクの行き先。routerの基準(`/console`)からの絶対パスで書く。 */
   readonly path: string;
   readonly label: string;
+  /** `g`の後に押して、この画面へ移るキー。サイドバーの並びの番号で、ヘルプの一覧もこの値から作る。 */
+  readonly shortcut: string;
+  /**
+   * サイドバーの1回の押下では届かない、固定の行き先。パレットに出す。
+   * 名前と経路は固定の値だけで、サーバー由来の文字は含めない。経路は画面の経路の下に置く。
+   */
+  readonly destinations: readonly Destination[];
   readonly icon: LucideIcon;
   /** サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。 */
   readonly badge: (counts: SummaryCounts | undefined) => number;
@@ -110,6 +124,8 @@ export const SCREENS: readonly Screen[] = [
     id: "inbox",
     path: "/",
     label: "要対応",
+    shortcut: "1",
+    destinations: [],
     icon: Inbox,
     // 一覧に出る承認、再実行できる失敗、通知の件数を数える。
     // 数えた件数と一覧の件数が食い違うと、最初に見る数字を信用できなくなるためである。
@@ -129,6 +145,11 @@ export const SCREENS: readonly Screen[] = [
     id: "items",
     path: "/items",
     label: "作業項目",
+    shortcut: "2",
+    destinations: [
+      { label: "作業項目 › 新規投入", path: "/items/new" },
+      { label: "作業項目 › 要件定義", path: "/items?tab=requirements" },
+    ],
     icon: ListChecks,
     badge: noBadge,
     // 一覧の2つの取得を先読みする。件数のsummaryはサイドバーが常に持つので含めない。
@@ -172,6 +193,8 @@ export const SCREENS: readonly Screen[] = [
     id: "reports",
     path: "/reports",
     label: "レポート",
+    shortcut: "3",
+    destinations: [],
     icon: ChartColumn,
     badge: noBadge,
     prefetch: noPrefetch,
@@ -195,6 +218,11 @@ export const SCREENS: readonly Screen[] = [
     id: "jobs",
     path: JOBS_PATH,
     label: "ジョブ",
+    shortcut: "4",
+    destinations: [
+      { label: "ジョブ › 履歴", path: `${JOBS_PATH}?tab=history` },
+      { label: "ジョブ › スケジュール", path: `${JOBS_PATH}?tab=schedules` },
+    ],
     icon: Activity,
     badge: noBadge,
     // 実行中と待ちの一覧だけを先読みする。履歴とscheduleは、タブを開いたときに取る。
@@ -220,6 +248,8 @@ export const SCREENS: readonly Screen[] = [
     id: "system",
     path: SYSTEM_PATH,
     label: "システム",
+    shortcut: "5",
+    destinations: [],
     icon: Server,
     badge: noBadge,
     // 画面が開く直後に走る3つの取得を先読みする。summaryはサイドバーが常に持つので含めない。

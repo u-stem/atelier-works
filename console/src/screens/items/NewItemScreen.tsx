@@ -15,6 +15,7 @@ import { Input } from "../../components/ui/input.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { describeIntakeAttempt } from "../../lib/intakeAttempt.ts";
 import {
+  draftForm,
   fieldsAfterCount,
   type IntakeFields,
   restoreFields,
@@ -96,7 +97,7 @@ export function NewItemScreen() {
   const targets = useIntakeTargets();
   const intake = useManualIntake();
   const { session } = intake;
-  // 一覧へ移って戻っても、投入できた後を除いて、直近に送った入力欄の値を復元する。
+  // 一覧へ移って戻っても、投入できた後を除いて、入力中か直近に送った入力欄の値を復元する。
   const [typed, setTyped] = useState<IntakeFields>(() =>
     restoreFields(session),
   );
@@ -115,12 +116,14 @@ export function NewItemScreen() {
     body,
     acceptanceCriteria: acceptance,
   } = reconciled.fields;
-  const setField = (change: Partial<IntakeFields>) => {
-    setTyped({ ...reconciled.fields, ...change });
-  };
-
   const candidates = targets.data ?? [];
   const repoText = repo ?? defaultRepoText(candidates);
+  // 入力のたびに、タブ全体の状態へ残す。サイドバーやパレットで別の画面へ移って戻っても、入力を失わない。
+  const setField = (change: Partial<IntakeFields>) => {
+    const next = { ...reconciled.fields, ...change };
+    setTyped(next);
+    intake.saveDraft(draftForm(next, repoText));
+  };
   const form = { repo: repoText, title, body, acceptanceCriteria: acceptance };
   const built = buildIntakeInput(form);
   const problems: readonly IntakeProblem[] =

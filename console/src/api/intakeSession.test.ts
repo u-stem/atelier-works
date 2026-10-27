@@ -477,3 +477,54 @@ describe("createLeaveGuard", () => {
     expect(sessions.get(KEY).attempt).toEqual(UNKNOWN);
   });
 });
+
+describe("a draft typed before sending", () => {
+  const DRAFT: IntakeForm = { ...FORM, title: "Half typed" };
+
+  test("is kept for a screen that comes back", () => {
+    const sessions = createIntakeSessions();
+    sessions.draft(KEY, DRAFT);
+    expect(sessions.get(KEY).form).toEqual(DRAFT);
+  });
+
+  test("leaves the result of the last attempt as it was", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.record(KEY, REFUSED);
+    sessions.draft(KEY, DRAFT);
+    expect(sessions.get(KEY).attempt).toEqual(REFUSED);
+  });
+
+  test("keeps the count of cleared inputs, which only a send or a discard changes", () => {
+    const sessions = createIntakeSessions();
+    sessions.draft(KEY, DRAFT);
+    expect(sessions.get(KEY).clearedCount).toBe(0);
+  });
+
+  test("does not replace the sent input of an attempt that may have gone through", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.record(KEY, UNKNOWN);
+    sessions.draft(KEY, DRAFT);
+    expect(sessions.get(KEY).form).toEqual(FORM);
+  });
+
+  test("is kept after an input was sent and cleared", () => {
+    const sessions = createIntakeSessions();
+    sessions.begin(KEY, FORM);
+    sessions.record(KEY, SUBMITTED);
+    sessions.draft(KEY, DRAFT);
+    expect(sessions.get(KEY).form).toEqual(DRAFT);
+  });
+
+  test("tells the subscribers once for the same draft typed twice", () => {
+    const sessions = createIntakeSessions();
+    let calls = 0;
+    sessions.subscribe(() => {
+      calls += 1;
+    });
+    sessions.draft(KEY, DRAFT);
+    sessions.draft(KEY, { ...DRAFT });
+    expect(calls).toBe(1);
+  });
+});
