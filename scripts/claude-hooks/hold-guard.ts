@@ -10,10 +10,11 @@
 // `-e`の直後の文字列と標準入力のコードは、凍結のCLIを指しながら`release`か`deploy`を含めば拒否する。
 // 標準入力へ流し込むファイル(`bun run - < scripts/freeze.ts`)が保留か凍結のコードなら拒否する。
 //
-// Consoleの解除script(`hold_release`と`freeze_release`)を1コマンドで呼ぶ形は、主セッションを含む
-// すべてのセッションで拒否する(`findConsoleReleaseCall`)。ローカルの主セッションはCLIでは`session`として
-// 扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らずに他の主体の保留を外せるためである。
-// 解除scriptの名前を軸に、拒否を既定にする。プログラムの種類を問わず、語、変数代入の値、標準入力の文字列に、
+// Consoleの書き込みのscript(`console-scripts.ts`の一覧。保留と凍結の解除、ジョブの取消など)を1コマンドで呼ぶ形は、
+// 主セッションを含むすべてのセッションで拒否する(`findConsoleReleaseCall`)。ローカルの主セッションはCLIでは`session`として
+// 扱われ、人の解除には端末での確認が要るが、Consoleのscriptはその確認を通らずに他の主体の保留を外せる。
+// 取消などの書き込みも、運用者がConsoleの確認のダイアログを通す操作で、セッションが直接呼ぶと、その確認を通らないためである。
+// 書き込みのscriptの名前を軸に、拒否を既定にする。プログラムの種類を問わず、語、変数代入の値、標準入力の文字列に、
 // 名前、名前に当たりうるglob、ブレースの形があれば拒否する。標準入力の文字列は、パイプの連鎖の上流まで辿る。
 // 読み取りなどのプログラム(`git`、`grep`、`cat`など)は、名前だけでは通す。同じコマンドに実行を表す語(`wmill`、`curl`、`npx`、`sh`など)が
 // 並ぶとき、実行を委ねるオプション(`git -c`、`rebase`、`gh alias set`、`rg --pre`)があるとき、変数代入の値に名前があるときは拒否する。
@@ -62,6 +63,7 @@
 // - subagentが新しいファイルを書いて実行する形。
 // Bashとdockerを持つ主体は、psqlで保留を直接書ける。ここで止めるのは、誤操作と、拒否を知らない呼び出しである。
 
+import { CONSOLE_WRITE_SCRIPTS } from "./console-scripts.ts";
 import {
   baseName,
   scanMiseGlobalOptions,
@@ -705,21 +707,18 @@ export function findHoldOperation(
   return null;
 }
 
-/** Consoleの解除scriptの名前。前後が英数字と`_`でないときだけ数え、通知の種類`hold_released`は取り違えない。 */
-const RELEASE_SCRIPT_NAME =
-  /(?<![A-Za-z0-9_])(?:hold_release|freeze_release)(?![A-Za-z0-9_])/;
+/**
+ * Consoleの書き込みのscript(`console-scripts.ts`の一覧)の名前。解除のscriptと取消のscriptなどである。
+ * 前後が英数字と`_`でないときだけ数え、通知の種類`hold_released`や、読み取りのscript`console_jobs`は取り違えない。
+ */
+const RELEASE_SCRIPT_NAME = new RegExp(
+  `(?<![A-Za-z0-9_])(?:${CONSOLE_WRITE_SCRIPTS.join("|")})(?![A-Za-z0-9_])`,
+);
 
-/** 解除scriptのファイル名。globが当たるかを見る対象である。 */
-const RELEASE_FILE_NAMES: readonly string[] = [
-  "hold_release",
-  "hold_release.ts",
-  "hold_release.script.yaml",
-  "hold_release.script.lock",
-  "freeze_release",
-  "freeze_release.ts",
-  "freeze_release.script.yaml",
-  "freeze_release.script.lock",
-];
+/** 書き込みのscriptのファイル名。globが当たるかを見る対象である。 */
+const RELEASE_FILE_NAMES: readonly string[] = CONSOLE_WRITE_SCRIPTS.flatMap(
+  (name) => [name, `${name}.ts`, `${name}.script.yaml`, `${name}.script.lock`],
+);
 
 /** 凍結の変数のパス。スラッシュはパーセント符号化でも数える。 */
 const FREEZE_VARIABLE_PATH =

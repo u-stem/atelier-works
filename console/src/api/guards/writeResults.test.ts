@@ -4,9 +4,11 @@ import {
   isAuditKickoffResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
+  isJobCancelResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  JOB_CANCEL_REFUSAL_REASONS,
   MANUAL_INTAKE_REFUSAL_REASONS,
 } from "./writeResults.ts";
 
@@ -318,5 +320,156 @@ describe("isFreezeReleaseResult", () => {
 
   test("rejects a numeric freeze id", () => {
     expect(isFreezeReleaseResult({ ...RELEASED, freeze_id: 3 })).toBe(false);
+  });
+});
+
+describe("isJobCancelResult", () => {
+  const CANCELED = {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    flow_path: "f/factory/implement",
+    job_state: "canceled",
+    work_item: { id: 7, status: "failed", lease_held: true },
+    action_audit: "recorded",
+  };
+
+  test("accepts a job that does not exist", () => {
+    expect(isJobCancelResult({ found: false })).toBe(true);
+  });
+
+  test("accepts a canceled job", () => {
+    expect(isJobCancelResult(CANCELED)).toBe(true);
+  });
+
+  test("accepts a canceled job whose state and work item could not be read", () => {
+    expect(
+      isJobCancelResult({ ...CANCELED, job_state: null, work_item: null }),
+    ).toBe(true);
+  });
+
+  test("accepts a canceled job whose record could not be written", () => {
+    expect(isJobCancelResult({ ...CANCELED, action_audit: "failed" })).toBe(
+      true,
+    );
+  });
+
+  test.each([...JOB_CANCEL_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isJobCancelResult({ found: true, refused: true, reason })).toBe(
+        true,
+      );
+    },
+  );
+
+  test("accepts the refusal of a job that is already stopping", () => {
+    expect(
+      isJobCancelResult({
+        found: true,
+        refused: true,
+        reason: "already_canceling",
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a refusal with a reason it does not know", () => {
+    expect(
+      isJobCancelResult({ found: true, refused: true, reason: "other" }),
+    ).toBe(false);
+  });
+
+  test("rejects a canceled job without the audit", () => {
+    const { action_audit: _omitted, ...rest } = CANCELED;
+    expect(isJobCancelResult(rest)).toBe(false);
+  });
+
+  test("rejects an audit it does not know", () => {
+    expect(isJobCancelResult({ ...CANCELED, action_audit: "maybe" })).toBe(
+      false,
+    );
+  });
+
+  test("rejects a work item whose lease flag is not a boolean", () => {
+    expect(
+      isJobCancelResult({
+        ...CANCELED,
+        work_item: { id: 7, status: "failed", lease_held: "yes" },
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a work item without a positive id", () => {
+    expect(
+      isJobCancelResult({
+        ...CANCELED,
+        work_item: { id: 0, status: "failed", lease_held: true },
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a missing found flag", () => {
+    expect(isJobCancelResult({ refused: false })).toBe(false);
+  });
+
+  test("rejects null", () => {
+    expect(isJobCancelResult(null)).toBe(false);
+  });
+});
+
+describe("the action audit of the other writes", () => {
+  test("is accepted on a restart", () => {
+    expect(
+      isRetryWorkItemResult({
+        ok: true,
+        status: "implementing",
+        started_job_id: JOB,
+        flow_job_id: JOB,
+        action_audit: "failed",
+      }),
+    ).toBe(true);
+  });
+
+  test("is accepted on a hold release", () => {
+    expect(
+      isHoldReleaseResult({
+        ok: true,
+        status: "released",
+        hold_id: 12,
+        was_active: true,
+        action_audit: "failed",
+      }),
+    ).toBe(true);
+  });
+
+  test("is accepted on a freeze release", () => {
+    expect(
+      isFreezeReleaseResult({
+        ok: true,
+        status: "released",
+        freeze_id: "0a1b2c3d",
+        action_audit: "recorded",
+      }),
+    ).toBe(true);
+  });
+
+  test("is accepted on a manual intake", () => {
+    expect(
+      isManualIntakeSubmitResult({
+        refused: false,
+        flow_job_id: JOB,
+        action_audit: "failed",
+      }),
+    ).toBe(true);
+  });
+
+  test("is rejected when it is neither recorded nor failed", () => {
+    expect(
+      isManualIntakeSubmitResult({
+        refused: false,
+        flow_job_id: JOB,
+        action_audit: "maybe",
+      }),
+    ).toBe(false);
   });
 });

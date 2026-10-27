@@ -6,6 +6,7 @@
 
 import { join } from "node:path";
 import { Glob } from "bun";
+import { WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES } from "./claude-hooks/console-scripts.ts";
 
 export type RepoSchedule = {
   readonly path: string;
@@ -67,22 +68,26 @@ async function readSchedule(root: string, file: string): Promise<RepoSchedule> {
 }
 
 /**
- * 定数に入れないscript。保留と凍結を解除するscriptは、Consoleの履歴の絞り込みに要らない。
- * tag consoleのジョブは既定で一覧に出ない。名前を`f/`の他のファイルに持たせない検査
- * (`tests/scripts/hold_wiring.test.ts`)を、生成した定数が破らないようにするためでもある。
+ * 定数に入れないscript。名前を`f/`の他のファイルに持たせない書き込みのscript(保留と凍結の解除、ジョブの取消)は、
+ * Consoleの履歴の絞り込みに要らない。tag consoleのジョブは既定で一覧に出ない。
+ * 名前を持たせない検査(`tests/scripts/hold_wiring.test.ts`)を、生成した定数が破らないようにするためでもある。
  */
-const WITHHELD: readonly string[] = [
-  "f/factory/hold_release",
-  "f/factory/freeze_release",
-];
+const WITHHELD: readonly string[] = WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES.map(
+  (name) => `f/factory/${name}`,
+);
 
 /**
  * 履歴の絞り込みに出さないscript。
- * フローのステップ(`f/factory/steps/`)と失敗ハンドラは、フローの中のジョブで、履歴のルートのジョブに出ない。
+ * フローのステップ(`f/factory/steps/`)と失敗ハンドラは、フローの中のジョブで、履歴に出ない。
+ * 例外は承認のハンドラで、承認のscriptが起動するので親のジョブを持つが、フローのステップではなく、履歴に出る。
  * Consoleのworker(tag console)のscriptは、履歴に出さない既定である。選んでも常に0件になる。
  */
 const HISTORY_FILTER_EXCLUDED: readonly string[] = ["f/factory/on_error_flow"];
 const HISTORY_FILTER_EXCLUDED_PREFIX = "f/factory/steps/";
+const APPROVAL_HANDLERS: readonly string[] = [
+  "f/factory/steps/issue_proposal_apply",
+  "f/factory/steps/requirements_apply",
+];
 const CONSOLE_TAG = "console";
 
 async function readTag(root: string, path: string): Promise<string | null> {
@@ -99,7 +104,12 @@ async function historyFilterOf(
 ): Promise<string[]> {
   const roots: string[] = [];
   for (const path of scripts) {
-    if (path.startsWith(HISTORY_FILTER_EXCLUDED_PREFIX)) continue;
+    if (
+      path.startsWith(HISTORY_FILTER_EXCLUDED_PREFIX) &&
+      !APPROVAL_HANDLERS.includes(path)
+    ) {
+      continue;
+    }
     if (HISTORY_FILTER_EXCLUDED.includes(path)) continue;
     if ((await readTag(root, path)) === CONSOLE_TAG) continue;
     roots.push(path);

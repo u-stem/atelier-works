@@ -1,0 +1,16 @@
+summary: '[OP-2-6] ジョブを取り消し'
+description: Factory
+  Consoleから、実行中か待ちの作業項目のフローを1件取り消します。対象は、親のジョブを持たないフローで、パスが許可した作業項目のフローと完全に一致するものだけです。予定の時刻が未来のジョブと、子のステップは取り消せません。操作の前に記録を残し、残せなければ取り消しません。取り消した後の作業項目の状態を読み直して返します。
+lock: '!inline f/factory/console_job_cancel.script.lock'
+kind: script
+schema:
+  properties:
+    job_id:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - job_id
+tag: console
+timeout: 30

@@ -1024,16 +1024,54 @@ describe("loadJobHistory", () => {
     return { list, query: jobsQueries[0], calls };
   }
 
-  test("asks for completed root jobs of f/factory/ without the Console's own", async () => {
+  test("asks for completed jobs that are not steps of a flow, without the Console's own", async () => {
     const { query } = await history({ includeConsole: false });
     expect(query).toEqual({
       scriptPathStart: "f/factory/",
       perPage: DEFAULT_PAGE_SIZE + 1,
-      hasNullParent: true,
+      isFlowStep: false,
       jobKinds: "script,flow",
       completedBefore: NOW.toISOString(),
       tag: "!console",
     });
+  });
+
+  test("does not filter by the parent, so a job started by another job is listed", async () => {
+    const { query } = await history({ includeConsole: false });
+    expect(query).not.toHaveProperty("hasNullParent");
+  });
+
+  test("lists an approval handler job, which has a parent and is not a flow step", async () => {
+    const handler = completedJob({
+      id: uuid(40),
+      script_path: "f/factory/steps/requirements_apply",
+      parent_job: PARENT,
+      is_flow_step: false,
+      schedule_path: null,
+    });
+    const { list } = await history({ includeConsole: false }, [handler]);
+    expect(list.jobs.map((job) => job.id)).toEqual([uuid(40)]);
+  });
+
+  test("does not return the parent of a listed job", async () => {
+    const handler = completedJob({
+      id: uuid(40),
+      script_path: "f/factory/steps/requirements_apply",
+      parent_job: PARENT,
+    });
+    const { list } = await history({ includeConsole: false }, [handler]);
+    expect(list.jobs[0]?.parent_job).toBeNull();
+  });
+
+  test("drops a step of a flow even when the API returns it", async () => {
+    const step = completedJob({
+      id: uuid(41),
+      script_path: "f/factory/steps/implement_prepare",
+      parent_job: PARENT,
+      is_flow_step: true,
+    });
+    const { list } = await history({ includeConsole: false }, [step]);
+    expect(list.jobs).toEqual([]);
   });
 
   test("passes a valid status", async () => {

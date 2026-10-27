@@ -16,8 +16,9 @@
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
 // - subagentの保留(hold)を置く・解除する操作(`hold-guard.ts`): 確認する相手がいないまま、自動マージを止めるか、止めている保留を外す。
 //   一覧(`list`)は許す。ベストエフォートで、別名の呼び出しや変数で組んだパスは止めない。
-// - Consoleの解除script(`hold_release`、`freeze_release`)の名前に当たりうる語や標準入力を持つコマンドと、
-//   凍結の変数を書く`wmill variable`と`curl`(`hold-guard.ts`): 端末での人の確認を通らずに、他の主体の保留や凍結を外す。
+// - Consoleの書き込みのscript(`console-scripts.ts`の一覧。`hold_release`、`freeze_release`、`console_job_cancel`など)の名前に
+//   当たりうる語や標準入力を持つコマンドと、凍結の変数を書く`wmill variable`と`curl`(`hold-guard.ts`):
+//   端末やConsoleでの人の確認を通らずに、他の主体の保留や凍結を外し、ジョブを止める。
 //   プログラムを問わず拒否を既定にし、すべてのセッションで拒否する。読み取りのプログラムは、実行を表す語が並ばない限り通す。
 // - マージと反映(`gh pr merge`、`wmill sync push`など)を保留の間止める判定は、別のフック(`merge-guard.ts`)が行う。
 //   このフックとは独立に動き、どちらかが拒否すれば止まる。
@@ -394,7 +395,7 @@ export const REASONS = {
   miseGenerate:
     "mise generate git-pre-commit --write writes into .git/hooks, and mise generate github-action --write writes into .github/workflows. Both can replace the checks that run before a commit or a merge. Any mise generate with a path under .git/hooks, .git/config, or .github/workflows, or with a word built from a variable, is denied too, because an option such as --output can write there. Print to stdout (without --write or a short flag bundle that contains w) and review the output instead.",
   consoleRelease:
-    "Releasing a hold or a freeze through the Console scripts is not allowed in any Claude session. This hook denies any command whose words, variable assignments, or standard input could name hold_release or freeze_release (a glob, a brace, or an xargs input counts), even for git, grep, or sed when a word such as wmill, curl, npx, bun, or sh is next to the name, and any write to f/factory/freezes (wmill variable add/push, or a URL under /variables/update, create, or delete), whichever program runs it. They skip the confirmation that a person gives in the terminal. A person releases from the system screen of the Console, or runs mise run hold:release or mise run freeze:release in a terminal and confirms there. To read the source, use the Read tool or git show, because a command that names the script is denied even when it only reads over the network. A call with a name built from a variable or a file is not caught here; do not try it.",
+    "Running a Console write script (hold_release, freeze_release, console_job_cancel, and the others listed in scripts/claude-hooks/console-scripts.ts) is not allowed in any Claude session. This hook denies any command whose words, variable assignments, or standard input could name one of them (a glob, a brace, or an xargs input counts), even for git, grep, or sed when a word such as wmill, curl, npx, bun, or sh is next to the name, and any write to f/factory/freezes (wmill variable add/push, or a URL under /variables/update, create, or delete), whichever program runs it. They skip the confirmation that a person gives in the Console or in the terminal. A person releases a hold or a freeze from the system screen of the Console and stops a job from the job screen, or runs mise run hold:release or mise run freeze:release in a terminal and confirms there. To read the source, use the Read tool or git show, because a command that names the script is denied even when it only reads over the network. A call with a name built from a variable or a file is not caught here; do not try it.",
   subagentHold:
     "Subagents must not place or release holds, place a deploy freeze, or release a freeze: a hold stops merges, a deploy freeze stops every deployment, and no one is there to confirm it. Ask the main session or a person to run mise run hold:place, mise run hold:release, mise run freeze:place -- --scope deploy, or mise run freeze:release. Listing with mise run hold:list or mise run freeze:list is fine, and so is placing a schedule freeze (mise run freeze:place -- --target ...). A word that could name the hold code (a glob such as hol?.ts, a character class, or a character code in $'...') is denied too.",
   subagentHoldOption:

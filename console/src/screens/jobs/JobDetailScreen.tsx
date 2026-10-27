@@ -35,6 +35,7 @@ import {
 import { SCROLL_BODY_CLASS } from "../../lib/layoutClasses.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
+import { JobActions } from "./JobActions.tsx";
 import {
   ArgList,
   DetailSection,
@@ -158,7 +159,13 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
             }}
           />
         ) : null}
-        <DetailSection id="job-overview-heading" title="概要">
+        <DetailSection
+          id="job-overview-heading"
+          title="概要"
+          actions={
+            <JobActions job={job} workItemId={relatedWorkItemId(detail.args)} />
+          }
+        >
           {active ? (
             <p className="text-small text-muted-foreground">
               状態は15秒ごとに更新します。ログと原因は、「ログと原因を更新」で読み込み直します。

@@ -32,9 +32,9 @@ import {
 // - github_tokenを読んでよいのは、approval_decideとretry_work_itemだけ。
 // - その2つも、github_token以外のsecret変数は読まない。
 // - audit_kickoff、notice_resolve、manual_intake_submit、console_holds、hold_release、freeze_release、
-//   console_jobs、console_schedules、console_configは、どのsecret変数も読まない。
+//   console_jobs、console_schedules、console_config、console_job_cancelは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
-// - console_jobs、console_schedules、console_configは、SDKの呼び出しも許可表に絞る。
+// - console_jobs、console_schedules、console_config、console_job_cancelは、SDKの呼び出しも許可表に絞る。
 //   `<X>Service.<method>`と`wmill.<member>`の使用を、importでたどれるファイルの和に当て、
 //   別名、名前付きimport、fetch、WM_TOKEN、深いパスのimportを禁じる。走査は`worker_boundary_scan.ts`の`sdkFindings`にある。
 //
@@ -71,11 +71,12 @@ const READS_NO_SECRET = [
   "f/factory/console_jobs",
   "f/factory/console_schedules",
   "f/factory/console_config",
+  "f/factory/console_job_cancel",
 ];
 
 /**
  * SDKの呼び出しを、script別の許可表に絞るscript。
- * ジョブ、schedule、設定を読むscriptは、これ以外のSDKの呼び出しを持たない。
+ * ジョブ、schedule、設定を読むscriptと、ジョブを取り消すscriptは、これ以外のSDKの呼び出しを持たない。
  * 許可表は、importでたどれるファイルの和に当てる。`datatable`は、失敗の保存済みの原因を読むために使う。
  * 別名、名前付きimport、`fetch`、`WM_TOKEN`、深いパスのimportなども、この3つには許さない。
  */
@@ -102,6 +103,11 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
     services: ["ResourceService.getResourceValue"],
     members: ["getWorkspace"],
   },
+  // 取消は、ジョブを1件読み、取り消し、作業項目の行を読む。記録の表はdatatableで書く。
+  "f/factory/console_job_cancel": {
+    services: ["JobService.getJob", "JobService.cancelQueuedJob"],
+    members: ["getWorkspace", "datatable"],
+  },
 };
 
 /**
@@ -121,10 +127,21 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
 
 /**
  * `process.env`を読んでよいファイルと、読んでよいキー。
- * ジョブ、schedule、設定を読む3つのscriptと、importでたどれるファイルは、ここに無いキーを読まない。
+ * 上のscriptと、importでたどれるファイルは、ここに無いキーを読まない。
  * 環境全体の列挙、添字の読み取り、`process`の別名は、表に関わらず禁じる。
+ * 取消は、操作者を導くために、ジョブの実行文脈の2つのキーだけを読む。
  */
-const ENV_ALLOWED: Readonly<Record<string, readonly string[]>> = {};
+const ENV_ALLOWED: Readonly<Record<string, readonly string[]>> = {
+  "f/factory/console_job_cancel.ts": ["WM_USERNAME", "WM_EMAIL"],
+};
+
+/**
+ * 書き込みのSQLを持ってよいファイル。操作の記録の部品は、記録の表だけを書く。
+ * 他の表を書かないことは、下の「記録の部品が書く表」のテストが固定する。
+ */
+const SQL_WRITERS_ALLOWED: readonly string[] = [
+  "f/factory/lib/console_actions.ts",
+];
 
 async function consoleScripts(): Promise<string[]> {
   const paths: string[] = [];
@@ -1153,6 +1170,7 @@ describe("the scripts restricted to an SDK allowance", () => {
       };
       const offenders: string[] = [];
       for (const [file, source] of sourcesReachableFrom(path)) {
+        if (SQL_WRITERS_ALLOWED.includes(relative(file))) continue;
         const templates = [
           ...codeOf(source).matchAll(/`((?:[^`\\]|\\.)*)`/g),
         ].map((match) => match[1] ?? "");
@@ -1163,4 +1181,52 @@ describe("the scripts restricted to an SDK allowance", () => {
       expect([...new Set(offenders)]).toEqual([]);
     },
   );
+});
+
+describe("the SQL that the console scripts reach", () => {
+  function templatesOf(file: string): string[] {
+    return [
+      ...codeOf(readFileSync(file, "utf8")).matchAll(/`((?:[^`\\]|\\.)*)`/g),
+    ].map((match) => match[1] ?? "");
+  }
+
+  const WRITE_WORDS =
+    /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
+
+  test.each([...SQL_WRITERS_ALLOWED])(
+    "%s writes only the table of the action record",
+    (file) => {
+      const stray = templatesOf(file)
+        .filter((text) => WRITE_WORDS.test(text))
+        .filter((text) => !text.includes("factory.console_actions"));
+      expect(stray).toEqual([]);
+    },
+  );
+
+  test.each([...SQL_WRITERS_ALLOWED])(
+    "%s names no table but the action record in a statement that writes",
+    (file) => {
+      const others = templatesOf(file)
+        .filter((text) => WRITE_WORDS.test(text))
+        .flatMap((text) => [...text.matchAll(/factory\.(\w+)/g)])
+        .map((match) => match[1])
+        .filter((table) => table !== "console_actions");
+      expect(others).toEqual([]);
+    },
+  );
+
+  test("the job cancel script reads only the work item table with its own SQL", () => {
+    const tables = templatesOf("f/factory/console_job_cancel.ts")
+      .flatMap((text) => [...text.matchAll(/factory\.(\w+)/g)])
+      .map((match) => match[1]);
+    expect([...new Set(tables)]).toEqual(["work_items"]);
+  });
+
+  test("the job cancel script has no SQL that writes of its own", () => {
+    expect(
+      templatesOf("f/factory/console_job_cancel.ts").filter((text) =>
+        WRITE_WORDS.test(text),
+      ),
+    ).toEqual([]);
+  });
 });

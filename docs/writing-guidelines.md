@@ -20,7 +20,7 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 | 手順 | 運用する人が、何をすればよいか、失敗したらどうするかを知る | `docs/setup.md`、`docs/operations.md` |
 | 説明 | 構成と、その構成をとる理由を理解する | `docs/architecture.md`、`docs/security.md` |
 | 仕様 | 変更する人が、内部の挙動と設定値を確かめる | `docs/internals/` |
-| 規約 | 書く人が、守ることを確かめる | `docs/coding-guidelines.md`、この文書 |
+| 規約 | 書く人が、守ることを確かめる | `docs/coding-guidelines.md`、`docs/console-display.md`、この文書 |
 | エージェント向けの指示 | Claudeが、作業の決まりを知る | AGENTS.md、`.claude/skills/`、`.claude/agents/` |
 
 内部の挙動は、まずコードのコメントとテストで表す。`docs/internals/`には、複数のファイルにまたがる挙動の要約だけを書き、詳細はコードを参照させる。

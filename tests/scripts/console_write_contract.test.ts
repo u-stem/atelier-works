@@ -16,9 +16,12 @@ import {
   isAuditKickoffResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
+  isJobCancelResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  JOB_CANCEL_REFUSAL_REASONS,
+  type JobCancelResult,
   MANUAL_INTAKE_REFUSAL_REASONS,
   type ManualIntakeRefusalReason,
   type ManualIntakeSubmitResult,
@@ -34,6 +37,7 @@ import * as consoleWrites from "../../console/src/api/writes.ts";
 import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
+import * as jobCancel from "../../f/factory/console_job_cancel.ts";
 import * as freezeRelease from "../../f/factory/freeze_release.ts";
 import * as holdRelease from "../../f/factory/hold_release.ts";
 import {
@@ -54,7 +58,8 @@ type WriteScript =
   | "manual_intake_submit"
   | "notice_resolve"
   | "hold_release"
-  | "freeze_release";
+  | "freeze_release"
+  | "console_job_cancel";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -64,9 +69,44 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "notice_resolve",
   "hold_release",
   "freeze_release",
+  "console_job_cancel",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+/** 結果の最小の形。`action_audit`を足して、型ガードが受けるか確かめる。 */
+function retryBase() {
+  return {
+    ok: true,
+    status: "implementing",
+    started_job_id: JOB,
+    flow_job_id: JOB,
+  };
+}
+function holdBase() {
+  return { ok: true, status: "released", hold_id: 12, was_active: true };
+}
+function freezeBase() {
+  return {
+    ok: true,
+    status: "released",
+    freeze_id: "0a1b2c3d",
+    scope: "schedule",
+  };
+}
+function intakeBase() {
+  return { refused: false, flow_job_id: JOB };
+}
+function cancelBase() {
+  return {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    flow_path: "f/factory/implement",
+    job_state: "canceled",
+    work_item: { id: 7, status: "failed", lease_held: true },
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -135,10 +175,11 @@ const WRAPPER_CALLS: Readonly<
   hold_release: (fetchFn) => consoleWrites.releaseHold(12, { fetchFn }),
   freeze_release: (fetchFn) =>
     consoleWrites.releaseFreeze("0a1b2c3d", { fetchFn }),
+  console_job_cancel: (fetchFn) => consoleWrites.cancelJob(JOB, { fetchFn }),
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the seven write scripts", () => {
+  test("holds the five read scripts and the eight write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -250,6 +291,16 @@ describe("what the typed calls send", () => {
   test("freeze_release has no input that names the releaser", async () => {
     const { properties } = await schemaOf(SCRIPT_PATHS.freeze_release);
     expect(properties).toEqual(["freeze_id"]);
+  });
+
+  test("console_job_cancel takes only the id of the job", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_job_cancel);
+    expect(properties).toEqual(["job_id"]);
+  });
+
+  test("console_job_cancel requires the id of the job", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_job_cancel);
+    expect(required).toEqual(["job_id"]);
   });
 
   test("console_holds takes no input", async () => {
@@ -592,6 +643,115 @@ describe("what the scripts return", () => {
     );
   });
 
+  const CANCEL_JOB = {
+    type: "QueuedJob",
+    id: JOB,
+    script_path: "f/factory/implement",
+    job_kind: "flow",
+    running: true,
+    canceled: false,
+    is_flow_step: false,
+    parent_job: null,
+    tag: "flow",
+    args: { work_item_id: 7 },
+  };
+
+  function cancelPorts(
+    job: unknown,
+    afterCancel: unknown = { ...CANCEL_JOB, canceled: true },
+  ): jobCancel.CancelPorts {
+    let reads = 0;
+    return {
+      now: () => new Date("2026-10-27T03:00:00.000Z"),
+      deriveActor: () => "operator",
+      getJob: () => {
+        reads += 1;
+        return Promise.resolve(reads === 1 ? job : afterCancel);
+      },
+      cancelJob: () => Promise.resolve(),
+      readWorkItem: (id) =>
+        Promise.resolve({ id, status: "failed", flow_job_id: JOB }),
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  test("a canceled job passes the guard", async () => {
+    const result = await jobCancel.cancelJobFromConsole(
+      JOB,
+      cancelPorts(CANCEL_JOB),
+    );
+    expect(isJobCancelResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a canceled job whose work item is gone passes the guard", async () => {
+    const ports = {
+      ...cancelPorts(CANCEL_JOB),
+      readWorkItem: () => Promise.resolve(null),
+    };
+    const result = await jobCancel.cancelJobFromConsole(JOB, ports);
+    expect(isJobCancelResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a job that does not exist passes the guard", async () => {
+    const result = await jobCancel.cancelJobFromConsole(
+      "not-a-job-id",
+      cancelPorts(CANCEL_JOB),
+    );
+    expect(isJobCancelResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test.each([...jobCancel.CANCEL_REFUSAL_REASONS])(
+    "the cancel refusal %s passes the guard",
+    (reason) => {
+      expect(isJobCancelResult({ found: true, refused: true, reason })).toBe(
+        true,
+      );
+    },
+  );
+
+  test("the console cancel refusal reasons are the backend ones", () => {
+    expect([...JOB_CANCEL_REFUSAL_REASONS]).toEqual([
+      ...jobCancel.CANCEL_REFUSAL_REASONS,
+    ]);
+  });
+
+  test("a refusal from the real check passes the guard", async () => {
+    const result = await jobCancel.cancelJobFromConsole(
+      JOB,
+      cancelPorts({ ...CANCEL_JOB, script_path: "f/factory/manual_intake" }),
+    );
+    expect(isJobCancelResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test.each([
+    ["retry_work_item", isRetryWorkItemResult, retryBase()],
+    ["hold_release", isHoldReleaseResult, holdBase()],
+    ["freeze_release", isFreezeReleaseResult, freezeBase()],
+    ["manual_intake_submit", isManualIntakeSubmitResult, intakeBase()],
+    ["console_job_cancel", isJobCancelResult, cancelBase()],
+  ] as const)(
+    "%s's result with a failed action audit passes the guard",
+    (_name, guard, base) => {
+      expect(guard({ ...base, action_audit: "failed" })).toBe(true);
+    },
+  );
+
+  test.each([
+    ["retry_work_item", isRetryWorkItemResult, retryBase()],
+    ["hold_release", isHoldReleaseResult, holdBase()],
+    ["freeze_release", isFreezeReleaseResult, freezeBase()],
+    ["manual_intake_submit", isManualIntakeSubmitResult, intakeBase()],
+    ["console_job_cancel", isJobCancelResult, cancelBase()],
+  ] as const)(
+    "%s's result with an action audit it does not know fails the guard",
+    (_name, guard, base) => {
+      expect(guard({ ...base, action_audit: "maybe" })).toBe(false);
+    },
+  );
+
   test("a started audit passes the guard", () => {
     const started: auditKickoff.AuditKickoffResult = {
       skipped: false,
@@ -648,6 +808,11 @@ describe("types", () => {
   test("the console freeze release result is the backend result", () => {
     const equal: Equal<FreezeReleaseResult, freezeRelease.FreezeReleaseResult> =
       true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console job cancel result is the backend result", () => {
+    const equal: Equal<JobCancelResult, jobCancel.JobCancelResult> = true;
     expect(equal).toBe(true);
   });
 
@@ -742,11 +907,11 @@ describe("api boundary", () => {
   });
 });
 
-// Consoleの解除scriptの名前は、許可リストと、その結果を型と関数に結ぶ少数のファイルだけに出る。
+// Consoleの解除scriptと取消scriptの名前は、許可リストと、その結果を型と関数に結ぶ少数のファイルだけに出る。
 // 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
 describe("console release script names", () => {
   const NAME =
-    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release)(?![A-Za-z0-9_])/;
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|console_job_cancel)(?![A-Za-z0-9_])/;
   const MAY_NAME_THEM = [
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",
