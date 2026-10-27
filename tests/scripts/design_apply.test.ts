@@ -6,6 +6,7 @@ import {
 } from "../../f/factory/lib/design_apply_support.ts";
 import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_support.ts";
 import {
+  DESIGN_STAGE_CLOSED_REASON,
   designNoApprovalReason,
   designRejectedExhaustedReason,
 } from "../../f/factory/lib/design_template.ts";
@@ -333,7 +334,7 @@ function rejectedHarness(overrides: Partial<DesignRejectedDeps> = {}) {
   const ports = designPorts();
   const relaunch = relaunchDeps();
   const deps: DesignRejectedDeps = {
-    config: { instance_name: "local" },
+    config: { instance_name: "local", design_enabled: true },
     ctx: {
       workItem: workItem(),
       issueNumber: 42,
@@ -456,6 +457,64 @@ describe("applyDesignRejected when the design is regenerated", () => {
     const h = rejectedHarness();
     await applyDesignRejected(h.deps, REJECTION);
     expect(h.ports.moves.filter((move) => move.from === move.to)).toEqual([]);
+  });
+});
+
+describe("applyDesignRejected when the design stage is closed", () => {
+  const closed = () =>
+    rejectedHarness({
+      config: { instance_name: "local", design_enabled: false },
+    });
+
+  test("moves to needs_human with the reason of the closed stage and notifies", async () => {
+    const h = closed();
+    await applyDesignRejected(h.deps, REJECTION);
+    expect(h.calls).toEqual([
+      `needs_human:${DESIGN_STAGE_CLOSED_REASON}`,
+      `notify:${DESIGN_STAGE_CLOSED_REASON}`,
+    ]);
+  });
+
+  test("reports needs_human", async () => {
+    const h = closed();
+    const result = await applyDesignRejected(h.deps, REJECTION);
+    expect(result.outcome).toBe("needs_human");
+  });
+
+  test("does not start the design flow", async () => {
+    const h = closed();
+    await applyDesignRejected(h.deps, REJECTION);
+    expect(h.ports.launches).toEqual([]);
+  });
+
+  test("does not move to designing", async () => {
+    const h = closed();
+    await applyDesignRejected(h.deps, REJECTION);
+    expect(h.ports.events).toEqual([]);
+  });
+
+  test("reports no_op when the work item moved on", async () => {
+    const h = rejectedHarness({
+      config: { instance_name: "local", design_enabled: false },
+      moveToNeedsHuman: async () => false,
+    });
+    const result = await applyDesignRejected(h.deps, REJECTION);
+    expect(result.outcome).toBe("no_op");
+  });
+
+  test("keeps the reason of the limit when the limit is reached", async () => {
+    const h = closed();
+    await applyDesignRejected(h.deps, { ...REJECTION, appliedRejections: 2 });
+    expect(h.calls[0]).toBe(`needs_human:${designRejectedExhaustedReason(3)}`);
+  });
+
+  test("still returns to the requirements when the issue changed", async () => {
+    const h = closed();
+    const result = await applyDesignRejected(h.deps, {
+      ...REJECTION,
+      issue: "changed",
+    });
+    expect(result.outcome).toBe("requirements_returned");
   });
 });
 

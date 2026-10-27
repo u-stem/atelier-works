@@ -12,6 +12,7 @@ import {
   DESIGN_APPROVAL_TIMED_OUT_REASON,
   DESIGN_DOC_DIR_IN_USE_REASON,
   DESIGN_REJECTED_EXHAUSTED_PREFIX,
+  DESIGN_STAGE_CLOSED_REASON,
   designGapExhaustedReason,
   designNoApprovalReason,
   designRejectedExhaustedReason,
@@ -82,6 +83,10 @@ describe("describeReason for the design stage", () => {
     expect(describeReason(REQUIREMENTS_DIR_MISSING_REASON)).toContain(
       "ディレクトリがありません",
     );
+  });
+
+  test("translates a rejection that arrives while the design stage is closed", () => {
+    expect(describeReason(DESIGN_STAGE_CLOSED_REASON)).toContain("設計工程");
   });
 
   test("translates a design directory that already holds a draft", () => {
@@ -178,6 +183,16 @@ describe("nextActionFor for the design stage", () => {
     ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
   ])("does not tell to relabel the Issue for %s", (_name, reason) => {
     expect(nextActionFor(reason)).not.toContain(RELABEL);
+  });
+
+  test("tells to check design_enabled before the retry when the design stage is closed", () => {
+    expect(nextActionFor(DESIGN_STAGE_CLOSED_REASON)).toContain(
+      "design_enabled",
+    );
+  });
+
+  test("tells how to retry when the design stage is closed", () => {
+    expect(nextActionFor(DESIGN_STAGE_CLOSED_REASON)).toContain(RETRY);
   });
 
   test("tells how to retry a design directory that already holds a draft", () => {

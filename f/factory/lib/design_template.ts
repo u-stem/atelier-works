@@ -89,6 +89,8 @@ export const DESIGN_DOC_DIR_IN_USE_REASON =
  */
 export const DESIGN_APPROVAL_TIMED_OUT_REASON = "design approval timed out";
 
+export const DESIGN_STAGE_CLOSED_REASON = "";
+
 /**
  * 設計の却下が上限に達したときの`needs_human`の理由の接頭辞。
  * 反映できた却下の数(`countAppliedDesignRejections`)が、遷移の注記をこの接頭辞で数える。

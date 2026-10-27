@@ -145,7 +145,7 @@ export async function applyDesignApproved(
 }
 
 export type DesignRejectedDeps = DesignNeedsHumanDeps & {
-  readonly config: Pick<FactoryConfig, "instance_name">;
+  readonly config: Pick<FactoryConfig, "instance_name" | "design_enabled">;
   readonly ctx: NotifyContext;
   /** 設計フローの起動の入出力。省略すると本番の呼び出しを使う。テストが差し替える。 */
   readonly ports?: StartDesignPorts;
