@@ -125,8 +125,19 @@ HTMLの除去は、見えない文字を挟んだコメントの開きを、整�
 - 結合文字を落とした。
 - 制御文字か書式文字を除いた。
 
-警告の項目は、`work_item_id`、`design_draft_id`、`original_chars`、`kept_chars`、`masked`、`dropped_combining`、`truncated`に限る。
+警告の項目は、次の8つに限る。
+
+- `work_item_id`
+- `design_draft_id`
+- `original_chars`
+- `kept_chars`
+- `masked`
+- `dropped_combining`
+- `stripped_characters`
+- `truncated`
+
 `original_chars`は整えた本文の長さ、`kept_chars`は残した長さである。
+`stripped_characters`は、制御文字・書式文字・結合文字などを除いた文字数である。
 設計書には秘密情報や隠れた指示が含まれうるので、本文はログに載せない。
 設計書は要件定義より下位の入力で、切れても要件定義が優先されるため、止めない。
 正しく生成された設計書は、検査で8000以下に収まるので、通常は何も変わらない。
