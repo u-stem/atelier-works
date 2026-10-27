@@ -6,6 +6,10 @@
 // GitHubのIssueはopen判定と、取り込み時点のURLが空のときのURLにだけ使う。
 
 import * as wmill from "windmill-client@1.817.0";
+import {
+  designGate,
+  isRequirementsApprovedForAttempt,
+} from "../lib/approval_gate.ts";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import {
   CheckEnvironmentError,
@@ -21,9 +25,11 @@ import {
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
+  getDesignDraft,
   getRequirementDraft,
   getWorkItem,
   hasUnfinishedPrRun,
+  latestDesignApproval,
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
@@ -63,7 +69,6 @@ import {
   buildImplementBranchName,
   implementDeadlineAt,
   implementTimeoutMisfit,
-  isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
 import {
@@ -137,6 +142,8 @@ export type BuildImplementContextInput = {
   /** worktreeの用意ができた時点での`readWorktreeGitPointer(worktreeDir).content`。 */
   readonly worktreeGitPointer: string;
   readonly existingPr: PullRequestRef | null;
+  /** 承認済みの設計書の本文。設計が無効なら`null`。 */
+  readonly designMarkdown: string | null;
   /** mainが始まった時刻(epoch ms)。フロー全体の期限の起点。 */
   readonly startedAt: number;
   readonly config: Pick<
@@ -184,6 +191,7 @@ export function buildImplementContext(
     requirements_diagrams: input.draft.diagrams,
     requirements_doc_dir: input.draft.doc_dir,
     requirements_doc_hash: input.draft.doc_hash,
+    design_markdown: input.designMarkdown,
     requirements_console_url: buildConsoleUrl(
       input.config.windmill_public_url,
       { work_item_id: workItem.id, attempt: input.draft.attempt },
@@ -385,6 +393,22 @@ export async function main(
       }),
   );
   if (untrusted !== null) return stop("needs_human", untrusted);
+  // 設計が有効なら、設計の承認が現在の状態に一致しなければ、ブランチにもworktreeにも触れる前に止める。
+  // 判定の実体は`lib/approval_gate.ts`にあり、ここでは呼び出しと、止める1文だけを持つ。
+  const gate = await designGate(
+    {
+      designEnabled: config.design_enabled,
+      workItem,
+      requirementsApproval: approval,
+    },
+    {
+      latestDesignApproval,
+      getDesignDraft,
+      warn: (message, fields) =>
+        logger("implement_prepare").warn(message, fields),
+    },
+  );
+  if (gate.kind === "stop") return stop("needs_human", gate.reason);
 
   // ブランチのPR(閉じたものを含む)で、pr_fix / pr_reviewが同じworktreeを使っていることがある。
   // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に、
@@ -556,6 +580,7 @@ export async function main(
       expectedHeadSha,
       worktreeGitPointer,
       existingPr,
+      designMarkdown: gate.kind === "pass" ? gate.markdown : null,
       startedAt,
       config,
     }),

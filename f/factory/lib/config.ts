@@ -88,6 +88,8 @@ type DefaultableField =
   | "implement_flow_timeout_sec"
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
+  | "design_enabled"
+  | "max_design_attempts"
   | "dependabot_enabled"
   | "dependabot_merge_enabled"
   | "dependabot_group_enabled"
@@ -160,6 +162,9 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
+  // 設計工程は既定で無効にする。有効にできるようになるまで、真を書いても偽として読む(`DESIGN_STAGE_OPENABLE`)。
+  design_enabled: false,
+  max_design_attempts: 3,
   // dependabotの自動処理は既定で無効にし、リモートのリソースで有効にする。
   dependabot_enabled: false,
   // マージは、結果を人が確かめてから別に有効にする。無効の間は、マージ可の判定も人に回す。
@@ -458,6 +463,28 @@ const PR_CONFLICT_FIX_MAX_ROUNDS_PER_PR_RANGE = { min: 2, max: 10 } as const;
 
 /** `pr_conflict_fix_notify_grace_min`の範囲(分)。0は猶予なしを表す。 */
 const PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE = { min: 0, max: 1440 } as const;
+
+/** `max_design_attempts`の範囲。設計の却下の反映と要件の不足の差し戻しが数える上限なので、書き損じで際限なく増えないようにする。 */
+const MAX_DESIGN_ATTEMPTS_RANGE = { min: 1, max: 10 } as const;
+
+/**
+ * 設計工程を有効にできる状態か。偽の間は、`design_enabled: true`を例外にせず、偽として読んで`design_enabled_ignored`を立てる。
+ * 例外にすると、設定を読む全てのscriptが止まり、自己更新も、止まったことを知らせる通知も動かなくなるため。
+ * 有効にできる状態になるときに、この定数と分岐を置き換える。
+ * 真にしてよい条件は、承認画面が実装に渡すのと同じ正規化の出力を、設計書のHTMLとリンク参照定義を要素や定義にせず文字として描くことと、それを確かめるテストがあることである。
+ */
+const DESIGN_STAGE_OPENABLE = false;
+
+/** `design_enabled`が偽として読まれたことを知らせる通知の種類。 */
+export const DESIGN_ENABLED_IGNORED_NOTICE_KIND = "design_enabled_ignored";
+
+/**
+ * `design_enabled`が偽として読まれたことを知らせる通知の本文。
+ * 同じ本文の未解決の通知は1件にまとまるので、固定の文にする。
+ * 設定をfalseに戻すと、自己更新が自動で解決する。
+ */
+export const DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE =
+  "設定のdesign_enabledがtrueですが、設計工程はまだ有効にできないため、falseとして読んでいます。設計工程は動きません。次の操作: factory_configのdesign_enabledをfalseに戻す。戻すと、自己更新(2分ごと)がこの通知を自動で解決する";
 
 /**
  * 競合を直す起動が有効なときの、`pr_conflict_fix_notify_grace_min`の下限(分)。
@@ -809,6 +836,19 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     );
   }
 
+  const designEnabledRequested = booleanField(
+    raw,
+    "design_enabled",
+    DEFAULTS.design_enabled,
+  );
+  // 範囲は、設計工程が無効でも検査する。使わない値でも、書き損じは早く知らせる。
+  const maxDesignAttempts = integerInRangeField(
+    raw,
+    "max_design_attempts",
+    DEFAULTS.max_design_attempts,
+    MAX_DESIGN_ATTEMPTS_RANGE,
+  );
+
   const allowedLabelerAssociations = raw.allowed_labeler_associations;
   const resolvedAllowedLabelerAssociations =
     allowedLabelerAssociations === undefined
@@ -971,6 +1011,9 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
     ),
+    design_enabled: designEnabledRequested && DESIGN_STAGE_OPENABLE,
+    design_enabled_ignored: designEnabledRequested && !DESIGN_STAGE_OPENABLE,
+    max_design_attempts: maxDesignAttempts,
     dependabot_enabled: booleanField(
       raw,
       "dependabot_enabled",

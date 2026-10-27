@@ -468,6 +468,29 @@ export type DesignDraft = {
   created_at: Date;
 };
 
+/**
+ * 作業項目の最新の`kind = 'design'`の承認依頼と、それが指す設計書。
+ * 実装の関門と再実行と自動再開が、設計の承認が現在の状態に一致するかを照合するのに使う。
+ */
+export type DesignApprovalRef = {
+  readonly approval_request_id: number;
+  /** `approval_requests.subject_id`(= `design_drafts.id`)。 */
+  readonly design_draft_id: number;
+  readonly status: ApprovalRequestStatus;
+  /** 依頼を作った時点の写し`payload.attempt`。無い、整数でない、負のときは`null`。 */
+  readonly payload_attempt: number | null;
+  /** 依頼を作った時点の写し`payload.design_attempt`。無い、整数でない、負のときは`null`。 */
+  readonly payload_design_attempt: number | null;
+  /**
+   * 依頼が指す設計書。同じ作業項目の行に結合できなければ`null`
+   * (設計書が無い、または別の作業項目のもの)。
+   */
+  readonly draft: {
+    readonly design_attempt: number;
+    readonly requirement_draft_id: number;
+  } | null;
+};
+
 // ---------------------------------------------------------------------------
 // approval_requests: 種別を問わない承認待ち。
 // 承認を扱うscriptはすべてこのテーブルを通す。
@@ -1769,6 +1792,19 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
+  // 設計工程。リソース型ではどちらも省略可能で、既定値がある。
+  /**
+   * 設計工程を有効にするか。既定は`false`。
+   * 設計工程を有効にできるようになるまで、リソースに`true`を書いても`false`として読む。そのとき`design_enabled_ignored`が真になる。
+   */
+  design_enabled: boolean;
+  /**
+   * `design_enabled`に`true`が書かれているのに、偽として読んだか。リソースの項目ではなく、読み込みの結果として導く。
+   * 真の間、自己更新が通知`design_enabled_ignored`を残す。
+   */
+  design_enabled_ignored: boolean;
+  /** 1つの要件定義の下で、設計を試せる回数の上限。1以上10以下の整数で、既定は3。 */
+  max_design_attempts: number;
   // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。
   /** dependabotのセキュリティ更新PRを自動で処理するか。既定は`false`。 */
   dependabot_enabled: boolean;

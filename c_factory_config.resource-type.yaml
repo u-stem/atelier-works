@@ -47,6 +47,8 @@ schema:
     - implement_flow_timeout_sec
     - implement_max_changed_files
     - implement_max_diff_lines
+    - design_enabled
+    - max_design_attempts
     - dependabot_enabled
     - dependabot_merge_enabled
     - dependabot_group_enabled
@@ -189,6 +191,11 @@ schema:
       description: >-
         実装(工程3)で検査コマンド1件を打ち切るまでの制限時間(秒)。フロー全体の期限を過ぎても、検査はこの時間まで走らせます。
       default: 900
+    design_enabled:
+      type: boolean
+      description: >-
+        設計工程を有効にするかどうかです。要件定義の承認の後、実装の前に、設計書の生成と人の承認を挟みます。設計工程を有効にできるようになるまで、trueを書いてもfalseとして読み、自己更新が通知を残します。
+      default: false
     implement_enabled:
       type: boolean
       description: >-
@@ -342,6 +349,13 @@ schema:
       description: >-
         1つのPRで、競合を直す作業項目を起動できる回数の上限です。競合の記録が掃除で消えても戻らないよう、競合の回をまたいで数えます。2以上10以下の整数にします。pr_conflict_fix_enabledがtrueのときは、pr_conflict_fix_max_roundsより大きくします。
       default: 5
+    max_design_attempts:
+      type: integer
+      minimum: 1
+      maximum: 10
+      description: >-
+        1つの要件定義の下で、設計を試せる回数の上限です。1以上10以下の整数にします。設計工程が無効でも、範囲を検査します。
+      default: 3
     pr_conflict_fix_notify_grace_min:
       type: integer
       minimum: 0

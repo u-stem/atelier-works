@@ -55,6 +55,7 @@ import {
   assertPullRequestUrl,
   checkGhRepoDetailWrite,
   type DeploymentRecord,
+  type DesignApprovalRef,
   type DesignDraft,
   type Diagram,
   type FailureRecord,
@@ -830,6 +831,24 @@ export type StatusEventSummary = {
   readonly note: string | null;
 };
 
+/** `work_item_events`の1行を`StatusEventSummary`にする。遷移元が状態の一覧に無ければ例外を投げる。 */
+function parseStatusEventRow(
+  row: Record<string, unknown>,
+  caller: string,
+): StatusEventSummary {
+  const from = row.from_status;
+  if (
+    from !== null &&
+    (typeof from !== "string" || !isOneOf(from, WORK_ITEM_STATUSES))
+  ) {
+    throw new Error(`db: ${caller}: unknown status ${String(from)}`);
+  }
+  return {
+    from_status: from,
+    note: parseNullableString(row.note, "note"),
+  };
+}
+
 /**
  * 作業項目が`toStatus`へ移った最新の遷移の記録を返す。無ければ`null`を返す。
  * `retry_work_item`が、取り消された作業項目の取り消す前の状態と理由の注記を読むために使う。
@@ -847,17 +866,39 @@ export async function latestStatusEvent(
   `.fetch();
   const row = rows[0];
   if (row === undefined) return null;
-  const from = row.from_status;
-  if (
-    from !== null &&
-    (typeof from !== "string" || !isOneOf(from, WORK_ITEM_STATUSES))
-  ) {
-    throw new Error(`db: latestStatusEvent: unknown status ${String(from)}`);
-  }
-  return {
-    from_status: from,
-    note: parseNullableString(row.note, "note"),
-  };
+  return parseStatusEventRow(row, "latestStatusEvent");
+}
+
+/**
+ * `latestStatusEvent`の兄弟。作業項目が`toStatus`へ移った最新の遷移の記録を返す。無ければ`null`を返す。
+ * 取り込みの更新のように状態を変えない行(遷移元と遷移先が同じ)は除く。
+ * 遷移元では絞らない。`retry_work_item`が、要件定義の生成へ戻った理由(設計・実装・PRの修正の差し戻し)を読むために使う。
+ * 再実行の遷移が後にあれば、その遷移を返す。古い差し戻しの理由を、いま戻す理由として渡さないためである。
+ * `skipNotePrefix`を渡すと、注記がその文字列で始まる遷移を飛ばして、その前の遷移を返す。
+ * 注記の無い遷移は飛ばさない。差し戻しの理由を引き継いだ再実行の遷移だけを、先頭の印で見分けて飛ばすために使う。
+ * 末尾でなく先頭で見るのは、差し戻しの本文が印と同じ文字列で終わっても、その遷移を飛ばさないためである。
+ */
+export async function latestStatusTransition(
+  workItemId: number,
+  toStatus: WorkItemStatus,
+  sql: SqlClient = defaultSqlClient,
+  skipNotePrefix: string | null = null,
+): Promise<StatusEventSummary | null> {
+  const rows = await sql`
+    SELECT from_status, note FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint AND to_status = ${toStatus}
+      AND from_status IS DISTINCT FROM to_status
+      AND (
+        ${skipNotePrefix}::text IS NULL
+        OR note IS NULL
+        OR NOT starts_with(note, ${skipNotePrefix}::text)
+      )
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return parseStatusEventRow(row, "latestStatusTransition");
 }
 
 /**
@@ -1086,6 +1127,37 @@ export async function updateStatusIfCurrentClearingFlowJobId(
   return rows.length > 0;
 }
 
+/**
+ * `updateStatusIfCurrentClearingFlowJobId`と同じ比較と交換で、遷移先を`requirements_generating`に固定し、
+ * 同じ文で`design_attempt`を0にそろえる。
+ * 再実行が作業項目を要件定義の生成へ戻す遷移(却下の作り直し、改ざんと差し戻しからの作り直し)で使う。
+ * 要件定義の生成中は`design_attempt`が0であるという不変条件を、次の`pipeline`の準備が`attempt`を進める前に止まった場合にも保つためである。
+ * `attempt`は書かない。次の`pipeline`の実行が`flow_input.attempt`で進める。
+ * statusが`expectedFrom`でなければ何も書かずに`false`を返す。
+ */
+export async function updateStatusToRequirementsIfCurrent(
+  id: number,
+  expectedFrom: WorkItemStatus,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, 'requirements_generating', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
+}
+
 /** 自動で再開できる作業項目の種類。実装の`issue`とPR修正の`pr_fix`である。 */
 const AUTO_RETRY_KINDS = ["issue", "pr_fix"] as const;
 
@@ -1094,6 +1166,8 @@ export type AutoRetryCandidate = {
   readonly kind: (typeof AUTO_RETRY_KINDS)[number];
   readonly status: WorkItemStatus;
   readonly attempt: number;
+  /** 設計の承認の照合に使う。 */
+  readonly design_attempt: number;
   readonly flow_job_id: string | null;
 };
 
@@ -1131,7 +1205,7 @@ export async function listAutoRetryCandidates(
 ): Promise<AutoRetryCandidate[]> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const rows = await sql`
-    SELECT w.id, w.kind, w.status, w.attempt, w.flow_job_id
+    SELECT w.id, w.kind, w.status, w.attempt, w.design_attempt, w.flow_job_id
     FROM factory.work_items w
     JOIN LATERAL (
       SELECT e.note, e.occurred_at FROM factory.work_item_events e
@@ -1186,6 +1260,7 @@ export async function listAutoRetryCandidates(
     kind: parseEnum(row.kind, AUTO_RETRY_KINDS, "kind"),
     status: parseEnum(row.status, WORK_ITEM_STATUSES, "status"),
     attempt: parseRequiredNumber(row.attempt, "attempt"),
+    design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
     flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
   }));
 }
@@ -3505,6 +3580,23 @@ export async function latestDraft(
 }
 
 /**
+ * `attempt`より大きい`attempt`の要件定義の下書きが、作業項目にあるか。
+ * 要件定義の生成が下書きを作ったかを、承認された`attempt`より後の下書きの有無で読む。
+ */
+export async function hasRequirementDraftAfter(
+  workItemId: number,
+  attempt: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT id FROM factory.requirement_drafts
+    WHERE work_item_id = ${workItemId}::bigint AND attempt > ${attempt}
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * `factory.requirement_drafts`の行をIDで1件取得する。無ければ`null`を返す。
  * `requirements`の承認依頼を読む側が、`subject_id`から下書き全体を引くのに使う。
  */
@@ -3897,6 +3989,8 @@ export type RequirementsApprovalRef = {
   /** その下書きの`requirement_drafts.attempt`。 */
   readonly attempt: number;
   readonly status: ApprovalRequestStatus;
+  /** 判断に添えられた理由。却下の理由はここにある。無ければ`null`。 */
+  readonly reason: string | null;
 };
 
 /**
@@ -3905,13 +3999,14 @@ export type RequirementsApprovalRef = {
  * 状態は問わない(`status === "approved"`と`attempt === workItem.attempt`は
  * 呼び出し側が確かめる)。要件定義の承認を一度も依頼していなければ`null`を返す。
  * 依頼の時刻が同じときは`id DESC`で決める。
+ * 却下の理由は、その行の`reason`から読める。
  */
 export async function latestRequirementsApproval(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<RequirementsApprovalRef | null> {
   const rows = await sql`
-    SELECT ar.id AS approval_request_id, ar.subject_id AS draft_id, rd.attempt, ar.status
+    SELECT ar.id AS approval_request_id, ar.subject_id AS draft_id, rd.attempt, ar.status, ar.reason
     FROM factory.approval_requests ar
     JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id AND rd.work_item_id = ar.work_item_id
     WHERE ar.kind = 'requirements' AND ar.work_item_id = ${workItemId}::bigint
@@ -3934,6 +4029,90 @@ export async function latestRequirementsApproval(
       APPROVAL_REQUEST_STATUSES,
       "status",
     ),
+    reason: parseNullableString(row.reason, "reason"),
+  };
+}
+
+/**
+ * `payload`の`key`を、0以上の整数として読む。
+ * `payload`はjsonbで、オブジェクトか、その文字列かのどちらで届いても読む。
+ * オブジェクトでない、キーが無い、整数でない、負のときは`null`を返し、例外は投げない。
+ * 書き換えられた行で読み取りが落ちると、関門が理由を残せないため、読めない値は`inconsistent`の判定に任せる。
+ */
+function payloadInteger(payload: unknown, key: string): number | null {
+  let object: unknown = payload;
+  if (isString(payload)) {
+    try {
+      object = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (!isRecord(object)) {
+    return null;
+  }
+  const value = object[key];
+  return isNumber(value) && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/**
+ * `workItemId`の`kind = 'design'`の`factory.approval_requests`のうち、
+ * 最も新しく依頼された行と、その依頼が指す設計書を返す。設計の承認を一度も依頼していなければ`null`を返す。
+ * 最新の1件を先に決めてから、設計書を結合する。設計書が引けない最新の依頼を読み飛ばすと、
+ * 古い承認に落ちて、書き換えられた最新の依頼の代わりに古い承認が効いてしまうためである。
+ * 設計書は、依頼の`subject_id`で引き、同じ作業項目の行だけを結ぶ。最新の設計書は読まない。
+ * 状態は問わない。照合は`designApprovalVerdict`が行う。
+ */
+export async function latestDesignApproval(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<DesignApprovalRef | null> {
+  const rows = await sql`
+    SELECT ar.id AS approval_request_id, ar.subject_id, ar.status, ar.payload,
+           dd.design_attempt AS dd_design_attempt,
+           dd.requirement_draft_id AS dd_requirement_draft_id
+    FROM factory.approval_requests ar
+    LEFT JOIN factory.design_drafts dd ON dd.id = ar.subject_id AND dd.work_item_id = ar.work_item_id
+    WHERE ar.kind = 'design' AND ar.work_item_id = ${workItemId}::bigint
+    ORDER BY ar.requested_at DESC, ar.id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const hasDraft =
+    row.dd_design_attempt !== null &&
+    row.dd_design_attempt !== undefined &&
+    row.dd_requirement_draft_id !== null &&
+    row.dd_requirement_draft_id !== undefined;
+  return {
+    approval_request_id: parseId(
+      row.approval_request_id,
+      "approval_request_id",
+    ),
+    design_draft_id: parseId(row.subject_id, "subject_id"),
+    status: parseEnum<ApprovalRequestStatus>(
+      row.status,
+      APPROVAL_REQUEST_STATUSES,
+      "status",
+    ),
+    payload_attempt: payloadInteger(row.payload, "attempt"),
+    payload_design_attempt: payloadInteger(row.payload, "design_attempt"),
+    draft: hasDraft
+      ? {
+          design_attempt: parseRequiredNumber(
+            row.dd_design_attempt,
+            "dd_design_attempt",
+          ),
+          requirement_draft_id: parseId(
+            row.dd_requirement_draft_id,
+            "dd_requirement_draft_id",
+          ),
+        }
+      : null,
   };
 }
 

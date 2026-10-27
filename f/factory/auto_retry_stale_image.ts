@@ -4,6 +4,7 @@
 // 状態の交換は、止まった理由を条件にした比較と交換なので、人が先に`retry_work_item`で再開していたり、
 // 二重に起動したりしても、同じ作業項目を二度起動しない。
 import * as wmill from "windmill-client@1.817.0";
+import { isReadyForImplement } from "./lib/approval_gate.ts";
 import {
   AUTO_RETRY_LIST_LIMIT,
   AUTO_RETRY_MAX_RESTARTS,
@@ -15,6 +16,7 @@ import {
 import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
+  latestDesignApproval,
   latestRequirementsApproval,
   listAutoRetryCandidates,
   restartStoppedWorkItem,
@@ -27,7 +29,6 @@ import {
   HOST_ACTION_RESOLVER,
   STALE_IMAGE_NOTICE_MARKER,
 } from "./lib/host_action.ts";
-import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger } from "./lib/log.ts";
 import { readJobState } from "./lib/poll_support.ts";
 
@@ -40,11 +41,11 @@ export async function main(): Promise<AutoRetryResult> {
     implementEnabled: config.implement_enabled,
     listCandidates: () =>
       listAutoRetryCandidates(autoRetryCandidateQuery(AUTO_RETRY_LIST_LIMIT)),
-    isImplementReady: async (candidate) =>
-      isRequirementsApprovedForAttempt(
-        await latestRequirementsApproval(candidate.id),
-        candidate.attempt,
-      ),
+    isImplementReady: (candidate) =>
+      isReadyForImplement(candidate, config.design_enabled, {
+        latestRequirementsApproval,
+        latestDesignApproval,
+      }),
     isFlowJobFinished: async (flowJobId) => {
       const job = await readJobState(
         (id) =>

@@ -114,6 +114,12 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the design setting that is read as false", () => {
+    expect(noticeKindLabel("design_enabled_ignored")).toBe(
+      "設計工程の有効化の無視",
+    );
+  });
+
   test("names the stopped schedule detector", () => {
     expect(noticeKindLabel("schedule_detector_stale")).toBe(
       "scheduleの失敗の検出器の停止",

@@ -1284,25 +1284,50 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("tells the implement flow that rerunning a failed requirements regeneration restarts implementation", () => {
+  // 実装の差し戻しの起動失敗は、差し戻し理由が通知に残る。再実行は要件定義を作り直す。
+  test("tells the implement flow that the rerun makes the requirements again and the reason is in the notice", () => {
     expect(
       nextActionFor(
         "requirements regeneration could not be started",
         "implement",
       ),
     ).toBe(
-      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(実装からやり直します。差し戻し理由は通知に残っています)",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(要件定義を作り直します。承認し直しが要ります。差し戻し理由は通知に残っていて、再実行で要件定義の生成に渡ります)",
     );
   });
 
-  // 却下による作り直し(requirements_apply)の再実行は、実装ではなく要件定義から始まる。
-  test("does not claim a restart from implementation when the flow is unknown", () => {
+  // 設計の差し戻しの起動失敗は、通知に差し戻し理由が載らず、作業項目の履歴の注記に残る。
+  test("tells the design flow that the reason is in the note of the work item history", () => {
+    expect(
+      nextActionFor("requirements regeneration could not be started", "design"),
+    ).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(要件定義を作り直します。承認し直しが要ります。差し戻し理由は作業項目の履歴の注記に残っていて、再実行で要件定義の生成に渡ります)",
+    );
+  });
+
+  test("does not point to the notice for the design flow", () => {
+    expect(
+      nextActionFor("requirements regeneration could not be started", "design"),
+    ).not.toContain("通知に残っている");
+  });
+
+  // 却下による作り直し(requirements_apply)は、却下の理由が承認依頼と遷移の注記に残る。
+  test("tells that the reason of a rejection passes to the rerun when the flow is unknown", () => {
     expect(
       nextActionFor("requirements regeneration could not be started"),
     ).toBe(
-      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(要件定義を作り直します。承認し直しが要ります。却下の理由は再実行で要件定義の生成に渡ります)",
     );
   });
+
+  test.each([undefined, "implement", "design"] as const)(
+    "does not claim a restart from implementation for the flow %s",
+    (flow) => {
+      expect(
+        nextActionFor("requirements regeneration could not be started", flow),
+      ).not.toContain("実装からやり直します");
+    },
+  );
 
   test("asks to stop the earlier run's processes and rerun the work item when the flow is unknown", () => {
     expect(

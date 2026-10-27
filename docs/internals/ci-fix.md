@@ -620,6 +620,7 @@ gitは呼ばない。
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`、`auto_retry_reasons`
   - `f/factory/lib/`の`ci_`、`pr_ci_`、`pr_conflict_`、`conflict_fix_`、`main_ci_`、`pr_fix_launch`
   - `f/factory/lib/`の`metadata_`
+  - `f/factory/lib/`の`approval_gate`、`doc_tree_hash`、`model_text`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
   - `f/factory/`の`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci`
 

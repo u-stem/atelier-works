@@ -168,7 +168,7 @@ export function describeFailure(failure: SummaryFailure): FailureDescription {
 export type RetryPlan = {
   /** 今の状態。 */
   readonly fromLabel: string;
-  /** 再開先の状態。Issueは、承認済みの要件定義の有無でscriptが決めるので、2つの候補を並べる。 */
+  /** 再開先の状態。Issueは、要件定義の承認と設計の承認の有無、止まった理由でscriptが決めるので、要件定義の生成、設計、実装の3つの候補を並べる。 */
   readonly toLabel: string;
   readonly note: string | null;
   /** 再実行できない理由。再実行できるときは`null`。 */
@@ -176,7 +176,7 @@ export type RetryPlan = {
 };
 
 const ISSUE_RESTART_NOTE =
-  "承認済みの要件定義があれば実装から、なければ要件定義の作り直しから始めます。要件定義を作り直す場合は、GitHubの現在のIssueの題名と本文を取り込み直します。";
+  "要件定義が承認されていないとき、要件定義の改ざんや欠落で止まったとき、差し戻しや再実行で要件定義の生成に戻った後に止まったときは、要件定義を作り直します。作り直すと承認し直しが要り、GitHubの現在のIssueの題名と本文を取り込み直します。それ以外は、設計が有効で未承認なら設計から、そうでなければ実装から始めます。";
 
 /**
  * scriptが再実行を断る場合。確認の画面で事前に伝える。
@@ -186,7 +186,7 @@ const ISSUE_RESTART_NOTE =
 export const RETRY_REFUSALS: readonly string[] = [
   "記録されたフローがまだ動いている、または動いているか読めないとき",
   "同じIssueに、より新しいサイクルがあるとき",
-  "要件定義が承認済みで、実装が無効のとき(実装を有効にすると再実行できます)",
+  "要件定義が承認済みで、改ざんや差し戻しの停止ではなく、設計が無効か承認済みで、実装が無効のとき(実装を有効にすると再実行できます)",
   "確認から更新までの間に、作業項目の状態が変わったとき",
 ];
 
@@ -202,7 +202,7 @@ export function describeRetryPlan(failure: SummaryFailure): RetryPlan {
     case "issue":
       return {
         fromLabel,
-        toLabel: "要件定義の生成中、または実装中",
+        toLabel: "要件定義の生成中、設計中、または実装中",
         note: ISSUE_RESTART_NOTE,
         blockedReason: null,
       };

@@ -16,6 +16,7 @@ import {
   copyFilesWithHash,
   type DirectoryEntryIo,
   hashDirectoryTree,
+  isRequirementsUntrustedReason,
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
@@ -750,5 +751,56 @@ describe("the reasons for a requirements directory that cannot be trusted", () =
     expect(REQUIREMENTS_DIR_MISSING_REASON).toBe(
       "approved requirements directory is missing",
     );
+  });
+});
+
+describe("isRequirementsUntrustedReason", () => {
+  const REASONS = [
+    ["before design", REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON],
+    ["during design", REQUIREMENTS_MODIFIED_REASON],
+    ["before implementation", REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON],
+    ["a missing directory", REQUIREMENTS_DIR_MISSING_REASON],
+  ] as const;
+
+  test.each(REASONS)("matches the reason alone for %s", (_name, reason) => {
+    expect(isRequirementsUntrustedReason(reason)).toBe(true);
+  });
+
+  test.each(REASONS)(
+    "matches the reason followed by a separator and a note for %s",
+    (_name, reason) => {
+      expect(
+        isRequirementsUntrustedReason(`${reason}; partial work kept local`),
+      ).toBe(true);
+    },
+  );
+
+  test.each(REASONS)(
+    "does not match the reason followed by other text for %s",
+    (_name, reason) => {
+      expect(isRequirementsUntrustedReason(`${reason} extra`)).toBe(false);
+    },
+  );
+
+  test.each(REASONS)(
+    "does not match the reason followed by a letter for %s",
+    (_name, reason) => {
+      expect(isRequirementsUntrustedReason(`${reason}x`)).toBe(false);
+    },
+  );
+
+  test.each(REASONS)(
+    "does not match a prefix of the reason for %s",
+    (_name, reason) => {
+      expect(isRequirementsUntrustedReason(reason.slice(0, -1))).toBe(false);
+    },
+  );
+
+  test("does not match another reason", () => {
+    expect(isRequirementsUntrustedReason("claude run failed")).toBe(false);
+  });
+
+  test("does not match a null note", () => {
+    expect(isRequirementsUntrustedReason(null)).toBe(false);
   });
 });

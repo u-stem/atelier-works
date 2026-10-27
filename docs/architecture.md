@@ -354,7 +354,7 @@ Consoleの一覧と集計は次のviewを読む。
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `pipeline` | `design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
-| `design` | `requirements_apply`(Consoleの承認と却下) | 設計書の生成と承認 |
+| `design` | `requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
 | `implement` | `auto_retry_stale_image`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
@@ -535,6 +535,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/metadata_patch_download` | script | [LIB] メタデータのパッチの取得 |
 | `f/factory/lib/metadata_patch_manifest` | script | [LIB] メタデータのパッチの検査 |
 | `f/factory/lib/metadata_patch_verify` | script | [LIB] メタデータのパッチの適用条件の検査 |
+| `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
@@ -548,6 +549,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_ci_fix_recovery` | script | [LIB] 失敗を直した行の回復 |
 | `f/factory/lib/periodic_worker` | script | [LIB] 定期ジョブ用workerの停止の検知 |
 | `f/factory/lib/gh_graphql` | script | [LIB] 宛先を固定したGitHubのGraphQLクライアント |
+| `f/factory/lib/approval_gate` | script | [LIB] 実装の関門が読む承認の判定 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
@@ -770,7 +772,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
 `job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3100秒は切り詰められない。
 
-3100秒は、全部が最悪のときの長さ3086.2秒に余裕を足した値である。
+3100秒は、全部が最悪のときの長さ3091.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -786,11 +788,14 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | 定期ジョブ用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 | 凍結の読む段と書く段 | 2 | 10秒 | なし | 20秒 |
 | 収集の鮮度の確認 | 1 | 30秒 | なし | 30秒 |
+| 設計の有効化の通知の処理 | 1 | 5秒 | なし | 5秒 |
 
 gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
 凍結の2段は、凍結の変数とファイルの読み取りと、終わった行を消す書き込みである。
 各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
+設計の有効化の通知の処理も、更新の前に全体を1つの上限5秒で包み、区切った呼び出しの回数には数えない。
+失敗しても時間切れでも、警告だけを残して更新へ進む。
 deployの保留の判定は読み取りの段の中で済ませるので、段は増えず、見送る回は`wmill`のCLIを呼ばない。
 ローカルのgitの9回は、ホストの印の確認である。
 コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
@@ -810,8 +815,8 @@ Console用のworkerの確認では、stateの読みと書き、noticeの挿入�
 定期ジョブ用のworkerの確認では、noticeの挿入、noticeの解決、通知先の取得を区切る。
 ホスト側の作業の通知の9回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得、止まった作業項目の再開の候補の確認、再開の起動である。
 収集の鮮度の確認では、stateの読みと書き、収集の記録の読み、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得の7か所を区切る。
-この7か所も箇所の数として数え、確認全体の30秒も足すと、同じ処理を二重に数えて合計は3276.2秒になる。
-確認全体の30秒を足さずに7か所だけを数えても、合計は3246.2秒になる。
+この7か所も箇所の数として数え、確認全体の30秒も足すと、同じ処理を二重に数えて合計は3281.2秒になる。
+確認全体の30秒を足さずに7か所だけを数えても、合計は3251.2秒になる。
 どちらも3100秒を超えるので、ジョブの`timeout`を上げる必要が出る。
 `timeout`は子プロセスが残るのを防ぐ最後の打ち切りなので、延ばさない。
 そこで、次の2つが成り立つときだけ、7か所を確認全体の30秒に含めて数える。
