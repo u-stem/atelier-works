@@ -220,6 +220,20 @@ export function flowDiagramPath(
   return `${JOBS}/flows/${name}`;
 }
 
+/** flowの図の画面が、経路の引数から決める状態。 */
+export type FlowRouteState =
+  | { readonly kind: "redirect" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "not_found" }
+  | { readonly kind: "found"; readonly flow: FlowDefinition };
+
+export function flowRouteState(
+  _name: string | undefined,
+  _data: FlowsData | null,
+): FlowRouteState {
+  return { kind: "not_found" };
+}
+
 /** flowのジョブの履歴の画面のパス。 */
 export function flowHistoryPath(name: string): string {
   const query = new URLSearchParams({

@@ -5,6 +5,7 @@ import {
   findFlow,
   flowDiagramPath,
   flowHistoryPath,
+  flowRouteState,
   parseFlowsData,
   scheduleFlowsOf,
 } from "./flowsData.ts";
@@ -265,6 +266,40 @@ describe("flowDiagramPath", () => {
 
   test("returns null when there is no data", () => {
     expect(flowDiagramPath("pipeline", null)).toBeNull();
+  });
+});
+
+describe("flowRouteState", () => {
+  const data = parseFlowsData(valid());
+
+  test("redirects to the list when the route has no name", () => {
+    expect(flowRouteState(undefined, data)).toEqual({ kind: "redirect" });
+  });
+
+  test("redirects to the list when the route has no name and no data", () => {
+    expect(flowRouteState(undefined, null)).toEqual({ kind: "redirect" });
+  });
+
+  test("says the data is unreadable when there is a name but no data", () => {
+    expect(flowRouteState("pipeline", null)).toEqual({ kind: "unreadable" });
+  });
+
+  test("says not found for a name that is not in the data", () => {
+    expect(flowRouteState("missing", data)).toEqual({ kind: "not_found" });
+  });
+
+  test.each(["", "../x", "constructor", "Pipeline"])(
+    "says not found for the unsafe name %p",
+    (name) => {
+      expect(flowRouteState(name, data)).toEqual({ kind: "not_found" });
+    },
+  );
+
+  test("finds a flow by its name", () => {
+    expect(flowRouteState("pipeline", data)).toEqual({
+      kind: "found",
+      flow: data?.flows[0],
+    });
   });
 });
 

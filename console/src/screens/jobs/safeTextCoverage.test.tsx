@@ -16,11 +16,15 @@ import {
   type ScheduleViewData,
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import { flowDiagramModel } from "../../lib/flowDiagram.ts";
 import type { FlowGraph } from "../../lib/flowGraph.ts";
 import type { FlowGraphState } from "../../lib/flowOverlay.ts";
+import type { FlowDefinition, FlowsData } from "../../lib/flowsData.ts";
 import { ItemFlowProgressView } from "../items/detail/ItemFlowProgress.tsx";
 import { ConfigList } from "../system/ConfigSection.tsx";
+import { FlowDiagramFrame } from "./FlowDiagram.tsx";
 import { FlowGraphDiagram, FlowGraphList } from "./FlowGraphDiagram.tsx";
+import { FlowScreenView } from "./FlowScreen.tsx";
 import {
   ArgList,
   FailureCauses,
@@ -170,6 +174,36 @@ const GRAPH_STATE: FlowGraphState = {
   schedulesTruncated: false,
 };
 
+/** 文字列の項目のすべてに`BAD`を入れたflowの定義。flowの名前は、リンクに入れるので安全な形にする。 */
+const FLOW: FlowDefinition = {
+  name: "pipeline",
+  summary: BAD,
+  description: BAD,
+  steps: [
+    {
+      id: BAD,
+      summary: BAD,
+      scriptPath: `f/factory/steps/${BAD}`,
+      conditional: true,
+    },
+  ],
+  entries: [
+    { kind: "schedule", name: BAD },
+    { kind: "human", label: BAD },
+    { kind: "script", name: BAD },
+    { kind: "flow", flow: "pipeline", via: "reject" },
+  ],
+  exits: [{ flow: "pipeline", step: BAD, via: "approve" }],
+};
+
+const FLOWS: FlowsData = { flows: [FLOW], schedules: [] };
+
+/** 定義のステップと、定義に無いステップの両方に、見えない文字を入れたジョブのステップ。 */
+const FLOW_STEPS = [
+  { id: BAD, state: BAD, job_id: BAD, iterations: null, skipped: false },
+  { id: `${BAD}x`, state: BAD, job_id: BAD, iterations: null, skipped: false },
+];
+
 const CASES: readonly (readonly [string, () => ReactElement])[] = [
   ["the detail screen with its heading", detailScreen],
   [
@@ -250,6 +284,30 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     ),
   ],
   ["the state badge", () => <JobStateBadge state={BAD} />],
+  [
+    "the flow diagram",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(FLOW, FLOW_STEPS)}
+        presentation="fit"
+      />
+    ),
+  ],
+  [
+    "the flow diagram in the list",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(FLOW, FLOW_STEPS)}
+        presentation="list"
+      />
+    ),
+  ],
+  [
+    "the flow screen",
+    () => (
+      <FlowScreenView name="pipeline" data={FLOWS} back={null} width={1100} />
+    ),
+  ],
   [
     "flow progress step id",
     () => (
@@ -385,6 +443,27 @@ describe("the flow progress of a work item in the coverage", () => {
     expect(found === undefined ? "" : render(found[1]())).toContain(
       "のステップ",
     );
+  });
+});
+
+describe("the flow diagram in the coverage", () => {
+  const draw = (name: string): string => {
+    const found = CASES.find(([label]) => label === name);
+    return found === undefined ? "" : render(found[1]());
+  };
+
+  test("draws the heading of the steps the definition lacks, so the check does not pass on an empty block", () => {
+    expect(draw("the flow diagram")).toContain("定義に無いステップ");
+  });
+
+  test("draws the steps of the flow in the list", () => {
+    expect(draw("the flow diagram in the list")).toContain(
+      "定義に無いステップ",
+    );
+  });
+
+  test("draws the diagram of the flow screen", () => {
+    expect(draw("the flow screen")).toContain("<svg");
   });
 });
 
