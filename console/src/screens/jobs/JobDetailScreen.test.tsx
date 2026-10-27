@@ -184,6 +184,26 @@ describe("JobDetailScreen from the cache", () => {
       "15秒ごとに更新します",
     );
   });
+
+  test("offers to stop a running flow of a work item", () => {
+    expect(render(`/jobs/${ID}`, { output: detail("running") })).toContain(
+      "ジョブを中止",
+    );
+  });
+
+  test("offers nothing to stop for a job that failed", () => {
+    expect(render(`/jobs/${ID}`, { output: detail("failure") })).not.toContain(
+      "ジョブを中止",
+    );
+  });
+
+  test("offers nothing to stop for a flow that is not on the list", () => {
+    expect(
+      render(`/jobs/${ID}`, {
+        output: detail("running", { scriptPath: "f/factory/manual_intake" }),
+      }),
+    ).not.toContain("ジョブを中止");
+  });
 });
 
 describe("JobDetailScreen when the job finished after the output was read", () => {

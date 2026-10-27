@@ -21,11 +21,18 @@
 // 見つけ直す。したがって再開はフローを直接起動するだけで、GitHubには
 // 何の副作用も無い。新しいサイクルを始めるのは、人がラベルを付け直したときだけ。
 import * as wmill from "windmill-client@1.817.0";
+import { deriveApprover } from "./lib/approver.ts";
 import { ciRoundRetryRefusal } from "./lib/ci_fix_round.ts";
 import { loadConfig } from "./lib/config.ts";
 import { conflictRoundRetryRefusal } from "./lib/conflict_fix_round.ts";
 import {
+  type ActionAudit,
+  type ActionSqlClient,
+  runRecordedAs,
+} from "./lib/console_actions.ts";
+import {
   addNoticeUnlessUnresolved,
+  defaultSqlClient,
   getWorkItem,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
@@ -473,6 +480,8 @@ export type RetryWorkItemResult = {
   readonly status: WorkItemStatus;
   readonly started_job_id: string;
   readonly flow_job_id: string | null;
+  /** 操作の記録を書けたか。`main`が付ける。 */
+  readonly action_audit?: ActionAudit;
 };
 
 /** recordedがfalse(別の実行が先にリースを取っていた)なら、okをfalse、flow_job_idをnullにする。 */
@@ -538,7 +547,57 @@ export function shouldRefreshIntakeOnRestart(
   );
 }
 
+/**
+ * 再開の操作を、操作の記録(`factory.console_actions`)で包む。
+ * 操作の前に`attempted`の行を入れ、操作の後に結果を更新する。リースを取れず起動したジョブを記録できなかった再開は`partial`にする。
+ * 記録を書けなくても再開は通し、戻りの`action_audit`を`failed`にする。操作者を導けないときも同じである。
+ * 再開が例外を投げたときは、行を`failed`にして投げ直す。
+ */
+export async function retryWorkItemRecorded(
+  workItemId: number,
+  restart: () => Promise<RetryWorkItemResult>,
+  deriveActor: () => string,
+  sql: ActionSqlClient,
+): Promise<RetryWorkItemResult> {
+  const recorded = await runRecordedAs(
+    deriveActor,
+    {
+      action: "retry_work_item",
+      target: `work_item:${String(workItemId)}`,
+      changes: { work_item_id: workItemId },
+    },
+    async () => {
+      const value = await restart();
+      return {
+        outcome: value.ok ? ("succeeded" as const) : ("partial" as const),
+        changes: { status: value.status, started_job_id: value.started_job_id },
+        value,
+      };
+    },
+    { sql, onUnrecordable: "proceed" },
+  );
+  if (!recorded.ok) {
+    throw new Error(`retry_work_item: ${recorded.reason}`);
+  }
+  return { ...recorded.value, action_audit: recorded.audit };
+}
+
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
+  return await retryWorkItemRecorded(
+    work_item_id,
+    () => restartWorkItem(work_item_id),
+    () =>
+      deriveApprover({
+        WM_USERNAME: process.env.WM_USERNAME,
+        WM_EMAIL: process.env.WM_EMAIL,
+      }),
+    defaultSqlClient,
+  );
+}
+
+async function restartWorkItem(
+  work_item_id: number,
+): Promise<RetryWorkItemResult> {
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );

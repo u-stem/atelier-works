@@ -1,6 +1,7 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscriptの戻りに合わせる。
+// 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
 
@@ -46,6 +47,7 @@ export type RetryWorkItemResult = {
   readonly status: string;
   readonly started_job_id: string;
   readonly flow_job_id: string | null;
+  readonly action_audit?: ActionAudit;
 };
 
 export function isRetryWorkItemResult(
@@ -56,7 +58,8 @@ export function isRetryWorkItemResult(
     isBoolean(value.ok) &&
     isString(value.status) &&
     isString(value.started_job_id) &&
-    isNullableString(value.flow_job_id)
+    isNullableString(value.flow_job_id) &&
+    isOptionalActionAudit(value.action_audit)
   );
 }
 
@@ -147,7 +150,11 @@ export type ManualIntakeSubmitResult =
       readonly refused: true;
       readonly reason: ManualIntakeRefusalReason;
     }
-  | { readonly refused: false; readonly flow_job_id: string };
+  | {
+      readonly refused: false;
+      readonly flow_job_id: string;
+      readonly action_audit?: ActionAudit;
+    };
 
 const isManualIntakeRefusalReason: Guard<ManualIntakeRefusalReason> = isOneOf(
   MANUAL_INTAKE_REFUSAL_REASONS,
@@ -162,7 +169,24 @@ export function isManualIntakeSubmitResult(
   if (value.refused === true) {
     return isManualIntakeRefusalReason(value.reason);
   }
-  return value.refused === false && isString(value.flow_job_id);
+  return (
+    value.refused === false &&
+    isString(value.flow_job_id) &&
+    isOptionalActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * 操作の記録(`factory.console_actions`)を書けたか。`failed`でも操作は済んでいる。
+ * 保留と凍結の解除の戻りにある`audit`は、解除の通知(`hold_released`)を書けたかで、別の記録である。
+ */
+export type ActionAudit = "recorded" | "failed";
+
+const isActionAudit: Guard<ActionAudit> = isOneOf(["recorded", "failed"]);
+
+/** 記録を書く前の戻りでは`action_audit`が欠ける。 */
+function isOptionalActionAudit(value: unknown): boolean {
+  return value === undefined || isActionAudit(value);
 }
 
 type ReleaseAudit = "recorded" | "failed";
@@ -186,6 +210,7 @@ export type HoldReleaseResult = {
   readonly was_active: boolean;
   readonly active_unknown?: true;
   readonly audit?: ReleaseAudit;
+  readonly action_audit?: ActionAudit;
 };
 
 const isHoldReleaseStatus: Guard<"released" | "already_released"> = isOneOf([
@@ -203,7 +228,8 @@ export function isHoldReleaseResult(
     isPositiveInteger(value.hold_id) &&
     isBoolean(value.was_active) &&
     (value.active_unknown === undefined || value.active_unknown === true) &&
-    isOptionalAudit(value.audit)
+    isOptionalAudit(value.audit) &&
+    isOptionalActionAudit(value.action_audit)
   );
 }
 
@@ -217,6 +243,7 @@ export type FreezeReleaseResult = {
   readonly freeze_id: string;
   readonly scope?: "schedule" | "deploy";
   readonly audit?: ReleaseAudit;
+  readonly action_audit?: ActionAudit;
 };
 
 const isFreezeReleaseStatus: Guard<
@@ -237,6 +264,88 @@ export function isFreezeReleaseResult(
     isFreezeReleaseStatus(value.status) &&
     isString(value.freeze_id) &&
     (value.scope === undefined || isFreezeScope(value.scope)) &&
-    isOptionalAudit(value.audit)
+    isOptionalAudit(value.audit) &&
+    isOptionalActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * ジョブを中止できなかった理由。`f/factory/console_job_cancel.ts`の`CANCEL_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。画面は日本語の固定文に直す(`lib/writeNotices.ts`)。
+ */
+export const JOB_CANCEL_REFUSAL_REASONS = [
+  "flow_not_allowed",
+  "not_a_root_flow",
+  "already_finished",
+  "already_canceling",
+  "scheduled_for_later",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type JobCancelRefusalReason =
+  (typeof JOB_CANCEL_REFUSAL_REASONS)[number];
+
+const isJobCancelRefusalReason: Guard<JobCancelRefusalReason> = isOneOf(
+  JOB_CANCEL_REFUSAL_REASONS,
+);
+
+/** 中止の後に読み直した作業項目。`lease_held`は、リースがまだそのジョブを指しているか。 */
+export type JobCancelWorkItem = {
+  readonly id: number;
+  readonly status: string;
+  readonly lease_held: boolean;
+};
+
+/**
+ * ジョブを中止した結果。`found: false`は、対象外のジョブも含めて、存在しないジョブと同じ応答である。
+ * `job_state`と`work_item`は、中止の後に読み直せなかったときに`null`になる。
+ */
+export type JobCancelResult =
+  | { readonly found: false }
+  | {
+      readonly found: true;
+      readonly refused: true;
+      readonly reason: JobCancelRefusalReason;
+    }
+  | {
+      readonly found: true;
+      readonly refused: false;
+      readonly job_id: string;
+      readonly flow_path: string;
+      readonly job_state: string | null;
+      readonly work_item: JobCancelWorkItem | null;
+      readonly action_audit: ActionAudit;
+    };
+
+function isJobCancelWorkItem(value: unknown): value is JobCancelWorkItem {
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.id) &&
+    isString(value.status) &&
+    isBoolean(value.lease_held)
+  );
+}
+
+export function isJobCancelResult(value: unknown): value is JobCancelResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.found === false) {
+    return true;
+  }
+  if (value.found !== true) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isJobCancelRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isString(value.job_id) &&
+    isString(value.flow_path) &&
+    isNullableString(value.job_state) &&
+    (value.work_item === null || isJobCancelWorkItem(value.work_item)) &&
+    isActionAudit(value.action_audit)
   );
 }

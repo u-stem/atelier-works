@@ -271,6 +271,8 @@ export const HISTORY_FILTER_PATHS: readonly string[] = [
   "f/factory/pr_review",
   "f/factory/sample_worker_load",
   "f/factory/self_update",
+  "f/factory/steps/issue_proposal_apply",
+  "f/factory/steps/requirements_apply",
   "f/factory/watch_main_ci",
   "f/factory/watch_pr_ci",
   "f/factory/watch_pr_conflicts",

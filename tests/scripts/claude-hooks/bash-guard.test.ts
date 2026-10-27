@@ -2300,7 +2300,6 @@ describe("bash-guard allows work near the Console release scripts", () => {
     "wmill variable add '{}' f/factory/other",
     "wmill sync push --dry-run",
     "wmill script run f/factory/console_holds",
-    "wmill script run f/factory/notice_resolve -d '{\"notice_id\":1}'",
     `curl ${URL_BASE}/run_wait_result/p/f/factory/console_holds`,
     "curl http://localhost:8000/api/version",
     "curl http://localhost:8000/api/w/factory/variables/get_value/f/factory/freezes",

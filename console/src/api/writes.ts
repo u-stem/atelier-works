@@ -19,9 +19,11 @@ import {
   isAuditKickoffResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
+  isJobCancelResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  type JobCancelResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
@@ -183,6 +185,23 @@ export function releaseHold(
     "hold_release",
     { hold_id: holdId },
     isHoldReleaseResult,
+    options,
+  );
+}
+
+/**
+ * 実行中か待ちの作業項目のフローのジョブを1件中止する。
+ * 対象外のジョブ、すでに終わったジョブ、停止処理中のジョブ、予定の時刻が先のジョブなどは、止めずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 操作者は引数に取らない。scriptがジョブの実行文脈から導く。
+ */
+export function cancelJob(
+  jobId: string,
+  options: RunScriptOptions = {},
+): Promise<JobCancelResult> {
+  return callWrite(
+    "console_job_cancel",
+    { job_id: jobId },
+    isJobCancelResult,
     options,
   );
 }
