@@ -573,14 +573,23 @@ describe("designGate", () => {
       });
     });
 
-    test("removes a link reference definition from the design", async () => {
+    test("keeps a link reference definition as text", async () => {
       const result = await designGate(
         INPUT,
         harness({
-          draft: withMarkdown("before\n[x]: https://example.com\nafter"),
+          draft: withMarkdown('before\n[x]:https://e.example "hid"\nafter'),
         }).deps,
       );
-      expect(result).toEqual({ kind: "pass", markdown: "before\nafter" });
+      expect(result).toEqual({
+        kind: "pass",
+        markdown: 'before\n[x]:https://e.example "hid"\nafter',
+      });
+    });
+
+    test("does not warn about a link reference definition", async () => {
+      const h = harness({ draft: withMarkdown("a\n[x]: y\nb") });
+      await designGate(INPUT, h.deps);
+      expect(h.warnings).toEqual([]);
     });
 
     test("masks a secret that a zero width space split in two", async () => {
@@ -612,34 +621,35 @@ describe("designGate", () => {
       expect(result).toEqual({ kind: "pass", markdown: "a".repeat(8000) });
     });
 
-    test("does not cut a design that fits once its definitions are removed", async () => {
-      const result = await designGate(
-        INPUT,
-        harness({
-          draft: withMarkdown(`[x]: ${"y".repeat(9000)}\n${"a".repeat(8000)}`),
-        }).deps,
-      );
-      expect(result).toEqual({ kind: "pass", markdown: "a".repeat(8000) });
+    test("warns once when the design changed", async () => {
+      const h = harness({ draft: withMarkdown("a\u0000b") });
+      await designGate(INPUT, h.deps);
+      expect(h.warnings).toHaveLength(1);
     });
 
-    test("warns once when the design changed", async () => {
-      const h = harness({ draft: withMarkdown("a\n[x]: y\nb") });
+    test("warns when only a control character was removed", async () => {
+      const h = harness({ draft: withMarkdown("a\u0001b") });
+      await designGate(INPUT, h.deps);
+      expect(h.warnings).toHaveLength(1);
+    });
+
+    test("warns when only a format character was removed", async () => {
+      const h = harness({ draft: withMarkdown("a\u200Bb") });
       await designGate(INPUT, h.deps);
       expect(h.warnings).toHaveLength(1);
     });
 
     test("warns with the fields that name the design and its sizes, and never the text", async () => {
-      const h = harness({ draft: withMarkdown("a\n[x]: secret text\nb") });
+      const h = harness({ draft: withMarkdown("a\u0000b") });
       await designGate(INPUT, h.deps);
       expect(h.warnings[0]?.fields).toEqual({
         work_item_id: 7,
         design_draft_id: 20,
-        original_chars: 3,
-        kept_chars: 3,
+        original_chars: 2,
+        kept_chars: 2,
         truncated: false,
         masked: false,
         dropped_combining: false,
-        stripped_reference_count: 1,
       });
     });
 
@@ -658,7 +668,7 @@ describe("designGate", () => {
     });
 
     test("does not warn when the gate stops", async () => {
-      const h = harness({ approval: null, draft: withMarkdown("a\n[x]: y") });
+      const h = harness({ approval: null, draft: withMarkdown("a\u0000b") });
       await designGate(INPUT, h.deps);
       expect(h.warnings).toEqual([]);
     });

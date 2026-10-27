@@ -171,6 +171,7 @@ export type NormalizedDesign = {
   readonly dropped_combining: boolean;
   /** 除いたリンク参照定義の行の数。 */
   readonly stripped_reference_count: number;
+  readonly changed: boolean;
 };
 
 /**
@@ -205,5 +206,6 @@ export function normalizeDesignForImplement(
     masked: sanitized.masked,
     dropped_combining: sanitized.dropped_combining,
     stripped_reference_count: stripped.count,
+    changed: false,
   };
 }

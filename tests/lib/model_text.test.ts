@@ -256,8 +256,8 @@ describe("normalizeDesignForImplement", () => {
       expect(normalize("# plan\n\nbody\n").text).toBe("# plan\n\nbody\n");
     });
 
-    test("counts no removed reference definition", () => {
-      expect(normalize("# plan").stripped_reference_count).toBe(0);
+    test("is not reported as changed", () => {
+      expect(normalize("# plan\n").changed).toBe(false);
     });
 
     test("is not cut", () => {
@@ -334,13 +334,27 @@ describe("normalizeDesignForImplement", () => {
       ["a comment opener split by a combining grapheme joiner", "<!͏-- c -->"],
       ["a closing tag split by a combining grapheme joiner", "</͏script>"],
       [
-        "a reference definition split by a zero width space",
-        "a\n[x]:​ https://example.com\nb",
+        "a definition-like line split by a zero width space",
+        "a\n[x]:\u200B https://example.com\nb",
       ],
+      [
+        "a definition-like line with no space after the colon",
+        'a\n[x]:https://e.example "hidden"\nb',
+      ],
+      ["a definition-like line in a quote", '> [x]: u "hidden"\nb'],
+      ["a definition-like line after a bare carriage return", "a\r[x]: y\rb"],
       ["a design over the limit", "a".repeat(MAX + 100)],
       [
-        "a design over the limit with a definition",
+        "a design over the limit with a definition-like line",
         `[x]: y\n${"a".repeat(MAX + 100)}`,
+      ],
+      [
+        "a design cut right after the colon of a definition label",
+        `${"a".repeat(MAX - 5)}\n[注]: https://e.example/${"b".repeat(50)}`,
+      ],
+      [
+        "a design cut in the middle of a definition label",
+        `${"a".repeat(MAX - 3)}\n[注]: https://e.example/${"b".repeat(50)}`,
       ],
       ["a secret", `token ${GITHUB_TOKEN} <!-- c -->`],
     ];
@@ -363,98 +377,56 @@ describe("normalizeDesignForImplement", () => {
   });
 
   describe("link reference definitions", () => {
-    test("removes a definition line", () => {
+    test("keeps a definition line as text", () => {
       expect(normalize("text\n[a]: https://example.com\nmore").text).toBe(
-        "text\nmore",
+        "text\n[a]: https://example.com\nmore",
       );
     });
 
-    test("counts the removed definition", () => {
-      expect(
-        normalize("text\n[a]: https://example.com\nmore")
-          .stripped_reference_count,
-      ).toBe(1);
-    });
-
-    test("counts each removed definition", () => {
-      expect(
-        normalize("[a]: https://a.example\n[b]: https://b.example\ntext")
-          .stripped_reference_count,
-      ).toBe(2);
-    });
-
-    test("removes a definition on the last line", () => {
-      expect(normalize("text\n[a]: https://example.com").text).toBe("text");
-    });
-
-    test("removes a definition indented by up to three spaces", () => {
-      expect(normalize("text\n   [a]: https://example.com\nmore").text).toBe(
-        "text\nmore",
+    test("keeps a definition line with no space after the colon", () => {
+      expect(normalize('[x]:https://e.example "hidden"\ntext').text).toBe(
+        '[x]:https://e.example "hidden"\ntext',
       );
     });
 
-    test("keeps a line indented by four spaces, which is a code block", () => {
-      expect(normalize("text\n\n    [a]: https://example.com\n").text).toBe(
-        "text\n\n    [a]: https://example.com\n",
+    test("keeps a definition line inside a quote", () => {
+      expect(normalize('> [x]: u "hidden"\ntext').text).toBe(
+        '> [x]: u "hidden"\ntext',
       );
     });
 
-    test("removes a definition whose separator had a zero width space", () => {
-      expect(normalize("a\n[x]:​ https://example.com\nb").text).toBe("a\nb");
+    test("keeps a definition line after a bare carriage return", () => {
+      expect(normalize("a\r[x]: y\rb").text).toBe("a\r[x]: y\rb");
     });
 
-    test("removes a definition with a title", () => {
-      expect(normalize('[a]: https://example.com "Title"\ntext').text).toBe(
-        "text",
-      );
+    test("keeps a definition line with a Windows line ending", () => {
+      expect(normalize("a\r\n[x]: y\r\nb").text).toBe("a\r\n[x]: y\r\nb");
     });
 
-    test("keeps a bracket with no colon", () => {
-      expect(normalize("- [x] done").text).toBe("- [x] done");
-    });
-
-    test("keeps a definition marker in the middle of a line", () => {
-      expect(normalize("see [a]: https://example.com").text).toBe(
-        "see [a]: https://example.com",
-      );
-    });
-
-    test("keeps a definition inside a backtick fence", () => {
+    test("keeps a definition inside a fence", () => {
       expect(normalize("```\n[x]: y\n```\n").text).toBe("```\n[x]: y\n```\n");
     });
 
-    test("keeps a definition inside a tilde fence", () => {
-      expect(normalize("~~~\n[x]: y\n~~~\n").text).toBe("~~~\n[x]: y\n~~~\n");
+    test("does not report a definition line as a change", () => {
+      expect(normalize("[a]: https://example.com\n").changed).toBe(false);
+    });
+  });
+
+  describe("changed", () => {
+    test("is true when a control character was removed", () => {
+      expect(normalize("a\u0000b").changed).toBe(true);
     });
 
-    test("keeps a definition inside a fence that is never closed", () => {
-      expect(normalize("```\n[x]: y\nmore").text).toBe("```\n[x]: y\nmore");
+    test("is true when only a format character was removed", () => {
+      expect(normalize("a\u200Bb").changed).toBe(true);
     });
 
-    test("does not count a definition inside a fence", () => {
-      expect(normalize("```\n[x]: y\n```\n").stripped_reference_count).toBe(0);
+    test("is true when a secret was masked", () => {
+      expect(normalize(`token ${GITHUB_TOKEN}`).changed).toBe(true);
     });
 
-    test("removes a definition after the fence is closed", () => {
-      expect(normalize("```\ncode\n```\n[x]: y\ntext").text).toBe(
-        "```\ncode\n```\ntext",
-      );
-    });
-
-    test("does not close a fence with a shorter fence", () => {
-      expect(normalize("````\n```\n[x]: y\n````\n").text).toBe(
-        "````\n```\n[x]: y\n````\n",
-      );
-    });
-
-    test("does not close a fence with the other kind of fence", () => {
-      expect(normalize("```\n~~~\n[x]: y\n```\n").text).toBe(
-        "```\n~~~\n[x]: y\n```\n",
-      );
-    });
-
-    test("removes a definition with a Windows line ending", () => {
-      expect(normalize("a\r\n[x]: y\r\nb").text).toBe("a\r\nb");
+    test("is true when the design was cut", () => {
+      expect(normalize("a".repeat(MAX + 1)).changed).toBe(true);
     });
   });
 
@@ -516,27 +488,9 @@ describe("normalizeDesignForImplement", () => {
       );
     });
 
-    test("measures the length after the definitions are removed", () => {
+    test("counts a definition line toward the limit", () => {
       expect(
         normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX)}`).truncated,
-      ).toBe(false);
-    });
-
-    test("keeps a design that fits once its definitions are removed without a mark", () => {
-      expect(
-        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX)}`).text,
-      ).toBe("a".repeat(MAX));
-    });
-
-    test("reports the length after the definitions are removed", () => {
-      expect(
-        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX)}`).original_chars,
-      ).toBe(MAX);
-    });
-
-    test("cuts a design that is one over the limit once its definitions are removed", () => {
-      expect(
-        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX + 1)}`).truncated,
       ).toBe(true);
     });
 
