@@ -646,4 +646,22 @@ describe("renderFlowsJson", () => {
 
     expect(JSON.parse(renderFlowsJson(data))).toEqual(data);
   });
+
+  test("puts a short array of names on one line, as the formatter does", () => {
+    const json = renderFlowsJson({
+      flows: [],
+      schedules: [{ name: "poll_prs", summary: "x", flows: ["a", "b"] }],
+    });
+
+    expect(json).toContain('"flows": ["a", "b"]');
+  });
+
+  test("keeps an empty array as it is", () => {
+    const json = renderFlowsJson({
+      flows: [],
+      schedules: [{ name: "x", summary: "y", flows: [] }],
+    });
+
+    expect(json).toContain('"flows": []');
+  });
 });
