@@ -222,7 +222,8 @@ export type DesignGateDeps = {
  *   後から保存された別の設計書が、承認済みの設計書に取って代わって実装に渡らないようにするためである。
  *   読み直した設計書が、照合した値と食い違う、または無いときは、`inconsistent`で止める。
  * 設計書は信頼できない入力を読んだClaudeの出力なので、渡す前に`normalizeDesignForImplement`を通す。
- * 整形で本文が変わったとき(切った、マスクした、結合文字を落とした、HTMLを除いた)は、警告を1件残して止めない。
+ * 整形で本文が変わったとき(切った、マスクした、結合文字を落とした、リンク参照定義の行を除いた)は、警告を1件残して止めない。
+ * HTMLは除かず、文字としてそのまま渡す。
  * 設計書は要件定義より下位の入力で、切れても要件定義が優先されるためである。
  */
 export async function designGate(
@@ -265,7 +266,7 @@ export async function designGate(
     normalized.truncated ||
     normalized.masked ||
     normalized.dropped_combining ||
-    normalized.stripped_html_count > 0
+    normalized.stripped_reference_count > 0
   ) {
     deps.warn(
       "the design was changed before it was handed to the implementation",
@@ -277,7 +278,7 @@ export async function designGate(
         truncated: normalized.truncated,
         masked: normalized.masked,
         dropped_combining: normalized.dropped_combining,
-        stripped_html_count: normalized.stripped_html_count,
+        stripped_reference_count: normalized.stripped_reference_count,
       },
     );
   }
