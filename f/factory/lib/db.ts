@@ -4316,13 +4316,23 @@ export async function countApprovalRedispatches(
   return row === undefined ? 0 : parseRequiredNumber(row.n, "n");
 }
 
-/** 起動し直した記録の最新の時刻。 */
+/**
+ * 承認の判断を反映する処理を起動し直した記録の、最新の時刻を返す。無ければ`null`を返す。
+ * 記録の条件は`countApprovalRedispatches`と同じである。
+ * 起動し直しの間隔を測るのに使う。
+ */
 export async function lastApprovalRedispatchAt(
-  _workItemId: number,
-  _note: string,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  note: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<Date | null> {
-  return null;
+  const rows = await sql`
+    SELECT MAX(occurred_at) AS last_at FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint
+      AND from_status = to_status AND note = ${note}
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : parseNullableDate(row.last_at, "last_at");
 }
 
 /**

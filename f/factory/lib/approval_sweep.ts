@@ -60,7 +60,12 @@ export const SWEEP_REDISPATCH_LIMIT = 5;
  */
 export const SWEEP_REDISPATCH_MAX_PER_REQUEST = 3;
 
-export const SWEEP_REDISPATCH_RETRY_GRACE_MS = 0;
+/**
+ * 直前の起動し直しから、次に起動し直す(または回数の上限で人の対応待ちにする)までの猶予。
+ * 起動し直したジョブが、既定のworkerの長いジョブに塞がれて動き出す前に、回数だけが上限に達して
+ * 作業項目を誤って人の対応待ちにしないためである。
+ */
+export const SWEEP_REDISPATCH_RETRY_GRACE_MS = 15 * 60 * 1000;
 
 /**
  * 処理先を起動し直した記録(作業項目の遷移の記録で、状態は変えない)の注記。
@@ -156,10 +161,11 @@ type Counters = { moved: number; redispatched: number };
 
 /**
  * 承認待ちの作業項目ごとに最新の依頼を照合する(段A)。
- * - 期限切れの`pending`: 先に作業項目を動かし、動かせたときだけ通知して、その後で依頼を期限切れにする。
- *   途中で落ちても依頼は`pending`のまま残り、次の回で段Bが依頼だけを片付ける。
+ * - 期限切れの`pending`: 先に作業項目を動かし、動かせたときだけ、依頼を期限切れにしてから通知する。
+ *   依頼を期限切れにする前に落ちても依頼は`pending`のまま残り、次の回で段Bが依頼だけを片付ける。
  * - 期限切れで、作業項目が承認待ちのまま残ったもの: 作業項目を`expired`へ動かす。
  * - 決定済みで、猶予を過ぎても作業項目が承認待ちのままのもの: 処理先を起動し直す。
+ *   猶予は決定の時刻と、直前の起動し直しの時刻のどちらからも測る。
  *   起動し直しは依頼ごとに回数の上限があり、超えたら作業項目を`needs_human`にする。
  */
 async function sweepWorkItem(
@@ -206,8 +212,13 @@ async function sweepWorkItem(
     );
     if (!moved) return;
     if (!inconsistent) counters.moved += 1;
-    await deps.notifyNeedsHuman(item, note);
-    await deps.expireApprovalRequestIfPending(latest.id);
+    // 通知は遅れることがある。待つ間に依頼が`pending`のまま残り、承認を記録できる窓を開けないよう、
+    // 通知の前に依頼を期限切れにする。期限切れにできなくても通知は送る。依頼は段Bが片付ける。
+    try {
+      await deps.expireApprovalRequestIfPending(latest.id);
+    } finally {
+      await deps.notifyNeedsHuman(item, note);
+    }
     return;
   }
 
@@ -236,6 +247,13 @@ async function sweepWorkItem(
   if (counters.redispatched >= SWEEP_REDISPATCH_LIMIT) return;
 
   const note = approvalRedispatchNote(latest.id);
+  const lastRestartAt = await deps.lastApprovalRedispatchAt(item.id, note);
+  if (
+    lastRestartAt !== null &&
+    now.getTime() - lastRestartAt.getTime() < SWEEP_REDISPATCH_RETRY_GRACE_MS
+  ) {
+    return;
+  }
   const restarts = await deps.countApprovalRedispatches(item.id, note);
   if (restarts >= SWEEP_REDISPATCH_MAX_PER_REQUEST) {
     const reason = approvalApplyStalledReason(restarts);
