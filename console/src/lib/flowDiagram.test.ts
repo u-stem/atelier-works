@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { StepViewData } from "../api/jobsQueries.ts";
 import {
+  activeScrollLeft,
   CONDITIONAL_EDGES_NOTE,
   CONDITIONAL_WORD,
   type DiagramBox,
@@ -20,7 +21,11 @@ import {
   UNKNOWN_STEPS_HEADING,
   unwiredText,
 } from "./flowDiagram.ts";
-import { FIT_CHROME_WIDTH, graphPresentation } from "./flowGraphFit.ts";
+import {
+  FIT_CHROME_WIDTH,
+  type GraphPresentation,
+  graphPresentation,
+} from "./flowGraphFit.ts";
 import { FLOWS_DATA, type FlowDefinition, findFlow } from "./flowsData.ts";
 
 function realFlow(name: string): FlowDefinition {
@@ -545,6 +550,143 @@ describe("layoutFlowDiagram", () => {
 
   test("scrolls the widest flow in a narrower body", () => {
     expect(graphPresentation(900, layoutOf("pr_fix").width)).toBe("scroll");
+  });
+});
+
+/** 作業項目の詳細の本文の幅(px)。 */
+const ITEM_BODY_WIDTH = 760;
+
+describe("the diagram without the column of entries", () => {
+  function embeddedLayout(
+    name: string,
+    progress: readonly StepViewData[] | null = null,
+  ) {
+    return layoutFlowDiagram(flowDiagramModel(realFlow(name), progress), {
+      entries: false,
+    });
+  }
+
+  test("draws no entry box", () => {
+    expect(boxesOf(embeddedLayout("pr_fix"), "entry")).toEqual([]);
+  });
+
+  test("draws no link from an entry", () => {
+    expect(
+      embeddedLayout("pr_fix").links.filter((link) => link.kind === "entry"),
+    ).toEqual([]);
+  });
+
+  test("starts the steps at the margin", () => {
+    expect(boxesOf(embeddedLayout("pr_fix"), "step")[0]?.x).toBe(20);
+  });
+
+  test("is narrower than the diagram with entries", () => {
+    expect(embeddedLayout("pr_fix").width).toBeLessThan(
+      layoutOf("pr_fix").width,
+    );
+  });
+
+  test("keeps the diagram with entries when the option is left out", () => {
+    expect(boxesOf(layoutOf("pr_fix"), "entry")).toHaveLength(
+      drawnEntries(realFlow("pr_fix")).length,
+    );
+  });
+
+  const EXPECTED: readonly (readonly [string, GraphPresentation])[] = [
+    ["audit", "fit"],
+    ["dependabot", "fit"],
+    ["design", "fit"],
+    ["implement", "fit"],
+    ["manual_intake", "fit"],
+    ["pipeline", "scroll"],
+    ["pr_fix", "scroll"],
+    ["pr_review", "fit"],
+  ];
+
+  test.each(EXPECTED)(
+    "shows %s in the body of a work item as %s",
+    (name, expected) => {
+      expect(
+        graphPresentation(ITEM_BODY_WIDTH, embeddedLayout(name).width),
+      ).toBe(expected);
+    },
+  );
+
+  test("covers every flow of the data in the table above", () => {
+    expect(FLOWS_DATA?.flows.map((flow) => flow.name).sort()).toEqual([
+      "audit",
+      "dependabot",
+      "design",
+      "implement",
+      "manual_intake",
+      "pipeline",
+      "pr_fix",
+      "pr_review",
+    ]);
+  });
+});
+
+describe("activeScrollLeft", () => {
+  const VIEWPORT = ITEM_BODY_WIDTH - FIT_CHROME_WIDTH;
+
+  function scrollOf(progress: readonly StepViewData[] | null) {
+    return activeScrollLeft(
+      layoutFlowDiagram(flowDiagramModel(realFlow("pr_fix"), progress), {
+        entries: false,
+      }),
+      VIEWPORT,
+    );
+  }
+
+  test("is null when the job is not drawn", () => {
+    expect(scrollOf(null)).toBeNull();
+  });
+
+  test("is null when no step is running or failed", () => {
+    expect(scrollOf([stepData("prepare", "success")])).toBeNull();
+  });
+
+  test("is zero when the running step is already in view", () => {
+    expect(scrollOf([stepData("prepare", "running")])).toBe(0);
+  });
+
+  test("moves a running step on the right edge into view", () => {
+    const last = realFlow("pr_fix").steps[4];
+    const layout = layoutFlowDiagram(
+      flowDiagramModel(realFlow("pr_fix"), [
+        stepData(last?.id ?? "", "running"),
+      ]),
+      { entries: false },
+    );
+
+    expect(activeScrollLeft(layout, VIEWPORT)).toBe(layout.width - VIEWPORT);
+  });
+
+  test("centers a running step in the middle", () => {
+    const middle = realFlow("pr_fix").steps[2];
+    const layout = layoutFlowDiagram(
+      flowDiagramModel(realFlow("pr_fix"), [
+        stepData(middle?.id ?? "", "running"),
+      ]),
+      { entries: false },
+    );
+    const box = boxesOf(layout, "step")[2];
+
+    expect(activeScrollLeft(layout, VIEWPORT)).toBe(
+      (box?.x ?? 0) + (box?.width ?? 0) / 2 - VIEWPORT / 2,
+    );
+  });
+
+  test("brings a failed step into view as well", () => {
+    const last = realFlow("pr_fix").steps[4];
+    const layout = layoutFlowDiagram(
+      flowDiagramModel(realFlow("pr_fix"), [
+        stepData(last?.id ?? "", "failure"),
+      ]),
+      { entries: false },
+    );
+
+    expect(activeScrollLeft(layout, VIEWPORT)).toBeGreaterThan(0);
   });
 });
 

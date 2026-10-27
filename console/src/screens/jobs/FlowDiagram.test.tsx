@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { StepViewData } from "../../api/jobsQueries.ts";
-import { entryText, flowDiagramModel } from "../../lib/flowDiagram.ts";
+import {
+  CONDITIONAL_EDGES_NOTE,
+  entryText,
+  flowDiagramModel,
+} from "../../lib/flowDiagram.ts";
 import type { GraphPresentation } from "../../lib/flowGraphFit.ts";
 import { FLOWS_DATA, findFlow } from "../../lib/flowsData.ts";
 import { FlowDiagramFrame } from "./FlowDiagram.tsx";
@@ -37,6 +41,7 @@ function render(
   options: {
     progress?: readonly StepViewData[] | null;
     presentation?: GraphPresentation;
+    embedded?: boolean;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -44,6 +49,7 @@ function render(
       <FlowDiagramFrame
         model={flowDiagramModel(flowOf(name), options.progress ?? null)}
         presentation={options.presentation ?? "fit"}
+        embedded={options.embedded ?? false}
       />
     </MemoryRouter>,
   );
@@ -454,5 +460,47 @@ describe("FlowDiagramFrame: the narrow presentation", () => {
         progress: [step("prepare", "success")],
       }),
     ).toContain("条件で飛ぶ");
+  });
+});
+
+describe("FlowDiagramFrame: embedded in a work item", () => {
+  test("draws no entry of the flow", () => {
+    expect(plain(render("pipeline", { embedded: true }))).not.toContain(
+      "スケジュール",
+    );
+  });
+
+  test("keeps the entries in the standalone diagram", () => {
+    expect(plain(render("pipeline"))).toContain("スケジュール");
+  });
+
+  test("adds no note about the conditional edges", () => {
+    expect(render("pipeline", { embedded: true })).not.toContain(
+      CONDITIONAL_EDGES_NOTE,
+    );
+  });
+
+  test("keeps the note in the standalone diagram", () => {
+    expect(render("pipeline")).toContain(CONDITIONAL_EDGES_NOTE);
+  });
+
+  test("adds no note about an entry that is not wired", () => {
+    expect(render("design", { embedded: true })).not.toContain(
+      "まだ起動されません",
+    );
+  });
+
+  test("keeps that note in the standalone diagram", () => {
+    expect(render("design")).toContain("まだ起動されません");
+  });
+
+  test("lists no entries in the narrow presentation", () => {
+    expect(
+      render("pipeline", { embedded: true, presentation: "list" }),
+    ).not.toContain('aria-label="入口"');
+  });
+
+  test("keeps the exits in the diagram", () => {
+    expect(plain(render("pipeline", { embedded: true }))).toContain("承認の後");
   });
 });

@@ -509,9 +509,12 @@ function UnknownSteps({ model }: { model: FlowDiagramModel }) {
 export function FlowDiagramFrame({
   model,
   presentation,
+  embedded: _embedded = false,
 }: {
   model: FlowDiagramModel;
   presentation: GraphPresentation;
+  /** 作業項目の詳細に埋め込む図か。入口の列と静的な注記を出さない。 */
+  embedded?: boolean;
 }) {
   const layout = useMemo(() => layoutFlowDiagram(model), [model]);
   const label = safeText(diagramLabel(model.flow.name));

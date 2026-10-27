@@ -65,9 +65,9 @@ describe("JobOverview: the link to the diagram of the flow", () => {
     );
   });
 
-  test("puts no link on a job that has a parent", () => {
-    expect(overview({ ...flowJob, parent_job: PARENT })).not.toContain(
-      "/jobs/flows/",
+  test("links a flow job that has a parent, because the diagram is static", () => {
+    expect(overview({ ...flowJob, parent_job: PARENT })).toContain(
+      'href="/jobs/flows/implement"',
     );
   });
 

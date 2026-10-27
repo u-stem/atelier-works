@@ -53,6 +53,12 @@ function render(
   );
 }
 
+/** 図(role="group"のsvg)の部分だけ。見出しの語と見分けるために使う。 */
+function diagramOf(html: string): string {
+  const start = html.indexOf('role="group"');
+  return html.slice(start, html.indexOf("</svg>", start));
+}
+
 function countOf(html: string, word: string): number {
   return html.split(word).length - 1;
 }
@@ -141,10 +147,18 @@ describe("ItemFlowProgressView: a job that is waiting or stopped", () => {
     ).toContain("失敗");
   });
 
-  test("shows the failed step in the diagram", () => {
+  test("shows the failed step in the diagram, apart from the heading", () => {
+    expect(
+      diagramOf(
+        render(steps([step("generate", "failure")], { jobState: "failure" })),
+      ),
+    ).toContain("失敗");
+  });
+
+  test("marks the failed step with the mark of a failure", () => {
     expect(
       render(steps([step("generate", "failure")], { jobState: "failure" })),
-    ).toContain("失敗");
+    ).toContain("stroke-failure");
   });
 
   test("does not highlight a failed step as a running one", () => {
@@ -157,6 +171,33 @@ describe("ItemFlowProgressView: a job that is waiting or stopped", () => {
     expect(
       render(steps([step("generate", "canceled")], { jobState: "canceled" })),
     ).toContain("取消");
+  });
+
+  test("shows the canceled step in the diagram, apart from the heading", () => {
+    expect(
+      diagramOf(
+        render(steps([step("generate", "canceled")], { jobState: "canceled" })),
+      ),
+    ).toContain("取消");
+  });
+
+  test("shows the waiting state of a queued job on the heading when no step runs", () => {
+    expect(render(steps([], { jobState: "queued" }))).toContain("待ち");
+  });
+
+  test("shows the running state on the heading when the steps only wait", () => {
+    expect(
+      render(steps([step("prepare", "waiting")], { jobState: "running" })),
+    ).toContain("実行中");
+  });
+
+  test("hides the state on the heading when a step runs in the diagram", () => {
+    expect(
+      countOf(
+        render(steps([step("generate", "running")], { jobState: "running" })),
+        "実行中",
+      ),
+    ).toBe(1);
   });
 });
 
@@ -204,6 +245,44 @@ describe("ItemFlowProgressView: the width", () => {
 
   test("keeps the heading before the width is measured", () => {
     expect(render(running, { width: 0 })).toContain("pipelineのステップ");
+  });
+});
+
+describe("ItemFlowProgressView: the diagram of the work item", () => {
+  const BODY = 760;
+
+  test("draws no entry of the flow", () => {
+    expect(
+      render(steps([step("prepare", "running")]), { width: WIDE }),
+    ).not.toContain("スケジュール");
+  });
+
+  test("adds no note about the conditional edges", () => {
+    expect(
+      render(steps([step("prepare", "running")]), { width: WIDE }),
+    ).not.toContain("起動しない場合があります");
+  });
+
+  test("fits implement in the body of the page without scrolling", () => {
+    expect(
+      render(
+        steps([step("implement_prepare", "running")], {
+          flowPath: "f/factory/implement",
+        }),
+        { width: BODY },
+      ),
+    ).not.toContain('role="region"');
+  });
+
+  test("scrolls pr_fix in the body of the page", () => {
+    expect(
+      render(
+        steps([step("pr_fix_prepare", "running")], {
+          flowPath: "f/factory/pr_fix",
+        }),
+        { width: BODY },
+      ),
+    ).toContain('role="region"');
   });
 });
 

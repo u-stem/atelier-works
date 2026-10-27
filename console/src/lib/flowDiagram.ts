@@ -232,6 +232,17 @@ export type DiagramLayout = {
   readonly height: number;
 };
 
+/** 配置の選択。入口の列を描かないときは`entries`を偽にする。 */
+export type LayoutOptions = { readonly entries: boolean };
+
+/** 横スクロールの枠を開いたとき、実行中か失敗したステップが見える位置。該当が無ければ`null`。 */
+export function activeScrollLeft(
+  _layout: DiagramLayout,
+  _viewportWidth: number,
+): number | null {
+  return null;
+}
+
 export const MARGIN = 20;
 export const ENTRY_WIDTH = 172;
 export const ENTRY_HEIGHT = 58;
@@ -251,7 +262,10 @@ const ROW_GAP = 48;
  * 線は隣り合う列と行の間だけを引くので、他の箱の上を通らない。
  * 箱の幅は、5ステップのflowが、ジョブの画面の本文の最大の幅(1152px)に収まるように決めた。画面の幅がそれより狭いときは、見せ方が横スクロールか一覧になる。
  */
-export function layoutFlowDiagram(model: FlowDiagramModel): DiagramLayout {
+export function layoutFlowDiagram(
+  model: FlowDiagramModel,
+  _options: LayoutOptions = { entries: true },
+): DiagramLayout {
   const { flow, steps } = model;
   const entries = drawnEntries(flow);
   const entriesHeight =

@@ -135,9 +135,14 @@ describe("OverviewTab", () => {
     expect(html).toContain(`href="${PR_URL}"`);
   });
 
-  test("shows no progress without a flow job", () => {
+  test("shows no heading of the progress without a flow job", () => {
     const html = render(<OverviewTab detail={detail()} now={NOW} />);
-    expect(html).not.toContain("のステップ");
+    expect(html).not.toContain(">進行<");
+  });
+
+  test("draws no diagram without a flow job", () => {
+    const html = render(<OverviewTab detail={detail()} now={NOW} />);
+    expect(html).not.toContain('role="group"');
   });
 
   test("workItemFlowProgress: shows no progress when the detail is not found but keeps the overview", () => {
