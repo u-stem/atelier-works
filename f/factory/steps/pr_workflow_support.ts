@@ -4323,8 +4323,9 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^design approval timed out$/,
     describe: () => "設計の承認がタイムアウトしました",
+    // 期限切れの直後に人の承認が記録されると、再実行は承認済みの設計書で実装へ進む。
     nextAction: () =>
-      `${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。承認済みの要件定義は使います)`,
+      `${RETRY_WORK_ITEM_ACTION}(最新の依頼が承認済みなら実装から始めます。そうでなければ設計書を作り直します。承認済みの要件定義は使います)`,
   },
   {
     pattern: /^design rejected after max_design_attempts (\d+)$/,
@@ -4698,9 +4699,10 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
-    // 期限切れの依頼は、承認も却下も断られる。再実行が要件定義を作り直し、承認を取り直す。
+    // 期限切れの依頼は、承認も却下も断られる。期限切れの直後に人の承認が記録されたときは、
+    // 再実行が承認の後の工程へ進む。そうでなければ要件定義を作り直し、承認を取り直す。
     nextAction: () =>
-      `${RETRY_WORK_ITEM_ACTION}(要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます)`,
+      `${RETRY_WORK_ITEM_ACTION}(最新の依頼が承認済みなら、承認の後の工程(設計が有効なら設計、そうでなければ実装)から始めます。そうでなければ要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます)`,
   },
   // 承認の判断を反映する処理を起動し直しても、作業項目に反映されなかった。
   // 理由の文字列は`lib/approval_sweep.ts`の`approvalApplyStalledReason`が作る。
