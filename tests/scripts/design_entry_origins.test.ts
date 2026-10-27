@@ -26,14 +26,14 @@ const transpiler = new Bun.Transpiler({ loader: "ts" });
 /** 設計フローを起動する経路を示す識別子と、その数え方。 */
 const ENTRY_PATTERNS = {
   DESIGN_FLOW_PATH: /\bDESIGN_FLOW_PATH\b/g,
-  designFlowPathLiteral: /"f\/factory\/design"/g,
+  designFlowPathLiteral: /f\/factory\/design(?![\w/])/g,
   "startDesign(": /(?<!\bfunction\s+)\bstartDesign\(/g,
   "designFlowInput(": /(?<!\bfunction\s+)\bdesignFlowInput\(/g,
   "buildStartDesign(": /(?<!\bfunction\s+)\bbuildStartDesign\(/g,
 } as const;
 
 /** 状態`designing`を指す文字列の数え方。 */
-const DESIGNING_PATTERN = /["']designing["']/g;
+const DESIGNING_PATTERN = /[`"']designing[`"']/g;
 
 type Counts = Readonly<Record<string, number>>;
 
@@ -61,7 +61,7 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
 };
 
 /**
- * 文字列`"designing"`の出現の数。遷移先が`designing`の比較交換を呼ぶ箇所を、ファイルごとの数で固定する。
+ * 文字列`"designing"`(引用符の形は問わない)の出現の数。遷移先が`designing`の比較交換を呼ぶ箇所を、ファイルごとの数で固定する。
  * 数が合わないときは、新しい遷移が足されたか、減ったかである。起動元の確認と同じ重さで見直す。
  */
 const ALLOWED_DESIGNING: Readonly<Record<string, number>> = {
