@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isReadyForImplement } from "../../f/factory/lib/approval_gate.ts";
-import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
+import { loadConfig } from "../../f/factory/lib/config.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 import { computeRestartPlan } from "../../f/factory/retry_work_item.ts";
 import { applyDesignApproved } from "../../f/factory/steps/design_apply.ts";
@@ -40,17 +40,28 @@ function productionSources(): string[] {
     .sort();
 }
 
-/** `design_enabled`をキーとして書く形。 */
-const DESIGN_ENABLED_KEY = /\bdesign_enabled\s*:/g;
+/**
+ * `design_enabled`の出現。キー、`.design_enabled`の読み、文字列、省略記法、分割代入の別名を区別せずに数える。
+ * 引用符付きのキーは、変換で引用符が落ちるのでキーと同じ形になる。
+ * `design_enabled_ignored`のように識別子の続きになる綴りは数えない。
+ */
+const DESIGN_ENABLED_TOKEN = /(?<![\w$])design_enabled(?![\w$])/g;
 
 /**
- * `design_enabled`をキーに書いてよい本番のファイルと、書く数。
+ * `design_enabled`が出てよい本番のファイルと、出る数。
  * 型の宣言(`lib/types.ts`の`design_enabled: boolean`、`Pick`の中の名前)は、変換で消える。
- * 変換後に値として書かれているのは、既定値と、要求と門から導く式の2つだけで、どちらも`lib/config.ts`にある。
- * 呼び出しの側で`{ ...config, design_enabled: ... }`と上書きする迂回は、ここで数が増えて見つかる。
+ * `lib/config.ts`の6つは、既定値、通知の本文の中の2つ、リソースの読み取りの名前と既定値の参照、門で絞った導出である。
+ * 残りは、設定の値を読む呼び出しの側の1つずつである。
+ * 呼び出しの側で`{ ...config, design_enabled: ... }`と上書きする迂回や、別の読み方を足す変更は、ここで数が増えて見つかる。
  */
-const ALLOWED_DESIGN_ENABLED_KEYS: Readonly<Record<string, number>> = {
-  "lib/config.ts": 2,
+const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
+  "auto_retry_stale_image.ts": 1,
+  "lib/config.ts": 6,
+  "lib/self_update_support.ts": 1,
+  "retry_work_item.ts": 1,
+  "self_update.ts": 1,
+  "steps/implement_prepare.ts": 1,
+  "steps/requirements_apply.ts": 1,
 };
 
 /** 要件定義の承認の反映の配線に、設定をそのまま渡す呼び出し。宣言は数えない。 */
@@ -177,10 +188,17 @@ describe("the wiring of the design flow", () => {
     expect(typeof deps.startDesign).toBe("function");
   });
 
-  test("leaves the design flow unwired in production, where the configuration ignores design_enabled: true", () => {
-    const config = parseFactoryConfig({ ...RAW_CONFIG, design_enabled: true });
-    expect(buildApprovedBranchDeps(config, CONTEXT).startDesign).toBeNull();
-  });
+  test.each(["local", "production", "prod", "factory-1", "staging"])(
+    "leaves the design flow unwired after loadConfig with instance_name %p and design_enabled: true",
+    async (instanceName) => {
+      const config = await loadConfig(async () => ({
+        ...RAW_CONFIG,
+        instance_name: instanceName,
+        design_enabled: true,
+      }));
+      expect(buildApprovedBranchDeps(config, CONTEXT).startDesign).toBeNull();
+    },
+  );
 });
 
 describe("the literal that opens the design stage", () => {
@@ -196,28 +214,68 @@ describe("the literal that opens the design stage", () => {
   });
 });
 
-describe("the files that write design_enabled as a key", () => {
+describe("the files that mention design_enabled", () => {
   test("are exactly the files in the table", () => {
-    expect(scanCounts(DESIGN_ENABLED_KEY)).toEqual(ALLOWED_DESIGN_ENABLED_KEYS);
+    expect(scanCounts(DESIGN_ENABLED_TOKEN)).toEqual(
+      ALLOWED_DESIGN_ENABLED_TOKENS,
+    );
   });
 
   test("catches an override that spreads the configuration", () => {
     const code = transpiler.transformSync(
       "const c = { ...config, design_enabled: true };",
     );
-    expect(countOf(code, DESIGN_ENABLED_KEY)).toBe(1);
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(1);
   });
 
   test("catches a key that is written with a space before the colon", () => {
     const code = transpiler.transformSync("const c = { design_enabled : x };");
-    expect(countOf(code, DESIGN_ENABLED_KEY)).toBe(1);
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(1);
+  });
+
+  test("catches a key that is quoted", () => {
+    const code = transpiler.transformSync('const c = { "design_enabled": x };');
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(1);
+  });
+
+  test("catches a read through a property", () => {
+    const code = transpiler.transformSync("const x = config.design_enabled;");
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(1);
+  });
+
+  test("catches a read through a string index", () => {
+    const code = transpiler.transformSync(
+      'const x = config["design_enabled"];',
+    );
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(1);
+  });
+
+  test("catches a shorthand property", () => {
+    const code = transpiler.transformSync(
+      "const design_enabled = 1; const c = { design_enabled };",
+    );
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(2);
+  });
+
+  test("catches a destructuring with an alias", () => {
+    const code = transpiler.transformSync(
+      "const { design_enabled: gate } = config;",
+    );
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(1);
+  });
+
+  test("does not count design_enabled_ignored", () => {
+    const code = transpiler.transformSync(
+      "const x = config.design_enabled_ignored;",
+    );
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(0);
   });
 
   test("does not count a type declaration, which the transpiler erases", () => {
     const code = transpiler.transformSync(
       "type T = { design_enabled: boolean };",
     );
-    expect(countOf(code, DESIGN_ENABLED_KEY)).toBe(0);
+    expect(countOf(code, DESIGN_ENABLED_TOKEN)).toBe(0);
   });
 });
 
@@ -264,16 +322,32 @@ describe("the gate in config.ts", () => {
     expect([...config.matchAll(/\bDESIGN_STAGE_OPENABLE\b/g)]).toHaveLength(3);
   });
 
+  test("declares the request of design_enabled exactly once, from the raw resource", () => {
+    expect([
+      ...config.matchAll(
+        /\bconst designEnabledRequested = booleanField\(\s*raw,\s*"design_enabled",\s*DEFAULTS\.design_enabled,?\s*\);/g,
+      ),
+    ]).toHaveLength(1);
+  });
+
+  test("mentions the request in its declaration and two derivations only", () => {
+    expect([...config.matchAll(/\bdesignEnabledRequested\b/g)]).toHaveLength(3);
+  });
+
   test("derives design_enabled from the request and the gate only", () => {
-    expect(config).toMatch(
-      /\bdesign_enabled:\s*designEnabledRequested\s*&&\s*DESIGN_STAGE_OPENABLE\b/,
-    );
+    expect([
+      ...config.matchAll(
+        /\bdesign_enabled:\s*designEnabledRequested\s*&&\s*DESIGN_STAGE_OPENABLE\s*,/g,
+      ),
+    ]).toHaveLength(1);
   });
 
   test("derives design_enabled_ignored from the request and the closed gate only", () => {
-    expect(config).toMatch(
-      /\bdesign_enabled_ignored:\s*designEnabledRequested\s*&&\s*!DESIGN_STAGE_OPENABLE\b/,
-    );
+    expect([
+      ...config.matchAll(
+        /\bdesign_enabled_ignored:\s*designEnabledRequested\s*&&\s*!DESIGN_STAGE_OPENABLE\s*,/g,
+      ),
+    ]).toHaveLength(1);
   });
 
   test.each(["process.env", "Bun.env", "import.meta.env"])(
