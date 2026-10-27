@@ -18,6 +18,7 @@ import {
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import type { FlowGraph } from "../../lib/flowGraph.ts";
 import type { FlowGraphState } from "../../lib/flowOverlay.ts";
+import { ItemFlowProgressView } from "../items/detail/ItemFlowProgress.tsx";
 import { ConfigList } from "../system/ConfigSection.tsx";
 import { FlowGraphDiagram, FlowGraphList } from "./FlowGraphDiagram.tsx";
 import {
@@ -286,6 +287,32 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     () => <FlowGraphList graph={GRAPH} state={GRAPH_STATE} />,
   ],
   [
+    "the flow progress of a work item",
+    () => (
+      <ItemFlowProgressView
+        kind="issue"
+        graph={GRAPH}
+        width={900}
+        view={{
+          kind: "steps",
+          jobId: DETAIL_ID,
+          flowPath: `f/factory/${BAD}`,
+          jobState: BAD,
+          steps: [
+            {
+              id: BAD,
+              state: BAD,
+              job_id: BAD,
+              iterations: null,
+              skipped: false,
+            },
+          ],
+          stale: true,
+        }}
+      />
+    ),
+  ],
+  [
     "the list of running jobs",
     () => <JobList jobs={[JOB]} now={NOW} back="" time="active" />,
   ],
@@ -347,6 +374,17 @@ describe("the cases of the current step and the graph in the coverage", () => {
 
   test("draw the last run of the schedule entry of the graph", () => {
     expect(draw("flow node label")).toContain("直近 失敗・取消");
+  });
+});
+
+describe("the flow progress of a work item in the coverage", () => {
+  test("draws the heading of the steps, so the check does not pass on an empty block", () => {
+    const found = CASES.find(
+      ([label]) => label === "the flow progress of a work item",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain(
+      "のステップ",
+    );
   });
 });
 

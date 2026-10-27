@@ -11,7 +11,7 @@ import {
   flowGraphStateOf,
 } from "../../lib/flowOverlay.ts";
 import { useElementWidth } from "../../lib/useElementWidth.ts";
-import { FlowGraphDiagram, FlowGraphList } from "../jobs/FlowGraphDiagram.tsx";
+import { FlowGraphFrame } from "../jobs/FlowGraphDiagram.tsx";
 import {
   ACTIVE_READ_FAILED_NOTE,
   overviewWords,
@@ -77,25 +77,7 @@ export function FlowGraphBody({
       {showsSchedules && state.schedulesTruncated ? (
         <GraphNote text={SCHEDULE_TRUNCATED_NOTE} />
       ) : null}
-      {presentation === "list" ? (
-        <FlowGraphList graph={graph} state={state} />
-      ) : presentation === "fit" ? (
-        <div className="rounded-xl border border-border bg-card p-2">
-          <FlowGraphDiagram graph={graph} state={state} />
-        </div>
-      ) : (
-        // 横にスクロールできる領域は、キーボードで焦点を当てないと読み進められない。
-        // biome-ignore lint/a11y/useSemanticElements: 領域の役割を明示する。sectionは、見出しを持つ節と取り違えられる。
-        <div
-          role="region"
-          // biome-ignore lint/a11y/noNoninteractiveTabindex: 同上。
-          tabIndex={0}
-          aria-label="起動の関係の図(横にスクロールできます)"
-          className="overflow-x-auto rounded-xl border border-border bg-card p-2 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <FlowGraphDiagram graph={graph} state={state} />
-        </div>
-      )}
+      <FlowGraphFrame graph={graph} state={state} presentation={presentation} />
     </div>
   );
 }

@@ -165,8 +165,12 @@ function anchorOf(box: LayoutBox, side: Side, fraction: number): Anchor {
 /**
  * 辺を、箱の側面につなぐ。右の列へ向かう辺は、元の右側から先の左側へ引く。
  * 左の列へ戻る辺(flowのステップ)は、元の左側から先の右側へ引く。
+ * `compact`を指定すると、左端の空の列を詰める。経路だけを切り出した小さなグラフのための指定である。
  */
-export function layoutFlowGraph(graph: FlowGraph): FlowGraphLayout {
+export function layoutFlowGraph(
+  graph: FlowGraph,
+  options: { readonly compact?: boolean } = {},
+): FlowGraphLayout {
   const columnOf = columnsOf(graph);
   const boxes = placeBoxes(orderColumns(graph, columnOf));
   const boxOf = new Map(boxes.map((box) => [box.node.id, box]));
@@ -225,7 +229,31 @@ export function layoutFlowGraph(graph: FlowGraph): FlowGraphLayout {
       ),
     });
   });
-  return { boxes, links };
+  const layout = { boxes, links };
+  return options.compact === true ? trimLeadingColumns(layout) : layout;
+}
+
+/**
+ * 左端の列が空のとき、全体を左へ寄せる。
+ * 経路だけを切り出したグラフは、1列目に箱が無く、図の左に空白が残るためである。
+ * 1列目に箱がある図は、そのままにする。
+ */
+function trimLeadingColumns(layout: FlowGraphLayout): FlowGraphLayout {
+  const left = Math.min(...layout.boxes.map((box) => box.x));
+  const shift = Number.isFinite(left) ? left - MARGIN : 0;
+  if (shift <= 0) return layout;
+  const moveAnchor = (anchor: Anchor): Anchor => ({
+    ...anchor,
+    x: anchor.x - shift,
+  });
+  return {
+    boxes: layout.boxes.map((box) => ({ ...box, x: box.x - shift })),
+    links: layout.links.map((link) => ({
+      ...link,
+      exit: moveAnchor(link.exit),
+      entry: moveAnchor(link.entry),
+    })),
+  };
 }
 
 /** 図全体の大きさ。いちばん外側の箱の外に、余白を足した値。 */
