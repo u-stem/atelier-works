@@ -6,16 +6,24 @@ import { SELECTED_STYLE } from "../lib/selectedStyle.ts";
 /**
  * 1つだけ選ぶ切り替えの組。`ToggleChip`を並べる。
  * `legend`は読み上げだけに出し、画面には描かない。
+ * `className`は、画面ごとに面や幅を変えるときに足す。省くと、今の見た目になる。
  */
 export function ToggleChipGroup({
   legend,
+  className,
   children,
 }: {
   legend: string;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <fieldset className="m-0 inline-flex w-fit min-w-0 gap-0.5 rounded-lg border-0 bg-muted p-0.5">
+    <fieldset
+      className={cn(
+        "m-0 inline-flex w-fit min-w-0 gap-0.5 rounded-lg border-0 bg-muted p-0.5",
+        className,
+      )}
+    >
       <legend className="sr-only">{legend}</legend>
       {children}
     </fieldset>

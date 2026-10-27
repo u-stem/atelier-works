@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useId, useRef } from "react";
 import { Button } from "./ui/button.tsx";
-import { useDialogSync } from "./useDialogSync.ts";
+import { focusElement, useDialogSync } from "./useDialogSync.ts";
 
 /**
  * 取り消せない操作の確認ダイアログ。ブラウザ標準の`<dialog>`をモーダルで開く。
@@ -42,7 +42,7 @@ export function ConfirmDialog({
   const cancelRef = useRef<HTMLButtonElement>(null);
   const headingId = useId();
   const focusCancel = useCallback(() => {
-    cancelRef.current?.focus();
+    focusElement(cancelRef.current);
   }, []);
   const { ref, openRef } = useDialogSync(open, focusCancel);
 

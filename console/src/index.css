@@ -168,15 +168,21 @@ body {
   scrollbar-color: var(--input) transparent;
 }
 
-/* 動きを減らす設定の利用者には、遷移と回転を止める。 */
+/* 動きを減らす設定の利用者には、遷移、回転、遅延、滑らかなスクロールを止める。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     /* biome-ignore lint/complexity/noImportantStyles: 利用者の設定を、画面の個別の指定より優先させる。 */
+    animation-delay: 0s !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     animation-duration: 0.01ms !important;
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
+    scroll-behavior: auto !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
+    transition-delay: 0s !important;
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     transition-duration: 0.01ms !important;
   }

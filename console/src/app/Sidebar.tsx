@@ -12,7 +12,7 @@ import {
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
 import { describeRelease } from "../lib/consoleStatus.ts";
-import { ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
+import { SIDEBAR_ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import { TRANSITION_WIDTH } from "../lib/motionClasses.ts";
 import {
@@ -255,7 +255,7 @@ export function Sidebar() {
           aria-expanded={drawerOpen}
           aria-label={menuButtonLabel(actionableTotal)}
           className={cn(
-            ICON_BUTTON_CLASS,
+            SIDEBAR_ICON_BUTTON_CLASS,
             "relative size-9 min-h-11 min-w-11 text-muted-foreground",
           )}
           onClick={() => {
@@ -283,7 +283,7 @@ export function Sidebar() {
             type="button"
             aria-label="メニューを閉じる"
             className={cn(
-              ICON_BUTTON_CLASS,
+              SIDEBAR_ICON_BUTTON_CLASS,
               "ml-auto size-8 min-h-11 min-w-11 shrink-0 text-subtle",
             )}
             onClick={closeDrawer}
@@ -332,7 +332,7 @@ export function Sidebar() {
                 type="button"
                 aria-expanded={!collapsed}
                 aria-label="メニューの開閉"
-                className={cn(ICON_BUTTON_CLASS, "size-8 text-subtle")}
+                className={cn(SIDEBAR_ICON_BUTTON_CLASS, "size-8 text-subtle")}
                 onClick={toggle}
               >
                 {collapsed ? (

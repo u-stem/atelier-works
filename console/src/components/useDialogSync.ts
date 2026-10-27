@@ -46,4 +46,10 @@ export function useDialogSync(
   return { ref, openRef };
 }
 
-export function focusElement(_target: { focus(): void } | null): void {}
+/**
+ * 要素にフォーカスを置く。まだ描かれていない(`null`)ときは何もしない。
+ * `syncDialog`の`onOpened`に渡して、ダイアログを開いたときの初期フォーカスを決める。
+ */
+export function focusElement(target: { focus(): void } | null): void {
+  target?.focus();
+}

@@ -1,5 +1,6 @@
 // 行のリンクとアイコンボタンが共有するclass。
 // 行は`Link`と`button`で要素が違うので、部品にせず、classだけを共有する。
+// アイコンボタンはサイドバーだけが使うので、色もサイドバーの面に合わせる。
 // 大きさと文字の色は、使う側が足す。
 
 import { cn } from "./cn.ts";
@@ -17,10 +18,8 @@ export const ROW_LINK_CLASS = cn(
   "block px-6 py-3.5 focus-visible:bg-accent",
 );
 
-/** サイドバーの面に置くアイコンボタン。 */
-export const ICON_BUTTON_CLASS = cn(
+/** サイドバーの面に置くアイコンボタン。hoverの面と輪の色が、サイドバー専用の色である。 */
+export const SIDEBAR_ICON_BUTTON_CLASS = cn(
   "inline-flex items-center justify-center rounded-lg outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
   TRANSITION_COLORS,
 );
-
-export const SIDEBAR_ICON_BUTTON_CLASS = "";

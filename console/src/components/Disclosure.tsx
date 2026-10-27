@@ -1,5 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
+import { cn } from "../lib/cn.ts";
+import { TRANSITION_TRANSFORM } from "../lib/motionClasses.ts";
 import { JUMP_OPEN_ATTRIBUTE } from "../lib/sectionJump.ts";
 
 /**
@@ -40,7 +42,10 @@ export function Disclosure({
       <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-md py-1 text-body font-medium text-foreground outline-none select-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight
           aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground transition-transform duration-(--duration-fast) ease-standard group-open:rotate-90"
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground group-open:rotate-90",
+            TRANSITION_TRANSFORM,
+          )}
         />
         <span className="min-w-0 flex-1">{summary}</span>
       </summary>
