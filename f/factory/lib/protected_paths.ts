@@ -187,6 +187,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 記録の配線と取消の許可表を固定するテスト(`tests/scripts/console_write_audit.test.ts`、`console_cancel.test.ts`、
  * `cleanup_db_console_actions.test.ts`)も守る。拒否フックの一覧(`scripts/claude-hooks/console-scripts.ts`)とそのテストは、
  * `scripts/claude-hooks/`と`tests/scripts/claude-hooks/`の接頭辞で、すでに守っている。
+ * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
+ * 後続のPRで同じ部品を変えるので、守ると毎回人の確認が要る。絞り込みと記録は守ったscript側にあり、
+ * 書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られる(`docs/security.md`の「ジョブの取消」)。
  * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)は守らない。契約テストが画面のソース全体を走査するので、
  * 保護の上乗せの保証が小さく、後続のPRで必ず直すので、毎回人の確認が要るのを避ける。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
