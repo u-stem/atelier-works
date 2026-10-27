@@ -148,6 +148,8 @@ export type NormalizedDesign = {
   readonly dropped_combining: boolean;
   /** 除いたHTMLの要素の数。 */
   readonly stripped_html_count: number;
+  /** 除いたリンク参照定義の行の数。 */
+  readonly stripped_reference_count: number;
 };
 
 /**
@@ -177,5 +179,6 @@ export function normalizeDesignForImplement(
     masked: sanitized.masked,
     dropped_combining: sanitized.dropped_combining,
     stripped_html_count: stripped.count,
+    stripped_reference_count: 0,
   };
 }

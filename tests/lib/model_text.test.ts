@@ -256,8 +256,8 @@ describe("normalizeDesignForImplement", () => {
       expect(normalize("# plan\n\nbody\n").text).toBe("# plan\n\nbody\n");
     });
 
-    test("counts no stripped element", () => {
-      expect(normalize("# plan").stripped_html_count).toBe(0);
+    test("counts no removed reference definition", () => {
+      expect(normalize("# plan").stripped_reference_count).toBe(0);
     });
 
     test("is not cut", () => {
@@ -269,97 +269,192 @@ describe("normalizeDesignForImplement", () => {
     });
   });
 
-  describe("HTML comments", () => {
-    test("removes a comment", () => {
-      expect(normalize("a<!-- hidden -->b").text).toBe("ab");
+  describe("HTML", () => {
+    test("keeps a comment as text", () => {
+      expect(normalize("a<!-- hidden -->b").text).toBe("a<!-- hidden -->b");
     });
 
-    test("removes a comment over several lines", () => {
-      expect(normalize("a<!--\nline\nline\n-->b").text).toBe("ab");
-    });
-
-    test("removes a comment that is never closed up to the end", () => {
-      expect(normalize("visible\n<!-- hidden\nmore").text).toBe("visible\n");
-    });
-
-    test("removes several comments", () => {
-      expect(normalize("a<!-- 1 -->b<!-- 2 -->c").text).toBe("abc");
-    });
-
-    test("counts each comment", () => {
-      expect(normalize("a<!-- 1 -->b<!-- 2 -->c").stripped_html_count).toBe(2);
-    });
-
-    test("counts a comment that is never closed", () => {
-      expect(normalize("a<!-- hidden").stripped_html_count).toBe(1);
-    });
-
-    test("removes a comment that another comment was hiding inside", () => {
-      expect(normalize("a<!<!-- x -->-- y -->b").text).toBe("ab");
-    });
-  });
-
-  describe("script and style elements", () => {
-    test("removes a script element with its content", () => {
-      expect(normalize("a<script>alert(1)</script>b").text).toBe("ab");
-    });
-
-    test("removes a style element with its content", () => {
-      expect(normalize("a<style>p{color:red}</style>b").text).toBe("ab");
-    });
-
-    test("removes a script element whatever the case", () => {
-      expect(normalize("a<SCRIPT>x</Script >b").text).toBe("ab");
-    });
-
-    test("removes a script element with attributes", () => {
-      expect(normalize('a<script src="x.js">y</script>b').text).toBe("ab");
-    });
-
-    test("removes a script element that is never closed up to the end", () => {
-      expect(normalize("a<script>x\nrest").text).toBe("a");
-    });
-
-    test("counts a script element as one", () => {
-      expect(
-        normalize("a<script>x</script>b<style>y</style>c").stripped_html_count,
-      ).toBe(2);
-    });
-  });
-
-  describe("raw HTML tags", () => {
-    test("removes an opening tag and keeps the text", () => {
-      expect(normalize("a<div>text</div>b").text).toBe("atextb");
-    });
-
-    test("removes a tag with attributes", () => {
-      expect(normalize('<a href="https://example.com">link</a>').text).toBe(
-        "link",
+    test("keeps a comment that is never closed as text", () => {
+      expect(normalize("visible\n<!-- hidden\nmore").text).toBe(
+        "visible\n<!-- hidden\nmore",
       );
     });
 
-    test("removes a self-closing tag", () => {
-      expect(normalize("a<br/>b").text).toBe("ab");
+    test("keeps a script element as text", () => {
+      expect(normalize("a<script>alert(1)</script>b").text).toBe(
+        "a<script>alert(1)</script>b",
+      );
     });
 
-    test("removes a declaration", () => {
-      expect(normalize("<!DOCTYPE html>a").text).toBe("a");
+    test("keeps a style element as text", () => {
+      expect(normalize("a<style>p{color:red}</style>b").text).toBe(
+        "a<style>p{color:red}</style>b",
+      );
     });
 
-    test("does not leave a script tag that another tag was hiding inside", () => {
-      expect(normalize("a<scr<b>ipt>x</p>b").text).not.toContain("<script");
+    test("keeps a tag with attributes as text", () => {
+      expect(normalize('<a href="https://example.com">link</a>').text).toBe(
+        '<a href="https://example.com">link</a>',
+      );
     });
 
-    test("counts each tag", () => {
-      expect(normalize("<p>a</p>").stripped_html_count).toBe(2);
+    test("keeps a generic type in code as it is", () => {
+      expect(normalize("returns `Promise<void>` or Promise<void>").text).toBe(
+        "returns `Promise<void>` or Promise<void>",
+      );
     });
 
-    test("keeps a less-than sign that does not start a tag", () => {
-      expect(normalize("1 < 2 and 3 > 2").text).toBe("1 < 2 and 3 > 2");
+    test("keeps an autolink as it is", () => {
+      expect(normalize("see <https://example.com>").text).toBe(
+        "see <https://example.com>",
+      );
     });
 
-    test("keeps a tag that is never closed", () => {
-      expect(normalize("a <div").text).toBe("a <div");
+    test("keeps a tag in an inline code span as it is", () => {
+      expect(normalize("use `<script>` carefully").text).toBe(
+        "use `<script>` carefully",
+      );
+    });
+
+    test("keeps tags in a fenced code block as they are", () => {
+      expect(normalize("```html\n<div>a</div>\n```").text).toBe(
+        "```html\n<div>a</div>\n```",
+      );
+    });
+
+    test("does not report HTML as a change", () => {
+      expect(normalize("a<!-- c -->b<script>x</script>").masked).toBe(false);
+    });
+  });
+
+  describe("idempotence", () => {
+    const INPUTS: readonly (readonly [string, string])[] = [
+      ["a comment opener split by a zero width space", "a<!​-- hidden -->b"],
+      ["a script tag split by a zero width space", "<​script>x</script>"],
+      ["a comment opener split by a combining grapheme joiner", "<!͏-- c -->"],
+      ["a closing tag split by a combining grapheme joiner", "</͏script>"],
+      [
+        "a reference definition split by a zero width space",
+        "a\n[x]:​ https://example.com\nb",
+      ],
+      ["a design over the limit", "a".repeat(MAX + 100)],
+      [
+        "a design over the limit with a definition",
+        `[x]: y\n${"a".repeat(MAX + 100)}`,
+      ],
+      ["a secret", `token ${GITHUB_TOKEN} <!-- c -->`],
+    ];
+
+    test.each(INPUTS)(
+      "normalizing twice equals once for %s",
+      (_name, input) => {
+        const once = normalize(input).text;
+        expect(normalize(once).text).toBe(once);
+      },
+    );
+
+    test("drops the zero width space and keeps the comment opener as text", () => {
+      expect(normalize("a<!​-- hidden -->b").text).toBe("a<!-- hidden -->b");
+    });
+
+    test("keeps the combining grapheme joiner when no secret hides behind it", () => {
+      expect(normalize("<!͏-- c -->").text).toBe("<!͏-- c -->");
+    });
+  });
+
+  describe("link reference definitions", () => {
+    test("removes a definition line", () => {
+      expect(normalize("text\n[a]: https://example.com\nmore").text).toBe(
+        "text\nmore",
+      );
+    });
+
+    test("counts the removed definition", () => {
+      expect(
+        normalize("text\n[a]: https://example.com\nmore")
+          .stripped_reference_count,
+      ).toBe(1);
+    });
+
+    test("counts each removed definition", () => {
+      expect(
+        normalize("[a]: https://a.example\n[b]: https://b.example\ntext")
+          .stripped_reference_count,
+      ).toBe(2);
+    });
+
+    test("removes a definition on the last line", () => {
+      expect(normalize("text\n[a]: https://example.com").text).toBe("text");
+    });
+
+    test("removes a definition indented by up to three spaces", () => {
+      expect(normalize("text\n   [a]: https://example.com\nmore").text).toBe(
+        "text\nmore",
+      );
+    });
+
+    test("keeps a line indented by four spaces, which is a code block", () => {
+      expect(normalize("text\n\n    [a]: https://example.com\n").text).toBe(
+        "text\n\n    [a]: https://example.com\n",
+      );
+    });
+
+    test("removes a definition whose separator had a zero width space", () => {
+      expect(normalize("a\n[x]:​ https://example.com\nb").text).toBe("a\nb");
+    });
+
+    test("removes a definition with a title", () => {
+      expect(normalize('[a]: https://example.com "Title"\ntext').text).toBe(
+        "text",
+      );
+    });
+
+    test("keeps a bracket with no colon", () => {
+      expect(normalize("- [x] done").text).toBe("- [x] done");
+    });
+
+    test("keeps a definition marker in the middle of a line", () => {
+      expect(normalize("see [a]: https://example.com").text).toBe(
+        "see [a]: https://example.com",
+      );
+    });
+
+    test("keeps a definition inside a backtick fence", () => {
+      expect(normalize("```\n[x]: y\n```\n").text).toBe("```\n[x]: y\n```\n");
+    });
+
+    test("keeps a definition inside a tilde fence", () => {
+      expect(normalize("~~~\n[x]: y\n~~~\n").text).toBe("~~~\n[x]: y\n~~~\n");
+    });
+
+    test("keeps a definition inside a fence that is never closed", () => {
+      expect(normalize("```\n[x]: y\nmore").text).toBe("```\n[x]: y\nmore");
+    });
+
+    test("does not count a definition inside a fence", () => {
+      expect(normalize("```\n[x]: y\n```\n").stripped_reference_count).toBe(0);
+    });
+
+    test("removes a definition after the fence is closed", () => {
+      expect(normalize("```\ncode\n```\n[x]: y\ntext").text).toBe(
+        "```\ncode\n```\ntext",
+      );
+    });
+
+    test("does not close a fence with a shorter fence", () => {
+      expect(normalize("````\n```\n[x]: y\n````\n").text).toBe(
+        "````\n```\n[x]: y\n````\n",
+      );
+    });
+
+    test("does not close a fence with the other kind of fence", () => {
+      expect(normalize("```\n~~~\n[x]: y\n```\n").text).toBe(
+        "```\n~~~\n[x]: y\n```\n",
+      );
+    });
+
+    test("removes a definition with a Windows line ending", () => {
+      expect(normalize("a\r\n[x]: y\r\nb").text).toBe("a\r\nb");
     });
   });
 
@@ -372,18 +467,9 @@ describe("normalizeDesignForImplement", () => {
       expect(normalize(`token ${GITHUB_TOKEN}`).masked).toBe(true);
     });
 
-    test("masks a secret that a comment split in two", () => {
+    test("masks a secret that a zero width space split in two", () => {
       expect(
-        normalize(
-          `${GITHUB_TOKEN.slice(0, 12)}<!-- x -->${GITHUB_TOKEN.slice(12)}`,
-        ).text,
-      ).toBe("***");
-    });
-
-    test("masks a secret that a closing tag split in two", () => {
-      expect(
-        normalize(`${GITHUB_TOKEN.slice(0, 12)}</b>${GITHUB_TOKEN.slice(12)}`)
-          .text,
+        normalize(`${GITHUB_TOKEN.slice(0, 12)}​${GITHUB_TOKEN.slice(12)}`).text,
       ).toBe("***");
     });
 
@@ -430,28 +516,27 @@ describe("normalizeDesignForImplement", () => {
       );
     });
 
-    test("measures the length after the HTML is removed", () => {
+    test("measures the length after the definitions are removed", () => {
       expect(
-        normalize(`a<!--${"x".repeat(MAX)}-->${"a".repeat(MAX - 1)}`).truncated,
+        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX)}`).truncated,
       ).toBe(false);
     });
 
-    test("keeps a design that fits once the HTML is removed without a mark", () => {
+    test("keeps a design that fits once its definitions are removed without a mark", () => {
       expect(
-        normalize(`a<!--${"x".repeat(MAX)}-->${"a".repeat(MAX - 1)}`).text,
+        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX)}`).text,
       ).toBe("a".repeat(MAX));
     });
 
-    test("reports the length after the HTML is removed", () => {
+    test("reports the length after the definitions are removed", () => {
       expect(
-        normalize(`a<!--${"x".repeat(MAX)}-->${"a".repeat(MAX - 1)}`)
-          .original_chars,
+        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX)}`).original_chars,
       ).toBe(MAX);
     });
 
-    test("cuts a design that is one over the limit once the HTML is removed", () => {
+    test("cuts a design that is one over the limit once its definitions are removed", () => {
       expect(
-        normalize(`a<!--${"x".repeat(MAX)}-->${"a".repeat(MAX)}`).truncated,
+        normalize(`[a]: ${"x".repeat(MAX)}\n${"a".repeat(MAX + 1)}`).truncated,
       ).toBe(true);
     });
 

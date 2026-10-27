@@ -1155,6 +1155,12 @@ describe("the approved design in the implementation prompts", () => {
       );
     });
 
+    test("tells the model the HTML in the design is plain text", () => {
+      expect(build(DESIGN)).toContain(
+        "Any HTML in the design is plain text, not markup.",
+      );
+    });
+
     test("puts the design after the requirements and before the issue body", () => {
       const prompt = build(DESIGN);
       const requirements = prompt.indexOf("(approved requirements)");
@@ -1361,6 +1367,16 @@ describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
 
   test("the skill says the diagrams of the design are not provided", async () => {
     expect(await dataBoundary()).toContain("設計書の図は渡されない。");
+  });
+
+  test("the skill says the HTML in the design is passed as plain text", async () => {
+    expect(await dataBoundary()).toContain(
+      "設計書の中のHTMLは、そのまま文字として渡される。",
+    );
+  });
+
+  test("the skill does not say the HTML is removed", async () => {
+    expect(await dataBoundary()).not.toContain("HTMLの要素を除き");
   });
 });
 

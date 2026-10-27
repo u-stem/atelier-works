@@ -562,31 +562,32 @@ describe("designGate", () => {
       expect(h.warnings).toEqual([]);
     });
 
-    test("removes an HTML comment from the design", async () => {
+    test("keeps an HTML comment as text", async () => {
       const result = await designGate(
         INPUT,
-        harness({ draft: withMarkdown("before<!-- hidden order -->after") })
-          .deps,
+        harness({ draft: withMarkdown("before<!-- order -->after") }).deps,
       );
-      expect(result).toEqual({ kind: "pass", markdown: "beforeafter" });
+      expect(result).toEqual({
+        kind: "pass",
+        markdown: "before<!-- order -->after",
+      });
     });
 
-    test("removes an HTML comment that is never closed up to the end", async () => {
-      const result = await designGate(
-        INPUT,
-        harness({ draft: withMarkdown("visible\n<!-- hidden\nstill hidden") })
-          .deps,
-      );
-      expect(result).toEqual({ kind: "pass", markdown: "visible\n" });
-    });
-
-    test("masks a secret that a comment split in two", async () => {
+    test("removes a link reference definition from the design", async () => {
       const result = await designGate(
         INPUT,
         harness({
-          draft: withMarkdown(
-            "ghp_0123456789abcdef<!-- split -->ghijklmnopqrstuvwxyz",
-          ),
+          draft: withMarkdown("before\n[x]: https://example.com\nafter"),
+        }).deps,
+      );
+      expect(result).toEqual({ kind: "pass", markdown: "before\nafter" });
+    });
+
+    test("masks a secret that a zero width space split in two", async () => {
+      const result = await designGate(
+        INPUT,
+        harness({
+          draft: withMarkdown("ghp_0123456789abcdef\u200Bghijklmnopqrstuvwxyz"),
         }).deps,
       );
       expect(result).toEqual({ kind: "pass", markdown: "***" });
@@ -611,34 +612,34 @@ describe("designGate", () => {
       expect(result).toEqual({ kind: "pass", markdown: "a".repeat(8000) });
     });
 
-    test("does not cut a design that fits once its comments are removed", async () => {
+    test("does not cut a design that fits once its definitions are removed", async () => {
       const result = await designGate(
         INPUT,
         harness({
-          draft: withMarkdown(`a<!--${"x".repeat(9000)}-->${"a".repeat(7999)}`),
+          draft: withMarkdown(`[x]: ${"y".repeat(9000)}\n${"a".repeat(8000)}`),
         }).deps,
       );
       expect(result).toEqual({ kind: "pass", markdown: "a".repeat(8000) });
     });
 
     test("warns once when the design changed", async () => {
-      const h = harness({ draft: withMarkdown("a<!-- c -->b") });
+      const h = harness({ draft: withMarkdown("a\n[x]: y\nb") });
       await designGate(INPUT, h.deps);
       expect(h.warnings).toHaveLength(1);
     });
 
     test("warns with the fields that name the design and its sizes, and never the text", async () => {
-      const h = harness({ draft: withMarkdown("a<!-- secret text -->b") });
+      const h = harness({ draft: withMarkdown("a\n[x]: secret text\nb") });
       await designGate(INPUT, h.deps);
       expect(h.warnings[0]?.fields).toEqual({
         work_item_id: 7,
         design_draft_id: 20,
-        original_chars: 2,
-        kept_chars: 2,
+        original_chars: 3,
+        kept_chars: 3,
         truncated: false,
         masked: false,
         dropped_combining: false,
-        stripped_html_count: 1,
+        stripped_reference_count: 1,
       });
     });
 
@@ -657,7 +658,7 @@ describe("designGate", () => {
     });
 
     test("does not warn when the gate stops", async () => {
-      const h = harness({ approval: null, draft: withMarkdown("a<!-- c -->") });
+      const h = harness({ approval: null, draft: withMarkdown("a\n[x]: y") });
       await designGate(INPUT, h.deps);
       expect(h.warnings).toEqual([]);
     });
