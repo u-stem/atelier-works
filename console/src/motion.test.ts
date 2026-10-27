@@ -6,7 +6,6 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   TRANSITION_COLORS,
-  TRANSITION_OPACITY,
   TRANSITION_TRANSFORM,
   TRANSITION_WIDTH,
 } from "./lib/motionClasses.ts";
@@ -67,7 +66,6 @@ describe("motion tokens", () => {
 
   test.each([
     ["colors", TRANSITION_COLORS],
-    ["opacity", TRANSITION_OPACITY],
     ["transform", TRANSITION_TRANSFORM],
     ["width", TRANSITION_WIDTH],
   ])("the %s transition reads the duration and ease tokens", (_name, value) => {

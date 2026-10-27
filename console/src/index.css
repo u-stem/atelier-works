@@ -138,6 +138,15 @@
 
   --shadow-raised:
     0 1px 2px var(--shadow-color), 0 8px 20px -6px var(--shadow-color);
+
+  /*
+   * 動きの長さとイージング。Tailwindは--duration-*から長さのユーティリティを作らないので、
+   * duration-(--duration-fast)の形で読む。--ease-*はease-standardになる。
+   * 動きを減らす設定の利用者への対応は、下の全要素の規則が受けるので、画面側では持たない。
+   */
+  --duration-fast: 150ms;
+  --duration-moderate: 200ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 body {

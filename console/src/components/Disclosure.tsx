@@ -40,7 +40,7 @@ export function Disclosure({
       <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-md py-1 text-body font-medium text-foreground outline-none select-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight
           aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90 motion-reduce:transition-none"
+          className="size-4 shrink-0 text-muted-foreground transition-transform duration-(--duration-fast) ease-standard group-open:rotate-90"
         />
         <span className="min-w-0 flex-1">{summary}</span>
       </summary>

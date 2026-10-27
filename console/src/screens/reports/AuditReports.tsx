@@ -31,7 +31,7 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
     <li>
       <Link
         to={auditReportPath(row.work_item_id)}
-        className="block px-6 py-3.5 outline-none transition-colors duration-150 hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
+        className="block px-6 py-3.5 outline-none transition-colors duration-(--duration-fast) ease-standard hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <span className="flex items-baseline justify-between gap-3">
           <span className="truncate text-body font-medium text-foreground">

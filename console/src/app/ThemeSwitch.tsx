@@ -107,7 +107,7 @@ function browserEnv(): ThemeEnv {
 /** テーマの選択肢のボタンのクラス。選択中は、他の切り替えと同じ表し方にする。 */
 export function themeOptionClass(pressed: boolean): string {
   return cn(
-    "inline-flex size-7 items-center justify-center rounded-md border border-transparent text-subtle outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted motion-reduce:transition-none",
+    "inline-flex size-7 items-center justify-center rounded-md border border-transparent text-subtle outline-none transition-colors duration-(--duration-fast) ease-standard hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted",
     pressed && SELECTED_STYLE,
   );
 }

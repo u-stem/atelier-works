@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { cn } from "../../lib/cn.ts";
 import { attemptRef } from "../../lib/labels.ts";
+import { TRANSITION_COLORS } from "../../lib/motionClasses.ts";
 import {
   attemptChoices,
   requirementsPath,
@@ -33,7 +34,8 @@ export function AttemptSwitcher({
           )}
           aria-current={choice.attempt === current ? "page" : undefined}
           className={cn(
-            "inline-flex h-8 items-center rounded-md border border-border px-3 text-small outline-none transition-colors duration-150 motion-reduce:transition-none",
+            "inline-flex h-8 items-center rounded-md border border-border px-3 text-small outline-none",
+            TRANSITION_COLORS,
             "hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
             "aria-[current=page]:border-primary aria-[current=page]:bg-selected aria-[current=page]:font-medium aria-[current=page]:text-selected-foreground",
           )}

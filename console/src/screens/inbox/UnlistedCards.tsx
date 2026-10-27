@@ -10,7 +10,7 @@ import {
 } from "../../lib/inboxView.ts";
 
 const LINK_HOVER =
-  "outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none";
+  "outline-none transition-colors duration-(--duration-fast) ease-standard hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 
 /** 移動先があるカードは全体を1つのリンクにし、押せると分かる矢印を添える。リンクの名前は、カードに見える文になる。 */
 function CardBody({

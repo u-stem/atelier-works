@@ -22,12 +22,13 @@ import {
   type RowDescription,
   selectionOf,
 } from "../../lib/inboxView.ts";
+import { TRANSITION_TRANSFORM } from "../../lib/motionClasses.ts";
 import { nextNavFocusIndex } from "../../lib/navigation.ts";
 
 const ROW_BUTTON_CLASS = cn(
-  "relative block w-full px-6 py-3.5 text-left outline-none transition-colors duration-150 motion-reduce:transition-none",
+  "relative block w-full px-6 py-3.5 text-left outline-none transition-colors duration-(--duration-fast) ease-standard",
   "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-  "before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-150",
+  "before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-(--duration-fast) before:ease-standard",
   "aria-[current=true]:bg-selected aria-[current=true]:before:opacity-100",
 );
 
@@ -152,7 +153,8 @@ export function GroupHeader({
           <ChevronRight
             aria-hidden="true"
             className={cn(
-              "size-4 shrink-0 self-center text-subtle transition-transform duration-150 motion-reduce:transition-none",
+              "size-4 shrink-0 self-center text-subtle",
+              TRANSITION_TRANSFORM,
               open && "rotate-90",
             )}
           />
