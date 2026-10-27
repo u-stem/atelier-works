@@ -931,6 +931,7 @@ describe("applyApprovedBranch comment failure notice", () => {
 describe("buildApprovedBranchDeps", () => {
   const CONFIG = {
     implement_enabled: true,
+    design_enabled: false,
     windmill_public_url: "http://127.0.0.1:8080",
     instance_name: "local",
   };
@@ -986,8 +987,24 @@ describe("buildApprovedBranchDeps", () => {
     log: NO_LOG,
   };
 
-  test("leaves the design flow unwired in production", () => {
+  test("leaves the design flow unwired when design_enabled is false", () => {
     expect(buildApprovedBranchDeps(CONFIG, CONTEXT).startDesign).toBeNull();
+  });
+
+  test("wires the design flow when design_enabled is true", () => {
+    const deps = buildApprovedBranchDeps(
+      { ...CONFIG, design_enabled: true },
+      CONTEXT,
+    );
+    expect(deps.startDesign).not.toBeNull();
+  });
+
+  test("wires the design flow even when implement is disabled", () => {
+    const deps = buildApprovedBranchDeps(
+      { ...CONFIG, design_enabled: true, implement_enabled: false },
+      CONTEXT,
+    );
+    expect(deps.startDesign).not.toBeNull();
   });
 
   test("leaves the design flow unwired when implement is disabled", () => {
