@@ -130,7 +130,7 @@ describe("the read-only scripts", () => {
   test("import only the port builder from the freeze library", () => {
     expect(
       [...(CLOSURE.imported.get("f/factory/lib/freeze_apply.ts") ?? [])].sort(),
-    ).toEqual(["FREEZE_RECOVERY_HINT", "FreezePorts", "sdkFreezePorts"]);
+    ).toEqual(["FreezePorts", "sdkFreezePorts"]);
   });
 
   test("call database functions that only read", async () => {

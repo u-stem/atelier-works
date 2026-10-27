@@ -7,7 +7,8 @@ import { classifyRunResponse, type RunResult } from "./errors.ts";
 
 /**
  * Consoleが呼んでよいscript。キーが呼び出し側の名前、値がWindmillのパス。
- * 保留を置くscriptは持たない。Consoleは保留と凍結を読み、解除するだけである。
+ * 保留と凍結を置くscriptは、`console_hold_place`の1本だけである。マージの保留、deployの保留、scheduleの凍結を、期限の上限と理由の必須を守って置く。
+ * scheduleを止める`console_schedule_stop`は、凍結を置いた名前で列挙したscheduleを無効にする。有効に戻すscriptは持たない。
  * ジョブ、schedule、設定を読む3本(`console_jobs`、`console_schedules`、`console_config`)は読み取り専用で、
  * 書き込みは持たない。ジョブを中止する`console_job_cancel`は、作業項目のフローの実行中か待ちのジョブを1件止める。
  * `console_job_rerun`は、失敗した定期ジョブを1件、scheduleの引数で再実行する。
@@ -29,6 +30,8 @@ export const SCRIPT_PATHS = {
   console_job_cancel: "f/factory/console_job_cancel",
   console_job_rerun: "f/factory/console_job_rerun",
   console_config_update: "f/factory/console_config_update",
+  console_hold_place: "f/factory/console_hold_place",
+  console_schedule_stop: "f/factory/console_schedule_stop",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;

@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   activeDeployFreezes,
   activeFreezes,
+  activeRowRefs,
   buildExcludes,
   countActiveFreezes,
   DEPLOY_FREEZE_MAX_TTL_MS,
+  DEPLOY_HOLDER_ACTIVE,
   type DeployFreezeEntry,
   emptyFreezeState,
   endedFreezes,
@@ -12,13 +14,23 @@ import {
   FREEZE_ID_IN_USE,
   FREEZE_MAX_ENTRIES,
   FREEZE_MAX_TTL_MS,
+  FREEZE_RECOVERY_HINT,
+  FREEZE_TARGET_ACTIVE,
+  FREEZE_TOO_MANY,
+  FREEZE_VARIABLE_DESCRIPTION,
   type FreezeEntry,
+  type FreezeIo,
+  type FreezeReadIo,
   type FreezeState,
   isActive,
+  lostActiveRows,
+  mutateFreezeStateVia,
   parseFreezeState,
   parseWmillExcludes,
   placeDeployFreeze,
   placeFreeze,
+  readFreezeStateVia,
+  readVariableOrNull,
   releaseFreeze,
   removeFreezes,
   sanitizeForDisplay,
@@ -1065,5 +1077,327 @@ describe("sessionHolderFromBranch", () => {
 
   test("limits the length", () => {
     expect(sessionHolderFromBranch("a".repeat(300)).length).toBe(100);
+  });
+});
+
+describe("readFreezeStateVia and mutateFreezeStateVia", () => {
+  function io(
+    initial: string | null,
+    options: { readError?: Error } = {},
+  ): { io: FreezeIo; writes: string[] } {
+    const writes: string[] = [];
+    return {
+      writes,
+      io: {
+        now: () => NOW,
+        readVariable: async () => {
+          if (options.readError !== undefined) throw options.readError;
+          return initial;
+        },
+        storeVariable: async (text) => {
+          writes.push(text);
+        },
+      },
+    };
+  }
+
+  test("reads a variable that does not exist as an empty state", async () => {
+    const result = await readFreezeStateVia(io(null).io);
+    expect(result).toEqual({ ok: true, value: emptyFreezeState() });
+  });
+
+  test("reads the rows of the variable", async () => {
+    const text = serializeFreezeState({
+      ...emptyFreezeState(),
+      freezes: [entry()],
+    });
+    const result = await readFreezeStateVia(io(text).io);
+    expect(result.ok && result.value.freezes).toEqual([entry()]);
+  });
+
+  test("fails with the way to recover when the variable is corrupt", async () => {
+    const result = await readFreezeStateVia(io("not json").io);
+    expect(!result.ok && result.reason).toContain("freeze:reset");
+  });
+
+  test("fails when a row was created in the future", async () => {
+    const text = serializeFreezeState({
+      ...emptyFreezeState(),
+      freezes: [entry({ created_at: "2026-10-18T01:00:00.000Z" })],
+    });
+    const result = await readFreezeStateVia(io(text).io);
+    expect(result.ok).toBe(false);
+  });
+
+  test("fails with the reason when the variable cannot be read", async () => {
+    const result = await readFreezeStateVia(
+      io(null, { readError: new Error("api down") }).io,
+    );
+    expect(!result.ok && result.reason).toBe(
+      "could not read the freeze variable: api down",
+    );
+  });
+
+  test("writes the state that the operation returns", async () => {
+    const fake = io(null);
+    await mutateFreezeStateVia(fake.io, (state) => ({
+      ok: true,
+      value: { ...state, freezes: [entry()] },
+    }));
+    expect(fake.writes).toEqual([
+      serializeFreezeState({ ...emptyFreezeState(), freezes: [entry()] }),
+    ]);
+  });
+
+  test("hands the state that it read to the operation", async () => {
+    const text = serializeFreezeState({
+      ...emptyFreezeState(),
+      freezes: [entry()],
+    });
+    const seen: FreezeState[] = [];
+    await mutateFreezeStateVia(io(text).io, (state) => {
+      seen.push(state);
+      return { ok: false, reason: "no" };
+    });
+    expect(seen).toEqual([{ ...emptyFreezeState(), freezes: [entry()] }]);
+  });
+
+  test("writes nothing when the operation fails", async () => {
+    const fake = io(null);
+    await mutateFreezeStateVia(fake.io, () => ({ ok: false, reason: "no" }));
+    expect(fake.writes).toEqual([]);
+  });
+
+  test("returns the reason of the operation", async () => {
+    const result = await mutateFreezeStateVia(io(null).io, () => ({
+      ok: false,
+      reason: "no",
+    }));
+    expect(result).toEqual({ ok: false, reason: "no" });
+  });
+
+  test("writes nothing when the variable cannot be read", async () => {
+    const fake = io(null, { readError: new Error("api down") });
+    await mutateFreezeStateVia(fake.io, (state) => ({
+      ok: true,
+      value: state,
+    }));
+    expect(fake.writes).toEqual([]);
+  });
+});
+
+describe("readVariableOrNull", () => {
+  const refused = new Error("not found or no access");
+
+  test("returns the value that it read", async () => {
+    const value = await readVariableOrNull(
+      async () => "text",
+      async () => true,
+    );
+    expect(value).toBe("text");
+  });
+
+  test("does not ask whether the variable exists when it read the value", async () => {
+    let asked = false;
+    await readVariableOrNull(
+      async () => "text",
+      async () => {
+        asked = true;
+        return true;
+      },
+    );
+    expect(asked).toBe(false);
+  });
+
+  test("returns null when the read failed and the variable does not exist", async () => {
+    const value = await readVariableOrNull(
+      async () => {
+        throw refused;
+      },
+      async () => false,
+    );
+    expect(value).toBeNull();
+  });
+
+  test("throws the error of the read when the variable exists", async () => {
+    await expect(
+      readVariableOrNull(
+        async () => {
+          throw refused;
+        },
+        async () => true,
+      ),
+    ).rejects.toBe(refused);
+  });
+
+  test("throws the error of the read when the existence cannot be checked", async () => {
+    await expect(
+      readVariableOrNull(
+        async () => {
+          throw refused;
+        },
+        async () => {
+          throw new Error("api down");
+        },
+      ),
+    ).rejects.toBe(refused);
+  });
+
+  test("throws the error of the read when the answer is not exactly false", async () => {
+    await expect(
+      readVariableOrNull(
+        async () => {
+          throw refused;
+        },
+        async () => undefined,
+      ),
+    ).rejects.toBe(refused);
+  });
+
+  test("reads the missing variable as an empty state through the reader of the state", async () => {
+    const io: FreezeReadIo = {
+      now: () => NOW,
+      readVariable: () =>
+        readVariableOrNull(
+          async () => {
+            throw refused;
+          },
+          async () => false,
+        ),
+    };
+    expect(await readFreezeStateVia(io)).toEqual({
+      ok: true,
+      value: emptyFreezeState(),
+    });
+  });
+});
+
+describe("activeRowRefs and lostActiveRows", () => {
+  const other = entry({ id: "11111111", target: "f/factory/poll_issues" });
+  const placed = entry({ id: "22222222" });
+  const deploy = deployEntry({ id: "33333333" });
+
+  test("lists the active rows of both kinds but the one that is named", () => {
+    const refs = activeRowRefs(
+      stateWith([other, placed], [deploy]),
+      "22222222",
+      NOW,
+    );
+    expect(refs.map((ref) => ref.id)).toEqual(["11111111", "33333333"]);
+  });
+
+  test("leaves out a row that has ended", () => {
+    const ended = entry({
+      id: "44444444",
+      expires_at: new Date(NOW.getTime() - 1000).toISOString(),
+    });
+    expect(activeRowRefs(stateWith([ended], []), "22222222", NOW)).toEqual([]);
+  });
+
+  test("leaves out a row that was released", () => {
+    const released = entry({
+      id: "44444444",
+      released_at: new Date(NOW.getTime() - 1000).toISOString(),
+    });
+    expect(activeRowRefs(stateWith([released], []), "22222222", NOW)).toEqual(
+      [],
+    );
+  });
+
+  test("keeps the end of each row", () => {
+    const refs = activeRowRefs(stateWith([other], []), "22222222", NOW);
+    expect(refs[0]?.expiresAt).toEqual(new Date(other.expires_at));
+  });
+
+  test("finds no lost row when every row is still there", () => {
+    const refs = activeRowRefs(
+      stateWith([other, placed], [deploy]),
+      "22222222",
+      NOW,
+    );
+    expect(
+      lostActiveRows(stateWith([other, placed], [deploy]), refs, NOW),
+    ).toEqual([]);
+  });
+
+  test("finds the row of the schedule freezes that is gone", () => {
+    const refs = activeRowRefs(
+      stateWith([other, placed], [deploy]),
+      "22222222",
+      NOW,
+    );
+    expect(lostActiveRows(stateWith([placed], [deploy]), refs, NOW)).toEqual([
+      "11111111",
+    ]);
+  });
+
+  test("finds the deploy hold that is gone", () => {
+    const refs = activeRowRefs(
+      stateWith([other, placed], [deploy]),
+      "22222222",
+      NOW,
+    );
+    expect(lostActiveRows(stateWith([other, placed], []), refs, NOW)).toEqual([
+      "33333333",
+    ]);
+  });
+
+  test("does not count a row whose end has passed by the time of the read back", () => {
+    const refs = activeRowRefs(stateWith([other], []), "22222222", NOW);
+    const later = new Date(new Date(other.expires_at).getTime() + 1000);
+    expect(lostActiveRows(stateWith([placed], []), refs, later)).toEqual([]);
+  });
+
+  test("counts a row that is gone at the very end of its time", () => {
+    const refs = activeRowRefs(stateWith([other], []), "22222222", NOW);
+    const justBefore = new Date(new Date(other.expires_at).getTime() - 1);
+    expect(lostActiveRows(stateWith([placed], []), refs, justBefore)).toEqual([
+      "11111111",
+    ]);
+  });
+});
+
+describe("the reasons that the placing functions give", () => {
+  test("names the limit of the rows", () => {
+    const rows = Array.from({ length: FREEZE_MAX_ENTRIES }, (_, index) =>
+      entry({
+        id: index.toString(16).padStart(8, "0"),
+        target: `f/factory/x${String(index)}`,
+      }),
+    );
+    const result = placeFreeze(
+      state(...rows),
+      placeInput({ id: "ffffffff" }),
+      KNOWN,
+      NOW,
+    );
+    expect(!result.ok && result.reason).toBe(FREEZE_TOO_MANY);
+  });
+
+  test("names the target that already has a freeze", () => {
+    const result = placeFreeze(
+      state(entry()),
+      placeInput({ id: "ffffffff" }),
+      KNOWN,
+      NOW,
+    );
+    expect(!result.ok && result.reason).toBe(FREEZE_TARGET_ACTIVE);
+  });
+
+  test("names the holder that already has a deploy hold", () => {
+    const result = placeDeployFreeze(
+      stateWith([], [deployEntry()]),
+      deployInput({ id: "ffffffff" }),
+      NOW,
+    );
+    expect(!result.ok && result.reason).toBe(DEPLOY_HOLDER_ACTIVE);
+  });
+
+  test("shares the way to recover with the reader of the state", () => {
+    expect(FREEZE_RECOVERY_HINT).toContain("freeze:reset");
+  });
+
+  test("describes the variable that the writers create", () => {
+    expect(FREEZE_VARIABLE_DESCRIPTION).toContain("freeze:place");
   });
 });

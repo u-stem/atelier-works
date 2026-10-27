@@ -31,10 +31,13 @@ import {
   sdkFreezePorts,
 } from "./lib/freeze_apply.ts";
 import {
+  type ActiveRowRef,
+  activeRowRefs,
   type DeployFreezeEntry,
   type FreezeEntry,
   type FreezeState,
   isActive,
+  lostActiveRows,
   type Outcome,
   releaseFreeze,
 } from "./lib/freezes.ts";
@@ -71,7 +74,7 @@ export type FreezeReleaseDeps = {
 type Seen = {
   readonly scope: "schedule" | "deploy";
   readonly target: string | null;
-  readonly others: readonly { readonly id: string; readonly expiresAt: Date }[];
+  readonly others: readonly ActiveRowRef[];
 };
 
 function rowOf(
@@ -87,21 +90,6 @@ function rowOf(
   return deploy === undefined ? null : { row: deploy, scope: "deploy" };
 }
 
-function allRows(state: FreezeState): (FreezeEntry | DeployFreezeEntry)[] {
-  return [...state.freezes, ...state.deploy_freezes];
-}
-
-/** 書いた時点で有効だった、解除する行以外の行。 */
-function activeOthers(
-  state: FreezeState,
-  id: string,
-  now: Date,
-): Seen["others"] {
-  return allRows(state)
-    .filter((entry) => entry.id !== id && isActive(entry, now))
-    .map((entry) => ({ id: entry.id, expiresAt: new Date(entry.expires_at) }));
-}
-
 /**
  * 書いた後の状態に、解除が残り、書いた時点で有効だった行が欠けていないか。
  * 読み直しの時点で期限が過ぎた行は、片付けられていてよい。
@@ -114,10 +102,7 @@ function confirmed(
 ): boolean {
   const found = rowOf(after, id);
   if (found === null || found.row.released_at === null) return false;
-  const ids = new Set(allRows(after).map((entry) => entry.id));
-  return seen.others.every(
-    (other) => ids.has(other.id) || other.expiresAt.getTime() <= now.getTime(),
-  );
+  return lostActiveRows(after, seen.others, now).length === 0;
 }
 
 /**
@@ -156,7 +141,7 @@ export async function releaseFreezeFromConsole(
       observed.seen = {
         scope: found.scope,
         target: "target" in found.row ? found.row.target : null,
-        others: activeOthers(state, freezeId, now),
+        others: activeRowRefs(state, freezeId, now),
       };
       return releaseFreeze(state, freezeId, HUMAN_RELEASER, now);
     });
