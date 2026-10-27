@@ -118,4 +118,29 @@ describe("JobsScreen rendered from the cache", () => {
     const active: JobListView = { ...list("active", "x"), jobs: scheduled };
     expect(render("", active)).toMatch(/実行中と待ち<span[^>]*>0</);
   });
+
+  test.each([
+    ["the active tab", ""],
+    ["the history tab", "?tab=history"],
+  ])("adds no note about the jobs left out on %s", (_name, search) => {
+    expect(render(search)).not.toMatch(/含みません/);
+  });
+
+  test("marks the count as a lower bound when the queue was cut", () => {
+    const running: JobSummaryView = { ...job("run_now", 99), state: "running" };
+    const scheduled: JobSummaryView = {
+      ...job("future_only_job", 1),
+      state: "scheduled",
+      completed_at: null,
+      scheduled_for: "2099-01-01T00:00:00.000000Z",
+    };
+    const active: JobListView = {
+      ...list("active", "x"),
+      jobs: [running, scheduled],
+      truncated: true,
+    };
+    expect(render("", active)).toMatch(
+      /実行中と待ち<span[^>]*>1<span aria-hidden="true">\+</,
+    );
+  });
 });

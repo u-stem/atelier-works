@@ -24,6 +24,11 @@ function render(element: ReactElement): string {
   );
 }
 
+/** タグを除いた、画面に見える文字。 */
+function textOf(html: string): string {
+  return html.replace(/<[^>]*>/g, "");
+}
+
 function job(overrides: Partial<JobSummaryView> = {}): JobSummaryView {
   return {
     id: ID,
@@ -289,9 +294,9 @@ describe("ActiveJobs", () => {
     );
   });
 
-  test("tells that the Console's own calls are left out", () => {
-    expect(render(<ActiveJobs query={freshQuery(list([]))} />)).toContain(
-      "Consoleの呼び出し(tag console)は含みません",
+  test("draws nothing but the empty note when no job is running", () => {
+    expect(textOf(render(<ActiveJobs query={freshQuery(list([]))} />))).toBe(
+      "いま実行中・待ちのジョブはありません。",
     );
   });
 });
@@ -319,7 +324,7 @@ describe("ActiveJobs with scheduled jobs", () => {
     ).toContain("いま実行中・待ちのジョブはありません");
   });
 
-  test("draws no row for a scheduled job by default", () => {
+  test("draws no row for a scheduled job", () => {
     expect(
       render(<ActiveJobs query={freshQuery(list(scheduledQueue()))} />),
     ).not.toContain("future_only_job");
@@ -352,10 +357,20 @@ describe("ActiveJobs with scheduled jobs", () => {
     ).not.toContain("いま実行中・待ちのジョブはありません");
   });
 
-  test("points to the schedules tab for the upcoming runs", () => {
+  test("says only what it could read when the cut page has scheduled jobs alone", () => {
     expect(
-      render(<ActiveJobs query={freshQuery(list(scheduledQueue()))} />),
-    ).toContain('href="/jobs?tab=schedules"');
+      render(
+        <ActiveJobs
+          query={freshQuery(list(scheduledQueue(), { truncated: true }))}
+        />,
+      ),
+    ).toContain("読めた範囲では、実行中・待ちのジョブはありません。");
+  });
+
+  test("does not claim that nothing runs when the cut page is empty", () => {
+    expect(
+      render(<ActiveJobs query={freshQuery(list([], { truncated: true }))} />),
+    ).not.toContain("いま実行中・待ちのジョブはありません");
   });
 });
 
