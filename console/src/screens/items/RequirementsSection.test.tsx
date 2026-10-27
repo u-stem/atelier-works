@@ -52,7 +52,7 @@ describe("RequirementsSection while loading", () => {
           index={loadingQuery<readonly RequirementsIndexRow[]>()}
         />,
       ),
-    ).toContain("h-[4.75rem]");
+    ).toContain("sm:h-[5.05rem]");
   });
 });
 

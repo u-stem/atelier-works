@@ -6,9 +6,12 @@ import { useNow } from "../../app/useNow.ts";
 import {
   LoadingGate,
   type LoadingShape,
+  rowIndexes,
+  SkeletonListCard,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
+import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   type PipelineScope,
   pipelineReachedLimit,
@@ -18,13 +21,41 @@ import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
 
 /**
- * 読み込み中の形。表の1行は約3rem(上下の余白と、題の1〜2行)で、1ページは25行になる。
- * 画面の高さに入る行の数で目安にする。値は見積もりで、実機で測り直して合わせる。
+ * 読み込み中の形。実物の絞り込みの帯、件数の行、表(狭い幅ではカード)の順に並べる。
+ * 寸法は、実機で実物を描いて測った値である。
+ * - 絞り込みの帯: 広い幅で61px、狭い幅で186px(縦に積む)。
+ * - 件数の行: 21px。
+ * - 表の見出し: 37px。表の1行: 42〜67px(題が2行のとき、PRのリンクがあるとき)で、平均54px。
+ * - 狭い幅のカード: 187〜235px。平均200px。
+ * 行の数は、画面の高さに入る目安で、実物の1ページ(25行)より少ない。
+ * 表とカードの切り替えは、実物と同じ`@4xl`の幅(コンテナ)で行う。
  */
-const LOADING_SHAPE: LoadingShape = {
-  rows: 8,
-  rowClassName: "h-12 w-full rounded-md",
-  gapClassName: "gap-2",
+export const PIPELINE_LOADING_SHAPE: LoadingShape = {
+  className: "flex flex-col gap-3",
+  node: (
+    <>
+      <Skeleton className="h-[11.6rem] lg:h-[3.8rem] w-full rounded-lg" />
+      <Skeleton className="h-5 w-24" />
+      <div className="@container">
+        <SkeletonListCard
+          rows={3}
+          rowClassName="h-[12.5rem]"
+          className="@4xl:hidden"
+        />
+        <div className="hidden overflow-hidden rounded-xl border border-border bg-card @4xl:block">
+          <Skeleton className="h-[2.3rem] w-full rounded-none" />
+          {rowIndexes(8).map((row) => (
+            <div
+              key={row}
+              className="flex h-[3.375rem] items-center border-t border-border px-3"
+            >
+              <Skeleton className="h-4 w-full" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  ),
 };
 
 /**
@@ -84,7 +115,7 @@ export function PipelineSection({
               PIPELINE_DAYS,
             )}
       </p>
-      <LoadingGate phase={loadPhaseOf(pipeline)} shape={LOADING_SHAPE}>
+      <LoadingGate phase={loadPhaseOf(pipeline)} shape={PIPELINE_LOADING_SHAPE}>
         {pipeline.data === undefined ? (
           <FailureState
             error={pipeline.error}

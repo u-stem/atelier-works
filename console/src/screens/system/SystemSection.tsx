@@ -1,8 +1,14 @@
 import type { ReactNode } from "react";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
-import { LoadingGate, type RowsShape } from "../../components/LoadingState.tsx";
+import {
+  LoadingGate,
+  type LoadingShape,
+  type RowsShape,
+  SkeletonListCard,
+} from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
+import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
 /** 内容が未知の節の読み込み中の形。 */
@@ -16,9 +22,17 @@ const DEFAULT_SKELETON: RowsShape = {
  * 高さは、内容が出たときに下の節が動かないよう、実機で測った本文の高さ(説明の下から節の終わりまで)にそろえる。
  * 一覧は件数で変わるので、よくある件数の高さにそろえる。測った内容は、各行のコメントに書く。
  */
-export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
-  // 有効な保留がなければ1行にたたまれる(63px)。
-  "holds-heading": { rows: 1, rowClassName: "h-16 w-full rounded-xl" },
+export const SYSTEM_SKELETONS: Readonly<Record<string, LoadingShape>> = {
+  // 「保留や凍結を置く」のボタン(32px)と、有効な保留がなければ1行にたたまれる枠(63px)。間は12px(107px)。
+  "holds-heading": {
+    className: "flex flex-col gap-3",
+    node: (
+      <>
+        <Skeleton className="h-8 w-44 rounded-md" />
+        <Skeleton className="h-16 w-full rounded-xl" />
+      </>
+    ),
+  },
   // 3行の表(145px)。
   "release-heading": { rows: 1, rowClassName: "h-36 w-full rounded-xl" },
   // 結論の1行の枠と、「内訳を表示」の1行(98px)。
@@ -51,11 +65,15 @@ export const SYSTEM_SKELETONS: Readonly<Record<string, RowsShape>> = {
     rows: 1,
     rowClassName: "h-9 w-full rounded-xl",
   },
-  // 検索欄と、項目の行(見積もり。実機で測り直す)。
+  // 説明の下の絞り込み(ラベルと入力欄で53px)と、項目の行(1行42px。実機で12項目を描いて測った)。
   "config-heading": {
-    rows: 6,
-    rowClassName: "h-12 w-full rounded-md",
-    gapClassName: "gap-2",
+    className: "flex flex-col gap-3",
+    node: (
+      <>
+        <Skeleton className="h-[3.3rem] w-96 max-w-full rounded-lg" />
+        <SkeletonListCard rows={8} rowClassName="h-[2.6rem]" />
+      </>
+    ),
   },
 };
 

@@ -10,13 +10,45 @@ import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
-/** 読み込み中の形。 */
-const LOADING_SHAPE: LoadingShape = {
-  className: "flex flex-col gap-3",
+/** 棒グラフ1つ(題と描画の領域)の骨組み。実機で測った実物は222px。 */
+function ChartBlock() {
+  return <Skeleton className="h-[13.86rem] w-full rounded-xl" />;
+}
+
+/**
+ * 区画ごとの読み込み中の形。実物は区画の中の塊を24pxあけて並べ、塊の数と高さが区画で違う。
+ * 寸法は、実機で実物を描いて測った値で、表の高さは行の数で変わる(表は最大256pxで切れる)。
+ * - Claudeの実行: 棒グラフ2つ(各222px)と表(256px)で748px。
+ * - 承認: 集計(92px)と表(297px)で413px。
+ * - リードタイム: 棒グラフ1つ(222px)と表(68px)で313px。
+ */
+export const ANALYTICS_COST_LOADING_SHAPE: LoadingShape = {
+  className: "flex flex-col gap-6",
   node: (
     <>
-      <Skeleton className="h-40 w-full rounded-xl" />
-      <Skeleton className="h-24 w-full rounded-xl" />
+      <ChartBlock />
+      <ChartBlock />
+      <Skeleton className="h-64 w-full max-w-3xl rounded-xl" />
+    </>
+  ),
+};
+
+export const ANALYTICS_APPROVALS_LOADING_SHAPE: LoadingShape = {
+  className: "flex flex-col gap-6",
+  node: (
+    <>
+      <Skeleton className="h-[5.74rem] w-full max-w-3xl rounded-xl" />
+      <Skeleton className="h-[18.6rem] w-full max-w-3xl rounded-xl" />
+    </>
+  ),
+};
+
+export const ANALYTICS_LEAD_TIME_LOADING_SHAPE: LoadingShape = {
+  className: "flex flex-col gap-6",
+  node: (
+    <>
+      <ChartBlock />
+      <Skeleton className="h-[4.2rem] w-full max-w-3xl rounded-xl" />
     </>
   ),
 };
@@ -63,6 +95,7 @@ export function AnalyticsSection<T>({
   failureTitle,
   emptyMessage,
   query,
+  loadingShape,
   children,
 }: {
   id: string;
@@ -70,6 +103,8 @@ export function AnalyticsSection<T>({
   failureTitle: string;
   emptyMessage: string;
   query: SectionQuery<T[]>;
+  /** 取得を待つ間の形。区画の実物の塊に合わせて渡す。 */
+  loadingShape: LoadingShape;
   children: (rows: T[]) => ReactNode;
 }) {
   const rows = query.data;
@@ -78,7 +113,7 @@ export function AnalyticsSection<T>({
       <h3 id={id} className="mb-4 text-lead font-semibold">
         {title}
       </h3>
-      <LoadingGate phase={loadPhaseOf(query)} shape={LOADING_SHAPE}>
+      <LoadingGate phase={loadPhaseOf(query)} shape={loadingShape}>
         {rows === undefined ? (
           <FailureState
             title={failureTitle}

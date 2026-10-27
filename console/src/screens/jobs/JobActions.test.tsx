@@ -90,6 +90,16 @@ describe("JobActions", () => {
 });
 
 describe("CancelDialog", () => {
+  test("shows the job id in mono", () => {
+    expect(renderDialog(job())).toMatch(
+      new RegExp(`font-mono[^>]*>${ID}</dd>`),
+    );
+  });
+
+  test("shows the flow name in mono", () => {
+    expect(renderDialog(job())).toMatch(/font-mono[^>]*>implement<\/dd>/);
+  });
+
   test("asks whether to stop the job", () => {
     expect(renderDialog(job())).toContain("このジョブを中止しますか");
   });
@@ -270,6 +280,12 @@ describe("JobActions for a failed scheduled run", () => {
 });
 
 describe("RerunDialog", () => {
+  test("shows the failed job id in mono", () => {
+    expect(renderRerunDialog(failedRun())).toMatch(
+      new RegExp(`font-mono[^>]*>${ID}</dd>`),
+    );
+  });
+
   test("asks whether to run the job again", () => {
     expect(renderRerunDialog(failedRun())).toContain(
       "この定期ジョブを再実行しますか",

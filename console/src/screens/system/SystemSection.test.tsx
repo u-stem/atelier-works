@@ -118,15 +118,19 @@ describe("SYSTEM_SKELETONS", () => {
     expect(SYSTEM_SKELETONS[id]).toBeDefined();
   });
 
+  /** 同じ高さの行を並べる形の、行のclass。 */
+  function rowClassOf(id: string): string {
+    const shape = SYSTEM_SKELETONS[id];
+    return shape !== undefined && "rowClassName" in shape
+      ? shape.rowClassName
+      : "";
+  }
+
   test("sizes the worker load card to its headline and the fold", () => {
-    expect(SYSTEM_SKELETONS["worker-load-heading"]?.rowClassName).toContain(
-      "h-[6.125rem]",
-    );
+    expect(rowClassOf("worker-load-heading")).toContain("h-[6.125rem]");
   });
 
   test("sizes the update history to its three entries and the button", () => {
-    expect(SYSTEM_SKELETONS["update-history-heading"]?.rowClassName).toContain(
-      "h-[33rem]",
-    );
+    expect(rowClassOf("update-history-heading")).toContain("h-[33rem]");
   });
 });

@@ -20,6 +20,10 @@ describe("docs: the visual rules", () => {
     ["states the typeface", "書体"],
     ["states the brand color", "ブランドの色"],
     ["states how enter and exit motion is limited", "出入りと画面遷移"],
+    ["states the radius and shadow steps", "角丸と影"],
+    ["states where the monospace face is used", "等幅"],
+    ["states the favicon", "ファビコン"],
+    ["states why the diagrams stay on white paper", "図の色"],
   ])("%s", (_name, heading) => {
     expect(HEADINGS).toContain(`### ${heading}`);
   });
@@ -46,6 +50,21 @@ describe("docs: the visual rules", () => {
     ],
     ["the dialog padding is stated", "p-6"],
     ["the sidebar icon button constant is named", "SIDEBAR_ICON_BUTTON_CLASS"],
+    ["the input border floor is stated", "3.5:1"],
+    ["the dialog fade is stated", "@starting-style"],
+    ["the fade is limited to opening", "閉じるときは即時"],
+    ["the radius values are stated as the Tailwind defaults", "値は既定"],
+    ["the edge color is named", "--edge"],
+    [
+      "the bar chart limit for a changed base font size is stated",
+      "基準の文字サイズ",
+    ],
+    ["the icon before the script runs is stated", "/favicon.ico"],
+    ["the rule for nested routes is stated", "入れ子の経路"],
+    ["the measured screens are listed", "実物と並べて測った画面"],
+    ["the way to measure a skeleton is stated", "getBoundingClientRect"],
+    ["the skeleton of the header with a subtitle is stated", "subtitlePending"],
+    ["the mark of the row under the title is named", "`trail`"],
   ])("%s", (_name, text) => {
     expect(DOC).toContain(text);
   });

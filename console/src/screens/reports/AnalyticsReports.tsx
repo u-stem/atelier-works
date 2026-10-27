@@ -29,7 +29,12 @@ import {
   rejectionsByAttempt,
 } from "../../lib/analytics.ts";
 import { attemptRef, workItemStatusLabel } from "../../lib/labels.ts";
-import { AnalyticsSection } from "./AnalyticsSection.tsx";
+import {
+  ANALYTICS_APPROVALS_LOADING_SHAPE,
+  ANALYTICS_COST_LOADING_SHAPE,
+  ANALYTICS_LEAD_TIME_LOADING_SHAPE,
+  AnalyticsSection,
+} from "./AnalyticsSection.tsx";
 
 function formatCount(value: number): string {
   return value.toLocaleString("ja-JP");
@@ -237,6 +242,7 @@ export function AnalyticsReports({
         failureTitle="実行のコスト"
         emptyMessage="この期間に記録された実行はありません。"
         query={cost}
+        loadingShape={ANALYTICS_COST_LOADING_SHAPE}
       >
         {(rows) => <CostReport rows={rows} days={days} />}
       </AnalyticsSection>
@@ -246,6 +252,7 @@ export function AnalyticsReports({
         failureTitle="承認の統計"
         emptyMessage="この期間に承認の判断はありません。"
         query={approvals}
+        loadingShape={ANALYTICS_APPROVALS_LOADING_SHAPE}
       >
         {(rows) => <ApprovalReport rows={rows} />}
       </AnalyticsSection>
@@ -255,6 +262,7 @@ export function AnalyticsReports({
         failureTitle="リードタイム"
         emptyMessage="この期間に終端になった作業項目はありません。"
         query={leadTime}
+        loadingShape={ANALYTICS_LEAD_TIME_LOADING_SHAPE}
       >
         {(rows) => <LeadTimeReport rows={rows} />}
       </AnalyticsSection>

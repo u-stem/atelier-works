@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useRequirementsDoc, useRequirementsIndex } from "../../api/queries.ts";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
-import { PageHeader } from "../../app/PageHeader.tsx";
+import { PageHeader, subtitlePendingOf } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
@@ -14,6 +14,10 @@ import {
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { itemRequirementsCrumbs } from "../../lib/breadcrumbs.ts";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
+import {
+  REQUIREMENTS_FRAME_CLASS,
+  REQUIREMENTS_SCROLL_CLASS,
+} from "../../lib/layoutClasses.ts";
 import {
   confirmedLatestAttempt,
   parseAttemptParam,
@@ -35,15 +39,30 @@ function Message({ children }: { children: string }) {
   );
 }
 
-/** 読み込み中の形。 */
-const LOADING_SHAPE: LoadingShape = {
-  className: "mx-auto w-full max-w-[75rem] space-y-4 px-8 py-6",
+/**
+ * 読み込み中の形。実物と同じ枠(本文と、右の目次の2列)に、状態の行、要約、本文の塊を置く。
+ * 寸法は、実機で実物を描いて測った値で、状態の行(2行に折り返す)は63px。目次は1100px以上の幅で出る。
+ * 本文の長さは書類で変わるので、画面の下端を満たす目安にする。
+ */
+export const REQUIREMENTS_DOC_LOADING_SHAPE: LoadingShape = {
+  className: REQUIREMENTS_SCROLL_CLASS,
   node: (
-    <>
-      <Skeleton className="h-8 w-full max-w-[47.5rem] rounded-md" />
-      <Skeleton className="h-5 w-2/3 max-w-[47.5rem]" />
-      <Skeleton className="h-32 w-full max-w-[47.5rem]" />
-    </>
+    <div className={REQUIREMENTS_FRAME_CLASS}>
+      <div className="flex min-w-0 max-w-[47.5rem] flex-1 flex-col gap-6">
+        <Skeleton className="h-[3.9rem] w-full rounded-md" />
+        <Skeleton className="h-7 w-3/4" />
+        <Skeleton className="h-40 w-full rounded-xl" />
+        <Skeleton className="h-40 w-full rounded-xl" />
+      </div>
+      <div className="hidden w-56 shrink-0 min-[1100px]:block">
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-12" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="h-4 w-36" />
+        </div>
+      </div>
+    </div>
   ),
 };
 
@@ -72,11 +91,19 @@ function ItemRequirements({
   if (doc === undefined || loadingDisplay !== "content") {
     return (
       <>
-        <PageHeader title={requested} refresh={refresh}>
+        {/* 副題は取得後に出る。待つ間も副題の行を空け、取得後の見出しと同じ高さにして、下の本文が動かないようにする。 */}
+        <PageHeader
+          title={requested}
+          subtitlePending={subtitlePendingOf(loadingDisplay)}
+          refresh={refresh}
+        >
           <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
-          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+          <LoadingBody
+            display={loadingDisplay}
+            shape={REQUIREMENTS_DOC_LOADING_SHAPE}
+          />
         ) : (
           <QueryFailure
             title="要件定義書を取得できませんでした"
@@ -113,7 +140,7 @@ function ItemRequirements({
       >
         <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
       </PageHeader>
-      <div {...SCROLL_ROOT_PROPS} className="min-h-0 flex-1 overflow-y-auto">
+      <div {...SCROLL_ROOT_PROPS} className={REQUIREMENTS_SCROLL_CLASS}>
         <RequirementsDocumentView
           doc={doc}
           prepared={prepared}
