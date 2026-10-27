@@ -12,11 +12,12 @@ import {
   flowOverlayOf,
   flowPathOfNode,
   nodeLinkTarget,
-  scheduleRunsOf,
+  scheduleEntriesOf,
 } from "./flowOverlay.ts";
 
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const OLDER = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
+const NOW = Date.parse("2026-10-27T03:00:00Z");
 
 function job(overrides: Partial<JobSummaryView> = {}): JobSummaryView {
   return {
@@ -138,7 +139,7 @@ describe("flowOverlay", () => {
   });
 
   test("shows the last run of a schedule entry", () => {
-    const runs = scheduleRunsOf(
+    const entries = scheduleEntriesOf(
       snapshot([
         schedule({
           path: "f/factory/poll_issues",
@@ -148,27 +149,76 @@ describe("flowOverlay", () => {
           ],
         }),
       ]),
+      NOW,
     );
-    expect(runs.get("schedule:poll_issues")).toEqual({ success: false });
+    expect(entries.get("schedule:poll_issues")?.lastRun).toEqual({
+      success: false,
+    });
   });
 
-  test("shows nothing for a schedule that has not run", () => {
-    const runs = scheduleRunsOf(
+  test("has no last run for a schedule that has not run", () => {
+    const entries = scheduleEntriesOf(
       snapshot([schedule({ path: "f/factory/poll_issues", recent_runs: [] })]),
+      NOW,
     );
-    expect(runs.has("schedule:poll_issues")).toBe(false);
+    expect(entries.get("schedule:poll_issues")?.lastRun).toBeNull();
   });
 
   test("ignores a schedule outside the factory folder", () => {
-    const runs = scheduleRunsOf(
+    const entries = scheduleEntriesOf(
       snapshot([
         schedule({
           path: "f/other/poll_issues",
           recent_runs: [{ job_id: ID, success: true, duration_ms: 1 }],
         }),
       ]),
+      NOW,
     );
-    expect(runs.size).toBe(0);
+    expect(entries.size).toBe(0);
+  });
+
+  test("carries the next run of a schedule", () => {
+    const entries = scheduleEntriesOf(
+      snapshot([schedule({ next_run_at: "2026-10-27T03:05:00Z" })]),
+      NOW,
+    );
+    expect(entries.get("schedule:poll_issues")?.nextRunAt).toBe(
+      "2026-10-27T03:05:00Z",
+    );
+  });
+
+  test("marks a disabled schedule as stopped even when its last run succeeded", () => {
+    const entries = scheduleEntriesOf(
+      snapshot([
+        schedule({
+          enabled: false,
+          recent_runs: [{ job_id: ID, success: true, duration_ms: 1 }],
+        }),
+      ]),
+      NOW,
+    );
+    expect(entries.get("schedule:poll_issues")?.stopped).toBe(true);
+  });
+
+  test("marks a schedule paused until a future time as stopped", () => {
+    const entries = scheduleEntriesOf(
+      snapshot([schedule({ paused_until: "2026-10-27T04:00:00Z" })]),
+      NOW,
+    );
+    expect(entries.get("schedule:poll_issues")?.stopped).toBe(true);
+  });
+
+  test("does not mark a schedule whose pause has ended as stopped", () => {
+    const entries = scheduleEntriesOf(
+      snapshot([schedule({ paused_until: "2026-10-27T02:00:00Z" })]),
+      NOW,
+    );
+    expect(entries.get("schedule:poll_issues")?.stopped).toBe(false);
+  });
+
+  test("does not mark an enabled schedule as stopped", () => {
+    const entries = scheduleEntriesOf(snapshot([schedule({})]), NOW);
+    expect(entries.get("schedule:poll_issues")?.stopped).toBe(false);
   });
 });
 
@@ -250,68 +300,116 @@ describe("flowGraphStateOf", () => {
   const read = <T>(data: T | undefined, isError = false) => ({ data, isError });
 
   test("reads nothing before the section asks for the data", () => {
-    expect(flowGraphStateOf(undefined)).toEqual({
+    expect(flowGraphStateOf(undefined, NOW)).toEqual({
       overlay: null,
-      scheduleRuns: null,
+      scheduleEntries: null,
       activeFailed: false,
       schedulesFailed: false,
+      activePending: false,
+      schedulesTruncated: false,
     });
   });
 
   test("marks the active jobs it has read", () => {
-    const state = flowGraphStateOf({
-      active: read(list([job()])),
-      schedules: read(undefined),
-    });
+    const state = flowGraphStateOf(
+      { active: read(list([job()])), schedules: read(undefined) },
+      NOW,
+    );
     expect(state.overlay?.activity.has("flow:pipeline")).toBe(true);
   });
 
   test("drops the overlay and flags the failure when the active read fails", () => {
-    const state = flowGraphStateOf({
-      active: read(undefined, true),
-      schedules: read(undefined),
-    });
+    const state = flowGraphStateOf(
+      { active: read(undefined, true), schedules: read(undefined) },
+      NOW,
+    );
     expect([state.overlay, state.activeFailed]).toEqual([null, true]);
   });
 
   test("drops the overlay even when an earlier value is kept", () => {
-    const state = flowGraphStateOf({
-      active: read(list([job()]), true),
-      schedules: read(undefined),
-    });
+    const state = flowGraphStateOf(
+      { active: read(list([job()]), true), schedules: read(undefined) },
+      NOW,
+    );
     expect(state.overlay).toBeNull();
   });
 
   test("is not a failure while the active jobs are still loading", () => {
-    const state = flowGraphStateOf({
-      active: read(undefined),
-      schedules: read(undefined),
-    });
+    const state = flowGraphStateOf(
+      { active: read(undefined), schedules: read(undefined) },
+      NOW,
+    );
     expect(state.activeFailed).toBe(false);
   });
 
+  test("says the active jobs are pending while nothing has arrived", () => {
+    const state = flowGraphStateOf(
+      { active: read(undefined), schedules: read(undefined) },
+      NOW,
+    );
+    expect(state.activePending).toBe(true);
+  });
+
+  test("is not pending once the active jobs have arrived", () => {
+    const state = flowGraphStateOf(
+      { active: read(list([])), schedules: read(undefined) },
+      NOW,
+    );
+    expect(state.activePending).toBe(false);
+  });
+
+  test("is not pending after the active read failed", () => {
+    const state = flowGraphStateOf(
+      { active: read(undefined, true), schedules: read(undefined) },
+      NOW,
+    );
+    expect(state.activePending).toBe(false);
+  });
+
   test("flags a failed schedule read apart from the active read", () => {
-    const state = flowGraphStateOf({
-      active: read(list([job()])),
-      schedules: read(undefined, true),
-    });
+    const state = flowGraphStateOf(
+      { active: read(list([job()])), schedules: read(undefined, true) },
+      NOW,
+    );
     expect([state.activeFailed, state.schedulesFailed]).toEqual([false, true]);
   });
 
-  test("keeps the last runs of the schedules it has read", () => {
-    const state = flowGraphStateOf({
-      active: read(undefined),
-      schedules: read(
-        snapshot([
-          schedule({
-            path: "f/factory/poll_prs",
-            recent_runs: [{ job_id: ID, success: true, duration_ms: 1 }],
-          }),
-        ]),
-      ),
-    });
-    expect(state.scheduleRuns?.get("schedule:poll_prs")).toEqual({
+  test("keeps the entries of the schedules it has read", () => {
+    const state = flowGraphStateOf(
+      {
+        active: read(undefined),
+        schedules: read(
+          snapshot([
+            schedule({
+              path: "f/factory/poll_prs",
+              recent_runs: [{ job_id: ID, success: true, duration_ms: 1 }],
+            }),
+          ]),
+        ),
+      },
+      NOW,
+    );
+    expect(state.scheduleEntries?.get("schedule:poll_prs")?.lastRun).toEqual({
       success: true,
     });
+  });
+
+  test("flags a schedule snapshot that was cut", () => {
+    const state = flowGraphStateOf(
+      {
+        active: read(undefined),
+        schedules: read({ ...snapshot([]), truncated: true }),
+      },
+      NOW,
+    );
+    expect(state.schedulesTruncated).toBe(true);
+  });
+
+  test("does not flag a schedule snapshot that was read to the end", () => {
+    const state = flowGraphStateOf(
+      { active: read(undefined), schedules: read(snapshot([])) },
+      NOW,
+    );
+    expect(state.schedulesTruncated).toBe(false);
   });
 });

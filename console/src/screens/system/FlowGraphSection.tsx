@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNow } from "../../app/useNow.ts";
 import { Disclosure } from "../../components/Disclosure.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import type { FlowGraph } from "../../lib/flowGraph.ts";
@@ -86,11 +87,14 @@ export function FlowGraphBody({
  * 図は重く、普段は読まないので、たたんで置く。開いたときに初めて描画し、一度描いた後は閉じても残す。
  * 図の幅は広いので、ほかの節より広く取る。
  */
-export function FlowGraphSection({
+export function FlowGraphSectionView({
   graph,
   initiallyOpen,
   reads,
   onOpen,
+  width,
+  widthRef,
+  nowMs,
 }: {
   graph: FlowGraph | null;
   initiallyOpen?: boolean | undefined;
@@ -98,12 +102,19 @@ export function FlowGraphSection({
   reads?: FlowGraphReads | undefined;
   /** 「図を表示」を開いたときに呼ぶ。取得を始める合図に使う。 */
   onOpen?: (() => void) | undefined;
+  /** 節の実際の幅(px)。 */
+  width: number;
+  /** 節の幅を測る要素の`ref`。 */
+  widthRef?:
+    | ((element: HTMLElement | null) => (() => void) | undefined)
+    | undefined;
+  nowMs: number;
 }) {
   const [opened, setOpened] = useState(initiallyOpen === true);
-  const { ref, width } = useElementWidth();
-  const state = flowGraphStateOf(reads);
+  const state = flowGraphStateOf(reads, nowMs);
   return (
     <section
+      ref={widthRef}
       aria-labelledby="flow-graph-heading"
       className="flex max-w-6xl flex-col gap-3"
     >
@@ -140,12 +151,29 @@ export function FlowGraphSection({
           }}
         >
           {opened ? (
-            <div ref={ref}>
-              <FlowGraphBody graph={graph} state={state} width={width} />
-            </div>
+            <FlowGraphBody graph={graph} state={state} width={width} />
           ) : null}
         </Disclosure>
       )}
     </section>
+  );
+}
+
+/** 起動の関係の節。幅と現在時刻を測って、表示の部分に渡す。 */
+export function FlowGraphSection(props: {
+  graph: FlowGraph | null;
+  initiallyOpen?: boolean | undefined;
+  reads?: FlowGraphReads | undefined;
+  onOpen?: (() => void) | undefined;
+}) {
+  const { ref, width } = useElementWidth();
+  const nowMs = useNow();
+  return (
+    <FlowGraphSectionView
+      {...props}
+      width={width}
+      widthRef={ref}
+      nowMs={nowMs}
+    />
   );
 }

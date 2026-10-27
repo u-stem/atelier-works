@@ -208,6 +208,11 @@ describe("newlyFinished", () => {
     expect(newlyFinished(details, new Set())).toEqual([ID(1)]);
   });
 
+  test("lists a job whose detail was not found, since it is gone from the list too", () => {
+    const details: StepDetails = new Map([[ID(1), { found: false }]]);
+    expect(newlyFinished(details, new Set())).toEqual([ID(1)]);
+  });
+
   test("lists a job only once", () => {
     const details: StepDetails = new Map([[ID(1), detail("failure")]]);
     expect(newlyFinished(details, new Set([ID(1)]))).toEqual([]);

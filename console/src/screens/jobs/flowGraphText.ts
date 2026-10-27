@@ -1,6 +1,10 @@
 // 起動関係の図に添える語を組み立てる。語は記号と並べて示し、色だけに頼らない。
 
-import type { NodeActivity, ScheduleRun } from "../../lib/flowOverlay.ts";
+import type {
+  FlowGraphState,
+  NodeActivity,
+  ScheduleEntry,
+} from "../../lib/flowOverlay.ts";
 
 /** 実行中と待ちの取得に失敗したときの文。強調が無いことを、動いていないと読ませないために出す。 */
 export const ACTIVE_READ_FAILED_NOTE = "実行の状態を読めませんでした";
@@ -8,6 +12,12 @@ export const ACTIVE_READ_FAILED_NOTE = "実行の状態を読めませんでし�
 /** scheduleの直近の結果の取得に失敗したときの文。 */
 export const SCHEDULE_READ_FAILED_NOTE =
   "定期の入口の直近の結果を読めませんでした";
+
+/** キューが1ページで切れているときの文。 */
+export const QUEUE_TRUNCATED_NOTE = "";
+
+/** scheduleを読み切れていないときの文。 */
+export const SCHEDULE_TRUNCATED_NOTE = "";
 
 export type ActivityWords = {
   readonly running: string | null;
@@ -32,11 +42,21 @@ export function activityWords(
   };
 }
 
-/**
- * scheduleの入口に添える、直近の実行の語。実行の記録が無いときは添えない。
- * 失敗と取消は、スケジュールのタブと同じく区別しない。
- */
-export function scheduleRunWords(run: ScheduleRun | undefined): string | null {
-  if (run === undefined) return null;
-  return run.success ? "直近 成功" : "直近 失敗・取消";
+export type ScheduleWords = {
+  /** 止まっているときは「停止中」、それ以外は直近の実行の語。 */
+  readonly last: string | null;
+  /** 次回の予定。止まっているときは添えない。 */
+  readonly next: string | null;
+  readonly stopped: boolean;
+};
+
+export function scheduleWords(
+  _entry: ScheduleEntry | undefined,
+): ScheduleWords {
+  return { last: null, next: null, stopped: false };
+}
+
+/** 図の上に置く1行の要約。値が無いとき(読んでいない、失敗)は`null`。 */
+export function overviewWords(_state: FlowGraphState): string | null {
+  return null;
 }

@@ -6,7 +6,7 @@ import type { FlowGraph } from "../../lib/flowGraph.ts";
 import type {
   FlowGraphState,
   NodeActivity,
-  ScheduleRun,
+  ScheduleEntry,
 } from "../../lib/flowOverlay.ts";
 import { FlowGraphDiagram, FlowGraphList } from "./FlowGraphDiagram.tsx";
 
@@ -48,7 +48,7 @@ function state(
   activity: Record<string, NodeActivity> = {},
   options: {
     lowerBound?: boolean;
-    runs?: Record<string, ScheduleRun>;
+    entries?: Record<string, ScheduleEntry>;
     activeFailed?: boolean;
   } = {},
 ): FlowGraphState {
@@ -57,9 +57,11 @@ function state(
       activity: new Map(Object.entries(activity)),
       lowerBound: options.lowerBound ?? false,
     },
-    scheduleRuns: new Map(Object.entries(options.runs ?? {})),
+    scheduleEntries: new Map(Object.entries(options.entries ?? {})),
     activeFailed: options.activeFailed ?? false,
     schedulesFailed: false,
+    activePending: false,
+    schedulesTruncated: false,
   };
 }
 
@@ -141,11 +143,61 @@ describe("flowOverlay on the diagram", () => {
         graph={GRAPH}
         state={state(
           {},
-          { runs: { "schedule:poll_issues": { success: false } } },
+          {
+            entries: {
+              "schedule:poll_issues": {
+                stopped: false,
+                lastRun: { success: false },
+                nextRunAt: null,
+              },
+            },
+          },
         )}
       />,
     );
     expect(html).toContain("直近 失敗・取消");
+  });
+
+  test("says a stopped schedule is stopped, not that its last run succeeded", () => {
+    const html = render(
+      <FlowGraphDiagram
+        graph={GRAPH}
+        state={state(
+          {},
+          {
+            entries: {
+              "schedule:poll_issues": {
+                stopped: true,
+                lastRun: { success: true },
+                nextRunAt: null,
+              },
+            },
+          },
+        )}
+      />,
+    );
+    expect(html).toMatch(/^(?![\s\S]*直近 成功)[\s\S]*停止中/);
+  });
+
+  test("shows the next run of a schedule in Japan time", () => {
+    const html = render(
+      <FlowGraphDiagram
+        graph={GRAPH}
+        state={state(
+          {},
+          {
+            entries: {
+              "schedule:poll_issues": {
+                stopped: false,
+                lastRun: { success: true },
+                nextRunAt: "2026-10-27T03:05:00Z",
+              },
+            },
+          },
+        )}
+      />,
+    );
+    expect(html).toContain("次回 12:05");
   });
 
   test("draws no mark when nothing runs", () => {
@@ -159,9 +211,11 @@ describe("flowOverlay on the diagram", () => {
         graph={GRAPH}
         state={{
           overlay: null,
-          scheduleRuns: null,
+          scheduleEntries: null,
           activeFailed: true,
           schedulesFailed: false,
+          activePending: false,
+          schedulesTruncated: false,
         }}
       />,
     );
@@ -198,6 +252,40 @@ describe("FlowGraphDiagram", () => {
     };
     expect(render(<FlowGraphDiagram graph={long} state={state()} />)).toContain(
       "steps/manual_intake_register",
+    );
+  });
+
+  test("cuts a flow name that cannot fit even when drawn smaller", () => {
+    const long: FlowGraph = {
+      nodes: [
+        {
+          id: "flow:pipeline",
+          kind: "flow",
+          label: "a_very_long_flow_name_that_cannot_fit_in_a_box",
+          note: "",
+        },
+      ],
+      edges: [],
+    };
+    expect(render(<FlowGraphDiagram graph={long} state={state()} />)).toMatch(
+      /a_very_long[^<]*…</,
+    );
+  });
+
+  test("keeps the whole name of a flow that fits", () => {
+    const fits: FlowGraph = {
+      nodes: [
+        {
+          id: "flow:manual_intake",
+          kind: "flow",
+          label: "manual_intake",
+          note: "",
+        },
+      ],
+      edges: [],
+    };
+    expect(render(<FlowGraphDiagram graph={fits} state={state()} />)).toContain(
+      ">manual_intake<",
     );
   });
 

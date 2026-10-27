@@ -1197,6 +1197,7 @@ describe("activeJobSteps", () => {
         order.push("active:start");
         await pause();
         order.push("active:end");
+        return undefined;
       },
       steps: () => {
         order.push("steps");

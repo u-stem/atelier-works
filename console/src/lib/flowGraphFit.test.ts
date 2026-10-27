@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  FIT_CHROME_WIDTH,
   FIT_MIN_WIDTH,
   graphPresentation,
   textEm,
@@ -7,12 +8,24 @@ import {
 } from "./flowGraphFit.ts";
 
 describe("graphPresentation", () => {
-  test("draws the graph as it is when the section is as wide as the layout", () => {
-    expect(graphPresentation(1080, 1080)).toBe("fit");
+  test("scrolls when the section is as wide as the layout, since the card takes 18px", () => {
+    expect(graphPresentation(1080, 1080)).toBe("scroll");
+  });
+
+  test("scrolls one pixel short of the layout plus the card", () => {
+    expect(graphPresentation(1080 + FIT_CHROME_WIDTH - 1, 1080)).toBe("scroll");
+  });
+
+  test("draws the graph as it is once the card around it fits too", () => {
+    expect(graphPresentation(1080 + FIT_CHROME_WIDTH, 1080)).toBe("fit");
   });
 
   test("draws the graph as it is when the section is wider than the layout", () => {
     expect(graphPresentation(1152, 1080)).toBe("fit");
+  });
+
+  test("takes 18px for the card: 1px border and 8px padding on both sides", () => {
+    expect(FIT_CHROME_WIDTH).toBe(18);
   });
 
   test("scrolls inside a region when the layout does not fit", () => {

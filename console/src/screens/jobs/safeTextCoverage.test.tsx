@@ -155,9 +155,16 @@ const GRAPH_STATE: FlowGraphState = {
     ]),
     lowerBound: true,
   },
-  scheduleRuns: new Map([["schedule:poll_issues", { success: false }]]),
+  scheduleEntries: new Map([
+    [
+      "schedule:poll_issues",
+      { stopped: false, lastRun: { success: false }, nextRunAt: null },
+    ],
+  ]),
   activeFailed: false,
   schedulesFailed: false,
+  activePending: false,
+  schedulesTruncated: false,
 };
 
 const CASES: readonly (readonly [string, () => ReactElement])[] = [
@@ -319,6 +326,25 @@ describe("every string of the server is sanitized when it is drawn", () => {
 
   test.each(CASES)("and %s still draws something", (_name, element) => {
     expect(render(element()).length).toBeGreaterThan(20);
+  });
+});
+
+describe("the cases of the current step and the graph in the coverage", () => {
+  const draw = (name: string): string => {
+    const found = CASES.find(([label]) => label === name);
+    return found === undefined ? "" : render(found[1]());
+  };
+
+  test("draw the label of the current step, so the check does not pass on an empty row", () => {
+    expect(draw("flow progress step id")).toContain("今のステップ");
+  });
+
+  test("draw the running mark of the graph, so the check does not pass on an empty graph", () => {
+    expect(draw("flow node label")).toContain("実行中");
+  });
+
+  test("draw the last run of the schedule entry of the graph", () => {
+    expect(draw("flow node label")).toContain("直近 失敗・取消");
   });
 });
 

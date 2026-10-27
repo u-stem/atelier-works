@@ -3,6 +3,9 @@
 /** 図が読める最小の幅(px)。これより狭いときは図の代わりに一覧を出す。 */
 export const FIT_MIN_WIDTH = 640;
 
+/** 図を包むカードが、左右に取る幅(px)。枠の1pxと余白の8pxを、両側で足した値。 */
+export const FIT_CHROME_WIDTH = 18;
+
 export type GraphPresentation = "fit" | "scroll" | "list";
 
 /**

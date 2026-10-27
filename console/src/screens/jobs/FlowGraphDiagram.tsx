@@ -21,7 +21,7 @@ import {
   nodeLinkTarget,
 } from "../../lib/flowOverlay.ts";
 import { safeText } from "../../lib/safeText.ts";
-import { activityWords, scheduleRunWords } from "./flowGraphText.ts";
+import { activityWords, scheduleWords } from "./flowGraphText.ts";
 import { JobStateBadge } from "./JobRows.tsx";
 
 /** 箱の左右の余白(px)。文字はこの内側に収める。 */
@@ -214,7 +214,7 @@ function GraphNode({
       box={box}
       activity={activity}
       lowerBound={lowerBound}
-      runWords={scheduleRunWords(state.scheduleRuns?.get(box.node.id))}
+      runWords={scheduleWords(state.scheduleEntries?.get(box.node.id)).last}
     />
   );
   return to === null ? (

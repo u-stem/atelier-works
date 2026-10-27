@@ -29,18 +29,33 @@ export type FlowOverlay = {
 /** scheduleの入口の、直近の実行の成否。 */
 export type ScheduleRun = { readonly success: boolean };
 
+/**
+ * scheduleの入口に添える情報。
+ * 止まっているscheduleは、直近の成否が成功でも動いていないので、`stopped`を先に見る。
+ */
+export type ScheduleEntry = {
+  /** 無効にされているか、一時停止の期限が未来である。 */
+  readonly stopped: boolean;
+  readonly lastRun: ScheduleRun | null;
+  /** 次回の実行の予定(ISO)。無ければ`null`。 */
+  readonly nextRunAt: string | null;
+};
+
 /** 図に重ねる情報。読めていないものは`null`で、強調や添え書きを出さない。 */
 export type FlowGraphState = {
   readonly overlay: FlowOverlay | null;
-  readonly scheduleRuns: ReadonlyMap<string, ScheduleRun> | null;
+  readonly scheduleEntries: ReadonlyMap<string, ScheduleEntry> | null;
   /** 実行中と待ちの取得に失敗した。強調が無いことを「動いていない」と読ませないために使う。 */
   readonly activeFailed: boolean;
   readonly schedulesFailed: boolean;
+  /** 実行中と待ちを、読んでいる途中である。値も失敗もまだ無い。 */
+  readonly activePending: boolean;
+  /** scheduleを読み切れていない(ページの上限に達した)。 */
+  readonly schedulesTruncated: boolean;
 };
 
 const FACTORY_PREFIX = "f/factory/";
 const FLOW_NODE_PREFIX = "flow:";
-const SCHEDULE_NODE_PREFIX = "schedule:";
 
 /**
  * flowのパスを、図のノードのidに直す。既知のflowの外のパスは`null`にする。
@@ -107,24 +122,11 @@ export function flowOverlayOf(list: JobListView): FlowOverlay {
   };
 }
 
-/**
- * scheduleごとの、直近の実行の成否。`recent_runs`は新しい順なので先頭を取る。
- * 実行の記録が無いscheduleは含めない。
- */
-export function scheduleRunsOf(
-  snapshot: SchedulesSnapshotView,
-): ReadonlyMap<string, ScheduleRun> {
-  const runs = new Map<string, ScheduleRun>();
-  for (const schedule of snapshot.schedules) {
-    if (!schedule.path.startsWith(FACTORY_PREFIX)) continue;
-    const latest = schedule.recent_runs[0];
-    if (latest === undefined) continue;
-    runs.set(
-      `${SCHEDULE_NODE_PREFIX}${schedule.path.slice(FACTORY_PREFIX.length)}`,
-      { success: latest.success },
-    );
-  }
-  return runs;
+export function scheduleEntriesOf(
+  _snapshot: SchedulesSnapshotView,
+  _nowMs: number,
+): ReadonlyMap<string, ScheduleEntry> {
+  return new Map();
 }
 
 /** ジョブの画面のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
@@ -165,13 +167,16 @@ export type FlowGraphReads = {
  */
 export function flowGraphStateOf(
   reads: FlowGraphReads | undefined,
+  nowMs: number,
 ): FlowGraphState {
   if (reads === undefined) {
     return {
       overlay: null,
-      scheduleRuns: null,
+      scheduleEntries: null,
       activeFailed: false,
       schedulesFailed: false,
+      activePending: false,
+      schedulesTruncated: false,
     };
   }
   const { active, schedules } = reads;
@@ -180,11 +185,13 @@ export function flowGraphStateOf(
       active.isError || active.data === undefined
         ? null
         : flowOverlayOf(active.data),
-    scheduleRuns:
+    scheduleEntries:
       schedules.isError || schedules.data === undefined
         ? null
-        : scheduleRunsOf(schedules.data),
+        : scheduleEntriesOf(schedules.data, nowMs),
     activeFailed: active.isError,
     schedulesFailed: schedules.isError,
+    activePending: false,
+    schedulesTruncated: false,
   };
 }

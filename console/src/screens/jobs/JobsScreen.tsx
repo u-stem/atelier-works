@@ -99,8 +99,8 @@ export function JobsScreen() {
       error: active.error,
       refetch: () =>
         refreshActiveThenSteps({
-          active: () => active.refetch(),
-          steps: () => steps.refetch(),
+          active: () => active.refetch().then((result) => result.data),
+          steps: (list) => steps.refetch(list),
         }),
     },
   ]);

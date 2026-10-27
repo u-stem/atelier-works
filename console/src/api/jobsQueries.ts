@@ -802,11 +802,36 @@ export function activeStepsQueryOptions(ids: readonly string[]) {
  * 一覧の取得が終わる前にステップを取ると、2つの取得がworkerの枠を取り合うためである。
  */
 export async function refreshActiveThenSteps(reads: {
-  readonly active: () => Promise<unknown>;
-  readonly steps: () => Promise<unknown>;
+  readonly active: () => Promise<JobListView | undefined>;
+  readonly steps: (list: JobListView | undefined) => Promise<unknown>;
 }): Promise<void> {
   await reads.active();
-  await reads.steps();
+  await reads.steps(undefined);
+}
+
+/** 今のステップの取得の設定。タブが違うか、画面が操作されていなければ、読まない。 */
+export function activeStepsOptions(
+  list: JobListView | undefined,
+  _selectedTab: JobsTabId,
+  _idle: boolean,
+) {
+  const ids = stepTargets(list?.jobs ?? []);
+  return { ...activeStepsQueryOptions(ids), enabled: true };
+}
+
+/** 終了を返した詳細を見て、一覧を取り直す関数を作る。 */
+export function createFinishWatcher(
+  _client: QueryClient,
+): (details: StepDetails) => Promise<void> {
+  return () => Promise.resolve();
+}
+
+/** 渡した一覧のflowの今のステップを、いまの値に取り直す。 */
+export async function refetchActiveSteps(
+  _client: QueryClient,
+  _list: JobListView | undefined,
+): Promise<void> {
+  return undefined;
 }
 
 /**
@@ -835,7 +860,7 @@ export type ActiveJobStepsView = {
   readonly details: StepDetails;
   readonly isFetching: boolean;
   /** 今のステップを取り直す。読んでいないときは何もしない。 */
-  readonly refetch: () => Promise<unknown>;
+  readonly refetch: (list?: JobListView) => Promise<unknown>;
 };
 
 const NO_DETAILS: StepDetails = new Map();

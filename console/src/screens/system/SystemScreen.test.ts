@@ -112,8 +112,14 @@ describe("the wiring of the figure of the launch relations", () => {
     expect(BODY).toContain("useActiveJobs(flowOpened)");
   });
 
+  test("reads the schedules after the active jobs, not at the same time", () => {
+    expect(BODY).toContain("!flowActive.isFetching");
+  });
+
   test("reads the schedules only after the figure is opened", () => {
-    expect(BODY).toContain("useSchedules(flowOpened)");
+    expect(BODY).toContain(
+      "useSchedules(flowOpened && !flowActive.isFetching)",
+    );
   });
 
   test("adds the reads to the header refresh after the figure is opened", () => {
