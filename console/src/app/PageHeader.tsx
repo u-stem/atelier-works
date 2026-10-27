@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
+import type { LoadingDisplay } from "../components/LoadingState.tsx";
 import { TimeText } from "../components/TimeText.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
@@ -43,7 +44,7 @@ export function PageHeader({
    * 副題が取得後に決まるとき、待つ間も副題の行を空けて、骨組みを出す。
    * 取得後の見出しと同じ高さになり、下の本文が動かない。`subtitle`を渡すと出さない。
    */
-  subtitlePending?: boolean;
+  subtitlePending?: boolean | "reserve" | "skeleton";
   refresh?: RefreshStatus;
   /** 更新ボタンの名前。更新が画面の一部だけを取り直すときは、取り直す範囲が分かる名前にする。 */
   refreshLabel?: string;
@@ -106,6 +107,13 @@ export function PageHeader({
       )}
     </header>
   );
+}
+
+/** 読み込みの段階から、副題の行の出し方を決める。 */
+export function subtitlePendingOf(
+  _display: LoadingDisplay,
+): "reserve" | "skeleton" | undefined {
+  return undefined;
 }
 
 function RefreshControls({

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Inbox } from "lucide-react";
 import type { ComponentType } from "react";
 import { buildScreenRoutes, flattenRoutePaths } from "./routeTable.ts";
-import { SCREENS, type Screen } from "./screens.ts";
+import { type FallbackHeader, SCREENS, type Screen } from "./screens.ts";
 
 const lazy = () => Promise.resolve({ Component: () => null });
 const DefaultBoundary: ComponentType = () => null;
@@ -197,36 +197,49 @@ describe("route titles", () => {
 });
 
 describe("buildScreenRoutes hydrate fallbacks", () => {
-  const WithSubtitle: ComponentType = () => null;
+  const Crumb: ComponentType = () => null;
+  const Back: ComponentType = () => null;
+  const NoRefresh: ComponentType = () => null;
   const Plain: ComponentType = () => null;
-  const choose = (hasSubtitle: boolean): ComponentType =>
-    hasSubtitle ? WithSubtitle : Plain;
+  const choose = (header: FallbackHeader): ComponentType => {
+    if (header.trail === "breadcrumb") {
+      return Crumb;
+    }
+    if (header.trail === "back") {
+      return Back;
+    }
+    return header.refresh === false ? NoRefresh : Plain;
+  };
 
-  test("gives a screen with a subtitle the fallback with a subtitle row", () => {
+  test("gives a screen with a breadcrumb the fallback chosen by its trail", () => {
     expect(
       buildScreenRoutes(
-        [screen({ subtitle: true })],
+        [
+          screen({
+            children: [{ path: "items/:id", lazy, trail: "breadcrumb" }],
+          }),
+        ],
         DefaultBoundary,
         choose,
-      )[0]?.HydrateFallback,
-    ).toBe(WithSubtitle);
+      )[1]?.HydrateFallback,
+    ).toBe(Crumb);
   });
 
-  test("gives a screen without the mark the plain fallback", () => {
+  test("gives a screen without a mark the plain fallback", () => {
     expect(
       buildScreenRoutes([screen()], DefaultBoundary, choose)[0]
         ?.HydrateFallback,
     ).toBe(Plain);
   });
 
-  test("gives the index route the fallback chosen by its mark", () => {
+  test("gives the index route the fallback chosen for a plain header", () => {
     expect(
       buildScreenRoutes(
-        [screen({ id: "inbox", path: "/", subtitle: true })],
+        [screen({ id: "inbox", path: "/" })],
         DefaultBoundary,
         choose,
       )[0]?.HydrateFallback,
-    ).toBe(WithSubtitle);
+    ).toBe(Plain);
   });
 
   test("gives a child route the fallback chosen by its own mark", () => {
@@ -234,32 +247,50 @@ describe("buildScreenRoutes hydrate fallbacks", () => {
       buildScreenRoutes(
         [
           screen({
-            children: [{ path: "items/new", lazy, subtitle: true }],
+            children: [
+              { path: "items/new", lazy, trail: "back", refresh: false },
+            ],
           }),
         ],
         DefaultBoundary,
         choose,
       )[1]?.HydrateFallback,
-    ).toBe(WithSubtitle);
+    ).toBe(Back);
   });
 
-  test("hands the trail mark of a child route to the chooser", () => {
-    const seen: (string | undefined)[] = [];
+  test("hands the trail and the refresh mark of a child route to the chooser", () => {
+    const seen: FallbackHeader[] = [];
     buildScreenRoutes(
       [
         screen({
           children: [
-            { path: "items/new", lazy, subtitle: true, trail: "back" },
+            { path: "items/new", lazy, trail: "back", refresh: false },
           ],
         }),
       ],
       DefaultBoundary,
-      (_hasSubtitle, trail) => {
-        seen.push(trail);
+      (header) => {
+        seen.push(header);
         return Plain;
       },
     );
-    expect(seen).toEqual([undefined, "back"]);
+    expect(seen).toEqual([
+      { trail: undefined, refresh: true },
+      { trail: "back", refresh: false },
+    ]);
+  });
+
+  test("tells the chooser that a route without the mark has refresh controls", () => {
+    const seen: FallbackHeader[] = [];
+    buildScreenRoutes(
+      [screen({ children: [{ path: "jobs/:id", lazy }] })],
+      DefaultBoundary,
+      (header) => {
+        seen.push(header);
+        return Plain;
+      },
+    );
+    expect(seen[1]?.refresh).toBe(true);
   });
 
   test("gives no fallback to a route nested in a child route", () => {

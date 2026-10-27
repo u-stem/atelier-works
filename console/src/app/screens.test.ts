@@ -18,26 +18,26 @@ import {
 } from "../api/systemQueries.ts";
 import { SCREENS, type ScreenId } from "./screens.ts";
 
-describe("the subtitle mark", () => {
-  const marked = SCREENS.flatMap((screen) => [
-    ...(screen.subtitle === true ? [screen.path] : []),
-    ...screen.children
-      .filter((child) => child.subtitle === true)
-      .map((child) => child.path),
-  ]);
-
-  test("lists the routes whose page header carries a subtitle", () => {
-    expect(marked).toEqual([
-      "items/new",
-      "items/:id/requirements",
-      "items/:id",
-      "reports/audit/:id",
-      "jobs/:id",
-    ]);
+describe("the header marks", () => {
+  // 副題は、戻り先の行(パンくずか戻りのリンク)を持つ画面にだけある。印を1つにして、食い違う組を作れなくする。
+  test("has no separate subtitle mark on an entrance", () => {
+    expect(SCREENS.filter((screen) => "subtitle" in screen)).toEqual([]);
   });
 
-  test("leaves the inbox unmarked because its subtitle appears only when nothing is left", () => {
-    expect(SCREENS[0]?.subtitle).toBeUndefined();
+  test("has no separate subtitle mark on a route", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children).filter(
+        (child) => "subtitle" in child,
+      ),
+    ).toEqual([]);
+  });
+
+  test("lists the routes that have no refresh controls", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children)
+        .filter((child) => child.refresh === false)
+        .map((child) => child.path),
+    ).toEqual(["items/new"]);
   });
 
   test("lists the routes whose page header carries a breadcrumb or a back link", () => {

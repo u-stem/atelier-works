@@ -132,6 +132,14 @@ export function LoadingGate({
   return <LoadingBody display={display} shape={shape} />;
 }
 
+/**
+ * 骨組みの行を区別する鍵。`count`個の番号を返す。
+ * 行は並びが変わらない固定の数で、入れ替えも挿入もないので、番号を鍵にしてよい。
+ */
+export function rowIndexes(_count: number): number[] {
+  return [];
+}
+
 /** 骨組みの行を区別する鍵。行は並びが変わらない固定の数で、入れ替えも挿入もない。 */
 const ROW_KEYS = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] as const;
 

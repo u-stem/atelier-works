@@ -67,3 +67,30 @@ export const PAGINATION_BUTTON_CLASS = "-scroll-mb-28";
  */
 export const PAGE_HEADER_CLASS =
   "flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8";
+
+/**
+ * 題の下の副題の行の高さ。`text-small`の1行(`--text-small`と`--text-small--line-height`の積)にそろえる。
+ * 実物の副題の行と、読み込み中の骨組みが、同じ高さを確保する。
+ */
+export const SUBTITLE_ROW_CLASS = "x-unset";
+
+/** 題の下のパンくずの行。上の余白4pxと、`text-small`の1行を確保する。 */
+export const BREADCRUMB_ROW_CLASS = "x-unset";
+
+/** 題の下の戻りのリンクの行。上の余白4pxと、実機で測った行の高さ(25.2px)を確保する。 */
+export const BACK_LINK_ROW_CLASS = "x-unset";
+
+/** 節の見出しの行。`text-lead`の1行を確保する。 */
+export const SECTION_HEADING_ROW_CLASS = "x-unset";
+
+/** 作業項目の詳細と監査レポートの、見出しの下の本文の枠。実物と骨組みが共有する。 */
+export const DETAIL_PANEL_CLASS = "x-unset";
+
+/** 要件定義書の、見出しの下のスクロールする枠。実物と骨組みが共有する。 */
+export const REQUIREMENTS_SCROLL_CLASS = "x-unset";
+
+/** 要件定義書の、本文と目次を横に並べる枠。実物と骨組みが共有する。 */
+export const REQUIREMENTS_FRAME_CLASS = "x-unset";
+
+/** 作業項目の詳細の概要タブの、塊を縦に並べる枠。実物と骨組みが共有する。 */
+export const OVERVIEW_BODY_CLASS = "x-unset";

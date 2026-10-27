@@ -43,6 +43,13 @@ export type PrefetchOptions = {
 /** 見出しの帯の題の下に置く、戻り先の行の種類。 */
 export type ScreenTrail = "breadcrumb" | "back";
 
+/** 最初の画面を読み込む間の骨組みを選ぶ、見出しの帯の特徴。 */
+export type FallbackHeader = {
+  readonly trail?: ScreenTrail | undefined;
+  /** 更新の操作を持つか。省くと持つ。 */
+  readonly refresh?: boolean | undefined;
+};
+
 export type ScreenId = "inbox" | "items" | "reports" | "jobs" | "system";
 
 /**
@@ -67,6 +74,8 @@ export type ScreenRoute = {
    * `breadcrumb`はパンくず、`back`は一覧への戻りのリンクである。
    */
   readonly trail?: ScreenTrail;
+  /** 見出しの帯に更新の操作を持たない画面は`false`にする。 */
+  readonly refresh?: false;
   /** 入れ子の経路は、骨組みを持たない。親の経路の骨組みが、子の位置まで描く。 */
   readonly children?: readonly ScreenRoute[];
 };

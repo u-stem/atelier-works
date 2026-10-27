@@ -3,10 +3,10 @@
 import type { ComponentType } from "react";
 import type { RouteObject } from "react-router";
 import type {
+  FallbackHeader,
   RouteTitle,
   Screen,
   ScreenRoute,
-  ScreenTrail,
 } from "./screens.ts";
 
 /**
@@ -17,21 +17,15 @@ export function titleHandle(title: RouteTitle): { title: RouteTitle } {
   return { title };
 }
 
-/** 副題の有無と戻り先の行の種類から、最初の画面を読み込む間に出す部品を選ぶ関数。 */
-export type HydrateFallbackFor = (
-  hasSubtitle: boolean,
-  trail?: ScreenTrail,
-) => ComponentType;
+/** 見出しの帯の特徴から、最初の画面を読み込む間に出す部品を選ぶ関数。 */
+export type HydrateFallbackFor = (header: FallbackHeader) => ComponentType;
 
 /** 最初の画面を読み込む間に出す部品を、経路に足す。選ぶ関数を渡さなければ足さない。 */
 function withHydrateFallback(
   fallbackFor: HydrateFallbackFor | undefined,
-  hasSubtitle: boolean | undefined,
-  trail?: ScreenTrail,
+  _header: FallbackHeader,
 ): { HydrateFallback: ComponentType } | Record<string, never> {
-  return fallbackFor === undefined
-    ? {}
-    : { HydrateFallback: fallbackFor(hasSubtitle === true, trail) };
+  return fallbackFor === undefined ? {} : { HydrateFallback: fallbackFor({}) };
 }
 
 /**
@@ -51,7 +45,10 @@ function toRoute(
     handle: titleHandle(title),
     lazy: route.lazy,
     ErrorBoundary: route.ErrorBoundary ?? fallbackBoundary,
-    ...withHydrateFallback(fallbackFor, route.subtitle, route.trail),
+    ...withHydrateFallback(fallbackFor, {
+      trail: route.trail,
+      refresh: route.refresh !== false,
+    }),
   };
   return route.children === undefined
     ? base
@@ -84,7 +81,7 @@ export function buildScreenRoutes(
       handle,
       lazy: screen.lazy,
       ErrorBoundary: boundary,
-      ...withHydrateFallback(fallbackFor, screen.subtitle),
+      ...withHydrateFallback(fallbackFor, { refresh: true }),
     };
     const own: RouteObject =
       screen.path === "/"

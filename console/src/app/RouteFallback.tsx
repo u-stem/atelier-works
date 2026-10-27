@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { PAGE_HEADER_CLASS, SCROLL_BODY_CLASS } from "../lib/layoutClasses.ts";
-import type { ScreenTrail } from "./screens.ts";
+import type { FallbackHeader, ScreenTrail } from "./screens.ts";
 
 /**
  * 題の下の戻り先の行の骨組み。実物の行(上の余白4pxと、1行の高さ)に合わせる。
@@ -85,16 +85,7 @@ export function RouteFallbackWithBackLink() {
   return <Fallback subtitle trail="back" />;
 }
 
-/** 副題と戻り先の有無に合う骨組みの部品。 */
-export function routeFallbackFor(
-  hasSubtitle: boolean,
-  trail?: ScreenTrail,
-): ComponentType {
-  if (trail === "breadcrumb") {
-    return RouteFallbackWithBreadcrumb;
-  }
-  if (trail === "back") {
-    return RouteFallbackWithBackLink;
-  }
-  return hasSubtitle ? RouteFallbackWithSubtitle : RouteFallback;
+/** 見出しの帯の特徴に合う骨組みの部品。 */
+export function routeFallbackFor(_header: FallbackHeader = {}): ComponentType {
+  return RouteFallback;
 }

@@ -8,6 +8,7 @@ import type {
   WorkItemReview,
   WorkItemRound,
 } from "../../../api/guards/workItemDetail.ts";
+import { OVERVIEW_BODY_CLASS } from "../../../lib/layoutClasses.ts";
 import { OverviewTab } from "./OverviewTab.tsx";
 import { RequirementsTab } from "./RequirementsTab.tsx";
 import { RoundsTab } from "./RoundsTab.tsx";
@@ -97,6 +98,14 @@ function detail(overrides: Partial<WorkItemDetail> = {}): WorkItemDetail {
 function render(element: React.ReactElement): string {
   return renderToStaticMarkup(<MemoryRouter>{element}</MemoryRouter>);
 }
+
+describe("OverviewTab frame", () => {
+  test("stacks its blocks with the class that the loading skeleton shares", () => {
+    expect(render(<OverviewTab detail={detail()} now={NOW} />)).toContain(
+      `class="${OVERVIEW_BODY_CLASS}"`,
+    );
+  });
+});
 
 describe("OverviewTab", () => {
   test("has no heading that repeats the tab name", () => {

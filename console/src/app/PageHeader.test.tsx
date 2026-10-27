@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
-import { PAGE_HEADER_CLASS } from "../lib/layoutClasses.ts";
+import { PAGE_HEADER_CLASS, SUBTITLE_ROW_CLASS } from "../lib/layoutClasses.ts";
 import { PAGE_HEADING_ID } from "../lib/routeFocus.ts";
-import { PageHeader } from "./PageHeader.tsx";
+import { PageHeader, subtitlePendingOf } from "./PageHeader.tsx";
 import type { RefreshStatus } from "./refreshStatus.ts";
 
 const REFRESH: RefreshStatus = {
@@ -57,6 +57,20 @@ function renderWith(options: {
     </TooltipProvider>,
   );
 }
+
+describe("subtitlePendingOf", () => {
+  test("keeps no row once the content is shown", () => {
+    expect(subtitlePendingOf("content")).toBeUndefined();
+  });
+
+  test("only keeps the height while the frame is empty", () => {
+    expect(subtitlePendingOf("frame")).toBe("reserve");
+  });
+
+  test("draws the skeleton while the skeleton is shown", () => {
+    expect(subtitlePendingOf("skeleton")).toBe("skeleton");
+  });
+});
 
 describe("PageHeader", () => {
   test("names the refresh button for the whole screen by default", () => {
@@ -180,25 +194,41 @@ describe("PageHeader", () => {
     expect(markup).toMatch(/<p class="[^"]*font-mono[^"]*">0190a1b2<\/p>/);
   });
 
-  test("draws a pending subtitle row when the subtitle is not known yet", () => {
+  test("keeps a pending subtitle row when the subtitle is not known yet", () => {
     const markup = renderToStaticMarkup(
-      <PageHeader title="題" subtitlePending />,
+      <PageHeader title="題" subtitlePending="reserve" />,
     );
 
     expect(markup).toContain('data-part="subtitle-pending"');
   });
 
-  test("draws the pending row as tall as a subtitle line of the real header", () => {
+  test("keeps the pending row as tall as the subtitle row of the real header", () => {
     const markup = renderToStaticMarkup(
-      <PageHeader title="題" subtitlePending />,
+      <PageHeader title="題" subtitlePending="reserve" />,
     );
 
-    expect(markup).toContain("h-[1.3rem]");
+    expect(markup).toContain(SUBTITLE_ROW_CLASS);
+  });
+
+  test("draws no skeleton in a row that only keeps the height", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitlePending="reserve" />,
+    );
+
+    expect(markup).not.toContain('data-slot="skeleton"');
+  });
+
+  test("draws a skeleton in the row when asked to show the skeleton", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitlePending="skeleton" />,
+    );
+
+    expect(markup).toContain('data-slot="skeleton"');
   });
 
   test("hides the pending row from the reading order", () => {
     const markup = renderToStaticMarkup(
-      <PageHeader title="題" subtitlePending />,
+      <PageHeader title="題" subtitlePending="reserve" />,
     );
 
     expect(markup).toMatch(
@@ -208,7 +238,7 @@ describe("PageHeader", () => {
 
   test("draws no pending row once the subtitle is known", () => {
     const markup = renderToStaticMarkup(
-      <PageHeader title="題" subtitle="副題" subtitlePending />,
+      <PageHeader title="題" subtitle="副題" subtitlePending="skeleton" />,
     );
 
     expect(markup).not.toContain("subtitle-pending");

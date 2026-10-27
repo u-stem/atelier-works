@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { SECTION_HEADING_ROW_CLASS } from "../lib/layoutClasses.ts";
 import {
   LoadingBody,
   LoadingGate,
   type LoadingShape,
   LoadingStateView,
   loadingDisplayOf,
+  rowIndexes,
   SkeletonListCard,
   SkeletonSection,
 } from "./LoadingState.tsx";
@@ -252,6 +254,17 @@ describe("SkeletonListCard", () => {
     expect(count(html, "h-[4.625rem]")).toBe(3);
   });
 
+  test("draws more than ten rows when asked", () => {
+    expect(
+      count(
+        renderToStaticMarkup(
+          <SkeletonListCard rows={12} rowClassName="h-[4.625rem]" />,
+        ),
+        "h-[4.625rem]",
+      ),
+    ).toBe(12);
+  });
+
   test("passes the card class on", () => {
     expect(html).toContain("max-w-4xl");
   });
@@ -265,11 +278,25 @@ describe("SkeletonListCard", () => {
   });
 });
 
+describe("rowIndexes", () => {
+  test("numbers the rows from zero", () => {
+    expect(rowIndexes(3)).toEqual([0, 1, 2]);
+  });
+
+  test("returns no number for no rows", () => {
+    expect(rowIndexes(0)).toEqual([]);
+  });
+
+  test("is not limited to a few rows", () => {
+    expect(rowIndexes(12)).toHaveLength(12);
+  });
+});
+
 describe("SkeletonSection", () => {
   const html = renderToStaticMarkup(<SkeletonSection block="h-[5.7rem]" />);
 
   test("draws the heading row as tall as a heading of the real screen", () => {
-    expect(html).toContain("h-[1.7rem]");
+    expect(html).toContain(SECTION_HEADING_ROW_CLASS);
   });
 
   test("draws the block with the given height", () => {

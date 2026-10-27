@@ -9,7 +9,13 @@ import {
   type LoadingShape,
   LoadingStateView,
 } from "../components/LoadingState.tsx";
-import { SCROLL_BODY_CLASS } from "../lib/layoutClasses.ts";
+import {
+  DETAIL_PANEL_CLASS,
+  OVERVIEW_BODY_CLASS,
+  REQUIREMENTS_FRAME_CLASS,
+  REQUIREMENTS_SCROLL_CLASS,
+  SCROLL_BODY_CLASS,
+} from "../lib/layoutClasses.ts";
 import { ITEM_DETAIL_LOADING_SHAPE } from "./items/ItemDetailScreen.tsx";
 import { REQUIREMENTS_DOC_LOADING_SHAPE } from "./items/ItemRequirementsScreen.tsx";
 import { PIPELINE_LOADING_SHAPE } from "./items/PipelineSection.tsx";
@@ -174,7 +180,7 @@ describe("the audit report skeleton", () => {
   const html = markup(AUDIT_REPORT_LOADING_SHAPE);
 
   test("uses the body frame of the real screen", () => {
-    expect(html).toContain("min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8");
+    expect(html).toContain(DETAIL_PANEL_CLASS);
   });
 
   test("draws the article as wide as the real one", () => {
@@ -200,15 +206,25 @@ describe("the work item detail skeleton", () => {
   test("keeps the width of the real card", () => {
     expect(html).toContain("max-w-[47.5rem]");
   });
+
+  test("uses the body frame of the real screen", () => {
+    expect(html).toContain(DETAIL_PANEL_CLASS);
+  });
+
+  test("stacks the blocks the way the overview tab does", () => {
+    expect(html).toContain(OVERVIEW_BODY_CLASS);
+  });
 });
 
 describe("the requirements document skeleton", () => {
   const html = markup(REQUIREMENTS_DOC_LOADING_SHAPE);
 
   test("uses the frame of the real document", () => {
-    expect(html).toContain(
-      "mx-auto flex w-full max-w-[75rem] items-start gap-10 px-8 py-6",
-    );
+    expect(html).toContain(REQUIREMENTS_FRAME_CLASS);
+  });
+
+  test("uses the scroll frame of the real screen", () => {
+    expect(html).toContain(REQUIREMENTS_SCROLL_CLASS);
   });
 
   test("draws the meta row of 63px", () => {
