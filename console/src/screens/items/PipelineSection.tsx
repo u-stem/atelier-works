@@ -6,6 +6,7 @@ import { useNow } from "../../app/useNow.ts";
 import {
   LoadingGate,
   type LoadingShape,
+  rowIndexes,
   SkeletonListCard,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
@@ -18,9 +19,6 @@ import {
 } from "../../lib/pipelineView.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
-
-/** 表の行の骨組みを区別する鍵。行は並びが変わらない固定の数で、入れ替えも挿入もない。 */
-const TABLE_ROW_KEYS = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 
 /**
  * 読み込み中の形。実物の絞り込みの帯、件数の行、表(狭い幅ではカード)の順に並べる。
@@ -46,9 +44,9 @@ export const PIPELINE_LOADING_SHAPE: LoadingShape = {
         />
         <div className="hidden overflow-hidden rounded-xl border border-border bg-card @4xl:block">
           <Skeleton className="h-[2.3rem] w-full rounded-none" />
-          {TABLE_ROW_KEYS.map((key) => (
+          {rowIndexes(8).map((row) => (
             <div
-              key={key}
+              key={row}
               className="flex h-[3.375rem] items-center border-t border-border px-3"
             >
               <Skeleton className="h-4 w-full" />

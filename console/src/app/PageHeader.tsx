@@ -10,7 +10,7 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
-import { PAGE_HEADER_CLASS } from "../lib/layoutClasses.ts";
+import { PAGE_HEADER_CLASS, SUBTITLE_ROW_CLASS } from "../lib/layoutClasses.ts";
 import { PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { AutoRefreshNote } from "./AutoRefreshNote.tsx";
 import type { RefreshStatus } from "./refreshStatus.ts";
@@ -30,7 +30,7 @@ export function PageHeader({
   title,
   subtitle,
   subtitleMono = false,
-  subtitlePending = false,
+  subtitlePending,
   refresh,
   refreshLabel = "この画面を更新",
   actions,
@@ -41,10 +41,12 @@ export function PageHeader({
   /** 副題がID、SHA、ジョブIDのような識別子のとき、等幅で出す。 */
   subtitleMono?: boolean;
   /**
-   * 副題が取得後に決まるとき、待つ間も副題の行を空けて、骨組みを出す。
-   * 取得後の見出しと同じ高さになり、下の本文が動かない。`subtitle`を渡すと出さない。
+   * 副題が取得後に決まるとき、待つ間も副題の行を空けて、取得後の見出しと同じ高さにする。下の本文が動かない。
+   * `reserve`は高さだけを確保し、`skeleton`は行に骨組みも描く。
+   * 本文の骨組みと同じく、取得が短い間は空の枠で済ませる。出し分けは`subtitlePendingOf`が決める。
+   * `subtitle`を渡すと出さない。
    */
-  subtitlePending?: boolean | "reserve" | "skeleton";
+  subtitlePending?: SubtitlePending | undefined;
   refresh?: RefreshStatus;
   /** 更新ボタンの名前。更新が画面の一部だけを取り直すときは、取り直す範囲が分かる名前にする。 */
   refreshLabel?: string;
@@ -76,15 +78,17 @@ export function PageHeader({
           {title}
         </h1>
         {subtitle === undefined || subtitle === null ? (
-          subtitlePending ? (
+          subtitlePending === undefined ? null : (
             <div
               data-part="subtitle-pending"
               aria-hidden="true"
-              className="flex h-[1.3rem] items-center"
+              className={SUBTITLE_ROW_CLASS}
             >
-              <Skeleton className="h-3 w-48" />
+              {subtitlePending === "skeleton" ? (
+                <Skeleton className="h-3 w-48" />
+              ) : null}
             </div>
-          ) : null
+          )
         ) : (
           <p
             className={cn(
@@ -109,11 +113,24 @@ export function PageHeader({
   );
 }
 
-/** 読み込みの段階から、副題の行の出し方を決める。 */
+/** 副題が決まるのを待つ間の、副題の行の出し方。 */
+export type SubtitlePending = "reserve" | "skeleton";
+
+/**
+ * 読み込みの段階から、副題の行の出し方を決める。
+ * 内容を出すときは行を持たない。空の枠の間は高さだけを確保し、骨組みを出すときに行にも骨組みを描く。
+ */
 export function subtitlePendingOf(
-  _display: LoadingDisplay,
-): "reserve" | "skeleton" | undefined {
-  return undefined;
+  display: LoadingDisplay,
+): SubtitlePending | undefined {
+  switch (display) {
+    case "content":
+      return undefined;
+    case "frame":
+      return "reserve";
+    case "skeleton":
+      return "skeleton";
+  }
 }
 
 function RefreshControls({

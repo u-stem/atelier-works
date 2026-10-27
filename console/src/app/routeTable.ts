@@ -23,9 +23,11 @@ export type HydrateFallbackFor = (header: FallbackHeader) => ComponentType;
 /** 最初の画面を読み込む間に出す部品を、経路に足す。選ぶ関数を渡さなければ足さない。 */
 function withHydrateFallback(
   fallbackFor: HydrateFallbackFor | undefined,
-  _header: FallbackHeader,
+  header: FallbackHeader,
 ): { HydrateFallback: ComponentType } | Record<string, never> {
-  return fallbackFor === undefined ? {} : { HydrateFallback: fallbackFor({}) };
+  return fallbackFor === undefined
+    ? {}
+    : { HydrateFallback: fallbackFor(header) };
 }
 
 /**

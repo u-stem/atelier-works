@@ -7,6 +7,7 @@ import { useNow } from "../../app/useNow.ts";
 import {
   LoadingBody,
   type LoadingShape,
+  rowIndexes,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
@@ -54,9 +55,6 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
   );
 }
 
-/** 骨組みの行を区別する鍵。行は並びが変わらない固定の数で、入れ替えも挿入もない。 */
-const AUDIT_ROW_KEYS = ["a", "b", "c"] as const;
-
 /**
  * 読み込み中の形。外側の枠の中に、実物の行(題、要約、内訳の3行)を3つ並べる。
  * 寸法は、実機で実物を描いて測った値で、1行は99px(線を含む)。
@@ -65,9 +63,9 @@ export const AUDIT_LIST_LOADING_SHAPE: LoadingShape = {
   className: "flex flex-col",
   node: (
     <>
-      {AUDIT_ROW_KEYS.map((key) => (
+      {rowIndexes(3).map((row) => (
         <div
-          key={key}
+          key={row}
           className="flex h-[6.2rem] flex-col justify-center gap-2.5 border-b border-border px-6 last:border-b-0"
         >
           <Skeleton className="h-4 w-1/3" />

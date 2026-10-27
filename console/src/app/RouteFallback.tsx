@@ -1,53 +1,53 @@
 import type { ComponentType } from "react";
 import { Skeleton } from "../components/ui/skeleton.tsx";
-import { PAGE_HEADER_CLASS, SCROLL_BODY_CLASS } from "../lib/layoutClasses.ts";
+import {
+  BACK_LINK_ROW_CLASS,
+  BREADCRUMB_ROW_CLASS,
+  PAGE_HEADER_CLASS,
+  SCROLL_BODY_CLASS,
+  SUBTITLE_ROW_CLASS,
+} from "../lib/layoutClasses.ts";
 import type { FallbackHeader, ScreenTrail } from "./screens.ts";
 
-/**
- * 題の下の戻り先の行の骨組み。実物の行(上の余白4pxと、1行の高さ)に合わせる。
- * パンくずは`text-small`の1行(約21px)で、戻りのリンクは行の高さが約25pxになる。
- */
+/** 題の下の戻り先の行。パンくずと戻りのリンクで、行の高さが違う。 */
 const TRAIL_ROW_CLASS: Readonly<Record<ScreenTrail, string>> = {
-  breadcrumb: "mt-1 flex h-[1.3rem] items-center",
-  back: "mt-1 flex h-[1.575rem] items-center",
+  breadcrumb: BREADCRUMB_ROW_CLASS,
+  back: BACK_LINK_ROW_CLASS,
 };
 
 /**
  * 最初の画面を読み込んでいる間の表示。外枠(サイドバー)は実物が描かれ、本文の位置にこれが出る。
  * 見出しの帯と本文の枠は、実物の画面と同じclassで描く。実物と入れ替わる瞬間に、帯の線と本文の位置が動かないためである。
  * 副題を持たない画面の帯は、題の1行(`text-title`の28px)でなく、帯の最小の高さ(72px)が高さを決める。
- * 副題を持つ画面は、副題の行(`text-small`の約21px)を足した高さになる。
- * 題の下に戻り先の行(パンくずか戻りのリンク)を持つ画面は、その行の高さも足す。
+ * 戻り先の行(パンくずか戻りのリンク)を持つ画面は、副題の行と、戻り先の行の高さを足す。副題は戻り先の行を持つ画面にだけある。
  * 右端の更新の操作(高さ36px、幅約154px)の枠も置く。幅が狭いと実物は題の下へ折り返し、帯が約44px高くなる。
- * 副題と戻り先の有無は経路ごとに違うので、`routeFallbackFor`が選ぶ。
+ * 更新の操作を持たない画面は、枠を置かない。
  */
 function Fallback({
-  subtitle,
   trail,
+  refresh,
 }: {
-  subtitle: boolean;
   trail?: ScreenTrail;
+  refresh: boolean;
 }) {
-  // 戻りのリンクは、取得するものを持たない新規投入の画面だけが使う。更新の操作が無い。
-  const hasRefresh = trail !== "back";
   return (
     <div role="status" className="flex min-h-0 flex-1 flex-col">
       <span className="sr-only">読み込み中</span>
       <div className={PAGE_HEADER_CLASS}>
         <div className="flex flex-col">
           <Skeleton className="h-7 w-48" />
-          {subtitle ? (
-            <div data-part="subtitle" className="flex h-[1.3rem] items-center">
-              <Skeleton className="h-3 w-72 max-w-full" />
-            </div>
-          ) : null}
           {trail === undefined ? null : (
-            <div data-part="trail" className={TRAIL_ROW_CLASS[trail]}>
-              <Skeleton className="h-3 w-40 max-w-full" />
-            </div>
+            <>
+              <div data-part="subtitle" className={SUBTITLE_ROW_CLASS}>
+                <Skeleton className="h-3 w-72 max-w-full" />
+              </div>
+              <div data-part="trail" className={TRAIL_ROW_CLASS[trail]}>
+                <Skeleton className="h-3 w-40 max-w-full" />
+              </div>
+            </>
           )}
         </div>
-        {hasRefresh ? (
+        {refresh ? (
           <Skeleton data-part="refresh" className="h-9 w-[9.6rem]" />
         ) : null}
       </div>
@@ -65,27 +65,34 @@ function Fallback({
   );
 }
 
-/** 副題を持たない画面の骨組み。 */
-export function RouteFallback() {
-  return <Fallback subtitle={false} />;
+const TRAILS = [undefined, "breadcrumb", "back"] as const;
+
+/** 見出しの帯の特徴ごとの骨組み。部品を毎回作り直さず、同じ特徴には同じ部品を返す。 */
+const FALLBACKS: ReadonlyMap<string, ComponentType> = new Map(
+  TRAILS.flatMap((trail) =>
+    [true, false].map((refresh): [string, ComponentType] => [
+      fallbackKey(trail, refresh),
+      () => (
+        <Fallback
+          {...(trail === undefined ? {} : { trail })}
+          refresh={refresh}
+        />
+      ),
+    ]),
+  ),
+);
+
+function fallbackKey(trail: ScreenTrail | undefined, refresh: boolean): string {
+  return `${trail ?? "none"}:${refresh ? "refresh" : "static"}`;
 }
 
-/** 副題を持つ画面の骨組み。 */
-export function RouteFallbackWithSubtitle() {
-  return <Fallback subtitle />;
-}
-
-/** 副題とパンくずを持つ画面の骨組み。 */
-export function RouteFallbackWithBreadcrumb() {
-  return <Fallback subtitle trail="breadcrumb" />;
-}
-
-/** 副題と戻りのリンクを持つ画面の骨組み。 */
-export function RouteFallbackWithBackLink() {
-  return <Fallback subtitle trail="back" />;
-}
-
-/** 見出しの帯の特徴に合う骨組みの部品。 */
-export function routeFallbackFor(_header: FallbackHeader = {}): ComponentType {
-  return RouteFallback;
+/** 見出しの帯の特徴に合う骨組みの部品。`refresh`を省くと、更新の操作を持つ画面の骨組みになる。 */
+export function routeFallbackFor(header: FallbackHeader = {}): ComponentType {
+  const found = FALLBACKS.get(
+    fallbackKey(header.trail, header.refresh !== false),
+  );
+  if (found === undefined) {
+    throw new Error("no fallback for the header");
+  }
+  return found;
 }

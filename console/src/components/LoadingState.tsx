@@ -6,6 +6,7 @@ import {
   type DelayedOptions,
   useDelayedVisible,
 } from "../lib/delayedVisible.ts";
+import { SECTION_HEADING_ROW_CLASS } from "../lib/layoutClasses.ts";
 import { Skeleton } from "./ui/skeleton.tsx";
 
 /** 同じ高さの行を並べる形。 */
@@ -77,10 +78,8 @@ export function LoadingStateView({
   const body =
     "node" in shape
       ? shape.node
-      : Array.from({ length: shape.rows }, (_unused, index) => (
-          // 行は並びが変わらない固定の数で、入れ替えも挿入もない。
-          // biome-ignore lint/suspicious/noArrayIndexKey: 同上。
-          <Skeleton key={index} className={shape.rowClassName} />
+      : rowIndexes(shape.rows).map((row) => (
+          <Skeleton key={row} className={shape.rowClassName} />
         ));
   return (
     <div
@@ -136,12 +135,9 @@ export function LoadingGate({
  * 骨組みの行を区別する鍵。`count`個の番号を返す。
  * 行は並びが変わらない固定の数で、入れ替えも挿入もないので、番号を鍵にしてよい。
  */
-export function rowIndexes(_count: number): number[] {
-  return [];
+export function rowIndexes(count: number): number[] {
+  return Array.from({ length: count }, (_unused, index) => index);
 }
-
-/** 骨組みの行を区別する鍵。行は並びが変わらない固定の数で、入れ替えも挿入もない。 */
-const ROW_KEYS = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] as const;
 
 /**
  * 枠で囲んだ行の並びの骨組み。実物の一覧(枠、行の間の線、行の高さ)に合わせる。
@@ -163,9 +159,9 @@ export function SkeletonListCard({
         className,
       )}
     >
-      {ROW_KEYS.slice(0, rows).map((key) => (
+      {rowIndexes(rows).map((row) => (
         <div
-          key={key}
+          key={row}
           className={cn(
             "flex flex-col justify-center gap-2 border-b border-border px-6 last:border-b-0",
             rowClassName,
@@ -192,7 +188,7 @@ export function SkeletonSection({
 }) {
   return (
     <div className={cn("flex flex-col gap-3 shrink-0", className)}>
-      <div className="flex h-[1.7rem] items-center">
+      <div className={SECTION_HEADING_ROW_CLASS}>
         <Skeleton className="h-5 w-20" />
       </div>
       <Skeleton className={cn("w-full rounded-xl", block)} />

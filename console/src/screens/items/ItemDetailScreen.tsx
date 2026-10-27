@@ -3,7 +3,7 @@ import { useLocation, useParams, useSearchParams } from "react-router";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { useWorkItemDetail } from "../../api/workItemDetailQueries.ts";
 import { useWorkItemFlow } from "../../api/workItemFlowQueries.ts";
-import { PageHeader } from "../../app/PageHeader.tsx";
+import { PageHeader, subtitlePendingOf } from "../../app/PageHeader.tsx";
 import { refreshStatusOfAll } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
@@ -21,6 +21,10 @@ import {
   parseDetailTab,
 } from "../../lib/itemDetailView.ts";
 import { workItemRef } from "../../lib/labels.ts";
+import {
+  DETAIL_PANEL_CLASS,
+  OVERVIEW_BODY_CLASS,
+} from "../../lib/layoutClasses.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
 import { ApprovalsTab } from "./detail/ApprovalsTab.tsx";
 import {
@@ -59,9 +63,11 @@ export const ITEM_DETAIL_LOADING_SHAPE: LoadingShape = {
         <Skeleton className="h-4 w-14" />
         <Skeleton className="h-4 w-20" />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
-        <Skeleton className="h-[30.5rem] w-full max-w-[47.5rem] shrink-0 rounded-xl" />
-        <SkeletonSection block="h-64" className="max-w-[47.5rem]" />
+      <div className={DETAIL_PANEL_CLASS}>
+        <div className={OVERVIEW_BODY_CLASS}>
+          <Skeleton className="h-[30.5rem] w-full shrink-0 rounded-xl" />
+          <SkeletonSection block="h-64" />
+        </div>
       </div>
     </>
   ),
@@ -102,7 +108,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         {/* 副題は取得後に出る。待つ間も副題の行を空け、取得後の見出しと同じ高さにして、下の本文が動かないようにする。 */}
         <PageHeader
           title={workItemRef(workItemId)}
-          subtitlePending={loadingDisplay !== "content"}
+          subtitlePending={subtitlePendingOf(loadingDisplay)}
           refresh={refresh}
         >
           <Breadcrumb items={itemDetailCrumbs(workItemId, back)} />
@@ -149,7 +155,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         id={ITEM_DETAIL_PANEL_ID}
         role="tabpanel"
         aria-labelledby={panelLabelledBy(tab)}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8"
+        className={DETAIL_PANEL_CLASS}
       >
         {tab === "overview" ? (
           <OverviewTab detail={detail} now={now} progress={flow.view} />

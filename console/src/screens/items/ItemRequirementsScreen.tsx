@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useRequirementsDoc, useRequirementsIndex } from "../../api/queries.ts";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
-import { PageHeader } from "../../app/PageHeader.tsx";
+import { PageHeader, subtitlePendingOf } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
@@ -14,6 +14,10 @@ import {
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { itemRequirementsCrumbs } from "../../lib/breadcrumbs.ts";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
+import {
+  REQUIREMENTS_FRAME_CLASS,
+  REQUIREMENTS_SCROLL_CLASS,
+} from "../../lib/layoutClasses.ts";
 import {
   confirmedLatestAttempt,
   parseAttemptParam,
@@ -41,9 +45,9 @@ function Message({ children }: { children: string }) {
  * 本文の長さは書類で変わるので、画面の下端を満たす目安にする。
  */
 export const REQUIREMENTS_DOC_LOADING_SHAPE: LoadingShape = {
-  className: "min-h-0 flex-1 overflow-y-auto",
+  className: REQUIREMENTS_SCROLL_CLASS,
   node: (
-    <div className="mx-auto flex w-full max-w-[75rem] items-start gap-10 px-8 py-6">
+    <div className={REQUIREMENTS_FRAME_CLASS}>
       <div className="flex min-w-0 max-w-[47.5rem] flex-1 flex-col gap-6">
         <Skeleton className="h-[3.9rem] w-full rounded-md" />
         <Skeleton className="h-7 w-3/4" />
@@ -90,7 +94,7 @@ function ItemRequirements({
         {/* 副題は取得後に出る。待つ間も副題の行を空け、取得後の見出しと同じ高さにして、下の本文が動かないようにする。 */}
         <PageHeader
           title={requested}
-          subtitlePending={loadingDisplay !== "content"}
+          subtitlePending={subtitlePendingOf(loadingDisplay)}
           refresh={refresh}
         >
           <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
@@ -136,7 +140,7 @@ function ItemRequirements({
       >
         <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
       </PageHeader>
-      <div {...SCROLL_ROOT_PROPS} className="min-h-0 flex-1 overflow-y-auto">
+      <div {...SCROLL_ROOT_PROPS} className={REQUIREMENTS_SCROLL_CLASS}>
         <RequirementsDocumentView
           doc={doc}
           prepared={prepared}

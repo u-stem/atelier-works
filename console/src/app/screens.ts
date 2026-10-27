@@ -65,12 +65,8 @@ export type ScreenRoute = {
   readonly lazy: LazyScreen;
   readonly ErrorBoundary?: ComponentType;
   /**
-   * 見出しの帯に副題を持つ画面か。最初の画面を読み込む間の骨組みが、帯の高さをそろえるために読む。
-   * 取得を待たずに副題が出る画面と、取得後に副題が出る画面のどちらも、副題を持つ画面として印を付ける。
-   */
-  readonly subtitle?: boolean;
-  /**
-   * 見出しの帯の題の下に、戻り先の行を持つ画面か。最初の画面を読み込む間の骨組みが、帯の高さをそろえるために読む。
+   * 見出しの帯の題の下に、副題と戻り先の行を持つ画面か。最初の画面を読み込む間の骨組みが、帯の高さをそろえるために読む。
+   * 取得後に常に副題が出る画面だけが持ち、副題と戻り先の行は一緒に印を付ける。
    * `breadcrumb`はパンくず、`back`は一覧への戻りのリンクである。
    */
   readonly trail?: ScreenTrail;
@@ -92,8 +88,6 @@ export type Screen = {
   readonly prefetch: () => readonly PrefetchOptions[];
   readonly lazy: LazyScreen;
   readonly ErrorBoundary?: ComponentType;
-  /** 見出しの帯に副題を持つ画面か。`ScreenRoute`の同名の項目と同じ意味である。 */
-  readonly subtitle?: boolean;
   readonly children: readonly ScreenRoute[];
 };
 
@@ -146,8 +140,8 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "items/new",
-        subtitle: true,
         trail: "back",
+        refresh: false,
         title: "新規投入",
         lazy: () =>
           import("../screens/items/NewItemScreen.tsx").then((module) => ({
@@ -156,7 +150,6 @@ export const SCREENS: readonly Screen[] = [
       },
       {
         path: "items/:id/requirements",
-        subtitle: true,
         trail: "breadcrumb",
         title: workItemTitle("の要件定義", "要件定義"),
         lazy: () =>
@@ -166,7 +159,6 @@ export const SCREENS: readonly Screen[] = [
       },
       {
         path: "items/:id",
-        subtitle: true,
         trail: "breadcrumb",
         title: workItemTitle("", "作業項目"),
         lazy: () =>
@@ -190,7 +182,6 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "reports/audit/:id",
-        subtitle: true,
         trail: "breadcrumb",
         title: workItemTitle("の監査レポート", "監査レポート"),
         lazy: () =>
@@ -216,7 +207,6 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "jobs/:id",
-        subtitle: true,
         trail: "breadcrumb",
         title: "ジョブの詳細",
         lazy: () =>

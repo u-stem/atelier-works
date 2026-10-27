@@ -95,7 +95,7 @@ export function AnalyticsSection<T>({
   failureTitle,
   emptyMessage,
   query,
-  loadingShape = ANALYTICS_COST_LOADING_SHAPE,
+  loadingShape,
   children,
 }: {
   id: string;
@@ -104,7 +104,7 @@ export function AnalyticsSection<T>({
   emptyMessage: string;
   query: SectionQuery<T[]>;
   /** 取得を待つ間の形。区画の実物の塊に合わせて渡す。 */
-  loadingShape?: LoadingShape;
+  loadingShape: LoadingShape;
   children: (rows: T[]) => ReactNode;
 }) {
   const rows = query.data;

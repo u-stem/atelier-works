@@ -28,7 +28,7 @@ export const ROUTES: RouteObject[] = [
         path: "*",
         handle: titleHandle("ページが見つかりません"),
         ErrorBoundary: RouteError,
-        HydrateFallback: routeFallbackFor({}),
+        HydrateFallback: routeFallbackFor({ refresh: false }),
         lazy: () =>
           import("../screens/NotFoundScreen.tsx").then((module) => ({
             Component: module.NotFoundScreen,
