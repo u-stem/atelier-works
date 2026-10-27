@@ -170,7 +170,7 @@ export function ResolvedNoticeDisclosure({
 }) {
   return (
     <Disclosure
-      summary={`履歴を表示(${String(notices.length)}件)`}
+      summary={`一覧を表示(${String(notices.length)}件)`}
       initiallyOpen={initiallyOpen}
     >
       <ResolvedNoticeList notices={notices} now={now} />

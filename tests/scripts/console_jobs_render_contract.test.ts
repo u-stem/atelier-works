@@ -34,7 +34,6 @@ const RENDERERS = [
 /** サーバーの文字列を画面に出す部品。無害化の部品を取り込んでいなければならない。 */
 const SAFE_TEXT_USERS = [
   "console/src/screens/jobs/FlowDiagram.tsx",
-  "console/src/screens/jobs/FlowGraphDiagram.tsx",
   "console/src/screens/jobs/FlowScreen.tsx",
   "console/src/screens/jobs/JobDetailParts.tsx",
   "console/src/screens/jobs/JobDetailScreen.tsx",
@@ -227,6 +226,14 @@ describe("the sanitizing part", () => {
     "\\p{Variation_Selector}",
   ])("holds the pattern of the class %s itself", async (cls) => {
     expect(codeOf(await textOf("console/src/lib/safeText.ts"))).toContain(cls);
+  });
+
+  test.each([
+    "console/src/screens/jobs/FlowDiagram.tsx",
+    "console/src/screens/jobs/FlowScreen.tsx",
+    "console/src/screens/items/detail/ItemFlowProgress.tsx",
+  ])("is checked for the flow view part %s", (file) => {
+    expect(SAFE_TEXT_USERS).toContain(file);
   });
 
   test.each(SAFE_TEXT_USERS)("is imported by %s", async (file) => {

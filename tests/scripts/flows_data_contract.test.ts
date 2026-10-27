@@ -314,6 +314,14 @@ describe("the schedules in the data", () => {
     ).toEqual([]);
   });
 
+  test("every schedule in the data is a schedule of the repository", () => {
+    const paths = REPO_SCHEDULES.map((item) => relative(item.path));
+
+    expect(data.schedules.filter((item) => !paths.includes(item.name))).toEqual(
+      [],
+    );
+  });
+
   test("no description keeps a bracket prefix", () => {
     expect(
       data.schedules.filter(

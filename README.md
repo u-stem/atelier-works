@@ -92,7 +92,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
 | `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
 | `mise run lint:docs` | Markdownの文書を検査する |
-| `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)とflowごとの図のデータ(`console/src/generated/flows.json`)を作り直す |
+| `mise run docs:gen` | 文書の中の生成した範囲と、Consoleに出すflowごとの図のデータ(`console/src/generated/flows.json`)を作り直す |
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test --parallel`でsmallのテストを並列に実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:changed` | `origin/main`との差分が影響するテストだけを実行する。日常の確認用で、全件の確認はCIが行う |

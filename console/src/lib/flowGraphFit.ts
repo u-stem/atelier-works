@@ -1,4 +1,4 @@
-// 起動関係の図を、節の幅に合わせてどう見せるかを決める純関数。
+// flowの図を、幅に合わせてどう見せるかを決める純関数と、図の中の文字列の折り返し。
 
 /** 図が読める最小の幅(px)。これより狭いときは図の代わりに一覧を出す。 */
 export const FIT_MIN_WIDTH = 640;
@@ -34,11 +34,6 @@ function emOf(character: string): number {
 
 function emOfText(characters: readonly string[]): number {
   return characters.reduce((sum, character) => sum + emOf(character), 0);
-}
-
-/** 文字列の幅(em)の見積もり。`wrapLines`と同じ基準で数える。 */
-export function textEm(text: string): number {
-  return emOfText(Array.from(text));
 }
 
 /**

@@ -85,7 +85,7 @@ describe("SYSTEM_TABS", () => {
     expect(SYSTEM_TABS.tabs.map((tab) => tab.label)).toEqual([
       "状態",
       "失敗と通知",
-      "履歴と構成",
+      "履歴",
       "設定",
     ]);
   });
