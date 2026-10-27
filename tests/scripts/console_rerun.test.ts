@@ -370,7 +370,7 @@ function harness(
       if (options.scheduleError !== undefined) throw options.scheduleError;
       return options.schedule === undefined ? schedule() : options.schedule;
     },
-    runScript: async (path, args) => {
+    startScript: async (path, args) => {
       events.push(`run:${path}`);
       started.push({ path, args });
       if (options.runError !== undefined) throw options.runError;

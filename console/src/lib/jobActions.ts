@@ -126,12 +126,64 @@ export function cancelDialogLines(
   return lines;
 }
 
-export const RERUNNABLE_SCHEDULE_PATHS: readonly string[] = [];
+/**
+ * 再実行の操作を出すschedule。backendの再実行のscriptが持つ`RERUNNABLE_SCHEDULES`のscheduleのパスと同じ並びで、
+ * 再実行のscriptの契約テストが突き合わせる。
+ * 画面が出す操作の絞り込みで、権限の境界ではない。境界はscriptが同じ表で確かめる。
+ */
+export const RERUNNABLE_SCHEDULE_PATHS: readonly string[] = [
+  "f/factory/collect_github",
+  "f/factory/auto_retry_pr_review",
+];
 
-export function canRerunJob(_job: Pick<JobSummaryView, "state">): boolean {
-  return false;
+type RerunCandidate = Pick<
+  JobSummaryView,
+  | "state"
+  | "script_path"
+  | "job_kind"
+  | "parent_job"
+  | "is_flow_step"
+  | "tag"
+  | "schedule_path"
+>;
+
+/**
+ * 再実行の操作を出すジョブか。失敗した、scheduleに由来するscriptのジョブで、
+ * scheduleが許可表にあり、scriptがそのscheduleのscriptと一致するもの。
+ * 実行中、成功、取り消し、飛ばされたジョブと、子のステップ、tag consoleのジョブには出さない。
+ */
+export function canRerunJob(job: RerunCandidate): boolean {
+  return (
+    job.state === "failure" &&
+    job.job_kind === "script" &&
+    !job.is_flow_step &&
+    job.parent_job === null &&
+    job.tag !== "console" &&
+    job.schedule_path !== null &&
+    RERUNNABLE_SCHEDULE_PATHS.includes(job.schedule_path) &&
+    job.script_path === job.schedule_path
+  );
 }
 
-export function rerunDialogLines(_scriptPath: string): readonly string[] {
-  return [];
+const RERUN_EFFECT_LINES: Readonly<Record<string, string>> = {
+  "f/factory/collect_github":
+    "GitHubの所有者ごとに、リポジトリとPRとIssueの状態を読み、DBの状態を置き換えます。GitHub APIの使用量を使います。",
+  "f/factory/auto_retry_pr_review":
+    "GitHubの一時的な失敗で止まったPRレビューのうち、待ちを過ぎたものを再開します。再開は同じ作業項目につき3回までで、この再実行も数えます。",
+};
+
+/**
+ * 確認のダイアログに並べる文。引数の出どころ、失敗したジョブが残ること、処理の効果、再実行しない場合を書く。
+ * 再実行の結果は、定期の失敗の通知に載らないので、新しいジョブで確かめるよう伝える。
+ */
+export function rerunDialogLines(scriptPath: string): readonly string[] {
+  const effect = Object.hasOwn(RERUN_EFFECT_LINES, scriptPath)
+    ? RERUN_EFFECT_LINES[scriptPath]
+    : undefined;
+  return [
+    "scheduleに定義された引数で、この処理を1回だけ実行します。",
+    ...(effect === undefined ? [] : [effect]),
+    "失敗したジョブは残ります。結果は、新しいジョブで確認します。再実行の失敗は、定期の失敗の通知に載りません。",
+    "同じ処理が実行中か待ちのとき、次の定期実行が近いときは、再実行しません。",
+  ];
 }

@@ -799,7 +799,7 @@ describe("what the scripts return", () => {
           enabled: true,
           args: {},
         }),
-      runScript: () => Promise.resolve(JOB),
+      startScript: () => Promise.resolve(JOB),
       sql: () => ({
         fetch: () => Promise.resolve([{ id: 5 }]),
         execute: () => Promise.resolve(),

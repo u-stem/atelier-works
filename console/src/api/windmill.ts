@@ -10,6 +10,8 @@ import { classifyRunResponse, type RunResult } from "./errors.ts";
  * 保留を置くscriptは持たない。Consoleは保留と凍結を読み、解除するだけである。
  * ジョブ、schedule、設定を読む3本(`console_jobs`、`console_schedules`、`console_config`)は読み取り専用で、
  * 書き込みは持たない。ジョブを中止する`console_job_cancel`は、作業項目のフローの実行中か待ちのジョブを1件止める。
+ * `console_job_rerun`は、失敗した定期ジョブを1件、scheduleの引数で再実行する。
+ * `console_config_update`は、設定の許可した項目を1つ、止める向きか下げる向きにだけ変える。
  */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
@@ -25,6 +27,8 @@ export const SCRIPT_PATHS = {
   console_schedules: "f/factory/console_schedules",
   console_config: "f/factory/console_config",
   console_job_cancel: "f/factory/console_job_cancel",
+  console_job_rerun: "f/factory/console_job_rerun",
+  console_config_update: "f/factory/console_config_update",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;

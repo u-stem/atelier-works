@@ -31,6 +31,8 @@ export const CONSOLE_WRITE_SCRIPTS: readonly string[] = [
   "hold_release",
   "freeze_release",
   "console_job_cancel",
+  "console_job_rerun",
+  "console_config_update",
 ];
 
 /**
@@ -43,4 +45,6 @@ export const WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES: readonly string[] = [
   "hold_release",
   "freeze_release",
   "console_job_cancel",
+  "console_job_rerun",
+  "console_config_update",
 ];

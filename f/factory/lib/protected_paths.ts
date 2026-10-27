@@ -187,7 +187,12 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 記録の配線と取消の許可表を固定するテスト(`tests/scripts/console_write_audit.test.ts`、`console_cancel.test.ts`、
  * `cleanup_db_console_actions.test.ts`)も守る。拒否フックの一覧(`scripts/claude-hooks/console-scripts.ts`)とそのテストは、
  * `scripts/claude-hooks/`と`tests/scripts/claude-hooks/`の接頭辞で、すでに守っている。
+ * 失敗した定期ジョブを再実行するscript(`console_job_rerun.ts`)と、設定を止める向きか下げる向きに変えるscript
+ * (`console_config_update.ts`)も、それぞれの`.script.yaml`とともに守る。再実行の許可表(再実行できる定期処理)と、
+ * 設定の許可表(変更できる項目と向きと下限)は、書き換えられると、再実行できる処理や変更できる設定が増えるためである。
+ * 2つの許可表を固定するテスト(`tests/scripts/console_rerun.test.ts`、`console_config_update.test.ts`)も守る。
  * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
+ * 再実行と設定変更の画面の部品(`console/src/lib/configChange.ts`、`console/src/screens/system/ConfigChangeDialog.tsx`など)も同じ理由で守らない。
  * 後続のPRで同じ部品を変えるので、守ると毎回人の確認が要る。絞り込みと記録は守ったscript側にあり、
  * 書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られる(`docs/security.md`の「ジョブの取消」)。
  * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)は守らない。契約テストが画面のソース全体を走査するので、
@@ -305,11 +310,17 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/approver.script.yaml",
   "f/factory/console_job_cancel.ts",
   "f/factory/console_job_cancel.script.yaml",
+  "f/factory/console_job_rerun.ts",
+  "f/factory/console_job_rerun.script.yaml",
+  "f/factory/console_config_update.ts",
+  "f/factory/console_config_update.script.yaml",
   "f/factory/retry_work_item.ts",
   "f/factory/retry_work_item.script.yaml",
   "f/factory/manual_intake_submit.ts",
   "f/factory/manual_intake_submit.script.yaml",
   "tests/scripts/console_cancel.test.ts",
+  "tests/scripts/console_rerun.test.ts",
+  "tests/scripts/console_config_update.test.ts",
   "tests/scripts/console_write_audit.test.ts",
   "tests/scripts/cleanup_db_console_actions.test.ts",
   "scripts/gen-console-known-paths.ts",

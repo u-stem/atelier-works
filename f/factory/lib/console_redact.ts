@@ -52,7 +52,24 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function holdsReference(_value: unknown, _depth = 0): boolean {
+const REFERENCE_DEPTH_MAX = 16;
+
+/**
+ * 値のどこかに、変数(`$var:`)かresource(`$res:`)への参照を含むか。入れ子の中も見る。
+ * 補間しない生の値を扱う処理が、参照の先を解決しないために使う。
+ * 深さの上限を超える入れ子は、中を見切れないので、参照を含むものとして扱う。
+ */
+export function holdsReference(value: unknown, depth = 0): boolean {
+  if (typeof value === "string") {
+    return value.includes("$var:") || value.includes("$res:");
+  }
+  if (depth >= REFERENCE_DEPTH_MAX) return true;
+  if (Array.isArray(value)) {
+    return value.some((item) => holdsReference(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some((item) => holdsReference(item, depth + 1));
+  }
   return false;
 }
 
