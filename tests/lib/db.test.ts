@@ -49,6 +49,7 @@ import {
   hasNonTerminalPrWorkItem,
   hasPassedMainCiRunAfter,
   hasPriorReview,
+  hasRequirementDraftAfter,
   hasSupersedingPrReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -1523,6 +1524,42 @@ describe("latestStatusTransition", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestStatusTransition(1, "requirements_generating", sql);
     expect(calls[0]?.values).toContain("requirements_generating");
+  });
+
+  test("binds the suffix of the notes to skip", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusTransition(1, "requirements_generating", sql, " (x)");
+    expect(calls[0]?.values).toContain(" (x)");
+  });
+
+  test("binds null when no suffix is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusTransition(1, "requirements_generating", sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+});
+
+describe("hasRequirementDraftAfter", () => {
+  test("is true when a later draft exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await hasRequirementDraftAfter(1, 2, sql)).toBe(true);
+  });
+
+  test("is false when no later draft exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasRequirementDraftAfter(1, 2, sql)).toBe(false);
+  });
+
+  test("binds the work item and the attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasRequirementDraftAfter(7, 2, sql);
+    expect(calls[0]?.values).toEqual([7, 2]);
+  });
+
+  test("compares the attempt with a strict greater-than", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasRequirementDraftAfter(7, 2, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain("attempt > ?");
   });
 });
 

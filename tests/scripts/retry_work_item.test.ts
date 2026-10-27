@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { StatusEventSummary } from "../../f/factory/lib/db.ts";
+import type { SqlClient, StatusEventSummary } from "../../f/factory/lib/db.ts";
 import {
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -37,8 +37,11 @@ import {
   launchFailureError,
   newerCycleRefusal,
   newerPrRowRefusal,
+  RESTART_CARRYING_GAP_NOTE_SUFFIX,
   type RestartContext,
   type RestartContextDeps,
+  restartContextDeps,
+  restartNote,
   retryResult,
   runningFlowRefusal,
   shouldRefreshIntakeOnRestart,
@@ -54,6 +57,7 @@ function context(overrides: Partial<RestartContext> = {}): RestartContext {
     designApproved: false,
     stop: "other",
     feedback: null,
+    carriesGap: false,
     ...overrides,
   };
 }
@@ -1136,12 +1140,14 @@ describe("feedbackFromRejection", () => {
     );
   });
 
-  test("masks a secret in the reason", () => {
-    expect(feedbackFromRejection(`use ${GITHUB_TOKEN}`)).toBe("use ***");
+  test("passes the reason as it is, as the normal path does", () => {
+    expect(feedbackFromRejection(`use ${GITHUB_TOKEN}\u0000 now`)).toBe(
+      `use ${GITHUB_TOKEN}\u0000 now`,
+    );
   });
 
-  test("cuts the reason at 2000 characters", () => {
-    expect(feedbackFromRejection("a".repeat(2500))).toBe("a".repeat(2000));
+  test("does not cut a long reason", () => {
+    expect(feedbackFromRejection("a".repeat(4000))).toBe("a".repeat(4000));
   });
 
   test("returns null for an empty reason", () => {
@@ -1457,6 +1463,8 @@ describe("buildRestartContext", () => {
     readonly designReads: number[];
     readonly eventReads: [number, WorkItemStatus][];
     readonly transitionReads: [number, WorkItemStatus][];
+    readonly skipSuffixes: string[];
+    readonly draftReads: [number, number][];
   };
 
   function harness(
@@ -1464,15 +1472,22 @@ describe("buildRestartContext", () => {
       designApproval?: DesignApprovalRef | null;
       stopEvent?: StatusEventSummary | null;
       transition?: StatusEventSummary | null;
+      /** 新しい順の遷移。注記が印で終わる行を飛ばす実際の問い合わせと同じ規則で返す。 */
+      transitions?: readonly StatusEventSummary[];
+      draftAfter?: boolean;
     } = {},
   ): Harness {
     const designReads: number[] = [];
     const eventReads: [number, WorkItemStatus][] = [];
     const transitionReads: [number, WorkItemStatus][] = [];
+    const skipSuffixes: string[] = [];
+    const draftReads: [number, number][] = [];
     return {
       designReads,
       eventReads,
       transitionReads,
+      skipSuffixes,
+      draftReads,
       deps: {
         latestDesignApproval: async (id) => {
           designReads.push(id);
@@ -1482,9 +1497,21 @@ describe("buildRestartContext", () => {
           eventReads.push([id, status]);
           return options.stopEvent ?? null;
         },
-        latestStatusTransition: async (id, status) => {
+        latestStatusTransition: async (id, status, skipNoteSuffix) => {
           transitionReads.push([id, status]);
+          skipSuffixes.push(skipNoteSuffix);
+          if (options.transitions !== undefined) {
+            return (
+              options.transitions.find(
+                (row) => !(row.note ?? "").endsWith(skipNoteSuffix),
+              ) ?? null
+            );
+          }
           return options.transition ?? null;
+        },
+        hasRequirementDraftAfter: async (id, attempt) => {
+          draftReads.push([id, attempt]);
+          return options.draftAfter ?? false;
         },
       },
     };
@@ -1748,15 +1775,307 @@ describe("buildRestartContext", () => {
       expect(context.feedback).toBeNull();
     });
 
-    test("is cut to the length limit of a report", async () => {
+    test("is not cut to the length limit of a report", async () => {
       const context = await build(harness(), {
         requirementsApproval: {
           ...REQUIREMENTS_REJECTED,
           reason: "x".repeat(GAP_REPORT_MAX_CHARS + 50),
         },
       });
-      expect(context.feedback?.length).toBe(GAP_REPORT_MAX_CHARS);
+      expect(context.feedback?.length).toBe(GAP_REPORT_MAX_CHARS + 50);
     });
+
+    test("is not masked or cleaned, as the normal path passes it", async () => {
+      const reason = `use ${GITHUB_TOKEN}\u0000 now`;
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_REJECTED, reason },
+      });
+      expect(context.feedback).toBe(reason);
+    });
+
+    test("does not carry a gap", async () => {
+      expect((await build(harness(), REJECTED)).carriesGap).toBe(false);
+    });
+  });
+
+  describe("a gap that a restart carries on", () => {
+    const CARRIED_RESTART: StatusEventSummary = {
+      from_status: "needs_human",
+      note: "retry_work_item: restarted from needs_human (carrying gap)",
+    };
+    const PLAIN_RESTART: StatusEventSummary = {
+      from_status: "needs_human",
+      note: "retry_work_item: restarted from needs_human",
+    };
+    const GAP_ROW: StatusEventSummary = {
+      from_status: "implementing",
+      note: "gap: X",
+    };
+
+    test("is the mark the restart note ends with", () => {
+      expect(RESTART_CARRYING_GAP_NOTE_SUFFIX).toBe(" (carrying gap)");
+    });
+
+    test("is passed to the lookup of the transition", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.skipSuffixes).toEqual([RESTART_CARRYING_GAP_NOTE_SUFFIX]);
+    });
+
+    test("skips a restart that carried the gap and reads the gap before it", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("skips every restart that carried the gap", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [CARRIED_RESTART, CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("does not skip a restart that carried no gap, so the old gap does not leak", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [PLAIN_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("does not read past a plain restart that follows a carried one", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [PLAIN_RESTART, CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("carries the gap on when a gap is passed", async () => {
+      const h = harness({ stopEvent: GAP_STOP, transitions: [GAP_ROW] });
+      expect((await build(h)).carriesGap).toBe(true);
+    });
+
+    test("does not carry a gap on when no feedback is passed", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [PLAIN_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).carriesGap).toBe(false);
+    });
+
+    test("does not carry a gap on for a restart after an untrusted requirements directory", async () => {
+      const h = harness({
+        stopEvent: {
+          from_status: "implementing",
+          note: REQUIREMENTS_MODIFIED_REASON,
+        },
+        transitions: [GAP_ROW],
+      });
+      expect((await build(h)).carriesGap).toBe(false);
+    });
+  });
+
+  describe("a reason that the attempt did not consume", () => {
+    const APPROVED_1 = { ...REQUIREMENTS_APPROVED, attempt: 1 };
+    const REJECTED_1 = { ...REQUIREMENTS_REJECTED, attempt: 1 };
+    const ADVANCED = { id: 7, attempt: 2, design_attempt: 0 };
+    const GAP_ROW: StatusEventSummary = {
+      from_status: "implementing",
+      note: "gap: X",
+    };
+
+    test("asks whether a draft exists after the attempt of the approval", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h, { workItem: ADVANCED, requirementsApproval: APPROVED_1 });
+      expect(h.draftReads).toEqual([[7, 1]]);
+    });
+
+    test("passes the gap when the preparation advanced the attempt and no draft was made", async () => {
+      const h = harness({ stopEvent: GAP_STOP, transitions: [GAP_ROW] });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("carries the gap on again", async () => {
+      const h = harness({ stopEvent: GAP_STOP, transitions: [GAP_ROW] });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.carriesGap).toBe(true);
+    });
+
+    test("does not pass the gap once a draft was made", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [GAP_ROW],
+        draftAfter: true,
+      });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not pass the gap when the work item did not stop after the regeneration", async () => {
+      const h = harness({
+        stopEvent: { from_status: "implementing", note: "something else" },
+        transitions: [GAP_ROW],
+      });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not pass an old gap behind a restart that carried none", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          { from_status: "needs_human", note: "retry_work_item: restarted" },
+          GAP_ROW,
+        ],
+      });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("passes the rejection reason when the attempt moved on and no draft was made", async () => {
+      const h = harness();
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: REJECTED_1,
+      });
+      expect(context.feedback).toBe("the scope is too wide");
+    });
+
+    test("does not pass the rejection reason once a draft was made", async () => {
+      const h = harness({ draftAfter: true });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: REJECTED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not carry a gap on for a rejection reason", async () => {
+      const context = await build(harness(), {
+        workItem: ADVANCED,
+        requirementsApproval: REJECTED_1,
+      });
+      expect(context.carriesGap).toBe(false);
+    });
+
+    test("does not ask about drafts when the approval is of the current attempt", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.draftReads).toEqual([]);
+    });
+
+    test("does not ask about drafts for a rejection of the current attempt", async () => {
+      const h = harness();
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.draftReads).toEqual([]);
+    });
+
+    test("does not pass a reason without an approval", async () => {
+      const context = await build(harness({ transitions: [GAP_ROW] }), {
+        workItem: ADVANCED,
+        requirementsApproval: null,
+      });
+      expect(context.feedback).toBeNull();
+    });
+  });
+});
+
+describe("restartNote", () => {
+  const BASE = {
+    status: "needs_human",
+    restartStatus: "needs_human",
+    carriesGap: false,
+  } as const;
+
+  test("names the stopped status", () => {
+    expect(restartNote(BASE)).toBe(
+      "retry_work_item: restarted from needs_human",
+    );
+  });
+
+  test("marks a restart that carries a gap on", () => {
+    expect(restartNote({ ...BASE, carriesGap: true })).toBe(
+      "retry_work_item: restarted from needs_human (carrying gap)",
+    );
+  });
+
+  test("names the status before a cancellation", () => {
+    expect(
+      restartNote({ ...BASE, status: "cancelled", restartStatus: "failed" }),
+    ).toBe(
+      "retry_work_item: restarted from cancelled (was failed before the closed target was cancelled)",
+    );
+  });
+
+  test("ends a marked note with the mark after a cancellation", () => {
+    expect(
+      restartNote({
+        status: "cancelled",
+        restartStatus: "failed",
+        carriesGap: true,
+      }).endsWith(RESTART_CARRYING_GAP_NOTE_SUFFIX),
+    ).toBe(true);
+  });
+
+  test("does not end an unmarked note with the mark", () => {
+    expect(restartNote(BASE).endsWith(RESTART_CARRYING_GAP_NOTE_SUFFIX)).toBe(
+      false,
+    );
+  });
+});
+
+describe("restartContextDeps", () => {
+  type Call = { text: string; values: unknown[] };
+
+  function fakeSql(rows: Record<string, unknown>[] = []): {
+    sql: SqlClient;
+    calls: Call[];
+  } {
+    const calls: Call[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      return {
+        fetch: () => Promise.resolve(rows),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, calls };
+  }
+
+  test("binds the mark to skip when it reads the latest transition", async () => {
+    const { sql, calls } = fakeSql();
+    await restartContextDeps(sql).latestStatusTransition(
+      7,
+      "requirements_generating",
+      RESTART_CARRYING_GAP_NOTE_SUFFIX,
+    );
+    expect(calls[0]?.values).toContain(RESTART_CARRYING_GAP_NOTE_SUFFIX);
+  });
+
+  test("asks whether a draft exists after the attempt", async () => {
+    const { sql, calls } = fakeSql([{ id: 1 }]);
+    const found = await restartContextDeps(sql).hasRequirementDraftAfter(7, 1);
+    expect([found, calls[0]?.values]).toEqual([true, [7, 1]]);
   });
 });
 
@@ -1773,7 +2092,27 @@ describe("main: the context of the restart", () => {
 
   test("builds the context with the dependencies that read the records", () => {
     expect(restart).toMatch(
-      /buildRestartContext\([\s\S]*?\{\s*latestDesignApproval,\s*latestStatusEvent,\s*latestStatusTransition,?\s*\}/,
+      /buildRestartContext\([\s\S]*?restartContextDeps\(\),?\s*\)/,
+    );
+  });
+
+  test("passes the design_enabled setting as the design flag", () => {
+    expect(restart).toContain("designEnabled: config.design_enabled");
+  });
+
+  test("passes the implement_enabled setting as the implement flag", () => {
+    expect(restart).toContain("implementEnabled: config.implement_enabled");
+  });
+
+  test("passes the latest requirements approval to the context", () => {
+    expect(restart).toMatch(
+      /buildRestartContext\(\s*\{[\s\S]*?\brequirementsApproval,[\s\S]*?\},/,
+    );
+  });
+
+  test("writes the restart note from the carried gap of the context", () => {
+    expect(restart).toMatch(
+      /restartNote\(\{[\s\S]*?carriesGap: context\.carriesGap/,
     );
   });
 

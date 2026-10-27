@@ -879,6 +879,7 @@ export async function latestStatusTransition(
   workItemId: number,
   toStatus: WorkItemStatus,
   sql: SqlClient = defaultSqlClient,
+  _skipNoteSuffix: string | null = null,
 ): Promise<StatusEventSummary | null> {
   const rows = await sql`
     SELECT from_status, note FROM factory.work_item_events
@@ -3568,6 +3569,15 @@ export async function latestDraft(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toRequirementDraft(row);
+}
+
+/** `attempt`より大きい`attempt`の要件定義の下書きが、作業項目にあるか。 */
+export async function hasRequirementDraftAfter(
+  _workItemId: number,
+  _attempt: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
 }
 
 /**

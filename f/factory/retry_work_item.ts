@@ -39,6 +39,7 @@ import {
   addNoticeUnlessUnresolved,
   defaultSqlClient,
   getWorkItem,
+  hasRequirementDraftAfter,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
   latestDesignApproval,
@@ -50,6 +51,7 @@ import {
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   type RequirementsApprovalRef,
+  type SqlClient,
   type StatusEventSummary,
   setFlowJobId,
   setFlowJobIdIfUnset,
@@ -132,6 +134,7 @@ export type RestartContext = {
   readonly designApproved: boolean;
   readonly stop: RestartStop;
   readonly feedback: string | null;
+  readonly carriesGap: boolean;
 };
 
 /**
@@ -196,8 +199,39 @@ export type RestartContextDeps = {
   readonly latestStatusTransition: (
     workItemId: number,
     toStatus: WorkItemStatus,
+    skipNoteSuffix: string,
   ) => Promise<StatusEventSummary | null>;
+  readonly hasRequirementDraftAfter: (
+    workItemId: number,
+    attempt: number,
+  ) => Promise<boolean>;
 };
+
+/** 差し戻しの理由を引き継いだ再実行の遷移の注記の末尾。 */
+export const RESTART_CARRYING_GAP_NOTE_SUFFIX = "";
+
+/** 再実行の遷移の注記を作る。 */
+export function restartNote(_input: {
+  readonly status: WorkItemStatus;
+  readonly restartStatus: WorkItemStatus;
+  readonly carriesGap: boolean;
+}): string {
+  return "";
+}
+
+/** `buildRestartContext`が読む問い合わせを、`sql`で組み立てる。 */
+export function restartContextDeps(
+  sql: SqlClient = defaultSqlClient,
+): RestartContextDeps {
+  return {
+    latestDesignApproval: (id) => latestDesignApproval(id, sql),
+    latestStatusEvent: (id, status) => latestStatusEvent(id, status, sql),
+    latestStatusTransition: (id, status, skipNoteSuffix) =>
+      latestStatusTransition(id, status, sql, skipNoteSuffix),
+    hasRequirementDraftAfter: (id, attempt) =>
+      hasRequirementDraftAfter(id, attempt, sql),
+  };
+}
 
 /**
  * 再開先を決めるための文脈を組み立てる。取得元は次のとおり。
@@ -245,6 +279,7 @@ export async function buildRestartContext(
     const transition = await deps.latestStatusTransition(
       workItem.id,
       "requirements_generating",
+      RESTART_CARRYING_GAP_NOTE_SUFFIX,
     );
     feedback = feedbackFromGapNote(transition?.note ?? null);
   } else if (
@@ -261,6 +296,7 @@ export async function buildRestartContext(
     designApproved,
     stop,
     feedback,
+    carriesGap: false,
   };
 }
 
@@ -841,7 +877,7 @@ async function restartWorkItem(
       implementEnabled: config.implement_enabled,
       designEnabled: config.design_enabled,
     },
-    { latestDesignApproval, latestStatusEvent, latestStatusTransition },
+    restartContextDeps(),
   );
   const plan = computeRestartPlan(restartItem, context);
   const refusal = runningFlowRefusal(
