@@ -242,6 +242,22 @@ describe("needsIssueCheck", () => {
       needsIssueCheck("record_and_dispatch", "approve", "issue_proposal"),
     ).toBe(false);
   });
+
+  test("checks a new approval of a design", () => {
+    expect(needsIssueCheck("record_and_dispatch", "approve", "design")).toBe(
+      true,
+    );
+  });
+
+  test("does not check a rejection of a design", () => {
+    expect(needsIssueCheck("record_and_dispatch", "reject", "design")).toBe(
+      false,
+    );
+  });
+
+  test("does not check the rerun of a recorded decision of a design", () => {
+    expect(needsIssueCheck("redispatch", "approve", "design")).toBe(false);
+  });
 });
 
 describe("issueCheckRefusal", () => {
@@ -281,5 +297,35 @@ describe("issueCheckRefusal", () => {
 
   test("names the approval request in the refusal", () => {
     expect(issueCheckRefusal("changed", 7)).toContain("approval request 7");
+  });
+
+  test("tells the approver of a design that rejecting regenerates from the current issue", () => {
+    expect(issueCheckRefusal("changed", 7, "design")).toContain(
+      "reject the request; the requirements are regenerated from the current issue",
+    );
+  });
+
+  test("keeps the marker the console matches when a design could not be compared", () => {
+    expect(issueCheckRefusal("unavailable", 7, "design")).toContain(
+      "the issue could not be compared",
+    );
+  });
+
+  test("tells the approver of a design that rejections are limited by max_design_attempts", () => {
+    expect(issueCheckRefusal("unavailable", 7, "design")).toContain(
+      "max_design_attempts",
+    );
+  });
+
+  test("keeps the sentence for requirements when the kind is requirements", () => {
+    expect(issueCheckRefusal("unavailable", 7, "requirements")).toContain(
+      "If the issue was transferred or deleted, reject the request.",
+    );
+  });
+
+  test("does not mention max_design_attempts for requirements", () => {
+    expect(issueCheckRefusal("unavailable", 7, "requirements")).not.toContain(
+      "max_design_attempts",
+    );
   });
 });

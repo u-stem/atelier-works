@@ -217,6 +217,21 @@ describe("assertIssueMatchesIntake", () => {
     );
   });
 
+  test("explains the limit of regenerations when a design could not be compared", async () => {
+    const { deps } = checkDeps({ fetchFn: () => issueResponse(500, {}) });
+    await expect(
+      assertIssueMatchesIntake(5, 9, deps, "design"),
+    ).rejects.toThrow("max_design_attempts");
+  });
+
+  test("keeps the sentence of requirements when no kind is passed", async () => {
+    const { deps } = checkDeps({ fetchFn: () => issueResponse(500, {}) });
+    const message = await assertIssueMatchesIntake(5, 9, deps).catch((err) =>
+      String(err),
+    );
+    expect(message).not.toContain("max_design_attempts");
+  });
+
   test("keeps the token out of the refusal", async () => {
     const { deps } = checkDeps({
       fetchFn: () => Promise.reject(new Error(TOKEN)),
@@ -390,6 +405,17 @@ describe("decideApproval for the kinds that have a handler", () => {
     await expect(decideApproval(h.deps, REJECT)).rejects.toThrow(
       "refusing to overwrite it",
     );
+  });
+
+  test("passes the kind of the request to the issue check", async () => {
+    const kinds: string[] = [];
+    const h = decideHarness(request(), {
+      assertIssueMatchesIntake: async (_requestId, _workItemId, kind) => {
+        kinds.push(kind);
+      },
+    });
+    await decideApproval(h.deps, APPROVE);
+    expect(kinds).toEqual(["requirements"]);
   });
 
   test("does not start the handler when the issue check refuses", async () => {
