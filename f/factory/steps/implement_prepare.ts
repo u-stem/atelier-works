@@ -6,7 +6,10 @@
 // GitHubのIssueはopen判定と、取り込み時点のURLが空のときのURLにだけ使う。
 
 import * as wmill from "windmill-client@1.817.0";
-import { isRequirementsApprovedForAttempt } from "../lib/approval_gate.ts";
+import {
+  designGate,
+  isRequirementsApprovedForAttempt,
+} from "../lib/approval_gate.ts";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import {
   CheckEnvironmentError,
@@ -22,9 +25,11 @@ import {
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
+  getDesignDraft,
   getRequirementDraft,
   getWorkItem,
   hasUnfinishedPrRun,
+  latestDesignApproval,
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
@@ -385,6 +390,17 @@ export async function main(
       }),
   );
   if (untrusted !== null) return stop("needs_human", untrusted);
+  // 設計が有効なら、設計の承認が現在の状態に一致しなければ、ブランチにもworktreeにも触れる前に止める。
+  // 判定の実体は`lib/approval_gate.ts`にあり、ここでは呼び出しと、止める1文だけを持つ。
+  const gate = await designGate(
+    {
+      designEnabled: config.design_enabled,
+      workItem,
+      requirementsApproval: approval,
+    },
+    { latestDesignApproval, getDesignDraft },
+  );
+  if (gate.kind === "stop") return stop("needs_human", gate.reason);
 
   // ブランチのPR(閉じたものを含む)で、pr_fix / pr_reviewが同じworktreeを使っていることがある。
   // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に、

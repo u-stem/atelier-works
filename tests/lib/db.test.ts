@@ -5805,7 +5805,7 @@ describe("listAutoRetryCandidates", () => {
           kind: "issue",
           status: "needs_human",
           attempt: 2,
-          design_attempt: "3",
+          design_attempt: 3,
           flow_job_id: null,
         },
       ],

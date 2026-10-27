@@ -155,16 +155,29 @@ export type ReadyForImplementDeps = {
   ) => Promise<DesignApprovalRef | null>;
 };
 
-/** 実装へ再開してよいか。 */
+/**
+ * 実装フローで再開してよいか。再実行と自動再開と自己更新の起動の要否が、同じ判定を使う。
+ * 要件定義が現在の`attempt`で承認済みで、設計が無効か、設計の承認が照合を通るときだけ真を返す。
+ * 設計が無効のときは、設計の承認を読まない。
+ */
 export async function isReadyForImplement(
   item: Pick<WorkItem, "id" | "attempt" | "design_attempt">,
   designEnabled: boolean,
   deps: ReadyForImplementDeps,
 ): Promise<boolean> {
-  void item;
-  void designEnabled;
-  void deps;
-  return false;
+  const requirements = await deps.latestRequirementsApproval(item.id);
+  if (
+    requirements === null ||
+    !isRequirementsApprovedForAttempt(requirements, item.attempt)
+  ) {
+    return false;
+  }
+  if (!designEnabled) return true;
+  return isDesignApprovedForAttempt(await deps.latestDesignApproval(item.id), {
+    attempt: item.attempt,
+    designAttempt: item.design_attempt,
+    requirementDraftId: requirements.draft_id,
+  });
 }
 
 /** `designGate`の結果。 */
@@ -192,12 +205,45 @@ export type DesignGateDeps = {
   > | null>;
 };
 
-/** 実装の関門の、設計の承認の判定。 */
+/**
+ * 実装の関門の、設計の承認の判定。
+ * - 設計が無効なら`skip`を返す。承認の行があっても読まず、設計書も渡さない。
+ * - 設計が有効で、承認が照合を通らなければ、理由つきで`stop`を返す。
+ * - 照合を通れば、承認依頼が指す設計書を読み直し、`pass`と設計書の本文を返す。最新の設計書は読まない。
+ *   後から保存された別の設計書が、承認済みの設計書に取って代わって実装に渡らないようにするためである。
+ *   読み直した設計書が、照合した値と食い違う、または無いときは、`inconsistent`で止める。
+ */
 export async function designGate(
   input: DesignGateInput,
   deps: DesignGateDeps,
 ): Promise<DesignGateResult> {
-  void input;
-  void deps;
-  return { kind: "skip" };
+  if (!input.designEnabled) return { kind: "skip" };
+  const { workItem } = input;
+  const approval = await deps.latestDesignApproval(workItem.id);
+  const verdict = designApprovalVerdict(approval, {
+    attempt: workItem.attempt,
+    designAttempt: workItem.design_attempt,
+    requirementDraftId: input.requirementsApproval.draft_id,
+  });
+  if (verdict.kind !== "ok") {
+    return {
+      kind: "stop",
+      reason: designGateReason({ kind: verdict.kind }, workItem.design_attempt),
+    };
+  }
+  const inconsistent: DesignGateResult = {
+    kind: "stop",
+    reason: DESIGN_APPROVAL_INCONSISTENT_REASON,
+  };
+  if (approval === null || approval.draft === null) return inconsistent;
+  const draft = await deps.getDesignDraft(approval.design_draft_id);
+  if (
+    draft === null ||
+    draft.work_item_id !== workItem.id ||
+    draft.design_attempt !== approval.draft.design_attempt ||
+    draft.requirement_draft_id !== approval.draft.requirement_draft_id
+  ) {
+    return inconsistent;
+  }
+  return { kind: "pass", markdown: draft.markdown };
 }

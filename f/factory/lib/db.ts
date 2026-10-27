@@ -1157,6 +1157,7 @@ export type AutoRetryCandidate = {
   readonly kind: (typeof AUTO_RETRY_KINDS)[number];
   readonly status: WorkItemStatus;
   readonly attempt: number;
+  /** 設計の承認の照合に使う。 */
   readonly design_attempt: number;
   readonly flow_job_id: string | null;
 };
@@ -1195,7 +1196,7 @@ export async function listAutoRetryCandidates(
 ): Promise<AutoRetryCandidate[]> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const rows = await sql`
-    SELECT w.id, w.kind, w.status, w.attempt, w.flow_job_id
+    SELECT w.id, w.kind, w.status, w.attempt, w.design_attempt, w.flow_job_id
     FROM factory.work_items w
     JOIN LATERAL (
       SELECT e.note, e.occurred_at FROM factory.work_item_events e
@@ -1250,7 +1251,7 @@ export async function listAutoRetryCandidates(
     kind: parseEnum(row.kind, AUTO_RETRY_KINDS, "kind"),
     status: parseEnum(row.status, WORK_ITEM_STATUSES, "status"),
     attempt: parseRequiredNumber(row.attempt, "attempt"),
-    design_attempt: 0,
+    design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
     flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
   }));
 }
