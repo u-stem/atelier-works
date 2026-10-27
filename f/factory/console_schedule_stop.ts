@@ -1,22 +1,26 @@
 // Consoleから、凍結を置いたscheduleを1件止める(無効にする)script。
 //
 // 凍結を置いたあとで、次のすべてを満たすときだけ止める。
-// - 名前で列挙したschedule(`STOPPABLE_SCHEDULES`)である。反映を担う`self_update`、作業項目の照合を兼ねる`poll_issues`、
-//   失敗の検出と見張りは、止めると他の仕組みが黙るので列挙しない(`NOT_STOPPABLE_SCHEDULES`に理由を書く)。
+// - 名前で列挙したschedule(`STOPPABLE_SCHEDULES`)である。選ぶ基準は`STOPPABLE_SCHEDULES`のコメントにある。
 // - そのscheduleに有効な凍結があり、置いたのが人である。ローカルのセッションが置いた凍結の下では止めない。
 // - 凍結を置いてから7分が過ぎている。凍結を置く前に始まった`self_update`のpushが、終わるまでの時間にあたる。
 //   その間は、凍結の前の定義でscheduleを上書きしうる。
+//   人の端末のpushには時間の上限が無く、この待ちの対象外である。
+// - 凍結の期限まで5分以上残っている。止めた直後に凍結が終わると、追従が戻す前後の窓が読めなくなるためである。
 // - 凍結を置く前から実行中の`self_update`が無い。7分を超えて続く反映が、まだ上書きしうるためである。
 // - scheduleが今もそのscriptの定期処理で、有効である。
 // 凍結が終わるか解除されると、次の自己更新の追従がscheduleをリポジトリの定義(有効)に戻す。有効に戻す操作は持たない。
+// 有効なdeployの保留があるあいだは、追従も待つので、凍結が終わっても戻らない。
 //
 // 操作の記録(`factory.console_actions`)は、無効にする前に`attempted`の行を入れ、後で結果を更新する。
 // 行を入れられなければ、止めずに断る。更新に失敗しても止めた結果は戻さず、`action_audit`を`failed`にする。
-// 無効にした後にscheduleを読み直し、無効になっていなければ記録の結果を`partial`にする。
+// 無効にした後にscheduleと凍結を読み直す。無効になっていないか、凍結が先に終わっていれば、記録の結果を`partial`にする。
+// 凍結が先に終わると、追従が戻す機会を失い、scheduleが無効のまま残りうるので、結果で知らせる。
 // 操作者は、ジョブのWindmill実行文脈から導く(`deriveApprover`)。導けなければ断る。引数に操作者は取らない。
 //
 // Console用workerで動くので、どのsecret変数も読まない。SDKの呼び出しは、境界テストの許可表に収める。
 // 凍結の変数は読むだけで、書かない。パスはリテラルで、走査が固定する。
+// 凍結の変数は初回には無い。読めなかったときは`existsVariable`で有無を確かめ、無いときだけ凍結が無いものとして扱う。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
@@ -34,6 +38,7 @@ import {
   type FreezeReadIo,
   type FreezeState,
   readFreezeStateVia,
+  readVariableOrNull,
 } from "./lib/freezes.ts";
 
 const SELF_UPDATE_PATH = "f/factory/self_update";
@@ -46,19 +51,25 @@ const SELF_UPDATE_PATH = "f/factory/self_update";
  */
 export const STOP_SETTLE_MINUTES = 7;
 
-export const STOP_MIN_REMAINING_MINUTES = 0;
+/**
+ * 止める時点で、凍結の期限まで残っていなければならない分。
+ * 止めた直後に凍結が終わると、追従が戻す前に凍結の行が片付けられ、scheduleが無効のまま残りうる。
+ * 画面の定数(`console/src/lib/holdPlace.ts`)と同じ値で、契約テストが突き合わせる。
+ */
+export const STOP_MIN_REMAINING_MINUTES = 5;
 
 const MINUTE_MS = 60_000;
 
 /**
- * 止めてよいschedule。止めても、他の仕組みが黙るだけで、作業項目の状態も反映も壊さないものに限る。
+ * 止めてよいschedule。
+ * 止められるのは、止めて黙るのがそのスケジュール自身の仕事だけで、
+ * ほかのスケジュールの入力や検知を止めず、再開を自己更新の追従へ任せられるものだけである。
  * 止めると出る通知と影響は、画面の確認の文と文書に書く。
  * 新しいscheduleは、ここに足すか、`NOT_STOPPABLE_SCHEDULES`に理由つきで置くまで、止められない。
  * 契約テスト(`tests/scripts/console_schedule_stop.test.ts`)が、リポジトリのscheduleとの差を固定する。
  */
 export const STOPPABLE_SCHEDULES: readonly string[] = [
   "f/factory/auto_retry_pr_review",
-  "f/factory/collect_github",
   "f/factory/drawio_viewer_bump",
   "f/factory/notify_daily_summary",
   "f/factory/poll_prs",
@@ -74,6 +85,8 @@ export const NOT_STOPPABLE_SCHEDULES: Readonly<Record<string, string>> = {
   "f/factory/cleanup_db": "古い行を削除する。止めると表が育ち続ける",
   "f/factory/cleanup_workspaces":
     "作業領域を掃除する。止めると、止まらないClaudeのプロセスが残る",
+  "f/factory/collect_github":
+    "GitHubの収集。止めると、poll_issuesの取り込みとpoll_dependabotが黙り、PRのCIとコンフリクトの判断が古い記録で動く",
   "f/factory/console_fetch_watch":
     "Consoleの取り込みの見張り。止めると、取り込みの問題を知らせる者がいなくなる",
   "f/factory/default_worker_watch":
@@ -96,6 +109,7 @@ export const STOP_REFUSAL_REASONS = [
   "no_freeze",
   "other_holder_freeze",
   "too_early",
+  "freeze_ending",
   "self_update_running",
   "schedule_changed",
   "already_stopped",
@@ -122,6 +136,11 @@ export type StopResult =
       readonly freeze_expires_at: string;
       /** 読み直したscheduleが無効になっていたか。 */
       readonly verified: boolean;
+      /**
+       * 無効にした後の読み直しで、止めたときの凍結がまだ有効だったか。読み直せなかったときも偽にする。
+       * 偽のとき、追従がscheduleを戻さないことがあるので、Windmillで有効に戻す必要がある。
+       */
+      readonly freeze_held: boolean;
       readonly action_audit: ActionAudit;
     };
 
@@ -194,6 +213,10 @@ export function checkFreeze(
       result: refused("too_early", new Date(readyAt).toISOString()),
     };
   }
+  const remaining = Date.parse(newest.expires_at) - now.getTime();
+  if (remaining < STOP_MIN_REMAINING_MINUTES * MINUTE_MS) {
+    return { kind: "refused", result: refused("freeze_ending") };
+  }
   return { kind: "ok", freeze: newest };
 }
 
@@ -247,8 +270,29 @@ async function readBack(ports: StopPorts, path: string): Promise<unknown> {
 }
 
 /**
+ * 無効にした後に、止めたときの凍結`freezeId`がまだ有効かを読み直す。
+ * 読めないときは、有効と言い切れないので偽にする。
+ */
+async function freezeStillHeld(
+  ports: StopPorts,
+  freezeId: string,
+): Promise<boolean> {
+  const state = await readFreezeStateVia(ports.freeze);
+  if (!state.ok) return false;
+  return activeFreezes(state.value, ports.now()).some(
+    (entry) => entry.id === freezeId,
+  );
+}
+
+/** 無効にした後の読み直しの結果。 */
+type AfterStop = {
+  readonly stillEnabled: boolean;
+  readonly freezeHeld: boolean;
+};
+
+/**
  * schedule`schedulePath`を止める。呼び出しの順序は、許可表の判定、凍結の読み取りと判定、scheduleの読み取りと判定、
- * 自己更新のキューの読み取り、操作者の導出、記録(`attempted`)、無効にする、読み直し、記録(結果)に固定する。
+ * 自己更新のキューの読み取り、操作者の導出、記録(`attempted`)、無効にする、scheduleと凍結の読み直し、記録(結果)に固定する。
  * 凍結の変数を読めない、壊れているとき、scheduleの読み取りの404以外の失敗は、投げる。
  * 無効にする呼び出しが失敗したときは、記録を`failed`にしてから投げる。
  */
@@ -302,14 +346,15 @@ export async function stopScheduleFromConsole(
       target: `schedule:${path}`,
       changes: { freeze_id: freeze.id },
     },
-    async (): Promise<RecordedOperation<boolean>> => {
+    async (): Promise<RecordedOperation<AfterStop>> => {
       await ports.setEnabled(path, false);
       const after = await readBack(ports, path);
       const stillEnabled = !(isRecord(after) && after.enabled === false);
+      const freezeHeld = await freezeStillHeld(ports, freeze.id);
       return {
-        outcome: stillEnabled ? "partial" : "succeeded",
-        changes: { enabled_after: stillEnabled },
-        value: stillEnabled,
+        outcome: stillEnabled || !freezeHeld ? "partial" : "succeeded",
+        changes: { enabled_after: stillEnabled, freeze_held: freezeHeld },
+        value: { stillEnabled, freezeHeld },
       };
     },
     { sql: ports.sql, onUnrecordable: "refuse" },
@@ -319,9 +364,10 @@ export async function stopScheduleFromConsole(
     refused: false,
     schedule_path: path,
     freeze_id: freeze.id,
-    enabled: recorded.value,
+    enabled: recorded.value.stillEnabled,
     freeze_expires_at: freeze.expires_at,
-    verified: !recorded.value,
+    verified: !recorded.value.stillEnabled,
+    freeze_held: recorded.value.freezeHeld,
     action_audit: recorded.audit,
   };
 }
@@ -337,7 +383,15 @@ function sdkPorts(): StopPorts {
       }),
     freeze: {
       now: () => new Date(),
-      readVariable: () => wmill.getVariable("f/factory/freezes"),
+      readVariable: () =>
+        readVariableOrNull(
+          () => wmill.getVariable("f/factory/freezes"),
+          () =>
+            wmill.VariableService.existsVariable({
+              workspace,
+              path: "f/factory/freezes",
+            }),
+        ),
     },
     getSchedule: (path) =>
       wmill.ScheduleService.getSchedule({ workspace, path }),

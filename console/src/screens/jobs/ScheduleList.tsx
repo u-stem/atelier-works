@@ -10,6 +10,7 @@ import { JobLink } from "../../components/JobLink.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
+  deployHoldActive,
   type ScheduleFreeze,
   type ScheduleStopState,
   scheduleStopState,
@@ -26,10 +27,12 @@ import { EmptyNote } from "../system/SystemSection.tsx";
 import {
   initialPlaceForm,
   usePlaceHold,
+  useScheduleRestore,
   useScheduleStop,
 } from "../system/usePlacement.ts";
 import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
 import {
+  ScheduleRestoreDialog,
   ScheduleStopControl,
   ScheduleStopDialog,
 } from "./ScheduleStopActions.tsx";
@@ -44,6 +47,7 @@ function ScheduleRow({
   locked,
   onPrepare,
   onStop,
+  onRestore,
 }: {
   schedule: ScheduleViewData;
   frozen: ReadonlySet<string> | null;
@@ -52,6 +56,7 @@ function ScheduleRow({
   locked: boolean;
   onPrepare: (path: string) => void;
   onStop: (path: string, freeze: ScheduleFreeze) => void;
+  onRestore: (path: string, freeze: ScheduleFreeze) => void;
 }) {
   const row = describeSchedule(schedule, frozen, now);
   return (
@@ -82,6 +87,7 @@ function ScheduleRow({
             locked={locked}
             onPrepare={onPrepare}
             onStop={onStop}
+            onRestore={onRestore}
           />
         </span>
       </div>
@@ -145,6 +151,8 @@ export function ScheduleList({
   const frozen = frozenScheduleTargets(holds.data, now);
   const place = usePlaceHold();
   const stop = useScheduleStop();
+  const restore = useScheduleRestore();
+  const deployHeld = deployHoldActive(holds.data, now);
   return (
     <div className="flex max-w-4xl flex-col gap-3">
       <JobsQueryGate
@@ -187,28 +195,34 @@ export function ScheduleList({
               <EmptyNote>scheduleはありません。</EmptyNote>
             ) : (
               <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-                {data.schedules.map((schedule) => (
-                  <ScheduleRow
-                    key={schedule.path}
-                    schedule={schedule}
-                    frozen={frozen}
-                    now={now}
-                    stop={scheduleStopState(
-                      schedule.path,
-                      schedule.enabled,
-                      holds.data,
-                      now,
-                    )}
-                    locked={
-                      place.isFreezeLocked(schedule.path) ||
-                      stop.isLocked(schedule.path)
-                    }
-                    onPrepare={(path) => {
-                      place.begin("stop_prepare", path);
-                    }}
-                    onStop={stop.choose}
-                  />
-                ))}
+                {data.schedules.map((schedule) => {
+                  const state = scheduleStopState(
+                    schedule.path,
+                    schedule.enabled,
+                    holds.data,
+                    now,
+                  );
+                  return (
+                    <ScheduleRow
+                      key={schedule.path}
+                      schedule={schedule}
+                      frozen={frozen}
+                      now={now}
+                      stop={state}
+                      locked={
+                        place.isFreezeLocked(schedule.path) ||
+                        stop.isLocked(schedule.path) ||
+                        (state.kind === "stopped" &&
+                          restore.isLocked(state.freeze.id))
+                      }
+                      onPrepare={(path) => {
+                        place.begin("stop_prepare", path);
+                      }}
+                      onStop={stop.choose}
+                      onRestore={restore.choose}
+                    />
+                  );
+                })}
               </ul>
             )}
           </>
@@ -224,8 +238,15 @@ export function ScheduleList({
       />
       <ScheduleStopDialog
         target={stop.target}
+        deployHoldActive={deployHeld}
         onConfirm={stop.confirm}
         onCancel={stop.dismiss}
+      />
+      <ScheduleRestoreDialog
+        target={restore.target}
+        deployHoldActive={deployHeld}
+        onConfirm={restore.confirm}
+        onCancel={restore.dismiss}
       />
     </div>
   );

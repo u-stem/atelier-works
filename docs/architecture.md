@@ -599,7 +599,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
 | `f/factory/manual_intake_submit` | script | [OP-1-2] 手動投入をConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
-| `f/factory/console_schedule_stop` | script | [OP-2-10] scheduleを止める |
+| `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |

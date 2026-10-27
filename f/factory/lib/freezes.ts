@@ -44,6 +44,13 @@ const CONTROL_CHARS_GLOBAL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /** `placeFreeze`がidの衝突で返す理由。呼び出し側がidを作り直す判定に使う。 */
 export const FREEZE_ID_IN_USE = "the freeze id is already in use";
+/** 置く関数が、同じ対象にすでに有効な凍結があるときに返す理由。 */
+export const FREEZE_TARGET_ACTIVE = "the target already has an active freeze";
+/** `placeDeployFreeze`が、同じ主体にすでに有効なdeployの保留があるときに返す理由。 */
+export const DEPLOY_HOLDER_ACTIVE =
+  "the holder already has an active deploy freeze";
+/** 置く関数が、行数の上限に達したときに返す理由。 */
+export const FREEZE_TOO_MANY = "too many freezes";
 const REASON_MAX = 200;
 const HOLDER_MAX = 100;
 
@@ -496,12 +503,12 @@ export function placeFreeze(
     return fail(FREEZE_ID_IN_USE);
   }
   if (activeFreezes(state, now).some((e) => e.target === input.target)) {
-    return fail("the target already has an active freeze");
+    return fail(FREEZE_TARGET_ACTIVE);
   }
   const kept = sweep(state.freezes, now);
   const keptDeploy = sweep(state.deploy_freezes, now);
   if (kept.length + keptDeploy.length >= FREEZE_MAX_ENTRIES) {
-    return fail("too many freezes");
+    return fail(FREEZE_TOO_MANY);
   }
   return ok({
     version: 1,
@@ -541,12 +548,12 @@ export function placeDeployFreeze(
       (e) => e.holder_kind === input.holder_kind && e.holder === input.holder,
     )
   ) {
-    return fail("the holder already has an active deploy freeze");
+    return fail(DEPLOY_HOLDER_ACTIVE);
   }
   const kept = sweep(state.freezes, now);
   const keptDeploy = sweep(state.deploy_freezes, now);
   if (kept.length + keptDeploy.length >= FREEZE_MAX_ENTRIES) {
-    return fail("too many freezes");
+    return fail(FREEZE_TOO_MANY);
   }
   return ok({
     version: 1,
@@ -587,6 +594,42 @@ export function releaseFreeze(
   });
 }
 
+/** 書く前に有効だった行。書いた後の読み直しで、欠けていないかを確かめるのに使う。 */
+export type ActiveRowRef = { readonly id: string; readonly expiresAt: Date };
+
+/**
+ * `exceptId`の行を除いた、有効なスケジュールの凍結とdeployの保留。
+ * 終わった行と解除された行は、別の書き手が片付けてよいので含めない。
+ */
+export function activeRowRefs(
+  state: FreezeState,
+  exceptId: string,
+  now: Date,
+): readonly ActiveRowRef[] {
+  return [...state.freezes, ...state.deploy_freezes]
+    .filter((entry) => entry.id !== exceptId && isActive(entry, now))
+    .map((entry) => ({ id: entry.id, expiresAt: new Date(entry.expires_at) }));
+}
+
+/**
+ * 書いた後の状態から、書く前に有効だった行のうち、欠けた行のidを返す。
+ * 読み直しの時点で期限が過ぎた行は、片付けられていてよいので数えない。
+ */
+export function lostActiveRows(
+  after: FreezeState,
+  refs: readonly ActiveRowRef[],
+  now: Date,
+): readonly string[] {
+  const ids = new Set(
+    [...after.freezes, ...after.deploy_freezes].map((entry) => entry.id),
+  );
+  return refs
+    .filter(
+      (ref) => !ids.has(ref.id) && ref.expiresAt.getTime() > now.getTime(),
+    )
+    .map((ref) => ref.id);
+}
+
 /** 追従が済んだスケジュールの凍結の行を消す。deployの保留には触れない。 */
 export function removeFreezes(
   state: FreezeState,
@@ -618,39 +661,36 @@ export function sessionHolderFromBranch(branch: string): string {
 // 変数の読み書き(入出力は注入する)
 // ---------------------------------------------------------------------------
 
-export const FREEZE_RECOVERY_HINT = "";
-export const FREEZE_VARIABLE_DESCRIPTION = "";
-export const FREEZE_TOO_MANY = "";
-export const FREEZE_TARGET_ACTIVE = "";
-export const DEPLOY_HOLDER_ACTIVE = "";
+/** 変数が壊れているときの回復の手順。失敗の文言に載せる。`reason`と`holder`は載せない。 */
+export const FREEZE_RECOVERY_HINT = `the freeze variable ${FREEZE_VARIABLE_PATH} is corrupt; a human can run "mise run freeze:reset" to clear it`;
 
-export type ActiveRowRef = { readonly id: string; readonly expiresAt: Date };
+/** 変数が無いときに書き手が作る変数の説明。 */
+export const FREEZE_VARIABLE_DESCRIPTION =
+  "スケジュールの凍結の状態です。mise run freeze:placeなどが書くため、通常は人が編集する必要はありません。";
 
-export function activeRowRefs(
-  _state: FreezeState,
-  _exceptId: string,
-  _now: Date,
-): readonly ActiveRowRef[] {
-  return [];
-}
-
-export function lostActiveRows(
-  _after: FreezeState,
-  _refs: readonly ActiveRowRef[],
-  _now: Date,
-): readonly string[] {
-  return [];
-}
-
+/**
+ * 変数を読む。読めなかったときは、`exists`で変数の有無を確かめ、`false`のときだけ「無い」として`null`を返す。
+ * 読み取りは、変数が無い場合も権限が無い場合も同じ形の例外を投げるので、有無を確かめずに「無い」とすると、
+ * 読めない変数を空の状態と取り違えて、行を消す書き込みをしてしまう。
+ * 有無を確かめられないときや、`false`でない答えのときは、読み取りの例外をそのまま投げる。
+ */
 export async function readVariableOrNull(
-  _read: () => Promise<string>,
-  _exists: () => Promise<unknown>,
+  read: () => Promise<string>,
+  exists: () => Promise<unknown>,
 ): Promise<string | null> {
-  return null;
+  try {
+    return await read();
+  } catch (err) {
+    let found: unknown;
+    try {
+      found = await exists();
+    } catch {
+      throw err;
+    }
+    if (found === false) return null;
+    throw err;
+  }
 }
-
-/** 変数が壊れているときの回復の手順。`freeze_apply.ts`の`FREEZE_RECOVERY_HINT`と同じ文である。 */
-const RECOVERY_HINT = `the freeze variable ${FREEZE_VARIABLE_PATH} is corrupt; a human can run "mise run freeze:reset" to clear it`;
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -670,7 +710,9 @@ export async function readFreezeStateVia(
     return fail(`could not read the freeze variable: ${errorMessage(err)}`);
   }
   const parsed = parseFreezeState(raw, io.now());
-  return parsed.ok ? parsed : fail(`${parsed.reason} (${RECOVERY_HINT})`);
+  return parsed.ok
+    ? parsed
+    : fail(`${parsed.reason} (${FREEZE_RECOVERY_HINT})`);
 }
 
 /**

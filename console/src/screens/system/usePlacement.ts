@@ -17,6 +17,7 @@ import {
 import {
   checkPlaceForm,
   type PlaceForm,
+  type PlaceVariant,
   type ScheduleFreeze,
 } from "../../lib/holdPlace.ts";
 import {
@@ -26,6 +27,7 @@ import {
   releaseNotice,
   STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
+import { useReleaseFreeze } from "./useRelease.ts";
 
 function announce(notice: ReleaseNotice): void {
   switch (notice.tone) {
@@ -44,9 +46,12 @@ function announce(notice: ReleaseNotice): void {
   }
 }
 
-/** 保留と凍結を置く操作を、共通の書き込みの流れに載せる設定。種類と対象ごとにロックし、置いた後は保留と状態の取得を読み直す。 */
+/**
+ * 保留と凍結を置く操作を、共通の書き込みの流れに載せる設定。種類と対象ごとにロックし、置いた後は保留と状態の取得を読み直す。
+ * 対象は、scriptが小文字にそろえて置くので、ロックの鍵も小文字にそろえる。
+ */
 export const PLACE_HOLD: WriteRunnerConfig<HoldPlaceInput, HoldPlaceResult> = {
-  keyOf: (input) => `place:${input.kind}:${input.target}`,
+  keyOf: (input) => `place:${input.kind}:${input.target.toLowerCase()}`,
   run: (input) => placeHold(input),
   invalidates: [holdsQueryKey, systemStatusQueryKey],
   onOutcome: (outcome) => {
@@ -57,7 +62,7 @@ export const PLACE_HOLD: WriteRunnerConfig<HoldPlaceInput, HoldPlaceResult> = {
   },
 };
 
-/** scheduleを止める操作の設定。scheduleごとにロックし、止めた後はscheduleと保留の取得を読み直す。 */
+/** スケジュールを止める操作の設定。スケジュールごとにロックし、止めた後はスケジュールと保留の取得を読み直す。 */
 export const STOP_SCHEDULE: WriteRunnerConfig<string, ScheduleStopResult> = {
   keyOf: (path) => `schedule-stop:${path}`,
   run: (path) => stopSchedule(path),
@@ -70,9 +75,9 @@ export const STOP_SCHEDULE: WriteRunnerConfig<string, ScheduleStopResult> = {
   },
 };
 
-/** 置く確認の入力欄の初期値。期限は1時間にする。止める準備は、対象のscheduleを固定した凍結から始める。 */
+/** 置く確認の入力欄の初期値。期限は1時間にする。止める準備は、対象のスケジュールを固定した凍結から始める。 */
 export function initialPlaceForm(
-  variant: "any" | "stop_prepare",
+  variant: PlaceVariant,
   schedulePath = "",
 ): PlaceForm {
   return variant === "any"
@@ -86,43 +91,64 @@ export function initialPlaceForm(
 }
 
 export type PlaceDialogState = {
-  readonly variant: "any" | "stop_prepare";
+  readonly variant: PlaceVariant;
   readonly form: PlaceForm;
 };
 
+/** 確認のダイアログを開く。開くだけで、書き込みは呼ばない。 */
 export function beginPlacement(
-  _variant: "any" | "stop_prepare",
-  _schedulePath = "",
+  variant: PlaceVariant,
+  schedulePath = "",
 ): PlaceDialogState {
-  return { variant: "any", form: initialPlaceForm("any") };
+  return { variant, form: initialPlaceForm(variant, schedulePath) };
 }
 
+/** 入力欄の変更を反映する。ダイアログが開いていなければ何もしない。 */
 export function editPlacement(
-  _current: PlaceDialogState | null,
-  _form: PlaceForm,
+  current: PlaceDialogState | null,
+  form: PlaceForm,
 ): PlaceDialogState | null {
+  return current === null ? null : { ...current, form };
+}
+
+/**
+ * 確認を通ったときの流れ。入力が整っていれば`submit`を1回呼んで閉じ、整っていなければ何も呼ばずに開いたままにする。
+ * 止める準備では、凍結が止められる前に終わる期限も整っていない入力として扱う。
+ */
+export function confirmPlacement(
+  dialog: PlaceDialogState | null,
+  submit: (input: HoldPlaceInput) => boolean,
+): PlaceDialogState | null {
+  if (dialog === null) return null;
+  const checked = checkPlaceForm(dialog.form, dialog.variant);
+  if (!checked.ok) return dialog;
+  submit(checked.input);
   return null;
 }
 
-export function confirmPlacement(
-  dialog: PlaceDialogState | null,
-  _submit: (input: HoldPlaceInput) => boolean,
-): PlaceDialogState | null {
-  return dialog;
-}
+type ScheduleTarget = {
+  readonly path: string;
+  readonly freeze: ScheduleFreeze;
+};
 
+/** 止める確認を通ったときの流れ。選んだスケジュールがあれば`submit`を1回呼んで閉じる。 */
 export function confirmStop(
-  target: { readonly path: string; readonly freeze: ScheduleFreeze } | null,
-  _submit: (path: string) => boolean,
-): null | { readonly path: string; readonly freeze: ScheduleFreeze } {
-  return target;
+  target: ScheduleTarget | null,
+  submit: (path: string) => boolean,
+): ScheduleTarget | null {
+  if (target === null) return null;
+  submit(target.path);
+  return null;
 }
 
+/** 戻す確認を通ったときの流れ。選んだスケジュールの凍結があれば、その解除を`submit`に1回渡して閉じる。 */
 export function confirmRestore(
-  target: { readonly path: string; readonly freeze: ScheduleFreeze } | null,
-  _submit: (freezeId: string) => boolean,
-): null | { readonly path: string; readonly freeze: ScheduleFreeze } {
-  return target;
+  target: ScheduleTarget | null,
+  submit: (freezeId: string) => boolean,
+): ScheduleTarget | null {
+  if (target === null) return null;
+  submit(target.freeze.id);
+  return null;
 }
 
 /**
@@ -135,33 +161,27 @@ export function usePlaceHold() {
 
   return {
     dialog,
-    begin: (variant: "any" | "stop_prepare", schedulePath = "") => {
-      setDialog({ variant, form: initialPlaceForm(variant, schedulePath) });
+    begin: (variant: PlaceVariant, schedulePath = "") => {
+      setDialog(beginPlacement(variant, schedulePath));
     },
     change: (form: PlaceForm) => {
-      setDialog((current) => (current === null ? null : { ...current, form }));
+      setDialog((current) => editPlacement(current, form));
     },
     dismiss: () => {
       setDialog(null);
     },
     confirm: () => {
-      if (dialog === null) return;
-      const checked = checkPlaceForm(dialog.form);
-      if (!checked.ok) return;
-      setDialog(null);
-      place.submit(checked.input);
+      setDialog(confirmPlacement(dialog, place.submit));
     },
-    /** `path`のscheduleの凍結を、置いている最中か。 */
+    /** `path`のスケジュールの凍結を、置いている最中か。 */
     isFreezeLocked: (path: string) =>
       place.isLocked({ kind: "freeze", target: path, minutes: 1, reason: "-" }),
   };
 }
 
-type StopTarget = { readonly path: string; readonly freeze: ScheduleFreeze };
-
-/** scheduleを止める操作。確認のダイアログを開き、確認を通った後にだけscriptを呼ぶ。実行中は同じscheduleを操作できない。 */
+/** スケジュールを止める操作。確認のダイアログを開き、確認を通った後にだけscriptを呼ぶ。実行中は同じスケジュールを操作できない。 */
 export function useScheduleStop() {
-  const [target, setTarget] = useState<StopTarget | null>(null);
+  const [target, setTarget] = useState<ScheduleTarget | null>(null);
   const stop = useWriteMutation(STOP_SCHEDULE);
 
   return {
@@ -173,10 +193,31 @@ export function useScheduleStop() {
       setTarget(null);
     },
     confirm: () => {
-      if (target === null) return;
-      setTarget(null);
-      stop.submit(target.path);
+      setTarget(confirmStop(target, stop.submit));
     },
     isLocked: (path: string) => stop.isLocked(path),
+  };
+}
+
+/**
+ * 止めたスケジュールを、凍結の解除で戻す操作。既存の解除の流れ(`useReleaseFreeze`)を使い、新しい書き込み口は足さない。
+ * 確認のダイアログを開き、確認を通った後にだけ解除を呼ぶ。実行中は同じ凍結を操作できない。
+ */
+export function useScheduleRestore() {
+  const [target, setTarget] = useState<ScheduleTarget | null>(null);
+  const release = useReleaseFreeze();
+
+  return {
+    target,
+    choose: (path: string, freeze: ScheduleFreeze) => {
+      setTarget({ path, freeze });
+    },
+    dismiss: () => {
+      setTarget(null);
+    },
+    confirm: () => {
+      setTarget(confirmRestore(target, release.submit));
+    },
+    isLocked: (freezeId: string) => release.isLocked(freezeId),
   };
 }

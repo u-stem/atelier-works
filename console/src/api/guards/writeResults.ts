@@ -489,6 +489,7 @@ export const HOLD_PLACE_REFUSAL_REASONS = [
   "target_not_allowed",
   "already_active",
   "other_holder_active",
+  "limit_reached",
   "actor_unknown",
   "audit_unavailable",
 ] as const;
@@ -539,7 +540,7 @@ export function isHoldPlaceResult(value: unknown): value is HoldPlaceResult {
 }
 
 /**
- * scheduleを止められなかった理由。`f/factory/console_schedule_stop.ts`の`STOP_REFUSAL_REASONS`と
+ * スケジュールを止められなかった理由。`f/factory/console_schedule_stop.ts`の`STOP_REFUSAL_REASONS`と
  * 同じ並びで、契約テストが突き合わせる。
  */
 export const SCHEDULE_STOP_REFUSAL_REASONS = [
@@ -547,6 +548,7 @@ export const SCHEDULE_STOP_REFUSAL_REASONS = [
   "no_freeze",
   "other_holder_freeze",
   "too_early",
+  "freeze_ending",
   "self_update_running",
   "schedule_changed",
   "already_stopped",
@@ -570,6 +572,8 @@ export type ScheduleStopResult =
       readonly enabled: boolean;
       readonly freeze_expires_at: string;
       readonly verified: boolean;
+      /** 無効にした後の読み直しで、止めたときの凍結がまだ有効だったか。 */
+      readonly freeze_held: boolean;
       readonly action_audit: ActionAudit;
     };
 
@@ -596,6 +600,7 @@ export function isScheduleStopResult(
     isBoolean(value.enabled) &&
     isIsoTimestamp(value.freeze_expires_at) &&
     isBoolean(value.verified) &&
+    isBoolean(value.freeze_held) &&
     isActionAudit(value.action_audit)
   );
 }

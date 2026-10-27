@@ -5,18 +5,21 @@
 // 期限は分で受け、置いた時刻からの上限を超えられない(マージの保留とscheduleの凍結は24時間、deployの保留は120分)。
 // 理由は必須で、1文字以上200文字以下、制御文字を含めない。理由は保留の行にだけ置き、操作の記録には長さだけを入れる。
 // 別の主体が置いた有効な同種の行があるときは置かない。同じ人が置いた有効な行があるときも、重ねて置かない。
+// 変数の行数が上限に達していたときも、置かずに断る。
 // scheduleの凍結は、リポジトリが定義するscheduleのうち`self_update`以外に置ける。凍結はscheduleを止めない。
 // 止める操作は別のscriptが行う。
 //
 // 操作の記録(`factory.console_actions`)は、置く前に`attempted`の行を入れ、後で結果を更新する。
 // 行を入れられなければ、置かずに断る。更新に失敗しても置いた結果は戻さず、`action_audit`を`failed`にする。
-// 置いた後に読み直し、置いた行が見えなければ、戻りの`verified`を偽にし、記録の結果を`partial`にする。
+// 置いた後に読み直し、置いた行が見えないか、書く前に有効だった他の行が欠けていれば、
+// 戻りの`verified`を偽にし、記録の結果を`partial`にする。
 //
 // Console用workerで動くので、どのsecret変数も読まない。SDKの呼び出しは、境界テストの許可表に収める。
 // 凍結の変数のパスはリテラルで、書くときに秘密の変数として作らない。走査が固定する。
+// 凍結の変数は初回には無い。読めなかったときは`existsVariable`で有無を確かめ、無いときだけ空の状態として扱う。
 // 保留の表は、保留のモジュールの関数だけが書く。
 
-import * as wmill from "windmill-client@1.817.0";
+import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
 import {
   type ActionAudit,
@@ -28,18 +31,26 @@ import {
 import { REPO_SCHEDULES } from "./lib/console_known_paths.ts";
 import type * as Freezes from "./lib/freezes.ts";
 import {
+  type ActiveRowRef,
   activeDeployFreezes,
   activeFreezes,
+  activeRowRefs,
+  DEPLOY_HOLDER_ACTIVE,
   type DeployFreezeEntry,
   emptyFreezeState,
   FREEZE_ID_IN_USE,
+  FREEZE_TARGET_ACTIVE,
+  FREEZE_TOO_MANY,
+  FREEZE_VARIABLE_DESCRIPTION,
   type FreezeEntry,
   type FreezeIo,
   type FreezeState,
+  lostActiveRows,
   mutateFreezeStateVia,
   placeDeployFreeze,
   placeFreeze,
   readFreezeStateVia,
+  readVariableOrNull,
 } from "./lib/freezes.ts";
 import {
   HOLD_ALREADY_ACTIVE,
@@ -64,6 +75,7 @@ export const PLACE_REFUSAL_REASONS = [
   "target_not_allowed",
   "already_active",
   "other_holder_active",
+  "limit_reached",
   "actor_unknown",
   "audit_unavailable",
 ] as const;
@@ -80,7 +92,7 @@ export type PlaceResult =
       readonly target: string;
       readonly created_at: string;
       readonly expires_at: string;
-      /** 置いた後に読み直して、置いた行が見えたか。 */
+      /** 置いた後に読み直して、置いた行が見え、書く前に有効だった他の行が残っていたか。 */
       readonly verified: boolean;
       readonly action_audit: ActionAudit;
     };
@@ -299,13 +311,32 @@ async function placeMerge(
 /** 凍結かdeployの保留の行。`target`は凍結だけが持つ。 */
 type Written = FreezeEntry | DeployFreezeEntry;
 
+/** 凍結の置き方が返す理由のうち、競合や上限として断りにするもの。それ以外は予期しない失敗である。 */
+function refusalOfWriteFailure(reason: string): PlaceRefusalReason | null {
+  switch (reason) {
+    case FREEZE_TARGET_ACTIVE:
+    case DEPLOY_HOLDER_ACTIVE:
+      return "already_active";
+    case FREEZE_TOO_MANY:
+      return "limit_reached";
+    default:
+      return null;
+  }
+}
+
+/** 書き込みの間に見たこと。断りと、書く前に有効だった他の行。 */
+type Observed = {
+  refusal: PlaceRefusalReason | null;
+  others: readonly ActiveRowRef[];
+};
+
 /**
  * 空いているidを選んで、操作を当てて書く。idの衝突は選び直す。
  * 断りは`observed`に残す。書けなかった理由が衝突でも断りでもなければ投げる。
  */
 async function writeWithFreshId(
   ports: PlacePorts,
-  observed: { refusal: PlaceRefusalReason | null },
+  observed: Observed,
   operation: (
     id: string,
   ) => (state: FreezeState, now: Date) => Freezes.Outcome<FreezeState>,
@@ -315,33 +346,49 @@ async function writeWithFreshId(
     const written = await mutateFreezeStateVia(ports.freeze, operation(id));
     if (written.ok) return id;
     if (observed.refusal !== null) return null;
-    if (written.reason !== FREEZE_ID_IN_USE) {
+    if (written.reason === FREEZE_ID_IN_USE) continue;
+    const refusal = refusalOfWriteFailure(written.reason);
+    if (refusal === null) {
       throw new Error(`freeze place: ${written.reason}`);
     }
+    observed.refusal = refusal;
+    return null;
   }
   throw new Error("freeze place: could not pick an unused freeze id");
 }
 
-/** 書いた後に読み直して、置いた行を探す。読めないときや見つからないときは`undefined`。 */
-async function readPlaced(
+/**
+ * 書いた後に読み直して、置いた行を探し、書く前に有効だった他の行が残っているかを確かめる。
+ * 読めないときや見つからないときは、行が`undefined`で、確認できなかったものとする。
+ */
+async function verifyPlaced(
   ports: PlacePorts,
   id: string,
+  others: readonly ActiveRowRef[],
   rowsOf: (state: FreezeState, now: Date) => readonly Written[],
-): Promise<Written | undefined> {
+): Promise<{ row: Written | undefined; verified: boolean }> {
   const state = await readFreezeStateVia(ports.freeze);
-  if (!state.ok) return undefined;
-  return rowsOf(state.value, ports.now()).find((row) => row.id === id);
+  if (!state.ok) return { row: undefined, verified: false };
+  const now = ports.now();
+  const row = rowsOf(state.value, now).find((candidate) => candidate.id === id);
+  return {
+    row,
+    verified:
+      row !== undefined &&
+      lostActiveRows(state.value, others, now).length === 0,
+  };
 }
 
 async function placeFreezeRow(
   input: Checked,
   ports: PlacePorts,
 ): Promise<RecordedOperation<Placed>> {
-  const observed: { refusal: PlaceRefusalReason | null } = { refusal: null };
+  const observed: Observed = { refusal: null, others: [] };
   const id = await writeWithFreshId(
     ports,
     observed,
     (freshId) => (state, now) => {
+      observed.others = activeRowRefs(state, freshId, now);
       const existing = activeFreezes(state, now).filter(
         (entry) => entry.target === input.target,
       );
@@ -370,7 +417,12 @@ async function placeFreezeRow(
   if (id === null) {
     return failedOperation(observed.refusal ?? "already_active");
   }
-  const row = await readPlaced(ports, id, activeFreezes);
+  const { row, verified } = await verifyPlaced(
+    ports,
+    id,
+    observed.others,
+    activeFreezes,
+  );
   return placedOperation(
     {
       kind: "placed",
@@ -378,7 +430,7 @@ async function placeFreezeRow(
       ...(row === undefined
         ? windowOf(ports.now(), input.minutes)
         : { created_at: row.created_at, expires_at: row.expires_at }),
-      verified: row !== undefined,
+      verified,
     },
     id,
   );
@@ -388,11 +440,12 @@ async function placeDeployRow(
   input: Checked,
   ports: PlacePorts,
 ): Promise<RecordedOperation<Placed>> {
-  const observed: { refusal: PlaceRefusalReason | null } = { refusal: null };
+  const observed: Observed = { refusal: null, others: [] };
   const id = await writeWithFreshId(
     ports,
     observed,
     (freshId) => (state, now) => {
+      observed.others = activeRowRefs(state, freshId, now);
       const existing = activeDeployFreezes(state, now);
       if (existing.length > 0) {
         observed.refusal = existing.some(
@@ -417,7 +470,12 @@ async function placeDeployRow(
   if (id === null) {
     return failedOperation(observed.refusal ?? "already_active");
   }
-  const row = await readPlaced(ports, id, activeDeployFreezes);
+  const { row, verified } = await verifyPlaced(
+    ports,
+    id,
+    observed.others,
+    activeDeployFreezes,
+  );
   return placedOperation(
     {
       kind: "placed",
@@ -425,7 +483,7 @@ async function placeDeployRow(
       ...(row === undefined
         ? windowOf(ports.now(), input.minutes)
         : { created_at: row.created_at, expires_at: row.expires_at }),
-      verified: row !== undefined,
+      verified,
     },
     id,
   );
@@ -510,6 +568,7 @@ export async function placeFromConsole(
 
 function sdkPorts(): PlacePorts {
   const sql = actionSqlClientFrom(() => wmill.datatable());
+  const workspace = wmillDefault.getWorkspace();
   return {
     now: () => new Date(),
     deriveActor: () =>
@@ -522,13 +581,21 @@ function sdkPorts(): PlacePorts {
     placeHold: (input) => placeHold(input, sql),
     freeze: {
       now: () => new Date(),
-      readVariable: () => wmill.getVariable("f/factory/freezes"),
+      readVariable: () =>
+        readVariableOrNull(
+          () => wmill.getVariable("f/factory/freezes"),
+          () =>
+            wmill.VariableService.existsVariable({
+              workspace,
+              path: "f/factory/freezes",
+            }),
+        ),
       storeVariable: (text) =>
         wmill.setVariable(
           "f/factory/freezes",
           text,
           false,
-          "スケジュールの凍結の状態です。mise run freeze:placeなどが書くため、通常は人が編集する必要はありません。",
+          FREEZE_VARIABLE_DESCRIPTION,
         ),
     },
     newFreezeId: () => crypto.randomUUID().replaceAll("-", "").slice(0, 8),

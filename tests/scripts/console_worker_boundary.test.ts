@@ -1420,10 +1420,10 @@ describe("the scripts restricted to an SDK allowance", () => {
     expect(codeOf(source)).toContain("mutateFreezeStateVia(");
   });
 
-  test("the place script calls neither the interpolating read nor a schedule service", () => {
+  test("the place script calls no service but the existence check of the freeze variable", () => {
     const source = readFileSync("f/factory/console_hold_place.ts", "utf8");
     expect(sdkFindings(source).used.filter((use) => use.includes("."))).toEqual(
-      [],
+      ["VariableService.existsVariable"],
     );
   });
 

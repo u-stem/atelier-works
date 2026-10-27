@@ -832,7 +832,7 @@ describe("describeScheduleStopResult", () => {
     });
     expect([
       notice.tone,
-      notice.message.includes("凍結が先に終わっていました"),
+      notice.message.includes("凍結が先に終わった可能性があります"),
       notice.message.includes("Windmillでスケジュールを有効に戻してください"),
     ]).toEqual(["warning", true, true]);
   });

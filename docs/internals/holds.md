@@ -827,8 +827,8 @@ datatableの接続の既定の`search_path`には`factory`が入っていない(
   置いたファイルがタスクとして実行されるので、拒否の外から保留を操作できるためである。
 - Consoleの解除scriptとその部品(`hold_release.ts`、`freeze_release.ts`、`lib/console_holds_support.ts`)と、そのテストも入れる。
   書き換えられると、他の主体の保留を無条件に外せるためである。
-- Consoleの置くscript(`console_hold_place.ts`)とscheduleを止めるscript(`console_schedule_stop.ts`)と、そのテストも入れる。
-  書き換えられると、置ける期限の上限が外れたり、止めてはならないscheduleを止められたりするためである。
+- Consoleの置くscript(`console_hold_place.ts`)とスケジュールを止めるscript(`console_schedule_stop.ts`)と、そのテストも入れる。
+  書き換えられると、置ける期限の上限が外れたり、止めてはならないスケジュールを止められたりするためである。
   読み取りだけの`console_holds.ts`は入れない。置く操作を持たず、読み込める名前を配線テストが固定する。
 - 実DBの検査が使う`scripts/test-db-sql.ts`は守らない。
   ほかの実DBの検査も使う部品で、守ると日常の変更を止めるためである。

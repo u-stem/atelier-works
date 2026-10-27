@@ -6,12 +6,13 @@ import { Select } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import {
   checkPlaceForm,
-  MAX_MINUTES,
+  minutesRangeText,
   PLACE_KIND_LABELS,
   PLACE_KINDS,
   type PlaceForm,
   type PlaceKind,
   type PlaceProblem,
+  type PlaceVariant,
   placeEffectLines,
   placeProblemMessage,
   prepareDialogLines,
@@ -19,7 +20,7 @@ import {
 } from "../../lib/holdPlace.ts";
 import { safeText } from "../../lib/safeText.ts";
 
-type Variant = "any" | "stop_prepare";
+type Variant = PlaceVariant;
 
 type FieldName = "target" | "minutes" | "reason";
 
@@ -30,8 +31,11 @@ function fieldOf(problem: PlaceProblem): FieldName {
 }
 
 /** 空の入力欄は、まだ入力していないだけなので、問題として出さない。 */
-function visibleProblem(form: PlaceForm): PlaceProblem | null {
-  const checked = checkPlaceForm(form);
+function visibleProblem(
+  form: PlaceForm,
+  variant: Variant,
+): PlaceProblem | null {
+  const checked = checkPlaceForm(form, variant);
   if (checked.ok || checked.problem.endsWith("_empty")) return null;
   return checked.problem;
 }
@@ -152,7 +156,7 @@ function Fields({
           }}
         />
         <p className="text-small text-subtle">
-          {`最大${String(MAX_MINUTES[form.kind])}分`}
+          {minutesRangeText(form.kind, variant)}
         </p>
         {failing === "minutes" && message !== null ? (
           <Problem id={problemId} text={message} />
@@ -191,7 +195,8 @@ function linesOf(variant: Variant, kind: PlaceKind, target: string) {
  * 期限が来れば必ず終わり、解除でき、置き直せるためである。
  * 種類、対象、期限、理由を入力欄で受け、使えない値の間は確認のボタンを押せなくする。
  * 効果と、終わり方(期限と解除)を並べる。初期のフォーカスは、操作をやめる「取り消す」ボタンにある(`ConfirmDialog`)。
- * `stop_prepare`は、scheduleを止める準備として凍結を置く確認で、対象を固定し、種類を選ばせない。
+ * `stop_prepare`は、スケジュールを止める準備として凍結を置く確認で、対象を固定し、種類を選ばせない。
+ * 期限の範囲は入力欄に常に添える。入力の問題の文には、範囲の数字を繰り返さない。
  * 対象の文字列は入力された値なので、固定の対象は`safeText`を通して文字としてだけ描く。
  */
 export function HoldPlaceDialog({
@@ -227,18 +232,18 @@ export function HoldPlaceDialog({
       open
       title={
         variant === "stop_prepare"
-          ? "scheduleを止める準備をしますか"
+          ? "スケジュールを止める準備をしますか"
           : "保留か凍結を置きますか"
       }
       confirmLabel={variant === "stop_prepare" ? "凍結を置く" : "置く"}
-      confirmDisabled={!checkPlaceForm(form).ok}
+      confirmDisabled={!checkPlaceForm(form, variant).ok}
       onConfirm={onConfirm}
       onCancel={onCancel}
     >
       <Fields
         variant={variant}
         form={form}
-        problem={visibleProblem(form)}
+        problem={visibleProblem(form, variant)}
         onChange={onChange}
       />
       {linesOf(variant, form.kind, form.target).map((line) => (
