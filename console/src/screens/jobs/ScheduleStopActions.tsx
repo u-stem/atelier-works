@@ -26,10 +26,12 @@ export function ScheduleStopControl({
   locked: boolean;
   onPrepare: (path: string) => void;
   onStop: (path: string, freeze: ScheduleFreeze) => void;
+  onRestore?: (path: string, freeze: ScheduleFreeze) => void;
 }) {
   const name = safeText(path);
   switch (state.kind) {
     case "none":
+    case "stopped":
       return null;
     case "prepare":
       return (
@@ -83,12 +85,22 @@ export function ScheduleStopControl({
  * 止めたときの影響と、有効に戻る時期を並べる。初期のフォーカスは、操作をやめる「取り消す」ボタンにある(`ConfirmDialog`)。
  * 対象のパスはサーバー由来の文字列なので、`safeText`を通して文字としてだけ描く。
  */
+export function ScheduleRestoreDialog(_props: {
+  target: { readonly path: string; readonly freeze: ScheduleFreeze } | null;
+  deployHoldActive: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return null;
+}
+
 export function ScheduleStopDialog({
   target,
   onConfirm,
   onCancel,
 }: {
   target: { readonly path: string; readonly freeze: ScheduleFreeze } | null;
+  deployHoldActive?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {

@@ -48,7 +48,7 @@ describe("HoldPlaceDialog for any kind", () => {
     expect(html).toMatch(/<label[^>]*>種類<\/label>/);
   });
 
-  test.each(["マージの保留", "deployの保留", "scheduleの凍結"])(
+  test.each(["マージの保留", "deployの保留", "スケジュールの凍結"])(
     "offers %s",
     (label) => {
       expect(render()).toContain(`>${label}<`);
@@ -79,8 +79,8 @@ describe("HoldPlaceDialog for any kind", () => {
     expect(render()).toMatch(/<label[^>]*>期限\(分\)<\/label>/);
   });
 
-  test("states the limit of the kind next to the minutes", () => {
-    expect(render({ ...FORM, kind: "deploy" })).toContain("最大120分");
+  test("states the range of the kind next to the minutes", () => {
+    expect(render({ ...FORM, kind: "deploy" })).toContain("1分から120分まで");
   });
 
   test("shows the minutes that were typed", () => {
@@ -105,7 +105,7 @@ describe("HoldPlaceDialog for any kind", () => {
       const html = render({
         ...FORM,
         kind,
-        target: kind === "freeze" ? "f/factory/collect_github" : FORM.target,
+        target: kind === "freeze" ? "f/factory/poll_prs" : FORM.target,
       });
       expect(placeEffectLines(kind).every((line) => html.includes(line))).toBe(
         true,
@@ -138,7 +138,7 @@ describe("HoldPlaceDialog for any kind", () => {
 
   test("explains a minutes value over the limit", () => {
     expect(render({ ...FORM, kind: "deploy", minutesText: "121" })).toContain(
-      "期限は最大120分です",
+      "期限が上限を超えています",
     );
   });
 
@@ -158,14 +158,42 @@ describe("HoldPlaceDialog for any kind", () => {
 describe("HoldPlaceDialog to prepare a stop", () => {
   const PREPARE: PlaceForm = {
     kind: "freeze",
-    target: "f/factory/collect_github",
+    target: "f/factory/poll_prs",
     minutesText: "60",
     reason: "check the workers",
   };
 
   test("asks whether to prepare", () => {
     expect(render(PREPARE, "stop_prepare")).toContain(
-      "scheduleを止める準備をしますか",
+      "スケジュールを止める準備をしますか",
+    );
+  });
+
+  test("states the shortest freeze that can still be stopped under", () => {
+    expect(render(PREPARE, "stop_prepare")).toContain("12分から1440分まで");
+  });
+
+  test("keeps the confirming button off for a freeze that ends before the stop", () => {
+    expect(
+      confirmIsDisabled(
+        render({ ...PREPARE, minutesText: "11" }, "stop_prepare"),
+        "凍結を置く",
+      ),
+    ).toBe(true);
+  });
+
+  test("lets the person confirm the shortest freeze that can be stopped under", () => {
+    expect(
+      confirmIsDisabled(
+        render({ ...PREPARE, minutesText: "12" }, "stop_prepare"),
+        "凍結を置く",
+      ),
+    ).toBe(false);
+  });
+
+  test("explains minutes that are too short", () => {
+    expect(render({ ...PREPARE, minutesText: "11" }, "stop_prepare")).toContain(
+      "期限が短すぎます",
     );
   });
 
@@ -176,7 +204,7 @@ describe("HoldPlaceDialog to prepare a stop", () => {
   test("names the schedule as text, not as a box", () => {
     const html = render(PREPARE, "stop_prepare");
     expect([
-      html.includes("f/factory/collect_github"),
+      html.includes("f/factory/poll_prs"),
       /<label[^>]*>対象<\/label>/.test(html),
     ]).toEqual([true, false]);
   });

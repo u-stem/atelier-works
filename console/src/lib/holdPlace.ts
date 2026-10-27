@@ -27,6 +27,29 @@ export const MAX_MINUTES: Readonly<Record<PlaceKind, number>> = {
 /** 理由の長さの上限。scriptがUTF-16の単位で数えるので、同じ数え方をする。 */
 export const REASON_MAX_LENGTH = 200;
 
+export type PlaceVariant = "any" | "stop_prepare";
+
+export const STOP_MIN_REMAINING_MINUTES = 0;
+export const STOP_PREPARE_MIN_MINUTES = 0;
+
+export function minutesRangeText(
+  _kind: PlaceKind,
+  _variant: PlaceVariant,
+): string {
+  return "";
+}
+
+export function deployHoldActive(
+  _holds: HoldsSnapshot | undefined,
+  _nowMs: number,
+): boolean {
+  return false;
+}
+
+export function restoreDialogLines(_deployHoldActive: boolean): string[] {
+  return [];
+}
+
 export type PlaceForm = {
   readonly kind: PlaceKind;
   readonly target: string;
@@ -85,7 +108,10 @@ function reasonProblem(reason: string): PlaceProblem | null {
  * 問題があれば、最初の1つを返す。順は、対象、期限、理由である。
  * deployの保留は対象を持たないので、入力欄に何があっても空にする。
  */
-export function checkPlaceForm(form: PlaceForm): PlaceCheck {
+export function checkPlaceForm(
+  form: PlaceForm,
+  _variant: PlaceVariant = "any",
+): PlaceCheck {
   const target = form.kind === "deploy" ? "" : form.target.trim();
   const problemOfTarget = targetProblem(form.kind, target);
   if (problemOfTarget !== null) return { ok: false, problem: problemOfTarget };
@@ -210,7 +236,8 @@ export type ScheduleStopState =
       readonly readyAt: number;
       readonly freeze: ScheduleFreeze;
     }
-  | { readonly kind: "ready"; readonly freeze: ScheduleFreeze };
+  | { readonly kind: "ready"; readonly freeze: ScheduleFreeze }
+  | { readonly kind: "stopped"; readonly freeze: ScheduleFreeze };
 
 const NONE: ScheduleStopState = { kind: "none" };
 
@@ -265,6 +292,7 @@ export function prepareDialogLines(path: string): readonly string[] {
 export function stopDialogLines(
   path: string,
   freezeExpiresAt: string,
+  _deployHoldActive = false,
 ): readonly string[] {
   const impact = stopImpactNote(path);
   return [

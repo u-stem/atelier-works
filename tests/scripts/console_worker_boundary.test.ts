@@ -132,10 +132,10 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
     members: ["getWorkspace", "datatable"],
   },
   // 置く操作は、保留の表(記録の部品と保留のモジュール経由のdatatable)と、凍結の変数だけを書く。
-  // 変数のパスと、変数を秘密として作らないことは、走査が固定する。
+  // 変数が無いときは`existsVariable`で有無を確かめる。変数のパスと、変数を秘密として作らないことは、走査が固定する。
   "f/factory/console_hold_place": {
-    services: [],
-    members: ["datatable", "getVariable", "setVariable"],
+    services: ["VariableService.existsVariable"],
+    members: ["getWorkspace", "datatable", "getVariable", "setVariable"],
   },
   // 止める操作は、scheduleを読んで無効にし、自己更新のキューと凍結の変数を読む。凍結の変数は書かない。
   "f/factory/console_schedule_stop": {
@@ -143,6 +143,7 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
       "ScheduleService.getSchedule",
       "ScheduleService.setScheduleEnabled",
       "JobService.listQueue",
+      "VariableService.existsVariable",
     ],
     members: ["getWorkspace", "datatable", "getVariable"],
   },
@@ -591,6 +592,108 @@ describe("the SDK use scan", () => {
     expect(
       sdkFindings(
         `${JOB}await wmill.setVariable(\`f/factory/\${name}\`, text, false);`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags an alias of setVariable that is called by another name", () => {
+    expect(
+      sdkFindings(
+        `${JOB}const put = wmill.setVariable; await put(${FREEZES}, t, false);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through .call", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable.call(wmill, "f/factory/deployed_sha", t, false);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through .bind", () => {
+    expect(
+      sdkFindings(
+        `${JOB}const put = wmill.setVariable.bind(wmill); await put("f/factory/deployed_sha", t, false);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through .apply", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable.apply(wmill, ["f/factory/deployed_sha", t, false]);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable passed to another function", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await Reflect.apply(wmill.setVariable, wmill, ["f/factory/deployed_sha", t, false]);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through an optional call", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.setVariable?.(path, t, false);`).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags an alias of getVariable that is called by another name", () => {
+    expect(
+      sdkFindings(
+        `${JOB}const read = wmill.getVariable; await read("f/factory/deployed_sha");`,
+      ).problems,
+    ).toContain("getVariable is used other than as a bound call");
+  });
+
+  test("flags getVariable called through .call", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.getVariable.call(wmill, "f/factory/deployed_sha");`,
+      ).problems,
+    ).toContain("getVariable is used other than as a bound call");
+  });
+
+  test("does not flag a bound call of both as used other than as a call", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.getVariable(${FREEZES}); await wmill.setVariable(${FREEZES}, t, false, "d");`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("does not count a mention in a string or a comment as a use", () => {
+    expect(
+      sdkFindings(
+        `${JOB}// setVariable is not used here\nconst note = "setVariable";`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("accepts existsVariable with the literal freeze path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path: ${FREEZES} });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags existsVariable with another literal path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path: "f/factory/github_token" });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags existsVariable with a path in a variable", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path });`,
       ).problems,
     ).not.toEqual([]);
   });
@@ -1296,6 +1399,20 @@ describe("the scripts restricted to an SDK allowance", () => {
   test("the stop script does not write a variable", () => {
     const source = readFileSync("f/factory/console_schedule_stop.ts", "utf8");
     expect(sdkFindings(source).used).not.toContain("setVariable");
+  });
+
+  test("the place script asks whether the freeze variable exists, when it cannot read it", () => {
+    const source = readFileSync("f/factory/console_hold_place.ts", "utf8");
+    expect(sdkFindings(source).used).toContain(
+      "VariableService.existsVariable",
+    );
+  });
+
+  test("the stop script asks whether the freeze variable exists, when it cannot read it", () => {
+    const source = readFileSync("f/factory/console_schedule_stop.ts", "utf8");
+    expect(sdkFindings(source).used).toContain(
+      "VariableService.existsVariable",
+    );
   });
 
   test("the place script reads and writes the freeze state through the shared mutation", () => {

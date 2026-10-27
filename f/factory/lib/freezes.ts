@@ -618,6 +618,37 @@ export function sessionHolderFromBranch(branch: string): string {
 // 変数の読み書き(入出力は注入する)
 // ---------------------------------------------------------------------------
 
+export const FREEZE_RECOVERY_HINT = "";
+export const FREEZE_VARIABLE_DESCRIPTION = "";
+export const FREEZE_TOO_MANY = "";
+export const FREEZE_TARGET_ACTIVE = "";
+export const DEPLOY_HOLDER_ACTIVE = "";
+
+export type ActiveRowRef = { readonly id: string; readonly expiresAt: Date };
+
+export function activeRowRefs(
+  _state: FreezeState,
+  _exceptId: string,
+  _now: Date,
+): readonly ActiveRowRef[] {
+  return [];
+}
+
+export function lostActiveRows(
+  _after: FreezeState,
+  _refs: readonly ActiveRowRef[],
+  _now: Date,
+): readonly string[] {
+  return [];
+}
+
+export async function readVariableOrNull(
+  _read: () => Promise<string>,
+  _exists: () => Promise<unknown>,
+): Promise<string | null> {
+  return null;
+}
+
 /** 変数が壊れているときの回復の手順。`freeze_apply.ts`の`FREEZE_RECOVERY_HINT`と同じ文である。 */
 const RECOVERY_HINT = `the freeze variable ${FREEZE_VARIABLE_PATH} is corrupt; a human can run "mise run freeze:reset" to clear it`;
 

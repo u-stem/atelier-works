@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import {
-  STOP_READY_AFTER_MINUTES,
-  STOP_TARGETS,
-} from "../../console/src/lib/holdPlace.ts";
+import * as holdPlaceView from "../../console/src/lib/holdPlace.ts";
 import {
   NOT_STOPPABLE_SCHEDULES,
+  STOP_MIN_REMAINING_MINUTES,
   STOP_REFUSAL_REASONS,
   STOP_SETTLE_MINUTES,
   STOPPABLE_SCHEDULES,
@@ -19,7 +17,7 @@ import {
   type FreezeReadIo,
 } from "../../f/factory/lib/freezes.ts";
 
-const SCHEDULE = "f/factory/collect_github";
+const SCHEDULE = "f/factory/poll_prs";
 const FREEZE_ID = "0a1b2c3d";
 /** 凍結を置いた時刻から7分後。 */
 const NOW = new Date("2026-10-27T03:07:00.000Z");
@@ -90,6 +88,10 @@ type Options = {
   actor?: () => string;
   variable?: string | null;
   readError?: Error;
+  /** 無効にした後の凍結の読み直しが返す変数。省略すると同じ値。 */
+  variableAfter?: string | null;
+  /** 無効にした後の凍結の読み直しが投げる例外。 */
+  readErrorAfter?: Error;
   schedule?: unknown;
   scheduleError?: unknown;
   /** 無効にした後の読み直しが返す値。省略すると`enabled`が偽のschedule。 */
@@ -104,10 +106,16 @@ function harness(options: Options = {}) {
   const sqlCalls: Call[] = [];
   const enabledCalls: { path: string; enabled: boolean }[] = [];
   let scheduleReads = 0;
+  let freezeReads = 0;
   const freeze: FreezeReadIo = {
     now: () => options.now ?? NOW,
     readVariable: async () => {
       events.push("read-freeze");
+      freezeReads += 1;
+      if (freezeReads > 1) {
+        if (options.readErrorAfter !== undefined) throw options.readErrorAfter;
+        if (options.variableAfter !== undefined) return options.variableAfter;
+      }
       if (options.readError !== undefined) throw options.readError;
       return options.variable === undefined ? freezeText() : options.variable;
     },
@@ -151,6 +159,7 @@ describe("stopScheduleFromConsole: what it refuses before it records", () => {
     "f/factory/self_update",
     "f/factory/poll_issues",
     "f/factory/poll_dependabot",
+    "f/factory/collect_github",
     "f/factory/cleanup_db",
     "f/factory/detect_schedule_failures",
     "f/factory/default_worker_watch",
@@ -244,6 +253,50 @@ describe("stopScheduleFromConsole: what it refuses before it records", () => {
     expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
       refused: false,
     });
+  });
+
+  test("refuses when less than the margin of the freeze is left", async () => {
+    const h = harness({
+      variable: freezeText([
+        freezeEntry({ expires_at: "2026-10-27T03:11:59.999Z" }),
+      ]),
+    });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toEqual(
+      refused("freeze_ending"),
+    );
+  });
+
+  test("allows exactly the margin of the freeze left", async () => {
+    const h = harness({
+      variable: freezeText([
+        freezeEntry({ expires_at: "2026-10-27T03:12:00.000Z" }),
+      ]),
+    });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
+      refused: false,
+    });
+  });
+
+  test("tells that the stop is early before it tells that the freeze is ending", async () => {
+    const h = harness({
+      now: new Date("2026-10-27T03:05:00.000Z"),
+      variable: freezeText([
+        freezeEntry({ expires_at: "2026-10-27T03:09:00.000Z" }),
+      ]),
+    });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toEqual(
+      refused("too_early", "2026-10-27T03:07:00.000Z"),
+    );
+  });
+
+  test("reads nothing of the schedule when the freeze is ending", async () => {
+    const h = harness({
+      variable: freezeText([
+        freezeEntry({ expires_at: "2026-10-27T03:11:00.000Z" }),
+      ]),
+    });
+    await stopScheduleFromConsole(SCHEDULE, h.ports);
+    expect(h.events).toEqual(["read-freeze"]);
   });
 
   test("refuses a schedule that is not enabled", async () => {
@@ -398,6 +451,7 @@ describe("stopScheduleFromConsole: stopping", () => {
       "record",
       "set-enabled",
       "get-schedule",
+      "read-freeze",
       "outcome",
     ]);
   });
@@ -417,6 +471,7 @@ describe("stopScheduleFromConsole: stopping", () => {
       enabled: false,
       freeze_expires_at: "2026-10-27T05:00:00.000Z",
       verified: true,
+      freeze_held: true,
       action_audit: "recorded",
     });
   });
@@ -437,9 +492,72 @@ describe("stopScheduleFromConsole: stopping", () => {
     await stopScheduleFromConsole(SCHEDULE, h.ports);
     expect(h.sqlCalls[1]?.values).toEqual([
       "succeeded",
-      JSON.stringify({ enabled_after: false }),
+      JSON.stringify({ enabled_after: false, freeze_held: true }),
       9,
     ]);
+  });
+
+  test("reports that the freeze ended while it disabled the schedule", async () => {
+    const h = harness({ variableAfter: freezeText([]) });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
+      refused: false,
+      verified: true,
+      freeze_held: false,
+    });
+  });
+
+  test("reports that the freeze ended by time while it disabled the schedule", async () => {
+    const h = harness({
+      variableAfter: freezeText([
+        freezeEntry({ expires_at: "2026-10-27T03:07:00.000Z" }),
+      ]),
+    });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
+      freeze_held: false,
+    });
+  });
+
+  test("reports that the freeze was released while it disabled the schedule", async () => {
+    const h = harness({
+      variableAfter: freezeText([freezeEntry({ released_at: PLACED })]),
+    });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
+      freeze_held: false,
+    });
+  });
+
+  test("marks the record partial when the freeze ended", async () => {
+    const h = harness({ variableAfter: freezeText([]) });
+    await stopScheduleFromConsole(SCHEDULE, h.ports);
+    expect(h.sqlCalls[1]?.values).toEqual([
+      "partial",
+      JSON.stringify({ enabled_after: false, freeze_held: false }),
+      9,
+    ]);
+  });
+
+  test("does not take another freeze of the schedule for the one that it stopped under", async () => {
+    const h = harness({
+      variableAfter: freezeText([freezeEntry({ id: "99999999" })]),
+    });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
+      freeze_held: false,
+    });
+  });
+
+  test("reports an unconfirmed freeze when it cannot be read again", async () => {
+    const h = harness({ readErrorAfter: new Error("api down") });
+    expect(await stopScheduleFromConsole(SCHEDULE, h.ports)).toMatchObject({
+      refused: false,
+      verified: true,
+      freeze_held: false,
+    });
+  });
+
+  test("marks the record partial when the freeze cannot be read again", async () => {
+    const h = harness({ readErrorAfter: new Error("api down") });
+    await stopScheduleFromConsole(SCHEDULE, h.ports);
+    expect(h.sqlCalls[1]?.values[0]).toBe("partial");
   });
 
   test("reports an unverified stop when the schedule still reads as enabled", async () => {
@@ -487,10 +605,9 @@ describe("the contract of the stop script", () => {
     .map((file) => `f/factory/${file.replace(/\.schedule\.yaml$/, "")}`)
     .sort();
 
-  test("stops these eight schedules", () => {
+  test("stops these seven schedules", () => {
     expect([...STOPPABLE_SCHEDULES].sort()).toEqual([
       "f/factory/auto_retry_pr_review",
-      "f/factory/collect_github",
       "f/factory/drawio_viewer_bump",
       "f/factory/notify_daily_summary",
       "f/factory/poll_prs",
@@ -498,6 +615,22 @@ describe("the contract of the stop script", () => {
       "f/factory/watch_pr_ci",
       "f/factory/watch_pr_conflicts",
     ]);
+  });
+
+  test("does not stop the collection, whose records poll_issues and poll_dependabot read", () => {
+    expect(NOT_STOPPABLE_SCHEDULES["f/factory/collect_github"]).toMatch(
+      /poll_issues.*poll_dependabot/,
+    );
+  });
+
+  test("asks for five minutes of the freeze to be left", () => {
+    expect(STOP_MIN_REMAINING_MINUTES).toBe(5);
+  });
+
+  test("the Console asks for the same margin", () => {
+    expect(holdPlaceView.STOP_MIN_REMAINING_MINUTES).toBe(
+      STOP_MIN_REMAINING_MINUTES,
+    );
   });
 
   test("waits seven minutes, as long as the freeze command tells", () => {
@@ -542,6 +675,7 @@ describe("the contract of the stop script", () => {
       "no_freeze",
       "other_holder_freeze",
       "too_early",
+      "freeze_ending",
       "self_update_running",
       "schedule_changed",
       "already_stopped",
@@ -551,10 +685,12 @@ describe("the contract of the stop script", () => {
   });
 
   test("the Console offers the same schedules", () => {
-    expect([...STOP_TARGETS].sort()).toEqual([...STOPPABLE_SCHEDULES].sort());
+    expect([...holdPlaceView.STOP_TARGETS].sort()).toEqual(
+      [...STOPPABLE_SCHEDULES].sort(),
+    );
   });
 
   test("the Console waits as long before it offers the stop", () => {
-    expect(STOP_READY_AFTER_MINUTES).toBe(STOP_SETTLE_MINUTES);
+    expect(holdPlaceView.STOP_READY_AFTER_MINUTES).toBe(STOP_SETTLE_MINUTES);
   });
 });

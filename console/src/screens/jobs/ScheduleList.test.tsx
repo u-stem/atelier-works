@@ -22,8 +22,8 @@ const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
 function schedule(overrides: Partial<ScheduleViewData> = {}): ScheduleViewData {
   return {
-    path: "f/factory/collect_github",
-    script_path: "f/factory/collect_github",
+    path: "f/factory/poll_prs",
+    script_path: "f/factory/poll_prs",
     is_flow: false,
     schedule: "0 1-59/5 * * * *",
     timezone: "Asia/Tokyo",
@@ -64,7 +64,7 @@ const FREEZE: HoldsSnapshot = {
     schedule: [
       {
         id: "a1b2c3d4",
-        target: "f/factory/collect_github",
+        target: "f/factory/poll_prs",
         reason: "r",
         holder_kind: "human",
         holder: "h",
@@ -345,7 +345,10 @@ describe("ScheduleList lead", () => {
 });
 
 describe("ScheduleList stop actions", () => {
-  function frozenAt(createdAt: string): HoldsSnapshot {
+  function frozenAt(
+    createdAt: string,
+    lastsMs: number = 3_600_000,
+  ): HoldsSnapshot {
     return {
       holds: { ok: true, rows: [] },
       freezes: {
@@ -353,12 +356,12 @@ describe("ScheduleList stop actions", () => {
         schedule: [
           {
             id: "a1b2c3d4",
-            target: "f/factory/collect_github",
+            target: "f/factory/poll_prs",
             reason: "r",
             holder_kind: "human",
             holder: "human",
             created_at: createdAt,
-            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            expires_at: new Date(Date.now() + lastsMs).toISOString(),
           },
         ],
         deploy: [],
@@ -419,6 +422,45 @@ describe("ScheduleList stop actions", () => {
       freshQuery(frozenAt(new Date(Date.now() - 600_000).toISOString())),
     );
     expect(html).toMatch(/<button(?![^>]*\sdisabled="")[^>]*>止める<\/button>/);
+  });
+
+  test("offers the restore for a schedule that was stopped under a freeze", () => {
+    const html = render(
+      freshQuery(snapshot([schedule({ enabled: false })])),
+      freshQuery(frozenAt(new Date(Date.now() - 600_000).toISOString())),
+    );
+    expect(html).toMatch(/<button[^>]*>凍結を解除して戻す<\/button>/);
+  });
+
+  test("offers no restore for a disabled schedule without a freeze", () => {
+    expect(
+      render(freshQuery(snapshot([schedule({ enabled: false })]))),
+    ).not.toContain("凍結を解除して戻す");
+  });
+
+  test("offers nothing when the freeze ends within the margin of the stop", () => {
+    const html = render(
+      freshQuery(snapshot([schedule()])),
+      freshQuery(
+        frozenAt(new Date(Date.now() - 600_000).toISOString(), 4 * 60_000),
+      ),
+    );
+    expect(html).not.toMatch(/>止める<\/button>/);
+  });
+
+  test("offers nothing for the collection, which feeds other schedules", () => {
+    expect(
+      render(
+        freshQuery(
+          snapshot([
+            schedule({
+              path: "f/factory/collect_github",
+              script_path: "f/factory/collect_github",
+            }),
+          ]),
+        ),
+      ),
+    ).not.toContain("止める準備");
   });
 
   test("does not offer the preparation again under a freeze", () => {

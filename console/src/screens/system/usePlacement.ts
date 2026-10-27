@@ -85,10 +85,45 @@ export function initialPlaceForm(
       };
 }
 
-type PlaceDialogState = {
+export type PlaceDialogState = {
   readonly variant: "any" | "stop_prepare";
   readonly form: PlaceForm;
 };
+
+export function beginPlacement(
+  _variant: "any" | "stop_prepare",
+  _schedulePath = "",
+): PlaceDialogState {
+  return { variant: "any", form: initialPlaceForm("any") };
+}
+
+export function editPlacement(
+  _current: PlaceDialogState | null,
+  _form: PlaceForm,
+): PlaceDialogState | null {
+  return null;
+}
+
+export function confirmPlacement(
+  dialog: PlaceDialogState | null,
+  _submit: (input: HoldPlaceInput) => boolean,
+): PlaceDialogState | null {
+  return dialog;
+}
+
+export function confirmStop(
+  target: { readonly path: string; readonly freeze: ScheduleFreeze } | null,
+  _submit: (path: string) => boolean,
+): null | { readonly path: string; readonly freeze: ScheduleFreeze } {
+  return target;
+}
+
+export function confirmRestore(
+  target: { readonly path: string; readonly freeze: ScheduleFreeze } | null,
+  _submit: (freezeId: string) => boolean,
+): null | { readonly path: string; readonly freeze: ScheduleFreeze } {
+  return target;
+}
 
 /**
  * 保留や凍結を置く操作。確認のダイアログを開き、確認を通った後にだけscriptを呼ぶ。

@@ -646,7 +646,7 @@ describe("placeHold", () => {
 });
 
 describe("stopSchedule", () => {
-  const SCHEDULE = "f/factory/collect_github";
+  const SCHEDULE = "f/factory/poll_prs";
   const STOPPED = {
     refused: false,
     schedule_path: SCHEDULE,
@@ -654,6 +654,7 @@ describe("stopSchedule", () => {
     enabled: false,
     freeze_expires_at: "2026-10-27T05:00:00.000Z",
     verified: true,
+    freeze_held: true,
     action_audit: "recorded",
   } as const;
 

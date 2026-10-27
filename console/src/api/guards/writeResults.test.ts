@@ -621,7 +621,7 @@ describe("isHoldPlaceResult", () => {
   );
 
   test("lists the nine reasons", () => {
-    expect(HOLD_PLACE_REFUSAL_REASONS.length).toBe(9);
+    expect(HOLD_PLACE_REFUSAL_REASONS.length).toBe(10);
   });
 
   test("rejects a refusal it does not know", () => {
@@ -662,11 +662,12 @@ describe("isHoldPlaceResult", () => {
 describe("isScheduleStopResult", () => {
   const STOPPED = {
     refused: false,
-    schedule_path: "f/factory/collect_github",
+    schedule_path: "f/factory/poll_prs",
     freeze_id: "0a1b2c3d",
     enabled: false,
     freeze_expires_at: "2026-10-27T05:00:00.000Z",
     verified: true,
+    freeze_held: true,
     action_audit: "recorded",
   };
 
@@ -727,6 +728,31 @@ describe("isScheduleStopResult", () => {
 
   test("rejects an id that is a number", () => {
     expect(isScheduleStopResult({ ...STOPPED, freeze_id: 3 })).toBe(false);
+  });
+
+  test("accepts a stop whose freeze ended before the read back", () => {
+    expect(isScheduleStopResult({ ...STOPPED, freeze_held: false })).toBe(true);
+  });
+
+  test("rejects a stop without the state of the freeze", () => {
+    const { freeze_held: _omitted, ...without } = STOPPED;
+    expect(isScheduleStopResult(without)).toBe(false);
+  });
+
+  test("rejects a state of the freeze that is not a boolean", () => {
+    expect(isScheduleStopResult({ ...STOPPED, freeze_held: "yes" })).toBe(
+      false,
+    );
+  });
+
+  test("accepts the refusal for a freeze that is about to end", () => {
+    expect(
+      isScheduleStopResult({
+        refused: true,
+        reason: "freeze_ending",
+        ready_at: null,
+      }),
+    ).toBe(true);
   });
 
   test("rejects a stop without the end of the freeze", () => {

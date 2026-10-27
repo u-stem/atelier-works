@@ -154,11 +154,12 @@ function placeBase() {
 function stopBase() {
   return {
     refused: false,
-    schedule_path: "f/factory/collect_github",
+    schedule_path: "f/factory/poll_prs",
     freeze_id: "0a1b2c3d",
     enabled: false,
     freeze_expires_at: "2026-10-27T05:00:00.000Z",
     verified: true,
+    freeze_held: true,
   };
 }
 function configBase() {
@@ -992,6 +993,72 @@ describe("what the scripts return", () => {
       }),
     };
   }
+
+  function stopPorts(held: boolean): scheduleStop.StopPorts {
+    const placed = JSON.stringify({
+      version: 1,
+      freezes: [
+        {
+          id: "0a1b2c3d",
+          target: "f/factory/poll_prs",
+          reason: "r",
+          holder_kind: "human",
+          holder: "human",
+          created_at: "2026-10-27T03:00:00.000Z",
+          expires_at: "2026-10-27T05:00:00.000Z",
+          released_at: null,
+        },
+      ],
+    });
+    let reads = 0;
+    let schedules = 0;
+    return {
+      now: () => new Date("2026-10-27T03:10:00.000Z"),
+      deriveActor: () => "operator",
+      freeze: {
+        now: () => new Date("2026-10-27T03:10:00.000Z"),
+        readVariable: () => {
+          reads += 1;
+          return Promise.resolve(
+            reads > 1 && !held
+              ? JSON.stringify({ version: 1, freezes: [] })
+              : placed,
+          );
+        },
+      },
+      getSchedule: () => {
+        schedules += 1;
+        return Promise.resolve({
+          path: "f/factory/poll_prs",
+          script_path: "f/factory/poll_prs",
+          is_flow: false,
+          enabled: schedules === 1,
+        });
+      },
+      listSelfUpdateQueue: () => Promise.resolve([]),
+      setEnabled: () => Promise.resolve(),
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  test("a stop that held the freeze passes the guard", async () => {
+    const result = await scheduleStop.stopScheduleFromConsole(
+      "f/factory/poll_prs",
+      stopPorts(true),
+    );
+    expect(isScheduleStopResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a stop whose freeze ended first reports that the freeze is no longer held", async () => {
+    const result = await scheduleStop.stopScheduleFromConsole(
+      "f/factory/poll_prs",
+      stopPorts(false),
+    );
+    expect(result).toMatchObject({ refused: false, freeze_held: false });
+  });
 
   test("a placed freeze passes the guard", async () => {
     const result = await holdPlace.placeFromConsole(

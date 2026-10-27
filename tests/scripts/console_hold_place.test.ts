@@ -26,7 +26,7 @@ import {
 } from "../../f/factory/lib/holds.ts";
 
 const NOW = new Date("2026-10-27T03:00:00.000Z");
-const SCHEDULE = "f/factory/collect_github";
+const SCHEDULE = "f/factory/poll_prs";
 const REASON = "check the workers before the release";
 
 type Call = { text: string; values: unknown[] };
@@ -682,6 +682,13 @@ describe("placeFromConsole: a schedule freeze", () => {
     expect(h.sqlCalls[1]?.values[0]).toBe("partial");
   });
 
+  test("treats a variable that does not exist as an empty one", async () => {
+    const h = harness({ variable: null });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: true });
+  });
+
   test("refuses without writing when the record cannot be written", async () => {
     const h = harness({ sql: [new Error("db down")] });
     const result = await placeFromConsole(
@@ -692,6 +699,142 @@ describe("placeFromConsole: a schedule freeze", () => {
       h.ports,
     );
     expect([result, h.writes]).toEqual([refused("audit_unavailable"), []]);
+  });
+});
+
+/** 書いた直後の状態に見える、置いた凍結の行。 */
+const PLACED_ROW = {
+  id: "5e6f7a8b",
+  target: SCHEDULE,
+  reason: REASON,
+  holder_kind: "human",
+  holder: "human",
+  created_at: "2026-10-27T03:00:00.000Z",
+  expires_at: "2026-10-27T04:00:00.000Z",
+  released_at: null,
+};
+
+const OTHER_ROW = freezeEntry({
+  id: "11111111",
+  target: "f/factory/watch_pr_ci",
+});
+
+describe("placeFromConsole: what the read back checks", () => {
+  test("is verified when the placed row and the other rows are all there", async () => {
+    const h = harness({
+      variable: freezeText({ freezes: [OTHER_ROW] }),
+      afterWrite: freezeText({ freezes: [OTHER_ROW, PLACED_ROW] }),
+    });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: true });
+  });
+
+  test("is not verified when the placed row is missing, though the other rows are there", async () => {
+    const h = harness({
+      variable: freezeText({ freezes: [OTHER_ROW] }),
+      afterWrite: freezeText({ freezes: [OTHER_ROW] }),
+    });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("is not verified when the placed row is there but another active row is gone", async () => {
+    const h = harness({
+      variable: freezeText({ freezes: [OTHER_ROW] }),
+      afterWrite: freezeText({ freezes: [PLACED_ROW] }),
+    });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("marks the record partial when another active row is gone", async () => {
+    const h = harness({
+      variable: freezeText({ freezes: [OTHER_ROW] }),
+      afterWrite: freezeText({ freezes: [PLACED_ROW] }),
+    });
+    await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports);
+    expect(h.sqlCalls[1]?.values[0]).toBe("partial");
+  });
+
+  test("is not verified when an active deploy hold is gone", async () => {
+    const { target: _target, ...deployRow } = OTHER_ROW;
+    const h = harness({
+      variable: freezeText({ deploy: [deployRow] }),
+      afterWrite: freezeText({ freezes: [PLACED_ROW] }),
+    });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+
+  test("does not count a row that was released before the write", async () => {
+    const released = freezeEntry({
+      id: "11111111",
+      target: "f/factory/watch_pr_ci",
+      released_at: "2026-10-27T02:55:00.000Z",
+    });
+    const h = harness({
+      variable: freezeText({ freezes: [released] }),
+      afterWrite: freezeText({ freezes: [PLACED_ROW] }),
+    });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: true });
+  });
+
+  test("is not verified when a schedule freeze is gone after a deploy hold was placed", async () => {
+    const { target: _target, ...placedDeploy } = PLACED_ROW;
+    const h = harness({
+      variable: freezeText({ freezes: [OTHER_ROW] }),
+      afterWrite: freezeText({ deploy: [placedDeploy] }),
+    });
+    expect(
+      await placeFromConsole("deploy", "", 60, REASON, h.ports),
+    ).toMatchObject({ refused: false, verified: false });
+  });
+});
+
+describe("placeFromConsole: a variable that is full", () => {
+  const FULL = freezeText({
+    freezes: Array.from({ length: 50 }, (_, index) =>
+      freezeEntry({
+        id: index.toString(16).padStart(8, "0"),
+        target: `f/factory/x${String(index)}`,
+      }),
+    ),
+  });
+
+  test("refuses a freeze with the limit instead of throwing", async () => {
+    const h = harness({ variable: FULL });
+    expect(
+      await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports),
+    ).toEqual(refused("limit_reached"));
+  });
+
+  test("refuses a deploy hold with the limit instead of throwing", async () => {
+    const h = harness({ variable: FULL });
+    expect(await placeFromConsole("deploy", "", 60, REASON, h.ports)).toEqual(
+      refused("limit_reached"),
+    );
+  });
+
+  test("writes nothing when the variable is full", async () => {
+    const h = harness({ variable: FULL });
+    await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports);
+    expect(h.writes).toEqual([]);
+  });
+
+  test("marks the record failed with the refusal", async () => {
+    const h = harness({ variable: FULL });
+    await placeFromConsole("freeze", SCHEDULE, 60, REASON, h.ports);
+    expect(h.sqlCalls[1]?.values).toEqual([
+      "failed",
+      JSON.stringify({ refusal: "limit_reached" }),
+      9,
+    ]);
   });
 });
 
@@ -772,6 +915,7 @@ describe("the contract of the place script", () => {
       "target_not_allowed",
       "already_active",
       "other_holder_active",
+      "limit_reached",
       "actor_unknown",
       "audit_unavailable",
     ]);

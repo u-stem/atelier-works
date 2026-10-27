@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { HoldsSnapshot } from "../api/guards/holds.ts";
 import {
   checkPlaceForm,
+  deployHoldActive,
   MAX_MINUTES,
+  minutesRangeText,
   PLACE_KIND_LABELS,
   PLACE_KINDS,
   type PlaceForm,
@@ -11,6 +13,9 @@ import {
   placeProblemMessage,
   prepareDialogLines,
   REASON_MAX_LENGTH,
+  restoreDialogLines,
+  STOP_MIN_REMAINING_MINUTES,
+  STOP_PREPARE_MIN_MINUTES,
   STOP_READY_AFTER_MINUTES,
   STOP_TARGETS,
   scheduleStopState,
@@ -20,7 +25,7 @@ import {
 } from "./holdPlace.ts";
 
 const NOW = Date.parse("2026-10-27T03:30:00.000Z");
-const SCHEDULE = "f/factory/collect_github";
+const SCHEDULE = "f/factory/poll_prs";
 
 function form(overrides: Partial<PlaceForm> = {}): PlaceForm {
   return {
@@ -62,7 +67,7 @@ describe("the kinds and their limits", () => {
     expect(PLACE_KINDS.map((kind) => PLACE_KIND_LABELS[kind])).toEqual([
       "マージの保留",
       "deployの保留",
-      "scheduleの凍結",
+      "スケジュールの凍結",
     ]);
   });
 });
@@ -233,13 +238,12 @@ describe("placeProblemMessage", () => {
     expect(placeProblemMessage(problem, "merge")).toMatch(/[ぁ-んァ-ヶ一-龠]/);
   });
 
-  test("states the limit of a deploy hold", () => {
-    expect(placeProblemMessage("minutes_too_large", "deploy")).toContain("120");
-  });
-
-  test("states the limit of a merge hold", () => {
-    expect(placeProblemMessage("minutes_too_large", "merge")).toContain("1440");
-  });
+  test.each(["minutes_too_small", "minutes_too_large"] as const)(
+    "does not repeat the range, which the box already shows, in %s",
+    (problem) => {
+      expect(placeProblemMessage(problem, "deploy")).not.toMatch(/[0-9]/);
+    },
+  );
 
   test("shows the form of a repository", () => {
     expect(placeProblemMessage("target_invalid", "merge")).toContain(
@@ -269,7 +273,7 @@ describe("placeEffectLines", () => {
 
   test("says that a freeze does not stop the schedule", () => {
     expect(placeEffectLines("freeze").join("")).toContain(
-      "scheduleそのものは止まりません",
+      "スケジュールそのものは止まりません",
     );
   });
 
@@ -289,10 +293,9 @@ describe("placeEffectLines", () => {
 });
 
 describe("the schedules that can be stopped", () => {
-  test("are the eight that the script lists", () => {
+  test("are the seven that the script lists", () => {
     expect([...STOP_TARGETS].sort()).toEqual([
       "f/factory/auto_retry_pr_review",
-      "f/factory/collect_github",
       "f/factory/drawio_viewer_bump",
       "f/factory/notify_daily_summary",
       "f/factory/poll_prs",
@@ -309,8 +312,12 @@ describe("the schedules that can be stopped", () => {
     },
   );
 
-  test("tells that stopping the collection raises a notice", () => {
-    expect(stopImpactNote(SCHEDULE)).toContain("通知");
+  test("tells that stopping a watch silences its notice", () => {
+    expect(stopImpactNote("f/factory/watch_main_ci")).toContain("通知");
+  });
+
+  test("has no note for the collection, which feeds other schedules", () => {
+    expect(stopImpactNote("f/factory/collect_github")).toBeNull();
   });
 
   test("has no note for a schedule that cannot be stopped", () => {
@@ -319,6 +326,58 @@ describe("the schedules that can be stopped", () => {
 
   test("has no note for a name from the prototype chain", () => {
     expect(stopImpactNote("constructor")).toBeNull();
+  });
+});
+
+describe("the margin before the freeze ends", () => {
+  test("is five minutes, as the script requires", () => {
+    expect(STOP_MIN_REMAINING_MINUTES).toBe(5);
+  });
+
+  test("makes the shortest freeze to prepare a stop the wait plus the margin", () => {
+    expect(STOP_PREPARE_MIN_MINUTES).toBe(
+      STOP_READY_AFTER_MINUTES + STOP_MIN_REMAINING_MINUTES,
+    );
+  });
+});
+
+describe("checkPlaceForm for the preparation of a stop", () => {
+  function prepared(minutesText: string) {
+    return checkPlaceForm(
+      form({ kind: "freeze", target: SCHEDULE, minutesText }),
+      "stop_prepare",
+    );
+  }
+
+  test("refuses minutes that end the freeze before it could be used", () => {
+    expect(prepared("11")).toEqual({ ok: false, problem: "minutes_too_small" });
+  });
+
+  test("accepts the wait plus the margin", () => {
+    expect(prepared("12").ok).toBe(true);
+  });
+
+  test("keeps one minute for a free placement", () => {
+    expect(
+      checkPlaceForm(
+        form({ kind: "freeze", target: SCHEDULE, minutesText: "1" }),
+        "any",
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("shows the range of a free placement of a deploy hold", () => {
+    expect(minutesRangeText("deploy", "any")).toBe("1分から120分まで");
+  });
+
+  test("shows the range of a free placement of a freeze", () => {
+    expect(minutesRangeText("freeze", "any")).toBe("1分から1440分まで");
+  });
+
+  test("shows the shortest freeze of the preparation as the least minutes", () => {
+    expect(minutesRangeText("freeze", "stop_prepare")).toBe(
+      `${String(STOP_PREPARE_MIN_MINUTES)}分から1440分まで`,
+    );
   });
 });
 
@@ -368,10 +427,86 @@ describe("scheduleStopState", () => {
     ).toEqual({ kind: "none" });
   });
 
-  test("offers nothing for a schedule that is already disabled", () => {
+  test("offers nothing for a schedule that is already disabled and not frozen", () => {
     expect(scheduleStopState(SCHEDULE, false, holds([]), NOW)).toEqual({
       kind: "none",
     });
+  });
+
+  test("offers the restore for a disabled schedule under a freeze of the human", () => {
+    expect(scheduleStopState(SCHEDULE, false, holds([{}]), NOW)).toEqual({
+      kind: "stopped",
+      freeze: {
+        id: "0a1b2c3d",
+        createdAt: "2026-10-27T03:00:00.000Z",
+        expiresAt: "2026-10-27T05:00:00.000Z",
+      },
+    });
+  });
+
+  test("offers nothing for a disabled schedule under a freeze of a session", () => {
+    expect(
+      scheduleStopState(
+        SCHEDULE,
+        false,
+        holds([{ holder_kind: "session" }]),
+        NOW,
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  test("offers nothing when the freeze cannot last until the stop plus the margin", () => {
+    expect(
+      scheduleStopState(
+        SCHEDULE,
+        true,
+        holds([
+          {
+            created_at: "2026-10-27T03:25:00.000Z",
+            expires_at: "2026-10-27T03:36:59.000Z",
+          },
+        ]),
+        NOW,
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  test("waits when the freeze lasts exactly the margin after the wait", () => {
+    expect(
+      scheduleStopState(
+        SCHEDULE,
+        true,
+        holds([
+          {
+            created_at: "2026-10-27T03:25:00.000Z",
+            expires_at: "2026-10-27T03:37:00.000Z",
+          },
+        ]),
+        NOW,
+      ).kind,
+    ).toBe("waiting");
+  });
+
+  test("offers nothing once less than the margin of the freeze is left", () => {
+    expect(
+      scheduleStopState(
+        SCHEDULE,
+        true,
+        holds([{ expires_at: "2026-10-27T03:34:59.000Z" }]),
+        NOW,
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  test("is ready while exactly the margin of the freeze is left", () => {
+    expect(
+      scheduleStopState(
+        SCHEDULE,
+        true,
+        holds([{ expires_at: "2026-10-27T03:35:00.000Z" }]),
+        NOW,
+      ).kind,
+    ).toBe("ready");
   });
 
   test("offers nothing while the freezes are not known", () => {
@@ -471,6 +606,53 @@ describe("scheduleStopState", () => {
   });
 });
 
+describe("deployHoldActive", () => {
+  function withDeploy(expiresAt: string): HoldsSnapshot {
+    return {
+      holds: { ok: true, rows: [] },
+      freezes: {
+        ok: true,
+        schedule: [],
+        deploy: [
+          {
+            id: "0a1b2c3d",
+            reason: "r",
+            holder_kind: "human",
+            holder: "human",
+            created_at: "2026-10-27T03:00:00.000Z",
+            expires_at: expiresAt,
+          },
+        ],
+      },
+    };
+  }
+
+  test("is true while a deploy hold is in force", () => {
+    expect(deployHoldActive(withDeploy("2026-10-27T04:00:00.000Z"), NOW)).toBe(
+      true,
+    );
+  });
+
+  test("is false once the deploy hold has ended", () => {
+    expect(deployHoldActive(withDeploy("2026-10-27T03:29:00.000Z"), NOW)).toBe(
+      false,
+    );
+  });
+
+  test("is false when the holds are not known", () => {
+    expect(deployHoldActive(undefined, NOW)).toBe(false);
+  });
+
+  test("is false when the freezes could not be read", () => {
+    expect(
+      deployHoldActive(
+        { holds: { ok: true, rows: [] }, freezes: { ok: false, reason: "x" } },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("the dialog lines of the stop", () => {
   test("prepare: says that the stop can be pressed after the wait", () => {
     expect(prepareDialogLines(SCHEDULE).join("")).toContain("7分");
@@ -506,6 +688,36 @@ describe("the dialog lines of the stop", () => {
     expect(
       stopDialogLines(SCHEDULE, "2026-10-27T05:00:00.000Z").join(""),
     ).toContain("Consoleからは有効に戻せません");
+  });
+
+  test("stop: says that a deploy hold keeps the schedule off even after the freeze ends", () => {
+    expect(
+      stopDialogLines(SCHEDULE, "2026-10-27T05:00:00.000Z", true).join(""),
+    ).toContain("deployの保留");
+  });
+
+  test("stop: says nothing of a deploy hold when there is none", () => {
+    expect(
+      stopDialogLines(SCHEDULE, "2026-10-27T05:00:00.000Z", false).join(""),
+    ).not.toContain("deployの保留");
+  });
+
+  test("prepare: shows the wait only in one line", () => {
+    expect(
+      prepareDialogLines(SCHEDULE).filter((line) => line.includes("7分")),
+    ).toHaveLength(1);
+  });
+
+  test("restore: tells that the schedule returns to the definition", () => {
+    expect(restoreDialogLines(false).join("")).toContain("リポジトリの定義");
+  });
+
+  test("restore: says that a deploy hold keeps it off", () => {
+    expect(restoreDialogLines(true).join("")).toContain("deployの保留");
+  });
+
+  test("restore: says nothing of a deploy hold when there is none", () => {
+    expect(restoreDialogLines(false).join("")).not.toContain("deployの保留");
   });
 
   test("stop: tells that releasing the freeze brings it back", () => {

@@ -46,6 +46,8 @@ const SELF_UPDATE_PATH = "f/factory/self_update";
  */
 export const STOP_SETTLE_MINUTES = 7;
 
+export const STOP_MIN_REMAINING_MINUTES = 0;
+
 const MINUTE_MS = 60_000;
 
 /**
