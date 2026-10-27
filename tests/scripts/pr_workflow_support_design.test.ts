@@ -185,9 +185,9 @@ describe("nextActionFor for the design stage", () => {
     expect(nextActionFor(reason)).not.toContain(RELABEL);
   });
 
-  test("tells to check design_enabled before the retry when the design stage is closed", () => {
+  test("tells to check the setting of the design stage when it is closed", () => {
     expect(nextActionFor(DESIGN_STAGE_CLOSED_REASON)).toContain(
-      "design_enabled",
+      "設計工程の設定を確かめ",
     );
   });
 
@@ -267,6 +267,7 @@ describe("the reason table and the reasons that the design stage produces", () =
     DESIGN_STALE_REQUIREMENTS_REASON,
     DESIGN_APPROVAL_INCONSISTENT_REASON,
     DESIGN_APPROVAL_TIMED_OUT_REASON,
+    DESIGN_STAGE_CLOSED_REASON,
     designRejectedExhaustedReason: designRejectedExhaustedReason(3),
   };
 

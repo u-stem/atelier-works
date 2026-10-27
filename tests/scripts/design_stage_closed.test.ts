@@ -51,7 +51,7 @@ const DESIGN_ENABLED_TOKEN = /(?<![\w$])design_enabled(?![\w$])/g;
  * `design_enabled`が出てよい本番のファイルと、出る数。
  * 型の宣言(`lib/types.ts`の`design_enabled: boolean`、`Pick`の中の名前)は、変換で消える。
  * `lib/config.ts`の6つは、既定値、通知の本文の中の2つ、リソースの読み取りの名前と既定値の参照、門で絞った導出である。
- * 残りは、設定の値を読む呼び出しの側の1つずつである。
+ * 残りは、設定の値を読む呼び出しの側の1つずつである。`steps/design_apply.ts`は、却下の再生成の分岐で入口が閉じているかを読む。
  * 呼び出しの側で`{ ...config, design_enabled: ... }`と上書きする迂回や、別の読み方を足す変更は、ここで数が増えて見つかる。
  */
 const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
@@ -60,6 +60,7 @@ const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
   "lib/self_update_support.ts": 1,
   "retry_work_item.ts": 1,
   "self_update.ts": 1,
+  "steps/design_apply.ts": 1,
   "steps/implement_prepare.ts": 1,
   "steps/requirements_apply.ts": 1,
 };

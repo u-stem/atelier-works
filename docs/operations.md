@@ -1304,6 +1304,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 | `design approval timed out` | 設計の承認依頼が7日の期限を過ぎた | 再実行する。最新の依頼が承認済みなら実装から始め、そうでなければ設計書を作り直す |
 | `requirements regeneration could not be started` | 設計の却下でIssueが変わっていて、要件定義の作り直しを起動できなかった | 再実行する。要件定義を作り直し、承認し直しが要る。取り込み内容は現在のIssueで更新され、却下の理由は要件定義の生成に渡る |
 | `design flow could not be started` | 設計の却下の後、設計の再生成を起動できなかった | 再実行する。設計書を作り直す |
+| `design stage is closed, so the rejected design was not regenerated` | 設計の却下を反映するとき、設計工程が無効だった | 設計工程の設定を確かめ、有効な状態になってから再実行する。設計書を作り直し、直前の却下の理由を渡す |
 | `approval decision could not be applied after 3 restarts of the handler` | 承認の判断を、処理先の起動し直しを3回しても作業項目に反映できなかった | Consoleで作業項目の状態と承認の記録を確かめてから、再実行する |
 
 最後の理由は、設計と要件定義で共通である。

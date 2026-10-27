@@ -33,6 +33,7 @@ import {
 } from "../lib/design_apply_support.ts";
 import {
   DESIGN_REJECTED_EXHAUSTED_PREFIX,
+  DESIGN_STAGE_CLOSED_REASON,
   designRejectedExhaustedReason,
 } from "../lib/design_template.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
@@ -162,6 +163,7 @@ export type DesignRejectedDeps = DesignNeedsHumanDeps & {
  * 設計の却下の分岐。行き先は`decideDesignRejection`が決める。
  * - 要件定義へ戻す: Issueが取り込み時点から変わっているとき。要件定義の却下の作り直しと同じ手順を使う。
  * - 人の対応待ち: 反映できた却下の数が上限に達したとき。
+ * - 人の対応待ち: 設計工程が無効(`design_enabled`が偽)のとき。閉じた入口を、`design_apply`が迂回しない。
  * - 設計の作り直し: それ以外。比較交換で`designing`へ移し、続けて設計フローを`design_attempt + 1`で起動する。
  *   人の却下の理由は`feedback`に渡す。遷移の注記は固定の文で、人の理由を入れない。
  *   起動か記録に失敗したら、`startDesign`の手順が`needs_human`へ戻して通知する。
@@ -191,6 +193,9 @@ export async function applyDesignRejected(
     return relaunched === "not_moved"
       ? { outcome: "no_op" }
       : { outcome: "requirements_returned" };
+  }
+  if (!deps.config.design_enabled) {
+    return stopForPerson(deps, DESIGN_STAGE_CLOSED_REASON);
   }
   if (!(await deps.casToDesigning(DESIGN_REGENERATING_NOTE))) {
     return { outcome: "no_op" };

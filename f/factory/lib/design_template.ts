@@ -89,7 +89,12 @@ export const DESIGN_DOC_DIR_IN_USE_REASON =
  */
 export const DESIGN_APPROVAL_TIMED_OUT_REASON = "design approval timed out";
 
-export const DESIGN_STAGE_CLOSED_REASON = "";
+/**
+ * 設計の却下を反映するときに、設計工程が無効だったときの`needs_human`の理由。
+ * 設計フローを起動する入口を閉じている間は、`design_apply`も設計を作り直さない。
+ */
+export const DESIGN_STAGE_CLOSED_REASON =
+  "design stage is closed, so the rejected design was not regenerated";
 
 /**
  * 設計の却下が上限に達したときの`needs_human`の理由の接頭辞。

@@ -4335,6 +4335,14 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       `Consoleで却下の理由を確かめ、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します。再実行ごとに設計を1回試します)`,
   },
   {
+    pattern:
+      /^design stage is closed, so the rejected design was not regenerated$/,
+    describe: () =>
+      "設計の却下を反映するとき、設計工程が無効だったため、設計書を作り直しませんでした",
+    nextAction: () =>
+      `設計工程の設定を確かめ、設計工程が有効な状態になってから、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します)`,
+  },
+  {
     pattern: /^design document directory already holds a saved draft$/,
     describe: () =>
       "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
