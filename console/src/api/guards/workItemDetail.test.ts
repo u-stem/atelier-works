@@ -90,6 +90,7 @@ const WORK_ITEM = {
   created_at: T0,
   updated_at: T0,
   status_note: null,
+  flow_job_id: JOB_ID,
   total_cost_usd: 1.25,
   run_count: 3,
 };
@@ -149,6 +150,29 @@ describe("isWorkItemDetail", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  test("workItemDetail guard: accepts a flow_job_id that is NULL", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        work_item: { ...WORK_ITEM, flow_job_id: null },
+      }),
+    ).toBe(true);
+  });
+
+  test("workItemDetail guard: rejects a flow_job_id that is not a string", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        work_item: { ...WORK_ITEM, flow_job_id: 12 },
+      }),
+    ).toBe(false);
+  });
+
+  test("workItemDetail guard: rejects an overview without flow_job_id", () => {
+    const { flow_job_id: _omitted, ...rest } = WORK_ITEM;
+    expect(isWorkItemDetail({ ...DETAIL, work_item: rest })).toBe(false);
   });
 
   test("accepts a status the Console does not know", () => {

@@ -35,6 +35,7 @@ const OVERVIEW: WorkItemOverview = {
   created_at: T0,
   updated_at: T0,
   status_note: null,
+  flow_job_id: null,
   total_cost_usd: 1.25,
   run_count: 3,
 };
@@ -123,6 +124,44 @@ describe("OverviewTab", () => {
   test("keeps the pull request link in its row", () => {
     const html = render(<OverviewTab detail={detail()} now={NOW} />);
     expect(html).toContain(`href="${PR_URL}"`);
+  });
+
+  test("shows the path of the work item kind", () => {
+    const html = render(<OverviewTab detail={detail()} now={NOW} />);
+    expect(html).toContain("作業項目の経路の図");
+  });
+
+  test("workItemFlowProgress: shows no progress when the detail is not found but keeps the overview", () => {
+    const html = render(
+      <OverviewTab detail={detail()} now={NOW} progress={{ kind: "none" }} />,
+    );
+    expect(html).toContain("リポジトリ");
+  });
+
+  test("shows the steps that the progress carries", () => {
+    const html = render(
+      <OverviewTab
+        detail={detail()}
+        now={NOW}
+        progress={{
+          kind: "steps",
+          jobId: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          flowPath: "f/factory/pipeline",
+          jobState: "running",
+          steps: [
+            {
+              id: "prepare",
+              state: "running",
+              job_id: null,
+              iterations: null,
+              skipped: false,
+            },
+          ],
+          stale: false,
+        }}
+      />,
+    );
+    expect(html).toContain("pipelineのステップ");
   });
 });
 

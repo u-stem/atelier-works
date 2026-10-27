@@ -26,6 +26,7 @@ const JOB_SCREENS = await sourcesOf("console/src/screens/jobs/*.{ts,tsx}");
 
 const RENDERERS = [
   ...JOB_SCREENS,
+  "console/src/screens/items/detail/ItemFlowProgress.tsx",
   "console/src/screens/system/ConfigSection.tsx",
   "console/src/lib/jobsView.ts",
 ];
@@ -38,6 +39,7 @@ const SAFE_TEXT_USERS = [
   "console/src/screens/jobs/JobHistory.tsx",
   "console/src/screens/jobs/JobRows.tsx",
   "console/src/screens/jobs/ScheduleList.tsx",
+  "console/src/screens/items/detail/ItemFlowProgress.tsx",
   "console/src/screens/system/ConfigSection.tsx",
 ];
 
@@ -173,6 +175,12 @@ const FORBIDDEN: readonly Forbidden[] = [
 describe("the renderers of the job screens", () => {
   test("include the parts that draw the output", () => {
     expect(RENDERERS).toContain("console/src/screens/jobs/JobDetailParts.tsx");
+  });
+
+  test("include the flow progress of a work item", () => {
+    expect(RENDERERS).toContain(
+      "console/src/screens/items/detail/ItemFlowProgress.tsx",
+    );
   });
 
   test("include the config section", () => {

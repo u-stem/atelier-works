@@ -29,6 +29,7 @@ const DETAIL = {
     created_at: T0,
     updated_at: T0,
     status_note: null,
+    flow_job_id: null,
     total_cost_usd: null,
     run_count: 0,
   },
@@ -79,6 +80,16 @@ describe("fetchWorkItemDetail", () => {
         fetchFn: respondWith(JSON.stringify(DETAIL)),
       }),
     ).toEqual(DETAIL);
+  });
+
+  test("treats a response from before flow_job_id existed as having none", async () => {
+    const { flow_job_id: _omitted, ...withoutFlowJob } = DETAIL.work_item;
+    const detail = await fetchWorkItemDetail(7, {
+      fetchFn: respondWith(
+        JSON.stringify({ ...DETAIL, work_item: withoutFlowJob }),
+      ),
+    });
+    expect(detail?.work_item.flow_job_id).toBeNull();
   });
 
   test("asks the work_item_detail view for the work item", async () => {
