@@ -61,6 +61,12 @@
       "note": ""
     },
     {
+      "id": "human:entry:steps/design_apply",
+      "kind": "human",
+      "label": "Consoleの承認と却下",
+      "note": ""
+    },
+    {
       "id": "human:entry:steps/requirements_apply",
       "kind": "human",
       "label": "Consoleの承認と却下",
@@ -118,6 +124,12 @@
       "id": "script:retry_work_item",
       "kind": "script",
       "label": "retry_work_item",
+      "note": ""
+    },
+    {
+      "id": "script:steps/design_apply",
+      "kind": "script",
+      "label": "steps/design_apply",
       "note": ""
     },
     {
@@ -263,6 +275,11 @@
       "kind": "human"
     },
     {
+      "from": "human:entry:steps/design_apply",
+      "to": "script:steps/design_apply",
+      "kind": "human"
+    },
+    {
       "from": "human:entry:steps/requirements_apply",
       "to": "script:steps/requirements_apply",
       "kind": "human"
@@ -340,6 +357,21 @@
     {
       "from": "script:retry_work_item",
       "to": "flow:pr_review",
+      "kind": "run"
+    },
+    {
+      "from": "script:steps/design_apply",
+      "to": "flow:design",
+      "kind": "run"
+    },
+    {
+      "from": "script:steps/design_apply",
+      "to": "flow:implement",
+      "kind": "run"
+    },
+    {
+      "from": "script:steps/design_apply",
+      "to": "flow:pipeline",
       "kind": "run"
     },
     {

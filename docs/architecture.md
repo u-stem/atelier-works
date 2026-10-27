@@ -353,11 +353,11 @@ Consoleの一覧と集計は次のviewを読む。
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
-| `pipeline` | `design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
-| `design` | `requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
+| `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
+| `design` | `design_apply`(Consoleの承認と却下)、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
-| `implement` | `auto_retry_stale_image`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
+| `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
 | `dependabot` | `poll_dependabot` | 依存の更新PRの検査と自動マージ |
 | `audit` | `audit_kickoff`(Consoleの今すぐ監査) | 運用記録の監査と改善提案 |
 <!-- /generated:flows -->
@@ -585,6 +585,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
+| `f/factory/lib/design_apply_support` | script | [LIB] 設計の承認の反映の判定 |
 | `f/factory/lib/design_launch_support` | script | [LIB] 設計フローの起動 |
 | `f/factory/lib/design_template` | script | [LIB] 設計書テンプレートの定義 |
 | `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
@@ -619,6 +620,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/design_prepare` | script | [SF-2-3/1] 設計用の作業領域の準備 |
 | `f/factory/steps/design_generate` | script | [SF-2-3/2] 設計書の生成(Claude) |
 | `f/factory/steps/design_request_approval` | script | [SF-2-3/3] 設計の承認依頼 |
+| `f/factory/steps/design_apply` | script | [SF-2-4] 設計の承認結果を反映 |
 | `f/factory/pr_review` | flow | [SF-3-1] PRの自動レビュー |
 | `f/factory/steps/pr_review_prepare` | script | [SF-3-1/1] PRの取得と検証 |
 | `f/factory/steps/pr_review_generate` | script | [SF-3-1/2] レビューの生成(Claude) |

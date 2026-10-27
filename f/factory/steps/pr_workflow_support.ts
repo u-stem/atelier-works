@@ -3817,7 +3817,10 @@ export type ReasonRule = {
 };
 
 /** 次の操作がフローによって違う理由のための、理由を出したフローの種類。 */
-export type NextActionFlow = LockOwner["kind"] | "dependabot";
+export type NextActionFlow =
+  | LockOwner["kind"]
+  | "dependabot"
+  | "design_rejection";
 
 /**
  * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
@@ -4324,6 +4327,13 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       `${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。承認済みの要件定義は使います)`,
   },
   {
+    pattern: /^design rejected after max_design_attempts (\d+)$/,
+    describe: (m) =>
+      `設計の却下が上限(max_design_attemptsの${m[1]}回)に達しました`,
+    nextAction: () =>
+      `Consoleで却下の理由を確かめ、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します。再実行ごとに設計を1回試します)`,
+  },
+  {
     pattern: /^design document directory already holds a saved draft$/,
     describe: () =>
       "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
@@ -4340,6 +4350,8 @@ const REQUIREMENTS_REGENERATION_RETRY_NOTE = {
     "要件定義を作り直します。承認し直しが要ります。差し戻し理由は作業項目の履歴の注記に残っていて、再実行で要件定義の生成に渡ります",
   rejection:
     "要件定義を作り直します。承認し直しが要ります。却下の理由は再実行で要件定義の生成に渡ります",
+  design_rejection:
+    "要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます。却下の理由は再実行で要件定義の生成に渡ります",
 } as const;
 
 export const REASON_RULES: readonly ReasonRule[] = [
@@ -4892,9 +4904,19 @@ export const REASON_RULES: readonly ReasonRule[] = [
     // どの経路でも、再実行は要件定義を作り直し、承認し直しになる。差し戻しの理由が残る場所が経路で違う。
     // - 実装の差し戻し(implement_finish): 通知に残る。
     // - 設計の差し戻し(design_generate): 通知には載らず、作業項目の履歴の注記に残る。
-    // - 却下による作り直し(requirements_apply。フローの指定なし): 却下の理由が承認依頼と遷移の注記に残る。
+    // - 要件定義の却下による作り直し(requirements_apply。フローの指定なし): 却下の理由が承認依頼と遷移の注記に残る。
+    // - 設計の却下によるIssueの変更後の戻し(design_apply。design_rejection): 却下の理由が承認依頼に残り、
+    //   再実行は取り込み内容を現在のIssueで更新する。
     nextAction: (_m, flow) =>
-      `${RETRY_WORK_ITEM_ACTION}(${REQUIREMENTS_REGENERATION_RETRY_NOTE[flow === "implement" || flow === "design" ? flow : "rejection"]})`,
+      `${RETRY_WORK_ITEM_ACTION}(${
+        REQUIREMENTS_REGENERATION_RETRY_NOTE[
+          flow === "implement" ||
+          flow === "design" ||
+          flow === "design_rejection"
+            ? flow
+            : "rejection"
+        ]
+      })`,
   },
   {
     pattern: /^pull request has an active fix run$/,

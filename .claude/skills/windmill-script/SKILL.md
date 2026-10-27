@@ -246,6 +246,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 - 続けて`approval_decide`は、`kind`に応じたapplyスクリプトを`wmill.runScriptByPathAsync`で起動する。実際の反映はapplyスクリプトが行う。
   - `requirements`: `steps/requirements_apply`
   - `issue_proposal`: `steps/issue_proposal_apply`
+  - `design`: `steps/design_apply`
 - タイムアウト(7日)は、`poll_issues`がreconcileの後に行う期限切れのスイープが`approval_requests.expires_at`を見て判定する。期限切れの行は、`expireApprovalRequestIfPending`で`expired`に遷移させる。
 
 ### Issueコメントの目印による冪等性

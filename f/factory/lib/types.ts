@@ -502,7 +502,7 @@ export type DesignApprovalRef = {
  * 承認依頼が待っている判断の種類。
  * `subject_id`は、`"requirements"`ならrequirement_drafts、
  * `"issue_proposal"`ならissue_proposalsの対応する行を指す。
- * `"design"`は設計書の承認依頼で、承認を反映するハンドラーはまだ無い(`handlerPathFor`が例外を投げる)。
+ * `"design"`は設計書の承認依頼で、`subject_id`は`design_drafts.id`を指し、承認の反映は`steps/design_apply`が行う。
  */
 export type ApprovalRequestKind = "requirements" | "issue_proposal" | "design";
 export const APPROVAL_REQUEST_KINDS: readonly ApprovalRequestKind[] = [

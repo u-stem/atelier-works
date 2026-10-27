@@ -156,7 +156,8 @@ export function buildSystemConsoleUrl(windmillPublicUrl: string): string {
  * 判断が記録された承認依頼を処理するstepスクリプトのパスを、種類ごとに返す。
  * `approval_decide.ts`は判断を記録した後、
  * `wmill.runScriptByPathAsync`でこのパスのスクリプトを起動する。
- * `design`にはハンドラーがまだ無いので例外を投げる。
+ * 承認待ちの走査(`approval_sweep.ts`)と設計の承認依頼のステップも、反映されなかった判断に同じパスを起動する。
+ * すべての種類に処理先がある。種類を足したときは、switchが網羅されないとコンパイルできない。
  */
 export function handlerPathFor(kind: ApprovalRequestKind): string {
   switch (kind) {
@@ -165,7 +166,7 @@ export function handlerPathFor(kind: ApprovalRequestKind): string {
     case "issue_proposal":
       return "f/factory/steps/issue_proposal_apply";
     case "design":
-      throw new Error("approval_support: no approval handler for kind design");
+      return "f/factory/steps/design_apply";
   }
 }
 

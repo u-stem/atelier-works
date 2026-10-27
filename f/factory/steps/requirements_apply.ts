@@ -9,6 +9,7 @@ import {
   addNoticeUnlessUnresolved,
   getApprovalRequest,
   getWorkItem,
+  latestApprovalRequest,
   recordFailure,
   setFlowJobIdIfUnset,
   updateIntakeIfRegenerating,
@@ -262,35 +263,34 @@ export type ApprovedBranchContext = {
 };
 
 /** `needs_human`の通知と、フローの起動の手順が使う、作業項目とログの文脈。 */
-export type NotifyContext = Pick<
-  ApprovedBranchContext,
-  "workItem" | "issueNumber" | "webhookUrl" | "log"
->;
+export type NotifyContext = {
+  readonly workItem: Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "issue_url" | "design_attempt"
+  >;
+  readonly issueNumber: number;
+  readonly webhookUrl: string;
+  readonly log: Logger;
+};
 
 /**
- * 承認の分岐の本番の依存を組み立てる。呼ぶだけでは、DB・GitHub・Windmillに触れない。
- * 設計フローは起動しない(`startDesign: null`)。設計工程の承認の反映と期限切れを受け持つコードが入るまで、
- * 作業項目を`designing`にしないためである。開けるときは、`startDesign`に`buildStartDesign`の結果を渡す。
+ * implementフローを起動する手順の本番の依存を組み立てる(`startImplement`に渡す)。
+ * 呼ぶだけでは、DB・GitHub・Windmillに触れない。返した関数を呼ぶと、作業項目を`approved`から`implementing`へ移して起動する。
+ * 起動か記録に失敗したら`needs_human`へ戻し、noticeとDiscordで知らせる(`startImplement`)。
+ * 要件定義の承認の反映(`buildApprovedBranchDeps`)と設計の承認の反映(`steps/design_apply.ts`)が共有する。
  */
-export function buildApprovedBranchDeps(
-  config: Pick<
-    FactoryConfig,
-    "implement_enabled" | "windmill_public_url" | "instance_name"
-  >,
-  ctx: ApprovedBranchContext,
-): ApprovedBranchDeps {
-  const { workItem, issueNumber, attempt, client, viewerLogin, log } = ctx;
-  const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
-    work_item_id: workItem.id,
-    attempt,
-  });
+export function buildStartImplement(
+  config: Pick<FactoryConfig, "instance_name">,
+  ctx: NotifyContext,
+): () => Promise<StartImplementOutcome> {
+  const { workItem, issueNumber, log } = ctx;
   const noticeTarget = {
     owner: workItem.owner,
     repo: workItem.repo,
     issue_number: issueNumber,
     work_item_id: workItem.id,
   };
-  const launchImplement = (): Promise<StartImplementOutcome> =>
+  return () =>
     startImplement({
       casToImplementing: () =>
         updateStatusIfCurrentClearingFlowJobId(
@@ -332,6 +332,31 @@ export function buildApprovedBranchDeps(
       log: (message, fields) =>
         log.warn(message, { work_item_id: workItem.id, ...fields }),
     });
+}
+
+/**
+ * 承認の分岐の本番の依存を組み立てる。呼ぶだけでは、DB・GitHub・Windmillに触れない。
+ * 設計フローは起動しない(`startDesign: null`)。設計工程を開けるまで、作業項目を`designing`にしないためである。
+ * 開けるときは、`startDesign`に`buildStartDesign`の結果を渡す。
+ */
+export function buildApprovedBranchDeps(
+  config: Pick<
+    FactoryConfig,
+    "implement_enabled" | "windmill_public_url" | "instance_name"
+  >,
+  ctx: ApprovedBranchContext,
+): ApprovedBranchDeps {
+  const { workItem, issueNumber, attempt, client, viewerLogin, log } = ctx;
+  const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
+    work_item_id: workItem.id,
+    attempt,
+  });
+  const noticeTarget = {
+    owner: workItem.owner,
+    repo: workItem.repo,
+    issue_number: issueNumber,
+    work_item_id: workItem.id,
+  };
   return {
     casToApproved: () =>
       updateStatusIfCurrent(workItem.id, "awaiting_approval", "approved", null),
@@ -382,7 +407,9 @@ export function buildApprovedBranchDeps(
       );
     },
     removeWorktree: () => removeReqWorktree(workItem),
-    startImplement: config.implement_enabled ? launchImplement : null,
+    startImplement: config.implement_enabled
+      ? buildStartImplement(config, ctx)
+      : null,
     startDesign: null,
     log: (message, fields) =>
       log.warn(message, { work_item_id: workItem.id, ...fields }),
@@ -447,20 +474,21 @@ const REAL_START_DESIGN_PORTS: StartDesignPorts = {
 
 /**
  * 設計フローを起動する手順の本番の依存を組み立てる(`startDesign`に渡す)。
- * 本番の配線(`buildApprovedBranchDeps`)はまだ渡さない。返した関数を呼ぶまでは、DB・GitHub・Windmillに触れない。
- * 起動先は設計フロー、入力は作業項目の次の設計の試行で、起動か記録に失敗したら`needs_human`へ戻す(`startDesign`)。
+ * 返した関数を呼ぶまでは、DB・GitHub・Windmillに触れない。
+ * 起動先は設計フロー、入力は作業項目の次の設計の試行と`feedback`で、起動か記録に失敗したら`needs_human`へ戻す(`startDesign`)。
+ * `feedback`は人の却下の理由で、整形も切り詰めもせずに渡す。設計の再生成のときだけ渡し、最初の起動は空である。
  * `ports`は呼び出しの入出力で、テストが差し替える。
  */
 export function buildStartDesign(
   config: Pick<FactoryConfig, "instance_name">,
   ctx: NotifyContext,
   ports: StartDesignPorts = REAL_START_DESIGN_PORTS,
-  _feedback = "",
+  feedback = "",
 ): () => Promise<StartDesignOutcome> {
   const { workItem, issueNumber, log } = ctx;
   const deps: DesignLaunchDeps = {
     launchFlow: () =>
-      ports.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem)),
+      ports.runFlowAsync(DESIGN_FLOW_PATH, designFlowInput(workItem, feedback)),
     recordFlowJobId: (jobId) => ports.setFlowJobIdIfUnset(workItem.id, jobId),
     moveToNeedsHuman: (reason) =>
       ports.updateStatusIfLeaseHolder(
@@ -564,9 +592,12 @@ export type RejectedRetryDeps = {
  * 記録されないpipelineは準備ステップで何もせずに終わるので、戻さないと動くジョブの無いまま
  * reconcileの猶予まで残るため。例外は`main`が`job_failures`に記録して通知する。
  * 記録が`false`を返す(別の実行がリースを持つ)ときは、その実行が進めているので、ログだけ残して`retrying`を返す。
+ * `needs_human`へ戻せたときは、直後に`needs_human`を通知する(`notifyNeedsHuman`)。戻せなかったときは通知しない。
+ * `label`は例外の文の接頭辞で、呼び出し元のscriptの名前を渡す。
  */
 export async function relaunchPipelineAfterRejection(
   deps: RejectedRetryDeps,
+  label = "requirements_apply",
 ): Promise<"not_moved" | "retrying"> {
   if (!(await deps.casToGenerating())) return "not_moved";
   deps.markRestartable();
@@ -592,7 +623,7 @@ export async function relaunchPipelineAfterRejection(
   } catch (err) {
     throw await rollBackToNeedsHuman(
       deps,
-      `requirements_apply: ${PIPELINE_FLOW_PATH} could not be started: ${messageOf(err)}`,
+      `${label}: ${PIPELINE_FLOW_PATH} could not be started: ${messageOf(err)}`,
     );
   }
 
@@ -602,7 +633,7 @@ export async function relaunchPipelineAfterRejection(
   } catch (err) {
     throw await rollBackToNeedsHuman(
       deps,
-      `requirements_apply: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${messageOf(err)}`,
+      `${label}: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${messageOf(err)}`,
     );
   }
   if (!recorded) {
@@ -615,6 +646,7 @@ export async function relaunchPipelineAfterRejection(
 
 /**
  * `REQUIREMENTS_REGENERATION_FAILED_REASON`を理由にして`needs_human`へ戻し、投げる例外を返す。
+ * 戻せたときは、`needs_human`を通知する(通知の失敗は握りつぶしてログに残す)。
  * 戻す比較交換が例外を投げたときはログに残し、元の失敗をそのまま返す。
  * 一致しなかったとき(別の実行がリースを持つか、作業項目が先に動いた)は、そのことを伝える例外を返す。
  * 起動は実際には成功していることがあり、「起動できなかった」と伝えると誤解させるため。
@@ -634,20 +666,34 @@ async function rollBackToNeedsHuman(
     });
     return new Error(failure);
   }
-  if (rolledBack) return new Error(failure);
+  if (rolledBack) {
+    try {
+      await deps.notifyNeedsHuman(REQUIREMENTS_REGENERATION_FAILED_REASON);
+    } catch (err) {
+      deps.log("failed to notify the needs_human after a failed relaunch", {
+        error: messageOf(err),
+      });
+    }
+    return new Error(failure);
+  }
   return new Error(
     `${failure}; another run holds the lease or the work item moved on, so it was not moved to needs_human`,
   );
 }
 
-/** 最新の承認依頼が、この依頼かを返す。 */
+/**
+ * 作業項目の最新の承認依頼(`latestApprovalRequest`の結果)が、この依頼かを返す。副作用は無い。
+ * 古い(承認済みの)依頼を再実行しても、新しい依頼の判断を待つ作業項目を動かさないための確認である。
+ * 最新の依頼が無いときは、最新ではないものとして扱う。
+ */
 export function isLatestApprovalRequest(
-  _latest: { readonly id: number } | null,
-  _requestId: number,
+  latest: { readonly id: number } | null,
+  requestId: number,
 ): boolean {
-  return true;
+  return latest !== null && latest.id === requestId;
 }
 
+/** `reportApplyFailure`が使うDBとDiscordの呼び出し。テストでは差し替える。 */
 export type ApplyFailurePorts = {
   readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
   readonly notifyJobFailed: (
@@ -657,21 +703,120 @@ export type ApplyFailurePorts = {
   ) => Promise<void>;
 };
 
-/** 承認の反映の失敗を記録して通知する。 */
-export async function reportApplyFailure(
-  _flowPath: string,
-  _err: unknown,
-  _failure: { work_item_id: number | null },
-  _log: Logger,
-  _ports?: ApplyFailurePorts,
-): Promise<void> {}
+const REAL_APPLY_FAILURE_PORTS: ApplyFailurePorts = {
+  recordFailure: (record) => recordFailure(record),
+  notifyJobFailed: async (flowPath, jobId, error) => {
+    const config = await loadConfig(() =>
+      wmill.getResource("f/factory/factory_config"),
+    );
+    const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
+    if (webhookUrl.length === 0) return;
+    await notify(webhookUrl, {
+      kind: "job_failed",
+      instance_name: config.instance_name,
+      flow_path: flowPath,
+      job_id: jobId,
+      error,
+    });
+  },
+};
 
-/** 実装フローを起動する手順の本番の依存を組み立てる。 */
-export function buildStartImplement(
-  _config: Pick<FactoryConfig, "instance_name">,
-  _ctx: NotifyContext,
-): () => Promise<StartImplementOutcome> {
-  return async () => "launch_failed";
+/**
+ * 承認の反映のscriptの失敗を、`factory.job_failures`に記録し、Discordへ`job_failed`を通知する。
+ * 例外を投げない。呼び出し側が元の例外を投げ直す。
+ * このscriptはフローのステップではなく単独で動くため、フローの`on_error_flow`に頼れない。
+ * `failure.work_item_id`があるときだけ作業項目のIDを付けて記録する。その作業項目は
+ * `retry_work_item`で再開できる状態で終わるので、Consoleの要対応から再実行できる。
+ * 比較交換より前の失敗では作業項目が承認待ちのままで、`retry_work_item`では再開できないため、IDを付けない。
+ * その場合は同じ判断で`approval_decide`を実行し直す。
+ * 記録と通知はそれぞれ失敗しても、もう一方を止めない。
+ */
+export async function reportApplyFailure(
+  flowPath: string,
+  err: unknown,
+  failure: { work_item_id: number | null },
+  log: Logger,
+  ports: ApplyFailurePorts = REAL_APPLY_FAILURE_PORTS,
+): Promise<void> {
+  const message = messageOf(err);
+  const jobId = process.env.WM_JOB_ID ?? "unknown";
+  const name = flowPath.split("/").at(-1) ?? flowPath;
+  log.error(`${name} failed`, { error: message });
+  try {
+    await ports.recordFailure({
+      work_item_id: failure.work_item_id,
+      flow_path: flowPath,
+      job_id: jobId,
+      step: null,
+      error: message,
+    });
+  } catch (recordErr) {
+    log.error("failed to record failure", { error: messageOf(recordErr) });
+  }
+  try {
+    await ports.notifyJobFailed(flowPath, jobId, message);
+  } catch (notifyErr) {
+    log.error("failed to send discord notification", {
+      error: messageOf(notifyErr),
+    });
+  }
+}
+
+/**
+ * 却下の作り直しの前に、作業項目に取り込んだ題名と本文を現在のIssueの内容に更新する手順の本番の依存を組み立てる。
+ * 更新したことは、noticeとDiscordの`intake_refreshed`で承認者に知らせる。noticeの失敗でDiscordへの通知を止めない。
+ * 要件定義の却下の作り直しと、設計の却下でIssueが変わっていたときの要件定義への戻しが共有する。
+ */
+export function buildRefreshIntake(args: {
+  readonly workItem: WorkItem;
+  readonly issueNumber: number;
+  readonly client: GhClient;
+  readonly webhookUrl: string;
+  readonly instanceName: string;
+  readonly log: Logger;
+}): () => Promise<unknown> {
+  const { workItem, issueNumber, client, webhookUrl, instanceName, log } = args;
+  return () =>
+    refreshIntakeFromIssue({
+      snapshot: workItem,
+      getIssue: () =>
+        getIssue(client, workItem.owner, workItem.repo, issueNumber),
+      writeIntake: (intake, note) =>
+        updateIntakeIfRegenerating(workItem.id, intake, note),
+      announce: async (updated) => {
+        try {
+          await addNoticeUnlessUnresolved({
+            kind: INTAKE_REFRESHED_NOTICE_KIND,
+            message: buildIntakeRefreshedNoticeMessage({
+              owner: workItem.owner,
+              repo: workItem.repo,
+              issue_number: issueNumber,
+              work_item_id: workItem.id,
+            }),
+          });
+        } catch (err) {
+          log.warn("failed to record the intake refresh notice", {
+            work_item_id: workItem.id,
+            error: messageOf(err),
+          });
+        }
+        await notifyBestEffort(
+          webhookUrl,
+          {
+            kind: "intake_refreshed",
+            instance_name: instanceName,
+            owner: workItem.owner,
+            repo: workItem.repo,
+            issue_number: issueNumber,
+            issue_url: workItem.issue_url ?? "",
+            title: updated.title,
+          },
+          log,
+        );
+      },
+      log: (message, fields) =>
+        log.warn(message, { work_item_id: workItem.id, ...fields }),
+    });
 }
 
 /**
@@ -779,6 +924,17 @@ async function run(
       `requirements_apply: work item ${workItem.id} has no issue_number`,
     );
   }
+  // 最新の依頼かは、下書きと結合しない問い合わせで確かめる。下書きに結合できない最新の依頼を読み飛ばすと、
+  // 古い承認を最新として返し、古い依頼で新しい依頼の判断を待つ作業項目を動かしてしまう。
+  const latest = await latestApprovalRequest(workItem.id, "requirements");
+  if (!isLatestApprovalRequest(latest, request.id)) {
+    log.info("approval request is not the latest, no-op", {
+      approval_request_id,
+      work_item_id: workItem.id,
+      latest_approval_request_id: latest?.id ?? null,
+    });
+    return { outcome: "no_op" };
+  }
   if (request.status !== "approved" && request.status !== "rejected") {
     // 防御的な検査。`approval_decide.ts`は"approved"か"rejected"を
     // 記録した直後にしかここを起動しない。
@@ -828,48 +984,14 @@ async function run(
           request.reason,
         ),
       removeWorktree: () => removeReqWorktree(workItem),
-      refreshIntake: () =>
-        refreshIntakeFromIssue({
-          snapshot: workItem,
-          getIssue: () =>
-            getIssue(client, workItem.owner, workItem.repo, intakeIssueNumber),
-          writeIntake: (intake, note) =>
-            updateIntakeIfRegenerating(workItem.id, intake, note),
-          announce: async (updated) => {
-            // noticeの失敗でDiscordへの通知を止めない。どちらも承認者に知らせる手段である。
-            try {
-              await addNoticeUnlessUnresolved({
-                kind: INTAKE_REFRESHED_NOTICE_KIND,
-                message: buildIntakeRefreshedNoticeMessage({
-                  owner: workItem.owner,
-                  repo: workItem.repo,
-                  issue_number: intakeIssueNumber,
-                  work_item_id: workItem.id,
-                }),
-              });
-            } catch (err) {
-              log.warn("failed to record the intake refresh notice", {
-                work_item_id: workItem.id,
-                error: messageOf(err),
-              });
-            }
-            await notifyBestEffort(
-              webhookUrl,
-              {
-                kind: "intake_refreshed",
-                instance_name: config.instance_name,
-                owner: workItem.owner,
-                repo: workItem.repo,
-                issue_number: intakeIssueNumber,
-                issue_url: workItem.issue_url ?? "",
-                title: updated.title,
-              },
-              log,
-            );
-          },
-          log: (message, fields) =>
-            log.warn(message, { work_item_id: workItem.id, ...fields }),
-        }),
+      refreshIntake: buildRefreshIntake({
+        workItem,
+        issueNumber: intakeIssueNumber,
+        client,
+        webhookUrl,
+        instanceName: config.instance_name,
+        log,
+      }),
       launchPipeline: () =>
         wmill.runFlowAsync(PIPELINE_FLOW_PATH, {
           work_item_id: workItem.id,
@@ -888,7 +1010,13 @@ async function run(
       markRestartable: () => {
         failure.work_item_id = workItem.id;
       },
-      notifyNeedsHuman: async () => {},
+      notifyNeedsHuman: (reason) =>
+        notifyNeedsHumanBestEffort(
+          { workItem, issueNumber: intakeIssueNumber, webhookUrl, log },
+          config,
+          reason,
+          undefined,
+        ),
       log: (message, fields) =>
         log.warn(message, { work_item_id: workItem.id, ...fields }),
     });
@@ -953,48 +1081,12 @@ export async function main(
   try {
     return await run(approval_request_id, log, failure);
   } catch (err) {
-    const message = maskSecrets(
-      err instanceof Error ? err.message : String(err),
+    await reportApplyFailure(
+      "f/factory/steps/requirements_apply",
+      err,
+      failure,
+      log,
     );
-    log.error("requirements_apply failed", { error: message });
-    try {
-      await recordFailure({
-        work_item_id: failure.work_item_id,
-        flow_path: "f/factory/steps/requirements_apply",
-        job_id: process.env.WM_JOB_ID ?? "unknown",
-        step: null,
-        error: message,
-      });
-    } catch (recordErr) {
-      log.error("failed to record failure", {
-        error: maskSecrets(
-          recordErr instanceof Error ? recordErr.message : String(recordErr),
-        ),
-      });
-    }
-    try {
-      const config = await loadConfig(() =>
-        wmill.getResource("f/factory/factory_config"),
-      );
-      const webhookUrl = await wmill.getVariable(
-        "f/factory/discord_webhook_url",
-      );
-      if (webhookUrl.length > 0) {
-        await notify(webhookUrl, {
-          kind: "job_failed",
-          instance_name: config.instance_name,
-          flow_path: "f/factory/steps/requirements_apply",
-          job_id: process.env.WM_JOB_ID ?? "unknown",
-          error: message,
-        });
-      }
-    } catch (notifyErr) {
-      log.error("failed to send discord notification", {
-        error: maskSecrets(
-          notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
-        ),
-      });
-    }
     throw err;
   }
 }

@@ -3786,8 +3786,8 @@ export async function returnToRequirementsIfLeaseHolder(
 // approval_requests
 // (`migrations/datatable/main/20260927120000_approval_requests.up.sql`)。
 // 承認待ちを扱うスクリプト(approval_decide.ts、pipeline_request_approval.ts、
-// steps/requirements_apply.ts、steps/issue_proposal_apply.ts、poll_issues.tsの
-// 期限切れ処理)はすべてこのテーブルを通す。
+// steps/design_request_approval.ts、steps/requirements_apply.ts、steps/design_apply.ts、
+// steps/issue_proposal_apply.ts、poll_issues.tsの承認待ちの走査)はすべてこのテーブルを通す。
 // ---------------------------------------------------------------------------
 
 /**

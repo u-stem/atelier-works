@@ -1271,6 +1271,8 @@ describe("buildStartDesign", () => {
 
 describe("notifyNeedsHumanBestEffort", () => {
   const WORK_ITEM_FOR_NOTICE = {
+    id: 7,
+    design_attempt: 0,
     owner: "octo",
     repo: "widgets",
     issue_url: "https://github.com/octo/widgets/issues/42",
@@ -1333,7 +1335,13 @@ describe("buildStartImplement", () => {
     const start = buildStartImplement(
       { instance_name: "local" },
       {
-        workItem: { id: 7, owner: "octo", repo: "widgets", issue_url: null },
+        workItem: {
+          id: 7,
+          owner: "octo",
+          repo: "widgets",
+          issue_url: null,
+          design_attempt: 0,
+        },
         issueNumber: 42,
         webhookUrl: "",
         log: { info() {}, warn() {}, error() {} },

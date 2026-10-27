@@ -4,7 +4,8 @@
 // 決定は`decideApprovalRequestIfPending`(不可分な比較交換)で行に記録し、
 // 実際のGitHubやDBへの副作用は、種別ごとのハンドラscript(`handlerPathFor`)に
 // `wmill.runScriptByPathAsync`で任せる。再開を待つ中断中のフローは無い。
-// 処理先は、行を読んだ直後、記録とIssueの確認より前に引く。処理先が無い種別の判断は、記録せずに断る。
+// 処理先は、行を読んだ直後、記録とIssueの確認より前に引く。記録した後に処理先が引けないと、
+// 判断が反映されないまま残るためである。
 //
 // 記録する承認者は、呼び出し側が渡す文字列ではなく、ジョブのWindmill実行文脈
 // (`WM_USERNAME`、無ければ`WM_EMAIL`。`deriveApprover`を参照)から導く。
@@ -212,8 +213,7 @@ export type ApprovalDecideCall = {
 /**
  * 判断を記録し、種別ごとのハンドラを起動する。
  * 処理先(`handlerPathFor`)は、行を読んだ直後、既存の判断の照合とIssueの確認より前に引く。
- * 処理先が無い種別(ハンドラを足すまでの`design`)は、判断を記録する前に断る。
- * 記録した後に処理先が無いと分かると、記録だけが残って反映されない状態になるためで、
+ * 記録した後に処理先を引けないと、記録だけが残って反映されない状態になるためで、
  * 記録済みの依頼の再起動でも同じ位置を通る。
  */
 export async function decideApproval(
