@@ -24,12 +24,10 @@ import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
 import { jobDetailPath } from "../../lib/jobLink.ts";
-import { withJobsTab } from "../../lib/jobsTabs.ts";
 import {
   ACTIVE_TRUNCATED_NOTE,
   currentJobs,
   formatDuration,
-  JOBS_PATH,
   type JobStateKind,
   jobScriptName,
   jobStateInfo,
@@ -97,21 +95,18 @@ export function UpcomingTime({
 function timeOf(
   job: JobSummaryView,
   time: "active" | "history",
-): { iso: string; prefix: string; upcoming: boolean } | null {
+): { iso: string; prefix: string } | null {
   if (time === "history") {
     return job.completed_at === null
       ? null
-      : { iso: job.completed_at, prefix: "完了 ", upcoming: false };
+      : { iso: job.completed_at, prefix: "完了 " };
   }
   if (job.state === "running" && job.started_at !== null) {
-    return { iso: job.started_at, prefix: "開始 ", upcoming: false };
-  }
-  if (job.state === "scheduled" && job.scheduled_for !== null) {
-    return { iso: job.scheduled_for, prefix: "予定 ", upcoming: true };
+    return { iso: job.started_at, prefix: "開始 " };
   }
   return job.created_at === null
     ? null
-    : { iso: job.created_at, prefix: "登録 ", upcoming: false };
+    : { iso: job.created_at, prefix: "登録 " };
 }
 
 function JobRow({
@@ -150,11 +145,7 @@ function JobRow({
       <p className="flex flex-wrap gap-x-4 gap-y-0.5 text-small text-muted-foreground tabular-nums">
         {at === null ? null : (
           <span>
-            {at.upcoming ? (
-              <UpcomingTime iso={at.iso} now={now} prefix={at.prefix} />
-            ) : (
-              <TimeText iso={at.iso} now={now} prefix={at.prefix} />
-            )}
+            <TimeText iso={at.iso} now={now} prefix={at.prefix} />
           </span>
         )}
         {job.duration_ms === null ? null : (
@@ -253,6 +244,8 @@ export const LIST_LOADING_SHAPE: LoadingShape = {
 /**
  * 実行中と待ちのタブの本体。実行中と、workerを待つジョブを並べる。
  * これから始まる予定のジョブは並べない。次回の予定は、スケジュールのタブに同じ情報があるためである。
+ * 並べないものの注記は置かない。スケジュールのタブは隣にあり、tag consoleの除外は運用の文書にある。
+ * キューが切れていて0件のときは、読めた範囲のことだと分かる文にする。切れた先に動いているジョブがありうるためである。
  * 自動では取り直さず、画面の更新ボタンで取り直す。その案内は見出しの更新の脇に任せ、ここでは繰り返さない。
  * キューの1ページで切れたときは、全件を読めていないと伝える。
  */
@@ -260,21 +253,6 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
   const now = useNow();
   return (
     <div className="flex max-w-4xl flex-col gap-3">
-      <p className="text-small text-muted-foreground">
-        Consoleの呼び出し(tag console)は含みません。
-        予定のジョブ(これから始まる定期実行)も含みません。次回の予定は、
-        <Link
-          to={{
-            pathname: JOBS_PATH,
-            search: `?${withJobsTab(new URLSearchParams(), "schedules").toString()}`,
-          }}
-          replace
-          className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          スケジュールのタブ
-        </Link>
-        で見られます。
-      </p>
       <JobsQueryGate
         query={query}
         title="実行中と待ちのジョブを取得できませんでした"
@@ -293,7 +271,11 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
                 </Alert>
               ) : null}
               {jobs.length === 0 ? (
-                <EmptyNote>いま実行中・待ちのジョブはありません。</EmptyNote>
+                <EmptyNote>
+                  {data.truncated
+                    ? "読めた範囲では、実行中・待ちのジョブはありません。"
+                    : "いま実行中・待ちのジョブはありません。"}
+                </EmptyNote>
               ) : (
                 <JobList jobs={jobs} now={now} back="" time="active" />
               )}

@@ -137,69 +137,6 @@ describe("JobList", () => {
     ).toContain('dateTime="2026-10-26T05:00:01.000000Z"');
   });
 
-  test("shows when a scheduled job is due", () => {
-    expect(
-      render(
-        <JobList
-          jobs={[
-            job({
-              state: "scheduled",
-              started_at: null,
-              completed_at: null,
-              scheduled_for: "2026-10-26T06:00:00.000000Z",
-              duration_ms: null,
-            }),
-          ]}
-          now={NOW}
-          back=""
-          time="active"
-        />,
-      ),
-    ).toContain('dateTime="2026-10-26T06:00:00.000000Z"');
-  });
-
-  test("says how long until a scheduled job is due", () => {
-    expect(
-      render(
-        <JobList
-          jobs={[
-            job({
-              state: "scheduled",
-              started_at: null,
-              completed_at: null,
-              scheduled_for: "2026-10-26T06:00:00.000000Z",
-              duration_ms: null,
-            }),
-          ]}
-          now={NOW}
-          back=""
-          time="active"
-        />,
-      ),
-    ).toContain("残り50分");
-  });
-
-  test("does not call a scheduled job just now", () => {
-    expect(
-      render(
-        <JobList
-          jobs={[
-            job({
-              state: "scheduled",
-              started_at: null,
-              completed_at: null,
-              scheduled_for: "2026-10-26T06:00:00.000000Z",
-              duration_ms: null,
-            }),
-          ]}
-          now={NOW}
-          back=""
-          time="active"
-        />,
-      ),
-    ).not.toContain("たった今");
-  });
-
   test("marks a flow", () => {
     expect(
       render(

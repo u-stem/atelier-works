@@ -215,9 +215,6 @@ export function JobHistory({
   const loadingMore = more?.isFetching === true;
   return (
     <div className="flex max-w-4xl flex-col gap-3">
-      <p className="text-small text-muted-foreground">
-        Consoleの呼び出し(tag console)は含みません。
-      </p>
       <Filters
         status={status}
         script={script}
