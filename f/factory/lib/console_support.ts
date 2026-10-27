@@ -182,3 +182,5 @@ export const INTAKE_REFRESHED_NOTE_PREFIX =
  * Consoleのビューが、再開の処理の依存を引かずに読めるよう、ここに置く。
  */
 export const TRANSIENT_STALL_NOTE_PREFIX = "auto_retry_stalled: ";
+
+export const APPROVAL_REDISPATCH_NOTE_PREFIX = "";

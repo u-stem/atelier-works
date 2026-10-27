@@ -5,6 +5,7 @@
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
 import {
+  APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
   INTAKE_REFRESHED_NOTE_PREFIX,
   UNRESOLVABLE_NOTICE_KINDS,
@@ -10591,6 +10592,43 @@ check(
     "awaiting_design_approval",
     sql,
   )) === null,
+);
+
+// 起動し直した記録は、状態の注記に出さない。承認待ちへ入った遷移の注記が押しのけられないようにする。
+// 状態が同じでも、起動し直しの記録でない注記は、新しいほうを出す。
+const noteItem = await issueWorkItem(
+  9512,
+  1,
+  "awaiting_approval",
+  "qdb approval redispatch note",
+);
+await moveStatus(
+  noteItem,
+  "awaiting_approval",
+  "awaiting_design_approval",
+  "qdb waiting note",
+);
+await recordApprovalRedispatch(
+  noteItem,
+  "awaiting_design_approval",
+  `${APPROVAL_REDISPATCH_NOTE_PREFIX}77`,
+  sql,
+);
+check(
+  "approval redispatch: the status note keeps the note of the transition into the status",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note ===
+    "qdb waiting note",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(noteItem)}, 'awaiting_design_approval', 'awaiting_design_approval', 'qdb other same-status note')`,
+);
+check(
+  "approval redispatch: a same-status note that is not a restart record is still shown",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note ===
+    "qdb other same-status note",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -13,6 +13,7 @@ import {
   type SweepDeps,
   sweepApprovals,
 } from "../../f/factory/lib/approval_sweep.ts";
+import { APPROVAL_REDISPATCH_NOTE_PREFIX } from "../../f/factory/lib/console_support.ts";
 import type {
   LatestApprovalGuard,
   LatestApprovalRequest,
@@ -272,6 +273,12 @@ describe("the limits of the sweep", () => {
   test("names the restart of a handler with the request id", () => {
     expect(approvalRedispatchNote(7)).toBe(
       "approval handler restarted for request 7",
+    );
+  });
+
+  test("starts the note of a restart with the prefix that the Console skips", () => {
+    expect(approvalRedispatchNote(7)).toBe(
+      `${APPROVAL_REDISPATCH_NOTE_PREFIX}7`,
     );
   });
 
