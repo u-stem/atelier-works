@@ -19,11 +19,17 @@ export const EMPTY_FIELDS: IntakeFields = {
   acceptanceCriteria: "",
 };
 
-export function draftForm(
-  _fields: IntakeFields,
-  _repoText: string,
-): IntakeForm {
-  return { repo: "", title: "", body: "", acceptanceCriteria: "" };
+/**
+ * 入力中の値を、保存する形にする。リポジトリをまだ選んでいないときは、画面が見せている既定の値を使う。
+ * 保存した値を復元しても、見せていた入力欄と同じ値になる。
+ */
+export function draftForm(fields: IntakeFields, repoText: string): IntakeForm {
+  return {
+    repo: fields.repo ?? repoText,
+    title: fields.title,
+    body: fields.body,
+    acceptanceCriteria: fields.acceptanceCriteria,
+  };
 }
 
 /**

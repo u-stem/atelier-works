@@ -29,6 +29,8 @@ type ManualIntake = {
   readonly confirmResend: () => void;
   /** 投入されていたと分かったとき、警告と保存した入力を片付ける。 */
   readonly discard: () => void;
+  /** 入力中の値を残す。別の画面へ移って戻っても、入力欄を復元するためである。 */
+  readonly saveDraft: (form: IntakeForm) => void;
 };
 
 /**
@@ -90,6 +92,9 @@ export function useManualIntake(): ManualIntake {
     }, []),
     discard: useCallback(() => {
       intakeSessions.discard(MANUAL_INTAKE_WRITE_KEY);
+    }, []),
+    saveDraft: useCallback((form: IntakeForm) => {
+      intakeSessions.draft(MANUAL_INTAKE_WRITE_KEY, form);
     }, []),
   };
 }

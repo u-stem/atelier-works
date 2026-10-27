@@ -8,10 +8,10 @@ const KBD_CLASS =
   "rounded border border-border bg-muted px-1.5 font-sans text-caption leading-5 text-muted-foreground";
 
 /**
- * ショートカットの一覧と、1文字のショートカットを無効にする切り替え。
+ * ショートカットの一覧と、1文字のショートカットを有効にする切り替え。
  * ブラウザ標準の`<dialog>`をモーダルで開く。Escで閉じ、閉じると元の要素へフォーカスが戻る。
- * 一覧は画面の表から作る。切り替えは、1文字のキーを止められるようにするために置く。
- * 無効にしても、パレットの項目とサイドバーのボタンから、この一覧を開いて有効に戻せる。
+ * 一覧は画面の表から作る。1文字のキーは既定で無効で、切り替えで有効にする。
+ * 無効のままでも、パレットの項目とサイドバーのボタンから、この一覧を開ける。
  * 閉じる操作はすべて`onClose`を呼ぶ。`open`を偽にして閉じたときは呼ばない。
  */
 export function ShortcutHelp({
@@ -71,16 +71,21 @@ export function ShortcutHelp({
         <label className="flex items-center gap-3 text-body">
           <input
             type="checkbox"
-            checked={!enabled}
+            checked={enabled}
             onChange={(event) => {
-              onEnabledChange(!event.target.checked);
+              onEnabledChange(event.target.checked);
             }}
             className="size-4 accent-primary"
           />
-          <span>ショートカットを無効にする</span>
+          <span>ショートカットを有効にする</span>
         </label>
         <p id={noteId} className="text-small text-muted-foreground">
-          無効にすると、gの次のキーと?が働かなくなります。コマンドパレットとこの一覧は使えます。
+          <span className="block">
+            gの次の数字と?は、入力中の内容を失わないよう、既定では無効です。
+          </span>
+          <span className="block">
+            無効のままでも、コマンドパレットとこの一覧は使えます。
+          </span>
         </p>
         <div className="flex justify-end">
           <Button

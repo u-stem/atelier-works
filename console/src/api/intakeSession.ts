@@ -20,7 +20,7 @@ export type IntakeSession = {
   /** 直近の送信の結果。 */
   readonly attempt: IntakeAttempt;
   /**
-   * 直近に送った入力欄の値。投入できたときと、利用者が破棄したときに消す。
+   * 入力中の値、または直近に送った入力欄の値。投入できたときと、利用者が破棄したときに消す。
    * それ以外は、戻った画面が復元する。
    */
   readonly form: IntakeForm | null;
@@ -74,11 +74,23 @@ export type IntakeSessions = {
    * 警告と保存した入力を消して、次の送信を開ける。
    */
   readonly discard: (key: string) => void;
-  /** 入力中の値を残す。 */
+  /**
+   * 入力中の値を残す。別の画面へ移って戻っても、入力欄を復元するためである。
+   * 結果は変えず、投入されたか分からない結果があるときは、送った入力を守るために書き換えない。
+   */
   readonly draft: (key: string, form: IntakeForm) => void;
   /** `useSyncExternalStore`に渡す。変わったときだけ呼ぶ。 */
   readonly subscribe: (listener: () => void) => () => void;
 };
+
+function sameForm(left: IntakeForm, right: IntakeForm): boolean {
+  return (
+    left.repo === right.repo &&
+    left.title === right.title &&
+    left.body === right.body &&
+    left.acceptanceCriteria === right.acceptanceCriteria
+  );
+}
 
 export function createIntakeSessions(): IntakeSessions {
   let sessions: ReadonlyMap<string, IntakeSession> = new Map();
@@ -162,7 +174,18 @@ export function createIntakeSessions(): IntakeSessions {
           : current,
       );
     },
-    draft: () => {},
+    draft: (key, form) => {
+      update(key, (current) => {
+        // 投入されたか分からない結果は、送った入力を見せ続けるので、書き換えない。
+        if (current.attempt.kind === "unknown") {
+          return current;
+        }
+        const kept = current.form;
+        return kept !== null && sameForm(kept, form)
+          ? current
+          : { ...current, form };
+      });
+    },
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {

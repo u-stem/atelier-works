@@ -23,12 +23,9 @@ import { TRANSITION_COLORS } from "../lib/motionClasses.ts";
 import { isOutsideRect } from "../lib/navDrawer.ts";
 import { SCREENS } from "./screens.ts";
 
-const KBD_CLASS =
-  "rounded border border-border bg-muted px-1.5 font-sans text-caption leading-5 text-muted-foreground";
-
 /**
  * コマンドパレット。ブラウザ標準の`<dialog>`をモーダルで開く。
- * 検索の対象は、画面の表にある画面と、ショートカットの一覧(ヘルプ)だけで、表示する文字はすべて固定の表から作る。
+ * 検索の対象は、画面の表にある画面と固定の行き先、ショートカットの一覧(ヘルプ)だけで、表示する文字はすべて固定の表から作る。
  * 入力欄にフォーカスを残し、選んでいる項目は`aria-activedescendant`で示す。項目にはフォーカスを移さない。
  * 項目を選ぶと、先にパレットを閉じてから移る。閉じるとブラウザが元の要素へフォーカスを戻すので、
  * 遷移後のフォーカスの移動を奪わない。Escで閉じたときは、元の要素に戻る。
@@ -50,12 +47,13 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
 
-  const reset = useCallback(() => {
-    setQuery("");
-    setActive(0);
+  // キーで選んだときだけ、項目を枠の中に見せる。マウスの移動では動かさない。
+  const scrollToActive = useRef(false);
+
+  const focusInput = useCallback(() => {
     focusElement(inputRef.current);
   }, []);
-  const { ref, openRef } = useDialogSync(open, reset);
+  const { ref, openRef } = useDialogSync(open, focusInput);
 
   const items = useMemo(() => paletteItems(SCREENS), []);
   const shown = filterPaletteItems(items, query);
@@ -66,10 +64,10 @@ export function CommandPalette({
   const activeItem = shown[activeIndex];
   const activeId = activeItem === undefined ? undefined : optionId(activeItem);
 
-  // キーで選んだ項目が、一覧の枠の外に出ないようにする。
   useEffect(() => {
-    if (activeId !== undefined) {
-      document.getElementById(activeId)?.scrollIntoView?.({ block: "nearest" });
+    if (activeId !== undefined && scrollToActive.current) {
+      scrollToActive.current = false;
+      document.getElementById(activeId)?.scrollIntoView({ block: "nearest" });
     }
   }, [activeId]);
 
@@ -93,6 +91,7 @@ export function CommandPalette({
     );
     if (action.kind === "move") {
       event.preventDefault();
+      scrollToActive.current = true;
       setActive(action.index);
     } else if (action.kind === "choose") {
       event.preventDefault();
@@ -110,6 +109,9 @@ export function CommandPalette({
       data-command-palette=""
       aria-label="コマンドパレット"
       onClose={() => {
+        // 次に開いたとき、前の入力と選択を見せない。
+        setQuery("");
+        setActive(0);
         // 親が`open`を偽にして閉じたときは、親がすでに知っているので知らせない。
         if (openRef.current) {
           onClose();
@@ -131,7 +133,7 @@ export function CommandPalette({
         ref={inputRef}
         type="text"
         role="combobox"
-        aria-expanded={true}
+        aria-expanded={shown.length > 0}
         aria-controls={listId}
         aria-autocomplete="list"
         aria-activedescendant={activeId}
@@ -196,13 +198,6 @@ export function CommandPalette({
                   >
                     <span className="min-w-0 flex-1 truncate">
                       {item.label}
-                    </span>
-                    <span aria-hidden="true" className="flex shrink-0 gap-1">
-                      {item.hint.map((key) => (
-                        <kbd key={key} className={KBD_CLASS}>
-                          {key}
-                        </kbd>
-                      ))}
                     </span>
                   </div>
                 );

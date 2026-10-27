@@ -15,8 +15,6 @@ export type PaletteItem = {
   readonly id: string;
   readonly group: PaletteGroupId;
   readonly label: string;
-  /** 項目の横に添えるキー。 */
-  readonly hint: readonly string[];
   /** 絞り込みだけが見る、ラベルに無い言葉。 */
   readonly keywords: string;
   readonly target: PaletteTarget;
@@ -50,31 +48,45 @@ const GROUP_ORDER: readonly PaletteGroupId[] = ["screens", "help"];
 
 export const HELP_ITEM_LABEL = "ショートカットの一覧を開く";
 
-/** 画面の表から、パレットの項目を作る。ヘルプの項目は、画面の有無によらず常に末尾に付く。 */
+/**
+ * 画面の表から、パレットの項目を作る。
+ * 画面ごとに、サイドバーの1回の押下で届かない固定の行き先(`destinations`)が続く。
+ * ヘルプの項目は、画面の有無によらず常に末尾に付く。
+ */
 export function paletteItems(
   screens: readonly {
     readonly id: string;
     readonly label: string;
     readonly path: string;
-    readonly shortcut: string;
+    readonly destinations: readonly {
+      readonly label: string;
+      readonly path: string;
+    }[];
   }[],
 ): readonly PaletteItem[] {
   return [
-    ...screens.map(
-      (screen): PaletteItem => ({
+    ...screens.flatMap((screen): PaletteItem[] => [
+      {
         id: `screen-${screen.id}`,
         group: "screens",
         label: screen.label,
-        hint: ["g", screen.shortcut],
         keywords: screen.id,
         target: { kind: "screen", path: screen.path },
-      }),
-    ),
+      },
+      ...screen.destinations.map(
+        (destination, index): PaletteItem => ({
+          id: `screen-${screen.id}-${String(index)}`,
+          group: "screens",
+          label: destination.label,
+          keywords: screen.id,
+          target: { kind: "screen", path: destination.path },
+        }),
+      ),
+    ]),
     {
       id: "help",
       group: "help",
       label: HELP_ITEM_LABEL,
-      hint: ["?"],
       keywords: "ヘルプ キーボード キー 操作 shortcut shortcuts help",
       target: { kind: "help" },
     },

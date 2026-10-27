@@ -69,10 +69,25 @@ const MODIFIER_ONLY_KEYS: ReadonlySet<string> = new Set([
   "CapsLock",
 ]);
 
-const TYPING_TAGS: ReadonlySet<string> = new Set([
-  "INPUT",
-  "TEXTAREA",
-  "SELECT",
+const TYPING_TAGS: ReadonlySet<string> = new Set(["TEXTAREA", "SELECT"]);
+
+/**
+ * 文字を打ち込む`input`の`type`。チェックボックスやボタンなど、文字を打ち込まないものは含めない。
+ * 日付と時刻の入力は、数字を打ち込むので含める。
+ */
+const TYPING_INPUT_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "search",
+  "email",
+  "url",
+  "tel",
+  "password",
+  "number",
+  "date",
+  "datetime-local",
+  "month",
+  "week",
+  "time",
 ]);
 
 /** IMEの変換中のキーか。変換を確定するEnterは、`isComposing`か`keyCode`の229で見分ける。 */
@@ -99,6 +114,7 @@ export function platformOf(navigatorLike: {
  * コマンドパレットを開くキーか。
  * macはCommandだけ、それ以外はCtrlだけを見る。
  * macの入力欄ではCtrl+Kが行末までの削除なので、奪わない。
+ * 押しっぱなしの繰り返しは含めない。開閉が繰り返されるためである。
  */
 export function isPaletteKey(
   event: {
@@ -111,7 +127,12 @@ export function isPaletteKey(
   },
   platform: Platform,
 ): boolean {
-  if (event.key.toLowerCase() !== "k" || event.altKey || event.shiftKey) {
+  if (
+    event.key.toLowerCase() !== "k" ||
+    event.altKey ||
+    event.shiftKey ||
+    event.repeat
+  ) {
     return false;
   }
   return platform === "mac"
@@ -119,7 +140,11 @@ export function isPaletteKey(
     : event.ctrlKey && !event.metaKey;
 }
 
-/** 文字を入力する要素か。1文字のショートカットを奪わないために使う。 */
+/**
+ * 文字を入力する要素か。1文字のショートカットを奪わないために使う。
+ * `input`は、文字を打ち込む種類(`type`が無いものを含む)だけを数える。
+ * チェックボックスやボタンでは、1文字のキーを働かせる。
+ */
 export function isTypingTarget(
   target: {
     readonly tagName?: string;
@@ -130,10 +155,11 @@ export function isTypingTarget(
   if (target === null) {
     return false;
   }
-  return (
-    TYPING_TAGS.has(target.tagName?.toUpperCase() ?? "") ||
-    target.isContentEditable === true
-  );
+  const tag = target.tagName?.toUpperCase() ?? "";
+  if (tag === "INPUT") {
+    return TYPING_INPUT_TYPES.has((target.type ?? "text").toLowerCase());
+  }
+  return TYPING_TAGS.has(tag) || target.isContentEditable === true;
 }
 
 /**
@@ -234,23 +260,57 @@ export type RouteEnv<Id extends string> = ShortcutEnv<Id> & {
 };
 
 export type RouteResult<Id extends string> = {
+  /** ブラウザの既定の動作を止めるか。 */
   readonly preventDefault: boolean;
   readonly togglePalette: boolean;
   readonly help: boolean;
+  /** 移る画面。移らないときは`null`。 */
   readonly go: Id | null;
   readonly nextChord: ChordState;
 };
 
-export function routeKeydown<Id extends string>(
-  _event: KeyEventLike & { readonly defaultPrevented: boolean },
-  chord: ChordState,
-  _env: RouteEnv<Id>,
+function routed<Id extends string>(
+  nextChord: ChordState,
+  change: Partial<RouteResult<Id>> = {},
 ): RouteResult<Id> {
   return {
     preventDefault: false,
     togglePalette: false,
     help: false,
     go: null,
-    nextChord: chord,
+    ...change,
+    nextChord,
   };
+}
+
+/**
+ * 1つのキー押下から、行う操作を決める。ブラウザのイベントとの接続は`useKeyboardShortcuts`が行う。
+ * 他の処理がすでに扱ったイベントには何もしない。
+ * パレットのキーは、他のダイアログが開いていなければ働く。入力欄の中でも、1文字のショートカットが無効でも働く。
+ * 1文字のショートカットは、ダイアログが何も開いていないときだけ働く。
+ * パレットだけが開いている間と、他のダイアログが開いている間は、`g`の待ちも捨てる。
+ */
+export function routeKeydown<Id extends string>(
+  event: KeyEventLike & { readonly defaultPrevented: boolean },
+  chord: ChordState,
+  env: RouteEnv<Id>,
+): RouteResult<Id> {
+  if (event.defaultPrevented) {
+    return routed(chord);
+  }
+  const gate = keyboardGate(env.openDialogs);
+  if (isPaletteKey(event, env.platform)) {
+    return gate === "blocked"
+      ? routed(CHORD_IDLE)
+      : routed(CHORD_IDLE, { preventDefault: true, togglePalette: true });
+  }
+  if (gate !== "free") {
+    return routed(CHORD_IDLE);
+  }
+  const step = stepShortcut(chord, event, env);
+  return routed(step.state, {
+    preventDefault: step.consumed,
+    help: step.action?.kind === "help",
+    go: step.action?.kind === "go" ? step.action.id : null,
+  });
 }

@@ -77,6 +77,7 @@ export function AppShell() {
   }, []);
   useKeyboardShortcuts({
     enabled: shortcutsEnabled,
+    platform,
     onTogglePalette: togglePalette,
     onOpenHelp: openHelp,
   });

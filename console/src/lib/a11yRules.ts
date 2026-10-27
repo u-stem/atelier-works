@@ -203,8 +203,10 @@ function parseHtml(html: string): ElementNode {
       const element = createElement(tag.name, tag.attrs, current);
       current.children.push(element);
       if (RAW_TEXT_TAGS.has(tag.name)) {
-        const close = html.toLowerCase().indexOf(`</${tag.name}`, index);
-        const end = close < 0 ? -1 : html.indexOf(">", close);
+        const closing = new RegExp(`</${tag.name}`, "gi");
+        closing.lastIndex = index;
+        const found = closing.exec(html);
+        const end = found === null ? -1 : html.indexOf(">", found.index);
         index = end < 0 ? length : end + 1;
       } else if (!VOID_TAGS.has(tag.name) && !tag.selfClosing) {
         current = element;
@@ -253,11 +255,18 @@ function isHidden(element: ElementNode): boolean {
   return false;
 }
 
-/** 隠れた部分も含めた、要素の中の文字。`aria-labelledby`の参照先の読み取りに使う。 */
-function fullText(node: HtmlNode): string {
-  return node.kind === "text"
-    ? node.text
-    : node.children.map(fullText).join("");
+/**
+ * 隠れた部分も含めた、要素の中の文字。`aria-labelledby`の参照先の読み取りに使う。
+ * `excluded`の要素の中は数えない。入力欄を包む`label`の文字から、入力欄自身の中身を除くためである。
+ */
+function fullText(node: HtmlNode, excluded?: ElementNode): string {
+  if (node.kind === "text") {
+    return node.text;
+  }
+  if (node === excluded) {
+    return "";
+  }
+  return node.children.map((child) => fullText(child, excluded)).join("");
 }
 
 /**
@@ -313,7 +322,7 @@ function indexDocument(root: ElementNode): Document {
 function labelledByText(element: ElementNode, document: Document): string {
   return tokens(element.attrs.get("aria-labelledby"))
     .flatMap((id) => document.byId.get(id) ?? [])
-    .map(fullText)
+    .map((referenced) => fullText(referenced))
     .join(" ");
 }
 
@@ -448,13 +457,13 @@ function hasInputLabel(element: ElementNode, document: Document): boolean {
       (candidate) =>
         candidate.tag === "label" &&
         candidate.attrs.get("for") === id &&
-        !isBlank(fullText(candidate)),
+        !isBlank(fullText(candidate, element)),
     )
   ) {
     return true;
   }
   for (let node = element.parent; node !== null; node = node.parent) {
-    if (node.tag === "label" && !isBlank(fullText(node))) {
+    if (node.tag === "label" && !isBlank(fullText(node, element))) {
       return true;
     }
   }

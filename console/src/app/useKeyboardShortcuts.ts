@@ -4,17 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   CHORD_IDLE,
-  isPaletteKey,
   isTypingTarget,
-  keyboardGate,
   type OpenDialog,
   type Platform,
   platformOf,
-  stepShortcut,
+  routeKeydown,
 } from "../lib/shortcutKeys.ts";
 import {
   readShortcutsEnabled,
   type StorageLike,
+  shortcutsEnabledFromStorageEvent,
   writeShortcutsEnabled,
 } from "../lib/shortcutStore.ts";
 import { SCREENS } from "./screens.ts";
@@ -28,7 +27,10 @@ function browserStorage(): StorageLike | null {
   }
 }
 
-/** 1文字のショートカットを有効にするか。切り替えは保存領域に残す。読めなければ有効にする。 */
+/**
+ * 1文字のショートカットを有効にするか。既定は無効で、切り替えは保存領域に残す。
+ * 別のタブでの切り替えも、`storage`イベントで反映する。
+ */
 export function useShortcutsEnabled(): readonly [
   boolean,
   (enabled: boolean) => void,
@@ -39,6 +41,18 @@ export function useShortcutsEnabled(): readonly [
   const update = useCallback((next: boolean) => {
     setEnabled(next);
     writeShortcutsEnabled(browserStorage(), next);
+  }, []);
+  useEffect(() => {
+    const handle = (event: StorageEvent): void => {
+      const next = shortcutsEnabledFromStorageEvent(event);
+      if (next !== null) {
+        setEnabled(next);
+      }
+    };
+    window.addEventListener("storage", handle);
+    return () => {
+      window.removeEventListener("storage", handle);
+    };
   }, []);
   return [enabled, update];
 }
@@ -54,23 +68,34 @@ function openDialogs(): OpenDialog[] {
   );
 }
 
+/** キーを受けた要素が、文字を打ち込む場所か。 */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return isTypingTarget({
+    tagName: target.tagName,
+    isContentEditable: target.isContentEditable,
+    ...(target instanceof HTMLInputElement ? { type: target.type } : {}),
+  });
+}
+
 /**
  * パレットのキーと、1文字のショートカットを受ける。外枠に1つだけ置く。
- * パレット以外のダイアログが開いている間は、どちらも受けない。
- * パレットのキーは入力欄の中でも働き、1文字のショートカットは`enabled`が偽のとき働かない。
- * Alt+T(通知)は、修飾キー付きなので奪わない。
+ * 何を行うかは`routeKeydown`が決め、ここは結果を実行する。
  */
 export function useKeyboardShortcuts({
   enabled,
+  platform,
   onTogglePalette,
   onOpenHelp,
 }: {
   enabled: boolean;
+  platform: Platform;
   onTogglePalette: () => void;
   onOpenHelp: () => void;
 }): void {
   const navigate = useNavigate();
-  const platform = useBrowserPlatform();
   const chord = useRef(CHORD_IDLE);
 
   useEffect(() => {
@@ -79,41 +104,27 @@ export function useKeyboardShortcuts({
       id: screen.id,
     }));
     const handle = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented) {
-        return;
-      }
-      const gate = keyboardGate(openDialogs());
-      if (isPaletteKey(event, platform)) {
-        if (gate !== "blocked") {
-          event.preventDefault();
-          onTogglePalette();
-        }
-        return;
-      }
-      if (gate !== "free") {
-        chord.current = CHORD_IDLE;
-        return;
-      }
-      const step = stepShortcut(chord.current, event, {
+      const result = routeKeydown(event, chord.current, {
         now: event.timeStamp,
         enabled,
-        typing: isTypingTarget(
-          event.target instanceof HTMLElement ? event.target : null,
-        ),
+        typing: isTyping(event.target),
         targets,
+        platform,
+        openDialogs: openDialogs(),
       });
-      chord.current = step.state;
-      if (step.consumed) {
+      chord.current = result.nextChord;
+      if (result.preventDefault) {
         event.preventDefault();
       }
-      if (step.action?.kind === "help") {
+      if (result.togglePalette) {
+        onTogglePalette();
+      }
+      if (result.help) {
         onOpenHelp();
-      } else if (step.action?.kind === "go") {
-        const { id } = step.action;
-        const screen = SCREENS.find((candidate) => candidate.id === id);
-        if (screen !== undefined) {
-          void navigate(screen.path);
-        }
+      }
+      const screen = SCREENS.find((candidate) => candidate.id === result.go);
+      if (screen !== undefined) {
+        void navigate(screen.path);
       }
     };
     document.addEventListener("keydown", handle);
