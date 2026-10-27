@@ -190,35 +190,12 @@ describe("the reads of the current steps", () => {
     expect(during).toBe(true);
   });
 
-  test("stops the periodic read while the document is hidden", async () => {
-    const reads = await recording(async () => {
-      const client = new QueryClient();
-      focusManager.setFocused(false);
-      const close = new QueryObserver(client, {
-        ...activeStepsOptions(TWO, "active", false),
-        refetchInterval: 20,
-      }).subscribe(() => undefined);
-      await wait(150);
-      close();
-      focusManager.setFocused(undefined);
-    });
-    expect(reads).toEqual([A, B]);
-  });
-
-  test("reads again on its interval while the document is visible", async () => {
-    const reads = await recording(async () => {
-      const client = new QueryClient();
-      focusManager.setFocused(true);
-      const close = new QueryObserver(client, {
-        ...activeStepsOptions(TWO, "active", false),
-        refetchInterval: 20,
-        staleTime: 0,
-      }).subscribe(() => undefined);
-      await wait(150);
-      close();
-      focusManager.setFocused(undefined);
-    });
-    expect(reads.length).toBeGreaterThan(2);
+  // bunにはwindowが無く、TanStack Queryはサーバーとみなして周期の取り直しを動かさない。
+  // 文書が見えない間に止めることは、周期の設定の値(`refetchIntervalInBackground`が偽)で確かめる。
+  test("leaves the periodic read to the interval that stops in the background", () => {
+    expect(
+      activeStepsOptions(TWO, "active", false).refetchIntervalInBackground,
+    ).toBe(false);
   });
 });
 

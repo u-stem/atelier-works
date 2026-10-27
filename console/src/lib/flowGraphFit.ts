@@ -10,7 +10,9 @@ export type GraphPresentation = "fit" | "scroll" | "list";
 
 /**
  * 節の実際の幅から、図の見せ方を決める。
- * 配置の幅に収まるなら図をそのまま、収まらず最小の幅以上なら横にスクロールする枠、最小の幅より狭いなら一覧にする。
+ * 図を包むカードの分を引いた幅に、配置の幅が収まるなら図をそのまま出す。
+ * 収まらず最小の幅以上なら横にスクロールする枠、最小の幅より狭いなら一覧にする。
+ * カードの分を引くのは、節の幅と図の幅が同じとき、図がカードからはみ出すためである。
  * 幅が測れていない(0以下)間は、枠に入れて描く。測れた後に見せ方が変わるだけで済み、図が隠れない。
  */
 export function graphPresentation(
@@ -19,7 +21,7 @@ export function graphPresentation(
 ): GraphPresentation {
   if (width <= 0) return "scroll";
   if (width < FIT_MIN_WIDTH) return "list";
-  return width >= extentWidth ? "fit" : "scroll";
+  return width - FIT_CHROME_WIDTH >= extentWidth ? "fit" : "scroll";
 }
 
 /** 半角の文字の幅(em)。全角の文字は1emとして数える。 */

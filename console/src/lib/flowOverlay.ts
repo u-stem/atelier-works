@@ -56,6 +56,7 @@ export type FlowGraphState = {
 
 const FACTORY_PREFIX = "f/factory/";
 const FLOW_NODE_PREFIX = "flow:";
+const SCHEDULE_NODE_PREFIX = "schedule:";
 
 /**
  * flowのパスを、図のノードのidに直す。既知のflowの外のパスは`null`にする。
@@ -122,11 +123,33 @@ export function flowOverlayOf(list: JobListView): FlowOverlay {
   };
 }
 
+/**
+ * scheduleごとの、図の入口に添える情報。`recent_runs`は新しい順なので先頭が直近の実行である。
+ * 無効にされたscheduleと、一時停止の期限が未来のscheduleは、止まっているとする。
+ * 止まっているscheduleは、直近の実行が成功でも、動いていない。
+ */
 export function scheduleEntriesOf(
-  _snapshot: SchedulesSnapshotView,
-  _nowMs: number,
+  snapshot: SchedulesSnapshotView,
+  nowMs: number,
 ): ReadonlyMap<string, ScheduleEntry> {
-  return new Map();
+  const entries = new Map<string, ScheduleEntry>();
+  for (const schedule of snapshot.schedules) {
+    if (!schedule.path.startsWith(FACTORY_PREFIX)) continue;
+    const pausedUntil =
+      schedule.paused_until === null
+        ? Number.NaN
+        : Date.parse(schedule.paused_until);
+    const latest = schedule.recent_runs[0];
+    entries.set(
+      `${SCHEDULE_NODE_PREFIX}${schedule.path.slice(FACTORY_PREFIX.length)}`,
+      {
+        stopped: !schedule.enabled || pausedUntil > nowMs,
+        lastRun: latest === undefined ? null : { success: latest.success },
+        nextRunAt: schedule.next_run_at,
+      },
+    );
+  }
+  return entries;
 }
 
 /** ジョブの画面のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
@@ -191,7 +214,8 @@ export function flowGraphStateOf(
         : scheduleEntriesOf(schedules.data, nowMs),
     activeFailed: active.isError,
     schedulesFailed: schedules.isError,
-    activePending: false,
-    schedulesTruncated: false,
+    activePending: !active.isError && active.data === undefined,
+    schedulesTruncated:
+      !schedules.isError && schedules.data?.truncated === true,
   };
 }

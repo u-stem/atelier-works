@@ -14,10 +14,13 @@ import { useElementWidth } from "../../lib/useElementWidth.ts";
 import { FlowGraphDiagram, FlowGraphList } from "../jobs/FlowGraphDiagram.tsx";
 import {
   ACTIVE_READ_FAILED_NOTE,
+  overviewWords,
+  QUEUE_TRUNCATED_NOTE,
   SCHEDULE_READ_FAILED_NOTE,
+  SCHEDULE_TRUNCATED_NOTE,
 } from "../jobs/flowGraphText.ts";
 
-function ReadFailedNote({ text }: { text: string }) {
+function GraphNote({ text }: { text: string }) {
   return (
     <Alert variant="warning">
       <AlertDescription>
@@ -27,12 +30,23 @@ function ReadFailedNote({ text }: { text: string }) {
   );
 }
 
+/** 節の実際の幅から、図の見せ方を決める。図の幅はグラフから求める。 */
+function usePresentation(graph: FlowGraph, width: number) {
+  const extentWidth = useMemo(
+    () => layoutExtent(layoutFlowGraph(graph)).width,
+    [graph],
+  );
+  return graphPresentation(width, extentWidth);
+}
+
 /**
  * 図の本体。節の実際の幅`width`(px)から、見せ方を選ぶ。
- * 配置の幅に収まれば図をそのまま、収まらなければ横にスクロールできる枠に入れる。
+ * 図の幅とカードの分が収まれば図をそのまま、収まらなければ横にスクロールできる枠に入れる。
  * 枠は、キーボードで焦点を当てないと隠れた部分を読めないので、焦点を受けられるようにする。
- * 640px未満は図が読めないので、flowごとの一覧にする。
+ * 640px未満は図が読めないので、flowごとの一覧にする。一覧は、定期の入口を描かないので、その注記も出さない。
+ * 図の上に、実行中と待ちの要約を1行置く。強調が無いだけでは、読み込み前と何も動いていない状態を見分けられないためである。
  * 実行中と待ちの取得に失敗したときは、強調を外し、読めなかったと伝える。
+ * キューが切れているときは、強調の無いflowも動いている場合があると伝える。
  */
 export function FlowGraphBody({
   graph,
@@ -43,18 +57,25 @@ export function FlowGraphBody({
   state: FlowGraphState;
   width: number;
 }) {
-  const extentWidth = useMemo(
-    () => layoutExtent(layoutFlowGraph(graph)).width,
-    [graph],
-  );
-  const presentation = graphPresentation(width, extentWidth);
+  const presentation = usePresentation(graph, width);
+  const overview = overviewWords(state);
+  const showsSchedules = presentation !== "list";
   return (
     <div className="flex flex-col gap-3">
-      {state.activeFailed ? (
-        <ReadFailedNote text={ACTIVE_READ_FAILED_NOTE} />
+      {overview === null ? null : (
+        <p role="status" className="text-small font-medium">
+          {overview}
+        </p>
+      )}
+      {state.activeFailed ? <GraphNote text={ACTIVE_READ_FAILED_NOTE} /> : null}
+      {state.overlay?.lowerBound === true ? (
+        <GraphNote text={QUEUE_TRUNCATED_NOTE} />
       ) : null}
-      {state.schedulesFailed ? (
-        <ReadFailedNote text={SCHEDULE_READ_FAILED_NOTE} />
+      {showsSchedules && state.schedulesFailed ? (
+        <GraphNote text={SCHEDULE_READ_FAILED_NOTE} />
+      ) : null}
+      {showsSchedules && state.schedulesTruncated ? (
+        <GraphNote text={SCHEDULE_TRUNCATED_NOTE} />
       ) : null}
       {presentation === "list" ? (
         <FlowGraphList graph={graph} state={state} />
@@ -79,6 +100,8 @@ export function FlowGraphBody({
   );
 }
 
+const EMPTY_GRAPH: FlowGraph = { nodes: [], edges: [] };
+
 /**
  * 起動の関係の節。スケジュール、script、flow、人の操作が何を起動するかを図にし、実行中のflowを重ねる。
  * 図は自前のSVGで描く。データはバンドルに取り込んだ静的なJSONで、外部の入力を含まない。
@@ -86,6 +109,7 @@ export function FlowGraphBody({
  * 取得は画面が持ち、図を開いた後にだけ始める。見出しの更新にも、その後から含める。
  * 図は重く、普段は読まないので、たたんで置く。開いたときに初めて描画し、一度描いた後は閉じても残す。
  * 図の幅は広いので、ほかの節より広く取る。
+ * 幅は節の全体で測る。図が出ない狭い幅では、図の説明も出さない。
  */
 export function FlowGraphSectionView({
   graph,
@@ -112,6 +136,7 @@ export function FlowGraphSectionView({
 }) {
   const [opened, setOpened] = useState(initiallyOpen === true);
   const state = flowGraphStateOf(reads, nowMs);
+  const presentation = usePresentation(graph ?? EMPTY_GRAPH, width);
   return (
     <section
       ref={widthRef}
@@ -127,12 +152,21 @@ export function FlowGraphSectionView({
           起動の関係
         </h2>
         <div className="text-small text-muted-foreground">
-          スケジュール、script、flow、人の操作が、何を起動するかを示します。
-          実線の矢印はscriptがflowを起動する関係、破線の矢印は時刻や人の操作による起動、点線の矢印はflowが実行するステップです。
-          scriptからscriptの起動は含みません。
-          たとえばself_updateがauto_retry_stale_imageを起動する関係は、図に出ません。
-          実行中のflowは強調し、待っているジョブの数を添えます。
-          定期の入口には、直近の実行の成否を添えます。
+          {presentation === "list" ? (
+            <>
+              flowごとに、実行中か、待っているジョブがあるかを示します。
+              起動の関係の図は、幅の広い画面で表示します。
+            </>
+          ) : (
+            <>
+              スケジュール、script、flow、人の操作が、何を起動するかを示します。
+              実線の矢印はscriptがflowを起動する関係、破線の矢印は時刻や人の操作による起動、点線の矢印はflowが実行するステップです。
+              scriptからscriptの起動は含みません。
+              たとえばself_updateがauto_retry_stale_imageを起動する関係は、図に出ません。
+              実行中のflowは強調し、待っているジョブの数を添えます。
+              定期の入口には、停止中か、直近の実行の成否と次回の予定を添えます。
+            </>
+          )}
         </div>
       </div>
       {graph === null ? (

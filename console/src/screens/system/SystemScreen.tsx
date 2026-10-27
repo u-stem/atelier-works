@@ -278,7 +278,8 @@ export function SystemScreen() {
   // 起動の関係の図に重ねる実行の状態も、図を表示するまで取得しない。実行中と待ちの一覧は、ジョブの画面と取得を分け合う。
   const [flowOpened, setFlowOpened] = useState(false);
   const flowActive = useActiveJobs(flowOpened);
-  const flowSchedules = useSchedules(flowOpened);
+  // scheduleは、実行中と待ちの取得が終わってから読む。Console用workerの枠が1つなので、2つを重ねない。
+  const flowSchedules = useSchedules(flowOpened && !flowActive.isFetching);
   const refresh = refreshStatusOfSystem({
     status,
     deployments,

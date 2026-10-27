@@ -113,7 +113,8 @@ export function stepLinesOf(
 }
 
 /**
- * 詳細が終了を返したジョブのうち、まだ数えていないもの。
+ * 詳細が終了を返したジョブと、詳細が見つからなくなったジョブのうち、まだ数えていないもの。
+ * 見つからないジョブも、一覧から消えているはずなので、一覧を取り直す契機に数える。
  * 同じ周期に複数が終わっても、取り直しを1回にまとめる材料になる。
  */
 export function newlyFinished(
@@ -124,8 +125,8 @@ export function newlyFinished(
     .filter(
       ([id, detail]) =>
         !handled.has(id) &&
-        detail?.found === true &&
-        isFinishedJobState(detail.job.state),
+        detail !== null &&
+        (!detail.found || isFinishedJobState(detail.job.state)),
     )
     .map(([id]) => id);
 }

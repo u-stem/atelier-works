@@ -21,7 +21,11 @@ import {
   nodeLinkTarget,
 } from "../../lib/flowOverlay.ts";
 import { safeText } from "../../lib/safeText.ts";
-import { activityWords, scheduleWords } from "./flowGraphText.ts";
+import {
+  activityWords,
+  type ScheduleWords,
+  scheduleWords,
+} from "./flowGraphText.ts";
 import { JobStateBadge } from "./JobRows.tsx";
 
 /** 箱の左右の余白(px)。文字はこの内側に収める。 */
@@ -101,12 +105,12 @@ function NodeBody({
   box,
   activity,
   lowerBound,
-  runWords,
+  schedule,
 }: {
   box: LayoutBox;
   activity: NodeActivity | undefined;
   lowerBound: boolean;
-  runWords: string | null;
+  schedule: ScheduleWords;
 }) {
   const { node } = box;
   const words =
@@ -181,16 +185,32 @@ function NodeBody({
           {words.queued}
         </text>
       )}
-      {runWords === null ? null : (
+      {schedule.last === null ? null : (
         <text
           x={textX}
           y={wordsY}
           className={cn(
-            "text-caption font-semibold",
-            runWords.includes("失敗") ? "fill-failure" : "fill-success",
+            "text-[11px] font-semibold",
+            schedule.stopped
+              ? "fill-muted-foreground"
+              : schedule.last.includes("失敗")
+                ? "fill-failure"
+                : "fill-success",
           )}
         >
-          {runWords}
+          {schedule.last}
+        </text>
+      )}
+      {schedule.next === null ? null : (
+        <text
+          x={
+            textX +
+            (schedule.last === null ? 0 : textEm(schedule.last) * 11 + 8)
+          }
+          y={wordsY}
+          className="fill-muted-foreground text-[11px]"
+        >
+          {schedule.next}
         </text>
       )}
     </>
@@ -214,7 +234,7 @@ function GraphNode({
       box={box}
       activity={activity}
       lowerBound={lowerBound}
-      runWords={scheduleWords(state.scheduleEntries?.get(box.node.id)).last}
+      schedule={scheduleWords(state.scheduleEntries?.get(box.node.id))}
     />
   );
   return to === null ? (
