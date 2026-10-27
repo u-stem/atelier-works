@@ -32,3 +32,17 @@ describe("the wiring of the job list screen", () => {
     expect(SOURCE).not.toContain("refetchOnWindowFocus");
   });
 });
+
+describe("the wiring of the current steps", () => {
+  test("reads the steps of the running flows of the active list", () => {
+    expect(BODY).toContain("useActiveJobSteps(active.data, tab)");
+  });
+
+  test("refreshes the active list before the steps", () => {
+    expect(BODY).toContain("refreshActiveThenSteps(");
+  });
+
+  test("passes the steps to the active list", () => {
+    expect(BODY).toContain("<ActiveJobs query={active} steps={steps} />");
+  });
+});

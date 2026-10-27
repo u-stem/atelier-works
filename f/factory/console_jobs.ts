@@ -121,6 +121,8 @@ export type StepView = {
   readonly state: string;
   readonly job_id: string | null;
   readonly iterations: number | null;
+  /** Windmillが条件で飛ばしたステップ。状態は`success`のまま返る。 */
+  readonly skipped: boolean;
 };
 
 /** 失敗の検知が保存した原因の1件。 */
@@ -352,6 +354,7 @@ function projectSteps(raw: Record<string, unknown>): StepView[] {
       iterations: Array.isArray(module.flow_jobs)
         ? module.flow_jobs.length
         : null,
+      skipped: false,
     });
   }
   return steps;

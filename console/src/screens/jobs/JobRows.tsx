@@ -11,7 +11,11 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import type { JobListView, JobSummaryView } from "../../api/jobsQueries.ts";
+import type {
+  ActiveJobStepsView,
+  JobListView,
+  JobSummaryView,
+} from "../../api/jobsQueries.ts";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import {
@@ -22,6 +26,7 @@ import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
+import type { StepLine } from "../../lib/activeSteps.ts";
 import { cn } from "../../lib/cn.ts";
 import { jobDetailPath } from "../../lib/jobLink.ts";
 import {
@@ -54,6 +59,11 @@ const STATE_STYLE: Readonly<
   skipped: { Icon: SkipForward, variant: "outline" },
   unknown: { Icon: CircleQuestionMark, variant: "outline" },
 };
+
+/** ステップの状態。記号と語を並べる。条件で飛ばしたステップは「スキップ」と示す。 */
+export function StepStateBadge({ state }: { state: string; skipped: boolean }) {
+  return <JobStateBadge state={state} />;
+}
 
 /** ジョブかステップの状態。記号と語を並べる。実行中の記号は、動きを減らす設定では回さない。 */
 export function JobStateBadge({ state }: { state: string }) {
@@ -171,11 +181,14 @@ export function JobList({
   now,
   back,
   time,
+  stepLines: _stepLines,
 }: {
   jobs: readonly JobSummaryView[];
   now: number;
   back: string;
   time: "active" | "history";
+  /** 実行中のflowの行に添える今のステップ。ジョブのidで引く。 */
+  stepLines?: ReadonlyMap<string, StepLine>;
 }) {
   return (
     <ul className="divide-y divide-border rounded-xl border border-border bg-card">
@@ -249,7 +262,12 @@ export const LIST_LOADING_SHAPE: LoadingShape = {
  * 自動では取り直さず、画面の更新ボタンで取り直す。その案内は見出しの更新の脇に任せ、ここでは繰り返さない。
  * キューの1ページで切れたときは、全件を読めていないと伝える。
  */
-export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
+export function ActiveJobs({
+  query,
+}: {
+  query: SectionQuery<JobListView>;
+  steps?: ActiveJobStepsView;
+}) {
   const now = useNow();
   return (
     <div className="flex max-w-4xl flex-col gap-3">

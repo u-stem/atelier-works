@@ -3,6 +3,7 @@ import { Disclosure } from "../../components/Disclosure.tsx";
 import { DrawioFrame } from "../../components/drawio/DrawioFrame.tsx";
 import type { FlowGraph } from "../../lib/flowGraph.ts";
 import { flowGraphToDrawioXml } from "../../lib/flowGraphXml.ts";
+import type { FlowGraphReads, FlowGraphState } from "../../lib/flowOverlay.ts";
 
 /**
  * 起動の関係の節。スケジュール、script、flow、人の操作が何を起動するかを図にする。
@@ -11,12 +12,22 @@ import { flowGraphToDrawioXml } from "../../lib/flowGraphXml.ts";
  * 図は重く、普段は読まないので、たたんで置く。開いたときに初めて描画し、一度描いた後は閉じても残す。
  * 図の幅は広いので、ほかの節より広く取る。
  */
+export function FlowGraphBody(_props: {
+  graph: FlowGraph;
+  state: FlowGraphState;
+  width: number;
+}) {
+  return null;
+}
+
 export function FlowGraphSection({
   graph,
   initiallyOpen,
 }: {
   graph: FlowGraph | null;
   initiallyOpen?: boolean | undefined;
+  reads?: FlowGraphReads | undefined;
+  onOpen?: (() => void) | undefined;
 }) {
   const [opened, setOpened] = useState(initiallyOpen === true);
   // 再描画のたびに組み立て直すと、DrawioFrameがXMLの変更とみなしてiframeを作り直す。

@@ -15,6 +15,8 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import type { StepDetails } from "../lib/activeSteps.ts";
+import type { JobsTabId } from "../lib/jobsTabs.ts";
 import { isActiveJobState, isFinishedJobState } from "../lib/jobsView.ts";
 import { ApiFailure } from "./errors.ts";
 import {
@@ -59,6 +61,8 @@ export type StepViewData = {
   readonly state: string;
   readonly job_id: string | null;
   readonly iterations: number | null;
+  /** Windmillが条件で飛ばしたステップ。状態は`success`のまま返る。 */
+  readonly skipped: boolean;
 };
 
 export type FailureViewData = {
@@ -722,5 +726,73 @@ export function jobsHoldsQueryOptions() {
     refetchInterval: false as const,
     refetchOnWindowFocus: false as const,
     refetchOnReconnect: false as const,
+  };
+}
+
+/** 実行中のflowの今のステップを取り直す間隔。 */
+export const ACTIVE_STEPS_REFRESH_MS = 30_000;
+
+/** 今のステップの取得のキーの先頭。 */
+export const activeStepsQueryKeyBase = ["console", "jobs", "steps"] as const;
+
+export function activeStepsQueryKey(ids: readonly string[]): readonly string[] {
+  return [...activeStepsQueryKeyBase, ...ids];
+}
+
+/** ログと結果を含めずに、ジョブ1件の詳細を読む。 */
+export type ActiveStepRead = (id: string) => Promise<JobDetailView>;
+
+export async function fetchActiveJobSteps(
+  _ids: readonly string[],
+  _read: ActiveStepRead,
+): Promise<StepDetails> {
+  return new Map();
+}
+
+const NO_INTERVAL: number | false = false;
+
+export function activeStepsQueryOptions(ids: readonly string[]) {
+  return {
+    queryKey: activeStepsQueryKey(ids),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchActiveJobSteps(ids, (id) =>
+        fetchJobDetail(id, { includeOutput: false }, { signal }),
+      ),
+    staleTime: 0,
+    refetchInterval: NO_INTERVAL,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  };
+}
+
+export async function refreshActiveThenSteps(_reads: {
+  readonly active: () => Promise<unknown>;
+  readonly steps: () => Promise<unknown>;
+}): Promise<void> {
+  return undefined;
+}
+
+export async function invalidateAfterFinish(
+  _client: QueryClient,
+): Promise<void> {
+  return undefined;
+}
+
+export type ActiveJobStepsView = {
+  readonly details: StepDetails;
+  readonly isFetching: boolean;
+  readonly refetch: () => Promise<unknown>;
+};
+
+/** 実行中のflowの今のステップを読む。 */
+export function useActiveJobSteps(
+  _list: JobListView | undefined,
+  _selectedTab: JobsTabId,
+): ActiveJobStepsView {
+  return {
+    details: new Map(),
+    isFetching: false,
+    refetch: () => Promise.resolve(undefined),
   };
 }

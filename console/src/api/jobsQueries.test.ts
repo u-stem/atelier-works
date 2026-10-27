@@ -6,17 +6,22 @@ import {
 } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
+  ACTIVE_STEPS_REFRESH_MS,
+  activeStepsQueryKey,
+  activeStepsQueryOptions,
   type ConfigSnapshotView,
   configQueryKey,
   configQueryOptions,
   currentJob,
   currentSteps,
   failedDetailReads,
+  fetchActiveJobSteps,
   fetchActiveJobs,
   fetchConfig,
   fetchJobDetail,
   fetchJobHistory,
   fetchSchedules,
+  invalidateAfterFinish,
   isConfigSnapshot,
   isJobDetail,
   isJobList,
@@ -33,6 +38,7 @@ import {
   jobsActiveQueryOptions,
   jobsHistoryQueryKey,
   jobsHoldsQueryOptions,
+  refreshActiveThenSteps,
   type SchedulesSnapshotView,
   schedulesQueryKey,
   schedulesQueryOptions,
@@ -76,7 +82,15 @@ const DETAIL: JobDetailView = {
     { key: "work_item_id", type: "number", value: 7 },
     { key: "note", type: "string" },
   ],
-  steps: [{ id: "prepare", state: "success", job_id: ID, iterations: null }],
+  steps: [
+    {
+      id: "prepare",
+      state: "success",
+      job_id: ID,
+      iterations: null,
+      skipped: false,
+    },
+  ],
   log: { text: "line", truncated: false, masked: false, nonJsonLines: 1 },
   result: { text: "{}", truncated: false, masked: false },
   result_error: null,
@@ -237,7 +251,52 @@ describe("isJobDetail", () => {
     expect(
       isJobDetail({
         ...DETAIL,
-        steps: [{ state: "success", job_id: null, iterations: null }],
+        steps: [
+          { state: "success", job_id: null, iterations: null, skipped: false },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  test("accepts a step that was skipped", () => {
+    expect(
+      isJobDetail({
+        ...DETAIL,
+        steps: [
+          {
+            id: "a",
+            state: "success",
+            job_id: ID,
+            iterations: null,
+            skipped: true,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a step without the skipped flag", () => {
+    expect(
+      isJobDetail({
+        ...DETAIL,
+        steps: [{ id: "a", state: "success", job_id: ID, iterations: null }],
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a skipped flag that is not a boolean", () => {
+    expect(
+      isJobDetail({
+        ...DETAIL,
+        steps: [
+          {
+            id: "a",
+            state: "success",
+            job_id: ID,
+            iterations: null,
+            skipped: "yes",
+          },
+        ],
       }),
     ).toBe(false);
   });
@@ -668,6 +727,7 @@ describe("currentSteps", () => {
             state: "success",
             job_id: null,
             iterations: null,
+            skipped: false,
           })),
         }
       : DETAIL;
@@ -1051,5 +1111,158 @@ describe("the detail reads against a real QueryClient", () => {
       client.unmount();
     });
     expect(calls).toBe(1);
+  });
+});
+
+describe("activeJobSteps", () => {
+  const A = "0190a1b2-c3d4-7e5f-8a9b-00000000000a";
+  const B = "0190a1b2-c3d4-7e5f-8a9b-00000000000b";
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  test("fetches details one at a time", async () => {
+    let running = 0;
+    let peak = 0;
+    const read = async (): Promise<JobDetailView> => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await pause();
+      running -= 1;
+      return DETAIL;
+    };
+    await fetchActiveJobSteps([A, B], read);
+    expect(peak).toBe(1);
+  });
+
+  test("reads the details in the order given", async () => {
+    const order: string[] = [];
+    const read = (id: string): Promise<JobDetailView> => {
+      order.push(id);
+      return Promise.resolve(DETAIL);
+    };
+    await fetchActiveJobSteps([B, A], read);
+    expect(order).toEqual([B, A]);
+  });
+
+  test("keeps a detail that could not be read as null and reads the next", async () => {
+    const read = (id: string): Promise<JobDetailView> =>
+      id === A
+        ? Promise.reject(new ApiFailure({ kind: "network" }))
+        : Promise.resolve(DETAIL);
+    const details = await fetchActiveJobSteps([A, B], read);
+    expect([details.get(A), details.get(B)]).toEqual([null, DETAIL]);
+  });
+
+  test("stops at an error that is not a failed read", async () => {
+    const read = (): Promise<JobDetailView> =>
+      Promise.reject(new Error("abort"));
+    await expect(fetchActiveJobSteps([A], read)).rejects.toThrow("abort");
+  });
+
+  test("refetches every 30 seconds", () => {
+    expect(activeStepsQueryOptions([A]).refetchInterval).toBe(
+      ACTIVE_STEPS_REFRESH_MS,
+    );
+  });
+
+  test("stops when the document is hidden", () => {
+    expect(activeStepsQueryOptions([A]).refetchIntervalInBackground).toBe(
+      false,
+    );
+  });
+
+  test("does not refetch on focus", () => {
+    expect(activeStepsQueryOptions([A]).refetchOnWindowFocus).toBe(false);
+  });
+
+  test("does not refetch on reconnect", () => {
+    expect(activeStepsQueryOptions([A]).refetchOnReconnect).toBe(false);
+  });
+
+  test("keys the read by the jobs it reads", () => {
+    expect(activeStepsQueryOptions([A, B]).queryKey).toEqual(
+      activeStepsQueryKey([A, B]),
+    );
+  });
+
+  test("keeps the key apart from the detail of a job", () => {
+    expect(activeStepsQueryKey([A])).not.toEqual(
+      jobDetailQueryKey(A, { includeOutput: false }),
+    );
+  });
+
+  test("refresh button reads active before details", async () => {
+    const order: string[] = [];
+    await refreshActiveThenSteps({
+      active: async () => {
+        order.push("active:start");
+        await pause();
+        order.push("active:end");
+      },
+      steps: () => {
+        order.push("steps");
+        return Promise.resolve();
+      },
+    });
+    expect(order).toEqual(["active:start", "active:end", "steps"]);
+  });
+});
+
+describe("invalidateAfterFinish", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  function counted(client: QueryClient, key: readonly string[]) {
+    const state = { reads: 0 };
+    const options = {
+      queryKey: key,
+      queryFn: () => {
+        state.reads += 1;
+        return Promise.resolve(state.reads);
+      },
+      staleTime: Number.POSITIVE_INFINITY,
+    };
+    return {
+      state,
+      subscribe: () =>
+        new QueryObserver(client, options).subscribe(() => undefined),
+      prefetch: () => client.prefetchQuery(options),
+    };
+  }
+
+  test("refetches only subscribed queries once after a finish", async () => {
+    const client = new QueryClient();
+    const active = counted(client, jobsActiveQueryKey);
+    const history = counted(client, jobsHistoryQueryKey({}));
+    const unsubscribe = active.subscribe();
+    await history.prefetch();
+    await settle();
+    await invalidateAfterFinish(client);
+    await settle();
+    unsubscribe();
+    expect([active.state.reads, history.state.reads]).toEqual([2, 1]);
+  });
+
+  test("refetches a subscribed history page too", async () => {
+    const client = new QueryClient();
+    const history = counted(client, jobsHistoryQueryKey({}));
+    const unsubscribe = history.subscribe();
+    await settle();
+    await invalidateAfterFinish(client);
+    await settle();
+    unsubscribe();
+    expect(history.state.reads).toBe(2);
+  });
+
+  test("leaves a subscribed detail alone", async () => {
+    const client = new QueryClient();
+    const detail = counted(
+      client,
+      jobDetailQueryKey(ID, { includeOutput: true }),
+    );
+    const unsubscribe = detail.subscribe();
+    await settle();
+    await invalidateAfterFinish(client);
+    await settle();
+    unsubscribe();
+    expect(detail.state.reads).toBe(1);
   });
 });

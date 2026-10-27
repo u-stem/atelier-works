@@ -18,6 +18,8 @@ export function refreshStatusOfSystem(queries: {
   readonly holds: Refreshable;
   /** 設定の取得。タブをまだ開いていないときは`null`か省略する。 */
   readonly config?: Refreshable | null;
+  /** 起動の関係の図の取得。図を開く前は`null`か省略する。 */
+  readonly flowGraph?: readonly Refreshable[] | null;
 }): RefreshStatus {
   const polled = [
     queries.status,

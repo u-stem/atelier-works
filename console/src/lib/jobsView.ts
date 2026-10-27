@@ -58,6 +58,14 @@ export function jobStateInfo(state: string): JobStateInfo {
   );
 }
 
+/** ステップの状態の語。 */
+export function stepStateInfo(step: {
+  readonly state: string;
+  readonly skipped: boolean;
+}): JobStateInfo {
+  return jobStateInfo(step.state);
+}
+
 /** 実行中か待ちの状態。状態の取り直しを続ける対象である。`waiting`はステップの状態で、ジョブの取り直しには使わない。 */
 const ACTIVE_STATES: ReadonlySet<string> = new Set(["running", "queued"]);
 
