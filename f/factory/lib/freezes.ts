@@ -1,5 +1,6 @@
-// スケジュールの凍結の純粋関数群。I/Oは持たない。
-// 状態の読み書きは`./freeze_apply.ts`、人の端末のCLIは`scripts/freeze.ts`が行う。
+// スケジュールの凍結の純粋関数群。変数の読み書きは、呼び出し側が渡す入出力(`FreezeIo`)で行い、自分では何も呼ばない。
+// 反映の側の読み書きは`./freeze_apply.ts`、人の端末のCLIは`scripts/freeze.ts`が行う。
+// Consoleの置く操作と止める操作は、ファイルを読む部品を取り込まないよう、このファイルの入出力の関数を使う。
 //
 // 凍結は「このスケジュールを`wmill sync push`で書き換えないで」を、期限つきで伝える。
 // 同じ変数は、反映全体(push、migration、`deployed_sha`の更新)を待たせるdeployの保留も持つ。
@@ -43,6 +44,13 @@ const CONTROL_CHARS_GLOBAL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /** `placeFreeze`がidの衝突で返す理由。呼び出し側がidを作り直す判定に使う。 */
 export const FREEZE_ID_IN_USE = "the freeze id is already in use";
+/** 置く関数が、同じ対象にすでに有効な凍結があるときに返す理由。 */
+export const FREEZE_TARGET_ACTIVE = "the target already has an active freeze";
+/** `placeDeployFreeze`が、同じ主体にすでに有効なdeployの保留があるときに返す理由。 */
+export const DEPLOY_HOLDER_ACTIVE =
+  "the holder already has an active deploy freeze";
+/** 置く関数が、行数の上限に達したときに返す理由。 */
+export const FREEZE_TOO_MANY = "too many freezes";
 const REASON_MAX = 200;
 const HOLDER_MAX = 100;
 
@@ -79,6 +87,24 @@ function ok<T>(value: T): Outcome<T> {
 function fail<T>(reason: string): Outcome<T> {
   return { ok: false, reason };
 }
+
+/**
+ * 変数の読み取りの入出力。実体は呼び出し側が渡す。
+ * `freeze_apply.ts`の`FreezePorts`と同じ形で、ファイルを読む部品を取り込まずに使えるよう、このファイルにも持つ。
+ */
+export type FreezeReadIo = {
+  /** 変数の値。変数が無いと確かめられたときだけ`null`を返す。読めなければ例外を投げる。 */
+  readonly readVariable: () => Promise<string | null>;
+  readonly now: () => Date;
+};
+
+/**
+ * 変数の読み書きの入出力。書く関数の名前は、読み取り専用のscriptが取り込むこのファイルに、
+ * 書き込みの語を持ち込まないよう、`FreezePorts`と変えている。
+ */
+export type FreezeIo = FreezeReadIo & {
+  readonly storeVariable: (text: string) => Promise<void>;
+};
 
 export function emptyFreezeState(): FreezeState {
   return { version: 1, freezes: [], deploy_freezes: [] };
@@ -477,12 +503,12 @@ export function placeFreeze(
     return fail(FREEZE_ID_IN_USE);
   }
   if (activeFreezes(state, now).some((e) => e.target === input.target)) {
-    return fail("the target already has an active freeze");
+    return fail(FREEZE_TARGET_ACTIVE);
   }
   const kept = sweep(state.freezes, now);
   const keptDeploy = sweep(state.deploy_freezes, now);
   if (kept.length + keptDeploy.length >= FREEZE_MAX_ENTRIES) {
-    return fail("too many freezes");
+    return fail(FREEZE_TOO_MANY);
   }
   return ok({
     version: 1,
@@ -522,12 +548,12 @@ export function placeDeployFreeze(
       (e) => e.holder_kind === input.holder_kind && e.holder === input.holder,
     )
   ) {
-    return fail("the holder already has an active deploy freeze");
+    return fail(DEPLOY_HOLDER_ACTIVE);
   }
   const kept = sweep(state.freezes, now);
   const keptDeploy = sweep(state.deploy_freezes, now);
   if (kept.length + keptDeploy.length >= FREEZE_MAX_ENTRIES) {
-    return fail("too many freezes");
+    return fail(FREEZE_TOO_MANY);
   }
   return ok({
     version: 1,
@@ -568,6 +594,42 @@ export function releaseFreeze(
   });
 }
 
+/** 書く前に有効だった行。書いた後の読み直しで、欠けていないかを確かめるのに使う。 */
+export type ActiveRowRef = { readonly id: string; readonly expiresAt: Date };
+
+/**
+ * `exceptId`の行を除いた、有効なスケジュールの凍結とdeployの保留。
+ * 終わった行と解除された行は、別の書き手が片付けてよいので含めない。
+ */
+export function activeRowRefs(
+  state: FreezeState,
+  exceptId: string,
+  now: Date,
+): readonly ActiveRowRef[] {
+  return [...state.freezes, ...state.deploy_freezes]
+    .filter((entry) => entry.id !== exceptId && isActive(entry, now))
+    .map((entry) => ({ id: entry.id, expiresAt: new Date(entry.expires_at) }));
+}
+
+/**
+ * 書いた後の状態から、書く前に有効だった行のうち、欠けた行のidを返す。
+ * 読み直しの時点で期限が過ぎた行は、片付けられていてよいので数えない。
+ */
+export function lostActiveRows(
+  after: FreezeState,
+  refs: readonly ActiveRowRef[],
+  now: Date,
+): readonly string[] {
+  const ids = new Set(
+    [...after.freezes, ...after.deploy_freezes].map((entry) => entry.id),
+  );
+  return refs
+    .filter(
+      (ref) => !ids.has(ref.id) && ref.expiresAt.getTime() > now.getTime(),
+    )
+    .map((ref) => ref.id);
+}
+
 /** 追従が済んだスケジュールの凍結の行を消す。deployの保留には触れない。 */
 export function removeFreezes(
   state: FreezeState,
@@ -593,4 +655,79 @@ export function sessionHolderFromBranch(branch: string): string {
   const cleaned = branch.trim().replace(/[^A-Za-z0-9._/-]/g, "-");
   const name = cleaned.length === 0 ? "detached" : cleaned;
   return `session:${name}`.slice(0, HOLDER_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// 変数の読み書き(入出力は注入する)
+// ---------------------------------------------------------------------------
+
+/** 変数が壊れているときの回復の手順。失敗の文言に載せる。`reason`と`holder`は載せない。 */
+export const FREEZE_RECOVERY_HINT = `the freeze variable ${FREEZE_VARIABLE_PATH} is corrupt; a human can run "mise run freeze:reset" to clear it`;
+
+/** 変数が無いときに書き手が作る変数の説明。 */
+export const FREEZE_VARIABLE_DESCRIPTION =
+  "スケジュールの凍結の状態です。mise run freeze:placeなどが書くため、通常は人が編集する必要はありません。";
+
+/**
+ * 変数を読む。読めなかったときは、`exists`で変数の有無を確かめ、`false`のときだけ「無い」として`null`を返す。
+ * 読み取りは、変数が無い場合も権限が無い場合も同じ形の例外を投げるので、有無を確かめずに「無い」とすると、
+ * 読めない変数を空の状態と取り違えて、行を消す書き込みをしてしまう。
+ * 有無を確かめられないときや、`false`でない答えのときは、読み取りの例外をそのまま投げる。
+ */
+export async function readVariableOrNull(
+  read: () => Promise<string>,
+  exists: () => Promise<unknown>,
+): Promise<string | null> {
+  try {
+    return await read();
+  } catch (err) {
+    let found: unknown;
+    try {
+      found = await exists();
+    } catch {
+      throw err;
+    }
+    if (found === false) return null;
+    throw err;
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * 変数を読んで解析する。時刻の検査(未来の作成、遠い期限)も行う。
+ * 読めない、壊れているときは、回復の手順を含む理由で失敗を返す。例外は投げない。
+ */
+export async function readFreezeStateVia(
+  io: FreezeReadIo,
+): Promise<Outcome<FreezeState>> {
+  let raw: string | null;
+  try {
+    raw = await io.readVariable();
+  } catch (err) {
+    return fail(`could not read the freeze variable: ${errorMessage(err)}`);
+  }
+  const parsed = parseFreezeState(raw, io.now());
+  return parsed.ok
+    ? parsed
+    : fail(`${parsed.reason} (${FREEZE_RECOVERY_HINT})`);
+}
+
+/**
+ * 読み直した状態に操作を当てて書く。操作が失敗を返したときは、何も書かずにその理由を返す。
+ * 読めないときは、書かずに失敗を返す。書き込みの失敗は投げる。
+ * 読み直しから書き込みまでは排他しないので、別の書き手と重なると、書く前に読んだ状態を上書きしうる。
+ */
+export async function mutateFreezeStateVia(
+  io: FreezeIo,
+  operation: (state: FreezeState, now: Date) => Outcome<FreezeState>,
+): Promise<Outcome<FreezeState>> {
+  const state = await readFreezeStateVia(io);
+  if (!state.ok) return state;
+  const next = operation(state.value, io.now());
+  if (!next.ok) return next;
+  await io.storeVariable(serializeFreezeState(next.value));
+  return next;
 }

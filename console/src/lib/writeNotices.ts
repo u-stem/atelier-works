@@ -10,6 +10,8 @@ import type {
   ConfigUpdateRefusalReason,
   ConfigUpdateResult,
   FreezeReleaseResult,
+  HoldPlaceRefusalReason,
+  HoldPlaceResult,
   HoldReleaseResult,
   JobCancelRefusalReason,
   JobCancelResult,
@@ -18,8 +20,17 @@ import type {
   JobRerunResult,
   NoticeResolveResult,
   RetryWorkItemResult,
+  ScheduleStopRefusalReason,
+  ScheduleStopResult,
 } from "../api/guards/writeResults.ts";
+import {
+  STOP_MIN_REMAINING_MINUTES,
+  STOP_READY_AFTER_MINUTES,
+  stopImpactNote,
+  stopWindowStart,
+} from "./holdPlace.ts";
 import { workItemStatusLabel } from "./labels.ts";
+import { formatShortAbsoluteIso } from "./relativeTime.ts";
 import { safeText } from "./safeText.ts";
 
 /**
@@ -347,6 +358,124 @@ export function describeConfigUpdateResult(
       ? `${item}を止めました。`
       : `${item}を${String(result.before)}から${String(result.after)}に下げました。`;
   return noteActionAudit({ tone: "success", message }, result.action_audit);
+}
+
+const HOLD_PLACE_REFUSALS: Readonly<Record<HoldPlaceRefusalReason, string>> = {
+  invalid_kind: "置く種類が正しくないため、置きませんでした。",
+  invalid_target: "対象が正しくないため、置きませんでした。",
+  invalid_minutes: "期限が範囲外のため、置きませんでした。",
+  invalid_reason: "理由が正しくないため、置きませんでした。",
+  target_not_allowed: "このスケジュールは、凍結を置けない対象です。",
+  already_active:
+    "同じ対象に、有効な保留か凍結がすでにあります。置きませんでした。",
+  other_holder_active:
+    "ローカルのセッションが置いた保留か凍結があるため、置きませんでした。",
+  limit_reached:
+    "保留と凍結の件数が上限に達しています。不要なものを解除してから、もう一度置いてください。",
+  actor_unknown: "操作者を確認できないため、置きませんでした。",
+  audit_unavailable: "操作の記録を残せないため、置きませんでした。",
+};
+
+const PLACED_SUBJECTS = {
+  merge: "マージの保留",
+  deploy: "deployの保留",
+  freeze: "凍結",
+} as const;
+
+/**
+ * 保留や凍結を置いた結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 置いた後の読み直しで行が見えなければ、置いたと言い切らず、一覧で確かめるよう伝える。
+ * 止められるスケジュールの凍結は、止められるようになる時刻を添える。
+ * 凍結が止められる前、または止める時点で残りの下限を割る前に終わるときは、添えない。
+ */
+export function describeHoldPlaceResult(result: HoldPlaceResult): WriteNotice {
+  if (result.refused) {
+    return { tone: "info", message: HOLD_PLACE_REFUSALS[result.reason] };
+  }
+  if (!result.verified) {
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message:
+          "置きましたが、読み直しで確認できませんでした。一覧を取り直して確かめてください。",
+      },
+      result.action_audit,
+    );
+  }
+  const subject = `${PLACED_SUBJECTS[result.kind]}を置きました。`;
+  const startsAt =
+    result.kind === "freeze" && stopImpactNote(result.target) !== null
+      ? stopWindowStart(result.created_at, result.expires_at)
+      : null;
+  const message =
+    startsAt === null
+      ? subject
+      : `${subject}${formatShortAbsoluteIso(new Date(startsAt).toISOString())} 以降に、スケジュールを止められます。`;
+  return noteActionAudit({ tone: "success", message }, result.action_audit);
+}
+
+const SCHEDULE_STOP_REFUSALS: Readonly<
+  Record<ScheduleStopRefusalReason, string>
+> = {
+  not_allowed: "このスケジュールは、Consoleから止められない対象です。",
+  no_freeze: "有効な凍結がありません。先に止める準備をしてください。",
+  other_holder_freeze:
+    "ローカルのセッションが置いた凍結のため、止めませんでした。",
+  too_early: `まだ止められません。凍結を置いてから${String(STOP_READY_AFTER_MINUTES)}分待ってください。`,
+  freeze_ending: `凍結が終わるまで${String(STOP_MIN_REMAINING_MINUTES)}分を切っているため、止めませんでした。`,
+  self_update_running:
+    "自己更新が実行中です。終わってから、もう一度止めてください。",
+  schedule_changed: "スケジュールの定義が変わったため、止めませんでした。",
+  already_stopped: "すでに無効です。",
+  actor_unknown: "操作者を確認できないため、止めませんでした。",
+  audit_unavailable: "操作の記録を残せないため、止めませんでした。",
+};
+
+/**
+ * スケジュールを止めた結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 早すぎる断りは、止められるようになる時刻を添える。
+ * 読み直したスケジュールが無効になっていなければ、止めたと言い切らず、Windmillで確かめるよう伝える。
+ * 止めたときの凍結が読み直しで有効でなければ、追従が戻さないことがあるので、Windmillで有効に戻すよう伝える。
+ */
+export function describeScheduleStopResult(
+  result: ScheduleStopResult,
+): WriteNotice {
+  if (result.refused) {
+    if (result.reason === "too_early" && result.ready_at !== null) {
+      return {
+        tone: "info",
+        message: `まだ止められません。${formatShortAbsoluteIso(result.ready_at)} 以降に止められます。`,
+      };
+    }
+    return { tone: "info", message: SCHEDULE_STOP_REFUSALS[result.reason] };
+  }
+  if (!result.verified) {
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message:
+          "止める操作をしましたが、スケジュールが無効になったことを確認できませんでした。Windmillで確かめてください。",
+      },
+      result.action_audit,
+    );
+  }
+  if (!result.freeze_held) {
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message:
+          "スケジュールを止めましたが、凍結が先に終わった可能性があります。自己更新の追従では戻らないことがあるので、Windmillでスケジュールを有効に戻してください。",
+      },
+      result.action_audit,
+    );
+  }
+  return noteActionAudit(
+    {
+      tone: "success",
+      message: `スケジュールを止めました。凍結が終わる${formatShortAbsoluteIso(result.freeze_expires_at)}以降の自己更新の追従で、有効に戻ります。`,
+    },
+    result.action_audit,
+  );
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

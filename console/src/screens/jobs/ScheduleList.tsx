@@ -10,14 +10,32 @@ import { JobLink } from "../../components/JobLink.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
+  deployHoldActive,
+  type ScheduleFreeze,
+  type ScheduleStopState,
+  scheduleStopState,
+} from "../../lib/holdPlace.ts";
+import {
   describeSchedule,
   frozenScheduleTargets,
   jobsBackState,
   SCHEDULES_TRUNCATED_NOTE,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
+import { HoldPlaceDialog } from "../system/HoldPlaceDialog.tsx";
 import { EmptyNote } from "../system/SystemSection.tsx";
+import {
+  initialPlaceForm,
+  usePlaceHold,
+  useScheduleRestore,
+  useScheduleStop,
+} from "../system/usePlacement.ts";
 import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
+import {
+  ScheduleRestoreDialog,
+  ScheduleStopControl,
+  ScheduleStopDialog,
+} from "./ScheduleStopActions.tsx";
 
 const BACK = jobsBackState("?tab=schedules");
 
@@ -25,10 +43,20 @@ function ScheduleRow({
   schedule,
   frozen,
   now,
+  stop,
+  locked,
+  onPrepare,
+  onStop,
+  onRestore,
 }: {
   schedule: ScheduleViewData;
   frozen: ReadonlySet<string> | null;
   now: number;
+  stop: ScheduleStopState;
+  locked: boolean;
+  onPrepare: (path: string) => void;
+  onStop: (path: string, freeze: ScheduleFreeze) => void;
+  onRestore: (path: string, freeze: ScheduleFreeze) => void;
 }) {
   const row = describeSchedule(schedule, frozen, now);
   return (
@@ -52,6 +80,16 @@ function ScheduleRow({
             {row.pausedLabel}
           </Badge>
         )}
+        <span className="ml-auto">
+          <ScheduleStopControl
+            path={schedule.path}
+            state={stop}
+            locked={locked}
+            onPrepare={onPrepare}
+            onStop={onStop}
+            onRestore={onRestore}
+          />
+        </span>
       </div>
       <p className="font-mono text-small break-all text-muted-foreground">
         {safeText(schedule.schedule)}
@@ -111,6 +149,10 @@ export function ScheduleList({
 }) {
   const now = useNow();
   const frozen = frozenScheduleTargets(holds.data, now);
+  const place = usePlaceHold();
+  const stop = useScheduleStop();
+  const restore = useScheduleRestore();
+  const deployHeld = deployHoldActive(holds.data, now);
   return (
     <div className="flex max-w-4xl flex-col gap-3">
       <JobsQueryGate
@@ -153,19 +195,59 @@ export function ScheduleList({
               <EmptyNote>scheduleはありません。</EmptyNote>
             ) : (
               <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-                {data.schedules.map((schedule) => (
-                  <ScheduleRow
-                    key={schedule.path}
-                    schedule={schedule}
-                    frozen={frozen}
-                    now={now}
-                  />
-                ))}
+                {data.schedules.map((schedule) => {
+                  const state = scheduleStopState(
+                    schedule.path,
+                    schedule.enabled,
+                    holds.data,
+                    now,
+                  );
+                  return (
+                    <ScheduleRow
+                      key={schedule.path}
+                      schedule={schedule}
+                      frozen={frozen}
+                      now={now}
+                      stop={state}
+                      locked={
+                        place.isFreezeLocked(schedule.path) ||
+                        stop.isLocked(schedule.path) ||
+                        (state.kind === "stopped" &&
+                          restore.isLocked(state.freeze.id))
+                      }
+                      onPrepare={(path) => {
+                        place.begin("stop_prepare", path);
+                      }}
+                      onStop={stop.choose}
+                      onRestore={restore.choose}
+                    />
+                  );
+                })}
               </ul>
             )}
           </>
         )}
       </JobsQueryGate>
+      <HoldPlaceDialog
+        open={place.dialog !== null}
+        variant={place.dialog?.variant ?? "stop_prepare"}
+        form={place.dialog?.form ?? initialPlaceForm("stop_prepare")}
+        onChange={place.change}
+        onConfirm={place.confirm}
+        onCancel={place.dismiss}
+      />
+      <ScheduleStopDialog
+        target={stop.target}
+        deployHoldActive={deployHeld}
+        onConfirm={stop.confirm}
+        onCancel={stop.dismiss}
+      />
+      <ScheduleRestoreDialog
+        target={restore.target}
+        deployHoldActive={deployHeld}
+        onConfirm={restore.confirm}
+        onCancel={restore.dismiss}
+      />
     </div>
   );
 }

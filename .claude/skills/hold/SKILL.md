@@ -79,7 +79,9 @@ deployの保留を置いた後は、置く前に始まった`self_update`の回�
 同じブランチのセッションは同じ`holder`を共有する。
 人は、端末で`yes`を入力して解除する。
 人は、Consoleのシステムの画面の「保留と凍結」からも、確認のダイアログを通して解除できる。
-置く操作は、画面に無く、CLIだけである。
+人は、Consoleのシステムの画面の「保留と凍結」からも、確認のダイアログを通して置ける。
+スケジュールを止める準備として、スケジュールのタブから凍結を置くこともできる。
+セッションが置くときは、CLIの`mise run hold:place`と`mise run freeze:place`を使う。
 
 ## 保留で止められたとき
 
@@ -96,13 +98,14 @@ deployの保留を置いた後は、置く前に始まった`self_update`の回�
 ## しないこと
 
 - subagentは、保留を置かず、解除もしない。主セッションに報告して終える。
-- Consoleの書き込みのscript10本を、`wmill script run`や`curl`などで呼ばない。10本は次のとおりである。
+- Consoleの書き込みのscript12本を、`wmill script run`や`curl`などで呼ばない。12本は次のとおりである。
   - `approval_decide`、`retry_work_item`、`audit_kickoff`、`manual_intake_submit`
   - `notice_resolve`、`hold_release`、`freeze_release`、`console_job_cancel`
   - `console_job_rerun`、`console_config_update`
-- 10本の拒否は、フックが主セッションにも行う。運用者がConsoleの確認のダイアログを通す操作を、セッションが直接呼ぶと、その確認を通らないためである。解除の2本は、さらに端末での人の確認を通らずに、他の主体の保留を外す。
-- 拒否は、10本のどれかの名前と、`bun`、`wmill`、`curl`などの語が、同じコマンドに並ぶと起きる。コミットメッセージやPR本文を、ヒアドキュメントや`-m`で渡すコマンドも同じである。メッセージやPR本文のファイルはWriteツールで書き、名前を並べない。
-- 主セッションは、`wmill script preview`で10本を確かめられない。
+  - `console_hold_place`、`console_schedule_stop`
+- 12本の拒否は、フックが主セッションにも行う。運用者がConsoleの確認のダイアログを通す操作を、セッションが直接呼ぶと、その確認を通らないためである。解除の2本は、さらに端末での人の確認を通らずに、他の主体の保留を外す。
+- 拒否は、12本のどれかの名前と、`bun`、`wmill`、`curl`などの語が、同じコマンドに並ぶと起きる。コミットメッセージやPR本文を、ヒアドキュメントや`-m`で渡すコマンドも同じである。メッセージやPR本文のファイルはWriteツールで書き、名前を並べない。
+- 主セッションは、`wmill script preview`で12本を確かめられない。
 - 凍結の変数を`wmill variable`で書かない。名前を含むコマンドは、読むだけでも拒否するので、ソースはReadツールか`git show`で読む。
 - 解除は、人がConsoleの画面で行う。
 - 保留で止められたマージを、別の経路(GitHubのWeb UI、MCP、APIの別の呼び出し)で通さない。

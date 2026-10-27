@@ -323,6 +323,18 @@ describe("effectText", () => {
     );
   });
 
+  test("tells that a deploy hold keeps the schedule from returning", () => {
+    const item = scheduleFreezeItems([schedule()])[0];
+    expect(item && effectText(item, 1)).toContain(
+      "有効なdeployの保留が1件あるあいだは、追従も待つので、スケジュールは戻りません。",
+    );
+  });
+
+  test("does not mention a deploy hold of a schedule freeze when there is none", () => {
+    const item = scheduleFreezeItems([schedule()])[0];
+    expect(item && effectText(item, 0)).not.toContain("deployの保留");
+  });
+
   test("does not promise anything for a scope it does not know", () => {
     const item = holdItems([hold({ scope: "other" })])[0];
     expect(item && effectText(item, 0)).toBe(
