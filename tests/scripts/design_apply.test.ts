@@ -854,4 +854,30 @@ describe("the source of design_apply", () => {
   test("starts the pipeline directly", async () => {
     expect(await source).toMatch(/wmill\.runFlowAsync\(\s*PIPELINE_FLOW_PATH/);
   });
+
+  // 読み直した`flow_job_id`を比較交換の条件にする結線は、依存を差し替えるテストでは確かめられない。
+  // 4つの呼び出しのどれかが条件を外すと、古い判断が、動いた後の作業項目を動かす。
+  test("moves to needs_human only while the re-read lease is unchanged", async () => {
+    expect(await source).toMatch(
+      /updateStatusIfLeaseHolder\(\s*workItem\.id,\s*"awaiting_design_approval",\s*"needs_human",\s*workItem\.flow_job_id,/,
+    );
+  });
+
+  test("moves to approved only while the re-read lease is unchanged", async () => {
+    expect(await source).toMatch(
+      /updateStatusIfLeaseHolder\(\s*workItem\.id,\s*"awaiting_design_approval",\s*"approved",\s*workItem\.flow_job_id,/,
+    );
+  });
+
+  test("moves to designing only while the re-read lease is unchanged", async () => {
+    expect(await source).toMatch(
+      /updateStatusIfLeaseHolderClearingFlowJobId\(\s*workItem\.id,\s*"awaiting_design_approval",\s*"designing",\s*workItem\.flow_job_id,/,
+    );
+  });
+
+  test("returns to the requirements only while the re-read lease is unchanged", async () => {
+    expect(await source).toMatch(
+      /updateStatusToRequirementsIfLeaseHolder\(\s*workItem\.id,\s*"awaiting_design_approval",\s*workItem\.flow_job_id,/,
+    );
+  });
 });
