@@ -263,6 +263,16 @@ describe("ItemFlowProgressView: a flow that is not in the data", () => {
   });
 
   test("shows 前の値 once in the fallback", () => {
-    expect(countOf(render({ ...other, stale: true }), "前の値")).toBe(1);
+    expect(
+      countOf(
+        render(
+          steps([step("review", "running")], {
+            flowPath: "f/factory/unknown_flow",
+            stale: true,
+          }),
+        ),
+        "前の値",
+      ),
+    ).toBe(1);
   });
 });

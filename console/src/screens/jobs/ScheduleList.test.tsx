@@ -374,7 +374,7 @@ describe("ScheduleList pause and runs", () => {
             schedule({ recent_runs: [run(1), run(2), run(3), run(4)] }),
           ]),
         ),
-      ).match(/href="\/jobs\//g),
+      ).match(/href="\/jobs\/(?!flows\/)/g),
     ).toHaveLength(3);
   });
 });

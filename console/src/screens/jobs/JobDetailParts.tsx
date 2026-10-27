@@ -11,10 +11,12 @@ import { JobLink, WindmillJobLink } from "../../components/JobLink.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { flowDiagramPath } from "../../lib/flowsData.ts";
 import {
   CAUSE_DETECTION_INTERVAL_MIN,
   describeArg,
   formatDuration,
+  jobScriptName,
   logScrollTop,
   outputNotes,
   stepIterationsLabel,
@@ -65,6 +67,16 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
+ * flowのジョブの図へのリンク先。
+ * 図に無いflow、flowのステップ、親を持つジョブには出さない。
+ */
+function flowDiagramLinkOf(job: JobSummaryView): string | null {
+  if (job.job_kind !== "flow" || job.is_flow_step) return null;
+  if (job.parent_job !== null) return null;
+  return flowDiagramPath(jobScriptName(job.script_path));
+}
+
+/**
  * ジョブの概要。状態、script、時刻、所要時間、親のジョブ、関連する作業項目を並べる。
  * 作業項目へのリンクは、正の整数のidから組み立てる。
  * Windmillの画面への副次のリンクは、Consoleの詳細で足りないときの逃げ道として小さく添える。
@@ -80,6 +92,7 @@ export function JobOverview({
   relatedItemId: number | null;
   back: BackState;
 }) {
+  const flowLink = flowDiagramLinkOf(job);
   return (
     <div className="flex flex-col gap-2">
       <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-small">
@@ -90,6 +103,13 @@ export function JobOverview({
           <span className="font-mono">{safeText(job.script_path)}</span>
         </Row>
         <Row label="種類">{job.job_kind === "flow" ? "flow" : "script"}</Row>
+        {flowLink === null ? null : (
+          <Row label="flowの図">
+            <Link to={flowLink} state={back} className={LINK_CLASS}>
+              {safeText(jobScriptName(job.script_path))}
+            </Link>
+          </Row>
+        )}
         {job.created_at === null ? null : (
           <Row label="登録">
             <TimeText iso={job.created_at} now={now} />

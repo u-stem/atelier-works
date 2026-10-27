@@ -3,11 +3,6 @@
 // 承認待ちのようにflowが終わった状態でも、ジョブが実行中か待ちなら進行を追う。
 
 import type { JobDetailView, StepViewData } from "../api/jobsQueries.ts";
-import {
-  type FlowGraphState,
-  flowNodeId,
-  type NodeActivity,
-} from "./flowOverlay.ts";
 import type { ItemDetailTabId } from "./itemDetailView.ts";
 import { isActiveJobState, isFinishedJobState } from "./jobsView.ts";
 
@@ -83,47 +78,6 @@ export function flowProgressOf(input: {
     jobState: input.detail.job.state,
     steps: input.detail.steps,
     stale: input.failed,
-  };
-}
-
-function activityOf(view: FlowProgressView): Map<string, NodeActivity> {
-  if (view.kind !== "steps" || !isActiveJobState(view.jobState)) {
-    return new Map();
-  }
-  const nodeId = flowNodeId(view.flowPath);
-  if (nodeId === null) return new Map();
-  const running = view.jobState === "running";
-  return new Map([
-    [
-      nodeId,
-      {
-        running: running ? 1 : 0,
-        queued: running ? 0 : 1,
-        runningJobId: running ? view.jobId : null,
-      },
-    ],
-  ]);
-}
-
-/**
- * 経路の図に重ねる情報。実行中か待ちのジョブのflowだけを強調する。
- * 終わったジョブは、強調しない。ステップの一覧が結果を示す。
- * 図に無い経路のflowは、強調する先が無いので重ねない。
- * 実行中のジョブだけをノードのリンク先にする。待ちのジョブは、そのflowの履歴へ移る。
- */
-export function flowGraphStateOfProgress(
-  view: FlowProgressView,
-): FlowGraphState {
-  return {
-    overlay:
-      view.kind === "none"
-        ? null
-        : { activity: activityOf(view), lowerBound: false },
-    scheduleEntries: null,
-    activeFailed: false,
-    schedulesFailed: false,
-    activePending: false,
-    schedulesTruncated: false,
   };
 }
 

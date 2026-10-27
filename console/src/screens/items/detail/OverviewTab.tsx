@@ -175,7 +175,7 @@ export function OverviewTab({
   return (
     <div className="flex max-w-[47.5rem] flex-col gap-8">
       <Summary detail={detail} now={now} />
-      <ItemFlowProgress kind={detail.work_item.kind} view={progress} />
+      <ItemFlowProgress view={progress} />
       <Failures detail={detail} now={now} />
       <Transitions detail={detail} now={now} />
     </div>
