@@ -62,6 +62,8 @@ export type Screen = {
   /** リンクの行き先。routerの基準(`/console`)からの絶対パスで書く。 */
   readonly path: string;
   readonly label: string;
+  /** `g`の後に押して、この画面へ移るキー。ヘルプとパレットの一覧も、この値から作る。 */
+  readonly shortcut: string;
   readonly icon: LucideIcon;
   /** サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。 */
   readonly badge: (counts: SummaryCounts | undefined) => number;
@@ -91,6 +93,7 @@ export const SCREENS: readonly Screen[] = [
     id: "inbox",
     path: "/",
     label: "要対応",
+    shortcut: "i",
     icon: Inbox,
     // 一覧に出る承認、再実行できる失敗、通知の件数を数える。
     // 数えた件数と一覧の件数が食い違うと、最初に見る数字を信用できなくなるためである。
@@ -110,6 +113,7 @@ export const SCREENS: readonly Screen[] = [
     id: "items",
     path: "/items",
     label: "作業項目",
+    shortcut: "w",
     icon: ListChecks,
     badge: noBadge,
     // 一覧の2つの取得を先読みする。件数のsummaryはサイドバーが常に持つので含めない。
@@ -149,6 +153,7 @@ export const SCREENS: readonly Screen[] = [
     id: "reports",
     path: "/reports",
     label: "レポート",
+    shortcut: "r",
     icon: ChartColumn,
     badge: noBadge,
     prefetch: noPrefetch,
@@ -171,6 +176,7 @@ export const SCREENS: readonly Screen[] = [
     id: "jobs",
     path: JOBS_PATH,
     label: "ジョブ",
+    shortcut: "j",
     icon: Activity,
     badge: noBadge,
     // 実行中と待ちの一覧だけを先読みする。履歴とscheduleは、タブを開いたときに取る。
@@ -195,6 +201,7 @@ export const SCREENS: readonly Screen[] = [
     id: "system",
     path: SYSTEM_PATH,
     label: "システム",
+    shortcut: "s",
     icon: Server,
     badge: noBadge,
     // 画面が開く直後に走る3つの取得を先読みする。summaryはサイドバーが常に持つので含めない。
