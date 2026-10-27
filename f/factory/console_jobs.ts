@@ -121,6 +121,8 @@ export type StepView = {
   readonly state: string;
   readonly job_id: string | null;
   readonly iterations: number | null;
+  /** Windmillが条件で飛ばしたステップ。状態は`success`のまま返る。 */
+  readonly skipped: boolean;
 };
 
 /** 失敗の検知が保存した原因の1件。 */
@@ -335,6 +337,10 @@ const STEP_STATES: Readonly<Record<string, string>> = {
   CancelledBeforeStarting: "canceled",
 };
 
+/**
+ * フローのステップを選ぶ。条件で飛ばしたステップは、Windmillが`Success`に`skipped: true`を付けて返す。
+ * 状態は`success`のまま、`skipped`で見分ける。真偽値でない値は偽として扱う。
+ */
 function projectSteps(raw: Record<string, unknown>): StepView[] {
   const status = raw.flow_status;
   if (!isRecord(status) || !Array.isArray(status.modules)) return [];
@@ -352,6 +358,7 @@ function projectSteps(raw: Record<string, unknown>): StepView[] {
       iterations: Array.isArray(module.flow_jobs)
         ? module.flow_jobs.length
         : null,
+      skipped: module.skipped === true,
     });
   }
   return steps;

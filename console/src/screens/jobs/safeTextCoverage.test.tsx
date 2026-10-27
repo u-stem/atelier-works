@@ -16,7 +16,10 @@ import {
   type ScheduleViewData,
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import type { FlowGraph } from "../../lib/flowGraph.ts";
+import type { FlowGraphState } from "../../lib/flowOverlay.ts";
 import { ConfigList } from "../system/ConfigSection.tsx";
+import { FlowGraphDiagram, FlowGraphList } from "./FlowGraphDiagram.tsx";
 import {
   ArgList,
   FailureCauses,
@@ -106,7 +109,9 @@ function detailScreen(): ReactElement {
     found: true,
     job: JOB,
     args: [{ key: BAD, type: BAD, value: BAD }],
-    steps: [{ id: BAD, state: BAD, job_id: BAD, iterations: null }],
+    steps: [
+      { id: BAD, state: BAD, job_id: BAD, iterations: null, skipped: false },
+    ],
     log: { text: BAD, truncated: false, masked: false, nonJsonLines: 0 },
     result: { text: BAD, truncated: false, masked: false },
     result_error: BAD,
@@ -136,6 +141,34 @@ function detailScreen(): ReactElement {
   );
 }
 
+/** 文字列の項目のすべてに`BAD`を入れた起動の関係。ノードのidは既知のflowに合わせる。 */
+const GRAPH: FlowGraph = {
+  nodes: [
+    { id: "schedule:poll_issues", kind: "schedule", label: BAD, note: BAD },
+    { id: "flow:pipeline", kind: "flow", label: BAD, note: BAD },
+  ],
+  edges: [{ from: "schedule:poll_issues", to: "flow:pipeline", kind: "run" }],
+};
+
+const GRAPH_STATE: FlowGraphState = {
+  overlay: {
+    activity: new Map([
+      ["flow:pipeline", { running: 1, queued: 2, runningJobId: DETAIL_ID }],
+    ]),
+    lowerBound: true,
+  },
+  scheduleEntries: new Map([
+    [
+      "schedule:poll_issues",
+      { stopped: false, lastRun: { success: false }, nextRunAt: null },
+    ],
+  ]),
+  activeFailed: false,
+  schedulesFailed: false,
+  activePending: false,
+  schedulesTruncated: false,
+};
+
 const CASES: readonly (readonly [string, () => ReactElement])[] = [
   ["the detail screen with its heading", detailScreen],
   [
@@ -159,7 +192,15 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     "the steps",
     () => (
       <StepList
-        steps={[{ id: BAD, state: BAD, job_id: BAD, iterations: null }]}
+        steps={[
+          {
+            id: BAD,
+            state: BAD,
+            job_id: BAD,
+            iterations: null,
+            skipped: false,
+          },
+        ]}
         back={undefined}
       />
     ),
@@ -209,6 +250,42 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
   ],
   ["the state badge", () => <JobStateBadge state={BAD} />],
   [
+    "flow progress step id",
+    () => (
+      <JobList
+        jobs={[{ ...JOB, job_kind: "flow", state: "running" }]}
+        now={NOW}
+        back=""
+        time="active"
+        stepLines={
+          new Map([
+            [
+              BAD,
+              {
+                kind: "step",
+                step: {
+                  id: BAD,
+                  state: BAD,
+                  job_id: BAD,
+                  iterations: null,
+                  skipped: false,
+                },
+              },
+            ],
+          ])
+        }
+      />
+    ),
+  ],
+  [
+    "flow node label",
+    () => <FlowGraphDiagram graph={GRAPH} state={GRAPH_STATE} />,
+  ],
+  [
+    "flow node label in the list",
+    () => <FlowGraphList graph={GRAPH} state={GRAPH_STATE} />,
+  ],
+  [
     "the list of running jobs",
     () => <JobList jobs={[JOB]} now={NOW} back="" time="active" />,
   ],
@@ -251,6 +328,25 @@ describe("every string of the server is sanitized when it is drawn", () => {
 
   test.each(CASES)("and %s still draws something", (_name, element) => {
     expect(render(element()).length).toBeGreaterThan(20);
+  });
+});
+
+describe("the cases of the current step and the graph in the coverage", () => {
+  const draw = (name: string): string => {
+    const found = CASES.find(([label]) => label === name);
+    return found === undefined ? "" : render(found[1]());
+  };
+
+  test("draw the label of the current step, so the check does not pass on an empty row", () => {
+    expect(draw("flow progress step id")).toContain("今のステップ");
+  });
+
+  test("draw the running mark of the graph, so the check does not pass on an empty graph", () => {
+    expect(draw("flow node label")).toContain("実行中");
+  });
+
+  test("draw the last run of the schedule entry of the graph", () => {
+    expect(draw("flow node label")).toContain("直近 失敗・取消");
   });
 });
 

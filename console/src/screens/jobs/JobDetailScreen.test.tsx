@@ -54,6 +54,7 @@ function detail(state: string, options: DetailOptions = {}): JobDetailView {
       state: "success",
       job_id: null,
       iterations: null,
+      skipped: false,
     })),
     log: { text: "log line", truncated: false, masked: false, nonJsonLines: 0 },
     result: null,

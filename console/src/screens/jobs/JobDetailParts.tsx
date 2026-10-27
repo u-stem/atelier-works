@@ -22,7 +22,7 @@ import {
 import { workItemRef } from "../../lib/labels.ts";
 import { itemDetailPath } from "../../lib/pipelineView.ts";
 import { safeText } from "../../lib/safeText.ts";
-import { JobStateBadge, UpcomingTime } from "./JobRows.tsx";
+import { JobStateBadge, StepStateBadge, UpcomingTime } from "./JobRows.tsx";
 
 /** 詳細のパンくずが、一覧の範囲へ戻るための履歴の`state`。 */
 export type BackState = { readonly jobsBack: string } | undefined;
@@ -170,6 +170,7 @@ export function ArgList({ args }: { args: readonly ArgViewData[] }) {
 
 /**
  * フローのステップの一覧。モジュールのid、状態、繰り返しの回数を出し、子のジョブの詳細へ移れる。
+ * 状態の語は、一覧の今のステップと同じ関数(`stepStateInfo`)で決める。
  * ルートのジョブのログは短く、ステップの出力は子のジョブにあるためである。
  */
 export function StepList({
@@ -191,7 +192,7 @@ export function StepList({
             <span className="min-w-0 font-mono break-all">
               {safeText(step.id)}
             </span>
-            <JobStateBadge state={step.state} />
+            <StepStateBadge state={step.state} skipped={step.skipped} />
             {iterations === null ? null : (
               <span className="text-muted-foreground">{iterations}</span>
             )}

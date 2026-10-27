@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import {
+  activeStepsQueryKey,
+  type JobDetailView,
   type JobListView,
   type JobSummaryView,
   jobHistoryQueryOptions,
@@ -141,6 +143,63 @@ describe("JobsScreen rendered from the cache", () => {
     };
     expect(render("", active)).toMatch(
       /実行中と待ち<span[^>]*>1<span aria-hidden="true">\+</,
+    );
+  });
+});
+
+describe("JobsScreen with the current steps in the cache", () => {
+  const ID = "0190a1b2-c3d4-7e5f-8a9b-000000000001";
+  const flow: JobSummaryView = {
+    ...job("pipeline", 1),
+    id: ID,
+    state: "running",
+    job_kind: "flow",
+    completed_at: null,
+  };
+  const detail: JobDetailView = {
+    found: true,
+    job: flow,
+    args: [],
+    steps: [
+      {
+        id: "generate_requirements",
+        state: "running",
+        job_id: null,
+        iterations: null,
+        skipped: false,
+      },
+    ],
+    log: null,
+    result: null,
+    result_error: null,
+    failures: { ok: true, items: [] },
+  };
+
+  function renderWithSteps(search: string): string {
+    const client = new QueryClient();
+    client.setQueryData(jobsActiveQueryKey, {
+      ...list("active", "x"),
+      jobs: [flow],
+    });
+    client.setQueryData(activeStepsQueryKey([ID]), new Map([[ID, detail]]));
+    return renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <MemoryRouter initialEntries={[`/jobs${search}`]}>
+            <JobsScreen />
+          </MemoryRouter>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  test("shows the current step of a running flow", () => {
+    expect(renderWithSteps("")).toContain("generate_requirements");
+  });
+
+  test("shows no step on the other tabs", () => {
+    expect(renderWithSteps("?tab=history")).not.toContain(
+      "generate_requirements",
     );
   });
 });

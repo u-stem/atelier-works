@@ -1710,7 +1710,7 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 - 網羅テスト(`console/src/screens/jobs/safeTextCoverage.test.tsx`)。全項目に見えない文字を入れて描き、残らないことを確かめる
 - ソースの契約テスト(`tests/scripts/console_jobs_render_contract.test.ts`)
 
-描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)は、保護パスに入れない。
+描画の部品(`JobDetailParts.tsx`、`FlowGraphDiagram.tsx`、`ConfigSection.tsx`)は、保護パスに入れない。
 契約テストが`screens/jobs/`の全体と設定の節を走査するので、部品を保護しても、上乗せの保証が小さい。
 後続のPRで必ず直す部品なので、保護すると、毎回人の確認が要るためである。
 
@@ -3885,7 +3885,12 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 最上位のページで描くと、ビューアの欠陥が、Windmillを管理者として操作できるXSSになる。
 実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
 要件定義書の画面(`/console/items/:id/requirements`)が、図ごとに`DrawioFrame`で描く。
-システムの画面(`/console/system`)の起動の関係の節も、`DrawioFrame`で描く。このXMLはリポジトリのコードから作るが、同じ隔離したiframeを通す。
+システムの画面(`/console/system`)の起動の関係の図は、このiframeを使わず、自前のSVGで描く。
+図のデータはリポジトリのコードから作ったバンドルの静的なJSONで、信用できない入力を含まない。
+SVGに重ねる実行の状態は、ジョブのパスを既知のflowの集合と照合し、外のパスを捨ててからノードに対応づける。
+ノードのリンクに入れるジョブのidは、UUIDの形のときだけhrefに入れる。形が違うidは、そのflowの履歴へのリンクに替える。
+ノードの名前と補足は、ジョブの画面の文字列と同じく、見えない文字を代替文字にしてから描く。
+図のSVGは、`dangerouslySetInnerHTML`を使わず、サーバー由来の文字列を属性にも入れない。
 安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 

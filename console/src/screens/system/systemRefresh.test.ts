@@ -139,3 +139,63 @@ describe("refreshStatusOfSystem with the config", () => {
     expect(config.refetched()).toBe(0);
   });
 });
+
+describe("refreshStatusOfSystem with the flow graph", () => {
+  const base = () => ({
+    status: fake(),
+    deployments: fake(),
+    summary: fake(),
+    holds: fake(),
+  });
+
+  test("refreshes the reads of the open figure with the others", () => {
+    const flow = [fake(), fake()];
+    refreshStatusOfSystem({ ...base(), flowGraph: flow }).onRefresh();
+    expect(flow.map((query) => query.refetched())).toEqual([1, 1]);
+  });
+
+  test("leaves the figure out until it is opened", () => {
+    const status = refreshStatusOfSystem({ ...base(), flowGraph: null });
+    expect(status.isFetching).toBe(false);
+  });
+
+  test("shows the older time when the figure was read earlier than the rest", () => {
+    const status = refreshStatusOfSystem({
+      ...base(),
+      flowGraph: [fake({ dataUpdatedAt: 400 }), fake({ dataUpdatedAt: 900 })],
+    });
+    expect(status.updatedAt).toBe(400);
+  });
+
+  test("shows the older time when the figure was read later than the rest", () => {
+    const status = refreshStatusOfSystem({
+      ...base(),
+      flowGraph: [fake({ dataUpdatedAt: 5000 }), fake({ dataUpdatedAt: 6000 })],
+    });
+    expect(status.updatedAt).toBe(1000);
+  });
+
+  test("is fetching while a read of the figure is fetching", () => {
+    const status = refreshStatusOfSystem({
+      ...base(),
+      flowGraph: [fake({ isFetching: true })],
+    });
+    expect(status.isFetching).toBe(true);
+  });
+
+  test("counts a failure of the figure", () => {
+    const status = refreshStatusOfSystem({
+      ...base(),
+      flowGraph: [fake({ isError: true, error: new Error("x") })],
+    });
+    expect(status.isError).toBe(true);
+  });
+
+  test("ignores a read of the figure that has not finished yet for the time", () => {
+    const status = refreshStatusOfSystem({
+      ...base(),
+      flowGraph: [fake({ dataUpdatedAt: 0 })],
+    });
+    expect(status.updatedAt).toBe(1000);
+  });
+});

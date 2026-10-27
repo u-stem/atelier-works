@@ -58,6 +58,21 @@ export function jobStateInfo(state: string): JobStateInfo {
   );
 }
 
+/**
+ * ステップの状態の語。ジョブ詳細のステップの一覧と、一覧の今のステップが共有する。
+ * Windmillは、条件で飛ばしたステップを`success`のまま`skipped`で返す。
+ * 状態だけで語を決めると、動いていないステップに「成功」と出てしまうので、飛ばしたものは「スキップ」にする。
+ * 失敗したステップは、`skipped`が立っていても失敗のままにする。
+ */
+export function stepStateInfo(step: {
+  readonly state: string;
+  readonly skipped: boolean;
+}): JobStateInfo {
+  return step.skipped && step.state === "success"
+    ? jobStateInfo("skipped")
+    : jobStateInfo(step.state);
+}
+
 /** 実行中か待ちの状態。状態の取り直しを続ける対象である。`waiting`はステップの状態で、ジョブの取り直しには使わない。 */
 const ACTIVE_STATES: ReadonlySet<string> = new Set(["running", "queued"]);
 
