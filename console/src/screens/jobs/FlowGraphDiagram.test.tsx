@@ -316,7 +316,7 @@ describe("FlowGraphDiagram", () => {
   });
 
   test("uses a token for the border of a node", () => {
-    expect(html).toMatch(/class="[^"]*stroke-input/);
+    expect(html).toMatch(/class="[^"]*stroke-edge/);
   });
 });
 
