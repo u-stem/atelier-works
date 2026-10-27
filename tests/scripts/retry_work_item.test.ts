@@ -37,7 +37,7 @@ import {
   launchFailureError,
   newerCycleRefusal,
   newerPrRowRefusal,
-  RESTART_CARRYING_GAP_NOTE_SUFFIX,
+  RESTART_CARRYING_GAP_NOTE_PREFIX,
   type RestartContext,
   type RestartContextDeps,
   restartContextDeps,
@@ -1463,7 +1463,7 @@ describe("buildRestartContext", () => {
     readonly designReads: number[];
     readonly eventReads: [number, WorkItemStatus][];
     readonly transitionReads: [number, WorkItemStatus][];
-    readonly skipSuffixes: string[];
+    readonly skipPrefixes: string[];
     readonly draftReads: [number, number][];
   };
 
@@ -1472,7 +1472,7 @@ describe("buildRestartContext", () => {
       designApproval?: DesignApprovalRef | null;
       stopEvent?: StatusEventSummary | null;
       transition?: StatusEventSummary | null;
-      /** 新しい順の遷移。注記が印で終わる行を飛ばす実際の問い合わせと同じ規則で返す。 */
+      /** 新しい順の遷移。注記が印で始まる行を飛ばす実際の問い合わせと同じ規則で返す。 */
       transitions?: readonly StatusEventSummary[];
       draftAfter?: boolean;
     } = {},
@@ -1480,13 +1480,13 @@ describe("buildRestartContext", () => {
     const designReads: number[] = [];
     const eventReads: [number, WorkItemStatus][] = [];
     const transitionReads: [number, WorkItemStatus][] = [];
-    const skipSuffixes: string[] = [];
+    const skipPrefixes: string[] = [];
     const draftReads: [number, number][] = [];
     return {
       designReads,
       eventReads,
       transitionReads,
-      skipSuffixes,
+      skipPrefixes,
       draftReads,
       deps: {
         latestDesignApproval: async (id) => {
@@ -1497,13 +1497,13 @@ describe("buildRestartContext", () => {
           eventReads.push([id, status]);
           return options.stopEvent ?? null;
         },
-        latestStatusTransition: async (id, status, skipNoteSuffix) => {
+        latestStatusTransition: async (id, status, skipNotePrefix) => {
           transitionReads.push([id, status]);
-          skipSuffixes.push(skipNoteSuffix);
+          skipPrefixes.push(skipNotePrefix);
           if (options.transitions !== undefined) {
             return (
               options.transitions.find(
-                (row) => !(row.note ?? "").endsWith(skipNoteSuffix),
+                (row) => !(row.note ?? "").startsWith(skipNotePrefix),
               ) ?? null
             );
           }
@@ -1801,7 +1801,7 @@ describe("buildRestartContext", () => {
   describe("a gap that a restart carries on", () => {
     const CARRIED_RESTART: StatusEventSummary = {
       from_status: "needs_human",
-      note: "retry_work_item: restarted from needs_human (carrying gap)",
+      note: "retry_work_item: restarted (carrying gap) from needs_human",
     };
     const PLAIN_RESTART: StatusEventSummary = {
       from_status: "needs_human",
@@ -1812,14 +1812,16 @@ describe("buildRestartContext", () => {
       note: "gap: X",
     };
 
-    test("is the mark the restart note ends with", () => {
-      expect(RESTART_CARRYING_GAP_NOTE_SUFFIX).toBe(" (carrying gap)");
+    test("is the mark the restart note starts with", () => {
+      expect(RESTART_CARRYING_GAP_NOTE_PREFIX).toBe(
+        "retry_work_item: restarted (carrying gap)",
+      );
     });
 
     test("is passed to the lookup of the transition", async () => {
       const h = harness({ stopEvent: GAP_STOP });
       await build(h);
-      expect(h.skipSuffixes).toEqual([RESTART_CARRYING_GAP_NOTE_SUFFIX]);
+      expect(h.skipPrefixes).toEqual([RESTART_CARRYING_GAP_NOTE_PREFIX]);
     });
 
     test("skips a restart that carried the gap and reads the gap before it", async () => {
@@ -1834,6 +1836,46 @@ describe("buildRestartContext", () => {
       const h = harness({
         stopEvent: GAP_STOP,
         transitions: [CARRIED_RESTART, CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("does not skip a gap whose body ends with the mark", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          { from_status: "implementing", note: "gap: X (carrying gap)" },
+          GAP_ROW,
+        ],
+      });
+      expect((await build(h)).feedback).toBe(
+        automatedFeedback("X (carrying gap)"),
+      );
+    });
+
+    test("does not skip a design gap whose body ends with the mark", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          { from_status: "designing", note: "design gap: X (carrying gap)" },
+          GAP_ROW,
+        ],
+      });
+      expect((await build(h)).feedback).toBe(
+        automatedFeedback("X (carrying gap)"),
+      );
+    });
+
+    test("skips a restart after a cancellation that carried the gap", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          {
+            from_status: "cancelled",
+            note: "retry_work_item: restarted (carrying gap) from cancelled (was needs_human before the closed target was cancelled)",
+          },
+          GAP_ROW,
+        ],
       });
       expect((await build(h)).feedback).toBe(automatedFeedback("X"));
     });
@@ -2015,7 +2057,7 @@ describe("restartNote", () => {
 
   test("marks a restart that carries a gap on", () => {
     expect(restartNote({ ...BASE, carriesGap: true })).toBe(
-      "retry_work_item: restarted from needs_human (carrying gap)",
+      "retry_work_item: restarted (carrying gap) from needs_human",
     );
   });
 
@@ -2027,20 +2069,42 @@ describe("restartNote", () => {
     );
   });
 
-  test("ends a marked note with the mark after a cancellation", () => {
+  test("marks a restart after a cancellation that carries a gap on", () => {
     expect(
       restartNote({
         status: "cancelled",
         restartStatus: "failed",
         carriesGap: true,
-      }).endsWith(RESTART_CARRYING_GAP_NOTE_SUFFIX),
+      }),
+    ).toBe(
+      "retry_work_item: restarted (carrying gap) from cancelled (was failed before the closed target was cancelled)",
+    );
+  });
+
+  test("starts a marked note with the mark after a cancellation", () => {
+    expect(
+      restartNote({
+        status: "cancelled",
+        restartStatus: "failed",
+        carriesGap: true,
+      }).startsWith(RESTART_CARRYING_GAP_NOTE_PREFIX),
     ).toBe(true);
   });
 
-  test("does not end an unmarked note with the mark", () => {
-    expect(restartNote(BASE).endsWith(RESTART_CARRYING_GAP_NOTE_SUFFIX)).toBe(
+  test("does not start an unmarked note with the mark", () => {
+    expect(restartNote(BASE).startsWith(RESTART_CARRYING_GAP_NOTE_PREFIX)).toBe(
       false,
     );
+  });
+
+  test("does not start an unmarked note after a cancellation with the mark", () => {
+    expect(
+      restartNote({
+        status: "cancelled",
+        restartStatus: "failed",
+        carriesGap: false,
+      }).startsWith(RESTART_CARRYING_GAP_NOTE_PREFIX),
+    ).toBe(false);
   });
 });
 
@@ -2067,9 +2131,9 @@ describe("restartContextDeps", () => {
     await restartContextDeps(sql).latestStatusTransition(
       7,
       "requirements_generating",
-      RESTART_CARRYING_GAP_NOTE_SUFFIX,
+      RESTART_CARRYING_GAP_NOTE_PREFIX,
     );
-    expect(calls[0]?.values).toContain(RESTART_CARRYING_GAP_NOTE_SUFFIX);
+    expect(calls[0]?.values).toContain(RESTART_CARRYING_GAP_NOTE_PREFIX);
   });
 
   test("asks whether a draft exists after the attempt", async () => {
@@ -2113,6 +2177,16 @@ describe("main: the context of the restart", () => {
   test("writes the restart note from the carried gap of the context", () => {
     expect(restart).toMatch(
       /restartNote\(\{[\s\S]*?carriesGap: context\.carriesGap/,
+    );
+  });
+
+  test("takes the note from restartNote", () => {
+    expect(restart).toMatch(/const note = restartNote\(/);
+  });
+
+  test("moves to the requirements with the note that restartNote wrote", () => {
+    expect(source).toMatch(
+      /updateStatusToRequirementsIfCurrent\(\s*work_item_id,\s*workItem\.status,\s*note,/,
     );
   });
 

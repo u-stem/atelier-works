@@ -224,6 +224,36 @@ describe("sanitizeModelTextDetailed", () => {
     expect(sanitizeModelTextDetailed("が").text).toBe("が");
   });
 
+  test("counts the control and format characters it removed", () => {
+    expect(
+      sanitizeModelTextDetailed("a\u0000b​c\u0001").stripped_characters,
+    ).toBe(3);
+  });
+
+  test("counts no stripped character in a plain text", () => {
+    expect(sanitizeModelTextDetailed("plain").stripped_characters).toBe(0);
+  });
+
+  test("does not count the combining mark it kept", () => {
+    expect(sanitizeModelTextDetailed("が").stripped_characters).toBe(0);
+  });
+
+  test("counts the combining mark it dropped when it hid a secret", () => {
+    const split = `${GITHUB_TOKEN.slice(0, 10)}́${GITHUB_TOKEN.slice(10)}`;
+    expect(sanitizeModelTextDetailed(split).stripped_characters).toBe(1);
+  });
+
+  test("counts both the control character and the combining mark", () => {
+    const split = `\u0000${GITHUB_TOKEN.slice(0, 10)}́${GITHUB_TOKEN.slice(10)}`;
+    expect(sanitizeModelTextDetailed(split).stripped_characters).toBe(2);
+  });
+
+  test("does not count the characters a mask replaced", () => {
+    expect(
+      sanitizeModelTextDetailed(`x ${GITHUB_TOKEN}`).stripped_characters,
+    ).toBe(0);
+  });
+
   test("reports that no combining mark was dropped when a plain secret was masked", () => {
     expect(
       sanitizeModelTextDetailed(`x ${GITHUB_TOKEN}`).dropped_combining,
@@ -452,6 +482,20 @@ describe("normalizeDesignForImplement", () => {
     test("reports a dropped combining mark", () => {
       const split = `${GITHUB_TOKEN.slice(0, 10)}́${GITHUB_TOKEN.slice(10)}`;
       expect(normalize(split).dropped_combining).toBe(true);
+    });
+
+    test("counts the control and format characters it removed", () => {
+      expect(normalize("a\u0000b\u200Bc").stripped_characters).toBe(2);
+    });
+
+    test("counts no stripped character in a plain design", () => {
+      expect(normalize("plain").stripped_characters).toBe(0);
+    });
+
+    test("counts the removed characters of a design that was also cut", () => {
+      expect(
+        normalize(`\u200B${"a".repeat(MAX + 1)}`).stripped_characters,
+      ).toBe(1);
     });
   });
 

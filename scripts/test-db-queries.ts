@@ -9531,9 +9531,13 @@ check(
 // 再実行が差し戻しの理由を引き継ぐ遷移の注記(`retry_work_item.ts`の`restartNote`)を飛ばす問い合わせと、
 // 理由を要件定義の生成が消費したかを読む問い合わせを、本物のPostgreSQLで確かめる。
 // 注記の文面は、`restartNote`のユニットテストが固定した文面と同じものを使う。
-const CARRYING_GAP_MARK = " (carrying gap)";
+const CARRYING_GAP_MARK = "retry_work_item: restarted (carrying gap)";
 const PLAIN_RESTART_NOTE = "retry_work_item: restarted from needs_human";
-const CARRIED_RESTART_NOTE = `${PLAIN_RESTART_NOTE}${CARRYING_GAP_MARK}`;
+const CARRIED_RESTART_NOTE = `${CARRYING_GAP_MARK} from needs_human`;
+const CANCELLED_TAIL =
+  "(was needs_human before the closed target was cancelled)";
+const PLAIN_CANCELLED_RESTART_NOTE = `retry_work_item: restarted from cancelled ${CANCELLED_TAIL}`;
+const CARRIED_CANCELLED_RESTART_NOTE = `${CARRYING_GAP_MARK} from cancelled ${CANCELLED_TAIL}`;
 const LAUNCH_FAILURE =
   "retry_work_item: f/factory/pipeline could not be started";
 
@@ -9719,6 +9723,130 @@ check(
   nullNoteRow,
 );
 
+// 差し戻しの本文が印で終わっても、印は先頭だけを見るので飛ばされない。
+const bodyMarkItem = await issueWorkItem(
+  9365,
+  1,
+  "implementing",
+  "qdb gap body mark",
+);
+check(
+  "carry: a gap body that ends with the mark",
+  await moveStatus(
+    bodyMarkItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X (carrying gap)",
+  ),
+);
+const bodyMarkRow = await latestStatusTransition(
+  bodyMarkItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a gap body that ends with the mark is not skipped",
+  bodyMarkRow?.note === "gap: X (carrying gap)",
+  bodyMarkRow,
+);
+const designBodyMarkItem = await issueWorkItem(
+  9366,
+  1,
+  "designing",
+  "qdb design gap body mark",
+);
+check(
+  "carry: a design gap body that ends with the mark",
+  await moveStatus(
+    designBodyMarkItem,
+    "designing",
+    "requirements_generating",
+    "design gap: X (carrying gap)",
+  ),
+);
+const designBodyMarkRow = await latestStatusTransition(
+  designBodyMarkItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a design gap body that ends with the mark is not skipped",
+  designBodyMarkRow?.note === "design gap: X (carrying gap)",
+  designBodyMarkRow,
+);
+
+// 取り消された後の再実行は、注記に取り消す前の状態が入る。印は先頭にあるので、その形でも飛ばされる。
+const cancelledItem = await issueWorkItem(
+  9367,
+  1,
+  "implementing",
+  "qdb cancelled restart",
+);
+check(
+  "carry: the gap, the launch failure, the cancellation, and a marked restart after it",
+  (await moveStatus(
+    cancelledItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      cancelledItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )) &&
+    (await moveStatus(
+      cancelledItem,
+      "needs_human",
+      "cancelled",
+      "cancelled",
+    )) &&
+    (await updateStatusToRequirementsIfCurrent(
+      cancelledItem,
+      "cancelled",
+      CARRIED_CANCELLED_RESTART_NOTE,
+      sql,
+    )) &&
+    (await moveStatus(
+      cancelledItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )),
+);
+const cancelledMarked = await latestStatusTransition(
+  cancelledItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a marked restart after a cancellation is skipped and the gap before it is read",
+  cancelledMarked?.note === "gap: X",
+  cancelledMarked,
+);
+check(
+  "carry: a plain restart after a cancellation is not skipped",
+  (await moveStatus(cancelledItem, "needs_human", "cancelled", "cancelled")) &&
+    (await updateStatusToRequirementsIfCurrent(
+      cancelledItem,
+      "cancelled",
+      PLAIN_CANCELLED_RESTART_NOTE,
+      sql,
+    )) &&
+    (
+      await latestStatusTransition(
+        cancelledItem,
+        "requirements_generating",
+        sql,
+        CARRYING_GAP_MARK,
+      )
+    )?.note === PLAIN_CANCELLED_RESTART_NOTE,
+);
+
 // 準備がattemptを進めた後、下書きを作れずに止まった(日次予算の超過など)とき、再実行が読む記録は次のとおりになる。
 // 承認は前のattemptのまま、作業項目のattemptは進み、後の下書きは無い。差し戻しの理由は消費されていない。
 async function setAttempt(workItemId: number, attempt: number): Promise<void> {
@@ -9791,6 +9919,68 @@ check(
 check(
   "unconsumed: another work item is not affected by the draft",
   !(await hasRequirementDraftAfter(carryItem, 0, sql)),
+);
+
+// 理由を引き継がない再実行(印なし)の後に準備がattemptを進め、予算で止まったとき、古い差し戻しの理由は読まれない。
+const budgetPlainItem = await issueWorkItem(
+  9368,
+  1,
+  "implementing",
+  "qdb budget after plain restart",
+);
+await approveRequirements(budgetPlainItem, 1);
+check(
+  "unconsumed: the gap, the launch failure, and a restart that carries no gap",
+  (await moveStatus(
+    budgetPlainItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      budgetPlainItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )) &&
+    (await updateStatusToRequirementsIfCurrent(
+      budgetPlainItem,
+      "needs_human",
+      PLAIN_RESTART_NOTE,
+      sql,
+    )),
+);
+await setAttempt(budgetPlainItem, 2);
+check(
+  "unconsumed: the budget stops the generation after the restart that carried no gap",
+  await moveStatus(
+    budgetPlainItem,
+    "requirements_generating",
+    "needs_human",
+    "daily budget exceeded ($5.00 >= $5.00)",
+  ),
+);
+const budgetPlainApproval = await latestRequirementsApproval(
+  budgetPlainItem,
+  sql,
+);
+check(
+  "unconsumed: the approval stays at the earlier attempt and no draft exists after it",
+  budgetPlainApproval?.status === "approved" &&
+    budgetPlainApproval.attempt === 1 &&
+    !(await hasRequirementDraftAfter(budgetPlainItem, 1, sql)),
+  budgetPlainApproval,
+);
+const budgetPlainRow = await latestStatusTransition(
+  budgetPlainItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "unconsumed: the transition to read is the restart that carried no gap, not the old gap",
+  budgetPlainRow?.note === PLAIN_RESTART_NOTE,
+  budgetPlainRow,
 );
 
 // 却下の理由も同じ並びで、承認依頼の行に残る。

@@ -650,7 +650,14 @@ describe("designGate", () => {
         truncated: false,
         masked: false,
         dropped_combining: false,
+        stripped_characters: 1,
       });
+    });
+
+    test("warns with the number of the characters that were removed", async () => {
+      const h = harness({ draft: withMarkdown("a\u0000b\u200Bc") });
+      await designGate(INPUT, h.deps);
+      expect(h.warnings[0]?.fields.stripped_characters).toBe(2);
     });
 
     test("warns when a secret was masked", async () => {

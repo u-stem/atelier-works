@@ -214,6 +214,9 @@ export type RestartContextDeps = {
  */
 export const RESTART_CARRYING_GAP_NOTE_SUFFIX = " (carrying gap)";
 
+// テストのコミット用のスタブ。実装のコミットで接頭辞に置き換える。
+export const RESTART_CARRYING_GAP_NOTE_PREFIX = "";
+
 /**
  * 再実行の遷移の注記を作る。取り消す前の状態(`restartStatus`)が現在の状態と違うときは、それも書く。
  * 差し戻しの理由を引き継いで要件定義の生成を起動する再実行(`carriesGap`)には、末尾に印を付ける。

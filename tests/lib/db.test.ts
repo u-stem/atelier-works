@@ -1526,13 +1526,27 @@ describe("latestStatusTransition", () => {
     expect(calls[0]?.values).toContain("requirements_generating");
   });
 
-  test("binds the suffix of the notes to skip", async () => {
+  test("binds the prefix of the notes to skip", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestStatusTransition(1, "requirements_generating", sql, " (x)");
-    expect(calls[0]?.values).toContain(" (x)");
+    await latestStatusTransition(1, "requirements_generating", sql, "x: (y)");
+    expect(calls[0]?.values).toContain("x: (y)");
   });
 
-  test("binds null when no suffix is given", async () => {
+  test("compares the start of the note, not the end", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusTransition(1, "requirements_generating", sql, "x: (y)");
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "NOT starts_with(note,",
+    );
+  });
+
+  test("does not read the end of the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusTransition(1, "requirements_generating", sql, "x: (y)");
+    expect(calls[0]?.text).not.toContain("right(");
+  });
+
+  test("binds null when no prefix is given", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestStatusTransition(1, "requirements_generating", sql);
     expect(calls[0]?.values).toContain(null);
