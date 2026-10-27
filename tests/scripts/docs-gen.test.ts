@@ -223,12 +223,23 @@ describe("resolveApprovalHandlers", () => {
     );
   });
 
-  test("gives null for the kind that handlerPathFor says has no handler", () => {
-    const handlers = resolveApprovalHandlers(steps, (kind) =>
-      handlerPathFor(kind),
-    );
+  test("gives null for the kind that the resolver says has no handler", () => {
+    const handlers = resolveApprovalHandlers(steps, (kind) => {
+      if (kind === "design") {
+        throw new Error("no approval handler for kind design");
+      }
+      return handlerPathFor(kind);
+    });
 
     expect(handlers["steps/design_request_approval"]).toBeNull();
+  });
+
+  test("gives the handler of design that handlerPathFor returns", () => {
+    const handlers = resolveApprovalHandlers(steps, handlerPathFor);
+
+    expect(handlers["steps/design_request_approval"]).toBe(
+      "steps/design_apply",
+    );
   });
 
   test("throws again for an error that is not the known one", () => {
