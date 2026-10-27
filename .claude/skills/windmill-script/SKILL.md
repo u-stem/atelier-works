@@ -178,7 +178,8 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
   Issueの作業項目は`insertIssueWorkItemUnlessActive`で挿入し、競合したら取得を失ったものとして引く。
   DBを分けた複数のインスタンスが同じリポジトリを扱う構成は対象外である。
 - scheduleに`on_failure`は付けない。このWindmillはscheduleの失敗時の呼び出しを呼ばず、付けると通知されるという誤った安心が残るためである。失敗は`detect_schedule_failures`がジョブ履歴から拾い、`job_failures`テーブルとDiscordの通知に流す。契約テスト(`tests/scripts/schedule_no_on_failure.test.ts`)が、付けていないことを固定する。
-- 承認のタイムアウト(7日)は、`poll_issues`がreconcileの後に行う期限切れのスイープが、`approval_requests.expires_at`を見て判定する。`pipeline.flow`はsuspendを使わない。
+- 承認のタイムアウト(7日)は、reconcileの後に`poll_issues`が行う承認待ちの走査(`lib/approval_sweep.ts`)が判定する。
+  判定には`approval_requests.expires_at`を使う。`pipeline.flow`はsuspendを使わない。
 
 ## プロンプトと投稿の規約
 
@@ -249,7 +250,10 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
   - `requirements`: `steps/requirements_apply`
   - `issue_proposal`: `steps/issue_proposal_apply`
   - `design`: `steps/design_apply`
-- タイムアウト(7日)は、`poll_issues`がreconcileの後に行う期限切れのスイープが`approval_requests.expires_at`を見て判定する。期限切れの行は、`expireApprovalRequestIfPending`で`expired`に遷移させる。
+- タイムアウト(7日)は、`poll_issues`がreconcileの後に行う承認待ちの走査が`approval_requests.expires_at`を見て判定する。
+  - 最新の依頼なら、作業項目を先に`expired`へ動かす。続けて`expireApprovalRequestIfPending`で依頼を期限切れにし、最後に通知する。
+  - 最新でない依頼は、作業項目を動かさず、依頼だけを期限切れにする。
+- 同じ走査が、決定済みなのに作業項目へ反映されなかった依頼の処理先(`requirements_apply`か`design_apply`)を起動し直す。
 
 ### Issueコメントの目印による冪等性
 
