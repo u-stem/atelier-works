@@ -112,7 +112,7 @@ export function CodeSpanBlock({ children }: { children: string }) {
         return part.code ? (
           <code
             key={key}
-            className="rounded bg-muted px-1 py-0.5 font-mono text-small break-all"
+            className="rounded-sm bg-muted px-1 py-0.5 font-mono text-small break-all"
           >
             {part.text}
           </code>

@@ -8,8 +8,8 @@
 // - flows: `f/factory`のflowの一覧と起動元(`docs/architecture.md`)。
 //   起動元は`scripts/launch-graph.ts`の表から作る
 // - assets: `f/factory`のscriptとflowのpathとsummaryの一覧(`docs/architecture.md`)
-// 起動関係の図のデータ(`console/src/generated/flow-graph.json`)も同じ元から作る。
-// Consoleのシステム画面が図にして出す。
+// flowごとの図のデータ(`console/src/generated/flows.json`)も同じ元から作る。
+// Consoleのジョブ画面と作業項目の詳細が図にして出す。
 // READMEのmiseタスクの表は日本語の説明を手で書くので生成せず、
 // `mise.toml`のタスクと過不足が無いかだけを`--check`で確かめる。
 //
@@ -19,25 +19,34 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { handlerPathFor } from "../f/factory/lib/approval_support.ts";
+import type { ApprovalRequestKind } from "../f/factory/lib/types.ts";
 import {
-  buildFlowGraph,
-  type FlowInput,
-  renderFlowGraphJson,
-  type ScheduleInput,
+  buildFlowsData,
+  type FlowDefinitionInput,
+  type FlowsInput,
+  renderFlowsJson,
+  type ScheduleDescriptionInput,
+  withoutIdPrefix,
 } from "./flow-graph.ts";
 import {
+  APPROVAL_OUTCOMES,
+  APPROVAL_STEPS,
   describeOrigin,
   HUMAN_ENTRY_SCRIPTS,
   HUMAN_OPERATIONS,
   LAUNCH_EDGES,
   type LaunchEdge,
+  REWORK_LAUNCH_EDGES,
+  SCRIPT_CALLERS,
+  UNWIRED_LAUNCH_EDGES,
 } from "./launch-graph.ts";
 
 /** 生成範囲を持つ文書。 */
 export const GENERATED_DOCS: readonly string[] = ["docs/architecture.md"];
 
-/** 起動関係の図のデータ。Consoleのバンドルに取り込む。 */
-export const FLOW_GRAPH_FILE = "console/src/generated/flow-graph.json";
+/** flowごとの図のデータ。Consoleのバンドルに取り込む。 */
+export const FLOWS_FILE = "console/src/generated/flows.json";
 
 /** miseタスクの表を持つ文書。 */
 export const TASK_TABLE_DOC = "README.md";
@@ -104,7 +113,7 @@ export function renderFlows(
         .filter((edge) => edge.to === flow.name)
         .map(originLabel)
         .sort((a, b) => a.localeCompare(b, "en"));
-      const content = flow.summary.replace(/^\[[^\]]+\]\s*/, "");
+      const content = withoutIdPrefix(flow.summary);
       return `| \`${flow.name}\` | ${origins.length === 0 ? "なし" : origins.join("、")} | ${cell(content)} |`;
     });
   return ["| フロー | 起動元 | 内容 |", "| --- | --- | --- |", ...rows].join(
@@ -173,17 +182,17 @@ export function compareTaskNames(
   ];
 }
 
-/** 起動関係の図のデータが古ければ、問題を説明する文を返す(無ければnull)。 */
-export function flowGraphProblem(
+/** flowごとの図のデータが古ければ、問題を説明する文を返す(無ければnull)。 */
+export function flowsProblem(
   current: string | null,
   next: string,
 ): string | null {
   if (current === null) {
-    return `${FLOW_GRAPH_FILE}: file is missing (run \`mise run docs:gen\`)`;
+    return `${FLOWS_FILE}: file is missing (run \`mise run docs:gen\`)`;
   }
   return current === next
     ? null
-    : `${FLOW_GRAPH_FILE}: file is stale (run \`mise run docs:gen\`)`;
+    : `${FLOWS_FILE}: file is stale (run \`mise run docs:gen\`)`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -239,33 +248,42 @@ function loadAssets(): AssetEntry[] {
   return [...scripts, ...flows];
 }
 
-/** flowの定義から、モジュールが実行するscriptのpathを、現れる順に集める。 */
-function scriptPathsIn(node: unknown): string[] {
-  if (Array.isArray(node)) return node.flatMap(scriptPathsIn);
-  if (!isRecord(node)) return [];
-  const own =
-    node.type === "script" && typeof node.path === "string" ? [node.path] : [];
-  return [...own, ...Object.values(node).flatMap(scriptPathsIn)];
-}
+const FACTORY_PREFIX = "f/factory/";
 
-function loadFlowInputs(): FlowInput[] {
+function flowDefinitionInputs(): FlowDefinitionInput[] {
   return listFiles("f/factory/*__flow/flow.yaml").map((path) => {
     const yaml = readYaml(path);
+    const value = isRecord(yaml.value) ? yaml.value : {};
+    const modules: unknown[] = Array.isArray(value.modules)
+      ? value.modules
+      : [];
     return {
       name: path
         .replace(/^f\/factory\//, "")
         .replace(/__flow\/flow\.yaml$/, ""),
       summary: stringField(yaml, "summary"),
-      stepPaths: scriptPathsIn(yaml.value),
+      description: stringField(yaml, "description"),
+      steps: modules.flatMap((module) => {
+        if (!isRecord(module) || !isRecord(module.value)) return [];
+        return [
+          {
+            id: stringField(module, "id"),
+            summary: stringField(module, "summary"),
+            path: stringField(module.value, "path"),
+            conditional: isRecord(module.skip_if),
+          },
+        ];
+      }),
     };
   });
 }
 
-function loadScheduleInputs(): ScheduleInput[] {
+function scheduleDescriptionInputs(): ScheduleDescriptionInput[] {
   return listFiles("f/factory/*.schedule.yaml").map((path) => {
     const yaml = readYaml(path);
     return {
       name: path.replace(/^f\/factory\//, "").replace(/\.schedule\.yaml$/, ""),
+      summary: stringField(yaml, "summary"),
       cron: stringField(yaml, "schedule"),
       target: stringField(yaml, "script_path"),
       isFlow: yaml.is_flow === true,
@@ -274,15 +292,52 @@ function loadScheduleInputs(): ScheduleInput[] {
   });
 }
 
-/** 起動関係の図のデータの、あるべき中身を返す。 */
-export function renderFlowGraphFile(): string {
-  return renderFlowGraphJson(
-    buildFlowGraph({
+/** `handlerPathFor`が、承認を処理するscriptの無い種類に投げるエラーの文。 */
+const NO_HANDLER_MESSAGE = /no approval handler for kind/;
+
+/**
+ * 承認のステップのscriptごとに、承認を処理するscriptを引く。
+ * 処理するscriptが無い種類は、`resolve`がそのエラーを投げたときだけnullにする。
+ * 別のエラーを隠すと、図から承認の出口が黙って消えるため、投げ直す。
+ */
+export function resolveApprovalHandlers(
+  steps: Readonly<Record<string, ApprovalRequestKind>>,
+  resolve: (kind: ApprovalRequestKind) => string,
+): FlowsInput["approvalSteps"] {
+  return Object.fromEntries(
+    Object.entries(steps).map(([script, kind]) => {
+      try {
+        const handler = resolve(kind);
+        return [
+          script,
+          handler.startsWith(FACTORY_PREFIX)
+            ? handler.slice(FACTORY_PREFIX.length)
+            : handler,
+        ];
+      } catch (error) {
+        if (error instanceof Error && NO_HANDLER_MESSAGE.test(error.message)) {
+          return [script, null];
+        }
+        throw error;
+      }
+    }),
+  );
+}
+
+/** flowごとの図のデータの、あるべき中身を返す。 */
+export function renderFlowsFile(): string {
+  return renderFlowsJson(
+    buildFlowsData({
       edges: LAUNCH_EDGES,
       humanOperations: HUMAN_OPERATIONS,
       humanEntryScripts: HUMAN_ENTRY_SCRIPTS,
-      schedules: loadScheduleInputs(),
-      flows: loadFlowInputs(),
+      schedules: scheduleDescriptionInputs(),
+      flows: flowDefinitionInputs(),
+      approvalSteps: resolveApprovalHandlers(APPROVAL_STEPS, handlerPathFor),
+      approvalOutcomes: APPROVAL_OUTCOMES,
+      unwiredEdges: UNWIRED_LAUNCH_EDGES,
+      reworkEdges: REWORK_LAUNCH_EDGES,
+      scriptCallers: SCRIPT_CALLERS,
     }),
   );
 }
@@ -304,7 +359,7 @@ function renderBlock(name: string): string | null {
 }
 
 /**
- * 生成範囲、起動関係の図のデータ、タスクの表を確かめ、問題を説明する文を返す(無ければ空)。
+ * 生成範囲、flowごとの図のデータ、タスクの表を確かめ、問題を説明する文を返す(無ければ空)。
  * `write`が真なら、生成範囲が古い文書と図のデータを書き換える(問題に数えない)。
  */
 export function runDocsGen(write: boolean): string[] {
@@ -321,17 +376,17 @@ export function runDocsGen(write: boolean): string[] {
       );
     }
   }
-  const graphNext = renderFlowGraphFile();
-  const graphCurrent = existsSync(FLOW_GRAPH_FILE)
-    ? readFileSync(FLOW_GRAPH_FILE, "utf8")
+  const flowsNext = renderFlowsFile();
+  const flowsCurrent = existsSync(FLOWS_FILE)
+    ? readFileSync(FLOWS_FILE, "utf8")
     : null;
   if (write) {
-    if (graphCurrent !== graphNext) {
-      mkdirSync(dirname(FLOW_GRAPH_FILE), { recursive: true });
-      writeFileSync(FLOW_GRAPH_FILE, graphNext);
+    if (flowsCurrent !== flowsNext) {
+      mkdirSync(dirname(FLOWS_FILE), { recursive: true });
+      writeFileSync(FLOWS_FILE, flowsNext);
     }
   } else {
-    const problem = flowGraphProblem(graphCurrent, graphNext);
+    const problem = flowsProblem(flowsCurrent, flowsNext);
     if (problem !== null) problems.push(problem);
   }
   problems.push(

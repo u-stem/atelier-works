@@ -6,6 +6,7 @@ import {
   type DelayedOptions,
   useDelayedVisible,
 } from "../lib/delayedVisible.ts";
+import { SECTION_HEADING_ROW_CLASS } from "../lib/layoutClasses.ts";
 import { Skeleton } from "./ui/skeleton.tsx";
 
 /** 同じ高さの行を並べる形。 */
@@ -77,10 +78,8 @@ export function LoadingStateView({
   const body =
     "node" in shape
       ? shape.node
-      : Array.from({ length: shape.rows }, (_unused, index) => (
-          // 行は並びが変わらない固定の数で、入れ替えも挿入もない。
-          // biome-ignore lint/suspicious/noArrayIndexKey: 同上。
-          <Skeleton key={index} className={shape.rowClassName} />
+      : rowIndexes(shape.rows).map((row) => (
+          <Skeleton key={row} className={shape.rowClassName} />
         ));
   return (
     <div
@@ -130,4 +129,69 @@ export function LoadingGate({
     return children;
   }
   return <LoadingBody display={display} shape={shape} />;
+}
+
+/**
+ * 骨組みの行を区別する鍵。`count`個の番号を返す。
+ * 行は並びが変わらない固定の数で、入れ替えも挿入もないので、番号を鍵にしてよい。
+ */
+export function rowIndexes(count: number): number[] {
+  return Array.from({ length: count }, (_unused, index) => index);
+}
+
+/**
+ * 枠で囲んだ行の並びの骨組み。実物の一覧(枠、行の間の線、行の高さ)に合わせる。
+ * `rowClassName`に、実機で測った実物の行の高さを渡す。最後の行の下には線を引かない。
+ */
+export function SkeletonListCard({
+  rows,
+  rowClassName,
+  className,
+}: {
+  rows: number;
+  rowClassName: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "overflow-hidden rounded-xl border border-border bg-card",
+        className,
+      )}
+    >
+      {rowIndexes(rows).map((row) => (
+        <div
+          key={row}
+          className={cn(
+            "flex flex-col justify-center gap-2 border-b border-border px-6 last:border-b-0",
+            rowClassName,
+          )}
+        >
+          <Skeleton className="h-4 w-2/5" />
+          <Skeleton className="h-3 w-3/5" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 見出しと本文の塊で作る節の骨組み。見出しの行は、実物の見出し(`text-lead`、27px)の高さにする。
+ * `block`に、実機で測った節の本文の高さを渡す。
+ */
+export function SkeletonSection({
+  block,
+  className,
+}: {
+  block: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex flex-col gap-3 shrink-0", className)}>
+      <div className={SECTION_HEADING_ROW_CLASS}>
+        <Skeleton className="h-5 w-20" />
+      </div>
+      <Skeleton className={cn("w-full rounded-xl", block)} />
+    </div>
+  );
 }

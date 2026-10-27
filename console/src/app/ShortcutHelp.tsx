@@ -5,7 +5,7 @@ import { type Platform, shortcutRows } from "../lib/shortcutKeys.ts";
 import { SCREENS } from "./screens.ts";
 
 const KBD_CLASS =
-  "rounded border border-border bg-muted px-1.5 font-sans text-caption leading-5 text-muted-foreground";
+  "rounded-sm border border-border bg-muted px-1.5 font-sans text-caption leading-5 text-muted-foreground";
 
 /**
  * ショートカットの一覧と、1文字のショートカットを有効にする切り替え。

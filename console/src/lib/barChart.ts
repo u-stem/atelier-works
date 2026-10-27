@@ -25,8 +25,8 @@ const MIN_BAR_HEIGHT = 1;
 /** 最大の棒の上に残す、値のラベルの置き場の高さ。 */
 export const VALUE_LABEL_ROOM = 16;
 
-/** ラベルの文字の大きさ(px)。幅の見積もりに使う。 */
-const LABEL_FONT_SIZE = 11;
+/** ラベルの文字の大きさ(px)。`text-caption`の大きさに合わせ、幅の見積もりに使う。 */
+const LABEL_FONT_SIZE = 12;
 
 /** 半角の文字の幅の、文字の大きさに対する比。数字や英字を平均して見積もる。 */
 const NARROW_CHAR_RATIO = 0.6;

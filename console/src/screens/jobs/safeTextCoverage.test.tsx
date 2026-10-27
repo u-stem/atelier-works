@@ -16,11 +16,12 @@ import {
   type ScheduleViewData,
 } from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
-import type { FlowGraph } from "../../lib/flowGraph.ts";
-import type { FlowGraphState } from "../../lib/flowOverlay.ts";
+import { flowDiagramModel } from "../../lib/flowDiagram.ts";
+import type { FlowDefinition, FlowsData } from "../../lib/flowsData.ts";
 import { ItemFlowProgressView } from "../items/detail/ItemFlowProgress.tsx";
 import { ConfigList } from "../system/ConfigSection.tsx";
-import { FlowGraphDiagram, FlowGraphList } from "./FlowGraphDiagram.tsx";
+import { FlowDiagramFrame } from "./FlowDiagram.tsx";
+import { FlowScreenView } from "./FlowScreen.tsx";
 import {
   ArgList,
   FailureCauses,
@@ -142,33 +143,51 @@ function detailScreen(): ReactElement {
   );
 }
 
-/** 文字列の項目のすべてに`BAD`を入れた起動の関係。ノードのidは既知のflowに合わせる。 */
-const GRAPH: FlowGraph = {
-  nodes: [
-    { id: "schedule:poll_issues", kind: "schedule", label: BAD, note: BAD },
-    { id: "flow:pipeline", kind: "flow", label: BAD, note: BAD },
+/** 文字列の項目のすべてに`BAD`を入れたflowの定義。flowの名前は、リンクに入れるので安全な形にする。 */
+const FLOW: FlowDefinition = {
+  name: "pipeline",
+  summary: BAD,
+  description: BAD,
+  steps: [
+    {
+      id: BAD,
+      summary: BAD,
+      scriptPath: `f/factory/steps/${BAD}`,
+      conditional: true,
+    },
   ],
-  edges: [{ from: "schedule:poll_issues", to: "flow:pipeline", kind: "run" }],
+  entries: [
+    { kind: "schedule", name: BAD },
+    { kind: "human", label: BAD },
+    { kind: "script", name: BAD, caller: BAD },
+    { kind: "flow", flow: "pipeline", via: "reject" },
+    { kind: "flow", flow: "pipeline", via: "rework" },
+  ],
+  exits: [
+    { flow: "pipeline", step: BAD, via: "approve" },
+    { flow: "pipeline", step: BAD, via: "rework" },
+  ],
+  unwiredEntries: [{ kind: "flow", flow: "pipeline", via: "approve" }],
 };
 
-const GRAPH_STATE: FlowGraphState = {
-  overlay: {
-    activity: new Map([
-      ["flow:pipeline", { running: 1, queued: 2, runningJobId: DETAIL_ID }],
-    ]),
-    lowerBound: true,
-  },
-  scheduleEntries: new Map([
-    [
-      "schedule:poll_issues",
-      { stopped: false, lastRun: { success: false }, nextRunAt: null },
-    ],
-  ]),
-  activeFailed: false,
-  schedulesFailed: false,
-  activePending: false,
-  schedulesTruncated: false,
+const SCHEDULE_FLOWS: FlowsData = {
+  flows: [FLOW],
+  schedules: [{ name: "pipeline_schedule", summary: BAD, flows: ["pipeline"] }],
 };
+
+const FLOWS: FlowsData = { flows: [FLOW], schedules: [] };
+
+/** 定義のステップと、定義に無いステップの両方に、見えない文字を入れたジョブのステップ。 */
+const FLOW_STEPS = [
+  {
+    id: BAD,
+    state: BAD,
+    job_id: DETAIL_ID,
+    iterations: null,
+    skipped: false,
+  },
+  { id: `${BAD}x`, state: BAD, job_id: BAD, iterations: null, skipped: false },
+];
 
 const CASES: readonly (readonly [string, () => ReactElement])[] = [
   ["the detail screen with its heading", detailScreen],
@@ -251,6 +270,30 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
   ],
   ["the state badge", () => <JobStateBadge state={BAD} />],
   [
+    "the flow diagram",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(FLOW, FLOW_STEPS)}
+        presentation="fit"
+      />
+    ),
+  ],
+  [
+    "the flow diagram in the list",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(FLOW, FLOW_STEPS)}
+        presentation="list"
+      />
+    ),
+  ],
+  [
+    "the flow screen",
+    () => (
+      <FlowScreenView name="pipeline" data={FLOWS} back={null} width={1100} />
+    ),
+  ],
+  [
     "flow progress step id",
     () => (
       <JobList
@@ -279,34 +322,34 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     ),
   ],
   [
-    "flow node label",
-    () => <FlowGraphDiagram graph={GRAPH} state={GRAPH_STATE} />,
-  ],
-  [
-    "flow node label in the list",
-    () => <FlowGraphList graph={GRAPH} state={GRAPH_STATE} />,
-  ],
-  [
     "the flow progress of a work item",
     () => (
       <ItemFlowProgressView
-        kind="issue"
-        graph={GRAPH}
+        data={FLOWS}
+        width={900}
+        view={{
+          kind: "steps",
+          jobId: DETAIL_ID,
+          flowPath: "f/factory/pipeline",
+          jobState: BAD,
+          steps: FLOW_STEPS,
+          stale: true,
+        }}
+      />
+    ),
+  ],
+  [
+    "the flow progress of a work item whose flow is not in the data",
+    () => (
+      <ItemFlowProgressView
+        data={FLOWS}
         width={900}
         view={{
           kind: "steps",
           jobId: DETAIL_ID,
           flowPath: `f/factory/${BAD}`,
           jobState: BAD,
-          steps: [
-            {
-              id: BAD,
-              state: BAD,
-              job_id: BAD,
-              iterations: null,
-              skipped: false,
-            },
-          ],
+          steps: FLOW_STEPS,
           stale: true,
         }}
       />
@@ -330,6 +373,20 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
           truncated: false,
         })}
         holds={freshQuery(HOLDS)}
+      />
+    ),
+  ],
+  [
+    "the schedules with a description from the data",
+    () => (
+      <ScheduleList
+        schedules={freshQuery({
+          schedules: [{ ...SCHEDULE, path: "f/factory/pipeline_schedule" }],
+          missing_in_workspace: [],
+          truncated: false,
+        })}
+        holds={freshQuery(HOLDS)}
+        flows={SCHEDULE_FLOWS}
       />
     ),
   ],
@@ -358,7 +415,7 @@ describe("every string of the server is sanitized when it is drawn", () => {
   });
 });
 
-describe("the cases of the current step and the graph in the coverage", () => {
+describe("the case of the current step in the coverage", () => {
   const draw = (name: string): string => {
     const found = CASES.find(([label]) => label === name);
     return found === undefined ? "" : render(found[1]());
@@ -366,14 +423,6 @@ describe("the cases of the current step and the graph in the coverage", () => {
 
   test("draw the label of the current step, so the check does not pass on an empty row", () => {
     expect(draw("flow progress step id")).toContain("今のステップ");
-  });
-
-  test("draw the running mark of the graph, so the check does not pass on an empty graph", () => {
-    expect(draw("flow node label")).toContain("実行中");
-  });
-
-  test("draw the last run of the schedule entry of the graph", () => {
-    expect(draw("flow node label")).toContain("直近 失敗・取消");
   });
 });
 
@@ -385,6 +434,64 @@ describe("the flow progress of a work item in the coverage", () => {
     expect(found === undefined ? "" : render(found[1]())).toContain(
       "のステップ",
     );
+  });
+
+  test("draws the steps the definition lacks, so the check reaches the id of the unknown step", () => {
+    const found = CASES.find(
+      ([label]) => label === "the flow progress of a work item",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain(
+      "定義に無いステップ",
+    );
+  });
+
+  test("draws the list of steps of a flow that is not in the data", () => {
+    const found = CASES.find(
+      ([label]) =>
+        label ===
+        "the flow progress of a work item whose flow is not in the data",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain("<ol");
+  });
+});
+
+describe("the description of a schedule in the coverage", () => {
+  test("draws the description and the links of a schedule that the data knows", () => {
+    const found = CASES.find(
+      ([label]) => label === "the schedules with a description from the data",
+    );
+    expect(found === undefined ? "" : render(found[1]())).toContain("flowの図");
+  });
+});
+
+describe("the flow diagram in the coverage", () => {
+  const draw = (name: string): string => {
+    const found = CASES.find(([label]) => label === name);
+    return found === undefined ? "" : render(found[1]());
+  };
+
+  test("draws the heading of the steps the definition lacks, so the check does not pass on an empty block", () => {
+    expect(draw("the flow diagram")).toContain("定義に無いステップ");
+  });
+
+  test("draws the steps the definition lacks in the list too", () => {
+    expect(draw("the flow diagram in the list")).toContain(
+      "定義に無いステップ",
+    );
+  });
+
+  test("draws the ordered list of the steps in the list", () => {
+    expect(draw("the flow diagram in the list")).toContain("<ol");
+  });
+
+  test("draws the diagram of the flow screen", () => {
+    expect(draw("the flow screen")).toContain(
+      'role="group" aria-label="pipelineの図"',
+    );
+  });
+
+  test("draws the link of a step that has a job, so the label of the link is checked", () => {
+    expect(draw("the flow diagram")).toContain(`href="/jobs/${DETAIL_ID}"`);
   });
 });
 

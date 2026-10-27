@@ -9,6 +9,7 @@ import {
   detailLimitNote,
   FAILURE_ERROR_LIMIT,
 } from "../../../lib/itemDetailView.ts";
+import { OVERVIEW_BODY_CLASS } from "../../../lib/layoutClasses.ts";
 import type { FlowProgressView } from "../../../lib/workItemFlowProgress.ts";
 import {
   EmptyNote,
@@ -173,9 +174,9 @@ export function OverviewTab({
   progress?: FlowProgressView;
 }) {
   return (
-    <div className="flex max-w-[47.5rem] flex-col gap-8">
+    <div className={OVERVIEW_BODY_CLASS}>
       <Summary detail={detail} now={now} />
-      <ItemFlowProgress kind={detail.work_item.kind} view={progress} />
+      <ItemFlowProgress view={progress} />
       <Failures detail={detail} now={now} />
       <Transitions detail={detail} now={now} />
     </div>

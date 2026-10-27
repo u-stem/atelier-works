@@ -5,6 +5,7 @@ import { Markdown } from "../../components/markdown/Markdown.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
+import { REQUIREMENTS_FRAME_CLASS } from "../../lib/layoutClasses.ts";
 import {
   docSourceNotice,
   type PreparedDoc,
@@ -82,9 +83,7 @@ export function RequirementsDocumentView({
     <div
       ref={anchor}
       className={
-        embedded
-          ? "flex w-full items-start"
-          : "mx-auto flex w-full max-w-[75rem] items-start gap-10 px-8 py-6"
+        embedded ? "flex w-full items-start" : REQUIREMENTS_FRAME_CLASS
       }
     >
       <article

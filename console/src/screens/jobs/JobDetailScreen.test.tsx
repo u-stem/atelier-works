@@ -141,6 +141,18 @@ describe("JobDetailScreen with an id that is not a UUID", () => {
   });
 });
 
+describe("JobDetailScreen before the first read", () => {
+  test("draws the breadcrumb, as the loaded header does", () => {
+    expect(render(`/jobs/${ID}`)).toContain('aria-label="パンくず"');
+  });
+
+  test("shows the job id in mono under the title, as the loaded header does", () => {
+    expect(render(`/jobs/${ID}`)).toMatch(
+      new RegExp(`<p class="[^"]*font-mono[^"]*">${ID}</p>`),
+    );
+  });
+});
+
 describe("JobDetailScreen from the cache", () => {
   test("shows the overview of the job that was read", () => {
     expect(render(`/jobs/${ID}`, { output: detail("failure") })).toMatch(

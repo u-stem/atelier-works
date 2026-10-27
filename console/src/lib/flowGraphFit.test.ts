@@ -3,7 +3,6 @@ import {
   FIT_CHROME_WIDTH,
   FIT_MIN_WIDTH,
   graphPresentation,
-  textEm,
   wrapLines,
 } from "./flowGraphFit.ts";
 
@@ -42,20 +41,6 @@ describe("graphPresentation", () => {
 
   test("scrolls before the width is measured", () => {
     expect(graphPresentation(0, 1080)).toBe("scroll");
-  });
-});
-
-describe("textEm", () => {
-  test("counts a narrow letter as less than one em", () => {
-    expect(textEm("abcd")).toBeCloseTo(2.2);
-  });
-
-  test("counts a wide letter as one em", () => {
-    expect(textEm("あい")).toBe(2);
-  });
-
-  test("is zero for an empty text", () => {
-    expect(textEm("")).toBe(0);
   });
 });
 

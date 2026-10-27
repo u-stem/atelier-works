@@ -17,10 +17,10 @@ import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
   LoadingBody,
   type LoadingShape,
+  SkeletonSection,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { jobDetailCrumbs } from "../../lib/breadcrumbs.ts";
 import { isJobId } from "../../lib/jobLink.ts";
 import {
@@ -63,14 +63,20 @@ function NotFound({ back }: { back: string | null }) {
   );
 }
 
-/** 読み込み中の形。概要、引数、ログの順の目安の高さに合わせる。実機で測り直す。 */
-const LOADING_SHAPE: LoadingShape = {
-  className: "mx-auto w-full max-w-4xl space-y-4 px-4 py-6 md:px-8",
+/**
+ * 読み込み中の形。実物と同じ本文の枠(左寄せ、節の間40px)に、概要、ステップ、引数、結果、ログの節を並べる。
+ * 寸法は、実機で実物を描いて測った値で、節の本文は概要が238px、ステップが91px、引数が100px、結果が80px。
+ * ログの高さは出力の量で変わるので、画面の下端を満たす目安にする。
+ */
+export const JOB_DETAIL_LOADING_SHAPE: LoadingShape = {
+  className: SCROLL_BODY_CLASS,
   node: (
     <>
-      <Skeleton className="h-48 w-full" />
-      <Skeleton className="h-5 w-1/3" />
-      <Skeleton className="h-32 w-full" />
+      <SkeletonSection block="h-[14.9rem]" className="max-w-4xl" />
+      <SkeletonSection block="h-[5.7rem]" className="max-w-4xl" />
+      <SkeletonSection block="h-[6.3rem]" className="max-w-4xl" />
+      <SkeletonSection block="h-20" className="max-w-4xl" />
+      <SkeletonSection block="h-64" className="max-w-4xl" />
     </>
   ),
 };
@@ -95,11 +101,20 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
   if (detail === undefined || loadingDisplay !== "content") {
     return (
       <>
-        <PageHeader title="ジョブの詳細" refresh={refreshStatusOf(output)}>
+        {/* 副題のIDは経路から分かるので、取得を待つ間も出す。取得後の見出しと同じ高さになり、下の本文が動かない。 */}
+        <PageHeader
+          title="ジョブの詳細"
+          subtitle={safeText(id)}
+          subtitleMono
+          refresh={refreshStatusOf(output)}
+        >
           <Breadcrumb items={jobDetailCrumbs(back)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
-          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+          <LoadingBody
+            display={loadingDisplay}
+            shape={JOB_DETAIL_LOADING_SHAPE}
+          />
         ) : (
           <QueryFailure
             title="ジョブの詳細を取得できませんでした"
@@ -144,6 +159,7 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
       <PageHeader
         title={safeText(jobScriptName(job.script_path))}
         subtitle={safeText(job.id)}
+        subtitleMono
         refresh={refresh}
         refreshLabel="状態を更新"
       >

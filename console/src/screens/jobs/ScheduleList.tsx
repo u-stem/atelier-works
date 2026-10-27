@@ -1,4 +1,5 @@
 import { Pause, Snowflake } from "lucide-react";
+import { Link } from "react-router";
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
 import type {
   SchedulesSnapshotView,
@@ -9,6 +10,12 @@ import { useNow } from "../../app/useNow.ts";
 import { JobLink } from "../../components/JobLink.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import {
+  FLOWS_DATA,
+  type FlowsData,
+  flowDiagramPath,
+  scheduleFlowsOf,
+} from "../../lib/flowsData.ts";
 import {
   deployHoldActive,
   type ScheduleFreeze,
@@ -30,7 +37,11 @@ import {
   useScheduleRestore,
   useScheduleStop,
 } from "../system/usePlacement.ts";
-import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
+import {
+  JobsQueryGate,
+  SCHEDULE_LOADING_SHAPE,
+  UpcomingTime,
+} from "./JobRows.tsx";
 import {
   ScheduleRestoreDialog,
   ScheduleStopControl,
@@ -38,6 +49,47 @@ import {
 } from "./ScheduleStopActions.tsx";
 
 const BACK = jobsBackState("?tab=schedules");
+
+const FLOW_LINK_CLASS =
+  "rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/**
+ * scheduleの1行の説明と、起動するflowの図へのリンク。
+ * データに無いscheduleは、何も出さない。flowを起動しないscheduleは、説明だけを出す。
+ * 行全体はリンクにしない。止める操作と入れ子にならず、キーボードの順序を保つためである。
+ */
+function ScheduleFlows({
+  path,
+  flows,
+}: {
+  path: string;
+  flows: FlowsData | null;
+}) {
+  const info = scheduleFlowsOf(flows, path);
+  if (info === null) return null;
+  const links = info.flows.flatMap((name) => {
+    const to = flowDiagramPath(name, flows);
+    return to === null ? [] : [{ name, to }];
+  });
+  return (
+    <>
+      <p className="text-small break-words">{safeText(info.summary)}</p>
+      {links.length === 0 ? null : (
+        <p className="flex flex-wrap items-center gap-x-2 text-small">
+          <span className="text-muted-foreground">flowの図:</span>
+          {links.map((link, index) => (
+            <span key={link.name}>
+              {index === 0 ? "" : "/ "}
+              <Link to={link.to} state={BACK} className={FLOW_LINK_CLASS}>
+                {safeText(link.name)}
+              </Link>
+            </span>
+          ))}
+        </p>
+      )}
+    </>
+  );
+}
 
 function ScheduleRow({
   schedule,
@@ -48,8 +100,10 @@ function ScheduleRow({
   onPrepare,
   onStop,
   onRestore,
+  flows,
 }: {
   schedule: ScheduleViewData;
+  flows: FlowsData | null;
   frozen: ReadonlySet<string> | null;
   now: number;
   stop: ScheduleStopState;
@@ -91,6 +145,7 @@ function ScheduleRow({
           />
         </span>
       </div>
+      <ScheduleFlows path={schedule.path} flows={flows} />
       <p className="font-mono text-small break-all text-muted-foreground">
         {safeText(schedule.schedule)}
         <span className="font-sans"> ({safeText(schedule.timezone)})</span>
@@ -143,9 +198,12 @@ function ScheduleRow({
 export function ScheduleList({
   schedules,
   holds,
+  flows = FLOWS_DATA,
 }: {
   schedules: SectionQuery<SchedulesSnapshotView>;
   holds: SectionQuery<HoldsSnapshot>;
+  /** 説明と起動するflowのデータ。既定は同梱のデータ。 */
+  flows?: FlowsData | null;
 }) {
   const now = useNow();
   const frozen = frozenScheduleTargets(holds.data, now);
@@ -159,7 +217,7 @@ export function ScheduleList({
         query={schedules}
         title="スケジュールを取得できませんでした"
         loginHint="上のバナーからログインすると、スケジュールを表示します。"
-        shape={LIST_LOADING_SHAPE}
+        shape={SCHEDULE_LOADING_SHAPE}
       >
         {(data) => (
           <>
@@ -205,6 +263,7 @@ export function ScheduleList({
                   return (
                     <ScheduleRow
                       key={schedule.path}
+                      flows={flows}
                       schedule={schedule}
                       frozen={frozen}
                       now={now}

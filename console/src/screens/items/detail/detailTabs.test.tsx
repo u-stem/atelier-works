@@ -8,6 +8,7 @@ import type {
   WorkItemReview,
   WorkItemRound,
 } from "../../../api/guards/workItemDetail.ts";
+import { OVERVIEW_BODY_CLASS } from "../../../lib/layoutClasses.ts";
 import { OverviewTab } from "./OverviewTab.tsx";
 import { RequirementsTab } from "./RequirementsTab.tsx";
 import { RoundsTab } from "./RoundsTab.tsx";
@@ -98,6 +99,14 @@ function render(element: React.ReactElement): string {
   return renderToStaticMarkup(<MemoryRouter>{element}</MemoryRouter>);
 }
 
+describe("OverviewTab frame", () => {
+  test("stacks its blocks with the class that the loading skeleton shares", () => {
+    expect(render(<OverviewTab detail={detail()} now={NOW} />)).toContain(
+      `class="${OVERVIEW_BODY_CLASS}"`,
+    );
+  });
+});
+
 describe("OverviewTab", () => {
   test("has no heading that repeats the tab name", () => {
     const html = render(<OverviewTab detail={detail()} now={NOW} />);
@@ -126,9 +135,14 @@ describe("OverviewTab", () => {
     expect(html).toContain(`href="${PR_URL}"`);
   });
 
-  test("shows the path of the work item kind", () => {
+  test("shows no heading of the progress without a flow job", () => {
     const html = render(<OverviewTab detail={detail()} now={NOW} />);
-    expect(html).toContain("作業項目の経路の図");
+    expect(html).not.toContain(">進行<");
+  });
+
+  test("draws no diagram without a flow job", () => {
+    const html = render(<OverviewTab detail={detail()} now={NOW} />);
+    expect(html).not.toContain('role="group"');
   });
 
   test("workItemFlowProgress: shows no progress when the detail is not found but keeps the overview", () => {

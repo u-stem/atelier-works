@@ -112,7 +112,7 @@ const COMPONENTS: Components = {
     <strong className="font-semibold">{children}</strong>
   ),
   code: ({ children }) => (
-    <code className="rounded bg-muted px-1 py-0.5 font-mono text-small">
+    <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-small">
       {children}
     </code>
   ),

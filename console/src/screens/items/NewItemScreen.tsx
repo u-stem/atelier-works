@@ -32,7 +32,8 @@ import {
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { useManualIntake } from "./useManualIntake.ts";
 
-function BackLink() {
+/** 見出しの題の下に置く、一覧への戻りのリンク。 */
+export function BackLink() {
   return (
     <Link
       to="/items"

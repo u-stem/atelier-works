@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Inbox } from "lucide-react";
 import type { ComponentType } from "react";
 import { buildScreenRoutes, flattenRoutePaths } from "./routeTable.ts";
-import { SCREENS, type Screen } from "./screens.ts";
+import { type FallbackHeader, SCREENS, type Screen } from "./screens.ts";
 
 const lazy = () => Promise.resolve({ Component: () => null });
 const DefaultBoundary: ComponentType = () => null;
@@ -37,6 +37,7 @@ describe("flattenRoutePaths", () => {
       "reports",
       "reports/audit/:id",
       "jobs",
+      "jobs/flows/:name?",
       "jobs/:id",
       "system",
     ]);
@@ -195,5 +196,128 @@ describe("route titles", () => {
       DefaultBoundary,
     );
     expect(routes[1]?.children?.[0]?.handle).toEqual({ title: "詳細" });
+  });
+});
+
+describe("buildScreenRoutes hydrate fallbacks", () => {
+  const Crumb: ComponentType = () => null;
+  const Back: ComponentType = () => null;
+  const NoRefresh: ComponentType = () => null;
+  const Plain: ComponentType = () => null;
+  const choose = (header: FallbackHeader): ComponentType => {
+    if (header.trail === "breadcrumb") {
+      return Crumb;
+    }
+    if (header.trail === "back") {
+      return Back;
+    }
+    return header.refresh === false ? NoRefresh : Plain;
+  };
+
+  test("gives a screen with a breadcrumb the fallback chosen by its trail", () => {
+    expect(
+      buildScreenRoutes(
+        [
+          screen({
+            children: [{ path: "items/:id", lazy, trail: "breadcrumb" }],
+          }),
+        ],
+        DefaultBoundary,
+        choose,
+      )[1]?.HydrateFallback,
+    ).toBe(Crumb);
+  });
+
+  test("gives a screen without a mark the plain fallback", () => {
+    expect(
+      buildScreenRoutes([screen()], DefaultBoundary, choose)[0]
+        ?.HydrateFallback,
+    ).toBe(Plain);
+  });
+
+  test("gives the index route the fallback chosen for a plain header", () => {
+    expect(
+      buildScreenRoutes(
+        [screen({ id: "inbox", path: "/" })],
+        DefaultBoundary,
+        choose,
+      )[0]?.HydrateFallback,
+    ).toBe(Plain);
+  });
+
+  test("gives a child route the fallback chosen by its own mark", () => {
+    expect(
+      buildScreenRoutes(
+        [
+          screen({
+            children: [
+              { path: "items/new", lazy, trail: "back", refresh: false },
+            ],
+          }),
+        ],
+        DefaultBoundary,
+        choose,
+      )[1]?.HydrateFallback,
+    ).toBe(Back);
+  });
+
+  test("hands the trail and the refresh mark of a child route to the chooser", () => {
+    const seen: FallbackHeader[] = [];
+    buildScreenRoutes(
+      [
+        screen({
+          children: [
+            { path: "items/new", lazy, trail: "back", refresh: false },
+          ],
+        }),
+      ],
+      DefaultBoundary,
+      (header) => {
+        seen.push(header);
+        return Plain;
+      },
+    );
+    expect(seen).toEqual([
+      { trail: undefined, refresh: true },
+      { trail: "back", refresh: false },
+    ]);
+  });
+
+  test("tells the chooser that a route without the mark has refresh controls", () => {
+    const seen: FallbackHeader[] = [];
+    buildScreenRoutes(
+      [screen({ children: [{ path: "jobs/:id", lazy }] })],
+      DefaultBoundary,
+      (header) => {
+        seen.push(header);
+        return Plain;
+      },
+    );
+    expect(seen[1]?.refresh).toBe(true);
+  });
+
+  test("gives no fallback to a route nested in a child route", () => {
+    const routes = buildScreenRoutes(
+      [
+        screen({
+          children: [
+            {
+              path: "items/:id",
+              lazy,
+              children: [{ path: "requirements", lazy }],
+            },
+          ],
+        }),
+      ],
+      DefaultBoundary,
+      choose,
+    );
+    expect(routes[1]?.children?.[0]?.HydrateFallback).toBeUndefined();
+  });
+
+  test("gives no fallback when none is passed", () => {
+    expect(
+      buildScreenRoutes([screen()], DefaultBoundary)[0]?.HydrateFallback,
+    ).toBeUndefined();
   });
 });

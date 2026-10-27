@@ -1,4 +1,4 @@
-// システムの画面のタブ(状態、失敗と通知、履歴と構成、設定)を決める純関数。
+// システムの画面のタブ(状態、失敗と通知、履歴、設定)を決める純関数。
 // 開くタブはURLの`?tab=`に持ち、状態は名前を持たない。
 // 失敗が隠れないよう、要約の帯のチップから、タブの印を決める。件数は帯の失敗のチップが示し、タブの名前には付けない。
 // 印の語と記号は、印を付けるチップの段(注意、要対応)から決める。
@@ -27,7 +27,7 @@ export const SYSTEM_TABS: TabSet<SystemTabId> = {
   tabs: [
     { id: "status", label: "状態" },
     { id: "failures", label: "失敗と通知" },
-    { id: "history", label: "履歴と構成" },
+    { id: "history", label: "履歴" },
     { id: "config", label: "設定" },
   ],
   defaultTab: "status",

@@ -18,6 +18,51 @@ import {
 } from "../api/systemQueries.ts";
 import { SCREENS, type ScreenId } from "./screens.ts";
 
+describe("the header marks", () => {
+  // 副題は、戻り先の行(パンくずか戻りのリンク)を持つ画面にだけある。印を1つにして、食い違う組を作れなくする。
+  test("has no separate subtitle mark on an entrance", () => {
+    expect(SCREENS.filter((screen) => "subtitle" in screen)).toEqual([]);
+  });
+
+  test("has no separate subtitle mark on a route", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children).filter(
+        (child) => "subtitle" in child,
+      ),
+    ).toEqual([]);
+  });
+
+  test("lists the routes that have no refresh controls", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children)
+        .filter((child) => child.refresh === false)
+        .map((child) => child.path),
+    ).toEqual(["items/new"]);
+  });
+
+  test("lists the routes whose page header carries a breadcrumb or a back link", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children)
+        .filter((child) => child.trail !== undefined)
+        .map((child) => [child.path, child.trail]),
+    ).toEqual([
+      ["items/new", "back"],
+      ["items/:id/requirements", "breadcrumb"],
+      ["items/:id", "breadcrumb"],
+      ["reports/audit/:id", "breadcrumb"],
+      ["jobs/:id", "breadcrumb"],
+    ]);
+  });
+
+  test("no route nests another route, so a fallback is never drawn twice", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children).filter(
+        (child) => child.children !== undefined,
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("SCREENS", () => {
   test("has the five entrances in order", () => {
     expect(SCREENS.map((screen) => screen.id)).toEqual([
@@ -179,12 +224,12 @@ describe("jobs entrance", () => {
     expect(SCREENS.find((screen) => screen.id === "jobs")?.path).toBe("/jobs");
   });
 
-  test("has the job detail as its child route", () => {
+  test("has the flow diagram before the job detail as its child routes", () => {
     expect(
       SCREENS.find((screen) => screen.id === "jobs")?.children.map(
         (child) => child.path,
       ),
-    ).toEqual(["jobs/:id"]);
+    ).toEqual(["jobs/flows/:name?", "jobs/:id"]);
   });
 
   test("prefetches only the active jobs, never the history or the schedules", () => {
