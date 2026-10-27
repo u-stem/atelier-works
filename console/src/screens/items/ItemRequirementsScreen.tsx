@@ -36,7 +36,7 @@ function Message({ children }: { children: string }) {
 }
 
 /** 読み込み中の形。 */
-const LOADING_SHAPE: LoadingShape = {
+export const REQUIREMENTS_DOC_LOADING_SHAPE: LoadingShape = {
   className: "mx-auto w-full max-w-[75rem] space-y-4 px-8 py-6",
   node: (
     <>
@@ -76,7 +76,10 @@ function ItemRequirements({
           <Breadcrumb items={itemRequirementsCrumbs(workItemId)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
-          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+          <LoadingBody
+            display={loadingDisplay}
+            shape={REQUIREMENTS_DOC_LOADING_SHAPE}
+          />
         ) : (
           <QueryFailure
             title="要件定義書を取得できませんでした"

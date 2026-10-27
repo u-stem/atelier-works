@@ -55,7 +55,7 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
 }
 
 /** 読み込み中の形。 */
-const LOADING_SHAPE: LoadingShape = {
+export const AUDIT_LIST_LOADING_SHAPE: LoadingShape = {
   className: "space-y-2 px-6 py-4",
   node: (
     <>
@@ -81,7 +81,7 @@ export function AuditListState({
   const display = useLoadingDisplay(loadPhaseOf(query));
   // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
   if (display !== "content") {
-    return <LoadingBody display={display} shape={LOADING_SHAPE} />;
+    return <LoadingBody display={display} shape={AUDIT_LIST_LOADING_SHAPE} />;
   }
   const rows = query.data;
   if (rows === undefined) {

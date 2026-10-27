@@ -13,7 +13,7 @@ import { RequirementsIndexList } from "./RequirementsIndexList.tsx";
  * 読み込み中の形。一覧の1行は約4.75rem(上下の余白と、題と補足の2行)で、1ページは10行になる。
  * 画面の高さに入る行の数で目安にする。値は見積もりで、実機で測り直して合わせる。
  */
-const LOADING_SHAPE: LoadingShape = {
+export const REQUIREMENTS_LOADING_SHAPE: LoadingShape = {
   rows: 6,
   rowClassName: "h-[4.75rem] w-full rounded-md",
   gapClassName: "gap-2",
@@ -33,7 +33,10 @@ export function RequirementsSection({
   const rows = index.data;
   return (
     <div className="flex flex-col gap-3">
-      <LoadingGate phase={loadPhaseOf(index)} shape={LOADING_SHAPE}>
+      <LoadingGate
+        phase={loadPhaseOf(index)}
+        shape={REQUIREMENTS_LOADING_SHAPE}
+      >
         {rows !== undefined ? (
           <>
             {index.isError ? (

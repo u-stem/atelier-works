@@ -64,7 +64,7 @@ function NotFound({ back }: { back: string | null }) {
 }
 
 /** 読み込み中の形。概要、引数、ログの順の目安の高さに合わせる。実機で測り直す。 */
-const LOADING_SHAPE: LoadingShape = {
+export const JOB_DETAIL_LOADING_SHAPE: LoadingShape = {
   className: "mx-auto w-full max-w-4xl space-y-4 px-4 py-6 md:px-8",
   node: (
     <>
@@ -99,7 +99,10 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
           <Breadcrumb items={jobDetailCrumbs(back)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
-          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+          <LoadingBody
+            display={loadingDisplay}
+            shape={JOB_DETAIL_LOADING_SHAPE}
+          />
         ) : (
           <QueryFailure
             title="ジョブの詳細を取得できませんでした"

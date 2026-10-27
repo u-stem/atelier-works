@@ -46,10 +46,9 @@ describe("docs: the visual rules", () => {
     ],
     ["the icon before the script runs is stated", "/favicon.ico"],
     ["the rule for nested routes is stated", "入れ子の経路"],
-    [
-      "the screens whose skeleton was not measured are stated",
-      "測っていない画面",
-    ],
+    ["the measured screens are listed", "実物と並べて測った画面"],
+    ["the way to measure a skeleton is stated", "getBoundingClientRect"],
+    ["the skeleton of the header with a subtitle is stated", "subtitlePending"],
   ])("%s", (_name, text) => {
     expect(DOC).toContain(text);
   });

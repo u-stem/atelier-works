@@ -21,7 +21,7 @@ import { parseIdParam } from "../../lib/routeParams.ts";
 import { AuditMarkdown } from "./AuditMarkdown.tsx";
 
 /** 読み込み中の形。 */
-const LOADING_SHAPE: LoadingShape = {
+export const AUDIT_REPORT_LOADING_SHAPE: LoadingShape = {
   className: "space-y-3 px-4 py-6 md:px-8",
   node: (
     <>
@@ -62,7 +62,10 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
         <PageHeader title={`${workItemRef(workItemId)}の監査レポート`}>
           <Breadcrumb items={auditReportCrumbs(workItemId)} />
         </PageHeader>
-        <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+        <LoadingBody
+          display={loadingDisplay}
+          shape={AUDIT_REPORT_LOADING_SHAPE}
+        />
       </>
     );
   }

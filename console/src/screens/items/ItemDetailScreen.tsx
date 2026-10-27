@@ -44,7 +44,7 @@ function Message({ children }: { children: string }) {
 }
 
 /** 読み込み中の形。 */
-const LOADING_SHAPE: LoadingShape = {
+export const ITEM_DETAIL_LOADING_SHAPE: LoadingShape = {
   className: "mx-auto w-full max-w-[75rem] space-y-4 px-4 py-6 md:px-8",
   node: (
     <>
@@ -91,7 +91,10 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
           <Breadcrumb items={itemDetailCrumbs(workItemId, back)} />
         </PageHeader>
         {loadingDisplay !== "content" ? (
-          <LoadingBody display={loadingDisplay} shape={LOADING_SHAPE} />
+          <LoadingBody
+            display={loadingDisplay}
+            shape={ITEM_DETAIL_LOADING_SHAPE}
+          />
         ) : (
           <QueryFailure
             title="作業項目の詳細を取得できませんでした"

@@ -21,6 +21,10 @@ const LOADING_SHAPE: LoadingShape = {
   ),
 };
 
+export const ANALYTICS_COST_LOADING_SHAPE: LoadingShape = LOADING_SHAPE;
+export const ANALYTICS_APPROVALS_LOADING_SHAPE: LoadingShape = LOADING_SHAPE;
+export const ANALYTICS_LEAD_TIME_LOADING_SHAPE: LoadingShape = LOADING_SHAPE;
+
 /**
  * 取得に失敗して表示できる値が無いときの表示。
  * 401は画面上部のバナーが知らせるので、同じ内容の警告を重ねない。

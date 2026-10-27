@@ -21,7 +21,7 @@ import { PipelineTable } from "./PipelineTable.tsx";
  * 読み込み中の形。表の1行は約3rem(上下の余白と、題の1〜2行)で、1ページは25行になる。
  * 画面の高さに入る行の数で目安にする。値は見積もりで、実機で測り直して合わせる。
  */
-const LOADING_SHAPE: LoadingShape = {
+export const PIPELINE_LOADING_SHAPE: LoadingShape = {
   rows: 8,
   rowClassName: "h-12 w-full rounded-md",
   gapClassName: "gap-2",
@@ -84,7 +84,7 @@ export function PipelineSection({
               PIPELINE_DAYS,
             )}
       </p>
-      <LoadingGate phase={loadPhaseOf(pipeline)} shape={LOADING_SHAPE}>
+      <LoadingGate phase={loadPhaseOf(pipeline)} shape={PIPELINE_LOADING_SHAPE}>
         {pipeline.data === undefined ? (
           <FailureState
             error={pipeline.error}

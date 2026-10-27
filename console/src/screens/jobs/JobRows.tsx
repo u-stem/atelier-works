@@ -310,6 +310,9 @@ export const LIST_LOADING_SHAPE: LoadingShape = {
   gapClassName: "gap-2",
 };
 
+export const JOB_LIST_LOADING_SHAPE: LoadingShape = LIST_LOADING_SHAPE;
+export const SCHEDULE_LOADING_SHAPE: LoadingShape = LIST_LOADING_SHAPE;
+
 /**
  * 実行中と待ちのタブの本体。実行中と、workerを待つジョブを並べる。
  * これから始まる予定のジョブは並べない。次回の予定は、スケジュールのタブに同じ情報があるためである。

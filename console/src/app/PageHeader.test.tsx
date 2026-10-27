@@ -180,6 +180,40 @@ describe("PageHeader", () => {
     expect(markup).toMatch(/<p class="[^"]*font-mono[^"]*">0190a1b2<\/p>/);
   });
 
+  test("draws a pending subtitle row when the subtitle is not known yet", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitlePending />,
+    );
+
+    expect(markup).toContain('data-part="subtitle-pending"');
+  });
+
+  test("draws the pending row as tall as a subtitle line of the real header", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitlePending />,
+    );
+
+    expect(markup).toContain("h-[1.3rem]");
+  });
+
+  test("hides the pending row from the reading order", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitlePending />,
+    );
+
+    expect(markup).toMatch(
+      /aria-hidden="true"[^>]*data-part="subtitle-pending"|data-part="subtitle-pending"[^>]*aria-hidden="true"/,
+    );
+  });
+
+  test("draws no pending row once the subtitle is known", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitle="副題" subtitlePending />,
+    );
+
+    expect(markup).not.toContain("subtitle-pending");
+  });
+
   test("shows the subtitle in the text face by default", () => {
     const markup = renderToStaticMarkup(
       <PageHeader title="題" subtitle="副題" />,

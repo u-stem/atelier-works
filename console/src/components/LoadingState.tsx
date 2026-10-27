@@ -131,3 +131,19 @@ export function LoadingGate({
   }
   return <LoadingBody display={display} shape={shape} />;
 }
+
+/** 枠で囲んだ行の並びの骨組み。 */
+export function SkeletonListCard(props: {
+  rows: number;
+  rowClassName: string;
+  className?: string;
+}) {
+  void props;
+  return null;
+}
+
+/** 見出しと本文の塊で作る節の骨組み。 */
+export function SkeletonSection(props: { block: string; className?: string }) {
+  void props;
+  return null;
+}
