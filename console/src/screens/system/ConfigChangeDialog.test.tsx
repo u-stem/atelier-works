@@ -49,7 +49,9 @@ describe("ConfigChangeDialog for a switch", () => {
   });
 
   test("says that a person undoes it in Windmill", () => {
-    expect(render(offer)).toContain("元に戻すには、人がWindmillで編集します");
+    expect(render(offer)).toContain(
+      "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します",
+    );
   });
 });
 

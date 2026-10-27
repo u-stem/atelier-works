@@ -195,14 +195,14 @@ describe("changeDialogLines", () => {
   test("says that a person edits it in Windmill to undo the change", () => {
     const offer = changeOfferOf(value("implement_enabled", true));
     expect(offer === null ? [] : changeDialogLines(offer).join("\n")).toContain(
-      "元に戻すには、人がWindmillで編集します",
+      "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します",
     );
   });
 
   test("says the same for a number", () => {
     const offer = changeOfferOf(value("daily_budget_usd", 50));
     expect(offer === null ? [] : changeDialogLines(offer).join("\n")).toContain(
-      "元に戻すには、人がWindmillで編集します",
+      "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します",
     );
   });
 
