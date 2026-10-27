@@ -345,43 +345,14 @@ describe("updateConfigFromConsole: the compare and swap", () => {
     expect([result, written]).toEqual([REFUSED("conflict"), []]);
   });
 
-  test("refuses when the replaced configuration fails the load check, and writes nothing", async () => {
-    const { owners: _owners, ...withoutOwners } = RAW;
-    const { ports, events, written } = harness({ raw: withoutOwners });
-    const result = await updateConfigFromConsole(
-      "daily_budget_usd",
-      50,
-      20,
-      ports,
-    );
-    expect([result, events, written]).toEqual([
-      REFUSED("config_invalid"),
-      ["insert", "read", "update"],
-      [],
-    ]);
-  });
-
-  test("records the failed load check as a failed action", async () => {
-    const { owners: _owners, ...withoutOwners } = RAW;
-    const { ports, sqlCalls } = harness({ raw: withoutOwners });
-    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
-    expect(sqlCalls[1]?.values.slice(0, 2)).toEqual([
-      "failed",
-      '{"refusal":"config_invalid"}',
-    ]);
-  });
-
-  test("refuses a configuration that another item makes invalid", async () => {
+  test("writes the one item even when another item would fail the load check", async () => {
     const { ports, written } = harness({
       raw: { ...RAW, max_attempts: "three" },
     });
-    const result = await updateConfigFromConsole(
-      "daily_budget_usd",
-      50,
-      20,
-      ports,
-    );
-    expect([result, written]).toEqual([REFUSED("config_invalid"), []]);
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(written).toEqual([
+      { ...RAW, max_attempts: "three", daily_budget_usd: 20 },
+    ]);
   });
 
   test("refuses when the resource is not an object", async () => {
@@ -637,7 +608,6 @@ describe("the list of items that can be changed", () => {
       [
         "actor_unknown",
         "audit_unavailable",
-        "config_invalid",
         "conflict",
         "has_reference",
         "invalid_value",

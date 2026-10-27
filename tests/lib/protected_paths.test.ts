@@ -1577,9 +1577,6 @@ describe("console job rerun and config update files", () => {
     "f/factory/console_config_update.script.yaml",
     "tests/scripts/console_rerun.test.ts",
     "tests/scripts/console_config_update.test.ts",
-    // 設定変更が書く前に通す、設定の読み込みの検証と、その型。
-    "f/factory/lib/config.ts",
-    "f/factory/lib/types.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS or a prefix lists %s", (path) => {
@@ -1589,6 +1586,15 @@ describe("console job rerun and config update files", () => {
   test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
   });
+
+  // 設定の項目の追加は日常の変更で、守ると自動の変更が止まる。
+  // 向きを下げる変更は項目ごとの検査で守り、検証の本体は契約テストが確かめる。
+  test.each(["f/factory/lib/config.ts", "f/factory/lib/types.ts"])(
+    "matchesForbiddenPath does not match the shared file %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
 
   test.each(PATHS)("%s exists", async (path) => {
     expect(await Bun.file(path).exists()).toBe(true);

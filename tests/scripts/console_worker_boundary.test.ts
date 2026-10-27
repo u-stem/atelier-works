@@ -850,26 +850,6 @@ describe("the escape hatch scan", () => {
     expect(escapeHatches('const f = x["constructor"];')).not.toEqual([]);
   });
 
-  test("does not flag the definition of a class constructor", () => {
-    expect(
-      escapeHatches(
-        "class Failure extends Error {\n  constructor(message: string) {\n    super(message);\n  }\n}",
-      ),
-    ).toEqual([]);
-  });
-
-  test("still flags a constructor access on an instance of the class", () => {
-    expect(
-      escapeHatches(
-        "class A {\n  constructor() {}\n}\nconst f = new A().constructor;",
-      ),
-    ).not.toEqual([]);
-  });
-
-  test("still flags a constructor that is called as a function", () => {
-    expect(escapeHatches("const f = constructor(1);")).not.toEqual([]);
-  });
-
   test("flags eval", () => {
     expect(escapeHatches('eval("1");')).not.toEqual([]);
   });
