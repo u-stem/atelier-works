@@ -68,6 +68,8 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run logs` | スタックのログを追う |
 | `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
+| `mise run console:build` | Consoleを`console/dist`に組み立てる |
+| `mise run console:branch` | 組み立てたブランチ版のConsoleを`127.0.0.1:5174`の`/console/`で配信し、読み取りだけをローカルのWindmillへ中継し、書き込みは`-- --allow-writes`を付けたときだけ通す([ブランチ版の確認](docs/setup.md#ブランチ版のconsoleを確かめる)) |
 | `mise run bootstrap` | ワークスペースの作成、secret変数の投入、インスタンスのカスタムtagの設定、sync push、migrationを行う。何度実行してもよい |
 | `mise run instance:tags` | インスタンスのカスタムtagに`console`と`periodic`を足す。`bootstrap`済みのインスタンス向けで、何度実行してもよい |
 | `mise run deploy` | `git pull --ff-only`、ビルド、起動、push(凍結中のスケジュールを除く)、migrationを続けて実行する。deployの保留が有効なあいだは止まる。手で一括して反映したいときに使う |
@@ -136,6 +138,7 @@ atelier-works/
 | [セキュリティ](docs/security.md) | 信頼境界、秘密値の扱い、資格情報の取得手順、各フローの安全策 |
 | [コーディング規約](docs/coding-guidelines.md) | コメント、TypeScript、TDD、テストの分類 |
 | [文書の書き方](docs/writing-guidelines.md) | 文書とFactoryが生成する文章の書き方 |
+| [Consoleの画面の表示の原則](docs/console-display.md) | 表示の要否を問う3点、情報の置き場所、毎日見る目での確認 |
 | [作業項目の仕様](docs/internals/work-items.md) | 作業項目と状態の扱い |
 | [要件定義の仕様](docs/internals/requirements.md) | 要件定義の生成と承認の仕組み |
 | [設計書の生成の仕様](docs/internals/design.md) | 設計書の生成の仕組みと書き込み範囲 |
