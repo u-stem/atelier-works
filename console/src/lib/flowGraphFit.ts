@@ -31,8 +31,9 @@ function emOfText(characters: readonly string[]): number {
   return characters.reduce((sum, character) => sum + emOf(character), 0);
 }
 
-export function textEm(_text: string): number {
-  return -1;
+/** 文字列の幅(em)の見積もり。`wrapLines`と同じ基準で数える。 */
+export function textEm(text: string): number {
+  return emOfText(Array.from(text));
 }
 
 /**

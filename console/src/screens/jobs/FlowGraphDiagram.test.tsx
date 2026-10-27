@@ -184,6 +184,23 @@ describe("FlowGraphDiagram", () => {
     ).toBe(true);
   });
 
+  test("shows a long name in full by drawing it smaller", () => {
+    const long: FlowGraph = {
+      nodes: [
+        {
+          id: "script:steps/manual_intake_register",
+          kind: "script",
+          label: "steps/manual_intake_register",
+          note: "",
+        },
+      ],
+      edges: [],
+    };
+    expect(render(<FlowGraphDiagram graph={long} state={state()} />)).toContain(
+      "steps/manual_intake_register",
+    );
+  });
+
   test("writes the note of a node", () => {
     expect(html).toContain("要件定義の生成と承認");
   });

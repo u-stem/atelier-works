@@ -8,7 +8,7 @@ import type {
   GraphEdgeKind,
   GraphNodeKind,
 } from "../../lib/flowGraph.ts";
-import { wrapLines } from "../../lib/flowGraphFit.ts";
+import { textEm, wrapLines } from "../../lib/flowGraphFit.ts";
 import {
   type LayoutBox,
   type LayoutLink,
@@ -28,6 +28,8 @@ import { JobStateBadge } from "./JobRows.tsx";
 const PAD_X = 10;
 /** 箱の幅に収める文字数(em)。名前は12px、補足は11pxで描く。 */
 const LABEL_EM = 15;
+/** 名前を12pxから11pxに落とすと、同じ幅に入る文字が増える割合。 */
+const LABEL_SHRINK_RATIO = 12 / 11;
 const NOTE_EM = 16;
 /** 行の送り(px)と、箱の下端から語の行までの余白(px)。 */
 const LINE_STEP = 14;
@@ -111,7 +113,14 @@ function NodeBody({
     node.kind === "flow" ? activityWords(activity, lowerBound) : null;
   const running = words?.running != null;
   const noteLines = node.kind === "flow" ? 2 : 1;
-  const label = wrapLines(safeText(node.label), LABEL_EM, 1);
+  const labelText = safeText(node.label);
+  // 12pxで箱に収まらない名前は、11pxに落として全体を見せる。それでも収まらなければ切る。
+  const shrink = textEm(labelText) > LABEL_EM;
+  const label = wrapLines(
+    labelText,
+    shrink ? LABEL_EM * LABEL_SHRINK_RATIO : LABEL_EM,
+    1,
+  );
   const note = wrapLines(safeText(node.note), NOTE_EM, noteLines);
   const wordsY = box.y + box.height - WORDS_BOTTOM;
   const textX = box.x + PAD_X;
@@ -133,7 +142,10 @@ function NodeBody({
       <text
         x={textX}
         y={box.y + LABEL_BASELINE}
-        className="fill-foreground text-caption font-semibold"
+        className={cn(
+          "fill-foreground font-semibold",
+          shrink ? "text-[11px]" : "text-caption",
+        )}
       >
         {label.join("")}
       </text>
