@@ -19,6 +19,7 @@ import {
   auditProposalBreakdown,
   auditReportPath,
 } from "../../lib/auditView.ts";
+import { ROW_LINK_CLASS } from "../../lib/controlClasses.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
@@ -29,10 +30,7 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
   const summary = displayableIssueText(row.summary).text;
   return (
     <li>
-      <Link
-        to={auditReportPath(row.work_item_id)}
-        className="block px-6 py-3.5 outline-none transition-colors duration-150 hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
-      >
+      <Link to={auditReportPath(row.work_item_id)} className={ROW_LINK_CLASS}>
         <span className="flex items-baseline justify-between gap-3">
           <span className="truncate text-body font-medium text-foreground">
             監査 {row.period_label}

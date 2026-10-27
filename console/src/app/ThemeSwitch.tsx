@@ -1,12 +1,11 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useState } from "react";
+import { ToggleChip, ToggleChipGroup } from "../components/ToggleChip.tsx";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
-import { cn } from "../lib/cn.ts";
-import { SELECTED_STYLE } from "../lib/selectedStyle.ts";
 import {
   parseThemePreference,
   resolveTheme,
@@ -104,44 +103,33 @@ function browserEnv(): ThemeEnv {
   };
 }
 
-/** テーマの選択肢のボタンのクラス。選択中は、他の切り替えと同じ表し方にする。 */
-export function themeOptionClass(pressed: boolean): string {
-  return cn(
-    "inline-flex size-7 items-center justify-center rounded-md border border-transparent text-subtle outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted motion-reduce:transition-none",
-    pressed && SELECTED_STYLE,
-  );
-}
-
 /** ライト、ダーク、OSに合わせるの3つを、アイコンの切り替えで選ぶ。 */
 export function ThemeSwitch() {
   const [preference, setPreference] =
     useState<ThemePreference>(readStoredPreference);
   return (
-    <fieldset className="m-0 inline-flex w-fit min-w-0 gap-0.5 rounded-lg border-0 bg-muted p-0.5">
-      <legend className="sr-only">テーマ</legend>
+    <ToggleChipGroup legend="テーマ">
       {THEME_OPTIONS.map((option) => {
         const Icon = ICONS[option.value];
-        const pressed = preference === option.value;
         return (
           <Tooltip key={option.value}>
             <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-pressed={pressed}
+              <ToggleChip
+                pressed={preference === option.value}
                 aria-label={option.label}
-                className={themeOptionClass(pressed)}
+                className="size-7 justify-center text-subtle"
                 onClick={() => {
                   applyThemePreference(option.value, browserEnv());
                   setPreference(option.value);
                 }}
               >
                 <Icon aria-hidden="true" className="size-4" />
-              </button>
+              </ToggleChip>
             </TooltipTrigger>
             <TooltipContent>{option.label}</TooltipContent>
           </Tooltip>
         );
       })}
-    </fieldset>
+    </ToggleChipGroup>
   );
 }

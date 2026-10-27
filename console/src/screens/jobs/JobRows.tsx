@@ -67,14 +67,14 @@ const STATE_STYLE: Readonly<
   unknown: { Icon: CircleQuestionMark, variant: "outline" },
 };
 
-/** 状態の記号と語。実行中の記号は、動きを減らす設定では回さない。 */
+/** 状態の記号と語。実行中の記号は回す。動きを減らす設定の利用者には、index.cssの規則が回転を止める。 */
 function StateBadge({ info }: { info: JobStateInfo }) {
   const { Icon, variant, spin } = STATE_STYLE[info.kind];
   return (
     <Badge variant={variant}>
       <Icon
         aria-hidden="true"
-        className={cn(spin === true && "motion-safe:animate-spin")}
+        className={cn(spin === true && "animate-spin")}
       />
       {info.label}
     </Badge>
