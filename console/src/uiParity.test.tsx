@@ -151,7 +151,7 @@ function sidebarIconButtons(): string[] {
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
         <TooltipProvider>
-          <Sidebar />
+          <Sidebar onOpenHelp={() => undefined} />
         </TooltipProvider>
       </MemoryRouter>
     </QueryClientProvider>,
