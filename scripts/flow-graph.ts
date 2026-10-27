@@ -7,8 +7,15 @@ import type {
   GraphEdge,
   GraphNode,
 } from "../console/src/lib/flowGraph.ts";
-import type { FlowsData } from "../console/src/lib/flowsData.ts";
-import type { LaunchEdge } from "./launch-graph.ts";
+import type {
+  ExitVia,
+  FlowDefinition,
+  FlowEntry,
+  FlowExit,
+  FlowSchedule,
+  FlowsData,
+} from "../console/src/lib/flowsData.ts";
+import type { ApprovalOutcome, LaunchEdge } from "./launch-graph.ts";
 
 export type ScheduleInput = {
   /** `f/factory/<name>.schedule.yaml`の`<name>`。 */
@@ -186,11 +193,6 @@ export type ScheduleDescriptionInput = ScheduleInput & {
   readonly summary: string;
 };
 
-export type ApprovalOutcomeInput = {
-  readonly to: string;
-  readonly outcome: "approve" | "reject";
-};
-
 export type FlowsInput = {
   readonly edges: readonly LaunchEdge[];
   readonly humanOperations: Readonly<Record<string, string>>;
@@ -201,16 +203,252 @@ export type FlowsInput = {
   readonly approvalSteps: Readonly<Record<string, string | null>>;
   /** 承認を処理するscriptごとの、起動するflowと承認か却下か。 */
   readonly approvalOutcomes: Readonly<
-    Record<string, readonly ApprovalOutcomeInput[]>
+    Record<string, readonly ApprovalOutcome[]>
   >;
   /** 表にあるが、本番では起動しない辺。図には描かない。 */
   readonly unwiredEdges: readonly LaunchEdge[];
 };
 
-export function buildFlowsData(_input: FlowsInput): FlowsData {
-  return { flows: [], schedules: [] };
+const ENTRY_ORDER: Readonly<Record<FlowEntry["kind"], number>> = {
+  schedule: 0,
+  human: 1,
+  script: 2,
+  flow: 3,
+};
+
+const VIA_ORDER: Readonly<Record<ExitVia, number>> = {
+  launch: 0,
+  approve: 1,
+  reject: 2,
+};
+
+function entryKey(entry: FlowEntry): string {
+  switch (entry.kind) {
+    case "schedule":
+    case "script":
+      return entry.name;
+    case "human":
+      return entry.label;
+    case "flow":
+      return `${entry.flow} ${String(VIA_ORDER[entry.via])}`;
+  }
 }
 
-export function renderFlowsJson(_data: FlowsData): string {
-  return "";
+/** 承認のステップから、承認の処理が起動するflowへの1本。 */
+type ApprovalLink = {
+  readonly flow: string;
+  readonly step: string;
+  readonly handler: string;
+  readonly to: string;
+  readonly via: ExitVia;
+};
+
+function sameEdge(a: LaunchEdge, b: LaunchEdge): boolean {
+  return a.from === b.from && a.to === b.to && a.kind === b.kind;
+}
+
+/**
+ * flowごとの図のデータを作る。並びは入力の並びに依らない。
+ * - ステップは、flowの定義の順に並べる
+ * - 入口は、そのflowを起動するスケジュール、人の操作、script、他のflowのステップとする。
+ *   ステップから起動されるときは、scriptではなく起動元のflowを入口にする
+ * - 出口は、ステップが起動する他のflowとする。承認のステップには、承認の処理が起動するflowを、承認と却下に分けてつける
+ * - `unwiredEdges`の辺は、入口にも出口にも描かない
+ * 起動の辺が存在しないflowを指していれば、例外を投げる。
+ * 承認の処理の辺が、`approvalOutcomes`にも`unwiredEdges`にも無ければ、例外を投げる。
+ */
+export function buildFlowsData(input: FlowsInput): FlowsData {
+  const flowNames = new Set(input.flows.map((flow) => flow.name));
+  for (const edge of input.edges) {
+    if (!flowNames.has(edge.to)) {
+      throw new Error(`launch edge targets an unknown flow: ${edge.to}`);
+    }
+  }
+  const wired = input.edges.filter(
+    (edge) => !input.unwiredEdges.some((other) => sameEdge(edge, other)),
+  );
+
+  const owners = new Map<string, { flow: string; step: string }[]>();
+  const approvalLinks: ApprovalLink[] = [];
+  for (const flow of input.flows) {
+    for (const step of flow.steps) {
+      const script = relativeToFactory(step.path);
+      owners.set(script, [
+        ...(owners.get(script) ?? []),
+        { flow: flow.name, step: step.id },
+      ]);
+      const handler = input.approvalSteps[script];
+      if (handler === undefined || handler === null) continue;
+      for (const edge of wired) {
+        if (edge.kind !== "script" || edge.from !== handler) continue;
+        const outcome = input.approvalOutcomes[handler]?.find(
+          (candidate) => candidate.to === edge.to,
+        );
+        if (outcome === undefined) {
+          throw new Error(
+            `approval handler edge has no outcome: ${edge.from} -> ${edge.to}`,
+          );
+        }
+        approvalLinks.push({
+          flow: flow.name,
+          step: step.id,
+          handler,
+          to: edge.to,
+          via: outcome.outcome,
+        });
+      }
+    }
+  }
+
+  const entriesOf = (flow: string): FlowEntry[] => {
+    const entries = new Map<string, FlowEntry>();
+    const add = (entry: FlowEntry): void => {
+      entries.set(JSON.stringify(entry), entry);
+    };
+    for (const edge of wired) {
+      if (edge.to !== flow) continue;
+      if (edge.kind === "human") {
+        add({
+          kind: "human",
+          label: input.humanOperations[edge.from] ?? edge.from,
+        });
+        continue;
+      }
+      const links = approvalLinks.filter(
+        (link) => link.handler === edge.from && link.to === flow,
+      );
+      if (links.length > 0) {
+        for (const link of links) {
+          add({ kind: "flow", flow: link.flow, via: link.via });
+        }
+        continue;
+      }
+      const stepOwners = owners.get(edge.from) ?? [];
+      if (stepOwners.length > 0) {
+        for (const owner of stepOwners) {
+          add({ kind: "flow", flow: owner.flow, via: "launch" });
+        }
+        continue;
+      }
+      const schedules = input.schedules.filter(
+        (schedule) =>
+          schedule.enabled &&
+          !schedule.isFlow &&
+          relativeToFactory(schedule.target) === edge.from,
+      );
+      for (const schedule of schedules) {
+        add({ kind: "schedule", name: schedule.name });
+      }
+      const operation = input.humanEntryScripts[edge.from];
+      if (operation !== undefined) add({ kind: "human", label: operation });
+      if (schedules.length === 0 && operation === undefined) {
+        add({ kind: "script", name: edge.from });
+      }
+    }
+    for (const schedule of input.schedules) {
+      if (
+        schedule.enabled &&
+        schedule.isFlow &&
+        relativeToFactory(schedule.target) === flow
+      ) {
+        add({ kind: "schedule", name: schedule.name });
+      }
+    }
+    return [...entries.values()].sort(
+      (a, b) =>
+        ENTRY_ORDER[a.kind] - ENTRY_ORDER[b.kind] ||
+        compareText(entryKey(a), entryKey(b)),
+    );
+  };
+
+  const exitsOf = (flow: FlowDefinitionInput): FlowExit[] => {
+    const exits: FlowExit[] = [];
+    for (const step of flow.steps) {
+      const script = relativeToFactory(step.path);
+      if (script in input.approvalSteps) {
+        for (const link of approvalLinks) {
+          if (link.flow === flow.name && link.step === step.id) {
+            exits.push({ flow: link.to, step: step.id, via: link.via });
+          }
+        }
+        continue;
+      }
+      for (const edge of wired) {
+        if (edge.kind === "script" && edge.from === script) {
+          exits.push({ flow: edge.to, step: step.id, via: "launch" });
+        }
+      }
+    }
+    const order = new Map(flow.steps.map((step, index) => [step.id, index]));
+    return exits.sort(
+      (a, b) =>
+        (order.get(a.step) ?? 0) - (order.get(b.step) ?? 0) ||
+        VIA_ORDER[a.via] - VIA_ORDER[b.via] ||
+        compareText(a.flow, b.flow),
+    );
+  };
+
+  const flows: FlowDefinition[] = input.flows
+    .map((flow) => ({
+      name: flow.name,
+      summary: withoutIdPrefix(flow.summary),
+      description: flow.description.trim(),
+      steps: flow.steps.map((step) => ({
+        id: step.id,
+        summary: withoutIdPrefix(step.summary),
+        scriptPath: step.path,
+        conditional: step.conditional,
+      })),
+      entries: entriesOf(flow.name),
+      exits: exitsOf(flow),
+    }))
+    .sort((a, b) => compareText(a.name, b.name));
+
+  const schedules: FlowSchedule[] = input.schedules
+    .map((schedule) => {
+      const target = relativeToFactory(schedule.target);
+      const launched = !schedule.enabled
+        ? []
+        : schedule.isFlow
+          ? flowNames.has(target)
+            ? [target]
+            : []
+          : wired
+              .filter((edge) => edge.kind === "script" && edge.from === target)
+              .map((edge) => edge.to);
+      return {
+        name: schedule.name,
+        summary: withoutIdPrefix(schedule.summary),
+        flows: [...new Set(launched)].sort(compareText),
+      };
+    })
+    .sort((a, b) => compareText(a.name, b.name));
+
+  return { flows, schedules };
+}
+
+/** formatterが1行に収める幅。 */
+const LINE_WIDTH = 80;
+
+/** 文字列だけを並べた複数行の配列。キーを持つときはキーも含めて取る。 */
+const STRING_ARRAY =
+  /^( *)((?:"[^"\n]*": )?)\[\n((?: +"[^"\n]*",?\n)+)\1\](,?)$/gm;
+
+/**
+ * データをJSONの文字列にする。末尾に改行を付ける。
+ * 文字列だけの短い配列は1行にする。生成したファイルを、リポジトリのformatterが書き換えないためである。
+ */
+export function renderFlowsJson(data: FlowsData): string {
+  const folded = JSON.stringify(data, null, 2).replace(
+    STRING_ARRAY,
+    (match, indent: string, key: string, body: string, comma: string) => {
+      const items = body
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .map((line) => line.trim().replace(/,$/, ""));
+      const line = `${indent}${key}[${items.join(", ")}]${comma}`;
+      return line.length <= LINE_WIDTH ? line : match;
+    },
+  );
+  return `${folded}\n`;
 }

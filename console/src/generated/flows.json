@@ -1,4 +1,463 @@
 {
-  "flows": [],
-  "schedules": []
+  "flows": [
+    {
+      "name": "audit",
+      "summary": "運用記録の監査と改善提案",
+      "description": "Factory自身の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)を監査し、監査レポートとFactory自身への改善提案を生成します。提案はConsoleの要対応で人が承認 / 却下し、承認した提案だけがIssueとして起票されます。",
+      "steps": [
+        {
+          "id": "audit_prepare",
+          "summary": "証跡の収集と作業領域の準備",
+          "scriptPath": "f/factory/steps/audit_prepare",
+          "conditional": false
+        },
+        {
+          "id": "audit_generate",
+          "summary": "監査レポートと提案の生成(Claude)",
+          "scriptPath": "f/factory/steps/audit_generate",
+          "conditional": true
+        }
+      ],
+      "entries": [
+        {
+          "kind": "schedule",
+          "name": "audit_kickoff"
+        },
+        {
+          "kind": "human",
+          "label": "Consoleの今すぐ監査"
+        }
+      ],
+      "exits": []
+    },
+    {
+      "name": "dependabot",
+      "summary": "依存の更新PRの検査と自動マージ",
+      "description": "dependabotのセキュリティ更新PRを検査し、自動でマージするかを決めます。更新の情報を集め直して自動でマージできる条件を確かめ、隔離した環境で依存をインストールしてから、Claudeに影響を調べさせます。懸念や確認できなかった項目があれば人に回し、影響があれば所見を投稿して修正に回します。懸念も確認できなかった項目も無く、影響も無ければ、調べたheadのままマージします。",
+      "steps": [
+        {
+          "id": "dependabot_prepare",
+          "summary": "依存の更新の検査とインストール",
+          "scriptPath": "f/factory/steps/dependabot_prepare",
+          "conditional": false
+        },
+        {
+          "id": "dependabot_assess",
+          "summary": "依存の更新の影響調査(Claude)",
+          "scriptPath": "f/factory/steps/dependabot_assess",
+          "conditional": true
+        },
+        {
+          "id": "dependabot_finish",
+          "summary": "依存の更新のマージと終了",
+          "scriptPath": "f/factory/steps/dependabot_finish",
+          "conditional": false
+        }
+      ],
+      "entries": [
+        {
+          "kind": "schedule",
+          "name": "poll_dependabot"
+        }
+      ],
+      "exits": []
+    },
+    {
+      "name": "design",
+      "summary": "設計書の生成と承認",
+      "description": "承認済みの要件定義から設計書を生成し、承認を依頼します。要件定義が設計に足りないと分かったときは、要件定義の生成へ戻します。",
+      "steps": [
+        {
+          "id": "prepare",
+          "summary": "設計用の作業領域の準備",
+          "scriptPath": "f/factory/steps/design_prepare",
+          "conditional": false
+        },
+        {
+          "id": "generate",
+          "summary": "設計書の生成(Claude)",
+          "scriptPath": "f/factory/steps/design_generate",
+          "conditional": true
+        },
+        {
+          "id": "request_approval",
+          "summary": "設計の承認依頼",
+          "scriptPath": "f/factory/steps/design_request_approval",
+          "conditional": true
+        }
+      ],
+      "entries": [
+        {
+          "kind": "human",
+          "label": "Consoleの再実行"
+        }
+      ],
+      "exits": [
+        {
+          "flow": "pipeline",
+          "step": "generate",
+          "via": "launch"
+        }
+      ]
+    },
+    {
+      "name": "implement",
+      "summary": "実装とPR作成",
+      "description": "承認済みの要件定義をもとに自動で実装し、PRを作成します。実装用のブランチとworktreeを用意してClaudeに実装させ、秘密情報の検査とリポジトリの検査コマンドに通るまで修正を繰り返します。検査に通れば変更をコミットしてpushし、PRを作成して自動レビューに回します。要件を満たせない場合は要件定義からやり直し、上限に達した場合や危険な変更を検知した場合は対応が必要な状態(needs_human)にします。",
+      "steps": [
+        {
+          "id": "implement_prepare",
+          "summary": "作業領域の準備",
+          "scriptPath": "f/factory/steps/implement_prepare",
+          "conditional": false
+        },
+        {
+          "id": "implement_generate",
+          "summary": "実装(Claude)",
+          "scriptPath": "f/factory/steps/implement_generate",
+          "conditional": true
+        },
+        {
+          "id": "implement_verify",
+          "summary": "検証と修正のループ",
+          "scriptPath": "f/factory/steps/implement_verify",
+          "conditional": true
+        },
+        {
+          "id": "implement_finish",
+          "summary": "コミット・push・PR作成",
+          "scriptPath": "f/factory/steps/implement_finish",
+          "conditional": false
+        }
+      ],
+      "entries": [
+        {
+          "kind": "human",
+          "label": "Consoleの再実行"
+        },
+        {
+          "kind": "script",
+          "name": "auto_retry_stale_image"
+        },
+        {
+          "kind": "flow",
+          "flow": "pipeline",
+          "via": "approve"
+        }
+      ],
+      "exits": [
+        {
+          "flow": "pipeline",
+          "step": "implement_finish",
+          "via": "launch"
+        }
+      ]
+    },
+    {
+      "name": "manual_intake",
+      "summary": "手動投入フォーム(Issueを作成して工程に乗せる)",
+      "description": "手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成し、担当を確定したうえで要件定義の生成を開始します。",
+      "steps": [
+        {
+          "id": "create_issue",
+          "summary": "Issue を作成",
+          "scriptPath": "f/factory/steps/manual_intake_create_issue",
+          "conditional": false
+        },
+        {
+          "id": "register",
+          "summary": "作業項目を登録して工程 2 を起動",
+          "scriptPath": "f/factory/steps/manual_intake_register",
+          "conditional": false
+        }
+      ],
+      "entries": [
+        {
+          "kind": "human",
+          "label": "Consoleの新規投入"
+        },
+        {
+          "kind": "human",
+          "label": "人がフォームから実行"
+        }
+      ],
+      "exits": [
+        {
+          "flow": "pipeline",
+          "step": "register",
+          "via": "launch"
+        }
+      ]
+    },
+    {
+      "name": "pipeline",
+      "summary": "要件定義の生成と承認",
+      "description": "要件定義を生成し、承認を受けたうえで次の工程に進めます。却下された場合はフィードバックをもとに要件定義を作り直します。",
+      "steps": [
+        {
+          "id": "prepare",
+          "summary": "作業領域の準備",
+          "scriptPath": "f/factory/steps/pipeline_prepare",
+          "conditional": false
+        },
+        {
+          "id": "generate",
+          "summary": "要件定義の生成(Claude)",
+          "scriptPath": "f/factory/steps/pipeline_generate",
+          "conditional": true
+        },
+        {
+          "id": "request_approval",
+          "summary": "承認依頼",
+          "scriptPath": "f/factory/steps/pipeline_request_approval",
+          "conditional": true
+        }
+      ],
+      "entries": [
+        {
+          "kind": "schedule",
+          "name": "poll_issues"
+        },
+        {
+          "kind": "human",
+          "label": "Consoleの再実行"
+        },
+        {
+          "kind": "flow",
+          "flow": "design",
+          "via": "launch"
+        },
+        {
+          "kind": "flow",
+          "flow": "implement",
+          "via": "launch"
+        },
+        {
+          "kind": "flow",
+          "flow": "manual_intake",
+          "via": "launch"
+        },
+        {
+          "kind": "flow",
+          "flow": "pipeline",
+          "via": "reject"
+        },
+        {
+          "kind": "flow",
+          "flow": "pr_fix",
+          "via": "launch"
+        }
+      ],
+      "exits": [
+        {
+          "flow": "implement",
+          "step": "request_approval",
+          "via": "approve"
+        },
+        {
+          "flow": "pipeline",
+          "step": "request_approval",
+          "via": "reject"
+        }
+      ]
+    },
+    {
+      "name": "pr_fix",
+      "summary": "レビュー指摘の修正と再レビュー依頼",
+      "description": "PRへの指摘を自動で修正します。安全確認を行ったうえで新しい指摘を集め、Claudeに修正を適用させます。適用結果を検証し、問題なければ変更をpushして再レビューを依頼します。試行回数の上限を超えた場合や危険な変更を検知した場合は、対応が必要な状態(needs_human)にするか、要件定義からやり直します。",
+      "steps": [
+        {
+          "id": "pr_fix_prepare",
+          "summary": "worktree の準備と安全確認",
+          "scriptPath": "f/factory/steps/pr_fix_prepare",
+          "conditional": false
+        },
+        {
+          "id": "pr_fix_collect",
+          "summary": "指摘の収集",
+          "scriptPath": "f/factory/steps/pr_fix_collect",
+          "conditional": true
+        },
+        {
+          "id": "pr_fix_apply",
+          "summary": "修正の適用(Claude)",
+          "scriptPath": "f/factory/steps/pr_fix_apply",
+          "conditional": true
+        },
+        {
+          "id": "pr_fix_verify",
+          "summary": "変更の検証",
+          "scriptPath": "f/factory/steps/pr_fix_verify",
+          "conditional": true
+        },
+        {
+          "id": "pr_fix_finish",
+          "summary": "push と再レビュー依頼",
+          "scriptPath": "f/factory/steps/pr_fix_finish",
+          "conditional": false
+        }
+      ],
+      "entries": [
+        {
+          "kind": "schedule",
+          "name": "poll_prs"
+        },
+        {
+          "kind": "schedule",
+          "name": "watch_pr_ci"
+        },
+        {
+          "kind": "schedule",
+          "name": "watch_pr_conflicts"
+        },
+        {
+          "kind": "human",
+          "label": "Consoleの再実行"
+        },
+        {
+          "kind": "script",
+          "name": "auto_retry_stale_image"
+        }
+      ],
+      "exits": [
+        {
+          "flow": "pipeline",
+          "step": "pr_fix_finish",
+          "via": "launch"
+        }
+      ]
+    },
+    {
+      "name": "pr_review",
+      "summary": "PRの自動レビュー",
+      "description": "依頼されたPRをレビューします。PRの内容をもとにClaudeがレビューを生成し、GitHubのPRへコメントとして投稿します。結果は記録され、Discordに通知されます。",
+      "steps": [
+        {
+          "id": "pr_review_prepare",
+          "summary": "PR の取得と検証",
+          "scriptPath": "f/factory/steps/pr_review_prepare",
+          "conditional": false
+        },
+        {
+          "id": "pr_review_generate",
+          "summary": "レビューの生成(Claude)",
+          "scriptPath": "f/factory/steps/pr_review_generate",
+          "conditional": true
+        },
+        {
+          "id": "pr_review_post",
+          "summary": "レビューの投稿",
+          "scriptPath": "f/factory/steps/pr_review_post",
+          "conditional": true
+        }
+      ],
+      "entries": [
+        {
+          "kind": "schedule",
+          "name": "auto_retry_pr_review"
+        },
+        {
+          "kind": "schedule",
+          "name": "poll_prs"
+        },
+        {
+          "kind": "human",
+          "label": "Consoleの再実行"
+        }
+      ],
+      "exits": []
+    }
+  ],
+  "schedules": [
+    {
+      "name": "audit_kickoff",
+      "summary": "週次監査の起動",
+      "flows": ["audit"]
+    },
+    {
+      "name": "auto_retry_pr_review",
+      "summary": "GitHubの一時的な失敗で止まったPRレビューを再開",
+      "flows": ["pr_review"]
+    },
+    {
+      "name": "cleanup_db",
+      "summary": "DBを掃除",
+      "flows": []
+    },
+    {
+      "name": "cleanup_workspaces",
+      "summary": "作業領域を掃除",
+      "flows": []
+    },
+    {
+      "name": "collect_github",
+      "summary": "GitHubのリポジトリの状態を集める",
+      "flows": []
+    },
+    {
+      "name": "console_fetch_watch",
+      "summary": "Consoleの取り込みを見張る",
+      "flows": []
+    },
+    {
+      "name": "default_worker_watch",
+      "summary": "defaultのworkerの停止を検知",
+      "flows": []
+    },
+    {
+      "name": "detect_schedule_failures",
+      "summary": "scheduleの失敗を検出して記録",
+      "flows": []
+    },
+    {
+      "name": "drawio_viewer_bump",
+      "summary": "draw.ioのビューアの固定を最新化",
+      "flows": []
+    },
+    {
+      "name": "notify_daily_summary",
+      "summary": "日次サマリ通知",
+      "flows": []
+    },
+    {
+      "name": "poll_dependabot",
+      "summary": "dependabotのPRを巡回して自動マージを起動",
+      "flows": ["dependabot"]
+    },
+    {
+      "name": "poll_issues",
+      "summary": "Issueを巡回して担当を確定",
+      "flows": ["pipeline"]
+    },
+    {
+      "name": "poll_prs",
+      "summary": "PRを巡回してレビュー / 修正を起動",
+      "flows": ["pr_fix", "pr_review"]
+    },
+    {
+      "name": "sample_worker_load",
+      "summary": "workerの負荷を記録",
+      "flows": []
+    },
+    {
+      "name": "self_update",
+      "summary": "Software Factory自身を最新化",
+      "flows": []
+    },
+    {
+      "name": "watch_main_ci",
+      "summary": "mainのCIを監視して失敗を通知",
+      "flows": []
+    },
+    {
+      "name": "watch_pr_ci",
+      "summary": "PRのCIを監視して失敗を通知",
+      "flows": ["pr_fix"]
+    },
+    {
+      "name": "watch_pr_conflicts",
+      "summary": "PRの競合を検知して通知",
+      "flows": ["pr_fix"]
+    }
+  ]
 }

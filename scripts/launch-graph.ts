@@ -2,6 +2,8 @@
 // Windmillの資産ではないので、f/には置かない。
 // 表が実物と合っているかは、tests/scripts/launch-graph.test.tsが確かめる。
 
+import type { ApprovalRequestKind } from "../f/factory/lib/types.ts";
+
 /** 辺の種類。scriptがコードで起動するか、人がコードを介さずに起動するか。 */
 export type LaunchKind = "script" | "human";
 
@@ -72,16 +74,41 @@ export function describeOrigin(edge: LaunchEdge): string {
   return entry === undefined ? `\`${name}\`` : `\`${name}\`(${entry})`;
 }
 
-/** 承認依頼を作るステップのscriptと、依頼の種類。 */
-export const APPROVAL_STEPS: Readonly<Record<string, string>> = {};
+/**
+ * 承認依頼を作るステップのscript(`f/factory`からの相対パス)と、作る依頼の種類。
+ * 種類は、ステップが`insertApprovalRequest`に渡す`kind`と一致する。
+ * 契約テストが、ステップのソースと突き合わせる。
+ */
+export const APPROVAL_STEPS: Readonly<Record<string, ApprovalRequestKind>> = {
+  "steps/pipeline_request_approval": "requirements",
+  "steps/design_request_approval": "design",
+};
 
-/** 承認を処理するscriptが起動するflowと、承認か却下か。 */
+/** 承認を処理するscriptが、承認か却下かで起動するflow。 */
+export type ApprovalOutcome = {
+  readonly to: string;
+  readonly outcome: "approve" | "reject";
+};
+
+/**
+ * 承認を処理するscript(`handlerPathFor`が返すもの)ごとの、起動するflowと承認か却下か。
+ * 承認の処理が起動する辺は、`LAUNCH_EDGES`のうち、ここに載るか`UNWIRED_LAUNCH_EDGES`に載るものである。
+ * どちらにも無い辺があると、図の生成が失敗する。
+ */
 export const APPROVAL_OUTCOMES: Readonly<
-  Record<
-    string,
-    readonly { readonly to: string; readonly outcome: "approve" | "reject" }[]
-  >
-> = {};
+  Record<string, readonly ApprovalOutcome[]>
+> = {
+  "steps/requirements_apply": [
+    { to: "implement", outcome: "approve" },
+    { to: "pipeline", outcome: "reject" },
+  ],
+};
 
-/** 表にあるが、本番では起動しない辺。 */
-export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [];
+/**
+ * `LAUNCH_EDGES`にあるが、本番では起動しない辺。図には描かない。
+ * 設計の承認の反映は、`requirements_apply`が設計flowを起動する配線を開けるまで動かない。
+ * 開けたときは、`flows_data_contract.test.ts`が落ちるので、ここから外して`APPROVAL_OUTCOMES`に移す。
+ */
+export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [
+  { from: "steps/requirements_apply", to: "design", kind: "script" },
+];

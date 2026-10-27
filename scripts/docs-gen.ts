@@ -8,8 +8,9 @@
 // - flows: `f/factory`のflowの一覧と起動元(`docs/architecture.md`)。
 //   起動元は`scripts/launch-graph.ts`の表から作る
 // - assets: `f/factory`のscriptとflowのpathとsummaryの一覧(`docs/architecture.md`)
-// 起動関係の図のデータ(`console/src/generated/flow-graph.json`)も同じ元から作る。
-// Consoleのシステム画面が図にして出す。
+// 起動関係の図のデータ(`console/src/generated/flow-graph.json`)と、
+// flowごとの図のデータ(`console/src/generated/flows.json`)も同じ元から作る。
+// Consoleのシステム画面とジョブ画面が図にして出す。
 // READMEのmiseタスクの表は日本語の説明を手で書くので生成せず、
 // `mise.toml`のタスクと過不足が無いかだけを`--check`で確かめる。
 //
@@ -19,18 +20,28 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { handlerPathFor } from "../f/factory/lib/approval_support.ts";
 import {
   buildFlowGraph,
+  buildFlowsData,
+  type FlowDefinitionInput,
   type FlowInput,
+  type FlowsInput,
   renderFlowGraphJson,
+  renderFlowsJson,
+  type ScheduleDescriptionInput,
   type ScheduleInput,
+  withoutIdPrefix,
 } from "./flow-graph.ts";
 import {
+  APPROVAL_OUTCOMES,
+  APPROVAL_STEPS,
   describeOrigin,
   HUMAN_ENTRY_SCRIPTS,
   HUMAN_OPERATIONS,
   LAUNCH_EDGES,
   type LaunchEdge,
+  UNWIRED_LAUNCH_EDGES,
 } from "./launch-graph.ts";
 
 /** 生成範囲を持つ文書。 */
@@ -107,7 +118,7 @@ export function renderFlows(
         .filter((edge) => edge.to === flow.name)
         .map(originLabel)
         .sort((a, b) => a.localeCompare(b, "en"));
-      const content = flow.summary.replace(/^\[[^\]]+\]\s*/, "");
+      const content = withoutIdPrefix(flow.summary);
       return `| \`${flow.name}\` | ${origins.length === 0 ? "なし" : origins.join("、")} | ${cell(content)} |`;
     });
   return ["| フロー | 起動元 | 内容 |", "| --- | --- | --- |", ...rows].join(
@@ -191,15 +202,15 @@ export function flowGraphProblem(
 
 /** flowごとの図のデータが古ければ、問題を説明する文を返す(無ければnull)。 */
 export function flowsProblem(
-  _current: string | null,
-  _next: string,
+  current: string | null,
+  next: string,
 ): string | null {
-  return null;
-}
-
-/** flowごとの図のデータの、あるべき中身を返す。 */
-export function renderFlowsFile(): string {
-  return "";
+  if (current === null) {
+    return `${FLOWS_FILE}: file is missing (run \`mise run docs:gen\`)`;
+  }
+  return current === next
+    ? null
+    : `${FLOWS_FILE}: file is stale (run \`mise run docs:gen\`)`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -303,6 +314,85 @@ export function renderFlowGraphFile(): string {
   );
 }
 
+const FACTORY_PREFIX = "f/factory/";
+
+function flowDefinitionInputs(): FlowDefinitionInput[] {
+  return listFiles("f/factory/*__flow/flow.yaml").map((path) => {
+    const yaml = readYaml(path);
+    const value = isRecord(yaml.value) ? yaml.value : {};
+    const modules: unknown[] = Array.isArray(value.modules)
+      ? value.modules
+      : [];
+    return {
+      name: path
+        .replace(/^f\/factory\//, "")
+        .replace(/__flow\/flow\.yaml$/, ""),
+      summary: stringField(yaml, "summary"),
+      description: stringField(yaml, "description"),
+      steps: modules.flatMap((module) => {
+        if (!isRecord(module) || !isRecord(module.value)) return [];
+        return [
+          {
+            id: stringField(module, "id"),
+            summary: stringField(module, "summary"),
+            path: stringField(module.value, "path"),
+            conditional: isRecord(module.skip_if),
+          },
+        ];
+      }),
+    };
+  });
+}
+
+function scheduleDescriptionInputs(): ScheduleDescriptionInput[] {
+  return listFiles("f/factory/*.schedule.yaml").map((path) => {
+    const yaml = readYaml(path);
+    return {
+      name: path.replace(/^f\/factory\//, "").replace(/\.schedule\.yaml$/, ""),
+      summary: stringField(yaml, "summary"),
+      cron: stringField(yaml, "schedule"),
+      target: stringField(yaml, "script_path"),
+      isFlow: yaml.is_flow === true,
+      enabled: yaml.enabled !== false,
+    };
+  });
+}
+
+/** 承認のステップのscriptから、承認を処理するscriptへの対応。処理するscriptが無い種類はnullにする。 */
+function approvalHandlers(): FlowsInput["approvalSteps"] {
+  return Object.fromEntries(
+    Object.entries(APPROVAL_STEPS).map(([script, kind]) => {
+      try {
+        const handler = handlerPathFor(kind);
+        return [
+          script,
+          handler.startsWith(FACTORY_PREFIX)
+            ? handler.slice(FACTORY_PREFIX.length)
+            : handler,
+        ];
+      } catch {
+        return [script, null];
+      }
+    }),
+  );
+}
+
+/** flowごとの図のデータの、あるべき中身を返す。 */
+export function renderFlowsFile(): string {
+  return renderFlowsJson(
+    buildFlowsData({
+      edges: LAUNCH_EDGES,
+      humanOperations: HUMAN_OPERATIONS,
+      humanEntryScripts: HUMAN_ENTRY_SCRIPTS,
+      schedules: scheduleDescriptionInputs(),
+      flows: flowDefinitionInputs(),
+      approvalSteps: approvalHandlers(),
+      approvalOutcomes: APPROVAL_OUTCOMES,
+      unwiredEdges: UNWIRED_LAUNCH_EDGES,
+    }),
+  );
+}
+
 function loadMiseTaskNames(): string[] {
   const parsed: unknown = Bun.TOML.parse(readFileSync("mise.toml", "utf8"));
   if (!isRecord(parsed) || !isRecord(parsed.tasks)) return [];
@@ -320,8 +410,8 @@ function renderBlock(name: string): string | null {
 }
 
 /**
- * 生成範囲、起動関係の図のデータ、タスクの表を確かめ、問題を説明する文を返す(無ければ空)。
- * `write`が真なら、生成範囲が古い文書と図のデータを書き換える(問題に数えない)。
+ * 生成範囲、起動関係の図のデータ、flowごとの図のデータ、タスクの表を確かめ、問題を説明する文を返す(無ければ空)。
+ * `write`が真なら、生成範囲が古い文書と図のデータ(2種類)を書き換える(問題に数えない)。
  */
 export function runDocsGen(write: boolean): string[] {
   const problems: string[] = [];
@@ -348,6 +438,19 @@ export function runDocsGen(write: boolean): string[] {
     }
   } else {
     const problem = flowGraphProblem(graphCurrent, graphNext);
+    if (problem !== null) problems.push(problem);
+  }
+  const flowsNext = renderFlowsFile();
+  const flowsCurrent = existsSync(FLOWS_FILE)
+    ? readFileSync(FLOWS_FILE, "utf8")
+    : null;
+  if (write) {
+    if (flowsCurrent !== flowsNext) {
+      mkdirSync(dirname(FLOWS_FILE), { recursive: true });
+      writeFileSync(FLOWS_FILE, flowsNext);
+    }
+  } else {
+    const problem = flowsProblem(flowsCurrent, flowsNext);
     if (problem !== null) problems.push(problem);
   }
   problems.push(
