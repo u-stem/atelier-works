@@ -33,19 +33,26 @@ function reducedMotionRule(): string {
 }
 
 describe("reduced motion", () => {
-  test("no component sets motion-reduce", () => {
+  test("no component sets motion-reduce or motion-safe", () => {
     const offenders = sources()
-      .filter((file) => file.text.includes("motion-reduce:"))
+      .filter((file) => /motion-(reduce|safe):/.test(file.text))
       .map((file) => file.path);
     expect(offenders).toEqual([]);
   });
 
-  test("index.css stops transitions in one rule", () => {
-    expect(reducedMotionRule()).toContain("transition-duration: 0.01ms");
+  test("index.css applies the rule to every element and pseudo-element", () => {
+    expect(reducedMotionRule()).toContain("*,\n  *::before,\n  *::after");
   });
 
-  test("index.css stops animations in the same rule", () => {
-    expect(reducedMotionRule()).toContain("animation-duration: 0.01ms");
+  test.each([
+    "transition-duration: 0.01ms !important",
+    "transition-delay: 0s !important",
+    "animation-duration: 0.01ms !important",
+    "animation-delay: 0s !important",
+    "animation-iteration-count: 1 !important",
+    "scroll-behavior: auto !important",
+  ])("index.css declares %s in the one rule", (declaration) => {
+    expect(reducedMotionRule()).toContain(declaration);
   });
 });
 

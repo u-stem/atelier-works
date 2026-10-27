@@ -22,3 +22,5 @@ export const ICON_BUTTON_CLASS = cn(
   "inline-flex items-center justify-center rounded-lg outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
   TRANSITION_COLORS,
 );
+
+export const SIDEBAR_ICON_BUTTON_CLASS = "";

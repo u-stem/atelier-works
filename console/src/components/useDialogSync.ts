@@ -45,3 +45,5 @@ export function useDialogSync(
   }, [open, onOpened]);
   return { ref, openRef };
 }
+
+export function focusElement(_target: { focus(): void } | null): void {}

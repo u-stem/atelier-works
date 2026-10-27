@@ -79,4 +79,26 @@ describe("ToggleChipGroup", () => {
   test("holds the chips", () => {
     expect(group).toContain("<span>中身</span>");
   });
+
+  test("keeps the default group classes without className", () => {
+    expect(group).toContain("rounded-lg");
+  });
+
+  test("adds the class of the caller to the group", () => {
+    const html = renderToStaticMarkup(
+      <ToggleChipGroup legend="テーマ" className="w-full">
+        {null}
+      </ToggleChipGroup>,
+    );
+    expect(html).toMatch(/^<fieldset [^>]*class="[^"]*\bw-full\b/);
+  });
+
+  test("lets the caller replace the width of the group", () => {
+    const html = renderToStaticMarkup(
+      <ToggleChipGroup legend="テーマ" className="w-full">
+        {null}
+      </ToggleChipGroup>,
+    );
+    expect(html).not.toMatch(/^<fieldset [^>]*class="[^"]*\bw-fit\b/);
+  });
 });

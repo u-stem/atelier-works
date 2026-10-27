@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type DialogLike, syncDialog } from "./useDialogSync.ts";
+import { type DialogLike, focusElement, syncDialog } from "./useDialogSync.ts";
 
 function fakeDialog(initiallyOpen: boolean): {
   dialog: DialogLike;
@@ -70,5 +70,34 @@ describe("syncDialog", () => {
       calls.push("onOpened");
     });
     expect(calls).toEqual(["close"]);
+  });
+});
+
+describe("focusElement", () => {
+  test("focuses the element", () => {
+    const calls: string[] = [];
+    focusElement({
+      focus() {
+        calls.push("focus");
+      },
+    });
+    expect(calls).toEqual(["focus"]);
+  });
+
+  test("does nothing before the element is mounted", () => {
+    expect(() => focusElement(null)).not.toThrow();
+  });
+
+  test("focuses the cancel button right after the dialog is shown", () => {
+    const { dialog, calls } = fakeDialog(false);
+    const cancel = {
+      focus() {
+        calls.push("focusCancel");
+      },
+    };
+    syncDialog(dialog, true, () => {
+      focusElement(cancel);
+    });
+    expect(calls).toEqual(["showModal", "focusCancel"]);
   });
 });

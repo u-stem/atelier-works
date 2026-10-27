@@ -19,8 +19,19 @@ describe("docs: the visual rules", () => {
     ["states the motion tokens", "動きのトークン"],
     ["states the typeface", "書体"],
     ["states the brand color", "ブランドの色"],
-    ["states why enter and exit motion is left out", "出入りと画面遷移"],
+    ["states how enter and exit motion is limited", "出入りと画面遷移"],
   ])("%s", (_name, heading) => {
     expect(HEADINGS).toContain(`### ${heading}`);
+  });
+
+  test.each([
+    [
+      "script-driven motion follows the setting",
+      "prefers-reduced-motion: reduce",
+    ],
+    ["the dialog padding is stated", "p-6"],
+    ["the sidebar icon button constant is named", "SIDEBAR_ICON_BUTTON_CLASS"],
+  ])("%s", (_name, text) => {
+    expect(DOC).toContain(text);
   });
 });

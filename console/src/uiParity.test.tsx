@@ -1,7 +1,8 @@
-// 部品の共有化(トグルのチップ、行のリンク、アイコンボタン、ダイアログ)の前後で、
-// 見た目を決めるclassが変わらないことを確かめる。
+// 共有の部品とclassの定数(トグルのチップ、行のリンク、アイコンボタン、ダイアログ)が、
+// 画面に描く見た目のclassを固定する。
 // classは`cn`で整えて並びを正規化して比べる。同じ集合なら同じ見た目である。
-// ダイアログの影は意図した変更なので、別のテストで確かめる。
+// 比べるのはclassだけで、DOMの構造は比較の外である。
+// ダイアログの影は共有の値を別のテストで確かめるので、ここでは枠のclassから外す。
 
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -17,6 +18,7 @@ import { NavDrawer } from "./app/NavDrawer.tsx";
 import { Sidebar } from "./app/Sidebar.tsx";
 import { ThemeSwitch } from "./app/ThemeSwitch.tsx";
 import { ConfirmDialog } from "./components/ConfirmDialog.tsx";
+import { Disclosure } from "./components/Disclosure.tsx";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { cn } from "./lib/cn.ts";
 import type { InboxItem, UnlistedCount } from "./lib/inboxView.ts";
@@ -122,16 +124,16 @@ function themeSwitch(): string[] {
   return classLists(inRouter(<ThemeSwitch />), ["fieldset", "button"]);
 }
 
-describe("ToggleChip: renders the same markup as the three screens did before", () => {
-  test("the kind chips keep the group and chip classes", () => {
+describe("ToggleChip: the three screens render the shared toggle classes", () => {
+  test("the kind chips render the group and chip classes", () => {
     expect(kindChips()).toEqual([GROUP, KIND_OFF, KIND_ON]);
   });
 
-  test("the scope switch keeps the group and chip classes", () => {
+  test("the scope switch renders the group and chip classes", () => {
     expect(scopeSwitch()).toEqual([GROUP, SCOPE_ON, SCOPE_OFF, SCOPE_OFF]);
   });
 
-  test("the theme switch keeps the group and option classes", () => {
+  test("the theme switch renders the group and option classes", () => {
     expect(themeSwitch()).toEqual([GROUP, THEME_OFF, THEME_OFF, THEME_ON]);
   });
 });
@@ -314,12 +316,27 @@ function drawerFrame(): string {
   );
 }
 
-describe("dialogs: keep the frame apart from the shadow", () => {
-  test("the confirm dialog keeps its frame", () => {
+describe("dialogs: the frame classes apart from the shadow", () => {
+  test("the confirm dialog renders its frame", () => {
     expect(confirmDialogFrame()).toBe(DIALOG_FRAME);
   });
 
-  test("the drawer keeps its frame", () => {
+  test("the drawer renders its frame", () => {
     expect(drawerFrame()).toBe(DRAWER_FRAME);
+  });
+});
+
+describe("Disclosure: the arrow rotates with the shared transform transition", () => {
+  test("the arrow renders the shared classes", () => {
+    const html = renderToStaticMarkup(
+      <Disclosure summary="履歴">
+        <p>本文</p>
+      </Disclosure>,
+    );
+    expect(classLists(html, ["svg"])[0]).toBe(
+      normalizeClass(
+        "size-4 shrink-0 text-muted-foreground group-open:rotate-90 transition-transform duration-(--duration-fast) ease-standard lucide lucide-chevron-right",
+      ),
+    );
   });
 });

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  ICON_BUTTON_CLASS,
   ROW_LINK_CLASS,
   ROW_TARGET_CLASS,
+  SIDEBAR_ICON_BUTTON_CLASS,
 } from "./controlClasses.ts";
 
 function tokens(value: string): string[] {
@@ -45,14 +45,14 @@ describe("controlClasses", () => {
     "rounded-lg",
     "hover:bg-sidebar-accent",
     "focus-visible:ring-sidebar-ring",
-  ])("ICON_BUTTON_CLASS has %s", (token) => {
-    expect(tokens(ICON_BUTTON_CLASS)).toContain(token);
+  ])("SIDEBAR_ICON_BUTTON_CLASS has %s", (token) => {
+    expect(tokens(SIDEBAR_ICON_BUTTON_CLASS)).toContain(token);
   });
 
   test.each([
     ["ROW_TARGET_CLASS", ROW_TARGET_CLASS],
     ["ROW_LINK_CLASS", ROW_LINK_CLASS],
-    ["ICON_BUTTON_CLASS", ICON_BUTTON_CLASS],
+    ["SIDEBAR_ICON_BUTTON_CLASS", SIDEBAR_ICON_BUTTON_CLASS],
   ])("%s changes colors with the shared transition", (_name, value) => {
     expect(value).toContain("duration-(--duration-fast)");
   });
