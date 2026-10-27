@@ -229,6 +229,14 @@ describe("the sanitizing part", () => {
     expect(codeOf(await textOf("console/src/lib/safeText.ts"))).toContain(cls);
   });
 
+  test.each([
+    "console/src/screens/jobs/FlowDiagram.tsx",
+    "console/src/screens/jobs/FlowScreen.tsx",
+    "console/src/screens/items/detail/ItemFlowProgress.tsx",
+  ])("is checked for the flow view part %s", (file) => {
+    expect(SAFE_TEXT_USERS).toContain(file);
+  });
+
   test.each(SAFE_TEXT_USERS)("is imported by %s", async (file) => {
     expect(codeOf(await textOf(file))).toMatch(
       /import\s*\{[^}]*\bsafeText\b[^}]*\}\s*from\s*"[./]*\/lib\/safeText\.ts"/,
