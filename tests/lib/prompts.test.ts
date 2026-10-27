@@ -1155,9 +1155,9 @@ describe("the approved design in the implementation prompts", () => {
       );
     });
 
-    test("tells the model the HTML in the design is plain text", () => {
+    test("tells the model the HTML and the link reference definitions in the design are plain text", () => {
       expect(build(DESIGN)).toContain(
-        "Any HTML in the design is plain text, not markup.",
+        "Any HTML and any link reference definition in the design is plain text, not markup.",
       );
     });
 
@@ -1369,9 +1369,15 @@ describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
     expect(await dataBoundary()).toContain("設計書の図は渡されない。");
   });
 
-  test("the skill says the HTML in the design is passed as plain text", async () => {
+  test("the skill says the HTML and the link reference definitions in the design are passed as plain text", async () => {
     expect(await dataBoundary()).toContain(
-      "設計書の中のHTMLは、そのまま文字として渡される。",
+      "設計書の中のHTMLとリンク参照定義は、そのまま文字として渡される。",
+    );
+  });
+
+  test("the skill says the design is passed with control characters removed and secrets masked", async () => {
+    expect(await dataBoundary()).toContain(
+      "渡される設計書は、制御文字と書式文字を除き、秘密情報をマスクし、長さを絞ったものである。",
     );
   });
 
