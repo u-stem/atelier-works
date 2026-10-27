@@ -140,10 +140,8 @@ import {
   updateStatusToRequirementsIfCurrent,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
-import { REQUIREMENTS_MODIFIED_REASON } from "../f/factory/lib/doc_tree_hash.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
-import { automatedFeedback } from "../f/factory/lib/prompts.ts";
 import {
   getCleanupSummary,
   getGatedReviewStats,
@@ -154,11 +152,6 @@ import type {
   GhPullRequestWrite,
   WorkItemStatus,
 } from "../f/factory/lib/types.ts";
-import {
-  buildRestartContext,
-  restartContextDeps,
-  restartNote,
-} from "../f/factory/retry_work_item.ts";
 import {
   runConsoleQuery,
   runConsoleSummary,
@@ -9535,22 +9528,14 @@ check(
   !(await updateStatusToRequirementsIfCurrent(rtItem, "needs_human", "x", sql)),
 );
 
-// 再実行が差し戻しの理由を引き継ぐ遷移の注記と、その理由を要件定義の生成が消費したかの判定を、
-// 本物の問い合わせで`buildRestartContext`に流して確かめる。
-async function restartContextFor(workItemId: number) {
-  const item = await getWorkItem(workItemId, sql);
-  if (item === null) throw new Error(`no work item ${String(workItemId)}`);
-  return buildRestartContext(
-    {
-      workItem: item,
-      restartStatus: item.status,
-      requirementsApproval: await latestRequirementsApproval(workItemId, sql),
-      implementEnabled: true,
-      designEnabled: false,
-    },
-    restartContextDeps(sql),
-  );
-}
+// 再実行が差し戻しの理由を引き継ぐ遷移の注記(`retry_work_item.ts`の`restartNote`)を飛ばす問い合わせと、
+// 理由を要件定義の生成が消費したかを読む問い合わせを、本物のPostgreSQLで確かめる。
+// 注記の文面は、`restartNote`のユニットテストが固定した文面と同じものを使う。
+const CARRYING_GAP_MARK = " (carrying gap)";
+const PLAIN_RESTART_NOTE = "retry_work_item: restarted from needs_human";
+const CARRIED_RESTART_NOTE = `${PLAIN_RESTART_NOTE}${CARRYING_GAP_MARK}`;
+const LAUNCH_FAILURE =
+  "retry_work_item: f/factory/pipeline could not be started";
 
 async function approveRequirements(
   workItemId: number,
@@ -9582,12 +9567,8 @@ async function moveStatus(
   return updateStatusIfCurrent(workItemId, from, to, note, sql);
 }
 
-const LAUNCH_FAILURE =
-  "retry_work_item: f/factory/pipeline could not be started";
-
-// (a) 実装の差し戻し、作り直しの起動の失敗、理由を引き継いだ再実行、その起動の失敗、もう一度の再実行。
+// 実装の差し戻し、作り直しの起動の失敗、理由を引き継いだ再実行、その起動の失敗、もう一度の再実行。
 const carryItem = await issueWorkItem(9360, 1, "implementing", "qdb carry gap");
-await approveRequirements(carryItem, 1);
 check(
   "carry: the implementation gap moves to the requirements and the launch fails",
   (await moveStatus(
@@ -9603,22 +9584,12 @@ check(
       LAUNCH_FAILURE,
     )),
 );
-const carryFirst = await restartContextFor(carryItem);
 check(
-  "carry: the first restart passes the gap and carries it on",
-  carryFirst.feedback === automatedFeedback("X") && carryFirst.carriesGap,
-  carryFirst,
-);
-check(
-  "carry: the restart that carries the gap on moves back to the requirements and the launch fails again",
+  "carry: the first restart carries the gap on and the launch fails again",
   (await updateStatusToRequirementsIfCurrent(
     carryItem,
     "needs_human",
-    restartNote({
-      status: "needs_human",
-      restartStatus: "needs_human",
-      carriesGap: carryFirst.carriesGap,
-    }),
+    CARRIED_RESTART_NOTE,
     sql,
   )) &&
     (await moveStatus(
@@ -9628,12 +9599,6 @@ check(
       LAUNCH_FAILURE,
     )),
 );
-const carrySecond = await restartContextFor(carryItem);
-check(
-  "carry: the second restart still passes the gap behind the marked restart",
-  carrySecond.feedback === automatedFeedback("X") && carrySecond.carriesGap,
-  carrySecond,
-);
 const carryMarked = await latestStatusTransition(
   carryItem,
   "requirements_generating",
@@ -9641,33 +9606,48 @@ const carryMarked = await latestStatusTransition(
 );
 check(
   "carry: the marked restart is the latest transition when nothing is skipped",
-  carryMarked?.note ===
-    "retry_work_item: restarted from needs_human (carrying gap)",
+  carryMarked?.note === CARRIED_RESTART_NOTE,
   carryMarked,
 );
 const carrySkipped = await latestStatusTransition(
   carryItem,
   "requirements_generating",
   sql,
-  " (carrying gap)",
+  CARRYING_GAP_MARK,
 );
 check(
-  "carry: the lookup that skips the mark reads the gap before it",
+  "carry: the lookup that skips the mark reads the gap before the marked restart",
   carrySkipped?.note === "gap: X" &&
     carrySkipped.from_status === "implementing",
   carrySkipped,
 );
+check(
+  "carry: a second marked restart is skipped as well",
+  (await updateStatusToRequirementsIfCurrent(
+    carryItem,
+    "needs_human",
+    CARRIED_RESTART_NOTE,
+    sql,
+  )) &&
+    (
+      await latestStatusTransition(
+        carryItem,
+        "requirements_generating",
+        sql,
+        CARRYING_GAP_MARK,
+      )
+    )?.note === "gap: X",
+);
 
-// (b) 理由を引き継がない再実行は、後ろの古い差し戻しの理由を隠したままにする。
+// 理由を引き継がない再実行は、その前の古い差し戻しの理由を隠したままにする。
 const plainItem = await issueWorkItem(
   9361,
   1,
   "implementing",
   "qdb plain restart",
 );
-await approveRequirements(plainItem, 1);
 check(
-  "carry: an old gap is followed by a stop of the untrusted requirements directory",
+  "carry: an old gap is followed by a stop that is not a gap, and by a restart that carries none",
   (await moveStatus(
     plainItem,
     "implementing",
@@ -9684,27 +9664,14 @@ check(
       plainItem,
       "implementing",
       "needs_human",
-      REQUIREMENTS_MODIFIED_REASON,
-    )),
-);
-const plainFirst = await restartContextFor(plainItem);
-check(
-  "carry: a restart after the untrusted directory passes no reason and carries none on",
-  plainFirst.feedback === null && !plainFirst.carriesGap,
-  plainFirst,
-);
-check(
-  "carry: the unmarked restart moves back to the requirements and the launch fails",
-  (await updateStatusToRequirementsIfCurrent(
-    plainItem,
-    "needs_human",
-    restartNote({
-      status: "needs_human",
-      restartStatus: "needs_human",
-      carriesGap: plainFirst.carriesGap,
-    }),
-    sql,
-  )) &&
+      "requirements directory was modified",
+    )) &&
+    (await updateStatusToRequirementsIfCurrent(
+      plainItem,
+      "needs_human",
+      PLAIN_RESTART_NOTE,
+      sql,
+    )) &&
     (await moveStatus(
       plainItem,
       "requirements_generating",
@@ -9712,14 +9679,19 @@ check(
       LAUNCH_FAILURE,
     )),
 );
-const plainSecond = await restartContextFor(plainItem);
+const plainSkipped = await latestStatusTransition(
+  plainItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
 check(
-  "carry: the old gap does not leak behind an unmarked restart",
-  plainSecond.feedback === null && !plainSecond.carriesGap,
-  plainSecond,
+  "carry: the restart that carries no gap is not skipped, so the old gap does not leak",
+  plainSkipped?.note === PLAIN_RESTART_NOTE,
+  plainSkipped,
 );
 
-// 遷移の注記が無い行は、印を飛ばす条件に巻き込まれない。
+// 注記の無い遷移は、印を飛ばす条件に巻き込まれない。
 const nullNoteItem = await issueWorkItem(
   9362,
   1,
@@ -9739,7 +9711,7 @@ const nullNoteRow = await latestStatusTransition(
   nullNoteItem,
   "requirements_generating",
   sql,
-  " (carrying gap)",
+  CARRYING_GAP_MARK,
 );
 check(
   "carry: a transition without a note is not skipped by the mark",
@@ -9747,7 +9719,15 @@ check(
   nullNoteRow,
 );
 
-// 準備がattemptを進めた後、下書きを作れずに止まった(日次予算の超過など)とき、差し戻しの理由は消費されていない。
+// 準備がattemptを進めた後、下書きを作れずに止まった(日次予算の超過など)とき、再実行が読む記録は次のとおりになる。
+// 承認は前のattemptのまま、作業項目のattemptは進み、後の下書きは無い。差し戻しの理由は消費されていない。
+async function setAttempt(workItemId: number, attempt: number): Promise<void> {
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET attempt = ${String(attempt)} WHERE id = ${String(workItemId)}`,
+  );
+}
+
 const budgetItem = await issueWorkItem(
   9363,
   1,
@@ -9756,20 +9736,13 @@ const budgetItem = await issueWorkItem(
 );
 await approveRequirements(budgetItem, 1);
 check(
-  "unconsumed: the gap moves to the requirements, the preparation advances the attempt, and the budget stops it",
+  "unconsumed: the gap moves to the requirements and the budget stops the generation",
   (await moveStatus(
     budgetItem,
     "implementing",
     "requirements_generating",
     "gap: X",
   )) &&
-    (await (async () => {
-      execPsql(
-        target,
-        `UPDATE factory.work_items SET attempt = 2 WHERE id = ${String(budgetItem)}`,
-      );
-      return true;
-    })()) &&
     (await moveStatus(
       budgetItem,
       "requirements_generating",
@@ -9777,15 +9750,34 @@ check(
       "daily budget exceeded ($5.00 >= $5.00)",
     )),
 );
-const budgetContext = await restartContextFor(budgetItem);
+await setAttempt(budgetItem, 2);
+const budgetApproval = await latestRequirementsApproval(budgetItem, sql);
 check(
-  "unconsumed: a gap whose requirements generation made no draft is passed again",
-  budgetContext.feedback === automatedFeedback("X") && budgetContext.carriesGap,
-  budgetContext,
+  "unconsumed: the approval stays at the earlier attempt while the work item moved on",
+  budgetApproval?.status === "approved" &&
+    budgetApproval.attempt === 1 &&
+    (await getWorkItem(budgetItem, sql))?.attempt === 2,
+  budgetApproval,
+);
+check(
+  "unconsumed: the work item stopped right after the requirements generation",
+  (await latestStatusEvent(budgetItem, "needs_human", sql))?.from_status ===
+    "requirements_generating",
 );
 check(
   "unconsumed: no draft exists after the approved attempt",
   !(await hasRequirementDraftAfter(budgetItem, 1, sql)),
+);
+check(
+  "unconsumed: the gap is still the transition to read",
+  (
+    await latestStatusTransition(
+      budgetItem,
+      "requirements_generating",
+      sql,
+      CARRYING_GAP_MARK,
+    )
+  )?.note === "gap: X",
 );
 await requirementsDraftAt(budgetItem, 2);
 check(
@@ -9793,16 +9785,15 @@ check(
   await hasRequirementDraftAfter(budgetItem, 1, sql),
 );
 check(
-  "unconsumed: a draft of the approved attempt itself is not a later draft",
+  "unconsumed: the draft of the attempt itself is not a later draft",
   !(await hasRequirementDraftAfter(budgetItem, 2, sql)),
 );
-const budgetConsumed = await restartContextFor(budgetItem);
 check(
-  "unconsumed: a gap whose requirements generation made a draft is not passed again",
-  budgetConsumed.feedback === null && !budgetConsumed.carriesGap,
-  budgetConsumed,
+  "unconsumed: another work item is not affected by the draft",
+  !(await hasRequirementDraftAfter(carryItem, 0, sql)),
 );
 
+// 却下の理由も同じ並びで、承認依頼の行に残る。
 const budgetRejectItem = await issueWorkItem(
   9364,
   1,
@@ -9811,20 +9802,13 @@ const budgetRejectItem = await issueWorkItem(
 );
 await rejectRequirements(budgetRejectItem, 1, "reason R");
 check(
-  "unconsumed: the rejection moves to the requirements, the preparation advances the attempt, and the budget stops it",
+  "unconsumed: the rejection moves to the requirements and the budget stops the generation",
   (await moveStatus(
     budgetRejectItem,
     "awaiting_approval",
     "requirements_generating",
     "reason R",
   )) &&
-    (await (async () => {
-      execPsql(
-        target,
-        `UPDATE factory.work_items SET attempt = 2 WHERE id = ${String(budgetRejectItem)}`,
-      );
-      return true;
-    })()) &&
     (await moveStatus(
       budgetRejectItem,
       "requirements_generating",
@@ -9832,17 +9816,15 @@ check(
       "daily budget exceeded ($5.00 >= $5.00)",
     )),
 );
-const budgetRejectContext = await restartContextFor(budgetRejectItem);
+await setAttempt(budgetRejectItem, 2);
+const budgetRejection = await latestRequirementsApproval(budgetRejectItem, sql);
 check(
-  "unconsumed: a rejection reason whose requirements generation made no draft is passed again",
-  budgetRejectContext.feedback === "reason R" &&
-    !budgetRejectContext.carriesGap,
-  budgetRejectContext,
-);
-await requirementsDraftAt(budgetRejectItem, 2);
-check(
-  "unconsumed: a rejection reason whose requirements generation made a draft is not passed again",
-  (await restartContextFor(budgetRejectItem)).feedback === null,
+  "unconsumed: the reason stays on the approval request of the earlier attempt",
+  budgetRejection?.status === "rejected" &&
+    budgetRejection.attempt === 1 &&
+    budgetRejection.reason === "reason R" &&
+    !(await hasRequirementDraftAfter(budgetRejectItem, 1, sql)),
+  budgetRejection,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
