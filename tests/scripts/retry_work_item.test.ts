@@ -1,27 +1,66 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { SqlClient, StatusEventSummary } from "../../f/factory/lib/db.ts";
+import {
+  REQUIREMENTS_DIR_MISSING_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  REQUIREMENTS_MODIFIED_REASON,
+} from "../../f/factory/lib/doc_tree_hash.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import { GAP_REPORT_MAX_CHARS } from "../../f/factory/lib/model_text.ts";
 import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
-import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
+import {
+  AUTOMATED_FEEDBACK_MARKER,
+  automatedFeedback,
+} from "../../f/factory/lib/prompts.ts";
+import type {
+  DesignApprovalRef,
+  WorkItem,
+  WorkItemStatus,
+} from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
   activePrFixConflictError,
   activePrFixConflictErrorFrom,
   asBeforeActionableCancel,
+  buildRestartContext,
   cancelledRestartRefusal,
+  classifyRestartStop,
   closedTargetRefusal,
   computeRestartPlan,
+  feedbackFromGapNote,
+  feedbackFromRejection,
   launchFailureError,
   newerCycleRefusal,
   newerPrRowRefusal,
+  RESTART_CARRYING_GAP_NOTE_PREFIX,
+  type RestartContext,
+  type RestartContextDeps,
+  restartContextDeps,
+  restartNote,
   retryResult,
   runningFlowRefusal,
   shouldRefreshIntakeOnRestart,
   usesFlowJobIdLease,
 } from "../../f/factory/retry_work_item.ts";
+
+/** 設計の分岐に関わらない既存のテストが使う、設計が無効で、止まった理由が分類されない文脈。 */
+function context(overrides: Partial<RestartContext> = {}): RestartContext {
+  return {
+    implementReady: false,
+    implementEnabled: false,
+    designEnabled: false,
+    designApproved: false,
+    stop: "other",
+    feedback: null,
+    carriesGap: false,
+    ...overrides,
+  };
+}
 
 describe("computeRestartPlan", () => {
   test("restarts a failed issue work item into pipeline at attempt + 1", () => {
@@ -31,8 +70,9 @@ describe("computeRestartPlan", () => {
         status: "failed",
         kind: "issue",
         attempt: 2,
+        design_attempt: 0,
       },
-      { implementReady: false, implementEnabled: false },
+      context({ implementReady: false, implementEnabled: false }),
     );
     expect(plan).toEqual({
       toStatus: "requirements_generating",
@@ -48,8 +88,9 @@ describe("computeRestartPlan", () => {
         status: "needs_human",
         kind: "pr_review",
         attempt: 1,
+        design_attempt: 0,
       },
-      { implementReady: false, implementEnabled: false },
+      context({ implementReady: false, implementEnabled: false }),
     );
     expect(plan).toEqual({
       toStatus: "reviewing",
@@ -65,8 +106,9 @@ describe("computeRestartPlan", () => {
         status: "expired",
         kind: "pr_fix",
         attempt: 1,
+        design_attempt: 0,
       },
-      { implementReady: false, implementEnabled: false },
+      context({ implementReady: false, implementEnabled: false }),
     );
     expect(plan).toEqual({
       toStatus: "fixing",
@@ -82,8 +124,9 @@ describe("computeRestartPlan", () => {
         status: "blocked",
         kind: "pr_fix",
         attempt: 1,
+        design_attempt: 0,
       },
-      { implementReady: false, implementEnabled: false },
+      context({ implementReady: false, implementEnabled: false }),
     );
     expect(plan.toStatus).toBe("fixing");
   });
@@ -96,8 +139,9 @@ describe("computeRestartPlan", () => {
           status: "awaiting_approval",
           kind: "issue",
           attempt: 1,
+          design_attempt: 0,
         },
-        { implementReady: false, implementEnabled: false },
+        context({ implementReady: false, implementEnabled: false }),
       ),
     ).toThrow();
   });
@@ -112,20 +156,27 @@ describe("computeRestartPlan — audit", () => {
           status: "failed",
           kind: "audit",
           attempt: 1,
+          design_attempt: 0,
         },
-        { implementReady: false, implementEnabled: false },
+        context({ implementReady: false, implementEnabled: false }),
       ),
     ).toThrow(/audit/);
   });
 });
 
 describe("computeRestartPlan — implement", () => {
-  const ENABLED = { implementReady: true, implementEnabled: true };
+  const ENABLED = context({ implementReady: true, implementEnabled: true });
 
   test("restarts a failed issue into implement when its approval matches and implement is enabled", () => {
     expect(
       computeRestartPlan(
-        { id: 7, status: "failed", kind: "issue", attempt: 2 },
+        {
+          id: 7,
+          status: "failed",
+          kind: "issue",
+          attempt: 2,
+          design_attempt: 0,
+        },
         ENABLED,
       ),
     ).toEqual({
@@ -138,7 +189,13 @@ describe("computeRestartPlan — implement", () => {
   test("restarts an approved issue into implement", () => {
     expect(
       computeRestartPlan(
-        { id: 8, status: "approved", kind: "issue", attempt: 1 },
+        {
+          id: 8,
+          status: "approved",
+          kind: "issue",
+          attempt: 1,
+          design_attempt: 0,
+        },
         ENABLED,
       ).flowPath,
     ).toBe("f/factory/implement");
@@ -147,8 +204,14 @@ describe("computeRestartPlan — implement", () => {
   test("refuses a failed issue with approved requirements while implement is disabled", () => {
     expect(() =>
       computeRestartPlan(
-        { id: 9, status: "failed", kind: "issue", attempt: 2 },
-        { implementReady: true, implementEnabled: false },
+        {
+          id: 9,
+          status: "failed",
+          kind: "issue",
+          attempt: 2,
+          design_attempt: 0,
+        },
+        context({ implementReady: true, implementEnabled: false }),
       ),
     ).toThrow(/implement_enabled/);
   });
@@ -156,8 +219,14 @@ describe("computeRestartPlan — implement", () => {
   test("refuses a needs_human issue with approved requirements while implement is disabled", () => {
     expect(() =>
       computeRestartPlan(
-        { id: 12, status: "needs_human", kind: "issue", attempt: 2 },
-        { implementReady: true, implementEnabled: false },
+        {
+          id: 12,
+          status: "needs_human",
+          kind: "issue",
+          attempt: 2,
+          design_attempt: 0,
+        },
+        context({ implementReady: true, implementEnabled: false }),
       ),
     ).toThrow(/implement_enabled/);
   });
@@ -165,8 +234,14 @@ describe("computeRestartPlan — implement", () => {
   test("still restarts a failed issue without approved requirements into the pipeline", () => {
     expect(
       computeRestartPlan(
-        { id: 13, status: "failed", kind: "issue", attempt: 2 },
-        { implementReady: false, implementEnabled: false },
+        {
+          id: 13,
+          status: "failed",
+          kind: "issue",
+          attempt: 2,
+          design_attempt: 0,
+        },
+        context({ implementReady: false, implementEnabled: false }),
       ).flowPath,
     ).toBe("f/factory/pipeline");
   });
@@ -174,8 +249,14 @@ describe("computeRestartPlan — implement", () => {
   test("refuses an approved issue while implement is disabled", () => {
     expect(() =>
       computeRestartPlan(
-        { id: 10, status: "approved", kind: "issue", attempt: 1 },
-        { implementReady: true, implementEnabled: false },
+        {
+          id: 10,
+          status: "approved",
+          kind: "issue",
+          attempt: 1,
+          design_attempt: 0,
+        },
+        context({ implementReady: true, implementEnabled: false }),
       ),
     ).toThrow(/implement_enabled/);
   });
@@ -183,8 +264,14 @@ describe("computeRestartPlan — implement", () => {
   test("refuses an approved issue whose approval does not match its attempt", () => {
     expect(() =>
       computeRestartPlan(
-        { id: 11, status: "approved", kind: "issue", attempt: 2 },
-        { implementReady: false, implementEnabled: true },
+        {
+          id: 11,
+          status: "approved",
+          kind: "issue",
+          attempt: 2,
+          design_attempt: 0,
+        },
+        context({ implementReady: false, implementEnabled: true }),
       ),
     ).toThrow(/approval/);
   });
@@ -483,8 +570,14 @@ describe("computeRestartPlan for a cancelled work item", () => {
   test("refuses to restart a work item that a newer cycle superseded", () => {
     expect(() =>
       computeRestartPlan(
-        { id: 1, status: "cancelled", kind: "issue", attempt: 1 },
-        { implementReady: true, implementEnabled: true },
+        {
+          id: 1,
+          status: "cancelled",
+          kind: "issue",
+          attempt: 1,
+          design_attempt: 0,
+        },
+        context({ implementReady: true, implementEnabled: true }),
       ),
     ).toThrow(/not restartable/);
   });
@@ -494,19 +587,29 @@ describe("computeRestartPlan for a dependabot work item", () => {
   test("refuses to restart a dependabot work item", () => {
     expect(() =>
       computeRestartPlan(
-        { id: 1, status: "failed", kind: "dependabot", attempt: 1 },
-        { implementReady: false, implementEnabled: false },
+        {
+          id: 1,
+          status: "failed",
+          kind: "dependabot",
+          attempt: 1,
+          design_attempt: 0,
+        },
+        context({ implementReady: false, implementEnabled: false }),
       ),
     ).toThrow(/dependabot/);
   });
 });
 
 describe("asBeforeActionableCancel", () => {
-  const cancelled: Pick<WorkItem, "id" | "status" | "kind" | "attempt"> = {
+  const cancelled: Pick<
+    WorkItem,
+    "id" | "status" | "kind" | "attempt" | "design_attempt"
+  > = {
     id: 1,
     status: "cancelled",
     kind: "issue",
     attempt: 1,
+    design_attempt: 0,
   };
 
   test("restores the status before a closed-target cancellation", () => {
@@ -551,10 +654,7 @@ describe("asBeforeActionableCancel", () => {
       { ...cancelled, kind: "pr_fix" as const },
       { from_status: "failed", note: actionableCancelNote("pr_closed") },
     );
-    const plan = computeRestartPlan(restored, {
-      implementReady: false,
-      implementEnabled: false,
-    });
+    const plan = computeRestartPlan(restored, context());
     expect(plan.flowPath).toBe("f/factory/pr_fix");
   });
 
@@ -563,10 +663,7 @@ describe("asBeforeActionableCancel", () => {
       from_status: "expired",
       note: actionableCancelNote("closed"),
     });
-    const plan = computeRestartPlan(restored, {
-      implementReady: false,
-      implementEnabled: false,
-    });
+    const plan = computeRestartPlan(restored, context());
     expect(plan.toStatus).toBe("requirements_generating");
   });
 });
@@ -902,5 +999,1225 @@ describe("main: conflict round refusal", () => {
 
   test("throws the refusal", () => {
     expect(source).toContain("throw new Error(conflictRoundRefusal)");
+  });
+});
+
+const GITHUB_TOKEN = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+
+describe("classifyRestartStop", () => {
+  const REASONS = [
+    REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+    REQUIREMENTS_MODIFIED_REASON,
+    REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    REQUIREMENTS_DIR_MISSING_REASON,
+  ];
+
+  test.each(REASONS)("classifies %s as untrusted", (reason) => {
+    expect(
+      classifyRestartStop({ from_status: "implementing", note: reason }),
+    ).toBe("requirements_untrusted");
+  });
+
+  test("classifies a reason followed by a note as untrusted", () => {
+    expect(
+      classifyRestartStop({
+        from_status: "implementing",
+        note: `${REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON}; partial work kept local`,
+      }),
+    ).toBe("requirements_untrusted");
+  });
+
+  test("classifies an untrusted note before the previous status", () => {
+    expect(
+      classifyRestartStop({
+        from_status: "requirements_generating",
+        note: REQUIREMENTS_DIR_MISSING_REASON,
+      }),
+    ).toBe("requirements_untrusted");
+  });
+
+  test("does not classify a reason with extra text as untrusted", () => {
+    expect(
+      classifyRestartStop({
+        from_status: "implementing",
+        note: `${REQUIREMENTS_MODIFIED_REASON} extra`,
+      }),
+    ).toBe("other");
+  });
+
+  test("classifies a stop right after the requirements regeneration as returned", () => {
+    expect(
+      classifyRestartStop({
+        from_status: "requirements_generating",
+        note: "requirements regeneration could not be started",
+      }),
+    ).toBe("requirements_returned");
+  });
+
+  test("classifies a stop right after the requirements regeneration without a note as returned", () => {
+    expect(
+      classifyRestartStop({
+        from_status: "requirements_generating",
+        note: null,
+      }),
+    ).toBe("requirements_returned");
+  });
+
+  test("classifies a stop from another status as other", () => {
+    expect(
+      classifyRestartStop({
+        from_status: "implementing",
+        note: "claude failed",
+      }),
+    ).toBe("other");
+  });
+
+  test("classifies a missing transition as other", () => {
+    expect(classifyRestartStop(null)).toBe("other");
+  });
+});
+
+describe("feedbackFromGapNote", () => {
+  test("wraps the report of a design gap", () => {
+    expect(feedbackFromGapNote("design gap: scope is missing")).toBe(
+      automatedFeedback("scope is missing"),
+    );
+  });
+
+  test("wraps the report of an implementation gap", () => {
+    expect(feedbackFromGapNote("gap: scope is missing")).toBe(
+      automatedFeedback("scope is missing"),
+    );
+  });
+
+  test("takes the design prefix before the shorter one", () => {
+    expect(feedbackFromGapNote("design gap: gap: nested")).toBe(
+      automatedFeedback("gap: nested"),
+    );
+  });
+
+  test("marks the report as automated", () => {
+    expect(
+      feedbackFromGapNote("gap: x")?.startsWith(AUTOMATED_FEEDBACK_MARKER),
+    ).toBe(true);
+  });
+
+  test("masks a secret in the report", () => {
+    expect(feedbackFromGapNote(`gap: token ${GITHUB_TOKEN}`)).toBe(
+      automatedFeedback("token ***"),
+    );
+  });
+
+  test("cuts the report at 2000 characters", () => {
+    expect(feedbackFromGapNote(`gap: ${"a".repeat(2500)}`)).toBe(
+      automatedFeedback("a".repeat(2000)),
+    );
+  });
+
+  test("returns null for another note", () => {
+    expect(
+      feedbackFromGapNote("retry_work_item: restarted from failed"),
+    ).toBeNull();
+  });
+
+  test("returns null for a prefix without a report", () => {
+    expect(feedbackFromGapNote("gap: ")).toBeNull();
+  });
+
+  test("returns null for a report of blanks", () => {
+    expect(feedbackFromGapNote("design gap:    ")).toBeNull();
+  });
+
+  test("returns null for a missing note", () => {
+    expect(feedbackFromGapNote(null)).toBeNull();
+  });
+});
+
+describe("feedbackFromRejection", () => {
+  test("passes the reason of a person without the automated mark", () => {
+    expect(feedbackFromRejection("the scope is too wide")).toBe(
+      "the scope is too wide",
+    );
+  });
+
+  test("passes the reason as it is, as the normal path does", () => {
+    expect(feedbackFromRejection(`use ${GITHUB_TOKEN}\u0000 now`)).toBe(
+      `use ${GITHUB_TOKEN}\u0000 now`,
+    );
+  });
+
+  test("does not cut a long reason", () => {
+    expect(feedbackFromRejection("a".repeat(4000))).toBe("a".repeat(4000));
+  });
+
+  test("returns null for an empty reason", () => {
+    expect(feedbackFromRejection("")).toBeNull();
+  });
+
+  test("returns null for a reason of blanks", () => {
+    expect(feedbackFromRejection("   ")).toBeNull();
+  });
+
+  test("returns null for a missing note", () => {
+    expect(feedbackFromRejection(null)).toBeNull();
+  });
+});
+
+describe("computeRestartPlan — where an issue restarts", () => {
+  function issue(
+    overrides: Partial<
+      Pick<WorkItem, "status" | "attempt" | "design_attempt">
+    > = {},
+  ): Pick<WorkItem, "id" | "status" | "kind" | "attempt" | "design_attempt"> {
+    return {
+      id: 7,
+      status: "needs_human",
+      kind: "issue",
+      attempt: 2,
+      design_attempt: 1,
+      ...overrides,
+    };
+  }
+
+  describe("row 1: the requirements are not approved for the attempt", () => {
+    test("restarts the pipeline at attempt + 1", () => {
+      expect(computeRestartPlan(issue(), context())).toEqual({
+        toStatus: "requirements_generating",
+        flowPath: "f/factory/pipeline",
+        args: { work_item_id: 7, attempt: 3 },
+      });
+    });
+
+    test("passes the reason of a rejection as the feedback", () => {
+      expect(
+        computeRestartPlan(issue(), context({ feedback: "narrow the scope" }))
+          .args,
+      ).toEqual({ work_item_id: 7, attempt: 3, feedback: "narrow the scope" });
+    });
+
+    test("restarts the pipeline whatever the stop was", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({ stop: "requirements_returned", designEnabled: true }),
+        ).flowPath,
+      ).toBe("f/factory/pipeline");
+    });
+
+    test("refuses an approved work item whose approval does not match", () => {
+      expect(() =>
+        computeRestartPlan(issue({ status: "approved" }), context()),
+      ).toThrow(/approval/);
+    });
+  });
+
+  describe("row 2: the approved requirements cannot be trusted", () => {
+    const UNTRUSTED = {
+      implementReady: true,
+      stop: "requirements_untrusted",
+      feedback: "an old gap report",
+    } as const;
+
+    test("restarts the pipeline with the implement flow and the design disabled", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({ ...UNTRUSTED, implementEnabled: false }),
+        ),
+      ).toEqual({
+        toStatus: "requirements_generating",
+        flowPath: "f/factory/pipeline",
+        args: { work_item_id: 7, attempt: 3 },
+      });
+    });
+
+    test("restarts the pipeline with the design enabled and approved", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({
+            ...UNTRUSTED,
+            designEnabled: true,
+            designApproved: true,
+            implementEnabled: true,
+          }),
+        ).flowPath,
+      ).toBe("f/factory/pipeline");
+    });
+
+    test("does not pass the old feedback", () => {
+      expect(
+        "feedback" in computeRestartPlan(issue(), context(UNTRUSTED)).args,
+      ).toBe(false);
+    });
+  });
+
+  describe("row 3: the requirements were returned", () => {
+    const RETURNED = {
+      implementReady: true,
+      stop: "requirements_returned",
+    } as const;
+
+    test("restarts the pipeline with the implement flow disabled", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({ ...RETURNED, implementEnabled: false }),
+        ).flowPath,
+      ).toBe("f/factory/pipeline");
+    });
+
+    test("restarts the pipeline with the design enabled", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({ ...RETURNED, designEnabled: true, implementEnabled: true }),
+        ).toStatus,
+      ).toBe("requirements_generating");
+    });
+
+    test("passes the report as the feedback", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({
+            ...RETURNED,
+            feedback: automatedFeedback("missing scope"),
+          }),
+        ).args,
+      ).toEqual({
+        work_item_id: 7,
+        attempt: 3,
+        feedback: automatedFeedback("missing scope"),
+      });
+    });
+
+    test("leaves the feedback out when there is none", () => {
+      expect(
+        "feedback" in computeRestartPlan(issue(), context(RETURNED)).args,
+      ).toBe(false);
+    });
+  });
+
+  describe("row 4: the design is enabled and not approved", () => {
+    const UNAPPROVED = {
+      implementReady: true,
+      designEnabled: true,
+      designApproved: false,
+    } as const;
+
+    test("restarts the design flow at design_attempt + 1 with the implement flow enabled", () => {
+      expect(
+        computeRestartPlan(
+          issue({ design_attempt: 2 }),
+          context({ ...UNAPPROVED, implementEnabled: true }),
+        ),
+      ).toEqual({
+        toStatus: "designing",
+        flowPath: "f/factory/design",
+        args: { work_item_id: 7, design_attempt: 3, feedback: "" },
+      });
+    });
+
+    test("restarts the design flow with the implement flow disabled", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({ ...UNAPPROVED, implementEnabled: false }),
+        ).flowPath,
+      ).toBe("f/factory/design");
+    });
+
+    test("restarts the design flow of an approved work item", () => {
+      expect(
+        computeRestartPlan(
+          issue({ status: "approved" }),
+          context({ ...UNAPPROVED, implementEnabled: true }),
+        ).toStatus,
+      ).toBe("designing");
+    });
+
+    test("starts from the first attempt when no design was tried", () => {
+      expect(
+        computeRestartPlan(
+          issue({ design_attempt: 0 }),
+          context({ ...UNAPPROVED, implementEnabled: true }),
+        ).args,
+      ).toEqual({ work_item_id: 7, design_attempt: 1, feedback: "" });
+    });
+  });
+
+  describe("row 5: the implement flow", () => {
+    test("restarts the implement flow when the design is approved", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({
+            implementReady: true,
+            implementEnabled: true,
+            designEnabled: true,
+            designApproved: true,
+          }),
+        ),
+      ).toEqual({
+        toStatus: "implementing",
+        flowPath: "f/factory/implement",
+        args: { work_item_id: 7 },
+      });
+    });
+
+    test("restarts the implement flow when the design is disabled", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({ implementReady: true, implementEnabled: true }),
+        ).flowPath,
+      ).toBe("f/factory/implement");
+    });
+  });
+
+  describe("row 6: the implement flow is disabled", () => {
+    test("refuses when the design is approved", () => {
+      expect(() =>
+        computeRestartPlan(
+          issue(),
+          context({
+            implementReady: true,
+            implementEnabled: false,
+            designEnabled: true,
+            designApproved: true,
+          }),
+        ),
+      ).toThrow(/implement_enabled/);
+    });
+
+    test("refuses when the design is disabled", () => {
+      expect(() =>
+        computeRestartPlan(
+          issue(),
+          context({ implementReady: true, implementEnabled: false }),
+        ),
+      ).toThrow(/implement_enabled/);
+    });
+  });
+
+  describe("a stop that is not classified", () => {
+    test("keeps the implement flow for an other stop with the design disabled", () => {
+      expect(
+        computeRestartPlan(
+          issue(),
+          context({
+            implementReady: true,
+            implementEnabled: true,
+            stop: "other",
+          }),
+        ).flowPath,
+      ).toBe("f/factory/implement");
+    });
+  });
+});
+
+describe("computeRestartPlan — the design statuses", () => {
+  const RUNNING: WorkItemStatus[] = ["designing", "awaiting_design_approval"];
+
+  test.each(RUNNING)("does not restart a work item in %s", (status) => {
+    expect(() =>
+      computeRestartPlan(
+        { id: 7, status, kind: "issue", attempt: 1, design_attempt: 1 },
+        context({ implementReady: true, designEnabled: true }),
+      ),
+    ).toThrow(/not restartable/);
+  });
+});
+
+describe("usesFlowJobIdLease for the design flow", () => {
+  test("is true for a restart into the design flow", () => {
+    expect(usesFlowJobIdLease({ flowPath: "f/factory/design" })).toBe(true);
+  });
+});
+
+describe("buildRestartContext", () => {
+  const REQUIREMENTS_APPROVED = {
+    draft_id: 10,
+    attempt: 2,
+    status: "approved" as const,
+    reason: null,
+  };
+  const REQUIREMENTS_REJECTED = {
+    draft_id: 10,
+    attempt: 2,
+    status: "rejected" as const,
+    reason: "the scope is too wide",
+  };
+  const DESIGN_APPROVED: DesignApprovalRef = {
+    approval_request_id: 5,
+    design_draft_id: 20,
+    status: "approved",
+    payload_attempt: 2,
+    payload_design_attempt: 1,
+    draft: { design_attempt: 1, requirement_draft_id: 10 },
+  };
+
+  type Harness = {
+    readonly deps: RestartContextDeps;
+    readonly designReads: number[];
+    readonly eventReads: [number, WorkItemStatus][];
+    readonly transitionReads: [number, WorkItemStatus][];
+    readonly skipPrefixes: string[];
+    readonly draftReads: [number, number][];
+  };
+
+  function harness(
+    options: {
+      designApproval?: DesignApprovalRef | null;
+      stopEvent?: StatusEventSummary | null;
+      transition?: StatusEventSummary | null;
+      /** 新しい順の遷移。注記が印で始まる行を飛ばす実際の問い合わせと同じ規則で返す。 */
+      transitions?: readonly StatusEventSummary[];
+      draftAfter?: boolean;
+    } = {},
+  ): Harness {
+    const designReads: number[] = [];
+    const eventReads: [number, WorkItemStatus][] = [];
+    const transitionReads: [number, WorkItemStatus][] = [];
+    const skipPrefixes: string[] = [];
+    const draftReads: [number, number][] = [];
+    return {
+      designReads,
+      eventReads,
+      transitionReads,
+      skipPrefixes,
+      draftReads,
+      deps: {
+        latestDesignApproval: async (id) => {
+          designReads.push(id);
+          return options.designApproval ?? null;
+        },
+        latestStatusEvent: async (id, status) => {
+          eventReads.push([id, status]);
+          return options.stopEvent ?? null;
+        },
+        latestStatusTransition: async (id, status, skipNotePrefix) => {
+          transitionReads.push([id, status]);
+          skipPrefixes.push(skipNotePrefix);
+          if (options.transitions !== undefined) {
+            return (
+              options.transitions.find(
+                (row) => !(row.note ?? "").startsWith(skipNotePrefix),
+              ) ?? null
+            );
+          }
+          return options.transition ?? null;
+        },
+        hasRequirementDraftAfter: async (id, attempt) => {
+          draftReads.push([id, attempt]);
+          return options.draftAfter ?? false;
+        },
+      },
+    };
+  }
+
+  function build(
+    h: Harness,
+    overrides: Partial<Parameters<typeof buildRestartContext>[0]> = {},
+  ) {
+    return buildRestartContext(
+      {
+        workItem: { id: 7, attempt: 2, design_attempt: 1 },
+        restartStatus: "needs_human",
+        requirementsApproval: REQUIREMENTS_APPROVED,
+        implementEnabled: true,
+        designEnabled: true,
+        ...overrides,
+      },
+      h.deps,
+    );
+  }
+
+  const GAP_STOP: StatusEventSummary = {
+    from_status: "requirements_generating",
+    note: "requirements regeneration could not be started",
+  };
+
+  describe("the requirements are ready", () => {
+    test("is ready for an approval of the current attempt", async () => {
+      expect((await build(harness())).implementReady).toBe(true);
+    });
+
+    test("is not ready for an approval of another attempt", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 1 },
+      });
+      expect(context.implementReady).toBe(false);
+    });
+
+    test("is not ready without an approval", async () => {
+      const context = await build(harness(), { requirementsApproval: null });
+      expect(context.implementReady).toBe(false);
+    });
+
+    test("carries the enabled flags", async () => {
+      const context = await build(harness(), {
+        implementEnabled: false,
+        designEnabled: false,
+      });
+      expect([context.implementEnabled, context.designEnabled]).toEqual([
+        false,
+        false,
+      ]);
+    });
+  });
+
+  describe("the design approval", () => {
+    test("reads it for the work item when the design is enabled and the requirements are ready", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      await build(h);
+      expect(h.designReads).toEqual([7]);
+    });
+
+    test("does not read it when the design is disabled", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      await build(h, { designEnabled: false });
+      expect(h.designReads).toEqual([]);
+    });
+
+    test("does not read it when the requirements are not ready", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.designReads).toEqual([]);
+    });
+
+    test("is approved for an approval that matches the work item and the requirements draft", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      expect((await build(h)).designApproved).toBe(true);
+    });
+
+    test("is not approved when the design attempt of the work item moved on", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 2, design_attempt: 2 },
+      });
+      expect(context.designApproved).toBe(false);
+    });
+
+    test("is not approved when the design was made from another requirements draft", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      const context = await build(h, {
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, draft_id: 11 },
+      });
+      expect(context.designApproved).toBe(false);
+    });
+
+    test("is not approved when the approval was requested for another attempt", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 3, design_attempt: 1 },
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 3 },
+      });
+      expect(context.designApproved).toBe(false);
+    });
+
+    test("is not approved without an approval", async () => {
+      expect((await build(harness())).designApproved).toBe(false);
+    });
+  });
+
+  describe("the transition that stopped the work item", () => {
+    test("reads it by the status before a cancellation", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h, { restartStatus: "failed" });
+      expect(h.eventReads).toEqual([[7, "failed"]]);
+    });
+
+    test("does not read it when the requirements are not ready", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.eventReads).toEqual([]);
+    });
+
+    test("classifies a stop right after the requirements regeneration", async () => {
+      const context = await build(harness({ stopEvent: GAP_STOP }));
+      expect(context.stop).toBe("requirements_returned");
+    });
+
+    test("classifies an untrusted requirements directory", async () => {
+      const context = await build(
+        harness({
+          stopEvent: {
+            from_status: "implementing",
+            note: REQUIREMENTS_MODIFIED_REASON,
+          },
+        }),
+      );
+      expect(context.stop).toBe("requirements_untrusted");
+    });
+
+    test("classifies a stop without a record as other", async () => {
+      expect((await build(harness())).stop).toBe("other");
+    });
+  });
+
+  describe("the reason of a gap", () => {
+    test("reads the latest transition into the requirements for a stop right after the regeneration", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.transitionReads).toEqual([[7, "requirements_generating"]]);
+    });
+
+    test("does not read it for another kind of stop", async () => {
+      const h = harness({
+        stopEvent: { from_status: "implementing", note: "something else" },
+      });
+      await build(h);
+      expect(h.transitionReads).toEqual([]);
+    });
+
+    test("wraps an implementation gap as an automated report", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: { from_status: "implementing", note: "gap: no scope" },
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("no scope"));
+    });
+
+    test("wraps a design gap as an automated report", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: { from_status: "designing", note: "design gap: no flow" },
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("no flow"));
+    });
+
+    test("wraps a gap noted by a pull request fix", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: { from_status: "pr_open", note: "gap: from the review" },
+      });
+      expect((await build(h)).feedback).toBe(
+        automatedFeedback("from the review"),
+      );
+    });
+
+    test("does not leak an old gap behind a restart", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: {
+          from_status: "needs_human",
+          note: "retry_work_item: restarted from needs_human",
+        },
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("has no feedback when no transition into the requirements exists", async () => {
+      expect(
+        (await build(harness({ stopEvent: GAP_STOP }))).feedback,
+      ).toBeNull();
+    });
+  });
+
+  describe("the reason of a rejection", () => {
+    const REJECTED = { requirementsApproval: REQUIREMENTS_REJECTED };
+
+    test("is the reason of the approval request of the current attempt", async () => {
+      expect((await build(harness(), REJECTED)).feedback).toBe(
+        "the scope is too wide",
+      );
+    });
+
+    test("is not read from the transition records", async () => {
+      const h = harness({
+        transition: {
+          from_status: "awaiting_approval",
+          note: "the reason of an earlier cycle",
+        },
+      });
+      expect((await build(h, REJECTED)).feedback).toBe("the scope is too wide");
+    });
+
+    test("does not read the transition records", async () => {
+      const h = harness();
+      await build(h, REJECTED);
+      expect(h.transitionReads).toEqual([]);
+    });
+
+    test("is the reason of the only rejection when the limit is one", async () => {
+      const h = harness({ transition: null });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 1, design_attempt: 0 },
+        requirementsApproval: {
+          ...REQUIREMENTS_REJECTED,
+          attempt: 1,
+          reason: "only reason",
+        },
+      });
+      expect(context.feedback).toBe("only reason");
+    });
+
+    test("is not passed for a rejection of an earlier attempt that a later draft followed", async () => {
+      const context = await build(harness({ draftAfter: true }), {
+        requirementsApproval: { ...REQUIREMENTS_REJECTED, attempt: 1 },
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("is not passed for an approval", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 1 },
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("is null for a rejection without a reason", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_REJECTED, reason: null },
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("is not cut to the length limit of a report", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: {
+          ...REQUIREMENTS_REJECTED,
+          reason: "x".repeat(GAP_REPORT_MAX_CHARS + 50),
+        },
+      });
+      expect(context.feedback?.length).toBe(GAP_REPORT_MAX_CHARS + 50);
+    });
+
+    test("is not masked or cleaned, as the normal path passes it", async () => {
+      const reason = `use ${GITHUB_TOKEN}\u0000 now`;
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_REJECTED, reason },
+      });
+      expect(context.feedback).toBe(reason);
+    });
+
+    test("does not carry a gap", async () => {
+      expect((await build(harness(), REJECTED)).carriesGap).toBe(false);
+    });
+  });
+
+  describe("a gap that a restart carries on", () => {
+    const CARRIED_RESTART: StatusEventSummary = {
+      from_status: "needs_human",
+      note: "retry_work_item: restarted (carrying gap) from needs_human",
+    };
+    const PLAIN_RESTART: StatusEventSummary = {
+      from_status: "needs_human",
+      note: "retry_work_item: restarted from needs_human",
+    };
+    const GAP_ROW: StatusEventSummary = {
+      from_status: "implementing",
+      note: "gap: X",
+    };
+
+    test("is the mark the restart note starts with", () => {
+      expect(RESTART_CARRYING_GAP_NOTE_PREFIX).toBe(
+        "retry_work_item: restarted (carrying gap)",
+      );
+    });
+
+    test("is passed to the lookup of the transition", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.skipPrefixes).toEqual([RESTART_CARRYING_GAP_NOTE_PREFIX]);
+    });
+
+    test("skips a restart that carried the gap and reads the gap before it", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("skips every restart that carried the gap", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [CARRIED_RESTART, CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("does not skip a gap whose body ends with the mark", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          { from_status: "implementing", note: "gap: X (carrying gap)" },
+          GAP_ROW,
+        ],
+      });
+      expect((await build(h)).feedback).toBe(
+        automatedFeedback("X (carrying gap)"),
+      );
+    });
+
+    test("does not skip a design gap whose body ends with the mark", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          { from_status: "designing", note: "design gap: X (carrying gap)" },
+          GAP_ROW,
+        ],
+      });
+      expect((await build(h)).feedback).toBe(
+        automatedFeedback("X (carrying gap)"),
+      );
+    });
+
+    test("skips a restart after a cancellation that carried the gap", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          {
+            from_status: "cancelled",
+            note: "retry_work_item: restarted (carrying gap) from cancelled (was needs_human before the closed target was cancelled)",
+          },
+          GAP_ROW,
+        ],
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("does not skip a restart that carried no gap, so the old gap does not leak", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [PLAIN_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("does not read past a plain restart that follows a carried one", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [PLAIN_RESTART, CARRIED_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("carries the gap on when a gap is passed", async () => {
+      const h = harness({ stopEvent: GAP_STOP, transitions: [GAP_ROW] });
+      expect((await build(h)).carriesGap).toBe(true);
+    });
+
+    test("does not carry a gap on when no feedback is passed", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [PLAIN_RESTART, GAP_ROW],
+      });
+      expect((await build(h)).carriesGap).toBe(false);
+    });
+
+    test("does not carry a gap on for a restart after an untrusted requirements directory", async () => {
+      const h = harness({
+        stopEvent: {
+          from_status: "implementing",
+          note: REQUIREMENTS_MODIFIED_REASON,
+        },
+        transitions: [GAP_ROW],
+      });
+      expect((await build(h)).carriesGap).toBe(false);
+    });
+  });
+
+  describe("a reason that the attempt did not consume", () => {
+    const APPROVED_1 = { ...REQUIREMENTS_APPROVED, attempt: 1 };
+    const REJECTED_1 = { ...REQUIREMENTS_REJECTED, attempt: 1 };
+    const ADVANCED = { id: 7, attempt: 2, design_attempt: 0 };
+    const GAP_ROW: StatusEventSummary = {
+      from_status: "implementing",
+      note: "gap: X",
+    };
+
+    test("asks whether a draft exists after the attempt of the approval", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h, { workItem: ADVANCED, requirementsApproval: APPROVED_1 });
+      expect(h.draftReads).toEqual([[7, 1]]);
+    });
+
+    test("passes the gap when the preparation advanced the attempt and no draft was made", async () => {
+      const h = harness({ stopEvent: GAP_STOP, transitions: [GAP_ROW] });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBe(automatedFeedback("X"));
+    });
+
+    test("carries the gap on again", async () => {
+      const h = harness({ stopEvent: GAP_STOP, transitions: [GAP_ROW] });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.carriesGap).toBe(true);
+    });
+
+    test("does not pass the gap once a draft was made", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [GAP_ROW],
+        draftAfter: true,
+      });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not pass the gap when the work item did not stop after the regeneration", async () => {
+      const h = harness({
+        stopEvent: { from_status: "implementing", note: "something else" },
+        transitions: [GAP_ROW],
+      });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not pass an old gap behind a restart that carried none", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transitions: [
+          { from_status: "needs_human", note: "retry_work_item: restarted" },
+          GAP_ROW,
+        ],
+      });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: APPROVED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("passes the rejection reason when the attempt moved on and no draft was made", async () => {
+      const h = harness();
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: REJECTED_1,
+      });
+      expect(context.feedback).toBe("the scope is too wide");
+    });
+
+    test("does not pass the rejection reason once a draft was made", async () => {
+      const h = harness({ draftAfter: true });
+      const context = await build(h, {
+        workItem: ADVANCED,
+        requirementsApproval: REJECTED_1,
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("does not carry a gap on for a rejection reason", async () => {
+      const context = await build(harness(), {
+        workItem: ADVANCED,
+        requirementsApproval: REJECTED_1,
+      });
+      expect(context.carriesGap).toBe(false);
+    });
+
+    test("does not ask about drafts when the approval is of the current attempt", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.draftReads).toEqual([]);
+    });
+
+    test("does not ask about drafts for a rejection of the current attempt", async () => {
+      const h = harness();
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.draftReads).toEqual([]);
+    });
+
+    test("does not pass a reason without an approval", async () => {
+      const context = await build(harness({ transitions: [GAP_ROW] }), {
+        workItem: ADVANCED,
+        requirementsApproval: null,
+      });
+      expect(context.feedback).toBeNull();
+    });
+  });
+});
+
+describe("restartNote", () => {
+  const BASE = {
+    status: "needs_human",
+    restartStatus: "needs_human",
+    carriesGap: false,
+  } as const;
+
+  test("names the stopped status", () => {
+    expect(restartNote(BASE)).toBe(
+      "retry_work_item: restarted from needs_human",
+    );
+  });
+
+  test("marks a restart that carries a gap on", () => {
+    expect(restartNote({ ...BASE, carriesGap: true })).toBe(
+      "retry_work_item: restarted (carrying gap) from needs_human",
+    );
+  });
+
+  test("names the status before a cancellation", () => {
+    expect(
+      restartNote({ ...BASE, status: "cancelled", restartStatus: "failed" }),
+    ).toBe(
+      "retry_work_item: restarted from cancelled (was failed before the closed target was cancelled)",
+    );
+  });
+
+  test("marks a restart after a cancellation that carries a gap on", () => {
+    expect(
+      restartNote({
+        status: "cancelled",
+        restartStatus: "failed",
+        carriesGap: true,
+      }),
+    ).toBe(
+      "retry_work_item: restarted (carrying gap) from cancelled (was failed before the closed target was cancelled)",
+    );
+  });
+
+  test("starts a marked note with the mark after a cancellation", () => {
+    expect(
+      restartNote({
+        status: "cancelled",
+        restartStatus: "failed",
+        carriesGap: true,
+      }).startsWith(RESTART_CARRYING_GAP_NOTE_PREFIX),
+    ).toBe(true);
+  });
+
+  test("does not start an unmarked note with the mark", () => {
+    expect(restartNote(BASE).startsWith(RESTART_CARRYING_GAP_NOTE_PREFIX)).toBe(
+      false,
+    );
+  });
+
+  test("does not start an unmarked note after a cancellation with the mark", () => {
+    expect(
+      restartNote({
+        status: "cancelled",
+        restartStatus: "failed",
+        carriesGap: false,
+      }).startsWith(RESTART_CARRYING_GAP_NOTE_PREFIX),
+    ).toBe(false);
+  });
+});
+
+describe("restartContextDeps", () => {
+  type Call = { text: string; values: unknown[] };
+
+  function fakeSql(rows: Record<string, unknown>[] = []): {
+    sql: SqlClient;
+    calls: Call[];
+  } {
+    const calls: Call[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      return {
+        fetch: () => Promise.resolve(rows),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, calls };
+  }
+
+  test("binds the mark to skip when it reads the latest transition", async () => {
+    const { sql, calls } = fakeSql();
+    await restartContextDeps(sql).latestStatusTransition(
+      7,
+      "requirements_generating",
+      RESTART_CARRYING_GAP_NOTE_PREFIX,
+    );
+    expect(calls[0]?.values).toContain(RESTART_CARRYING_GAP_NOTE_PREFIX);
+  });
+
+  test("asks whether a draft exists after the attempt", async () => {
+    const { sql, calls } = fakeSql([{ id: 1 }]);
+    const found = await restartContextDeps(sql).hasRequirementDraftAfter(7, 1);
+    expect([found, calls[0]?.values]).toEqual([true, [7, 1]]);
+  });
+});
+
+describe("main: the context of the restart", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  const restart = source.slice(
+    source.indexOf("async function restartWorkItem"),
+  );
+
+  test("builds the context with the dependencies that read the records", () => {
+    expect(restart).toMatch(
+      /buildRestartContext\([\s\S]*?restartContextDeps\(\),?\s*\)/,
+    );
+  });
+
+  test("passes the design_enabled setting as the design flag", () => {
+    expect(restart).toContain("designEnabled: config.design_enabled");
+  });
+
+  test("passes the implement_enabled setting as the implement flag", () => {
+    expect(restart).toContain("implementEnabled: config.implement_enabled");
+  });
+
+  test("passes the latest requirements approval to the context", () => {
+    expect(restart).toMatch(
+      /buildRestartContext\(\s*\{[\s\S]*?\brequirementsApproval,[\s\S]*?\},/,
+    );
+  });
+
+  test("writes the restart note from the carried gap of the context", () => {
+    expect(restart).toMatch(
+      /restartNote\(\{[\s\S]*?carriesGap: context\.carriesGap/,
+    );
+  });
+
+  test("takes the note from restartNote", () => {
+    expect(restart).toMatch(/const note = restartNote\(/);
+  });
+
+  test("moves to the requirements with the note that restartNote wrote", () => {
+    expect(source).toMatch(
+      /updateStatusToRequirementsIfCurrent\(\s*work_item_id,\s*workItem\.status,\s*note,/,
+    );
+  });
+
+  test("passes the status before a cancellation to the context", () => {
+    expect(restart).toContain("restartStatus: restartItem.status");
+  });
+
+  test("plans the restart from the built context", () => {
+    expect(restart).toMatch(/computeRestartPlan\(restartItem,\s*context\)/);
+  });
+
+  test("no longer reads the transition records by the previous status", () => {
+    expect(source).not.toContain("latestStatusEventFromAny");
+  });
+});
+
+describe("main: the move back to the requirements", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  test("moves to the requirements with the compare-and-swap that resets the design attempt", () => {
+    expect(source).toMatch(
+      /plan\.toStatus === "requirements_generating"\s*\?\s*await updateStatusToRequirementsIfCurrent\(/,
+    );
+  });
+
+  test("keeps the other leased restarts on the compare-and-swap that clears the lease", () => {
+    expect(source).toContain("await updateStatusIfCurrentClearingFlowJobId(");
   });
 });

@@ -319,6 +319,11 @@
     },
     {
       "from": "script:retry_work_item",
+      "to": "flow:design",
+      "kind": "run"
+    },
+    {
+      "from": "script:retry_work_item",
       "to": "flow:implement",
       "kind": "run"
     },

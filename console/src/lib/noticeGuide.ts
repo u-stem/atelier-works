@@ -486,6 +486,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "design_enabled_ignored",
+    guide(
+      "設定のdesign_enabledがtrueですが、設計工程はまだ有効にできないため、falseとして読んでいます。設計工程は動かず、設定タブには書かれた値のtrueが出ます。",
+      "factory_configのdesign_enabledをfalseに戻してください。設計工程を有効にできる版が反映されるまで、trueにしても動きません。",
+      {
+        note: "設定がfalseに戻ると、自己更新(2分ごと)がこの通知を自動で解決します。Consoleからは解決できません。",
+      },
+    ),
+  ],
+  [
     "pr_ci_check_denied",
     guide(
       "対象リポジトリのPRとCIの実行を、GitHubから読めませんでした(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできません。読めない間は、そのリポジトリのPRのCIの失敗に気づけません。",

@@ -19,6 +19,7 @@ import {
   countPrCiFixRounds,
   countPrConflictFixRounds,
   countPrFixFailures,
+  decideApprovalRequestIfPending,
   deleteClosedGhDetailRowsBefore,
   deleteGhCollectRunsBefore,
   deleteMainCiRunsBefore,
@@ -46,6 +47,7 @@ import {
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
+  hasRequirementDraftAfter,
   hasSupersedingPrReview,
   insertApprovalRequest,
   insertCleanupRun,
@@ -58,9 +60,12 @@ import {
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   latestConflictFixSettledAt,
+  latestDesignApproval,
   latestDesignDraft,
   latestMainCiRunCreatedAt,
+  latestRequirementsApproval,
   latestStatusEvent,
+  latestStatusTransition,
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
   listClaimablePrCiChecks,
@@ -132,6 +137,7 @@ import {
   updateStatus,
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
+  updateStatusToRequirementsIfCurrent,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -4411,6 +4417,16 @@ check(
   (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql))
     .map((candidate) => candidate.id)
     .includes(stoppedFix),
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET design_attempt = 2 WHERE id = ${String(stoppedFix)}`,
+);
+check(
+  "auto retry candidate: the design attempt of the work item is read",
+  (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql)).find(
+    (candidate) => candidate.id === stoppedFix,
+  )?.design_attempt === 2,
 );
 check(
   "active pr_fix: a stopped pr_fix is restarted once the active one ends",
@@ -9034,6 +9050,971 @@ check(
 check(
   "design drafts by doc dir: another doc dir is not found",
   !(await hasDesignDraftForDocDir(`${dhDesignDir}-other`, sql)),
+);
+
+// 設計の承認の照合: 最新の設計の承認依頼だけを読み、その依頼が指す設計書を結合する。
+// 最新の依頼が指す設計書が引けないとき(存在しない、別の作業項目のもの)に、古い承認へ落ちない。
+const daItem = await issueWorkItem(9331, 1, "designing", "qdb design approval");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-da' WHERE id = ${String(daItem)}`,
+);
+const daRequirements = await requirementDraftFor(daItem);
+const daFirstDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(daItem, daRequirements, 1),
+  "qdb-job-da",
+  sql,
+);
+const daSecondDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(daItem, daRequirements, 2),
+  "qdb-job-da",
+  sql,
+);
+const daOtherItem = await issueWorkItem(
+  9332,
+  1,
+  "designing",
+  "qdb other design",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-db' WHERE id = ${String(daOtherItem)}`,
+);
+const daOtherRequirements = await requirementDraftFor(daOtherItem);
+const daOtherDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(daOtherItem, daOtherRequirements, 1),
+  "qdb-job-db",
+  sql,
+);
+check(
+  "design approval: a work item without a request has none",
+  (await latestDesignApproval(daItem, sql)) === null,
+);
+const daApprovedRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: daFirstDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(daApprovedRequest)}`,
+);
+const daApproved = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: the approved request is read with the design draft and the integers of the payload",
+  daApproved?.approval_request_id === daApprovedRequest &&
+    daApproved.status === "approved" &&
+    daApproved.design_draft_id === daFirstDesign &&
+    daApproved.payload_attempt === 1 &&
+    daApproved.payload_design_attempt === 1 &&
+    daApproved.draft?.design_attempt === 1 &&
+    daApproved.draft.requirement_draft_id === daRequirements,
+  daApproved,
+);
+const daPendingRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: daSecondDesign ?? 0,
+    payload: { attempt: 1, design_attempt: "2" },
+    expires_at: null,
+  },
+  sql,
+);
+const daPending = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: a newer pending request hides the older approved one",
+  daPending?.approval_request_id === daPendingRequest &&
+    daPending.status === "pending",
+  daPending,
+);
+check(
+  "design approval: a payload value that is not an integer is read as null",
+  daPending?.payload_design_attempt === null && daPending.payload_attempt === 1,
+  daPending,
+);
+const daMissingRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: 2147483000,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(daMissingRequest)}`,
+);
+const daMissing = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: a newest request whose design draft does not exist has no draft and does not fall back to the older approval",
+  daMissing?.approval_request_id === daMissingRequest &&
+    daMissing.status === "approved" &&
+    daMissing.draft === null,
+  daMissing,
+);
+const daForeignRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: daOtherDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+const daForeign = await latestDesignApproval(daItem, sql);
+check(
+  "design approval: a newest request that points at a design draft of another work item has no draft",
+  daForeign?.approval_request_id === daForeignRequest &&
+    daForeign.draft === null,
+  daForeign,
+);
+check(
+  "design approval: the other work item is not affected",
+  (await latestDesignApproval(daOtherItem, sql)) === null,
+);
+
+// 再実行が差し戻しの理由を読む問い合わせ。要件定義の生成への最新の遷移(状態の変わらない行を除く)を1件返す。
+// 遷移元で絞らないので、実装・設計・PRの修正のどの差し戻しも拾い、後から記録された再実行の遷移は
+// そのまま返す(古い差し戻しを新しい理由として返さない)。
+const reItem = await issueWorkItem(9341, 1, "implementing", "qdb restart gap");
+check(
+  "restart: the implementation gap moves to the requirements",
+  await updateStatusIfCurrent(
+    reItem,
+    "implementing",
+    "requirements_generating",
+    "gap: first gap",
+    sql,
+  ),
+);
+const reImplGap = await latestStatusTransition(
+  reItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "restart: the latest transition into the requirements is the implementation gap",
+  reImplGap?.from_status === "implementing" &&
+    reImplGap.note === "gap: first gap",
+  reImplGap,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(reItem)}, 'requirements_generating', 'requirements_generating', 'intake refreshed')`,
+);
+const reAfterIntake = await latestStatusTransition(
+  reItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "restart: an event that keeps the status does not hide the gap",
+  reAfterIntake?.note === "gap: first gap",
+  reAfterIntake,
+);
+check(
+  "restart: the failed regeneration moves to needs_human",
+  await updateStatusIfCurrent(
+    reItem,
+    "requirements_generating",
+    "needs_human",
+    "requirements regeneration could not be started",
+    sql,
+  ),
+);
+check(
+  "restart: the restart moves back to the requirements",
+  await updateStatusIfCurrent(
+    reItem,
+    "needs_human",
+    "requirements_generating",
+    "retry_work_item: restarted from needs_human",
+    sql,
+  ),
+);
+const reAfterRestart = await latestStatusTransition(
+  reItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "restart: a restart after the gap is the latest transition, so the old gap does not leak",
+  reAfterRestart?.from_status === "needs_human" &&
+    reAfterRestart.note === "retry_work_item: restarted from needs_human",
+  reAfterRestart,
+);
+check(
+  "restart: the design gap moves to the requirements",
+  (await updateStatusIfCurrent(
+    reItem,
+    "requirements_generating",
+    "designing",
+    null,
+    sql,
+  )) &&
+    (await updateStatusIfCurrent(
+      reItem,
+      "designing",
+      "requirements_generating",
+      "design gap: second gap",
+      sql,
+    )),
+);
+const reDesignGap = await latestStatusTransition(
+  reItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "restart: the design gap is the latest transition after an older restart",
+  reDesignGap?.from_status === "designing" &&
+    reDesignGap.note === "design gap: second gap",
+  reDesignGap,
+);
+check(
+  "restart: a work item with no transition into the status has none",
+  (await latestStatusTransition(reItem, "pr_open", sql)) === null,
+);
+for (const [index, from] of (["approved", "pr_open"] as const).entries()) {
+  const prFixItem = await issueWorkItem(
+    9350 + index,
+    1,
+    from,
+    `qdb restart pr fix ${from}`,
+  );
+  check(
+    `restart: the pull request fix gap moves the work item from ${from} to the requirements`,
+    await updateStatusIfCurrent(
+      prFixItem,
+      from,
+      "requirements_generating",
+      "gap: pull request fix gap",
+      sql,
+    ),
+  );
+  const prFixGap = await latestStatusTransition(
+    prFixItem,
+    "requirements_generating",
+    sql,
+  );
+  check(
+    `restart: the gap noted by the pull request fix from ${from} is found`,
+    prFixGap?.from_status === from &&
+      prFixGap.note === "gap: pull request fix gap",
+    prFixGap,
+  );
+}
+
+// 却下の理由は、照合に使った承認依頼の行から読む。却下が`max_attempts`に達した最後の却下は
+// 要件定義の生成への遷移を作らないので、遷移の記録からは前のサイクルの理由しか引けない。
+async function requirementsDraftAt(
+  workItemId: number,
+  attempt: number,
+): Promise<number> {
+  return saveDraft(
+    {
+      work_item_id: workItemId,
+      attempt,
+      summary: `qdb requirements ${String(attempt)}`,
+      markdown: `qdb requirements ${String(attempt)}`,
+      diagrams: [],
+      open_questions: [],
+      doc_dir: null,
+      doc_hash: null,
+    },
+    sql,
+  );
+}
+
+async function rejectRequirements(
+  workItemId: number,
+  attempt: number,
+  reason: string | null,
+): Promise<number> {
+  const request = await insertApprovalRequest(
+    {
+      kind: "requirements",
+      work_item_id: workItemId,
+      subject_id: await requirementsDraftAt(workItemId, attempt),
+      payload: { attempt },
+      expires_at: null,
+    },
+    sql,
+  );
+  await decideApprovalRequestIfPending(
+    request,
+    { status: "rejected", decided_by: "qdb", reason },
+    sql,
+  );
+  return request;
+}
+
+const reRejectItem = await issueWorkItem(
+  9342,
+  1,
+  "awaiting_approval",
+  "qdb restart rejection",
+);
+await rejectRequirements(reRejectItem, 1, "reason A");
+check(
+  "restart: the first rejection moves to the requirements with its reason",
+  await updateStatusIfCurrent(
+    reRejectItem,
+    "awaiting_approval",
+    "requirements_generating",
+    "reason A",
+    sql,
+  ),
+);
+check(
+  "restart: the regenerated draft waits for approval again",
+  await updateStatusIfCurrent(
+    reRejectItem,
+    "requirements_generating",
+    "awaiting_approval",
+    null,
+    sql,
+  ),
+);
+await rejectRequirements(reRejectItem, 2, "reason B");
+check(
+  "restart: the second rejection moves to the requirements with its reason",
+  await updateStatusIfCurrent(
+    reRejectItem,
+    "awaiting_approval",
+    "requirements_generating",
+    "reason B",
+    sql,
+  ),
+);
+check(
+  "restart: the second regenerated draft waits for approval again",
+  await updateStatusIfCurrent(
+    reRejectItem,
+    "requirements_generating",
+    "awaiting_approval",
+    null,
+    sql,
+  ),
+);
+await rejectRequirements(reRejectItem, 3, "reason C");
+check(
+  "restart: the last rejection stops at the attempt limit without a move to the requirements",
+  await updateStatusIfCurrent(
+    reRejectItem,
+    "awaiting_approval",
+    "needs_human",
+    "reason C",
+    sql,
+  ),
+);
+const reRejectionTransition = await latestStatusTransition(
+  reRejectItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "restart: the transition records give only the reason of the consumed cycle",
+  reRejectionTransition?.note === "reason B",
+  reRejectionTransition,
+);
+const reRejection = await latestRequirementsApproval(reRejectItem, sql);
+check(
+  "restart: the latest requirements approval is the rejection of attempt 3",
+  reRejection?.status === "rejected" && reRejection.attempt === 3,
+  reRejection,
+);
+check(
+  "restart: the reason is read from the approval request of the last rejection",
+  reRejection?.reason === "reason C",
+  reRejection,
+);
+const reLimitOneItem = await issueWorkItem(
+  9344,
+  1,
+  "awaiting_approval",
+  "qdb restart rejection limit one",
+);
+await rejectRequirements(reLimitOneItem, 1, "only reason");
+check(
+  "restart: with a limit of one the only rejection stops without a move to the requirements",
+  await updateStatusIfCurrent(
+    reLimitOneItem,
+    "awaiting_approval",
+    "needs_human",
+    "only reason",
+    sql,
+  ),
+);
+check(
+  "restart: with a limit of one there is no transition into the requirements to read",
+  (await latestStatusTransition(
+    reLimitOneItem,
+    "requirements_generating",
+    sql,
+  )) === null,
+);
+check(
+  "restart: with a limit of one the reason is read from the approval request",
+  (await latestRequirementsApproval(reLimitOneItem, sql))?.reason ===
+    "only reason",
+);
+const reNoReasonItem = await issueWorkItem(
+  9345,
+  1,
+  "awaiting_approval",
+  "qdb restart rejection without reason",
+);
+await rejectRequirements(reNoReasonItem, 1, null);
+check(
+  "restart: a rejection without a reason reads as null",
+  (await latestRequirementsApproval(reNoReasonItem, sql))?.reason === null,
+);
+
+// 再実行が要件定義の生成へ戻す遷移は、同じ文で設計の試行を0へそろえ、リースを空け、遷移を記録する。
+const rtItem = await issueWorkItem(9343, 1, "needs_human", "qdb restart reset");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-rt', design_attempt = 2 WHERE id = ${String(rtItem)}`,
+);
+check(
+  "restart: a stale expected status writes nothing",
+  !(await updateStatusToRequirementsIfCurrent(rtItem, "failed", "x", sql)),
+);
+const rtUntouched = await getWorkItem(rtItem, sql);
+check(
+  "restart: a stale expected status keeps the status, the design attempt and the lease",
+  rtUntouched?.status === "needs_human" &&
+    rtUntouched.design_attempt === 2 &&
+    rtUntouched.flow_job_id === "qdb-job-rt",
+  rtUntouched,
+);
+check(
+  "restart: the expected status moves the work item to the requirements",
+  await updateStatusToRequirementsIfCurrent(
+    rtItem,
+    "needs_human",
+    "retry_work_item: restarted from needs_human",
+    sql,
+  ),
+);
+const rtMoved = await getWorkItem(rtItem, sql);
+check(
+  "restart: the move resets design_attempt, clears the lease and keeps attempt",
+  rtMoved?.status === "requirements_generating" &&
+    rtMoved.design_attempt === 0 &&
+    rtMoved.flow_job_id === null &&
+    rtMoved.attempt === 1,
+  rtMoved,
+);
+const rtEvent = await latestStatusEvent(rtItem, "requirements_generating", sql);
+check(
+  "restart: the move is recorded as an event from the stopped status",
+  rtEvent?.from_status === "needs_human" &&
+    rtEvent.note === "retry_work_item: restarted from needs_human",
+  rtEvent,
+);
+check(
+  "restart: the work item cannot be moved twice",
+  !(await updateStatusToRequirementsIfCurrent(rtItem, "needs_human", "x", sql)),
+);
+
+// 再実行が差し戻しの理由を引き継ぐ遷移の注記(`retry_work_item.ts`の`restartNote`)を飛ばす問い合わせと、
+// 理由を要件定義の生成が消費したかを読む問い合わせを、本物のPostgreSQLで確かめる。
+// 注記の文面は、`restartNote`のユニットテストが固定した文面と同じものを使う。
+const CARRYING_GAP_MARK = "retry_work_item: restarted (carrying gap)";
+const PLAIN_RESTART_NOTE = "retry_work_item: restarted from needs_human";
+const CARRIED_RESTART_NOTE = `${CARRYING_GAP_MARK} from needs_human`;
+const CANCELLED_TAIL =
+  "(was needs_human before the closed target was cancelled)";
+const PLAIN_CANCELLED_RESTART_NOTE = `retry_work_item: restarted from cancelled ${CANCELLED_TAIL}`;
+const CARRIED_CANCELLED_RESTART_NOTE = `${CARRYING_GAP_MARK} from cancelled ${CANCELLED_TAIL}`;
+const LAUNCH_FAILURE =
+  "retry_work_item: f/factory/pipeline could not be started";
+
+async function approveRequirements(
+  workItemId: number,
+  attempt: number,
+): Promise<void> {
+  const request = await insertApprovalRequest(
+    {
+      kind: "requirements",
+      work_item_id: workItemId,
+      subject_id: await requirementsDraftAt(workItemId, attempt),
+      payload: { attempt },
+      expires_at: null,
+    },
+    sql,
+  );
+  await decideApprovalRequestIfPending(
+    request,
+    { status: "approved", decided_by: "qdb", reason: null },
+    sql,
+  );
+}
+
+async function moveStatus(
+  workItemId: number,
+  from: WorkItemStatus,
+  to: WorkItemStatus,
+  note: string | null,
+): Promise<boolean> {
+  return updateStatusIfCurrent(workItemId, from, to, note, sql);
+}
+
+// 実装の差し戻し、作り直しの起動の失敗、理由を引き継いだ再実行、その起動の失敗、もう一度の再実行。
+const carryItem = await issueWorkItem(9360, 1, "implementing", "qdb carry gap");
+check(
+  "carry: the implementation gap moves to the requirements and the launch fails",
+  (await moveStatus(
+    carryItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      carryItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )),
+);
+check(
+  "carry: the first restart carries the gap on and the launch fails again",
+  (await updateStatusToRequirementsIfCurrent(
+    carryItem,
+    "needs_human",
+    CARRIED_RESTART_NOTE,
+    sql,
+  )) &&
+    (await moveStatus(
+      carryItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )),
+);
+const carryMarked = await latestStatusTransition(
+  carryItem,
+  "requirements_generating",
+  sql,
+);
+check(
+  "carry: the marked restart is the latest transition when nothing is skipped",
+  carryMarked?.note === CARRIED_RESTART_NOTE,
+  carryMarked,
+);
+const carrySkipped = await latestStatusTransition(
+  carryItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: the lookup that skips the mark reads the gap before the marked restart",
+  carrySkipped?.note === "gap: X" &&
+    carrySkipped.from_status === "implementing",
+  carrySkipped,
+);
+check(
+  "carry: a second marked restart is skipped as well",
+  (await updateStatusToRequirementsIfCurrent(
+    carryItem,
+    "needs_human",
+    CARRIED_RESTART_NOTE,
+    sql,
+  )) &&
+    (
+      await latestStatusTransition(
+        carryItem,
+        "requirements_generating",
+        sql,
+        CARRYING_GAP_MARK,
+      )
+    )?.note === "gap: X",
+);
+
+// 理由を引き継がない再実行は、その前の古い差し戻しの理由を隠したままにする。
+const plainItem = await issueWorkItem(
+  9361,
+  1,
+  "implementing",
+  "qdb plain restart",
+);
+check(
+  "carry: an old gap is followed by a stop that is not a gap, and by a restart that carries none",
+  (await moveStatus(
+    plainItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      plainItem,
+      "requirements_generating",
+      "implementing",
+      null,
+    )) &&
+    (await moveStatus(
+      plainItem,
+      "implementing",
+      "needs_human",
+      "requirements directory was modified",
+    )) &&
+    (await updateStatusToRequirementsIfCurrent(
+      plainItem,
+      "needs_human",
+      PLAIN_RESTART_NOTE,
+      sql,
+    )) &&
+    (await moveStatus(
+      plainItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )),
+);
+const plainSkipped = await latestStatusTransition(
+  plainItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: the restart that carries no gap is not skipped, so the old gap does not leak",
+  plainSkipped?.note === PLAIN_RESTART_NOTE,
+  plainSkipped,
+);
+
+// 注記の無い遷移は、印を飛ばす条件に巻き込まれない。
+const nullNoteItem = await issueWorkItem(
+  9362,
+  1,
+  "implementing",
+  "qdb null note",
+);
+check(
+  "carry: a transition without a note",
+  await moveStatus(
+    nullNoteItem,
+    "implementing",
+    "requirements_generating",
+    null,
+  ),
+);
+const nullNoteRow = await latestStatusTransition(
+  nullNoteItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a transition without a note is not skipped by the mark",
+  nullNoteRow?.from_status === "implementing" && nullNoteRow.note === null,
+  nullNoteRow,
+);
+
+// 差し戻しの本文が印で終わっても、印は先頭だけを見るので飛ばされない。
+const bodyMarkItem = await issueWorkItem(
+  9365,
+  1,
+  "implementing",
+  "qdb gap body mark",
+);
+check(
+  "carry: a gap body that ends with the mark",
+  await moveStatus(
+    bodyMarkItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X (carrying gap)",
+  ),
+);
+const bodyMarkRow = await latestStatusTransition(
+  bodyMarkItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a gap body that ends with the mark is not skipped",
+  bodyMarkRow?.note === "gap: X (carrying gap)",
+  bodyMarkRow,
+);
+const designBodyMarkItem = await issueWorkItem(
+  9366,
+  1,
+  "designing",
+  "qdb design gap body mark",
+);
+check(
+  "carry: a design gap body that ends with the mark",
+  await moveStatus(
+    designBodyMarkItem,
+    "designing",
+    "requirements_generating",
+    "design gap: X (carrying gap)",
+  ),
+);
+const designBodyMarkRow = await latestStatusTransition(
+  designBodyMarkItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a design gap body that ends with the mark is not skipped",
+  designBodyMarkRow?.note === "design gap: X (carrying gap)",
+  designBodyMarkRow,
+);
+
+// 取り消された後の再実行は、注記に取り消す前の状態が入る。印は先頭にあるので、その形でも飛ばされる。
+const cancelledItem = await issueWorkItem(
+  9367,
+  1,
+  "implementing",
+  "qdb cancelled restart",
+);
+check(
+  "carry: the gap, the launch failure, the cancellation, and a marked restart after it",
+  (await moveStatus(
+    cancelledItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      cancelledItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )) &&
+    (await moveStatus(
+      cancelledItem,
+      "needs_human",
+      "cancelled",
+      "cancelled",
+    )) &&
+    (await updateStatusToRequirementsIfCurrent(
+      cancelledItem,
+      "cancelled",
+      CARRIED_CANCELLED_RESTART_NOTE,
+      sql,
+    )) &&
+    (await moveStatus(
+      cancelledItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )),
+);
+const cancelledMarked = await latestStatusTransition(
+  cancelledItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "carry: a marked restart after a cancellation is skipped and the gap before it is read",
+  cancelledMarked?.note === "gap: X",
+  cancelledMarked,
+);
+check(
+  "carry: a plain restart after a cancellation is not skipped",
+  (await moveStatus(cancelledItem, "needs_human", "cancelled", "cancelled")) &&
+    (await updateStatusToRequirementsIfCurrent(
+      cancelledItem,
+      "cancelled",
+      PLAIN_CANCELLED_RESTART_NOTE,
+      sql,
+    )) &&
+    (
+      await latestStatusTransition(
+        cancelledItem,
+        "requirements_generating",
+        sql,
+        CARRYING_GAP_MARK,
+      )
+    )?.note === PLAIN_CANCELLED_RESTART_NOTE,
+);
+
+// 準備がattemptを進めた後、下書きを作れずに止まった(日次予算の超過など)とき、再実行が読む記録は次のとおりになる。
+// 承認は前のattemptのまま、作業項目のattemptは進み、後の下書きは無い。差し戻しの理由は消費されていない。
+async function setAttempt(workItemId: number, attempt: number): Promise<void> {
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET attempt = ${String(attempt)} WHERE id = ${String(workItemId)}`,
+  );
+}
+
+const budgetItem = await issueWorkItem(
+  9363,
+  1,
+  "implementing",
+  "qdb budget gap",
+);
+await approveRequirements(budgetItem, 1);
+check(
+  "unconsumed: the gap moves to the requirements and the budget stops the generation",
+  (await moveStatus(
+    budgetItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      budgetItem,
+      "requirements_generating",
+      "needs_human",
+      "daily budget exceeded ($5.00 >= $5.00)",
+    )),
+);
+await setAttempt(budgetItem, 2);
+const budgetApproval = await latestRequirementsApproval(budgetItem, sql);
+check(
+  "unconsumed: the approval stays at the earlier attempt while the work item moved on",
+  budgetApproval?.status === "approved" &&
+    budgetApproval.attempt === 1 &&
+    (await getWorkItem(budgetItem, sql))?.attempt === 2,
+  budgetApproval,
+);
+check(
+  "unconsumed: the work item stopped right after the requirements generation",
+  (await latestStatusEvent(budgetItem, "needs_human", sql))?.from_status ===
+    "requirements_generating",
+);
+check(
+  "unconsumed: no draft exists after the approved attempt",
+  !(await hasRequirementDraftAfter(budgetItem, 1, sql)),
+);
+check(
+  "unconsumed: the gap is still the transition to read",
+  (
+    await latestStatusTransition(
+      budgetItem,
+      "requirements_generating",
+      sql,
+      CARRYING_GAP_MARK,
+    )
+  )?.note === "gap: X",
+);
+await requirementsDraftAt(budgetItem, 2);
+check(
+  "unconsumed: a draft after the approved attempt exists once the generation made one",
+  await hasRequirementDraftAfter(budgetItem, 1, sql),
+);
+check(
+  "unconsumed: the draft of the attempt itself is not a later draft",
+  !(await hasRequirementDraftAfter(budgetItem, 2, sql)),
+);
+check(
+  "unconsumed: another work item is not affected by the draft",
+  !(await hasRequirementDraftAfter(carryItem, 0, sql)),
+);
+
+// 理由を引き継がない再実行(印なし)の後に準備がattemptを進め、予算で止まったとき、古い差し戻しの理由は読まれない。
+const budgetPlainItem = await issueWorkItem(
+  9368,
+  1,
+  "implementing",
+  "qdb budget after plain restart",
+);
+await approveRequirements(budgetPlainItem, 1);
+check(
+  "unconsumed: the gap, the launch failure, and a restart that carries no gap",
+  (await moveStatus(
+    budgetPlainItem,
+    "implementing",
+    "requirements_generating",
+    "gap: X",
+  )) &&
+    (await moveStatus(
+      budgetPlainItem,
+      "requirements_generating",
+      "needs_human",
+      LAUNCH_FAILURE,
+    )) &&
+    (await updateStatusToRequirementsIfCurrent(
+      budgetPlainItem,
+      "needs_human",
+      PLAIN_RESTART_NOTE,
+      sql,
+    )),
+);
+await setAttempt(budgetPlainItem, 2);
+check(
+  "unconsumed: the budget stops the generation after the restart that carried no gap",
+  await moveStatus(
+    budgetPlainItem,
+    "requirements_generating",
+    "needs_human",
+    "daily budget exceeded ($5.00 >= $5.00)",
+  ),
+);
+const budgetPlainApproval = await latestRequirementsApproval(
+  budgetPlainItem,
+  sql,
+);
+check(
+  "unconsumed: the approval stays at the earlier attempt and no draft exists after it",
+  budgetPlainApproval?.status === "approved" &&
+    budgetPlainApproval.attempt === 1 &&
+    !(await hasRequirementDraftAfter(budgetPlainItem, 1, sql)),
+  budgetPlainApproval,
+);
+const budgetPlainRow = await latestStatusTransition(
+  budgetPlainItem,
+  "requirements_generating",
+  sql,
+  CARRYING_GAP_MARK,
+);
+check(
+  "unconsumed: the transition to read is the restart that carried no gap, not the old gap",
+  budgetPlainRow?.note === PLAIN_RESTART_NOTE,
+  budgetPlainRow,
+);
+
+// 却下の理由も同じ並びで、承認依頼の行に残る。
+const budgetRejectItem = await issueWorkItem(
+  9364,
+  1,
+  "awaiting_approval",
+  "qdb budget rejection",
+);
+await rejectRequirements(budgetRejectItem, 1, "reason R");
+check(
+  "unconsumed: the rejection moves to the requirements and the budget stops the generation",
+  (await moveStatus(
+    budgetRejectItem,
+    "awaiting_approval",
+    "requirements_generating",
+    "reason R",
+  )) &&
+    (await moveStatus(
+      budgetRejectItem,
+      "requirements_generating",
+      "needs_human",
+      "daily budget exceeded ($5.00 >= $5.00)",
+    )),
+);
+await setAttempt(budgetRejectItem, 2);
+const budgetRejection = await latestRequirementsApproval(budgetRejectItem, sql);
+check(
+  "unconsumed: the reason stays on the approval request of the earlier attempt",
+  budgetRejection?.status === "rejected" &&
+    budgetRejection.attempt === 1 &&
+    budgetRejection.reason === "reason R" &&
+    !(await hasRequirementDraftAfter(budgetRejectItem, 1, sql)),
+  budgetRejection,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

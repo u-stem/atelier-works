@@ -823,6 +823,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "手動投入の入力の検証と、断りの理由の定数。入力の規則を直す変更が日常的に触れる。断りの理由は、Consoleの契約テストが型と突き合わせる",
   "f/factory/lib/intake_refresh.ts":
     "Issueの取り込み内容を更新する共有モジュール。取り込みの修正が日常的に触れる",
+  "f/factory/lib/design_launch_support.ts":
+    "設計フローの起動の入力を組み立てる純粋関数。固定の形で、信頼できない入力を持たない。設計工程の修正が日常的に触れる",
   "f/factory/lib/pipeline_lease.ts":
     "要件定義と設計のフローのパスと、リースの判定の共有モジュール。要件定義と設計の修正が日常的に触れる",
   "f/factory/lib/owner_id_notice.ts":
@@ -959,6 +961,44 @@ describe("files of the conflict round", () => {
     "f/factory/lib/ci_fix_paths.ts",
   ])("denies %s", (path) => {
     expect(isDeniedPath(path)).toBe(true);
+  });
+});
+
+describe("files of the implement gate", () => {
+  test.each([
+    "f/factory/lib/approval_gate.ts",
+    "f/factory/lib/approval_gate.script.yaml",
+    "f/factory/lib/approval_gate.script.lock",
+    "f/factory/lib/doc_tree_hash.ts",
+    "f/factory/lib/doc_tree_hash.script.yaml",
+    "f/factory/lib/doc_tree_hash.script.lock",
+    "f/factory/lib/model_text.ts",
+    "f/factory/lib/model_text.script.yaml",
+    "f/factory/lib/model_text.script.lock",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/lib/implement_support.ts",
+    "f/factory/lib/implement_loop.ts",
+  ])("keeps %s open to the fix of the implement flow", (path) => {
+    expect(isDeniedPath(path)).toBe(false);
+  });
+
+  test("names the three files in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(
+      ["approval_gate", "doc_tree_hash", "model_text"].filter(
+        (name) => !doc.includes(`\`${name}\``),
+      ),
+    ).toEqual([]);
   });
 });
 

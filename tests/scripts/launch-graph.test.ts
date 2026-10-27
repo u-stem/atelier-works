@@ -243,6 +243,14 @@ describe("describeOrigin", () => {
     );
   });
 
+  test("lists the design flow among the flows the Console retry starts", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "retry_work_item",
+      to: "design",
+      kind: "script",
+    });
+  });
+
   test("adds the operation of a person to an entry script", () => {
     const edge = LAUNCH_EDGES.find(
       (candidate) => candidate.from === "retry_work_item",

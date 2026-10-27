@@ -138,6 +138,13 @@ export type ImplementContext = {
    * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も基準値なしとして扱い、複製の側が警告を出す。
    */
   readonly requirements_doc_hash: string | null;
+  /**
+   * 承認済みの設計書の本文。`designGate`が整えた(制御文字と書式文字を除き、秘密をマスクし、長さを絞った)ものである。
+   * HTMLとリンク参照定義は除かず、文字としてそのまま渡す。
+   * 設計が無効なら`null`。設計書の図とディレクトリは文脈に載せない。
+   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も`null`として扱う。
+   */
+  readonly design_markdown: string | null;
   readonly requirements_console_url: string;
   /**
    * 対象がFactory自身のリポジトリなら`true`。
@@ -167,7 +174,9 @@ export type ImplementContext = {
  * プロンプトが示すパスであり、`addDirs`で渡すパスでもある。
  */
 export function implementPromptInput(
-  context: ImplementContext,
+  context: Omit<ImplementContext, "design_markdown"> & {
+    readonly design_markdown?: string | null;
+  },
   docDir: string | null,
 ): ImplementPromptInput {
   return {
@@ -186,6 +195,7 @@ export function implementPromptInput(
     },
     worktreeDir: context.worktree_dir,
     branch: context.branch,
+    design: context.design_markdown ?? null,
     hasPreviousImplementation: context.has_previous_implementation,
   };
 }

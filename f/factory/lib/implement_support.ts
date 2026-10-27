@@ -1024,26 +1024,6 @@ export function stallHash(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// isRequirementsApprovedForAttempt: implement_prepareの関門と、
-// retry_work_itemがimplementとpipelineのどちらを再実行するかの判定に使う
-// ---------------------------------------------------------------------------
-
-/**
- * `approval`(`db.latestRequirementsApproval`の行か`null`)が、
- * ちょうど`attempt`回目の要件定義を承認したものかを返す。
- */
-export function isRequirementsApprovedForAttempt(
-  approval: { readonly status: string; readonly attempt: number } | null,
-  attempt: number,
-): boolean {
-  return (
-    approval !== null &&
-    approval.status === "approved" &&
-    approval.attempt === attempt
-  );
-}
-
-// ---------------------------------------------------------------------------
 // ブランチのPRで動いている修正・レビュー
 // ---------------------------------------------------------------------------
 

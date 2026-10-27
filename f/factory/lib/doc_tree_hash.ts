@@ -31,6 +31,27 @@ export const REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON =
 export const REQUIREMENTS_DIR_MISSING_REASON =
   "approved requirements directory is missing";
 
+/** 改ざん・欠落の4つの理由。 */
+const REQUIREMENTS_UNTRUSTED_REASONS: readonly string[] = [
+  REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
+  REQUIREMENTS_MODIFIED_REASON,
+  REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+  REQUIREMENTS_DIR_MISSING_REASON,
+];
+
+/**
+ * 遷移の注記が、承認済みの要件定義の改ざん・欠落の理由か。
+ * 理由に完全一致するか、理由に`"; "`と注記が続くときだけ真を返す。
+ * 実装の人の対応待ちの注記は、理由に途中の作業の保全などの注記を`"; "`でつなぐので、後者も理由として扱う。
+ * 理由の後ろに別の語が続く注記は、別の理由なので扱わない。
+ */
+export function isRequirementsUntrustedReason(note: string | null): boolean {
+  if (note === null) return false;
+  return REQUIREMENTS_UNTRUSTED_REASONS.some(
+    (reason) => note === reason || note.startsWith(`${reason}; `),
+  );
+}
+
 /**
  * ディレクトリ以外の項目の種類。
  * 通常のファイルとシンボリックリンクと特殊ファイルを、中身が同じ文字列でも別のものとして数えるために、ハッシュに種類の印を入れる。
