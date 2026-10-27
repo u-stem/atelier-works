@@ -132,12 +132,13 @@ describe("flowJobQueryOptions", () => {
     expect(await readsFor(null, true)).toEqual([]);
   });
 
-  test.each([
+  const POLLS: ReadonlyArray<readonly [string, number | false]> = [
     ["running", JOB_DETAIL_REFRESH_MS],
     ["queued", JOB_DETAIL_REFRESH_MS],
     ["success", false],
     ["failure", false],
-  ])("polls a %s job at %p", (state, expected) => {
+  ];
+  test.each(POLLS)("polls a %s job at %p", (state, expected) => {
     const options = flowJobQueryOptions(JOB, true);
     expect(options.refetchInterval({ state: { data: detailOf(state) } })).toBe(
       expected,

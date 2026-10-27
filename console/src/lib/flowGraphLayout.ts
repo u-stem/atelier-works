@@ -166,7 +166,10 @@ function anchorOf(box: LayoutBox, side: Side, fraction: number): Anchor {
  * 辺を、箱の側面につなぐ。右の列へ向かう辺は、元の右側から先の左側へ引く。
  * 左の列へ戻る辺(flowのステップ)は、元の左側から先の右側へ引く。
  */
-export function layoutFlowGraph(graph: FlowGraph): FlowGraphLayout {
+export function layoutFlowGraph(
+  graph: FlowGraph,
+  _options: { readonly compact?: boolean } = {},
+): FlowGraphLayout {
   const columnOf = columnsOf(graph);
   const boxes = placeBoxes(orderColumns(graph, columnOf));
   const boxOf = new Map(boxes.map((box) => [box.node.id, box]));
