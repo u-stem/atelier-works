@@ -6,6 +6,7 @@ import type {
   ArgViewData,
   ConfigItemView,
   JobListView,
+  JobSummaryView,
   OutputViewData,
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
@@ -71,6 +72,15 @@ const FINISHED_STATES: ReadonlySet<string> = new Set([
 /** 実行中か待ちの状態か。 */
 export function isActiveJobState(state: string): boolean {
   return ACTIVE_STATES.has(state);
+}
+
+/**
+ * 実行中と待ちのタブに出すジョブ。これから始まる予定のジョブは外す。
+ * 予定かどうかは、一覧を作るサーバーが予定の時刻と現在の比較で決めた状態をそのまま使う。
+ * 次回の予定は、スケジュールのタブにあるので、この一覧では重ねない。
+ */
+export function currentJobs(jobs: readonly JobSummaryView[]): JobSummaryView[] {
+  return jobs.filter((job) => job.state !== "scheduled");
 }
 
 /** 終わった状態か。 */
