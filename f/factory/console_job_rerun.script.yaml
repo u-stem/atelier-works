@@ -1,0 +1,16 @@
+summary: '[OP-2-7] 失敗した定期ジョブを再実行'
+description: Factory
+  Consoleから、失敗した定期ジョブを1件、scheduleに定義された引数で1回再実行します。対象は、名前で列挙した冪等な定期処理(GitHubの収集と、PRレビューの自動再開)の失敗だけです。同じscriptが実行中か待ちのとき、次の回がタイムアウトより近いとき、scheduleが無効のときは再実行しません。操作の前に記録を残し、残せなければ再実行しません。
+lock: '!inline f/factory/console_job_rerun.script.lock'
+kind: script
+schema:
+  properties:
+    job_id:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - job_id
+tag: console
+timeout: 30

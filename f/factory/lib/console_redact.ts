@@ -52,6 +52,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export function holdsReference(_value: unknown, _depth = 0): boolean {
+  return false;
+}
+
 const SECRET_WORDS =
   "TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|CREDENTIAL|AUTHORIZATION";
 const SECRET_KEY = new RegExp(SECRET_WORDS, "i");
