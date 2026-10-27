@@ -16,6 +16,7 @@ import {
   claimPrConflictForFix,
   closeGhZeroCountRepos,
   countAppliedDesignRejections,
+  countApprovalRedispatches,
   countImplementFailedRounds,
   countPrCiFixRounds,
   countPrConflictFixRounds,
@@ -103,6 +104,7 @@ import {
   readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
+  recordApprovalRedispatch,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
@@ -10495,6 +10497,100 @@ check(
     "n",
     sql,
   )) === true,
+);
+
+// 承認の判断を反映する処理の起動し直しは、作業項目の状態を変えない遷移の記録として残し、その数を依頼ごとに数える。
+const redispatchItem = await issueWorkItem(
+  9510,
+  1,
+  "awaiting_design_approval",
+  "qdb approval redispatch",
+);
+const redispatchOther = await issueWorkItem(
+  9511,
+  1,
+  "awaiting_design_approval",
+  "qdb approval redispatch other",
+);
+const REDISPATCH_NOTE = "approval handler restarted for request 41";
+const REDISPATCH_OTHER_NOTE = "approval handler restarted for request 42";
+check(
+  "approval redispatch: none are counted at first",
+  (await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql)) === 0,
+);
+check(
+  "approval redispatch: a record is written while the work item is in the status",
+  (await recordApprovalRedispatch(
+    redispatchItem,
+    "awaiting_design_approval",
+    REDISPATCH_NOTE,
+    sql,
+  )) === true,
+);
+await recordApprovalRedispatch(
+  redispatchItem,
+  "awaiting_design_approval",
+  REDISPATCH_NOTE,
+  sql,
+);
+await recordApprovalRedispatch(
+  redispatchItem,
+  "awaiting_design_approval",
+  REDISPATCH_OTHER_NOTE,
+  sql,
+);
+await recordApprovalRedispatch(
+  redispatchOther,
+  "awaiting_design_approval",
+  REDISPATCH_NOTE,
+  sql,
+);
+check(
+  "approval redispatch: the records of the request are counted",
+  (await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql)) === 2,
+  await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql),
+);
+check(
+  "approval redispatch: the records of another request and another work item are not counted",
+  (await countApprovalRedispatches(
+    redispatchItem,
+    REDISPATCH_OTHER_NOTE,
+    sql,
+  )) === 1 &&
+    (await countApprovalRedispatches(redispatchOther, REDISPATCH_NOTE, sql)) ===
+      1,
+);
+check(
+  "approval redispatch: the status of the work item stays",
+  (await workItemRow(redispatchItem)).status === "awaiting_design_approval",
+);
+check(
+  "approval redispatch: a record of a transition with the same note is not counted",
+  (await moveStatus(
+    redispatchItem,
+    "awaiting_design_approval",
+    "designing",
+    REDISPATCH_NOTE,
+  )) &&
+    (await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql)) ===
+      2,
+);
+check(
+  "approval redispatch: no record is written once the work item left the status",
+  (await recordApprovalRedispatch(
+    redispatchItem,
+    "awaiting_design_approval",
+    REDISPATCH_NOTE,
+    sql,
+  )) === false,
+);
+check(
+  "approval redispatch: the record does not become the latest transition",
+  (await latestStatusTransition(
+    redispatchOther,
+    "awaiting_design_approval",
+    sql,
+  )) === null,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

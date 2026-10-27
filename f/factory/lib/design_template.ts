@@ -84,6 +84,8 @@ export function buildDesignDocDir(
 export const DESIGN_DOC_DIR_IN_USE_REASON =
   "design document directory already holds a saved draft";
 
+export const DESIGN_APPROVAL_TIMED_OUT_REASON = "";
+
 /** 設計の開始時に、要件定義の試行に承認が無いときの`needs_human`の理由。 */
 export function designNoApprovalReason(attempt: number): string {
   return `design requires approved requirements for attempt ${String(attempt)}`;

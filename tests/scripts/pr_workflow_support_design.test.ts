@@ -9,6 +9,7 @@ import {
 } from "../../f/factory/lib/approval_gate.ts";
 import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_support.ts";
 import {
+  DESIGN_APPROVAL_TIMED_OUT_REASON,
   DESIGN_DOC_DIR_IN_USE_REASON,
   designGapExhaustedReason,
   designNoApprovalReason,
@@ -248,6 +249,7 @@ describe("the reason table and the reasons that the design stage produces", () =
     designGateReason: designGateReason({ kind: "inconsistent" }, 1),
     DESIGN_STALE_REQUIREMENTS_REASON,
     DESIGN_APPROVAL_INCONSISTENT_REASON,
+    DESIGN_APPROVAL_TIMED_OUT_REASON,
   };
 
   /** 設計の理由の定数を持つファイル。 */
@@ -335,6 +337,34 @@ describe("the reason table and the reasons that the design stage produces", () =
       );
     },
   );
+});
+
+describe("the reason of a design approval that timed out", () => {
+  test("is the fixed sentence of the timeout", () => {
+    expect(DESIGN_APPROVAL_TIMED_OUT_REASON).toBe("design approval timed out");
+  });
+
+  test("translates the timeout", () => {
+    expect(describeReason(DESIGN_APPROVAL_TIMED_OUT_REASON)).toBe(
+      "設計の承認がタイムアウトしました",
+    );
+  });
+
+  test("tells how to retry after the timeout", () => {
+    expect(nextActionFor(DESIGN_APPROVAL_TIMED_OUT_REASON)).toContain(RETRY);
+  });
+
+  test("tells that the design is regenerated with the approved requirements", () => {
+    expect(nextActionFor(DESIGN_APPROVAL_TIMED_OUT_REASON)).toContain(
+      "設計書を作り直します。承認済みの要件定義は使います",
+    );
+  });
+
+  test("does not tell the operator to decide a request that expired", () => {
+    expect(nextActionFor(DESIGN_APPROVAL_TIMED_OUT_REASON)).not.toContain(
+      "承認または却下してください",
+    );
+  });
 });
 
 describe("designNeedsHumanFields", () => {

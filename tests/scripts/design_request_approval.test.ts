@@ -4,12 +4,18 @@ import {
   buildApprovalConsoleUrl,
 } from "../../f/factory/lib/approval_support.ts";
 import type { NewApprovalRequest } from "../../f/factory/lib/db.ts";
+import { DESIGN_APPROVAL_TIMED_OUT_REASON } from "../../f/factory/lib/design_template.ts";
 import type {
   NotifyBestEffortResult,
   NotifyEvent,
 } from "../../f/factory/lib/discord.ts";
 import { PIPELINE_LEASE_LOST_REASON } from "../../f/factory/lib/pipeline_lease.ts";
-import type { DesignDraft, WorkItem } from "../../f/factory/lib/types.ts";
+import type {
+  ApprovalRequest,
+  ApprovalRequestStatus,
+  DesignDraft,
+  WorkItem,
+} from "../../f/factory/lib/types.ts";
 import {
   DESIGN_APPROVAL_ALREADY_DECIDED_REASON,
   DESIGN_APPROVAL_WITHDRAWN_REASON,
@@ -96,7 +102,34 @@ type Options = {
   readonly withdrawError?: Error;
   readonly notify?: NotifyBestEffortResult;
   readonly recordNotice?: () => Promise<void>;
+  /** 移行の後に読み直した依頼の状態。既定は`pending`。 */
+  readonly requestStatus?: ApprovalRequestStatus;
+  /** 設定すると、依頼の読み直しがこのエラーを投げる。 */
+  readonly readError?: Error;
+  /** 設定すると、依頼の読み直しが`null`を返す。 */
+  readonly requestMissing?: boolean;
+  /** 設定すると、設計の承認の反映の起動がこのエラーを投げる。 */
+  readonly runError?: Error;
+  /** 期限切れの依頼のときに、作業項目を`expired`へ動かす比較交換の結果。既定は`true`。 */
+  readonly expiredMoved?: boolean;
 };
+
+function approvalRequest(status: ApprovalRequestStatus): ApprovalRequest {
+  return {
+    id: 33,
+    kind: "design",
+    work_item_id: 7,
+    subject_id: 11,
+    status,
+    payload: { attempt: 2, design_attempt: 3 },
+    decision_options: {},
+    requested_at: DATE,
+    expires_at: null,
+    decided_at: null,
+    decided_by: null,
+    reason: null,
+  };
+}
 
 function harness(options: Options = {}) {
   const calls: string[] = [];
@@ -104,6 +137,8 @@ function harness(options: Options = {}) {
   const withdrawn: number[] = [];
   const events: NotifyEvent[] = [];
   const notices: string[] = [];
+  const handlerRuns: number[] = [];
+  const needsHumanReasons: string[] = [];
   const deps: DesignRequestApprovalDeps = {
     leaseJobId: LEASE,
     now: () => NOW,
@@ -135,6 +170,26 @@ function harness(options: Options = {}) {
       if (options.withdrawError !== undefined) throw options.withdrawError;
       return options.withdrawn ?? true;
     },
+    getApprovalRequest: async () => {
+      calls.push("read");
+      if (options.readError !== undefined) throw options.readError;
+      if (options.requestMissing === true) return null;
+      return approvalRequest(options.requestStatus ?? "pending");
+    },
+    runHandler: async (approvalRequestId) => {
+      calls.push("run");
+      handlerRuns.push(approvalRequestId);
+      if (options.runError !== undefined) throw options.runError;
+      return "job-1";
+    },
+    moveToExpired: async () => {
+      calls.push("move_expired");
+      return options.expiredMoved ?? true;
+    },
+    notifyNeedsHuman: async (reason) => {
+      calls.push("needs_human");
+      needsHumanReasons.push(reason);
+    },
     notify: async (event) => {
       calls.push("notify");
       events.push(event);
@@ -147,7 +202,16 @@ function harness(options: Options = {}) {
     },
     log: () => {},
   };
-  return { deps, calls, inserted, withdrawn, events, notices };
+  return {
+    deps,
+    calls,
+    inserted,
+    withdrawn,
+    events,
+    notices,
+    handlerRuns,
+    needsHumanReasons,
+  };
 }
 
 const INPUT = { work_item_id: 7, design_attempt: 3 };
@@ -279,7 +343,7 @@ describe("runDesignRequestApproval on success", () => {
   test("notifies after the move", async () => {
     const h = harness();
     await runDesignRequestApproval(h.deps, INPUT);
-    expect(h.calls).toEqual(["insert", "move", "notify"]);
+    expect(h.calls).toEqual(["insert", "move", "read", "notify"]);
   });
 
   test("sends a design approval notification for the issue", async () => {
@@ -409,5 +473,152 @@ describe("runDesignRequestApproval when the notification is not delivered", () =
       },
     });
     expect((await runDesignRequestApproval(h.deps, INPUT)).ok).toBe(true);
+  });
+});
+
+describe("runDesignRequestApproval and a decision that came in before the move", () => {
+  test("reads the request again after it moved the work item", async () => {
+    const h = harness();
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls.slice(0, 3)).toEqual(["insert", "move", "read"]);
+  });
+
+  test("does not read the request again when the work item cannot move", async () => {
+    const h = harness({ moved: false });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).not.toContain("read");
+  });
+
+  test("does not read the request again when moving the work item throws", async () => {
+    const h = harness({ moveError: new Error("database is down") });
+    await runDesignRequestApproval(h.deps, INPUT).catch(() => {});
+    expect(h.calls).not.toContain("read");
+  });
+
+  test("does not start the handler for a pending request", async () => {
+    const h = harness({ requestStatus: "pending" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.handlerRuns).toEqual([]);
+  });
+
+  test("notifies for a pending request", async () => {
+    const h = harness({ requestStatus: "pending" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).toContain("notify");
+  });
+
+  test.each([["approved"], ["rejected"]] as const)(
+    "starts the handler for a request that was %s",
+    async (requestStatus) => {
+      const h = harness({ requestStatus });
+      await runDesignRequestApproval(h.deps, INPUT);
+      expect(h.handlerRuns).toEqual([33]);
+    },
+  );
+
+  test.each([["approved"], ["rejected"]] as const)(
+    "does not ask for the decision again when the request was %s",
+    async (requestStatus) => {
+      const h = harness({ requestStatus });
+      await runDesignRequestApproval(h.deps, INPUT);
+      expect(h.events).toEqual([]);
+    },
+  );
+
+  test("writes nothing after it started the handler", async () => {
+    const h = harness({ requestStatus: "approved" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).toEqual(["insert", "move", "read", "run"]);
+  });
+
+  test("reports the request as recorded after it started the handler", async () => {
+    const h = harness({ requestStatus: "rejected" });
+    expect(await runDesignRequestApproval(h.deps, INPUT)).toEqual({
+      ok: true,
+      approval_request_id: 33,
+    });
+  });
+
+  test("does not throw when the handler could not be started", async () => {
+    const h = harness({
+      requestStatus: "approved",
+      runError: new Error("launch failed"),
+    });
+    expect((await runDesignRequestApproval(h.deps, INPUT)).ok).toBe(true);
+  });
+
+  test("writes nothing when the handler could not be started", async () => {
+    const h = harness({
+      requestStatus: "approved",
+      runError: new Error("launch failed"),
+    });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).toEqual(["insert", "move", "read", "run"]);
+  });
+
+  test("treats a read that throws as a pending request and notifies", async () => {
+    const h = harness({ readError: new Error("db down") });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).toEqual(["insert", "move", "read", "notify"]);
+  });
+
+  test("reports success when the read throws", async () => {
+    const h = harness({ readError: new Error("db down") });
+    expect(await runDesignRequestApproval(h.deps, INPUT)).toEqual({
+      ok: true,
+      approval_request_id: 33,
+    });
+  });
+
+  test("treats a request that cannot be found as a pending request", async () => {
+    const h = harness({ requestMissing: true });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).toEqual(["insert", "move", "read", "notify"]);
+  });
+});
+
+describe("runDesignRequestApproval and a request that expired before the notification", () => {
+  test("moves the work item to expired and tells a person", async () => {
+    const h = harness({ requestStatus: "expired" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.calls).toEqual([
+      "insert",
+      "move",
+      "read",
+      "move_expired",
+      "needs_human",
+    ]);
+  });
+
+  test("tells a person the design approval timed out", async () => {
+    const h = harness({ requestStatus: "expired" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.needsHumanReasons).toEqual([DESIGN_APPROVAL_TIMED_OUT_REASON]);
+  });
+
+  test("does not ask for the decision", async () => {
+    const h = harness({ requestStatus: "expired" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.events).toEqual([]);
+  });
+
+  test("does not start the handler", async () => {
+    const h = harness({ requestStatus: "expired" });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.handlerRuns).toEqual([]);
+  });
+
+  test("does not tell a person when the work item could not move", async () => {
+    const h = harness({ requestStatus: "expired", expiredMoved: false });
+    await runDesignRequestApproval(h.deps, INPUT);
+    expect(h.needsHumanReasons).toEqual([]);
+  });
+
+  test("reports the timeout", async () => {
+    const h = harness({ requestStatus: "expired" });
+    expect(await runDesignRequestApproval(h.deps, INPUT)).toEqual({
+      ok: false,
+      reason: DESIGN_APPROVAL_TIMED_OUT_REASON,
+    });
   });
 });

@@ -41,6 +41,7 @@ const WITHOUT_CI_ACTION = [
   "^implement time settings do not fit",
   "^design ",
   "^design ",
+  "^approval decision could not be applied",
 ];
 
 describe("REASON_RULES in a CI round", () => {

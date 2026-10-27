@@ -8,6 +8,7 @@ import {
   claimIssueCreation,
   claimPrCiCheckForFix,
   countAppliedDesignRejections,
+  countApprovalRedispatches,
   countImplementFailedRounds,
   countPendingIssueProposals,
   countPrCiFixRounds,
@@ -5747,6 +5748,96 @@ describe("updateStatusToRequirementsIfLeaseHolder", () => {
   });
 
   test("returns false when the status or flow job id changed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(false);
+  });
+});
+
+describe("countApprovalRedispatches", () => {
+  const NOTE = "approval handler restarted for request 41";
+
+  test("returns the count", async () => {
+    const { sql } = createFakeSqlClient([[{ n: 2 }]]);
+    expect(await countApprovalRedispatches(1, NOTE, sql)).toBe(2);
+  });
+
+  test("returns zero when the query returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countApprovalRedispatches(1, NOTE, sql)).toBe(0);
+  });
+
+  test("passes the note from the caller as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countApprovalRedispatches(1, NOTE, sql);
+    expect(calls[0]?.values).toContain(NOTE);
+  });
+
+  test("counts only the records that keep the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countApprovalRedispatches(1, NOTE, sql);
+    expect(calls[0]?.text).toContain("from_status = to_status");
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countApprovalRedispatches(1, NOTE, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "work_item_id = ? ::bigint",
+    );
+  });
+});
+
+describe("recordApprovalRedispatch", () => {
+  const NOTE = "approval handler restarted for request 41";
+
+  function call(sql: SqlClient) {
+    return recordApprovalRedispatch(
+      1,
+      "awaiting_design_approval",
+      NOTE,
+      sql,
+      NO_JOBS,
+    );
+  }
+
+  test("records a record that keeps the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("writes the status as both the source and the destination", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "SELECT id, status, status, ?",
+    );
+  });
+
+  test("does not touch the work item row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).not.toContain("UPDATE");
+  });
+
+  test("records only while the work item is still in the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("awaiting_design_approval");
+  });
+
+  test("records the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain(NOTE);
+  });
+
+  test("returns true when a record was written", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(await call(sql)).toBe(true);
+  });
+
+  test("returns false when the work item left the status", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await call(sql)).toBe(false);
   });

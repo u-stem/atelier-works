@@ -10,7 +10,6 @@ import {
   buildSystemConsoleUrl,
   classifyExistingDecision,
   computeExpiresAt,
-  expiredRequirementsRequests,
   handlerPathFor,
   isExpired,
   issueCheckRefusal,
@@ -197,23 +196,6 @@ describe("handlerPathFor", () => {
   });
 });
 
-describe("expiredRequirementsRequests", () => {
-  test("keeps only requirements-kind requests", () => {
-    const requests = [
-      { kind: "requirements" as const, id: 1 },
-      { kind: "issue_proposal" as const, id: 2 },
-    ];
-    expect(expiredRequirementsRequests(requests)).toEqual([
-      { kind: "requirements", id: 1 },
-    ]);
-  });
-
-  test("returns an empty array when none are requirements-kind", () => {
-    const requests = [{ kind: "issue_proposal" as const, id: 2 }];
-    expect(expiredRequirementsRequests(requests)).toEqual([]);
-  });
-});
-
 describe("needsIssueCheck", () => {
   test("checks a new approval of requirements", () => {
     expect(
@@ -327,5 +309,42 @@ describe("issueCheckRefusal", () => {
     expect(issueCheckRefusal("unavailable", 7, "requirements")).not.toContain(
       "max_design_attempts",
     );
+  });
+});
+
+describe("the imports of approval_support", () => {
+  // `approval_decide`はConsole用のworkerで動き、`approval_support.ts`を読み込む。
+  // 走査の表と設計の定数は、このファイルから読み込まれない場所に置く。
+  async function importSpecifiers(): Promise<string[]> {
+    const source = await Bun.file(
+      new URL("../../f/factory/lib/approval_support.ts", import.meta.url),
+    ).text();
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+    return [...code.matchAll(/from\s+["']([^"']+)["']/g)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
+  }
+
+  test("does not import the approval sweep", async () => {
+    expect(
+      (await importSpecifiers()).filter((path) =>
+        path.includes("approval_sweep"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not import the design template", async () => {
+    expect(
+      (await importSpecifiers()).filter((path) =>
+        path.includes("design_template"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("no longer filters the expired requests of requirements", async () => {
+    const source = await Bun.file(
+      new URL("../../f/factory/lib/approval_support.ts", import.meta.url),
+    ).text();
+    expect(source).not.toContain("expiredRequirementsRequests");
   });
 });

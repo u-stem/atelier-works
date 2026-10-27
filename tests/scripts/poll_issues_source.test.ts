@@ -102,3 +102,30 @@ describe("poll_issues: the result", () => {
     expect(source.includes("fallback_searches")).toBe(false);
   });
 });
+
+describe("poll_issues: the wiring of the approval sweep", () => {
+  test("hands the waiting approvals to the sweep", async () => {
+    const source = await read("f/factory/poll_issues.ts");
+    expect(source).toContain("sweepApprovals(");
+  });
+
+  test("reads the newest request without the drafts", async () => {
+    const source = await read("f/factory/poll_issues.ts");
+    expect(source).toContain("latestApprovalRequest");
+  });
+
+  test("moves the work item with the newest request as a condition", async () => {
+    const source = await read("f/factory/poll_issues.ts");
+    expect(source).toContain("updateStatusIfLatestApproval");
+  });
+
+  test("no longer expires the requests before it moves the work items", async () => {
+    const source = await read("f/factory/poll_issues.ts");
+    expect(source).not.toContain("expirePendingApprovals");
+  });
+
+  test("no longer filters the expired requests of requirements", async () => {
+    const source = await read("f/factory/poll_issues.ts");
+    expect(source).not.toContain("expiredRequirementsRequests");
+  });
+});

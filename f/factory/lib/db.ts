@@ -4297,6 +4297,24 @@ export async function updateStatusToRequirementsIfLeaseHolder(
   return rows.length > 0;
 }
 
+export async function countApprovalRedispatches(
+  _workItemId: number,
+  _note: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
+}
+
+export async function recordApprovalRedispatch(
+  _workItemId: number,
+  _status: WorkItemStatus,
+  _note: string,
+  _sql: SqlClient = defaultSqlClient,
+  _jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // cleanup_db.ts(DBの保持期間による掃除)が使う削除。
 // 期限の計算と集計の文言は`lib/cleanup_db_support.ts`、
