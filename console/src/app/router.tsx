@@ -14,6 +14,7 @@ export const ROUTER_BASENAME = "/console";
 
 /**
  * 経路の木。画面はすべて外枠(`AppShell`)の子にし、画面ごとの読み込みの失敗は画面の位置で受ける。
+ * 最初の画面を読み込む間の骨組みも、外枠でなく画面の経路に置く。外枠(サイドバー)は実物のまま描かれる。
  * どの経路にも当たらないパスは「見つかりません」の画面で受ける。
  */
 export const ROUTES: RouteObject[] = [
@@ -21,13 +22,13 @@ export const ROUTES: RouteObject[] = [
     path: "/",
     Component: AppShell,
     ErrorBoundary: RouteError,
-    HydrateFallback: RouteFallback,
     children: [
-      ...buildScreenRoutes(SCREENS, RouteError),
+      ...buildScreenRoutes(SCREENS, RouteError, RouteFallback),
       {
         path: "*",
         handle: titleHandle("ページが見つかりません"),
         ErrorBoundary: RouteError,
+        HydrateFallback: RouteFallback,
         lazy: () =>
           import("../screens/NotFoundScreen.tsx").then((module) => ({
             Component: module.NotFoundScreen,

@@ -80,11 +80,16 @@ describe("motion tokens", () => {
   });
 });
 
-/** セレクタが`selector`そのもののルールの中身。 */
+/** セレクタの並びに`selector`を含む、最初のルールの中身。 */
 function declarationsOf(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`(^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(CSS);
-  return match?.[2] ?? "";
+  const code = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const rule of code.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = (rule[1] ?? "").split(",").map((part) => part.trim());
+    if (selectors.includes(selector)) {
+      return rule[2] ?? "";
+    }
+  }
+  return "";
 }
 
 describe("dialog fade", () => {

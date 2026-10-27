@@ -56,24 +56,12 @@ function writeCollapsed(collapsed: boolean): void {
   }
 }
 
-/** 配信している版と確認の時刻の文。 */
+/** 配信している版と確認の時刻の文。版はSHAを含む識別子なので等幅で出す。 */
 export function ReleaseNote({ release }: { release: ReleaseDescription }) {
-  void release;
-  return null;
-}
-
-/** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */
-function ReleaseInfo() {
-  const status = useConsoleStatus();
-  const now = useNow();
-  const release = status === null ? null : describeRelease(status, now);
-  if (release === null) {
-    return null;
-  }
   return (
     <p className="text-caption leading-5 text-subtle">
       {release.versionLabel === null ? null : (
-        <span className="font-medium text-muted-foreground tabular-nums">
+        <span className="font-mono font-medium text-muted-foreground tabular-nums">
           {release.versionLabel}
         </span>
       )}
@@ -86,6 +74,14 @@ function ReleaseInfo() {
       )}
     </p>
   );
+}
+
+/** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */
+function ReleaseInfo() {
+  const status = useConsoleStatus();
+  const now = useNow();
+  const release = status === null ? null : describeRelease(status, now);
+  return release === null ? null : <ReleaseNote release={release} />;
 }
 
 /**
@@ -184,7 +180,7 @@ function NavList({
                   {collapsed && badge !== null ? (
                     <span
                       aria-hidden="true"
-                      className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
+                      className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-caption leading-4 font-semibold text-primary-foreground tabular-nums"
                     >
                       {badge}
                     </span>

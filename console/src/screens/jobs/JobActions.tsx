@@ -16,6 +16,7 @@ import type { WriteRunnerConfig } from "../../api/writeRunner.ts";
 import { cancelJob, rerunJob } from "../../api/writes.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { cn } from "../../lib/cn.ts";
 import {
   canCancelJob,
   cancelDialogLines,
@@ -51,13 +52,25 @@ function announce(notice: ReleaseNotice): void {
   }
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  /** flowの名前やジョブのIDのような識別子は、等幅で出す。 */
+  mono?: boolean;
+}) {
   return (
     <div className="grid grid-cols-[6rem_1fr] gap-x-3">
       <dt className="text-small text-subtle">{label}</dt>
       <dd
         dir="ltr"
-        className="min-w-0 text-body break-words [unicode-bidi:isolate]"
+        className={cn(
+          "min-w-0 text-body break-words [unicode-bidi:isolate]",
+          mono && "font-mono",
+        )}
       >
         {value}
       </dd>
@@ -97,8 +110,9 @@ export function CancelDialog({
             <Field
               label="フロー"
               value={safeText(jobScriptName(job.script_path))}
+              mono
             />
-            <Field label="ジョブ" value={safeText(job.id)} />
+            <Field label="ジョブ" value={safeText(job.id)} mono />
             {workItemId === null ? null : (
               <Field label="作業項目" value={`#${String(workItemId)}`} />
             )}
@@ -158,8 +172,9 @@ export function RerunDialog({
             <Field
               label="処理"
               value={safeText(jobScriptName(job.script_path))}
+              mono
             />
-            <Field label="失敗したジョブ" value={safeText(job.id)} />
+            <Field label="失敗したジョブ" value={safeText(job.id)} mono />
           </dl>
           {rerunDialogLines(job.script_path).map((line) => (
             <p key={line} className="text-body">

@@ -1,15 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
-import { createMemoryRouter, type RouteObject } from "react-router";
+import { createMemoryRouter, Outlet, type RouteObject } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
 import { RouteFallback } from "./RouteFallback.tsx";
 import { ROUTER_BASENAME, ROUTES } from "./router.tsx";
 
-/** 最初の画面を読み込んでいる間の、1回目の描画。 */
+/** 外枠の代わりに置く、サイドバーだけの外枠。本物の外枠は、描画に`window`を要る部品を含む。 */
+function StubShell() {
+  return (
+    <div>
+      <nav aria-label="メインメニュー" />
+      <Outlet />
+    </div>
+  );
+}
+
+/** 最初の画面を読み込んでいる間の、1回目の描画。外枠だけを差し替え、経路の木はそのまま使う。 */
 function firstPaint(path: string): string {
-  const router = createMemoryRouter(ROUTES, {
+  const routes = ROUTES.map((route) => ({ ...route, Component: StubShell }));
+  const router = createMemoryRouter(routes, {
     basename: ROUTER_BASENAME,
     initialEntries: [`${ROUTER_BASENAME}${path}`],
   });

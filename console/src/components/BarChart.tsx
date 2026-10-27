@@ -105,7 +105,7 @@ export function BarChart({
                   x={center}
                   y={bar.y - VALUE_LABEL_GAP}
                   textAnchor="middle"
-                  className="fill-muted-foreground text-[11px] tabular-nums"
+                  className="fill-muted-foreground text-caption tabular-nums"
                 >
                   {formatValue(datum.value)}
                 </text>
@@ -115,7 +115,7 @@ export function BarChart({
                   x={labelPlace.x}
                   y={LABEL_BASELINE}
                   textAnchor={labelPlace.anchor}
-                  className="fill-muted-foreground text-[11px] tabular-nums"
+                  className="fill-muted-foreground text-caption tabular-nums"
                 >
                   {datum.label}
                 </text>

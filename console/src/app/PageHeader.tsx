@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
+import { PAGE_HEADER_CLASS } from "../lib/layoutClasses.ts";
 import { PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { AutoRefreshNote } from "./AutoRefreshNote.tsx";
 import type { RefreshStatus } from "./refreshStatus.ts";
@@ -26,6 +27,7 @@ import { useNow } from "./useNow.ts";
 export function PageHeader({
   title,
   subtitle,
+  subtitleMono = false,
   refresh,
   refreshLabel = "この画面を更新",
   actions,
@@ -33,6 +35,8 @@ export function PageHeader({
 }: {
   title: string;
   subtitle?: string | null;
+  /** 副題がID、SHA、ジョブIDのような識別子のとき、等幅で出す。 */
+  subtitleMono?: boolean;
   refresh?: RefreshStatus;
   /** 更新ボタンの名前。更新が画面の一部だけを取り直すときは、取り直す範囲が分かる名前にする。 */
   refreshLabel?: string;
@@ -53,7 +57,7 @@ export function PageHeader({
   // ml-autoで右端へ寄せ、中の並びもjustify-endで揃えて、折り返した行も右端に置く。
   // actionsが無い画面は、更新の塊をそのまま置き、描画を変えない。
   return (
-    <header className="flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8">
+    <header className={PAGE_HEADER_CLASS}>
       <div className="min-w-0">
         {/* 遷移の後にフォーカスを受ける。Tabの順には入れない。キーボードで移ったときだけ、移った先が分かるよう細い輪を描く。マウスの操作の後には描かない。 */}
         <h1
@@ -64,7 +68,12 @@ export function PageHeader({
           {title}
         </h1>
         {subtitle === undefined || subtitle === null ? null : (
-          <p className="text-small text-muted-foreground tabular-nums">
+          <p
+            className={cn(
+              "text-small text-muted-foreground tabular-nums",
+              subtitleMono && "font-mono",
+            )}
+          >
             {subtitle}
           </p>
         )}

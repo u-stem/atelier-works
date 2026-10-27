@@ -60,5 +60,10 @@ export const STICKY_HEADER_CLASS =
  */
 export const PAGINATION_BUTTON_CLASS = "-scroll-mb-28";
 
-/** 画面の見出しの帯のclass。 */
-export const PAGE_HEADER_CLASS = "";
+/**
+ * 画面の見出しの帯のclass。`PageHeader`と、最初の画面を読み込む間の骨組み(`RouteFallback`)が共有する。
+ * 骨組みが帯の高さと線を同じにして、実物に置き換わる瞬間に下の本文が動かないようにする。
+ * `min-h-[4.5rem]`は、副題が無い見出しでも帯の高さを保つ。
+ */
+export const PAGE_HEADER_CLASS =
+  "flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8";

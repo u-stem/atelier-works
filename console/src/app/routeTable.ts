@@ -12,10 +12,20 @@ export function titleHandle(title: RouteTitle): { title: RouteTitle } {
   return { title };
 }
 
+/** 最初の画面を読み込む間に出す部品を、経路に足す。渡さなければ足さない。 */
+function withHydrateFallback(
+  hydrateFallback: ComponentType | undefined,
+): { HydrateFallback: ComponentType } | Record<string, never> {
+  return hydrateFallback === undefined
+    ? {}
+    : { HydrateFallback: hydrateFallback };
+}
+
 function toRoute(
   route: ScreenRoute,
   fallbackBoundary: ComponentType,
   inheritedTitle: RouteTitle,
+  hydrateFallback: ComponentType | undefined,
 ): RouteObject {
   // 名前を持たない経路は、親の名前を引き継ぐ。名前が無い画面を作らないためである。
   const title = route.title ?? inheritedTitle;
@@ -24,13 +34,14 @@ function toRoute(
     handle: titleHandle(title),
     lazy: route.lazy,
     ErrorBoundary: route.ErrorBoundary ?? fallbackBoundary,
+    ...withHydrateFallback(hydrateFallback),
   };
   return route.children === undefined
     ? base
     : {
         ...base,
         children: route.children.map((child) =>
-          toRoute(child, fallbackBoundary, title),
+          toRoute(child, fallbackBoundary, title, hydrateFallback),
         ),
       };
 }
@@ -41,27 +52,31 @@ function toRoute(
  * どの経路にも`ErrorBoundary`を付け、読み込みの失敗を画面の位置で受ける。
  * これが無いと、失敗は外枠の`ErrorBoundary`まで上がり、サイドバーごと消える。
  * 入口の経路の名前は入口の名前(`label`)で、下の経路は自分の名前か、入口の名前を使う。
+ * `hydrateFallback`は、最初の画面を読み込む間に、外枠の子の位置へ出す。
+ * 外枠に置くと外枠ごと置き換わり、サイドバーが読み込みの終わりまで消える。
  */
 export function buildScreenRoutes(
   screens: readonly Screen[],
   fallbackBoundary: ComponentType,
+  hydrateFallback?: ComponentType,
 ): RouteObject[] {
   return screens.flatMap((screen): RouteObject[] => {
     const boundary = screen.ErrorBoundary ?? fallbackBoundary;
     const handle = titleHandle(screen.label);
+    const common = {
+      handle,
+      lazy: screen.lazy,
+      ErrorBoundary: boundary,
+      ...withHydrateFallback(hydrateFallback),
+    };
     const own: RouteObject =
       screen.path === "/"
-        ? { index: true, handle, lazy: screen.lazy, ErrorBoundary: boundary }
-        : {
-            path: screen.path.slice(1),
-            handle,
-            lazy: screen.lazy,
-            ErrorBoundary: boundary,
-          };
+        ? { index: true, ...common }
+        : { path: screen.path.slice(1), ...common };
     return [
       own,
       ...screen.children.map((child) =>
-        toRoute(child, fallbackBoundary, screen.label),
+        toRoute(child, fallbackBoundary, screen.label, hydrateFallback),
       ),
     ];
   });

@@ -10,7 +10,7 @@
  * アクセントは藍(primary)の1色で、選択中の帯、主要な操作、フォーカスの輪に使う。
  * 意味の色は、承認=青、失敗=赤(destructive)、通知=琥珀(warning)、成功=緑で、点・バッジ・ラベルに使う。
  * 文字の濃さは、主(foreground)、副(muted-foreground)、補足(subtle-foreground)の3段である。
- * 文字と背景の組はWCAG AAの4.5:1以上、入力欄などの境界は3:1以上を保つ。
+ * 文字と背景の組はWCAG AAの4.5:1以上を保つ。入力欄の境界は3.5:1以上、フォーカスの輪や図形は3:1以上を保つ。
  */
 :root {
   color-scheme: light dark;
@@ -50,7 +50,7 @@
   --success-foreground: light-dark(oklch(0.99 0.005 152), oklch(0.15 0.02 265));
 
   --border: light-dark(oklch(0.9 0.008 265), oklch(0.3 0.014 265));
-  --input: light-dark(oklch(0.6 0.02 265), oklch(0.52 0.02 265));
+  --input: light-dark(oklch(0.58 0.02 265), oklch(0.6 0.02 265));
   --ring: light-dark(oklch(0.5 0.18 272), oklch(0.72 0.14 275));
 
   --sidebar: light-dark(oklch(0.955 0.007 265), oklch(0.155 0.013 265));
@@ -136,6 +136,25 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
+  /*
+   * 角丸は、小さい印から大きい面へ5段で上げる。
+   * sm: 文字の中の印(コード、見出しのフォーカスの輪)。md: 操作の部品(ボタン、ツールチップ、スケルトン)。
+   * lg: 入力欄と通知の枠。xl: 面(カード、確認のダイアログ)。2xl: 画面の中央に置く案内の面。
+   */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.25rem;
+
+  /*
+   * 影は3段で、色は--shadow-colorだけから取る。ダークは濃い影に替わるので、ライトの灰色の影をそのまま使わない。
+   * sm: 面の上に載る操作(主要なボタン)。md: 一時的に浮く小さな面(ツールチップ、トースト)。
+   * raised: 背面を覆う面(確認のダイアログ、案内の面)。
+   */
+  --shadow-sm: 0 1px 2px var(--shadow-color);
+  --shadow-md:
+    0 1px 2px var(--shadow-color), 0 4px 10px -4px var(--shadow-color);
   --shadow-raised:
     0 1px 2px var(--shadow-color), 0 8px 20px -6px var(--shadow-color);
 
@@ -172,7 +191,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
-  *::after {
+  *::after,
+  *::backdrop {
     /* biome-ignore lint/complexity/noImportantStyles: 利用者の設定を、画面の個別の指定より優先させる。 */
     animation-delay: 0s !important;
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
@@ -185,6 +205,35 @@ body {
     transition-delay: 0s !important;
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * ダイアログの出入りは、不透明度のフェードだけにする。動かすのは透明度だけで、位置も大きさも変えない。
+ * 閉じるときは、overlayとdisplayを離散の遷移にして、フェードが終わるまで最前面に残す。
+ * 動きを減らす設定は、上の全要素の規則(背面の幕を含む)が受けて、遷移を止める。
+ */
+dialog,
+dialog::backdrop {
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    overlay var(--duration-fast) allow-discrete,
+    display var(--duration-fast) allow-discrete;
+}
+
+dialog[open],
+dialog[open]::backdrop {
+  opacity: 1;
+}
+
+@starting-style {
+  dialog[open] {
+    opacity: 0;
+  }
+
+  dialog[open]::backdrop {
+    opacity: 0;
   }
 }
 

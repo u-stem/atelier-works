@@ -144,6 +144,7 @@ function JobDetail({ id, back }: { id: string; back: string | null }) {
       <PageHeader
         title={safeText(jobScriptName(job.script_path))}
         subtitle={safeText(job.id)}
+        subtitleMono
         refresh={refresh}
         refreshLabel="状態を更新"
       >
