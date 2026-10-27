@@ -67,6 +67,15 @@ run = "docker compose -f infra/docker-compose.yml run --rm --no-deps console_fet
 description = "Remove the console pin so console_fetcher resumes automatic updates"
 run = "docker compose -f infra/docker-compose.yml run --rm --no-deps console_fetcher unpin"
 
+[tasks."console:build"]
+description = "Build the console into console/dist"
+run = "bun run --cwd console build"
+
+[tasks."console:branch"]
+description = "Serve this branch's console build on 127.0.0.1:5174 and relay reads to the local Windmill (writes are refused unless --allow-writes is passed)"
+depends = ["console:build"]
+run = "bun run scripts/console-branch-server.ts --dist console/dist"
+
 [tasks.setup]
 description = "Install mise-managed tools, project dependencies, and git hooks"
 run = """
