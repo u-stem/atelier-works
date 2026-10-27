@@ -4070,7 +4070,7 @@ export async function latestDesignApproval(
   sql: SqlClient = defaultSqlClient,
 ): Promise<DesignApprovalRef | null> {
   const rows = await sql`
-    SELECT ar.id AS approval_request_id, ar.subject_id, ar.status, ar.payload,
+    SELECT ar.id AS approval_request_id, ar.subject_id, ar.status, ar.payload, ar.reason,
            dd.design_attempt AS dd_design_attempt,
            dd.requirement_draft_id AS dd_requirement_draft_id
     FROM factory.approval_requests ar
@@ -4101,6 +4101,7 @@ export async function latestDesignApproval(
     ),
     payload_attempt: payloadInteger(row.payload, "attempt"),
     payload_design_attempt: payloadInteger(row.payload, "design_attempt"),
+    reason: parseNullableString(row.reason, "reason"),
     draft: hasDraft
       ? {
           design_attempt: parseRequiredNumber(
@@ -4116,62 +4117,184 @@ export async function latestDesignApproval(
   };
 }
 
+/**
+ * 作業項目の最新の承認依頼から、承認待ちの走査と反映が照合に使う項目。
+ * 下書きは含まない。
+ */
 export type LatestApprovalRequest = Pick<
   ApprovalRequest,
   "id" | "status" | "payload" | "expires_at" | "decided_at"
 >;
 
+/**
+ * `workItemId`の`kind`の承認依頼のうち、最も新しく依頼された行を返す。無ければ`null`。
+ * 要件定義や設計の下書きと結合しない。下書きに結合できない最新の依頼を読み飛ばすと、
+ * 古い承認が最新として返り、古い依頼で作業項目を動かしてしまうためである。
+ * 依頼の時刻が同じときは`id DESC`で決める。状態は問わない。
+ */
 export async function latestApprovalRequest(
-  _workItemId: number,
-  _kind: ApprovalRequestKind,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  kind: ApprovalRequestKind,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<LatestApprovalRequest | null> {
-  return null;
+  const rows = await sql`
+    SELECT id, status, payload, expires_at, decided_at FROM factory.approval_requests
+    WHERE work_item_id = ${workItemId}::bigint AND kind = ${kind}
+    ORDER BY requested_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    id: parseId(row.id, "id"),
+    status: parseEnum<ApprovalRequestStatus>(
+      row.status,
+      APPROVAL_REQUEST_STATUSES,
+      "status",
+    ),
+    payload: parseJsonObject(row.payload, "payload"),
+    expires_at:
+      row.expires_at === null || row.expires_at === undefined
+        ? null
+        : parseDate(row.expires_at, "expires_at"),
+    decided_at:
+      row.decided_at === null || row.decided_at === undefined
+        ? null
+        : parseDate(row.decided_at, "decided_at"),
+  };
 }
 
+/**
+ * 状態が`statuses`のどれかである`issue`の作業項目を、`id`の昇順で返す。
+ * 承認待ちの走査が、承認待ちの作業項目を読むのに使う。
+ */
 export async function listWorkItemsByStatuses(
-  _statuses: readonly WorkItemStatus[],
-  _sql: SqlClient = defaultSqlClient,
+  statuses: readonly WorkItemStatus[],
+  sql: SqlClient = defaultSqlClient,
 ): Promise<WorkItem[]> {
-  return [];
+  const list: string[] = [...statuses];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'issue' AND status = ANY(${list})
+    ORDER BY id ASC
+  `.fetch();
+  return rows.map(toWorkItem);
 }
 
+/**
+ * 設計の却下のうち、作業項目に反映できたものの数を、遷移の記録(`factory.work_item_events`)から数える。
+ * 数えるのは、`awaiting_design_approval`からの遷移で、次のどちらかである。
+ * - 遷移先が`designing`で、注記が`regeneratingNote`と等しい(設計の再生成)。
+ * - 遷移先が`needs_human`で、注記が`exhaustedPrefix`で始まる(上限に達した却下)。
+ * 範囲は現在の要件定義の試行である。遷移の記録には試行の番号が無いので、
+ * 作業項目の「`requirements_generating`への遷移(遷移元と遷移先が違う)」の最新の`id`より後の記録だけを数える。
+ * 同じ状態どうしの記録(取り込み内容の更新)は範囲を区切らない。
+ * 時刻でなく`id`を使うのは、同じ時刻の記録の順序を`id`が決めるためである。
+ * 注記は呼び出し側が渡す。失敗や期限切れの再実行は記録を増やさないので、数えない。
+ */
 export async function countAppliedDesignRejections(
-  _workItemId: number,
-  _regeneratingNote: string,
-  _exhaustedPrefix: string,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  regeneratingNote: string,
+  exhaustedPrefix: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  return 0;
+  const rows = await sql`
+    SELECT count(*)::integer AS n FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint
+      AND from_status = 'awaiting_design_approval'
+      AND (
+        (to_status = 'designing' AND note = ${regeneratingNote})
+        OR (to_status = 'needs_human' AND starts_with(note, ${exhaustedPrefix}))
+      )
+      AND id > COALESCE((
+        SELECT MAX(id) FROM factory.work_item_events
+        WHERE work_item_id = ${workItemId}::bigint
+          AND to_status = 'requirements_generating' AND from_status IS DISTINCT FROM to_status
+      ), 0)
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? 0 : parseRequiredNumber(row.n, "n");
 }
 
+/** `updateStatusIfLatestApproval`が条件にする、最新の承認依頼。 */
 export type LatestApprovalGuard = {
   readonly kind: ApprovalRequestKind;
   readonly requestId: number;
   readonly requestStatus: ApprovalRequestStatus;
 };
 
+/**
+ * `updateStatusIfCurrent`と同じ比較と交換に、同じ文の中で、作業項目の最新の`latest.kind`の承認依頼が
+ * `latest.requestId`で、その状態が`latest.requestStatus`であることを条件に足す。
+ * 読み取りと更新の間に新しい依頼ができても、古い依頼を根拠に作業項目を動かさないためである。
+ * `flow_job_id`は書かない。条件に合わなければ何も書かずに`false`を返す。
+ */
 export async function updateStatusIfLatestApproval(
-  _id: number,
-  _expectedFrom: WorkItemStatus,
-  _to: WorkItemStatus,
-  _note: string | null,
-  _latest: LatestApprovalGuard,
-  _sql: SqlClient = defaultSqlClient,
-  _jobIds: JobIds = jobIdsFromEnv(process.env),
+  id: number,
+  expectedFrom: WorkItemStatus,
+  to: WorkItemStatus,
+  note: string | null,
+  latest: LatestApprovalGuard,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
-  return false;
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = ${to}, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+        AND EXISTS (
+          SELECT 1 FROM (
+            SELECT a.id, a.status FROM factory.approval_requests a
+            WHERE a.work_item_id = ${id}::bigint AND a.kind = ${latest.kind}
+            ORDER BY a.requested_at DESC, a.id DESC
+            LIMIT 1
+          ) newest
+          WHERE newest.id = ${latest.requestId}::bigint AND newest.status = ${latest.requestStatus}
+        )
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
 }
 
+/**
+ * `updateStatusToRequirementsIfCurrent`と同じ更新に、`flow_job_id`が`expectedFlowJobId`のままであること
+ * (`null`なら`NULL`のままであること)を条件に足す。
+ * 設計の承認待ちの間に残る前のフローのジョブIDを条件にして、読み直した後に別の経路が
+ * 作業項目を動かし、同じ状態に戻していても、古い判断で要件定義へ戻さないために使う。
+ * 条件に合わなければ何も書かずに`false`を返す。
+ */
 export async function updateStatusToRequirementsIfLeaseHolder(
-  _id: number,
-  _expectedFrom: WorkItemStatus,
-  _expectedFlowJobId: string | null,
-  _note: string | null = null,
-  _sql: SqlClient = defaultSqlClient,
-  _jobIds: JobIds = jobIdsFromEnv(process.env),
+  id: number,
+  expectedFrom: WorkItemStatus,
+  expectedFlowJobId: string | null,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
-  return false;
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+        AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, 'requirements_generating', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

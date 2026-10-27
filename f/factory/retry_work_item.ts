@@ -126,6 +126,8 @@ export type RestartStop =
  * - `stop`: 止まった理由の分類。`implementReady`のときだけ読む。
  * - `feedback`: 要件定義の生成(`pipeline`)へ渡す文。無ければ`null`。
  *   要件定義の差し戻しの再開では印を付けた報告、承認が却下された再開では人の却下の理由が入る。
+ * - `designFeedback`: 設計フローへ渡す文。無ければ`null`。
+ *   設計が有効で、要件定義が承認済みで、設計が未承認のとき、直前の設計の却下の理由が入る(印は付けない)。
  * - `carriesGap`: `feedback`が設計か実装の差し戻しの報告か。真なら、再実行の遷移の注記に印を付ける(`restartNote`)。
  */
 export type RestartContext = {
@@ -135,6 +137,7 @@ export type RestartContext = {
   readonly designApproved: boolean;
   readonly stop: RestartStop;
   readonly feedback: string | null;
+  readonly designFeedback: string | null;
   readonly carriesGap: boolean;
 };
 
@@ -262,6 +265,16 @@ export function restartContextDeps(
  * - 準備が`attempt`を進めた後、下書きを作れずに止まったとき(日次予算の超過など)は、
  *   最新の承認の`attempt`より後の下書きが無いことを、理由を消費していない印として読む。
  *   却下なら承認依頼の理由を、承認なら上の差し戻しの理由を、もう一度渡す。
+ * - 設計の却下の理由(`designFeedback`)は、照合に使った設計の承認依頼の行から引く。
+ *   最新の設計の依頼が却下で、依頼を作ったときの`attempt`が現在の`attempt`と一致するときに渡す。
+ *   設計の試行の番号は問わない。失敗や期限切れの再実行で番号が進んでも、その後に新しい依頼が無ければ、
+ *   直前の却下の理由は有効だからである。要件定義を作り直した後の古い却下の理由は渡さない。
+ * - 設計の却下で要件定義へ戻した後(遷移元が`awaiting_design_approval`)に起動に失敗して止まったときは、
+ *   差し戻しの遷移の注記が固定文なので、注記でなく設計の承認依頼の却下の理由を要件定義の生成へ渡す。
+ *   これは設計が無効でも読む。根拠は設定でなく、遷移元が設計の承認待ちだったという事実である。
+ *   理由を消費していないかは、要件定義の却下の理由と同じ形で読む(現在の`attempt`の依頼か、
+ *   `attempt`が進んで依頼の`attempt`より後の下書きが無い)。
+ *   設計の承認依頼は、この関数の中で1回だけ読む。
  *
  * この関数は遷移の注記の文面を判定に使う。読むのは、差し戻しの接頭辞(`GAP_NOTE_PREFIXES`)と、
  * 引き継ぎの印(`RESTART_CARRYING_GAP_NOTE_PREFIX`)だけである。
@@ -285,23 +298,60 @@ export async function buildRestartContext(
     requirementsApproval,
     workItem.attempt,
   );
+  let designApprovalRead: Promise<DesignApprovalRef | null> | null = null;
+  const readDesignApproval = () => {
+    designApprovalRead ??= deps.latestDesignApproval(workItem.id);
+    return designApprovalRead;
+  };
+  const designApprovalInScope =
+    input.designEnabled && implementReady && requirementsApproval !== null;
+  const designApproval = designApprovalInScope
+    ? await readDesignApproval()
+    : null;
   const designApproved =
-    input.designEnabled &&
-    implementReady &&
-    requirementsApproval !== null &&
-    isDesignApprovedForAttempt(await deps.latestDesignApproval(workItem.id), {
+    designApprovalInScope &&
+    isDesignApprovedForAttempt(designApproval, {
       attempt: workItem.attempt,
       designAttempt: workItem.design_attempt,
       requirementDraftId: requirementsApproval.draft_id,
     });
+  const designFeedback =
+    designApprovalInScope &&
+    !designApproved &&
+    designApproval !== null &&
+    designApproval.status === "rejected" &&
+    designApproval.payload_attempt === workItem.attempt
+      ? feedbackFromRejection(designApproval.reason)
+      : null;
   const readStopEvent = () =>
     deps.latestStatusEvent(workItem.id, input.restartStatus);
+  const readDesignRejectionReason = async () => {
+    const approval = await readDesignApproval();
+    if (
+      approval === null ||
+      approval.status !== "rejected" ||
+      approval.payload_attempt === null
+    ) {
+      return null;
+    }
+    const unconsumed =
+      approval.payload_attempt === workItem.attempt ||
+      (workItem.attempt > approval.payload_attempt &&
+        !(await deps.hasRequirementDraftAfter(
+          workItem.id,
+          approval.payload_attempt,
+        )));
+    return unconsumed ? feedbackFromRejection(approval.reason) : null;
+  };
   const readGap = async () => {
     const transition = await deps.latestStatusTransition(
       workItem.id,
       "requirements_generating",
       RESTART_CARRYING_GAP_NOTE_PREFIX,
     );
+    if (transition?.from_status === "awaiting_design_approval") {
+      return readDesignRejectionReason();
+    }
     return feedbackFromGapNote(transition?.note ?? null);
   };
   const stop = classifyRestartStop(
@@ -341,6 +391,7 @@ export async function buildRestartContext(
     designApproved,
     stop,
     feedback,
+    designFeedback,
     carriesGap,
   };
 }
@@ -676,7 +727,7 @@ export function computeRestartPlan(
         return {
           toStatus: "designing",
           flowPath: DESIGN_FLOW_PATH,
-          args: designFlowInput(workItem),
+          args: designFlowInput(workItem, context.designFeedback ?? ""),
         };
       }
       if (context.implementEnabled) {
