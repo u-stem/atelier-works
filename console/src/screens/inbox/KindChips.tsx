@@ -1,6 +1,5 @@
-import { cn } from "../../lib/cn.ts";
+import { ToggleChip, ToggleChipGroup } from "../../components/ToggleChip.tsx";
 import type { InboxChip } from "../../lib/inboxView.ts";
-import { SELECTED_STYLE } from "../../lib/selectedStyle.ts";
 
 /** 種類の切り替え。押した種類だけを一覧に出す。件数はチップの横に添える。 */
 export function KindChips({
@@ -15,28 +14,20 @@ export function KindChips({
   onChange: (chip: InboxChip) => void;
 }) {
   return (
-    <fieldset className="m-0 inline-flex w-fit min-w-0 gap-0.5 rounded-lg border-0 bg-muted p-0.5">
-      <legend className="sr-only">種類で絞り込む</legend>
-      {chips.map((chip) => {
-        const pressed = chip.id === active;
-        return (
-          <button
-            key={chip.id}
-            type="button"
-            aria-pressed={pressed}
-            className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-3 text-small text-muted-foreground outline-none transition-colors duration-(--duration-fast) ease-standard hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted",
-              pressed && SELECTED_STYLE,
-            )}
-            onClick={() => {
-              onChange(chip.id);
-            }}
-          >
-            {chip.label}
-            <span className="text-subtle tabular-nums">{counts[chip.id]}</span>
-          </button>
-        );
-      })}
-    </fieldset>
+    <ToggleChipGroup legend="種類で絞り込む">
+      {chips.map((chip) => (
+        <ToggleChip
+          key={chip.id}
+          pressed={chip.id === active}
+          className="h-7 gap-1.5 px-3 text-small"
+          onClick={() => {
+            onChange(chip.id);
+          }}
+        >
+          {chip.label}
+          <span className="text-subtle tabular-nums">{counts[chip.id]}</span>
+        </ToggleChip>
+      ))}
+    </ToggleChipGroup>
   );
 }

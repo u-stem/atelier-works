@@ -3,6 +3,7 @@ import { type KeyboardEvent, useId, useMemo, useRef, useState } from "react";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
+import { ROW_LINK_CLASS } from "../../lib/controlClasses.ts";
 import {
   describeGroup,
   type GroupDescription,
@@ -26,8 +27,8 @@ import { TRANSITION_TRANSFORM } from "../../lib/motionClasses.ts";
 import { nextNavFocusIndex } from "../../lib/navigation.ts";
 
 const ROW_BUTTON_CLASS = cn(
-  "relative block w-full px-6 py-3.5 text-left outline-none transition-colors duration-(--duration-fast) ease-standard",
-  "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+  ROW_LINK_CLASS,
+  "relative w-full text-left",
   "before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-(--duration-fast) before:ease-standard",
   "aria-[current=true]:bg-selected aria-[current=true]:before:opacity-100",
 );

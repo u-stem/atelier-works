@@ -12,6 +12,7 @@ import {
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
 import { describeRelease } from "../lib/consoleStatus.ts";
+import { ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import { TRANSITION_WIDTH } from "../lib/motionClasses.ts";
 import {
@@ -253,7 +254,10 @@ export function Sidebar() {
           aria-haspopup="dialog"
           aria-expanded={drawerOpen}
           aria-label={menuButtonLabel(actionableTotal)}
-          className="relative inline-flex size-9 min-h-11 min-w-11 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors duration-(--duration-fast) ease-standard hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          className={cn(
+            ICON_BUTTON_CLASS,
+            "relative size-9 min-h-11 min-w-11 text-muted-foreground",
+          )}
           onClick={() => {
             setDrawerOpen(true);
           }}
@@ -278,7 +282,10 @@ export function Sidebar() {
           <button
             type="button"
             aria-label="メニューを閉じる"
-            className="ml-auto inline-flex size-8 min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-(--duration-fast) ease-standard hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            className={cn(
+              ICON_BUTTON_CLASS,
+              "ml-auto size-8 min-h-11 min-w-11 shrink-0 text-subtle",
+            )}
             onClick={closeDrawer}
           >
             <X aria-hidden="true" className="size-4" />
@@ -325,7 +332,7 @@ export function Sidebar() {
                 type="button"
                 aria-expanded={!collapsed}
                 aria-label="メニューの開閉"
-                className="inline-flex size-8 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-(--duration-fast) ease-standard hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                className={cn(ICON_BUTTON_CLASS, "size-8 text-subtle")}
                 onClick={toggle}
               >
                 {collapsed ? (

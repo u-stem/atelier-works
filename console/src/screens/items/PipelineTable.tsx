@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
+import { ToggleChip, ToggleChipGroup } from "../../components/ToggleChip.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -44,7 +45,6 @@ import {
   sortPipelineRows,
   statusOptions,
 } from "../../lib/pipelineView.ts";
-import { SELECTED_STYLE } from "../../lib/selectedStyle.ts";
 import { usePagination } from "../../lib/usePagination.ts";
 import { PipelineCards } from "./PipelineCards.tsx";
 import { PlainText } from "./PipelineParts.tsx";
@@ -176,28 +176,20 @@ function ScopeSwitch({
   onChange: (next: PipelineScope) => void;
 }) {
   return (
-    <fieldset className="m-0 inline-flex w-fit min-w-0 gap-0.5 rounded-lg border-0 bg-muted p-0.5">
-      <legend className="sr-only">表に出す範囲</legend>
-      {PIPELINE_SCOPES.map((item) => {
-        const pressed = item.id === scope;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            aria-pressed={pressed}
-            className={cn(
-              "inline-flex h-7 items-center rounded-md border border-transparent px-3 text-small text-muted-foreground outline-none transition-colors duration-(--duration-fast) ease-standard hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted",
-              pressed && SELECTED_STYLE,
-            )}
-            onClick={() => {
-              onChange(item.id);
-            }}
-          >
-            {item.label}
-          </button>
-        );
-      })}
-    </fieldset>
+    <ToggleChipGroup legend="表に出す範囲">
+      {PIPELINE_SCOPES.map((item) => (
+        <ToggleChip
+          key={item.id}
+          pressed={item.id === scope}
+          className="h-7 px-3 text-small"
+          onClick={() => {
+            onChange(item.id);
+          }}
+        >
+          {item.label}
+        </ToggleChip>
+      ))}
+    </ToggleChipGroup>
   );
 }
 
