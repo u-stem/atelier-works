@@ -834,11 +834,87 @@ describe("loadJobDetail response", () => {
       },
     });
     expect((await detailOf(flow)).steps).toEqual([
-      { id: "prepare", state: "success", job_id: CHILD, iterations: null },
-      { id: "generate", state: "failure", job_id: ID, iterations: null },
-      { id: "finish", state: "waiting", job_id: null, iterations: null },
-      { id: "each", state: "running", job_id: null, iterations: 2 },
+      {
+        id: "prepare",
+        state: "success",
+        job_id: CHILD,
+        iterations: null,
+        skipped: false,
+      },
+      {
+        id: "generate",
+        state: "failure",
+        job_id: ID,
+        iterations: null,
+        skipped: false,
+      },
+      {
+        id: "finish",
+        state: "waiting",
+        job_id: null,
+        iterations: null,
+        skipped: false,
+      },
+      {
+        id: "each",
+        state: "running",
+        job_id: null,
+        iterations: 2,
+        skipped: false,
+      },
     ]);
+  });
+
+  test("projectSteps: returns skipped from the module", async () => {
+    const flow = completedJob({
+      job_kind: "flow",
+      flow_status: {
+        modules: [
+          { id: "approve", type: "Success", job: CHILD, skipped: true },
+        ],
+      },
+    });
+    expect((await detailOf(flow)).steps[0]?.skipped).toBe(true);
+  });
+
+  test("keeps the state of a skipped step as the module reports it", async () => {
+    const flow = completedJob({
+      job_kind: "flow",
+      flow_status: {
+        modules: [
+          { id: "approve", type: "Success", job: CHILD, skipped: true },
+        ],
+      },
+    });
+    expect((await detailOf(flow)).steps[0]?.state).toBe("success");
+  });
+
+  test("does not mark a step as skipped when the module says it ran", async () => {
+    const flow = completedJob({
+      job_kind: "flow",
+      flow_status: {
+        modules: [{ id: "run", type: "Success", job: CHILD, skipped: false }],
+      },
+    });
+    expect((await detailOf(flow)).steps[0]?.skipped).toBe(false);
+  });
+
+  test("does not mark a step as skipped when the module has no flag", async () => {
+    const flow = completedJob({
+      job_kind: "flow",
+      flow_status: { modules: [{ id: "wait", type: "WaitingForPriorSteps" }] },
+    });
+    expect((await detailOf(flow)).steps[0]?.skipped).toBe(false);
+  });
+
+  test("does not trust a flag that is not a boolean", async () => {
+    const flow = completedJob({
+      job_kind: "flow",
+      flow_status: {
+        modules: [{ id: "x", type: "Success", job: CHILD, skipped: "true" }],
+      },
+    });
+    expect((await detailOf(flow)).steps[0]?.skipped).toBe(false);
   });
 
   test("shows an unknown step state as unknown", async () => {

@@ -197,11 +197,15 @@ export function otherActiveDeployCount(
 
 /**
  * 解除の効果の文。deployの保留は、ほかに有効なものが残るあいだ反映が再開しないので、その件数を添える。
+ * スケジュールの凍結は、有効なdeployの保留があるあいだ追従も待ち、スケジュールが戻らないので、その件数を添える。
  */
 export function effectText(item: HoldItem, otherDeployCount: number): string {
   const text = HOLD_EFFECT_TEXT[item.category];
   if (item.category === "deploy" && otherDeployCount > 0) {
     return `${text}ほかに${String(otherDeployCount)}件のdeployの保留が有効です。すべて外れるまで反映は再開しません。`;
+  }
+  if (item.category === "schedule" && otherDeployCount > 0) {
+    return `${text}ただし、有効なdeployの保留が${String(otherDeployCount)}件あるあいだは、追従も待つので、スケジュールは戻りません。`;
   }
   return text;
 }

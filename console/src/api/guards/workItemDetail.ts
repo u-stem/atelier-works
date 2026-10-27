@@ -54,6 +54,8 @@ export type WorkItemOverview = {
   readonly created_at: string;
   readonly updated_at: string;
   readonly status_note: string | null;
+  /** いま作業項目を進めているflowのジョブのid。無ければ`null`。 */
+  readonly flow_job_id: string | null;
   /** 実行の記録が無ければ`null`。 */
   readonly total_cost_usd: number | null;
   readonly run_count: number;
@@ -80,6 +82,7 @@ function isWorkItemOverview(value: unknown): value is WorkItemOverview {
     isIsoTimestamp(value.created_at) &&
     isIsoTimestamp(value.updated_at) &&
     isNullableString(value.status_note) &&
+    isNullableString(value.flow_job_id) &&
     isNullableFiniteNumber(value.total_cost_usd) &&
     isNonNegativeInteger(value.run_count)
   );

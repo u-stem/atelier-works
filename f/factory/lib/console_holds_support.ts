@@ -2,7 +2,7 @@
 // 信頼できない文字列を無害化して切り詰め、読めない源の失敗を値で表し、解除の通知の文を作る。
 // 保留のモジュールからは型だけを読み込み、凍結の変数は読むだけで書かない。
 
-import { FREEZE_RECOVERY_HINT, type FreezePorts } from "./freeze_apply.ts";
+import type { FreezePorts } from "./freeze_apply.ts";
 import {
   activeDeployFreezes,
   activeFreezes,
@@ -10,7 +10,7 @@ import {
   type FreezeEntry,
   type FreezeState,
   type Outcome,
-  parseFreezeState,
+  readFreezeStateVia,
   sanitizeForDisplay,
 } from "./freezes.ts";
 import type {
@@ -196,20 +196,7 @@ export function freezesReadView(
 export async function readFreezeState(
   ports: FreezePorts,
 ): Promise<Outcome<FreezeState>> {
-  let raw: string | null;
-  try {
-    raw = await ports.readVariable();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      reason: `could not read the freeze variable: ${message}`,
-    };
-  }
-  const parsed = parseFreezeState(raw, ports.now());
-  return parsed.ok
-    ? parsed
-    : { ok: false, reason: `${parsed.reason} (${FREEZE_RECOVERY_HINT})` };
+  return await readFreezeStateVia(ports);
 }
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;

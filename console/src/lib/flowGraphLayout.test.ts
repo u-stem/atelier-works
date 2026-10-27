@@ -245,3 +245,55 @@ describe("layoutFlowGraph", () => {
     expect(layoutFlowGraph(GRAPH)).toEqual(layoutFlowGraph(GRAPH));
   });
 });
+
+describe("layoutFlowGraph with the compact option", () => {
+  const PATH: FlowGraph = {
+    nodes: [
+      { id: "script:s", kind: "script", label: "s", note: "" },
+      { id: "flow:x", kind: "flow", label: "x", note: "" },
+    ],
+    edges: [{ from: "script:s", to: "flow:x", kind: "run" }],
+  };
+  const LONE: FlowGraph = {
+    nodes: [{ id: "flow:x", kind: "flow", label: "x", note: "" }],
+    edges: [],
+  };
+  const COMPACT = { compact: true };
+
+  test("moves the leftmost box to the margin", () => {
+    const layout = layoutFlowGraph(PATH, COMPACT);
+    expect(Math.min(...layout.boxes.map((box) => box.x))).toBe(LAYOUT_MARGIN);
+  });
+
+  test("moves a lone flow to the margin", () => {
+    expect(layoutFlowGraph(LONE, COMPACT).boxes[0]?.x).toBe(LAYOUT_MARGIN);
+  });
+
+  test("keeps the gap between the two columns that remain", () => {
+    const layout = layoutFlowGraph(PATH, COMPACT);
+    expect(
+      (boxById(layout, "flow:x")?.x ?? 0) -
+        (boxById(layout, "script:s")?.x ?? 0),
+    ).toBe(400);
+  });
+
+  test("moves the links with the boxes", () => {
+    const layout = layoutFlowGraph(PATH, COMPACT);
+    const box = boxById(layout, "script:s");
+    expect(layout.links[0]?.exit.x).toBe((box?.x ?? 0) + (box?.width ?? 0));
+  });
+
+  test("narrows the figure by the empty column", () => {
+    expect(layoutExtent(layoutFlowGraph(PATH, COMPACT)).width).toBe(680);
+  });
+
+  test("leaves a graph that uses the first column where it was", () => {
+    const layout = layoutFlowGraph(GRAPH, COMPACT);
+    expect(boxById(layout, "schedule:a")?.x).toBe(LAYOUT_MARGIN);
+  });
+
+  test("does not move the boxes without the option", () => {
+    const layout = layoutFlowGraph(PATH);
+    expect(Math.min(...layout.boxes.map((box) => box.x))).toBe(440);
+  });
+});

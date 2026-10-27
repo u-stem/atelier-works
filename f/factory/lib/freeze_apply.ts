@@ -13,11 +13,14 @@ import {
   endedFreezes,
   excludesArg,
   FREEZE_FORBIDDEN_TARGET,
+  FREEZE_VARIABLE_DESCRIPTION,
   FREEZE_VARIABLE_PATH,
   type FreezeState,
+  mutateFreezeStateVia,
   type Outcome,
-  parseFreezeState,
   parseWmillExcludes,
+  readFreezeStateVia,
+  readVariableOrNull,
   removeFreezes,
   serializeFreezeState,
 } from "./freezes.ts";
@@ -50,27 +53,12 @@ export type ActiveDeployFreeze = {
   readonly expires_at: string;
 };
 
-/** 失敗の文言に載せる、回復の手順。`reason`と`holder`は載せない。 */
-export const FREEZE_RECOVERY_HINT = `the freeze variable ${FREEZE_VARIABLE_PATH} is corrupt; a human can run "mise run freeze:reset" to clear it`;
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 async function readState(ports: FreezePorts): Promise<Outcome<FreezeState>> {
-  let raw: string | null;
-  try {
-    raw = await ports.readVariable();
-  } catch (err) {
-    return {
-      ok: false,
-      reason: `could not read the freeze variable: ${errorMessage(err)}`,
-    };
-  }
-  const parsed = parseFreezeState(raw, ports.now());
-  return parsed.ok
-    ? parsed
-    : { ok: false, reason: `${parsed.reason} (${FREEZE_RECOVERY_HINT})` };
+  return await readFreezeStateVia(ports);
 }
 
 /**
@@ -178,12 +166,14 @@ export async function mutateFreezeState(
   ports: FreezePorts,
   operation: (state: FreezeState, now: Date) => Outcome<FreezeState>,
 ): Promise<Outcome<FreezeState>> {
-  const state = await readState(ports);
-  if (!state.ok) return state;
-  const next = operation(state.value, ports.now());
-  if (!next.ok) return next;
-  await ports.writeVariable(serializeFreezeState(next.value));
-  return next;
+  return await mutateFreezeStateVia(
+    {
+      readVariable: ports.readVariable,
+      now: ports.now,
+      storeVariable: ports.writeVariable,
+    },
+    operation,
+  );
 }
 
 const SCHEDULE_SUFFIX = ".schedule.yaml";
@@ -237,9 +227,6 @@ export type FreezeSdk = {
   };
 };
 
-export const FREEZE_VARIABLE_DESCRIPTION =
-  "スケジュールの凍結の状態です。mise run freeze:placeなどが書くため、通常は人が編集する必要はありません。";
-
 /**
  * Windmillの変数を読み書きする入出力。`getVariable`は変数が無い場合もほかの失敗も同じ形の例外を
  * 投げるので、読めなかったときに`existsVariable`で有無を確かめ、`false`のときだけ「無い」とする。
@@ -250,23 +237,15 @@ export function sdkFreezePorts(
   now: () => Date,
 ): FreezePorts {
   return {
-    readVariable: async () => {
-      try {
-        return await sdk.getVariable(FREEZE_VARIABLE_PATH);
-      } catch (err) {
-        let found: unknown;
-        try {
-          found = await sdk.VariableService.existsVariable({
+    readVariable: () =>
+      readVariableOrNull(
+        () => sdk.getVariable(FREEZE_VARIABLE_PATH),
+        () =>
+          sdk.VariableService.existsVariable({
             workspace,
             path: FREEZE_VARIABLE_PATH,
-          });
-        } catch {
-          throw err;
-        }
-        if (found === false) return null;
-        throw err;
-      }
-    },
+          }),
+      ),
     writeVariable: (text) =>
       sdk.setVariable(
         FREEZE_VARIABLE_PATH,

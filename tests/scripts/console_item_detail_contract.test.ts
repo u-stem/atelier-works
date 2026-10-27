@@ -30,6 +30,7 @@ const OVERVIEW_ROW: SqlRow = {
   created_at: new Date(T0),
   updated_at: new Date(T0),
   status_note: null,
+  flow_job_id: ROOT_JOB_ID,
   total_cost_usd: "1.25",
   run_count: "3",
 };
@@ -179,6 +180,25 @@ const FULL_RESPONSES: SqlRow[][] = [
   TRANSITION_ROWS,
 ];
 
+/** 発行された問い合わせの文を記録する。 */
+function recordingSql(responses: SqlRow[][]): {
+  sql: SqlClient;
+  texts: string[];
+} {
+  const texts: string[] = [];
+  let callIndex = 0;
+  const sql: SqlClient = (strings) => {
+    texts.push(strings.join("?"));
+    const rows = responses[callIndex] ?? [];
+    callIndex += 1;
+    return {
+      fetch: () => Promise.resolve(rows),
+      execute: () => Promise.resolve(),
+    };
+  };
+  return { sql, texts };
+}
+
 describe("work_item_detail contract", () => {
   test("a detail with every list filled passes the Console type guard", async () => {
     const detail = await runWorkItemDetail(7, detailSql(FULL_RESPONSES));
@@ -231,5 +251,50 @@ describe("work_item_detail contract", () => {
         99,
       ),
     ).toBe(true);
+  });
+
+  test("toWorkItemOverview: returns flow_job_id", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(FULL_RESPONSES));
+    expect(detail.work_item.flow_job_id).toBe(ROOT_JOB_ID);
+  });
+
+  test("toWorkItemOverview: returns null when flow_job_id is NULL", async () => {
+    const detail = await runWorkItemDetail(
+      7,
+      detailSql([
+        [{ ...OVERVIEW_ROW, flow_job_id: null }],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+      ]),
+    );
+    expect(detail.work_item.flow_job_id).toBeNull();
+  });
+
+  test("toWorkItemOverview: an overview with a NULL flow_job_id passes the Console type guard", async () => {
+    const detail = await runWorkItemDetail(
+      7,
+      detailSql([
+        [{ ...OVERVIEW_ROW, flow_job_id: null }],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+      ]),
+    );
+    expect(isWorkItemDetail(detail)).toBe(true);
+  });
+
+  test("the overview query reads flow_job_id from work_items", async () => {
+    const { sql, texts } = recordingSql(FULL_RESPONSES);
+    await runWorkItemDetail(7, sql);
+    expect(texts[0]).toContain("wi.flow_job_id");
   });
 });

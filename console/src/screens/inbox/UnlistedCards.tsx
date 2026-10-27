@@ -3,14 +3,12 @@ import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { KindDot } from "../../components/KindDot.tsx";
 import { cn } from "../../lib/cn.ts";
+import { ROW_TARGET_CLASS } from "../../lib/controlClasses.ts";
 import {
   type UnlistedCount,
   unlistedNote,
   unlistedPath,
 } from "../../lib/inboxView.ts";
-
-const LINK_HOVER =
-  "outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none";
 
 /** 移動先があるカードは全体を1つのリンクにし、押せると分かる矢印を添える。リンクの名前は、カードに見える文になる。 */
 function CardBody({
@@ -27,7 +25,7 @@ function CardBody({
     return <div className={className}>{children}</div>;
   }
   return (
-    <Link to={path} className={cn(className, LINK_HOVER)}>
+    <Link to={path} className={cn(className, ROW_TARGET_CLASS)}>
       {children}
       <ChevronRight
         aria-hidden="true"

@@ -8,10 +8,22 @@ import {
   loadingQuery,
   staleQuery,
 } from "../../api/fakeSectionQuery.testing.ts";
-import type { JobListView, JobSummaryView } from "../../api/jobsQueries.ts";
+import type {
+  ActiveJobStepsView,
+  JobDetailView,
+  JobListView,
+  JobSummaryView,
+  StepViewData,
+} from "../../api/jobsQueries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import type { StepLine } from "../../lib/activeSteps.ts";
 import { ACTIVE_TRUNCATED_NOTE } from "../../lib/jobsView.ts";
-import { ActiveJobs, JobList, JobStateBadge } from "./JobRows.tsx";
+import {
+  ActiveJobs,
+  JobList,
+  JobStateBadge,
+  StepStateBadge,
+} from "./JobRows.tsx";
 
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const NOW = Date.parse("2026-10-26T05:10:00.000Z");
@@ -336,5 +348,199 @@ describe("JobList hidden characters", () => {
         />,
       ),
     ).not.toContain("\u202E");
+  });
+});
+
+const FLOW = job({
+  state: "running",
+  job_kind: "flow",
+  script_path: "f/factory/pipeline",
+});
+
+function step(id: string, state: string, skipped = false): StepViewData {
+  return { id, state, job_id: null, iterations: null, skipped };
+}
+
+function lines(line: StepLine): ReadonlyMap<string, StepLine> {
+  return new Map([[ID, line]]);
+}
+
+function detailOf(
+  state: string,
+  steps: StepViewData[],
+  id = ID,
+): JobDetailView {
+  return {
+    found: true,
+    job: { ...FLOW, id, state },
+    args: [],
+    steps,
+    log: null,
+    result: null,
+    result_error: null,
+    failures: { ok: true, items: [] },
+  };
+}
+
+function stepsView(
+  details: ReadonlyMap<string, JobDetailView | null>,
+): ActiveJobStepsView {
+  return {
+    details,
+    isFetching: false,
+    refetch: () => Promise.resolve(undefined),
+  };
+}
+
+describe("a row with the current step", () => {
+  test("names the step that runs", () => {
+    expect(
+      render(
+        <JobList
+          jobs={[FLOW]}
+          now={NOW}
+          back=""
+          time="active"
+          stepLines={lines({ kind: "step", step: step("generate", "running") })}
+        />,
+      ),
+    ).toContain("generate");
+  });
+
+  test("labels the line as the current step", () => {
+    expect(
+      render(
+        <JobList
+          jobs={[FLOW]}
+          now={NOW}
+          back=""
+          time="active"
+          stepLines={lines({ kind: "step", step: step("generate", "running") })}
+        />,
+      ),
+    ).toContain("今のステップ");
+  });
+
+  test("says in words that a step was skipped", () => {
+    expect(
+      render(
+        <JobList
+          jobs={[FLOW]}
+          now={NOW}
+          back=""
+          time="active"
+          stepLines={lines({
+            kind: "step",
+            step: step("generate", "success", true),
+          })}
+        />,
+      ),
+    ).toContain("スキップ");
+  });
+
+  test("says that the step could not be read", () => {
+    expect(
+      render(
+        <JobList
+          jobs={[FLOW]}
+          now={NOW}
+          back=""
+          time="active"
+          stepLines={lines({ kind: "unreadable" })}
+        />,
+      ),
+    ).toContain("今のステップを読めませんでした");
+  });
+
+  test("adds no line to a row without a step", () => {
+    expect(
+      render(<JobList jobs={[FLOW]} now={NOW} back="" time="active" />),
+    ).not.toContain("今のステップ");
+  });
+});
+
+describe("StepStateBadge", () => {
+  test("names a skipped step in words", () => {
+    expect(render(<StepStateBadge state="success" skipped />)).toContain(
+      "スキップ",
+    );
+  });
+
+  test("names a step that ran as a success", () => {
+    expect(
+      render(<StepStateBadge state="success" skipped={false} />),
+    ).toContain("成功");
+  });
+
+  test("draws a symbol that assistive technology skips", () => {
+    expect(render(<StepStateBadge state="success" skipped />)).toMatch(
+      /<svg[^>]*aria-hidden="true"/,
+    );
+  });
+});
+
+describe("ActiveJobs with the current steps", () => {
+  test("shows the current step of the running flow", () => {
+    expect(
+      render(
+        <ActiveJobs
+          query={freshQuery(list([FLOW]))}
+          steps={stepsView(
+            new Map([[ID, detailOf("running", [step("generate", "running")])]]),
+          )}
+        />,
+      ),
+    ).toContain("generate");
+  });
+
+  test("shows the state of the detail instead of the stale one of the list", () => {
+    expect(
+      textOf(
+        render(
+          <ActiveJobs
+            query={freshQuery(list([FLOW]))}
+            steps={stepsView(
+              new Map([[ID, detailOf("success", [step("finish", "success")])]]),
+            )}
+          />,
+        ),
+      ),
+    ).not.toContain("実行中");
+  });
+
+  test("says that the step could not be read when the detail failed", () => {
+    expect(
+      render(
+        <ActiveJobs
+          query={freshQuery(list([FLOW]))}
+          steps={stepsView(new Map([[ID, null]]))}
+        />,
+      ),
+    ).toContain("今のステップを読めませんでした");
+  });
+
+  test("draws no line for a flow that was not read", () => {
+    expect(
+      render(
+        <ActiveJobs
+          query={freshQuery(list([FLOW]))}
+          steps={stepsView(new Map())}
+        />,
+      ),
+    ).not.toContain("今のステップ");
+  });
+
+  test("draws no line for a script job", () => {
+    const script = job({ state: "running" });
+    expect(
+      render(
+        <ActiveJobs
+          query={freshQuery(list([script]))}
+          steps={stepsView(
+            new Map([[ID, detailOf("running", [step("generate", "running")])]]),
+          )}
+        />,
+      ),
+    ).not.toContain("今のステップ");
   });
 });

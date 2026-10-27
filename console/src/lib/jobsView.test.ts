@@ -33,6 +33,7 @@ import {
   REDACTION_LIMIT_NOTE,
   relatedWorkItemId,
   stepIterationsLabel,
+  stepStateInfo,
   upcomingLabel,
   withHistoryScript,
   withHistoryStatus,
@@ -72,6 +73,38 @@ describe("jobStateInfo", () => {
       kind: "unknown",
       label: "不明(exploded)",
     });
+  });
+});
+
+describe("stepStateInfo", () => {
+  test('names a skipped step "スキップ"', () => {
+    expect(stepStateInfo({ state: "success", skipped: true }).label).toBe(
+      "スキップ",
+    );
+  });
+
+  test("keeps the skipped kind apart from a success", () => {
+    expect(stepStateInfo({ state: "success", skipped: true }).kind).toBe(
+      "skipped",
+    );
+  });
+
+  test("names a step that ran as a success", () => {
+    expect(stepStateInfo({ state: "success", skipped: false }).label).toBe(
+      "成功",
+    );
+  });
+
+  test("does not call a failure skipped", () => {
+    expect(stepStateInfo({ state: "failure", skipped: true }).label).toBe(
+      "失敗",
+    );
+  });
+
+  test("names a step that waits as waiting", () => {
+    expect(stepStateInfo({ state: "waiting", skipped: false }).label).toBe(
+      "待機中",
+    );
   });
 });
 

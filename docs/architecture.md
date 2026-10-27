@@ -321,10 +321,10 @@ Consoleの一覧と集計は次のviewを読む。
 | view | 内容 |
 | --- | --- |
 | `summary` | サイドバーの件数と、要対応の一覧。承認待ち、作業項目の失敗、要対応の通知を返す |
-| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
+| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の16本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の18本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -342,6 +342,8 @@ Consoleの一覧と集計は次のviewを読む。
 - `console_job_cancel`
 - `console_job_rerun`
 - `console_config_update`
+- `console_hold_place`
+- `console_schedule_stop`
 
 どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
@@ -601,6 +603,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
 | `f/factory/manual_intake_submit` | script | [OP-1-2] 手動投入をConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
+| `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |
@@ -608,6 +611,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/console_job_cancel` | script | [OP-2-6] ジョブを取り消し |
 | `f/factory/console_job_rerun` | script | [OP-2-7] 失敗した定期ジョブを再実行 |
 | `f/factory/console_config_update` | script | [OP-2-8] 設定を止める向きに変更 |
+| `f/factory/console_hold_place` | script | [OP-2-9] 保留と凍結を置く |
 | `f/factory/poll_issues` | script | [SF-1-1] Issueを巡回して担当を確定 |
 | `f/factory/poll_prs` | script | [SF-1-2] PRを巡回してレビュー / 修正を起動 |
 | `f/factory/poll_dependabot` | script | [SF-1-3] dependabotのPRを巡回して自動マージを起動 |

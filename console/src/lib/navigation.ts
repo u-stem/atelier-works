@@ -1,6 +1,7 @@
 // サイドバーの件数の表示、たたみ状態の読み取り、キーボードでの項目の移動を決める純粋関数。
 
 import { cn } from "./cn.ts";
+import { TRANSITION_COLORS } from "./motionClasses.ts";
 
 /** サイドバーをたたんだかどうかを残す保存領域のキー。 */
 export const SIDEBAR_STORAGE_KEY = "factory-console.sidebar";
@@ -65,9 +66,10 @@ export function nextNavFocusIndex(
  */
 export function navLinkClass(collapsed: boolean): string {
   return cn(
-    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-body font-medium text-muted-foreground outline-none transition-colors duration-150 motion-reduce:transition-none",
+    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-body font-medium text-muted-foreground outline-none",
+    TRANSITION_COLORS,
     "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-    "before:absolute before:inset-y-2 before:-left-3 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-150",
+    "before:absolute before:inset-y-2 before:-left-3 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-(--duration-fast) before:ease-standard",
     "aria-[current=page]:bg-selected aria-[current=page]:text-selected-foreground aria-[current=page]:before:opacity-100",
     collapsed && "justify-center px-0",
   );

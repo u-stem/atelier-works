@@ -1352,6 +1352,8 @@ export type WorkItemOverview = {
   readonly updated_at: string;
   /** 今の状態へ遷移したときの`work_item_events.note`。 */
   readonly status_note: string | null;
+  /** いま作業項目を進めているflowのジョブのid。進めているflowが無ければ`null`。 */
+  readonly flow_job_id: string | null;
   /** `agent_runs.cost_usd`の合計。実行の記録が無ければ`null`。 */
   readonly total_cost_usd: number | null;
   readonly run_count: number;
@@ -1377,6 +1379,7 @@ function toWorkItemOverview(row: SqlRow): WorkItemOverview {
     created_at: asIsoDate(row.created_at, "created_at"),
     updated_at: asIsoDate(row.updated_at, "updated_at"),
     status_note: asNullableStr(row.status_note, "status_note"),
+    flow_job_id: asNullableStr(row.flow_job_id, "flow_job_id"),
     total_cost_usd: asNullableNumeric(row.total_cost_usd, "total_cost_usd"),
     run_count: asNumeric(row.run_count, "run_count"),
   };
@@ -1662,7 +1665,7 @@ export async function runWorkItemDetail(
       wi.id AS work_item_id, wi.kind, wi.source, wi.cycle, wi.owner, wi.repo,
       wi.issue_number, wi.issue_url, wi.pr_number, wi.pr_url, wi.branch,
       wi.title, wi.status, wi.attempt, wi.fix_round, wi.created_at,
-      wi.updated_at,
+      wi.updated_at, wi.flow_job_id,
       left(ev.note, ${SUMMARY_TEXT_LIMIT}::integer) AS status_note,
       cost.total_cost_usd, cost.run_count
     FROM factory.work_items wi

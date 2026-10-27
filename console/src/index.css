@@ -138,6 +138,15 @@
 
   --shadow-raised:
     0 1px 2px var(--shadow-color), 0 8px 20px -6px var(--shadow-color);
+
+  /*
+   * 動きの長さとイージング。Tailwindは--duration-*から長さのユーティリティを作らないので、
+   * duration-(--duration-fast)の形で読む。--ease-*はease-standardになる。
+   * 動きを減らす設定の利用者への対応は、下の全要素の規則が受けるので、画面側では持たない。
+   */
+  --duration-fast: 150ms;
+  --duration-moderate: 200ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 body {
@@ -159,15 +168,21 @@ body {
   scrollbar-color: var(--input) transparent;
 }
 
-/* 動きを減らす設定の利用者には、遷移と回転を止める。 */
+/* 動きを減らす設定の利用者には、遷移、回転、遅延、滑らかなスクロールを止める。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     /* biome-ignore lint/complexity/noImportantStyles: 利用者の設定を、画面の個別の指定より優先させる。 */
+    animation-delay: 0s !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     animation-duration: 0.01ms !important;
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
+    scroll-behavior: auto !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
+    transition-delay: 0s !important;
     /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
     transition-duration: 0.01ms !important;
   }

@@ -738,6 +738,7 @@ describe("runWorkItemDetail result", () => {
       created_at: T0,
       updated_at: T0,
       status_note: null,
+      flow_job_id: null,
       total_cost_usd: 1.2345,
       run_count: 4,
     });

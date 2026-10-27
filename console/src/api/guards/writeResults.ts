@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
@@ -8,6 +8,8 @@
 import {
   type Guard,
   isBoolean,
+  isIsoTimestamp,
+  isNullableIsoTimestamp,
   isNullableString,
   isOneOf,
   isPositiveInteger,
@@ -471,6 +473,134 @@ export function isConfigUpdateResult(
     isConfigValue(value.before) &&
     isConfigValue(value.after) &&
     isBoolean(value.verified) &&
+    isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * 保留と凍結を置けなかった理由。`f/factory/console_hold_place.ts`の`PLACE_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。画面は日本語の固定文に直す(`lib/writeNotices.ts`)。
+ */
+export const HOLD_PLACE_REFUSAL_REASONS = [
+  "invalid_kind",
+  "invalid_target",
+  "invalid_minutes",
+  "invalid_reason",
+  "target_not_allowed",
+  "already_active",
+  "other_holder_active",
+  "limit_reached",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type HoldPlaceRefusalReason =
+  (typeof HOLD_PLACE_REFUSAL_REASONS)[number];
+
+export type HoldPlaceResult =
+  | { readonly refused: true; readonly reason: HoldPlaceRefusalReason }
+  | {
+      readonly refused: false;
+      readonly kind: "merge" | "deploy" | "freeze";
+      readonly id: string;
+      readonly target: string;
+      readonly created_at: string;
+      readonly expires_at: string;
+      readonly verified: boolean;
+      readonly action_audit: ActionAudit;
+    };
+
+const isHoldPlaceRefusalReason: Guard<HoldPlaceRefusalReason> = isOneOf(
+  HOLD_PLACE_REFUSAL_REASONS,
+);
+
+const isPlaceKind: Guard<"merge" | "deploy" | "freeze"> = isOneOf([
+  "merge",
+  "deploy",
+  "freeze",
+]);
+
+export function isHoldPlaceResult(value: unknown): value is HoldPlaceResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isHoldPlaceRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isPlaceKind(value.kind) &&
+    isString(value.id) &&
+    isString(value.target) &&
+    isIsoTimestamp(value.created_at) &&
+    isIsoTimestamp(value.expires_at) &&
+    isBoolean(value.verified) &&
+    isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * スケジュールを止められなかった理由。`f/factory/console_schedule_stop.ts`の`STOP_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。
+ */
+export const SCHEDULE_STOP_REFUSAL_REASONS = [
+  "not_allowed",
+  "no_freeze",
+  "other_holder_freeze",
+  "too_early",
+  "freeze_ending",
+  "self_update_running",
+  "schedule_changed",
+  "already_stopped",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type ScheduleStopRefusalReason =
+  (typeof SCHEDULE_STOP_REFUSAL_REASONS)[number];
+
+export type ScheduleStopResult =
+  | {
+      readonly refused: true;
+      readonly reason: ScheduleStopRefusalReason;
+      readonly ready_at: string | null;
+    }
+  | {
+      readonly refused: false;
+      readonly schedule_path: string;
+      readonly freeze_id: string;
+      readonly enabled: boolean;
+      readonly freeze_expires_at: string;
+      readonly verified: boolean;
+      /** 無効にした後の読み直しで、止めたときの凍結がまだ有効だったか。 */
+      readonly freeze_held: boolean;
+      readonly action_audit: ActionAudit;
+    };
+
+const isScheduleStopRefusalReason: Guard<ScheduleStopRefusalReason> = isOneOf(
+  SCHEDULE_STOP_REFUSAL_REASONS,
+);
+
+export function isScheduleStopResult(
+  value: unknown,
+): value is ScheduleStopResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return (
+      isScheduleStopRefusalReason(value.reason) &&
+      isNullableIsoTimestamp(value.ready_at)
+    );
+  }
+  return (
+    value.refused === false &&
+    isString(value.schedule_path) &&
+    isString(value.freeze_id) &&
+    isBoolean(value.enabled) &&
+    isIsoTimestamp(value.freeze_expires_at) &&
+    isBoolean(value.verified) &&
+    isBoolean(value.freeze_held) &&
     isActionAudit(value.action_audit)
   );
 }

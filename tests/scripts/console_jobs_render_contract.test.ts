@@ -26,17 +26,20 @@ const JOB_SCREENS = await sourcesOf("console/src/screens/jobs/*.{ts,tsx}");
 
 const RENDERERS = [
   ...JOB_SCREENS,
+  "console/src/screens/items/detail/ItemFlowProgress.tsx",
   "console/src/screens/system/ConfigSection.tsx",
   "console/src/lib/jobsView.ts",
 ];
 
 /** サーバーの文字列を画面に出す部品。無害化の部品を取り込んでいなければならない。 */
 const SAFE_TEXT_USERS = [
+  "console/src/screens/jobs/FlowGraphDiagram.tsx",
   "console/src/screens/jobs/JobDetailParts.tsx",
   "console/src/screens/jobs/JobDetailScreen.tsx",
   "console/src/screens/jobs/JobHistory.tsx",
   "console/src/screens/jobs/JobRows.tsx",
   "console/src/screens/jobs/ScheduleList.tsx",
+  "console/src/screens/items/detail/ItemFlowProgress.tsx",
   "console/src/screens/system/ConfigSection.tsx",
 ];
 
@@ -71,7 +74,7 @@ const LINK_TAG = /<(a|Link|NavLink|JobLink|WindmillJobLink)(\s|>|\/)/;
 
 /** サーバー由来の文字列の項目名。 */
 const FIELDS =
-  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name|tag|state|job_kind|parent_job|summary";
+  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name|tag|state|job_kind|parent_job|summary|flowPath|jobState";
 
 /** 項目名だけの式。`item.key`のように、呼び出しや演算を含まない。 */
 const FIELD_EXPRESSION = String.raw`\{\s*[A-Za-z_][\w.]*\.(${FIELDS})\s*\}`;
@@ -174,6 +177,12 @@ describe("the renderers of the job screens", () => {
     expect(RENDERERS).toContain("console/src/screens/jobs/JobDetailParts.tsx");
   });
 
+  test("include the flow progress of a work item", () => {
+    expect(RENDERERS).toContain(
+      "console/src/screens/items/detail/ItemFlowProgress.tsx",
+    );
+  });
+
   test("include the config section", () => {
     expect(RENDERERS).toContain("console/src/screens/system/ConfigSection.tsx");
   });
@@ -261,6 +270,8 @@ describe("the checks themselves", () => {
       "<PageHeader title={jobScriptName(job.script_path)} />",
     ],
     ["a field with spaces", "<p>{ row.error }</p>"],
+    ["the flow path of the progress", "<span>{view.flowPath}</span>"],
+    ["the job state of the progress", "<span>{view.jobState}</span>"],
   ])("the raw field pattern catches %s", (_name, sample) => {
     expect(sample).toMatch(RAW_FIELD_IN_JSX);
   });

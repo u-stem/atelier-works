@@ -426,7 +426,21 @@ const BOUND_PATH_CALLS: Readonly<
     path: "f/factory/factory_config",
     requestBody: true,
   },
+  // 凍結の変数が無いときの有無の確認。他の変数の有無は読ませない。
+  "VariableService.existsVariable": {
+    path: "f/factory/freezes",
+    requestBody: false,
+  },
 };
+
+/**
+ * パスをリテラルに固定する変数の呼び出し。凍結の変数だけを読み書きしてよい。
+ * `setVariable`は変数が無いときに作るので、秘密の変数として作らないよう、3番目の引数を`false`に固定する。
+ * 名前の出現はすべて`name(`の呼び出しでなければならない。別名、`.call`、`.bind`、`.apply`、
+ * 引数への受け渡しは、パスの固定をすり抜けるので禁じる。
+ */
+const BOUND_VARIABLE_PATH = "f/factory/freezes";
+const BOUND_VARIABLE_CALLS = ["getVariable", "setVariable"] as const;
 
 /** `text`の`index`にある引用符で始まる文字列の、次の位置。閉じていなければ`undefined`。 */
 function skipQuoted(text: string, index: number): number | undefined {
@@ -678,6 +692,28 @@ export function sdkFindings(source: string): SdkFindings {
         boundArgumentsProblem(args, bound.path, bound.requestBody) !== undefined
       ) {
         problems.push(`${call} is not bound to the literal ${bound.path}`);
+      }
+    }
+  }
+  for (const name of BOUND_VARIABLE_CALLS) {
+    const identifier = new RegExp(`(?<![\\w$])${name}(?![\\w$])`, "g");
+    const callPattern = new RegExp(`(?<![\\w$])${name}\\s*\\(`, "g");
+    if (
+      [...skeleton.matchAll(identifier)].length !==
+      [...skeleton.matchAll(callPattern)].length
+    ) {
+      problems.push(`${name} is used other than as a bound call`);
+    }
+    const opening = new RegExp(`(?<![\\w$])${name}\\s*\\(`, "g");
+    for (const match of code.matchAll(opening)) {
+      const args = callArguments(code, match.index + match[0].length - 1);
+      const parts = args === undefined ? undefined : splitTopLevel(args);
+      if (parts?.[0]?.trim() !== JSON.stringify(BOUND_VARIABLE_PATH)) {
+        problems.push(
+          `${name} is not bound to the literal ${BOUND_VARIABLE_PATH}`,
+        );
+      } else if (name === "setVariable" && parts[2]?.trim() !== "false") {
+        problems.push("setVariable may not create a secret variable");
       }
     }
   }

@@ -181,6 +181,7 @@ describe("StepList", () => {
               state: "success",
               job_id: CHILD,
               iterations: null,
+              skipped: false,
             },
           ]}
           back={undefined}
@@ -199,6 +200,7 @@ describe("StepList", () => {
               state: "success",
               job_id: CHILD,
               iterations: null,
+              skipped: false,
             },
           ]}
           back={undefined}
@@ -217,6 +219,7 @@ describe("StepList", () => {
               state: "failure",
               job_id: CHILD,
               iterations: null,
+              skipped: false,
             },
           ]}
           back={undefined}
@@ -230,7 +233,13 @@ describe("StepList", () => {
       render(
         <StepList
           steps={[
-            { id: "verify", state: "waiting", job_id: null, iterations: null },
+            {
+              id: "verify",
+              state: "waiting",
+              job_id: null,
+              iterations: null,
+              skipped: false,
+            },
           ]}
           back={undefined}
         />,
@@ -243,12 +252,40 @@ describe("StepList", () => {
       render(
         <StepList
           steps={[
-            { id: "each", state: "success", job_id: null, iterations: 4 },
+            {
+              id: "each",
+              state: "success",
+              job_id: null,
+              iterations: 4,
+              skipped: false,
+            },
           ]}
           back={undefined}
         />,
       ),
     ).toContain("4回繰り返し");
+  });
+});
+
+describe("StepList with a skipped step", () => {
+  const skipped = {
+    id: "request_approval",
+    state: "success",
+    job_id: CHILD,
+    iterations: null,
+    skipped: true,
+  };
+
+  test('names a skipped step "スキップ"', () => {
+    expect(render(<StepList steps={[skipped]} back={undefined} />)).toContain(
+      "スキップ",
+    );
+  });
+
+  test("does not call a skipped step a success", () => {
+    expect(
+      render(<StepList steps={[skipped]} back={undefined} />),
+    ).not.toContain("成功");
   });
 });
 
@@ -511,7 +548,13 @@ describe("JobDetailParts hidden characters", () => {
       render(
         <StepList
           steps={[
-            { id: BIDI, state: "success", job_id: null, iterations: null },
+            {
+              id: BIDI,
+              state: "success",
+              job_id: null,
+              iterations: null,
+              skipped: false,
+            },
           ]}
           back={undefined}
         />,

@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect } from "react";
+import { useDialogSync } from "../components/useDialogSync.ts";
 import { isOutsideRect } from "../lib/navDrawer.ts";
 import { useMediaQuery } from "./useMediaQuery.ts";
 
@@ -25,21 +26,7 @@ export function NavDrawer({
   onClose: () => void;
   children: ReactNode;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const openRef = useRef(open);
-
-  useEffect(() => {
-    openRef.current = open;
-    const dialog = ref.current;
-    if (dialog === null) {
-      return;
-    }
-    if (open && !dialog.open) {
-      dialog.showModal();
-    } else if (!open && dialog.open) {
-      dialog.close();
-    }
-  }, [open]);
+  const { ref, openRef } = useDialogSync(open);
 
   const wide = useMediaQuery(WIDE_QUERY);
   useEffect(() => {

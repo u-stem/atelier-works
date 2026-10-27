@@ -749,6 +749,9 @@ async function runReset(actor: FreezeActor, deps: CliDeps): Promise<number> {
     return 1;
   }
   deps.print("reset: no freezes");
+  deps.print(
+    "note: a schedule stopped from the Console stays off until the next deploy; turn it on in Windmill",
+  );
   return 0;
 }
 

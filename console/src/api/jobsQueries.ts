@@ -7,14 +7,26 @@
 // Console用workerの枠が1つで、ジョブの一覧の取得が承認などの呼び出しを待たせるため。
 // 詳細は、ログと結果を含む取得を1回だけ行い、実行中のジョブの状態だけを15秒ごとに取り直す。
 // ログと結果は、フォーカスや再接続、画面を開き直したときにも取り直さない。操作と、終了の検知のときだけ取り直す。
+// 例外が、実行中と待ちのタブの「今のステップ」である。実行中のflowのルートのうち古い2件の詳細(ログと結果なし)を、
+// 1件ずつ30秒ごとに取り直す。選んでいるタブが実行中と待ちで、文書が見えていて、画面が15分以内に操作されたときだけ取る。
+// 取得のたびにWindmillのジョブが1件できるので、止める条件を絞っている。
 
 import {
+  keepPreviousData,
   type QueryClient,
   type UseQueryResult,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  activeStepsEnabled,
+  newlyFinished,
+  type StepDetails,
+  stepTargets,
+} from "../lib/activeSteps.ts";
+import { useIdle } from "../lib/idleTracker.ts";
+import type { JobsTabId } from "../lib/jobsTabs.ts";
 import { isActiveJobState, isFinishedJobState } from "../lib/jobsView.ts";
 import { ApiFailure } from "./errors.ts";
 import {
@@ -59,6 +71,8 @@ export type StepViewData = {
   readonly state: string;
   readonly job_id: string | null;
   readonly iterations: number | null;
+  /** Windmillが条件で飛ばしたステップ。状態は`success`のまま返る。 */
+  readonly skipped: boolean;
 };
 
 export type FailureViewData = {
@@ -180,7 +194,8 @@ const isStepView: Guard<StepViewData> = (
   isString(value.id) &&
   isString(value.state) &&
   isNullableString(value.job_id) &&
-  isNullableInteger(value.iterations);
+  isNullableInteger(value.iterations) &&
+  isBoolean(value.skipped);
 
 const isFailureView: Guard<FailureViewData> = (
   value: unknown,
@@ -354,15 +369,34 @@ async function fetchChecked<T>(
   script: "console_jobs" | "console_schedules" | "console_config",
   guard: Guard<T>,
   options: RunScriptOptions,
+  normalize: (value: unknown) => unknown = (value) => value,
 ): Promise<T> {
   const result = await runScript(script, args, options);
   if (!result.ok) {
     throw new ApiFailure(result.error);
   }
-  if (!guard(result.value)) {
+  const value = normalize(result.value);
+  if (!guard(value)) {
     throw new ApiFailure({ kind: "invalid_response" });
   }
-  return result.value;
+  return value;
+}
+
+/**
+ * 詳細のステップに`skipped`が無いとき、飛ばしていないものとして補う。
+ * Consoleの配信とscriptの反映の順序に依らず、詳細を読めるようにするためである。
+ * 型ガードは`skipped`を必須のままにするので、真偽値でない値は拒否する。
+ */
+function withSkippedDefault(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.steps)) return value;
+  return {
+    ...value,
+    steps: value.steps.map((step: unknown) =>
+      isRecord(step) && !("skipped" in step)
+        ? { ...step, skipped: false }
+        : step,
+    ),
+  };
 }
 
 /** 実行中と待ちのジョブを取る。失敗は`ApiFailure`で投げる。 */
@@ -403,6 +437,7 @@ export function fetchJobDetail(
     "console_jobs",
     isJobDetail,
     options,
+    withSkippedDefault,
   );
 }
 
@@ -723,4 +758,186 @@ export function jobsHoldsQueryOptions() {
     refetchOnWindowFocus: false as const,
     refetchOnReconnect: false as const,
   };
+}
+
+/** 実行中のflowの今のステップを取り直す間隔。 */
+export const ACTIVE_STEPS_REFRESH_MS = 30_000;
+
+/** 今のステップの取得のキーの先頭。 */
+export const activeStepsQueryKeyBase = ["console", "jobs", "steps"] as const;
+
+/** 今のステップの取得のキー。読むジョブのidを、読む順に並べる。 */
+export function activeStepsQueryKey(ids: readonly string[]): readonly string[] {
+  return [...activeStepsQueryKeyBase, ...ids];
+}
+
+/** ログと結果を含めずに、ジョブ1件の詳細を読む。 */
+export type ActiveStepRead = (id: string) => Promise<JobDetailView>;
+
+/**
+ * ジョブの詳細を、渡した順に1件ずつ読む。
+ * Console用workerの枠が1つなので、並べて読まず、前の取得が終わってから次を読む。
+ * 取得に失敗したジョブは`null`にして、次のジョブを読む。
+ * 取得の中断など、`ApiFailure`でない例外は読み手に返す。
+ */
+export async function fetchActiveJobSteps(
+  ids: readonly string[],
+  read: ActiveStepRead,
+): Promise<StepDetails> {
+  const details = new Map<string, JobDetailView | null>();
+  for (const id of ids) {
+    try {
+      details.set(id, await read(id));
+    } catch (error) {
+      if (!(error instanceof ApiFailure)) throw error;
+      details.set(id, null);
+    }
+  }
+  return details;
+}
+
+/**
+ * 今のステップの取得の設定。
+ * 30秒ごとに取り直し、文書が見えない間は止める。フォーカスと再接続では取り直さない。
+ * 読むジョブが変わるとキーが変わるので、直前の値を残して、行のステップが消えないようにする。
+ */
+export function activeStepsQueryOptions(ids: readonly string[]) {
+  return {
+    queryKey: activeStepsQueryKey(ids),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchActiveJobSteps(ids, (id) =>
+        fetchJobDetail(id, { includeOutput: false }, { signal }),
+      ),
+    staleTime: ACTIVE_STEPS_REFRESH_MS,
+    refetchInterval: ACTIVE_STEPS_REFRESH_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    placeholderData: keepPreviousData,
+  };
+}
+
+/**
+ * 更新の操作で、実行中と待ちの一覧を取ってから、今のステップを取る。
+ * 一覧の取得が終わる前にステップを取ると、2つの取得がworkerの枠を取り合うためである。
+ * ステップの取得には、取り直した一覧を渡す。一覧が変わると読むジョブのキーが変わるので、
+ * 古いキーを読み直さず、新しい一覧のジョブを読ませる。
+ */
+export async function refreshActiveThenSteps(reads: {
+  readonly active: () => Promise<JobListView | undefined>;
+  readonly steps: (list: JobListView | undefined) => Promise<unknown>;
+}): Promise<void> {
+  const list = await reads.active();
+  await reads.steps(list);
+}
+
+/**
+ * 今のステップの取得の設定。
+ * 実行中と待ちのタブを選んでいて、画面が操作されていて、読むflowがあるときだけ読む。
+ */
+export function activeStepsOptions(
+  list: JobListView | undefined,
+  selectedTab: JobsTabId,
+  idle: boolean,
+) {
+  const ids = stepTargets(list?.jobs ?? []);
+  return {
+    ...activeStepsQueryOptions(ids),
+    enabled: ids.length > 0 && activeStepsEnabled({ selectedTab, idle }),
+  };
+}
+
+/**
+ * ジョブが終わったと分かったとき、一覧を順に取り直す。取り直すのは購読のある取得だけである。
+ * 開いていないタブの取得は古いと印を付けるだけで、走らせない。
+ * 一覧は自動では取り直さないので、終わったジョブが実行中のまま残らないよう、
+ * 実行中と待ち、scheduleの直近の実行、履歴の順に取り直す。
+ * Console用workerの枠が1つなので、重ねずに1つずつ取る。
+ */
+export async function invalidateAfterFinish(
+  client: QueryClient,
+): Promise<void> {
+  const keys = [
+    jobsActiveQueryKey,
+    schedulesQueryKey,
+    ["console", "jobs", "history"],
+  ];
+  for (const queryKey of keys) {
+    await client.invalidateQueries({ queryKey, refetchType: "active" });
+  }
+}
+
+/**
+ * 終了を返した詳細を見て、一覧を取り直す関数を作る。
+ * 同じジョブでは1回しか取り直さない。同じ周期に複数のジョブが終わっても、取り直しは1回にまとめる。
+ */
+export function createFinishWatcher(
+  client: QueryClient,
+): (details: StepDetails) => Promise<void> {
+  const handled = new Set<string>();
+  return async (details) => {
+    const finished = newlyFinished(details, handled);
+    if (finished.length === 0) return;
+    for (const id of finished) handled.add(id);
+    await invalidateAfterFinish(client);
+  };
+}
+
+/**
+ * 渡した一覧のflowの今のステップを、いまの値に取り直す。
+ * 一覧から読むジョブを決め直すので、更新の操作で一覧が変わった後も、古いジョブを読まない。
+ * 読む対象が無ければ何もしない。取得の失敗は投げない。
+ */
+export async function refetchActiveSteps(
+  client: QueryClient,
+  list: JobListView | undefined,
+): Promise<void> {
+  const ids = stepTargets(list?.jobs ?? []);
+  if (ids.length === 0) return;
+  await client
+    .fetchQuery({ ...activeStepsQueryOptions(ids), staleTime: 0 })
+    .then(
+      () => undefined,
+      () => undefined,
+    );
+}
+
+export type ActiveJobStepsView = {
+  /** ジョブのidごとの詳細。取得に失敗したジョブは`null`。 */
+  readonly details: StepDetails;
+  readonly isFetching: boolean;
+  /** 今のステップを取り直す。読んでいないときは何もしない。 */
+  readonly refetch: (list?: JobListView) => Promise<unknown>;
+};
+
+const NO_DETAILS: StepDetails = new Map();
+
+/**
+ * 実行中のflowのルートのうち古い2件の、今のステップを読む。
+ * 実行中と待ちのタブを選んでいて、画面が操作されているときだけ読み、文書が見えない間は止まる。
+ * 詳細が終了を返したジョブがあれば、購読のある一覧を1回だけ取り直す。
+ * 同じ周期に複数が終わっても、まとめて1回にする。
+ */
+export function useActiveJobSteps(
+  list: JobListView | undefined,
+  selectedTab: JobsTabId,
+): ActiveJobStepsView {
+  const client = useQueryClient();
+  const idle = useIdle();
+  const query = useQuery(activeStepsOptions(list, selectedTab, idle));
+  const details = query.data ?? NO_DETAILS;
+
+  const watch = useMemo(() => createFinishWatcher(client), [client]);
+  useEffect(() => {
+    void watch(details);
+  }, [watch, details]);
+
+  const latest = useRef(list);
+  latest.current = list;
+  const refetch = useCallback(
+    (fresh?: JobListView) =>
+      refetchActiveSteps(client, fresh ?? latest.current),
+    [client],
+  );
+  return { details, isFetching: query.isFetching, refetch };
 }

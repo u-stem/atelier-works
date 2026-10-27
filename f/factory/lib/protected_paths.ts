@@ -191,6 +191,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`console_config_update.ts`)も、それぞれの`.script.yaml`とともに守る。再実行の許可表(再実行できる定期処理)と、
  * 設定の許可表(変更できる項目と向きと下限)は、書き換えられると、再実行できる処理や変更できる設定が増えるためである。
  * 2つの許可表を固定するテスト(`tests/scripts/console_rerun.test.ts`、`console_config_update.test.ts`)も守る。
+ * 保留と凍結を置くscript(`console_hold_place.ts`)と、凍結を置いたscheduleを止めるscript(`console_schedule_stop.ts`)も、
+ * それぞれの`.script.yaml`とともに守る。置ける期限の上限と、止められるscheduleの許可表は、書き換えられると、
+ * 長く止められたり、止めてはならないscheduleを止められたりするためである。
+ * 2つのscriptのテスト(`tests/scripts/console_hold_place.test.ts`、`console_schedule_stop.test.ts`)も守る。
+ * 凍結の変数を読み書きする部品は、`lib/freezes.ts`にあり、すでに守っている。
+ * 置くscriptと止めるscriptの画面の部品(`console/src/lib/holdPlace.ts`、`console/src/screens/system/HoldPlaceDialog.tsx`など)は、
+ * 取消などの画面の部品と同じ理由で守らない。
  * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
  * 再実行と設定変更の画面の部品(`console/src/lib/configChange.ts`、`console/src/screens/system/ConfigChangeDialog.tsx`など)も同じ理由で守らない。
  * 守ると毎回人の確認が要り、書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られるためである。
@@ -319,6 +326,10 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/console_job_rerun.script.yaml",
   "f/factory/console_config_update.ts",
   "f/factory/console_config_update.script.yaml",
+  "f/factory/console_hold_place.ts",
+  "f/factory/console_hold_place.script.yaml",
+  "f/factory/console_schedule_stop.ts",
+  "f/factory/console_schedule_stop.script.yaml",
   "f/factory/retry_work_item.ts",
   "f/factory/retry_work_item.script.yaml",
   "f/factory/manual_intake_submit.ts",
@@ -326,6 +337,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/scripts/console_cancel.test.ts",
   "tests/scripts/console_rerun.test.ts",
   "tests/scripts/console_config_update.test.ts",
+  "tests/scripts/console_hold_place.test.ts",
+  "tests/scripts/console_schedule_stop.test.ts",
+  "tests/lib/freezes.test.ts",
   "tests/scripts/console_write_audit.test.ts",
   "tests/scripts/cleanup_db_console_actions.test.ts",
   "scripts/gen-console-known-paths.ts",

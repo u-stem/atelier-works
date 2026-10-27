@@ -11,7 +11,11 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import type { JobListView, JobSummaryView } from "../../api/jobsQueries.ts";
+import type {
+  ActiveJobStepsView,
+  JobListView,
+  JobSummaryView,
+} from "../../api/jobsQueries.ts";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import {
@@ -22,16 +26,24 @@ import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
+import {
+  preferDetailState,
+  type StepDetails,
+  type StepLine,
+  stepLinesOf,
+} from "../../lib/activeSteps.ts";
 import { cn } from "../../lib/cn.ts";
 import { jobDetailPath } from "../../lib/jobLink.ts";
 import {
   ACTIVE_TRUNCATED_NOTE,
   currentJobs,
   formatDuration,
+  type JobStateInfo,
   type JobStateKind,
   jobScriptName,
   jobStateInfo,
   jobsBackState,
+  stepStateInfo,
   upcomingLabel,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
@@ -55,19 +67,37 @@ const STATE_STYLE: Readonly<
   unknown: { Icon: CircleQuestionMark, variant: "outline" },
 };
 
-/** ジョブかステップの状態。記号と語を並べる。実行中の記号は、動きを減らす設定では回さない。 */
-export function JobStateBadge({ state }: { state: string }) {
-  const info = jobStateInfo(state);
+/** 状態の記号と語。実行中の記号は回す。動きを減らす設定の利用者には、index.cssの規則が回転を止める。 */
+function StateBadge({ info }: { info: JobStateInfo }) {
   const { Icon, variant, spin } = STATE_STYLE[info.kind];
   return (
     <Badge variant={variant}>
       <Icon
         aria-hidden="true"
-        className={cn(spin === true && "motion-safe:animate-spin")}
+        className={cn(spin === true && "animate-spin")}
       />
       {info.label}
     </Badge>
   );
+}
+
+/** ジョブの状態。記号と語を並べる。 */
+export function JobStateBadge({ state }: { state: string }) {
+  return <StateBadge info={jobStateInfo(state)} />;
+}
+
+/**
+ * ステップの状態。記号と語を並べる。
+ * ジョブ詳細のステップの一覧と、一覧の今のステップが共有する。条件で飛ばしたステップは「スキップ」と示す。
+ */
+export function StepStateBadge({
+  state,
+  skipped,
+}: {
+  state: string;
+  skipped: boolean;
+}) {
+  return <StateBadge info={stepStateInfo({ state, skipped })} />;
 }
 
 /**
@@ -109,16 +139,42 @@ function timeOf(
     : { iso: job.created_at, prefix: "登録 " };
 }
 
+/**
+ * 実行中のflowの行に添える、今のステップの1行。
+ * ステップの状態は、ジョブ詳細のステップの一覧と同じ語で示す。
+ * 取得に失敗したときは、ステップが無いとは言わず、読めなかったと伝える。
+ */
+function StepLineView({ line }: { line: StepLine }) {
+  if (line.kind === "unreadable") {
+    return (
+      <p className="text-small text-muted-foreground">
+        今のステップを読めませんでした
+      </p>
+    );
+  }
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted-foreground">
+      <span>今のステップ</span>
+      <span className="min-w-0 font-mono break-all text-foreground">
+        {safeText(line.step.id)}
+      </span>
+      <StepStateBadge state={line.step.state} skipped={line.step.skipped} />
+    </p>
+  );
+}
+
 function JobRow({
   job,
   now,
   back,
   time,
+  stepLine,
 }: {
   job: JobSummaryView;
   now: number;
   back: string;
   time: "active" | "history";
+  stepLine: StepLine | undefined;
 }) {
   const to = jobDetailPath(job.id);
   const name = safeText(jobScriptName(job.script_path));
@@ -157,6 +213,7 @@ function JobRow({
           </span>
         )}
       </p>
+      {stepLine === undefined ? null : <StepLineView line={stepLine} />}
     </li>
   );
 }
@@ -171,16 +228,28 @@ export function JobList({
   now,
   back,
   time,
+  stepLines,
 }: {
   jobs: readonly JobSummaryView[];
   now: number;
   back: string;
   time: "active" | "history";
+  /** 実行中のflowの行に添える今のステップ。ジョブのidで引く。 */
+  stepLines?: ReadonlyMap<string, StepLine>;
 }) {
   return (
     <ul className="divide-y divide-border rounded-xl border border-border bg-card">
       {jobs.map((job) => (
-        <JobRow key={job.id} job={job} now={now} back={back} time={time} />
+        <JobRow
+          key={job.id}
+          job={job}
+          now={now}
+          back={back}
+          time={time}
+          stepLine={
+            job.job_kind === "flow" ? stepLines?.get(job.id) : undefined
+          }
+        />
       ))}
     </ul>
   );
@@ -249,7 +318,14 @@ export const LIST_LOADING_SHAPE: LoadingShape = {
  * 自動では取り直さず、画面の更新ボタンで取り直す。その案内は見出しの更新の脇に任せ、ここでは繰り返さない。
  * キューの1ページで切れたときは、全件を読めていないと伝える。
  */
-export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
+export function ActiveJobs({
+  query,
+  steps,
+}: {
+  query: SectionQuery<JobListView>;
+  /** 実行中のflowの今のステップ。渡さなければ、行にステップを添えない。 */
+  steps?: ActiveJobStepsView;
+}) {
   const now = useNow();
   return (
     <div className="flex max-w-4xl flex-col gap-3">
@@ -260,7 +336,8 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
         shape={LIST_LOADING_SHAPE}
       >
         {(data) => {
-          const jobs = currentJobs(data.jobs);
+          const details: StepDetails = steps?.details ?? new Map();
+          const jobs = preferDetailState(currentJobs(data.jobs), details);
           return (
             <>
               {data.truncated ? (
@@ -277,7 +354,13 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
                     : "いま実行中・待ちのジョブはありません。"}
                 </EmptyNote>
               ) : (
-                <JobList jobs={jobs} now={now} back="" time="active" />
+                <JobList
+                  jobs={jobs}
+                  now={now}
+                  back=""
+                  time="active"
+                  stepLines={stepLinesOf(jobs, details)}
+                />
               )}
             </>
           );

@@ -25,6 +25,57 @@ function confirmButton(
 /** 属性としての`disabled`。クラス名の`disabled:`は数えない。 */
 const DISABLED_ATTRIBUTE = /\sdisabled(?:=""|\s|>)/;
 
+function dialogMarkup(
+  props: { cancelLabel?: string; describedBy?: string } = {},
+): string {
+  return renderToStaticMarkup(
+    <ConfirmDialog
+      open={false}
+      title="確認"
+      confirmLabel="実行する"
+      onConfirm={() => undefined}
+      onCancel={() => undefined}
+      {...props}
+    >
+      <p id="detail">本文</p>
+    </ConfirmDialog>,
+  );
+}
+
+describe("ConfirmDialog", () => {
+  test("uses shadow-raised", () => {
+    expect(dialogMarkup()).toMatch(
+      /<dialog [^>]*class="[^"]*\bshadow-raised\b/,
+    );
+  });
+
+  test("does not use shadow-md", () => {
+    expect(dialogMarkup()).not.toMatch(
+      /<dialog [^>]*class="[^"]*\bshadow-md\b/,
+    );
+  });
+
+  test("labels the cancel button 取り消す by default", () => {
+    expect(dialogMarkup()).toContain(">取り消す</button>");
+  });
+
+  test("labels the cancel button with cancelLabel", () => {
+    expect(dialogMarkup({ cancelLabel: "やめる" })).toContain(
+      ">やめる</button>",
+    );
+  });
+
+  test("describes the dialog by the element describedBy points at", () => {
+    expect(dialogMarkup({ describedBy: "detail" })).toContain(
+      'aria-describedby="detail"',
+    );
+  });
+
+  test("has no aria-describedby without describedBy", () => {
+    expect(dialogMarkup()).not.toContain("aria-describedby");
+  });
+});
+
 describe("ConfirmDialog confirm button", () => {
   test("is on by default", () => {
     expect(confirmButton()).not.toMatch(DISABLED_ATTRIBUTE);

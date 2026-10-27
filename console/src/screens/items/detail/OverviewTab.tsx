@@ -9,6 +9,7 @@ import {
   detailLimitNote,
   FAILURE_ERROR_LIMIT,
 } from "../../../lib/itemDetailView.ts";
+import type { FlowProgressView } from "../../../lib/workItemFlowProgress.ts";
 import {
   EmptyNote,
   JobLinks,
@@ -19,6 +20,7 @@ import {
   TargetLinkView,
   TimeLabel,
 } from "./DetailParts.tsx";
+import { ItemFlowProgress } from "./ItemFlowProgress.tsx";
 
 function Summary({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const view = describeOverview(detail.work_item);
@@ -154,20 +156,26 @@ function Transitions({ detail, now }: { detail: WorkItemDetail; now: number }) {
   );
 }
 
+const NO_PROGRESS: FlowProgressView = { kind: "none" };
+
 /**
- * 概要のタブ。状態、リンク、試行などの概要と、失敗の記録、状態の遷移を出す。
+ * 概要のタブ。状態、リンク、試行などの概要と、flowの進行、失敗の記録、状態の遷移を出す。
  * 失敗の再実行などの書き込みは置かず、要対応の画面へのリンクだけを添える。
+ * 進行は、概要の取得とは別の取得なので、読めなくても概要は残る。
  */
 export function OverviewTab({
   detail,
   now,
+  progress = NO_PROGRESS,
 }: {
   detail: WorkItemDetail;
   now: number;
+  progress?: FlowProgressView;
 }) {
   return (
     <div className="flex max-w-[47.5rem] flex-col gap-8">
       <Summary detail={detail} now={now} />
+      <ItemFlowProgress kind={detail.work_item.kind} view={progress} />
       <Failures detail={detail} now={now} />
       <Transitions detail={detail} now={now} />
     </div>

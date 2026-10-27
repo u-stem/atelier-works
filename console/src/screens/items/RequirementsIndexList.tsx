@@ -5,6 +5,8 @@ import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Input } from "../../components/ui/input.tsx";
+import { cn } from "../../lib/cn.ts";
+import { ROW_LINK_CLASS } from "../../lib/controlClasses.ts";
 import { pageSlice } from "../../lib/pagination.ts";
 import {
   emptyFilterMessage,
@@ -23,7 +25,7 @@ function IndexRow({ row, now }: { row: RequirementsIndexRow; now: number }) {
     <li>
       <Link
         to={requirementsPath(row.work_item_id, null)}
-        className="relative block px-6 py-3.5 outline-none transition-colors duration-150 hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
+        className={cn(ROW_LINK_CLASS, "relative")}
       >
         <span className="flex items-baseline justify-between gap-3">
           <span className="truncate text-body font-medium text-foreground">

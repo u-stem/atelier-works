@@ -106,3 +106,31 @@ describe("the worker load note", () => {
     );
   });
 });
+
+describe("the wiring of the figure of the launch relations", () => {
+  test("reads the active jobs only after the figure is opened", () => {
+    expect(BODY).toContain("useActiveJobs(flowOpened)");
+  });
+
+  test("reads the schedules after the active jobs, not at the same time", () => {
+    expect(BODY).toContain("!flowActive.isFetching");
+  });
+
+  test("reads the schedules only after the figure is opened", () => {
+    expect(BODY).toContain(
+      "useSchedules(flowOpened && !flowActive.isFetching)",
+    );
+  });
+
+  test("adds the reads to the header refresh after the figure is opened", () => {
+    expect(BODY).toMatch(/flowGraph: flowOpened \? \[/);
+  });
+
+  test("hands the reads to the section", () => {
+    expect(BODY).toMatch(/reads=\{\{\s*active: flowActive/);
+  });
+
+  test("learns from the section when the figure is opened", () => {
+    expect(BODY).toContain("onOpen={() => setFlowOpened(true)}");
+  });
+});

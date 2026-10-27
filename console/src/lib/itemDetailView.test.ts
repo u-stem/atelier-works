@@ -54,6 +54,7 @@ function overview(overrides: Partial<WorkItemOverview> = {}): WorkItemOverview {
     created_at: T0,
     updated_at: T1,
     status_note: null,
+    flow_job_id: null,
     total_cost_usd: 1.25,
     run_count: 3,
     ...overrides,

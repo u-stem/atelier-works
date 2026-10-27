@@ -650,6 +650,24 @@ describe("runCommand reset", () => {
     expect(h.stored()).toBe('{"version":1,"freezes":[]}');
   });
 
+  test("tells that a schedule stopped from the Console stays off until it is turned on in Windmill", async () => {
+    const h = harness({ initial: "{", confirm: true });
+
+    await runCommand({ kind: "reset" }, h.deps);
+
+    expect(h.lines.join("\n")).toMatch(
+      /stopped from the Console.*turn.*on in Windmill/s,
+    );
+  });
+
+  test("does not tell that after a reset that was refused", async () => {
+    const h = harness({ initial: "{", confirm: false });
+
+    await runCommand({ kind: "reset" }, h.deps);
+
+    expect(h.lines.join("\n")).not.toContain("Windmill");
+  });
+
   test("a session cannot reset", async () => {
     const h = harness({
       initial: "{",

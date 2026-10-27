@@ -3,6 +3,8 @@ import { useSearchParams } from "react-router";
 import { HISTORY_FILTER_PATHS } from "../../../../f/factory/lib/console_known_paths.ts";
 import {
   jobsHoldsQueryOptions,
+  refreshActiveThenSteps,
+  useActiveJobSteps,
   useActiveJobs,
   useSchedules,
 } from "../../api/jobsQueries.ts";
@@ -44,7 +46,9 @@ import { ScheduleList } from "./ScheduleList.tsx";
  * scriptの値はURLから来るので、履歴に出るscriptとフローの集合と照合し、知らない値は無視する。
  * 集合は、ルートのジョブとして動くものだけである。フローのステップや、Consoleの呼び出しを選んでも、常に0件になるためである。
  * どの一覧も自動では取り直さない。Console用workerの枠が1つで、一覧の取得が承認などの呼び出しを待たせるためである。
+ * 例外は、実行中のflowの行に添える今のステップである。実行中と待ちのタブを選んでいる間だけ、30秒ごとに取り直す。
  * 取得は、タブを初めて開いたときに始める。見出しの更新ボタンは、今開いているタブの取得だけを取り直す。
+ * 実行中と待ちの更新は、一覧を取ってから今のステップを取る。
  * スケジュールの凍結の突き合わせに使う保留と凍結の取得は、定期の取り直しをせず、そのタブの更新で取り直す。
  */
 export function JobsScreen() {
@@ -66,6 +70,7 @@ export function JobsScreen() {
     },
     visited.has("history"),
   );
+  const steps = useActiveJobSteps(active.data, tab);
   const schedules = useSchedules(visited.has("schedules"));
   const holds = useQuery({
     ...jobsHoldsQueryOptions(),
@@ -85,12 +90,26 @@ export function JobsScreen() {
       },
     },
   ]);
+  // 実行中と待ちの更新は、一覧を取ってから今のステップを取る。2つの取得を重ねない。
+  const activeRefresh = refreshStatusOfAll([
+    {
+      dataUpdatedAt: active.dataUpdatedAt,
+      isFetching: active.isFetching || steps.isFetching,
+      isError: active.isError,
+      error: active.error,
+      refetch: () =>
+        refreshActiveThenSteps({
+          active: () => active.refetch().then((result) => result.data),
+          steps: (list) => steps.refetch(list),
+        }),
+    },
+  ]);
   const refresh =
     tab === "history"
       ? historyRefresh
       : tab === "schedules"
         ? refreshStatusOfAll([schedules, holds])
-        : refreshStatusOf(active);
+        : activeRefresh;
 
   // 401は上部のバナーが知らせるので、失敗の印には数えない。
   const failed = {
@@ -152,7 +171,7 @@ export function JobsScreen() {
           attrs={jobsPanelAttrs("active", tab)}
           mounted={visited.has("active")}
         >
-          <ActiveJobs query={active} />
+          <ActiveJobs query={active} steps={steps} />
         </TabPanel>
         <TabPanel
           attrs={jobsPanelAttrs("history", tab)}

@@ -1,19 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import {
   CONFIG_UPDATE_REFUSAL_REASONS,
+  HOLD_PLACE_REFUSAL_REASONS,
   isApprovalDecideResult,
   isAuditKickoffResult,
   isConfigUpdateResult,
   isFreezeReleaseResult,
+  isHoldPlaceResult,
   isHoldReleaseResult,
   isJobCancelResult,
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
+  isScheduleStopResult,
   JOB_CANCEL_REFUSAL_REASONS,
   JOB_RERUN_REFUSAL_REASONS,
   MANUAL_INTAKE_REFUSAL_REASONS,
+  SCHEDULE_STOP_REFUSAL_REASONS,
 } from "./writeResults.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -582,5 +586,186 @@ describe("isConfigUpdateResult", () => {
 
   test("rejects a value that is not an object", () => {
     expect(isConfigUpdateResult(null)).toBe(false);
+  });
+});
+
+describe("isHoldPlaceResult", () => {
+  const PLACED = {
+    refused: false,
+    kind: "merge",
+    id: "31",
+    target: "octo-owner/widgets",
+    created_at: "2026-10-27T03:00:00.000Z",
+    expires_at: "2026-10-27T04:00:00.000Z",
+    verified: true,
+    action_audit: "recorded",
+  };
+
+  test.each(["merge", "deploy", "freeze"])("accepts a placed %s", (kind) => {
+    expect(isHoldPlaceResult({ ...PLACED, kind })).toBe(true);
+  });
+
+  test("accepts an unverified placement", () => {
+    expect(isHoldPlaceResult({ ...PLACED, verified: false })).toBe(true);
+  });
+
+  test("accepts a placement whose record could not be written", () => {
+    expect(isHoldPlaceResult({ ...PLACED, action_audit: "failed" })).toBe(true);
+  });
+
+  test.each([...HOLD_PLACE_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isHoldPlaceResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("lists the nine reasons", () => {
+    expect(HOLD_PLACE_REFUSAL_REASONS.length).toBe(10);
+  });
+
+  test("rejects a refusal it does not know", () => {
+    expect(isHoldPlaceResult({ refused: true, reason: "because" })).toBe(false);
+  });
+
+  test("rejects a kind it does not know", () => {
+    expect(isHoldPlaceResult({ ...PLACED, kind: "claim" })).toBe(false);
+  });
+
+  test("rejects an id that is a number", () => {
+    expect(isHoldPlaceResult({ ...PLACED, id: 31 })).toBe(false);
+  });
+
+  test("rejects a time that is not a timestamp", () => {
+    expect(isHoldPlaceResult({ ...PLACED, expires_at: "soon" })).toBe(false);
+  });
+
+  test("rejects a placement without the audit state", () => {
+    const { action_audit: _omitted, ...without } = PLACED;
+    expect(isHoldPlaceResult(without)).toBe(false);
+  });
+
+  test("rejects an audit state it does not know", () => {
+    expect(isHoldPlaceResult({ ...PLACED, action_audit: "maybe" })).toBe(false);
+  });
+
+  test("rejects a placement without the verification", () => {
+    const { verified: _omitted, ...without } = PLACED;
+    expect(isHoldPlaceResult(without)).toBe(false);
+  });
+
+  test("rejects a value that is not an object", () => {
+    expect(isHoldPlaceResult(null)).toBe(false);
+  });
+});
+
+describe("isScheduleStopResult", () => {
+  const STOPPED = {
+    refused: false,
+    schedule_path: "f/factory/poll_prs",
+    freeze_id: "0a1b2c3d",
+    enabled: false,
+    freeze_expires_at: "2026-10-27T05:00:00.000Z",
+    verified: true,
+    freeze_held: true,
+    action_audit: "recorded",
+  };
+
+  test("accepts a stopped schedule", () => {
+    expect(isScheduleStopResult(STOPPED)).toBe(true);
+  });
+
+  test("accepts a schedule that still reads as enabled", () => {
+    expect(
+      isScheduleStopResult({ ...STOPPED, enabled: true, verified: false }),
+    ).toBe(true);
+  });
+
+  test.each([...SCHEDULE_STOP_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(
+        isScheduleStopResult({ refused: true, reason, ready_at: null }),
+      ).toBe(true);
+    },
+  );
+
+  test("accepts a refusal with the time at which the stop becomes possible", () => {
+    expect(
+      isScheduleStopResult({
+        refused: true,
+        reason: "too_early",
+        ready_at: "2026-10-27T03:07:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a refusal without the ready time", () => {
+    expect(isScheduleStopResult({ refused: true, reason: "too_early" })).toBe(
+      false,
+    );
+  });
+
+  test("rejects a ready time that is not a timestamp", () => {
+    expect(
+      isScheduleStopResult({
+        refused: true,
+        reason: "too_early",
+        ready_at: "soon",
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a refusal it does not know", () => {
+    expect(
+      isScheduleStopResult({
+        refused: true,
+        reason: "because",
+        ready_at: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects an id that is a number", () => {
+    expect(isScheduleStopResult({ ...STOPPED, freeze_id: 3 })).toBe(false);
+  });
+
+  test("accepts a stop whose freeze ended before the read back", () => {
+    expect(isScheduleStopResult({ ...STOPPED, freeze_held: false })).toBe(true);
+  });
+
+  test("rejects a stop without the state of the freeze", () => {
+    const { freeze_held: _omitted, ...without } = STOPPED;
+    expect(isScheduleStopResult(without)).toBe(false);
+  });
+
+  test("rejects a state of the freeze that is not a boolean", () => {
+    expect(isScheduleStopResult({ ...STOPPED, freeze_held: "yes" })).toBe(
+      false,
+    );
+  });
+
+  test("accepts the refusal for a freeze that is about to end", () => {
+    expect(
+      isScheduleStopResult({
+        refused: true,
+        reason: "freeze_ending",
+        ready_at: null,
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a stop without the end of the freeze", () => {
+    const { freeze_expires_at: _omitted, ...without } = STOPPED;
+    expect(isScheduleStopResult(without)).toBe(false);
+  });
+
+  test("rejects a stop without the audit state", () => {
+    const { action_audit: _omitted, ...without } = STOPPED;
+    expect(isScheduleStopResult(without)).toBe(false);
+  });
+
+  test("rejects a value that is not an object", () => {
+    expect(isScheduleStopResult("stopped")).toBe(false);
   });
 });

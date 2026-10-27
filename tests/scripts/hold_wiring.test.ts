@@ -45,6 +45,16 @@ const HOLD_VIEWERS: Readonly<Record<string, readonly string[]>> = {
 const HOLD_RELEASERS: Readonly<Record<string, readonly string[]>> = {
   "f/factory/hold_release.ts": ["listActiveHolds", "releaseHold"],
 };
+// - 置く書き手(`HOLD_PLACERS`): 人の操作で保留を置く。`placeHold`を読み込んでよい`f/`のファイルは、これだけである。
+//   入力の検査(`validatePlaceInput`)と、置けなかった理由の定数(`HOLD_ALREADY_ACTIVE`)も、置く書き手が読み込む。
+const HOLD_PLACERS: Readonly<Record<string, readonly string[]>> = {
+  "f/factory/console_hold_place.ts": [
+    "HOLD_ALREADY_ACTIVE",
+    "listActiveHolds",
+    "placeHold",
+    "validatePlaceInput",
+  ],
+};
 
 // 表を作るmigration。走査から外すので、保護パスに入れてあることを下で確かめる。
 const HOLDS_MIGRATION_FILES = [
@@ -1106,7 +1116,9 @@ describe("files under f/", () => {
       }
       const allowed = Object.keys(HOLD_RELEASERS).includes(path)
         ? [...READ_ONLY_NAMES, "releaseHold"]
-        : READ_ONLY_NAMES;
+        : Object.keys(HOLD_PLACERS).includes(path)
+          ? [...READ_ONLY_NAMES, ...(HOLD_PLACERS[path] ?? [])]
+          : READ_ONLY_NAMES;
       return disallowedHoldsReferences(source, allowed).map(
         (reference) =>
           `${path}: ${reference.kind} ${reference.specifier} ${reference.clause}`,
@@ -1454,6 +1466,7 @@ describe("the files that read the holds", () => {
       .filter((path) => !HOLD_READERS.includes(path))
       .filter((path) => !(path in HOLD_VIEWERS))
       .filter((path) => !(path in HOLD_RELEASERS))
+      .filter((path) => !(path in HOLD_PLACERS))
       .filter((path) => runtimeHoldNames(read(path)).length > 0);
 
     expect(offenders).toEqual([]);
@@ -1575,6 +1588,68 @@ describe("the files that release the holds", () => {
   });
 });
 
+describe("the files that place the holds", () => {
+  const paths = Object.keys(HOLD_PLACERS);
+  const typescript = SCANNED.filter((path) => path.endsWith(".ts"));
+
+  test.each(paths)("%s exists", (path) => {
+    expect(typescript).toContain(path);
+  });
+
+  test.each(paths)(
+    "%s imports exactly the listed names at run time",
+    (path) => {
+      expect(runtimeHoldNames(read(path))).toEqual(
+        [...(HOLD_PLACERS[path] ?? [])].sort(),
+      );
+    },
+  );
+
+  test.each(paths)("%s does not import releaseHold", (path) => {
+    expect(runtimeHoldNames(read(path))).not.toContain("releaseHold");
+  });
+
+  test.each(paths)(
+    "%s does not use the shared default client, which holds.ts refuses to default",
+    (path) => {
+      expect(codeOf(read(path))).not.toContain("defaultSqlClient");
+    },
+  );
+
+  test.each(paths)("%s passes the client of the action record", (path) => {
+    expect(codeOf(read(path))).toContain("actionSqlClientFrom(");
+  });
+
+  test.each(paths)("%s is a protected path in the pr_fix list", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(paths)("%s is a protected path in the implement list", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(paths)("%s is named in the exact list", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(paths)("the definition of %s is a protected path", (path) => {
+    expect(
+      FORBIDDEN_EXACT_PATHS.includes(path.replace(/\.ts$/, ".script.yaml")),
+    ).toBe(true);
+  });
+
+  test("no placer is a viewer, a releaser or a reader that stops work", () => {
+    expect(
+      paths.filter(
+        (path) =>
+          path in HOLD_VIEWERS ||
+          path in HOLD_RELEASERS ||
+          HOLD_READERS.includes(path),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("the freeze variable", () => {
   const WRITES = /\b(?:setVariable|writeVariable)\b/;
 
@@ -1617,13 +1692,15 @@ describe("the names of the console write scripts that only their own files name"
     return new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(text);
   }
 
-  test("are the two release scripts, the job cancel script, the rerun script and the config update script", () => {
+  test("are the two release scripts, the job cancel script, the rerun script, the config update script, the place script and the stop script", () => {
     expect([...WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES]).toEqual([
       "hold_release",
       "freeze_release",
       "console_job_cancel",
       "console_job_rerun",
       "console_config_update",
+      "console_hold_place",
+      "console_schedule_stop",
     ]);
   });
 

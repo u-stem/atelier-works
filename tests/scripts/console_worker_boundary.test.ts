@@ -32,9 +32,11 @@ import {
 // - github_tokenを読んでよいのは、approval_decideとretry_work_itemだけ。
 // - その2つも、github_token以外のsecret変数は読まない。
 // - audit_kickoff、notice_resolve、manual_intake_submit、console_holds、hold_release、freeze_release、
-//   console_jobs、console_schedules、console_config、console_job_cancelは、どのsecret変数も読まない。
+//   console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
+//   console_hold_place、console_schedule_stopは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
-// - console_jobs、console_schedules、console_config、console_job_cancelは、SDKの呼び出しも許可表に絞る。
+// - console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
+//   console_hold_place、console_schedule_stopの8本は、SDKの呼び出しも許可表に絞る。
 //   `<X>Service.<method>`と`wmill.<member>`の使用を、importでたどれるファイルの和に当て、
 //   別名、名前付きimport、fetch、WM_TOKEN、深いパスのimportを禁じる。走査は`worker_boundary_scan.ts`の`sdkFindings`にある。
 //
@@ -74,6 +76,8 @@ const READS_NO_SECRET = [
   "f/factory/console_job_cancel",
   "f/factory/console_job_rerun",
   "f/factory/console_config_update",
+  "f/factory/console_hold_place",
+  "f/factory/console_schedule_stop",
 ];
 
 /**
@@ -127,6 +131,22 @@ const SDK_ALLOWED: Readonly<Record<string, SdkAllowance>> = {
     ],
     members: ["getWorkspace", "datatable"],
   },
+  // 置く操作は、保留の表(記録の部品と保留のモジュール経由のdatatable)と、凍結の変数だけを書く。
+  // 変数が無いときは`existsVariable`で有無を確かめる。変数のパスと、変数を秘密として作らないことは、走査が固定する。
+  "f/factory/console_hold_place": {
+    services: ["VariableService.existsVariable"],
+    members: ["getWorkspace", "datatable", "getVariable", "setVariable"],
+  },
+  // 止める操作は、scheduleを読んで無効にし、自己更新のキューと凍結の変数を読む。凍結の変数は書かない。
+  "f/factory/console_schedule_stop": {
+    services: [
+      "ScheduleService.getSchedule",
+      "ScheduleService.setScheduleEnabled",
+      "JobService.listQueue",
+      "VariableService.existsVariable",
+    ],
+    members: ["getWorkspace", "datatable", "getVariable"],
+  },
 };
 
 /**
@@ -156,14 +176,23 @@ const ENV_ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "f/factory/console_job_cancel.ts": ["WM_USERNAME", "WM_EMAIL"],
   "f/factory/console_job_rerun.ts": ["WM_USERNAME", "WM_EMAIL"],
   "f/factory/console_config_update.ts": ["WM_USERNAME", "WM_EMAIL"],
+  "f/factory/console_hold_place.ts": ["WM_USERNAME", "WM_EMAIL"],
+  "f/factory/console_schedule_stop.ts": ["WM_USERNAME", "WM_EMAIL"],
 };
 
 /**
- * 書き込みのSQLを持ってよいファイル。操作の記録の部品は、記録の表だけを書く。
- * 他の表を書かないことは、下の「記録の部品が書く表」のテストが固定する。
+ * 書き込みのSQLを持ってよいファイルと、書いてよい表。操作の記録の部品は、記録の表だけを書く。
+ * 保留のモジュールは、保留の表だけを書く。保留を置くscriptだけが、このモジュールにたどり着く。
+ * 他の表を書かないことは、下の「書き込みのSQLが書く表」のテストが固定する。
  */
-const SQL_WRITERS_ALLOWED: readonly string[] = [
-  "f/factory/lib/console_actions.ts",
+const SQL_WRITERS_ALLOWED: Readonly<Record<string, string>> = {
+  "f/factory/lib/console_actions.ts": "console_actions",
+  "f/factory/lib/holds.ts": "holds",
+};
+
+/** 保留のモジュールにたどり着いてよいscript。 */
+const MAY_REACH_HOLDS_MODULE: readonly string[] = [
+  "f/factory/console_hold_place",
 ];
 
 async function consoleScripts(): Promise<string[]> {
@@ -507,6 +536,172 @@ describe("the SDK use scan", () => {
 
   test("flags OpenAPI", () => {
     expect(sdkFindings("OpenAPI.TOKEN = 'x';").problems).not.toEqual([]);
+  });
+
+  const FREEZES = '"f/factory/freezes"';
+
+  test("accepts getVariable with the literal freeze path", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.getVariable(${FREEZES});`).problems,
+    ).toEqual([]);
+  });
+
+  test("flags getVariable with another literal path", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.getVariable("f/factory/deployed_sha");`)
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags getVariable with a path in a variable", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.getVariable(path);`).problems,
+    ).not.toEqual([]);
+  });
+
+  test("accepts setVariable with the literal freeze path that is not secret", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable(${FREEZES}, text, false, "d");`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags setVariable with another literal path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable("f/factory/deployed_sha", text, false);`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags setVariable that may create a secret variable", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.setVariable(${FREEZES}, text, true);`)
+        .problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags setVariable without the secret flag", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.setVariable(${FREEZES}, text);`).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags setVariable whose path is a template", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable(\`f/factory/\${name}\`, text, false);`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags an alias of setVariable that is called by another name", () => {
+    expect(
+      sdkFindings(
+        `${JOB}const put = wmill.setVariable; await put(${FREEZES}, t, false);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through .call", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable.call(wmill, "f/factory/deployed_sha", t, false);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through .bind", () => {
+    expect(
+      sdkFindings(
+        `${JOB}const put = wmill.setVariable.bind(wmill); await put("f/factory/deployed_sha", t, false);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through .apply", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.setVariable.apply(wmill, ["f/factory/deployed_sha", t, false]);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable passed to another function", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await Reflect.apply(wmill.setVariable, wmill, ["f/factory/deployed_sha", t, false]);`,
+      ).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags setVariable called through an optional call", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.setVariable?.(path, t, false);`).problems,
+    ).toContain("setVariable is used other than as a bound call");
+  });
+
+  test("flags an alias of getVariable that is called by another name", () => {
+    expect(
+      sdkFindings(
+        `${JOB}const read = wmill.getVariable; await read("f/factory/deployed_sha");`,
+      ).problems,
+    ).toContain("getVariable is used other than as a bound call");
+  });
+
+  test("flags getVariable called through .call", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.getVariable.call(wmill, "f/factory/deployed_sha");`,
+      ).problems,
+    ).toContain("getVariable is used other than as a bound call");
+  });
+
+  test("does not flag a bound call of both as used other than as a call", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.getVariable(${FREEZES}); await wmill.setVariable(${FREEZES}, t, false, "d");`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("does not count a mention in a string or a comment as a use", () => {
+    expect(
+      sdkFindings(
+        `${JOB}// setVariable is not used here\nconst note = "setVariable";`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("accepts existsVariable with the literal freeze path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path: ${FREEZES} });`,
+      ).problems,
+    ).toEqual([]);
+  });
+
+  test("flags existsVariable with another literal path", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path: "f/factory/github_token" });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("flags existsVariable with a path in a variable", () => {
+    expect(
+      sdkFindings(
+        `${JOB}await wmill.VariableService.existsVariable({ workspace, path });`,
+      ).problems,
+    ).not.toEqual([]);
+  });
+
+  test("reads setVariable as a use of the client", () => {
+    expect(
+      sdkFindings(`${JOB}await wmill.setVariable(${FREEZES}, t, false);`).used,
+    ).toEqual(["setVariable"]);
   });
 
   test("accepts the literal config path for getResourceValue", () => {
@@ -1189,6 +1384,49 @@ describe("the scripts restricted to an SDK allowance", () => {
     expect(codeOf(source)).not.toMatch(/runFlow|runScriptByHash|runScript\(/);
   });
 
+  test("the stop script disables a schedule and never enables one", () => {
+    const source = readFileSync("f/factory/console_schedule_stop.ts", "utf8");
+    expect(codeOf(source)).not.toMatch(/enabled:\s*true|setEnabled\([^)]*true/);
+  });
+
+  test("the stop script calls the disabling service", () => {
+    const source = readFileSync("f/factory/console_schedule_stop.ts", "utf8");
+    expect(sdkFindings(source).used).toContain(
+      "ScheduleService.setScheduleEnabled",
+    );
+  });
+
+  test("the stop script does not write a variable", () => {
+    const source = readFileSync("f/factory/console_schedule_stop.ts", "utf8");
+    expect(sdkFindings(source).used).not.toContain("setVariable");
+  });
+
+  test("the place script asks whether the freeze variable exists, when it cannot read it", () => {
+    const source = readFileSync("f/factory/console_hold_place.ts", "utf8");
+    expect(sdkFindings(source).used).toContain(
+      "VariableService.existsVariable",
+    );
+  });
+
+  test("the stop script asks whether the freeze variable exists, when it cannot read it", () => {
+    const source = readFileSync("f/factory/console_schedule_stop.ts", "utf8");
+    expect(sdkFindings(source).used).toContain(
+      "VariableService.existsVariable",
+    );
+  });
+
+  test("the place script reads and writes the freeze state through the shared mutation", () => {
+    const source = readFileSync("f/factory/console_hold_place.ts", "utf8");
+    expect(codeOf(source)).toContain("mutateFreezeStateVia(");
+  });
+
+  test("the place script calls no service but the existence check of the freeze variable", () => {
+    const source = readFileSync("f/factory/console_hold_place.ts", "utf8");
+    expect(sdkFindings(source).used.filter((use) => use.includes("."))).toEqual(
+      ["VariableService.existsVariable"],
+    );
+  });
+
   test("the only read of the config script that the name scan cannot explain is its fixed getResourceValue", () => {
     const source = readFileSync("f/factory/console_config.ts", "utf8");
     expect(nonLiteralVariableReads(source)).toEqual(["1 unexplained"]);
@@ -1228,7 +1466,7 @@ describe("the scripts restricted to an SDK allowance", () => {
       };
       const offenders: string[] = [];
       for (const [file, source] of sourcesReachableFrom(path)) {
-        if (SQL_WRITERS_ALLOWED.includes(relative(file))) continue;
+        if (relative(file) in SQL_WRITERS_ALLOWED) continue;
         const templates = [
           ...codeOf(source).matchAll(/`((?:[^`\\]|\\.)*)`/g),
         ].map((match) => match[1] ?? "");
@@ -1251,31 +1489,42 @@ describe("the SQL that the console scripts reach", () => {
   const WRITE_WORDS =
     /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|COPY|CALL|GRANT)\b/;
 
-  test.each([...SQL_WRITERS_ALLOWED])(
-    "%s writes only the table of the action record",
-    (file) => {
+  test.each(Object.entries(SQL_WRITERS_ALLOWED))(
+    "%s writes only the table that it is allowed to write",
+    (file, table) => {
       const stray = templatesOf(file)
         .filter((text) => WRITE_WORDS.test(text))
-        .filter((text) => !text.includes("factory.console_actions"));
+        .filter((text) => !text.includes(`factory.${table}`));
       expect(stray).toEqual([]);
     },
   );
 
-  test.each([...SQL_WRITERS_ALLOWED])(
-    "%s names no table but the action record in a statement that writes",
-    (file) => {
+  test.each(Object.entries(SQL_WRITERS_ALLOWED))(
+    "%s names no other table in a statement that writes",
+    (file, table) => {
       const others = templatesOf(file)
         .filter((text) => WRITE_WORDS.test(text))
         .flatMap((text) => [...text.matchAll(/factory\.(\w+)/g)])
         .map((match) => match[1])
-        .filter((table) => table !== "console_actions");
+        .filter((name) => name !== table);
       expect(others).toEqual([]);
     },
   );
 
+  test("only the place script reaches the module that writes the holds", () => {
+    const reaching = Object.keys(SDK_ALLOWED).filter((path) =>
+      [...sourcesReachableFrom(path).keys()]
+        .map(relative)
+        .includes("f/factory/lib/holds.ts"),
+    );
+    expect(reaching).toEqual([...MAY_REACH_HOLDS_MODULE]);
+  });
+
   test.each([
     "f/factory/console_job_rerun.ts",
     "f/factory/console_config_update.ts",
+    "f/factory/console_hold_place.ts",
+    "f/factory/console_schedule_stop.ts",
   ])("%s has no SQL of its own", (file) => {
     expect(
       templatesOf(file).filter((text) => /\bfactory\./.test(text)),
