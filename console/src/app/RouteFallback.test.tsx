@@ -122,6 +122,32 @@ describe("the fallback of a screen with a back link", () => {
   });
 });
 
+describe("the refresh controls of the fallback", () => {
+  test("are drawn in the plain fallback so a narrow band wraps like the real one", () => {
+    expect(renderToStaticMarkup(<RouteFallback />)).toContain(
+      'data-part="refresh"',
+    );
+  });
+
+  test("are drawn in the fallback with a breadcrumb", () => {
+    expect(
+      renderToStaticMarkup(createElement(routeFallbackFor(true, "breadcrumb"))),
+    ).toContain('data-part="refresh"');
+  });
+
+  test("are as tall as the real controls", () => {
+    expect(renderToStaticMarkup(<RouteFallback />)).toMatch(
+      /h-9[^>]*data-part="refresh"/,
+    );
+  });
+
+  test("are left out of the new item screen, which has nothing to refresh", () => {
+    expect(
+      renderToStaticMarkup(createElement(routeFallbackFor(true, "back"))),
+    ).not.toContain('data-part="refresh"');
+  });
+});
+
 describe("the fallback without a trail", () => {
   test("draws no trail row", () => {
     expect(
@@ -157,6 +183,7 @@ describe("the first paint of a screen", () => {
       screens.filter(
         (route) =>
           route.HydrateFallback === undefined ||
+          route.HydrateFallback === null ||
           !known.includes(route.HydrateFallback),
       ),
     ).toEqual([]);
