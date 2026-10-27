@@ -8,7 +8,11 @@ import type {
   GraphEdgeKind,
   GraphNodeKind,
 } from "../../lib/flowGraph.ts";
-import { textEm, wrapLines } from "../../lib/flowGraphFit.ts";
+import {
+  type GraphPresentation,
+  textEm,
+  wrapLines,
+} from "../../lib/flowGraphFit.ts";
 import {
   type LayoutBox,
   type LayoutLink,
@@ -246,6 +250,9 @@ function GraphNode({
   );
 }
 
+/** 図の読み上げの名前の既定。 */
+const DIAGRAM_LABEL = "起動の関係の図";
+
 const LINK_CLASS =
   "outline-none [&:focus-visible>rect]:stroke-ring [&:focus-visible>rect]:stroke-[3px]";
 
@@ -260,11 +267,20 @@ const LINK_CLASS =
 export function FlowGraphDiagram({
   graph,
   state,
+  label = DIAGRAM_LABEL,
+  compact = false,
 }: {
   graph: FlowGraph;
   state: FlowGraphState;
+  /** 図の読み上げの名前。 */
+  label?: string;
+  /** 左端の空の列を詰める。経路だけを切り出した小さなグラフに使う。 */
+  compact?: boolean;
 }) {
-  const layout = useMemo(() => layoutFlowGraph(graph), [graph]);
+  const layout = useMemo(
+    () => layoutFlowGraph(graph, { compact }),
+    [graph, compact],
+  );
   const extent = layoutExtent(layout);
   const markerId = `flow-arrow-${useId().replace(/:/g, "")}`;
   const lowerBound = state.overlay?.lowerBound ?? false;
@@ -272,7 +288,7 @@ export function FlowGraphDiagram({
     // biome-ignore lint/a11y/useSemanticElements: SVGの中にfieldsetは置けない。リンクを含む図なので、imgにもできない。
     <svg
       role="group"
-      aria-label="起動の関係の図"
+      aria-label={label}
       width={extent.width}
       height={extent.height}
       viewBox={`0 0 ${extent.width} ${extent.height}`}
@@ -307,6 +323,57 @@ export function FlowGraphDiagram({
         />
       ))}
     </svg>
+  );
+}
+
+/**
+ * 図を、節の幅に合わせた見せ方で包む。
+ * 収まるときはカードに入れて図をそのまま、収まらないときは横にスクロールできる枠に入れる。
+ * 枠は、キーボードで焦点を当てないと隠れた部分を読めないので、焦点を受けられるようにする。
+ * 幅が狭く図が読めないときは、図の代わりに、flowごとの一覧を出す。
+ */
+export function FlowGraphFrame({
+  graph,
+  state,
+  presentation,
+  label = DIAGRAM_LABEL,
+  compact = false,
+}: {
+  graph: FlowGraph;
+  state: FlowGraphState;
+  presentation: GraphPresentation;
+  label?: string;
+  compact?: boolean;
+}) {
+  if (presentation === "list")
+    return <FlowGraphList graph={graph} state={state} />;
+  const diagram = (
+    <FlowGraphDiagram
+      graph={graph}
+      state={state}
+      label={label}
+      compact={compact}
+    />
+  );
+  if (presentation === "fit") {
+    return (
+      <div className="rounded-xl border border-border bg-card p-2">
+        {diagram}
+      </div>
+    );
+  }
+  return (
+    // 横にスクロールできる領域は、キーボードで焦点を当てないと読み進められない。
+    // biome-ignore lint/a11y/useSemanticElements: 領域の役割を明示する。sectionは、見出しを持つ節と取り違えられる。
+    <div
+      role="region"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: 同上。
+      tabIndex={0}
+      aria-label={`${label}(横にスクロールできます)`}
+      className="overflow-x-auto rounded-xl border border-border bg-card p-2 focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {diagram}
+    </div>
   );
 }
 

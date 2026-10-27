@@ -2,8 +2,9 @@ import { FileQuestion } from "lucide-react";
 import { useLocation, useParams, useSearchParams } from "react-router";
 import { loadPhaseOf } from "../../api/sectionQuery.ts";
 import { useWorkItemDetail } from "../../api/workItemDetailQueries.ts";
+import { useWorkItemFlow } from "../../api/workItemFlowQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import { refreshStatusOfAll } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import {
@@ -57,12 +58,14 @@ const LOADING_SHAPE: LoadingShape = {
 function ItemDetail({ workItemId }: { workItemId: number }) {
   const query = useWorkItemDetail(workItemId);
   const loadingDisplay = useLoadingDisplay(loadPhaseOf(query));
-  const refresh = refreshStatusOf(query);
   const now = useNow();
   const [searchParams, setSearchParams] = useSearchParams();
   // 一覧の行から開いたときは、一覧の範囲を持った戻り先が履歴の`state`に入っている。
   const back = parseItemsBack(useLocation().state);
   const tab = parseDetailTab(searchParams.get("tab"));
+  const flow = useWorkItemFlow({ workItemId, item: query, tab });
+  // 更新は、作業項目の詳細、flowのジョブの順に取る。最終更新は古い方の時刻になる。
+  const refresh = refreshStatusOfAll(flow.refreshQueries);
   const detail = query.data;
 
   const selectTab = (id: ItemDetailTabId): void => {
@@ -128,7 +131,9 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         aria-labelledby={panelLabelledBy(tab)}
         className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8"
       >
-        {tab === "overview" ? <OverviewTab detail={detail} now={now} /> : null}
+        {tab === "overview" ? (
+          <OverviewTab detail={detail} now={now} progress={flow.view} />
+        ) : null}
         {tab === "requirements" ? (
           <RequirementsTab detail={detail} now={now} />
         ) : null}
