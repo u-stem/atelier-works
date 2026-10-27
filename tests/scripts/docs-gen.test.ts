@@ -3,12 +3,16 @@ import { readFileSync } from "node:fs";
 import {
   compareTaskNames,
   FLOW_GRAPH_FILE,
+  FLOWS_FILE,
   flowGraphProblem,
+  flowsProblem,
   renderAssets,
   renderFlowGraphFile,
   renderFlows,
+  renderFlowsFile,
   renderSchedules,
   replaceGeneratedBlocks,
+  runDocsGen,
   taskNamesInTable,
 } from "../../scripts/docs-gen.ts";
 import type { LaunchEdge } from "../../scripts/launch-graph.ts";
@@ -179,5 +183,45 @@ describe("flowGraphProblem", () => {
 describe("the committed flow graph", () => {
   test("is the same as the one built from the repository", () => {
     expect(readFileSync(FLOW_GRAPH_FILE, "utf8")).toBe(renderFlowGraphFile());
+  });
+});
+
+describe("flowsProblem", () => {
+  test("reports a missing file", () => {
+    expect(flowsProblem(null, "{}\n")).toContain("is missing");
+  });
+
+  test("reports a file that differs from the expected content", () => {
+    expect(flowsProblem("{ }\n", "{}\n")).toContain("is stale");
+  });
+
+  test("accepts a file that matches the expected content", () => {
+    expect(flowsProblem("{}\n", "{}\n")).toBeNull();
+  });
+
+  test("names the file in the problem", () => {
+    expect(flowsProblem(null, "{}\n")).toContain(FLOWS_FILE);
+  });
+});
+
+describe("the committed flows data", () => {
+  test("is the same as the one built from the repository", () => {
+    expect(readFileSync(FLOWS_FILE, "utf8")).toBe(renderFlowsFile());
+  });
+
+  test("leaves no problem for the committed repository", () => {
+    expect(runDocsGen(false)).toEqual([]);
+  });
+});
+
+describe("renderFlows: prefixes", () => {
+  test.each([
+    ["[OP-1-1] 手動投入フォーム", "手動投入フォーム"],
+    ["[SYS-6] 掃除", "掃除"],
+    ["[LIB] 部品", "部品"],
+  ])("strips the prefix of %s like withoutIdPrefix", (summary, expected) => {
+    const table = renderFlows([{ name: "x", summary }], [], () => "");
+
+    expect(table.split("\n")[2]).toBe(`| \`x\` | なし | ${expected} |`);
   });
 });

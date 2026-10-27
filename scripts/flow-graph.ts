@@ -7,6 +7,7 @@ import type {
   GraphEdge,
   GraphNode,
 } from "../console/src/lib/flowGraph.ts";
+import type { FlowsData } from "../console/src/lib/flowsData.ts";
 import type { LaunchEdge } from "./launch-graph.ts";
 
 export type ScheduleInput = {
@@ -59,7 +60,7 @@ function relativeToFactory(path: string): string {
 }
 
 /** summaryの先頭の`[SF-2-1]`などの接頭辞を除く。 */
-function withoutIdPrefix(summary: string): string {
+export function withoutIdPrefix(summary: string): string {
   return summary.replace(/^\[[^\]]+\]\s*/, "").trim();
 }
 
@@ -162,4 +163,54 @@ export function buildFlowGraph(input: FlowGraphInput): FlowGraph {
 /** グラフをJSONの文字列にする。末尾に改行を付ける。 */
 export function renderFlowGraphJson(graph: FlowGraph): string {
   return `${JSON.stringify(graph, null, 2)}\n`;
+}
+
+/** flow.yamlのモジュール1つ。 */
+export type FlowStepInput = {
+  readonly id: string;
+  readonly summary: string;
+  /** モジュールが実行するscriptのpath(`f/factory/steps/pr_fix_finish`)。 */
+  readonly path: string;
+  /** `skip_if`を持つか。 */
+  readonly conditional: boolean;
+};
+
+export type FlowDefinitionInput = {
+  readonly name: string;
+  readonly summary: string;
+  readonly description: string;
+  readonly steps: readonly FlowStepInput[];
+};
+
+export type ScheduleDescriptionInput = ScheduleInput & {
+  readonly summary: string;
+};
+
+export type ApprovalOutcomeInput = {
+  readonly to: string;
+  readonly outcome: "approve" | "reject";
+};
+
+export type FlowsInput = {
+  readonly edges: readonly LaunchEdge[];
+  readonly humanOperations: Readonly<Record<string, string>>;
+  readonly humanEntryScripts: Readonly<Record<string, string>>;
+  readonly schedules: readonly ScheduleDescriptionInput[];
+  readonly flows: readonly FlowDefinitionInput[];
+  /** 承認依頼を作るステップのscriptから、承認を処理するscriptへの対応。ハンドラーが無ければnull。 */
+  readonly approvalSteps: Readonly<Record<string, string | null>>;
+  /** 承認を処理するscriptごとの、起動するflowと承認か却下か。 */
+  readonly approvalOutcomes: Readonly<
+    Record<string, readonly ApprovalOutcomeInput[]>
+  >;
+  /** 表にあるが、本番では起動しない辺。図には描かない。 */
+  readonly unwiredEdges: readonly LaunchEdge[];
+};
+
+export function buildFlowsData(_input: FlowsInput): FlowsData {
+  return { flows: [], schedules: [] };
+}
+
+export function renderFlowsJson(_data: FlowsData): string {
+  return "";
 }

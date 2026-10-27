@@ -71,3 +71,17 @@ export function describeOrigin(edge: LaunchEdge): string {
   const entry = HUMAN_ENTRY_SCRIPTS[edge.from];
   return entry === undefined ? `\`${name}\`` : `\`${name}\`(${entry})`;
 }
+
+/** 承認依頼を作るステップのscriptと、依頼の種類。 */
+export const APPROVAL_STEPS: Readonly<Record<string, string>> = {};
+
+/** 承認を処理するscriptが起動するflowと、承認か却下か。 */
+export const APPROVAL_OUTCOMES: Readonly<
+  Record<
+    string,
+    readonly { readonly to: string; readonly outcome: "approve" | "reject" }[]
+  >
+> = {};
+
+/** 表にあるが、本番では起動しない辺。 */
+export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [];
