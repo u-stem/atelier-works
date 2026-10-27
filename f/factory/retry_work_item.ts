@@ -3,10 +3,11 @@
 // 要対応の照合が取り消した`cancelled`も、取り消す前の状態の作業項目として再開できる。
 // その再開だけは、対象のIssueかPRが開いていることをGitHubで確かめる(`closedTargetRefusal`)。
 // ほかの再開はGitHubに依存しない。
-// 再開するフローと遷移先の状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
-// 前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
+// 再開するフローと遷移先の状態は種別で決まる(`computeRestartPlan`)。Issueは、承認済みの要件定義と
+// 設計の承認の有無、止まった理由で、要件定義の生成(pipeline)、設計、実装のどれかを選ぶ。
+// 状態の変更はここで読んだ状態を前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
 // 記録済みのflowジョブがまだ動いている(キュー待ちを含む)か、状態を読めないときは
-// 再開を拒否する。実装フローとpipelineへの再開は比較交換でflow_job_id(リース)を空にし、
+// 再開を拒否する。実装フロー、設計フロー、pipelineへの再開は比較交換でflow_job_id(リース)を空にし、
 // 起動したジョブIDは空のときだけ記録する。起動の戻り値がジョブIDでなければ、
 // 状態をneeds_humanに戻して例外を投げる(`launchFailureError`)。
 // CIの失敗を直す回のpr_fixは再開できず、回が終わると失敗の行をCIの監視が戻すことを説明する(`ciRoundRetryRefusal`)。
@@ -21,7 +22,10 @@
 // 見つけ直す。したがって再開はフローを直接起動するだけで、GitHubには
 // 何の副作用も無い。新しいサイクルを始めるのは、人がラベルを付け直したときだけ。
 import * as wmill from "windmill-client@1.817.0";
-import { isRequirementsApprovedForAttempt } from "./lib/approval_gate.ts";
+import {
+  isDesignApprovedForAttempt,
+  isRequirementsApprovedForAttempt,
+} from "./lib/approval_gate.ts";
 import { ciRoundRetryRefusal } from "./lib/ci_fix_round.ts";
 import { loadConfig } from "./lib/config.ts";
 import { conflictRoundRetryRefusal } from "./lib/conflict_fix_round.ts";
@@ -30,8 +34,10 @@ import {
   getWorkItem,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
+  latestDesignApproval,
   latestRequirementsApproval,
   latestStatusEvent,
+  latestStatusEventFromAny,
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
   newestNewerIssueCycle,
@@ -43,7 +49,10 @@ import {
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
+  updateStatusToRequirementsIfCurrent,
 } from "./lib/db.ts";
+import { designFlowInput } from "./lib/design_launch_support.ts";
+import { isRequirementsUntrustedReason } from "./lib/doc_tree_hash.ts";
 import {
   fetchIssueContent,
   fetchIssueState,
@@ -57,12 +66,14 @@ import {
   refreshIntakeFromIssue,
 } from "./lib/intake_refresh.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
-import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
+import { GAP_REPORT_MAX_CHARS, sanitizeModelText } from "./lib/model_text.ts";
+import { DESIGN_FLOW_PATH, PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import {
   type JobState,
   readJobState,
   statusBeforeActionableCancel,
 } from "./lib/poll_support.ts";
+import { automatedFeedback } from "./lib/prompts.ts";
 import {
   isOneOf,
   TERMINAL_WORK_ITEM_STATUSES,
@@ -84,7 +95,12 @@ export type RestartPlan = {
   readonly args: Readonly<Record<string, unknown>>;
 };
 
-/** 止まった理由の分類。 */
+/**
+ * 止まった理由の分類。
+ * - `requirements_untrusted`: 承認済みの要件定義のディレクトリが改ざんまたは欠落していた。
+ * - `requirements_returned`: 設計か実装が要件の不足を返し、要件定義の生成へ戻った後に止まった。
+ * - `other`: それ以外。
+ */
 export type RestartStop =
   | "requirements_untrusted"
   | "requirements_returned"
@@ -92,6 +108,13 @@ export type RestartStop =
 
 /**
  * 再開先を決めるための文脈。すべて`main`が計算する。
+ * - `implementReady`: 最新の要件承認が現在の`attempt`に対して承認済みか。
+ * - `implementEnabled`: `factory_config.implement_enabled`の値。
+ * - `designEnabled`: `factory_config.design_enabled`の値(偽として読んだ後の値)。
+ * - `designApproved`: 設計が有効で、要件定義が承認済みで、設計の承認が照合を通るか。
+ * - `stop`: 止まった理由の分類。`implementReady`のときだけ読む。
+ * - `feedback`: 要件定義の生成(`pipeline`)へ渡す文。無ければ`null`。
+ *   要件定義の差し戻しの再開では印を付けた報告、承認が却下された再開では人の却下の理由が入る。
  */
 export type RestartContext = {
   readonly implementReady: boolean;
@@ -102,24 +125,54 @@ export type RestartContext = {
   readonly feedback: string | null;
 };
 
-/** 止まった遷移の記録から、止まった理由を分類する。 */
+/**
+ * 作業項目が止まった遷移の記録から、止まった理由を分類する。
+ * 改ざん・欠落の理由は、遷移元に依らず先に判定する(実装の注記は理由に別の注記が続くことがある)。
+ * 次に、遷移元が要件定義の生成なら、要件定義の生成へ戻る遷移の後、`pipeline`の準備が`attempt`を進める前に止まった作業項目である。
+ * この間は要件定義の承認が旧`attempt`に一致したままで、起動の失敗で人の対応待ちに戻ったものもここに当たる。
+ */
 export function classifyRestartStop(
   event: StatusEventSummary | null,
 ): RestartStop {
-  void event;
+  if (event === null) return "other";
+  if (isRequirementsUntrustedReason(event.note)) {
+    return "requirements_untrusted";
+  }
+  if (event.from_status === "requirements_generating") {
+    return "requirements_returned";
+  }
   return "other";
 }
 
-/** 設計か実装が要件の不足を返した遷移の注記から、要件定義の生成に渡す文を作る。 */
+/** 設計と実装が要件の不足を返したときの遷移の注記の接頭辞。長い方を先に照合する。 */
+const GAP_NOTE_PREFIXES = ["design gap: ", "gap: "] as const;
+
+/**
+ * 設計か実装が要件の不足を返した遷移の注記から、要件定義の生成に渡す文を作る。
+ * 報告は信頼できない入力を読んだClaudeの出力なので、秘密のマスクと制御文字の除去をかけて長さを絞り、
+ * 人の指示と区別できる印を付ける(`automatedFeedback`)。接頭辞の無い注記と、報告が空の注記は`null`を返す。
+ */
 export function feedbackFromGapNote(note: string | null): string | null {
-  void note;
-  return null;
+  if (note === null) return null;
+  const prefix = GAP_NOTE_PREFIXES.find((candidate) =>
+    note.startsWith(candidate),
+  );
+  if (prefix === undefined) return null;
+  const report = sanitizeModelText(
+    note.slice(prefix.length),
+    GAP_REPORT_MAX_CHARS,
+  );
+  return report.trim() === "" ? null : automatedFeedback(report);
 }
 
-/** 人が書いた却下の理由の注記から、要件定義の生成に渡す文を作る。 */
+/**
+ * 人が書いた却下の理由の注記から、要件定義の生成に渡す文を作る。
+ * 承認者本人の指示なので印は付けず、秘密のマスクと制御文字の除去をかけて長さを絞る。空は`null`を返す。
+ */
 export function feedbackFromRejection(note: string | null): string | null {
-  void note;
-  return null;
+  if (note === null) return null;
+  const reason = sanitizeModelText(note, GAP_REPORT_MAX_CHARS);
+  return reason.trim() === "" ? null : reason;
 }
 
 /**
@@ -385,14 +438,35 @@ export async function closedTargetRefusal(
   return `${head}, and ${target} is still closed; reopen it and run retry_work_item again`;
 }
 
+/** 要件定義の生成(pipeline)へ戻す再開先。`feedback`があるときだけ引数に含める。 */
+function requirementsRestartPlan(
+  workItem: Pick<WorkItem, "id" | "attempt">,
+  feedback: string | null,
+): RestartPlan {
+  return {
+    toStatus: "requirements_generating",
+    flowPath: PIPELINE_FLOW_PATH,
+    args: {
+      work_item_id: workItem.id,
+      attempt: workItem.attempt + 1,
+      ...(feedback === null ? {} : { feedback }),
+    },
+  };
+}
+
 /**
  * 再開できる作業項目について、戻す状態と起動するフローを決める。
- * issueは、要件が現在の`attempt`で承認済みで`implement_enabled`が有効なら
- * implementフロー、そうでなければpipelineフローで再開する。
+ * issueは、上から順に次のとおり決める。
+ * 1. 要件が現在の`attempt`で承認済みでなければ、pipelineで再開する。`feedback`があれば渡す。
+ * 2. 承認済みの要件定義のディレクトリが改ざん・欠落していたなら、pipelineで要件定義を作り直す。
+ * 3. 要件定義の生成へ戻った後に止まったなら、pipelineで要件定義を作り直し、`feedback`があれば渡す。
+ * 4. 設計が有効で承認されていなければ、設計フローで再開する。実装が無効でも進められる。
+ * 5. `implement_enabled`が有効なら、implementフローで再開する。
+ * 6. それ以外は例外を投げる。
  * pr_reviewとpr_fixは同名のフローで再開する。
  * 次の場合は例外を投げる。
  * - `workItem.status`が再開できる状態でない。
- * - issueの要件が承認済みだが、`implement_enabled`が無効(状態を問わない)。
+ * - issueの要件が承認済みで、設計が無効か承認済みだが、`implement_enabled`が無効(状態を問わない)。
  * - `approved`のissueの最新の要件承認が`attempt`と合わない。
  * - auditである(監査は再開しない)。
  * - dependabotである(dependabotの作業項目は再開しない)。
@@ -412,7 +486,30 @@ export function computeRestartPlan(
 
   switch (workItem.kind) {
     case "issue":
-      if (context.implementReady && context.implementEnabled) {
+      if (!context.implementReady) {
+        if (workItem.status === "approved") {
+          throw new Error(
+            `retry_work_item: work item ${workItem.id} is approved but its latest requirements approval does not match attempt ${workItem.attempt}; nothing to restart`,
+          );
+        }
+        return requirementsRestartPlan(workItem, context.feedback);
+      }
+      // 改ざん・欠落の再開は、差し戻しの理由を渡さない。現在の`attempt`の要件定義の承認があることは、
+      // それを作った`pipeline`が前の差し戻しの理由を消費済みであることを示し、残っている差し戻しの注記は改ざんと無関係である。
+      if (context.stop === "requirements_untrusted") {
+        return requirementsRestartPlan(workItem, null);
+      }
+      if (context.stop === "requirements_returned") {
+        return requirementsRestartPlan(workItem, context.feedback);
+      }
+      if (context.designEnabled && !context.designApproved) {
+        return {
+          toStatus: "designing",
+          flowPath: DESIGN_FLOW_PATH,
+          args: designFlowInput(workItem),
+        };
+      }
+      if (context.implementEnabled) {
         return {
           toStatus: "implementing",
           flowPath: IMPLEMENT_FLOW_PATH,
@@ -422,21 +519,9 @@ export function computeRestartPlan(
       // 要件が承認済みでimplementフローが無効のとき、pipelineで再開すると
       // 人が承認した要件を作り直してしまう。状態を問わず拒否し、
       // 進め方をエラーで伝える。
-      if (context.implementReady) {
-        throw new Error(
-          `retry_work_item: work item ${workItem.id} has approved requirements, but implement_enabled is false; enable it to restart the implement flow`,
-        );
-      }
-      if (workItem.status === "approved") {
-        throw new Error(
-          `retry_work_item: work item ${workItem.id} is approved but its latest requirements approval does not match attempt ${workItem.attempt}; nothing to restart`,
-        );
-      }
-      return {
-        toStatus: "requirements_generating",
-        flowPath: PIPELINE_FLOW_PATH,
-        args: { work_item_id: workItem.id, attempt: workItem.attempt + 1 },
-      };
+      throw new Error(
+        `retry_work_item: work item ${workItem.id} has approved requirements, but implement_enabled is false; enable it to restart the implement flow`,
+      );
     case "pr_review":
       return {
         toStatus: "reviewing",
@@ -461,7 +546,7 @@ export function computeRestartPlan(
 }
 
 /**
- * flow_job_idをリースとして扱うフロー(実装フローとpipeline)への再開ならtrueを返す。
+ * flow_job_idをリースとして扱うフロー(実装フロー、設計フロー、pipeline)への再開ならtrueを返す。
  * そのときは比較交換でリースを空け、ジョブIDは空のときだけ記録する。
  * 空けておくと、記録までの間にreconcileが終わった前のジョブを見て再開を孤児と判定せず、
  * 未記録として猶予を待つ。
@@ -471,6 +556,7 @@ export function usesFlowJobIdLease(
 ): boolean {
   return (
     plan.flowPath === IMPLEMENT_FLOW_PATH ||
+    plan.flowPath === DESIGN_FLOW_PATH ||
     plan.flowPath === PIPELINE_FLOW_PATH
   );
 }
@@ -596,25 +682,63 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const superseded = newerCycleRefusal(workItem, newest, config.trigger_label);
   if (superseded !== null) throw new Error(superseded);
 
-  const implementReady =
-    workItem.kind === "issue" &&
-    isRequirementsApprovedForAttempt(
-      await latestRequirementsApproval(work_item_id),
-      workItem.attempt,
-    );
+  const requirementsApproval =
+    workItem.kind === "issue"
+      ? await latestRequirementsApproval(work_item_id)
+      : null;
+  const implementReady = isRequirementsApprovedForAttempt(
+    requirementsApproval,
+    workItem.attempt,
+  );
   const restartItem = asBeforeActionableCancel(
     workItem,
     workItem.status === "cancelled"
       ? await latestStatusEvent(work_item_id, "cancelled")
       : null,
   );
+  // 設計の承認は、設計が有効で、要件定義が現在の`attempt`で承認済みのときだけ読む。
+  const designApproved =
+    config.design_enabled &&
+    implementReady &&
+    requirementsApproval !== null &&
+    isDesignApprovedForAttempt(await latestDesignApproval(work_item_id), {
+      attempt: workItem.attempt,
+      designAttempt: workItem.design_attempt,
+      requirementDraftId: requirementsApproval.draft_id,
+    });
+  // 止まった遷移は、取り消された作業項目を取り消す前の状態として扱うため、`restartItem.status`で引く。
+  const stop = classifyRestartStop(
+    implementReady
+      ? await latestStatusEvent(work_item_id, restartItem.status)
+      : null,
+  );
+  let feedback: string | null = null;
+  if (stop === "requirements_returned") {
+    const gap = await latestStatusEventFromAny(
+      work_item_id,
+      "requirements_generating",
+      ["designing", "implementing"],
+    );
+    feedback = feedbackFromGapNote(gap?.note ?? null);
+  } else if (
+    !implementReady &&
+    requirementsApproval?.status === "rejected" &&
+    requirementsApproval.attempt === workItem.attempt
+  ) {
+    const rejection = await latestStatusEventFromAny(
+      work_item_id,
+      "requirements_generating",
+      ["awaiting_approval"],
+    );
+    feedback = feedbackFromRejection(rejection?.note ?? null);
+  }
   const plan = computeRestartPlan(restartItem, {
     implementReady,
     implementEnabled: config.implement_enabled,
     designEnabled: config.design_enabled,
-    designApproved: false,
-    stop: "other",
-    feedback: null,
+    designApproved,
+    stop,
+    feedback,
   });
   const refusal = runningFlowRefusal(
     work_item_id,
@@ -670,19 +794,27 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
       : `retry_work_item: restarted from ${workItem.status} (was ${restartItem.status} before the closed target was cancelled)`;
   let moved: boolean;
   try {
-    moved = leased
-      ? await updateStatusIfCurrentClearingFlowJobId(
-          work_item_id,
-          workItem.status,
-          plan.toStatus,
-          note,
-        )
-      : await updateStatusIfCurrent(
-          work_item_id,
-          workItem.status,
-          plan.toStatus,
-          note,
-        );
+    // 要件定義の生成へ戻す遷移は、同じ文で設計の試行を0にそろえる。
+    moved =
+      plan.toStatus === "requirements_generating"
+        ? await updateStatusToRequirementsIfCurrent(
+            work_item_id,
+            workItem.status,
+            note,
+          )
+        : leased
+          ? await updateStatusIfCurrentClearingFlowJobId(
+              work_item_id,
+              workItem.status,
+              plan.toStatus,
+              note,
+            )
+          : await updateStatusIfCurrent(
+              work_item_id,
+              workItem.status,
+              plan.toStatus,
+              note,
+            );
   } catch (err) {
     if (isActivePrFixUniqueViolation(err)) {
       const prNumber = workItem.pr_number;

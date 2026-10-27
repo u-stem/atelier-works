@@ -831,6 +831,24 @@ export type StatusEventSummary = {
   readonly note: string | null;
 };
 
+/** `work_item_events`の1行を`StatusEventSummary`にする。遷移元が状態の一覧に無ければ例外を投げる。 */
+function parseStatusEventRow(
+  row: Record<string, unknown>,
+  caller: string,
+): StatusEventSummary {
+  const from = row.from_status;
+  if (
+    from !== null &&
+    (typeof from !== "string" || !isOneOf(from, WORK_ITEM_STATUSES))
+  ) {
+    throw new Error(`db: ${caller}: unknown status ${String(from)}`);
+  }
+  return {
+    from_status: from,
+    note: parseNullableString(row.note, "note"),
+  };
+}
+
 /**
  * 作業項目が`toStatus`へ移った最新の遷移の記録を返す。無ければ`null`を返す。
  * `retry_work_item`が、取り消された作業項目の取り消す前の状態と理由の注記を読むために使う。
@@ -848,21 +866,13 @@ export async function latestStatusEvent(
   `.fetch();
   const row = rows[0];
   if (row === undefined) return null;
-  const from = row.from_status;
-  if (
-    from !== null &&
-    (typeof from !== "string" || !isOneOf(from, WORK_ITEM_STATUSES))
-  ) {
-    throw new Error(`db: latestStatusEvent: unknown status ${String(from)}`);
-  }
-  return {
-    from_status: from,
-    note: parseNullableString(row.note, "note"),
-  };
+  return parseStatusEventRow(row, "latestStatusEvent");
 }
 
 /**
- * `latestStatusEvent`の兄弟。遷移元が`fromStatuses`のどれかである遷移に絞る。
+ * `latestStatusEvent`の兄弟。遷移元が`fromStatuses`のどれかである、`toStatus`への最新の遷移の記録を返す。無ければ`null`を返す。
+ * `retry_work_item`が、要件定義の生成へ戻った理由(遷移元が設計か実装の差し戻し、承認待ちの却下)を読むために使う。
+ * 再実行の遷移や、状態の変わらない取り込みの更新の記録が後にあっても、遷移元で絞るので差し戻しの遷移を返す。
  */
 export async function latestStatusEventFromAny(
   workItemId: number,
@@ -870,11 +880,16 @@ export async function latestStatusEventFromAny(
   fromStatuses: readonly WorkItemStatus[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<StatusEventSummary | null> {
-  void workItemId;
-  void toStatus;
-  void fromStatuses;
-  void sql;
-  return null;
+  const rows = await sql`
+    SELECT from_status, note FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint AND to_status = ${toStatus}
+      AND from_status = ANY(${[...fromStatuses]}::text[])
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return parseStatusEventRow(row, "latestStatusEventFromAny");
 }
 
 /**
@@ -1104,7 +1119,12 @@ export async function updateStatusIfCurrentClearingFlowJobId(
 }
 
 /**
- * 作業項目を要件定義の生成へ戻す比較交換。
+ * `updateStatusIfCurrentClearingFlowJobId`と同じ比較と交換で、遷移先を`requirements_generating`に固定し、
+ * 同じ文で`design_attempt`を0にそろえる。
+ * 再実行が作業項目を要件定義の生成へ戻す遷移(却下の作り直し、改ざんと差し戻しからの作り直し)で使う。
+ * 要件定義の生成中は`design_attempt`が0であるという不変条件を、次の`pipeline`の準備が`attempt`を進める前に止まった場合にも保つためである。
+ * `attempt`は書かない。次の`pipeline`の実行が`flow_input.attempt`で進める。
+ * statusが`expectedFrom`でなければ何も書かずに`false`を返す。
  */
 export async function updateStatusToRequirementsIfCurrent(
   id: number,
@@ -1113,12 +1133,20 @@ export async function updateStatusToRequirementsIfCurrent(
   sql: SqlClient = defaultSqlClient,
   jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
-  void id;
-  void expectedFrom;
-  void note;
-  void sql;
-  void jobIds;
-  return false;
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, 'requirements_generating', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
 }
 
 /** 自動で再開できる作業項目の種類。実装の`issue`とPR修正の`pr_fix`である。 */

@@ -4241,10 +4241,9 @@ function ciRoundStopAction(match: RegExpMatchArray): string {
 
 /**
  * 承認済みの要件定義のディレクトリが、承認時の内容と違う、または無いときの次の操作。
- * 基準値が残るので、同じ作業項目を再実行しても同じ検出で止まる。新しいサイクルで要件定義を作り直す。
+ * 基準値が残るので、実装や設計に戻しても同じ検出で止まる。再実行は要件定義を作り直すので、承認し直しになる。
  */
-const REQUIREMENTS_UNTRUSTED_NEXT_ACTION =
-  "承認済みの要件定義のディレクトリを確かめ、`factory`ラベルを付け直して要件定義を作り直してください(この作業項目を再実行しても同じ理由で止まります)";
+const REQUIREMENTS_UNTRUSTED_NEXT_ACTION = `承認済みの要件定義のディレクトリを確かめてから、${RETRY_WORK_ITEM_ACTION}(要件定義を作り直すので、承認し直しが要ります)`;
 
 /**
  * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
@@ -4326,6 +4325,16 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       `Consoleで保存済みの設計書の下書きを確かめてから、${RETRY_WORK_ITEM_ACTION}`,
   },
 ];
+
+/** 要件定義の作り直しを起動できなかった理由の、再実行の案内。経路ごとに、差し戻しの理由が残る場所を示す。 */
+const REQUIREMENTS_REGENERATION_RETRY_NOTE = {
+  implement:
+    "要件定義を作り直します。承認し直しが要ります。差し戻し理由は通知に残っていて、再実行で要件定義の生成に渡ります",
+  design:
+    "要件定義を作り直します。承認し直しが要ります。差し戻し理由は作業項目の履歴の注記に残っていて、再実行で要件定義の生成に渡ります",
+  rejection:
+    "要件定義を作り直します。承認し直しが要ります。却下の理由は再実行で要件定義の生成に渡ります",
+} as const;
 
 export const REASON_RULES: readonly ReasonRule[] = [
   // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
@@ -4861,12 +4870,12 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^requirements regeneration could not be started$/,
     describe: () => "要件定義の作り直しを起動できませんでした",
-    // 実装フローの差し戻しでは承認済みの要件定義のattemptが変わっていないので、再実行は実装フローからやり直す。
-    // 理由を出すのは実装フローの差し戻しと、却下による作り直し(requirements_apply。要件定義から再開する)なので、実装フローのときだけ添える。
+    // どの経路でも、再実行は要件定義を作り直し、承認し直しになる。差し戻しの理由が残る場所が経路で違う。
+    // - 実装の差し戻し(implement_finish): 通知に残る。
+    // - 設計の差し戻し(design_generate): 通知には載らず、作業項目の履歴の注記に残る。
+    // - 却下による作り直し(requirements_apply。フローの指定なし): 却下の理由が承認依頼と遷移の注記に残る。
     nextAction: (_m, flow) =>
-      flow === "implement"
-        ? `${RETRY_WORK_ITEM_ACTION}(実装からやり直します。差し戻し理由は通知に残っています)`
-        : RETRY_WORK_ITEM_ACTION,
+      `${RETRY_WORK_ITEM_ACTION}(${REQUIREMENTS_REGENERATION_RETRY_NOTE[flow === "implement" || flow === "design" ? flow : "rejection"]})`,
   },
   {
     pattern: /^pull request has an active fix run$/,

@@ -642,10 +642,7 @@ describe("asBeforeActionableCancel", () => {
       { ...cancelled, kind: "pr_fix" as const },
       { from_status: "failed", note: actionableCancelNote("pr_closed") },
     );
-    const plan = computeRestartPlan(restored, {
-      implementReady: false,
-      implementEnabled: false,
-    });
+    const plan = computeRestartPlan(restored, context());
     expect(plan.flowPath).toBe("f/factory/pr_fix");
   });
 
@@ -654,10 +651,7 @@ describe("asBeforeActionableCancel", () => {
       from_status: "expired",
       note: actionableCancelNote("closed"),
     });
-    const plan = computeRestartPlan(restored, {
-      implementReady: false,
-      implementEnabled: false,
-    });
+    const plan = computeRestartPlan(restored, context());
     expect(plan.toStatus).toBe("requirements_generating");
   });
 });
@@ -1410,7 +1404,7 @@ describe("computeRestartPlan — where an issue restarts", () => {
 });
 
 describe("computeRestartPlan — the design statuses", () => {
-  const RUNNING = ["designing", "awaiting_design_approval"] as const;
+  const RUNNING: WorkItemStatus[] = ["designing", "awaiting_design_approval"];
 
   test.each(RUNNING)("does not restart a work item in %s", (status) => {
     expect(() =>
