@@ -49,6 +49,11 @@ function render(
   );
 }
 
+/** タグを除いた文字。折り返して複数の行に分けた文字も、元の並びで読める。 */
+function plain(html: string): string {
+  return html.replace(/<[^>]+>/g, "");
+}
+
 function countOf(html: string, word: string): number {
   return html.split(word).length - 1;
 }
@@ -59,7 +64,7 @@ describe("FlowDiagramFrame: the content", () => {
   });
 
   test("writes the summary of every step", () => {
-    const html = render("pr_fix");
+    const html = plain(render("pr_fix"));
 
     expect(
       flowOf("pr_fix").steps.filter(
@@ -84,7 +89,7 @@ describe("FlowDiagramFrame: the content", () => {
   });
 
   test("writes every entry", () => {
-    const html = render("pr_fix");
+    const html = plain(render("pr_fix"));
 
     expect(
       flowOf("pr_fix").entries.filter(
