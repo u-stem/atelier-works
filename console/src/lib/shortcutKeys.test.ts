@@ -15,11 +15,11 @@ import {
 } from "./shortcutKeys.ts";
 
 const TARGETS = [
-  { key: "i", id: "inbox" },
-  { key: "w", id: "items" },
-  { key: "r", id: "reports" },
-  { key: "j", id: "jobs" },
-  { key: "s", id: "system" },
+  { key: "1", id: "inbox" },
+  { key: "2", id: "items" },
+  { key: "3", id: "reports" },
+  { key: "4", id: "jobs" },
+  { key: "5", id: "system" },
 ] as const;
 
 type Id = (typeof TARGETS)[number]["id"];
@@ -91,7 +91,14 @@ describe("paletteKey", () => {
     ctrlKey: false,
     metaKey: false,
     shiftKey: false,
+    repeat: false,
   };
+
+  test("ignores an auto-repeated press, which would toggle the palette over and over", () => {
+    expect(
+      isPaletteKey({ ...base, key: "k", ctrlKey: true, repeat: true }, "other"),
+    ).toBe(false);
+  });
 
   test("uses meta on mac", () => {
     expect(isPaletteKey({ ...base, key: "k", metaKey: true }, "mac")).toBe(
@@ -137,9 +144,35 @@ describe("paletteKey", () => {
 });
 
 describe("isTypingTarget", () => {
-  test.each(["INPUT", "TEXTAREA", "SELECT"])("is true for %s", (tagName) => {
+  test.each(["TEXTAREA", "SELECT"])("is true for %s", (tagName) => {
     expect(isTypingTarget({ tagName })).toBe(true);
   });
+
+  test("is true for an input without a type, which is a text field", () => {
+    expect(isTypingTarget({ tagName: "INPUT" })).toBe(true);
+  });
+
+  test.each([
+    "text",
+    "search",
+    "email",
+    "url",
+    "tel",
+    "password",
+    "number",
+    "date",
+    "datetime-local",
+    "time",
+  ])("is true for an input of type %s", (type) => {
+    expect(isTypingTarget({ tagName: "INPUT", type })).toBe(true);
+  });
+
+  test.each(["checkbox", "radio", "button", "submit", "reset", "range"])(
+    "is false for an input of type %s, which takes no text",
+    (type) => {
+      expect(isTypingTarget({ tagName: "INPUT", type })).toBe(false);
+    },
+  );
 
   test("is true for contenteditable", () => {
     expect(isTypingTarget({ tagName: "DIV", isContentEditable: true })).toBe(
@@ -183,8 +216,8 @@ describe("shortcutFor", () => {
     );
   });
 
-  test("maps g then j to the jobs screen", () => {
-    expect(stepShortcut(AFTER_G, press("j"), env({ now: 10 })).action).toEqual({
+  test("maps g then 4 to the jobs screen", () => {
+    expect(stepShortcut(AFTER_G, press("4"), env({ now: 10 })).action).toEqual({
       kind: "go",
       id: "jobs",
     });
@@ -198,20 +231,20 @@ describe("shortcutFor", () => {
   });
 
   test("returns to idle after a go", () => {
-    expect(stepShortcut(AFTER_G, press("j"), env({ now: 10 })).state).toEqual(
+    expect(stepShortcut(AFTER_G, press("4"), env({ now: 10 })).state).toEqual(
       CHORD_IDLE,
     );
   });
 
   test("gives up g after one second", () => {
     expect(
-      stepShortcut(AFTER_G, press("j"), env({ now: GO_WAIT_MS + 1 })).action,
+      stepShortcut(AFTER_G, press("4"), env({ now: GO_WAIT_MS + 1 })).action,
     ).toBeNull();
   });
 
   test("still accepts the key exactly at the limit", () => {
     expect(
-      stepShortcut(AFTER_G, press("j"), env({ now: GO_WAIT_MS })).action,
+      stepShortcut(AFTER_G, press("4"), env({ now: GO_WAIT_MS })).action,
     ).toEqual({ kind: "go", id: "jobs" });
   });
 
@@ -250,12 +283,12 @@ describe("shortcutFor", () => {
   });
 
   test.each(["ctrlKey", "altKey", "metaKey"] as const)(
-    "ignores j with %s after g",
+    "ignores 4 with %s after g",
     (modifier) => {
       expect(
         stepShortcut(
           AFTER_G,
-          press("j", { [modifier]: true }),
+          press("4", { [modifier]: true }),
           env({ now: 10 }),
         ).action,
       ).toBeNull();
@@ -282,7 +315,7 @@ describe("shortcutFor", () => {
 
   test("drops a pending g when focus moves into a field", () => {
     expect(
-      stepShortcut(AFTER_G, press("j"), env({ now: 10, typing: true })).state,
+      stepShortcut(AFTER_G, press("4"), env({ now: 10, typing: true })).state,
     ).toEqual(CHORD_IDLE);
   });
 
@@ -294,7 +327,7 @@ describe("shortcutFor", () => {
 
   test("stays off when disabled", () => {
     expect(
-      stepShortcut(AFTER_G, press("j"), env({ now: 10, enabled: false }))
+      stepShortcut(AFTER_G, press("4"), env({ now: 10, enabled: false }))
         .action,
     ).toBeNull();
   });
@@ -310,7 +343,7 @@ describe("shortcutFor", () => {
   });
 
   test("takes the browser default for a go", () => {
-    expect(stepShortcut(AFTER_G, press("j"), env({ now: 10 })).consumed).toBe(
+    expect(stepShortcut(AFTER_G, press("4"), env({ now: 10 })).consumed).toBe(
       true,
     );
   });
@@ -318,8 +351,8 @@ describe("shortcutFor", () => {
 
 describe("shortcutRows", () => {
   const screens = [
-    { label: "要対応", shortcut: "i" },
-    { label: "ジョブ", shortcut: "j" },
+    { label: "要対応", shortcut: "1" },
+    { label: "ジョブ", shortcut: "2" },
   ];
 
   test("lists the palette key with the platform's modifier", () => {
@@ -342,8 +375,8 @@ describe("shortcutRows", () => {
         .filter((row) => row.keys[0] === "g")
         .map((row) => [row.keys[1], row.description]),
     ).toEqual([
-      ["i", "要対応へ移る"],
-      ["j", "ジョブへ移る"],
+      ["1", "要対応へ移る"],
+      ["2", "ジョブへ移る"],
     ]);
   });
 

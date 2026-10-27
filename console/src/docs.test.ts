@@ -31,9 +31,10 @@ describe("docs: the visual rules", () => {
   test.each([
     ["the command palette", "コマンドパレット"],
     ["the shortcuts", "ショートカット"],
-    ["turning the shortcuts off", "ショートカットを無効にする"],
+    ["turning the shortcuts on", "ショートカットを有効にする"],
     ["the focus rules", "フォーカスの規則"],
     ["the automatic accessibility check", "自動のa11y検査"],
+    ["the limits that remain", "キーボード操作の残る制限"],
   ])("states %s under the keyboard operation", (_name, heading) => {
     expect(HEADINGS).toContain(`### ${heading}`);
   });

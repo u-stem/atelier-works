@@ -19,6 +19,13 @@ export const EMPTY_FIELDS: IntakeFields = {
   acceptanceCriteria: "",
 };
 
+export function draftForm(
+  _fields: IntakeFields,
+  _repoText: string,
+): IntakeForm {
+  return { repo: "", title: "", body: "", acceptanceCriteria: "" };
+}
+
 /**
  * 画面を開いたときの入力欄の値。保存した入力があれば復元し、無ければ空にする。
  * 保存した入力は、投入できたときと、破棄したときに消えている。

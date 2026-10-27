@@ -107,6 +107,7 @@ export function isPaletteKey(
     readonly ctrlKey: boolean;
     readonly metaKey: boolean;
     readonly shiftKey: boolean;
+    readonly repeat: boolean;
   },
   platform: Platform,
 ): boolean {
@@ -122,6 +123,7 @@ export function isPaletteKey(
 export function isTypingTarget(
   target: {
     readonly tagName?: string;
+    readonly type?: string;
     readonly isContentEditable?: boolean;
   } | null,
 ): boolean {
@@ -224,4 +226,31 @@ export function shortcutRows(
       }),
     ),
   ];
+}
+
+export type RouteEnv<Id extends string> = ShortcutEnv<Id> & {
+  readonly platform: Platform;
+  readonly openDialogs: readonly OpenDialog[];
+};
+
+export type RouteResult<Id extends string> = {
+  readonly preventDefault: boolean;
+  readonly togglePalette: boolean;
+  readonly help: boolean;
+  readonly go: Id | null;
+  readonly nextChord: ChordState;
+};
+
+export function routeKeydown<Id extends string>(
+  _event: KeyEventLike & { readonly defaultPrevented: boolean },
+  chord: ChordState,
+  _env: RouteEnv<Id>,
+): RouteResult<Id> {
+  return {
+    preventDefault: false,
+    togglePalette: false,
+    help: false,
+    go: null,
+    nextChord: chord,
+  };
 }

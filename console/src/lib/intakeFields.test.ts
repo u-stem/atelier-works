@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  draftForm,
   EMPTY_FIELDS,
   fieldsAfterCount,
   restoreFields,
@@ -81,5 +82,42 @@ describe("fieldsAfterCount", () => {
   test("starts a screen that opened after a submission empty, because the saved input was cleared", () => {
     const session = { form: null, clearedCount: 4 };
     expect(restoreFields(session)).toEqual(EMPTY_FIELDS);
+  });
+});
+
+describe("draftForm", () => {
+  test("uses the typed repository", () => {
+    expect(
+      draftForm({ ...EMPTY_FIELDS, repo: "octo-owner/gadgets" }, "default/repo")
+        .repo,
+    ).toBe("octo-owner/gadgets");
+  });
+
+  test("uses the shown default while no repository was chosen", () => {
+    expect(draftForm(EMPTY_FIELDS, "default/repo").repo).toBe("default/repo");
+  });
+
+  test("carries the title, the body and the acceptance criteria", () => {
+    expect(
+      draftForm(
+        { repo: null, title: "t", body: "b", acceptanceCriteria: "a" },
+        "default/repo",
+      ),
+    ).toEqual({
+      repo: "default/repo",
+      title: "t",
+      body: "b",
+      acceptanceCriteria: "a",
+    });
+  });
+
+  test("restores to the same fields that were typed", () => {
+    const fields = {
+      repo: "octo-owner/gadgets",
+      title: "t",
+      body: "b",
+      acceptanceCriteria: "a",
+    };
+    expect(restoreFields({ form: draftForm(fields, "x/y") })).toEqual(fields);
   });
 });

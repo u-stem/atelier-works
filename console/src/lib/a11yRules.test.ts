@@ -183,6 +183,30 @@ describe("a11yRules: input-label", () => {
     expect(count("input-label", "<label>名前<input></label>")).toBe(0);
   });
 
+  test("catches a select wrapped in a label whose only text is its own options", () => {
+    expect(
+      count(
+        "input-label",
+        "<label><select><option>a</option></select></label>",
+      ),
+    ).toBe(1);
+  });
+
+  test("passes a select wrapped in a label that has text of its own", () => {
+    expect(
+      count(
+        "input-label",
+        "<label>種類<select><option>a</option></select></label>",
+      ),
+    ).toBe(0);
+  });
+
+  test("catches a textarea wrapped in a label with no text", () => {
+    expect(
+      count("input-label", "<label><textarea>draft</textarea></label>"),
+    ).toBe(1);
+  });
+
   test("passes an input named by aria-labelledby", () => {
     expect(
       count(
@@ -351,5 +375,60 @@ describe("a11yRules: reading the HTML", () => {
 
   test("reports nothing for a clean document", () => {
     expect(checkA11y('<h1 id="t">a</h1><button>b</button>').length).toBe(0);
+  });
+
+  test("reads a single-quoted attribute", () => {
+    expect(count("button-name", "<button aria-label='閉じる'></button>")).toBe(
+      0,
+    );
+  });
+
+  test("reads an upper-case tag and attribute name", () => {
+    expect(count("button-name", '<BUTTON ARIA-LABEL="閉じる"></BUTTON>')).toBe(
+      0,
+    );
+  });
+
+  test("still catches an upper-case button without a name", () => {
+    expect(count("button-name", "<BUTTON></BUTTON>")).toBe(1);
+  });
+
+  test("closes a self-closing element so that it does not swallow what follows", () => {
+    expect(
+      count("button-name", '<path aria-hidden="true"/><button></button>'),
+    ).toBe(1);
+  });
+
+  test("skips the inside of a style", () => {
+    expect(
+      count("button-name", "<style>/* <button></button> */</style><p>x</p>"),
+    ).toBe(0);
+  });
+
+  test("keeps reading after a script that contains a less-than sign", () => {
+    expect(
+      count("button-name", "<script>if (a < b) {}</script><button></button>"),
+    ).toBe(1);
+  });
+
+  test("ends a script at an upper-case closing tag", () => {
+    expect(count("button-name", "<script>x</SCRIPT><button></button>")).toBe(1);
+  });
+
+  test("ends a comment at its own closing, even when it holds a greater-than sign", () => {
+    expect(count("button-name", "<!-- a > b --><button></button>")).toBe(1);
+  });
+
+  test("skips an element with the hidden attribute", () => {
+    expect(count("button-name", "<button hidden></button>")).toBe(0);
+  });
+
+  test("names a button by the aria-label of its child", () => {
+    expect(
+      count(
+        "button-name",
+        '<button><span aria-label="閉じる"></span></button>',
+      ),
+    ).toBe(0);
   });
 });

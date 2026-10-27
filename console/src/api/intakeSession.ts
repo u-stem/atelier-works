@@ -74,6 +74,8 @@ export type IntakeSessions = {
    * 警告と保存した入力を消して、次の送信を開ける。
    */
   readonly discard: (key: string) => void;
+  /** 入力中の値を残す。 */
+  readonly draft: (key: string, form: IntakeForm) => void;
   /** `useSyncExternalStore`に渡す。変わったときだけ呼ぶ。 */
   readonly subscribe: (listener: () => void) => () => void;
 };
@@ -160,6 +162,7 @@ export function createIntakeSessions(): IntakeSessions {
           : current,
       );
     },
+    draft: () => {},
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {

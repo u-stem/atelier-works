@@ -16,8 +16,10 @@ import type { PipelineRow } from "./api/guards/pipeline.ts";
 import type { RequirementsIndexRow } from "./api/guards/requirements.ts";
 import type { ConsoleSummary } from "./api/guards/summary.ts";
 import type { SystemStatus } from "./api/guards/systemStatus.ts";
+import type { WorkItemDetail } from "./api/guards/workItemDetail.ts";
 import type {
   ConfigSnapshotView,
+  JobDetailView,
   JobListView,
   JobSummaryView,
   SchedulesSnapshotView,
@@ -224,11 +226,99 @@ const CONFIG_NORMAL: ConfigSnapshotView = {
   ],
 };
 
+const JOB_DETAIL_NORMAL: JobDetailView = {
+  found: true,
+  job: JOB,
+  args: [{ key: "work_item_id", type: "number", value: 7 }],
+  steps: [
+    {
+      id: "a",
+      state: "success",
+      job_id: null,
+      iterations: null,
+      skipped: false,
+    },
+  ],
+  log: { text: "log line", truncated: false, masked: false, nonJsonLines: 0 },
+  result: { text: "{}", truncated: false, masked: false },
+  result_error: null,
+  failures: { ok: true, items: [] },
+};
+
+const WORK_ITEM_DETAIL_NORMAL: WorkItemDetail = {
+  work_item: {
+    work_item_id: 7,
+    kind: "issue",
+    source: "issue",
+    cycle: 1,
+    owner: "o",
+    repo: "r",
+    issue_number: 9,
+    issue_url: "https://github.com/o/r/issues/9",
+    pr_number: 12,
+    pr_url: "https://github.com/o/r/pull/12",
+    branch: "factory/issue-9-wi-7",
+    title: "example item",
+    status: "pr_open",
+    attempt: 1,
+    fix_round: 0,
+    created_at: STAMP,
+    updated_at: STAMP,
+    status_note: null,
+    flow_job_id: null,
+    total_cost_usd: 1.25,
+    run_count: 3,
+  },
+  attempts: [],
+  approvals: [],
+  implement_rounds: [
+    {
+      round_id: 3,
+      attempt: 1,
+      round: 1,
+      mode: "implement",
+      outcome: "done",
+      summary: "Changed a file",
+      gap_report: null,
+      checks_skipped_reason: null,
+      protected_changes: [],
+      diff_stat: { files: 2, added: 17, deleted: 0 },
+      created_at: STAMP,
+    },
+  ],
+  failures: [],
+  transitions: [],
+  reviews: [
+    {
+      review_id: 1,
+      head_sha: "abc1234",
+      verdict: "comment",
+      result: "reviewed",
+      finding_count: 2,
+      posted_review_id: null,
+      created_at: STAMP,
+    },
+  ],
+  fix_rounds: [
+    {
+      fix_round_id: 1,
+      round: 1,
+      outcome: "done",
+      trigger_review_count: 1,
+      reply_count: 1,
+      commit_count: 1,
+      created_at: STAMP,
+    },
+  ],
+};
+
 /** クエリの名前ごとの、通常と空の値。ここに無いクエリは、取得前のままにする。 */
 const FIXTURES: Readonly<
   Record<string, { readonly normal: unknown; readonly empty: unknown }>
 > = {
   summary: { normal: SUMMARY_NORMAL, empty: SUMMARY_EMPTY },
+  "jobs/detail": { normal: JOB_DETAIL_NORMAL, empty: { found: false } },
+  work_item_detail: { normal: WORK_ITEM_DETAIL_NORMAL, empty: null },
   pipeline: { normal: [PIPELINE_ROW], empty: [] },
   requirements_index: { normal: [REQUIREMENTS_ROW], empty: [] },
   audit_index: { normal: [], empty: [] },
@@ -366,6 +456,8 @@ type Case = {
   readonly entry: string;
   readonly load: () => Promise<{ Component: ComponentType }>;
   readonly variants: readonly Variant[];
+  /** 画面の中の確認ダイアログも、開いた形にして検査するか。 */
+  readonly dialogsOpen?: boolean;
 };
 
 const ALL_VARIANTS: readonly Variant[] = [
@@ -376,19 +468,37 @@ const ALL_VARIANTS: readonly Variant[] = [
 ];
 const DETAIL_VARIANTS: readonly Variant[] = ["pending", "failed"];
 
+/** 固定のデータで通常と空の状態も描く詳細の経路。 */
+const DETAILS_WITH_DATA: ReadonlySet<string> = new Set([
+  "items/:id",
+  "jobs/:id",
+]);
+
+/** 経路の`:id`に入れる値。ジョブの番号は、形の合うUUIDにする。 */
+function idFor(path: string): string {
+  return path.startsWith("jobs/") ? JOB.id : "7";
+}
+
 function childCases(children: readonly ScreenRoute[]): Case[] {
   return children.map((child) => ({
     name: child.path,
     routePath: `/${child.path}`,
-    entry: `/${child.path.replace(":id", "12")}`,
+    entry: `/${child.path.replace(":id", idFor(child.path))}`,
     load: child.lazy,
-    variants: DETAIL_VARIANTS,
+    variants: DETAILS_WITH_DATA.has(child.path)
+      ? ALL_VARIANTS
+      : DETAIL_VARIANTS,
   }));
 }
 
 const TAB_ENTRIES: Readonly<Record<string, readonly string[]>> = {
   items: ["/items?tab=requirements"],
   jobs: ["/jobs?tab=history", "/jobs?tab=schedules"],
+};
+
+/** 一覧で選んだ項目の詳細。承認、再実行の確認ダイアログを持つ。 */
+const SELECTION_ENTRIES: Readonly<Record<string, readonly string[]>> = {
+  inbox: ["/?approval=1", "/?failure=2", "/?notice=1"],
 };
 
 const CASES: readonly Case[] = SCREENS.flatMap((screen) => [
@@ -406,6 +516,16 @@ const CASES: readonly Case[] = SCREENS.flatMap((screen) => [
       entry,
       load: screen.lazy,
       variants: ALL_VARIANTS,
+    }),
+  ),
+  ...(SELECTION_ENTRIES[screen.id] ?? []).map(
+    (entry): Case => ({
+      name: entry,
+      routePath: screen.path,
+      entry,
+      load: screen.lazy,
+      variants: ["normal"],
+      dialogsOpen: true,
     }),
   ),
   ...childCases(screen.children),
@@ -429,6 +549,42 @@ async function renderCase(
   const { Component } = await screen.lazy();
   return renderScreen(Component, screen.path, entry ?? screen.path, variant);
 }
+
+async function renderChild(path: string, variant: Variant): Promise<string> {
+  const child = SCREENS.flatMap((screen) => screen.children).find(
+    (candidate) => candidate.path === path,
+  );
+  if (child === undefined) {
+    throw new Error(`no child route: ${path}`);
+  }
+  const { Component } = await child.lazy();
+  return renderScreen(
+    Component,
+    `/${child.path}`,
+    `/${child.path.replace(":id", idFor(child.path))}`,
+    variant,
+  );
+}
+
+describe("a11y: the detail screens reach their data", () => {
+  test("the work item detail draws the title of the fixture", async () => {
+    expect(await renderChild("items/:id", "normal")).toContain("example item");
+  });
+
+  test("the work item detail draws the not-found state for an empty result", async () => {
+    expect(await renderChild("items/:id", "empty")).not.toContain(
+      "example item",
+    );
+  });
+
+  test("the job detail draws the log of the fixture", async () => {
+    expect(await renderChild("jobs/:id", "normal")).toContain("log line");
+  });
+
+  test("the job detail draws the not-found state for an empty result", async () => {
+    expect(await renderChild("jobs/:id", "empty")).not.toContain("log line");
+  });
+});
 
 describe("a11y: the states reach the screens", () => {
   test("the normal state draws the work item rows", async () => {
@@ -465,7 +621,8 @@ describe("a11y: every screen in its representative states", () => {
           testCase.entry,
           variant,
         );
-        expect(messages(checkA11y(html))).toEqual([]);
+        const drawn = testCase.dialogsOpen === true ? opened(html) : html;
+        expect(messages(checkA11y(drawn))).toEqual([]);
       });
     }
   }

@@ -50,16 +50,20 @@ describe("ShortcutHelp", () => {
     expect(render(true, "mac")).toContain(">⌘</kbd>");
   });
 
-  test("offers the switch that turns the shortcuts off", () => {
-    expect(render()).toContain("ショートカットを無効にする");
+  test("offers the switch that turns the shortcuts on", () => {
+    expect(render()).toContain("ショートカットを有効にする");
   });
 
-  test("leaves the switch unchecked while the shortcuts are on", () => {
-    expect(checkboxTag(render(true))).not.toContain("checked");
+  test("leaves the switch unchecked while the shortcuts are off", () => {
+    expect(checkboxTag(render(false))).not.toContain("checked");
   });
 
-  test("checks the switch while the shortcuts are off", () => {
-    expect(checkboxTag(render(false))).toContain("checked");
+  test("checks the switch while the shortcuts are on", () => {
+    expect(checkboxTag(render(true))).toContain("checked");
+  });
+
+  test("says that they are off by default, so that typed input is not lost", () => {
+    expect(render(false)).toContain("既定では無効です");
   });
 
   test("says what stays available while they are off", () => {

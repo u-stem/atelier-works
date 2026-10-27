@@ -11,9 +11,19 @@ import {
 } from "./commandPalette.ts";
 
 const SCREENS = [
-  { id: "inbox", label: "要対応", path: "/", shortcut: "i" },
-  { id: "items", label: "作業項目", path: "/items", shortcut: "w" },
-  { id: "jobs", label: "ジョブ", path: "/jobs", shortcut: "j" },
+  { id: "inbox", label: "要対応", path: "/", destinations: [] },
+  {
+    id: "items",
+    label: "作業項目",
+    path: "/items",
+    destinations: [{ label: "作業項目 › 新規投入", path: "/items/new" }],
+  },
+  {
+    id: "jobs",
+    label: "ジョブ",
+    path: "/jobs",
+    destinations: [{ label: "ジョブ › 履歴", path: "/jobs?tab=history" }],
+  },
 ];
 
 function recordedEnv(): ChooseEnv & { readonly calls: string[] } {
@@ -40,8 +50,10 @@ function key(
 }
 
 describe("palette", () => {
-  test("lists the screens and the shortcut help only", () => {
+  test("lists the screens, their fixed destinations and the shortcut help only", () => {
     expect(paletteItems(SCREENS).map((item) => item.group)).toEqual([
+      "screens",
+      "screens",
       "screens",
       "screens",
       "screens",
@@ -49,12 +61,18 @@ describe("palette", () => {
     ]);
   });
 
-  test("takes the screen names from the table", () => {
+  test("takes the names from the table, each destination after its screen", () => {
     expect(
       paletteItems(SCREENS)
         .filter((item) => item.group === "screens")
         .map((item) => item.label),
-    ).toEqual(["要対応", "作業項目", "ジョブ"]);
+    ).toEqual([
+      "要対応",
+      "作業項目",
+      "作業項目 › 新規投入",
+      "ジョブ",
+      "ジョブ › 履歴",
+    ]);
   });
 
   test("moves to the screen's path", () => {
@@ -64,8 +82,16 @@ describe("palette", () => {
     });
   });
 
-  test("hints the g chord from the table", () => {
-    expect(paletteItems(SCREENS)[2]?.hint).toEqual(["g", "j"]);
+  test("moves to the path of a fixed destination", () => {
+    expect(paletteItems(SCREENS)[4]?.target).toEqual({
+      kind: "screen",
+      path: "/jobs?tab=history",
+    });
+  });
+
+  test("gives every item its own id", () => {
+    const ids = paletteItems(SCREENS).map((item) => item.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   test("always carries the help item", () => {
@@ -103,13 +129,19 @@ describe("filterPaletteItems", () => {
 
   test("matches part of a label", () => {
     expect(filterPaletteItems(items, "項目").map((item) => item.label)).toEqual(
-      ["作業項目"],
+      ["作業項目", "作業項目 › 新規投入"],
+    );
+  });
+
+  test("matches a fixed destination by its own words", () => {
+    expect(filterPaletteItems(items, "履歴").map((item) => item.label)).toEqual(
+      ["ジョブ › 履歴"],
     );
   });
 
   test("matches the English id of a screen", () => {
     expect(filterPaletteItems(items, "JOBS").map((item) => item.label)).toEqual(
-      ["ジョブ"],
+      ["ジョブ", "ジョブ › 履歴"],
     );
   });
 
@@ -124,7 +156,7 @@ describe("filterPaletteItems", () => {
   });
 
   test("folds full-width letters", () => {
-    expect(filterPaletteItems(items, "ＪＯＢＳ").length).toBe(1);
+    expect(filterPaletteItems(items, "ＪＯＢＳ").length).toBe(2);
   });
 });
 
@@ -190,7 +222,6 @@ describe("palette choose", () => {
     id: "screen-jobs",
     group: "screens",
     label: "ジョブ",
-    hint: [],
     keywords: "",
     target: { kind: "screen", path: "/jobs" },
   };
