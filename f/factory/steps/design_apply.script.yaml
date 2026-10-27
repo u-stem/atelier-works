@@ -1,0 +1,14 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/design_apply.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _approval_request_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - _approval_request_id

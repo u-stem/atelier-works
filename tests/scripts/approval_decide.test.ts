@@ -328,37 +328,76 @@ const APPROVE = {
 
 const REJECT = { ...APPROVE, decision: "reject", reason: "no" } as const;
 
-describe("decideApproval and the handler of the kind", () => {
-  test("refuses a pending design request without recording the decision", async () => {
+describe("decideApproval for a design request", () => {
+  test("checks the issue, records the decision, then starts design_apply for an approval", async () => {
     const h = decideHarness(request({ kind: "design" }));
-    await decideApproval(h.deps, APPROVE).catch(() => undefined);
-    expect(h.events).toEqual(["get"]);
+    await decideApproval(h.deps, APPROVE);
+    expect(h.events).toEqual([
+      "get",
+      "issue_check",
+      "decide",
+      "run:f/factory/steps/design_apply",
+    ]);
   });
 
-  test("names the missing handler when it refuses a design request", async () => {
+  test("records a rejection and starts design_apply without checking the issue", async () => {
     const h = decideHarness(request({ kind: "design" }));
-    await expect(decideApproval(h.deps, APPROVE)).rejects.toThrow(
-      "no approval handler for kind design",
-    );
+    await decideApproval(h.deps, REJECT);
+    expect(h.events).toEqual([
+      "get",
+      "decide",
+      "run:f/factory/steps/design_apply",
+    ]);
   });
 
-  test("refuses a design request that was already decided before it dispatches again", async () => {
+  test("starts design_apply again without recording when the same decision is already recorded", async () => {
     const h = decideHarness(request({ kind: "design", status: "approved" }));
-    await decideApproval(h.deps, APPROVE).catch(() => undefined);
-    expect(h.events).toEqual(["get"]);
+    await decideApproval(h.deps, APPROVE);
+    expect(h.events).toEqual(["get", "run:f/factory/steps/design_apply"]);
   });
 
-  test("looks up the handler before it compares the recorded decision", async () => {
+  test("refuses a different decision than the recorded one", async () => {
     const h = decideHarness(request({ kind: "design", status: "approved" }));
     await expect(decideApproval(h.deps, REJECT)).rejects.toThrow(
-      "no approval handler for kind design",
+      "refusing to overwrite it",
     );
   });
 
-  test("does not check the issue for a design request", async () => {
-    const h = decideHarness(request({ kind: "design" }));
+  test("refuses a request that has expired", async () => {
+    const h = decideHarness(request({ kind: "design", status: "expired" }));
+    await expect(decideApproval(h.deps, APPROVE)).rejects.toThrow(
+      "refusing to overwrite it",
+    );
+  });
+
+  test("passes the design kind to the issue check", async () => {
+    const kinds: string[] = [];
+    const h = decideHarness(request({ kind: "design" }), {
+      assertIssueMatchesIntake: async (_requestId, _workItemId, kind) => {
+        kinds.push(kind);
+      },
+    });
+    await decideApproval(h.deps, APPROVE);
+    expect(kinds).toEqual(["design"]);
+  });
+
+  test("does not record the decision when the issue check refuses", async () => {
+    const h = decideHarness(request({ kind: "design" }), {
+      assertIssueMatchesIntake: async () => {
+        throw new Error("issue changed");
+      },
+    });
     await decideApproval(h.deps, APPROVE).catch(() => undefined);
-    expect(h.events).not.toContain("issue_check");
+    expect(h.events).toEqual(["get"]);
+  });
+
+  test("returns the recorded status and the job id", async () => {
+    const h = decideHarness(request({ kind: "design" }));
+    expect(await decideApproval(h.deps, REJECT)).toEqual({
+      ok: true,
+      status: "rejected",
+      job_id: "job-1",
+    });
   });
 });
 

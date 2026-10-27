@@ -50,7 +50,11 @@ import {
   type WorkItem,
 } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
-import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
+import {
+  describeReason,
+  type NextActionFlow,
+  nextActionFor,
+} from "./pr_workflow_support.ts";
 
 export type RequirementsApplyOutcome =
   | "approved"
@@ -257,6 +261,12 @@ export type ApprovedBranchContext = {
   readonly log: Logger;
 };
 
+/** `needs_human`の通知と、フローの起動の手順が使う、作業項目とログの文脈。 */
+export type NotifyContext = Pick<
+  ApprovedBranchContext,
+  "workItem" | "issueNumber" | "webhookUrl" | "log"
+>;
+
 /**
  * 承認の分岐の本番の依存を組み立てる。呼ぶだけでは、DB・GitHub・Windmillに触れない。
  * 設計フローは起動しない(`startDesign: null`)。設計工程の承認の反映と期限切れを受け持つコードが入るまで、
@@ -380,11 +390,11 @@ export function buildApprovedBranchDeps(
 }
 
 /** `needs_human`のDiscord通知を、失敗しても例外を投げずに送る。 */
-async function notifyNeedsHumanBestEffort(
-  ctx: ApprovedBranchContext,
+export async function notifyNeedsHumanBestEffort(
+  ctx: NotifyContext,
   config: Pick<FactoryConfig, "instance_name">,
   reason: string,
-  flow: "implement" | "design",
+  flow: NextActionFlow | undefined,
   send: StartDesignPorts["notifyBestEffort"] = notifyBestEffort,
 ): Promise<void> {
   await send(
@@ -443,8 +453,9 @@ const REAL_START_DESIGN_PORTS: StartDesignPorts = {
  */
 export function buildStartDesign(
   config: Pick<FactoryConfig, "instance_name">,
-  ctx: ApprovedBranchContext,
+  ctx: NotifyContext,
   ports: StartDesignPorts = REAL_START_DESIGN_PORTS,
+  _feedback = "",
 ): () => Promise<StartDesignOutcome> {
   const { workItem, issueNumber, log } = ctx;
   const deps: DesignLaunchDeps = {
@@ -536,6 +547,8 @@ export type RejectedRetryDeps = {
    * Consoleの要対応から`retry_work_item`で再開できるため。
    */
   readonly markRestartable: () => void;
+  /** 作業項目を`needs_human`に戻せたときに、直後に呼ぶ。失敗しても作り直しの失敗の報告は変えない。 */
+  readonly notifyNeedsHuman: (reason: string) => Promise<void>;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -625,6 +638,40 @@ async function rollBackToNeedsHuman(
   return new Error(
     `${failure}; another run holds the lease or the work item moved on, so it was not moved to needs_human`,
   );
+}
+
+/** 最新の承認依頼が、この依頼かを返す。 */
+export function isLatestApprovalRequest(
+  _latest: { readonly id: number } | null,
+  _requestId: number,
+): boolean {
+  return true;
+}
+
+export type ApplyFailurePorts = {
+  readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
+  readonly notifyJobFailed: (
+    flowPath: string,
+    jobId: string,
+    error: string,
+  ) => Promise<void>;
+};
+
+/** 承認の反映の失敗を記録して通知する。 */
+export async function reportApplyFailure(
+  _flowPath: string,
+  _err: unknown,
+  _failure: { work_item_id: number | null },
+  _log: Logger,
+  _ports?: ApplyFailurePorts,
+): Promise<void> {}
+
+/** 実装フローを起動する手順の本番の依存を組み立てる。 */
+export function buildStartImplement(
+  _config: Pick<FactoryConfig, "instance_name">,
+  _ctx: NotifyContext,
+): () => Promise<StartImplementOutcome> {
+  return async () => "launch_failed";
 }
 
 /**
@@ -841,6 +888,7 @@ async function run(
       markRestartable: () => {
         failure.work_item_id = workItem.id;
       },
+      notifyNeedsHuman: async () => {},
       log: (message, fields) =>
         log.warn(message, { work_item_id: workItem.id, ...fields }),
     });

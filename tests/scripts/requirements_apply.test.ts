@@ -7,12 +7,13 @@ import {
   implementLaunchFailureReason,
 } from "../../f/factory/lib/implement_launch_support.ts";
 import { DESIGN_FLOW_PATH } from "../../f/factory/lib/pipeline_lease.ts";
-import type { WorkItem } from "../../f/factory/lib/types.ts";
+import type { FailureRecord, WorkItem } from "../../f/factory/lib/types.ts";
 import {
   describeReason,
   nextActionFor,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
+  type ApplyFailurePorts,
   type ApprovedBranchContext,
   type ApprovedBranchDeps,
   type ApprovedSideEffectsDeps,
@@ -23,10 +24,14 @@ import {
   buildApprovedComment,
   buildImplementLaunchNoticeMessage,
   buildStartDesign,
+  buildStartImplement,
   decideRejectedOutcome,
+  isLatestApprovalRequest,
+  notifyNeedsHumanBestEffort,
   type RejectedRetryDeps,
   readRequestAttempt,
   relaunchPipelineAfterRejection,
+  reportApplyFailure,
   type StartDesignPorts,
   shouldProceed,
 } from "../../f/factory/steps/requirements_apply.ts";
@@ -53,9 +58,11 @@ function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
   deps: RejectedRetryDeps;
   calls: string[];
   needsHumanReasons: string[];
+  notified: string[];
 } {
   const calls: string[] = [];
   const needsHumanReasons: string[] = [];
+  const notified: string[] = [];
   const deps: RejectedRetryDeps = {
     casToGenerating: async () => {
       calls.push("cas");
@@ -83,10 +90,14 @@ function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
     markRestartable: () => {
       calls.push("mark_restartable");
     },
+    notifyNeedsHuman: async (reason) => {
+      calls.push("notify");
+      notified.push(reason);
+    },
     log: () => {},
     ...overrides,
   };
-  return { deps, calls, needsHumanReasons };
+  return { deps, calls, needsHumanReasons, notified };
 }
 
 /** 呼び出しを`calls`に記録する偽の依存を作る。`overrides`で個別に差し替える。 */
@@ -539,6 +550,84 @@ describe("relaunchPipelineAfterRejection", () => {
     expect(
       await rejectionMessage(relaunchPipelineAfterRejection(h.deps)),
     ).toContain("another run holds the lease or the work item moved on");
+  });
+});
+
+describe("relaunchPipelineAfterRejection and the notification of a person", () => {
+  test("notifies a person after it moved the work item back to needs_human", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.notified).toEqual([
+      "requirements regeneration could not be started",
+    ]);
+  });
+
+  test("notifies after the move back", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.calls.indexOf("notify")).toBeGreaterThan(
+      h.calls.indexOf("needs_human"),
+    );
+  });
+
+  test("notifies when recording the job id throws", async () => {
+    const h = rejectedDeps({ recordFlowJobId: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.notified).toHaveLength(1);
+  });
+
+  test("does not notify when the move back did not match", async () => {
+    const h = rejectedDeps({
+      launchPipeline: boom,
+      moveToNeedsHuman: async () => false,
+    });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.notified).toEqual([]);
+  });
+
+  test("does not notify when the move back throws", async () => {
+    const h = rejectedDeps({ launchPipeline: boom, moveToNeedsHuman: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.notified).toEqual([]);
+  });
+
+  test("does not notify when the pipeline started", async () => {
+    const h = rejectedDeps();
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.notified).toEqual([]);
+  });
+
+  test("does not notify when the work item moved on before the retry", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.notified).toEqual([]);
+  });
+
+  test("still throws the launch failure when the notification throws", async () => {
+    const h = rejectedDeps({ launchPipeline: boom, notifyNeedsHuman: boom });
+    expect(await rejectionMessage(relaunchPipelineAfterRejection(h.deps))).toBe(
+      "requirements_apply: f/factory/pipeline could not be started: boom",
+    );
+  });
+
+  test("uses the label of the caller in the launch failure", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    expect(
+      await rejectionMessage(
+        relaunchPipelineAfterRejection(h.deps, "design_apply"),
+      ),
+    ).toBe("design_apply: f/factory/pipeline could not be started: boom");
+  });
+
+  test("uses the label of the caller in the record failure", async () => {
+    const h = rejectedDeps({ recordFlowJobId: boom });
+    expect(
+      await rejectionMessage(
+        relaunchPipelineAfterRejection(h.deps, "design_apply"),
+      ),
+    ).toBe(
+      `design_apply: f/factory/pipeline job ${JOB_A} could not be recorded: boom`,
+    );
   });
 });
 
@@ -1063,6 +1152,16 @@ describe("buildStartDesign", () => {
     });
   });
 
+  test("passes the feedback it was given to the flow", async () => {
+    const p = ports();
+    await buildStartDesign(CONFIG, CONTEXT, p.value, "needs a diagram")();
+    expect(p.launches[0]?.args).toEqual({
+      work_item_id: 7,
+      design_attempt: 3,
+      feedback: "needs a diagram",
+    });
+  });
+
   test("records the job id of the flow it started", async () => {
     const p = ports();
     await buildStartDesign(CONFIG, CONTEXT, p.value)();
@@ -1167,5 +1266,250 @@ describe("buildStartDesign", () => {
     expect(await buildStartDesign(CONFIG, CONTEXT, p.value)()).toBe(
       "flow_holds_lease",
     );
+  });
+});
+
+describe("notifyNeedsHumanBestEffort", () => {
+  const WORK_ITEM_FOR_NOTICE = {
+    owner: "octo",
+    repo: "widgets",
+    issue_url: "https://github.com/octo/widgets/issues/42",
+  };
+  const NO_LOG = { info() {}, warn() {}, error() {} };
+
+  async function sent(flow: Parameters<typeof notifyNeedsHumanBestEffort>[3]) {
+    const events: NotifyEvent[] = [];
+    await notifyNeedsHumanBestEffort(
+      {
+        workItem: { ...WORK_ITEM_FOR_NOTICE },
+        issueNumber: 42,
+        webhookUrl: "https://discord.example/webhook",
+        log: NO_LOG,
+      },
+      { instance_name: "local" },
+      "requirements regeneration could not be started",
+      flow,
+      async (_url, event) => {
+        events.push(event);
+      },
+    );
+    return events[0];
+  }
+
+  test("links the issue", async () => {
+    expect(await sent(undefined)).toMatchObject({
+      kind: "needs_human",
+      url: "https://github.com/octo/widgets/issues/42",
+      target: { kind: "issue", number: 42 },
+    });
+  });
+
+  test("guides the rejection of requirements when no flow is given", async () => {
+    expect(await sent(undefined)).toMatchObject({
+      next_action: nextActionFor(
+        "requirements regeneration could not be started",
+      ),
+    });
+  });
+
+  test("guides the rejection of a design when the flow is design_rejection", async () => {
+    expect(await sent("design_rejection")).toMatchObject({
+      next_action: nextActionFor(
+        "requirements regeneration could not be started",
+        "design_rejection",
+      ),
+    });
+  });
+
+  test("translates the reason", async () => {
+    expect(await sent(undefined)).toMatchObject({
+      reason: describeReason("requirements regeneration could not be started"),
+    });
+  });
+});
+
+describe("buildStartImplement", () => {
+  test("returns the start function without touching anything", () => {
+    const start = buildStartImplement(
+      { instance_name: "local" },
+      {
+        workItem: { id: 7, owner: "octo", repo: "widgets", issue_url: null },
+        issueNumber: 42,
+        webhookUrl: "",
+        log: { info() {}, warn() {}, error() {} },
+      },
+    );
+    expect(typeof start).toBe("function");
+  });
+});
+
+describe("reportApplyFailure", () => {
+  type Sent = { flowPath: string; jobId: string; error: string };
+
+  function reporter(overrides: Partial<ApplyFailurePorts> = {}) {
+    const records: FailureRecord[] = [];
+    const sent: Sent[] = [];
+    const logged: string[] = [];
+    const ports: ApplyFailurePorts = {
+      recordFailure: async (record) => {
+        records.push(record);
+      },
+      notifyJobFailed: async (flowPath, jobId, error) => {
+        sent.push({ flowPath, jobId, error });
+      },
+      ...overrides,
+    };
+    const log = {
+      info() {},
+      warn() {},
+      error: (message: string) => {
+        logged.push(message);
+      },
+    };
+    return { ports, records, sent, logged, log };
+  }
+
+  test("records the failure against the path, without a step", async () => {
+    const r = reporter();
+    await reportApplyFailure(
+      "f/factory/steps/design_apply",
+      new Error("boom"),
+      { work_item_id: null },
+      r.log,
+      r.ports,
+    );
+    expect(r.records[0]).toMatchObject({
+      work_item_id: null,
+      flow_path: "f/factory/steps/design_apply",
+      step: null,
+      error: "boom",
+    });
+  });
+
+  test("records the work item that can be restarted", async () => {
+    const r = reporter();
+    await reportApplyFailure(
+      "f/factory/steps/design_apply",
+      new Error("boom"),
+      { work_item_id: 7 },
+      r.log,
+      r.ports,
+    );
+    expect(r.records[0]?.work_item_id).toBe(7);
+  });
+
+  test("masks secrets in the recorded error", async () => {
+    const r = reporter();
+    await reportApplyFailure(
+      "f/factory/steps/design_apply",
+      new Error(`failed with ${GITHUB_TOKEN}`),
+      { work_item_id: null },
+      r.log,
+      r.ports,
+    );
+    expect(r.records[0]?.error).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("notifies the failure of the job with the path", async () => {
+    const r = reporter();
+    await reportApplyFailure(
+      "f/factory/steps/design_apply",
+      new Error("boom"),
+      { work_item_id: null },
+      r.log,
+      r.ports,
+    );
+    expect(r.sent[0]).toMatchObject({
+      flowPath: "f/factory/steps/design_apply",
+      error: "boom",
+    });
+  });
+
+  test("names the script in the log", async () => {
+    const r = reporter();
+    await reportApplyFailure(
+      "f/factory/steps/design_apply",
+      new Error("boom"),
+      { work_item_id: null },
+      r.log,
+      r.ports,
+    );
+    expect(r.logged[0]).toBe("design_apply failed");
+  });
+
+  test("notifies even when the record fails", async () => {
+    const r = reporter({ recordFailure: boom });
+    await reportApplyFailure(
+      "f/factory/steps/requirements_apply",
+      new Error("boom"),
+      { work_item_id: null },
+      r.log,
+      r.ports,
+    );
+    expect(r.sent).toHaveLength(1);
+  });
+
+  test("does not throw when the notification fails", async () => {
+    const r = reporter({ notifyJobFailed: boom });
+    await expect(
+      reportApplyFailure(
+        "f/factory/steps/requirements_apply",
+        new Error("boom"),
+        { work_item_id: null },
+        r.log,
+        r.ports,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("reads a thrown value that is not an error", async () => {
+    const r = reporter();
+    await reportApplyFailure(
+      "f/factory/steps/requirements_apply",
+      "plain text",
+      { work_item_id: null },
+      r.log,
+      r.ports,
+    );
+    expect(r.records[0]?.error).toBe("plain text");
+  });
+});
+
+describe("isLatestApprovalRequest", () => {
+  test("accepts the latest request", () => {
+    expect(isLatestApprovalRequest({ id: 11 }, 11)).toBe(true);
+  });
+
+  test("refuses an older request", () => {
+    expect(isLatestApprovalRequest({ id: 12 }, 11)).toBe(false);
+  });
+
+  test("refuses when the work item has no request", () => {
+    expect(isLatestApprovalRequest(null, 11)).toBe(false);
+  });
+});
+
+describe("the source of requirements_apply and the latest request", () => {
+  const source = Bun.file(
+    new URL("../../f/factory/steps/requirements_apply.ts", import.meta.url),
+  ).text();
+
+  test("looks up the latest request without the drafts", async () => {
+    expect(await source).toContain(
+      'latestApprovalRequest(workItem.id, "requirements")',
+    );
+  });
+
+  test("does not use the lookup that joins the drafts", async () => {
+    expect(await source).not.toContain("latestRequirementsApproval");
+  });
+
+  test("checks the latest request after the status of the work item and before the status of the request", async () => {
+    const text = await source;
+    const check = text.indexOf("isLatestApprovalRequest(latest");
+    expect([
+      text.indexOf("shouldProceed(workItem.status)") < check,
+      check < text.indexOf('request.status !== "approved"'),
+    ]).toEqual([true, true]);
   });
 });

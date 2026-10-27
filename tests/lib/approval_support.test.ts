@@ -15,6 +15,7 @@ import {
   issueCheckRefusal,
   needsIssueCheck,
 } from "../../f/factory/lib/approval_support.ts";
+import { APPROVAL_REQUEST_KINDS } from "../../f/factory/lib/types.ts";
 
 describe("computeExpiresAt", () => {
   test("adds APPROVAL_TIMEOUT_SEC to now", () => {
@@ -189,10 +190,20 @@ describe("handlerPathFor", () => {
     );
   });
 
-  test("throws for design, which has no handler yet", () => {
-    expect(() => handlerPathFor("design")).toThrow(
-      "no approval handler for kind design",
-    );
+  test("routes design to design_apply", () => {
+    expect(handlerPathFor("design")).toBe("f/factory/steps/design_apply");
+  });
+
+  test("returns a path for every kind of approval request", () => {
+    const failed = APPROVAL_REQUEST_KINDS.filter((kind) => {
+      try {
+        handlerPathFor(kind);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(failed).toEqual([]);
   });
 });
 

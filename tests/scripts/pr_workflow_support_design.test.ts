@@ -11,8 +11,10 @@ import { DESIGN_START_FAILED_REASON } from "../../f/factory/lib/design_launch_su
 import {
   DESIGN_APPROVAL_TIMED_OUT_REASON,
   DESIGN_DOC_DIR_IN_USE_REASON,
+  DESIGN_REJECTED_EXHAUSTED_PREFIX,
   designGapExhaustedReason,
   designNoApprovalReason,
+  designRejectedExhaustedReason,
 } from "../../f/factory/lib/design_template.ts";
 import {
   REQUIREMENTS_DIR_MISSING_REASON,
@@ -250,6 +252,7 @@ describe("the reason table and the reasons that the design stage produces", () =
     DESIGN_STALE_REQUIREMENTS_REASON,
     DESIGN_APPROVAL_INCONSISTENT_REASON,
     DESIGN_APPROVAL_TIMED_OUT_REASON,
+    designRejectedExhaustedReason: designRejectedExhaustedReason(3),
   };
 
   /** 設計の理由の定数を持つファイル。 */
@@ -364,6 +367,88 @@ describe("the reason of a design approval that timed out", () => {
     expect(nextActionFor(DESIGN_APPROVAL_TIMED_OUT_REASON)).not.toContain(
       "承認または却下してください",
     );
+  });
+});
+
+describe("the reason of a design that was rejected up to the limit", () => {
+  test("names the limit", () => {
+    expect(designRejectedExhaustedReason(3)).toBe(
+      "design rejected after max_design_attempts 3",
+    );
+  });
+
+  test("starts with the prefix that counts the applied rejections", () => {
+    expect(
+      designRejectedExhaustedReason(3).startsWith(
+        DESIGN_REJECTED_EXHAUSTED_PREFIX,
+      ),
+    ).toBe(true);
+  });
+
+  test("translates the limit", () => {
+    expect(describeReason(designRejectedExhaustedReason(3))).toBe(
+      "設計の却下が上限(max_design_attemptsの3回)に達しました",
+    );
+  });
+
+  test("tells how to retry after the limit", () => {
+    expect(nextActionFor(designRejectedExhaustedReason(3))).toContain(RETRY);
+  });
+
+  test("tells that the reason of the rejection is passed on", () => {
+    expect(nextActionFor(designRejectedExhaustedReason(3))).toContain(
+      "直前の却下の理由を渡します",
+    );
+  });
+
+  test("tells that each retry tries the design once", () => {
+    expect(nextActionFor(designRejectedExhaustedReason(3))).toContain(
+      "再実行ごとに設計を1回試します",
+    );
+  });
+
+  test("does not say that the rejections were consecutive", () => {
+    expect(describeReason(designRejectedExhaustedReason(3))).not.toContain(
+      "連続",
+    );
+  });
+});
+
+describe("the retry note of a requirements regeneration that a design rejection could not start", () => {
+  const REASON = "requirements regeneration could not be started";
+
+  test("tells that the reason of the rejection is passed to the regeneration", () => {
+    expect(nextActionFor(REASON, "design_rejection")).toContain(
+      "却下の理由は再実行で要件定義の生成に渡ります",
+    );
+  });
+
+  test("tells that the intake is updated with the current issue", () => {
+    expect(nextActionFor(REASON, "design_rejection")).toContain(
+      "取り込み内容は現在のIssueで更新されます",
+    );
+  });
+
+  test("tells that the requirements need a new approval", () => {
+    expect(nextActionFor(REASON, "design_rejection")).toContain(
+      "承認し直しが要ります",
+    );
+  });
+
+  test("keeps the note of the rejection of requirements", () => {
+    expect(nextActionFor(REASON)).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(要件定義を作り直します。承認し直しが要ります。却下の理由は再実行で要件定義の生成に渡ります)",
+    );
+  });
+
+  test("keeps the note of the design flow", () => {
+    expect(nextActionFor(REASON, "design")).toContain(
+      "作業項目の履歴の注記に残っていて",
+    );
+  });
+
+  test("keeps the note of the implement flow", () => {
+    expect(nextActionFor(REASON, "implement")).toContain("通知に残っていて");
   });
 });
 

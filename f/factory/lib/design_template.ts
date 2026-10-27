@@ -89,6 +89,14 @@ export const DESIGN_DOC_DIR_IN_USE_REASON =
  */
 export const DESIGN_APPROVAL_TIMED_OUT_REASON = "design approval timed out";
 
+export const DESIGN_REJECTED_EXHAUSTED_PREFIX = "";
+
+export function designRejectedExhaustedReason(
+  _maxDesignAttempts: number,
+): string {
+  return "";
+}
+
 /** 設計の開始時に、要件定義の試行に承認が無いときの`needs_human`の理由。 */
 export function designNoApprovalReason(attempt: number): string {
   return `design requires approved requirements for attempt ${String(attempt)}`;
