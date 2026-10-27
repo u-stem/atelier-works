@@ -59,3 +59,43 @@ export const STICKY_HEADER_CLASS =
  * `-scroll-mb-28`で`SCROLL_BODY_CLASS`の`scroll-pb-28`を打ち消す。
  */
 export const PAGINATION_BUTTON_CLASS = "-scroll-mb-28";
+
+/**
+ * 画面の見出しの帯のclass。`PageHeader`と、最初の画面を読み込む間の骨組み(`RouteFallback`)が共有する。
+ * 骨組みが帯の高さと線を同じにして、実物に置き換わる瞬間に下の本文が動かないようにする。
+ * `min-h-[4.5rem]`は、副題が無い見出しでも帯の高さを保つ。
+ */
+export const PAGE_HEADER_CLASS =
+  "flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8";
+
+/**
+ * 題の下の副題の行の高さ。`text-small`の1行(`--text-small`と`--text-small--line-height`の積)にそろえる。
+ * 実物の副題の行と、読み込み中の骨組みが、同じ高さを確保する。
+ */
+export const SUBTITLE_ROW_CLASS = "flex h-[1.3rem] items-center";
+
+/** 題の下のパンくずの行。上の余白4pxと、`text-small`の1行を確保する。 */
+export const BREADCRUMB_ROW_CLASS = "mt-1 flex h-[1.3rem] items-center";
+
+/** 題の下の戻りのリンクの行。上の余白4pxと、実機で測った行の高さ(25.2px)を確保する。 */
+export const BACK_LINK_ROW_CLASS = "mt-1 flex h-[1.575rem] items-center";
+
+/** 節の見出しの行。`text-lead`の1行(`--text-lead`と`--text-lead--line-height`の積)を確保する。 */
+export const SECTION_HEADING_ROW_CLASS = "flex h-[1.7rem] items-center";
+
+/**
+ * 作業項目の詳細と監査レポートの、見出しの下の本文の枠。実物と骨組みが共有する。
+ * 骨組みと実物で枠が違うと、取得後に本文の位置が動く。
+ */
+export const DETAIL_PANEL_CLASS =
+  "min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8";
+
+/** 要件定義書の、見出しの下のスクロールする枠。実物と骨組みが共有する。 */
+export const REQUIREMENTS_SCROLL_CLASS = "min-h-0 flex-1 overflow-y-auto";
+
+/** 要件定義書の、本文と目次を横に並べる枠。実物と骨組みが共有する。 */
+export const REQUIREMENTS_FRAME_CLASS =
+  "mx-auto flex w-full max-w-[75rem] items-start gap-10 px-8 py-6";
+
+/** 作業項目の詳細の概要タブの、塊を縦に並べる枠。実物と骨組みが共有する。 */
+export const OVERVIEW_BODY_CLASS = "flex max-w-[47.5rem] flex-col gap-8";

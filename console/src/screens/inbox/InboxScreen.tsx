@@ -57,7 +57,10 @@ import { UnlistedCards } from "./UnlistedCards.tsx";
 /** 一覧と詳細を並べる幅(Tailwindのlg)。これ未満では1画面ずつ出す。 */
 const WIDE_QUERY = "(min-width: 64rem)";
 
-/** 読み込み中の形。一覧と詳細の2つの面を、出る内容と同じ幅で並べる。 */
+/**
+ * 読み込み中の形。一覧と詳細の2つの面を、出る内容と同じ幅で並べる。
+ * 行の高さは、実機で測った実物の行の高さ(81px。線を含む)に合わせる。
+ */
 const LOADING_SHAPE: LoadingShape = {
   className: "flex min-h-0 flex-1",
   node: (
@@ -66,12 +69,12 @@ const LOADING_SHAPE: LoadingShape = {
         {["a", "b", "c", "d"].map((key) => (
           <div
             key={key}
-            className="flex gap-3 border-b border-border px-6 py-4"
+            className="flex gap-3 border-b border-border px-6 py-3.5"
           >
             <Skeleton className="mt-1.5 size-2 rounded-full" />
-            <div className="flex-1 space-y-2">
-              <Skeleton className="h-4 w-4/5" />
-              <Skeleton className="h-3 w-3/5" />
+            <div className="flex flex-1 flex-col">
+              <Skeleton className="my-1 h-4 w-4/5" />
+              <Skeleton className="mt-2.5 mb-1.5 h-3 w-3/5" />
             </div>
           </div>
         ))}

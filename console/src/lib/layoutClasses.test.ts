@@ -1,11 +1,31 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   APP_MAIN_CLASS,
+  BACK_LINK_ROW_CLASS,
+  BREADCRUMB_ROW_CLASS,
+  DETAIL_PANEL_CLASS,
+  OVERVIEW_BODY_CLASS,
   PAGINATION_BAR_CLASS,
   PAGINATION_BUTTON_CLASS,
+  REQUIREMENTS_FRAME_CLASS,
+  REQUIREMENTS_SCROLL_CLASS,
   SCROLL_BODY_CLASS,
+  SECTION_HEADING_ROW_CLASS,
   STICKY_HEADER_CLASS,
+  SUBTITLE_ROW_CLASS,
 } from "./layoutClasses.ts";
+
+const CSS = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+/** index.cssの文字の大きさと行の高さの積(rem)。小数の誤差を丸める。 */
+function lineHeightRem(token: string): number {
+  const size = new RegExp(`--text-${token}:\\s*([0-9.]+)rem`).exec(CSS)?.[1];
+  const ratio = new RegExp(`--text-${token}--line-height:\\s*([0-9.]+)`).exec(
+    CSS,
+  )?.[1];
+  return Number((Number(size) * Number(ratio)).toFixed(3));
+}
 
 function classesOf(value: string): string[] {
   return value.split(/\s+/);
@@ -117,6 +137,58 @@ describe("STICKY_HEADER_CLASS", () => {
 
   test("is the same width as the md side padding of the scroll body", () => {
     expect(classesOf(SCROLL_BODY_CLASS)).toContain("md:px-8");
+  });
+});
+
+describe("the rows that a skeleton keeps for a line of text", () => {
+  test("the subtitle row is as tall as one line of the small text", () => {
+    expect(SUBTITLE_ROW_CLASS).toContain(`h-[${lineHeightRem("small")}rem]`);
+  });
+
+  test("the breadcrumb row is as tall as one line of the small text", () => {
+    expect(BREADCRUMB_ROW_CLASS).toContain(`h-[${lineHeightRem("small")}rem]`);
+  });
+
+  test("the breadcrumb row keeps the 4px margin above the breadcrumb", () => {
+    expect(classesOf(BREADCRUMB_ROW_CLASS)).toContain("mt-1");
+  });
+
+  test("the back link row keeps the 4px margin above the link", () => {
+    expect(classesOf(BACK_LINK_ROW_CLASS)).toContain("mt-1");
+  });
+
+  test("the back link row is the height measured on the real screen", () => {
+    expect(BACK_LINK_ROW_CLASS).toContain("h-[1.575rem]");
+  });
+
+  test("the section heading row is as tall as one line of the lead text", () => {
+    expect(SECTION_HEADING_ROW_CLASS).toContain(
+      `h-[${lineHeightRem("lead")}rem]`,
+    );
+  });
+});
+
+describe("the body frames that the real screen and its skeleton share", () => {
+  test("the detail panel scrolls vertically", () => {
+    expect(classesOf(DETAIL_PANEL_CLASS)).toContain("overflow-y-auto");
+  });
+
+  test("the detail panel takes the side padding of the scroll body", () => {
+    expect(amountOf(DETAIL_PANEL_CLASS, "px")).toBe(
+      amountOf(SCROLL_BODY_CLASS, "px"),
+    );
+  });
+
+  test("the requirements frame scrolls vertically", () => {
+    expect(classesOf(REQUIREMENTS_SCROLL_CLASS)).toContain("overflow-y-auto");
+  });
+
+  test("the requirements frame keeps the side padding of the document", () => {
+    expect(amountOf(REQUIREMENTS_FRAME_CLASS, "px")).toBe(8);
+  });
+
+  test("the overview body stacks its blocks 32px apart", () => {
+    expect(amountOf(OVERVIEW_BODY_CLASS, "gap")).toBe(8);
   });
 });
 

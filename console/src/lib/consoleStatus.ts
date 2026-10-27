@@ -34,8 +34,8 @@ export function parseConsoleStatus(value: unknown): ConsoleStatus | null {
 }
 
 export type ReleaseDescription = {
-  /** 「版 0123456」。版が分からなければ`null`。 */
-  readonly versionLabel: string | null;
+  /** 版のSHAの先頭7文字。版が分からなければ`null`。 */
+  readonly versionSha: string | null;
   /** 「3分前に確認」。 */
   readonly checkedLabel: string;
   /** 注意が要る状態の文。無ければ`null`。 */
@@ -59,10 +59,8 @@ export function describeRelease(
     warning = "最新の版を取り込めていません";
   }
   return {
-    versionLabel:
-      status.sha === null
-        ? null
-        : `版 ${status.sha.slice(0, SHORT_SHA_LENGTH)}`,
+    versionSha:
+      status.sha === null ? null : status.sha.slice(0, SHORT_SHA_LENGTH),
     checkedLabel: `${formatRelativeIso(status.checked_at, nowMs)}に確認`,
     warning,
   };

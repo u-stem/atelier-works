@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { SECTION_HEADING_ROW_CLASS } from "../lib/layoutClasses.ts";
 import {
   LoadingBody,
   LoadingGate,
   type LoadingShape,
   LoadingStateView,
   loadingDisplayOf,
+  rowIndexes,
+  SkeletonListCard,
+  SkeletonSection,
 } from "./LoadingState.tsx";
 
 const SHAPE: LoadingShape = { rows: 3, rowClassName: "h-12 rounded-md" };
@@ -228,5 +232,78 @@ describe("LoadingBody", () => {
     expect(
       renderToStaticMarkup(<LoadingBody display="frame" shape={SHAPE} />),
     ).not.toContain("読み込み中");
+  });
+});
+
+describe("SkeletonListCard", () => {
+  const html = renderToStaticMarkup(
+    <SkeletonListCard
+      rows={3}
+      rowClassName="h-[4.625rem]"
+      className="max-w-4xl"
+    />,
+  );
+
+  test("draws a bordered card", () => {
+    expect(html).toContain(
+      "overflow-hidden rounded-xl border border-border bg-card",
+    );
+  });
+
+  test("draws the requested number of rows", () => {
+    expect(count(html, "h-[4.625rem]")).toBe(3);
+  });
+
+  test("draws more than ten rows when asked", () => {
+    expect(
+      count(
+        renderToStaticMarkup(
+          <SkeletonListCard rows={12} rowClassName="h-[4.625rem]" />,
+        ),
+        "h-[4.625rem]",
+      ),
+    ).toBe(12);
+  });
+
+  test("passes the card class on", () => {
+    expect(html).toContain("max-w-4xl");
+  });
+
+  test("draws no line under the last row", () => {
+    expect(html).toContain("last:border-b-0");
+  });
+
+  test("hides the skeleton from the reading order", () => {
+    expect(html).toContain('aria-hidden="true"');
+  });
+});
+
+describe("rowIndexes", () => {
+  test("numbers the rows from zero", () => {
+    expect(rowIndexes(3)).toEqual([0, 1, 2]);
+  });
+
+  test("returns no number for no rows", () => {
+    expect(rowIndexes(0)).toEqual([]);
+  });
+
+  test("is not limited to a few rows", () => {
+    expect(rowIndexes(12)).toHaveLength(12);
+  });
+});
+
+describe("SkeletonSection", () => {
+  const html = renderToStaticMarkup(<SkeletonSection block="h-[5.7rem]" />);
+
+  test("draws the heading row as tall as a heading of the real screen", () => {
+    expect(html).toContain(SECTION_HEADING_ROW_CLASS);
+  });
+
+  test("draws the block with the given height", () => {
+    expect(html).toContain("h-[5.7rem]");
+  });
+
+  test("keeps the 12px gap between the heading and the block", () => {
+    expect(html).toContain("flex flex-col gap-3");
   });
 });

@@ -7,7 +7,10 @@ import {
   staleQuery,
 } from "../../api/fakeSectionQuery.testing.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
-import { AnalyticsSection } from "./AnalyticsSection.tsx";
+import {
+  ANALYTICS_COST_LOADING_SHAPE,
+  AnalyticsSection,
+} from "./AnalyticsSection.tsx";
 
 const NOTICE = "前回取得した値を表示しています";
 
@@ -19,6 +22,7 @@ function render(query: SectionQuery<string[]>): string {
       failureTitle="区画"
       emptyMessage="空です"
       query={query}
+      loadingShape={ANALYTICS_COST_LOADING_SHAPE}
     >
       {(rows) => <p>{rows.join(",")}</p>}
     </AnalyticsSection>,

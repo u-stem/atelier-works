@@ -97,7 +97,7 @@ export function DrawioFrame({ xml, title }: DrawioFrameProps) {
 
   if (!result.ok) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         {result.reason === "empty"
           ? "図のデータがありません。"
           : `図のXMLが大きすぎるため、表示しません(上限${MAX_XML_BYTES / 1024}KB)。`}
@@ -126,12 +126,12 @@ export function DrawioFrame({ xml, title }: DrawioFrameProps) {
         />
       </div>
       {stopped ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-body text-destructive">
           {FRAME_STOPPED_TEXT}
         </p>
       ) : null}
       {state.failure !== null && !stopped ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-body text-destructive">
           {frameErrorText(state.failure)}
         </p>
       ) : null}

@@ -11,7 +11,10 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
-import { describeRelease } from "../lib/consoleStatus.ts";
+import {
+  describeRelease,
+  type ReleaseDescription,
+} from "../lib/consoleStatus.ts";
 import { SIDEBAR_ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import { TRANSITION_WIDTH } from "../lib/motionClasses.ts";
@@ -53,22 +56,16 @@ function writeCollapsed(collapsed: boolean): void {
   }
 }
 
-/** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */
-function ReleaseInfo() {
-  const status = useConsoleStatus();
-  const now = useNow();
-  const release = status === null ? null : describeRelease(status, now);
-  if (release === null) {
-    return null;
-  }
+/** 配信している版と確認の時刻の文。識別子のSHAだけを等幅で出し、「版」の語は本文の書体にする。 */
+export function ReleaseNote({ release }: { release: ReleaseDescription }) {
   return (
     <p className="text-caption leading-5 text-subtle">
-      {release.versionLabel === null ? null : (
+      {release.versionSha === null ? null : (
         <span className="font-medium text-muted-foreground tabular-nums">
-          {release.versionLabel}
+          版 <span className="font-mono">{release.versionSha}</span>
         </span>
       )}
-      {release.versionLabel === null ? null : "・"}
+      {release.versionSha === null ? null : "・"}
       <span className="tabular-nums">{release.checkedLabel}</span>
       {release.warning === null ? null : (
         <span className="mt-1 block font-medium text-notice">
@@ -77,6 +74,14 @@ function ReleaseInfo() {
       )}
     </p>
   );
+}
+
+/** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */
+function ReleaseInfo() {
+  const status = useConsoleStatus();
+  const now = useNow();
+  const release = status === null ? null : describeRelease(status, now);
+  return release === null ? null : <ReleaseNote release={release} />;
 }
 
 /**
@@ -175,7 +180,7 @@ function NavList({
                   {collapsed && badge !== null ? (
                     <span
                       aria-hidden="true"
-                      className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
+                      className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-caption leading-4 font-semibold text-primary-foreground tabular-nums"
                     >
                       {badge}
                     </span>

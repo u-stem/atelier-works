@@ -148,7 +148,7 @@ function NodeBody({
         className={cn(
           running
             ? "fill-selected stroke-primary"
-            : cn(NODE_FILL[node.kind], "stroke-input"),
+            : cn(NODE_FILL[node.kind], "stroke-edge"),
         )}
       />
       <text
