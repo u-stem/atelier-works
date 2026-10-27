@@ -60,6 +60,8 @@ export const SWEEP_REDISPATCH_LIMIT = 5;
  */
 export const SWEEP_REDISPATCH_MAX_PER_REQUEST = 3;
 
+export const SWEEP_REDISPATCH_RETRY_GRACE_MS = 0;
+
 /**
  * 処理先を起動し直した記録(作業項目の遷移の記録で、状態は変えない)の注記。
  * 記録を数えて上限を判定するので、依頼ごとに固定の文にする。
@@ -103,6 +105,11 @@ export type SweepDeps = {
     workItemId: number,
     note: string,
   ) => Promise<number>;
+  /** 起動し直した記録(注記が`note`のもの)の最新の時刻。無ければ`null`。 */
+  readonly lastApprovalRedispatchAt: (
+    workItemId: number,
+    note: string,
+  ) => Promise<Date | null>;
   /** 処理先を起動し直した記録を書く。作業項目が`status`のままのときだけ書き、書けたら`true`を返す。 */
   readonly recordApprovalRedispatch: (
     workItemId: number,

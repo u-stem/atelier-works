@@ -33,6 +33,7 @@ import {
   hasNonTerminalPrWorkItem,
   type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
+  lastApprovalRedispatchAt,
   latestApprovalRequest,
   listActionableWorkItems,
   listActive,
@@ -1356,6 +1357,8 @@ async function sweepPendingApprovals(
     expireApprovalRequestIfPending: (id) => expireApprovalRequestIfPending(id),
     countApprovalRedispatches: (workItemId, note) =>
       countApprovalRedispatches(workItemId, note),
+    lastApprovalRedispatchAt: (workItemId, note) =>
+      lastApprovalRedispatchAt(workItemId, note),
     recordApprovalRedispatch: (workItemId, status, note) =>
       recordApprovalRedispatch(workItemId, status, note),
     redispatch: async (kind, approvalRequestId) => {

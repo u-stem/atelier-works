@@ -4316,6 +4316,15 @@ export async function countApprovalRedispatches(
   return row === undefined ? 0 : parseRequiredNumber(row.n, "n");
 }
 
+/** 起動し直した記録の最新の時刻。 */
+export async function lastApprovalRedispatchAt(
+  _workItemId: number,
+  _note: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<Date | null> {
+  return null;
+}
+
 /**
  * 承認の判断を反映する処理を起動し直したことを、作業項目の遷移の記録に残す。
  * 状態は変えない(遷移元と遷移先に同じ`status`を書き、作業項目の行は更新しない)。

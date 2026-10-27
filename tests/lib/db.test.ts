@@ -71,6 +71,7 @@ import {
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
+  lastApprovalRedispatchAt,
   latestApprovalRequest,
   latestConflictFixSettledAt,
   latestDesignApproval,
@@ -5782,6 +5783,52 @@ describe("countApprovalRedispatches", () => {
   test("casts work_item_id to ::bigint", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
     await countApprovalRedispatches(1, NOTE, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "work_item_id = ? ::bigint",
+    );
+  });
+});
+
+describe("lastApprovalRedispatchAt", () => {
+  const NOTE = "approval handler restarted for request 41";
+
+  test("returns the latest time of the records", async () => {
+    const at = new Date("2026-10-27T11:50:00Z");
+    const { sql } = createFakeSqlClient([[{ last_at: at }]]);
+    expect(await lastApprovalRedispatchAt(1, NOTE, sql)).toEqual(at);
+  });
+
+  test("returns null when there is no record", async () => {
+    const { sql } = createFakeSqlClient([[{ last_at: null }]]);
+    expect(await lastApprovalRedispatchAt(1, NOTE, sql)).toBeNull();
+  });
+
+  test("returns null when the query returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await lastApprovalRedispatchAt(1, NOTE, sql)).toBeNull();
+  });
+
+  test("passes the note from the caller as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ last_at: null }]]);
+    await lastApprovalRedispatchAt(1, NOTE, sql);
+    expect(calls[0]?.values).toContain(NOTE);
+  });
+
+  test("reads only the records that keep the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ last_at: null }]]);
+    await lastApprovalRedispatchAt(1, NOTE, sql);
+    expect(calls[0]?.text).toContain("from_status = to_status");
+  });
+
+  test("takes the latest time of the events", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ last_at: null }]]);
+    await lastApprovalRedispatchAt(1, NOTE, sql);
+    expect(calls[0]?.text).toContain("MAX(occurred_at)");
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ last_at: null }]]);
+    await lastApprovalRedispatchAt(1, NOTE, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "work_item_id = ? ::bigint",
     );

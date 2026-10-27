@@ -10,6 +10,7 @@ import {
   SWEEP_REDISPATCH_GRACE_MS,
   SWEEP_REDISPATCH_LIMIT,
   SWEEP_REDISPATCH_MAX_PER_REQUEST,
+  SWEEP_REDISPATCH_RETRY_GRACE_MS,
   type SweepDeps,
   sweepApprovals,
 } from "../../f/factory/lib/approval_sweep.ts";
@@ -150,6 +151,10 @@ type Options = {
   readonly counts?: Readonly<Record<string, number>>;
   /** 起動し直しの記録の結果。既定は`true`。 */
   readonly recorded?: boolean;
+  /** 起動し直した記録の最新の時刻。キーは注記。無ければ記録なし。 */
+  readonly lastRedispatchAt?: Readonly<Record<string, Date>>;
+  /** 通知が投げる例外。 */
+  readonly notifyError?: Error;
   /** 起動し直しが例外を投げる依頼のID。 */
   readonly redispatchFails?: readonly number[];
   /** 最新の依頼の読み取りが例外を投げる作業項目のID。 */
@@ -168,6 +173,7 @@ function harness(options: Options = {}) {
   const failures: string[] = [];
   const statusQueries: (readonly WorkItemStatus[])[] = [];
   const countedNotes: string[] = [];
+  const lastAtNotes: string[] = [];
   const recordedNotes: string[] = [];
   const items = options.items ?? [];
   const known = options.known ?? items;
@@ -201,6 +207,10 @@ function harness(options: Options = {}) {
       countedNotes.push(note);
       return options.counts?.[note] ?? 0;
     },
+    lastApprovalRedispatchAt: async (_workItemId, note) => {
+      lastAtNotes.push(note);
+      return options.lastRedispatchAt?.[note] ?? null;
+    },
     recordApprovalRedispatch: async (workItemId, _status, note) => {
       calls.push(`record_redispatch:${String(workItemId)}`);
       recordedNotes.push(note);
@@ -213,6 +223,7 @@ function harness(options: Options = {}) {
       }
     },
     notifyNeedsHuman: async (item, reason) => {
+      if (options.notifyError !== undefined) throw options.notifyError;
       calls.push(`notify:${String(item.id)}:${reason}`);
     },
     recordFailure: async (step) => {
@@ -227,6 +238,7 @@ function harness(options: Options = {}) {
     failures,
     statusQueries,
     countedNotes,
+    lastAtNotes,
     recordedNotes,
   };
 }
@@ -264,6 +276,10 @@ describe("the limits of the sweep", () => {
 
   test("starts at most five handlers in one sweep", () => {
     expect(SWEEP_REDISPATCH_LIMIT).toBe(5);
+  });
+
+  test("waits fifteen minutes after a restart before it starts the handler again", () => {
+    expect(SWEEP_REDISPATCH_RETRY_GRACE_MS).toBe(15 * MINUTE);
   });
 
   test("starts the handler of one request at most three times", () => {
@@ -352,13 +368,13 @@ describe("sweepApprovals: an expired pending request", () => {
     expiredPending: [request(41, "design", 7)],
   };
 
-  test("moves the work item first, then notifies, then expires the request", async () => {
+  test("moves the work item first, then expires the request, then notifies", async () => {
     const h = harness(WORLD);
     await sweepApprovals(h.deps);
     expect(h.calls).toEqual([
       "move:7:awaiting_design_approval>expired",
-      "notify:7:design approval timed out",
       "expire_request:41",
+      "notify:7:design approval timed out",
     ]);
   });
 
@@ -419,8 +435,8 @@ describe("sweepApprovals: an expired pending request", () => {
     await sweepApprovals(h.deps);
     expect(h.calls).toEqual([
       "move:8:awaiting_approval>expired",
-      "notify:8:approval timed out",
       "expire_request:60",
+      "notify:8:approval timed out",
     ]);
   });
 
@@ -428,6 +444,41 @@ describe("sweepApprovals: an expired pending request", () => {
     const h = harness({ ...WORLD, expireError: new Error("db down") });
     await sweepApprovals(h.deps);
     expect(h.failures).toEqual(["approval_sweep:7"]);
+  });
+
+  test("still notifies when the update that expires the request fails", async () => {
+    const h = harness({ ...WORLD, expireError: new Error("db down") });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toEqual([
+      "move:7:awaiting_design_approval>expired",
+      "notify:7:design approval timed out",
+    ]);
+  });
+
+  test("has expired the request when the notification fails", async () => {
+    const h = harness({ ...WORLD, notifyError: new Error("discord down") });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toEqual([
+      "move:7:awaiting_design_approval>expired",
+      "expire_request:41",
+    ]);
+  });
+
+  test("records the failure of the notification", async () => {
+    const h = harness({ ...WORLD, notifyError: new Error("discord down") });
+    await sweepApprovals(h.deps);
+    expect(h.failures).toEqual(["approval_sweep:7"]);
+  });
+
+  test("goes on to the next work item when the notification fails", async () => {
+    const other = workItem({ id: 9, issue_number: 44 });
+    const h = harness({
+      items: [DESIGN_ITEM, other],
+      latest: { "7:design": latest(), "9:design": latest({ id: 43 }) },
+      notifyError: new Error("discord down"),
+    });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toContain("expire_request:43");
   });
 
   test("expires only the request on the next sweep after a failure", async () => {
@@ -564,8 +615,8 @@ describe("sweepApprovals: a design request whose record is inconsistent", () => 
     await sweepApprovals(h.deps);
     expect(h.calls).toEqual([
       "move:7:awaiting_design_approval>needs_human",
-      `notify:7:${DESIGN_APPROVAL_INCONSISTENT_REASON}`,
       "expire_request:41",
+      `notify:7:${DESIGN_APPROVAL_INCONSISTENT_REASON}`,
     ]);
   });
 
@@ -831,6 +882,82 @@ describe("sweepApprovals: a decision that the handler did not apply", () => {
     expect(h.calls).toEqual(["move:7:awaiting_design_approval>needs_human"]);
   });
 
+  test("reads the time of the last restart by the note of the request", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 6) },
+    });
+    await sweepApprovals(h.deps);
+    expect(h.lastAtNotes).toEqual([approvalRedispatchNote(41)]);
+  });
+
+  test("does not start the handler within fifteen minutes of the last restart", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 60) },
+      counts: { [approvalRedispatchNote(41)]: 1 },
+      lastRedispatchAt: {
+        [approvalRedispatchNote(41)]: new Date(NOW.getTime() - 14 * MINUTE),
+      },
+    });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("starts the handler once fifteen minutes have passed since the last restart", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 60) },
+      counts: { [approvalRedispatchNote(41)]: 1 },
+      lastRedispatchAt: {
+        [approvalRedispatchNote(41)]: new Date(NOW.getTime() - 15 * MINUTE),
+      },
+    });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toContain("redispatch:design:41");
+  });
+
+  test("does not hand the work item to a person within fifteen minutes of the third restart", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 60) },
+      counts: { [approvalRedispatchNote(41)]: 3 },
+      lastRedispatchAt: {
+        [approvalRedispatchNote(41)]: new Date(NOW.getTime() - 10 * MINUTE),
+      },
+    });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("hands the work item to a person once fifteen minutes have passed since the third restart", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 60) },
+      counts: { [approvalRedispatchNote(41)]: 3 },
+      lastRedispatchAt: {
+        [approvalRedispatchNote(41)]: new Date(NOW.getTime() - 15 * MINUTE),
+      },
+    });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toEqual([
+      "move:7:awaiting_design_approval>needs_human",
+      `notify:7:${approvalApplyStalledReason(3)}`,
+    ]);
+  });
+
+  test("measures the wait from the last restart of the same request only", async () => {
+    const h = harness({
+      items: [DESIGN_ITEM],
+      latest: { "7:design": decided("approved", 60, { id: 42 }) },
+      lastRedispatchAt: {
+        [approvalRedispatchNote(41)]: new Date(NOW.getTime() - MINUTE),
+      },
+    });
+    await sweepApprovals(h.deps);
+    expect(h.calls).toContain("redispatch:design:42");
+  });
+
   test("starts a new request with a new count", async () => {
     const h = harness({
       items: [DESIGN_ITEM],
@@ -855,8 +982,8 @@ describe("sweepApprovals: failures", () => {
     await sweepApprovals(h.deps);
     expect(h.calls).toEqual([
       "move:9:awaiting_design_approval>expired",
-      "notify:9:design approval timed out",
       "expire_request:43",
+      "notify:9:design approval timed out",
     ]);
   });
 

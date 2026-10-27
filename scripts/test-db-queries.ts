@@ -62,6 +62,7 @@ import {
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
+  lastApprovalRedispatchAt,
   latestApprovalRequest,
   latestConflictFixSettledAt,
   latestDesignApproval,
@@ -10560,6 +10561,53 @@ check(
   )) === 1 &&
     (await countApprovalRedispatches(redispatchOther, REDISPATCH_NOTE, sql)) ===
       1,
+);
+check(
+  "approval redispatch: no time is returned when the request has no record",
+  (await lastApprovalRedispatchAt(
+    redispatchOther,
+    REDISPATCH_OTHER_NOTE,
+    sql,
+  )) === null,
+);
+const redispatchLastAt = await lastApprovalRedispatchAt(
+  redispatchItem,
+  REDISPATCH_NOTE,
+  sql,
+);
+check(
+  "approval redispatch: the time of the last record is returned",
+  redispatchLastAt !== null &&
+    Math.abs(Date.now() - redispatchLastAt.getTime()) < 60_000,
+  redispatchLastAt,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_item_events SET occurred_at = now() - interval '2 hours' WHERE id = (SELECT min(id) FROM factory.work_item_events WHERE work_item_id = ${String(redispatchItem)} AND from_status = to_status AND note = '${REDISPATCH_NOTE}')`,
+);
+const redispatchLastAtAfterBackdate = await lastApprovalRedispatchAt(
+  redispatchItem,
+  REDISPATCH_NOTE,
+  sql,
+);
+check(
+  "approval redispatch: the latest of the records is returned, not the oldest",
+  redispatchLastAtAfterBackdate !== null &&
+    Math.abs(Date.now() - redispatchLastAtAfterBackdate.getTime()) < 60_000,
+  redispatchLastAtAfterBackdate,
+);
+check(
+  "approval redispatch: the time of another request and another work item is not mixed in",
+  (await lastApprovalRedispatchAt(
+    redispatchOther,
+    REDISPATCH_OTHER_NOTE,
+    sql,
+  )) === null &&
+    (await lastApprovalRedispatchAt(
+      redispatchItem,
+      REDISPATCH_OTHER_NOTE,
+      sql,
+    )) !== null,
 );
 check(
   "approval redispatch: the status of the work item stays",
