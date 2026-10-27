@@ -112,3 +112,11 @@ export const APPROVAL_OUTCOMES: Readonly<
 export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/requirements_apply", to: "design", kind: "script" },
 ];
+
+export type ReworkEdge = { readonly from: string; readonly to: string };
+
+/** 差し戻しのときだけ起動する辺。 */
+export const REWORK_LAUNCH_EDGES: readonly ReworkEdge[] = [];
+
+/** flowを起動するscriptを、別のscriptが呼ぶ関係。 */
+export const SCRIPT_CALLERS: Readonly<Record<string, string>> = {};

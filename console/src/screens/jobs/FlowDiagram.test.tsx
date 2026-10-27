@@ -98,8 +98,20 @@ describe("FlowDiagramFrame: the content", () => {
     ).toEqual([]);
   });
 
-  test("marks a conditional step with the word 条件で飛ぶ", () => {
-    expect(render("pipeline")).toContain("条件で飛ぶ");
+  test("marks a conditional step with the word 条件で飛ぶ when a job overlays", () => {
+    expect(
+      render("pipeline", { progress: [step("prepare", "success")] }),
+    ).toContain("条件で飛ぶ");
+  });
+
+  test("does not mark a conditional step in the static diagram", () => {
+    expect(render("pipeline")).not.toContain("条件で飛ぶ");
+  });
+
+  test("writes the script that calls a launching script", () => {
+    expect(plain(render("pr_fix"))).toContain(
+      "script auto_retry_stale_image(self_updateから起動)",
+    );
   });
 
   test("draws no word of a state when nothing overlays", () => {
@@ -126,6 +138,46 @@ describe("FlowDiagramFrame: the exits", () => {
 
   test("draws no approval exit on design", () => {
     expect(render("design")).not.toContain("承認の後");
+  });
+
+  test("writes the exit that sends work back", () => {
+    expect(render("pr_fix")).toContain("差し戻し: pipeline");
+  });
+
+  test("writes the entry from a flow that sends work back", () => {
+    expect(plain(render("pipeline"))).toContain("implementの差し戻し");
+  });
+
+  test("says that the approval of pipeline does not start design yet", () => {
+    expect(render("design")).toContain(
+      "pipelineの承認からは、まだ起動されません。",
+    );
+  });
+
+  test("does not say it for a flow that is started", () => {
+    expect(render("implement")).not.toContain("まだ起動されません");
+  });
+
+  test.each(["pipeline", "implement", "pr_fix", "design"])(
+    "notes under %s that settings or limits can stop a start",
+    (name) => {
+      expect(render(name)).toContain(
+        "設定や試行の上限により、起動しない場合があります。",
+      );
+    },
+  );
+
+  test.each(["pr_review", "audit"])("adds no note under %s", (name) => {
+    expect(render(name)).not.toContain("起動しない場合があります");
+  });
+
+  test("notes once, also in the narrow presentation", () => {
+    expect(
+      countOf(
+        render("pipeline", { presentation: "list" }),
+        "起動しない場合があります",
+      ),
+    ).toBe(1);
   });
 
   test("shows no mark of implement_enabled on an exit", () => {
@@ -194,7 +246,7 @@ describe("FlowDiagramFrame: the state of a running job", () => {
 
   test("names the link of a step by the step", () => {
     expect(render("pipeline", { progress: steps })).toContain(
-      "generateのログと結果を見る",
+      "要件定義の生成(Claude)(generate)のログと結果を見る",
     );
   });
 
@@ -320,20 +372,50 @@ describe("FlowDiagramFrame: the narrow presentation", () => {
   });
 
   test("groups the entries that come from the step of another flow in one item", () => {
-    expect(render("pipeline", { presentation: "list" })).toContain(
-      "他のflowのステップ: design、implement、manual_intake、pr_fix",
+    expect(plain(render("pipeline", { presentation: "list" }))).toContain(
+      "他のflowのステップ: manual_intake",
     );
   });
 
-  test("does not list the grouped flows one by one", () => {
-    expect(render("pipeline", { presentation: "list" })).not.toContain(
-      "designのステップ",
+  test("groups the entries that send work back in one item", () => {
+    expect(plain(render("pipeline", { presentation: "list" }))).toContain(
+      "他のflowからの差し戻し: design、implement、pr_fix",
     );
   });
 
-  test("keeps the entry from a rejection apart from the group", () => {
+  test("links the flows of the group to their diagrams", () => {
     expect(render("pipeline", { presentation: "list" })).toContain(
+      'href="/jobs/flows/design"',
+    );
+  });
+
+  test("links the entry from the approval of another flow to its diagram", () => {
+    expect(render("implement", { presentation: "list" })).toContain(
+      'href="/jobs/flows/pipeline"',
+    );
+  });
+
+  test("does not list the entry back from the flow itself", () => {
+    expect(plain(render("pipeline", { presentation: "list" }))).not.toContain(
       "pipelineの却下",
+    );
+  });
+
+  test("writes the step each exit comes from", () => {
+    expect(plain(render("pipeline", { presentation: "list" }))).toContain(
+      "request_approvalから",
+    );
+  });
+
+  test("does not link the exit back to the flow itself", () => {
+    expect(render("pipeline", { presentation: "list" })).not.toContain(
+      'href="/jobs/flows/pipeline"',
+    );
+  });
+
+  test("does not mark a conditional step in the static list", () => {
+    expect(render("pipeline", { presentation: "list" })).not.toContain(
+      "条件で飛ぶ",
     );
   });
 
@@ -361,9 +443,12 @@ describe("FlowDiagramFrame: the narrow presentation", () => {
     ).toContain(`href="/jobs/${STEP_JOB}"`);
   });
 
-  test("marks a conditional step in the list", () => {
-    expect(render("pipeline", { presentation: "list" })).toContain(
-      "条件で飛ぶ",
-    );
+  test("marks a conditional step in the list when a job overlays", () => {
+    expect(
+      render("pipeline", {
+        presentation: "list",
+        progress: [step("prepare", "success")],
+      }),
+    ).toContain("条件で飛ぶ");
   });
 });

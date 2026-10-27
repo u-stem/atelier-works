@@ -27,6 +27,7 @@ function flow(name: string, overrides: Record<string, unknown> = {}) {
     steps: [step("prepare"), step("finish")],
     entries: [{ kind: "human", label: "人" }],
     exits: [],
+    unwiredEntries: [],
     ...overrides,
   };
 }
@@ -185,6 +186,118 @@ describe("parseFlowsData", () => {
           schedules: [
             { name: "a", summary: "x", flows: [] },
             { name: "a", summary: "y", flows: [] },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseFlowsData: the rework and the entries that are not drawn", () => {
+  test("accepts an exit that sends work back", () => {
+    expect(
+      parseFlowsData(
+        valid({
+          flows: [
+            flow("pipeline", {
+              exits: [{ flow: "pipeline", step: "finish", via: "rework" }],
+            }),
+          ],
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  test("accepts an entry from a flow that sends work back", () => {
+    expect(
+      parseFlowsData(
+        valid({
+          flows: [
+            flow("pipeline", {
+              entries: [{ kind: "flow", flow: "pipeline", via: "rework" }],
+            }),
+          ],
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  test("reads the caller of a script entry", () => {
+    const data = parseFlowsData(
+      valid({
+        flows: [
+          flow("pipeline", {
+            entries: [{ kind: "script", name: "a", caller: "b" }],
+          }),
+        ],
+      }),
+    );
+
+    expect(data?.flows[0]?.entries).toEqual([
+      { kind: "script", name: "a", caller: "b" },
+    ]);
+  });
+
+  test("accepts a script entry without a caller", () => {
+    expect(
+      parseFlowsData(
+        valid({
+          flows: [
+            flow("pipeline", {
+              entries: [{ kind: "script", name: "a", caller: null }],
+            }),
+          ],
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  test("rejects a script entry that says nothing of its caller", () => {
+    expect(
+      parseFlowsData(
+        valid({
+          flows: [
+            flow("pipeline", { entries: [{ kind: "script", name: "a" }] }),
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  test("reads the entries that are not drawn", () => {
+    const data = parseFlowsData(
+      valid({
+        flows: [
+          flow("pipeline", {
+            unwiredEntries: [
+              { kind: "flow", flow: "pipeline", via: "approve" },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    expect(data?.flows[0]?.unwiredEntries).toEqual([
+      { kind: "flow", flow: "pipeline", via: "approve" },
+    ]);
+  });
+
+  test("rejects a flow without the entries that are not drawn", () => {
+    const { unwiredEntries: _omitted, ...rest } = flow("pipeline");
+
+    expect(parseFlowsData(valid({ flows: [rest] }))).toBeNull();
+  });
+
+  test("rejects an entry that is not drawn and comes from an unknown flow", () => {
+    expect(
+      parseFlowsData(
+        valid({
+          flows: [
+            flow("pipeline", {
+              unwiredEntries: [
+                { kind: "flow", flow: "missing", via: "approve" },
+              ],
+            }),
           ],
         }),
       ),

@@ -21,6 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { handlerPathFor } from "../f/factory/lib/approval_support.ts";
+import type { ApprovalRequestKind } from "../f/factory/lib/types.ts";
 import {
   buildFlowGraph,
   buildFlowsData,
@@ -358,7 +359,18 @@ function scheduleDescriptionInputs(): ScheduleDescriptionInput[] {
   });
 }
 
-/** 承認のステップのscriptから、承認を処理するscriptへの対応。処理するscriptが無い種類はnullにする。 */
+/**
+ * 承認のステップのscriptごとに、承認を処理するscriptを引く。
+ * 処理するscriptが無い種類は、`resolve`が投げる既知のエラーのときだけnullにする。
+ */
+export function resolveApprovalHandlers(
+  _steps: Readonly<Record<string, ApprovalRequestKind>>,
+  _resolve: (kind: ApprovalRequestKind) => string,
+): FlowsInput["approvalSteps"] {
+  return {};
+}
+
+/** 承認のステップのscriptから、承認を処理するscriptへの対応。 */
 function approvalHandlers(): FlowsInput["approvalSteps"] {
   return Object.fromEntries(
     Object.entries(APPROVAL_STEPS).map(([script, kind]) => {

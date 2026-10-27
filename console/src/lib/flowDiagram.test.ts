@@ -1,16 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import type { StepViewData } from "../api/jobsQueries.ts";
 import {
+  CONDITIONAL_EDGES_NOTE,
   CONDITIONAL_WORD,
   type DiagramBox,
   type DiagramLayout,
   entryText,
+  exitOriginText,
   exitText,
   exitWord,
   type FlowDiagramModel,
   flowDiagramModel,
+  groupEntriesForList,
+  hasConditionalEdges,
+  isSelfExit,
   layoutFlowDiagram,
+  stepLinkLabel,
   UNKNOWN_STEPS_HEADING,
+  unwiredText,
 } from "./flowDiagram.ts";
 import { FIT_CHROME_WIDTH, graphPresentation } from "./flowGraphFit.ts";
 import { FLOWS_DATA, type FlowDefinition, findFlow } from "./flowsData.ts";
@@ -150,6 +157,95 @@ describe("flowDiagramModel", () => {
   });
 });
 
+describe("the overlay of a model", () => {
+  test("has no overlay when nothing overlays", () => {
+    expect(flowDiagramModel(FLOW, null).overlay).toBe(false);
+  });
+
+  test("has an overlay when a job overlays, even without steps", () => {
+    expect(flowDiagramModel(FLOW, []).overlay).toBe(true);
+  });
+});
+
+describe("hasConditionalEdges", () => {
+  test.each(["pipeline", "implement", "pr_fix", "design"])(
+    "is true for %s, which has an edge that settings or limits decide",
+    (name) => {
+      expect(hasConditionalEdges(realFlow(name))).toBe(true);
+    },
+  );
+
+  test.each(["pr_review", "audit", "dependabot", "manual_intake"])(
+    "is false for %s",
+    (name) => {
+      expect(hasConditionalEdges(realFlow(name))).toBe(false);
+    },
+  );
+
+  test("writes the note", () => {
+    expect(CONDITIONAL_EDGES_NOTE).toBe(
+      "設定や試行の上限により、起動しない場合があります。",
+    );
+  });
+});
+
+describe("groupEntriesForList", () => {
+  const grouped = groupEntriesForList(realFlow("pipeline"));
+
+  test("gathers the flows whose step starts the flow", () => {
+    expect(grouped.launchFlows).toEqual(["manual_intake"]);
+  });
+
+  test("gathers the flows that send work back", () => {
+    expect(grouped.reworkFlows).toEqual(["design", "implement", "pr_fix"]);
+  });
+
+  test("leaves out the entry from the flow itself", () => {
+    expect(
+      grouped.entries.filter(
+        (entry) => entry.kind === "flow" && entry.flow === "pipeline",
+      ),
+    ).toEqual([]);
+  });
+
+  test("keeps the schedule and the human entries", () => {
+    expect(grouped.entries.map((entry) => entry.kind).sort()).toEqual([
+      "human",
+      "schedule",
+    ]);
+  });
+
+  test("keeps the entry from the approval of another flow", () => {
+    expect(groupEntriesForList(realFlow("implement")).entries).toContainEqual({
+      kind: "flow",
+      flow: "pipeline",
+      via: "approve",
+    });
+  });
+});
+
+describe("isSelfExit", () => {
+  test("is true for the exit back to the flow itself", () => {
+    expect(
+      isSelfExit(realFlow("pipeline"), {
+        flow: "pipeline",
+        step: "request_approval",
+        via: "reject",
+      }),
+    ).toBe(true);
+  });
+
+  test("is false for the exit to another flow", () => {
+    expect(
+      isSelfExit(realFlow("pipeline"), {
+        flow: "implement",
+        step: "request_approval",
+        via: "approve",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("the words", () => {
   test("names the conditional step", () => {
     expect(CONDITIONAL_WORD).toBe("条件で飛ぶ");
@@ -199,8 +295,54 @@ describe("the words", () => {
     ["launch", "次に起動"],
     ["approve", "承認の後"],
     ["reject", "却下の後"],
+    ["rework", "差し戻し"],
   ] as const)("names the way %s of an exit", (via, word) => {
     expect(exitWord(via)).toBe(word);
+  });
+
+  test("writes the entry from a flow that sends work back", () => {
+    expect(entryText({ kind: "flow", flow: "implement", via: "rework" })).toBe(
+      "implementの差し戻し",
+    );
+  });
+
+  test("writes a script entry with the script that calls it", () => {
+    expect(
+      entryText({ kind: "script", name: "stale", caller: "self_update" }),
+    ).toBe("script stale(self_updateから起動)");
+  });
+
+  test("writes an exit that sends work back", () => {
+    expect(exitText({ flow: "pipeline", step: "x", via: "rework" })).toBe(
+      "差し戻し: pipeline",
+    );
+  });
+
+  test("writes the step an exit comes from", () => {
+    expect(
+      exitOriginText({
+        flow: "pipeline",
+        step: "request_approval",
+        via: "reject",
+      }),
+    ).toBe("request_approvalから");
+  });
+
+  test("writes an entry that does not start the flow yet", () => {
+    expect(
+      unwiredText({ kind: "flow", flow: "pipeline", via: "approve" }),
+    ).toBe("pipelineの承認からは、まだ起動されません。");
+  });
+
+  test("labels the link of a step with its summary and id", () => {
+    expect(
+      stepLinkLabel({
+        id: "generate",
+        summary: "要件定義の生成",
+        scriptPath: "f/factory/steps/x",
+        conditional: false,
+      }),
+    ).toBe("要件定義の生成(generate)のログと結果を見る");
   });
 
   test("writes an exit with the way and the next flow", () => {

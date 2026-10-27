@@ -24,6 +24,8 @@ import {
   APPROVAL_OUTCOMES,
   APPROVAL_STEPS,
   LAUNCH_EDGES,
+  REWORK_LAUNCH_EDGES,
+  SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
 } from "../../scripts/launch-graph.ts";
 
@@ -225,68 +227,24 @@ describe("the exits and the launch edges", () => {
     ).toEqual([]);
   });
 
-  test("the unwired edge stays unwired while buildApprovedBranchDeps passes startDesign null", () => {
-    const item: WorkItem = {
-      id: 7,
-      cycle: 1,
-      source: "issue",
-      kind: "issue",
-      owner: "octo",
-      repo: "widgets",
-      issue_number: 42,
-      issue_url: "https://github.com/octo/widgets/issues/42",
-      pr_number: null,
-      title: "t",
-      body: "b",
-      status: "awaiting_approval",
-      attempt: 1,
-      claimed_by: null,
-      flow_job_id: null,
-      resume_url: null,
-      cancel_url: null,
-      head_sha: null,
-      last_review_id: null,
-      last_comment_id: null,
-      last_review_comment_id: null,
-      observed_review_id: null,
-      observed_comment_id: null,
-      observed_review_comment_id: null,
-      fix_round: 0,
-      parent_work_item_id: null,
-      branch: null,
-      pr_url: null,
-      ci_check_id: null,
-      conflict_check_id: null,
-      conflict_episode: null,
-      design_attempt: 0,
-      created_at: new Date("2026-10-26T00:00:00Z"),
-      updated_at: new Date("2026-10-26T00:00:00Z"),
-    };
-    const context: ApprovedBranchContext = {
-      workItem: item,
-      issueNumber: 42,
-      attempt: 1,
-      client: {
-        run: async () => {
-          throw new Error("the builder must not call GitHub");
-        },
-        ghToken: "token",
-      },
-      viewerLogin: "factory-bot",
-      webhookUrl: "",
-      log: { info() {}, warn() {}, error() {} },
-    };
-    const deps = buildApprovedBranchDeps(
-      {
-        implement_enabled: true,
-        windmill_public_url: "http://127.0.0.1:8080",
-        instance_name: "local",
-      },
-      context,
-    );
+  test.each([true, false])(
+    "buildApprovedBranchDeps passes startDesign null with implement_enabled %p, so the design edge stays unwired",
+    (implementEnabled) => {
+      expect(depsFor(implementEnabled).startDesign).toBeNull();
+    },
+  );
 
-    expect(deps.startDesign).toBeNull();
-  });
+  test.each([
+    [true, false],
+    [false, true],
+  ])(
+    "buildApprovedBranchDeps with implement_enabled %p starts implement only when it is on (null is %p)",
+    (implementEnabled, startsNothing) => {
+      expect(depsFor(implementEnabled).startImplement === null).toBe(
+        startsNothing,
+      );
+    },
+  );
 });
 
 function handlerOf(kind: string): string | null {
@@ -326,21 +284,18 @@ describe("the approval steps", () => {
       .map((script) => handlerOf(APPROVAL_STEPS[script] ?? ""))
       .filter((handler) => handler !== null);
 
-    expect(handlers.every((handler) => handler in APPROVAL_OUTCOMES)).toBe(
-      true,
-    );
+    expect(
+      handlers.every((handler) => Object.hasOwn(APPROVAL_OUTCOMES, handler)),
+    ).toBe(true);
   });
 
-  test("every edge of a handler has an outcome or is listed as unwired", () => {
-    const unlisted = LAUNCH_EDGES.filter(
-      (edge) => edge.from in APPROVAL_OUTCOMES,
+  test("every edge of a handler has an outcome, wired or not", () => {
+    const unlisted = LAUNCH_EDGES.filter((edge) =>
+      Object.hasOwn(APPROVAL_OUTCOMES, edge.from),
     ).filter(
       (edge) =>
         !(APPROVAL_OUTCOMES[edge.from] ?? []).some(
           (outcome) => outcome.to === edge.to,
-        ) &&
-        !UNWIRED_LAUNCH_EDGES.some(
-          (other) => other.from === edge.from && other.to === edge.to,
         ),
     );
 
@@ -378,4 +333,183 @@ describe("the schedules in the data", () => {
       data.schedules.find((item) => item.name === "cleanup_db")?.flows,
     ).toEqual([]);
   });
+});
+
+/** 承認の分岐の依存を、implement_enabledを変えて組み立てる。組み立てるだけで、外には触れない。 */
+function depsFor(implementEnabled: boolean) {
+  const item: WorkItem = {
+    id: 7,
+    cycle: 1,
+    source: "issue",
+    kind: "issue",
+    owner: "octo",
+    repo: "widgets",
+    issue_number: 42,
+    issue_url: "https://github.com/octo/widgets/issues/42",
+    pr_number: null,
+    title: "t",
+    body: "b",
+    status: "awaiting_approval",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 0,
+    parent_work_item_id: null,
+    branch: null,
+    pr_url: null,
+    ci_check_id: null,
+    conflict_check_id: null,
+    conflict_episode: null,
+    design_attempt: 0,
+    created_at: new Date("2026-10-26T00:00:00Z"),
+    updated_at: new Date("2026-10-26T00:00:00Z"),
+  };
+  const context: ApprovedBranchContext = {
+    workItem: item,
+    issueNumber: 42,
+    attempt: 1,
+    client: {
+      run: async () => {
+        throw new Error("the builder must not call GitHub");
+      },
+      ghToken: "token",
+    },
+    viewerLogin: "factory-bot",
+    webhookUrl: "",
+    log: { info() {}, warn() {}, error() {} },
+  };
+  return buildApprovedBranchDeps(
+    {
+      implement_enabled: implementEnabled,
+      windmill_public_url: "http://127.0.0.1:8080",
+      instance_name: "local",
+    },
+    context,
+  );
+}
+
+describe("the rework exits", () => {
+  const sourceOf = (script: string): string =>
+    readFileSync(join(FACTORY_DIR, `${script}.ts`), "utf8");
+
+  test("every rework edge is an edge of the launch table", () => {
+    expect(
+      REWORK_LAUNCH_EDGES.filter(
+        (edge) =>
+          !LAUNCH_EDGES.some(
+            (other) => other.from === edge.from && other.to === edge.to,
+          ),
+      ),
+    ).toEqual([]);
+  });
+
+  test.each(REWORK_LAUNCH_EDGES.map((edge) => edge.from))(
+    "%s sends work back because of a requirements gap",
+    (from) => {
+      expect(sourceOf(from)).toContain("requirements_gap");
+    },
+  );
+
+  test("a step that starts pipeline without a rework edge reports no requirements gap", () => {
+    const plain = LAUNCH_EDGES.filter(
+      (edge) =>
+        edge.kind === "script" &&
+        edge.from.startsWith("steps/") &&
+        edge.to === "pipeline" &&
+        !REWORK_LAUNCH_EDGES.some((other) => other.from === edge.from),
+    ).filter((edge) => sourceOf(edge.from).includes("requirements_gap"));
+
+    expect(plain).toEqual([]);
+  });
+
+  test("the data draws each rework edge as a rework exit", () => {
+    const missing = REWORK_LAUNCH_EDGES.filter(
+      (edge) =>
+        !data.flows.some((flow) =>
+          flow.exits.some(
+            (exit) =>
+              exit.flow === edge.to &&
+              exit.via === "rework" &&
+              flow.steps.some(
+                (step) =>
+                  step.id === exit.step &&
+                  relative(step.scriptPath) === edge.from,
+              ),
+          ),
+        ),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  test("the data draws no plain launch exit for a rework edge", () => {
+    const plain = data.flows.flatMap((flow) =>
+      flow.exits
+        .filter((exit) => exit.via === "launch")
+        .filter((exit) =>
+          REWORK_LAUNCH_EDGES.some(
+            (edge) =>
+              edge.to === exit.flow &&
+              flow.steps.some(
+                (step) =>
+                  step.id === exit.step &&
+                  relative(step.scriptPath) === edge.from,
+              ),
+          ),
+        ),
+    );
+
+    expect(plain).toEqual([]);
+  });
+
+  test("pipeline has a rework entry from every flow that sends work back", () => {
+    const flows = new Set(
+      data.flows
+        .filter((flow) => flow.exits.some((exit) => exit.via === "rework"))
+        .map((flow) => flow.name),
+    );
+    const entries = new Set(
+      flowOf(data, "pipeline").entries.flatMap((entry) =>
+        entry.kind === "flow" && entry.via === "rework" ? [entry.flow] : [],
+      ),
+    );
+
+    expect([...flows].sort()).toEqual([...entries].sort());
+  });
+});
+
+describe("the entries that are not drawn yet", () => {
+  test("design records that the approval of pipeline does not start it yet", () => {
+    expect(flowOf(data, "design").unwiredEntries).toEqual([
+      { kind: "flow", flow: "pipeline", via: "approve" },
+    ]);
+  });
+});
+
+describe("the script entries", () => {
+  const scriptEntries = data.flows.flatMap((flow) =>
+    flow.entries.flatMap((entry) => (entry.kind === "script" ? [entry] : [])),
+  );
+
+  test("every script entry names the script that calls it", () => {
+    expect(scriptEntries.filter((entry) => entry.caller === null)).toEqual([]);
+  });
+
+  test.each(Object.entries(SCRIPT_CALLERS))(
+    "%s is called by %s in its source",
+    (script, caller) => {
+      expect(readFileSync(join(FACTORY_DIR, `${caller}.ts`), "utf8")).toContain(
+        `"f/factory/${script}"`,
+      );
+    },
+  );
 });

@@ -190,17 +190,28 @@ const FLOW: FlowDefinition = {
   entries: [
     { kind: "schedule", name: BAD },
     { kind: "human", label: BAD },
-    { kind: "script", name: BAD },
+    { kind: "script", name: BAD, caller: BAD },
     { kind: "flow", flow: "pipeline", via: "reject" },
+    { kind: "flow", flow: "pipeline", via: "rework" },
   ],
-  exits: [{ flow: "pipeline", step: BAD, via: "approve" }],
+  exits: [
+    { flow: "pipeline", step: BAD, via: "approve" },
+    { flow: "pipeline", step: BAD, via: "rework" },
+  ],
+  unwiredEntries: [{ kind: "flow", flow: "pipeline", via: "approve" }],
 };
 
 const FLOWS: FlowsData = { flows: [FLOW], schedules: [] };
 
 /** 定義のステップと、定義に無いステップの両方に、見えない文字を入れたジョブのステップ。 */
 const FLOW_STEPS = [
-  { id: BAD, state: BAD, job_id: BAD, iterations: null, skipped: false },
+  {
+    id: BAD,
+    state: BAD,
+    job_id: DETAIL_ID,
+    iterations: null,
+    skipped: false,
+  },
   { id: `${BAD}x`, state: BAD, job_id: BAD, iterations: null, skipped: false },
 ];
 
@@ -456,14 +467,24 @@ describe("the flow diagram in the coverage", () => {
     expect(draw("the flow diagram")).toContain("定義に無いステップ");
   });
 
-  test("draws the steps of the flow in the list", () => {
+  test("draws the steps the definition lacks in the list too", () => {
     expect(draw("the flow diagram in the list")).toContain(
       "定義に無いステップ",
     );
   });
 
+  test("draws the ordered list of the steps in the list", () => {
+    expect(draw("the flow diagram in the list")).toContain("<ol");
+  });
+
   test("draws the diagram of the flow screen", () => {
-    expect(draw("the flow screen")).toContain("<svg");
+    expect(draw("the flow screen")).toContain(
+      'role="group" aria-label="pipelineの図"',
+    );
+  });
+
+  test("draws the link of a step that has a job, so the label of the link is checked", () => {
+    expect(draw("the flow diagram")).toContain(`href="/jobs/${DETAIL_ID}"`);
   });
 });
 

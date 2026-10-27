@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { handlerPathFor } from "../../f/factory/lib/approval_support.ts";
 import {
   compareTaskNames,
   FLOW_GRAPH_FILE,
@@ -12,6 +13,7 @@ import {
   renderFlowsFile,
   renderSchedules,
   replaceGeneratedBlocks,
+  resolveApprovalHandlers,
   runDocsGen,
   taskNamesInTable,
 } from "../../scripts/docs-gen.ts";
@@ -223,5 +225,40 @@ describe("renderFlows: prefixes", () => {
     const table = renderFlows([{ name: "x", summary }], [], () => "");
 
     expect(table.split("\n")[2]).toBe(`| \`x\` | なし | ${expected} |`);
+  });
+});
+
+describe("resolveApprovalHandlers", () => {
+  const steps = {
+    "steps/pipeline_request_approval": "requirements",
+    "steps/design_request_approval": "design",
+  } as const;
+
+  test("gives the handler of a kind that has one, without the factory folder", () => {
+    const handlers = resolveApprovalHandlers(steps, (kind) =>
+      kind === "design"
+        ? handlerPathFor("design")
+        : "f/factory/steps/requirements_apply",
+    );
+
+    expect(handlers["steps/pipeline_request_approval"]).toBe(
+      "steps/requirements_apply",
+    );
+  });
+
+  test("gives null for the kind that handlerPathFor says has no handler", () => {
+    const handlers = resolveApprovalHandlers(steps, (kind) =>
+      handlerPathFor(kind),
+    );
+
+    expect(handlers["steps/design_request_approval"]).toBeNull();
+  });
+
+  test("throws again for an error that is not the known one", () => {
+    expect(() =>
+      resolveApprovalHandlers(steps, () => {
+        throw new Error("disk is gone");
+      }),
+    ).toThrow("disk is gone");
   });
 });

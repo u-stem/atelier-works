@@ -67,6 +67,18 @@ describe("FlowScreenView: a known flow", () => {
     expect(render({ width: 400 })).not.toContain('role="group"');
   });
 
+  test("draws nothing of the diagram before the width is measured", () => {
+    expect(render({ width: 0 })).not.toContain('role="group"');
+  });
+
+  test("draws no list either before the width is measured", () => {
+    expect(render({ width: 0 })).not.toContain("入口");
+  });
+
+  test("keeps the heading before the width is measured", () => {
+    expect(render({ width: 0 })).toMatch(/<h1[^>]*>pipeline<\/h1>/);
+  });
+
   test("shows no state of a job, because the diagram is static", () => {
     expect(render()).not.toContain("実行中");
   });

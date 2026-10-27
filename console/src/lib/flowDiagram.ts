@@ -105,6 +105,40 @@ export function diagramLabel(flowName: string): string {
   return `${flowName}の図`;
 }
 
+/** 設定や上限で起動が決まる辺を持つflowの図の下に出す文。 */
+export const CONDITIONAL_EDGES_NOTE = "";
+
+/** 設定や上限で起動が決まる辺を、入口か出口に持つか。 */
+export function hasConditionalEdges(_flow: FlowDefinition): boolean {
+  return false;
+}
+
+/** 一覧に出す入口の分け方。 */
+export type ListEntries = {
+  readonly launchFlows: readonly string[];
+  readonly reworkFlows: readonly string[];
+  readonly entries: readonly FlowEntry[];
+};
+
+export function groupEntriesForList(_flow: FlowDefinition): ListEntries {
+  return { launchFlows: [], reworkFlows: [], entries: [] };
+}
+
+/** 出口が、そのflow自身へ戻るものか。 */
+export function isSelfExit(_flow: FlowDefinition, _exit: FlowExit): boolean {
+  return false;
+}
+
+/** 一覧で出口に添える、出口がつくステップの文。 */
+export function exitOriginText(_exit: FlowExit): string {
+  return "";
+}
+
+/** まだ起動されない入口の文。 */
+export function unwiredText(_entry: FlowEntry): string {
+  return "";
+}
+
 /** 子のジョブを持つステップのリンクの名前。 */
 export function stepLinkLabel(stepId: string): string {
   return `${stepId}のログと結果を見る`;

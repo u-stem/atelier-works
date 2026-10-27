@@ -263,6 +263,7 @@ const FLOWS_INPUT: FlowsInput = {
     { from: "steps/requirements_apply", to: "design", kind: "script" },
     { from: "steps/design_generate", to: "pipeline", kind: "script" },
     { from: "steps/pr_fix_finish", to: "pipeline", kind: "script" },
+    { from: "steps/manual_intake_register", to: "pipeline", kind: "script" },
     { from: "form", to: "manual_intake", kind: "human" },
   ],
   humanOperations: { form: "人がフォームから実行" },
@@ -351,8 +352,14 @@ const FLOWS_INPUT: FlowsInput = {
     "steps/requirements_apply": [
       { to: "implement", outcome: "approve" },
       { to: "pipeline", outcome: "reject" },
+      { to: "design", outcome: "approve" },
     ],
   },
+  reworkEdges: [
+    { from: "steps/design_generate", to: "pipeline" },
+    { from: "steps/pr_fix_finish", to: "pipeline" },
+  ],
+  scriptCallers: {},
   unwiredEdges: [
     { from: "steps/requirements_apply", to: "design", kind: "script" },
   ],
@@ -410,6 +417,22 @@ describe("buildFlowsData: entries", () => {
   test("names the flow of a launching step as an entry", () => {
     expect(flowOf(FLOWS_INPUT, "pipeline")?.entries).toContainEqual({
       kind: "flow",
+      flow: "manual_intake",
+      via: "launch",
+    });
+  });
+
+  test("names the flow that sends work back as a rework entry", () => {
+    expect(flowOf(FLOWS_INPUT, "pipeline")?.entries).toContainEqual({
+      kind: "flow",
+      flow: "pr_fix",
+      via: "rework",
+    });
+  });
+
+  test("does not name a rework entry as a plain launch", () => {
+    expect(flowOf(FLOWS_INPUT, "pipeline")?.entries).not.toContainEqual({
+      kind: "flow",
       flow: "pr_fix",
       via: "launch",
     });
@@ -442,7 +465,30 @@ describe("buildFlowsData: entries", () => {
     };
 
     expect(flowOf(input, "pr_fix")?.entries).toEqual([
-      { kind: "script", name: "self_retry" },
+      { kind: "script", name: "self_retry", caller: null },
+    ]);
+  });
+
+  test("names the script that calls a launching script as the caller", () => {
+    const input: FlowsInput = {
+      ...FLOWS_INPUT,
+      edges: [{ from: "self_retry", to: "pr_fix", kind: "script" }],
+      scriptCallers: { self_retry: "self_update" },
+    };
+
+    expect(flowOf(input, "pr_fix")?.entries).toEqual([
+      { kind: "script", name: "self_retry", caller: "self_update" },
+    ]);
+  });
+
+  test("does not give a caller to a script that has a schedule", () => {
+    const input: FlowsInput = {
+      ...FLOWS_INPUT,
+      scriptCallers: { poll_prs: "self_update" },
+    };
+
+    expect(flowOf(input, "pr_fix")?.entries).toEqual([
+      { kind: "schedule", name: "poll_prs" },
     ]);
   });
 
@@ -477,7 +523,7 @@ describe("buildFlowsData: entries", () => {
     };
 
     expect(flowOf(input, "pr_fix")?.entries).toEqual([
-      { kind: "script", name: "poll_prs" },
+      { kind: "script", name: "poll_prs", caller: null },
     ]);
   });
 
@@ -505,12 +551,66 @@ describe("buildFlowsData: entries", () => {
   test("does not draw an unwired edge as an entry", () => {
     expect(flowOf(FLOWS_INPUT, "design")?.entries).toEqual([]);
   });
+
+  test("keeps the unwired edge apart as an entry that does not start the flow yet", () => {
+    expect(flowOf(FLOWS_INPUT, "design")?.unwiredEntries).toEqual([
+      { kind: "flow", flow: "pipeline", via: "approve" },
+    ]);
+  });
+
+  test("gives a flow without an unwired edge no unwired entries", () => {
+    expect(flowOf(FLOWS_INPUT, "implement")?.unwiredEntries).toEqual([]);
+  });
+
+  test("does not read an inherited key of a table as an operation of a script", () => {
+    const input: FlowsInput = {
+      ...FLOWS_INPUT,
+      edges: [{ from: "constructor", to: "pr_fix", kind: "script" }],
+    };
+
+    expect(flowOf(input, "pr_fix")?.entries).toEqual([
+      { kind: "script", name: "constructor", caller: null },
+    ]);
+  });
+
+  test("does not read an inherited key of a table as the name of an operation", () => {
+    const input: FlowsInput = {
+      ...FLOWS_INPUT,
+      edges: [{ from: "toString", to: "manual_intake", kind: "human" }],
+    };
+
+    expect(flowOf(input, "manual_intake")?.entries).toEqual([
+      { kind: "human", label: "toString" },
+    ]);
+  });
 });
 
 describe("buildFlowsData: exits", () => {
   test("puts the exit of a launching step on that step", () => {
+    expect(flowOf(FLOWS_INPUT, "manual_intake")?.exits).toEqual([
+      { flow: "pipeline", step: "register", via: "launch" },
+    ]);
+  });
+
+  test("marks the exit that sends work back as a rework exit", () => {
     expect(flowOf(FLOWS_INPUT, "pr_fix")?.exits).toEqual([
-      { flow: "pipeline", step: "pr_fix_finish", via: "launch" },
+      { flow: "pipeline", step: "pr_fix_finish", via: "rework" },
+    ]);
+  });
+
+  test("keeps the exit of a script named like an inherited key", () => {
+    const input: FlowsInput = {
+      ...FLOWS_INPUT,
+      edges: [{ from: "constructor", to: "pipeline", kind: "script" }],
+      flows: FLOWS_INPUT.flows.map((flow) =>
+        flow.name === "pr_fix"
+          ? { ...flow, steps: [stepInput("a", "constructor")] }
+          : flow,
+      ),
+    };
+
+    expect(flowOf(input, "pr_fix")?.exits).toEqual([
+      { flow: "pipeline", step: "a", via: "launch" },
     ]);
   });
 
@@ -542,7 +642,15 @@ describe("buildFlowsData: exits", () => {
   });
 
   test("throws when an edge of the approval handler has no outcome", () => {
-    const input: FlowsInput = { ...FLOWS_INPUT, unwiredEdges: [] };
+    const input: FlowsInput = {
+      ...FLOWS_INPUT,
+      approvalOutcomes: {
+        "steps/requirements_apply": [
+          { to: "implement", outcome: "approve" },
+          { to: "pipeline", outcome: "reject" },
+        ],
+      },
+    };
 
     expect(() => buildFlowsData(input)).toThrow(
       "approval handler edge has no outcome: steps/requirements_apply -> design",
