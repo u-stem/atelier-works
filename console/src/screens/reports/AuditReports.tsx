@@ -54,15 +54,27 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
   );
 }
 
-/** 読み込み中の形。 */
+/** 骨組みの行を区別する鍵。行は並びが変わらない固定の数で、入れ替えも挿入もない。 */
+const AUDIT_ROW_KEYS = ["a", "b", "c"] as const;
+
+/**
+ * 読み込み中の形。外側の枠の中に、実物の行(題、要約、内訳の3行)を3つ並べる。
+ * 寸法は、実機で実物を描いて測った値で、1行は99px(線を含む)。
+ */
 export const AUDIT_LIST_LOADING_SHAPE: LoadingShape = {
-  className: "space-y-2 px-6 py-4",
+  className: "flex flex-col",
   node: (
     <>
-      <Skeleton className="h-4 w-1/2" />
-      <Skeleton className="h-3 w-4/5" />
-      <Skeleton className="h-4 w-1/2" />
-      <Skeleton className="h-3 w-4/5" />
+      {AUDIT_ROW_KEYS.map((key) => (
+        <div
+          key={key}
+          className="flex h-[6.2rem] flex-col justify-center gap-2.5 border-b border-border px-6 last:border-b-0"
+        >
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-3.5 w-3/4" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
+      ))}
     </>
   ),
 };

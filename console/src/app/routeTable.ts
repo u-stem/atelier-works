@@ -17,7 +17,7 @@ export function titleHandle(title: RouteTitle): { title: RouteTitle } {
   return { title };
 }
 
-/** 副題の有無から、最初の画面を読み込む間に出す部品を選ぶ関数。 */
+/** 副題の有無と戻り先の行の種類から、最初の画面を読み込む間に出す部品を選ぶ関数。 */
 export type HydrateFallbackFor = (
   hasSubtitle: boolean,
   trail?: ScreenTrail,
@@ -27,10 +27,11 @@ export type HydrateFallbackFor = (
 function withHydrateFallback(
   fallbackFor: HydrateFallbackFor | undefined,
   hasSubtitle: boolean | undefined,
+  trail?: ScreenTrail,
 ): { HydrateFallback: ComponentType } | Record<string, never> {
   return fallbackFor === undefined
     ? {}
-    : { HydrateFallback: fallbackFor(hasSubtitle === true) };
+    : { HydrateFallback: fallbackFor(hasSubtitle === true, trail) };
 }
 
 /**
@@ -50,7 +51,7 @@ function toRoute(
     handle: titleHandle(title),
     lazy: route.lazy,
     ErrorBoundary: route.ErrorBoundary ?? fallbackBoundary,
-    ...withHydrateFallback(fallbackFor, route.subtitle),
+    ...withHydrateFallback(fallbackFor, route.subtitle, route.trail),
   };
   return route.children === undefined
     ? base

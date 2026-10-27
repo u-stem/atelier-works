@@ -4,19 +4,26 @@ import { useNow } from "../../app/useNow.ts";
 import {
   LoadingGate,
   type LoadingShape,
+  SkeletonListCard,
 } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
+import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "./QueryFailure.tsx";
 import { RequirementsIndexList } from "./RequirementsIndexList.tsx";
 
 /**
- * 読み込み中の形。一覧の1行は約4.75rem(上下の余白と、題と補足の2行)で、1ページは10行になる。
- * 画面の高さに入る行の数で目安にする。値は見積もりで、実機で測り直して合わせる。
+ * 読み込み中の形。実物の絞り込みの行(入力欄36px)と、枠で囲んだ一覧を並べる。
+ * 寸法は、実機で実物を描いて測った値で、一覧の1行は広い幅で81px、狭い幅(題が折り返す幅)で106px。
+ * 行の数は、画面の高さに入る目安で、実物の1ページ(10行)より少ない。
  */
 export const REQUIREMENTS_LOADING_SHAPE: LoadingShape = {
-  rows: 6,
-  rowClassName: "h-[4.75rem] w-full rounded-md",
-  gapClassName: "gap-2",
+  className: "flex flex-col gap-4",
+  node: (
+    <>
+      <Skeleton className="h-9 w-80 max-w-full rounded-lg" />
+      <SkeletonListCard rows={6} rowClassName="h-[6.6rem] sm:h-[5.05rem]" />
+    </>
+  ),
 };
 
 /**

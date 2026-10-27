@@ -116,7 +116,6 @@ export const SCREENS: readonly Screen[] = [
       (counts?.failures ?? 0) +
       (counts?.notices ?? 0),
     prefetch: noPrefetch,
-    subtitle: true,
     lazy: () =>
       import("../screens/inbox/InboxScreen.tsx").then((module) => ({
         Component: module.InboxScreen,
@@ -139,6 +138,7 @@ export const SCREENS: readonly Screen[] = [
       {
         path: "items/new",
         subtitle: true,
+        trail: "back",
         title: "新規投入",
         lazy: () =>
           import("../screens/items/NewItemScreen.tsx").then((module) => ({
@@ -148,6 +148,7 @@ export const SCREENS: readonly Screen[] = [
       {
         path: "items/:id/requirements",
         subtitle: true,
+        trail: "breadcrumb",
         title: workItemTitle("の要件定義", "要件定義"),
         lazy: () =>
           import("../screens/items/ItemRequirementsScreen.tsx").then(
@@ -157,6 +158,7 @@ export const SCREENS: readonly Screen[] = [
       {
         path: "items/:id",
         subtitle: true,
+        trail: "breadcrumb",
         title: workItemTitle("", "作業項目"),
         lazy: () =>
           import("../screens/items/ItemDetailScreen.tsx").then((module) => ({
@@ -180,6 +182,7 @@ export const SCREENS: readonly Screen[] = [
       {
         path: "reports/audit/:id",
         subtitle: true,
+        trail: "breadcrumb",
         title: workItemTitle("の監査レポート", "監査レポート"),
         lazy: () =>
           import("../screens/reports/AuditReportScreen.tsx").then((module) => ({
@@ -205,6 +208,7 @@ export const SCREENS: readonly Screen[] = [
       {
         path: "jobs/:id",
         subtitle: true,
+        trail: "breadcrumb",
         title: "ジョブの詳細",
         lazy: () =>
           import("../screens/jobs/JobDetailScreen.tsx").then((module) => ({

@@ -21,7 +21,7 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { EmptyNote } from "../system/SystemSection.tsx";
-import { JobList, JobsQueryGate, LIST_LOADING_SHAPE } from "./JobRows.tsx";
+import { JOB_LIST_LOADING_SHAPE, JobList, JobsQueryGate } from "./JobRows.tsx";
 
 /** 履歴の読み込み済みのページと、その取得の状態。 */
 export type HistoryData = {
@@ -226,7 +226,7 @@ export function JobHistory({
         query={history.first}
         title="ジョブの履歴を取得できませんでした"
         loginHint="上のバナーからログインすると、ジョブの履歴を表示します。"
-        shape={LIST_LOADING_SHAPE}
+        shape={JOB_LIST_LOADING_SHAPE}
       >
         {() => (
           <>

@@ -2,6 +2,7 @@ import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { TimeText } from "../components/TimeText.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { Skeleton } from "../components/ui/skeleton.tsx";
 import {
   Tooltip,
   TooltipContent,
@@ -28,6 +29,7 @@ export function PageHeader({
   title,
   subtitle,
   subtitleMono = false,
+  subtitlePending = false,
   refresh,
   refreshLabel = "この画面を更新",
   actions,
@@ -37,6 +39,11 @@ export function PageHeader({
   subtitle?: string | null;
   /** 副題がID、SHA、ジョブIDのような識別子のとき、等幅で出す。 */
   subtitleMono?: boolean;
+  /**
+   * 副題が取得後に決まるとき、待つ間も副題の行を空けて、骨組みを出す。
+   * 取得後の見出しと同じ高さになり、下の本文が動かない。`subtitle`を渡すと出さない。
+   */
+  subtitlePending?: boolean;
   refresh?: RefreshStatus;
   /** 更新ボタンの名前。更新が画面の一部だけを取り直すときは、取り直す範囲が分かる名前にする。 */
   refreshLabel?: string;
@@ -67,7 +74,17 @@ export function PageHeader({
         >
           {title}
         </h1>
-        {subtitle === undefined || subtitle === null ? null : (
+        {subtitle === undefined || subtitle === null ? (
+          subtitlePending ? (
+            <div
+              data-part="subtitle-pending"
+              aria-hidden="true"
+              className="flex h-[1.3rem] items-center"
+            >
+              <Skeleton className="h-3 w-48" />
+            </div>
+          ) : null
+        ) : (
           <p
             className={cn(
               "text-small text-muted-foreground tabular-nums",

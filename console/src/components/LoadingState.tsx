@@ -132,18 +132,62 @@ export function LoadingGate({
   return <LoadingBody display={display} shape={shape} />;
 }
 
-/** 枠で囲んだ行の並びの骨組み。 */
-export function SkeletonListCard(props: {
+/** 骨組みの行を区別する鍵。行は並びが変わらない固定の数で、入れ替えも挿入もない。 */
+const ROW_KEYS = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] as const;
+
+/**
+ * 枠で囲んだ行の並びの骨組み。実物の一覧(枠、行の間の線、行の高さ)に合わせる。
+ * `rowClassName`に、実機で測った実物の行の高さを渡す。最後の行の下には線を引かない。
+ */
+export function SkeletonListCard({
+  rows,
+  rowClassName,
+  className,
+}: {
   rows: number;
   rowClassName: string;
   className?: string;
 }) {
-  void props;
-  return null;
+  return (
+    <div
+      className={cn(
+        "overflow-hidden rounded-xl border border-border bg-card",
+        className,
+      )}
+    >
+      {ROW_KEYS.slice(0, rows).map((key) => (
+        <div
+          key={key}
+          className={cn(
+            "flex flex-col justify-center gap-2 border-b border-border px-6 last:border-b-0",
+            rowClassName,
+          )}
+        >
+          <Skeleton className="h-4 w-2/5" />
+          <Skeleton className="h-3 w-3/5" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
-/** 見出しと本文の塊で作る節の骨組み。 */
-export function SkeletonSection(props: { block: string; className?: string }) {
-  void props;
-  return null;
+/**
+ * 見出しと本文の塊で作る節の骨組み。見出しの行は、実物の見出し(`text-lead`、27px)の高さにする。
+ * `block`に、実機で測った節の本文の高さを渡す。
+ */
+export function SkeletonSection({
+  block,
+  className,
+}: {
+  block: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex flex-col gap-3 shrink-0", className)}>
+      <div className="flex h-[1.7rem] items-center">
+        <Skeleton className="h-5 w-20" />
+      </div>
+      <Skeleton className={cn("w-full rounded-xl", block)} />
+    </div>
+  );
 }

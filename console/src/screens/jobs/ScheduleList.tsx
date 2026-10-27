@@ -30,7 +30,11 @@ import {
   useScheduleRestore,
   useScheduleStop,
 } from "../system/usePlacement.ts";
-import { JobsQueryGate, LIST_LOADING_SHAPE, UpcomingTime } from "./JobRows.tsx";
+import {
+  JobsQueryGate,
+  SCHEDULE_LOADING_SHAPE,
+  UpcomingTime,
+} from "./JobRows.tsx";
 import {
   ScheduleRestoreDialog,
   ScheduleStopControl,
@@ -159,7 +163,7 @@ export function ScheduleList({
         query={schedules}
         title="スケジュールを取得できませんでした"
         loginHint="上のバナーからログインすると、スケジュールを表示します。"
-        shape={LIST_LOADING_SHAPE}
+        shape={SCHEDULE_LOADING_SHAPE}
       >
         {(data) => (
           <>

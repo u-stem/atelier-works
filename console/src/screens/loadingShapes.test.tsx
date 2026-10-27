@@ -54,7 +54,7 @@ describe("the pipeline skeleton", () => {
   });
 
   test("draws the table on a wide container", () => {
-    expect(html).toContain("hidden @4xl:block");
+    expect(html).toContain("@4xl:block");
   });
 
   test("draws a table row as tall as a measured row of 54px", () => {

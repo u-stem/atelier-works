@@ -49,6 +49,7 @@ describe("docs: the visual rules", () => {
     ["the measured screens are listed", "実物と並べて測った画面"],
     ["the way to measure a skeleton is stated", "getBoundingClientRect"],
     ["the skeleton of the header with a subtitle is stated", "subtitlePending"],
+    ["the mark of the row under the title is named", "`trail`"],
   ])("%s", (_name, text) => {
     expect(DOC).toContain(text);
   });

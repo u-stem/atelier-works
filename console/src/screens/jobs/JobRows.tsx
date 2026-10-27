@@ -21,6 +21,7 @@ import { useNow } from "../../app/useNow.ts";
 import {
   LoadingGate,
   type LoadingShape,
+  SkeletonListCard,
 } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
@@ -303,15 +304,24 @@ export function JobsQueryGate<T>({
   );
 }
 
-/** 読み込み中の形。1行は約3.5remで、よくある件数に合わせる。実機で測り直す。 */
-export const LIST_LOADING_SHAPE: LoadingShape = {
-  rows: 5,
-  rowClassName: "h-14 w-full rounded-md",
-  gapClassName: "gap-2",
+/**
+ * ジョブの行の読み込み中の形。実物と同じ幅(最大56rem)の枠に、行を並べる。
+ * 寸法は、実機で実物を描いて測った値で、1行は74px(線を含む)。
+ * 今のステップを添える行は101pxになるが、よくある行の高さに合わせる。
+ */
+export const JOB_LIST_LOADING_SHAPE: LoadingShape = {
+  className: "max-w-4xl",
+  node: <SkeletonListCard rows={5} rowClassName="h-[4.625rem]" />,
 };
 
-export const JOB_LIST_LOADING_SHAPE: LoadingShape = LIST_LOADING_SHAPE;
-export const SCHEDULE_LOADING_SHAPE: LoadingShape = LIST_LOADING_SHAPE;
+/**
+ * scheduleの行の読み込み中の形。実物と同じ幅の枠に、行を並べる。
+ * 寸法は、実機で実物を描いて測った値で、1行は130px(線を含む。名前、定義、次回と直近、定義との差の4行)。
+ */
+export const SCHEDULE_LOADING_SHAPE: LoadingShape = {
+  className: "max-w-4xl",
+  node: <SkeletonListCard rows={4} rowClassName="h-[8.1rem]" />,
+};
 
 /**
  * 実行中と待ちのタブの本体。実行中と、workerを待つジョブを並べる。
@@ -336,7 +346,7 @@ export function ActiveJobs({
         query={query}
         title="実行中と待ちのジョブを取得できませんでした"
         loginHint="上のバナーからログインすると、実行中と待ちのジョブを表示します。"
-        shape={LIST_LOADING_SHAPE}
+        shape={JOB_LIST_LOADING_SHAPE}
       >
         {(data) => {
           const details: StepDetails = steps?.details ?? new Map();

@@ -80,7 +80,7 @@ describe("PipelineSection while loading", () => {
           pipeline={loadingQuery<PipelineRow[]>()}
         />,
       ),
-    ).toContain("h-12");
+    ).toContain("h-[3.375rem]");
   });
 });
 
