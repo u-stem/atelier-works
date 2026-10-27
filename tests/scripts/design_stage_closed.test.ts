@@ -40,6 +40,55 @@ function productionSources(): string[] {
     .sort();
 }
 
+/** `design_enabled`をキーとして書く形。 */
+const DESIGN_ENABLED_KEY = /\bdesign_enabled\s*:/g;
+
+/**
+ * `design_enabled`をキーに書いてよい本番のファイルと、書く数。
+ * 型の宣言(`lib/types.ts`の`design_enabled: boolean`、`Pick`の中の名前)は、変換で消える。
+ * 変換後に値として書かれているのは、既定値と、要求と門から導く式の2つだけで、どちらも`lib/config.ts`にある。
+ * 呼び出しの側で`{ ...config, design_enabled: ... }`と上書きする迂回は、ここで数が増えて見つかる。
+ */
+const ALLOWED_DESIGN_ENABLED_KEYS: Readonly<Record<string, number>> = {
+  "lib/config.ts": 2,
+};
+
+/** 要件定義の承認の反映の配線に、設定をそのまま渡す呼び出し。宣言は数えない。 */
+const BUILDER_CALL = /(?<!\bfunction\s+)\bbuildApprovedBranchDeps\(config,/g;
+
+/** 実装の入口が、設定の`design_enabled`をそのまま読んで渡す形。 */
+const DESIGN_ENABLED_HANDOFF = /\bdesignEnabled:\s*config\.design_enabled\b/g;
+
+/** 設定を渡す呼び出しの形と、ファイルごとの数。上書きした設定を渡す形にすると、数が減って見つかる。 */
+const WIRING_CALLS: ReadonlyArray<
+  readonly [string, RegExp, Readonly<Record<string, number>>]
+> = [
+  [
+    "buildApprovedBranchDeps(config,",
+    BUILDER_CALL,
+    { "steps/requirements_apply.ts": 1 },
+  ],
+  [
+    "designEnabled: config.design_enabled",
+    DESIGN_ENABLED_HANDOFF,
+    { "retry_work_item.ts": 1, "steps/implement_prepare.ts": 1 },
+  ],
+];
+
+function countOf(code: string, pattern: RegExp): number {
+  return [...code.matchAll(pattern)].length;
+}
+
+/** パターンが出るファイルごとの出現の数(0は含めない)。 */
+function scanCounts(pattern: RegExp): Record<string, number> {
+  const found: Record<string, number> = {};
+  for (const path of productionSources()) {
+    const n = countOf(codeOf(path), pattern);
+    if (n > 0) found[path] = n;
+  }
+  return found;
+}
+
 const WORK_ITEM: WorkItem = {
   id: 7,
   cycle: 1,
@@ -144,6 +193,61 @@ describe("the literal that opens the design stage", () => {
 
   test("reads every production file", () => {
     expect(productionSources().length).toBeGreaterThan(100);
+  });
+});
+
+describe("the files that write design_enabled as a key", () => {
+  test("are exactly the files in the table", () => {
+    expect(scanCounts(DESIGN_ENABLED_KEY)).toEqual(ALLOWED_DESIGN_ENABLED_KEYS);
+  });
+
+  test("catches an override that spreads the configuration", () => {
+    const code = transpiler.transformSync(
+      "const c = { ...config, design_enabled: true };",
+    );
+    expect(countOf(code, DESIGN_ENABLED_KEY)).toBe(1);
+  });
+
+  test("catches a key that is written with a space before the colon", () => {
+    const code = transpiler.transformSync("const c = { design_enabled : x };");
+    expect(countOf(code, DESIGN_ENABLED_KEY)).toBe(1);
+  });
+
+  test("does not count a type declaration, which the transpiler erases", () => {
+    const code = transpiler.transformSync(
+      "type T = { design_enabled: boolean };",
+    );
+    expect(countOf(code, DESIGN_ENABLED_KEY)).toBe(0);
+  });
+});
+
+describe("the calls that hand the configuration to the wiring", () => {
+  test.each(WIRING_CALLS)(
+    "%s appears in the files of the table",
+    (_name, pattern, allowed) => {
+      expect(scanCounts(pattern)).toEqual(allowed);
+    },
+  );
+
+  test("counts a call of the builder with the configuration", () => {
+    const code = transpiler.transformSync(
+      "const d = buildApprovedBranchDeps(config, ctx);",
+    );
+    expect(countOf(code, BUILDER_CALL)).toBe(1);
+  });
+
+  test("does not count the declaration of the builder", () => {
+    const code = transpiler.transformSync(
+      "export function buildApprovedBranchDeps(config, ctx) { return 1; }",
+    );
+    expect(countOf(code, BUILDER_CALL)).toBe(0);
+  });
+
+  test("does not count a call of the builder with an overridden configuration", () => {
+    const code = transpiler.transformSync(
+      "const d = buildApprovedBranchDeps({ ...config, design_enabled: true }, ctx);",
+    );
+    expect(countOf(code, BUILDER_CALL)).toBe(0);
   });
 });
 
