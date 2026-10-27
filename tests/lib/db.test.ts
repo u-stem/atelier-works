@@ -113,6 +113,7 @@ import {
   PR_CI_CHECK_COLUMNS,
   type PrCiCheckSqlRow,
   recordAgentRun,
+  recordApprovalRedispatch,
   recordDeployment,
   recordFailure,
   recordMainCiRun,

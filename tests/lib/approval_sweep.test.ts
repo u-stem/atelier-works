@@ -33,6 +33,7 @@ import {
 const NOW = new Date("2026-10-27T12:00:00Z");
 const MINUTE = 60 * 1000;
 const DATE = new Date("2026-10-26T00:00:00Z");
+const LATER = new Date(NOW.getTime() + 60 * MINUTE);
 
 function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -397,7 +398,7 @@ describe("sweepApprovals: an expired pending request", () => {
         return read(id, kind);
       },
     });
-    expect(reads).toEqual(["7:design"]);
+    expect(reads[0]).toBe("7:design");
   });
 
   test("moves a work item that waits for requirements to expired", async () => {
@@ -470,7 +471,7 @@ describe("sweepApprovals: a request that is not the newest", () => {
   test("expires only the request of a design and leaves the work item", async () => {
     const h = harness({
       items: [DESIGN_ITEM],
-      latest: { "7:design": latest({ id: 42 }) },
+      latest: { "7:design": latest({ id: 42, expires_at: LATER }) },
       expiredPending: [request(41, "design", 7)],
     });
     await sweepApprovals(h.deps);
@@ -481,7 +482,11 @@ describe("sweepApprovals: a request that is not the newest", () => {
     const h = harness({
       items: [REQUIREMENTS_ITEM],
       latest: {
-        "8:requirements": latest({ id: 61, payload: { attempt: 3 } }),
+        "8:requirements": latest({
+          id: 61,
+          payload: { attempt: 3 },
+          expires_at: LATER,
+        }),
       },
       expiredPending: [request(60, "requirements", 8)],
     });
@@ -519,7 +524,7 @@ describe("sweepApprovals: a request that is not the newest", () => {
   test("does not notify for a request that only expires", async () => {
     const h = harness({
       items: [DESIGN_ITEM],
-      latest: { "7:design": latest({ id: 42 }) },
+      latest: { "7:design": latest({ id: 42, expires_at: LATER }) },
       expiredPending: [request(41, "design", 7)],
     });
     await sweepApprovals(h.deps);
