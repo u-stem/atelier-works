@@ -173,7 +173,7 @@ function StepBody({
         className={
           node.running
             ? "fill-selected stroke-primary"
-            : "fill-card stroke-input"
+            : "fill-card stroke-edge"
         }
       />
       {summary.map((line, index) => (
@@ -225,7 +225,7 @@ function SideBody({ box, text }: { box: DiagramBox; text: string }) {
         rx={6}
         strokeWidth={1}
         className={cn(
-          "stroke-input",
+          "stroke-edge",
           box.kind === "entry" ? "fill-accent" : "fill-card",
         )}
       />
