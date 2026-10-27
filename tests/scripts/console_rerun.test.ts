@@ -388,6 +388,20 @@ function harness(
 }
 
 describe("rerunJobFromConsole", () => {
+  test.each([
+    ["an array that holds a UUID", [ID]],
+    ["a number", 5],
+    ["null", null],
+    ["an object that prints as a UUID", { toString: () => ID }],
+  ])(
+    "answers as if the job does not exist for %s as the id",
+    async (_label, jobId) => {
+      const { ports, events } = harness();
+      const result = await rerunJobFromConsole(jobId, ports);
+      expect([result, events]).toEqual([{ found: false }, []]);
+    },
+  );
+
   test("answers as if the job does not exist for an id that is not a UUID", async () => {
     const { ports, events } = harness();
     const result = await rerunJobFromConsole("../etc", ports);

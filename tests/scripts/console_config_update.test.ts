@@ -148,6 +148,18 @@ describe("updateConfigFromConsole: what it refuses before it records", () => {
     expect([result, events]).toEqual([REFUSED("item_not_allowed"), []]);
   });
 
+  test.each([
+    ["an array that holds an allowed name", ["daily_budget_usd"]],
+    ["a number", 5],
+    ["null", null],
+    ["undefined", undefined],
+    ["an object", { toString: () => "daily_budget_usd" }],
+  ])("refuses %s as the item", async (_label, item) => {
+    const { ports, events } = harness();
+    const result = await updateConfigFromConsole(item, 50, 20, ports);
+    expect([result, events]).toEqual([REFUSED("item_not_allowed"), []]);
+  });
+
   test.each([...BOOLEAN_STOP_ITEMS])(
     "refuses a number for the switch %s",
     async (item) => {
@@ -331,6 +343,45 @@ describe("updateConfigFromConsole: the compare and swap", () => {
       ports,
     );
     expect([result, written]).toEqual([REFUSED("conflict"), []]);
+  });
+
+  test("refuses when the replaced configuration fails the load check, and writes nothing", async () => {
+    const { owners: _owners, ...withoutOwners } = RAW;
+    const { ports, events, written } = harness({ raw: withoutOwners });
+    const result = await updateConfigFromConsole(
+      "daily_budget_usd",
+      50,
+      20,
+      ports,
+    );
+    expect([result, events, written]).toEqual([
+      REFUSED("config_invalid"),
+      ["insert", "read", "update"],
+      [],
+    ]);
+  });
+
+  test("records the failed load check as a failed action", async () => {
+    const { owners: _owners, ...withoutOwners } = RAW;
+    const { ports, sqlCalls } = harness({ raw: withoutOwners });
+    await updateConfigFromConsole("daily_budget_usd", 50, 20, ports);
+    expect(sqlCalls[1]?.values.slice(0, 2)).toEqual([
+      "failed",
+      '{"refusal":"config_invalid"}',
+    ]);
+  });
+
+  test("refuses a configuration that another item makes invalid", async () => {
+    const { ports, written } = harness({
+      raw: { ...RAW, max_attempts: "three" },
+    });
+    const result = await updateConfigFromConsole(
+      "daily_budget_usd",
+      50,
+      20,
+      ports,
+    );
+    expect([result, written]).toEqual([REFUSED("config_invalid"), []]);
   });
 
   test("refuses when the resource is not an object", async () => {
@@ -559,7 +610,11 @@ describe("the list of items that can be changed", () => {
       numbers: Object.fromEntries(
         Object.entries(consoleView.LOWERABLE_NUMBERS).map(([key, rule]) => [
           key,
-          { integer: rule.integer, minimum: rule.minimum },
+          {
+            integer: rule.integer,
+            minimum: rule.minimum,
+            minimumExclusive: rule.minimumExclusive,
+          },
         ]),
       ),
     }).toEqual({
@@ -567,7 +622,11 @@ describe("the list of items that can be changed", () => {
       numbers: Object.fromEntries(
         Object.entries(LOWERABLE_NUMBERS).map(([key, rule]) => [
           key,
-          { integer: rule.integer, minimum: rule.minimum },
+          {
+            integer: rule.integer,
+            minimum: rule.minimum,
+            minimumExclusive: rule.minimumExclusive,
+          },
         ]),
       ),
     });
@@ -578,6 +637,7 @@ describe("the list of items that can be changed", () => {
       [
         "actor_unknown",
         "audit_unavailable",
+        "config_invalid",
         "conflict",
         "has_reference",
         "invalid_value",
@@ -585,5 +645,35 @@ describe("the list of items that can be changed", () => {
         "not_lowering",
       ].sort(),
     );
+  });
+});
+
+// 値は数値か真偽で、型は呼び出し側から来る。生成したスキーマが一方の型に絞ると、もう一方が引数の検証で弾かれる。
+describe("the generated input schema", () => {
+  function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+
+  async function declaredType(name: string): Promise<unknown> {
+    const parsed: unknown = Bun.YAML.parse(
+      await Bun.file("f/factory/console_config_update.script.yaml").text(),
+    );
+    const schema = isObject(parsed) ? parsed.schema : undefined;
+    const properties = isObject(schema) ? schema.properties : undefined;
+    const property = isObject(properties) ? properties[name] : undefined;
+    return isObject(property) ? property.type : undefined;
+  }
+
+  test.each(["expected", "next"])(
+    "%s is not narrowed to a string, a number or a boolean",
+    async (name) => {
+      expect(["string", "number", "integer", "boolean"]).not.toContain(
+        await declaredType(name),
+      );
+    },
+  );
+
+  test("the item is a string", async () => {
+    expect(await declaredType("item")).toBe("string");
   });
 });

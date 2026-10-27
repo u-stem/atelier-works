@@ -92,3 +92,54 @@ describe("console scripts", () => {
     ).toEqual([]);
   });
 });
+
+// Console用workerと定期ジョブ用workerは、1つずつ動かす前提で書いたscriptがある。
+// 再実行は、同じscriptが実行中か待ちかを読んで判断するので、同じtagの枠が1つであることに頼る。
+// 設定の変更は、読み直しから書き込みまでの間に、同じscriptの別の呼び出しが入らないことに頼る。
+describe("the slots of the workers that the console scripts rely on", () => {
+  async function composeServices(): Promise<Record<string, unknown>> {
+    const parsed: unknown = Bun.YAML.parse(
+      await Bun.file("infra/docker-compose.yml").text(),
+    );
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("services" in parsed) ||
+      typeof parsed.services !== "object" ||
+      parsed.services === null
+    ) {
+      throw new Error("infra/docker-compose.yml has no services");
+    }
+    return Object.fromEntries(Object.entries(parsed.services));
+  }
+
+  function replicasOf(service: unknown): unknown {
+    if (typeof service !== "object" || service === null) return undefined;
+    if (!("deploy" in service)) return undefined;
+    const deploy = service.deploy;
+    if (typeof deploy !== "object" || deploy === null) return undefined;
+    return "replicas" in deploy ? deploy.replicas : undefined;
+  }
+
+  function environmentOf(service: unknown): string {
+    if (typeof service !== "object" || service === null) return "";
+    if (!("environment" in service)) return "";
+    return JSON.stringify(service.environment);
+  }
+
+  test.each(["windmill_worker_console", "windmill_worker_periodic"])(
+    "%s runs as one replica",
+    async (name) => {
+      expect(replicasOf((await composeServices())[name])).toBe(1);
+    },
+  );
+
+  test.each(["windmill_worker_console", "windmill_worker_periodic"])(
+    "%s does not raise the number of workers in a container",
+    async (name) => {
+      expect(environmentOf((await composeServices())[name])).not.toMatch(
+        /NUM_WORKERS/,
+      );
+    },
+  );
+});

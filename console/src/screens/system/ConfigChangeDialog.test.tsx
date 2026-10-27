@@ -96,7 +96,7 @@ describe("ConfigChangeDialog for a number", () => {
       onConfirm: () => undefined,
       onCancel: () => undefined,
     });
-    expect(element.props.busy).toBe(true);
+    expect(element.props.confirmDisabled).toBe(true);
   });
 
   test("keeps the confirm button off while the box is empty", () => {
@@ -107,7 +107,7 @@ describe("ConfigChangeDialog for a number", () => {
       onConfirm: () => undefined,
       onCancel: () => undefined,
     });
-    expect(element.props.busy).toBe(true);
+    expect(element.props.confirmDisabled).toBe(true);
   });
 
   test("turns the confirm button on for a value that can be used", () => {
@@ -118,7 +118,7 @@ describe("ConfigChangeDialog for a number", () => {
       onConfirm: () => undefined,
       onCancel: () => undefined,
     });
-    expect(element.props.busy).toBe(false);
+    expect(element.props.confirmDisabled).toBe(false);
   });
 });
 

@@ -220,3 +220,60 @@ describe("changeDialogLines", () => {
     );
   });
 });
+
+describe("changeDialogLines for what the change reaches", () => {
+  function linesFor(key: string, value: unknown): string {
+    const offer = changeOfferOf({ key, kind: "value", value, masked: false });
+    return offer === null ? "" : changeDialogLines(offer).join("\n");
+  }
+
+  test("does not say that running work is not affected", () => {
+    expect(linesFor("implement_enabled", true)).not.toContain(
+      "自動では止まりません",
+    );
+  });
+
+  test("says that a flow already running reads the new value in its later steps", () => {
+    expect(linesFor("max_fix_diff_lines", 1500)).toContain(
+      "動いているフローも、以後の手順が設定を読むときから、新しい値で動きます",
+    );
+  });
+
+  test("says the same for a switch", () => {
+    expect(linesFor("implement_enabled", true)).toContain(
+      "動いているフローも、以後の手順が設定を読むときから、新しい値で動きます",
+    );
+  });
+
+  test("warns that an approval while the implementation is stopped ends as approved", () => {
+    expect(linesFor("implement_enabled", true)).toContain(
+      "止めている間に承認した要件定義は、承認済みで止まります",
+    );
+  });
+
+  test("says that a person resumes it by the retry after the switch is on again", () => {
+    expect(linesFor("implement_enabled", true)).toContain(
+      "有効に戻した後、人が再実行で再開します",
+    );
+  });
+
+  test("keeps the approval warning out of the other switches", () => {
+    expect(linesFor("dependabot_enabled", true)).not.toContain("承認");
+  });
+
+  test("warns that a daily limit below today's spending fails the flows that use Claude today", () => {
+    expect(linesFor("daily_budget_usd", 50)).toContain(
+      "今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗します",
+    );
+  });
+
+  test("says that the Console cannot raise it again", () => {
+    expect(linesFor("daily_budget_usd", 50)).toContain(
+      "引き上げはConsoleではできません",
+    );
+  });
+
+  test("keeps the daily warning out of the per-run limit", () => {
+    expect(linesFor("max_budget_usd_per_run", 5)).not.toContain("今日の使用額");
+  });
+});

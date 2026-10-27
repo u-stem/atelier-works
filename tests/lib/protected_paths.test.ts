@@ -1577,6 +1577,9 @@ describe("console job rerun and config update files", () => {
     "f/factory/console_config_update.script.yaml",
     "tests/scripts/console_rerun.test.ts",
     "tests/scripts/console_config_update.test.ts",
+    // 設定変更が書く前に通す、設定の読み込みの検証と、その型。
+    "f/factory/lib/config.ts",
+    "f/factory/lib/types.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS or a prefix lists %s", (path) => {

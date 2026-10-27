@@ -633,6 +633,7 @@ describe("describeConfigUpdateResult", () => {
 
   test.each([
     ["item_not_allowed", "変更できない"],
+    ["config_invalid", "検証を通らない"],
     ["invalid_value", "範囲に合わない"],
     ["not_lowering", "止める向きか、下げる向き"],
     ["has_reference", "参照"],

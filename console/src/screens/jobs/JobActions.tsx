@@ -18,9 +18,9 @@ import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
   canCancelJob,
-  cancelDialogHandlers,
   cancelDialogLines,
   canRerunJob,
+  confirmDialogHandlers,
   rerunDialogLines,
 } from "../../lib/jobActions.ts";
 import { jobDetailPath } from "../../lib/jobLink.ts";
@@ -261,7 +261,7 @@ export function JobActions({
   const cancel = useWriteMutation(cancelSettings);
   const rerun = useWriteMutation(rerunSettings);
   if (canCancelJob(job)) {
-    const handlers = cancelDialogHandlers({
+    const handlers = confirmDialogHandlers({
       jobId: job.id,
       setOpen: setCancelOpen,
       submit: cancel.submit,
@@ -282,8 +282,7 @@ export function JobActions({
     );
   }
   if (canRerunJob(job)) {
-    // 確認の流れは中止と同じ。開くだけで、書き込みは確認を通った後(`onConfirm`)にだけ呼ぶ。
-    const handlers = cancelDialogHandlers({
+    const handlers = confirmDialogHandlers({
       jobId: job.id,
       setOpen: setRerunOpen,
       submit: rerun.submit,

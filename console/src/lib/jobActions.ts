@@ -42,7 +42,7 @@ export function canCancelJob(job: CancelCandidate): boolean {
   );
 }
 
-export type CancelDialogHandlers = {
+export type ConfirmDialogHandlers = {
   readonly onOpen: () => void;
   readonly onConfirm: () => void;
   readonly onDismiss: () => void;
@@ -50,14 +50,14 @@ export type CancelDialogHandlers = {
 
 /**
  * 確認のダイアログの操作を、画面の状態から切り離して決める。
- * ボタンを押すと開くだけで、中止の書き込みは確認を通った後(`onConfirm`)にだけ呼ぶ。
+ * 中止も再実行も、ボタンを押すと開くだけで、書き込みは確認を通った後(`onConfirm`)にだけ呼ぶ。
  * 確認のダイアログの「取り消す」ボタンとEscは、どちらも`onDismiss`に届き、書き込みを呼ばずに閉じる。
  */
-export function cancelDialogHandlers(input: {
+export function confirmDialogHandlers(input: {
   readonly jobId: string;
   readonly setOpen: (open: boolean) => void;
   readonly submit: (jobId: string) => void;
-}): CancelDialogHandlers {
+}): ConfirmDialogHandlers {
   return {
     onOpen: () => {
       input.setOpen(true);
