@@ -17,6 +17,8 @@ export const ITEM_KIND_FLOWS: ReadonlyMap<string, readonly string[]> = new Map([
   ["dependabot", ["flow:dependabot"]],
 ]);
 
+export const NOT_ITEM_PATH_SCRIPTS: ReadonlySet<string> = new Set();
+
 /**
  * 作業項目の種別が通るflowと、それをつなぐscriptだけのグラフ。
  * 表に無い種別と、グラフに無いflowは含めない。
@@ -26,6 +28,7 @@ export function itemFlowGraph(
   kind: string,
   graph: FlowGraph,
   table: ReadonlyMap<string, readonly string[]> = ITEM_KIND_FLOWS,
+  _excluded: ReadonlySet<string> = NOT_ITEM_PATH_SCRIPTS,
 ): FlowGraph {
   const flowIds = new Set(
     graph.nodes

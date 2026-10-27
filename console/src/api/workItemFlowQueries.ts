@@ -78,6 +78,34 @@ async function refetchFlowJob(
 
 type RefreshQueries = Parameters<typeof refreshStatusOfAll>[0];
 
+export function followFinish(
+  _client: QueryClient,
+  _watch: (jobId: string, detail: JobDetailView | undefined) => boolean,
+  _workItemId: number,
+  _jobId: string | null,
+  _detail: JobDetailView | undefined,
+): Promise<void> {
+  return Promise.resolve();
+}
+
+export function itemRefreshQueries(_input: {
+  readonly item: {
+    readonly dataUpdatedAt: number;
+    readonly isFetching: boolean;
+    readonly isError: boolean;
+    readonly error: unknown;
+  };
+  readonly job: {
+    readonly dataUpdatedAt: number;
+    readonly isFetching: boolean;
+  };
+  readonly showsJob: boolean;
+  readonly refetchItem: () => Promise<WorkItemDetail | null | undefined>;
+  readonly refetchJob: (flowJobId: string | null) => Promise<unknown>;
+}): RefreshQueries {
+  return [];
+}
+
 export type WorkItemFlow = {
   readonly view: FlowProgressView;
   /** 見出しの更新に渡す取得。作業項目、ジョブの順に取り、最終更新は古い方の時刻になる。 */

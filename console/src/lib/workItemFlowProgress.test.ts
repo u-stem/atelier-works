@@ -153,6 +153,37 @@ describe("workItemFlowProgress: what to show", () => {
       flowProgressOf({ jobId: JOB, detail: undefined, failed: true }),
     ).toEqual({ kind: "unreadable" });
   });
+
+  test("says the progress is unreadable when the last read found nothing and the next one fails", () => {
+    expect(
+      flowProgressOf({ jobId: JOB, detail: { found: false }, failed: true }),
+    ).toEqual({ kind: "unreadable" });
+  });
+
+  test.each(["running", "queued", "failure", "canceled"])(
+    "shows the steps of a %s job",
+    (state) => {
+      expect(
+        flowProgressOf({ jobId: JOB, detail: detail(state), failed: false })
+          .kind,
+      ).toBe("steps");
+    },
+  );
+
+  test.each(["success", "skipped"])(
+    "shows nothing for a %s job, whose steps all succeeded and decide nothing",
+    (state) => {
+      expect(
+        flowProgressOf({ jobId: JOB, detail: detail(state), failed: false }),
+      ).toEqual({ kind: "none" });
+    },
+  );
+
+  test("shows nothing for a succeeded job even when the next read fails", () => {
+    expect(
+      flowProgressOf({ jobId: JOB, detail: detail("success"), failed: true }),
+    ).toEqual({ kind: "none" });
+  });
 });
 
 describe("workItemFlowProgress: what the diagram highlights", () => {
@@ -183,7 +214,7 @@ describe("workItemFlowProgress: what the diagram highlights", () => {
   });
 
   test("highlights nothing for a finished job", () => {
-    expect(stateOf("success").overlay?.activity.size).toBe(0);
+    expect(stateOf("failure").overlay?.activity.size).toBe(0);
   });
 
   test("highlights nothing for a path outside the known flows", () => {

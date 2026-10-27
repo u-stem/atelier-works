@@ -74,7 +74,7 @@ const LINK_TAG = /<(a|Link|NavLink|JobLink|WindmillJobLink)(\s|>|\/)/;
 
 /** サーバー由来の文字列の項目名。 */
 const FIELDS =
-  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name|tag|state|job_kind|parent_job|summary";
+  "script_path|schedule_path|timezone|schedule|error|reason|result_error|key|value|text|path|step|id|type|name|tag|state|job_kind|parent_job|summary|flowPath|jobState";
 
 /** 項目名だけの式。`item.key`のように、呼び出しや演算を含まない。 */
 const FIELD_EXPRESSION = String.raw`\{\s*[A-Za-z_][\w.]*\.(${FIELDS})\s*\}`;
@@ -270,6 +270,8 @@ describe("the checks themselves", () => {
       "<PageHeader title={jobScriptName(job.script_path)} />",
     ],
     ["a field with spaces", "<p>{ row.error }</p>"],
+    ["the flow path of the progress", "<span>{view.flowPath}</span>"],
+    ["the job state of the progress", "<span>{view.jobState}</span>"],
   ])("the raw field pattern catches %s", (_name, sample) => {
     expect(sample).toMatch(RAW_FIELD_IN_JSX);
   });

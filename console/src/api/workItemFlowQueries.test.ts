@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { refreshStatusOfAll } from "../app/refreshStatus.ts";
+import { createFinishReloadWatcher } from "../lib/workItemFlowProgress.ts";
 import type { WorkItemDetail } from "./guards/workItemDetail.ts";
 import {
   JOB_DETAIL_REFRESH_MS,
@@ -9,6 +11,8 @@ import {
 import { workItemDetailQueryKey } from "./workItemDetailQueries.ts";
 import {
   flowJobQueryOptions,
+  followFinish,
+  itemRefreshQueries,
   refreshItemThenJob,
   reloadWorkItem,
 } from "./workItemFlowQueries.ts";
@@ -251,5 +255,161 @@ describe("refreshItemThenJob", () => {
       },
     });
     expect(given).toBeNull();
+  });
+});
+
+describe("flowJobQueryOptions: the job that has finished", () => {
+  const staleTimeOf = (data: JobDetailView | undefined) =>
+    flowJobQueryOptions(JOB, true).staleTime({ state: { data } });
+
+  test("never goes stale once the job has finished", () => {
+    expect(staleTimeOf(detailOf("failure"))).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("goes stale after the polling interval while the job runs", () => {
+    expect(staleTimeOf(detailOf("running"))).toBe(JOB_DETAIL_REFRESH_MS);
+  });
+
+  test("goes stale after the polling interval before the first read", () => {
+    expect(staleTimeOf(undefined)).toBe(JOB_DETAIL_REFRESH_MS);
+  });
+
+  test("does not read a finished job again when the overview is opened again", async () => {
+    const client = new QueryClient();
+    client.setQueryData(
+      jobDetailQueryKey(JOB, { includeOutput: false }),
+      detailOf("failure"),
+      { updatedAt: Date.now() - 600_000 },
+    );
+    const sent = await recording(async () => {
+      const close = new QueryObserver(
+        client,
+        flowJobQueryOptions(JOB, true),
+      ).subscribe(() => undefined);
+      await wait(30);
+      close();
+    });
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("followFinish", () => {
+  async function readsAfter(
+    details: ReadonlyArray<JobDetailView | undefined>,
+    jobId: string | null = JOB,
+  ): Promise<number> {
+    const client = new QueryClient();
+    let reads = 0;
+    const close = new QueryObserver(client, {
+      queryKey: workItemDetailQueryKey(7),
+      queryFn: () => {
+        reads += 1;
+        return Promise.resolve(itemOf(JOB));
+      },
+      staleTime: Number.POSITIVE_INFINITY,
+    }).subscribe(() => undefined);
+    await wait(20);
+    const watch = createFinishReloadWatcher();
+    for (const detail of details) {
+      await followFinish(client, watch, 7, jobId, detail);
+    }
+    close();
+    return reads;
+  }
+
+  test("reloads the work item once when the job finishes", async () => {
+    expect(
+      await readsAfter([
+        detailOf("running"),
+        detailOf("success"),
+        detailOf("success"),
+      ]),
+    ).toBe(2);
+  });
+
+  test("does not reload while the job runs", async () => {
+    expect(await readsAfter([detailOf("running"), detailOf("running")])).toBe(
+      1,
+    );
+  });
+
+  test("does not reload without a job", async () => {
+    expect(
+      await readsAfter([detailOf("running"), detailOf("success")], null),
+    ).toBe(1);
+  });
+});
+
+describe("itemRefreshQueries", () => {
+  const ITEM_STATE = {
+    dataUpdatedAt: 1000,
+    isFetching: false,
+    isError: false,
+    error: null,
+  };
+  const JOB_STATE = { dataUpdatedAt: 5000, isFetching: false };
+
+  function queriesFor(
+    events: string[],
+    overrides: {
+      showsJob?: boolean;
+      job?: { dataUpdatedAt: number; isFetching: boolean };
+    } = {},
+  ) {
+    return itemRefreshQueries({
+      item: ITEM_STATE,
+      job: overrides.job ?? JOB_STATE,
+      showsJob: overrides.showsJob ?? true,
+      refetchItem: async () => {
+        events.push("item:start");
+        await wait(10);
+        events.push("item:end");
+        return itemOf(NEXT_JOB);
+      },
+      refetchJob: async (flowJobId) => {
+        events.push(`job:${flowJobId}`);
+      },
+    });
+  }
+
+  test("refreshes the work item first and the job after it", async () => {
+    const events: string[] = [];
+    refreshStatusOfAll(queriesFor(events)).onRefresh();
+    await wait(40);
+    expect(events).toEqual(["item:start", "item:end", `job:${NEXT_JOB}`]);
+  });
+
+  test("does not read the job when another tab is selected", async () => {
+    const events: string[] = [];
+    refreshStatusOfAll(queriesFor(events, { showsJob: false })).onRefresh();
+    await wait(40);
+    expect(events).toEqual(["item:start", "item:end"]);
+  });
+
+  test("shows the older of the two times as the last update", () => {
+    expect(refreshStatusOfAll(queriesFor([])).updatedAt).toBe(1000);
+  });
+
+  test("leaves the time of the job out when another tab is selected", () => {
+    const job = { dataUpdatedAt: 200, isFetching: false };
+    expect(
+      refreshStatusOfAll(queriesFor([], { showsJob: false, job })).updatedAt,
+    ).toBe(1000);
+  });
+
+  test("counts the job as fetching while it is shown", () => {
+    const job = { dataUpdatedAt: 5000, isFetching: true };
+    expect(refreshStatusOfAll(queriesFor([], { job })).isFetching).toBe(true);
+  });
+
+  test("does not count the job as fetching while another tab is selected", () => {
+    const job = { dataUpdatedAt: 5000, isFetching: true };
+    expect(
+      refreshStatusOfAll(queriesFor([], { showsJob: false, job })).isFetching,
+    ).toBe(false);
+  });
+
+  test("does not count a failed read of the job as a failure of the header", () => {
+    expect(refreshStatusOfAll(queriesFor([])).isError).toBe(false);
   });
 });

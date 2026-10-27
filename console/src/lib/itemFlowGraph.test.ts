@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { FlowGraph, GraphNode } from "./flowGraph.ts";
 import { FLOW_GRAPH } from "./flowGraphData.ts";
-import { ITEM_KIND_FLOWS, itemFlowGraph } from "./itemFlowGraph.ts";
+import {
+  ITEM_KIND_FLOWS,
+  itemFlowGraph,
+  NOT_ITEM_PATH_SCRIPTS,
+} from "./itemFlowGraph.ts";
 
 function node(id: string, kind: GraphNode["kind"]): GraphNode {
   return { id, kind, label: id, note: "" };
@@ -87,8 +91,43 @@ describe("itemFlowGraph", () => {
   });
 });
 
+describe("itemFlowGraph with excluded scripts", () => {
+  const table = new Map([["demo", ["flow:a", "flow:b"]]]);
+
+  test("leaves out a script that is listed as not part of the path", () => {
+    expect(
+      idsOf(itemFlowGraph("demo", SMALL, table, new Set(["script:link"]))),
+    ).not.toContain("script:link");
+  });
+
+  test("drops the edges of an excluded script", () => {
+    expect(
+      itemFlowGraph("demo", SMALL, table, new Set(["script:link"])).edges,
+    ).toEqual([]);
+  });
+});
+
 describe("itemFlowGraph on the generated graph", () => {
   const graph = FLOW_GRAPH ?? { nodes: [], edges: [] };
+
+  test("every excluded script is a script of the generated graph", () => {
+    const scripts = new Set(
+      graph.nodes.filter((n) => n.kind === "script").map((n) => n.id),
+    );
+    expect([...NOT_ITEM_PATH_SCRIPTS].filter((id) => !scripts.has(id))).toEqual(
+      [],
+    );
+  });
+
+  test("an issue leaves out the script of the Console retry", () => {
+    expect(idsOf(itemFlowGraph("issue", graph))).not.toContain(
+      "script:retry_work_item",
+    );
+  });
+
+  test("the script of the Console retry is on the excluded list", () => {
+    expect(NOT_ITEM_PATH_SCRIPTS.has("script:retry_work_item")).toBe(true);
+  });
 
   test("every flow of the table is a flow of the generated graph", () => {
     const flows = new Set(
