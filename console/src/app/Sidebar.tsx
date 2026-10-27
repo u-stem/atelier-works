@@ -11,7 +11,10 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
-import { describeRelease } from "../lib/consoleStatus.ts";
+import {
+  describeRelease,
+  type ReleaseDescription,
+} from "../lib/consoleStatus.ts";
 import { SIDEBAR_ICON_BUTTON_CLASS } from "../lib/controlClasses.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import { TRANSITION_WIDTH } from "../lib/motionClasses.ts";
@@ -51,6 +54,12 @@ function writeCollapsed(collapsed: boolean): void {
   } catch {
     // 保存できなくても、この画面の表示はすでに切り替わっている。
   }
+}
+
+/** 配信している版と確認の時刻の文。 */
+export function ReleaseNote({ release }: { release: ReleaseDescription }) {
+  void release;
+  return null;
 }
 
 /** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */

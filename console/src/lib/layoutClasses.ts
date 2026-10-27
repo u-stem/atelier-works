@@ -59,3 +59,6 @@ export const STICKY_HEADER_CLASS =
  * `-scroll-mb-28`で`SCROLL_BODY_CLASS`の`scroll-pb-28`を打ち消す。
  */
 export const PAGINATION_BUTTON_CLASS = "-scroll-mb-28";
+
+/** 画面の見出しの帯のclass。 */
+export const PAGE_HEADER_CLASS = "";

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
+import { PAGE_HEADER_CLASS } from "../lib/layoutClasses.ts";
 import { PAGE_HEADING_ID } from "../lib/routeFocus.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import type { RefreshStatus } from "./refreshStatus.ts";
@@ -165,5 +166,25 @@ describe("PageHeader", () => {
 
   test("draws a thin ring on the heading for a keyboard focus", () => {
     expect(render()).toMatch(/<h1[^>]*focus-visible:ring-2/);
+  });
+
+  test("draws the band with the shared class", () => {
+    expect(renderWith({})).toContain(`<header class="${PAGE_HEADER_CLASS}">`);
+  });
+
+  test("shows the subtitle in mono when asked", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitle="0190a1b2" subtitleMono />,
+    );
+
+    expect(markup).toMatch(/<p class="[^"]*font-mono[^"]*">0190a1b2<\/p>/);
+  });
+
+  test("shows the subtitle in the text face by default", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeader title="題" subtitle="副題" />,
+    );
+
+    expect(markup).not.toContain("font-mono");
   });
 });

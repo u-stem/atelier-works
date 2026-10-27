@@ -65,6 +65,10 @@ describe("layoutBars", () => {
 });
 
 describe("estimateLabelWidth", () => {
+  test("counts a full-width character as the text-caption size (12px)", () => {
+    expect(estimateLabelWidth("あ")).toBe(12);
+  });
+
   test("counts a full width character as wider than a half width one", () => {
     expect(estimateLabelWidth("あ")).toBeGreaterThan(estimateLabelWidth("a"));
   });

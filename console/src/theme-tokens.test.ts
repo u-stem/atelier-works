@@ -64,6 +64,9 @@ const MEANING_SURFACES = [
   "accent",
 ] as const;
 
+/** 入力欄の境界の下限。WCAGの3:1に余裕を持たせる。 */
+const INPUT_BORDER_MIN = 3.5;
+
 const BADGE_TINT = 0.14;
 const BANNER_TINT = 0.07;
 /** `Badge`のmuted(`bg-foreground/10`)が背景に重ねる割合。 */
@@ -119,8 +122,9 @@ const PAIRS: Pair[] = [
   { fg: "destructive-foreground", bg: "destructive", min: 4.5 },
   { fg: "warning-foreground", bg: "warning", min: 4.5 },
   { fg: "success-foreground", bg: "success", min: 4.5 },
-  { fg: "input", bg: "background", min: 3 },
-  { fg: "input", bg: "card", min: 3 },
+  { fg: "input", bg: "background", min: INPUT_BORDER_MIN },
+  { fg: "input", bg: "card", min: INPUT_BORDER_MIN },
+  { fg: "input", bg: "popover", min: INPUT_BORDER_MIN },
   { fg: "ring", bg: "background", min: 3 },
   { fg: "ring", bg: "card", min: 3 },
   { fg: "ring", bg: "sidebar", min: 3 },
@@ -146,6 +150,15 @@ describe("theme tokens", () => {
     expect(BADGE_SOURCE).toContain(
       'muted: "border-transparent bg-foreground/10 text-foreground"',
     );
+  });
+
+  test("the input border is at least 3.5:1 in both themes", () => {
+    const ratios = ([0, 1] as const).flatMap((slot) =>
+      (["background", "card", "popover"] as const).map((surface) =>
+        contrastRatio(color("input", slot), color(surface, slot)),
+      ),
+    );
+    expect(Math.min(...ratios)).toBeGreaterThanOrEqual(3.5);
   });
 
   test("defines the tokens that the pairs use", () => {

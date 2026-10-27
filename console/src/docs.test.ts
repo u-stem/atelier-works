@@ -20,6 +20,10 @@ describe("docs: the visual rules", () => {
     ["states the typeface", "書体"],
     ["states the brand color", "ブランドの色"],
     ["states how enter and exit motion is limited", "出入りと画面遷移"],
+    ["states the radius and shadow steps", "角丸と影"],
+    ["states where the monospace face is used", "等幅"],
+    ["states the favicon", "ファビコン"],
+    ["states why the diagrams stay on white paper", "図の色"],
   ])("%s", (_name, heading) => {
     expect(HEADINGS).toContain(`### ${heading}`);
   });
@@ -31,6 +35,8 @@ describe("docs: the visual rules", () => {
     ],
     ["the dialog padding is stated", "p-6"],
     ["the sidebar icon button constant is named", "SIDEBAR_ICON_BUTTON_CLASS"],
+    ["the input border floor is stated", "3.5:1"],
+    ["the dialog fade is stated", "@starting-style"],
   ])("%s", (_name, text) => {
     expect(DOC).toContain(text);
   });

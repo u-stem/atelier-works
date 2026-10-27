@@ -79,3 +79,49 @@ describe("motion tokens", () => {
     expect(value).toMatch(/duration-\(--duration-[a-z]+\) ease-standard$/);
   });
 });
+
+/** セレクタが`selector`そのもののルールの中身。 */
+function declarationsOf(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(CSS);
+  return match?.[2] ?? "";
+}
+
+describe("dialog fade", () => {
+  const FADE = "opacity var(--duration-fast) var(--ease-standard)";
+
+  test.each(["dialog", "dialog::backdrop"])(
+    "%s fades its opacity with the fast duration and the standard ease",
+    (selector) => {
+      expect(declarationsOf(selector)).toContain(FADE);
+    },
+  );
+
+  test.each(["dialog", "dialog::backdrop"])(
+    "%s keeps showing while it fades out",
+    (selector) => {
+      expect(declarationsOf(selector)).toMatch(
+        /overlay var\(--duration-fast\) allow-discrete/,
+      );
+    },
+  );
+
+  test.each(["dialog[open]", "dialog[open]::backdrop"])(
+    "%s starts from transparent when it opens",
+    (opened) => {
+      const start = CSS.indexOf("@starting-style");
+      const block =
+        start < 0 ? "" : CSS.slice(start, CSS.indexOf("\n}\n", start));
+      expect(block).toContain(`${opened} {\n    opacity: 0;\n  }`);
+    },
+  );
+
+  test("moves nothing but the opacity", () => {
+    const fade = `${declarationsOf("dialog")}${declarationsOf("dialog::backdrop")}`;
+    expect(fade).not.toMatch(/transform|translate|scale|margin|inset/);
+  });
+
+  test("is stopped by the reduced motion rule, which also reaches the backdrop", () => {
+    expect(reducedMotionRule()).toContain("*::backdrop");
+  });
+});
