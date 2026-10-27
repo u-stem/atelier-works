@@ -173,8 +173,9 @@ const RERUN_EFFECT_LINES: Readonly<Record<string, string>> = {
 };
 
 /**
- * 確認のダイアログに並べる文。引数の出どころ、失敗したジョブが残ること、処理の効果、再実行しない場合を書く。
- * 再実行の結果は、定期の失敗の通知に載らないので、新しいジョブで確かめるよう伝える。
+ * 確認のダイアログに並べる文。引数の出どころ、処理の効果、失敗したジョブが残ることを書く。
+ * 再実行の失敗は定期の失敗の通知に載らないことも伝える。
+ * 結果を読む場所(新しいジョブ)と、再実行しない場合は、押した後の知らせが伝えるので、ここには書かない。
  */
 export function rerunDialogLines(scriptPath: string): readonly string[] {
   const effect = Object.hasOwn(RERUN_EFFECT_LINES, scriptPath)
@@ -183,7 +184,6 @@ export function rerunDialogLines(scriptPath: string): readonly string[] {
   return [
     "scheduleに定義された引数で、この処理を1回だけ実行します。",
     ...(effect === undefined ? [] : [effect]),
-    "失敗したジョブは残ります。結果は、新しいジョブで確認します。再実行の失敗は、定期の失敗の通知に載りません。",
-    "同じ処理が実行中か待ちのとき、次の定期実行が近いときは、再実行しません。",
+    "失敗したジョブは残ります。再実行の失敗は、定期の失敗の通知に載りません。",
   ];
 }

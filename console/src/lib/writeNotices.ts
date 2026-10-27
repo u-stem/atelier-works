@@ -318,6 +318,8 @@ const CONFIG_UPDATE_REFUSALS: Readonly<
   has_reference: "設定に変数かresourceへの参照があるため、変更しませんでした。",
   conflict:
     "画面を開いた後に、設定の値が変わっていました。更新して、もう一度確かめてください。",
+  config_invalid:
+    "置き換えた設定が、設定の読み込みの検証を通らないため、変更しませんでした。",
   actor_unknown: "操作者を確認できないため、変更しませんでした。",
   audit_unavailable: "操作の記録を残せないため、変更しませんでした。",
 };

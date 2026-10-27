@@ -191,12 +191,14 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`console_config_update.ts`)も、それぞれの`.script.yaml`とともに守る。再実行の許可表(再実行できる定期処理)と、
  * 設定の許可表(変更できる項目と向きと下限)は、書き換えられると、再実行できる処理や変更できる設定が増えるためである。
  * 2つの許可表を固定するテスト(`tests/scripts/console_rerun.test.ts`、`console_config_update.test.ts`)も守る。
+ * 設定変更のscriptは、書く前に、置き換えた全体を設定の読み込みの検証に通す。
+ * そのため、検証の本体(`lib/config.ts`)と、その型(`lib/types.ts`)も守る。境界の走査が、scriptがたどれるファイルを保護パスに限るためである。
  * 取消の画面の部品(`console/src/lib/jobActions.ts`、`console/src/screens/jobs/JobActions.tsx`)とそのテストも守らない。
  * 再実行と設定変更の画面の部品(`console/src/lib/configChange.ts`、`console/src/screens/system/ConfigChangeDialog.tsx`など)も同じ理由で守らない。
- * 後続のPRで同じ部品を変えるので、守ると毎回人の確認が要る。絞り込みと記録は守ったscript側にあり、
- * 書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られる(`docs/security.md`の「ジョブの取消」)。
- * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)は守らない。契約テストが画面のソース全体を走査するので、
- * 保護の上乗せの保証が小さく、後続のPRで必ず直すので、毎回人の確認が要るのを避ける。
+ * 守ると毎回人の確認が要り、書き換えられた被害は、確認のダイアログを飛ばして呼ぶことに限られるためである。
+ * 絞り込みと記録は守ったscript側にある(`docs/security.md`の「ジョブの取消」)。
+ * 描画の部品(`JobDetailParts.tsx`、`ConfigSection.tsx`)も、同じ理由で守らない。
+ * 契約テストが画面のソース全体を走査するので、守っても保証の上乗せが小さい。
  * これらのlock(`console_jobs.script.lock`など)は、`windmill-client`を含み、その版を上げる変更で全scriptのlockと
  * 一緒に書き換わるので守らない。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
@@ -314,6 +316,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/console_job_rerun.script.yaml",
   "f/factory/console_config_update.ts",
   "f/factory/console_config_update.script.yaml",
+  "f/factory/lib/config.ts",
+  "f/factory/lib/types.ts",
   "f/factory/retry_work_item.ts",
   "f/factory/retry_work_item.script.yaml",
   "f/factory/manual_intake_submit.ts",

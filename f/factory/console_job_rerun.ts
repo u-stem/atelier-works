@@ -15,6 +15,9 @@
 //   scriptのscheduleは、次の回を前の回の終了時に積むので、定期の回同士は重ならない。
 //   手動のジョブはその連鎖に入らず、schedule由来の印も持たないので、定期の回との重なりはWindmillが防がない。
 //   この判定が、その重なりを避ける。定期の回が実行中のときは、キューの実行中のジョブとして見える。
+//   判定は、Console用workerと定期ジョブ用workerがそれぞれ1枠(`infra/docker-compose.yml`の`replicas`が1)の前提で書く。
+//   Console用workerが1枠なので、この操作の呼び出し同士は重ならない。定期ジョブ用workerが1枠なので、
+//   再実行と定期の回は、同時には動かず、どちらかが待つ。その前提は`tests/scripts/console_script_tags.test.ts`が固定する。
 // - scheduleが無効、定義が変わった、引数が参照を含む。
 //
 // 操作の記録(`factory.console_actions`)は、起動の前に`attempted`の行を入れ、後で結果を更新する。
@@ -275,14 +278,16 @@ export function evaluateSchedule(
 /**
  * ジョブ`jobId`の定期処理を再実行する。呼び出しの順序は、ジョブの取得、対象の判定、キューの読み取り、
  * scheduleの読み取り、操作者の導出、記録(`attempted`)、起動、記録(結果)に固定する。
- * 形の違うid、存在しないジョブ、`f/factory/`の外のジョブは`{ found: false }`を返す。
+ * 文字列でないid、形の違うid、存在しないジョブ、`f/factory/`の外のジョブは`{ found: false }`を返す。
  * 読み取りの失敗と、起動の失敗は、投げる。起動の失敗は、記録を`failed`にしてから投げる。
  */
 export async function rerunJobFromConsole(
-  jobId: string,
+  jobId: unknown,
   ports: RerunPorts,
 ): Promise<JobRerunResult> {
-  if (!JOB_ID.test(jobId)) return { found: false };
+  if (typeof jobId !== "string" || !JOB_ID.test(jobId)) {
+    return { found: false };
+  }
   let raw: unknown;
   try {
     raw = await ports.getJob(jobId);

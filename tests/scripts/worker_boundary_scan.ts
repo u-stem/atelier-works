@@ -751,8 +751,17 @@ export function transpilerImports(source: string): string[] {
 }
 
 /**
+ * クラスの本体にある`constructor(...) {`の定義を取り除く。定義は走査を迂回する書き方ではない。
+ * 行頭の定義で、本体の波括弧が続く形に限る。`x.constructor`と`x["constructor"]`、関数としての呼び出しは残す。
+ */
+function withoutConstructorDefinitions(code: string): string {
+  return code.replace(/^[ \t]*constructor\s*\([^()]*\)\s*\{/gm, "{");
+}
+
+/**
  * 字句の禁止で見つける、走査を迂回できる書き方。
  * - `constructor`の言及。文字列の中の言及も数える。`x["constructor"]`は、文字列を組み立てずに書ける。
+ *   クラスの本体にある`constructor(...) {`の定義は数えない。
  * - `eval`と`Function`の使用。コメントと文字列の中の言及は数えない。
  * - `Bun`の添字アクセス(`Bun["env"]`)。
  * 連結した名前で組み立てる参照、割り算を正規表現リテラルと読み違えた範囲の中身は、見つけられない。
@@ -762,7 +771,9 @@ export function escapeHatches(source: string): string[] {
   const code = codeOf(source);
   const skeleton = codeSkeleton(code);
   const found: string[] = [];
-  if (/constructor/.test(code)) found.push("mention of constructor");
+  if (/constructor/.test(withoutConstructorDefinitions(code))) {
+    found.push("mention of constructor");
+  }
   if (/(?<![\w$])eval(?![\w$])/.test(skeleton)) found.push("use of eval");
   if (/(?<![.\w$])Function(?![\w$])/.test(skeleton)) {
     found.push("use of Function");

@@ -133,16 +133,38 @@ export function newValueMessage(reason: NewNumberProblem): string {
   return NEW_VALUE_MESSAGES[reason];
 }
 
+/** 止めている間の承認が、承認済みで止まる項目。 */
+const APPROVAL_STOPPING_SWITCH = "implement_enabled";
+
+/** 日次の予算の項目。下げた値が今日の使用額を下回ると、今日のClaudeを使うフローが止まる。 */
+const DAILY_BUDGET_ITEM = "daily_budget_usd";
+
 /**
- * 確認のダイアログに並べる文。効く時期と、元に戻す方法を書く。
- * Consoleは止める向きと下げる向きの変更だけを持つので、戻すには人がWindmillで編集する。
+ * 確認のダイアログに並べる文。効く範囲と、項目ごとの注意と、元に戻す方法を書く。
+ * 変更は、次に設定を読む処理から効く。動いているフローも、以後の手順が設定を読めば、新しい値で動く。
+ * 実装を止めている間の承認は、承認済みで止まり、要対応に載らない。再開は、有効に戻した後に人が再実行で行う。
+ * 日次の予算は、今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗する。今日の使用額は、ここでは調べない。
+ * Consoleは止める向きと下げる向きの変更だけを持つので、戻すには運用者がWindmillで直す。
  */
 export function changeDialogLines(offer: ChangeOffer): readonly string[] {
-  return [
+  const lines = [
     offer.kind === "stop"
-      ? "止めると、この機能は新しく動かなくなります。すでに動いている作業は、自動では止まりません。"
+      ? "止めると、この機能は新しく動かなくなります。"
       : "下げた値は、いまの値より厳しい上限になります。",
-    "変更は、次に設定を読む処理から効きます。",
-    "元に戻すには、人がWindmillで編集します。Consoleからは戻せません。",
+    "変更は、次に設定を読む処理から効きます。動いているフローも、以後の手順が設定を読むときから、新しい値で動きます。",
   ];
+  if (offer.key === APPROVAL_STOPPING_SWITCH) {
+    lines.push(
+      "止めている間に承認した要件定義は、承認済みで止まります。要対応には載りません。有効に戻した後、人が再実行で再開します。",
+    );
+  }
+  if (offer.key === DAILY_BUDGET_ITEM) {
+    lines.push(
+      "今日の使用額を下回る値にすると、今日のClaudeを使うフローがすべて失敗します。引き上げはConsoleではできません。",
+    );
+  }
+  lines.push(
+    "元に戻すには、運用者がWindmillでリソースを編集するか、wmill resource pushで戻します。Consoleからは戻せません。",
+  );
+  return lines;
 }

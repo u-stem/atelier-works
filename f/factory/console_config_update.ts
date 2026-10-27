@@ -4,14 +4,19 @@
 // - 真偽の項目(`BOOLEAN_STOP_ITEMS`): `true`から`false`へ。自動でGitHubに書く機能を止める向きだけで、有効にする向きは人がCLIで行う。
 // - 数値の項目(`LOWERABLE_NUMBERS`): いまの値より小さい値へ。下限は項目ごとに決める。
 // 許可表の外の項目、`owners`や`repo_allowlist`のような権限に関わる設定、`*_since`は、変更できない。
-// 向きを下げる変更は、設定の組み合わせの検査(有効にする向きの検査だけ)に触れないので、項目ごとの検査で足りる。
-// この対応は`tests/scripts/console_config_update.test.ts`が、実際の設定の検証に通して確かめる。
+// 向きを下げる変更は、設定の組み合わせの検査(有効にする向きの検査だけ)に触れない。
+// それでも、書く前に、置き換えた全体を設定の読み込みの検証(`parseFactoryConfig`)に通し、通らなければ変更しない。
+// 別の項目が壊れた設定を、この操作で書き戻さないためである。
 //
 // 補間しない生の値を読み、許可した1項目だけを置き換えて、全体を書き戻す。他のキーは同じ文字列のまま残す。
 // 値のどこかに`$var:`か`$res:`があれば、参照の先をこのscriptが解決しないよう、変更しない。
 // 呼び出し側が「読んだ時の値」を渡し、書く直前に読み直した値と違えば変更しない(比較交換)。
-// Windmillのresourceの更新は条件付きの書き込みを持たないので、読み直しから書き込みまでの間は原子的でない。
-// その間に別の経路が同じ項目を書くと、その書き込みを上書きする。書いた後に読み直して、変更が残ったかを返す。
+// Windmillのresourceの更新は条件付きの書き込みを持たないので、書く直前の読み取りから書き込みまでの間は原子的でない。
+// その間に別の経路が書いた変更は、項目を問わず、全体の書き戻しで失われ、検出できない。
+// 書いた後の読み直しが検出するのは、書き込みの後に起きた変更だけである。
+// この間が実際に問題になるのは、別の経路が同時に書く場合に限る。同じscriptの別の呼び出しは、
+// Console用workerが1枠(`infra/docker-compose.yml`の`replicas`が1)なので、重ならない。
+// その前提は`tests/scripts/console_script_tags.test.ts`が固定する。
 //
 // 操作の記録(`factory.console_actions`)は、読み取りの前に`attempted`の行を入れ、後で結果を更新する。
 // 記録するのは項目名と前後の値(数値か真偽)だけで、設定の全体は入れない。
@@ -23,6 +28,7 @@
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { deriveApprover } from "./lib/approver.ts";
+import { parseFactoryConfig } from "./lib/config.ts";
 import {
   type ActionAudit,
   type ActionSqlClient,
@@ -85,6 +91,7 @@ export const CONFIG_UPDATE_REFUSAL_REASONS = [
   "not_lowering",
   "has_reference",
   "conflict",
+  "config_invalid",
   "actor_unknown",
   "audit_unavailable",
 ] as const;
@@ -166,6 +173,16 @@ export function checkChange(
     : refusedWith("not_lowering");
 }
 
+/** 置き換えた設定の全体が、設定の読み込みの検証を通るか。通らない設定を書くと、Factory全体が設定を読めなくなる。 */
+function loads(config: Record<string, unknown>): boolean {
+  try {
+    parseFactoryConfig(config);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type WriteStep =
   | { readonly kind: "refused"; readonly reason: ConfigUpdateRefusalReason }
   | { readonly kind: "written"; readonly verified: boolean };
@@ -197,15 +214,19 @@ async function verifyWritten(
 /**
  * 項目`item`を、読んだ時の値`expected`から`next`へ変更する。
  * 呼び出しの順序は、許可表の判定、操作者の導出、記録(`attempted`)、読み取り、書き込み、読み直し、記録(結果)に固定する。
- * 読み取りの後の判定(参照を含む、読んだ時の値と違う)で断ったときも、記録は`failed`で残す。
+ * 項目が文字列でないときは、許可表の外として断る。文字列でない値を、プロパティ名に使わないためである。
+ * 読み取りの後の判定(読んだ時の値と違う、参照を含む、置き換えた全体が検証を通らない)で断ったときも、記録は`failed`で残す。
  * 読み取りと書き込みの失敗は、記録を`failed`にしてから投げる。
  */
 export async function updateConfigFromConsole(
-  item: string,
+  item: unknown,
   expected: unknown,
   next: unknown,
   ports: ConfigUpdatePorts,
 ): Promise<ConfigUpdateResult> {
+  if (typeof item !== "string") {
+    return { refused: true, reason: "item_not_allowed" };
+  }
   const change = checkChange(item, expected, next);
   if (change.kind === "refused") {
     return { refused: true, reason: change.reason };
@@ -242,6 +263,13 @@ export async function updateConfigFromConsole(
         };
       }
       const written = { ...current, [item]: after };
+      if (!loads(written)) {
+        return {
+          outcome: "failed",
+          changes: { refusal: "config_invalid" },
+          value: { kind: "refused", reason: "config_invalid" },
+        };
+      }
       await ports.writeConfig(written);
       const verified = await verifyWritten(ports, item, written, after);
       return {
@@ -298,8 +326,8 @@ function sdkPorts(): ConfigUpdatePorts {
  */
 export async function main(
   item: string,
-  expected: number | boolean,
-  next: number | boolean,
+  expected: unknown,
+  next: unknown,
 ): Promise<ConfigUpdateResult> {
   return await updateConfigFromConsole(item, expected, next, sdkPorts());
 }

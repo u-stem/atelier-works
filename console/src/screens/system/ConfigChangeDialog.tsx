@@ -73,7 +73,7 @@ export function ConfigChangeDialog({
       }
       confirmLabel={offer.kind === "stop" ? "止める" : "下げる"}
       destructive
-      busy={parsed !== null && !parsed.ok}
+      confirmDisabled={parsed !== null && !parsed.ok}
       onConfirm={onConfirm}
       onCancel={onCancel}
     >

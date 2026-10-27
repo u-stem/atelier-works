@@ -424,6 +424,7 @@ export const CONFIG_UPDATE_REFUSAL_REASONS = [
   "not_lowering",
   "has_reference",
   "conflict",
+  "config_invalid",
   "actor_unknown",
   "audit_unavailable",
 ] as const;
