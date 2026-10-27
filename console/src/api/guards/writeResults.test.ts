@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CONFIG_UPDATE_REFUSAL_REASONS,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isConfigUpdateResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
   isJobCancelResult,
+  isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
   JOB_CANCEL_REFUSAL_REASONS,
+  JOB_RERUN_REFUSAL_REASONS,
   MANUAL_INTAKE_REFUSAL_REASONS,
 } from "./writeResults.ts";
 
@@ -471,5 +475,112 @@ describe("the action audit of the other writes", () => {
         action_audit: "maybe",
       }),
     ).toBe(false);
+  });
+});
+
+describe("isJobRerunResult", () => {
+  const STARTED = {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    script_path: "f/factory/collect_github",
+    action_audit: "recorded",
+  };
+
+  test("accepts a started rerun", () => {
+    expect(isJobRerunResult(STARTED)).toBe(true);
+  });
+
+  test("accepts a job that was not found", () => {
+    expect(isJobRerunResult({ found: false })).toBe(true);
+  });
+
+  test.each([...JOB_RERUN_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isJobRerunResult({ found: true, refused: true, reason })).toBe(
+        true,
+      );
+    },
+  );
+
+  test("rejects a refusal it does not know", () => {
+    expect(
+      isJobRerunResult({ found: true, refused: true, reason: "because" }),
+    ).toBe(false);
+  });
+
+  test("accepts a started rerun whose record failed", () => {
+    expect(isJobRerunResult({ ...STARTED, action_audit: "failed" })).toBe(true);
+  });
+
+  test("rejects an audit state it does not know", () => {
+    expect(isJobRerunResult({ ...STARTED, action_audit: "maybe" })).toBe(false);
+  });
+
+  test("rejects a started rerun without the new job", () => {
+    const { job_id: _omitted, ...without } = STARTED;
+    expect(isJobRerunResult(without)).toBe(false);
+  });
+
+  test("rejects a value that is not an object", () => {
+    expect(isJobRerunResult("started")).toBe(false);
+  });
+});
+
+describe("isConfigUpdateResult", () => {
+  const CHANGED = {
+    refused: false,
+    item: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    verified: true,
+    action_audit: "recorded",
+  };
+
+  test("accepts a change of a number", () => {
+    expect(isConfigUpdateResult(CHANGED)).toBe(true);
+  });
+
+  test("accepts a change of a switch", () => {
+    expect(
+      isConfigUpdateResult({ ...CHANGED, before: true, after: false }),
+    ).toBe(true);
+  });
+
+  test("accepts a change that could not be verified", () => {
+    expect(isConfigUpdateResult({ ...CHANGED, verified: false })).toBe(true);
+  });
+
+  test.each([...CONFIG_UPDATE_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isConfigUpdateResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("rejects a refusal it does not know", () => {
+    expect(isConfigUpdateResult({ refused: true, reason: "because" })).toBe(
+      false,
+    );
+  });
+
+  test("rejects a value that is a string", () => {
+    expect(isConfigUpdateResult({ ...CHANGED, before: "50" })).toBe(false);
+  });
+
+  test("rejects an audit state it does not know", () => {
+    expect(isConfigUpdateResult({ ...CHANGED, action_audit: "maybe" })).toBe(
+      false,
+    );
+  });
+
+  test("rejects a change without the verification", () => {
+    const { verified: _omitted, ...without } = CHANGED;
+    expect(isConfigUpdateResult(without)).toBe(false);
+  });
+
+  test("rejects a value that is not an object", () => {
+    expect(isConfigUpdateResult(null)).toBe(false);
   });
 });

@@ -6,7 +6,7 @@
 // 値は`lib/console_redact.ts`で伏せてから返す。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
-import { isRecord, redactValue } from "./lib/console_redact.ts";
+import { holdsReference, isRecord, redactValue } from "./lib/console_redact.ts";
 
 export const CONFIG_RESOURCE_PATH = "f/factory/factory_config";
 
@@ -29,21 +29,6 @@ export type ConfigPorts = {
   /** 補間しない生の値を返す。 */
   readonly getConfig: () => Promise<unknown>;
 };
-
-/** 値のどこかに、変数かresourceへの参照を含むか。入れ子の中も見る。 */
-function holdsReference(value: unknown, depth = 0): boolean {
-  if (typeof value === "string") {
-    return value.includes("$var:") || value.includes("$res:");
-  }
-  if (depth >= 16) return true;
-  if (Array.isArray(value)) {
-    return value.some((item) => holdsReference(item, depth + 1));
-  }
-  if (isRecord(value)) {
-    return Object.values(value).some((item) => holdsReference(item, depth + 1));
-  }
-  return false;
-}
 
 /**
  * 設定の全項目を、キーの順に返す。参照を含む値は値を出さない。

@@ -1169,6 +1169,7 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 保留と凍結の3つ(`console_holds`、`hold_release`、`freeze_release`)も、どのsecret変数も読まない。
 保留と凍結の3つは、`discord_webhook_url`も読めないので、Discordへは送らない。解除の記録は情報の通知に残す。
 ジョブを取り消す`console_job_cancel`も、どのsecret変数も読まず、SDKの呼び出しを許可表に絞る([ジョブの取消](#ジョブの取消))。
+失敗した定期ジョブを再実行する`console_job_rerun`と、設定を変更する`console_config_update`も、同じ上限と同じ絞り方である([定期ジョブの再実行](#定期ジョブの再実行)、[設定の変更](#設定の変更))。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。
@@ -1418,6 +1419,117 @@ Windmillのジョブトークンは、一般形の規則に当たる。
 取り消せる対象の絞り込みと、操作の記録は、保護したscript側にある。
 そのため、部品が書き換えられたときの被害は、確認のダイアログを飛ばして呼ぶことに限られる。
 
+### 定期ジョブの再実行
+
+失敗した定期ジョブを再実行する`console_job_rerun`は、tag`console`で動かす書き込みのscriptである。
+運用者がConsoleの確認のダイアログを通した後にだけ呼ぶ。
+ローカルのClaudeのセッションが、このscriptを名前で呼ぶ経路は、拒否フックが止める([Claude Codeのフック](#claude-codeのフック))。
+再実行できる対象を、次のとおりに絞る。
+
+| 絞る対象 | 内容 |
+| --- | --- |
+| 対象のジョブ | パスが`f/factory/`で始まる、終わったscriptのジョブだけを扱う。外のジョブと、UUIDの形でないidは、存在しないジョブと同じ応答にする。存在を返さないためである |
+| 再実行できる定期処理 | `collect_github`と`auto_retry_pr_review`の2つだけ。scheduleに由来するジョブで、scriptがそのscheduleのscriptと一致し、失敗したものに限る。取り消されたジョブと、飛ばされたジョブは、失敗とみなさない |
+| 列挙の根拠 | 繰り返しても二重の副作用が出ないと、scriptの中身で確かめたものだけを入れる。収集は、GitHubを読んでDBの状態を置き換えるだけで、通知は種類と本文で重複を除く。自動の再開は、理由と回数を条件にした比較交換で、同じ作業項目を二度起動しない |
+| 再実行しないschedule | 上の2つ以外のすべて。`watch_*`は、タイムアウト(600秒)が間隔(5分)より長く、再実行が次の回を待つだけになる。`self_update`、`poll_*`、`cleanup_*`、`notify_daily_summary`は、反映、GitHubへの書き込み、削除、通知の二重送信のおそれがある。見張りは、次の回が取り直す。除いた理由は、許可表に注記する。リポジトリのscheduleが、許可したか、理由つきで除いたかのどちらかであることを、契約テストが固定する。新しいscheduleは、決めるまで再実行できない |
+| 引数 | scheduleの定義の`args`だけを使う。呼び出し側の引数は受けない。`$var:`か`$res:`を含む引数は、参照の先をscriptが解決しないよう、再実行しない |
+| 断る条件 | 終わっていない、失敗していない、scheduleに由来しない、許可表の外にある。同じscriptが実行中か待ちにある。次の回の予定が、scriptのタイムアウト(120秒)より近い。scheduleが無効、定義が変わった |
+| 呼び出しの順序 | ジョブの取得、対象の判定、キューの読み取り、scheduleの読み取り、操作者の導出、記録(`attempted`)、起動、記録(結果)の順に固定する。操作者を導けないときと、記録を書けないときは、起動せずに断る |
+| 起動 | `runScriptByPathAsync`だけ。フローは起動しない。起動したジョブは親のジョブを持ち、scheduleに由来する印を持たない。この呼び出しはHTTPの失敗の本文もそのまま返すので、戻りの前後の空白を除いた文字列がジョブのIDの形でなければ、起動していないとみなして投げる。記録は`failed`になり、本文はエラーの文に入れない |
+| SDKの呼び出し | `JobService.getJob`、`JobService.listQueue`、`ScheduleService.getSchedule`、`wmill.getWorkspace`、`wmill.datatable`、`wmill.runScriptByPathAsync`だけ。境界テストの許可表に載せ、importでたどれるファイルの和に当てる |
+| SQL | 自分のSQLは持たない。書くのは記録の部品だけで、書く表は`factory.console_actions`に限る |
+| 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
+
+次の隙があるので、次の回が近いときは、再実行せずに次の回を待たせる。
+scriptのscheduleは、次の回を前の回の終了時に積む。そのため、定期の回同士は重ならない。
+手動で起動したジョブは、この連鎖に入らない。
+フローのscheduleの重なりを防ぐ`no_flow_overlap`は、`trigger_kind`が`schedule`のジョブだけを数える。
+手動のジョブは数えられないので、定期の回が始まると、手動の再実行と重なりうる。
+定期の回が実行中のときは、キューの実行中のジョブとして見えるので、再実行を断る。
+定期の回が待っているときは、始まる時刻がタイムアウトより遠いときだけ、再実行を始める。
+
+実機のWindmill(1.817.0)で、次のことを確かめた。
+
+- 使い捨てのpreview(defaultのworker)のジョブのトークンで、`getJob`、`listQueue`、`getSchedule`、`runScriptByPathAsync`が通る。tag`console`のworkerでの実行は、反映の後の実ジョブで確かめる。
+- scheduleの`args`は、`getSchedule`が返す。`collect_github`と`auto_retry_pr_review`は、どちらも空のオブジェクトである。
+- `runScriptByPathAsync`で起動したジョブは、`trigger_kind`が`webhook`で、`schedule_path`を持たず、`parent_job`が起動元になる。
+  そのため、失敗の検知(`detect_schedule_failures`)は、`schedule_path`の無いジョブを拾わない。
+- 起動元のジョブが先に終わっても、起動したジョブは最後まで動く。
+- `no_flow_overlap`と次の回の積み方は、Windmillのソース(1.817.0)で読んだ。実機では、定期の回と重なる場面を作っていない。
+
+次のことは、この操作では守れない。
+
+- 再実行の失敗は、失敗の検知に載らない。通知も出ない。画面は新しいジョブの詳細へ移るので、結果はそこで確かめる。
+- 押すたびに1回起動する。複数のタブから押すと、2つ起動しうる。ロックは画面を開いたタブの中だけで効く。
+  どちらの処理も冪等なので、二重の副作用は出ない。
+- 重なりを避ける判定は、Console用workerと定期ジョブ用workerが、それぞれ1枠であることを前提にする。
+  Console用workerが1枠なので、この操作の呼び出し同士は重ならない。
+  定期ジョブ用workerが1枠なので、起動した再実行と定期の回は、同時には動かず、どちらかが待つ。
+  同じ処理が2つ起動しても、直列に動く。`auto_retry_pr_review`の見送りの通知は、先の実行が記録するので、後の実行は二重に送らない。
+  `replicas`が1であることは、`tests/scripts/console_script_tags.test.ts`が固定する。枠を増やすと、この前提が崩れる。
+- 許可の根拠は、`collect_github`と`auto_retry_pr_review`が冪等であることである。
+  この2つの中身は保護パスではないので、変更で前提が崩れうる。
+  5分ごとの定期の回が同じ副作用をすでに起こすので、再実行で増えるのは、押した回数分だけである。
+  許可表の見直しは、この2つを変えるPRのレビューで行う。
+- ローカルのClaudeのセッションも、運用者のwmillの資格で、`wmill`の汎用の呼び出しから、許可表の外のscriptを動かせる。
+  フックが止めるのは、書き込みのscriptを名前で呼ぶ経路だけである。
+  この経路は、ジョブのデバッグに必要な正当な操作でもあるので、受け入れたリスクとする。
+
+### 設定の変更
+
+設定を変更する`console_config_update`は、tag`console`で動かす書き込みのscriptである。
+運用者がConsoleの確認のダイアログを通した後にだけ呼ぶ。
+ローカルのClaudeのセッションが、このscriptを名前で呼ぶ経路は、拒否フックが止める([Claude Codeのフック](#claude-codeのフック))。
+変更できる項目と向きを、次のとおりに絞る。
+
+| 絞る対象 | 内容 |
+| --- | --- |
+| 変更できる真偽の項目 | `implement_enabled`、`dependabot_enabled`、`dependabot_merge_enabled`、`pr_ci_fix_enabled`、`pr_conflict_fix_enabled`の5つ。`true`から`false`へだけ変えられる。自動でGitHubに書くか、実装を起動する機能を止める向きである |
+| 変更できる数値の項目 | `daily_budget_usd`、`max_budget_usd_per_run`、`max_fix_rounds`、`implement_max_changed_files`、`max_fix_diff_lines`の5つ。いまの値より小さい値へだけ変えられる。予算の2つは0より大きい値、ほかの3つは1以上の整数に限る。0にすると、設定の検証が拒否するか、Claudeの利用が止まる。止めるのは真偽の項目の役割である |
+| 変更できない項目 | 上の10個以外のすべて。`owners`、`repo_allowlist`、`factory_repo`、`allowed_*`、`check_commands_by_repo`、モデル名のような権限や宛先に関わる設定、`*_since`、`retention_*`、`dependabot_min_published_days`、`worker_alert_memory_ratio`、`*_timeout_sec`、`pr_conflict_watch_enabled`を含む。新しい項目も、決めるまで変更できない。有効にする向きと上げる向きは、手順(有効にする前の確認、`*_since`の書き直し)があるので、人がCLIで行う |
+| 読み取り | 補間しない生の値(`ResourceService.getResourceValue`)。パスはリテラルの`f/factory/factory_config`に固定し、境界テストが確かめる。補間する取得(`getResourceValueInterpolated`と`getResource`)は使わない |
+| 参照 | 設定のどこかに`$var:`か`$res:`があれば、変更しない。読み取りが参照を展開すると、書き戻しで秘密の値が設定に入るおそれがあるためである |
+| 比較交換 | 呼び出し側が「読んだ時の値」を渡す。書く直前に読み直した値と違えば、変更しない。項目が設定に無いときも変更しない |
+| 書き戻し | 対象の項目だけを置き換えた全体を書く。他のキーは同じ順の同じ文字列のまま残す。書いた後に読み直し、対象の項目が新しい値で、他のキーが書いた内容と同じかを返す。違えば、記録の結果を`partial`にする。読み直しが検出するのは、書き込みの後に起きた変更だけである。書く直前の読み取りから書き込みまでの間の変更は、検出できない |
+| 記録 | 項目名と、前後の値(数値か真偽)だけを入れる。設定の全体は入れない |
+| 呼び出しの順序 | 許可表の判定、操作者の導出、記録(`attempted`)、読み取り、比較と参照の検査、書き込み、読み直し、記録(結果)の順に固定する。項目が文字列でないときは、許可表の外として断る。比較と参照の検査で断ったときも、記録は`failed`で残す |
+| SDKの呼び出し | `ResourceService.getResourceValue`、`ResourceService.updateResourceValue`、`wmill.getWorkspace`、`wmill.datatable`だけ。境界テストの許可表に載せ、書き込みのパスもリテラルに固定する |
+| SQL | 自分のSQLは持たない。書くのは記録の部品だけで、書く表は`factory.console_actions`に限る |
+| 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
+
+実機のWindmill(1.817.0)で、使い捨てのpreview(defaultのworker)のジョブのトークンが、`factory_config`の生の値を読めることを確かめた。
+現在の設定は参照を含まないので、生の値と補間した値は同じである。この読み取りだけでは、補間しないことは示せない。
+補間しないことは、取得の呼び出しが別のエンドポイントであることと、境界テストが補間する呼び出しを禁じることで守る。
+書き込み(`updateResourceValue`)は、実際の設定を書き換えるため、実機では確かめていない。反映の後に、実ジョブで確かめる。
+
+次のことは、この操作では守れない。
+
+- 書く直前の読み取りから書き込みまでは原子的でない。Windmillのresourceの更新は、条件付きの書き込みを持たない。
+  その間に、Windmillの画面や`wmill resource push`が設定を書くと、書き戻しがその変更を失わせる。
+  項目を問わない。対象の項目以外の変更も失われ、検出できない。
+  書いた後の読み直しが検出するのは、書き込みの後に起きた変更だけである。
+  読み直しは、対象の項目が新しい値で、他のキーが書いた内容と同じかを確かめ、違えば`verified`を偽にして知らせる。
+  この間が問題になるのは、別の経路が同時に書く場合に限る。Console用workerが1枠なので、この操作の呼び出し同士は重ならない。
+- 置き換えた設定の全体は、書く前に設定の読み込みの検証にかけない。
+  別の項目がすでに壊れていても、許可した1項目の変更は書かれる。
+  全体を検証するには、その本体(`lib/config.ts`)とその型(`lib/types.ts`)をscriptがたどり、境界の走査が要求する保護パスに入れる必要がある。
+  この2つは設定の項目を足す変更が日常的に触れるので、守ると、その変更で自動の実装と修正が止まる。
+  守っているのは、項目ごとの検査と、契約テストである。
+  項目ごとの検査は、許可表の項目と向きと下限、参照、比較交換である。
+  契約テストは、許可したすべての項目の変更が、実際の読み込みの検証を通る設定を書くことを確かめる。
+  数値は、下限の値まで下げた設定で確かめる。
+  向きを下げる変更は、設定の組み合わせの検査に触れないので、この守りで足りる。
+- 元に戻す機能は無い。元に戻すには、運用者がWindmillでリソースを編集するか、`wmill resource push`で戻す。
+- 実装を止めている間に承認すると、要件定義は承認済みで終わり、要対応に載らず、再開の口が無い。
+  有効に戻した後、人が`retry_work_item`(Consoleの再実行)で再開する。確認のダイアログが、この旨を伝える。
+- 数値の項目は、動いているフローの以後の手順にも効く。
+  日次の予算を今日の使用額より小さくすると、今日のClaudeを使うフローがすべて失敗し、Consoleからは引き上げられない。
+  確認のダイアログが、この旨を伝える。今日の使用額は、ダイアログでは調べない。
+- ローカルのClaudeのセッションも、運用者のwmillの資格で、`wmill resource push`やAPIから、設定を直接書ける。
+  この経路は、許可表も、比較交換も、操作の記録も通らない。
+  フックが止めるのは、書き込みのscriptを名前で呼ぶ経路だけである。
+  この経路は、設定の手順で人が使う正当な操作でもあるので、受け入れたリスクとする。
+
 ### 操作の記録
 
 Consoleから行う書き込みの操作は、表`factory.console_actions`に記録する。
@@ -1439,6 +1551,8 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 | 操作 | 記録の名前 | 記録を書けないとき |
 | --- | --- | --- |
 | ジョブの取消 | `job_cancel` | 取り消さずに断る |
+| 定期ジョブの再実行 | `job_rerun` | 起動せずに断る |
+| 設定の変更 | `config_update` | 変更せずに断る |
 | 作業項目の再実行 | `retry_work_item` | 通す |
 | 保留の解除 | `hold_release` | 通す |
 | 凍結とdeployの保留の解除 | `freeze_release` | 通す |
@@ -1458,8 +1572,17 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 定義は`lib/console_actions.ts`にあり、保護パスで守る。
 保護パスの目的は、PRの自動修正と実装が、人のレビューを経ずに書き換えるのを止めることである。
 この表に記録する書き込みのscriptは、記録の順序を持つので保護パスに入れる。
-対象は、取消の`console_job_cancel`、`retry_work_item`、`manual_intake_submit`と、保留と凍結の解除の2本である。
 書き換えられると、記録なしで同じ操作ができ、記録が誰の操作も表さなくなるためである。
+対象は、次の7本である。
+
+- 取消の`console_job_cancel`
+- 定期ジョブの再実行の`console_job_rerun`
+- 設定変更の`console_config_update`
+- `retry_work_item`
+- `manual_intake_submit`
+- 保留の解除の`hold_release`
+- 凍結とdeployの保留の解除の`freeze_release`
+
 `approval_decide`、`notice_resolve`、`audit_kickoff`は、この表に記録しない。
 記録の順序を持たないので、この理由では保護パスに入れていない。
 `approval_decide`が決めた人を残す先は、承認依頼の表の`decided_by`である。
@@ -3310,7 +3433,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | subagentのdeployの保留を置く操作(`freeze:place`の`--scope deploy`、`scripts/freeze.ts place --scope deploy`)と凍結の解除(`freeze:release`、`scripts/freeze.ts release`)。`--scope`の値が実行時に決まる形も拒否する | deployの保留は反映全体を止める。解除すると保留を外せる。subagentには、確認する相手がいない。スケジュールの凍結を置くことと一覧は許す |
-| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
+| 主セッションを含むすべてのClaudeのセッションの、Consoleの書き込みのscriptを呼びうる操作。コマンドの語か標準入力の文字列に、書き込みのscript(`scripts/claude-hooks/console-scripts.ts`の一覧。解除の`hold_release`と`freeze_release`、取消の`console_job_cancel`、再実行の`console_job_rerun`、設定変更の`console_config_update`、`approval_decide`、`retry_work_item`など)の名前、名前に当たりうるglob、ブレースの形があるもの。読み取りのプログラムと`wmill`の読み取りの副コマンドは、実行を表す語が並ばない限り除く。名前なしの`wmill jobs push`。凍結の変数`f/factory/freezes`を書く`wmill variable add`と`wmill variable push`、変数を書くURLへの呼び出し | 解除は、人がConsoleの画面で行うか、端末で確認を通るCLIで行う。ローカルの主セッションはCLIでは`session`として扱われ、他の主体の保留の解除に端末での人の確認が要る。Consoleのscriptは、その確認を通らずに他の主体の保留を外せる。ハッシュでの呼び出し、パーセント符号化したパス、変数やファイルで組み立てた名前は止められないので、残るリスクとして受け入れる |
 | subagentの保留を置く・解除する操作。保留のコード(`hold`、`hold_psql`、`holds`。拡張子は省ける)を指す語を含む実行系の呼び出しのうち`list`と検査の道具以外、`hold:place`と`hold:release`を指しうる語を含む`mise`の実行、`holds`を語に含む`docker`と`psql`。`bun exec`の文字列は、シェルの入力として判定する | 保留は自動マージを止める。subagentには、置く前に確認する相手がいない。一覧(`list`)は許す |
 | `gh pr`と`gh api`のうち、読み取りか編集と確かめられた形以外(`gh pr merge`、書き込みのメソッドの`gh api`、GraphQLのマージのmutationなど)と、マージを含む`gh alias`。対象のリポジトリのマージの保留が有効なときと、保留を読めないとき。リポジトリが決まらないものは、どのリポジトリの保留でも拒否する | 保留は、期限つきでマージを止める。綴りの列挙は漏れるので、確かめられた形以外を対象にする。読めないときに通すと、保留を置いた意味が外れる |
 | `wmill datatable migrate up`と`migrate down`(deployの保留が有効か、読めないとき)。`--dry-run`の無い`wmill sync push`(deployの保留かスケジュールの凍結が有効か、読めないとき) | deployの保留は反映全体を止める。除外を付けない手動のpushは、凍結中のスケジュールを上書きする |

@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   CANCELABLE_FLOW_PATHS,
   canCancelJob,
-  cancelDialogHandlers,
   cancelDialogLines,
+  canRerunJob,
+  confirmDialogHandlers,
   DEPENDABOT_FLOW_PATH,
+  RERUNNABLE_SCHEDULE_PATHS,
+  rerunDialogLines,
 } from "./jobActions.ts";
 
 function job(overrides: Record<string, unknown> = {}) {
@@ -190,13 +193,13 @@ describe("cancelDialogLines", () => {
   });
 });
 
-describe("cancelDialogHandlers", () => {
+describe("confirmDialogHandlers", () => {
   const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
   function setup() {
     const opened: boolean[] = [];
     const submitted: string[] = [];
-    const handlers = cancelDialogHandlers({
+    const handlers = confirmDialogHandlers({
       jobId: JOB,
       setOpen: (open) => {
         opened.push(open);
@@ -242,5 +245,138 @@ describe("cancelDialogHandlers", () => {
     const { handlers, opened } = setup();
     handlers.onDismiss();
     expect(opened).toEqual([false]);
+  });
+});
+
+function failedRun(overrides: Record<string, unknown> = {}) {
+  return {
+    state: "failure",
+    script_path: "f/factory/collect_github",
+    job_kind: "script",
+    schedule_path: "f/factory/collect_github",
+    parent_job: null,
+    is_flow_step: false,
+    tag: "periodic",
+    ...overrides,
+  };
+}
+
+describe("canRerunJob", () => {
+  test("allows a failed run of a listed schedule", () => {
+    expect(canRerunJob(failedRun())).toBe(true);
+  });
+
+  test.each([...RERUNNABLE_SCHEDULE_PATHS])(
+    "allows a failed run of %s",
+    (path) => {
+      expect(
+        canRerunJob(failedRun({ script_path: path, schedule_path: path })),
+      ).toBe(true);
+    },
+  );
+
+  test.each([
+    "running",
+    "queued",
+    "scheduled",
+    "success",
+    "canceled",
+    "skipped",
+  ])("does not allow a job in the state %s", (state) => {
+    expect(canRerunJob(failedRun({ state }))).toBe(false);
+  });
+
+  test("does not allow a run that did not come from a schedule", () => {
+    expect(canRerunJob(failedRun({ schedule_path: null }))).toBe(false);
+  });
+
+  test("does not allow a schedule that is not on the list", () => {
+    expect(
+      canRerunJob(
+        failedRun({
+          script_path: "f/factory/self_update",
+          schedule_path: "f/factory/self_update",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("does not allow a script that differs from the one of the schedule", () => {
+    expect(
+      canRerunJob(failedRun({ script_path: "f/factory/self_update" })),
+    ).toBe(false);
+  });
+
+  test("does not allow a flow", () => {
+    expect(canRerunJob(failedRun({ job_kind: "flow" }))).toBe(false);
+  });
+
+  test("does not allow a run that has a parent", () => {
+    expect(
+      canRerunJob(
+        failedRun({ parent_job: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b" }),
+      ),
+    ).toBe(false);
+  });
+
+  test("does not allow a job of the Console worker", () => {
+    expect(canRerunJob(failedRun({ tag: "console" }))).toBe(false);
+  });
+});
+
+describe("rerunDialogLines", () => {
+  test("says the schedule's own arguments are used", () => {
+    expect(rerunDialogLines("f/factory/collect_github").join("\n")).toContain(
+      "scheduleに定義された引数",
+    );
+  });
+
+  test("says that the failed job stays", () => {
+    expect(rerunDialogLines("f/factory/collect_github").join("\n")).toContain(
+      "失敗したジョブは残ります",
+    );
+  });
+
+  test("says that a failed rerun is not in the notice of failed schedules", () => {
+    expect(rerunDialogLines("f/factory/collect_github").join("\n")).toContain(
+      "再実行の失敗は、定期の失敗の通知に載りません",
+    );
+  });
+
+  test("leaves out where to read the result, which the notice tells", () => {
+    expect(
+      rerunDialogLines("f/factory/collect_github").join("\n"),
+    ).not.toContain("新しいジョブ");
+  });
+
+  test("leaves out the refusals, which the notice tells", () => {
+    expect(
+      rerunDialogLines("f/factory/collect_github").join("\n"),
+    ).not.toContain("再実行しません");
+  });
+
+  test("says what the collection does", () => {
+    expect(rerunDialogLines("f/factory/collect_github").join("\n")).toContain(
+      "GitHub",
+    );
+  });
+
+  test("says what the automatic retry does", () => {
+    expect(
+      rerunDialogLines("f/factory/auto_retry_pr_review").join("\n"),
+    ).toContain("PRレビュー");
+  });
+
+  test.each([...RERUNNABLE_SCHEDULE_PATHS])(
+    "gives %s a sentence of its own",
+    (path) => {
+      expect(rerunDialogLines(path).length).toBeGreaterThanOrEqual(3);
+    },
+  );
+
+  test("does not say the rerun can be undone", () => {
+    expect(
+      rerunDialogLines("f/factory/collect_github").join("\n"),
+    ).not.toContain("元に戻せます");
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  holdsReference,
   isRecord,
   LOG_LIMIT_BYTES,
   RESULT_LIMIT_BYTES,
@@ -722,5 +723,29 @@ describe("isRecord of the redact module", () => {
     ["a null prototype object", Object.create(null)],
   ])("answers like lib/types.ts for %s", (_name, value) => {
     expect(isRecord(value)).toBe(types.isRecord(value));
+  });
+});
+
+describe("holdsReference", () => {
+  test("finds a variable reference in a string", () => {
+    expect(holdsReference("$var:f/factory/x")).toBe(true);
+  });
+
+  test("finds a resource reference in a string", () => {
+    expect(holdsReference("see $res:f/factory/x")).toBe(true);
+  });
+
+  test("finds a reference in an array inside an object", () => {
+    expect(holdsReference({ a: [{ b: "$var:f/x" }] })).toBe(true);
+  });
+
+  test("does not find a reference in plain values", () => {
+    expect(holdsReference({ a: 1, b: [true, null, "text"] })).toBe(false);
+  });
+
+  test("treats a structure nested deeper than the limit as a reference", () => {
+    let deep: unknown = "x";
+    for (let i = 0; i < 40; i += 1) deep = { next: deep };
+    expect(holdsReference(deep)).toBe(true);
   });
 });

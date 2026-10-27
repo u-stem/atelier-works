@@ -13,6 +13,7 @@ export function ConfirmDialog({
   confirmLabel,
   destructive = false,
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
   children,
@@ -24,6 +25,8 @@ export function ConfirmDialog({
   destructive?: boolean;
   /** 実行中。確認のボタンを押せなくする。 */
   busy?: boolean;
+  /** 入力が整っていない。確認のボタンを押せなくする。実行中(`busy`)とは別の理由で押せないことを表す。 */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   children: ReactNode;
@@ -70,7 +73,7 @@ export function ConfirmDialog({
           </Button>
           <Button
             variant={destructive ? "destructive" : "default"}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}

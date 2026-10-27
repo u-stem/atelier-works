@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
@@ -346,6 +346,131 @@ export function isJobCancelResult(value: unknown): value is JobCancelResult {
     isString(value.flow_path) &&
     isNullableString(value.job_state) &&
     (value.work_item === null || isJobCancelWorkItem(value.work_item)) &&
+    isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * 定期ジョブを再実行できなかった理由。`f/factory/console_job_rerun.ts`の`RERUN_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。画面は日本語の固定文に直す(`lib/writeNotices.ts`)。
+ */
+export const JOB_RERUN_REFUSAL_REASONS = [
+  "not_scheduled",
+  "not_allowed",
+  "not_failed",
+  "not_finished",
+  "already_running",
+  "next_run_soon",
+  "schedule_disabled",
+  "schedule_changed",
+  "args_have_reference",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type JobRerunRefusalReason = (typeof JOB_RERUN_REFUSAL_REASONS)[number];
+
+const isJobRerunRefusalReason: Guard<JobRerunRefusalReason> = isOneOf(
+  JOB_RERUN_REFUSAL_REASONS,
+);
+
+/**
+ * 定期ジョブを再実行した結果。`found: false`は、対象外のジョブも含めて、存在しないジョブと同じ応答である。
+ * 起動したジョブの`job_id`は、再実行の新しいジョブのidで、結果はその詳細で読む。
+ */
+export type JobRerunResult =
+  | { readonly found: false }
+  | {
+      readonly found: true;
+      readonly refused: true;
+      readonly reason: JobRerunRefusalReason;
+    }
+  | {
+      readonly found: true;
+      readonly refused: false;
+      readonly job_id: string;
+      readonly script_path: string;
+      readonly action_audit: ActionAudit;
+    };
+
+export function isJobRerunResult(value: unknown): value is JobRerunResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.found === false) {
+    return true;
+  }
+  if (value.found !== true) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isJobRerunRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isString(value.job_id) &&
+    isString(value.script_path) &&
+    isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * 設定を変更できなかった理由。`f/factory/console_config_update.ts`の`CONFIG_UPDATE_REFUSAL_REASONS`と
+ * 同じ並びで、契約テストが突き合わせる。画面は日本語の固定文に直す(`lib/writeNotices.ts`)。
+ */
+export const CONFIG_UPDATE_REFUSAL_REASONS = [
+  "item_not_allowed",
+  "invalid_value",
+  "not_lowering",
+  "has_reference",
+  "conflict",
+  "actor_unknown",
+  "audit_unavailable",
+] as const;
+
+export type ConfigUpdateRefusalReason =
+  (typeof CONFIG_UPDATE_REFUSAL_REASONS)[number];
+
+const isConfigUpdateRefusalReason: Guard<ConfigUpdateRefusalReason> = isOneOf(
+  CONFIG_UPDATE_REFUSAL_REASONS,
+);
+
+/**
+ * 設定を変更した結果。`verified`は、書いた後に読み直した値が期待と同じだったか。
+ * 値は、真偽か数値の項目だけを変えるので、どちらかである。
+ */
+export type ConfigUpdateResult =
+  | { readonly refused: true; readonly reason: ConfigUpdateRefusalReason }
+  | {
+      readonly refused: false;
+      readonly item: string;
+      readonly before: number | boolean;
+      readonly after: number | boolean;
+      readonly verified: boolean;
+      readonly action_audit: ActionAudit;
+    };
+
+function isConfigValue(value: unknown): value is number | boolean {
+  return (
+    isBoolean(value) || (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+export function isConfigUpdateResult(
+  value: unknown,
+): value is ConfigUpdateResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isConfigUpdateRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isString(value.item) &&
+    isConfigValue(value.before) &&
+    isConfigValue(value.after) &&
+    isBoolean(value.verified) &&
     isActionAudit(value.action_audit)
   );
 }

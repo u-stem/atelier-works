@@ -47,6 +47,8 @@ describe("SCRIPT_PATHS", () => {
       "console_schedules",
       "console_config",
       "console_job_cancel",
+      "console_job_rerun",
+      "console_config_update",
     ]);
   });
 
@@ -65,6 +67,8 @@ describe("SCRIPT_PATHS", () => {
       console_schedules: "f/factory/console_schedules",
       console_config: "f/factory/console_config",
       console_job_cancel: "f/factory/console_job_cancel",
+      console_job_rerun: "f/factory/console_job_rerun",
+      console_config_update: "f/factory/console_config_update",
     });
   });
 });
@@ -83,6 +87,8 @@ describe("isScriptName", () => {
     "console_schedules",
     "console_config",
     "console_job_cancel",
+    "console_job_rerun",
+    "console_config_update",
   ])("accepts the allowed name %s", (name) => {
     expect(isScriptName(name)).toBe(true);
   });

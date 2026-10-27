@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   describeApprovalResult,
   describeAuditResult,
+  describeConfigUpdateResult,
   describeFreezeReleaseResult,
   describeHoldReleaseResult,
   describeJobCancelResult,
+  describeJobRerunResult,
   describeNoticeResult,
   describeRetryResult,
   releaseNotice,
@@ -523,5 +525,129 @@ describe("releaseNotice", () => {
         describeHoldReleaseResult,
       ),
     ).toEqual({ tone: "error", message: "権限がありません。" });
+  });
+});
+
+describe("describeJobRerunResult", () => {
+  const STARTED = {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    script_path: "f/factory/collect_github",
+    action_audit: "recorded",
+  } as const;
+
+  test("reports a started rerun as a success", () => {
+    expect(describeJobRerunResult(STARTED).tone).toBe("success");
+  });
+
+  test("tells where to read the result", () => {
+    expect(describeJobRerunResult(STARTED).message).toContain("新しいジョブ");
+  });
+
+  test("warns when the record could not be written", () => {
+    expect(
+      describeJobRerunResult({ ...STARTED, action_audit: "failed" }).tone,
+    ).toBe("warning");
+  });
+
+  test("says a job that does not exist is not found", () => {
+    expect(describeJobRerunResult({ found: false })).toEqual({
+      tone: "info",
+      message: "ジョブが見つかりません。",
+    });
+  });
+
+  test.each([
+    ["not_scheduled", "定期の実行ではない"],
+    ["not_allowed", "再実行できない対象"],
+    ["not_failed", "失敗したジョブではない"],
+    ["not_finished", "まだ終わっていない"],
+    ["already_running", "実行中か待ち"],
+    ["next_run_soon", "次の回を待って"],
+    ["schedule_disabled", "無効"],
+    ["schedule_changed", "定義が変わった"],
+    ["args_have_reference", "参照"],
+    ["actor_unknown", "操作者を確認できない"],
+    ["audit_unavailable", "操作の記録を残せない"],
+  ] as const)("explains the refusal %s", (reason, phrase) => {
+    expect(
+      describeJobRerunResult({ found: true, refused: true, reason }).message,
+    ).toContain(phrase);
+  });
+
+  test("reports a refusal as information, not as a failure", () => {
+    expect(
+      describeJobRerunResult({
+        found: true,
+        refused: true,
+        reason: "already_running",
+      }).tone,
+    ).toBe("info");
+  });
+});
+
+describe("describeConfigUpdateResult", () => {
+  const LOWERED = {
+    refused: false,
+    item: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    verified: true,
+    action_audit: "recorded",
+  } as const;
+  const STOPPED = {
+    ...LOWERED,
+    item: "implement_enabled",
+    before: true,
+    after: false,
+  } as const;
+
+  test("reports a lowered number with both values", () => {
+    expect(describeConfigUpdateResult(LOWERED)).toEqual({
+      tone: "success",
+      message: "daily_budget_usdを50から20に下げました。",
+    });
+  });
+
+  test("reports a stopped switch", () => {
+    expect(describeConfigUpdateResult(STOPPED)).toEqual({
+      tone: "success",
+      message: "implement_enabledを止めました。",
+    });
+  });
+
+  test("warns when the value read back differs", () => {
+    const notice = describeConfigUpdateResult({ ...LOWERED, verified: false });
+    expect([notice.tone, notice.message]).toEqual([
+      "warning",
+      "daily_budget_usdを書き込みましたが、読み直した値が期待と違います。Windmillで確かめてください。",
+    ]);
+  });
+
+  test("warns when the record could not be written", () => {
+    expect(
+      describeConfigUpdateResult({ ...LOWERED, action_audit: "failed" }).tone,
+    ).toBe("warning");
+  });
+
+  test.each([
+    ["item_not_allowed", "変更できない"],
+    ["invalid_value", "範囲に合わない"],
+    ["not_lowering", "止める向きか、下げる向き"],
+    ["has_reference", "参照"],
+    ["conflict", "値が変わっていました"],
+    ["actor_unknown", "操作者を確認できない"],
+    ["audit_unavailable", "操作の記録を残せない"],
+  ] as const)("explains the refusal %s", (reason, phrase) => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason }).message,
+    ).toContain(phrase);
+  });
+
+  test("reports a refusal as information, not as a failure", () => {
+    expect(
+      describeConfigUpdateResult({ refused: true, reason: "conflict" }).tone,
+    ).toBe("info");
   });
 });

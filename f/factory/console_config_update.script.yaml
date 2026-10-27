@@ -1,0 +1,26 @@
+summary: '[OP-2-8] 設定を止める向きに変更'
+description: Factory
+  Consoleから、factory_configの許可した項目を1つ、止める向きか下げる向きにだけ変更します。真偽の項目はtrueからfalseへ、数値の項目は小さい値へ変えられます。読んだ時の値と書く直前の値が違えば変更しません。参照を含む設定は変更しません。操作の前に記録を残し、残せなければ変更しません。書いた後に読み直して返します。
+lock: '!inline f/factory/console_config_update.script.lock'
+kind: script
+schema:
+  properties:
+    expected:
+      type: object
+      description: ''
+      default: null
+    item:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    next:
+      type: object
+      description: ''
+      default: null
+  required:
+    - item
+    - expected
+    - next
+tag: console
+timeout: 30

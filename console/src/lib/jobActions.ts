@@ -42,7 +42,7 @@ export function canCancelJob(job: CancelCandidate): boolean {
   );
 }
 
-export type CancelDialogHandlers = {
+export type ConfirmDialogHandlers = {
   readonly onOpen: () => void;
   readonly onConfirm: () => void;
   readonly onDismiss: () => void;
@@ -50,14 +50,14 @@ export type CancelDialogHandlers = {
 
 /**
  * 確認のダイアログの操作を、画面の状態から切り離して決める。
- * ボタンを押すと開くだけで、中止の書き込みは確認を通った後(`onConfirm`)にだけ呼ぶ。
+ * 中止も再実行も、ボタンを押すと開くだけで、書き込みは確認を通った後(`onConfirm`)にだけ呼ぶ。
  * 確認のダイアログの「取り消す」ボタンとEscは、どちらも`onDismiss`に届き、書き込みを呼ばずに閉じる。
  */
-export function cancelDialogHandlers(input: {
+export function confirmDialogHandlers(input: {
   readonly jobId: string;
   readonly setOpen: (open: boolean) => void;
   readonly submit: (jobId: string) => void;
-}): CancelDialogHandlers {
+}): ConfirmDialogHandlers {
   return {
     onOpen: () => {
       input.setOpen(true);
@@ -124,4 +124,66 @@ export function cancelDialogLines(
     );
   }
   return lines;
+}
+
+/**
+ * 再実行の操作を出すschedule。backendの再実行のscriptが持つ`RERUNNABLE_SCHEDULES`のscheduleのパスと同じ並びで、
+ * 再実行のscriptの契約テストが突き合わせる。
+ * 画面が出す操作の絞り込みで、権限の境界ではない。境界はscriptが同じ表で確かめる。
+ */
+export const RERUNNABLE_SCHEDULE_PATHS: readonly string[] = [
+  "f/factory/collect_github",
+  "f/factory/auto_retry_pr_review",
+];
+
+type RerunCandidate = Pick<
+  JobSummaryView,
+  | "state"
+  | "script_path"
+  | "job_kind"
+  | "parent_job"
+  | "is_flow_step"
+  | "tag"
+  | "schedule_path"
+>;
+
+/**
+ * 再実行の操作を出すジョブか。失敗した、scheduleに由来するscriptのジョブで、
+ * scheduleが許可表にあり、scriptがそのscheduleのscriptと一致するもの。
+ * 実行中、成功、取り消し、飛ばされたジョブと、子のステップ、tag consoleのジョブには出さない。
+ */
+export function canRerunJob(job: RerunCandidate): boolean {
+  return (
+    job.state === "failure" &&
+    job.job_kind === "script" &&
+    !job.is_flow_step &&
+    job.parent_job === null &&
+    job.tag !== "console" &&
+    job.schedule_path !== null &&
+    RERUNNABLE_SCHEDULE_PATHS.includes(job.schedule_path) &&
+    job.script_path === job.schedule_path
+  );
+}
+
+const RERUN_EFFECT_LINES: Readonly<Record<string, string>> = {
+  "f/factory/collect_github":
+    "GitHubの所有者ごとに、リポジトリとPRとIssueの状態を読み、DBの状態を置き換えます。GitHub APIの使用量を使います。",
+  "f/factory/auto_retry_pr_review":
+    "GitHubの一時的な失敗で止まったPRレビューのうち、待ちを過ぎたものを再開します。再開は同じ作業項目につき3回までで、この再実行も数えます。",
+};
+
+/**
+ * 確認のダイアログに並べる文。引数の出どころ、処理の効果、失敗したジョブが残ることを書く。
+ * 再実行の失敗は定期の失敗の通知に載らないことも伝える。
+ * 結果を読む場所(新しいジョブ)と、再実行しない場合は、押した後の知らせが伝えるので、ここには書かない。
+ */
+export function rerunDialogLines(scriptPath: string): readonly string[] {
+  const effect = Object.hasOwn(RERUN_EFFECT_LINES, scriptPath)
+    ? RERUN_EFFECT_LINES[scriptPath]
+    : undefined;
+  return [
+    "scheduleに定義された引数で、この処理を1回だけ実行します。",
+    ...(effect === undefined ? [] : [effect]),
+    "失敗したジョブは残ります。再実行の失敗は、定期の失敗の通知に載りません。",
+  ];
 }

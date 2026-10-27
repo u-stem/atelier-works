@@ -7,15 +7,20 @@ import type {
   ApprovalDecideResult,
   AuditKickoffResult,
   AuditSkipReason,
+  ConfigUpdateRefusalReason,
+  ConfigUpdateResult,
   FreezeReleaseResult,
   HoldReleaseResult,
   JobCancelRefusalReason,
   JobCancelResult,
   JobCancelWorkItem,
+  JobRerunRefusalReason,
+  JobRerunResult,
   NoticeResolveResult,
   RetryWorkItemResult,
 } from "../api/guards/writeResults.ts";
 import { workItemStatusLabel } from "./labels.ts";
+import { safeText } from "./safeText.ts";
 
 /**
  * 画面に出す知らせ。
@@ -264,6 +269,84 @@ export function describeJobCancelResult(result: JobCancelResult): WriteNotice {
       }
     : { tone: "success", message: `ジョブを中止しました。${workItem}` };
   return noteActionAudit(notice, result.action_audit);
+}
+
+const JOB_RERUN_REFUSALS: Readonly<Record<JobRerunRefusalReason, string>> = {
+  not_scheduled: "定期の実行ではないため、再実行できません。",
+  not_allowed: "このジョブは、再実行できない対象です。",
+  not_failed: "失敗したジョブではないため、再実行しませんでした。",
+  not_finished: "まだ終わっていないため、再実行しませんでした。",
+  already_running:
+    "同じ処理が実行中か待ちです。終わってから、もう一度確かめてください。",
+  next_run_soon:
+    "次の定期実行がもうすぐ始まります。再実行せず、次の回を待ってください。",
+  schedule_disabled: "このscheduleは無効のため、再実行しませんでした。",
+  schedule_changed: "scheduleの定義が変わったため、再実行しませんでした。",
+  args_have_reference:
+    "scheduleの引数に変数かresourceへの参照があるため、再実行しませんでした。",
+  actor_unknown: "操作者を確認できないため、再実行しませんでした。",
+  audit_unavailable: "操作の記録を残せないため、再実行しませんでした。",
+};
+
+/**
+ * 定期ジョブの再実行の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 起動したときは、結果が新しいジョブにあることを伝える。再実行の失敗は、定期の失敗の検知に載らない。
+ */
+export function describeJobRerunResult(result: JobRerunResult): WriteNotice {
+  if (!result.found) {
+    return { tone: "info", message: "ジョブが見つかりません。" };
+  }
+  if (result.refused) {
+    return { tone: "info", message: JOB_RERUN_REFUSALS[result.reason] };
+  }
+  return noteActionAudit(
+    {
+      tone: "success",
+      message: "再実行を始めました。結果は新しいジョブで確認してください。",
+    },
+    result.action_audit,
+  );
+}
+
+const CONFIG_UPDATE_REFUSALS: Readonly<
+  Record<ConfigUpdateRefusalReason, string>
+> = {
+  item_not_allowed: "この項目は、Consoleから変更できない項目です。",
+  invalid_value: "値が範囲に合わないため、変更しませんでした。",
+  not_lowering:
+    "止める向きか、下げる向きの変更だけできます。変更しませんでした。",
+  has_reference: "設定に変数かresourceへの参照があるため、変更しませんでした。",
+  conflict:
+    "画面を開いた後に、設定の値が変わっていました。更新して、もう一度確かめてください。",
+  actor_unknown: "操作者を確認できないため、変更しませんでした。",
+  audit_unavailable: "操作の記録を残せないため、変更しませんでした。",
+};
+
+/**
+ * 設定の変更の結果。断りは失敗ではなく、何も変えなかった結果として伝える。
+ * 書いた後に読み直した値が期待と違うときは、変えたと言い切らず、Windmillで確かめるよう伝える。
+ */
+export function describeConfigUpdateResult(
+  result: ConfigUpdateResult,
+): WriteNotice {
+  if (result.refused) {
+    return { tone: "info", message: CONFIG_UPDATE_REFUSALS[result.reason] };
+  }
+  const item = safeText(result.item);
+  if (!result.verified) {
+    return noteActionAudit(
+      {
+        tone: "warning",
+        message: `${item}を書き込みましたが、読み直した値が期待と違います。Windmillで確かめてください。`,
+      },
+      result.action_audit,
+    );
+  }
+  const message =
+    typeof result.before === "boolean"
+      ? `${item}を止めました。`
+      : `${item}を${String(result.before)}から${String(result.after)}に下げました。`;
+  return noteActionAudit({ tone: "success", message }, result.action_audit);
 }
 
 /** 書き込みの結果を、トーストの文にする。失敗は、失敗の文をそのまま`error`にする。 */

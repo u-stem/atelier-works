@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
 import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
@@ -22,11 +23,17 @@ const SNAPSHOT: ConfigSnapshotView = {
   items: ITEMS,
 };
 
+function snapshotOf(items: ConfigItemView[]): ConfigSnapshotView {
+  return { path: "f/factory/factory_config", items };
+}
+
 function renderSection(query = freshQuery(SNAPSHOT)): string {
   return renderToStaticMarkup(
-    <TooltipProvider>
-      <ConfigSection query={query} />
-    </TooltipProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <TooltipProvider>
+        <ConfigSection query={query} />
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -93,8 +100,50 @@ describe("ConfigSection", () => {
     expect(renderSection()).toMatch(/<label[^>]*>キー名で絞り込む<\/label>/);
   });
 
-  test("says that changing the config is not done here", () => {
-    expect(renderSection()).toContain("変更はここではできません");
+  test("says that only some items can be changed, and only one way", () => {
+    expect(renderSection()).toContain(
+      "止める向きと下げる向きの変更だけ、許可した項目でできます",
+    );
+  });
+
+  test("offers to lower a number that is on the list", () => {
+    expect(renderSection()).toContain(">下げる<");
+  });
+
+  test("offers to stop a switch that is on", () => {
+    const query = freshQuery(
+      snapshotOf([
+        { key: "implement_enabled", kind: "value", value: true, masked: false },
+      ]),
+    );
+    expect(renderSection(query)).toContain(">止める<");
+  });
+
+  test("offers nothing for a switch that is already off", () => {
+    const query = freshQuery(
+      snapshotOf([
+        {
+          key: "implement_enabled",
+          kind: "value",
+          value: false,
+          masked: false,
+        },
+      ]),
+    );
+    expect(renderSection(query)).not.toContain(">止める<");
+  });
+
+  test("offers nothing for an item that is not on the list", () => {
+    const query = freshQuery(
+      snapshotOf([
+        { key: "owners", kind: "value", value: true, masked: false },
+      ]),
+    );
+    expect(renderSection(query)).not.toContain(">止める<");
+  });
+
+  test("keeps the sentences of the confirmation out of the page until the dialog opens", () => {
+    expect(renderSection()).not.toContain("元に戻すには");
   });
 
   test("shows the items", () => {
@@ -147,5 +196,36 @@ describe("ConfigSection heading and hidden characters", () => {
         />,
       ),
     ).not.toContain("\u202E");
+  });
+});
+
+describe("ConfigList with the changes", () => {
+  const offers: string[] = [];
+
+  test("shows no button when no handler is given", () => {
+    expect(renderToStaticMarkup(<ConfigList items={ITEMS} />)).not.toContain(
+      "下げる",
+    );
+  });
+
+  test("shows a button for a number that is on the list when a handler is given", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList
+          items={ITEMS}
+          onChoose={(offer) => {
+            offers.push(offer.key);
+          }}
+        />,
+      ),
+    ).toContain("下げる");
+  });
+
+  test("names the item in the label of the button", () => {
+    expect(
+      renderToStaticMarkup(
+        <ConfigList items={ITEMS} onChoose={() => undefined} />,
+      ),
+    ).toContain("daily_budget_usdを下げる");
   });
 });

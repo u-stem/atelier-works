@@ -10,18 +10,24 @@ import { Glob } from "bun";
 import {
   AUDIT_SKIP_REASONS,
   type AuditSkipReason,
+  CONFIG_UPDATE_REFUSAL_REASONS,
+  type ConfigUpdateResult,
   type FreezeReleaseResult,
   type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isConfigUpdateResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
   isJobCancelResult,
+  isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
   JOB_CANCEL_REFUSAL_REASONS,
+  JOB_RERUN_REFUSAL_REASONS,
   type JobCancelResult,
+  type JobRerunResult,
   MANUAL_INTAKE_REFUSAL_REASONS,
   type ManualIntakeRefusalReason,
   type ManualIntakeSubmitResult,
@@ -37,7 +43,9 @@ import * as consoleWrites from "../../console/src/api/writes.ts";
 import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
+import * as configUpdate from "../../f/factory/console_config_update.ts";
 import * as jobCancel from "../../f/factory/console_job_cancel.ts";
+import * as jobRerun from "../../f/factory/console_job_rerun.ts";
 import * as freezeRelease from "../../f/factory/freeze_release.ts";
 import * as holdRelease from "../../f/factory/hold_release.ts";
 import {
@@ -59,7 +67,9 @@ type WriteScript =
   | "notice_resolve"
   | "hold_release"
   | "freeze_release"
-  | "console_job_cancel";
+  | "console_job_cancel"
+  | "console_job_rerun"
+  | "console_config_update";
 
 const WRITE_SCRIPTS: WriteScript[] = [
   "approval_decide",
@@ -70,6 +80,8 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "hold_release",
   "freeze_release",
   "console_job_cancel",
+  "console_job_rerun",
+  "console_config_update",
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -105,6 +117,24 @@ function cancelBase() {
     flow_path: "f/factory/implement",
     job_state: "canceled",
     work_item: { id: 7, status: "failed", lease_held: true },
+  };
+}
+
+function rerunBase() {
+  return {
+    found: true,
+    refused: false,
+    job_id: JOB,
+    script_path: "f/factory/collect_github",
+  };
+}
+function configBase() {
+  return {
+    refused: false,
+    item: "daily_budget_usd",
+    before: 50,
+    after: 20,
+    verified: true,
   };
 }
 
@@ -176,10 +206,16 @@ const WRAPPER_CALLS: Readonly<
   freeze_release: (fetchFn) =>
     consoleWrites.releaseFreeze("0a1b2c3d", { fetchFn }),
   console_job_cancel: (fetchFn) => consoleWrites.cancelJob(JOB, { fetchFn }),
+  console_job_rerun: (fetchFn) => consoleWrites.rerunJob(JOB, { fetchFn }),
+  console_config_update: (fetchFn) =>
+    consoleWrites.updateConfig(
+      { item: "daily_budget_usd", expected: 50, next: 20 },
+      { fetchFn },
+    ),
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the eight write scripts", () => {
+  test("holds the five read scripts and the ten write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -301,6 +337,26 @@ describe("what the typed calls send", () => {
   test("console_job_cancel requires the id of the job", async () => {
     const { required } = await schemaOf(SCRIPT_PATHS.console_job_cancel);
     expect(required).toEqual(["job_id"]);
+  });
+
+  test("console_job_rerun takes only the id of the job", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_job_rerun);
+    expect(properties).toEqual(["job_id"]);
+  });
+
+  test("console_job_rerun requires the id of the job", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_job_rerun);
+    expect(required).toEqual(["job_id"]);
+  });
+
+  test("console_config_update takes the item and the two values, and no operator", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.console_config_update);
+    expect([...properties].sort()).toEqual(["expected", "item", "next"]);
+  });
+
+  test("console_config_update requires all three inputs", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.console_config_update);
+    expect([...required].sort()).toEqual(["expected", "item", "next"]);
   });
 
   test("console_holds takes no input", async () => {
@@ -718,6 +774,127 @@ describe("what the scripts return", () => {
     ]);
   });
 
+  const RERUN_JOB = {
+    type: "CompletedJob",
+    id: JOB,
+    script_path: "f/factory/collect_github",
+    job_kind: "script",
+    schedule_path: "f/factory/collect_github",
+    success: false,
+    canceled: false,
+    is_skipped: false,
+    parent_job: null,
+  };
+
+  function rerunPorts(job: unknown): jobRerun.RerunPorts {
+    return {
+      now: () => new Date("2026-10-27T03:00:00.000Z"),
+      deriveActor: () => "operator",
+      getJob: () => Promise.resolve(job),
+      listQueue: () => Promise.resolve([]),
+      getSchedule: () =>
+        Promise.resolve({
+          script_path: "f/factory/collect_github",
+          is_flow: false,
+          enabled: true,
+          args: {},
+        }),
+      startScript: () => Promise.resolve(JOB),
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  test("a started rerun passes the guard", async () => {
+    const result = await jobRerun.rerunJobFromConsole(
+      JOB,
+      rerunPorts(RERUN_JOB),
+    );
+    expect(isJobRerunResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a rerun refused by the real check passes the guard", async () => {
+    const result = await jobRerun.rerunJobFromConsole(
+      JOB,
+      rerunPorts({ ...RERUN_JOB, success: true }),
+    );
+    expect(isJobRerunResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a job that does not exist passes the rerun guard", async () => {
+    const result = await jobRerun.rerunJobFromConsole(
+      "not-a-job-id",
+      rerunPorts(RERUN_JOB),
+    );
+    expect(isJobRerunResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test.each([...jobRerun.RERUN_REFUSAL_REASONS])(
+    "the rerun refusal %s passes the guard",
+    (reason) => {
+      expect(isJobRerunResult({ found: true, refused: true, reason })).toBe(
+        true,
+      );
+    },
+  );
+
+  test("the console rerun refusal reasons are the backend ones", () => {
+    expect([...JOB_RERUN_REFUSAL_REASONS]).toEqual([
+      ...jobRerun.RERUN_REFUSAL_REASONS,
+    ]);
+  });
+
+  function configPorts(): configUpdate.ConfigUpdatePorts {
+    let written: Record<string, unknown> = { daily_budget_usd: 50 };
+    return {
+      deriveActor: () => "operator",
+      readConfig: () => Promise.resolve(written),
+      writeConfig: (value) => {
+        written = value;
+        return Promise.resolve();
+      },
+      sql: () => ({
+        fetch: () => Promise.resolve([{ id: 5 }]),
+        execute: () => Promise.resolve(),
+      }),
+    };
+  }
+
+  test("a changed configuration passes the guard", async () => {
+    const result = await configUpdate.updateConfigFromConsole(
+      "daily_budget_usd",
+      50,
+      20,
+      configPorts(),
+    );
+    expect(isConfigUpdateResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("a configuration change refused by the real check passes the guard", async () => {
+    const result = await configUpdate.updateConfigFromConsole(
+      "owners",
+      50,
+      20,
+      configPorts(),
+    );
+    expect(isConfigUpdateResult(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test.each([...configUpdate.CONFIG_UPDATE_REFUSAL_REASONS])(
+    "the config refusal %s passes the guard",
+    (reason) => {
+      expect(isConfigUpdateResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("the console config refusal reasons are the backend ones", () => {
+    expect([...CONFIG_UPDATE_REFUSAL_REASONS]).toEqual([
+      ...configUpdate.CONFIG_UPDATE_REFUSAL_REASONS,
+    ]);
+  });
+
   test("a refusal from the real check passes the guard", async () => {
     const result = await jobCancel.cancelJobFromConsole(
       JOB,
@@ -732,6 +909,8 @@ describe("what the scripts return", () => {
     ["freeze_release", isFreezeReleaseResult, freezeBase()],
     ["manual_intake_submit", isManualIntakeSubmitResult, intakeBase()],
     ["console_job_cancel", isJobCancelResult, cancelBase()],
+    ["console_job_rerun", isJobRerunResult, rerunBase()],
+    ["console_config_update", isConfigUpdateResult, configBase()],
   ] as const)(
     "%s's result with a failed action audit passes the guard",
     (_name, guard, base) => {
@@ -745,6 +924,8 @@ describe("what the scripts return", () => {
     ["freeze_release", isFreezeReleaseResult, freezeBase()],
     ["manual_intake_submit", isManualIntakeSubmitResult, intakeBase()],
     ["console_job_cancel", isJobCancelResult, cancelBase()],
+    ["console_job_rerun", isJobRerunResult, rerunBase()],
+    ["console_config_update", isConfigUpdateResult, configBase()],
   ] as const)(
     "%s's result with an action audit it does not know fails the guard",
     (_name, guard, base) => {
@@ -813,6 +994,17 @@ describe("types", () => {
 
   test("the console job cancel result is the backend result", () => {
     const equal: Equal<JobCancelResult, jobCancel.JobCancelResult> = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console job rerun result is the backend result", () => {
+    const equal: Equal<JobRerunResult, jobRerun.JobRerunResult> = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console config update result is the backend result", () => {
+    const equal: Equal<ConfigUpdateResult, configUpdate.ConfigUpdateResult> =
+      true;
     expect(equal).toBe(true);
   });
 
@@ -911,7 +1103,7 @@ describe("api boundary", () => {
 // 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
 describe("console release script names", () => {
   const NAME =
-    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|console_job_cancel)(?![A-Za-z0-9_])/;
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|console_job_cancel|console_job_rerun|console_config_update)(?![A-Za-z0-9_])/;
   const MAY_NAME_THEM = [
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",

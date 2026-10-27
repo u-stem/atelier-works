@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import type { JobSummaryView } from "../../api/jobsQueries.ts";
-import { CancelDialog, JobActions, OpenCancelButton } from "./JobActions.tsx";
+import {
+  CancelDialog,
+  JobActions,
+  OpenCancelButton,
+  OpenRerunButton,
+  RerunDialog,
+} from "./JobActions.tsx";
 
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -28,9 +35,11 @@ function job(overrides: Partial<JobSummaryView> = {}): JobSummaryView {
 function renderActions(target: JobSummaryView, workItemId: number | null = 7) {
   const client = new QueryClient();
   return renderToStaticMarkup(
-    <QueryClientProvider client={client}>
-      <JobActions job={target} workItemId={workItemId} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <JobActions job={target} workItemId={workItemId} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -200,5 +209,150 @@ describe("the parts that carry the operation", () => {
       onCancel: () => undefined,
     });
     expect(element.props.open).toBe(false);
+  });
+});
+
+function failedRun(overrides: Partial<JobSummaryView> = {}): JobSummaryView {
+  return job({
+    state: "failure",
+    script_path: "f/factory/collect_github",
+    job_kind: "script",
+    schedule_path: "f/factory/collect_github",
+    tag: "periodic",
+    completed_at: "2026-10-27T02:05:00.000000Z",
+    ...overrides,
+  });
+}
+
+function renderRerunDialog(target: JobSummaryView | null) {
+  return renderToStaticMarkup(
+    <RerunDialog
+      job={target}
+      onConfirm={() => undefined}
+      onCancel={() => undefined}
+    />,
+  );
+}
+
+describe("JobActions for a failed scheduled run", () => {
+  test("offers to run it again", () => {
+    expect(renderActions(failedRun())).toContain("ジョブを再実行");
+  });
+
+  test("does not offer to stop it", () => {
+    expect(renderActions(failedRun())).not.toContain("ジョブを中止");
+  });
+
+  test("renders nothing for a run that did not come from a schedule", () => {
+    expect(renderActions(failedRun({ schedule_path: null }))).toBe("");
+  });
+
+  test("renders nothing for a run of a schedule that is not on the list", () => {
+    expect(
+      renderActions(
+        failedRun({
+          script_path: "f/factory/self_update",
+          schedule_path: "f/factory/self_update",
+        }),
+      ),
+    ).toBe("");
+  });
+
+  test("renders nothing for a run that succeeded", () => {
+    expect(renderActions(failedRun({ state: "success" }))).toBe("");
+  });
+
+  test("keeps the sentences of the confirmation out of the page until the dialog opens", () => {
+    expect(renderActions(failedRun())).not.toContain(
+      "scheduleに定義された引数",
+    );
+  });
+});
+
+describe("RerunDialog", () => {
+  test("asks whether to run the job again", () => {
+    expect(renderRerunDialog(failedRun())).toContain(
+      "この定期ジョブを再実行しますか",
+    );
+  });
+
+  test("names the script", () => {
+    expect(renderRerunDialog(failedRun())).toContain("collect_github");
+  });
+
+  test("names the failed job", () => {
+    expect(renderRerunDialog(failedRun())).toContain(ID);
+  });
+
+  test("says that the arguments come from the schedule", () => {
+    expect(renderRerunDialog(failedRun())).toContain(
+      "scheduleに定義された引数",
+    );
+  });
+
+  test("labels the button that runs it apart from the one that dismisses", () => {
+    expect(renderRerunDialog(failedRun())).toContain("再実行する");
+  });
+
+  test("does not paint the confirm button as destructive", () => {
+    expect(renderRerunDialog(failedRun())).not.toContain("bg-destructive");
+  });
+
+  test("asks nothing when no job is chosen", () => {
+    expect(renderRerunDialog(null)).not.toContain(
+      "この定期ジョブを再実行しますか",
+    );
+  });
+
+  test("hides characters that change how the text reads", () => {
+    const hostile = failedRun({ script_path: "f/factory/collect‮_github" });
+    expect(renderRerunDialog(hostile)).not.toContain("‮");
+  });
+
+  test("hands the confirmation of the dialog to the confirm handler", () => {
+    const onConfirm = () => undefined;
+    const element = RerunDialog({
+      job: failedRun(),
+      onConfirm,
+      onCancel: () => undefined,
+    });
+    expect(element.props.onConfirm).toBe(onConfirm);
+  });
+
+  test("hands both the cancel button and Esc of the dialog to the dismiss handler", () => {
+    const onCancel = () => undefined;
+    const element = RerunDialog({
+      job: failedRun(),
+      onConfirm: () => undefined,
+      onCancel,
+    });
+    expect(element.props.onCancel).toBe(onCancel);
+  });
+
+  test("opens the dialog only for a job", () => {
+    const element = RerunDialog({
+      job: null,
+      onConfirm: () => undefined,
+      onCancel: () => undefined,
+    });
+    expect(element.props.open).toBe(false);
+  });
+});
+
+describe("OpenRerunButton", () => {
+  test("opens the dialog when the button is pressed", () => {
+    const calls: string[] = [];
+    OpenRerunButton({
+      locked: false,
+      onOpen: () => {
+        calls.push("open");
+      },
+    }).props.onClick();
+    expect(calls).toEqual(["open"]);
+  });
+
+  test("keeps the button off while the run is being started", () => {
+    const element = OpenRerunButton({ locked: true, onOpen: () => undefined });
+    expect(element.props.disabled).toBe(true);
   });
 });

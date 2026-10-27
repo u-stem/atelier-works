@@ -13,17 +13,21 @@ import type { Guard } from "./guards/primitives.ts";
 import {
   type ApprovalDecideResult,
   type AuditKickoffResult,
+  type ConfigUpdateResult,
   type FreezeReleaseResult,
   type HoldReleaseResult,
   isApprovalDecideResult,
   isAuditKickoffResult,
+  isConfigUpdateResult,
   isFreezeReleaseResult,
   isHoldReleaseResult,
   isJobCancelResult,
+  isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
   type JobCancelResult,
+  type JobRerunResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
   type RetryWorkItemResult,
@@ -215,6 +219,47 @@ export function releaseFreeze(
     "freeze_release",
     { freeze_id: freezeId },
     isFreezeReleaseResult,
+    options,
+  );
+}
+
+/**
+ * 失敗した定期ジョブを1件、scheduleに定義された引数で再実行する。
+ * 対象外のジョブ、失敗していないジョブ、同じ処理が実行中か待ちのとき、次の回が近いときなどは、起動せずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 起動したときの`job_id`は新しいジョブのidで、結果はその詳細で読む。引数と操作者は引数に取らない。
+ */
+export function rerunJob(
+  jobId: string,
+  options: RunScriptOptions = {},
+): Promise<JobRerunResult> {
+  return callWrite(
+    "console_job_rerun",
+    { job_id: jobId },
+    isJobRerunResult,
+    options,
+  );
+}
+
+export type ConfigUpdateInput = {
+  readonly item: string;
+  /** 画面が読んだときの値。書く直前の値と違えば、scriptは変更しない。 */
+  readonly expected: number | boolean;
+  readonly next: number | boolean;
+};
+
+/**
+ * factory_configの項目を1つ、止める向き(真偽はtrueからfalse)か下げる向き(数値は小さい値)に変更する。
+ * 許可表の外の項目、向きの違う変更、読んだ時の値と違うときなどは、変更せずに理由つきの断りで返る。断りは失敗ではなく結果である。
+ * 操作者は引数に取らない。scriptがジョブの実行文脈から導く。
+ */
+export function updateConfig(
+  input: ConfigUpdateInput,
+  options: RunScriptOptions = {},
+): Promise<ConfigUpdateResult> {
+  return callWrite(
+    "console_config_update",
+    { item: input.item, expected: input.expected, next: input.next },
+    isConfigUpdateResult,
     options,
   );
 }
