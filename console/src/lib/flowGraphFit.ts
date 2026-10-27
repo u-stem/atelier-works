@@ -31,6 +31,10 @@ function emOfText(characters: readonly string[]): number {
   return characters.reduce((sum, character) => sum + emOf(character), 0);
 }
 
+export function textEm(_text: string): number {
+  return -1;
+}
+
 /**
  * 箱の幅(em)に収まるように、文字列を行に分ける。
  * 文字の幅は、半角を0.55em、それ以外を1emとして見積もる。フォントの実測ではない。
