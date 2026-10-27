@@ -147,13 +147,33 @@ function scanDesigning(): Record<string, number> {
   return found;
 }
 
+/**
+ * `export const LAUNCH_EDGES = [`から対応する閉じ括弧までの配列のテキスト。
+ * 未配線の辺や差し戻しの辺など、ほかの配列に同じ形の辺があっても拾わないために、配列の範囲だけを返す。
+ * 宣言が無いときは空文字列を返す。
+ */
+function launchEdgesBlock(code: string): string {
+  const declaration = /export\s+const\s+LAUNCH_EDGES\b[^=]*=\s*\[/.exec(code);
+  if (declaration === null) return "";
+  const start = declaration.index + declaration[0].length;
+  let depth = 1;
+  for (let i = start; i < code.length; i += 1) {
+    if (code[i] === "[") depth += 1;
+    if (code[i] === "]") depth -= 1;
+    if (depth === 0) return code.slice(start, i);
+  }
+  return code.slice(start);
+}
+
 /** 起動の台帳のテキストから、`to`が`target`の辺の起点を拾う。台帳はモジュールとして評価しない。 */
 function launchOriginsTo(code: string, target: string): string[] {
   const pattern = new RegExp(
     `\\{\\s*from:\\s*["'\`]([^"'\`]+)["'\`],\\s*to:\\s*["'\`]${target}["'\`]`,
     "g",
   );
-  return [...code.matchAll(pattern)].flatMap((m) => m[1] ?? []).sort();
+  return [...launchEdgesBlock(code).matchAll(pattern)]
+    .flatMap((m) => m[1] ?? [])
+    .sort();
 }
 
 /** 最上位の関数の本体。変換後のコードは、最上位の宣言が行頭にあり、閉じる括弧も行頭にある。 */
@@ -293,11 +313,44 @@ describe("the way the references are counted", () => {
     expect(
       launchOriginsTo(
         transpile(
-          'export const E = [{ from: "b", to: "design", kind: "script" }, { from: "a", to: "design", kind: "script" }, { from: "c", to: "design_x", kind: "script" }];',
+          'export const LAUNCH_EDGES = [{ from: "b", to: "design", kind: "script" }, { from: "a", to: "design", kind: "script" }, { from: "c", to: "design_x", kind: "script" }];',
         ),
         "design",
       ),
     ).toEqual(["a", "b"]);
+  });
+
+  test("does not read the edges of the arrays other than LAUNCH_EDGES", () => {
+    expect(
+      launchOriginsTo(
+        transpile(
+          'export const LAUNCH_EDGES = [{ from: "a", to: "design", kind: "script" }];\nexport const UNWIRED_LAUNCH_EDGES = [{ from: "b", to: "design", kind: "script" }];\nexport const REWORK_LAUNCH_EDGES = [{ from: "c", to: "design" }];',
+        ),
+        "design",
+      ),
+    ).toEqual(["a"]);
+  });
+
+  test("does not read the edges of an array that comes before LAUNCH_EDGES", () => {
+    expect(
+      launchOriginsTo(
+        transpile(
+          'export const UNWIRED_LAUNCH_EDGES = [{ from: "b", to: "design", kind: "script" }];\nexport const LAUNCH_EDGES = [{ from: "a", to: "design", kind: "script" }];',
+        ),
+        "design",
+      ),
+    ).toEqual(["a"]);
+  });
+
+  test("reads no origin when the text has no LAUNCH_EDGES", () => {
+    expect(
+      launchOriginsTo(
+        transpile(
+          'export const UNWIRED_LAUNCH_EDGES = [{ from: "b", to: "design", kind: "script" }];',
+        ),
+        "design",
+      ),
+    ).toEqual([]);
   });
 });
 
