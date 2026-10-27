@@ -49,6 +49,7 @@ import {
   listActivePrFixWorkItems,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
+  type RequirementsApprovalRef,
   type StatusEventSummary,
   setFlowJobId,
   setFlowJobIdIfUnset,
@@ -82,6 +83,7 @@ import {
 } from "./lib/poll_support.ts";
 import { automatedFeedback } from "./lib/prompts.ts";
 import {
+  type DesignApprovalRef,
   isOneOf,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
@@ -180,6 +182,45 @@ export function feedbackFromRejection(note: string | null): string | null {
   if (note === null) return null;
   const reason = sanitizeModelText(note, GAP_REPORT_MAX_CHARS);
   return reason.trim() === "" ? null : reason;
+}
+
+/** `buildRestartContext`が読む問い合わせ。 */
+export type RestartContextDeps = {
+  readonly latestDesignApproval: (
+    workItemId: number,
+  ) => Promise<DesignApprovalRef | null>;
+  readonly latestStatusEvent: (
+    workItemId: number,
+    toStatus: WorkItemStatus,
+  ) => Promise<StatusEventSummary | null>;
+  readonly latestStatusTransition: (
+    workItemId: number,
+    toStatus: WorkItemStatus,
+  ) => Promise<StatusEventSummary | null>;
+};
+
+/** 再開先を決めるための文脈を組み立てる。 */
+export async function buildRestartContext(
+  _input: {
+    readonly workItem: Pick<WorkItem, "id" | "attempt" | "design_attempt">;
+    readonly restartStatus: WorkItemStatus;
+    readonly requirementsApproval: Pick<
+      RequirementsApprovalRef,
+      "draft_id" | "attempt" | "status" | "reason"
+    > | null;
+    readonly implementEnabled: boolean;
+    readonly designEnabled: boolean;
+  },
+  _deps: RestartContextDeps,
+): Promise<RestartContext> {
+  return {
+    implementReady: false,
+    implementEnabled: false,
+    designEnabled: false,
+    designApproved: false,
+    stop: "other",
+    feedback: null,
+  };
 }
 
 /**

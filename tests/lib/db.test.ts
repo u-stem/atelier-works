@@ -77,7 +77,7 @@ import {
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
-  latestStatusEventFromAny,
+  latestStatusTransition,
   listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
@@ -1473,23 +1473,21 @@ describe("latestStatusEvent", () => {
   });
 });
 
-describe("latestStatusEventFromAny", () => {
-  const FROM = ["designing", "implementing"] as const;
-
+describe("latestStatusTransition", () => {
   test("returns null when no transition matched", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(
-      await latestStatusEventFromAny(1, "requirements_generating", FROM, sql),
+      await latestStatusTransition(1, "requirements_generating", sql),
     ).toBeNull();
   });
 
   test("reads the previous status and the note", async () => {
     const { sql } = createFakeSqlClient([
-      [{ from_status: "designing", note: "design gap: missing scope" }],
+      [{ from_status: "implementing", note: "gap: missing scope" }],
     ]);
     expect(
-      await latestStatusEventFromAny(1, "requirements_generating", FROM, sql),
-    ).toEqual({ from_status: "designing", note: "design gap: missing scope" });
+      await latestStatusTransition(1, "requirements_generating", sql),
+    ).toEqual({ from_status: "implementing", note: "gap: missing scope" });
   });
 
   test("rejects an unknown previous status", async () => {
@@ -1497,31 +1495,33 @@ describe("latestStatusEventFromAny", () => {
       [{ from_status: "bogus", note: null }],
     ]);
     await expect(
-      latestStatusEventFromAny(1, "requirements_generating", FROM, sql),
+      latestStatusTransition(1, "requirements_generating", sql),
     ).rejects.toThrow("unknown status");
   });
 
-  test("looks at the newest matching transition", async () => {
+  test("looks at the newest transition", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
+    await latestStatusTransition(1, "requirements_generating", sql);
     expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
   });
 
-  test("restricts the previous status to the given set", async () => {
+  test("skips the rows that keep the status", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
-    expect(calls[0]?.text).toContain("from_status = ANY(");
+    await latestStatusTransition(1, "requirements_generating", sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "from_status IS DISTINCT FROM to_status",
+    );
   });
 
-  test("binds the set of previous statuses as one parameter", async () => {
+  test("does not restrict the previous status", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
-    expect(calls[0]?.values).toContainEqual(["designing", "implementing"]);
+    await latestStatusTransition(1, "requirements_generating", sql);
+    expect(calls[0]?.text).not.toContain("ANY(");
   });
 
   test("binds the target status", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestStatusEventFromAny(1, "requirements_generating", FROM, sql);
+    await latestStatusTransition(1, "requirements_generating", sql);
     expect(calls[0]?.values).toContain("requirements_generating");
   });
 });
@@ -5193,6 +5193,7 @@ describe("latestRequirementsApproval", () => {
     draft_id: 5,
     attempt: 2,
     status: "approved",
+    reason: null,
   };
 
   test("returns null when the work item has no requirements approval request", async () => {
@@ -5207,7 +5208,23 @@ describe("latestRequirementsApproval", () => {
       draft_id: 5,
       attempt: 2,
       status: "approved",
+      reason: null,
     });
+  });
+
+  test("reads the reason of the decision", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, status: "rejected", reason: "the scope is too wide" }],
+    ]);
+    expect((await latestRequirementsApproval(1, sql))?.reason).toBe(
+      "the scope is too wide",
+    );
+  });
+
+  test("selects the reason from the approval request itself", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestRequirementsApproval(1, sql);
+    expect(calls[0]?.text).toContain("ar.reason");
   });
 
   test("restricts to kind = 'requirements' joined to requirement_drafts", async () => {

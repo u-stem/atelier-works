@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { StatusEventSummary } from "../../f/factory/lib/db.ts";
 import {
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -9,18 +10,24 @@ import {
 } from "../../f/factory/lib/doc_tree_hash.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import { GAP_REPORT_MAX_CHARS } from "../../f/factory/lib/model_text.ts";
 import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
 import {
   AUTOMATED_FEEDBACK_MARKER,
   automatedFeedback,
 } from "../../f/factory/lib/prompts.ts";
-import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
+import type {
+  DesignApprovalRef,
+  WorkItem,
+  WorkItemStatus,
+} from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
   activePrFixConflictError,
   activePrFixConflictErrorFrom,
   asBeforeActionableCancel,
+  buildRestartContext,
   cancelledRestartRefusal,
   classifyRestartStop,
   closedTargetRefusal,
@@ -31,6 +38,7 @@ import {
   newerCycleRefusal,
   newerPrRowRefusal,
   type RestartContext,
+  type RestartContextDeps,
   retryResult,
   runningFlowRefusal,
   shouldRefreshIntakeOnRestart,
@@ -1422,6 +1430,336 @@ describe("usesFlowJobIdLease for the design flow", () => {
   });
 });
 
+describe("buildRestartContext", () => {
+  const REQUIREMENTS_APPROVED = {
+    draft_id: 10,
+    attempt: 2,
+    status: "approved" as const,
+    reason: null,
+  };
+  const REQUIREMENTS_REJECTED = {
+    draft_id: 10,
+    attempt: 2,
+    status: "rejected" as const,
+    reason: "the scope is too wide",
+  };
+  const DESIGN_APPROVED: DesignApprovalRef = {
+    approval_request_id: 5,
+    design_draft_id: 20,
+    status: "approved",
+    payload_attempt: 2,
+    payload_design_attempt: 1,
+    draft: { design_attempt: 1, requirement_draft_id: 10 },
+  };
+
+  type Harness = {
+    readonly deps: RestartContextDeps;
+    readonly designReads: number[];
+    readonly eventReads: [number, WorkItemStatus][];
+    readonly transitionReads: [number, WorkItemStatus][];
+  };
+
+  function harness(
+    options: {
+      designApproval?: DesignApprovalRef | null;
+      stopEvent?: StatusEventSummary | null;
+      transition?: StatusEventSummary | null;
+    } = {},
+  ): Harness {
+    const designReads: number[] = [];
+    const eventReads: [number, WorkItemStatus][] = [];
+    const transitionReads: [number, WorkItemStatus][] = [];
+    return {
+      designReads,
+      eventReads,
+      transitionReads,
+      deps: {
+        latestDesignApproval: async (id) => {
+          designReads.push(id);
+          return options.designApproval ?? null;
+        },
+        latestStatusEvent: async (id, status) => {
+          eventReads.push([id, status]);
+          return options.stopEvent ?? null;
+        },
+        latestStatusTransition: async (id, status) => {
+          transitionReads.push([id, status]);
+          return options.transition ?? null;
+        },
+      },
+    };
+  }
+
+  function build(
+    h: Harness,
+    overrides: Partial<Parameters<typeof buildRestartContext>[0]> = {},
+  ) {
+    return buildRestartContext(
+      {
+        workItem: { id: 7, attempt: 2, design_attempt: 1 },
+        restartStatus: "needs_human",
+        requirementsApproval: REQUIREMENTS_APPROVED,
+        implementEnabled: true,
+        designEnabled: true,
+        ...overrides,
+      },
+      h.deps,
+    );
+  }
+
+  const GAP_STOP: StatusEventSummary = {
+    from_status: "requirements_generating",
+    note: "requirements regeneration could not be started",
+  };
+
+  describe("the requirements are ready", () => {
+    test("is ready for an approval of the current attempt", async () => {
+      expect((await build(harness())).implementReady).toBe(true);
+    });
+
+    test("is not ready for an approval of another attempt", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 1 },
+      });
+      expect(context.implementReady).toBe(false);
+    });
+
+    test("is not ready without an approval", async () => {
+      const context = await build(harness(), { requirementsApproval: null });
+      expect(context.implementReady).toBe(false);
+    });
+
+    test("carries the enabled flags", async () => {
+      const context = await build(harness(), {
+        implementEnabled: false,
+        designEnabled: false,
+      });
+      expect([context.implementEnabled, context.designEnabled]).toEqual([
+        false,
+        false,
+      ]);
+    });
+  });
+
+  describe("the design approval", () => {
+    test("reads it for the work item when the design is enabled and the requirements are ready", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      await build(h);
+      expect(h.designReads).toEqual([7]);
+    });
+
+    test("does not read it when the design is disabled", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      await build(h, { designEnabled: false });
+      expect(h.designReads).toEqual([]);
+    });
+
+    test("does not read it when the requirements are not ready", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.designReads).toEqual([]);
+    });
+
+    test("is approved for an approval that matches the work item and the requirements draft", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      expect((await build(h)).designApproved).toBe(true);
+    });
+
+    test("is not approved when the design attempt of the work item moved on", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 2, design_attempt: 2 },
+      });
+      expect(context.designApproved).toBe(false);
+    });
+
+    test("is not approved when the design was made from another requirements draft", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      const context = await build(h, {
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, draft_id: 11 },
+      });
+      expect(context.designApproved).toBe(false);
+    });
+
+    test("is not approved when the approval was requested for another attempt", async () => {
+      const h = harness({ designApproval: DESIGN_APPROVED });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 3, design_attempt: 1 },
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 3 },
+      });
+      expect(context.designApproved).toBe(false);
+    });
+
+    test("is not approved without an approval", async () => {
+      expect((await build(harness())).designApproved).toBe(false);
+    });
+  });
+
+  describe("the transition that stopped the work item", () => {
+    test("reads it by the status before a cancellation", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h, { restartStatus: "failed" });
+      expect(h.eventReads).toEqual([[7, "failed"]]);
+    });
+
+    test("does not read it when the requirements are not ready", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.eventReads).toEqual([]);
+    });
+
+    test("classifies a stop right after the requirements regeneration", async () => {
+      const context = await build(harness({ stopEvent: GAP_STOP }));
+      expect(context.stop).toBe("requirements_returned");
+    });
+
+    test("classifies an untrusted requirements directory", async () => {
+      const context = await build(
+        harness({
+          stopEvent: {
+            from_status: "implementing",
+            note: REQUIREMENTS_MODIFIED_REASON,
+          },
+        }),
+      );
+      expect(context.stop).toBe("requirements_untrusted");
+    });
+
+    test("classifies a stop without a record as other", async () => {
+      expect((await build(harness())).stop).toBe("other");
+    });
+  });
+
+  describe("the reason of a gap", () => {
+    test("reads the latest transition into the requirements for a stop right after the regeneration", async () => {
+      const h = harness({ stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.transitionReads).toEqual([[7, "requirements_generating"]]);
+    });
+
+    test("does not read it for another kind of stop", async () => {
+      const h = harness({
+        stopEvent: { from_status: "implementing", note: "something else" },
+      });
+      await build(h);
+      expect(h.transitionReads).toEqual([]);
+    });
+
+    test("wraps an implementation gap as an automated report", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: { from_status: "implementing", note: "gap: no scope" },
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("no scope"));
+    });
+
+    test("wraps a design gap as an automated report", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: { from_status: "designing", note: "design gap: no flow" },
+      });
+      expect((await build(h)).feedback).toBe(automatedFeedback("no flow"));
+    });
+
+    test("wraps a gap noted by a pull request fix", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: { from_status: "pr_open", note: "gap: from the review" },
+      });
+      expect((await build(h)).feedback).toBe(
+        automatedFeedback("from the review"),
+      );
+    });
+
+    test("does not leak an old gap behind a restart", async () => {
+      const h = harness({
+        stopEvent: GAP_STOP,
+        transition: {
+          from_status: "needs_human",
+          note: "retry_work_item: restarted from needs_human",
+        },
+      });
+      expect((await build(h)).feedback).toBeNull();
+    });
+
+    test("has no feedback when no transition into the requirements exists", async () => {
+      expect(
+        (await build(harness({ stopEvent: GAP_STOP }))).feedback,
+      ).toBeNull();
+    });
+  });
+
+  describe("the reason of a rejection", () => {
+    const REJECTED = { requirementsApproval: REQUIREMENTS_REJECTED };
+
+    test("is the reason of the approval request of the current attempt", async () => {
+      expect((await build(harness(), REJECTED)).feedback).toBe(
+        "the scope is too wide",
+      );
+    });
+
+    test("is not read from the transition records", async () => {
+      const h = harness({
+        transition: {
+          from_status: "awaiting_approval",
+          note: "the reason of an earlier cycle",
+        },
+      });
+      expect((await build(h, REJECTED)).feedback).toBe("the scope is too wide");
+    });
+
+    test("does not read the transition records", async () => {
+      const h = harness();
+      await build(h, REJECTED);
+      expect(h.transitionReads).toEqual([]);
+    });
+
+    test("is the reason of the only rejection when the limit is one", async () => {
+      const h = harness({ transition: null });
+      const context = await build(h, {
+        workItem: { id: 7, attempt: 1, design_attempt: 0 },
+        requirementsApproval: {
+          ...REQUIREMENTS_REJECTED,
+          attempt: 1,
+          reason: "only reason",
+        },
+      });
+      expect(context.feedback).toBe("only reason");
+    });
+
+    test("is not passed for a rejection of another attempt", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_REJECTED, attempt: 1 },
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("is not passed for an approval", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 1 },
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("is null for a rejection without a reason", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: { ...REQUIREMENTS_REJECTED, reason: null },
+      });
+      expect(context.feedback).toBeNull();
+    });
+
+    test("is cut to the length limit of a report", async () => {
+      const context = await build(harness(), {
+        requirementsApproval: {
+          ...REQUIREMENTS_REJECTED,
+          reason: "x".repeat(GAP_REPORT_MAX_CHARS + 50),
+        },
+      });
+      expect(context.feedback?.length).toBe(GAP_REPORT_MAX_CHARS);
+    });
+  });
+});
+
 describe("main: the context of the restart", () => {
   const source = readFileSync(
     join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
@@ -1429,59 +1767,26 @@ describe("main: the context of the restart", () => {
   )
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-  const beforePlan = source.slice(
-    0,
-    source.indexOf("computeRestartPlan(restartItem"),
+  const restart = source.slice(
+    source.indexOf("async function restartWorkItem"),
   );
 
-  test("reads the design approval only when the design is enabled and the requirements are ready", () => {
-    expect(beforePlan).toMatch(
-      /config\.design_enabled\s*&&\s*implementReady\s*&&[\s\S]*?await latestDesignApproval\(/,
+  test("builds the context with the dependencies that read the records", () => {
+    expect(restart).toMatch(
+      /buildRestartContext\([\s\S]*?\{\s*latestDesignApproval,\s*latestStatusEvent,\s*latestStatusTransition,?\s*\}/,
     );
   });
 
-  test("matches the design approval against the design attempt of the work item", () => {
-    expect(beforePlan).toContain("designAttempt: workItem.design_attempt");
+  test("passes the status before a cancellation to the context", () => {
+    expect(restart).toContain("restartStatus: restartItem.status");
   });
 
-  test("matches the design approval against the attempt of the work item", () => {
-    expect(beforePlan).toMatch(/attempt: workItem\.attempt,\s*designAttempt/);
+  test("plans the restart from the built context", () => {
+    expect(restart).toMatch(/computeRestartPlan\(restartItem,\s*context\)/);
   });
 
-  test("matches the design approval against the draft of the requirements approval", () => {
-    expect(beforePlan).toContain(
-      "requirementDraftId: requirementsApproval.draft_id",
-    );
-  });
-
-  test("reads the transition that stopped the work item with the status before a cancellation", () => {
-    expect(beforePlan).toContain(
-      "latestStatusEvent(work_item_id, restartItem.status)",
-    );
-  });
-
-  test("reads the gap report from the transitions out of the design and the implementation", () => {
-    expect(beforePlan).toMatch(
-      /latestStatusEventFromAny\(\s*work_item_id,\s*"requirements_generating",\s*\["designing", "implementing"\],?\s*\)/,
-    );
-  });
-
-  test("reads the reason of a rejection from the transitions out of the approval wait", () => {
-    expect(beforePlan).toMatch(
-      /latestStatusEventFromAny\(\s*work_item_id,\s*"requirements_generating",\s*\["awaiting_approval"\],?\s*\)/,
-    );
-  });
-
-  test("passes the gap report only for a stop right after the requirements regeneration", () => {
-    expect(beforePlan).toMatch(
-      /stop === "requirements_returned"[\s\S]*?feedbackFromGapNote\(/,
-    );
-  });
-
-  test("passes the reason of a rejection only for a rejection of the current attempt", () => {
-    expect(beforePlan).toMatch(
-      /status === "rejected"\s*&&[\s\S]*?attempt === workItem\.attempt[\s\S]*?feedbackFromRejection\(/,
-    );
+  test("no longer reads the transition records by the previous status", () => {
+    expect(source).not.toContain("latestStatusEventFromAny");
   });
 });
 

@@ -892,6 +892,15 @@ export async function latestStatusEventFromAny(
   return parseStatusEventRow(row, "latestStatusEventFromAny");
 }
 
+/** 作業項目が`toStatus`へ移った最新の遷移を返す。状態の変わらない行は除く。 */
+export async function latestStatusTransition(
+  _workItemId: number,
+  _toStatus: WorkItemStatus,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<StatusEventSummary | null> {
+  return null;
+}
+
 /**
  * PRに紐づく`pr_review`か`pr_fix`の作業項目のうち、終端でないものがあるかを返す。
  * 閉じたPRのworktreeを消す前に、そのPRをまだ使う処理が無いことを確かめるために使う。
@@ -3963,6 +3972,8 @@ export type RequirementsApprovalRef = {
   /** その下書きの`requirement_drafts.attempt`。 */
   readonly attempt: number;
   readonly status: ApprovalRequestStatus;
+  /** 判断に添えられた理由。却下の理由はここにある。無ければ`null`。 */
+  readonly reason: string | null;
 };
 
 /**
@@ -4000,6 +4011,7 @@ export async function latestRequirementsApproval(
       APPROVAL_REQUEST_STATUSES,
       "status",
     ),
+    reason: null,
   };
 }
 
