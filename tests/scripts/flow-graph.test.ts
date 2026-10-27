@@ -729,6 +729,58 @@ describe("buildFlowsData: schedules", () => {
   });
 });
 
+describe("buildFlowsData: the script that is called by another", () => {
+  const input: FlowsInput = {
+    ...FLOWS_INPUT,
+    edges: [{ from: "self_retry", to: "pr_fix", kind: "script" }],
+    scriptCallers: { self_retry: "self_update" },
+    schedules: [
+      {
+        name: "self_update",
+        summary: "[SYS-1] 最新化",
+        cron: "0 0 * * * *",
+        target: "f/factory/self_update",
+        isFlow: false,
+        enabled: true,
+      },
+    ],
+  };
+
+  test("adds the flows of the called script to the schedule of the caller", () => {
+    expect(
+      buildFlowsData(input).schedules.find(
+        (item) => item.name === "self_update",
+      )?.flows,
+    ).toEqual(["pr_fix"]);
+  });
+
+  test("adds nothing when the schedule of the caller is disabled", () => {
+    const disabled: FlowsInput = {
+      ...input,
+      schedules: input.schedules.map((item) => ({ ...item, enabled: false })),
+    };
+
+    expect(
+      buildFlowsData(disabled).schedules.find(
+        (item) => item.name === "self_update",
+      )?.flows,
+    ).toEqual([]);
+  });
+
+  test("adds nothing for a schedule that is not the caller", () => {
+    const other: FlowsInput = {
+      ...input,
+      scriptCallers: { self_retry: "someone_else" },
+    };
+
+    expect(
+      buildFlowsData(other).schedules.find(
+        (item) => item.name === "self_update",
+      )?.flows,
+    ).toEqual([]);
+  });
+});
+
 describe("buildFlowsData", () => {
   test("does not depend on the order of the input", () => {
     const reversed: FlowsInput = {

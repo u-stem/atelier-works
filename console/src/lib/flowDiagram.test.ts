@@ -5,6 +5,7 @@ import {
   CONDITIONAL_WORD,
   type DiagramBox,
   type DiagramLayout,
+  drawnEntries,
   entryText,
   exitOriginText,
   exitText,
@@ -225,6 +226,30 @@ describe("groupEntriesForList", () => {
   });
 });
 
+describe("drawnEntries", () => {
+  test("leaves out the entry from the flow itself", () => {
+    expect(
+      drawnEntries(realFlow("pipeline")).filter(
+        (entry) => entry.kind === "flow" && entry.flow === "pipeline",
+      ),
+    ).toEqual([]);
+  });
+
+  test("keeps the entry from the approval of another flow", () => {
+    expect(drawnEntries(realFlow("implement"))).toContainEqual({
+      kind: "flow",
+      flow: "pipeline",
+      via: "approve",
+    });
+  });
+
+  test("keeps every entry of a flow that has no entry from itself", () => {
+    expect(drawnEntries(realFlow("pr_fix"))).toEqual(
+      realFlow("pr_fix").entries,
+    );
+  });
+});
+
 describe("isSelfExit", () => {
   test("is true for the exit back to the flow itself", () => {
     expect(
@@ -407,14 +432,31 @@ describe("layoutFlowDiagram", () => {
     const flow = realFlow("pipeline");
 
     expect(layoutOf("pipeline").boxes).toHaveLength(
-      flow.entries.length + flow.steps.length + flow.exits.length,
+      drawnEntries(flow).length + flow.steps.length + flow.exits.length,
+    );
+  });
+
+  test("draws no box for the entry from the flow itself", () => {
+    expect(
+      boxesOf(layoutOf("pipeline"), "entry").filter(
+        (box) =>
+          box.kind === "entry" &&
+          box.entry.kind === "flow" &&
+          box.entry.flow === "pipeline",
+      ),
+    ).toEqual([]);
+  });
+
+  test("draws one entry box fewer than the data has for pipeline", () => {
+    expect(boxesOf(layoutOf("pipeline"), "entry")).toHaveLength(
+      realFlow("pipeline").entries.length - 1,
     );
   });
 
   test("draws a link from every entry to the steps", () => {
     expect(
       layoutOf("pipeline").links.filter((link) => link.kind === "entry"),
-    ).toHaveLength(realFlow("pipeline").entries.length);
+    ).toHaveLength(drawnEntries(realFlow("pipeline")).length);
   });
 
   test("puts the entries to the left of the steps", () => {

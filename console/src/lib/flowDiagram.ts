@@ -166,6 +166,11 @@ export function groupEntriesForList(flow: FlowDefinition): ListEntries {
   return { launchFlows, reworkFlows, entries };
 }
 
+/** 図に描く入口。 */
+export function drawnEntries(flow: FlowDefinition): readonly FlowEntry[] {
+  return flow.entries;
+}
+
 /** 出口が、そのflow自身へ戻るものか。 */
 export function isSelfExit(flow: FlowDefinition, exit: FlowExit): boolean {
   return exit.flow === flow.name;

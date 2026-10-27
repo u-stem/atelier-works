@@ -144,6 +144,10 @@ describe("FlowDiagramFrame: the exits", () => {
     expect(render("pr_fix")).toContain("差し戻し: pipeline");
   });
 
+  test("draws no entry from the flow itself in the diagram", () => {
+    expect(plain(render("pipeline"))).not.toContain("pipelineの却下");
+  });
+
   test("writes the entry from a flow that sends work back", () => {
     expect(plain(render("pipeline"))).toContain("implementの差し戻し");
   });

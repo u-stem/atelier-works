@@ -328,6 +328,12 @@ describe("the schedules in the data", () => {
     ).toEqual(["pr_fix", "pr_review"]);
   });
 
+  test("self_update links the flows that the script it calls starts", () => {
+    expect(
+      data.schedules.find((item) => item.name === "self_update")?.flows,
+    ).toEqual(["implement", "pr_fix"]);
+  });
+
   test("cleanup_db launches no flow", () => {
     expect(
       data.schedules.find((item) => item.name === "cleanup_db")?.flows,
