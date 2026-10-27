@@ -1435,7 +1435,7 @@ Windmillのジョブトークンは、一般形の規則に当たる。
 | 引数 | scheduleの定義の`args`だけを使う。呼び出し側の引数は受けない。`$var:`か`$res:`を含む引数は、参照の先をscriptが解決しないよう、再実行しない |
 | 断る条件 | 終わっていない、失敗していない、scheduleに由来しない、許可表の外にある。同じscriptが実行中か待ちにある。次の回の予定が、scriptのタイムアウト(120秒)より近い。scheduleが無効、定義が変わった |
 | 呼び出しの順序 | ジョブの取得、対象の判定、キューの読み取り、scheduleの読み取り、操作者の導出、記録(`attempted`)、起動、記録(結果)の順に固定する。操作者を導けないときと、記録を書けないときは、起動せずに断る |
-| 起動 | `runScriptByPathAsync`だけ。フローは起動しない。起動したジョブは親のジョブを持ち、scheduleに由来する印を持たない |
+| 起動 | `runScriptByPathAsync`だけ。フローは起動しない。起動したジョブは親のジョブを持ち、scheduleに由来する印を持たない。この呼び出しはHTTPの失敗の本文もそのまま返すので、戻りの前後の空白を除いた文字列がジョブのIDの形でなければ、起動していないとみなして投げる。記録は`failed`になり、本文はエラーの文に入れない |
 | SDKの呼び出し | `JobService.getJob`、`JobService.listQueue`、`ScheduleService.getSchedule`、`wmill.getWorkspace`、`wmill.datatable`、`wmill.runScriptByPathAsync`だけ。境界テストの許可表に載せ、importでたどれるファイルの和に当てる |
 | SQL | 自分のSQLは持たない。書くのは記録の部品だけで、書く表は`factory.console_actions`に限る |
 | 環境変数 | 操作者を導くための`WM_USERNAME`と`WM_EMAIL`だけ |
@@ -1467,6 +1467,10 @@ scriptのscheduleは、次の回を前の回の終了時に積む。そのため
   定期ジョブ用workerが1枠なので、起動した再実行と定期の回は、同時には動かず、どちらかが待つ。
   同じ処理が2つ起動しても、直列に動く。`auto_retry_pr_review`の見送りの通知は、先の実行が記録するので、後の実行は二重に送らない。
   `replicas`が1であることは、`tests/scripts/console_script_tags.test.ts`が固定する。枠を増やすと、この前提が崩れる。
+- 許可の根拠は、`collect_github`と`auto_retry_pr_review`が冪等であることである。
+  この2つの中身は保護パスではないので、変更で前提が崩れうる。
+  5分ごとの定期の回が同じ副作用をすでに起こすので、再実行で増えるのは、押した回数分だけである。
+  許可表の見直しは、この2つを変えるPRのレビューで行う。
 - ローカルのClaudeのセッションも、運用者のwmillの資格で、`wmill`の汎用の呼び出しから、許可表の外のscriptを動かせる。
   フックが止めるのは、書き込みのscriptを名前で呼ぶ経路だけである。
   この経路は、ジョブのデバッグに必要な正当な操作でもあるので、受け入れたリスクとする。

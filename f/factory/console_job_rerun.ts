@@ -340,10 +340,13 @@ export async function rerunJobFromConsole(
       changes: { script: target.script_path },
     },
     async (): Promise<RecordedOperation<string>> => {
-      const started = await ports.startScript(
-        target.script_path,
-        schedule.args,
-      );
+      const body = await ports.startScript(target.script_path, schedule.args);
+      // 起動の呼び出しは、HTTPの失敗の本文もそのまま返す。IDでなければ、何も起動していないとみなす。
+      // 本文は、エラーの文に入れない。
+      const started = body.trim();
+      if (!JOB_ID.test(started)) {
+        throw new Error("the start did not return a job id");
+      }
       return {
         outcome: "succeeded",
         changes: { rerun_job: started },
