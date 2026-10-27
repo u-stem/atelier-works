@@ -351,17 +351,15 @@ describe("RETRY_REFUSALS", () => {
     );
   });
 
-  test("names the refusal for a design that is disabled or approved", () => {
-    expect(
-      RETRY_REFUSALS[2]?.startsWith(
-        "要件定義が承認済みで、設計が無効か承認済みで、実装が無効のとき",
-      ),
-    ).toBe(true);
+  test("names the refusal for an approved requirement that is not a stop of the requirements", () => {
+    expect(RETRY_REFUSALS[2]).toBe(
+      "要件定義が承認済みで、改ざんや差し戻しの停止ではなく、設計が無効か承認済みで、実装が無効のとき(実装を有効にすると再実行できます)",
+    );
   });
 
-  test("says the requirements stops can be retried while the implementation is disabled", () => {
-    expect(RETRY_REFUSALS[2]).toContain(
-      "要件定義の改ざんや差し戻しの停止は、実装が無効でも再実行できます",
+  test("does not nest parentheses in the refusals", () => {
+    expect(RETRY_REFUSALS.every((reason) => !/\([^)]*\(/.test(reason))).toBe(
+      true,
     );
   });
 
@@ -391,34 +389,46 @@ describe("describeRetryPlan", () => {
     );
   });
 
-  test("explains that an unapproved design restarts at the design", () => {
+  test("explains the three cases that make the requirements again", () => {
     expect(describeRetryPlan(failure()).note).toContain(
-      "設計が有効で未承認なら設計から",
+      "要件定義が承認されていないとき、要件定義の改ざんや欠落で止まったとき、差し戻しや再実行で要件定義の生成に戻った後に止まったときは、要件定義を作り直します",
     );
   });
 
-  test("explains that the requirements stops restart at the requirements", () => {
+  test("explains that making the requirements again needs an approval again", () => {
     expect(describeRetryPlan(failure()).note).toContain(
-      "要件定義の改ざんや欠落で止まったときと、要件定義の差し戻しを起動できなかったときは、要件定義の作り直しから始めます",
-    );
-  });
-
-  test("explains that a missing approval restarts at the requirements", () => {
-    expect(describeRetryPlan(failure()).note).toContain(
-      "承認済みの要件定義がなければ、要件定義の作り直しから始めます",
+      "作り直すと承認し直しが要り",
     );
   });
 
   test("explains that the Issue is read again when the requirements are made again", () => {
     expect(describeRetryPlan(failure()).note).toContain(
-      "要件定義を作り直す場合は、GitHubの現在のIssueの題名と本文を取り込み直します",
+      "GitHubの現在のIssueの題名と本文を取り込み直します",
     );
+  });
+
+  test("explains that an unapproved design restarts at the design and the others at the implementation", () => {
+    expect(describeRetryPlan(failure()).note).toContain(
+      "それ以外は、設計が有効で未承認なら設計から、そうでなければ実装から始めます",
+    );
+  });
+
+  test("does not say only a failed launch of the regeneration restarts the requirements", () => {
+    expect(describeRetryPlan(failure()).note).not.toContain("起動できなかった");
   });
 
   test("does not say an approved requirement always restarts the implementation", () => {
     expect(describeRetryPlan(failure()).note).not.toContain(
       "承認済みの要件定義があれば実装から",
     );
+  });
+
+  test("keeps the note to three sentences", () => {
+    expect(describeRetryPlan(failure()).note?.split("。").length).toBe(4);
+  });
+
+  test("does not nest parentheses in the note", () => {
+    expect(describeRetryPlan(failure()).note).not.toContain("(");
   });
 
   test("has no note for a review work item", () => {

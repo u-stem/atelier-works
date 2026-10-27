@@ -184,11 +184,14 @@ describe("nextActionFor for the design stage", () => {
   test.each([
     ["a missing design approval", noApprovedDesignReason(2)],
     ["a stale design", DESIGN_STALE_REQUIREMENTS_REASON],
-  ])("tells to retry from the design for %s", (_name, reason) => {
-    expect(nextActionFor(reason)).toContain(
-      `${RETRY}\`を作業項目のIDで実行してください(設計から再開します)`,
-    );
-  });
+  ])(
+    "tells to retry from the design when it is enabled for %s",
+    (_name, reason) => {
+      expect(nextActionFor(reason)).toContain(
+        `${RETRY}\`を作業項目のIDで実行してください(設計が有効なら設計から再開します)`,
+      );
+    },
+  );
 
   test("tells to check the approval record before the retry of an inconsistent design approval", () => {
     expect(nextActionFor(DESIGN_APPROVAL_INCONSISTENT_REASON)).toContain(
