@@ -643,11 +643,11 @@ describe("activeScrollLeft", () => {
   });
 
   test("is null when no step is running or failed", () => {
-    expect(scrollOf([stepData("prepare", "success")])).toBeNull();
+    expect(scrollOf([stepData("pr_fix_prepare", "success")])).toBeNull();
   });
 
   test("is zero when the running step is already in view", () => {
-    expect(scrollOf([stepData("prepare", "running")])).toBe(0);
+    expect(scrollOf([stepData("pr_fix_prepare", "running")])).toBe(0);
   });
 
   test("moves a running step on the right edge into view", () => {

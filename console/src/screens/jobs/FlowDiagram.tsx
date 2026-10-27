@@ -1,8 +1,9 @@
-import { useId, useMemo } from "react";
+import { type ReactNode, useId, useLayoutEffect, useMemo, useRef } from "react";
 import { Link } from "react-router";
 import { JobLink } from "../../components/JobLink.tsx";
 import { cn } from "../../lib/cn.ts";
 import {
+  activeScrollLeft,
   CONDITIONAL_EDGES_NOTE,
   CONDITIONAL_WORD,
   type DiagramBox,
@@ -500,23 +501,68 @@ function UnknownSteps({ model }: { model: FlowDiagramModel }) {
 }
 
 /**
+ * 横にスクロールできる枠。キーボードで焦点を当てないと読み進められないので、焦点を受けられるようにする。
+ * 開いたとき、実行中か失敗したステップが見える位置へ寄せる。そのステップが動かない間は、利用者が動かしたスクロールを戻さない。
+ */
+function ScrollFrame({
+  layout,
+  label,
+  children,
+}: {
+  layout: DiagramLayout;
+  label: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const applied = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element === null) return;
+    const left = activeScrollLeft(layout, element.clientWidth);
+    if (left === null || left === applied.current) {
+      applied.current = left;
+      return;
+    }
+    applied.current = left;
+    element.scrollLeft = left;
+  }, [layout]);
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: 領域の役割を明示する。sectionは、見出しを持つ節と取り違えられる。
+    <div
+      ref={ref}
+      role="region"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: 同上。
+      tabIndex={0}
+      aria-label={`${label}(横にスクロールできます)`}
+      className="overflow-x-auto rounded-xl border border-border bg-card p-2 focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
  * 図を、節の幅に合わせた見せ方で包む。
  * 収まるときはカードに入れて図をそのまま、収まらないときは横にスクロールできる枠に入れる。
  * 枠は、キーボードで焦点を当てないと隠れた部分を読めないので、焦点を受けられるようにする。
  * 幅が狭く図が読めないときは、図の代わりに、入口、ステップ、出口の一覧を出す。
  * 定義に無いステップは、どの見せ方でも図の後ろに出す。
+ * 作業項目の詳細に埋め込む図(`embedded`)は、図の入口の列と、静的な注記を出さない。入口は、そのflowの図の画面で読む。一覧は入口も出す。
  */
 export function FlowDiagramFrame({
   model,
   presentation,
-  embedded: _embedded = false,
+  embedded = false,
 }: {
   model: FlowDiagramModel;
   presentation: GraphPresentation;
   /** 作業項目の詳細に埋め込む図か。入口の列と静的な注記を出さない。 */
   embedded?: boolean;
 }) {
-  const layout = useMemo(() => layoutFlowDiagram(model), [model]);
+  const layout = useMemo(
+    () => layoutFlowDiagram(model, { entries: !embedded }),
+    [model, embedded],
+  );
   const label = safeText(diagramLabel(model.flow.name));
   const body =
     presentation === "list" ? (
@@ -526,22 +572,14 @@ export function FlowDiagramFrame({
         <FlowDiagram layout={layout} label={label} overlay={model.overlay} />
       </div>
     ) : (
-      // 横にスクロールできる領域は、キーボードで焦点を当てないと読み進められない。
-      // biome-ignore lint/a11y/useSemanticElements: 領域の役割を明示する。sectionは、見出しを持つ節と取り違えられる。
-      <div
-        role="region"
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: 同上。
-        tabIndex={0}
-        aria-label={`${label}(横にスクロールできます)`}
-        className="overflow-x-auto rounded-xl border border-border bg-card p-2 focus-visible:ring-2 focus-visible:ring-ring"
-      >
+      <ScrollFrame layout={layout} label={label}>
         <FlowDiagram layout={layout} label={label} overlay={model.overlay} />
-      </div>
+      </ScrollFrame>
     );
   return (
     <div className="flex flex-col gap-3">
       {body}
-      <Notes model={model} />
+      {embedded ? null : <Notes model={model} />}
       <UnknownSteps model={model} />
     </div>
   );

@@ -494,10 +494,10 @@ describe("FlowDiagramFrame: embedded in a work item", () => {
     expect(render("design")).toContain("まだ起動されません");
   });
 
-  test("lists no entries in the narrow presentation", () => {
+  test("keeps the entries in the narrow list, where they are the only links upstream", () => {
     expect(
       render("pipeline", { embedded: true, presentation: "list" }),
-    ).not.toContain('aria-label="入口"');
+    ).toContain('aria-label="入口"');
   });
 
   test("keeps the exits in the diagram", () => {

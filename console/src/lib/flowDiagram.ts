@@ -235,12 +235,29 @@ export type DiagramLayout = {
 /** 配置の選択。入口の列を描かないときは`entries`を偽にする。 */
 export type LayoutOptions = { readonly entries: boolean };
 
-/** 横スクロールの枠を開いたとき、実行中か失敗したステップが見える位置。該当が無ければ`null`。 */
+/**
+ * 横にスクロールする枠を開いたとき、実行中か失敗したステップが見える位置(scrollLeft)。
+ * 実行中のステップを優先し、無ければ最後の失敗のステップを枠の中央に寄せる。両端では、図の外へ出ない位置に収める。
+ * 該当するステップが無ければ`null`にする。
+ */
 export function activeScrollLeft(
-  _layout: DiagramLayout,
-  _viewportWidth: number,
+  layout: DiagramLayout,
+  viewportWidth: number,
 ): number | null {
-  return null;
+  let target: Box | null = null;
+  for (const box of layout.boxes) {
+    if (box.kind !== "step") continue;
+    const kind = box.node.state?.kind;
+    if (kind === "running") {
+      target = box;
+      break;
+    }
+    if (kind === "failure") target = box;
+  }
+  if (target === null) return null;
+  const center = target.x + target.width / 2;
+  const max = Math.max(0, layout.width - viewportWidth);
+  return Math.min(max, Math.max(0, center - viewportWidth / 2));
 }
 
 export const MARGIN = 20;
@@ -257,17 +274,17 @@ const EXIT_GAP = 12;
 const ROW_GAP = 48;
 
 /**
- * 図の配置を決める。入口は左の列に縦に並べ、ステップは右へ一列に並べ、出口はステップの下の行に並べる。
+ * 図の配置を決める。入口は左の列に縦に並べ(`entries`が偽なら描かない)、ステップは右へ一列に並べ、出口はステップの下の行に並べる。
  * 出口は、つくステップの真下に置く。同じ行で重なるときは右へずらす。
  * 線は隣り合う列と行の間だけを引くので、他の箱の上を通らない。
  * 箱の幅は、5ステップのflowが、ジョブの画面の本文の最大の幅(1152px)に収まるように決めた。画面の幅がそれより狭いときは、見せ方が横スクロールか一覧になる。
  */
 export function layoutFlowDiagram(
   model: FlowDiagramModel,
-  _options: LayoutOptions = { entries: true },
+  options: LayoutOptions = { entries: true },
 ): DiagramLayout {
   const { flow, steps } = model;
-  const entries = drawnEntries(flow);
+  const entries = options.entries ? drawnEntries(flow) : [];
   const entriesHeight =
     entries.length === 0
       ? 0

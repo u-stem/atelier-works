@@ -68,11 +68,11 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /**
  * flowのジョブの図へのリンク先。
- * 図に無いflow、flowのステップ、親を持つジョブには出さない。
+ * 図は静的で、親のジョブとは関係が無いので、親を持つflowのジョブにも出す。
+ * 図に無いflowと、flowのステップの子のジョブには出さない。
  */
 function flowDiagramLinkOf(job: JobSummaryView): string | null {
   if (job.job_kind !== "flow" || job.is_flow_step) return null;
-  if (job.parent_job !== null) return null;
   return flowDiagramPath(jobScriptName(job.script_path));
 }
 

@@ -11,7 +11,7 @@ import {
   type FlowsData,
   findFlow,
 } from "../../../lib/flowsData.ts";
-import { isActiveJobState, jobScriptName } from "../../../lib/jobsView.ts";
+import { jobScriptName } from "../../../lib/jobsView.ts";
 import { safeText } from "../../../lib/safeText.ts";
 import { useElementWidth } from "../../../lib/useElementWidth.ts";
 import type { FlowProgressView } from "../../../lib/workItemFlowProgress.ts";
@@ -28,7 +28,7 @@ type StepsView = Extract<FlowProgressView, { kind: "steps" }>;
 type WidthRef = (element: HTMLElement | null) => (() => void) | undefined;
 
 /**
- * 現在のflowの図。ステップの状態を重ね、実行中のステップを強調する。
+ * 現在のflowの図。ステップの状態を重ね、実行中のステップを強調する。入口の列と注記は出さない。
  * 幅は、図を包む要素の実際の幅から決める。測る前は描かない。描き直しで見せ方が変わると画面がちらつくためである。
  */
 function FlowBlock({
@@ -46,13 +46,17 @@ function FlowBlock({
     () => flowDiagramModel(flow, view.steps),
     [flow, view.steps],
   );
-  const extent = useMemo(() => layoutFlowDiagram(model).width, [model]);
+  const extent = useMemo(
+    () => layoutFlowDiagram(model, { entries: false }).width,
+    [model],
+  );
   return (
     <div ref={widthRef}>
       {width <= 0 ? null : (
         <FlowDiagramFrame
           model={model}
           presentation={graphPresentation(width, extent)}
+          embedded
         />
       )}
     </div>
@@ -61,7 +65,7 @@ function FlowBlock({
 
 /**
  * 現在のflow。見出しにflow名、実行中と待ち以外のジョブの状態、ジョブの詳細へのリンク、前の値の印を置き、その下に図を置く。
- * 図が実行中か待ちを示しているときは、状態の語を見出しに重ねない。
+ * 図に実行中のステップがあるときは、状態の語を見出しに重ねない。待ちのステップだけのときと、ステップがまだ無いときは、見出しが状態を示す。
  * 同梱のデータにflowが無いときは、図を描けないので、ステップの一覧に替える。
  */
 function Current({
@@ -76,14 +80,15 @@ function Current({
   widthRef: WidthRef | undefined;
 }) {
   const name = safeText(jobScriptName(view.flowPath));
-  const showsState = !(flow !== null && isActiveJobState(view.jobState));
+  const runningInDiagram =
+    flow !== null && view.steps.some((step) => step.state === "running");
   return (
     <section className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h3 className="min-w-0 text-body font-semibold break-all">
           {`${name}のステップ`}
         </h3>
-        {showsState ? <JobStateBadge state={view.jobState} /> : null}
+        {runningInDiagram ? null : <JobStateBadge state={view.jobState} />}
         <JobLink jobId={view.jobId} label="ジョブを開く" />
         {view.stale ? (
           <span className="text-caption text-muted-foreground">
