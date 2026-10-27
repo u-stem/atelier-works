@@ -200,7 +200,7 @@ export type RestartContextDeps = {
   readonly latestStatusTransition: (
     workItemId: number,
     toStatus: WorkItemStatus,
-    skipNoteSuffix: string,
+    skipNotePrefix: string,
   ) => Promise<StatusEventSummary | null>;
   readonly hasRequirementDraftAfter: (
     workItemId: number,
@@ -209,17 +209,16 @@ export type RestartContextDeps = {
 };
 
 /**
- * 差し戻しの理由を引き継いだ再実行の遷移の注記の末尾。
- * `buildRestartContext`は、この文字列で終わる注記の遷移を飛ばして、その前の差し戻しの理由を読む。
+ * 差し戻しの理由を引き継いだ再実行の遷移の注記の接頭辞。
+ * `buildRestartContext`は、この文字列で始まる注記の遷移を飛ばして、その前の差し戻しの理由を読む。
+ * 末尾でなく先頭で見分けるのは、差し戻しの本文が印と同じ文字列で終わっても、その遷移を飛ばさないためである。
  */
-export const RESTART_CARRYING_GAP_NOTE_SUFFIX = " (carrying gap)";
-
-// テストのコミット用のスタブ。実装のコミットで接頭辞に置き換える。
-export const RESTART_CARRYING_GAP_NOTE_PREFIX = "";
+export const RESTART_CARRYING_GAP_NOTE_PREFIX =
+  "retry_work_item: restarted (carrying gap)";
 
 /**
  * 再実行の遷移の注記を作る。取り消す前の状態(`restartStatus`)が現在の状態と違うときは、それも書く。
- * 差し戻しの理由を引き継いで要件定義の生成を起動する再実行(`carriesGap`)には、末尾に印を付ける。
+ * 差し戻しの理由を引き継いで要件定義の生成を起動する再実行(`carriesGap`)には、先頭に印を付ける。
  * 印を付けない再実行の遷移は、`buildRestartContext`が飛ばさないので、その前の古い差し戻しの理由を隠す。
  */
 export function restartNote(input: {
@@ -227,11 +226,13 @@ export function restartNote(input: {
   readonly restartStatus: WorkItemStatus;
   readonly carriesGap: boolean;
 }): string {
-  const base =
+  const from =
     input.restartStatus === input.status
-      ? `retry_work_item: restarted from ${input.status}`
-      : `retry_work_item: restarted from ${input.status} (was ${input.restartStatus} before the closed target was cancelled)`;
-  return input.carriesGap ? `${base}${RESTART_CARRYING_GAP_NOTE_SUFFIX}` : base;
+      ? `from ${input.status}`
+      : `from ${input.status} (was ${input.restartStatus} before the closed target was cancelled)`;
+  return input.carriesGap
+    ? `${RESTART_CARRYING_GAP_NOTE_PREFIX} ${from}`
+    : `retry_work_item: restarted ${from}`;
 }
 
 /** `buildRestartContext`が読む問い合わせを、`sql`で組み立てる。 */
@@ -241,8 +242,8 @@ export function restartContextDeps(
   return {
     latestDesignApproval: (id) => latestDesignApproval(id, sql),
     latestStatusEvent: (id, status) => latestStatusEvent(id, status, sql),
-    latestStatusTransition: (id, status, skipNoteSuffix) =>
-      latestStatusTransition(id, status, sql, skipNoteSuffix),
+    latestStatusTransition: (id, status, skipNotePrefix) =>
+      latestStatusTransition(id, status, sql, skipNotePrefix),
     hasRequirementDraftAfter: (id, attempt) =>
       hasRequirementDraftAfter(id, attempt, sql),
   };
@@ -254,7 +255,7 @@ export function restartContextDeps(
  * - 止まった遷移は、取り消す前の状態(`restartStatus`)で引く。要件定義が承認済みのときだけ読む。
  * - 差し戻しの理由は、要件定義の生成へ戻った後に止まったときだけ、要件定義の生成への最新の遷移の注記から引く。
  *   再実行の遷移が後にあれば、注記が差し戻しの理由でないので、理由は渡らない。
- *   ただし、差し戻しの理由を引き継いだ再実行の遷移(注記が`RESTART_CARRYING_GAP_NOTE_SUFFIX`で終わる)は飛ばして、その前を読む。
+ *   ただし、差し戻しの理由を引き継いだ再実行の遷移(注記が`RESTART_CARRYING_GAP_NOTE_PREFIX`で始まる)は飛ばして、その前を読む。
  *   引き継いだ再実行が起動に失敗して止まっても、次の再実行が同じ理由を渡せるようにするためである。
  * - 却下の理由は、照合に使った承認依頼の行から引く。最新の承認が現在の`attempt`の却下のときに渡す。
  *   却下が`max_attempts`に達した最後の却下は要件定義の生成への遷移を作らず、遷移の記録には前のサイクルの理由しか無いためである。
@@ -263,7 +264,7 @@ export function restartContextDeps(
  *   却下なら承認依頼の理由を、承認なら上の差し戻しの理由を、もう一度渡す。
  *
  * この関数は遷移の注記の文面を判定に使う。読むのは、差し戻しの接頭辞(`GAP_NOTE_PREFIXES`)と、
- * 引き継ぎの印(`RESTART_CARRYING_GAP_NOTE_SUFFIX`)だけである。
+ * 引き継ぎの印(`RESTART_CARRYING_GAP_NOTE_PREFIX`)だけである。
  * 注記を書く側(`restartNote`、設計と実装の差し戻し)と読む側の文面は、同時に変える。
  */
 export async function buildRestartContext(
@@ -299,7 +300,7 @@ export async function buildRestartContext(
     const transition = await deps.latestStatusTransition(
       workItem.id,
       "requirements_generating",
-      RESTART_CARRYING_GAP_NOTE_SUFFIX,
+      RESTART_CARRYING_GAP_NOTE_PREFIX,
     );
     return feedbackFromGapNote(transition?.note ?? null);
   };

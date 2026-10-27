@@ -273,6 +273,7 @@ export async function designGate(
         truncated: normalized.truncated,
         masked: normalized.masked,
         dropped_combining: normalized.dropped_combining,
+        stripped_characters: normalized.stripped_characters,
       },
     );
   }

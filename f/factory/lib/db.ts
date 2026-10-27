@@ -874,23 +874,24 @@ export async function latestStatusEvent(
  * 取り込みの更新のように状態を変えない行(遷移元と遷移先が同じ)は除く。
  * 遷移元では絞らない。`retry_work_item`が、要件定義の生成へ戻った理由(設計・実装・PRの修正の差し戻し)を読むために使う。
  * 再実行の遷移が後にあれば、その遷移を返す。古い差し戻しの理由を、いま戻す理由として渡さないためである。
- * `skipNoteSuffix`を渡すと、注記がその文字列で終わる遷移を飛ばして、その前の遷移を返す。
- * 注記の無い遷移は飛ばさない。差し戻しの理由を引き継いだ再実行の遷移だけを、印で見分けて飛ばすために使う。
+ * `skipNotePrefix`を渡すと、注記がその文字列で始まる遷移を飛ばして、その前の遷移を返す。
+ * 注記の無い遷移は飛ばさない。差し戻しの理由を引き継いだ再実行の遷移だけを、先頭の印で見分けて飛ばすために使う。
+ * 末尾でなく先頭で見るのは、差し戻しの本文が印と同じ文字列で終わっても、その遷移を飛ばさないためである。
  */
 export async function latestStatusTransition(
   workItemId: number,
   toStatus: WorkItemStatus,
   sql: SqlClient = defaultSqlClient,
-  skipNoteSuffix: string | null = null,
+  skipNotePrefix: string | null = null,
 ): Promise<StatusEventSummary | null> {
   const rows = await sql`
     SELECT from_status, note FROM factory.work_item_events
     WHERE work_item_id = ${workItemId}::bigint AND to_status = ${toStatus}
       AND from_status IS DISTINCT FROM to_status
       AND (
-        ${skipNoteSuffix}::text IS NULL
+        ${skipNotePrefix}::text IS NULL
         OR note IS NULL
-        OR right(note, char_length(${skipNoteSuffix}::text)) <> ${skipNoteSuffix}::text
+        OR NOT starts_with(note, ${skipNotePrefix}::text)
       )
     ORDER BY occurred_at DESC, id DESC
     LIMIT 1

@@ -471,6 +471,7 @@ const MAX_DESIGN_ATTEMPTS_RANGE = { min: 1, max: 10 } as const;
  * 設計工程を有効にできる状態か。偽の間は、`design_enabled: true`を例外にせず、偽として読んで`design_enabled_ignored`を立てる。
  * 例外にすると、設定を読む全てのscriptが止まり、自己更新も、止まったことを知らせる通知も動かなくなるため。
  * 有効にできる状態になるときに、この定数と分岐を置き換える。
+ * 真にしてよい条件は、承認画面が実装に渡すのと同じ正規化の出力を、設計書のHTMLとリンク参照定義を要素や定義にせず文字として描くことと、それを確かめるテストがあることである。
  */
 const DESIGN_STAGE_OPENABLE = false;
 

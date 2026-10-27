@@ -44,6 +44,11 @@ export type SanitizedModelText = {
   readonly masked: boolean;
   /** 見えない文字や結合文字を落とした影の文字列をマスクした結果を、保存する文字列にしたか。 */
   readonly dropped_combining: boolean;
+  /**
+   * 元の文字列から除いた文字数(コードポイント数)。制御文字と書式文字に、影をマスクした結果を保存したときに落とした結合文字などを足す。
+   * マスクが置き換えた秘密情報の文字数は含まない。
+   */
+  readonly stripped_characters: number;
 };
 
 /**
@@ -57,18 +62,26 @@ export type SanitizedModelText = {
  * 限界として、見える区切り文字(空白、ハイフン、記号)を秘密情報の途中に挟む意図的な難読化は、マスクでは止められない。
  */
 export function sanitizeModelTextDetailed(text: string): SanitizedModelText {
-  const cleaned = Array.from(text).filter(isAllowedCharacter).join("");
-  const shadow = Array.from(cleaned)
-    .filter((char) => !INVISIBLE_PATTERN.test(char))
-    .join("");
+  const original = Array.from(text);
+  const cleanedPoints = original.filter(isAllowedCharacter);
+  const cleaned = cleanedPoints.join("");
+  const shadowPoints = cleanedPoints.filter(
+    (char) => !INVISIBLE_PATTERN.test(char),
+  );
+  const shadow = shadowPoints.join("");
   const maskedShadow = maskSecrets(shadow);
   const shadowHidSecret = maskedShadow !== shadow;
   const maskedCleaned = shadowHidSecret ? maskedShadow : maskSecrets(cleaned);
+  const droppedCombining = shadowHidSecret && shadow !== cleaned;
   return {
     text: maskedCleaned,
     chars: Array.from(maskedCleaned).length,
     masked: shadowHidSecret || maskedCleaned !== cleaned,
-    dropped_combining: shadowHidSecret && shadow !== cleaned,
+    dropped_combining: droppedCombining,
+    stripped_characters:
+      original.length -
+      cleanedPoints.length +
+      (droppedCombining ? cleanedPoints.length - shadowPoints.length : 0),
   };
 }
 
@@ -104,6 +117,8 @@ export type NormalizedDesign = {
   readonly truncated: boolean;
   readonly masked: boolean;
   readonly dropped_combining: boolean;
+  /** 整形が元の本文から除いた文字数(`SanitizedModelText.stripped_characters`)。切り詰めで落とした分は含まない。 */
+  readonly stripped_characters: number;
   /** 元の本文から変わったか。制御文字や書式文字だけを除いた場合と、切った場合を含む。 */
   readonly changed: boolean;
 };
@@ -140,6 +155,7 @@ export function normalizeDesignForImplement(
     truncated,
     masked: sanitized.masked,
     dropped_combining: sanitized.dropped_combining,
+    stripped_characters: sanitized.stripped_characters,
     changed: truncated || sanitized.text !== markdown,
   };
 }
