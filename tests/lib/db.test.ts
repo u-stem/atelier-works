@@ -5543,7 +5543,7 @@ describe("countAppliedDesignRejections", () => {
   const PREFIX = "design rejected after max_design_attempts";
 
   test("returns the count", async () => {
-    const { sql } = createFakeSqlClient([[{ n: "2" }]]);
+    const { sql } = createFakeSqlClient([[{ n: 2 }]]);
     expect(await countAppliedDesignRejections(1, NOTE, PREFIX, sql)).toBe(2);
   });
 
@@ -5570,7 +5570,7 @@ describe("countAppliedDesignRejections", () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
     await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
-      "to_status = 'needs_human' AND starts_with(note, ?)",
+      "to_status = 'needs_human' AND starts_with(note, ? )",
     );
   });
 
