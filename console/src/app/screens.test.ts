@@ -49,6 +49,30 @@ describe("SCREENS", () => {
     ]);
   });
 
+  test("gives every entrance the go-to key from the issue", () => {
+    expect(SCREENS.map((screen) => screen.shortcut)).toEqual([
+      "i",
+      "w",
+      "r",
+      "j",
+      "s",
+    ]);
+  });
+
+  test("keeps the go-to keys distinct", () => {
+    expect(new Set(SCREENS.map((screen) => screen.shortcut)).size).toBe(
+      SCREENS.length,
+    );
+  });
+
+  test("keeps g and ? free for the chord and the help", () => {
+    expect(
+      SCREENS.some(
+        (screen) => screen.shortcut === "g" || screen.shortcut === "?",
+      ),
+    ).toBe(false);
+  });
+
   test("keeps child paths relative to the router base", () => {
     expect(
       SCREENS.flatMap((screen) => screen.children).every(
