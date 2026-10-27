@@ -190,7 +190,7 @@ describe("shortcutFor", () => {
     });
   });
 
-  test.each(TARGETS)("maps g then $key to $id", ({ key, id }) => {
+  test.each([...TARGETS])("maps g then $key to $id", ({ key, id }) => {
     expect(stepShortcut(AFTER_G, press(key), env({ now: 10 })).action).toEqual({
       kind: "go",
       id,

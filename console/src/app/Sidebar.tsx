@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { Keyboard, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
@@ -209,6 +209,48 @@ function NavList({
   );
 }
 
+/**
+ * ショートカットの一覧を開くボタン。
+ * 1文字のショートカットを無効にしても一覧を開けて、有効に戻せるようにするための入口である。
+ * たたんだサイドバーでは、名前を読み上げ専用にして、アイコンだけを見せる。
+ */
+function ShortcutHelpButton({
+  compact,
+  className,
+  onClick,
+}: {
+  compact: boolean;
+  className?: string;
+  onClick: () => void;
+}) {
+  const button = (
+    <button
+      type="button"
+      aria-haspopup="dialog"
+      className={cn(
+        SIDEBAR_ICON_BUTTON_CLASS,
+        compact
+          ? "size-8 text-subtle"
+          : "h-8 w-full justify-start gap-2 px-2 text-small text-subtle",
+        className,
+      )}
+      onClick={onClick}
+    >
+      <Keyboard aria-hidden="true" className="size-4 shrink-0" />
+      <span className={compact ? "sr-only" : undefined}>ショートカット</span>
+    </button>
+  );
+  if (!compact) {
+    return button;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent side="right">ショートカット</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /** 題名の2行。サイドバーの上端とドロワーの上端で共通に使う。 */
 function BrandTitle() {
   return (
@@ -224,8 +266,9 @@ function BrandTitle() {
 /**
  * 画面のメニュー。md以上は、4つの入口と件数を出す左のサイドバーで、たたむ操作は保存領域に残す。
  * md未満は、上部のバーのボタンからドロワーを開く。たたむ操作は無く、常に広げた形で出す。
+ * `onOpenHelp`は、ショートカットの一覧を開く。ドロワーから開くときは、ドロワーを閉じてから呼ぶ。
  */
-export function Sidebar() {
+export function Sidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
   const summary = useSummary();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -295,6 +338,14 @@ export function Sidebar() {
         <div className="mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3">
           <ReleaseInfo />
           <ThemeSwitch />
+          <ShortcutHelpButton
+            compact={false}
+            className="min-h-11"
+            onClick={() => {
+              closeDrawer();
+              onOpenHelp();
+            }}
+          />
         </div>
       </NavDrawer>
       <aside
@@ -326,6 +377,7 @@ export function Sidebar() {
               <ThemeSwitch />
             </>
           )}
+          <ShortcutHelpButton compact={collapsed} onClick={onOpenHelp} />
           <Tooltip>
             <TooltipTrigger asChild>
               <button

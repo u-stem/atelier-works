@@ -56,8 +56,11 @@ const NO_INPUT: ManualIntakeInput = {
  * 戻った画面に警告が出る。ロックを持つのは、このタブの中だけである。
  */
 export function useManualIntake(): ManualIntake {
-  const session = useSyncExternalStore(intakeSessions.subscribe, () =>
-    intakeSessions.get(MANUAL_INTAKE_WRITE_KEY),
+  // 静的な描画(a11y検査のテスト)にも、同じ状態を返す。
+  const session = useSyncExternalStore(
+    intakeSessions.subscribe,
+    () => intakeSessions.get(MANUAL_INTAKE_WRITE_KEY),
+    () => intakeSessions.get(MANUAL_INTAKE_WRITE_KEY),
   );
   useEffect(() => {
     leaveGuard.enter();

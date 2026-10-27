@@ -232,14 +232,21 @@ function isBlank(text: string | undefined): boolean {
   return text === undefined || text.trim() === "";
 }
 
-/** 要素か祖先が、支援技術から隠されているか。 */
+/**
+ * 要素か祖先が、支援技術から隠されているか。
+ * 閉じた`<dialog>`の中は描かれないので、隠されたものとして扱う。
+ */
 function isHidden(element: ElementNode): boolean {
   for (
     let node: ElementNode | null = element;
     node !== null;
     node = node.parent
   ) {
-    if (node.attrs.get("aria-hidden") === "true" || node.attrs.has("hidden")) {
+    if (
+      node.attrs.get("aria-hidden") === "true" ||
+      node.attrs.has("hidden") ||
+      (node.tag === "dialog" && !node.attrs.has("open"))
+    ) {
       return true;
     }
   }

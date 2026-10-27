@@ -27,7 +27,7 @@ import { CommandPalette } from "./app/CommandPalette.tsx";
 import { ShortcutHelp } from "./app/ShortcutHelp.tsx";
 import { Sidebar } from "./app/Sidebar.tsx";
 import { SkipLink } from "./app/SkipLink.tsx";
-import { SCREENS, type ScreenRoute } from "./app/screens.ts";
+import { SCREENS, type ScreenId, type ScreenRoute } from "./app/screens.ts";
 import { LoadingStateView } from "./components/LoadingState.tsx";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { type A11yViolation, checkA11y } from "./lib/a11yRules.ts";
@@ -332,7 +332,10 @@ function renderScreen(
   entry: string,
   variant: Variant,
 ): string {
-  const client = new QueryClient();
+  // 失敗した取得を、描画のたびに取り直し中として扱わせない。
+  const client = new QueryClient({
+    defaultOptions: { queries: { retryOnMount: false } },
+  });
   const draw = (): string =>
     renderToStaticMarkup(
       <QueryClientProvider client={client}>
@@ -413,6 +416,43 @@ function messages(violations: readonly A11yViolation[]): string[] {
     (violation) => `${violation.rule}: ${violation.message}`,
   );
 }
+
+async function renderCase(
+  id: ScreenId,
+  variant: Variant,
+  entry?: string,
+): Promise<string> {
+  const screen = SCREENS.find((candidate) => candidate.id === id);
+  if (screen === undefined) {
+    throw new Error(`no screen: ${id}`);
+  }
+  const { Component } = await screen.lazy();
+  return renderScreen(Component, screen.path, entry ?? screen.path, variant);
+}
+
+describe("a11y: the states reach the screens", () => {
+  test("the normal state draws the work item rows", async () => {
+    expect(await renderCase("items", "normal")).toContain("example item");
+  });
+
+  test("the normal state draws the approval of the inbox", async () => {
+    expect(await renderCase("inbox", "normal")).toContain("example item");
+  });
+
+  test("the normal state draws the jobs", async () => {
+    expect(await renderCase("jobs", "normal")).toContain(">example<");
+  });
+
+  test("the failed state draws the failure of the inbox", async () => {
+    expect(await renderCase("inbox", "failed")).toContain(
+      "取得できませんでした",
+    );
+  });
+
+  test("the failed state draws the failure of the jobs", async () => {
+    expect(await renderCase("jobs", "failed")).toContain("取得");
+  });
+});
 
 describe("a11y: every screen in its representative states", () => {
   for (const testCase of CASES) {
