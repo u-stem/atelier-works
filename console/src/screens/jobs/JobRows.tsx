@@ -24,9 +24,12 @@ import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
 import { jobDetailPath } from "../../lib/jobLink.ts";
+import { withJobsTab } from "../../lib/jobsTabs.ts";
 import {
   ACTIVE_TRUNCATED_NOTE,
+  currentJobs,
   formatDuration,
+  JOBS_PATH,
   type JobStateKind,
   jobScriptName,
   jobStateInfo,
@@ -248,7 +251,8 @@ export const LIST_LOADING_SHAPE: LoadingShape = {
 };
 
 /**
- * 実行中と待ちのタブの本体。実行中、待ち、予定のジョブを並べる。
+ * 実行中と待ちのタブの本体。実行中と、workerを待つジョブを並べる。
+ * これから始まる予定のジョブは並べない。次回の予定は、スケジュールのタブに同じ情報があるためである。
  * 自動では取り直さず、画面の更新ボタンで取り直す。その案内は見出しの更新の脇に任せ、ここでは繰り返さない。
  * キューの1ページで切れたときは、全件を読めていないと伝える。
  */
@@ -258,6 +262,18 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
     <div className="flex max-w-4xl flex-col gap-3">
       <p className="text-small text-muted-foreground">
         Consoleの呼び出し(tag console)は含みません。
+        予定のジョブ(これから始まる定期実行)も含みません。次回の予定は、
+        <Link
+          to={{
+            pathname: JOBS_PATH,
+            search: `?${withJobsTab(new URLSearchParams(), "schedules").toString()}`,
+          }}
+          replace
+          className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          スケジュールのタブ
+        </Link>
+        で見られます。
       </p>
       <JobsQueryGate
         query={query}
@@ -265,22 +281,25 @@ export function ActiveJobs({ query }: { query: SectionQuery<JobListView> }) {
         loginHint="上のバナーからログインすると、実行中と待ちのジョブを表示します。"
         shape={LIST_LOADING_SHAPE}
       >
-        {(data) => (
-          <>
-            {data.truncated ? (
-              <Alert variant="warning">
-                <AlertDescription>
-                  <p>{ACTIVE_TRUNCATED_NOTE}</p>
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            {data.jobs.length === 0 ? (
-              <EmptyNote>実行中と待ちのジョブはありません。</EmptyNote>
-            ) : (
-              <JobList jobs={data.jobs} now={now} back="" time="active" />
-            )}
-          </>
-        )}
+        {(data) => {
+          const jobs = currentJobs(data.jobs);
+          return (
+            <>
+              {data.truncated ? (
+                <Alert variant="warning">
+                  <AlertDescription>
+                    <p>{ACTIVE_TRUNCATED_NOTE}</p>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {jobs.length === 0 ? (
+                <EmptyNote>いま実行中・待ちのジョブはありません。</EmptyNote>
+              ) : (
+                <JobList jobs={jobs} now={now} back="" time="active" />
+              )}
+            </>
+          );
+        }}
       </JobsQueryGate>
     </div>
   );
