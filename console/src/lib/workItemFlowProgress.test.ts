@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { JobDetailView, StepViewData } from "../api/jobsQueries.ts";
 import {
   createFinishReloadWatcher,
-  flowGraphStateOfProgress,
   flowJobTarget,
   flowProgressOf,
 } from "./workItemFlowProgress.ts";
@@ -183,49 +182,6 @@ describe("workItemFlowProgress: what to show", () => {
     expect(
       flowProgressOf({ jobId: JOB, detail: detail("success"), failed: true }),
     ).toEqual({ kind: "none" });
-  });
-});
-
-describe("workItemFlowProgress: what the diagram highlights", () => {
-  function stateOf(state: string, path = "f/factory/pipeline") {
-    return flowGraphStateOfProgress(
-      flowProgressOf({
-        jobId: JOB,
-        detail: detail(state, [], JOB, path),
-        failed: false,
-      }),
-    );
-  }
-
-  test("highlights the flow of a running job and opens that job", () => {
-    expect(stateOf("running").overlay?.activity.get("flow:pipeline")).toEqual({
-      running: 1,
-      queued: 0,
-      runningJobId: JOB,
-    });
-  });
-
-  test("shows a queued job as waiting", () => {
-    expect(stateOf("queued").overlay?.activity.get("flow:pipeline")).toEqual({
-      running: 0,
-      queued: 1,
-      runningJobId: null,
-    });
-  });
-
-  test("highlights nothing for a finished job", () => {
-    expect(stateOf("failure").overlay?.activity.size).toBe(0);
-  });
-
-  test("highlights nothing for a path outside the known flows", () => {
-    expect(
-      stateOf("running", "f/factory/steps/pipeline_prepare").overlay?.activity
-        .size,
-    ).toBe(0);
-  });
-
-  test("highlights nothing when there is no progress", () => {
-    expect(flowGraphStateOfProgress({ kind: "none" }).overlay).toBeNull();
   });
 });
 

@@ -33,7 +33,9 @@ const RENDERERS = [
 
 /** サーバーの文字列を画面に出す部品。無害化の部品を取り込んでいなければならない。 */
 const SAFE_TEXT_USERS = [
+  "console/src/screens/jobs/FlowDiagram.tsx",
   "console/src/screens/jobs/FlowGraphDiagram.tsx",
+  "console/src/screens/jobs/FlowScreen.tsx",
   "console/src/screens/jobs/JobDetailParts.tsx",
   "console/src/screens/jobs/JobDetailScreen.tsx",
   "console/src/screens/jobs/JobHistory.tsx",
@@ -175,6 +177,15 @@ const FORBIDDEN: readonly Forbidden[] = [
 describe("the renderers of the job screens", () => {
   test("include the parts that draw the output", () => {
     expect(RENDERERS).toContain("console/src/screens/jobs/JobDetailParts.tsx");
+  });
+
+  test("include the diagram and the screen of a flow", () => {
+    expect(
+      RENDERERS.filter((file) => /\/Flow(Diagram|Screen)\.tsx$/.test(file)),
+    ).toEqual([
+      "console/src/screens/jobs/FlowDiagram.tsx",
+      "console/src/screens/jobs/FlowScreen.tsx",
+    ]);
   });
 
   test("include the flow progress of a work item", () => {

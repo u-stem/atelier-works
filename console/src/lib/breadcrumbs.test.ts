@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   auditReportCrumbs,
+  flowDiagramCrumbs,
   itemDetailCrumbs,
   itemRequirementsCrumbs,
   itemsBackState,
@@ -137,6 +138,22 @@ describe("jobDetailCrumbs", () => {
     expect(jobDetailCrumbs("/jobs?tab=history&status=failure")).toEqual([
       { label: "ジョブ", to: "/jobs?tab=history&status=failure" },
       { label: "ジョブの詳細" },
+    ]);
+  });
+});
+
+describe("flowDiagramCrumbs", () => {
+  test("goes back to the job list", () => {
+    expect(flowDiagramCrumbs("pipeline", null)).toEqual([
+      { label: "ジョブ", to: "/jobs" },
+      { label: "pipelineの図" },
+    ]);
+  });
+
+  test("goes back to the tab it came from", () => {
+    expect(flowDiagramCrumbs("pr_fix", "/jobs?tab=schedules")).toEqual([
+      { label: "ジョブ", to: "/jobs?tab=schedules" },
+      { label: "pr_fixの図" },
     ]);
   });
 });

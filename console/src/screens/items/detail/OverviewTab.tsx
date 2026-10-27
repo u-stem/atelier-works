@@ -176,7 +176,7 @@ export function OverviewTab({
   return (
     <div className={OVERVIEW_BODY_CLASS}>
       <Summary detail={detail} now={now} />
-      <ItemFlowProgress kind={detail.work_item.kind} view={progress} />
+      <ItemFlowProgress view={progress} />
       <Failures detail={detail} now={now} />
       <Transitions detail={detail} now={now} />
     </div>

@@ -14,7 +14,10 @@ const CSS = readFileSync(join(SRC_DIR, "index.css"), "utf8");
  * 大きさをトークンに替えると、見積もりが実物とずれて文字が箱をはみ出す。
  * 同じファイルのHTMLの部分は、対象に残す。
  */
-const SVG_TEXT_SIZED_BY_GEOMETRY = ["screens/jobs/FlowGraphDiagram.tsx"];
+const SVG_TEXT_SIZED_BY_GEOMETRY = [
+  "screens/jobs/FlowGraphDiagram.tsx",
+  "screens/jobs/FlowDiagram.tsx",
+];
 
 /** 入力欄の枠の色(`--input`)を使ってよいソース。 */
 const INPUT_BORDER_USERS = [

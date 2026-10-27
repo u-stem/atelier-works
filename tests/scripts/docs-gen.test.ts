@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { handlerPathFor } from "../../f/factory/lib/approval_support.ts";
 import {
   compareTaskNames,
   FLOW_GRAPH_FILE,
+  FLOWS_FILE,
   flowGraphProblem,
+  flowsProblem,
   renderAssets,
   renderFlowGraphFile,
   renderFlows,
+  renderFlowsFile,
   renderSchedules,
   replaceGeneratedBlocks,
+  resolveApprovalHandlers,
+  runDocsGen,
   taskNamesInTable,
 } from "../../scripts/docs-gen.ts";
 import type { LaunchEdge } from "../../scripts/launch-graph.ts";
@@ -179,5 +185,80 @@ describe("flowGraphProblem", () => {
 describe("the committed flow graph", () => {
   test("is the same as the one built from the repository", () => {
     expect(readFileSync(FLOW_GRAPH_FILE, "utf8")).toBe(renderFlowGraphFile());
+  });
+});
+
+describe("flowsProblem", () => {
+  test("reports a missing file", () => {
+    expect(flowsProblem(null, "{}\n")).toContain("is missing");
+  });
+
+  test("reports a file that differs from the expected content", () => {
+    expect(flowsProblem("{ }\n", "{}\n")).toContain("is stale");
+  });
+
+  test("accepts a file that matches the expected content", () => {
+    expect(flowsProblem("{}\n", "{}\n")).toBeNull();
+  });
+
+  test("names the file in the problem", () => {
+    expect(flowsProblem(null, "{}\n")).toContain(FLOWS_FILE);
+  });
+});
+
+describe("the committed flows data", () => {
+  test("is the same as the one built from the repository", () => {
+    expect(readFileSync(FLOWS_FILE, "utf8")).toBe(renderFlowsFile());
+  });
+
+  test("leaves no problem for the committed repository", () => {
+    expect(runDocsGen(false)).toEqual([]);
+  });
+});
+
+describe("renderFlows: prefixes", () => {
+  test.each([
+    ["[OP-1-1] 手動投入フォーム", "手動投入フォーム"],
+    ["[SYS-6] 掃除", "掃除"],
+    ["[LIB] 部品", "部品"],
+  ])("strips the prefix of %s like withoutIdPrefix", (summary, expected) => {
+    const table = renderFlows([{ name: "x", summary }], [], () => "");
+
+    expect(table.split("\n")[2]).toBe(`| \`x\` | なし | ${expected} |`);
+  });
+});
+
+describe("resolveApprovalHandlers", () => {
+  const steps = {
+    "steps/pipeline_request_approval": "requirements",
+    "steps/design_request_approval": "design",
+  } as const;
+
+  test("gives the handler of a kind that has one, without the factory folder", () => {
+    const handlers = resolveApprovalHandlers(steps, (kind) =>
+      kind === "design"
+        ? handlerPathFor("design")
+        : "f/factory/steps/requirements_apply",
+    );
+
+    expect(handlers["steps/pipeline_request_approval"]).toBe(
+      "steps/requirements_apply",
+    );
+  });
+
+  test("gives null for the kind that handlerPathFor says has no handler", () => {
+    const handlers = resolveApprovalHandlers(steps, (kind) =>
+      handlerPathFor(kind),
+    );
+
+    expect(handlers["steps/design_request_approval"]).toBeNull();
+  });
+
+  test("throws again for an error that is not the known one", () => {
+    expect(() =>
+      resolveApprovalHandlers(steps, () => {
+        throw new Error("disk is gone");
+      }),
+    ).toThrow("disk is gone");
   });
 });

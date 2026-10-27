@@ -368,7 +368,9 @@ Consoleの一覧と集計は次のviewを読む。
 括弧は、そのscriptをConsoleから動かせる操作の例で、スケジュールによる起動は示さない。
 たとえば`audit`は、Consoleの今すぐ監査のほかに、`audit_kickoff`の週次のスケジュールでも起動する。
 起動元の一覧は`scripts/launch-graph.ts`の`LAUNCH_EDGES`から作る。
-同じ表から、Consoleのシステムの画面に出す起動関係の図のデータ(`console/src/generated/flow-graph.json`)も作る。
+同じ表から、Consoleに出す2つの図のデータも作る。
+システムの画面の起動関係の図は`console/src/generated/flow-graph.json`である。
+ジョブの画面のflowごとの図は`console/src/generated/flows.json`である。
 `wmill.runFlowAsync`を呼ぶscriptを足したときは、`LAUNCH_EDGES`にも足す。
 足し忘れると、`tests/scripts/launch-graph.test.ts`が失敗する。
 辺だけを残して起動のコードを消したときと、`*_FLOW_PATH`の定数を足したときも、同じテストが失敗する。
