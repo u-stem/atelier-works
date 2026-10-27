@@ -93,84 +93,18 @@ export const DESIGN_FOR_IMPLEMENT_MAX_CHARS = 8000;
 /** 切り詰めた設計書の末尾に足す行。 */
 const DESIGN_TRUNCATED_MARK = "[the design was truncated]";
 
-/** リンク参照定義の行(`[label]: destination`)。字下げが4文字以上の行はコードブロックなので含まない。 */
-const LINK_REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[[^\]]+\]:(?:\s|$)/;
-
-/** コードフェンスの開始の行。字下げは3文字まで。 */
-const FENCE_OPEN_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-
-type Fence = { readonly char: string; readonly length: number };
-
-/**
- * 行がコードフェンスの開始なら、そのフェンスを返す。
- * バッククォートのフェンスは、同じ行の後ろにバッククォートがあるとインラインのコードなので、開始に数えない。
- */
-function openingFence(line: string): Fence | null {
-  const match = FENCE_OPEN_PATTERN.exec(line);
-  const marker = match?.[1];
-  const rest = match?.[2];
-  if (marker === undefined || rest === undefined) return null;
-  const char = marker.charAt(0);
-  if (char === "`" && rest.includes("`")) return null;
-  return { char, length: marker.length };
-}
-
-/** 行が、開いているフェンスを閉じるか。同じ文字を同じ数以上並べ、ほかに何も書かない行である。 */
-function closesFence(line: string, fence: Fence): boolean {
-  const trimmed = line.replace(/^ {0,3}/, "").trimEnd();
-  return (
-    trimmed.length >= fence.length &&
-    Array.from(trimmed).every((char) => char === fence.char)
-  );
-}
-
-/**
- * Markdownから、リンク参照定義の行を除く。除いた行の数も返す。
- * 承認画面(`react-markdown`)は、リンク参照定義を描かない。人が見ていない行を、次の工程に渡さないためである。
- * コードフェンスの中の行は、文字として描かれるので除かない。
- * 段落の直後の行など、描画上は本文になりうる行も除く。除くことは情報を減らす向きなので、画面に無い内容は増えない。
- */
-function stripLinkReferenceDefinitions(markdown: string): {
-  readonly text: string;
-  readonly count: number;
-} {
-  const kept: string[] = [];
-  let count = 0;
-  let fence: Fence | null = null;
-  for (const line of markdown.split("\n")) {
-    if (fence !== null) {
-      if (closesFence(line, fence)) fence = null;
-      kept.push(line);
-      continue;
-    }
-    const opened = openingFence(line);
-    if (opened !== null) {
-      fence = opened;
-      kept.push(line);
-      continue;
-    }
-    if (LINK_REFERENCE_DEFINITION_PATTERN.test(line)) {
-      count += 1;
-      continue;
-    }
-    kept.push(line);
-  }
-  return { text: kept.join("\n"), count };
-}
-
 /** `normalizeDesignForImplement`の結果。 */
 export type NormalizedDesign = {
   /** 実装に渡す本文。切ったときは末尾に印の行がある。 */
   readonly text: string;
-  /** 整えた(`sanitizeModelTextDetailed`を通し、リンク参照定義を除いた)本文の、切る前のコードポイント数。 */
+  /** 整えた(`sanitizeModelTextDetailed`を通した)本文の、切る前のコードポイント数。 */
   readonly original_chars: number;
   /** 本文のうち残したコードポイント数。印の行は含まない。 */
   readonly kept_chars: number;
   readonly truncated: boolean;
   readonly masked: boolean;
   readonly dropped_combining: boolean;
-  /** 除いたリンク参照定義の行の数。 */
-  readonly stripped_reference_count: number;
+  /** 元の本文から変わったか。制御文字や書式文字だけを除いた場合と、切った場合を含む。 */
   readonly changed: boolean;
 };
 
@@ -178,26 +112,27 @@ export type NormalizedDesign = {
  * 設計書のMarkdownを、実装のClaudeに渡してよい形に整える。
  * 設計書は、信頼できない入力を読んだClaudeの出力で、保存の前に整形を通っていない。
  * 1. 制御文字と書式文字を除き、秘密情報をマスクする(`sanitizeModelTextDetailed`)。
- * 2. 承認画面が描かないリンク参照定義の行を除く。コードフェンスの中は除かない。
- * 3. 整えた本文が`maxChars`を超えるときだけ、コードポイントの境界で切り、末尾に印の行を足す。
- *    切るかの判定と`original_chars`は、整えた本文で行う。元の本文が上限を超えても、整えた後に上限以下なら切らない。
+ * 2. 整えた本文が`maxChars`を超えるときだけ、コードポイントの境界で切り、末尾に印の行を足す。
+ *    切るかの判定と`original_chars`は、整えた本文で行う。
  *
- * HTMLは除かず、そのまま文字として渡す。除去は、見えない文字を挟んだ`<!--`を整形の後に本物のコメントとして
- * 復元し、コードの中の`Promise<void>`のような文字列を壊す。人が見る文字と実装が受け取る文字を一致させるには、
- * 承認画面がHTMLを要素にせず、同じ文字としてそのまま描けばよい。
- * 結果は、もう一度通しても変わらない(冪等)。承認画面が描く文字列と実装に渡る文字列が、同じ関数の出力だからである。
+ * HTMLとリンク参照定義は除かず、そのまま文字として渡す。
+ * 行ごとの規則では、Markdownの定義と構文のすべてを真似きれず、取りこぼした行が人の見ていない形で実装に届く。
+ * HTMLの除去は、見えない文字を挟んだ`<!--`を整形の後に本物のコメントとして復元し、
+ * コードの中の`Promise<void>`のような文字列を壊す。
+ * 人が見る文字と実装が受け取る文字の一致は、描く側(承認画面)が、この出力のHTMLとリンク参照定義を
+ * 要素や定義にせず文字としてそのまま描くことを前提にする。
+ * 結果は、もう一度通しても変わらない(冪等)。切り詰めの境界を含む。
  */
 export function normalizeDesignForImplement(
   markdown: string,
   maxChars: number,
 ): NormalizedDesign {
   const sanitized = sanitizeModelTextDetailed(markdown);
-  const stripped = stripLinkReferenceDefinitions(sanitized.text);
-  const chars = Array.from(stripped.text).length;
+  const chars = sanitized.chars;
   const truncated = chars > maxChars;
   const kept = truncated
-    ? Array.from(stripped.text).slice(0, maxChars).join("")
-    : stripped.text;
+    ? Array.from(sanitized.text).slice(0, maxChars).join("")
+    : sanitized.text;
   return {
     text: truncated ? `${kept}\n${DESIGN_TRUNCATED_MARK}` : kept,
     original_chars: chars,
@@ -205,7 +140,6 @@ export function normalizeDesignForImplement(
     truncated,
     masked: sanitized.masked,
     dropped_combining: sanitized.dropped_combining,
-    stripped_reference_count: stripped.count,
-    changed: false,
+    changed: truncated || sanitized.text !== markdown,
   };
 }
