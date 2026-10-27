@@ -273,6 +273,16 @@ describe("a11yRules: button-name", () => {
   test("catches an element with role button and no name", () => {
     expect(count("button-name", '<div role="button"></div>')).toBe(1);
   });
+
+  test("passes an unnamed button inside a closed dialog, which is not drawn", () => {
+    expect(count("button-name", "<dialog><button></button></dialog>")).toBe(0);
+  });
+
+  test("catches an unnamed button inside an open dialog", () => {
+    expect(
+      count("button-name", "<dialog open><button></button></dialog>"),
+    ).toBe(1);
+  });
 });
 
 describe("a11yRules: link-name", () => {

@@ -24,6 +24,20 @@ describe("docs: the visual rules", () => {
     expect(HEADINGS).toContain(`### ${heading}`);
   });
 
+  test("states the keyboard operation as its own section", () => {
+    expect(HEADINGS).toContain("## キーボード操作");
+  });
+
+  test.each([
+    ["the command palette", "コマンドパレット"],
+    ["the shortcuts", "ショートカット"],
+    ["turning the shortcuts off", "ショートカットを無効にする"],
+    ["the focus rules", "フォーカスの規則"],
+    ["the automatic accessibility check", "自動のa11y検査"],
+  ])("states %s under the keyboard operation", (_name, heading) => {
+    expect(HEADINGS).toContain(`### ${heading}`);
+  });
+
   test.each([
     [
       "script-driven motion follows the setting",
