@@ -60,3 +60,35 @@ export type FlowsData = {
 export function parseFlowsData(_value: unknown): FlowsData | null {
   return null;
 }
+
+/** バンドルに取り込んだflowごとの図のデータ。形が違えばnullになる。 */
+export const FLOWS_DATA: FlowsData | null = null;
+
+/** 名前のflowを返す。無ければnull。 */
+export function findFlow(
+  _data: FlowsData | null,
+  _name: string,
+): FlowDefinition | null {
+  return null;
+}
+
+/** schedule(`f/factory/<name>`)の説明と起動するflowを返す。無ければnull。 */
+export function scheduleFlowsOf(
+  _data: FlowsData | null,
+  _schedulePath: string,
+): FlowSchedule | null {
+  return null;
+}
+
+/** flowの図の画面のパス。データに無い名前はnull。 */
+export function flowDiagramPath(
+  _name: string,
+  _data: FlowsData | null = FLOWS_DATA,
+): string | null {
+  return null;
+}
+
+/** flowのジョブの履歴の画面のパス。 */
+export function flowHistoryPath(_name: string): string {
+  return "";
+}
