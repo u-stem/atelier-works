@@ -343,7 +343,7 @@ describe("FlowDiagramFrame: light and dark", () => {
   });
 
   test("uses a token for the border of a box", () => {
-    expect(render("pipeline")).toMatch(/class="[^"]*stroke-input/);
+    expect(render("pipeline")).toMatch(/class="[^"]*stroke-edge/);
   });
 
   test("uses no color utility that ignores the theme", () => {
