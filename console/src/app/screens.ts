@@ -54,6 +54,12 @@ export type ScreenRoute = {
   readonly title?: RouteTitle;
   readonly lazy: LazyScreen;
   readonly ErrorBoundary?: ComponentType;
+  /**
+   * 見出しの帯に副題を持つ画面か。最初の画面を読み込む間の骨組みが、帯の高さをそろえるために読む。
+   * 取得を待たずに副題が出る画面と、取得後に副題が出る画面のどちらも、副題を持つ画面として印を付ける。
+   */
+  readonly subtitle?: boolean;
+  /** 入れ子の経路は、骨組みを持たない。親の経路の骨組みが、子の位置まで描く。 */
   readonly children?: readonly ScreenRoute[];
 };
 
@@ -69,6 +75,8 @@ export type Screen = {
   readonly prefetch: () => readonly PrefetchOptions[];
   readonly lazy: LazyScreen;
   readonly ErrorBoundary?: ComponentType;
+  /** 見出しの帯に副題を持つ画面か。`ScreenRoute`の同名の項目と同じ意味である。 */
+  readonly subtitle?: boolean;
   readonly children: readonly ScreenRoute[];
 };
 
@@ -100,6 +108,7 @@ export const SCREENS: readonly Screen[] = [
       (counts?.failures ?? 0) +
       (counts?.notices ?? 0),
     prefetch: noPrefetch,
+    subtitle: true,
     lazy: () =>
       import("../screens/inbox/InboxScreen.tsx").then((module) => ({
         Component: module.InboxScreen,
@@ -121,6 +130,7 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "items/new",
+        subtitle: true,
         title: "新規投入",
         lazy: () =>
           import("../screens/items/NewItemScreen.tsx").then((module) => ({
@@ -129,6 +139,7 @@ export const SCREENS: readonly Screen[] = [
       },
       {
         path: "items/:id/requirements",
+        subtitle: true,
         title: workItemTitle("の要件定義", "要件定義"),
         lazy: () =>
           import("../screens/items/ItemRequirementsScreen.tsx").then(
@@ -137,6 +148,7 @@ export const SCREENS: readonly Screen[] = [
       },
       {
         path: "items/:id",
+        subtitle: true,
         title: workItemTitle("", "作業項目"),
         lazy: () =>
           import("../screens/items/ItemDetailScreen.tsx").then((module) => ({
@@ -159,6 +171,7 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "reports/audit/:id",
+        subtitle: true,
         title: workItemTitle("の監査レポート", "監査レポート"),
         lazy: () =>
           import("../screens/reports/AuditReportScreen.tsx").then((module) => ({
@@ -183,6 +196,7 @@ export const SCREENS: readonly Screen[] = [
     children: [
       {
         path: "jobs/:id",
+        subtitle: true,
         title: "ジョブの詳細",
         lazy: () =>
           import("../screens/jobs/JobDetailScreen.tsx").then((module) => ({

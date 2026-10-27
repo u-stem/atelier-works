@@ -56,16 +56,16 @@ function writeCollapsed(collapsed: boolean): void {
   }
 }
 
-/** 配信している版と確認の時刻の文。版はSHAを含む識別子なので等幅で出す。 */
+/** 配信している版と確認の時刻の文。識別子のSHAだけを等幅で出し、「版」の語は本文の書体にする。 */
 export function ReleaseNote({ release }: { release: ReleaseDescription }) {
   return (
     <p className="text-caption leading-5 text-subtle">
-      {release.versionLabel === null ? null : (
-        <span className="font-mono font-medium text-muted-foreground tabular-nums">
-          {release.versionLabel}
+      {release.versionSha === null ? null : (
+        <span className="font-medium text-muted-foreground tabular-nums">
+          版 <span className="font-mono">{release.versionSha}</span>
         </span>
       )}
-      {release.versionLabel === null ? null : "・"}
+      {release.versionSha === null ? null : "・"}
       <span className="tabular-nums">{release.checkedLabel}</span>
       {release.warning === null ? null : (
         <span className="mt-1 block font-medium text-notice">

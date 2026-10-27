@@ -59,7 +59,7 @@ const WIDE_QUERY = "(min-width: 64rem)";
 
 /**
  * 読み込み中の形。一覧と詳細の2つの面を、出る内容と同じ幅で並べる。
- * 行の高さは、実物の行(余白28px、題24px、題と下の行の間4px、下の行24px、線1px)の81pxに合わせる。
+ * 行の高さは、実機で測った実物の行の高さ(81px。線を含む)に合わせる。
  */
 const LOADING_SHAPE: LoadingShape = {
   className: "flex min-h-0 flex-1",

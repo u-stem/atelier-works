@@ -5,7 +5,7 @@ import {
 } from "react-router";
 import { AppShell } from "./AppShell.tsx";
 import { RouteError } from "./RouteError.tsx";
-import { RouteFallback } from "./RouteFallback.tsx";
+import { routeFallbackFor } from "./RouteFallback.tsx";
 import { buildScreenRoutes, titleHandle } from "./routeTable.ts";
 import { SCREENS } from "./screens.ts";
 
@@ -23,12 +23,12 @@ export const ROUTES: RouteObject[] = [
     Component: AppShell,
     ErrorBoundary: RouteError,
     children: [
-      ...buildScreenRoutes(SCREENS, RouteError, RouteFallback),
+      ...buildScreenRoutes(SCREENS, RouteError, routeFallbackFor),
       {
         path: "*",
         handle: titleHandle("ページが見つかりません"),
         ErrorBoundary: RouteError,
-        HydrateFallback: RouteFallback,
+        HydrateFallback: routeFallbackFor(false),
         lazy: () =>
           import("../screens/NotFoundScreen.tsx").then((module) => ({
             Component: module.NotFoundScreen,

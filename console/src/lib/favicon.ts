@@ -25,25 +25,15 @@ export function faviconHref(): string {
 /** `<link>`要素のうち、アイコンに使う属性。 */
 export type IconLink = { rel: string; type: string; href: string };
 
-/** `<head>`に`<link>`を足す手段。ブラウザでは`document`の操作を渡す。 */
-export type FaviconHost<L extends IconLink> = {
-  createLink: () => L;
-  append: (link: L) => void;
-};
-
-/** タブのアイコンを`<head>`に足す。 */
-export function installFavicon<L extends IconLink>(host: FaviconHost<L>): void {
-  const link = host.createLink();
-  link.rel = "icon";
-  link.type = "image/svg+xml";
-  link.href = faviconHref();
-  host.append(link);
-}
-
-/** 文書の`<head>`にタブのアイコンを足す。 */
-export function installFaviconIn<L extends IconLink>(doc: {
+/** 文書の`<head>`にタブのアイコンを足す。ブラウザでは`document`を渡す。 */
+export function installFaviconIn<L extends object>(doc: {
   createElement: (tag: "link") => L;
   head: { append: (link: L) => void };
 }): void {
-  void doc;
+  const icon: IconLink = {
+    rel: "icon",
+    type: "image/svg+xml",
+    href: faviconHref(),
+  };
+  doc.head.append(Object.assign(doc.createElement("link"), icon));
 }
