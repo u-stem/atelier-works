@@ -39,3 +39,11 @@ export function installFavicon<L extends IconLink>(host: FaviconHost<L>): void {
   link.href = faviconHref();
   host.append(link);
 }
+
+/** 文書の`<head>`にタブのアイコンを足す。 */
+export function installFaviconIn<L extends IconLink>(doc: {
+  createElement: (tag: "link") => L;
+  head: { append: (link: L) => void };
+}): void {
+  void doc;
+}

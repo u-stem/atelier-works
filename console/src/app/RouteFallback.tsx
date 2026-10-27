@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { PAGE_HEADER_CLASS, SCROLL_BODY_CLASS } from "../lib/layoutClasses.ts";
 
@@ -26,4 +27,13 @@ export function RouteFallback() {
       </div>
     </div>
   );
+}
+
+function RouteFallbackWithSubtitle() {
+  return null;
+}
+
+/** 副題の有無に合う骨組みの部品。 */
+export function routeFallbackFor(hasSubtitle: boolean): ComponentType {
+  return hasSubtitle ? RouteFallbackWithSubtitle : RouteFallback;
 }

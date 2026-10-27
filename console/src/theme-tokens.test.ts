@@ -1,5 +1,5 @@
 // index.cssの色のトークンが、WCAG AAの基準を保つことを確かめる。
-// 文字は4.5:1以上、入力欄の境界・フォーカスの輪・点のような図形は3:1以上とする。
+// 文字は4.5:1以上、入力欄の境界は3.5:1以上、フォーカスの輪・図の線・点のような図形は3:1以上とする。
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -125,6 +125,9 @@ const PAIRS: Pair[] = [
   { fg: "input", bg: "background", min: INPUT_BORDER_MIN },
   { fg: "input", bg: "card", min: INPUT_BORDER_MIN },
   { fg: "input", bg: "popover", min: INPUT_BORDER_MIN },
+  // 図の箱の線とスクロールバーの色。入力欄の枠とは別に、元の値を保つ。
+  { fg: "edge", bg: "background", min: 3 },
+  { fg: "edge", bg: "card", min: 3 },
   { fg: "ring", bg: "background", min: 3 },
   { fg: "ring", bg: "card", min: 3 },
   { fg: "ring", bg: "sidebar", min: 3 },

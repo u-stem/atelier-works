@@ -195,3 +195,76 @@ describe("route titles", () => {
     expect(routes[1]?.children?.[0]?.handle).toEqual({ title: "詳細" });
   });
 });
+
+describe("buildScreenRoutes hydrate fallbacks", () => {
+  const WithSubtitle: ComponentType = () => null;
+  const Plain: ComponentType = () => null;
+  const choose = (hasSubtitle: boolean): ComponentType =>
+    hasSubtitle ? WithSubtitle : Plain;
+
+  test("gives a screen with a subtitle the fallback with a subtitle row", () => {
+    expect(
+      buildScreenRoutes(
+        [screen({ subtitle: true })],
+        DefaultBoundary,
+        choose,
+      )[0]?.HydrateFallback,
+    ).toBe(WithSubtitle);
+  });
+
+  test("gives a screen without the mark the plain fallback", () => {
+    expect(
+      buildScreenRoutes([screen()], DefaultBoundary, choose)[0]
+        ?.HydrateFallback,
+    ).toBe(Plain);
+  });
+
+  test("gives the index route the fallback chosen by its mark", () => {
+    expect(
+      buildScreenRoutes(
+        [screen({ id: "inbox", path: "/", subtitle: true })],
+        DefaultBoundary,
+        choose,
+      )[0]?.HydrateFallback,
+    ).toBe(WithSubtitle);
+  });
+
+  test("gives a child route the fallback chosen by its own mark", () => {
+    expect(
+      buildScreenRoutes(
+        [
+          screen({
+            children: [{ path: "items/new", lazy, subtitle: true }],
+          }),
+        ],
+        DefaultBoundary,
+        choose,
+      )[1]?.HydrateFallback,
+    ).toBe(WithSubtitle);
+  });
+
+  test("gives no fallback to a route nested in a child route", () => {
+    const routes = buildScreenRoutes(
+      [
+        screen({
+          children: [
+            {
+              path: "items/:id",
+              lazy,
+              children: [{ path: "requirements", lazy }],
+            },
+          ],
+        }),
+      ],
+      DefaultBoundary,
+      choose,
+    );
+    expect(routes[1]?.children?.[0]?.HydrateFallback).toBeUndefined();
+  });
+
+  test("gives no fallback when none is passed", () => {
+    expect(
+      buildScreenRoutes([screen()], DefaultBoundary)[0]?.HydrateFallback,
+    ).toBeUndefined();
+  });
+});

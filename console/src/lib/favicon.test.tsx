@@ -3,21 +3,34 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BrandMark } from "../components/BrandMark.tsx";
 import { oklchToLinearRgb } from "./contrast.ts";
-import { faviconHref, type IconLink, installFavicon } from "./favicon.ts";
+import { faviconHref, type IconLink, installFaviconIn } from "./favicon.ts";
 
 const CSS = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+const MAIN = readFileSync(new URL("../main.tsx", import.meta.url), "utf8");
 const DATA_PREFIX = "data:image/svg+xml,";
 
-/** ヘッダーの代わりに、足された`<link>`を集める。 */
+/** 文書の代わりに、足された`<link>`を集める。 */
 function installed(): IconLink[] {
   const appended: IconLink[] = [];
-  installFavicon({
-    createLink: () => ({ rel: "", type: "", href: "" }),
-    append: (link) => {
-      appended.push(link);
+  installFaviconIn({
+    createElement: () => ({ rel: "", type: "", href: "" }),
+    head: {
+      append: (link) => {
+        appended.push(link);
+      },
     },
   });
   return appended;
+}
+
+/** `index.css`の`--name`のライトの色を、`#rrggbb`にする。 */
+function lightHex(name: string): string {
+  const light = new RegExp(
+    `--${name}:\\s*light-dark\\(\\s*oklch\\(([^)]*)\\)`,
+  ).exec(CSS)?.[1];
+  return `#${oklchToLinearRgb(light ?? "")
+    .map(channelHex)
+    .join("")}`;
 }
 
 function decodedSvg(): string {
@@ -78,9 +91,14 @@ describe("favicon", () => {
   });
 
   test("the tile is drawn in the light primary color", () => {
-    const light = /--primary:\s*light-dark\(\s*oklch\(([^)]*)\)/.exec(CSS)?.[1];
-    expect(light).toBeDefined();
-    const rgb = oklchToLinearRgb(light ?? "").map(channelHex);
-    expect(decodedSvg()).toContain(`fill="#${rgb.join("")}"`);
+    expect(decodedSvg()).toContain(`fill="${lightHex("primary")}"`);
+  });
+
+  test("the bars and the dot are drawn in the light primary-foreground color", () => {
+    expect(decodedSvg()).toContain(`fill="${lightHex("primary-foreground")}"`);
+  });
+
+  test("main.tsx installs the icon into the document", () => {
+    expect(MAIN).toContain("installFaviconIn(document)");
   });
 });

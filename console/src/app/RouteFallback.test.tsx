@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { createMemoryRouter, Outlet, type RouteObject } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
-import { RouteFallback } from "./RouteFallback.tsx";
+import { PAGE_HEADER_CLASS, SCROLL_BODY_CLASS } from "../lib/layoutClasses.ts";
+import { RouteFallback, routeFallbackFor } from "./RouteFallback.tsx";
 import { ROUTER_BASENAME, ROUTES } from "./router.tsx";
 
 /** 外枠の代わりに置く、サイドバーだけの外枠。本物の外枠は、描画に`window`を要る部品を含む。 */
@@ -52,11 +54,35 @@ describe("RouteFallback", () => {
   });
 
   test("draws the border under the band", () => {
-    expect(markup).toContain("border-b");
+    expect(markup).toMatch(/(^|[\s"])border-b([\s"]|$)/);
+  });
+
+  test("draws the band with the class that PageHeader uses", () => {
+    expect(markup).toContain(`class="${PAGE_HEADER_CLASS}"`);
   });
 
   test("draws the body below the band", () => {
-    expect(markup).toContain("gap-10");
+    expect(markup).toContain(SCROLL_BODY_CLASS);
+  });
+
+  test("draws no subtitle row by default", () => {
+    expect(markup).not.toContain('data-part="subtitle"');
+  });
+});
+
+describe("the fallback of a screen with a subtitle", () => {
+  const markup = renderToStaticMarkup(createElement(routeFallbackFor(true)));
+
+  test("draws a subtitle row under the title", () => {
+    expect(markup).toContain('data-part="subtitle"');
+  });
+
+  test("keeps the band of the page header", () => {
+    expect(markup).toContain(`class="${PAGE_HEADER_CLASS}"`);
+  });
+
+  test("is not the plain fallback", () => {
+    expect(routeFallbackFor(true)).not.toBe(routeFallbackFor(false));
   });
 });
 
@@ -75,10 +101,44 @@ describe("the first paint of a screen", () => {
     expect(ROUTES[0]?.HydrateFallback).toBeUndefined();
   });
 
-  test("every screen route draws the fallback", () => {
+  test("every screen route draws a fallback", () => {
     const screens = allRoutes(ROUTES[0]?.children ?? []);
     expect(
-      screens.filter((route) => route.HydrateFallback !== RouteFallback),
+      screens.filter(
+        (route) =>
+          route.HydrateFallback !== routeFallbackFor(true) &&
+          route.HydrateFallback !== routeFallbackFor(false),
+      ),
     ).toEqual([]);
   });
+
+  test.each([
+    "items/new",
+    "items/:id",
+    "items/:id/requirements",
+    "reports/audit/:id",
+    "jobs/:id",
+  ])("the %s screen draws the fallback with a subtitle row", (path) => {
+    const route = allRoutes(ROUTES[0]?.children ?? []).find(
+      (candidate) => candidate.path === path,
+    );
+    expect(route?.HydrateFallback).toBe(routeFallbackFor(true));
+  });
+
+  test("the inbox, the entrance of the screens with subtitle, draws a subtitle row", () => {
+    const inbox = allRoutes(ROUTES[0]?.children ?? []).find(
+      (candidate) => candidate.index === true,
+    );
+    expect(inbox?.HydrateFallback).toBe(routeFallbackFor(true));
+  });
+
+  test.each(["items", "reports", "jobs", "system"])(
+    "the %s screen draws the fallback without a subtitle row",
+    (path) => {
+      const route = allRoutes(ROUTES[0]?.children ?? []).find(
+        (candidate) => candidate.path === path,
+      );
+      expect(route?.HydrateFallback).toBe(routeFallbackFor(false));
+    },
+  );
 });

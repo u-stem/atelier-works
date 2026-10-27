@@ -1,4 +1,4 @@
-// 角丸、影、文字の大きさがindex.cssのトークンだけで決まることを確かめる。
+// 角丸、影、文字の大きさ、枠の色がindex.cssのトークンだけで決まることを確かめる。
 // 値の組み合わせの良し悪しは、実機で見て決める。ここでは、トークンの定義と、トークンを迂回する書き方が無いことを見る。
 
 import { describe, expect, test } from "bun:test";
@@ -9,11 +9,19 @@ const SRC_DIR = new URL(".", import.meta.url).pathname;
 const CSS = readFileSync(join(SRC_DIR, "index.css"), "utf8");
 
 /**
- * 文字の大きさを画面の単位(px、rem)で直書きしてよいソース。
+ * SVGの`<text>`の文字の大きさを、画面の単位(px)で直書きしてよいソース。
  * 図は、箱の幅や文字の幅の見積もりを、描く文字の大きさの数値から計算する。
  * 大きさをトークンに替えると、見積もりが実物とずれて文字が箱をはみ出す。
+ * 同じファイルのHTMLの部分は、対象に残す。
  */
-const SIZED_BY_GEOMETRY = ["screens/jobs/FlowGraphDiagram.tsx"];
+const SVG_TEXT_SIZED_BY_GEOMETRY = ["screens/jobs/FlowGraphDiagram.tsx"];
+
+/** 入力欄の枠の色(`--input`)を使ってよいソース。 */
+const INPUT_BORDER_USERS = [
+  "components/ui/input.tsx",
+  "components/ui/select.tsx",
+  "components/ui/textarea.tsx",
+];
 
 /** テストを除くソースのパスと中身。 */
 function sources(): { path: string; text: string }[] {
@@ -38,19 +46,45 @@ function literalsOf(text: string): string[] {
   );
 }
 
-describe("radius tokens", () => {
-  test.each(["sm", "md", "lg", "xl", "2xl"])(
-    "index.css defines --radius-%s",
-    (step) => {
-      expect(tokenValue(`--radius-${step}`)).toMatch(/^[0-9.]+rem$/);
-    },
-  );
+const RAW_TEXT_SIZE =
+  /(^|[^\w-])text-(xs|sm|base|lg|xl|[2-9]xl|\[[0-9.]+(px|rem)\])(?![\w-])/;
 
-  test("the steps grow from sm to 2xl", () => {
-    const rems = ["sm", "md", "lg", "xl", "2xl"].map((step) =>
-      Number.parseFloat(tokenValue(`--radius-${step}`)),
-    );
-    expect(rems).toEqual([...rems].sort((a, b) => a - b));
+/** SVGの`<text>`の開始タグを除いたソース。 */
+function withoutSvgTextTags(text: string): string {
+  return text.replace(/<text\b[^>]*>/g, "");
+}
+
+describe("withoutSvgTextTags", () => {
+  test("drops the size written on an SVG text element", () => {
+    expect(
+      RAW_TEXT_SIZE.test(
+        withoutSvgTextTags(
+          '<text className="fill-subtle text-[10px]">a</text>',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps the size written on an HTML element", () => {
+    expect(
+      RAW_TEXT_SIZE.test(
+        withoutSvgTextTags(
+          '<text className="text-caption">a</text><p className="text-[11px]">b</p>',
+        ),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("radius tokens", () => {
+  test.each([
+    ["sm", "0.25rem"],
+    ["md", "0.375rem"],
+    ["lg", "0.5rem"],
+    ["xl", "0.75rem"],
+    ["2xl", "1rem"],
+  ])("index.css defines --radius-%s as %s", (step, value) => {
+    expect(tokenValue(`--radius-${step}`)).toBe(value);
   });
 });
 
@@ -80,15 +114,51 @@ describe("shape classes", () => {
       .map((file) => file.path);
     expect(offenders).toEqual([]);
   });
+
+  test("no source uses a step that the theme does not define", () => {
+    const undefinedStep =
+      /(^|[\s:])(shadow-(2xs|xs|lg|xl|2xl)|rounded-(xs|3xl|4xl))(\s|$)/;
+    const offenders = sources()
+      .filter((file) =>
+        literalsOf(file.text).some((literal) => undefinedStep.test(literal)),
+      )
+      .map((file) => file.path);
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("border colors", () => {
+  test("only the form fields use the input border color", () => {
+    const offenders = sources()
+      .filter((file) => !INPUT_BORDER_USERS.includes(file.path))
+      .filter((file) =>
+        literalsOf(file.text).some((literal) =>
+          /(^|[\s:])[a-z-]+-input(\s|$)/.test(literal),
+        ),
+      )
+      .map((file) => file.path);
+    expect(offenders).toEqual([]);
+  });
+
+  test("the scrollbar reads the edge color", () => {
+    expect(CSS).toContain("scrollbar-color: var(--edge) transparent");
+  });
+
+  test("the edge color is exposed as a utility", () => {
+    expect(tokenValue("--color-edge")).toBe("var(--edge)");
+  });
 });
 
 describe("font sizes", () => {
   test("no raw text size outside the tokens", () => {
-    const raw =
-      /(^|[^\w-])text-(xs|sm|base|lg|xl|[2-9]xl|\[[0-9.]+(px|rem)\])(?![\w-])/;
     const offenders = sources()
-      .filter((file) => !SIZED_BY_GEOMETRY.includes(file.path))
-      .filter((file) => raw.test(file.text))
+      .filter((file) =>
+        RAW_TEXT_SIZE.test(
+          SVG_TEXT_SIZED_BY_GEOMETRY.includes(file.path)
+            ? withoutSvgTextTags(file.text)
+            : file.text,
+        ),
+      )
       .map((file) => file.path);
     expect(offenders).toEqual([]);
   });

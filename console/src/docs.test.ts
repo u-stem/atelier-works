@@ -37,6 +37,19 @@ describe("docs: the visual rules", () => {
     ["the sidebar icon button constant is named", "SIDEBAR_ICON_BUTTON_CLASS"],
     ["the input border floor is stated", "3.5:1"],
     ["the dialog fade is stated", "@starting-style"],
+    ["the fade is limited to opening", "閉じるときは即時"],
+    ["the radius values are stated as the Tailwind defaults", "値は既定"],
+    ["the edge color is named", "--edge"],
+    [
+      "the bar chart limit for a changed base font size is stated",
+      "基準の文字サイズ",
+    ],
+    ["the icon before the script runs is stated", "/favicon.ico"],
+    ["the rule for nested routes is stated", "入れ子の経路"],
+    [
+      "the screens whose skeleton was not measured are stated",
+      "測っていない画面",
+    ],
   ])("%s", (_name, text) => {
     expect(DOC).toContain(text);
   });

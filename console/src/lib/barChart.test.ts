@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   estimateLabelWidth,
   isLabeledIndex,
@@ -65,8 +66,12 @@ describe("layoutBars", () => {
 });
 
 describe("estimateLabelWidth", () => {
-  test("counts a full-width character as the text-caption size (12px)", () => {
-    expect(estimateLabelWidth("あ")).toBe(12);
+  test("counts a full-width character as the text-caption size of index.css", () => {
+    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+    const rem = Number.parseFloat(
+      /--text-caption:\s*([0-9.]+)rem;/.exec(css)?.[1] ?? "",
+    );
+    expect(estimateLabelWidth("あ")).toBe(rem * 16);
   });
 
   test("counts a full width character as wider than a half width one", () => {

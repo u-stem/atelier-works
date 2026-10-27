@@ -18,6 +18,34 @@ import {
 } from "../api/systemQueries.ts";
 import { SCREENS, type ScreenId } from "./screens.ts";
 
+describe("the subtitle mark", () => {
+  const marked = SCREENS.flatMap((screen) => [
+    ...(screen.subtitle === true ? [screen.path] : []),
+    ...screen.children
+      .filter((child) => child.subtitle === true)
+      .map((child) => child.path),
+  ]);
+
+  test("lists the routes whose page header carries a subtitle", () => {
+    expect(marked).toEqual([
+      "/",
+      "items/new",
+      "items/:id/requirements",
+      "items/:id",
+      "reports/audit/:id",
+      "jobs/:id",
+    ]);
+  });
+
+  test("no route nests another route, so a fallback is never drawn twice", () => {
+    expect(
+      SCREENS.flatMap((screen) => screen.children).filter(
+        (child) => child.children !== undefined,
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("SCREENS", () => {
   test("has the five entrances in order", () => {
     expect(SCREENS.map((screen) => screen.id)).toEqual([

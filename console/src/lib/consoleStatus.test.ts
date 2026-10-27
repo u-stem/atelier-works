@@ -39,7 +39,7 @@ describe("parseConsoleStatus", () => {
 
 describe("describeRelease", () => {
   test("shows the short sha", () => {
-    expect(describeRelease(OK, NOW)?.versionLabel).toBe("版 0123456");
+    expect(describeRelease(OK, NOW)?.versionSha).toBe("0123456");
   });
 
   test("shows when the fetcher last checked", () => {
@@ -69,7 +69,7 @@ describe("describeRelease", () => {
   });
 
   test("omits the version when there is no sha", () => {
-    expect(describeRelease({ ...OK, sha: null }, NOW)?.versionLabel).toBeNull();
+    expect(describeRelease({ ...OK, sha: null }, NOW)?.versionSha).toBeNull();
   });
 
   test("returns null for a missing status", () => {
