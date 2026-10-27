@@ -1,4 +1,4 @@
-// 作業項目の詳細の取得。画面を開いたときに取り、自動では取り直さない。
+// 作業項目の詳細の取得。画面を開いたときに取り、周期では取り直さない。進めているflowのジョブが終わったときに1回、見出しの更新で取り直す。
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { type ApiError, ApiFailure } from "./errors.ts";
@@ -73,7 +73,7 @@ export async function fetchWorkItemDetail(
   return value;
 }
 
-/** 作業項目の詳細を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
+/** 作業項目の詳細を取る。周期では取り直さない。ジョブの終了の検知(`workItemFlowQueries.ts`)と、画面の更新ボタンで取り直す。 */
 export function useWorkItemDetail(
   workItemId: number,
 ): UseQueryResult<WorkItemDetail | null, Error> {

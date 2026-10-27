@@ -24,6 +24,7 @@ import {
   type NodeActivity,
   nodeLinkTarget,
 } from "../../lib/flowOverlay.ts";
+import { jobDetailPath } from "../../lib/jobLink.ts";
 import { safeText } from "../../lib/safeText.ts";
 import {
   activityWords,
@@ -31,6 +32,9 @@ import {
   scheduleWords,
 } from "./flowGraphText.ts";
 import { JobStateBadge } from "./JobRows.tsx";
+
+/** 図のノード1つ分のデータ。 */
+type GraphNodeData = FlowGraph["nodes"][number];
 
 /** 箱の左右の余白(px)。文字はこの内側に収める。 */
 const PAD_X = 10;
@@ -221,18 +225,35 @@ function NodeBody({
   );
 }
 
+/**
+ * ノードの移動先。`runningLinksOnly`のとき、flowの箱は実行中のジョブの詳細へ移るときだけリンクにする。
+ * 動いていないflowの箱が、そのflowの全作業項目の履歴へ移ると、1件の作業項目の図から他の作業項目へ飛ぶためである。
+ */
+function linkOf(
+  node: GraphNodeData,
+  activity: NodeActivity | undefined,
+  runningLinksOnly: boolean,
+): string | null {
+  if (runningLinksOnly && node.kind === "flow") {
+    return jobDetailPath(activity?.runningJobId);
+  }
+  return nodeLinkTarget(node, activity);
+}
+
 /** 箱1つ。移る先があればリンクにして、キーボードで届くようにする。 */
 function GraphNode({
   box,
   state,
   lowerBound,
+  runningLinksOnly,
 }: {
   box: LayoutBox;
   state: FlowGraphState;
   lowerBound: boolean;
+  runningLinksOnly: boolean;
 }) {
   const activity = state.overlay?.activity.get(box.node.id);
-  const to = nodeLinkTarget(box.node, activity);
+  const to = linkOf(box.node, activity, runningLinksOnly);
   const body = (
     <NodeBody
       box={box}
@@ -269,6 +290,7 @@ export function FlowGraphDiagram({
   state,
   label = DIAGRAM_LABEL,
   compact = false,
+  runningLinksOnly = false,
 }: {
   graph: FlowGraph;
   state: FlowGraphState;
@@ -276,6 +298,8 @@ export function FlowGraphDiagram({
   label?: string;
   /** 左端の空の列を詰める。経路だけを切り出した小さなグラフに使う。 */
   compact?: boolean;
+  /** flowの箱を、実行中のジョブへのリンクだけにする。 */
+  runningLinksOnly?: boolean;
 }) {
   const layout = useMemo(
     () => layoutFlowGraph(graph, { compact }),
@@ -320,6 +344,7 @@ export function FlowGraphDiagram({
           box={box}
           state={state}
           lowerBound={lowerBound}
+          runningLinksOnly={runningLinksOnly}
         />
       ))}
     </svg>
@@ -338,21 +363,31 @@ export function FlowGraphFrame({
   presentation,
   label = DIAGRAM_LABEL,
   compact = false,
+  runningLinksOnly = false,
 }: {
   graph: FlowGraph;
   state: FlowGraphState;
   presentation: GraphPresentation;
   label?: string;
   compact?: boolean;
+  runningLinksOnly?: boolean;
 }) {
-  if (presentation === "list")
-    return <FlowGraphList graph={graph} state={state} />;
+  if (presentation === "list") {
+    return (
+      <FlowGraphList
+        graph={graph}
+        state={state}
+        runningLinksOnly={runningLinksOnly}
+      />
+    );
+  }
   const diagram = (
     <FlowGraphDiagram
       graph={graph}
       state={state}
       label={label}
       compact={compact}
+      runningLinksOnly={runningLinksOnly}
     />
   );
   if (presentation === "fit") {
@@ -384,9 +419,11 @@ export function FlowGraphFrame({
 export function FlowGraphList({
   graph,
   state,
+  runningLinksOnly = false,
 }: {
   graph: FlowGraph;
   state: FlowGraphState;
+  runningLinksOnly?: boolean;
 }) {
   const flows = graph.nodes.filter((node) => node.kind === "flow");
   const lowerBound = state.overlay?.lowerBound ?? false;
@@ -395,7 +432,7 @@ export function FlowGraphList({
       {flows.map((node) => {
         const activity = state.overlay?.activity.get(node.id);
         const words = activityWords(activity, lowerBound);
-        const to = nodeLinkTarget(node, activity);
+        const to = linkOf(node, activity, runningLinksOnly);
         const name = safeText(node.label);
         return (
           <li

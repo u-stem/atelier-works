@@ -17,7 +17,14 @@ export const ITEM_KIND_FLOWS: ReadonlyMap<string, readonly string[]> = new Map([
   ["dependabot", ["flow:dependabot"]],
 ]);
 
-export const NOT_ITEM_PATH_SCRIPTS: ReadonlySet<string> = new Set();
+/**
+ * 経路に載せないscript。2つ以上のflowをつなぐが、作業項目が進む順序の一部ではない。
+ * Consoleの再実行は、運用者が状態に合うflowを選び直して起動する操作で、flowの間の遷移ではない。
+ * 名前が変わると除外が黙って効かなくなるので、生成したグラフに実在することをテストが確かめる。
+ */
+export const NOT_ITEM_PATH_SCRIPTS: ReadonlySet<string> = new Set([
+  "script:retry_work_item",
+]);
 
 /**
  * 作業項目の種別が通るflowと、それをつなぐscriptだけのグラフ。
@@ -28,7 +35,7 @@ export function itemFlowGraph(
   kind: string,
   graph: FlowGraph,
   table: ReadonlyMap<string, readonly string[]> = ITEM_KIND_FLOWS,
-  _excluded: ReadonlySet<string> = NOT_ITEM_PATH_SCRIPTS,
+  excluded: ReadonlySet<string> = NOT_ITEM_PATH_SCRIPTS,
 ): FlowGraph {
   const flowIds = new Set(
     graph.nodes
@@ -50,7 +57,11 @@ export function itemFlowGraph(
   }
   const keep = new Set(flowIds);
   for (const node of graph.nodes) {
-    if (node.kind === "script" && (touched.get(node.id)?.size ?? 0) >= 2) {
+    if (
+      node.kind === "script" &&
+      !excluded.has(node.id) &&
+      (touched.get(node.id)?.size ?? 0) >= 2
+    ) {
       keep.add(node.id);
     }
   }

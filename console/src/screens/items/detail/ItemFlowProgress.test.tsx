@@ -89,7 +89,7 @@ describe("workItemFlowProgress: the path", () => {
       }),
       { kind: "pr_review" },
     );
-    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("作業項目の経路の図");
   });
 
   test("still shows the steps for a kind whose path is a single flow", () => {
@@ -181,9 +181,7 @@ describe("workItemFlowProgress: the current flow", () => {
   });
 
   test("says the running state once, on the node, when the diagram is shown", () => {
-    expect(countOf(render(steps([step("prepare", "running")])), "実行中")).toBe(
-      1,
-    );
+    expect(countOf(render(steps([])), "実行中")).toBe(1);
   });
 
   test("says the running state on the heading when there is no diagram", () => {

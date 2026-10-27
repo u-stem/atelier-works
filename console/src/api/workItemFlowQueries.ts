@@ -3,6 +3,7 @@
 // 概要のタブを選んでいて、画面が操作されていて、文書が見えている間だけ、ジョブが実行中か待ちのあいだ15秒ごとに取る。
 // 作業項目の状態では止めない。承認待ちのようにflowが終わった状態でも、ジョブの状態で決める。
 // ジョブが終わったら、作業項目の詳細を1回だけ取り直し、引き継ぎ先の新しい`flow_job_id`に追従する。
+// 承認や再実行でflowが引き継がれたときは追従しない。更新の操作で取り直す。
 
 import {
   type QueryClient,
@@ -10,10 +11,11 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { refreshStatusOfAll } from "../app/refreshStatus.ts";
 import { useIdle } from "../lib/idleTracker.ts";
 import type { ItemDetailTabId } from "../lib/itemDetailView.ts";
+import { isFinishedJobState } from "../lib/jobsView.ts";
 import {
   createFinishReloadWatcher,
   type FlowProgressView,
@@ -21,17 +23,33 @@ import {
   flowProgressOf,
 } from "../lib/workItemFlowProgress.ts";
 import type { WorkItemDetail } from "./guards/workItemDetail.ts";
-import { jobDetailQueryOptions } from "./jobsQueries.ts";
+import {
+  JOB_DETAIL_REFRESH_MS,
+  type JobDetailView,
+  jobDetailQueryOptions,
+} from "./jobsQueries.ts";
 import { workItemDetailQueryKey } from "./workItemDetailQueries.ts";
+
+/** 終わったジョブの詳細か。終わったジョブの詳細は、もう変わらない。 */
+function isFinishedDetail(data: JobDetailView | undefined): boolean {
+  return data !== undefined && data.found && isFinishedJobState(data.job.state);
+}
 
 /**
  * flowのジョブの詳細の取得の設定。ジョブ詳細の画面が状態だけを読む取得とキーを共有する。
  * ジョブが実行中か待ちのあいだ15秒ごとに取り直し、文書が見えない間とフォーカスの出入りでは取り直さない。
+ * 終わったジョブは古くならない。概要を開き直すたびに取り直して、Windmillのジョブを増やさないためである。
  */
 export function flowJobQueryOptions(jobId: string | null, enabled: boolean) {
   return {
     ...jobDetailQueryOptions(jobId ?? "", { includeOutput: false }),
     enabled: enabled && jobId !== null,
+    staleTime: (query: {
+      readonly state: { readonly data: JobDetailView | undefined };
+    }): number =>
+      isFinishedDetail(query.state.data)
+        ? Number.POSITIVE_INFINITY
+        : JOB_DETAIL_REFRESH_MS,
   };
 }
 
@@ -47,6 +65,21 @@ export async function reloadWorkItem(
     queryKey: workItemDetailQueryKey(workItemId),
     refetchType: "active",
   });
+}
+
+/**
+ * ジョブの詳細を読むたびに呼ぶ。実行中か待ちから終了へ変わったと`watch`が知らせたときだけ、
+ * 作業項目の詳細を1回取り直す。flowが次のflowへ引き継いだときの、新しい`flow_job_id`に追従するためである。
+ */
+export async function followFinish(
+  client: QueryClient,
+  watch: (jobId: string, detail: JobDetailView | undefined) => boolean,
+  workItemId: number,
+  jobId: string | null,
+  detail: JobDetailView | undefined,
+): Promise<void> {
+  if (jobId === null || !watch(jobId, detail)) return;
+  await reloadWorkItem(client, workItemId);
 }
 
 /**
@@ -78,17 +111,13 @@ async function refetchFlowJob(
 
 type RefreshQueries = Parameters<typeof refreshStatusOfAll>[0];
 
-export function followFinish(
-  _client: QueryClient,
-  _watch: (jobId: string, detail: JobDetailView | undefined) => boolean,
-  _workItemId: number,
-  _jobId: string | null,
-  _detail: JobDetailView | undefined,
-): Promise<void> {
-  return Promise.resolve();
-}
-
-export function itemRefreshQueries(_input: {
+/**
+ * 見出しの更新に渡す取得。作業項目、ジョブの順に取り、最終更新は古い方の時刻になる。
+ * ジョブの詳細を画面に出していないとき(`showsJob`が偽)は、読まず、時刻と取得中にも数えない。
+ * 出さないジョブの詳細を読むと、Windmillのジョブが増え、最終更新に古い時刻が混ざるためである。
+ * ジョブの取得の失敗は、進行の節が前の値として伝える。見出しの失敗には数えない。
+ */
+export function itemRefreshQueries(input: {
   readonly item: {
     readonly dataUpdatedAt: number;
     readonly isFetching: boolean;
@@ -103,12 +132,33 @@ export function itemRefreshQueries(_input: {
   readonly refetchItem: () => Promise<WorkItemDetail | null | undefined>;
   readonly refetchJob: (flowJobId: string | null) => Promise<unknown>;
 }): RefreshQueries {
-  return [];
+  const itemQuery = {
+    dataUpdatedAt: input.item.dataUpdatedAt,
+    isFetching: input.item.isFetching,
+    isError: input.item.isError,
+    error: input.item.error,
+    refetch: () =>
+      refreshItemThenJob({
+        item: input.refetchItem,
+        job: input.showsJob ? input.refetchJob : () => Promise.resolve(),
+      }),
+  };
+  if (!input.showsJob) return [itemQuery];
+  return [
+    itemQuery,
+    {
+      dataUpdatedAt: input.job.dataUpdatedAt,
+      isFetching: input.job.isFetching,
+      isError: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    },
+  ];
 }
 
 export type WorkItemFlow = {
   readonly view: FlowProgressView;
-  /** 見出しの更新に渡す取得。作業項目、ジョブの順に取り、最終更新は古い方の時刻になる。 */
+  /** 見出しの更新に渡す取得。 */
   readonly refreshQueries: RefreshQueries;
 };
 
@@ -132,21 +182,16 @@ export function useWorkItemFlow(input: {
       : flowJobTarget(overview, { tab, idle });
   const job = useQuery(flowJobQueryOptions(target.jobId, target.enabled));
 
-  const watch = useMemo(() => createFinishReloadWatcher(), []);
+  // 監視は状態を持つ。描画のたびに作り直さないよう、最初の描画で1つだけ作る。
+  const [watch] = useState(() => createFinishReloadWatcher());
   useEffect(() => {
-    if (target.jobId !== null && watch(target.jobId, job.data)) {
-      void reloadWorkItem(client, workItemId);
-    }
+    void followFinish(client, watch, workItemId, target.jobId, job.data);
   }, [client, watch, workItemId, target.jobId, job.data]);
 
   const refetchItem = item.refetch;
-  const refetch = useCallback(
-    () =>
-      refreshItemThenJob({
-        item: () => refetchItem().then((result) => result.data),
-        job: (flowJobId) => refetchFlowJob(client, flowJobId),
-      }),
-    [client, refetchItem],
+  const refetchJob = useCallback(
+    (flowJobId: string | null) => refetchFlowJob(client, flowJobId),
+    [client],
   );
 
   return {
@@ -155,22 +200,15 @@ export function useWorkItemFlow(input: {
       detail: job.data,
       failed: job.isError,
     }),
-    refreshQueries: [
-      {
-        dataUpdatedAt: item.dataUpdatedAt,
-        isFetching: item.isFetching,
-        isError: item.isError,
-        error: item.error,
-        refetch,
-      },
-      // ジョブの取得の失敗は、進行の節が前の値として伝える。見出しの失敗には数えない。
-      {
+    refreshQueries: itemRefreshQueries({
+      item,
+      job: {
         dataUpdatedAt: target.jobId === null ? 0 : job.dataUpdatedAt,
         isFetching: job.isFetching,
-        isError: false,
-        error: null,
-        refetch: () => Promise.resolve(),
       },
-    ],
+      showsJob: tab === "overview",
+      refetchItem: () => refetchItem().then((result) => result.data),
+      refetchJob,
+    }),
   };
 }

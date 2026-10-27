@@ -52,9 +52,19 @@ export type FlowProgressView =
     };
 
 /**
+ * 進行を出さない終了の状態。成功とスキップで終わったジョブは、ステップが全部成功か飛ばしたものである。
+ * 承認待ちのようにflowが終わった作業項目では何も決めないので、節を出さない。
+ */
+function isQuietState(state: string): boolean {
+  return state === "success" || state === "skipped";
+}
+
+/**
  * ジョブの詳細から、概要に出す進行を決める。
+ * 出すのは、実行中、待ち、失敗、取消のジョブだけである。失敗と取消は、止まったステップを示す。
  * 見つからないジョブは、進行を出さない。概要は別の取得なので残る。
- * 取得に失敗したときは、前の値があればそれを前の値として出し、無ければ読めなかったと伝える。
+ * 取得に失敗したときは、値が無いか見つからなかった前回の後なら読めなかったと伝え、
+ * 前の値があればそれを前の値として出す。
  */
 export function flowProgressOf(input: {
   readonly jobId: string | null;
@@ -62,10 +72,10 @@ export function flowProgressOf(input: {
   readonly failed: boolean;
 }): FlowProgressView {
   if (input.jobId === null) return { kind: "none" };
-  if (input.detail === undefined) {
+  if (input.detail === undefined || !input.detail.found) {
     return input.failed ? { kind: "unreadable" } : { kind: "none" };
   }
-  if (!input.detail.found) return { kind: "none" };
+  if (isQuietState(input.detail.job.state)) return { kind: "none" };
   return {
     kind: "steps",
     jobId: input.jobId,
