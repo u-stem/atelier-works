@@ -336,13 +336,16 @@ export function buildStartImplement(
 
 /**
  * 承認の分岐の本番の依存を組み立てる。呼ぶだけでは、DB・GitHub・Windmillに触れない。
- * 設計フローは起動しない(`startDesign: null`)。設計工程を開けるまで、作業項目を`designing`にしないためである。
- * 開けるときは、`startDesign`に`buildStartDesign`の結果を渡す。
+ * 設計フローは、設定の`design_enabled`が真のときだけ結ぶ。偽のときは`null`で、承認は今までどおり実装へ進む。
+ * 本番の設定の読み込み(`parseFactoryConfig`)は、設計工程を有効にできるようになるまで、`design_enabled: true`を偽として読む。
  */
 export function buildApprovedBranchDeps(
   config: Pick<
     FactoryConfig,
-    "implement_enabled" | "windmill_public_url" | "instance_name"
+    | "implement_enabled"
+    | "design_enabled"
+    | "windmill_public_url"
+    | "instance_name"
   >,
   ctx: ApprovedBranchContext,
 ): ApprovedBranchDeps {
@@ -410,7 +413,7 @@ export function buildApprovedBranchDeps(
     startImplement: config.implement_enabled
       ? buildStartImplement(config, ctx)
       : null,
-    startDesign: null,
+    startDesign: config.design_enabled ? buildStartDesign(config, ctx) : null,
     log: (message, fields) =>
       log.warn(message, { work_item_id: workItem.id, ...fields }),
   };
