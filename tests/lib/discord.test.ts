@@ -1037,9 +1037,9 @@ describe("buildEmbed", () => {
       expect(buildEmbed(EVENT).title).toBe("設計の承認待ち: #42 Add feature");
     });
 
-    test("describes the design draft as awaiting review", () => {
+    test("describes the design draft as awaiting review and tells what to do", () => {
       expect(buildEmbed(EVENT).description).toBe(
-        "設計書のドラフトが確認待ちです。",
+        "設計書のドラフトが確認待ちです。リンク先のConsoleで承認または却下してください。",
       );
     });
 

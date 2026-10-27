@@ -1420,6 +1420,22 @@ describe("design settings in the resource type", () => {
     );
   });
 
+  test("describes max_design_attempts as the limit of the rejections in the current requirements attempt", () => {
+    expect(yaml).toMatch(
+      /^ {4}max_design_attempts:\n(?: {6}.*\n)*? {8}現在の要件定義の試行で、設計を却下できる回数の上限です。/m,
+    );
+  });
+
+  test("says that a work item waits for a person once the applied rejections reach the limit", () => {
+    expect(yaml).toMatch(
+      /^ {4}max_design_attempts:\n(?: {6}.*\n)*? {8}.*反映できた却下の数が上限に達すると、作業項目は人の対応待ちになります。/m,
+    );
+  });
+
+  test("no longer describes max_design_attempts as the number of designs that can be tried", () => {
+    expect(yaml).not.toContain("設計を試せる回数の上限");
+  });
+
   test("does not declare the derived design_enabled_ignored", () => {
     expect(yaml.includes("design_enabled_ignored")).toBe(false);
   });
