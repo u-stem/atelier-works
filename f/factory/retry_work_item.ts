@@ -126,6 +126,7 @@ export type RestartStop =
  * - `stop`: 止まった理由の分類。`implementReady`のときだけ読む。
  * - `feedback`: 要件定義の生成(`pipeline`)へ渡す文。無ければ`null`。
  *   要件定義の差し戻しの再開では印を付けた報告、承認が却下された再開では人の却下の理由が入る。
+ * - `carriesGap`: `feedback`が設計か実装の差し戻しの報告か。真なら、再実行の遷移の注記に印を付ける(`restartNote`)。
  */
 export type RestartContext = {
   readonly implementReady: boolean;
@@ -178,13 +179,13 @@ export function feedbackFromGapNote(note: string | null): string | null {
 }
 
 /**
- * 人が書いた却下の理由の注記から、要件定義の生成に渡す文を作る。
- * 承認者本人の指示なので印は付けず、秘密のマスクと制御文字の除去をかけて長さを絞る。空は`null`を返す。
+ * 人が書いた却下の理由から、要件定義の生成に渡す文を作る。空は`null`を返す。
+ * 承認者本人の指示なので印は付けず、整形も切り詰めもしない。
+ * 通常の却下(`requirements_apply`)が、理由をそのまま要件定義の生成に渡すのと同じ扱いである。
  */
 export function feedbackFromRejection(note: string | null): string | null {
-  if (note === null) return null;
-  const reason = sanitizeModelText(note, GAP_REPORT_MAX_CHARS);
-  return reason.trim() === "" ? null : reason;
+  if (note === null || note.trim() === "") return null;
+  return note;
 }
 
 /** `buildRestartContext`が読む問い合わせ。 */
@@ -207,16 +208,27 @@ export type RestartContextDeps = {
   ) => Promise<boolean>;
 };
 
-/** 差し戻しの理由を引き継いだ再実行の遷移の注記の末尾。 */
-export const RESTART_CARRYING_GAP_NOTE_SUFFIX = "";
+/**
+ * 差し戻しの理由を引き継いだ再実行の遷移の注記の末尾。
+ * `buildRestartContext`は、この文字列で終わる注記の遷移を飛ばして、その前の差し戻しの理由を読む。
+ */
+export const RESTART_CARRYING_GAP_NOTE_SUFFIX = " (carrying gap)";
 
-/** 再実行の遷移の注記を作る。 */
-export function restartNote(_input: {
+/**
+ * 再実行の遷移の注記を作る。取り消す前の状態(`restartStatus`)が現在の状態と違うときは、それも書く。
+ * 差し戻しの理由を引き継いで要件定義の生成を起動する再実行(`carriesGap`)には、末尾に印を付ける。
+ * 印を付けない再実行の遷移は、`buildRestartContext`が飛ばさないので、その前の古い差し戻しの理由を隠す。
+ */
+export function restartNote(input: {
   readonly status: WorkItemStatus;
   readonly restartStatus: WorkItemStatus;
   readonly carriesGap: boolean;
 }): string {
-  return "";
+  const base =
+    input.restartStatus === input.status
+      ? `retry_work_item: restarted from ${input.status}`
+      : `retry_work_item: restarted from ${input.status} (was ${input.restartStatus} before the closed target was cancelled)`;
+  return input.carriesGap ? `${base}${RESTART_CARRYING_GAP_NOTE_SUFFIX}` : base;
 }
 
 /** `buildRestartContext`が読む問い合わせを、`sql`で組み立てる。 */
@@ -239,8 +251,17 @@ export function restartContextDeps(
  * - 止まった遷移は、取り消す前の状態(`restartStatus`)で引く。要件定義が承認済みのときだけ読む。
  * - 差し戻しの理由は、要件定義の生成へ戻った後に止まったときだけ、要件定義の生成への最新の遷移の注記から引く。
  *   再実行の遷移が後にあれば、注記が差し戻しの理由でないので、理由は渡らない。
- * - 却下の理由は、照合に使った承認依頼の行から引く。最新の承認が現在の`attempt`の却下のときだけ渡す。
+ *   ただし、差し戻しの理由を引き継いだ再実行の遷移(注記が`RESTART_CARRYING_GAP_NOTE_SUFFIX`で終わる)は飛ばして、その前を読む。
+ *   引き継いだ再実行が起動に失敗して止まっても、次の再実行が同じ理由を渡せるようにするためである。
+ * - 却下の理由は、照合に使った承認依頼の行から引く。最新の承認が現在の`attempt`の却下のときに渡す。
  *   却下が`max_attempts`に達した最後の却下は要件定義の生成への遷移を作らず、遷移の記録には前のサイクルの理由しか無いためである。
+ * - 準備が`attempt`を進めた後、下書きを作れずに止まったとき(日次予算の超過など)は、
+ *   最新の承認の`attempt`より後の下書きが無いことを、理由を消費していない印として読む。
+ *   却下なら承認依頼の理由を、承認なら上の差し戻しの理由を、もう一度渡す。
+ *
+ * この関数は遷移の注記の文面を判定に使う。読むのは、差し戻しの接頭辞(`GAP_NOTE_PREFIXES`)と、
+ * 引き継ぎの印(`RESTART_CARRYING_GAP_NOTE_SUFFIX`)だけである。
+ * 注記を書く側(`restartNote`、設計と実装の差し戻し)と読む側の文面は、同時に変える。
  */
 export async function buildRestartContext(
   input: {
@@ -269,25 +290,45 @@ export async function buildRestartContext(
       designAttempt: workItem.design_attempt,
       requirementDraftId: requirementsApproval.draft_id,
     });
-  const stop = classifyRestartStop(
-    implementReady
-      ? await deps.latestStatusEvent(workItem.id, input.restartStatus)
-      : null,
-  );
-  let feedback: string | null = null;
-  if (stop === "requirements_returned") {
+  const readStopEvent = () =>
+    deps.latestStatusEvent(workItem.id, input.restartStatus);
+  const readGap = async () => {
     const transition = await deps.latestStatusTransition(
       workItem.id,
       "requirements_generating",
       RESTART_CARRYING_GAP_NOTE_SUFFIX,
     );
-    feedback = feedbackFromGapNote(transition?.note ?? null);
-  } else if (
-    !implementReady &&
-    requirementsApproval?.status === "rejected" &&
-    requirementsApproval.attempt === workItem.attempt
-  ) {
-    feedback = feedbackFromRejection(requirementsApproval.reason);
+    return feedbackFromGapNote(transition?.note ?? null);
+  };
+  const stop = classifyRestartStop(
+    implementReady ? await readStopEvent() : null,
+  );
+  let feedback: string | null = null;
+  let carriesGap = false;
+  if (stop === "requirements_returned") {
+    feedback = await readGap();
+    carriesGap = feedback !== null;
+  } else if (!implementReady && requirementsApproval !== null) {
+    const rejected = requirementsApproval.status === "rejected";
+    if (rejected && requirementsApproval.attempt === workItem.attempt) {
+      feedback = feedbackFromRejection(requirementsApproval.reason);
+    } else if (
+      workItem.attempt > requirementsApproval.attempt &&
+      !(await deps.hasRequirementDraftAfter(
+        workItem.id,
+        requirementsApproval.attempt,
+      ))
+    ) {
+      if (rejected) {
+        feedback = feedbackFromRejection(requirementsApproval.reason);
+      } else if (
+        requirementsApproval.status === "approved" &&
+        classifyRestartStop(await readStopEvent()) === "requirements_returned"
+      ) {
+        feedback = await readGap();
+        carriesGap = feedback !== null;
+      }
+    }
   }
   return {
     implementReady,
@@ -296,7 +337,7 @@ export async function buildRestartContext(
     designApproved,
     stop,
     feedback,
-    carriesGap: false,
+    carriesGap,
   };
 }
 
@@ -928,10 +969,11 @@ async function restartWorkItem(
   if (cancelledRefusal !== null) throw new Error(cancelledRefusal);
 
   const leased = usesFlowJobIdLease(plan);
-  const note =
-    restartItem.status === workItem.status
-      ? `retry_work_item: restarted from ${workItem.status}`
-      : `retry_work_item: restarted from ${workItem.status} (was ${restartItem.status} before the closed target was cancelled)`;
+  const note = restartNote({
+    status: workItem.status,
+    restartStatus: restartItem.status,
+    carriesGap: context.carriesGap,
+  });
   let moved: boolean;
   try {
     // 要件定義の生成へ戻す遷移は、同じ文で設計の試行を0にそろえる。
