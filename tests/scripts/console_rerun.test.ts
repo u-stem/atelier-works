@@ -345,6 +345,7 @@ function harness(
     schedule?: unknown;
     scheduleError?: unknown;
     runError?: unknown;
+    runResult?: string;
     sql?: readonly (Record<string, unknown>[] | Error)[];
     actor?: () => string;
   } = {},
@@ -374,7 +375,7 @@ function harness(
       events.push(`run:${path}`);
       started.push({ path, args });
       if (options.runError !== undefined) throw options.runError;
-      return NEW_ID;
+      return options.runResult ?? NEW_ID;
     },
     sql: fakeSql(
       options.sql ?? [[{ id: 5 }], [{ id: 5 }]],
@@ -578,6 +579,33 @@ describe("rerunJobFromConsole", () => {
     const { ports, sqlCalls } = harness({ runError: boom });
     await expect(rerunJobFromConsole(ID, ports)).rejects.toBe(boom);
     expect(sqlCalls[1]?.values[0]).toBe("failed");
+  });
+});
+
+describe("rerunJobFromConsole: the id that the start returns", () => {
+  test.each([
+    ["an error body", '{"error":"Not found: f/factory/collect_github"}'],
+    ["an empty string", ""],
+    ["a UUID with text after it", `${NEW_ID} extra`],
+  ])("throws and marks the record failed for %s", async (_label, body) => {
+    const { ports, sqlCalls } = harness({ runResult: body });
+    await expect(rerunJobFromConsole(ID, ports)).rejects.toThrow();
+    expect(sqlCalls[1]?.values[0]).toBe("failed");
+  });
+
+  test("does not put the returned body in the error", async () => {
+    const { ports } = harness({ runResult: "secret-body-text" });
+    const error = await rerunJobFromConsole(ID, ports).catch(
+      (err: unknown) => err,
+    );
+    expect(String(error)).not.toContain("secret-body-text");
+  });
+
+  test("returns the id without surrounding whitespace", async () => {
+    const { ports } = harness({ runResult: `${NEW_ID}\n` });
+    expect(await rerunJobFromConsole(ID, ports)).toMatchObject({
+      job_id: NEW_ID,
+    });
   });
 });
 
