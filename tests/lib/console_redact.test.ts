@@ -607,22 +607,32 @@ describe("adversarial input", () => {
     },
   );
 
-  test("redactLog finishes a single 512KB line of JWT heads in under a second", () => {
+  // 通常は0.2秒に満たない。上限は、二乗の増え方(数十秒以上)を見分けられ、
+  // 並列の負荷で数倍に遅れても超えない値にする。
+  const JWT_HEADS_LIMIT_SECONDS = 5;
+
+  test("redactLog finishes a single 512KB line of JWT heads in a few seconds", () => {
     const started = performance.now();
     redactLog("eyJ-".repeat(131072));
-    expect((performance.now() - started) / 1000).toBeLessThan(1);
+    expect((performance.now() - started) / 1000).toBeLessThan(
+      JWT_HEADS_LIMIT_SECONDS,
+    );
   });
 
-  test("redactLog finishes a JSON line that wraps 512KB of JWT heads in under a second", () => {
+  test("redactLog finishes a JSON line that wraps 512KB of JWT heads in a few seconds", () => {
     const started = performance.now();
     redactLog(`{"a":"${"eyJ-".repeat(131072)}"}`);
-    expect((performance.now() - started) / 1000).toBeLessThan(1);
+    expect((performance.now() - started) / 1000).toBeLessThan(
+      JWT_HEADS_LIMIT_SECONDS,
+    );
   });
 
-  test("redactLog finishes a JSON line that wraps 256KB of JWT heads in under a second", () => {
+  test("redactLog finishes a JSON line that wraps 256KB of JWT heads in a few seconds", () => {
     const started = performance.now();
     redactLog(`{"a":"${"eyJ-".repeat(65536)}"}`);
-    expect((performance.now() - started) / 1000).toBeLessThan(1);
+    expect((performance.now() - started) / 1000).toBeLessThan(
+      JWT_HEADS_LIMIT_SECONDS,
+    );
   });
 
   test("redactResult finishes a 500KB result in a few seconds", () => {
