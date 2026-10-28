@@ -249,18 +249,25 @@ describe("the wiring of the design gap in implement_finish", () => {
     expect((await source()).split("buildStartDesign(").length - 1).toBe(1);
   });
 
-  test("cleans up the worktree and the branch before it decides", async () => {
+  // design_gapの分岐の本文だけを切り出す。分岐は2字下げの閉じ括弧で終わる。
+  async function designGapBranch(): Promise<string> {
     const text = await source();
-    expect(text.indexOf("removeWorktree({")).toBeLessThan(
-      text.indexOf("decideDesignGapAction("),
+    const start = text.indexOf('if (action.kind === "design_gap") {');
+    const end = text.indexOf("\n  }\n", start);
+    return text.slice(start, end);
+  }
+
+  test("calls the cleanup of the gap work in the branch", async () => {
+    expect(await designGapBranch()).toContain(
+      "cleanUpGapWork(context, gapReport)",
     );
   });
 
-  test("decides after the cleanup of the branch", async () => {
-    const text = await source();
-    expect(text.indexOf("decideGapBranchCleanup(")).toBeLessThan(
-      text.indexOf("decideDesignGapAction("),
-    );
+  test("cleans up the gap work before it decides", async () => {
+    const branch = await designGapBranch();
+    const cleanup = branch.indexOf("cleanUpGapWork(context, gapReport)");
+    expect(cleanup).toBeGreaterThanOrEqual(0);
+    expect(cleanup).toBeLessThan(branch.indexOf("decideDesignGapAction("));
   });
 
   test("stops with the fixed reason of the limit", async () => {
