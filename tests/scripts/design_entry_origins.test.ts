@@ -190,6 +190,19 @@ function bodyOf(code: string, name: string): string {
   return end < 0 ? code.slice(start) : code.slice(start, end + 2);
 }
 
+/**
+ * `header`の直後から始まる`{ ... }`の本体(波括弧を含む)。引用符の中の波括弧は数えない。
+ * 見つからないとき、または閉じていないときは空文字列を返す。
+ */
+function blockAfter(code: string, header: string): string {
+  void code;
+  void header;
+  return "";
+}
+
+/** 設計の不足を戻す分岐の見出し。変換後のコードでの形である。 */
+const DESIGN_GAP_REROUTE_BRANCH = 'if (action.kind === "design_gap_reroute")';
+
 describe("the files that refer to the design flow", () => {
   test("reads every production file", () => {
     expect(productionSources().length).toBeGreaterThan(100);
@@ -533,6 +546,15 @@ describe("the condition at the return from the PR fix", () => {
     );
   });
 
+  test("builds the start of the design flow in the branch of the reroute to design", () => {
+    expect(
+      countOf(
+        blockAfter(main, DESIGN_GAP_REROUTE_BRANCH),
+        /\bbuildStartDesign\(/g,
+      ),
+    ).toBe(1);
+  });
+
   test("calls the reroute of the PR fix to design only after the stop at the limit", () => {
     const stop = main.indexOf('designAction === "exhausted"');
     const call = main.indexOf("reroutePrFixToDesign(");
@@ -547,6 +569,50 @@ describe("the condition at the return from the PR fix", () => {
     expect(countOf(main, /\breturnToDesigningFromPrFixIfLeaseHolder\(/g)).toBe(
       1,
     );
+  });
+});
+
+describe("the way the block of a branch is cut", () => {
+  test("returns the block with its nested braces", () => {
+    expect(
+      blockAfter("if (a) { x(); if (b) { y(); } z(); } w();", "if (a)"),
+    ).toBe("{ x(); if (b) { y(); } z(); }");
+  });
+
+  test("does not count a brace in a string", () => {
+    expect(blockAfter('if (a) { x("}"); } w();', "if (a)")).toBe('{ x("}"); }');
+  });
+
+  test("returns an empty string when the header is missing", () => {
+    expect(blockAfter("if (b) { x(); }", "if (a)")).toBe("");
+  });
+
+  test("returns an empty string when the block is not closed", () => {
+    expect(blockAfter("if (a) { x();", "if (a)")).toBe("");
+  });
+
+  test("finds the build of the start of the design flow inside the branch", () => {
+    const code = transpile(
+      'if (action.kind === "design_gap_reroute") { buildStartDesign(); }\nif (action.kind === "push") { x(); }',
+    );
+    expect(
+      countOf(
+        blockAfter(code, DESIGN_GAP_REROUTE_BRANCH),
+        /\bbuildStartDesign\(/g,
+      ),
+    ).toBe(1);
+  });
+
+  test("does not find the build of the start of the design flow moved out of the branch", () => {
+    const code = transpile(
+      'if (action.kind === "design_gap_reroute") { x(); }\nif (action.kind === "push") { buildStartDesign(); }',
+    );
+    expect(
+      countOf(
+        blockAfter(code, DESIGN_GAP_REROUTE_BRANCH),
+        /\bbuildStartDesign\(/g,
+      ),
+    ).toBe(0);
   });
 });
 

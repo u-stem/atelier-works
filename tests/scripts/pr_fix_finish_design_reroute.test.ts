@@ -174,4 +174,22 @@ describe("the design gap of a work item without a parent", () => {
     const end = code.indexOf('if (action.kind === "design_gap_reroute")');
     expect(code.slice(start, end)).toContain('finalizeTerminal("needs_human"');
   });
+
+  test("appends the limited report to the fixed reason", async () => {
+    const code = await source();
+    const start = code.indexOf('if (action.kind === "design_gap_needs_human")');
+    const end = code.indexOf('if (action.kind === "design_gap_reroute")');
+    expect(code.slice(start, end)).toMatch(
+      /withGapReport\(\s*PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,\s*limitGapReport\(reason \?\? summary\),?\s*\)/,
+    );
+  });
+
+  test("hands the same text to the note and the notification", async () => {
+    const code = await source();
+    const start = code.indexOf('if (action.kind === "design_gap_needs_human")');
+    const end = code.indexOf('if (action.kind === "design_gap_reroute")');
+    expect(code.slice(start, end)).toMatch(
+      /const (\w+) = withGapReport\([^;]*\);\s*await finalizeTerminal\(\s*"needs_human",\s*\1,\s*\1,?\s*\)/,
+    );
+  });
 });
