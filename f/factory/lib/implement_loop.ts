@@ -46,6 +46,7 @@ import { modelFor } from "./model_policy.ts";
 import {
   type CheckFailure,
   IMPLEMENT_SCHEMA,
+  IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
   type ImplementPromptInput,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
@@ -198,6 +199,16 @@ export function implementPromptInput(
     design: context.design_markdown ?? null,
     hasPreviousImplementation: context.has_previous_implementation,
   };
+}
+
+/**
+ * 文脈が設計書を持つかを返す。設計書を持つ実行だけが、`design_gap`を返せる。
+ * `design_markdown`を足す前の準備ステップが作った文脈には項目が無いので、`undefined`は設計書なしとして扱う。
+ */
+export function implementContextHasDesign(context: {
+  readonly design_markdown?: string | null;
+}): boolean {
+  return (context.design_markdown ?? null) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +571,7 @@ export async function runImplementGenerateRound(deps: {
 
 /**
  * `runClaude`の結果を`ImplementClaudeRound`に変換する。
+ * `hasDesign`は、この実行に設計書が渡ったかどうかで、設計書の無い実行の`design_gap`を不正な出力にする。
  * 意味の検査は実行が成功した後にだけ行う。
  * `isStructuredOutput`に含めると、件名が長いといった理由だけで
  * 実装全体をやり直すことになるためである。
@@ -567,6 +579,7 @@ export async function runImplementGenerateRound(deps: {
 export function toImplementClaudeRound(
   result: RunClaudeResult<ImplementClaudeOutput>,
   agentRunId: number,
+  hasDesign: boolean,
 ): ImplementClaudeRunRound {
   // 再試行で捨てた最初の試行の費用も、このラウンドにかかった費用に数える。
   const costUsd =
@@ -580,7 +593,10 @@ export function toImplementClaudeRound(
       cost_usd: costUsd,
     };
   }
-  const validation = validateImplementOutput(result.structuredOutput);
+  const validation = validateImplementOutput(
+    result.structuredOutput,
+    hasDesign,
+  );
   if (!validation.ok) {
     return {
       kind: "invalid_output",
@@ -627,6 +643,11 @@ export type ImplementClaudeRunInput = {
    * (`countImplementFailedRounds`)。2回に達したら`heavy_model`を使う。
    */
   readonly sonnetFailures: number;
+  /**
+   * この実行に設計書が渡ったか(`implementContextHasDesign`)。
+   * 真のときだけ、`design_gap`を選べるスキーマを使う。
+   */
+  readonly hasDesign: boolean;
   readonly stage: "implement" | "implement_fix";
   readonly prompt: string;
   /** `buildSystemPrompt([IMPLEMENT_SKILL_NAME])`が作ったファイル。 */
@@ -656,6 +677,7 @@ export type ImplementClaudeRunDeps = {
  * Bashは使わせず、`dontAsk`と`--allowedTools Edit Write`
  * (pr_fixで書き込みができると測った組み合わせ)にする。
  * `cwd`はworktreeにし、`doc_dir`の複製は`addDirs`で渡す。
+ * 設計書の無い実行には`IMPLEMENT_SCHEMA`を渡し、結果の選択肢に`design_gap`を出さない。
  */
 export function buildImplementClaudeOptions(
   input: ImplementClaudeRunInput,
@@ -668,7 +690,9 @@ export function buildImplementClaudeOptions(
     model: modelFor(input.config, "implement", input.sonnetFailures),
     prompt: input.prompt,
     appendSystemPromptFile: input.systemPromptPath,
-    jsonSchema: IMPLEMENT_SCHEMA,
+    jsonSchema: input.hasDesign
+      ? IMPLEMENT_SCHEMA_WITH_DESIGN_GAP
+      : IMPLEMENT_SCHEMA,
     isStructuredOutput: isImplementClaudeOutput,
     tools: IMPLEMENT_CLAUDE_TOOLS,
     allowedTools: IMPLEMENT_CLAUDE_ALLOWED_TOOLS,
@@ -692,7 +716,7 @@ export async function runImplementClaudeRound(
 ): Promise<ImplementClaudeRunRound> {
   const result = await deps.runClaude(buildImplementClaudeOptions(input));
   const agentRunId = await recordClaudeRuns(result, deps.recordAgentRun);
-  return toImplementClaudeRound(result, agentRunId);
+  return toImplementClaudeRound(result, agentRunId, input.hasDesign);
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +737,7 @@ export type ImplementLoopExit =
   | "checks_passed"
   | "checks_skipped"
   | "requirements_gap"
+  | "design_gap"
   | "max_rounds"
   | "daily_budget"
   | "deadline"
@@ -730,6 +755,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "checks_passed",
   "checks_skipped",
   "requirements_gap",
+  "design_gap",
   "max_rounds",
   "daily_budget",
   "deadline",
@@ -786,20 +812,20 @@ export const IMPLEMENT_OUTPUT_CONTRACT_NOTE = [
   "Answer again with an output that follows these rules.",
 ].join("\n");
 
-/** 設計書がある実行の出力の取り決め。 */
-export const IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP =
-  IMPLEMENT_OUTPUT_CONTRACT_NOTE;
+/** 設計書がある実行の注記。`IMPLEMENT_OUTPUT_CONTRACT_NOTE`に、`design_gap`の規則を足す。 */
+export const IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP = [
+  "Your previous structured output broke the output contract, so the flow could not use it.",
+  '- outcome "done": gap_report is null; commit_subject is one non-empty line of at most 72 code points, not ending in "…", without control characters.',
+  '- outcome "requirements_gap": gap_report is a non-empty string; commit_subject and commit_body are both "".',
+  '- outcome "design_gap": gap_report is a non-empty string; commit_subject and commit_body are both "".',
+  "Answer again with an output that follows these rules.",
+].join("\n");
 
-/** 設計書の有無に応じた出力の取り決めを返す。 */
-export function implementOutputContractNote(_hasDesign: boolean): string {
-  return IMPLEMENT_OUTPUT_CONTRACT_NOTE;
-}
-
-/** 文脈が設計書を持つかを返す。 */
-export function implementContextHasDesign(_context: {
-  readonly design_markdown?: string | null;
-}): boolean {
-  return false;
+/** 設計書の有無に応じた、出力の取り決めの注記を返す。 */
+export function implementOutputContractNote(hasDesign: boolean): string {
+  return hasDesign
+    ? IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP
+    : IMPLEMENT_OUTPUT_CONTRACT_NOTE;
 }
 
 const FAILURE_TAIL_CHARS = 2000;
@@ -911,7 +937,7 @@ export type ImplementLoopResult = {
   readonly exit: ImplementLoopExit;
   /**
    * 状態の注記と`describeReason`に使う英語の理由。
-   * 成功かrequirements_gapで終わったときは`null`。
+   * 成功か、要件定義か設計の不足の報告で終わったときは`null`。
    */
   readonly reason: string | null;
   readonly gap_report: string | null;
@@ -1107,7 +1133,7 @@ export async function gitPointerStopReason(
 /**
  * Claudeの1ラウンドごとにworktreeを検証し、ループを終えるか修正のラウンドを実行する。
  * 検証が通るか実行しなかったとき、ガードに当たったとき、
- * Claudeが要件の不足を報告したときに終える。
+ * Claudeが要件定義か設計の不足を報告したときに終える。
  *
  * 各ラウンドでは次の順に処理する。
  * 1. リースを確かめる。generateがリースを失っていた(`lease_lost`のラウンド)か、
@@ -1227,10 +1253,11 @@ export async function runImplementVerifyLoop(
     const produced: ProducedRound = current;
     if (produced.kind === "output") {
       lastValidOutput = produced.output;
-      if (produced.output.outcome === "requirements_gap") {
+      const reported = produced.output.outcome;
+      if (reported === "requirements_gap" || reported === "design_gap") {
         await deps.recordRound({
           ...base,
-          outcome: "requirements_gap",
+          outcome: reported,
           summary: produced.output.summary,
           gap_report: produced.output.gap_report,
           check_output: null,
@@ -1239,7 +1266,7 @@ export async function runImplementVerifyLoop(
           diff_stat: null,
         });
         return stopped({
-          exit: "requirements_gap",
+          exit: reported,
           gap_report: produced.output.gap_report,
         });
       }

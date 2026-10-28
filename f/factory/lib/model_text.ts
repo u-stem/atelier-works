@@ -160,7 +160,11 @@ export function normalizeDesignForImplement(
   };
 }
 
-/** 要件の不足の報告を保存してよい形にする。 */
+/**
+ * 要件定義か設計の不足の報告を、保存してよい形にする。
+ * 報告は信頼できない入力を読んだClaudeの出力で、作業項目の履歴と次の工程の入力に渡るため、
+ * 秘密のマスクと制御文字の除去をかけ、`GAP_REPORT_MAX_CHARS`に絞る。
+ */
 export function limitGapReport(report: string): string {
-  return report.slice(0, 0);
+  return sanitizeModelText(report, GAP_REPORT_MAX_CHARS);
 }

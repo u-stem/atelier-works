@@ -479,7 +479,9 @@ const REAL_START_DESIGN_PORTS: StartDesignPorts = {
  * 設計フローを起動する手順の本番の依存を組み立てる(`startDesign`に渡す)。
  * 返した関数を呼ぶまでは、DB・GitHub・Windmillに触れない。
  * 起動先は設計フロー、入力は作業項目の次の設計の試行と`feedback`で、起動か記録に失敗したら`needs_human`へ戻す(`startDesign`)。
- * `feedback`は人の却下の理由で、整形も切り詰めもせずに渡す。設計の再生成のときだけ渡し、最初の起動は空である。
+ * `feedback`は設計の再生成のときだけ渡し、最初の起動は空である。人の却下の理由か、実装が返した設計の不足の報告
+ * (`automatedFeedback`の印つき。呼び出し側が整える)で、ここでは整形も切り詰めもせずに渡す。
+ * 設計の生成は、印の有無で人の理由と信頼できない報告を区別する。
  * `ports`は呼び出しの入出力で、テストが差し替える。
  */
 export function buildStartDesign(

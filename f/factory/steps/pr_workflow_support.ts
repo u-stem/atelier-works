@@ -4250,7 +4250,7 @@ const REQUIREMENTS_UNTRUSTED_NEXT_ACTION = `承認済みの要件定義のディ
 
 /**
  * 設計工程が`needs_human`にする理由の規則。理由の文字列は`lib/doc_tree_hash.ts`、`lib/design_template.ts`、
- * `lib/design_launch_support.ts`、`lib/approval_gate.ts`の定数と関数が作る文字列と同じにする。
+ * `lib/design_launch_support.ts`、`lib/approval_gate.ts`、`lib/implement_finish_support.ts`の定数と関数が作る文字列と同じにする。
  * この表は設計の定数をimportしない。importするとpr_workflow_support.tsの依存が増えるため、文字列をここに直接書く。
  * `tests/scripts/pr_workflow_support_design.test.ts`が、定数と関数の出力を表と突き合わせて食い違いを検出する。
  */
@@ -4330,7 +4330,7 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^design rejected after max_design_attempts (\d+)$/,
     describe: (m) =>
-      `設計の却下が上限(max_design_attemptsの${m[1]}回)に達しました`,
+      `設計の却下と実装からの戻しが上限(max_design_attemptsの${m[1]}回)に達しました`,
     nextAction: () =>
       `Consoleで却下の理由を確かめ、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します。再実行ごとに設計を1回試します)`,
   },
@@ -4341,6 +4341,20 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       "設計の却下を反映するとき、設計工程が無効だったため、設計書を作り直しませんでした",
     nextAction: () =>
       `設計工程の設定を確かめ、設計工程が有効な状態になってから、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します)`,
+  },
+  {
+    pattern: /^design gap after max_design_attempts$/,
+    describe: () =>
+      "実装が設計書の不足を報告しましたが、設計の却下と実装からの戻しが上限(max_design_attempts)に達しました",
+    nextAction: () =>
+      `Consoleで報告を確かめ、${RETRY_WORK_ITEM_ACTION}(再実行すると設計を作り直します)`,
+  },
+  {
+    pattern: /^design gap reported while design_enabled is off$/,
+    describe: () =>
+      "実装が設計書の不足を報告しましたが、設計工程が無効のため、設計へ戻せませんでした",
+    nextAction: () =>
+      `設計工程を有効にしてから、${RETRY_WORK_ITEM_ACTION}。または、Issueに\`factory\`ラベルを付け直して、新しいサイクルを始めてください`,
   },
   {
     pattern: /^design document directory already holds a saved draft$/,

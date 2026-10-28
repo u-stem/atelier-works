@@ -722,13 +722,14 @@ export const IMPLEMENT_ROUND_MODES: readonly ImplementRoundMode[] = [
 
 /**
  * ラウンドの結果。テーブルのCHECK制約と一致させる。
- * `done` / `requirements_gap`はClaudeの出力から、
+ * `done` / `requirements_gap` / `design_gap`はClaudeの出力から、
  * `check_failed` / `checks_skipped` / `stalled`は検証ループから決まる。
  * `error`はClaudeの実行自体が失敗したときに使う。
  */
 export type ImplementRoundOutcome =
   | "done"
   | "requirements_gap"
+  | "design_gap"
   | "check_failed"
   | "checks_skipped"
   | "stalled"
@@ -736,6 +737,7 @@ export type ImplementRoundOutcome =
 export const IMPLEMENT_ROUND_OUTCOMES: readonly ImplementRoundOutcome[] = [
   "done",
   "requirements_gap",
+  "design_gap",
   "check_failed",
   "checks_skipped",
   "stalled",

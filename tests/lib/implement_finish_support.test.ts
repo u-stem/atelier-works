@@ -998,7 +998,7 @@ describe("rerouteImplementationToDesign", () => {
         notes.push(note);
         return true;
       },
-      startDesign: async (feedback) => {
+      launchDesign: async (feedback) => {
         calls.push("start");
         feedbacks.push(feedback);
         return outcome;
@@ -1086,7 +1086,7 @@ describe("rerouteImplementationToDesign", () => {
       notifyNeedsHuman: async () => {},
       log: () => {},
     };
-    const h = harness({ startDesign: () => startDesign(launch) });
+    const h = harness({ launchDesign: () => startDesign(launch) });
     await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
     expect(moves).toEqual([DESIGN_START_FAILED_REASON]);
   });

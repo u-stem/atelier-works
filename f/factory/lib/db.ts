@@ -4184,10 +4184,13 @@ export async function listWorkItemsByStatuses(
 }
 
 /**
- * 設計の却下のうち、作業項目に反映できたものの数を、遷移の記録(`factory.work_item_events`)から数える。
- * 数えるのは、`awaiting_design_approval`からの遷移で、次のどちらかである。
- * - 遷移先が`designing`で、注記が`regeneratingNote`と等しい(設計の再生成)。
- * - 遷移先が`needs_human`で、注記が`exhaustedPrefix`で始まる(上限に達した却下)。
+ * 設計の却下のうち作業項目に反映できたものと、実装から設計へ戻した数を、遷移の記録(`factory.work_item_events`)から数える。
+ * 同じ上限(`max_design_attempts`)を分け合うので、合計を返す。数えるのは次の3つである。
+ * - `awaiting_design_approval`から`designing`への遷移で、注記が`regeneratingNote`と等しい(設計の再生成)。
+ * - `awaiting_design_approval`から`needs_human`への遷移で、注記が`exhaustedPrefix`で始まる(上限に達した却下)。
+ * - `implementing`から`designing`への遷移(実装からの戻し)。注記では照合しない。
+ *   この遷移は、リースを持つ実装だけが、設計の試行を進める1つの文でしか作れないためである。
+ * 遷移元の条件は、分岐ごとに持つ。再実行の遷移(`needs_human`から`designing`など)は、どの分岐にも当たらず数えない。
  * 範囲は現在の要件定義の試行である。遷移の記録には試行の番号が無いので、
  * 作業項目の「`requirements_generating`への遷移(遷移元と遷移先が違う)」の最新の`id`より後の記録だけを数える。
  * 同じ状態どうしの記録(取り込み内容の更新)は範囲を区切らない。
@@ -4203,10 +4206,10 @@ export async function countAppliedDesignRejections(
   const rows = await sql`
     SELECT count(*)::integer AS n FROM factory.work_item_events
     WHERE work_item_id = ${workItemId}::bigint
-      AND from_status = 'awaiting_design_approval'
       AND (
-        (to_status = 'designing' AND note = ${regeneratingNote})
-        OR (to_status = 'needs_human' AND starts_with(note, ${exhaustedPrefix}))
+        (from_status = 'awaiting_design_approval' AND to_status = 'designing' AND note = ${regeneratingNote})
+        OR (from_status = 'awaiting_design_approval' AND to_status = 'needs_human' AND starts_with(note, ${exhaustedPrefix}))
+        OR (from_status = 'implementing' AND to_status = 'designing')
       )
       AND id > COALESCE((
         SELECT MAX(id) FROM factory.work_item_events
@@ -4265,15 +4268,36 @@ export async function updateStatusIfLatestApproval(
   return rows.length > 0;
 }
 
-/** 実装から設計へ戻す。 */
+/**
+ * 実装フローがリースを持つ間に、作業項目を`implementing`から`designing`へ戻す。
+ * 比較は`flow_job_id`が`leaseJobId`のままであること(`null`なら`NULL`のままであること)で、
+ * 同じ文で`design_attempt`を1進め、`flow_job_id`を空にし、遷移の記録(遷移元`implementing`)を書く。
+ * 設計の試行を進めるので、前の設計の承認は、実装の関門、再実行、承認待ちの走査のどれの照合も通らない。
+ * リースを空にするので、`designing`から`designing`への遷移を作らずに、続く設計フローが新しいジョブIDを記録できる。
+ * 条件に合わなければ何も書かずに`false`を返す。
+ */
 export async function returnToDesigningFromImplementingIfLeaseHolder(
-  _id: number,
-  _leaseJobId: string | null,
-  _note: string | null = null,
-  _sql: SqlClient = defaultSqlClient,
-  _jobIds: JobIds = jobIdsFromEnv(process.env),
+  id: number,
+  leaseJobId: string | null,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
-  return false;
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'designing', design_attempt = design_attempt + 1, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = 'implementing'
+        AND flow_job_id IS NOT DISTINCT FROM ${leaseJobId}::text
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, 'implementing', 'designing', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
 }
 
 /**
@@ -6002,7 +6026,7 @@ export async function insertImplementRound(
  * 作業項目の、指定した試行(同じ要件定義)の実装で、直近に連続して失敗したラウンドの数を返す。
  * 失敗は、検査が通らなかった(`check_failed`)、変更が進まなかった(`stalled`)、
  * Claudeの実行が失敗した(`error`)ラウンドである。
- * それ以外の結果(`done`、`checks_skipped`、`requirements_gap`)のラウンドが入ると、
+ * それ以外の結果(`done`、`checks_skipped`、`requirements_gap`、`design_gap`)のラウンドが入ると、
  * それより前の失敗は数えない。モデルが成功した後に、基盤の障害などの古い失敗で
  * `heavy_model`のまま戻らないようにするためである。
  * 検証ループの修正ラウンドと、`retry_work_item`で再開する前の実行の失敗が、続いていれば合わさる。

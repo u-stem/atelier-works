@@ -122,7 +122,7 @@ function reroute(
           notes.push(note);
           return (await options.cas?.()) ?? true;
         },
-        startDesign: (feedback) =>
+        launchDesign: (feedback) =>
           buildStartDesign(
             { instance_name: "local" },
             ctx,
