@@ -12,6 +12,7 @@ import {
 import {
   getDesignDraft,
   getWorkItem,
+  hasNewerIssueCycle,
   latestDesignApproval,
   latestRequirementsApproval,
 } from "./db.ts";
@@ -25,6 +26,8 @@ export type ParentForDesign = Pick<
 
 export type FixDesignDeps = {
   readonly getWorkItem: (id: number) => Promise<ParentForDesign | null>;
+  /** 作業項目と同じIssueに、より大きい`cycle`の`issue`の作業項目があるか。 */
+  readonly hasNewerIssueCycle: (workItemId: number) => Promise<boolean>;
   /** 作業項目の最新の要件定義の承認。 */
   readonly latestRequirementsApproval: (
     workItemId: number,
@@ -58,8 +61,9 @@ export type FixDesignArgs = {
  * 4. PRのheadがFactoryの実装のブランチで、その作業項目が親であり、親と同じownerとrepoである。
  *    人が書いたPR(`Closes #N`で親に結んだもの)は、設計書を渡す相手ではないので降格する。
  * 5. 親が`pr_open`でない。設計の最中や実装中の親の設計書は、今のPRと食い違いうる。
- * 6. 親の最新の要件定義の承認が、親の今の`attempt`の承認でない。
- * 7. 実装の関門(`designGate`)が止める。止めた理由は、本文を含まない警告に残す。
+ * 6. 親のIssueに新しいサイクルがある。置き換わった親の設計書は、今のサイクルの設計と無関係である。
+ * 7. 親の最新の要件定義の承認が、親の今の`attempt`の承認でない。
+ * 8. 実装の関門(`designGate`)が止める。止めた理由は、本文を含まない警告に残す。
  * 承認済みの設計書は、関門が整えた本文で、信頼できない入力として囲みに入れて渡す。
  * 降格した実行は、設計書なしのスキーマ、プロンプト、出力の検査で動く。
  */
@@ -80,6 +84,7 @@ export async function loadParentDesignForFix(
     return null;
   }
   if (parent.status !== "pr_open") return null;
+  if (await deps.hasNewerIssueCycle(parent.id)) return null;
   const requirements = await deps.latestRequirementsApproval(parent.id);
   if (
     requirements === null ||
@@ -111,6 +116,7 @@ export function fixDesignDepsFromDb(
 ): FixDesignDeps {
   return {
     getWorkItem: (id) => getWorkItem(id),
+    hasNewerIssueCycle: (id) => hasNewerIssueCycle(id),
     latestRequirementsApproval: (id) => latestRequirementsApproval(id),
     latestDesignApproval: (id) => latestDesignApproval(id),
     getDesignDraft: (id) => getDesignDraft(id),

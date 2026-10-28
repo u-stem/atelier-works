@@ -3108,7 +3108,8 @@ export type PrFixFinishBumpKind =
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  *   - `design_gap_reroute_success`: 親のIssueを`designing`に戻すことで、フィードバックを消化した。
- *     設計の承認の後の実装が、そのフィードバックを再び集める。
+ *     実装のステップはPRのレビューも処理済みの位置も読まないので、このフィードバックは二度と集まらない。
+ *     指摘は、絞った要約として設計に届くだけである。
  * それ以外の終端の種別(試行の開始前に関門が止めた、何らかの原因の`needs_human`、
  * 失敗した差し戻し(親の作業項目が見つからない、親にIssue番号が無い、
  * 親が差し戻せる状態にない、親が試行回数を使い切った、

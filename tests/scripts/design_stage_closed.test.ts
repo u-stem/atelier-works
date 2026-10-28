@@ -283,6 +283,7 @@ describe("the return from the PR fix to the design", () => {
           reads.push(id);
           return null;
         },
+        hasNewerIssueCycle: async () => false,
         latestRequirementsApproval: async () => null,
         latestDesignApproval: async () => null,
         getDesignDraft: async () => null,
