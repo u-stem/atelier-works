@@ -70,7 +70,10 @@ import {
   fetchIssueState,
   GitHubHttpError,
 } from "./lib/github.ts";
-import { IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX } from "./lib/implement_finish_support.ts";
+import {
+  IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+  IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+} from "./lib/implement_finish_support.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import {
@@ -126,12 +129,15 @@ export type RestartStop =
  * - `implementEnabled`: `factory_config.implement_enabled`の値。
  * - `designEnabled`: `factory_config.design_enabled`の値(偽として読んだ後の値)。
  * - `designApproved`: 設計が有効で、要件定義が承認済みで、設計の承認が照合を通るか。
+ *   実装が設計の不足を返して、設計がまだ作り直されていないときは、承認が照合を通っても偽にする。
  * - `stop`: 止まった理由の分類。`implementReady`のときだけ読む。
  * - `feedback`: 要件定義の生成(`pipeline`)へ渡す文。無ければ`null`。
  *   要件定義の差し戻しの再開では印を付けた報告、承認が却下された再開では人の却下の理由が入る。
  * - `designFeedback`: 設計フローへ渡す文。無ければ`null`。
- *   設計が有効で、要件定義が承認済みで、設計が未承認のとき、直前の設計の却下の理由が入る(印は付けない)。
- * - `carriesGap`: `feedback`が設計か実装の差し戻しの報告か。真なら、再実行の遷移の注記に印を付ける(`restartNote`)。
+ *   設計が有効で、要件定義が承認済みで、設計が未承認のとき、次のどちらかが入る。
+ *   実装が設計の不足を返して、設計がまだ作り直されていなければ、その報告(印を付ける)。
+ *   そうでなければ、直前の設計の却下の理由(印は付けない)。
+ * - `carriesGap`: `feedback`か`designFeedback`が差し戻しの報告か。真なら、再実行の遷移の注記に印を付ける(`restartNote`)。
  */
 export type RestartContext = {
   readonly implementReady: boolean;
@@ -167,15 +173,16 @@ export function classifyRestartStop(
 const GAP_NOTE_PREFIXES = ["design gap: ", "gap: "] as const;
 
 /**
- * 設計か実装が要件の不足を返した遷移の注記から、要件定義の生成に渡す文を作る。
+ * 差し戻しの遷移の注記から、接頭辞を外した報告を整えて、印つきの`feedback`にする。
  * 報告は信頼できない入力を読んだClaudeの出力なので、秘密のマスクと制御文字の除去をかけて長さを絞り、
  * 人の指示と区別できる印を付ける(`automatedFeedback`)。接頭辞の無い注記と、報告が空の注記は`null`を返す。
  */
-export function feedbackFromGapNote(note: string | null): string | null {
+function automatedFeedbackFromNote(
+  note: string | null,
+  prefixes: readonly string[],
+): string | null {
   if (note === null) return null;
-  const prefix = GAP_NOTE_PREFIXES.find((candidate) =>
-    note.startsWith(candidate),
-  );
+  const prefix = prefixes.find((candidate) => note.startsWith(candidate));
   if (prefix === undefined) return null;
   const report = sanitizeModelText(
     note.slice(prefix.length),
@@ -185,11 +192,36 @@ export function feedbackFromGapNote(note: string | null): string | null {
 }
 
 /**
- * 実装が設計の不足を返して設計へ入った記録から、設計に渡す文を作る。渡さないときは`null`を返す。
+ * 設計か実装が要件の不足を返した遷移の注記から、要件定義の生成に渡す文を作る。
+ * 接頭辞の無い注記と、報告が空の注記は`null`を返す。
+ */
+export function feedbackFromGapNote(note: string | null): string | null {
+  return automatedFeedbackFromNote(note, GAP_NOTE_PREFIXES);
+}
+
+/**
+ * 実装が設計の不足を返して設計へ入った(または、戻す上限で止まった)遷移の記録から、設計に渡す文を作る。
+ * 渡さないときは`null`を返す。渡すのは、次のすべてを満たすときだけである。
+ * - 遷移元が実装で、注記の接頭辞が遷移先と合う(設計への戻しは`IMPLEMENT_DESIGN_GAP_NOTE_PREFIX`、
+ *   `needs_human`への停止は`IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX`)。
+ * - 遷移より後に、設計の承認依頼が作られていない。作られていれば、設計は報告を読んで作り直し済みである。
+ * - 報告が空でない。
  */
 export function feedbackFromDesignEntry(
-  _event: DesignEntryEvent | null,
+  event: DesignEntryEvent | null,
 ): string | null {
+  if (event === null || event.designRequestedAfter) return null;
+  if (event.from_status !== "implementing") return null;
+  if (event.to_status === "designing") {
+    return automatedFeedbackFromNote(event.note, [
+      IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+    ]);
+  }
+  if (event.to_status === "needs_human") {
+    return automatedFeedbackFromNote(event.note, [
+      IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+    ]);
+  }
   return null;
 }
 
@@ -221,6 +253,7 @@ export type RestartContextDeps = {
     workItemId: number,
     attempt: number,
   ) => Promise<boolean>;
+  /** 設計へ入る最新の遷移(実装からの戻し、または戻す上限での停止)。`latestDesignEntryEvent`を参照。 */
   readonly latestDesignEntry: (
     workItemId: number,
   ) => Promise<DesignEntryEvent | null>;
@@ -330,21 +363,6 @@ export async function buildRestartContext(
   const designApproval = designApprovalInScope
     ? await readDesignApproval()
     : null;
-  const designApproved =
-    designApprovalInScope &&
-    isDesignApprovedForAttempt(designApproval, {
-      attempt: workItem.attempt,
-      designAttempt: workItem.design_attempt,
-      requirementDraftId: requirementsApproval.draft_id,
-    });
-  const designFeedback =
-    designApprovalInScope &&
-    !designApproved &&
-    designApproval !== null &&
-    designApproval.status === "rejected" &&
-    designApproval.payload_attempt === workItem.attempt
-      ? feedbackFromRejection(designApproval.reason)
-      : null;
   const readStopEvent = () =>
     deps.latestStatusEvent(workItem.id, input.restartStatus);
   const readDesignRejectionReason = async () => {
@@ -379,8 +397,30 @@ export async function buildRestartContext(
   const stop = classifyRestartStop(
     implementReady ? await readStopEvent() : null,
   );
+  // 要件定義へ戻る再開では、設計へ渡す報告を読まない。戻した後の設計は要件定義から作り直すためである。
+  const designGapFeedback =
+    designApprovalInScope && stop === "other"
+      ? feedbackFromDesignEntry(await deps.latestDesignEntry(workItem.id))
+      : null;
+  const designApproved =
+    designApprovalInScope &&
+    designGapFeedback === null &&
+    isDesignApprovedForAttempt(designApproval, {
+      attempt: workItem.attempt,
+      designAttempt: workItem.design_attempt,
+      requirementDraftId: requirementsApproval.draft_id,
+    });
+  const designFeedback =
+    designGapFeedback ??
+    (designApprovalInScope &&
+    !designApproved &&
+    designApproval !== null &&
+    designApproval.status === "rejected" &&
+    designApproval.payload_attempt === workItem.attempt
+      ? feedbackFromRejection(designApproval.reason)
+      : null);
   let feedback: string | null = null;
-  let carriesGap = false;
+  let carriesGap = designGapFeedback !== null;
   if (stop === "requirements_returned") {
     feedback = await readGap();
     carriesGap = feedback !== null;

@@ -902,21 +902,72 @@ export async function latestStatusTransition(
 }
 
 /**
- * 設計へ入る最新の遷移の記録と、その遷移より後に設計の承認依頼があるか。
- * `designRequestedAfter`は、承認依頼の`requested_at`が遷移の`occurred_at`より後のときだけ真になる(同時刻は偽)。
+ * 設計へ入る遷移の記録と、その遷移より後に設計の承認依頼が作られたか。
+ * `designRequestedAfter`は、承認依頼の`requested_at`が遷移の`occurred_at`より後のときだけ真になる。同時刻は偽である。
  */
 export type DesignEntryEvent = StatusEventSummary & {
   readonly to_status: WorkItemStatus;
   readonly designRequestedAfter: boolean;
 };
 
+/**
+ * 実装が設計の不足を返したことを、再実行が設計へ渡すために読む。
+ * 現在の要件定義の試行(要件定義の生成への最新の遷移より後)で、次のうち最も新しい遷移を1件返す。無ければ`null`を返す。
+ * - 設計への遷移(遷移元と遷移先が違う)。注記が`carryingNotePrefix`で始まる遷移は飛ばす。
+ *   報告を引き継いだ再実行が、その前の戻しを隠さないためである。
+ * - 実装から`needs_human`への遷移で、注記が`exhaustedNotePrefix`で始まるもの(戻す上限での停止)。
+ * どちらの遷移かと、報告を渡してよいかの判断は呼び出し側が行う。この関数は、遷移より後に設計の承認依頼が作られたかだけを調べる。
+ * 順序は遷移の記録の`id`で決める。時刻が同じ記録の順序を`id`が決めるためである。
+ */
 export async function latestDesignEntryEvent(
-  _workItemId: number,
-  _carryingNotePrefix: string,
-  _exhaustedNotePrefix: string,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  carryingNotePrefix: string,
+  exhaustedNotePrefix: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<DesignEntryEvent | null> {
-  return null;
+  const rows = await sql`
+    WITH target AS (SELECT ${workItemId}::bigint AS work_item_id),
+    scope AS (
+      SELECT COALESCE(MAX(e.id), 0) AS floor
+      FROM factory.work_item_events e, target
+      WHERE e.work_item_id = target.work_item_id
+        AND e.to_status = 'requirements_generating' AND e.from_status IS DISTINCT FROM e.to_status
+    )
+    SELECT e.from_status, e.to_status, e.note,
+           EXISTS (
+             SELECT 1 FROM factory.approval_requests ar
+             WHERE ar.work_item_id = e.work_item_id AND ar.kind = 'design'
+               AND ar.requested_at > e.occurred_at
+           ) AS design_requested_after
+    FROM factory.work_item_events e, target, scope
+    WHERE e.work_item_id = target.work_item_id AND e.id > scope.floor
+      AND (
+        (
+          e.to_status = 'designing' AND e.from_status IS DISTINCT FROM e.to_status
+          AND (e.note IS NULL OR NOT starts_with(e.note, ${carryingNotePrefix}::text))
+        )
+        OR (
+          e.from_status = 'implementing' AND e.to_status = 'needs_human'
+          AND starts_with(e.note, ${exhaustedNotePrefix}::text)
+        )
+      )
+    ORDER BY e.id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const to = row.to_status;
+  if (typeof to !== "string" || !isOneOf(to, WORK_ITEM_STATUSES)) {
+    throw new Error(`db: latestDesignEntryEvent: unknown status ${String(to)}`);
+  }
+  return {
+    ...parseStatusEventRow(row, "latestDesignEntryEvent"),
+    to_status: to,
+    designRequestedAfter: parseBoolean(
+      row.design_requested_after,
+      "design_requested_after",
+    ),
+  };
 }
 
 /**

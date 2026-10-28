@@ -328,6 +328,7 @@ const ROUND_MODE_LABELS: ReadonlyMap<string, string> = new Map([
 const ROUND_OUTCOME_LABELS: ReadonlyMap<string, string> = new Map([
   ["done", "完了"],
   ["requirements_gap", "要件の不足"],
+  ["design_gap", "設計の不足"],
   ["check_failed", "検査の失敗"],
   ["checks_skipped", "検査の省略"],
   ["stalled", "進展なし"],
@@ -338,6 +339,7 @@ const ROUND_OUTCOME_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> =
   new Map([
     ["done", "success"],
     ["requirements_gap", "warning"],
+    ["design_gap", "warning"],
     ["check_failed", "failure"],
     ["checks_skipped", "warning"],
     ["stalled", "warning"],
