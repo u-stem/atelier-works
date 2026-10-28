@@ -44,7 +44,7 @@ locks:
   f/factory/lib/check_sandbox: a0723a0bfa811613eaa3c720efc5ce5547bb9d2144ed88e214a10ded685e3696
   f/factory/lib/check_sandbox_reasons: 1c162edbcb7aff4ae5b1a282fceca8b4072543c845054a50f3af07f1fffc11e2
   f/factory/lib/ci_fix_classify: eb35e7112fa3b72e97c4b37137f7bcc4d6942b52a60736d4b5a959a436b11092
-  f/factory/lib/ci_fix_paths: 849ca3bd627f73d7c98427e8bdd665c904db0f6d5d9e299453818c322d29d5f9
+  f/factory/lib/ci_fix_paths: df6ccd8c48ae44fe9435c89cb003ff52e791d53455149ad2359510e695d16608
   f/factory/lib/ci_fix_pr_base: 4ec219212273d92823aa1a58a12f9e969876313a3e39fdf27aae986a913aa784
   f/factory/lib/ci_fix_prompt: 4bc2dfa11c0cbfdec024509e6def41312cc5ddccd3747d6ab1f2c4f9065e91db
   f/factory/lib/ci_fix_round: 42724fa8bbec1bae25d357cbe99286e9fbfb9f34b19177bbff32fb08ab0f6fe6
