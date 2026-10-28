@@ -83,6 +83,9 @@ Claudeの1回の実行は、`implement_timeout_sec`と、期限までの残り�
 
 Claudeは実装中に要件や設計を書き換えてはならない。要件を満たせないときは、要件の不足(`requirements_gap`)と不足の報告(`gap_report`)を返して中断する。この決まりは`factory-implementation`スキル(`.claude/skills/factory-implementation/SKILL.md`)に書く。
 
+設計書が渡された実行は、承認済みの設計書に従えないとき、設計の不足(`design_gap`)を返せる。
+設計書が渡されない実行は、この結果を選べない([設計の不足](#設計の不足))。
+
 ### 設計書の入力
 
 設計が有効で、設計の承認が照合を通ったときだけ、承認済みの設計書の本文をプロンプトに載せる。
@@ -142,13 +145,60 @@ HTMLの除去は、見えない文字を挟んだコメントの開きを、整�
 設計書は要件定義より下位の入力で、切れても要件定義が優先されるため、止めない。
 正しく生成された設計書は、検査で8000以下に収まるので、通常は何も変わらない。
 
+### 設計の不足
+
+設計書が渡された実行だけが、設計の不足(`design_gap`)を返せる。
+設計書が要件定義と食い違うか、書かれたとおりには作れないときに返し、不足の報告(`gap_report`)を必ず付ける。
+`gap_report`は、設計の段に向けた報告である。
+指示や命令は書かせない。
+
+設計書が渡されない実行は、出力の形(`IMPLEMENT_SCHEMA`)、プロンプト、システムプロンプトのどれにも、設計の不足を出さない。
+設計書が渡された実行は、結果の選択肢に`design_gap`を足した出力の形(`IMPLEMENT_SCHEMA_WITH_DESIGN_GAP`)と、`design_gap`の説明を足したプロンプトを使う。
+設計書が渡されない実行の出力に`design_gap`があれば、不正な出力として扱う。
+選択肢にない結果は、指示に従っていないためである。
+設計工程の入口が閉じている間、本番の実行には設計書が渡らないので、本番で`design_gap`は返らない。
+
+`design_gap`を返したラウンドは、ループを終えて完了のステップ(`implement_finish`)に渡る。
+完了のステップは、要件の不足と同じく、worktreeと、PRが無ければ実装ブランチを先に片付ける。
+不足を返した実装の作業は捨てる。
+その後、次の表の行き先に移す。
+
+| 行き先 | 条件 | 作業項目の状態 | 理由 |
+| --- | --- | --- | --- |
+| 設計へ戻す | 設計工程が有効で、上限に達していない | 設計中(`designing`) | なし |
+| 上限で止める | 設計工程が有効で、反映できた設計の却下と設計への戻しの数に1を足すと`max_design_attempts`以上 | 人の対応待ち | `design gap after max_design_attempts` |
+| 無効で止める | 設計工程が無効(`design_enabled`が偽) | 人の対応待ち | `design gap reported while design_enabled is off` |
+
+設計工程が無効のときに戻さないのは、閉じた入口を迂回しないためである。
+行き先の判定は`decideDesignGapAction`が行い、設計工程が有効かは`config.design_enabled`をそのまま渡す。
+上限は、人の設計の却下と数を分け合う。数え方は[設計書の生成](design.md)の「却下の数え方」に書く。
+
+設計へ戻す遷移は、次を1つの比較交換で行う(`returnToDesigningFromImplementingIfLeaseHolder`)。
+条件は、作業項目が実装中で、`flow_job_id`が自分のジョブIDのままであることである。
+
+- 状態を設計中にする。
+- `design_attempt`を1進める。前の設計の承認が、実装の関門、再実行、承認待ちの走査のどこでも照合を通らないようにするためである。
+- `flow_job_id`を空にする。`designing`から`designing`への遷移を作らずに、続く設計フローが新しいジョブIDを記録できるようにするためである。
+- 遷移の記録を、遷移元を実装中、注記を`implement design gap:`と報告にして書く。
+
+移せなければ、作業項目が先に動いているので、何も起動しない。
+移せたら、設計フローを自動の報告の印(`automatedFeedback`)つきの`feedback`で起動し、空のときだけジョブIDを記録する。
+報告は、長さの制限と秘密のマスクを通してから渡す。
+設計フローの起動か記録に失敗したら、設計の起動の手順が設計中から人の対応待ちへ戻して通知する。
+上限で止めたときの注記は`implement design gap exhausted:`と報告である。
+再実行は、この2つの接頭辞で報告を読み出す([作業項目の状態とリース](work-items.md)の「設計フローへ渡す理由」)。
+
+要件の不足で要件定義へ戻すときは、同じ文で`design_attempt`を0にし、`flow_job_id`を空にする。
+`feedback`は、設計の不足と同じく自動の報告の印を付けて渡す。
+古い設計書の承認を、作り直した要件定義の実装に使わせないためである。
+
 ## 検証と修正のループ
 
 検証のステップ(`implement_verify`)は、`f/factory/lib/implement_loop.ts`の検証のループを回す。Claudeの1回の実行を1ラウンドとし、ラウンドごとに次の順で処理する。
 
 1. リースを確かめる。実装のステップがリースを失っていたか、今リースを持っていなければ、worktreeに触れず、記録もせずに止める。
 2. worktreeの`.git`を確かめる。変わっていれば、worktreeでgitを1つも実行せずに止める。
-3. Claudeの実行が失敗したか、要件の不足が報告されたら、記録して止める。
+3. Claudeの実行が失敗したか、要件の不足か設計の不足が報告されたら、記録して止める。
 4. 差分をすべてステージし、指紋(`git write-tree`)と、比較の基準からの差分の量を取る。
 5. 比較の基準からの変更パス(`git diff -z --name-status`)を調べる。
 6. symlinkの変更と差分の超過を確かめ、当たれば止める。保護パスの変更は記録だけする。
@@ -175,6 +225,7 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。
 | 終了の理由 | 条件 | `implement_rounds.outcome` |
 | --- | --- | --- |
 | `requirements_gap` | Claudeが要件の不足を返した | `requirements_gap` |
+| `design_gap` | Claudeが設計の不足を返した(設計書が渡された実行だけ) | `design_gap` |
 | `checks_skipped` | 検査コマンドを実行しなかった | `checks_skipped` |
 | `checks_passed` | 検査に通った | `done` |
 | `max_rounds` | ラウンドが`implement_max_rounds`に達した | `check_failed` |
@@ -436,7 +487,7 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 設計工程の設定(`design_enabled`、`max_design_attempts`)は[設計書の生成](design.md)の「設定値」に書く。
 
 モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`を新しいほうから見て、結果が`check_failed`、`stalled`、`error`の行が続いた数である。
-ほかの結果(`done`、`checks_skipped`、`requirements_gap`)の行に当たったら、そこで数えるのをやめる。成功が入れば`model`に戻るためである。
+ほかの結果(`done`、`checks_skipped`、`requirements_gap`、`design_gap`)の行に当たったら、そこで数えるのをやめる。成功が入れば`model`に戻るためである。
 `error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、基盤の失敗が2回続くと`heavy_model`に上がる。損失の上限は`implement_max_rounds`と予算で決まる。
 停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
