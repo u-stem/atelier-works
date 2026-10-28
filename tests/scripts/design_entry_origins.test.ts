@@ -395,13 +395,36 @@ describe("the condition at each origin", () => {
   });
 });
 
+/** 設計の不足の判定に、設定の`design_enabled`をそのまま渡す呼び出しの形。値の直後で区切られていなければ当たらない。 */
+const DECIDE_DESIGN_GAP_CONDITION =
+  /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\b/;
+
+describe("the pattern of the condition at the return from the implement flow", () => {
+  test("matches the setting passed as it is", () => {
+    expect(
+      DECIDE_DESIGN_GAP_CONDITION.test(
+        "decideDesignGapAction({\n designEnabled: config.design_enabled,\n appliedRejections: 0 })",
+      ),
+    ).toBe(true);
+  });
+
+  test.each(["|| true", "?? true", "|| flag", "&& flag", ".valueOf()"])(
+    "does not match the setting followed by %p",
+    (tail) => {
+      expect(
+        DECIDE_DESIGN_GAP_CONDITION.test(
+          `decideDesignGapAction({ designEnabled: config.design_enabled ${tail}, appliedRejections: 0 })`,
+        ),
+      ).toBe(false);
+    },
+  );
+});
+
 describe("the condition at the return from the implement flow", () => {
   const code = codeOf("steps/implement_finish.ts");
 
   test("decides the action of a design gap from the design_enabled setting", () => {
-    expect(code).toMatch(
-      /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\b/,
-    );
+    expect(code).toMatch(DECIDE_DESIGN_GAP_CONDITION);
   });
 
   test("decides the action of a design gap once", () => {

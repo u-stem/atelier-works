@@ -254,6 +254,38 @@ describe("the literal that opens the design stage", () => {
   });
 });
 
+describe("the handoff of design_enabled to the entrance of the implement flow", () => {
+  test("counts the setting passed as it is, before a comma", () => {
+    expect(
+      countOf(
+        "{ designEnabled: config.design_enabled, x }",
+        DESIGN_ENABLED_HANDOFF,
+      ),
+    ).toBe(1);
+  });
+
+  test("counts the setting passed as it is, before a closing brace", () => {
+    expect(
+      countOf(
+        "{ designEnabled: config.design_enabled }",
+        DESIGN_ENABLED_HANDOFF,
+      ),
+    ).toBe(1);
+  });
+
+  test.each(["|| true", "?? true", "|| flag", "&& flag", ".valueOf()"])(
+    "does not count the setting followed by %p",
+    (tail) => {
+      expect(
+        countOf(
+          `{ designEnabled: config.design_enabled ${tail}, x }`,
+          DESIGN_ENABLED_HANDOFF,
+        ),
+      ).toBe(0);
+    },
+  );
+});
+
 describe("the files that mention design_enabled", () => {
   test("are exactly the files in the table", () => {
     expect(scanCounts(DESIGN_ENABLED_TOKEN)).toEqual(
