@@ -215,18 +215,23 @@ export function feedbackFromDesignEntry(
   event: DesignEntryEvent | null,
 ): string | null {
   if (event === null || event.designRequestedAfter) return null;
-  if (event.from_status === "pr_open") {
-    return event.to_status === "designing"
-      ? automatedFeedbackFromNote(event.note, [PR_FIX_DESIGN_GAP_NOTE_PREFIX])
-      : null;
-  }
-  if (event.from_status !== "implementing") return null;
   if (event.to_status === "designing") {
-    return automatedFeedbackFromNote(event.note, [
-      IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
-    ]);
+    if (event.from_status === "implementing") {
+      return automatedFeedbackFromNote(event.note, [
+        IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+      ]);
+    }
+    if (event.from_status === "pr_open") {
+      return automatedFeedbackFromNote(event.note, [
+        PR_FIX_DESIGN_GAP_NOTE_PREFIX,
+      ]);
+    }
+    return null;
   }
-  if (event.to_status === "needs_human") {
+  if (
+    event.from_status === "implementing" &&
+    event.to_status === "needs_human"
+  ) {
     return automatedFeedbackFromNote(event.note, [
       IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
     ]);
