@@ -4265,6 +4265,17 @@ export async function updateStatusIfLatestApproval(
   return rows.length > 0;
 }
 
+/** 実装から設計へ戻す。 */
+export async function returnToDesigningFromImplementingIfLeaseHolder(
+  _id: number,
+  _leaseJobId: string | null,
+  _note: string | null = null,
+  _sql: SqlClient = defaultSqlClient,
+  _jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  return false;
+}
+
 /**
  * `updateStatusToRequirementsIfCurrent`と同じ更新に、`flow_job_id`が`expectedFlowJobId`のままであること
  * (`null`なら`NULL`のままであること)を条件に足す。

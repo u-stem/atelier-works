@@ -125,6 +125,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
   restartTransientPrReview,
+  returnToDesigningFromImplementingIfLeaseHolder,
   returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
   saveDesignDraftIfLeaseHolder,
@@ -10316,6 +10317,138 @@ check(
   "applied rejections: a rejection after the new range started is counted",
   (await countFor(countItem)) === 1,
   await countFor(countItem),
+);
+
+// 実装から設計への戻しは、反映できた却下と同じ数に入る。再実行の遷移や、実装から別の状態への遷移は数えない。
+const gapCountItem = await issueWorkItem(
+  9590,
+  1,
+  "implementing",
+  "qdb gap return count",
+);
+check(
+  "design gap count: nothing is counted at first",
+  (await countFor(gapCountItem)) === 0,
+  await countFor(gapCountItem),
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-gap-lease', design_attempt = 2 WHERE id = ${String(gapCountItem)}`,
+);
+check(
+  "design gap return: the work item with another lease is not moved",
+  !(await returnToDesigningFromImplementingIfLeaseHolder(
+    gapCountItem,
+    "qdb-other-lease",
+    "implement design gap: nope",
+    sql,
+  )) && (await workItemRow(gapCountItem)).status === "implementing",
+  await workItemRow(gapCountItem),
+);
+check(
+  "design gap return: the work item that is not implementing is not moved",
+  !(await returnToDesigningFromImplementingIfLeaseHolder(
+    await issueWorkItem(9591, 1, "awaiting_design_approval", "qdb gap other"),
+    null,
+    "implement design gap: nope",
+    sql,
+  )),
+);
+check(
+  "design gap return: the lease holder moves it",
+  await returnToDesigningFromImplementingIfLeaseHolder(
+    gapCountItem,
+    "qdb-gap-lease",
+    "implement design gap: FR-002",
+    sql,
+  ),
+);
+const gapMoved = await workItemRow(gapCountItem);
+check(
+  "design gap return: the work item is designing with the next design_attempt and no lease",
+  gapMoved.status === "designing" &&
+    gapMoved.design_attempt === 3 &&
+    gapMoved.flow_job_id === null,
+  gapMoved,
+);
+check(
+  "design gap return: the transition is recorded from implementing with the note",
+  (await lastEventNote(gapCountItem)) === "implement design gap: FR-002" &&
+    (
+      await sql`
+        SELECT from_status, to_status FROM factory.work_item_events
+        WHERE work_item_id = ${gapCountItem}::bigint ORDER BY id DESC LIMIT 1
+      `.fetch()
+    )[0]?.from_status === "implementing",
+);
+check(
+  "design gap count: the return is counted whatever its note is",
+  (await countFor(gapCountItem)) === 1,
+  await countFor(gapCountItem),
+);
+await moveStatus(
+  gapCountItem,
+  "designing",
+  "needs_human",
+  "design flow could not be started",
+);
+await moveStatus(
+  gapCountItem,
+  "needs_human",
+  "designing",
+  "retry_work_item: restarted",
+);
+check(
+  "design gap count: a retry into designing is not counted",
+  (await countFor(gapCountItem)) === 1,
+  await countFor(gapCountItem),
+);
+await moveStatus(gapCountItem, "designing", "implementing", "design approved");
+await moveStatus(
+  gapCountItem,
+  "implementing",
+  "needs_human",
+  "implement design gap exhausted: FR-002",
+);
+check(
+  "design gap count: a stop of the implementation is not counted",
+  (await countFor(gapCountItem)) === 1,
+  await countFor(gapCountItem),
+);
+await moveStatus(gapCountItem, "needs_human", "implementing", "retry");
+await moveStatus(gapCountItem, "implementing", "designing", "another note");
+check(
+  "design gap count: a second return and a rejection add up",
+  (await countFor(gapCountItem)) === 2,
+  await countFor(gapCountItem),
+);
+await moveStatus(
+  gapCountItem,
+  "designing",
+  "awaiting_design_approval",
+  "design approval requested",
+);
+await moveStatus(
+  gapCountItem,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+check(
+  "design gap count: the returns and the rejections are one total",
+  (await countFor(gapCountItem)) === 3,
+  await countFor(gapCountItem),
+);
+await moveStatus(
+  gapCountItem,
+  "designing",
+  "requirements_generating",
+  "design gap: requirements",
+);
+check(
+  "design gap count: the move into the requirements starts the range again",
+  (await countFor(gapCountItem)) === 0,
+  await countFor(gapCountItem),
 );
 
 // 作業項目を動かす更新は、最新の依頼が指定の依頼で、指定の状態のときだけ書く。

@@ -5,6 +5,7 @@
 
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import { normalizeRepoUrl } from "./config.ts";
+import type { StartDesignOutcome } from "./design_launch_support.ts";
 import type { NotifyEvent } from "./discord.ts";
 import { ImplementLeaseLostError } from "./implement_launch_support.ts";
 import {
@@ -22,6 +23,57 @@ import {
   CommitBlockedError,
   type GitleaksScan,
 } from "./workspace.ts";
+
+/** 設計の不足の報告を受けた遷移の注記の接頭辞。 */
+export const IMPLEMENT_DESIGN_GAP_NOTE_PREFIX = "";
+
+/** 上限で止めたときの遷移の注記の接頭辞。 */
+export const IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX = "";
+
+/** 上限に達したときの理由。 */
+export const DESIGN_GAP_EXHAUSTED_REASON = "";
+
+/** 設計工程が無効なときの理由。 */
+export const DESIGN_GAP_DISABLED_REASON = "";
+
+/** 設計へ戻した遷移の注記を返す。 */
+export function implementDesignGapNote(_report: string): string {
+  return "";
+}
+
+/** 上限で止めた遷移の注記を返す。 */
+export function implementDesignGapExhaustedNote(_report: string): string {
+  return "";
+}
+
+/** 設計の不足の報告を受けたときの行き先。 */
+export type DesignGapAction = "reroute" | "exhausted" | "disabled";
+
+/** 設計の不足の報告を受けたときの行き先を決める。 */
+export function decideDesignGapAction(_input: {
+  readonly designEnabled: boolean;
+  readonly appliedRejections: number;
+  readonly maxDesignAttempts: number;
+}): DesignGapAction {
+  return "reroute";
+}
+
+export type RerouteToDesignDeps = {
+  readonly casToDesigning: (note: string) => Promise<boolean>;
+  readonly startDesign: (feedback: string) => Promise<StartDesignOutcome>;
+};
+
+export type RerouteToDesignResult =
+  | { readonly kind: "not_moved" }
+  | { readonly kind: "started"; readonly outcome: StartDesignOutcome };
+
+/** 実装から設計へ戻す。 */
+export async function rerouteImplementationToDesign(
+  _deps: RerouteToDesignDeps,
+  _args: { readonly gapReport: string },
+): Promise<RerouteToDesignResult> {
+  return { kind: "not_moved" };
+}
 
 /** finishが扱う結果。prepareでの停止か、検証ループの終了のどちらか。 */
 export type ImplementFinishOutcome =

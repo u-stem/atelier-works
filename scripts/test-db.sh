@@ -73,6 +73,7 @@ DESIGN_STAGE_ITEMS_MIGRATION="20261026120000_design_stage_work_items.up.sql"
 DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
 DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
 DOC_HASH_MIGRATION="20261026150000_requirement_drafts_doc_hash.up.sql"
+IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION="20261028100000_implement_rounds_design_gap.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -839,6 +840,72 @@ SQL
   log "requirement_drafts_doc_hash round-trips and leaves existing drafts without a baseline"
 }
 
+# 実装ラウンドの結果に`design_gap`を足すmigrationを、既存の行ごと戻して当て直す。
+# 戻す前に`design_gap`の行があると、旧い一覧の制約を足す文が失敗し、全体が戻ることを確かめる。
+# 行を消せば戻せて、旧い一覧は`design_gap`を拒み、当て直せば受け入れる。全downを当てる検査の前に呼ぶ。
+verify_implement_rounds_design_gap_rollback() {
+  local up="${MIGRATIONS_DIR}/${IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  gap_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  gap_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+  gap_outcomes() {
+    gap_scalar "SELECT string_agg(r.outcome, ',' ORDER BY r.round) FROM factory.implement_rounds r JOIN factory.work_items w ON w.id = r.work_item_id WHERE w.owner = 'gapprobe'"
+  }
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the implement rounds"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
+  (1, 'issue', 'issue', 'gapprobe', 'r', 1, 'https://github.com/gapprobe/r/issues/1', 't', 'implementing');
+INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, gap_report)
+  SELECT id, 1, 1, 'implement', 'requirements_gap', 'r' FROM factory.work_items WHERE owner = 'gapprobe';
+INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, gap_report)
+  SELECT id, 1, 2, 'implement', 'design_gap', 'd' FROM factory.work_items WHERE owner = 'gapprobe';
+SQL
+  [ "$(gap_outcomes)" = "requirements_gap,design_gap" ] || die "unexpected rounds before the rollback: $(gap_outcomes)"
+
+  log "rolling back implement_rounds_design_gap while a design_gap round remains"
+  local refused
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${down}" 2>&1)"; then
+    die "implement_rounds_design_gap was rolled back while a design_gap round remained"
+  fi
+  case "${refused}" in
+    *implement_rounds_outcome_check*) ;;
+    *) die "implement_rounds_design_gap was refused, but not by implement_rounds_outcome_check: ${refused}" ;;
+  esac
+  [ "$(gap_outcomes)" = "requirements_gap,design_gap" ] || die "the refused rollback changed the rounds: $(gap_outcomes)"
+  gap_rejected "INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) SELECT id, 1, 3, 'implement', 'bogus' FROM factory.work_items WHERE owner = 'gapprobe'" implement_rounds_outcome_check
+
+  printf "DELETE FROM factory.implement_rounds WHERE outcome = 'design_gap';\n" | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "could not delete the design_gap round"
+  log "rolling back implement_rounds_design_gap"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back implement_rounds_design_gap"
+  [ "$(gap_outcomes)" = "requirements_gap" ] || die "unexpected rounds after the rollback: $(gap_outcomes)"
+  gap_rejected "INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) SELECT id, 1, 3, 'implement', 'design_gap' FROM factory.work_items WHERE owner = 'gapprobe'" implement_rounds_outcome_check
+
+  log "re-applying implement_rounds_design_gap"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply implement_rounds_design_gap"
+  printf "INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome, gap_report) SELECT id, 1, 3, 'implement', 'design_gap', 'd' FROM factory.work_items WHERE owner = 'gapprobe';\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a design_gap round was rejected after re-applying"
+  gap_rejected "INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) SELECT id, 1, 4, 'implement', 'bogus' FROM factory.work_items WHERE owner = 'gapprobe'" implement_rounds_outcome_check
+  printf "DELETE FROM factory.work_items WHERE owner = 'gapprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "implement_rounds_design_gap refuses to roll back over a design_gap round, and round-trips"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -974,6 +1041,7 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
 verify_design_stage_rollback
 verify_design_drafts_rollback
 verify_doc_hash_rollback
+verify_implement_rounds_design_gap_rollback
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
