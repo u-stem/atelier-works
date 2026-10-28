@@ -14,6 +14,8 @@ import {
   HUMAN_ENTRY_SCRIPTS,
   HUMAN_OPERATIONS,
   LAUNCH_EDGES,
+  REWORK_LAUNCH_EDGES,
+  UNWIRED_LAUNCH_EDGES,
 } from "../../scripts/launch-graph.ts";
 
 const FACTORY_DIR = join(import.meta.dir, "../../f/factory");
@@ -261,6 +263,29 @@ describe("describeOrigin", () => {
       });
     },
   );
+
+  test("lists the design flow among the flows that pr_fix_finish starts", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "steps/pr_fix_finish",
+      to: "design",
+      kind: "script",
+    });
+  });
+
+  test("lists the return of pr_fix_finish to the design flow as an edge that is not wired yet", () => {
+    expect(UNWIRED_LAUNCH_EDGES).toContainEqual({
+      from: "steps/pr_fix_finish",
+      to: "design",
+      kind: "script",
+    });
+  });
+
+  test("does not list the return of pr_fix_finish to the design flow as a rework edge", () => {
+    expect(REWORK_LAUNCH_EDGES).not.toContainEqual({
+      from: "steps/pr_fix_finish",
+      to: "design",
+    });
+  });
 
   test("names the approval and rejection of the Console as the entry of design_apply", () => {
     expect(HUMAN_ENTRY_SCRIPTS["steps/design_apply"]).toBe(

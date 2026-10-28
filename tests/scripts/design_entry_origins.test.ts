@@ -1,7 +1,7 @@
 // 設計フローを起動する元を、このテストの中で完結して固定する。
 // 設計フローを起動できるのは、再実行(`retry_work_item`)、要件定義の承認の反映(`steps/requirements_apply`)、
-// 設計の承認の反映(`steps/design_apply`)、実装の完了(`steps/implement_finish`)の4つだけである。
-// 実装の完了は、設計書が渡された実行が設計の不足を返し、設計工程が有効で、上限に達していないときだけ起動する。
+// 設計の承認の反映(`steps/design_apply`)、実装の完了(`steps/implement_finish`)、PRの修正の完了(`steps/pr_fix_finish`)の5つだけである。
+// 実装の完了とPRの修正の完了は、設計書が渡された実行が設計の不足を返し、設計工程が有効で、上限に達していないときだけ起動する。
 // 新しい起動元が足されると、ここが落ちる。
 // このテストは保護パスに置く。実装フローの自動修正やPRの修正が許可の表を広げて、
 // 黙って通るようになるのを防ぐためである。
@@ -41,7 +41,7 @@ type Counts = Readonly<Record<string, number>>;
 
 /**
  * 設計フローを参照するファイルと、参照ごとの出現の数。キーは`f/factory`からの相対パス。
- * 起動元は`retry_work_item.ts`、`steps/requirements_apply.ts`、`steps/design_apply.ts`、`steps/implement_finish.ts`の4つ。
+ * 起動元は`retry_work_item.ts`、`steps/requirements_apply.ts`、`steps/design_apply.ts`、`steps/implement_finish.ts`、`steps/pr_fix_finish.ts`の5つ。
  * 起動しない参照は、失敗ハンドラ(`on_error_flow.ts`)、ジョブの取消(`console_job_cancel.ts`)、
  * リースの定義(`lib/pipeline_lease.ts`)、Consoleの既知のpathの生成物(`lib/console_known_paths.ts`)、
  * 設計フロー自身の定義(`design__flow/flow.yaml`)である。
@@ -56,6 +56,7 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
   },
   "steps/design_apply.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
   "steps/implement_finish.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
+  "steps/pr_fix_finish.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
   "on_error_flow.ts": { DESIGN_FLOW_PATH: 3 },
   "console_job_cancel.ts": { designFlowPathLiteral: 1 },
   "lib/pipeline_lease.ts": { DESIGN_FLOW_PATH: 1, designFlowPathLiteral: 1 },
@@ -68,7 +69,7 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
  * 数が合わないときは、新しい遷移が足されたか、減ったかである。起動元の確認と同じ重さで見直す。
  */
 const ALLOWED_DESIGNING: Readonly<Record<string, number>> = {
-  "lib/db.ts": 10,
+  "lib/db.ts": 13,
   "lib/types.ts": 1,
   "retry_work_item.ts": 2,
   "steps/design_apply.ts": 1,
@@ -76,6 +77,7 @@ const ALLOWED_DESIGNING: Readonly<Record<string, number>> = {
   "steps/design_prepare.ts": 3,
   "steps/design_request_approval.ts": 2,
   "steps/implement_finish.ts": 2,
+  "steps/pr_workflow_support.ts": 2,
   "steps/requirements_apply.ts": 2,
 };
 
@@ -397,16 +399,24 @@ describe("the condition at each origin", () => {
 
 /**
  * 設計の不足の判定に、設定の`design_enabled`をそのまま渡す呼び出しの形。
- * 値の直後が`,`でなければ当たらない。`|| true`のような後ろの式で値を変える書き換えを通さないためである。
+ * 値の直後が`,`か`}`でなければ当たらない。`|| true`のような後ろの式で値を変える書き換えを通さないためである。
  */
 const DECIDE_DESIGN_GAP_CONDITION =
-  /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\s*,/;
+  /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\s*[,}]/;
 
-describe("the pattern of the condition at the return from the implement flow", () => {
-  test("matches the setting passed as it is", () => {
+describe("the pattern of the condition that decides the return to the design", () => {
+  test("matches the setting passed as it is, before a comma", () => {
     expect(
       DECIDE_DESIGN_GAP_CONDITION.test(
         "decideDesignGapAction({\n designEnabled: config.design_enabled,\n appliedRejections: 0 })",
+      ),
+    ).toBe(true);
+  });
+
+  test("matches the setting passed as it is, before a closing brace", () => {
+    expect(
+      DECIDE_DESIGN_GAP_CONDITION.test(
+        "decideDesignGapAction({ designEnabled: config.design_enabled })",
       ),
     ).toBe(true);
   });
@@ -417,6 +427,17 @@ describe("the pattern of the condition at the return from the implement flow", (
       expect(
         DECIDE_DESIGN_GAP_CONDITION.test(
           `decideDesignGapAction({ designEnabled: config.design_enabled ${tail}, appliedRejections: 0 })`,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  test.each(["|| true", "?? true", "|| flag", "&& flag", ".valueOf()"])(
+    "does not match the setting followed by %p before a closing brace",
+    (tail) => {
+      expect(
+        DECIDE_DESIGN_GAP_CONDITION.test(
+          `decideDesignGapAction({ designEnabled: config.design_enabled ${tail} })`,
         ),
       ).toBe(false);
     },
@@ -464,8 +485,68 @@ describe("the condition at the return from the implement flow", () => {
   });
 });
 
+describe("the condition at the return from the PR fix", () => {
+  const code = codeOf("steps/pr_fix_finish.ts");
+  const main = bodyOf(code, "main");
+
+  test("decides the action of a design gap from the design_enabled setting", () => {
+    expect(main).toMatch(DECIDE_DESIGN_GAP_CONDITION);
+  });
+
+  test("decides the action of a design gap once in the file", () => {
+    expect(countOf(code, /\bdecideDesignGapAction\(/g)).toBe(1);
+  });
+
+  test("decides the action of a design gap in main", () => {
+    expect(countOf(main, /\bdecideDesignGapAction\(/g)).toBe(1);
+  });
+
+  test("builds the start of the design flow once in the file", () => {
+    expect(countOf(code, /\bbuildStartDesign\(/g)).toBe(1);
+  });
+
+  test("builds the start of the design flow in main", () => {
+    expect(countOf(main, /\bbuildStartDesign\(/g)).toBe(1);
+  });
+
+  test("stops at needs_human when the design is disabled", () => {
+    expect(main).toMatch(
+      /if\s*\(designAction === "disabled"\)\s*\{[^}]*\bfinalizeTerminal\("needs_human",[^}]*\breturn\s*\{[^}]*final_status:\s*"needs_human"/,
+    );
+  });
+
+  test("stops at needs_human when the limit is reached", () => {
+    expect(main).toMatch(
+      /if\s*\(designAction === "exhausted"\)\s*\{[^}]*\bfinalizeTerminal\("needs_human",[^}]*\breturn\s*\{[^}]*final_status:\s*"needs_human"/,
+    );
+  });
+
+  test("builds the start of the design flow only after the stop for a disabled design", () => {
+    expect(main.indexOf('designAction === "disabled"')).toBeLessThan(
+      main.indexOf("buildStartDesign("),
+    );
+  });
+
+  test("builds the start of the design flow only after the stop at the limit", () => {
+    expect(main.indexOf('designAction === "exhausted"')).toBeLessThan(
+      main.indexOf("buildStartDesign("),
+    );
+  });
+
+  test("moves to designing before it builds the start of the design flow", () => {
+    const move = main.indexOf("returnToDesigningFromPrFixIfLeaseHolder(");
+    expect(move > -1 && move < main.indexOf("buildStartDesign(")).toBe(true);
+  });
+
+  test("moves to designing once", () => {
+    expect(countOf(main, /\breturnToDesigningFromPrFixIfLeaseHolder\(/g)).toBe(
+      1,
+    );
+  });
+});
+
 describe("the launch edges to the design flow", () => {
-  test("start from the four origins", () => {
+  test("start from the five origins", () => {
     const origins = launchOriginsTo(
       transpile(readFileSync(LAUNCH_GRAPH, "utf8")),
       "design",
@@ -474,6 +555,7 @@ describe("the launch edges to the design flow", () => {
       "retry_work_item",
       "steps/design_apply",
       "steps/implement_finish",
+      "steps/pr_fix_finish",
       "steps/requirements_apply",
     ]);
   });
