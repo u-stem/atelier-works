@@ -74,8 +74,12 @@ const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
 /** 要件定義の承認の反映の配線に、設定をそのまま渡す呼び出し。宣言は数えない。 */
 const BUILDER_CALL = /(?<!\bfunction\s+)\bbuildApprovedBranchDeps\(config,/g;
 
-/** 実装の入口が、設定の`design_enabled`をそのまま読んで渡す形。 */
-const DESIGN_ENABLED_HANDOFF = /\bdesignEnabled:\s*config\.design_enabled\b/g;
+/**
+ * 実装の入口が、設定の`design_enabled`をそのまま読んで渡す形。
+ * 値の直後が`,`か`}`でなければ数えない。`|| true`のような後ろの式で値を変える書き換えを、数の差で見つけるためである。
+ */
+const DESIGN_ENABLED_HANDOFF =
+  /\bdesignEnabled:\s*config\.design_enabled(?=\s*[,}])/g;
 
 /** 設定を渡す呼び出しの形と、ファイルごとの数。上書きした設定を渡す形にすると、数が減って見つかる。 */
 const WIRING_CALLS: ReadonlyArray<

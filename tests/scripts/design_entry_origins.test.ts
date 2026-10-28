@@ -395,9 +395,12 @@ describe("the condition at each origin", () => {
   });
 });
 
-/** 設計の不足の判定に、設定の`design_enabled`をそのまま渡す呼び出しの形。値の直後で区切られていなければ当たらない。 */
+/**
+ * 設計の不足の判定に、設定の`design_enabled`をそのまま渡す呼び出しの形。
+ * 値の直後が`,`でなければ当たらない。`|| true`のような後ろの式で値を変える書き換えを通さないためである。
+ */
 const DECIDE_DESIGN_GAP_CONDITION =
-  /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\b/;
+  /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\s*,/;
 
 describe("the pattern of the condition at the return from the implement flow", () => {
   test("matches the setting passed as it is", () => {
