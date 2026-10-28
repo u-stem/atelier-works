@@ -10700,6 +10700,40 @@ check(
   await entryOf(exhaustedItem),
 );
 
+// PRの修正から設計へ戻した遷移(`pr_open`から`designing`)も、設計へ入る遷移として読む。
+const prFixEntryItem = await issueWorkItem(
+  9603,
+  1,
+  "pr_open",
+  "qdb design entry from pr_fix",
+);
+await moveStatus(
+  prFixEntryItem,
+  "pr_open",
+  "designing",
+  `${PR_FIX_GAP_TEST_PREFIX}the design lacks FR-002`,
+);
+const prFixEntry = await entryOf(prFixEntryItem);
+check(
+  "design entry: the return from the PR fix is read from pr_open with no design request after it",
+  prFixEntry?.from_status === "pr_open" &&
+    prFixEntry.to_status === "designing" &&
+    prFixEntry.note === `${PR_FIX_GAP_TEST_PREFIX}the design lacks FR-002` &&
+    !prFixEntry.designRequestedAfter,
+  prFixEntry,
+);
+await moveStatus(
+  prFixEntryItem,
+  "designing",
+  "needs_human",
+  "design flow could not be started",
+);
+check(
+  "design entry: the failed start of the design flow leaves the return from the PR fix as the latest entry",
+  (await entryOf(prFixEntryItem))?.from_status === "pr_open",
+  await entryOf(prFixEntryItem),
+);
+
 // 作業項目を動かす更新は、最新の依頼が指定の依頼で、指定の状態のときだけ書く。
 const guardItem = await issueWorkItem(
   9507,
