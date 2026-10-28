@@ -109,6 +109,11 @@
           "kind": "flow",
           "flow": "pipeline",
           "via": "approve"
+        },
+        {
+          "kind": "flow",
+          "flow": "pr_fix",
+          "via": "launch"
         }
       ],
       "exits": [
