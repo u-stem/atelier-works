@@ -618,7 +618,7 @@ gitは呼ばない。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`、`auto_retry_reasons`
-  - `f/factory/lib/`の`ci_`、`pr_ci_`、`pr_conflict_`、`conflict_fix_`、`main_ci_`、`pr_fix_launch`
+  - `f/factory/lib/`の`ci_`、`pr_ci_`、`pr_conflict_`、`conflict_fix_`、`main_ci_`、`pr_fix_launch`、`pr_fix_design`
   - `f/factory/lib/`の`metadata_`
   - `f/factory/lib/`の`approval_gate`、`doc_tree_hash`、`model_text`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
@@ -636,6 +636,10 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 受け入れたのは、ほかのフローが日常的に直す共有モジュールで、拒否すると正当な修正を止めるものである。
 `db`、`discord`、`poll_support`、`implement_*`、`factory_clone`、`self_update_support`がこれにあたる。
 `job_ids`、`prose_check`、`console_support`もこれにあたる。
+`steps/requirements_apply`、`design_apply_support`、`design_template`もこれにあたる。
+`pr_fix_finish`が、設計へ戻す起動の手順と、遷移の注記の定数を読むためである。
+これらは設計工程の修正が日常的に触れる。反映はマージ後で、レビューが受け皿になる。
+拒否すると、そのファイルに触れるPRの競合回が止まる。
 
 テストのパスは、`tests`などのディレクトリの配下か、`*.test.ts`と`*.spec.ts`の形のものである。
 テストは、基点から持っていた行を残し、意味のある追加行を伴わずに行を減らさない変更だけを許す。

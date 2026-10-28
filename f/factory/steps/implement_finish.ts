@@ -22,7 +22,10 @@ import {
 } from "../lib/db.ts";
 import { DESIGN_REGENERATING_NOTE } from "../lib/design_apply_support.ts";
 import { DESIGN_START_FAILED_REASON } from "../lib/design_launch_support.ts";
-import { DESIGN_REJECTED_EXHAUSTED_PREFIX } from "../lib/design_template.ts";
+import {
+  DESIGN_REJECTED_EXHAUSTED_PREFIX,
+  PR_FIX_DESIGN_GAP_NOTE_PREFIX,
+} from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import {
   addLabels,
@@ -716,6 +719,7 @@ async function finishImplement(
         work_item_id,
         DESIGN_REGENERATING_NOTE,
         DESIGN_REJECTED_EXHAUSTED_PREFIX,
+        PR_FIX_DESIGN_GAP_NOTE_PREFIX,
       ),
       maxDesignAttempts: config.max_design_attempts,
     });

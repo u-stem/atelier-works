@@ -743,6 +743,24 @@ describe("describeFixRound", () => {
     ).toBe("muted");
   });
 
+  test("labels the outcome of a design gap", () => {
+    expect(
+      describeFixRound({ ...fixRound, outcome: "design_gap" }).outcomeLabel,
+    ).toBe("設計の不足");
+  });
+
+  test("shows the outcome of a design gap as a warning", () => {
+    expect(
+      describeFixRound({ ...fixRound, outcome: "design_gap" }).outcomeVariant,
+    ).toBe("warning");
+  });
+
+  test("labels the outcome of a design gap as the implement round does", () => {
+    expect(
+      describeFixRound({ ...fixRound, outcome: "design_gap" }).outcomeLabel,
+    ).toBe(describeRound(round({ outcome: "design_gap" })).outcomeLabel);
+  });
+
   test("counts the reviews, replies and commits", () => {
     expect(describeFixRound(fixRound).countsLabel).toBe(
       "対象のレビュー 1件・返信 3件・コミット 0件",

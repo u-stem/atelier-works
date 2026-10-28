@@ -64,6 +64,7 @@ import {
   updateStatusToRequirementsIfCurrent,
 } from "./lib/db.ts";
 import { designFlowInput } from "./lib/design_launch_support.ts";
+import { PR_FIX_DESIGN_GAP_NOTE_PREFIX } from "./lib/design_template.ts";
 import { isRequirementsUntrustedReason } from "./lib/doc_tree_hash.ts";
 import {
   fetchIssueContent,
@@ -200,10 +201,13 @@ export function feedbackFromGapNote(note: string | null): string | null {
 }
 
 /**
- * 実装が設計の不足を返して設計へ入った(または、戻す上限で止まった)遷移の記録から、設計に渡す文を作る。
+ * 設計の不足を返して設計へ入った(または、戻す上限で止まった)遷移の記録から、設計に渡す文を作る。
  * 渡さないときは`null`を返す。渡すのは、次のすべてを満たすときだけである。
- * - 遷移元が実装で、注記の接頭辞が遷移先と合う(設計への戻しは`IMPLEMENT_DESIGN_GAP_NOTE_PREFIX`、
- *   `needs_human`への停止は`IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX`)。
+ * - 遷移元と注記の接頭辞が、次のどれかに合う。
+ *   - 実装からの戻し: 遷移元が実装で、遷移先が設計(`IMPLEMENT_DESIGN_GAP_NOTE_PREFIX`)。
+ *   - 実装からの上限での停止: 遷移元が実装で、遷移先が`needs_human`(`IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX`)。
+ *   - PRの修正からの戻し: 遷移元が`pr_open`で、遷移先が設計(`PR_FIX_DESIGN_GAP_NOTE_PREFIX`)。
+ *     設計の起動に失敗して親が`needs_human`になっても、この注記が報告を運ぶ。
  * - 遷移より後に、設計の承認依頼が作られていない。作られていれば、設計は報告を読んで作り直し済みである。
  * - 報告が空でない。
  */
@@ -211,13 +215,23 @@ export function feedbackFromDesignEntry(
   event: DesignEntryEvent | null,
 ): string | null {
   if (event === null || event.designRequestedAfter) return null;
-  if (event.from_status !== "implementing") return null;
   if (event.to_status === "designing") {
-    return automatedFeedbackFromNote(event.note, [
-      IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
-    ]);
+    if (event.from_status === "implementing") {
+      return automatedFeedbackFromNote(event.note, [
+        IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+      ]);
+    }
+    if (event.from_status === "pr_open") {
+      return automatedFeedbackFromNote(event.note, [
+        PR_FIX_DESIGN_GAP_NOTE_PREFIX,
+      ]);
+    }
+    return null;
   }
-  if (event.to_status === "needs_human") {
+  if (
+    event.from_status === "implementing" &&
+    event.to_status === "needs_human"
+  ) {
     return automatedFeedbackFromNote(event.note, [
       IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
     ]);

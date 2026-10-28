@@ -362,4 +362,162 @@ describe("isCiFixClaudeOutput", () => {
   test("rejects an output that is not a fix output", () => {
     expect(isCiFixClaudeOutput({ outcome: "done", replies: [] })).toBe(false);
   });
+
+  test("rejects a design gap", () => {
+    expect(
+      isCiFixClaudeOutput({
+        ...CI_OUTPUT,
+        outcome: "design_gap",
+        blocked_reason: "gap",
+      }),
+    ).toBe(false);
+  });
+});
+
+const DESIGN_GAP_OUTPUT = {
+  outcome: "design_gap",
+  summary: "設計書のままでは受入条件2を満たせません。",
+  commit_subject: "",
+  commit_body: null,
+  replies: [],
+  blocked_reason: "設計書の関数Aは、受入条件2の入力を扱えません。",
+};
+
+describe("isFixClaudeOutput with a design_gap outcome", () => {
+  test("accepts it when a design was handed over", () => {
+    expect(isFixClaudeOutput(DESIGN_GAP_OUTPUT, true)).toBe(true);
+  });
+
+  test("rejects it when no design was handed over", () => {
+    expect(isFixClaudeOutput(DESIGN_GAP_OUTPUT, false)).toBe(false);
+  });
+
+  test("rejects it when the design flag is left out", () => {
+    expect(isFixClaudeOutput(DESIGN_GAP_OUTPUT)).toBe(false);
+  });
+
+  test("rejects it without a report", () => {
+    expect(
+      isFixClaudeOutput({ ...DESIGN_GAP_OUTPUT, blocked_reason: null }, true),
+    ).toBe(false);
+  });
+
+  test("rejects it with an empty report", () => {
+    expect(
+      isFixClaudeOutput({ ...DESIGN_GAP_OUTPUT, blocked_reason: "" }, true),
+    ).toBe(false);
+  });
+
+  test("rejects it with a report of blanks only", () => {
+    expect(
+      isFixClaudeOutput({ ...DESIGN_GAP_OUTPUT, blocked_reason: " \n " }, true),
+    ).toBe(false);
+  });
+
+  test("rejects it with a reply, so that a proposal is not lost silently", () => {
+    expect(
+      isFixClaudeOutput(
+        {
+          ...DESIGN_GAP_OUTPUT,
+          replies: [{ review_comment_id: 1, body: "x", decision: "skipped" }],
+        },
+        true,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("isFixClaudeOutput with a design handed over", () => {
+  test("still accepts a done output", () => {
+    expect(isFixClaudeOutput(VALID_OUTPUT, true)).toBe(true);
+  });
+
+  test("still accepts a blocked output", () => {
+    expect(
+      isFixClaudeOutput(
+        { ...VALID_OUTPUT, outcome: "blocked", blocked_reason: "unsafe" },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  test("still accepts a requirements gap", () => {
+    expect(
+      isFixClaudeOutput(
+        { ...VALID_OUTPUT, outcome: "requirements_gap", blocked_reason: "gap" },
+        true,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("isFixClaudeOutput without a design", () => {
+  test.each([
+    ["done", VALID_OUTPUT],
+    ["blocked", { ...VALID_OUTPUT, outcome: "blocked", blocked_reason: "x" }],
+    [
+      "requirements_gap",
+      { ...VALID_OUTPUT, outcome: "requirements_gap", blocked_reason: "x" },
+    ],
+  ])("accepts a %s output as before", (_name, output) => {
+    expect(isFixClaudeOutput(output, false)).toBe(true);
+  });
+});
+
+/** コメントを除いたソース。コメントに書いた文字列を、結線として数えないため。 */
+async function stepSource(name: string): Promise<string> {
+  const text = await Bun.file(
+    new URL(`../../f/factory/steps/${name}`, import.meta.url),
+  ).text();
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\s+/g, " ");
+}
+
+// `main`はWindmillの変数とDBを直接使うので、結線はソースの文面で固定する。
+// 整形や変数名の変更で落ちたときは、結線が変わっていないかを確かめてから文面を直す。
+describe("the wiring of the design in pr_fix_apply", () => {
+  test("loads the design with the setting of the design stage as it is", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toMatch(
+      /loadParentDesignForFix\(.*?\{ designEnabled: config\.design_enabled,/,
+    );
+  });
+
+  test("loads the design only for a review round", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toMatch(
+      /reviewRound: ci_check_id === null && conflict_check_id === null,/,
+    );
+  });
+
+  test("loads the design of the parent of the work item", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toMatch(
+      /parentWorkItemId: parent_work_item_id,/,
+    );
+  });
+
+  test("hands the design to fixPrompt next to the requirements", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toMatch(
+      /requirements, design, checkFailures: \[\],/,
+    );
+  });
+
+  test("asks for the schema with design_gap only when a design was handed over", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toMatch(
+      /jsonSchema: design === null \? FIX_SCHEMA : FIX_SCHEMA_WITH_DESIGN_GAP,/,
+    );
+  });
+
+  test("checks the output with the presence of the design", async () => {
+    expect(await stepSource("pr_fix_apply.ts")).toMatch(
+      /isFixClaudeOutput\(value, design !== null\)/,
+    );
+  });
+
+  test("loads the design once", async () => {
+    expect(
+      (await stepSource("pr_fix_apply.ts")).split("loadParentDesignForFix(")
+        .length - 1,
+    ).toBe(1);
+  });
 });

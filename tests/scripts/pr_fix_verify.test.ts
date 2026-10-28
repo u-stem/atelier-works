@@ -1890,3 +1890,61 @@ describe("anyPackageJsonScriptsChanged", () => {
     expect(read).toEqual(["/wt/pkg/package.json"]);
   });
 });
+
+/** コメントを除き、空白を1つにまとめたソース。コメントに書いた文字列を、結線として数えないため。 */
+async function stepSource(name: string): Promise<string> {
+  const text = await Bun.file(
+    new URL(`../../f/factory/steps/${name}`, import.meta.url),
+  ).text();
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\s+/g, " ");
+}
+
+// `main`はWindmillの変数とDBを直接使うので、結線はソースの文面で固定する。
+// 整形や変数名の変更で落ちたときは、結線が変わっていないかを確かめてから文面を直す。
+describe("the wiring of the design in the retry of pr_fix_verify", () => {
+  test("loads the design with the setting of the design stage as it is", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /loadParentDesignForFix\(.*?\{ designEnabled: config\.design_enabled,/,
+    );
+  });
+
+  test("loads the design only for a review round", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /reviewRound: ci_check_id === null && conflict_check_id === null,/,
+    );
+  });
+
+  test("loads the design of the parent of the work item", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /parentWorkItemId: parent_work_item_id,/,
+    );
+  });
+
+  test("hands the design to fixPrompt next to the requirements", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /requirements, design, /,
+    );
+  });
+
+  test("asks for the schema with design_gap only when a design was handed over", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /jsonSchema: design === null \? FIX_SCHEMA : FIX_SCHEMA_WITH_DESIGN_GAP,/,
+    );
+  });
+
+  test("checks the output with the presence of the design", async () => {
+    expect(await stepSource("pr_fix_verify.ts")).toMatch(
+      /isFixClaudeOutput\(value, design !== null\)/,
+    );
+  });
+
+  test("loads the design once", async () => {
+    expect(
+      (await stepSource("pr_fix_verify.ts")).split("loadParentDesignForFix(")
+        .length - 1,
+    ).toBe(1);
+  });
+});

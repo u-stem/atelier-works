@@ -24,6 +24,7 @@ import {
   fetchPrFixHeadBranchState,
   nextActionFor,
   PR_COMMAND_STOP_OVERHEAD_SEC,
+  PR_FIX_DESIGN_STAGE_PARENT_REASON,
   prFixTimeoutMisfit,
   shouldReadPrFixHeadState,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -476,6 +477,33 @@ describe("evaluateParentImplementingGuard", () => {
       ok: false,
       reason: "parent issue is being re-implemented",
     });
+  });
+
+  // 設計の最中に同じブランチへpushすると、設計の承認の後に実装が引き継ぐPRと食い違う。
+  test.each(["designing", "awaiting_design_approval"] as const)(
+    "blocks while the parent issue is %s",
+    (status) => {
+      expect(evaluateParentImplementingGuard(status)).toEqual({
+        ok: false,
+        reason: "parent issue is in the design stage",
+      });
+    },
+  );
+
+  test("uses the fixed reason of the design stage", () => {
+    expect(PR_FIX_DESIGN_STAGE_PARENT_REASON).toBe(
+      "parent issue is in the design stage",
+    );
+  });
+
+  test.each([
+    "approved",
+    "needs_human",
+    "failed",
+    "requirements_generating",
+    "awaiting_approval",
+  ] as const)("keeps passing when the parent issue is %s", (status) => {
+    expect(evaluateParentImplementingGuard(status)).toEqual({ ok: true });
   });
 });
 

@@ -14,6 +14,10 @@ import { join } from "node:path";
 import { isReadyForImplement } from "../../f/factory/lib/approval_gate.ts";
 import { loadConfig } from "../../f/factory/lib/config.ts";
 import { decideDesignGapAction } from "../../f/factory/lib/implement_finish_support.ts";
+import {
+  type FixDesignDeps,
+  loadParentDesignForFix,
+} from "../../f/factory/lib/pr_fix_design.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 import { computeRestartPlan } from "../../f/factory/retry_work_item.ts";
 import { applyDesignApproved } from "../../f/factory/steps/design_apply.ts";
@@ -53,7 +57,8 @@ const DESIGN_ENABLED_TOKEN = /(?<![\w$])design_enabled(?![\w$])/g;
  * 型の宣言(`lib/types.ts`の`design_enabled: boolean`、`Pick`の中の名前)は、変換で消える。
  * `lib/config.ts`の6つは、既定値、通知の本文の中の2つ、リソースの読み取りの名前と既定値の参照、門で絞った導出である。
  * 残りは、設定の値を読む呼び出しの側の1つずつである。`steps/design_apply.ts`は、却下の再生成の分岐で入口が閉じているかを読む。
- * `steps/implement_finish.ts`は、設計の不足を返した実装を設計へ戻すかの判定に渡す。
+ * `steps/implement_finish.ts`と`steps/pr_fix_finish.ts`は、設計の不足を返した実装とPRの修正を設計へ戻すかの判定に渡す。
+ * `steps/pr_fix_apply.ts`と`steps/pr_fix_verify.ts`は、PRの修正のレビュー回に設計書を渡すかの判定に渡す。
  * `lib/implement_finish_support.ts`と`steps/pr_workflow_support.ts`の1つずつは、設計工程が無効のときの理由の固定文に入る語である。
  * 呼び出しの側で`{ ...config, design_enabled: ... }`と上書きする迂回や、別の読み方を足す変更は、ここで数が増えて見つかる。
  */
@@ -67,6 +72,9 @@ const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
   "steps/design_apply.ts": 1,
   "steps/implement_finish.ts": 1,
   "steps/implement_prepare.ts": 1,
+  "steps/pr_fix_apply.ts": 1,
+  "steps/pr_fix_finish.ts": 1,
+  "steps/pr_fix_verify.ts": 1,
   "steps/pr_workflow_support.ts": 1,
   "steps/requirements_apply.ts": 1,
 };
@@ -97,6 +105,9 @@ const WIRING_CALLS: ReadonlyArray<
       "retry_work_item.ts": 1,
       "steps/implement_finish.ts": 1,
       "steps/implement_prepare.ts": 1,
+      "steps/pr_fix_apply.ts": 1,
+      "steps/pr_fix_finish.ts": 1,
+      "steps/pr_fix_verify.ts": 1,
     },
   ],
 ];
@@ -243,6 +254,50 @@ describe("the return from the implement flow to the design", () => {
       }),
     ).toBe("disabled");
   });
+});
+
+describe("the return from the PR fix to the design", () => {
+  const code = codeOf("steps/pr_fix_finish.ts");
+
+  test("decides with the function that the implement flow also uses", () => {
+    expect(code).toMatch(
+      /import\s*\{\s*decideDesignGapAction\s*\}\s*from\s*"\.\.\/lib\/implement_finish_support\.ts"/,
+    );
+  });
+
+  test("decides the action of a design gap once", () => {
+    expect(countOf(code, /\bdecideDesignGapAction\(/g)).toBe(1);
+  });
+
+  test.each(["local", "production", "prod", "factory-1", "staging"])(
+    "hands no design to the PR fix after loadConfig with instance_name %p and design_enabled: true",
+    async (instanceName) => {
+      const config = await loadConfig(async () => ({
+        ...RAW_CONFIG,
+        instance_name: instanceName,
+        design_enabled: true,
+      }));
+      const reads: number[] = [];
+      const deps: FixDesignDeps = {
+        getWorkItem: async (id) => {
+          reads.push(id);
+          return null;
+        },
+        hasNewerIssueCycle: async () => false,
+        latestRequirementsApproval: async () => null,
+        latestDesignApproval: async () => null,
+        getDesignDraft: async () => null,
+        warn: () => {},
+      };
+      const design = await loadParentDesignForFix(deps, {
+        designEnabled: config.design_enabled,
+        reviewRound: true,
+        parentWorkItemId: 7,
+        pr: { owner: "octo", repo: "widgets", headRef: "factory/issue-7" },
+      });
+      expect([design, reads]).toEqual([null, []]);
+    },
+  );
 });
 
 describe("the literal that opens the design stage", () => {

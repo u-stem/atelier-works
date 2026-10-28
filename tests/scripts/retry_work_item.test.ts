@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import type {
   DesignEntryEvent,
   SqlClient,
   StatusEventSummary,
 } from "../../f/factory/lib/db.ts";
+import { PR_FIX_DESIGN_GAP_NOTE_PREFIX } from "../../f/factory/lib/design_template.ts";
 import {
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -1254,6 +1256,100 @@ describe("feedbackFromDesignEntry", () => {
       feedbackFromDesignEntry({ ...RETURN, to_status: "needs_human" }),
     ).toBeNull();
   });
+
+  describe("a return from the PR fix", () => {
+    const PR_FIX_RETURN: DesignEntryEvent = {
+      from_status: "pr_open",
+      to_status: "designing",
+      note: `${PR_FIX_DESIGN_GAP_NOTE_PREFIX}the design lacks FR-002`,
+      designRequestedAfter: false,
+    };
+
+    test("wraps the report of a return from pr_open", () => {
+      expect(feedbackFromDesignEntry(PR_FIX_RETURN)).toBe(
+        automatedFeedback("the design lacks FR-002"),
+      );
+    });
+
+    test("masks a secret in the report", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          note: `${PR_FIX_DESIGN_GAP_NOTE_PREFIX}token ${GITHUB_TOKEN}`,
+        }),
+      ).toBe(automatedFeedback("token ***"));
+    });
+
+    test("returns null once a design request followed the entry", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          designRequestedAfter: true,
+        }),
+      ).toBeNull();
+    });
+
+    test("returns null for a report of blanks", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          note: `${PR_FIX_DESIGN_GAP_NOTE_PREFIX}   `,
+        }),
+      ).toBeNull();
+    });
+
+    test("returns null for a move from pr_open without the prefix", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          note: "retry_work_item: restarted from pr_open",
+        }),
+      ).toBeNull();
+    });
+
+    test("returns null for a move from pr_open with the prefix of the implement flow", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          note: `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}the design lacks FR-002`,
+        }),
+      ).toBeNull();
+    });
+
+    test("returns null for a move from the implementation with the prefix of the PR fix", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          from_status: "implementing",
+        }),
+      ).toBeNull();
+    });
+
+    test("returns null for a stop at needs_human from pr_open", () => {
+      expect(
+        feedbackFromDesignEntry({
+          ...PR_FIX_RETURN,
+          to_status: "needs_human",
+        }),
+      ).toBeNull();
+    });
+  });
+});
+
+describe("the note that parks a PR fix after a design gap", () => {
+  test("is not a reason that restarts automatically", () => {
+    const note = "design_gap: rerouted to work item 7";
+    expect(
+      AUTO_RETRY_REASON_PREFIXES.some((prefix) => note.startsWith(prefix)),
+    ).toBe(false);
+  });
+
+  test("of the parent is not a reason that restarts automatically", () => {
+    const note = `${PR_FIX_DESIGN_GAP_NOTE_PREFIX}the design lacks FR-002`;
+    expect(
+      AUTO_RETRY_REASON_PREFIXES.some((prefix) => note.startsWith(prefix)),
+    ).toBe(false);
+  });
 });
 
 describe("feedbackFromRejection", () => {
@@ -2296,7 +2392,7 @@ describe("buildRestartContext", () => {
     });
   });
 
-  describe("a design gap that the implement flow returned", () => {
+  describe("a design gap that sent the work item back to the design", () => {
     const REPORT = "the design lacks FR-002";
     const RETURN: DesignEntryEvent = {
       from_status: "implementing",
@@ -2430,6 +2526,46 @@ describe("buildRestartContext", () => {
         designEntry: { ...RETURN, designRequestedAfter: true },
       });
       expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    describe("reported by the PR fix", () => {
+      const PR_FIX_RETURN: DesignEntryEvent = {
+        from_status: "pr_open",
+        to_status: "designing",
+        note: `${PR_FIX_DESIGN_GAP_NOTE_PREFIX}${REPORT}`,
+        designRequestedAfter: false,
+      };
+
+      test("hands the report to the design", async () => {
+        const h = harness({ designEntry: PR_FIX_RETURN });
+        expect((await build(h)).designFeedback).toBe(automatedFeedback(REPORT));
+      });
+
+      test("carries the gap on", async () => {
+        const h = harness({ designEntry: PR_FIX_RETURN });
+        expect((await build(h)).carriesGap).toBe(true);
+      });
+
+      test("does not approve a design that the PR fix reported as lacking", async () => {
+        const h = harness({
+          designApproval: DESIGN_APPROVED,
+          designEntry: PR_FIX_RETURN,
+        });
+        expect((await build(h)).designApproved).toBe(false);
+      });
+
+      test("restarts at the design flow with the report as the feedback", async () => {
+        const h = harness({ designEntry: PR_FIX_RETURN });
+        const plan = computeRestartPlan(ITEM, await build(h));
+        expect(plan.args.feedback).toBe(automatedFeedback(REPORT));
+      });
+
+      test("hands no report once a design request followed the entry", async () => {
+        const h = harness({
+          designEntry: { ...PR_FIX_RETURN, designRequestedAfter: true },
+        });
+        expect((await build(h)).designFeedback).toBeNull();
+      });
     });
 
     test("hands no report for a return outside the current requirements attempt", async () => {

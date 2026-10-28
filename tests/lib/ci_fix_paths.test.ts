@@ -829,6 +829,12 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "要件定義と設計のフローのパスと、リースの判定の共有モジュール。要件定義と設計の修正が日常的に触れる",
   "f/factory/lib/owner_id_notice.ts":
     "owner_idの照合のnoticeの種類と本文を組み立てるだけで、通信と判定を持たない。poll_support.tsが再エクスポートし、PRのポーリングでも使う。CI回が変えても影響はnoticeの文面と解決の照合に限られ、レビューが受け皿になる",
+  "f/factory/steps/requirements_apply.ts":
+    "要件定義の承認の反映と、設計フローの起動の手順(buildStartDesign)の共有モジュール。pr_fix_finishが設計へ戻すときに読む。要件定義と設計の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
+  "f/factory/lib/design_apply_support.ts":
+    "設計の承認の反映の純関数と固定の注記(設計の上限を数える注記)の共有モジュール。pr_fix_finishが読む。設計工程の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
+  "f/factory/lib/design_template.ts":
+    "設計書テンプレートの固定値と、設計へ戻す遷移の注記の定数の共有モジュール。pr_fix_finishが読む。設計工程の修正が日常的に触れ、反映はマージ後で、レビューが受け皿になる。拒否すると、このファイルに触れるPRの競合回が止まる",
 };
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -999,6 +1005,35 @@ describe("files of the implement gate", () => {
         (name) => !doc.includes(`\`${name}\``),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("files of the design handoff to the PR fix", () => {
+  test.each([
+    "f/factory/lib/pr_fix_design.ts",
+    "f/factory/lib/pr_fix_design.script.yaml",
+    "f/factory/lib/pr_fix_design.script.lock",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/steps/requirements_apply.ts",
+    "f/factory/lib/design_apply_support.ts",
+    "f/factory/lib/design_template.ts",
+  ])("keeps %s open to the fix of the PR", (path) => {
+    expect(isDeniedPath(path)).toBe(false);
+  });
+
+  test("names the module in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(doc.includes("`pr_fix_design`")).toBe(true);
   });
 });
 

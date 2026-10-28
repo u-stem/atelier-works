@@ -51,6 +51,7 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/pr_fix_finish", to: "pipeline", kind: "script" },
   { from: "steps/implement_finish", to: "pipeline", kind: "script" },
   { from: "steps/implement_finish", to: "design", kind: "script" },
+  { from: "steps/pr_fix_finish", to: "design", kind: "script" },
   { from: "form", to: "manual_intake", kind: "human" },
 ];
 
@@ -118,7 +119,7 @@ export const APPROVAL_OUTCOMES: Readonly<
 /**
  * `LAUNCH_EDGES`にあるが、本番では起動しない辺。図の入口と出口には描かず、起動先のflowに「まだ起動されない」入口として添える。
  * 設計の承認の反映は、`requirements_apply`が設計flowを起動する配線を開けるまで動かない。
- * 実装の完了が設計へ戻す辺は、設計書が渡される実行でだけ起動するので、同じ配線を開けるまで動かない。
+ * 実装の完了とPRの修正の完了が設計へ戻す辺は、設計書が渡される実行でだけ起動するので、同じ配線を開けるまで動かない。
  * 配線を変えるときは、次を決める。
  * - 設計flowを起動する辺を、ここから外す
  * - implementを起動する辺を、ここへ移すかどうか。承認で設計へ進む間は、implementを起動しない
@@ -130,6 +131,7 @@ export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/design_apply", to: "pipeline", kind: "script" },
   { from: "steps/design_apply", to: "design", kind: "script" },
   { from: "steps/implement_finish", to: "design", kind: "script" },
+  { from: "steps/pr_fix_finish", to: "design", kind: "script" },
 ];
 
 /** 要件定義の不足(requirements_gap)を見つけたときだけ、pipelineへ差し戻す辺。 */

@@ -559,6 +559,41 @@ describe("runPrFixVerify: retry after failing checks", () => {
     ]);
   });
 
+  test("passes through a retry that reported a design gap with its report", async () => {
+    const h = harness({
+      checks: [false],
+      retry: {
+        outcome: "success",
+        output: {
+          ...RETRY_OUTPUT,
+          outcome: "design_gap",
+          blocked_reason: "the design cannot meet criterion 2",
+        },
+      },
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect([result.outcome, result.reason]).toEqual([
+      "design_gap",
+      "the design cannot meet criterion 2",
+    ]);
+  });
+
+  test("returns no commit message for a retry that reported a design gap", async () => {
+    const h = harness({
+      checks: [false],
+      retry: {
+        outcome: "success",
+        output: {
+          ...RETRY_OUTPUT,
+          outcome: "design_gap",
+          blocked_reason: "gap",
+        },
+      },
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.commit_subject).toBeNull();
+  });
+
   test("keeps the retry's blocked_reason a single reason item", async () => {
     const h = harness({
       checks: [false],

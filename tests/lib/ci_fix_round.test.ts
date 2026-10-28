@@ -172,6 +172,13 @@ describe("isCiFixOutputAllowed", () => {
       isCiFixOutputAllowed({ outcome: "requirements_gap", replies: [] }),
     ).toBe(false);
   });
+
+  // 設計書を渡さない回には、設計へ戻す結果の選択肢が無い。
+  test("rejects a design gap", () => {
+    expect(isCiFixOutputAllowed({ outcome: "design_gap", replies: [] })).toBe(
+      false,
+    );
+  });
 });
 
 describe("ciRoundApplyTimeoutMisfit", () => {

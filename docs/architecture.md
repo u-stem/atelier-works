@@ -143,7 +143,7 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
-| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。設計書を生成している。実装が設計の不足を返したときも、実装中からここへ戻す。遷移させるコードは入っているが、入口が閉じていて本番では動かない | issue | |
+| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。設計書を生成している。実装が設計の不足を返したときは実装中から、PRの修正が設計の不足を返したときはPR作成済みから、ここへ戻す。遷移させるコードは入っているが、入口が閉じていて本番では動かない | issue | |
 | `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。設計フローが`designing`から移すコードと、承認の反映(`design_apply`)がここから動かすコードは入っているが、入口が閉じていて本番では動かない | issue | |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
@@ -152,7 +152,7 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `reviewed` | レビューをCOMMENTとして投稿した。dependabotでは、マージしたか、影響の所見を投稿した | pr_review、pr_fix、dependabot | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
 | `rereview_requested` | 修正をpushし、再レビューを依頼した | pr_fix | 終端 |
-| `blocked` | 準備の確認でレビューか修正の前に止めた(headがforkのPRなど)、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_review、pr_fix | 終端 |
+| `blocked` | 準備の確認でレビューか修正の前に止めた(headがforkのPRなど)、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した、設計の不足で親のIssueを設計へ戻した | pr_review、pr_fix | 終端 |
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
@@ -167,6 +167,7 @@ pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`n
 - 設計フローが前者から後者へ移すコード
 - 承認の反映と期限切れの走査が、後者から動かすコード
 - 実装が設計の不足を返したときに、実装中から前者へ戻すコード
+- PRの修正が設計の不足を返したときに、PR作成済みから前者へ戻すコード
 
 ただし、設計フローの入口が閉じていて、本番の作業項目はこの2状態にならない。
 そのため、下の状態遷移の図に載せない。
@@ -378,7 +379,7 @@ Consoleの一覧と集計は次のviewを読む。
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
-| `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
+| `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
 | `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
@@ -399,7 +400,7 @@ Consoleの一覧と集計は次のviewを読む。
 そのような起動を足したときは、人が表を確かめる。
 
 - `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。
-- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。入口が閉じていて本番では動かない。
+- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。入口が閉じていて本番では動かない。
 - `auto_retry_stale_image`は、`self_update`が起動する。
 - `requirements_apply`と`design_apply`は、`approval_decide`が承認か却下を記録した後に起動する。`design_apply`は、`design_request_approval`と承認待ちの走査も、反映されなかった決定に対して起動する。
 
@@ -530,6 +531,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
+| `f/factory/lib/pr_fix_design` | script | [LIB] PRの修正に渡す設計書の判定 |
 | `f/factory/lib/ci_fix_pr_base` | script | [LIB] PRの基点のcommitを求める |
 | `f/factory/lib/pr_conflict_support` | script | [LIB] PRの競合の判断 |
 | `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |

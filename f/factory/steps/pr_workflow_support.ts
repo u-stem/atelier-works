@@ -32,6 +32,7 @@ import {
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
+import type { StartDesignOutcome } from "../lib/design_launch_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   endsWithMarkerLine,
@@ -46,6 +47,7 @@ import {
 } from "../lib/github.ts";
 import {
   decideGapReroute,
+  designGapFeedback,
   SECRETS_NOT_PUSHED_REASON,
 } from "../lib/implement_finish_support.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
@@ -71,6 +73,7 @@ import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
 import {
   assertSha,
   type FactoryConfig,
+  FIX_OUTCOMES,
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
@@ -1252,17 +1255,35 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
 }
 
 /**
+ * 親のIssueが設計の段階(`designing`か`awaiting_design_approval`)にあるために、
+ * PRの修正の準備を止める理由。
+ * 設計の最中に同じブランチへpushすると、設計の承認の後に実装が引き継ぐPRと食い違う。
+ * 止めた作業項目の再実行は、書き込みの失敗の後でも、設計の最中に同じ指摘を設計なしで直さない。
+ */
+export const PR_FIX_DESIGN_STAGE_PARENT_REASON =
+  "parent issue is in the design stage";
+
+/**
  * pr_fixとimplementフローはPRのブランチのworktreeを共有する。
  * 親のIssueの作業項目(`parent_work_item_id`)が再び`implementing`にある間は、
  * 修正の実行がworktreeに触れてはならない。
+ * 親が設計の段階にある間(`designing`と`awaiting_design_approval`)も止める。
+ * 設計へ戻した後は、設計の承認の後の実装が、PRのブランチを引き継ぐためである。
  * `parentStatus`は、親が無いとき(親の行が消えたときを含む)は`null`。
  */
 export function evaluateParentImplementingGuard(
   parentStatus: WorkItemStatus | null,
 ): PrFixGuardResult {
-  return parentStatus === "implementing"
-    ? { ok: false, reason: "parent issue is being re-implemented" }
-    : { ok: true };
+  if (parentStatus === "implementing") {
+    return { ok: false, reason: "parent issue is being re-implemented" };
+  }
+  if (
+    parentStatus === "designing" ||
+    parentStatus === "awaiting_design_approval"
+  ) {
+    return { ok: false, reason: PR_FIX_DESIGN_STAGE_PARENT_REASON };
+  }
+  return { ok: true };
 }
 
 /**
@@ -1618,12 +1639,6 @@ export function composeCommitMessage(
 // pr_fix_apply: Claudeの構造化出力の型ガード(純粋関数)
 // ---------------------------------------------------------------------------
 
-const FIX_OUTCOMES: readonly FixOutcome[] = [
-  "done",
-  "requirements_gap",
-  "blocked",
-];
-
 const FIX_REPLY_DECISIONS: readonly FixReplyDecision[] = [
   "fixed",
   "skipped",
@@ -1697,8 +1712,14 @@ function isValidCommitSubject(value: unknown): value is string {
 }
 
 /**
- * `prompts.ts`の`FIX_SCHEMA`と完全に一致する形かを判定する。
- * `blocked_reason`は`"blocked"`と`"requirements_gap"`の両方の`outcome`で使う。
+ * `prompts.ts`の`FIX_SCHEMA`(設計書が渡る実行では`FIX_SCHEMA_WITH_DESIGN_GAP`)と完全に一致する形かを判定する。
+ * `blocked_reason`は`"blocked"`と`"requirements_gap"`と`"design_gap"`の`outcome`で使う。
+ *
+ * `hasDesign`は、この実行に承認済みの設計書が渡ったかどうか。省略は渡していない実行を表す。
+ * `outcome`が`"design_gap"`のときは、次を満たさなければ不正な出力にする。
+ * - 設計書が渡っていること。設計書の無い実行のスキーマには選択肢が無く、戻す先の設計が存在しない。
+ * - `blocked_reason`が空白だけでない文字列であること。設計へ戻す報告になるので、空では手がかりが無い。
+ * - `replies`が空であること。設計へ戻すラウンドは返信を投稿しないので、返信に入れた提案が黙って消えるのを防ぐ。
  *
  * `outcome`が`"done"`のときは、`commit_subject`が空でなく空白だけでもないことも求める。
  * `FIX_SCHEMA`の説明は、コミットするものが無いとき(`"done"`以外)にだけ
@@ -1709,7 +1730,10 @@ function isValidCommitSubject(value: unknown): value is string {
  * それ以外の`outcome`では`""`を受け付ける。
  * `pr_fix_apply.ts`は`"done"`以外の`commit_subject`を実際のコミットに使わない。
  */
-export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
+export function isFixClaudeOutput(
+  value: unknown,
+  hasDesign = false,
+): value is FixClaudeOutput {
   if (!isRecord(value)) return false;
   if (!isOneOf(value.outcome, FIX_OUTCOMES)) return false;
   if (!isString(value.summary)) return false;
@@ -1718,6 +1742,16 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
   }
   if (value.blocked_reason !== null && !isString(value.blocked_reason)) {
     return false;
+  }
+  if (value.outcome === "design_gap") {
+    if (!hasDesign) return false;
+    if (
+      !isString(value.blocked_reason) ||
+      value.blocked_reason.trim().length === 0
+    ) {
+      return false;
+    }
+    if (value.replies.length > 0) return false;
   }
   if (!isValidCommitSubject(value.commit_subject)) return false;
   if (value.outcome === "done" && value.commit_subject.trim().length === 0) {
@@ -2977,6 +3011,7 @@ export type PrFixFinishOutcome =
   | "no_feedback"
   | "done"
   | "requirements_gap"
+  | "design_gap"
   | "blocked"
   | "conflict_up_to_date"
   | "conflict_blocked";
@@ -2986,6 +3021,8 @@ export type PrFixFinalAction =
   | { readonly kind: "push" }
   | { readonly kind: "requirements_gap_reroute" }
   | { readonly kind: "requirements_gap_needs_human" }
+  | { readonly kind: "design_gap_reroute" }
+  | { readonly kind: "design_gap_needs_human" }
   | { readonly kind: "guard_blocked" }
   | { readonly kind: "needs_human" }
   | { readonly kind: "conflict_up_to_date" }
@@ -3020,6 +3057,10 @@ export function decideFixFinishAction(
       return hasParent
         ? { kind: "requirements_gap_reroute" }
         : { kind: "requirements_gap_needs_human" };
+    case "design_gap":
+      return hasParent
+        ? { kind: "design_gap_reroute" }
+        : { kind: "design_gap_needs_human" };
     case "guard_blocked":
       return { kind: "guard_blocked" };
     case "round_exhausted":
@@ -3040,6 +3081,9 @@ export type PrFixFinishBumpKind =
   | "requirements_gap_needs_human"
   | "requirements_gap_reroute_failed"
   | "requirements_gap_reroute_success"
+  | "design_gap_needs_human"
+  | "design_gap_reroute_failed"
+  | "design_gap_reroute_success"
   | "push_missing_commit_message"
   | "push_head_changed"
   | "push_nothing_to_commit"
@@ -3063,10 +3107,15 @@ export type PrFixFinishBumpKind =
  *     他の成功したpushと同じく、このラウンドのフィードバックは消化済みである。
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
+ *   - `design_gap_reroute_success`: 親のIssueを`designing`に戻すことで、フィードバックを消化した。
+ *     実装のステップはPRのレビューも処理済みの位置も読まないので、このフィードバックは二度と集まらない。
+ *     指摘は、絞った要約として設計に届くだけである。
  * それ以外の終端の種別(試行の開始前に関門が止めた、何らかの原因の`needs_human`、
  * 失敗した差し戻し(親の作業項目が見つからない、親にIssue番号が無い、
  * 親が差し戻せる状態にない、親が試行回数を使い切った、
  * 親が読み取った後に変わって比較交換に負けた)、
+ * 失敗した設計への戻し(親が`pr_open`でない、新しいサイクルがある、読んだ後に親が動いた、
+ * 比較交換に負けた、設計の上限、設計工程の無効)、
  * 実際には反映されなかったpush
  * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
  * 処理済み位置を変えない。
@@ -3075,7 +3124,11 @@ export type PrFixFinishBumpKind =
  * `on_error_flow.ts`が扱う)も、位置を進める呼び出しには届かない。
  */
 export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
-  return kind === "requirements_gap_reroute_success" || kind === "push_success";
+  return (
+    kind === "requirements_gap_reroute_success" ||
+    kind === "design_gap_reroute_success" ||
+    kind === "push_success"
+  );
 }
 
 /**
@@ -3264,6 +3317,151 @@ export async function rerouteRequirementsGap(
     }
   }
   return { kind: "rerouted", jobId, recorded };
+}
+
+/**
+ * 設計の不足の戻しが、設計の却下と戻しの上限(`max_design_attempts`)に達して止まったときの`needs_human`の理由。
+ * 設定の名前を理由に入れない。親は`pr_open`のまま残り、再実行では設計を作り直せない。
+ */
+export const PR_FIX_DESIGN_GAP_EXHAUSTED_REASON =
+  "design gap from the PR fix after max_design_attempts";
+
+/**
+ * 設計の不足の戻しが、設計工程の無効で止まったときの`needs_human`の理由。
+ * 閉じた入口を迂回しない。親は`pr_open`のまま残り、再実行では設計を作り直せない。
+ */
+export const PR_FIX_DESIGN_GAP_DISABLED_REASON =
+  "design gap from the PR fix while the design stage is closed";
+
+/** 設計の不足の戻し先の親の作業項目が見つからなかったときの`needs_human`の理由。 */
+export const PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON =
+  "design gap from the PR fix: parent work item not found";
+
+/** 設計の不足の戻し先の親の作業項目。Issue番号が無い親は戻す前に除いておく。 */
+export type DesignGapRerouteParent = Pick<
+  RerouteParent,
+  "id" | "issue_number" | "status" | "flow_job_id"
+>;
+
+/**
+ * 親の作業項目が、設計の不足の戻し先として許される状態かを判定する。
+ * `pr_open`(実装が終わってPRが開いている状態)だけを許し、許すなら`null`を返す。
+ * それ以外は、戻さずに`needs_human`へ倒す理由を返す。
+ * 設計の段階(`designing`、`awaiting_design_approval`)は設計フローが動いているか人の判断を待っており、
+ * `implementing`は実装フローがリースを持つので、戻すとそれぞれを上書きする。理由を分けて待つよう案内する。
+ */
+export function evaluateDesignGapRerouteParentStatus(
+  parent: DesignGapRerouteParent,
+): string | null {
+  if (parent.status === "pr_open") return null;
+  if (
+    parent.status === "designing" ||
+    parent.status === "awaiting_design_approval"
+  ) {
+    return `${describeRerouteParent(parent)} is in the design stage, design_gap not rerouted`;
+  }
+  if (parent.status === "implementing") {
+    return `${describeRerouteParent(parent)} is being implemented, design_gap not rerouted`;
+  }
+  return `${describeRerouteParent(parent)} is ${parent.status}, design_gap not rerouted`;
+}
+
+/**
+ * 親のIssueに、より新しいサイクルの作業項目があるときの理由。
+ * 新しいサイクルに置き換わった親を、設計へ戻して生き返らせない。
+ */
+export function designGapNewerCycleReason(
+  parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return `${describeRerouteParent(parent)} was replaced by a newer cycle, design_gap not rerouted`;
+}
+
+/**
+ * このPRの修正が始まった後に、親の遷移の記録があるときの理由。
+ * 修正が読んだ設計や要件と、親の今の状態が食い違うので、戻さない。
+ */
+export function designGapParentMovedReason(
+  parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return `${describeRerouteParent(parent)} moved after the fix started, design_gap not rerouted`;
+}
+
+/**
+ * 親を読んだ後、戻す比較交換までの間に、親の状態か`flow_job_id`が変わった
+ * (同じIssueの新しいサイクルが割り込んで一意制約に阻まれた場合を含む)ときの理由。
+ */
+export function designGapRerouteRaceLostReason(
+  parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return `${describeRerouteParent(parent)} changed before the design_gap reroute`;
+}
+
+export type PrFixDesignRerouteDeps = {
+  /** 親のIssueに、より大きい`cycle`の`issue`の作業項目があるか(`hasNewerIssueCycle`)。 */
+  readonly hasNewerCycle: () => Promise<boolean>;
+  /** このPRの修正が始まった後に、親の状態を変えた遷移の記録があるか(`hasParentTransitionSinceFixStarted`)。 */
+  readonly parentMovedSinceFixStarted: () => Promise<boolean>;
+  /**
+   * `returnToDesigningFromPrFixIfLeaseHolder`で、親を読んだ時点の`flow_job_id`のままのときだけ
+   * `pr_open`から`designing`へ移す。同じ文で設計の試行を進め、リースを空にし、遷移の記録を書く。
+   * 条件に合わないか、新しいサイクルの一意制約に阻まれたときは`false`を返す。
+   */
+  readonly casToDesigning: (
+    expectedFlowJobId: string | null,
+  ) => Promise<boolean>;
+  /**
+   * 設計フローを`feedback`つきで起動し、ジョブIDを記録する(`buildStartDesign`)。
+   * 起動か記録に失敗したら、その手順が親を`designing`から`needs_human`へ戻して通知する。
+   */
+  readonly launchDesign: (feedback: string) => Promise<StartDesignOutcome>;
+  /** このPRの修正の処理済みの位置を、今回集めたフィードバックの先まで進める。 */
+  readonly bumpWatermarks: () => Promise<void>;
+  /** このPRの修正を`fixing`から`blocked`へ移す。 */
+  readonly markBlocked: () => Promise<void>;
+};
+
+export type PrFixDesignRerouteOutcome =
+  | { readonly kind: "refused"; readonly reason: string }
+  | { readonly kind: "rerouted"; readonly outcome: StartDesignOutcome };
+
+/**
+ * PRの修正が返した設計の不足で、親の作業項目を`pr_open`から`designing`へ戻し、設計フローを起動する。
+ * 戻す前に、親が`pr_open`であること、新しいサイクルに置き換わっていないこと、
+ * このPRの修正が始まった後に親が動いていないことを、この順に確かめる。どれかに当たれば、何も書かずに理由を返す。
+ * 比較交換で戻せなければ(読んだ後に親が変わったか、新しいサイクルが割り込んだ)、同じく何も書かずに理由を返す。
+ * 戻せたら、続けて設計フローを起動し、処理済みの位置を進め、このPRの修正を`blocked`にする。
+ * 起動は取り消せず外から見える操作なので、比較交換の直後に行う。
+ * 戻しに成功したときが「消化した」なので、起動に失敗しても(親は`needs_human`になる)位置を進めて`blocked`にする。
+ * 起動か、その後の書き込みが例外を投げたときは、投げたままにして、ステップの失敗(`on_error_flow`)に任せる。
+ * 設計は起動済みか、親が`needs_human`のままなので、同じ指摘を設計なしで直さないよう、準備が親の設計の段階で止める。
+ * 報告は整え、自動の報告の印を付けて渡す(`designGapFeedback`)。
+ * 設計フローが報告を人の却下の理由として扱わないようにするためである。
+ */
+export async function reroutePrFixToDesign(
+  deps: PrFixDesignRerouteDeps,
+  args: {
+    readonly parent: DesignGapRerouteParent;
+    readonly gapReport: string;
+  },
+): Promise<PrFixDesignRerouteOutcome> {
+  const { parent, gapReport } = args;
+  const statusReason = evaluateDesignGapRerouteParentStatus(parent);
+  if (statusReason !== null) return { kind: "refused", reason: statusReason };
+  if (await deps.hasNewerCycle()) {
+    return { kind: "refused", reason: designGapNewerCycleReason(parent) };
+  }
+  if (await deps.parentMovedSinceFixStarted()) {
+    return { kind: "refused", reason: designGapParentMovedReason(parent) };
+  }
+  if (!(await deps.casToDesigning(parent.flow_job_id))) {
+    return { kind: "refused", reason: designGapRerouteRaceLostReason(parent) };
+  }
+  const outcome = await deps.launchDesign(designGapFeedback(gapReport));
+  if (shouldAdvanceWatermarks("design_gap_reroute_success")) {
+    await deps.bumpWatermarks();
+  }
+  await deps.markBlocked();
+  return { kind: "rerouted", outcome };
 }
 
 /**
@@ -3870,6 +4068,13 @@ function procedureThenRerun(
 const GENERIC_PROCEDURE =
   "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、";
 const GENERIC_NEXT_ACTION = `${GENERIC_PROCEDURE}${RETRY_WORK_ITEM_ACTION}`;
+
+/**
+ * PRの修正が返した設計の不足を戻せなかった、設計の上限と設計工程の無効の次の操作。
+ * 親は`pr_open`のまま残り、再実行では設計を作り直せないので、再実行を案内しない。
+ */
+const PR_FIX_DESIGN_GAP_NEW_CYCLE_ACTION =
+  "Issueに`factory`ラベルを付け直して新しいサイクルを始めるか、PRを人が直してください";
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -4681,6 +4886,77 @@ export const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "親Issueの要件定義が承認され、実装フローが終わった後に`factory:fix`を付け直してください",
   },
+  // pr_fix_finish.tsの設計への戻し。`evaluateDesignGapRerouteParentStatus`と、`designGap*Reason`と、固定の理由。
+  // どれも修正のClaudeがdesign_gapを返した後に止めるので、そのラウンドは使い終わっている。
+  // 設計の上限と設計工程の無効は、親が`pr_open`のまま残り、再実行では設計を作り直せないので、
+  // 再実行を案内せず、新しいサイクルを始めるか、PRを人が直すよう案内する。
+  // 状態名を取る規則(設計の段階、実装中)は、一般の状態の規則より先に置く。
+  {
+    pattern: /^design gap from the PR fix after max_design_attempts$/,
+    describe: () =>
+      "PRの修正が設計書の不足を報告しましたが、設計の却下と戻しが上限(max_design_attempts)に達しました",
+    nextAction: () => PR_FIX_DESIGN_GAP_NEW_CYCLE_ACTION,
+  },
+  {
+    pattern: /^design gap from the PR fix while the design stage is closed$/,
+    describe: () =>
+      "PRの修正が設計書の不足を報告しましたが、設計工程が無効のため、設計へ戻せませんでした",
+    nextAction: () => PR_FIX_DESIGN_GAP_NEW_CYCLE_ACTION,
+  },
+  {
+    pattern: /^design gap from the PR fix: parent work item not found$/,
+    describe: () => "設計への差し戻し先の親の作業項目が見つかりませんでした",
+    nextAction: () => "work itemの状態をConsoleで確認してください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) is in the design stage, design_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})が設計の段階にあるため、設計への差し戻しを止めました`,
+    nextAction: () =>
+      "親Issueの設計の承認と、その後の実装が終わってから`factory:fix`を付け直してください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) is being implemented, design_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})が実装中のため、設計への差し戻しを止めました`,
+    nextAction: () =>
+      "実装フローの完了を待ってから`factory:fix`を付け直してください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) is ([a-z_]+), design_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})の状態が${m[3]}のため、設計への差し戻しを止めました`,
+    nextAction: () =>
+      "Consoleで親Issueの作業項目の状態を確認し、実装が終わってPRが開いた状態になってから`factory:fix`を付け直してください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) was replaced by a newer cycle, design_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})は新しいサイクルに置き換わっているため、設計への差し戻しを止めました`,
+    nextAction: () =>
+      "このPRは古いサイクルのものです。Issueの現在のサイクルの作業項目をConsoleで確認し、必要ならPRを人が直してください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) moved after the fix started, design_gap not rerouted$/,
+    describe: (m) =>
+      `このPRの修正を始めた後に親Issue #${m[2]}(作業項目${m[1]})が動いたため、設計への差し戻しを止めました`,
+    nextAction: () =>
+      "Consoleで親Issueの作業項目の状態を確認し、設計と実装が終わってから`factory:fix`を付け直してください",
+  },
+  // 比較交換に負けるのは、読み取った後に親が動いたか、同じIssueの新しいサイクルが割り込んだときである。
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) changed before the design_gap reroute$/,
+    describe: (m) =>
+      `差し戻す前に親Issue #${m[2]}(作業項目${m[1]})の状態が変わったため、設計への差し戻しを止めました`,
+    nextAction: () =>
+      "Consoleで親Issueの作業項目の状態を確認し、設計と実装が終わってから`factory:fix`を付け直してください",
+  },
   // requirements_apply.tsの差し戻し・needs_humanの結果と、
   // poll_issues.tsの期限切れの掃除
   {
@@ -4951,6 +5227,12 @@ export const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^parent issue is being re-implemented$/,
     describe: () => "親Issueの実装をやり直している最中のため修正を止めました",
     nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  // 親が設計へ戻された間は、設計の承認の後の実装が同じブランチを引き継ぐ。
+  {
+    pattern: /^parent issue is in the design stage$/,
+    describe: () => "親Issueの設計の最中のため修正を止めました",
+    ...procedureThenRerun("設計の承認と、その後の実装の完了を待ってから、"),
   },
   {
     pattern: /^worktree git pointer was modified$/,

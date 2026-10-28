@@ -1,0 +1,9 @@
+summary: '[LIB] PRの修正に渡す設計書の判定'
+description: 内部ライブラリです。直接実行するものではありません。レビュー回のPRの修正に、親のIssueの承認済みの設計書を渡すかを決めます。設計工程が無効、CI回と競合回、Factoryのブランチでないとき、親が実装後でないとき、承認が照合を通らないときは、設計書なしにします。
+lock: '!inline f/factory/lib/pr_fix_design.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

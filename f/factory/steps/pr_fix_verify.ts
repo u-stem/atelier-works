@@ -76,11 +76,20 @@ import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
 import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
+  fixDesignDepsFromDb,
+  loadParentDesignForFix,
+} from "../lib/pr_fix_design.ts";
+import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
-import { type CheckFailure, FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
+import {
+  type CheckFailure,
+  FIX_SCHEMA,
+  FIX_SCHEMA_WITH_DESIGN_GAP,
+  fixPrompt,
+} from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
@@ -1039,6 +1048,19 @@ export async function main(
           parent_work_item_id === null
             ? null
             : await latestDraft(parent_work_item_id);
+        // 修正のステップと同じ判定で設計書を渡す。再実行だけ設計書の有無が変わると、
+        // 設計の不足を返せる実行と返せない実行が、同じ修正の中で入れ替わるためである。
+        const design = await loadParentDesignForFix(
+          fixDesignDepsFromDb((message, fields) =>
+            log.warn(message, { work_item_id, ...fields }),
+          ),
+          {
+            designEnabled: config.design_enabled,
+            reviewRound: ci_check_id === null && conflict_check_id === null,
+            parentWorkItemId: parent_work_item_id,
+            pr: { owner, repo, headRef: pr.headRef },
+          },
+        );
         const retryPrompt = fixPrompt({
           pr: {
             owner,
@@ -1053,6 +1075,7 @@ export async function main(
           reviews,
           comments,
           requirements,
+          design,
           // 検査の失敗出力は対象リポジトリ由来の信頼できない内容なので、
           // 他の同種の内容と同じく`fixPrompt`がフェンスで囲む。
           // ここで素のテキストとして足さない。
@@ -1072,8 +1095,10 @@ export async function main(
             model: prFixRetryModel(config, sonnetFailures),
             prompt: retryPrompt,
             appendSystemPromptFile: systemPrompt.path,
-            jsonSchema: FIX_SCHEMA,
-            isStructuredOutput: isFixClaudeOutput,
+            jsonSchema:
+              design === null ? FIX_SCHEMA : FIX_SCHEMA_WITH_DESIGN_GAP,
+            isStructuredOutput: (value): value is FixClaudeOutput =>
+              isFixClaudeOutput(value, design !== null),
             tools: ["Read", "Glob", "Grep", "Edit", "Write"],
             // `pr_fix_apply.ts`と同じ設定。
             // 実測で編集と書き込みが通ったのは、"acceptEdits"ではなく

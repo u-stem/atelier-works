@@ -29,8 +29,18 @@ import {
 } from "../../f/factory/lib/implement_finish_support.ts";
 import {
   describeReason,
+  designGapNewerCycleReason,
+  designGapParentMovedReason,
+  designGapRerouteRaceLostReason,
   designNeedsHumanFields,
+  evaluateDesignGapRerouteParentStatus,
   nextActionFor,
+  PR_FIX_DESIGN_GAP_DISABLED_REASON,
+  PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
+  PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
+  PR_FIX_DESIGN_STAGE_PARENT_REASON,
+  shouldAdvanceWatermarks,
+  withGapReport,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const RETRY = "f/factory/retry_work_item";
@@ -570,5 +580,217 @@ describe("the reason of a design gap that the implementation reported", () => {
     expect(nextActionFor(DESIGN_GAP_DISABLED_REASON, "implement")).toContain(
       `${RELABEL}`,
     );
+  });
+});
+
+describe("the reasons of a design gap that the PR fix reported", () => {
+  const PARENT = { id: 7, issue_number: 12 };
+  const NEW_CYCLE_ACTION =
+    "Issueに`factory`ラベルを付け直して新しいサイクルを始めるか、PRを人が直してください";
+
+  test("translates the limit", () => {
+    expect(describeReason(PR_FIX_DESIGN_GAP_EXHAUSTED_REASON)).toBe(
+      "PRの修正が設計書の不足を報告しましたが、設計の却下と戻しが上限(max_design_attempts)に達しました",
+    );
+  });
+
+  test("translates the closed stage", () => {
+    expect(describeReason(PR_FIX_DESIGN_GAP_DISABLED_REASON)).toBe(
+      "PRの修正が設計書の不足を報告しましたが、設計工程が無効のため、設計へ戻せませんでした",
+    );
+  });
+
+  test.each([
+    ["the limit", PR_FIX_DESIGN_GAP_EXHAUSTED_REASON],
+    ["the closed stage", PR_FIX_DESIGN_GAP_DISABLED_REASON],
+  ])(
+    "tells to start a new cycle or to fix the PR by hand after %s",
+    (_name, reason) => {
+      expect(nextActionFor(reason, "pr_fix")).toBe(NEW_CYCLE_ACTION);
+    },
+  );
+
+  test.each([
+    ["the limit", PR_FIX_DESIGN_GAP_EXHAUSTED_REASON],
+    ["the closed stage", PR_FIX_DESIGN_GAP_DISABLED_REASON],
+  ])(
+    "does not tell to build the design again by a retry after %s",
+    (_name, reason) => {
+      expect(nextActionFor(reason, "pr_fix")).not.toContain(RETRY);
+    },
+  );
+
+  test("does not name the setting of the design stage in the reason of the limit", () => {
+    expect(PR_FIX_DESIGN_GAP_EXHAUSTED_REASON).not.toContain("design_enabled");
+  });
+
+  test("does not name the setting of the design stage in the reason of the closed stage", () => {
+    expect(PR_FIX_DESIGN_GAP_DISABLED_REASON).not.toContain("design_enabled");
+  });
+
+  test("translates a parent in the design stage", () => {
+    expect(
+      describeReason(
+        evaluateDesignGapRerouteParentStatus({
+          ...PARENT,
+          status: "designing",
+          flow_job_id: null,
+        }) ?? "",
+      ),
+    ).toBe(
+      "親Issue #12(作業項目7)が設計の段階にあるため、設計への差し戻しを止めました",
+    );
+  });
+
+  test("translates a parent that is being implemented", () => {
+    expect(
+      describeReason(
+        evaluateDesignGapRerouteParentStatus({
+          ...PARENT,
+          status: "implementing",
+          flow_job_id: null,
+        }) ?? "",
+      ),
+    ).toBe(
+      "親Issue #12(作業項目7)が実装中のため、設計への差し戻しを止めました",
+    );
+  });
+
+  test("translates a parent in another status", () => {
+    expect(
+      describeReason(
+        evaluateDesignGapRerouteParentStatus({
+          ...PARENT,
+          status: "needs_human",
+          flow_job_id: null,
+        }) ?? "",
+      ),
+    ).toBe(
+      "親Issue #12(作業項目7)の状態がneeds_humanのため、設計への差し戻しを止めました",
+    );
+  });
+
+  test("translates a parent that a newer cycle replaced", () => {
+    expect(describeReason(designGapNewerCycleReason(PARENT))).toBe(
+      "親Issue #12(作業項目7)は新しいサイクルに置き換わっているため、設計への差し戻しを止めました",
+    );
+  });
+
+  test("translates a parent that moved after the fix started", () => {
+    expect(describeReason(designGapParentMovedReason(PARENT))).toBe(
+      "このPRの修正を始めた後に親Issue #12(作業項目7)が動いたため、設計への差し戻しを止めました",
+    );
+  });
+
+  test("translates the race that was lost", () => {
+    expect(describeReason(designGapRerouteRaceLostReason(PARENT))).toBe(
+      "差し戻す前に親Issue #12(作業項目7)の状態が変わったため、設計への差し戻しを止めました",
+    );
+  });
+
+  test("translates a parent that was not found", () => {
+    expect(describeReason(PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON)).toBe(
+      "設計への差し戻し先の親の作業項目が見つかりませんでした",
+    );
+  });
+
+  test("tells to relabel after the design stage of the parent", () => {
+    expect(
+      nextActionFor(
+        evaluateDesignGapRerouteParentStatus({
+          ...PARENT,
+          status: "designing",
+          flow_job_id: null,
+        }) ?? "",
+        "pr_fix",
+      ),
+    ).toBe(
+      "親Issueの設計の承認と、その後の実装が終わってから`factory:fix`を付け直してください",
+    );
+  });
+
+  test("tells to wait for the implementation before the relabel", () => {
+    expect(
+      nextActionFor(
+        evaluateDesignGapRerouteParentStatus({
+          ...PARENT,
+          status: "implementing",
+          flow_job_id: null,
+        }) ?? "",
+        "pr_fix",
+      ),
+    ).toBe("実装フローの完了を待ってから`factory:fix`を付け直してください");
+  });
+
+  test("tells to check the status of the parent before the relabel", () => {
+    expect(
+      nextActionFor(
+        evaluateDesignGapRerouteParentStatus({
+          ...PARENT,
+          status: "needs_human",
+          flow_job_id: null,
+        }) ?? "",
+        "pr_fix",
+      ),
+    ).toContain("Consoleで親Issueの作業項目の状態を確認し");
+  });
+
+  test("tells that the PR belongs to an old cycle", () => {
+    expect(
+      nextActionFor(designGapNewerCycleReason(PARENT), "pr_fix"),
+    ).toContain("古いサイクル");
+  });
+
+  test.each([
+    ["a move of the parent", designGapParentMovedReason(PARENT)],
+    ["a race that was lost", designGapRerouteRaceLostReason(PARENT)],
+  ])("tells to relabel after %s", (_name, reason) => {
+    expect(nextActionFor(reason, "pr_fix")).toContain(
+      "`factory:fix`を付け直してください",
+    );
+  });
+
+  test("tells to check the work item when the parent was not found", () => {
+    expect(
+      nextActionFor(PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON, "pr_fix"),
+    ).toContain("Consoleで");
+  });
+
+  test("keeps the report of the gap as a separate segment after the reason", () => {
+    expect(
+      describeReason(
+        withGapReport(designGapParentMovedReason(PARENT), "設計の不足"),
+      ),
+    ).toBe(
+      "このPRの修正を始めた後に親Issue #12(作業項目7)が動いたため、設計への差し戻しを止めました; 設計の不足",
+    );
+  });
+});
+
+describe("the reason that stops the preparation while the parent designs", () => {
+  test("translates it", () => {
+    expect(describeReason(PR_FIX_DESIGN_STAGE_PARENT_REASON)).toBe(
+      "親Issueの設計の最中のため修正を止めました",
+    );
+  });
+
+  test("tells to wait for the design and the implementation, then to retry", () => {
+    expect(nextActionFor(PR_FIX_DESIGN_STAGE_PARENT_REASON, "pr_fix")).toBe(
+      `設計の承認と、その後の実装の完了を待ってから、Windmillで\`${RETRY}\`を作業項目のIDで実行してください`,
+    );
+  });
+});
+
+describe("shouldAdvanceWatermarks for a design gap", () => {
+  test("advances the positions when the parent was returned to the design", () => {
+    expect(shouldAdvanceWatermarks("design_gap_reroute_success")).toBe(true);
+  });
+
+  test("keeps the positions when the reroute was refused", () => {
+    expect(shouldAdvanceWatermarks("design_gap_reroute_failed")).toBe(false);
+  });
+
+  test("keeps the positions when the design gap stops at needs_human", () => {
+    expect(shouldAdvanceWatermarks("design_gap_needs_human")).toBe(false);
   });
 });
