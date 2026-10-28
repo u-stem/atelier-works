@@ -107,7 +107,7 @@ export const DESIGN_REJECTED_EXHAUSTED_PREFIX =
  * PRの修正が設計の不足を報告し、親を`pr_open`から`designing`へ戻した遷移の注記の接頭辞。
  * 書く側(`steps/pr_fix_finish.ts`)と数える側(`countAppliedDesignRejections`)が、同じ値を使う。
  */
-export const PR_FIX_DESIGN_GAP_NOTE_PREFIX = "";
+export const PR_FIX_DESIGN_GAP_NOTE_PREFIX = "pr_fix design gap: ";
 
 /**
  * 現在の要件定義の試行で、設計の却下が上限(`max_design_attempts`)に達したときの`needs_human`の理由。

@@ -50,11 +50,19 @@ import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import {
+  fixDesignDepsFromDb,
+  loadParentDesignForFix,
+} from "../lib/pr_fix_design.ts";
+import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
-import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
+import {
+  FIX_SCHEMA,
+  FIX_SCHEMA_WITH_DESIGN_GAP,
+  fixPrompt,
+} from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
@@ -66,6 +74,7 @@ import {
   type CollectedComment,
   type CollectedReview,
   claudeBlockedReason,
+  type FixClaudeOutput,
   isCiFixClaudeOutput,
   isFixClaudeOutput,
   recordedGitPointerStopReason,
@@ -86,6 +95,9 @@ export type PrFixApplyResult = {
  * (outcome、理由、要約、各コメントへの返信、コミットの件名と本文)を返す。
  * 使えるツールはRead/Glob/Grep/Edit/Writeに限り、Bashは渡さない。
  * コミットの件名と本文はClaudeが提案したものを使い、`outcome`が"done"のときだけ返す。
+ * レビュー回で、Factoryのブランチの親が承認済みの設計書を持つときだけ、設計書を囲みに入れて渡し、
+ * 結果に"design_gap"(設計書の不足を報告して、親を設計へ戻す)を選べるスキーマを使う。
+ * それ以外は、設計書なしのスキーマとプロンプトと出力の検査で動く(`loadParentDesignForFix`)。
  * 日次予算を超えていればClaudeを起動せず"blocked"を返す。
  * CIの失敗を直す回で`metadata`ジョブだけが落ちていれば、予算の検査より前に、Claudeを起動せずhashを再計算する(`applyMetadataRound`)。
  * worktreeの`.git`が`worktree_git_pointer`(準備ステップの記録)と一致しないとき、
@@ -237,6 +249,19 @@ export async function main(
     parent_work_item_id === null
       ? null
       : await latestDraft(parent_work_item_id);
+  // 承認済みの設計書を渡すのは、Factoryのブランチのレビュー回で、親が承認済みの設計を持つときだけである。
+  // 渡さない実行は、今のスキーマとプロンプトと出力の検査のままで動く。
+  const design = await loadParentDesignForFix(
+    fixDesignDepsFromDb((message, fields) =>
+      log.warn(message, { work_item_id, ...fields }),
+    ),
+    {
+      designEnabled: config.design_enabled,
+      reviewRound: ci_check_id === null && conflict_check_id === null,
+      parentWorkItemId: parent_work_item_id,
+      pr: { owner, repo, headRef: pr.headRef },
+    },
+  );
 
   const promptText = fixPrompt({
     pr: {
@@ -252,6 +277,7 @@ export async function main(
     reviews,
     comments,
     requirements,
+    design,
     checkFailures: [],
   });
 
@@ -274,8 +300,9 @@ export async function main(
       model: modelFor(config, "pr_fix", sonnetFailures),
       prompt: promptText,
       appendSystemPromptFile: systemPrompt.path,
-      jsonSchema: FIX_SCHEMA,
-      isStructuredOutput: isFixClaudeOutput,
+      jsonSchema: design === null ? FIX_SCHEMA : FIX_SCHEMA_WITH_DESIGN_GAP,
+      isStructuredOutput: (value): value is FixClaudeOutput =>
+        isFixClaudeOutput(value, design !== null),
       tools: ["Read", "Glob", "Grep", "Edit", "Write"],
       // 実測では、"dontAsk"だけだとEdit/Writeが自動で拒否され
       // (`{"edited":false,"written":false,"denied_reason":"write permission
@@ -323,7 +350,7 @@ export async function main(
     const output = result.structuredOutput;
     return {
       outcome: output.outcome,
-      // `blocked_reason`は"blocked"と"requirements_gap"で値が入り、"done"ではnullになる。
+      // `blocked_reason`は"blocked"と"requirements_gap"と"design_gap"で値が入り、"done"ではnullになる。
       reason: claudeBlockedReason(output.blocked_reason),
       summary: output.summary,
       replies: output.replies,

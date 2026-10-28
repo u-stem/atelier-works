@@ -88,6 +88,16 @@ export function decideDesignGapAction(input: {
     : "reroute";
 }
 
+/**
+ * 設計フローへ渡す、設計の不足の報告を返す。
+ * 報告は整えて(`limitGapReport`)、自動の報告の印(`automatedFeedback`)を付ける。
+ * 設計フローが報告を、人の却下の理由として扱わず、信頼できない入力として読むためである。
+ * 実装とPRの修正が、同じ形で渡す。
+ */
+export function designGapFeedback(report: string): string {
+  return automatedFeedback(limitGapReport(report));
+}
+
 /** `rerouteImplementationToDesign`が使う、DBと設計フローの起動の依存。テストでは差し替える。 */
 export type RerouteToDesignDeps = {
   /**

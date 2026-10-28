@@ -658,12 +658,17 @@ export type ReviewRecord = {
   posted_review_id: string | null;
 };
 
-export type FixOutcome = "done" | "requirements_gap" | "blocked";
+/**
+ * 修正ラウンドの結果。`design_gap`は、承認済みの設計書が渡ったレビュー回だけが返す。
+ * 設計書の不足を報告して、親のIssueを設計へ戻す結果である。
+ */
+export type FixOutcome = "done" | "requirements_gap" | "design_gap" | "blocked";
 
 /** `factory.fix_rounds.outcome`の値。テーブルのCHECK制約と一致させる。 */
 export const FIX_OUTCOMES: readonly FixOutcome[] = [
   "done",
   "requirements_gap",
+  "design_gap",
   "blocked",
 ];
 

@@ -52,16 +52,25 @@ import {
 import {
   addNoticeUnlessUnresolved,
   bumpWatermarks,
+  countAppliedDesignRejections,
   getWorkItem,
+  hasNewerIssueCycle,
+  hasParentTransitionSinceFixStarted,
   insertApprovalRequest,
   insertFixRound,
   insertIssueProposal,
   recordFailure,
+  returnToDesigningFromPrFixIfLeaseHolder,
   setFlowJobIdIfUnset,
   setHeadSha,
   updateStatusIfCurrent,
   updateStatusToRequirementsIfLeaseHolder,
 } from "../lib/db.ts";
+import { DESIGN_REGENERATING_NOTE } from "../lib/design_apply_support.ts";
+import {
+  DESIGN_REJECTED_EXHAUSTED_PREFIX,
+  PR_FIX_DESIGN_GAP_NOTE_PREFIX,
+} from "../lib/design_template.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   type GhClient,
@@ -76,6 +85,7 @@ import {
   requestReviewers,
   withMarker,
 } from "../lib/github.ts";
+import { decideDesignGapAction } from "../lib/implement_finish_support.ts";
 import { GITLEAKS_TIMEOUT_MS } from "../lib/implement_loop.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { runCommandBytes } from "../lib/metadata_git_ports.ts";
@@ -121,12 +131,16 @@ import {
   matchReviewThreadForComment,
   nextActionFor,
   nextActionForPrFix,
+  PR_FIX_DESIGN_GAP_DISABLED_REASON,
+  PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
+  PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
   PR_HEAD_NOT_RECORDED_REASON,
   type PrFixFinishOutcome,
   type PrFixSecretScanResult,
   prFixPushGateReason,
   type ReplyPostFailure,
   renderFixReply,
+  reroutePrFixToDesign,
   rerouteRequirementsGap,
   scanPrFixBeforeCommit,
   selectProposeIssueReplies,
@@ -134,6 +148,7 @@ import {
   stopBeforeCommitTerminal,
   withGapReport,
 } from "./pr_workflow_support.ts";
+import { buildStartDesign } from "./requirements_apply.ts";
 
 const ALL_OUTCOMES: readonly PrFixFinishOutcome[] = [
   "skip",
@@ -142,6 +157,7 @@ const ALL_OUTCOMES: readonly PrFixFinishOutcome[] = [
   "no_feedback",
   "done",
   "requirements_gap",
+  "design_gap",
   "blocked",
   "conflict_up_to_date",
   "conflict_blocked",
@@ -364,6 +380,13 @@ export async function runConflictPush(
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
  *
+ * `outcome`が`design_gap`のとき(承認済みの設計書が渡ったレビュー回だけが返す)は、ラウンドを記録した後、親を読んで行き先を決める。
+ * - 親が無い、親にIssue番号が無い、設計の却下と戻しが上限に達した、設計工程が無効: 親に触れずに`needs_human`にする。
+ *   上限と設計工程の無効は、親が`pr_open`のまま残り、再実行では設計を作り直せない。
+ * - それ以外: 親が`pr_open`で、新しいサイクルに置き換わらず、この修正の開始後に動いていないときだけ、
+ *   親を`designing`へ戻して設計フローを起動し(`reroutePrFixToDesign`)、処理済みの位置を進めて、この修正を`blocked`にする。
+ *   戻せなければ、何も書かずに`needs_human`にする。起動に失敗しても、戻せていれば位置を進めて`blocked`にする。
+ *
  * CIの失敗を直す回(`ci_check_id`が非NULL)は、通常の回と次の点が違う。
  * - 返信を投稿せず、作業項目のheadも処理済みの位置も更新しない。
  *   作業項目のheadを進めないのは、その差(作業項目のheadとPRのhead)が`poll_prs`の自動のレビューを起動するためで、
@@ -450,7 +473,7 @@ export async function main(
   const prUrl = `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`;
 
   // watermarkは無条件には進めない(理由は`shouldAdvanceWatermarks`の説明を参照)。
-  // 進めるのは、requirements_gapの差し戻しに成功したときと、pushに成功したときだけ。
+  // 進めるのは、requirements_gapの差し戻しに成功したときと、design_gapで設計へ戻せたときと、pushに成功したときだけ。
 
   /**
    * 作業項目を`fixing`から`toStatus`へ遷移させ、遷移できたらDiscordへ
@@ -492,7 +515,7 @@ export async function main(
 
   // `finalizeTerminal`で終わる分岐(これと、以降の"needs_human" / "blocked"のすべて)は、
   // 意図して`bumpWatermarks`を呼ばない(`shouldAdvanceWatermarks`の説明を参照)。
-  // 呼ぶのは、後に出てくるrequirements_gapの差し戻し成功とpush成功の経路だけ。
+  // 呼ぶのは、後に出てくるrequirements_gapの差し戻し成功と、設計への戻しの成功と、push成功の経路だけ。
   if (action.kind === "guard_blocked") {
     await finalizeTerminal("blocked", reason ?? "safety guard failed");
     return { ok: true, final_status: "blocked", notice: reason };
@@ -664,7 +687,189 @@ export async function main(
     return { ok: true, final_status: "blocked", notice: gapReport };
   }
 
-  // ここに来るのは`action.kind === "push"`のときだけ。
+  // 親が無いPRの修正は設計書を渡されないので、設計の不足は返らない。返ったときは、戻す先が無いので人に回す。
+  if (action.kind === "design_gap_needs_human") {
+    await insertFixRound({
+      work_item_id,
+      round: fix_round,
+      trigger_review_ids,
+      outcome: "design_gap",
+      replies,
+      commit_shas: [],
+    });
+    await finalizeTerminal("needs_human", reason ?? summary);
+    return { ok: true, final_status: "needs_human", notice: reason };
+  }
+
+  // 設計書が渡ったレビュー回が設計の不足を返したとき、親を設計へ戻す。
+  // 上限と設計工程の無効は、親に触れずにここで止める。起動の判定と起動は、この`main`の中に置く。
+  if (action.kind === "design_gap_reroute") {
+    if (parent_work_item_id === null) {
+      throw new Error(
+        "pr_fix_finish: design_gap_reroute without a parent_work_item_id",
+      );
+    }
+    // ラウンドは、親を読む前に、止める場合も含めて必ず記録する。
+    await insertFixRound({
+      work_item_id,
+      round: fix_round,
+      trigger_review_ids,
+      outcome: "design_gap",
+      replies,
+      commit_shas: [],
+    });
+
+    const gapReport = reason ?? summary;
+    // 報告は信頼できない入力を読んだClaudeの出力なので、注記と通知に出す前に整える。
+    const gapNotice = limitGapReport(gapReport);
+
+    const parentItem = await getWorkItem(parent_work_item_id);
+    if (parentItem === null) {
+      const missing = withGapReport(
+        PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
+        gapNotice,
+      );
+      await finalizeTerminal("needs_human", missing, missing);
+      return {
+        ok: true,
+        final_status: "needs_human",
+        notice: PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
+      };
+    }
+
+    // 親Issueの`factory`ラベルも、このPRの`factory:fix`ラベルも付け直さない。
+    // どちらも着手時に消費され、戻すものは無い。
+    const rerouteGuard = evaluateRerouteGuard(parentItem.issue_number);
+    if (!rerouteGuard.ok) {
+      log.warn("aborting design_gap reroute: parent work item has no issue", {
+        parent_work_item_id,
+        reason: "no_parent_issue",
+        detail: rerouteGuard.reason,
+      });
+      const noIssue = withGapReport(rerouteGuard.reason, gapNotice);
+      await finalizeTerminal("needs_human", noIssue, noIssue);
+      return {
+        ok: true,
+        final_status: "needs_human",
+        notice: rerouteGuard.reason,
+      };
+    }
+    const parentIssueNumber = rerouteGuard.issueNumber;
+
+    // 反映できた設計の却下と、実装とPRの修正からの戻しは、同じ上限を分け合う。
+    const designAction = decideDesignGapAction({
+      designEnabled: config.design_enabled,
+      appliedRejections: await countAppliedDesignRejections(
+        parent_work_item_id,
+        DESIGN_REGENERATING_NOTE,
+        DESIGN_REJECTED_EXHAUSTED_PREFIX,
+        PR_FIX_DESIGN_GAP_NOTE_PREFIX,
+      ),
+      maxDesignAttempts: config.max_design_attempts,
+    });
+    if (designAction === "disabled") {
+      const closed = withGapReport(
+        PR_FIX_DESIGN_GAP_DISABLED_REASON,
+        gapNotice,
+      );
+      await finalizeTerminal("needs_human", closed, closed);
+      return {
+        ok: true,
+        final_status: "needs_human",
+        notice: PR_FIX_DESIGN_GAP_DISABLED_REASON,
+      };
+    }
+    if (designAction === "exhausted") {
+      const exhausted = withGapReport(
+        PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
+        gapNotice,
+      );
+      await finalizeTerminal("needs_human", exhausted, exhausted);
+      return {
+        ok: true,
+        final_status: "needs_human",
+        notice: PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
+      };
+    }
+
+    // 親を比較交換で戻した直後に設計フローを起動し、処理済みの位置と`blocked`はその後に書く。
+    const rerouted = await reroutePrFixToDesign(
+      {
+        casToDesigning: (expectedFlowJobId) =>
+          returnToDesigningFromPrFixIfLeaseHolder(
+            parent_work_item_id,
+            expectedFlowJobId,
+            `${PR_FIX_DESIGN_GAP_NOTE_PREFIX}${limitGapReport(gapReport)}`,
+          ),
+        hasNewerCycle: () => hasNewerIssueCycle(parent_work_item_id),
+        parentMovedSinceFixStarted: () =>
+          hasParentTransitionSinceFixStarted(parent_work_item_id, work_item_id),
+        // 起動に失敗したときは、起動の手順が親を`designing`から`needs_human`へ戻してIssueへ通知する。
+        launchDesign: (feedback) => {
+          const startDesign = buildStartDesign(
+            config,
+            {
+              workItem: parentItem,
+              issueNumber: parentIssueNumber,
+              webhookUrl,
+              log,
+            },
+            undefined,
+            feedback,
+          );
+          return startDesign();
+        },
+        bumpWatermarks: () =>
+          bumpWatermarks(work_item_id, {
+            last_review_id: max_review_id,
+            last_comment_id: max_comment_id,
+            last_review_comment_id: max_review_comment_id,
+          }),
+        markBlocked: async () => {
+          await updateStatusIfCurrent(
+            work_item_id,
+            "fixing",
+            "blocked",
+            `design_gap: rerouted to work item ${String(parent_work_item_id)}`,
+          );
+        },
+      },
+      {
+        parent: {
+          id: parentItem.id,
+          issue_number: parentIssueNumber,
+          status: parentItem.status,
+          flow_job_id: parentItem.flow_job_id,
+        },
+        gapReport,
+      },
+    );
+    if (rerouted.kind === "refused") {
+      log.warn("aborting design_gap reroute", {
+        parent_work_item_id,
+        parent_status: parentItem.status,
+        detail: rerouted.reason,
+      });
+      const refusal = withGapReport(rerouted.reason, gapNotice);
+      await finalizeTerminal("needs_human", refusal, refusal);
+      return { ok: true, final_status: "needs_human", notice: rerouted.reason };
+    }
+    if (rerouted.outcome !== "started") {
+      log.warn("the design flow was not started after the design_gap reroute", {
+        parent_work_item_id,
+        outcome: rerouted.outcome,
+      });
+    }
+    return { ok: true, final_status: "blocked", notice: gapNotice };
+  }
+
+  // ここに来るのは`action.kind === "push"`のときだけ。分岐を足したとき、pushの経路へ黙って落ちないよう、型で確かめる。
+  if (action.kind !== "push") {
+    const unhandled: never = action;
+    throw new Error(
+      `pr_fix_finish: unhandled action ${JSON.stringify(unhandled)}`,
+    );
+  }
   if (commit_subject === null) {
     await finalizeTerminal(
       "needs_human",

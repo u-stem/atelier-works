@@ -59,6 +59,7 @@ import {
   type DesignDraft,
   type Diagram,
   type FailureRecord,
+  FIX_OUTCOMES,
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
@@ -2756,12 +2757,6 @@ export async function hasPrReviewForHead(
 // fix_rounds
 // ---------------------------------------------------------------------------
 
-const FIX_OUTCOMES: readonly FixOutcome[] = [
-  "done",
-  "requirements_gap",
-  "blocked",
-];
-
 /** `factory.fix_rounds`に行を挿入し、そのIDを返す。 */
 export async function insertFixRound(
   record: FixRoundRecord,
@@ -4253,12 +4248,14 @@ export async function listWorkItemsByStatuses(
 }
 
 /**
- * 設計の却下のうち作業項目に反映できたものと、実装から設計へ戻した数を、遷移の記録(`factory.work_item_events`)から数える。
- * 同じ上限(`max_design_attempts`)を分け合うので、合計を返す。数えるのは次の3つである。
+ * 設計の却下のうち作業項目に反映できたものと、実装とPRの修正から設計へ戻した数を、遷移の記録(`factory.work_item_events`)から数える。
+ * 同じ上限(`max_design_attempts`)を分け合うので、合計を返す。数えるのは次の4つである。
  * - `awaiting_design_approval`から`designing`への遷移で、注記が`regeneratingNote`と等しい(設計の再生成)。
  * - `awaiting_design_approval`から`needs_human`への遷移で、注記が`exhaustedPrefix`で始まる(上限に達した却下)。
  * - `implementing`から`designing`への遷移(実装からの戻し)。注記では照合しない。
  *   この遷移は、リースを持つ実装だけが、設計の試行を進める1つの文でしか作れないためである。
+ * - `pr_open`から`designing`への遷移(PRの修正からの戻し)で、注記が`prFixGapPrefix`で始まる。
+ *   遷移元が`pr_open`の遷移は再実行など他にもあるので、書く側と同じ接頭辞で絞る。
  * 遷移元の条件は、分岐ごとに持つ。再実行の遷移(`needs_human`から`designing`など)は、どの分岐にも当たらず数えない。
  * 範囲は現在の要件定義の試行である。遷移の記録には試行の番号が無いので、
  * 作業項目の「`requirements_generating`への遷移(遷移元と遷移先が違う)」の最新の`id`より後の記録だけを数える。
@@ -4270,7 +4267,7 @@ export async function countAppliedDesignRejections(
   workItemId: number,
   regeneratingNote: string,
   exhaustedPrefix: string,
-  _prFixGapPrefix: string,
+  prFixGapPrefix: string,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const rows = await sql`
@@ -4280,6 +4277,7 @@ export async function countAppliedDesignRejections(
         (from_status = 'awaiting_design_approval' AND to_status = 'designing' AND note = ${regeneratingNote})
         OR (from_status = 'awaiting_design_approval' AND to_status = 'needs_human' AND starts_with(note, ${exhaustedPrefix}))
         OR (from_status = 'implementing' AND to_status = 'designing')
+        OR (from_status = 'pr_open' AND to_status = 'designing' AND starts_with(note, ${prFixGapPrefix}))
       )
       AND id > COALESCE((
         SELECT MAX(id) FROM factory.work_item_events
@@ -4370,32 +4368,90 @@ export async function returnToDesigningFromImplementingIfLeaseHolder(
   return rows.length > 0;
 }
 
-/** PRの修正から親を`designing`へ戻す比較交換。 */
+/**
+ * PRの修正が設計の不足を返したとき、親を`pr_open`から`designing`へ戻す。
+ * 比較は、親の状態が`pr_open`で、`flow_job_id`が読んだときの`expectedFlowJobId`のまま(`null`なら`NULL`のまま)であること。
+ * 条件に合えば、同じ文で設計の試行を1進め、`flow_job_id`を空にし、遷移の記録(遷移元`pr_open`)を`note`で書く。
+ * 設計の試行を進めるので、前の設計の承認は、実装の関門、再実行、承認待ちの走査のどれの照合も通らない。
+ * 戻す先の`designing`は稼働中の状態なので、読んだ後に同じIssueの新しいサイクルが稼働中で挿入されていると、
+ * 部分一意インデックス`work_items_active_issue_key`が更新を拒む。その違反は、競合に負けたものとして`false`を返す。
+ * 条件に合わなければ何も書かずに`false`を返す。違反以外の失敗は投げる。
+ */
 export async function returnToDesigningFromPrFixIfLeaseHolder(
-  _id: number,
-  _expectedFlowJobId: string | null,
-  _note: string | null = null,
-  _sql: SqlClient = defaultSqlClient,
-  _jobIds: JobIds = jobIdsFromEnv(process.env),
+  id: number,
+  expectedFlowJobId: string | null,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
-  return false;
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'designing', design_attempt = design_attempt + 1, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = 'pr_open'
+        AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, 'pr_open', 'designing', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  try {
+    const rows = await statement.fetch();
+    return rows.length > 0;
+  } catch (err) {
+    if (isActiveIssueUniqueViolation(err)) return false;
+    throw err;
+  }
 }
 
-/** 同じIssueに、より大きい`cycle`の`issue`の作業項目があるか。 */
+/**
+ * `workItemId`の作業項目と同じIssueに、より大きい`cycle`の`issue`の作業項目があるかを返す。
+ * 新しいサイクルに置き換わった作業項目を、設計へ戻して生き返らせないために、戻す前に確かめる。
+ */
 export async function hasNewerIssueCycle(
-  _workItemId: number,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  const rows = await sql`
+    SELECT 1 AS found
+    FROM factory.work_items parent
+    JOIN factory.work_items newer
+      ON newer.owner = parent.owner AND newer.repo = parent.repo AND newer.issue_number = parent.issue_number
+    WHERE parent.id = ${workItemId}::bigint
+      AND newer.kind = 'issue'
+      AND newer.cycle > parent.cycle
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
-/** PRの修正が始まった後に、親の遷移の記録があるか。 */
+/**
+ * PRの修正(`fixWorkItemId`)が始まった後に、親(`parentWorkItemId`)の状態を変えた遷移の記録があるかを返す。
+ * 修正が始まった時点は、修正が`fixing`へ入った最新の遷移の時刻で、無ければ修正の作成時刻である。
+ * 修正の行は`fixing`で挿入されるので、再実行していなければ遷移の記録を持たない。
+ * 同じ状態どうしの記録(取り込み内容の更新)は、状態を変えないので数えない。
+ * 修正が読んだ親の設計や要件と、戻す時点の親が食い違わないことを確かめるのに使う。
+ */
 export async function hasParentTransitionSinceFixStarted(
-  _parentWorkItemId: number,
-  _fixWorkItemId: number,
-  _sql: SqlClient = defaultSqlClient,
+  parentWorkItemId: number,
+  fixWorkItemId: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  const rows = await sql`
+    SELECT EXISTS (
+      SELECT 1 FROM factory.work_item_events moved
+      WHERE moved.work_item_id = ${parentWorkItemId}::bigint
+        AND from_status IS DISTINCT FROM to_status
+        AND moved.occurred_at > COALESCE(
+          (SELECT MAX(started.occurred_at) FROM factory.work_item_events started WHERE started.work_item_id = ${fixWorkItemId}::bigint AND started.to_status = 'fixing'),
+          (SELECT created_at FROM factory.work_items WHERE id = ${fixWorkItemId}::bigint)
+        )
+    ) AS moved
+  `.fetch();
+  const row = rows[0];
+  return row !== undefined && row.moved === true;
 }
 
 /**

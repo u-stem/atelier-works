@@ -35,6 +35,7 @@ import {
   DESIGN_REJECTED_EXHAUSTED_PREFIX,
   DESIGN_STAGE_CLOSED_REASON,
   designRejectedExhaustedReason,
+  PR_FIX_DESIGN_GAP_NOTE_PREFIX,
 } from "../lib/design_template.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
 import type { StartImplementOutcome } from "../lib/implement_launch_support.ts";
@@ -425,6 +426,7 @@ export async function buildDesignApplyDeps(
         id,
         DESIGN_REGENERATING_NOTE,
         DESIGN_REJECTED_EXHAUSTED_PREFIX,
+        PR_FIX_DESIGN_GAP_NOTE_PREFIX,
       ),
     maxDesignAttempts: config.max_design_attempts,
     needsHumanDepsFor,

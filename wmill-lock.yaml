@@ -66,7 +66,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 98ef3087ac821a587800abc79cdbde75f1f37bdd1cfea25830e8c7743bf23176
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/db: 2ddc47251ddc8faf81a5dd74e3d359e66bc9b606aabe39c24185a373067a15dc
+  f/factory/lib/db: 9a5a11652a6d5d97979ed9f569f30805a465bf57815bd54d492385afc41aa9c4
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -76,7 +76,7 @@ locks:
   f/factory/lib/design_apply_support: ad7611c5659ce77e9378008e504baa4f21b9295cf97d1fb22230ef27dba119bf
   f/factory/lib/design_doc: 39e65ecf8d275747851dc4c37e554886830c8ed6cfff7ac65ba161162aa12aef
   f/factory/lib/design_launch_support: f3755aa859f912007af96c4877849a5ae2c6fc362f2846bcafc26f6d2b2b917f
-  f/factory/lib/design_template: 426e76eb8a930e6b40e4f68f7aa53b0afbddd73b109138736936a5cbedbb0dbd
+  f/factory/lib/design_template: 9da4537c3a80561b53250e81bb2378b3622843e90ed1828bb7365334ba539c1e
   f/factory/lib/discord: 78f224b9e1ac156908338a958daf1846e4edb17329fdb8c1dd7b42741972c3b3
   f/factory/lib/doc_tree_hash: 248310a17a8d590114b08021e558454a908388727e4e199c5c4a6cd482c3e699
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
@@ -99,7 +99,7 @@ locks:
   f/factory/lib/github_errors: c1c63662dbdc331149e492cfd841f14f93f898a99bde2605b753b0db2127f8b4
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
-  f/factory/lib/implement_finish_support: e4562e4515498ca49b0fc8c7822666efe60770d2e7cbd535a5c72e573f873aa4
+  f/factory/lib/implement_finish_support: 11776270bb243a39206a44e2a54f5f5eb2f2f8a1bcc7da5c0b4c1c767b15929c
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
   f/factory/lib/implement_loop: 9cf4873b2bdb08aedb95004a19e3e31b1161b546b7c83886a469a8235e889ef2
   f/factory/lib/implement_support: 5f97221a91430c8e86a8ff77d0c8cd9e7bcbd4247902278b0ced5e2504510314
@@ -139,11 +139,11 @@ locks:
   f/factory/lib/pr_conflict_fix_recovery: adaa381f1013323d9fcd27019329d849d7ba525da75bf7a1a0ca3bd5acca74d9
   f/factory/lib/pr_conflict_support: ed43026581af4725569fe81138f9f36d6a95747a11658ff9e54abe1aa92e4c54
   f/factory/lib/pr_conflict_watch: bcb46f8fb66623c64eb6d34fa3aa4f81b395b3c5807378ab0e62111aa79ccf0d
-  f/factory/lib/pr_fix_design: 63d24b5bf91f985e9cabe8d05d8d094659412fbd35695577e5d93db818ce4aeb
+  f/factory/lib/pr_fix_design: 0f9ae3c7a17051c30b058cbba826ce172cbf943543ef92b87f784d5f3a390781
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/pr_review_retry: ffa95180ff2167b7a3a96bcd8d4e1da50747c61b6e193ba361e7ad2ad771c789
   f/factory/lib/process_lock: 6b49498e491ae04a2b6a2b2c11d016770c93b48e71d0f56318d65df21ca28cef
-  f/factory/lib/prompts: 2d3e30c36cc16594ba402c569e7e5228f802fa81642427c31fb90b49fbaef77d
+  f/factory/lib/prompts: 52daea1d901dd2953e57ad228584f746891147e8944276c0852c6fc0b79a2e5b
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
   f/factory/lib/protected_paths: 1ff3cd98d3bb6ec71835d8fd9d64275e9f6013944c170c209d2d27ac0c4ab3fb
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
@@ -158,7 +158,7 @@ locks:
   f/factory/lib/self_update_support: e1f7016a6238d611b7fe2824fc03dc7d9447ad0325162cb86daba9993a341fdd
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 0d52f0897e7c5b9e6f1ed17c06d43a9f5da8921a697f67c1f37e1e12a616b657
+  f/factory/lib/types: 73d89151229e509c0cd5b78ea370828958b5a0c55efa7a2ad8601b925a07966d
   f/factory/lib/worker_load_support: b68337109b6233aacd50be93bf977391910fcaf328a7a7ae6ba01be1269fe00c
   f/factory/lib/workspace: 4586bbeb2ef59260d2cac673043b58ecc9918231931a37be886f1f76c6090006
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -181,11 +181,11 @@ locks:
   f/factory/steps/dependabot_assess: 15c82461f3f283e89e953107be209c1b77e85311033966261245dbb0cfd9c7f6
   f/factory/steps/dependabot_finish: 4af9847578aa1e1b501e73efaf85318244b988100e0d375ef04284319e641391
   f/factory/steps/dependabot_prepare: c7f1d8acb7f22c04ec4103a39bcf6e977a0592d7e0d535ee261c9eba17a486e9
-  f/factory/steps/design_apply: eb8246a59c4945b18e47c6d19453f1550fcef5b2488d9d31cc44145dd01ab368
+  f/factory/steps/design_apply: d6fe0e352e83b6408218f4f04308ce60644a4b33df906897e851989e0c3f94c4
   f/factory/steps/design_generate: 89fccc8fc352b75d9132fd42d2dc52971b46f61da5b398da6d937b3adbaac1a8
   f/factory/steps/design_prepare: 8bef3c8c3fbf955935a67feae8c6b7e4cf42fc2a470e126f5ef353ecea082fa1
   f/factory/steps/design_request_approval: 5263c832493d2c3aa5209ceb43a93fbb150b8ba3673949e4d0a25bb77059f4aa
-  f/factory/steps/implement_finish: 6b8a9273a4b76d3c17caccac520172db0e5896b7f186f45ff16ae4c70eeddbc8
+  f/factory/steps/implement_finish: 30052a5cc709a4a1554e3149f370062d85a462386e16275a8399c28467948b05
   f/factory/steps/implement_generate: ba05e28ce48be7e632412109814437538559e42a915a60e1254e9680e5cabed7
   f/factory/steps/implement_prepare: 17d4985a53d84fc1c4b5b01b232f621b1e483acb2d7ce7c1156a9b348d96ec63
   f/factory/steps/implement_verify: f052f0212c14748287ebb6cce13d1bdb18f19b6d5fae8a15ac3d2c21e482aa7a
@@ -195,15 +195,15 @@ locks:
   f/factory/steps/pipeline_generate: 980dd3223c34609f5c2780586743d4f2d64c903b6a0d973a7809eba2ed34c855
   f/factory/steps/pipeline_prepare: 2fce173e13f4f049ae07595e86307c8bb178afb9399ff4acbdb6b9bae8e48f5b
   f/factory/steps/pipeline_request_approval: 88bd1e6f549cc625287c0dfbb26d0c09d47c13634b5f266e292794babff9c19c
-  f/factory/steps/pr_fix_apply: 7ca1c2a901dc84b244d15ac279b7c1375a80edd045cad7c8251b8043797418d0
+  f/factory/steps/pr_fix_apply: 55f101944ecaad2c0b89c45bdbf6a3b11c3efaaf14606ca3452b75c6a61d481b
   f/factory/steps/pr_fix_collect: b9723400e73863da7ca8bcc831bd84de95514e8c54393929ee508e20a5513f92
-  f/factory/steps/pr_fix_finish: e7ed607c3d9553b4b5a60c31b28f20fd6c29c7b9eb29af683d47a4d8bf15094a
+  f/factory/steps/pr_fix_finish: ee1431a16396abd17b7b4a5222d3c9c6d9094fa0335fe5ee80ed4ea236db8439
   f/factory/steps/pr_fix_prepare: 36d3a1151bb6a61d160c90b3b685bbd7522caf865f6a22671da9602b68737542
-  f/factory/steps/pr_fix_verify: 58796006a72bafefe4eb884e015e22c7e331d60492d4f7120637cc89237c485b
+  f/factory/steps/pr_fix_verify: 98a2ad0eb7a322d769d8d6f13ee07efcd4972ad1d0300caf1b53169b4e19a560
   f/factory/steps/pr_review_generate: eb116cae89512a05ce41de2818489ae2ea8ffee2036807d3cceb0e90bed0caaf
   f/factory/steps/pr_review_post: b2ea0351363d6a1e95fc4f021f4f35fd3970db46fc5f8cd0aed86c2c3830ee98
   f/factory/steps/pr_review_prepare: 08e09697d6989fcfcb82502f39ca37847d1891f94153ad23a08db3ae07e30b8f
-  f/factory/steps/pr_workflow_support: f49498918cdd5113d157e0277e046a63b3cef6a97ba95da43084b0d20ebdcbd1
+  f/factory/steps/pr_workflow_support: f21b7903ac83a72160ba3f2ff79060864cdc609a83d369eef035dbc9914eda4e
   f/factory/steps/requirements_apply: 2576a814019d09aa4aef399be13b2e17b65c475f570338c35c43871be14d703b
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: 2391a93c4071c6b45a07daa6f387c562d2184b462864718cfca832426d5afe22
