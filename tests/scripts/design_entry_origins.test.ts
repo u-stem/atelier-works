@@ -1,6 +1,8 @@
 // 設計フローを起動する元を、このテストの中で完結して固定する。
 // 設計フローを起動できるのは、再実行(`retry_work_item`)、要件定義の承認の反映(`steps/requirements_apply`)、
-// 設計の承認の反映(`steps/design_apply`)の3つだけである。新しい起動元が足されると、ここが落ちる。
+// 設計の承認の反映(`steps/design_apply`)、実装の完了(`steps/implement_finish`)の4つだけである。
+// 実装の完了は、設計書が渡された実行が設計の不足を返し、設計工程が有効で、上限に達していないときだけ起動する。
+// 新しい起動元が足されると、ここが落ちる。
 // このテストは保護パスに置く。実装フローの自動修正やPRの修正が許可の表を広げて、
 // 黙って通るようになるのを防ぐためである。
 //
@@ -39,7 +41,7 @@ type Counts = Readonly<Record<string, number>>;
 
 /**
  * 設計フローを参照するファイルと、参照ごとの出現の数。キーは`f/factory`からの相対パス。
- * 起動元は`retry_work_item.ts`、`steps/requirements_apply.ts`、`steps/design_apply.ts`の3つ。
+ * 起動元は`retry_work_item.ts`、`steps/requirements_apply.ts`、`steps/design_apply.ts`、`steps/implement_finish.ts`の4つ。
  * 起動しない参照は、失敗ハンドラ(`on_error_flow.ts`)、ジョブの取消(`console_job_cancel.ts`)、
  * リースの定義(`lib/pipeline_lease.ts`)、Consoleの既知のpathの生成物(`lib/console_known_paths.ts`)、
  * 設計フロー自身の定義(`design__flow/flow.yaml`)である。
@@ -53,6 +55,7 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
     "buildStartDesign(": 1,
   },
   "steps/design_apply.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
+  "steps/implement_finish.ts": { "startDesign(": 1, "buildStartDesign(": 1 },
   "on_error_flow.ts": { DESIGN_FLOW_PATH: 3 },
   "console_job_cancel.ts": { designFlowPathLiteral: 1 },
   "lib/pipeline_lease.ts": { DESIGN_FLOW_PATH: 1, designFlowPathLiteral: 1 },
@@ -65,13 +68,14 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
  * 数が合わないときは、新しい遷移が足されたか、減ったかである。起動元の確認と同じ重さで見直す。
  */
 const ALLOWED_DESIGNING: Readonly<Record<string, number>> = {
-  "lib/db.ts": 6,
+  "lib/db.ts": 9,
   "lib/types.ts": 1,
   "retry_work_item.ts": 1,
   "steps/design_apply.ts": 1,
   "steps/design_generate.ts": 2,
   "steps/design_prepare.ts": 3,
   "steps/design_request_approval.ts": 2,
+  "steps/implement_finish.ts": 2,
   "steps/requirements_apply.ts": 2,
 };
 
@@ -391,8 +395,51 @@ describe("the condition at each origin", () => {
   });
 });
 
+describe("the condition at the return from the implement flow", () => {
+  const code = codeOf("steps/implement_finish.ts");
+
+  test("decides the action of a design gap from the design_enabled setting", () => {
+    expect(code).toMatch(
+      /\bdecideDesignGapAction\(\{\s*designEnabled:\s*config\.design_enabled\b/,
+    );
+  });
+
+  test("decides the action of a design gap once", () => {
+    expect(countOf(code, /\bdecideDesignGapAction\(/g)).toBe(1);
+  });
+
+  test("builds the start of the design flow once", () => {
+    expect(countOf(code, /\bbuildStartDesign\(/g)).toBe(1);
+  });
+
+  test("stops at needs_human when the design is disabled", () => {
+    expect(code).toMatch(
+      /if\s*\(designAction === "disabled"\)\s*\{\s*return finalizeNeedsHuman\(/,
+    );
+  });
+
+  test("stops at needs_human when the limit is reached", () => {
+    expect(code).toMatch(
+      /if\s*\(designAction === "exhausted"\)\s*\{\s*return finalizeNeedsHuman\(/,
+    );
+  });
+
+  test("builds the start of the design flow only after both stops", () => {
+    expect(code.indexOf('designAction === "exhausted"')).toBeLessThan(
+      code.indexOf("buildStartDesign("),
+    );
+  });
+
+  test("moves to designing before it builds the start of the design flow", () => {
+    const move = code.indexOf(
+      "returnToDesigningFromImplementingIfLeaseHolder(",
+    );
+    expect(move > -1 && move < code.indexOf("buildStartDesign(")).toBe(true);
+  });
+});
+
 describe("the launch edges to the design flow", () => {
-  test("start from the three origins", () => {
+  test("start from the four origins", () => {
     const origins = launchOriginsTo(
       transpile(readFileSync(LAUNCH_GRAPH, "utf8")),
       "design",
@@ -400,6 +447,7 @@ describe("the launch edges to the design flow", () => {
     expect(origins).toEqual([
       "retry_work_item",
       "steps/design_apply",
+      "steps/implement_finish",
       "steps/requirements_apply",
     ]);
   });

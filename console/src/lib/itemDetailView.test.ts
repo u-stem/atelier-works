@@ -582,6 +582,18 @@ describe("describeRound", () => {
     ).toBe("要件の不足");
   });
 
+  test("labels a design gap", () => {
+    expect(describeRound(round({ outcome: "design_gap" })).outcomeLabel).toBe(
+      "設計の不足",
+    );
+  });
+
+  test("colors a design gap as a warning", () => {
+    expect(describeRound(round({ outcome: "design_gap" })).outcomeVariant).toBe(
+      "warning",
+    );
+  });
+
   test("colors a failed check as a failure", () => {
     expect(
       describeRound(round({ outcome: "check_failed" })).outcomeVariant,

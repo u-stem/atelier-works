@@ -902,6 +902,24 @@ export async function latestStatusTransition(
 }
 
 /**
+ * 設計へ入る最新の遷移の記録と、その遷移より後に設計の承認依頼があるか。
+ * `designRequestedAfter`は、承認依頼の`requested_at`が遷移の`occurred_at`より後のときだけ真になる(同時刻は偽)。
+ */
+export type DesignEntryEvent = StatusEventSummary & {
+  readonly to_status: WorkItemStatus;
+  readonly designRequestedAfter: boolean;
+};
+
+export async function latestDesignEntryEvent(
+  _workItemId: number,
+  _carryingNotePrefix: string,
+  _exhaustedNotePrefix: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<DesignEntryEvent | null> {
+  return null;
+}
+
+/**
  * PRに紐づく`pr_review`か`pr_fix`の作業項目のうち、終端でないものがあるかを返す。
  * 閉じたPRのworktreeを消す前に、そのPRをまだ使う処理が無いことを確かめるために使う。
  */

@@ -37,12 +37,14 @@ import {
 } from "./lib/console_actions.ts";
 import {
   addNoticeUnlessUnresolved,
+  type DesignEntryEvent,
   defaultSqlClient,
   getWorkItem,
   hasRequirementDraftAfter,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
   latestDesignApproval,
+  latestDesignEntryEvent,
   latestRequirementsApproval,
   latestStatusEvent,
   latestStatusTransition,
@@ -68,6 +70,7 @@ import {
   fetchIssueState,
   GitHubHttpError,
 } from "./lib/github.ts";
+import { IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX } from "./lib/implement_finish_support.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import {
@@ -182,6 +185,15 @@ export function feedbackFromGapNote(note: string | null): string | null {
 }
 
 /**
+ * 実装が設計の不足を返して設計へ入った記録から、設計に渡す文を作る。渡さないときは`null`を返す。
+ */
+export function feedbackFromDesignEntry(
+  _event: DesignEntryEvent | null,
+): string | null {
+  return null;
+}
+
+/**
  * 人が書いた却下の理由から、要件定義の生成に渡す文を作る。空は`null`を返す。
  * 承認者本人の指示なので印は付けず、整形も切り詰めもしない。
  * 通常の却下(`requirements_apply`)が、理由をそのまま要件定義の生成に渡すのと同じ扱いである。
@@ -209,6 +221,9 @@ export type RestartContextDeps = {
     workItemId: number,
     attempt: number,
   ) => Promise<boolean>;
+  readonly latestDesignEntry: (
+    workItemId: number,
+  ) => Promise<DesignEntryEvent | null>;
 };
 
 /**
@@ -249,6 +264,13 @@ export function restartContextDeps(
       latestStatusTransition(id, status, sql, skipNotePrefix),
     hasRequirementDraftAfter: (id, attempt) =>
       hasRequirementDraftAfter(id, attempt, sql),
+    latestDesignEntry: (id) =>
+      latestDesignEntryEvent(
+        id,
+        RESTART_CARRYING_GAP_NOTE_PREFIX,
+        IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+        sql,
+      ),
   };
 }
 
