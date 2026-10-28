@@ -226,6 +226,22 @@ export function feedbackFromDesignEntry(
 }
 
 /**
+ * 戻す上限で止めた遷移の後に、設計がまだ作り直されていないかを返す。
+ * 報告が空でも真になる。報告が無くても、設計の不足で止めた設計は実装に渡せないためである。
+ * 設計への戻しは、設計の試行が進んで設計へ入っているので対象にしない。
+ */
+function isUnconsumedDesignGapStop(event: DesignEntryEvent | null): boolean {
+  return (
+    event !== null &&
+    !event.designRequestedAfter &&
+    event.from_status === "implementing" &&
+    event.to_status === "needs_human" &&
+    event.note !== null &&
+    event.note.startsWith(IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX)
+  );
+}
+
+/**
  * 人が書いた却下の理由から、要件定義の生成に渡す文を作る。空は`null`を返す。
  * 承認者本人の指示なので印は付けず、整形も切り詰めもしない。
  * 通常の却下(`requirements_apply`)が、理由をそのまま要件定義の生成に渡すのと同じ扱いである。
@@ -398,13 +414,15 @@ export async function buildRestartContext(
     implementReady ? await readStopEvent() : null,
   );
   // 要件定義へ戻る再開では、設計へ渡す報告を読まない。戻した後の設計は要件定義から作り直すためである。
-  const designGapFeedback =
+  const designEntry =
     designApprovalInScope && stop === "other"
-      ? feedbackFromDesignEntry(await deps.latestDesignEntry(workItem.id))
+      ? await deps.latestDesignEntry(workItem.id)
       : null;
+  const designGapFeedback = feedbackFromDesignEntry(designEntry);
   const designApproved =
     designApprovalInScope &&
     designGapFeedback === null &&
+    !isUnconsumedDesignGapStop(designEntry) &&
     isDesignApprovedForAttempt(designApproval, {
       attempt: workItem.attempt,
       designAttempt: workItem.design_attempt,
