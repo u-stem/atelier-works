@@ -32,6 +32,7 @@ import {
   DEPENDABOT_RESULT_UNKNOWN_REASON,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
+import type { StartDesignOutcome } from "../lib/design_launch_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   endsWithMarkerLine,
@@ -1709,7 +1710,10 @@ function isValidCommitSubject(value: unknown): value is string {
  * それ以外の`outcome`では`""`を受け付ける。
  * `pr_fix_apply.ts`は`"done"`以外の`commit_subject`を実際のコミットに使わない。
  */
-export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
+export function isFixClaudeOutput(
+  value: unknown,
+  _hasDesign = false,
+): value is FixClaudeOutput {
   if (!isRecord(value)) return false;
   if (!isOneOf(value.outcome, FIX_OUTCOMES)) return false;
   if (!isString(value.summary)) return false;
@@ -3264,6 +3268,78 @@ export async function rerouteRequirementsGap(
     }
   }
   return { kind: "rerouted", jobId, recorded };
+}
+
+/** PRの修正が設計の不足を報告し、親が設計の段階にあるために止めた準備の理由。 */
+export const PR_FIX_DESIGN_STAGE_PARENT_REASON = "";
+
+/** 設計の不足の戻しが、設計の却下と戻しの上限に達して止まった理由。 */
+export const PR_FIX_DESIGN_GAP_EXHAUSTED_REASON = "";
+
+/** 設計の不足の戻しが、設計工程の無効で止まった理由。 */
+export const PR_FIX_DESIGN_GAP_DISABLED_REASON = "";
+
+/** 設計の不足の戻し先の親の作業項目が見つからなかった理由。 */
+export const PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON = "";
+
+/** 設計の不足の戻し先の親の作業項目。Issue番号が無い親は戻す前に除いておく。 */
+export type DesignGapRerouteParent = Pick<
+  RerouteParent,
+  "id" | "issue_number" | "status" | "flow_job_id"
+>;
+
+/** 親が`pr_open`でなく、設計の不足を戻せないときの理由。戻せるなら`null`。 */
+export function evaluateDesignGapRerouteParentStatus(
+  _parent: DesignGapRerouteParent,
+): string | null {
+  return null;
+}
+
+/** 親のIssueが、より新しいサイクルに置き換わっているときの理由。 */
+export function designGapNewerCycleReason(
+  _parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return "";
+}
+
+/** このPRの修正が始まった後に、親が動いたときの理由。 */
+export function designGapParentMovedReason(
+  _parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return "";
+}
+
+/** 比較交換に負けたときの理由。 */
+export function designGapRerouteRaceLostReason(
+  _parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return "";
+}
+
+export type PrFixDesignRerouteDeps = {
+  readonly hasNewerCycle: () => Promise<boolean>;
+  readonly parentMovedSinceFixStarted: () => Promise<boolean>;
+  readonly casToDesigning: (
+    expectedFlowJobId: string | null,
+  ) => Promise<boolean>;
+  readonly launchDesign: (feedback: string) => Promise<StartDesignOutcome>;
+  readonly bumpWatermarks: () => Promise<void>;
+  readonly markBlocked: () => Promise<void>;
+};
+
+export type PrFixDesignRerouteOutcome =
+  | { readonly kind: "refused"; readonly reason: string }
+  | { readonly kind: "rerouted"; readonly outcome: StartDesignOutcome };
+
+/** PRの修正が返した設計の不足で、親を`pr_open`から`designing`へ戻し、設計フローを起動する。 */
+export async function reroutePrFixToDesign(
+  _deps: PrFixDesignRerouteDeps,
+  _args: {
+    readonly parent: DesignGapRerouteParent;
+    readonly gapReport: string;
+  },
+): Promise<PrFixDesignRerouteOutcome> {
+  return { kind: "refused", reason: "" };
 }
 
 /**

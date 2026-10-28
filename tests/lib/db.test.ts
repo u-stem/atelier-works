@@ -46,9 +46,11 @@ import {
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerIssueCycle,
   hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasNonTerminalPrWorkItem,
+  hasParentTransitionSinceFixStarted,
   hasPassedMainCiRunAfter,
   hasPriorReview,
   hasRequirementDraftAfter,
@@ -131,6 +133,7 @@ import {
   restartStoppedWorkItem,
   restartTransientPrReview,
   returnToDesigningFromImplementingIfLeaseHolder,
+  returnToDesigningFromPrFixIfLeaseHolder,
   returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
   type SqlClient,
@@ -5545,26 +5548,31 @@ describe("listWorkItemsByStatuses", () => {
 describe("countAppliedDesignRejections", () => {
   const NOTE = "design rejected; regenerating";
   const PREFIX = "design rejected after max_design_attempts";
+  const GAP_PREFIX = "pr_fix design gap: ";
 
   test("returns the count", async () => {
     const { sql } = createFakeSqlClient([[{ n: 2 }]]);
-    expect(await countAppliedDesignRejections(1, NOTE, PREFIX, sql)).toBe(2);
+    expect(
+      await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql),
+    ).toBe(2);
   });
 
   test("returns zero when the query returns no row", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await countAppliedDesignRejections(1, NOTE, PREFIX, sql)).toBe(0);
+    expect(
+      await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql),
+    ).toBe(0);
   });
 
   test("passes the notes from the caller as parameters", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.values).toEqual(expect.arrayContaining([NOTE, PREFIX]));
   });
 
   test("counts the moves from awaiting_design_approval back to designing", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "to_status = 'designing' AND note = ?",
     );
@@ -5572,7 +5580,7 @@ describe("countAppliedDesignRejections", () => {
 
   test("counts the moves from awaiting_design_approval to needs_human by the prefix", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "to_status = 'needs_human' AND starts_with(note, ? )",
     );
@@ -5580,7 +5588,7 @@ describe("countAppliedDesignRejections", () => {
 
   test("counts the regeneration only when it left awaiting_design_approval", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "from_status = 'awaiting_design_approval' AND to_status = 'designing' AND note = ?",
     );
@@ -5588,7 +5596,7 @@ describe("countAppliedDesignRejections", () => {
 
   test("counts the limit only when it left awaiting_design_approval", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "from_status = 'awaiting_design_approval' AND to_status = 'needs_human' AND starts_with(note, ? )",
     );
@@ -5596,7 +5604,7 @@ describe("countAppliedDesignRejections", () => {
 
   test("counts the returns from implementing to designing", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "(from_status = 'implementing' AND to_status = 'designing')",
     );
@@ -5604,7 +5612,7 @@ describe("countAppliedDesignRejections", () => {
 
   test("does not compare the note of a return from implementing", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).not.toMatch(
       /from_status = 'implementing' AND to_status = 'designing' AND/,
     );
@@ -5612,15 +5620,37 @@ describe("countAppliedDesignRejections", () => {
 
   test("does not count a move into designing from any other status", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).not.toMatch(
       /\(\s*to_status = 'designing'/,
     );
   });
 
+  test("counts the returns from pr_open to designing by the prefix of the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "(from_status = 'pr_open' AND to_status = 'designing' AND starts_with(note, ? ))",
+    );
+  });
+
+  test("passes the prefix of the PR fix from the caller as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
+    expect(calls[0]?.values).toContain(GAP_PREFIX);
+  });
+
+  test("does not count a return from pr_open without the prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).not.toMatch(
+      /from_status = 'pr_open' AND to_status = 'designing'\s*\)/,
+    );
+  });
+
   test("counts only the records after the latest move into the requirements", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "to_status = 'requirements_generating' AND from_status IS DISTINCT FROM to_status",
     );
@@ -5628,13 +5658,13 @@ describe("countAppliedDesignRejections", () => {
 
   test("compares the ids of the records, not the times", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text).toContain("MAX(id)");
   });
 
   test("casts work_item_id to ::bigint", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
-    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, GAP_PREFIX, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "work_item_id = ? ::bigint",
     );
@@ -9482,5 +9512,212 @@ describe("returnToDesigningFromImplementingIfLeaseHolder", () => {
   test("returns false when the status or the lease changed", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await call(sql)).toBe(false);
+  });
+});
+
+describe("returnToDesigningFromPrFixIfLeaseHolder", () => {
+  function call(sql: SqlClient, lease: string | null = "job-1") {
+    return returnToDesigningFromPrFixIfLeaseHolder(
+      1,
+      lease,
+      "pr_fix design gap: x",
+      sql,
+      NO_JOBS,
+    );
+  }
+
+  test("moves the work item to designing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("status = 'designing'");
+  });
+
+  test("advances design_attempt in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("design_attempt = design_attempt + 1");
+  });
+
+  test("clears flow_job_id in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("moves only from pr_open", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "AND status = 'pr_open'",
+    );
+  });
+
+  test("guards the update with the lease the parent was read with", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("flow_job_id IS NOT DISTINCT FROM");
+  });
+
+  test("casts the lease to text so that a null lease is compared as text", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql, null);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "flow_job_id IS NOT DISTINCT FROM ? ::text",
+    );
+  });
+
+  test("records the transition from pr_open in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id) SELECT updated.id, 'pr_open', 'designing',",
+    );
+  });
+
+  test("passes the id, the lease, the note and the job ids as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toEqual([
+      1,
+      "job-1",
+      "pr_fix design gap: x",
+      null,
+      null,
+    ]);
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(await call(sql)).toBe(true);
+  });
+
+  test("returns false when the status or the lease changed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(false);
+  });
+
+  /** 文を実行すると、`error`で失敗する偽の`SqlClient`。 */
+  function failingSql(error: Error): SqlClient {
+    return () => ({
+      fetch: () => Promise.reject(error),
+      execute: () => Promise.reject(error),
+    });
+  }
+
+  test("returns false when a newer cycle of the issue won the unique index", async () => {
+    const error = new Error(
+      'duplicate key value violates unique constraint "work_items_active_issue_key"',
+    );
+    expect(await call(failingSql(error))).toBe(false);
+  });
+
+  test("throws an error that is not the violation of the unique index", async () => {
+    const error = new Error("db down");
+    await expect(call(failingSql(error))).rejects.toThrow("db down");
+  });
+});
+
+describe("hasNewerIssueCycle", () => {
+  test("returns true when a newer cycle exists", async () => {
+    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
+    expect(await hasNewerIssueCycle(7, sql)).toBe(true);
+  });
+
+  test("returns false when no newer cycle exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNewerIssueCycle(7, sql)).toBe(false);
+  });
+
+  test("compares the cycle of the issue work item of the same issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle(7, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "newer.cycle > parent.cycle",
+    );
+  });
+
+  test("looks only at work items of the issue kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle(7, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "newer.kind = 'issue'",
+    );
+  });
+
+  test("matches the owner, the repository and the issue number", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle(7, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "newer.owner = parent.owner AND newer.repo = parent.repo AND newer.issue_number = parent.issue_number",
+    );
+  });
+
+  test("casts the id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle(7, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "parent.id = ? ::bigint",
+    );
+  });
+});
+
+describe("hasParentTransitionSinceFixStarted", () => {
+  test("returns true when the parent moved after the fix started", async () => {
+    const { sql } = createFakeSqlClient([[{ moved: true }]]);
+    expect(await hasParentTransitionSinceFixStarted(7, 9, sql)).toBe(true);
+  });
+
+  test("returns false when the parent did not move", async () => {
+    const { sql } = createFakeSqlClient([[{ moved: false }]]);
+    expect(await hasParentTransitionSinceFixStarted(7, 9, sql)).toBe(false);
+  });
+
+  test("returns false when the query returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasParentTransitionSinceFixStarted(7, 9, sql)).toBe(false);
+  });
+
+  test("counts only the records that changed the status of the parent", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ moved: false }]]);
+    await hasParentTransitionSinceFixStarted(7, 9, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "from_status IS DISTINCT FROM to_status",
+    );
+  });
+
+  test("takes the latest move of the fix into fixing as the start", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ moved: false }]]);
+    await hasParentTransitionSinceFixStarted(7, 9, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "SELECT MAX(started.occurred_at) FROM factory.work_item_events started WHERE started.work_item_id = ? ::bigint AND started.to_status = 'fixing'",
+    );
+  });
+
+  test("falls back to the creation time of the fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ moved: false }]]);
+    await hasParentTransitionSinceFixStarted(7, 9, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "SELECT created_at FROM factory.work_items WHERE id = ? ::bigint",
+    );
+  });
+
+  test("passes the ids of the parent and the fix as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ moved: false }]]);
+    await hasParentTransitionSinceFixStarted(7, 9, sql);
+    expect(calls[0]?.values).toEqual([7, 9, 9]);
+  });
+});
+
+describe("toFixRoundRecord for a design gap", () => {
+  test("accepts design_gap as the outcome", () => {
+    const fixRound = toFixRoundRecord({
+      work_item_id: 1,
+      round: 1,
+      trigger_review_ids: [17],
+      outcome: "design_gap",
+      replies: [],
+      commit_shas: [],
+    });
+    expect(fixRound.outcome).toBe("design_gap");
   });
 });

@@ -4270,6 +4270,7 @@ export async function countAppliedDesignRejections(
   workItemId: number,
   regeneratingNote: string,
   exhaustedPrefix: string,
+  _prFixGapPrefix: string,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const rows = await sql`
@@ -4367,6 +4368,34 @@ export async function returnToDesigningFromImplementingIfLeaseHolder(
   `;
   const rows = await statement.fetch();
   return rows.length > 0;
+}
+
+/** PRの修正から親を`designing`へ戻す比較交換。 */
+export async function returnToDesigningFromPrFixIfLeaseHolder(
+  _id: number,
+  _expectedFlowJobId: string | null,
+  _note: string | null = null,
+  _sql: SqlClient = defaultSqlClient,
+  _jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  return false;
+}
+
+/** 同じIssueに、より大きい`cycle`の`issue`の作業項目があるか。 */
+export async function hasNewerIssueCycle(
+  _workItemId: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
+/** PRの修正が始まった後に、親の遷移の記録があるか。 */
+export async function hasParentTransitionSinceFixStarted(
+  _parentWorkItemId: number,
+  _fixWorkItemId: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
 }
 
 /**

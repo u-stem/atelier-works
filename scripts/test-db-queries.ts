@@ -46,8 +46,10 @@ import {
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerIssueCycle,
   hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
+  hasParentTransitionSinceFixStarted,
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
   hasRequirementDraftAfter,
@@ -127,6 +129,7 @@ import {
   restartStoppedWorkItem,
   restartTransientPrReview,
   returnToDesigningFromImplementingIfLeaseHolder,
+  returnToDesigningFromPrFixIfLeaseHolder,
   returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
   saveDesignDraftIfLeaseHolder,
@@ -926,7 +929,7 @@ function runRow(
 /** `fix_rounds`に入れる1行のVALUESを返す。 */
 function roundRow(
   workItemId: number,
-  outcome: "done" | "blocked",
+  outcome: "done" | "blocked" | "design_gap",
   ago: number,
 ): string {
   return `(${String(workItemId)}, 1, '${outcome}', ${secondsAgo(ago)})`;
@@ -1026,6 +1029,9 @@ const blockedAfterDone = await prFixItem(100);
 // 検査の再実行が、doneのラウンドの前と後の作業項目にそれぞれある(後の1回)。
 const retriedBeforeDone = await prFixItem(101);
 const retriedAfterDone = await prFixItem(101);
+// blockedのラウンドの後に、design_gapのラウンドで終えた(design_gapは成功として数えるので、その前の失敗は数えない)。
+const blockedBeforeGap = await prFixItem(102);
+const gapAfterBlocked = await prFixItem(102);
 execPsql(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
@@ -1042,6 +1048,8 @@ execPsql(
     runRow(blockedAfterDone, "pr_fix", 550, null),
     runRow(retriedBeforeDone, "pr_fix_verify_retry", 900, null),
     runRow(retriedAfterDone, "pr_fix_verify_retry", 300, null),
+    runRow(blockedBeforeGap, "pr_fix", 950, null),
+    runRow(gapAfterBlocked, "pr_fix", 750, null),
   ].join(", ")}`,
 );
 execPsql(
@@ -1054,6 +1062,8 @@ execPsql(
     roundRow(doneBetweenBlocked, "done", 700),
     roundRow(blockedAfterDone, "blocked", 500),
     roundRow(retriedBeforeDone, "done", 700),
+    roundRow(blockedBeforeGap, "blocked", 900),
+    roundRow(gapAfterBlocked, "design_gap", 700),
   ].join(", ")}`,
 );
 for (const [workItemId, round] of [
@@ -1105,6 +1115,11 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
   ],
   ["a blocked round before a done round is not counted", blockedAfterDone, 1],
   ["a verify retry before a done round is not counted", retriedAfterDone, 1],
+  [
+    "a design_gap round counts as a success, so the failure before it is not counted",
+    gapAfterBlocked,
+    0,
+  ],
 ];
 for (const [name, workItemId, expected] of prFixExpectations) {
   const actual = await countPrFixFailures(workItemId, sql);
@@ -10052,6 +10067,7 @@ async function lastEventNote(id: number): Promise<unknown> {
 const DESIGN_REGENERATING_TEST_NOTE = "design rejected; regenerating";
 const DESIGN_EXHAUSTED_TEST_PREFIX =
   "design rejected after max_design_attempts";
+const PR_FIX_GAP_TEST_PREFIX = "pr_fix design gap: ";
 
 // 設計の承認の判断に添えた理由は、最新の設計の承認の読み取りで返る。
 const reasonItem = await issueWorkItem(
@@ -10211,6 +10227,7 @@ async function countFor(id: number): Promise<number> {
     id,
     DESIGN_REGENERATING_TEST_NOTE,
     DESIGN_EXHAUSTED_TEST_PREFIX,
+    PR_FIX_GAP_TEST_PREFIX,
     sql,
   );
 }
@@ -11042,6 +11059,263 @@ check(
   (await runWorkItemDetail(noteItem, sql)).work_item.status_note ===
     "qdb other same-status note",
   (await runWorkItemDetail(noteItem, sql)).work_item.status_note,
+);
+
+// PRの修正が設計の不足を返したときの、親の`pr_open`から`designing`への戻し。
+// リースを持つ(読んだときの`flow_job_id`のままの)親だけを、1つの文で戻す。
+const prGapParent = await issueWorkItem(9700, 1, "pr_open", "qdb pr fix gap");
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-pr-gap-lease', design_attempt = 2 WHERE id = ${String(prGapParent)}`,
+);
+check(
+  "pr fix design gap: a parent that holds another lease is not moved",
+  !(await returnToDesigningFromPrFixIfLeaseHolder(
+    prGapParent,
+    "qdb-other-lease",
+    `${PR_FIX_GAP_TEST_PREFIX}nope`,
+    sql,
+  )) && (await workItemRow(prGapParent)).status === "pr_open",
+  await workItemRow(prGapParent),
+);
+check(
+  "pr fix design gap: a parent that is not pr_open is not moved",
+  !(await returnToDesigningFromPrFixIfLeaseHolder(
+    await issueWorkItem(9701, 1, "implementing", "qdb pr fix gap other"),
+    null,
+    `${PR_FIX_GAP_TEST_PREFIX}nope`,
+    sql,
+  )),
+);
+check(
+  "pr fix design gap: the lease holder moves the parent",
+  await returnToDesigningFromPrFixIfLeaseHolder(
+    prGapParent,
+    "qdb-pr-gap-lease",
+    `${PR_FIX_GAP_TEST_PREFIX}FR-002`,
+    sql,
+  ),
+);
+const prGapMoved = await workItemRow(prGapParent);
+check(
+  "pr fix design gap: the parent is designing with the next design_attempt and no lease",
+  prGapMoved.status === "designing" &&
+    prGapMoved.design_attempt === 3 &&
+    prGapMoved.flow_job_id === null,
+  prGapMoved,
+);
+check(
+  "pr fix design gap: the transition is recorded from pr_open with the note",
+  (await lastEventNote(prGapParent)) === `${PR_FIX_GAP_TEST_PREFIX}FR-002` &&
+    (
+      await sql`
+        SELECT from_status, to_status FROM factory.work_item_events
+        WHERE work_item_id = ${prGapParent}::bigint ORDER BY id DESC LIMIT 1
+      `.fetch()
+    )[0]?.from_status === "pr_open",
+);
+check(
+  "pr fix design gap: the return is counted by the prefix of its note",
+  (await countFor(prGapParent)) === 1,
+  await countFor(prGapParent),
+);
+await moveStatus(
+  prGapParent,
+  "designing",
+  "needs_human",
+  "design flow could not be started",
+);
+await moveStatus(prGapParent, "needs_human", "pr_open", "retry");
+await moveStatus(prGapParent, "pr_open", "designing", "another note");
+check(
+  "pr fix design gap: a move from pr_open without the prefix is not counted",
+  (await countFor(prGapParent)) === 1,
+  await countFor(prGapParent),
+);
+await moveStatus(prGapParent, "designing", "pr_open", "back");
+await moveStatus(
+  prGapParent,
+  "pr_open",
+  "designing",
+  `${PR_FIX_GAP_TEST_PREFIX}second`,
+);
+check(
+  "pr fix design gap: a second return adds up",
+  (await countFor(prGapParent)) === 2,
+  await countFor(prGapParent),
+);
+await moveStatus(
+  prGapParent,
+  "designing",
+  "awaiting_design_approval",
+  "design approval requested",
+);
+await moveStatus(
+  prGapParent,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+check(
+  "pr fix design gap: the returns of the PR fix, the rejections and the returns of the implementation are one total",
+  (await countFor(prGapParent)) === 3,
+  await countFor(prGapParent),
+);
+await moveStatus(
+  prGapParent,
+  "designing",
+  "requirements_generating",
+  "design gap: requirements",
+);
+check(
+  "pr fix design gap: the move into the requirements starts the range again",
+  (await countFor(prGapParent)) === 0,
+  await countFor(prGapParent),
+);
+
+// 新しいサイクルに割り込まれた親は戻さない。稼働中のサイクルが部分一意インデックスを持つので、戻す文が違反して`false`になる。
+const prGapOld = await issueWorkItem(
+  9702,
+  1,
+  "pr_open",
+  "qdb pr fix gap old cycle",
+);
+check(
+  "newer cycle: no newer cycle exists at first",
+  !(await hasNewerIssueCycle(prGapOld, sql)),
+);
+await issueWorkItem(
+  9702,
+  2,
+  "requirements_generating",
+  "qdb pr fix gap new cycle",
+);
+check(
+  "newer cycle: a newer cycle of the same issue is found",
+  await hasNewerIssueCycle(prGapOld, sql),
+);
+check(
+  "newer cycle: the newer cycle does not point back to an older one",
+  !(await hasNewerIssueCycle(
+    Number(
+      (
+        await sql`
+          SELECT id FROM factory.work_items
+          WHERE owner = ${OWNER} AND issue_number = 9702 AND cycle = 2
+        `.fetch()
+      )[0]?.id,
+    ),
+    sql,
+  )),
+);
+check(
+  "newer cycle: a cycle of another issue is not a newer cycle",
+  !(await hasNewerIssueCycle(
+    await issueWorkItem(9703, 1, "pr_open", "qdb pr fix gap other issue"),
+    sql,
+  )),
+);
+check(
+  "newer cycle: the unique index refuses the return of an old cycle, and the call returns false",
+  !(await returnToDesigningFromPrFixIfLeaseHolder(
+    prGapOld,
+    null,
+    `${PR_FIX_GAP_TEST_PREFIX}race`,
+    sql,
+  )) && (await workItemRow(prGapOld)).status === "pr_open",
+  await workItemRow(prGapOld),
+);
+
+// 親が動いたかは、このPRの修正が`fixing`へ入った最新の遷移(無ければ作成時刻)より後の、状態を変えた遷移で決める。
+// 同じ状態どうしの記録(取り込み内容の更新)は動いたと数えない。
+const moveParent = await issueWorkItem(
+  9704,
+  1,
+  "pr_open",
+  "qdb pr fix moved parent",
+);
+const moveFix = await prFixItem(9704);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET created_at = '2026-10-01 00:00:00+00', status = 'fixing' WHERE id = ${String(moveFix)}`,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.work_item_events WHERE work_item_id IN (${String(moveParent)}, ${String(moveFix)})`,
+);
+function eventAt(
+  workItemId: number,
+  from: string,
+  to: string,
+  at: string,
+): string {
+  return `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(workItemId)}, '${from}', '${to}', 'qdb', '${at}')`;
+}
+execPsql(
+  target,
+  eventAt(moveParent, "implementing", "pr_open", "2026-09-30 00:00:00+00"),
+);
+check(
+  "parent moved: a transition before the fix was created does not count, and a fix without transitions starts at its creation",
+  !(await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql)),
+);
+execPsql(
+  target,
+  eventAt(moveParent, "pr_open", "pr_open", "2026-10-02 00:00:00+00"),
+);
+check(
+  "parent moved: a record that keeps the status does not count",
+  !(await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql)),
+);
+execPsql(
+  target,
+  eventAt(moveFix, "reviewed", "fixing", "2026-10-03 00:00:00+00"),
+);
+execPsql(
+  target,
+  eventAt(moveParent, "pr_open", "implementing", "2026-10-02 12:00:00+00"),
+);
+check(
+  "parent moved: the latest move of the fix into fixing is the start, so an earlier move of the parent does not count",
+  !(await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql)),
+);
+execPsql(
+  target,
+  eventAt(moveParent, "implementing", "pr_open", "2026-10-04 00:00:00+00"),
+);
+check(
+  "parent moved: a move of the parent after the start counts",
+  await hasParentTransitionSinceFixStarted(moveParent, moveFix, sql),
+);
+const moveParentOther = await issueWorkItem(
+  9705,
+  1,
+  "pr_open",
+  "qdb pr fix moved other",
+);
+execPsql(
+  target,
+  `DELETE FROM factory.work_item_events WHERE work_item_id = ${String(moveParentOther)}`,
+);
+check(
+  "parent moved: the transitions of another parent do not count",
+  !(await hasParentTransitionSinceFixStarted(moveParentOther, moveFix, sql)),
+);
+
+// 設計の不足のラウンドを、修正のラウンドの結果として記録できる。
+check(
+  "pr fix design gap: the round is recorded with the design_gap outcome",
+  (await insertFixRound(
+    {
+      work_item_id: moveFix,
+      round: 1,
+      trigger_review_ids: [],
+      outcome: "design_gap",
+      replies: [],
+      commit_shas: [],
+    },
+    sql,
+  )) > 0,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -692,6 +692,8 @@ export type FixPromptInput = {
   reviews: PromptReview[];
   comments: PromptComment[];
   requirements: RequirementDraft | null;
+  /** 親のIssueの承認済みの設計書の本文。渡さない実行は`null`か省略。 */
+  design?: string | null;
   checkFailures: readonly CheckFailure[];
 };
 
@@ -850,6 +852,9 @@ export const FIX_SCHEMA = {
   ],
   additionalProperties: false,
 } as const;
+
+/** 設計書が渡るレビュー回の出力スキーマ。 */
+export const FIX_SCHEMA_WITH_DESIGN_GAP = FIX_SCHEMA;
 
 // ---------------------------------------------------------------------------
 // auditPrompt

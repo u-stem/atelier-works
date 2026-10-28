@@ -660,6 +660,13 @@ export type ReviewRecord = {
 
 export type FixOutcome = "done" | "requirements_gap" | "blocked";
 
+/** `factory.fix_rounds.outcome`の値。テーブルのCHECK制約と一致させる。 */
+export const FIX_OUTCOMES: readonly FixOutcome[] = [
+  "done",
+  "requirements_gap",
+  "blocked",
+];
+
 /**
  * 修正の返信で、元のコメントをどう扱ったか。
  * - `"fixed"`: コードを変更して対応した。

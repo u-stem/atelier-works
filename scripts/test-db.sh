@@ -74,6 +74,7 @@ DESIGN_STAGE_KIND_MIGRATION="20261026120100_design_stage_approval_kind.up.sql"
 DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
 DOC_HASH_MIGRATION="20261026150000_requirement_drafts_doc_hash.up.sql"
 IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION="20261028100000_implement_rounds_design_gap.up.sql"
+FIX_ROUNDS_DESIGN_GAP_MIGRATION="20261028110000_fix_rounds_design_gap.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -906,6 +907,89 @@ SQL
   log "implement_rounds_design_gap refuses to roll back over a design_gap round, and round-trips"
 }
 
+# 修正ラウンドの結果に`design_gap`を足すmigrationの前に、既存の結果の行を入れておく。
+# 制約の付け替えが、既存の行の上で通り、行を変えないことを確かめるため。
+seed_fix_rounds_rows() {
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the fix rounds"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES
+  (1, 'issue', 'pr_fix', 'fixgapprobe', 'r', 1, 't', 'needs_human');
+INSERT INTO factory.fix_rounds (work_item_id, round, outcome)
+  SELECT id, 1, 'done' FROM factory.work_items WHERE owner = 'fixgapprobe';
+INSERT INTO factory.fix_rounds (work_item_id, round, outcome)
+  SELECT id, 2, 'blocked' FROM factory.work_items WHERE owner = 'fixgapprobe';
+INSERT INTO factory.fix_rounds (work_item_id, round, outcome)
+  SELECT id, 3, 'requirements_gap' FROM factory.work_items WHERE owner = 'fixgapprobe';
+SQL
+}
+
+fix_scalar() {
+  printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+}
+fix_outcomes() {
+  fix_scalar "SELECT string_agg(r.outcome, ',' ORDER BY r.round) FROM factory.fix_rounds r JOIN factory.work_items w ON w.id = r.work_item_id WHERE w.owner = 'fixgapprobe'"
+}
+
+# 付け替えた後も、入れておいた行がそのまま残り、`design_gap`を受け入れることを確かめる。
+verify_fix_rounds_rows_survive() {
+  [ "$(fix_outcomes)" = "done,blocked,requirements_gap" ] || die "the fix rounds changed while the check was replaced: $(fix_outcomes)"
+  log "fix_rounds_design_gap kept the existing rounds"
+}
+
+# 修正ラウンドの結果に`design_gap`を足すmigrationを、既存の行ごと戻して当て直す。
+# 戻す前に`design_gap`の行があると、旧い一覧の制約を足す文が失敗し、全体が戻ることを確かめる。
+# 行を消せば戻せて、旧い一覧は`design_gap`を拒み、当て直せば受け入れる。全downを当てる検査の前に呼ぶ。
+verify_fix_rounds_design_gap_rollback() {
+  local up="${MIGRATIONS_DIR}/${FIX_ROUNDS_DESIGN_GAP_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${FIX_ROUNDS_DESIGN_GAP_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  fix_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  printf "INSERT INTO factory.fix_rounds (work_item_id, round, outcome) SELECT id, 4, 'design_gap' FROM factory.work_items WHERE owner = 'fixgapprobe';\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a design_gap round was rejected after the migration"
+  [ "$(fix_outcomes)" = "done,blocked,requirements_gap,design_gap" ] || die "unexpected rounds before the rollback: $(fix_outcomes)"
+  fix_rejected "INSERT INTO factory.fix_rounds (work_item_id, round, outcome) SELECT id, 5, 'bogus' FROM factory.work_items WHERE owner = 'fixgapprobe'" fix_rounds_outcome_check
+
+  log "rolling back fix_rounds_design_gap while a design_gap round remains"
+  local refused
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${down}" 2>&1)"; then
+    die "fix_rounds_design_gap was rolled back while a design_gap round remained"
+  fi
+  case "${refused}" in
+    *fix_rounds_outcome_check*) ;;
+    *) die "fix_rounds_design_gap was refused, but not by fix_rounds_outcome_check: ${refused}" ;;
+  esac
+  [ "$(fix_outcomes)" = "done,blocked,requirements_gap,design_gap" ] || die "the refused rollback changed the rounds: $(fix_outcomes)"
+
+  printf "DELETE FROM factory.fix_rounds WHERE outcome = 'design_gap';\n" | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "could not delete the design_gap round"
+  log "rolling back fix_rounds_design_gap"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back fix_rounds_design_gap"
+  [ "$(fix_outcomes)" = "done,blocked,requirements_gap" ] || die "unexpected rounds after the rollback: $(fix_outcomes)"
+  fix_rejected "INSERT INTO factory.fix_rounds (work_item_id, round, outcome) SELECT id, 4, 'design_gap' FROM factory.work_items WHERE owner = 'fixgapprobe'" fix_rounds_outcome_check
+
+  log "re-applying fix_rounds_design_gap"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply fix_rounds_design_gap"
+  [ "$(fix_outcomes)" = "done,blocked,requirements_gap" ] || die "the re-applied migration changed the rounds: $(fix_outcomes)"
+  printf "INSERT INTO factory.fix_rounds (work_item_id, round, outcome) SELECT id, 4, 'design_gap' FROM factory.work_items WHERE owner = 'fixgapprobe';\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a design_gap round was rejected after re-applying"
+  fix_rejected "INSERT INTO factory.fix_rounds (work_item_id, round, outcome) SELECT id, 5, 'bogus' FROM factory.work_items WHERE owner = 'fixgapprobe'" fix_rounds_outcome_check
+  printf "DELETE FROM factory.work_items WHERE owner = 'fixgapprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "fix_rounds_design_gap refuses to roll back over a design_gap round, and round-trips"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -919,6 +1003,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
     seed_disk_usage_notices
+  fi
+  if [ "${up_name}" = "${FIX_ROUNDS_DESIGN_GAP_MIGRATION}" ]; then
+    seed_fix_rounds_rows
   fi
   log "applying ${up_name}"
   psql_exec "${SCRATCH_DB}" <"${up_file}"
@@ -942,6 +1029,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${GH_COLLECT_DETAIL_MIGRATION}" ]; then
     verify_gh_collect_detail
+  fi
+  if [ "${up_name}" = "${FIX_ROUNDS_DESIGN_GAP_MIGRATION}" ]; then
+    verify_fix_rounds_rows_survive
   fi
 done
 
@@ -1042,6 +1132,7 @@ verify_design_stage_rollback
 verify_design_drafts_rollback
 verify_doc_hash_rollback
 verify_implement_rounds_design_gap_rollback
+verify_fix_rounds_design_gap_rollback
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
