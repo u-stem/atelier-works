@@ -1282,7 +1282,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 設定タブは書かれた値をそのまま出すので、`false`として読まれている`true`も`true`と表示される。
 `design_enabled_ignored`が未解決なら、`true`が`false`として読まれている。
 
-`max_design_attempts`は、現在の要件定義の試行で、設計を却下できる回数の上限である。
+`max_design_attempts`は、現在の要件定義の試行で、設計を作り直せる回数の上限である。
+人の却下、実装からの戻し、PR修正からの戻しが、この上限を分け合う。
 上限に達した却下は、作業項目を人の対応待ちにする。
 設計の失敗や期限切れの再実行は、回数に数えない。
 
@@ -1316,6 +1317,38 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 承認の断りで「Issueを比べられなかった」と案内されたときは、しばらく待ってからやり直す。
 Issueが移されたか消されたなら、却下する。
 設計の却下は、Issueを読めないと要件定義へ戻れず、設計の再生成が`max_design_attempts`に達するまで繰り返される。
+
+## PR修正が設計の不足を返して止まったとき
+
+設計工程が有効なとき、レビュー回のPR修正は、承認済みの設計書どおりに直すと要件を満たせない場合に、設計の不足を報告する。
+Factoryは、親のIssueの作業項目を設計中へ戻し、設計フローを起動する。
+このときPR修正の作業項目は、ブロック(`blocked`)で終わる。
+設計の承認の後は、実装フローがPRを引き継ぐ。
+設計の最中にPRの修正を依頼しても、準備の確認が止める。
+止まった理由は`parent issue is in the design stage`で、設計の承認と実装が終わってからやり直す。
+
+Factoryが親を戻せなかったときは、PR修正が人の対応待ちになる。
+通知の理由は、次のとおりである。
+どの理由でも、修正のラウンドは記録済みである。
+
+| 理由の先頭 | 意味 | 手順 |
+| --- | --- | --- |
+| `design gap from the PR fix after max_design_attempts` | 設計の却下と戻しが、上限に達した | Issueにトリガーのラベルを付け直して新しいサイクルを始めるか、PRを人が直す |
+| `design gap from the PR fix while the design stage is closed` | 設計工程が無効だった | Issueにトリガーのラベルを付け直して新しいサイクルを始めるか、PRを人が直す |
+| `design gap from the PR fix: parent work item not found` | 戻す先の親が見つからない | Consoleで作業項目の状態を確かめる |
+| `parent work item N (issue #M) is in the design stage` | 親が設計の段階にある | 設計の承認と実装が終わってから、`factory:fix`を付け直す |
+| `parent work item N (issue #M) is being implemented` | 親が実装中である | 実装フローの完了を待ってから、`factory:fix`を付け直す |
+| `parent work item N (issue #M) was replaced by a newer cycle` | 親が新しいサイクルに置き換わっている | このPRは古いサイクルのものである。Consoleで現在のサイクルを確かめ、必要ならPRを人が直す |
+| `parent work item N (issue #M) moved after the fix started` | PR修正の開始後に、親の状態が動いた | Consoleで親の状態を確かめ、設計と実装が終わってから、`factory:fix`を付け直す |
+| `parent work item N (issue #M) changed before the design_gap reroute` | 戻す直前に、親の状態が変わった | Consoleで親の状態を確かめ、設計と実装が終わってから、`factory:fix`を付け直す |
+
+上限と設計工程の無効のときは、親がPR作成済み(`pr_open`)のまま残る。
+親は再実行の対象でないので、再実行しても設計を作り直せない。
+手順の1つ目は、新しいサイクルが要件定義から作り直すので、承認し直しが要る。
+
+設計の起動に失敗したときは、親が人の対応待ちになる。
+親を再実行すると、PR修正の報告が設計に渡り、設計書を作り直す。
+理由は`design flow could not be started`で始まる。
 
 ## 実装フローを有効にして使う
 
@@ -3090,6 +3123,15 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 トランザクションごと戻るので、表と制約は残る。
 設計の下書きを、行があるまま失わないためである。
 行の扱いを決めて消してから、1行目をやり直す。
+
+設計工程より新しいmigrationには、ラウンドの結果の制約を戻すものが2つある。
+実装のラウンドは`20261028100000_implement_rounds_design_gap`である。
+PR修正のラウンドは`20261028110000_fix_rounds_design_gap`である。
+どちらも、`design_gap`のラウンドが1件でもあれば、制約の足し直しに失敗する。
+トランザクションごと戻るので、制約とラウンドは残る。
+ラウンドは修正の記録で、行を失わないためである。
+設計フローの入口が閉じている間は、`design_gap`のラウンドは書かれないので、通常は止まらない。
+止まったときは、`implement_rounds`と`fix_rounds`で`outcome = 'design_gap'`の行を確かめ、扱いを決めてから、やり直す。
 
 設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。
 そのため、通常は表の1行目と2行目で止まらない。
