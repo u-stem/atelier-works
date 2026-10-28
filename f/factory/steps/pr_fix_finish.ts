@@ -697,8 +697,17 @@ export async function main(
       replies,
       commit_shas: [],
     });
-    await finalizeTerminal("needs_human", reason ?? summary);
-    return { ok: true, final_status: "needs_human", notice: reason };
+    // 報告は信頼できない入力を読んだClaudeの出力なので、注記と通知に出す前に整える。
+    const noParent = withGapReport(
+      PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
+      limitGapReport(reason ?? summary),
+    );
+    await finalizeTerminal("needs_human", noParent, noParent);
+    return {
+      ok: true,
+      final_status: "needs_human",
+      notice: PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
+    };
   }
 
   // 設計書が渡ったレビュー回が設計の不足を返したとき、親を設計へ戻す。

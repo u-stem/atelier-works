@@ -191,12 +191,34 @@ function bodyOf(code: string, name: string): string {
 }
 
 /**
- * `header`の直後から始まる`{ ... }`の本体(波括弧を含む)。引用符の中の波括弧は数えない。
- * 見つからないとき、または閉じていないときは空文字列を返す。
+ * `header`の直後から始まる`{ ... }`の本体(波括弧を含む)。
+ * 二重引用符、一重引用符、バッククォートの文字列の中の波括弧は数えない。
+ * バッククォートの文字列は、入れ子のテンプレートを持たないものとして読む。
+ * 見出しの直後(空白を除く)に`{`が無いとき、見つからないとき、閉じていないときは空文字列を返す。
  */
 function blockAfter(code: string, header: string): string {
-  void code;
-  void header;
+  const at = code.indexOf(header);
+  if (at < 0) return "";
+  const open = at + header.length;
+  const start =
+    open + (code.slice(open).length - code.slice(open).trimStart().length);
+  if (code[start] !== "{") return "";
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = start; i < code.length; i += 1) {
+    const ch = code[i];
+    if (quote !== null) {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+    } else if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return code.slice(start, i + 1);
+    }
+  }
   return "";
 }
 
