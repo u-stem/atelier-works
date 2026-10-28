@@ -63,3 +63,17 @@ describe("the first round that never reaches the checks in implement_verify", ()
     expect(await source()).not.toContain('first_round.kind !== "lease_lost"');
   });
 });
+
+describe("the design flag of the fix rounds in implement_verify", () => {
+  test("passes whether the context carries a design to the Claude round", async () => {
+    expect(await source()).toContain(
+      "hasDesign: implementContextHasDesign(context)",
+    );
+  });
+
+  test("selects the output contract note by the same flag", async () => {
+    expect(await source()).toContain(
+      "outputContractNote: implementOutputContractNote(",
+    );
+  });
+});

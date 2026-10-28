@@ -41,3 +41,11 @@ describe("the requirements check around the copy in implement_generate", () => {
     expect(count(await source(), "runImplementClaudeRound(")).toBe(1);
   });
 });
+
+describe("the design flag of the Claude round in implement_generate", () => {
+  test("passes whether the context carries a design", async () => {
+    expect(await source()).toContain(
+      "hasDesign: implementContextHasDesign(context)",
+    );
+  });
+});

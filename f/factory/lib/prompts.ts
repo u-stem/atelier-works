@@ -1194,3 +1194,6 @@ export const IMPLEMENT_SCHEMA = {
   ],
   additionalProperties: false,
 } as const;
+
+/** 設計書がある実行の出力スキーマ。 */
+export const IMPLEMENT_SCHEMA_WITH_DESIGN_GAP = IMPLEMENT_SCHEMA;

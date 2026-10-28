@@ -5,6 +5,7 @@ import {
   GAP_REPORT_MAX_CHARS,
   INVISIBLE_PATTERN,
   isAllowedCharacter,
+  limitGapReport,
   normalizeDesignForImplement,
   sanitizeModelText,
   sanitizeModelTextDetailed,
@@ -543,5 +544,27 @@ describe("normalizeDesignForImplement", () => {
         normalize(`${"a".repeat(MAX - 5)}${GITHUB_TOKEN}`).text,
       ).not.toContain("ghp_");
     });
+  });
+});
+
+describe("limitGapReport", () => {
+  test("keeps a short report as it is", () => {
+    expect(limitGapReport("FR-002を満たせません。")).toBe(
+      "FR-002を満たせません。",
+    );
+  });
+
+  test("cuts a long report at GAP_REPORT_MAX_CHARS code points", () => {
+    expect(
+      Array.from(limitGapReport("あ".repeat(GAP_REPORT_MAX_CHARS + 500))),
+    ).toHaveLength(GAP_REPORT_MAX_CHARS);
+  });
+
+  test("masks a secret in the report", () => {
+    expect(limitGapReport(`token ${GITHUB_TOKEN}`)).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("removes the control characters of the report", () => {
+    expect(limitGapReport("a\u0000b")).toBe("ab");
   });
 });

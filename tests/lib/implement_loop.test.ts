@@ -36,12 +36,17 @@ import {
   type FixRoundRequest,
   GITLEAKS_CHECK_NAME,
   IMPLEMENT_CLAUDE_ROUND_KINDS,
+  IMPLEMENT_LOOP_EXITS,
+  IMPLEMENT_OUTPUT_CONTRACT_NOTE,
+  IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP,
   type ImplementClaudeRound,
   type ImplementClaudeRunInput,
   type ImplementClaudeRunRound,
   type ImplementContext,
   type ImplementLoopDeps,
   type ImplementLoopInput,
+  implementContextHasDesign,
+  implementOutputContractNote,
   implementPromptInput,
   isCopyableDocEntry,
   LEASE_LOST_ROUND,
@@ -64,7 +69,10 @@ import {
   type ImplementClaudeOutput,
 } from "../../f/factory/lib/implement_support.ts";
 import { modelChangesAfterFailure } from "../../f/factory/lib/model_policy.ts";
-import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
+import {
+  IMPLEMENT_SCHEMA,
+  IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
+} from "../../f/factory/lib/prompts.ts";
 import type {
   AgentRunRecord,
   ImplementRoundRecord,
@@ -89,6 +97,14 @@ const GAP: ImplementClaudeOutput = {
   outcome: "requirements_gap",
   summary: "FR-002を満たせません。",
   gap_report: "FR-002は既存APIに無い項目を前提としています。",
+  commit_subject: "",
+  commit_body: "",
+  notes_for_reviewer: [],
+};
+const DESIGN_GAP: ImplementClaudeOutput = {
+  outcome: "design_gap",
+  summary: "設計書のAPIでは受入条件を満たせません。",
+  gap_report: "設計書は既存APIに無い項目を前提としています。",
   commit_subject: "",
   commit_body: "",
   notes_for_reviewer: [],
@@ -191,6 +207,7 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   workItemId: 3,
   attempt: 1,
   sonnetFailures: 0,
+  hasDesign: false,
   stage: "implement",
   prompt: "prompt",
   systemPromptPath: "/tmp/system-prompt.md",
@@ -999,9 +1016,17 @@ describe("defaultDocDirCopyDeps.copyDir", () => {
   });
 });
 
+/** 設計書の無い実行のラウンド。 */
+function roundWithoutDesign(
+  result: RunClaudeResult<ImplementClaudeOutput>,
+  agentRunId: number,
+) {
+  return toImplementClaudeRound(result, agentRunId, false);
+}
+
 describe("toImplementClaudeRound", () => {
   test("returns an output round for a valid output", () => {
-    expect(toImplementClaudeRound(success(DONE), 11)).toEqual({
+    expect(roundWithoutDesign(success(DONE), 11)).toEqual({
       kind: "output",
       output: DONE,
       agent_run_id: 11,
@@ -1011,22 +1036,19 @@ describe("toImplementClaudeRound", () => {
 
   test("returns an invalid_output round when the semantic check fails", () => {
     expect(
-      toImplementClaudeRound(success({ ...DONE, gap_report: "x" }), 11).kind,
+      roundWithoutDesign(success({ ...DONE, gap_report: "x" }), 11).kind,
     ).toBe("invalid_output");
   });
 
   test("keeps the semantic check's reason on an invalid_output round", () => {
-    const round = toImplementClaudeRound(
-      success({ ...DONE, gap_report: "x" }),
-      11,
-    );
+    const round = roundWithoutDesign(success({ ...DONE, gap_report: "x" }), 11);
     expect(round.kind === "invalid_output" ? round.reason : null).toBe(
       "gap_report must be null when outcome is done",
     );
   });
 
   test("returns a claude_failed round for a failed run", () => {
-    expect(toImplementClaudeRound(FAILURE, 12)).toEqual({
+    expect(roundWithoutDesign(FAILURE, 12)).toEqual({
       kind: "claude_failed",
       reason: "timeout",
       detail: "claude -p timed out after 1000ms",
@@ -1036,7 +1058,7 @@ describe("toImplementClaudeRound", () => {
   });
 
   test("accepts a requirements_gap output as a valid round", () => {
-    expect(toImplementClaudeRound(success(GAP), 13).kind).toBe("output");
+    expect(roundWithoutDesign(success(GAP), 13).kind).toBe("output");
   });
 
   test("adds the discarded attempt's cost to the round cost", () => {
@@ -1045,7 +1067,7 @@ describe("toImplementClaudeRound", () => {
       retried: true,
       discardedAgentRun: { ...AGENT_RUN, cost_usd: 0.75 },
     };
-    expect(toImplementClaudeRound(retried, 11).cost_usd).toBe(2);
+    expect(roundWithoutDesign(retried, 11).cost_usd).toBe(2);
   });
 
   test("adds the discarded attempt's cost to a failed round", () => {
@@ -1054,7 +1076,26 @@ describe("toImplementClaudeRound", () => {
       retried: true,
       discardedAgentRun: { ...AGENT_RUN, cost_usd: 0.75 },
     };
-    expect(toImplementClaudeRound(retriedFailure, 12).cost_usd).toBe(0.75);
+    expect(roundWithoutDesign(retriedFailure, 12).cost_usd).toBe(0.75);
+  });
+
+  test("accepts a design_gap output as a valid round when a design was given", () => {
+    expect(toImplementClaudeRound(success(DESIGN_GAP), 14, true).kind).toBe(
+      "output",
+    );
+  });
+
+  test("returns an invalid_output round for a design_gap output without a design", () => {
+    expect(toImplementClaudeRound(success(DESIGN_GAP), 14, false).kind).toBe(
+      "invalid_output",
+    );
+  });
+
+  test("keeps the reason of a design_gap output without a design", () => {
+    const round = toImplementClaudeRound(success(DESIGN_GAP), 14, false);
+    expect(round.kind === "invalid_output" ? round.reason : null).toBe(
+      "design_gap outcome without an approved design",
+    );
   });
 });
 
@@ -1140,10 +1181,16 @@ describe("buildImplementClaudeOptions", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).timeoutMs).toBe(3_600_000);
   });
 
-  test("uses IMPLEMENT_SCHEMA", () => {
+  test("uses IMPLEMENT_SCHEMA when there is no design", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).jsonSchema).toBe(
       IMPLEMENT_SCHEMA,
     );
+  });
+
+  test("uses IMPLEMENT_SCHEMA_WITH_DESIGN_GAP when a design was given", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, hasDesign: true }).jsonSchema,
+    ).toBe(IMPLEMENT_SCHEMA_WITH_DESIGN_GAP);
   });
 
   test("uses dontAsk", () => {
@@ -1562,6 +1609,33 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(harness(), loopInput(outputRound(GAP)))).gap_report).toBe(
       GAP.gap_report,
     );
+  });
+
+  test("exits design_gap without inspecting the worktree", async () => {
+    const h = harness();
+    await run(h, loopInput(outputRound(DESIGN_GAP)));
+    expect(h.calls.fingerprint).toBe(0);
+  });
+
+  test("exits design_gap for a design_gap output", async () => {
+    expect(
+      (await run(harness(), loopInput(outputRound(DESIGN_GAP)))).exit,
+    ).toBe("design_gap");
+  });
+
+  test("carries the gap report on a design_gap exit", async () => {
+    expect(
+      (await run(harness(), loopInput(outputRound(DESIGN_GAP)))).gap_report,
+    ).toBe(DESIGN_GAP.gap_report);
+  });
+
+  test("records a design_gap round with the report", async () => {
+    const h = harness();
+    await run(h, loopInput(outputRound(DESIGN_GAP)));
+    expect(h.recorded[0]).toMatchObject({
+      outcome: "design_gap",
+      gap_report: DESIGN_GAP.gap_report,
+    });
   });
 
   test("exits claude_error for a failed run", async () => {
@@ -2595,6 +2669,59 @@ describe("ranClaude", () => {
   test("is false for a round stopped by the requirements check", () => {
     expect(ranClaude({ kind: "requirements_modified", reason: "r" })).toBe(
       false,
+    );
+  });
+});
+
+describe("IMPLEMENT_LOOP_EXITS", () => {
+  test("lists design_gap", () => {
+    expect(IMPLEMENT_LOOP_EXITS).toContain("design_gap");
+  });
+});
+
+describe("implementContextHasDesign", () => {
+  test("is true for a design", () => {
+    expect(implementContextHasDesign({ design_markdown: "## 設計" })).toBe(
+      true,
+    );
+  });
+
+  test("is false for a null design", () => {
+    expect(implementContextHasDesign({ design_markdown: null })).toBe(false);
+  });
+
+  test("is false for a context made before the design was added", () => {
+    expect(implementContextHasDesign({})).toBe(false);
+  });
+});
+
+describe("the output contract note", () => {
+  test("keeps the note without a design byte for byte", () => {
+    expect(IMPLEMENT_OUTPUT_CONTRACT_NOTE).toBe(
+      [
+        "Your previous structured output broke the output contract, so the flow could not use it.",
+        '- outcome "done": gap_report is null; commit_subject is one non-empty line of at most 72 code points, not ending in "…", without control characters.',
+        '- outcome "requirements_gap": gap_report is a non-empty string; commit_subject and commit_body are both "".',
+        "Answer again with an output that follows these rules.",
+      ].join("\n"),
+    );
+  });
+
+  test("adds the design_gap rule when a design was given", () => {
+    expect(IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP).toContain(
+      '- outcome "design_gap": gap_report is a non-empty string; commit_subject and commit_body are both "".',
+    );
+  });
+
+  test("selects the note without a design", () => {
+    expect(implementOutputContractNote(false)).toBe(
+      IMPLEMENT_OUTPUT_CONTRACT_NOTE,
+    );
+  });
+
+  test("selects the note with design_gap when a design was given", () => {
+    expect(implementOutputContractNote(true)).toBe(
+      IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP,
     );
   });
 });

@@ -159,3 +159,8 @@ export function normalizeDesignForImplement(
     changed: truncated || sanitized.text !== markdown,
   };
 }
+
+/** 要件の不足の報告を保存してよい形にする。 */
+export function limitGapReport(report: string): string {
+  return report.slice(0, 0);
+}

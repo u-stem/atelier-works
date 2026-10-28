@@ -34,7 +34,10 @@ import {
   truncateCheckSections,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
-import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
+import {
+  IMPLEMENT_SCHEMA,
+  IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
+} from "../../f/factory/lib/prompts.ts";
 import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
 import {
   extractLinkedIssueNumbers,
@@ -59,11 +62,37 @@ const GAP_OUTPUT: ImplementClaudeOutput = {
   notes_for_reviewer: [],
 };
 
+/** 設計書の無い実行の検査。 */
+function validateNoDesign(output: ImplementClaudeOutput) {
+  return validateImplementOutput(output, false);
+}
+
+/** 設計書のある実行の検査。 */
+function validateWithDesign(output: ImplementClaudeOutput) {
+  return validateImplementOutput(output, true);
+}
+
+const DESIGN_GAP_OUTPUT: ImplementClaudeOutput = {
+  outcome: "design_gap",
+  summary: "設計書のAPIでは受入条件を満たせません。",
+  gap_report: "設計書は存在しないフィールドを前提としています。",
+  commit_subject: "",
+  commit_body: "",
+  notes_for_reviewer: [],
+};
+
 describe("IMPLEMENT_CLAUDE_OUTCOMES", () => {
-  test("matches IMPLEMENT_SCHEMA's outcome enum", () => {
+  test("matches IMPLEMENT_SCHEMA_WITH_DESIGN_GAP's outcome enum", () => {
     expect(IMPLEMENT_CLAUDE_OUTCOMES).toEqual(
-      IMPLEMENT_SCHEMA.properties.outcome.enum,
+      IMPLEMENT_SCHEMA_WITH_DESIGN_GAP.properties.outcome.enum,
     );
+  });
+
+  test("is IMPLEMENT_SCHEMA's outcome enum plus design_gap", () => {
+    expect(IMPLEMENT_CLAUDE_OUTCOMES).toEqual([
+      ...IMPLEMENT_SCHEMA.properties.outcome.enum,
+      "design_gap",
+    ]);
   });
 });
 
@@ -74,6 +103,10 @@ describe("isImplementClaudeOutput", () => {
 
   test("accepts a well-formed requirements_gap output", () => {
     expect(isImplementClaudeOutput(GAP_OUTPUT)).toBe(true);
+  });
+
+  test("accepts a well-formed design_gap output", () => {
+    expect(isImplementClaudeOutput(DESIGN_GAP_OUTPUT)).toBe(true);
   });
 
   test("rejects a non-object", () => {
@@ -119,54 +152,52 @@ describe("isImplementClaudeOutput", () => {
 
 describe("validateImplementOutput", () => {
   test("accepts a done output with a one-line subject within 72 code points", () => {
-    expect(validateImplementOutput(DONE_OUTPUT)).toEqual({ ok: true });
+    expect(validateNoDesign(DONE_OUTPUT)).toEqual({ ok: true });
   });
 
   test("accepts a done output with an empty commit_body", () => {
-    expect(
-      validateImplementOutput({ ...DONE_OUTPUT, commit_body: "" }),
-    ).toEqual({ ok: true });
+    expect(validateNoDesign({ ...DONE_OUTPUT, commit_body: "" })).toEqual({
+      ok: true,
+    });
   });
 
   test("accepts a subject of exactly 72 code points", () => {
     const subject = `feat: ${"あ".repeat(66)}`;
     expect(
-      validateImplementOutput({ ...DONE_OUTPUT, commit_subject: subject }).ok,
+      validateNoDesign({ ...DONE_OUTPUT, commit_subject: subject }).ok,
     ).toBe(true);
   });
 
   test("rejects a subject of 73 code points", () => {
     const subject = `feat: ${"あ".repeat(67)}`;
     expect(
-      validateImplementOutput({ ...DONE_OUTPUT, commit_subject: subject }).ok,
+      validateNoDesign({ ...DONE_OUTPUT, commit_subject: subject }).ok,
     ).toBe(false);
   });
 
   test("counts code points, not UTF-16 units (66 astral chars fit)", () => {
     const subject = `feat: ${"𠮷".repeat(66)}`;
     expect(
-      validateImplementOutput({ ...DONE_OUTPUT, commit_subject: subject }).ok,
+      validateNoDesign({ ...DONE_OUTPUT, commit_subject: subject }).ok,
     ).toBe(true);
   });
 
   test("rejects a done output whose subject is empty", () => {
-    expect(
-      validateImplementOutput({ ...DONE_OUTPUT, commit_subject: "" }),
-    ).toEqual({
+    expect(validateNoDesign({ ...DONE_OUTPUT, commit_subject: "" })).toEqual({
       ok: false,
       reason: "done outcome with an empty commit_subject",
     });
   });
 
   test("rejects a done output whose subject is whitespace only", () => {
-    expect(
-      validateImplementOutput({ ...DONE_OUTPUT, commit_subject: "   " }).ok,
-    ).toBe(false);
+    expect(validateNoDesign({ ...DONE_OUTPUT, commit_subject: "   " }).ok).toBe(
+      false,
+    );
   });
 
   test("rejects a subject containing a newline", () => {
     expect(
-      validateImplementOutput({
+      validateNoDesign({
         ...DONE_OUTPUT,
         commit_subject: "feat: 1行目\n2行目",
       }),
@@ -175,7 +206,7 @@ describe("validateImplementOutput", () => {
 
   test("rejects a subject ending with an ellipsis", () => {
     expect(
-      validateImplementOutput({
+      validateNoDesign({
         ...DONE_OUTPUT,
         commit_subject: "feat: 長すぎる説明…",
       }).ok,
@@ -184,7 +215,7 @@ describe("validateImplementOutput", () => {
 
   test("rejects a subject ending with an ellipsis followed by trailing whitespace", () => {
     expect(
-      validateImplementOutput({
+      validateNoDesign({
         ...DONE_OUTPUT,
         commit_subject: "feat: 長すぎる説明… ",
       }).ok,
@@ -193,7 +224,7 @@ describe("validateImplementOutput", () => {
 
   test("rejects a subject containing a control character", () => {
     expect(
-      validateImplementOutput({
+      validateNoDesign({
         ...DONE_OUTPUT,
         commit_subject: "feat: \u001bsubject",
       }),
@@ -204,40 +235,85 @@ describe("validateImplementOutput", () => {
   });
 
   test("accepts a requirements_gap output with a gap_report", () => {
-    expect(validateImplementOutput(GAP_OUTPUT)).toEqual({ ok: true });
+    expect(validateNoDesign(GAP_OUTPUT)).toEqual({ ok: true });
   });
 
   test("rejects a requirements_gap output with a null gap_report", () => {
-    expect(
-      validateImplementOutput({ ...GAP_OUTPUT, gap_report: null }),
-    ).toEqual({
+    expect(validateNoDesign({ ...GAP_OUTPUT, gap_report: null })).toEqual({
       ok: false,
       reason: "requirements_gap outcome without a gap_report",
     });
   });
 
   test("rejects a requirements_gap output with a blank gap_report", () => {
-    expect(
-      validateImplementOutput({ ...GAP_OUTPUT, gap_report: "  \n" }).ok,
-    ).toBe(false);
+    expect(validateNoDesign({ ...GAP_OUTPUT, gap_report: "  \n" }).ok).toBe(
+      false,
+    );
   });
 
   test("rejects a requirements_gap output with a non-empty commit_subject", () => {
     expect(
-      validateImplementOutput({ ...GAP_OUTPUT, commit_subject: "feat: x" }).ok,
+      validateNoDesign({ ...GAP_OUTPUT, commit_subject: "feat: x" }).ok,
     ).toBe(false);
   });
 
   test("rejects a requirements_gap output with a non-empty commit_body", () => {
-    expect(
-      validateImplementOutput({ ...GAP_OUTPUT, commit_body: "- x" }).ok,
-    ).toBe(false);
+    expect(validateNoDesign({ ...GAP_OUTPUT, commit_body: "- x" }).ok).toBe(
+      false,
+    );
   });
 
   test("rejects a done output with a non-null gap_report", () => {
     expect(
-      validateImplementOutput({ ...DONE_OUTPUT, gap_report: "leftover" }).ok,
+      validateNoDesign({ ...DONE_OUTPUT, gap_report: "leftover" }).ok,
     ).toBe(false);
+  });
+
+  test("accepts a design_gap output when a design was given", () => {
+    expect(validateWithDesign(DESIGN_GAP_OUTPUT)).toEqual({ ok: true });
+  });
+
+  test("rejects a design_gap output when no design was given", () => {
+    expect(validateNoDesign(DESIGN_GAP_OUTPUT)).toEqual({
+      ok: false,
+      reason: "design_gap outcome without an approved design",
+    });
+  });
+
+  test("rejects a design_gap output with a null gap_report", () => {
+    expect(
+      validateWithDesign({ ...DESIGN_GAP_OUTPUT, gap_report: null }),
+    ).toEqual({
+      ok: false,
+      reason: "design_gap outcome without a gap_report",
+    });
+  });
+
+  test("rejects a design_gap output with a blank gap_report", () => {
+    expect(
+      validateWithDesign({ ...DESIGN_GAP_OUTPUT, gap_report: "  \n" }).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a design_gap output with a non-empty commit_subject", () => {
+    expect(
+      validateWithDesign({ ...DESIGN_GAP_OUTPUT, commit_subject: "feat: x" })
+        .ok,
+    ).toBe(false);
+  });
+
+  test("rejects a design_gap output with a non-empty commit_body", () => {
+    expect(
+      validateWithDesign({ ...DESIGN_GAP_OUTPUT, commit_body: "- x" }).ok,
+    ).toBe(false);
+  });
+
+  test("accepts a done output whether or not a design was given", () => {
+    expect(validateWithDesign(DONE_OUTPUT)).toEqual({ ok: true });
+  });
+
+  test("accepts a requirements_gap output when a design was given", () => {
+    expect(validateWithDesign(GAP_OUTPUT)).toEqual({ ok: true });
   });
 });
 
@@ -1069,6 +1145,16 @@ describe("decideImplementRoundExit", () => {
     ).toBe("requirements_gap");
   });
 
+  test("exits with design_gap whenever Claude reported one", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        claudeOutcome: "design_gap",
+        checks: "passed",
+      }),
+    ).toBe("design_gap");
+  });
+
   test("exits with checks_skipped when the round ran no checks", () => {
     expect(
       decideImplementRoundExit({ ...CONTINUE_STATE, checks: "skipped" }),
@@ -1242,6 +1328,10 @@ describe("roundOutcomeForExit", () => {
 
   test("maps requirements_gap to requirements_gap", () => {
     expect(roundOutcomeForExit("requirements_gap")).toBe("requirements_gap");
+  });
+
+  test("maps design_gap to design_gap", () => {
+    expect(roundOutcomeForExit("design_gap")).toBe("design_gap");
   });
 
   test("maps max_rounds to check_failed", () => {

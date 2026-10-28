@@ -786,6 +786,22 @@ export const IMPLEMENT_OUTPUT_CONTRACT_NOTE = [
   "Answer again with an output that follows these rules.",
 ].join("\n");
 
+/** 設計書がある実行の出力の取り決め。 */
+export const IMPLEMENT_OUTPUT_CONTRACT_NOTE_WITH_DESIGN_GAP =
+  IMPLEMENT_OUTPUT_CONTRACT_NOTE;
+
+/** 設計書の有無に応じた出力の取り決めを返す。 */
+export function implementOutputContractNote(_hasDesign: boolean): string {
+  return IMPLEMENT_OUTPUT_CONTRACT_NOTE;
+}
+
+/** 文脈が設計書を持つかを返す。 */
+export function implementContextHasDesign(_context: {
+  readonly design_markdown?: string | null;
+}): boolean {
+  return false;
+}
+
 const FAILURE_TAIL_CHARS = 2000;
 
 export type ChangeInspection = {

@@ -236,10 +236,11 @@ describe("implement work item vocabulary (工程3)", () => {
     expect(IMPLEMENT_ROUND_MODES).toEqual(["implement", "fix"]);
   });
 
-  test("lists the six round outcomes in the migration's CHECK order", () => {
+  test("lists the seven round outcomes in the migration's CHECK order", () => {
     expect(IMPLEMENT_ROUND_OUTCOMES).toEqual([
       "done",
       "requirements_gap",
+      "design_gap",
       "check_failed",
       "checks_skipped",
       "stalled",

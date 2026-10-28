@@ -101,7 +101,7 @@ locks:
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
   f/factory/lib/implement_finish_support: cc4d155b0bb1e2aa98c3fdc30aa14d22c00e4e607bf21fe851f2b28f6106e2a2
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
-  f/factory/lib/implement_loop: b8344f820369877cb2c4af4a99a234da732ac1070bc2682def57ecc085fda5e0
+  f/factory/lib/implement_loop: 322bbe74e208ee0915f047dceabd7c87c637637ba328e0a16644ddfedd7cb3ca
   f/factory/lib/implement_support: 9f00f9120377f3a9593e1ac36fab095b12587b4036f4f7c957b2a088c95be56a
   f/factory/lib/intake_refresh: 10bf958e6d3a3a18d0b3e867f271b7974b66aad6e621bf193f735a30c6e88cf3
   f/factory/lib/job_ids: f11c9a38be9492f5776fdf950f87c51f0162028142640a2017f0f2dafba49432
@@ -122,7 +122,7 @@ locks:
   f/factory/lib/metadata_precheck: 2af277b61b41147128ea4f2e0bf7a14b3d43eb36ebb831b39edd96795ce9c89f
   f/factory/lib/metadata_signature: e82f134efb6fd01718b670cef10f4e90ec209d68c9e31865a8581fa5b9f50ecf
   f/factory/lib/model_policy: 25fed2a9c1db353e6dd08d6bac7d51335740d88ac1826b57d6a6bbaf2d16de6b
-  f/factory/lib/model_text: 86d2e1fff2768930d88dc08e4110dca570d7c24b6b575de2481412a5dfdda532
+  f/factory/lib/model_text: 7f909ef59cbe21b3bb16aa7cb1f4892252a011cf0c2df288a25810d22992fa33
   f/factory/lib/owner_id_notice: a60fb6ea53ecdb7f1e613f94c1702ca8189b4b35000aae04faba452d97afa1a2
   f/factory/lib/periodic_worker: 5babda25b9b699d5d66fac8fe4ab312645b72a686040e0816264004be145e378
   f/factory/lib/pipeline_lease: f1bc3033cac5de04674703ebd422683e4f60a94f12d4b26f863a2f35c69efe6f
@@ -142,7 +142,7 @@ locks:
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/pr_review_retry: ffa95180ff2167b7a3a96bcd8d4e1da50747c61b6e193ba361e7ad2ad771c789
   f/factory/lib/process_lock: 6b49498e491ae04a2b6a2b2c11d016770c93b48e71d0f56318d65df21ca28cef
-  f/factory/lib/prompts: 4ad7a2fbfcc9a7acb584767ad318b343b8d434aac2bff10c493fb448fa1a0fa5
+  f/factory/lib/prompts: ab59cd319f78dab52fb9d9598083a1dde2662b7b0ad11b5b2f7ec75920311936
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
   f/factory/lib/protected_paths: 1ff3cd98d3bb6ec71835d8fd9d64275e9f6013944c170c209d2d27ac0c4ab3fb
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
