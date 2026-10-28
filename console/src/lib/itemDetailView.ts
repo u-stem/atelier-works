@@ -461,6 +461,7 @@ export function describeReview(review: WorkItemReview): ReviewView {
 const FIX_OUTCOME_LABELS: ReadonlyMap<string, string> = new Map([
   ["done", "完了"],
   ["requirements_gap", "要件の不足"],
+  ["design_gap", "設計の不足"],
   ["blocked", "ブロック"],
 ]);
 
@@ -468,6 +469,7 @@ const FIX_OUTCOME_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> =
   new Map([
     ["done", "success"],
     ["requirements_gap", "warning"],
+    ["design_gap", "warning"],
     ["blocked", "failure"],
   ]);
 
