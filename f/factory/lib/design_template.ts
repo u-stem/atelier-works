@@ -84,6 +84,35 @@ export function buildDesignDocDir(
 export const DESIGN_DOC_DIR_IN_USE_REASON =
   "design document directory already holds a saved draft";
 
+/**
+ * 設計の承認依頼が期限を過ぎたときの`needs_human`の理由。承認待ちの走査が、作業項目を`expired`へ動かす遷移の注記にも使う。
+ */
+export const DESIGN_APPROVAL_TIMED_OUT_REASON = "design approval timed out";
+
+/**
+ * 設計の却下を反映するときに、設計工程が無効だったときの`needs_human`の理由。
+ * 設計フローを起動する入口を閉じている間は、`design_apply`も設計を作り直さない。
+ */
+export const DESIGN_STAGE_CLOSED_REASON =
+  "design stage is closed, so the rejected design was not regenerated";
+
+/**
+ * 設計の却下が上限に達したときの`needs_human`の理由の接頭辞。
+ * 反映できた却下の数(`countAppliedDesignRejections`)が、遷移の注記をこの接頭辞で数える。
+ */
+export const DESIGN_REJECTED_EXHAUSTED_PREFIX =
+  "design rejected after max_design_attempts ";
+
+/**
+ * 現在の要件定義の試行で、設計の却下が上限(`max_design_attempts`)に達したときの`needs_human`の理由。
+ * 反映できた却下の数が上限になったことを示し、却下が連続したことは示さない。
+ */
+export function designRejectedExhaustedReason(
+  maxDesignAttempts: number,
+): string {
+  return `${DESIGN_REJECTED_EXHAUSTED_PREFIX}${String(maxDesignAttempts)}`;
+}
+
 /** 設計の開始時に、要件定義の試行に承認が無いときの`needs_human`の理由。 */
 export function designNoApprovalReason(attempt: number): string {
   return `design requires approved requirements for attempt ${String(attempt)}`;

@@ -605,6 +605,33 @@ describe("hold files", () => {
   });
 });
 
+// 設計工程の入口が閉じていることを固定するテストは、書き換えられると、黙って通るようになる。
+// グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
+describe("design stage closed files", () => {
+  const PATHS = [
+    "tests/scripts/design_stage_closed.test.ts",
+    "tests/scripts/design_entry_origins.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect the other tests of the design stage", () => {
+    expect(matchesForbiddenPath("tests/scripts/design_apply.test.ts")).toBe(
+      false,
+    );
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {

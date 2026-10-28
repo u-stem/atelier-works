@@ -55,6 +55,22 @@ describe("approval refusal contract between approval_decide and the console", ()
     ).toBe("unavailable");
   });
 
+  test("recognizes the refusal for a design whose issue could not be compared", () => {
+    expect(
+      classifyDecisionRefusal(
+        jobFailed(issueCheckRefusal("unavailable", 3, "design") ?? ""),
+      )?.kind,
+    ).toBe("unavailable");
+  });
+
+  test("recognizes the refusal for a design whose issue changed after intake", () => {
+    expect(
+      classifyDecisionRefusal(
+        jobFailed(issueCheckRefusal("changed", 3, "design") ?? ""),
+      )?.kind,
+    ).toBe("changed");
+  });
+
   test("recognizes the refusal for a rejection without a reason", () => {
     expect(
       classifyDecisionRefusal(jobFailed(reasonRequiredMessage()))?.kind,

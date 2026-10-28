@@ -4,7 +4,8 @@
 // 決定は`decideApprovalRequestIfPending`(不可分な比較交換)で行に記録し、
 // 実際のGitHubやDBへの副作用は、種別ごとのハンドラscript(`handlerPathFor`)に
 // `wmill.runScriptByPathAsync`で任せる。再開を待つ中断中のフローは無い。
-// 処理先は、行を読んだ直後、記録とIssueの確認より前に引く。処理先が無い種別の判断は、記録せずに断る。
+// 処理先は、行を読んだ直後、記録とIssueの確認より前に引く。記録した後に処理先が引けないと、
+// 判断が反映されないまま残るためである。
 //
 // 記録する承認者は、呼び出し側が渡す文字列ではなく、ジョブのWindmill実行文脈
 // (`WM_USERNAME`、無ければ`WM_EMAIL`。`deriveApprover`を参照)から導く。
@@ -17,7 +18,7 @@
 // (決定の記録後にハンドラの起動が失敗した場合の冪等な再試行)。
 // 異なる決定が記録済みの行と、期限切れの行は拒否する。
 //
-// 要件定義を承認するときは、記録の前に、現在のIssueの題名と本文が取り込み時点と
+// 要件定義か設計を承認するときは、記録の前に、現在のIssueの題名と本文が取り込み時点と
 // 同じかを確かめ、違うか確かめられなければ承認を拒否する。
 // 承認者が見た内容と、実装のClaudeに渡る内容を一致させるためである。
 // このscriptはConsole用workerで動き、`gh`を起動できない。そのため、GitHubのREST APIを
@@ -44,7 +45,12 @@ import {
 import { type FetchLike, fetchIssueContent } from "./lib/github.ts";
 import { issueChangedSinceIntake } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
-import { type ApprovalRequest, isOneOf, type WorkItem } from "./lib/types.ts";
+import {
+  type ApprovalRequest,
+  type ApprovalRequestKind,
+  isOneOf,
+  type WorkItem,
+} from "./lib/types.ts";
 
 const DECISIONS = ["approve", "reject"] as const;
 type Decision = (typeof DECISIONS)[number];
@@ -125,9 +131,10 @@ export async function assertIssueMatchesIntake(
   approvalRequestId: number,
   workItemId: number,
   deps: IssueCheckDeps,
+  kind: ApprovalRequestKind = "requirements",
 ): Promise<void> {
   const verdict = await checkIssueAgainstIntake(workItemId, deps);
-  const refusal = issueCheckRefusal(verdict, approvalRequestId);
+  const refusal = issueCheckRefusal(verdict, approvalRequestId, kind);
   if (refusal !== null) {
     throw new Error(refusal);
   }
@@ -181,6 +188,7 @@ export type ApprovalDecideDeps = {
   readonly assertIssueMatchesIntake: (
     approvalRequestId: number,
     workItemId: number,
+    kind: ApprovalRequestKind,
   ) => Promise<void>;
   readonly deriveApprover: () => string;
   readonly decideIfPending: (
@@ -205,8 +213,7 @@ export type ApprovalDecideCall = {
 /**
  * 判断を記録し、種別ごとのハンドラを起動する。
  * 処理先(`handlerPathFor`)は、行を読んだ直後、既存の判断の照合とIssueの確認より前に引く。
- * 処理先が無い種別(ハンドラを足すまでの`design`)は、判断を記録する前に断る。
- * 記録した後に処理先が無いと分かると、記録だけが残って反映されない状態になるためで、
+ * 記録した後に処理先を引けないと、記録だけが残って反映されない状態になるためで、
  * 記録済みの依頼の再起動でも同じ位置を通る。
  */
 export async function decideApproval(
@@ -244,6 +251,7 @@ export async function decideApproval(
       await deps.assertIssueMatchesIntake(
         approval_request_id,
         request.work_item_id,
+        request.kind,
       );
     }
     const recorded = await deps.decideIfPending(approval_request_id, {
@@ -287,14 +295,19 @@ export async function main(
   return decideApproval(
     {
       getApprovalRequest: (id) => getApprovalRequest(id),
-      assertIssueMatchesIntake: (requestId, workItemId) =>
-        assertIssueMatchesIntake(requestId, workItemId, {
-          getWorkItem: (id) => getWorkItem(id),
-          getToken: () => wmill.getVariable("f/factory/github_token"),
-          fetchFn: fetch,
-          warn: (message, fields) =>
-            logger("approval_decide").warn(message, fields),
-        }),
+      assertIssueMatchesIntake: (requestId, workItemId, kind) =>
+        assertIssueMatchesIntake(
+          requestId,
+          workItemId,
+          {
+            getWorkItem: (id) => getWorkItem(id),
+            getToken: () => wmill.getVariable("f/factory/github_token"),
+            fetchFn: fetch,
+            warn: (message, fields) =>
+              logger("approval_decide").warn(message, fields),
+          },
+          kind,
+        ),
       deriveApprover: () =>
         deriveApprover({
           WM_USERNAME: process.env.WM_USERNAME,

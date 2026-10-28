@@ -1,5 +1,5 @@
 summary: '[OP-2-1] 承認 / 差し戻しを記録して反映'
-description: 承認待ちの承認依頼(要件定義またはIssue化提案)に対して、承認または差し戻しの判断を記録するためのフォームです。判断を記録すると、対応する反映処理が起動します。
+description: 承認待ちの承認依頼(要件定義、設計、またはIssue化提案)に対して、承認または差し戻しの判断を記録するためのフォームです。判断を記録すると、対応する反映処理が起動します。
 lock: '!inline f/factory/approval_decide.script.lock'
 kind: script
 schema:

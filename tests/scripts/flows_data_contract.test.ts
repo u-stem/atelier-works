@@ -24,6 +24,7 @@ import {
   APPROVAL_OUTCOMES,
   APPROVAL_STEPS,
   LAUNCH_EDGES,
+  type LaunchEdge,
   REWORK_LAUNCH_EDGES,
   SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
@@ -78,6 +79,9 @@ function flowOf(data: FlowsData, name: string): FlowDefinition {
 }
 
 const data = load();
+const unwiredEdgeCases: [string, LaunchEdge][] = UNWIRED_LAUNCH_EDGES.map(
+  (edge) => [`${edge.from} -> ${edge.to}`, edge],
+);
 const relative = (path: string): string =>
   path.startsWith(FACTORY_PREFIX) ? path.slice(FACTORY_PREFIX.length) : path;
 
@@ -191,8 +195,8 @@ describe("the exits and the launch edges", () => {
     ]);
   });
 
-  test('design has no approval exit while handlerPathFor("design") throws', () => {
-    expect(handlerOf("design")).toBeNull();
+  test("the approval of design is handled by design_apply", () => {
+    expect(handlerOf("design")).toBe("steps/design_apply");
   });
 
   test("design draws no exit on its approval step", () => {
@@ -203,18 +207,43 @@ describe("the exits and the launch edges", () => {
     ).toEqual([]);
   });
 
-  test("unwired launch edges are not drawn", () => {
-    const drawn = UNWIRED_LAUNCH_EDGES.flatMap((edge) => [
-      ...data.flows
-        .flatMap((flow) => flow.exits)
-        .filter((exit) => exit.flow === edge.to && exit.via !== "launch"),
-      ...flowOf(data, edge.to).entries.filter(
-        (entry) => entry.kind === "flow" && entry.via !== "launch",
-      ),
-    ]);
+  test.each(unwiredEdgeCases)(
+    "the unwired launch edge %s is not drawn",
+    (_label, edge) => {
+      const approvalScripts = Object.keys(APPROVAL_STEPS).filter(
+        (script) => handlerOf(APPROVAL_STEPS[script] ?? "") === edge.from,
+      );
+      const origins = data.flows.filter((flow) =>
+        flow.steps.some((step) =>
+          approvalScripts.includes(relative(step.scriptPath)),
+        ),
+      );
+      const outcomes = (APPROVAL_OUTCOMES[edge.from] ?? [])
+        .filter((outcome) => outcome.to === edge.to)
+        .map((outcome) => outcome.outcome);
+      const drawn = [
+        ...origins.flatMap((origin) =>
+          origin.exits.filter(
+            (exit) =>
+              exit.flow === edge.to &&
+              origin.steps.some(
+                (step) =>
+                  step.id === exit.step &&
+                  approvalScripts.includes(relative(step.scriptPath)),
+              ),
+          ),
+        ),
+        ...flowOf(data, edge.to).entries.filter(
+          (entry) =>
+            entry.kind === "flow" &&
+            origins.some((origin) => origin.name === entry.flow) &&
+            outcomes.some((outcome) => outcome === entry.via),
+        ),
+      ];
 
-    expect(drawn).toEqual([]);
-  });
+      expect(drawn).toEqual([]);
+    },
+  );
 
   test("every unwired edge is an edge of the launch table", () => {
     expect(
@@ -404,6 +433,7 @@ function depsFor(implementEnabled: boolean) {
   return buildApprovedBranchDeps(
     {
       implement_enabled: implementEnabled,
+      design_enabled: false,
       windmill_public_url: "http://127.0.0.1:8080",
       instance_name: "local",
     },
@@ -502,9 +532,22 @@ describe("the rework exits", () => {
 });
 
 describe("the entries that are not drawn yet", () => {
-  test("design records that the approval of pipeline does not start it yet", () => {
+  test("design records the approval of pipeline and the rejection of design as entries that do not start it yet", () => {
     expect(flowOf(data, "design").unwiredEntries).toEqual([
+      { kind: "flow", flow: "design", via: "reject" },
       { kind: "flow", flow: "pipeline", via: "approve" },
+    ]);
+  });
+
+  test("implement records the approval of design as an entry that does not start it yet", () => {
+    expect(flowOf(data, "implement").unwiredEntries).toEqual([
+      { kind: "flow", flow: "design", via: "approve" },
+    ]);
+  });
+
+  test("pipeline records the rejection of design as an entry that does not start it yet", () => {
+    expect(flowOf(data, "pipeline").unwiredEntries).toEqual([
+      { kind: "flow", flow: "design", via: "reject" },
     ]);
   });
 });

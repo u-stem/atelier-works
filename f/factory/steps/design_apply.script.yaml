@@ -1,0 +1,15 @@
+summary: '[SF-2-4] 設計の承認結果を反映'
+description: 決定済みの承認依頼(kind =
+  design)を受け取り、承認なら実装へ進め、却下なら設計を作り直します。Issueが変わっていれば要件定義の生成へ戻し、反映できた却下が上限に達した場合は対応が必要な状態(needs_human)にします。
+lock: '!inline f/factory/steps/design_apply.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    approval_request_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - approval_request_id

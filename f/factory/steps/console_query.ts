@@ -13,6 +13,7 @@ import {
 } from "../lib/console_status.ts";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
+  APPROVAL_REDISPATCH_NOTE_PREFIX,
   countHiddenCharacters,
   countHtmlCommentOpeners,
   INFO_NOTICE_KINDS,
@@ -1274,6 +1275,7 @@ export async function runConsoleSummary(
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
         AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
         AND NOT coalesce(starts_with(e.note, ${TRANSIENT_STALL_NOTE_PREFIX}), false)
+        AND NOT coalesce(starts_with(e.note, ${APPROVAL_REDISPATCH_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1675,6 +1677,7 @@ export async function runWorkItemDetail(
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
         AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
         AND NOT coalesce(starts_with(e.note, ${TRANSIENT_STALL_NOTE_PREFIX}), false)
+        AND NOT coalesce(starts_with(e.note, ${APPROVAL_REDISPATCH_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true

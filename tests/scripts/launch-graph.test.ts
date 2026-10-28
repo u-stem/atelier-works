@@ -251,6 +251,33 @@ describe("describeOrigin", () => {
     });
   });
 
+  test.each(["implement", "pipeline", "design"])(
+    "lists the %s flow among the flows that design_apply starts",
+    (flow) => {
+      expect(LAUNCH_EDGES).toContainEqual({
+        from: "steps/design_apply",
+        to: flow,
+        kind: "script",
+      });
+    },
+  );
+
+  test("names the approval and rejection of the Console as the entry of design_apply", () => {
+    expect(HUMAN_ENTRY_SCRIPTS["steps/design_apply"]).toBe(
+      "Consoleの承認と却下",
+    );
+  });
+
+  test("shows design_apply with the operation of a person", () => {
+    const edge = LAUNCH_EDGES.find(
+      (candidate) => candidate.from === "steps/design_apply",
+    );
+
+    expect(edge === undefined ? "" : describeOrigin(edge)).toBe(
+      "`design_apply`(Consoleの承認と却下)",
+    );
+  });
+
   test("adds the operation of a person to an entry script", () => {
     const edge = LAUNCH_EDGES.find(
       (candidate) => candidate.from === "retry_work_item",

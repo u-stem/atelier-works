@@ -24,9 +24,9 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- | --- | --- |
 | `issue_claimed` | Issue着手 | `poll_issues`、`manual_intake_register` | Issueを取得し、要件定義の生成を始めた |
 | `approval_requested` | 承認待ち | `pipeline_request_approval` | 要件定義の承認依頼を記録した |
-| `design_approval_requested` | 設計の承認待ち | `design_request_approval` | 設計の承認依頼を記録した。設計フローの入口が閉じていて、本番では送らない |
+| `design_approval_requested` | 設計の承認待ち | `design_request_approval` | 設計の承認依頼を記録した。説明文は「リンク先のConsoleで承認または却下してください」と案内する。依頼を記録してから作業項目を移すまでの間に、人が判断していたか、期限が切れていたときは送らない。設計フローの入口が閉じていて、本番では送らない |
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
-| `intake_refreshed` | 取り込み内容を更新 | `requirements_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した |
+| `intake_refreshed` | 取り込み内容を更新 | `requirements_apply`、`design_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した。設計の却下では、Issueが変わっていて要件定義へ戻したときに送る |
 | `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった。または、Factoryが作ったPRのCIが失敗した |
 | `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューをGitHubに投稿した |
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
@@ -50,8 +50,10 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
 | `design_prepare`、`design_generate` | 承認済みの要件定義が無い、オーナーの照合に落ちた、日次の予算を超えた、承認済みの要件定義のディレクトリが基準値と違う(設計の前、または設計のClaudeの実行中の書き換え)か無い、同じ試行の設計書の下書きが保存済みである、要件の不足の戻しが試行回数の上限に達した。設計フローの入口が閉じていて、本番では送らない |
-| `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
-| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した結果が分からなかった(理由は`claim ownership could not be determined`) |
+| `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった。却下の後の要件定義の作り直しを起動できず、人の対応待ちへ戻した |
+| `design_apply` | 設計の却下が`max_design_attempts`に達した。設計の承認の記録が食い違う、承認済みの要件定義が無い、承認の照合が通らない。承認の後に実装フローを起動できなかった。却下の後の設計の再生成を起動できなかった。Issueが変わった却下で、要件定義の作り直しを起動できず、人の対応待ちへ戻した |
+| `design_request_approval` | 設計の承認依頼を記録してから作業項目を移すまでの間に、期限が切れていた(理由は`design approval timed out`) |
+| `poll_issues` | 承認待ちの走査が、承認依頼の期限切れで作業項目を期限切れにした(理由は要件定義が`approval timed out`、設計が`design approval timed out`)。設計の承認の記録が食い違っていた。承認の判断を反映する処理を3回起動し直しても作業項目に反映されなかった(理由は`approval decision could not be applied after 3 restarts of the handler`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した結果が分からなかった(理由は`claim ownership could not be determined`) |
 | `poll_prs` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままになった(理由は`claimed pr trigger label was left removed`) |
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
@@ -75,7 +77,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `on_error_flow` | フロー(pipeline、design、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
 | `detect_schedule_failures` | スケジュールのジョブが失敗した。検出器が失敗をジョブ履歴から拾い、記録した後に送る。失敗の発生から通知まで、最大5分遅れる。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。1回の実行で拾った同じscriptの失敗が複数あっても、最新の失敗の内容で1回に収める。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗して、ここで拾われる。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
-| `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
+| `requirements_apply`、`design_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
 | `issue_proposal_apply` | Issue化の提案の反映が失敗した |
 
 ### 種類ごとに載る項目
@@ -234,7 +236,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | --- | --- | --- |
 | `approval_notify_failed` | `pipeline_request_approval` | 対象、送れなかった理由 |
 | `approval_comment_failed` | `requirements_apply` | 対象、理由、要件定義を開くConsoleのリンク |
-| `intake_refreshed` | `requirements_apply`、`retry_work_item` | 対象、Consoleで更新後の内容を確かめる旨 |
+| `intake_refreshed` | `requirements_apply`、`design_apply`、`retry_work_item` | 対象、Consoleで更新後の内容を確かめる旨 |
 | `implement_launch_failed` | `requirements_apply` | 対象、理由、次の操作 |
 | `implement_needs_human` | `implement_finish` | 対象、止まった理由 |
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |

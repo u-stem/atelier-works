@@ -10,12 +10,12 @@ import {
   buildSystemConsoleUrl,
   classifyExistingDecision,
   computeExpiresAt,
-  expiredRequirementsRequests,
   handlerPathFor,
   isExpired,
   issueCheckRefusal,
   needsIssueCheck,
 } from "../../f/factory/lib/approval_support.ts";
+import { APPROVAL_REQUEST_KINDS } from "../../f/factory/lib/types.ts";
 
 describe("computeExpiresAt", () => {
   test("adds APPROVAL_TIMEOUT_SEC to now", () => {
@@ -190,27 +190,20 @@ describe("handlerPathFor", () => {
     );
   });
 
-  test("throws for design, which has no handler yet", () => {
-    expect(() => handlerPathFor("design")).toThrow(
-      "no approval handler for kind design",
-    );
-  });
-});
-
-describe("expiredRequirementsRequests", () => {
-  test("keeps only requirements-kind requests", () => {
-    const requests = [
-      { kind: "requirements" as const, id: 1 },
-      { kind: "issue_proposal" as const, id: 2 },
-    ];
-    expect(expiredRequirementsRequests(requests)).toEqual([
-      { kind: "requirements", id: 1 },
-    ]);
+  test("routes design to design_apply", () => {
+    expect(handlerPathFor("design")).toBe("f/factory/steps/design_apply");
   });
 
-  test("returns an empty array when none are requirements-kind", () => {
-    const requests = [{ kind: "issue_proposal" as const, id: 2 }];
-    expect(expiredRequirementsRequests(requests)).toEqual([]);
+  test("returns a path for every kind of approval request", () => {
+    const failed = APPROVAL_REQUEST_KINDS.filter((kind) => {
+      try {
+        handlerPathFor(kind);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(failed).toEqual([]);
   });
 });
 
@@ -241,6 +234,22 @@ describe("needsIssueCheck", () => {
     expect(
       needsIssueCheck("record_and_dispatch", "approve", "issue_proposal"),
     ).toBe(false);
+  });
+
+  test("checks a new approval of a design", () => {
+    expect(needsIssueCheck("record_and_dispatch", "approve", "design")).toBe(
+      true,
+    );
+  });
+
+  test("does not check a rejection of a design", () => {
+    expect(needsIssueCheck("record_and_dispatch", "reject", "design")).toBe(
+      false,
+    );
+  });
+
+  test("does not check the rerun of a recorded decision of a design", () => {
+    expect(needsIssueCheck("redispatch", "approve", "design")).toBe(false);
   });
 });
 
@@ -281,5 +290,65 @@ describe("issueCheckRefusal", () => {
 
   test("names the approval request in the refusal", () => {
     expect(issueCheckRefusal("changed", 7)).toContain("approval request 7");
+  });
+
+  test("tells the approver of a design that rejecting regenerates from the current issue", () => {
+    expect(issueCheckRefusal("changed", 7, "design")).toContain(
+      "reject the request; the requirements are regenerated from the current issue",
+    );
+  });
+
+  test("keeps the marker the console matches when a design could not be compared", () => {
+    expect(issueCheckRefusal("unavailable", 7, "design")).toContain(
+      "the issue could not be compared",
+    );
+  });
+
+  test("tells the approver of a design that rejections are limited by max_design_attempts", () => {
+    expect(issueCheckRefusal("unavailable", 7, "design")).toContain(
+      "max_design_attempts",
+    );
+  });
+
+  test("keeps the sentence for requirements when the kind is requirements", () => {
+    expect(issueCheckRefusal("unavailable", 7, "requirements")).toContain(
+      "If the issue was transferred or deleted, reject the request.",
+    );
+  });
+
+  test("does not mention max_design_attempts for requirements", () => {
+    expect(issueCheckRefusal("unavailable", 7, "requirements")).not.toContain(
+      "max_design_attempts",
+    );
+  });
+});
+
+describe("the imports of approval_support", () => {
+  // `approval_decide`はConsole用のworkerで動き、`approval_support.ts`を読み込む。
+  // 走査の表と設計の定数は、このファイルから読み込まれない場所に置く。
+  async function importSpecifiers(): Promise<string[]> {
+    const source = await Bun.file(
+      new URL("../../f/factory/lib/approval_support.ts", import.meta.url),
+    ).text();
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+    return [...code.matchAll(/from\s+["']([^"']+)["']/g)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
+  }
+
+  test("does not import the approval sweep", async () => {
+    expect(
+      (await importSpecifiers()).filter((path) =>
+        path.includes("approval_sweep"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not import the design template", async () => {
+    expect(
+      (await importSpecifiers()).filter((path) =>
+        path.includes("design_template"),
+      ),
+    ).toEqual([]);
   });
 });

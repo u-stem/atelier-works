@@ -1,0 +1,9 @@
+summary: '[LIB] 設計の承認の反映の判定'
+description: 内部ライブラリです。直接実行するものではありません。設計の承認と却下を反映してよいかの判定と、却下の行き先の決定を行います。
+lock: '!inline f/factory/lib/design_apply_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

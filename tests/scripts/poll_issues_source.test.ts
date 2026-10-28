@@ -102,3 +102,27 @@ describe("poll_issues: the result", () => {
     expect(source.includes("fallback_searches")).toBe(false);
   });
 });
+
+// 承認待ちの走査の配線は、コメントを落とした文面で照合する。
+// 各依存が、同じ名前のdbの関数へ引数をそのまま渡すことを確かめる。
+describe("poll_issues: the wiring of the approval sweep", () => {
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
+  const code = async (): Promise<string> =>
+    transpiler.transformSync(await read("f/factory/poll_issues.ts"));
+
+  test("hands the waiting approvals to the sweep", async () => {
+    expect(await code()).toMatch(/\bsweepApprovals\(\{/);
+  });
+
+  test("reads the newest request without the drafts", async () => {
+    expect(await code()).toMatch(
+      /\blatestApprovalRequest:\s*\(([^)]*)\)\s*=>\s*latestApprovalRequest\(\1\)/,
+    );
+  });
+
+  test("moves the work item with the newest request as a condition", async () => {
+    expect(await code()).toMatch(
+      /\bupdateStatusIfLatestApproval:\s*\(([^)]*)\)\s*=>\s*updateStatusIfLatestApproval\(\1\)/,
+    );
+  });
+});

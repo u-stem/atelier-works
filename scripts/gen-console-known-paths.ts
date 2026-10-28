@@ -85,6 +85,7 @@ const WITHHELD: readonly string[] = WRITE_SCRIPTS_NAMED_ONLY_BY_THEMSELVES.map(
 const HISTORY_FILTER_EXCLUDED: readonly string[] = ["f/factory/on_error_flow"];
 const HISTORY_FILTER_EXCLUDED_PREFIX = "f/factory/steps/";
 const APPROVAL_HANDLERS: readonly string[] = [
+  "f/factory/steps/design_apply",
   "f/factory/steps/issue_proposal_apply",
   "f/factory/steps/requirements_apply",
 ];

@@ -5,6 +5,7 @@
 // 使い方: COMPOSE_FILE=<compose> SCRATCH_DB=<db> bun run scripts/test-db-queries.ts
 
 import {
+  APPROVAL_REDISPATCH_NOTE_PREFIX,
   INFO_NOTICE_KINDS,
   INTAKE_REFRESHED_NOTE_PREFIX,
   UNRESOLVABLE_NOTICE_KINDS,
@@ -15,6 +16,8 @@ import {
   claimPrCiCheckForFix,
   claimPrConflictForFix,
   closeGhZeroCountRepos,
+  countAppliedDesignRejections,
+  countApprovalRedispatches,
   countImplementFailedRounds,
   countPrCiFixRounds,
   countPrConflictFixRounds,
@@ -59,6 +62,8 @@ import {
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
+  lastApprovalRedispatchAt,
+  latestApprovalRequest,
   latestConflictFixSettledAt,
   latestDesignApproval,
   latestDesignDraft,
@@ -92,6 +97,7 @@ import {
   listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
+  listWorkItemsByStatuses,
   markGhOwnerRowsUnusable,
   markGhRepoDetailIncomplete,
   markPrCiNotified,
@@ -100,6 +106,7 @@ import {
   readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
+  recordApprovalRedispatch,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
@@ -136,8 +143,10 @@ import {
   updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
+  updateStatusIfLatestApproval,
   updateStatusIfLeaseHolder,
   updateStatusToRequirementsIfCurrent,
+  updateStatusToRequirementsIfLeaseHolder,
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -10015,6 +10024,659 @@ check(
     budgetRejection.reason === "reason R" &&
     !(await hasRequirementDraftAfter(budgetRejectItem, 1, sql)),
   budgetRejection,
+);
+
+// 設計の承認の反映と、承認待ちの走査が使う問い合わせ。
+async function workItemRow(id: number): Promise<{
+  status: unknown;
+  flow_job_id: unknown;
+  design_attempt: unknown;
+}> {
+  const rows = await sql`
+    SELECT status, flow_job_id, design_attempt FROM factory.work_items WHERE id = ${id}::bigint
+  `.fetch();
+  return {
+    status: rows[0]?.status,
+    flow_job_id: rows[0]?.flow_job_id,
+    design_attempt: rows[0]?.design_attempt,
+  };
+}
+async function lastEventNote(id: number): Promise<unknown> {
+  const rows = await sql`
+    SELECT note FROM factory.work_item_events WHERE work_item_id = ${id}::bigint ORDER BY id DESC LIMIT 1
+  `.fetch();
+  return rows[0]?.note;
+}
+const DESIGN_REGENERATING_TEST_NOTE = "design rejected; regenerating";
+const DESIGN_EXHAUSTED_TEST_PREFIX =
+  "design rejected after max_design_attempts";
+
+// 設計の承認の判断に添えた理由は、最新の設計の承認の読み取りで返る。
+const reasonItem = await issueWorkItem(
+  9500,
+  1,
+  "designing",
+  "qdb design reason",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-job-reason' WHERE id = ${String(reasonItem)}`,
+);
+const reasonRequirements = await requirementDraftFor(reasonItem);
+const reasonDesign = await saveDesignDraftIfLeaseHolder(
+  draftInput(reasonItem, reasonRequirements, 1),
+  "qdb-job-reason",
+  sql,
+);
+const reasonRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: reasonItem,
+    subject_id: reasonDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+check(
+  "design approval reason: a pending request has no reason",
+  (await latestDesignApproval(reasonItem, sql))?.reason === null,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'rejected', decided_at = now(), reason = 'too complex' WHERE id = ${String(reasonRequest)}`,
+);
+check(
+  "design approval reason: the reason of the rejection is returned",
+  (await latestDesignApproval(reasonItem, sql))?.reason === "too complex",
+);
+
+// 最新の依頼は、下書きと結合せずに読む。下書きに結合できない最新の依頼を読み飛ばして、古い依頼を返してはならない。
+const latestItem = await issueWorkItem(
+  9501,
+  1,
+  "awaiting_design_approval",
+  "qdb latest request",
+);
+check(
+  "latest request: a work item without a request has none",
+  (await latestApprovalRequest(latestItem, "design", sql)) === null,
+);
+const latestOlder = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: latestItem,
+    subject_id: 2147482001,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'approved', decided_at = now() WHERE id = ${String(latestOlder)}`,
+);
+const latestNewer = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: latestItem,
+    subject_id: 2147482002,
+    payload: { attempt: 1, design_attempt: 2 },
+    expires_at: new Date("2030-01-01T00:00:00Z"),
+  },
+  sql,
+);
+const latestRead = await latestApprovalRequest(latestItem, "design", sql);
+check(
+  "latest request: the newest request is returned although no draft exists for it",
+  latestRead?.id === latestNewer &&
+    latestRead.status === "pending" &&
+    latestRead.expires_at?.toISOString() === "2030-01-01T00:00:00.000Z" &&
+    latestRead.decided_at === null,
+  latestRead,
+);
+check(
+  "latest request: the payload is returned as an object",
+  latestRead?.payload.design_attempt === 2,
+  latestRead,
+);
+check(
+  "latest request: a request of another kind is not returned",
+  (await latestApprovalRequest(latestItem, "requirements", sql)) === null,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'rejected', decided_at = now() WHERE id = ${String(latestNewer)}`,
+);
+const latestDecided = await latestApprovalRequest(latestItem, "design", sql);
+check(
+  "latest request: the decision time of a decided request is returned",
+  latestDecided?.status === "rejected" && latestDecided.decided_at !== null,
+  latestDecided,
+);
+
+// 指定した状態の`issue`の作業項目だけを返す。
+const byStatusAwaiting = await issueWorkItem(
+  9502,
+  1,
+  "awaiting_approval",
+  "qdb by status a",
+);
+const byStatusDesign = await issueWorkItem(
+  9503,
+  1,
+  "awaiting_design_approval",
+  "qdb by status b",
+);
+const byStatusOther = await issueWorkItem(9504, 1, "picked", "qdb by status c");
+const byStatus = (
+  await listWorkItemsByStatuses(
+    ["awaiting_approval", "awaiting_design_approval"],
+    sql,
+  )
+).map((item) => item.id);
+check(
+  "list by statuses: the work items in the given statuses are returned",
+  byStatus.includes(byStatusAwaiting) && byStatus.includes(byStatusDesign),
+  byStatus,
+);
+check(
+  "list by statuses: a work item in another status is not returned",
+  !byStatus.includes(byStatusOther),
+  byStatus,
+);
+check(
+  "list by statuses: the ids are in ascending order",
+  byStatus.every((id, index) => index === 0 || (byStatus[index - 1] ?? 0) < id),
+  byStatus,
+);
+
+// 反映できた却下の数は、遷移の記録から数える。現在の要件定義の試行の範囲だけを数え、取り込みの更新の記録は範囲を区切らない。
+const countItem = await issueWorkItem(
+  9505,
+  1,
+  "awaiting_design_approval",
+  "qdb applied rejections",
+);
+const countOther = await issueWorkItem(
+  9506,
+  1,
+  "awaiting_design_approval",
+  "qdb applied rejections other",
+);
+async function countFor(id: number): Promise<number> {
+  return countAppliedDesignRejections(
+    id,
+    DESIGN_REGENERATING_TEST_NOTE,
+    DESIGN_EXHAUSTED_TEST_PREFIX,
+    sql,
+  );
+}
+check(
+  "applied rejections: none are counted at first",
+  (await countFor(countItem)) === 0,
+);
+await moveStatus(
+  countItem,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+await moveStatus(
+  countOther,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+await moveStatus(
+  countItem,
+  "designing",
+  "awaiting_design_approval",
+  "design approval requested",
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(countItem)}, 'requirements_generating', 'requirements_generating', 'intake refreshed')`,
+);
+check(
+  "applied rejections: the regeneration is counted and a same-status record does not start the range again",
+  (await countFor(countItem)) === 1,
+  await countFor(countItem),
+);
+check(
+  "applied rejections: the rejections of another work item are not counted",
+  (await countFor(countOther)) === 1 && (await countFor(countItem)) === 1,
+);
+await moveStatus(
+  countItem,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+await moveStatus(
+  countItem,
+  "designing",
+  "awaiting_design_approval",
+  "design approval requested",
+);
+await moveStatus(
+  countItem,
+  "awaiting_design_approval",
+  "needs_human",
+  `${DESIGN_EXHAUSTED_TEST_PREFIX} 3`,
+);
+check(
+  "applied rejections: the move to needs_human with the prefix is counted",
+  (await countFor(countItem)) === 3,
+  await countFor(countItem),
+);
+await moveStatus(countItem, "needs_human", "awaiting_design_approval", "x");
+await moveStatus(
+  countItem,
+  "awaiting_design_approval",
+  "designing",
+  "another note",
+);
+await moveStatus(countItem, "designing", "awaiting_design_approval", "y");
+await moveStatus(
+  countItem,
+  "awaiting_design_approval",
+  "needs_human",
+  "design approval timed out",
+);
+check(
+  "applied rejections: a move with another note is not counted",
+  (await countFor(countItem)) === 3,
+  await countFor(countItem),
+);
+await moveStatus(
+  countItem,
+  "needs_human",
+  "requirements_generating",
+  "retry_work_item: restarted",
+);
+check(
+  "applied rejections: the move into the requirements starts the range again",
+  (await countFor(countItem)) === 0,
+  await countFor(countItem),
+);
+await moveStatus(
+  countItem,
+  "requirements_generating",
+  "awaiting_design_approval",
+  "back",
+);
+await moveStatus(
+  countItem,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+check(
+  "applied rejections: a rejection after the new range started is counted",
+  (await countFor(countItem)) === 1,
+  await countFor(countItem),
+);
+
+// 作業項目を動かす更新は、最新の依頼が指定の依頼で、指定の状態のときだけ書く。
+const guardItem = await issueWorkItem(
+  9507,
+  1,
+  "awaiting_design_approval",
+  "qdb latest approval guard",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-flow-guard' WHERE id = ${String(guardItem)}`,
+);
+const guardOld = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: guardItem,
+    subject_id: 2147482011,
+    payload: { attempt: 1, design_attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+const guardNew = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: guardItem,
+    subject_id: 2147482012,
+    payload: { attempt: 1, design_attempt: 2 },
+    expires_at: null,
+  },
+  sql,
+);
+check(
+  "latest approval guard: a request that is not the newest does not move the work item",
+  (await updateStatusIfLatestApproval(
+    guardItem,
+    "awaiting_design_approval",
+    "expired",
+    "n",
+    { kind: "design", requestId: guardOld, requestStatus: "pending" },
+    sql,
+  )) === false,
+);
+check(
+  "latest approval guard: another request status does not move the work item",
+  (await updateStatusIfLatestApproval(
+    guardItem,
+    "awaiting_design_approval",
+    "expired",
+    "n",
+    { kind: "design", requestId: guardNew, requestStatus: "approved" },
+    sql,
+  )) === false,
+);
+check(
+  "latest approval guard: another kind does not move the work item",
+  (await updateStatusIfLatestApproval(
+    guardItem,
+    "awaiting_design_approval",
+    "expired",
+    "n",
+    { kind: "requirements", requestId: guardNew, requestStatus: "pending" },
+    sql,
+  )) === false,
+);
+check(
+  "latest approval guard: another current status does not move the work item",
+  (await updateStatusIfLatestApproval(
+    guardItem,
+    "awaiting_approval",
+    "expired",
+    "n",
+    { kind: "design", requestId: guardNew, requestStatus: "pending" },
+    sql,
+  )) === false,
+);
+check(
+  "latest approval guard: the work item is unchanged after the refusals",
+  (await workItemRow(guardItem)).status === "awaiting_design_approval",
+);
+check(
+  "latest approval guard: the newest request with the status moves the work item",
+  (await updateStatusIfLatestApproval(
+    guardItem,
+    "awaiting_design_approval",
+    "expired",
+    "design approval timed out",
+    { kind: "design", requestId: guardNew, requestStatus: "pending" },
+    sql,
+  )) === true,
+);
+const guardAfter = await workItemRow(guardItem);
+check(
+  "latest approval guard: the status changes and the flow job id stays",
+  guardAfter.status === "expired" &&
+    guardAfter.flow_job_id === "qdb-flow-guard",
+  guardAfter,
+);
+check(
+  "latest approval guard: the event is recorded with the note",
+  (await lastEventNote(guardItem)) === "design approval timed out",
+);
+
+// 要件定義へ戻す更新は、状態と`flow_job_id`の両方が一致したときだけ書く。
+const backItem = await issueWorkItem(
+  9508,
+  1,
+  "awaiting_design_approval",
+  "qdb back to requirements",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-flow-back', design_attempt = 2 WHERE id = ${String(backItem)}`,
+);
+check(
+  "back to requirements: another flow job id does not move the work item",
+  (await updateStatusToRequirementsIfLeaseHolder(
+    backItem,
+    "awaiting_design_approval",
+    "qdb-flow-other",
+    "n",
+    sql,
+  )) === false,
+);
+check(
+  "back to requirements: a missing flow job id does not move a work item that has one",
+  (await updateStatusToRequirementsIfLeaseHolder(
+    backItem,
+    "awaiting_design_approval",
+    null,
+    "n",
+    sql,
+  )) === false,
+);
+check(
+  "back to requirements: another current status does not move the work item",
+  (await updateStatusToRequirementsIfLeaseHolder(
+    backItem,
+    "awaiting_approval",
+    "qdb-flow-back",
+    "n",
+    sql,
+  )) === false,
+);
+check(
+  "back to requirements: the matching status and flow job id move the work item",
+  (await updateStatusToRequirementsIfLeaseHolder(
+    backItem,
+    "awaiting_design_approval",
+    "qdb-flow-back",
+    "design rejected; the issue changed since intake",
+    sql,
+  )) === true,
+);
+const backAfter = await workItemRow(backItem);
+check(
+  "back to requirements: the design attempt is reset and the flow job id is cleared",
+  backAfter.status === "requirements_generating" &&
+    Number(backAfter.design_attempt) === 0 &&
+    backAfter.flow_job_id === null,
+  backAfter,
+);
+check(
+  "back to requirements: the event is recorded with the note",
+  (await lastEventNote(backItem)) ===
+    "design rejected; the issue changed since intake",
+);
+const backNoLease = await issueWorkItem(
+  9509,
+  1,
+  "awaiting_design_approval",
+  "qdb back to requirements without a lease",
+);
+check(
+  "back to requirements: an empty flow job id matches an empty expectation",
+  (await updateStatusToRequirementsIfLeaseHolder(
+    backNoLease,
+    "awaiting_design_approval",
+    null,
+    "n",
+    sql,
+  )) === true,
+);
+
+// 承認の判断を反映する処理の起動し直しは、作業項目の状態を変えない遷移の記録として残し、その数を依頼ごとに数える。
+const redispatchItem = await issueWorkItem(
+  9510,
+  1,
+  "awaiting_design_approval",
+  "qdb approval redispatch",
+);
+const redispatchOther = await issueWorkItem(
+  9511,
+  1,
+  "awaiting_design_approval",
+  "qdb approval redispatch other",
+);
+const REDISPATCH_NOTE = "approval handler restarted for request 41";
+const REDISPATCH_OTHER_NOTE = "approval handler restarted for request 42";
+check(
+  "approval redispatch: none are counted at first",
+  (await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql)) === 0,
+);
+check(
+  "approval redispatch: a record is written while the work item is in the status",
+  (await recordApprovalRedispatch(
+    redispatchItem,
+    "awaiting_design_approval",
+    REDISPATCH_NOTE,
+    sql,
+  )) === true,
+);
+await recordApprovalRedispatch(
+  redispatchItem,
+  "awaiting_design_approval",
+  REDISPATCH_NOTE,
+  sql,
+);
+await recordApprovalRedispatch(
+  redispatchItem,
+  "awaiting_design_approval",
+  REDISPATCH_OTHER_NOTE,
+  sql,
+);
+await recordApprovalRedispatch(
+  redispatchOther,
+  "awaiting_design_approval",
+  REDISPATCH_NOTE,
+  sql,
+);
+check(
+  "approval redispatch: the records of the request are counted",
+  (await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql)) === 2,
+  await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql),
+);
+check(
+  "approval redispatch: the records of another request and another work item are not counted",
+  (await countApprovalRedispatches(
+    redispatchItem,
+    REDISPATCH_OTHER_NOTE,
+    sql,
+  )) === 1 &&
+    (await countApprovalRedispatches(redispatchOther, REDISPATCH_NOTE, sql)) ===
+      1,
+);
+check(
+  "approval redispatch: no time is returned when the request has no record",
+  (await lastApprovalRedispatchAt(
+    redispatchOther,
+    REDISPATCH_OTHER_NOTE,
+    sql,
+  )) === null,
+);
+const redispatchLastAt = await lastApprovalRedispatchAt(
+  redispatchItem,
+  REDISPATCH_NOTE,
+  sql,
+);
+check(
+  "approval redispatch: the time of the last record is returned",
+  redispatchLastAt !== null &&
+    Math.abs(Date.now() - redispatchLastAt.getTime()) < 60_000,
+  redispatchLastAt,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_item_events SET occurred_at = now() - interval '2 hours' WHERE id = (SELECT min(id) FROM factory.work_item_events WHERE work_item_id = ${String(redispatchItem)} AND from_status = to_status AND note = '${REDISPATCH_NOTE}')`,
+);
+const redispatchLastAtAfterBackdate = await lastApprovalRedispatchAt(
+  redispatchItem,
+  REDISPATCH_NOTE,
+  sql,
+);
+check(
+  "approval redispatch: the latest of the records is returned, not the oldest",
+  redispatchLastAtAfterBackdate !== null &&
+    Math.abs(Date.now() - redispatchLastAtAfterBackdate.getTime()) < 60_000,
+  redispatchLastAtAfterBackdate,
+);
+check(
+  "approval redispatch: the time of another request and another work item is not mixed in",
+  (await lastApprovalRedispatchAt(
+    redispatchOther,
+    REDISPATCH_OTHER_NOTE,
+    sql,
+  )) === null &&
+    (await lastApprovalRedispatchAt(
+      redispatchItem,
+      REDISPATCH_OTHER_NOTE,
+      sql,
+    )) !== null,
+);
+check(
+  "approval redispatch: the status of the work item stays",
+  (await workItemRow(redispatchItem)).status === "awaiting_design_approval",
+);
+check(
+  "approval redispatch: a record of a transition with the same note is not counted",
+  (await moveStatus(
+    redispatchItem,
+    "awaiting_design_approval",
+    "designing",
+    REDISPATCH_NOTE,
+  )) &&
+    (await countApprovalRedispatches(redispatchItem, REDISPATCH_NOTE, sql)) ===
+      2,
+);
+check(
+  "approval redispatch: no record is written once the work item left the status",
+  (await recordApprovalRedispatch(
+    redispatchItem,
+    "awaiting_design_approval",
+    REDISPATCH_NOTE,
+    sql,
+  )) === false,
+);
+check(
+  "approval redispatch: the record does not become the latest transition",
+  (await latestStatusTransition(
+    redispatchOther,
+    "awaiting_design_approval",
+    sql,
+  )) === null,
+);
+
+// 起動し直した記録は、状態の注記に出さない。承認待ちへ入った遷移の注記が押しのけられないようにする。
+// 状態が同じでも、起動し直しの記録でない注記は、新しいほうを出す。
+const noteItem = await issueWorkItem(
+  9512,
+  1,
+  "awaiting_approval",
+  "qdb approval redispatch note",
+);
+await moveStatus(
+  noteItem,
+  "awaiting_approval",
+  "awaiting_design_approval",
+  "qdb waiting note",
+);
+await recordApprovalRedispatch(
+  noteItem,
+  "awaiting_design_approval",
+  `${APPROVAL_REDISPATCH_NOTE_PREFIX}77`,
+  sql,
+);
+check(
+  "approval redispatch: the status note keeps the note of the transition into the status",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note ===
+    "qdb waiting note",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(noteItem)}, 'awaiting_design_approval', 'awaiting_design_approval', 'qdb other same-status note')`,
+);
+check(
+  "approval redispatch: a same-status note that is not a restart record is still shown",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note ===
+    "qdb other same-status note",
+  (await runWorkItemDetail(noteItem, sql)).work_item.status_note,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

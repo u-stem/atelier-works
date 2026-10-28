@@ -481,6 +481,8 @@ export type DesignApprovalRef = {
   readonly payload_attempt: number | null;
   /** 依頼を作った時点の写し`payload.design_attempt`。無い、整数でない、負のときは`null`。 */
   readonly payload_design_attempt: number | null;
+  /** 判断に添えられた理由。却下の理由はここにある。無ければ`null`。 */
+  readonly reason: string | null;
   /**
    * 依頼が指す設計書。同じ作業項目の行に結合できなければ`null`
    * (設計書が無い、または別の作業項目のもの)。
@@ -500,7 +502,7 @@ export type DesignApprovalRef = {
  * 承認依頼が待っている判断の種類。
  * `subject_id`は、`"requirements"`ならrequirement_drafts、
  * `"issue_proposal"`ならissue_proposalsの対応する行を指す。
- * `"design"`は設計書の承認依頼で、承認を反映するハンドラーはまだ無い(`handlerPathFor`が例外を投げる)。
+ * `"design"`は設計書の承認依頼で、`subject_id`は`design_drafts.id`を指し、承認の反映は`steps/design_apply`が行う。
  */
 export type ApprovalRequestKind = "requirements" | "issue_proposal" | "design";
 export const APPROVAL_REQUEST_KINDS: readonly ApprovalRequestKind[] = [

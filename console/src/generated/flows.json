@@ -97,6 +97,11 @@
       "unwiredEntries": [
         {
           "kind": "flow",
+          "flow": "design",
+          "via": "reject"
+        },
+        {
+          "kind": "flow",
           "flow": "pipeline",
           "via": "approve"
         }
@@ -155,7 +160,13 @@
           "via": "approve"
         }
       ],
-      "unwiredEntries": [],
+      "unwiredEntries": [
+        {
+          "kind": "flow",
+          "flow": "design",
+          "via": "approve"
+        }
+      ],
       "exits": [
         {
           "flow": "pipeline",
@@ -260,7 +271,13 @@
           "via": "rework"
         }
       ],
-      "unwiredEntries": [],
+      "unwiredEntries": [
+        {
+          "kind": "flow",
+          "flow": "design",
+          "via": "reject"
+        }
+      ],
       "exits": [
         {
           "flow": "implement",

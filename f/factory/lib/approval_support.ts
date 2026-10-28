@@ -156,7 +156,8 @@ export function buildSystemConsoleUrl(windmillPublicUrl: string): string {
  * 判断が記録された承認依頼を処理するstepスクリプトのパスを、種類ごとに返す。
  * `approval_decide.ts`は判断を記録した後、
  * `wmill.runScriptByPathAsync`でこのパスのスクリプトを起動する。
- * `design`にはハンドラーがまだ無いので例外を投げる。
+ * 承認待ちの走査(`approval_sweep.ts`)と設計の承認依頼のステップも、反映されなかった判断に同じパスを起動する。
+ * すべての種類に処理先がある。種類を足したときは、switchが網羅されないとコンパイルできない。
  */
 export function handlerPathFor(kind: ApprovalRequestKind): string {
   switch (kind) {
@@ -165,21 +166,8 @@ export function handlerPathFor(kind: ApprovalRequestKind): string {
     case "issue_proposal":
       return "f/factory/steps/issue_proposal_apply";
     case "design":
-      throw new Error("approval_support: no approval handler for kind design");
+      return "f/factory/steps/design_apply";
   }
-}
-
-/**
- * 承認依頼の一覧から`requirements`の種類だけを取り出す。
- * `poll_issues.ts`の期限切れ処理では、状態の移行やラベルの片付けといった
- * `requirements`固有の副作用をこの部分集合にだけ適用する。
- * `issue_proposal`は`expires_at`を持たないので、そもそも期限切れの一覧に入らない。
- * それでも種類ごとの分岐を、DB側のこの保証とは別にテストできるよう関数にしている。
- */
-export function expiredRequirementsRequests<
-  T extends { kind: ApprovalRequestKind },
->(requests: readonly T[]): T[] {
-  return requests.filter((request) => request.kind === "requirements");
 }
 
 /**
@@ -197,8 +185,9 @@ export type IssueCheckVerdict =
 
 /**
  * 決定を記録する前に、Issueを取り込み時点と比べる必要があるかを返す。副作用は無い。
- * 比べるのは、要件定義を承認し、これから決定を記録するときだけである。
+ * 比べるのは、要件定義か設計を承認し、これから決定を記録するときだけである。
  * 却下は実装に渡る内容を決めない。
+ * 却下による作り直しは、反映する側が現在のIssueを読み直す。
  * 記録済みの決定の再実行(`redispatch`)は、記録のときに確認を済ませている。
  * Issue提案には取り込み時点の内容が無い。
  */
@@ -210,7 +199,7 @@ export function needsIssueCheck(
   return (
     action === "record_and_dispatch" &&
     decision === "approve" &&
-    kind === "requirements"
+    (kind === "requirements" || kind === "design")
   );
 }
 
@@ -219,10 +208,15 @@ export function needsIssueCheck(
  * 承認者が見た取り込み時点の内容と、実装のClaudeが受け取る内容を一致させるため、
  * 比べられなかったときも断る(安全側)。
  * 現在のIssueの内容を使うには、却下する。却下による作り直しは、現在のIssueの内容を取り込み直す。
+ * 比べられなかったときの案内は種類で違う。
+ * 設計の却下は、Issueを読めないと要件定義へ戻れず、設計の再生成が上限まで繰り返されるため、
+ * 上限があることを伝える。
+ * 判定の目印の文(`the issue could not be compared`)は種類によらず同じにする。
  */
 export function issueCheckRefusal(
   verdict: IssueCheckVerdict,
   approvalRequestId: number,
+  kind: ApprovalRequestKind = "requirements",
 ): string | null {
   switch (verdict) {
     case "match":
@@ -235,7 +229,12 @@ export function issueCheckRefusal(
         "To approve it, restore the issue to that content and approve again.",
         "To use the current issue instead, reject the request; the requirements are regenerated from the current issue and need a new approval.",
       ].join(" ");
-    case "unavailable":
-      return `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again. If the issue was transferred or deleted, reject the request.`;
+    case "unavailable": {
+      const head = `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again.`;
+      if (kind === "design") {
+        return `${head} If the issue was transferred or deleted, reject the request; the design is regenerated until the applied rejections reach max_design_attempts, and then the work item waits for a person.`;
+      }
+      return `${head} If the issue was transferred or deleted, reject the request.`;
+    }
   }
 }

@@ -117,6 +117,25 @@ describe("runConsoleSummary queries", () => {
     );
   });
 
+  // 承認の反映を起動し直した記録も状態が変わらない遷移なので、本来の注記を押しのけない。
+  test("skips the approval restart record when it reads the note of the current status", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.values).toContain(
+      "approval handler restarted for request ",
+    );
+  });
+
+  test("skips the approval restart record in the work item detail too", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(
+      calls.some((c) =>
+        c.values.includes("approval handler restarted for request "),
+      ),
+    ).toBe(true);
+  });
+
   test("reads approvals from v_approval_requests", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);

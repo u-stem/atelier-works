@@ -164,6 +164,7 @@ async function tagOf(path: string): Promise<string | null> {
 
 // 承認のハンドラは、承認のscriptが起動するので親のジョブを持つが、フローのステップではなく、履歴に出る。
 const APPROVAL_HANDLERS = [
+  "f/factory/steps/design_apply",
   "f/factory/steps/issue_proposal_apply",
   "f/factory/steps/requirements_apply",
 ];

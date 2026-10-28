@@ -1546,3 +1546,22 @@ describe("the SQL that the console scripts reach", () => {
     ).toEqual([]);
   });
 });
+
+describe("the files that approval_decide reaches", () => {
+  // 期限切れの表と設計の定数を足した走査を読み込むと、Console用workerが読むコードの範囲が広がる。
+  const reached = [
+    ...sourcesReachableFrom("f/factory/approval_decide").keys(),
+  ].map(relative);
+
+  test("do not include the approval sweep", () => {
+    expect(reached.filter((file) => file.includes("approval_sweep"))).toEqual(
+      [],
+    );
+  });
+
+  test("do not include the design template", () => {
+    expect(reached.filter((file) => file.includes("design_template"))).toEqual(
+      [],
+    );
+  });
+});

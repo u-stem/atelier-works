@@ -3817,7 +3817,10 @@ export type ReasonRule = {
 };
 
 /** 次の操作がフローによって違う理由のための、理由を出したフローの種類。 */
-export type NextActionFlow = LockOwner["kind"] | "dependabot";
+export type NextActionFlow =
+  | LockOwner["kind"]
+  | "dependabot"
+  | "design_rejection";
 
 /**
  * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
@@ -4318,6 +4321,28 @@ const DESIGN_REASON_RULES: readonly ReasonRule[] = [
       `Consoleで設計の承認の記録を確かめた上で、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
+    pattern: /^design approval timed out$/,
+    describe: () => "設計の承認がタイムアウトしました",
+    // 期限切れの直後に人の承認が記録されると、再実行は承認済みの設計書で実装へ進む。
+    nextAction: () =>
+      `${RETRY_WORK_ITEM_ACTION}(最新の依頼が承認済みなら実装から始めます。そうでなければ設計書を作り直します。承認済みの要件定義は使います)`,
+  },
+  {
+    pattern: /^design rejected after max_design_attempts (\d+)$/,
+    describe: (m) =>
+      `設計の却下が上限(max_design_attemptsの${m[1]}回)に達しました`,
+    nextAction: () =>
+      `Consoleで却下の理由を確かめ、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します。再実行ごとに設計を1回試します)`,
+  },
+  {
+    pattern:
+      /^design stage is closed, so the rejected design was not regenerated$/,
+    describe: () =>
+      "設計の却下を反映するとき、設計工程が無効だったため、設計書を作り直しませんでした",
+    nextAction: () =>
+      `設計工程の設定を確かめ、設計工程が有効な状態になってから、${RETRY_WORK_ITEM_ACTION}(設計書を作り直します。直前の却下の理由を渡します)`,
+  },
+  {
     pattern: /^design document directory already holds a saved draft$/,
     describe: () =>
       "同じ試行の設計書の下書きが保存済みのため、図を消さないように設計書の生成を止めました",
@@ -4334,6 +4359,8 @@ const REQUIREMENTS_REGENERATION_RETRY_NOTE = {
     "要件定義を作り直します。承認し直しが要ります。差し戻し理由は作業項目の履歴の注記に残っていて、再実行で要件定義の生成に渡ります",
   rejection:
     "要件定義を作り直します。承認し直しが要ります。却下の理由は再実行で要件定義の生成に渡ります",
+  design_rejection:
+    "要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます。却下の理由は再実行で要件定義の生成に渡ります",
 } as const;
 
 export const REASON_RULES: readonly ReasonRule[] = [
@@ -4680,7 +4707,21 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
-    nextAction: () => "Consoleの要対応で承認または却下してください",
+    // 期限切れの依頼は、承認も却下も断られる。期限切れの直後に人の承認が記録されたときは、
+    // 再実行が承認の後の工程へ進む。そうでなければ要件定義を作り直し、承認を取り直す。
+    nextAction: () =>
+      `${RETRY_WORK_ITEM_ACTION}(最新の依頼が承認済みなら、承認の後の工程(設計が有効なら設計、そうでなければ実装)から始めます。そうでなければ要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます)`,
+  },
+  // 承認の判断を反映する処理を起動し直しても、作業項目に反映されなかった。
+  // 理由の文字列は`lib/approval_sweep.ts`の`approvalApplyStalledReason`が作る。
+  // この表は走査をimportしない(依存が増えるため)ので、`tests/lib/approval_sweep.test.ts`が出力と表を突き合わせる。
+  {
+    pattern:
+      /^approval decision could not be applied after (\d+) restarts of the handler$/,
+    describe: (m) =>
+      `承認の判断を作業項目に反映できませんでした(反映の処理を${m[1]}回起動し直しました)`,
+    nextAction: () =>
+      `Consoleで作業項目の状態と承認の記録を確かめ、${RETRY_WORK_ITEM_ACTION}`,
   },
   // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reportReviewerRequest`の`note`で、
   // 作業項目の`status_reason`に残す文)。
@@ -4873,9 +4914,19 @@ export const REASON_RULES: readonly ReasonRule[] = [
     // どの経路でも、再実行は要件定義を作り直し、承認し直しになる。差し戻しの理由が残る場所が経路で違う。
     // - 実装の差し戻し(implement_finish): 通知に残る。
     // - 設計の差し戻し(design_generate): 通知には載らず、作業項目の履歴の注記に残る。
-    // - 却下による作り直し(requirements_apply。フローの指定なし): 却下の理由が承認依頼と遷移の注記に残る。
+    // - 要件定義の却下による作り直し(requirements_apply。フローの指定なし): 却下の理由が承認依頼と遷移の注記に残る。
+    // - 設計の却下によるIssueの変更後の戻し(design_apply。design_rejection): 却下の理由が承認依頼に残り、
+    //   再実行は取り込み内容を現在のIssueで更新する。
     nextAction: (_m, flow) =>
-      `${RETRY_WORK_ITEM_ACTION}(${REQUIREMENTS_REGENERATION_RETRY_NOTE[flow === "implement" || flow === "design" ? flow : "rejection"]})`,
+      `${RETRY_WORK_ITEM_ACTION}(${
+        REQUIREMENTS_REGENERATION_RETRY_NOTE[
+          flow === "implement" ||
+          flow === "design" ||
+          flow === "design_rejection"
+            ? flow
+            : "rejection"
+        ]
+      })`,
   },
   {
     pattern: /^pull request has an active fix run$/,

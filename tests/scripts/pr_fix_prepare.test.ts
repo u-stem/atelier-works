@@ -758,9 +758,25 @@ describe("nextActionFor", () => {
     );
   });
 
-  test("tells the operator to check the Inbox when approval timed out", () => {
-    expect(nextActionFor("approval timed out")).toBe(
-      "Consoleの要対応で承認または却下してください",
+  test("tells the operator to retry when approval timed out", () => {
+    expect(nextActionFor("approval timed out")).toContain("retry_work_item");
+  });
+
+  test("does not tell the operator to decide a request that expired", () => {
+    expect(nextActionFor("approval timed out")).not.toContain(
+      "承認または却下してください",
+    );
+  });
+
+  test("tells the operator that retrying regenerates the requirements", () => {
+    expect(nextActionFor("approval timed out")).toContain(
+      "要件定義を作り直します。承認し直しが要ります。取り込み内容は現在のIssueで更新されます",
+    );
+  });
+
+  test("tells the operator that an approval recorded after the timeout starts the later stage", () => {
+    expect(nextActionFor("approval timed out")).toContain(
+      "最新の依頼が承認済みなら、承認の後の工程(設計が有効なら設計、そうでなければ実装)から始めます",
     );
   });
 

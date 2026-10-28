@@ -16,7 +16,8 @@
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。固定しないと
 // `generate-metadata`のたびにscriptごとに別の最新版へずれていく。
 import * as wmill from "windmill-client@1.817.0";
-import { expiredRequirementsRequests } from "./lib/approval_support.ts";
+import { handlerPathFor } from "./lib/approval_support.ts";
+import { sweepApprovals } from "./lib/approval_sweep.ts";
 import {
   ACTIVE_WORK_ITEM_EXISTS_REASON,
   recordAssigneeMissing,
@@ -25,22 +26,27 @@ import {
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  countApprovalRedispatches,
   expireApprovalRequestIfPending,
   getLatestDeployment,
   getWorkItem,
   hasNonTerminalPrWorkItem,
   type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
+  lastApprovalRedispatchAt,
+  latestApprovalRequest,
   listActionableWorkItems,
   listActive,
   listExpiredPendingApprovalRequests,
+  listWorkItemsByStatuses,
   nextCycleForIssue,
   readGhOwnerOpenIssues,
+  recordApprovalRedispatch,
   recordFailure,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveUnresolvedNoticesByPrefix,
   setFlowJobId,
-  updateStatusIfCurrent,
+  updateStatusIfLatestApproval,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
@@ -1328,66 +1334,59 @@ async function claimAndStart(
 }
 
 // ---------------------------------------------------------------------------
-// 保留中の"requirements"承認依頼の期限切れ処理。承認依頼の記録は何も待たない
-// ので、期限を過ぎた依頼を期限切れにするのはここだけである。
-// "issue_proposal"の依頼は`expires_at`を持たない(`pr_fix_finish.ts`の
-// `insertApprovalRequest`の呼び出しを参照)ので、そもそも
-// `listExpiredPendingApprovalRequests`の結果に現れない。それでも
-// 下の分岐のために`expiredRequirementsRequests`で型を絞る。
+// 承認待ちの走査。承認待ちの作業項目を最新の承認依頼と照合し、期限切れを片付け、
+// 決定済みなのに反映されなかった依頼の処理先を起動し直す。判断は`lib/approval_sweep.ts`にあり、
+// ここは本番の入出力をつなぐだけである。
 // ---------------------------------------------------------------------------
 
-async function expirePendingApprovals(
+async function sweepPendingApprovals(
   config: FactoryConfig,
   discordWebhookUrl: string,
   log: Logger,
 ): Promise<number> {
-  let count = 0;
-  const expired = await listExpiredPendingApprovalRequests(new Date());
-  const requirementsExpired = expiredRequirementsRequests(expired);
-
-  for (const request of requirementsExpired) {
-    try {
-      const wasExpired = await expireApprovalRequestIfPending(request.id);
-      if (!wasExpired) continue; // 並行する決定か期限切れ処理が先に処理した。
-
-      const workItem = await getWorkItem(request.work_item_id);
-      if (workItem === null || workItem.issue_number === null) continue;
-
-      const updated = await updateStatusIfCurrent(
-        workItem.id,
-        "awaiting_approval",
-        "expired",
-        "approval timed out",
-      );
-      if (!updated) continue; // 作業項目は既に次の状態に進んでいる。
-
+  return sweepApprovals({
+    now: () => new Date(),
+    listWorkItemsByStatuses: (statuses) => listWorkItemsByStatuses(statuses),
+    getWorkItem: (id) => getWorkItem(id),
+    latestApprovalRequest: (workItemId, kind) =>
+      latestApprovalRequest(workItemId, kind),
+    updateStatusIfLatestApproval: (id, from, to, note, latest) =>
+      updateStatusIfLatestApproval(id, from, to, note, latest),
+    listExpiredPendingApprovalRequests: (now) =>
+      listExpiredPendingApprovalRequests(now),
+    expireApprovalRequestIfPending: (id) => expireApprovalRequestIfPending(id),
+    countApprovalRedispatches: (workItemId, note) =>
+      countApprovalRedispatches(workItemId, note),
+    lastApprovalRedispatchAt: (workItemId, note) =>
+      lastApprovalRedispatchAt(workItemId, note),
+    recordApprovalRedispatch: (workItemId, status, note) =>
+      recordApprovalRedispatch(workItemId, status, note),
+    redispatch: async (kind, approvalRequestId) => {
+      await wmill.runScriptByPathAsync(handlerPathFor(kind), {
+        approval_request_id: approvalRequestId,
+      });
+    },
+    notifyNeedsHuman: async (item, reason) => {
+      if (item.issue_number === null) return;
       await notifyBestEffort(
         discordWebhookUrl,
         {
           kind: "needs_human",
           instance_name: config.instance_name,
-          owner: workItem.owner,
-          repo: workItem.repo,
-          url: workItem.issue_url ?? "",
-          reason: describeReason("approval timed out"),
-          target: { kind: "issue", number: workItem.issue_number },
-          next_action: nextActionFor("approval timed out"),
+          owner: item.owner,
+          repo: item.repo,
+          url: item.issue_url ?? "",
+          reason: describeReason(reason),
+          target: { kind: "issue", number: item.issue_number },
+          next_action: nextActionFor(reason),
         },
         log,
       );
-
-      count += 1;
-    } catch (err) {
-      await recordFailureSafe(
-        `expire_approval:${String(request.id)}`,
-        err,
-        log,
-        request.work_item_id,
-      );
-    }
-  }
-
-  return count;
+    },
+    recordFailure: (step, err, workItemId) =>
+      recordFailureSafe(step, err, log, workItemId),
+    log: (message, fields) => log.info(message, fields),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1541,7 +1540,7 @@ export async function main(): Promise<{
     },
   );
 
-  const expired = await expirePendingApprovals(config, discordWebhookUrl, log);
+  const expired = await sweepPendingApprovals(config, discordWebhookUrl, log);
 
   return {
     claimed,

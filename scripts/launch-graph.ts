@@ -43,6 +43,9 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/requirements_apply", to: "implement", kind: "script" },
   { from: "steps/requirements_apply", to: "pipeline", kind: "script" },
   { from: "steps/requirements_apply", to: "design", kind: "script" },
+  { from: "steps/design_apply", to: "implement", kind: "script" },
+  { from: "steps/design_apply", to: "pipeline", kind: "script" },
+  { from: "steps/design_apply", to: "design", kind: "script" },
   { from: "steps/design_generate", to: "pipeline", kind: "script" },
   { from: "steps/manual_intake_register", to: "pipeline", kind: "script" },
   { from: "steps/pr_fix_finish", to: "pipeline", kind: "script" },
@@ -57,13 +60,14 @@ export const HUMAN_OPERATIONS: Readonly<Record<string, string>> = {
 
 /**
  * Consoleの操作が起動するscriptと、その操作の名前。
- * 承認と却下は`approval_decide`が記録した後に`requirements_apply`を起動する。
+ * 承認と却下は`approval_decide`が記録した後に、`requirements_apply`か`design_apply`を起動する。
  */
 export const HUMAN_ENTRY_SCRIPTS: Readonly<Record<string, string>> = {
   retry_work_item: "Consoleの再実行",
   audit_kickoff: "Consoleの今すぐ監査",
   manual_intake_submit: "Consoleの新規投入",
   "steps/requirements_apply": "Consoleの承認と却下",
+  "steps/design_apply": "Consoleの承認と却下",
 };
 
 /** 文書の起動元の列に書く、辺の起点の表記を返す。 */
@@ -103,6 +107,11 @@ export const APPROVAL_OUTCOMES: Readonly<
     { to: "pipeline", outcome: "reject" },
     { to: "design", outcome: "approve" },
   ],
+  "steps/design_apply": [
+    { to: "implement", outcome: "approve" },
+    { to: "pipeline", outcome: "reject" },
+    { to: "design", outcome: "reject" },
+  ],
 };
 
 /**
@@ -115,6 +124,9 @@ export const APPROVAL_OUTCOMES: Readonly<
  */
 export const UNWIRED_LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/requirements_apply", to: "design", kind: "script" },
+  { from: "steps/design_apply", to: "implement", kind: "script" },
+  { from: "steps/design_apply", to: "pipeline", kind: "script" },
+  { from: "steps/design_apply", to: "design", kind: "script" },
 ];
 
 /** 要件定義の不足(requirements_gap)を見つけたときだけ、pipelineへ差し戻す辺。 */
