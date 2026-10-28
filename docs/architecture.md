@@ -530,6 +530,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
+| `f/factory/lib/pr_fix_design` | script | [LIB] PRの修正に渡す設計書の判定 |
 | `f/factory/lib/ci_fix_pr_base` | script | [LIB] PRの基点のcommitを求める |
 | `f/factory/lib/pr_conflict_support` | script | [LIB] PRの競合の判断 |
 | `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |
