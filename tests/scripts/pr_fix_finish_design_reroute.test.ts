@@ -86,10 +86,15 @@ describe("the design gap branch of pr_fix_finish", () => {
     );
   });
 
-  test("moves the parent before it builds the start of the design flow", async () => {
+  test("calls the reroute of the PR fix to design only after the stop at the limit", async () => {
     const branch = await designGapBranch();
-    const move = branch.indexOf("returnToDesigningFromPrFixIfLeaseHolder(");
-    expect(move > -1 && move < branch.indexOf("buildStartDesign(")).toBe(true);
+    const stop = branch.indexOf('designAction === "exhausted"');
+    const call = branch.indexOf("reroutePrFixToDesign(");
+    expect(stop > -1 && call > stop).toBe(true);
+  });
+
+  test("calls the reroute of the PR fix to design once", async () => {
+    expect(countOf(await designGapBranch(), "reroutePrFixToDesign(")).toBe(1);
   });
 
   test("records the round before it reads the parent", async () => {

@@ -533,9 +533,14 @@ describe("the condition at the return from the PR fix", () => {
     );
   });
 
-  test("moves to designing before it builds the start of the design flow", () => {
-    const move = main.indexOf("returnToDesigningFromPrFixIfLeaseHolder(");
-    expect(move > -1 && move < main.indexOf("buildStartDesign(")).toBe(true);
+  test("calls the reroute of the PR fix to design only after the stop at the limit", () => {
+    const stop = main.indexOf('designAction === "exhausted"');
+    const call = main.indexOf("reroutePrFixToDesign(");
+    expect(stop > -1 && call > stop).toBe(true);
+  });
+
+  test("calls the reroute of the PR fix to design once", () => {
+    expect(countOf(main, /\breroutePrFixToDesign\(/g)).toBe(1);
   });
 
   test("moves to designing once", () => {

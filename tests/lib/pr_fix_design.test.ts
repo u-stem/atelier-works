@@ -46,6 +46,7 @@ const ARGS: FixDesignArgs = {
 
 type Options = {
   parent?: ParentForDesign | null;
+  newerCycle?: boolean;
   requirements?: RequirementsApprovalForGate | null;
   designApproval?: DesignApprovalRef | null;
 };
@@ -57,6 +58,7 @@ function harness(options: Options = {}) {
     requirements: 0,
     designApproval: 0,
     draft: 0,
+    newerCycle: 0,
   };
   const warnings: string[] = [];
   const deps: FixDesignDeps = {
@@ -84,6 +86,10 @@ function harness(options: Options = {}) {
         requirement_draft_id: 10,
         markdown: "# approved design",
       };
+    },
+    hasNewerIssueCycle: async () => {
+      reads.newerCycle += 1;
+      return options.newerCycle === true;
     },
     warn: (message) => {
       warnings.push(message);
@@ -123,6 +129,7 @@ describe("loadParentDesignForFix when the design stage is disabled", () => {
       requirements: 0,
       designApproval: 0,
       draft: 0,
+      newerCycle: 0,
     });
   });
 });
@@ -143,6 +150,7 @@ describe("loadParentDesignForFix outside a review round", () => {
       requirements: 0,
       designApproval: 0,
       draft: 0,
+      newerCycle: 0,
     });
   });
 });
@@ -204,6 +212,11 @@ describe("loadParentDesignForFix demotes to no design", () => {
     expect(await loadParentDesignForFix(h.deps, ARGS)).toBeNull();
   });
 
+  test("when the Issue of the parent has a newer cycle", async () => {
+    const h = harness({ newerCycle: true });
+    expect(await loadParentDesignForFix(h.deps, ARGS)).toBeNull();
+  });
+
   test("when the requirements have no approval", async () => {
     const h = harness({ requirements: null });
     expect(await loadParentDesignForFix(h.deps, ARGS)).toBeNull();
@@ -237,6 +250,24 @@ describe("loadParentDesignForFix reads only what it needs", () => {
     expect(h.reads.requirements).toBe(0);
   });
 
+  test("does not look for a newer cycle of a parent that is not open", async () => {
+    const h = harness({ parent: { ...PARENT, status: "implementing" } });
+    await loadParentDesignForFix(h.deps, ARGS);
+    expect(h.reads.newerCycle).toBe(0);
+  });
+
+  test("does not read the requirements of a parent that has a newer cycle", async () => {
+    const h = harness({ newerCycle: true });
+    await loadParentDesignForFix(h.deps, ARGS);
+    expect(h.reads.requirements).toBe(0);
+  });
+
+  test("looks for a newer cycle of the parent that it reads", async () => {
+    const h = harness();
+    await loadParentDesignForFix(h.deps, ARGS);
+    expect(h.reads.newerCycle).toBe(1);
+  });
+
   test("does not read the requirements of a branch that is not the parent's", async () => {
     const h = harness();
     await loadParentDesignForFix(h.deps, {
@@ -263,6 +294,12 @@ describe("loadParentDesignForFix warnings", () => {
   test("keeps no warning when the design stage is disabled", async () => {
     const h = harness();
     await loadParentDesignForFix(h.deps, { ...ARGS, designEnabled: false });
+    expect(h.warnings).toEqual([]);
+  });
+
+  test("keeps no warning when the Issue of the parent has a newer cycle", async () => {
+    const h = harness({ newerCycle: true });
+    await loadParentDesignForFix(h.deps, ARGS);
     expect(h.warnings).toEqual([]);
   });
 
