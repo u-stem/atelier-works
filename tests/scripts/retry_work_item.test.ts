@@ -2347,6 +2347,63 @@ describe("buildRestartContext", () => {
       expect((await build(h)).designApproved).toBe(false);
     });
 
+    test("does not approve a design after the stop at the limit with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}   `,
+        },
+      });
+      expect((await build(h)).designApproved).toBe(false);
+    });
+
+    test("restarts at the design flow after the stop at the limit with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+        },
+      });
+      const plan = computeRestartPlan(ITEM, await build(h));
+      expect(plan.toStatus).toBe("designing");
+    });
+
+    test("hands no report after the stop at the limit with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+        },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("keeps an approved design after a return with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...RETURN,
+          note: IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+        },
+      });
+      expect((await build(h)).designApproved).toBe(true);
+    });
+
+    test("keeps an approved design once a design request followed the stop at the limit", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+          designRequestedAfter: true,
+        },
+      });
+      expect((await build(h)).designApproved).toBe(true);
+    });
+
     test("restarts at the design flow instead of the implement flow after the stop at the limit", async () => {
       const h = harness({
         designApproval: DESIGN_APPROVED,
