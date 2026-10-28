@@ -130,6 +130,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
   restartTransientPrReview,
+  returnToDesigningFromImplementingIfLeaseHolder,
   returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
   type SqlClient,
@@ -5577,11 +5578,43 @@ describe("countAppliedDesignRejections", () => {
     );
   });
 
-  test("counts only the moves out of awaiting_design_approval", async () => {
+  test("counts the regeneration only when it left awaiting_design_approval", async () => {
     const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
     await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
-    expect(calls[0]?.text).toContain(
-      "from_status = 'awaiting_design_approval'",
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "from_status = 'awaiting_design_approval' AND to_status = 'designing' AND note = ?",
+    );
+  });
+
+  test("counts the limit only when it left awaiting_design_approval", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "from_status = 'awaiting_design_approval' AND to_status = 'needs_human' AND starts_with(note, ? )",
+    );
+  });
+
+  test("counts the returns from implementing to designing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "(from_status = 'implementing' AND to_status = 'designing')",
+    );
+  });
+
+  test("does not compare the note of a return from implementing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).not.toMatch(
+      /from_status = 'implementing' AND to_status = 'designing' AND/,
+    );
+  });
+
+  test("does not count a move into designing from any other status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ n: 0 }]]);
+    await countAppliedDesignRejections(1, NOTE, PREFIX, sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).not.toMatch(
+      /\(\s*to_status = 'designing'/,
     );
   });
 
@@ -9375,5 +9408,79 @@ describe("returnToRequirementsIfLeaseHolder", () => {
     expect(
       await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS),
     ).toBe(false);
+  });
+});
+
+describe("returnToDesigningFromImplementingIfLeaseHolder", () => {
+  function call(sql: SqlClient) {
+    return returnToDesigningFromImplementingIfLeaseHolder(
+      1,
+      "job-1",
+      "implement design gap: x",
+      sql,
+      NO_JOBS,
+    );
+  }
+
+  test("moves the work item to designing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("status = 'designing'");
+  });
+
+  test("advances design_attempt in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("design_attempt = design_attempt + 1");
+  });
+
+  test("clears flow_job_id in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("moves only from implementing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "AND status = 'implementing'",
+    );
+  });
+
+  test("guards the update with the lease", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("flow_job_id IS NOT DISTINCT FROM");
+  });
+
+  test("records the transition from implementing in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id) SELECT updated.id, 'implementing', 'designing',",
+    );
+  });
+
+  test("passes the id, the lease, the note and the job ids as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.values).toEqual([
+      1,
+      "job-1",
+      "implement design gap: x",
+      null,
+      null,
+    ]);
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(await call(sql)).toBe(true);
+  });
+
+  test("returns false when the status or the lease changed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(false);
   });
 });

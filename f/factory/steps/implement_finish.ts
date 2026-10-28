@@ -11,12 +11,18 @@ import { loadConfig } from "../lib/config.ts";
 import { INTAKE_REFRESHED_NOTE_PREFIX } from "../lib/console_support.ts";
 import {
   addNoticeUnlessUnresolved,
+  countAppliedDesignRejections,
   getWorkItem,
   hasIntakeRefreshEvent,
-  setFlowJobId,
+  returnToDesigningFromImplementingIfLeaseHolder,
+  setFlowJobIdIfUnset,
   setWorkItemPrUrl,
   updateStatusIfLeaseHolder,
+  updateStatusToRequirementsIfLeaseHolder,
 } from "../lib/db.ts";
+import { DESIGN_REGENERATING_NOTE } from "../lib/design_apply_support.ts";
+import { DESIGN_START_FAILED_REASON } from "../lib/design_launch_support.ts";
+import { DESIGN_REJECTED_EXHAUSTED_PREFIX } from "../lib/design_template.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import {
   addLabels,
@@ -33,7 +39,10 @@ import {
 } from "../lib/github.ts";
 import {
   buildPrOpenedEvent,
+  DESIGN_GAP_DISABLED_REASON,
+  DESIGN_GAP_EXHAUSTED_REASON,
   decideAfterCommit,
+  decideDesignGapAction,
   decideGapBranchCleanup,
   decideGapReroute,
   decideImplementFinishAction,
@@ -45,6 +54,8 @@ import {
   IMPLEMENT_WIP_COMMIT_MESSAGE,
   type ImplementFinishOutcome,
   implementCommitGuards,
+  implementDesignGapExhaustedNote,
+  implementDesignGapNote,
   implementNeedsHumanNextAction,
   mergeImplementOutcome,
   PARTIAL_WORK_KEPT_LOCAL_REASON,
@@ -52,6 +63,7 @@ import {
   preserveWork,
   REQUIREMENTS_REGENERATION_FAILED_REASON,
   REVIEW_LABEL_STYLE,
+  rerouteImplementationToDesign,
   shouldDeleteBranchOnGap,
   shouldPreserveBeforeFailing,
   shouldPushPartialWork,
@@ -81,11 +93,13 @@ import {
   neutralizeIssueRefs,
 } from "../lib/implement_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import { limitGapReport } from "../lib/model_text.ts";
 import {
   defaultLockReleaseDeps,
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { automatedFeedback } from "../lib/prompts.ts";
 import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
@@ -110,6 +124,7 @@ import {
   nextActionFor,
   normalizeJapaneseText,
 } from "./pr_workflow_support.ts";
+import { buildStartDesign } from "./requirements_apply.ts";
 
 export type ImplementFinishResult = {
   readonly ok: boolean;
@@ -215,8 +230,13 @@ type PrAttempt =
  * - requirements_gap: worktreeを消し、ブランチはどのPRも使っていないときだけ消す。
  *   attempt+1で`f/factory/pipeline`へ差し戻す(`max_attempts`を超えたらneeds_human)。
  *   `pr_fix_finish`の差し戻しと同じく、`runFlowAsync`より先に状態を更新する。
- *   その後の`runFlowAsync`(戻り値がジョブIDでないときを含む)か`setFlowJobId`が失敗したら、
+ *   状態の更新は同じ文で設計の試行を0にそろえ、リースを空にする。報告は自動の報告の印を付けて渡す。
+ *   その後の`runFlowAsync`(戻り値がジョブIDでないときを含む)か`setFlowJobIdIfUnset`が失敗したら、
  *   `requirements_generating`からneeds_humanに移し、noticeにギャップの報告を載せる。
+ * - design_gap: requirements_gapと同じ後始末(gapの作業は捨てる)を先に行い、その後で行き先を決める
+ *   (`decideDesignGapAction`)。戻すなら`designing`へ移し、設計の試行を進め、報告を自動の報告の印つきで
+ *   渡して設計フローを起動する。反映できた却下と戻しの数が上限に達するか、設計工程が無効なら、
+ *   固定の理由でneeds_humanにする。
  * - needs_human: max_rounds / daily_budget / deadline / stalled / diff_too_largeで止まったとき、
  *   PRが無く、worktreeの`.git`ポインタが変わっておらず、gitleaksを通れば、
  *   ブランチを確認できるように今ある作業をpushする(`preserveWork`)。
@@ -354,9 +374,10 @@ async function finishImplement(
    * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
    * `requirements_generating`)。
-   * 状態の遷移はflow_job_idがこの実行のルートジョブIDのときだけ行う。
-   * requirements_generatingからの遷移も、再起動の失敗経路なのでflow_job_idはまだこの実行のID。
+   * `implementing`からの遷移は、flow_job_idがこの実行のルートジョブIDのときだけ行う。
+   * `from`を渡す遷移は、差し戻しの比較交換がリースを空にした後の失敗経路なので、flow_job_idが空のときだけ行う。
    * `detail`はnoticeとDiscordに足す文(ギャップの報告)。
+   * `note`は遷移の記録に書く文で、既定は`reason`。理由の文を固定にしたまま、報告を記録に残すときに渡す。
    */
   const finalizeNeedsHuman = async (
     reason: string,
@@ -364,14 +385,15 @@ async function finishImplement(
     options: {
       readonly from?: WorkItemStatus;
       readonly detail?: string;
+      readonly note?: string;
     } = {},
   ): Promise<ImplementFinishResult> => {
     const moved = await updateStatusIfLeaseHolder(
       work_item_id,
       options.from ?? "implementing",
       "needs_human",
-      leaseJobId,
-      reason,
+      options.from === undefined ? leaseJobId : null,
+      options.note ?? reason,
     );
     const described =
       options.detail === undefined
@@ -547,15 +569,21 @@ async function finishImplement(
     );
   }
 
-  if (action.kind === "requirements_gap") {
-    const gapReport = loop_result.gap_report ?? "";
+  /**
+   * 要件定義か設計の不足で、この実行の作業を捨てる後始末。worktreeを消し、ブランチはどのPRも使っていないときだけ消す。
+   * 照合に落ちて差し戻しを続けないときは、その`needs_human`の結果を返す。続けてよいときは`null`を返す。
+   */
+  const cleanUpGapWork = async (
+    ctx: ImplementContext,
+    gapReport: string,
+  ): Promise<ImplementFinishResult | null> => {
     // worktreeは同じ作業項目の次の実行も使うので、リースを持つ間だけ消す。
     await confirmLease();
     try {
       await removeWorktree({
         run: runCommand,
-        repoDir: context.repo_dir,
-        dir: context.worktree_dir,
+        repoDir: ctx.repo_dir,
+        dir: ctx.worktree_dir,
         force: true,
       });
     } catch (err) {
@@ -567,7 +595,7 @@ async function finishImplement(
     let prLookupFailed = false;
     try {
       openPrNumber =
-        (await findOpenPullRequestByHead(client, owner, repo, context.branch))
+        (await findOpenPullRequestByHead(client, owner, repo, ctx.branch))
           ?.number ?? null;
     } catch (err) {
       prLookupFailed = true;
@@ -605,8 +633,8 @@ async function finishImplement(
       try {
         await deleteRemoteBranch({
           run: runCommand,
-          repoDir: context.repo_dir,
-          branch: context.branch,
+          repoDir: ctx.repo_dir,
+          branch: ctx.branch,
           ghToken,
         });
       } catch (err) {
@@ -617,8 +645,8 @@ async function finishImplement(
       try {
         await deleteLocalBranch({
           run: runCommand,
-          repoDir: context.repo_dir,
-          branch: context.branch,
+          repoDir: ctx.repo_dir,
+          branch: ctx.branch,
         });
       } catch (err) {
         log.warn("failed to delete the local implement branch", {
@@ -626,14 +654,21 @@ async function finishImplement(
         });
       }
     }
+    return null;
+  };
+
+  if (action.kind === "requirements_gap") {
+    const gapReport = loop_result.gap_report ?? "";
+    const stopped = await cleanUpGapWork(context, gapReport);
+    if (stopped !== null) return stopped;
     if (decideGapReroute(attempt, config.max_attempts) === "needs_human") {
       const reason = gapExhaustedReason(config.max_attempts);
       return finalizeNeedsHuman(reason, nextActionFor(reason, "implement"));
     }
-    const moved = await updateStatusIfLeaseHolder(
+    // 同じ文で設計の試行を0にそろえ、リースを空にする。古い設計書が、次の要件定義の実装に渡らないようにするためである。
+    const moved = await updateStatusToRequirementsIfLeaseHolder(
       work_item_id,
       "implementing",
-      "requirements_generating",
       leaseJobId,
       `gap: ${gapReport}`,
     );
@@ -648,11 +683,12 @@ async function finishImplement(
         await wmill.runFlowAsync("f/factory/pipeline", {
           work_item_id,
           attempt: attempt + 1,
-          feedback: gapReport,
+          feedback: automatedFeedback(limitGapReport(gapReport)),
         }),
         "runFlowAsync",
       );
-      await setFlowJobId(work_item_id, flowJobId);
+      // 別の実行が先にジョブIDを記録していれば、その実行が進めているので、記録済みとして先へ進む。
+      await setFlowJobIdIfUnset(work_item_id, flowJobId);
     } catch (err) {
       log.warn("requirements regeneration could not be started", {
         error: errorText(err),
@@ -667,6 +703,76 @@ async function finishImplement(
       );
     }
     return transitionResult(true, "requirements_generating", gapReport);
+  }
+
+  if (action.kind === "design_gap") {
+    const gapReport = loop_result.gap_report ?? "";
+    // 後始末を先に行う。行き先がneeds_humanでも、gapの作業は捨てる。
+    const stopped = await cleanUpGapWork(context, gapReport);
+    if (stopped !== null) return stopped;
+    const designAction = decideDesignGapAction({
+      designEnabled: config.design_enabled,
+      appliedRejections: await countAppliedDesignRejections(
+        work_item_id,
+        DESIGN_REGENERATING_NOTE,
+        DESIGN_REJECTED_EXHAUSTED_PREFIX,
+      ),
+      maxDesignAttempts: config.max_design_attempts,
+    });
+    const detail = gapReportNoticeDetail(limitGapReport(gapReport));
+    if (designAction === "disabled") {
+      return finalizeNeedsHuman(
+        DESIGN_GAP_DISABLED_REASON,
+        nextActionFor(DESIGN_GAP_DISABLED_REASON, "implement"),
+        { detail },
+      );
+    }
+    if (designAction === "exhausted") {
+      return finalizeNeedsHuman(
+        DESIGN_GAP_EXHAUSTED_REASON,
+        nextActionFor(DESIGN_GAP_EXHAUSTED_REASON, "implement"),
+        { detail, note: implementDesignGapExhaustedNote(gapReport) },
+      );
+    }
+    const rerouted = await rerouteImplementationToDesign(
+      {
+        casToDesigning: (note) =>
+          returnToDesigningFromImplementingIfLeaseHolder(
+            work_item_id,
+            leaseJobId,
+            note,
+          ),
+        launchDesign: (feedback) => {
+          const startDesign = buildStartDesign(
+            config,
+            { workItem, issueNumber, webhookUrl, log },
+            undefined,
+            feedback,
+          );
+          return startDesign();
+        },
+      },
+      { gapReport },
+    );
+    if (rerouted.kind === "not_moved") {
+      return transitionResult(
+        false,
+        "designing",
+        "work item moved on before the reroute",
+      );
+    }
+    // 設計フローを起動できなかったときは、起動の手順が`needs_human`へ戻して通知している。
+    if (
+      rerouted.outcome === "launch_failed" ||
+      rerouted.outcome === "record_failed"
+    ) {
+      return transitionResult(true, "needs_human", DESIGN_START_FAILED_REASON);
+    }
+    return transitionResult(
+      true,
+      "designing",
+      implementDesignGapNote(gapReport),
+    );
   }
 
   // ここに来るのは`action.kind === "open_pr"`のときだけ。

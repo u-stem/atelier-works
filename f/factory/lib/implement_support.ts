@@ -4,7 +4,7 @@
 // 入出力は行わない。stepsからは独立させ、lib→stepsのimportを作らない。
 //
 // 形と意味の検査は意図して分けている。`isImplementClaudeOutput`は
-// `prompts.ts`の`IMPLEMENT_SCHEMA`(`claude -p --json-schema`が強制する形)を
+// `prompts.ts`の`IMPLEMENT_SCHEMA_WITH_DESIGN_GAP`(`claude -p --json-schema`が強制する形のうち、結果の選択肢が最も多いもの)を
 // 項目ごとに写したもので、`validateImplementOutput`はスキーマで表せない規則を持つ。
 
 import { createHash } from "node:crypto";
@@ -34,22 +34,24 @@ import { withCommitTrailers } from "./workspace.ts";
 export { parseImplementBranchWorkItemId } from "./types.ts";
 
 /**
- * Claude自身が返す2つの結果(`IMPLEMENT_SCHEMA`)。
+ * Claude自身が返す3つの結果(`IMPLEMENT_SCHEMA_WITH_DESIGN_GAP`)。
+ * `design_gap`は設計書がある実行だけが返せる(`IMPLEMENT_SCHEMA`の選択肢には無い)。
  * `implement_rounds.outcome`のそれ以外の値(`check_failed` / `checks_skipped` /
  * `stalled` / `error`)は、Claudeではなくフローが付ける。
  */
-export type ImplementClaudeOutcome = "done" | "requirements_gap";
+export type ImplementClaudeOutcome = "done" | "requirements_gap" | "design_gap";
 export const IMPLEMENT_CLAUDE_OUTCOMES: readonly ImplementClaudeOutcome[] = [
   "done",
   "requirements_gap",
+  "design_gap",
 ];
 
 export type ImplementClaudeOutput = {
   readonly outcome: ImplementClaudeOutcome;
   readonly summary: string;
   /**
-   * `outcome`が`requirements_gap`のときは必須(`null`でも空白だけでもない)。
-   * 要件定義をやり直すときのフィードバックになる。
+   * `outcome`が`requirements_gap`か`design_gap`のときは必須(`null`でも空白だけでもない)。
+   * 要件定義か設計をやり直すときのフィードバックになる。
    */
   readonly gap_report: string | null;
   /** `outcome`が`done`なら空でない1行、それ以外なら`""`。 */
@@ -95,9 +97,10 @@ export function implementOutputProseIssues(
 }
 
 /**
- * 値が`prompts.ts`の`IMPLEMENT_SCHEMA`(`claude -p --json-schema`に渡すスキーマ)の
- * 形に一致するかを返す。形だけを見る。
- * 結果ごとの規則は`validateImplementOutput`が検査する。
+ * 値が`prompts.ts`の`IMPLEMENT_SCHEMA_WITH_DESIGN_GAP`(`claude -p --json-schema`に渡すスキーマのうち、
+ * 結果の選択肢が最も多いもの)の形に一致するかを返す。形だけを見る。
+ * 設計書の無い実行に`design_gap`が返ったことは、ここでは拒まない。結果ごとの規則と合わせて
+ * `validateImplementOutput`が検査する。
  */
 export function isImplementClaudeOutput(
   value: unknown,
@@ -112,7 +115,7 @@ export function isImplementClaudeOutput(
 }
 
 // ---------------------------------------------------------------------------
-// validateImplementOutput: IMPLEMENT_SCHEMAでは表せない、結果ごとの規則
+// validateImplementOutput: スキーマでは表せない、結果ごとの規則
 // ---------------------------------------------------------------------------
 
 /**
@@ -129,6 +132,13 @@ export type ImplementOutputValidation =
 
 /**
  * Claudeの出力が、スキーマで表せない結果ごとの規則を満たすかを検査する。
+ * `hasDesign`は、この実行に設計書が渡ったかどうか。
+ *
+ * `design_gap`のとき:
+ * - 設計書が無い実行では不正な出力にする。設計書の無い実行のスキーマには選択肢が無く、
+ *   戻す先の設計が存在しないため。
+ * - 設計書がある実行では、`requirements_gap`と同じ規則(`gap_report`が空白でなく、
+ *   `commit_subject`と`commit_body`が空)を課す。
  *
  * `requirements_gap`のとき:
  * - `gap_report`が空白でないこと。要件定義へのフィードバックになるため、
@@ -151,12 +161,22 @@ export type ImplementOutputValidation =
  */
 export function validateImplementOutput(
   output: ImplementClaudeOutput,
+  hasDesign: boolean,
 ): ImplementOutputValidation {
-  if (output.outcome === "requirements_gap") {
+  if (output.outcome === "design_gap" && !hasDesign) {
+    return {
+      ok: false,
+      reason: "design_gap outcome without an approved design",
+    };
+  }
+  if (
+    output.outcome === "requirements_gap" ||
+    output.outcome === "design_gap"
+  ) {
     if (output.gap_report === null || output.gap_report.trim().length === 0) {
       return {
         ok: false,
-        reason: "requirements_gap outcome without a gap_report",
+        reason: `${output.outcome} outcome without a gap_report`,
       };
     }
     if (output.commit_subject !== "" || output.commit_body !== "") {
@@ -804,6 +824,7 @@ export type ImplementRoundExit =
   | "deadline"
   | "stalled"
   | "requirements_gap"
+  | "design_gap"
   | "continue";
 
 export type ImplementRoundExitInput = {
@@ -932,7 +953,7 @@ export function implementTimeoutMisfit(
 /**
  * implement_verifyが修正のラウンドをもう1回回すか、どの理由で終えるかを決める。
  * 判定は次の優先順で行う。
- * 1. Claude自身が`requirements_gap`を返したら、必ずループを終える。
+ * 1. Claude自身が`requirements_gap`か`design_gap`を返したら、必ずループを終える。
  * 2. 検証を実行しなかったラウンドは`checks_skipped`で終える(GitHubのCIに任せる)。
  * 3. 検証が通ったら終える。
  * 4. ガードとして、ラウンド上限、日次予算、フロー全体の期限、停滞の検出を確かめる。
@@ -946,6 +967,7 @@ export function decideImplementRoundExit(
   state: ImplementRoundExitInput,
 ): ImplementRoundExit {
   if (state.claudeOutcome === "requirements_gap") return "requirements_gap";
+  if (state.claudeOutcome === "design_gap") return "design_gap";
   if (state.checks === "skipped") return "checks_skipped";
   if (state.checks === "passed") return "checks_passed";
   if (state.round >= state.maxRounds) return "max_rounds";
@@ -987,7 +1009,7 @@ export function roundIsStalled(
  * 検証ループを`exit`で終えたラウンドの`implement_rounds.outcome`を返す。
  * `continue`の場合は、検証が失敗して次に修正のラウンドが続くラウンドの値になる。
  * - `checks_passed`は`done`にする。
- * - `checks_skipped`、`stalled`、`requirements_gap`は同じ名前のままにする。
+ * - `checks_skipped`、`stalled`、`requirements_gap`、`design_gap`は同じ名前のままにする。
  * - `max_rounds`、`daily_budget`、`deadline`、`continue`は、どれも検証が失敗したラウンドなので
  *   `check_failed`にする。
  */
@@ -1003,6 +1025,8 @@ export function roundOutcomeForExit(
       return "stalled";
     case "requirements_gap":
       return "requirements_gap";
+    case "design_gap":
+      return "design_gap";
     case "max_rounds":
     case "daily_budget":
     case "deadline":

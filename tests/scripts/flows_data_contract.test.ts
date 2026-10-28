@@ -532,9 +532,10 @@ describe("the rework exits", () => {
 });
 
 describe("the entries that are not drawn yet", () => {
-  test("design records the approval of pipeline and the rejection of design as entries that do not start it yet", () => {
+  test("design records the rejection of design, the return from implement, and the approval of pipeline as entries that do not start it yet", () => {
     expect(flowOf(data, "design").unwiredEntries).toEqual([
       { kind: "flow", flow: "design", via: "reject" },
+      { kind: "flow", flow: "implement", via: "launch" },
       { kind: "flow", flow: "pipeline", via: "approve" },
     ]);
   });

@@ -5,6 +5,8 @@
 
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import { normalizeRepoUrl } from "./config.ts";
+import { isDesignRejectionExhausted } from "./design_apply_support.ts";
+import type { StartDesignOutcome } from "./design_launch_support.ts";
 import type { NotifyEvent } from "./discord.ts";
 import { ImplementLeaseLostError } from "./implement_launch_support.ts";
 import {
@@ -16,12 +18,113 @@ import {
 } from "./implement_loop.ts";
 import type { ImplementCheckSummary } from "./implement_support.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import { limitGapReport } from "./model_text.ts";
 import { WorktreeBusyError } from "./process_lock.ts";
+import { automatedFeedback } from "./prompts.ts";
 import {
   type CommitAndPushResult,
   CommitBlockedError,
   type GitleaksScan,
 } from "./workspace.ts";
+
+/**
+ * 実装が設計の不足を報告し、設計へ戻した遷移の注記の接頭辞。
+ * 設計が要件の不足を返した遷移の注記(`design gap: `)と分ける。再実行はこの接頭辞で報告を読み出す。
+ */
+export const IMPLEMENT_DESIGN_GAP_NOTE_PREFIX = "implement design gap: ";
+
+/**
+ * 設計へ戻す上限に達して`needs_human`にした遷移の注記の接頭辞。
+ * 理由の文は固定の英文(`DESIGN_GAP_EXHAUSTED_REASON`)で、報告は注記だけに残す。再実行はこの接頭辞で報告を読み出す。
+ */
+export const IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX =
+  "implement design gap exhausted: ";
+
+/** 設計へ戻す上限(`max_design_attempts`)に達したときの`needs_human`の理由。 */
+export const DESIGN_GAP_EXHAUSTED_REASON =
+  "design gap after max_design_attempts";
+
+/** 設計工程が無効(`design_enabled`が偽)のため、設計へ戻せなかったときの`needs_human`の理由。 */
+export const DESIGN_GAP_DISABLED_REASON =
+  "design gap reported while design_enabled is off";
+
+/**
+ * 設計へ戻した遷移の注記を返す。
+ * 報告は信頼できない入力を読んだClaudeの出力なので、秘密のマスクと制御文字の除去をかけ、長さを絞る。
+ */
+export function implementDesignGapNote(report: string): string {
+  return `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}${limitGapReport(report)}`;
+}
+
+/** 上限で止めた遷移の注記を返す。報告は`implementDesignGapNote`と同じに整える。 */
+export function implementDesignGapExhaustedNote(report: string): string {
+  return `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}${limitGapReport(report)}`;
+}
+
+/**
+ * 実装が設計の不足を報告したときの行き先。
+ * - `reroute`: 設計へ戻す。
+ * - `exhausted`: 反映できた設計の却下と実装からの戻しの数が、上限に達する。
+ * - `disabled`: 設計工程が無効で、閉じた入口を迂回しない。
+ */
+export type DesignGapAction = "reroute" | "exhausted" | "disabled";
+
+/**
+ * 設計の不足の報告の行き先を決める。副作用は無い。
+ * 設計工程が無効なら、数に依らず`disabled`にする。有効なら、人の却下と共有する上限を
+ * `isDesignRejectionExhausted`で判定する。今回の戻しは遷移の記録にまだ無いので、その関数が1を足して比べる。
+ */
+export function decideDesignGapAction(input: {
+  readonly designEnabled: boolean;
+  readonly appliedRejections: number;
+  readonly maxDesignAttempts: number;
+}): DesignGapAction {
+  if (!input.designEnabled) return "disabled";
+  return isDesignRejectionExhausted(
+    input.appliedRejections,
+    input.maxDesignAttempts,
+  )
+    ? "exhausted"
+    : "reroute";
+}
+
+/** `rerouteImplementationToDesign`が使う、DBと設計フローの起動の依存。テストでは差し替える。 */
+export type RerouteToDesignDeps = {
+  /**
+   * `returnToDesigningFromImplementingIfLeaseHolder`で、リースを持つ実装から`designing`へ移す。
+   * 同じ文で設計の試行を進め、リースを空にし、遷移の記録に`note`を書く。移せなければ`false`。
+   */
+  readonly casToDesigning: (note: string) => Promise<boolean>;
+  /**
+   * 設計フローを`feedback`つきで起動し、ジョブIDを記録する(`buildStartDesign`)。
+   * 起動か記録に失敗したら、その手順が`designing`から`needs_human`へ戻して通知する。
+   */
+  readonly launchDesign: (feedback: string) => Promise<StartDesignOutcome>;
+};
+
+export type RerouteToDesignResult =
+  | { readonly kind: "not_moved" }
+  | { readonly kind: "started"; readonly outcome: StartDesignOutcome };
+
+/**
+ * 実装を設計へ戻す。比較交換で`designing`へ移し、続けて設計フローを起動する。
+ * 移せなければ、作業項目が先に動いているので何も起動しない。
+ * 報告は整えて(`limitGapReport`)、自動の報告の印(`automatedFeedback`)を付けて渡す。
+ * 設計フローが報告を人の却下の理由として扱わないようにするためである。
+ * 遷移元は`implementing`だけで、`designing`から`designing`への遷移は作らない。
+ */
+export async function rerouteImplementationToDesign(
+  deps: RerouteToDesignDeps,
+  args: { readonly gapReport: string },
+): Promise<RerouteToDesignResult> {
+  if (!(await deps.casToDesigning(implementDesignGapNote(args.gapReport)))) {
+    return { kind: "not_moved" };
+  }
+  const outcome = await deps.launchDesign(
+    automatedFeedback(limitGapReport(args.gapReport)),
+  );
+  return { kind: "started", outcome };
+}
 
 /** finishが扱う結果。prepareでの停止か、検証ループの終了のどちらか。 */
 export type ImplementFinishOutcome =
@@ -50,6 +153,7 @@ export type ImplementFinishAction =
   | { readonly kind: "cancel" }
   | { readonly kind: "open_pr" }
   | { readonly kind: "requirements_gap" }
+  | { readonly kind: "design_gap" }
   /**
    * `preserveWork`は、ループが検証を正常に回した後にガードで止まったことを表す。
    * このときは、`.git`ポインタの確認とgitleaksの検査を通れば、
@@ -87,6 +191,8 @@ export function decideImplementFinishAction(
       return { kind: "open_pr" };
     case "requirements_gap":
       return { kind: "requirements_gap" };
+    case "design_gap":
+      return { kind: "design_gap" };
     case "max_rounds":
     case "daily_budget":
     case "deadline":
@@ -246,7 +352,7 @@ export function shouldPushPartialWork(
  * 終端処理の前(Issueの再確認)でgitやGitHubの操作が失敗したとき、
  * 先に実行の作業をブランチに残すかを返す。
  * 残すのは、PRを開くはずだった実行と、作業を残すガード停止である。
- * requirements_gap、キャンセル、作業を残さない停止には残すものが無い。
+ * requirements_gap、design_gap、キャンセル、作業を残さない停止には残すものが無い。
  * PRが開いているときの規則(`shouldPushPartialWork`)は呼び出し側が適用する。
  */
 export function shouldPreserveBeforeFailing(

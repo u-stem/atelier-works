@@ -102,6 +102,11 @@
         },
         {
           "kind": "flow",
+          "flow": "implement",
+          "via": "launch"
+        },
+        {
+          "kind": "flow",
           "flow": "pipeline",
           "via": "approve"
         }

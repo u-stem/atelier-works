@@ -24,6 +24,10 @@ import {
   REQUIREMENTS_MODIFIED_REASON,
 } from "../../f/factory/lib/doc_tree_hash.ts";
 import {
+  DESIGN_GAP_DISABLED_REASON,
+  DESIGN_GAP_EXHAUSTED_REASON,
+} from "../../f/factory/lib/implement_finish_support.ts";
+import {
   describeReason,
   designNeedsHumanFields,
   nextActionFor,
@@ -269,6 +273,8 @@ describe("the reason table and the reasons that the design stage produces", () =
     DESIGN_APPROVAL_TIMED_OUT_REASON,
     DESIGN_STAGE_CLOSED_REASON,
     designRejectedExhaustedReason: designRejectedExhaustedReason(3),
+    DESIGN_GAP_EXHAUSTED_REASON,
+    DESIGN_GAP_DISABLED_REASON,
   };
 
   /** 設計の理由の定数を持つファイル。 */
@@ -409,7 +415,7 @@ describe("the reason of a design that was rejected up to the limit", () => {
 
   test("translates the limit", () => {
     expect(describeReason(designRejectedExhaustedReason(3))).toBe(
-      "設計の却下が上限(max_design_attemptsの3回)に達しました",
+      "設計の却下と実装からの戻しが上限(max_design_attemptsの3回)に達しました",
     );
   });
 
@@ -521,4 +527,48 @@ describe("the wiring of the design notifications", () => {
       expect(await stepSource(name)).not.toMatch(/next_action\s*:/);
     },
   );
+});
+
+describe("the reason of a design gap that the implementation reported", () => {
+  test("translates the limit", () => {
+    expect(describeReason(DESIGN_GAP_EXHAUSTED_REASON)).toBe(
+      "実装が設計書の不足を報告しましたが、設計の却下と実装からの戻しが上限(max_design_attempts)に達しました",
+    );
+  });
+
+  test("tells that a retry builds the design again", () => {
+    expect(nextActionFor(DESIGN_GAP_EXHAUSTED_REASON, "implement")).toContain(
+      "再実行すると設計を作り直します",
+    );
+  });
+
+  test("tells how to retry after the limit", () => {
+    expect(nextActionFor(DESIGN_GAP_EXHAUSTED_REASON, "implement")).toContain(
+      RETRY,
+    );
+  });
+
+  test("translates the closed stage", () => {
+    expect(describeReason(DESIGN_GAP_DISABLED_REASON)).toBe(
+      "実装が設計書の不足を報告しましたが、設計工程が無効のため、設計へ戻せませんでした",
+    );
+  });
+
+  test("tells to turn the design stage on first", () => {
+    expect(nextActionFor(DESIGN_GAP_DISABLED_REASON, "implement")).toContain(
+      "設計工程を有効にしてから",
+    );
+  });
+
+  test("tells to retry once the stage is on", () => {
+    expect(nextActionFor(DESIGN_GAP_DISABLED_REASON, "implement")).toContain(
+      RETRY,
+    );
+  });
+
+  test("tells to start a new cycle by the trigger label", () => {
+    expect(nextActionFor(DESIGN_GAP_DISABLED_REASON, "implement")).toContain(
+      `${RELABEL}`,
+    );
+  });
 });

@@ -67,6 +67,7 @@ import {
   latestConflictFixSettledAt,
   latestDesignApproval,
   latestDesignDraft,
+  latestDesignEntryEvent,
   latestMainCiRunCreatedAt,
   latestRequirementsApproval,
   latestStatusEvent,
@@ -125,6 +126,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
   restartTransientPrReview,
+  returnToDesigningFromImplementingIfLeaseHolder,
   returnToRequirementsIfLeaseHolder,
   revertIssueProposalToPending,
   saveDesignDraftIfLeaseHolder,
@@ -10316,6 +10318,369 @@ check(
   "applied rejections: a rejection after the new range started is counted",
   (await countFor(countItem)) === 1,
   await countFor(countItem),
+);
+
+// 実装から設計への戻しは、反映できた却下と同じ数に入る。再実行の遷移や、実装から別の状態への遷移は数えない。
+const gapCountItem = await issueWorkItem(
+  9590,
+  1,
+  "implementing",
+  "qdb gap return count",
+);
+check(
+  "design gap count: nothing is counted at first",
+  (await countFor(gapCountItem)) === 0,
+  await countFor(gapCountItem),
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'qdb-gap-lease', design_attempt = 2 WHERE id = ${String(gapCountItem)}`,
+);
+check(
+  "design gap return: the work item with another lease is not moved",
+  !(await returnToDesigningFromImplementingIfLeaseHolder(
+    gapCountItem,
+    "qdb-other-lease",
+    "implement design gap: nope",
+    sql,
+  )) && (await workItemRow(gapCountItem)).status === "implementing",
+  await workItemRow(gapCountItem),
+);
+check(
+  "design gap return: the work item that is not implementing is not moved",
+  !(await returnToDesigningFromImplementingIfLeaseHolder(
+    await issueWorkItem(9591, 1, "awaiting_design_approval", "qdb gap other"),
+    null,
+    "implement design gap: nope",
+    sql,
+  )),
+);
+check(
+  "design gap return: the lease holder moves it",
+  await returnToDesigningFromImplementingIfLeaseHolder(
+    gapCountItem,
+    "qdb-gap-lease",
+    "implement design gap: FR-002",
+    sql,
+  ),
+);
+const gapMoved = await workItemRow(gapCountItem);
+check(
+  "design gap return: the work item is designing with the next design_attempt and no lease",
+  gapMoved.status === "designing" &&
+    gapMoved.design_attempt === 3 &&
+    gapMoved.flow_job_id === null,
+  gapMoved,
+);
+check(
+  "design gap return: the transition is recorded from implementing with the note",
+  (await lastEventNote(gapCountItem)) === "implement design gap: FR-002" &&
+    (
+      await sql`
+        SELECT from_status, to_status FROM factory.work_item_events
+        WHERE work_item_id = ${gapCountItem}::bigint ORDER BY id DESC LIMIT 1
+      `.fetch()
+    )[0]?.from_status === "implementing",
+);
+check(
+  "design gap count: the return is counted whatever its note is",
+  (await countFor(gapCountItem)) === 1,
+  await countFor(gapCountItem),
+);
+await moveStatus(
+  gapCountItem,
+  "designing",
+  "needs_human",
+  "design flow could not be started",
+);
+await moveStatus(
+  gapCountItem,
+  "needs_human",
+  "designing",
+  "retry_work_item: restarted",
+);
+check(
+  "design gap count: a retry into designing is not counted",
+  (await countFor(gapCountItem)) === 1,
+  await countFor(gapCountItem),
+);
+await moveStatus(gapCountItem, "designing", "implementing", "design approved");
+await moveStatus(
+  gapCountItem,
+  "implementing",
+  "needs_human",
+  "implement design gap exhausted: FR-002",
+);
+check(
+  "design gap count: a stop of the implementation is not counted",
+  (await countFor(gapCountItem)) === 1,
+  await countFor(gapCountItem),
+);
+await moveStatus(gapCountItem, "needs_human", "implementing", "retry");
+await moveStatus(gapCountItem, "implementing", "designing", "another note");
+check(
+  "design gap count: a second return and a rejection add up",
+  (await countFor(gapCountItem)) === 2,
+  await countFor(gapCountItem),
+);
+await moveStatus(
+  gapCountItem,
+  "designing",
+  "awaiting_design_approval",
+  "design approval requested",
+);
+await moveStatus(
+  gapCountItem,
+  "awaiting_design_approval",
+  "designing",
+  DESIGN_REGENERATING_TEST_NOTE,
+);
+check(
+  "design gap count: the returns and the rejections are one total",
+  (await countFor(gapCountItem)) === 3,
+  await countFor(gapCountItem),
+);
+await moveStatus(
+  gapCountItem,
+  "designing",
+  "requirements_generating",
+  "design gap: requirements",
+);
+check(
+  "design gap count: the move into the requirements starts the range again",
+  (await countFor(gapCountItem)) === 0,
+  await countFor(gapCountItem),
+);
+
+// 再実行が設計へ渡す報告の問い合わせ。要件定義の生成への最新の遷移より後で、設計へ入る最新の遷移
+// (引き継ぎ印つきの再実行を除く)か、実装から上限で止めた遷移のうち新しい方を返す。
+// 設計の承認依頼がその遷移より後に作られたか(同時刻は後でない)も返す。
+const GAP_CARRY_MARK = "retry_work_item: restarted (carrying gap)";
+const GAP_EXHAUSTED_PREFIX = "implement design gap exhausted: ";
+async function entryOf(id: number) {
+  return latestDesignEntryEvent(id, GAP_CARRY_MARK, GAP_EXHAUSTED_PREFIX, sql);
+}
+let designRequestSubject = 2147482100;
+async function requestDesignFor(id: number): Promise<number> {
+  designRequestSubject += 1;
+  return insertApprovalRequest(
+    {
+      kind: "design",
+      work_item_id: id,
+      subject_id: designRequestSubject,
+      payload: { attempt: 1, design_attempt: 1 },
+      expires_at: null,
+    },
+    sql,
+  );
+}
+
+const entryItem = await issueWorkItem(
+  9600,
+  1,
+  "implementing",
+  "qdb design entry",
+);
+check(
+  "design entry: a work item with no transition has none",
+  (await entryOf(entryItem)) === null,
+);
+await moveStatus(
+  entryItem,
+  "implementing",
+  "designing",
+  "implement design gap: first",
+);
+const entryReturn = await entryOf(entryItem);
+check(
+  "design entry: the return to the design is read from implementing with no design request after it",
+  entryReturn?.from_status === "implementing" &&
+    entryReturn.to_status === "designing" &&
+    entryReturn.note === "implement design gap: first" &&
+    !entryReturn.designRequestedAfter,
+  entryReturn,
+);
+await moveStatus(
+  entryItem,
+  "designing",
+  "needs_human",
+  "design flow could not be started",
+);
+check(
+  "design entry: the failed start of the design flow leaves the return as the latest entry",
+  (await entryOf(entryItem))?.note === "implement design gap: first",
+  await entryOf(entryItem),
+);
+await moveStatus(
+  entryItem,
+  "needs_human",
+  "designing",
+  `${GAP_CARRY_MARK} from needs_human`,
+);
+await moveStatus(entryItem, "designing", "failed", "design flow failed");
+check(
+  "design entry: a failure before the draft is saved leaves the return as the latest entry",
+  (await entryOf(entryItem))?.note === "implement design gap: first",
+  await entryOf(entryItem),
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'designing', flow_job_id = 'qdb-entry-lease' WHERE id = ${String(entryItem)}`,
+);
+const entryRequirements = await requirementDraftFor(entryItem);
+await saveDesignDraftIfLeaseHolder(
+  draftInput(entryItem, entryRequirements, 1),
+  "qdb-entry-lease",
+  sql,
+);
+await moveStatus(entryItem, "designing", "failed", "design flow failed");
+check(
+  "design entry: a saved draft without a design request leaves the return unconsumed",
+  (await entryOf(entryItem))?.designRequestedAfter === false,
+  await entryOf(entryItem),
+);
+await moveStatus(
+  entryItem,
+  "failed",
+  "designing",
+  `${GAP_CARRY_MARK} from failed`,
+);
+await moveStatus(entryItem, "designing", "needs_human", "design flow failed");
+check(
+  "design entry: a second restart that carried the gap leaves the return as the latest entry",
+  (await entryOf(entryItem))?.note === "implement design gap: first",
+  await entryOf(entryItem),
+);
+check(
+  "design entry: the entry of another work item is not read",
+  (await entryOf(
+    await issueWorkItem(9601, 1, "needs_human", "qdb design entry other"),
+  )) === null,
+);
+const entryRequest = await requestDesignFor(entryItem);
+check(
+  "design entry: a design request created after the return consumes it",
+  (await entryOf(entryItem))?.designRequestedAfter === true,
+  await entryOf(entryItem),
+);
+const entryEventTime = `(SELECT occurred_at FROM factory.work_item_events WHERE work_item_id = ${String(entryItem)} AND from_status = 'implementing' AND to_status = 'designing' ORDER BY id DESC LIMIT 1)`;
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET requested_at = ${entryEventTime} WHERE id = ${String(entryRequest)}`,
+);
+check(
+  "design entry: a design request created at the same time as the return does not consume it",
+  (await entryOf(entryItem))?.designRequestedAfter === false,
+  await entryOf(entryItem),
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET requested_at = ${entryEventTime} - interval '1 second' WHERE id = ${String(entryRequest)}`,
+);
+check(
+  "design entry: a design request created before the return does not consume it",
+  (await entryOf(entryItem))?.designRequestedAfter === false,
+  await entryOf(entryItem),
+);
+await moveStatus(
+  entryItem,
+  "needs_human",
+  "designing",
+  "design rejected; regenerating",
+);
+check(
+  "design entry: a later entry into the design that did not come from the implementation replaces the return",
+  (await entryOf(entryItem))?.from_status === "needs_human" &&
+    (await entryOf(entryItem))?.note === "design rejected; regenerating",
+  await entryOf(entryItem),
+);
+await moveStatus(
+  entryItem,
+  "designing",
+  "requirements_generating",
+  "design gap: requirements",
+);
+check(
+  "design entry: a return before the latest move into the requirements is out of range",
+  (await entryOf(entryItem)) === null,
+  await entryOf(entryItem),
+);
+
+const exhaustedItem = await issueWorkItem(
+  9602,
+  1,
+  "implementing",
+  "qdb design entry exhausted",
+);
+await moveStatus(exhaustedItem, "implementing", "needs_human", "tests failed");
+check(
+  "design entry: a stop of the implementation with another note is not an entry",
+  (await entryOf(exhaustedItem)) === null,
+  await entryOf(exhaustedItem),
+);
+await moveStatus(exhaustedItem, "needs_human", "implementing", "retry");
+await moveStatus(
+  exhaustedItem,
+  "implementing",
+  "needs_human",
+  `${GAP_EXHAUSTED_PREFIX}second`,
+);
+const exhaustedEntry = await entryOf(exhaustedItem);
+check(
+  "design entry: the stop at the limit is read from implementing to needs_human",
+  exhaustedEntry?.from_status === "implementing" &&
+    exhaustedEntry.to_status === "needs_human" &&
+    exhaustedEntry.note === `${GAP_EXHAUSTED_PREFIX}second` &&
+    !exhaustedEntry.designRequestedAfter,
+  exhaustedEntry,
+);
+await moveStatus(
+  exhaustedItem,
+  "needs_human",
+  "designing",
+  `${GAP_CARRY_MARK} from needs_human`,
+);
+await moveStatus(
+  exhaustedItem,
+  "designing",
+  "needs_human",
+  "design flow could not be started",
+);
+await moveStatus(
+  exhaustedItem,
+  "needs_human",
+  "designing",
+  `${GAP_CARRY_MARK} from needs_human`,
+);
+await moveStatus(exhaustedItem, "designing", "needs_human", "design failed");
+check(
+  "design entry: restarts that carried the gap leave the stop at the limit as the latest entry",
+  (await entryOf(exhaustedItem))?.note === `${GAP_EXHAUSTED_PREFIX}second`,
+  await entryOf(exhaustedItem),
+);
+await requestDesignFor(exhaustedItem);
+check(
+  "design entry: a design request after the restart consumes the stop at the limit",
+  (await entryOf(exhaustedItem))?.designRequestedAfter === true,
+  await entryOf(exhaustedItem),
+);
+await moveStatus(
+  exhaustedItem,
+  "needs_human",
+  "implementing",
+  "design approved",
+);
+await moveStatus(
+  exhaustedItem,
+  "implementing",
+  "needs_human",
+  `${GAP_EXHAUSTED_PREFIX}third`,
+);
+check(
+  "design entry: a later stop at the limit is not consumed by the older design request",
+  (await entryOf(exhaustedItem))?.note === `${GAP_EXHAUSTED_PREFIX}third` &&
+    (await entryOf(exhaustedItem))?.designRequestedAfter === false,
+  await entryOf(exhaustedItem),
 );
 
 // 作業項目を動かす更新は、最新の依頼が指定の依頼で、指定の状態のときだけ書く。

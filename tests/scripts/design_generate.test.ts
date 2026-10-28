@@ -2136,10 +2136,14 @@ describe("the shared text helpers of design_generate", () => {
     );
   });
 
-  test("imports GAP_REPORT_MAX_CHARS from lib/model_text", async () => {
+  test("imports limitGapReport from lib/model_text", async () => {
     expect(await source()).toMatch(
-      /import \{[^}]*\bGAP_REPORT_MAX_CHARS\b[^}]*\} from "\.\.\/lib\/model_text\.ts";/,
+      /import \{[^}]*\blimitGapReport\b[^}]*\} from "\.\.\/lib\/model_text\.ts";/,
     );
+  });
+
+  test("does not define limitGapReport itself", async () => {
+    expect(await source()).not.toMatch(/function limitGapReport\b/);
   });
 
   test.each([

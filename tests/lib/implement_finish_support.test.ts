@@ -3,9 +3,19 @@ import {
   CheckImageStaleError,
   CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
+import { isDesignRejectionExhausted } from "../../f/factory/lib/design_apply_support.ts";
+import {
+  DESIGN_START_FAILED_REASON,
+  type DesignLaunchDeps,
+  type StartDesignOutcome,
+  startDesign,
+} from "../../f/factory/lib/design_launch_support.ts";
 import {
   buildPrOpenedEvent,
+  DESIGN_GAP_DISABLED_REASON,
+  DESIGN_GAP_EXHAUSTED_REASON,
   decideAfterCommit,
+  decideDesignGapAction,
   decideGapBranchCleanup,
   decideGapReroute,
   decideImplementFinishAction,
@@ -13,14 +23,20 @@ import {
   finishFailureReason,
   gapExhaustedReason,
   gapReportNoticeDetail,
+  IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+  IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
   IMPLEMENT_NO_CHANGES_REASON,
   implementCommitGuards,
+  implementDesignGapExhaustedNote,
+  implementDesignGapNote,
   implementNeedsHumanNextAction,
   isFactoryRepo,
   mergeImplementOutcome,
   type PreserveWorkDeps,
   preserveWork,
   prOpenedNextAction,
+  type RerouteToDesignDeps,
+  rerouteImplementationToDesign,
   SECRETS_NOT_PUSHED_REASON,
   shouldDeleteBranchOnGap,
   shouldPreserveBeforeFailing,
@@ -30,9 +46,17 @@ import {
 } from "../../f/factory/lib/implement_finish_support.ts";
 import { ImplementLeaseLostError } from "../../f/factory/lib/implement_launch_support.ts";
 import {
+  GAP_REPORT_MAX_CHARS,
+  limitGapReport,
+} from "../../f/factory/lib/model_text.ts";
+import {
   WORKTREE_BUSY_REASON,
   WorktreeBusyError,
 } from "../../f/factory/lib/process_lock.ts";
+import {
+  AUTOMATED_FEEDBACK_MARKER,
+  automatedFeedback,
+} from "../../f/factory/lib/prompts.ts";
 import {
   type CommitAndPushResult,
   CommitBlockedError,
@@ -81,6 +105,12 @@ describe("decideImplementFinishAction", () => {
   test("reroutes a requirements gap", () => {
     expect(decideImplementFinishAction("requirements_gap")).toEqual({
       kind: "requirements_gap",
+    });
+  });
+
+  test("reroutes a design gap", () => {
+    expect(decideImplementFinishAction("design_gap")).toEqual({
+      kind: "design_gap",
     });
   });
 
@@ -814,5 +844,250 @@ describe("buildPrOpenedEvent", () => {
 
   test("carries the total cost", () => {
     expect(event.total_cost_usd).toBe(3.5);
+  });
+});
+
+describe("shouldPreserveBeforeFailing for a design gap", () => {
+  test("keeps nothing, since the work of a gap is thrown away", () => {
+    expect(shouldPreserveBeforeFailing({ kind: "design_gap" })).toBe(false);
+  });
+});
+
+describe("decideDesignGapAction", () => {
+  const OPEN = { designEnabled: true, maxDesignAttempts: 3 } as const;
+
+  test("reroutes the first gap", () => {
+    expect(decideDesignGapAction({ ...OPEN, appliedRejections: 0 })).toBe(
+      "reroute",
+    );
+  });
+
+  test("reroutes below the limit", () => {
+    expect(decideDesignGapAction({ ...OPEN, appliedRejections: 1 })).toBe(
+      "reroute",
+    );
+  });
+
+  test("counts the gap that is being applied", () => {
+    expect(decideDesignGapAction({ ...OPEN, appliedRejections: 2 })).toBe(
+      "exhausted",
+    );
+  });
+
+  test("stays exhausted above the limit", () => {
+    expect(decideDesignGapAction({ ...OPEN, appliedRejections: 7 })).toBe(
+      "exhausted",
+    );
+  });
+
+  test("is exhausted at the first gap when the limit is 1", () => {
+    expect(
+      decideDesignGapAction({
+        designEnabled: true,
+        appliedRejections: 0,
+        maxDesignAttempts: 1,
+      }),
+    ).toBe("exhausted");
+  });
+
+  test("stops when the design stage is off", () => {
+    expect(
+      decideDesignGapAction({
+        ...OPEN,
+        designEnabled: false,
+        appliedRejections: 0,
+      }),
+    ).toBe("disabled");
+  });
+
+  test("names the closed stage even at the limit", () => {
+    expect(
+      decideDesignGapAction({
+        ...OPEN,
+        designEnabled: false,
+        appliedRejections: 9,
+      }),
+    ).toBe("disabled");
+  });
+
+  test.each([
+    [0, 1],
+    [0, 3],
+    [1, 3],
+    [2, 3],
+    [3, 3],
+    [4, 2],
+  ])(
+    "agrees with isDesignRejectionExhausted for %i applied of %i",
+    (appliedRejections, maxDesignAttempts) => {
+      expect(
+        decideDesignGapAction({
+          designEnabled: true,
+          appliedRejections,
+          maxDesignAttempts,
+        }) === "exhausted",
+      ).toBe(isDesignRejectionExhausted(appliedRejections, maxDesignAttempts));
+    },
+  );
+});
+
+describe("the reasons and notes of a design gap", () => {
+  test("names the limit in a fixed sentence", () => {
+    expect(DESIGN_GAP_EXHAUSTED_REASON).toBe(
+      "design gap after max_design_attempts",
+    );
+  });
+
+  test("names the closed stage in a fixed sentence", () => {
+    expect(DESIGN_GAP_DISABLED_REASON).toBe(
+      "design gap reported while design_enabled is off",
+    );
+  });
+
+  test("keeps the transition note apart from the note of a design that reported a requirements gap", () => {
+    expect(IMPLEMENT_DESIGN_GAP_NOTE_PREFIX).toBe("implement design gap: ");
+  });
+
+  test("keeps the exhausted note apart from the transition note", () => {
+    expect(IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX).toBe(
+      "implement design gap exhausted: ",
+    );
+  });
+
+  test("starts the transition note with its prefix", () => {
+    expect(implementDesignGapNote("設計書のAPIが無い")).toBe(
+      "implement design gap: 設計書のAPIが無い",
+    );
+  });
+
+  test("starts the exhausted note with its prefix", () => {
+    expect(implementDesignGapExhaustedNote("設計書のAPIが無い")).toBe(
+      "implement design gap exhausted: 設計書のAPIが無い",
+    );
+  });
+
+  test("limits and masks the report in the transition note", () => {
+    expect(implementDesignGapNote(`token ghp_${"a".repeat(36)}`)).not.toContain(
+      "a".repeat(36),
+    );
+  });
+
+  test("cuts a long report in the exhausted note", () => {
+    expect(
+      Array.from(implementDesignGapExhaustedNote("あ".repeat(5000))),
+    ).toHaveLength(
+      Array.from(IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX).length +
+        GAP_REPORT_MAX_CHARS,
+    );
+  });
+});
+
+describe("rerouteImplementationToDesign", () => {
+  const REPORT = "設計書は存在しないAPIを前提としています。";
+
+  function harness(
+    overrides: Partial<RerouteToDesignDeps> = {},
+    outcome: StartDesignOutcome = "started",
+  ) {
+    const calls: string[] = [];
+    const notes: string[] = [];
+    const feedbacks: string[] = [];
+    const deps: RerouteToDesignDeps = {
+      casToDesigning: async (note) => {
+        calls.push("cas");
+        notes.push(note);
+        return true;
+      },
+      launchDesign: async (feedback) => {
+        calls.push("start");
+        feedbacks.push(feedback);
+        return outcome;
+      },
+      ...overrides,
+    };
+    return { deps, calls, notes, feedbacks };
+  }
+
+  test("moves to designing before it starts the design flow", async () => {
+    const h = harness();
+    await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
+    expect(h.calls).toEqual(["cas", "start"]);
+  });
+
+  test("moves with the note of the design gap", async () => {
+    const h = harness();
+    await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
+    expect(h.notes).toEqual([implementDesignGapNote(REPORT)]);
+  });
+
+  test("hands the report to the design flow as an automated report", async () => {
+    const h = harness();
+    await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
+    expect(h.feedbacks).toEqual([automatedFeedback(limitGapReport(REPORT))]);
+  });
+
+  test("starts the feedback with the marker", async () => {
+    const h = harness();
+    await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
+    expect(h.feedbacks[0]?.startsWith(AUTOMATED_FEEDBACK_MARKER)).toBe(true);
+  });
+
+  test("cuts a long report in the feedback", async () => {
+    const h = harness();
+    await rerouteImplementationToDesign(h.deps, {
+      gapReport: "あ".repeat(GAP_REPORT_MAX_CHARS + 500),
+    });
+    expect(h.feedbacks[0]).toBe(
+      automatedFeedback("あ".repeat(GAP_REPORT_MAX_CHARS)),
+    );
+  });
+
+  test("masks a secret in the feedback", async () => {
+    const h = harness();
+    await rerouteImplementationToDesign(h.deps, {
+      gapReport: `token ghp_${"a".repeat(36)}`,
+    });
+    expect(h.feedbacks[0]).not.toContain("a".repeat(36));
+  });
+
+  test("does not start the design flow when the work item moved on", async () => {
+    const h = harness({ casToDesigning: async () => false });
+    await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("reports that the work item did not move", async () => {
+    const h = harness({ casToDesigning: async () => false });
+    expect(
+      await rerouteImplementationToDesign(h.deps, { gapReport: REPORT }),
+    ).toEqual({ kind: "not_moved" });
+  });
+
+  test("reports the outcome of the start", async () => {
+    const h = harness({}, "record_failed");
+    expect(
+      await rerouteImplementationToDesign(h.deps, { gapReport: REPORT }),
+    ).toEqual({ kind: "started", outcome: "record_failed" });
+  });
+
+  test("moves a design flow that could not start to needs_human", async () => {
+    const moves: string[] = [];
+    const launch: DesignLaunchDeps = {
+      launchFlow: async () => {
+        throw new Error("boom");
+      },
+      recordFlowJobId: async () => true,
+      moveToNeedsHuman: async (reason) => {
+        moves.push(reason);
+        return true;
+      },
+      recordFailure: async () => {},
+      addNotice: async () => {},
+      notifyNeedsHuman: async () => {},
+      log: () => {},
+    };
+    const h = harness({ launchDesign: () => startDesign(launch) });
+    await rerouteImplementationToDesign(h.deps, { gapReport: REPORT });
+    expect(moves).toEqual([DESIGN_START_FAILED_REASON]);
   });
 });

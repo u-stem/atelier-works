@@ -60,7 +60,7 @@ import {
   setFlowJobIdIfUnset,
   setHeadSha,
   updateStatusIfCurrent,
-  updateStatusIfLeaseHolderClearingFlowJobId,
+  updateStatusToRequirementsIfLeaseHolder,
 } from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
@@ -79,11 +79,13 @@ import {
 import { GITLEAKS_TIMEOUT_MS } from "../lib/implement_loop.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { runCommandBytes } from "../lib/metadata_git_ports.ts";
+import { limitGapReport } from "../lib/model_text.ts";
 import {
   defaultLockReleaseDeps,
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { automatedFeedback } from "../lib/prompts.ts";
 import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
@@ -603,11 +605,11 @@ export async function main(
       },
       config.max_attempts,
       {
+        // 同じ文で親の設計の試行を0にそろえる。古い設計書が、次の要件定義の実装に渡らないようにするためである。
         casParent: (expectedFrom, expectedFlowJobId) =>
-          updateStatusIfLeaseHolderClearingFlowJobId(
+          updateStatusToRequirementsIfLeaseHolder(
             parent_work_item_id,
             expectedFrom,
-            "requirements_generating",
             expectedFlowJobId,
             `gap: ${gapReport}`,
           ),
@@ -629,7 +631,7 @@ export async function main(
           wmill.runFlowAsync("f/factory/pipeline", {
             work_item_id: parent_work_item_id,
             attempt: parentItem.attempt + 1,
-            feedback: gapReport,
+            feedback: automatedFeedback(limitGapReport(gapReport)),
           }),
         recordFlowJobId: (jobId) =>
           setFlowJobIdIfUnset(parent_work_item_id, jobId),

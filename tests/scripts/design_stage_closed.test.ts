@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isReadyForImplement } from "../../f/factory/lib/approval_gate.ts";
 import { loadConfig } from "../../f/factory/lib/config.ts";
+import { decideDesignGapAction } from "../../f/factory/lib/implement_finish_support.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 import { computeRestartPlan } from "../../f/factory/retry_work_item.ts";
 import { applyDesignApproved } from "../../f/factory/steps/design_apply.ts";
@@ -52,24 +53,33 @@ const DESIGN_ENABLED_TOKEN = /(?<![\w$])design_enabled(?![\w$])/g;
  * 型の宣言(`lib/types.ts`の`design_enabled: boolean`、`Pick`の中の名前)は、変換で消える。
  * `lib/config.ts`の6つは、既定値、通知の本文の中の2つ、リソースの読み取りの名前と既定値の参照、門で絞った導出である。
  * 残りは、設定の値を読む呼び出しの側の1つずつである。`steps/design_apply.ts`は、却下の再生成の分岐で入口が閉じているかを読む。
+ * `steps/implement_finish.ts`は、設計の不足を返した実装を設計へ戻すかの判定に渡す。
+ * `lib/implement_finish_support.ts`と`steps/pr_workflow_support.ts`の1つずつは、設計工程が無効のときの理由の固定文に入る語である。
  * 呼び出しの側で`{ ...config, design_enabled: ... }`と上書きする迂回や、別の読み方を足す変更は、ここで数が増えて見つかる。
  */
 const ALLOWED_DESIGN_ENABLED_TOKENS: Readonly<Record<string, number>> = {
   "auto_retry_stale_image.ts": 1,
   "lib/config.ts": 6,
+  "lib/implement_finish_support.ts": 1,
   "lib/self_update_support.ts": 1,
   "retry_work_item.ts": 1,
   "self_update.ts": 1,
   "steps/design_apply.ts": 1,
+  "steps/implement_finish.ts": 1,
   "steps/implement_prepare.ts": 1,
+  "steps/pr_workflow_support.ts": 1,
   "steps/requirements_apply.ts": 1,
 };
 
 /** 要件定義の承認の反映の配線に、設定をそのまま渡す呼び出し。宣言は数えない。 */
 const BUILDER_CALL = /(?<!\bfunction\s+)\bbuildApprovedBranchDeps\(config,/g;
 
-/** 実装の入口が、設定の`design_enabled`をそのまま読んで渡す形。 */
-const DESIGN_ENABLED_HANDOFF = /\bdesignEnabled:\s*config\.design_enabled\b/g;
+/**
+ * 実装の入口が、設定の`design_enabled`をそのまま読んで渡す形。
+ * 値の直後が`,`か`}`でなければ数えない。`|| true`のような後ろの式で値を変える書き換えを、数の差で見つけるためである。
+ */
+const DESIGN_ENABLED_HANDOFF =
+  /\bdesignEnabled:\s*config\.design_enabled(?=\s*[,}])/g;
 
 /** 設定を渡す呼び出しの形と、ファイルごとの数。上書きした設定を渡す形にすると、数が減って見つかる。 */
 const WIRING_CALLS: ReadonlyArray<
@@ -83,7 +93,11 @@ const WIRING_CALLS: ReadonlyArray<
   [
     "designEnabled: config.design_enabled",
     DESIGN_ENABLED_HANDOFF,
-    { "retry_work_item.ts": 1, "steps/implement_prepare.ts": 1 },
+    {
+      "retry_work_item.ts": 1,
+      "steps/implement_finish.ts": 1,
+      "steps/implement_prepare.ts": 1,
+    },
   ],
 ];
 
@@ -202,6 +216,35 @@ describe("the wiring of the design flow", () => {
   );
 });
 
+describe("the return from the implement flow to the design", () => {
+  test.each(["local", "production", "prod", "factory-1", "staging"])(
+    "does not reroute after loadConfig with instance_name %p and design_enabled: true",
+    async (instanceName) => {
+      const config = await loadConfig(async () => ({
+        ...RAW_CONFIG,
+        instance_name: instanceName,
+        design_enabled: true,
+      }));
+      const action = decideDesignGapAction({
+        designEnabled: config.design_enabled,
+        appliedRejections: 0,
+        maxDesignAttempts: config.max_design_attempts,
+      });
+      expect(action).not.toBe("reroute");
+    },
+  );
+
+  test("stops at disabled when design_enabled is false", () => {
+    expect(
+      decideDesignGapAction({
+        designEnabled: false,
+        appliedRejections: 0,
+        maxDesignAttempts: 3,
+      }),
+    ).toBe("disabled");
+  });
+});
+
 describe("the literal that opens the design stage", () => {
   test("appears nowhere in the production code of f/factory", () => {
     const found = productionSources().filter((path) =>
@@ -213,6 +256,38 @@ describe("the literal that opens the design stage", () => {
   test("reads every production file", () => {
     expect(productionSources().length).toBeGreaterThan(100);
   });
+});
+
+describe("the handoff of design_enabled to the entrance of the implement flow", () => {
+  test("counts the setting passed as it is, before a comma", () => {
+    expect(
+      countOf(
+        "{ designEnabled: config.design_enabled, x }",
+        DESIGN_ENABLED_HANDOFF,
+      ),
+    ).toBe(1);
+  });
+
+  test("counts the setting passed as it is, before a closing brace", () => {
+    expect(
+      countOf(
+        "{ designEnabled: config.design_enabled }",
+        DESIGN_ENABLED_HANDOFF,
+      ),
+    ).toBe(1);
+  });
+
+  test.each(["|| true", "?? true", "|| flag", "&& flag", ".valueOf()"])(
+    "does not count the setting followed by %p",
+    (tail) => {
+      expect(
+        countOf(
+          `{ designEnabled: config.design_enabled ${tail}, x }`,
+          DESIGN_ENABLED_HANDOFF,
+        ),
+      ).toBe(0);
+    },
+  );
 });
 
 describe("the files that mention design_enabled", () => {

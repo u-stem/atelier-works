@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SqlClient, StatusEventSummary } from "../../f/factory/lib/db.ts";
+import type {
+  DesignEntryEvent,
+  SqlClient,
+  StatusEventSummary,
+} from "../../f/factory/lib/db.ts";
 import {
   REQUIREMENTS_DIR_MISSING_REASON,
   REQUIREMENTS_MODIFIED_BEFORE_DESIGN_REASON,
@@ -9,8 +13,13 @@ import {
   REQUIREMENTS_MODIFIED_REASON,
 } from "../../f/factory/lib/doc_tree_hash.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
+import {
+  IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+  IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+} from "../../f/factory/lib/implement_finish_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import { GAP_REPORT_MAX_CHARS } from "../../f/factory/lib/model_text.ts";
+import { DESIGN_FLOW_PATH } from "../../f/factory/lib/pipeline_lease.ts";
 import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
 import {
   AUTOMATED_FEEDBACK_MARKER,
@@ -32,6 +41,7 @@ import {
   classifyRestartStop,
   closedTargetRefusal,
   computeRestartPlan,
+  feedbackFromDesignEntry,
   feedbackFromGapNote,
   feedbackFromRejection,
   launchFailureError,
@@ -1134,6 +1144,118 @@ describe("feedbackFromGapNote", () => {
   });
 });
 
+describe("feedbackFromDesignEntry", () => {
+  const RETURN: DesignEntryEvent = {
+    from_status: "implementing",
+    to_status: "designing",
+    note: `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}the design lacks FR-002`,
+    designRequestedAfter: false,
+  };
+  const EXHAUSTED: DesignEntryEvent = {
+    from_status: "implementing",
+    to_status: "needs_human",
+    note: `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}the design lacks FR-002`,
+    designRequestedAfter: false,
+  };
+
+  test("wraps the report of a return to the design", () => {
+    expect(feedbackFromDesignEntry(RETURN)).toBe(
+      automatedFeedback("the design lacks FR-002"),
+    );
+  });
+
+  test("wraps the report of the stop at the limit", () => {
+    expect(feedbackFromDesignEntry(EXHAUSTED)).toBe(
+      automatedFeedback("the design lacks FR-002"),
+    );
+  });
+
+  test("marks the report as automated", () => {
+    expect(
+      feedbackFromDesignEntry(RETURN)?.startsWith(AUTOMATED_FEEDBACK_MARKER),
+    ).toBe(true);
+  });
+
+  test("masks a secret in the report", () => {
+    expect(
+      feedbackFromDesignEntry({
+        ...RETURN,
+        note: `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}token ${GITHUB_TOKEN}`,
+      }),
+    ).toBe(automatedFeedback("token ***"));
+  });
+
+  test("cuts the report at 2000 characters", () => {
+    expect(
+      feedbackFromDesignEntry({
+        ...RETURN,
+        note: `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}${"a".repeat(2500)}`,
+      }),
+    ).toBe(automatedFeedback("a".repeat(2000)));
+  });
+
+  test("returns null once a design request followed the entry", () => {
+    expect(
+      feedbackFromDesignEntry({ ...RETURN, designRequestedAfter: true }),
+    ).toBeNull();
+  });
+
+  test("returns null when no entry was found", () => {
+    expect(feedbackFromDesignEntry(null)).toBeNull();
+  });
+
+  test("returns null for an entry that did not come from the implementation", () => {
+    expect(
+      feedbackFromDesignEntry({ ...RETURN, from_status: "needs_human" }),
+    ).toBeNull();
+  });
+
+  test("returns null for a plain restart into the design", () => {
+    expect(
+      feedbackFromDesignEntry({
+        ...RETURN,
+        from_status: "needs_human",
+        note: "retry_work_item: restarted from needs_human",
+      }),
+    ).toBeNull();
+  });
+
+  test("returns null for a regeneration after a rejection", () => {
+    expect(
+      feedbackFromDesignEntry({
+        ...RETURN,
+        from_status: "awaiting_design_approval",
+        note: "design rejected; regenerating",
+      }),
+    ).toBeNull();
+  });
+
+  test("returns null for a stop at the limit that came from the design", () => {
+    expect(
+      feedbackFromDesignEntry({ ...EXHAUSTED, from_status: "designing" }),
+    ).toBeNull();
+  });
+
+  test("returns null for a report of blanks", () => {
+    expect(
+      feedbackFromDesignEntry({
+        ...RETURN,
+        note: `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}   `,
+      }),
+    ).toBeNull();
+  });
+
+  test("returns null for a missing note", () => {
+    expect(feedbackFromDesignEntry({ ...RETURN, note: null })).toBeNull();
+  });
+
+  test("returns null for a return note that stops at needs_human", () => {
+    expect(
+      feedbackFromDesignEntry({ ...RETURN, to_status: "needs_human" }),
+    ).toBeNull();
+  });
+});
+
 describe("feedbackFromRejection", () => {
   test("passes the reason of a person without the automated mark", () => {
     expect(feedbackFromRejection("the scope is too wide")).toBe(
@@ -1492,6 +1614,7 @@ describe("buildRestartContext", () => {
     readonly transitionReads: [number, WorkItemStatus][];
     readonly skipPrefixes: string[];
     readonly draftReads: [number, number][];
+    readonly designEntryReads: number[];
   };
 
   function harness(
@@ -1502,6 +1625,7 @@ describe("buildRestartContext", () => {
       /** 新しい順の遷移。注記が印で始まる行を飛ばす実際の問い合わせと同じ規則で返す。 */
       transitions?: readonly StatusEventSummary[];
       draftAfter?: boolean;
+      designEntry?: DesignEntryEvent | null;
     } = {},
   ): Harness {
     const designReads: number[] = [];
@@ -1509,7 +1633,9 @@ describe("buildRestartContext", () => {
     const transitionReads: [number, WorkItemStatus][] = [];
     const skipPrefixes: string[] = [];
     const draftReads: [number, number][] = [];
+    const designEntryReads: number[] = [];
     return {
+      designEntryReads,
       designReads,
       eventReads,
       transitionReads,
@@ -1539,6 +1665,10 @@ describe("buildRestartContext", () => {
         hasRequirementDraftAfter: async (id, attempt) => {
           draftReads.push([id, attempt]);
           return options.draftAfter ?? false;
+        },
+        latestDesignEntry: async (id) => {
+          designEntryReads.push(id);
+          return options.designEntry ?? null;
         },
       },
     };
@@ -2166,6 +2296,209 @@ describe("buildRestartContext", () => {
     });
   });
 
+  describe("a design gap that the implement flow returned", () => {
+    const REPORT = "the design lacks FR-002";
+    const RETURN: DesignEntryEvent = {
+      from_status: "implementing",
+      to_status: "designing",
+      note: `${IMPLEMENT_DESIGN_GAP_NOTE_PREFIX}${REPORT}`,
+      designRequestedAfter: false,
+    };
+    const EXHAUSTED: DesignEntryEvent = {
+      from_status: "implementing",
+      to_status: "needs_human",
+      note: `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}${REPORT}`,
+      designRequestedAfter: false,
+    };
+    const ITEM = {
+      id: 7,
+      status: "needs_human",
+      kind: "issue",
+      attempt: 2,
+      design_attempt: 1,
+    } as const;
+
+    test("reads the entry into the design of the work item", async () => {
+      const h = harness({ designEntry: RETURN });
+      await build(h);
+      expect(h.designEntryReads).toEqual([7]);
+    });
+
+    test("hands the report of a return that no design request followed to the design", async () => {
+      const h = harness({ designEntry: RETURN });
+      expect((await build(h)).designFeedback).toBe(automatedFeedback(REPORT));
+    });
+
+    test("carries the gap on when the report is handed to the design", async () => {
+      const h = harness({ designEntry: RETURN });
+      expect((await build(h)).carriesGap).toBe(true);
+    });
+
+    test("hands the report of the stop at the limit to the design", async () => {
+      const h = harness({ designEntry: EXHAUSTED });
+      expect((await build(h)).designFeedback).toBe(automatedFeedback(REPORT));
+    });
+
+    test("does not approve a design that the implementation reported as lacking", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: EXHAUSTED,
+      });
+      expect((await build(h)).designApproved).toBe(false);
+    });
+
+    test("does not approve a design after the stop at the limit with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: `${IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX}   `,
+        },
+      });
+      expect((await build(h)).designApproved).toBe(false);
+    });
+
+    test("restarts at the design flow after the stop at the limit with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+        },
+      });
+      const plan = computeRestartPlan(ITEM, await build(h));
+      expect(plan.toStatus).toBe("designing");
+    });
+
+    test("hands no report after the stop at the limit with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+        },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("keeps an approved design after a return with an empty report", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...RETURN,
+          note: IMPLEMENT_DESIGN_GAP_NOTE_PREFIX,
+        },
+      });
+      expect((await build(h)).designApproved).toBe(true);
+    });
+
+    test("keeps an approved design once a design request followed the stop at the limit", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: {
+          ...EXHAUSTED,
+          note: IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+          designRequestedAfter: true,
+        },
+      });
+      expect((await build(h)).designApproved).toBe(true);
+    });
+
+    test("restarts at the design flow instead of the implement flow after the stop at the limit", async () => {
+      const h = harness({
+        designApproval: DESIGN_APPROVED,
+        designEntry: EXHAUSTED,
+      });
+      const plan = computeRestartPlan(ITEM, await build(h));
+      expect(plan.flowPath).toBe(DESIGN_FLOW_PATH);
+    });
+
+    test("moves the work item to designing after a return", async () => {
+      const h = harness({ designEntry: RETURN });
+      const plan = computeRestartPlan(ITEM, await build(h));
+      expect(plan.toStatus).toBe("designing");
+    });
+
+    test("passes the report to the design flow as the feedback", async () => {
+      const h = harness({ designEntry: RETURN });
+      const plan = computeRestartPlan(ITEM, await build(h));
+      expect(plan.args.feedback).toBe(automatedFeedback(REPORT));
+    });
+
+    test("hands no report once a design request followed the entry", async () => {
+      const h = harness({
+        designEntry: { ...RETURN, designRequestedAfter: true },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("hands no report for a return outside the current requirements attempt", async () => {
+      const h = harness({ designEntry: null });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("does not carry the gap on without a report", async () => {
+      const h = harness({ designEntry: null });
+      expect((await build(h)).carriesGap).toBe(false);
+    });
+
+    test("hands no report when the latest entry into the design is a regeneration after a rejection", async () => {
+      const h = harness({
+        designEntry: {
+          ...RETURN,
+          from_status: "awaiting_design_approval",
+          note: "design rejected; regenerating",
+        },
+      });
+      expect((await build(h)).designFeedback).toBeNull();
+    });
+
+    test("hands no report when the design is disabled", async () => {
+      const h = harness({ designEntry: RETURN });
+      expect(
+        (await build(h, { designEnabled: false })).designFeedback,
+      ).toBeNull();
+    });
+
+    test("does not read the entry when the design is disabled", async () => {
+      const h = harness({ designEntry: RETURN });
+      await build(h, { designEnabled: false });
+      expect(h.designEntryReads).toEqual([]);
+    });
+
+    test("does not read the entry when the requirements are not ready", async () => {
+      const h = harness({ designEntry: RETURN });
+      await build(h, { requirementsApproval: REQUIREMENTS_REJECTED });
+      expect(h.designEntryReads).toEqual([]);
+    });
+
+    test("does not read the entry when the work item went back to the requirements", async () => {
+      const h = harness({ designEntry: RETURN, stopEvent: GAP_STOP });
+      await build(h);
+      expect(h.designEntryReads).toEqual([]);
+    });
+
+    test("does not read the entry when the requirements directory is untrusted", async () => {
+      const h = harness({
+        designEntry: RETURN,
+        stopEvent: {
+          from_status: "implementing",
+          note: REQUIREMENTS_MODIFIED_REASON,
+        },
+      });
+      await build(h);
+      expect(h.designEntryReads).toEqual([]);
+    });
+
+    test("keeps the reason of a person when no gap was returned", async () => {
+      const h = harness({
+        designApproval: DESIGN_REJECTED,
+        designEntry: null,
+      });
+      expect((await build(h)).designFeedback).toBe("the design is too complex");
+    });
+  });
+
   describe("a reason that the attempt did not consume", () => {
     const APPROVED_1 = { ...REQUIREMENTS_APPROVED, attempt: 1 };
     const REJECTED_1 = { ...REQUIREMENTS_REJECTED, attempt: 1 };
@@ -2379,6 +2712,38 @@ describe("restartContextDeps", () => {
       RESTART_CARRYING_GAP_NOTE_PREFIX,
     );
     expect(calls[0]?.values).toContain(RESTART_CARRYING_GAP_NOTE_PREFIX);
+  });
+
+  test("binds the mark to skip and the prefix of the stop when it reads the entry into the design", async () => {
+    const { sql, calls } = fakeSql();
+    await restartContextDeps(sql).latestDesignEntry(7);
+    expect(calls[0]?.values).toEqual([
+      7,
+      RESTART_CARRYING_GAP_NOTE_PREFIX,
+      IMPLEMENT_DESIGN_GAP_EXHAUSTED_NOTE_PREFIX,
+    ]);
+  });
+
+  test("reads the entry into the design with whether a design request followed", async () => {
+    const { sql } = fakeSql([
+      {
+        from_status: "implementing",
+        to_status: "designing",
+        note: "implement design gap: x",
+        design_requested_after: false,
+      },
+    ]);
+    expect(await restartContextDeps(sql).latestDesignEntry(7)).toEqual({
+      from_status: "implementing",
+      to_status: "designing",
+      note: "implement design gap: x",
+      designRequestedAfter: false,
+    });
+  });
+
+  test("reads no entry into the design when there is none", async () => {
+    const { sql } = fakeSql();
+    expect(await restartContextDeps(sql).latestDesignEntry(7)).toBeNull();
   });
 
   test("asks whether a draft exists after the attempt", async () => {

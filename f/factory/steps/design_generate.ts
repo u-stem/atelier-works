@@ -68,7 +68,7 @@ import {
 import { jobTmpBase } from "../lib/job_tmp.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { modelFor } from "../lib/model_policy.ts";
-import { GAP_REPORT_MAX_CHARS, sanitizeModelText } from "../lib/model_text.ts";
+import { limitGapReport, sanitizeModelText } from "../lib/model_text.ts";
 import {
   holdsPipelineLease,
   PIPELINE_FLOW_PATH,
@@ -286,11 +286,6 @@ async function unlessRootLinked<T>(
     if (err instanceof DocTreeRootSymlinkError) return ROOT_LINKED;
     throw err;
   }
-}
-
-/** 要件の不足の報告を保存してよい形にする。 */
-function limitGapReport(report: string): string {
-  return sanitizeModelText(report, GAP_REPORT_MAX_CHARS);
 }
 
 /** 設計の構造化出力の`open_questions`を、件数と各要素の長さを絞った、空でない要素だけにする。 */

@@ -27,8 +27,8 @@ export function designFlowJobIdFailureReason(message: string): string {
 /**
  * 設計フローの入力を返す。
  * `design_attempt`は作業項目の値に1を足す。1から数え、最初の起動は1になる。
- * `feedback`は設計書の差し戻しの理由で、既定は空(最初の起動の入力は変わらない)。
- * 人の却下の理由は、整形も切り詰めもせずそのまま渡す。
+ * `feedback`は設計書を作り直す理由で、既定は空(最初の起動の入力は変わらない)。
+ * 人の却下の理由か、実装が返した報告(`automatedFeedback`の印つき)を、整形も切り詰めもせずそのまま渡す。
  */
 export function designFlowInput(
   item: Pick<WorkItem, "id" | "design_attempt">,

@@ -31,11 +31,12 @@ import {
   docDirGuardFor,
   GITLEAKS_TIMEOUT_MS,
   IMPLEMENT_CLAUDE_ROUND_KINDS,
-  IMPLEMENT_OUTPUT_CONTRACT_NOTE,
   IMPLEMENT_SKILL_NAME,
   type ImplementClaudeRound,
   type ImplementContext,
   type ImplementLoopResult,
+  implementContextHasDesign,
+  implementOutputContractNote,
   implementPromptInput,
   ranClaude,
   runDocDirGuardedRound,
@@ -241,6 +242,7 @@ export async function main(
                   workItemId: work_item_id,
                   attempt: context.attempt,
                   sonnetFailures,
+                  hasDesign: implementContextHasDesign(context),
                   stage: "implement_fix",
                   prompt: implementFixPrompt({
                     ...implementPromptInput(context, docDir),
@@ -248,7 +250,11 @@ export async function main(
                     round: request.round,
                     maxRounds: config.implement_max_rounds,
                     ...(request.contractViolated
-                      ? { outputContractNote: IMPLEMENT_OUTPUT_CONTRACT_NOTE }
+                      ? {
+                          outputContractNote: implementOutputContractNote(
+                            implementContextHasDesign(context),
+                          ),
+                        }
                       : {}),
                     previousRoundStalled: request.previousRoundStalled,
                   }),
