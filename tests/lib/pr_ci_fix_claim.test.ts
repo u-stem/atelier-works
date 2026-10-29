@@ -13,6 +13,7 @@ import {
   LAUNCH_FAILURE_ALLOWANCE,
   type WorkerEnvHoldReason,
 } from "../../f/factory/lib/pr_ci_fix_claim.ts";
+import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -51,6 +52,8 @@ type Setup = {
   readonly hasActiveFix?: boolean;
   readonly hasReview?: boolean;
   readonly pr?: PullRequest;
+  /** ブランチの作業項目の状態。`null`は引けないこと。 */
+  readonly branchItemStatus?: WorkItemStatus | null;
   readonly commits?: PrCommitMessages;
   readonly hasSkillMarker?: boolean;
   readonly classification?: Awaited<ReturnType<FixClaimReaders["classify"]>>;
@@ -78,6 +81,10 @@ function readers(setup: Setup = {}): {
       hasActiveFix: track("active_fix", setup.hasActiveFix ?? false),
       hasReview: track("review", setup.hasReview ?? true),
       readPr: track("pr", setup.pr ?? pr()),
+      readBranchItemStatus: track(
+        "branch_item",
+        setup.branchItemStatus ?? null,
+      ),
       readCommits: track(
         "commits",
         setup.commits ?? { messages: [factoryCommit()], truncated: false },
@@ -185,6 +192,68 @@ describe("decideFixClaim", () => {
   test("skips a closed pull request", async () => {
     const { decision } = decide({ pr: pr({ state: "closed" }) });
     expect(await decision).toEqual({ kind: "skip", why: "pr_closed" });
+  });
+
+  test.each([
+    "requirements_generating",
+    "awaiting_approval",
+    "designing",
+    "awaiting_design_approval",
+    "approved",
+    "implementing",
+  ] as const)(
+    "skips branch_held while the work item of the branch is %s",
+    async (status) => {
+      const { decision } = decide({ branchItemStatus: status });
+      expect(await decision).toEqual({ kind: "skip", why: "branch_held" });
+    },
+  );
+
+  test("reads nothing after the branch when it is held", async () => {
+    const { decision, events } = decide({ branchItemStatus: "implementing" });
+    await decision;
+    expect(events).toEqual(["active_fix", "review", "pr", "branch_item"]);
+  });
+
+  test.each([
+    ["no work item", null],
+    ["pr_open", "pr_open"],
+    ["needs_human", "needs_human"],
+    ["failed", "failed"],
+  ] as const)(
+    "claims as before when the work item of the branch is %s",
+    async (_name, status) => {
+      const { decision } = decide({ branchItemStatus: status });
+      expect((await decision).kind).toBe("claim");
+    },
+  );
+
+  test("reads the branch after the pull request", async () => {
+    const { decision, events } = decide();
+    await decision;
+    expect(events.slice(0, 4)).toEqual([
+      "active_fix",
+      "review",
+      "pr",
+      "branch_item",
+    ]);
+  });
+
+  test("checks the head before the branch", async () => {
+    const { decision, events } = decide({
+      pr: pr({ headSha: SHA_B }),
+      branchItemStatus: "implementing",
+    });
+    await decision;
+    expect(events).not.toContain("branch_item");
+  });
+
+  test("skips the branch before it holds a draft", async () => {
+    const { decision } = decide({
+      pr: pr({ draft: true }),
+      branchItemStatus: "implementing",
+    });
+    expect(await decision).toEqual({ kind: "skip", why: "branch_held" });
   });
 
   test("holds pr_draft_or_auto_merge for a draft", async () => {

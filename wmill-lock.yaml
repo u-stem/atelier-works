@@ -40,6 +40,7 @@ locks:
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
   f/factory/lib/auto_retry: 262fba04a886640a79bab35139646b97e2fa88b5571857f35915a1a36befd24b
   f/factory/lib/auto_retry_reasons: 6a2a29d8f0dd66b52bd8247f0e393afad81bf1c3164220080b2068af2f129076
+  f/factory/lib/branch_hold: fb326c8df21576e62c02fdc3e68e89473c1df495941855181bae34bc0dec0d97
   f/factory/lib/check_runner: b1f2652b764026ea58cb864cd5d9eba08c776daf3113d8491754e3edd8c81ab7
   f/factory/lib/check_sandbox: a0723a0bfa811613eaa3c720efc5ce5547bb9d2144ed88e214a10ded685e3696
   f/factory/lib/check_sandbox_reasons: 1c162edbcb7aff4ae5b1a282fceca8b4072543c845054a50f3af07f1fffc11e2
@@ -66,7 +67,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 98ef3087ac821a587800abc79cdbde75f1f37bdd1cfea25830e8c7743bf23176
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/db: 9a5a11652a6d5d97979ed9f569f30805a465bf57815bd54d492385afc41aa9c4
+  f/factory/lib/db: c79aa39db6c20940b9c20f3cad7905bbc606dcda3909eabc3635b5c3e5c003ff
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905

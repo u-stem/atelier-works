@@ -126,6 +126,7 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  restartPrConflictGrace,
   restartStoppedWorkItem,
   restartTransientPrReview,
   returnToDesigningFromImplementingIfLeaseHolder,
@@ -6687,6 +6688,61 @@ check(
   Number((await cfRowOf(cfEpisode.id))?.fix_attempts) === 0 &&
     (await cfRowOf(cfEpisode.id))?.fix_hold_reason === null,
   await cfRowOf(cfEpisode.id),
+);
+
+// 猶予の起点だけを今に戻す。競合のままで、通知も結びも無い行だけを書き換える。
+const cfGrace = await conflictFixRow(790, CF_HEAD_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day' WHERE id = ${String(cfGrace.id)}`,
+);
+const cfGraceRestarted = await restartPrConflictGrace(cfGrace.id, sql);
+const cfGraceRow = await cfRowOf(cfGrace.id);
+check(
+  "conflict grace: restarting reports that it changed the row",
+  cfGraceRestarted === true,
+);
+check(
+  "conflict grace: restarting sets the start of the episode to now",
+  Date.now() - new Date(String(cfGraceRow?.episode_started_at)).getTime() <
+    60_000,
+  cfGraceRow,
+);
+check(
+  "conflict grace: restarting keeps the episode and the attempts",
+  Number(cfGraceRow?.episode) === cfGrace.episode &&
+    Number(cfGraceRow?.fix_attempts) === 0,
+  cfGraceRow,
+);
+const cfGraceBound = await conflictFixRow(791, CF_HEAD_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day', fix_work_item_id = 556 WHERE id = ${String(cfGraceBound.id)}`,
+);
+check(
+  "conflict grace: a row bound to a work item is not restarted",
+  (await restartPrConflictGrace(cfGraceBound.id, sql)) === false &&
+    Date.now() -
+      new Date(
+        String((await cfRowOf(cfGraceBound.id))?.episode_started_at),
+      ).getTime() >
+      60_000,
+);
+const cfGraceNotified = await conflictFixRow(792, CF_HEAD_1);
+await markPrConflictNotified(cfGraceNotified.id, sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day' WHERE id = ${String(cfGraceNotified.id)}`,
+);
+check(
+  "conflict grace: a notified row is not restarted",
+  (await restartPrConflictGrace(cfGraceNotified.id, sql)) === false,
+);
+const cfGraceSettled = await conflictFixRow(793, CF_HEAD_1);
+await settlePrConflictCheck(cfGraceSettled.id, "resolved", sql);
+check(
+  "conflict grace: a row that is no longer conflicted is not restarted",
+  (await restartPrConflictGrace(cfGraceSettled.id, sql)) === false,
 );
 
 // 後で適用するdown migrationが、新しい状態の行に引っかからないよう、この節で用意した行を消す。

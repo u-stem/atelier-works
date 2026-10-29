@@ -113,6 +113,7 @@ const TRANSIENT_DETAIL_KEYS = [
   "headMovedAtPush",
   "worktreeBusy",
   "implementRunning",
+  "designStage",
 ] as const;
 
 describe("decideConflictFixRecovery for a temporary stop", () => {

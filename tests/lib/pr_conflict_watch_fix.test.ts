@@ -29,7 +29,10 @@ import {
   runPrConflictWatch,
 } from "../../f/factory/lib/pr_conflict_watch.ts";
 import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts";
-import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import type {
+  NoticeRecord,
+  WorkItemStatus,
+} from "../../f/factory/lib/types.ts";
 import { generatedByTrailer } from "../../f/factory/lib/workspace.ts";
 
 const HEAD = "a".repeat(40);
@@ -138,6 +141,8 @@ type Setup = {
   /** 起動の依存を渡さない。 */
   readonly withoutFix?: boolean;
   readonly fix?: Partial<PrConflictFixDeps>;
+  /** ブランチの作業項目の状態。省略か`null`は、作業項目が引けないこと。 */
+  readonly branchItemStatus?: WorkItemStatus | null;
   readonly failListFixing?: boolean;
   readonly failReadItem?: number;
   readonly releaseResult?: boolean;
@@ -166,6 +171,8 @@ type Harness = {
   readonly cancelled: string[];
   readonly prReads: string[];
   readonly marked: number[];
+  /** 猶予の起点を今に戻した行のID。 */
+  readonly graceRestarts: number[];
   readonly reads: Record<string, unknown[][]>;
 };
 
@@ -188,6 +195,7 @@ function setup(options: Setup = {}): Harness {
   const cancelled: string[] = [];
   const prReads: string[] = [];
   const marked: number[] = [];
+  const graceRestarts: number[] = [];
   const reads: Record<string, unknown[][]> = {};
   const read = (name: string, ...args: unknown[]): void => {
     const list = reads[name] ?? [];
@@ -240,6 +248,16 @@ function setup(options: Setup = {}): Harness {
     hasActiveFix: async (...args) => {
       read("hasActiveFix", ...args);
       return false;
+    },
+    readBranchItemStatus: async (...args) => {
+      read("readBranchItemStatus", ...args);
+      return options.branchItemStatus ?? null;
+    },
+    restartGrace: async (id) => {
+      graceRestarts.push(id);
+      calls.push(`restart_grace:${String(id)}`);
+      replace(id, { episode_started_at: options.now ?? NOW });
+      return true;
     },
     getDefaultBranch: async (...args) => {
       read("getDefaultBranch", ...args);
@@ -410,6 +428,7 @@ function setup(options: Setup = {}): Harness {
     cancelled,
     prReads,
     marked,
+    graceRestarts,
     reads,
   };
 }
@@ -1241,6 +1260,301 @@ describe("runPrConflictWatch: a work item that runs without being bound to the r
     });
     await runPrConflictWatch(h.deps);
     expect(h.events).toHaveLength(1);
+  });
+});
+
+describe("runPrConflictWatch: a branch that the factory holds", () => {
+  const PAST_GRACE = {
+    episode_started_at: new Date(NOW.getTime() - 120 * MINUTE),
+  };
+  const HELD_STATUSES = [
+    "requirements_generating",
+    "awaiting_approval",
+    "designing",
+    "awaiting_design_approval",
+    "approved",
+    "implementing",
+  ] as const;
+  const unreadable: Partial<PrConflictFixDeps> = {
+    readBranchItemStatus: async () => {
+      throw new Error("db down");
+    },
+  };
+  const unrestartable: Partial<PrConflictFixDeps> = {
+    restartGrace: async () => {
+      throw new Error("db down");
+    },
+  };
+
+  describe("within the grace", () => {
+    test.each(HELD_STATUSES)(
+      "does not claim while the branch is %s",
+      async (status) => {
+        const h = setup({ rows: [check()], branchItemStatus: status });
+        await runPrConflictWatch(h.deps);
+        expect(h.claims).toEqual([]);
+      },
+    );
+
+    test("does not launch a flow", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      await runPrConflictWatch(h.deps);
+      expect(h.launched).toEqual([]);
+    });
+
+    test("does not write a hold", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      await runPrConflictWatch(h.deps);
+      expect(h.holds).toEqual([]);
+    });
+
+    test("does not notify", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toEqual([]);
+    });
+
+    test("does not read the facts of the holds", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      await runPrConflictWatch(h.deps);
+      expect(h.reads.getDefaultBranch ?? []).toEqual([]);
+    });
+
+    test("asks for the work item of the branch with the spelling that the pull request shows", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      await runPrConflictWatch(h.deps);
+      expect(h.reads.readBranchItemStatus).toEqual([
+        ["Acme", "Widgets", BRANCH],
+      ]);
+    });
+
+    test("restarts the grace of the row", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      await runPrConflictWatch(h.deps);
+      expect(h.graceRestarts).toEqual([7]);
+    });
+
+    test("counts the row as waiting", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "implementing" });
+      const result = await runPrConflictWatch(h.deps);
+      expect(result.waiting).toBe(1);
+    });
+
+    test("claims again once the branch leaves the held states", async () => {
+      const h = setup({ rows: [check()], branchItemStatus: "pr_open" });
+      await runPrConflictWatch(h.deps);
+      expect(h.launched).toEqual([900]);
+    });
+
+    test("records the failure when the branch cannot be read", async () => {
+      const h = setup({ rows: [check()], fix: unreadable });
+      await runPrConflictWatch(h.deps);
+      expect(h.failures).toEqual(["claim_conflict_fix:acme/widgets#12"]);
+    });
+
+    test("does not launch when the branch cannot be read", async () => {
+      const h = setup({ rows: [check()], fix: unreadable });
+      await runPrConflictWatch(h.deps);
+      expect(h.launched).toEqual([]);
+    });
+
+    test("keeps waiting when the grace cannot be restarted", async () => {
+      const h = setup({
+        rows: [check()],
+        branchItemStatus: "implementing",
+        fix: unrestartable,
+      });
+      const result = await runPrConflictWatch(h.deps);
+      expect(result.waiting).toBe(1);
+    });
+  });
+
+  describe("after the grace", () => {
+    test.each(HELD_STATUSES)(
+      "does not notify while the branch is %s",
+      async (status) => {
+        const h = setup({
+          rows: [check(PAST_GRACE)],
+          branchItemStatus: status,
+        });
+        await runPrConflictWatch(h.deps);
+        expect(h.events).toEqual([]);
+      },
+    );
+
+    test("does not register a notice", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "designing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.notices).toEqual([]);
+    });
+
+    test("does not mark the row as notified", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "designing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.marked).toEqual([]);
+    });
+
+    test("restarts the grace of the row at the time of the run", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.rows[0]?.episode_started_at).toEqual(NOW);
+    });
+
+    test("restarts the grace once for the row", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.graceRestarts).toEqual([7]);
+    });
+
+    test("counts the row as waiting", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+      });
+      const result = await runPrConflictWatch(h.deps);
+      expect(result.waiting).toBe(1);
+    });
+
+    test("asks for the work item of the branch with the spelling of the row", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.reads.readBranchItemStatus).toEqual([
+        ["acme", "widgets", BRANCH],
+      ]);
+    });
+
+    test("notifies once the branch leaves the held states", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "pr_open",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toHaveLength(1);
+    });
+
+    test("notifies when the work item of the branch cannot be found", async () => {
+      const h = setup({ rows: [check(PAST_GRACE)] });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toHaveLength(1);
+    });
+
+    test("notifies when the work item of the branch cannot be read", async () => {
+      const h = setup({ rows: [check(PAST_GRACE)], fix: unreadable });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toHaveLength(1);
+    });
+
+    test("warns when the work item of the branch cannot be read", async () => {
+      const h = setup({ rows: [check(PAST_GRACE)], fix: unreadable });
+      await runPrConflictWatch(h.deps);
+      expect(h.warnings).toContain(
+        "pr conflict could not read the work item of the branch",
+      );
+    });
+
+    test("does not restart the grace when the work item of the branch cannot be read", async () => {
+      const h = setup({ rows: [check(PAST_GRACE)], fix: unreadable });
+      await runPrConflictWatch(h.deps);
+      expect(h.graceRestarts).toEqual([]);
+    });
+
+    test("still waits for an active fix work item when the branch is not held", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        fix: { hasActiveFix: async () => true },
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toEqual([]);
+    });
+
+    test("does not notify when the grace cannot be restarted", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+        fix: unrestartable,
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toEqual([]);
+    });
+
+    test("warns when the grace cannot be restarted", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+        fix: unrestartable,
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.warnings).toContain(
+        "pr conflict could not restart the grace of the row",
+      );
+    });
+  });
+
+  describe("outside the decision that waits for the grace", () => {
+    test("notifies a row with a final hold", async () => {
+      const h = setup({
+        rows: [check({ ...PAST_GRACE, fix_hold_reason: "protected_path" })],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toHaveLength(1);
+    });
+
+    test("reads no work item of the branch for a row with a final hold", async () => {
+      const h = setup({
+        rows: [check({ ...PAST_GRACE, fix_hold_reason: "protected_path" })],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.reads.readBranchItemStatus ?? []).toEqual([]);
+    });
+
+    test("notifies while the fix is disabled", async () => {
+      const h = setup({
+        rows: [check(PAST_GRACE)],
+        branchItemStatus: "implementing",
+        withoutFix: true,
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toHaveLength(1);
+    });
+
+    test("does not restart the grace of a conflict that began before the fix was enabled", async () => {
+      const h = setup({
+        rows: [
+          check({ episode_started_at: new Date(SINCE.getTime() - MINUTE) }),
+        ],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.graceRestarts).toEqual([]);
+    });
+
+    test("does not notify a conflict that began before the fix was enabled while the branch is held", async () => {
+      const h = setup({
+        rows: [
+          check({ episode_started_at: new Date(SINCE.getTime() - MINUTE) }),
+        ],
+        branchItemStatus: "implementing",
+      });
+      await runPrConflictWatch(h.deps);
+      expect(h.events).toEqual([]);
+    });
   });
 });
 

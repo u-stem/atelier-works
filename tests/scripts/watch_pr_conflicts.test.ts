@@ -284,6 +284,82 @@ describe("buildConflictFixDeps: the reads of the decision", () => {
   });
 });
 
+describe("buildConflictFixDeps: the branch of the pull request", () => {
+  const config = parseFactoryConfig(ENABLED);
+  const BRANCH_ITEM = {
+    kind: "issue" as const,
+    owner: "acme",
+    repo: "widgets",
+    status: "implementing" as const,
+  };
+
+  test("reads the work item that the branch names", async () => {
+    const asked: number[] = [];
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      getWorkItem: async (id: number) => {
+        asked.push(id);
+        return null;
+      },
+    });
+    await deps?.readBranchItemStatus(
+      "Acme",
+      "Widgets",
+      "factory/issue-5-wi-33",
+    );
+    expect(asked).toEqual([33]);
+  });
+
+  test("returns the status of the work item of the same repository", async () => {
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      getWorkItem: async () => BRANCH_ITEM,
+    });
+    expect(
+      await deps?.readBranchItemStatus(
+        "Acme",
+        "Widgets",
+        "factory/issue-5-wi-33",
+      ),
+    ).toBe("implementing");
+  });
+
+  test("returns null for a work item of another repository", async () => {
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      getWorkItem: async () => ({ ...BRANCH_ITEM, repo: "gadgets" }),
+    });
+    expect(
+      await deps?.readBranchItemStatus(
+        "Acme",
+        "Widgets",
+        "factory/issue-5-wi-33",
+      ),
+    ).toBeNull();
+  });
+
+  test("reads no work item for a branch that the factory did not name", async () => {
+    const asked: number[] = [];
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      getWorkItem: async (id: number) => {
+        asked.push(id);
+        return BRANCH_ITEM;
+      },
+    });
+    await deps?.readBranchItemStatus("Acme", "Widgets", "feature/x");
+    expect(asked).toEqual([]);
+  });
+
+  test("restarts the grace of the row that it was given", async () => {
+    const restarted: number[] = [];
+    const deps = buildConflictFixDeps(config, CLIENT, {
+      restartPrConflictGrace: async (id: number) => {
+        restarted.push(id);
+        return true;
+      },
+    });
+    await deps?.restartGrace(7);
+    expect(restarted).toEqual([7]);
+  });
+});
+
 describe("buildConflictRecoveryDeps: the reads of the recovery", () => {
   const stored = {
     status: "blocked" as const,

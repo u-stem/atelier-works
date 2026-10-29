@@ -6813,6 +6813,13 @@ export async function touchPrConflictCheck(
   return rows.length > 0;
 }
 
+export async function restartPrConflictGrace(
+  _id: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
 /** IDで`factory.pr_conflict_checks`の行を読む。無ければnull。 */
 export async function getPrConflictCheckById(
   id: number,

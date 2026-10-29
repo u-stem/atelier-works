@@ -12,6 +12,7 @@ import {
   decideConflictNotify,
   RECENTLY_FIXED_WINDOW_MS,
 } from "../../f/factory/lib/pr_conflict_fix_claim.ts";
+import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -50,6 +51,8 @@ function factoryCommit(subject = "fix: x"): string {
 type Setup = {
   readonly hasActiveFix?: boolean;
   readonly pr?: PullRequest;
+  /** ブランチの作業項目の状態。`null`は引けないこと。 */
+  readonly branchItemStatus?: WorkItemStatus | null;
   readonly defaultBranch?: string;
   readonly commits?: PrCommitMessages;
   readonly hasSkillMarker?: boolean;
@@ -76,6 +79,10 @@ function readers(setup: Setup = {}): {
     readers: {
       hasActiveFix: track("active_fix", setup.hasActiveFix ?? false),
       readPr: track("pr", setup.pr ?? pr()),
+      readBranchItemStatus: track(
+        "branch_item",
+        setup.branchItemStatus ?? null,
+      ),
       readDefaultBranch: track("default_branch", setup.defaultBranch ?? "main"),
       readCommits: track(
         "commits",
@@ -131,6 +138,7 @@ describe("decideConflictFixClaim", () => {
     expect(events).toEqual([
       "active_fix",
       "pr",
+      "branch_item",
       "default_branch",
       "commits",
       "marker",
@@ -170,6 +178,87 @@ describe("decideConflictFixClaim", () => {
   test("skips a row whose head the pull request has left", async () => {
     const { decision } = decide({ pr: pr({ headSha: SHA_B }) });
     expect(await decision).toEqual({ kind: "skip", why: "head_moved" });
+  });
+
+  test.each([
+    "requirements_generating",
+    "awaiting_approval",
+    "designing",
+    "awaiting_design_approval",
+    "approved",
+    "implementing",
+  ] as const)(
+    "skips branch_held while the work item of the branch is %s",
+    async (status) => {
+      const { decision } = decide({ branchItemStatus: status });
+      expect(await decision).toEqual({ kind: "skip", why: "branch_held" });
+    },
+  );
+
+  test("reads nothing of the holds when the branch is held", async () => {
+    const { decision, events } = decide({ branchItemStatus: "implementing" });
+    await decision;
+    expect(events).toEqual(["active_fix", "pr", "branch_item"]);
+  });
+
+  test.each([
+    ["no work item", null],
+    ["pr_open", "pr_open"],
+    ["needs_human", "needs_human"],
+    ["failed", "failed"],
+    ["rejected", "rejected"],
+  ] as const)(
+    "claims as before when the work item of the branch is %s",
+    async (_name, status) => {
+      const { decision } = decide({ branchItemStatus: status });
+      expect((await decision).kind).toBe("claim");
+    },
+  );
+
+  test("checks the head before the branch", async () => {
+    const { decision, events } = decide({
+      pr: pr({ headSha: SHA_B }),
+      branchItemStatus: "implementing",
+    });
+    await decision;
+    expect(events).not.toContain("branch_item");
+  });
+
+  test("checks the closed state before the branch", async () => {
+    const { decision, events } = decide({
+      pr: pr({ state: "closed" }),
+      branchItemStatus: "implementing",
+    });
+    await decision;
+    expect(events).not.toContain("branch_item");
+  });
+
+  test("skips the branch before it holds a base that is not the default", async () => {
+    const { decision } = decide({
+      pr: pr({ baseRef: "release" }),
+      branchItemStatus: "implementing",
+    });
+    expect(await decision).toEqual({ kind: "skip", why: "branch_held" });
+  });
+
+  test("lets the failure of the branch read through", async () => {
+    const built = readers();
+    const failing = {
+      ...built.readers,
+      readBranchItemStatus: async (): Promise<WorkItemStatus | null> => {
+        throw new Error("db down");
+      },
+    };
+    await expect(
+      decideConflictFixClaim({
+        row: { head_sha: SHA_A, fix_attempts: 0 },
+        instanceName: "local",
+        maxRounds: 2,
+        maxRoundsPerPr: 5,
+        now: NOW,
+        readers: failing,
+      }),
+    ).rejects.toThrow("db down");
   });
 
   test("holds base_not_default when the base is not the default branch", async () => {

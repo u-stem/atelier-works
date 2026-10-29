@@ -68,6 +68,7 @@ describe("CONFLICT_UNCOUNTED_STOP_NOTES", () => {
         CONFLICT_ROUND_DETAILS.headMoved,
         CONFLICT_ROUND_DETAILS.worktreeBusy,
         CONFLICT_ROUND_DETAILS.implementRunning,
+        CONFLICT_ROUND_DETAILS.designStage,
       ].map(conflictRoundReason),
     );
   });
@@ -129,6 +130,7 @@ describe("CONFLICT_ROUND_DETAILS", () => {
     ["treeChangedDuringChecks", "the tree changed during the checks"],
     ["worktreeBusy", "the worktree is in use by another process"],
     ["implementRunning", "an implement flow is running on the branch"],
+    ["designStage", "the work item of the branch is in the design stage"],
     [
       "markerMissing",
       "the factory-fix skill lacks the conflict-fix-skill:v1 marker",
