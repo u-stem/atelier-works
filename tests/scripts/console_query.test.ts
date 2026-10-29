@@ -2,6 +2,10 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { INTAKE_BODY_MAX_CHARS } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
+  DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+  normalizeDesignForImplement,
+} from "../../f/factory/lib/model_text.ts";
+import {
   main,
   readDocFromDisk,
   resolveIntArg,
@@ -1015,6 +1019,188 @@ describe("runConsoleQuery intake_snapshot", () => {
     const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
 
     expect(rows).toEqual([]);
+  });
+});
+
+describe("runConsoleQuery approval_design_doc", () => {
+  function designRow(markdown: string): SqlRow {
+    return {
+      approval_request_id: "31",
+      work_item_id: "7",
+      design_attempt: 2,
+      requirement_draft_id: "11",
+      markdown,
+      approval_status: "pending",
+    };
+  }
+
+  function query(sql: SqlClient) {
+    return runConsoleQuery(
+      "approval_design_doc",
+      200,
+      30,
+      sql,
+      null,
+      null,
+      undefined,
+      31,
+    );
+  }
+
+  async function textOf(markdown: string): Promise<unknown> {
+    const { sql } = createFakeSqlClient([[designRow(markdown)]]);
+    const rows = await query(sql);
+    const row = rows[0];
+    return row !== undefined && "text" in row ? row.text : null;
+  }
+
+  test("returns the design of the request in the shape the screen reads", async () => {
+    const { sql } = createFakeSqlClient([[designRow("# Design")]]);
+
+    const rows = await query(sql);
+
+    expect(rows).toEqual([
+      {
+        approval_request_id: 31,
+        work_item_id: 7,
+        design_attempt: 2,
+        requirement_draft_id: 11,
+        text: "# Design",
+        truncated: false,
+        approval_status: "pending",
+      },
+    ]);
+  });
+
+  test("returns neither the summary, the diagrams, the open questions nor the raw markdown", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...designRow("# Design"),
+          summary: "Summary",
+          diagrams: [],
+          open_questions: ["Which one?"],
+        },
+      ],
+    ]);
+
+    const rows = await query(sql);
+
+    expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
+      "approval_request_id",
+      "approval_status",
+      "design_attempt",
+      "requirement_draft_id",
+      "text",
+      "truncated",
+      "work_item_id",
+    ]);
+  });
+
+  test("joins the draft the request points at, on the same work item as the gate does", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await query(sql);
+
+    expect(calls[0]?.text).toContain(
+      "JOIN factory.design_drafts dd ON dd.id = ar.subject_id AND dd.work_item_id = ar.work_item_id",
+    );
+  });
+
+  test("selects only a design request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await query(sql);
+
+    expect(calls[0]?.text).toContain("ar.kind = 'design'");
+  });
+
+  test("binds the approval request id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await query(sql);
+
+    expect(calls[0]?.values).toContain(31);
+  });
+
+  test("returns no rows when nothing matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+
+    const rows = await query(sql);
+
+    expect(rows).toEqual([]);
+  });
+
+  test("requires an approval_request_id", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+
+    await expect(
+      runConsoleQuery("approval_design_doc", 200, 30, sql),
+    ).rejects.toThrow('"approval_request_id" is required');
+  });
+
+  test("returns HTML and link reference definitions as characters", async () => {
+    const markdown =
+      '<img src="https://example.test/x.png">\n[ref]: https://example.test "title"';
+
+    expect(await textOf(markdown)).toBe(markdown);
+  });
+
+  test("masks a secret", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+
+    expect(await textOf(`token: ${token}`)).toBe("token: ***");
+  });
+
+  test("removes control characters", async () => {
+    expect(await textOf("a\u0007b​c")).toBe("abc");
+  });
+
+  test("returns the same text as the gate hands to the implementation", async () => {
+    const markdown = `${"あ".repeat(DESIGN_FOR_IMPLEMENT_MAX_CHARS + 5)}\nend`;
+
+    expect(await textOf(markdown)).toBe(
+      normalizeDesignForImplement(markdown, DESIGN_FOR_IMPLEMENT_MAX_CHARS)
+        .text,
+    );
+  });
+
+  test("marks a design over the limit as truncated", async () => {
+    const { sql } = createFakeSqlClient([
+      [designRow("a".repeat(DESIGN_FOR_IMPLEMENT_MAX_CHARS + 1))],
+    ]);
+
+    const rows = await query(sql);
+
+    expect(rows[0]).toMatchObject({ truncated: true });
+  });
+
+  test("does not mark a design at the limit as truncated", async () => {
+    const { sql } = createFakeSqlClient([
+      [designRow("a".repeat(DESIGN_FOR_IMPLEMENT_MAX_CHARS))],
+    ]);
+
+    const rows = await query(sql);
+
+    expect(rows[0]).toMatchObject({ truncated: false });
+  });
+
+  test("main rejects a missing approval_request_id", async () => {
+    await expect(main("approval_design_doc")).rejects.toThrow(
+      '"approval_request_id" is required',
+    );
+  });
+
+  test("main rejects a zero approval_request_id", async () => {
+    await expect(
+      main("approval_design_doc", 200, 30, undefined, undefined, 0),
+    ).rejects.toThrow('"approval_request_id" is required');
+  });
+
+  test("main rejects a fractional approval_request_id", async () => {
+    await expect(
+      main("approval_design_doc", 200, 30, undefined, undefined, 1.5),
+    ).rejects.toThrow('"approval_request_id" is required');
   });
 });
 

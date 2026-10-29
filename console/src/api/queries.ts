@@ -3,6 +3,10 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
+  type ApprovalDesignDoc,
+  isApprovalDesignDocRows,
+} from "./guards/approvalDesignDoc.ts";
+import {
   type DeploymentEntry,
   isDeploymentHistory,
 } from "./guards/deployments.ts";
@@ -297,5 +301,53 @@ export function useRequirementsDoc(
     queryFn: ({ signal }) =>
       fetchRequirementsDoc(workItemId, attempt, { signal }),
     staleTime: REQUIREMENTS_STALE_MS,
+  });
+}
+
+/** 承認依頼が指す設計書が新しいとみなす間隔。 */
+export const APPROVAL_DESIGN_DOC_STALE_MS = 10_000;
+
+/** 承認依頼が指す設計書のキャッシュのキー。 */
+export function approvalDesignDocQueryKey(
+  approvalRequestId: number,
+): readonly ["console", "approval_design_doc", number] {
+  return ["console", "approval_design_doc", approvalRequestId];
+}
+
+/**
+ * 承認依頼が指す設計書を取り、型ガードを通してから返す。
+ * 依頼が設計の依頼でないか、設計書が無いときは`null`を返す。失敗は`ApiFailure`で投げる。
+ */
+export async function fetchApprovalDesignDoc(
+  approvalRequestId: number,
+  options: RunScriptOptions = {},
+): Promise<ApprovalDesignDoc | null> {
+  const result = await runScript(
+    "console_query",
+    { view: "approval_design_doc", approval_request_id: approvalRequestId },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isApprovalDesignDocRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value[0] ?? null;
+}
+
+/**
+ * 承認依頼が指す設計書を取る。画面を開くたびに取り直す。
+ * 依頼の状態は承認や期限切れで変わるので、古い値を使い回さない。
+ */
+export function useApprovalDesignDoc(
+  approvalRequestId: number,
+): UseQueryResult<ApprovalDesignDoc | null, Error> {
+  return useQuery({
+    queryKey: approvalDesignDocQueryKey(approvalRequestId),
+    queryFn: ({ signal }) =>
+      fetchApprovalDesignDoc(approvalRequestId, { signal }),
+    staleTime: APPROVAL_DESIGN_DOC_STALE_MS,
+    refetchOnMount: "always",
   });
 }

@@ -41,6 +41,10 @@ import {
 import { parseJobId } from "../lib/job_ids.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import {
+  DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+  normalizeDesignForImplement,
+} from "../lib/model_text.ts";
+import {
   DIAGRAM_NAME_PATTERN,
   REQUIREMENTS_BASE_DIR,
 } from "../lib/requirements_template.ts";
@@ -85,6 +89,7 @@ const CONSOLE_ROW_VIEWS = [
   "fix_rounds",
   "requirements_index",
   "requirements_doc",
+  "approval_design_doc",
   "intake_snapshot",
   "audit_index",
   "audit_doc",
@@ -941,6 +946,44 @@ async function toRequirementsDocRow(
     rejected_diagrams: fromDisk?.rejected_diagrams ?? [],
     open_questions: parseStringArray(row.open_questions, "open_questions"),
     doc_dir_source: fromDisk === null ? "db_fallback" : "file",
+  };
+}
+
+/**
+ * "approval_design_doc"ビューの1行。設計の承認依頼が指す設計書を、承認後の実装が受け取る文字そのものにして返す。
+ * `text`は`normalizeDesignForImplement`の出力で、実装の関門(`designGate`)が渡す文字と同じである。
+ * 秘密値のマスクと制御文字の除去を済ませ、上限を超えるときは切って末尾に印の行を足す。
+ * HTMLとリンク参照定義は除かない。人が見る文字と実装が受け取る文字を一致させるため、描く側は文字のまま描く。
+ * 設計書の図、要約、未確定事項と、整える前の本文は返さない。
+ * `approval_status`は依頼の状態で、承認済みや却下済みの依頼でも設計書を返す。
+ */
+export type ApprovalDesignDocRow = {
+  readonly approval_request_id: number;
+  readonly work_item_id: number;
+  readonly design_attempt: number;
+  readonly requirement_draft_id: number;
+  readonly text: string;
+  /** `text`が上限で切られ、末尾に印の行があるか。 */
+  readonly truncated: boolean;
+  readonly approval_status: ApprovalRequestStatus;
+};
+
+function toApprovalDesignDocRow(row: SqlRow): ApprovalDesignDocRow {
+  const normalized = normalizeDesignForImplement(
+    asStr(row.markdown, "markdown"),
+    DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+  );
+  return {
+    approval_request_id: asId(row.approval_request_id, "approval_request_id"),
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    design_attempt: asNumeric(row.design_attempt, "design_attempt"),
+    requirement_draft_id: asId(
+      row.requirement_draft_id,
+      "requirement_draft_id",
+    ),
+    text: normalized.text,
+    truncated: normalized.truncated,
+    approval_status: asApprovalRequestStatus(row.approval_status),
   };
 }
 
@@ -2295,6 +2338,7 @@ export type ConsoleQueryRow =
   | FixRoundRow
   | RequirementsIndexRow
   | RequirementsDocRow
+  | ApprovalDesignDocRow
   | IntakeSnapshotRow
   | AuditIndexRow
   | AuditDocRow
@@ -2312,6 +2356,7 @@ export type ConsoleQueryRow =
  * 古い未決の承認依頼や未解決のnoticeが、それを見せる画面から黙って消えてはならないため。
  *
  * "requirements_doc"と"intake_snapshot"と"audit_doc"で`workItemId`が無ければ例外を投げる。
+ * "approval_design_doc"で`approvalRequestId`が無ければ例外を投げる。
  * テストで偽の`SqlClient`を渡し、実際のDBなしでクエリ文と行の解析を確かめられるよう、
  * `main`に畳み込まずにexportしている。
  */
@@ -2323,6 +2368,7 @@ export async function runConsoleQuery(
   workItemId: number | null = null,
   attempt: number | null = null,
   readFile: ReadTextFile = readTextFile,
+  approvalRequestId: number | null = null,
 ): Promise<ConsoleQueryRow[]> {
   const since = sinceIso(days, new Date());
 
@@ -2488,6 +2534,27 @@ export async function runConsoleQuery(
       }
       return [await toRequirementsDocRow(rows[0], readFile)];
     }
+    case "approval_design_doc": {
+      if (approvalRequestId === null) {
+        throw new Error(
+          'console_query: "approval_request_id" is required for view "approval_design_doc"',
+        );
+      }
+      // 実装の関門(`latestDesignApproval`)と同じ結合の条件で、依頼の指す設計書を引く。
+      // 最新の設計書ではなく依頼の指すものを返し、別の作業項目の設計書は結ばない。
+      // 依頼の状態は問わない。承認済み、却下済み、期限切れの依頼の設計書も、画面が読み返せるようにする。
+      const rows = await sql`
+        SELECT
+          ar.id AS approval_request_id, ar.work_item_id, ar.status AS approval_status,
+          dd.design_attempt, dd.requirement_draft_id, dd.markdown
+        FROM factory.approval_requests ar
+        JOIN factory.design_drafts dd ON dd.id = ar.subject_id AND dd.work_item_id = ar.work_item_id
+        WHERE ar.kind = 'design'
+          AND ar.id = ${approvalRequestId}::bigint
+        LIMIT 1
+      `.fetch();
+      return rows.map(toApprovalDesignDocRow);
+    }
     case "intake_snapshot": {
       if (workItemId === null) {
         throw new Error(
@@ -2613,9 +2680,10 @@ export type ConsoleQueryResult =
 /**
  * Consoleが読む`view`の結果を返す。
  * 行のビューは行の配列、"summary"と"work_item_detail"は1つのオブジェクトを返す。
- * `limit`と`days`は範囲に丸め、`work_item_id`/`attempt`は不正なら指定なしとして扱う。
+ * `limit`と`days`は範囲に丸め、`work_item_id`/`attempt`/`approval_request_id`は不正なら指定なしとして扱う。
  * `view`が既知のビューでなければ例外を投げる。
  * "work_item_detail"では`work_item_id`が必須で、無ければ例外を投げる。
+ * "approval_design_doc"では`approval_request_id`が必須で、無いか不正なら例外を投げる。
  */
 export async function main(
   view: string,
@@ -2623,6 +2691,7 @@ export async function main(
   days: number = DEFAULT_DAYS,
   work_item_id?: number,
   attempt?: number,
+  approval_request_id?: number,
 ): Promise<ConsoleQueryResult> {
   const resolvedLimit = resolveIntArg(
     limit,
@@ -2666,5 +2735,7 @@ export async function main(
     defaultSqlClient,
     resolvedWorkItemId,
     resolvePositiveIntArg(attempt),
+    readTextFile,
+    resolvePositiveIntArg(approval_request_id),
   );
 }

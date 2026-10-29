@@ -7,6 +7,10 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
+    approval_request_id:
+      type: number
+      description: view が approval_design_doc のとき必須。設計の承認依頼の id。
+      default: null
     attempt:
       type: number
       description: view が requirements_doc のとき、取得する試行番号(省略時は最新)。
@@ -25,6 +29,7 @@ schema:
         / approval_stats(承認統計) / lead_time(リードタイム) / failures(失敗一覧) /
         notices(未解決の通知。重要度と解決可否つき) / reviews(PRレビュー) / fix_rounds(PR修正) /
         requirements_index(要件定義の一覧) / requirements_doc(要件定義書1件の全文) /
+        approval_design_doc(設計の承認依頼が指す設計書。承認後の実装が受け取る文字そのもの) /
         audit_index(監査の一覧) / audit_doc(監査1件の全文) / deployments(反映の履歴と含まれるPR) /
         summary(要対応の件数と一覧。1つのオブジェクトを返す) /
         work_item_detail(作業項目1件の概要と履歴。1つのオブジェクトを返す) /
