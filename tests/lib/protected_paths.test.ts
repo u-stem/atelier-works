@@ -1555,6 +1555,45 @@ describe("console job viewing files", () => {
   });
 });
 
+// 設計の承認画面が全文を描く部品と、止める判定、全コードポイントの契約テストは、
+// 書き換えられると、範囲を狭めたり、判定を緩めたりする変更が、人のレビューを経ずに入る。
+// 承認する人に見えない文字が、実装に渡ったまま承認されうる。
+describe("design approval screen files", () => {
+  const PATHS = [
+    "console/src/lib/visibleText.ts",
+    "console/src/lib/visibleText.test.ts",
+    "tests/scripts/console_design_visible_text_contract.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  // 日常的に直す部品は守らない。契約テストが全体を走査するので、守っても上乗せが小さい。
+  test.each([
+    "console/src/lib/approvalDecision.ts",
+    "console/src/lib/approvalDecision.test.ts",
+    "console/src/lib/approvalRefusal.ts",
+    "console/src/lib/writeNotices.ts",
+    "console/src/api/guards/approvalDesignDoc.ts",
+    "console/src/screens/inbox/ApprovalBar.tsx",
+  ])("FORBIDDEN_EXACT_PATHS does not list the part %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
+  });
+});
+
 // Consoleからジョブを取り消すscriptと、操作の記録を足した既存の書き込みのscript、拒否フックの一覧は、
 // 書き換えられると、取り消せるフローが増えたり、記録の順序や拒否が外れたりする。
 // 記録の配線と取消の許可表を固定するテストも、同じ理由で守る。

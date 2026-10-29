@@ -6,6 +6,10 @@ import { MAX_REASON_LENGTH } from "../api/writes.ts";
 import { auditReportPath } from "./auditView.ts";
 import { displayableIssueText } from "./intakeText.ts";
 import { requirementsPath } from "./requirementsView.ts";
+import {
+  type DesignApprovalInput,
+  designApprovalBlock,
+} from "./visibleText.ts";
 
 /**
  * 承認と却下の操作を出してよい依頼か。承認待ち(pending)で、期限内のものに限る。
@@ -154,6 +158,16 @@ export function requirementsBlockedReason(
   return doc === "ready" ? null : DOC_BLOCKED[doc];
 }
 
+/**
+ * 設計の承認を止める理由。止めなくてよければ`null`。
+ * 判定の本体は`designApprovalBlock`にあり、ここは呼ぶだけにする。
+ * 本体は保護パスの`visibleText.ts`にあるので、判定を緩める変更は人のレビューを経る。
+ * 却下は、この判定の対象にしない。設計書が読めなくても押せる。
+ */
+export function designBlockedReason(input: DesignApprovalInput): string | null {
+  return designApprovalBlock(input);
+}
+
 /** 期限を過ぎた依頼に出す文。 */
 export const EXPIRED_MESSAGE = "期限を過ぎているため、承認も却下もできません。";
 
@@ -295,6 +309,14 @@ export function approvalConfirmation(input: {
       consequence: "承認すると、Claudeによる実装が始まります。取り消せません。",
     };
   }
+  if (input.kind === "design") {
+    return {
+      subject: input.subject,
+      idLabel,
+      consequence:
+        "承認すると、実装が始まります。承認した設計書(正規化後の全文)が実装に渡ります。取り消せません。",
+    };
+  }
   return {
     subject: input.subject,
     idLabel,
@@ -303,14 +325,36 @@ export function approvalConfirmation(input: {
 }
 
 /**
- * 要件定義の却下の確認ダイアログの文。却下は作り直しになる。
- * 要件定義以外の却下は確認を求めないので`null`にする。
+ * 設計の却下の確認の文。行き先が3通りあるので、静的な文で全部を伝える。
+ * 現在の却下の数は出さない。上限は「今回を足して達するか」で判定される。
+ */
+const DESIGN_REJECT_CONSEQUENCE = [
+  "却下には理由が必要です。",
+  "却下すると、設計を作り直します。",
+  "反映できた却下と、実装とPR修正からの戻しは、合わせて上限(設定のmax_design_attempts)を分け合います。",
+  "今回の却下を足して上限に達すると、作り直さず人の対応待ちになります。",
+  "取り込み時点からIssueが変わっていれば、要件定義へ戻ります。",
+  "却下の理由は要件定義の生成にも渡ります。",
+  "Issueを読めないときは、変わっていないものとして設計を作り直します。",
+  "設計工程が無効のときは、作り直さず人の対応待ちになります。",
+].join("");
+
+/**
+ * 要件定義と設計の却下の確認ダイアログの文。却下は作り直しになる。
+ * それ以外の却下は確認を求めないので`null`にする。
  */
 export function rejectConfirmation(input: {
   readonly kind: string;
   readonly subject: string;
   readonly approvalRequestId: number;
 }): ApprovalConfirmation | null {
+  if (input.kind === "design") {
+    return {
+      subject: input.subject,
+      idLabel: `承認依頼 #${String(input.approvalRequestId)}`,
+      consequence: DESIGN_REJECT_CONSEQUENCE,
+    };
+  }
   if (input.kind !== "requirements") {
     return null;
   }

@@ -73,9 +73,24 @@ function noteActionAudit(
   };
 }
 
+/**
+ * 承認と却下の結果の知らせ。
+ * 設計は、承認の後の実装の開始も、却下の行き先(設計の再生成、要件定義へ戻る、人の対応待ち)も、
+ * 反映が済むまで分からないので、記録したことだけを伝え、確かめる場所を示す。
+ */
 export function describeApprovalResult(
   result: ApprovalDecideResult,
+  kind?: string,
 ): WriteNotice {
+  if (kind === "design") {
+    return {
+      tone: "success",
+      message:
+        result.status === "approved"
+          ? "承認を記録しました。実装の開始は作業項目で確かめてください。"
+          : "却下を記録しました。行き先は作業項目で確かめてください。",
+    };
+  }
   return {
     tone: "success",
     message: result.status === "approved" ? "承認しました。" : "却下しました。",

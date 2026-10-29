@@ -63,6 +63,36 @@ describe("approval refusal contract between approval_decide and the console", ()
     ).toBe("unavailable");
   });
 
+  test("the backend tells a design that regeneration is limited by max_design_attempts", () => {
+    expect(issueCheckRefusal("unavailable", 3, "design")).toContain(
+      "max_design_attempts",
+    );
+  });
+
+  test("the Console adds the same limit to the actions for a design", () => {
+    expect(
+      classifyDecisionRefusal(
+        jobFailed(issueCheckRefusal("unavailable", 3, "design") ?? ""),
+        "design",
+      )?.actions.join(""),
+    ).toContain("max_design_attempts");
+  });
+
+  test("the backend does not mention the limit for requirements", () => {
+    expect(issueCheckRefusal("unavailable", 3, "requirements")).not.toContain(
+      "max_design_attempts",
+    );
+  });
+
+  test("the Console does not mention the limit for requirements", () => {
+    expect(
+      classifyDecisionRefusal(
+        jobFailed(issueCheckRefusal("unavailable", 3, "requirements") ?? ""),
+        "requirements",
+      )?.actions.join(""),
+    ).not.toContain("max_design_attempts");
+  });
+
   test("recognizes the refusal for a design whose issue changed after intake", () => {
     expect(
       classifyDecisionRefusal(

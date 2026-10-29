@@ -76,17 +76,35 @@ const REFUSALS: readonly {
 ];
 
 /**
+ * 設計の承認で、Issueを比べられなかったときの案内。
+ * 設計の却下は、Issueを読めないと要件定義へ戻れず、設計の再生成が上限まで繰り返されるので、
+ * 却下の案内に上限を添える(backendの`approval_support.ts`の設計向けの文と対)。
+ */
+const DESIGN_UNAVAILABLE_ACTIONS: readonly string[] = [
+  "少し待って、もう一度承認する。",
+  "Issueを移したか削除したなら、却下する。却下すると、上限(設定のmax_design_attempts)まで設計を作り直し、上限に達すると人の対応待ちになる。",
+];
+
+/**
  * 承認の失敗が、approval_decideの確定した断りなら、その説明を返す。そうでなければ`null`。
  * 文の出どころはbackendの`approval_decide.ts`と`approval_support.ts`で、契約テストが突き合わせる。
+ * `kind`は承認依頼の種類で、設計のときだけ、Issueを比べられない断りの案内を設計向けにする。
  * `null`のときは、結果が分からない失敗の案内を使う。
  */
 export function classifyDecisionRefusal(
   error: ApiError,
+  kind?: string,
 ): DecisionRefusal | null {
   if (error.kind !== "job_failed") {
     return null;
   }
   const message = error.message;
   const found = REFUSALS.find(({ marker }) => message.includes(marker));
-  return found?.refusal ?? null;
+  if (found === undefined) {
+    return null;
+  }
+  if (kind === "design" && found.refusal.kind === "unavailable") {
+    return { ...found.refusal, actions: DESIGN_UNAVAILABLE_ACTIONS };
+  }
+  return found.refusal;
 }

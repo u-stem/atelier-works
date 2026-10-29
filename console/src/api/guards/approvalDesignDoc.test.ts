@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isApprovalDesignDocRows } from "./approvalDesignDoc.ts";
+import {
+  DESIGN_TEXT_MAX_CODE_POINTS,
+  DESIGN_TEXT_MAX_WITH_MARK,
+  DESIGN_TRUNCATED_MARK_LINE,
+  isApprovalDesignDocRows,
+} from "./approvalDesignDoc.ts";
 
 const ROW = {
   approval_request_id: 31,
@@ -75,6 +80,93 @@ describe("isApprovalDesignDocRows", () => {
 
   test("rejects a row with a design attempt below one", () => {
     expect(isApprovalDesignDocRows([{ ...ROW, design_attempt: 0 }])).toBe(
+      false,
+    );
+  });
+});
+
+const KEPT = "x".repeat(8000);
+const TRUNCATED_TEXT = `${KEPT}\n[the design was truncated]`;
+
+describe("the limit of the design text", () => {
+  test("limits the text to 8000 code points", () => {
+    expect(DESIGN_TEXT_MAX_CODE_POINTS).toBe(8000);
+  });
+
+  test("writes the mark line that follows a truncated text", () => {
+    expect(DESIGN_TRUNCATED_MARK_LINE).toBe("\n[the design was truncated]");
+  });
+
+  test("limits a truncated text to the limit and the mark line", () => {
+    expect(DESIGN_TEXT_MAX_WITH_MARK).toBe(8027);
+  });
+
+  test("accepts a text of exactly 8000 code points that is not truncated", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, text: KEPT }])).toBe(true);
+  });
+
+  test("rejects a text of 8001 code points that is not truncated", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, text: `${KEPT}x` }])).toBe(false);
+  });
+
+  test("accepts a truncated text of 8027 code points that ends with the mark", () => {
+    expect(
+      isApprovalDesignDocRows([
+        { ...ROW, text: TRUNCATED_TEXT, truncated: true },
+      ]),
+    ).toBe(true);
+  });
+
+  test("rejects a truncated text that is longer than the limit and the mark", () => {
+    expect(
+      isApprovalDesignDocRows([
+        { ...ROW, text: `x${TRUNCATED_TEXT}`, truncated: true },
+      ]),
+    ).toBe(false);
+  });
+
+  test("rejects a truncated text that is shorter than the limit and the mark", () => {
+    expect(
+      isApprovalDesignDocRows([
+        {
+          ...ROW,
+          text: `${"x".repeat(7999)}\n[the design was truncated]`,
+          truncated: true,
+        },
+      ]),
+    ).toBe(false);
+  });
+
+  test("rejects a truncated text that does not end with the mark", () => {
+    expect(
+      isApprovalDesignDocRows([
+        {
+          ...ROW,
+          text: `${KEPT}\n[the design was trimmed!!!]`,
+          truncated: true,
+        },
+      ]),
+    ).toBe(false);
+  });
+
+  test("rejects a row flagged truncated whose text is short", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, truncated: true }])).toBe(false);
+  });
+
+  test("rejects a text of 8027 code points that is flagged as not truncated", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, text: TRUNCATED_TEXT }])).toBe(
+      false,
+    );
+  });
+
+  test("counts code points, not UTF-16 units", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, text: "😀".repeat(8000) }])).toBe(
+      true,
+    );
+  });
+
+  test("rejects 8001 code points that are outside the BMP", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, text: "😀".repeat(8001) }])).toBe(
       false,
     );
   });
