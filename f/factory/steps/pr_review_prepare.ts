@@ -167,14 +167,8 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
           { headRef, owner: workItem.owner, repo: workItem.repo },
           getWorkItem,
         ),
-      holdReview: async (reason) => {
-        await updateStatusIfCurrent(
-          work_item_id,
-          "reviewing",
-          "blocked",
-          reason,
-        );
-      },
+      holdReview: (reason) =>
+        holdReview({ work_item_id, reason }, { updateStatusIfCurrent }),
       blockReview: async (reason) => {
         await blockReview(
           {
@@ -254,10 +248,23 @@ export type HoldReviewDeps = {
   readonly updateStatusIfCurrent: typeof updateStatusIfCurrent;
 };
 
+/**
+ * 設計の段階の作業項目に付いた`pr_review`を、通知せずに終端の`blocked`にして理由を残す。
+ * 人の操作が要らない見送りで、`blockReview`と違ってDiscordに知らせない。
+ * `reviewing`のまま残すと、reconcileが理由の分からない失敗として扱うためである。
+ * すでにほかの処理が状態を進めていたときは、何も記録しない。
+ */
 export async function holdReview(
-  _input: HoldReviewInput,
-  _deps: HoldReviewDeps,
-): Promise<void> {}
+  input: HoldReviewInput,
+  deps: HoldReviewDeps,
+): Promise<void> {
+  await deps.updateStatusIfCurrent(
+    input.work_item_id,
+    "reviewing",
+    "blocked",
+    input.reason,
+  );
+}
 
 export type ReviewPrepareTarget = {
   readonly work_item_id: number;
