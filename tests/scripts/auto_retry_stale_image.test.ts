@@ -91,4 +91,27 @@ describe("auto_retry_stale_image wiring", () => {
       /restartStoppedWorkItem\(\{[\s\S]*?noticeMarker: STALE_IMAGE_NOTICE_MARKER,/,
     );
   });
+
+  test("restarts an item that waits for the runs only for the reasons of the shared list", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /restartStoppedWorkItem\(\{[\s\S]*?waitReasonPrefixes: PR_RUN_WAIT_REASON_PREFIXES,/,
+    );
+  });
+
+  test("limits the age of the stop that waits for the runs with the shared limit", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /restartStoppedWorkItem\(\{[\s\S]*?waitMaxAgeMs: PR_RUN_WAIT_MAX_AGE_MS,/,
+    );
+  });
+
+  test("gives the shared retry the reader of the unfinished runs", async () => {
+    const source = await scriptSource();
+
+    // import行には一致させず、depsの中の`restart:`の直前の行だけに一致させる。
+    expect(source).toMatch(/hasUnfinishedPrRun,\s*restart:/);
+  });
 });

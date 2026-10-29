@@ -35,6 +35,9 @@
 //    人とFactoryが同じブランチへpushしうるためである。回復が結びを外すと、次の判断で通知に進む。
 // 3. 起動の判断: 通知の判断が起動に回した行だけを、`decideConflictFixClaim`で判断する。
 //    判断が例外を投げても、起動の文が何も返さなくても、通知は猶予の経過で必ず出る。
+// PRのブランチが指すIssueの作業項目が、Factoryがブランチを引き継ぐ状態(`isBranchHeldForFixRounds`)の間は、
+// 2と3のどちらでも、通知も起動もせず待ち、猶予の起点(`episode_started_at`)を今に戻す。
+// 引き継ぐ状態を出た後に、猶予が数え直され、自動修正の機会が戻る。
 // 保留の理由は、直す作業項目を起動しなかった理由を行に書く。最終の保留は猶予を待たずに通知する。
 // 通知の解決は、競合が終わった(解けた、PRが閉じた、設定が対象から外した)ときだけ行う。
 // 始まったときには解決しない。並んだ2つの実行の一方が、他方の出したばかりの通知を解決してしまうのを避けるためである。
@@ -46,6 +49,7 @@
 // 外部由来の文字列(題名、ブランチ名)は、通知にもログにも載せない。
 // 例外は、PRごと、リポジトリごとに捕まえて、他を止めない。rate limitは、以降の読み取りを止める。
 
+import { isBranchHeldForFixRounds } from "./branch_hold.ts";
 import { configuredRepos } from "./config.ts";
 import type {
   ClaimPrConflictInput,
@@ -105,6 +109,7 @@ import {
   type GhPullRequest,
   type NoticeRecord,
   parseImplementBranchWorkItemId,
+  type WorkItemStatus,
 } from "./types.ts";
 
 /** 設定で明示されたリポジトリ。`factory_repo`と`repo_allowlist`の各項目で、実体は`config.ts`にある。 */
@@ -170,6 +175,20 @@ export type PrConflictFixDeps = {
     repo: string,
     prNumber: number,
   ) => Promise<boolean>;
+  /**
+   * PRのブランチ名(`headRef`)が指すIssueの作業項目の状態を読む。
+   * 引けないとき(ブランチの形が違う、削除済み、別のリポジトリ)は`null`。
+   */
+  readonly readBranchItemStatus: (
+    owner: string,
+    repo: string,
+    headRef: string,
+  ) => Promise<WorkItemStatus | null>;
+  /**
+   * 行の猶予の起点(競合の回の開始時刻)を今に戻す(`restartPrConflictGrace`)。戻したら`true`。
+   * Factoryがブランチを引き継ぐ間は猶予を進めず、その状態を出た時点から数え直すために使う。
+   */
+  readonly restartGrace: (id: number) => Promise<boolean>;
   readonly getDefaultBranch: (owner: string, repo: string) => Promise<string>;
   readonly listCommits: (
     owner: string,
@@ -312,7 +331,10 @@ export type PrConflictWatchResult = {
   readonly held: number;
   /** 回復で、直す作業項目との結びを外した行の数。 */
   readonly released: number;
-  /** 直す作業項目が動いているので、通知も起動もせず待った行の数。 */
+  /**
+   * 通知も起動もせず待った行の数。直す作業項目が動いているときと、
+   * Factoryがブランチを引き継ぐ状態(要件定義から実装まで)にあるときである。
+   */
   readonly waiting: number;
   /** 閉じた行の数。PRが閉じたときと、設定が対象から外したときを含む。 */
   readonly closed: number;
@@ -1145,10 +1167,15 @@ async function recoverRow(
  * 作業項目が動く間に通知して人が直し始めると、人とFactoryが同じブランチへpushしうるためである。
  * 作業項目が終われば、回復が結びを外し、次の巡回で通常の判断に戻る。
  * 結びの無い行でも、競合を直す作業項目が動いていれば、猶予の後の通知を待つ。
+ * 通知に進む行は、通知の前にPRのブランチの作業項目の状態を読む。Factoryがブランチを引き継ぐ状態なら、
+ * 通知せずに待つ。設計や実装がpushする間は、人に直させないためである。
+ * 待つ行は、猶予の起点を今に戻す。その状態を出た後に、猶予が数え直される。
+ * 状態を読めなくても、通知は止めない。
  */
 async function decideRowAction(
   context: Context,
   row: PrConflictCheck,
+  headRef: string,
 ): Promise<"notify" | "defer" | "claim"> {
   if (row.fix_work_item_id !== null) return "defer";
   const { fix, log } = context.deps;
@@ -1167,6 +1194,13 @@ async function decideRowAction(
     isFinalPrConflictFixHold(row.fix_hold_reason)
   ) {
     return decision;
+  }
+  if (await isBranchHeld(context, fix, row, headRef)) {
+    // 有効にした時刻より前に始まった競合の起点は動かさない。動かすと、直す対象でなかった競合が対象になる。
+    if (row.episode_started_at.getTime() >= fix.enabledSince.getTime()) {
+      await restartGrace(context, fix, row);
+    }
+    return "defer";
   }
   // 行に結ばれていなくても、競合を直す作業項目が動いていることがある(古いイメージで止まった作業項目の自動の再開など)。
   // そのまま通知すると人とFactoryが同じブランチへpushしうるので、動く間は待つ。読めなくても、通知を止めない。
@@ -1205,6 +1239,51 @@ async function decideRowAction(
   return decideConflictNotify({ ...input, lastFixSettledAt });
 }
 
+/**
+ * PRのブランチの作業項目が、Factoryがブランチを引き継ぐ状態か。
+ * 読めなかったときは偽を返し、警告を残す。通知を止めないためである。
+ */
+async function isBranchHeld(
+  context: Context,
+  fix: PrConflictFixDeps,
+  row: PrConflictCheck,
+  headRef: string,
+): Promise<boolean> {
+  try {
+    return isBranchHeldForFixRounds(
+      await fix.readBranchItemStatus(row.owner, row.repo, headRef),
+    );
+  } catch (err) {
+    context.deps.log.warn(
+      "pr conflict could not read the work item of the branch",
+      { pr: pullRequestKey(rowRef(row)), error: errorMessage(err) },
+    );
+    return false;
+  }
+}
+
+/**
+ * 行の猶予の起点を今に戻す。戻せなくても例外を投げず、警告を残す。
+ * 戻せなかった行も、その状態の間は通知せずに待つので、通知が出るのは状態を出た後の次の巡回以降である。
+ */
+async function restartGrace(
+  context: Context,
+  fix: PrConflictFixDeps,
+  row: PrConflictCheck,
+): Promise<void> {
+  try {
+    await fix.restartGrace(row.id);
+  } catch (err) {
+    context.deps.log.warn(
+      "pr conflict could not restart the grace of the row",
+      {
+        pr: pullRequestKey(rowRef(row)),
+        error: errorMessage(err),
+      },
+    );
+  }
+}
+
 /** 通知に載せる保留の理由。起動の設定が無効なとき、語彙に無い理由のときは載せない。 */
 function noticeHold(
   context: Context,
@@ -1221,7 +1300,7 @@ async function handleUnnotified(
   row: PrConflictCheck,
   pr: PullRequest,
 ): Promise<void> {
-  const action = await decideRowAction(context, row);
+  const action = await decideRowAction(context, row, pr.headRef);
   if (action === "notify") {
     await notifyConflict(context, ref, row.id, noticeHold(context, row));
     return;
@@ -1256,6 +1335,7 @@ function claimReaders(
   ref: PullRequestRef,
   row: PrConflictCheck,
   names: { owner: string; repo: string },
+  headRef: string,
 ): ConflictFixClaimReaders {
   const { deps, facts } = context;
   const repo = repoKey(names);
@@ -1267,6 +1347,8 @@ function claimReaders(
     hasActiveFix: () =>
       fix.hasActiveFix(names.owner, names.repo, row.pr_number),
     readPr: () => deps.getPr(ref.owner, ref.repo, ref.number),
+    readBranchItemStatus: () =>
+      fix.readBranchItemStatus(names.owner, names.repo, headRef),
     readDefaultBranch: defaultBranch,
     readCommits: () => fix.listCommits(names.owner, names.repo, row.pr_number),
     hasSkillMarker: () =>
@@ -1315,7 +1397,7 @@ async function claimRow(
       maxRounds: fix.maxRounds,
       maxRoundsPerPr: fix.maxRoundsPerPr,
       now: deps.now(),
-      readers: claimReaders(context, fix, ref, row, names),
+      readers: claimReaders(context, fix, ref, row, names, pr.headRef),
     });
   } catch (err) {
     // 共有した読み取りの失敗は、同じ失敗が行の数だけ届く。1回の実行で1回だけ記録する。
@@ -1324,7 +1406,17 @@ async function claimRow(
     await absorbReadError(context, `claim_conflict_fix:${key}`, key, err);
     return;
   }
-  if (decision.kind === "skip") return;
+  if (decision.kind === "skip") {
+    if (decision.why === "branch_held") {
+      // 引き継ぐ間は猶予を進めない。その状態を出た時点から数え直す。
+      await restartGrace(context, fix, row);
+      context.counters.waiting += 1;
+      deps.log.info("pr conflict waits while the factory holds the branch", {
+        pr: key,
+      });
+    }
+    return;
+  }
   if (decision.kind === "hold") {
     if (
       row.fix_hold_reason !== decision.reason &&

@@ -213,9 +213,28 @@ describe("the prepare step of a conflict round", () => {
     ).toBe(1);
   });
 
-  test("gives the stop for a running implement flow the fixed note in a conflict round", async () => {
+  test("gives the stop for a parent that is being re-implemented the fixed note in a conflict round", async () => {
     const text = await source("pr_fix_prepare.ts");
-    expect(count(text, "CONFLICT_ROUND_DETAILS.implementRunning,")).toBe(2);
+    expect(count(text, "CONFLICT_ROUND_DETAILS.implementRunning,")).toBe(1);
+  });
+
+  test("reads the work item of the branch through the match that the watchers share", async () => {
+    const text = await source("pr_fix_prepare.ts");
+    expect(text).toMatch(/readBranchItemStatus\(/);
+  });
+
+  test("chooses the fixed note of the stop for the branch by the kind of the guard", async () => {
+    const text = await source("pr_fix_prepare.ts");
+    expect(text).toMatch(
+      /branchGuard\.kind === "design_stage"\s*\?\s*CONFLICT_ROUND_DETAILS\.designStage\s*:\s*CONFLICT_ROUND_DETAILS\.implementRunning/,
+    );
+  });
+
+  test("gives the stop for the branch the fixed note that the kind chose", async () => {
+    const text = await source("pr_fix_prepare.ts");
+    expect(text).toMatch(
+      /roundStopReason\(\s*conflictRound,\s*branchDetail,\s*branchGuard\.reason,?\s*\)/,
+    );
   });
 
   test("gives a head that moved while the base was merged the fixed note", async () => {
@@ -521,6 +540,7 @@ const DETAIL_HOLDS: readonly (readonly [
   ["treeChangedDuringChecks", null],
   ["worktreeBusy", null],
   ["implementRunning", null],
+  ["designStage", null],
 ];
 
 describe("the notes of a stopped conflict round", () => {

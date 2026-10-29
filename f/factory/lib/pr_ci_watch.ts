@@ -112,6 +112,7 @@ import {
   type GhOwnerOpenPrSnapshot,
   type GhRepoOpenPrSnapshot,
   type NoticeRecord,
+  type WorkItemStatus,
 } from "./types.ts";
 
 /** PRのCIの実行をGitHubから読めないことを知らせるnoticeの種類。 */
@@ -352,6 +353,15 @@ export type PrCiClaimDeps = {
     prNumber: number,
     headSha: string,
   ) => Promise<boolean>;
+  /**
+   * PRのブランチ名(`headRef`)が指すIssueの作業項目の状態を読む。
+   * 引けないとき(ブランチの形が違う、削除済み、別のリポジトリ)は`null`。
+   */
+  readonly readBranchItemStatus: (
+    owner: string,
+    repo: string,
+    headRef: string,
+  ) => Promise<WorkItemStatus | null>;
   readonly listCommits: (
     owner: string,
     repo: string,
@@ -2526,6 +2536,7 @@ function claimReaders(
   row: PrCiCheck,
   ref: PullRequestRef,
   names: { owner: string; repo: string },
+  headRef: string,
 ): FixClaimReaders {
   const { deps } = context;
   const repo = repoKey(ref);
@@ -2535,6 +2546,8 @@ function claimReaders(
     hasReview: () =>
       claim.hasReview(row.owner, row.repo, row.pr_number, row.head_sha),
     readPr: () => readPr(context, ref),
+    readBranchItemStatus: () =>
+      claim.readBranchItemStatus(names.owner, names.repo, headRef),
     readCommits: () => claim.listCommits(row.owner, row.repo, row.pr_number),
     hasSkillMarker: () => readSkillMarker(context, claim),
     classify: async (pr) => {
@@ -2601,7 +2614,7 @@ async function claimRow(
   const { deps, counters, state } = context;
   const snapshot = state.snapshots.get(prKey(ref));
   const names = snapshot === undefined ? null : canonicalRepoNames(snapshot);
-  if (names === null) {
+  if (snapshot === undefined || names === null) {
     deps.log.warn(
       "pr ci claim skipped a pull request without a repository name",
       {
@@ -2617,9 +2630,15 @@ async function claimRow(
     instanceName: deps.instanceName,
     maxRounds: claim.maxRounds,
     configMisfit: claim.configMisfit,
-    readers: claimReaders(context, claim, row, ref, names),
+    readers: claimReaders(context, claim, row, ref, names, snapshot.headRef),
   });
   if (decision.kind === "skip") {
+    if (decision.why === "branch_held") {
+      deps.log.info("pr ci fix waits while the factory holds the branch", {
+        repo: repoKey(row),
+        pr: row.pr_number,
+      });
+    }
     await touchSafely(context, row);
     return;
   }

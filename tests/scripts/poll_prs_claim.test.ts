@@ -1264,6 +1264,44 @@ describe("processPrDecisions", () => {
     expect(calls).toEqual(["startReview", "resolveNotices:factory:review"]);
   });
 
+  test("tells startReview that the label asked for the review", async () => {
+    const reasons: string[] = [];
+    const { handlers } = handlersWith({
+      startReview: async (_candidate, _context, reason) => {
+        reasons.push(reason);
+      },
+    });
+
+    await processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(reasons).toEqual(["label"]);
+  });
+
+  test("tells startReview that the detection asked for the review", async () => {
+    const reasons: string[] = [];
+    const { handlers } = handlersWith({
+      startReview: async (_candidate, _context, reason) => {
+        reasons.push(reason);
+      },
+    });
+
+    await processPrDecisions(
+      [REVIEW_BY_ASSIGNMENT],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(reasons).toEqual(["assignment"]);
+  });
+
   test("resolves the fix notices after the fix has started", async () => {
     const { handlers, calls } = handlersWith();
 

@@ -549,6 +549,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/console_redact` | script | [LIB] ジョブのログと結果の伏せ字 |
 | `f/factory/lib/freezes` | script | [LIB] スケジュールの凍結の純粋ロジック |
 | `f/factory/lib/freeze_apply` | script | [LIB] スケジュールの凍結の読み込みと追従 |
+| `f/factory/lib/branch_hold` | script | [LIB] ブランチを引き継ぐ状態の判定 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/metadata_hash` | script | [LIB] メタデータのhashの再計算 |

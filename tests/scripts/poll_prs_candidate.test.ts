@@ -37,6 +37,8 @@ const LABELS = { reviewLabel: "factory:review", fixLabel: "factory:fix" };
 const DEPS: BuildPrCandidateDeps = {
   latestPrWorkItem: async () => null,
   findApprovedWorkItemForIssue: async () => null,
+  readBranchStatus: async () => null,
+  hasStatusEventWithNote: async () => false,
 };
 
 const labeled = (login: string | null, label: string) =>
@@ -381,6 +383,8 @@ describe("buildPrCandidate with dependabot work items", () => {
         ? DEPENDABOT_ROW
         : null,
     findApprovedWorkItemForIssue: async () => null,
+    readBranchStatus: async () => null,
+    hasStatusEventWithNote: async () => false,
   };
 
   async function buildWithDependabot() {
@@ -486,6 +490,8 @@ describe("pr_review and pr_fix decisions with a row created by poll_dependabot",
         latestPrWorkItem: async (_owner, _repo, _number, opts) =>
           opts?.kind === undefined || opts.kind === "dependabot" ? row : null,
         findApprovedWorkItemForIssue: async () => null,
+        readBranchStatus: async () => null,
+        hasStatusEventWithNote: async () => false,
       },
     );
     const [decision] = decidePrActions(
@@ -643,5 +649,167 @@ describe("buildPrCandidate for a candidate that came from the table", () => {
 
   test("takes no argument that carries values read beforehand", () => {
     expect(buildPrCandidate.length).toBe(5);
+  });
+});
+
+// 設計の段階でレビューを保留した行の`head_sha`は、設計の段階が終わった後の自動検出を塞がない。
+describe("buildPrCandidate with a review held at the design stage", () => {
+  const HEAD_OF_WORLD = "aaaaaaa";
+  const HOLD_NOTE =
+    "review is not started while the branch's work item is in the design stage";
+
+  function reviewRow(status: WorkItem["status"]): WorkItem {
+    return {
+      id: 70,
+      cycle: 1,
+      source: "issue",
+      kind: "pr_review",
+      owner: FOUND.owner,
+      repo: FOUND.repo,
+      issue_number: null,
+      issue_url: null,
+      pr_number: FOUND.number,
+      title: "Fix the thing",
+      body: null,
+      status,
+      attempt: 1,
+      claimed_by: "octo-owner",
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: HEAD_OF_WORLD,
+      last_review_id: null,
+      last_comment_id: null,
+      last_review_comment_id: null,
+      observed_review_id: null,
+      observed_comment_id: null,
+      observed_review_comment_id: null,
+      fix_round: 0,
+      parent_work_item_id: null,
+      branch: null,
+      pr_url: null,
+      ci_check_id: null,
+      conflict_check_id: null,
+      conflict_episode: null,
+      design_attempt: 0,
+      created_at: new Date("2026-10-12T00:00:00Z"),
+      updated_at: new Date("2026-10-12T00:00:00Z"),
+    };
+  }
+
+  async function buildHeld(options: {
+    readonly row: WorkItem;
+    readonly branchStatus: WorkItem["status"] | null;
+    readonly held: boolean;
+  }) {
+    const fake = world({
+      labels: [],
+      headRepo: "octo-owner/atelier-works",
+      baseRepo: "octo-owner/atelier-works",
+      events: labelEventsOk([]),
+    });
+    const reads: string[] = [];
+    const deps: BuildPrCandidateDeps = {
+      latestPrWorkItem: async (_owner, _repo, _number, opts) =>
+        opts?.kind === undefined ? options.row : null,
+      findApprovedWorkItemForIssue: async () => null,
+      readBranchStatus: async () => {
+        reads.push("readBranchStatus");
+        return options.branchStatus;
+      },
+      hasStatusEventWithNote: async (id, toStatus, note) => {
+        reads.push(`hasStatusEventWithNote:${String(id)}:${toStatus}:${note}`);
+        return options.held;
+      },
+    };
+    const context = await buildPrCandidate(
+      { run: fake.run, ghToken: "tok" },
+      FOUND,
+      "octo-owner",
+      [],
+      LABELS,
+      deps,
+    );
+    return { candidate: context.candidate, reads };
+  }
+
+  test.each([
+    "designing",
+    "awaiting_design_approval",
+    "approved",
+    "implementing",
+  ] as const)(
+    "keeps the held head while the branch work item is %s",
+    async (branchStatus) => {
+      const { candidate } = await buildHeld({
+        row: reviewRow("blocked"),
+        branchStatus,
+        held: true,
+      });
+      expect(candidate.lastKnownHeadSha).toBe(HEAD_OF_WORLD);
+    },
+  );
+
+  test.each(["pr_open", "needs_human", "expired", "cancelled"] as const)(
+    "forgets the held head once the branch work item is %s",
+    async (branchStatus) => {
+      const { candidate } = await buildHeld({
+        row: reviewRow("blocked"),
+        branchStatus,
+        held: true,
+      });
+      expect(candidate.lastKnownHeadSha).toBeNull();
+    },
+  );
+
+  test("forgets the held head when the branch work item cannot be found", async () => {
+    const { candidate } = await buildHeld({
+      row: reviewRow("blocked"),
+      branchStatus: null,
+      held: true,
+    });
+    expect(candidate.lastKnownHeadSha).toBeNull();
+  });
+
+  test("looks for the hold by the design stage note on the blocked transition", async () => {
+    const { reads } = await buildHeld({
+      row: reviewRow("blocked"),
+      branchStatus: "pr_open",
+      held: true,
+    });
+    expect(reads).toContain(`hasStatusEventWithNote:70:blocked:${HOLD_NOTE}`);
+  });
+
+  test("keeps the head of a blocked review that was not held for the design stage", async () => {
+    const { candidate } = await buildHeld({
+      row: reviewRow("blocked"),
+      branchStatus: "pr_open",
+      held: false,
+    });
+    expect(candidate.lastKnownHeadSha).toBe(HEAD_OF_WORLD);
+  });
+
+  test("keeps the head of a finished review and reads nothing more", async () => {
+    const { candidate, reads } = await buildHeld({
+      row: reviewRow("reviewed"),
+      branchStatus: "pr_open",
+      held: true,
+    });
+    expect([candidate.lastKnownHeadSha, reads]).toEqual([HEAD_OF_WORLD, []]);
+  });
+
+  test("lets the next poll detect the review at the same head after the design stage", async () => {
+    const { candidate } = await buildHeld({
+      row: reviewRow("blocked"),
+      branchStatus: "needs_human",
+      held: true,
+    });
+    const [decision] = decidePrActions(
+      [candidate],
+      LABELS.reviewLabel,
+      LABELS.fixLabel,
+      { viewerLogin: "octo-owner", allowedLogins: [], allowedIds: {} },
+    );
+    expect(decision?.review.kind).toBe("trigger_review");
   });
 });

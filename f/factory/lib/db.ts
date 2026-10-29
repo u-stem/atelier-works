@@ -1235,15 +1235,24 @@ export type AutoRetryCandidate = {
   readonly id: number;
   readonly kind: (typeof AUTO_RETRY_KINDS)[number];
   readonly status: WorkItemStatus;
+  readonly owner: string;
+  readonly repo: string;
+  /** 実装が開いたPRのURL。終端でない回の有無を引くPRの番号を読む。 */
+  readonly pr_url: string | null;
   readonly attempt: number;
   /** 設計の承認の照合に使う。 */
   readonly design_attempt: number;
   readonly flow_job_id: string | null;
+  /** 通知の解決ではなく、ブランチのPRの終端でない回が終わるのを待って再開する理由で止まっているか。 */
+  readonly waits_for_pr_run: boolean;
 };
 
 /**
  * 止まった理由が`reasonPrefixes`のどれかで始まり、その止まった後に、本文に`noticeMarker`を含む
  * `noticeKind`のnoticeが`resolvedBy`に解決された作業項目を、IDの小さい順に`limit`件まで返す。
+ * 実装(`issue`)の`needs_human`は、止まった理由が`waitReasonPrefixes`のどれかで始まるものも返す。
+ * こちらはnoticeの解決を条件にしない。終端でない回が終わったかは、呼び出し側が`waits_for_pr_run`で見分けて確かめる。
+ * ただし、最新の注記を書いてから`waitMaxAgeMs`以内のものに限る。古い止まりは、人が再実行する。
  * 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`である。
  * 理由は、その状態へ移った最新の遷移の注記である。
  * 同じIssueに新しいサイクルがある`issue`は、新しいサイクルに置き換えられているので除く。
@@ -1264,6 +1273,8 @@ export type AutoRetryCandidate = {
 export async function listAutoRetryCandidates(
   params: {
     readonly reasonPrefixes: readonly string[];
+    readonly waitReasonPrefixes: readonly string[];
+    readonly waitMaxAgeMs: number;
     readonly noticeKind: string;
     readonly noticeMarker: string;
     readonly resolvedBy: string;
@@ -1275,7 +1286,11 @@ export async function listAutoRetryCandidates(
 ): Promise<AutoRetryCandidate[]> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const rows = await sql`
-    SELECT w.id, w.kind, w.status, w.attempt, w.design_attempt, w.flow_job_id
+    SELECT w.id, w.kind, w.status, w.owner, w.repo, w.pr_url, w.attempt, w.design_attempt, w.flow_job_id,
+      (w.kind = 'issue' AND EXISTS (
+        SELECT 1 FROM unnest(${[...params.waitReasonPrefixes]}::text[]) AS wp(prefix)
+        WHERE starts_with(last.note, wp.prefix)
+      )) AS waits_for_pr_run
     FROM factory.work_items w
     JOIN LATERAL (
       SELECT e.note, e.occurred_at FROM factory.work_item_events e
@@ -1287,9 +1302,29 @@ export async function listAutoRetryCandidates(
         OR (w.kind = 'pr_fix' AND w.status = 'blocked'))
       AND w.ci_check_id IS NULL
       AND w.conflict_check_id IS NULL
-      AND EXISTS (
-        SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
-        WHERE starts_with(last.note, p.prefix)
+      AND (
+        (
+          EXISTS (
+            SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
+            WHERE starts_with(last.note, p.prefix)
+          )
+          AND EXISTS (
+            SELECT 1 FROM factory.notices n
+            WHERE n.kind = ${params.noticeKind}
+              AND n.resolved = true
+              AND n.resolved_by = ${params.resolvedBy}
+              AND n.resolved_at > last.occurred_at
+              AND position(${params.noticeMarker} in n.message) > 0
+          )
+        )
+        OR (
+          w.kind = 'issue'
+          AND EXISTS (
+            SELECT 1 FROM unnest(${[...params.waitReasonPrefixes]}::text[]) AS wp(prefix)
+            WHERE starts_with(last.note, wp.prefix)
+          )
+          AND last.occurred_at > now() - (${params.waitMaxAgeMs}::double precision * interval '1 millisecond')
+        )
       )
       AND NOT EXISTS (
         SELECT 1 FROM factory.work_items newer
@@ -1314,14 +1349,6 @@ export async function listAutoRetryCandidates(
         SELECT count(*) FROM factory.work_item_events c
         WHERE c.work_item_id = w.id AND starts_with(c.note, ${params.notePrefix})
       ) < ${params.maxRestarts}::integer
-      AND EXISTS (
-        SELECT 1 FROM factory.notices n
-        WHERE n.kind = ${params.noticeKind}
-          AND n.resolved = true
-          AND n.resolved_by = ${params.resolvedBy}
-          AND n.resolved_at > last.occurred_at
-          AND position(${params.noticeMarker} in n.message) > 0
-      )
     ORDER BY w.id
     LIMIT ${params.limit}::integer
   `.fetch();
@@ -1329,9 +1356,13 @@ export async function listAutoRetryCandidates(
     id: parseId(row.id, "id"),
     kind: parseEnum(row.kind, AUTO_RETRY_KINDS, "kind"),
     status: parseEnum(row.status, WORK_ITEM_STATUSES, "status"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    pr_url: parseNullableString(row.pr_url, "pr_url"),
     attempt: parseRequiredNumber(row.attempt, "attempt"),
     design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
     flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
+    waits_for_pr_run: parseBoolean(row.waits_for_pr_run, "waits_for_pr_run"),
   }));
 }
 
@@ -1343,7 +1374,9 @@ export async function listAutoRetryCandidates(
  * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も、終端でない別の`pr_fix`も無く、
  * 止まった後に、本文に`noticeMarker`を含む`noticeKind`のnoticeが`resolvedBy`に解決されているときだけ更新し、
  * 同じ文で遷移の記録を残す。
- * 最後の条件は、候補の一覧を読んだ後に別の実行が再開し、同じ理由で止まり直した作業項目を、
+ * 実装(`issue`)の注記が`waitReasonPrefixes`のどれかで始まるときは、noticeの解決を条件にしない。
+ * その代わり、最新の注記を書いてから`waitMaxAgeMs`以内のものに限る。
+ * noticeの条件は、候補の一覧を読んだ後に別の実行が再開し、同じ理由で止まり直した作業項目を、
  * 新しい解決の無いまま再び再開しないための歯止めである。`clearFlowJobId`なら`flow_job_id`も空にする。
  * 条件に合わなければ何も書かずに`false`を返す。条件を確かめた後に別の`pr_fix`が先に稼働中になり、
  * 一意インデックスに阻まれたときも`false`を返す。人が先に再開した場合や、
@@ -1355,6 +1388,8 @@ export async function restartStoppedWorkItem(
     readonly expectedFrom: WorkItemStatus;
     readonly to: WorkItemStatus;
     readonly reasonPrefixes: readonly string[];
+    readonly waitReasonPrefixes: readonly string[];
+    readonly waitMaxAgeMs: number;
     readonly clearFlowJobId: boolean;
     readonly notePrefix: string;
     readonly maxRestarts: number;
@@ -1376,32 +1411,54 @@ export async function restartStoppedWorkItem(
       WHERE id = ${params.id}::bigint AND status = ${params.expectedFrom}
         AND ci_check_id IS NULL
         AND conflict_check_id IS NULL
-        AND EXISTS (
-          SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
-          WHERE starts_with((
-            SELECT e.note FROM factory.work_item_events e
-            WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
-            ORDER BY e.occurred_at DESC, e.id DESC
-            LIMIT 1
-          ), p.prefix)
+        AND (
+          (
+            EXISTS (
+              SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
+              WHERE starts_with((
+                SELECT e.note FROM factory.work_item_events e
+                WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+                ORDER BY e.occurred_at DESC, e.id DESC
+                LIMIT 1
+              ), p.prefix)
+            )
+            AND EXISTS (
+              SELECT 1 FROM factory.notices n
+              WHERE n.kind = ${params.noticeKind}
+                AND n.resolved = true
+                AND n.resolved_by = ${params.resolvedBy}
+                AND position(${params.noticeMarker} in n.message) > 0
+                AND n.resolved_at > (
+                  SELECT e.occurred_at FROM factory.work_item_events e
+                  WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+                  ORDER BY e.occurred_at DESC, e.id DESC
+                  LIMIT 1
+                )
+            )
+          )
+          OR (
+            kind = 'issue'
+            AND EXISTS (
+              SELECT 1 FROM unnest(${[...params.waitReasonPrefixes]}::text[]) AS wp(prefix)
+              WHERE starts_with((
+                SELECT e.note FROM factory.work_item_events e
+                WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+                ORDER BY e.occurred_at DESC, e.id DESC
+                LIMIT 1
+              ), wp.prefix)
+            )
+            AND (
+              SELECT e.occurred_at FROM factory.work_item_events e
+              WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+              ORDER BY e.occurred_at DESC, e.id DESC
+              LIMIT 1
+            ) > now() - (${params.waitMaxAgeMs}::double precision * interval '1 millisecond')
+          )
         )
         AND (
           SELECT count(*) FROM factory.work_item_events c
           WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
         ) < ${params.maxRestarts}::integer
-        AND EXISTS (
-          SELECT 1 FROM factory.notices n
-          WHERE n.kind = ${params.noticeKind}
-            AND n.resolved = true
-            AND n.resolved_by = ${params.resolvedBy}
-            AND position(${params.noticeMarker} in n.message) > 0
-            AND n.resolved_at > (
-              SELECT e.occurred_at FROM factory.work_item_events e
-              WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
-              ORDER BY e.occurred_at DESC, e.id DESC
-              LIMIT 1
-            )
-        )
         AND NOT EXISTS (
           SELECT 1 FROM factory.work_items newer
           WHERE factory.work_items.kind = 'issue' AND newer.kind = 'issue'
@@ -1721,6 +1778,27 @@ export async function hasIntakeRefreshEvent(
     SELECT 1 AS found FROM factory.work_item_events
     WHERE work_item_id = ${workItemId}::bigint
       AND starts_with(note, ${notePrefix})
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 作業項目が`toStatus`へ移った遷移の記録のうち、注記が`note`と完全に一致するものがあるかを返す。
+ * 前方一致にしないのは、別の理由の注記を同じ保留とみなさないためである。
+ * 設計の段階で保留した`pr_review`の行を、`poll_prs`が見分けるのに使う。
+ */
+export async function hasStatusEventWithNote(
+  workItemId: number,
+  toStatus: WorkItemStatus,
+  note: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1 AS found FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint
+      AND to_status = ${toStatus}
+      AND note = ${note}
     LIMIT 1
   `.fetch();
   return rows.length > 0;
@@ -6808,6 +6886,28 @@ export async function touchPrConflictCheck(
     UPDATE factory.pr_conflict_checks
     SET checked_at = now()
     WHERE id = ${id}::bigint
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 競合の行の猶予の起点(競合の回の開始時刻`episode_started_at`)を、DBの今に戻す。戻したら`true`を返す。
+ * Factoryがブランチを引き継ぐ間は猶予を進めず、その状態を出た時点から数え直すために使う。
+ * 競合のままで、通知しておらず、直す作業項目に結ばれていない行だけを書き換える。
+ * 通知した行や結ばれた行の起点は、別の判断が使うので動かさない。
+ * 回の番号、起動の回数、保留、読み直した時刻には触れない。
+ */
+export async function restartPrConflictGrace(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPositiveId(id, "pr conflict check id");
+  const rows = await sql`
+    UPDATE factory.pr_conflict_checks
+    SET episode_started_at = now()
+    WHERE id = ${id}::bigint
+      AND state = 'conflicted' AND notified_at IS NULL AND fix_work_item_id IS NULL
     RETURNING id
   `.fetch();
   return rows.length > 0;

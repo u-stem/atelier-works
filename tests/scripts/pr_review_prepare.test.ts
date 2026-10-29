@@ -6,16 +6,22 @@ import { describe, expect, test } from "bun:test";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { PullRequest } from "../../f/factory/lib/github.ts";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
+import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
   type BlockReviewDeps,
   type BlockReviewInput,
   blockReview,
   buildReviewWorktreeDir,
+  type HoldReviewDeps,
+  holdReview,
   prepareReviewWorktree,
   type ReviewPrepareDeps,
   type ReviewPrepareTarget,
 } from "../../f/factory/steps/pr_review_prepare.ts";
-import { decideReviewPrepare } from "../../f/factory/steps/pr_workflow_support.ts";
+import {
+  decideReviewPrepare,
+  REVIEW_DESIGN_STAGE_REASON,
+} from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("buildReviewWorktreeDir", () => {
   test("builds the review-<pr>-<sha7> path under the repo's parent dir", () => {
@@ -95,15 +101,19 @@ const TARGET: ReviewPrepareTarget = {
   pr_number: 7,
   parent_work_item_id: null,
   attempt: 1,
+  requested_by_label: false,
 };
 
 /** 呼ばれた入出力の名前を`calls`に順に記録する。 */
 function recordingDeps(
   headRepoFullName: string | null,
   ownerGate: RepoOwnerGateResult = { ok: true },
+  branchStatus: WorkItemStatus | null = null,
 ) {
   const calls: string[] = [];
   const blocked: string[] = [];
+  const held: string[] = [];
+  const headRefs: string[] = [];
   const deps: ReviewPrepareDeps = {
     checkRepoOwner: async () => {
       calls.push("checkRepoOwner");
@@ -133,8 +143,16 @@ function recordingDeps(
     blockReview: async (reason) => {
       blocked.push(reason);
     },
+    readBranchStatus: async (headRef) => {
+      calls.push("readBranchStatus");
+      headRefs.push(headRef);
+      return branchStatus;
+    },
+    holdReview: async (reason) => {
+      held.push(reason);
+    },
   };
-  return { deps, calls, blocked };
+  return { deps, calls, blocked, held, headRefs };
 }
 
 describe("blockReview", () => {
@@ -182,6 +200,30 @@ describe("blockReview", () => {
     const { deps, events } = blockDeps(false);
     await blockReview(INPUT, deps);
     expect(events).toEqual([]);
+  });
+});
+
+describe("holdReview", () => {
+  function holdDeps(moved: boolean) {
+    const transitions: unknown[][] = [];
+    const deps: HoldReviewDeps = {
+      updateStatusIfCurrent: async (...args) => {
+        transitions.push(args);
+        return moved;
+      },
+    };
+    return { deps, transitions };
+  }
+
+  test("moves the work item from reviewing to blocked with the reason as the note", async () => {
+    const { deps, transitions } = holdDeps(true);
+    await holdReview(
+      { work_item_id: 11, reason: REVIEW_DESIGN_STAGE_REASON },
+      deps,
+    );
+    expect(transitions).toEqual([
+      [11, "reviewing", "blocked", REVIEW_DESIGN_STAGE_REASON],
+    ]);
   });
 });
 
@@ -257,5 +299,139 @@ describe("prepareReviewWorktree", () => {
     const { deps, calls } = recordingDeps("octo-owner/atelier-works");
     await prepareReviewWorktree(TARGET, deps);
     expect(calls[0]).toBe("checkRepoOwner");
+  });
+});
+
+describe("prepareReviewWorktree while the branch designs", () => {
+  const SAME_REPO = "octo-owner/atelier-works";
+
+  test.each(["designing", "awaiting_design_approval"] as const)(
+    "skips with the design stage reason when the work item is %s",
+    async (status) => {
+      const { deps } = recordingDeps(SAME_REPO, { ok: true }, status);
+      const result = await prepareReviewWorktree(TARGET, deps);
+      expect(result).toMatchObject({
+        skip: true,
+        reason: REVIEW_DESIGN_STAGE_REASON,
+      });
+    },
+  );
+
+  test("holds the review with the design stage reason", async () => {
+    const { deps, held } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(TARGET, deps);
+    expect(held).toEqual([REVIEW_DESIGN_STAGE_REASON]);
+  });
+
+  test("does not notify a person of the hold", async () => {
+    const { deps, blocked } = recordingDeps(
+      SAME_REPO,
+      { ok: true },
+      "designing",
+    );
+    await prepareReviewWorktree(TARGET, deps);
+    expect(blocked).toEqual([]);
+  });
+
+  test("does not clone, fetch, or create a worktree for the hold", async () => {
+    const { deps, calls } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(TARGET, deps);
+    expect(calls).toEqual(["checkRepoOwner", "getPr", "readBranchStatus"]);
+  });
+
+  test("reads the work item of the head branch of the pull request", async () => {
+    const { deps, headRefs } = recordingDeps(
+      SAME_REPO,
+      { ok: true },
+      "designing",
+    );
+    await prepareReviewWorktree(TARGET, deps);
+    expect(headRefs).toEqual(["feature"]);
+  });
+
+  test.each(["implementing", "approved", "pr_open"] as const)(
+    "prepares the worktree when the work item is %s",
+    async (status) => {
+      const { deps } = recordingDeps(SAME_REPO, { ok: true }, status);
+      const result = await prepareReviewWorktree(TARGET, deps);
+      expect(result.skip).toBe(false);
+    },
+  );
+
+  test("prepares the worktree when no work item is found for the branch", async () => {
+    const { deps } = recordingDeps(SAME_REPO, { ok: true }, null);
+    const result = await prepareReviewWorktree(TARGET, deps);
+    expect(result.skip).toBe(false);
+  });
+
+  test("does not hold the review when the work item is not in the design stage", async () => {
+    const { deps, held } = recordingDeps(
+      SAME_REPO,
+      { ok: true },
+      "implementing",
+    );
+    await prepareReviewWorktree(TARGET, deps);
+    expect(held).toEqual([]);
+  });
+
+  test("keeps the fork reason ahead of the design stage", async () => {
+    const { deps, held } = recordingDeps(
+      "mallory/atelier-works",
+      { ok: true },
+      "designing",
+    );
+    await prepareReviewWorktree(TARGET, deps);
+    expect(held).toEqual([]);
+  });
+});
+
+// 人が`review_label`で頼んだレビューは、保留で黙って落とさず、人に知らせて終端にする。
+describe("prepareReviewWorktree for a review a person asked for by the label", () => {
+  const SAME_REPO = "octo-owner/atelier-works";
+  const LABEL_TARGET: ReviewPrepareTarget = {
+    ...TARGET,
+    requested_by_label: true,
+  };
+
+  test.each(["designing", "awaiting_design_approval"] as const)(
+    "blocks the review with the design stage reason when the work item is %s",
+    async (status) => {
+      const { deps, blocked } = recordingDeps(SAME_REPO, { ok: true }, status);
+      await prepareReviewWorktree(LABEL_TARGET, deps);
+      expect(blocked).toEqual([REVIEW_DESIGN_STAGE_REASON]);
+    },
+  );
+
+  test("does not hold silently what it notifies", async () => {
+    const { deps, held } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(held).toEqual([]);
+  });
+
+  test("skips with the design stage reason", async () => {
+    const { deps } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    const result = await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(result).toMatchObject({
+      skip: true,
+      reason: REVIEW_DESIGN_STAGE_REASON,
+    });
+  });
+
+  test("does not clone, fetch, or create a worktree for the block", async () => {
+    const { deps, calls } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(calls).toEqual(["checkRepoOwner", "getPr", "readBranchStatus"]);
+  });
+
+  test("prepares the worktree when the work item is not in the design stage", async () => {
+    const { deps } = recordingDeps(SAME_REPO, { ok: true }, "implementing");
+    const result = await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(result.skip).toBe(false);
+  });
+
+  test("still holds without a notice a review the detection started", async () => {
+    const { deps, held } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(TARGET, deps);
+    expect(held).toEqual([REVIEW_DESIGN_STAGE_REASON]);
   });
 });

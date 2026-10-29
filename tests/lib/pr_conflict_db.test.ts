@@ -13,6 +13,7 @@ import {
   markPrConflictNotified,
   recordPrConflict,
   releasePrConflictFix,
+  restartPrConflictGrace,
   setPrConflictFixHold,
   settlePrConflictCheck,
   touchPrConflictCheck,
@@ -303,6 +304,44 @@ describe("touchPrConflictCheck", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await touchPrConflictCheck(7, sql);
     expect(calls[0]?.text).toMatch(/SET checked_at = now\(\)\s+WHERE id =/);
+  });
+});
+
+describe("restartPrConflictGrace", () => {
+  test("sets the start of the episode to the time of the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await restartPrConflictGrace(7, sql);
+    expect(calls[0]?.text).toMatch(/SET episode_started_at = now\(\)/);
+  });
+
+  test("changes only a conflicted row that is neither notified nor bound to a work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await restartPrConflictGrace(7, sql);
+    expect(calls[0]?.text).toMatch(
+      /WHERE id =\s+\?\s*::bigint\s+AND state = 'conflicted' AND notified_at IS NULL AND fix_work_item_id IS NULL/,
+    );
+  });
+
+  test("does not touch the time of the last read", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await restartPrConflictGrace(7, sql);
+    expect(calls[0]?.text).not.toContain("checked_at");
+  });
+
+  test("returns true when it changed the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
+    expect(await restartPrConflictGrace(7, sql)).toBe(true);
+  });
+
+  test("returns false when the row did not match", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await restartPrConflictGrace(7, sql)).toBe(false);
+  });
+
+  test("rejects an id that is not a positive integer without touching the database", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await restartPrConflictGrace(0, sql).catch(() => undefined);
+    expect(calls).toEqual([]);
   });
 });
 

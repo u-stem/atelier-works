@@ -34,11 +34,15 @@ import {
   designGapRerouteRaceLostReason,
   designNeedsHumanFields,
   evaluateDesignGapRerouteParentStatus,
+  isReviewRequestedByLabel,
   nextActionFor,
+  nextActionForPrFix,
   PR_FIX_DESIGN_GAP_DISABLED_REASON,
   PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
   PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
   PR_FIX_DESIGN_STAGE_PARENT_REASON,
+  REVIEW_DESIGN_STAGE_REASON,
+  reviewRowBody,
   shouldAdvanceWatermarks,
   withGapReport,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -778,6 +782,86 @@ describe("the reason that stops the preparation while the parent designs", () =>
     expect(nextActionFor(PR_FIX_DESIGN_STAGE_PARENT_REASON, "pr_fix")).toBe(
       `設計の承認と、その後の実装の完了を待ってから、Windmillで\`${RETRY}\`を作業項目のIDで実行してください`,
     );
+  });
+});
+
+describe("the reasons that stop the preparation while the branch is held", () => {
+  const IMPLEMENTING =
+    "implementation of the branch's work item is running or about to run";
+  const DESIGN_STAGE = "the branch's work item is in the design stage";
+
+  test("translates the stop for an implementation that runs or is about to run", () => {
+    expect(describeReason(IMPLEMENTING)).toBe(
+      "このPRのブランチで実装フローが実行中か開始直前のため修正を止めました",
+    );
+  });
+
+  test("waits for the implementation before rerunning", () => {
+    expect(nextActionFor(IMPLEMENTING, "pr_fix")).toBe(
+      `実装フローの完了を待ってから、Windmillで\`${RETRY}\`を作業項目のIDで実行してください`,
+    );
+  });
+
+  test("translates the stop for the design stage", () => {
+    expect(describeReason(DESIGN_STAGE)).toBe(
+      "このPRのブランチの作業項目が設計の最中のため修正を止めました",
+    );
+  });
+
+  test("waits for the design and the implementation before rerunning", () => {
+    expect(nextActionFor(DESIGN_STAGE, "pr_fix")).toBe(
+      `設計の承認と、その後の実装の完了を待ってから、Windmillで\`${RETRY}\`を作業項目のIDで実行してください`,
+    );
+  });
+
+  test("keeps translating the earlier wording of the implementation stop", () => {
+    expect(
+      describeReason("implementation of the branch's work item is running"),
+    ).toBe("このPRのブランチで実装フローが実行中のため修正を止めました");
+  });
+
+  test("does not point a CI round to a rerun when the design stage stops it", () => {
+    expect(nextActionForPrFix(DESIGN_STAGE, true)).not.toContain(RETRY);
+  });
+});
+
+describe("the reason that holds the review while the branch designs", () => {
+  test("translates the hold", () => {
+    expect(describeReason(REVIEW_DESIGN_STAGE_REASON)).toBe(
+      "このPRのブランチの作業項目が設計の最中のため、レビューを始めませんでした",
+    );
+  });
+
+  test("tells the reader that nothing is required", () => {
+    expect(nextActionFor(REVIEW_DESIGN_STAGE_REASON)).toBe(
+      "対応は要りません。設計と実装が終わるか止まった後に、レビューが自動で付きます",
+    );
+  });
+
+  test("does not point to a rerun", () => {
+    expect(nextActionFor(REVIEW_DESIGN_STAGE_REASON)).not.toContain(RETRY);
+  });
+});
+
+describe("the mark of a review a person asked for by the label", () => {
+  test("is written to the body of a review started by the label", () => {
+    expect(reviewRowBody("label")).not.toBeNull();
+  });
+
+  test("is not written to the body of a review the detection started", () => {
+    expect(reviewRowBody("assignment")).toBeNull();
+  });
+
+  test("is read back from the body the label wrote", () => {
+    expect(isReviewRequestedByLabel(reviewRowBody("label"))).toBe(true);
+  });
+
+  test("is not read from an empty body", () => {
+    expect(isReviewRequestedByLabel(null)).toBe(false);
+  });
+
+  test("is not read from another body", () => {
+    expect(isReviewRequestedByLabel("review requested")).toBe(false);
   });
 });
 

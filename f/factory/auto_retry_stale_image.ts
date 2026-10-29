@@ -1,5 +1,5 @@
-// イメージが古くて止まった作業項目を、原因が直った後に再開するscript。
-// 自己更新(`self_update`)が、イメージが古いことを知らせる通知を自動で解決したときに起動する。
+// イメージが古くて止まった作業項目と、終端でない回を待つ実装を、原因が直った後に再開するscript。
+// 自己更新(`self_update`)が、イメージが古いことを知らせる通知を自動で解決したときと、再開できる候補が残っているときに起動する。
 // 候補の選び方、再開先、再開の回数の上限は`./lib/auto_retry.ts`にあり、このファイルは入出力をつなぐだけ。
 // 状態の交換は、止まった理由を条件にした比較と交換なので、人が先に`retry_work_item`で再開していたり、
 // 二重に起動したりしても、同じ作業項目を二度起動しない。
@@ -13,9 +13,14 @@ import {
   autoRetryCandidateQuery,
   retryStaleImageItems,
 } from "./lib/auto_retry.ts";
-import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
+import {
+  AUTO_RETRY_REASON_PREFIXES,
+  PR_RUN_WAIT_MAX_AGE_MS,
+  PR_RUN_WAIT_REASON_PREFIXES,
+} from "./lib/auto_retry_reasons.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
+  hasUnfinishedPrRun,
   latestDesignApproval,
   latestRequirementsApproval,
   listAutoRetryCandidates,
@@ -64,12 +69,15 @@ export async function main(): Promise<AutoRetryResult> {
       );
       return job.state !== "running" && job.state !== "unknown";
     },
+    hasUnfinishedPrRun,
     restart: (candidate, plan) =>
       restartStoppedWorkItem({
         id: candidate.id,
         expectedFrom: candidate.status,
         to: plan.toStatus,
         reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
+        waitReasonPrefixes: PR_RUN_WAIT_REASON_PREFIXES,
+        waitMaxAgeMs: PR_RUN_WAIT_MAX_AGE_MS,
         clearFlowJobId: plan.leased,
         notePrefix: AUTO_RETRY_NOTE_PREFIX,
         maxRestarts: AUTO_RETRY_MAX_RESTARTS,

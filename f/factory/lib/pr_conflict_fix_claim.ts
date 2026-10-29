@@ -4,6 +4,7 @@
 // 確かめる事実は、安く確かめられるものから順に、最初に当たった理由で止める。
 // 事実はすべて`ConflictFixClaimReaders`で渡し、必要になるまで読まない。テストで差し替える。
 
+import { isBranchHeldForFixRounds } from "./branch_hold.ts";
 import type { PrCommitMessages, PullRequest } from "./github.ts";
 import type { MainCiState } from "./main_ci_support.ts";
 import {
@@ -14,6 +15,7 @@ import {
   isFinalPrConflictFixHold,
   type PrConflictFixHoldReason,
 } from "./pr_conflict_support.ts";
+import type { WorkItemStatus } from "./types.ts";
 
 /**
  * 直近の直す作業項目が終わってから、次を起動しない時間(ミリ秒)。
@@ -27,6 +29,11 @@ export type ConflictFixClaimReaders = {
   readonly hasActiveFix: () => Promise<boolean>;
   /** PRを読み直す。作業項目の状態より後に読む。 */
   readonly readPr: () => Promise<PullRequest>;
+  /**
+   * PRのブランチが指すIssueの作業項目の状態。引けないとき(ブランチの形が違う、削除済み、別のリポジトリ)は`null`。
+   * PRを読み直した後に読む。
+   */
+  readonly readBranchItemStatus: () => Promise<WorkItemStatus | null>;
   /** リポジトリの既定のブランチの名前。 */
   readonly readDefaultBranch: () => Promise<string>;
   readonly readCommits: () => Promise<PrCommitMessages>;
@@ -60,7 +67,10 @@ export type ConflictFixClaimInput = {
 };
 
 /** 起動せず、行をそのままにする理由。次の巡回で読み直す。 */
-export type ConflictFixClaimSkipReason = "pr_closed" | "head_moved";
+export type ConflictFixClaimSkipReason =
+  | "pr_closed"
+  | "head_moved"
+  | "branch_held";
 
 export type ConflictFixClaimDecision =
   /** 起動してよい。`pr`は判定の途中で読み直したPRで、起動に使う。 */
@@ -77,6 +87,8 @@ function hold(reason: PrConflictFixHoldReason): ConflictFixClaimDecision {
  * 競合の行を起動してよいかを決める。次の順に確かめ、最初に当たったものを返す。
  * 1. 直す作業項目が動いていれば`last_fix_unsettled`で保留する。
  * 2. その後でPRを読み直す。閉じているか、headが行から進んでいれば、skipする。
+ *    続けて、PRのブランチが指すIssueの作業項目が、Factoryがブランチを引き継ぐ状態(`isBranchHeldForFixRounds`)なら、
+ *    `branch_held`でskipする。起動せず、ラウンドを数えず、保留も書かない。引き継ぐ間は、設計や実装がpushするためである。
  *    baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら
  *    `pr_draft_or_auto_merge`で保留する。
  *    作業項目の状態を先に読むのは、読んでいる間に直す作業項目がpushしたとき、
@@ -102,6 +114,9 @@ export async function decideConflictFixClaim(
   const pr = await readers.readPr();
   if (pr.state !== "open") return { kind: "skip", why: "pr_closed" };
   if (pr.headSha !== row.head_sha) return { kind: "skip", why: "head_moved" };
+  if (isBranchHeldForFixRounds(await readers.readBranchItemStatus())) {
+    return { kind: "skip", why: "branch_held" };
+  }
   if (pr.baseRef !== (await readers.readDefaultBranch())) {
     return hold("base_not_default");
   }

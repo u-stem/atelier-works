@@ -25,6 +25,10 @@
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
 import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
+import {
+  type BranchWorkItem,
+  readBranchItemStatus,
+} from "./lib/branch_hold.ts";
 import { dailyBudgetStatus } from "./lib/claude.ts";
 import { loadConfig } from "./lib/config.ts";
 import { hasConflictFixSkillMarker } from "./lib/conflict_fix_round.ts";
@@ -50,6 +54,7 @@ import {
   releasePrConflictFix,
   resolveNoticeIfUnresolved,
   resolveUnresolvedNoticesByPrefix,
+  restartPrConflictGrace,
   setFlowJobId,
   setPrConflictFixHold,
   settlePrConflictCheck,
@@ -95,6 +100,8 @@ export type ConflictFixLookups = {
   readonly getBranchSha: typeof getBranchSha;
   readonly getMainCiStateBySha: typeof getMainCiStateBySha;
   readonly getFileAtRef: typeof getFileAtRef;
+  readonly getWorkItem: (id: number) => Promise<BranchWorkItem | null>;
+  readonly restartPrConflictGrace: typeof restartPrConflictGrace;
 };
 
 /** 回復の依存が呼ぶ読み取りと書き込み。テストで差し替える。 */
@@ -132,6 +139,8 @@ export function buildConflictFixDeps(
     getBranchSha,
     getMainCiStateBySha,
     getFileAtRef,
+    getWorkItem,
+    restartPrConflictGrace,
     ...lookups,
   };
   const since = config.pr_conflict_fix_enabled_since;
@@ -143,6 +152,11 @@ export function buildConflictFixDeps(
     graceMin: config.pr_conflict_fix_notify_grace_min,
     hasActiveFix: async (owner, repo, prNumber) =>
       (await listActivePrFixWorkItems(owner, repo, prNumber)).length > 0,
+    readBranchItemStatus: (owner, repo, headRef) =>
+      readBranchItemStatus({ headRef, owner, repo }, (id) =>
+        read.getWorkItem(id),
+      ),
+    restartGrace: (id) => read.restartPrConflictGrace(id),
     getDefaultBranch: (owner, repo) => getDefaultBranch(client, owner, repo),
     listCommits: (owner, repo, prNumber) =>
       listPrCommitMessages(client, owner, repo, prNumber),

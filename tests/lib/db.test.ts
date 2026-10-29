@@ -54,6 +54,7 @@ import {
   hasPassedMainCiRunAfter,
   hasPriorReview,
   hasRequirementDraftAfter,
+  hasStatusEventWithNote,
   hasSupersedingPrReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -6370,9 +6371,35 @@ describe("hasIntakeRefreshEvent", () => {
   });
 });
 
+describe("hasStatusEventWithNote", () => {
+  test("is true when an event moved the work item to the status with the note", async () => {
+    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
+    expect(await hasStatusEventWithNote(1, "blocked", "held", sql)).toBe(true);
+  });
+
+  test("is false when no event matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasStatusEventWithNote(1, "blocked", "held", sql)).toBe(false);
+  });
+
+  test("binds the work item, the status, and the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasStatusEventWithNote(1, "blocked", "held", sql);
+    expect(calls[0]?.values).toEqual([1, "blocked", "held"]);
+  });
+
+  test("compares the note exactly, not by prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasStatusEventWithNote(1, "blocked", "held", sql);
+    expect(calls[0]?.text).not.toContain("starts_with");
+  });
+});
+
 describe("listAutoRetryCandidates", () => {
   const params = {
     reasonPrefixes: ["worker image is stale: "],
+    waitReasonPrefixes: ["pull request has an active fix run"],
+    waitMaxAgeMs: 86_400_000,
     noticeKind: "host_action_required",
     noticeMarker: "workerのイメージが古く",
     resolvedBy: "self_update",
@@ -6388,9 +6415,13 @@ describe("listAutoRetryCandidates", () => {
           id: "7",
           kind: "pr_fix",
           status: "blocked",
+          owner: "octo-owner",
+          repo: "atelier-works",
+          pr_url: null,
           attempt: 1,
           design_attempt: 0,
           flow_job_id: "job-1",
+          waits_for_pr_run: false,
         },
       ],
     ]);
@@ -6399,11 +6430,64 @@ describe("listAutoRetryCandidates", () => {
         id: 7,
         kind: "pr_fix",
         status: "blocked",
+        owner: "octo-owner",
+        repo: "atelier-works",
+        pr_url: null,
         attempt: 1,
         design_attempt: 0,
         flow_job_id: "job-1",
+        waits_for_pr_run: false,
       },
     ]);
+  });
+
+  test("reads the pull request url and whether the item waits for the runs", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 8,
+          kind: "issue",
+          status: "needs_human",
+          owner: "octo-owner",
+          repo: "atelier-works",
+          pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+          attempt: 2,
+          design_attempt: 0,
+          flow_job_id: null,
+          waits_for_pr_run: true,
+        },
+      ],
+    ]);
+    expect((await listAutoRetryCandidates(params, sql))[0]).toMatchObject({
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      waits_for_pr_run: true,
+    });
+  });
+
+  test("selects whether the item waits for the runs", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("AS waits_for_pr_run");
+  });
+
+  test("passes the reasons that wait for the runs as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContainEqual([
+      "pull request has an active fix run",
+    ]);
+  });
+
+  test("passes the age limit of the stop that waits for the runs as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContain(86_400_000);
+  });
+
+  test("limits the age of the stop that waits for the runs by the time of the latest note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("last.occurred_at > now() - (");
   });
 
   test("reads the design attempt of the work item", async () => {
@@ -6413,9 +6497,13 @@ describe("listAutoRetryCandidates", () => {
           id: 8,
           kind: "issue",
           status: "needs_human",
+          owner: "octo-owner",
+          repo: "atelier-works",
+          pr_url: null,
           attempt: 2,
           design_attempt: 3,
           flow_job_id: null,
+          waits_for_pr_run: false,
         },
       ],
     ]);
@@ -6437,8 +6525,13 @@ describe("listAutoRetryCandidates", () => {
           id: 7,
           kind: "audit",
           status: "blocked",
+          owner: "octo-owner",
+          repo: "atelier-works",
+          pr_url: null,
           attempt: 1,
+          design_attempt: 0,
           flow_job_id: null,
+          waits_for_pr_run: false,
         },
       ],
     ]);
@@ -6512,6 +6605,8 @@ describe("restartStoppedWorkItem", () => {
     expectedFrom: "needs_human",
     to: "implementing",
     reasonPrefixes: ["worker image is stale: "],
+    waitReasonPrefixes: ["pull request has an active fix run"],
+    waitMaxAgeMs: 86_400_000,
     clearFlowJobId: true,
     notePrefix: "auto_retry: ",
     maxRestarts: 3,
@@ -6541,6 +6636,26 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls[0]?.values).toContainEqual(["worker image is stale: "]);
+  });
+
+  test("passes the reasons that wait for the runs as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContainEqual([
+      "pull request has an active fix run",
+    ]);
+  });
+
+  test("passes the age limit of the stop that waits for the runs as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain(86_400_000);
+  });
+
+  test("limits the age of the stop that waits for the runs by the time of the latest note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("> now() - (");
   });
 
   test("passes the restart cap as a parameter", async () => {

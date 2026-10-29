@@ -11,7 +11,11 @@ import {
   retryStaleImageItems,
   shouldStartStaleImageRetry,
 } from "../../f/factory/lib/auto_retry.ts";
-import type { AutoRetryCandidate } from "../../f/factory/lib/db.ts";
+import {
+  PR_RUN_WAIT_MAX_AGE_MS,
+  PR_RUN_WAIT_REASON_PREFIXES,
+} from "../../f/factory/lib/auto_retry_reasons.ts";
+import type { AutoRetryCandidate, PrRunScope } from "../../f/factory/lib/db.ts";
 import {
   HOST_ACTION_RESOLVER,
   STALE_IMAGE_NOTICE_MARKER,
@@ -25,17 +29,32 @@ const ISSUE: AutoRetryCandidate = {
   id: 1,
   kind: "issue",
   status: "needs_human",
+  owner: "octo-owner",
+  repo: "atelier-works",
+  pr_url: null,
   attempt: 2,
   design_attempt: 0,
   flow_job_id: "old-job",
+  waits_for_pr_run: false,
 };
 const PR_FIX: AutoRetryCandidate = {
   id: 2,
   kind: "pr_fix",
   status: "blocked",
+  owner: "octo-owner",
+  repo: "atelier-works",
+  pr_url: null,
   attempt: 1,
   design_attempt: 0,
   flow_job_id: "old-job",
+  waits_for_pr_run: false,
+};
+/** 終端でない回が終わるのを待つ理由で止まった実装。 */
+const WAITING_ISSUE: AutoRetryCandidate = {
+  ...ISSUE,
+  id: 3,
+  pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+  waits_for_pr_run: true,
 };
 
 const quietLog: Logger = {
@@ -45,6 +64,7 @@ const quietLog: Logger = {
 };
 
 type Recorder = {
+  runQueries: { owner: string; repo: string; scope: PrRunScope }[];
   restarted: number[];
   launched: string[];
   recorded: { id: number; jobId: string; leased: boolean }[];
@@ -56,6 +76,7 @@ function fakeDeps(
   overrides: Partial<AutoRetryDeps> = {},
 ): { deps: AutoRetryDeps; rec: Recorder } {
   const rec: Recorder = {
+    runQueries: [],
     restarted: [],
     launched: [],
     recorded: [],
@@ -66,6 +87,10 @@ function fakeDeps(
     listCandidates: async () => candidates,
     isImplementReady: async () => true,
     isFlowJobFinished: async () => true,
+    hasUnfinishedPrRun: async (owner, repo, scope) => {
+      rec.runQueries.push({ owner, repo, scope });
+      return false;
+    },
     restart: async (candidate) => {
       rec.restarted.push(candidate.id);
       return true;
@@ -246,6 +271,90 @@ function warnCollector(): { log: Logger; warnings: string[] } {
   };
 }
 
+describe("retryStaleImageItems for an item that waits for the runs of its pull request", () => {
+  const unfinished = async () => true;
+
+  test("restarts the item at the implement flow when no run is unfinished", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE]);
+    await retryStaleImageItems(deps);
+    expect(rec.launched).toEqual([IMPLEMENT_FLOW_PATH]);
+  });
+
+  test("does not restart the item while a run of the pull request is unfinished", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE], {
+      hasUnfinishedPrRun: unfinished,
+    });
+    await retryStaleImageItems(deps);
+    expect(rec.restarted).toEqual([]);
+  });
+
+  test("counts the item that waits as skipped", async () => {
+    const { deps } = fakeDeps([WAITING_ISSUE], {
+      hasUnfinishedPrRun: unfinished,
+    });
+    expect((await retryStaleImageItems(deps)).skipped).toBe(1);
+  });
+
+  test("asks about the pull request number of the recorded url and the work item as the parent", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE]);
+    await retryStaleImageItems(deps);
+    expect(rec.runQueries).toEqual([
+      {
+        owner: "octo-owner",
+        repo: "atelier-works",
+        scope: { prNumbers: [7], parentWorkItemId: 3 },
+      },
+    ]);
+  });
+
+  test("asks only by the parent when no pull request url is recorded", async () => {
+    const { deps, rec } = fakeDeps([{ ...WAITING_ISSUE, pr_url: null }]);
+    await retryStaleImageItems(deps);
+    expect(rec.runQueries[0]?.scope).toEqual({
+      prNumbers: [],
+      parentWorkItemId: 3,
+    });
+  });
+
+  test("does not read the runs for an item that does not wait", async () => {
+    const { deps, rec } = fakeDeps([ISSUE, PR_FIX]);
+    await retryStaleImageItems(deps);
+    expect(rec.runQueries).toEqual([]);
+  });
+
+  test("does not restart the item that waits when the requirements are not approved", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE], {
+      isImplementReady: async () => false,
+    });
+    await retryStaleImageItems(deps);
+    expect(rec.restarted).toEqual([]);
+  });
+
+  test("does not restart the item that waits when implement is disabled", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE], {
+      implementEnabled: false,
+    });
+    await retryStaleImageItems(deps);
+    expect(rec.restarted).toEqual([]);
+  });
+
+  test("restarts the item that waits with the lease of the implement flow", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE]);
+    await retryStaleImageItems(deps);
+    expect(rec.recorded).toEqual([{ id: 3, jobId: JOB_ID, leased: true }]);
+  });
+
+  test("continues with the next item after the read of the runs fails", async () => {
+    const { deps, rec } = fakeDeps([WAITING_ISSUE, PR_FIX], {
+      hasUnfinishedPrRun: async () => {
+        throw new Error("db down");
+      },
+    });
+    await retryStaleImageItems(deps);
+    expect(rec.restarted).toEqual([2]);
+  });
+});
+
 describe("retryStaleImageItems edge cases", () => {
   const launchFails = async (): Promise<string> => {
     throw new Error("boom");
@@ -410,11 +519,24 @@ describe("autoRetryCandidateQuery", () => {
       STALE_IMAGE_NOTICE_MARKER,
     );
   });
+
+  test("passes the reasons that wait for the runs of the pull request", () => {
+    expect(autoRetryCandidateQuery(1).waitReasonPrefixes).toEqual(
+      PR_RUN_WAIT_REASON_PREFIXES,
+    );
+  });
+
+  test("limits the age of the stop that waits for the runs", () => {
+    expect(autoRetryCandidateQuery(1).waitMaxAgeMs).toBe(
+      PR_RUN_WAIT_MAX_AGE_MS,
+    );
+  });
 });
 
 describe("hasRetryableCandidate", () => {
   const ready = async () => true;
   const notReady = async () => false;
+  const noRun = async () => false;
 
   test("is true when a pr_fix candidate exists", async () => {
     expect(
@@ -422,6 +544,7 @@ describe("hasRetryableCandidate", () => {
         implementEnabled: false,
         listCandidates: async () => [PR_FIX],
         isImplementReady: notReady,
+        hasUnfinishedPrRun: noRun,
       }),
     ).toBe(true);
   });
@@ -432,6 +555,7 @@ describe("hasRetryableCandidate", () => {
         implementEnabled: true,
         listCandidates: async () => [ISSUE],
         isImplementReady: ready,
+        hasUnfinishedPrRun: noRun,
       }),
     ).toBe(true);
   });
@@ -442,6 +566,7 @@ describe("hasRetryableCandidate", () => {
         implementEnabled: true,
         listCandidates: async () => [ISSUE],
         isImplementReady: notReady,
+        hasUnfinishedPrRun: noRun,
       }),
     ).toBe(false);
   });
@@ -452,6 +577,7 @@ describe("hasRetryableCandidate", () => {
         implementEnabled: false,
         listCandidates: async () => [ISSUE],
         isImplementReady: ready,
+        hasUnfinishedPrRun: noRun,
       }),
     ).toBe(false);
   });
@@ -462,6 +588,7 @@ describe("hasRetryableCandidate", () => {
         implementEnabled: true,
         listCandidates: async () => [],
         isImplementReady: ready,
+        hasUnfinishedPrRun: noRun,
       }),
     ).toBe(false);
   });
@@ -472,6 +599,40 @@ describe("hasRetryableCandidate", () => {
         implementEnabled: true,
         listCandidates: async () => [ISSUE, PR_FIX],
         isImplementReady: notReady,
+        hasUnfinishedPrRun: noRun,
+      }),
+    ).toBe(true);
+  });
+
+  test("is true when an item that waits has no unfinished run", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [WAITING_ISSUE],
+        isImplementReady: ready,
+        hasUnfinishedPrRun: noRun,
+      }),
+    ).toBe(true);
+  });
+
+  test("is false when the only candidate waits for an unfinished run", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [WAITING_ISSUE],
+        isImplementReady: ready,
+        hasUnfinishedPrRun: async () => true,
+      }),
+    ).toBe(false);
+  });
+
+  test("finds a retryable candidate behind one that waits for an unfinished run", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [WAITING_ISSUE, PR_FIX],
+        isImplementReady: ready,
+        hasUnfinishedPrRun: async () => true,
       }),
     ).toBe(true);
   });

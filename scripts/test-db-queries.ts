@@ -53,6 +53,7 @@ import {
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
   hasRequirementDraftAfter,
+  hasStatusEventWithNote,
   hasSupersedingPrReview,
   insertApprovalRequest,
   insertCleanupRun,
@@ -126,6 +127,7 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  restartPrConflictGrace,
   restartStoppedWorkItem,
   restartTransientPrReview,
   returnToDesigningFromImplementingIfLeaseHolder,
@@ -4393,6 +4395,8 @@ execPsql(
 );
 const autoRetryParams = {
   reasonPrefixes: ["worker image is stale: "],
+  waitReasonPrefixes: ["qdb active run: "],
+  waitMaxAgeMs: 24 * 60 * 60 * 1000,
   noticeKind: "qdb_stale_image",
   noticeMarker: "qdb stale image probe",
   resolvedBy: "qdb",
@@ -4504,6 +4508,178 @@ check(
   "conflict round: a stopped round stays blocked",
   (await getWorkItem(conflictStopped, sql))?.status === "blocked",
 );
+
+// 終端でない回が終わるのを待つ理由で止まった実装は、解決された通知が無くても候補になり、再開できる。
+// 通知を条件にしないことを示すため、存在しない本文を通知の条件に渡す。
+const noNoticeParams = {
+  ...autoRetryParams,
+  noticeMarker: "qdb no such notice",
+};
+const waitingIssue = await issueWorkItem(9801, 1, "needs_human", "qdb waiting");
+event(waitingIssue, "needs_human", "qdb active run: busy");
+const waitRestartParams = {
+  ...noNoticeParams,
+  id: waitingIssue,
+  expectedFrom: "needs_human",
+  to: "implementing",
+  clearFlowJobId: true,
+  note: "auto_retry: restarted from needs_human",
+} as const;
+check(
+  "wait reason: an issue stopped by the reason is a candidate without a resolved notice",
+  (await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(waitingIssue),
+);
+check(
+  "wait reason: the candidate is marked as waiting for the runs",
+  (await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql)).find(
+    (candidate) => candidate.id === waitingIssue,
+  )?.waits_for_pr_run === true,
+);
+const staleImageFix = await prWorkItem(
+  "pr_fix",
+  9805,
+  "blocked",
+  "qdb stale image fix",
+);
+event(staleImageFix, "blocked", "worker image is stale: probe");
+check(
+  "wait reason: a candidate of the resolved notice is not marked as waiting",
+  (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql)).find(
+    (candidate) => candidate.id === staleImageFix,
+  )?.waits_for_pr_run === false,
+);
+const otherReasonIssue = await issueWorkItem(
+  9802,
+  1,
+  "needs_human",
+  "qdb other reason",
+);
+event(otherReasonIssue, "needs_human", "qdb another reason");
+check(
+  "wait reason: an issue stopped by another reason is not a candidate without a resolved notice",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(otherReasonIssue),
+);
+check(
+  "wait reason: an issue stopped by another reason is not restarted without a resolved notice",
+  (await restartStoppedWorkItem(
+    { ...waitRestartParams, id: otherReasonIssue },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+const waitingFix = await prWorkItem(
+  "pr_fix",
+  9803,
+  "blocked",
+  "qdb waiting fix",
+);
+event(waitingFix, "blocked", "qdb active run: busy");
+check(
+  "wait reason: a pr_fix stopped by the reason is not a candidate",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(waitingFix),
+);
+check(
+  "wait reason: a pr_fix stopped by the reason is not restarted",
+  (await restartStoppedWorkItem(
+    {
+      ...waitRestartParams,
+      id: waitingFix,
+      expectedFrom: "blocked",
+      to: "fixing",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+const exhaustedIssue = await issueWorkItem(
+  9804,
+  1,
+  "needs_human",
+  "qdb exhausted waiting",
+);
+for (let attempt = 0; attempt < 3; attempt += 1) {
+  event(
+    exhaustedIssue,
+    "implementing",
+    "auto_retry: restarted from needs_human",
+  );
+}
+event(exhaustedIssue, "needs_human", "qdb active run: busy");
+check(
+  "wait reason: an issue that used up its restarts is not a candidate",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(exhaustedIssue),
+);
+check(
+  "wait reason: an issue that used up its restarts is not restarted",
+  (await restartStoppedWorkItem(
+    { ...waitRestartParams, id: exhaustedIssue },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+// 待つ理由の止まりは、最新の注記が上限より古いと、候補にも再開にも入らない。
+const oldWaitingIssue = await issueWorkItem(
+  9806,
+  1,
+  "needs_human",
+  "qdb old waiting",
+);
+eventAgo(oldWaitingIssue, "needs_human", "qdb active run: busy", 25 * 60 * 60);
+check(
+  "wait reason: an issue stopped by the reason longer ago than the limit is not a candidate",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(oldWaitingIssue),
+);
+check(
+  "wait reason: an issue stopped by the reason longer ago than the limit is not restarted",
+  (await restartStoppedWorkItem(
+    { ...waitRestartParams, id: oldWaitingIssue },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+const recentWaitingIssue = await issueWorkItem(
+  9807,
+  1,
+  "needs_human",
+  "qdb recent waiting",
+);
+eventAgo(
+  recentWaitingIssue,
+  "needs_human",
+  "qdb active run: busy",
+  23 * 60 * 60,
+);
+check(
+  "wait reason: an issue stopped by the reason within the limit is a candidate",
+  (await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(recentWaitingIssue),
+);
+check(
+  "wait reason: an issue stopped by the reason is restarted without a resolved notice",
+  (await restartStoppedWorkItem(waitRestartParams, sql, NO_JOB_IDS)) === true,
+);
+check(
+  "wait reason: the restarted issue moved to implementing",
+  (await getWorkItem(waitingIssue, sql))?.status === "implementing",
+);
+check(
+  "wait reason: the restarted issue is not a candidate any more",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(waitingIssue),
+);
+
 // フロー自身が取り消した行(4つの注記)は数えず、同じheadを処理し直せる。
 // ほかの処理が取り消した行と、ほかの終端(終えた、失敗した)は処理済みとして数える。
 for (const [pr, status, note, counts] of [
@@ -6687,6 +6863,61 @@ check(
   Number((await cfRowOf(cfEpisode.id))?.fix_attempts) === 0 &&
     (await cfRowOf(cfEpisode.id))?.fix_hold_reason === null,
   await cfRowOf(cfEpisode.id),
+);
+
+// 猶予の起点だけを今に戻す。競合のままで、通知も結びも無い行だけを書き換える。
+const cfGrace = await conflictFixRow(790, CF_HEAD_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day' WHERE id = ${String(cfGrace.id)}`,
+);
+const cfGraceRestarted = await restartPrConflictGrace(cfGrace.id, sql);
+const cfGraceRow = await cfRowOf(cfGrace.id);
+check(
+  "conflict grace: restarting reports that it changed the row",
+  cfGraceRestarted === true,
+);
+check(
+  "conflict grace: restarting sets the start of the episode to now",
+  Date.now() - new Date(String(cfGraceRow?.episode_started_at)).getTime() <
+    60_000,
+  cfGraceRow,
+);
+check(
+  "conflict grace: restarting keeps the episode and the attempts",
+  Number(cfGraceRow?.episode) === cfGrace.episode &&
+    Number(cfGraceRow?.fix_attempts) === 0,
+  cfGraceRow,
+);
+const cfGraceBound = await conflictFixRow(791, CF_HEAD_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day', fix_work_item_id = 556 WHERE id = ${String(cfGraceBound.id)}`,
+);
+check(
+  "conflict grace: a row bound to a work item is not restarted",
+  (await restartPrConflictGrace(cfGraceBound.id, sql)) === false &&
+    Date.now() -
+      new Date(
+        String((await cfRowOf(cfGraceBound.id))?.episode_started_at),
+      ).getTime() >
+      60_000,
+);
+const cfGraceNotified = await conflictFixRow(792, CF_HEAD_1);
+await markPrConflictNotified(cfGraceNotified.id, sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day' WHERE id = ${String(cfGraceNotified.id)}`,
+);
+check(
+  "conflict grace: a notified row is not restarted",
+  (await restartPrConflictGrace(cfGraceNotified.id, sql)) === false,
+);
+const cfGraceSettled = await conflictFixRow(793, CF_HEAD_1);
+await settlePrConflictCheck(cfGraceSettled.id, "resolved", sql);
+check(
+  "conflict grace: a row that is no longer conflicted is not restarted",
+  (await restartPrConflictGrace(cfGraceSettled.id, sql)) === false,
 );
 
 // 後で適用するdown migrationが、新しい状態の行に引っかからないよう、この節で用意した行を消す。
@@ -11350,6 +11581,36 @@ check(
     },
     sql,
   )) > 0,
+);
+
+// 状態の遷移の記録を、遷移先の状態と注記の完全一致で引ける。
+// 注記に引用符を含んでも、束縛した値として照合する。
+const heldNote =
+  "review is not started while the branch's work item is in the design stage";
+const heldReview = await prWorkItem("pr_review", 9810, "reviewing", "qdb held");
+await updateStatusIfCurrent(heldReview, "reviewing", "blocked", heldNote, sql);
+check(
+  "hasStatusEventWithNote: finds the transition with the exact note",
+  await hasStatusEventWithNote(heldReview, "blocked", heldNote, sql),
+);
+check(
+  "hasStatusEventWithNote: does not match a note that only contains the text",
+  !(await hasStatusEventWithNote(heldReview, "blocked", "review is not", sql)),
+);
+check(
+  "hasStatusEventWithNote: does not match another status",
+  !(await hasStatusEventWithNote(heldReview, "reviewed", heldNote, sql)),
+);
+const otherReview = await prWorkItem(
+  "pr_review",
+  9811,
+  "reviewing",
+  "qdb other",
+);
+await updateStatusIfCurrent(otherReview, "reviewing", "blocked", "other", sql);
+check(
+  "hasStatusEventWithNote: does not match the transition of another work item",
+  !(await hasStatusEventWithNote(otherReview, "blocked", heldNote, sql)),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

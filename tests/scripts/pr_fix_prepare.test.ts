@@ -512,16 +512,40 @@ describe("evaluateBranchImplementingGuard", () => {
     expect(evaluateBranchImplementingGuard(null)).toEqual({ ok: true });
   });
 
-  test("passes when the branch's work item is not implementing", () => {
-    expect(evaluateBranchImplementingGuard("pr_open")).toEqual({ ok: true });
+  test.each([
+    "pr_open",
+    "needs_human",
+    "failed",
+    "rejected",
+    "requirements_generating",
+    "awaiting_approval",
+  ] as const)("passes when the branch's work item is %s", (status) => {
+    expect(evaluateBranchImplementingGuard(status)).toEqual({ ok: true });
   });
 
-  test("blocks while the branch's work item is implementing", () => {
-    expect(evaluateBranchImplementingGuard("implementing")).toEqual({
-      ok: false,
-      reason: "implementation of the branch's work item is running",
-    });
-  });
+  // 承認の後、実装が動き出す直前の状態も、実装と同じ種別で止める。
+  test.each(["implementing", "approved"] as const)(
+    "blocks as an implementation while the branch's work item is %s",
+    (status) => {
+      expect(evaluateBranchImplementingGuard(status)).toEqual({
+        ok: false,
+        kind: "implementing",
+        reason:
+          "implementation of the branch's work item is running or about to run",
+      });
+    },
+  );
+
+  test.each(["designing", "awaiting_design_approval"] as const)(
+    "blocks as the design stage while the branch's work item is %s",
+    (status) => {
+      expect(evaluateBranchImplementingGuard(status)).toEqual({
+        ok: false,
+        kind: "design_stage",
+        reason: "the branch's work item is in the design stage",
+      });
+    },
+  );
 });
 
 describe("prFixTimeoutMisfit", () => {
@@ -1316,9 +1340,9 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("waits for the fix run before re-running the implement flow", () => {
+  test("tells that the implement flow restarts by itself after the active run", () => {
     expect(nextActionFor("pull request has an active fix run")).toBe(
-      "自動修正の完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "対応は要りません。自動で再開します。3回再開しても止まるときだけ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

@@ -40,6 +40,7 @@ import {
 } from "./lib/console_worker.ts";
 import {
   addNoticeUnlessUnresolved,
+  hasUnfinishedPrRun,
   latestDesignApproval,
   latestRequirementsApproval,
   listAutoRetryCandidates,
@@ -1102,6 +1103,7 @@ async function updateSelf(
                   latestRequirementsApproval,
                   latestDesignApproval,
                 }),
+              hasUnfinishedPrRun,
             }),
           ),
         log,

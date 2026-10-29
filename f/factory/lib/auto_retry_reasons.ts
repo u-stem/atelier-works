@@ -25,6 +25,29 @@ export const STALE_IMAGE_NOTICE_MARKER = "workerのイメージが古く";
  */
 export const TRANSIENT_GITHUB_REASON_PREFIX = "github_transient: ";
 
+/**
+ * 実装の準備が、ブランチのPRで終端でないpr_fix / pr_reviewを見つけて止めた理由。
+ * 実装の支援(`implement_support.ts`)も同じ値をexportする。
+ */
+export const ACTIVE_PR_RUN_REASON = "pull request has an active fix run";
+
+/**
+ * 終端でない回が終わるまで待って再開する止まった理由の先頭。
+ * 通知の解決は待たない。再開の条件は、ブランチのPRに終端でない回が無いことである(`auto_retry.ts`)。
+ * 上の一覧(`AUTO_RETRY_REASON_PREFIXES`)とは分ける。上の一覧は、イメージが古い通知の解決を再開の条件にし、
+ * 回復の待ち時間の判定もそれを読む。ここに足した理由が、それらの判定に混ざらないようにするためである。
+ */
+export const PR_RUN_WAIT_REASON_PREFIXES: readonly string[] = [
+  ACTIVE_PR_RUN_REASON,
+];
+
+/**
+ * 待つ理由の止まりを自動で再開する、最新の注記を書いてからの経過時間の上限。
+ * これより古い止まりは、回の終了を待つ理由ではなくなっているので、人が再実行する。
+ * 反映の時点で残っている古い止まりを、一度にまとめて再開しないためである。
+ */
+export const PR_RUN_WAIT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 /** 自動で再開してよい止まった理由の先頭。 */
 export const AUTO_RETRY_REASON_PREFIXES: readonly string[] = [
   `${CHECK_IMAGE_STALE_REASON}: `,

@@ -7,6 +7,7 @@
 
 import { lstat, readlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import { isBranchGuardedStatus, isDesignStage } from "../lib/branch_hold.ts";
 import {
   CheckEnvironmentError,
   isCheckEnvironmentReason,
@@ -1287,18 +1288,69 @@ export function evaluateParentImplementingGuard(
 }
 
 /**
- * PRのブランチ名(`factory/issue-<N>-wi-<id>`)から引いた実装の作業項目が実装中なら止める。
+ * ブランチの作業項目が実装の段階(`implementing`、`approved`)にあるために、
+ * PRの修正の準備を止める理由。`approved`は、実装が動き出す直前の状態である。
+ */
+export const BRANCH_IMPLEMENTING_REASON =
+  "implementation of the branch's work item is running or about to run";
+
+/** ブランチの作業項目が設計の段階にあるために、PRの修正の準備を止める理由。 */
+export const BRANCH_DESIGN_STAGE_REASON =
+  "the branch's work item is in the design stage";
+
+/**
+ * ブランチの作業項目が設計の段階にあるために、PRのレビューを始めずに終端にする理由。
+ * 設計の承認の後の実装が同じブランチを引き継ぎ、実装の完了でレビューが自動に付く。
+ * 設計と実装が実装のpushなしに止まったときも、止まった後の巡回が同じheadのレビューを検出する。
+ * 人がラベルで頼んだレビューは、この理由で通知して終端にする。
+ */
+export const REVIEW_DESIGN_STAGE_REASON =
+  "review is not started while the branch's work item is in the design stage";
+
+/**
+ * 人が`review_label`で頼んだレビューの行の`body`に書く印。
+ * `pr_review`の行の`body`はほかに使われない。
+ * 準備が、設計の段階で止めるときに人へ知らせるかを決めるのに読む。
+ * 再実行はフローの入力を引き継がないが行は引き継ぐので、入力でなく行に残す。
+ */
+const REVIEW_BY_LABEL_BODY = "review requested by a person through the label";
+
+/** 新しい`pr_review`の行の`body`。ラベルが頼んだレビューにだけ印を書く。 */
+export function reviewRowBody(reason: "label" | "assignment"): string | null {
+  return reason === "label" ? REVIEW_BY_LABEL_BODY : null;
+}
+
+/** `pr_review`の行の`body`が、人がラベルで頼んだレビューの印か。 */
+export function isReviewRequestedByLabel(body: string | null): boolean {
+  return body === REVIEW_BY_LABEL_BODY;
+}
+
+/** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */
+export type BranchGuardKind = "implementing" | "design_stage";
+
+export type BranchGuardResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly kind: BranchGuardKind;
+      readonly reason: string;
+    };
+
+/**
+ * PRのブランチ名(`factory/issue-<N>-wi-<id>`)から引いた作業項目が、設計の段階から実装の間
+ * (`designing`、`awaiting_design_approval`、`approved`、`implementing`)なら止める。
+ * 設計や実装がそのブランチのworktreeを使うか、使う直前のためである。
+ * 設計の段階は`design_stage`、それ以外は`implementing`の種別で返し、種別ごとに固定の理由を返す。
+ * 要件定義の段階の状態では止めない。既存のレビュー回の挙動を変えないためである。
  * 親の行(parent_work_item_id)から引いた場合と理由を分けるのは、親の行が無いPRでも止まったことを読み手が見分けられるようにするためである。
  */
 export function evaluateBranchImplementingGuard(
   branchItemStatus: WorkItemStatus | null,
-): PrFixGuardResult {
-  return branchItemStatus === "implementing"
-    ? {
-        ok: false,
-        reason: "implementation of the branch's work item is running",
-      }
-    : { ok: true };
+): BranchGuardResult {
+  if (!isBranchGuardedStatus(branchItemStatus)) return { ok: true };
+  return isDesignStage(branchItemStatus)
+    ? { ok: false, kind: "design_stage", reason: BRANCH_DESIGN_STAGE_REASON }
+    : { ok: false, kind: "implementing", reason: BRANCH_IMPLEMENTING_REASON };
 }
 
 // ---------------------------------------------------------------------------
@@ -5221,7 +5273,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^pull request has an active fix run$/,
     describe: () => "このPRで自動修正が実行中のため実装を止めました",
-    nextAction: () => `自動修正の完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
+    // 回の終了後に自己更新が自動で再開するので、人の操作は上限に達したときだけ要る。
+    nextAction: () =>
+      `対応は要りません。自動で再開します。3回再開しても止まるときだけ、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^parent issue is being re-implemented$/,
@@ -5319,11 +5373,31 @@ export const REASON_RULES: readonly ReasonRule[] = [
       "(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
     ),
   },
+  // 記録済みの注記も訳せるよう、「or about to run」の無い文も受ける。
   {
-    pattern: /^implementation of the branch's work item is running$/,
-    describe: () =>
-      "このPRのブランチで実装フローが実行中のため修正を止めました",
+    pattern:
+      /^implementation of the branch's work item is running( or about to run)?$/,
+    describe: (m) =>
+      m[1] === undefined
+        ? "このPRのブランチで実装フローが実行中のため修正を止めました"
+        : "このPRのブランチで実装フローが実行中か開始直前のため修正を止めました",
     nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  // 人の操作は要らない終端の理由。検出が始めたレビューは通知せず、人がラベルで頼んだレビューには知らせる。
+  {
+    pattern:
+      /^review is not started while the branch's work item is in the design stage$/,
+    describe: () =>
+      "このPRのブランチの作業項目が設計の最中のため、レビューを始めませんでした",
+    nextAction: () =>
+      "対応は要りません。設計と実装が終わるか止まった後に、レビューが自動で付きます",
+  },
+  // ブランチの作業項目が設計の段階にある間は、設計の承認の後の実装が同じブランチを引き継ぐ。
+  {
+    pattern: /^the branch's work item is in the design stage$/,
+    describe: () =>
+      "このPRのブランチの作業項目が設計の最中のため修正を止めました",
+    ...procedureThenRerun("設計の承認と、その後の実装の完了を待ってから、"),
   },
   {
     pattern: /^worktree lock is held by a process this run left behind$/,

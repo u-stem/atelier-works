@@ -1,0 +1,9 @@
+summary: '[LIB] ブランチを引き継ぐ状態の判定'
+description: 内部ライブラリです。直接実行するものではありません。Factoryがブランチを引き継ぐ作業項目の状態の述語と、PRのブランチから作業項目を引く照合を置きます。
+lock: '!inline f/factory/lib/branch_hold.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

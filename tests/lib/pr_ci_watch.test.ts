@@ -82,6 +82,7 @@ import type {
   GhRepoFreshnessRow,
   GhRepoOpenPrSnapshot,
   NoticeRecord,
+  WorkItemStatus,
 } from "../../f/factory/lib/types.ts";
 import { ghApiOk } from "./testSupport.ts";
 
@@ -2937,6 +2938,8 @@ type ClaimSetup = {
   readonly candidates?: PrCiCheck[];
   readonly activeFix?: boolean;
   readonly review?: boolean;
+  /** ブランチの作業項目の状態。省略か`null`は、作業項目が引けないこと。 */
+  readonly branchItemStatus?: WorkItemStatus | null;
   readonly commits?: PrCommitMessages;
   readonly marker?: boolean;
   readonly jobs?: WorkflowRunJob[];
@@ -3004,6 +3007,8 @@ type ClaimHarness = {
   readonly listed: { since: Date; limit: number }[];
   readonly reads: Record<string, number>;
   readonly order: string[];
+  /** ブランチの作業項目を引いたときの引数。 */
+  readonly branchReads: unknown[][];
 };
 
 function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
@@ -3017,6 +3022,7 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
   const listed: ClaimHarness["listed"] = [];
   const reads: Record<string, number> = {};
   const order: string[] = [];
+  const branchReads: unknown[][] = [];
   const results = [...(setup.claimResults ?? [])];
   const count = (name: string) => {
     reads[name] = (reads[name] ?? 0) + 1;
@@ -3044,6 +3050,11 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     hasReview: async () => {
       count("review");
       return setup.review ?? true;
+    },
+    readBranchItemStatus: async (...args) => {
+      count("branch_item");
+      branchReads.push(args);
+      return setup.branchItemStatus ?? null;
     },
     listCommits: async () => {
       count("commits");
@@ -3117,6 +3128,7 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     listed,
     reads,
     order,
+    branchReads,
   };
 }
 
@@ -3133,6 +3145,83 @@ function claimSetup(c: ClaimHarness | null, overrides: Setup = {}): Setup {
     },
   };
 }
+
+describe("claiming a failed row: a branch that the factory holds", () => {
+  const HELD_STATUSES: WorkItemStatus[] = [
+    "requirements_generating",
+    "awaiting_approval",
+    "designing",
+    "awaiting_design_approval",
+    "approved",
+    "implementing",
+  ];
+
+  test.each(HELD_STATUSES)(
+    "does not claim while the branch is %s",
+    async (status) => {
+      const c = claimHarness({ branchItemStatus: status });
+      const h = harness(claimSetup(c));
+      await runPrCiWatch(h.deps);
+      expect(c.claims).toEqual([]);
+    },
+  );
+
+  test("does not launch a flow", async () => {
+    const c = claimHarness({ branchItemStatus: "implementing" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.launched).toEqual([]);
+  });
+
+  test("does not write a reason for holding the fix", async () => {
+    const c = claimHarness({ branchItemStatus: "implementing" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([]);
+  });
+
+  test("does not count a round", async () => {
+    const c = claimHarness({ branchItemStatus: "implementing" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.reads.rounds ?? 0).toBe(0);
+  });
+
+  test("does not count the row as claimed", async () => {
+    const c = claimHarness({ branchItemStatus: "implementing" });
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.claimed).toBe(0);
+  });
+
+  test("touches the row so that it is read again later", async () => {
+    const c = claimHarness({ branchItemStatus: "implementing" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+
+  test("asks for the work item of the branch with the spelling that the pull request shows", async () => {
+    const c = claimHarness({ branchItemStatus: "implementing" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.branchReads).toEqual([["Acme", "Widgets", BRANCH]]);
+  });
+
+  test("claims as before when the work item of the branch is not held", async () => {
+    const c = claimHarness({ branchItemStatus: "pr_open" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.launched).toEqual([NEW_ITEM_ID]);
+  });
+
+  test("claims as before when the work item of the branch cannot be found", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.launched).toEqual([NEW_ITEM_ID]);
+  });
+});
 
 describe("claiming a failed row", () => {
   test("launches the fix flow for a claimable row", async () => {

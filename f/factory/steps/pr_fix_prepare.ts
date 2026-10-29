@@ -2,6 +2,7 @@
 // 修正を始めてよいかを検査し、通ればPRのheadブランチのworktreeを用意する。
 
 import * as wmill from "windmill-client@1.817.0";
+import { readBranchItemStatus } from "../lib/branch_hold.ts";
 import {
   CheckEnvironmentError,
   checkImageGate,
@@ -32,7 +33,6 @@ import {
   gitIdentityForViewer,
 } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
-import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
 import {
   defaultLockReleaseDeps,
@@ -143,7 +143,8 @@ const NO_CONFLICT: ConflictPrepared = {
  * `commitAndPush`がそのブランチへpushし直すため。
  * 作ったworktreeは`.git`ファイルを1回だけ読んで検証し(`readAndVerifyWorktreeGitPointer`)、その中身を`worktree_git_pointer`として返す。
  * 検証に通らなければ例外を投げる。
- * PRのブランチ名から引いた実装の作業項目が`implementing`なら`guard_blocked`を返す。
+ * PRのブランチ名から引いた作業項目が、設計の段階から実装の間(`designing`、`awaiting_design_approval`、`approved`、`implementing`)なら`guard_blocked`を返す。
+ * 競合回では、止めた理由の注記を、設計の段階か実装かで分ける。
  * worktreeを前の実行のプロセスがまだ使っていれば、何も止めずに保持者を理由に載せて`guard_blocked`を返す。
  * `allowed_check_commands`があり、workerが検査を実行できないときと、枠の記録が指すworktreeを同じ理由で取り戻せないときは、
  * 要対応の通知を残して`guard_blocked`を返す。通知は、イメージが古ければ`host_action_required`、稼働中のworkerの問題なら`check_runtime_unsafe`である。
@@ -336,26 +337,22 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       };
     }
   }
-  // 親の行が無くても(parent_work_item_idがnull)、ブランチ名から実装の作業項目を引き、実装フローの実行中ならworktreeに触れない。
-  const branchItemId = parseImplementBranchWorkItemId(pr.headRef);
-  const branchItem =
-    branchItemId === null ? null : await getWorkItem(branchItemId);
+  // 親の行が無くても(parent_work_item_idがnull)、ブランチ名から作業項目を引き、設計の段階か実装の間ならworktreeに触れない。
+  // 競合回の注記は、ガードの種別で選ぶ。
   const branchGuard = evaluateBranchImplementingGuard(
-    branchItem !== null &&
-      branchItem.kind === "issue" &&
-      branchItem.owner === workItem.owner &&
-      branchItem.repo === workItem.repo
-      ? branchItem.status
-      : null,
+    await readBranchItemStatus(
+      { headRef: pr.headRef, owner: workItem.owner, repo: workItem.repo },
+      getWorkItem,
+    ),
   );
   if (!branchGuard.ok) {
+    const branchDetail =
+      branchGuard.kind === "design_stage"
+        ? CONFLICT_ROUND_DETAILS.designStage
+        : CONFLICT_ROUND_DETAILS.implementRunning;
     return {
       outcome: "guard_blocked",
-      reason: roundStopReason(
-        conflictRound,
-        CONFLICT_ROUND_DETAILS.implementRunning,
-        branchGuard.reason,
-      ),
+      reason: roundStopReason(conflictRound, branchDetail, branchGuard.reason),
       ...earlyExitBase(workItem),
     };
   }
