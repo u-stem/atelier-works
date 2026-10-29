@@ -103,6 +103,7 @@ describe("auto_retry_stale_image wiring", () => {
   test("gives the shared retry the reader of the unfinished runs", async () => {
     const source = await scriptSource();
 
-    expect(source).toMatch(/hasUnfinishedPrRun,\s/);
+    // import行には一致させず、depsの中の`restart:`の直前の行だけに一致させる。
+    expect(source).toMatch(/hasUnfinishedPrRun,\s*restart:/);
   });
 });
