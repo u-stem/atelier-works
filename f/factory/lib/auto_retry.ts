@@ -1,4 +1,4 @@
-// イメージが古くて止まった作業項目を、原因が直った後に自動で再開する。
+// 原因が直った後に、止まった作業項目を自動で再開する。
 //
 // 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`のうち、
 // 止まった理由が`AUTO_RETRY_REASON_PREFIXES`(`auto_retry_reasons.ts`)のどれかで始まるものである。
@@ -8,6 +8,10 @@
 //
 // 再開のきっかけは、イメージが古いことを知らせるnotice(`host_action_required`)を、
 // 自己更新が止まった後に自動で解決したことである(`listAutoRetryCandidates`)。
+//
+// もう1つの対象は、実装の準備が、ブランチのPRの終端でない回(`pr_fix`、`pr_review`)を見つけて止めた`needs_human`である
+// (`PR_RUN_WAIT_REASON_PREFIXES`)。noticeの解決は待たず、ブランチのPRに終端でない回が無くなったときに再開する。
+// 回が動いている間に再開すると、実装の準備がまた同じ理由で止まり、再開の回数を使うだけだからである。
 // 再開は`retry_work_item`と同じ遷移とフローの起動で行う。違いは次の点である。
 // - 状態の交換は、止まった理由も条件にする(`restartStoppedWorkItem`)。人が先に再開したり、
 //   別の理由で止まり直したりした作業項目は、再開しない。
@@ -23,9 +27,10 @@ import {
   AUTO_RETRY_REASON_PREFIXES,
   HOST_ACTION_NOTICE_KIND,
   HOST_ACTION_RESOLVER,
+  PR_RUN_WAIT_REASON_PREFIXES,
   STALE_IMAGE_NOTICE_MARKER,
 } from "./auto_retry_reasons.ts";
-import type { AutoRetryCandidate } from "./db.ts";
+import type { AutoRetryCandidate, PrRunScope } from "./db.ts";
 import {
   IMPLEMENT_FLOW_PATH,
   parseFlowJobId,
@@ -57,6 +62,7 @@ const PR_FIX_FLOW_PATH = "f/factory/pr_fix";
 export function autoRetryCandidateQuery(limit: number) {
   return {
     reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
+    waitReasonPrefixes: PR_RUN_WAIT_REASON_PREFIXES,
     noticeKind: HOST_ACTION_NOTICE_KIND,
     noticeMarker: STALE_IMAGE_NOTICE_MARKER,
     resolvedBy: HOST_ACTION_RESOLVER,
@@ -116,6 +122,12 @@ export type AutoRetryDeps = {
   ) => Promise<boolean>;
   /** 記録済みのflowジョブが終わっているか。動いているか状態を読めなければ`false`を返す。 */
   readonly isFlowJobFinished: (flowJobId: string | null) => Promise<boolean>;
+  /** 範囲のPRに、終端でない`pr_fix`か`pr_review`があるか(`hasUnfinishedPrRun`)。終端でない回を待つ理由の作業項目だけを調べる。 */
+  readonly hasUnfinishedPrRun: (
+    owner: string,
+    repo: string,
+    scope: PrRunScope,
+  ) => Promise<boolean>;
   /** 止まった理由を条件にした比較と交換(`restartStoppedWorkItem`)。移せたら`true`を返す。 */
   readonly restart: (
     candidate: AutoRetryCandidate,
@@ -153,6 +165,27 @@ function messageOf(err: unknown): string {
 
 type Outcome = "restarted" | "skipped" | "failed";
 
+/** PRのURL(`https://github.com/<owner>/<repo>/pull/<n>`)の末尾の番号。形が合わなければ空の一覧を返す。 */
+function prNumbersOfUrl(url: string | null): number[] {
+  const match = url === null ? null : /\/pull\/([1-9][0-9]*)$/.exec(url);
+  return match?.[1] === undefined ? [] : [Number(match[1])];
+}
+
+/**
+ * 終端でない回を待つ理由で止まった作業項目の、ブランチのPRに終端でない回が残っているか。
+ * 記録したPRのURLの番号と、作業項目を親に持つ回を調べる。待つ理由でなければ調べず、偽を返す。
+ */
+async function isWaitingForPrRun(
+  deps: Pick<AutoRetryDeps, "hasUnfinishedPrRun">,
+  candidate: AutoRetryCandidate,
+): Promise<boolean> {
+  if (!candidate.waits_for_pr_run) return false;
+  return deps.hasUnfinishedPrRun(candidate.owner, candidate.repo, {
+    prNumbers: prNumbersOfUrl(candidate.pr_url),
+    parentWorkItemId: candidate.id,
+  });
+}
+
 /** 再開先を決める。実装の要件が承認済みかを読んでから、`autoRetryPlan`で判定する。 */
 async function planFor(
   deps: Pick<AutoRetryDeps, "implementEnabled" | "isImplementReady">,
@@ -172,6 +205,15 @@ async function retryOne(
     deps.log.info("auto retry skipped: the work item cannot be restarted", {
       work_item_id: candidate.id,
     });
+    return "skipped";
+  }
+  if (await isWaitingForPrRun(deps, candidate)) {
+    deps.log.info(
+      "auto retry skipped: a run of the pull request is not finished",
+      {
+        work_item_id: candidate.id,
+      },
+    );
     return "skipped";
   }
   // 動いている古いフローと新しいフローが、同じ作業項目を同時に書き換えないようにする。
@@ -218,7 +260,7 @@ async function retryOne(
 }
 
 /**
- * イメージが古くて止まった作業項目を再開し、結果の件数を返す。例外は投げない。
+ * 止まった作業項目を再開し、結果の件数を返す。例外は投げない。
  * 作業項目ごとに失敗を分け、1件の失敗で残りを飛ばさない。
  */
 export async function retryStaleImageItems(
@@ -250,18 +292,24 @@ export async function retryStaleImageItems(
 }
 
 /**
- * 候補のうち、再開できるものが1件でもあるか。`autoRetryPlan`で、再開のscriptと同じ判定をする。
- * 要件が未承認のIssueや、`implement_enabled`が無効のIssueは、DBの候補に残り続けるが再開できない。
- * それらだけが残る間は、起動しても何もしないので、`false`を返す。
+ * 候補のうち、再開できるものが1件でもあるか。`autoRetryPlan`と終端でない回の有無で、再開のscriptと同じ判定をする。
+ * 要件が未承認のIssueや、`implement_enabled`が無効のIssue、終端でない回がまだ動いているIssueは、
+ * DBの候補に残り続けるが再開できない。それらだけが残る間は、起動しても何もしないので、`false`を返す。
  */
 export async function hasRetryableCandidate(
   deps: Pick<
     AutoRetryDeps,
-    "implementEnabled" | "listCandidates" | "isImplementReady"
+    | "implementEnabled"
+    | "listCandidates"
+    | "isImplementReady"
+    | "hasUnfinishedPrRun"
   >,
 ): Promise<boolean> {
   for (const candidate of await deps.listCandidates()) {
-    if ((await planFor(deps, candidate)) !== null) {
+    if (
+      (await planFor(deps, candidate)) !== null &&
+      !(await isWaitingForPrRun(deps, candidate))
+    ) {
       return true;
     }
   }

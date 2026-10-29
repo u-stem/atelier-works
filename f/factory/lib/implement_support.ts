@@ -8,6 +8,7 @@
 // 項目ごとに写したもので、`validateImplementOutput`はスキーマで表せない規則を持つ。
 
 import { createHash } from "node:crypto";
+import { ACTIVE_PR_RUN_REASON } from "./auto_retry_reasons.ts";
 import {
   COMMIT_MESSAGE_RULES,
   checkProseFields,
@@ -1051,7 +1052,7 @@ export function stallHash(text: string): string {
 // ブランチのPRで動いている修正・レビュー
 // ---------------------------------------------------------------------------
 
-export const ACTIVE_PR_RUN_REASON = "pull request has an active fix run";
+export { ACTIVE_PR_RUN_REASON };
 
 /** ブランチのPRで、終端に達していないpr_fix / pr_reviewがある(`hasUnfinishedPrRun`)。実装フローの準備はworktreeに触れずに止まる。 */
 export class ActivePrRunError extends Error {

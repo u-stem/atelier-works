@@ -6,6 +6,7 @@
 // worktreeを作る間にheadのshaが動いていないかを、最後にもう一度確かめる。
 
 import * as wmill from "windmill-client@1.817.0";
+import { isDesignStage, readBranchItemStatus } from "../lib/branch_hold.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -39,6 +40,7 @@ import {
   describeReason,
   evaluateSameRepoHeadGuard,
   nextActionFor,
+  REVIEW_DESIGN_STAGE_REASON,
 } from "./pr_workflow_support.ts";
 
 export type PrReviewPrepareResult = {
@@ -160,8 +162,19 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
         await addDetachedWorktree({ run: runCommand, ghToken, ...input });
       },
       setHeadSha,
-      readBranchStatus: async () => null,
-      holdReview: async () => {},
+      readBranchStatus: (headRef) =>
+        readBranchItemStatus(
+          { headRef, owner: workItem.owner, repo: workItem.repo },
+          getWorkItem,
+        ),
+      holdReview: async (reason) => {
+        await updateStatusIfCurrent(
+          work_item_id,
+          "reviewing",
+          "blocked",
+          reason,
+        );
+      },
       blockReview: async (reason) => {
         await blockReview(
           {
@@ -284,6 +297,7 @@ export type ReviewPrepareDeps = {
  * 作業項目を手で追加するなどの経路は止められない。
  * 通らないときは、forkの内容をcloneにもfetchにも入れず、worktreeも作らずに、
  * 同じく作業項目を`blockReview`で終端にして飛ばす。
+ * 最後に、PRのheadブランチが指す作業項目が設計の段階にあれば、通知せずに`holdReview`で終端にして飛ばす。
  */
 export async function prepareReviewWorktree(
   target: ReviewPrepareTarget,
@@ -305,6 +319,13 @@ export async function prepareReviewWorktree(
   if (!sameRepoHead.ok) {
     await deps.blockReview(sameRepoHead.reason);
     return { skip: true, reason: sameRepoHead.reason, ...SKIPPED_BASE };
+  }
+
+  // ブランチの作業項目が設計の段階にある間は、設計の承認の後の実装が同じブランチを引き継ぎ、実装の完了でレビューが付く。
+  // 人の操作は要らないので、通知せずに終端にする。作業項目が引けないときと、ほかの状態では止めない。
+  if (isDesignStage(await deps.readBranchStatus(prForRepoCheck.headRef))) {
+    await deps.holdReview(REVIEW_DESIGN_STAGE_REASON);
+    return { skip: true, reason: REVIEW_DESIGN_STAGE_REASON, ...SKIPPED_BASE };
   }
 
   const factoryClone = await deps.ensureFactoryClone();

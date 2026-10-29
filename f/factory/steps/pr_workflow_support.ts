@@ -1298,8 +1298,12 @@ export const BRANCH_IMPLEMENTING_REASON =
 export const BRANCH_DESIGN_STAGE_REASON =
   "the branch's work item is in the design stage";
 
-/** 設計の段階のPRのレビューを、始めずに終端にする理由。 */
-export const REVIEW_DESIGN_STAGE_REASON = "";
+/**
+ * ブランチの作業項目が設計の段階にあるために、PRのレビューを始めずに終端にする理由。
+ * 設計の承認の後の実装が同じブランチを引き継ぎ、実装の完了でレビューが自動に付く。
+ */
+export const REVIEW_DESIGN_STAGE_REASON =
+  "review is not started while the branch's work item is in the design stage";
 
 /** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */
 export type BranchGuardKind = "implementing" | "design_stage";
@@ -5356,6 +5360,15 @@ export const REASON_RULES: readonly ReasonRule[] = [
         ? "このPRのブランチで実装フローが実行中のため修正を止めました"
         : "このPRのブランチで実装フローが実行中か開始直前のため修正を止めました",
     nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  // 通知しない終端の理由。人の操作は要らない。
+  {
+    pattern:
+      /^review is not started while the branch's work item is in the design stage$/,
+    describe: () =>
+      "このPRのブランチの作業項目が設計の最中のため、レビューを始めませんでした",
+    nextAction: () =>
+      "対応は要りません。設計の承認と実装の完了の後に、レビューが自動で付きます",
   },
   // ブランチの作業項目が設計の段階にある間は、設計の承認の後の実装が同じブランチを引き継ぐ。
   {
