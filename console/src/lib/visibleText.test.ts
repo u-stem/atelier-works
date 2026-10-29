@@ -246,8 +246,24 @@ describe("visibleText space-run", () => {
     expect(kinds("a\u3000b")).toEqual(["plain", "code", "plain"]);
   });
 
-  test("marks two ideographic spaces in a row in the middle of a line", () => {
-    expect(spaceRuns("a\u3000\u3000b")).toHaveLength(1);
+  test("leaves two ideographic spaces in a row in the middle of a line", () => {
+    expect(spaceRuns("x\u3000\u3000y")).toEqual([]);
+  });
+
+  test("leaves seven ideographic spaces in a row", () => {
+    expect(spaceRuns(`a${"\u3000".repeat(7)}b`)).toEqual([]);
+  });
+
+  test("marks four ideographic spaces and a tab as eight columns", () => {
+    expect(spaceRuns(`a${"\u3000".repeat(4)}\tb`)).toHaveLength(1);
+  });
+
+  test("marks six ideographic spaces and two spaces as eight columns", () => {
+    expect(spaceRuns(`a${"\u3000".repeat(6)}  b`)).toHaveLength(1);
+  });
+
+  test("leaves an ideographic space next to a no-break space", () => {
+    expect(spaceRuns("a\u3000\u00A0b")).toEqual([]);
   });
 
   test("marks two no-break spaces in a row in the middle of a line", () => {
@@ -335,8 +351,8 @@ describe("countDesignAnomalies", () => {
     expect(countDesignAnomalies("# 設計\u3000書\n").total).toBe(0);
   });
 
-  test("counts two ideographic spaces in a row as a space run", () => {
-    expect(countDesignAnomalies("a\u3000\u3000b").spaceRuns).toBe(1);
+  test("does not count two ideographic spaces in a row as a space run", () => {
+    expect(countDesignAnomalies("x\u3000\u3000y").spaceRuns).toBe(0);
   });
 
   test("does not count two ideographic spaces as invisible characters", () => {
@@ -372,12 +388,37 @@ describe("countDesignAnomalies", () => {
     expect(countDesignAnomalies("aابb").strongRtl).toBe(2);
   });
 
-  test("does not count an Arabic-Indic digit as a strong right to left character", () => {
-    expect(countDesignAnomalies("a\u0660b").strongRtl).toBe(0);
+  test("counts an Arabic-Indic digit in the right to left range", () => {
+    expect(countDesignAnomalies("a\u0660b").strongRtl).toBe(1);
   });
 
-  test("does not count ornate parentheses in the right to left range", () => {
-    expect(countDesignAnomalies("a\uFD3Eb").strongRtl).toBe(0);
+  test("counts ornate parentheses in the right to left range", () => {
+    expect(countDesignAnomalies("a\uFD3Eb").strongRtl).toBe(1);
+  });
+
+  test.each([
+    ["Hebrew maqaf", "\u05BE"],
+    ["Hebrew paseq", "\u05C0"],
+    ["Hebrew sof pasuq", "\u05C3"],
+    ["Hebrew geresh", "\u05F3"],
+    ["Hebrew gershayim", "\u05F4"],
+    ["Nko digit zero", "\u07C0"],
+    ["Nko digit nine", "\u07C9"],
+    ["Nko dorme sign", "\u07FE"],
+    ["Arabic question mark", "\u061F"],
+    ["Arabic full stop", "\u06D4"],
+    ["Arabic ligature rial sign", "\uFDFC"],
+    ["Adlam digit zero", "\u{1E950}"],
+  ])("counts the %s as a strong right to left character", (_name, char) => {
+    expect(countDesignAnomalies(`a${char}b`).strongRtl).toBe(1);
+  });
+
+  test("does not count a Hebrew point that is already notated", () => {
+    expect(countDesignAnomalies("a\u05B0b").strongRtl).toBe(0);
+  });
+
+  test("does not count an unassigned code point in the right to left range", () => {
+    expect(countDesignAnomalies("a\u0590b").strongRtl).toBe(0);
   });
 
   test("counts an Arabic letter mark as an invisible character", () => {
@@ -448,6 +489,62 @@ describe("countDesignAnomalies", () => {
     expect(countDesignAnomalies("[空白 １２ 個]").markLookalikes).toBe(1);
   });
 
+  test("counts a mark with Arabic-Indic digits", () => {
+    expect(countDesignAnomalies("[空行 \u0665 行]").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with kanji digits", () => {
+    expect(countDesignAnomalies("[空行 五 行]").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with kanji digits of two places", () => {
+    expect(countDesignAnomalies("[空白 十二 個]").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with lenticular brackets", () => {
+    expect(countDesignAnomalies("【空行 5 行】").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with tortoise shell brackets", () => {
+    expect(countDesignAnomalies("〔空白 5 個〕").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with full-width square brackets and kanji digits", () => {
+    expect(countDesignAnomalies("［空白 九 個］").markLookalikes).toBe(1);
+  });
+
+  test("does not count a mark that a line encloses in backticks", () => {
+    expect(countDesignAnomalies("`[空行 5 行]`").markLookalikes).toBe(0);
+  });
+
+  test("does not count a mark in backticks inside a sentence", () => {
+    expect(
+      countDesignAnomalies("画面は`[空白 9 個]`と出す。").markLookalikes,
+    ).toBe(0);
+  });
+
+  test("counts a mark with a backtick only before it", () => {
+    expect(countDesignAnomalies("`[空行 5 行]").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with a backtick only after it", () => {
+    expect(countDesignAnomalies("[空行 5 行]`").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with text between it and the backticks", () => {
+    expect(countDesignAnomalies("` [空行 5 行] `").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark whose backticks are on other lines", () => {
+    expect(countDesignAnomalies("`\n[空行 5 行]\n`").markLookalikes).toBe(1);
+  });
+
+  test("counts the marks outside backticks when one is enclosed", () => {
+    expect(
+      countDesignAnomalies("`[空行 5 行]` [空行 5 行]").markLookalikes,
+    ).toBe(1);
+  });
+
   test("counts a mark without spaces", () => {
     expect(countDesignAnomalies("[空行5行]").markLookalikes).toBe(1);
   });
@@ -508,8 +605,32 @@ describe("countDesignAnomalies for combining marks", () => {
     expect(countDesignAnomalies("漢\u3099").invisible).toBe(1);
   });
 
-  test("does not count a single combining mark after a kanji", () => {
-    expect(countDesignAnomalies("漢\u0301").invisible).toBe(0);
+  test("counts a combining mark after a kanji", () => {
+    expect(countDesignAnomalies("漢\u0301").invisible).toBe(1);
+  });
+
+  test("counts a combining mark other than a sound mark after a kana", () => {
+    expect(countDesignAnomalies("か\u0336").invisible).toBe(1);
+  });
+
+  test("counts an enclosing mark after a kanji", () => {
+    expect(countDesignAnomalies("漢\u20DD").invisible).toBe(1);
+  });
+
+  test("counts a combining mark of a rare script between a kanji and a digit", () => {
+    expect(countDesignAnomalies("漢\u{16FE4}4").invisible).toBe(1);
+  });
+
+  test("does not count the decomposed form of a voiced kana", () => {
+    expect(countDesignAnomalies("が".normalize("NFD")).invisible).toBe(0);
+  });
+
+  test("counts the decomposed form of a Latin letter", () => {
+    expect(countDesignAnomalies("é".normalize("NFD")).invisible).toBe(1);
+  });
+
+  test("counts a combining mark after a sound mark that follows a kana", () => {
+    expect(countDesignAnomalies("か\u3099\u0301").invisible).toBe(2);
   });
 
   test("counts a combining mark after a space", () => {
@@ -737,6 +858,7 @@ describe("designApprovalBlock", () => {
     ["one tab in a line", "a\tb"],
     ["an indent of seven tabs", `a\n${"\t".repeat(7)}b`],
     ["two ideographic spaces of an indent", "\u3000\u3000本文です。"],
+    ["two ideographic spaces in a line", "x\u3000\u3000y"],
   ])("lets a design with %s through", (_name, text) => {
     expect(designApprovalBlock(withDoc({ text }))).toBeNull();
   });

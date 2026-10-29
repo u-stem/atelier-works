@@ -25,18 +25,26 @@ const MAX_CODE_POINT = 0x10ffff;
 /** 表記の対象に足す分類。U+0020は素通りなので、判定で除く。 */
 const EXTRA_NOTATION = /^[\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}]$/u;
 
+/** 表記にしても、単独では件数に数えない空白。U+0020は表記にしない。 */
+const SPACE_SEPARATOR = /^\p{Zs}$/u;
+
 /**
- * 右から左へ書く文字体系の文字(`\p{L}`)。`visibleText`の範囲の表とは別に、Unicodeの文字体系から作る。
+ * 右から左へ書く文字体系の、文字・数字・句読点・記号(`\p{L}\p{N}\p{P}\p{S}`)。
+ * `visibleText`の範囲の表とは別に、Unicodeの文字体系から作る。
  * 数える側に1つも漏れないことを、表の写しでなく、この集合で確かめる。
+ * 結合文字や書式文字などは、表記の分類が数えるので、ここに含めない。
  */
-const RTL_SCRIPT_LETTER =
-  /^(?=\p{L})[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}\p{Script=Hanifi_Rohingya}]$/u;
+const RTL_SCRIPT_CHARACTER =
+  /^(?=[\p{L}\p{N}\p{P}\p{S}])[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}\p{Script=Hanifi_Rohingya}]$/u;
 
-/** 左から右へ書く、広く使われる文字体系の文字。数えてはならない。 */
-const LTR_SCRIPT_LETTER =
-  /^(?=\p{L})[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
+/** 左から右へ書く、広く使われる文字体系の文字・数字・句読点・記号。数えてはならない。 */
+const LTR_SCRIPT_CHARACTER =
+  /^(?=[\p{L}\p{N}\p{P}\p{S}])[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
 
-const LETTER = /^\p{L}$/u;
+const KANA = /^[\p{Script=Hiragana}\p{Script=Katakana}]$/u;
+
+/** 濁点と半濁点(NFDの形)。 */
+const KANA_SOUND_MARKS = ["\u3099", "\u309A"];
 
 function codePointString(codePoint: number): string {
   return String.fromCodePoint(codePoint);
@@ -47,6 +55,14 @@ function expectedNotated(char: string): boolean {
   if (INVISIBLE_PATTERN.test(char)) return true;
   if (!isAllowedCharacter(char)) return true;
   return char !== " " && EXTRA_NOTATION.test(char);
+}
+
+/**
+ * 件数に数えるか。表記になる文字のうち、U+0020以外の空白は、単独では数えない。
+ * 基底がラテン文字の`a`なので、濁点と半濁点も数える。
+ */
+function expectedInvisible(char: string): boolean {
+  return expectedNotated(char) && !SPACE_SEPARATOR.test(char);
 }
 
 function notatedSources(text: string): string[] {
@@ -63,8 +79,10 @@ type Scan = {
   readonly notRestored: number[];
   readonly notatedCount: number;
   readonly rtlMissed: number[];
-  readonly rtlOnNonLetter: number[];
-  readonly rtlOnLtrLetter: number[];
+  readonly rtlOnLtrCharacter: number[];
+  readonly invisibleWrong: number[];
+  readonly kanaSoundMarkCounted: number[];
+  readonly kanaOtherMarkNotCounted: number[];
   readonly rtlScriptCount: number;
 };
 
@@ -82,8 +100,10 @@ function scan(): Scan {
   const wrongLabel: number[] = [];
   const notRestored: number[] = [];
   const rtlMissed: number[] = [];
-  const rtlOnNonLetter: number[] = [];
-  const rtlOnLtrLetter: number[] = [];
+  const rtlOnLtrCharacter: number[] = [];
+  const invisibleWrong: number[] = [];
+  const kanaSoundMarkCounted: number[] = [];
+  const kanaOtherMarkNotCounted: number[] = [];
   let rtlScriptCount = 0;
   let notatedCount = 0;
   for (let codePoint = 0; codePoint <= MAX_CODE_POINT; codePoint += 1) {
@@ -105,14 +125,30 @@ function scan(): Scan {
       wrongLabel.push(codePoint);
     }
     if (restoreText(segments) !== text) notRestored.push(codePoint);
-    const rtl = countDesignAnomalies(text).strongRtl;
-    if (RTL_SCRIPT_LETTER.test(char)) {
+    const anomalies = countDesignAnomalies(text);
+    const rtl = anomalies.strongRtl;
+    if (RTL_SCRIPT_CHARACTER.test(char)) {
       rtlScriptCount += 1;
       if (rtl !== 1) rtlMissed.push(codePoint);
     }
-    if (!LETTER.test(char) && rtl !== 0) rtlOnNonLetter.push(codePoint);
-    if (LTR_SCRIPT_LETTER.test(char) && rtl !== 0) {
-      rtlOnLtrLetter.push(codePoint);
+    if (LTR_SCRIPT_CHARACTER.test(char) && rtl !== 0) {
+      rtlOnLtrCharacter.push(codePoint);
+    }
+    if (anomalies.invisible !== (expectedInvisible(char) ? 1 : 0)) {
+      invisibleWrong.push(codePoint);
+    }
+    if (KANA.test(char)) {
+      for (const mark of KANA_SOUND_MARKS) {
+        if (countDesignAnomalies(`${char}${mark}`).invisible !== 0) {
+          kanaSoundMarkCounted.push(codePoint);
+        }
+      }
+    }
+    if (
+      countDesignAnomalies(`か${char}b`).invisible !==
+      (expectedInvisible(char) && !KANA_SOUND_MARKS.includes(char) ? 1 : 0)
+    ) {
+      kanaOtherMarkNotCounted.push(codePoint);
     }
   }
   cachedScan = {
@@ -123,8 +159,10 @@ function scan(): Scan {
     notRestored,
     notatedCount,
     rtlMissed,
-    rtlOnNonLetter,
-    rtlOnLtrLetter,
+    rtlOnLtrCharacter,
+    invisibleWrong,
+    kanaSoundMarkCounted,
+    kanaOtherMarkNotCounted,
     rtlScriptCount,
   };
   return cachedScan;
@@ -156,21 +194,31 @@ describe("visibleText across all code points", () => {
   });
 });
 
+describe("invisible characters across all code points", () => {
+  test("counts a notated character once and a spacing separator not at all", () => {
+    expect(scan().invisibleWrong.map(hex)).toEqual([]);
+  });
+
+  test("does not count a sound mark that follows any kana", () => {
+    expect(scan().kanaSoundMarkCounted.map(hex)).toEqual([]);
+  });
+
+  test("counts every notated character after a kana except a sound mark", () => {
+    expect(scan().kanaOtherMarkNotCounted.map(hex)).toEqual([]);
+  });
+});
+
 describe("strong right to left characters across all code points", () => {
-  test("counts every letter of the right to left scripts", () => {
+  test("counts every character of the right to left scripts", () => {
     expect(scan().rtlMissed.map(hex)).toEqual([]);
   });
 
-  test("the scan sees the letters of the right to left scripts at all", () => {
+  test("the scan sees the characters of the right to left scripts at all", () => {
     expect(scan().rtlScriptCount).toBeGreaterThan(1000);
   });
 
-  test("counts no character that is not a letter", () => {
-    expect(scan().rtlOnNonLetter.map(hex)).toEqual([]);
-  });
-
-  test("counts no letter of a left to right script", () => {
-    expect(scan().rtlOnLtrLetter.map(hex)).toEqual([]);
+  test("counts no character of a left to right script", () => {
+    expect(scan().rtlOnLtrCharacter.map(hex)).toEqual([]);
   });
 });
 
