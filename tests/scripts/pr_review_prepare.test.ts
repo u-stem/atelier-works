@@ -12,6 +12,8 @@ import {
   type BlockReviewInput,
   blockReview,
   buildReviewWorktreeDir,
+  type HoldReviewDeps,
+  holdReview,
   prepareReviewWorktree,
   type ReviewPrepareDeps,
   type ReviewPrepareTarget,
@@ -197,6 +199,30 @@ describe("blockReview", () => {
     const { deps, events } = blockDeps(false);
     await blockReview(INPUT, deps);
     expect(events).toEqual([]);
+  });
+});
+
+describe("holdReview", () => {
+  function holdDeps(moved: boolean) {
+    const transitions: unknown[][] = [];
+    const deps: HoldReviewDeps = {
+      updateStatusIfCurrent: async (...args) => {
+        transitions.push(args);
+        return moved;
+      },
+    };
+    return { deps, transitions };
+  }
+
+  test("moves the work item from reviewing to blocked with the reason as the note", async () => {
+    const { deps, transitions } = holdDeps(true);
+    await holdReview(
+      { work_item_id: 11, reason: REVIEW_DESIGN_STAGE_REASON },
+      deps,
+    );
+    expect(transitions).toEqual([
+      [11, "reviewing", "blocked", REVIEW_DESIGN_STAGE_REASON],
+    ]);
   });
 });
 

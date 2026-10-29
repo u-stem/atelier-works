@@ -245,6 +245,20 @@ export async function blockReview(
   });
 }
 
+export type HoldReviewInput = {
+  readonly work_item_id: number;
+  readonly reason: string;
+};
+
+export type HoldReviewDeps = {
+  readonly updateStatusIfCurrent: typeof updateStatusIfCurrent;
+};
+
+export async function holdReview(
+  _input: HoldReviewInput,
+  _deps: HoldReviewDeps,
+): Promise<void> {}
+
 export type ReviewPrepareTarget = {
   readonly work_item_id: number;
   readonly owner: string;
