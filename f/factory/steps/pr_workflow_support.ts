@@ -5353,7 +5353,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
       "(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
     ),
   },
-  // 「or about to run」の無い文は、以前に記録した作業項目の注記を訳すために残す。
+  // 記録済みの注記も訳せるよう、「or about to run」の無い文も受ける。
   {
     pattern:
       /^implementation of the branch's work item is running( or about to run)?$/,
