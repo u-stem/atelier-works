@@ -1,0 +1,512 @@
+import { describe, expect, test } from "bun:test";
+import {
+  BLANK_RUN_MARK_PREFIX,
+  blankRunMark,
+  countDesignAnomalies,
+  type DesignApprovalInput,
+  designApprovalBlock,
+  END_MARK_PREFIX,
+  endMark,
+  restoreText,
+  SPACE_RUN_MARK_PREFIX,
+  spaceRunMark,
+  textStats,
+  type VisibleSegment,
+  visibleText,
+} from "./visibleText.ts";
+
+function kinds(text: string): string[] {
+  return visibleText(text).map((segment) => segment.kind);
+}
+
+function codes(text: string): string[] {
+  return visibleText(text).flatMap((segment) =>
+    segment.kind === "code" ? [segment.label] : [],
+  );
+}
+
+function blankRuns(text: string): VisibleSegment[] {
+  return visibleText(text).filter((segment) => segment.kind === "blank-run");
+}
+
+function spaceRuns(text: string): VisibleSegment[] {
+  return visibleText(text).filter((segment) => segment.kind === "space-run");
+}
+
+describe("visibleText passes printable characters through", () => {
+  test("keeps ordinary text as one plain segment", () => {
+    expect(visibleText("# Design\nbody")).toEqual([
+      { kind: "plain", source: "# Design" },
+      { kind: "line-break", source: "\n" },
+      { kind: "plain", source: "body" },
+    ]);
+  });
+
+  test("keeps Japanese text, a tab and U+0020 as plain", () => {
+    expect(kinds("設計\t書 です")).toEqual(["plain"]);
+  });
+
+  test("keeps a character outside the BMP as plain", () => {
+    expect(kinds("a😀b")).toEqual(["plain"]);
+  });
+
+  test("returns no segment for an empty text", () => {
+    expect(visibleText("")).toEqual([]);
+  });
+
+  test("keeps a newline as a line-break segment", () => {
+    expect(kinds("a\nb")).toEqual(["plain", "line-break", "plain"]);
+  });
+});
+
+describe("visibleText notates characters that are not visible", () => {
+  test.each([
+    ["line separator", " ", "U+2028"],
+    ["paragraph separator", " ", "U+2029"],
+    ["variation selector", "️", "U+FE0F"],
+    ["variation selector supplement", "\u{E0100}", "U+E0100"],
+    ["hangul filler", "ㅤ", "U+3164"],
+    ["halfwidth hangul filler", "ﾠ", "U+FFA0"],
+    ["hangul choseong filler", "ᅟ", "U+115F"],
+    ["hangul jungseong filler", "ᅠ", "U+1160"],
+    ["braille blank", "⠀", "U+2800"],
+    ["combining mark", "́", "U+0301"],
+    ["enclosing mark", "⃝", "U+20DD"],
+    ["zero width space", "​", "U+200B"],
+    ["right to left override", "‮", "U+202E"],
+    ["right to left isolate", "⁧", "U+2067"],
+    ["no-break space", " ", "U+00A0"],
+    ["ideographic space", "　", "U+3000"],
+    ["carriage return", "\r", "U+000D"],
+    ["escape", "\u001B", "U+001B"],
+    ["delete", "\u007F", "U+007F"],
+    ["C1 control", "\u0085", "U+0085"],
+    ["private use", "", "U+E000"],
+    ["unassigned", "͸", "U+0378"],
+    ["lone high surrogate", "\uD800", "U+D800"],
+    ["lone low surrogate", "\uDFFF", "U+DFFF"],
+    ["tag character", "\u{E0041}", "U+E0041"],
+  ])("notates the %s", (_name, char, label) => {
+    expect(codes(`a${char}b`)).toEqual([label]);
+  });
+
+  test("keeps the original character in the notation segment", () => {
+    expect(visibleText(" ")).toEqual([
+      { kind: "code", source: " ", label: "U+2028" },
+    ]);
+  });
+
+  test("notates every character of a run of invisible characters", () => {
+    expect(codes("a​​​b")).toEqual(["U+200B", "U+200B", "U+200B"]);
+  });
+
+  test("tells a carriage return from a newline", () => {
+    expect(kinds("a\r\nb")).toEqual(["plain", "code", "line-break", "plain"]);
+  });
+
+  test("does not mistake a newline for a carriage return", () => {
+    expect(kinds("a\nb")).not.toContain("code");
+  });
+});
+
+describe("visibleText blank-run", () => {
+  test("marks three consecutive empty lines", () => {
+    expect(blankRuns("a\n\n\n\nb").map((segment) => segment.source)).toEqual([
+      "\n\n\n",
+    ]);
+  });
+
+  test("leaves two consecutive empty lines alone", () => {
+    expect(blankRuns("a\n\n\nb")).toEqual([]);
+  });
+
+  test("counts a line of spaces and tabs as an empty line", () => {
+    expect(blankRuns("a\n \n\t\n \t\nb")).toHaveLength(1);
+  });
+
+  test("keeps the spaces and tabs of every line in the run", () => {
+    const [run] = blankRuns("a\n \n\t\n  \t\nb");
+    expect(run?.kind === "blank-run" ? run.lines : null).toEqual([
+      { spaces: 1, tabs: 0 },
+      { spaces: 0, tabs: 1 },
+      { spaces: 2, tabs: 1 },
+    ]);
+  });
+
+  test("treats a run of 401 lines of whitespace as one run", () => {
+    expect(blankRuns(`\n${" \n".repeat(400)}`)).toHaveLength(1);
+  });
+
+  test("marks a run of lines that hold only a tab", () => {
+    expect(blankRuns(`a\n${"\t\n".repeat(5)}b`)).toHaveLength(1);
+  });
+
+  test("does not take a line with an invisible character as empty", () => {
+    expect(blankRuns("a\n\n​\n\nb")).toEqual([]);
+  });
+
+  test("does not take a line with a carriage return as empty", () => {
+    expect(blankRuns("a\n\r\n\r\n\r\nb")).toEqual([]);
+  });
+
+  test("marks a run at the start of the text", () => {
+    expect(blankRuns("\n\n\nabc")).toHaveLength(1);
+  });
+
+  test("marks a run at the end of the text", () => {
+    expect(blankRuns("abc\n\n\n\n")).toHaveLength(1);
+  });
+
+  test("restores the run with the line break before it", () => {
+    expect(restoreText(visibleText("a\n\n\n\nb"))).toBe("a\n\n\n\nb");
+  });
+
+  test("marks two separate runs separately", () => {
+    expect(blankRuns("a\n\n\n\nb\n\n\n\nc")).toHaveLength(2);
+  });
+});
+
+describe("visibleText space-run", () => {
+  test("marks eight spaces in the middle of a line", () => {
+    expect(spaceRuns("a        b").map((segment) => segment.source)).toEqual([
+      "        ",
+    ]);
+  });
+
+  test("leaves seven spaces alone", () => {
+    expect(spaceRuns("a       b")).toEqual([]);
+  });
+
+  test("counts tabs and spaces together", () => {
+    expect(spaceRuns("a \t \t \t \tb")).toHaveLength(1);
+  });
+
+  test("leaves the indent at the start of a line alone", () => {
+    expect(spaceRuns("a\n            b")).toEqual([]);
+  });
+
+  test("marks a long run at the end of a line", () => {
+    expect(spaceRuns("a            \nb")).toHaveLength(1);
+  });
+
+  test("marks a run that follows a notated character", () => {
+    expect(spaceRuns("　        b")).toHaveLength(1);
+  });
+
+  test("does not join runs across a line break", () => {
+    expect(spaceRuns("a    \n    b")).toEqual([]);
+  });
+
+  test("keeps the text before and after the run as plain", () => {
+    expect(kinds("a        b")).toEqual(["plain", "space-run", "plain"]);
+  });
+});
+
+describe("restoreText", () => {
+  const MIXED = [
+    "# 設計\r\n",
+    "本文 次️行ㅤ́\n",
+    "\n\n\n\n",
+    "表   |        | 値\t\n",
+    "\uD800͸ 😀\n",
+    "        ",
+  ].join("");
+
+  test("restores a text that mixes every kind of segment", () => {
+    expect(restoreText(visibleText(MIXED))).toBe(MIXED);
+  });
+
+  test("restores a text with a carriage return and a newline apart", () => {
+    expect(restoreText(visibleText("a\r\nb\nc\r"))).toBe("a\r\nb\nc\r");
+  });
+
+  test("restores an empty text", () => {
+    expect(restoreText(visibleText(""))).toBe("");
+  });
+});
+
+describe("countDesignAnomalies", () => {
+  test("finds nothing in an ordinary Japanese design", () => {
+    expect(
+      countDesignAnomalies("# 設計\n\n本文です。\n\n| a | b |\n| - | - |\n")
+        .total,
+    ).toBe(0);
+  });
+
+  test("finds nothing in a code block that is indented", () => {
+    expect(countDesignAnomalies("```\n        indented\n```\n").total).toBe(0);
+  });
+
+  test("counts invisible characters one by one", () => {
+    expect(countDesignAnomalies("a​b c").invisible).toBe(2);
+  });
+
+  test("counts a right to left override as an invisible character", () => {
+    expect(countDesignAnomalies("a‮b").invisible).toBe(1);
+  });
+
+  test("counts a no-break space as an anomaly", () => {
+    expect(countDesignAnomalies("a b").total).toBe(1);
+  });
+
+  test("counts a Hebrew letter as a strong right to left character", () => {
+    expect(countDesignAnomalies("aאb").strongRtl).toBe(1);
+  });
+
+  test("counts an Arabic letter as a strong right to left character", () => {
+    expect(countDesignAnomalies("aابb").strongRtl).toBe(2);
+  });
+
+  test("counts a character outside the BMP in the right to left range", () => {
+    expect(countDesignAnomalies("a\u{10800}b").strongRtl).toBe(1);
+  });
+
+  test("does not count a Latin letter as right to left", () => {
+    expect(countDesignAnomalies("abc").strongRtl).toBe(0);
+  });
+
+  test("counts a run of blank lines once", () => {
+    expect(countDesignAnomalies("a\n \n\n\t\nb").blankRuns).toBe(1);
+  });
+
+  test("does not count two blank lines", () => {
+    expect(countDesignAnomalies("a\n\n\nb").blankRuns).toBe(0);
+  });
+
+  test("counts a run of spaces in a line", () => {
+    expect(countDesignAnomalies("a        b").spaceRuns).toBe(1);
+  });
+
+  test("counts the end mark that the text writes itself", () => {
+    expect(countDesignAnomalies(`a\n${endMark(3, 20)}\n`).markLookalikes).toBe(
+      1,
+    );
+  });
+
+  test("counts the blank-run mark that the text writes itself", () => {
+    expect(countDesignAnomalies(blankRunMark(5)).markLookalikes).toBe(1);
+  });
+
+  test("counts the space-run mark that the text writes itself", () => {
+    expect(countDesignAnomalies(spaceRunMark(9)).markLookalikes).toBe(1);
+  });
+
+  test("counts a mark with the wording only", () => {
+    expect(countDesignAnomalies("[空行").markLookalikes).toBe(1);
+  });
+
+  test("adds every count into the total", () => {
+    const text = `a​א\n\n\n\nb        c ${endMark(1, 1)}`;
+    expect(countDesignAnomalies(text).total).toBe(5);
+  });
+});
+
+describe("marks", () => {
+  test("writes the blank-run mark with the line count", () => {
+    expect(blankRunMark(5)).toBe("[空行 5 行]");
+  });
+
+  test("writes the space-run mark with the count", () => {
+    expect(spaceRunMark(12)).toBe("[空白 12 個]");
+  });
+
+  test("writes the end mark with the line and code point counts", () => {
+    expect(endMark(3, 20)).toBe("全文の終わり(3 行、20 コードポイント)");
+  });
+
+  test("starts the blank-run mark with its prefix", () => {
+    expect(blankRunMark(5).startsWith(BLANK_RUN_MARK_PREFIX)).toBe(true);
+  });
+
+  test("starts the space-run mark with its prefix", () => {
+    expect(spaceRunMark(5).startsWith(SPACE_RUN_MARK_PREFIX)).toBe(true);
+  });
+
+  test("starts the end mark with its prefix", () => {
+    expect(endMark(1, 1).startsWith(END_MARK_PREFIX)).toBe(true);
+  });
+
+  test("keeps the three prefixes apart", () => {
+    expect(
+      new Set([BLANK_RUN_MARK_PREFIX, SPACE_RUN_MARK_PREFIX, END_MARK_PREFIX])
+        .size,
+    ).toBe(3);
+  });
+});
+
+describe("textStats", () => {
+  test("counts the lines of a text without a final newline", () => {
+    expect(textStats("a\nb\nc").lines).toBe(3);
+  });
+
+  test("does not count the empty part after a final newline", () => {
+    expect(textStats("a\nb\n").lines).toBe(2);
+  });
+
+  test("counts no line in an empty text", () => {
+    expect(textStats("").lines).toBe(0);
+  });
+
+  test("counts code points, not UTF-16 units", () => {
+    expect(textStats("a😀日").codePoints).toBe(3);
+  });
+});
+
+const READY: DesignApprovalInput = {
+  approvalRequestId: 31,
+  snapshot: "ready",
+  doc: {
+    isPending: false,
+    isError: false,
+    data: {
+      approval_request_id: 31,
+      text: "# 設計\n\n本文です。\n",
+      truncated: false,
+      approval_status: "pending",
+    },
+  },
+  workItemStatus: "awaiting_design_approval",
+};
+
+function withDoc(
+  patch: Partial<NonNullable<DesignApprovalInput["doc"]["data"]>>,
+): DesignApprovalInput {
+  const data = READY.doc.data;
+  return {
+    ...READY,
+    doc: {
+      ...READY.doc,
+      data: data === null || data === undefined ? data : { ...data, ...patch },
+    },
+  };
+}
+
+describe("designApprovalBlock", () => {
+  test("lets a clean design through", () => {
+    expect(designApprovalBlock(READY)).toBeNull();
+  });
+
+  test("stops while the intake issue is loading", () => {
+    expect(designApprovalBlock({ ...READY, snapshot: "loading" })).toBe(
+      "取り込み時点のIssueを読み込み中です。表示されるまで承認できません。",
+    );
+  });
+
+  test("stops when the intake issue failed to load", () => {
+    expect(designApprovalBlock({ ...READY, snapshot: "failed" })).toBe(
+      "取り込み時点のIssueを取得できていません。取得し直して内容を確かめるまで承認できません。",
+    );
+  });
+
+  test("stops when the work item has no intake issue", () => {
+    expect(designApprovalBlock({ ...READY, snapshot: "empty" })).toBe(
+      "この作業項目に、取り込み時点のIssueがありません。確かめる内容が無いため、承認できません。",
+    );
+  });
+
+  test("stops while the design is loading", () => {
+    expect(
+      designApprovalBlock({
+        ...READY,
+        doc: { isPending: true, isError: false, data: undefined },
+      }),
+    ).toBe("設計書を読み込み中です。表示されるまで承認できません。");
+  });
+
+  test("stops when the design failed to load", () => {
+    expect(
+      designApprovalBlock({
+        ...READY,
+        doc: { isPending: false, isError: true, data: undefined },
+      }),
+    ).toBe(
+      "設計書を取得できていません。取得し直して内容を確かめるまで承認できません。",
+    );
+  });
+
+  test("stops when the design is not found", () => {
+    expect(
+      designApprovalBlock({
+        ...READY,
+        doc: { isPending: false, isError: false, data: null },
+      }),
+    ).toBe(
+      "この依頼の設計書が見つかりません。内容を確かめられないため、承認できません。",
+    );
+  });
+
+  test("stops when the design belongs to another request", () => {
+    expect(designApprovalBlock(withDoc({ approval_request_id: 32 }))).toBe(
+      "表示している設計書が、承認する依頼のものと違います。承認できません。",
+    );
+  });
+
+  test("stops when the work item status is missing", () => {
+    expect(designApprovalBlock({ ...READY, workItemStatus: undefined })).toBe(
+      "作業項目の状態を確かめられないため、承認できません。",
+    );
+  });
+
+  test("stops when the work item status is null", () => {
+    expect(designApprovalBlock({ ...READY, workItemStatus: null })).toBe(
+      "作業項目の状態を確かめられないため、承認できません。",
+    );
+  });
+
+  test("stops when the work item is not waiting for the design approval", () => {
+    expect(
+      designApprovalBlock({ ...READY, workItemStatus: "implementing" }),
+    ).toBe("作業項目が設計の承認待ちではないため、承認できません。");
+  });
+
+  test("stops when the approval request is not pending", () => {
+    expect(designApprovalBlock(withDoc({ approval_status: "approved" }))).toBe(
+      "この承認依頼は承認待ちではないため、承認できません。",
+    );
+  });
+
+  test("stops when the approval status is one that is not known", () => {
+    expect(designApprovalBlock(withDoc({ approval_status: "cancelled" }))).toBe(
+      "この承認依頼は承認待ちではないため、承認できません。",
+    );
+  });
+
+  test("stops when the design was truncated", () => {
+    expect(designApprovalBlock(withDoc({ truncated: true }))).toBe(
+      "設計書が長さの上限で切られていて、全文を確かめられないため、承認できません。",
+    );
+  });
+
+  const ANOMALY_MESSAGE =
+    "実装に渡る全文に、見えない文字か見えにくい並びがあります。却下を勧めます。";
+
+  test.each([
+    ["a zero width space", "a​b"],
+    ["a line separator", "a b"],
+    ["a strong right to left character", "aאb"],
+    ["blank lines", "a\n\n\n\nb"],
+    ["lines of spaces", `a\n${" \n".repeat(5)}b`],
+    ["a long run of spaces", "a        b"],
+    ["a copy of the end mark", `a\n${endMark(2, 8)}`],
+  ])("stops a design with %s", (_name, text) => {
+    expect(designApprovalBlock(withDoc({ text }))).toBe(ANOMALY_MESSAGE);
+  });
+
+  test("stops a design that is truncated before it looks for anomalies", () => {
+    expect(designApprovalBlock(withDoc({ truncated: true, text: "a​b" }))).toBe(
+      "設計書が長さの上限で切られていて、全文を確かめられないため、承認できません。",
+    );
+  });
+
+  test("reports the intake issue before the design", () => {
+    expect(
+      designApprovalBlock({
+        ...READY,
+        snapshot: "loading",
+        doc: { isPending: true, isError: false, data: undefined },
+      }),
+    ).toBe(
+      "取り込み時点のIssueを読み込み中です。表示されるまで承認できません。",
+    );
+  });
+});
