@@ -3,6 +3,7 @@
 // 確かめる事実は、安く確かめられるものから順に、最初に当たった理由で止める。
 // 事実はすべて`FixClaimReaders`で渡し、必要になるまで読まない。テストで差し替える。
 
+import { isBranchHeldForFixRounds } from "./branch_hold.ts";
 import { classifyFailedRuns } from "./ci_fix_round.ts";
 import type {
   PrCommitMessages,
@@ -11,6 +12,7 @@ import type {
 } from "./github.ts";
 import type { WorkflowRun } from "./main_ci_support.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
+import type { WorkItemStatus } from "./types.ts";
 import { generatedByTrailer } from "./workspace.ts";
 
 /**
@@ -109,6 +111,11 @@ export type FixClaimReaders = {
   readonly hasReview: () => Promise<boolean>;
   /** PRを読み直す。作業項目の状態より後に読む。 */
   readonly readPr: () => Promise<PullRequest>;
+  /**
+   * PRのブランチが指すIssueの作業項目の状態。引けないとき(ブランチの形が違う、削除済み、別のリポジトリ)は`null`。
+   * PRを読み直した後に読む。
+   */
+  readonly readBranchItemStatus: () => Promise<WorkItemStatus | null>;
   readonly readCommits: () => Promise<PrCommitMessages>;
   /** factory-fixスキルが、CI回の節のマーカーを持つか。 */
   readonly hasSkillMarker: () => Promise<boolean>;
@@ -149,6 +156,7 @@ export type FixClaimInput = {
 export type FixClaimSkipReason =
   | "pr_closed"
   | "head_moved"
+  | "branch_held"
   | "no_failure"
   | "unreadable";
 
@@ -169,6 +177,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 2. 作業項目の状態を読む。直す作業項目が動いていれば`last_fix_unsettled`、
  *    行のheadのレビューが無ければ`not_reviewed`で保留する。
  * 3. その後でPRを読み直す。行のheadから進んでいれば、閉じていれば、skipする。
+ *    続けて、PRのブランチが指すIssueの作業項目が、Factoryがブランチを引き継ぐ状態(`isBranchHeldForFixRounds`)なら、
+ *    `branch_held`でskipする。起動せず、ラウンドを数えず、保留も書かない。引き継ぐ間は、設計や実装がpushするためである。
  *    ドラフトか、auto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
  *    作業項目の状態を先に読むのは、読んでいる間に直す作業項目がpushしたとき、
  *    古いheadの行を起動しないためである。PRを先に読むと、その読み取りは古くなる。
@@ -205,6 +215,9 @@ export async function decideFixClaim(
   const pr = await readers.readPr();
   if (pr.state !== "open") return { kind: "skip", why: "pr_closed" };
   if (pr.headSha !== row.head_sha) return { kind: "skip", why: "head_moved" };
+  if (isBranchHeldForFixRounds(await readers.readBranchItemStatus())) {
+    return { kind: "skip", why: "branch_held" };
+  }
   if (pr.draft || pr.autoMergeEnabled) return hold("pr_draft_or_auto_merge");
 
   if (!allCommitsFromFactory(await readers.readCommits(), input.instanceName)) {

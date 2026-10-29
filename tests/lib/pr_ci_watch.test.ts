@@ -3147,14 +3147,14 @@ function claimSetup(c: ClaimHarness | null, overrides: Setup = {}): Setup {
 }
 
 describe("claiming a failed row: a branch that the factory holds", () => {
-  const HELD_STATUSES = [
+  const HELD_STATUSES: WorkItemStatus[] = [
     "requirements_generating",
     "awaiting_approval",
     "designing",
     "awaiting_design_approval",
     "approved",
     "implementing",
-  ] as const;
+  ];
 
   test.each(HELD_STATUSES)(
     "does not claim while the branch is %s",

@@ -1267,14 +1267,14 @@ describe("runPrConflictWatch: a branch that the factory holds", () => {
   const PAST_GRACE = {
     episode_started_at: new Date(NOW.getTime() - 120 * MINUTE),
   };
-  const HELD_STATUSES = [
+  const HELD_STATUSES: WorkItemStatus[] = [
     "requirements_generating",
     "awaiting_approval",
     "designing",
     "awaiting_design_approval",
     "approved",
     "implementing",
-  ] as const;
+  ];
   const unreadable: Partial<PrConflictFixDeps> = {
     readBranchItemStatus: async () => {
       throw new Error("db down");

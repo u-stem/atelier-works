@@ -7,6 +7,7 @@
 
 import { lstat, readlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import { isBranchGuardedStatus, isDesignStage } from "../lib/branch_hold.ts";
 import {
   CheckEnvironmentError,
   isCheckEnvironmentReason,
@@ -1287,18 +1288,42 @@ export function evaluateParentImplementingGuard(
 }
 
 /**
- * PRのブランチ名(`factory/issue-<N>-wi-<id>`)から引いた実装の作業項目が実装中なら止める。
+ * ブランチの作業項目が実装の段階(`implementing`、`approved`)にあるために、
+ * PRの修正の準備を止める理由。`approved`は、実装が動き出す直前の状態である。
+ */
+export const BRANCH_IMPLEMENTING_REASON =
+  "implementation of the branch's work item is running or about to run";
+
+/** ブランチの作業項目が設計の段階にあるために、PRの修正の準備を止める理由。 */
+export const BRANCH_DESIGN_STAGE_REASON =
+  "the branch's work item is in the design stage";
+
+/** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */
+export type BranchGuardKind = "implementing" | "design_stage";
+
+export type BranchGuardResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly kind: BranchGuardKind;
+      readonly reason: string;
+    };
+
+/**
+ * PRのブランチ名(`factory/issue-<N>-wi-<id>`)から引いた作業項目が、設計の段階から実装の間
+ * (`designing`、`awaiting_design_approval`、`approved`、`implementing`)なら止める。
+ * 設計や実装がそのブランチのworktreeを使うか、使う直前のためである。
+ * 設計の段階は`design_stage`、それ以外は`implementing`の種別で返し、種別ごとに固定の理由を返す。
+ * 要件定義の段階の状態では止めない。既存のレビュー回の挙動を変えないためである。
  * 親の行(parent_work_item_id)から引いた場合と理由を分けるのは、親の行が無いPRでも止まったことを読み手が見分けられるようにするためである。
  */
 export function evaluateBranchImplementingGuard(
   branchItemStatus: WorkItemStatus | null,
-): PrFixGuardResult {
-  return branchItemStatus === "implementing"
-    ? {
-        ok: false,
-        reason: "implementation of the branch's work item is running",
-      }
-    : { ok: true };
+): BranchGuardResult {
+  if (!isBranchGuardedStatus(branchItemStatus)) return { ok: true };
+  return isDesignStage(branchItemStatus)
+    ? { ok: false, kind: "design_stage", reason: BRANCH_DESIGN_STAGE_REASON }
+    : { ok: false, kind: "implementing", reason: BRANCH_IMPLEMENTING_REASON };
 }
 
 // ---------------------------------------------------------------------------
@@ -5319,11 +5344,22 @@ export const REASON_RULES: readonly ReasonRule[] = [
       "(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
     ),
   },
+  // 「or about to run」の無い文は、以前に記録した作業項目の注記を訳すために残す。
   {
-    pattern: /^implementation of the branch's work item is running$/,
-    describe: () =>
-      "このPRのブランチで実装フローが実行中のため修正を止めました",
+    pattern:
+      /^implementation of the branch's work item is running( or about to run)?$/,
+    describe: (m) =>
+      m[1] === undefined
+        ? "このPRのブランチで実装フローが実行中のため修正を止めました"
+        : "このPRのブランチで実装フローが実行中か開始直前のため修正を止めました",
     nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  // ブランチの作業項目が設計の段階にある間は、設計の承認の後の実装が同じブランチを引き継ぐ。
+  {
+    pattern: /^the branch's work item is in the design stage$/,
+    describe: () =>
+      "このPRのブランチの作業項目が設計の最中のため修正を止めました",
+    ...procedureThenRerun("設計の承認と、その後の実装の完了を待ってから、"),
   },
   {
     pattern: /^worktree lock is held by a process this run left behind$/,

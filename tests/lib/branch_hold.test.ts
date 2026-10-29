@@ -14,7 +14,7 @@ import {
 /** 状態の述語が真になる状態の集合を、全状態から求める。 */
 function statusesWhere(
   predicate: (status: WorkItemStatus) => boolean,
-): WorkItemStatus[] {
+): string[] {
   return WORK_ITEM_STATUSES.filter(predicate);
 }
 

@@ -38,7 +38,8 @@ export const CONFLICT_FIX_SKILL_MARKER = "conflict-fix-skill:v1";
  * - `treeChangedDuringChecks`は検査コマンドがツリーを書き換えたときの注記で、保留の理由に写さない。
  *   待っても解けないので、回復は`fix_stopped`で最終の保留にする。
  * - 残りは一時の停止の注記である。待てば解ける事情で止めた回で、回復が行に保留を書かずに結びだけを外す。
- *   行の状態が変わったか、PRのheadが動いたか、worktreeを別の処理が使っているか、実装のフローが動いているかのいずれかである。
+ *   行の状態が変わったか、PRのheadが動いたか、worktreeを別の処理が使っているか、実装のフローが動いているか、
+ *   ブランチの作業項目が設計の段階にあるかのいずれかである。
  *   `headMovedAtPush`だけはpushの直前に見つけるので、Claudeを動かした後の停止である。
  */
 export const CONFLICT_ROUND_DETAILS = {
@@ -58,6 +59,7 @@ export const CONFLICT_ROUND_DETAILS = {
   treeChangedDuringChecks: "the tree changed during the checks",
   worktreeBusy: "the worktree is in use by another process",
   implementRunning: "an implement flow is running on the branch",
+  designStage: "the work item of the branch is in the design stage",
   markerMissing: `the factory-fix skill lacks the ${CONFLICT_FIX_SKILL_MARKER} marker`,
 } as const;
 
@@ -80,6 +82,7 @@ export const CONFLICT_UNCOUNTED_STOP_NOTES: readonly string[] = [
   CONFLICT_ROUND_DETAILS.headMoved,
   CONFLICT_ROUND_DETAILS.worktreeBusy,
   CONFLICT_ROUND_DETAILS.implementRunning,
+  CONFLICT_ROUND_DETAILS.designStage,
 ].map(conflictRoundReason);
 
 /**

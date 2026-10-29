@@ -6813,11 +6813,26 @@ export async function touchPrConflictCheck(
   return rows.length > 0;
 }
 
+/**
+ * 競合の行の猶予の起点(競合の回の開始時刻`episode_started_at`)を、DBの今に戻す。戻したら`true`を返す。
+ * Factoryがブランチを引き継ぐ間は猶予を進めず、その状態を出た時点から数え直すために使う。
+ * 競合のままで、通知しておらず、直す作業項目に結ばれていない行だけを書き換える。
+ * 通知した行や結ばれた行の起点は、別の判断が使うので動かさない。
+ * 回の番号、起動の回数、保留、読み直した時刻には触れない。
+ */
 export async function restartPrConflictGrace(
-  _id: number,
-  _sql: SqlClient = defaultSqlClient,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  assertPositiveId(id, "pr conflict check id");
+  const rows = await sql`
+    UPDATE factory.pr_conflict_checks
+    SET episode_started_at = now()
+    WHERE id = ${id}::bigint
+      AND state = 'conflicted' AND notified_at IS NULL AND fix_work_item_id IS NULL
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
 /** IDで`factory.pr_conflict_checks`の行を読む。無ければnull。 */

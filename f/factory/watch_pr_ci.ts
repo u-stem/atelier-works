@@ -31,6 +31,7 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
+import { readBranchItemStatus } from "./lib/branch_hold.ts";
 import {
   type CheckEnvironmentError,
   type CheckEnvironmentProblems,
@@ -183,6 +184,8 @@ export function buildClaimDeps(
       (await listActivePrFixWorkItems(owner, repo, prNumber)).length > 0,
     hasReview: (owner, repo, prNumber, headSha) =>
       hasPrReviewForHead(owner, repo, prNumber, headSha),
+    readBranchItemStatus: (owner, repo, headRef) =>
+      readBranchItemStatus({ headRef, owner, repo }, (id) => getWorkItem(id)),
     listCommits: (owner, repo, prNumber) =>
       listPrCommitMessages(client, owner, repo, prNumber),
     // `factory_repo`の解釈もここで行う。解釈に失敗しても、ほかの処理を止めず、行単位の失敗として記録される。

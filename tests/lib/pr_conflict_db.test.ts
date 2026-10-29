@@ -318,7 +318,7 @@ describe("restartPrConflictGrace", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await restartPrConflictGrace(7, sql);
     expect(calls[0]?.text).toMatch(
-      /WHERE id = \? ::bigint\s+AND state = 'conflicted' AND notified_at IS NULL AND fix_work_item_id IS NULL/,
+      /WHERE id =\s+\?\s*::bigint\s+AND state = 'conflicted' AND notified_at IS NULL AND fix_work_item_id IS NULL/,
     );
   });
 
