@@ -3,12 +3,12 @@
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_approval_design_doc_contract.test.ts`が落ちる。
 
-/** 承認依頼の状態。 */
-export type ApprovalRequestStatus =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "expired";
+import {
+  isBoolean,
+  isPositiveInteger,
+  isRecord,
+  isString,
+} from "./primitives.ts";
 
 /**
  * 承認依頼が指す設計書。`text`は、承認後の実装が受け取る文字そのものである。
@@ -23,12 +23,30 @@ export type ApprovalDesignDoc = {
   readonly text: string;
   /** `text`が長さの上限で切られ、末尾に印の行が付いているか。 */
   readonly truncated: boolean;
-  readonly approval_status: ApprovalRequestStatus;
+  /** 承認依頼の状態。表示にしか使わないので文字列として受ける。知らない値は呼び出し側が決まった文言に落とす。 */
+  readonly approval_status: string;
 };
+
+function isApprovalDesignDoc(value: unknown): value is ApprovalDesignDoc {
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.approval_request_id) &&
+    isPositiveInteger(value.work_item_id) &&
+    isPositiveInteger(value.design_attempt) &&
+    isPositiveInteger(value.requirement_draft_id) &&
+    isString(value.text) &&
+    isBoolean(value.truncated) &&
+    isString(value.approval_status)
+  );
+}
 
 /** 0件か1件の行。該当する設計書が無いときは0件になる。 */
 export function isApprovalDesignDocRows(
-  _value: unknown,
-): _value is readonly ApprovalDesignDoc[] {
-  return false;
+  value: unknown,
+): value is readonly ApprovalDesignDoc[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 1 &&
+    value.every(isApprovalDesignDoc)
+  );
 }

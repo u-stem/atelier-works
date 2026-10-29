@@ -320,7 +320,7 @@ Consoleの一覧と集計は次のviewを読む。
 
 | view | 内容 |
 | --- | --- |
-| `v_inbox` | 承認の一覧 |
+| `v_inbox` | 要件定義の承認待ちの作業項目と、現在の試行の下書き。Consoleは読まない |
 | `v_pipeline` | 作業項目の進捗の一覧 |
 | `v_agent_cost_daily` | Claudeの実行の日ごとの費用 |
 | `v_agent_usage_daily` | Claudeの実行の、日、モデル、バージョン、工程ごとの使用量(費用、トークン数、ターン数、実行時間) |
@@ -330,12 +330,13 @@ Consoleの一覧と集計は次のviewを読む。
 | `v_failures` | 失敗の一覧 |
 | `v_notices` | 要対応事項の一覧 |
 | `v_issue_proposals` | Issue化の提案の一覧 |
-| `v_approval_requests` | 承認依頼の一覧 |
+| `v_approval_requests` | 承認依頼の一覧。Consoleの要対応の一覧と件数が読む |
 | `v_audit_reports` | 監査レポートの一覧 |
 | `v_reviews` | PRレビューの一覧 |
 | `v_fix_rounds` | PR修正の一覧 |
 
-要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
+要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`design_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
+設計の承認依頼が指す設計書は、`approval_design_doc`viewが`approval_requests`と`design_drafts`を結合して読み、実装に渡すのと同じ整形を通して返す。
 
 更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPR、失敗の理由で、変更したパスの一覧は選ばない。
 
