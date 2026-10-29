@@ -1340,9 +1340,9 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("waits for the fix run before re-running the implement flow", () => {
+  test("tells that the implement flow restarts by itself after the active run", () => {
     expect(nextActionFor("pull request has an active fix run")).toBe(
-      "自動修正の完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "対応は要りません。自動で再開します。3回再開しても止まるときだけ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
