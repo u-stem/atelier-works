@@ -13,7 +13,8 @@
 // 表記にする文字の集合と、承認を止める件数に数える集合は、別にする。
 // 表記は、人が見て判断する材料なので広く残す。
 // 件数は、承認を止めるので、日本語の設計書が普通に含む文字を数えない。
-// U+3000などの空白と、かなの後ろの単独の結合文字(濁点)は、表記を残し、単独では数えない。
+// U+3000などの空白と、かなの直後の単独の濁点(U+3099)と半濁点(U+309A)は、表記を残し、単独では数えない。
+// 漢字の直後や、濁点以外の結合文字は、数える。NFDのラテン文字(e+U+0301など)も数える。
 //
 // 見えないかどうかは、ブラウザとBunのUnicodeの表の版で変わりうる。
 // 未割当(Cn)も表記にするので、版の差は表記が増える側に倒れる。
@@ -30,8 +31,8 @@ export type BlankLine = {
  * - `plain`: そのまま描く文字列(改行以外の、見える文字、U+0020、行頭のタブ)
  * - `code`: 見えない文字。元の文字1つを持ち、`label`にコードポイントの表記を持つ
  * - `blank-run`: 3行以上続く空行(空白とタブだけの行を含む)。各行の改行を含む
- * - `space-run`: 長く続く空白とタブの連続。行の途中では8桁以上(タブは4桁)か、
- *   U+0020以外の空白が2個以上。行頭では32桁以上
+ * - `space-run`: 長く続く空白とタブの連続。行の途中では8桁以上(タブは4桁、そのほかは1個を1桁)か、
+ *   U+3000とU+0020を除く空白が2個以上。行頭では32桁以上
  * - `line-break`: 改行(`\n`)。`\r`は`code`になるので、`\r\n`と`\n`を区別できる
  */
 export type VisibleSegment =
@@ -63,9 +64,10 @@ const TAB_COLUMNS = 4;
  * ハングルのフィラー(U+115F、U+1160、U+3164、U+FFA0)、点字の空白(U+2800)、
  * 制御文字(Cc)、書式文字(Cf)、空白の分類(Zs、Zl、Zp)、私用領域(Co)、未割当(Cn)、孤立サロゲート(Cs)。
  * U+0020とタブと`\n`は、判定の前に除く。
+ * 見えない文字を読み違えないよう、フィラーと点字の空白は、文字でなくコードポイントで書く。
  */
 const NOTATION_CHARACTER =
-  /[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}ᅟᅠㅤﾠ⠀\p{Cc}\p{Cf}\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}]/u;
+  /[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}\p{Cc}\p{Cf}\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}]/u;
 
 function needsNotation(char: string): boolean {
   if (char === " " || char === "\t" || char === "\n") {
@@ -85,50 +87,47 @@ function isSpaceSeparator(char: string): boolean {
   return (char.codePointAt(0) ?? 0) >= 0xa0 && SPACE_SEPARATOR.test(char);
 }
 
+const IDEOGRAPHIC_SPACE = "\u3000";
+
+/**
+ * 隣り合うと、それだけで印にする空白か。
+ * U+3000は、字下げや全角の区切りに普通に使うので、桁の合計だけで数える。
+ */
+function isStrictSpaceSeparator(char: string): boolean {
+  return isSpaceSeparator(char) && char !== IDEOGRAPHIC_SPACE;
+}
+
 /** 空白の連続をつくる文字(U+0020、タブ、U+0020以外の空白)か。 */
 function isRunCharacter(char: string): boolean {
   return char === " " || char === "\t" || isSpaceSeparator(char);
 }
 
 const COMBINING_MARK = /^[\p{Mn}\p{Me}]$/u;
-const DEFAULT_IGNORABLE = /^\p{Default_Ignorable_Code_Point}$/u;
 const KANA = /^[\p{Script=Hiragana}\p{Script=Katakana}]$/u;
-const KANJI = /^\p{Script=Han}$/u;
 
-/** かなの濁点と半濁点(NFDの形)。 */
-const KANA_SOUND_MARKS: ReadonlySet<string> = new Set(["゙", "゚"]);
+/** かなの濁点(U+3099)と半濁点(U+309A)。NFDの形である。 */
+const KANA_SOUND_MARKS: ReadonlySet<string> = new Set(["\u3099", "\u309A"]);
 
 /**
  * 件数に数えない結合文字か。表記は残す。
- * 直前が基底文字で、連続が1個のときに限る。
- * 基底は、濁点と半濁点ではかな、そのほかの結合文字ではかなか漢字である。
- * 先頭、改行の直後、2個以上の連続、基底がそれ以外の場合は数える。
- * 既定で無視される文字(異体字セレクタなど)は、結合文字でも数える。
+ * 数えないのは、ひらがなかカタカナの直後にある、濁点か半濁点の1個だけである。
+ * 先頭、改行の直後、2個以上の連続、基底がそれ以外(漢字とラテン文字を含む)の場合は数える。
+ * かなの直後でも、濁点と半濁点以外の結合文字は数える。NFDで書いたラテン文字も数える。
  */
 function isSingleCombiningMark(
   chars: readonly string[],
   index: number,
 ): boolean {
   const char = chars[index];
-  if (
-    char === undefined ||
-    !COMBINING_MARK.test(char) ||
-    DEFAULT_IGNORABLE.test(char)
-  ) {
+  if (char === undefined || !KANA_SOUND_MARKS.has(char)) {
     return false;
   }
   const before = chars[index - 1];
   const after = chars[index + 1];
-  if (before === undefined || COMBINING_MARK.test(before)) {
+  if (before === undefined || !KANA.test(before)) {
     return false;
   }
-  if (after !== undefined && COMBINING_MARK.test(after)) {
-    return false;
-  }
-  if (KANA.test(before)) {
-    return true;
-  }
-  return !KANA_SOUND_MARKS.has(char) && KANJI.test(before);
+  return after === undefined || !COMBINING_MARK.test(after);
 }
 
 function codePointLabel(char: string): string {
@@ -163,8 +162,8 @@ class SegmentBuilder {
 
 /**
  * 空白の連続を区切りにする。
- * 印にするのは、行頭なら32桁以上、行の途中なら8桁以上(タブは4桁)か、
- * U+0020以外の空白が2個以上続くときである。
+ * 印にするのは、行頭なら32桁以上、行の途中なら8桁以上(タブは4桁、そのほかは1個を1桁)か、
+ * U+3000とU+0020を除く空白が2個以上続くときである。
  * 印にしない連続は、U+0020とタブを素通りにし、U+0020以外の空白を表記にする。単独では数えない。
  */
 function pushWhitespaceRun(
@@ -179,8 +178,8 @@ function pushWhitespaceRun(
     const before = run[offset - 1];
     if (
       before !== undefined &&
-      isSpaceSeparator(char) &&
-      isSpaceSeparator(before)
+      isStrictSpaceSeparator(char) &&
+      isStrictSpaceSeparator(before)
     ) {
       adjacentSeparators = true;
     }
@@ -309,13 +308,38 @@ export const END_MARK_PREFIX = "全文の終わり";
 
 /**
  * 本文が書く、空行の印と空白の印のまね。
- * 印の文言と同じ形(数字を含む)だけを数える。書き出しだけの文言は、普通の文章やリンクに現れる。
+ * 印の文言と同じ形だけを数える。書き出しだけの文言は、普通の文章やリンクに現れる。
+ * 数字は、Unicodeの十進数字(Nd)と漢数字(〇から九、十、百、千)を許す。
+ * 括弧は、角括弧、隅付き括弧、亀甲括弧を許す。
  * 照合は、全角の角括弧と数字を直すため、NFKCにした文字列に対して行う。
  */
-const MARK_LOOKALIKE = /\[(?:空行\s*\d+\s*行|空白\s*\d+\s*個)\]/gu;
+const MARK_LOOKALIKE =
+  /[[【〔](?:空行\s*[\p{Nd}〇一二三四五六七八九十百千]+\s*行|空白\s*[\p{Nd}〇一二三四五六七八九十百千]+\s*個)[\]】〕]/gu;
+
+const BACKTICK = "`";
+
+/**
+ * 本文が印の文言をコードとして引用しているか。
+ * 印の直前と直後が、どちらもバッククォートの場合に限る。
+ * 画面の印は、バッククォートを伴わないので、引用は印と見分けがつく。
+ */
+function isQuotedInBackticks(
+  text: string,
+  index: number,
+  length: number,
+): boolean {
+  return text[index - 1] === BACKTICK && text[index + length] === BACKTICK;
+}
 
 function countMarkLookalikes(text: string): number {
-  return text.normalize("NFKC").match(MARK_LOOKALIKE)?.length ?? 0;
+  const normalized = text.normalize("NFKC");
+  let count = 0;
+  for (const match of normalized.matchAll(MARK_LOOKALIKE)) {
+    if (!isQuotedInBackticks(normalized, match.index, match[0].length)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** 空行の印の文言。 */
@@ -355,8 +379,9 @@ export function textStats(text: string): {
 /**
  * 強い右から左の文字を含みうる範囲。
  * `\p{Bidi_Class=R}`はJavaScriptの正規表現で書けないので、UAX#9の既定のRとALの範囲を固定で持つ。
- * 範囲の中の文字(`\p{L}`)だけを数える。範囲の中の書式制御と未割当は、表記の分類が数える。
- * 数字と記号は、並びの向きを入れ替えないので数えない。
+ * 範囲の中の文字は、表記の分類が数えるもの(結合文字、書式文字、制御文字、私用領域、未割当、空白)を除き、
+ * 文字、数字、句読点、記号をすべて数える。
+ * 範囲の中でも、数字や句読点の中には、強い右から左でないものがある。見分けの表を持たず、広めに数える。
  */
 const STRONG_RTL_RANGES: readonly (readonly [number, number])[] = [
   [0x0590, 0x08ff],
@@ -366,14 +391,16 @@ const STRONG_RTL_RANGES: readonly (readonly [number, number])[] = [
   [0x1e800, 0x1efff],
 ];
 
-const LETTER = /^\p{L}$/u;
+/** 表記の分類が、すでに数える文字。範囲の中でも、重ねて数えない。 */
+const COUNTED_AS_INVISIBLE =
+  /^[\p{Mn}\p{Me}\p{Cf}\p{Cc}\p{Cn}\p{Co}\p{Cs}\p{Zs}\p{Zl}\p{Zp}]$/u;
 
 function isStrongRtl(char: string): boolean {
   const codePoint = char.codePointAt(0) ?? 0;
   return (
     STRONG_RTL_RANGES.some(
       ([from, to]) => codePoint >= from && codePoint <= to,
-    ) && LETTER.test(char)
+    ) && !COUNTED_AS_INVISIBLE.test(char)
   );
 }
 
@@ -381,11 +408,12 @@ function isStrongRtl(char: string): boolean {
  * 設計書の全文にある、見えない文字と見えにくい並びの件数。
  * 重なる文字は、それぞれの件数に数える。
  * - `invisible`: 表記にする文字のうち、数えるもの。U+0020以外の空白は、単独では数えない。
- *   かなの後ろの単独の結合文字(濁点)も数えない。`\r`は数える
- * - `strongRtl`: 強い右から左の文字(並びの見た目を入れ替える)
+ *   かなの直後の単独の濁点と半濁点も数えない。`\r`は数える
+ * - `strongRtl`: 強い右から左の文字(並びの見た目を入れ替える)。右から左の範囲の中の、
+ *   表記の分類が数えない文字、数字、句読点、記号を含む
  * - `blankRuns`: 3行以上の空行の連続(空白とタブだけの行を含む)
- * - `spaceRuns`: 空白の連続の印。行の途中は8桁以上(タブは4桁)かU+0020以外の空白が2個以上、行頭は32桁以上
- * - `markLookalikes`: 画面が出す空行と空白の印と同じ形の文言(本文が印をまねる)
+ * - `spaceRuns`: 空白の連続の印。行の途中は8桁以上(タブは4桁)かU+3000とU+0020を除く空白が2個以上、行頭は32桁以上
+ * - `markLookalikes`: 画面が出す空行と空白の印と同じ形の文言(本文が印をまねる)。バッククォートで囲んだものは数えない
  */
 export type DesignAnomalies = {
   readonly invisible: number;
