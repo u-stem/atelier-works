@@ -15,6 +15,7 @@ import {
 } from "./lib/auto_retry.ts";
 import {
   AUTO_RETRY_REASON_PREFIXES,
+  PR_RUN_WAIT_MAX_AGE_MS,
   PR_RUN_WAIT_REASON_PREFIXES,
 } from "./lib/auto_retry_reasons.ts";
 import { loadConfig } from "./lib/config.ts";
@@ -76,6 +77,7 @@ export async function main(): Promise<AutoRetryResult> {
         to: plan.toStatus,
         reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
         waitReasonPrefixes: PR_RUN_WAIT_REASON_PREFIXES,
+        waitMaxAgeMs: PR_RUN_WAIT_MAX_AGE_MS,
         clearFlowJobId: plan.leased,
         notePrefix: AUTO_RETRY_NOTE_PREFIX,
         maxRestarts: AUTO_RETRY_MAX_RESTARTS,

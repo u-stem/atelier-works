@@ -1252,6 +1252,7 @@ export type AutoRetryCandidate = {
  * `noticeKind`のnoticeが`resolvedBy`に解決された作業項目を、IDの小さい順に`limit`件まで返す。
  * 実装(`issue`)の`needs_human`は、止まった理由が`waitReasonPrefixes`のどれかで始まるものも返す。
  * こちらはnoticeの解決を条件にしない。終端でない回が終わったかは、呼び出し側が`waits_for_pr_run`で見分けて確かめる。
+ * ただし、最新の注記を書いてから`waitMaxAgeMs`以内のものに限る。古い止まりは、人が再実行する。
  * 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`である。
  * 理由は、その状態へ移った最新の遷移の注記である。
  * 同じIssueに新しいサイクルがある`issue`は、新しいサイクルに置き換えられているので除く。
@@ -1322,6 +1323,7 @@ export async function listAutoRetryCandidates(
             SELECT 1 FROM unnest(${[...params.waitReasonPrefixes]}::text[]) AS wp(prefix)
             WHERE starts_with(last.note, wp.prefix)
           )
+          AND last.occurred_at > now() - (${params.waitMaxAgeMs}::double precision * interval '1 millisecond')
         )
       )
       AND NOT EXISTS (
@@ -1373,6 +1375,7 @@ export async function listAutoRetryCandidates(
  * 止まった後に、本文に`noticeMarker`を含む`noticeKind`のnoticeが`resolvedBy`に解決されているときだけ更新し、
  * 同じ文で遷移の記録を残す。
  * 実装(`issue`)の注記が`waitReasonPrefixes`のどれかで始まるときは、noticeの解決を条件にしない。
+ * その代わり、最新の注記を書いてから`waitMaxAgeMs`以内のものに限る。
  * noticeの条件は、候補の一覧を読んだ後に別の実行が再開し、同じ理由で止まり直した作業項目を、
  * 新しい解決の無いまま再び再開しないための歯止めである。`clearFlowJobId`なら`flow_job_id`も空にする。
  * 条件に合わなければ何も書かずに`false`を返す。条件を確かめた後に別の`pr_fix`が先に稼働中になり、
@@ -1444,6 +1447,12 @@ export async function restartStoppedWorkItem(
                 LIMIT 1
               ), wp.prefix)
             )
+            AND (
+              SELECT e.occurred_at FROM factory.work_item_events e
+              WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+              ORDER BY e.occurred_at DESC, e.id DESC
+              LIMIT 1
+            ) > now() - (${params.waitMaxAgeMs}::double precision * interval '1 millisecond')
           )
         )
         AND (

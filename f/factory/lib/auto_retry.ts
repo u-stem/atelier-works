@@ -27,6 +27,7 @@ import {
   AUTO_RETRY_REASON_PREFIXES,
   HOST_ACTION_NOTICE_KIND,
   HOST_ACTION_RESOLVER,
+  PR_RUN_WAIT_MAX_AGE_MS,
   PR_RUN_WAIT_REASON_PREFIXES,
   STALE_IMAGE_NOTICE_MARKER,
 } from "./auto_retry_reasons.ts";
@@ -63,6 +64,7 @@ export function autoRetryCandidateQuery(limit: number) {
   return {
     reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
     waitReasonPrefixes: PR_RUN_WAIT_REASON_PREFIXES,
+    waitMaxAgeMs: PR_RUN_WAIT_MAX_AGE_MS,
     noticeKind: HOST_ACTION_NOTICE_KIND,
     noticeMarker: STALE_IMAGE_NOTICE_MARKER,
     resolvedBy: HOST_ACTION_RESOLVER,

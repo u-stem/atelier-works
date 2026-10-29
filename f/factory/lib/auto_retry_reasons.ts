@@ -41,7 +41,12 @@ export const PR_RUN_WAIT_REASON_PREFIXES: readonly string[] = [
   ACTIVE_PR_RUN_REASON,
 ];
 
-export const PR_RUN_WAIT_MAX_AGE_MS = 0;
+/**
+ * 待つ理由の止まりを自動で再開する、最新の注記を書いてからの経過時間の上限。
+ * これより古い止まりは、回の終了を待つ理由ではなくなっているので、人が再実行する。
+ * 反映の時点で残っている古い止まりを、一度にまとめて再開しないためである。
+ */
+export const PR_RUN_WAIT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** 自動で再開してよい止まった理由の先頭。 */
 export const AUTO_RETRY_REASON_PREFIXES: readonly string[] = [
