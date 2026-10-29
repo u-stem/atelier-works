@@ -6,6 +6,7 @@ import { MAX_REASON_LENGTH } from "../api/writes.ts";
 import { auditReportPath } from "./auditView.ts";
 import { displayableIssueText } from "./intakeText.ts";
 import { requirementsPath } from "./requirementsView.ts";
+import type { DesignApprovalInput } from "./visibleText.ts";
 
 /**
  * 承認と却下の操作を出してよい依頼か。承認待ち(pending)で、期限内のものに限る。
@@ -152,6 +153,12 @@ export function requirementsBlockedReason(
     return SNAPSHOT_BLOCKED[snapshot];
   }
   return doc === "ready" ? null : DOC_BLOCKED[doc];
+}
+
+export function designBlockedReason(
+  _input: DesignApprovalInput,
+): string | null {
+  return null;
 }
 
 /** 期限を過ぎた依頼に出す文。 */

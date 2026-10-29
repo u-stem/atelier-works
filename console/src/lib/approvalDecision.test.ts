@@ -5,6 +5,7 @@ import {
   approvalLinks,
   approveGateProblem,
   decisionSurface,
+  designBlockedReason,
   docReadiness,
   EXPIRED_MESSAGE,
   FULL_CHECK_MESSAGE,
@@ -20,6 +21,10 @@ import {
   waitingMessage,
   withFactoryLabelArg,
 } from "./approvalDecision.ts";
+import {
+  type DesignApprovalInput,
+  designApprovalBlock,
+} from "./visibleText.ts";
 
 const NOW = Date.parse("2026-10-11T00:00:00.000Z");
 
@@ -606,6 +611,229 @@ describe("requirementsBlockedReason", () => {
   test("reports the snapshot first when both are not ready", () => {
     expect(requirementsBlockedReason("failed", "loading")).toContain(
       "取り込み時点のIssue",
+    );
+  });
+});
+
+const DESIGN_READY: DesignApprovalInput = {
+  approvalRequestId: 31,
+  snapshot: "ready",
+  doc: {
+    isPending: false,
+    isError: false,
+    data: {
+      approval_request_id: 31,
+      text: "# 設計\n\n本文です。\n",
+      truncated: false,
+      approval_status: "pending",
+    },
+  },
+  workItemStatus: "awaiting_design_approval",
+};
+
+function designWith(patch: {
+  readonly text?: string;
+  readonly truncated?: boolean;
+  readonly approval_status?: string;
+}): DesignApprovalInput {
+  return {
+    ...DESIGN_READY,
+    doc: {
+      ...DESIGN_READY.doc,
+      data: {
+        approval_request_id: 31,
+        text: patch.text ?? "# 設計\n",
+        truncated: patch.truncated ?? false,
+        approval_status: patch.approval_status ?? "pending",
+      },
+    },
+  };
+}
+
+describe("designBlockedReason", () => {
+  test("lets a clean design through", () => {
+    expect(designBlockedReason(DESIGN_READY)).toBeNull();
+  });
+
+  test("gives the same answer as designApprovalBlock for a truncated design", () => {
+    const input = designWith({ truncated: true });
+    expect(designBlockedReason(input)).toBe(designApprovalBlock(input));
+  });
+
+  test("blocks a truncated design", () => {
+    expect(designBlockedReason(designWith({ truncated: true }))).toContain(
+      "切られて",
+    );
+  });
+
+  test("blocks a design with an invisible character", () => {
+    expect(designBlockedReason(designWith({ text: "a​b" }))).toContain(
+      "見えない文字",
+    );
+  });
+
+  test("blocks while the design is loading", () => {
+    expect(
+      designBlockedReason({
+        ...DESIGN_READY,
+        doc: { isPending: true, isError: false, data: undefined },
+      }),
+    ).toContain("設計書を読み込み中");
+  });
+
+  test("blocks when the design failed to load", () => {
+    expect(
+      designBlockedReason({
+        ...DESIGN_READY,
+        doc: { isPending: false, isError: true, data: undefined },
+      }),
+    ).toContain("設計書を取得できていません");
+  });
+
+  test("blocks when the design is not found", () => {
+    expect(
+      designBlockedReason({
+        ...DESIGN_READY,
+        doc: { isPending: false, isError: false, data: null },
+      }),
+    ).toContain("設計書が見つかりません");
+  });
+
+  test("blocks a design of another request", () => {
+    expect(
+      designBlockedReason({ ...DESIGN_READY, approvalRequestId: 32 }),
+    ).toContain("違います");
+  });
+
+  test("blocks when the intake issue cannot be seen", () => {
+    expect(
+      designBlockedReason({ ...DESIGN_READY, snapshot: "failed" }),
+    ).toContain("取り込み時点のIssue");
+  });
+
+  test("blocks when the work item status is missing", () => {
+    expect(
+      designBlockedReason({ ...DESIGN_READY, workItemStatus: undefined }),
+    ).toContain("作業項目の状態");
+  });
+
+  test("blocks when the work item is not waiting for the design approval", () => {
+    expect(
+      designBlockedReason({ ...DESIGN_READY, workItemStatus: "implementing" }),
+    ).toContain("設計の承認待ちではない");
+  });
+
+  test("blocks when the request is not pending", () => {
+    expect(
+      designBlockedReason(designWith({ approval_status: "rejected" })),
+    ).toContain("承認待ちではない");
+  });
+
+  test("stops the approval through the approval gate", () => {
+    expect(
+      approveGateProblem({
+        approval: { status: "pending", expires_at: null },
+        nowMs: NOW,
+        blockedReason: designBlockedReason({
+          ...DESIGN_READY,
+          workItemStatus: undefined,
+        }),
+        fullCheckRequired: false,
+        fullChecked: false,
+      }),
+    ).toContain("作業項目の状態");
+  });
+
+  test("keeps a rejection open when the design cannot be shown", () => {
+    expect(
+      rejectConfirmation({
+        kind: "design",
+        subject: "Add feature",
+        approvalRequestId: 31,
+      }),
+    ).not.toBeNull();
+  });
+});
+
+describe("approvalConfirmation for a design", () => {
+  const confirmation = approvalConfirmation({
+    kind: "design",
+    subject: "Add feature",
+    approvalRequestId: 31,
+    withFactoryLabel: undefined,
+  });
+
+  test("names the subject and the request id", () => {
+    expect([confirmation.subject, confirmation.idLabel]).toEqual([
+      "Add feature",
+      "承認依頼 #31",
+    ]);
+  });
+
+  test("says that the implementation starts with the approved design", () => {
+    expect(confirmation.consequence).toBe(
+      "承認すると、実装が始まります。承認した設計書(正規化後の全文)が実装に渡ります。取り消せません。",
+    );
+  });
+});
+
+describe("rejectConfirmation for a design", () => {
+  const confirmation = rejectConfirmation({
+    kind: "design",
+    subject: "Add feature",
+    approvalRequestId: 31,
+  });
+
+  test("names the subject and the request id", () => {
+    expect([confirmation?.subject, confirmation?.idLabel]).toEqual([
+      "Add feature",
+      "承認依頼 #31",
+    ]);
+  });
+
+  test("says that a reason is required", () => {
+    expect(confirmation?.consequence).toContain("却下には理由が必要です。");
+  });
+
+  test("says that the design is regenerated", () => {
+    expect(confirmation?.consequence).toContain(
+      "却下すると、設計を作り直します。",
+    );
+  });
+
+  test("says that rejections and returns share the limit", () => {
+    expect(confirmation?.consequence).toContain(
+      "反映できた却下と、実装とPR修正からの戻しは、合わせて上限(設定のmax_design_attempts)を分け合います。",
+    );
+  });
+
+  test("says that reaching the limit with this rejection waits for a person", () => {
+    expect(confirmation?.consequence).toContain(
+      "今回の却下を足して上限に達すると、作り直さず人の対応待ちになります。",
+    );
+  });
+
+  test("says that a changed issue returns to the requirements", () => {
+    expect(confirmation?.consequence).toContain(
+      "取り込み時点からIssueが変わっていれば、要件定義へ戻ります。",
+    );
+  });
+
+  test("says that the reason goes to the requirements generation", () => {
+    expect(confirmation?.consequence).toContain(
+      "却下の理由は要件定義の生成にも渡ります。",
+    );
+  });
+
+  test("says what happens when the issue cannot be read", () => {
+    expect(confirmation?.consequence).toContain(
+      "Issueを読めないときは、変わっていないものとして設計を作り直します。",
+    );
+  });
+
+  test("says what happens when the design stage is disabled", () => {
+    expect(confirmation?.consequence).toContain(
+      "設計工程が無効のときは、作り直さず人の対応待ちになります。",
     );
   });
 });

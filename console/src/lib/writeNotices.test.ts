@@ -43,6 +43,39 @@ describe("describeApprovalResult", () => {
       describeApprovalResult({ ok: true, status: "rejected", job_id: JOB }),
     ).toEqual({ tone: "success", message: "却下しました。" });
   });
+
+  test("keeps the wording for requirements", () => {
+    expect(
+      describeApprovalResult(
+        { ok: true, status: "approved", job_id: JOB },
+        "requirements",
+      ),
+    ).toEqual({ tone: "success", message: "承認しました。" });
+  });
+
+  test("tells that the start of the implementation is checked on the work item", () => {
+    expect(
+      describeApprovalResult(
+        { ok: true, status: "approved", job_id: JOB },
+        "design",
+      ),
+    ).toEqual({
+      tone: "success",
+      message: "承認を記録しました。実装の開始は作業項目で確かめてください。",
+    });
+  });
+
+  test("tells that the destination of a rejection is checked on the work item", () => {
+    expect(
+      describeApprovalResult(
+        { ok: true, status: "rejected", job_id: JOB },
+        "design",
+      ),
+    ).toEqual({
+      tone: "success",
+      message: "却下を記録しました。行き先は作業項目で確かめてください。",
+    });
+  });
 });
 
 describe("describeRetryResult", () => {

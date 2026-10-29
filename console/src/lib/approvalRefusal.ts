@@ -82,6 +82,7 @@ const REFUSALS: readonly {
  */
 export function classifyDecisionRefusal(
   error: ApiError,
+  _kind?: string,
 ): DecisionRefusal | null {
   if (error.kind !== "job_failed") {
     return null;

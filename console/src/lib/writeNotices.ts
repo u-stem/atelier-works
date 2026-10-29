@@ -75,6 +75,7 @@ function noteActionAudit(
 
 export function describeApprovalResult(
   result: ApprovalDecideResult,
+  _kind?: string,
 ): WriteNotice {
   return {
     tone: "success",

@@ -83,6 +83,42 @@ describe("classifyDecisionRefusal", () => {
     );
   });
 
+  test("adds the limit of the design regeneration when a design issue could not be compared", () => {
+    expect(
+      classifyDecisionRefusal(jobFailed(UNAVAILABLE), "design")?.actions,
+    ).toEqual([
+      "少し待って、もう一度承認する。",
+      "Issueを移したか削除したなら、却下する。却下すると、上限(設定のmax_design_attempts)まで設計を作り直し、上限に達すると人の対応待ちになる。",
+    ]);
+  });
+
+  test("keeps the actions for requirements when the issue could not be compared", () => {
+    expect(
+      classifyDecisionRefusal(jobFailed(UNAVAILABLE), "requirements")?.actions,
+    ).toEqual([
+      "少し待って、もう一度承認する。",
+      "Issueを移したか削除したなら、却下する。",
+    ]);
+  });
+
+  test("keeps the actions when no kind is given", () => {
+    expect(
+      classifyDecisionRefusal(jobFailed(UNAVAILABLE))?.actions.join(""),
+    ).not.toContain("上限");
+  });
+
+  test("keeps the actions for a design whose issue changed", () => {
+    expect(
+      classifyDecisionRefusal(jobFailed(CHANGED), "design")?.actions,
+    ).toEqual(classifyDecisionRefusal(jobFailed(CHANGED))?.actions);
+  });
+
+  test("keeps the message for a design whose issue could not be compared", () => {
+    expect(
+      classifyDecisionRefusal(jobFailed(UNAVAILABLE), "design")?.message,
+    ).toBe(classifyDecisionRefusal(jobFailed(UNAVAILABLE))?.message);
+  });
+
   test("ignores an error that is not a job failure", () => {
     expect(classifyDecisionRefusal({ kind: "network" })).toBeNull();
   });
