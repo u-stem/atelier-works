@@ -46,10 +46,16 @@ describe("isApprovalDesignDocRows", () => {
     expect(isApprovalDesignDocRows(ROW)).toBe(false);
   });
 
-  test("rejects a row with an unknown approval status", () => {
+  test("accepts an approval status the Console does not know", () => {
     expect(
       isApprovalDesignDocRows([{ ...ROW, approval_status: "cancelled" }]),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  test("rejects a row whose approval status is not a string", () => {
+    expect(isApprovalDesignDocRows([{ ...ROW, approval_status: 1 }])).toBe(
+      false,
+    );
   });
 
   test("rejects a row whose text is not a string", () => {
