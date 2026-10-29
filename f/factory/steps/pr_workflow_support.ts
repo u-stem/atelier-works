@@ -5253,7 +5253,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^pull request has an active fix run$/,
     describe: () => "このPRで自動修正が実行中のため実装を止めました",
-    nextAction: () => `自動修正の完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
+    // 回の終了後に自己更新が自動で再開するので、人の操作は上限に達したときだけ要る。
+    nextAction: () =>
+      `対応は要りません。自動で再開します。3回再開しても止まるときだけ、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^parent issue is being re-implemented$/,
