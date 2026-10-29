@@ -42,8 +42,12 @@ describe("visibleText passes printable characters through", () => {
     ]);
   });
 
-  test("keeps Japanese text, a tab and U+0020 as plain", () => {
-    expect(kinds("設計\t書 です")).toEqual(["plain"]);
+  test("keeps Japanese text and U+0020 as plain", () => {
+    expect(kinds("設計書 です")).toEqual(["plain"]);
+  });
+
+  test("keeps a tab at the start of a line as plain", () => {
+    expect(kinds("\t設計書")).toEqual(["plain"]);
   });
 
   test("keeps a character outside the BMP as plain", () => {
@@ -149,6 +153,15 @@ describe("visibleText blank-run", () => {
     expect(blankRuns("a\n\r\n\r\n\r\nb")).toEqual([]);
   });
 
+  test("counts a line of ideographic spaces as an empty line", () => {
+    expect(blankRuns(`a\n${"\u3000\n".repeat(5)}b`)).toHaveLength(1);
+  });
+
+  test("restores a run of lines of ideographic spaces", () => {
+    const text = `a\n${"\u3000\n".repeat(5)}b`;
+    expect(restoreText(visibleText(text))).toBe(text);
+  });
+
   test("marks a run at the start of the text", () => {
     expect(blankRuns("\n\n\nabc")).toHaveLength(1);
   });
@@ -190,7 +203,64 @@ describe("visibleText space-run", () => {
   });
 
   test("marks a run that follows a notated character", () => {
-    expect(spaceRuns("　        b")).toHaveLength(1);
+    expect(spaceRuns("\u200B        b")).toHaveLength(1);
+  });
+
+  test("counts a tab as eight columns in the middle of a line", () => {
+    expect(spaceRuns("a\tb")).toHaveLength(1);
+  });
+
+  test("marks an indent of 32 spaces at the start of a line", () => {
+    expect(spaceRuns(`a\n${" ".repeat(32)}b`)).toHaveLength(1);
+  });
+
+  test("leaves an indent of 31 spaces at the start of a line", () => {
+    expect(spaceRuns(`a\n${" ".repeat(31)}b`)).toEqual([]);
+  });
+
+  test("marks an indent of four tabs at the start of a line", () => {
+    expect(spaceRuns("a\n\t\t\t\tb")).toHaveLength(1);
+  });
+
+  test("leaves an indent of three tabs at the start of a line", () => {
+    expect(spaceRuns("a\n\t\t\tb")).toEqual([]);
+  });
+
+  test("marks a run of seven tabs", () => {
+    expect(spaceRuns(`a${"\t".repeat(7)}b`)).toHaveLength(1);
+  });
+
+  test("keeps one ideographic space as a notation", () => {
+    expect(kinds("a\u3000b")).toEqual(["plain", "code", "plain"]);
+  });
+
+  test("marks two ideographic spaces in a row in the middle of a line", () => {
+    expect(spaceRuns("a\u3000\u3000b")).toHaveLength(1);
+  });
+
+  test("marks two no-break spaces in a row in the middle of a line", () => {
+    expect(spaceRuns("a\u00A0\u00A0b")).toHaveLength(1);
+  });
+
+  test("marks eight ideographic spaces", () => {
+    expect(spaceRuns(`a${"\u3000".repeat(8)}b`)).toHaveLength(1);
+  });
+
+  test("marks a mix of an ideographic space and seven spaces", () => {
+    expect(spaceRuns("a\u3000       b")).toHaveLength(1);
+  });
+
+  test("keeps two ideographic spaces of an indent as notations", () => {
+    expect(spaceRuns("\u3000\u3000本文")).toEqual([]);
+  });
+
+  test("keeps an ideographic space between spaces as a notation", () => {
+    expect(codes("a \u3000 b")).toEqual(["U+3000"]);
+  });
+
+  test("restores a run that mixes spaces, tabs and ideographic spaces", () => {
+    const text = "a \u3000\t\u3000  b";
+    expect(restoreText(visibleText(text))).toBe(text);
   });
 
   test("does not join runs across a line break", () => {
@@ -245,8 +315,41 @@ describe("countDesignAnomalies", () => {
     expect(countDesignAnomalies("a‮b").invisible).toBe(1);
   });
 
-  test("counts a no-break space as an anomaly", () => {
-    expect(countDesignAnomalies("a b").total).toBe(1);
+  test("does not count one no-break space", () => {
+    expect(countDesignAnomalies("a\u00A0b").total).toBe(0);
+  });
+
+  test("does not count one ideographic space", () => {
+    expect(countDesignAnomalies("# 設計\u3000書\n").total).toBe(0);
+  });
+
+  test("counts two ideographic spaces in a row as a space run", () => {
+    expect(countDesignAnomalies("a\u3000\u3000b").spaceRuns).toBe(1);
+  });
+
+  test("does not count two ideographic spaces as invisible characters", () => {
+    expect(countDesignAnomalies("a\u3000\u3000b").invisible).toBe(0);
+  });
+
+  test("counts eight ideographic spaces as one space run", () => {
+    expect(countDesignAnomalies(`a${"\u3000".repeat(8)}b`).spaceRuns).toBe(1);
+  });
+
+  test("counts a line separator as an invisible character", () => {
+    expect(countDesignAnomalies("a\u2028b").invisible).toBe(1);
+  });
+
+  test("counts a carriage return as an invisible character", () => {
+    expect(countDesignAnomalies("a\r\nb").invisible).toBe(1);
+  });
+
+  test("counts an indent of 32 spaces as a space run", () => {
+    expect(countDesignAnomalies(`a\n${" ".repeat(32)}b`).spaceRuns).toBe(1);
+  });
+
+  test("counts repeated runs of seven tabs", () => {
+    const text = `a${"\t".repeat(7)}b\n`.repeat(3);
+    expect(countDesignAnomalies(text).spaceRuns).toBe(3);
   });
 
   test("counts a Hebrew letter as a strong right to left character", () => {
@@ -255,6 +358,22 @@ describe("countDesignAnomalies", () => {
 
   test("counts an Arabic letter as a strong right to left character", () => {
     expect(countDesignAnomalies("aابb").strongRtl).toBe(2);
+  });
+
+  test("does not count an Arabic-Indic digit as a strong right to left character", () => {
+    expect(countDesignAnomalies("a\u0660b").strongRtl).toBe(0);
+  });
+
+  test("does not count ornate parentheses in the right to left range", () => {
+    expect(countDesignAnomalies("a\uFD3Eb").strongRtl).toBe(0);
+  });
+
+  test("counts an Arabic letter mark as an invisible character", () => {
+    expect(countDesignAnomalies("a\u061Cb").invisible).toBe(1);
+  });
+
+  test("does not count an Arabic letter mark as a strong right to left character", () => {
+    expect(countDesignAnomalies("a\u061Cb").strongRtl).toBe(0);
   });
 
   test("counts a character outside the BMP in the right to left range", () => {
@@ -277,9 +396,15 @@ describe("countDesignAnomalies", () => {
     expect(countDesignAnomalies("a        b").spaceRuns).toBe(1);
   });
 
-  test("counts the end mark that the text writes itself", () => {
+  test("does not count the end mark that the text writes itself", () => {
     expect(countDesignAnomalies(`a\n${endMark(3, 20)}\n`).markLookalikes).toBe(
-      1,
+      0,
+    );
+  });
+
+  test("does not count a sentence that mentions the end mark", () => {
+    expect(countDesignAnomalies("画面は全文の終わりの印を出す。").total).toBe(
+      0,
     );
   });
 
@@ -291,13 +416,104 @@ describe("countDesignAnomalies", () => {
     expect(countDesignAnomalies(spaceRunMark(9)).markLookalikes).toBe(1);
   });
 
-  test("counts a mark with the wording only", () => {
-    expect(countDesignAnomalies("[空行").markLookalikes).toBe(1);
+  test("does not count the opening of a mark without a number", () => {
+    expect(countDesignAnomalies("[空行").markLookalikes).toBe(0);
+  });
+
+  test("does not count a link whose text starts like a mark", () => {
+    expect(countDesignAnomalies("[空白の扱い](docs/a.md)").total).toBe(0);
+  });
+
+  test("does not count a mark without its closing words", () => {
+    expect(countDesignAnomalies("[空行 5]").markLookalikes).toBe(0);
+  });
+
+  test("counts a blank-run mark with full-width brackets", () => {
+    expect(countDesignAnomalies("［空行 5 行］").markLookalikes).toBe(1);
+  });
+
+  test("counts a space-run mark with full-width digits", () => {
+    expect(countDesignAnomalies("[空白 １２ 個]").markLookalikes).toBe(1);
+  });
+
+  test("counts a mark without spaces", () => {
+    expect(countDesignAnomalies("[空行5行]").markLookalikes).toBe(1);
+  });
+
+  test("counts two marks in one text", () => {
+    expect(
+      countDesignAnomalies(`${blankRunMark(3)} ${spaceRunMark(9)}`)
+        .markLookalikes,
+    ).toBe(2);
   });
 
   test("adds every count into the total", () => {
-    const text = `a​א\n\n\n\nb        c ${endMark(1, 1)}`;
+    const text = `a\u200B\u05D0\n\n\n\nb        c ${blankRunMark(1)}`;
     expect(countDesignAnomalies(text).total).toBe(5);
+  });
+});
+
+describe("countDesignAnomalies for combining marks", () => {
+  test("does not count a voiced sound mark after a hiragana", () => {
+    expect(countDesignAnomalies("か\u3099").total).toBe(0);
+  });
+
+  test("does not count a semi-voiced sound mark after a katakana", () => {
+    expect(countDesignAnomalies("ハ\u309A").total).toBe(0);
+  });
+
+  test("keeps the voiced sound mark as a notation", () => {
+    expect(codes("か\u3099")).toEqual(["U+3099"]);
+  });
+
+  test("does not count a decomposed Japanese sentence", () => {
+    expect(countDesignAnomalies("設計か\u3099終わる。ハ\u309Aーツ").total).toBe(
+      0,
+    );
+  });
+
+  test("counts a combining mark at the start of the text", () => {
+    expect(countDesignAnomalies("\u3099か").invisible).toBe(1);
+  });
+
+  test("counts a combining mark right after a newline", () => {
+    expect(countDesignAnomalies("か\n\u3099か").invisible).toBe(1);
+  });
+
+  test("counts both marks of a run of two", () => {
+    expect(countDesignAnomalies("か\u3099\u3099").invisible).toBe(2);
+  });
+
+  test("counts a combining mark after a Latin letter", () => {
+    expect(countDesignAnomalies("e\u0301").invisible).toBe(1);
+  });
+
+  test("counts a voiced sound mark after a Latin letter", () => {
+    expect(countDesignAnomalies("a\u3099").invisible).toBe(1);
+  });
+
+  test("counts a voiced sound mark after a kanji", () => {
+    expect(countDesignAnomalies("漢\u3099").invisible).toBe(1);
+  });
+
+  test("does not count a single combining mark after a kanji", () => {
+    expect(countDesignAnomalies("漢\u0301").invisible).toBe(0);
+  });
+
+  test("counts a combining mark after a space", () => {
+    expect(countDesignAnomalies("か \u3099").invisible).toBe(1);
+  });
+
+  test("counts a variation selector after a kanji", () => {
+    expect(countDesignAnomalies("漢\uFE0F").invisible).toBe(1);
+  });
+
+  test("counts an enclosing mark after a Latin letter", () => {
+    expect(countDesignAnomalies("a\u20DD").invisible).toBe(1);
+  });
+
+  test("counts both a zero width space and the mark after it", () => {
+    expect(countDesignAnomalies("か\u200B\u3099").invisible).toBe(2);
   });
 });
 
@@ -487,9 +703,32 @@ describe("designApprovalBlock", () => {
     ["blank lines", "a\n\n\n\nb"],
     ["lines of spaces", `a\n${" \n".repeat(5)}b`],
     ["a long run of spaces", "a        b"],
-    ["a copy of the end mark", `a\n${endMark(2, 8)}`],
+    ["a copy of the blank-run mark", `a\n${blankRunMark(9)}`],
+    ["a copy of the space-run mark", `a ${spaceRunMark(9)}`],
+    ["eight ideographic spaces", `a${"\u3000".repeat(8)}b`],
+    ["two no-break spaces in a row", "a\u00A0\u00A0b"],
+    ["an indent of 32 spaces", `a\n${" ".repeat(32)}b`],
+    ["repeated runs of seven tabs", `a${"\t".repeat(7)}b\n`.repeat(3)],
+    ["a combining mark after a Latin letter", "e\u0301"],
   ])("stops a design with %s", (_name, text) => {
     expect(designApprovalBlock(withDoc({ text }))).toBe(ANOMALY_MESSAGE);
+  });
+
+  test.each([
+    ["one ideographic space in a title", "# 設計\u3000書\n"],
+    ["one no-break space", "a\u00A0b"],
+    ["a decomposed voiced sound mark", "か\u3099"],
+    ["a sentence that mentions the end mark", "画面は全文の終わりの印を出す。"],
+    ["a link that starts like a mark", "[空白の扱い](docs/a.md)"],
+    ["an indent of 31 spaces", `a\n${" ".repeat(31)}b`],
+    ["two ideographic spaces of an indent", "\u3000\u3000本文です。"],
+  ])("lets a design with %s through", (_name, text) => {
+    expect(designApprovalBlock(withDoc({ text }))).toBeNull();
+  });
+
+  test("documents that two empty lines between single characters are not stopped", () => {
+    const text = "x\n \n \n".repeat(200);
+    expect(designApprovalBlock(withDoc({ text }))).toBeNull();
   });
 
   test("stops a design that is truncated before it looks for anomalies", () => {

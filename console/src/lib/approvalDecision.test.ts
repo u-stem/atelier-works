@@ -743,16 +743,6 @@ describe("designBlockedReason", () => {
       }),
     ).toContain("作業項目の状態");
   });
-
-  test("keeps a rejection open when the design cannot be shown", () => {
-    expect(
-      rejectConfirmation({
-        kind: "design",
-        subject: "Add feature",
-        approvalRequestId: 31,
-      }),
-    ).not.toBeNull();
-  });
 });
 
 describe("approvalConfirmation for a design", () => {
@@ -782,6 +772,10 @@ describe("rejectConfirmation for a design", () => {
     kind: "design",
     subject: "Add feature",
     approvalRequestId: 31,
+  });
+
+  test("returns a confirmation for a design rejection", () => {
+    expect(confirmation).not.toBeNull();
   });
 
   test("names the subject and the request id", () => {

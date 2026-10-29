@@ -6,8 +6,11 @@
 // `safeText`は通さない。通すと、U+2028などがU+FFFDに、`\r\n`が`\n`に変わり、実装に渡る文字と一致しない。
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   countDesignAnomalies,
+  designApprovalBlock,
   restoreText,
   visibleText,
 } from "../../console/src/lib/visibleText.ts";
@@ -22,14 +25,18 @@ const MAX_CODE_POINT = 0x10ffff;
 /** 表記の対象に足す分類。U+0020は素通りなので、判定で除く。 */
 const EXTRA_NOTATION = /^[\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}]$/u;
 
-/** 強い右から左の文字として数える範囲(UAX#9の既定のRとALの範囲)。 */
-const STRONG_RTL_RANGES: readonly (readonly [number, number])[] = [
-  [0x0590, 0x08ff],
-  [0xfb1d, 0xfdff],
-  [0xfe70, 0xfeff],
-  [0x10800, 0x10fff],
-  [0x1e800, 0x1efff],
-];
+/**
+ * 右から左へ書く文字体系の文字(`\p{L}`)。`visibleText`の範囲の表とは別に、Unicodeの文字体系から作る。
+ * 数える側に1つも漏れないことを、表の写しでなく、この集合で確かめる。
+ */
+const RTL_SCRIPT_LETTER =
+  /^(?=\p{L})[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}\p{Script=Hanifi_Rohingya}]$/u;
+
+/** 左から右へ書く、広く使われる文字体系の文字。数えてはならない。 */
+const LTR_SCRIPT_LETTER =
+  /^(?=\p{L})[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
+
+const LETTER = /^\p{L}$/u;
 
 function codePointString(codePoint: number): string {
   return String.fromCodePoint(codePoint);
@@ -40,12 +47,6 @@ function expectedNotated(char: string): boolean {
   if (INVISIBLE_PATTERN.test(char)) return true;
   if (!isAllowedCharacter(char)) return true;
   return char !== " " && EXTRA_NOTATION.test(char);
-}
-
-function expectedStrongRtl(codePoint: number): boolean {
-  return STRONG_RTL_RANGES.some(
-    ([from, to]) => codePoint >= from && codePoint <= to,
-  );
 }
 
 function notatedSources(text: string): string[] {
@@ -62,7 +63,9 @@ type Scan = {
   readonly notRestored: number[];
   readonly notatedCount: number;
   readonly rtlMissed: number[];
-  readonly rtlExtra: number[];
+  readonly rtlOnNonLetter: number[];
+  readonly rtlOnLtrLetter: number[];
+  readonly rtlScriptCount: number;
 };
 
 function hex(codePoint: number): string {
@@ -79,7 +82,9 @@ function scan(): Scan {
   const wrongLabel: number[] = [];
   const notRestored: number[] = [];
   const rtlMissed: number[] = [];
-  const rtlExtra: number[] = [];
+  const rtlOnNonLetter: number[] = [];
+  const rtlOnLtrLetter: number[] = [];
+  let rtlScriptCount = 0;
   let notatedCount = 0;
   for (let codePoint = 0; codePoint <= MAX_CODE_POINT; codePoint += 1) {
     const char = codePointString(codePoint);
@@ -101,9 +106,14 @@ function scan(): Scan {
     }
     if (restoreText(segments) !== text) notRestored.push(codePoint);
     const rtl = countDesignAnomalies(text).strongRtl;
-    const wantsRtl = expectedStrongRtl(codePoint);
-    if (wantsRtl && rtl !== 1) rtlMissed.push(codePoint);
-    if (!wantsRtl && rtl !== 0) rtlExtra.push(codePoint);
+    if (RTL_SCRIPT_LETTER.test(char)) {
+      rtlScriptCount += 1;
+      if (rtl !== 1) rtlMissed.push(codePoint);
+    }
+    if (!LETTER.test(char) && rtl !== 0) rtlOnNonLetter.push(codePoint);
+    if (LTR_SCRIPT_LETTER.test(char) && rtl !== 0) {
+      rtlOnLtrLetter.push(codePoint);
+    }
   }
   cachedScan = {
     missed,
@@ -113,7 +123,9 @@ function scan(): Scan {
     notRestored,
     notatedCount,
     rtlMissed,
-    rtlExtra,
+    rtlOnNonLetter,
+    rtlOnLtrLetter,
+    rtlScriptCount,
   };
   return cachedScan;
 }
@@ -145,12 +157,20 @@ describe("visibleText across all code points", () => {
 });
 
 describe("strong right to left characters across all code points", () => {
-  test("counts every character in the fixed ranges", () => {
+  test("counts every letter of the right to left scripts", () => {
     expect(scan().rtlMissed.map(hex)).toEqual([]);
   });
 
-  test("counts nothing outside the fixed ranges", () => {
-    expect(scan().rtlExtra.map(hex)).toEqual([]);
+  test("the scan sees the letters of the right to left scripts at all", () => {
+    expect(scan().rtlScriptCount).toBeGreaterThan(1000);
+  });
+
+  test("counts no character that is not a letter", () => {
+    expect(scan().rtlOnNonLetter.map(hex)).toEqual([]);
+  });
+
+  test("counts no letter of a left to right script", () => {
+    expect(scan().rtlOnLtrLetter.map(hex)).toEqual([]);
   });
 });
 
@@ -246,5 +266,48 @@ describe("the normalized output of a design that hides text", () => {
   test("keeps the hangul filler in the output and counts it", () => {
     const out = normalizeDesignForImplement("aㅤb", 8000).text;
     expect(countDesignAnomalies(out).invisible).toBe(1);
+  });
+});
+
+const TEMPLATE_PATH = resolve(
+  import.meta.dir,
+  "../../.claude/skills/factory-design/template.md",
+);
+
+/** 設計書の本文を、承認を送れる状態の画面に渡したときの、承認を止める理由。 */
+function blockOf(text: string): string | null {
+  return designApprovalBlock({
+    approvalRequestId: 1,
+    snapshot: "ready",
+    doc: {
+      isPending: false,
+      isError: false,
+      data: {
+        approval_request_id: 1,
+        text,
+        truncated: false,
+        approval_status: "pending",
+      },
+    },
+    workItemStatus: "awaiting_design_approval",
+  });
+}
+
+describe("the design template that the design stage fills in", () => {
+  const template = readFileSync(TEMPLATE_PATH, "utf8");
+  const titled = template.replace("<Issueタイトル>", "画面　設計");
+
+  test("is not stopped as it is", () => {
+    expect(
+      blockOf(normalizeDesignForImplement(template, 8000).text),
+    ).toBeNull();
+  });
+
+  test("is not stopped when the title holds an ideographic space", () => {
+    expect(blockOf(normalizeDesignForImplement(titled, 8000).text)).toBeNull();
+  });
+
+  test("really holds the ideographic space in the title it checks", () => {
+    expect(normalizeDesignForImplement(titled, 8000).text).toContain("　");
   });
 });
