@@ -49,4 +49,12 @@ describe("self_update wiring of the auto retry check", () => {
       /withCallTimeout\("check auto retry candidates",[\s\S]*?isReadyForImplement\(/,
     );
   });
+
+  test("gives the check of the candidates the reader of the unfinished runs", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /withCallTimeout\("check auto retry candidates",[\s\S]*?hasUnfinishedPrRun,/,
+    );
+  });
 });

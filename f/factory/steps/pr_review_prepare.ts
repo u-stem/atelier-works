@@ -23,7 +23,11 @@ import {
   repoOwnerGateDeps,
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
-import { assertGitHubName, assertSha } from "../lib/types.ts";
+import {
+  assertGitHubName,
+  assertSha,
+  type WorkItemStatus,
+} from "../lib/types.ts";
 import {
   addDetachedWorktree,
   ensureRepo,
@@ -156,6 +160,8 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
         await addDetachedWorktree({ run: runCommand, ghToken, ...input });
       },
       setHeadSha,
+      readBranchStatus: async () => null,
+      holdReview: async () => {},
       blockReview: async (reason) => {
         await blockReview(
           {
@@ -261,6 +267,12 @@ export type ReviewPrepareDeps = {
   readonly setHeadSha: (id: number, sha: string) => Promise<void>;
   /** 準備の関門でPRのレビューを見送るとき、作業項目を終端にして人に知らせる。 */
   readonly blockReview: (reason: string) => Promise<void>;
+  /** PRのheadブランチが指す作業項目の状態を返す。引けないときは`null`を返す。 */
+  readonly readBranchStatus: (
+    headRef: string,
+  ) => Promise<WorkItemStatus | null>;
+  /** 設計の段階でPRのレビューを始めないとき、通知せずに作業項目を終端にする。 */
+  readonly holdReview: (reason: string) => Promise<void>;
 };
 
 /**

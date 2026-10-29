@@ -4394,6 +4394,7 @@ execPsql(
 );
 const autoRetryParams = {
   reasonPrefixes: ["worker image is stale: "],
+  waitReasonPrefixes: ["qdb active run: "],
   noticeKind: "qdb_stale_image",
   noticeMarker: "qdb stale image probe",
   resolvedBy: "qdb",
@@ -4505,6 +4506,131 @@ check(
   "conflict round: a stopped round stays blocked",
   (await getWorkItem(conflictStopped, sql))?.status === "blocked",
 );
+
+// 終端でない回が終わるのを待つ理由で止まった実装は、解決された通知が無くても候補になり、再開できる。
+// 通知を条件にしないことを示すため、存在しない本文を通知の条件に渡す。
+const noNoticeParams = {
+  ...autoRetryParams,
+  noticeMarker: "qdb no such notice",
+};
+const waitingIssue = await issueWorkItem(9801, 1, "needs_human", "qdb waiting");
+event(waitingIssue, "needs_human", "qdb active run: busy");
+const waitRestartParams = {
+  ...noNoticeParams,
+  id: waitingIssue,
+  expectedFrom: "needs_human",
+  to: "implementing",
+  clearFlowJobId: true,
+  note: "auto_retry: restarted from needs_human",
+} as const;
+check(
+  "wait reason: an issue stopped by the reason is a candidate without a resolved notice",
+  (await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(waitingIssue),
+);
+check(
+  "wait reason: the candidate is marked as waiting for the runs",
+  (await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql)).find(
+    (candidate) => candidate.id === waitingIssue,
+  )?.waits_for_pr_run === true,
+);
+check(
+  "wait reason: a candidate of the resolved notice is not marked as waiting",
+  (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql)).find(
+    (candidate) => candidate.id === stoppedFix,
+  )?.waits_for_pr_run === false,
+);
+const otherReasonIssue = await issueWorkItem(
+  9802,
+  1,
+  "needs_human",
+  "qdb other reason",
+);
+event(otherReasonIssue, "needs_human", "qdb another reason");
+check(
+  "wait reason: an issue stopped by another reason is not a candidate without a resolved notice",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(otherReasonIssue),
+);
+check(
+  "wait reason: an issue stopped by another reason is not restarted without a resolved notice",
+  (await restartStoppedWorkItem(
+    { ...waitRestartParams, id: otherReasonIssue },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+const waitingFix = await prWorkItem(
+  "pr_fix",
+  9803,
+  "blocked",
+  "qdb waiting fix",
+);
+event(waitingFix, "blocked", "qdb active run: busy");
+check(
+  "wait reason: a pr_fix stopped by the reason is not a candidate",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(waitingFix),
+);
+check(
+  "wait reason: a pr_fix stopped by the reason is not restarted",
+  (await restartStoppedWorkItem(
+    {
+      ...waitRestartParams,
+      id: waitingFix,
+      expectedFrom: "blocked",
+      to: "fixing",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+const exhaustedIssue = await issueWorkItem(
+  9804,
+  1,
+  "needs_human",
+  "qdb exhausted waiting",
+);
+for (let attempt = 0; attempt < 3; attempt += 1) {
+  event(
+    exhaustedIssue,
+    "implementing",
+    "auto_retry: restarted from needs_human",
+  );
+}
+event(exhaustedIssue, "needs_human", "qdb active run: busy");
+check(
+  "wait reason: an issue that used up its restarts is not a candidate",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(exhaustedIssue),
+);
+check(
+  "wait reason: an issue that used up its restarts is not restarted",
+  (await restartStoppedWorkItem(
+    { ...waitRestartParams, id: exhaustedIssue },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+check(
+  "wait reason: an issue stopped by the reason is restarted without a resolved notice",
+  (await restartStoppedWorkItem(waitRestartParams, sql, NO_JOB_IDS)) === true,
+);
+check(
+  "wait reason: the restarted issue moved to implementing",
+  (await getWorkItem(waitingIssue, sql))?.status === "implementing",
+);
+check(
+  "wait reason: the restarted issue is not a candidate any more",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(waitingIssue),
+);
+
 // フロー自身が取り消した行(4つの注記)は数えず、同じheadを処理し直せる。
 // ほかの処理が取り消した行と、ほかの終端(終えた、失敗した)は処理済みとして数える。
 for (const [pr, status, note, counts] of [

@@ -91,4 +91,18 @@ describe("auto_retry_stale_image wiring", () => {
       /restartStoppedWorkItem\(\{[\s\S]*?noticeMarker: STALE_IMAGE_NOTICE_MARKER,/,
     );
   });
+
+  test("restarts an item that waits for the runs only for the reasons of the shared list", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /restartStoppedWorkItem\(\{[\s\S]*?waitReasonPrefixes: PR_RUN_WAIT_REASON_PREFIXES,/,
+    );
+  });
+
+  test("gives the shared retry the reader of the unfinished runs", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(/hasUnfinishedPrRun,\s/);
+  });
 });

@@ -1298,6 +1298,9 @@ export const BRANCH_IMPLEMENTING_REASON =
 export const BRANCH_DESIGN_STAGE_REASON =
   "the branch's work item is in the design stage";
 
+/** 設計の段階のPRのレビューを、始めずに終端にする理由。 */
+export const REVIEW_DESIGN_STAGE_REASON = "";
+
 /** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */
 export type BranchGuardKind = "implementing" | "design_stage";
 

@@ -40,6 +40,7 @@ import {
   PR_FIX_DESIGN_GAP_EXHAUSTED_REASON,
   PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
   PR_FIX_DESIGN_STAGE_PARENT_REASON,
+  REVIEW_DESIGN_STAGE_REASON,
   shouldAdvanceWatermarks,
   withGapReport,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -819,6 +820,24 @@ describe("the reasons that stop the preparation while the branch is held", () =>
 
   test("does not point a CI round to a rerun when the design stage stops it", () => {
     expect(nextActionForPrFix(DESIGN_STAGE, true)).not.toContain(RETRY);
+  });
+});
+
+describe("the reason that holds the review while the branch designs", () => {
+  test("translates the hold", () => {
+    expect(describeReason(REVIEW_DESIGN_STAGE_REASON)).toBe(
+      "このPRのブランチの作業項目が設計の最中のため、レビューを始めませんでした",
+    );
+  });
+
+  test("tells the reader that nothing is required", () => {
+    expect(nextActionFor(REVIEW_DESIGN_STAGE_REASON)).toBe(
+      "対応は要りません。設計の承認と実装の完了の後に、レビューが自動で付きます",
+    );
+  });
+
+  test("does not point to a rerun", () => {
+    expect(nextActionFor(REVIEW_DESIGN_STAGE_REASON)).not.toContain(RETRY);
   });
 });
 

@@ -1037,6 +1037,34 @@ describe("files of the design handoff to the PR fix", () => {
   });
 });
 
+describe("files of the branch hold", () => {
+  test.each([
+    "f/factory/lib/branch_hold.ts",
+    "f/factory/lib/branch_hold.script.yaml",
+    "f/factory/lib/branch_hold.script.lock",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
+  });
+
+  test.each([
+    "f/factory/steps/pr_review_prepare.ts",
+    "f/factory/lib/branch_names.ts",
+  ])("keeps %s open to the fix of the PR", (path) => {
+    expect(isDeniedPath(path)).toBe(false);
+  });
+
+  test("names the module in the doc of the denied list", async () => {
+    const source = await Bun.file(
+      join(REPO_ROOT, "f/factory/lib/ci_fix_paths.ts"),
+    ).text();
+    const doc = source.slice(
+      0,
+      source.indexOf("const CI_DENIED_NAME_PREFIXES"),
+    );
+    expect(doc.includes("`branch_hold`")).toBe(true);
+  });
+});
+
 describe("countMeaningfulLines", () => {
   test("counts a line of code", () => {
     expect(countMeaningfulLines(["expect(a).toBe(1);"])).toBe(1);

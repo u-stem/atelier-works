@@ -69,6 +69,7 @@ const ALLOWED_REFERENCES: Readonly<Record<string, Counts>> = {
  * 数が合わないときは、新しい遷移が足されたか、減ったかである。起動元の確認と同じ重さで見直す。
  */
 const ALLOWED_DESIGNING: Readonly<Record<string, number>> = {
+  "lib/branch_hold.ts": 1,
   "lib/db.ts": 13,
   "lib/types.ts": 1,
   "retry_work_item.ts": 2,

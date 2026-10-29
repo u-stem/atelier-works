@@ -25,6 +25,9 @@ export const STALE_IMAGE_NOTICE_MARKER = "workerのイメージが古く";
  */
 export const TRANSIENT_GITHUB_REASON_PREFIX = "github_transient: ";
 
+/** 終端でない回が終わるまで待って再開する止まった理由の先頭。 */
+export const PR_RUN_WAIT_REASON_PREFIXES: readonly string[] = [];
+
 /** 自動で再開してよい止まった理由の先頭。 */
 export const AUTO_RETRY_REASON_PREFIXES: readonly string[] = [
   `${CHECK_IMAGE_STALE_REASON}: `,
