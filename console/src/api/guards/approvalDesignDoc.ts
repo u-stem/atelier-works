@@ -10,6 +10,10 @@ import {
   isString,
 } from "./primitives.ts";
 
+export const DESIGN_TEXT_MAX_CODE_POINTS = 0;
+export const DESIGN_TRUNCATED_MARK_LINE = "";
+export const DESIGN_TEXT_MAX_WITH_MARK = 0;
+
 /**
  * 承認依頼が指す設計書。`text`は、承認後の実装が受け取る文字そのものである。
  * 秘密値のマスクと制御文字の除去を済ませ、長すぎるときは切ってある。
