@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "./errors.ts";
 import {
+  APPROVAL_DESIGN_DOC_STALE_MS,
+  approvalDesignDocQueryKey,
+  fetchApprovalDesignDoc,
   fetchDeployments,
   fetchIntakeSnapshot,
   fetchSummary,
@@ -191,5 +194,83 @@ describe("intakeSnapshotQueryKey", () => {
 describe("INTAKE_SNAPSHOT_STALE_MS", () => {
   test("is finite so that a refreshed snapshot is fetched again", () => {
     expect(Number.isFinite(INTAKE_SNAPSHOT_STALE_MS)).toBe(true);
+  });
+});
+
+const DESIGN_DOC_ROW = {
+  approval_request_id: 31,
+  work_item_id: 7,
+  design_attempt: 2,
+  requirement_draft_id: 11,
+  text: "# Design",
+  truncated: false,
+  approval_status: "pending",
+};
+
+describe("fetchApprovalDesignDoc", () => {
+  test("returns the design row", async () => {
+    expect(
+      await fetchApprovalDesignDoc(31, {
+        fetchFn: respondWith(JSON.stringify([DESIGN_DOC_ROW])),
+      }),
+    ).toEqual(DESIGN_DOC_ROW);
+  });
+
+  test("returns null when the request has no design", async () => {
+    expect(
+      await fetchApprovalDesignDoc(31, { fetchFn: respondWith("[]") }),
+    ).toBeNull();
+  });
+
+  test("asks the approval_design_doc view for the request", async () => {
+    const bodies: string[] = [];
+    const fetchFn: FetchLike = (_input, init) => {
+      bodies.push(String(init.body));
+      return Promise.resolve(new Response("[]"));
+    };
+    await fetchApprovalDesignDoc(31, { fetchFn });
+    expect(bodies).toEqual([
+      '{"view":"approval_design_doc","approval_request_id":31}',
+    ]);
+  });
+
+  test("throws invalid_response for a row of the wrong shape", async () => {
+    expect(
+      await failureOf(
+        fetchApprovalDesignDoc(31, {
+          fetchFn: respondWith(JSON.stringify([{ text: 1 }])),
+        }),
+      ),
+    ).toEqual({ kind: "invalid_response" });
+  });
+
+  test("throws unauthorized on 401", async () => {
+    expect(
+      await failureOf(
+        fetchApprovalDesignDoc(31, {
+          fetchFn: respondWith("Unauthorized", 401),
+        }),
+      ),
+    ).toEqual({ kind: "unauthorized" });
+  });
+});
+
+describe("approvalDesignDocQueryKey", () => {
+  test("changes with the approval request", () => {
+    expect(approvalDesignDocQueryKey(31)).not.toEqual(
+      approvalDesignDocQueryKey(32),
+    );
+  });
+
+  test("is the same for the same request", () => {
+    expect(approvalDesignDocQueryKey(31)).toEqual(
+      approvalDesignDocQueryKey(31),
+    );
+  });
+});
+
+describe("APPROVAL_DESIGN_DOC_STALE_MS", () => {
+  test("is finite so that a changed status is fetched again", () => {
+    expect(Number.isFinite(APPROVAL_DESIGN_DOC_STALE_MS)).toBe(true);
   });
 });

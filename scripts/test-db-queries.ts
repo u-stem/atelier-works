@@ -157,6 +157,10 @@ import {
   writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
+import {
+  DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+  normalizeDesignForImplement,
+} from "../f/factory/lib/model_text.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
 import {
   getCleanupSummary,
@@ -9437,6 +9441,142 @@ check(
 check(
   "design approval: the other work item is not affected",
   (await latestDesignApproval(daOtherItem, sql)) === null,
+);
+
+// 承認依頼が指す設計書の取得(console_queryのapproval_design_doc): 結合の条件は関門の照合と同じで、
+// 最新の下書きではなく依頼の指す下書きを、実装に渡すのと同じ整形で返す。
+const adToken = `ghp_${"a".repeat(36)}`;
+const adPointedMarkdown = `qdb pointed design <b>raw</b>\n[ref]: https://example.test "t"\nkey ${adToken}`;
+const adPointedDesign = await saveDesignDraftIfLeaseHolder(
+  { ...draftInput(daItem, daRequirements, 3), markdown: adPointedMarkdown },
+  "qdb-job-da",
+  sql,
+);
+const adNewestDesign = await saveDesignDraftIfLeaseHolder(
+  {
+    ...draftInput(daItem, daRequirements, 4),
+    markdown: "qdb newest design",
+  },
+  "qdb-job-da",
+  sql,
+);
+const adLongDesign = await saveDesignDraftIfLeaseHolder(
+  {
+    ...draftInput(daItem, daRequirements, 5),
+    markdown: "a".repeat(DESIGN_FOR_IMPLEMENT_MAX_CHARS + 1),
+  },
+  "qdb-job-da",
+  sql,
+);
+const adPointedRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: adPointedDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 3 },
+    expires_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.approval_requests SET status = 'rejected', decided_at = now() WHERE id = ${String(adPointedRequest)}`,
+);
+const adLongRequest = await insertApprovalRequest(
+  {
+    kind: "design",
+    work_item_id: daItem,
+    subject_id: adLongDesign ?? 0,
+    payload: { attempt: 1, design_attempt: 5 },
+    expires_at: null,
+  },
+  sql,
+);
+const adRequirementsRequest = await insertApprovalRequest(
+  {
+    kind: "requirements",
+    work_item_id: daItem,
+    subject_id: adPointedDesign ?? 0,
+    payload: { attempt: 1 },
+    expires_at: null,
+  },
+  sql,
+);
+async function approvalDesignDocFor(requestId: number) {
+  return await runConsoleQuery(
+    "approval_design_doc",
+    200,
+    30,
+    sql,
+    null,
+    null,
+    undefined,
+    requestId,
+  );
+}
+const adPointed = (await approvalDesignDocFor(adPointedRequest))[0];
+check(
+  "approval design doc: the draft the request points at is returned, not the newest draft of the work item",
+  adNewestDesign !== null &&
+    adNewestDesign > (adPointedDesign ?? 0) &&
+    adPointed !== undefined &&
+    "design_attempt" in adPointed &&
+    adPointed.design_attempt === 3 &&
+    adPointed.approval_request_id === adPointedRequest &&
+    adPointed.work_item_id === daItem &&
+    adPointed.requirement_draft_id === daRequirements,
+  adPointed,
+);
+check(
+  "approval design doc: the text is the normalized design, with HTML and link definitions kept and the secret masked",
+  adPointed !== undefined &&
+    "text" in adPointed &&
+    adPointed.text ===
+      normalizeDesignForImplement(
+        adPointedMarkdown,
+        DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+      ).text &&
+    adPointed.text.includes("<b>raw</b>") &&
+    adPointed.text.includes('[ref]: https://example.test "t"') &&
+    !adPointed.text.includes(adToken),
+  adPointed,
+);
+check(
+  "approval design doc: a rejected request still returns its design with its status",
+  adPointed !== undefined &&
+    "approval_status" in adPointed &&
+    adPointed.approval_status === "rejected",
+  adPointed,
+);
+const adLong = (await approvalDesignDocFor(adLongRequest))[0];
+check(
+  "approval design doc: a design over the limit is truncated and flagged",
+  adLong !== undefined &&
+    "truncated" in adLong &&
+    adLong.truncated === true &&
+    "text" in adLong &&
+    adLong.text ===
+      normalizeDesignForImplement(
+        "a".repeat(DESIGN_FOR_IMPLEMENT_MAX_CHARS + 1),
+        DESIGN_FOR_IMPLEMENT_MAX_CHARS,
+      ).text,
+  adLong,
+);
+check(
+  "approval design doc: a request that points at a design draft of another work item returns nothing",
+  (await approvalDesignDocFor(daForeignRequest)).length === 0,
+);
+check(
+  "approval design doc: a request whose design draft does not exist returns nothing",
+  (await approvalDesignDocFor(daMissingRequest)).length === 0,
+);
+check(
+  "approval design doc: a request that is not a design request returns nothing",
+  (await approvalDesignDocFor(adRequirementsRequest)).length === 0,
+);
+check(
+  "approval design doc: an unknown request returns nothing",
+  (await approvalDesignDocFor(2147483000)).length === 0,
 );
 
 // 再実行が差し戻しの理由を読む問い合わせ。要件定義の生成への最新の遷移(状態の変わらない行を除く)を1件返す。

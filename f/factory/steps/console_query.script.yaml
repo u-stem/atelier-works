@@ -7,6 +7,10 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
+    approval_request_id:
+      type: number
+      description: ''
+      default: null
     attempt:
       type: number
       description: view が requirements_doc のとき、取得する試行番号(省略時は最新)。

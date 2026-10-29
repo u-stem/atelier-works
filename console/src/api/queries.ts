@@ -3,6 +3,10 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
 import {
+  type ApprovalDesignDoc,
+  isApprovalDesignDocRows,
+} from "./guards/approvalDesignDoc.ts";
+import {
   type DeploymentEntry,
   isDeploymentHistory,
 } from "./guards/deployments.ts";
@@ -298,4 +302,25 @@ export function useRequirementsDoc(
       fetchRequirementsDoc(workItemId, attempt, { signal }),
     staleTime: REQUIREMENTS_STALE_MS,
   });
+}
+
+/** 承認依頼が指す設計書が新しいとみなす間隔。 */
+export const APPROVAL_DESIGN_DOC_STALE_MS = 10_000;
+
+/** 承認依頼が指す設計書のキャッシュのキー。 */
+export function approvalDesignDocQueryKey(
+  approvalRequestId: number,
+): readonly ["console", "approval_design_doc", number] {
+  return ["console", "approval_design_doc", approvalRequestId];
+}
+
+/**
+ * 承認依頼が指す設計書を取り、型ガードを通してから返す。
+ * 依頼が設計の依頼でないか、設計書が無いときは`null`を返す。失敗は`ApiFailure`で投げる。
+ */
+export async function fetchApprovalDesignDoc(
+  _approvalRequestId: number,
+  _options: RunScriptOptions = {},
+): Promise<ApprovalDesignDoc | null> {
+  return null;
 }

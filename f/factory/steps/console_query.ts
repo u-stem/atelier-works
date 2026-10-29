@@ -85,6 +85,7 @@ const CONSOLE_ROW_VIEWS = [
   "fix_rounds",
   "requirements_index",
   "requirements_doc",
+  "approval_design_doc",
   "intake_snapshot",
   "audit_index",
   "audit_doc",
@@ -943,6 +944,17 @@ async function toRequirementsDocRow(
     doc_dir_source: fromDisk === null ? "db_fallback" : "file",
   };
 }
+
+/** "approval_design_doc"ビューの1行。 */
+export type ApprovalDesignDocRow = {
+  readonly approval_request_id: number;
+  readonly work_item_id: number;
+  readonly design_attempt: number;
+  readonly requirement_draft_id: number;
+  readonly text: string;
+  readonly truncated: boolean;
+  readonly approval_status: ApprovalRequestStatus;
+};
 
 /**
  * "intake_snapshot"ビューの1行。作業項目に取り込んだ時点のIssueの題名と本文。
@@ -2295,6 +2307,7 @@ export type ConsoleQueryRow =
   | FixRoundRow
   | RequirementsIndexRow
   | RequirementsDocRow
+  | ApprovalDesignDocRow
   | IntakeSnapshotRow
   | AuditIndexRow
   | AuditDocRow
@@ -2323,6 +2336,7 @@ export async function runConsoleQuery(
   workItemId: number | null = null,
   attempt: number | null = null,
   readFile: ReadTextFile = readTextFile,
+  approvalRequestId: number | null = null,
 ): Promise<ConsoleQueryRow[]> {
   const since = sinceIso(days, new Date());
 
@@ -2488,6 +2502,10 @@ export async function runConsoleQuery(
       }
       return [await toRequirementsDocRow(rows[0], readFile)];
     }
+    case "approval_design_doc": {
+      void approvalRequestId;
+      return [];
+    }
     case "intake_snapshot": {
       if (workItemId === null) {
         throw new Error(
@@ -2623,6 +2641,7 @@ export async function main(
   days: number = DEFAULT_DAYS,
   work_item_id?: number,
   attempt?: number,
+  approval_request_id?: number,
 ): Promise<ConsoleQueryResult> {
   const resolvedLimit = resolveIntArg(
     limit,
@@ -2666,5 +2685,7 @@ export async function main(
     defaultSqlClient,
     resolvedWorkItemId,
     resolvePositiveIntArg(attempt),
+    readTextFile,
+    resolvePositiveIntArg(approval_request_id),
   );
 }
