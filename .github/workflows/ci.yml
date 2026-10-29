@@ -76,6 +76,9 @@ jobs:
     needs: scope
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # 通常は6〜9分で終わる。テストが戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
+    # 時間切れの結論は`cancelled`か`timed_out`になりうるが、どちらもPRのチェックを緑にしない。
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

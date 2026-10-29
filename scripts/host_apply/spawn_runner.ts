@@ -29,7 +29,8 @@ export type SpawnedProcess = {
   readonly stdout: ReadableStream<Uint8Array>;
   readonly stderr: ReadableStream<Uint8Array>;
   readonly exited: Promise<number>;
-  readonly signalCode: string | null;
+  // 名前の無いシグナル(Linuxのリアルタイムシグナルなど)は番号で返る。有無だけを見る。
+  readonly signalCode: string | number | null;
 };
 
 /** 実行口が外の世界に触れる4つの口。テストは偽物を渡す。 */
