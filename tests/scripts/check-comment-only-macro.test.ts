@@ -171,7 +171,7 @@ describe("a ts comparison that falls back to the transpiler reports a source wit
   });
 });
 
-// 素の`transformSync`がマクロを実行することを、対照で確かめた入力(Bun 1.4.2)。
+// 素の`transformSync`がマクロを実行することを、対照で確かめた入力(Bun 1.4.3)。
 // マクロ無効の検証は、この入力に限る。素で実行されない入力は、無効にしたことの効果を区別できない。
 // `-->`を挟む属性は、無効側では構文エラーで止まり、`macro: false`の効果と区別できないので、
 // ここには入れず、素の対照だけに置く。
@@ -260,7 +260,7 @@ describe("the transpiler of the comparison has macros disabled", () => {
   });
 });
 
-// 次の形は、素の`transformSync`でもマクロを実行しない(Bun 1.4.2で実測した)。
+// 次の形は、素の`transformSync`でもマクロを実行しない(Bun 1.4.3で実測した)。
 // 型だけのimportは変換で消え、動的importの第2引数は読まれず、タグ付きテンプレートでの
 // マクロの呼び出しはBunが拒否する。
 describe("forms that a plain transformSync does not run", () => {
