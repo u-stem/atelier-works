@@ -4535,10 +4535,17 @@ check(
     (candidate) => candidate.id === waitingIssue,
   )?.waits_for_pr_run === true,
 );
+const staleImageFix = await prWorkItem(
+  "pr_fix",
+  9805,
+  "blocked",
+  "qdb stale image fix",
+);
+event(staleImageFix, "blocked", "worker image is stale: probe");
 check(
   "wait reason: a candidate of the resolved notice is not marked as waiting",
   (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql)).find(
-    (candidate) => candidate.id === stoppedFix,
+    (candidate) => candidate.id === staleImageFix,
   )?.waits_for_pr_run === false,
 );
 const otherReasonIssue = await issueWorkItem(
