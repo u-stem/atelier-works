@@ -11,7 +11,10 @@ import {
   retryStaleImageItems,
   shouldStartStaleImageRetry,
 } from "../../f/factory/lib/auto_retry.ts";
-import { PR_RUN_WAIT_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import {
+  PR_RUN_WAIT_MAX_AGE_MS,
+  PR_RUN_WAIT_REASON_PREFIXES,
+} from "../../f/factory/lib/auto_retry_reasons.ts";
 import type { AutoRetryCandidate, PrRunScope } from "../../f/factory/lib/db.ts";
 import {
   HOST_ACTION_RESOLVER,
@@ -520,6 +523,12 @@ describe("autoRetryCandidateQuery", () => {
   test("passes the reasons that wait for the runs of the pull request", () => {
     expect(autoRetryCandidateQuery(1).waitReasonPrefixes).toEqual(
       PR_RUN_WAIT_REASON_PREFIXES,
+    );
+  });
+
+  test("limits the age of the stop that waits for the runs", () => {
+    expect(autoRetryCandidateQuery(1).waitMaxAgeMs).toBe(
+      PR_RUN_WAIT_MAX_AGE_MS,
     );
   });
 });

@@ -1273,6 +1273,7 @@ export async function listAutoRetryCandidates(
   params: {
     readonly reasonPrefixes: readonly string[];
     readonly waitReasonPrefixes: readonly string[];
+    readonly waitMaxAgeMs: number;
     readonly noticeKind: string;
     readonly noticeMarker: string;
     readonly resolvedBy: string;
@@ -1385,6 +1386,7 @@ export async function restartStoppedWorkItem(
     readonly to: WorkItemStatus;
     readonly reasonPrefixes: readonly string[];
     readonly waitReasonPrefixes: readonly string[];
+    readonly waitMaxAgeMs: number;
     readonly clearFlowJobId: boolean;
     readonly notePrefix: string;
     readonly maxRestarts: number;

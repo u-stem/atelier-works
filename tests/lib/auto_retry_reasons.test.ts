@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AUTO_RETRY_REASON_PREFIXES,
+  PR_RUN_WAIT_MAX_AGE_MS,
   PR_RUN_WAIT_REASON_PREFIXES,
 } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
@@ -40,5 +41,11 @@ describe("PR_RUN_WAIT_REASON_PREFIXES", () => {
 
   test("is kept apart from the reasons that wait for a resolved notice", () => {
     expect(AUTO_RETRY_REASON_PREFIXES).not.toContain(ACTIVE_PR_RUN_REASON);
+  });
+});
+
+describe("PR_RUN_WAIT_MAX_AGE_MS", () => {
+  test("is 24 hours", () => {
+    expect(PR_RUN_WAIT_MAX_AGE_MS).toBe(24 * 60 * 60 * 1000);
   });
 });

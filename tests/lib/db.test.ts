@@ -6374,6 +6374,7 @@ describe("listAutoRetryCandidates", () => {
   const params = {
     reasonPrefixes: ["worker image is stale: "],
     waitReasonPrefixes: ["pull request has an active fix run"],
+    waitMaxAgeMs: 86_400_000,
     noticeKind: "host_action_required",
     noticeMarker: "workerのイメージが古く",
     resolvedBy: "self_update",
@@ -6450,6 +6451,18 @@ describe("listAutoRetryCandidates", () => {
     expect(calls[0]?.values).toContainEqual([
       "pull request has an active fix run",
     ]);
+  });
+
+  test("passes the age limit of the stop that waits for the runs as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContain(86_400_000);
+  });
+
+  test("limits the age of the stop that waits for the runs by the time of the latest note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("last.occurred_at > now() - (");
   });
 
   test("reads the design attempt of the work item", async () => {
@@ -6568,6 +6581,7 @@ describe("restartStoppedWorkItem", () => {
     to: "implementing",
     reasonPrefixes: ["worker image is stale: "],
     waitReasonPrefixes: ["pull request has an active fix run"],
+    waitMaxAgeMs: 86_400_000,
     clearFlowJobId: true,
     notePrefix: "auto_retry: ",
     maxRestarts: 3,
@@ -6605,6 +6619,18 @@ describe("restartStoppedWorkItem", () => {
     expect(calls[0]?.values).toContainEqual([
       "pull request has an active fix run",
     ]);
+  });
+
+  test("passes the age limit of the stop that waits for the runs as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain(86_400_000);
+  });
+
+  test("limits the age of the stop that waits for the runs by the time of the latest note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("> now() - (");
   });
 
   test("passes the restart cap as a parameter", async () => {

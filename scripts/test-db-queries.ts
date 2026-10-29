@@ -4395,6 +4395,7 @@ execPsql(
 const autoRetryParams = {
   reasonPrefixes: ["worker image is stale: "],
   waitReasonPrefixes: ["qdb active run: "],
+  waitMaxAgeMs: 24 * 60 * 60 * 1000,
   noticeKind: "qdb_stale_image",
   noticeMarker: "qdb stale image probe",
   resolvedBy: "qdb",
@@ -4622,6 +4623,46 @@ check(
     sql,
     NO_JOB_IDS,
   )) === false,
+);
+// 待つ理由の止まりは、最新の注記が上限より古いと、候補にも再開にも入らない。
+const oldWaitingIssue = await issueWorkItem(
+  9806,
+  1,
+  "needs_human",
+  "qdb old waiting",
+);
+eventAgo(oldWaitingIssue, "needs_human", "qdb active run: busy", 25 * 60 * 60);
+check(
+  "wait reason: an issue stopped by the reason longer ago than the limit is not a candidate",
+  !(await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(oldWaitingIssue),
+);
+check(
+  "wait reason: an issue stopped by the reason longer ago than the limit is not restarted",
+  (await restartStoppedWorkItem(
+    { ...waitRestartParams, id: oldWaitingIssue },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+const recentWaitingIssue = await issueWorkItem(
+  9807,
+  1,
+  "needs_human",
+  "qdb recent waiting",
+);
+eventAgo(
+  recentWaitingIssue,
+  "needs_human",
+  "qdb active run: busy",
+  23 * 60 * 60,
+);
+check(
+  "wait reason: an issue stopped by the reason within the limit is a candidate",
+  (await listAutoRetryCandidates({ ...noNoticeParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(recentWaitingIssue),
 );
 check(
   "wait reason: an issue stopped by the reason is restarted without a resolved notice",

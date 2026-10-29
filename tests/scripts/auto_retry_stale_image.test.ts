@@ -100,6 +100,14 @@ describe("auto_retry_stale_image wiring", () => {
     );
   });
 
+  test("limits the age of the stop that waits for the runs with the shared limit", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /restartStoppedWorkItem\(\{[\s\S]*?waitMaxAgeMs: PR_RUN_WAIT_MAX_AGE_MS,/,
+    );
+  });
+
   test("gives the shared retry the reader of the unfinished runs", async () => {
     const source = await scriptSource();
 

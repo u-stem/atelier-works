@@ -41,6 +41,8 @@ export const PR_RUN_WAIT_REASON_PREFIXES: readonly string[] = [
   ACTIVE_PR_RUN_REASON,
 ];
 
+export const PR_RUN_WAIT_MAX_AGE_MS = 0;
+
 /** 自動で再開してよい止まった理由の先頭。 */
 export const AUTO_RETRY_REASON_PREFIXES: readonly string[] = [
   `${CHECK_IMAGE_STALE_REASON}: `,
