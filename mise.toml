@@ -1,6 +1,6 @@
 [tools]
 node = "24"
-bun = "1.4.2"
+bun = "1.4.3"
 "npm:windmill-cli" = "1.817.0"
 gh = "2.101.0"
 lefthook = "2.1.14"

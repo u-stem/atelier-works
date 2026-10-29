@@ -403,7 +403,7 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   PRの作者が決めるコードを、Factoryのworkerで動かさないためである。
 - importを読むときも、コードを実行しない。
   Bunの`transformSync`は、マクロを指定したimport属性のimportを、読む側のプロセスで実行する。
-  空白、改行、コメントを挟んだ形でも実行されることを、Bun 1.4.0(worker)と1.4.2で確かめた。
+  空白、改行、コメントを挟んだ形でも実行されることを、Bun 1.4.0(worker)と1.4.3で確かめた。
   挟んだ文字の一覧は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
   そのため、`transformSync`は使わず、実行しない`scanImports`だけで読む。
   `scanImports`は、同じ入力でマクロを実行しないことを、両方の版で確かめた。

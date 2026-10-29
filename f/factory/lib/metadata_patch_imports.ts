@@ -54,7 +54,7 @@ function scanner(): Bun.Transpiler {
  * 型と、使われないimportを省くトランスパイラ。実行時に残るimportだけを返す。
  * `scanImports`だけを使い、`transformSync`は使わない。`transformSync`は変換を最後まで行い、
  * マクロを指定したimport属性のimportのマクロを、ソースを読む側のプロセスで実行する(実測した)。
- * `scanImports`はマクロを実行しない(Bun 1.4.0と1.4.2で実測した)。
+ * `scanImports`はマクロを実行しない(Bun 1.4.0と1.4.3で実測した)。
  */
 function runtimeScanner(): Bun.Transpiler {
   runtimeTranspiler ??= new Bun.Transpiler({
