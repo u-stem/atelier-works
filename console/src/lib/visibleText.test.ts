@@ -206,8 +206,20 @@ describe("visibleText space-run", () => {
     expect(spaceRuns("\u200B        b")).toHaveLength(1);
   });
 
-  test("counts a tab as eight columns in the middle of a line", () => {
-    expect(spaceRuns("a\tb")).toHaveLength(1);
+  test("leaves one tab in the middle of a line", () => {
+    expect(spaceRuns("a\tb")).toEqual([]);
+  });
+
+  test("marks two tabs in a row in the middle of a line", () => {
+    expect(spaceRuns("a\t\tb")).toHaveLength(1);
+  });
+
+  test("counts a tab as four columns when it mixes with spaces", () => {
+    expect(spaceRuns("a\t    b")).toHaveLength(1);
+  });
+
+  test("leaves a tab and three spaces in the middle of a line", () => {
+    expect(spaceRuns("a\t   b")).toEqual([]);
   });
 
   test("marks an indent of 32 spaces at the start of a line", () => {
@@ -218,12 +230,12 @@ describe("visibleText space-run", () => {
     expect(spaceRuns(`a\n${" ".repeat(31)}b`)).toEqual([]);
   });
 
-  test("marks an indent of four tabs at the start of a line", () => {
-    expect(spaceRuns("a\n\t\t\t\tb")).toHaveLength(1);
+  test("marks an indent of eight tabs at the start of a line", () => {
+    expect(spaceRuns(`a\n${"\t".repeat(8)}b`)).toHaveLength(1);
   });
 
-  test("leaves an indent of three tabs at the start of a line", () => {
-    expect(spaceRuns("a\n\t\t\tb")).toEqual([]);
+  test("leaves an indent of seven tabs at the start of a line", () => {
+    expect(spaceRuns(`a\n${"\t".repeat(7)}b`)).toEqual([]);
   });
 
   test("marks a run of seven tabs", () => {
@@ -703,6 +715,7 @@ describe("designApprovalBlock", () => {
     ["blank lines", "a\n\n\n\nb"],
     ["lines of spaces", `a\n${" \n".repeat(5)}b`],
     ["a long run of spaces", "a        b"],
+    ["two tabs in a row", "a\t\tb"],
     ["a copy of the blank-run mark", `a\n${blankRunMark(9)}`],
     ["a copy of the space-run mark", `a ${spaceRunMark(9)}`],
     ["eight ideographic spaces", `a${"\u3000".repeat(8)}b`],
@@ -721,6 +734,8 @@ describe("designApprovalBlock", () => {
     ["a sentence that mentions the end mark", "画面は全文の終わりの印を出す。"],
     ["a link that starts like a mark", "[空白の扱い](docs/a.md)"],
     ["an indent of 31 spaces", `a\n${" ".repeat(31)}b`],
+    ["one tab in a line", "a\tb"],
+    ["an indent of seven tabs", `a\n${"\t".repeat(7)}b`],
     ["two ideographic spaces of an indent", "\u3000\u3000本文です。"],
   ])("lets a design with %s through", (_name, text) => {
     expect(designApprovalBlock(withDoc({ text }))).toBeNull();
