@@ -53,6 +53,7 @@ import {
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
   hasRequirementDraftAfter,
+  hasStatusEventWithNote,
   hasSupersedingPrReview,
   insertApprovalRequest,
   insertCleanupRun,
@@ -11580,6 +11581,36 @@ check(
     },
     sql,
   )) > 0,
+);
+
+// 状態の遷移の記録を、遷移先の状態と注記の完全一致で引ける。
+// 注記に引用符を含んでも、束縛した値として照合する。
+const heldNote =
+  "review is not started while the branch's work item is in the design stage";
+const heldReview = await prWorkItem("pr_review", 9810, "reviewing", "qdb held");
+await updateStatusIfCurrent(heldReview, "reviewing", "blocked", heldNote, sql);
+check(
+  "hasStatusEventWithNote: finds the transition with the exact note",
+  await hasStatusEventWithNote(heldReview, "blocked", heldNote, sql),
+);
+check(
+  "hasStatusEventWithNote: does not match a note that only contains the text",
+  !(await hasStatusEventWithNote(heldReview, "blocked", "review is not", sql)),
+);
+check(
+  "hasStatusEventWithNote: does not match another status",
+  !(await hasStatusEventWithNote(heldReview, "reviewed", heldNote, sql)),
+);
+const otherReview = await prWorkItem(
+  "pr_review",
+  9811,
+  "reviewing",
+  "qdb other",
+);
+await updateStatusIfCurrent(otherReview, "reviewing", "blocked", "other", sql);
+check(
+  "hasStatusEventWithNote: does not match the transition of another work item",
+  !(await hasStatusEventWithNote(otherReview, "blocked", heldNote, sql)),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

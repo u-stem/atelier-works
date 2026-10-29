@@ -1305,6 +1305,14 @@ export const BRANCH_DESIGN_STAGE_REASON =
 export const REVIEW_DESIGN_STAGE_REASON =
   "review is not started while the branch's work item is in the design stage";
 
+export function reviewRowBody(_reason: "label" | "assignment"): string | null {
+  return null;
+}
+
+export function isReviewRequestedByLabel(_body: string | null): boolean {
+  return false;
+}
+
 /** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */
 export type BranchGuardKind = "implementing" | "design_stage";
 

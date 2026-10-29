@@ -101,6 +101,7 @@ const TARGET: ReviewPrepareTarget = {
   pr_number: 7,
   parent_work_item_id: null,
   attempt: 1,
+  requested_by_label: false,
 };
 
 /** 呼ばれた入出力の名前を`calls`に順に記録する。 */
@@ -381,5 +382,56 @@ describe("prepareReviewWorktree while the branch designs", () => {
     );
     await prepareReviewWorktree(TARGET, deps);
     expect(held).toEqual([]);
+  });
+});
+
+// 人が`review_label`で頼んだレビューは、保留で黙って落とさず、人に知らせて終端にする。
+describe("prepareReviewWorktree for a review a person asked for by the label", () => {
+  const SAME_REPO = "octo-owner/atelier-works";
+  const LABEL_TARGET: ReviewPrepareTarget = {
+    ...TARGET,
+    requested_by_label: true,
+  };
+
+  test.each(["designing", "awaiting_design_approval"] as const)(
+    "blocks the review with the design stage reason when the work item is %s",
+    async (status) => {
+      const { deps, blocked } = recordingDeps(SAME_REPO, { ok: true }, status);
+      await prepareReviewWorktree(LABEL_TARGET, deps);
+      expect(blocked).toEqual([REVIEW_DESIGN_STAGE_REASON]);
+    },
+  );
+
+  test("does not hold silently what it notifies", async () => {
+    const { deps, held } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(held).toEqual([]);
+  });
+
+  test("skips with the design stage reason", async () => {
+    const { deps } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    const result = await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(result).toMatchObject({
+      skip: true,
+      reason: REVIEW_DESIGN_STAGE_REASON,
+    });
+  });
+
+  test("does not clone, fetch, or create a worktree for the block", async () => {
+    const { deps, calls } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(calls).toEqual(["checkRepoOwner", "getPr", "readBranchStatus"]);
+  });
+
+  test("prepares the worktree when the work item is not in the design stage", async () => {
+    const { deps } = recordingDeps(SAME_REPO, { ok: true }, "implementing");
+    const result = await prepareReviewWorktree(LABEL_TARGET, deps);
+    expect(result.skip).toBe(false);
+  });
+
+  test("still holds without a notice a review the detection started", async () => {
+    const { deps, held } = recordingDeps(SAME_REPO, { ok: true }, "designing");
+    await prepareReviewWorktree(TARGET, deps);
+    expect(held).toEqual([REVIEW_DESIGN_STAGE_REASON]);
   });
 });

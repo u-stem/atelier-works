@@ -1783,6 +1783,15 @@ export async function hasIntakeRefreshEvent(
   return rows.length > 0;
 }
 
+export async function hasStatusEventWithNote(
+  _workItemId: number,
+  _toStatus: WorkItemStatus,
+  _note: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
 /**
  * updateStatusIfCurrentと同じ比較と交換に、flow_job_idがexpectedFlowJobIdのままであること
  * (nullならNULLのままであること)を条件として足す。実装フローは自分のルートジョブIDを渡して、

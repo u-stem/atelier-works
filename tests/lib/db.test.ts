@@ -54,6 +54,7 @@ import {
   hasPassedMainCiRunAfter,
   hasPriorReview,
   hasRequirementDraftAfter,
+  hasStatusEventWithNote,
   hasSupersedingPrReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -6367,6 +6368,30 @@ describe("hasIntakeRefreshEvent", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasIntakeRefreshEvent(1, "intake refreshed", sql);
     expect(calls[0]?.values).toEqual([1, "intake refreshed"]);
+  });
+});
+
+describe("hasStatusEventWithNote", () => {
+  test("is true when an event moved the work item to the status with the note", async () => {
+    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
+    expect(await hasStatusEventWithNote(1, "blocked", "held", sql)).toBe(true);
+  });
+
+  test("is false when no event matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasStatusEventWithNote(1, "blocked", "held", sql)).toBe(false);
+  });
+
+  test("binds the work item, the status, and the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasStatusEventWithNote(1, "blocked", "held", sql);
+    expect(calls[0]?.values).toEqual([1, "blocked", "held"]);
+  });
+
+  test("compares the note exactly, not by prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasStatusEventWithNote(1, "blocked", "held", sql);
+    expect(calls[0]?.text).not.toContain("starts_with");
   });
 });
 

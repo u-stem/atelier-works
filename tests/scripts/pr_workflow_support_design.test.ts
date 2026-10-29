@@ -34,6 +34,7 @@ import {
   designGapRerouteRaceLostReason,
   designNeedsHumanFields,
   evaluateDesignGapRerouteParentStatus,
+  isReviewRequestedByLabel,
   nextActionFor,
   nextActionForPrFix,
   PR_FIX_DESIGN_GAP_DISABLED_REASON,
@@ -41,6 +42,7 @@ import {
   PR_FIX_DESIGN_GAP_PARENT_MISSING_REASON,
   PR_FIX_DESIGN_STAGE_PARENT_REASON,
   REVIEW_DESIGN_STAGE_REASON,
+  reviewRowBody,
   shouldAdvanceWatermarks,
   withGapReport,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -832,12 +834,34 @@ describe("the reason that holds the review while the branch designs", () => {
 
   test("tells the reader that nothing is required", () => {
     expect(nextActionFor(REVIEW_DESIGN_STAGE_REASON)).toBe(
-      "対応は要りません。設計の承認と実装の完了の後に、レビューが自動で付きます",
+      "対応は要りません。設計と実装が終わるか止まった後に、レビューが自動で付きます",
     );
   });
 
   test("does not point to a rerun", () => {
     expect(nextActionFor(REVIEW_DESIGN_STAGE_REASON)).not.toContain(RETRY);
+  });
+});
+
+describe("the mark of a review a person asked for by the label", () => {
+  test("is written to the body of a review started by the label", () => {
+    expect(reviewRowBody("label")).not.toBeNull();
+  });
+
+  test("is not written to the body of a review the detection started", () => {
+    expect(reviewRowBody("assignment")).toBeNull();
+  });
+
+  test("is read back from the body the label wrote", () => {
+    expect(isReviewRequestedByLabel(reviewRowBody("label"))).toBe(true);
+  });
+
+  test("is not read from an empty body", () => {
+    expect(isReviewRequestedByLabel(null)).toBe(false);
+  });
+
+  test("is not read from another body", () => {
+    expect(isReviewRequestedByLabel("review requested")).toBe(false);
   });
 });
 
