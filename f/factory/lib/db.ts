@@ -1783,13 +1783,25 @@ export async function hasIntakeRefreshEvent(
   return rows.length > 0;
 }
 
+/**
+ * 作業項目が`toStatus`へ移った遷移の記録のうち、注記が`note`と完全に一致するものがあるかを返す。
+ * 前方一致にしないのは、別の理由の注記を同じ保留とみなさないためである。
+ * 設計の段階で保留した`pr_review`の行を、`poll_prs`が見分けるのに使う。
+ */
 export async function hasStatusEventWithNote(
-  _workItemId: number,
-  _toStatus: WorkItemStatus,
-  _note: string,
-  _sql: SqlClient = defaultSqlClient,
+  workItemId: number,
+  toStatus: WorkItemStatus,
+  note: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  const rows = await sql`
+    SELECT 1 AS found FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint
+      AND to_status = ${toStatus}
+      AND note = ${note}
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 /**

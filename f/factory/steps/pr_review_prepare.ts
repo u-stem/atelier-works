@@ -39,6 +39,7 @@ import {
   decideReviewPrepare,
   describeReason,
   evaluateSameRepoHeadGuard,
+  isReviewRequestedByLabel,
   nextActionFor,
   REVIEW_DESIGN_STAGE_REASON,
 } from "./pr_workflow_support.ts";
@@ -142,6 +143,7 @@ async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
       pr_number: prNumber,
       parent_work_item_id: workItem.parent_work_item_id,
       attempt: workItem.attempt,
+      requested_by_label: isReviewRequestedByLabel(workItem.body),
     },
     {
       checkRepoOwner: () =>
@@ -273,6 +275,8 @@ export type ReviewPrepareTarget = {
   readonly pr_number: number;
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
+  /** 人が`review_label`で頼んだレビューか。設計の段階で止めるときに、人へ知らせるかを決める。 */
+  readonly requested_by_label: boolean;
 };
 
 /** `prepareReviewWorktree`が使う入出力。テストで差し替える。 */
@@ -318,7 +322,8 @@ export type ReviewPrepareDeps = {
  * 作業項目を手で追加するなどの経路は止められない。
  * 通らないときは、forkの内容をcloneにもfetchにも入れず、worktreeも作らずに、
  * 同じく作業項目を`blockReview`で終端にして飛ばす。
- * 最後に、PRのheadブランチが指す作業項目が設計の段階にあれば、通知せずに`holdReview`で終端にして飛ばす。
+ * 最後に、PRのheadブランチが指す作業項目が設計の段階にあれば、終端にして飛ばす。
+ * 検出が始めたレビューは通知せずに`holdReview`で、人がラベルで頼んだレビューは`blockReview`で通知して終端にする。
  */
 export async function prepareReviewWorktree(
   target: ReviewPrepareTarget,
@@ -343,9 +348,16 @@ export async function prepareReviewWorktree(
   }
 
   // ブランチの作業項目が設計の段階にある間は、設計の承認の後の実装が同じブランチを引き継ぎ、実装の完了でレビューが付く。
-  // 人の操作は要らないので、通知せずに終端にする。作業項目が引けないときと、ほかの状態では止めない。
+  // 設計と実装が止まったときは、止まった後の巡回が同じheadのレビューを検出し直す。
+  // 検出が始めたレビューは人の操作が要らないので、通知せずに終端にする。
+  // 人がラベルで頼んだレビューは、ラベルが消費済みで、黙って落とすと頼んだ人が気づけないので、通知して終端にする。
+  // 作業項目が引けないときと、ほかの状態では止めない。
   if (isDesignStage(await deps.readBranchStatus(prForRepoCheck.headRef))) {
-    await deps.holdReview(REVIEW_DESIGN_STAGE_REASON);
+    if (target.requested_by_label) {
+      await deps.blockReview(REVIEW_DESIGN_STAGE_REASON);
+    } else {
+      await deps.holdReview(REVIEW_DESIGN_STAGE_REASON);
+    }
     return { skip: true, reason: REVIEW_DESIGN_STAGE_REASON, ...SKIPPED_BASE };
   }
 

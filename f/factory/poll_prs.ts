@@ -26,11 +26,17 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
+import {
+  isBranchGuardedStatus,
+  readBranchItemStatus,
+} from "./lib/branch_hold.ts";
 import { isRepoAllowed, loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   bumpWatermarks,
   findApprovedWorkItemForIssue,
+  getWorkItem,
+  hasStatusEventWithNote,
   insertWorkItem,
   isActivePrFixUniqueViolation,
   latestPrWorkItem,
@@ -94,6 +100,7 @@ import {
   isRecord,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
+  type WorkItemStatus,
 } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import {
@@ -101,6 +108,8 @@ import {
   evaluateSameRepoHeadGuard,
   extractLinkedIssueNumbers,
   nextActionFor,
+  REVIEW_DESIGN_STAGE_REASON,
+  reviewRowBody,
 } from "./steps/pr_workflow_support.ts";
 
 /** 確かめて対象でなかったPRの覚えを置く、Windmillのstateのキー。 */
@@ -200,12 +209,54 @@ function prKey(owner: string, repo: string, number: number): string {
 export type BuildPrCandidateDeps = {
   readonly latestPrWorkItem: typeof latestPrWorkItem;
   readonly findApprovedWorkItemForIssue: typeof findApprovedWorkItemForIssue;
+  /** PRのheadブランチが指す作業項目の状態。引けないときは`null`。 */
+  readonly readBranchStatus: (
+    headRef: string,
+    owner: string,
+    repo: string,
+  ) => Promise<WorkItemStatus | null>;
+  readonly hasStatusEventWithNote: typeof hasStatusEventWithNote;
 };
 
 const defaultBuildPrCandidateDeps: BuildPrCandidateDeps = {
   latestPrWorkItem,
   findApprovedWorkItemForIssue,
+  readBranchStatus: (headRef, owner, repo) =>
+    readBranchItemStatus({ headRef, owner, repo }, getWorkItem),
+  hasStatusEventWithNote,
 };
+
+/**
+ * 自動のレビューの検出が、今のheadを処理済みとみなす`head_sha`を返す。
+ * 最新の行のheadを使うが、設計の段階で保留した`pr_review`の行は例外にする。
+ * その行にはPRの挿入時にheadが記録されていて、そのままだと、設計の段階が実装のpushなしに終わったときに、
+ * 同じheadのレビューが二度と検出されないためである。
+ * 作業項目が設計の段階か、実装が動く間(ガードが止める4状態)は、保留を続けるので記録されたheadを返す。
+ * それ以外で、作業項目が引けないときも含めて`null`を返し、次の巡回が同じheadのレビューを検出できるようにする。
+ * 設計の段階で保留していない行と、完了した行は、今までどおり記録されたheadを返す。
+ */
+async function resolveLastKnownHeadSha(
+  latest: WorkItem | null,
+  target: { readonly owner: string; readonly repo: string; headRef: string },
+  deps: BuildPrCandidateDeps,
+): Promise<string | null> {
+  if (latest === null) return null;
+  if (latest.kind !== "pr_review" || latest.status !== "blocked") {
+    return latest.head_sha;
+  }
+  const held = await deps.hasStatusEventWithNote(
+    latest.id,
+    "blocked",
+    REVIEW_DESIGN_STAGE_REASON,
+  );
+  if (!held) return latest.head_sha;
+  const branchStatus = await deps.readBranchStatus(
+    target.headRef,
+    target.owner,
+    target.repo,
+  );
+  return isBranchGuardedStatus(branchStatus) ? latest.head_sha : null;
+}
 
 /**
  * 見つかったPRを、判定にかける候補にする。
@@ -311,7 +362,11 @@ export async function buildPrCandidate(
       (item) => item.kind === "pr_review",
     ),
     activeFixItemId: activeFix?.id ?? null,
-    lastKnownHeadSha: latestAny?.head_sha ?? null,
+    lastKnownHeadSha: await resolveLastKnownHeadSha(
+      latestAny,
+      { owner: found.owner, repo: found.repo, headRef: pr.headRef },
+      deps,
+    ),
     previousFixRound: latestFix?.fix_round ?? 0,
     maxReviewId: reviews.maxId,
   };
@@ -782,6 +837,7 @@ async function startReview(
   viewerLogin: string,
   observed: ObservedSeed,
   linkedParentWorkItemId: number | null,
+  reason: "label" | "assignment",
 ): Promise<void> {
   const workItemId = await insertWorkItem({
     cycle: 1,
@@ -793,7 +849,7 @@ async function startReview(
     issue_url: null,
     pr_number: candidate.number,
     title: candidate.title,
-    body: null,
+    body: reviewRowBody(reason),
     status: "reviewing",
     attempt: 1,
     claimed_by: viewerLogin,
@@ -901,9 +957,11 @@ export type PrDecisionHandlers = {
   ) => Promise<void>;
   /** headがbaseと同じリポジトリにないために見送ったレビューを、noticeに残す。 */
   readonly recordForkHeadDenied: (candidate: PrCandidate) => Promise<void>;
+  /** `reason`は、人がラベルで頼んだか(`label`)、検出が始めたか(`assignment`)。 */
   readonly startReview: (
     candidate: PrCandidate,
     context: PrCandidateContext,
+    reason: "label" | "assignment",
   ) => Promise<void>;
   readonly startFix: (
     candidate: PrCandidate,
@@ -1068,14 +1126,14 @@ export async function processPrDecisions(
                 skipped += 1;
                 await handlers.recordNotClaimed(candidate, claimResult);
               } else {
-                await handlers.startReview(candidate, context);
+                await handlers.startReview(candidate, context, "label");
                 reviewsStarted += 1;
                 await handlers.resolveNotices(candidate, labels.reviewLabel);
               }
             }
           } else {
             // assignで起きた場合はラベルが関わらず、消費するものが無い。
-            await handlers.startReview(candidate, context);
+            await handlers.startReview(candidate, context, "assignment");
             reviewsStarted += 1;
           }
         } catch (err) {
@@ -1373,12 +1431,13 @@ export async function main(): Promise<{
       recordLabelerDenied: (candidate, label) =>
         recordPrLabelerDenied(candidate, label),
       recordForkHeadDenied: (candidate) => recordPrForkHeadDenied(candidate),
-      startReview: (candidate, context) =>
+      startReview: (candidate, context, reason) =>
         startReview(
           candidate,
           viewer.login,
           context.observed,
           context.linkedParentWorkItemId,
+          reason,
         ),
       startFix: (candidate, context) =>
         startFix(

@@ -1301,16 +1301,28 @@ export const BRANCH_DESIGN_STAGE_REASON =
 /**
  * ブランチの作業項目が設計の段階にあるために、PRのレビューを始めずに終端にする理由。
  * 設計の承認の後の実装が同じブランチを引き継ぎ、実装の完了でレビューが自動に付く。
+ * 設計と実装が実装のpushなしに止まったときも、止まった後の巡回が同じheadのレビューを検出する。
+ * 人がラベルで頼んだレビューは、この理由で通知して終端にする。
  */
 export const REVIEW_DESIGN_STAGE_REASON =
   "review is not started while the branch's work item is in the design stage";
 
-export function reviewRowBody(_reason: "label" | "assignment"): string | null {
-  return null;
+/**
+ * 人が`review_label`で頼んだレビューの行の`body`に書く印。
+ * `pr_review`の行の`body`はほかに使われない。
+ * 準備が、設計の段階で止めるときに人へ知らせるかを決めるのに読む。
+ * 再実行はフローの入力を引き継がないが行は引き継ぐので、入力でなく行に残す。
+ */
+const REVIEW_BY_LABEL_BODY = "review requested by a person through the label";
+
+/** 新しい`pr_review`の行の`body`。ラベルが頼んだレビューにだけ印を書く。 */
+export function reviewRowBody(reason: "label" | "assignment"): string | null {
+  return reason === "label" ? REVIEW_BY_LABEL_BODY : null;
 }
 
-export function isReviewRequestedByLabel(_body: string | null): boolean {
-  return false;
+/** `pr_review`の行の`body`が、人がラベルで頼んだレビューの印か。 */
+export function isReviewRequestedByLabel(body: string | null): boolean {
+  return body === REVIEW_BY_LABEL_BODY;
 }
 
 /** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */
@@ -5371,14 +5383,14 @@ export const REASON_RULES: readonly ReasonRule[] = [
         : "このPRのブランチで実装フローが実行中か開始直前のため修正を止めました",
     nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
-  // 通知しない終端の理由。人の操作は要らない。
+  // 人の操作は要らない終端の理由。検出が始めたレビューは通知せず、人がラベルで頼んだレビューには知らせる。
   {
     pattern:
       /^review is not started while the branch's work item is in the design stage$/,
     describe: () =>
       "このPRのブランチの作業項目が設計の最中のため、レビューを始めませんでした",
     nextAction: () =>
-      "対応は要りません。設計の承認と実装の完了の後に、レビューが自動で付きます",
+      "対応は要りません。設計と実装が終わるか止まった後に、レビューが自動で付きます",
   },
   // ブランチの作業項目が設計の段階にある間は、設計の承認の後の実装が同じブランチを引き継ぐ。
   {
