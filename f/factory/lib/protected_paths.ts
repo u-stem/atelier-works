@@ -183,7 +183,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`console/src/screens/jobs/safeTextCoverage.test.tsx`)も守る。これらを書き換えると、出力の描き方が変わるためである。
  * 設計の承認画面が全文を描く部品(`console/src/lib/visibleText.ts`)、そのテスト、全コードポイントの契約テスト
  * (`tests/scripts/console_design_visible_text_contract.test.ts`)も守る。
- * `visibleText.ts`は、実装に渡る全文の見えない文字を表記にする範囲と、承認を止める判定(`designApprovalBlock`)を持つ。
+ * `visibleText.ts`は、実装に渡る全文の見えない文字を表記にする範囲と、承認を止める件数の数え方を持つ。
+ * 承認を止める判定(`designApprovalBlock`)は、作業項目の状態などの判定と、人に見せる止める理由の文まで、同じ部品が持つ。
+ * 止める判定の全体を守る意図なので、文言の手直しも人のレビューを経る。
  * 範囲は`safeText.ts`と同じく自前で持つ。契約テストは、バックエンドの整形の出力と1文字ずつ対応することを、
  * 0からU+10FFFFまで、漏れと余計な置き換えの両方向で確かめる。
  * 書き換えられると、範囲を狭める変更や判定を緩める変更が、人のレビューを経ずに入り、
