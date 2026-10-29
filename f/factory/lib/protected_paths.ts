@@ -181,6 +181,15 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * ジョブの画面の出力の描き方を固定する検査(`tests/scripts/console_jobs_render_contract.test.ts`)と、
  * サーバー由来の文字列を無害化する部品(`console/src/lib/safeText.ts`)、そのテストと、全項目への適用を確かめるテスト
  * (`console/src/screens/jobs/safeTextCoverage.test.tsx`)も守る。これらを書き換えると、出力の描き方が変わるためである。
+ * 設計の承認画面が全文を描く部品(`console/src/lib/visibleText.ts`)、そのテスト、全コードポイントの契約テスト
+ * (`tests/scripts/console_design_visible_text_contract.test.ts`)も守る。
+ * `visibleText.ts`は、実装に渡る全文の見えない文字を表記にする範囲と、承認を止める判定(`designApprovalBlock`)を持つ。
+ * 範囲は`safeText.ts`と同じく自前で持つ。契約テストは、バックエンドの整形の出力と1文字ずつ対応することを、
+ * 0からU+10FFFFまで、漏れと余計な置き換えの両方向で確かめる。
+ * 書き換えられると、範囲を狭める変更や判定を緩める変更が、人のレビューを経ずに入り、
+ * 承認する人に見えない文字が、実装に渡ったまま承認される。
+ * 判定を呼ぶ`designBlockedReason`(`console/src/lib/approvalDecision.ts`)と、確認文、トースト、型ガードは、
+ * 日常的に直す部品なので守らない。判定の本体は`visibleText.ts`にある。
  * ジョブを取り消すscript(`console_job_cancel.ts`)と、操作の記録を足した既存の書き込みのscript(`retry_work_item.ts`、
  * `manual_intake_submit.ts`。`hold_release.ts`と`freeze_release.ts`は上で守っている)も、それぞれの`.script.yaml`とともに守る。
  * 取消の許可表(取り消せるフローの名前)と、記録の順序は、書き換えられると、取り消せる対象が増えたり、記録なしで操作できたりする。
@@ -358,6 +367,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/src/lib/safeText.ts",
   "console/src/lib/safeText.test.ts",
   "console/src/screens/jobs/safeTextCoverage.test.tsx",
+  "console/src/lib/visibleText.ts",
+  "console/src/lib/visibleText.test.ts",
+  "tests/scripts/console_design_visible_text_contract.test.ts",
   "tests/scripts/console_write_contract.test.ts",
   "tests/scripts/console_worker_boundary.test.ts",
   "tests/scripts/console_script_tags.test.ts",
