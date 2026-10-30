@@ -12,7 +12,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import type { ApprovalDesignDoc } from "./api/guards/approvalDesignDoc.ts";
+import {
+  type ApprovalDesignDoc,
+  DESIGN_TEXT_MAX_CODE_POINTS,
+} from "./api/guards/approvalDesignDoc.ts";
 import type { IntakeSnapshot } from "./api/guards/intakeSnapshot.ts";
 import type { SummaryApproval } from "./api/guards/summary.ts";
 import {
@@ -227,10 +230,12 @@ function restoreFromScreen(html: string): string {
 }
 
 // 承認者が見る文字は、実装に渡る文字の全部でなければならない。一部しか描かない変更は、承認者を欺く。
-// この検査は承認画面全体を通して描くので、描画の部品を差し替えても外れない。
+// この検査は、承認画面(DesignReview.tsx)自身が、固定した入力の全文を描き切ることを確かめる。
+// 印の要素は、見える文字ではなく元の文字列を持つ属性から戻す。
+// 保護しない祖先や共有のパネルが描画を差し替える手は、この検査では捕まえない(docs/securityの残るリスク)。
 describe("the whole text that the approval screen draws", () => {
   // 上限(8000コードポイント)ちょうどの1行と、数千行の本文。
-  const LONG = `${"設".repeat(7999)}\n`;
+  const LONG = `${"設".repeat(DESIGN_TEXT_MAX_CODE_POINTS - 1)}\n`;
   const MANY_LINES = "行\n".repeat(3999);
   test.each([
     ["several lines", "# 設計\n\n本文です。\n- 項目1\n- 項目2\n"],
@@ -251,8 +256,9 @@ describe("the whole text that the approval screen draws", () => {
     expect(restoreFromScreen(render({ doc: { text } }))).toBe(text);
   });
 
-  test("draws the limit of the text exactly", () => {
-    expect(Array.from(LONG).length).toBe(8000);
+  test("draws a text of exactly the limit of the code points", () => {
+    const restored = restoreFromScreen(render({ doc: { text: LONG } }));
+    expect(Array.from(restored).length).toBe(DESIGN_TEXT_MAX_CODE_POINTS);
   });
 
   // 行の数は、空行の連続を含まない入力で、改行で分けて末尾の空の要素を除いた数とする。
