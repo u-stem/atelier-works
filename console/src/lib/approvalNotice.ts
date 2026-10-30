@@ -18,13 +18,14 @@ export type ToastNotice = {
 export function approvalOutcomeNotice(
   outcome: WriteOutcome<ApprovalDecideResult>,
   mode: "decide" | "redo" = "decide",
+  kind?: string,
 ): ToastNotice {
   if (outcome.kind === "done") {
     return mode === "redo"
       ? { tone: "success", message: "Issueの作成のやり直しを始めました。" }
-      : describeApprovalResult(outcome.result);
+      : describeApprovalResult(outcome.result, kind);
   }
-  const refusal = classifyDecisionRefusal(outcome.error);
+  const refusal = classifyDecisionRefusal(outcome.error, kind);
   return {
     tone: "error",
     message: refusal === null ? outcome.message : refusal.message,

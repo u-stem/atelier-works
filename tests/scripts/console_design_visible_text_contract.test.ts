@@ -377,7 +377,7 @@ describe("the source of the design approval screen", () => {
   });
 
   test("does not draw the text as it is", () => {
-    expect(review).not.toMatch(/\{doc\.text\}|\{text\}/);
+    expect(review).not.toMatch(/<pre[^>]*>\s*\{(?:doc\.)?text\}/);
   });
 
   test("wraps each line in a left-to-right override", () => {

@@ -20,6 +20,8 @@ export type DecisionInput = {
   readonly decision: "approve" | "reject";
   readonly reason: string;
   readonly withFactoryLabel: boolean | undefined;
+  /** 承認依頼の種類。結果の文と断りの案内を、種類に合わせる呼び出しだけが渡す。 */
+  readonly kind?: string;
 };
 
 function keyOf(input: DecisionInput): string {
@@ -75,10 +77,10 @@ export function useApprovalDecision(mode: "decide" | "redo"): {
       }
       setRefusal(
         outcome.kind === "failed"
-          ? classifyDecisionRefusal(outcome.error)
+          ? classifyDecisionRefusal(outcome.error, input.kind)
           : null,
       );
-      showToast(approvalOutcomeNotice(outcome, mode));
+      showToast(approvalOutcomeNotice(outcome, mode, input.kind));
     },
     onStale: () => {
       showToast(STALE_LIST_NOTICE);

@@ -40,6 +40,11 @@ export type SummaryApproval = {
   readonly proposal_title: string | null;
   readonly created_issue_number: number | null;
   readonly origin: string | null;
+  /**
+   * 作業項目の今の状態。設計の承認を押せる状態かの判定に使う。
+   * 古いbackendは送らないので、欠けたときは`undefined`として扱い、承認を止める側に倒す。
+   */
+  readonly work_item_status?: string | null;
 };
 
 /** 失敗の1行。作業項目ごとに1行で、失敗の記録が無い作業項目では記録の項目が`null`になる。 */
@@ -118,7 +123,8 @@ function isSummaryApproval(value: unknown): value is SummaryApproval {
     isNullableString(value.summary) &&
     isNullableString(value.proposal_title) &&
     isNullableInteger(value.created_issue_number) &&
-    isNullableString(value.origin)
+    isNullableString(value.origin) &&
+    (!("work_item_status" in value) || isNullableString(value.work_item_status))
   );
 }
 

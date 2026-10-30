@@ -11,6 +11,7 @@ import {
   formatAbsoluteWithRelative,
   formatDeadline,
 } from "../../lib/relativeTime.ts";
+import { DesignReview } from "./DesignReview.tsx";
 import { ProposalReview } from "./ProposalReview.tsx";
 import { RequirementsReview } from "./RequirementsReview.tsx";
 
@@ -29,8 +30,8 @@ const LINK_CLASS =
 /**
  * 選んだ承認の詳細。題名、種類、作業項目、Issueへのリンク、期限、依頼の時刻を出す。
  * 続けて、種類ごとの確認の内容と承認バーを出す。
- * 要件定義は取り込み時点のIssue、Issue提案は提案の本文を、承認バーの直前に置く。
- * 要件定義の本文は、要件定義書の画面へのリンクで開く。
+ * 要件定義と設計は取り込み時点のIssue、Issue提案は提案の本文を、承認バーの直前に置く。
+ * 要件定義の本文は、要件定義書の画面へのリンクで開く。設計書の全文は、この画面で出す。
  */
 export function ApprovalOverview({
   approval,
@@ -120,6 +121,8 @@ export function ApprovalOverview({
         <RequirementsReview approval={approval} title={title} now={now} />
       ) : approval.kind === "issue_proposal" ? (
         <ProposalReview approval={approval} title={title} now={now} />
+      ) : approval.kind === "design" ? (
+        <DesignReview approval={approval} title={title} now={now} />
       ) : (
         <p className="rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
           この種類の承認は、この画面では操作できません。

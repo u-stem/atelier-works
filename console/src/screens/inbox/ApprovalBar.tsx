@@ -113,6 +113,8 @@ function DecideBar({
     decision: kind,
     reason: kind === "reject" ? reason : "",
     withFactoryLabel,
+    // 設計だけが、結果の文と断りの案内を種類に合わせる。ほかの種類は今のまま。
+    ...(approval.kind === "design" ? { kind: approval.kind } : {}),
   });
   const locked = decision.isLocked(input("approve"));
   const counter = reasonCounter(reason);

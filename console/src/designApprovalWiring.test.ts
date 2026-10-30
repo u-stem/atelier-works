@@ -78,6 +78,8 @@ const SNAPSHOT: IntakeSnapshot = {
 
 type Seed = {
   readonly approval?: Partial<SummaryApproval>;
+  /** 古いbackendの応答のように、作業項目の状態の項目ごと無くす。 */
+  readonly withoutWorkItemStatus?: boolean;
   readonly doc?: Partial<ApprovalDesignDoc> | null;
   readonly snapshot?: Partial<IntakeSnapshot> | null;
 };
@@ -95,6 +97,14 @@ function render(seed: Seed = {}): string {
     intakeSnapshotQueryKey(WORK_ITEM_ID, REQUEST_ID),
     seed.snapshot === null ? null : { ...SNAPSHOT, ...seed.snapshot },
   );
+  const { work_item_status: status, ...withoutStatus } = {
+    ...APPROVAL,
+    ...seed.approval,
+  };
+  const approval: SummaryApproval =
+    seed.withoutWorkItemStatus === true || status === undefined
+      ? withoutStatus
+      : { ...withoutStatus, work_item_status: status };
   // このファイルは`.ts`なので、JSXを使わずに要素を組む。
   return renderToStaticMarkup(
     createElement(
@@ -107,7 +117,7 @@ function render(seed: Seed = {}): string {
           MemoryRouter,
           null,
           createElement(ApprovalOverview, {
-            approval: { ...APPROVAL, ...seed.approval },
+            approval,
             now: NOW,
           }),
         ),
@@ -122,7 +132,8 @@ function approveButton(html: string): string {
 }
 
 function approveIsDisabled(html: string): boolean {
-  return approveButton(html).includes("disabled");
+  // クラスの`disabled:`は数えず、属性の`disabled`だけを見る。
+  return /\sdisabled(?:=|>|\s)/.test(approveButton(html));
 }
 
 describe("the approval screen of a design", () => {
@@ -165,9 +176,9 @@ describe("the approval screen of a design", () => {
   });
 
   test("stops the approval when the work item status is missing", () => {
-    expect(
-      approveIsDisabled(render({ approval: { work_item_status: undefined } })),
-    ).toBe(true);
+    expect(approveIsDisabled(render({ withoutWorkItemStatus: true }))).toBe(
+      true,
+    );
   });
 
   test("stops the approval when no design is found for the request", () => {

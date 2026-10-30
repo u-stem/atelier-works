@@ -8999,6 +8999,7 @@ check(
     (row) =>
       "approval_request_id" in row &&
       row.approval_request_id === designRequest &&
+      "kind" in row &&
       row.kind === "design",
   ),
 );

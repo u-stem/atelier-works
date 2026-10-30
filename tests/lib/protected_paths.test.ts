@@ -1563,6 +1563,7 @@ describe("design approval screen files", () => {
     "console/src/lib/visibleText.ts",
     "console/src/lib/visibleText.test.ts",
     "tests/scripts/console_design_visible_text_contract.test.ts",
+    "console/src/designApprovalWiring.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
@@ -1589,6 +1590,9 @@ describe("design approval screen files", () => {
     "console/src/lib/writeNotices.ts",
     "console/src/api/guards/approvalDesignDoc.ts",
     "console/src/screens/inbox/ApprovalBar.tsx",
+    "console/src/screens/inbox/DesignReview.tsx",
+    "console/src/screens/inbox/DesignReview.test.tsx",
+    "console/src/screens/inbox/ApprovalOverview.tsx",
   ])("FORBIDDEN_EXACT_PATHS does not list the part %s", (path) => {
     expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
   });
