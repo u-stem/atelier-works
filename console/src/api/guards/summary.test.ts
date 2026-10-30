@@ -167,6 +167,40 @@ describe("isConsoleSummary", () => {
     expect(isConsoleSummary(summaryWith({ approvals: {} }))).toBe(false);
   });
 
+  test("accepts a design approval with the work item status", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({
+          approvals: [
+            {
+              ...APPROVAL,
+              kind: "design",
+              draft_attempt: null,
+              summary: null,
+              work_item_status: "awaiting_design_approval",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts an approval whose work item status is null", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ approvals: [{ ...APPROVAL, work_item_status: null }] }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects an approval whose work item status is a number", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ approvals: [{ ...APPROVAL, work_item_status: 3 }] }),
+      ),
+    ).toBe(false);
+  });
+
   test("accepts an approval with a kind the console does not know", () => {
     expect(
       isConsoleSummary(

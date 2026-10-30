@@ -8983,7 +8983,7 @@ check(
   designRequest > 0,
   designRequest,
 );
-// Consoleに設計の承認の画面が入るまで、Inboxとサマリーは設計の依頼を取得しない。取得しても一覧が落ちない。
+// 設計の承認依頼は、Inboxとサマリーに載る。一覧は落ちず、サマリーの行は作業項目の状態を持つ。
 let designInboxRows: Awaited<ReturnType<typeof runConsoleQuery>> = [];
 const designInboxError = await errorOf(async () => {
   designInboxRows = await runConsoleQuery("inbox", 500, 30, sql);
@@ -8994,17 +8994,22 @@ check(
   String(designInboxError),
 );
 check(
-  "design stage: the inbox does not list the design request",
-  !designInboxRows.some(
+  "design stage: the inbox lists the design request",
+  designInboxRows.some(
     (row) =>
-      "approval_request_id" in row && row.approval_request_id === designRequest,
+      "approval_request_id" in row &&
+      row.approval_request_id === designRequest &&
+      row.kind === "design",
   ),
 );
 const designSummary = await runConsoleSummary(500, sql);
 check(
-  "design stage: the summary does not list the design request",
-  !designSummary.approvals.some(
-    (row) => row.approval_request_id === designRequest,
+  "design stage: the summary lists the design request with its work item status",
+  designSummary.approvals.some(
+    (row) =>
+      row.approval_request_id === designRequest &&
+      row.kind === "design" &&
+      row.work_item_status === "designing",
   ),
 );
 
