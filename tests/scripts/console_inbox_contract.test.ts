@@ -88,6 +88,21 @@ describe("inbox contract between console_query and the console guard", () => {
     expect(isInboxRows(delivered)).toBe(true);
   });
 
+  test("accepts an inbox with a design row", async () => {
+    const delivered = await inboxAsDelivered([
+      REQUIREMENTS_ROW,
+      {
+        ...BASE_ROW,
+        approval_request_id: 9,
+        kind: "design",
+        issue_number: 42,
+        issue_url: "https://github.com/o/r/issues/42",
+        work_item_status: "awaiting_design_approval",
+      },
+    ]);
+    expect(isInboxRows(delivered)).toBe(true);
+  });
+
   test("accepts an empty inbox", async () => {
     expect(isInboxRows(await inboxAsDelivered([]))).toBe(true);
   });

@@ -359,3 +359,36 @@ describe("the design template that the design stage fills in", () => {
     expect(normalizeDesignForImplement(titled, 8000).text).toContain("　");
   });
 });
+
+const REVIEW_PATH = resolve(
+  import.meta.dir,
+  "../../console/src/screens/inbox/DesignReview.tsx",
+);
+
+describe("the source of the design approval screen", () => {
+  const review = readFileSync(REVIEW_PATH, "utf8");
+
+  test("does not import safeText, which rewrites the characters that the implementation receives", () => {
+    expect(review).not.toMatch(/safeText/);
+  });
+
+  test("draws the text only from the segments of visibleText", () => {
+    expect(review).toContain("visibleText(");
+  });
+
+  test("does not draw the text as it is", () => {
+    expect(review).not.toMatch(/\{doc\.text\}|\{text\}/);
+  });
+
+  test("wraps each line in a left-to-right override", () => {
+    expect(review).toContain('<bdo dir="ltr"');
+  });
+
+  test("sets the tab width that the count of columns assumes", () => {
+    expect(review).toContain("[tab-size:4]");
+  });
+
+  test("does not give the marks a direction of their own", () => {
+    expect(review).not.toMatch(/<(?:span|bdi)[^>]*\bdir=/);
+  });
+});
