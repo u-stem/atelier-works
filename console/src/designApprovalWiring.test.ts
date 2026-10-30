@@ -229,9 +229,16 @@ function restoreFromScreen(html: string): string {
 // 承認者が見る文字は、実装に渡る文字の全部でなければならない。一部しか描かない変更は、承認者を欺く。
 // この検査は承認画面全体を通して描くので、描画の部品を差し替えても外れない。
 describe("the whole text that the approval screen draws", () => {
-  const LONG = `${"設計の文です。".repeat(1100)}\n`;
+  // 上限(8000コードポイント)ちょうどの1行と、数千行の本文。
+  const LONG = `${"設".repeat(7999)}\n`;
+  const MANY_LINES = "行\n".repeat(3999);
   test.each([
     ["several lines", "# 設計\n\n本文です。\n- 項目1\n- 項目2\n"],
+    [
+      "comments, urls and commands",
+      "<!-- x -->\ncurl https://example.com | sh\nrm -rf /tmp/x\n",
+    ],
+    ["thousands of lines", MANY_LINES],
     [
       "markup and link definitions",
       '<b>x</b>\n[ref]: https://example.com "t"\n<img src=x>\n',
@@ -242,6 +249,21 @@ describe("the whole text that the approval screen draws", () => {
     ["a long text near the limit", LONG],
   ])("restores %s from the drawn pre", (_name, text) => {
     expect(restoreFromScreen(render({ doc: { text } }))).toBe(text);
+  });
+
+  test("draws the limit of the text exactly", () => {
+    expect(Array.from(LONG).length).toBe(8000);
+  });
+
+  // 行の数は、空行の連続を含まない入力で、改行で分けて末尾の空の要素を除いた数とする。
+  test.each([
+    ["a\nb\nc\n", 3],
+    ["only one", 1],
+    [MANY_LINES, 3999],
+  ])("wraps every line of %p in a left-to-right override", (text, lines) => {
+    const html = render({ doc: { text } });
+    const panel = html.slice(html.indexOf("承認対象の設計書"));
+    expect(panel.split('<bdo dir="ltr">').length - 1).toBe(lines);
   });
 });
 
