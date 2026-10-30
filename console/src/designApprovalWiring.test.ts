@@ -204,6 +204,47 @@ describe("the approval screen of a design", () => {
   });
 });
 
+const ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#x27;": "'",
+};
+
+/** 承認画面が描いた`<pre>`の中身から、元の文字列を組み直す。印の要素は、元の文字列を持つ属性から戻す。 */
+function restoreFromScreen(html: string): string {
+  // 取り込み時点のIssueのパネルにも`<pre>`があるので、設計書のパネルから先を読む。
+  const panel = html.slice(html.indexOf("承認対象の設計書"));
+  const inner = /<pre[^>]*>([\s\S]*?)<\/pre>/.exec(panel)?.[1] ?? "";
+  return inner
+    .replace(
+      /<span[^>]*data-source="([^"]*)"[^>]*>[\s\S]*?<\/span>/g,
+      (_whole, encoded: string) => decodeURIComponent(encoded),
+    )
+    .replace(/<\/?bdo[^>]*>/g, "")
+    .replace(/&(?:amp|lt|gt|quot|#x27);/g, (entity) => ENTITIES[entity] ?? "");
+}
+
+// 承認者が見る文字は、実装に渡る文字の全部でなければならない。一部しか描かない変更は、承認者を欺く。
+// この検査は承認画面全体を通して描くので、描画の部品を差し替えても外れない。
+describe("the whole text that the approval screen draws", () => {
+  const LONG = `${"設計の文です。".repeat(1100)}\n`;
+  test.each([
+    ["several lines", "# 設計\n\n本文です。\n- 項目1\n- 項目2\n"],
+    [
+      "markup and link definitions",
+      '<b>x</b>\n[ref]: https://example.com "t"\n<img src=x>\n',
+    ],
+    ["a short run of spaces", "a   b\n\tc\n"],
+    ["hidden characters", `a${ZWSP}b${FILLER}c\r\nd\n`],
+    ["a text with no trailing line feed", "last line"],
+    ["a long text near the limit", LONG],
+  ])("restores %s from the drawn pre", (_name, text) => {
+    expect(restoreFromScreen(render({ doc: { text } }))).toBe(text);
+  });
+});
+
 function source(path: string): string {
   return readFileSync(resolve(import.meta.dir, "../..", path), "utf8");
 }
@@ -229,6 +270,17 @@ describe("the source of the wiring", () => {
     const uses = bar.match(/approveBlockedReason/g) ?? [];
     // 型の宣言、引数の受け取り、承認の判定への受け渡しの3か所だけ。却下の判定は使わない。
     expect(uses.length).toBe(3);
+  });
+
+  test("the design screen does not hide the text with a style", () => {
+    // 全文を切る、隠す、見えなくする書き方。スクロールする入れ物(overflow-auto)だけを許す。
+    expect(review).not.toMatch(
+      /overflow-hidden|line-clamp|\btruncate\b|text-ellipsis|\bhidden\b|(?:^|[\s"'`])invisible(?=[\s"'`])|opacity-0|sr-only/,
+    );
+  });
+
+  test("the design screen does not cut the text before it draws", () => {
+    expect(review).not.toMatch(/\.slice\(|\.substring\(|\.substr\(/);
   });
 
   test("the approval bar judges the rejection without the reason to stop", () => {

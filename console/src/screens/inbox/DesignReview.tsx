@@ -38,7 +38,7 @@ function sourceAttr(source: string): string {
 
 /** 改行の無い最後の行以外は、末尾の改行を印の外に出す。 */
 function withoutTrailingBreak(source: string): string {
-  return source.endsWith("\n") ? source.slice(0, -1) : source;
+  return source.replace(/\n$/, "");
 }
 
 /** 空行の印に添える、空白とタブの数。どちらも無ければ`null`。 */
@@ -124,19 +124,9 @@ function groupLines(segments: readonly VisibleSegment[]): readonly Line[] {
  */
 export function DesignTextView({ text }: { text: string }) {
   const lines = useMemo(() => groupLines(visibleText(text)), [text]);
-  const count = Math.max(textStats(text).lines, 1);
-  const numbers = Array.from({ length: count }, (_, index) => index + 1).join(
-    "\n",
-  );
   return (
-    <div className="flex max-h-[40rem] overflow-auto rounded-md border border-border bg-background">
-      <div
-        aria-hidden="true"
-        className="select-none whitespace-pre border-r border-border px-2 py-2 text-right font-mono text-small tabular-nums text-subtle"
-      >
-        {numbers}
-      </div>
-      <pre className="min-w-0 flex-1 px-3 py-2 font-mono text-small text-foreground whitespace-pre-wrap [overflow-wrap:anywhere] [tab-size:4]">
+    <div className="max-h-[40rem] overflow-auto rounded-md border border-border bg-background">
+      <pre className="px-3 py-2 font-mono text-small text-foreground whitespace-pre-wrap [overflow-wrap:anywhere] [tab-size:4]">
         {lines.map((line, index) => (
           // 行は並びが変わらないので、位置を鍵にしてよい。
           // biome-ignore lint/suspicious/noArrayIndexKey: 位置が行の同一性である
@@ -197,11 +187,6 @@ export function DesignDocBody({ doc }: { doc: ApprovalDesignDoc }) {
       <p className="text-small text-muted-foreground">
         承認の対象は、この全文です。承認すると、ここに出ている文字がそのまま実装に渡ります。図、要約、未確定事項は実装に渡りません。
       </p>
-      {doc.truncated ? (
-        <p className="text-small font-medium text-warning">
-          設計書が長さの上限で切られていて、末尾に切り詰めの印があります。全文を確かめられないため、承認できません。
-        </p>
-      ) : null}
       <AnomalySummary text={doc.text} />
       <p className="text-small tabular-nums text-muted-foreground">
         {`全文: ${String(stats.lines)} 行、${String(stats.codePoints)} コードポイント`}

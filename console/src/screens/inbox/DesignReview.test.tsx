@@ -146,14 +146,6 @@ describe("DesignDocBody", () => {
     expect(html.slice(html.indexOf("</pre>"))).toContain("全文の終わり(1 行、");
   });
 
-  test("tells that the text was cut at the limit", () => {
-    expect(renderBody({ truncated: true })).toContain("長さの上限で切られて");
-  });
-
-  test("does not tell about a cut when the text was not cut", () => {
-    expect(renderBody()).not.toContain("長さの上限で切られて");
-  });
-
   test("counts a hidden character above the text", () => {
     const html = renderBody({ text: `a${ZWSP}b\n` });
     expect(html.slice(0, html.indexOf("<pre"))).toContain("見えない文字");

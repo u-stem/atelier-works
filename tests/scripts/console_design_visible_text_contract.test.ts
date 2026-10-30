@@ -377,7 +377,8 @@ describe("the source of the design approval screen", () => {
   });
 
   test("does not draw the text as it is", () => {
-    expect(review).not.toMatch(/<pre[^>]*>\s*\{(?:doc\.)?text\}/);
+    // 属性で渡す`text={doc.text}`は`=`の後ろなので当たらない。子として本文を置く形(`<p>{doc.text}</p>`)を捕まえる。
+    expect(review).not.toMatch(/>\s*\{(?:doc\.)?text\}/);
   });
 
   test("wraps each line in a left-to-right override", () => {
