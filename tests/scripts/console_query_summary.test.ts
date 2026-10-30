@@ -50,7 +50,17 @@ const APPROVAL_ROW: SqlRow = {
   proposal_title: null,
   created_issue_number: null,
   origin: null,
+  work_item_status: "awaiting_approval",
   total_count: 5,
+};
+
+const DESIGN_APPROVAL_ROW: SqlRow = {
+  ...APPROVAL_ROW,
+  approval_request_id: 9,
+  kind: "design",
+  draft_attempt: null,
+  summary: null,
+  work_item_status: "awaiting_design_approval",
 };
 
 const FAILURE_ROW: SqlRow = {
@@ -146,8 +156,26 @@ describe("runConsoleSummary queries", () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);
     expect(calls[0]?.text).toContain(
-      "kind IN ('requirements', 'issue_proposal')",
+      "kind IN ('requirements', 'issue_proposal', 'design')",
     );
+  });
+
+  test("selects the work item status of an approval row", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[0]?.text).toContain("work_item_status");
+  });
+
+  test("breaks ties between approvals by id", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[0]?.text).toContain("ORDER BY requested_at DESC, id DESC");
+  });
+
+  test("does not select the markdown of a design draft", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[0]?.text).not.toContain("markdown");
   });
 
   test("includes approved issue proposals whose issue was not created", async () => {
@@ -398,7 +426,25 @@ describe("runConsoleSummary result", () => {
       proposal_title: null,
       created_issue_number: null,
       origin: null,
+      work_item_status: "awaiting_approval",
     });
+  });
+
+  test("parses a design approval row with the work item status", async () => {
+    const { sql } = createFakeSqlClient([[DESIGN_APPROVAL_ROW], [], []]);
+    const summary = await runConsoleSummary(200, sql);
+    expect(summary.approvals[0]).toMatchObject({
+      kind: "design",
+      draft_attempt: null,
+      work_item_status: "awaiting_design_approval",
+    });
+  });
+
+  test("reads a missing work item status as null", async () => {
+    const { work_item_status: _omitted, ...rest } = APPROVAL_ROW;
+    const { sql } = createFakeSqlClient([[rest], [], []]);
+    const summary = await runConsoleSummary(200, sql);
+    expect(summary.approvals[0]?.work_item_status).toBeNull();
   });
 
   test("parses a failure row", async () => {

@@ -190,8 +190,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 0からU+10FFFFまで、漏れと余計な置き換えの両方向で確かめる。
  * 書き換えられると、範囲を狭める変更や判定を緩める変更が、人のレビューを経ずに入り、
  * 承認する人に見えない文字が、実装に渡ったまま承認される。
+ * 承認画面(`console/src/screens/inbox/DesignReview.tsx`)と、承認画面から承認のボタンまでの配線を固定するテスト
+ * (`console/src/designApprovalWiring.test.ts`)も守る。
+ * 承認画面は、取得した全文を描く部分、止める判定への入力の渡し方、全文の外の行数と終わりの印を、1つのファイルに持つ。
+ * 保護しないと、渡す全文を作り替える変更や、判定に別の値を渡す変更が、人のレビューを経ずに入る。
  * 判定を呼ぶ`designBlockedReason`(`console/src/lib/approvalDecision.ts`)と、確認文、トースト、型ガードは、
- * 日常的に直す部品なので守らない。判定の本体は`visibleText.ts`にある。
+ * 日常的に直す部品なので守る一覧に入れない。判定の本体は`visibleText.ts`にある。
+ * 保護しない祖先の部品や全体のCSSから、全文の一部を隠す手は、ファイル単位の保護では閉じられない。`docs/security.md`の残るリスクに書く。
  * ジョブを取り消すscript(`console_job_cancel.ts`)と、操作の記録を足した既存の書き込みのscript(`retry_work_item.ts`、
  * `manual_intake_submit.ts`。`hold_release.ts`と`freeze_release.ts`は上で守っている)も、それぞれの`.script.yaml`とともに守る。
  * 取消の許可表(取り消せるフローの名前)と、記録の順序は、書き換えられると、取り消せる対象が増えたり、記録なしで操作できたりする。
@@ -372,6 +377,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/src/lib/visibleText.ts",
   "console/src/lib/visibleText.test.ts",
   "tests/scripts/console_design_visible_text_contract.test.ts",
+  "console/src/designApprovalWiring.test.ts",
+  "console/src/screens/inbox/DesignReview.tsx",
   "tests/scripts/console_write_contract.test.ts",
   "tests/scripts/console_worker_boundary.test.ts",
   "tests/scripts/console_script_tags.test.ts",

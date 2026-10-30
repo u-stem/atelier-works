@@ -97,8 +97,28 @@ const REQUIREMENTS_ROW: RequirementsIndexRow = {
 };
 
 const SUMMARY_NORMAL: ConsoleSummary = {
-  counts: { approvals: 1, failures: 1, notices: 1 },
+  counts: { approvals: 2, failures: 1, notices: 1 },
   approvals: [
+    {
+      approval_request_id: 3,
+      kind: "design",
+      status: "pending",
+      work_item_id: 1,
+      owner: "o",
+      repo: "r",
+      title: "example item",
+      issue_number: 1,
+      issue_url: null,
+      pr_number: null,
+      requested_at: STAMP,
+      expires_at: null,
+      draft_attempt: null,
+      summary: null,
+      proposal_title: null,
+      created_issue_number: null,
+      origin: null,
+      work_item_status: "awaiting_design_approval",
+    },
     {
       approval_request_id: 1,
       kind: "requirements",
@@ -317,6 +337,34 @@ const FIXTURES: Readonly<
   Record<string, { readonly normal: unknown; readonly empty: unknown }>
 > = {
   summary: { normal: SUMMARY_NORMAL, empty: SUMMARY_EMPTY },
+  approval_design_doc: {
+    normal: {
+      approval_request_id: 3,
+      work_item_id: 1,
+      design_attempt: 1,
+      requirement_draft_id: 1,
+      text: "# 設計\n\n本文です。\n",
+      truncated: false,
+      approval_status: "pending",
+    },
+    empty: null,
+  },
+  intake_snapshot: {
+    normal: {
+      work_item_id: 1,
+      owner: "o",
+      repo: "r",
+      issue_number: 1,
+      issue_url: "https://github.com/o/r/issues/1",
+      title: "example item",
+      body: "body",
+      body_truncated: false,
+      body_tail_html_comments: 0,
+      body_tail_hidden_chars: 0,
+      refreshed: false,
+    },
+    empty: null,
+  },
   "jobs/detail": { normal: JOB_DETAIL_NORMAL, empty: { found: false } },
   work_item_detail: { normal: WORK_ITEM_DETAIL_NORMAL, empty: null },
   pipeline: { normal: [PIPELINE_ROW], empty: [] },
@@ -498,7 +546,7 @@ const TAB_ENTRIES: Readonly<Record<string, readonly string[]>> = {
 
 /** 一覧で選んだ項目の詳細。承認、再実行の確認ダイアログを持つ。 */
 const SELECTION_ENTRIES: Readonly<Record<string, readonly string[]>> = {
-  inbox: ["/?approval=1", "/?failure=2", "/?notice=1"],
+  inbox: ["/?approval=1", "/?approval=3", "/?failure=2", "/?notice=1"],
 };
 
 const CASES: readonly Case[] = SCREENS.flatMap((screen) => [

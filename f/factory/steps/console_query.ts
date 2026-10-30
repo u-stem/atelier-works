@@ -415,7 +415,22 @@ export type IssueProposalInboxRow = InboxRowBase & {
   readonly factory_label_available: boolean;
 };
 
-export type InboxRow = RequirementsInboxRow | IssueProposalInboxRow;
+/**
+ * 設計の承認依頼のInboxの行。
+ * 設計書の全文はこの行に持たせず、行を選んだときに"approval_design_doc"ビューで取得する。
+ * `work_item_status`は、承認を押せる状態(設計の承認待ち)かを画面が確かめるために持つ。
+ */
+export type DesignInboxRow = InboxRowBase & {
+  readonly kind: "design";
+  readonly issue_number: number | null;
+  readonly issue_url: string | null;
+  readonly work_item_status: string | null;
+};
+
+export type InboxRow =
+  | RequirementsInboxRow
+  | IssueProposalInboxRow
+  | DesignInboxRow;
 
 /**
  * `factory.approval_requests.payload`をレコードにして返す。
@@ -456,9 +471,13 @@ function toInboxRow(row: SqlRow): InboxRow {
         : asIsoDate(row.expires_at, "expires_at"),
   };
   if (kind === "design") {
-    throw new Error(
-      "console_query: approval kind design is not handled yet by the inbox",
-    );
+    return {
+      ...base,
+      kind,
+      issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+      issue_url: asNullableStr(row.issue_url, "issue_url"),
+      work_item_status: asNullableStr(row.work_item_status, "work_item_status"),
+    };
   }
   if (kind === "requirements") {
     return {
@@ -1129,6 +1148,8 @@ export type SummaryApprovalRow = {
   readonly proposal_title: string | null;
   readonly created_issue_number: number | null;
   readonly origin: IssueProposalOrigin | null;
+  /** 作業項目の今の状態。設計の承認を押せる状態かを、画面が確かめるために持つ。 */
+  readonly work_item_status: string | null;
 };
 
 function toSummaryApprovalRow(row: SqlRow): SummaryApprovalRow {
@@ -1153,6 +1174,7 @@ function toSummaryApprovalRow(row: SqlRow): SummaryApprovalRow {
       "created_issue_number",
     ),
     origin: isOneOf(row.origin, ISSUE_PROPOSAL_ORIGINS) ? row.origin : null,
+    work_item_status: asNullableStr(row.work_item_status, "work_item_status"),
   };
 }
 
@@ -1277,13 +1299,13 @@ export async function runConsoleSummary(
       id AS approval_request_id, kind, status, work_item_id, owner, repo,
       title, issue_number, issue_url, pr_number, requested_at, expires_at,
       draft_attempt, left(summary, ${SUMMARY_TEXT_LIMIT}::integer) AS summary,
-      proposal_title, created_issue_number, origin,
+      proposal_title, created_issue_number, origin, work_item_status,
       count(*) OVER () AS total_count
     FROM factory.v_approval_requests
-    WHERE kind IN ('requirements', 'issue_proposal')
+    WHERE kind IN ('requirements', 'issue_proposal', 'design')
       AND (status = 'pending'
         OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL))
-    ORDER BY requested_at DESC
+    ORDER BY requested_at DESC, id DESC
     LIMIT ${limit}::integer
   `.fetch();
 
@@ -2379,19 +2401,19 @@ export async function runConsoleQuery(
       // 承認の記録はIssueの作成より先に行うため、その間で失敗する(GitHubがエラーを返すなど)と、
       // `status = 'pending'`だけを選ぶ条件では、その行が人から永久に見えなくなる。
       // 取得する種類は、画面が扱えるものを並べる。除外する書き方だと、種類を足したときに
-      // 画面の用意が無いまま行が届き、一覧全体が落ちる。設計の承認依頼は、設計の承認の画面を入れるときに足す。
+      // 画面の用意が無いまま行が届き、一覧全体が落ちる。
       const rows = await sql`
         SELECT
           id AS approval_request_id, kind, status, work_item_id, owner, repo,
           title, requested_at, expires_at, issue_number, issue_url,
           draft_attempt, summary, pr_number, proposal_title, proposal_body,
           proposal_status, created_issue_number, created_issue_url, claimed_by,
-          origin, audit_report_id, payload
+          origin, audit_report_id, payload, work_item_status
         FROM factory.v_approval_requests
-        WHERE kind IN ('requirements', 'issue_proposal')
+        WHERE kind IN ('requirements', 'issue_proposal', 'design')
           AND (status = 'pending'
             OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL))
-        ORDER BY requested_at DESC
+        ORDER BY requested_at DESC, id DESC
         LIMIT ${limit}::integer
       `.fetch();
       return rows.map(toInboxRow);

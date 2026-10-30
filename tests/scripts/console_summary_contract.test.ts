@@ -152,6 +152,43 @@ describe("summary contract between console_query and the console guard", () => {
     expect(isConsoleSummary(delivered)).toBe(true);
   });
 
+  test("accepts a design approval that carries the work item status", async () => {
+    const delivered = await summaryAsDelivered([
+      [
+        {
+          ...APPROVAL_ROW,
+          kind: "design",
+          draft_attempt: null,
+          summary: null,
+          work_item_status: "awaiting_design_approval",
+        },
+      ],
+      [],
+      [],
+    ]);
+    expect(isConsoleSummary(delivered)).toBe(true);
+  });
+
+  test("accepts an approval from a backend that does not send the work item status", async () => {
+    const delivered = await summaryAsDelivered([[APPROVAL_ROW], [], []]);
+    const older = JSON.parse(
+      JSON.stringify(delivered, (key, value) =>
+        key === "work_item_status" ? undefined : value,
+      ),
+    );
+    expect(isConsoleSummary(older)).toBe(true);
+  });
+
+  test("rejects an approval whose work item status is not a string", async () => {
+    const delivered = await summaryAsDelivered([[APPROVAL_ROW], [], []]);
+    const damaged = JSON.parse(
+      JSON.stringify(delivered, (key, value) =>
+        key === "work_item_status" ? 7 : value,
+      ),
+    );
+    expect(isConsoleSummary(damaged)).toBe(false);
+  });
+
   test("rejects a summary whose approval lost a field", async () => {
     const delivered = await summaryAsDelivered([[APPROVAL_ROW], [], []]);
     const damaged = JSON.parse(

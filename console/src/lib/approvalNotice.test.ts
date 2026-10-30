@@ -51,6 +51,36 @@ describe("approvalOutcomeNotice", () => {
     );
   });
 
+  test("points a design approval to the work item for the start of the implementation", () => {
+    const outcome: WriteOutcome<ApprovalDecideResult> = {
+      kind: "done",
+      result: APPROVED,
+    };
+    expect(approvalOutcomeNotice(outcome, "decide", "design").message).toBe(
+      "承認を記録しました。実装の開始は作業項目で確かめてください。",
+    );
+  });
+
+  test("points a design rejection to the work item for the destination", () => {
+    const outcome: WriteOutcome<ApprovalDecideResult> = {
+      kind: "done",
+      result: { ...APPROVED, status: "rejected" },
+    };
+    expect(approvalOutcomeNotice(outcome, "decide", "design").message).toBe(
+      "却下を記録しました。行き先は作業項目で確かめてください。",
+    );
+  });
+
+  test("keeps the notice of the other kinds when a kind is given", () => {
+    const outcome: WriteOutcome<ApprovalDecideResult> = {
+      kind: "done",
+      result: APPROVED,
+    };
+    expect(
+      approvalOutcomeNotice(outcome, "decide", "requirements").message,
+    ).toBe("承認しました。");
+  });
+
   test("reports a definite refusal in Japanese instead of the raw message", () => {
     const outcome: WriteOutcome<ApprovalDecideResult> = {
       kind: "failed",

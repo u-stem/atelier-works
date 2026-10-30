@@ -443,17 +443,23 @@ describe("runConsoleQuery", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await runConsoleQuery("inbox", 200, 30, sql);
     expect(calls[0]?.text).toContain(
-      "kind IN ('requirements', 'issue_proposal')",
+      "kind IN ('requirements', 'issue_proposal', 'design')",
     );
   });
 
-  test("inbox: does not select design requests by name", async () => {
+  test("inbox: breaks ties by id", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await runConsoleQuery("inbox", 200, 30, sql);
-    expect(calls[0]?.text).not.toContain("design");
+    expect(calls[0]?.text).toContain("ORDER BY requested_at DESC, id DESC");
   });
 
-  test("inbox: rejects a design row, which the inbox does not handle yet", async () => {
+  test("inbox: does not select the markdown of a design draft", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await runConsoleQuery("inbox", 200, 30, sql);
+    expect(calls[0]?.text).not.toContain("markdown");
+  });
+
+  test("inbox: parses a design row", async () => {
     const row: SqlRow = {
       approval_request_id: 9,
       kind: "design",
@@ -464,12 +470,46 @@ describe("runConsoleQuery", () => {
       title: "Add feature",
       requested_at: NOW.toISOString(),
       expires_at: null,
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      work_item_status: "awaiting_design_approval",
     };
     const { sql } = createFakeSqlClient([[row]]);
 
-    await expect(runConsoleQuery("inbox", 200, 30, sql)).rejects.toThrow(
-      "approval kind design is not handled yet",
-    );
+    expect(await runConsoleQuery("inbox", 200, 30, sql)).toEqual([
+      {
+        approval_request_id: 9,
+        kind: "design",
+        status: "pending",
+        work_item_id: 1,
+        owner: "octo-owner",
+        repo: "atelier-works",
+        title: "Add feature",
+        requested_at: NOW.toISOString(),
+        expires_at: null,
+        issue_number: 42,
+        issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+        work_item_status: "awaiting_design_approval",
+      },
+    ]);
+  });
+
+  test("inbox: reads a missing work item status of a design row as null", async () => {
+    const row: SqlRow = {
+      approval_request_id: 9,
+      kind: "design",
+      status: "pending",
+      work_item_id: 1,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      title: null,
+      requested_at: NOW.toISOString(),
+      expires_at: null,
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("inbox", 200, 30, sql);
+    expect(rows[0]).toMatchObject({ kind: "design", work_item_status: null });
   });
 
   test("inbox: parses an issue_proposal row", async () => {
