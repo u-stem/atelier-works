@@ -27,6 +27,7 @@ import {
   intakeMarkerText,
   type ManualIntakeFields,
   type ManualIntakeIssueInput,
+  normalizeIntakeKey,
   withIntakeMarker,
 } from "../lib/manual_intake_support.ts";
 import {
@@ -181,7 +182,8 @@ export async function createManualIntakeIssue(
  * リポジトリのオーナーの数値IDが`owners`の`id`と食い違うとき(`verifyRepoOwnerId`)は、
  * Issueを作らずに例外を投げる。
  * 進め方の検査は、GitHubへ書く前にここで行う。Issueが先にできて、ラベルだけが残る経路を作らないためである。
- * `intake_key`は、投入の再送を止める冪等キーである。省くか`null`にすると、再送を止めない従来の投入になる。
+ * `intake_key`は、投入の再送を止める冪等キーである。省くか`null`か空文字にすると、再送を止めない従来の投入になる。
+ * Windmillのフォームが空欄を空文字で送りうるためである。
  * 形が違うキーは、表に触れる前に例外を投げる。
  */
 export async function main(
@@ -196,7 +198,7 @@ export async function main(
   assertGitHubName(owner);
   assertGitHubName(repo);
   assertAcceptedProfile(profile);
-  const key = intake_key ?? undefined;
+  const key = normalizeIntakeKey(intake_key);
   if (key !== undefined) {
     assertIntakeKey(key);
   }

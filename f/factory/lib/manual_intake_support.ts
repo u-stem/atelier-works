@@ -87,11 +87,17 @@ export type ManualIntakeFields = ManualIntakeIssueInput & {
 export const INTAKE_KEY_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** スタブ。空文字をキー無しにする実装は、次のコミットで入れる。 */
+/**
+ * 冪等キーの入力を、キー無し(`undefined`)か、形を検査する前の文字列にそろえる。
+ * Windmillのフォームは空欄を空文字で送りうるので、空文字、`null`、省略を同じくキー無しにする。
+ * 空白だけの文字列は、形が違うキーとして残し、検査で断る。
+ */
 export function normalizeIntakeKey(
   value: string | null | undefined,
 ): string | undefined {
-  return value ?? undefined;
+  return value === null || value === undefined || value === ""
+    ? undefined
+    : value;
 }
 
 /** 冪等キーの形か。例外を投げず、値を文に含めない。 */
@@ -235,7 +241,7 @@ function hasForbiddenCharacter(
  * 許可の判定は`isRepoAllowed`に任せる。リポジトリのオーナーの数値IDの照合は、Issueを作るステップが行う。
  * 進め方は、リポジトリの許可の後、題名より前に調べる。冪等キーは、進め方の次に調べる。
  * 本文の長さは、`buildManualIntakeIssueBody`で組み立てた後の値で測る。GitHubへ届く長さと一致させるためである。
- * 冪等キーがあるときは、Issueの本文の末尾に付ける目印の分も数える。
+ * 冪等キーがあるときは、Issueの本文の末尾に付ける目印の分も数える。空文字のキーは、キー無しとして扱う。
  */
 export function validateManualIntake(
   input: ManualIntakeFields,
@@ -253,7 +259,8 @@ export function validateManualIntake(
   if (!isAcceptedProfile(input.profile)) {
     return { ok: false, reason: "profile_not_allowed" };
   }
-  if (input.intake_key !== undefined && !isIntakeKey(input.intake_key)) {
+  const intakeKey = normalizeIntakeKey(input.intake_key);
+  if (intakeKey !== undefined && !isIntakeKey(intakeKey)) {
     return { ok: false, reason: "invalid_intake_key" };
   }
 
@@ -279,9 +286,9 @@ export function validateManualIntake(
   }
   const assembled = buildManualIntakeIssueBody(input);
   const issueBody =
-    input.intake_key === undefined
+    intakeKey === undefined
       ? assembled
-      : withIntakeMarker(assembled, input.intake_key);
+      : withIntakeMarker(assembled, intakeKey);
   if (codePointLength(issueBody) > MANUAL_INTAKE_BODY_MAX_CHARS) {
     return { ok: false, reason: "body_too_long" };
   }

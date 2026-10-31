@@ -75,7 +75,8 @@ describe("the entry point of the issue creation", () => {
   });
 
   test("treats an empty intake key as no key before it checks the key", () => {
-    expect(code.slice(0, code.indexOf("assertIntakeKey(key)"))).toContain(
+    const entry = code.slice(code.indexOf("async function main("));
+    expect(entry.slice(0, entry.indexOf("assertIntakeKey(key)"))).toContain(
       "normalizeIntakeKey(intake_key)",
     );
   });
