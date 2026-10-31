@@ -3,16 +3,18 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  buildProfileUpgradedComment,
   decideProtectedPathReroute,
-  PROFILE_UPGRADED_COMMENT_KIND,
   PROTECTED_PATH_GAP_PREFIX,
   PROTECTED_WORK_NOT_PUSHED_REASON,
-  postProfileUpgradedComment,
   prBodySpecFor,
-  shouldCommentProfileUpgrade,
   shouldWithholdPartialPush,
 } from "../../f/factory/lib/implement_finish_support.ts";
+import {
+  buildProfileUpgradedComment,
+  PROFILE_UPGRADED_COMMENT_KIND,
+  postProfileUpgradedComment,
+  shouldCommentProfileUpgrade,
+} from "../../f/factory/lib/profile_upgrade.ts";
 import {
   describeReason,
   nextActionFor,

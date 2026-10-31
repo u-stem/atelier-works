@@ -66,7 +66,6 @@ import {
   PARTIAL_WORK_KEPT_LOCAL_REASON,
   PROTECTED_WORK_NOT_PUSHED_REASON,
   type PreserveWorkDeps,
-  postProfileUpgradedComment,
   prBodySpecFor,
   preserveWork,
   REQUIREMENTS_REGENERATION_FAILED_REASON,
@@ -110,6 +109,7 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { postProfileUpgradedComment } from "../lib/profile_upgrade.ts";
 import { automatedFeedback } from "../lib/prompts.ts";
 import {
   repoOwnerGateDeps,

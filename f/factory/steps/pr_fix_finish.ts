@@ -86,10 +86,7 @@ import {
   requestReviewers,
   withMarker,
 } from "../lib/github.ts";
-import {
-  decideDesignGapAction,
-  postProfileUpgradedComment,
-} from "../lib/implement_finish_support.ts";
+import { decideDesignGapAction } from "../lib/implement_finish_support.ts";
 import { GITLEAKS_TIMEOUT_MS } from "../lib/implement_loop.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { runCommandBytes } from "../lib/metadata_git_ports.ts";
@@ -99,6 +96,7 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { postProfileUpgradedComment } from "../lib/profile_upgrade.ts";
 import { automatedFeedback } from "../lib/prompts.ts";
 import {
   repoOwnerGateDeps,
