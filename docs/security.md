@@ -5663,7 +5663,10 @@ PR修正の報告は、親の遷移の注記と通知の理由に整えてから
 
 `design_enabled`と`design_enabled_since`を書く操作は、運用者がWindmillの画面か`wmill resource push`で行う。
 Consoleの設定の変更(`console_config_update`)の許可表には入れない。
-入れると、確認のダイアログ1つで、設計工程が開くためである。
+
+- 開く向き: 入れない。入れると、確認のダイアログ1つで、設計工程が開くためである。
+- 閉じる向き: 今は入れていない。許可表の`BOOLEAN_STOP_ITEMS`はtrueからfalseへの変更だけを許すが、設計工程の設定はそこに無い。閉じるには、Windmillの画面か`wmill resource push`が要る。入れるかは別に決める。
+
 subagentと背景のセッションは、この2つを書かない([運用](operations.md)の「設計工程を有効にする」)。
 
 安全策には、次の案がある。

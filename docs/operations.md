@@ -1296,6 +1296,8 @@ Windmillの画面か、`wmill resource push`で書く。
 一覧の上の**設計工程**の行が、実際に効いている値(有効、無効のどちらか)を出す。
 書かれた値が無視されているときは、その理由も出る。
 `design_enabled`か`design_enabled_since`を参照(`$var:`か`$res:`)で書いたときは、設定タブが参照の先を解決しないので、行は「判定できない」と出る。
+このとき設定を読む処理は、参照が文字列やオブジェクトに解決されて真偽値でなくなると、例外で止まる場合がある。
+主な対象は`design_enabled_since`の参照である。
 設計工程の2つの設定は、参照で書かず、値を直接書く。
 有効にした直後の確認は、この行でしかできない。
 
@@ -1311,10 +1313,11 @@ Windmillの画面か、`wmill resource push`で書く。
    Consoleのシステムの画面の更新履歴で、最新のデプロイが成功していることを確かめる。
    設定タブに**設計工程**の行が出て、「無効」と読めればよい。
    リソース型(ルートの`c_factory_config.resource-type.yaml`)は、自己更新の`wmill sync push`が反映する見込みである。
-   `wmill sync push --dry-run`が、このファイルを反映の対象に数えるためである。実際の反映は実機で確かめていない。
+   `wmill sync push --dry-run`が、このファイルを反映の対象に数えるためである。
+   実際の反映は実機で確かめていない。
    `wmill resource-type get c_factory_config --json`の出力に`design_enabled_since`があることを確かめる。
    無いときは、有効にせず、反映を待つか原因を調べる。
-   `mise run push`を手で実行しない。
+   `mise run push`を手で実行しない。自己更新と手動の反映の経路が二重になり、どちらが反映したか追えなくなるためである。
 3. 有効にする時点で止まっている作業項目が無い。
    次のコマンドで数える。
 
@@ -1347,6 +1350,8 @@ Windmillの画面か、`wmill resource push`で書く。
    `design_enabled_since`には、書く時点の時刻を書く(例: `2026-11-01T00:00:00Z`)。
 2. 書いた時点で効く。設定タブの**設計工程**の行が「有効」になったことを、すぐ確かめる。
    「無効」のまま、書かれた値が無視されていると出たときは、`design_enabled_since`の書式を直す。
+   理由の無い「無効」と出たときは、`design_enabled`が真偽値(引用符なしの`true`)かを確かめる。
+   文字列や数値だと、設定を読む処理は例外で止まるが、設定タブは理由なしで「無効」と出すためである。
    自己更新(2分ごと)を待つのは通知の解決だけである。
    `design_enabled_ignored`が未解決なら、自己更新が次の回に解決する。
 3. 検証用のIssueを1件投入し、1周を確かめる。
@@ -1376,6 +1381,7 @@ Windmillの画面か、`wmill resource push`で書く。
 
 進行中の項目の数は、次のコマンドで確かめる。実行するのは、無効にする前である。
 数が0になるまで待ってから無効にすると、設計書なしで実装へ進む項目が出ない。
+待てないときは、設計書なしで進む項目が出ることを受け入れて閉じる。
 
 ```bash
 mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT status, count(*) FROM factory.work_items WHERE kind = 'issue' AND status IN ('designing', 'awaiting_design_approval') GROUP BY status ORDER BY status"
