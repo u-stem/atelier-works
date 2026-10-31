@@ -81,8 +81,8 @@ export function useManualIntake(): ManualIntake {
   const locked = mutation.isLocked(NO_INPUT);
   return {
     submit: (form, input) =>
-      startIntake(intakeSessions, MANUAL_INTAKE_WRITE_KEY, form, () =>
-        mutation.submit(input),
+      startIntake(intakeSessions, MANUAL_INTAKE_WRITE_KEY, form, (intakeKey) =>
+        mutation.submit({ ...input, intakeKey }),
       ),
     session,
     locked,

@@ -16,6 +16,11 @@ schema:
       description: このタスクで達成したい目的。
       default: null
       originalType: string
+    intake_key:
+      type: string
+      description: 投入の再送を止める冪等キー(小文字のUUID)。省くと、再送を止めない従来の投入になります。
+      default: null
+      originalType: string
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。

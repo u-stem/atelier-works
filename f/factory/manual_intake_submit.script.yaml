@@ -16,6 +16,11 @@ schema:
       description: 目的(Issueの本文)。空にはできません。
       default: null
       originalType: string
+    intake_key:
+      type: string
+      description: 投入の再送を止める冪等キー(小文字のUUID)。省くと、再送を止めない従来の投入になります。形が違うと、起動せずに理由を返します。
+      default: null
+      originalType: string
     owner:
       type: string
       description: 投入先リポジトリのオーナー。factory_configで許可されたものに限ります。

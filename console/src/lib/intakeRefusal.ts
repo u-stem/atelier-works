@@ -24,6 +24,8 @@ const REFUSALS: Readonly<Record<ManualIntakeRefusalReason, string>> = {
     "目的か受入基準に使えない文字があります。改行とタブ以外の制御文字と、文字の向きを変える記号は使えません。",
   body_too_long:
     "目的と受入基準が長すぎます。Issueの本文に組み立てた後で、65,536字までにしてください。",
+  invalid_intake_key:
+    "再送を止めるための識別子の形が正しくありません。画面が作る値なので、通常は起きません。",
   actor_unknown:
     "操作した人を特定できませんでした。ログインし直してから、もう一度試してください。",
 };

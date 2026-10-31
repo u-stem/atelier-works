@@ -14,6 +14,9 @@ value:
           body:
             type: javascript
             expr: flow_input.body
+          intake_key:
+            type: javascript
+            expr: flow_input.intake_key
           owner:
             type: javascript
             expr: flow_input.owner
@@ -54,6 +57,8 @@ value:
             type: javascript
             expr: results.create_issue.title
         path: f/factory/steps/manual_intake_register
+      skip_if:
+        expr: results.create_issue.reused === true
   failure_module:
     id: failure
     value:
@@ -76,6 +81,7 @@ schema:
     - body
     - acceptance_criteria
     - profile
+    - intake_key
   properties:
     acceptance_criteria:
       type: string
@@ -84,6 +90,9 @@ schema:
     body:
       type: string
       description: このタスクで達成したい目的。
+    intake_key:
+      type: string
+      description: 投入の再送を止める冪等キー(小文字のUUID)。形が違うと、Issueを作る前に断ります(任意)。
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。

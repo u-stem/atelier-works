@@ -35,7 +35,11 @@ export type IntakeSession = {
   readonly resultId: number;
   /** 画面が描画したことを記録した、最後の結果の連番。まだ見せていなければ`null`。 */
   readonly shownResultId: number | null;
-  /** 直近の送信に付けた冪等キー。結果が分かった送信では持たない。 */
+  /**
+   * 直近の送信に付けた冪等キー。同じ送信の再送が、Issueを増やさないために使う。
+   * 投入されたか分からない結果の間だけ持ち越し、結果が分かった送信では持たない。
+   * メモリだけに置く。リロードや別のタブには広げない。
+   */
   readonly intakeKey: string | null;
 };
 
@@ -54,9 +58,16 @@ export type IntakeSessions = {
   readonly get: (key: string) => IntakeSession;
   /** 投入されたか分からず、再送を確かめていないために、次の送信を止めているか。 */
   readonly isBlocked: (key: string) => boolean;
-  /** 次の送信に付ける冪等キーを返す。 */
+  /**
+   * 次の送信に付ける冪等キーを返す。
+   * 投入されたか分からない結果があり、同じ入力で再送するときだけ、そのキーを引き継ぐ。
+   * それ以外は、新しいキーを作る。
+   */
   readonly keyFor: (key: string, form: IntakeForm) => string;
-  /** 送信を始める。前の結果と、一覧が古い印を消し、入力欄の値を残す。 */
+  /**
+   * 送信を始める。前の結果と、一覧が古い印を消し、入力欄の値を残す。
+   * `intakeKey`は、この送信に付けたキーで、省くと`keyFor`と同じ規則で決める。
+   */
   readonly begin: (key: string, form: IntakeForm, intakeKey?: string) => void;
   /** 送信の結果を書く。投入できたときだけ、入力欄の値を消す。 */
   readonly record: (key: string, attempt: IntakeAttempt) => void;
@@ -97,8 +108,18 @@ function sameForm(left: IntakeForm, right: IntakeForm): boolean {
   );
 }
 
+/** 引き継げるキー。投入されたか分からない結果が、同じ入力の送信から来ているときだけ返す。 */
+function carriedKey(current: IntakeSession, form: IntakeForm): string | null {
+  return current.attempt.kind === "unknown" &&
+    current.intakeKey !== null &&
+    current.form !== null &&
+    sameForm(current.form, form)
+    ? current.intakeKey
+    : null;
+}
+
 export function createIntakeSessions(
-  _newKey: () => string = () => "",
+  newKey: () => string = () => crypto.randomUUID(),
 ): IntakeSessions {
   let sessions: ReadonlyMap<string, IntakeSession> = new Map();
   const listeners = new Set<() => void>();
@@ -123,18 +144,25 @@ export function createIntakeSessions(
   return {
     get,
     isBlocked: (key) => isSubmitBlocked(get(key).attempt),
-    keyFor: () => "",
-    begin: (key, form) => {
+    keyFor: (key, form) => carriedKey(get(key), form) ?? newKey(),
+    begin: (key, form, intakeKey) => {
       update(key, (current) => ({
         ...current,
         attempt: { kind: "idle" },
         form,
         stale: false,
+        intakeKey: intakeKey ?? carriedKey(current, form) ?? newKey(),
       }));
     },
     record: (key, attempt) => {
       update(key, (current) => {
-        const written = { ...current, attempt, resultId: current.resultId + 1 };
+        const written = {
+          ...current,
+          attempt,
+          resultId: current.resultId + 1,
+          // 結果が分かったら、次の送信は新しいキーで始める。
+          intakeKey: attempt.kind === "unknown" ? current.intakeKey : null,
+        };
         return attempt.kind === "submitted"
           ? {
               ...written,
@@ -178,6 +206,7 @@ export function createIntakeSessions(
               attempt: { kind: "idle" },
               form: null,
               clearedCount: current.clearedCount + 1,
+              intakeKey: null,
             }
           : current,
       );
@@ -208,6 +237,7 @@ export const intakeSessions: IntakeSessions = createIntakeSessions();
 
 /**
  * 送信を始める。投入されたか分からず、再送を確かめていないときは、`start`を呼ばずに`false`を返す。
+ * `start`には、この送信に付ける冪等キーを渡す。投入されたか分からない結果の再送では、前と同じキーになる。
  * `start`が始められなかったとき(別の送信が実行中など)は、状態を変えずに`false`を返す。
  * 始められたときだけ、入力欄の値を残して前の結果を消す。
  */
@@ -220,10 +250,11 @@ export function startIntake(
   if (sessions.isBlocked(key)) {
     return false;
   }
-  if (!start("")) {
+  const intakeKey = sessions.keyFor(key, form);
+  if (!start(intakeKey)) {
     return false;
   }
-  sessions.begin(key, form);
+  sessions.begin(key, form, intakeKey);
   return true;
 }
 

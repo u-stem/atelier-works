@@ -144,6 +144,7 @@ import {
   setPrConflictFixHold,
   settlePrConflictCheck,
   setWorkItemPrUrl,
+  sqlIntakeKeyStore,
   touchPrCiCheck,
   touchPrConflictCheck,
   transitionMainCiRun,
@@ -179,7 +180,6 @@ import {
   runSystemStatus,
   runWorkItemDetail,
 } from "../f/factory/steps/console_query.ts";
-import { sqlIntakeKeyStore } from "../f/factory/steps/manual_intake_create_issue.ts";
 import { createPsqlClient, execPsql, type PsqlTarget } from "./test-db-sql.ts";
 
 /** 通知を挿入してIDを返す。同じ種類と本文の未解決の通知が既にあるときは、場面の設定の誤りなので失敗させる。 */

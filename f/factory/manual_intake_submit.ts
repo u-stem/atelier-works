@@ -95,6 +95,10 @@ export async function submitManualIntake(
       body: input.body,
       acceptance_criteria: input.acceptance_criteria,
       profile: input.profile,
+      // キーが無い呼び出しには、引数を足さない。フローは、キーが無い従来の投入として動く。
+      ...(input.intake_key === undefined
+        ? {}
+        : { intake_key: input.intake_key }),
     }),
     "runFlowAsync",
   );
@@ -148,6 +152,8 @@ export async function submitManualIntakeRecorded(
 /**
  * Consoleの新規投入。実行者はジョブの実行文脈から導く。
  * `profile`は進め方で、省くと通常の進め方になる。受け付けない値は、検証で断る。
+ * `intake_key`は投入の再送を止める冪等キー(小文字のUUID)で、省くと再送を止めない従来の投入になる。
+ * 形が違うキーは、検証で断る。
  */
 export async function main(
   owner: string,
@@ -156,9 +162,19 @@ export async function main(
   body: string,
   acceptance_criteria: string = "",
   profile: string = "standard",
+  intake_key?: string,
 ): Promise<ManualIntakeSubmitResult> {
+  // Windmillは、渡されなかった引数を`null`で渡すことがある。`null`は、キーが無い呼び出しとして扱う。
   return await submitManualIntakeRecorded(
-    { owner, repo, title, body, acceptance_criteria, profile },
+    {
+      owner,
+      repo,
+      title,
+      body,
+      acceptance_criteria,
+      profile,
+      ...(intake_key == null ? {} : { intake_key }),
+    },
     {
       loadConfig: () =>
         loadConfig(() => wmill.getResource("f/factory/factory_config")),

@@ -218,7 +218,7 @@
           "id": "register",
           "summary": "作業項目を登録して工程 2 を起動",
           "scriptPath": "f/factory/steps/manual_intake_register",
-          "conditional": false
+          "conditional": true
         }
       ],
       "entries": [
