@@ -262,7 +262,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
-| `design_enabled_ignored` | `self_update` | `design_enabled`が`true`で`false`として読んでいること、`false`に戻す操作 |
+| `design_enabled_ignored` | `self_update` | `design_enabled`が`true`でも、`design_enabled_since`が無いか日時として読めないため`false`として読んでいること、`design_enabled_since`を書くか`false`に戻す操作 |
 | `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
@@ -579,8 +579,8 @@ PRのトリガーラベルの取得に成功したときは、`poll_prs`が、�
 対象は、確認できずにラベルを戻したときの`claim_race_lost`と、`pr_trigger_label_left_removed`である。
 本文が完全に一致する行だけを選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、別のラベルの行には触れない。`resolved_by`は`poll_prs`になる。
 
-`design_enabled_ignored`は、自己更新が設定を読むたびに、`design_enabled`が`true`なら残す。未解決の通知は同じ本文で1件にまとまる。
-設定が`false`に戻った回は、自己更新が未解決の通知を3件まで解決する。`resolved_by`は`self_update`になる。
+`design_enabled_ignored`は、自己更新が設定を読むたびに、`design_enabled`が`true`なのに`design_enabled_since`が無いか日時として読めないときに残す。未解決の通知は同じ本文で1件にまとまる。
+`design_enabled_since`が書かれた回と、設定が`false`に戻った回は、自己更新が未解決の通知を3件まで解決する。`resolved_by`は`self_update`になる。
 この種類はConsoleから解決できない。設定が直らないまま、通知だけを消せないようにするためである。
 重要度は「要対応」なので、`cleanup_db`の期限の解決の対象に入らない。
 

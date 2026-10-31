@@ -143,8 +143,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
-| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。設計書を生成している。実装が設計の不足を返したときは実装中から、PRの修正が設計の不足を返したときはPR作成済みから、ここへ戻す。遷移させるコードは入っているが、入口が閉じていて本番では動かない | issue | |
-| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。設計フローが`designing`から移すコードと、承認の反映(`design_apply`)がここから動かすコードは入っているが、入口が閉じていて本番では動かない | issue | |
+| `designing` | 設計工程の状態。要件定義の承認の後、実装の前に置く。設計書を生成している。実装が設計の不足を返したときは実装中から、PRの修正が設計の不足を返したときはPR作成済みから、ここへ戻す。設計工程が無効の間(既定)は、この状態にならない | issue | |
+| `awaiting_design_approval` | 設計工程の状態。人の設計の承認を待つ。設計フローが`designing`から移し、承認の反映(`design_apply`)がここから動かす。設計工程が無効の間(既定)は、この状態にならない | issue | |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
 | `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
@@ -169,7 +169,7 @@ pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`n
 - 実装が設計の不足を返したときに、実装中から前者へ戻すコード
 - PRの修正が設計の不足を返したときに、PR作成済みから前者へ戻すコード
 
-ただし、設計フローの入口が閉じていて、本番の作業項目はこの2状態にならない。
+ただし、設計工程は既定で無効で、無効の間は作業項目がこの2状態にならない。
 そのため、下の状態遷移の図に載せない。
 設計フローは[設計書の生成](internals/design.md)に書く。
 
@@ -615,6 +615,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
 | `f/factory/lib/design_apply_support` | script | [LIB] 設計の承認の反映の判定 |
 | `f/factory/lib/design_launch_support` | script | [LIB] 設計フローの起動 |
+| `f/factory/lib/design_gate` | script | [LIB] 設計工程を開ける門 |
 | `f/factory/lib/design_template` | script | [LIB] 設計書テンプレートの定義 |
 | `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
@@ -997,9 +998,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
-- 設計工程の動作。
-  フロー、承認の反映、期限切れ、実装の関門は入っているが、入口が閉じている。
-  Consoleの設計書の画面と承認画面は無い
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

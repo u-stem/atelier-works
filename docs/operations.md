@@ -1269,18 +1269,114 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 
 その後、Consoleの**要対応**で失敗の行を選び、**再実行**を押す。
 
-## 設計工程の設定を確かめる
+## 設計工程を有効にする
 
-`factory_config`の`design_enabled`に`true`を書いても、設計工程は動かない。
-設計フローを起動する配線は、`design_enabled`が真のときだけ結ばれる。
-ただし、コードの定数`DESIGN_STAGE_OPENABLE`が偽の間は、`design_enabled`は偽として読まれる。
-そのため、設定に`true`を書いても配線は結ばれない。
-設定は`false`として読まれ、要対応の通知`design_enabled_ignored`が残る。
-`false`に戻すと、自己更新(2分ごと)が通知を自動で解決する。
+設計工程は、要件定義の承認の後、実装の前に、設計書の生成と人の承認を挟む。
+既定は無効である。
+有効にするには、`factory_config`の`design_enabled`を`true`にし、`design_enabled_since`に日時を書く。
+`design_enabled`だけを`true`にしても有効にならず、設定は`false`として読まれる。
+このとき要対応の通知`design_enabled_ignored`が残る。
+`design_enabled_since`が日時として読めない値のときも同じである。
+設定を読む処理は例外にしない。例外にすると、自己更新まで止まるためである。
 通知は[通知の種類](#通知の種類)に、設定値の一覧は[設計書の生成](internals/design.md)の「設定値」に書く。
 
-設定タブは書かれた値をそのまま出すので、`false`として読まれている`true`も`true`と表示される。
-`design_enabled_ignored`が未解決なら、`true`が`false`として読まれている。
+`design_enabled_since`は、有効にする意思の表明と、有効にした時刻の記録である。
+他の`*_since`(`pr_ci_fix_enabled_since`など)のように、この時刻より前の作業を除く境にはならない。
+未来の日時を書いても、書いた時点で有効になる。
+書式は、秒まで書いたタイムゾーン付きの日時である。例は`2026-11-01T00:00:00Z`である。
+日付だけ(`2026-11-01`)などの書き損じは、設定を読む処理を失敗させず、設計工程を開けない。
+
+`design_enabled_since`を書くのは運用者である。
+subagentと背景のセッションは書かない。
+有効にする操作が、人の判断を経るようにするためである。
+`console_config_update`の許可表に`design_enabled`と`design_enabled_since`は入れないので、Consoleからは書けない。
+Windmillの画面か、`wmill resource push`で書く。
+
+設定タブは、一覧の値を書かれたまま出す。
+一覧の上の**設計工程**の行が、実際に効いている値(有効、無効のどちらか)を出す。
+書かれた値が無視されているときは、その理由も出る。
+有効にした直後の確認は、この行でしかできない。
+
+### 有効にする前に確かめること
+
+次の5つをすべて満たしてから、有効にする。
+
+1. 変更が反映されている。
+   Consoleのシステムの画面の更新履歴で、最新のデプロイが成功していることを確かめる。
+   設定タブに**設計工程**の行が出て、「無効」と読めればよい。
+2. リソース型を先に反映する。
+   `mise run push`を実行する。
+   リソース型に`design_enabled_since`が無い状態で書いて`wmill resource push`すると、断られるか落ちるかを確かめていないためである。
+3. ホストが最新に追い付いている。
+   ホストのメインのチェックアウトで、`git fetch origin`の後、`git log --oneline HEAD..origin/main`が空であることを確かめる。
+   最後に`mise run up`を実行した時点は、`git reflog`で探す。
+   `mise run up`が要る変更が残っていると、実機の1周が、本番に入る環境と違う環境の確認になるためである。
+4. 有効にする時点で止まっている作業項目が無い。
+   次のコマンドで数える。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT status, count(*) FROM factory.work_items WHERE kind = 'issue' AND status IN ('approved', 'implementing', 'needs_human') GROUP BY status ORDER BY status"
+   ```
+
+   該当の作業項目は、有効にしても自動では再開されない。
+   承認済み(`approved`)で止まった項目は、次の実装の準備の関門が、設計の承認が無いことを理由に止める(理由は`no approved design for design attempt 0`)。
+   人が再実行すると、実装ではなく設計から始まる。
+   `needs_human`のうち、自動で再開する理由(workerのイメージが古い、PRに動いている修正がある)を持つ項目も、同じ扱いになる。
+   Consoleの要対応で理由を確かめる。
+   `implementing`の項目は、終わってから有効にする。
+   0にできない分は、再実行が設計へ回ることを受け入れる。
+5. 本番の過去の要件定義書で、承認画面が止める条件に当たる割合を確かめる。
+   設計書はまだ本番に無いので、要件定義書で近似する。
+   次のコマンドは読み取りだけで、書き込まない。
+   `flagged`が多いときは、承認画面が止めすぎる可能性がある。有効にする前に、止める条件を見直す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "WITH p AS (SELECT '[' || chr(8203) || '-' || chr(8207) || chr(8232) || chr(8233) || chr(8234) || '-' || chr(8238) || chr(8288) || '-' || chr(8303) || chr(65024) || '-' || chr(65039) || chr(12644) || chr(65440) || chr(10240) || chr(4447) || chr(4448) || chr(13) || ']' AS re) SELECT count(*) AS total, count(*) FILTER (WHERE rd.markdown ~ p.re) AS flagged FROM factory.requirement_drafts rd, p"
+   ```
+
+   このパターンは、書式文字、行と段落の区切り、異体字セレクタ、ハングルのフィラー、点字の空白、`\r`に当たる。
+   承認画面の判定と完全には同じでないので、近似として読む。
+
+### 有効にする手順
+
+1. `factory_config`に、`design_enabled: true`と`design_enabled_since`を同じ編集で書く。
+   `design_enabled_since`には、書く時点の時刻を書く(例: `2026-11-01T00:00:00Z`)。
+2. 自己更新(2分ごと)を待ち、設定タブの**設計工程**の行が「有効」になったことを確かめる。
+   「無効」のまま、書かれた値が無視されていると出たときは、`design_enabled_since`の書式を直す。
+   `design_enabled_ignored`が未解決なら、自己更新が次の回に解決する。
+3. 検証用のIssueを1件投入し、1周を確かめる。
+   - 要件定義を承認すると、作業項目が設計中(`designing`)になり、設計書が生成される。
+   - 設計の承認依頼が、Consoleの要対応に出る。
+   - 設計の承認画面が、実装に渡る全文をそのまま出す。不可視文字は、コードポイントの表記で見える。
+   - 設計を承認すると、実装が始まり、PRができる。
+   - 設計を却下すると、理由を添えて設計が作り直される。
+4. 1周に問題が無ければ、通常の運用に入る。
+   問題があれば、次の手順で無効に戻す。
+
+### 無効にする手順
+
+1. `design_enabled`を`false`に戻す。
+   `design_enabled_since`は残してよい。`design_enabled`が偽なら読まれない。
+   もう一度有効にするときは、`design_enabled_since`を新しい時刻に書き直す。
+2. 自己更新(2分ごと)の後、設定タブの**設計工程**の行が「無効」になったことを確かめる。
+
+無効にしても、進行中の設計は止まらない。
+設計中(`designing`)と設計の承認待ち(`awaiting_design_approval`)の作業項目は動き続け、`design_apply`も動く。
+無効の間は、次のとおり動く。
+
+- 設計の承認は、設計書を実装に渡さず、実装へ進める。確認文もそう伝える。
+- 設計の却下は、設計を作り直さず、人の対応待ちで止める。
+- 無効の間に再開した実装も、設計書を受け取らない。
+- 実装とPRの修正は、設計の不足を返せない。
+
+進行中の項目の数は、次のコマンドで確かめる。実行するのは、無効にする前である。
+数が0になるまで待ってから無効にすると、設計書なしで実装へ進む項目が出ない。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT status, count(*) FROM factory.work_items WHERE kind = 'issue' AND status IN ('designing', 'awaiting_design_approval') GROUP BY status ORDER BY status"
+```
+
+### 設計の上限と設定の書き損じ
 
 `max_design_attempts`は、現在の要件定義の試行で、設計を作り直せる回数の上限である。
 人の却下、実装からの戻し、PR修正からの戻しが、この上限を分け合う。
@@ -1289,6 +1385,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 
 `design_enabled`が真偽値でないとき、または`max_design_attempts`が1以上10以下の整数でないときは、設定を読む処理が例外になる。
 このとき自己更新と検知が止まるので、値を直す。
+`design_enabled_since`の書き損じは、例外にならず、設計工程が開かないだけである。
 
 ## 設計の承認の反映で止まったとき
 
@@ -3140,7 +3237,7 @@ PR修正のラウンドは`20261028110000_fix_rounds_design_gap`である。
 どちらも、`design_gap`のラウンドが1件でもあれば、制約の足し直しに失敗する。
 トランザクションごと戻るので、制約とラウンドは残る。
 ラウンドは修正の記録で、行を失わないためである。
-設計フローの入口が閉じている間は、`design_gap`のラウンドは書かれないので、通常は止まらない。
+設計工程が無効の間は、`design_gap`のラウンドは書かれないので、通常は止まらない。
 止まったときは、`implement_rounds`と`fix_rounds`で`outcome = 'design_gap'`の行を確かめ、扱いを決めてから、やり直す。
 
 設計フローの入口は閉じていて、今のコードは本番で設計の下書きも設計の承認依頼も書き込まない。
@@ -3911,7 +4008,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `dependabot_merge_hold_unreadable` | マージの保留の表を読めないため、dependabotの更新PRの自動マージを待たせている。本文に原因の種類(`missing_table`、`read_failed`、`corrupt`、`error`)が載る。PRの数は載せない | 原因の種類に従う。`missing_table`は、保留の表を作るmigrationが反映済みか、デプロイの記録で確かめる。`read_failed`は、DBが動いているか確かめる。`corrupt`は、`mise run hold:list`で壊れた行を確かめ、psqlでその行を解除か削除する。`error`は、workerのログで原因を確かめる。読めるようになると、次の取得で自動で再開し、この通知も自動で解決される。`corrupt`と`error`は、本文の先頭にリポジトリが載り、そのリポジトリを読めた周回で解決される。候補のPRが無い周回も読むので、PRが閉じても解決される |
 | `hold_released` | 人が、保留、スケジュールの凍結、deployの保留を、Consoleのシステムの画面から解除した。本文に、解除した対象、操作者、時刻(JST、秒まで)が載る。「情報」で、保留の`reason`と`holder`は載せない。凍結の行は解除した主体を残さないので、この通知が操作者の記録になる。期限切れの行を片付けたときと、解除済みの行への呼び出しでは残さない。Discordには届かない | 心当たりのある解除なら、何もしない。心当たりが無いなら、操作者の名前を確かめ、止めていた対象を置き直すかを判断する |
 | `doc_hash_column_missing` | 要件定義の下書きの基準値の列(`requirement_drafts.doc_hash`)が無いまま、基準値なしで下書きを保存した。列を足すmigrationより先に、コードが反映されたときに残る。この下書きは、承認の後の書き換えを検出できない。本文は固定で、未解決は1件にまとまる | 列を足すmigrationは、自己更新が自動で反映する。デプロイの記録で、反映が成功していることを確かめる。失敗しているときは、自己更新のジョブのログで原因を確かめる。書き換えから守りたい要件定義は作り直す。列が足されても、通知は自動では解決されない。基準値なしで保存された承認済みの要件定義が残ること自体が、書き換えからの守りの欠落であり、列が足されたことだけでは消えないためである。人が、その要件定義の扱いを確かめ終えてから解決する |
-| `design_enabled_ignored` | 設定の`design_enabled`が`true`だが、設計工程はまだ有効にできないため、`false`として読んでいる。設計工程は動かない。設定タブには書かれた値の`true`が出る。自己更新が設定を読むたびに残し、本文は固定で、未解決は1件にまとまる | `factory_config`の`design_enabled`を`false`に戻す。戻すと、自己更新(2分ごと)がこの通知を自動で解決する。Consoleからは解決できない |
+| `design_enabled_ignored` | 設定の`design_enabled`が`true`だが、`design_enabled_since`が無いか日時として読めないため、`false`として読んでいる。設計工程は動かない。設定タブの**設計工程**の行には、効いている値の「無効」が出る。自己更新が設定を読むたびに残し、本文は固定で、未解決は1件にまとまる | 設計工程を有効にするなら、[設計工程を有効にする](#設計工程を有効にする)の確認を済ませてから、`factory_config`に`design_enabled_since`を書く。有効にしないなら、`design_enabled`を`false`に戻す。どちらでも、自己更新(2分ごと)がこの通知を自動で解決する。Consoleからは解決できない |
 
 ### Console用のworkerの検知を確かめる
 

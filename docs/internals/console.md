@@ -628,7 +628,7 @@ backendの型との一致は、`tests/scripts/console_jobs_contract.test.ts`が�
 | `console_jobs`の`history` | `status`、`script_path`、`before`、`include_console`、`limit` | 完了したジョブを、新しい順に1ページ(50件まで)。フローのステップは含めない。次のページのカーソルを`next_before`で返す。累積が200件に達したら、カーソルは`null`になる |
 | `console_jobs`の`detail` | `job_id`、`include_output` | ジョブ1件。許可した項目、引数、フローのステップの一覧(条件で飛ばしたステップは`skipped`が真)、ログ、結果、結果を読めなかった理由、失敗の保存済みの原因 |
 | `console_schedules` | なし | `f/factory/`のscheduleの状態。有効/無効、一時停止の期限、cron、次回の予定、直近5件の実行(新しい順)、リポジトリの定義との差異。全ページを読む(最大10ページ)。ページの上限かキューの1ページに達したときは、`truncated`を真にする |
-| `console_config` | なし | `factory_config`の全項目。参照を含む値は、値の代わりに参照の印 |
+| `console_config` | なし | `factory_config`の全項目。参照を含む値は、値の代わりに参照の印。加えて、設計工程の効いている値`design_stage`(`enabled`と`ignored`) |
 
 一覧は、既定でtag`console`のジョブ(Consoleの呼び出し自身)を除く。
 Windmillの一覧のAPIが、tagの否定(`!console`)を受けるためである。
@@ -2526,6 +2526,12 @@ Consoleから解決できる種類の行は、「詳細と解決」と書く。�
 キー名の部分一致で絞り込める。大文字と小文字は区別せず、値は探さない。
 表示する内容は`src/lib/jobsView.ts`の純関数が決め、部品は`src/screens/system/ConfigSection.tsx`にある。
 
+一覧の上に、設計工程の行を出す。
+一覧の値は書かれたままなので、設計工程が実際に動くかは、この行で確かめる。
+`console_config`が返す`design_stage`は、設定を読む処理と同じ門(`lib/design_gate.ts`)で決めた値である。
+有効か無効かを出し、書かれた値が無視されているとき(`design_enabled`が`true`で、`design_enabled_since`が無いか日時として読めない)は、その理由を添える。
+古いbackendは`design_stage`を返さないので、無いときは行を出さない。
+
 #### 設定の変更
 
 変更の候補を出すかは、`changeOfferOf`(`src/lib/configChange.ts`)が決める。
@@ -2866,7 +2872,8 @@ backendは、履歴を新しい順に切って返す。上限は、失敗が20�
 
 図の見せ方は、図を包む要素の実際の幅から、[flowの図の画面の幅](#幅)と同じ規則で選ぶ。
 入口の列が無いので、図の幅はその分狭い。
-本文の幅が760pxのとき、4ステップまでのflowは図をそのまま出す。pipelineとpr_fixは、横にスクロールする枠で出す。
+本文の幅が760pxのとき、図をそのまま出すflowは、audit、dependabot、manual_intake、pr_reviewである。
+pipeline、pr_fix、design、implementは、横にスクロールする枠で出す。
 `src/lib/flowDiagram.test.ts`が、実際のflowごとの見せ方を固定する。
 スクロールする枠は、開いたとき、実行中か失敗したステップが見える位置へ寄せる。
 そのステップが動かない間は、利用者が動かしたスクロールを戻さない。
@@ -3499,16 +3506,16 @@ flow自身からの入口(却下の作り直し)は、同じ戻りを出口が�
 
 | flow | 出口 |
 | --- | --- |
-| `pipeline` | 承認の後に`implement`、却下の後に`pipeline`(要件定義の作り直し) |
-| `design` | 承認の出口を持たない。承認を処理するscriptが無く、`handlerPathFor("design")`が例外を投げるため |
+| `pipeline` | 承認の後に`design`か`implement`、却下の後に`pipeline`(要件定義の作り直し) |
+| `design` | 承認の後に`implement`、却下の後に`design`(設計の作り直し)か`pipeline`(要件定義へ戻る) |
 
 `LAUNCH_EDGES`にあって本番では起動しない辺は、`UNWIRED_LAUNCH_EDGES`に載せ、入口と出口のどちらにも描かない。
-承認の処理から`design`を起動する辺と、`implement_finish`と`pr_fix_finish`が設計の不足を`design`へ戻す辺が当たる。
 起動先のflowの図には、「pipelineの承認からは、まだ起動されません」のように添える。
-`buildApprovedBranchDeps`が`startDesign`を渡さない間だけ、この辺を載せられる。
-`tests/scripts/flows_data_contract.test.ts`が、`implement_enabled`の真偽ごとにこの条件を確かめる。
-設計の承認を反映する処理を開けるとテストが失敗する。
-そのときは、設計を起動する辺を`UNWIRED_LAUNCH_EDGES`から外し、承認で設計へ進む間はimplementを起動しないので、implementの辺を移すかも決める。
+今は、載せる辺が無い。
+設計工程の辺は、設定の`design_enabled`で切り替わる辺として`LAUNCH_EDGES`に載せる。
+設計工程の辺は、承認の処理から`design`を起動する辺と、設計の不足を`design`へ戻す`implement_finish`と`pr_fix_finish`の辺である。
+設定と上限で決まる辺と同じく、図に印は付けない([設定と上限で決まる辺](#設定と上限で決まる辺))。
+`startDesign`を結ぶのが`config.design_enabled`の内側だけであることは、`tests/scripts/flows_data_contract.test.ts`が確かめる。
 
 ### 差し戻し
 
@@ -3516,12 +3523,12 @@ flow自身からの入口(却下の作り直し)は、同じ戻りを出口が�
 通常の起動と分けて、出口に「差し戻し」、`pipeline`の入口に「implementの差し戻し」のように示す。
 どの辺が差し戻しかは、`scripts/launch-graph.ts`の`REWORK_LAUNCH_EDGES`が持つ。
 契約テストが、各ステップのソースの`requirements_gap`と照合する。
-設計の不足を`design`へ戻す辺は、`UNWIRED_LAUNCH_EDGES`に載せ、`REWORK_LAUNCH_EDGES`には載せない。
-設計工程の入口が閉じている間は、起動しないためである。
+設計の不足を`design`へ戻す辺は、`REWORK_LAUNCH_EDGES`に載せず、通常の起動の辺として描く。
+差し戻しの辺は、行き先を`pipeline`に限るためである。
 
 ### 設定と上限で決まる辺
 
-承認、却下、差し戻しの起動は、設定(`implement_enabled`)と試行の上限で決まる。
+承認、却下、差し戻しの起動は、設定(`implement_enabled`と`design_enabled`)と試行の上限で決まる。
 図は設定の値を読まないため、辺に印は付けない。
 この辺を入口か出口に持つflowの図には、図の下に1文を添える。
 文は「設定や試行の上限により、起動しない場合があります」である。
@@ -3532,7 +3539,8 @@ flow自身からの入口(却下の作り直し)は、同じ戻りを出口が�
 入口は左の列、ステップは右へ一列、出口はステップの下の行に置く。
 線は隣り合う列と行の間だけを引くので、他の箱の上を通らない。
 出口は、つくステップの真下に置き、同じ行で重なるときは右へずらす。
-図の幅は、いちばん多いステップ(5つ)のflowでも、ジョブの画面の本文の最大の幅(1152px)からカードの分(18px)を引いた幅に収まる。
+出口が右へ広がるpipeline、pr_fix、designは、ジョブの画面の本文の最大の幅(1152px)からカードの分(18px)を引いた幅を超え、横にスクロールする枠で出す。
+ほかのflowは、その幅に収まる。
 
 図は自前のSVGで描く(`src/screens/jobs/FlowDiagram.tsx`)。
 色はCSSのトークンだけで指定するので、ライトとダークの両方で読める。
