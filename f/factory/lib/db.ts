@@ -6661,6 +6661,13 @@ export async function deleteWorkerSamplesBefore(
   return rows.length;
 }
 
+export async function deleteManualIntakeKeysBefore(
+  _olderThan: Date,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
+}
+
 /** 新しい順に`limit`件の`factory.worker_samples`の行を返す。 */
 export async function listRecentWorkerSamples(
   limit: number,
