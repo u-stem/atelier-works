@@ -15,6 +15,7 @@ import {
   type ImplementLoopExit,
   type ImplementLoopResult,
   type ImplementPrepareOutcome,
+  implementContextSpecKind,
 } from "./implement_loop.ts";
 import type {
   ImplementCheckSummary,
@@ -584,57 +585,127 @@ export function buildPrOpenedEvent(
 // 仕様がIssueの実装(承認を省く進め方)の完了処理
 // ---------------------------------------------------------------------------
 
-export const PROTECTED_PATH_GAP_PREFIX = "";
-export const PROTECTED_WORK_NOT_PUSHED_REASON = "";
-export const PROFILE_UPGRADED_COMMENT_KIND = "";
+/**
+ * 保護パスの変更が要るとして要件定義へ戻すときの、不足の報告の先頭。
+ * 要件の不足(`requirements_gap`)の報告と同じく、要件定義の生成への`feedback`になる。
+ */
+export const PROTECTED_PATH_GAP_PREFIX = "保護パスの変更が要る: ";
 
+/**
+ * 仕様がIssueの実装が保護パスを変えたため、途中の作業をpushしなかったときの理由。
+ * 理由の訳と次の操作は`steps/pr_workflow_support.ts`の理由の表にある。
+ */
+export const PROTECTED_WORK_NOT_PUSHED_REASON =
+  "protected path changes without approved requirements, changes not pushed";
+
+/** 進め方を通常に戻したことをIssueに伝えるコメントの目印の種類。作業項目ごとに1件だけ付く。 */
+export const PROFILE_UPGRADED_COMMENT_KIND = "profile-upgraded";
+
+/** 進め方を通常に戻した原因。 */
 export type ProfileUpgradeCause = "requirements_gap" | "protected_paths";
 
-export function prBodySpecFor(_context: {
+/**
+ * 文脈から、PR本文の仕様の欄を作る。
+ * `spec_kind`を足す前の準備ステップが作った文脈には項目が無いので、要件定義として扱う。
+ */
+export function prBodySpecFor(context: {
   readonly spec_kind?: ImplementSpecKind;
   readonly profile?: string;
   readonly requirements_markdown: string | null;
   readonly requirements_console_url: string | null;
 }): ImplementPrBodySpec {
-  return { kind: "issue", profile: "" };
+  if (implementContextSpecKind(context) === "issue") {
+    return { kind: "issue", profile: context.profile ?? "" };
+  }
+  return {
+    kind: "requirements",
+    requirementsMarkdown: context.requirements_markdown ?? "",
+    requirementsConsoleUrl: context.requirements_console_url ?? "",
+  };
 }
 
-export function decideProtectedPathReroute(_input: {
+/**
+ * 仕様がIssueの実装の差分が保護パスに触れたとき、要件定義へ戻す不足の報告を返す。触れないときと、仕様が要件定義のときは`null`を返す。
+ * 承認を省く進め方では、保護パスの変更を人が見る関門が無い。
+ * 戻した先の要件定義の承認で、人が保護パスの変更を判断する。
+ * 保護パスのPRが日常的に出ても、人の手は承認だけで済むよう、`needs_human`にはしない。
+ * 呼び出し側は、commitとpushの前にこれを呼び、返したときはpushもPRの作成も更新もしない。
+ */
+export function decideProtectedPathReroute(input: {
   readonly specKind: ImplementSpecKind;
   readonly protectedChanges: readonly string[];
 }): { readonly gapReport: string } | null {
-  return null;
+  if (input.specKind !== "issue" || input.protectedChanges.length === 0) {
+    return null;
+  }
+  return {
+    gapReport: `${PROTECTED_PATH_GAP_PREFIX}${input.protectedChanges.join("; ")}`,
+  };
 }
 
-export function shouldWithholdPartialPush(_input: {
+/**
+ * 途中の作業をブランチへpushしないかを返す。
+ * 仕様がIssueで、差分が保護パスに触れているときは、人が見ない保護パスの変更を、途中の作業としてもpushしない。
+ */
+export function shouldWithholdPartialPush(input: {
   readonly specKind: ImplementSpecKind;
   readonly protectedChanges: readonly string[];
 }): boolean {
-  return false;
+  return input.specKind === "issue" && input.protectedChanges.length > 0;
 }
 
-export function shouldCommentProfileUpgrade(_previousProfile: string): boolean {
-  return false;
+/**
+ * 進め方を通常に戻したことをIssueに伝えるかを返す。
+ * 戻す前の進め方が通常のときは、何も変わらないので伝えない。
+ * 前の進め方は、呼び出し側が戻す前に読んだ作業項目の値を渡す。
+ * 戻す更新は、状態と`flow_job_id`が読んだ時点のままのときだけ書くので、その間に進め方が変わることは無い。
+ */
+export function shouldCommentProfileUpgrade(previousProfile: string): boolean {
+  return previousProfile !== "standard";
 }
 
-export function buildProfileUpgradedComment(_input: {
+/** 進め方を通常に戻したことを伝えるコメントの本文を返す。 */
+export function buildProfileUpgradedComment(input: {
   readonly workItemId: number;
   readonly previousProfile: string;
   readonly cause: ProfileUpgradeCause;
 }): string {
-  return "";
+  const cause =
+    input.cause === "protected_paths"
+      ? "承認なしの実装では保護パスを変更できないのに、保護パスの変更が要ると分かったためです。"
+      : "承認なしの実装で、Issueの本文だけでは要件が足りないと分かったためです。";
+  return [
+    `進め方を${input.previousProfile}から通常の進め方(standard)に切り替えました(work_item_id: ${String(input.workItemId)})。`,
+    cause,
+    "要件定義を作り直し、承認を依頼します。",
+  ].join("\n");
 }
 
+/**
+ * 進め方を通常に戻したことをIssueに伝える。戻す前の進め方が通常のときは何もしない。
+ * コメントの失敗は、戻した結果を変えないので、警告に残して続ける。
+ * 目印は作業項目ごとに1件なので、投稿し直しても重複しない。
+ */
 export async function postProfileUpgradedComment(
-  _input: {
+  input: {
     readonly previousProfile: string;
     readonly workItemId: number;
     readonly cause: ProfileUpgradeCause;
   },
-  _deps: {
+  deps: {
     readonly comment: (kind: string, body: string) => Promise<void>;
     readonly warn: (message: string) => void;
   },
 ): Promise<"posted" | "skipped" | "failed"> {
-  return "skipped";
+  if (!shouldCommentProfileUpgrade(input.previousProfile)) return "skipped";
+  try {
+    await deps.comment(
+      PROFILE_UPGRADED_COMMENT_KIND,
+      buildProfileUpgradedComment(input),
+    );
+    return "posted";
+  } catch {
+    deps.warn("the profile upgrade comment could not be posted");
+    return "failed";
+  }
 }
