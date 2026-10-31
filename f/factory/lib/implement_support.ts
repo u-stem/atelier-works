@@ -600,6 +600,16 @@ export function classifyDeployNeeds(
   };
 }
 
+/**
+ * 進め方に照らした差分の警告を返す。止める判定ではなく、PR本文の「確認して欲しい点」に載せる。
+ */
+export function profileDiffWarnings(
+  _profile: string,
+  _changedPaths: readonly string[],
+): string[] {
+  return [];
+}
+
 export type ImplementCheckSummary =
   | {
       readonly kind: "ran";
@@ -610,19 +620,32 @@ export type ImplementCheckSummary =
     }
   | { readonly kind: "skipped"; readonly reason: string };
 
+/**
+ * PR本文の仕様の欄。`requirements`は承認済みの要件定義、`issue`は承認を省く進め方で、
+ * 要件定義の転記とConsoleのリンクを出さず、進め方と承認が無いことを載せる。
+ */
+export type ImplementPrBodySpec =
+  | {
+      readonly kind: "requirements";
+      /** 承認済みの要件定義書(`requirement_drafts`のMarkdown)。 */
+      readonly requirementsMarkdown: string;
+      /** `approval_support.ts`の`buildConsoleUrl`に作業項目と承認した試行を渡した値。 */
+      readonly requirementsConsoleUrl: string;
+    }
+  | { readonly kind: "issue"; readonly profile: string };
+
 export type ImplementPrBodyInput = {
   /** Claudeの`summary`。呼び出し側が先に`normalizeJapaneseText`を適用する。 */
   readonly summary: string;
-  /** 承認済みの要件定義書(`requirement_drafts`のMarkdown)。 */
-  readonly requirementsMarkdown: string;
+  readonly spec: ImplementPrBodySpec;
+  /** 進め方に照らした差分の警告(`profileDiffWarnings`)。止めずに、「確認して欲しい点」に載せる。 */
+  readonly profileWarnings: readonly string[];
   /** 最後のラウンドの検証結果。 */
   readonly checks: ImplementCheckSummary;
   /** 最終の差分に対する`classifyProtectedChanges`の行。 */
   readonly protectedChanges: readonly string[];
   /** Claudeの`notes_for_reviewer`。呼び出し側が先に正規化する。 */
   readonly notesForReviewer: readonly string[];
-  /** `approval_support.ts`の`buildConsoleUrl`に作業項目と承認した試行を渡した値。 */
-  readonly requirementsConsoleUrl: string;
   readonly issueNumber: number;
   readonly changedPaths: readonly string[];
   /**
@@ -774,14 +797,16 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * マーカーや告知の文は入れない。運用上の告知はDiscordとConsoleに出す。
  */
 export function buildImplementPrBody(input: ImplementPrBodyInput): string {
+  const requirements = input.spec.kind === "requirements" ? input.spec : null;
   const attention = [
+    ...input.profileWarnings.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
     ...(input.intakeRefreshed ? [`- ${INTAKE_REFRESHED_PR_NOTE}`] : []),
     ...(input.issueUpdatedAfterIntake
       ? [`- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`]
       : []),
-    `- 要件定義(Console): ${input.requirementsConsoleUrl}`,
+    `- 要件定義(Console): ${requirements?.requirementsConsoleUrl ?? ""}`,
   ];
   return [
     "## 概要",
@@ -790,7 +815,7 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
     "",
     "## 受入条件",
     "",
-    extractAcceptanceCriteria(input.requirementsMarkdown),
+    extractAcceptanceCriteria(requirements?.requirementsMarkdown ?? ""),
     "",
     "## 動作確認結果",
     "",
