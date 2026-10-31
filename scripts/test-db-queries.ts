@@ -26,6 +26,7 @@ import {
   deleteClosedGhDetailRowsBefore,
   deleteGhCollectRunsBefore,
   deleteMainCiRunsBefore,
+  deleteManualIntakeKeysBefore,
   deletePrCiChecksBefore,
   deletePrConflictChecksBefore,
   deleteResolvedNoticesBefore,
@@ -178,6 +179,7 @@ import {
   runSystemStatus,
   runWorkItemDetail,
 } from "../f/factory/steps/console_query.ts";
+import { sqlIntakeKeyStore } from "../f/factory/steps/manual_intake_create_issue.ts";
 import { createPsqlClient, execPsql, type PsqlTarget } from "./test-db-sql.ts";
 
 /** 通知を挿入してIDを返す。同じ種類と本文の未解決の通知が既にあるときは、場面の設定の誤りなので失敗させる。 */
@@ -11758,6 +11760,150 @@ check(
   "hasStatusEventWithNote: does not match the transition of another work item",
   !(await hasStatusEventWithNote(otherReview, "blocked", heldNote, sql)),
 );
+
+// manual_intake_keys: 表のCHECKは小文字のUUIDだけを通し、予約と取り直しと番号の書き込みは、
+// 手順のコードが組み立てた文のまま、自分の持ち主と古さの条件で効く。
+const intakeStore = sqlIntakeKeyStore(sql);
+const INTAKE_ID_A = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const INTAKE_ID_B = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
+const INTAKE_ID_C = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d";
+const INTAKE_ID_D = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e";
+const INTAKE_HOLDER_1 = "0190aaaa-0000-7000-8000-000000000001";
+const INTAKE_HOLDER_2 = "0190bbbb-0000-7000-8000-000000000002";
+function intakeReservation(key: string, holder: string) {
+  return {
+    intake_key: key,
+    content_hash: "h".repeat(64),
+    owner: OWNER,
+    repo: "qdb-intake",
+    holder,
+  };
+}
+async function intakeRowOf(key: string) {
+  return await intakeStore.read(key);
+}
+function setIntakeReservedAt(key: string, expression: string): void {
+  execPsql(
+    target,
+    `UPDATE factory.manual_intake_keys SET reserved_at = ${expression} WHERE intake_key = '${key}'`,
+  );
+}
+
+check(
+  "manual_intake_keys: a lower case uuid is reserved",
+  (await intakeStore.reserve(
+    intakeReservation(INTAKE_ID_A, INTAKE_HOLDER_1),
+  )) === true,
+);
+check(
+  "manual_intake_keys: a second reservation of the same key does nothing",
+  (await intakeStore.reserve(
+    intakeReservation(INTAKE_ID_A, INTAKE_HOLDER_2),
+  )) === false,
+);
+const reservedRow = await intakeRowOf(INTAKE_ID_A);
+check(
+  "manual_intake_keys: the first reservation keeps its holder and has no issue number",
+  reservedRow !== null &&
+    reservedRow.holder === INTAKE_HOLDER_1 &&
+    reservedRow.issue_number === null &&
+    reservedRow.owner === OWNER &&
+    reservedRow.repo === "qdb-intake",
+  reservedRow,
+);
+check(
+  "manual_intake_keys: a key that is not in the table reads as no row",
+  (await intakeRowOf(INTAKE_ID_D)) === null,
+);
+for (const [name, key] of [
+  ["upper case letters", `'${INTAKE_ID_A.toUpperCase()}'`],
+  ["a leading character", `'0${INTAKE_ID_A}'`],
+  ["a trailing character", `'${INTAKE_ID_A}0'`],
+  ["a trailing line feed", `'${INTAKE_ID_A}' || chr(10)`],
+  ["a leading space", `' ${INTAKE_ID_A}'`],
+] as const) {
+  let rejected = false;
+  try {
+    execPsql(
+      target,
+      `INSERT INTO factory.manual_intake_keys (intake_key, content_hash, owner, repo, holder) VALUES (${key}, 'h', 'o', 'r', 'j')`,
+    );
+  } catch {
+    rejected = true;
+  }
+  check(`manual_intake_keys: the table rejects ${name}`, rejected);
+}
+
+check(
+  "manual_intake_keys: a reservation that is not old is not taken over",
+  (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_2)) === false,
+);
+setIntakeReservedAt(INTAKE_ID_A, "now() - interval '9 minutes'");
+check(
+  "manual_intake_keys: a reservation of nine minutes is not taken over",
+  (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_2)) === false,
+);
+setIntakeReservedAt(INTAKE_ID_A, "now() - interval '11 minutes'");
+check(
+  "manual_intake_keys: a reservation of eleven minutes is taken over",
+  (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_2)) === true,
+);
+const takenOverRow = await intakeRowOf(INTAKE_ID_A);
+check(
+  "manual_intake_keys: the takeover changes the holder and renews the time",
+  takenOverRow !== null &&
+    takenOverRow.holder === INTAKE_HOLDER_2 &&
+    Date.now() - takenOverRow.reserved_at.getTime() < 60_000,
+  takenOverRow,
+);
+check(
+  "manual_intake_keys: a second takeover right after the first finds nothing to take",
+  (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_1)) === false,
+);
+check(
+  "manual_intake_keys: the holder that lost the takeover cannot write the number",
+  (await intakeStore.recordIssue(INTAKE_ID_A, INTAKE_HOLDER_1, 41)) === false,
+);
+check(
+  "manual_intake_keys: the holder that won the takeover writes the number",
+  (await intakeStore.recordIssue(INTAKE_ID_A, INTAKE_HOLDER_2, 42)) === true,
+);
+check(
+  "manual_intake_keys: the written number reads back",
+  (await intakeRowOf(INTAKE_ID_A))?.issue_number === 42,
+);
+setIntakeReservedAt(INTAKE_ID_A, "now() - interval '11 minutes'");
+check(
+  "manual_intake_keys: an old reservation that has its number is not taken over",
+  (await intakeStore.takeOver(INTAKE_ID_A, INTAKE_HOLDER_1)) === false,
+);
+
+// 掃除は、期限ちょうどの行も含めて消し、期限より新しい行を残す。
+const intakeCutoff = new Date("2026-08-01T00:00:00.000Z");
+await intakeStore.reserve(intakeReservation(INTAKE_ID_B, INTAKE_HOLDER_1));
+await intakeStore.reserve(intakeReservation(INTAKE_ID_C, INTAKE_HOLDER_1));
+setIntakeReservedAt(INTAKE_ID_B, `'${intakeCutoff.toISOString()}'`);
+setIntakeReservedAt(
+  INTAKE_ID_C,
+  `'${new Date(intakeCutoff.getTime() + 1000).toISOString()}'`,
+);
+setIntakeReservedAt(
+  INTAKE_ID_A,
+  `'${new Date(intakeCutoff.getTime() - 1000).toISOString()}'`,
+);
+const deletedIntakeKeys = await deleteManualIntakeKeysBefore(intakeCutoff, sql);
+check(
+  "manual_intake_keys: cleanup deletes the rows at or before the cutoff",
+  deletedIntakeKeys === 2 &&
+    (await intakeRowOf(INTAKE_ID_A)) === null &&
+    (await intakeRowOf(INTAKE_ID_B)) === null,
+  deletedIntakeKeys,
+);
+check(
+  "manual_intake_keys: cleanup keeps the row newer than the cutoff",
+  (await intakeRowOf(INTAKE_ID_C)) !== null,
+);
+execPsql(target, "DELETE FROM factory.manual_intake_keys");
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

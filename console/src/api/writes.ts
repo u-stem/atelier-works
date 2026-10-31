@@ -156,6 +156,8 @@ export type ManualIntakeInput = {
   readonly body: string;
   /** 受入基準。1行に1項目で書く。空でもよい。 */
   readonly acceptanceCriteria: string;
+  /** 再送を止める冪等キー。 */
+  readonly intakeKey?: string;
 };
 
 /**

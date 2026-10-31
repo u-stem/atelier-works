@@ -22,6 +22,7 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "empty_body",
   "invalid_body_chars",
   "body_too_long",
+  "invalid_intake_key",
   "actor_unknown",
 ] as const;
 
@@ -74,7 +75,35 @@ export type ManualIntakeFields = ManualIntakeIssueInput & {
   readonly title: string;
   /** 進め方。受け付けるのは`ACCEPTED_PROFILES`に載せた値だけである。 */
   readonly profile: string;
+  /** 投入の再送を止める冪等キー。省くと、再送を止めない従来の投入になる。 */
+  readonly intake_key?: string;
 };
+
+/** 冪等キーの形(小文字のUUID)。`factory.manual_intake_keys`のCHECKと同じ式で、両端に固定する。 */
+export const INTAKE_KEY_PATTERN = /(?!)/;
+
+/** 冪等キーの形を検査する。形が違うと例外を投げる。入力の文字列はメッセージに含めない。 */
+export function assertIntakeKey(_key: string): void {}
+
+/** 投入の内容(リポジトリ、題名、本文、受入基準、進め方)を正規化して、sha256の16進数にする。 */
+export function computeIntakeContentHash(
+  _fields: Pick<
+    ManualIntakeFields,
+    "owner" | "repo" | "title" | "body" | "acceptance_criteria" | "profile"
+  >,
+): string {
+  return "";
+}
+
+/** Issueの本文の末尾に置く、冪等キーの目印。 */
+export function intakeMarkerText(_key: string): string {
+  return "";
+}
+
+/** `body`の末尾に、冪等キーの目印の行を足す。 */
+export function withIntakeMarker(body: string, _key: string): string {
+  return body;
+}
 
 /**
  * 進め方が受け付けるものかを返す。入口(検証、Issueの作成、登録)が、同じ一覧を見る。

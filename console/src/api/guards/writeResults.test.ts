@@ -168,8 +168,8 @@ describe("isManualIntakeSubmitResult", () => {
     },
   );
 
-  test("lists the eleven refusal reasons", () => {
-    expect(MANUAL_INTAKE_REFUSAL_REASONS).toHaveLength(11);
+  test("lists the twelve refusal reasons", () => {
+    expect(MANUAL_INTAKE_REFUSAL_REASONS).toHaveLength(12);
   });
 
   test("rejects a reason it does not know", () => {

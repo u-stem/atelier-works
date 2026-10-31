@@ -35,6 +35,8 @@ export type IntakeSession = {
   readonly resultId: number;
   /** 画面が描画したことを記録した、最後の結果の連番。まだ見せていなければ`null`。 */
   readonly shownResultId: number | null;
+  /** 直近の送信に付けた冪等キー。結果が分かった送信では持たない。 */
+  readonly intakeKey: string | null;
 };
 
 const EMPTY: IntakeSession = {
@@ -44,6 +46,7 @@ const EMPTY: IntakeSession = {
   clearedCount: 0,
   resultId: 0,
   shownResultId: null,
+  intakeKey: null,
 };
 
 export type IntakeSessions = {
@@ -51,8 +54,10 @@ export type IntakeSessions = {
   readonly get: (key: string) => IntakeSession;
   /** 投入されたか分からず、再送を確かめていないために、次の送信を止めているか。 */
   readonly isBlocked: (key: string) => boolean;
+  /** 次の送信に付ける冪等キーを返す。 */
+  readonly keyFor: (key: string, form: IntakeForm) => string;
   /** 送信を始める。前の結果と、一覧が古い印を消し、入力欄の値を残す。 */
-  readonly begin: (key: string, form: IntakeForm) => void;
+  readonly begin: (key: string, form: IntakeForm, intakeKey?: string) => void;
   /** 送信の結果を書く。投入できたときだけ、入力欄の値を消す。 */
   readonly record: (key: string, attempt: IntakeAttempt) => void;
   readonly markStale: (key: string) => void;
@@ -92,7 +97,9 @@ function sameForm(left: IntakeForm, right: IntakeForm): boolean {
   );
 }
 
-export function createIntakeSessions(): IntakeSessions {
+export function createIntakeSessions(
+  _newKey: () => string = () => "",
+): IntakeSessions {
   let sessions: ReadonlyMap<string, IntakeSession> = new Map();
   const listeners = new Set<() => void>();
 
@@ -116,6 +123,7 @@ export function createIntakeSessions(): IntakeSessions {
   return {
     get,
     isBlocked: (key) => isSubmitBlocked(get(key).attempt),
+    keyFor: () => "",
     begin: (key, form) => {
       update(key, (current) => ({
         ...current,
@@ -207,12 +215,12 @@ export function startIntake(
   sessions: IntakeSessions,
   key: string,
   form: IntakeForm,
-  start: () => boolean,
+  start: (intakeKey: string) => boolean,
 ): boolean {
   if (sessions.isBlocked(key)) {
     return false;
   }
-  if (!start()) {
+  if (!start("")) {
     return false;
   }
   sessions.begin(key, form);

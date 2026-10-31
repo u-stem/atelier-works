@@ -79,3 +79,69 @@ describe("the script definitions that take the profile", () => {
     expect(field(field(meta, "schema"), "required")).not.toContain("profile");
   });
 });
+
+describe("the intake key in the manual intake flow", () => {
+  test("hands the intake key of the flow input to the create_issue step", () => {
+    expect(transformOf(moduleById("create_issue"), "intake_key")).toEqual({
+      type: "javascript",
+      expr: "flow_input.intake_key",
+    });
+  });
+
+  test("does not hand the intake key to the register step", () => {
+    expect(transformOf(moduleById("register"), "intake_key")).toBeUndefined();
+  });
+
+  test("skips the register step for a reused issue", () => {
+    expect(field(moduleById("register"), "skip_if")).toEqual({
+      expr: "results.create_issue.reused === true",
+    });
+  });
+
+  test("does not skip the create_issue step", () => {
+    expect(field(moduleById("create_issue"), "skip_if")).toBeUndefined();
+  });
+
+  test("declares the intake key as a text input", () => {
+    expect(
+      field(field(field(FLOW, "schema"), "properties"), "intake_key"),
+    ).toMatchObject({ type: "string" });
+  });
+
+  test("lists the intake key in the order of the inputs", () => {
+    expect(field(field(FLOW, "schema"), "order")).toContain("intake_key");
+  });
+
+  test("does not require the intake key", () => {
+    expect(field(field(FLOW, "schema"), "required")).not.toContain(
+      "intake_key",
+    );
+  });
+});
+
+describe("the script definitions that take the intake key", () => {
+  test.each([
+    "f/factory/manual_intake_submit",
+    "f/factory/steps/manual_intake_create_issue",
+  ])("%s declares the intake key", (path) => {
+    const meta = readYaml(join(ROOT, `${path}.script.yaml`));
+    expect(Object.keys(schemaProperties(meta))).toContain("intake_key");
+  });
+
+  test.each([
+    "f/factory/manual_intake_submit",
+    "f/factory/steps/manual_intake_create_issue",
+  ])("%s does not require the intake key", (path) => {
+    const meta = readYaml(join(ROOT, `${path}.script.yaml`));
+    expect(field(field(meta, "schema"), "required")).not.toContain(
+      "intake_key",
+    );
+  });
+
+  test("the register step does not take the intake key", () => {
+    const meta = readYaml(
+      join(ROOT, "f/factory/steps/manual_intake_register.script.yaml"),
+    );
+    expect(Object.keys(schemaProperties(meta))).not.toContain("intake_key");
+  });
+});

@@ -301,6 +301,19 @@ describe("submitManualIntake", () => {
     });
   });
 
+  test("sends the intake key as intake_key", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    const sendId = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    await submitManualIntake({ ...INPUT, intakeKey: sendId }, { fetchFn });
+    expect(calls[0]?.body).toMatchObject({ intake_key: sendId });
+  });
+
+  test("sends no intake_key when it has none", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    await submitManualIntake(INPUT, { fetchFn });
+    expect(calls[0]?.body).not.toHaveProperty("intake_key");
+  });
+
   test("returns the started flow", async () => {
     const { fetchFn } = respondWith(STARTED);
     expect(await submitManualIntake(INPUT, { fetchFn })).toEqual(STARTED);

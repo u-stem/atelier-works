@@ -175,7 +175,63 @@ describe("the profile", () => {
       join(import.meta.dir, "../../f/factory/manual_intake_submit.ts"),
       "utf8",
     );
-    expect(source).toMatch(/\bprofile: string = "standard",?\s*\)/);
+    expect(source).toMatch(/\bprofile: string = "standard",/);
+  });
+});
+
+describe("the intake key", () => {
+  const INTAKE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+  test("is passed to the flow", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake({ ...INPUT, intake_key: INTAKE_ID }, deps);
+    expect(runs[0]?.args.intake_key).toBe(INTAKE_ID);
+  });
+
+  test("is left out of the flow inputs when the caller sends none", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake(INPUT, deps);
+    expect("intake_key" in (runs[0]?.args ?? {})).toBe(false);
+  });
+
+  test("starts the flow for a valid key", async () => {
+    const { deps } = harness();
+    expect(
+      await submitManualIntake({ ...INPUT, intake_key: INTAKE_ID }, deps),
+    ).toEqual({ refused: false, flow_job_id: JOB });
+  });
+
+  test.each([
+    ["an empty string", ""],
+    ["upper case letters", INTAKE_ID.toUpperCase()],
+    ["a trailing line feed", `${INTAKE_ID}\n`],
+    ["a word", "not-a-key"],
+  ])("refuses %s as invalid_intake_key", async (_name, intake_key) => {
+    const { deps } = harness();
+    expect(await submitManualIntake({ ...INPUT, intake_key }, deps)).toEqual({
+      refused: true,
+      reason: "invalid_intake_key",
+    });
+  });
+
+  test("starts no flow for a key that is not valid", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake({ ...INPUT, intake_key: "not-a-key" }, deps);
+    expect(runs).toEqual([]);
+  });
+
+  test("is not logged", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake({ ...INPUT, intake_key: INTAKE_ID }, deps);
+    expect(JSON.stringify(logs)).not.toContain(INTAKE_ID);
+  });
+
+  test("is an optional argument of the script", () => {
+    const source = readFileSync(
+      join(import.meta.dir, "../../f/factory/manual_intake_submit.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(/\bintake_key\?: string/);
   });
 });
 

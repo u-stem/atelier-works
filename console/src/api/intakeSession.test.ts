@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { type IntakeAttempt, isSubmitBlocked } from "../lib/intakeAttempt.ts";
 import type { IntakeForm } from "../lib/manualIntake.ts";
 import {
@@ -526,5 +528,175 @@ describe("a draft typed before sending", () => {
     sessions.draft(KEY, DRAFT);
     sessions.draft(KEY, { ...DRAFT });
     expect(calls).toBe(1);
+  });
+});
+
+describe("the intake key", () => {
+  const OTHER_FORM: IntakeForm = { ...FORM, title: "Add a gadget" };
+
+  /** 呼ぶたびに別のキーを返す生成器と、これまでに作ったキー。 */
+  function keys() {
+    const made: string[] = [];
+    return {
+      made,
+      newKey: () => {
+        const next = `key-${String(made.length + 1)}`;
+        made.push(next);
+        return next;
+      },
+    };
+  }
+
+  /** 送信を始め、渡されたキーを返す。 */
+  function send(
+    sessions: ReturnType<typeof createIntakeSessions>,
+    form: IntakeForm = FORM,
+  ): string {
+    let given = "";
+    startIntake(sessions, KEY, form, (intakeKey) => {
+      given = intakeKey;
+      return true;
+    });
+    return given;
+  }
+
+  test("is a lower case uuid by default", () => {
+    expect(send(createIntakeSessions())).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  test("is new for every first send", () => {
+    const sessions = createIntakeSessions();
+    expect(send(sessions)).not.toBe(send(sessions));
+  });
+
+  test("is kept in the session for the send in progress", () => {
+    const { newKey } = keys();
+    const sessions = createIntakeSessions(newKey);
+    const given = send(sessions);
+    expect(sessions.get(KEY).intakeKey).toBe(given);
+  });
+
+  test("is not kept when the write does not start", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    startIntake(sessions, KEY, FORM, () => false);
+    expect(sessions.get(KEY).intakeKey).toBeNull();
+  });
+
+  test("is not made when the send is blocked", () => {
+    const { newKey, made } = keys();
+    const sessions = createIntakeSessions(newKey);
+    sessions.record(KEY, UNKNOWN);
+    send(sessions);
+    expect(made).toEqual([]);
+  });
+
+  test("is the same for a resend of the input whose result is not known", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.confirmResend(KEY);
+    expect(send(sessions)).toBe(first);
+  });
+
+  test("is kept while the result is not known", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    expect(sessions.get(KEY).intakeKey).toBe(first);
+  });
+
+  test("is the same for a resend after the screen left and came back", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    const leave = sessions.subscribe(() => undefined);
+    leave();
+    sessions.dismiss(KEY);
+    sessions.confirmResend(KEY);
+    expect(send(sessions)).toBe(first);
+  });
+
+  test("is the same for a second resend after another unknown result", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.confirmResend(KEY);
+    send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.confirmResend(KEY);
+    expect(send(sessions)).toBe(first);
+  });
+
+  test("is new for a resend of a different input", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.confirmResend(KEY);
+    expect(send(sessions, OTHER_FORM)).not.toBe(first);
+  });
+
+  test("is new after a submission", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, SUBMITTED);
+    expect(send(sessions)).not.toBe(first);
+  });
+
+  test("is new after a refusal", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, REFUSED);
+    expect(send(sessions)).not.toBe(first);
+  });
+
+  test("is new after a rejection", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, { kind: "rejected", message: "断られました" });
+    expect(send(sessions)).not.toBe(first);
+  });
+
+  test("is new after the input is discarded", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.discard(KEY);
+    expect(send(sessions)).not.toBe(first);
+  });
+
+  test.each([
+    ["a submission", SUBMITTED],
+    ["a refusal", REFUSED],
+    ["a rejection", { kind: "rejected", message: "断られました" } as const],
+  ])("is dropped from the session after %s", (_name, attempt) => {
+    const sessions = createIntakeSessions(keys().newKey);
+    send(sessions);
+    sessions.record(KEY, attempt);
+    expect(sessions.get(KEY).intakeKey).toBeNull();
+  });
+
+  test("is dropped from the session when the input is discarded", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.discard(KEY);
+    expect(sessions.get(KEY).intakeKey).toBeNull();
+  });
+
+  test("survives a draft that is saved while the result is not known", () => {
+    const sessions = createIntakeSessions(keys().newKey);
+    const first = send(sessions);
+    sessions.record(KEY, UNKNOWN);
+    sessions.draft(KEY, OTHER_FORM);
+    expect(sessions.get(KEY).intakeKey).toBe(first);
+  });
+
+  test("is not written to the storage of the tab", () => {
+    const code = new Bun.Transpiler({ loader: "ts" }).transformSync(
+      readFileSync(join(import.meta.dir, "intakeSession.ts"), "utf8"),
+    );
+    expect(code).not.toMatch(/sessionStorage|localStorage/);
   });
 });
