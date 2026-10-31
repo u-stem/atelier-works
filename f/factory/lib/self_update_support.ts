@@ -583,7 +583,7 @@ export const DESIGN_NOTICE_CHECK_TIMEOUT_MS = 5_000;
 export const DESIGN_NOTICE_RESOLVE_LIMIT = 3;
 
 const DESIGN_ENABLED_IGNORED_WARNING =
-  "design_enabled is true but the design stage cannot be opened yet; reading it as false";
+  "design_enabled is true but design_enabled_since is missing or unreadable; reading it as false";
 
 function errorFields(err: unknown): { error: string } {
   return {

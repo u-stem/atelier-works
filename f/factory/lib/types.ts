@@ -1811,7 +1811,8 @@ export type FactoryConfig = {
   // 設計工程。リソース型ではどちらも省略可能で、既定値がある。
   /**
    * 設計工程を有効にするか。既定は`false`。
-   * 設計工程を有効にできるようになるまで、リソースに`true`を書いても`false`として読む。そのとき`design_enabled_ignored`が真になる。
+   * リソースに`true`を書いても、`design_enabled_since`が日時として読めるまでは`false`として読む。そのとき`design_enabled_ignored`が真になる。
+   * 読み込みの結果であり、書かれた値ではない。
    */
   design_enabled: boolean;
   /**
@@ -1819,6 +1820,11 @@ export type FactoryConfig = {
    * 真の間、自己更新が通知`design_enabled_ignored`を残す。
    */
   design_enabled_ignored: boolean;
+  /**
+   * 設計工程を開ける意思の表明と、開けた時刻の記録。日時として読めたときだけ値が入り、無いか読めないときは`null`。既定は`null`。
+   * 境の時刻としては使わない。未来の日時でも開く。
+   */
+  design_enabled_since: Date | null;
   /** 1つの要件定義の下で、設計を試せる回数の上限。1以上10以下の整数で、既定は3。 */
   max_design_attempts: number;
   // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。

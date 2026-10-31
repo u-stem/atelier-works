@@ -337,7 +337,7 @@ export function buildStartImplement(
 /**
  * 承認の分岐の本番の依存を組み立てる。呼ぶだけでは、DB・GitHub・Windmillに触れない。
  * 設計フローは、設定の`design_enabled`が真のときだけ結ぶ。偽のときは`null`で、承認は今までどおり実装へ進む。
- * 本番の設定の読み込み(`parseFactoryConfig`)は、設計工程を有効にできるようになるまで、`design_enabled: true`を偽として読む。
+ * 本番の設定の読み込み(`parseFactoryConfig`)は、`design_enabled_since`が日時として読めるまで、`design_enabled: true`を偽として読む。
  */
 export function buildApprovedBranchDeps(
   config: Pick<

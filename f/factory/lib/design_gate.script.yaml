@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 設計工程を開ける門'
+description: 内部ライブラリです。直接実行するものではありません。設計工程の設定が真で、開けた記録の日時が読めるときだけ、設計工程を開く共通処理です。
 lock: '!inline f/factory/lib/design_gate.script.lock'
 kind: script
 schema:

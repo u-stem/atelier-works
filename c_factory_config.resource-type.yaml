@@ -48,6 +48,7 @@ schema:
     - implement_max_changed_files
     - implement_max_diff_lines
     - design_enabled
+    - design_enabled_since
     - max_design_attempts
     - dependabot_enabled
     - dependabot_merge_enabled
@@ -194,8 +195,13 @@ schema:
     design_enabled:
       type: boolean
       description: >-
-        設計工程を有効にするかどうかです。要件定義の承認の後、実装の前に、設計書の生成と人の承認を挟みます。設計工程を有効にできるようになるまで、trueを書いてもfalseとして読み、自己更新が通知を残します。
+        設計工程を有効にするかどうかです。要件定義の承認の後、実装の前に、設計書の生成と人の承認を挟みます。trueにするには、design_enabled_sinceも書きます。書かれていないか日時として読めないと、falseとして読み、自己更新が通知を残します。
       default: false
+    design_enabled_since:
+      type: string
+      format: date-time
+      description: >-
+        設計工程を開ける意思の表明と、開けた時刻の記録です。秒まで書いたタイムゾーン付きのRFC 3339の日時にします(例: 2026-11-01T00:00:00Z)。日付だけなどの書き損じは、設定の読み込みを失敗させず、設計工程を開けません。開ける時刻の境ではないので、未来の日時でも、書いた時点で開きます。design_enabledがtrueのときは省略できません。
     implement_enabled:
       type: boolean
       description: >-

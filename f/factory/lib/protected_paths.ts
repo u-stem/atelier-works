@@ -226,9 +226,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
  * これらを書き換えてdependabotのフローの判断を変える変更は、PRのレビューで差分を確かめて止める。
- * 設計工程の入口が閉じていることを固定する2つのテスト(`tests/scripts/design_stage_closed.test.ts`、
- * `design_entry_origins.test.ts`)は守る。設計フローの配線の門(`DESIGN_STAGE_OPENABLE`)と、設計フローを起動できる元の集合を
- * 固定しているので、書き換えられると、入口が開いても黙って通るためである。`lib/config.ts`は日常的に直すので守らない。
+ * 設計工程の門(`lib/design_gate.ts`とその`.script.yaml`)は守る。設定の`design_enabled`が真で、`design_enabled_since`が
+ * 日時として読めるときだけ開く判定の1か所で、書き換えられると、人の確認なしに設計工程が開く。
+ * 門を固定する2つのテスト(`tests/scripts/design_stage_closed.test.ts`、`design_entry_origins.test.ts`)も守る。
+ * 門の呼び出しの形(設定の読み込みが門の結果だけから`design_enabled`を導くこと)と、設計フローを起動できる元の集合を
+ * 固定しているので、書き換えられると、門が緩んでも黙って通るためである。
+ * `lib/config.ts`は日常的に直すので守らない。門の呼び出しの形を保護されたテストが固定するので、守っても保証の上乗せが小さい。
+ * 門の単体のテスト(`tests/lib/design_gate.test.ts`)も、保護されたテストが同じ判定を確かめるので守らない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -310,6 +314,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/lib/holds.test.ts",
   "tests/lib/holds_db.test.ts",
   "tests/scripts/hold_wiring.test.ts",
+  "f/factory/lib/design_gate.ts",
+  "f/factory/lib/design_gate.script.yaml",
   "tests/scripts/design_stage_closed.test.ts",
   "tests/scripts/design_entry_origins.test.ts",
   "scripts/test-db-holds.ts",
