@@ -400,6 +400,8 @@ export type PreserveWorkDeps = {
    * `commitAndPush`を実行する。
    * ステージし直した内容が`scannedTreeSha`と違えば、`inspectStaged`(`scannedTreeStopReasons`)で
    * commitせずに`CommitBlockedError`を投げる。
+   * 一致したときは、仕様がIssueの場合に限り、同じ`inspectStaged`が索引の保護パスを分類し直し
+   * (`protectedPartialPushStopReasons`)、触れていればcommitせずに止める。
    */
   readonly commitAndPush: (
     scannedTreeSha: string,
