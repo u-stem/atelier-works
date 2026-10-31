@@ -68,6 +68,7 @@ import {
   type PreserveWorkDeps,
   prBodySpecFor,
   preserveWork,
+  protectedPartialPushStopReasons,
   REQUIREMENTS_REGENERATION_FAILED_REASON,
   REVIEW_LABEL_STYLE,
   rerouteImplementationToDesign,
@@ -132,6 +133,7 @@ import {
 } from "../lib/workspace.ts";
 import {
   describeReason,
+  listChangedPaths,
   nextActionFor,
   normalizeJapaneseText,
 } from "./pr_workflow_support.ts";
@@ -499,12 +501,19 @@ async function finishImplement(
       return commitAndPush({
         ...options,
         expectedTreeSha: scannedTreeSha,
-        inspectStaged: () =>
-          scannedTreeStopReasons({
+        inspectStaged: async () => {
+          const changed = await scannedTreeStopReasons({
             run: runCommand,
             worktreeDir: ctx.worktree_dir,
             scannedTreeSha,
-          }),
+          });
+          if (changed.length > 0) return changed;
+          return protectedPartialPushStopReasons({
+            specKind: implementContextSpecKind(ctx),
+            listStagedChanges: () =>
+              listChangedPaths(runCommand, ctx.worktree_dir, ctx.base_sha),
+          });
+        },
       });
     },
   });

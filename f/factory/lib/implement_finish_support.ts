@@ -17,9 +17,10 @@ import {
   type ImplementPrepareOutcome,
   implementContextSpecKind,
 } from "./implement_loop.ts";
-import type {
-  ImplementCheckSummary,
-  ImplementPrBodySpec,
+import {
+  classifyProtectedChanges,
+  type ImplementCheckSummary,
+  type ImplementPrBodySpec,
 } from "./implement_support.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import { limitGapReport } from "./model_text.ts";
@@ -649,9 +650,27 @@ export function shouldWithholdPartialPush(input: {
   return input.specKind === "issue" && input.protectedChanges.length > 0;
 }
 
-export async function protectedPartialPushStopReasons(_input: {
+/**
+ * 途中の作業をcommitする直前に、ステージしたツリーが保護パスに触れていないかを確かめ、止める理由を返す(無ければ空)。
+ * ループの最後の点検(`loop_result.protected_changes`)は、秘密の検査をしたツリーと同じツリーを見たとは限らない。
+ * そのため、commitする索引そのものを分類し直す。
+ * 呼び出し側は、ステージしたツリーが秘密を検査したツリーと一致すると確かめた後にこれを呼ぶ。
+ * 仕様が要件定義のときは、人が承認した範囲なので何も調べない。
+ * `package.json`はscriptsの変更の有無によらず保護パスなので、scriptsの変更は判定に使わない。
+ */
+export async function protectedPartialPushStopReasons(input: {
   readonly specKind: ImplementSpecKind;
   readonly listStagedChanges: () => Promise<readonly ChangedPath[]>;
 }): Promise<string[]> {
-  return [];
+  if (input.specKind !== "issue") return [];
+  const protectedChanges = classifyProtectedChanges(
+    await input.listStagedChanges(),
+    false,
+  );
+  return shouldWithholdPartialPush({
+    specKind: input.specKind,
+    protectedChanges,
+  })
+    ? [PROTECTED_WORK_NOT_PUSHED_REASON]
+    : [];
 }
