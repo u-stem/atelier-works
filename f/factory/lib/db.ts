@@ -386,6 +386,7 @@ function toWorkItem(row: SqlRow): WorkItem {
     ),
     conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
     design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
+    profile: "",
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };

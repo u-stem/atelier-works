@@ -191,6 +191,7 @@ const WORK_ITEM: WorkItem = {
   conflict_check_id: null,
   conflict_episode: null,
   design_attempt: 0,
+  profile: "standard",
   created_at: new Date("2026-10-26T00:00:00Z"),
   updated_at: new Date("2026-10-26T00:00:00Z"),
 };

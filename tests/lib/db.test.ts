@@ -1409,6 +1409,33 @@ describe("getWorkItem", () => {
     expect(item?.design_attempt).toBe(2);
   });
 
+  test("reads a row without the profile column as standard", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.profile).toBe("standard");
+  });
+
+  test("reads the profile of a row that has the column", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, profile: "bugfix" }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.profile).toBe("bugfix");
+  });
+
+  test("keeps an unknown profile as the string it holds", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, profile: "future_profile" }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.profile).toBe("future_profile");
+  });
+
+  test("rejects a profile that is not a string", async () => {
+    const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, profile: 3 }]]);
+    await expect(getWorkItem(1, sql)).rejects.toThrow("profile");
+  });
+
   test("parses branch and pr_url (工程3 columns)", async () => {
     const { sql } = createFakeSqlClient([
       [

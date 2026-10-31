@@ -252,6 +252,8 @@ export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "dependabot",
 ];
 
+export const WORK_ITEM_PROFILES: readonly string[] = [];
+
 /**
  * 作業項目が取りうるすべての状態。
  * 要件定義のパイプライン(`pipeline.flow`)、PRのレビュー・修正の
@@ -400,6 +402,7 @@ export type WorkItem = {
    * 列を足すmigrationの反映前の行は、列が無いので0として読む。
    */
   design_attempt: number;
+  profile: string;
   created_at: Date;
   updated_at: Date;
 };

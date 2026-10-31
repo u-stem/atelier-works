@@ -372,6 +372,7 @@ describe("buildPrCandidate with dependabot work items", () => {
     conflict_check_id: null,
     conflict_episode: null,
     design_attempt: 0,
+    profile: "standard",
     created_at: new Date("2026-10-12T00:00:00Z"),
     updated_at: new Date("2026-10-12T00:00:00Z"),
   };
@@ -460,6 +461,7 @@ describe("pr_review and pr_fix decisions with a row created by poll_dependabot",
       conflict_check_id: null,
       conflict_episode: null,
       design_attempt: 0,
+      profile: "standard",
       created_at: new Date("2026-10-12T00:00:00Z"),
       updated_at: new Date("2026-10-12T00:00:00Z"),
     };
@@ -572,6 +574,7 @@ describe("buildPrCandidate with active pr_fix work items", () => {
     conflict_check_id: null,
     conflict_episode: null,
     design_attempt: 0,
+    profile: "standard",
     created_at: new Date("2026-10-12T00:00:00Z"),
     updated_at: new Date("2026-10-12T00:00:00Z"),
   };
@@ -692,6 +695,7 @@ describe("buildPrCandidate with a review held at the design stage", () => {
       conflict_check_id: null,
       conflict_episode: null,
       design_attempt: 0,
+      profile: "standard",
       created_at: new Date("2026-10-12T00:00:00Z"),
       updated_at: new Date("2026-10-12T00:00:00Z"),
     };
