@@ -99,7 +99,8 @@ flowchart TD
 設計フロー(`f/factory/design`)は、承認済みの要件定義から設計書を作り、同じ形で承認依頼を記録して終わる。
 人の決定は、`design_apply`が作業項目に反映する。
 放置された依頼の期限切れと、反映されなかった決定の起動し直しは、`poll_issues`の承認待ちの走査(`approval_sweep`)が行う。
-入口が閉じていて、本番では動かない。
+設計工程は既定で無効で、設定で開ける。
+開け方は[運用](operations.md)の「設計工程を有効にする」に書く。
 仕組みは[設計書の生成](internals/design.md)に書く。
 
 ```mermaid
@@ -269,7 +270,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)、承認の後の書き換えを検出する基準値(`doc_hash`)を持つ |
 | `design_drafts` | 設計の下書き。要件定義の下書きに結び付き、本文、図の参照、未確定事項、ファイルの置き場所、読んだコミットを持つ |
-| `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)を記録して反映するコードは入っているが、本番では作られない |
+| `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ。設計の承認依頼(`design`)は、設計工程が有効なときだけ作られる |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード。実際に使われたモデルごとの内訳(`model_usage`)も持つ |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
@@ -401,7 +402,7 @@ Consoleの一覧と集計は次のviewを読む。
 そのような起動を足したときは、人が表を確かめる。
 
 - `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。
-- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。入口が閉じていて本番では動かない。
+- `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。設計書が渡されるのは設計工程が有効なときだけなので、設計工程が無効の間は設計へ戻さない。
 - `auto_retry_stale_image`は、`self_update`が起動する。
 - `requirements_apply`と`design_apply`は、`approval_decide`が承認か却下を記録した後に起動する。`design_apply`は、`design_request_approval`と承認待ちの走査も、反映されなかった決定に対して起動する。
 
