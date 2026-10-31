@@ -7,8 +7,10 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  type DesignGateDeps,
   designGate,
   isRequirementsApprovedForAttempt,
+  type RequirementsApprovalForGate,
 } from "../lib/approval_gate.ts";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import {
@@ -122,6 +124,7 @@ export type BuildImplementContextInput = {
     | "title"
     | "body"
     | "issue_url"
+    | "profile"
   >;
   readonly issueNumber: number;
   /**
@@ -129,10 +132,14 @@ export type BuildImplementContextInput = {
    * (題名と本文はworkItemの取り込み時点の値を使う)。
    */
   readonly issue: Pick<Issue, "title" | "body" | "htmlUrl">;
+  /**
+   * 承認済みの要件定義の下書き。承認を省く進め方(仕様がIssue)では`null`。
+   * `null`のとき、要件定義に関する項目はすべて空になり、仕様は`workItem.title`と`workItem.body`である。
+   */
   readonly draft: Pick<
     RequirementDraft,
     "attempt" | "markdown" | "diagrams" | "doc_dir" | "doc_hash"
-  >;
+  > | null;
   readonly branch: string;
   readonly baseBranch: string;
   readonly baseSha: string;
@@ -163,7 +170,7 @@ export type BuildImplementContextInput = {
 export function buildImplementContext(
   input: BuildImplementContextInput,
 ): ImplementContext {
-  const { workItem } = input;
+  const { workItem, draft } = input;
   return {
     owner: workItem.owner,
     repo: workItem.repo,
@@ -188,15 +195,20 @@ export function buildImplementContext(
       workItem.pr_url !== null ||
       input.expectedHeadSha !== input.baseSha,
     attempt: workItem.attempt,
-    requirements_markdown: input.draft.markdown,
-    requirements_diagrams: input.draft.diagrams,
-    requirements_doc_dir: input.draft.doc_dir,
-    requirements_doc_hash: input.draft.doc_hash,
+    spec_kind: draft === null ? "issue" : "requirements",
+    profile: workItem.profile,
+    requirements_markdown: draft?.markdown ?? null,
+    requirements_diagrams: draft?.diagrams ?? [],
+    requirements_doc_dir: draft?.doc_dir ?? null,
+    requirements_doc_hash: draft?.doc_hash ?? null,
     design_markdown: input.designMarkdown,
-    requirements_console_url: buildConsoleUrl(
-      input.config.windmill_public_url,
-      { work_item_id: workItem.id, attempt: input.draft.attempt },
-    ),
+    requirements_console_url:
+      draft === null
+        ? null
+        : buildConsoleUrl(input.config.windmill_public_url, {
+            work_item_id: workItem.id,
+            attempt: draft.attempt,
+          }),
     is_factory_repo: isFactoryRepo(
       input.config.factory_repo,
       workItem.owner,
@@ -239,6 +251,89 @@ export async function requirementsGateReason(
     case "modified":
       return REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON;
   }
+}
+
+/** 実装の仕様の決まり方。`stop`は、承認の前提が崩れていて実装に進めないことを表す。 */
+export type ImplementSpec =
+  | { readonly kind: "issue" }
+  | {
+      readonly kind: "requirements";
+      readonly draft: RequirementDraft;
+      readonly designMarkdown: string | null;
+    }
+  | { readonly kind: "stop"; readonly reason: string };
+
+export type ResolveImplementSpecInput = {
+  readonly workItem: Pick<
+    WorkItem,
+    "id" | "attempt" | "design_attempt" | "profile"
+  >;
+  /** 進め方が要件定義の承認を求めるか(`requiredApprovals(...).requirements`)。 */
+  readonly requirementsRequired: boolean;
+  readonly designEnabled: boolean;
+};
+
+export type ResolveImplementSpecDeps = {
+  readonly latestRequirementsApproval: (
+    workItemId: number,
+  ) => Promise<RequirementsApprovalForGate | null>;
+  readonly getRequirementDraft: (
+    id: number,
+  ) => Promise<RequirementDraft | null>;
+  readonly hashTree: (dir: string) => Promise<string | null>;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  readonly designGate: DesignGateDeps;
+};
+
+/**
+ * 実装の仕様を決める。承認の前提が崩れていれば`stop`を返す。
+ * - 進め方が要件定義の承認を求めない(`requirementsRequired`が偽)なら、承認も下書きも設計の承認も読まず、`issue`を返す。
+ *   仕様は、取り込み時点のIssueの題名と本文(`work_items`の値)になる。
+ *   承認の行が残っていても使わない。人が見ていない入力で実装する経路に、承認の行を混ぜないためである。
+ * - 求めるなら、現在の`attempt`で承認済みの要件定義の下書きを読む。
+ *   承認が無い、別の試行である、下書きが無いときは止める。
+ *   承認後に要件定義のディレクトリが書き換わっていれば(`requirementsGateReason`)、ブランチにもworktreeにも触れる前に止める。
+ *   設計が有効なら、設計の承認が現在の状態に一致しなければ止める(`designGate`)。
+ *   判定の実体は`lib/approval_gate.ts`にあり、ここでは呼び出しと、止める理由の受け渡しだけを持つ。
+ */
+export async function resolveImplementSpec(
+  input: ResolveImplementSpecInput,
+  deps: ResolveImplementSpecDeps,
+): Promise<ImplementSpec> {
+  if (!input.requirementsRequired) return { kind: "issue" };
+  const { workItem } = input;
+  const approval = await deps.latestRequirementsApproval(workItem.id);
+  const noApproval = `no approved requirements for attempt ${String(workItem.attempt)}`;
+  // 承認の行が無ければ、実装に渡す要件定義の下書きが無いので止める。
+  if (
+    approval === null ||
+    !isRequirementsApprovedForAttempt(approval, workItem.attempt)
+  )
+    return { kind: "stop", reason: noApproval };
+  const draft = await deps.getRequirementDraft(approval.draft_id);
+  if (draft === null) return { kind: "stop", reason: noApproval };
+  // 承認後に要件定義のディレクトリが書き換わっていれば、ブランチにもworktreeにも触れる前に止める。
+  const untrusted = await requirementsGateReason(
+    draft,
+    deps.hashTree,
+    deps.warn,
+  );
+  if (untrusted !== null) return { kind: "stop", reason: untrusted };
+  // 設計が有効なら、設計の承認が現在の状態に一致しなければ、ブランチにもworktreeにも触れる前に止める。
+  const gate = await designGate(
+    {
+      designEnabled: input.designEnabled,
+      workItem,
+      requirementsApproval: approval,
+    },
+    deps.designGate,
+  );
+  if (gate.kind === "stop") return { kind: "stop", reason: gate.reason };
+  return {
+    kind: "requirements",
+    draft,
+    designMarkdown: gate.kind === "pass" ? gate.markdown : null,
+  };
 }
 
 function stop(
@@ -374,45 +469,32 @@ export async function main(
   if (issue.state !== "open")
     return stop("cancelled", "issue closed before implementation started");
 
-  const approval = await latestRequirementsApproval(work_item_id);
-  const noApproval = `no approved requirements for attempt ${String(workItem.attempt)}`;
-  // 承認の行が無ければ、実装に渡す要件定義の下書きが無いので止める。
-  // 承認済みかの照合は、進め方が要件定義の承認を求めるときに行う(`lib/profile.ts`)。
-  if (
-    approval === null ||
-    (requiredApprovals(workItem.profile).requirements &&
-      !isRequirementsApprovedForAttempt(approval, workItem.attempt))
-  )
-    return stop("needs_human", noApproval);
-  const draft = await getRequirementDraft(approval.draft_id);
-  if (draft === null) return stop("needs_human", noApproval);
-  // 承認後に要件定義のディレクトリが書き換わっていれば、ブランチにもworktreeにも触れる前に止める。
-  const untrusted = await requirementsGateReason(
-    draft,
-    (dir) => hashDirectoryTree(dir, realDirectoryIo),
-    (message, fields) =>
-      logger("implement_prepare").warn(message, {
-        work_item_id,
-        ...fields,
-      }),
-  );
-  if (untrusted !== null) return stop("needs_human", untrusted);
-  // 設計が有効なら、設計の承認が現在の状態に一致しなければ、ブランチにもworktreeにも触れる前に止める。
-  // 判定の実体は`lib/approval_gate.ts`にあり、ここでは呼び出しと、止める1文だけを持つ。
-  const gate = await designGate(
+  // 要件定義の承認を求めない進め方は、承認を読まず、Issueの題名と本文(`work_items`の値)を仕様にする。
+  // 判定の実体は`resolveImplementSpec`にあり、ここでは表(`lib/profile.ts`)を引いて渡す。
+  const spec = await resolveImplementSpec(
     {
-      designEnabled: config.design_enabled,
       workItem,
-      requirementsApproval: approval,
+      requirementsRequired: requiredApprovals(workItem.profile).requirements,
+      designEnabled: config.design_enabled,
     },
     {
-      latestDesignApproval,
-      getDesignDraft,
+      latestRequirementsApproval,
+      getRequirementDraft,
+      hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),
       warn: (message, fields) =>
-        logger("implement_prepare").warn(message, fields),
+        logger("implement_prepare").warn(message, {
+          work_item_id,
+          ...fields,
+        }),
+      designGate: {
+        latestDesignApproval,
+        getDesignDraft,
+        warn: (message, fields) =>
+          logger("implement_prepare").warn(message, fields),
+      },
     },
   );
-  if (gate.kind === "stop") return stop("needs_human", gate.reason);
+  if (spec.kind === "stop") return stop("needs_human", spec.reason);
 
   // ブランチのPR(閉じたものを含む)で、pr_fix / pr_reviewが同じworktreeを使っていることがある。
   // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に、
@@ -574,7 +656,7 @@ export async function main(
       workItem,
       issueNumber,
       issue,
-      draft,
+      draft: spec.kind === "requirements" ? spec.draft : null,
       branch,
       baseBranch,
       baseSha,
@@ -584,7 +666,7 @@ export async function main(
       expectedHeadSha,
       worktreeGitPointer,
       existingPr,
-      designMarkdown: gate.kind === "pass" ? gate.markdown : null,
+      designMarkdown: spec.kind === "requirements" ? spec.designMarkdown : null,
       startedAt,
       config,
     }),

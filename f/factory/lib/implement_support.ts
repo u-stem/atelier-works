@@ -503,6 +503,26 @@ export const ISSUE_UPDATED_AFTER_INTAKE_NOTE =
   "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。";
 
 /**
+ * 仕様がIssueのPRで、Issueの取り込み後に題名か本文が変わったときの注記。
+ * 要件定義が無いので、`ISSUE_UPDATED_AFTER_INTAKE_NOTE`の言い方は使わない。
+ */
+export const ISSUE_SPEC_UPDATED_AFTER_INTAKE_NOTE =
+  "この実装は取り込み時点のIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。";
+
+/** 仕様がIssueのPRの「受入条件」の欄。要件定義の受入条件は無く、Issueの本文を読む。 */
+export const ISSUE_SPEC_ACCEPTANCE_NOTE =
+  "承認済みの要件定義はありません。Issueの本文を仕様として実装しました。";
+
+/**
+ * 仕様がIssueのPRで、「確認して欲しい点」の先頭に出す注記。
+ * 承認を省く進め方のPRを、承認済みの要件定義に基づくPRと見分けられるようにする。
+ * `profile`は呼び出し側で無害化する。
+ */
+export function issueSpecProfileNote(profile: string): string {
+  return `進め方は${profile}です。要件定義の承認なしで、取り込み時点のIssueの本文を仕様として実装しました。`;
+}
+
+/**
  * PR本文の「確認して欲しい点」に出す注記。取り込み内容を、却下や再実行による作り直しのときに
  * 現在のIssueへ更新したことがある作業項目だけに出す。
  * `ISSUE_UPDATED_AFTER_INTAKE_NOTE`は更新後の内容と比べるので、更新したときの書き換えは拾えない。
@@ -600,6 +620,84 @@ export function classifyDeployNeeds(
   };
 }
 
+/** 文書として扱う拡張子。 */
+const DOCUMENT_EXTENSIONS: readonly string[] = [
+  ".md",
+  ".mdx",
+  ".markdown",
+  ".txt",
+  ".rst",
+  ".adoc",
+];
+
+/** 文書のディレクトリ(`docs/`)の下か、文書の拡張子のファイル。 */
+function isDocumentPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return (
+    lower.startsWith("docs/") ||
+    lower.includes("/docs/") ||
+    DOCUMENT_EXTENSIONS.some((extension) => lower.endsWith(extension))
+  );
+}
+
+/** テストのディレクトリの名前。 */
+const TEST_DIRECTORY_NAMES: readonly string[] = [
+  "test",
+  "tests",
+  "__tests__",
+  "spec",
+  "specs",
+];
+
+/**
+ * テストのファイルか。テストのディレクトリの下、`*.test.*`、`*.spec.*`、`*_test.*`、`test_*`のいずれか。
+ * 名前の一部に`test`を含むだけ(`latest.ts`など)では、テストとみなさない。
+ */
+function isTestPath(path: string): boolean {
+  const segments = path.split("/");
+  const name = segments.at(-1) ?? "";
+  return (
+    segments
+      .slice(0, -1)
+      .some((segment) => TEST_DIRECTORY_NAMES.includes(segment)) ||
+    /\.(test|spec)\.[^.]+$/.test(name) ||
+    /_test\.[^.]+$/.test(name) ||
+    name.startsWith("test_")
+  );
+}
+
+/** 警告に載せるパスの最大数。 */
+const DOCS_WARNING_PATH_LIMIT = 5;
+
+/**
+ * 進め方に照らした差分の警告を返す。止める判定ではなく、PR本文の「確認して欲しい点」に載せる。
+ * - `docs`: 文書以外のパスを変更していれば、そのパスを載せる(最大5件。残りは件数にする)。
+ * - `bugfix`: 差分にテストのファイルが無ければ、再現テストの確認を促す。
+ * 機械的に見分けられるのは差分のパスだけなので、テストが不具合を再現するかは見ない。
+ * それ以外の進め方と未知の値は、警告を出さない。
+ */
+export function profileDiffWarnings(
+  profile: string,
+  changedPaths: readonly string[],
+): string[] {
+  if (profile === "docs") {
+    const outside = changedPaths.filter((path) => !isDocumentPath(path));
+    if (outside.length === 0) return [];
+    const listed = outside.slice(0, DOCS_WARNING_PATH_LIMIT).join(", ");
+    const rest = outside.length - DOCS_WARNING_PATH_LIMIT;
+    const more = rest > 0 ? ` ほか${String(rest)}件` : "";
+    return [
+      `docsの進め方ですが、文書以外のパスを変更しています: ${listed}${more}`,
+    ];
+  }
+  if (profile === "bugfix" && !changedPaths.some(isTestPath)) {
+    return [
+      "bugfixの進め方ですが、差分にテストのファイルがありません。再現テストが含まれているかを確認してください。",
+    ];
+  }
+  return [];
+}
+
 export type ImplementCheckSummary =
   | {
       readonly kind: "ran";
@@ -610,19 +708,32 @@ export type ImplementCheckSummary =
     }
   | { readonly kind: "skipped"; readonly reason: string };
 
+/**
+ * PR本文の仕様の欄。`requirements`は承認済みの要件定義、`issue`は承認を省く進め方で、
+ * 要件定義の転記とConsoleのリンクを出さず、進め方と承認が無いことを載せる。
+ */
+export type ImplementPrBodySpec =
+  | {
+      readonly kind: "requirements";
+      /** 承認済みの要件定義書(`requirement_drafts`のMarkdown)。 */
+      readonly requirementsMarkdown: string;
+      /** `approval_support.ts`の`buildConsoleUrl`に作業項目と承認した試行を渡した値。 */
+      readonly requirementsConsoleUrl: string;
+    }
+  | { readonly kind: "issue"; readonly profile: string };
+
 export type ImplementPrBodyInput = {
   /** Claudeの`summary`。呼び出し側が先に`normalizeJapaneseText`を適用する。 */
   readonly summary: string;
-  /** 承認済みの要件定義書(`requirement_drafts`のMarkdown)。 */
-  readonly requirementsMarkdown: string;
+  readonly spec: ImplementPrBodySpec;
+  /** 進め方に照らした差分の警告(`profileDiffWarnings`)。止めずに、「確認して欲しい点」に載せる。 */
+  readonly profileWarnings: readonly string[];
   /** 最後のラウンドの検証結果。 */
   readonly checks: ImplementCheckSummary;
   /** 最終の差分に対する`classifyProtectedChanges`の行。 */
   readonly protectedChanges: readonly string[];
   /** Claudeの`notes_for_reviewer`。呼び出し側が先に正規化する。 */
   readonly notesForReviewer: readonly string[];
-  /** `approval_support.ts`の`buildConsoleUrl`に作業項目と承認した試行を渡した値。 */
-  readonly requirementsConsoleUrl: string;
   readonly issueNumber: number;
   readonly changedPaths: readonly string[];
   /**
@@ -761,12 +872,13 @@ function renderChecks(checks: ImplementCheckSummary): string {
 /**
  * `.github/PULL_REQUEST_TEMPLATE.md`の節の順にPR本文を組み立てる。
  * - 概要: summary
- * - 受入条件: 要件定義書の表
+ * - 受入条件: 要件定義書の表。仕様がIssueのときは、要件定義が無いことを示す固定の文
  * - 動作確認結果: 最後のラウンドの検証結果(実行しなかったときは「検査未実施」と理由)
- * - 確認して欲しい点: 保護対象の変更、レビュアーへの注記、
+ * - 確認して欲しい点: 仕様がIssueのときの進め方と承認なしの注記(先頭)、進め方に照らした差分の警告、
+ *   保護対象の変更、レビュアーへの注記、
  *   取り込み内容を更新した注記(`intakeRefreshed`のときだけ)、
  *   Issueの取り込み後の更新の注記(`issueUpdatedAfterIntake`のときだけ)、
- *   承認済みの要件定義を開くConsoleのリンク
+ *   承認済みの要件定義を開くConsoleのリンク(仕様が要件定義のときだけ)
  * - 関連リンク: `Closes #N`。PRの作業項目をIssueに結び付ける。
  *   `poll_prs.ts`の`extractLinkedIssueNumbers`はこの形を読む。
  * - 備考: Factory自身のリポジトリ(`deployChecklist`)なら
@@ -774,14 +886,27 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * マーカーや告知の文は入れない。運用上の告知はDiscordとConsoleに出す。
  */
 export function buildImplementPrBody(input: ImplementPrBodyInput): string {
+  const { spec } = input;
   const attention = [
+    ...(spec.kind === "issue"
+      ? [`- ${sanitizePrLine(issueSpecProfileNote(spec.profile))}`]
+      : []),
+    ...input.profileWarnings.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
     ...(input.intakeRefreshed ? [`- ${INTAKE_REFRESHED_PR_NOTE}`] : []),
     ...(input.issueUpdatedAfterIntake
-      ? [`- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`]
+      ? [
+          `- ${
+            spec.kind === "issue"
+              ? ISSUE_SPEC_UPDATED_AFTER_INTAKE_NOTE
+              : ISSUE_UPDATED_AFTER_INTAKE_NOTE
+          }`,
+        ]
       : []),
-    `- 要件定義(Console): ${input.requirementsConsoleUrl}`,
+    ...(spec.kind === "requirements"
+      ? [`- 要件定義(Console): ${spec.requirementsConsoleUrl}`]
+      : []),
   ];
   return [
     "## 概要",
@@ -790,7 +915,9 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
     "",
     "## 受入条件",
     "",
-    extractAcceptanceCriteria(input.requirementsMarkdown),
+    spec.kind === "requirements"
+      ? extractAcceptanceCriteria(spec.requirementsMarkdown)
+      : ISSUE_SPEC_ACCEPTANCE_NOTE,
     "",
     "## 動作確認結果",
     "",

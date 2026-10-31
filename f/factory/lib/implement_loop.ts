@@ -48,6 +48,7 @@ import {
   IMPLEMENT_SCHEMA,
   IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
   type ImplementPromptInput,
+  type ImplementSpecKind,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
 import type {
@@ -125,11 +126,25 @@ export type ImplementContext = {
    */
   readonly has_previous_implementation: boolean;
   readonly attempt: number;
-  readonly requirements_markdown: string;
+  /**
+   * 仕様の出どころ。`requirements`は人が承認した要件定義、`issue`は承認を省く進め方で、
+   * 取り込み時点のIssueの題名と本文(`issue_title`、`issue_body`)が仕様になる。
+   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`implementContextSpecKind`を通す。
+   */
+  readonly spec_kind: ImplementSpecKind;
+  /**
+   * 作業項目の進め方。`spec_kind`が`issue`のとき、プロンプトの進め方ごとの指示とPR本文の注記が読む。
+   * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も許す。
+   */
+  readonly profile: string;
+  /** 承認済みの要件定義の本文。`spec_kind`が`issue`のときは`null`。 */
+  readonly requirements_markdown: string | null;
+  /** 承認済みの要件定義の図。`spec_kind`が`issue`のときは空。 */
   readonly requirements_diagrams: Diagram[];
   /**
    * 承認済みの下書きのディレクトリ。これ自体はClaudeに渡さず、
    * Claudeの実行ごとに新しい複製を渡す(`withReadOnlyDocDirCopy`)。
+   * `spec_kind`が`issue`のときは`null`で、複製も照合も行わない。
    */
   readonly requirements_doc_dir: string | null;
   /**
@@ -146,7 +161,8 @@ export type ImplementContext = {
    * この項目を足す前の準備ステップが作った文脈には無いので、読む側は`undefined`も`null`として扱う。
    */
   readonly design_markdown: string | null;
-  readonly requirements_console_url: string;
+  /** 承認済みの要件定義を開くConsoleのリンク。`spec_kind`が`issue`のときは`null`。 */
+  readonly requirements_console_url: string | null;
   /**
    * 対象がFactory自身のリポジトリなら`true`。
    * `true`のときだけ、PR本文にWindmillへの反映のチェックリストを載せる。
@@ -171,16 +187,24 @@ export type ImplementContext = {
 /**
  * `implementPrompt`と`implementFixPrompt`が共有する入力を作る。
  * 承認済みのMarkdownはプロンプトがコードフェンスで囲んで埋め込む。
+ * 仕様がIssueのとき(`spec_kind`)は、要件定義の欄を空にし、題名と本文を仕様として囲んで埋め込む。
  * `docDir`は実行ごとの`doc_dir`の複製(または`null`)で、
  * プロンプトが示すパスであり、`addDirs`で渡すパスでもある。
  */
 export function implementPromptInput(
-  context: Omit<ImplementContext, "design_markdown"> & {
+  context: Omit<
+    ImplementContext,
+    "design_markdown" | "spec_kind" | "profile"
+  > & {
     readonly design_markdown?: string | null;
+    readonly spec_kind?: ImplementSpecKind;
+    readonly profile?: string;
   },
   docDir: string | null,
 ): ImplementPromptInput {
   return {
+    specKind: implementContextSpecKind(context),
+    profile: context.profile ?? null,
     issue: {
       owner: context.owner,
       repo: context.repo,
@@ -190,7 +214,7 @@ export function implementPromptInput(
       url: context.issue_url,
     },
     requirements: {
-      markdown: context.requirements_markdown,
+      markdown: context.requirements_markdown ?? "",
       diagrams: context.requirements_diagrams,
       doc_dir: docDir,
     },
@@ -199,6 +223,16 @@ export function implementPromptInput(
     design: context.design_markdown ?? null,
     hasPreviousImplementation: context.has_previous_implementation,
   };
+}
+
+/**
+ * 文脈の仕様の出どころを返す。
+ * `spec_kind`を足す前の準備ステップが作った文脈には項目が無いので、`undefined`は要件定義として扱う。
+ */
+export function implementContextSpecKind(context: {
+  readonly spec_kind?: ImplementSpecKind;
+}): ImplementSpecKind {
+  return context.spec_kind ?? "requirements";
 }
 
 /**

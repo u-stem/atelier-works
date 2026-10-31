@@ -73,6 +73,7 @@ import {
 } from "../lib/design_template.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
+  commentIssue,
   type GhClient,
   getPr,
   getPrFiles,
@@ -95,6 +96,7 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { postProfileUpgradedComment } from "../lib/profile_upgrade.ts";
 import { automatedFeedback } from "../lib/prompts.ts";
 import {
   repoOwnerGateDeps,
@@ -683,6 +685,30 @@ export async function main(
       await finalizeTerminal("needs_human", refusalWithGap, refusalWithGap);
       return { ok: true, final_status: "needs_human", notice: outcome.reason };
     }
+
+    // 親の進め方は、差し戻しの更新と同じ文で通常に戻っている。戻す前の進め方が通常でなければ、Issueに伝える。
+    await postProfileUpgradedComment(
+      {
+        previousProfile: parentItem.profile,
+        workItemId: parent_work_item_id,
+        cause: "requirements_gap",
+      },
+      {
+        comment: async (kind, body) => {
+          await commentIssue(
+            client,
+            owner,
+            repo,
+            rerouteGuard.issueNumber,
+            kind,
+            parent_work_item_id,
+            body,
+            viewer.login,
+          );
+        },
+        warn: (message) => log.warn(message, { parent_work_item_id }),
+      },
+    );
 
     return { ok: true, final_status: "blocked", notice: gapReport };
   }

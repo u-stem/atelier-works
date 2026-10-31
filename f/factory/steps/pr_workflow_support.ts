@@ -5223,6 +5223,14 @@ export const REASON_RULES: readonly ReasonRule[] = [
       "worktreeの変更を人が確認し、必要ならPRに反映してください",
   },
   {
+    pattern:
+      /^protected path changes without approved requirements, changes not pushed$/,
+    describe: () =>
+      "承認済みの要件定義が無い実装が保護パスを変更したため、途中の変更をpushしていません",
+    nextAction: () =>
+      "worktreeの変更を人が確認し、保護パスの変更が要るなら、通常の進め方で依頼し直してください",
+  },
+  {
     pattern: /^worktree changed after verification$/,
     describe: () => "検証の後にworktreeが変更されました",
     ...procedureThenRerun(

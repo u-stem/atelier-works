@@ -29,6 +29,7 @@ import {
 import { notifyBestEffort } from "../lib/discord.ts";
 import {
   addLabels,
+  commentIssue,
   createPullRequest,
   ensureLabel,
   findOpenPullRequestByHead,
@@ -49,6 +50,7 @@ import {
   decideGapBranchCleanup,
   decideGapReroute,
   decideImplementFinishAction,
+  decideProtectedPathReroute,
   decideVerifiedTree,
   finishFailureReason,
   gapExhaustedReason,
@@ -62,14 +64,18 @@ import {
   implementNeedsHumanNextAction,
   mergeImplementOutcome,
   PARTIAL_WORK_KEPT_LOCAL_REASON,
+  PROTECTED_WORK_NOT_PUSHED_REASON,
   type PreserveWorkDeps,
+  prBodySpecFor,
   preserveWork,
+  protectedPartialPushStopReasons,
   REQUIREMENTS_REGENERATION_FAILED_REASON,
   REVIEW_LABEL_STYLE,
   rerouteImplementationToDesign,
   shouldDeleteBranchOnGap,
   shouldPreserveBeforeFailing,
   shouldPushPartialWork,
+  shouldWithholdPartialPush,
   worktreeBusyStopReason,
 } from "../lib/implement_finish_support.ts";
 import {
@@ -87,6 +93,7 @@ import {
   IMPLEMENT_PREPARE_OUTCOMES,
   type ImplementContext,
   type ImplementLoopResult,
+  implementContextSpecKind,
 } from "../lib/implement_loop.ts";
 import {
   buildImplementCommitMessage,
@@ -94,6 +101,7 @@ import {
   implementOutputProseIssues,
   issueChangedSinceIntake,
   neutralizeIssueRefs,
+  profileDiffWarnings,
 } from "../lib/implement_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { limitGapReport } from "../lib/model_text.ts";
@@ -102,6 +110,7 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { postProfileUpgradedComment } from "../lib/profile_upgrade.ts";
 import { automatedFeedback } from "../lib/prompts.ts";
 import {
   repoOwnerGateDeps,
@@ -124,6 +133,7 @@ import {
 } from "../lib/workspace.ts";
 import {
   describeReason,
+  listChangedPaths,
   nextActionFor,
   normalizeJapaneseText,
 } from "./pr_workflow_support.ts";
@@ -491,15 +501,34 @@ async function finishImplement(
       return commitAndPush({
         ...options,
         expectedTreeSha: scannedTreeSha,
-        inspectStaged: () =>
-          scannedTreeStopReasons({
+        inspectStaged: async () => {
+          const changed = await scannedTreeStopReasons({
             run: runCommand,
             worktreeDir: ctx.worktree_dir,
             scannedTreeSha,
-          }),
+          });
+          if (changed.length > 0) return changed;
+          return protectedPartialPushStopReasons({
+            specKind: implementContextSpecKind(ctx),
+            listStagedChanges: () =>
+              listChangedPaths(runCommand, ctx.worktree_dir, ctx.base_sha),
+          });
+        },
       });
     },
   });
+
+  // 仕様がIssueの実装が保護パスを変えたときは、途中の作業もブランチへpushしない。
+  // 人が見ない保護パスの変更を、PRの外でもリモートへ出さないためである。
+  const preserveOrWithhold = async (
+    ctx: ImplementContext,
+  ): Promise<string[]> =>
+    shouldWithholdPartialPush({
+      specKind: implementContextSpecKind(ctx),
+      protectedChanges: loop_result?.protected_changes ?? [],
+    })
+      ? [PROTECTED_WORK_NOT_PUSHED_REASON]
+      : preserveWork(preserveWorkDeps(ctx));
 
   const hasPr =
     (context !== null && context.existing_pr_number !== null) ||
@@ -523,7 +552,7 @@ async function finishImplement(
       if (shouldPreserveBeforeFailing(action)) {
         notes = hasPr
           ? [PARTIAL_WORK_KEPT_LOCAL_REASON]
-          : await preserveWork(preserveWorkDeps(context));
+          : await preserveOrWithhold(context);
       }
       const reason = [finishFailureReason(err), ...notes].join("; ");
       return finalizeNeedsHuman(
@@ -549,7 +578,7 @@ async function finishImplement(
     );
     let notes: string[] = [];
     if (context !== null && shouldPushPartialWork(action, hasPr)) {
-      notes = await preserveWork(preserveWorkDeps(context));
+      notes = await preserveOrWithhold(context);
     } else if (context !== null && action.preserveWork) {
       notes = [PARTIAL_WORK_KEPT_LOCAL_REASON];
     }
@@ -660,8 +689,19 @@ async function finishImplement(
     return null;
   };
 
-  if (action.kind === "requirements_gap") {
-    const gapReport = loop_result.gap_report ?? "";
+  // 仕様がIssueの実装が保護パスを変えたときは、commitもpushもPRの作成も更新もせず、要件の不足と同じ経路で要件定義へ戻す。
+  // 要件定義の承認で、人が保護パスの変更を判断する。
+  const protectedReroute =
+    action.kind === "open_pr"
+      ? decideProtectedPathReroute({
+          specKind: implementContextSpecKind(context),
+          protectedChanges: loop_result.protected_changes,
+        })
+      : null;
+
+  if (action.kind === "requirements_gap" || protectedReroute !== null) {
+    const gapReport =
+      protectedReroute?.gapReport ?? loop_result.gap_report ?? "";
     const stopped = await cleanUpGapWork(context, gapReport);
     if (stopped !== null) return stopped;
     if (decideGapReroute(attempt, config.max_attempts) === "needs_human") {
@@ -681,6 +721,31 @@ async function finishImplement(
         "requirements_generating",
         "work item moved on before the reroute",
       );
+    // 進め方は同じ文で通常に戻っている。戻す前の進め方が通常でなければ、Issueに伝える。
+    await postProfileUpgradedComment(
+      {
+        previousProfile: workItem.profile,
+        workItemId: work_item_id,
+        cause:
+          protectedReroute !== null ? "protected_paths" : "requirements_gap",
+      },
+      {
+        comment: async (kind, body) => {
+          const viewer = await getViewer(client);
+          await commentIssue(
+            client,
+            owner,
+            repo,
+            issueNumber,
+            kind,
+            work_item_id,
+            body,
+            viewer.login,
+          );
+        },
+        warn: (message) => log.warn(message, { work_item_id }),
+      },
+    );
     try {
       const flowJobId = parseFlowJobId(
         await wmill.runFlowAsync("f/factory/pipeline", {
@@ -853,11 +918,14 @@ async function finishImplement(
       );
       const body = buildImplementPrBody({
         summary: claudeText(output.summary),
-        requirementsMarkdown: ctx.requirements_markdown,
+        spec: prBodySpecFor(ctx),
+        profileWarnings:
+          implementContextSpecKind(ctx) === "issue"
+            ? profileDiffWarnings(ctx.profile, loop.changed_paths)
+            : [],
         checks,
         protectedChanges: loop.protected_changes,
         notesForReviewer: output.notes_for_reviewer.map(claudeText),
-        requirementsConsoleUrl: ctx.requirements_console_url,
         issueNumber: ctx.issue_number,
         changedPaths: loop.changed_paths,
         deployChecklist: ctx.is_factory_repo,

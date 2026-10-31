@@ -15,12 +15,18 @@ import {
   type ImplementLoopExit,
   type ImplementLoopResult,
   type ImplementPrepareOutcome,
+  implementContextSpecKind,
 } from "./implement_loop.ts";
-import type { ImplementCheckSummary } from "./implement_support.ts";
+import {
+  classifyProtectedChanges,
+  type ImplementCheckSummary,
+  type ImplementPrBodySpec,
+} from "./implement_support.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import { limitGapReport } from "./model_text.ts";
 import { WorktreeBusyError } from "./process_lock.ts";
-import { automatedFeedback } from "./prompts.ts";
+import { automatedFeedback, type ImplementSpecKind } from "./prompts.ts";
+import type { ChangedPath } from "./protected_paths.ts";
 import {
   type CommitAndPushResult,
   CommitBlockedError,
@@ -394,6 +400,8 @@ export type PreserveWorkDeps = {
    * `commitAndPush`を実行する。
    * ステージし直した内容が`scannedTreeSha`と違えば、`inspectStaged`(`scannedTreeStopReasons`)で
    * commitせずに`CommitBlockedError`を投げる。
+   * 一致したときは、仕様がIssueの場合に限り、同じ`inspectStaged`が索引の保護パスを分類し直し
+   * (`protectedPartialPushStopReasons`)、触れていればcommitせずに止める。
    */
   readonly commitAndPush: (
     scannedTreeSha: string,
@@ -575,4 +583,96 @@ export function buildPrOpenedEvent(
     next_action: prOpenedNextAction(input.loop.protected_changes.length > 0),
     created: input.created,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 仕様がIssueの実装(承認を省く進め方)の完了処理
+// ---------------------------------------------------------------------------
+
+/**
+ * 保護パスの変更が要るとして要件定義へ戻すときの、不足の報告の先頭。
+ * 要件の不足(`requirements_gap`)の報告と同じく、要件定義の生成への`feedback`になる。
+ */
+export const PROTECTED_PATH_GAP_PREFIX = "保護パスの変更が要る: ";
+
+/**
+ * 仕様がIssueの実装が保護パスを変えたため、途中の作業をpushしなかったときの理由。
+ * 理由の訳と次の操作は`steps/pr_workflow_support.ts`の理由の表にある。
+ */
+export const PROTECTED_WORK_NOT_PUSHED_REASON =
+  "protected path changes without approved requirements, changes not pushed";
+
+/**
+ * 文脈から、PR本文の仕様の欄を作る。
+ * `spec_kind`を足す前の準備ステップが作った文脈には項目が無いので、要件定義として扱う。
+ */
+export function prBodySpecFor(context: {
+  readonly spec_kind?: ImplementSpecKind;
+  readonly profile?: string;
+  readonly requirements_markdown: string | null;
+  readonly requirements_console_url: string | null;
+}): ImplementPrBodySpec {
+  if (implementContextSpecKind(context) === "issue") {
+    return { kind: "issue", profile: context.profile ?? "" };
+  }
+  return {
+    kind: "requirements",
+    requirementsMarkdown: context.requirements_markdown ?? "",
+    requirementsConsoleUrl: context.requirements_console_url ?? "",
+  };
+}
+
+/**
+ * 仕様がIssueの実装の差分が保護パスに触れたとき、要件定義へ戻す不足の報告を返す。触れないときと、仕様が要件定義のときは`null`を返す。
+ * 承認を省く進め方では、保護パスの変更を人が見る関門が無い。
+ * 戻した先の要件定義の承認で、人が保護パスの変更を判断する。
+ * 保護パスのPRが日常的に出ても、人の手は承認だけで済むよう、`needs_human`にはしない。
+ * 呼び出し側は、commitとpushの前にこれを呼び、返したときはpushもPRの作成も更新もしない。
+ */
+export function decideProtectedPathReroute(input: {
+  readonly specKind: ImplementSpecKind;
+  readonly protectedChanges: readonly string[];
+}): { readonly gapReport: string } | null {
+  if (input.specKind !== "issue" || input.protectedChanges.length === 0) {
+    return null;
+  }
+  return {
+    gapReport: `${PROTECTED_PATH_GAP_PREFIX}${input.protectedChanges.join("; ")}`,
+  };
+}
+
+/**
+ * 途中の作業をブランチへpushしないかを返す。
+ * 仕様がIssueで、差分が保護パスに触れているときは、人が見ない保護パスの変更を、途中の作業としてもpushしない。
+ */
+export function shouldWithholdPartialPush(input: {
+  readonly specKind: ImplementSpecKind;
+  readonly protectedChanges: readonly string[];
+}): boolean {
+  return input.specKind === "issue" && input.protectedChanges.length > 0;
+}
+
+/**
+ * 途中の作業をcommitする直前に、ステージしたツリーが保護パスに触れていないかを確かめ、止める理由を返す(無ければ空)。
+ * ループの最後の点検(`loop_result.protected_changes`)は、秘密の検査をしたツリーと同じツリーを見たとは限らない。
+ * そのため、commitする索引そのものを分類し直す。
+ * 呼び出し側は、ステージしたツリーが秘密を検査したツリーと一致すると確かめた後にこれを呼ぶ。
+ * 仕様が要件定義のときは、人が承認した範囲なので何も調べない。
+ * `package.json`はscriptsの変更の有無によらず保護パスなので、scriptsの変更は判定に使わない。
+ */
+export async function protectedPartialPushStopReasons(input: {
+  readonly specKind: ImplementSpecKind;
+  readonly listStagedChanges: () => Promise<readonly ChangedPath[]>;
+}): Promise<string[]> {
+  if (input.specKind !== "issue") return [];
+  const protectedChanges = classifyProtectedChanges(
+    await input.listStagedChanges(),
+    false,
+  );
+  return shouldWithholdPartialPush({
+    specKind: input.specKind,
+    protectedChanges,
+  })
+    ? [PROTECTED_WORK_NOT_PUSHED_REASON]
+    : [];
 }

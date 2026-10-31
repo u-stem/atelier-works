@@ -6,10 +6,19 @@ import {
 import {
   type BuildImplementContextInput,
   buildImplementContext,
+  type ResolveImplementSpecDeps,
   requirementsGateReason,
+  resolveImplementSpec,
 } from "../../f/factory/steps/implement_prepare.ts";
 
 const BASE = "b".repeat(40);
+const APPROVED_DRAFT = {
+  attempt: 2,
+  markdown: "# 要件定義",
+  diagrams: [],
+  doc_dir: "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2",
+  doc_hash: "c".repeat(64),
+};
 const INPUT: BuildImplementContextInput = {
   workItem: {
     id: 3,
@@ -20,6 +29,7 @@ const INPUT: BuildImplementContextInput = {
     title: "CSV出力",
     body: "CSVで出力したい",
     issue_url: "https://github.com/acme/widgets/issues/7",
+    profile: "standard",
   },
   issueNumber: 7,
   issue: {
@@ -27,14 +37,7 @@ const INPUT: BuildImplementContextInput = {
     body: "CSVで出力したい",
     htmlUrl: "https://github.com/acme/widgets/issues/7",
   },
-  draft: {
-    attempt: 2,
-    markdown: "# 要件定義",
-    diagrams: [],
-    doc_dir:
-      "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2",
-    doc_hash: "c".repeat(64),
-  },
+  draft: APPROVED_DRAFT,
   branch: "factory/issue-7-wi-3",
   baseBranch: "main",
   baseSha: BASE,
@@ -244,9 +247,264 @@ describe("buildImplementContext", () => {
     expect(
       buildImplementContext({
         ...INPUT,
-        draft: { ...INPUT.draft, doc_hash: null },
+        draft: { ...APPROVED_DRAFT, doc_hash: null },
       }).requirements_doc_hash,
     ).toBeNull();
+  });
+});
+
+describe("buildImplementContext with the requirements as the specification", () => {
+  test("marks the specification as the requirements", () => {
+    expect(buildImplementContext(INPUT).spec_kind).toBe("requirements");
+  });
+
+  test("carries the profile of the work item", () => {
+    expect(buildImplementContext(INPUT).profile).toBe("standard");
+  });
+
+  test("carries the approved markdown", () => {
+    expect(buildImplementContext(INPUT).requirements_markdown).toBe(
+      "# 要件定義",
+    );
+  });
+});
+
+describe("buildImplementContext with the issue as the specification", () => {
+  const ISSUE_INPUT: BuildImplementContextInput = {
+    ...INPUT,
+    workItem: { ...INPUT.workItem, profile: "direct" },
+    draft: null,
+  };
+
+  test("marks the specification as the issue", () => {
+    expect(buildImplementContext(ISSUE_INPUT).spec_kind).toBe("issue");
+  });
+
+  test("carries the profile of the work item", () => {
+    expect(buildImplementContext(ISSUE_INPUT).profile).toBe("direct");
+  });
+
+  test("carries no requirements markdown", () => {
+    expect(buildImplementContext(ISSUE_INPUT).requirements_markdown).toBeNull();
+  });
+
+  test("carries no diagrams", () => {
+    expect(buildImplementContext(ISSUE_INPUT).requirements_diagrams).toEqual(
+      [],
+    );
+  });
+
+  test("carries no requirements directory", () => {
+    expect(buildImplementContext(ISSUE_INPUT).requirements_doc_dir).toBeNull();
+  });
+
+  test("carries no baseline hash", () => {
+    expect(buildImplementContext(ISSUE_INPUT).requirements_doc_hash).toBeNull();
+  });
+
+  test("carries no link to the requirements in the Console", () => {
+    expect(
+      buildImplementContext(ISSUE_INPUT).requirements_console_url,
+    ).toBeNull();
+  });
+
+  test("keeps the body recorded at intake as the specification", () => {
+    expect(
+      buildImplementContext({
+        ...ISSUE_INPUT,
+        issue: { ...INPUT.issue, body: "承認なしに書き換えた本文" },
+      }).issue_body,
+    ).toBe("CSVで出力したい");
+  });
+
+  test("keeps the title recorded at intake as the specification", () => {
+    expect(
+      buildImplementContext({
+        ...ISSUE_INPUT,
+        issue: { ...INPUT.issue, title: "書き換えた題名" },
+      }).issue_title,
+    ).toBe("CSV出力");
+  });
+
+  test("carries no design", () => {
+    expect(buildImplementContext(ISSUE_INPUT).design_markdown).toBeNull();
+  });
+});
+
+describe("resolveImplementSpec", () => {
+  const DIR =
+    "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2";
+  const HASH = "d".repeat(64);
+  const APPROVED = { status: "approved", attempt: 2, draft_id: 11 };
+  const DRAFT = {
+    id: 11,
+    work_item_id: 3,
+    attempt: 2,
+    summary: "要約",
+    markdown: "# 要件定義",
+    diagrams: [],
+    open_questions: [],
+    doc_dir: DIR,
+    doc_hash: HASH,
+    created_at: new Date(0),
+  };
+  const WORK_ITEM = {
+    id: 3,
+    attempt: 2,
+    design_attempt: 0,
+    profile: "standard",
+  };
+
+  function setup(overrides: Partial<ResolveImplementSpecDeps> = {}): {
+    deps: ResolveImplementSpecDeps;
+    calls: string[];
+  } {
+    const calls: string[] = [];
+    const deps: ResolveImplementSpecDeps = {
+      latestRequirementsApproval: async () => {
+        calls.push("latestRequirementsApproval");
+        return APPROVED;
+      },
+      getRequirementDraft: async () => {
+        calls.push("getRequirementDraft");
+        return DRAFT;
+      },
+      hashTree: async () => {
+        calls.push("hashTree");
+        return HASH;
+      },
+      warn: () => {
+        calls.push("warn");
+      },
+      designGate: {
+        latestDesignApproval: async () => {
+          calls.push("latestDesignApproval");
+          return null;
+        },
+        getDesignDraft: async () => {
+          calls.push("getDesignDraft");
+          return null;
+        },
+        warn: () => {
+          calls.push("designWarn");
+        },
+      },
+      ...overrides,
+    };
+    return { deps, calls };
+  }
+
+  function resolve(
+    deps: ResolveImplementSpecDeps,
+    input: { requirementsRequired: boolean; designEnabled?: boolean },
+  ) {
+    return resolveImplementSpec(
+      {
+        workItem: WORK_ITEM,
+        requirementsRequired: input.requirementsRequired,
+        designEnabled: input.designEnabled ?? false,
+      },
+      deps,
+    );
+  }
+
+  test("takes the issue as the specification when the requirements are not required", async () => {
+    const { deps } = setup();
+    expect(await resolve(deps, { requirementsRequired: false })).toEqual({
+      kind: "issue",
+    });
+  });
+
+  test("reads no approval and no draft when the requirements are not required", async () => {
+    const { deps, calls } = setup();
+    await resolve(deps, { requirementsRequired: false });
+    expect(calls).toEqual([]);
+  });
+
+  test("skips the design gate when the requirements are not required, even with the design stage on", async () => {
+    const { deps, calls } = setup();
+    await resolve(deps, { requirementsRequired: false, designEnabled: true });
+    expect(calls).toEqual([]);
+  });
+
+  test("stops when no requirements were approved", async () => {
+    const { deps } = setup({ latestRequirementsApproval: async () => null });
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "stop",
+      reason: "no approved requirements for attempt 2",
+    });
+  });
+
+  test("stops when the approval is for another attempt", async () => {
+    const { deps } = setup({
+      latestRequirementsApproval: async () => ({ ...APPROVED, attempt: 1 }),
+    });
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "stop",
+      reason: "no approved requirements for attempt 2",
+    });
+  });
+
+  test("stops when the newest approval was rejected", async () => {
+    const { deps } = setup({
+      latestRequirementsApproval: async () => ({
+        ...APPROVED,
+        status: "rejected",
+      }),
+    });
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "stop",
+      reason: "no approved requirements for attempt 2",
+    });
+  });
+
+  test("stops when the draft the approval points to is gone", async () => {
+    const { deps } = setup({ getRequirementDraft: async () => null });
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "stop",
+      reason: "no approved requirements for attempt 2",
+    });
+  });
+
+  test("stops when the approved directory was modified", async () => {
+    const { deps } = setup({ hashTree: async () => "e".repeat(64) });
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "stop",
+      reason: REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON,
+    });
+  });
+
+  test("stops when the approved directory is gone", async () => {
+    const { deps } = setup({ hashTree: async () => null });
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "stop",
+      reason: REQUIREMENTS_DIR_MISSING_REASON,
+    });
+  });
+
+  test("stops at the design gate when the design stage is on and no design was approved", async () => {
+    const { deps } = setup();
+    expect(
+      await resolve(deps, { requirementsRequired: true, designEnabled: true }),
+    ).toEqual({
+      kind: "stop",
+      reason: "no approved design for design attempt 0",
+    });
+  });
+
+  test("takes the approved draft as the specification", async () => {
+    const { deps } = setup();
+    expect(await resolve(deps, { requirementsRequired: true })).toEqual({
+      kind: "requirements",
+      draft: DRAFT,
+      designMarkdown: null,
+    });
+  });
+
+  test("hashes the approved directory", async () => {
+    const { deps, calls } = setup();
+    await resolve(deps, { requirementsRequired: true });
+    expect(calls).toContain("hashTree");
   });
 });
 
@@ -372,14 +630,14 @@ describe("the wiring of the requirements gate in implement_prepare main", () => 
   const GATE = "await requirementsGateReason(";
 
   test("hashes the approved directory with the real hash function", async () => {
-    expect(await source()).toMatch(
-      /await requirementsGateReason\(\s*draft,\s*\(dir\) => hashDirectoryTree\(dir, realDirectoryIo\),/,
+    expect(await source()).toContain(
+      "hashTree: (dir) => hashDirectoryTree(dir, realDirectoryIo),",
     );
   });
 
   test("stops for a person with the reason of the gate", async () => {
     expect(await source()).toContain(
-      'if (untrusted !== null) return stop("needs_human", untrusted);',
+      'if (untrusted !== null) return { kind: "stop", reason: untrusted };',
     );
   });
 
@@ -403,7 +661,33 @@ describe("the wiring of the requirements gate in implement_prepare main", () => 
 
   test("carries the baseline of the draft into the context", async () => {
     expect(await source()).toContain(
-      "requirements_doc_hash: input.draft.doc_hash,",
+      "requirements_doc_hash: draft?.doc_hash ?? null,",
+    );
+  });
+
+  test("resolves the specification before it looks at the branch", async () => {
+    const text = await source();
+    const spec = onlyIndex(text, "await resolveImplementSpec(");
+    const branch = onlyIndex(text, "await findOpenPullRequestByHead(");
+    expect(spec >= 0 && branch >= 0 && spec < branch).toBe(true);
+  });
+
+  test("resolves the specification before it prepares the worktree", async () => {
+    const text = await source();
+    const spec = onlyIndex(text, "await resolveImplementSpec(");
+    const worktree = onlyIndex(text, "await prepareImplementWorktree(");
+    expect(spec >= 0 && worktree >= 0 && spec < worktree).toBe(true);
+  });
+
+  test("asks the table of approvals whether the requirements are required", async () => {
+    expect(await source()).toMatch(
+      /requirementsRequired: requiredApprovals\(workItem\.profile\)\.requirements,/,
+    );
+  });
+
+  test("stops for a person with the reason of the specification", async () => {
+    expect(await source()).toContain(
+      'if (spec.kind === "stop") return stop("needs_human", spec.reason);',
     );
   });
 });
@@ -448,7 +732,7 @@ describe("the wiring of the design gate in implement_prepare main", () => {
 
   test("stops for a person with the reason of the gate", async () => {
     expect(await source()).toContain(
-      'if (gate.kind === "stop") return stop("needs_human", gate.reason);',
+      'if (gate.kind === "stop") return { kind: "stop", reason: gate.reason };',
     );
   });
 

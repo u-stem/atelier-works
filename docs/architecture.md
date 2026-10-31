@@ -623,6 +623,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
+| `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |

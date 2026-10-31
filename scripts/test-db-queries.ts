@@ -152,8 +152,10 @@ import {
   updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
+  updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLatestApproval,
   updateStatusIfLeaseHolder,
+  updateStatusIfLeaseHolderClearingFlowJobId,
   updateStatusToRequirementsIfCurrent,
   updateStatusToRequirementsIfLeaseHolder,
   writeGhRepoDetail,
@@ -11904,6 +11906,86 @@ check(
   (await intakeRowOf(INTAKE_ID_C)) !== null,
 );
 execPsql(target, "DELETE FROM factory.manual_intake_keys");
+
+// 移り先を引数で受ける状態の更新は、要件定義の生成へ移るときだけ、進め方を通常の進め方に戻す。
+// 要件定義の生成以外へ移る行と、すでに通常の進め方の行は、進め方が変わらない。
+const PROFILE_LEASE = "qdb-job-profile";
+let profileIssue = 99100;
+
+async function profileAfterMove(
+  profile: string,
+  to: WorkItemStatus,
+  move: (id: number, to: WorkItemStatus) => Promise<unknown>,
+): Promise<string | undefined> {
+  profileIssue += 1;
+  const id = await issueWorkItem(
+    profileIssue,
+    1,
+    "implementing",
+    "qdb profile reset",
+  );
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET profile = '${profile}', flow_job_id = '${PROFILE_LEASE}' WHERE id = ${String(id)}`,
+  );
+  await move(id, to);
+  return (await getWorkItem(id, sql))?.profile;
+}
+
+const PROFILE_MOVES: ReadonlyArray<
+  readonly [string, (id: number, to: WorkItemStatus) => Promise<unknown>]
+> = [
+  ["updateStatus", (id, to) => updateStatus(id, to, null, sql)],
+  [
+    "updateStatusIfCurrent",
+    (id, to) => updateStatusIfCurrent(id, "implementing", to, null, sql),
+  ],
+  [
+    "updateStatusIfCurrentClearingFlowJobId",
+    (id, to) =>
+      updateStatusIfCurrentClearingFlowJobId(id, "implementing", to, null, sql),
+  ],
+  [
+    "updateStatusIfLeaseHolder",
+    (id, to) =>
+      updateStatusIfLeaseHolder(
+        id,
+        "implementing",
+        to,
+        PROFILE_LEASE,
+        null,
+        sql,
+      ),
+  ],
+  [
+    "updateStatusIfLeaseHolderClearingFlowJobId",
+    (id, to) =>
+      updateStatusIfLeaseHolderClearingFlowJobId(
+        id,
+        "implementing",
+        to,
+        PROFILE_LEASE,
+        null,
+        sql,
+      ),
+  ],
+];
+for (const [name, move] of PROFILE_MOVES) {
+  check(
+    `profile reset: ${name} sets a direct item to standard when it moves to the requirements`,
+    (await profileAfterMove("direct", "requirements_generating", move)) ===
+      "standard",
+  );
+  check(
+    `profile reset: ${name} keeps a standard item standard when it moves to the requirements`,
+    (await profileAfterMove("standard", "requirements_generating", move)) ===
+      "standard",
+  );
+  check(
+    `profile reset: ${name} keeps a direct item direct when it moves elsewhere`,
+    (await profileAfterMove("direct", "needs_human", move)) === "direct",
+  );
+}
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

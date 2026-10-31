@@ -26,6 +26,7 @@ import {
   NO_ACCEPTANCE_CRITERIA_NOTE,
   neutralizeIssueRefs,
   parseImplementBranchWorkItemId,
+  profileDiffWarnings,
   requireDeadlineAt,
   roundIsStalled,
   roundOutcomeForExit,
@@ -723,9 +724,16 @@ const REQUIREMENTS_MD = [
   "なし",
 ].join("\n");
 
+const REQUIREMENTS_URL = "http://127.0.0.1:8080/console/items/7/requirements";
+
 const PR_BODY_INPUT = {
   summary: "CSV出力を追加しました。",
-  requirementsMarkdown: REQUIREMENTS_MD,
+  spec: {
+    kind: "requirements" as const,
+    requirementsMarkdown: REQUIREMENTS_MD,
+    requirementsConsoleUrl: REQUIREMENTS_URL,
+  },
+  profileWarnings: [],
   checks: {
     kind: "ran" as const,
     results: [
@@ -735,7 +743,6 @@ const PR_BODY_INPUT = {
   },
   protectedChanges: [],
   notesForReviewer: ["区切り文字はカンマ固定と仮置きしました。"],
-  requirementsConsoleUrl: "http://127.0.0.1:8080/console/items/7/requirements",
   issueNumber: 42,
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
   deployChecklist: true,
@@ -1086,6 +1093,168 @@ describe("buildImplementPrBody", () => {
       ISSUE_UPDATED_AFTER_INTAKE_NOTE,
     );
   });
+});
+
+// 承認を省く進め方のPRは、要件定義の転記とConsoleのリンクを出さず、
+// 進め方と「要件定義の承認なしで実装した」ことを載せる。
+describe("buildImplementPrBody with the issue as the specification", () => {
+  const ISSUE_SPEC_INPUT = {
+    ...PR_BODY_INPUT,
+    spec: { kind: "issue" as const, profile: "bugfix" },
+  };
+
+  test("follows the PR template's section order", () => {
+    const body = buildImplementPrBody(ISSUE_SPEC_INPUT);
+    expect(body.split("\n").filter((line) => line.startsWith("## "))).toEqual([
+      "## 概要",
+      "## 受入条件",
+      "## 動作確認結果",
+      "## 確認して欲しい点",
+      "## 関連リンク",
+      "## 備考",
+    ]);
+  });
+
+  test("says under 受入条件 that no requirements were approved", () => {
+    expect(buildImplementPrBody(ISSUE_SPEC_INPUT)).toContain(
+      "## 受入条件\n\n承認済みの要件定義はありません。Issueの本文を仕様として実装しました。\n",
+    );
+  });
+
+  test("copies no acceptance criteria table", () => {
+    expect(buildImplementPrBody(ISSUE_SPEC_INPUT)).not.toContain("AC-001");
+  });
+
+  test("links no requirements in the Console", () => {
+    expect(buildImplementPrBody(ISSUE_SPEC_INPUT)).not.toContain(
+      "要件定義(Console)",
+    );
+  });
+
+  test("names the profile and the missing approval first under 確認して欲しい点", () => {
+    expect(buildImplementPrBody(ISSUE_SPEC_INPUT)).toContain(
+      "## 確認して欲しい点\n\n- 進め方はbugfixです。要件定義の承認なしで、取り込み時点のIssueの本文を仕様として実装しました。\n",
+    );
+  });
+
+  test("escapes a profile that looks like markup", () => {
+    const body = buildImplementPrBody({
+      ...ISSUE_SPEC_INPUT,
+      spec: { kind: "issue", profile: "<b>x" },
+    });
+    expect(body).toContain("- 進め方は\\<b>xです。");
+  });
+
+  test("lists the warnings of the diff after the note of the profile", () => {
+    const body = buildImplementPrBody({
+      ...ISSUE_SPEC_INPUT,
+      profileWarnings: ["差分にテストのファイルがありません。"],
+    });
+    expect(body).toContain(
+      "を仕様として実装しました。\n- 差分にテストのファイルがありません。\n- 区切り文字は",
+    );
+  });
+
+  test("words the note of an updated Issue for the issue specification", () => {
+    expect(
+      buildImplementPrBody({
+        ...ISSUE_SPEC_INPUT,
+        issueUpdatedAfterIntake: true,
+      }),
+    ).toContain(
+      "- この実装は取り込み時点のIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。",
+    );
+  });
+
+  test("does not use the note of an updated Issue that speaks of the requirements", () => {
+    expect(
+      buildImplementPrBody({
+        ...ISSUE_SPEC_INPUT,
+        issueUpdatedAfterIntake: true,
+      }),
+    ).not.toContain(ISSUE_UPDATED_AFTER_INTAKE_NOTE);
+  });
+
+  test("still links the parent issue with Closes #N", () => {
+    expect(buildImplementPrBody(ISSUE_SPEC_INPUT)).toContain(
+      "## 関連リンク\n\nCloses #42\n",
+    );
+  });
+});
+
+describe("buildImplementPrBody with warnings in the requirements mode", () => {
+  test("lists the warnings before the reviewer notes", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      profileWarnings: ["警告です。"],
+    });
+    expect(body).toContain(
+      "## 確認して欲しい点\n\n- 警告です。\n- 区切り文字は",
+    );
+  });
+});
+
+describe("profileDiffWarnings", () => {
+  test("warns a docs change that touches a source file", () => {
+    expect(profileDiffWarnings("docs", ["docs/a.md", "src/a.ts"])).toEqual([
+      "docsの進め方ですが、文書以外のパスを変更しています: src/a.ts",
+    ]);
+  });
+
+  test("does not warn a docs change that touches documents only", () => {
+    expect(
+      profileDiffWarnings("docs", [
+        "README.md",
+        "docs/guide/a.md",
+        "docs/images/flow.drawio",
+        ".claude/skills/x/SKILL.md",
+      ]),
+    ).toEqual([]);
+  });
+
+  test("lists at most five paths of a docs change", () => {
+    const paths = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts", "g.ts"];
+    expect(profileDiffWarnings("docs", paths)).toEqual([
+      "docsの進め方ですが、文書以外のパスを変更しています: a.ts, b.ts, c.ts, d.ts, e.ts ほか2件",
+    ]);
+  });
+
+  test("does not warn a docs change without a diff", () => {
+    expect(profileDiffWarnings("docs", [])).toEqual([]);
+  });
+
+  test("warns a bugfix without a test file", () => {
+    expect(profileDiffWarnings("bugfix", ["src/a.ts"])).toEqual([
+      "bugfixの進め方ですが、差分にテストのファイルがありません。再現テストが含まれているかを確認してください。",
+    ]);
+  });
+
+  test("warns a bugfix without a diff", () => {
+    expect(profileDiffWarnings("bugfix", [])).toHaveLength(1);
+  });
+
+  test.each([
+    "tests/a.ts",
+    "src/__tests__/a.ts",
+    "src/a.test.ts",
+    "src/a.spec.tsx",
+    "pkg/a_test.go",
+    "pkg/test_a.py",
+    "test/a.rb",
+  ])("does not warn a bugfix that changes the test file %s", (path) => {
+    expect(profileDiffWarnings("bugfix", ["src/a.ts", path])).toEqual([]);
+  });
+
+  test("warns a bugfix whose path only has test in a word", () => {
+    expect(profileDiffWarnings("bugfix", ["src/latest.ts"])).toHaveLength(1);
+  });
+
+  test.each(["direct", "standard", "unknown"])(
+    "does not warn the profile %s",
+    (profile) => {
+      expect(profileDiffWarnings(profile, ["src/a.ts"])).toEqual([]);
+    },
+  );
 });
 
 const CONTINUE_STATE = {

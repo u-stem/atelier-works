@@ -1,0 +1,9 @@
+summary: '[LIB] 進め方を通常に戻したことのIssueへのコメント'
+description: 内部ライブラリです。直接実行するものではありません。承認を省く進め方の作業項目を通常の進め方に戻したとき、Issueに知らせるコメントの本文と投稿の判定を返す共通処理です。
+lock: '!inline f/factory/lib/profile_upgrade.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

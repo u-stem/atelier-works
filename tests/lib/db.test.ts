@@ -1114,6 +1114,12 @@ describe("updateStatusToRequirementsIfCurrent", () => {
     expect(calls[0]?.text).toContain("design_attempt = 0");
   });
 
+  test("sets the profile to standard in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.text).toContain("profile = 'standard'");
+  });
+
   test("clears flow_job_id in the same statement", async () => {
     const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
     await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
@@ -1151,6 +1157,119 @@ describe("updateStatusToRequirementsIfCurrent", () => {
       await updateStatusToRequirementsIfCurrent(1, "failed", null, sql),
     ).toBe(false);
   });
+});
+
+describe("the status updates that take the target as an argument", () => {
+  // どれも、要件定義の生成へ移すときだけ進め方を通常の進め方に戻す。
+  // 戻り先は引数で決まり、SQLの字面に状態が現れないので、全体の走査では見つけられない。
+  const RESETS_PROFILE =
+    "profile = CASE WHEN ? ::text = 'requirements_generating' THEN 'standard' ELSE profile END";
+
+  const CALLS: ReadonlyArray<
+    readonly [string, (sql: SqlClient) => Promise<unknown>]
+  > = [
+    [
+      "updateStatus",
+      (sql) => updateStatus(1, "requirements_generating", null, sql, NO_JOBS),
+    ],
+    [
+      "updateStatusIfCurrent",
+      (sql) =>
+        updateStatusIfCurrent(
+          1,
+          "needs_human",
+          "requirements_generating",
+          null,
+          sql,
+          NO_JOBS,
+        ),
+    ],
+    [
+      "updateStatusIfCurrentClearingFlowJobId",
+      (sql) =>
+        updateStatusIfCurrentClearingFlowJobId(
+          1,
+          "needs_human",
+          "requirements_generating",
+          null,
+          sql,
+          NO_JOBS,
+        ),
+    ],
+    [
+      "updateStatusIfLeaseHolder",
+      (sql) =>
+        updateStatusIfLeaseHolder(
+          1,
+          "implementing",
+          "requirements_generating",
+          "job-1",
+          null,
+          sql,
+          NO_JOBS,
+        ),
+    ],
+    [
+      "updateStatusIfLeaseHolderClearingFlowJobId",
+      (sql) =>
+        updateStatusIfLeaseHolderClearingFlowJobId(
+          1,
+          "implementing",
+          "requirements_generating",
+          "job-1",
+          null,
+          sql,
+          NO_JOBS,
+        ),
+    ],
+    [
+      "updateStatusIfLatestApproval",
+      (sql) =>
+        updateStatusIfLatestApproval(
+          1,
+          "awaiting_approval",
+          "requirements_generating",
+          null,
+          { kind: "requirements", requestId: 41, requestStatus: "pending" },
+          sql,
+          NO_JOBS,
+        ),
+    ],
+    [
+      "restartStoppedWorkItem",
+      (sql) =>
+        restartStoppedWorkItem(
+          {
+            id: 7,
+            expectedFrom: "needs_human",
+            to: "requirements_generating",
+            reasonPrefixes: ["worker image is stale: "],
+            waitReasonPrefixes: [],
+            waitMaxAgeMs: 86_400_000,
+            clearFlowJobId: true,
+            notePrefix: "auto_retry: ",
+            maxRestarts: 3,
+            noticeKind: "host_action_required",
+            noticeMarker: "marker",
+            resolvedBy: "self_update",
+            note: "auto_retry: restarted",
+          },
+          sql,
+          NO_JOBS,
+        ),
+    ],
+  ];
+
+  test.each(CALLS)(
+    "%s sets the profile back to standard when the target is the requirements",
+    async (_name, run) => {
+      const { sql, calls } = createFakeSqlClient([
+        [{ work_item_id: 1, from_status: "picked" }],
+      ]);
+      await run(sql);
+      expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(RESETS_PROFILE);
+    },
+  );
 });
 
 describe("updateStatusIfLeaseHolder", () => {
@@ -1274,6 +1393,7 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       NO_JOBS,
     );
     expect(calls[0]?.values).toEqual([
+      "requirements_generating",
       "requirements_generating",
       1,
       "pr_open",
@@ -5803,6 +5923,12 @@ describe("updateStatusToRequirementsIfLeaseHolder", () => {
     expect(calls[0]?.text).toContain("design_attempt = 0");
   });
 
+  test("sets the profile to standard in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("profile = 'standard'");
+  });
+
   test("clears flow_job_id in the same statement", async () => {
     const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
     await call(sql);
@@ -9584,6 +9710,12 @@ describe("returnToRequirementsIfLeaseHolder", () => {
     const { sql, calls } = createFakeSqlClient([WON_ROWS]);
     await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
     expect(calls[0]?.text).toContain("design_attempt = 0");
+  });
+
+  test("sets the profile to standard in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("profile = 'standard'");
   });
 
   test("clears the flow job id so that the next run can record its own", async () => {
