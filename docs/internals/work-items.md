@@ -365,7 +365,10 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 `profile`を書く処理は、要件定義の生成へ移す更新だけである。
 この更新は、同じ文で`profile`を`standard`にする。
 承認を省く進め方の実装が、要件の不足か保護パスの変更を報告したとき、作業項目は要件定義の生成へ移り、通常の進め方になるためである。
-要件定義の生成へ移すUPDATEがすべて進め方を戻すことは、保護されたテスト`tests/scripts/profile_gate.test.ts`が固定する。
+移り先を文に直書きする更新は、`profile = 'standard'`を書く。
+移り先を引数で受ける汎用の更新(`updateStatus`、`updateStatusIfCurrent`など)は、移り先が要件定義の生成のときだけ`standard`にする。
+他の移り先では、現在の値のままにする。
+どちらの更新も、保護されたテスト`tests/scripts/profile_gate.test.ts`が`lib/db.ts`の走査で固定する。
 登録の`INSERT`は`profile`を名指しせず、新しい行は、すべて既定の`standard`になる。
 受け付ける進め方は`standard`だけで、入口は他の値を断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
 

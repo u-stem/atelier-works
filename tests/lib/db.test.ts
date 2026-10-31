@@ -1163,7 +1163,7 @@ describe("the status updates that take the target as an argument", () => {
   // どれも、要件定義の生成へ移すときだけ進め方を通常の進め方に戻す。
   // 戻り先は引数で決まり、SQLの字面に状態が現れないので、全体の走査では見つけられない。
   const RESETS_PROFILE =
-    "profile = CASE WHEN ?::text = 'requirements_generating' THEN 'standard' ELSE profile END";
+    "profile = CASE WHEN ? ::text = 'requirements_generating' THEN 'standard' ELSE profile END";
 
   const CALLS: ReadonlyArray<
     readonly [string, (sql: SqlClient) => Promise<unknown>]
@@ -1393,6 +1393,7 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       NO_JOBS,
     );
     expect(calls[0]?.values).toEqual([
+      "requirements_generating",
       "requirements_generating",
       1,
       "pr_open",

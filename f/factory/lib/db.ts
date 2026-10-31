@@ -1109,6 +1109,11 @@ export async function listPrOpenIssueWorkItems(
  * 上書きすることは防がない(独立にキャンセルされた作業項目でpipelineのstepを
  * 再開する場合など)。フローの分岐は先に現在の状態を確かめ直すか、
  * 1回の不可分な比較と交換を行う`updateStatusIfCurrent`を使うこと。
+ *
+ * 移り先を引数で受ける更新(`updateStatusIf*`、`restartStoppedWorkItem`を含む)は、すべて同じ文で、
+ * 移り先が`requirements_generating`のときだけ進め方(`profile`)を`standard`に戻す。
+ * 承認を省く進め方の作業項目が、どの経路で要件定義の生成へ移っても、承認済みの要件定義が出た後に
+ * 承認を省く経路で実装が進まないためである。他の移り先では`profile`を変えない。
  */
 export async function updateStatus(
   id: number,
@@ -1123,7 +1128,9 @@ export async function updateStatus(
     ),
     updated AS (
       UPDATE factory.work_items
-      SET status = ${to}, updated_at = now()
+      SET status = ${to},
+          profile = CASE WHEN ${to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
+          updated_at = now()
       FROM previous
       WHERE factory.work_items.id = ${id}
       RETURNING factory.work_items.id, previous.status AS from_status
@@ -1157,7 +1164,9 @@ export async function updateStatusIfCurrent(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = ${to}, updated_at = now()
+      SET status = ${to},
+          profile = CASE WHEN ${to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
+          updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
       RETURNING id
     )
@@ -1189,7 +1198,9 @@ export async function updateStatusIfCurrentClearingFlowJobId(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = ${to}, flow_job_id = NULL, updated_at = now()
+      SET status = ${to},
+          profile = CASE WHEN ${to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
+          flow_job_id = NULL, updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
       RETURNING id
     )
@@ -1416,6 +1427,7 @@ export async function restartStoppedWorkItem(
     WITH updated AS (
       UPDATE factory.work_items
       SET status = ${params.to},
+          profile = CASE WHEN ${params.to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
           flow_job_id = CASE WHEN ${params.clearFlowJobId}::boolean THEN NULL ELSE flow_job_id END,
           updated_at = now()
       WHERE id = ${params.id}::bigint AND status = ${params.expectedFrom}
@@ -1832,7 +1844,9 @@ export async function updateStatusIfLeaseHolder(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = ${to}, updated_at = now()
+      SET status = ${to},
+          profile = CASE WHEN ${to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
+          updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
         AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
       RETURNING id
@@ -1865,7 +1879,9 @@ export async function updateStatusIfLeaseHolderClearingFlowJobId(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = ${to}, flow_job_id = NULL, updated_at = now()
+      SET status = ${to},
+          profile = CASE WHEN ${to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
+          flow_job_id = NULL, updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
         AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
       RETURNING id
@@ -4403,7 +4419,9 @@ export async function updateStatusIfLatestApproval(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = ${to}, updated_at = now()
+      SET status = ${to},
+          profile = CASE WHEN ${to}::text = 'requirements_generating' THEN 'standard' ELSE profile END,
+          updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
         AND EXISTS (
           SELECT 1 FROM (
