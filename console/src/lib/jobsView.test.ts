@@ -640,38 +640,86 @@ describe("filterConfigItems", () => {
 
 describe("describeDesignStage", () => {
   test("says that an open stage is on", () => {
-    expect(describeDesignStage({ enabled: true, ignored: false }).state).toBe(
-      "有効",
-    );
+    expect(
+      describeDesignStage({
+        enabled: true,
+        ignored: false,
+        indeterminate: false,
+      }).state,
+    ).toBe("有効");
   });
 
   test("says that a closed stage is off", () => {
-    expect(describeDesignStage({ enabled: false, ignored: false }).state).toBe(
-      "無効",
-    );
+    expect(
+      describeDesignStage({
+        enabled: false,
+        ignored: false,
+        indeterminate: false,
+      }).state,
+    ).toBe("無効");
   });
 
   test("says that a stage whose written value is ignored is off", () => {
-    expect(describeDesignStage({ enabled: false, ignored: true }).state).toBe(
-      "無効",
-    );
+    expect(
+      describeDesignStage({
+        enabled: false,
+        ignored: true,
+        indeterminate: false,
+      }).state,
+    ).toBe("無効");
   });
 
   test("has no note for an open stage", () => {
     expect(
-      describeDesignStage({ enabled: true, ignored: false }).note,
+      describeDesignStage({
+        enabled: true,
+        ignored: false,
+        indeterminate: false,
+      }).note,
     ).toBeNull();
   });
 
   test("has no note for a closed stage", () => {
     expect(
-      describeDesignStage({ enabled: false, ignored: false }).note,
+      describeDesignStage({
+        enabled: false,
+        ignored: false,
+        indeterminate: false,
+      }).note,
     ).toBeNull();
   });
 
   test("tells that the written value is ignored for lack of design_enabled_since", () => {
-    expect(describeDesignStage({ enabled: false, ignored: true }).note).toBe(
+    expect(
+      describeDesignStage({
+        enabled: false,
+        ignored: true,
+        indeterminate: false,
+      }).note,
+    ).toBe(
       "design_enabledにtrueが書かれていますが、design_enabled_sinceが無いか日時として読めないため、無視しています。",
+    );
+  });
+
+  test("says that a stage held by a reference cannot be told", () => {
+    expect(
+      describeDesignStage({
+        enabled: false,
+        ignored: false,
+        indeterminate: true,
+      }).state,
+    ).toBe("判定できない");
+  });
+
+  test("tells that the value is held by a reference", () => {
+    expect(
+      describeDesignStage({
+        enabled: false,
+        ignored: false,
+        indeterminate: true,
+      }).note,
+    ).toBe(
+      "design_enabledかdesign_enabled_sinceが参照で書かれているため、効いている値をここでは判定できません。設定を読む処理は、参照を解決した値で判定します。",
     );
   });
 });

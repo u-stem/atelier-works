@@ -153,7 +153,7 @@ describe("ConfigSection", () => {
   test("shows the design stage that is in effect", () => {
     const query = freshQuery({
       ...SNAPSHOT,
-      design_stage: { enabled: true, ignored: false },
+      design_stage: { enabled: true, ignored: false, indeterminate: false },
     });
     expect(renderSection(query)).toMatch(
       /設計工程: <\/span><span[^>]*>有効<\/span>/,
@@ -163,7 +163,7 @@ describe("ConfigSection", () => {
   test("shows a closed design stage as off", () => {
     const query = freshQuery({
       ...SNAPSHOT,
-      design_stage: { enabled: false, ignored: false },
+      design_stage: { enabled: false, ignored: false, indeterminate: false },
     });
     expect(renderSection(query)).toMatch(
       /設計工程: <\/span><span[^>]*>無効<\/span>/,
@@ -173,7 +173,7 @@ describe("ConfigSection", () => {
   test("tells that the written value is ignored", () => {
     const query = freshQuery({
       ...SNAPSHOT,
-      design_stage: { enabled: false, ignored: true },
+      design_stage: { enabled: false, ignored: true, indeterminate: false },
     });
     expect(renderSection(query)).toContain(
       "design_enabled_sinceが無いか日時として読めないため、無視しています。",
@@ -183,9 +183,39 @@ describe("ConfigSection", () => {
   test("does not tell that a value is ignored when it is not", () => {
     const query = freshQuery({
       ...SNAPSHOT,
-      design_stage: { enabled: true, ignored: false },
+      design_stage: { enabled: true, ignored: false, indeterminate: false },
     });
     expect(renderSection(query)).not.toContain("無視しています");
+  });
+
+  test("shows that the design stage cannot be told when a reference holds it", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: false, ignored: false, indeterminate: true },
+    });
+    expect(renderSection(query)).toMatch(
+      /設計工程: <\/span><span[^>]*>判定できない<\/span>/,
+    );
+  });
+
+  test("tells why the design stage cannot be told", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: false, ignored: false, indeterminate: true },
+    });
+    expect(renderSection(query)).toContain(
+      "参照で書かれているため、効いている値をここでは判定できません。",
+    );
+  });
+
+  test("does not call an indeterminate design stage off", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: false, ignored: false, indeterminate: true },
+    });
+    expect(renderSection(query)).not.toMatch(
+      /設計工程: <\/span><span[^>]*>無効<\/span>/,
+    );
   });
 
   test("shows no design stage when the backend does not send it", () => {

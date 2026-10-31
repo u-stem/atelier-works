@@ -92,57 +92,161 @@ describe("loadConfigView design_stage", () => {
 
   test("reports a stage that is not requested as closed and not ignored", async () => {
     const view = await loadConfigView(portsOf({ max_attempts: 3 }));
-    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: false,
+    });
   });
 
   test("reports a requested stage with a since as open", async () => {
     const view = await loadConfigView(
       portsOf({ design_enabled: true, design_enabled_since: SINCE }),
     );
-    expect(view.design_stage).toEqual({ enabled: true, ignored: false });
+    expect(view.design_stage).toEqual({
+      enabled: true,
+      ignored: false,
+      indeterminate: false,
+    });
   });
 
   test("reports a requested stage without a since as closed and ignored", async () => {
     const view = await loadConfigView(portsOf({ design_enabled: true }));
-    expect(view.design_stage).toEqual({ enabled: false, ignored: true });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: true,
+      indeterminate: false,
+    });
   });
 
   test("reports a requested stage with a null since as closed and ignored", async () => {
     const view = await loadConfigView(
       portsOf({ design_enabled: true, design_enabled_since: null }),
     );
-    expect(view.design_stage).toEqual({ enabled: false, ignored: true });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: true,
+      indeterminate: false,
+    });
   });
 
   test("reports a requested stage with an unreadable since as closed and ignored", async () => {
     const view = await loadConfigView(
       portsOf({ design_enabled: true, design_enabled_since: "2026-11-01" }),
     );
-    expect(view.design_stage).toEqual({ enabled: false, ignored: true });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: true,
+      indeterminate: false,
+    });
   });
 
   test("reports a since without the request as closed and not ignored", async () => {
     const view = await loadConfigView(
       portsOf({ design_enabled: false, design_enabled_since: SINCE }),
     );
-    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: false,
+    });
   });
 
   test("reports a request that is not a boolean as not requested", async () => {
     const view = await loadConfigView(
       portsOf({ design_enabled: "true", design_enabled_since: SINCE }),
     );
-    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: false,
+    });
   });
 
-  test("reports a request that holds a reference as not requested", async () => {
+  test("reports a request that holds a variable reference as indeterminate", async () => {
     const view = await loadConfigView(
       portsOf({
         design_enabled: "$var:f/factory/x",
         design_enabled_since: SINCE,
       }),
     );
-    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: true,
+    });
+  });
+
+  test("reports a request that holds a resource reference as indeterminate", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: "$res:f/factory/x" }),
+    );
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: true,
+    });
+  });
+
+  test("reports a since that holds a reference as indeterminate", async () => {
+    const view = await loadConfigView(
+      portsOf({
+        design_enabled: true,
+        design_enabled_since: "$var:f/factory/since",
+      }),
+    );
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: true,
+    });
+  });
+
+  test("reports a since that holds a reference as indeterminate even when the request is false", async () => {
+    const view = await loadConfigView(
+      portsOf({
+        design_enabled: false,
+        design_enabled_since: "$var:f/factory/since",
+      }),
+    );
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: true,
+    });
+  });
+
+  test("reports a reference inside a nested value as indeterminate", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: { value: "$var:f/factory/x" } }),
+    );
+    expect(view.design_stage).toEqual({
+      enabled: false,
+      ignored: false,
+      indeterminate: true,
+    });
+  });
+
+  test("does not report a reference in an unrelated item as indeterminate", async () => {
+    const view = await loadConfigView(
+      portsOf({
+        hook: "$var:f/factory/x",
+        design_enabled: true,
+        design_enabled_since: SINCE,
+      }),
+    );
+    expect(view.design_stage).toEqual({
+      enabled: true,
+      ignored: false,
+      indeterminate: false,
+    });
+  });
+
+  test("does not put the referenced path into the design stage", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: "$var:f/factory/secret_path" }),
+    );
+    expect(JSON.stringify(view.design_stage)).not.toContain("secret_path");
   });
 
   test("keeps the items as the resource has them", async () => {

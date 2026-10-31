@@ -365,7 +365,7 @@ describe("isConfigSnapshot", () => {
     expect(
       isConfigSnapshot({
         ...CONFIG,
-        design_stage: { enabled: true, ignored: false },
+        design_stage: { enabled: true, ignored: false, indeterminate: false },
       }),
     ).toBe(true);
   });
@@ -382,13 +382,46 @@ describe("isConfigSnapshot", () => {
 
   test("rejects a design stage without the enabled flag", () => {
     expect(
-      isConfigSnapshot({ ...CONFIG, design_stage: { ignored: false } }),
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { ignored: false, indeterminate: false },
+      }),
     ).toBe(false);
   });
 
   test("rejects a design stage without the ignored flag", () => {
     expect(
-      isConfigSnapshot({ ...CONFIG, design_stage: { enabled: false } }),
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { enabled: false, indeterminate: false },
+      }),
+    ).toBe(false);
+  });
+
+  test("accepts a snapshot whose design stage is indeterminate", () => {
+    expect(
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { enabled: false, ignored: false, indeterminate: true },
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a design stage without the indeterminate flag", () => {
+    expect(
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { enabled: false, ignored: false },
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a design stage whose indeterminate flag is not a boolean", () => {
+    expect(
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { enabled: false, ignored: false, indeterminate: "yes" },
+      }),
     ).toBe(false);
   });
 
@@ -396,7 +429,7 @@ describe("isConfigSnapshot", () => {
     expect(
       isConfigSnapshot({
         ...CONFIG,
-        design_stage: { enabled: "yes", ignored: false },
+        design_stage: { enabled: "yes", ignored: false, indeterminate: false },
       }),
     ).toBe(false);
   });
