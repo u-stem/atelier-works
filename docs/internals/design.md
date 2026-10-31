@@ -79,8 +79,9 @@ Consoleの設定タブは、`console_config`の返り値の`design_stage`で、�
 門の関数を、設定を読む処理と同じ入力で呼んで決める。
 ただし、`design_enabled`か`design_enabled_since`が参照を含むときは、設定を読む処理が解決した値を、設定タブは知らない。
 そのときは効いている値を断定せず、`indeterminate`を立てて、設定タブは「判定できない」と出す。
-参照が文字列やオブジェクトに解決されて真偽値でなくなると、設定を読む処理は例外で止まる場合がある。
-主な対象は`design_enabled_since`の参照である。
+`design_enabled`の参照が、文字列やオブジェクトなど真偽値でない値に解決されると、設定を読む処理は例外で止まる。
+`design_enabled_since`の参照が、日時として読めない値に解決されても、例外にならない。
+その場合は、設計工程が閉じたまま、`design_enabled_ignored`の通知が出る。
 運用の手順は[運用](../operations.md)の「設計工程を有効にする」にある。
 
 `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、例外にする。
