@@ -628,7 +628,7 @@ backendの型との一致は、`tests/scripts/console_jobs_contract.test.ts`が�
 | `console_jobs`の`history` | `status`、`script_path`、`before`、`include_console`、`limit` | 完了したジョブを、新しい順に1ページ(50件まで)。フローのステップは含めない。次のページのカーソルを`next_before`で返す。累積が200件に達したら、カーソルは`null`になる |
 | `console_jobs`の`detail` | `job_id`、`include_output` | ジョブ1件。許可した項目、引数、フローのステップの一覧(条件で飛ばしたステップは`skipped`が真)、ログ、結果、結果を読めなかった理由、失敗の保存済みの原因 |
 | `console_schedules` | なし | `f/factory/`のscheduleの状態。有効/無効、一時停止の期限、cron、次回の予定、直近5件の実行(新しい順)、リポジトリの定義との差異。全ページを読む(最大10ページ)。ページの上限かキューの1ページに達したときは、`truncated`を真にする |
-| `console_config` | なし | `factory_config`の全項目。参照を含む値は、値の代わりに参照の印。加えて、設計工程の効いている値`design_stage`(`enabled`と`ignored`) |
+| `console_config` | なし | `factory_config`の全項目。参照を含む値は、値の代わりに参照の印。加えて、設計工程の効いている値`design_stage`(`enabled`、`ignored`、`indeterminate`) |
 
 一覧は、既定でtag`console`のジョブ(Consoleの呼び出し自身)を除く。
 Windmillの一覧のAPIが、tagの否定(`!console`)を受けるためである。
@@ -2530,6 +2530,9 @@ Consoleから解決できる種類の行は、「詳細と解決」と書く。�
 一覧の値は書かれたままなので、設計工程が実際に動くかは、この行で確かめる。
 `console_config`が返す`design_stage`は、設定を読む処理と同じ門(`lib/design_gate.ts`)で決めた値である。
 有効か無効かを出し、書かれた値が無視されているとき(`design_enabled`が`true`で、`design_enabled_since`が無いか日時として読めない)は、その理由を添える。
+`console_config`は補間しない生の値を読む。
+`design_enabled`か`design_enabled_since`が参照(`$var:`か`$res:`)を含むときは、設定を読む処理が解決した値を知らない。
+そのときは`indeterminate`を立て、行は効いている値を断定せず「判定できない」と出す。
 古いbackendは`design_stage`を返さないので、無いときは行を出さない。
 
 #### 設定の変更

@@ -111,7 +111,7 @@ export function ConfigList({
 
 /**
  * 設計工程の、効いている値。一覧の値は書かれたままなので、実際に動くかはここで確かめる。
- * 書かれた値が無視されているときは、その理由を添える。
+ * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を添える。
  */
 function DesignStageStatus({ stage }: { stage: DesignStageView }) {
   const text = describeDesignStage(stage);

@@ -6,6 +6,7 @@
 // 値は`lib/console_redact.ts`で伏せてから返す。
 // 設計工程だけは、書かれた値に加えて、効いている値も返す(`design_stage`)。
 // 効いている値は、設定を読む全てのscriptと同じ門(`lib/design_gate.ts`)で決める。
+// ただし、門の入力が参照のときは、参照を解決した値を読めないので、効いている値を断定しない。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { holdsReference, isRecord, redactValue } from "./lib/console_redact.ts";
@@ -23,11 +24,19 @@ export type ConfigItem =
     }
   | { readonly key: string; readonly kind: "reference" };
 
+/** 設計工程の、効いている値と、書かれた値が無視されているか。 */
+export type DesignStage = DesignGate & {
+  /**
+   * 門の入力が参照で、効いている値を判定できないか。
+   * 真のとき、`enabled`と`ignored`は意味を持たず、どちらも偽にする。
+   */
+  readonly indeterminate: boolean;
+};
+
 export type ConfigSnapshot = {
   readonly path: string;
   readonly items: readonly ConfigItem[];
-  /** 設計工程の、効いている値と、書かれた値が無視されているか。 */
-  readonly design_stage: DesignGate;
+  readonly design_stage: DesignStage;
 };
 
 export type ConfigPorts = {
@@ -37,14 +46,21 @@ export type ConfigPorts = {
 
 /**
  * 設計工程が効いているかを、生の値から決める。
- * 真と書かれていない値(参照、文字列、数値、無い値)は、要求なしとして扱う。
+ * `design_enabled`か`design_enabled_since`が参照を含むときは、設定を読む側が解決した値で門を決めるので、
+ * 生の値からは効いている値を判定できない。そのときは`indeterminate`を立てる。
+ * 参照を含まないとき、真と書かれていない値(文字列、数値、無い値)は、要求なしとして扱う。
  * 設定を読む側は真偽値でない値を検証エラーにするが、ここは画面を出すために例外にしない。
  */
-function designStageOf(raw: Record<string, unknown>): DesignGate {
-  return resolveDesignGate(
-    raw.design_enabled === true,
-    raw.design_enabled_since,
-  );
+function designStageOf(raw: Record<string, unknown>): DesignStage {
+  const requested = raw.design_enabled;
+  const since = raw.design_enabled_since;
+  if (holdsReference(requested) || holdsReference(since)) {
+    return { enabled: false, ignored: false, indeterminate: true };
+  }
+  return {
+    ...resolveDesignGate(requested === true, since),
+    indeterminate: false,
+  };
 }
 
 /**

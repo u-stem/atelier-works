@@ -151,10 +151,14 @@ export type ConfigItemView =
     }
   | { readonly key: string; readonly kind: "reference" };
 
-/** 設計工程の、効いている値と、書かれた値が無視されているか。 */
+/**
+ * 設計工程の、効いている値と、書かれた値が無視されているか。
+ * `indeterminate`が真のとき、設定が参照で書かれているため、効いている値は判定できない。
+ */
 export type DesignStageView = {
   readonly enabled: boolean;
   readonly ignored: boolean;
+  readonly indeterminate: boolean;
 };
 
 export type ConfigSnapshotView = {
@@ -315,7 +319,10 @@ const isConfigItem: Guard<ConfigItemView> = (
 const isDesignStage: Guard<DesignStageView> = (
   value: unknown,
 ): value is DesignStageView =>
-  isRecord(value) && isBoolean(value.enabled) && isBoolean(value.ignored);
+  isRecord(value) &&
+  isBoolean(value.enabled) &&
+  isBoolean(value.ignored) &&
+  isBoolean(value.indeterminate);
 
 /**
  * `value`がconsole_configの戻りの形か。

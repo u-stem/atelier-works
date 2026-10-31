@@ -389,9 +389,16 @@ export type DesignStageText = {
 
 /**
  * 設計工程の、効いている値の表示。有効か無効かを言葉にし、書かれた値が無視されているときは、そのことと理由を添える。
+ * 設定が参照で書かれているときは、有効とも無効とも言わず、判定できないことと理由を出す。
  * 設定タブが、開けた直後に実際に効いているかを確かめる唯一の場所である。
  */
 export function describeDesignStage(stage: DesignStageView): DesignStageText {
+  if (stage.indeterminate) {
+    return {
+      state: "判定できない",
+      note: "design_enabledかdesign_enabled_sinceが参照で書かれているため、効いている値をここでは判定できません。設定を読む処理は、参照を解決した値で判定します。",
+    };
+  }
   return {
     state: stage.enabled ? "有効" : "無効",
     note: stage.ignored
