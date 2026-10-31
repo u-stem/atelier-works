@@ -101,7 +101,7 @@ locks:
   f/factory/lib/github_errors: c1c63662dbdc331149e492cfd841f14f93f898a99bde2605b753b0db2127f8b4
   f/factory/lib/holds: 2377c9840d17e626331e3450f97978bfa8fafa583d01b243a9073169aaad728c
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
-  f/factory/lib/implement_finish_support: 11776270bb243a39206a44e2a54f5f5eb2f2f8a1bcc7da5c0b4c1c767b15929c
+  f/factory/lib/implement_finish_support: 9b64db28ea394b48643c2c362f946b55bb5ac9c18822490a419dbaa142ecedb0
   f/factory/lib/implement_launch_support: 7be386046ce792cfe2a9959285a931351d0b3592d565ce23b6e4195880ae6cf4
   f/factory/lib/implement_loop: b8ecad76c7036225b5dce3f7c87f601a884c909d6923ea0d39292c7b2d9c48e0
   f/factory/lib/implement_support: ac9f435958239ad503dc1178a441d2b5033e676d0a1bc455e5b068467f43a426

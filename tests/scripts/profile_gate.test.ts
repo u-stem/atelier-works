@@ -361,3 +361,20 @@ describe("the implement preparation", () => {
     ).toBe(true);
   });
 });
+
+describe("the implement finish", () => {
+  test("decides the protected path reroute before it opens the pull request", () => {
+    const code = codeOf("steps/implement_finish.ts");
+    const decided = code.indexOf("decideProtectedPathReroute(");
+    const opened = code.indexOf("const openPullRequest");
+    expect(decided >= 0 && opened > decided).toBe(true);
+  });
+
+  test("sends the protected path reroute down the branch of the requirements gap", () => {
+    expect(
+      /action\.kind === "requirements_gap" \|\| protectedReroute !== null/.test(
+        codeOf("steps/implement_finish.ts"),
+      ),
+    ).toBe(true);
+  });
+});

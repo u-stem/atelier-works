@@ -36,3 +36,26 @@ describe("the requirements gap reroute in pr_fix_finish", () => {
     expect(await source()).not.toMatch(/feedback: gapReport\b/);
   });
 });
+
+describe("the comment of the switch in pr_fix_finish", () => {
+  test("hands the profile of the parent read before the switch", async () => {
+    expect(await source()).toContain("previousProfile: parentItem.profile,");
+  });
+
+  test("names the requirements gap as the cause", async () => {
+    expect(await source()).toContain('cause: "requirements_gap",');
+  });
+
+  test("comments after the reroute succeeded", async () => {
+    const text = await source();
+    const refused = text.indexOf('if (outcome.kind === "refused") {');
+    const commented = text.indexOf("postProfileUpgradedComment(");
+    expect(refused >= 0 && commented > refused).toBe(true);
+  });
+
+  test("posts the comment with the marker of the parent", async () => {
+    expect(await source()).toMatch(
+      /commentIssue\(\s*client,\s*owner,\s*repo,\s*rerouteGuard\.issueNumber,\s*kind,\s*parent_work_item_id,\s*body,\s*viewer\.login,/,
+    );
+  });
+});

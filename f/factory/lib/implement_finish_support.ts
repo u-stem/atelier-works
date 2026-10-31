@@ -16,11 +16,14 @@ import {
   type ImplementLoopResult,
   type ImplementPrepareOutcome,
 } from "./implement_loop.ts";
-import type { ImplementCheckSummary } from "./implement_support.ts";
+import type {
+  ImplementCheckSummary,
+  ImplementPrBodySpec,
+} from "./implement_support.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import { limitGapReport } from "./model_text.ts";
 import { WorktreeBusyError } from "./process_lock.ts";
-import { automatedFeedback } from "./prompts.ts";
+import { automatedFeedback, type ImplementSpecKind } from "./prompts.ts";
 import {
   type CommitAndPushResult,
   CommitBlockedError,
@@ -575,4 +578,63 @@ export function buildPrOpenedEvent(
     next_action: prOpenedNextAction(input.loop.protected_changes.length > 0),
     created: input.created,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 仕様がIssueの実装(承認を省く進め方)の完了処理
+// ---------------------------------------------------------------------------
+
+export const PROTECTED_PATH_GAP_PREFIX = "";
+export const PROTECTED_WORK_NOT_PUSHED_REASON = "";
+export const PROFILE_UPGRADED_COMMENT_KIND = "";
+
+export type ProfileUpgradeCause = "requirements_gap" | "protected_paths";
+
+export function prBodySpecFor(_context: {
+  readonly spec_kind?: ImplementSpecKind;
+  readonly profile?: string;
+  readonly requirements_markdown: string | null;
+  readonly requirements_console_url: string | null;
+}): ImplementPrBodySpec {
+  return { kind: "issue", profile: "" };
+}
+
+export function decideProtectedPathReroute(_input: {
+  readonly specKind: ImplementSpecKind;
+  readonly protectedChanges: readonly string[];
+}): { readonly gapReport: string } | null {
+  return null;
+}
+
+export function shouldWithholdPartialPush(_input: {
+  readonly specKind: ImplementSpecKind;
+  readonly protectedChanges: readonly string[];
+}): boolean {
+  return false;
+}
+
+export function shouldCommentProfileUpgrade(_previousProfile: string): boolean {
+  return false;
+}
+
+export function buildProfileUpgradedComment(_input: {
+  readonly workItemId: number;
+  readonly previousProfile: string;
+  readonly cause: ProfileUpgradeCause;
+}): string {
+  return "";
+}
+
+export async function postProfileUpgradedComment(
+  _input: {
+    readonly previousProfile: string;
+    readonly workItemId: number;
+    readonly cause: ProfileUpgradeCause;
+  },
+  _deps: {
+    readonly comment: (kind: string, body: string) => Promise<void>;
+    readonly warn: (message: string) => void;
+  },
+): Promise<"posted" | "skipped" | "failed"> {
+  return "skipped";
 }
