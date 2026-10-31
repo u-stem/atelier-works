@@ -1310,9 +1310,11 @@ Windmillの画面か、`wmill resource push`で書く。
 2. 変更が反映されている。
    Consoleのシステムの画面の更新履歴で、最新のデプロイが成功していることを確かめる。
    設定タブに**設計工程**の行が出て、「無効」と読めればよい。
-   リソース型(ルートの`c_factory_config.resource-type.yaml`)は、自己更新の`wmill sync push`で反映される。
-   `wmill sync push --dry-run`が、このファイルを反映の対象に数えるためである。
-   そのため、`mise run push`を手で実行しない。
+   リソース型(ルートの`c_factory_config.resource-type.yaml`)は、自己更新の`wmill sync push`が反映する見込みである。
+   `wmill sync push --dry-run`が、このファイルを反映の対象に数えるためである。実際の反映は実機で確かめていない。
+   `wmill resource-type get c_factory_config --json`の出力に`design_enabled_since`があることを確かめる。
+   無いときは、有効にせず、反映を待つか原因を調べる。
+   `mise run push`を手で実行しない。
 3. 有効にする時点で止まっている作業項目が無い。
    次のコマンドで数える。
 
