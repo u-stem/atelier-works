@@ -652,7 +652,7 @@ describe("the statements of the intake key table", () => {
     const { sql, calls } = recordingSql([{ intake_key: INTAKE_ID }]);
     await sqlIntakeKeyStore(sql).takeOver(INTAKE_ID, ME);
     expect(calls[0]?.text).toMatch(
-      /UPDATE factory\.manual_intake_keys[\s\S]*SET holder = \?, reserved_at = now\(\)[\s\S]*WHERE intake_key = \?[\s\S]*AND issue_number IS NULL[\s\S]*AND reserved_at < now\(\) - interval '10 minutes'[\s\S]*RETURNING/,
+      /UPDATE factory\.manual_intake_keys[\s\S]*SET holder =\s+\?\s+, reserved_at = now\(\)[\s\S]*WHERE intake_key =\s+\?[\s\S]*AND issue_number IS NULL[\s\S]*AND reserved_at < now\(\) - interval '10 minutes'[\s\S]*RETURNING/,
     );
   });
 
@@ -671,7 +671,7 @@ describe("the statements of the intake key table", () => {
     const { sql, calls } = recordingSql([{ intake_key: INTAKE_ID }]);
     await sqlIntakeKeyStore(sql).recordIssue(INTAKE_ID, ME, 41);
     expect(calls[0]?.text).toMatch(
-      /UPDATE factory\.manual_intake_keys[\s\S]*SET issue_number = \?::integer[\s\S]*WHERE intake_key = \?[\s\S]*AND holder = \?[\s\S]*RETURNING/,
+      /UPDATE factory\.manual_intake_keys[\s\S]*SET issue_number =\s+\?\s+::integer[\s\S]*WHERE intake_key =\s+\?[\s\S]*AND holder =\s+\?[\s\S]*RETURNING/,
     );
   });
 
@@ -692,7 +692,7 @@ describe("the statements of the intake key table", () => {
     const { sql, calls } = recordingSql([]);
     await sqlIntakeKeyStore(sql).read(INTAKE_ID);
     expect(calls[0]?.text).toMatch(
-      /FROM factory\.manual_intake_keys\s+WHERE intake_key = \?/,
+      /FROM factory\.manual_intake_keys\s+WHERE intake_key =\s+\?/,
     );
   });
 
