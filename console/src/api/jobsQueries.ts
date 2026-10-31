@@ -151,9 +151,21 @@ export type ConfigItemView =
     }
   | { readonly key: string; readonly kind: "reference" };
 
+/**
+ * 設計工程の、効いている値と、書かれた値が無視されているか。
+ * `indeterminate`が真のとき、設定が参照で書かれているため、効いている値は判定できない。
+ */
+export type DesignStageView = {
+  readonly enabled: boolean;
+  readonly ignored: boolean;
+  readonly indeterminate: boolean;
+};
+
 export type ConfigSnapshotView = {
   readonly path: string;
   readonly items: readonly ConfigItemView[];
+  /** 古いbackendは返さない。 */
+  readonly design_stage?: DesignStageView;
 };
 
 // stateやdefinitionは表示にしか使わないので文字列で受け、日本語への変換で知らない値を受け止める。
@@ -304,12 +316,24 @@ const isConfigItem: Guard<ConfigItemView> = (
   return value.kind === "value" && "value" in value && isBoolean(value.masked);
 };
 
-/** `value`がconsole_configの戻りの形か。 */
+const isDesignStage: Guard<DesignStageView> = (
+  value: unknown,
+): value is DesignStageView =>
+  isRecord(value) &&
+  isBoolean(value.enabled) &&
+  isBoolean(value.ignored) &&
+  isBoolean(value.indeterminate);
+
+/**
+ * `value`がconsole_configの戻りの形か。
+ * `design_stage`は、反映の順序でbackendが先に新しくなるまで無いので、無くても受ける。あれば形を確かめる。
+ */
 export function isConfigSnapshot(value: unknown): value is ConfigSnapshotView {
   return (
     isRecord(value) &&
     isString(value.path) &&
-    isArrayOf(isConfigItem)(value.items)
+    isArrayOf(isConfigItem)(value.items) &&
+    (value.design_stage === undefined || isDesignStage(value.design_stage))
   );
 }
 

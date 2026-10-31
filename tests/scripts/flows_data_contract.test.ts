@@ -24,7 +24,6 @@ import {
   APPROVAL_OUTCOMES,
   APPROVAL_STEPS,
   LAUNCH_EDGES,
-  type LaunchEdge,
   REWORK_LAUNCH_EDGES,
   SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
@@ -79,9 +78,6 @@ function flowOf(data: FlowsData, name: string): FlowDefinition {
 }
 
 const data = load();
-const unwiredEdgeCases: [string, LaunchEdge][] = UNWIRED_LAUNCH_EDGES.map(
-  (edge) => [`${edge.from} -> ${edge.to}`, edge],
-);
 const relative = (path: string): string =>
   path.startsWith(FACTORY_PREFIX) ? path.slice(FACTORY_PREFIX.length) : path;
 
@@ -155,41 +151,34 @@ describe("the exits and the launch edges", () => {
     return relative(step?.scriptPath ?? "");
   }
 
-  function isUnwired(edge: (typeof LAUNCH_EDGES)[number]): boolean {
-    return UNWIRED_LAUNCH_EDGES.some(
-      (other) => other.from === edge.from && other.to === edge.to,
-    );
-  }
-
-  test("every launch edge from a step script is drawn as an exit or listed as unwired", () => {
+  test("every launch edge from a step script is drawn as an exit", () => {
     const missing = LAUNCH_EDGES.filter(
       (edge) => edge.kind === "script" && edge.from.startsWith("steps/"),
-    )
-      .filter((edge) => !isUnwired(edge))
-      .filter(
-        (edge) =>
-          !data.flows.some((flow) =>
-            flow.exits.some((exit) => {
-              const script = stepScript(flow, exit.step);
-              const handler = APPROVAL_STEPS[script];
-              return (
-                exit.flow === edge.to &&
-                (script === edge.from ||
-                  (handler !== undefined && handlerOf(handler) === edge.from))
-              );
-            }),
-          ),
-      );
+    ).filter(
+      (edge) =>
+        !data.flows.some((flow) =>
+          flow.exits.some((exit) => {
+            const script = stepScript(flow, exit.step);
+            const handler = APPROVAL_STEPS[script];
+            return (
+              exit.flow === edge.to &&
+              (script === edge.from ||
+                (handler !== undefined && handlerOf(handler) === edge.from))
+            );
+          }),
+        ),
+    );
 
     expect(missing).toEqual([]);
   });
 
-  test("pipeline approval exits: approve→implement / reject→pipeline", () => {
+  test("pipeline approval exits: approve→design / approve→implement / reject→pipeline", () => {
     expect(
       flowOf(data, "pipeline").exits.filter(
         (exit) => exit.step === "request_approval",
       ),
     ).toEqual([
+      { flow: "design", step: "request_approval", via: "approve" },
       { flow: "implement", step: "request_approval", via: "approve" },
       { flow: "pipeline", step: "request_approval", via: "reject" },
     ]);
@@ -199,69 +188,51 @@ describe("the exits and the launch edges", () => {
     expect(handlerOf("design")).toBe("steps/design_apply");
   });
 
-  test("design draws no exit on its approval step", () => {
+  test("design approval exits: approve→implement / reject→design / reject→pipeline", () => {
     expect(
       flowOf(data, "design").exits.filter(
         (exit) => exit.step === "request_approval",
       ),
-    ).toEqual([]);
+    ).toEqual([
+      { flow: "implement", step: "request_approval", via: "approve" },
+      { flow: "design", step: "request_approval", via: "reject" },
+      { flow: "pipeline", step: "request_approval", via: "reject" },
+    ]);
   });
 
-  test.each(unwiredEdgeCases)(
-    "the unwired launch edge %s is not drawn",
-    (_label, edge) => {
-      const approvalScripts = Object.keys(APPROVAL_STEPS).filter(
-        (script) => handlerOf(APPROVAL_STEPS[script] ?? "") === edge.from,
-      );
-      const origins = data.flows.filter((flow) =>
-        flow.steps.some((step) =>
-          approvalScripts.includes(relative(step.scriptPath)),
-        ),
-      );
-      const outcomes = (APPROVAL_OUTCOMES[edge.from] ?? [])
-        .filter((outcome) => outcome.to === edge.to)
-        .map((outcome) => outcome.outcome);
-      const drawn = [
-        ...origins.flatMap((origin) =>
-          origin.exits.filter(
-            (exit) =>
-              exit.flow === edge.to &&
-              origin.steps.some(
-                (step) =>
-                  step.id === exit.step &&
-                  approvalScripts.includes(relative(step.scriptPath)),
-              ),
-          ),
-        ),
-        ...flowOf(data, edge.to).entries.filter(
-          (entry) =>
-            entry.kind === "flow" &&
-            origins.some((origin) => origin.name === entry.flow) &&
-            outcomes.some((outcome) => outcome === entry.via),
-        ),
-      ];
+  test("no launch edge is left out of the diagrams as unwired", () => {
+    expect(UNWIRED_LAUNCH_EDGES).toEqual([]);
+  });
 
-      expect(drawn).toEqual([]);
-    },
-  );
-
-  test("every unwired edge is an edge of the launch table", () => {
+  test("no flow keeps an entry that does not start it yet", () => {
     expect(
-      UNWIRED_LAUNCH_EDGES.filter(
-        (edge) =>
-          !LAUNCH_EDGES.some(
-            (other) => other.from === edge.from && other.to === edge.to,
-          ),
-      ),
+      data.flows.flatMap((flow) => flow.unwiredEntries.map(() => flow.name)),
     ).toEqual([]);
   });
 
   test.each([true, false])(
-    "buildApprovedBranchDeps passes startDesign null with implement_enabled %p, so the design edge stays unwired",
+    "buildApprovedBranchDeps passes startDesign null with design_enabled false and implement_enabled %p",
     (implementEnabled) => {
-      expect(depsFor(implementEnabled).startDesign).toBeNull();
+      expect(depsFor(implementEnabled, false).startDesign).toBeNull();
     },
   );
+
+  test.each([true, false])(
+    "buildApprovedBranchDeps wires startDesign with design_enabled true and implement_enabled %p, inside the design_enabled check only",
+    (implementEnabled) => {
+      expect(typeof depsFor(implementEnabled, true).startDesign).toBe(
+        "function",
+      );
+    },
+  );
+
+  test("requirements_apply wires startDesign only inside the design_enabled check", () => {
+    expect(
+      readFileSync(join(FACTORY_DIR, "steps/requirements_apply.ts"), "utf8"),
+    ).toMatch(
+      /startDesign:\s*config\.design_enabled\s*\?\s*buildStartDesign\(/,
+    );
+  });
 
   test.each([
     [true, false],
@@ -269,7 +240,7 @@ describe("the exits and the launch edges", () => {
   ])(
     "buildApprovedBranchDeps with implement_enabled %p starts implement only when it is on (null is %p)",
     (implementEnabled, startsNothing) => {
-      expect(depsFor(implementEnabled).startImplement === null).toBe(
+      expect(depsFor(implementEnabled, false).startImplement === null).toBe(
         startsNothing,
       );
     },
@@ -378,8 +349,8 @@ describe("the schedules in the data", () => {
   });
 });
 
-/** 承認の分岐の依存を、implement_enabledを変えて組み立てる。組み立てるだけで、外には触れない。 */
-function depsFor(implementEnabled: boolean) {
+/** 承認の分岐の依存を、implement_enabledとdesign_enabledを変えて組み立てる。組み立てるだけで、外には触れない。 */
+function depsFor(implementEnabled: boolean, designEnabled: boolean) {
   const item: WorkItem = {
     id: 7,
     cycle: 1,
@@ -433,7 +404,7 @@ function depsFor(implementEnabled: boolean) {
   return buildApprovedBranchDeps(
     {
       implement_enabled: implementEnabled,
-      design_enabled: false,
+      design_enabled: designEnabled,
       windmill_public_url: "http://127.0.0.1:8080",
       instance_name: "local",
     },
@@ -528,29 +499,6 @@ describe("the rework exits", () => {
     );
 
     expect([...flows].sort()).toEqual([...entries].sort());
-  });
-});
-
-describe("the entries that are not drawn yet", () => {
-  test("design records the rejection of design, the returns from implement and pr_fix, and the approval of pipeline as entries that do not start it yet", () => {
-    expect(flowOf(data, "design").unwiredEntries).toEqual([
-      { kind: "flow", flow: "design", via: "reject" },
-      { kind: "flow", flow: "implement", via: "launch" },
-      { kind: "flow", flow: "pipeline", via: "approve" },
-      { kind: "flow", flow: "pr_fix", via: "launch" },
-    ]);
-  });
-
-  test("implement records the approval of design as an entry that does not start it yet", () => {
-    expect(flowOf(data, "implement").unwiredEntries).toEqual([
-      { kind: "flow", flow: "design", via: "approve" },
-    ]);
-  });
-
-  test("pipeline records the rejection of design as an entry that does not start it yet", () => {
-    expect(flowOf(data, "pipeline").unwiredEntries).toEqual([
-      { kind: "flow", flow: "design", via: "reject" },
-    ]);
   });
 });
 

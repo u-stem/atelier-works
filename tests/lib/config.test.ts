@@ -1319,7 +1319,7 @@ describe("design_enabled", () => {
     expect(config.design_enabled_ignored).toBe(false);
   });
 
-  test("reads true as false while the design stage cannot be opened", () => {
+  test("reads true without design_enabled_since as false", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
       design_enabled: true,
@@ -1327,7 +1327,7 @@ describe("design_enabled", () => {
     expect(config.design_enabled).toBe(false);
   });
 
-  test("flags a true setting as ignored", () => {
+  test("flags a true setting without design_enabled_since as ignored", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
       design_enabled: true,
@@ -1335,10 +1335,97 @@ describe("design_enabled", () => {
     expect(config.design_enabled_ignored).toBe(true);
   });
 
-  test("does not throw for a true setting", () => {
+  test("does not throw for a true setting without design_enabled_since", () => {
     const raw = { ...LEGACY_RAW_CONFIG, design_enabled: true };
     expect(() => parseFactoryConfig(raw)).not.toThrow();
   });
+
+  test("reads true with design_enabled_since as true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+      design_enabled_since: "2026-11-01T00:00:00Z",
+    });
+    expect(config.design_enabled).toBe(true);
+  });
+
+  test("does not flag a true setting with design_enabled_since as ignored", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+      design_enabled_since: "2026-11-01T00:00:00Z",
+    });
+    expect(config.design_enabled_ignored).toBe(false);
+  });
+
+  test("reads true with a null design_enabled_since as false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+      design_enabled_since: null,
+    });
+    expect(config.design_enabled).toBe(false);
+  });
+
+  test("reads false with design_enabled_since as false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: false,
+      design_enabled_since: "2026-11-01T00:00:00Z",
+    });
+    expect(config.design_enabled).toBe(false);
+  });
+
+  test("does not flag a false setting with design_enabled_since as ignored", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: false,
+      design_enabled_since: "2026-11-01T00:00:00Z",
+    });
+    expect(config.design_enabled_ignored).toBe(false);
+  });
+
+  test("reads design_enabled_since alone as false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled_since: "2026-11-01T00:00:00Z",
+    });
+    expect(config.design_enabled).toBe(false);
+  });
+
+  test("reads true with an unreadable design_enabled_since as false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+      design_enabled_since: "2026-11-01",
+    });
+    expect(config.design_enabled).toBe(false);
+  });
+
+  test("flags a true setting with an unreadable design_enabled_since as ignored", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled: true,
+      design_enabled_since: "2026-11-01",
+    });
+    expect(config.design_enabled_ignored).toBe(true);
+  });
+
+  test.each([
+    ["a date without a time", "2026-11-01"],
+    ["a number", 1],
+    ["a boolean", true],
+  ])(
+    "does not throw for a true setting when design_enabled_since is %s",
+    (_name, value) => {
+      const raw = {
+        ...LEGACY_RAW_CONFIG,
+        design_enabled: true,
+        design_enabled_since: value,
+      };
+      expect(() => parseFactoryConfig(raw)).not.toThrow();
+    },
+  );
 
   test.each([
     ["a string", "yes"],
@@ -1347,6 +1434,44 @@ describe("design_enabled", () => {
   ])("throws when design_enabled is %s", (_name, value) => {
     const raw = { ...LEGACY_RAW_CONFIG, design_enabled: value };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("design_enabled_since", () => {
+  test("defaults to null when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.design_enabled_since).toBeNull();
+  });
+
+  test("passes through an explicit null", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled_since: null,
+    });
+    expect(config.design_enabled_since).toBeNull();
+  });
+
+  test("returns a readable value as a Date", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled_since: "2026-11-01T00:00:00Z",
+    });
+    expect(config.design_enabled_since).toEqual(
+      new Date("2026-11-01T00:00:00Z"),
+    );
+  });
+
+  test("reads an unreadable value as null", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      design_enabled_since: "2026-11-01",
+    });
+    expect(config.design_enabled_since).toBeNull();
+  });
+
+  test("ignores a key that the config does not know", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, a_future_setting: "x" };
+    expect(() => parseFactoryConfig(raw)).not.toThrow();
   });
 });
 
@@ -1434,6 +1559,26 @@ describe("design settings in the resource type", () => {
 
   test("no longer describes max_design_attempts as the number of designs that can be tried", () => {
     expect(yaml).not.toContain("設計を試せる回数の上限");
+  });
+
+  test("orders design_enabled_since", () => {
+    expect(yaml).toMatch(/^ {4}- design_enabled_since$/m);
+  });
+
+  test("declares design_enabled_since as a date-time string without a default", () => {
+    expect(yaml).toMatch(
+      /^ {4}design_enabled_since:\n {6}type: string\n {6}format: date-time\n {6}description: >-\n {8}.*\n(?! {6}default:)/m,
+    );
+  });
+
+  test("tells how to write design_enabled_since", () => {
+    expect(yaml).toMatch(
+      /^ {4}design_enabled_since:\n(?: {6}.*\n)*? {8}.*2026-11-01T00:00:00Z/m,
+    );
+  });
+
+  test("no longer says that true is read as false in every case", () => {
+    expect(yaml).not.toContain("有効にできるようになるまで");
   });
 
   test("does not declare the derived design_enabled_ignored", () => {

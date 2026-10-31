@@ -24,7 +24,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- | --- | --- |
 | `issue_claimed` | Issue着手 | `poll_issues`、`manual_intake_register` | Issueを取得し、要件定義の生成を始めた |
 | `approval_requested` | 承認待ち | `pipeline_request_approval` | 要件定義の承認依頼を記録した |
-| `design_approval_requested` | 設計の承認待ち | `design_request_approval` | 設計の承認依頼を記録した。説明文は「リンク先のConsoleで承認または却下してください」と案内する。依頼を記録してから作業項目を移すまでの間に、人が判断していたか、期限が切れていたときは送らない。設計フローの入口が閉じていて、本番では送らない |
+| `design_approval_requested` | 設計の承認待ち | `design_request_approval` | 設計の承認依頼を記録した。説明文は「リンク先のConsoleで承認または却下してください」と案内する。依頼を記録してから作業項目を移すまでの間に、人が判断していたか、期限が切れていたときは送らない。設計工程が無効の間は、設計フローが動かないので送らない |
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
 | `intake_refreshed` | 取り込み内容を更新 | `requirements_apply`、`design_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した。設計の却下では、Issueが変わっていて要件定義へ戻したときに送る |
 | `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった。または、Factoryが作ったPRのCIが失敗した |
@@ -49,7 +49,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
-| `design_prepare`、`design_generate` | 承認済みの要件定義が無い、オーナーの照合に落ちた、日次の予算を超えた、承認済みの要件定義のディレクトリが基準値と違う(設計の前、または設計のClaudeの実行中の書き換え)か無い、同じ試行の設計書の下書きが保存済みである、要件の不足の戻しが試行回数の上限に達した。設計フローの入口が閉じていて、本番では送らない |
+| `design_prepare`、`design_generate` | 承認済みの要件定義が無い、オーナーの照合に落ちた、日次の予算を超えた、承認済みの要件定義のディレクトリが基準値と違う(設計の前、または設計のClaudeの実行中の書き換え)か無い、同じ試行の設計書の下書きが保存済みである、要件の不足の戻しが試行回数の上限に達した。設計工程が無効の間は、設計フローが動かないので送らない |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった。却下の後の要件定義の作り直しを起動できず、人の対応待ちへ戻した |
 | `design_apply` | 設計の却下が`max_design_attempts`に達した。設計の承認の記録が食い違う、承認済みの要件定義が無い、承認の照合が通らない。承認の後に実装フローを起動できなかった。却下の後の設計の再生成を起動できなかった。Issueが変わった却下で、要件定義の作り直しを起動できず、人の対応待ちへ戻した |
 | `design_request_approval` | 設計の承認依頼を記録してから作業項目を移すまでの間に、期限が切れていた(理由は`design approval timed out`) |
@@ -262,7 +262,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
-| `design_enabled_ignored` | `self_update` | `design_enabled`が`true`で`false`として読んでいること、`false`に戻す操作 |
+| `design_enabled_ignored` | `self_update` | `design_enabled`が`true`でも、`design_enabled_since`が無いか日時として読めないため`false`として読んでいること、`design_enabled_since`を書くか`false`に戻す操作 |
 | `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
@@ -579,8 +579,8 @@ PRのトリガーラベルの取得に成功したときは、`poll_prs`が、�
 対象は、確認できずにラベルを戻したときの`claim_race_lost`と、`pr_trigger_label_left_removed`である。
 本文が完全に一致する行だけを選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、別のラベルの行には触れない。`resolved_by`は`poll_prs`になる。
 
-`design_enabled_ignored`は、自己更新が設定を読むたびに、`design_enabled`が`true`なら残す。未解決の通知は同じ本文で1件にまとまる。
-設定が`false`に戻った回は、自己更新が未解決の通知を3件まで解決する。`resolved_by`は`self_update`になる。
+`design_enabled_ignored`は、自己更新が設定を読むたびに、`design_enabled`が`true`なのに`design_enabled_since`が無いか日時として読めないときに残す。未解決の通知は同じ本文で1件にまとまる。
+`design_enabled_since`が書かれた回と、設定が`false`に戻った回は、自己更新が未解決の通知を3件まで解決する。`resolved_by`は`self_update`になる。
 この種類はConsoleから解決できない。設定が直らないまま、通知だけを消せないようにするためである。
 重要度は「要対応」なので、`cleanup_db`の期限の解決の対象に入らない。
 

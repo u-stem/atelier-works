@@ -263,7 +263,7 @@ describe("ItemFlowProgressView: the diagram of the work item", () => {
     ).not.toContain("起動しない場合があります");
   });
 
-  test("fits implement in the body of the page without scrolling", () => {
+  test("scrolls implement in the body of the page", () => {
     expect(
       render(
         steps([step("implement_prepare", "running")], {
@@ -271,7 +271,7 @@ describe("ItemFlowProgressView: the diagram of the work item", () => {
         }),
         { width: BODY },
       ),
-    ).not.toContain('role="region"');
+    ).toContain('role="region"');
   });
 
   test("scrolls pr_fix in the body of the page", () => {

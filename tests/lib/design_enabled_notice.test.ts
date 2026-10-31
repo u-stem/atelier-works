@@ -60,7 +60,7 @@ function harness(options: {
 }
 
 const IGNORED_WARNING =
-  "design_enabled is true but the design stage cannot be opened yet; reading it as false";
+  "design_enabled is true but design_enabled_since is missing or unreadable; reading it as false";
 
 describe("design notice constants", () => {
   test("the check timeout is five seconds", () => {
@@ -77,6 +77,30 @@ describe("design notice constants", () => {
 
   test("the notice message is not empty", () => {
     expect(DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE.length).toBeGreaterThan(0);
+  });
+
+  test("the notice message names the missing design_enabled_since as the cause", () => {
+    expect(DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE).toContain(
+      "design_enabled_sinceが無いか日時として読めないため",
+    );
+  });
+
+  test("the notice message tells to write design_enabled_since or put design_enabled back", () => {
+    expect(DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE).toContain(
+      "次の操作: factory_configにdesign_enabled_sinceを書くか、design_enabledをfalseに戻す",
+    );
+  });
+
+  test("the notice message says that the self update resolves it", () => {
+    expect(DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE).toContain(
+      "自己更新(2分ごと)がこの通知を自動で解決する",
+    );
+  });
+
+  test("the notice message no longer says that the stage cannot be opened", () => {
+    expect(DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE).not.toContain(
+      "まだ有効にできない",
+    );
   });
 });
 

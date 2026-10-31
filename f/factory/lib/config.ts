@@ -3,6 +3,7 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
+import { readDesignSince, resolveDesignGate } from "./design_gate.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -89,6 +90,7 @@ type DefaultableField =
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
   | "design_enabled"
+  | "design_enabled_since"
   | "max_design_attempts"
   | "dependabot_enabled"
   | "dependabot_merge_enabled"
@@ -162,8 +164,10 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
-  // 設計工程は既定で無効にする。有効にできるようになるまで、真を書いても偽として読む(`DESIGN_STAGE_OPENABLE`)。
+  // 設計工程は既定で無効にする。真を書いても、`design_enabled_since`が日時として読めるまでは偽として読む。
+  // 既定の`design_enabled_since`は`null`で、本番のコードに日時を書かない。開ける日時は運用者がリソースに書く。
   design_enabled: false,
+  design_enabled_since: null,
   max_design_attempts: 3,
   // dependabotの自動処理は既定で無効にし、リモートのリソースで有効にする。
   dependabot_enabled: false,
@@ -470,24 +474,16 @@ const PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE = { min: 0, max: 1440 } as const;
  */
 const MAX_DESIGN_ATTEMPTS_RANGE = { min: 1, max: 10 } as const;
 
-/**
- * 設計工程を有効にできる状態か。偽の間は、`design_enabled: true`を例外にせず、偽として読んで`design_enabled_ignored`を立てる。
- * 例外にすると、設定を読む全てのscriptが止まり、自己更新も、止まったことを知らせる通知も動かなくなるため。
- * 有効にできる状態になるときに、この定数と分岐を置き換える。
- * 真にしてよい条件は、承認画面が実装に渡すのと同じ正規化の出力を、設計書のHTMLとリンク参照定義を要素や定義にせず文字として描くことと、それを確かめるテストがあることである。
- */
-const DESIGN_STAGE_OPENABLE = false;
-
 /** `design_enabled`が偽として読まれたことを知らせる通知の種類。 */
 export const DESIGN_ENABLED_IGNORED_NOTICE_KIND = "design_enabled_ignored";
 
 /**
  * `design_enabled`が偽として読まれたことを知らせる通知の本文。
  * 同じ本文の未解決の通知は1件にまとまるので、固定の文にする。
- * 設定をfalseに戻すと、自己更新が自動で解決する。
+ * `design_enabled_since`を書くか、`design_enabled`をfalseに戻すと、自己更新が自動で解決する。
  */
 export const DESIGN_ENABLED_IGNORED_NOTICE_MESSAGE =
-  "設定のdesign_enabledがtrueですが、設計工程はまだ有効にできないため、falseとして読んでいます。設計工程は動きません。次の操作: factory_configのdesign_enabledをfalseに戻す。戻すと、自己更新(2分ごと)がこの通知を自動で解決する";
+  "設定のdesign_enabledがtrueですが、design_enabled_sinceが無いか日時として読めないため、falseとして読んでいます。設計工程は動きません。次の操作: factory_configにdesign_enabled_sinceを書くか、design_enabledをfalseに戻す。どちらかで直ると、自己更新(2分ごと)がこの通知を自動で解決する";
 
 /**
  * 競合を直す起動が有効なときの、`pr_conflict_fix_notify_grace_min`の下限(分)。
@@ -844,6 +840,13 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     "design_enabled",
     DEFAULTS.design_enabled,
   );
+  // 日時として読めない値は、例外にせず、門が無視する。例外にすると、設定を読む全てのscriptが止まる。
+  const designEnabledSince =
+    raw.design_enabled_since ?? DEFAULTS.design_enabled_since;
+  const designGate = resolveDesignGate(
+    designEnabledRequested,
+    designEnabledSince,
+  );
   // 範囲は、設計工程が無効でも検査する。使わない値でも、書き損じは早く知らせる。
   const maxDesignAttempts = integerInRangeField(
     raw,
@@ -1014,8 +1017,9 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
     ),
-    design_enabled: designEnabledRequested && DESIGN_STAGE_OPENABLE,
-    design_enabled_ignored: designEnabledRequested && !DESIGN_STAGE_OPENABLE,
+    design_enabled: designGate.enabled,
+    design_enabled_ignored: designGate.ignored,
+    design_enabled_since: readDesignSince(designEnabledSince),
     max_design_attempts: maxDesignAttempts,
     dependabot_enabled: booleanField(
       raw,

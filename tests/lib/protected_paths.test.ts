@@ -605,10 +605,13 @@ describe("hold files", () => {
   });
 });
 
-// 設計工程の入口が閉じていることを固定するテストは、書き換えられると、黙って通るようになる。
+// 設計工程の門(`design_gate.ts`とその定義)と、入口が閉じていることを固定するテストは、書き換えられると、
+// 門が緩んでも黙って通るようになる。
 // グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
-describe("design stage closed files", () => {
+describe("design stage gate files", () => {
   const PATHS = [
+    "f/factory/lib/design_gate.ts",
+    "f/factory/lib/design_gate.script.yaml",
     "tests/scripts/design_stage_closed.test.ts",
     "tests/scripts/design_entry_origins.test.ts",
   ];
@@ -629,6 +632,14 @@ describe("design stage closed files", () => {
     expect(matchesForbiddenPath("tests/scripts/design_apply.test.ts")).toBe(
       false,
     );
+  });
+
+  test("does not protect lib/config.ts, which changes often", () => {
+    expect(matchesForbiddenPath("f/factory/lib/config.ts")).toBe(false);
+  });
+
+  test("does not protect the unit test of the gate, which the protected tests also cover", () => {
+    expect(matchesForbiddenPath("tests/lib/design_gate.test.ts")).toBe(false);
   });
 });
 

@@ -272,10 +272,22 @@ describe("describeOrigin", () => {
     });
   });
 
-  test("lists the return of pr_fix_finish to the design flow as an edge that is not wired yet", () => {
-    expect(UNWIRED_LAUNCH_EDGES).toContainEqual({
-      from: "steps/pr_fix_finish",
+  test("lists no edge as one that is not wired", () => {
+    expect(UNWIRED_LAUNCH_EDGES).toEqual([]);
+  });
+
+  test("keeps the edge from requirements_apply to the design flow among the launch edges", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "steps/requirements_apply",
       to: "design",
+      kind: "script",
+    });
+  });
+
+  test("keeps the edge from requirements_apply to the implement flow among the launch edges", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "steps/requirements_apply",
+      to: "implement",
       kind: "script",
     });
   });

@@ -281,7 +281,8 @@ type ApprovalConfirmation = {
 };
 
 /**
- * 承認の確認ダイアログの文。承認は取り消せず、要件定義ならClaudeの実装が始まる。
+ * 承認の確認ダイアログの文。承認は取り消せない。
+ * 要件定義の承認は、設計工程が有効なら設計書の生成、無効なら実装が始まる。設定は読まず、両方の行き先を書く。
  * `subject`は、Issueに由来する文字を`displayableIssueText`に通したものを渡す。
  */
 export function approvalConfirmation(input: {
@@ -306,7 +307,8 @@ export function approvalConfirmation(input: {
     return {
       subject: input.subject,
       idLabel,
-      consequence: "承認すると、Claudeによる実装が始まります。取り消せません。",
+      consequence:
+        "承認すると、設計工程が有効なときは設計書の生成が、無効なときはClaudeによる実装が始まります。取り消せません。",
     };
   }
   if (input.kind === "design") {
@@ -314,7 +316,7 @@ export function approvalConfirmation(input: {
       subject: input.subject,
       idLabel,
       consequence:
-        "承認すると、実装が始まります。承認した設計書(正規化後の全文)が実装に渡ります。取り消せません。",
+        "承認すると、実装が始まります。承認した設計書(正規化後の全文)が実装に渡ります。設計工程が無効のときは、設計書は実装に渡りません。取り消せません。",
     };
   }
   return {

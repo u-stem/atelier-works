@@ -2,6 +2,7 @@ import { useState } from "react";
 import type {
   ConfigItemView,
   ConfigSnapshotView,
+  DesignStageView,
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { Button } from "../../components/ui/button.tsx";
@@ -10,6 +11,7 @@ import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
 import {
   CONFIG_REFERENCE_LABEL,
   describeConfigValue,
+  describeDesignStage,
   filterConfigItems,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
@@ -107,11 +109,39 @@ export function ConfigList({
   );
 }
 
-function ConfigBody({ items }: { items: readonly ConfigItemView[] }) {
+/**
+ * 設計工程の、効いている値。一覧の値は書かれたままなので、実際に動くかはここで確かめる。
+ * 書かれた値が無視されているときと、参照のため判定できないときは、その理由を添える。
+ */
+function DesignStageStatus({ stage }: { stage: DesignStageView }) {
+  const text = describeDesignStage(stage);
+  return (
+    <div className="flex flex-col gap-1 rounded-xl border border-border bg-card px-4 py-2.5 text-small">
+      <p>
+        <span className="text-muted-foreground">設計工程: </span>
+        <span className="font-medium">{safeText(text.state)}</span>
+      </p>
+      {text.note === null ? null : (
+        <p className="text-muted-foreground">{safeText(text.note)}</p>
+      )}
+    </div>
+  );
+}
+
+function ConfigBody({
+  items,
+  designStage,
+}: {
+  items: readonly ConfigItemView[];
+  designStage: DesignStageView | undefined;
+}) {
   const [query, setQuery] = useState("");
   const change = useConfigChange();
   return (
     <div className="flex flex-col gap-3">
+      {designStage === undefined ? null : (
+        <DesignStageStatus stage={designStage} />
+      )}
       <div className="flex max-w-sm flex-col gap-1">
         <label
           htmlFor="config-search"
@@ -164,7 +194,9 @@ export function ConfigSection({
       query={query}
       loginHint="上のバナーからログインすると、設定を表示します。"
     >
-      {(data) => <ConfigBody items={data.items} />}
+      {(data) => (
+        <ConfigBody items={data.items} designStage={data.design_stage} />
+      )}
     </SystemSection>
   );
 }

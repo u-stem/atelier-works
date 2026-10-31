@@ -3,16 +3,18 @@
 承認済みの要件定義から設計書を作る処理を定める仕様である。
 設計フロー、設計書の保存、設計のClaudeの書き込み範囲を変更する人が読む。
 
-設計工程の生成側と承認の反映は入っているが、入口は閉じていて動かない。
-本番では作業項目が設計中(`designing`)にならず、設計の承認依頼も作られない。
+設計工程の生成側と承認の反映は入っている。
+既定は無効で、設定で有効にする([設定値](#設定値))。
+無効の間は、作業項目が設計中(`designing`)にならず、設計の承認依頼も作られない。
 
-## 入口が閉じていること
+## 設計フローを起動する元
 
 設計フローを起動できる元は5つである。
 どの元も、設定の`design_enabled`が真のときだけ起動する。
-本番では、設定を読む処理が`true`を`false`として読むので([設定値](#設定値))、5つとも起動しない。
+設定を読む処理は、`design_enabled_since`が日時として読めるときだけ、`true`を`true`として読む([設定値](#設定値))。
+既定では、5つとも起動しない。
 
-| 起動元 | 起動する場面 | 閉じている理由 |
+| 起動元 | 起動する場面 | 無効のときに起動しない理由 |
 | --- | --- | --- |
 | `retry_work_item` | 設計が有効で未承認の止まった作業項目の再実行 | 設計フローの入力を作るのは、設計が有効なときのブロックの中だけである。偽なら実装か要件定義から再開する |
 | `requirements_apply` | 要件定義の承認の反映 | `buildApprovedBranchDeps`が、`design_enabled`が真のときだけ設計フローを起動する依存`startDesign`を渡す。偽なら空で、承認済み(`approved`)へ移して実装へ進む |
@@ -30,19 +32,23 @@
 
 ### 配線の門
 
-`f/factory/lib/config.ts`の定数`DESIGN_STAGE_OPENABLE`が偽である間は、`design_enabled`は偽になる。
-設定で`design_enabled`に`true`を要求しても同じである。
-門は、この定数1か所だけである。
-`config.ts`は設定の項目を足すたびに直すファイルで、保護パスに入れると正当な設定の追加がすべて止まる。
-そのため、門の宣言と使い方は、保護パスのテスト2つで固定する。
+門は、`f/factory/lib/design_gate.ts`の関数`resolveDesignGate`の1か所である。
+設定の`design_enabled`が真で、`design_enabled_since`が日時として読めるときだけ、設計工程が開く。
+設定を読む処理(`lib/config.ts`)と、Consoleの設定の取得(`console_config.ts`)が、同じ関数を呼ぶ。
+門は、環境変数と現在時刻を読まない。
+`design_gate.ts`はimportを持たず、保護パスに入れる。
+門の条件を書き換えると、人の確認なしに設計工程が開くためである。
+
+`config.ts`は、設定の項目を足すたびに直すファイルで、保護パスに入れると正当な設定の追加がすべて止まる。
+そのため保護せず、門の呼び出しの形を、保護パスのテスト2つで固定する。
 
 | テスト | 固定すること |
 | --- | --- |
 | `tests/scripts/design_entry_origins.test.ts` | `f/factory`のテスト以外の`.ts`とフローの定義を、コメントを落として読み、設計フローを指す識別子を参照するファイルの集合と出現の数を、テスト内の許可表と完全に一致させる。設計中への遷移を書くファイルとその数も同じである。起動元ごとの条件(`requirements_apply`は`config.design_enabled`の条件の内側、`retry_work_item`は設計が有効なときのブロックの内側、`design_apply`は設計中へ移した後、`implement_finish`と`pr_fix_finish`は`config.design_enabled`を渡した判定が戻す結果になる分岐の内側で、設計中へ移した後)も固定する。起動の台帳(`LAUNCH_EDGES`)の辺の起点は、追加の検査である。台帳は保護していないので、固定の根拠にしない |
-| `tests/scripts/design_stage_closed.test.ts` | `design_enabled`が偽なら`startDesign`が空で、真なら関数になること。`design_enabled: true`を渡した設定を本番の読み込みに通すと、空のままであること。`design_enabled: true`のリテラルが本番のコードに無いこと。`config.ts`で`DESIGN_STAGE_OPENABLE`を偽として宣言するのが1つだけで、`design_enabled`がその定数と要求だけで決まり、環境変数を読まないこと。実装の入口3つが、設計が有効なときに設計を経由すること。偽として読んだ設定では、実装とPRの修正の設計の不足の判定が戻す結果にならず、PRの修正に設計書が渡らないこと。`config.design_enabled`を読む呼び出しの数が、実装の完了とPRの修正の3つのステップを含めて許可表と一致すること |
+| `tests/scripts/design_stage_closed.test.ts` | 設定を本番の読み込みに通した結果で、全入口(`requirements_apply`、`design_apply`、`implement_prepare`、`implement_finish`、`pr_fix_apply`、`pr_fix_verify`、`pr_fix_finish`、`retry_work_item`、`auto_retry_stale_image`)の開閉を確かめる。`design_enabled`が真でも`design_enabled_since`が無いか日時として読めなければ閉じていて、日時として読めれば開く。`DESIGN_STAGE_OPENABLE`が本番のコードのどこにも無いこと。`config.ts`が`design_enabled`の要求を1回宣言し、`design_enabled_since`を生の値から1回だけ読み、`design_enabled`と`design_enabled_ignored`を`resolveDesignGate`の結果だけから導き、環境変数を読まないこと。`DEFAULTS.design_enabled`が`false`で、`DEFAULTS.design_enabled_since`が`null`の字面であること。本番のコードに`null`以外の`design_enabled_since`の字面が無いこと。`design_enabled`と`design_enabled_since`を参照するファイルの集合と数が、許可表と一致すること |
 
 2つのテストは、実装フローの保護パスの一覧(`protected_paths.ts`)に入っている。
-入口を開ける変更が、テストの書き換えを必ず伴うようにするためである。
+門を緩める変更が、テストの書き換えを必ず伴うようにするためである。
 文字列の照合なので、識別子を連結や別名で組み立てる起動は追えない。
 そのため、設定を通した戻り値の検査と組み合わせる。
 
@@ -52,16 +58,31 @@
 
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
-| `design_enabled` | `false` | 設計工程を有効にするか。`true`を書いても`false`として読む |
+| `design_enabled` | `false` | 設計工程を有効にするか。`true`を書いても、`design_enabled_since`が日時として読めるまでは`false`として読む |
+| `design_enabled_since` | 無し | 有効にする意思の表明と、有効にした時刻の記録。秒まで書いたタイムゾーン付きの日時 |
 | `max_design_attempts` | `3` | 現在の要件定義の試行で、設計の却下と、実装とPRの修正から設計への戻しを合わせて受けられる回数の上限。1以上10以下の整数 |
 
-`design_enabled`に`true`を書くと、設定を読む処理は`false`として読み、警告のログと通知`design_enabled_ignored`(要対応)を残す。
+`design_enabled_since`は、他の`*_since`と違い、作業を除く境の時刻ではない。
+未来の日時でも、書いた時点で開く。
+日時として読めない値は、例外にせず、無いものとして扱う。例は、日付だけの文字列、数値、`null`である。
+
+`design_enabled`が`true`でも、`design_enabled_since`が日時として読めないとき、設定を読む処理は`false`として読む。
+このとき警告のログと通知`design_enabled_ignored`(要対応)を残す。
 例外にすると、設定を読むすべてのscriptが止まる。
 自己更新と、止まったことを知らせる通知も動かなくなり、知らせる手段が無くなるためである。
 自己更新が設定を読むたびに、通知を1件にまとめて残す。
-`false`に戻すと、自己更新が通知を解決する。
+`design_enabled_since`を書くか、`design_enabled`を`false`に戻すと、自己更新が通知を解決する。
 解決は1回に3件までで、残りは次の回に解決する。
 通知の処理は、全体を5秒の上限で包んで更新の前に行う。失敗しても時間切れでも、更新と検知は止めない。
+
+Consoleの設定タブは、`console_config`の返り値の`design_stage`で、効いている値(`enabled`)と、書かれた値が無視されているか(`ignored`)を出す。
+門の関数を、設定を読む処理と同じ入力で呼んで決める。
+ただし、`design_enabled`か`design_enabled_since`が参照を含むときは、設定を読む処理が解決した値を、設定タブは知らない。
+そのときは効いている値を断定せず、`indeterminate`を立てて、設定タブは「判定できない」と出す。
+`design_enabled`の参照が、文字列やオブジェクトなど真偽値でない値に解決されると、設定を読む処理は例外で止まる。
+`design_enabled_since`の参照が、日時として読めない値に解決されても、例外にならない。
+その場合は、設計工程が閉じたまま、`design_enabled_ignored`の通知が出る。
+運用の手順は[運用](../operations.md)の「設計工程を有効にする」にある。
 
 `design_enabled`が真偽値でないときと、`max_design_attempts`が範囲外のときは、例外にする。
 `max_design_attempts`の範囲は、`design_enabled`が`false`でも検査する。
@@ -401,7 +422,7 @@ GitHubには成果物だけを載せる。
 前者は古い依頼なので、今の依頼の判断を待つ作業項目を動かさない。
 後者は承認の行が書き換えられたか壊れた状態で、誰にも知らせず捨てると、判断が失われたまま残る。
 
-設計工程が無効なときに設計を作り直さないのは、閉じた入口を`design_apply`が迂回しないためである。
+設計工程が無効なときに設計を作り直さないのは、無効の設定を`design_apply`が迂回しないためである。
 承認の反映は、この確認をしない。承認は実装へ進むだけで、設計フローを起動しない。
 
 設計の再生成では、遷移の注記を固定文(`design rejected; regenerating`)にする。

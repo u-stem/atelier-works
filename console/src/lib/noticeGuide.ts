@@ -488,10 +488,10 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "design_enabled_ignored",
     guide(
-      "設定のdesign_enabledがtrueですが、設計工程はまだ有効にできないため、falseとして読んでいます。設計工程は動かず、設定タブには書かれた値のtrueが出ます。",
-      "factory_configのdesign_enabledをfalseに戻してください。設計工程を有効にできる版が反映されるまで、trueにしても動きません。",
+      "設定のdesign_enabledがtrueですが、design_enabled_sinceが無いか日時として読めないため、falseとして読んでいます。設計工程は動きません。設定タブには効いている値が出ます。",
+      "設計工程を開けるなら、factory_configにdesign_enabled_sinceを書いてください。秒まで書いたタイムゾーン付きの日時にします(例: 2026-11-01T00:00:00Z)。書くのは運用者で、開ける前に手順の確認を済ませます。開けないなら、design_enabledをfalseに戻してください。",
       {
-        note: "設定がfalseに戻ると、自己更新(2分ごと)がこの通知を自動で解決します。Consoleからは解決できません。",
+        note: "design_enabled_sinceを書くか、design_enabledをfalseに戻すと、自己更新(2分ごと)がこの通知を自動で解決します。Consoleからは解決できません。",
       },
     ),
   ],
