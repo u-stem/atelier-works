@@ -150,3 +150,17 @@ describe("the pull request body in implement_finish", () => {
     );
   });
 });
+
+describe("the check of the staged tree before the partial push in implement_finish", () => {
+  test("classifies the staged changes after it compares the staged tree with the scanned one", async () => {
+    expect(await source()).toMatch(
+      /inspectStaged: async \(\) => \{\s*const changed = await scannedTreeStopReasons\(\{[^}]*\}\);\s*if \(changed\.length > 0\) return changed;\s*return protectedPartialPushStopReasons\(\{/,
+    );
+  });
+
+  test("classifies the issue specification against the base of the branch", async () => {
+    expect(await source()).toMatch(
+      /protectedPartialPushStopReasons\(\{\s*specKind: implementContextSpecKind\(ctx\),\s*listStagedChanges: \(\) =>\s*listChangedPaths\(\s*runCommand,\s*ctx\.worktree_dir,\s*ctx\.base_sha,?\s*\),?\s*\}\)/,
+    );
+  });
+});

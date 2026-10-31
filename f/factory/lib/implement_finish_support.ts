@@ -25,6 +25,7 @@ import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import { limitGapReport } from "./model_text.ts";
 import { WorktreeBusyError } from "./process_lock.ts";
 import { automatedFeedback, type ImplementSpecKind } from "./prompts.ts";
+import type { ChangedPath } from "./protected_paths.ts";
 import {
   type CommitAndPushResult,
   CommitBlockedError,
@@ -646,4 +647,11 @@ export function shouldWithholdPartialPush(input: {
   readonly protectedChanges: readonly string[];
 }): boolean {
   return input.specKind === "issue" && input.protectedChanges.length > 0;
+}
+
+export async function protectedPartialPushStopReasons(_input: {
+  readonly specKind: ImplementSpecKind;
+  readonly listStagedChanges: () => Promise<readonly ChangedPath[]>;
+}): Promise<string[]> {
+  return [];
 }

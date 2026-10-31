@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
+import { shouldWithholdPartialPush } from "../../f/factory/lib/implement_finish_support.ts";
 import {
   ACCEPTED_PROFILES,
   requiredApprovals,
@@ -454,5 +455,88 @@ describe("the implement finish", () => {
         codeOf("steps/implement_finish.ts"),
       ),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 途中の作業のpush
+// ---------------------------------------------------------------------------
+
+/** `preserveOrWithhold`の定義。次の文(`const hasPr`)の手前までを返す。 */
+function preserveOrWithholdDefinition(): string {
+  const code = codeOf("steps/implement_finish.ts");
+  const start = code.indexOf("const preserveOrWithhold = ");
+  const end = code.indexOf("const hasPr = ", start);
+  if (start < 0 || end < start) {
+    throw new Error("preserveOrWithhold was not found");
+  }
+  return code.slice(start, end);
+}
+
+describe("the partial push of the implement finish", () => {
+  test("calls preserveWork in one place only", () => {
+    const calls = codeOf("steps/implement_finish.ts").match(
+      /(?<![\w$.])preserveWork\(/g,
+    );
+    expect(calls?.length).toBe(1);
+  });
+
+  test("calls preserveWork inside preserveOrWithhold", () => {
+    expect(preserveOrWithholdDefinition()).toMatch(
+      /(?<![\w$.])preserveWork\(preserveWorkDeps\(ctx\)\)/,
+    );
+  });
+
+  test("decides to withhold before preserveWork inside preserveOrWithhold", () => {
+    const definition = preserveOrWithholdDefinition();
+    const decided = definition.indexOf("shouldWithholdPartialPush(");
+    const pushed = definition.indexOf("preserveWork(");
+    expect(decided >= 0 && pushed > decided).toBe(true);
+  });
+
+  test("reaches preserveOrWithhold from the needs_human stop and the failed issue lookup", () => {
+    const calls = codeOf("steps/implement_finish.ts").match(
+      /\bawait preserveOrWithhold\(context\)/g,
+    );
+    expect(calls?.length).toBe(2);
+  });
+
+  test("checks the staged tree against the protected paths after it compares the staged tree with the scanned one", () => {
+    const code = codeOf("steps/implement_finish.ts");
+    const compared = code.indexOf("scannedTreeStopReasons(");
+    const classified = code.indexOf("protectedPartialPushStopReasons(");
+    expect(compared >= 0 && classified > compared).toBe(true);
+  });
+});
+
+describe("shouldWithholdPartialPush", () => {
+  test("withholds the issue specification with one protected change", () => {
+    expect(
+      shouldWithholdPartialPush({
+        specKind: "issue",
+        protectedChanges: ["保護パスを変更: mise.toml"],
+      }),
+    ).toBe(true);
+  });
+
+  test("withholds the issue specification whatever the line says", () => {
+    expect(
+      shouldWithholdPartialPush({ specKind: "issue", protectedChanges: [""] }),
+    ).toBe(true);
+  });
+
+  test("does not withhold the issue specification without a protected change", () => {
+    expect(
+      shouldWithholdPartialPush({ specKind: "issue", protectedChanges: [] }),
+    ).toBe(false);
+  });
+
+  test("does not withhold the approved requirements with protected changes", () => {
+    expect(
+      shouldWithholdPartialPush({
+        specKind: "requirements",
+        protectedChanges: ["保護パスを変更: mise.toml"],
+      }),
+    ).toBe(false);
   });
 });

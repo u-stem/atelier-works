@@ -7,6 +7,7 @@ import {
   PROTECTED_PATH_GAP_PREFIX,
   PROTECTED_WORK_NOT_PUSHED_REASON,
   prBodySpecFor,
+  protectedPartialPushStopReasons,
   shouldWithholdPartialPush,
 } from "../../f/factory/lib/implement_finish_support.ts";
 import {
@@ -15,6 +16,7 @@ import {
   postProfileUpgradedComment,
   shouldCommentProfileUpgrade,
 } from "../../f/factory/lib/profile_upgrade.ts";
+import type { ChangedPath } from "../../f/factory/lib/protected_paths.ts";
 import {
   describeReason,
   nextActionFor,
@@ -154,6 +156,68 @@ describe("shouldWithholdPartialPush", () => {
     expect(
       nextActionFor(PROTECTED_WORK_NOT_PUSHED_REASON, "implement"),
     ).toContain("worktree");
+  });
+});
+
+describe("protectedPartialPushStopReasons", () => {
+  const PROTECTED: readonly ChangedPath[] = [
+    { path: "mise.toml", status: "modified" },
+  ];
+  const PLAIN: readonly ChangedPath[] = [
+    { path: "src/a.ts", status: "modified" },
+  ];
+  const listing = (changes: readonly ChangedPath[]) => ({
+    list: async () => changes,
+  });
+
+  test("stops the issue specification whose staged tree touches a protected path", async () => {
+    expect(
+      await protectedPartialPushStopReasons({
+        specKind: "issue",
+        listStagedChanges: listing(PROTECTED).list,
+      }),
+    ).toEqual([PROTECTED_WORK_NOT_PUSHED_REASON]);
+  });
+
+  test("stops the issue specification whose staged tree changes a package.json", async () => {
+    expect(
+      await protectedPartialPushStopReasons({
+        specKind: "issue",
+        listStagedChanges: async () => [
+          { path: "pkg/package.json", status: "modified" },
+        ],
+      }),
+    ).toEqual([PROTECTED_WORK_NOT_PUSHED_REASON]);
+  });
+
+  test("lets the issue specification without a protected change go on", async () => {
+    expect(
+      await protectedPartialPushStopReasons({
+        specKind: "issue",
+        listStagedChanges: listing(PLAIN).list,
+      }),
+    ).toEqual([]);
+  });
+
+  test("lets the approved requirements go on even with a protected change", async () => {
+    expect(
+      await protectedPartialPushStopReasons({
+        specKind: "requirements",
+        listStagedChanges: listing(PROTECTED).list,
+      }),
+    ).toEqual([]);
+  });
+
+  test("does not list the staged changes of the approved requirements", async () => {
+    const listed = { count: 0 };
+    await protectedPartialPushStopReasons({
+      specKind: "requirements",
+      listStagedChanges: async () => {
+        listed.count += 1;
+        return PROTECTED;
+      },
+    });
+    expect(listed.count).toBe(0);
   });
 });
 
