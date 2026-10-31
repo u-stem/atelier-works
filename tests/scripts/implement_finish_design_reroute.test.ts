@@ -61,6 +61,7 @@ function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
     conflict_check_id: null,
     conflict_episode: null,
     design_attempt: 3,
+    profile: "standard",
     created_at: new Date("2026-10-26T00:00:00Z"),
     updated_at: new Date("2026-10-26T00:00:00Z"),
     ...overrides,

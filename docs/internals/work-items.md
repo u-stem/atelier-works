@@ -349,6 +349,24 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 競合の1回は、行のIDと回の組で指す。行は競合が解けて再び競合しても同じ行のままで、回だけが進むためである。
 `pr_conflict_checks`の列の意味は、[PRのCI監視の内部仕様](pr-ci.md)の「記録」にある。
 
+### 進め方の列
+
+作業項目は、進め方を`profile`列で持つ。
+値は`standard`、`direct`、`bugfix`、`docs`のどれかで、既定は`standard`である。
+種別がIssue以外の作業項目も既定値で埋まるが、意味を持たない。
+
+値の一覧は、列のCHECK制約と`f/factory/lib/types.ts`の`WORK_ITEM_PROFILES`にある。
+2つが食い違わないことは、`tests/scripts/profile_migration.test.ts`が確かめる。
+
+行の読みは、`profile`を文字列のまま持つ。
+一覧にない値の行も、読みを止めずに通すためである。
+列が無い行は`standard`として読む。`f/`の反映がmigrationより先に走るので、その間も読みが失敗しないためである。
+
+`profile`を書く処理と、値で挙動を変える処理は、まだ無い。
+新しい行は、すべて既定の`standard`になる。
+列を名指しする`SELECT`も`profile`を含まない。列が存在する前に、名指しの文が失敗しないためである。
+`v_*`のviewにも出さない。
+
 ### 新しいサイクルによる取り消し
 
 Issueの新しいサイクルの作業項目を挿入すると、同じIssueの古いサイクルの`approved`の作業項目を取り消す。
