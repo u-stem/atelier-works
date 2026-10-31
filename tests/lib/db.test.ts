@@ -1114,6 +1114,12 @@ describe("updateStatusToRequirementsIfCurrent", () => {
     expect(calls[0]?.text).toContain("design_attempt = 0");
   });
 
+  test("sets the profile to standard in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
+    expect(calls[0]?.text).toContain("profile = 'standard'");
+  });
+
   test("clears flow_job_id in the same statement", async () => {
     const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
     await updateStatusToRequirementsIfCurrent(1, "needs_human", null, sql);
@@ -5803,6 +5809,12 @@ describe("updateStatusToRequirementsIfLeaseHolder", () => {
     expect(calls[0]?.text).toContain("design_attempt = 0");
   });
 
+  test("sets the profile to standard in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("profile = 'standard'");
+  });
+
   test("clears flow_job_id in the same statement", async () => {
     const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
     await call(sql);
@@ -9584,6 +9596,12 @@ describe("returnToRequirementsIfLeaseHolder", () => {
     const { sql, calls } = createFakeSqlClient([WON_ROWS]);
     await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
     expect(calls[0]?.text).toContain("design_attempt = 0");
+  });
+
+  test("sets the profile to standard in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([WON_ROWS]);
+    await returnToRequirementsIfLeaseHolder(1, "job-1", "gap", sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("profile = 'standard'");
   });
 
   test("clears the flow job id so that the next run can record its own", async () => {

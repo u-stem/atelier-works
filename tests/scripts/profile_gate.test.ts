@@ -308,3 +308,46 @@ describe("lib/approval_gate.ts", () => {
     expect(codeOf("lib/approval_gate.ts")).toMatch(/from\s*"\.\/profile\.ts"/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 要件定義の生成へ戻す更新
+// ---------------------------------------------------------------------------
+
+/**
+ * `UPDATE factory.work_items`が書く`SET`の節。
+ * 承認を省く進め方の作業項目が要件定義の生成へ移るときは、同じ文で進め方を通常の進め方に戻す。
+ * 戻さないと、人が承認した要件定義ではなく、承認を省く経路の入力で実装が進む。
+ */
+function workItemSetClauses(path: string): string[] {
+  return [
+    ...codeOf(path).matchAll(
+      /UPDATE\s+factory\.work_items\s+SET\s+([\s\S]*?)\s+WHERE\b/g,
+    ),
+  ].map((match) => match[1] ?? "");
+}
+
+const WRITES_REQUIREMENTS_GENERATING =
+  /\bstatus\s*=\s*'requirements_generating'/;
+const SETS_STANDARD_PROFILE = /\bprofile\s*=\s*'standard'/;
+
+describe("the updates that move a work item to requirements_generating", () => {
+  test("exist in lib/db.ts", () => {
+    const writers = workItemSetClauses("lib/db.ts").filter((clause) =>
+      WRITES_REQUIREMENTS_GENERATING.test(clause),
+    );
+    expect(writers.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("all set the profile to standard in the same statement", () => {
+    const offenders = productionSources().flatMap((path) =>
+      workItemSetClauses(path)
+        .filter(
+          (clause) =>
+            WRITES_REQUIREMENTS_GENERATING.test(clause) &&
+            !SETS_STANDARD_PROFILE.test(clause),
+        )
+        .map((clause) => `${path}: ${clause}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+});
