@@ -386,7 +386,11 @@ function toWorkItem(row: SqlRow): WorkItem {
     ),
     conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
     design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
-    profile: "",
+    // 列を足すmigrationより先にコードが反映された間は、`SELECT *`の行に列が無い。標準の進め方として読む。
+    profile:
+      row.profile === undefined
+        ? "standard"
+        : parseRequiredString(row.profile, "profile"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };

@@ -252,7 +252,17 @@ export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "dependabot",
 ];
 
-export const WORK_ITEM_PROFILES: readonly string[] = [];
+/**
+ * 作業項目の進め方として`factory.work_items.profile`のCHECK制約が許す値。
+ * `WorkItem.profile`の型にはしない。未知の値の行があっても、行の読みを止めないためである。
+ * 制約との一致は`tests/scripts/profile_migration.test.ts`が確かめる。
+ */
+export const WORK_ITEM_PROFILES: readonly string[] = [
+  "standard",
+  "direct",
+  "bugfix",
+  "docs",
+];
 
 /**
  * 作業項目が取りうるすべての状態。
@@ -402,6 +412,10 @@ export type WorkItem = {
    * 列を足すmigrationの反映前の行は、列が無いので0として読む。
    */
   design_attempt: number;
+  /**
+   * 作業項目の進め方。値の一覧は`WORK_ITEM_PROFILES`。
+   * 未知の値も文字列のまま持つ。列を足すmigrationの反映前の行は、列が無いので`"standard"`として読む。
+   */
   profile: string;
   created_at: Date;
   updated_at: Date;
