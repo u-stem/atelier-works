@@ -387,8 +387,17 @@ export type DesignStageText = {
   readonly note: string | null;
 };
 
-export function describeDesignStage(_stage: DesignStageView): DesignStageText {
-  return { state: "", note: null };
+/**
+ * 設計工程の、効いている値の表示。有効か無効かを言葉にし、書かれた値が無視されているときは、そのことと理由を添える。
+ * 設定タブが、開けた直後に実際に効いているかを確かめる唯一の場所である。
+ */
+export function describeDesignStage(stage: DesignStageView): DesignStageText {
+  return {
+    state: stage.enabled ? "有効" : "無効",
+    note: stage.ignored
+      ? "design_enabledにtrueが書かれていますが、design_enabled_sinceが無いか日時として読めないため、無視しています。"
+      : null,
+  };
 }
 
 /** 値を出さない設定の印の文言。参照と、伏せた値に使う。 */

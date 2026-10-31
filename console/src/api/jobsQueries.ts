@@ -312,12 +312,21 @@ const isConfigItem: Guard<ConfigItemView> = (
   return value.kind === "value" && "value" in value && isBoolean(value.masked);
 };
 
-/** `value`がconsole_configの戻りの形か。 */
+const isDesignStage: Guard<DesignStageView> = (
+  value: unknown,
+): value is DesignStageView =>
+  isRecord(value) && isBoolean(value.enabled) && isBoolean(value.ignored);
+
+/**
+ * `value`がconsole_configの戻りの形か。
+ * `design_stage`は、反映の順序でbackendが先に新しくなるまで無いので、無くても受ける。あれば形を確かめる。
+ */
 export function isConfigSnapshot(value: unknown): value is ConfigSnapshotView {
   return (
     isRecord(value) &&
     isString(value.path) &&
-    isArrayOf(isConfigItem)(value.items)
+    isArrayOf(isConfigItem)(value.items) &&
+    (value.design_stage === undefined || isDesignStage(value.design_stage))
   );
 }
 

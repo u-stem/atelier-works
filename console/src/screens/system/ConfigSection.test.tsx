@@ -155,7 +155,9 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: true, ignored: false },
     });
-    expect(renderSection(query)).toMatch(/設計工程[^<]*<[^>]*>有効</);
+    expect(renderSection(query)).toMatch(
+      /設計工程: <\/span><span[^>]*>有効<\/span>/,
+    );
   });
 
   test("shows a closed design stage as off", () => {
@@ -163,7 +165,9 @@ describe("ConfigSection", () => {
       ...SNAPSHOT,
       design_stage: { enabled: false, ignored: false },
     });
-    expect(renderSection(query)).toMatch(/設計工程[^<]*<[^>]*>無効</);
+    expect(renderSection(query)).toMatch(
+      /設計工程: <\/span><span[^>]*>無効<\/span>/,
+    );
   });
 
   test("tells that the written value is ignored", () => {
