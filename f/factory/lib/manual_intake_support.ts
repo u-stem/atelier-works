@@ -87,6 +87,13 @@ export type ManualIntakeFields = ManualIntakeIssueInput & {
 export const INTAKE_KEY_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** スタブ。空文字をキー無しにする実装は、次のコミットで入れる。 */
+export function normalizeIntakeKey(
+  value: string | null | undefined,
+): string | undefined {
+  return value ?? undefined;
+}
+
 /** 冪等キーの形か。例外を投げず、値を文に含めない。 */
 function isIntakeKey(value: string): boolean {
   return INTAKE_KEY_PATTERN.test(value);

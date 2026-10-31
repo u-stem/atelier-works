@@ -7,6 +7,7 @@ import {
   INTAKE_KEY_PATTERN,
   intakeMarkerText,
   MANUAL_INTAKE_REFUSAL_REASONS,
+  normalizeIntakeKey,
   validateManualIntake,
   withIntakeMarker,
 } from "../../f/factory/lib/manual_intake_support.ts";
@@ -163,6 +164,7 @@ describe("profile", () => {
 
 const MALFORMED_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["an empty string", ""],
+  ["a space only", " "],
   ["upper case letters", INTAKE_ID.toUpperCase()],
   ["a trailing line feed", `${INTAKE_ID}\n`],
   ["a leading space", ` ${INTAKE_ID}`],
@@ -198,12 +200,24 @@ describe("intake_key", () => {
     expect(reasonOf(VALID)).toBeNull();
   });
 
-  test.each(MALFORMED_KEYS)(
+  // 空文字は、キー無しとして扱う。形が違うキーとは別に確かめる。
+  test.each(MALFORMED_KEYS.filter(([, key]) => key !== ""))(
     "refuses %s as invalid_intake_key",
     (_name, intake_key) => {
       expect(reasonOf({ ...VALID, intake_key })).toBe("invalid_intake_key");
     },
   );
+
+  test("treats an empty string as no key", () => {
+    expect(reasonOf({ ...VALID, intake_key: "" })).toBeNull();
+  });
+
+  test("does not count a marker for an empty string toward the body limit", () => {
+    const body = bodyForTotal(65536);
+    expect(
+      reasonOf({ ...VALID, body, acceptance_criteria: "", intake_key: "" }),
+    ).toBeNull();
+  });
 
   test("is checked after the profile", () => {
     expect(reasonOf({ ...VALID, profile: "direct", intake_key: "bad" })).toBe(
@@ -227,6 +241,28 @@ describe("intake_key", () => {
         intake_key: INTAKE_ID,
       }),
     ).toBe("body_too_long");
+  });
+});
+
+describe("normalizeIntakeKey", () => {
+  test("turns an empty string into no key", () => {
+    expect(normalizeIntakeKey("")).toBeUndefined();
+  });
+
+  test("turns null into no key", () => {
+    expect(normalizeIntakeKey(null)).toBeUndefined();
+  });
+
+  test("turns undefined into no key", () => {
+    expect(normalizeIntakeKey(undefined)).toBeUndefined();
+  });
+
+  test("keeps a space only so that it is refused as malformed", () => {
+    expect(normalizeIntakeKey(" ")).toBe(" ");
+  });
+
+  test("keeps a uuid as it is", () => {
+    expect(normalizeIntakeKey(INTAKE_ID)).toBe(INTAKE_ID);
   });
 });
 

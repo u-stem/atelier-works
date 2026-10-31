@@ -80,6 +80,45 @@ describe("the script definitions that take the profile", () => {
   });
 });
 
+/**
+ * `skip_if`の式を評価する。式は`results.<step>.<name> === true`の形だけを受け付け、
+ * 他の形は例外にする。`eval`を使わず、結果の値を辿って`true`と厳密に比べる。
+ */
+function evaluateSkipIf(expr: unknown, results: Record<string, unknown>) {
+  if (typeof expr !== "string") throw new Error("expr is not a string");
+  const matched = /^results\.(\w+)\.(\w+) === true$/.exec(expr);
+  if (matched === null) throw new Error(`unsupported expression: ${expr}`);
+  const [, step, name] = matched;
+  if (step === undefined || name === undefined) {
+    throw new Error("unsupported expression");
+  }
+  return field(results[step], name) === true;
+}
+
+describe("the skip_if of the register step", () => {
+  const expr = field(field(moduleById("register"), "skip_if"), "expr");
+
+  test("does not skip when the result has no reused", () => {
+    expect(evaluateSkipIf(expr, { create_issue: { number: 1 } })).toBe(false);
+  });
+
+  test("does not skip when reused is undefined", () => {
+    expect(evaluateSkipIf(expr, { create_issue: { reused: undefined } })).toBe(
+      false,
+    );
+  });
+
+  test("does not skip when reused is false", () => {
+    expect(evaluateSkipIf(expr, { create_issue: { reused: false } })).toBe(
+      false,
+    );
+  });
+
+  test("skips when reused is true", () => {
+    expect(evaluateSkipIf(expr, { create_issue: { reused: true } })).toBe(true);
+  });
+});
+
 describe("the intake key in the manual intake flow", () => {
   test("hands the intake key of the flow input to the create_issue step", () => {
     expect(transformOf(moduleById("create_issue"), "intake_key")).toEqual({

@@ -74,6 +74,12 @@ describe("the entry point of the issue creation", () => {
     );
   });
 
+  test("treats an empty intake key as no key before it checks the key", () => {
+    expect(code.slice(0, code.indexOf("assertIntakeKey(key)"))).toContain(
+      "normalizeIntakeKey(intake_key)",
+    );
+  });
+
   test("refuses a profile that is not accepted before it reads the token", () => {
     expect(code.slice(0, code.indexOf("github_token"))).toContain(
       "assertAcceptedProfile(profile)",
@@ -738,14 +744,18 @@ describe("the statements of the intake key table", () => {
 
 describe("the SQL of the intake key", () => {
   const code = readFileSync(
-    join(
-      import.meta.dir,
-      "../../f/factory/steps/manual_intake_create_issue.ts",
-    ),
+    join(import.meta.dir, "../../f/factory/lib/db.ts"),
     "utf8",
   );
+  const start = code.indexOf("export function sqlIntakeKeyStore(");
+  // 関数の本体は、行頭の閉じ括弧で終わる。
+  const store = code.slice(start, code.indexOf("\n}\n", start));
+
+  test("is found in the store function", () => {
+    expect(store).toContain("factory.manual_intake_keys");
+  });
 
   test("builds no statement by joining strings", () => {
-    expect(code).not.toMatch(/sql\(|sql\.unsafe|\.query\(/);
+    expect(store).not.toMatch(/sql\(|sql\.unsafe|\.query\(/);
   });
 });
