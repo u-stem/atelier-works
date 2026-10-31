@@ -90,6 +90,7 @@ import {
   readJobState,
   statusBeforeActionableCancel,
 } from "./lib/poll_support.ts";
+import { requiredApprovals } from "./lib/profile.ts";
 import { automatedFeedback } from "./lib/prompts.ts";
 import {
   type DesignApprovalRef,
@@ -367,7 +368,10 @@ export function restartContextDeps(
  */
 export async function buildRestartContext(
   input: {
-    readonly workItem: Pick<WorkItem, "id" | "attempt" | "design_attempt">;
+    readonly workItem: Pick<
+      WorkItem,
+      "id" | "attempt" | "design_attempt" | "profile"
+    >;
     readonly restartStatus: WorkItemStatus;
     readonly requirementsApproval: Pick<
       RequirementsApprovalRef,
@@ -379,17 +383,19 @@ export async function buildRestartContext(
   deps: RestartContextDeps,
 ): Promise<RestartContext> {
   const { workItem, requirementsApproval } = input;
-  const implementReady = isRequirementsApprovedForAttempt(
-    requirementsApproval,
-    workItem.attempt,
-  );
+  const required = requiredApprovals(workItem.profile);
+  // 進め方が要件定義の承認を求めないときは、承認の有無を問わず、要件定義は揃っているとみなす。
+  const implementReady =
+    !required.requirements ||
+    isRequirementsApprovedForAttempt(requirementsApproval, workItem.attempt);
+  const designEnabled = input.designEnabled && required.design;
   let designApprovalRead: Promise<DesignApprovalRef | null> | null = null;
   const readDesignApproval = () => {
     designApprovalRead ??= deps.latestDesignApproval(workItem.id);
     return designApprovalRead;
   };
   const designApprovalInScope =
-    input.designEnabled && implementReady && requirementsApproval !== null;
+    designEnabled && implementReady && requirementsApproval !== null;
   const designApproval = designApprovalInScope
     ? await readDesignApproval()
     : null;
@@ -481,7 +487,7 @@ export async function buildRestartContext(
   return {
     implementReady,
     implementEnabled: input.implementEnabled,
-    designEnabled: input.designEnabled,
+    designEnabled,
     designApproved,
     stop,
     feedback,

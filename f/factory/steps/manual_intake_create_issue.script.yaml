@@ -21,6 +21,11 @@ schema:
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
+    profile:
+      type: string
+      description: 作業の進め方。受け付けない値は、Issueを作らずに断ります。
+      default: standard
+      originalType: string
     repo:
       type: string
       description: 対象リポジトリ名。

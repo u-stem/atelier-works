@@ -21,6 +21,11 @@ schema:
       description: 投入先リポジトリのオーナー。factory_configで許可されたものに限ります。
       default: null
       originalType: string
+    profile:
+      type: string
+      description: 作業の進め方。省くと通常の進め方(standard)になります。受け付けない値は、起動せずに理由を返します。
+      default: standard
+      originalType: string
     repo:
       type: string
       description: 投入先のリポジトリ名。

@@ -203,6 +203,12 @@ describe("the callers of the approval gate", () => {
     },
   );
 
+  test("lib/pr_fix_design.ts hands the standard profile to the gate explicitly", () => {
+    expect(codeOf("lib/pr_fix_design.ts")).toMatch(
+      /\bworkItem:\s*\{\s*\.\.\.parent,\s*profile:\s*"standard"\s*\}/,
+    );
+  });
+
   test("the candidate query selects the profile", () => {
     expect(codeOf("lib/db.ts")).toMatch(
       /SELECT w\.id, w\.kind, w\.status, w\.owner, w\.repo, w\.pr_url, w\.attempt, w\.design_attempt, w\.profile,/,

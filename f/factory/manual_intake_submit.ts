@@ -94,6 +94,7 @@ export async function submitManualIntake(
       title: validation.title,
       body: input.body,
       acceptance_criteria: input.acceptance_criteria,
+      profile: input.profile,
     }),
     "runFlowAsync",
   );
@@ -144,16 +145,20 @@ export async function submitManualIntakeRecorded(
   return result.refused ? result : { ...result, action_audit: state.audit };
 }
 
-/** Consoleの新規投入。実行者はジョブの実行文脈から導く。 */
+/**
+ * Consoleの新規投入。実行者はジョブの実行文脈から導く。
+ * `profile`は進め方で、省くと通常の進め方になる。受け付けない値は、検証で断る。
+ */
 export async function main(
   owner: string,
   repo: string,
   title: string,
   body: string,
   acceptance_criteria: string = "",
+  profile: string = "standard",
 ): Promise<ManualIntakeSubmitResult> {
   return await submitManualIntakeRecorded(
-    { owner, repo, title, body, acceptance_criteria },
+    { owner, repo, title, body, acceptance_criteria, profile },
     {
       loadConfig: () =>
         loadConfig(() => wmill.getResource("f/factory/factory_config")),

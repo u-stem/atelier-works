@@ -545,7 +545,15 @@ describe("designGate", () => {
   test("names the design attempt of the work item in the reason", async () => {
     expect(
       await designGate(
-        { ...INPUT, workItem: { id: 7, attempt: 2, design_attempt: 0 } },
+        {
+          ...INPUT,
+          workItem: {
+            id: 7,
+            attempt: 2,
+            design_attempt: 0,
+            profile: "standard",
+          },
+        },
         harness().deps,
       ),
     ).toEqual({ kind: "stop", reason: noApprovedDesignReason(0) });

@@ -2973,8 +2973,13 @@ DBは読まない。
 
 | 項目 | 内容 |
 | --- | --- |
-| 引数 | `owner`、`repo`、`title`、`body`(目的)、`acceptance_criteria`(省略時は空) |
+| 引数 | `owner`、`repo`、`title`、`body`(目的)、`acceptance_criteria`(省略時は空)、`profile`(進め方。省略時は`standard`) |
 | 戻り値 | 断ったときは`{ refused: true, reason }`、起動したときは`{ refused: false, flow_job_id }` |
+
+画面は`profile`を送らない。
+受け付ける進め方は`standard`だけで、それ以外は`profile_not_allowed`で断る。
+断りはフローを起動する前に起き、フローのステップも、Issueの作成と登録の前に同じ一覧で断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
+画面は`profile`を送らないので、この断りの文は画面に出ない。
 
 断りは、失敗ではなく結果として返す。
 その場合、フローは起動せず、Issueと作業項目は作られない。

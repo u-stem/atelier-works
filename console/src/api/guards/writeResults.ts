@@ -135,6 +135,7 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "invalid_owner",
   "invalid_repo",
   "repo_not_allowed",
+  "profile_not_allowed",
   "empty_title",
   "title_too_long",
   "invalid_title_chars",

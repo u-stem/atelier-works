@@ -21,6 +21,7 @@ import { notifyBestEffort } from "../lib/discord.ts";
 import { claimIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { type Logger, logger } from "../lib/log.ts";
+import { assertAcceptedProfile } from "../lib/manual_intake_support.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 
@@ -146,6 +147,8 @@ const defaultInsertDeps: ManualIntakeInsertDeps = {
  * 並行する取得に先を越された場合で、そちらが作業を受け持つので、
  * `poll_issues`と同じく`claim_race_lost`のnoticeを残すだけで、人には知らせない。
  * 挿入が例外を投げたときは、そのまま投げる。フローの失敗として`on_error_flow`が知らせる。
+ * 進め方が受け付けるものでなければ、挿入せずに例外を投げる。
+ * 挿入する行の進め方は、DBの既定(標準の進め方)である。ここで受け付ける値は標準の進め方だけなので、列に書かない。
  */
 export async function registerManualIntakeWorkItem(
   input: {
@@ -156,10 +159,13 @@ export async function registerManualIntakeWorkItem(
     readonly title: string;
     readonly body: string;
     readonly viewerLogin: string;
+    /** 進め方。受け付けないものなら、挿入の前に例外を投げる。 */
+    readonly profile: string;
     readonly log: Logger;
   },
   deps: ManualIntakeInsertDeps = defaultInsertDeps,
 ): Promise<number | null> {
+  assertAcceptedProfile(input.profile);
   const registered = await deps.insertWorkItem({
     cycle: 1,
     source: "manual",
@@ -198,10 +204,13 @@ export async function main(
   issue_url: string,
   title: string,
   body: string,
+  profile: string = "standard",
 ): Promise<ManualIntakeRegisterResult> {
   const log = logger("manual_intake_register");
   assertGitHubName(owner);
   assertGitHubName(repo);
+  // ラベルを外す(取得)より前に断る。外した後に断ると、Issueがどの取得にも拾われなくなる。
+  assertAcceptedProfile(profile);
 
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -232,6 +241,7 @@ export async function main(
     title,
     body,
     viewerLogin: viewer.login,
+    profile,
     log,
   });
   if (workItemId === null) {

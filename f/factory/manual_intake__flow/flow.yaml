@@ -17,6 +17,9 @@ value:
           owner:
             type: javascript
             expr: flow_input.owner
+          profile:
+            type: javascript
+            expr: flow_input.profile
           repo:
             type: javascript
             expr: flow_input.repo
@@ -41,6 +44,9 @@ value:
           owner:
             type: javascript
             expr: results.create_issue.owner
+          profile:
+            type: javascript
+            expr: flow_input.profile
           repo:
             type: javascript
             expr: results.create_issue.repo
@@ -69,6 +75,7 @@ schema:
     - title
     - body
     - acceptance_criteria
+    - profile
   properties:
     acceptance_criteria:
       type: string
@@ -80,6 +87,10 @@ schema:
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
+    profile:
+      type: string
+      description: 作業の進め方。受け付けない値は、Issueを作る前に断ります(任意)。
+      default: standard
     repo:
       type: string
       description: 対象リポジトリ名。

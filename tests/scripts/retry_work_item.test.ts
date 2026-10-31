@@ -1869,7 +1869,7 @@ describe("buildRestartContext", () => {
     test("is not approved when the design attempt of the work item moved on", async () => {
       const h = harness({ designApproval: DESIGN_APPROVED });
       const context = await build(h, {
-        workItem: { id: 7, attempt: 2, design_attempt: 2 },
+        workItem: { id: 7, attempt: 2, design_attempt: 2, profile: "standard" },
       });
       expect(context.designApproved).toBe(false);
     });
@@ -1885,7 +1885,7 @@ describe("buildRestartContext", () => {
     test("is not approved when the approval was requested for another attempt", async () => {
       const h = harness({ designApproval: DESIGN_APPROVED });
       const context = await build(h, {
-        workItem: { id: 7, attempt: 3, design_attempt: 1 },
+        workItem: { id: 7, attempt: 3, design_attempt: 1, profile: "standard" },
         requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 3 },
       });
       expect(context.designApproved).toBe(false);
@@ -1907,7 +1907,7 @@ describe("buildRestartContext", () => {
         designApproval: { ...DESIGN_REJECTED, payload_design_attempt: 9 },
       });
       const context = await build(h, {
-        workItem: { id: 7, attempt: 2, design_attempt: 4 },
+        workItem: { id: 7, attempt: 2, design_attempt: 4, profile: "standard" },
       });
       expect(context.designFeedback).toBe("the design is too complex");
     });
@@ -1985,7 +1985,12 @@ describe("buildRestartContext", () => {
       from_status: "awaiting_design_approval",
       note: "design rejected; the issue changed since intake",
     };
-    const ADVANCED = { id: 7, attempt: 3, design_attempt: 0 };
+    const ADVANCED = {
+      id: 7,
+      attempt: 3,
+      design_attempt: 0,
+      profile: "standard",
+    };
 
     test("passes the reason of the rejection to the requirements", async () => {
       const h = harness({
@@ -2236,7 +2241,7 @@ describe("buildRestartContext", () => {
     test("is the reason of the only rejection when the limit is one", async () => {
       const h = harness({ transition: null });
       const context = await build(h, {
-        workItem: { id: 7, attempt: 1, design_attempt: 0 },
+        workItem: { id: 7, attempt: 1, design_attempt: 0, profile: "standard" },
         requirementsApproval: {
           ...REQUIREMENTS_REJECTED,
           attempt: 1,
@@ -2659,7 +2664,12 @@ describe("buildRestartContext", () => {
   describe("a reason that the attempt did not consume", () => {
     const APPROVED_1 = { ...REQUIREMENTS_APPROVED, attempt: 1 };
     const REJECTED_1 = { ...REQUIREMENTS_REJECTED, attempt: 1 };
-    const ADVANCED = { id: 7, attempt: 2, design_attempt: 0 };
+    const ADVANCED = {
+      id: 7,
+      attempt: 2,
+      design_attempt: 0,
+      profile: "standard",
+    };
     const GAP_ROW: StatusEventSummary = {
       from_status: "implementing",
       note: "gap: X",

@@ -7,6 +7,7 @@ import {
   DESIGN_FOR_IMPLEMENT_MAX_CHARS,
   normalizeDesignForImplement,
 } from "./model_text.ts";
+import { requiredApprovals } from "./profile.ts";
 import type { DesignApprovalRef, DesignDraft, WorkItem } from "./types.ts";
 
 /**
@@ -161,26 +162,31 @@ export type ReadyForImplementDeps = {
 
 /**
  * 実装フローで再開してよいか。再実行と自動再開と自己更新の起動の要否が、同じ判定を使う。
- * 要件定義が現在の`attempt`で承認済みで、設計が無効か、設計の承認が照合を通るときだけ真を返す。
- * 設計が無効のときは、設計の承認を読まない。
+ * 進め方(`item.profile`)が求める承認が揃うときだけ真を返す(`lib/profile.ts`)。
+ * 要件定義が求められるときは、現在の`attempt`で承認済みでなければならない。
+ * 設計が求められ、かつ設計工程が有効なときは、設計の承認が照合を通らなければならない。
+ * 設計が求められないか無効のときは、設計の承認を読まない。
  */
 export async function isReadyForImplement(
-  item: Pick<WorkItem, "id" | "attempt" | "design_attempt">,
+  item: Pick<WorkItem, "id" | "attempt" | "design_attempt" | "profile">,
   designEnabled: boolean,
   deps: ReadyForImplementDeps,
 ): Promise<boolean> {
+  const required = requiredApprovals(item.profile);
   const requirements = await deps.latestRequirementsApproval(item.id);
-  if (
-    requirements === null ||
-    !isRequirementsApprovedForAttempt(requirements, item.attempt)
-  ) {
-    return false;
-  }
-  if (!designEnabled) return true;
+  const approvedRequirements =
+    requirements !== null &&
+    isRequirementsApprovedForAttempt(requirements, item.attempt)
+      ? requirements
+      : null;
+  if (required.requirements && approvedRequirements === null) return false;
+  if (!designEnabled || !required.design) return true;
+  // 設計の承認は、承認済みの要件定義の下書きに対して照合する。要件定義が承認済みでなければ、照合できない。
+  if (approvedRequirements === null) return false;
   return isDesignApprovedForAttempt(await deps.latestDesignApproval(item.id), {
     attempt: item.attempt,
     designAttempt: item.design_attempt,
-    requirementDraftId: requirements.draft_id,
+    requirementDraftId: approvedRequirements.draft_id,
   });
 }
 
@@ -192,7 +198,10 @@ export type DesignGateResult =
 
 export type DesignGateInput = {
   readonly designEnabled: boolean;
-  readonly workItem: Pick<WorkItem, "id" | "attempt" | "design_attempt">;
+  readonly workItem: Pick<
+    WorkItem,
+    "id" | "attempt" | "design_attempt" | "profile"
+  >;
   /** 現在の`attempt`で承認済みの、最新の要件定義の承認。 */
   readonly requirementsApproval: { readonly draft_id: number };
 };
@@ -216,7 +225,7 @@ export type DesignGateDeps = {
 
 /**
  * 実装の関門の、設計の承認の判定。
- * - 設計が無効なら`skip`を返す。承認の行があっても読まず、設計書も渡さない。
+ * - 設計が無効、または進め方(`workItem.profile`)が設計の承認を求めないなら`skip`を返す。承認の行があっても読まず、設計書も渡さない。
  * - 設計が有効で、承認が照合を通らなければ、理由つきで`stop`を返す。
  * - 照合を通れば、承認依頼が指す設計書を読み直し、`pass`と整えた設計書の本文を返す。最新の設計書は読まない。
  *   後から保存された別の設計書が、承認済みの設計書に取って代わって実装に渡らないようにするためである。
@@ -230,8 +239,10 @@ export async function designGate(
   input: DesignGateInput,
   deps: DesignGateDeps,
 ): Promise<DesignGateResult> {
-  if (!input.designEnabled) return { kind: "skip" };
   const { workItem } = input;
+  if (!input.designEnabled || !requiredApprovals(workItem.profile).design) {
+    return { kind: "skip" };
+  }
   const approval = await deps.latestDesignApproval(workItem.id);
   const verdict = designApprovalVerdict(approval, {
     attempt: workItem.attempt,
