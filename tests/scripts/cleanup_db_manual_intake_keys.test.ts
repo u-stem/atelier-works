@@ -16,7 +16,7 @@ describe("cleanup_db.ts", () => {
     expect(await SOURCE).toContain("手動投入のキーの削除に失敗しました");
   });
 
-  test("does not let a failed sweep stop the others", async () => {
+  test("logs a failure to delete manual_intake_keys", async () => {
     expect(await SOURCE).toContain(
       "cleanup_db: failed to delete manual_intake_keys",
     );
