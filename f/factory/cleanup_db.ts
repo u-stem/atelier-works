@@ -9,6 +9,7 @@
 // 収集の実行の`gh_collect_runs`も保持期間で削除する(所有者ごとの直近の成功と、`finished_at`のある直近の実行は残す)。件数はログだけに残す。
 // 収集の詳細のうち、閉じたPRと一覧から外れたIssueの行も、`written_at`から保持期間を過ぎたものを削除する。開いている行は、古くても削除しない。件数はログだけに残す。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
+// 手動投入の冪等キー`manual_intake_keys`は、`reserved_at`から作業項目と同じ保持期間(`retention_work_items_days`)を過ぎたものを削除する。件数はログだけに残す。
 // Consoleの操作の記録`console_actions`は、設定ではなく固定の保持日数(90日)で削除する。件数はログだけに残す。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
@@ -46,6 +47,7 @@ import {
   deleteGhCollectRunsBefore,
   deleteJobFailuresBefore,
   deleteMainCiRunsBefore,
+  deleteManualIntakeKeysBefore,
   deletePrCiChecksBefore,
   deletePrConflictChecksBefore,
   deleteResolvedNoticesBefore,
@@ -280,6 +282,29 @@ async function cleanupWorkerSamples(
 }
 
 /**
+ * 手動投入の冪等キーを、予約した時刻から作業項目と同じ保持期間を過ぎたものだけ削除する。
+ * 件数は`cleanup_runs`に記録せず、ログに残す。
+ */
+async function cleanupManualIntakeKeys(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deleteManualIntakeKeysBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete manual_intake_keys", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `手動投入のキーの削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
+/**
  * Consoleの操作の記録を、記録した時刻から固定の保持日数(`CONSOLE_ACTIONS_RETENTION_DAYS`)を過ぎたものだけ削除する。
  * 保持日数は設定の項目にしない。記録を短くすると、誤操作の追跡が効かなくなるためである。
  * 件数は`cleanup_runs`に記録せず、ログに残す。
@@ -400,6 +425,11 @@ export async function main(): Promise<CleanupCounts> {
     log,
   );
 
+  const manualIntakeKeysDeleted = await cleanupManualIntakeKeys(
+    cutoffs.workItemsBefore,
+    log,
+  );
+
   const consoleActionsDeleted = await cleanupConsoleActions(new Date(), log);
 
   const counts: CleanupCounts = {
@@ -421,6 +451,7 @@ export async function main(): Promise<CleanupCounts> {
     pr_conflict_checks_deleted: prConflictChecksDeleted,
     gh_collect_runs_deleted: ghCollectRunsDeleted,
     gh_detail_rows_deleted: ghDetailRowsDeleted,
+    manual_intake_keys_deleted: manualIntakeKeysDeleted,
     console_actions_deleted: consoleActionsDeleted,
   });
   return counts;

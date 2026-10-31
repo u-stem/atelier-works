@@ -374,6 +374,16 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 要件定義の承認が要らない進め方を表に足すときは、`isReadyForImplement`、`implement_prepare`、`buildRestartContext`の3つの判定を揃える。
 承認の行が無いときの扱いと、要件定義の下書きを実装に渡すかが、3つで同じになる必要がある。
 
+### 手動投入の冪等キー
+
+表`manual_intake_keys`は、手動投入の1回を表すキー、投入の内容のハッシュ、作ったIssueの所有者とリポジトリと番号、キーを予約したジョブのID、予約した時刻を持つ。
+キーは小文字のUUIDだけを受け、作業項目とは外部キーを持たない。
+この表に触れるのは`cleanup_db`の削除だけで、行を作るコードは無い。
+表を落とすdown migrationを当てる前に、`cleanup_db`の削除も外す。表が無いと、`cleanup_db`が毎回失敗して通知を残すためである。
+
+保持期間は、予約した時刻から`retention_work_items_days`である。
+`cleanup_db`が期限を過ぎた行を、状態にかかわらず消し、件数をログだけに残す。
+
 ### 新しいサイクルによる取り消し
 
 Issueの新しいサイクルの作業項目を挿入すると、同じIssueの古いサイクルの`approved`の作業項目を取り消す。
