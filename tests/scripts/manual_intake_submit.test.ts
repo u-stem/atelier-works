@@ -203,7 +203,7 @@ describe("the intake key", () => {
   });
 
   test.each([
-    ["an empty string", ""],
+    ["a space only", " "],
     ["upper case letters", INTAKE_ID.toUpperCase()],
     ["a trailing line feed", `${INTAKE_ID}\n`],
     ["a word", "not-a-key"],
@@ -213,6 +213,13 @@ describe("the intake key", () => {
       refused: true,
       reason: "invalid_intake_key",
     });
+  });
+
+  test("starts the flow for an empty string, which is no key", async () => {
+    const { deps } = harness();
+    expect(
+      await submitManualIntake({ ...INPUT, intake_key: "" }, deps),
+    ).toEqual({ refused: false, flow_job_id: JOB });
   });
 
   test("starts no flow for a key that is not valid", async () => {
