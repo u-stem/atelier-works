@@ -1207,6 +1207,8 @@ export async function updateStatusIfCurrentClearingFlowJobId(
  * 同じ文で`design_attempt`を0にそろえる。
  * 再実行が作業項目を要件定義の生成へ戻す遷移(却下の作り直し、改ざんと差し戻しからの作り直し)で使う。
  * 要件定義の生成中は`design_attempt`が0であるという不変条件を、次の`pipeline`の準備が`attempt`を進める前に止まった場合にも保つためである。
+ * 同じ文で進め方(`profile`)を通常の進め方(`standard`)に戻す。
+ * 要件定義の生成へ移った作業項目は、人が承認した要件定義で実装が進むので、承認を省く進め方のままにしない。
  * `attempt`は書かない。次の`pipeline`の実行が`flow_input.attempt`で進める。
  * statusが`expectedFrom`でなければ何も書かずに`false`を返す。
  */
@@ -1220,7 +1222,7 @@ export async function updateStatusToRequirementsIfCurrent(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      SET status = 'requirements_generating', profile = 'standard', design_attempt = 0, flow_job_id = NULL, updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
       RETURNING id
     )
@@ -3905,6 +3907,7 @@ export async function setDesignAttemptIfLeaseHolder(
  * `factory.work_item_events`の行も記録する。
  * - `status`を`requirements_generating`にする。
  * - `design_attempt`を0に戻す。
+ * - 進め方(`profile`)を通常の進め方(`standard`)にする。要件定義の生成へ移る更新は、すべて進め方を戻す。
  * - `flow_job_id`を空にする。次の要件定義のフローが、起動側の記録した値でリースを取れるようにするため。
  * `attempt`は書かない。次の`pipeline`の実行が`flow_input.attempt`で進める。
  * 条件に合わなければ何も書かずに`false`を返す。
@@ -3919,7 +3922,7 @@ export async function returnToRequirementsIfLeaseHolder(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      SET status = 'requirements_generating', profile = 'standard', design_attempt = 0, flow_job_id = NULL, updated_at = now()
       WHERE id = ${id} AND status = 'designing' AND flow_job_id = ${leaseJobId}::text
       RETURNING id
     )
@@ -4545,6 +4548,8 @@ export async function hasParentTransitionSinceFixStarted(
  * (`null`なら`NULL`のままであること)を条件に足す。
  * 設計の承認待ちの間に残る前のフローのジョブIDを条件にして、読み直した後に別の経路が
  * 作業項目を動かし、同じ状態に戻していても、古い判断で要件定義へ戻さないために使う。
+ * 進め方(`profile`)を通常の進め方に戻す点も同じである。
+ * 承認を省く進め方の実装が要件の不足か保護パスの変更を報告したとき、この更新で通常の進め方になる。
  * 条件に合わなければ何も書かずに`false`を返す。
  */
 export async function updateStatusToRequirementsIfLeaseHolder(
@@ -4558,7 +4563,7 @@ export async function updateStatusToRequirementsIfLeaseHolder(
   const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = 'requirements_generating', design_attempt = 0, flow_job_id = NULL, updated_at = now()
+      SET status = 'requirements_generating', profile = 'standard', design_attempt = 0, flow_job_id = NULL, updated_at = now()
       WHERE id = ${id} AND status = ${expectedFrom}
         AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
       RETURNING id
