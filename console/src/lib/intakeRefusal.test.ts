@@ -33,6 +33,10 @@ describe("describeIntakeRefusal", () => {
     expect(describeIntakeRefusal("profile_not_allowed")).toContain("進め方");
   });
 
+  test("says that the intake key is not in the expected form", () => {
+    expect(describeIntakeRefusal("invalid_intake_key")).toContain("再送");
+  });
+
   test("names the title limit", () => {
     expect(describeIntakeRefusal("title_too_long")).toContain("256");
   });

@@ -156,12 +156,15 @@ export type ManualIntakeInput = {
   readonly body: string;
   /** 受入基準。1行に1項目で書く。空でもよい。 */
   readonly acceptanceCriteria: string;
+  /** 再送を止める冪等キー。 */
+  readonly intakeKey?: string;
 };
 
 /**
  * 手動で投入する。許可されていないリポジトリや不正な入力は、フローを起動せず、理由つきの断りで返る。
  * 断りは失敗ではなく結果として返す。投入した人は引数に取らない。scriptがジョブの実行文脈から導く。
  * 入力の検証と、Issueの作成、作業項目の登録は、scriptとフローが行う。
+ * `intakeKey`は、同じ送信の再送を止める冪等キーである。同じキーの再送は、最初の投入のIssueを返す。
  */
 export function submitManualIntake(
   input: ManualIntakeInput,
@@ -175,6 +178,8 @@ export function submitManualIntake(
       title: input.title,
       body: input.body,
       acceptance_criteria: input.acceptanceCriteria,
+      // キーが無い呼び出しには、引数を足さない。
+      ...(input.intakeKey === undefined ? {} : { intake_key: input.intakeKey }),
     },
     isManualIntakeSubmitResult,
     options,

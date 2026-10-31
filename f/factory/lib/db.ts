@@ -6678,6 +6678,111 @@ export async function deleteManualIntakeKeysBefore(
   return rows.length;
 }
 
+/** `factory.manual_intake_keys`の1行。 */
+export type IntakeKeyRow = {
+  readonly intake_key: string;
+  readonly content_hash: string;
+  readonly owner: string;
+  readonly repo: string;
+  /** 作成が終わるまでは`null`。 */
+  readonly issue_number: number | null;
+  /** 予約したジョブのID。 */
+  readonly holder: string;
+  readonly reserved_at: Date;
+};
+
+export type IntakeReservation = {
+  readonly intake_key: string;
+  readonly content_hash: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly holder: string;
+};
+
+/** 冪等キーの表の操作。SQLの本体は`sqlIntakeKeyStore`にある。 */
+export type IntakeKeyStore = {
+  /** キーを予約する。このジョブが予約できたときだけ`true`を返す。 */
+  readonly reserve: (reservation: IntakeReservation) => Promise<boolean>;
+  readonly read: (key: string) => Promise<IntakeKeyRow | null>;
+  /** 作成中のまま10分を過ぎた予約を取り直す。取り直せたときだけ`true`を返す。 */
+  readonly takeOver: (key: string, holder: string) => Promise<boolean>;
+  /** 自分が持つ予約に、Issueの番号を書く。書けたときだけ`true`を返す。 */
+  readonly recordIssue: (
+    key: string,
+    holder: string,
+    issueNumber: number,
+  ) => Promise<boolean>;
+};
+
+function toIntakeKeyRow(row: SqlRow): IntakeKeyRow {
+  return {
+    intake_key: parseRequiredString(row.intake_key, "intake_key"),
+    content_hash: parseRequiredString(row.content_hash, "content_hash"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    issue_number: parseNullableId(row.issue_number, "issue_number"),
+    holder: parseRequiredString(row.holder, "holder"),
+    reserved_at: parseDate(row.reserved_at, "reserved_at"),
+  };
+}
+
+/**
+ * 冪等キーの表(`factory.manual_intake_keys`)を、タグ付きテンプレートのSQLで操作する。
+ * 値はパラメータとして束縛し、文字列を結合して文を作らない。
+ * 時刻の比較は、workerの時計のずれを避けるため、DBの`now()`だけで行う。
+ * 判断の手順は、Issueを作るステップ(`steps/manual_intake_create_issue.ts`)にある。
+ */
+export function sqlIntakeKeyStore(
+  sql: SqlClient = defaultSqlClient,
+): IntakeKeyStore {
+  return {
+    reserve: async (reservation) => {
+      const rows = await sql`
+        INSERT INTO factory.manual_intake_keys (
+          intake_key, content_hash, owner, repo, holder
+        ) VALUES (
+          ${reservation.intake_key}, ${reservation.content_hash},
+          ${reservation.owner}, ${reservation.repo}, ${reservation.holder}
+        )
+        ON CONFLICT (intake_key) DO NOTHING
+        RETURNING intake_key
+      `.fetch();
+      return rows.length > 0;
+    },
+    read: async (key) => {
+      const rows = await sql`
+        SELECT intake_key, content_hash, owner, repo, issue_number, holder, reserved_at
+        FROM factory.manual_intake_keys
+        WHERE intake_key = ${key}
+      `.fetch();
+      const row = rows[0];
+      return row === undefined ? null : toIntakeKeyRow(row);
+    },
+    takeOver: async (key, holder) => {
+      // 古さと番号の有無の判定を、更新と同じ1文に入れる。
+      // 2つのジョブが同時に取り直そうとしても、片方だけが条件に当たる。
+      const rows = await sql`
+        UPDATE factory.manual_intake_keys
+        SET holder = ${holder}, reserved_at = now()
+        WHERE intake_key = ${key}
+          AND issue_number IS NULL
+          AND reserved_at < now() - interval '10 minutes'
+        RETURNING intake_key
+      `.fetch();
+      return rows.length > 0;
+    },
+    recordIssue: async (key, holder, issueNumber) => {
+      const rows = await sql`
+        UPDATE factory.manual_intake_keys
+        SET issue_number = ${issueNumber}::integer
+        WHERE intake_key = ${key} AND holder = ${holder}
+        RETURNING intake_key
+      `.fetch();
+      return rows.length > 0;
+    },
+  };
+}
+
 /** 新しい順に`limit`件の`factory.worker_samples`の行を返す。 */
 export async function listRecentWorkerSamples(
   limit: number,

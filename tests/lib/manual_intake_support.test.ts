@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertAcceptedProfile,
+  assertIntakeKey,
   buildManualIntakeIssueBody,
+  computeIntakeContentHash,
+  INTAKE_KEY_PATTERN,
+  intakeMarkerText,
   MANUAL_INTAKE_REFUSAL_REASONS,
+  normalizeIntakeKey,
   validateManualIntake,
+  withIntakeMarker,
 } from "../../f/factory/lib/manual_intake_support.ts";
 import type { FactoryConfig } from "../../f/factory/lib/types.ts";
 import * as createIssueStep from "../../f/factory/steps/manual_intake_create_issue.ts";
@@ -28,10 +34,11 @@ const VALID = {
   profile: "standard",
 };
 
-function reasonOf(
-  input: typeof VALID,
-  config: AllowConfig = CONFIG,
-): string | null {
+const INTAKE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+type Input = typeof VALID & { intake_key?: string };
+
+function reasonOf(input: Input, config: AllowConfig = CONFIG): string | null {
   const result = validateManualIntake(input, config);
   return result.ok ? null : result.reason;
 }
@@ -61,6 +68,7 @@ describe("the refusal reasons", () => {
       "empty_body",
       "invalid_body_chars",
       "body_too_long",
+      "invalid_intake_key",
       "actor_unknown",
     ]);
   });
@@ -150,6 +158,188 @@ describe("profile", () => {
   test("is checked before the title", () => {
     expect(reasonOf({ ...VALID, profile: "direct", title: "" })).toBe(
       "profile_not_allowed",
+    );
+  });
+});
+
+const MALFORMED_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["an empty string", ""],
+  ["a space only", " "],
+  ["upper case letters", INTAKE_ID.toUpperCase()],
+  ["a trailing line feed", `${INTAKE_ID}\n`],
+  ["a leading space", ` ${INTAKE_ID}`],
+  ["a trailing character", `${INTAKE_ID}0`],
+  ["a leading character", `0${INTAKE_ID}`],
+  ["a non-hex letter", INTAKE_ID.replace("0190", "019g")],
+  ["no hyphens", INTAKE_ID.replaceAll("-", "")],
+  ["a short last group", INTAKE_ID.slice(0, -1)],
+];
+
+describe("INTAKE_KEY_PATTERN", () => {
+  test("accepts a lower case uuid", () => {
+    expect(INTAKE_KEY_PATTERN.test(INTAKE_ID)).toBe(true);
+  });
+
+  test.each(MALFORMED_KEYS)("rejects %s", (_name, key) => {
+    expect(INTAKE_KEY_PATTERN.test(key)).toBe(false);
+  });
+
+  test("is the expression of the table's CHECK", () => {
+    expect(INTAKE_KEY_PATTERN.source).toBe(
+      "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    );
+  });
+});
+
+describe("intake_key", () => {
+  test("is accepted when it is a lower case uuid", () => {
+    expect(reasonOf({ ...VALID, intake_key: INTAKE_ID })).toBeNull();
+  });
+
+  test("is not required", () => {
+    expect(reasonOf(VALID)).toBeNull();
+  });
+
+  // 空文字は、キー無しとして扱う。形が違うキーとは別に確かめる。
+  test.each(MALFORMED_KEYS.filter(([, key]) => key !== ""))(
+    "refuses %s as invalid_intake_key",
+    (_name, intake_key) => {
+      expect(reasonOf({ ...VALID, intake_key })).toBe("invalid_intake_key");
+    },
+  );
+
+  test("treats an empty string as no key", () => {
+    expect(reasonOf({ ...VALID, intake_key: "" })).toBeNull();
+  });
+
+  test("does not count a marker for an empty string toward the body limit", () => {
+    const body = bodyForTotal(65536);
+    expect(
+      reasonOf({ ...VALID, body, acceptance_criteria: "", intake_key: "" }),
+    ).toBeNull();
+  });
+
+  test("is checked after the profile", () => {
+    expect(reasonOf({ ...VALID, profile: "direct", intake_key: "bad" })).toBe(
+      "profile_not_allowed",
+    );
+  });
+
+  test("is checked before the title", () => {
+    expect(reasonOf({ ...VALID, title: "", intake_key: "bad" })).toBe(
+      "invalid_intake_key",
+    );
+  });
+
+  test("counts the marker toward the body limit", () => {
+    const body = bodyForTotal(65536);
+    expect(
+      reasonOf({
+        ...VALID,
+        body,
+        acceptance_criteria: "",
+        intake_key: INTAKE_ID,
+      }),
+    ).toBe("body_too_long");
+  });
+});
+
+describe("normalizeIntakeKey", () => {
+  test("turns an empty string into no key", () => {
+    expect(normalizeIntakeKey("")).toBeUndefined();
+  });
+
+  test("turns null into no key", () => {
+    expect(normalizeIntakeKey(null)).toBeUndefined();
+  });
+
+  test("turns undefined into no key", () => {
+    expect(normalizeIntakeKey(undefined)).toBeUndefined();
+  });
+
+  test("keeps a space only so that it is refused as malformed", () => {
+    expect(normalizeIntakeKey(" ")).toBe(" ");
+  });
+
+  test("keeps a uuid as it is", () => {
+    expect(normalizeIntakeKey(INTAKE_ID)).toBe(INTAKE_ID);
+  });
+});
+
+describe("assertIntakeKey", () => {
+  test("accepts a lower case uuid", () => {
+    expect(() => assertIntakeKey(INTAKE_ID)).not.toThrow();
+  });
+
+  test.each(MALFORMED_KEYS)("throws for %s", (_name, key) => {
+    expect(() => assertIntakeKey(key)).toThrow();
+  });
+
+  test("throws a fixed message without the key", () => {
+    expect(() => assertIntakeKey("secret-key")).toThrow(
+      "manual_intake: the intake key is not accepted",
+    );
+  });
+});
+
+describe("computeIntakeContentHash", () => {
+  test("is a sha256 in lower case hex", () => {
+    expect(computeIntakeContentHash(VALID)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("is the same for the same content", () => {
+    expect(computeIntakeContentHash({ ...VALID })).toBe(
+      computeIntakeContentHash(VALID),
+    );
+  });
+
+  test("ignores the padding of the title, the body, and the acceptance criteria", () => {
+    expect(
+      computeIntakeContentHash({
+        ...VALID,
+        title: ` ${VALID.title}\t`,
+        body: `\n${VALID.body} `,
+        acceptance_criteria: ` ${VALID.acceptance_criteria}\n`,
+      }),
+    ).toBe(computeIntakeContentHash(VALID));
+  });
+
+  test("ignores the kind of line break", () => {
+    expect(computeIntakeContentHash({ ...VALID, body: "a\r\nb" })).toBe(
+      computeIntakeContentHash({ ...VALID, body: "a\nb" }),
+    );
+  });
+
+  test.each([
+    ["owner", { owner: "other-owner" }],
+    ["repo", { repo: "gadgets" }],
+    ["title", { title: "Add a gadget" }],
+    ["body", { body: "Add a gadget." }],
+    ["acceptance_criteria", { acceptance_criteria: "It works." }],
+    ["profile", { profile: "direct" }],
+  ])("differs when the %s differs", (_name, change) => {
+    expect(computeIntakeContentHash({ ...VALID, ...change })).not.toBe(
+      computeIntakeContentHash(VALID),
+    );
+  });
+
+  test("tells apart contents that join into the same text", () => {
+    expect(
+      computeIntakeContentHash({ ...VALID, title: "a b", body: "c" }),
+    ).not.toBe(computeIntakeContentHash({ ...VALID, title: "a", body: "b c" }));
+  });
+});
+
+describe("the marker of the intake key", () => {
+  test("is an HTML comment that holds the key", () => {
+    expect(intakeMarkerText(INTAKE_ID)).toBe(
+      `<!-- factory:intake:${INTAKE_ID} -->`,
+    );
+  });
+
+  test("ends the issue body on a line of its own", () => {
+    expect(withIntakeMarker("### 目的\n\nDo it", INTAKE_ID)).toBe(
+      `### 目的\n\nDo it\n\n<!-- factory:intake:${INTAKE_ID} -->`,
     );
   });
 });

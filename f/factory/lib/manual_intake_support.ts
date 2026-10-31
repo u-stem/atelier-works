@@ -3,6 +3,7 @@
 // Issueを作る`steps/manual_intake_create_issue`が共有する。
 // 検証は純粋な関数で、拒否の理由は固定の符号だけで返す。入力の文字列を理由に含めない。
 
+import { createHash } from "node:crypto";
 import { isRepoAllowed } from "./config.ts";
 import { ACCEPTED_PROFILES } from "./profile.ts";
 import { type FactoryConfig, isGitHubName } from "./types.ts";
@@ -22,6 +23,7 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "empty_body",
   "invalid_body_chars",
   "body_too_long",
+  "invalid_intake_key",
   "actor_unknown",
 ] as const;
 
@@ -74,7 +76,85 @@ export type ManualIntakeFields = ManualIntakeIssueInput & {
   readonly title: string;
   /** 進め方。受け付けるのは`ACCEPTED_PROFILES`に載せた値だけである。 */
   readonly profile: string;
+  /** 投入の再送を止める冪等キー。省くと、再送を止めない従来の投入になる。 */
+  readonly intake_key?: string;
 };
+
+/**
+ * 冪等キーの形(小文字のUUID)。`factory.manual_intake_keys`のCHECKと同じ式で、両端に固定する。
+ * 大文字、前後の文字、末尾の改行を通さない。
+ */
+export const INTAKE_KEY_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * 冪等キーの入力を、キー無し(`undefined`)か、形を検査する前の文字列にそろえる。
+ * Windmillのフォームは空欄を空文字で送りうるので、空文字、`null`、省略を同じくキー無しにする。
+ * 空白だけの文字列は、形が違うキーとして残し、検査で断る。
+ */
+export function normalizeIntakeKey(
+  value: string | null | undefined,
+): string | undefined {
+  return value === null || value === undefined || value === ""
+    ? undefined
+    : value;
+}
+
+/** 冪等キーの形か。例外を投げず、値を文に含めない。 */
+function isIntakeKey(value: string): boolean {
+  return INTAKE_KEY_PATTERN.test(value);
+}
+
+/**
+ * 冪等キーの形を検査する。形が違うと例外を投げる。
+ * フローを直接実行する経路でも、表に触れる前に形を確かめるために使う。
+ * 入力の文字列は、メッセージに含めない。
+ */
+export function assertIntakeKey(key: string): void {
+  if (!isIntakeKey(key)) {
+    throw new Error("manual_intake: the intake key is not accepted");
+  }
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").trim();
+}
+
+/**
+ * 投入の内容(リポジトリ、題名、本文、受入基準、進め方)を正規化して、sha256の16進数にする。
+ * 同じキーで内容が違う投入を、同じ投入として扱わないために使う。
+ * 前後の空白と改行の種類は、Issueの本文に影響しないので、正規化で除く。
+ * 項目の境目が曖昧にならないよう、JSONの配列にしてから計算する。
+ */
+export function computeIntakeContentHash(
+  fields: Pick<
+    ManualIntakeFields,
+    "owner" | "repo" | "title" | "body" | "acceptance_criteria" | "profile"
+  >,
+): string {
+  const normalized = JSON.stringify([
+    fields.owner,
+    fields.repo,
+    normalizeText(fields.title),
+    normalizeText(fields.body),
+    normalizeText(fields.acceptance_criteria),
+    fields.profile,
+  ]);
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+/**
+ * Issueの本文の末尾に置く、冪等キーの目印。
+ * 作成の結果を取りこぼしたとき、同じキーの再試行がこの目印で作成済みのIssueを見つける。
+ */
+export function intakeMarkerText(key: string): string {
+  return `<!-- factory:intake:${key} -->`;
+}
+
+/** `body`の末尾に、冪等キーの目印を単独の行として足す。 */
+export function withIntakeMarker(body: string, key: string): string {
+  return `${body}\n\n${intakeMarkerText(key)}`;
+}
 
 /**
  * 進め方が受け付けるものかを返す。入口(検証、Issueの作成、登録)が、同じ一覧を見る。
@@ -159,8 +239,9 @@ function hasForbiddenCharacter(
 /**
  * 手動投入の入力を検証する。上から順に調べ、最初に当たった理由を返す。
  * 許可の判定は`isRepoAllowed`に任せる。リポジトリのオーナーの数値IDの照合は、Issueを作るステップが行う。
- * 進め方は、リポジトリの許可の後、題名より前に調べる。
+ * 進め方は、リポジトリの許可の後、題名より前に調べる。冪等キーは、進め方の次に調べる。
  * 本文の長さは、`buildManualIntakeIssueBody`で組み立てた後の値で測る。GitHubへ届く長さと一致させるためである。
+ * 冪等キーがあるときは、Issueの本文の末尾に付ける目印の分も数える。空文字のキーは、キー無しとして扱う。
  */
 export function validateManualIntake(
   input: ManualIntakeFields,
@@ -177,6 +258,10 @@ export function validateManualIntake(
   }
   if (!isAcceptedProfile(input.profile)) {
     return { ok: false, reason: "profile_not_allowed" };
+  }
+  const intakeKey = normalizeIntakeKey(input.intake_key);
+  if (intakeKey !== undefined && !isIntakeKey(intakeKey)) {
+    return { ok: false, reason: "invalid_intake_key" };
   }
 
   const title = input.title.trim();
@@ -199,10 +284,12 @@ export function validateManualIntake(
   ) {
     return { ok: false, reason: "invalid_body_chars" };
   }
-  if (
-    codePointLength(buildManualIntakeIssueBody(input)) >
-    MANUAL_INTAKE_BODY_MAX_CHARS
-  ) {
+  const assembled = buildManualIntakeIssueBody(input);
+  const issueBody =
+    intakeKey === undefined
+      ? assembled
+      : withIntakeMarker(assembled, intakeKey);
+  if (codePointLength(issueBody) > MANUAL_INTAKE_BODY_MAX_CHARS) {
     return { ok: false, reason: "body_too_long" };
   }
   return { ok: true, title };

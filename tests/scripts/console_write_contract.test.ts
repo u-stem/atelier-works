@@ -97,6 +97,7 @@ const WRITE_SCRIPTS: WriteScript[] = [
 ];
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const SEND_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
 
 /** 結果の最小の形。`action_audit`を足して、型ガードが受けるか確かめる。 */
 function retryBase() {
@@ -232,6 +233,7 @@ const WRAPPER_CALLS: Readonly<
         title: "Add a widget",
         body: "Add a widget.",
         acceptanceCriteria: "",
+        intakeKey: SEND_ID,
       },
       { fetchFn },
     ),
@@ -445,11 +447,17 @@ describe("what the typed calls send", () => {
     expect([...properties].sort()).toEqual([
       "acceptance_criteria",
       "body",
+      "intake_key",
       "owner",
       "profile",
       "repo",
       "title",
     ]);
+  });
+
+  test("manual_intake_submit receives the intake key under the name of the script", async () => {
+    const sent = await sentBy(WRAPPER_CALLS.manual_intake_submit);
+    expect(sent.body.intake_key).toBe(SEND_ID);
   });
 
   test("manual_intake_submit requires the inputs the flow requires", async () => {
