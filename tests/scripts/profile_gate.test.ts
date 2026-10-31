@@ -14,7 +14,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import {
   ACCEPTED_PROFILES,
   requiredApprovals,
@@ -105,6 +105,62 @@ describe("lib/profile.ts", () => {
 
   test("decides by the accepted list, not by a comparison with standard", () => {
     expect(codeOf("lib/profile.ts")).not.toMatch(/[=!]==?\s*"standard"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 表の定義と取り込み
+// ---------------------------------------------------------------------------
+
+const TABLE_NAMES = ["requiredApprovals", "ACCEPTED_PROFILES"] as const;
+const TABLE_NAME_PATTERN = TABLE_NAMES.join("|");
+const TABLE_MODULE = "lib/profile.ts";
+
+/** 表の名前の宣言、代入、別名での再束縛。 */
+const TABLE_DEFINITION = new RegExp(
+  `\\bfunction\\s+(?:${TABLE_NAME_PATTERN})\\b` +
+    `|\\b(?:const|let|var)\\s+(?:${TABLE_NAME_PATTERN})\\b` +
+    `|\\b(?:${TABLE_NAME_PATTERN})\\s*=(?!=)` +
+    `|\\bas\\s+(?:${TABLE_NAME_PATTERN})\\b`,
+);
+
+/**
+ * `path`が`name`を取り込む(再エクスポートを含む)モジュールの、`f/factory`からの相対パス。
+ * 取り込む形は`{ name }`だけを見る。別名は左側の名前で数える。
+ */
+function modulesProviding(path: string, name: string): string[] {
+  const modules: string[] = [];
+  const statements = codeOf(path).matchAll(
+    /\b(?:import|export)\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g,
+  );
+  for (const [, names, specifier] of statements) {
+    const imported = (names ?? "")
+      .split(",")
+      .map((part) => part.trim().split(/\s+as\s+/)[0]);
+    if (imported.includes(name) && specifier !== undefined) {
+      modules.push(posix.join(posix.dirname(path), specifier));
+    }
+  }
+  return modules;
+}
+
+describe("the table of approvals", () => {
+  test("is defined only in lib/profile.ts", () => {
+    const definers = productionSources().filter(
+      (path) => path !== TABLE_MODULE && TABLE_DEFINITION.test(codeOf(path)),
+    );
+    expect(definers).toEqual([]);
+  });
+
+  test("is imported only from lib/profile.ts", () => {
+    const elsewhere = productionSources().flatMap((path) =>
+      TABLE_NAMES.flatMap((name) =>
+        modulesProviding(path, name)
+          .filter((module) => module !== TABLE_MODULE)
+          .map((module) => `${path}: ${name} from ${module}`),
+      ),
+    );
+    expect(elsewhere).toEqual([]);
   });
 });
 
@@ -202,6 +258,17 @@ describe("the callers of the approval gate", () => {
       );
     },
   );
+
+  test.each([
+    "lib/approval_gate.ts",
+    ...Object.entries(PROFILE_AWARE_CALLERS)
+      .filter(([, called]) =>
+        called.includes("isRequirementsApprovedForAttempt"),
+      )
+      .map(([path]) => path),
+  ])("%s imports requiredApprovals from lib/profile.ts", (path) => {
+    expect(modulesProviding(path, "requiredApprovals")).toEqual([TABLE_MODULE]);
+  });
 
   test("lib/pr_fix_design.ts hands the standard profile to the gate explicitly", () => {
     expect(codeOf("lib/pr_fix_design.ts")).toMatch(
