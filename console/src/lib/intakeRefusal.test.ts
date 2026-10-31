@@ -29,6 +29,10 @@ describe("describeIntakeRefusal", () => {
     );
   });
 
+  test("says that the way of proceeding is not accepted", () => {
+    expect(describeIntakeRefusal("profile_not_allowed")).toContain("進め方");
+  });
+
   test("names the title limit", () => {
     expect(describeIntakeRefusal("title_too_long")).toContain("256");
   });

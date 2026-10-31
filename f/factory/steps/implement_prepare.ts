@@ -79,6 +79,7 @@ import {
   WorktreeBusyError,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import { requiredApprovals } from "../lib/profile.ts";
 import {
   repoOwnerGateDeps,
   verifyRepoOwnerId,
@@ -375,9 +376,12 @@ export async function main(
 
   const approval = await latestRequirementsApproval(work_item_id);
   const noApproval = `no approved requirements for attempt ${String(workItem.attempt)}`;
+  // 承認の行が無ければ、実装に渡す要件定義の下書きが無いので止める。
+  // 承認済みかの照合は、進め方が要件定義の承認を求めるときに行う(`lib/profile.ts`)。
   if (
     approval === null ||
-    !isRequirementsApprovedForAttempt(approval, workItem.attempt)
+    (requiredApprovals(workItem.profile).requirements &&
+      !isRequirementsApprovedForAttempt(approval, workItem.attempt))
   )
     return stop("needs_human", noApproval);
   const draft = await getRequirementDraft(approval.draft_id);

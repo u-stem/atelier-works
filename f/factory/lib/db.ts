@@ -1247,6 +1247,8 @@ export type AutoRetryCandidate = {
   readonly attempt: number;
   /** 設計の承認の照合に使う。 */
   readonly design_attempt: number;
+  /** 進め方。承認の要否の表(`lib/profile.ts`)を引く。 */
+  readonly profile: string;
   readonly flow_job_id: string | null;
   /** 通知の解決ではなく、ブランチのPRの終端でない回が終わるのを待って再開する理由で止まっているか。 */
   readonly waits_for_pr_run: boolean;
@@ -1291,7 +1293,7 @@ export async function listAutoRetryCandidates(
 ): Promise<AutoRetryCandidate[]> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const rows = await sql`
-    SELECT w.id, w.kind, w.status, w.owner, w.repo, w.pr_url, w.attempt, w.design_attempt, w.flow_job_id,
+    SELECT w.id, w.kind, w.status, w.owner, w.repo, w.pr_url, w.attempt, w.design_attempt, w.profile, w.flow_job_id,
       (w.kind = 'issue' AND EXISTS (
         SELECT 1 FROM unnest(${[...params.waitReasonPrefixes]}::text[]) AS wp(prefix)
         WHERE starts_with(last.note, wp.prefix)
@@ -1366,6 +1368,7 @@ export async function listAutoRetryCandidates(
     pr_url: parseNullableString(row.pr_url, "pr_url"),
     attempt: parseRequiredNumber(row.attempt, "attempt"),
     design_attempt: parseRequiredNumber(row.design_attempt, "design_attempt"),
+    profile: parseRequiredString(row.profile, "profile"),
     flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
     waits_for_pr_run: parseBoolean(row.waits_for_pr_run, "waits_for_pr_run"),
   }));

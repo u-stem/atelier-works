@@ -5519,6 +5519,49 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 
 `.github/workflows/`を含むpushは、PATにWorkflowsの権限が無いのでGitHubが拒否する。拒否されたら、作業項目は人の対応待ちになり、理由に拒否が載る。
 
+### 進め方ごとの承認
+
+作業項目は進め方(`profile`)を持ち、進め方が要件定義と設計の承認が要るかを決める。
+承認を省く進め方は、人の承認という関門を外す。
+そのため、判定を1か所に置き、受け付ける進め方を一覧で閉じる。
+仕組みは[実装フローの仕様](internals/implement.md)の「進め方と承認の要否」にある。
+
+- 承認の要否は、`f/factory/lib/profile.ts`の`requiredApprovals`の1か所で決める。
+  実装の関門(`isReadyForImplement`、`designGate`、要件定義の承認の照合)と、準備、再実行、自動再開、自己更新の起動の要否が、作業項目の進め方を渡して同じ表を引く。
+  入口ごとに判定を書くと、片方だけが緩んで承認を飛ばせるためである。
+- 表を引けるのは、受け付ける進め方の一覧(`ACCEPTED_PROFILES`)に載せた値だけである。
+  一覧に無い値は、DBの制約が許す値も未知の値も、要件定義と設計の承認の両方を要る側に倒す。
+  「標準の値だけが承認を要る」と書くと、値が増えたとき、既定で承認が外れるためである。
+- 入口の受け付けも、同じ一覧を見る。
+  手動投入は、検証(`validateManualIntake`)、Issueの作成、登録の3か所で断り、Issueの作成は`createIssue`の前、登録はラベルを外す取得の前に断る。
+  Issueが先にできてラベルだけが残る経路と、取得の後に断って作業項目がどの取得にも拾われなくなる経路を作らないためである。
+- `poll_issues`は進め方を渡さず、標準の進め方で登録する。
+  登録の`INSERT`も`profile`を書かないので、新しい行は既定の`standard`になる。
+- 受け付ける進め方は、通常の進め方(`standard`)だけである。
+  `standard`は両方の承認を求めるので、承認を省く経路は無い。
+
+表の`lib/profile.ts`とその`.script.yaml`、表と関門を呼ぶ場所を固定するテスト`tests/scripts/profile_gate.test.ts`は、保護パスに入れる。
+書き換えられると、承認を省く進め方が、人の確認なしに通るためである。
+テストは次を固定する。
+
+- `standard`が要件定義と設計の承認を求めること。
+- DBの制約が許す、`standard`以外の値と、未知の値が、両方の承認を求めること。
+- `ACCEPTED_PROFILES`が字面で`["standard"]`であること。
+- 関門(`isRequirementsApprovedForAttempt`、`designGate`、`isReadyForImplement`)を呼ぶ本番のファイルの集合が、テスト内の表と一致すること。
+  表の一方は、進め方を関門に渡すファイルで、`requiredApprovals`を通すことも確かめる。
+  もう一方は、設計工程の中で通常の進め方だけを扱うファイルで、進め方を渡さない。
+  `design_prepare`、`design_generate`、`design_apply_support`、`pr_fix_design`である。
+  受け付ける進め方を広げるときは、後者の見直しが要る。
+- 表の名前(`requiredApprovals`、`ACCEPTED_PROFILES`)を、`lib/profile.ts`以外で宣言しないこと。
+  宣言とみなす形は、`function`、`const`、`let`、`var`、代入、`as`による別名である。
+  分割代入、関数の引数、オブジェクトのプロパティによる上書きは検出しない。
+- 表の名前を取り込む本番のファイルが、すべて`lib/profile.ts`から取り込むこと。
+- `approval_gate.ts`と、`requiredApprovals`を呼ぶ呼び出し元が、`requiredApprovals`を取り込んでいること。
+
+残るリスクとして、`approval_gate.ts`、`implement_prepare.ts`、`auto_retry_stale_image.ts`、`self_update.ts`は保護パスではない。
+保護テストが固定するのは、表を呼ぶ字面と、表の宣言と取り込みの位置である。
+呼び出しの結果を条件にどう組み込むかは固定しないので、この範囲はPRの人のレビューが守る。
+
 ## 設計書の生成の安全策
 
 設計書の生成(`design`フロー)も、Claudeに書き込みのツールを与える。

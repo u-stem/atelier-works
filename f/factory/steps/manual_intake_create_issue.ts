@@ -6,6 +6,7 @@ import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved } from "../lib/db.ts";
 import { createIssue, type GhClient } from "../lib/github.ts";
 import {
+  assertAcceptedProfile,
   buildManualIntakeIssueBody,
   type ManualIntakeIssueInput,
 } from "../lib/manual_intake_support.ts";
@@ -31,9 +32,10 @@ export type ManualIntakeCreateIssueResult = {
 
 /**
  * `owner/repo`にトリガーラベル付きのIssueを作り、作ったIssueの情報を返す。
- * リポジトリ名が不正なとき、`factory_config`で許可されていないとき、
+ * リポジトリ名が不正なとき、進め方が受け付けるものでないとき、`factory_config`で許可されていないとき、
  * リポジトリのオーナーの数値IDが`owners`の`id`と食い違うとき(`verifyRepoOwnerId`)は、
  * Issueを作らずに例外を投げる。
+ * 進め方の検査は、GitHubへ書く前にここで行う。Issueが先にできて、ラベルだけが残る経路を作らないためである。
  */
 export async function main(
   owner: string,
@@ -41,9 +43,11 @@ export async function main(
   title: string,
   body: string,
   acceptance_criteria: string,
+  profile: string = "standard",
 ): Promise<ManualIntakeCreateIssueResult> {
   assertGitHubName(owner);
   assertGitHubName(repo);
+  assertAcceptedProfile(profile);
 
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),

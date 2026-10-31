@@ -95,7 +95,8 @@ export async function loadParentDesignForFix(
   const gate = await designGate(
     {
       designEnabled: true,
-      workItem: parent,
+      // 親の設計工程は通常の進め方だけを扱うので、進め方を明示して渡す。
+      workItem: { ...parent, profile: "standard" },
       requirementsApproval: requirements,
     },
     deps,

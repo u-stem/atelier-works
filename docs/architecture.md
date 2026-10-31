@@ -566,6 +566,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/metadata_patch_verify` | script | [LIB] メタデータのパッチの適用条件の検査 |
 | `f/factory/lib/model_text` | script | [LIB] モデルの出力の文字列の整形 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
+| `f/factory/lib/profile` | script | [LIB] 作業項目の進め方ごとの承認の要否 |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
 | `f/factory/lib/holds` | script | [LIB] 共通の保留の表の読み書き |

@@ -34,6 +34,7 @@ const ISSUE: AutoRetryCandidate = {
   pr_url: null,
   attempt: 2,
   design_attempt: 0,
+  profile: "standard",
   flow_job_id: "old-job",
   waits_for_pr_run: false,
 };
@@ -46,6 +47,7 @@ const PR_FIX: AutoRetryCandidate = {
   pr_url: null,
   attempt: 1,
   design_attempt: 0,
+  profile: "standard",
   flow_job_id: "old-job",
   waits_for_pr_run: false,
 };

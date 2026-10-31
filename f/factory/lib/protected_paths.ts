@@ -233,6 +233,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 固定しているので、書き換えられると、門が緩んでも黙って通るためである。
  * `lib/config.ts`は日常的に直すので守らない。門の呼び出しの形を保護されたテストが固定するので、守っても保証の上乗せが小さい。
  * 門の単体のテスト(`tests/lib/design_gate.test.ts`)も、保護されたテストが同じ判定を確かめるので守らない。
+ * 進め方ごとの承認の要否の表(`lib/profile.ts`とその`.script.yaml`)は守る。受け付ける進め方の一覧と、承認を省く進め方の表が
+ * この1か所にあり、書き換えられると、要件定義や設計の承認を、人の確認なしに省ける。
+ * 表と、実装の関門が表を通すことを固定するテスト(`tests/scripts/profile_gate.test.ts`)も守る。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -318,6 +321,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/design_gate.script.yaml",
   "tests/scripts/design_stage_closed.test.ts",
   "tests/scripts/design_entry_origins.test.ts",
+  "f/factory/lib/profile.ts",
+  "f/factory/lib/profile.script.yaml",
+  "tests/scripts/profile_gate.test.ts",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",

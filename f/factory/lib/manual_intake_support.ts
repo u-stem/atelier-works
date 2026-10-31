@@ -4,6 +4,7 @@
 // 検証は純粋な関数で、拒否の理由は固定の符号だけで返す。入力の文字列を理由に含めない。
 
 import { isRepoAllowed } from "./config.ts";
+import { ACCEPTED_PROFILES } from "./profile.ts";
 import { type FactoryConfig, isGitHubName } from "./types.ts";
 
 /**
@@ -14,6 +15,7 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "invalid_owner",
   "invalid_repo",
   "repo_not_allowed",
+  "profile_not_allowed",
   "empty_title",
   "title_too_long",
   "invalid_title_chars",
@@ -70,7 +72,27 @@ export type ManualIntakeFields = ManualIntakeIssueInput & {
   readonly owner: string;
   readonly repo: string;
   readonly title: string;
+  /** 進め方。受け付けるのは`ACCEPTED_PROFILES`に載せた値だけである。 */
+  readonly profile: string;
 };
+
+/**
+ * 進め方が受け付けるものかを返す。入口(検証、Issueの作成、登録)が、同じ一覧を見る。
+ * 承認を省く進め方は、この一覧に載せない限り、どの入口も通らない。
+ */
+function isAcceptedProfile(profile: string): boolean {
+  return ACCEPTED_PROFILES.includes(profile);
+}
+
+/**
+ * 受け付けない進め方なら例外を投げる。Issueの作成と登録のステップが、副作用の前に呼ぶ。
+ * 入力の文字列は、メッセージに含めない。
+ */
+export function assertAcceptedProfile(profile: string): void {
+  if (!isAcceptedProfile(profile)) {
+    throw new Error("manual_intake: the profile is not accepted");
+  }
+}
 
 export type ManualIntakeValidation =
   | {
@@ -137,6 +159,7 @@ function hasForbiddenCharacter(
 /**
  * 手動投入の入力を検証する。上から順に調べ、最初に当たった理由を返す。
  * 許可の判定は`isRepoAllowed`に任せる。リポジトリのオーナーの数値IDの照合は、Issueを作るステップが行う。
+ * 進め方は、リポジトリの許可の後、題名より前に調べる。
  * 本文の長さは、`buildManualIntakeIssueBody`で組み立てた後の値で測る。GitHubへ届く長さと一致させるためである。
  */
 export function validateManualIntake(
@@ -151,6 +174,9 @@ export function validateManualIntake(
   }
   if (!isRepoAllowed(config, input.owner, input.repo)) {
     return { ok: false, reason: "repo_not_allowed" };
+  }
+  if (!isAcceptedProfile(input.profile)) {
+    return { ok: false, reason: "profile_not_allowed" };
   }
 
   const title = input.title.trim();

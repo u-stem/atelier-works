@@ -4,6 +4,8 @@
 // 失敗にせず見送る。assigneeが付かなくても作業を続け、noticeを残す。
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { InsertedIssueWorkItem } from "../../f/factory/lib/db.ts";
 import {
   type ClaimIssueResult,
@@ -248,6 +250,7 @@ describe("registerManualIntakeWorkItem", () => {
     title: "Add a thing",
     body: "please add a thing",
     viewerLogin: "factory-bot",
+    profile: "standard",
   };
 
   test("returns the id of the registered work item", async () => {
@@ -312,6 +315,30 @@ describe("registerManualIntakeWorkItem", () => {
     ]);
   });
 
+  test.each(["direct", "bugfix", "docs", "", "unknown"])(
+    "refuses the profile %p before the insert",
+    async (profile) => {
+      const { deps, inserted } = insertDeps(async () => ({
+        id: 77,
+        superseded: [],
+      }));
+      const { log } = recordingLog();
+      await registerManualIntakeWorkItem(
+        { ...INPUT, profile, log },
+        deps,
+      ).catch(() => undefined);
+      expect(inserted).toEqual([]);
+    },
+  );
+
+  test("throws for a profile that is not accepted", async () => {
+    const { deps } = insertDeps(async () => ({ id: 77, superseded: [] }));
+    const { log } = recordingLog();
+    await expect(
+      registerManualIntakeWorkItem({ ...INPUT, profile: "direct", log }, deps),
+    ).rejects.toThrow("manual_intake: the profile is not accepted");
+  });
+
   test("rethrows a failing insert", async () => {
     const { deps } = insertDeps(async () => {
       throw new Error("db down");
@@ -320,5 +347,24 @@ describe("registerManualIntakeWorkItem", () => {
     await expect(
       registerManualIntakeWorkItem({ ...INPUT, log }, deps),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("the entry point of the registration", () => {
+  const code = new Bun.Transpiler({ loader: "ts" }).transformSync(
+    readFileSync(
+      join(import.meta.dir, "../../f/factory/steps/manual_intake_register.ts"),
+      "utf8",
+    ),
+  );
+
+  test("takes the profile and defaults it to standard", () => {
+    expect(code).toMatch(/\bprofile = "standard"/);
+  });
+
+  test("refuses a profile that is not accepted before it claims the issue", () => {
+    expect(
+      code.slice(0, code.indexOf("await claimManualIntakeIssue(")),
+    ).toContain("assertAcceptedProfile(profile)");
   });
 });

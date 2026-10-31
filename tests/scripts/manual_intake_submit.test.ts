@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { LogFields } from "../../f/factory/lib/log.ts";
 import type { ManualIntakeRefusalReason } from "../../f/factory/lib/manual_intake_support.ts";
 import type { FactoryConfig } from "../../f/factory/lib/types.ts";
@@ -24,6 +26,7 @@ const INPUT = {
   title: "Add a widget",
   body: "Add a widget to the page.",
   acceptance_criteria: "It renders.",
+  profile: "standard",
 };
 
 type Run = { path: string; args: Record<string, unknown> };
@@ -124,6 +127,7 @@ describe("a refusal", () => {
     ["invalid_owner", { owner: "bad owner" }],
     ["invalid_repo", { repo: "a/b" }],
     ["repo_not_allowed", { owner: "stranger" }],
+    ["profile_not_allowed", { profile: "direct" }],
     ["empty_title", { title: "  " }],
     ["title_too_long", { title: "a".repeat(257) }],
     ["invalid_title_chars", { title: "a\u0000b" }],
@@ -142,6 +146,36 @@ describe("a refusal", () => {
     const { deps, runs } = harness();
     await submitManualIntake({ ...INPUT, owner: "stranger" }, deps);
     expect(runs).toEqual([]);
+  });
+
+  test("does not start the flow for a profile that is not accepted", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake({ ...INPUT, profile: "direct" }, deps);
+    expect(runs).toEqual([]);
+  });
+
+  test("refuses an empty profile", async () => {
+    const { deps } = harness();
+    expect(await submitManualIntake({ ...INPUT, profile: "" }, deps)).toEqual({
+      refused: true,
+      reason: "profile_not_allowed",
+    });
+  });
+});
+
+describe("the profile", () => {
+  test("is passed to the flow", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake(INPUT, deps);
+    expect(runs[0]?.args.profile).toBe("standard");
+  });
+
+  test("defaults to standard when the script is called without it", () => {
+    const source = readFileSync(
+      join(import.meta.dir, "../../f/factory/manual_intake_submit.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(/\bprofile: string = "standard",?\s*\)/);
   });
 });
 

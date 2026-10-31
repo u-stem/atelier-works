@@ -13,6 +13,8 @@ const REFUSALS: Readonly<Record<ManualIntakeRefusalReason, string>> = {
     "リポジトリ名が正しくありません。英数字で始め、英数字と「.」「_」「-」だけで書いてください。",
   repo_not_allowed:
     "このリポジトリは投入先として許可されていません。候補から選ぶか、許可の設定を確かめてください。",
+  profile_not_allowed:
+    "指定された進め方は受け付けていません。この画面では通常の進め方だけを受け付けます。",
   empty_title: "題名が空です。題名を入力してください。",
   title_too_long: "題名が長すぎます。256字までにしてください。",
   invalid_title_chars:
