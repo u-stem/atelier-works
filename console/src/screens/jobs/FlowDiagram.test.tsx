@@ -142,8 +142,12 @@ describe("FlowDiagramFrame: the exits", () => {
     expect(render("pipeline")).toContain('href="/jobs/flows/pipeline"');
   });
 
-  test("draws no approval exit on design", () => {
-    expect(render("design")).not.toContain("承認の後");
+  test("writes the approve exit of design", () => {
+    expect(render("design")).toContain("承認の後: implement");
+  });
+
+  test("writes the reject exit of design that makes it again", () => {
+    expect(render("design")).toContain("却下の後: design");
   });
 
   test("writes the exit that sends work back", () => {
@@ -158,10 +162,8 @@ describe("FlowDiagramFrame: the exits", () => {
     expect(plain(render("pipeline"))).toContain("implementの差し戻し");
   });
 
-  test("says that the approval of pipeline does not start design yet", () => {
-    expect(render("design")).toContain(
-      "pipelineの承認からは、まだ起動されません。",
-    );
+  test("says nothing about an entry of design that is not started yet", () => {
+    expect(render("design")).not.toContain("まだ起動されません");
   });
 
   test("does not say it for a flow that is started", () => {
@@ -490,8 +492,8 @@ describe("FlowDiagramFrame: embedded in a work item", () => {
     );
   });
 
-  test("keeps that note in the standalone diagram", () => {
-    expect(render("design")).toContain("まだ起動されません");
+  test("adds no note about an entry that is not wired in the standalone diagram either", () => {
+    expect(render("design")).not.toContain("まだ起動されません");
   });
 
   test("keeps the entries in the narrow list, where they are the only links upstream", () => {

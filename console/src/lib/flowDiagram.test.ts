@@ -215,8 +215,9 @@ describe("groupEntriesForList", () => {
     ).toEqual([]);
   });
 
-  test("keeps the schedule and the human entries", () => {
+  test("keeps the schedule, the human entries and the entry from the rejection of design", () => {
     expect(grouped.entries.map((entry) => entry.kind).sort()).toEqual([
+      "flow",
       "human",
       "schedule",
     ]);
@@ -501,8 +502,8 @@ describe("layoutFlowDiagram", () => {
     expect(exitTop).toBeGreaterThan(stepBottom);
   });
 
-  test("draws both exits of the approval step", () => {
-    expect(boxesOf(layoutOf("pipeline"), "exit")).toHaveLength(2);
+  test("draws every exit of the approval step", () => {
+    expect(boxesOf(layoutOf("pipeline"), "exit")).toHaveLength(3);
   });
 
   test("links each entry to the first step", () => {
@@ -540,12 +541,13 @@ describe("layoutFlowDiagram", () => {
     );
   });
 
-  test("fits the widest flow in the widest body, so five steps need no scrolling there", () => {
-    const widest = Math.max(
-      ...(FLOWS_DATA?.flows.map((flow) => layoutOf(flow.name).width) ?? []),
-    );
+  test("scrolls in the widest body exactly the flows whose exits spread to the right", () => {
+    const scrolled = (FLOWS_DATA?.flows ?? [])
+      .filter((flow) => layoutOf(flow.name).width > 1152 - FIT_CHROME_WIDTH)
+      .map((flow) => flow.name)
+      .sort();
 
-    expect(widest).toBeLessThanOrEqual(1152 - FIT_CHROME_WIDTH);
+    expect(scrolled).toEqual(["design", "pipeline", "pr_fix"]);
   });
 
   test("scrolls the widest flow in a narrower body", () => {
@@ -595,8 +597,8 @@ describe("the diagram without the column of entries", () => {
   const EXPECTED: readonly (readonly [string, GraphPresentation])[] = [
     ["audit", "fit"],
     ["dependabot", "fit"],
-    ["design", "fit"],
-    ["implement", "fit"],
+    ["design", "scroll"],
+    ["implement", "scroll"],
     ["manual_intake", "fit"],
     ["pipeline", "scroll"],
     ["pr_fix", "scroll"],
