@@ -6661,11 +6661,21 @@ export async function deleteWorkerSamplesBefore(
   return rows.length;
 }
 
+/**
+ * `reserved_at`が`olderThan`以前の`factory.manual_intake_keys`の行を削除し、行数を返す。
+ * このテーブルは外部キーを持たず、残すべき行も無いので、期限を過ぎた行をすべて削除する。
+ * 消したキーの再送は、重複として止まらず、新しい投入として扱われる。
+ */
 export async function deleteManualIntakeKeysBefore(
-  _olderThan: Date,
-  _sql: SqlClient = defaultSqlClient,
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  return 0;
+  const rows = await sql`
+    DELETE FROM factory.manual_intake_keys
+    WHERE reserved_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING intake_key
+  `.fetch();
+  return rows.length;
 }
 
 /** 新しい順に`limit`件の`factory.worker_samples`の行を返す。 */

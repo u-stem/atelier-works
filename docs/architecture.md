@@ -292,6 +292,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `gh_pull_requests` | GitHubの開いているPRの記録。リポジトリの番号ごとに1行で、headのコミットとブランチ名、作者、ドラフトかとforkか、競合の有無、ラベルの有無、レビュー依頼とassigneeの数値IDを持つ。題と本文は持たない。行を使ってよいかを`usable`で表す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`と`poll_prs`と`watch_pr_conflicts`は収集の2つの設定が真のときに、`watch_pr_ci`は収集の2つの設定が真で、設定`pr_ci_watch_human_prs`が`true`のときに、候補の列挙に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `gh_issues` | GitHubのトリガーラベル付きの開いているIssueの記録。リポジトリの番号ごとに1行で、作者と作成と更新の時刻を持つ。題と本文は持たない。作業項目とは独立した記録で、外部キーを持たない。`poll_issues`が、収集の2つの設定が真のときに、候補のIssueの発見に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録で、保持期間を過ぎた行はDBの掃除が消す |
+| `manual_intake_keys` | 手動投入の冪等キー。キー、投入の内容のハッシュ、作ったIssueの所有者とリポジトリと番号、予約したジョブのID、予約した時刻を持つ。作業項目とは外部キーを持たない。期限を過ぎた行はDBの掃除が消す([作業項目の状態とリース](internals/work-items.md#手動投入の冪等キー)) |
 | `holds` | 共通の保留。対象を進めないことを、期限つきで伝える。範囲は自動マージ(`merge`、主体ごとに重ねられる)とIssueの取り込み(`claim`、排他、読み手なし)で、置いた主体の名乗り、期限、閉じた時刻と閉じた理由を持つ。作業項目とは独立した記録で、外部キーを持たない。行は消さず履歴として残す([保留の内部仕様](internals/holds.md)) |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
