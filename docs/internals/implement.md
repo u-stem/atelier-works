@@ -86,8 +86,9 @@ Claudeに渡すIssueの題名、本文、URLは、取り込んだ時点の値(`w
 
 - 設計工程の準備と生成(`design_prepare`、`design_generate`)
 - 承認の反映(`design_apply_support`)
-- 承認待ちの走査(`approval_sweep`)
 - PR修正の設計書の受け渡し(`pr_fix_design`)
+
+承認待ちの走査(`approval_sweep`)は、`designGateReason`を取り込むだけで、関門の関数を呼ばない。
 
 受け付ける進め方を広げるときは、これらを見直す。
 関門を呼ぶ場所の一覧は、保護されたテスト`tests/scripts/profile_gate.test.ts`が固定する。

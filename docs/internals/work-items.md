@@ -371,6 +371,9 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 関門に渡すためである。列を足すmigrationの反映より前に、この問い合わせが動くと失敗する。
 `v_*`のviewには出さない。
 
+要件定義の承認が要らない進め方を表に足すときは、`isReadyForImplement`、`implement_prepare`、`buildRestartContext`の3つの判定を揃える。
+承認の行が無いときの扱いと、要件定義の下書きを実装に渡すかが、3つで同じになる必要がある。
+
 ### 新しいサイクルによる取り消し
 
 Issueの新しいサイクルの作業項目を挿入すると、同じIssueの古いサイクルの`approved`の作業項目を取り消す。

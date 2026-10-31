@@ -5552,6 +5552,13 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
   もう一方は、設計工程の中で通常の進め方だけを扱うファイルで、進め方を渡さない。
   `design_prepare`、`design_generate`、`design_apply_support`、`pr_fix_design`である。
   受け付ける進め方を広げるときは、後者の見直しが要る。
+- 表の名前(`requiredApprovals`、`ACCEPTED_PROFILES`)を、`lib/profile.ts`以外で宣言せず、再束縛しないこと。
+- 表の名前を取り込む本番のファイルが、すべて`lib/profile.ts`から取り込むこと。
+- `approval_gate.ts`と、`requiredApprovals`を呼ぶ呼び出し元が、`requiredApprovals`を取り込んでいること。
+
+残るリスクとして、`approval_gate.ts`、`implement_prepare.ts`、`auto_retry_stale_image.ts`、`self_update.ts`は保護パスではない。
+保護テストが固定するのは、表を呼ぶ字面と、表の宣言と取り込みの位置である。
+呼び出しの結果を条件にどう組み込むかは固定しないので、この範囲はPRの人のレビューが守る。
 
 ## 設計書の生成の安全策
 
