@@ -1570,7 +1570,24 @@ describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
 
   test("the skill keeps the requirements above the issue body when both are given", async () => {
     expect(await readSkillText()).toContain(
-      "要件定義が渡されるときは、Issue本文は背景の参考情報で、要件定義と食い違う場合は要件定義を優先する。",
+      "要件定義が渡されるときは、実装の仕様は承認済みの要件定義で、Issue本文は背景の参考情報であり、食い違う場合は要件定義を優先する。",
+    );
+  });
+
+  test("the skill states the requirements-given rule once", async () => {
+    const text = await readSkillText();
+    expect(text.split("要件定義が渡されるときは、").length - 1).toBe(1);
+  });
+
+  test("the skill does not apply the permission on protected paths when the issue is the input", async () => {
+    expect(await inputKinds()).toContain(
+      "保護パスの節の「触ってよい」は、この入力では適用しない(保護パスは変更しない)。",
+    );
+  });
+
+  test("the skill does not ask for a requirement ID in the gap report when the issue is the input", async () => {
+    expect(await inputKinds()).toContain(
+      "`gap_report`の「どの要件(FR / ACのID)」は、この入力では該当しない。",
     );
   });
 

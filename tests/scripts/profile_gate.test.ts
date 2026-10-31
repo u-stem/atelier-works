@@ -317,11 +317,13 @@ describe("lib/approval_gate.ts", () => {
  * `UPDATE factory.work_items`が書く`SET`の節。
  * 承認を省く進め方の作業項目が要件定義の生成へ移るときは、同じ文で進め方を通常の進め方に戻す。
  * 戻さないと、人が承認した要件定義ではなく、承認を省く経路の入力で実装が進む。
+ * 移り先は、文に直書きする更新と、引数で受ける更新の2通りがある。
+ * 後者はSQLの字面に`requirements_generating`が現れないので、`status = ${...}`の形を別に数える。
  */
 function workItemSetClauses(path: string): string[] {
   return [
     ...codeOf(path).matchAll(
-      /UPDATE\s+factory\.work_items\s+SET\s+([\s\S]*?)\s+WHERE\b/g,
+      /UPDATE\s+factory\.work_items(?:\s+AS\s+\w+)?\s+SET\s+([\s\S]*?)\s+WHERE\b/g,
     ),
   ].map((match) => match[1] ?? "");
 }
@@ -329,8 +331,59 @@ function workItemSetClauses(path: string): string[] {
 const WRITES_REQUIREMENTS_GENERATING =
   /\bstatus\s*=\s*'requirements_generating'/;
 const SETS_STANDARD_PROFILE = /\bprofile\s*=\s*'standard'/;
+/** 移り先を引数で受ける`status = ${...}`。`to_status`は数えない。 */
+const WRITES_STATUS_BY_ARGUMENT = /\bstatus\s*=\s*\$\{([^}]+)\}/;
 
-describe("the updates that move a work item to requirements_generating", () => {
+function escapeForPattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 引数で受けた移り先が要件定義の生成のときだけ、進め方を通常の進め方に戻す式を持つか。
+ * 比べる式は、`status`に代入する式と同じでなければならない。
+ */
+function resetsProfileByArgument(clause: string): boolean {
+  const target = WRITES_STATUS_BY_ARGUMENT.exec(clause)?.[1];
+  if (target === undefined) return false;
+  return new RegExp(
+    `\\bprofile\\s*=\\s*CASE\\s+WHEN\\s+\\$\\{${escapeForPattern(target)}\\}(?:::text)?\\s*=\\s*'requirements_generating'` +
+      `\\s+THEN\\s+'standard'\\s+ELSE\\s+profile\\s+END`,
+  ).test(clause);
+}
+
+/** `path`の`SET status = ${...}`を持つ更新と、それを含む関数の名前の組。 */
+function argumentTargetUpdates(
+  path: string,
+): { name: string; clause: string }[] {
+  const code = codeOf(path);
+  return [
+    ...code.matchAll(
+      /UPDATE\s+factory\.work_items(?:\s+AS\s+\w+)?\s+SET\s+([\s\S]*?)\s+WHERE\b/g,
+    ),
+  ]
+    .filter((match) => WRITES_STATUS_BY_ARGUMENT.test(match[1] ?? ""))
+    .map((match) => {
+      const before = code.slice(0, match.index);
+      const name = [...before.matchAll(/\bfunction\s+(\w+)\s*\(/g)].at(-1)?.[1];
+      return { name: name ?? "", clause: match[1] ?? "" };
+    });
+}
+
+/**
+ * 移り先を引数で受ける、作業項目の状態の更新。
+ * 増やすときは、進め方を戻す式を足したうえでこの一覧にも足す。
+ */
+const ARGUMENT_TARGET_UPDATES = [
+  "restartStoppedWorkItem",
+  "updateStatus",
+  "updateStatusIfCurrent",
+  "updateStatusIfCurrentClearingFlowJobId",
+  "updateStatusIfLatestApproval",
+  "updateStatusIfLeaseHolder",
+  "updateStatusIfLeaseHolderClearingFlowJobId",
+];
+
+describe("the updates that move a work item to requirements_generating by a literal", () => {
   test("exist in lib/db.ts", () => {
     const writers = workItemSetClauses("lib/db.ts").filter((clause) =>
       WRITES_REQUIREMENTS_GENERATING.test(clause),
@@ -347,6 +400,31 @@ describe("the updates that move a work item to requirements_generating", () => {
             !SETS_STANDARD_PROFILE.test(clause),
         )
         .map((clause) => `${path}: ${clause}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("the updates that take the target status as an argument", () => {
+  test("are exactly the functions in the list", () => {
+    const names = argumentTargetUpdates("lib/db.ts").map(({ name }) => name);
+    expect(names.sort()).toEqual([...ARGUMENT_TARGET_UPDATES].sort());
+  });
+
+  test("exist only in lib/db.ts", () => {
+    const elsewhere = productionSources()
+      .filter((path) => path !== "lib/db.ts")
+      .flatMap((path) =>
+        argumentTargetUpdates(path).map(({ name }) => `${path}: ${name}`),
+      );
+    expect(elsewhere).toEqual([]);
+  });
+
+  test("all reset the profile when the target is the requirements", () => {
+    const offenders = productionSources().flatMap((path) =>
+      argumentTargetUpdates(path)
+        .filter(({ clause }) => !resetsProfileByArgument(clause))
+        .map(({ name }) => `${path}: ${name}`),
     );
     expect(offenders).toEqual([]);
   });
