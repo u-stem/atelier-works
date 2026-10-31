@@ -180,7 +180,8 @@ describe("the profile", () => {
 });
 
 describe("the intake key", () => {
-  const INTAKE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+  // フローのジョブIDと違う値にする。ログにキーが無いことを、ジョブIDと取り違えずに確かめるため。
+  const INTAKE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
 
   test("is passed to the flow", async () => {
     const { deps, runs } = harness();
