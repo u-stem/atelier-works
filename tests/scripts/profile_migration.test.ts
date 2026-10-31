@@ -1,6 +1,6 @@
 // 作業項目に進め方の列を足すmigration(`20261031100000_work_items_profile`)が、
 // アプリの定数`WORK_ITEM_PROFILES`と食い違っていないかを、SQLの文面から静的に確かめる。
-// 実際に適用して戻せること、制約が効くことは`mise run test:db`が確かめる。
+// 適用と巻き戻しが通ることは`mise run test:db`が確かめる。制約の効き方は実DBでは確かめていない。
 
 import { describe, expect, test } from "bun:test";
 import { WORK_ITEM_PROFILES } from "../../f/factory/lib/types.ts";
