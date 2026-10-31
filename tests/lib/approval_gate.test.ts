@@ -271,7 +271,7 @@ describe("the move of isRequirementsApprovedForAttempt", () => {
 });
 
 describe("isReadyForImplement", () => {
-  const ITEM = { id: 7, attempt: 2, design_attempt: 1 };
+  const ITEM = { id: 7, attempt: 2, design_attempt: 1, profile: "standard" };
   const REQUIREMENTS = { status: "approved", attempt: 2, draft_id: 10 };
 
   function deps(
@@ -383,12 +383,42 @@ describe("isReadyForImplement", () => {
     await isReadyForImplement(ITEM, true, d.deps);
     expect(d.calls).toEqual(["requirements"]);
   });
+
+  test("is false for a profile that is not accepted when the requirements are not approved", async () => {
+    expect(
+      await isReadyForImplement(
+        { ...ITEM, profile: "direct" },
+        false,
+        deps({ requirements: null }).deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false for an unknown profile when the design approval is missing", async () => {
+    expect(
+      await isReadyForImplement(
+        { ...ITEM, profile: "unknown" },
+        true,
+        deps({ design: null }).deps,
+      ),
+    ).toBe(false);
+  });
+
+  test("is true for an unknown profile with both approvals", async () => {
+    expect(
+      await isReadyForImplement(
+        { ...ITEM, profile: "unknown" },
+        true,
+        deps().deps,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("designGate", () => {
   const INPUT = {
     designEnabled: true,
-    workItem: { id: 7, attempt: 2, design_attempt: 1 },
+    workItem: { id: 7, attempt: 2, design_attempt: 1, profile: "standard" },
     requirementsApproval: { draft_id: 10 },
   };
 
@@ -437,6 +467,26 @@ describe("designGate", () => {
     expect(
       await designGate({ ...INPUT, designEnabled: false }, harness().deps),
     ).toEqual({ kind: "skip" });
+  });
+
+  test("stops for an unknown profile without a design approval", async () => {
+    expect(
+      await designGate(
+        { ...INPUT, workItem: { ...INPUT.workItem, profile: "unknown" } },
+        harness({ approval: null }).deps,
+      ),
+    ).toEqual({
+      kind: "stop",
+      reason: "no approved design for design attempt 1",
+    });
+  });
+
+  test("passes for an unknown profile with a matching design approval", async () => {
+    const result = await designGate(
+      { ...INPUT, workItem: { ...INPUT.workItem, profile: "unknown" } },
+      harness().deps,
+    );
+    expect(result.kind).toBe("pass");
   });
 
   test("does not read anything when the design is disabled", async () => {

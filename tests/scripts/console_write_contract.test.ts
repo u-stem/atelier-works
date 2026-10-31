@@ -446,6 +446,7 @@ describe("what the typed calls send", () => {
       "acceptance_criteria",
       "body",
       "owner",
+      "profile",
       "repo",
       "title",
     ]);
@@ -587,6 +588,7 @@ describe("what the scripts return", () => {
         title: "t",
         body: "b",
         acceptance_criteria: "",
+        profile: "standard",
       },
       {
         loadConfig: () =>
@@ -605,6 +607,31 @@ describe("what the scripts return", () => {
     );
   });
 
+  test("a refusal of the profile from the real validation passes the guard", async () => {
+    const result = await manualIntakeSubmit.submitManualIntake(
+      {
+        owner: "octo-owner",
+        repo: "widgets",
+        title: "t",
+        body: "b",
+        acceptance_criteria: "",
+        profile: "direct",
+      },
+      {
+        loadConfig: () =>
+          Promise.resolve({
+            owners: [{ name: "octo-owner", kind: "user" }],
+            repo_allowlist: [],
+            factory_repo: "https://github.com/octo-owner/atelier-works",
+          }),
+        deriveActor: () => "alice",
+        runFlow: () => Promise.resolve(JOB),
+        log: { info: () => undefined },
+      },
+    );
+    expect(result).toEqual({ refused: true, reason: "profile_not_allowed" });
+  });
+
   test("a started flow passes the guard", async () => {
     const result = await manualIntakeSubmit.submitManualIntake(
       {
@@ -613,6 +640,7 @@ describe("what the scripts return", () => {
         title: "t",
         body: "b",
         acceptance_criteria: "",
+        profile: "standard",
       },
       {
         loadConfig: () =>

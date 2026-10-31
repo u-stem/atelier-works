@@ -366,6 +366,7 @@ describe("manual_intake_submit", () => {
     title: "Add a widget",
     body: "Add a widget.",
     acceptance_criteria: "",
+    profile: "standard",
   };
 
   function deps(events: string[] = []): ManualIntakeSubmitDeps {

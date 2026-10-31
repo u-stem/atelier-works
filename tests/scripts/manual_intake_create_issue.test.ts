@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildManualIntakeIssueBody } from "../../f/factory/steps/manual_intake_create_issue.ts";
 
 // `isRepoAllowed`は`f/factory/lib/config.ts`にあり、
@@ -35,5 +37,33 @@ describe("buildManualIntakeIssueBody", () => {
       acceptance_criteria: "It renders.",
     });
     expect(rendered).toContain("### 目的\n\n_No response_");
+  });
+});
+
+describe("the entry point of the issue creation", () => {
+  const code = new Bun.Transpiler({ loader: "ts" }).transformSync(
+    readFileSync(
+      join(
+        import.meta.dir,
+        "../../f/factory/steps/manual_intake_create_issue.ts",
+      ),
+      "utf8",
+    ),
+  );
+
+  test("takes the profile and defaults it to standard", () => {
+    expect(code).toMatch(/\bprofile = "standard"/);
+  });
+
+  test("refuses a profile that is not accepted before it creates the issue", () => {
+    expect(code.slice(0, code.indexOf("await createIssue("))).toContain(
+      "assertAcceptedProfile(profile)",
+    );
+  });
+
+  test("refuses a profile that is not accepted before it reads the token", () => {
+    expect(code.slice(0, code.indexOf("github_token"))).toContain(
+      "assertAcceptedProfile(profile)",
+    );
   });
 });

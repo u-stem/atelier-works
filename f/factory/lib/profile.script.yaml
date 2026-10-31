@@ -1,0 +1,9 @@
+summary: '[LIB] 作業項目の進め方ごとの承認の要否'
+description: 内部ライブラリです。直接実行するものではありません。受け付ける進め方の一覧と、進め方ごとに要件定義と設計の承認が要るかを返す共通処理です。
+lock: '!inline f/factory/lib/profile.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -643,6 +643,35 @@ describe("design stage gate files", () => {
   });
 });
 
+// 進め方ごとの承認の要否の表(`profile.ts`とその定義)と、それを固定するテストは、書き換えられると、
+// 承認を省く進め方が黙って通るようになる。
+// グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
+describe("profile gate files", () => {
+  const PATHS = [
+    "f/factory/lib/profile.ts",
+    "f/factory/lib/profile.script.yaml",
+    "tests/scripts/profile_gate.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect the lock of the table, which has no dependency", () => {
+    expect(matchesForbiddenPath("f/factory/lib/profile.script.lock")).toBe(
+      false,
+    );
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {

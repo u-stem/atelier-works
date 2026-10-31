@@ -1776,7 +1776,12 @@ describe("buildRestartContext", () => {
   ) {
     return buildRestartContext(
       {
-        workItem: { id: 7, attempt: 2, design_attempt: 1 },
+        workItem: {
+          id: 7,
+          attempt: 2,
+          design_attempt: 1,
+          profile: "standard",
+        },
         restartStatus: "needs_human",
         requirementsApproval: REQUIREMENTS_APPROVED,
         implementEnabled: true,
@@ -1806,6 +1811,22 @@ describe("buildRestartContext", () => {
 
     test("is not ready without an approval", async () => {
       const context = await build(harness(), { requirementsApproval: null });
+      expect(context.implementReady).toBe(false);
+    });
+
+    test("is not ready for a profile that is not accepted without an approval", async () => {
+      const context = await build(harness(), {
+        workItem: { id: 7, attempt: 2, design_attempt: 1, profile: "direct" },
+        requirementsApproval: null,
+      });
+      expect(context.implementReady).toBe(false);
+    });
+
+    test("is not ready for an unknown profile with an approval of another attempt", async () => {
+      const context = await build(harness(), {
+        workItem: { id: 7, attempt: 2, design_attempt: 1, profile: "unknown" },
+        requirementsApproval: { ...REQUIREMENTS_APPROVED, attempt: 1 },
+      });
       expect(context.implementReady).toBe(false);
     });
 

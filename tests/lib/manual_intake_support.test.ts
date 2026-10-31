@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertAcceptedProfile,
   buildManualIntakeIssueBody,
   MANUAL_INTAKE_REFUSAL_REASONS,
   validateManualIntake,
@@ -24,6 +25,7 @@ const VALID = {
   title: "Add a widget",
   body: "Add a widget to the page.",
   acceptance_criteria: "It renders.",
+  profile: "standard",
 };
 
 function reasonOf(
@@ -52,6 +54,7 @@ describe("the refusal reasons", () => {
       "invalid_owner",
       "invalid_repo",
       "repo_not_allowed",
+      "profile_not_allowed",
       "empty_title",
       "title_too_long",
       "invalid_title_chars",
@@ -123,6 +126,50 @@ describe("owner and repo", () => {
 
   test("checks the name before the allow list", () => {
     expect(reasonOf({ ...VALID, owner: "bad owner" })).toBe("invalid_owner");
+  });
+});
+
+describe("profile", () => {
+  test("accepts standard", () => {
+    expect(reasonOf({ ...VALID, profile: "standard" })).toBeNull();
+  });
+
+  test.each(["direct", "bugfix", "docs", "", "Standard", "unknown"])(
+    "refuses the profile %p as profile_not_allowed",
+    (profile) => {
+      expect(reasonOf({ ...VALID, profile })).toBe("profile_not_allowed");
+    },
+  );
+
+  test("is checked after the allow list", () => {
+    expect(reasonOf({ ...VALID, owner: "stranger", profile: "direct" })).toBe(
+      "repo_not_allowed",
+    );
+  });
+
+  test("is checked before the title", () => {
+    expect(reasonOf({ ...VALID, profile: "direct", title: "" })).toBe(
+      "profile_not_allowed",
+    );
+  });
+});
+
+describe("assertAcceptedProfile", () => {
+  test("accepts standard", () => {
+    expect(() => assertAcceptedProfile("standard")).not.toThrow();
+  });
+
+  test.each(["direct", "bugfix", "docs", "", "unknown"])(
+    "throws for the profile %p",
+    (profile) => {
+      expect(() => assertAcceptedProfile(profile)).toThrow();
+    },
+  );
+
+  test("throws a fixed message", () => {
+    expect(() => assertAcceptedProfile("secret-profile")).toThrow(
+      "manual_intake: the profile is not accepted",
+    );
   });
 });
 

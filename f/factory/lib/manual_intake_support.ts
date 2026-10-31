@@ -70,7 +70,11 @@ export type ManualIntakeFields = ManualIntakeIssueInput & {
   readonly owner: string;
   readonly repo: string;
   readonly title: string;
+  readonly profile: string;
 };
+
+// スタブ。実装は次のコミットで書く。
+export function assertAcceptedProfile(_profile: string): void {}
 
 export type ManualIntakeValidation =
   | {

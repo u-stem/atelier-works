@@ -6447,6 +6447,7 @@ describe("listAutoRetryCandidates", () => {
           pr_url: null,
           attempt: 1,
           design_attempt: 0,
+          profile: "standard",
           flow_job_id: "job-1",
           waits_for_pr_run: false,
         },
@@ -6462,6 +6463,7 @@ describe("listAutoRetryCandidates", () => {
         pr_url: null,
         attempt: 1,
         design_attempt: 0,
+        profile: "standard",
         flow_job_id: "job-1",
         waits_for_pr_run: false,
       },
@@ -6480,6 +6482,7 @@ describe("listAutoRetryCandidates", () => {
           pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
           attempt: 2,
           design_attempt: 0,
+          profile: "standard",
           flow_job_id: null,
           waits_for_pr_run: true,
         },
@@ -6529,6 +6532,7 @@ describe("listAutoRetryCandidates", () => {
           pr_url: null,
           attempt: 2,
           design_attempt: 3,
+          profile: "standard",
           flow_job_id: null,
           waits_for_pr_run: false,
         },
@@ -6545,6 +6549,55 @@ describe("listAutoRetryCandidates", () => {
     expect(calls[0]?.text).toContain("w.design_attempt");
   });
 
+  test("reads the profile of the work item", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 8,
+          kind: "issue",
+          status: "needs_human",
+          owner: "octo-owner",
+          repo: "atelier-works",
+          pr_url: null,
+          attempt: 2,
+          design_attempt: 3,
+          profile: "direct",
+          flow_job_id: null,
+          waits_for_pr_run: false,
+        },
+      ],
+    ]);
+    expect((await listAutoRetryCandidates(params, sql))[0]?.profile).toBe(
+      "direct",
+    );
+  });
+
+  test("selects the profile", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("w.profile");
+  });
+
+  test("rejects a row without the profile", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 8,
+          kind: "issue",
+          status: "needs_human",
+          owner: "octo-owner",
+          repo: "atelier-works",
+          pr_url: null,
+          attempt: 2,
+          design_attempt: 3,
+          flow_job_id: null,
+          waits_for_pr_run: false,
+        },
+      ],
+    ]);
+    await expect(listAutoRetryCandidates(params, sql)).rejects.toThrow();
+  });
+
   test("rejects a kind that cannot be restarted automatically", async () => {
     const { sql } = createFakeSqlClient([
       [
@@ -6557,6 +6610,7 @@ describe("listAutoRetryCandidates", () => {
           pr_url: null,
           attempt: 1,
           design_attempt: 0,
+          profile: "standard",
           flow_job_id: null,
           waits_for_pr_run: false,
         },
