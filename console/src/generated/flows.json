@@ -92,9 +92,7 @@
         {
           "kind": "human",
           "label": "Consoleの再実行"
-        }
-      ],
-      "unwiredEntries": [
+        },
         {
           "kind": "flow",
           "flow": "design",
@@ -116,11 +114,27 @@
           "via": "launch"
         }
       ],
+      "unwiredEntries": [],
       "exits": [
         {
           "flow": "pipeline",
           "step": "generate",
           "via": "rework"
+        },
+        {
+          "flow": "implement",
+          "step": "request_approval",
+          "via": "approve"
+        },
+        {
+          "flow": "design",
+          "step": "request_approval",
+          "via": "reject"
+        },
+        {
+          "flow": "pipeline",
+          "step": "request_approval",
+          "via": "reject"
         }
       ]
     },
@@ -166,18 +180,22 @@
         },
         {
           "kind": "flow",
+          "flow": "design",
+          "via": "approve"
+        },
+        {
+          "kind": "flow",
           "flow": "pipeline",
           "via": "approve"
         }
       ],
-      "unwiredEntries": [
-        {
-          "kind": "flow",
-          "flow": "design",
-          "via": "approve"
-        }
-      ],
+      "unwiredEntries": [],
       "exits": [
+        {
+          "flow": "design",
+          "step": "implement_finish",
+          "via": "launch"
+        },
         {
           "flow": "pipeline",
           "step": "implement_finish",
@@ -258,6 +276,11 @@
         {
           "kind": "flow",
           "flow": "design",
+          "via": "reject"
+        },
+        {
+          "kind": "flow",
+          "flow": "design",
           "via": "rework"
         },
         {
@@ -281,14 +304,13 @@
           "via": "rework"
         }
       ],
-      "unwiredEntries": [
-        {
-          "kind": "flow",
-          "flow": "design",
-          "via": "reject"
-        }
-      ],
+      "unwiredEntries": [],
       "exits": [
+        {
+          "flow": "design",
+          "step": "request_approval",
+          "via": "approve"
+        },
         {
           "flow": "implement",
           "step": "request_approval",
@@ -362,6 +384,11 @@
       ],
       "unwiredEntries": [],
       "exits": [
+        {
+          "flow": "design",
+          "step": "pr_fix_finish",
+          "via": "launch"
+        },
         {
           "flow": "pipeline",
           "step": "pr_fix_finish",
