@@ -5552,7 +5552,9 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
   もう一方は、設計工程の中で通常の進め方だけを扱うファイルで、進め方を渡さない。
   `design_prepare`、`design_generate`、`design_apply_support`、`pr_fix_design`である。
   受け付ける進め方を広げるときは、後者の見直しが要る。
-- 表の名前(`requiredApprovals`、`ACCEPTED_PROFILES`)を、`lib/profile.ts`以外で宣言せず、再束縛しないこと。
+- 表の名前(`requiredApprovals`、`ACCEPTED_PROFILES`)を、`lib/profile.ts`以外で宣言しないこと。
+  宣言とみなす形は、`function`、`const`、`let`、`var`、代入、`as`による別名である。
+  分割代入、関数の引数、オブジェクトのプロパティによる上書きは検出しない。
 - 表の名前を取り込む本番のファイルが、すべて`lib/profile.ts`から取り込むこと。
 - `approval_gate.ts`と、`requiredApprovals`を呼ぶ呼び出し元が、`requiredApprovals`を取り込んでいること。
 
