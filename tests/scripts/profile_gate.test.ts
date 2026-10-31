@@ -351,3 +351,13 @@ describe("the updates that move a work item to requirements_generating", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the implement preparation", () => {
+  test("skips the approvals only when the table does not require the requirements", () => {
+    expect(
+      /\brequirementsRequired:\s*requiredApprovals\(\s*workItem\.profile\s*\)\.requirements\b/.test(
+        codeOf("steps/implement_prepare.ts"),
+      ),
+    ).toBe(true);
+  });
+});

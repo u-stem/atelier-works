@@ -48,6 +48,7 @@ import {
   IMPLEMENT_SCHEMA,
   IMPLEMENT_SCHEMA_WITH_DESIGN_GAP,
   type ImplementPromptInput,
+  type ImplementSpecKind,
 } from "./prompts.ts";
 import type { ChangedPath } from "./protected_paths.ts";
 import type {
@@ -199,6 +200,16 @@ export function implementPromptInput(
     design: context.design_markdown ?? null,
     hasPreviousImplementation: context.has_previous_implementation,
   };
+}
+
+/**
+ * 文脈の仕様の出どころを返す。
+ * `spec_kind`を足す前の準備ステップが作った文脈には項目が無いので、`undefined`は要件定義として扱う。
+ */
+export function implementContextSpecKind(_context: {
+  readonly spec_kind?: ImplementSpecKind;
+}): ImplementSpecKind {
+  return "requirements";
 }
 
 /**

@@ -7,8 +7,10 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  type DesignGateDeps,
   designGate,
   isRequirementsApprovedForAttempt,
+  type RequirementsApprovalForGate,
 } from "../lib/approval_gate.ts";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import {
@@ -239,6 +241,45 @@ export async function requirementsGateReason(
     case "modified":
       return REQUIREMENTS_MODIFIED_BEFORE_IMPLEMENT_REASON;
   }
+}
+
+/** 実装の仕様の決まり方。`stop`は、承認の前提が崩れていて実装に進めないことを表す。 */
+export type ImplementSpec =
+  | { readonly kind: "issue" }
+  | {
+      readonly kind: "requirements";
+      readonly draft: RequirementDraft;
+      readonly designMarkdown: string | null;
+    }
+  | { readonly kind: "stop"; readonly reason: string };
+
+export type ResolveImplementSpecInput = {
+  readonly workItem: Pick<
+    WorkItem,
+    "id" | "attempt" | "design_attempt" | "profile"
+  >;
+  /** 進め方が要件定義の承認を求めるか(`requiredApprovals(...).requirements`)。 */
+  readonly requirementsRequired: boolean;
+  readonly designEnabled: boolean;
+};
+
+export type ResolveImplementSpecDeps = {
+  readonly latestRequirementsApproval: (
+    workItemId: number,
+  ) => Promise<RequirementsApprovalForGate | null>;
+  readonly getRequirementDraft: (
+    id: number,
+  ) => Promise<RequirementDraft | null>;
+  readonly hashTree: (dir: string) => Promise<string | null>;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  readonly designGate: DesignGateDeps;
+};
+
+export async function resolveImplementSpec(
+  _input: ResolveImplementSpecInput,
+  _deps: ResolveImplementSpecDeps,
+): Promise<ImplementSpec> {
+  return { kind: "issue" };
 }
 
 function stop(

@@ -983,8 +983,17 @@ export const AUDIT_SCHEMA = {
 // implementPrompt / implementFixPrompt
 // ---------------------------------------------------------------------------
 
+/**
+ * 実装の仕様の出どころ。`requirements`は人が承認した要件定義、`issue`は取り込み時点のIssueの題名と本文である。
+ */
+export type ImplementSpecKind = "requirements" | "issue";
+
 export type ImplementPromptInput = {
   issue: PromptIssue;
+  /** 仕様の出どころ。省略は`requirements`。 */
+  specKind?: ImplementSpecKind;
+  /** 作業項目の進め方。`specKind`が`issue`のときだけ読む。 */
+  profile?: string | null;
   /**
    * 人が承認した要件定義。
    * `markdown`はIssueから生成したもので信頼できない内容の影響を受けるため、囲みに入れる。

@@ -46,6 +46,7 @@ import {
   type ImplementLoopDeps,
   type ImplementLoopInput,
   implementContextHasDesign,
+  implementContextSpecKind,
   implementOutputContractNote,
   implementPromptInput,
   isCopyableDocEntry,
@@ -129,6 +130,8 @@ const CONTEXT: ImplementContext = {
   existing_pr_url: null,
   has_previous_implementation: false,
   attempt: 1,
+  spec_kind: "requirements",
+  profile: "standard",
   requirements_markdown:
     "# 要件定義\n\n## 受入条件\n\n| ID | 条件 |\n| --- | --- |\n| AC-001 | CSVを出力できる |\n",
   requirements_diagrams: [],
@@ -275,6 +278,54 @@ describe("implementPromptInput", () => {
         "/tmp/copy/requirements",
       ).requirements.doc_dir,
     ).toBe("/tmp/copy/requirements");
+  });
+});
+
+describe("implementContextSpecKind", () => {
+  test("reads the kind the preparation recorded", () => {
+    expect(implementContextSpecKind({ spec_kind: "issue" })).toBe("issue");
+  });
+
+  test("reads a context made before the field existed as the requirements", () => {
+    expect(implementContextSpecKind({})).toBe("requirements");
+  });
+});
+
+describe("implementPromptInput with the issue as the specification", () => {
+  const ISSUE_SPEC = {
+    ...CONTEXT,
+    spec_kind: "issue" as const,
+    profile: "bugfix",
+    requirements_markdown: null,
+    requirements_diagrams: [],
+    requirements_doc_dir: null,
+    requirements_doc_hash: null,
+    requirements_console_url: null,
+  };
+
+  test("marks the specification as the issue", () => {
+    expect(implementPromptInput(ISSUE_SPEC, null).specKind).toBe("issue");
+  });
+
+  test("carries the profile", () => {
+    expect(implementPromptInput(ISSUE_SPEC, null).profile).toBe("bugfix");
+  });
+
+  test("carries the recorded title and body of the issue", () => {
+    expect(implementPromptInput(ISSUE_SPEC, null).issue.body).toBe(
+      "CSVで出力したい",
+    );
+  });
+
+  test("hands Claude no requirements directory", () => {
+    expect(implementPromptInput(ISSUE_SPEC, null).requirements.doc_dir).toBe(
+      null,
+    );
+  });
+
+  test("marks the requirements as the specification for a context made before the field existed", () => {
+    const { spec_kind: _omitted, ...older } = CONTEXT;
+    expect(implementPromptInput(older, null).specKind).toBe("requirements");
   });
 });
 
