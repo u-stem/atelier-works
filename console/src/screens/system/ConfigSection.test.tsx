@@ -150,6 +150,44 @@ describe("ConfigSection", () => {
     expect(renderSection()).toContain("owners");
   });
 
+  test("shows the design stage that is in effect", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: true, ignored: false },
+    });
+    expect(renderSection(query)).toMatch(/設計工程[^<]*<[^>]*>有効</);
+  });
+
+  test("shows a closed design stage as off", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: false, ignored: false },
+    });
+    expect(renderSection(query)).toMatch(/設計工程[^<]*<[^>]*>無効</);
+  });
+
+  test("tells that the written value is ignored", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: false, ignored: true },
+    });
+    expect(renderSection(query)).toContain(
+      "design_enabled_sinceが無いか日時として読めないため、無視しています。",
+    );
+  });
+
+  test("does not tell that a value is ignored when it is not", () => {
+    const query = freshQuery({
+      ...SNAPSHOT,
+      design_stage: { enabled: true, ignored: false },
+    });
+    expect(renderSection(query)).not.toContain("無視しています");
+  });
+
+  test("shows no design stage when the backend does not send it", () => {
+    expect(renderSection(freshQuery(SNAPSHOT))).not.toContain("設計工程");
+  });
+
   test("says the items are stale after a failed refetch", () => {
     expect(
       renderSection(staleQuery(SNAPSHOT, new ApiFailure({ kind: "network" }))),

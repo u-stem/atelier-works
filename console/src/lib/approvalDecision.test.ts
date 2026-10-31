@@ -216,14 +216,16 @@ describe("approvalConfirmation", () => {
     ]);
   });
 
-  test("warns that approving requirements starts the implementation", () => {
+  test("requirements approval confirmation names both destinations", () => {
     const confirmation = approvalConfirmation({
       kind: "requirements",
       subject: "Add feature",
       approvalRequestId: 7,
       withFactoryLabel: undefined,
     });
-    expect(confirmation.consequence).toContain("実装");
+    expect(confirmation.consequence).toBe(
+      "承認すると、設計工程が有効なときは設計書の生成が、無効なときはClaudeによる実装が始まります。取り消せません。",
+    );
   });
 
   test("warns that approving a proposal creates an issue", () => {
@@ -760,9 +762,9 @@ describe("approvalConfirmation for a design", () => {
     ]);
   });
 
-  test("says that the implementation starts with the approved design", () => {
+  test("says that the implementation starts with the approved design, and what happens when the stage is off", () => {
     expect(confirmation.consequence).toBe(
-      "承認すると、実装が始まります。承認した設計書(正規化後の全文)が実装に渡ります。取り消せません。",
+      "承認すると、実装が始まります。承認した設計書(正規化後の全文)が実装に渡ります。設計工程が無効のときは、設計書は実装に渡りません。取り消せません。",
     );
   });
 });

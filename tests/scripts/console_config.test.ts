@@ -86,3 +86,72 @@ describe("loadConfigView", () => {
     await expect(loadConfigView(portsOf([1]))).rejects.toThrow();
   });
 });
+
+describe("loadConfigView design_stage", () => {
+  const SINCE = "2026-11-01T00:00:00Z";
+
+  test("reports a stage that is not requested as closed and not ignored", async () => {
+    const view = await loadConfigView(portsOf({ max_attempts: 3 }));
+    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+  });
+
+  test("reports a requested stage with a since as open", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: true, design_enabled_since: SINCE }),
+    );
+    expect(view.design_stage).toEqual({ enabled: true, ignored: false });
+  });
+
+  test("reports a requested stage without a since as closed and ignored", async () => {
+    const view = await loadConfigView(portsOf({ design_enabled: true }));
+    expect(view.design_stage).toEqual({ enabled: false, ignored: true });
+  });
+
+  test("reports a requested stage with a null since as closed and ignored", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: true, design_enabled_since: null }),
+    );
+    expect(view.design_stage).toEqual({ enabled: false, ignored: true });
+  });
+
+  test("reports a requested stage with an unreadable since as closed and ignored", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: true, design_enabled_since: "2026-11-01" }),
+    );
+    expect(view.design_stage).toEqual({ enabled: false, ignored: true });
+  });
+
+  test("reports a since without the request as closed and not ignored", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: false, design_enabled_since: SINCE }),
+    );
+    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+  });
+
+  test("reports a request that is not a boolean as not requested", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: "true", design_enabled_since: SINCE }),
+    );
+    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+  });
+
+  test("reports a request that holds a reference as not requested", async () => {
+    const view = await loadConfigView(
+      portsOf({
+        design_enabled: "$var:f/factory/x",
+        design_enabled_since: SINCE,
+      }),
+    );
+    expect(view.design_stage).toEqual({ enabled: false, ignored: false });
+  });
+
+  test("keeps the items as the resource has them", async () => {
+    const view = await loadConfigView(
+      portsOf({ design_enabled: true, design_enabled_since: SINCE }),
+    );
+    expect(view.items.map((item) => item.key)).toEqual([
+      "design_enabled",
+      "design_enabled_since",
+    ]);
+  });
+});

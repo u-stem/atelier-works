@@ -13,7 +13,7 @@ locks:
   f/factory/cleanup_db: df72e6585d978c701e79b614b352127cf53b3a0c1cbf4c283c1f9dce43b2d1ff
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
   f/factory/collect_github: 150e44bca16d65aec9a05b899337db653f12622632d3c3b56f50bae83877f81d
-  f/factory/console_config: 91931bb487dff7e45b9994cb32b63a9c56be3380df7665784a1382c8c711d893
+  f/factory/console_config: cd06082bd1158020a8df566ea10068d59b0dd3910e6a317b800e1b47a9b78252
   f/factory/console_config_update: 3f6b21e43f673c00d75d9f7498a7f6b41b5d1fd1833a327ac42e8cc31ca93aae
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
   f/factory/console_hold_place: 258ef15bedfd133fc2ffe9876e4a661b1ff256f8854f1b64390eda624a0daea1
@@ -76,6 +76,7 @@ locks:
   f/factory/lib/dependabot_support: f0faecb544ce7a33dac1f1901035711a3b432e1858efba6b0a48b7554da348aa
   f/factory/lib/design_apply_support: ad7611c5659ce77e9378008e504baa4f21b9295cf97d1fb22230ef27dba119bf
   f/factory/lib/design_doc: 39e65ecf8d275747851dc4c37e554886830c8ed6cfff7ac65ba161162aa12aef
+  f/factory/lib/design_gate: c6ed518b2b9df9e1c0a1d234d859c5857e413cfc009597e4175ad9d62a449c8f
   f/factory/lib/design_launch_support: f3755aa859f912007af96c4877849a5ae2c6fc362f2846bcafc26f6d2b2b917f
   f/factory/lib/design_template: 9da4537c3a80561b53250e81bb2378b3622843e90ed1828bb7365334ba539c1e
   f/factory/lib/discord: 78f224b9e1ac156908338a958daf1846e4edb17329fdb8c1dd7b42741972c3b3

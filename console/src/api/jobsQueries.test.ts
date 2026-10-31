@@ -360,6 +360,46 @@ describe("isConfigSnapshot", () => {
       }),
     ).toBe(false);
   });
+
+  test("accepts a snapshot with the design stage", () => {
+    expect(
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { enabled: true, ignored: false },
+      }),
+    ).toBe(true);
+  });
+
+  test("accepts a snapshot from a backend that has no design stage yet", () => {
+    expect(isConfigSnapshot({ path: CONFIG.path, items: CONFIG.items })).toBe(
+      true,
+    );
+  });
+
+  test("rejects a design stage that is not an object", () => {
+    expect(isConfigSnapshot({ ...CONFIG, design_stage: "on" })).toBe(false);
+  });
+
+  test("rejects a design stage without the enabled flag", () => {
+    expect(
+      isConfigSnapshot({ ...CONFIG, design_stage: { ignored: false } }),
+    ).toBe(false);
+  });
+
+  test("rejects a design stage without the ignored flag", () => {
+    expect(
+      isConfigSnapshot({ ...CONFIG, design_stage: { enabled: false } }),
+    ).toBe(false);
+  });
+
+  test("rejects a design stage whose flag is not a boolean", () => {
+    expect(
+      isConfigSnapshot({
+        ...CONFIG,
+        design_stage: { enabled: "yes", ignored: false },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("the fetchers", () => {

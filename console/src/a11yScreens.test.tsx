@@ -240,6 +240,7 @@ const SCHEDULES_NORMAL: SchedulesSnapshotView = {
 
 const CONFIG_NORMAL: ConfigSnapshotView = {
   path: "f/factory/config",
+  design_stage: { enabled: false, ignored: true },
   items: [
     { key: "example", kind: "value", value: "on", masked: false },
     { key: "secret_ref", kind: "reference" },

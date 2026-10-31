@@ -5,6 +5,7 @@ import type { HoldsSnapshot } from "../api/guards/holds.ts";
 import type {
   ArgViewData,
   ConfigItemView,
+  DesignStageView,
   JobListView,
   JobSummaryView,
   OutputViewData,
@@ -379,6 +380,15 @@ export function describeSchedule(
     })),
     error: schedule.error,
   };
+}
+
+export type DesignStageText = {
+  readonly state: string;
+  readonly note: string | null;
+};
+
+export function describeDesignStage(_stage: DesignStageView): DesignStageText {
+  return { state: "", note: null };
 }
 
 /** 値を出さない設定の印の文言。参照と、伏せた値に使う。 */

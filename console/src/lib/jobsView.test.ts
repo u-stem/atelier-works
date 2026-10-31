@@ -13,6 +13,7 @@ import {
   currentJobs,
   describeArg,
   describeConfigValue,
+  describeDesignStage,
   describeSchedule,
   filterConfigItems,
   formatDuration,
@@ -634,6 +635,44 @@ describe("filterConfigItems", () => {
 
   test("does not search the values", () => {
     expect(filterConfigItems(ITEMS, "5")).toEqual([]);
+  });
+});
+
+describe("describeDesignStage", () => {
+  test("says that an open stage is on", () => {
+    expect(describeDesignStage({ enabled: true, ignored: false }).state).toBe(
+      "有効",
+    );
+  });
+
+  test("says that a closed stage is off", () => {
+    expect(describeDesignStage({ enabled: false, ignored: false }).state).toBe(
+      "無効",
+    );
+  });
+
+  test("says that a stage whose written value is ignored is off", () => {
+    expect(describeDesignStage({ enabled: false, ignored: true }).state).toBe(
+      "無効",
+    );
+  });
+
+  test("has no note for an open stage", () => {
+    expect(
+      describeDesignStage({ enabled: true, ignored: false }).note,
+    ).toBeNull();
+  });
+
+  test("has no note for a closed stage", () => {
+    expect(
+      describeDesignStage({ enabled: false, ignored: false }).note,
+    ).toBeNull();
+  });
+
+  test("tells that the written value is ignored for lack of design_enabled_since", () => {
+    expect(describeDesignStage({ enabled: false, ignored: true }).note).toBe(
+      "design_enabledにtrueが書かれていますが、design_enabled_sinceが無いか日時として読めないため、無視しています。",
+    );
   });
 });
 

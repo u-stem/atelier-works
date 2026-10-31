@@ -23,6 +23,11 @@ export type ConfigItem =
 export type ConfigSnapshot = {
   readonly path: string;
   readonly items: readonly ConfigItem[];
+  /** 設計工程の、効いている値と、書かれた値が無視されているか。 */
+  readonly design_stage: {
+    readonly enabled: boolean;
+    readonly ignored: boolean;
+  };
 };
 
 export type ConfigPorts = {
@@ -52,7 +57,11 @@ export async function loadConfigView(
       const shown = isRecord(redacted.value) ? redacted.value[key] : undefined;
       return { key, kind: "value", value: shown, masked: redacted.masked };
     });
-  return { path: CONFIG_RESOURCE_PATH, items };
+  return {
+    path: CONFIG_RESOURCE_PATH,
+    items,
+    design_stage: { enabled: false, ignored: false },
+  };
 }
 
 /** Consoleのシステム画面に、factory_configの全項目を返す。 */

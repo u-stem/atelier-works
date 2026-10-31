@@ -303,4 +303,33 @@ describe("what the scripts return", () => {
     });
     expect(isConfigSnapshot(view)).toBe(true);
   });
+
+  test("the config view with an open design stage passes the guard", async () => {
+    const view = await loadConfigView({
+      getConfig: async () => ({
+        design_enabled: true,
+        design_enabled_since: "2026-11-01T00:00:00Z",
+      }),
+    });
+    expect(isConfigSnapshot(view)).toBe(true);
+  });
+
+  test("the config view with an ignored design request passes the guard", async () => {
+    const view = await loadConfigView({
+      getConfig: async () => ({ design_enabled: true }),
+    });
+    expect(isConfigSnapshot(view)).toBe(true);
+  });
+
+  test("the config view carries the design stage the guard reads", async () => {
+    const view = await loadConfigView({
+      getConfig: async () => ({
+        design_enabled: true,
+        design_enabled_since: "2026-11-01T00:00:00Z",
+      }),
+    });
+    expect(
+      isConfigSnapshot(view) ? view.design_stage : "not a snapshot",
+    ).toEqual({ enabled: true, ignored: false });
+  });
 });

@@ -332,6 +332,42 @@ describe("noticeGuide", () => {
     expect(noticeGuide("design_enabled_ignored").action).toContain("falseに戻");
   });
 
+  test("tells to write design_enabled_since to open the design stage", () => {
+    expect(noticeGuide("design_enabled_ignored").action).toContain(
+      "design_enabled_sinceを書",
+    );
+  });
+
+  test("gives the format of design_enabled_since", () => {
+    expect(noticeGuide("design_enabled_ignored").action).toContain(
+      "2026-11-01T00:00:00Z",
+    );
+  });
+
+  test("names the missing design_enabled_since as the cause", () => {
+    expect(noticeGuide("design_enabled_ignored").meaning).toContain(
+      "design_enabled_since",
+    );
+  });
+
+  test("does not say that the design stage cannot be opened yet", () => {
+    expect(noticeGuide("design_enabled_ignored").meaning).not.toContain(
+      "まだ有効にできない",
+    );
+  });
+
+  test("says that the config tab shows the value that is in effect", () => {
+    expect(noticeGuide("design_enabled_ignored").meaning).toContain(
+      "設定タブには効いている値が出ます",
+    );
+  });
+
+  test("does not say that the config tab shows the written value", () => {
+    expect(noticeGuide("design_enabled_ignored").meaning).not.toContain(
+      "書かれた値のtrueが出ます",
+    );
+  });
+
   test("tells that the self update resolves the design setting notice", () => {
     expect(noticeGuide("design_enabled_ignored").note).toContain("自動で解決");
   });

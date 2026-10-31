@@ -151,9 +151,17 @@ export type ConfigItemView =
     }
   | { readonly key: string; readonly kind: "reference" };
 
+/** 設計工程の、効いている値と、書かれた値が無視されているか。 */
+export type DesignStageView = {
+  readonly enabled: boolean;
+  readonly ignored: boolean;
+};
+
 export type ConfigSnapshotView = {
   readonly path: string;
   readonly items: readonly ConfigItemView[];
+  /** 古いbackendは返さない。 */
+  readonly design_stage?: DesignStageView;
 };
 
 // stateやdefinitionは表示にしか使わないので文字列で受け、日本語への変換で知らない値を受け止める。
