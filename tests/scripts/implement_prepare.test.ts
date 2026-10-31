@@ -12,6 +12,13 @@ import {
 } from "../../f/factory/steps/implement_prepare.ts";
 
 const BASE = "b".repeat(40);
+const APPROVED_DRAFT = {
+  attempt: 2,
+  markdown: "# 要件定義",
+  diagrams: [],
+  doc_dir: "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2",
+  doc_hash: "c".repeat(64),
+};
 const INPUT: BuildImplementContextInput = {
   workItem: {
     id: 3,
@@ -30,14 +37,7 @@ const INPUT: BuildImplementContextInput = {
     body: "CSVで出力したい",
     htmlUrl: "https://github.com/acme/widgets/issues/7",
   },
-  draft: {
-    attempt: 2,
-    markdown: "# 要件定義",
-    diagrams: [],
-    doc_dir:
-      "/var/lib/factory/requirements/acme/widgets/issue-7/wi-3/attempt-2",
-    doc_hash: "c".repeat(64),
-  },
+  draft: APPROVED_DRAFT,
   branch: "factory/issue-7-wi-3",
   baseBranch: "main",
   baseSha: BASE,
@@ -247,7 +247,7 @@ describe("buildImplementContext", () => {
     expect(
       buildImplementContext({
         ...INPUT,
-        draft: { ...INPUT.draft, doc_hash: null },
+        draft: { ...APPROVED_DRAFT, doc_hash: null },
       }).requirements_doc_hash,
     ).toBeNull();
   });

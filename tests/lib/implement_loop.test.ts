@@ -235,7 +235,7 @@ describe("implementPromptInput", () => {
 
   test("inlines the approved markdown", () => {
     expect(implementPromptInput(CONTEXT, null).requirements.markdown).toBe(
-      CONTEXT.requirements_markdown,
+      CONTEXT.requirements_markdown ?? "",
     );
   });
 

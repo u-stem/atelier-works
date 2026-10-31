@@ -853,11 +853,15 @@ async function finishImplement(
       );
       const body = buildImplementPrBody({
         summary: claudeText(output.summary),
-        requirementsMarkdown: ctx.requirements_markdown,
+        spec: {
+          kind: "requirements",
+          requirementsMarkdown: ctx.requirements_markdown ?? "",
+          requirementsConsoleUrl: ctx.requirements_console_url ?? "",
+        },
+        profileWarnings: [],
         checks,
         protectedChanges: loop.protected_changes,
         notesForReviewer: output.notes_for_reviewer.map(claudeText),
-        requirementsConsoleUrl: ctx.requirements_console_url,
         issueNumber: ctx.issue_number,
         changedPaths: loop.changed_paths,
         deployChecklist: ctx.is_factory_repo,
