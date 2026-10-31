@@ -146,7 +146,7 @@ locks:
   f/factory/lib/pr_review_retry: ffa95180ff2167b7a3a96bcd8d4e1da50747c61b6e193ba361e7ad2ad771c789
   f/factory/lib/process_lock: 6b49498e491ae04a2b6a2b2c11d016770c93b48e71d0f56318d65df21ca28cef
   f/factory/lib/profile: 9b5927e438ead8dfc8c93347500c41f4fed06bdb9ec4525c98bf1880cb16e171
-  f/factory/lib/profile_upgrade: 910b9a0037f4690e3b39660065cdc3ed296e990fd73a92b57abdd55a65c5628c
+  f/factory/lib/profile_upgrade: 25c6854e8bfef10f6042c3db54442adefc1062d836398a44b2f0feec27979d6c
   f/factory/lib/prompts: 1a87b663780e1f2fa5ea8199e5f32594749a0e77d882e69321dc72f8aaf77e5f
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
   f/factory/lib/protected_paths: 8011b4a7bbeca569698772bb1d42c568abe3f38806fec2fad3c925997f15eb85
