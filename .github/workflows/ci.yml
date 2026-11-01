@@ -421,8 +421,11 @@ jobs:
     # 配信物は上げない。CheckoutからBuildまでの手順は`console`ジョブと同じで、テストが一致を確かめる。
     # draw.ioのビューアは取得しないので、検査するdistには含まれない(図を埋め込む画面は実物の形で見ない)。
     # APIは検査が固定の値で受けるので、WindmillにもGitHubにも繋がない。
+    # PRの実行だけで動かす。ACTIONS_RUNTIME_TOKENはpermissionsと関係なく全ジョブに渡るので、
+    # mainのpushで照合しないブラウザを動かすと、mainの範囲のキャッシュへ書ける経路ができるため。
+    # スキップは、必須チェックとhost_applyで通過として扱う。
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.console != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.console != 'false' && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

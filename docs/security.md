@@ -1097,7 +1097,10 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。取得元かその通信が侵害されると、改ざんされたブラウザが動く。
-  受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わないためである。
+  受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。
+  キャッシュのトークン(`ACTIONS_RUNTIME_TOKEN`)は、`permissions`と関係なく全ジョブに渡る。
+  そのため、`main`のpushで動かすと、`main`の範囲のキャッシュ(`console-dist.yml`が復元するビューアのキャッシュ)へ書く経路ができる。
+  `main`の実行では、このジョブを飛ばす。
   ブラウザはキャッシュせず、毎回取得する。照合しないキャッシュを、`main`の実行が書いてPRの実行が読む経路を作らないためである。
 - e2eの依存(`@playwright/test`、`@axe-core/playwright`、`axe-core`)は、`console/package.json`にある。そのため、配信するジョブ(`console-dist.yml`と`ci.yml`の`console`ジョブ)の`node_modules`に入る。
   インストールは`--ignore-scripts`で行うので、install scriptは動かない。

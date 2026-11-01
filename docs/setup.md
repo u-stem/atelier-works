@@ -356,7 +356,8 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 `console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの書き出しだけをする。
 成果物は上げない。
 
-`console-a11y`ジョブは、`console`と同じフラグで動き、ビルドしたConsoleをブラウザで検査する。
+`console-a11y`ジョブは、`console`と同じフラグで、PRの実行だけで動き、ビルドしたConsoleをブラウザで検査する。
+`main`のpushでは飛ばし、必須チェックでは通過として扱う。
 詳細は[Consoleの仕様](internals/console.md#ブラウザでのa11y検査)にある。
 この検査は、ブラウザの取得が要るので、`mise run check`に含めない。
 
