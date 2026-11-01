@@ -1037,6 +1037,26 @@ export function isActivePrFixUniqueViolation(err: unknown): boolean {
   return isUniqueViolationOf(err, ACTIVE_PR_FIX_INDEX_NAME);
 }
 
+export function isActivePrReviewUniqueViolation(_err: unknown): boolean {
+  return false;
+}
+
+export async function insertPrReviewWorkItemUnlessActive(
+  _item: NewWorkItem,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  return null;
+}
+
+export async function hasActivePrReviewWorkItem(
+  _owner: string,
+  _repo: string,
+  _prNumber: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
 /**
  * (owner, repo, prNumber)の、終端でない`pr_fix`の作業項目を返す。
  * ownerとrepoは小文字で照合する。`claimPrConflictForFix`と同じく、綴りの違いで引き漏らさないためである。
