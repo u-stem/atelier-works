@@ -727,6 +727,12 @@ describe("the entry point of the registration for the approval-free profiles", (
     expect(entry).toContain("implementEnabled: config.implement_enabled");
   });
 
+  test("hands the built issue address to the notification of the approval-free path", () => {
+    expect(entry).toContain(
+      "issue_url: issueHtmlUrl(owner, repo, issue_number)",
+    );
+  });
+
   test("leaves the label claim to the standard path", () => {
     expect(entry.indexOf("registerApprovalFreeIntake(")).toBeLessThan(
       entry.indexOf("claimManualIntakeIssue("),

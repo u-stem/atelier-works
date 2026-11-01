@@ -578,6 +578,13 @@ describe("the callers that hand a profile to a new work item", () => {
     );
     expect(columns?.length).toBe(2);
   });
+
+  test("the insert statements default the profile to standard in one expression", () => {
+    const defaults = codeOf("lib/db.ts").match(
+      /\$\{item\.profile \?\? "standard"\}/g,
+    );
+    expect(defaults?.length).toBe(2);
+  });
 });
 
 describe("the products of the preparation for an issue as the specification", () => {
