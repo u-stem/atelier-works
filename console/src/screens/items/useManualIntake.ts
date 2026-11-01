@@ -50,6 +50,7 @@ const NO_INPUT: ManualIntakeInput = {
   title: "",
   body: "",
   acceptanceCriteria: "",
+  profile: "standard",
 };
 
 /**

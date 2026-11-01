@@ -14,7 +14,7 @@ import {
   type IntakeAttempt,
   isSubmitBlocked,
 } from "../lib/intakeAttempt.ts";
-import type { IntakeForm } from "../lib/manualIntake.ts";
+import { type IntakeForm, sameSentValues } from "../lib/manualIntake.ts";
 
 export type IntakeSession = {
   /** 直近の送信の結果。 */
@@ -99,21 +99,29 @@ export type IntakeSessions = {
   readonly subscribe: (listener: () => void) => () => void;
 };
 
-function sameForm(left: IntakeForm, right: IntakeForm): boolean {
+/** 入力中の保存で、欄の値がすべて同じか。進め方と不具合の3欄も比べる。 */
+function sameFields(left: IntakeForm, right: IntakeForm): boolean {
   return (
     left.repo === right.repo &&
     left.title === right.title &&
     left.body === right.body &&
-    left.acceptanceCriteria === right.acceptanceCriteria
+    left.acceptanceCriteria === right.acceptanceCriteria &&
+    left.profile === right.profile &&
+    left.reproduction === right.reproduction &&
+    left.expectedBehavior === right.expectedBehavior &&
+    left.actualBehavior === right.actualBehavior
   );
 }
 
-/** 引き継げるキー。投入されたか分からない結果が、同じ入力の送信から来ているときだけ返す。 */
+/**
+ * 引き継げるキー。投入されたか分からない結果が、同じ送る値の送信から来ているときだけ返す。
+ * 欄の値ではなく送る値で比べる。進め方が違わない限り、使われない欄の違いで新しいキーにしない。
+ */
 function carriedKey(current: IntakeSession, form: IntakeForm): string | null {
   return current.attempt.kind === "unknown" &&
     current.intakeKey !== null &&
     current.form !== null &&
-    sameForm(current.form, form)
+    sameSentValues(current.form, form)
     ? current.intakeKey
     : null;
 }
@@ -218,7 +226,7 @@ export function createIntakeSessions(
           return current;
         }
         const kept = current.form;
-        return kept !== null && sameForm(kept, form)
+        return kept !== null && sameFields(kept, form)
           ? current
           : { ...current, form };
       });

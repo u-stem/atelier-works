@@ -278,7 +278,8 @@ describe("submitManualIntake", () => {
     title: "Add a widget",
     body: "Add a widget to the page.",
     acceptanceCriteria: "It renders.",
-  };
+    profile: "standard",
+  } as const;
   const STARTED = { refused: false, flow_job_id: JOB } as const;
 
   test("calls manual_intake_submit", async () => {
@@ -298,8 +299,18 @@ describe("submitManualIntake", () => {
       title: "Add a widget",
       body: "Add a widget to the page.",
       acceptance_criteria: "It renders.",
+      profile: "standard",
     });
   });
+
+  test.each(["direct", "bugfix", "docs"] as const)(
+    "sends the profile %s as chosen",
+    async (profile) => {
+      const { fetchFn, calls } = respondWith(STARTED);
+      await submitManualIntake({ ...INPUT, profile }, { fetchFn });
+      expect(calls[0]?.body).toMatchObject({ profile });
+    },
+  );
 
   test("sends the intake key as intake_key", async () => {
     const { fetchFn, calls } = respondWith(STARTED);

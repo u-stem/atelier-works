@@ -17,6 +17,18 @@ const FORM: IntakeForm = {
   title: "Add a widget",
   body: "Add a widget to the page.",
   acceptanceCriteria: "It renders.",
+  profile: "standard",
+  reproduction: "",
+  expectedBehavior: "",
+  actualBehavior: "",
+};
+
+const BUGFIX_FORM: IntakeForm = {
+  ...FORM,
+  profile: "bugfix",
+  reproduction: "Press save.",
+  expectedBehavior: "The widget is saved.",
+  actualBehavior: "An error is shown.",
 };
 
 const UNKNOWN: IntakeAttempt = {
@@ -519,6 +531,27 @@ describe("a draft typed before sending", () => {
     expect(sessions.get(KEY).form).toEqual(DRAFT);
   });
 
+  test("keeps a draft whose title is still empty, because the purpose typed so far must not be lost", () => {
+    const sessions = createIntakeSessions();
+    sessions.draft(KEY, { ...FORM, title: "", body: "First" });
+    sessions.draft(KEY, { ...FORM, title: "", body: "First, then more" });
+    expect(sessions.get(KEY).form?.body).toBe("First, then more");
+  });
+
+  test("keeps the profile chosen while neither draft can be sent", () => {
+    const sessions = createIntakeSessions();
+    sessions.draft(KEY, { ...FORM, title: "" });
+    sessions.draft(KEY, { ...FORM, title: "", profile: "direct" });
+    expect(sessions.get(KEY).form?.profile).toBe("direct");
+  });
+
+  test("keeps a field of the bugfix typed under another profile", () => {
+    const sessions = createIntakeSessions();
+    sessions.draft(KEY, { ...FORM, profile: "direct" });
+    sessions.draft(KEY, { ...FORM, profile: "direct", reproduction: "Steps" });
+    expect(sessions.get(KEY).form?.reproduction).toBe("Steps");
+  });
+
   test("tells the subscribers once for the same draft typed twice", () => {
     const sessions = createIntakeSessions();
     let calls = 0;
@@ -691,6 +724,68 @@ describe("the intake key", () => {
     sessions.record(KEY, UNKNOWN);
     sessions.draft(KEY, OTHER_FORM);
     expect(sessions.get(KEY).intakeKey).toBe(first);
+  });
+
+  describe("for an input that differs only in what is sent", () => {
+    /** 結果が分からない送信の後、別の入力で再送したときのキーが、最初と同じか。 */
+    function resendKeepsKey(first: IntakeForm, again: IntakeForm): boolean {
+      const sessions = createIntakeSessions(keys().newKey);
+      const given = send(sessions, first);
+      sessions.record(KEY, UNKNOWN);
+      sessions.confirmResend(KEY);
+      return send(sessions, again) === given;
+    }
+
+    test("is new when the profile differs", () => {
+      expect(resendKeepsKey(FORM, { ...FORM, profile: "direct" })).toBe(false);
+    });
+
+    test("is new when the reproduction of a bugfix differs", () => {
+      expect(
+        resendKeepsKey(BUGFIX_FORM, {
+          ...BUGFIX_FORM,
+          reproduction: "Press cancel.",
+        }),
+      ).toBe(false);
+    });
+
+    test("is new when the expected behavior of a bugfix differs", () => {
+      expect(
+        resendKeepsKey(BUGFIX_FORM, {
+          ...BUGFIX_FORM,
+          expectedBehavior: "The widget is kept.",
+        }),
+      ).toBe(false);
+    });
+
+    test("is new when the actual behavior of a bugfix differs", () => {
+      expect(
+        resendKeepsKey(BUGFIX_FORM, {
+          ...BUGFIX_FORM,
+          actualBehavior: "Nothing happens.",
+        }),
+      ).toBe(false);
+    });
+
+    test("is the same when the same bugfix is sent again", () => {
+      expect(resendKeepsKey(BUGFIX_FORM, { ...BUGFIX_FORM })).toBe(true);
+    });
+
+    test.each([
+      ["reproduction", { reproduction: "Left over." }],
+      ["expectedBehavior", { expectedBehavior: "Left over." }],
+      ["actualBehavior", { actualBehavior: "Left over." }],
+    ] satisfies [string, Partial<IntakeForm>][])(
+      "is the same when %s differs under a profile that does not send it",
+      (_name, change) => {
+        const direct: IntakeForm = { ...FORM, profile: "direct" };
+        expect(resendKeepsKey(direct, { ...direct, ...change })).toBe(true);
+      },
+    );
+
+    test("is new when the purpose differs", () => {
+      expect(resendKeepsKey(FORM, { ...FORM, body: "Another." })).toBe(false);
+    });
   });
 
   test("is not written to the storage of the tab", () => {

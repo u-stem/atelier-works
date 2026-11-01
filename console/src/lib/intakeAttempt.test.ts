@@ -192,6 +192,10 @@ describe("describeIntakeAttempt", () => {
     title: "Add a widget",
     body: "Add a widget to the page.",
     acceptanceCriteria: "",
+    profile: "standard",
+    reproduction: "",
+    expectedBehavior: "",
+    actualBehavior: "",
   };
   const NOT_KNOWN = attemptFromOutcome(failed({ kind: "network" }));
   const lines = (attempt: IntakeAttempt, form: IntakeForm | null = null) =>
@@ -199,6 +203,27 @@ describe("describeIntakeAttempt", () => {
 
   test("names the title that was sent, so the Issue can be found", () => {
     expect(lines(NOT_KNOWN, FORM)).toContain("送った題名: Add a widget");
+  });
+
+  test.each([
+    ["direct", "直接"],
+    ["bugfix", "不具合の修正"],
+    ["docs", "文書の変更"],
+  ] satisfies [IntakeForm["profile"], string][])(
+    "names the profile %s that was sent, so that a resend does not change it",
+    (profile, label) => {
+      expect(lines(NOT_KNOWN, { ...FORM, profile })).toContain(
+        `送った進め方: ${label}`,
+      );
+    },
+  );
+
+  test("names no profile for the standard one", () => {
+    expect(lines(NOT_KNOWN, FORM)).not.toContain("送った進め方");
+  });
+
+  test("names no profile when there is no saved input", () => {
+    expect(lines(NOT_KNOWN, null)).not.toContain("送った進め方");
   });
 
   test("names no title when there is no saved input", () => {

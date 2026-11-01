@@ -369,12 +369,24 @@ describe("manual_intake_submit", () => {
     profile: "standard",
   };
 
+  const SEND_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d";
+
+  /** 承認を省く進め方の投入。不具合の3欄は、組み立てた後の本文と受入基準に入っている。 */
+  const BUGFIX_INPUT = {
+    ...INPUT,
+    body: "Add a widget.\n\n#### 再現手順\nsecret steps\n\n#### 実際の動作\nsecret result",
+    acceptance_criteria: "#### 期待する動作\nsecret expectation",
+    profile: "bugfix",
+    intake_key: SEND_ID,
+  };
+
   function deps(events: string[] = []): ManualIntakeSubmitDeps {
     return {
       loadConfig: async () => ({
         owners: [{ name: "octo-owner", kind: "user" }],
         repo_allowlist: [],
         factory_repo: "https://github.com/octo-owner/atelier-works",
+        implement_enabled: true,
       }),
       deriveActor: () => "alice",
       runFlow: async () => {
@@ -395,15 +407,57 @@ describe("manual_intake_submit", () => {
     expect(events).toEqual(["insert", "flow", "update"]);
   });
 
-  test("records the operator, the action and the repository", async () => {
+  test("records the operator, the action, the repository and the profile", async () => {
     const calls: Call[] = [];
     await submitManualIntakeRecorded(INPUT, deps(), fakeSql(RECORDED, calls));
     expect(calls[0]?.values).toEqual([
       "alice",
       "manual_intake_submit",
       "octo-owner/widgets",
-      '{"owner":"octo-owner","repo":"widgets"}',
+      '{"owner":"octo-owner","repo":"widgets","profile":"standard"}',
     ]);
+  });
+
+  test("records the profile that passed the validation", async () => {
+    const calls: Call[] = [];
+    await submitManualIntakeRecorded(
+      { ...INPUT, profile: "direct", intake_key: SEND_ID },
+      deps(),
+      fakeSql(RECORDED, calls),
+    );
+    expect(calls[0]?.values[3]).toBe(
+      '{"owner":"octo-owner","repo":"widgets","profile":"direct"}',
+    );
+  });
+
+  test("records the attempt of an approval-free profile before the flow starts", async () => {
+    const events: string[] = [];
+    await submitManualIntakeRecorded(
+      BUGFIX_INPUT,
+      deps(events),
+      fakeSql(RECORDED, [], events),
+    );
+    expect(events).toEqual(["insert", "flow", "update"]);
+  });
+
+  test("never records the fields of a bugfix", async () => {
+    const calls: Call[] = [];
+    await submitManualIntakeRecorded(
+      BUGFIX_INPUT,
+      deps(),
+      fakeSql(RECORDED, calls),
+    );
+    expect(JSON.stringify(calls)).not.toMatch(/secret|再現手順|期待する動作/);
+  });
+
+  test("writes no record for a profile that is refused", async () => {
+    const calls: Call[] = [];
+    await submitManualIntakeRecorded(
+      { ...INPUT, profile: "unknown" },
+      deps(),
+      fakeSql(RECORDED, calls),
+    );
+    expect(calls).toEqual([]);
   });
 
   test("never records the title or the body", async () => {
