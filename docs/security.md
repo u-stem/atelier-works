@@ -1050,7 +1050,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
 | 旧Consoleのリンクを固定の行き先に飛ばす | 廃止した旧ConsoleのURL(`/apps/get/f/factory/factory_console`と`/apps_raw/get/f/factory/factory_console`、配下を含む)は、パスとクエリによらず固定の`/console/`へ302で飛ばす。行き先を要求から作らないので、オープンリダイレクトにならない。`Cache-Control: no-store`を付け、ブラウザに転送を覚えさせない |
 | 他のサイトからAPIを呼ばせない | `/api/*`への要求は、次の4つをCaddyが403にする。`Sec-Fetch-Site`が`cross-site`か`same-site`のもの。`Origin`がブラウザの開いたオリジンと一致しないもの。ジョブを起動するGET(`run_wait_result`、`run_and_stream`、`slack_approval`、`teams_approval`、`move_s3_file`)を、fetchとXHR以外(`Sec-Fetch-Dest`が`empty`でないもの)で呼んだもの。GETとHEAD以外の要求を、ページの移動(`Sec-Fetch-Mode`が`navigate`か`nested-navigate`)で送ったもの。副作用のあるGETも、`Sec-Fetch-Mode`が`navigate`のときは止める。`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らないCLIは通す |
-| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの17個(読み取りの5つと、承認、再実行、監査の起動、通知の解決、手動投入の受付、保留の解除、凍結の解除、ジョブの取消、定期ジョブの再実行、設定の変更、保留と凍結を置く、スケジュールを止める)だけである。scheduleを有効に戻すscriptは無い。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
+| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの18個(読み取りの5つと、承認、再実行、監査の起動、通知の解決、手動投入の受付、PRレビューの投入の受付、保留の解除、凍結の解除、ジョブの取消、定期ジョブの再実行、設定の変更、保留と凍結を置く、スケジュールを止める)だけである。scheduleを有効に戻すscriptは無い。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
 | 秘密を配信物に入れない | Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない |
 
@@ -1250,6 +1250,8 @@ tag`console`がsuperadminでない主体にも許されていても、フォル�
 フローは呼び出した主体の権限で起動し、`on_behalf_of_email`を置かない。
 そのため、投入できる主体は、WindmillのUIから`manual_intake`を実行できる主体と同じである。
 `on_behalf_of_email`を置くと、フローが別の主体の権限で動くので、Console用のscriptに置かれていないことを契約テストが確かめる。
+PRのレビューを投入する`pr_review_submit`も同じ作りで、投入できる主体は、`pr_review_intake`を実行できる主体と同じである。
+詳しくは、[PRレビューの投入](#prレビューの投入)にある。
 
 管理者の資格情報を送る`doctor`と`bootstrap`は、宛先を`WM_HTTP_PORT`のポートの`127.0.0.1`に限る。
 `WM_BASE_URL`は使わない。
@@ -1262,7 +1264,7 @@ tag`console`がsuperadminでない主体にも許されていても、フォル�
 
 Consoleから押せる書き込みには、読むsecret変数の上限を決める。
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
-`audit_kickoff`、`notice_resolve`、`manual_intake_submit`は、どのsecret変数も読まない。
+`audit_kickoff`、`notice_resolve`、`manual_intake_submit`、`pr_review_submit`は、どのsecret変数も読まない。
 保留と凍結の3つ(`console_holds`、`hold_release`、`freeze_release`)も、どのsecret変数も読まない。
 保留と凍結の3つは、`discord_webhook_url`も読めないので、Discordへは送らない。解除の記録は情報の通知に残す。
 ジョブを取り消す`console_job_cancel`も、どのsecret変数も読まず、SDKの呼び出しを許可表に絞る([ジョブの取消](#ジョブの取消))。
@@ -1311,7 +1313,7 @@ Podmanは対象外である。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - 次のtag`console`のscriptは、resource`f/factory/factory_config`を読む。
-  `audit_kickoff`、`retry_work_item`、`manual_intake_submit`、`console_query`、`console_fetch_watch`である。
+  `audit_kickoff`、`retry_work_item`、`manual_intake_submit`、`pr_review_submit`、`console_query`、`console_fetch_watch`である。
   `console_query`は、手動投入の候補(`intake_targets`)のために読む。
   `approval_decide`と`notice_resolve`は、設定を読まない。
   契約テストが見るのはsecret変数の名前の読み取りだけなので、resourceの値に`$var:`の参照が無いことは、人が確かめる。
@@ -1469,6 +1471,64 @@ ENDが窓に無いときは、BEGINと、その後ろの鍵の本文らしい並
 切ったときは`truncated`で示す。
 Windmillのジョブトークンは、一般形の規則に当たる。
 
+### PRレビューの投入
+
+PRのレビューを投入する入口は、2つに分かれる。
+Console用workerで動く`pr_review_submit`は、入力の形、リポジトリの許可、操作者、稼働中のレビューの有無を確かめて、フロー`pr_review_intake`を起動する。
+GitHubを読む確認と、作業項目の登録は、通常のworkerで動く登録のステップ(`pr_review_intake_register`)が行う。
+`pr_review_submit`はsecret変数を読まないので、GitHubのトークンを要る確認を持てないためである。
+`pr_review_submit`が読むDBは、`factory.work_items`の1回の`SELECT`だけで、書くのは操作の記録の部品だけである。
+SDKの呼び出しは、境界テストの許可表には載せない。`manual_intake_submit`と同じく、secret変数を読まないことだけを境界テストが確かめる。
+
+ラベルの経路と、確かめる関門が違う。
+投入は`factory:review`ラベルを使わないので、ラベルの付与者の確認(`isAllowedLabeler`)を通らない。
+代わりに、操作者をジョブの実行文脈から導いて操作の記録に残す。
+投入できる主体は、フォルダ`f/factory`を実行できる主体で、ラベルを付けられる人とは別の許可である。
+リポジトリの許可(`isRepoAllowed`)、オーナーのIDの照合、fork headの断りは、ラベルの経路と同じ判定を通す。
+登録のステップは、入口の検査に頼らない。
+フローを直接実行された場合に備えて、GitHubを読む前に、PR番号の形、名前の形、リポジトリの許可を確かめ直す。
+PRが開いていることも確かめ、GitHubが返す正規のリポジトリ名で、許可とオーナーのIDを確かめる。
+入力のリポジトリ名が正規の名前と一致しないとき(改名で転送された場合)は、投入しない。
+
+同じPRの稼働中の`pr_review`は、3つの層で1件に保つ。
+
+1. `pr_review_submit`が、DBを読んで断る。
+2. 登録のステップの挿入が、`WHERE NOT EXISTS`で稼働中の行を除く。
+3. 部分一意インデックス`work_items_active_pr_review_key`が、並行する挿入を拒む。
+
+`pr_review`の行の綴りは、書き手によって揺れる。
+収集の表は小文字で書き、設定で明示したリポジトリは設定の綴りをそのまま使うためである。
+そのため、このインデックスと、1と2の比較は、ownerとrepoを小文字にして比べる。
+登録のステップが書く行は、GitHubが返す正規の綴りである。
+`pr_fix`のインデックスの綴りの扱いは、この変更の対象外で、変えていない。
+
+次のファイルを、保護パスに入れる。
+書き換えられると、許可されていないリポジトリや閉じたPRのレビューが投入で通ったり、同じPRのレビューが重なったりするためである。
+
+- 入口の`pr_review_submit.ts`
+- 登録のステップ`steps/pr_review_intake_register.ts`
+- 投入のフロー`pr_review_intake__flow/`(前方一致)
+- 作業項目の作り方を`poll_prs`と共有する`lib/pr_review_start.ts`
+- 上の3つのファイルの`.script.yaml`
+- 一意インデックスを作るmigration2本
+
+3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+
+投入を止める停止スイッチは無い。
+`poll_prs`のスケジュールを止めても、投入は止まらない。
+
+残るリスクがある。
+
+- `pr_review_intake`のフローを直接実行すると、`pr_review_submit`を通らず、操作の記録が残らない。
+  実行できるのは、`f/factory`の権限を持つ管理者と、その資格情報で動くローカルのClaudeのセッションである。
+  拒否フックが名前で止めるのは、`CONSOLE_WRITE_SCRIPTS`の書き込みのscriptだけで、フローと登録のステップは止めない。
+  手動投入のフロー(`manual_intake`)と同じ性質である。
+  `.claude/settings.json`の許可に`wmill`の実行系は無いので、実行には人の許可が要る。
+- 登録のステップの断りのうち、noticeに残るのは、fork headとオーナーのIDの食い違いだけである。
+  そのほかは、ステップのジョブの結果として読む。
+- 投入の確認の後に、ラベルの経路が同じPRのレビューを始めた競合は、登録のステップの挿入が断る。
+  人の依頼は失われない。ラベルの経路は、ラベルを付け直して次の巡回に任せる。
+
 ### ジョブの取消
 
 ジョブを取り消す`console_job_cancel`は、tag`console`で動かす書き込みのscriptである。
@@ -1481,7 +1541,7 @@ Windmillのジョブトークンは、一般形の規則に当たる。
 | --- | --- |
 | 対象のジョブ | パスが`f/factory/`で始まるジョブだけを扱う。外のジョブと、UUIDの形でないidは、存在しないジョブと同じ応答にする。存在を返さないためである |
 | 取り消せるフロー | `job_kind`が`flow`で、親のジョブが無く、フローのステップでなく、パスが許可した7つのフロー(audit、dependabot、design、implement、pipeline、pr_fix、pr_review)のどれかと完全に一致するものだけ。前方一致にしない |
-| 取り消さないもの | `self_update`、migrationを走らせるscript、`cleanup_*`などのscriptのジョブ、tag`console`のジョブ、予定の時刻が先のジョブ、終わったジョブ、取り消しの依頼が済んで止まる途中のジョブ、子のステップ、作業項目を持たない手動投入のフロー。許可したフローの外は、すべて取り消さない。予定の時刻は、10秒の猶予を超えて先のときだけ「先」とみなす。Windmillとworkerの時計のずれで、もうすぐ始まる待ちのジョブを誤って断らないためである |
+| 取り消さないもの | `self_update`、migrationを走らせるscript、`cleanup_*`などのscriptのジョブ、tag`console`のジョブ、予定の時刻が先のジョブ、終わったジョブ、取り消しの依頼が済んで止まる途中のジョブ、子のステップ、作業項目を持たない手動投入のフローとPRレビューの投入のフロー。許可したフローの外は、すべて取り消さない。予定の時刻は、10秒の猶予を超えて先のときだけ「先」とみなす。Windmillとworkerの時計のずれで、もうすぐ始まる待ちのジョブを誤って断らないためである |
 | 許可表の保守 | 許可表はフローの名前で列挙し、生成した既知のpathの定数とは別に持つ。リポジトリのフローが、許可したか、理由つきで除いたかのどちらかであることを、契約テストが固定する。新しいフローは、決めるまで取り消せない。許可したフローは、作業項目のidを入力に取ることも、契約テストが確かめる |
 | 呼び出しの順序 | ジョブの取得、対象の判定、操作者の導出、記録(`attempted`)、取り消し、記録(結果)、ジョブと作業項目の読み直しの順に固定する。操作者を導けないときと、記録を書けないときは、取り消さずに断る |
 | SDKの呼び出し | `JobService.getJob`、`JobService.cancelQueuedJob`、`wmill.getWorkspace`、`wmill.datatable`だけ。境界テストの許可表に載せ、importでたどれるファイルの和に当てる |
@@ -1757,12 +1817,15 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 | 保留の解除 | `hold_release` | 通す |
 | 凍結とdeployの保留の解除 | `freeze_release` | 通す |
 | 手動投入 | `manual_intake_submit` | 通す |
+| PRレビューの投入 | `pr_review_submit` | 通す |
 
 解除の戻りにある`audit`は、解除の通知(`hold_released`)を書けたかを示す。
 `action_audit`は、この表への記録を書けたかを示し、別である。
 通知は人への知らせで、記録は監査のためなので、両方を残す。
 手動投入の記録に入れるのは、リポジトリ(`owner/repo`)と検証後の進め方だけである。
 題名、本文、不具合の欄は入れない。
+PRレビューの投入の記録に入れるのは、`owner`、`repo`、`pr_number`だけである。
+検証で断った投入は、何も起動しないので記録しない。
 
 `changes`には、変えたキーと値だけを入れる。
 値は、数値、真偽値、`null`、空白を含まない識別子の形の文字列に限る。
@@ -1774,7 +1837,7 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 保護パスの目的は、PRの自動修正と実装が、人のレビューを経ずに書き換えるのを止めることである。
 この表に記録する書き込みのscriptは、記録の順序を持つので保護パスに入れる。
 書き換えられると、記録なしで同じ操作ができ、記録が誰の操作も表さなくなるためである。
-対象は、次の9本である。
+対象は、次の10本である。
 
 - 取消の`console_job_cancel`
 - 定期ジョブの再実行の`console_job_rerun`
@@ -1783,6 +1846,7 @@ Consoleから行う書き込みの操作は、表`factory.console_actions`に記
 - スケジュールを止める`console_schedule_stop`
 - `retry_work_item`
 - `manual_intake_submit`
+- PRレビューの投入の`pr_review_submit`
 - 保留の解除の`hold_release`
 - 凍結とdeployの保留の解除の`freeze_release`
 

@@ -1056,6 +1056,7 @@ export function isActivePrReviewUniqueViolation(err: unknown): boolean {
  * 一意インデックス`work_items_active_pr_review_key`が、並行する挿入を防ぐ。
  * `ON CONFLICT DO NOTHING`は対象を指定しないので、インデックスへの違反も例外にならず、`null`になる。
  * 種類が`pr_review`でないとき、PR番号が正の整数でないときは、DBに触れる前に例外を投げる。
+ * 進め方、CIの判定、競合の列は書かない。`pr_review`には要らず、進め方は列の既定(通常の進め方)になる。
  */
 export async function insertPrReviewWorkItemUnlessActive(
   item: NewWorkItem,
@@ -1073,17 +1074,14 @@ export async function insertPrReviewWorkItemUnlessActive(
     INSERT INTO factory.work_items (
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-      cancel_url, head_sha, parent_work_item_id, ci_check_id,
-      conflict_check_id, conflict_episode, profile
+      cancel_url, head_sha, parent_work_item_id
     )
     SELECT
       ${item.cycle}::integer, ${item.source}::text, ${item.kind}::text, ${item.owner}::text, ${item.repo}::text,
       ${item.issue_number}::integer, ${item.issue_url}::text, ${item.pr_number}::integer, ${item.title}::text,
       ${item.body}::text, ${item.status}::text, ${item.attempt}::integer, ${item.claimed_by}::text,
       ${item.flow_job_id}::text, ${item.resume_url}::text, ${item.cancel_url}::text, ${item.head_sha}::text,
-      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
-      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer,
-      ${item.profile ?? "standard"}::text
+      ${item.parent_work_item_id}::bigint
     WHERE NOT EXISTS (
       SELECT 1 FROM factory.work_items active
       WHERE active.kind = 'pr_review'

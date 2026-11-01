@@ -4,7 +4,9 @@
 
 import type { NewWorkItem } from "./db.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
-import { PR_REVIEW_FLOW_PATH } from "./pr_review_retry.ts";
+
+/** レビューのフローのパス。 */
+export const PR_REVIEW_FLOW_PATH = "f/factory/pr_review";
 
 /** Issueの承認済み以降の作業項目を引く検索(`findApprovedWorkItemForIssue`)のうち、使う部分。 */
 export type FindApprovedWorkItem = (

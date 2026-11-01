@@ -350,7 +350,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の18本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の19本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -358,6 +358,7 @@ Consoleの一覧と集計は次のviewを読む。
 - `audit_kickoff`
 - `notice_resolve`
 - `manual_intake_submit`
+- `pr_review_submit`
 - `console_fetch_watch`
 - `console_holds`
 - `hold_release`
@@ -457,13 +458,17 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 外せた後は取り直して残っていないかを確かめる。
 取り直しが数回とも失敗したときは、トリガーラベルを付け直して引く。
 取り直せないまま始めると、同じPRのサイクルが重なりうるためである。
-レビューのラベルは、稼働中のレビューがあっても止まらない。
+レビューのラベルは、終端でない`pr_review`がある間だけ止まる。
+そのレビューが終わった後に、1回だけ新しいレビューが始まる。
 修正のラベルは、終端でないPR修正がある間だけ止まる。
 その修正が終わった後に、1回だけ新しいラウンドが始まる。
 この排他はベストエフォートである。
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
+終端でない`pr_review`の作業項目も、部分一意インデックス`work_items_active_pr_review_key`により、同時に1つしか持てない。
+組は、小文字にした`owner`と`repo`、PRの番号である。
+`pr_review`の行の綴りは書き手によって揺れるので、このインデックスだけが大文字小文字を区別しない。
 これらのインデックスの述語は、終端でない状態を列挙する。
 設計工程の2状態は、Issueの`work_items_active_issue_key`と、PR修正の`work_items_active_pr_fix_key`の述語に含める。
 dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕様](internals/dependabot.md))の述語にも含める。

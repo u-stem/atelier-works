@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { NewWorkItem } from "../../f/factory/lib/db.ts";
+import * as prReviewRetry from "../../f/factory/lib/pr_review_retry.ts";
 import {
   findLinkedParentWorkItemId,
+  PR_REVIEW_FLOW_PATH,
   type PrReviewStartDeps,
   type PrReviewStartInput,
   startPrReview,
@@ -174,6 +176,12 @@ describe("startPrReview", () => {
     });
     await startPrReview(INPUT, deps).catch(() => undefined);
     expect(jobIds).toEqual([]);
+  });
+});
+
+describe("PR_REVIEW_FLOW_PATH", () => {
+  test("is the flow that the retry starts", () => {
+    expect(PR_REVIEW_FLOW_PATH).toBe(prReviewRetry.PR_REVIEW_FLOW_PATH);
   });
 });
 
