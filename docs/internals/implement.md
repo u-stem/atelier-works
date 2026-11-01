@@ -145,8 +145,10 @@ GitHubの今のIssueの本文は仕様に使わない。取り込みの後に本
 5の起動は、承認の後に起動する手順(`approved`から移す)とは別に持つ。
 結果は`started`、`not_moved`、`cas_failed`、`launch_failed`などで返り、失敗の記録、notice、`needs_human`への移行は、起動の手順が行う。
 `implementing`へ移す比較交換が例外で終わると、作業項目は`picked`のまま残る。
-実装フローのジョブIDを記録できなかったときは、`implementing`のまま残る。
 `picked`は終端でないので、`poll_issues`の照合が拾い、実行中のジョブが無いまま猶予(10分と`claude_timeout_sec`の2倍の大きい方)を過ぎると失敗に移す。
+実装フローの起動が成功して、ジョブIDだけを記録できなかったときは、`implementing`のまま進む。
+フローが準備のステップで自分のジョブIDを書き、照合はフローの実行中は何もしない。
+記録の失敗は、失敗の記録とnoticeに残る。
 Discordへの`issue_claimed`の通知は、要件定義の生成を始めたことを伝えるので、この道では送らない。
 
 ## 実装

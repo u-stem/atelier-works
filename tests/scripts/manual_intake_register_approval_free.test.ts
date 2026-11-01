@@ -49,7 +49,6 @@ const INPUT: ApprovalFreeIntakeInput = {
   owner: "octo-owner",
   repo: "widgets",
   issueNumber: 41,
-  issueUrl: "https://github.com/octo-owner/widgets/issues/41",
   title: "Fix the typo",
   body: buildPostedIssueBody(
     {
@@ -193,7 +192,7 @@ describe("registerApprovalFreeIntake", () => {
       skipped: false,
       work_item_id: 77,
       issue_number: 41,
-      issue_url: INPUT.issueUrl,
+      issue_url: issueHtmlUrl("octo-owner", "widgets", 41),
       implement: "started",
     });
   });
@@ -234,15 +233,6 @@ describe("registerApprovalFreeIntake refusals", () => {
     ).rejects.toThrow(
       "manual_intake: the intake key does not match the request",
     );
-  });
-
-  test("does not check the issue address of the input", async () => {
-    const { deps, inserted } = harness();
-    await registerApprovalFreeIntake(
-      { ...INPUT, issueUrl: "https://example.test/not-the-issue" },
-      deps,
-    );
-    expect(inserted).toHaveLength(1);
   });
 
   test("inserts nothing for a body that does not match", async () => {
@@ -461,15 +451,13 @@ describe("registerApprovalFreeIntake for names that GitHub spells differently", 
   const MIXED_INPUT = {
     ...INPUT,
     ...MIXED,
-    // GitHubが返すURLは、正規の綴り(小文字)である。入力の綴りとは違いうる。
-    issueUrl: "https://github.com/octo-owner/widgets/issues/41",
   };
   const MIXED_ROW = rowWith({
     ...MIXED,
     content_hash: computeIntakeContentHash(MIXED_FIELDS),
   });
 
-  test("registers although the address that GitHub returned is spelled in lower case", async () => {
+  test("registers although GitHub spells the names in lower case", async () => {
     const { deps, inserted } = harness({ row: MIXED_ROW });
     await registerApprovalFreeIntake(MIXED_INPUT, deps);
     expect(inserted).toHaveLength(1);

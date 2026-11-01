@@ -275,7 +275,6 @@ export type ApprovalFreeIntakeInput = {
   readonly owner: string;
   readonly repo: string;
   readonly issueNumber: number;
-  readonly issueUrl: string;
   readonly title: string;
   /** 作業項目の本文になる、Issueを作るステップが投稿した本文(区切りの行と目印を含む)。登録が組み立て直して照合する。 */
   readonly body: string;
@@ -330,8 +329,9 @@ const KEY_MISMATCH_MESSAGE =
  *   フローを直接実行する経路でも、Issueを作ったステップの検査に頼らないためである。
  * - キーの表の行が、引数のリポジトリ、Issueの番号、進め方を含む内容のハッシュと一致する。
  *   進め方を差し替えた登録は、ハッシュが合わず断られる。
- * - 作業項目の本文とIssueのURLが、入力とキーから組み立て直した値と一致する。
+ * - 作業項目の本文が、入力とキーから組み立て直した値と一致する。
  *   本文は、Issueを作るステップが投稿した本文そのものでなければならない。
+ * IssueのURLは入力から受けず、名前と番号から組み立てて保存する。
  * Issueに作業項目が1件でもあれば、再利用か新規かにかかわらず登録しない。
  * 終端の作業項目があるIssueで、新しいサイクルを始めないためである。
  * 取得は挿入で決まる。稼働中の作業項目が既にあって挿入されなければ、取得を失ったものとして何も始めない。
@@ -341,7 +341,11 @@ export async function registerApprovalFreeIntake(
   input: ApprovalFreeIntakeInput,
   deps: ApprovalFreeIntakeDeps,
 ): Promise<ManualIntakeApprovalFreeResult | ManualIntakeSkippedResult> {
-  const { owner, repo, issueNumber, issueUrl, profile } = input;
+  const { owner, repo, issueNumber, profile } = input;
+  // IssueのURLは、入力から受けず、名前と番号から組み立てる。
+  // GitHubが返すURLは正規の綴りで、入力のオーナー名やリポジトリ名の綴りと違いうる。
+  // 綴りの違いを断ると、Issueを作った後に登録が落ちて、誰も拾わないIssueが残る。
+  const issueUrl = issueHtmlUrl(owner, repo, issueNumber);
   assertAcceptedProfile(profile);
   if (!skipsApprovals(profile)) {
     throw new Error("manual_intake: the profile needs approvals");
@@ -368,7 +372,6 @@ export async function registerApprovalFreeIntake(
         },
         key,
       ) ||
-    issueUrl !== issueHtmlUrl(owner, repo, issueNumber) ||
     row === null ||
     row.issue_number !== issueNumber ||
     row.owner !== owner ||
@@ -573,7 +576,6 @@ export async function main(
         owner,
         repo,
         issueNumber: issue_number,
-        issueUrl: issue_url,
         title,
         body,
         viewerLogin: viewer.login,
