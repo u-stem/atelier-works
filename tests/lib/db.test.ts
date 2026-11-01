@@ -760,6 +760,18 @@ describe("newestNewerPrWorkItem", () => {
     await newestNewerPrWorkItem("pr_fix", "o", "r", 7, 3, sql);
     expect(calls[0]?.values).toEqual(["pr_fix", "o", "r", 7, 3]);
   });
+
+  test("compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("lower(owner) = lower(");
+  });
+
+  test("compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("lower(repo) = lower(");
+  });
 });
 
 describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
@@ -3905,6 +3917,20 @@ describe("hasPriorReview", () => {
     await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
     expect(calls[0]?.values).toContain(1);
   });
+
+  test("compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.text).toContain(
+      "lower(factory.work_items.owner) = lower(",
+    );
+  });
+
+  test("compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.text).toContain("lower(factory.work_items.repo) = lower(");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4582,6 +4608,42 @@ describe("latestPrWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
+  });
+
+  test("compares the owner without regard to case when it does not filter by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("lower(owner) = lower(");
+  });
+
+  test("compares the repo without regard to case when it does not filter by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("lower(repo) = lower(");
+  });
+
+  test("compares the owner without regard to case when it filters by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      { kind: "pr_review" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("lower(owner) = lower(");
+  });
+
+  test("compares the repo without regard to case when it filters by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      { kind: "pr_review" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("lower(repo) = lower(");
   });
 });
 
@@ -9383,6 +9445,54 @@ describe("transient pr_review restart", () => {
   test("tells whether a newer or concurrent review exists", async () => {
     const { sql } = createFakeSqlClient([[{ superseded: true }]]);
     expect(await hasSupersedingPrReview(7, sql)).toBe(true);
+  });
+
+  test("looks for a newer row with another case of the owner", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("lower(other.owner) = lower(w.owner)");
+  });
+
+  test("looks for a newer row with another case of the repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("lower(other.repo) = lower(w.repo)");
+  });
+
+  test("the restart looks for a newer row with another case of the owner", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain(
+      "lower(other.owner) = lower(factory.work_items.owner)",
+    );
+  });
+
+  test("the restart looks for a newer row with another case of the repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain(
+      "lower(other.repo) = lower(factory.work_items.repo)",
+    );
+  });
+
+  test("the superseding check compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ superseded: false }]]);
+    await hasSupersedingPrReview(7, sql);
+    expect(calls[0]?.text).toContain("lower(other.owner) = lower(w.owner)");
+  });
+
+  test("the superseding check compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ superseded: false }]]);
+    await hasSupersedingPrReview(7, sql);
+    expect(calls[0]?.text).toContain("lower(other.repo) = lower(w.repo)");
   });
 
   test("records a stall once", async () => {

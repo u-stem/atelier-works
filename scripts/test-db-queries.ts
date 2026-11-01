@@ -53,6 +53,7 @@ import {
   hasNewerUnsettledOrFailedMainCiRun,
   hasParentTransitionSinceFixStarted,
   hasPassedMainCiRunAfter,
+  hasPriorReview,
   hasPrReviewForHead,
   hasRequirementDraftAfter,
   hasStatusEventWithNote,
@@ -76,6 +77,7 @@ import {
   latestDesignDraft,
   latestDesignEntryEvent,
   latestMainCiRunCreatedAt,
+  latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
   latestStatusTransition,
@@ -111,6 +113,7 @@ import {
   markPrCiNotified,
   markPrConflictNotified,
   type NewWorkerSample,
+  newestNewerPrWorkItem,
   readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
@@ -4455,6 +4458,40 @@ check(
   )) !== null,
 );
 
+// 綴りの違う`pr_review`の行を、同じPRの行として引く。登録のstepは正規の綴りで書き、
+// 自動の経路は検索で得た別の綴りで引くので、大文字小文字を区別した比較だと引き漏らす。
+const spelledReview = await insertWorkItem(
+  { ...reviewCandidate("Qdb", "R", 9261), status: "reviewed" as const },
+  sql,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary) VALUES (${String(spelledReview)}, 'spell01', 'comment', 'qspell')`,
+);
+check(
+  "spelling: the latest row of the pull request is found with another case",
+  (await latestPrWorkItem(OWNER, "r", 9261, undefined, sql))?.id ===
+    spelledReview,
+);
+check(
+  "spelling: the latest pr_review row of the pull request is found with another case",
+  (await latestPrWorkItem(OWNER, "r", 9261, { kind: "pr_review" }, sql))?.id ===
+    spelledReview,
+);
+check(
+  "spelling: the newer pr_review row of the pull request is found with another case",
+  (await newestNewerPrWorkItem("pr_review", OWNER, "r", 9261, 0, sql))?.id ===
+    spelledReview,
+);
+check(
+  "spelling: a prior review of the pull request is found with another case",
+  (await hasPriorReview(OWNER, "r", 9261, 0, sql)) === true,
+);
+check(
+  "spelling: no row is found for another pull request",
+  (await latestPrWorkItem(OWNER, "r", 9269, undefined, sql)) === null,
+);
+
 // 同じPRの終端でないpr_fixは1件までである(`work_items_active_pr_fix_key`)。
 // 一意インデックスへの違反を`isActivePrFixUniqueViolation`が見分けられること、稼働中のpr_fixの一覧、
 // 自動の再開の候補の一覧と比較交換が、同じPRの別の稼働中のpr_fixを避けることを確かめる。
@@ -7265,6 +7302,38 @@ execPsql(
 check(
   "transient review: the newer row itself is not superseded by the older finished one",
   (await hasSupersedingPrReview(transientNewer, sql)) === false,
+);
+// 新しい行の綴りが違っても、同じPRの新しい行として扱い、古い行を再開しない。
+const transientSpelled = await prWorkItem(
+  "pr_review",
+  9308,
+  "failed",
+  "qdb transient spelled",
+);
+eventAgo(transientSpelled, "failed", "github_transient: boom", 600);
+await insertWorkItem(
+  { ...reviewCandidate("Qdb", "R", 9308), status: "reviewed" as const },
+  sql,
+);
+check(
+  "transient review: a newer row under another spelling supersedes the review",
+  (await hasSupersedingPrReview(transientSpelled, sql)) === true,
+);
+check(
+  "transient review: a newer row under another spelling takes the review off the restart list",
+  !(await transientListed()).includes(transientSpelled),
+);
+check(
+  "transient review: a newer row under another spelling stops the restart",
+  (await restartTransientPrReview(
+    {
+      ...transientQuery,
+      id: transientSpelled,
+      note: "auto_retry: restarted from failed",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
 );
 // 起動に失敗した再開は、再開の遷移で1回に数え、戻した遷移(auto_retry:で始めない)で二重に数えない。
 const transientLaunchFailed = await prWorkItem(
