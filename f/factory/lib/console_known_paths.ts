@@ -25,6 +25,7 @@ export const KNOWN_SCRIPT_PATHS: readonly string[] = [
   "f/factory/poll_dependabot",
   "f/factory/poll_issues",
   "f/factory/poll_prs",
+  "f/factory/pr_review_submit",
   "f/factory/retry_work_item",
   "f/factory/sample_worker_load",
   "f/factory/self_update",
@@ -54,6 +55,7 @@ export const KNOWN_SCRIPT_PATHS: readonly string[] = [
   "f/factory/steps/pr_fix_prepare",
   "f/factory/steps/pr_fix_verify",
   "f/factory/steps/pr_review_generate",
+  "f/factory/steps/pr_review_intake_register",
   "f/factory/steps/pr_review_post",
   "f/factory/steps/pr_review_prepare",
   "f/factory/steps/pr_workflow_support",
@@ -72,6 +74,7 @@ export const KNOWN_FLOW_PATHS: readonly string[] = [
   "f/factory/pipeline",
   "f/factory/pr_fix",
   "f/factory/pr_review",
+  "f/factory/pr_review_intake",
 ];
 
 export type RepoSchedule = {
@@ -270,6 +273,7 @@ export const HISTORY_FILTER_PATHS: readonly string[] = [
   "f/factory/poll_prs",
   "f/factory/pr_fix",
   "f/factory/pr_review",
+  "f/factory/pr_review_intake",
   "f/factory/sample_worker_load",
   "f/factory/self_update",
   "f/factory/steps/design_apply",

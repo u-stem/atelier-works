@@ -1,26 +1,28 @@
-summary: ''
-description: ''
+summary: '[OP-1-4] PRのレビューをConsoleから受け付ける'
+description: ConsoleのPRレビューの投入から呼ぶ入口です。入力を検証し、通ればPRレビューの投入フロー(pr_review_intake)を起動してジョブIDを返します。許可されていないリポジトリ、不正な入力、同じPRで稼働中のレビューがある場合は、起動せずに理由を返します。PRの確認と作業項目の登録はフローが行います。
 lock: '!inline f/factory/pr_review_submit.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    _owner:
+    owner:
       type: string
-      description: ''
+      description: 対象リポジトリのオーナー。factory_configで許可されたものに限ります。
       default: null
       originalType: string
-    _pr_number:
+    pr_number:
       type: number
-      description: ''
+      description: レビューするPRの番号。正の整数です。
       default: null
-    _repo:
+    repo:
       type: string
-      description: ''
+      description: 対象のリポジトリ名。
       default: null
       originalType: string
   required:
-    - _owner
-    - _repo
-    - _pr_number
+    - owner
+    - repo
+    - pr_number
+tag: console
+timeout: 30

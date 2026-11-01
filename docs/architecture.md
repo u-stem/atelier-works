@@ -381,9 +381,10 @@ Consoleの一覧と集計は次のviewを読む。
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
+| `pr_review_intake` | `pr_review_submit`(ConsoleのPRレビューの投入)、人がフォームから実行 | PRレビューの投入フォーム(PRを確かめてレビューを始める) |
 | `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
 | `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
-| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
+| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`pr_review_intake_register`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
 | `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`manual_intake_register`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
 | `dependabot` | `poll_dependabot` | 依存の更新PRの検査と自動マージ |
@@ -532,6 +533,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_metadata_rehash` | script | [LIB] metadataジョブの失敗をhashの再計算で直す |
 | `f/factory/lib/owner_id_notice` | script | [LIB] owner_idの照合のnotice |
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
+| `f/factory/lib/pr_review_start` | script | [LIB] pr_reviewの作業項目の作成とフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
 | `f/factory/lib/pr_fix_design` | script | [LIB] PRの修正に渡す設計書の判定 |
@@ -633,6 +635,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2または実装を起動 |
 | `f/factory/manual_intake_submit` | script | [OP-1-2] 手動投入をConsoleから受け付ける |
+| `f/factory/pr_review_intake` | flow | [OP-1-3] PRレビューの投入フォーム(PRを確かめてレビューを始める) |
+| `f/factory/steps/pr_review_intake_register` | script | [OP-1-3/1] PRを確かめてレビューを登録 |
+| `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |

@@ -442,10 +442,46 @@
         {
           "kind": "human",
           "label": "Consoleの再実行"
+        },
+        {
+          "kind": "flow",
+          "flow": "pr_review_intake",
+          "via": "launch"
         }
       ],
       "unwiredEntries": [],
       "exits": []
+    },
+    {
+      "name": "pr_review_intake",
+      "summary": "PRレビューの投入フォーム(PRを確かめてレビューを始める)",
+      "description": "手動でPRのレビューを投入するためのフォームです。入力のPRを確かめ、同じPRで稼働中のレビューが無ければ、pr_reviewの作業項目を登録してレビューのフローを起動します。ラベルの付与者の確認は通らないので、投入できるのはf/factoryを実行できる主体に限ります。",
+      "steps": [
+        {
+          "id": "register",
+          "summary": "PRを確かめてレビューを登録",
+          "scriptPath": "f/factory/steps/pr_review_intake_register",
+          "conditional": false
+        }
+      ],
+      "entries": [
+        {
+          "kind": "human",
+          "label": "ConsoleのPRレビューの投入"
+        },
+        {
+          "kind": "human",
+          "label": "人がフォームから実行"
+        }
+      ],
+      "unwiredEntries": [],
+      "exits": [
+        {
+          "flow": "pr_review",
+          "step": "register",
+          "via": "launch"
+        }
+      ]
     }
   ],
   "schedules": [

@@ -27,6 +27,7 @@ export const CONSOLE_WRITE_SCRIPTS: readonly string[] = [
   "retry_work_item",
   "audit_kickoff",
   "manual_intake_submit",
+  "pr_review_submit",
   "notice_resolve",
   "hold_release",
   "freeze_release",
