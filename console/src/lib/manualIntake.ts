@@ -235,6 +235,10 @@ export function profileNotice(profile: IntakeProfile): string | null {
     : null;
 }
 
+export function blocksImplicitSubmit(_key: string): boolean {
+  return false;
+}
+
 /** 送信ボタンの文言。承認を省くときは、押す場所でそれを示す。 */
 export function submitLabel(profile: IntakeProfile): string {
   return skipsApproval(profile) ? "承認なしで投入する" : "投入する";

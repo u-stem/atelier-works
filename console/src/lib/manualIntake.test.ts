@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  blocksImplicitSubmit,
   buildIntakeInput,
   defaultRepoText,
   describeIntakeProblem,
@@ -313,7 +314,29 @@ describe("sameSentValues", () => {
   });
 });
 
+describe("blocksImplicitSubmit", () => {
+  test("blocks Enter, so that the choice of a profile is not sent by the key", () => {
+    expect(blocksImplicitSubmit("Enter")).toBe(true);
+  });
+
+  test.each(["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", " ", "Tab"])(
+    "does not block %p, which moves or picks a choice",
+    (key) => {
+      expect(blocksImplicitSubmit(key)).toBe(false);
+    },
+  );
+});
+
 describe("what the profile changes on the screen", () => {
+  test.each(["direct", "bugfix"] as const)(
+    "writes PR without a space around it in the description of %s",
+    (profile) => {
+      expect(
+        PROFILE_OPTIONS.find((option) => option.value === profile)?.description,
+      ).toContain("PRを作る");
+    },
+  );
+
   test("offers the four profiles in order", () => {
     expect(PROFILE_OPTIONS.map((option) => option.value)).toEqual([
       "standard",
@@ -339,7 +362,7 @@ describe("what the profile changes on the screen", () => {
     expect(
       PROFILE_OPTIONS.find((option) => option.value === "docs")?.description,
     ).toBe(
-      "文書の変更として承認なしで実装する(文書以外を変えたら PR で警告する)",
+      "文書の変更として承認なしで実装する(文書以外を変えたら PRで警告する)",
     );
   });
 
@@ -362,7 +385,7 @@ describe("what the profile changes on the screen", () => {
     "shows the notice about the review for %s",
     (profile) => {
       expect(profileNotice(profile)).toBe(
-        "PR は人がレビューしてからマージしてください(強制はされません)",
+        "PRは人がレビューしてからマージしてください(強制はされません)",
       );
     },
   );
