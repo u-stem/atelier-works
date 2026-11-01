@@ -86,8 +86,11 @@ describe("the console-a11y job", () => {
     expect(a11y.needs).toBe("scope");
   });
 
-  test("runs under the same condition as the console job", () => {
-    expect(a11y.if).toBe(consoleJob.if);
+  // mainのpushで照合しないブラウザを動かすと、mainの範囲のキャッシュへ書けるトークンが渡る。
+  // そのため、consoleジョブの条件に、PRの実行に限る条件を足す。
+  test("runs under the console job condition and only for pull requests", () => {
+    const base = String(consoleJob.if).replace(/\s*\}\}\s*$/, "");
+    expect(a11y.if).toBe(`${base} && github.event_name == 'pull_request' }}`);
   });
 
   test("has a time limit of 10 minutes", () => {
