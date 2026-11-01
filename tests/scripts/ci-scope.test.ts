@@ -1319,7 +1319,6 @@ const FLAG_JOBS: readonly (readonly [string, string])[] = [
   ["test-db", "db"],
   ["metadata", "metadata"],
   ["console", "console"],
-  ["console-a11y", "console"],
   ["caddyfile", "caddy"],
   ["console-fetcher-image", "fetcher"],
 ];
@@ -1411,6 +1410,15 @@ describe("ci.yml wiring", () => {
       );
     });
   }
+
+  // 照合しないブラウザを動かすので、mainの範囲のキャッシュへ書けるトークンを渡さないよう、PRの実行に限る。
+  test("console-a11y runs unless scope says console is false, and only for pull requests", () => {
+    expect(job("console-a11y").if).toBe(
+      expression(
+        "!cancelled() && needs.scope.outputs.console != 'false' && github.event_name == 'pull_request'",
+      ),
+    );
+  });
 
   test("check runs unless the run is cancelled", () => {
     expect(job("check").if).toBe(expression("!cancelled()"));
