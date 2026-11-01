@@ -699,6 +699,49 @@ export async function activePrFixConflictErrorFrom(
   }
 }
 
+export function activePrReviewConflictError(
+  _workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  _active: readonly Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "pr_number" | "kind"
+  >[],
+): Error {
+  return new Error("");
+}
+
+export async function activePrReviewConflictErrorFrom(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  lookup: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >,
+): Promise<Error> {
+  return activePrReviewConflictError(workItem, await lookup());
+}
+
+export async function restartConflictError(
+  err: unknown,
+  _workItem: Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "pr_number" | "issue_number"
+  >,
+  _lookups: RestartConflictLookups,
+): Promise<unknown> {
+  return err;
+}
+
+/** `restartConflictError`が、稼働中の作業項目を引く検索。 */
+export type RestartConflictLookups = {
+  readonly activePrFix: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >;
+  readonly activePrReview: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >;
+  readonly activeIssue: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "issue_number" | "kind">[]
+  >;
+};
+
 /**
  * 取り消された作業項目を、取り消す前の状態の作業項目として扱うために、状態を置き換えて返す。
  * 対象は、`poll_issues`の要対応の照合が、要対応の状態(失敗、人の対応待ち、期限切れ)から

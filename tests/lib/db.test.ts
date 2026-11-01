@@ -93,6 +93,7 @@ import {
   listActive,
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
+  listActivePrReviewWorkItems,
   listAutoRetryCandidates,
   listClaimablePrCiChecks,
   listExpiredPendingApprovalRequests,
@@ -10260,6 +10261,31 @@ describe("hasActivePrReviewWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasActivePrReviewWorkItem("acme", "widgets", 12, sql);
     expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+  });
+});
+
+describe("listActivePrReviewWorkItems", () => {
+  test("reads only the pr_review kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrReviewWorkItems("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("kind = 'pr_review'");
+  });
+
+  test("compares the owner and repo in lower case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrReviewWorkItems("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets"]),
+    );
+  });
+
+  test("returns the parsed rows", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    expect(
+      (await listActivePrReviewWorkItems("acme", "widgets", 12, sql)).map(
+        (item) => item.id,
+      ),
+    ).toEqual([1]);
   });
 });
 

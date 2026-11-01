@@ -1143,6 +1143,15 @@ export async function listActivePrFixWorkItems(
   return rows.map(toWorkItem);
 }
 
+export async function listActivePrReviewWorkItems(
+  _owner: string,
+  _repo: string,
+  _prNumber: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  return [];
+}
+
 /**
  * (owner, repo, issueNumber)の、終端でない`issue`の作業項目を返す。
  * 一意インデックスにより、通常は多くても1件である。
