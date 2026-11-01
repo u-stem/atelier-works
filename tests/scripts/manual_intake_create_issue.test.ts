@@ -431,6 +431,13 @@ describe("a resend of an input that already created its issue", () => {
     });
   });
 
+  test("returns the address of the first issue, which the register step needs", async () => {
+    const { deps } = harness({ row: DONE });
+    expect((await createManualIntakeIssue(KEYED, deps)).htmlUrl).toBe(
+      "https://github.com/octo-owner/widgets/issues/17",
+    );
+  });
+
   test("returns the profile and the key of the input for a reuse", async () => {
     const { deps } = harness({ row: DONE });
     expect(await createManualIntakeIssue(KEYED, deps)).toMatchObject({
