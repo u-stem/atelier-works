@@ -1,6 +1,6 @@
-import { Fragment, useId } from "react";
+import { Fragment, useId, useRef } from "react";
 import { Button } from "../components/ui/button.tsx";
-import { useDialogSync } from "../components/useDialogSync.ts";
+import { Dialog } from "../components/ui/dialog.tsx";
 import { type Platform, shortcutRows } from "../lib/shortcutKeys.ts";
 import { SCREENS } from "./screens.ts";
 
@@ -30,21 +30,16 @@ export function ShortcutHelp({
 }) {
   const headingId = useId();
   const noteId = useId();
-  const { ref, openRef } = useDialogSync(open);
+  const ref = useRef<HTMLDialogElement>(null);
   const rows = shortcutRows(SCREENS, platform);
 
   return (
-    <dialog
+    <Dialog
       ref={ref}
+      open={open}
+      onClose={onClose}
       aria-labelledby={headingId}
       aria-describedby={noteId}
-      onClose={() => {
-        // 親が`open`を偽にして閉じたときは、親がすでに知っているので知らせない。
-        if (openRef.current) {
-          onClose();
-        }
-      }}
-      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-raised backdrop:bg-black/50"
     >
       <div className="flex flex-col gap-4 p-6">
         <h2 id={headingId} className="text-lead font-semibold">
@@ -98,6 +93,6 @@ export function ShortcutHelp({
           </Button>
         </div>
       </div>
-    </dialog>
+    </Dialog>
   );
 }
