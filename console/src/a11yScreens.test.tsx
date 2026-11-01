@@ -11,19 +11,26 @@ import {
 import type { ComponentType, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
+import {
+  APPROVAL_DESIGN_DOC_NORMAL,
+  CONFIG_EMPTY,
+  CONFIG_NORMAL,
+  HOLDS_SNAPSHOT,
+  INTAKE_SNAPSHOT_NORMAL,
+  JOB,
+  JOB_DETAIL_NORMAL,
+  jobList,
+  PIPELINE_ROW,
+  REQUIREMENTS_ROW,
+  SCHEDULES_EMPTY,
+  SCHEDULES_NORMAL,
+  SUMMARY_EMPTY,
+  SUMMARY_NORMAL,
+  SYSTEM_EMPTY,
+  SYSTEM_NORMAL,
+  WORK_ITEM_DETAIL_NORMAL,
+} from "../e2e/fixtures.ts";
 import { ApiFailure } from "./api/errors.ts";
-import type { PipelineRow } from "./api/guards/pipeline.ts";
-import type { RequirementsIndexRow } from "./api/guards/requirements.ts";
-import type { ConsoleSummary } from "./api/guards/summary.ts";
-import type { SystemStatus } from "./api/guards/systemStatus.ts";
-import type { WorkItemDetail } from "./api/guards/workItemDetail.ts";
-import type {
-  ConfigSnapshotView,
-  JobDetailView,
-  JobListView,
-  JobSummaryView,
-  SchedulesSnapshotView,
-} from "./api/jobsQueries.ts";
 import { AppMain } from "./app/AppShell.tsx";
 import { CommandPalette } from "./app/CommandPalette.tsx";
 import { ShortcutHelp } from "./app/ShortcutHelp.tsx";
@@ -36,336 +43,13 @@ import { type A11yViolation, checkA11y } from "./lib/a11yRules.ts";
 
 type Variant = "pending" | "normal" | "empty" | "failed";
 
-const STAMP = "2026-10-26T05:00:00.000Z";
-
-const JOB: JobSummaryView = {
-  id: "0190a1b2-c3d4-7e5f-8a9b-000000000001",
-  state: "success",
-  script_path: "f/factory/example",
-  job_kind: "script",
-  created_at: STAMP,
-  started_at: STAMP,
-  completed_at: STAMP,
-  scheduled_for: null,
-  duration_ms: 2000,
-  schedule_path: null,
-  parent_job: null,
-  tag: "",
-  is_flow_step: false,
-};
-
-function jobList(
-  view: "active" | "history",
-  jobs: readonly JobSummaryView[],
-): JobListView {
-  return {
-    view,
-    jobs,
-    next_before: null,
-    filter_rejected: false,
-    truncated: false,
-  };
-}
-
-const PIPELINE_ROW: PipelineRow = {
-  work_item_id: 1,
-  owner: "o",
-  repo: "r",
-  issue_number: 1,
-  issue_url: null,
-  title: "example item",
-  status: "implementing",
-  attempt: 1,
-  kind: "issue",
-  pr_number: null,
-  fix_round: 0,
-  branch: null,
-  pr_url: null,
-  updated_at: STAMP,
-};
-
-const REQUIREMENTS_ROW: RequirementsIndexRow = {
-  work_item_id: 1,
-  owner: "o",
-  repo: "r",
-  issue_number: 1,
-  issue_url: null,
-  title: "example requirements",
-  status: "approved",
-  latest_attempt: 1,
-  updated_at: STAMP,
-};
-
-const SUMMARY_NORMAL: ConsoleSummary = {
-  counts: { approvals: 2, failures: 1, notices: 1 },
-  approvals: [
-    {
-      approval_request_id: 3,
-      kind: "design",
-      status: "pending",
-      work_item_id: 1,
-      owner: "o",
-      repo: "r",
-      title: "example item",
-      issue_number: 1,
-      issue_url: null,
-      pr_number: null,
-      requested_at: STAMP,
-      expires_at: null,
-      draft_attempt: null,
-      summary: null,
-      proposal_title: null,
-      created_issue_number: null,
-      origin: null,
-      work_item_status: "awaiting_design_approval",
-    },
-    {
-      approval_request_id: 1,
-      kind: "requirements",
-      status: "pending",
-      work_item_id: 1,
-      owner: "o",
-      repo: "r",
-      title: "example item",
-      issue_number: 1,
-      issue_url: null,
-      pr_number: null,
-      requested_at: STAMP,
-      expires_at: null,
-      draft_attempt: 1,
-      summary: null,
-      proposal_title: null,
-      created_issue_number: null,
-      origin: null,
-    },
-  ],
-  failures: [
-    {
-      work_item_id: 2,
-      kind: "issue",
-      owner: "o",
-      repo: "r",
-      issue_number: 2,
-      issue_url: null,
-      pr_number: null,
-      title: "failed item",
-      status: "failed",
-      updated_at: STAMP,
-      status_note: null,
-      status_changed_at: null,
-      job_failure_id: 1,
-      flow_path: "f/factory/example",
-      job_id: JOB.id,
-      step: "a",
-      error: "boom",
-      occurred_at: STAMP,
-    },
-  ],
-  notices: [
-    {
-      notice_id: 1,
-      kind: "example",
-      message: "example notice",
-      resolved: false,
-      created_at: STAMP,
-      severity: "action",
-      resolvable: true,
-    },
-  ],
-};
-
-const SUMMARY_EMPTY: ConsoleSummary = {
-  counts: { approvals: 0, failures: 0, notices: 0 },
-  approvals: [],
-  failures: [],
-  notices: [],
-};
-
-const SYSTEM_NORMAL: SystemStatus = {
-  deployed_sha: "0123456789abcdef0123456789abcdef01234567",
-  deployment: {
-    sha_from: null,
-    sha_to: "0123456789abcdef0123456789abcdef01234567",
-    changed_paths: ["f/factory/example.ts"],
-    result: "success",
-    needs_host_action: false,
-    occurred_at: STAMP,
-  },
-  fetcher: {
-    availability: "available",
-    state: "current",
-    sha: "0123456789abcdef0123456789abcdef01234567",
-    checked_at: STAMP,
-    error: null,
-    assessment: "ok",
-    minutes_since_check: 1,
-    next_action: null,
-  },
-  orphan_failures: [],
-  info_notices: [],
-  resolved_notices: [],
-};
-
-const SYSTEM_EMPTY: SystemStatus = {
-  deployed_sha: null,
-  deployment: null,
-  fetcher: { availability: "unavailable", reason: "no status" },
-  orphan_failures: [],
-  info_notices: [],
-  resolved_notices: [],
-};
-
-const SCHEDULES_NORMAL: SchedulesSnapshotView = {
-  schedules: [
-    {
-      path: "f/factory/example_schedule",
-      script_path: "f/factory/example",
-      is_flow: true,
-      schedule: "0 0 * * *",
-      timezone: "Asia/Tokyo",
-      enabled: true,
-      summary: null,
-      paused_until: null,
-      edited_at: STAMP,
-      error: null,
-      next_run_at: STAMP,
-      recent_runs: [{ job_id: JOB.id, success: true, duration_ms: 1000 }],
-      definition: "match",
-      differences: [],
-    },
-  ],
-  missing_in_workspace: [],
-  truncated: false,
-};
-
-const CONFIG_NORMAL: ConfigSnapshotView = {
-  path: "f/factory/config",
-  design_stage: { enabled: false, ignored: true, indeterminate: false },
-  items: [
-    { key: "example", kind: "value", value: "on", masked: false },
-    { key: "secret_ref", kind: "reference" },
-  ],
-};
-
-const JOB_DETAIL_NORMAL: JobDetailView = {
-  found: true,
-  job: JOB,
-  args: [{ key: "work_item_id", type: "number", value: 7 }],
-  steps: [
-    {
-      id: "a",
-      state: "success",
-      job_id: null,
-      iterations: null,
-      skipped: false,
-    },
-  ],
-  log: { text: "log line", truncated: false, masked: false, nonJsonLines: 0 },
-  result: { text: "{}", truncated: false, masked: false },
-  result_error: null,
-  failures: { ok: true, items: [] },
-};
-
-const WORK_ITEM_DETAIL_NORMAL: WorkItemDetail = {
-  work_item: {
-    work_item_id: 7,
-    kind: "issue",
-    source: "issue",
-    cycle: 1,
-    owner: "o",
-    repo: "r",
-    issue_number: 9,
-    issue_url: "https://github.com/o/r/issues/9",
-    pr_number: 12,
-    pr_url: "https://github.com/o/r/pull/12",
-    branch: "factory/issue-9-wi-7",
-    title: "example item",
-    status: "pr_open",
-    attempt: 1,
-    fix_round: 0,
-    created_at: STAMP,
-    updated_at: STAMP,
-    status_note: null,
-    flow_job_id: null,
-    total_cost_usd: 1.25,
-    run_count: 3,
-  },
-  attempts: [],
-  approvals: [],
-  implement_rounds: [
-    {
-      round_id: 3,
-      attempt: 1,
-      round: 1,
-      mode: "implement",
-      outcome: "done",
-      summary: "Changed a file",
-      gap_report: null,
-      checks_skipped_reason: null,
-      protected_changes: [],
-      diff_stat: { files: 2, added: 17, deleted: 0 },
-      created_at: STAMP,
-    },
-  ],
-  failures: [],
-  transitions: [],
-  reviews: [
-    {
-      review_id: 1,
-      head_sha: "abc1234",
-      verdict: "comment",
-      result: "reviewed",
-      finding_count: 2,
-      posted_review_id: null,
-      created_at: STAMP,
-    },
-  ],
-  fix_rounds: [
-    {
-      fix_round_id: 1,
-      round: 1,
-      outcome: "done",
-      trigger_review_count: 1,
-      reply_count: 1,
-      commit_count: 1,
-      created_at: STAMP,
-    },
-  ],
-};
-
 /** クエリの名前ごとの、通常と空の値。ここに無いクエリは、取得前のままにする。 */
 const FIXTURES: Readonly<
   Record<string, { readonly normal: unknown; readonly empty: unknown }>
 > = {
   summary: { normal: SUMMARY_NORMAL, empty: SUMMARY_EMPTY },
-  approval_design_doc: {
-    normal: {
-      approval_request_id: 3,
-      work_item_id: 1,
-      design_attempt: 1,
-      requirement_draft_id: 1,
-      text: "# 設計\n\n本文です。\n",
-      truncated: false,
-      approval_status: "pending",
-    },
-    empty: null,
-  },
-  intake_snapshot: {
-    normal: {
-      work_item_id: 1,
-      owner: "o",
-      repo: "r",
-      issue_number: 1,
-      issue_url: "https://github.com/o/r/issues/1",
-      title: "example item",
-      body: "body",
-      body_truncated: false,
-      body_tail_html_comments: 0,
-      body_tail_hidden_chars: 0,
-      refreshed: false,
-    },
-    empty: null,
-  },
+  approval_design_doc: { normal: APPROVAL_DESIGN_DOC_NORMAL, empty: null },
+  intake_snapshot: { normal: INTAKE_SNAPSHOT_NORMAL, empty: null },
   "jobs/detail": { normal: JOB_DETAIL_NORMAL, empty: { found: false } },
   work_item_detail: { normal: WORK_ITEM_DETAIL_NORMAL, empty: null },
   pipeline: { normal: [PIPELINE_ROW], empty: [] },
@@ -382,26 +66,11 @@ const FIXTURES: Readonly<
     normal: jobList("history", [JOB]),
     empty: jobList("history", []),
   },
-  schedules: {
-    normal: SCHEDULES_NORMAL,
-    empty: { schedules: [], missing_in_workspace: [], truncated: false },
-  },
-  holds: {
-    normal: {
-      holds: { ok: true, rows: [] },
-      freezes: { ok: true, schedule: [], deploy: [] },
-    },
-    empty: {
-      holds: { ok: true, rows: [] },
-      freezes: { ok: true, schedule: [], deploy: [] },
-    },
-  },
+  schedules: { normal: SCHEDULES_NORMAL, empty: SCHEDULES_EMPTY },
+  holds: { normal: HOLDS_SNAPSHOT, empty: HOLDS_SNAPSHOT },
   system_status: { normal: SYSTEM_NORMAL, empty: SYSTEM_EMPTY },
   deployments: { normal: [], empty: [] },
-  config: {
-    normal: CONFIG_NORMAL,
-    empty: { path: "f/factory/config", items: [] },
-  },
+  config: { normal: CONFIG_NORMAL, empty: CONFIG_EMPTY },
 };
 
 /** クエリの鍵から名前を作る。空でない文字列の先頭2つを、`/`でつなぐ。 */
