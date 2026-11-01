@@ -43,6 +43,7 @@ import {
   hasRequirementDraftAfter,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
+  isActivePrReviewUniqueViolation,
   latestDesignApproval,
   latestDesignEntryEvent,
   latestRequirementsApproval,
@@ -50,6 +51,7 @@ import {
   latestStatusTransition,
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
+  listActivePrReviewWorkItems,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   type RequirementsApprovalRef,
@@ -699,33 +701,81 @@ export async function activePrFixConflictErrorFrom(
   }
 }
 
+/**
+ * 終端の`pr_review`を稼働中の状態へ戻す更新が、同じPRの別の稼働中の`pr_review`に阻まれたときの
+ * 例外を作る。その稼働中の`pr_review`が同じPRのレビューを進めているので、
+ * この作業項目は再開できず、稼働中のものに従う。稼働中の作業項目が見つかれば、そのIDを文に含める。
+ * ownerとrepoは大文字小文字を無視して比べる。インデックスが同じ比べ方をするためである。
+ */
 export function activePrReviewConflictError(
-  _workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
-  _active: readonly Pick<
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  active: readonly Pick<
     WorkItem,
     "id" | "owner" | "repo" | "pr_number" | "kind"
   >[],
 ): Error {
-  return new Error("");
+  const other = active.find(
+    (item) =>
+      item.kind === "pr_review" &&
+      item.id !== workItem.id &&
+      item.owner.toLowerCase() === workItem.owner.toLowerCase() &&
+      item.repo.toLowerCase() === workItem.repo.toLowerCase() &&
+      item.pr_number === workItem.pr_number,
+  );
+  const id = String(workItem.id);
+  if (other === undefined) {
+    return new Error(
+      `retry_work_item: another work item is already reviewing the same pull request, work item ${id} will not be resumed`,
+    );
+  }
+  const otherId = String(other.id);
+  return new Error(
+    `retry_work_item: work item ${otherId} (active) is already reviewing the same pull request, work item ${id} will not be resumed, follow work item ${otherId}`,
+  );
 }
 
+/**
+ * `activePrReviewConflictError`を、稼働中の作業項目の検索(`lookup`)の結果から作る。
+ * 検索が失敗しても、再実行の失敗の理由を隠さないよう、IDなしの文にして返す。
+ */
 export async function activePrReviewConflictErrorFrom(
   workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
   lookup: () => Promise<
     readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
   >,
 ): Promise<Error> {
-  return activePrReviewConflictError(workItem, await lookup());
+  try {
+    return activePrReviewConflictError(workItem, await lookup());
+  } catch {
+    return activePrReviewConflictError(workItem, []);
+  }
 }
 
+/**
+ * 終端の作業項目を稼働中の状態へ戻す更新が失敗したとき、投げる例外を返す。
+ * 同じPRの稼働中の`pr_fix`と`pr_review`、同じIssueの稼働中の作業項目に阻まれた一意違反は、
+ * 生のエラーでなく、稼働中の作業項目を示す断りの文にする。それ以外の失敗は、そのまま返す。
+ */
 export async function restartConflictError(
   err: unknown,
-  _workItem: Pick<
+  workItem: Pick<
     WorkItem,
     "id" | "owner" | "repo" | "pr_number" | "issue_number"
   >,
-  _lookups: RestartConflictLookups,
+  lookups: RestartConflictLookups,
 ): Promise<unknown> {
+  if (isActivePrFixUniqueViolation(err)) {
+    return await activePrFixConflictErrorFrom(workItem, lookups.activePrFix);
+  }
+  if (isActivePrReviewUniqueViolation(err)) {
+    return await activePrReviewConflictErrorFrom(
+      workItem,
+      lookups.activePrReview,
+    );
+  }
+  if (isActiveIssueUniqueViolation(err)) {
+    return await activeIssueConflictErrorFrom(workItem, lookups.activeIssue);
+  }
   return err;
 }
 
@@ -1196,21 +1246,30 @@ async function restartWorkItem(
               note,
             );
   } catch (err) {
-    if (isActivePrFixUniqueViolation(err)) {
-      const prNumber = workItem.pr_number;
-      throw await activePrFixConflictErrorFrom(workItem, async () =>
+    const prNumber = workItem.pr_number;
+    const issueNumber = workItem.issue_number;
+    throw await restartConflictError(err, workItem, {
+      activePrFix: async () =>
         prNumber === null
           ? []
           : listActivePrFixWorkItems(workItem.owner, workItem.repo, prNumber),
-      );
-    }
-    if (!isActiveIssueUniqueViolation(err)) throw err;
-    const issueNumber = workItem.issue_number;
-    throw await activeIssueConflictErrorFrom(workItem, async () =>
-      issueNumber === null
-        ? []
-        : listActiveIssueWorkItems(workItem.owner, workItem.repo, issueNumber),
-    );
+      activePrReview: async () =>
+        prNumber === null
+          ? []
+          : listActivePrReviewWorkItems(
+              workItem.owner,
+              workItem.repo,
+              prNumber,
+            ),
+      activeIssue: async () =>
+        issueNumber === null
+          ? []
+          : listActiveIssueWorkItems(
+              workItem.owner,
+              workItem.repo,
+              issueNumber,
+            ),
+    });
   }
   if (!moved) {
     throw new Error(

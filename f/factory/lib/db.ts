@@ -1143,13 +1143,26 @@ export async function listActivePrFixWorkItems(
   return rows.map(toWorkItem);
 }
 
+/**
+ * (owner, repo, prNumber)の、終端でない`pr_review`の作業項目を返す。
+ * ownerとrepoは小文字で照合する。`insertPrReviewWorkItemUnlessActive`と同じ比べ方である。
+ * 一意インデックス`work_items_active_pr_review_key`により、通常は多くても1件である。
+ */
 export async function listActivePrReviewWorkItems(
-  _owner: string,
-  _repo: string,
-  _prNumber: number,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<WorkItem[]> {
-  return [];
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'pr_review'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer AND status != ALL(${terminal})
+    ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
 }
 
 /**
