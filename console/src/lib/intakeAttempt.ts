@@ -9,7 +9,11 @@ import { isResultUnknown, type WriteOutcome } from "../api/executeWrite.ts";
 import type { ManualIntakeSubmitResult } from "../api/guards/writeResults.ts";
 import { describeIntakeRefusal } from "./intakeRefusal.ts";
 import { displayableIssueText } from "./intakeText.ts";
-import type { IntakeForm } from "./manualIntake.ts";
+import {
+  type IntakeForm,
+  profileLabel,
+  skipsApproval,
+} from "./manualIntake.ts";
 
 export type IntakeAttempt =
   | { readonly kind: "idle" }
@@ -92,6 +96,16 @@ function sentTitleLines(form: IntakeForm | null): readonly string[] {
     : [`送った題名: ${displayableIssueText(form.title.trim()).text}`];
 }
 
+/**
+ * 承認を省く進め方で送ったときだけ、その進め方を案内に載せる。
+ * 進め方を変えた再送は別の投入になり、先に作られたIssueと重なるため、再送の前にIssueを探す手がかりにする。
+ */
+function sentProfileLines(form: IntakeForm | null): readonly string[] {
+  return form !== null && skipsApproval(form.profile)
+    ? [`送った進め方: ${profileLabel(form.profile)}`]
+    : [];
+}
+
 function unknownLines(
   attempt: Extract<IntakeAttempt, { kind: "unknown" }>,
   form: IntakeForm | null,
@@ -100,6 +114,7 @@ function unknownLines(
     attempt.message,
     KEPT_INPUT_LINE,
     ...sentTitleLines(form),
+    ...sentProfileLines(form),
     ...(attempt.resendConfirmed ? CONFIRMED_LINES : CHECK_LINES),
     DISCARD_LINE,
   ];

@@ -55,7 +55,13 @@ describe("describeIntakeRefusal", () => {
 
   test("names the fields of the bugfix for the body that is too long", () => {
     expect(describeIntakeRefusal("body_too_long")).toContain(
-      "目的、受入基準、不具合の欄を組み立てた後で、65,536字までにしてください",
+      "目的、受入基準、不具合の欄が長すぎます",
+    );
+  });
+
+  test("says that the limit applies to the body after it was put together", () => {
+    expect(describeIntakeRefusal("body_too_long")).toContain(
+      "組み立てた後のIssueの本文は、65,536字までにしてください",
     );
   });
 

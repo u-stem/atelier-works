@@ -2,7 +2,7 @@
 // 画面が外れて戻っても入力を復元し、表示中に投入できたときや破棄したときは入力欄を空にする。
 // 画面の部品から切り離して、`bun test`で確かめる。
 
-import type { IntakeForm } from "./manualIntake.ts";
+import type { IntakeForm, IntakeProfile } from "./manualIntake.ts";
 
 export type IntakeFields = {
   /** `null`は、まだ選んでいないこと。候補の既定を使う。 */
@@ -10,6 +10,11 @@ export type IntakeFields = {
   readonly title: string;
   readonly body: string;
   readonly acceptanceCriteria: string;
+  readonly profile: IntakeProfile;
+  /** 不具合の修正のときだけ送る3欄。 */
+  readonly reproduction: string;
+  readonly expectedBehavior: string;
+  readonly actualBehavior: string;
 };
 
 export const EMPTY_FIELDS: IntakeFields = {
@@ -17,6 +22,10 @@ export const EMPTY_FIELDS: IntakeFields = {
   title: "",
   body: "",
   acceptanceCriteria: "",
+  profile: "standard",
+  reproduction: "",
+  expectedBehavior: "",
+  actualBehavior: "",
 };
 
 /**
@@ -29,6 +38,10 @@ export function draftForm(fields: IntakeFields, repoText: string): IntakeForm {
     title: fields.title,
     body: fields.body,
     acceptanceCriteria: fields.acceptanceCriteria,
+    profile: fields.profile,
+    reproduction: fields.reproduction,
+    expectedBehavior: fields.expectedBehavior,
+    actualBehavior: fields.actualBehavior,
   };
 }
 
@@ -47,11 +60,16 @@ export function restoreFields(session: {
         title: form.title,
         body: form.body,
         acceptanceCriteria: form.acceptanceCriteria,
+        profile: form.profile,
+        reproduction: form.reproduction,
+        expectedBehavior: form.expectedBehavior,
+        actualBehavior: form.actualBehavior,
       };
 }
 
 /**
- * 表示中に保存した入力を消した回数が増えたら、題名、目的、受入基準を空にする。
+ * 表示中に保存した入力を消した回数が増えたら、題名、目的、受入基準、不具合の3欄を空にし、
+ * 進め方を通常に戻す。承認を省く選択を、次の投入に持ち越さないためである。
  * リポジトリは残す。続けて同じ宛先に投入することが多いためである。
  * 増えていなければ、入力中の値をそのまま返す。
  * `seenCount`は、画面が最後に見た回数で、返した値に更新する。

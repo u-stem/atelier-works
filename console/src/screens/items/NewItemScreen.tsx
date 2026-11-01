@@ -26,7 +26,11 @@ import {
   describeIntakeProblem,
   INTAKE_TITLE_MAX_CHARS,
   type IntakeProblem,
+  type IntakeProfile,
+  PROFILE_OPTIONS,
+  profileNotice,
   repoOptionLabel,
+  submitLabel,
   titleLength,
 } from "../../lib/manualIntake.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
@@ -78,6 +82,57 @@ function Field({
   );
 }
 
+/**
+ * 進め方の選択。ネイティブのラジオを`fieldset`でまとめ、矢印キーで選べるようにする。
+ * ラジオでEnterを押すとフォームが送信されるので、選んだ進め方は送信ボタンの文言にも出る。
+ */
+function ProfileChoice({
+  name,
+  value,
+  disabled,
+  describedBy,
+  onChange,
+}: {
+  name: string;
+  value: IntakeProfile;
+  disabled: boolean;
+  describedBy: string | undefined;
+  onChange: (profile: IntakeProfile) => void;
+}) {
+  return (
+    <fieldset
+      className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"
+      aria-describedby={describedBy}
+    >
+      <legend className="mb-1.5 p-0 text-body font-medium">進め方</legend>
+      {PROFILE_OPTIONS.map((option) => (
+        <label
+          key={option.value}
+          className="flex items-start gap-3 rounded-lg border border-border bg-card px-3 py-2 has-[:checked]:border-primary has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+        >
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === option.value}
+            disabled={disabled}
+            className="mt-1 size-4 accent-primary"
+            onChange={() => {
+              onChange(option.value);
+            }}
+          />
+          <span className="flex flex-col">
+            <span className="text-body font-medium">{option.label}</span>
+            <span className="text-small text-muted-foreground">
+              {option.description}
+            </span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function problemOf(
   problems: readonly IntakeProblem[],
   ...kinds: IntakeProblem[]
@@ -87,7 +142,9 @@ function problemOf(
 }
 
 /**
- * 新規投入の画面。リポジトリ、題名、目的、受入基準を入力して、`manual_intake`フローを起動する。
+ * 新規投入の画面。リポジトリ、進め方、題名、目的、受入基準を入力して、`manual_intake`フローを起動する。
+ * 承認を省く進め方を選ぶと、送信ボタンと注記がそれを示す。不具合の修正では、再現手順などの3欄を足す。
+ * 承認を省く進め方を受け付けるかは、画面が知らずscriptが決める。画面は設定を読まない。
  * 候補は設定で許可されたリポジトリで、一覧に無いリポジトリも入力できる。許可の判定はscriptが行う。
  * 投入できなかったときと、投入されたか分からないときは、入力を残す。
  * 投入されたか分からないときは、確かめたと明示するまで再送のボタンを止める。
@@ -115,6 +172,10 @@ export function NewItemScreen() {
     title,
     body,
     acceptanceCriteria: acceptance,
+    profile,
+    reproduction,
+    expectedBehavior,
+    actualBehavior,
   } = reconciled.fields;
   const candidates = targets.data ?? [];
   const repoText = repo ?? defaultRepoText(candidates);
@@ -124,7 +185,17 @@ export function NewItemScreen() {
     setTyped(next);
     intake.saveDraft(draftForm(next, repoText));
   };
-  const form = { repo: repoText, title, body, acceptanceCriteria: acceptance };
+  const form = {
+    repo: repoText,
+    title,
+    body,
+    acceptanceCriteria: acceptance,
+    profile,
+    reproduction,
+    expectedBehavior,
+    actualBehavior,
+  };
+  const notice = profileNotice(profile);
   const built = buildIntakeInput(form);
   const problems: readonly IntakeProblem[] =
     checked && !built.ok ? built.problems : [];
@@ -186,6 +257,23 @@ export function NewItemScreen() {
               </p>
             ) : null}
           </Field>
+          <ProfileChoice
+            name={`${ids}-profile`}
+            value={profile}
+            disabled={intake.locked}
+            describedBy={notice === null ? undefined : `${ids}-profile-notice`}
+            onChange={(next) => {
+              setField({ profile: next });
+            }}
+          />
+          {notice === null ? null : (
+            <p
+              id={`${ids}-profile-notice`}
+              className="-mt-3 text-small text-muted-foreground"
+            >
+              {notice}
+            </p>
+          )}
           <Field
             id={`${ids}-title`}
             label="題名"
@@ -222,6 +310,67 @@ export function NewItemScreen() {
               }}
             />
           </Field>
+          {profile === "bugfix" ? (
+            <>
+              <Field
+                id={`${ids}-reproduction`}
+                label="再現手順"
+                hint="不具合が起きるまでの手順を書きます。Issueの本文になります。"
+                problem={problemOf(problems, "reproduction_empty")}
+              >
+                <Textarea
+                  id={`${ids}-reproduction`}
+                  rows={4}
+                  value={reproduction}
+                  disabled={intake.locked}
+                  aria-invalid={
+                    problemOf(problems, "reproduction_empty") !== undefined
+                  }
+                  onChange={(event) => {
+                    setField({ reproduction: event.target.value });
+                  }}
+                />
+              </Field>
+              <Field
+                id={`${ids}-expected`}
+                label="期待する動作"
+                hint="本来どう動くべきかを書きます。受入基準の先頭になります。"
+                problem={problemOf(problems, "expected_empty")}
+              >
+                <Textarea
+                  id={`${ids}-expected`}
+                  rows={3}
+                  value={expectedBehavior}
+                  disabled={intake.locked}
+                  aria-invalid={
+                    problemOf(problems, "expected_empty") !== undefined
+                  }
+                  onChange={(event) => {
+                    setField({ expectedBehavior: event.target.value });
+                  }}
+                />
+              </Field>
+              <Field
+                id={`${ids}-actual`}
+                label="実際の動作"
+                hint="いま実際にどう動くかを書きます。Issueの本文になります。"
+                problem={problemOf(problems, "actual_empty")}
+              >
+                <Textarea
+                  id={`${ids}-actual`}
+                  rows={3}
+                  value={actualBehavior}
+                  disabled={intake.locked}
+                  aria-invalid={
+                    problemOf(problems, "actual_empty") !== undefined
+                  }
+                  onChange={(event) => {
+                    setField({ actualBehavior: event.target.value });
+                  }}
+                />
+              </Field>
+            </>
+          ) : null}
           <Field
             id={`${ids}-acceptance`}
             label="受入基準(任意)"
@@ -239,7 +388,7 @@ export function NewItemScreen() {
           </Field>
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" disabled={intake.blocked}>
-              {intake.locked ? "送信しています" : "投入する"}
+              {intake.locked ? "送信しています" : submitLabel(profile)}
             </Button>
             {session.attempt.kind === "unknown" &&
             !session.attempt.resendConfirmed ? (

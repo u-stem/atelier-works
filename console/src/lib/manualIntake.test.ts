@@ -159,7 +159,7 @@ function inputOf(form: IntakeForm) {
 
 describe("buildIntakeInput with a profile", () => {
   test.each(INTAKE_PROFILES)("carries the profile %s as chosen", (profile) => {
-    expect(inputOf({ ...FORM, profile }).profile).toBe(profile);
+    expect(inputOf({ ...BUGFIX_FORM, profile }).profile).toBe(profile);
   });
 });
 
