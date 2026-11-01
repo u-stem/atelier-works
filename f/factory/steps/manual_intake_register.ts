@@ -630,7 +630,7 @@ export async function main(
                       id: workItemId,
                       owner,
                       repo,
-                      issue_url,
+                      issue_url: issueHtmlUrl(owner, repo, issue_number),
                       design_attempt: 0,
                     },
                     issueNumber: issue_number,
