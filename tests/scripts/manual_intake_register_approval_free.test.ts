@@ -12,7 +12,9 @@ import type {
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_launch_support.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
+  buildPostedIssueBody,
   computeIntakeContentHash,
+  issueHtmlUrl,
   type ManualIntakeFields,
 } from "../../f/factory/lib/manual_intake_support.ts";
 import { decideReconcileAction } from "../../f/factory/lib/poll_support.ts";
@@ -24,6 +26,7 @@ import {
   type ApprovalFreeIntakeDeps,
   type ApprovalFreeIntakeInput,
   buildStartImplementFromPicked,
+  EXISTING_WORK_ITEM_REASON,
   type PickedStartPorts,
   registerApprovalFreeIntake,
   shouldSkipReusedStandard,
@@ -48,7 +51,13 @@ const INPUT: ApprovalFreeIntakeInput = {
   issueNumber: 41,
   issueUrl: "https://github.com/octo-owner/widgets/issues/41",
   title: "Fix the typo",
-  body: "### 目的\n\nFix the typo in the readme.",
+  body: buildPostedIssueBody(
+    {
+      body: "Fix the typo in the readme.",
+      acceptance_criteria: "The typo is gone.",
+    },
+    INTAKE_ID,
+  ),
   viewerLogin: "factory-bot",
   profile: "direct",
   reused: false,
@@ -197,6 +206,59 @@ describe("registerApprovalFreeIntake", () => {
 });
 
 describe("registerApprovalFreeIntake refusals", () => {
+  test("throws when the body is not the one the create step posts", async () => {
+    const { deps } = harness();
+    await expect(
+      registerApprovalFreeIntake({ ...INPUT, body: "### 目的\n\nother" }, deps),
+    ).rejects.toThrow(
+      "manual_intake: the intake key does not match the request",
+    );
+  });
+
+  test("throws when the body lacks the end line and the marker", async () => {
+    const { deps } = harness();
+    await expect(
+      registerApprovalFreeIntake(
+        {
+          ...INPUT,
+          body: buildPostedIssueBody(
+            {
+              body: INPUT.intakeBody,
+              acceptance_criteria: INPUT.acceptanceCriteria,
+            },
+            undefined,
+          ),
+        },
+        deps,
+      ),
+    ).rejects.toThrow(
+      "manual_intake: the intake key does not match the request",
+    );
+  });
+
+  test("throws when the issue address is not the address of the issue", async () => {
+    const { deps } = harness();
+    await expect(
+      registerApprovalFreeIntake(
+        {
+          ...INPUT,
+          issueUrl: issueHtmlUrl("someone", "widgets", 41),
+        },
+        deps,
+      ),
+    ).rejects.toThrow(
+      "manual_intake: the intake key does not match the request",
+    );
+  });
+
+  test("inserts nothing for a body that does not match", async () => {
+    const { deps, inserted } = harness();
+    await registerApprovalFreeIntake({ ...INPUT, body: "x" }, deps).catch(
+      () => undefined,
+    );
+    expect(inserted).toEqual([]);
+  });
+
   test("throws intake_key_required without a key", async () => {
     const { deps } = harness();
     await expect(
@@ -355,6 +417,19 @@ describe("registerApprovalFreeIntake for an issue that an earlier request create
       skipped: true,
       issue_number: 41,
     });
+  });
+
+  test("registers nothing when the issue has a work item even if the flow did not call it a reuse", async () => {
+    const { deps, inserted } = harness({ cycle: 2 });
+    await registerApprovalFreeIntake({ ...INPUT, reused: false }, deps);
+    expect(inserted).toEqual([]);
+  });
+
+  test("returns the same skipped reason for a request that is not a reuse", async () => {
+    const { deps } = harness({ cycle: 2 });
+    expect(
+      await registerApprovalFreeIntake({ ...INPUT, reused: false }, deps),
+    ).toMatchObject({ skipped: true, reason: EXISTING_WORK_ITEM_REASON });
   });
 
   test("verifies the key row even when it registers nothing", async () => {

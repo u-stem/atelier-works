@@ -171,6 +171,21 @@ export function withIntakeMarker(body: string, key: string): string {
   return `${withIntakeEnd(body)}\n\n${intakeMarkerText(key)}`;
 }
 
+export function buildPostedIssueBody(
+  _input: ManualIntakeIssueInput,
+  _key: string | undefined,
+): string {
+  return "";
+}
+
+export function issueHtmlUrl(
+  _owner: string,
+  _repo: string,
+  _issueNumber: number,
+): string {
+  return "";
+}
+
 /**
  * `body`が、区切りの行、空行、`key`の目印の順に終わるかを返す。
  * 目印の探索が見つけたIssueを、作成済みと信じる前の確認に使う。

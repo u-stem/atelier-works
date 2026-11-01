@@ -308,7 +308,7 @@ describe("an input without an intake key", () => {
       number: 41,
       htmlUrl: "https://github.com/octo-owner/widgets/issues/41",
       title: "Add a widget",
-      body: buildManualIntakeIssueBody(INPUT),
+      body: withIntakeEnd(buildManualIntakeIssueBody(INPUT)),
       reused: false,
       profile: "standard",
     });
@@ -384,10 +384,10 @@ describe("the first input with an intake key", () => {
     expect((await createManualIntakeIssue(KEYED, deps)).reused).toBe(false);
   });
 
-  test("returns the body without the marker", async () => {
-    const { deps } = harness();
+  test("returns the body that it posted, with the end line and the marker", async () => {
+    const { deps, created } = harness();
     expect((await createManualIntakeIssue(KEYED, deps)).body).toBe(
-      buildManualIntakeIssueBody(INPUT),
+      created[0]?.body,
     );
   });
 
@@ -435,6 +435,13 @@ describe("a resend of an input that already created its issue", () => {
     const { deps } = harness({ row: DONE });
     expect((await createManualIntakeIssue(KEYED, deps)).htmlUrl).toBe(
       "https://github.com/octo-owner/widgets/issues/17",
+    );
+  });
+
+  test("returns the body that the first request posted, built the same way", async () => {
+    const { deps } = harness({ row: DONE });
+    expect((await createManualIntakeIssue(KEYED, deps)).body).toBe(
+      withIntakeMarker(buildManualIntakeIssueBody(INPUT), INTAKE_ID),
     );
   });
 
