@@ -1478,7 +1478,8 @@ Console用workerで動く`pr_review_submit`は、入力の形、リポジトリ�
 GitHubを読む確認と、作業項目の登録は、通常のworkerで動く登録のステップ(`pr_review_intake_register`)が行う。
 `pr_review_submit`はsecret変数を読まないので、GitHubのトークンを要る確認を持てないためである。
 `pr_review_submit`が読むDBは、`factory.work_items`の1回の`SELECT`だけで、書くのは操作の記録の部品だけである。
-SDKの呼び出しは、境界テストの許可表には載せない。`manual_intake_submit`と同じく、secret変数を読まないことだけを境界テストが確かめる。
+SDKの呼び出しは、境界テストの許可表には載せない。
+`manual_intake_submit`と同じく、secret変数を読まないことだけを境界テストが確かめる。
 
 ラベルの経路と、確かめる関門が違う。
 投入は`factory:review`ラベルを使わないので、ラベルの付与者の確認(`isAllowedLabeler`)を通らない。
@@ -1516,7 +1517,8 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
 - 上の3つのファイルの`.script.yaml`
 - 一意インデックスを作るmigration2本
 
-3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+3つの`.script.lock`は守らない。
+`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
 
 投入を止める停止スイッチは無い。
 `poll_prs`のスケジュールを止めても、投入は止まらない。
@@ -1541,7 +1543,8 @@ PRが開いていることも確かめ、GitHubが返す正規のリポジトリ
   閉じたPRのworktreeの掃除と、実装の準備の保護も、綴りの違う行を見落とす。
   後の2つは、自動で復旧する。
 - 投入の確認の後に、ラベルの経路が同じPRのレビューを始めた競合は、登録のステップの挿入が断る。
-  人の依頼は失われない。ラベルの経路は、ラベルを付け直して次の巡回に任せる。
+  人の依頼は失われない。
+  ラベルの経路は、ラベルを付け直して次の巡回に任せる。
 
 ### ジョブの取消
 

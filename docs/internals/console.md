@@ -562,7 +562,7 @@ PRのレビューを投入する`pr_review_submit`の型付きの関数は`submi
 `already_reviewing`は、同じPRの稼働中のレビューがあることを、同期に返す。
 投入のフローの登録のステップが断る8つの符号は、`PR_REVIEW_REGISTER_REFUSAL_REASONS`と、型ガード`isPrReviewRegisterResult`にある。
 この符号は、起動したフローのジョブの結果に現れる。
-Consoleには、この関数を呼ぶ画面がまだ無く、符号を日本語の固定文に直す対応も、画面と一緒に持つ。
+Consoleには、この関数を呼ぶ画面と、符号を日本語の固定文に直す対応が無い。
 仕組みは[PRワークフローの仕様](pr-workflow.md#consoleからの投入)にある。
 
 却下の理由は、4000文字までにする(`MAX_REASON_LENGTH`)。文字はコードポイントで数える。
