@@ -37,8 +37,10 @@ import {
   findApprovedWorkItemForIssue,
   getWorkItem,
   hasStatusEventWithNote,
+  insertPrReviewWorkItemUnlessActive,
   insertWorkItem,
   isActivePrFixUniqueViolation,
+  isActivePrReviewUniqueViolation,
   latestPrWorkItem,
   listActive,
   listTrackedPrs,
@@ -72,7 +74,6 @@ import {
   removeLabel,
   rereadWithRetries,
 } from "./lib/github.ts";
-import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   discoverPrs,
@@ -95,6 +96,11 @@ import {
   recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
+import {
+  findLinkedParentWorkItemId,
+  type PrReviewStartResult,
+  startPrReview,
+} from "./lib/pr_review_start.ts";
 import {
   hasLabel,
   isRecord,
@@ -141,7 +147,9 @@ async function recordFailureSafe(
   }
 }
 
-function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
+export function activeItemsByPr(
+  active: readonly WorkItem[],
+): Map<string, WorkItem[]> {
   const byPr = new Map<string, WorkItem[]>();
   for (const item of active) {
     if (item.pr_number === null) continue;
@@ -154,6 +162,54 @@ function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
     }
   }
   return byPr;
+}
+
+/** 小文字にそろえたPRのキー。`pr_review`の索引が使う。 */
+function lowerPrKey(owner: string, repo: string, number: number): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${String(number)}`;
+}
+
+/**
+ * 稼働中の`pr_review`を、ownerとrepoを小文字にそろえたPRのキーで引く索引にする。
+ * `pr_review`の行の綴りは書き手によって揺れる。`activeItemsByPr`のキーは綴りを区別したままで、
+ * `pr_fix`の判定がそれに頼るので変えない。
+ */
+export function activeReviewItemsByLowerPr(
+  active: readonly WorkItem[],
+): Map<string, WorkItem[]> {
+  const byPr = new Map<string, WorkItem[]>();
+  for (const item of active) {
+    if (item.kind !== "pr_review" || item.pr_number === null) continue;
+    const key = lowerPrKey(item.owner, item.repo, item.pr_number);
+    const list = byPr.get(key);
+    if (list === undefined) {
+      byPr.set(key, [item]);
+    } else {
+      list.push(item);
+    }
+  }
+  return byPr;
+}
+
+/**
+ * PRの稼働中の作業項目を返す。綴りを区別した索引の項目に、小文字の索引の`pr_review`を、重複なしで足す。
+ * 綴りの違う`pr_review`も、稼働中のレビューとして数えるためである。
+ */
+export function activeItemsForPr(
+  byPr: ReadonlyMap<string, WorkItem[]>,
+  reviewsByLowerPr: ReadonlyMap<string, WorkItem[]>,
+  found: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+): WorkItem[] {
+  const exact = byPr.get(prKey(found.owner, found.repo, found.number)) ?? [];
+  const reviews =
+    reviewsByLowerPr.get(lowerPrKey(found.owner, found.repo, found.number)) ??
+    [];
+  const seen = new Set(exact.map((item) => item.id));
+  return [...exact, ...reviews.filter((item) => !seen.has(item.id))];
 }
 
 // ---------------------------------------------------------------------------
@@ -322,15 +378,12 @@ export async function buildPrCandidate(
     found.owner,
     found.repo,
   );
-  const firstLinkedIssue = linkedIssueNumbers[0];
-  const approvedParent =
-    firstLinkedIssue === undefined
-      ? null
-      : await deps.findApprovedWorkItemForIssue(
-          found.owner,
-          found.repo,
-          firstLinkedIssue,
-        );
+  const linkedParentWorkItemId = await findLinkedParentWorkItemId(
+    linkedIssueNumbers,
+    found.owner,
+    found.repo,
+    deps.findApprovedWorkItemForIssue,
+  );
 
   // `activeForPr`は`listActive`の結果なので終端の行を含まないが、終端の行が混ざっても
   // 稼働中とみなさないよう、`TERMINAL_WORK_ITEM_STATUSES`でも確かめる(二重の確認)。
@@ -382,7 +435,7 @@ export async function buildPrCandidate(
       reviewId: reviews.maxId,
       reviewCommentId: reviewComments.maxId,
     },
-    linkedParentWorkItemId: approvedParent?.id ?? null,
+    linkedParentWorkItemId,
   };
 }
 
@@ -408,9 +461,9 @@ export type ClaimPrResult =
  * それでも読めなければ、取得できたか分からない。ラベルを消費したまま
  * 作業項目を作らないと、以後ラベルでもDBでもそのPRを見つけられない。
  * 一方、読めないまま作業を始めると、別のアクターがラベルを付け直していた場合に、
- * 次のポーリングで同じPRのサイクルが二重に始まる。レビューのラベルの経路は、稼働中の作業項目が
- * あっても`decidePrActions`が止めない。修正のラベルの経路は、終端でない`pr_fix`がある間だけ止まり、
- * その修正が次のポーリングまでに終わると、付け直されたラベルで次のサイクルが始まる。
+ * 次のポーリングで同じPRのサイクルが二重に始まる。レビューのラベルの経路は、終端でない`pr_review`が
+ * ある間だけ止まり、修正のラベルの経路は、終端でない`pr_fix`がある間だけ止まる。
+ * そのレビューや修正が次のポーリングまでに終わると、付け直されたラベルで次のサイクルが始まる。
  * そのため、トリガーラベルを付け直して`claimed: false`と`restored: true`を返し、
  * 次のポーリングが拾い直す。
  * 付け直しは5xxと通信断を1回再送する(ラベルの追加は何度送っても状態が同じ)。
@@ -832,52 +885,38 @@ export async function recordPrForkHeadDenied(
   });
 }
 
+/**
+ * レビューを始める。作業項目の作り方と起動は、共有の手順(`startPrReview`)に任せる。
+ * トリガーラベルを消費した後は、ラベルやコメントではなくDB(`listTrackedPrs`)から見つけ直す。
+ * 同じPRの稼働中の`pr_review`があって何も作らなかったときは、`already_active`を返す。
+ * 応答がジョブIDでなければ例外にし、`main`が起動の失敗と同じく`job_failures`に記録する。
+ */
 async function startReview(
   candidate: PrCandidate,
   viewerLogin: string,
   observed: ObservedSeed,
   linkedParentWorkItemId: number | null,
   reason: "label" | "assignment",
-): Promise<void> {
-  const workItemId = await insertWorkItem({
-    cycle: 1,
-    source: "issue",
-    kind: "pr_review",
-    owner: candidate.owner,
-    repo: candidate.repo,
-    issue_number: null,
-    issue_url: null,
-    pr_number: candidate.number,
-    title: candidate.title,
-    body: reviewRowBody(reason),
-    status: "reviewing",
-    attempt: 1,
-    claimed_by: viewerLogin,
-    flow_job_id: null,
-    resume_url: null,
-    cancel_url: null,
-    head_sha: candidate.headSha,
-    parent_work_item_id: linkedParentWorkItemId,
-  });
-  // pr_reviewはpr_fixと違いwatermark以降の指摘を集めないので、`last_*`を
-  // 使わない。ここでは観測した値だけを記録する。
-  await setObservedWatermarks(workItemId, {
-    observed_review_id: observed.reviewId,
-    observed_review_comment_id: observed.reviewCommentId,
-  });
-  // 「レビューを始めた」というPRコメントは投稿しない。取得の冪等性は
-  // コメントではなく、このPRの終端でない作業項目の行(`decidePrActions`)で
-  // 保つ。人のPRに頼まれていない実況コメントを付けても雑音になる。
-  // トリガーラベルを消費した後は、ラベルやコメントではなくDB
-  // (`listTrackedPrs`)から見つけ直す。
-  // 応答がジョブIDでなければ例外にし、`main`が起動の失敗と同じく`job_failures`に記録する。
-  const flowJobId = parseFlowJobId(
-    await wmill.runFlowAsync("f/factory/pr_review", {
-      work_item_id: workItemId,
-    }),
-    "runFlowAsync",
+): Promise<PrReviewStartResult> {
+  return await startPrReview(
+    {
+      owner: candidate.owner,
+      repo: candidate.repo,
+      number: candidate.number,
+      title: candidate.title,
+      headSha: candidate.headSha,
+      viewerLogin,
+      body: reviewRowBody(reason),
+      observed,
+      linkedParentWorkItemId,
+    },
+    {
+      insertWorkItem: insertPrReviewWorkItemUnlessActive,
+      setObservedWatermarks,
+      runFlowAsync: (path, args) => wmill.runFlowAsync(path, args),
+      setFlowJobId,
+    },
   );
-  await setFlowJobId(workItemId, flowJobId);
 }
 
 async function startFix(
@@ -957,12 +996,15 @@ export type PrDecisionHandlers = {
   ) => Promise<void>;
   /** headがbaseと同じリポジトリにないために見送ったレビューを、noticeに残す。 */
   readonly recordForkHeadDenied: (candidate: PrCandidate) => Promise<void>;
-  /** `reason`は、人がラベルで頼んだか(`label`)、検出が始めたか(`assignment`)。 */
+  /**
+   * `reason`は、人がラベルで頼んだか(`label`)、検出が始めたか(`assignment`)。
+   * 同じPRの稼働中の`pr_review`があって何も作らなかったときは、`already_active`を返す。
+   */
   readonly startReview: (
     candidate: PrCandidate,
     context: PrCandidateContext,
     reason: "label" | "assignment",
-  ) => Promise<void>;
+  ) => Promise<PrReviewStartResult>;
   readonly startFix: (
     candidate: PrCandidate,
     context: PrCandidateContext,
@@ -1049,6 +1091,21 @@ export async function processPrDecisions(
       );
     }
   };
+  // レビューを始める。一意インデックスへの違反が例外として届いたときも、稼働中の行があったものとして扱う。
+  const startReviewOutcome = async (
+    candidate: PrCandidate,
+    context: PrCandidateContext,
+    reason: "label" | "assignment",
+  ): Promise<PrReviewStartResult> => {
+    try {
+      return await handlers.startReview(candidate, context, reason);
+    } catch (err) {
+      if (isActivePrReviewUniqueViolation(err)) {
+        return { status: "already_active" };
+      }
+      throw err;
+    }
+  };
   // 取得の直前に付与者を確かめ直し、許可されていなければ見送りとして数えて`false`を返す。
   const labelerConfirmed = async (
     candidate: PrCandidate,
@@ -1085,6 +1142,19 @@ export async function processPrDecisions(
           {
             target: prKey(candidate.owner, candidate.repo, candidate.number),
             work_item_id: candidate.activeFixItemId,
+          },
+        );
+      }
+      // 終端でない`pr_review`があるPRのレビューラベルも、消費せずに残している。noticeは出さず、理由をログに残す。
+      if (
+        review.kind === "none" &&
+        candidate.hasActiveReviewingItem &&
+        hasLabel(candidate.labels, labels.reviewLabel)
+      ) {
+        log.info(
+          "review label kept: a pr_review is in progress for the pull request",
+          {
+            target: prKey(candidate.owner, candidate.repo, candidate.number),
           },
         );
       }
@@ -1126,15 +1196,46 @@ export async function processPrDecisions(
                 skipped += 1;
                 await handlers.recordNotClaimed(candidate, claimResult);
               } else {
-                await handlers.startReview(candidate, context, "label");
-                reviewsStarted += 1;
-                await handlers.resolveNotices(candidate, labels.reviewLabel);
+                const started = await startReviewOutcome(
+                  candidate,
+                  context,
+                  "label",
+                );
+                if (started.status === "already_active") {
+                  // 一覧を読んだ後に別の`pr_review`が始まった。消費したラベルを付け直し、
+                  // その`pr_review`が終わった後のポーリングに任せる。失敗とは数えない。
+                  // 同じPRの修正の判定には進む(両方のラベルが付いたPRの修正を遅らせない)。
+                  await handlers.restoreLabel(
+                    candidate,
+                    labels.reviewLabel,
+                    new Error("a pr_review is already active"),
+                  );
+                  skipped += 1;
+                } else {
+                  reviewsStarted += 1;
+                  await handlers.resolveNotices(candidate, labels.reviewLabel);
+                }
               }
             }
           } else {
             // assignで起きた場合はラベルが関わらず、消費するものが無い。
-            await handlers.startReview(candidate, context, "assignment");
-            reviewsStarted += 1;
+            const started = await startReviewOutcome(
+              candidate,
+              context,
+              "assignment",
+            );
+            if (started.status === "already_active") {
+              log.info("review not started: a pr_review is already active", {
+                target: prKey(
+                  candidate.owner,
+                  candidate.repo,
+                  candidate.number,
+                ),
+              });
+              skipped += 1;
+            } else {
+              reviewsStarted += 1;
+            }
           }
         } catch (err) {
           failed += 1;
@@ -1259,6 +1360,7 @@ export async function main(): Promise<{
 
   const active = await listActive();
   const byPr = activeItemsByPr(active);
+  const reviewsByLowerPr = activeReviewItemsByLowerPr(active);
 
   const verified = await filterVerifiedOwners(config.owners, {
     getAccountId: (name) => getAccountId(client, name),
@@ -1367,8 +1469,7 @@ export async function main(): Promise<{
   const contexts: PrCandidateContext[] = [];
   for (const found of allowed) {
     try {
-      const activeForPr =
-        byPr.get(`${found.owner}/${found.repo}#${found.number}`) ?? [];
+      const activeForPr = activeItemsForPr(byPr, reviewsByLowerPr, found);
       contexts.push(
         await buildPrCandidate(client, found, viewer.login, activeForPr, {
           reviewLabel: config.review_label,

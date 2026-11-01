@@ -75,6 +75,7 @@ DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
 DOC_HASH_MIGRATION="20261026150000_requirement_drafts_doc_hash.up.sql"
 IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION="20261028100000_implement_rounds_design_gap.up.sql"
 FIX_ROUNDS_DESIGN_GAP_MIGRATION="20261028110000_fix_rounds_design_gap.up.sql"
+ACTIVE_PR_REVIEW_MIGRATION="20261102100000_active_pr_review_key.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -466,6 +467,89 @@ verify_active_pr_fix_index() {
   log "pr_fix work items are limited to one active row per pull request"
 }
 
+# 稼働中のpr_reviewの一意索引を足す前に、同じPRの稼働中のpr_reviewを、綴りの違う行を含めて入れておく。
+# migrationが、id が最大の行だけを残して古い行を取り消し、events に残してから索引を作れることを確かめるため。
+seed_active_pr_review_duplicates() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES
+  (1, 'issue', 'pr_review', 'Reviewprobe', 'Widgets', 7, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 8, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 9, 't', 'failed'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 9, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', NULL, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', NULL, 't', 'reviewing');
+SQL
+}
+
+# migrationが、同じPRの古い稼働中の行(綴りの違う行を含む)だけを取り消し、events を1件残し、
+# 終端の行、重複の無いPR、pr_number が NULL の行には触れないことを確かめる。
+# そのうえで、索引が小文字にそろえた2件目の稼働中の行を拒み(拒否の文に制約名が含まれること。
+# `isActivePrReviewUniqueViolation`が頼る形)、ON CONFLICT DO NOTHING では挿入せず、
+# 終端の行、ほかのPR、ほかの種類の行は拒まないことを確かめる。このmigrationの適用直後に呼ぶ。
+verify_active_pr_review_index() {
+  local migrated
+  migrated="$(printf "SELECT string_agg(pr_number || ':' || status, ',' ORDER BY pr_number, id) FROM factory.work_items WHERE lower(owner) = 'reviewprobe' AND pr_number IS NOT NULL;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the migrated pr_review rows"
+  [ "${migrated}" = "7:cancelled,7:reviewing,8:reviewing,9:failed,9:reviewing" ] \
+    || die "unexpected pr_review rows after the migration: ${migrated}"
+  local kept
+  kept="$(printf "SELECT owner FROM factory.work_items WHERE lower(owner) = 'reviewprobe' AND pr_number = 7 AND status = 'reviewing';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the kept pr_review row"
+  [ "${kept}" = "reviewprobe" ] \
+    || die "expected the row with the highest id to be kept, got '${kept}'"
+  local events
+  events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE from_status = 'reviewing' AND to_status = 'cancelled' AND note LIKE 'duplicate active pr_review work item%%';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the events of the cancelled duplicate"
+  [ "$(printf '%s' "${events}" | tr -d '[:space:]')" = "1" ] \
+    || die "expected one work_item_events row for the cancelled duplicate, got '${events}'"
+  local untouched
+  untouched="$(printf "SELECT count(*) FROM factory.work_items WHERE lower(owner) = 'reviewprobe' AND pr_number IS NULL AND status = 'reviewing';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the rows without a pull request number"
+  [ "$(printf '%s' "${untouched}" | tr -d '[:space:]')" = "2" ] \
+    || die "expected the rows without a pull request number to be left alone, got '${untouched}'"
+
+  local insert_prefix="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue',"
+  expect_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  expect_rejected() {
+    local statement="$1" constraint="work_items_active_pr_review_key" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  expect_rejected "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewing')"
+  expect_rejected "${insert_prefix} 'pr_review', 'REVIEWPROBE', 'WIDGETS', 7, 't', 'picked')"
+  local skipped
+  skipped="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue', 'pr_review', 'Reviewprobe', 'Widgets', 7, 't', 'reviewing') ON CONFLICT DO NOTHING RETURNING id;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "ON CONFLICT DO NOTHING failed instead of skipping the pr_review insert"
+  [ -z "$(printf '%s' "${skipped}" | tr -d '[:space:]')" ] \
+    || die "ON CONFLICT DO NOTHING inserted a second active pr_review for the pull request"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewed')"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 10, 't', 'reviewing')"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'other', 7, 't', 'reviewing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'reviewprobe', 'widgets', 7, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'dependabot', 'reviewprobe', 'widgets', 7, 't', 'picked')"
+  # 終端の行を稼働中へ戻す更新(retry_work_itemの再開)も、同じPRの稼働中の行に拒まれる。
+  expect_rejected "UPDATE factory.work_items SET status = 'reviewing' WHERE owner = 'reviewprobe' AND repo = 'widgets' AND pr_number = 7 AND kind = 'pr_review' AND status = 'reviewed'"
+  # 稼働中の行が終端になれば、同じPRに新しい稼働中の行を入れられる。
+  expect_accepted "UPDATE factory.work_items SET status = 'failed' WHERE owner = 'reviewprobe' AND repo = 'widgets' AND pr_number = 7 AND kind = 'pr_review' AND status = 'reviewing'"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewing')"
+  printf "DELETE FROM factory.work_items WHERE lower(owner) = 'reviewprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "pr_review work items are limited to one active row per pull request, whatever the case of the name"
+}
+
 # 競合を直す仕組みの土台のmigrationが、列の既定値と制約を効かせ、部分索引を作り、
 # 戻したときに列、制約、索引を落とし、既存の行を壊さずにもう一度適用できることを確かめる。
 # このmigrationの適用直後に呼ぶので、後のmigrationの影響を受けない。もう一度適用し直す。
@@ -612,7 +696,7 @@ verify_gh_collect_detail() {
   log "gh_collect_detail applies over existing rows and leaves the new columns at their defaults"
 }
 
-# 稼働中の一意インデックス3本の述語が、アプリの終端でない状態の一覧と一致することを確かめる。
+# 稼働中の一意インデックス4本の述語が、アプリの終端でない状態の一覧と一致することを確かめる。
 # 一覧は`f/factory/lib/types.ts`から読む。migrationの文面の検査(`tests/scripts/active_*_migration.test.ts`)と違い、
 # PostgreSQLが実際に持つインデックスの定義を読む。全migrationの適用後に呼ぶ。
 verify_active_index_predicates() {
@@ -621,7 +705,7 @@ verify_active_index_predicates() {
     || die "could not read the non-terminal statuses from types.ts"
   [ -n "${expected}" ] || die "the non-terminal statuses read from types.ts are empty"
   local index actual
-  for index in work_items_active_issue_key work_items_active_pr_fix_key work_items_active_dependabot_key; do
+  for index in work_items_active_issue_key work_items_active_pr_fix_key work_items_active_dependabot_key work_items_active_pr_review_key; do
     actual="$(psql_exec "${SCRATCH_DB}" -q -t -A -v index="${index}" <<'SQL' | tr -d '[:space:]'
 SELECT string_agg(m[1], ',' ORDER BY m[1] COLLATE "C")
 FROM (
@@ -1007,6 +1091,9 @@ for up_file in "${up_files[@]}"; do
   if [ "${up_name}" = "${FIX_ROUNDS_DESIGN_GAP_MIGRATION}" ]; then
     seed_fix_rounds_rows
   fi
+  if [ "${up_name}" = "${ACTIVE_PR_REVIEW_MIGRATION}" ]; then
+    seed_active_pr_review_duplicates
+  fi
   log "applying ${up_name}"
   psql_exec "${SCRATCH_DB}" <"${up_file}"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -1032,6 +1119,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${FIX_ROUNDS_DESIGN_GAP_MIGRATION}" ]; then
     verify_fix_rounds_rows_survive
+  fi
+  if [ "${up_name}" = "${ACTIVE_PR_REVIEW_MIGRATION}" ]; then
+    verify_active_pr_review_index
   fi
 done
 

@@ -37,6 +37,8 @@ import {
   activeIssueConflictErrorFrom,
   activePrFixConflictError,
   activePrFixConflictErrorFrom,
+  activePrReviewConflictError,
+  activePrReviewConflictErrorFrom,
   asBeforeActionableCancel,
   buildRestartContext,
   cancelledRestartRefusal,
@@ -52,6 +54,7 @@ import {
   RESTART_CARRYING_GAP_NOTE_PREFIX,
   type RestartContext,
   type RestartContextDeps,
+  restartConflictError,
   restartContextDeps,
   restartNote,
   retryResult,
@@ -576,6 +579,159 @@ describe("activePrFixConflictErrorFrom", () => {
     expect(error.message).toBe(
       "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
     );
+  });
+});
+
+describe("activePrReviewConflictError", () => {
+  const base = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+    kind: "pr_review" as const,
+  };
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+  };
+
+  test("names the active pr_review of the same pull request", () => {
+    const error = activePrReviewConflictError(target, [
+      { ...base, id: 9 },
+      { ...base, id: 3 },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: work item 9 (active) is already reviewing the same pull request, work item 3 will not be resumed, follow work item 9",
+    );
+  });
+
+  test("matches the owner and repo without regard to case", () => {
+    const error = activePrReviewConflictError(target, [
+      { ...base, id: 9, owner: "Octo-Owner", repo: "Atelier-Works" },
+    ]);
+    expect(error.message).toContain("work item 9 (active)");
+  });
+
+  test("ignores active work items of other pull requests", () => {
+    const error = activePrReviewConflictError(target, [
+      { ...base, id: 9, pr_number: 99 },
+      { ...base, id: 4 },
+    ]);
+    expect(error.message).toContain("work item 4 (active)");
+  });
+
+  test("ignores active work items that are not pr_review", () => {
+    const error = activePrReviewConflictError(target, [
+      { ...base, id: 9, kind: "pr_fix" as const },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already reviewing the same pull request, work item 3 will not be resumed",
+    );
+  });
+
+  test("omits the id when the active work item is not found", () => {
+    const error = activePrReviewConflictError(target, [{ ...base, id: 3 }]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already reviewing the same pull request, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("activePrReviewConflictErrorFrom", () => {
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+  };
+
+  test("names the active work item returned by the lookup", async () => {
+    const error = await activePrReviewConflictErrorFrom(target, async () => [
+      { ...target, id: 9, kind: "pr_review" as const },
+    ]);
+    expect(error.message).toContain("work item 9 (active)");
+  });
+
+  test("falls back to the message without an id when the lookup fails", async () => {
+    const error = await activePrReviewConflictErrorFrom(target, async () => {
+      throw new Error("db down");
+    });
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already reviewing the same pull request, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("restartConflictError", () => {
+  const workItem = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+    issue_number: null,
+  };
+  const REVIEW_KEY =
+    'duplicate key value violates unique constraint "work_items_active_pr_review_key"';
+  const FIX_KEY =
+    'duplicate key value violates unique constraint "work_items_active_pr_fix_key"';
+  const lookups = {
+    activePrFix: async () => [],
+    activePrReview: async () => [
+      { ...workItem, id: 9, kind: "pr_review" as const },
+    ],
+    activeIssue: async () => [],
+  };
+
+  test("turns a violation of the active pr_review index into a refusal that names the other review", async () => {
+    const error = await restartConflictError(
+      new Error(REVIEW_KEY),
+      workItem,
+      lookups,
+    );
+    expect(error).toEqual(
+      new Error(
+        "retry_work_item: work item 9 (active) is already reviewing the same pull request, work item 3 will not be resumed, follow work item 9",
+      ),
+    );
+  });
+
+  test("does not hand back the raw violation of the active pr_review index", async () => {
+    const raw = new Error(REVIEW_KEY);
+    expect(await restartConflictError(raw, workItem, lookups)).not.toBe(raw);
+  });
+
+  test("keeps the refusal for the active pr_fix index", async () => {
+    const error = await restartConflictError(
+      new Error(FIX_KEY),
+      workItem,
+      lookups,
+    );
+    expect(error).toEqual(
+      new Error(
+        "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
+      ),
+    );
+  });
+
+  test("keeps the refusal for the active issue index", async () => {
+    const error = await restartConflictError(
+      new Error(
+        'duplicate key value violates unique constraint "work_items_active_issue_key"',
+      ),
+      { ...workItem, issue_number: 5 },
+      lookups,
+    );
+    expect(error).toEqual(
+      new Error(
+        "retry_work_item: another work item is the current cycle for this Issue, work item 3 will not be resumed",
+      ),
+    );
+  });
+
+  test("hands back any other failure as it is", async () => {
+    const raw = new Error("db down");
+    expect(await restartConflictError(raw, workItem, lookups)).toBe(raw);
   });
 });
 

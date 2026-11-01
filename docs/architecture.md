@@ -350,7 +350,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の18本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の19本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -358,6 +358,7 @@ Consoleの一覧と集計は次のviewを読む。
 - `audit_kickoff`
 - `notice_resolve`
 - `manual_intake_submit`
+- `pr_review_submit`
 - `console_fetch_watch`
 - `console_holds`
 - `hold_release`
@@ -381,9 +382,10 @@ Consoleの一覧と集計は次のviewを読む。
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
+| `pr_review_intake` | `pr_review_submit`(ConsoleのPRレビューの投入)、人がフォームから実行 | PRレビューの投入フォーム(PRを確かめてレビューを始める) |
 | `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
 | `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
-| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
+| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`pr_review_intake_register`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
 | `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`manual_intake_register`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
 | `dependabot` | `poll_dependabot` | 依存の更新PRの検査と自動マージ |
@@ -456,13 +458,19 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 外せた後は取り直して残っていないかを確かめる。
 取り直しが数回とも失敗したときは、トリガーラベルを付け直して引く。
 取り直せないまま始めると、同じPRのサイクルが重なりうるためである。
-レビューのラベルは、稼働中のレビューがあっても止まらない。
+レビューのラベルは、終端でない`pr_review`がある間だけ止まる。
+そのレビューが終わった後に、1回だけ新しいレビューが始まる。
 修正のラベルは、終端でないPR修正がある間だけ止まる。
 その修正が終わった後に、1回だけ新しいラウンドが始まる。
 この排他はベストエフォートである。
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
+終端でない`pr_review`の作業項目も、部分一意インデックス`work_items_active_pr_review_key`により、同時に1つしか持てない。
+組は、小文字にした`owner`と`repo`、PRの番号である。
+`pr_review`の行の綴りは、GitHub側の改名や前の行の綴りの引き継ぎで、書き手によって違いうる。
+そのため、同じPRを指す`pr_review`の検索は大文字小文字を区別しない。
+`pr_fix`とIssueのインデックスは、綴りを区別したままである。
 これらのインデックスの述語は、終端でない状態を列挙する。
 設計工程の2状態は、Issueの`work_items_active_issue_key`と、PR修正の`work_items_active_pr_fix_key`の述語に含める。
 dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕様](internals/dependabot.md))の述語にも含める。
@@ -532,6 +540,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_metadata_rehash` | script | [LIB] metadataジョブの失敗をhashの再計算で直す |
 | `f/factory/lib/owner_id_notice` | script | [LIB] owner_idの照合のnotice |
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
+| `f/factory/lib/pr_review_start` | script | [LIB] pr_reviewの作業項目の作成とフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
 | `f/factory/lib/pr_fix_design` | script | [LIB] PRの修正に渡す設計書の判定 |
@@ -633,6 +642,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2または実装を起動 |
 | `f/factory/manual_intake_submit` | script | [OP-1-2] 手動投入をConsoleから受け付ける |
+| `f/factory/pr_review_intake` | flow | [OP-1-3] PRレビューの投入フォーム(PRを確かめてレビューを始める) |
+| `f/factory/steps/pr_review_intake_register` | script | [OP-1-3/1] PRを確かめてレビューを登録 |
+| `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
@@ -1001,6 +1013,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
+- ConsoleのPRレビューの投入の画面。バックエンドの`pr_review_submit`と型付きの関数`submitPrReview`は動くが、その関数を呼ぶ画面と、断りの符号を日本語の固定文に直す対応が無い
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 

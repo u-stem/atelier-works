@@ -43,6 +43,7 @@ import {
   getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
+  hasActivePrReviewWorkItem,
   hasDependabotItemForHead,
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
@@ -52,6 +53,7 @@ import {
   hasNewerUnsettledOrFailedMainCiRun,
   hasParentTransitionSinceFixStarted,
   hasPassedMainCiRunAfter,
+  hasPriorReview,
   hasPrReviewForHead,
   hasRequirementDraftAfter,
   hasStatusEventWithNote,
@@ -61,10 +63,12 @@ import {
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertGhCollectRuns,
+  insertPrReviewWorkItemUnlessActive,
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
+  isActivePrReviewUniqueViolation,
   isLatestMainCiRunFailed,
   lastApprovalRedispatchAt,
   latestApprovalRequest,
@@ -73,6 +77,7 @@ import {
   latestDesignDraft,
   latestDesignEntryEvent,
   latestMainCiRunCreatedAt,
+  latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
   latestStatusTransition,
@@ -108,6 +113,7 @@ import {
   markPrCiNotified,
   markPrConflictNotified,
   type NewWorkerSample,
+  newestNewerPrWorkItem,
   readGhOwnerOpenIssues,
   readGhOwnerOpenPullRequests,
   readGhRepoOpenPullRequests,
@@ -4368,6 +4374,124 @@ check(
     false,
 );
 
+// 同じPRの終端でないpr_reviewは1件までである(`work_items_active_pr_review_key`)。
+// 挿入の関数が、綴りの違うownerとrepoを同じPRとして数えて挿入せず、終端になれば挿入し直せること、
+// 直接の挿入は一意インデックスが拒み、その違反を`isActivePrReviewUniqueViolation`が見分けられることを確かめる。
+function reviewCandidate(owner: string, repo: string, pr: number) {
+  return {
+    cycle: 1,
+    source: "issue" as const,
+    kind: "pr_review" as const,
+    owner,
+    repo,
+    issue_number: null,
+    issue_url: null,
+    pr_number: pr,
+    title: "qdb active review",
+    body: null,
+    status: "reviewing" as const,
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  };
+}
+const reviewFirst = await insertPrReviewWorkItemUnlessActive(
+  reviewCandidate(OWNER, "r", 9251),
+  sql,
+);
+check(
+  "active pr_review: the first insert for a pull request returns the id",
+  reviewFirst !== null && reviewFirst > 0,
+  reviewFirst,
+);
+check(
+  "active pr_review: an insert with another case of the owner and repo returns null",
+  (await insertPrReviewWorkItemUnlessActive(
+    reviewCandidate(OWNER.toUpperCase(), "R", 9251),
+    sql,
+  )) === null,
+);
+check(
+  "active pr_review: an insert for another pull request returns the id",
+  (await insertPrReviewWorkItemUnlessActive(
+    reviewCandidate(OWNER, "r", 9252),
+    sql,
+  )) !== null,
+);
+check(
+  "active pr_review: the read finds the active row whatever the case",
+  (await hasActivePrReviewWorkItem(OWNER.toUpperCase(), "R", 9251, sql)) ===
+    true,
+);
+check(
+  "active pr_review: the read finds nothing for another pull request",
+  (await hasActivePrReviewWorkItem(OWNER, "r", 9259, sql)) === false,
+);
+let activeReviewInsertError: unknown = null;
+try {
+  await prWorkItem("pr_review", 9251, "reviewing", "qdb direct second review");
+} catch (err) {
+  activeReviewInsertError = err;
+}
+check(
+  "active pr_review: a direct second insert is rejected by the index",
+  isActivePrReviewUniqueViolation(activeReviewInsertError),
+  activeReviewInsertError,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'reviewed' WHERE id = ${String(reviewFirst)}`,
+);
+check(
+  "active pr_review: a finished review does not count",
+  (await hasActivePrReviewWorkItem(OWNER, "r", 9251, sql)) === false,
+);
+check(
+  "active pr_review: an insert after the review finished returns the id",
+  (await insertPrReviewWorkItemUnlessActive(
+    reviewCandidate(OWNER, "r", 9251),
+    sql,
+  )) !== null,
+);
+
+// 綴りの違う`pr_review`の行を、同じPRの行として引く。登録のstepは正規の綴りで書き、
+// 自動の経路は検索で得た別の綴りで引くので、大文字小文字を区別した比較だと引き漏らす。
+const spelledReview = await insertWorkItem(
+  { ...reviewCandidate("Qdb", "R", 9261), status: "reviewed" as const },
+  sql,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary) VALUES (${String(spelledReview)}, 'spell01', 'comment', 'qspell')`,
+);
+check(
+  "spelling: the latest row of the pull request is found with another case",
+  (await latestPrWorkItem(OWNER, "r", 9261, undefined, sql))?.id ===
+    spelledReview,
+);
+check(
+  "spelling: the latest pr_review row of the pull request is found with another case",
+  (await latestPrWorkItem(OWNER, "r", 9261, { kind: "pr_review" }, sql))?.id ===
+    spelledReview,
+);
+check(
+  "spelling: the newer pr_review row of the pull request is found with another case",
+  (await newestNewerPrWorkItem("pr_review", OWNER, "r", 9261, 0, sql))?.id ===
+    spelledReview,
+);
+check(
+  "spelling: a prior review of the pull request is found with another case",
+  (await hasPriorReview(OWNER, "r", 9261, 0, sql)) === true,
+);
+check(
+  "spelling: no row is found for another pull request",
+  (await latestPrWorkItem(OWNER, "r", 9269, undefined, sql)) === null,
+);
+
 // 同じPRの終端でないpr_fixは1件までである(`work_items_active_pr_fix_key`)。
 // 一意インデックスへの違反を`isActivePrFixUniqueViolation`が見分けられること、稼働中のpr_fixの一覧、
 // 自動の再開の候補の一覧と比較交換が、同じPRの別の稼働中のpr_fixを避けることを確かめる。
@@ -7152,6 +7276,11 @@ check(
       })
     ).includes(transientExhausted),
 );
+// 同じPRの稼働中のpr_reviewは1件までなので(`work_items_active_pr_review_key`)、再開した古い行を失敗に戻してから、新しい行を入れる。
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'failed' WHERE id = ${String(transientOld)}`,
+);
 const transientNewer = await prWorkItem(
   "pr_review",
   9301,
@@ -7173,6 +7302,38 @@ execPsql(
 check(
   "transient review: the newer row itself is not superseded by the older finished one",
   (await hasSupersedingPrReview(transientNewer, sql)) === false,
+);
+// 新しい行の綴りが違っても、同じPRの新しい行として扱い、古い行を再開しない。
+const transientSpelled = await prWorkItem(
+  "pr_review",
+  9308,
+  "failed",
+  "qdb transient spelled",
+);
+eventAgo(transientSpelled, "failed", "github_transient: boom", 600);
+await insertWorkItem(
+  { ...reviewCandidate("Qdb", "R", 9308), status: "reviewed" as const },
+  sql,
+);
+check(
+  "transient review: a newer row under another spelling supersedes the review",
+  (await hasSupersedingPrReview(transientSpelled, sql)) === true,
+);
+check(
+  "transient review: a newer row under another spelling takes the review off the restart list",
+  !(await transientListed()).includes(transientSpelled),
+);
+check(
+  "transient review: a newer row under another spelling stops the restart",
+  (await restartTransientPrReview(
+    {
+      ...transientQuery,
+      id: transientSpelled,
+      note: "auto_retry: restarted from failed",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
 );
 // 起動に失敗した再開は、再開の遷移で1回に数え、戻した遷移(auto_retry:で始めない)で二重に数えない。
 const transientLaunchFailed = await prWorkItem(
@@ -11989,7 +12150,10 @@ for (const [name, move] of PROFILE_MOVES) {
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
-execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);
+execPsql(
+  target,
+  `DELETE FROM factory.work_items WHERE lower(owner) = '${OWNER}'`,
+);
 
 if (failures.length > 0) {
   console.error(`[test-db-queries] ${String(failures.length)} check(s) failed`);

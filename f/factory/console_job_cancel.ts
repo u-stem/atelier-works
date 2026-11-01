@@ -56,6 +56,8 @@ export const CANCELABLE_FLOW_PATHS: readonly string[] = [
 export const NOT_CANCELABLE_FLOW_PATHS: Readonly<Record<string, string>> = {
   "f/factory/manual_intake":
     "作業項目を持たない。途中で止めると、Issueだけが作られて工程に乗らないことがある",
+  "f/factory/pr_review_intake":
+    "作業項目を持たない。途中で止めると、flow_job_idの無いreviewingの行が残ることがある",
 };
 
 /**

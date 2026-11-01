@@ -28,12 +28,14 @@ import {
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
+  isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
   type JobCancelResult,
   type JobRerunResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
+  type PrReviewSubmitResult,
   type RetryWorkItemResult,
   type ScheduleStopResult,
 } from "./guards/writeResults.ts";
@@ -187,6 +189,31 @@ export function submitManualIntake(
       ...(input.intakeKey === undefined ? {} : { intake_key: input.intakeKey }),
     },
     isManualIntakeSubmitResult,
+    options,
+  );
+}
+
+export type PrReviewSubmitInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+};
+
+/**
+ * PRのレビューを投入する。許可されていないリポジトリ、不正な入力、同じPRで稼働中のレビューがあるときは、
+ * フローを起動せず、理由つきの断りで返る。断りは失敗ではなく結果として返す。
+ * 投入した人は引数に取らない。scriptがジョブの実行文脈から導く。
+ * PRの存在や状態の確認と、作業項目の登録は、起動したフローのステップが行う。
+ * そのため、閉じたPRなどの断りは、この戻りではなく、起動したフローのジョブの結果に現れる。
+ */
+export function submitPrReview(
+  input: PrReviewSubmitInput,
+  options: RunScriptOptions = {},
+): Promise<PrReviewSubmitResult> {
+  return callWrite(
+    "pr_review_submit",
+    { owner: input.owner, repo: input.repo, pr_number: input.prNumber },
+    isPrReviewSubmitResult,
     options,
   );
 }

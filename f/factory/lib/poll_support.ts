@@ -859,6 +859,8 @@ export type PrDecision = {
  * - レビューと修正のどちらのトリガーラベルも、拒否された状態で付いていない。
  * 未処理の`head_sha`から自動で検出するレビューは、
  * このPRに実行中の`pr_review`があれば見送る。
+ * ラベルによるレビューも、実行中の`pr_review`があるときは始めず、ラベルを残す。
+ * 今のレビューが終わった後のポーリングが、残ったラベルから始める。
  * ラベルの経路も検出の経路も、PRのheadがbaseと同じリポジトリにないとき
  * (forkのPRと、headのリポジトリを取得できないPR)は始めず、`deny_fork_head`を返す。
  * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
@@ -894,9 +896,13 @@ export function decidePrActions(
       (!hasReviewLabel || reviewLabelAllowed) &&
       (!hasFixLabel || fixLabelAllowed);
 
+    // 終端でない`pr_review`があるPRのレビューラベルは、許可された人のものでも始めず、ラベルを残す。
+    // 消費してから挿入が一意インデックスに阻まれると、人の依頼が黙って失われるためである。
     const wouldReview: PrReviewAction = hasReviewLabel
       ? reviewLabelAllowed
-        ? { kind: "trigger_review", reason: "label", removeLabel: true }
+        ? candidate.hasActiveReviewingItem
+          ? { kind: "none" }
+          : { kind: "trigger_review", reason: "label", removeLabel: true }
         : { kind: "deny_labeler" }
       : mayDetect &&
           !candidate.hasActiveReviewingItem &&

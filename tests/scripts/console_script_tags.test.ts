@@ -13,6 +13,7 @@ const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/retry_work_item": 120,
   "f/factory/audit_kickoff": 120,
   "f/factory/manual_intake_submit": 30,
+  "f/factory/pr_review_submit": 30,
   "f/factory/console_fetch_watch": 60,
   "f/factory/console_holds": 30,
   "f/factory/hold_release": 30,
@@ -87,7 +88,7 @@ describe("console scripts", () => {
     expect(delegating).toEqual([]);
   });
 
-  test("the eighteen console scripts exist", async () => {
+  test("the nineteen console scripts exist", async () => {
     const paths = await allScriptYamlPaths();
     expect(
       Object.keys(CONSOLE_SCRIPTS).filter((path) => !paths.includes(path)),

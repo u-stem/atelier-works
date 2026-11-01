@@ -1,0 +1,40 @@
+summary: '[OP-1-3] PRレビューの投入フォーム(PRを確かめてレビューを始める)'
+description: 手動でPRのレビューを投入するためのフォームです。入力のPRを確かめ、同じPRで稼働中のレビューが無ければ、pr_reviewの作業項目を登録してレビューのフローを起動します。ラベルの付与者の確認は通らないので、投入できるのはf/factoryを実行できる主体に限ります。
+value:
+  modules:
+    - id: register
+      summary: '[OP-1-3/1] PRを確かめてレビューを登録'
+      value:
+        type: script
+        input_transforms:
+          owner:
+            type: javascript
+            expr: flow_input.owner
+          pr_number:
+            type: javascript
+            expr: flow_input.pr_number
+          repo:
+            type: javascript
+            expr: flow_input.repo
+        path: f/factory/steps/pr_review_intake_register
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - owner
+    - repo
+    - pr_number
+  properties:
+    owner:
+      type: string
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
+    pr_number:
+      type: integer
+      description: レビューするPRの番号。
+    repo:
+      type: string
+      description: 対象リポジトリ名。
+  required:
+    - owner
+    - repo
+    - pr_number

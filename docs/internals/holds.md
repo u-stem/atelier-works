@@ -57,6 +57,7 @@ Issueの二重取りは、次の仕組みで防ぐ。
 - 取得: Factoryは、トリガーラベルを外す要求に成功したインスタンスだけが、そのIssueを受け持つ。
 - 作業項目: 部分一意インデックス`work_items_active_issue_key`が、終端でないIssueの作業項目をIssueごとに1件までにする。
   `work_items_active_pr_fix_key`が、終端でないPR修正をPRごとに1件までにする。
+  `work_items_active_pr_review_key`が、終端でない`pr_review`を、ownerとrepoを小文字にした組とPRの番号の組ごとに1件までにする。
   GitHubは、同時の削除のうち成功が1つになることを保証しない。
   そのため、最後の防御はインデックスである。
 - ブランチ名: Factoryの実装ブランチは`factory/issue-<N>-wi-<id>`で、作業項目ごとに違う。

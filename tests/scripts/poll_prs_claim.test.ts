@@ -1050,6 +1050,11 @@ describe("restoreTriggerLabelAfterStartRace", () => {
 
 describe("processPrDecisions", () => {
   const LABELS = { reviewLabel: "factory:review", fixLabel: "factory:fix" };
+  const STARTED = {
+    status: "started",
+    work_item_id: 100,
+    flow_job_id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+  } as const;
   const CANDIDATE = {
     owner: "octo-owner",
     repo: "atelier-works",
@@ -1102,6 +1107,7 @@ describe("processPrDecisions", () => {
       recordForkHeadDenied: async () => {},
       startReview: async () => {
         calls.push("startReview");
+        return STARTED;
       },
       startFix: async () => {
         calls.push("startFix");
@@ -1269,6 +1275,7 @@ describe("processPrDecisions", () => {
     const { handlers } = handlersWith({
       startReview: async (_candidate, _context, reason) => {
         reasons.push(reason);
+        return STARTED;
       },
     });
 
@@ -1288,6 +1295,7 @@ describe("processPrDecisions", () => {
     const { handlers } = handlersWith({
       startReview: async (_candidate, _context, reason) => {
         reasons.push(reason);
+        return STARTED;
       },
     });
 
@@ -1372,6 +1380,166 @@ describe("processPrDecisions", () => {
       fixesStarted: 0,
       skipped: 0,
       failed: 1,
+    });
+  });
+
+  describe("when a review is already active for the pull request", () => {
+    const ACTIVE = { status: "already_active" } as const;
+    const REVIEW_KEY_VIOLATION = new Error(
+      'duplicate key value violates unique constraint "work_items_active_pr_review_key"',
+    );
+
+    test("puts the review label back", async () => {
+      const { handlers, calls } = handlersWith({
+        startReview: async () => ACTIVE,
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(calls).toEqual(["restoreLabel:factory:review"]);
+    });
+
+    test("counts the review as skipped", async () => {
+      const { handlers } = handlersWith({ startReview: async () => ACTIVE });
+
+      const result = await run([REVIEW_BY_LABEL], handlers);
+
+      expect(result).toEqual({
+        reviewsStarted: 0,
+        fixesStarted: 0,
+        skipped: 1,
+        failed: 0,
+      });
+    });
+
+    test("puts the label back when the start raises the index violation", async () => {
+      const { handlers, calls } = handlersWith({
+        startReview: async () => {
+          throw REVIEW_KEY_VIOLATION;
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(calls).toEqual(["restoreLabel:factory:review"]);
+    });
+
+    test("counts the index violation as skipped, not as failed", async () => {
+      const { handlers } = handlersWith({
+        startReview: async () => {
+          throw REVIEW_KEY_VIOLATION;
+        },
+      });
+
+      const result = await run([REVIEW_BY_LABEL], handlers);
+
+      expect(result.failed).toBe(0);
+    });
+
+    test("still starts the fix of the same pull request", async () => {
+      const { handlers, calls } = handlersWith({
+        startReview: async () => ACTIVE,
+      });
+
+      await run([REVIEW_AND_FIX], handlers);
+
+      expect(calls).toEqual([
+        "restoreLabel:factory:review",
+        "startFix",
+        "resolveNotices:factory:fix",
+      ]);
+    });
+
+    test("does not resolve the notices of the review label", async () => {
+      const { handlers, calls } = handlersWith({
+        startReview: async () => ACTIVE,
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(calls).not.toContain("resolveNotices:factory:review");
+    });
+
+    test("does not put a label back for a review that no label asked for", async () => {
+      const { handlers, calls } = handlersWith({
+        startReview: async () => ACTIVE,
+      });
+
+      await run([REVIEW_BY_ASSIGNMENT], handlers);
+
+      expect(calls).toEqual([]);
+    });
+
+    test("counts a detected review as skipped", async () => {
+      const { handlers } = handlersWith({ startReview: async () => ACTIVE });
+
+      const result = await run([REVIEW_BY_ASSIGNMENT], handlers);
+
+      expect(result).toEqual({
+        reviewsStarted: 0,
+        fixesStarted: 0,
+        skipped: 1,
+        failed: 0,
+      });
+    });
+
+    test("collects the pull request whose label could not be put back", async () => {
+      const collected: unknown[] = [];
+      const { handlers } = handlersWith({
+        startReview: async () => ACTIVE,
+        restoreLabel: async () => {
+          throw LEFT_REMOVED;
+        },
+        collectLeftRemoved: async (_items, _candidate, err) => {
+          collected.push(err);
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(collected).toEqual([LEFT_REMOVED]);
+    });
+  });
+
+  describe("when a review label is held back by an active pr_review", () => {
+    const HELD: PrDecision = {
+      candidate: {
+        ...CANDIDATE,
+        labels: ["factory:review"],
+        hasActiveReviewingItem: true,
+      },
+      review: { kind: "none" },
+      fix: { kind: "none" },
+    };
+
+    test("logs the pull request whose label is kept", async () => {
+      const infos: { message: string; fields: unknown }[] = [];
+      const log: Logger = {
+        info(message, fields) {
+          infos.push({ message, fields });
+        },
+        warn() {},
+        error() {},
+      };
+      const { handlers } = handlersWith();
+
+      await processPrDecisions([HELD], CONTEXTS, LABELS, handlers, log);
+
+      expect(infos).toEqual([
+        {
+          message:
+            "review label kept: a pr_review is in progress for the pull request",
+          fields: { target: "octo-owner/atelier-works#7" },
+        },
+      ]);
+    });
+
+    test("starts nothing", async () => {
+      const { handlers, calls } = handlersWith();
+
+      await run([HELD], handlers);
+
+      expect(calls).toEqual([]);
     });
   });
 
@@ -2139,6 +2307,7 @@ describe("processPrDecisions", () => {
       startReview: async (candidate) => {
         if (candidate.number === 7) throw new Error("start failed");
         started.push(candidate.number);
+        return STARTED;
       },
     });
 

@@ -384,7 +384,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 画面は、取得の`queries.ts`と書き込みの`writes.ts`にある型付きの関数だけを使う。
 `src/api/`の外が`windmill.ts`をimportしないことは、契約テストが確かめる。
 
-呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の17個だけである。
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の18個だけである。
 どれもtag`console`を持ち、Console用のworkerで動く。
 
 | 名前 | 用途 | 型付きの関数 |
@@ -399,6 +399,7 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 | `audit_kickoff` | 監査の手動起動 | `kickoffAudit` |
 | `notice_resolve` | 通知1件の解決 | `resolveNotice` |
 | `manual_intake_submit` | 手動投入の受付 | `submitManualIntake` |
+| `pr_review_submit` | PRのレビューの投入の受付 | `submitPrReview` |
 | `hold_release` | 保留1件の解除 | `releaseHold` |
 | `freeze_release` | 凍結かdeployの保留1件の解除 | `releaseFreeze` |
 | `console_job_cancel` | 実行中か待ちのジョブ1件の中止 | `cancelJob` |
@@ -555,6 +556,14 @@ backendが先に新しい値を反映した間や、配信を前の版に固定�
 
 承認は、同じ決定が記録済みの行にもう一度呼ぶと、ハンドラの起動をやり直す。
 二重の送信は、画面側で止める。
+
+PRのレビューを投入する`pr_review_submit`の型付きの関数は`submitPrReview`で、引数は`owner`、`repo`、`prNumber`である。
+戻りの型ガードは`isPrReviewSubmitResult`で、断りの符号は`PR_REVIEW_SUBMIT_REFUSAL_REASONS`の6つである。
+`already_reviewing`は、同じPRの稼働中のレビューがあることを、同期に返す。
+投入のフローの登録のステップが断る8つの符号は、`PR_REVIEW_REGISTER_REFUSAL_REASONS`と、型ガード`isPrReviewRegisterResult`にある。
+この符号は、起動したフローのジョブの結果に現れる。
+Consoleには、この関数を呼ぶ画面と、符号を日本語の固定文に直す対応が無い。
+仕組みは[PRワークフローの仕様](pr-workflow.md#consoleからの投入)にある。
 
 却下の理由は、4000文字までにする(`MAX_REASON_LENGTH`)。文字はコードポイントで数える。
 `decideApproval`は、上限を超える理由を送らず、`RangeError`で断る。

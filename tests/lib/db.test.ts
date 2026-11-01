@@ -42,6 +42,7 @@ import {
   getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
+  hasActivePrReviewWorkItem,
   hasDependabotItemForHead,
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
@@ -66,11 +67,13 @@ import {
   insertImplementRound,
   insertIssueProposal,
   insertIssueWorkItemUnlessActive,
+  insertPrReviewWorkItemUnlessActive,
   insertReview,
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
+  isActivePrReviewUniqueViolation,
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
   isMissingDocHashColumnError,
@@ -90,6 +93,7 @@ import {
   listActive,
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
+  listActivePrReviewWorkItems,
   listAutoRetryCandidates,
   listClaimablePrCiChecks,
   listExpiredPendingApprovalRequests,
@@ -755,6 +759,18 @@ describe("newestNewerPrWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await newestNewerPrWorkItem("pr_fix", "o", "r", 7, 3, sql);
     expect(calls[0]?.values).toEqual(["pr_fix", "o", "r", 7, 3]);
+  });
+
+  test("compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("lower(owner) = lower(");
+  });
+
+  test("compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("lower(repo) = lower(");
   });
 });
 
@@ -3901,6 +3917,20 @@ describe("hasPriorReview", () => {
     await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
     expect(calls[0]?.values).toContain(1);
   });
+
+  test("compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.text).toContain(
+      "lower(factory.work_items.owner) = lower(",
+    );
+  });
+
+  test("compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.text).toContain("lower(factory.work_items.repo) = lower(");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4578,6 +4608,42 @@ describe("latestPrWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
+  });
+
+  test("compares the owner without regard to case when it does not filter by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("lower(owner) = lower(");
+  });
+
+  test("compares the repo without regard to case when it does not filter by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("lower(repo) = lower(");
+  });
+
+  test("compares the owner without regard to case when it filters by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      { kind: "pr_review" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("lower(owner) = lower(");
+  });
+
+  test("compares the repo without regard to case when it filters by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      { kind: "pr_review" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("lower(repo) = lower(");
   });
 });
 
@@ -9381,6 +9447,54 @@ describe("transient pr_review restart", () => {
     expect(await hasSupersedingPrReview(7, sql)).toBe(true);
   });
 
+  test("looks for a newer row with another case of the owner", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("lower(other.owner) = lower(w.owner)");
+  });
+
+  test("looks for a newer row with another case of the repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("lower(other.repo) = lower(w.repo)");
+  });
+
+  test("the restart looks for a newer row with another case of the owner", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain(
+      "lower(other.owner) = lower(factory.work_items.owner)",
+    );
+  });
+
+  test("the restart looks for a newer row with another case of the repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain(
+      "lower(other.repo) = lower(factory.work_items.repo)",
+    );
+  });
+
+  test("the superseding check compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ superseded: false }]]);
+    await hasSupersedingPrReview(7, sql);
+    expect(calls[0]?.text).toContain("lower(other.owner) = lower(w.owner)");
+  });
+
+  test("the superseding check compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ superseded: false }]]);
+    await hasSupersedingPrReview(7, sql);
+    expect(calls[0]?.text).toContain("lower(other.repo) = lower(w.repo)");
+  });
+
   test("records a stall once", async () => {
     const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
     expect(
@@ -10085,5 +10199,237 @@ describe("toFixRoundRecord for a design gap", () => {
       commit_shas: [],
     });
     expect(fixRound.outcome).toBe("design_gap");
+  });
+});
+
+describe("isActivePrReviewUniqueViolation", () => {
+  const KEY_BODY =
+    'ERROR: duplicate key value violates unique constraint "work_items_active_pr_review_key"';
+
+  test("recognises a violation of the active pr_review index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_pr_review_key"',
+    );
+    expect(isActivePrReviewUniqueViolation(err)).toBe(true);
+  });
+
+  test("does not match a violation of the active pr_fix index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+    );
+    expect(isActivePrReviewUniqueViolation(err)).toBe(false);
+  });
+
+  test("does not match an unrelated error", () => {
+    expect(isActivePrReviewUniqueViolation(new Error("db down"))).toBe(false);
+  });
+
+  test("does not match a value that is not an error", () => {
+    expect(
+      isActivePrReviewUniqueViolation("work_items_active_pr_review_key"),
+    ).toBe(false);
+  });
+
+  test("recognises the constraint name in a string body", () => {
+    const err = Object.assign(new Error("Conflict"), { body: KEY_BODY });
+    expect(isActivePrReviewUniqueViolation(err)).toBe(true);
+  });
+
+  test("ignores a body that is not a string", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: { message: KEY_BODY },
+    });
+    expect(isActivePrReviewUniqueViolation(err)).toBe(false);
+  });
+});
+
+describe("insertPrReviewWorkItemUnlessActive", () => {
+  const REVIEW_ITEM = {
+    ...NEW_WORK_ITEM,
+    kind: "pr_review" as const,
+    owner: "Acme",
+    repo: "Widgets",
+    issue_number: null,
+    pr_number: 12,
+    status: "reviewing" as const,
+  };
+
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("inserts only when no active pr_review exists for the pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.text).toContain("WHERE NOT EXISTS");
+  });
+
+  test("compares the owner without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.text).toContain("lower(active.owner) = lower(");
+  });
+
+  test("compares the repo without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.text).toContain("lower(active.repo) = lower(");
+  });
+
+  test("looks only at the rows that are not terminal", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.text).toContain("active.status != ALL(");
+  });
+
+  test("skips the insert on any unique violation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "5" }]]);
+    expect(await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql)).toBe(5);
+  });
+
+  test("returns null when the insert did not happen", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql),
+    ).toBeNull();
+  });
+
+  test("writes the repo as given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertPrReviewWorkItemUnlessActive(REVIEW_ITEM, sql);
+    expect(calls[0]?.values).toContain("Widgets");
+  });
+
+  test("refuses a kind other than pr_review", async () => {
+    const { sql } = createFakeSqlClient();
+    await expect(
+      insertPrReviewWorkItemUnlessActive(
+        { ...REVIEW_ITEM, kind: "pr_fix" },
+        sql,
+      ),
+    ).rejects.toThrow("pr_review");
+  });
+
+  test("does not query for a kind other than pr_review", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertPrReviewWorkItemUnlessActive(
+      { ...REVIEW_ITEM, kind: "pr_fix" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses a missing pull request number", async () => {
+    const { sql } = createFakeSqlClient();
+    await expect(
+      insertPrReviewWorkItemUnlessActive(
+        { ...REVIEW_ITEM, pr_number: null },
+        sql,
+      ),
+    ).rejects.toThrow("pull request number");
+  });
+});
+
+describe("hasActivePrReviewWorkItem", () => {
+  test("is true when an active pr_review exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await hasActivePrReviewWorkItem("acme", "widgets", 12, sql)).toBe(
+      true,
+    );
+  });
+
+  test("is false when none exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasActivePrReviewWorkItem("acme", "widgets", 12, sql)).toBe(
+      false,
+    );
+  });
+
+  test("reads only the pr_review kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasActivePrReviewWorkItem("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("kind = 'pr_review'");
+  });
+
+  test("compares the owner and repo in lower case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasActivePrReviewWorkItem("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets"]),
+    );
+  });
+
+  test("does not write", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasActivePrReviewWorkItem("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+  });
+});
+
+describe("listActivePrReviewWorkItems", () => {
+  test("reads only the pr_review kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrReviewWorkItems("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("kind = 'pr_review'");
+  });
+
+  test("compares the owner and repo in lower case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrReviewWorkItems("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets"]),
+    );
+  });
+
+  test("returns the parsed rows", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    expect(
+      (await listActivePrReviewWorkItems("acme", "widgets", 12, sql)).map(
+        (item) => item.id,
+      ),
+    ).toEqual([1]);
+  });
+});
+
+describe("restartTransientPrReview against the active pr_review index", () => {
+  const params = {
+    reasonPrefix: "github_transient: ",
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    delaysSeconds: [300, 900, 2700],
+    stallNotePrefix: "auto_retry_stalled: ",
+    id: 7,
+    note: "auto_retry: restarted from failed",
+  };
+
+  function failingSql(error: Error): SqlClient {
+    return () => ({
+      fetch: () => Promise.reject(error),
+      execute: () => Promise.reject(error),
+    });
+  }
+
+  test("returns false when another review became active for the pull request", async () => {
+    const sql = failingSql(
+      new Error(
+        'duplicate key value violates unique constraint "work_items_active_pr_review_key"',
+      ),
+    );
+    expect(await restartTransientPrReview(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("rethrows any other failure", async () => {
+    const sql = failingSql(new Error("db down"));
+    await expect(
+      restartTransientPrReview(params, sql, NO_JOBS),
+    ).rejects.toThrow("db down");
   });
 });
