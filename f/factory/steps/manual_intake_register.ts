@@ -14,15 +14,23 @@ import {
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  type IntakeKeyRow,
   insertIssueWorkItemUnlessActive,
   setFlowJobId,
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { claimIssue, type GhClient, getViewer } from "../lib/github.ts";
-import { parseFlowJobId } from "../lib/implement_launch_support.ts";
+import {
+  parseFlowJobId,
+  type StartImplementOutcome,
+} from "../lib/implement_launch_support.ts";
 import { type Logger, logger } from "../lib/log.ts";
 import { assertAcceptedProfile } from "../lib/manual_intake_support.ts";
-import { assertGitHubName } from "../lib/types.ts";
+import {
+  assertGitHubName,
+  type FailureRecord,
+  type WorkItemStatus,
+} from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 
 export type ManualIntakeStartedResult = {
@@ -195,6 +203,98 @@ export async function registerManualIntakeWorkItem(
     );
   }
   return registered?.id ?? null;
+}
+
+export type ApprovalFreeIntakeInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly issueNumber: number;
+  readonly issueUrl: string;
+  readonly title: string;
+  readonly body: string;
+  readonly viewerLogin: string;
+  readonly profile: string;
+  readonly reused: boolean;
+  readonly intakeKey: string | undefined;
+  readonly intakeBody: string;
+  readonly acceptanceCriteria: string;
+};
+
+export type ApprovalFreeIntakeDeps = {
+  readonly implementEnabled: boolean;
+  readonly isRepoAllowed: (owner: string, repo: string) => boolean;
+  readonly verifyRepoOwner: (
+    owner: string,
+    repo: string,
+  ) => Promise<
+    { readonly ok: true } | { readonly ok: false; readonly reason: string }
+  >;
+  readonly readIntakeKey: (key: string) => Promise<IntakeKeyRow | null>;
+  readonly nextCycle: (
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ) => Promise<number>;
+  readonly insertWorkItem: typeof insertIssueWorkItemUnlessActive;
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+  readonly startImplement: (
+    workItemId: number,
+  ) => Promise<StartImplementOutcome>;
+  readonly log: Logger;
+};
+
+export type ApprovalFreeIntakeResult =
+  | ManualIntakeSkippedResult
+  | {
+      readonly skipped: false;
+      readonly work_item_id: number;
+      readonly issue_number: number;
+      readonly issue_url: string;
+      readonly implement: StartImplementOutcome;
+    };
+
+export async function registerApprovalFreeIntake(
+  input: ApprovalFreeIntakeInput,
+  _deps: ApprovalFreeIntakeDeps,
+): Promise<ApprovalFreeIntakeResult> {
+  return manualIntakeSkippedResult(input.issueNumber, input.issueUrl, "");
+}
+
+export function shouldSkipReusedStandard(
+  _profile: string,
+  _reused: boolean | null | undefined,
+): boolean {
+  return false;
+}
+
+export type PickedStartPorts = {
+  readonly compareAndSwap: (
+    id: number,
+    from: WorkItemStatus,
+    to: WorkItemStatus,
+  ) => Promise<boolean>;
+  readonly runFlowAsync: (
+    path: string,
+    args: Record<string, unknown>,
+  ) => Promise<string>;
+  readonly setFlowJobIdIfUnset: (id: number, jobId: string) => Promise<boolean>;
+  readonly moveToNeedsHuman: (id: number, reason: string) => Promise<boolean>;
+  readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
+  readonly addNotice: (message: string) => Promise<void>;
+  readonly notifyNeedsHuman: (reason: string) => Promise<void>;
+};
+
+export function buildStartImplementFromPicked(
+  _ctx: {
+    readonly workItemId: number;
+    readonly owner: string;
+    readonly repo: string;
+    readonly issueNumber: number;
+    readonly log: Logger;
+  },
+  _ports: PickedStartPorts,
+): () => Promise<StartImplementOutcome> {
+  return async () => "not_moved";
 }
 
 export async function main(

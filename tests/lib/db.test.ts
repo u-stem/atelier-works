@@ -291,6 +291,23 @@ describe("insertIssueWorkItemUnlessActive", () => {
     expect(guarded.calls[0]?.values).toEqual(plain.calls[0]?.values);
   });
 
+  test("binds the profile of the work item", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(
+      { ...NEW_WORK_ITEM, profile: "bugfix" },
+      sql,
+    );
+    expect(calls[0]?.values.at(-1)).toBe("bugfix");
+  });
+
+  test("inserts into the profile column", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain(
+      "conflict_check_id, conflict_episode, profile",
+    );
+  });
+
   test("runs the sweep as a second statement after a successful insert", async () => {
     const { sql, calls } = createFakeSqlClient([WON, []]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
@@ -890,13 +907,34 @@ describe("insertWorkItem", () => {
       null,
       null,
       null,
+      "standard",
     ]);
+  });
+
+  test("binds the profile when given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem({ ...NEW_WORK_ITEM, profile: "docs" }, sql);
+    expect(calls[0]?.values.at(-1)).toBe("docs");
+  });
+
+  test("binds the standard profile when it is omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.values.at(-1)).toBe("standard");
+  });
+
+  test("inserts into the profile column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain(
+      "conflict_check_id, conflict_episode, profile",
+    );
   });
 
   test("binds the ci check id when given", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await insertWorkItem({ ...NEW_WORK_ITEM, ci_check_id: 33 }, sql);
-    expect(calls[0]?.values.at(-3)).toBe(33);
+    expect(calls[0]?.values.at(-4)).toBe(33);
   });
 
   test("binds the conflict check id when given", async () => {
@@ -905,7 +943,7 @@ describe("insertWorkItem", () => {
       { ...NEW_WORK_ITEM, conflict_check_id: 44, conflict_episode: 2 },
       sql,
     );
-    expect(calls[0]?.values.at(-2)).toBe(44);
+    expect(calls[0]?.values.at(-3)).toBe(44);
   });
 
   test("binds the conflict episode when given", async () => {
@@ -914,13 +952,13 @@ describe("insertWorkItem", () => {
       { ...NEW_WORK_ITEM, conflict_check_id: 44, conflict_episode: 2 },
       sql,
     );
-    expect(calls[0]?.values.at(-1)).toBe(2);
+    expect(calls[0]?.values.at(-2)).toBe(2);
   });
 
   test("binds no conflict columns when they are omitted", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await insertWorkItem(NEW_WORK_ITEM, sql);
-    expect(calls[0]?.values.slice(-2)).toEqual([null, null]);
+    expect(calls[0]?.values.slice(-3, -1)).toEqual([null, null]);
   });
 
   test("inserts into the conflict columns", async () => {

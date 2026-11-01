@@ -39,15 +39,19 @@ function schemaProperties(meta: unknown): Record<string, unknown> {
 }
 
 describe("the profile in the manual intake flow", () => {
-  test.each(["create_issue", "register"])(
-    "hands the profile of the flow input to the %s step",
-    (id) => {
-      expect(transformOf(moduleById(id), "profile")).toEqual({
-        type: "javascript",
-        expr: "flow_input.profile",
-      });
-    },
-  );
+  test("hands the profile of the flow input to the create_issue step", () => {
+    expect(transformOf(moduleById("create_issue"), "profile")).toEqual({
+      type: "javascript",
+      expr: "flow_input.profile",
+    });
+  });
+
+  test("hands the profile that the create_issue step checked to the register step", () => {
+    expect(transformOf(moduleById("register"), "profile")).toEqual({
+      type: "javascript",
+      expr: "results.create_issue.profile",
+    });
+  });
 
   test("declares the profile as an input that defaults to standard", () => {
     expect(
@@ -80,42 +84,21 @@ describe("the script definitions that take the profile", () => {
   });
 });
 
-/**
- * `skip_if`の式を評価する。式は`results.<step>.<name> === true`の形だけを受け付け、
- * 他の形は例外にする。`eval`を使わず、結果の値を辿って`true`と厳密に比べる。
- */
-function evaluateSkipIf(expr: unknown, results: Record<string, unknown>) {
-  if (typeof expr !== "string") throw new Error("expr is not a string");
-  const matched = /^results\.(\w+)\.(\w+) === true$/.exec(expr);
-  if (matched === null) throw new Error(`unsupported expression: ${expr}`);
-  const [, step, name] = matched;
-  if (step === undefined || name === undefined) {
-    throw new Error("unsupported expression");
-  }
-  return field(results[step], name) === true;
-}
-
-describe("the skip_if of the register step", () => {
-  const expr = field(field(moduleById("register"), "skip_if"), "expr");
-
-  test("does not skip when the result has no reused", () => {
-    expect(evaluateSkipIf(expr, { create_issue: { number: 1 } })).toBe(false);
+describe("the register step of the manual intake flow", () => {
+  test("is never skipped, because it decides for a reused issue itself", () => {
+    expect(field(moduleById("register"), "skip_if")).toBeUndefined();
   });
 
-  test("does not skip when reused is undefined", () => {
-    expect(evaluateSkipIf(expr, { create_issue: { reused: undefined } })).toBe(
-      false,
-    );
-  });
-
-  test("does not skip when reused is false", () => {
-    expect(evaluateSkipIf(expr, { create_issue: { reused: false } })).toBe(
-      false,
-    );
-  });
-
-  test("skips when reused is true", () => {
-    expect(evaluateSkipIf(expr, { create_issue: { reused: true } })).toBe(true);
+  test.each([
+    ["reused", "results.create_issue.reused"],
+    ["intake_key", "results.create_issue.intake_key"],
+    ["intake_body", "flow_input.body"],
+    ["acceptance_criteria", "flow_input.acceptance_criteria"],
+  ])("hands %s to the register step", (name, expr) => {
+    expect(transformOf(moduleById("register"), name)).toEqual({
+      type: "javascript",
+      expr,
+    });
   });
 });
 
@@ -124,16 +107,6 @@ describe("the intake key in the manual intake flow", () => {
     expect(transformOf(moduleById("create_issue"), "intake_key")).toEqual({
       type: "javascript",
       expr: "flow_input.intake_key",
-    });
-  });
-
-  test("does not hand the intake key to the register step", () => {
-    expect(transformOf(moduleById("register"), "intake_key")).toBeUndefined();
-  });
-
-  test("skips the register step for a reused issue", () => {
-    expect(field(moduleById("register"), "skip_if")).toEqual({
-      expr: "results.create_issue.reused === true",
     });
   });
 
@@ -177,10 +150,23 @@ describe("the script definitions that take the intake key", () => {
     );
   });
 
-  test("the register step does not take the intake key", () => {
-    const meta = readYaml(
-      join(ROOT, "f/factory/steps/manual_intake_register.script.yaml"),
-    );
-    expect(Object.keys(schemaProperties(meta))).not.toContain("intake_key");
-  });
+  test.each(["reused", "intake_key", "intake_body", "acceptance_criteria"])(
+    "the register step declares %s",
+    (name) => {
+      const meta = readYaml(
+        join(ROOT, "f/factory/steps/manual_intake_register.script.yaml"),
+      );
+      expect(Object.keys(schemaProperties(meta))).toContain(name);
+    },
+  );
+
+  test.each(["reused", "intake_key", "intake_body", "acceptance_criteria"])(
+    "the register step does not require %s",
+    (name) => {
+      const meta = readYaml(
+        join(ROOT, "f/factory/steps/manual_intake_register.script.yaml"),
+      );
+      expect(field(field(meta, "schema"), "required")).not.toContain(name);
+    },
+  );
 });

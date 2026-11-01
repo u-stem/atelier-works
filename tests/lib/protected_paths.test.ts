@@ -672,6 +672,45 @@ describe("profile gate files", () => {
   });
 });
 
+// 承認を省く進め方の手動投入を通す3つのファイルと冪等キーの表のmigrationは、書き換えられると、
+// キー無しの投入や、キーの表と食い違う登録が通り、承認の行の無い作業項目が人の確認なしにできる。
+describe("approval-free manual intake files", () => {
+  const PATHS = [
+    "f/factory/steps/manual_intake_create_issue.ts",
+    "f/factory/steps/manual_intake_create_issue.script.yaml",
+    "f/factory/steps/manual_intake_register.ts",
+    "f/factory/steps/manual_intake_register.script.yaml",
+    "f/factory/lib/manual_intake_support.ts",
+    "f/factory/lib/manual_intake_support.script.yaml",
+    "migrations/datatable/main/20261031110000_manual_intake_keys.up.sql",
+    "migrations/datatable/main/20261031110000_manual_intake_keys.down.sql",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each([
+    "f/factory/steps/manual_intake_create_issue.script.lock",
+    "f/factory/steps/manual_intake_register.script.lock",
+    "f/factory/lib/manual_intake_support.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {

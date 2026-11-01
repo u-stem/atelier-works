@@ -151,6 +151,30 @@ export function intakeMarkerText(key: string): string {
   return `<!-- factory:intake:${key} -->`;
 }
 
+export const MANUAL_INTAKE_END_LINE = "";
+
+export function withIntakeEnd(body: string): string {
+  return body;
+}
+
+export function endsWithIntakeMarker(_body: string, _key: string): boolean {
+  return false;
+}
+
+export function skipsApprovals(_profile: string): boolean {
+  return false;
+}
+
+export function assertIntakeKeyForProfile(
+  _profile: string,
+  _key: string | undefined,
+): void {}
+
+export function assertImplementEnabledForProfile(
+  _profile: string,
+  _implementEnabled: boolean,
+): void {}
+
 /** `body`の末尾に、冪等キーの目印を単独の行として足す。 */
 export function withIntakeMarker(body: string, key: string): string {
   return `${body}\n\n${intakeMarkerText(key)}`;

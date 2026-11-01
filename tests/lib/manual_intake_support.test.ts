@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertAcceptedProfile,
+  assertImplementEnabledForProfile,
   assertIntakeKey,
+  assertIntakeKeyForProfile,
   buildManualIntakeIssueBody,
   computeIntakeContentHash,
+  endsWithIntakeMarker,
   INTAKE_KEY_PATTERN,
   intakeMarkerText,
+  MANUAL_INTAKE_END_LINE,
   MANUAL_INTAKE_REFUSAL_REASONS,
   normalizeIntakeKey,
+  skipsApprovals,
   validateManualIntake,
+  withIntakeEnd,
   withIntakeMarker,
 } from "../../f/factory/lib/manual_intake_support.ts";
 import type { FactoryConfig } from "../../f/factory/lib/types.ts";
@@ -16,13 +22,14 @@ import * as createIssueStep from "../../f/factory/steps/manual_intake_create_iss
 
 type AllowConfig = Pick<
   FactoryConfig,
-  "owners" | "repo_allowlist" | "factory_repo"
+  "owners" | "repo_allowlist" | "factory_repo" | "implement_enabled"
 >;
 
 const CONFIG: AllowConfig = {
   owners: [{ name: "octo-owner", kind: "user" }],
   repo_allowlist: [],
   factory_repo: "https://github.com/octo-owner/atelier-works",
+  implement_enabled: true,
 };
 
 const VALID = {
@@ -50,7 +57,9 @@ function codePoints(text: string): number {
 /** 組み立てた本文がちょうど`total`コードポイントになる、`body`の値を返す。 */
 function bodyForTotal(total: number): string {
   const base = codePoints(
-    buildManualIntakeIssueBody({ body: "a", acceptance_criteria: "" }),
+    withIntakeEnd(
+      buildManualIntakeIssueBody({ body: "a", acceptance_criteria: "" }),
+    ),
   );
   return "😀".repeat(total - base + 1);
 }
@@ -69,6 +78,8 @@ describe("the refusal reasons", () => {
       "invalid_body_chars",
       "body_too_long",
       "invalid_intake_key",
+      "intake_key_required",
+      "implement_disabled",
       "actor_unknown",
     ]);
   });
@@ -142,7 +153,14 @@ describe("profile", () => {
     expect(reasonOf({ ...VALID, profile: "standard" })).toBeNull();
   });
 
-  test.each(["direct", "bugfix", "docs", "", "Standard", "unknown"])(
+  test.each(["direct", "bugfix", "docs"])(
+    "accepts %p with an intake key",
+    (profile) => {
+      expect(reasonOf({ ...VALID, profile, intake_key: INTAKE_ID })).toBeNull();
+    },
+  );
+
+  test.each(["", "Standard", "unknown", " direct", "direct\n"])(
     "refuses the profile %p as profile_not_allowed",
     (profile) => {
       expect(reasonOf({ ...VALID, profile })).toBe("profile_not_allowed");
@@ -156,9 +174,97 @@ describe("profile", () => {
   });
 
   test("is checked before the title", () => {
-    expect(reasonOf({ ...VALID, profile: "direct", title: "" })).toBe(
+    expect(reasonOf({ ...VALID, profile: "unknown", title: "" })).toBe(
       "profile_not_allowed",
     );
+  });
+});
+
+describe.each(["direct", "bugfix", "docs"])("the profile %s", (profile) => {
+  test("refuses an input without an intake key as intake_key_required", () => {
+    expect(reasonOf({ ...VALID, profile })).toBe("intake_key_required");
+  });
+
+  test("refuses an empty intake key as intake_key_required", () => {
+    expect(reasonOf({ ...VALID, profile, intake_key: "" })).toBe(
+      "intake_key_required",
+    );
+  });
+
+  test("refuses an input while the implementation is off as implement_disabled", () => {
+    expect(
+      reasonOf(
+        { ...VALID, profile, intake_key: INTAKE_ID },
+        { ...CONFIG, implement_enabled: false },
+      ),
+    ).toBe("implement_disabled");
+  });
+
+  test("checks the implementation switch before the key", () => {
+    expect(
+      reasonOf({ ...VALID, profile }, { ...CONFIG, implement_enabled: false }),
+    ).toBe("implement_disabled");
+  });
+
+  test("checks the key shape after the key is required", () => {
+    expect(reasonOf({ ...VALID, profile, intake_key: "bad" })).toBe(
+      "invalid_intake_key",
+    );
+  });
+});
+
+describe("the standard profile", () => {
+  test("does not need the implementation switch", () => {
+    expect(reasonOf(VALID, { ...CONFIG, implement_enabled: false })).toBeNull();
+  });
+});
+
+describe("skipsApprovals", () => {
+  test.each(["direct", "bugfix", "docs"])("is true for %s", (profile) => {
+    expect(skipsApprovals(profile)).toBe(true);
+  });
+
+  test.each(["standard", "", "unknown", "constructor"])(
+    "is false for %p",
+    (profile) => {
+      expect(skipsApprovals(profile)).toBe(false);
+    },
+  );
+});
+
+describe("assertIntakeKeyForProfile", () => {
+  test("throws intake_key_required for an approval-free profile without a key", () => {
+    expect(() => assertIntakeKeyForProfile("direct", undefined)).toThrow(
+      "manual_intake: intake_key_required",
+    );
+  });
+
+  test("passes an approval-free profile with a key", () => {
+    expect(() => assertIntakeKeyForProfile("direct", INTAKE_ID)).not.toThrow();
+  });
+
+  test("passes the standard profile without a key", () => {
+    expect(() =>
+      assertIntakeKeyForProfile("standard", undefined),
+    ).not.toThrow();
+  });
+});
+
+describe("assertImplementEnabledForProfile", () => {
+  test("throws implement_disabled for an approval-free profile while the switch is off", () => {
+    expect(() => assertImplementEnabledForProfile("docs", false)).toThrow(
+      "manual_intake: implement_disabled",
+    );
+  });
+
+  test("passes an approval-free profile while the switch is on", () => {
+    expect(() => assertImplementEnabledForProfile("docs", true)).not.toThrow();
+  });
+
+  test("passes the standard profile while the switch is off", () => {
+    expect(() =>
+      assertImplementEnabledForProfile("standard", false),
+    ).not.toThrow();
   });
 });
 
@@ -220,7 +326,7 @@ describe("intake_key", () => {
   });
 
   test("is checked after the profile", () => {
-    expect(reasonOf({ ...VALID, profile: "direct", intake_key: "bad" })).toBe(
+    expect(reasonOf({ ...VALID, profile: "unknown", intake_key: "bad" })).toBe(
       "profile_not_allowed",
     );
   });
@@ -337,10 +443,84 @@ describe("the marker of the intake key", () => {
     );
   });
 
-  test("ends the issue body on a line of its own", () => {
+  test("ends the issue body on a line of its own, after the end line", () => {
     expect(withIntakeMarker("### 目的\n\nDo it", INTAKE_ID)).toBe(
-      `### 目的\n\nDo it\n\n<!-- factory:intake:${INTAKE_ID} -->`,
+      `### 目的\n\nDo it\n\n${MANUAL_INTAKE_END_LINE}\n\n<!-- factory:intake:${INTAKE_ID} -->`,
     );
+  });
+});
+
+describe("the end line of the issue body", () => {
+  test("is an HTML comment", () => {
+    expect(MANUAL_INTAKE_END_LINE).toBe("<!-- factory:intake:end -->");
+  });
+
+  test("ends a body without a key on the end line", () => {
+    expect(withIntakeEnd("### 目的\n\nDo it")).toBe(
+      `### 目的\n\nDo it\n\n${MANUAL_INTAKE_END_LINE}`,
+    );
+  });
+});
+
+describe("endsWithIntakeMarker", () => {
+  const BODY = "### 目的\n\nDo it";
+
+  test("matches a body that ends on the end line, a blank line, and the marker", () => {
+    expect(
+      endsWithIntakeMarker(withIntakeMarker(BODY, INTAKE_ID), INTAKE_ID),
+    ).toBe(true);
+  });
+
+  test("matches a body that the API returns with CRLF line breaks", () => {
+    expect(
+      endsWithIntakeMarker(
+        withIntakeMarker(BODY, INTAKE_ID).replaceAll("\n", "\r\n"),
+        INTAKE_ID,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match a body whose last line is only the marker", () => {
+    expect(
+      endsWithIntakeMarker(
+        `${BODY}\n\n${intakeMarkerText(INTAKE_ID)}`,
+        INTAKE_ID,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a marker for another key", () => {
+    expect(
+      endsWithIntakeMarker(
+        withIntakeMarker(BODY, INTAKE_ID),
+        "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match when the end line is not on a line of its own", () => {
+    expect(
+      endsWithIntakeMarker(
+        `${BODY} ${MANUAL_INTAKE_END_LINE}\n\n${intakeMarkerText(INTAKE_ID)}`,
+        INTAKE_ID,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a body without a blank line before the marker", () => {
+    expect(
+      endsWithIntakeMarker(
+        `${BODY}\n\n${MANUAL_INTAKE_END_LINE}\n${intakeMarkerText(INTAKE_ID)}`,
+        INTAKE_ID,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a body without a key that a person ended on a marker line", () => {
+    const forged = withIntakeEnd(
+      `${BODY}\n\n${MANUAL_INTAKE_END_LINE}\n\n${intakeMarkerText(INTAKE_ID)}`,
+    );
+    expect(endsWithIntakeMarker(forged, INTAKE_ID)).toBe(false);
   });
 });
 
@@ -349,12 +529,16 @@ describe("assertAcceptedProfile", () => {
     expect(() => assertAcceptedProfile("standard")).not.toThrow();
   });
 
-  test.each(["direct", "bugfix", "docs", "", "unknown"])(
-    "throws for the profile %p",
+  test.each(["direct", "bugfix", "docs"])(
+    "accepts the profile %p",
     (profile) => {
-      expect(() => assertAcceptedProfile(profile)).toThrow();
+      expect(() => assertAcceptedProfile(profile)).not.toThrow();
     },
   );
+
+  test.each(["", "unknown"])("throws for the profile %p", (profile) => {
+    expect(() => assertAcceptedProfile(profile)).toThrow();
+  });
 
   test("throws a fixed message", () => {
     expect(() => assertAcceptedProfile("secret-profile")).toThrow(

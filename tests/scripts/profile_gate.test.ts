@@ -58,12 +58,12 @@ describe("requiredApprovals", () => {
     expect(NOT_STANDARD.length).toBeGreaterThan(0);
   });
 
-  test.each(NOT_STANDARD)(
-    "requires both approvals for %s, which is not accepted",
-    (profile) => {
-      expect(requiredApprovals(profile)).toEqual(BOTH_REQUIRED);
-    },
-  );
+  test.each(NOT_STANDARD)("skips both approvals for %s", (profile) => {
+    expect(requiredApprovals(profile)).toEqual({
+      requirements: false,
+      design: false,
+    });
+  });
 
   test.each([
     "",
@@ -81,22 +81,55 @@ describe("requiredApprovals", () => {
 });
 
 describe("ACCEPTED_PROFILES", () => {
-  test("is exactly standard", () => {
-    expect([...ACCEPTED_PROFILES]).toEqual(["standard"]);
+  test("is exactly the four profiles", () => {
+    expect([...ACCEPTED_PROFILES]).toEqual([
+      "standard",
+      "direct",
+      "bugfix",
+      "docs",
+    ]);
   });
 
   test("is written as that literal", () => {
     expect(codeOf("lib/profile.ts")).toMatch(
-      /\bACCEPTED_PROFILES\s*=\s*\[\s*"standard"\s*\]\s*;/,
+      /\bACCEPTED_PROFILES\s*=\s*\[\s*"standard",\s*"direct",\s*"bugfix",\s*"docs"\s*\]\s*;/,
     );
   });
 
-  test.each(WORK_ITEM_PROFILES.filter((profile) => profile !== "standard"))(
-    "does not list %s",
+  test.each(WORK_ITEM_PROFILES)(
+    "lists %s, which the database allows",
     (profile) => {
-      expect(ACCEPTED_PROFILES).not.toContain(profile);
+      expect(ACCEPTED_PROFILES).toContain(profile);
     },
   );
+});
+
+describe("the table of lib/profile.ts", () => {
+  test("requires both approvals for standard", () => {
+    expect(codeOf("lib/profile.ts")).toMatch(
+      /\bstandard:\s*\{\s*requirements:\s*true,\s*design:\s*true\s*\}/,
+    );
+  });
+
+  test.each(["direct", "bugfix", "docs"])(
+    "skips both approvals for %s in that literal form",
+    (profile) => {
+      expect(codeOf("lib/profile.ts")).toMatch(
+        new RegExp(
+          `\\b${profile}:\\s*\\{\\s*requirements:\\s*false,\\s*design:\\s*false\\s*\\}`,
+        ),
+      );
+    },
+  );
+
+  test("has no row for another key", () => {
+    const table = /const TABLE[^=]*=\s*\{([\s\S]*?)\};/.exec(
+      codeOf("lib/profile.ts"),
+    );
+    expect(
+      [...(table?.[1] ?? "").matchAll(/(\w+):\s*\{/g)].map((m) => m[1]),
+    ).toEqual(["standard", "direct", "bugfix", "docs"]);
+  });
 });
 
 describe("lib/profile.ts", () => {
@@ -455,6 +488,117 @@ describe("the implement finish", () => {
         codeOf("steps/implement_finish.ts"),
       ),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 承認を省く進め方を開ける入口
+// ---------------------------------------------------------------------------
+
+describe("the approvals skipped by implement_prepare", () => {
+  test("are skipped only by the requirements flag of the table", () => {
+    const code = codeOf("steps/implement_prepare.ts");
+    const flagged = code.match(/\brequirementsRequired\b/g) ?? [];
+    const skipsByOtherProfileTest =
+      /workItem\.profile\s*(?:[=!]==?|\.includes|\.startsWith)/.test(code);
+    expect([
+      /\brequirementsRequired:\s*requiredApprovals\(\s*workItem\.profile\s*\)\.requirements\b/.test(
+        code,
+      ),
+      flagged.length >= 2,
+      skipsByOtherProfileTest,
+    ]).toEqual([true, true, false]);
+  });
+});
+
+describe("the callers of startImplement in the manual intake", () => {
+  const INTAKE_SOURCES = productionSources().filter((path) =>
+    /(^|\/)manual_intake/.test(path),
+  );
+
+  test("are only the register step", () => {
+    const callers = INTAKE_SOURCES.filter((path) =>
+      /(?<![\w$.])startImplement\(/.test(codeOf(path)),
+    );
+    expect(callers).toEqual(["steps/manual_intake_register.ts"]);
+  });
+
+  test("the register step calls it only for a profile that skips the requirements approval", () => {
+    expect(codeOf("lib/manual_intake_support.ts")).toMatch(
+      /function skipsApprovals\(profile\)\s*\{\s*return !requiredApprovals\(profile\)\.requirements;\s*\}/,
+    );
+  });
+
+  test("the register step picks the path by skipsApprovals", () => {
+    const code = codeOf("steps/manual_intake_register.ts");
+    const entry = code.slice(code.indexOf("async function main("));
+    expect(entry).toContain("skipsApprovals(profile)");
+  });
+
+  test("the register step moves the work item from picked to implementing", () => {
+    expect(codeOf("steps/manual_intake_register.ts")).toMatch(
+      /"picked",\s*"implementing"/,
+    );
+  });
+});
+
+describe("the callers that hand a profile to a new work item", () => {
+  const INSERT_CALL = /\b(?:insertWorkItem|insertIssueWorkItemUnlessActive)\b/;
+
+  test("are only the register step", () => {
+    const callers = productionSources()
+      .filter((path) => path !== "lib/db.ts")
+      .filter((path) => {
+        const code = codeOf(path);
+        return (
+          INSERT_CALL.test(code) && /(?<![\w$.])profile:\s*[^,\n]/.test(code)
+        );
+      });
+    expect(callers).toEqual(["steps/manual_intake_register.ts"]);
+  });
+
+  test("poll_issues inserts its work item without a profile, so it stays standard", () => {
+    const code = codeOf("poll_issues.ts");
+    const start = code.indexOf("registered = await deps.insertWorkItem(");
+    const end = code.indexOf("});", start);
+    expect(code.slice(start, end)).not.toMatch(/\bprofile\b/);
+  });
+
+  test("the insert statements write the profile column", () => {
+    const code = codeOf("lib/db.ts");
+    const columns = code.match(
+      /conflict_check_id, conflict_episode, profile\b/g,
+    );
+    expect(columns?.length).toBe(2);
+  });
+});
+
+describe("the products of the preparation for an issue as the specification", () => {
+  test("implement_prepare makes the issue specification kind", () => {
+    expect(codeOf("steps/implement_prepare.ts")).toMatch(/spec_kind:/);
+  });
+
+  test("the implement prompt branches on the specification kind", () => {
+    expect(codeOf("lib/prompts.ts")).toMatch(/\bspecKind === "issue"/);
+  });
+
+  test("the implement finish stops a protected change before it pushes", () => {
+    const code = codeOf("steps/implement_finish.ts");
+    const decided = code.indexOf("decideProtectedPathReroute(");
+    const pushed = code.indexOf("await commitAndPush({");
+    expect(decided >= 0 && pushed > decided).toBe(true);
+  });
+
+  test("the skill describes the input kinds", () => {
+    expect(
+      readFileSync(
+        join(
+          import.meta.dir,
+          "../../.claude/skills/factory-implementation/SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).toContain("## 入力の種類");
   });
 });
 

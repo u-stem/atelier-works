@@ -5,6 +5,9 @@ import type { SqlRow } from "../../f/factory/lib/db.ts";
 import {
   computeIntakeContentHash,
   intakeMarkerText,
+  MANUAL_INTAKE_END_LINE,
+  withIntakeEnd,
+  withIntakeMarker,
 } from "../../f/factory/lib/manual_intake_support.ts";
 import {
   buildManualIntakeIssueBody,
@@ -85,6 +88,22 @@ describe("the entry point of the issue creation", () => {
     expect(code.slice(0, code.indexOf("github_token"))).toContain(
       "assertAcceptedProfile(profile)",
     );
+  });
+
+  test("requires the intake key of an approval-free profile before it reads the config", () => {
+    expect(code.slice(0, code.indexOf("factory_config"))).toContain(
+      "assertIntakeKeyForProfile(profile, key)",
+    );
+  });
+
+  test("checks the implementation switch before it reads the token", () => {
+    expect(code.slice(0, code.indexOf("github_token"))).toContain(
+      "assertImplementEnabledForProfile(profile, config.implement_enabled)",
+    );
+  });
+
+  test("creates the labeled issue only for a profile that approvals gate", () => {
+    expect(code).toMatch(/labels:\s*skipsApprovals\(profile\)\s*\?\s*\[\]/);
   });
 });
 
@@ -188,6 +207,8 @@ function harness(
     row?: IntakeKeyRow | null;
     stale?: boolean;
     existing?: CreatedIssue | null;
+    /** 見つかったIssueの本文。省くと、キーの目印で終わる本文になる。 */
+    existingBody?: string;
     createFails?: boolean;
   } = {},
 ): Harness {
@@ -203,7 +224,16 @@ function harness(
     findIssue: (markerText, since) => {
       events.push("find");
       searched.push({ markerText, since });
-      return Promise.resolve(options.existing ?? null);
+      return Promise.resolve(
+        options.existing === undefined || options.existing === null
+          ? null
+          : {
+              ...options.existing,
+              body:
+                options.existingBody ??
+                withIntakeMarker("### 目的\n\nDo it", INTAKE_ID),
+            },
+      );
     },
     createIssue: (title, body) => {
       events.push("create");
@@ -229,8 +259,28 @@ describe("an input without an intake key", () => {
     const { deps, created } = harness();
     await createManualIntakeIssue(INPUT, deps);
     expect(created.map((issue) => issue.body)).toEqual([
-      buildManualIntakeIssueBody(INPUT),
+      withIntakeEnd(buildManualIntakeIssueBody(INPUT)),
     ]);
+  });
+
+  test("ends the issue body on the end line", async () => {
+    const { deps, created } = harness();
+    await createManualIntakeIssue(INPUT, deps);
+    expect(created[0]?.body.endsWith(MANUAL_INTAKE_END_LINE)).toBe(true);
+  });
+
+  test("ends the body even when the person ended the text on a marker line", async () => {
+    const { deps, created } = harness();
+    await createManualIntakeIssue(
+      {
+        ...INPUT,
+        acceptance_criteria: `x\n${intakeMarkerText(INTAKE_ID)}`,
+      },
+      deps,
+    );
+    expect(created[0]?.body.endsWith(`\n\n${MANUAL_INTAKE_END_LINE}`)).toBe(
+      true,
+    );
   });
 
   test("does not touch the table", async () => {
@@ -260,6 +310,7 @@ describe("an input without an intake key", () => {
       title: "Add a widget",
       body: buildManualIntakeIssueBody(INPUT),
       reused: false,
+      profile: "standard",
     });
   });
 });
@@ -307,11 +358,18 @@ describe("the first input with an intake key", () => {
     expect(searched[0]?.since).toEqual(NOW);
   });
 
-  test("ends the issue body on the marker line", async () => {
+  test("ends the issue body on the end line, a blank line, and the marker line", async () => {
     const { deps, created } = harness();
     await createManualIntakeIssue(KEYED, deps);
     expect(created[0]?.body).toBe(
-      `${buildManualIntakeIssueBody(INPUT)}\n\n<!-- factory:intake:${INTAKE_ID} -->`,
+      `${buildManualIntakeIssueBody(INPUT)}\n\n${MANUAL_INTAKE_END_LINE}\n\n<!-- factory:intake:${INTAKE_ID} -->`,
+    );
+  });
+
+  test("returns the key it used", async () => {
+    const { deps } = harness();
+    expect((await createManualIntakeIssue(KEYED, deps)).intake_key).toBe(
+      INTAKE_ID,
     );
   });
 
@@ -370,6 +428,14 @@ describe("a resend of an input that already created its issue", () => {
       repo: "widgets",
       number: 17,
       reused: true,
+    });
+  });
+
+  test("returns the profile and the key of the input for a reuse", async () => {
+    const { deps } = harness({ row: DONE });
+    expect(await createManualIntakeIssue(KEYED, deps)).toMatchObject({
+      profile: "standard",
+      intake_key: INTAKE_ID,
     });
   });
 
@@ -536,6 +602,17 @@ describe("a resend after an old reservation", () => {
     });
     await createManualIntakeIssue(KEYED, deps);
     expect(store.row?.issue_number).toBe(33);
+  });
+
+  test("creates the issue when the body of the found issue does not end on the end line", async () => {
+    const { deps, created } = harness({
+      row: keyRow(),
+      stale: true,
+      existing: { number: 33, htmlUrl: "https://github.com/o/r/issues/33" },
+      existingBody: `### 目的\n\nx\n\n${intakeMarkerText(INTAKE_ID)}`,
+    });
+    await createManualIntakeIssue(KEYED, deps);
+    expect(created).toHaveLength(1);
   });
 
   test("registers the issue that the marker finds", async () => {
