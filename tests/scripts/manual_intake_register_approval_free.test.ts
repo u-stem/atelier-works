@@ -236,19 +236,13 @@ describe("registerApprovalFreeIntake refusals", () => {
     );
   });
 
-  test("throws when the issue address is not the address of the issue", async () => {
-    const { deps } = harness();
-    await expect(
-      registerApprovalFreeIntake(
-        {
-          ...INPUT,
-          issueUrl: issueHtmlUrl("someone", "widgets", 41),
-        },
-        deps,
-      ),
-    ).rejects.toThrow(
-      "manual_intake: the intake key does not match the request",
+  test("does not check the issue address of the input", async () => {
+    const { deps, inserted } = harness();
+    await registerApprovalFreeIntake(
+      { ...INPUT, issueUrl: "https://example.test/not-the-issue" },
+      deps,
     );
+    expect(inserted).toHaveLength(1);
   });
 
   test("inserts nothing for a body that does not match", async () => {
@@ -458,6 +452,42 @@ describe("registerApprovalFreeIntake when another work item is active", () => {
     const { deps, started } = harness({ insertResult: null });
     await registerApprovalFreeIntake(INPUT, deps);
     expect(started).toEqual([]);
+  });
+});
+
+describe("registerApprovalFreeIntake for names that GitHub spells differently", () => {
+  const MIXED = { owner: "Octo-Owner", repo: "Widgets" };
+  const MIXED_FIELDS = { ...FIELDS, ...MIXED };
+  const MIXED_INPUT = {
+    ...INPUT,
+    ...MIXED,
+    // GitHubが返すURLは、正規の綴り(小文字)である。入力の綴りとは違いうる。
+    issueUrl: "https://github.com/octo-owner/widgets/issues/41",
+  };
+  const MIXED_ROW = rowWith({
+    ...MIXED,
+    content_hash: computeIntakeContentHash(MIXED_FIELDS),
+  });
+
+  test("registers although the address that GitHub returned is spelled in lower case", async () => {
+    const { deps, inserted } = harness({ row: MIXED_ROW });
+    await registerApprovalFreeIntake(MIXED_INPUT, deps);
+    expect(inserted).toHaveLength(1);
+  });
+
+  test("stores the address built from the names of the request", async () => {
+    const { deps, inserted } = harness({ row: MIXED_ROW });
+    await registerApprovalFreeIntake(MIXED_INPUT, deps);
+    expect(inserted[0]?.issue_url).toBe(
+      issueHtmlUrl("Octo-Owner", "Widgets", 41),
+    );
+  });
+
+  test("returns the address built from the names of the request", async () => {
+    const { deps } = harness({ row: MIXED_ROW });
+    expect(await registerApprovalFreeIntake(MIXED_INPUT, deps)).toMatchObject({
+      issue_url: issueHtmlUrl("Octo-Owner", "Widgets", 41),
+    });
   });
 });
 
