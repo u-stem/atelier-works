@@ -418,7 +418,8 @@ jobs:
     # ビルドしたConsoleをChromiumで開き、アクセシビリティを自動で検査する。
     # axe-coreでWCAG 2.0と2.1のAとAAの規則を、テーマ(ライト、ダーク)と画面の状態ごとに見る。
     # TabとEscapeの実操作で、スキップのリンク、Tabの順序、ダイアログ、遷移後のフォーカスも確かめる。
-    # 配信物は上げない。組み立ての手順は`console`ジョブと同じ(一致はテストが確かめる)。
+    # 配信物は上げない。CheckoutからBuildまでの手順は`console`ジョブと同じで、テストが一致を確かめる。
+    # draw.ioのビューアは取得しないので、検査するdistには含まれない(図を埋め込む画面は実物の形で見ない)。
     # APIは検査が固定の値で受けるので、WindmillにもGitHubにも繋がない。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.console != 'false' }}
