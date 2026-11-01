@@ -42,7 +42,9 @@ import {
   assertImplementEnabledForProfile,
   assertIntakeKey,
   assertIntakeKeyForProfile,
+  buildPostedIssueBody,
   computeIntakeContentHash,
+  issueHtmlUrl,
   normalizeIntakeKey,
   skipsApprovals,
 } from "../lib/manual_intake_support.ts";
@@ -275,7 +277,7 @@ export type ApprovalFreeIntakeInput = {
   readonly issueNumber: number;
   readonly issueUrl: string;
   readonly title: string;
-  /** 作業項目の本文になる、組み立て済みのIssueの本文(目印と区切りの行を含まない)。 */
+  /** 作業項目の本文になる、Issueを作るステップが投稿した本文(区切りの行と目印を含む)。登録が組み立て直して照合する。 */
   readonly body: string;
   readonly viewerLogin: string;
   readonly profile: string;
@@ -328,8 +330,10 @@ const KEY_MISMATCH_MESSAGE =
  *   フローを直接実行する経路でも、Issueを作ったステップの検査に頼らないためである。
  * - キーの表の行が、引数のリポジトリ、Issueの番号、進め方を含む内容のハッシュと一致する。
  *   進め方を差し替えた登録は、ハッシュが合わず断られる。
- * 再利用したIssueは、作業項目がまだ1件も無いときだけ登録する。
- * 終端の作業項目があるIssueで、新しいサイクルを始めない。
+ * - 作業項目の本文とIssueのURLが、入力とキーから組み立て直した値と一致する。
+ *   本文は、Issueを作るステップが投稿した本文そのものでなければならない。
+ * Issueに作業項目が1件でもあれば、再利用か新規かにかかわらず登録しない。
+ * 終端の作業項目があるIssueで、新しいサイクルを始めないためである。
  * 取得は挿入で決まる。稼働中の作業項目が既にあって挿入されなければ、取得を失ったものとして何も始めない。
  * 検査に通らないときは例外を投げる。フローの失敗として`on_error_flow`が知らせる。
  */
@@ -356,6 +360,15 @@ export async function registerApprovalFreeIntake(
 
   const row = await deps.readIntakeKey(key);
   if (
+    input.body !==
+      buildPostedIssueBody(
+        {
+          body: input.intakeBody,
+          acceptance_criteria: input.acceptanceCriteria,
+        },
+        key,
+      ) ||
+    issueUrl !== issueHtmlUrl(owner, repo, issueNumber) ||
     row === null ||
     row.issue_number !== issueNumber ||
     row.owner !== owner ||
@@ -378,8 +391,14 @@ export async function registerApprovalFreeIntake(
     throw new Error(`manual_intake: ${ownerGate.reason}`);
   }
 
+  // 取得済みのIssueには、新しいサイクルを始めない。再利用か新規かにかかわらず、作業項目の有無だけで決める。
+  // 再利用かどうかは、ログの区別にだけ使う。
   const cycle = await deps.nextCycle(owner, repo, issueNumber);
-  if (input.reused && cycle !== 1) {
+  if (cycle !== 1) {
+    deps.log.info("manual intake found a work item for the issue", {
+      target: `${owner}/${repo}#${String(issueNumber)}`,
+      reused: input.reused,
+    });
     return manualIntakeSkippedResult(
       issueNumber,
       issueUrl,

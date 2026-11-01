@@ -492,13 +492,14 @@ FactoryがIssueを作成し、ラベルで投入したときと同じ要件定�
 ### 承認を省く進め方の投入
 
 進め方`direct`、`bugfix`、`docs`は、要件定義と設計の承認を省き、Issueの本文を仕様にして実装を直接始める。
-Consoleの画面は進め方を送らないので、これらの進め方の投入は、Windmillで手動投入のフローを直接実行する。
+Consoleの画面は進め方を送らないので、これらの進め方の投入は、Windmillで`manual_intake_submit`を実行する。
+引数は`owner`、`repo`、`title`、`body`、`acceptance_criteria`、`profile`、`intake_key`で、`profile`に進め方、`intake_key`にキーを渡す。
 
 投入の前に、次を確かめる。
-どれかが欠けると、フローは、Issueを作る前に失敗する。
+どれかが欠けると、`manual_intake_submit`は、フローを起動せず、断りの理由を結果で返す。
 
-- 実装の停止スイッチ(`implement_enabled`)が真である。偽だと`implement_disabled`で失敗する。
-- `intake_key`に、小文字のUUIDを入れる。無いと`intake_key_required`で失敗する。
+- 実装の停止スイッチ(`implement_enabled`)が真である。偽だと`implement_disabled`で断られる。
+- `intake_key`に、小文字のUUIDを入れる。無いと`intake_key_required`で断られる。
   同じ投入を再実行するときは、同じキーを使う。
 - 対象のリポジトリが許可リストにあり、オーナーのIDの照合を通る。
 
@@ -509,6 +510,7 @@ Discordの`issue_claimed`の通知は届かない。
 投入の結果は、Consoleの作業項目の一覧で確かめる。
 実装フローの起動に失敗すると、作業項目は`needs_human`になり、noticeとDiscordに出る。
 `implementing`へ移す更新が失敗したときは、作業項目が`picked`のまま残る。
+実装フローのジョブIDを記録できなかったときは、`implementing`のまま残る。
 `poll_issues`の照合が、猶予(10分と`claude_timeout_sec`の2倍の大きい方)を過ぎて失敗に移す。失敗に移るまで待ち、通知に従って対応する。
 
 PRのレビューとマージは人が行う。承認を省いたPRにも、人のレビューは強制されない。

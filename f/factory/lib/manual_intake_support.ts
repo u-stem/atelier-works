@@ -171,19 +171,29 @@ export function withIntakeMarker(body: string, key: string): string {
   return `${withIntakeEnd(body)}\n\n${intakeMarkerText(key)}`;
 }
 
+/**
+ * GitHubに投稿するIssueの本文を組み立てる。キーが無ければ区切りの行で、あれば区切りの行と目印で終える。
+ * 作業項目の本文にも、この値をそのまま保存する。
+ * 承認の前の確認が、作業項目の本文と現在のIssueの本文を比べるので、投稿した本文と食い違うと、承認が常に断られる。
+ * Issueを作るステップと登録のステップが、同じ式で組み立てる。
+ */
 export function buildPostedIssueBody(
-  _input: ManualIntakeIssueInput,
-  _key: string | undefined,
+  input: ManualIntakeIssueInput,
+  key: string | undefined,
 ): string {
-  return "";
+  const assembled = buildManualIntakeIssueBody(input);
+  return key === undefined
+    ? withIntakeEnd(assembled)
+    : withIntakeMarker(assembled, key);
 }
 
+/** GitHubのIssueの画面のURL。Issueを作るステップと登録のステップが、同じ式で組み立てる。 */
 export function issueHtmlUrl(
-  _owner: string,
-  _repo: string,
-  _issueNumber: number,
+  owner: string,
+  repo: string,
+  issueNumber: number,
 ): string {
-  return "";
+  return `https://github.com/${owner}/${repo}/issues/${String(issueNumber)}`;
 }
 
 /**
@@ -384,11 +394,7 @@ export function validateManualIntake(
   ) {
     return { ok: false, reason: "invalid_body_chars" };
   }
-  const assembled = buildManualIntakeIssueBody(input);
-  const issueBody =
-    intakeKey === undefined
-      ? withIntakeEnd(assembled)
-      : withIntakeMarker(assembled, intakeKey);
+  const issueBody = buildPostedIssueBody(input, intakeKey);
   if (codePointLength(issueBody) > MANUAL_INTAKE_BODY_MAX_CHARS) {
     return { ok: false, reason: "body_too_long" };
   }

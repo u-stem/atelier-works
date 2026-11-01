@@ -25,15 +25,15 @@ import {
   assertIntakeKey,
   assertIntakeKeyForProfile,
   buildManualIntakeIssueBody,
+  buildPostedIssueBody,
   computeIntakeContentHash,
   endsWithIntakeMarker,
   intakeMarkerText,
+  issueHtmlUrl,
   type ManualIntakeFields,
   type ManualIntakeIssueInput,
   normalizeIntakeKey,
   skipsApprovals,
-  withIntakeEnd,
-  withIntakeMarker,
 } from "../lib/manual_intake_support.ts";
 import {
   repoOwnerGateDeps,
@@ -62,6 +62,7 @@ export type ManualIntakeCreateIssueResult = {
   /** `reused`のときは、キーの表の所有者・リポジトリ・番号から組み立てる。登録のステップが使う。 */
   readonly htmlUrl: string;
   readonly title: string;
+  /** GitHubに投稿した本文そのもの(区切りの行と、キーがあれば目印を含む)。作業項目の本文になる。 */
   readonly body: string;
   /** 同じ冪等キーの最初の投入が作ったIssueを返したか。 */
   readonly reused: boolean;
@@ -124,7 +125,8 @@ export async function createManualIntakeIssue(
   input: ManualIntakeFields,
   deps: ManualIntakeIssueDeps,
 ): Promise<ManualIntakeCreateIssueResult> {
-  const issueBody = buildManualIntakeIssueBody(input);
+  // 投稿する本文そのものを、作業項目の本文として返す。承認の前の確認が、現在のIssueの本文と比べるためである。
+  const issueBody = buildPostedIssueBody(input, input.intake_key);
   const outcome = (issue: CreatedIssue): ManualIntakeCreateIssueResult => ({
     owner: input.owner,
     repo: input.repo,
@@ -139,9 +141,7 @@ export async function createManualIntakeIssue(
 
   const key = input.intake_key;
   if (key === undefined) {
-    return outcome(
-      await deps.createIssue(input.title, withIntakeEnd(issueBody)),
-    );
+    return outcome(await deps.createIssue(input.title, issueBody));
   }
   assertIntakeKey(key);
 
@@ -173,7 +173,7 @@ export async function createManualIntakeIssue(
         owner: row.owner,
         repo: row.repo,
         number: row.issue_number,
-        htmlUrl: `https://github.com/${row.owner}/${row.repo}/issues/${String(row.issue_number)}`,
+        htmlUrl: issueHtmlUrl(row.owner, row.repo, row.issue_number),
         title: input.title,
         body: issueBody,
         reused: true,
@@ -192,9 +192,7 @@ export async function createManualIntakeIssue(
     found !== null && endsWithIntakeMarker(found.body, key)
       ? { number: found.number, htmlUrl: found.htmlUrl }
       : null;
-  const issue =
-    existing ??
-    (await deps.createIssue(input.title, withIntakeMarker(issueBody, key)));
+  const issue = existing ?? (await deps.createIssue(input.title, issueBody));
   const recorded = await store.recordIssue(key, holder, issue.number);
   if (!recorded) {
     deps.log.warn("manual intake could not record the issue number", {

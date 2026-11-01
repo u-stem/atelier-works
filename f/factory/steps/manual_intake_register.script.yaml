@@ -13,7 +13,7 @@ schema:
       originalType: string
     body:
       type: string
-      description: 作成されたIssueの本文。
+      description: Issueを作るステップが投稿した本文。作業項目の本文になる。
       default: null
       originalType: string
     intake_body:

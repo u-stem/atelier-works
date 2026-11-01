@@ -386,9 +386,8 @@ describe("the first input with an intake key", () => {
 
   test("returns the body that it posted, with the end line and the marker", async () => {
     const { deps, created } = harness();
-    expect((await createManualIntakeIssue(KEYED, deps)).body).toBe(
-      created[0]?.body,
-    );
+    const result = await createManualIntakeIssue(KEYED, deps);
+    expect([result.body]).toEqual(created.map((issue) => issue.body));
   });
 
   test("returns the number even when it could not record it", async () => {
