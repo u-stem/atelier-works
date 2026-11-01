@@ -240,8 +240,10 @@ describe("the metadata job", () => {
   });
 });
 
+// artifactは名前の完全一致で許す。Factoryはmetadata-patchを名前で指定して読む。
+// playwright-reportは、console-a11yが失敗したときだけ上がる、固定のデータの検査の記録である。
 describe("the artifacts of ci.yml", () => {
-  test("uploads only the metadata patch", () => {
+  test("uploads only the metadata patch and the Playwright report", () => {
     const names: unknown[] = [];
     for (const job of Object.values(recordAt(ci, "jobs"))) {
       if (!isRecord(job)) {
@@ -257,6 +259,6 @@ describe("the artifacts of ci.yml", () => {
       }
     }
 
-    expect(names).toEqual(["metadata-patch"]);
+    expect(names.sort()).toEqual(["metadata-patch", "playwright-report"]);
   });
 });

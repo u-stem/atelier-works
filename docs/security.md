@@ -53,11 +53,51 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 
 - `main`の削除とforce pushを禁止する。
 - `main`への変更はPRを必須にする。承認は0件でよく、人のレビューをGitHubが強制するわけではない。
-- 必須チェックは`scope`、`check`、`test-db`、`metadata`、`console`、`caddyfile`、`console-fetcher-image`である。条件付きのジョブは、スキップされると通過として扱われる。
+- 必須チェックは`scope`、`check`、`test-db`、`metadata`、`console`、`console-a11y`、`caddyfile`、`console-fetcher-image`である。条件付きのジョブは、スキップされると通過として扱われる。
 - 設定を迂回できるのは、管理者のロールだけである。迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
 
 迂回すると、`check`などの必須チェックが失敗していてもPRをマージできる。
 運用者は、迂回を使わず、必須チェックが成功してからマージする。
+
+必須チェックを足すときは、そのジョブが`main`の`ci.yml`に入ってから、rulesetの一覧を更新する。
+先に更新すると、そのジョブを持たない古い`main`から分かれたPRが、出ないチェックを待ち続けてマージできない。
+ジョブを足すPR自身は、一覧を更新する前にマージする。
+更新は、マージの後にClaudeが行う。次の順に進める。
+
+射影には、次の`jq`を使う。
+読み取り専用のフィールドを外し、書き込めるフィールドだけを残すためである。
+
+```sh
+jq '{name, target, enforcement, bypass_actors, conditions, rules}' <応答のファイル>
+```
+
+1. `gh api repos/<owner>/<repo>/rulesets`で、名前が`protect-main`のrulesetの`id`を読む。
+2. `gh api repos/<owner>/<repo>/rulesets/<id>`で全体を読み、応答のファイルは書き換えずに残す。
+編集の前に、そのファイルを前置きの`jq`で射影し、`before.json`として保存する。
+書き戻した後の比較に使うためである。
+続けて応答のファイルをコピーし、コピーの`required_status_checks`に足すチェックを、既存の項目と同じ形で加える。
+既存の項目に`integration_id`があれば同じ値を付け、`context`だけなら`context`だけを足す。
+形が違うと、別のアプリが出したチェックだけを受け付ける項目になり、待ち続けることがある。
+他の規則と迂回の設定は変えない。
+3. 手順2で編集したコピーを前置きの`jq`で射影する。
+射影したファイルを、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。
+`id`、`source`、`_links`、`created_at`、`updated_at`、`current_user_can_bypass`などは読み取り専用なので、射影で外れる。
+残すと、拒否されるか意図しない変更になる。
+4. `gh api repos/<owner>/<repo>/rules/branches/main`を読み、一覧にチェック名が載ったことを確かめる。
+あわせて、書き戻しで他が変わっていないことを確かめる。
+もう一度`rulesets/<id>`を読み、前置きの`jq`で射影して、`before.json`と`diff`で比べる。
+差が`required_status_checks`に足した1項目だけでなければ失敗とする。
+差が空のときも失敗に含める。
+失敗したときは、`before.json`を手順3と同じ`gh api --method PUT`の`--input`に渡して書き戻し、元の状態に戻す。
+戻したら、運用者に報告する。
+
+一覧を更新したら、更新の前に分かれたPRは、`main`を取り込むまで新しいチェックが出ずに待つ。
+更新の後に開く新しいPRと、`main`を取り込んだPRには、新しいチェックが出る。
+
+マージの後に開いているdependabotのPRがあれば、`@dependabot rebase`とコメントして、新しいチェックを出させる。
+Factory自身のリポジトリのPRは、rulesetでなく、Factory内部の固定の一覧で必須チェックを判定する。
+この一覧は、マージの後に`self_update`が反映すると増える。
+マージの前にCIが走ったPRは、新しいチェックが出ないので、待ちになる。
 
 タグはrulesetの`protect-tags`で保護する。
 対象はすべてのタグで、作成、更新、削除を禁止する。
@@ -104,6 +144,10 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 トークンを`gh`に渡すのは`main`へのpushの実行だけで、PRの実行には渡さない。
 `metadata`ジョブも権限を足さない。
 失敗したときに限り、PRの実行でartifactを上げる([CIのメタデータの再生成](#ciのメタデータの再生成))。
+`console-a11y`ジョブも権限を足さない。
+失敗したときに限り、Playwrightのレポート(`playwright-report`)を3日間だけ上げる。
+レポートは、検査が固定の値で受けた画面の記録だけである。
+秘密値と実データは含まない。
 
 `console-dist.yml`の既定の権限も、`contents: read`だけである。
 ジョブは権限を足さない。
@@ -1078,6 +1122,16 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   印に持ち主の識別子は無い。期限を超える処理と取り直した処理は、理論上は重なりうる。
 - `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
+- `ci.yml`の`console-a11y`ジョブが使うPlaywrightのブラウザは、ハッシュで照合しない。HTTPSで公式の取得元(`cdn.playwright.dev`、予備に`playwright.download.prss.microsoft.com`)から取る。取得元かその通信が侵害されると、改ざんされたブラウザが動く。
+  受け入れる理由は、このジョブが`contents: read`の権限だけを持ち、秘密値と配信物を扱わず、PRの実行だけで動くためである。
+  キャッシュのトークン(`ACTIONS_RUNTIME_TOKEN`)は、`permissions`と関係なく全ジョブに渡る。
+  そのため、`main`のpushで動かすと、`main`の範囲のキャッシュ(`console-dist.yml`が復元するビューアのキャッシュ)へ書く経路ができる。
+  `main`の実行では、このジョブを飛ばす。
+  ブラウザはキャッシュせず、毎回取得する。照合しないキャッシュを、`main`の実行が書いてPRの実行が読む経路を作らないためである。
+- e2eの依存(`@playwright/test`、`@axe-core/playwright`、`axe-core`)は、`console/package.json`にある。そのため、配信するジョブ(`console-dist.yml`と`ci.yml`の`console`ジョブ)の`node_modules`に入る。
+  インストールは`--ignore-scripts`で行うので、install scriptは動かない。
+  `vite build`はこの3つを読み込まないので、配布物には入らない。
+  別の`package.json`に分けると、lockfileの検査とdependabotの設定が二重になる。そのため、分けない。
 - 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存に及ぶ。`ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。組み立ての手順は`console-dist.yml`に直接書き、composite actionに分けない。`console-dist.yml`を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。
 - 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。`console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。
 - `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。`ci.yml`が実行中のcommitは、成功するまで取り込まない。
@@ -3119,7 +3173,7 @@ Discordのwebhookには`allowed_mentions`を空にして送り、本文からの
 
 目標のコミットは、必須チェックが通っていなければ反映しない。
 判定は、GitHubのAPIの応答から行う。
-必須チェックは、[mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開)の7つと同じである。
+必須チェックは、[mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開)の8つと同じである。
 必須チェックの一覧は`scripts/host_apply/constants.ts`にある。
 `tests/scripts/host_apply_ci.test.ts`が、一覧とこの記述、`ci.yml`のジョブ名の一致を確かめる。
 
@@ -3132,7 +3186,7 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 
 | 結果 | 判定 |
 | --- | --- |
-| 7つがすべて成功かスキップ | 通過 |
+| 8つがすべて成功かスキップ | 通過 |
 | 1つでも失敗、キャンセル、時間切れ | 拒否。ほかが走行中でも拒否する |
 | 実行が未着、走行中、チェックが欠ける、応答が読めない | 保留 |
 
@@ -6168,12 +6222,12 @@ Factoryは、原則としてPRをマージしない。
 | ロックファイル | 対象以外のエントリが変わらない。グループでは、全対象のエントリを除く([グループの更新](#グループの更新))。整合性ハッシュがnpm registryの`dist.integrity`と一致する |
 | マニフェスト | 対象の依存の版指定のほかは変わらない。scriptsなどの変更は止める |
 | install時のスクリプト | 更新先の版が、前の版に無いスクリプトか、中身の違うスクリプトを持たない。`binding.gyp`による暗黙のinstallも含む |
-| 必須チェック | `main`の必須チェック7件が、そのheadで成功かスキップである。同じ名前の実行はすべて合格を求め、GitHub Actionsから来た実行が1件以上要る |
+| 必須チェック | `main`の必須チェック8件が、そのheadで成功かスキップである。同じ名前の実行はすべて合格を求め、GitHub Actionsから来た実行が1件以上要る |
 | マージできる | GitHubがマージできると判定している。判定の途中と競合のときは待ち、待ちの上限を超えたら人に回す |
 | 公開の日数 | 更新先の版の公開から`dependabot_min_published_days`日(既定7日)以上たっている |
 | マージの設定 | `dependabot_merge_enabled`が真である。偽なら、マージの直前の確認までを行い、マージせずに人に回す |
 
-`factory_repo`の必須チェックの名前は、`main`のrulesetの7件に固定している。設定では変えられない。
+`factory_repo`の必須チェックの名前は、`main`のrulesetの8件に固定している。設定では変えられない。
 他のリポジトリの必須チェックは、設定に持たず、そのリポジトリのrulesetから読む([他のリポジトリ](#他のリポジトリ))。
 
 事実はすべて、最初に読んだheadとbaseのshaに固定して集める。
@@ -6191,7 +6245,7 @@ Factoryは、原則としてPRをマージしない。
 | --- | --- |
 | 既定で無効 | 一覧は空。`repo_allowlist`にだけ載せたリポジトリは対象にならない |
 | 名前の出典 | 必須チェックは、リポジトリのrulesetだけから導く。設定を書き換えても、リポジトリ自身のルールより弱くならない。0件、形の違い、GitHub Actions以外のAppは人に回す |
-| `factory_repo`は設定を読まない | このリポジトリの必須チェックは固定の7件で、一覧に載せても変わらない |
+| `factory_repo`は設定を読まない | このリポジトリの必須チェックは固定の8件で、一覧に載せても変わらない |
 | マージの経路が無い | 他のリポジトリは、準備のステップがcloneとインストールの前に、終了のステップが書き込みの前に人に回す。上の層がすべて破られても、マージには至らない |
 
 他のリポジトリでは、そのリポジトリのコマンドをworkerで動かさない。
