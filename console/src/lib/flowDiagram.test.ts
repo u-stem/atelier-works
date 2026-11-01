@@ -603,6 +603,7 @@ describe("the diagram without the column of entries", () => {
     ["pipeline", "scroll"],
     ["pr_fix", "scroll"],
     ["pr_review", "fit"],
+    ["pr_review_intake", "fit"],
   ];
 
   test.each(EXPECTED)(
@@ -624,6 +625,7 @@ describe("the diagram without the column of entries", () => {
       "pipeline",
       "pr_fix",
       "pr_review",
+      "pr_review_intake",
     ]);
   });
 });
