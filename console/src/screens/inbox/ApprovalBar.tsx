@@ -3,6 +3,7 @@ import { type ReactNode, useId, useState } from "react";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import {
   approvalConfirmation,
@@ -47,9 +48,9 @@ type BarProps = {
 
 function Note({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
+    <Card tag="p" variant="empty">
       {children}
-    </p>
+    </Card>
   );
 }
 
@@ -179,9 +180,11 @@ function DecideBar({
         };
 
   return (
-    <section
+    <Card
       aria-label="承認バー"
-      className="flex flex-col gap-4 rounded-xl border border-border bg-card px-5 py-4"
+      tag="section"
+      padding="default"
+      className="flex flex-col gap-4"
     >
       <h3 className="text-lead font-semibold">承認と却下</h3>
       {refreshed ? (
@@ -327,6 +330,6 @@ function DecideBar({
         <p className="text-small text-muted-foreground">{dialog.idLabel}</p>
         {dialog.body}
       </ConfirmDialog>
-    </section>
+    </Card>
   );
 }

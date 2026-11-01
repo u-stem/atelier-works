@@ -12,6 +12,7 @@ import {
   AlertDescription,
   AlertTitle,
 } from "../../components/ui/alert.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 
@@ -122,10 +123,7 @@ export function IntakeSnapshotView({
   state: IntakeSnapshotViewState;
 }) {
   return (
-    <section
-      aria-labelledby="intake-snapshot-heading"
-      className="rounded-xl border border-border bg-card"
-    >
+    <Card aria-labelledby="intake-snapshot-heading" tag="section">
       <header className="flex flex-col gap-1 border-b border-border px-5 py-3">
         <h3 id="intake-snapshot-heading" className="text-lead font-semibold">
           取り込み時点のIssue
@@ -151,7 +149,7 @@ export function IntakeSnapshotView({
       ) : (
         <SnapshotBody snapshot={state.snapshot} />
       )}
-    </section>
+    </Card>
   );
 }
 

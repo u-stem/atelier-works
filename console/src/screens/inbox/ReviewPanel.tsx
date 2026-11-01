@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { LoadingShape } from "../../components/LoadingState.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 
 /**
@@ -17,10 +18,7 @@ export function PanelShell({
   children: ReactNode;
 }) {
   return (
-    <section
-      aria-labelledby="approval-doc-heading"
-      className="rounded-xl border border-border bg-card"
-    >
+    <Card aria-labelledby="approval-doc-heading" tag="section">
       <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border px-5 py-3">
         <h3 id="approval-doc-heading" className="text-lead font-semibold">
           {heading}
@@ -35,7 +33,7 @@ export function PanelShell({
         )}
       </header>
       {children}
-    </section>
+    </Card>
   );
 }
 

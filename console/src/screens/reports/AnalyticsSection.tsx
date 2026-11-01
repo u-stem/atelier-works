@@ -7,6 +7,7 @@ import {
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
@@ -134,9 +135,13 @@ export function AnalyticsSection<T>({
               />
             ) : null}
             {rows.length === 0 ? (
-              <p className="max-w-3xl rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+              <Card
+                tag="p"
+                padding="default"
+                className="max-w-3xl text-small text-muted-foreground"
+              >
                 {emptyMessage}
-              </p>
+              </Card>
             ) : (
               children(rows)
             )}

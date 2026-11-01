@@ -6,6 +6,7 @@ import { JobLink } from "../../components/JobLink.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   describeFailure,
   FAILURE_TEXT_LIMIT,
@@ -54,7 +55,7 @@ function AuditFailureItem({
 }) {
   const description = describeFailure(failure);
   return (
-    <li className="rounded-xl border border-border bg-card p-5">
+    <Card tag="li" padding="default">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <Link
           to={workItemPath(failure.work_item_id)}
@@ -89,7 +90,7 @@ function AuditFailureItem({
           truncated={description.error.truncated}
         />
       )}
-    </li>
+    </Card>
   );
 }
 
@@ -173,7 +174,7 @@ function OrphanFailureGroupItem({
 }) {
   const pager = usePagination(group.failures.length, PAGE_SIZE, initialPage);
   return (
-    <li className="rounded-xl border border-border bg-card px-5 py-3">
+    <Card tag="li" padding="compact">
       <Disclosure
         jumpOpen={jumpOpen}
         summary={
@@ -203,7 +204,7 @@ function OrphanFailureGroupItem({
           />
         </div>
       </Disclosure>
-    </li>
+    </Card>
   );
 }
 

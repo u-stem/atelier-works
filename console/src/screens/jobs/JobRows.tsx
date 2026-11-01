@@ -27,6 +27,7 @@ import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   preferDetailState,
   type StepDetails,
@@ -239,7 +240,7 @@ export function JobList({
   stepLines?: ReadonlyMap<string, StepLine>;
 }) {
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="ul" variant="list">
       {jobs.map((job) => (
         <JobRow
           key={job.id}
@@ -252,7 +253,7 @@ export function JobList({
           }
         />
       ))}
-    </ul>
+    </Card>
   );
 }
 

@@ -8,6 +8,7 @@ import {
   SkeletonListCard,
 } from "../../components/LoadingState.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
@@ -159,8 +160,12 @@ export function SystemSection<T>({
 /** 節の本文が空のときの表示。 */
 export function EmptyNote({ children }: { children: string }) {
   return (
-    <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+    <Card
+      tag="p"
+      padding="default"
+      className="text-small text-muted-foreground"
+    >
       {children}
-    </p>
+    </Card>
   );
 }

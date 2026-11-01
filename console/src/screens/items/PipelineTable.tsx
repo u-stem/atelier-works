@@ -7,6 +7,7 @@ import { TimeText } from "../../components/TimeText.tsx";
 import { ToggleChip, ToggleChipGroup } from "../../components/ToggleChip.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import { itemsBackState } from "../../lib/breadcrumbs.ts";
@@ -384,14 +385,17 @@ export function NoMatchNotice({
   onShowAll: () => void;
 }) {
   return (
-    <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+    <Card
+      padding="default"
+      className="flex flex-col items-start gap-3 text-small text-muted-foreground"
+    >
       <p>条件に合う作業項目はありません</p>
       {hiddenMatches > 0 ? (
         <Button variant="outline" size="sm" onClick={onShowAll}>
           すべてで探す({hiddenMatches}件)
         </Button>
       ) : null}
-    </div>
+    </Card>
   );
 }
 
@@ -483,9 +487,13 @@ export function PipelineTable({
 
   if (rows.length === 0) {
     return (
-      <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+      <Card
+        tag="p"
+        padding="default"
+        className="text-small text-muted-foreground"
+      >
         作業項目はまだありません
-      </p>
+      </Card>
     );
   }
 
@@ -507,7 +515,10 @@ export function PipelineTable({
         <p className="text-small text-muted-foreground">{PR_OPEN_NOTE}</p>
       ) : null}
       {scopedRows.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+        <Card
+          padding="default"
+          className="flex flex-col items-start gap-3 text-small text-muted-foreground"
+        >
           <p>{scopeEmptyMessage(filter.scope)}</p>
           {scopeEmptyNote(filter.scope, limitReached) === null ? null : (
             <p>{scopeEmptyNote(filter.scope, limitReached)}</p>
@@ -521,7 +532,7 @@ export function PipelineTable({
               すべて({rows.length}件)を表示
             </Button>
           )}
-        </div>
+        </Card>
       ) : filtered.length === 0 ? (
         <NoMatchNotice
           hiddenMatches={outOfScopeMatchCount(rows, filter)}
@@ -538,7 +549,7 @@ export function PipelineTable({
                 backState={backState}
               />
             </div>
-            <div className="@container hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
+            <Card className="@container hidden overflow-x-auto @4xl:block">
               <table className="w-full border-collapse text-body">
                 <thead className="text-small text-muted-foreground">
                   <tr>
@@ -606,7 +617,7 @@ export function PipelineTable({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </Card>
           </div>
           <Pagination
             page={pager.page}

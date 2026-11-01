@@ -1,5 +1,6 @@
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
 import { Badge } from "../../../components/ui/badge.tsx";
+import { Card } from "../../../components/ui/card.tsx";
 import {
   DETAIL_LIMITS,
   describeFixRound,
@@ -28,7 +29,7 @@ function limitedNote(count: number, limit: number): string {
 
 function RoundCard({ round, now }: { round: RoundView; now: number }) {
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-border bg-card px-5 py-4">
+    <Card tag="li" padding="default" className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-semibold">{round.roundLabel}</span>
         <Badge variant="muted">{round.modeLabel}</Badge>
@@ -66,7 +67,7 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
           </ul>
         </div>
       )}
-    </li>
+    </Card>
   );
 }
 
@@ -123,7 +124,7 @@ function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
       heading="PRのレビュー"
       note={limitedNote(detail.reviews.length, DETAIL_LIMITS.reviews)}
     >
-      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="ul" variant="list">
         {reviews.map((review) => (
           <li
             key={review.key}
@@ -141,7 +142,7 @@ function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
             </span>
           </li>
         ))}
-      </ul>
+      </Card>
     </Panel>
   );
 }
@@ -156,7 +157,7 @@ function FixRounds({ detail, now }: { detail: WorkItemDetail; now: number }) {
       heading="PRの修正"
       note={limitedNote(detail.fix_rounds.length, DETAIL_LIMITS.fixRounds)}
     >
-      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="ul" variant="list">
         {fixRounds.map((fixRound) => (
           <li
             key={fixRound.key}
@@ -174,7 +175,7 @@ function FixRounds({ detail, now }: { detail: WorkItemDetail; now: number }) {
             </span>
           </li>
         ))}
-      </ul>
+      </Card>
     </Panel>
   );
 }

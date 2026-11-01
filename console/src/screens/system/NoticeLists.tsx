@@ -4,6 +4,7 @@ import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
 import { Disclosure } from "../../components/Disclosure.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { FAILURE_TEXT_LIMIT } from "../../lib/failureView.ts";
 import { pageSlice } from "../../lib/pagination.ts";
 import {
@@ -40,7 +41,7 @@ export function InfoNoticeList({
   }
   return (
     <div ref={pager.anchorRef} className="flex flex-col gap-3">
-      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="ul" variant="list">
         {pageSlice(notices, pager.page, PAGE_SIZE).map((notice) => {
           const row = describeInfoNotice(notice);
           return (
@@ -71,7 +72,7 @@ export function InfoNoticeList({
             </li>
           );
         })}
-      </ul>
+      </Card>
       <Pagination
         page={pager.page}
         total={notices.length}
@@ -198,11 +199,11 @@ export function ResolvedNoticeList({
   }
   return (
     <div ref={pager.anchorRef} className="flex flex-col gap-3">
-      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="ul" variant="list">
         {pageSlice(notices, pager.page, PAGE_SIZE).map((notice) => (
           <ResolvedItem key={notice.notice_id} notice={notice} now={now} />
         ))}
-      </ul>
+      </Card>
       <Pagination
         page={pager.page}
         total={notices.length}

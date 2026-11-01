@@ -4,6 +4,7 @@ import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { cn } from "../../lib/cn.ts";
 import { ROW_LINK_CLASS } from "../../lib/controlClasses.ts";
@@ -91,23 +92,35 @@ export function RequirementsIndexList({
         />
       </div>
       {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-small text-muted-foreground">
+        <Card
+          tag="p"
+          variant="empty"
+          padding="spacious"
+          className="text-center"
+        >
           要件定義はまだありません。
-        </p>
+        </Card>
       ) : visible.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-small text-muted-foreground">
+        <Card
+          tag="p"
+          variant="empty"
+          padding="spacious"
+          className="text-center"
+        >
           {emptyFilterMessage(filter)}
-        </p>
+        </Card>
       ) : (
         <div ref={pager.anchorRef} className="flex flex-col gap-3">
-          <ul
+          <Card
             aria-label="要件定義の一覧"
-            className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
+            tag="ul"
+            variant="list"
+            className="overflow-hidden"
           >
             {pageSlice(visible, pager.page, PAGE_SIZE).map((row) => (
               <IndexRow key={row.work_item_id} row={row} now={now} />
             ))}
-          </ul>
+          </Card>
           <Pagination
             page={pager.page}
             total={visible.length}

@@ -1,5 +1,6 @@
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
 import { Badge } from "../../../components/ui/badge.tsx";
+import { Card } from "../../../components/ui/card.tsx";
 import {
   describeApproval,
   sortApprovalsNewestFirst,
@@ -37,10 +38,7 @@ export function ApprovalsTab({
         ) : (
           <ul className="flex flex-col gap-3">
             {approvals.map((approval) => (
-              <li
-                key={approval.key}
-                className="overflow-hidden rounded-xl border border-border bg-card"
-              >
+              <Card key={approval.key} tag="li" className="overflow-hidden">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-5 py-3">
                   <span className="font-semibold">{approval.kindLabel}</span>
                   {approval.subject === null ? null : (
@@ -87,7 +85,7 @@ export function ApprovalsTab({
                     )}
                   </Row>
                 </dl>
-              </li>
+              </Card>
             ))}
           </ul>
         )}

@@ -11,6 +11,7 @@ import { JobLink, WindmillJobLink } from "../../components/JobLink.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { flowDiagramPath } from "../../lib/flowsData.ts";
 import {
   CAUSE_DETECTION_INTERVAL_MIN,
@@ -169,7 +170,11 @@ export function ArgList({ args }: { args: readonly ArgViewData[] }) {
     );
   }
   return (
-    <dl className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-xl border border-border bg-card px-4 py-3 text-small">
+    <Card
+      tag="dl"
+      padding="compact"
+      className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-small"
+    >
       {args.map((arg) => {
         const text = describeArg(arg);
         return (
@@ -184,7 +189,7 @@ export function ArgList({ args }: { args: readonly ArgViewData[] }) {
           </Row>
         );
       })}
-    </dl>
+    </Card>
   );
 }
 
@@ -201,7 +206,7 @@ export function StepList({
   back: BackState;
 }) {
   return (
-    <ol className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="ol" variant="list">
       {steps.map((step) => {
         const iterations = stepIterationsLabel(step.iterations);
         return (
@@ -224,7 +229,7 @@ export function StepList({
           </li>
         );
       })}
-    </ol>
+    </Card>
   );
 }
 
@@ -376,7 +381,7 @@ export function FailureCauses({
     );
   }
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="ul" variant="list">
       {failures.items.map((item) => (
         <li
           key={`${item.occurred_at}-${item.step ?? ""}-${item.job_id ?? ""}`}
@@ -400,6 +405,6 @@ export function FailureCauses({
           </p>
         </li>
       ))}
-    </ul>
+    </Card>
   );
 }

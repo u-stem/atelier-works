@@ -11,6 +11,7 @@ import {
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   type PipelineScope,
@@ -42,7 +43,7 @@ export const PIPELINE_LOADING_SHAPE: LoadingShape = {
           rowClassName="h-[12.5rem]"
           className="@4xl:hidden"
         />
-        <div className="hidden overflow-hidden rounded-xl border border-border bg-card @4xl:block">
+        <Card className="hidden overflow-hidden @4xl:block">
           <Skeleton className="h-[2.3rem] w-full rounded-none" />
           {rowIndexes(8).map((row) => (
             <div
@@ -52,7 +53,7 @@ export const PIPELINE_LOADING_SHAPE: LoadingShape = {
               <Skeleton className="h-4 w-full" />
             </div>
           ))}
-        </div>
+        </Card>
       </div>
     </>
   ),

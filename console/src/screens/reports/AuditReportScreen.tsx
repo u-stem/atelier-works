@@ -12,6 +12,7 @@ import {
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { auditProposalTotal, auditReportTitle } from "../../lib/auditView.ts";
 import { auditReportCrumbs } from "../../lib/breadcrumbs.ts";
@@ -126,9 +127,9 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
         <Breadcrumb items={auditReportCrumbs(workItemId)} />
       </PageHeader>
       <div className={DETAIL_PANEL_CLASS}>
-        <article className="max-w-3xl rounded-xl border border-border bg-card px-4 py-6 text-body md:px-8">
+        <Card tag="article" className="max-w-3xl px-4 py-6 text-body md:px-8">
           <AuditMarkdown markdown={doc.markdown} />
-        </article>
+        </Card>
       </div>
     </>
   );

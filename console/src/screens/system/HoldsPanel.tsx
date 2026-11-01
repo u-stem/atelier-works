@@ -2,6 +2,7 @@ import { TriangleAlert } from "lucide-react";
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   deployFreezeItems,
   type FailureView,
@@ -132,7 +133,7 @@ function RowList({
   items: readonly HoldItem[];
 } & Pick<PanelProps, "now" | "isLocked" | "onRequestRelease">) {
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="ul" variant="list">
       {items.map((item) => (
         <Row
           key={item.key}
@@ -142,7 +143,7 @@ function RowList({
           onRequestRelease={onRequestRelease}
         />
       ))}
-    </ul>
+    </Card>
   );
 }
 
@@ -156,9 +157,10 @@ function FailureBox({
   isFetching: boolean;
 }) {
   return (
-    <div
+    <Card
       role="alert"
-      className="flex flex-col gap-2 rounded-xl border border-warning/40 bg-warning/10 p-4"
+      padding="compact"
+      className="flex flex-col gap-2 border-warning/40 bg-warning/10"
     >
       <p className="flex items-center gap-2 text-body font-semibold text-warning">
         <TriangleAlert aria-hidden="true" className="size-4" />
@@ -189,11 +191,11 @@ function FailureBox({
           </Button>
         </div>
       ) : null}
-    </div>
+    </Card>
   );
 }
 
-function Card({
+function HoldGroup({
   title,
   note,
   children,
@@ -216,7 +218,10 @@ function Card({
 function HoldsCard(props: PanelProps) {
   const { holds } = props.data;
   return (
-    <Card title={HOLDS_TEXT.holdsCardTitle} note={HOLDS_TEXT.holdsCardNote}>
+    <HoldGroup
+      title={HOLDS_TEXT.holdsCardTitle}
+      note={HOLDS_TEXT.holdsCardNote}
+    >
       {!holds.ok ? (
         <FailureBox
           view={holdsFailureView(holds)}
@@ -233,14 +238,17 @@ function HoldsCard(props: PanelProps) {
           onRequestRelease={props.onRequestRelease}
         />
       )}
-    </Card>
+    </HoldGroup>
   );
 }
 
 function FreezesCard(props: PanelProps) {
   const { freezes } = props.data;
   return (
-    <Card title={HOLDS_TEXT.freezesCardTitle} note={HOLDS_TEXT.freezesCardNote}>
+    <HoldGroup
+      title={HOLDS_TEXT.freezesCardTitle}
+      note={HOLDS_TEXT.freezesCardNote}
+    >
       {!freezes.ok ? (
         <FailureBox
           view={freezesFailureView(freezes)}
@@ -260,7 +268,7 @@ function FreezesCard(props: PanelProps) {
           onRequestRelease={props.onRequestRelease}
         />
       )}
-    </Card>
+    </HoldGroup>
   );
 }
 
