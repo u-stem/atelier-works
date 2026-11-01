@@ -33,6 +33,7 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       "console/public/",
       "infra/console_fetcher/",
       "f/factory/dependabot__flow/",
+      "f/factory/pr_review_intake__flow/",
       "scripts/host_apply/",
       "infra/worker/",
       "mise/",

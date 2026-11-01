@@ -50,6 +50,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   "console/public/",
   "infra/console_fetcher/",
   "f/factory/dependabot__flow/",
+  "f/factory/pr_review_intake__flow/",
   "scripts/host_apply/",
   "infra/worker/",
   "mise/",
@@ -241,6 +242,12 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * キー必須と実装の停止スイッチの断り、キーの表の行との照合、ラベルなしのIssueの作成、`picked`から`implementing`への起動が、この3つにある。
  * 書き換えられると、キー無しの投入や、キーの表と食い違う登録が通り、承認の行の無い作業項目が、人の確認なしにできる。
  * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+ * ConsoleからPRのレビューを投入する入口も守る。Console用workerの入口(`pr_review_submit.ts`)、GitHubを読んで作業項目を作る登録のステップ
+ * (`steps/pr_review_intake_register.ts`)、投入のフロー(`pr_review_intake__flow/`、前方一致)、作業項目の作り方を`poll_prs`と共有する
+ * `lib/pr_review_start.ts`、それぞれの`.script.yaml`、稼働中の`pr_review`をPRごとに1件にする一意インデックスのmigration2本である。
+ * リポジトリの許可、オーナーIDの照合、fork headの断り、PRが開いていることの確認、同じPRの重なりの防止が、この中にある。
+ * 書き換えられると、許可されていないリポジトリや閉じたPRのレビューが投入で通ったり、同じPRのレビューが重なったりする。
+ * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -337,6 +344,14 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/manual_intake_support.script.yaml",
   "migrations/datatable/main/20261031110000_manual_intake_keys.up.sql",
   "migrations/datatable/main/20261031110000_manual_intake_keys.down.sql",
+  "f/factory/pr_review_submit.ts",
+  "f/factory/pr_review_submit.script.yaml",
+  "f/factory/steps/pr_review_intake_register.ts",
+  "f/factory/steps/pr_review_intake_register.script.yaml",
+  "f/factory/lib/pr_review_start.ts",
+  "f/factory/lib/pr_review_start.script.yaml",
+  "migrations/datatable/main/20261102100000_active_pr_review_key.up.sql",
+  "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",
