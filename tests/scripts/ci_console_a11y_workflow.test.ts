@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 // `console-a11y`ジョブの配線を、ワークフローの定義から静的に確かめる。
 // 実際のGitHub Actionsでは動かせないので、組み立ての手順がconsoleジョブと同じことと、
-// ブラウザの取得とキャッシュ、失敗時の報告の扱いを確かめる。
+// ブラウザの取得、失敗時の報告の扱いを確かめる。
+// ブラウザは毎回取得する。取得物を照合しないので、mainの実行が書いたキャッシュをPRが読む経路を作らない。
 const ROOT = join(import.meta.dir, "..", "..");
 
 // GitHub Actionsの式の開き括弧。テンプレートリテラルの置換と誤検出されないよう、組み立てる。
@@ -135,35 +136,23 @@ describe("the console-a11y job", () => {
     );
   });
 
-  test("reads the Playwright version from the console package.json", () => {
-    expect(String(stepNamed("Read the Playwright version").run)).toContain(
-      "console/package.json",
-    );
-  });
-
-  test("accepts only a plain version number as the cache key", () => {
-    expect(String(stepNamed("Read the Playwright version").run)).toContain(
-      "grep -Ex '[0-9]+\\.[0-9]+\\.[0-9]+'",
-    );
-  });
-
-  test("pins the cache action to the commit the console job uses", () => {
-    expect(stepNamed("Restore the Playwright browser cache").uses).toBe(
-      consoleStepNamed("Restore the draw.io viewer cache").uses,
-    );
-  });
-
-  test("caches the browser directory", () => {
+  test("uses no cache action", () => {
     expect(
-      recordAt(stepNamed("Restore the Playwright browser cache"), "with").path,
-    ).toBe("~/.cache/ms-playwright");
+      steps.filter((step) => String(step.uses).startsWith("actions/cache")),
+    ).toEqual([]);
   });
 
-  test("keys the browser cache on the Playwright version", () => {
+  test("does not refer to the Playwright browser directory", () => {
     expect(
-      recordAt(stepNamed("Restore the Playwright browser cache"), "with").key,
-    ).toBe(
-      `playwright-${OPEN} runner.os }}-${OPEN} steps.playwright.outputs.version }}`,
+      steps.filter((step) =>
+        JSON.stringify(step).includes(".cache/ms-playwright"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("has no step that reads the Playwright version for a cache key", () => {
+    expect(steps.map((step) => step.name)).not.toContain(
+      "Read the Playwright version",
     );
   });
 
