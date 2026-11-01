@@ -189,6 +189,28 @@ test.describe("tab walk", () => {
   }
 });
 
+// 検査自身の確認。最初のTabでbodyへ出て停止先が0件になる画面と、本文に止まらない画面を、
+// 他の問題が無くても失敗にする。ここが通らないとき、画面の「問題なし」は何も意味しない。
+test.describe("the tab walk check itself", () => {
+  test("reports a page where the first Tab leaves the page", async ({
+    page,
+  }) => {
+    await page.setContent(
+      "<!doctype html><html lang=ja><head><title>canary</title></head><body><main><p>no focusable element</p></main></body></html>",
+    );
+
+    expect(problemsOf(await walkTabs(page))).toContain("no tab stops");
+  });
+
+  test("reports a page whose stops are all outside main", async ({ page }) => {
+    await page.setContent(
+      '<!doctype html><html lang=ja><head><title>canary</title></head><body><a href="#x">outside</a><main><p>no focusable element</p></main></body></html>',
+    );
+
+    expect(problemsOf(await walkTabs(page))).toContain("no tab stop in main");
+  });
+});
+
 test.describe("skip link", () => {
   test("is shown by the first Tab", async ({ page }) => {
     await openScreen(page, "items");
