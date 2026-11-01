@@ -711,6 +711,64 @@ describe("approval-free manual intake files", () => {
   });
 });
 
+// ConsoleからのPRレビューの投入を通すファイルと、稼働中のpr_reviewの一意インデックスのmigrationは、
+// 書き換えられると、許可の検査やオーナーIDの照合、fork headの断りが外れたり、同じPRのレビューが重なったりする。
+// 投入のフロー(`pr_review_intake__flow/`)は前方一致で守る。
+describe("pull request review intake files", () => {
+  const EXACT = [
+    "f/factory/pr_review_submit.ts",
+    "f/factory/pr_review_submit.script.yaml",
+    "f/factory/steps/pr_review_intake_register.ts",
+    "f/factory/steps/pr_review_intake_register.script.yaml",
+    "f/factory/lib/pr_review_start.ts",
+    "f/factory/lib/pr_review_start.script.yaml",
+    "migrations/datatable/main/20261102100000_active_pr_review_key.up.sql",
+    "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql",
+  ];
+
+  test.each(EXACT)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test("FORBIDDEN_PATH_PREFIXES lists the intake flow directory", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(
+      "f/factory/pr_review_intake__flow/",
+    );
+  });
+
+  test.each([...EXACT, "f/factory/pr_review_intake__flow/flow.yaml"])(
+    "matchesForbiddenPath matches %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([...EXACT, "f/factory/pr_review_intake__flow/flow.yaml"])(
+    "matchesImplementProtectedPath matches %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(true);
+    },
+  );
+
+  test.each(EXACT)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test("the intake flow exists", async () => {
+    expect(
+      await Bun.file("f/factory/pr_review_intake__flow/flow.yaml").exists(),
+    ).toBe(true);
+  });
+
+  test.each([
+    "f/factory/pr_review_submit.script.lock",
+    "f/factory/steps/pr_review_intake_register.script.lock",
+    "f/factory/lib/pr_review_start.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
 // 保護が完全一致の一覧から来ていることを確かめる。
 describe("metadata patch manifest files", () => {
