@@ -147,6 +147,12 @@ function problemsOf(walk: { stops: Stop[]; trap: string | null }): string[] {
   if (walk.trap !== null) {
     problems.push(walk.trap);
   }
+  // 最初のTabでbodyへ出ると、停止先が0件のまま「問題なし」になる。本文に1つも止まらない画面も同じ。
+  if (walk.stops.length === 0) {
+    problems.push("no tab stops");
+  } else if (!walk.stops.some((stop) => stop.region === "main")) {
+    problems.push("no tab stop in main");
+  }
   const order = orderProblem(walk.stops);
   if (order !== null) {
     problems.push(order);
