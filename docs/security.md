@@ -64,17 +64,30 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 ジョブを足すPR自身は、一覧を更新する前にマージする。
 更新は、マージの後にClaudeが行う。次の順に進める。
 
-1. `gh api repos/<owner>/<repo>/rulesets`で、名前が`protect-main`のrulesetの`id`を読む。
-2. `gh api repos/<owner>/<repo>/rulesets/<id>`で全体を読み、`required_status_checks`に足すチェックを、既存の項目と同じ形で加える。既存の項目に`integration_id`があれば同じ値を付け、`context`だけなら`context`だけを足す。形が違うと、別のアプリが出したチェックだけを受け付ける項目になり、待ち続けることがある。他の規則と迂回の設定は変えない。
-3. 手順2で加えた後のファイルを、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。`<file>`には、読んだ応答から書き込めるフィールドだけを残して渡す。`id`、`source`、`_links`、`created_at`、`updated_at`、`current_user_can_bypass`などは読み取り専用なので外す。書き戻すと、拒否されるか意図しない変更になる。
-4. `gh api repos/<owner>/<repo>/rules/branches/main`を読み、一覧にチェック名が載ったことを確かめる。あわせて、書き戻しで他が変わっていないことを確かめる。更新の前に、手順3の`jq`で射影を保存しておく。書き戻した後にもう一度`rulesets/<id>`を読み、同じ`jq`で射影する。2つを`diff`で比べ、違いが`required_status_checks`に足した1項目だけであることを確かめる。
-
-手順3の`<file>`は、手順2で加えた後のファイルを入力にして、次の`jq`で作る。
-更新の前後の射影も、同じ`jq`で作る。
+射影には、次の`jq`を使う。
+読み取り専用のフィールドを外し、書き込めるフィールドだけを残すためである。
 
 ```sh
-jq '{name, target, enforcement, bypass_actors, conditions, rules}' <応答のファイル> > <file>
+jq '{name, target, enforcement, bypass_actors, conditions, rules}' <応答のファイル>
 ```
+
+1. `gh api repos/<owner>/<repo>/rulesets`で、名前が`protect-main`のrulesetの`id`を読む。
+2. `gh api repos/<owner>/<repo>/rulesets/<id>`で全体を読み、応答のファイルは書き換えずに残す。
+編集の前に、そのファイルを前置きの`jq`で射影し、`before.json`として保存する。
+書き戻した後の比較に使うためである。
+続けて応答のファイルをコピーし、コピーの`required_status_checks`に足すチェックを、既存の項目と同じ形で加える。
+既存の項目に`integration_id`があれば同じ値を付け、`context`だけなら`context`だけを足す。
+形が違うと、別のアプリが出したチェックだけを受け付ける項目になり、待ち続けることがある。
+他の規則と迂回の設定は変えない。
+3. 手順2で編集したコピーを前置きの`jq`で射影する。
+射影したファイルを、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。
+`id`、`source`、`_links`、`created_at`、`updated_at`、`current_user_can_bypass`などは読み取り専用なので、射影で外れる。
+残すと、拒否されるか意図しない変更になる。
+4. `gh api repos/<owner>/<repo>/rules/branches/main`を読み、一覧にチェック名が載ったことを確かめる。
+あわせて、書き戻しで他が変わっていないことを確かめる。
+もう一度`rulesets/<id>`を読み、前置きの`jq`で射影して、`before.json`と`diff`で比べる。
+差が`required_status_checks`に足した1項目だけでなければ失敗とする。
+差が空のときも失敗に含める。
 
 一覧を更新したら、更新の前に分かれたPRは、`main`を取り込むまで新しいチェックが出ずに待つ。
 更新の後に開く新しいPRと、`main`を取り込んだPRには、新しいチェックが出る。
