@@ -15,7 +15,8 @@ import {
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 // mainの先端で実測した応答の形(認証あり、読み取り)。
-// 必須の7つはci.ymlのcheck suite、`build`はconsole-dist.ymlの別のsuiteにある。
+// 必須の8つはci.ymlのcheck suite、`build`はconsole-dist.ymlの別のsuiteにある。
+// 条件付きのconsole-a11yは、他の条件付きのジョブと同じ形でskippedに置く。
 const CI_SUITE = 105533738648;
 const DIST_SUITE = 105533738632;
 
@@ -39,6 +40,7 @@ function measuredCheckRuns(): Record<string, unknown>[] {
   return [
     checkRun("console-fetcher-image", "skipped"),
     checkRun("console", "skipped"),
+    checkRun("console-a11y", "skipped"),
     checkRun("caddyfile", "skipped"),
     checkRun("check", "success"),
     checkRun("test-db", "success"),
@@ -277,13 +279,14 @@ describe("readAllPages", () => {
 });
 
 describe("required check names", () => {
-  test("lists the seven required checks", () => {
+  test("lists the eight required checks", () => {
     expect([...REQUIRED_CHECKS]).toEqual([
       "scope",
       "check",
       "test-db",
       "metadata",
       "console",
+      "console-a11y",
       "caddyfile",
       "console-fetcher-image",
     ]);
@@ -292,7 +295,9 @@ describe("required check names", () => {
   test("matches the checks that docs/security.md says main requires", () => {
     const doc = readFileSync(join(REPO_ROOT, "docs/security.md"), "utf8");
     const line = doc.split("\n").find((l) => l.startsWith("- 必須チェックは"));
-    const names = [...(line ?? "").matchAll(/`([a-z-]+)`/g)].map((m) => m[1]);
+    const names = [...(line ?? "").matchAll(/`([a-z0-9-]+)`/g)].map(
+      (m) => m[1],
+    );
     expect(names).toEqual([...REQUIRED_CHECKS]);
   });
 

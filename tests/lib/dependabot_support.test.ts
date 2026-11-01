@@ -1030,6 +1030,7 @@ describe("REQUIRED_CHECKS", () => {
       "test-db",
       "metadata",
       "console",
+      "console-a11y",
       "caddyfile",
       "console-fetcher-image",
     ]);
