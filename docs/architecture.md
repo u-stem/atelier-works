@@ -1013,7 +1013,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- ConsoleのPRレビューの投入の画面。バックエンドの`pr_review_submit`は動き、画面から呼ぶ関数と、断りの符号を日本語の固定文に直す対応が無い
+- ConsoleのPRレビューの投入の画面。バックエンドの`pr_review_submit`と型付きの関数`submitPrReview`は動くが、その関数を呼ぶ画面と、断りの符号を日本語の固定文に直す対応が無い
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
