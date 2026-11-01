@@ -26,6 +26,10 @@ const REFUSALS: Readonly<Record<ManualIntakeRefusalReason, string>> = {
     "目的と受入基準が長すぎます。Issueの本文に組み立てた後で、65,536字までにしてください。",
   invalid_intake_key:
     "再送を止めるための識別子の形が正しくありません。画面が作る値なので、通常は起きません。",
+  intake_key_required:
+    "承認を省く進め方には、再送を止めるための識別子が要ります。画面が作る値なので、通常は起きません。",
+  implement_disabled:
+    "実装が止まっているため、承認を省く進め方は受け付けていません。",
   actor_unknown:
     "操作した人を特定できませんでした。ログインし直してから、もう一度試してください。",
 };

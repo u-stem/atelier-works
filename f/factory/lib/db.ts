@@ -437,6 +437,11 @@ export type NewWorkItem = {
   conflict_check_id?: number | null;
   /** 直している競合のepisode。`conflict_check_id`と同時に指定する。省略するとNULL。 */
   conflict_episode?: number | null;
+  /**
+   * 進め方。省略すると通常の進め方(`standard`)。
+   * 手動投入の登録だけが、承認を省く進め方を渡す(`tests/scripts/profile_gate.test.ts`が固定する)。
+   */
+  profile?: string;
 };
 
 /** `factory.work_items`に新しい行を挿入し、そのIDを返す。 */
@@ -449,14 +454,15 @@ export async function insertWorkItem(
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
       cancel_url, head_sha, parent_work_item_id, ci_check_id,
-      conflict_check_id, conflict_episode
+      conflict_check_id, conflict_episode, profile
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
       ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
-      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer,
+      ${item.profile ?? "standard"}
     )
     RETURNING id
   `;
@@ -556,14 +562,15 @@ export async function insertIssueWorkItemUnlessActive(
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
       cancel_url, head_sha, parent_work_item_id, ci_check_id,
-      conflict_check_id, conflict_episode
+      conflict_check_id, conflict_episode, profile
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
       ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
-      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer,
+      ${item.profile ?? "standard"}
     )
     ON CONFLICT DO NOTHING
     RETURNING id

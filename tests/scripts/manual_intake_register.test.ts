@@ -335,8 +335,18 @@ describe("registerManualIntakeWorkItem", () => {
     const { deps } = insertDeps(async () => ({ id: 77, superseded: [] }));
     const { log } = recordingLog();
     await expect(
-      registerManualIntakeWorkItem({ ...INPUT, profile: "direct", log }, deps),
+      registerManualIntakeWorkItem({ ...INPUT, profile: "unknown", log }, deps),
     ).rejects.toThrow("manual_intake: the profile is not accepted");
+  });
+
+  test("throws for a profile that skips approvals, which another path registers", async () => {
+    const { deps } = insertDeps(async () => ({ id: 77, superseded: [] }));
+    const { log } = recordingLog();
+    await expect(
+      registerManualIntakeWorkItem({ ...INPUT, profile: "direct", log }, deps),
+    ).rejects.toThrow(
+      "manual_intake: the profile does not belong to this path",
+    );
   });
 
   test("rethrows a failing insert", async () => {

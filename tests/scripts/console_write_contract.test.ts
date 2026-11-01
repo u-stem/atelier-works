@@ -623,7 +623,7 @@ describe("what the scripts return", () => {
         title: "t",
         body: "b",
         acceptance_criteria: "",
-        profile: "direct",
+        profile: "unknown",
       },
       {
         loadConfig: () =>

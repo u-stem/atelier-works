@@ -8,7 +8,12 @@
 // 「標準の値だけが要る」という書き方にしない。値が増えたとき、既定で承認が外れるのを避けるためである。
 
 /** 受け付ける進め方。入口(手動投入、登録)と関門が、同じこの一覧を見る。 */
-export const ACCEPTED_PROFILES: readonly string[] = ["standard"];
+export const ACCEPTED_PROFILES: readonly string[] = [
+  "standard",
+  "direct",
+  "bugfix",
+  "docs",
+];
 
 /** 進め方が求める承認。設計の承認は、呼び出し側が設計工程の有効の設定と掛ける。 */
 export type RequiredApprovals = {
@@ -27,6 +32,11 @@ const BOTH_REQUIRED: RequiredApprovals = {
 /** 受け付ける進め方ごとの承認の要否。キーは`ACCEPTED_PROFILES`と同じ値にする。 */
 const TABLE: Readonly<Record<string, RequiredApprovals>> = {
   standard: { requirements: true, design: true },
+  // 承認を省く3つの進め方。人の承認の代わりに、手動投入が冪等キーと実装の停止スイッチで入口を閉じ、
+  // 実装の後のPRを人がレビューする。
+  direct: { requirements: false, design: false },
+  bugfix: { requirements: false, design: false },
+  docs: { requirements: false, design: false },
 };
 
 /**

@@ -185,6 +185,11 @@
         },
         {
           "kind": "flow",
+          "flow": "manual_intake",
+          "via": "launch"
+        },
+        {
+          "kind": "flow",
           "flow": "pipeline",
           "via": "approve"
         }
@@ -206,7 +211,7 @@
     {
       "name": "manual_intake",
       "summary": "手動投入フォーム(Issueを作成して工程に乗せる)",
-      "description": "手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成し、担当を確定したうえで要件定義の生成を開始します。",
+      "description": "手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成します。通常の進め方は、担当を確定して要件定義の生成を開始します。承認を省く進め方は、ラベルなしでIssueを作り、承認の行を作らずに実装を開始します。",
       "steps": [
         {
           "id": "create_issue",
@@ -216,9 +221,9 @@
         },
         {
           "id": "register",
-          "summary": "作業項目を登録して工程 2 を起動",
+          "summary": "作業項目を登録して工程 2 または実装を起動",
           "scriptPath": "f/factory/steps/manual_intake_register",
-          "conditional": true
+          "conditional": false
         }
       ],
       "entries": [
@@ -233,6 +238,11 @@
       ],
       "unwiredEntries": [],
       "exits": [
+        {
+          "flow": "implement",
+          "step": "register",
+          "via": "launch"
+        },
         {
           "flow": "pipeline",
           "step": "register",

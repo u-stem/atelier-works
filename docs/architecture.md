@@ -385,7 +385,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
 | `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
-| `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
+| `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`manual_intake_register`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
 | `dependabot` | `poll_dependabot` | 依存の更新PRの検査と自動マージ |
 | `audit` | `audit_kickoff`(Consoleの今すぐ監査) | 運用記録の監査と改善提案 |
 <!-- /generated:flows -->
@@ -402,7 +402,7 @@ Consoleの一覧と集計は次のviewを読む。
 別名の変数で呼ぶ起動、`wmill.`を付けない呼び出し、包みの関数だけでflowを起動するscriptは、見落とす。
 そのような起動を足したときは、人が表を確かめる。
 
-- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。冪等キーで最初の投入のIssueを再利用したときは、フローがこのステップを飛ばす。
+- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの工程を始める。通常の進め方は要件定義を始め、承認を省く進め方は承認の行を作らずに実装を始める。冪等キーで最初の投入のIssueを再利用したときは、通常の進め方では何もせず、承認を省く進め方ではそのIssueに作業項目が無いときだけ登録する。
 - `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。設計書が渡されるのは設計工程が有効なときだけなので、設計工程が無効の間は設計へ戻さない。
 - `auto_retry_stale_image`は、`self_update`が起動する。
 - `requirements_apply`と`design_apply`は、`approval_decide`が承認か却下を記録した後に起動する。`design_apply`は、`design_request_approval`と承認待ちの走査も、反映されなかった決定に対して起動する。
@@ -631,7 +631,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/console_config` | script | [OP-0-5] factory_configを取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
-| `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
+| `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2または実装を起動 |
 | `f/factory/manual_intake_submit` | script | [OP-1-2] 手動投入をConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
