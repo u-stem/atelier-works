@@ -2,7 +2,7 @@
 // 検査は、ビルド済みのConsoleを、テーマ(ライト、ダーク)と、データの有る無しの組み合わせで開いて行う。
 // 規則の無効化、検査の対象からの除外、既知の違反の許容リストは持たない。
 // 検査が何も測らずに通る事態を防ぐため、違反を埋めたページで違反が出ること、
-// 規則が1つ以上通ること、テーマの属性が意図どおりであることも、画面ごとに確かめる。
+// 規則が1つ以上通ること、文字のコントラストが測られたこと、テーマの属性が意図どおりであることも、画面ごとに確かめる。
 
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
@@ -24,6 +24,14 @@ const WCAG_TAGS: readonly string[] = [
 
 const THEMES: readonly Theme[] = ["light", "dark"];
 const MODES: readonly Mode[] = ["normal", "empty"];
+
+/**
+ * 通った文字がまったく無い画面で、「要確認」のコントラストとして許す件数の上限。
+ * 固定データの画面は、どれも文字のコントラストが通った要素を持つ(実測は17件以上)。
+ * 「要確認」は、1画面で最大4件(作業項目の詳細)だった。
+ * 通った要素が無いのに「要確認」が4件を超えると、色の検査はほぼ何も決められていないと見なす。
+ */
+const MAX_PENDING_CONTRAST = 4;
 
 /** 画面の経路(`/console/`の下)。 */
 const SCREEN_PATHS: readonly string[] = [
@@ -59,9 +67,17 @@ async function auditOf(page: Page): Promise<Audit> {
   const results = await new AxeBuilder({ page })
     .withTags([...WCAG_TAGS])
     .analyze();
-  const pending = results.incomplete
-    .filter((item) => item.id === "color-contrast")
-    .reduce((sum, item) => sum + item.nodes.length, 0);
+  const contrastNodes = (items: typeof results.incomplete): number =>
+    items
+      .filter((item) => item.id === "color-contrast")
+      .reduce((sum, item) => sum + item.nodes.length, 0);
+  const pending = contrastNodes(results.incomplete);
+  // 通った、または違反になった要素が1つ以上あれば、測れている。
+  // どちらも無いときは、「要確認」が1件以上、上限までなら、測ろうとはしたと見なす。
+  const decided =
+    contrastNodes(results.passes) + contrastNodes(results.violations);
+  const contrastMeasured =
+    decided > 0 || (pending > 0 && pending <= MAX_PENDING_CONTRAST);
   if (pending > 0) {
     const note = `color-contrast incomplete: ${pending} node(s) at ${page.url()}`;
     test.info().annotations.push({ type: "incomplete", description: note });
@@ -75,7 +91,7 @@ async function auditOf(page: Page): Promise<Audit> {
       return `${violation.id} (${violation.impact ?? "n/a"}) x${violation.nodes.length}: ${target}`;
     }),
     checked: results.passes.length > 0,
-    contrastMeasured: false,
+    contrastMeasured,
     theme: await attribute("data-theme"),
     preference: await attribute("data-theme-preference"),
   };
