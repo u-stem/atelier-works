@@ -811,6 +811,7 @@ export async function newestNewerIssueCycle(
  * `id`が最大のものを返す。無ければ`null`。
  * `listActionableWorkItems`が引き継ぎ済みとみなす行と同じ条件で、
  * `retry_work_item`が取り消された古い行を、並んで動く新しい行があるときに再開しないために使う。
+ * ownerとrepoは小文字で照合する。行の綴りは書き手ごとに違うので、綴りの違う新しい行も引く。
  */
 export async function newestNewerPrWorkItem(
   kind: "pr_review" | "pr_fix",
@@ -822,7 +823,8 @@ export async function newestNewerPrWorkItem(
 ): Promise<{ readonly id: number; readonly status: WorkItemStatus } | null> {
   const rows = await sql`
     SELECT id, status FROM factory.work_items
-    WHERE kind = ${kind} AND owner = ${owner} AND repo = ${repo}
+    WHERE kind = ${kind}
+      AND lower(owner) = lower(${owner}) AND lower(repo) = lower(${repo})
       AND pr_number = ${prNumber}::integer AND id > ${id}::bigint
     ORDER BY id DESC
     LIMIT 1
@@ -1720,7 +1722,7 @@ export async function listTransientReviewCandidates(
       AND NOT EXISTS (
         SELECT 1 FROM factory.work_items other
         WHERE other.kind = 'pr_review'
-          AND other.owner = w.owner AND other.repo = w.repo
+          AND lower(other.owner) = lower(w.owner) AND lower(other.repo) = lower(w.repo)
           AND other.pr_number = w.pr_number AND other.id <> w.id
           AND (other.id > w.id OR other.status != ALL(${terminal}))
       )
@@ -1786,7 +1788,8 @@ export async function restartTransientPrReview(
         AND NOT EXISTS (
           SELECT 1 FROM factory.work_items other
           WHERE other.kind = 'pr_review'
-            AND other.owner = factory.work_items.owner AND other.repo = factory.work_items.repo
+            AND lower(other.owner) = lower(factory.work_items.owner)
+            AND lower(other.repo) = lower(factory.work_items.repo)
             AND other.pr_number = factory.work_items.pr_number
             AND other.id <> factory.work_items.id
             AND (other.id > factory.work_items.id OR other.status != ALL(${terminal}))
@@ -1825,7 +1828,7 @@ export async function hasSupersedingPrReview(
       FROM factory.work_items w
       JOIN factory.work_items other
         ON other.kind = 'pr_review'
-        AND other.owner = w.owner AND other.repo = w.repo
+        AND lower(other.owner) = lower(w.owner) AND lower(other.repo) = lower(w.repo)
         AND other.pr_number = w.pr_number AND other.id <> w.id
       WHERE w.id = ${id}::bigint
         AND (other.id > w.id OR other.status != ALL(${terminal}))
@@ -2920,6 +2923,7 @@ export function toReviewRecord(row: SqlRow): ReviewRecord {
  * このPRについて、この作業項目より前にFactoryのレビューが記録されているかを返す。
  * `factory.reviews`を`work_item_id`で`factory.work_items`に結合し、
  * 同じ(owner, repo, pr_number)で`work_item_id`が異なる行に絞る。
+ * ownerとrepoは小文字で照合する。
  * そのため、実行中のpr_review自身のまだ挿入していない行(または同じ呼び出しの中で
  * まだcommitしていない先の挿入)は「前の」レビューに数えない。
  * 投稿したレビューも、投稿を見送って記録だけしたレビューも、
@@ -2938,8 +2942,8 @@ export async function hasPriorReview(
     SELECT 1
     FROM factory.reviews
     JOIN factory.work_items ON factory.work_items.id = factory.reviews.work_item_id
-    WHERE factory.work_items.owner = ${owner}
-      AND factory.work_items.repo = ${repo}
+    WHERE lower(factory.work_items.owner) = lower(${owner})
+      AND lower(factory.work_items.repo) = lower(${repo})
       AND factory.work_items.pr_number = ${prNumber}::integer
       AND factory.reviews.work_item_id != ${excludingWorkItemId}::bigint
     LIMIT 1
@@ -3703,6 +3707,7 @@ export type LatestPrWorkItemOpts = {
  * このPRの`work_items`の行のうち、最新のもの(`created_at`の順、
  * 同じ秒に挿入された行はIDの順)を返す。無ければ`null`。
  * `opts.kind`を省略すれば種類を問わず、指定すればその種類に絞る。
+ * ownerとrepoは小文字で照合する。登録のstepが書く行の綴りと、検索で得た綴りが違っても同じPRとして引く。
  * 呼び出し側が`observed_comment_id`や`last_review_id`などを読むために
  * もう一度`getWorkItem`を呼ばずに済むよう、行全体を返す。
  * レビューの経路の「未処理のhead_sha」の確認と、修正の経路での
@@ -3720,13 +3725,15 @@ export async function latestPrWorkItem(
     kind === undefined
       ? await sql`
           SELECT * FROM factory.work_items
-          WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}
+          WHERE lower(owner) = lower(${owner}) AND lower(repo) = lower(${repo})
+            AND pr_number = ${prNumber}
           ORDER BY created_at DESC, id DESC
           LIMIT 1
         `.fetch()
       : await sql`
           SELECT * FROM factory.work_items
-          WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber} AND kind = ${kind}
+          WHERE lower(owner) = lower(${owner}) AND lower(repo) = lower(${repo})
+            AND pr_number = ${prNumber} AND kind = ${kind}
           ORDER BY created_at DESC, id DESC
           LIMIT 1
         `.fetch();
