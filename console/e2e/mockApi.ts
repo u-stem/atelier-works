@@ -1,6 +1,8 @@
 // ブラウザの検査で、ConsoleのAPIとstatus.jsonを固定の値で受ける。
-// 想定外の要求(表に無いscript、別のオリジンへの通信)は、中断して記録する。
-// 記録が残った検査は、`assertNoProblems`で失敗にする。書き込みのscriptも表に無いので、実行されない。
+// 想定外の要求(表に無いscript、別のオリジンへの通信、同じオリジンの`/console/`の外への通信)は、
+// 中断して記録する。同じオリジンの`/console/`の外は、検査用のサーバーが実際のWindmillへ中継しうるので、
+// 止めることで、検査の要求がWindmillにも外部にも届かないことを成り立たせる。
+// 記録が残った検査は、`support.ts`の検査の後始末で失敗にする。書き込みのscriptも表に無いので、実行されない。
 
 import type { Page, Request, Route } from "@playwright/test";
 import { STAMP } from "./fixtures.ts";
@@ -59,7 +61,8 @@ async function handleApi(
 
 /**
  * ページにAPIの受け口を付ける。ページを開く前に呼ぶ。
- * `baseOrigin`の外への通信は、すべて中断する。
+ * `baseOrigin`の外への通信と、`baseOrigin`の`/console/`と`/api/`の外への通信は、すべて中断する。
+ * `/console/`の下は検査用のサーバーが配信し、`/api/`は受け口が固定の値で返す。
  */
 export async function installMockApi(
   page: Page,
@@ -67,6 +70,18 @@ export async function installMockApi(
   mode: Mode,
 ): Promise<MockApi> {
   const problems: string[] = [];
+  await page.route(
+    (url) =>
+      url.origin === baseOrigin &&
+      !url.pathname.startsWith("/console/") &&
+      !url.pathname.startsWith("/api/"),
+    async (route) => {
+      problems.push(
+        `request outside /console/: ${describeRequest(route.request())}`,
+      );
+      await route.abort();
+    },
+  );
   await page.route(
     (url) => url.origin !== baseOrigin,
     async (route) => {

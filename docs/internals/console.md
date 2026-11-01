@@ -1006,10 +1006,17 @@ Biomeが見るもの(画像の`alt`、正の`tabindex`)は入れず、静的に�
 検査の構成は、次のとおりである。
 
 - 配信は`scripts/console-branch-server.ts`で行う。本番のCaddyと同じCSPを付けるので、CSPの下でも検査が動くことを確かめられる。
-- APIは`page.route`で固定の値を返す(`console/e2e/responses.ts`)。要求はWindmillと外部のどちらへも届かない。
-- 表に無い要求は、中断して検査を失敗にする。書き込みのscriptは表に無いので、呼ばれると失敗する。
+- APIは`page.route`で固定の値を返す(`console/e2e/responses.ts`)。
+- 次の要求は、中断して記録し、検査を失敗にする(`console/e2e/mockApi.ts`)。書き込みのscriptは表に無いので、呼ばれると失敗する。
+  - 表に無いscriptの呼び出し
+  - 別のオリジンへの通信
+  - 同じオリジンで、`/console/`と`/api/`の外を指す通信。配信のサーバーは、この通信を実際のWindmillへ中継しうる。
+- この3つを止めるので、検査の要求は、Windmillと外部のどちらへも届かない。
+  `mockApi.a11y.ts`が、中断と記録を確かめる。
 - 固定のデータは、静的な描画の検査と共有する(`console/e2e/fixtures.ts`)。返す値がConsoleの型ガードを通ることは、単体テストが確かめる。
 - ファイル名は`*.a11y.ts`にする。`bun test`は拾わず、`playwright.config.ts`だけが拾う。
+- `console/tsconfig.json`の`include`に`e2e`と`playwright.config.ts`を入れる。検査のコードは、Consoleの型検査(`bun run --cwd console typecheck`)に掛かる。
+- レポートと一時の出力(`console/playwright-report/`、`console/test-results/`)は、gitに入れない。
 
 axe-coreの検査(`axe.a11y.ts`)は、次の組み合わせを開く。
 
@@ -1021,6 +1028,13 @@ axe-coreの検査(`axe.a11y.ts`)は、次の組み合わせを開く。
 規則は、WCAG 2.0と2.1のAとAAだけを見る。
 規則の無効化、対象の除外、既知の違反の許容リストは持たない。
 違反が出たら、規則を緩めずConsoleを直す。
+
+検査が何も測らずに通る事態を、次の確認で防ぐ。
+
+- 違反を埋めた固定のページ(代替テキストの無い画像、コントラストの低い文字)で、画面の検査と同じ設定のaxe-coreが違反を返す。
+- 画面とダイアログごとに、axe-coreを通った規則が1件以上ある。
+- 画面とダイアログごとに、htmlの`data-theme`と`data-theme-preference`が、開いたテーマと一致する。ダークの検査がライトの配色で通る事態を防ぐ。
+- 「要確認」になった文字のコントラストの件数は、検査の出力とPlaywrightのレポートの注記に残す。失敗にはしない。
 
 キーボードの検査(`keyboard.a11y.ts`)は、実際のTabとEscapeを押して、次を確かめる。
 Tabの順序のスナップショットは取らない。
@@ -1036,7 +1050,9 @@ Tabの順序のスナップショットは取らない。
 
 - Chromium以外のブラウザの動き
 - 画面の読み上げの聞こえ方
-- axe-coreが「要確認」とする項目
+- axe-coreが「要確認」とする項目。文字のコントラストの件数だけは出力に残す。
+- WCAG 1.4.11(非テキストのコントラスト)。axe-coreは測らない。
+- WCAG 2.4.7(フォーカスの表示)。axe-coreは測らない。
 - 開いていないときに描かない内容(Tooltip)
 - 狭い幅のメニューのドロワー
 - 見た目と文言の良し悪し(原則は[Consoleの画面の表示の原則](../console-display.md)にある)
@@ -3814,9 +3830,10 @@ composite action(`.github/actions/`)は書けるので、分けると配布物�
 
 - 実行の上限は10分にする。ブラウザが固まっても、実行を長く占めないためである。
 - ブラウザは、Playwrightの取得元(`cdn.playwright.dev`)から、headless shellだけを入れる。
-- ブラウザは、`@playwright/test`の版をキーにしてキャッシュする。キーに使う版は、`console/package.json`から読み、`x.y.z`の形だけを通す。
-- システムのパッケージ(`--with-deps`)は、キャッシュに入らないので、毎回入れる。
+- ブラウザはキャッシュせず、毎回取得する。取得物をハッシュで照合しないので、`main`の実行が書いたキャッシュをPRが読む経路を作らないためである。取得物を照合しない残るリスクは[セキュリティ](../security.md#consoleの配信)に書く。
+- システムのパッケージ(`--with-deps`)も、毎回入れる。
 - 失敗したときだけ、レポート(`playwright-report`)を3日間だけ上げる。成功では上げない。
+- ci.ymlが上げてよいartifactは、名前の完全一致で許す。`metadata-patch`と`playwright-report`の2つだけで、`tests/scripts/ci_metadata_workflow.test.ts`が固定する。
 
 ## 配信の経路
 
