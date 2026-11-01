@@ -831,7 +831,7 @@ describe("buildPrCandidate with a review row written under another spelling", ()
   const REGISTERED_ROW: SqlRow = {
     id: 80,
     cycle: 1,
-    source: "console",
+    source: "manual",
     kind: "pr_review",
     owner: "octo-owner",
     repo: "atelier-works",
