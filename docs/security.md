@@ -88,6 +88,8 @@ jq '{name, target, enforcement, bypass_actors, conditions, rules}' <応答のフ
 もう一度`rulesets/<id>`を読み、前置きの`jq`で射影して、`before.json`と`diff`で比べる。
 差が`required_status_checks`に足した1項目だけでなければ失敗とする。
 差が空のときも失敗に含める。
+失敗したときは、`before.json`を手順3と同じ`gh api --method PUT`の`--input`に渡して書き戻し、元の状態に戻す。
+戻したら、運用者に報告する。
 
 一覧を更新したら、更新の前に分かれたPRは、`main`を取り込むまで新しいチェックが出ずに待つ。
 更新の後に開く新しいPRと、`main`を取り込んだPRには、新しいチェックが出る。
