@@ -2172,7 +2172,7 @@ describe("exceptions", () => {
     expect(h.transitions.map((t) => t.to.state)).toEqual(["failed"]);
   });
 
-  test("expires a day-old pending row when the server fails while reading", async () => {
+  test("expires a day-old pending row when the server does not answer", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },
       pending: [
@@ -2180,7 +2180,7 @@ describe("exceptions", () => {
           first_seen_at: new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS),
         }),
       ],
-      runs: { [SHA_A]: deniedError(502) },
+      runs: { [SHA_A]: deniedError(0) },
     });
     await runPrCiWatch(h.deps);
     expect(h.transitions.map((t) => t.to.state)).toEqual(["expired"]);
@@ -7764,5 +7764,390 @@ describe("notifying the time setting misfit once for the whole config", () => {
     );
     await runPrCiWatch(h.deps);
     expect(h.marked).toEqual([{ id: 9, reason: "ci_failure" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 再送後もGitHubが5xxを返したとき
+// ---------------------------------------------------------------------------
+
+describe("a server error that persists after the retry", () => {
+  const STOP_MESSAGE = "pr ci reading stopped by a GitHub server error";
+  const PR_13 = "acme/widgets#13";
+  const PR_14 = "acme/widgets#14";
+
+  function serverError(status = 503): GitHubHttpError {
+    return new GitHubHttpError(
+      `GET pulls failed with HTTP ${String(status)}: SECRET-RESPONSE-BODY`,
+      status,
+    );
+  }
+
+  function stopWarnings(h: Harness): LogLine[] {
+    return h.logs.filter(
+      (line) => line.level === "warn" && line.message === STOP_MESSAGE,
+    );
+  }
+
+  function threeItems(): FactoryWorkItemRef[] {
+    return [
+      item({ id: 33, prUrl: PR_PAGE }),
+      item({ id: 34, prUrl: "https://github.com/acme/widgets/pull/13" }),
+      item({ id: 35, prUrl: "https://github.com/acme/widgets/pull/14" }),
+    ];
+  }
+
+  function threeItemSetup(overrides: Setup = {}): Setup {
+    return {
+      items: threeItems(),
+      prs: {
+        [PR_KEY]: serverError(),
+        [PR_13]: pr({ number: 13, headRef: "factory/issue-6-wi-34" }),
+        [PR_14]: pr({ number: 14, headRef: "factory/issue-7-wi-35" }),
+      },
+      ...overrides,
+    };
+  }
+
+  describe("in the discovery", () => {
+    test("does not read the remaining pull requests", async () => {
+      const h = harness(threeItemSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([PR_KEY]);
+    });
+
+    test("records no failure of the flow", async () => {
+      const h = harness(threeItemSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.failures).toEqual([]);
+    });
+
+    test("reports no error in the result", async () => {
+      const h = harness(threeItemSetup());
+      const result = await runPrCiWatch(h.deps);
+      expect(result.errors).toBe(0);
+    });
+
+    test("leaves exactly one warning", async () => {
+      const h = harness(threeItemSetup());
+      await runPrCiWatch(h.deps);
+      expect(stopWarnings(h)).toHaveLength(1);
+    });
+
+    test("names the repository and the status in the warning", async () => {
+      const h = harness(threeItemSetup());
+      await runPrCiWatch(h.deps);
+      expect(stopWarnings(h)[0]?.fields).toEqual({
+        repo: "acme/widgets",
+        status: 503,
+      });
+    });
+
+    test("does not put the response body in the log", async () => {
+      const h = harness(threeItemSetup());
+      await runPrCiWatch(h.deps);
+      expect(JSON.stringify(h.logs)).not.toContain("SECRET-RESPONSE-BODY");
+    });
+
+    test("does not add a denied notice", async () => {
+      const h = harness(threeItemSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.notices).toEqual([]);
+    });
+
+    test("stops on any status from 500 to 599", async () => {
+      const h = harness(
+        threeItemSetup({ prs: { [PR_KEY]: serverError(599) } }),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([PR_KEY]);
+    });
+
+    test("does not stop on a status of 0", async () => {
+      const h = harness(
+        threeItemSetup({
+          prs: {
+            [PR_KEY]: serverError(0),
+            [PR_13]: pr({ number: 13, headRef: "factory/issue-6-wi-34" }),
+            [PR_14]: pr({ number: 14, headRef: "factory/issue-7-wi-35" }),
+          },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([PR_KEY, PR_13, PR_14]);
+    });
+  });
+
+  describe("in the judgement", () => {
+    function pendingSetup(overrides: Setup = {}): Setup {
+      return {
+        prs: { [PR_KEY]: pr(), [PR_13]: pr({ number: 13 }) },
+        pending: [row({ id: 1 }), row({ id: 2, pr_number: 13 })],
+        runs: { [SHA_A]: serverError() },
+        ...overrides,
+      };
+    }
+
+    test("does not read the runs of the following rows", async () => {
+      const h = harness(pendingSetup());
+      await runPrCiWatch(h.deps);
+      expect(h.runCalls).toHaveLength(1);
+    });
+
+    test("does not read the pull request of the following rows", async () => {
+      const h = harness(
+        pendingSetup({ prs: { [PR_KEY]: serverError(), [PR_13]: pr() } }),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([PR_KEY]);
+    });
+
+    test("records no failure and counts no error", async () => {
+      const h = harness(pendingSetup());
+      const result = await runPrCiWatch(h.deps);
+      expect([h.failures, result.errors]).toEqual([[], 0]);
+    });
+
+    test("leaves exactly one warning", async () => {
+      const h = harness(pendingSetup());
+      await runPrCiWatch(h.deps);
+      expect(stopWarnings(h)).toHaveLength(1);
+    });
+
+    test("leaves the rows unchanged", async () => {
+      const h = harness(pendingSetup());
+      await runPrCiWatch(h.deps);
+      expect([h.transitions, h.touched]).toEqual([[], []]);
+    });
+
+    test("does not expire a pending row that is older than a day", async () => {
+      const h = harness(
+        pendingSetup({
+          pending: [
+            row({
+              first_seen_at: new Date(
+                NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS,
+              ),
+            }),
+          ],
+        }),
+      );
+      const result = await runPrCiWatch(h.deps);
+      expect([h.transitions, result.expired]).toEqual([[], 0]);
+    });
+
+    test("judges the row in the next run when GitHub answers again", async () => {
+      const first = harness(pendingSetup());
+      await runPrCiWatch(first.deps);
+      const next = harness({
+        prs: { [PR_KEY]: pr(), [PR_13]: pr({ number: 13 }) },
+        pending: [row({ id: 1 }), row({ id: 2, pr_number: 13 })],
+        runs: { [SHA_A]: [run()] },
+      });
+      await runPrCiWatch(next.deps);
+      expect(next.transitions.map((t) => [t.id, t.to.state])).toEqual([
+        [1, "passed"],
+        [2, "passed"],
+      ]);
+    });
+
+    test("keeps the handling of the rate limit", async () => {
+      const h = harness(
+        pendingSetup({
+          runs: {
+            [SHA_A]: new GitHubRateLimitError("endpoint", 300_000, true),
+          },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect([h.runCalls.length, h.failures, stopWarnings(h)]).toEqual([
+        1,
+        [],
+        [],
+      ]);
+    });
+
+    test("keeps the handling of a permission error", async () => {
+      const h = harness(pendingSetup({ runs: { [SHA_A]: deniedError(403) } }));
+      await runPrCiWatch(h.deps);
+      expect([h.runCalls.length, h.notices.map((n) => n.kind)]).toEqual([
+        2,
+        [PR_CI_CHECK_DENIED_KIND],
+      ]);
+    });
+
+    test("keeps the handling of incomplete runs", async () => {
+      const h = harness(
+        pendingSetup({
+          runs: { [SHA_A]: new WorkflowRunsIncompleteError("too many runs") },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect([h.runCalls.length, h.failures]).toEqual([2, []]);
+    });
+  });
+
+  describe("in the recovery of a fixing row", () => {
+    function twoFixingRows(overrides: Setup = {}): Setup {
+      return fixingSetup(fixItem("failed"), {
+        fixing: [fixingRow(), fixingRow({ id: FIXING_ID + 1, pr_number: 13 })],
+        prs: { [PR_KEY]: serverError(), [PR_13]: pr({ number: 13 }) },
+        ...overrides,
+      });
+    }
+
+    test("does not read the pull request of the remaining rows", async () => {
+      const h = harness(twoFixingRows());
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([PR_KEY]);
+    });
+
+    test("leaves the rows in fixing", async () => {
+      const h = harness(twoFixingRows());
+      await runPrCiWatch(h.deps);
+      expect(h.released).toEqual([]);
+    });
+
+    test("records no failure", async () => {
+      const h = harness(twoFixingRows());
+      const result = await runPrCiWatch(h.deps);
+      expect([h.failures, result.errors]).toEqual([[], 0]);
+    });
+
+    test("leaves exactly one warning", async () => {
+      const h = harness(twoFixingRows());
+      await runPrCiWatch(h.deps);
+      expect(stopWarnings(h)).toHaveLength(1);
+    });
+
+    test("stops the recovery without the watch as well", async () => {
+      const h = harness(twoFixingRows());
+      await runPrCiRecovery(h.deps);
+      expect([h.prCalls, h.failures]).toEqual([[PR_KEY], []]);
+    });
+  });
+
+  describe("in the claim", () => {
+    test("does not claim after the server error of a read", async () => {
+      const c = claimHarness({
+        listCommitsError: serverError(),
+        candidates: [candidateRow(), candidateRow({ id: 6, pr_number: 13 })],
+      });
+      const h = harness(claimSetup(c));
+      await runPrCiWatch(h.deps);
+      expect([c.reads.review, c.claims, h.failures]).toEqual([1, [], []]);
+    });
+
+    test("stops when the skill read hits the server error", async () => {
+      const c = claimHarness({
+        markerError: serverError(),
+        candidates: [candidateRow(), candidateRow({ id: 6, pr_number: 13 })],
+      });
+      const h = harness(claimSetup(c));
+      await runPrCiWatch(h.deps);
+      expect([c.reads.marker, h.failures, stopWarnings(h).length]).toEqual([
+        1,
+        [],
+        1,
+      ]);
+    });
+
+    test("does not claim or read in the claim after a judgement hit the server error", async () => {
+      const c = claimHarness();
+      const h = harness(
+        claimSetup(c, {
+          pending: [row()],
+          runs: { [SHA_A]: serverError() },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect([c.reads, c.claims]).toEqual([{}, []]);
+    });
+  });
+
+  describe("in the human discovery", () => {
+    test("does not start after a judgement hit the server error", async () => {
+      const h = harness(
+        trackedSetup({
+          pending: [row()],
+          runs: { [SHA_A]: serverError() },
+          human: tableHuman([ghPrRow(40)]),
+          prs: { [PR_KEY]: pr(), [HUMAN_KEY]: humanPr() },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect([h.prCalls, h.tableReads, h.lists]).toEqual([[PR_KEY], [], []]);
+    });
+
+    test("does not start after the discovery hit the server error", async () => {
+      const h = harness(
+        threeItemSetup({
+          human: tableHuman([ghPrRow(40)]),
+          prs: { [PR_KEY]: serverError(), [HUMAN_KEY]: humanPr() },
+        }),
+      );
+      await runPrCiWatch(h.deps);
+      expect([h.prCalls, h.tableReads]).toEqual([[PR_KEY], []]);
+    });
+
+    test("stops reading the remaining candidates", async () => {
+      const h = harness({
+        human: tableHuman([ghPrRow(40), ghPrRow(41)]),
+        prs: {
+          [HUMAN_KEY]: serverError(),
+          "acme/widgets#41": humanPr({ number: 41 }),
+        },
+      });
+      await runPrCiWatch(h.deps);
+      expect(h.prCalls).toEqual([HUMAN_KEY]);
+    });
+
+    test("records no failure and leaves exactly one warning", async () => {
+      const h = harness({
+        human: tableHuman([ghPrRow(40), ghPrRow(41)]),
+        prs: {
+          [HUMAN_KEY]: serverError(),
+          "acme/widgets#41": humanPr({ number: 41 }),
+        },
+      });
+      const result = await runPrCiWatch(h.deps);
+      expect([h.failures, result.errors, stopWarnings(h).length]).toEqual([
+        [],
+        0,
+        1,
+      ]);
+    });
+
+    test("counts the candidates left unread as deferred", async () => {
+      const h = harness({
+        human: tableHuman([ghPrRow(40), ghPrRow(41)]),
+        prs: {
+          [HUMAN_KEY]: serverError(),
+          "acme/widgets#41": humanPr({ number: 41 }),
+        },
+      });
+      const result = await runPrCiWatch(h.deps);
+      expect(result.human_deferred).toBe(2);
+    });
+
+    test("stops the lists of the remaining repositories", async () => {
+      const h = harness({
+        human: {
+          useTable: false,
+          explicit: [{ owner: "acme", repo: "widgets" }, TOOLS_REPO],
+          lists: {
+            "acme/widgets": serverError(),
+            "other/tools": [],
+          },
+        },
+      });
+      const result = await runPrCiWatch(h.deps);
+      expect([
+        h.lists,
+        h.failures,
+        result.human_deferred,
+        stopWarnings(h).length,
+      ]).toEqual([["acme/widgets"], [], 2, 1]);
+    });
   });
 });
