@@ -193,6 +193,12 @@ describe("scopeOfPaths", () => {
     );
   });
 
+  test("runs console for the server the accessibility job serves the build with", () => {
+    expect(scopeOfPaths(["scripts/console-branch-server.ts"])).toEqual(
+      noneScope({ console: true }),
+    );
+  });
+
   test("runs console for the lockfile policy script", () => {
     expect(scopeOfPaths(["scripts/check-console-lockfile.ts"])).toEqual(
       noneScope({ console: true }),
@@ -1313,6 +1319,7 @@ const FLAG_JOBS: readonly (readonly [string, string])[] = [
   ["test-db", "db"],
   ["metadata", "metadata"],
   ["console", "console"],
+  ["console-a11y", "console"],
   ["caddyfile", "caddy"],
   ["console-fetcher-image", "fetcher"],
 ];
