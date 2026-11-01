@@ -53,3 +53,13 @@ export function useDialogSync(
 export function focusElement(target: { focus(): void } | null): void {
   target?.focus();
 }
+
+/**
+ * dialogが閉じたことを知らせる。
+ * `onClosed`は閉じたたびに呼ぶ。`onClose`は、`open`が真のまま閉じたとき(利用者の操作)だけ呼ぶ。
+ */
+export function notifyDialogClosed(
+  _wasOpen: boolean,
+  _onClose: () => void,
+  _onClosed?: () => void,
+): void {}
