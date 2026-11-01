@@ -387,11 +387,21 @@ describe("isReadyForImplement", () => {
   test("is false for a profile that is not accepted when the requirements are not approved", async () => {
     expect(
       await isReadyForImplement(
-        { ...ITEM, profile: "direct" },
+        { ...ITEM, profile: "other" },
         false,
         deps({ requirements: null }).deps,
       ),
     ).toBe(false);
+  });
+
+  test("is true for a profile that skips the approvals when nothing is approved", async () => {
+    expect(
+      await isReadyForImplement(
+        { ...ITEM, profile: "direct" },
+        true,
+        deps({ requirements: null, design: null }).deps,
+      ),
+    ).toBe(true);
   });
 
   test("is false for an unknown profile when the design approval is missing", async () => {

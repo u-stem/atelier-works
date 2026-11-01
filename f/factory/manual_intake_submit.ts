@@ -22,11 +22,11 @@ import { defaultSqlClient } from "./lib/db.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import {
+  type ManualIntakeConfig,
   type ManualIntakeFields,
   type ManualIntakeRefusalReason,
   validateManualIntake,
 } from "./lib/manual_intake_support.ts";
-import type { FactoryConfig } from "./lib/types.ts";
 
 const MANUAL_INTAKE_FLOW_PATH = "f/factory/manual_intake";
 
@@ -44,9 +44,7 @@ export type ManualIntakeSubmitResult =
 
 /** `submitManualIntake`が使う外部の操作。テストでは差し替える。 */
 export type ManualIntakeSubmitDeps = {
-  readonly loadConfig: () => Promise<
-    Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">
-  >;
+  readonly loadConfig: () => Promise<ManualIntakeConfig>;
   /** 実行者を返す。導けないときは例外を投げる。 */
   readonly deriveActor: () => string;
   /** フローを起動して、応答の文字列をそのまま返す。 */
@@ -154,6 +152,7 @@ export async function submitManualIntakeRecorded(
  * `profile`は進め方で、省くと通常の進め方になる。受け付けない値は、検証で断る。
  * `intake_key`は投入の再送を止める冪等キー(小文字のUUID)で、省くと再送を止めない従来の投入になる。
  * 形が違うキーは、検証で断る。
+ * 承認を省く進め方は、キーが無いとき(`intake_key_required`)と、実装が止まっているとき(`implement_disabled`)も、検証で断る。
  */
 export async function main(
   owner: string,

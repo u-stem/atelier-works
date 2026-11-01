@@ -2983,9 +2983,10 @@ DBは読まない。
 キーの扱いは、[手動投入の冪等キー](work-items.md#手動投入の冪等キー)にある。
 
 画面は`profile`を送らない。
-受け付ける進め方は`standard`だけで、それ以外は`profile_not_allowed`で断る。
+受け付ける進め方は`standard`、`direct`、`bugfix`、`docs`で、それ以外は`profile_not_allowed`で断る。
+承認を省く進め方は、`intake_key`が無いと`intake_key_required`で、実装が止まっていると`implement_disabled`で断る。
 断りはフローを起動する前に起き、フローのステップも、Issueの作成と登録の前に同じ一覧で断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
-画面は`profile`を送らないので、この断りの文は画面に出ない。
+画面は`profile`を送らないので、これらの断りの文は画面に出ない。
 符号の表を網羅するために置いていて、描画されない。
 
 断りは、失敗ではなく結果として返す。

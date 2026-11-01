@@ -545,14 +545,21 @@ describe("the callers of startImplement in the manual intake", () => {
 describe("the callers that hand a profile to a new work item", () => {
   const INSERT_CALL = /\b(?:insertWorkItem|insertIssueWorkItemUnlessActive)\b/;
 
+  /** 新しい作業項目のリテラル(`parent_work_item_id`を持つ)の周りに、`profile`があるか。 */
+  function handsProfile(code: string): boolean {
+    return [...code.matchAll(/\bparent_work_item_id:/g)].some((match) => {
+      const start = Math.max(0, (match.index ?? 0) - 900);
+      const window = code.slice(start, (match.index ?? 0) + 300);
+      return /\bprofile\b/.test(window);
+    });
+  }
+
   test("are only the register step", () => {
     const callers = productionSources()
       .filter((path) => path !== "lib/db.ts")
       .filter((path) => {
         const code = codeOf(path);
-        return (
-          INSERT_CALL.test(code) && /(?<![\w$.])profile:\s*[^,\n]/.test(code)
-        );
+        return INSERT_CALL.test(code) && handsProfile(code);
       });
     expect(callers).toEqual(["steps/manual_intake_register.ts"]);
   });

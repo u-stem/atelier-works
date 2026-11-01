@@ -1,6 +1,6 @@
 summary: '[OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる)'
 description: >-
-  手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成し、担当を確定したうえで要件定義の生成を開始します。
+  手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成します。通常の進め方は、担当を確定して要件定義の生成を開始します。承認を省く進め方は、ラベルなしでIssueを作り、承認の行を作らずに実装を開始します。
 value:
   modules:
     - id: create_issue
@@ -31,13 +31,22 @@ value:
             expr: flow_input.title
         path: f/factory/steps/manual_intake_create_issue
     - id: register
-      summary: '[OP-1-1/2] 作業項目を登録して工程 2 を起動'
+      summary: '[OP-1-1/2] 作業項目を登録して工程 2 または実装を起動'
       value:
         type: script
         input_transforms:
+          acceptance_criteria:
+            type: javascript
+            expr: flow_input.acceptance_criteria
           body:
             type: javascript
             expr: results.create_issue.body
+          intake_body:
+            type: javascript
+            expr: flow_input.body
+          intake_key:
+            type: javascript
+            expr: results.create_issue.intake_key
           issue_number:
             type: javascript
             expr: results.create_issue.number
@@ -49,16 +58,17 @@ value:
             expr: results.create_issue.owner
           profile:
             type: javascript
-            expr: flow_input.profile
+            expr: results.create_issue.profile
           repo:
             type: javascript
             expr: results.create_issue.repo
+          reused:
+            type: javascript
+            expr: results.create_issue.reused
           title:
             type: javascript
             expr: results.create_issue.title
         path: f/factory/steps/manual_intake_register
-      skip_if:
-        expr: results.create_issue.reused === true
   failure_module:
     id: failure
     value:
@@ -92,13 +102,13 @@ schema:
       description: このタスクで達成したい目的。
     intake_key:
       type: string
-      description: 投入の再送を止める冪等キー(小文字のUUID)。形が違うと、Issueを作る前に断ります(任意)。
+      description: 投入の再送を止める冪等キー(小文字のUUID)。形が違うと、Issueを作る前に断ります。承認を省く進め方では必須です。
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
     profile:
       type: string
-      description: 作業の進め方。受け付けない値は、Issueを作る前に断ります(任意)。
+      description: 作業の進め方(standard、direct、bugfix、docs)。受け付けない値は、Issueを作る前に断ります。承認を省く進め方(direct、bugfix、docs)は、冪等キーが無いか、実装が止まっているときも、Issueを作る前に断ります(任意)。
       default: standard
     repo:
       type: string

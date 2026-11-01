@@ -1816,10 +1816,18 @@ describe("buildRestartContext", () => {
 
     test("is not ready for a profile that is not accepted without an approval", async () => {
       const context = await build(harness(), {
-        workItem: { id: 7, attempt: 2, design_attempt: 1, profile: "direct" },
+        workItem: { id: 7, attempt: 2, design_attempt: 1, profile: "other" },
         requirementsApproval: null,
       });
       expect(context.implementReady).toBe(false);
+    });
+
+    test("is ready for a profile that skips the approvals without an approval", async () => {
+      const context = await build(harness(), {
+        workItem: { id: 7, attempt: 2, design_attempt: 1, profile: "direct" },
+        requirementsApproval: null,
+      });
+      expect(context.implementReady).toBe(true);
     });
 
     test("is not ready for an unknown profile with an approval of another attempt", async () => {

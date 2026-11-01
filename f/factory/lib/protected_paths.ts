@@ -236,6 +236,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 進め方ごとの承認の要否の表(`lib/profile.ts`とその`.script.yaml`)は守る。受け付ける進め方の一覧と、承認を省く進め方の表が
  * この1か所にあり、書き換えられると、要件定義や設計の承認を、人の確認なしに省ける。
  * 表と、実装の関門が表を通すことを固定するテスト(`tests/scripts/profile_gate.test.ts`)も守る。
+ * 承認を省く進め方の手動投入を通す3つのファイル(`steps/manual_intake_create_issue.ts`、`steps/manual_intake_register.ts`、
+ * `lib/manual_intake_support.ts`)と、それぞれの`.script.yaml`、冪等キーの表を作るmigration2本も守る。
+ * キー必須と実装の停止スイッチの断り、キーの表の行との照合、ラベルなしのIssueの作成、`picked`から`implementing`への起動が、この3つにある。
+ * 書き換えられると、キー無しの投入や、キーの表と食い違う登録が通り、承認の行の無い作業項目が、人の確認なしにできる。
+ * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -324,6 +329,14 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/profile.ts",
   "f/factory/lib/profile.script.yaml",
   "tests/scripts/profile_gate.test.ts",
+  "f/factory/steps/manual_intake_create_issue.ts",
+  "f/factory/steps/manual_intake_create_issue.script.yaml",
+  "f/factory/steps/manual_intake_register.ts",
+  "f/factory/steps/manual_intake_register.script.yaml",
+  "f/factory/lib/manual_intake_support.ts",
+  "f/factory/lib/manual_intake_support.script.yaml",
+  "migrations/datatable/main/20261031110000_manual_intake_keys.up.sql",
+  "migrations/datatable/main/20261031110000_manual_intake_keys.down.sql",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",

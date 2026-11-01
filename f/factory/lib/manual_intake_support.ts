@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { isRepoAllowed } from "./config.ts";
-import { ACCEPTED_PROFILES } from "./profile.ts";
+import { ACCEPTED_PROFILES, requiredApprovals } from "./profile.ts";
 import { type FactoryConfig, isGitHubName } from "./types.ts";
 
 /**
@@ -24,6 +24,8 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "invalid_body_chars",
   "body_too_long",
   "invalid_intake_key",
+  "intake_key_required",
+  "implement_disabled",
   "actor_unknown",
 ] as const;
 
@@ -151,33 +153,35 @@ export function intakeMarkerText(key: string): string {
   return `<!-- factory:intake:${key} -->`;
 }
 
-export const MANUAL_INTAKE_END_LINE = "";
+/**
+ * 手動投入の本文の最後に置く、固定の区切りの行。
+ * 本文の末尾は、目的と受入基準に利用者の入力が入る。入力の最後の行に目印を書かれると、
+ * 目印の探索が、別の投入のIssueを作成済みと見誤る。
+ * 手動投入は、本文の最後に必ずこの行を足す。目印はその後に足すので、目印の前は常にこの行になる。
+ */
+export const MANUAL_INTAKE_END_LINE = "<!-- factory:intake:end -->";
 
+/** キー無しの投入の本文に、区切りの行を足す。 */
 export function withIntakeEnd(body: string): string {
-  return body;
+  return `${body}\n\n${MANUAL_INTAKE_END_LINE}`;
 }
 
-export function endsWithIntakeMarker(_body: string, _key: string): boolean {
-  return false;
-}
-
-export function skipsApprovals(_profile: string): boolean {
-  return false;
-}
-
-export function assertIntakeKeyForProfile(
-  _profile: string,
-  _key: string | undefined,
-): void {}
-
-export function assertImplementEnabledForProfile(
-  _profile: string,
-  _implementEnabled: boolean,
-): void {}
-
-/** `body`の末尾に、冪等キーの目印を単独の行として足す。 */
+/** `body`の末尾に、区切りの行と、冪等キーの目印を、それぞれ単独の行として足す。 */
 export function withIntakeMarker(body: string, key: string): string {
-  return `${body}\n\n${intakeMarkerText(key)}`;
+  return `${withIntakeEnd(body)}\n\n${intakeMarkerText(key)}`;
+}
+
+/**
+ * `body`が、区切りの行、空行、`key`の目印の順に終わるかを返す。
+ * 目印の探索が見つけたIssueを、作成済みと信じる前の確認に使う。
+ * 末尾の空白と改行の種類(CRLF)は無視する。区切りの行は、行の先頭から始まる単独の行でなければならない。
+ */
+export function endsWithIntakeMarker(body: string, key: string): boolean {
+  const text = body.replace(/\r\n?/g, "\n").trimEnd();
+  const tail = `${MANUAL_INTAKE_END_LINE}\n\n${intakeMarkerText(key)}`;
+  if (!text.endsWith(tail)) return false;
+  const before = text.slice(0, text.length - tail.length);
+  return before === "" || before.endsWith("\n");
 }
 
 /**
@@ -197,6 +201,54 @@ export function assertAcceptedProfile(profile: string): void {
     throw new Error("manual_intake: the profile is not accepted");
   }
 }
+
+/**
+ * 進め方が、要件定義の承認を省くか。省く進め方は、人の承認の代わりに入口を閉じる(冪等キー、実装の停止スイッチ)。
+ * 登録が実装フローを直接起動する条件と、同じ判定である。
+ */
+export function skipsApprovals(profile: string): boolean {
+  return !requiredApprovals(profile).requirements;
+}
+
+/**
+ * 承認を省く進め方で冪等キーが無ければ、例外を投げる。副作用の前に呼ぶ。
+ * キーが無いと、再送がIssueと作業項目を増やし、承認の無い実装が重なって起動するためである。
+ */
+export function assertIntakeKeyForProfile(
+  profile: string,
+  key: string | undefined,
+): void {
+  if (skipsApprovals(profile) && key === undefined) {
+    throw new Error(
+      "manual_intake: intake_key_required: the profile needs an intake key",
+    );
+  }
+}
+
+/**
+ * 承認を省く進め方で実装が止まっていれば、例外を投げる。Issueを作る前に呼ぶ。
+ * 実装を止める設定の間に、承認の無い作業項目とIssueだけが残るのを避けるためである。
+ */
+export function assertImplementEnabledForProfile(
+  profile: string,
+  implementEnabled: boolean,
+): void {
+  if (skipsApprovals(profile) && !implementEnabled) {
+    throw new Error(
+      "manual_intake: implement_disabled: the implementation is switched off",
+    );
+  }
+}
+
+/**
+ * 検証が読む設定。`implement_enabled`は、承認を省く進め方だけが読む。
+ * 無い設定は、実装が止まっているものとして扱う(`implement_disabled`)。承認を省く進め方を、設定の欠落で通さないためである。
+ */
+export type ManualIntakeConfig = Pick<
+  FactoryConfig,
+  "owners" | "repo_allowlist" | "factory_repo"
+> &
+  Partial<Pick<FactoryConfig, "implement_enabled">>;
 
 export type ManualIntakeValidation =
   | {
@@ -263,13 +315,14 @@ function hasForbiddenCharacter(
 /**
  * 手動投入の入力を検証する。上から順に調べ、最初に当たった理由を返す。
  * 許可の判定は`isRepoAllowed`に任せる。リポジトリのオーナーの数値IDの照合は、Issueを作るステップが行う。
- * 進め方は、リポジトリの許可の後、題名より前に調べる。冪等キーは、進め方の次に調べる。
+ * 進め方は、リポジトリの許可の後、題名より前に調べる。
+ * 承認を省く進め方は、次に実装の停止スイッチ、冪等キーの有無の順に調べる。冪等キーの形は、その次に調べる。
  * 本文の長さは、`buildManualIntakeIssueBody`で組み立てた後の値で測る。GitHubへ届く長さと一致させるためである。
- * 冪等キーがあるときは、Issueの本文の末尾に付ける目印の分も数える。空文字のキーは、キー無しとして扱う。
+ * Issueの本文の末尾に付ける区切りの行と、冪等キーがあるときの目印の分も数える。空文字のキーは、キー無しとして扱う。
  */
 export function validateManualIntake(
   input: ManualIntakeFields,
-  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+  config: ManualIntakeConfig,
 ): ManualIntakeValidation {
   if (!isGitHubName(input.owner)) {
     return { ok: false, reason: "invalid_owner" };
@@ -284,6 +337,14 @@ export function validateManualIntake(
     return { ok: false, reason: "profile_not_allowed" };
   }
   const intakeKey = normalizeIntakeKey(input.intake_key);
+  if (skipsApprovals(input.profile)) {
+    if (config.implement_enabled !== true) {
+      return { ok: false, reason: "implement_disabled" };
+    }
+    if (intakeKey === undefined) {
+      return { ok: false, reason: "intake_key_required" };
+    }
+  }
   if (intakeKey !== undefined && !isIntakeKey(intakeKey)) {
     return { ok: false, reason: "invalid_intake_key" };
   }
@@ -311,7 +372,7 @@ export function validateManualIntake(
   const assembled = buildManualIntakeIssueBody(input);
   const issueBody =
     intakeKey === undefined
-      ? assembled
+      ? withIntakeEnd(assembled)
       : withIntakeMarker(assembled, intakeKey);
   if (codePointLength(issueBody) > MANUAL_INTAKE_BODY_MAX_CHARS) {
     return { ok: false, reason: "body_too_long" };
