@@ -3,7 +3,10 @@
 // ブラウザの検査では、`mockApi.ts`が同じ値をAPIの応答として返す。
 
 import type { PipelineRow } from "../src/api/guards/pipeline.ts";
-import type { RequirementsIndexRow } from "../src/api/guards/requirements.ts";
+import type {
+  RequirementsDoc,
+  RequirementsIndexRow,
+} from "../src/api/guards/requirements.ts";
 import type { ConsoleSummary } from "../src/api/guards/summary.ts";
 import type { SystemStatus } from "../src/api/guards/systemStatus.ts";
 import type { WorkItemDetail } from "../src/api/guards/workItemDetail.ts";
@@ -348,3 +351,20 @@ export const SCHEDULES_EMPTY: SchedulesSnapshotView = {
 };
 
 export const CONFIG_EMPTY = { path: "f/factory/config", items: [] };
+
+export const REQUIREMENTS_DOC_NORMAL: RequirementsDoc = {
+  work_item_id: 1,
+  owner: "o",
+  repo: "r",
+  issue_number: 1,
+  issue_url: "https://github.com/o/r/issues/1",
+  title: "example item",
+  work_item_status: "awaiting_requirements_approval",
+  attempt: 1,
+  summary: "example summary",
+  markdown: "# 要件\n\n本文です。\n\n- 項目1\n- 項目2\n",
+  diagrams: [],
+  rejected_diagrams: [],
+  open_questions: ["example question"],
+  doc_dir_source: "default",
+};
