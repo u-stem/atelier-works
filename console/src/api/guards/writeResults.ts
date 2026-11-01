@@ -608,3 +608,63 @@ export function isScheduleStopResult(
     isActionAudit(value.action_audit)
   );
 }
+
+export const PR_REVIEW_SUBMIT_REFUSAL_REASONS = [
+  "invalid_owner",
+  "invalid_repo",
+  "invalid_pr_number",
+  "repo_not_allowed",
+  "actor_unknown",
+  "already_reviewing",
+] as const;
+
+export type PrReviewSubmitRefusalReason =
+  (typeof PR_REVIEW_SUBMIT_REFUSAL_REASONS)[number];
+
+export type PrReviewSubmitResult =
+  | {
+      readonly refused: true;
+      readonly reason: PrReviewSubmitRefusalReason;
+    }
+  | {
+      readonly refused: false;
+      readonly flow_job_id: string;
+      readonly action_audit?: ActionAudit;
+    };
+
+export function isPrReviewSubmitResult(
+  _value: unknown,
+): _value is PrReviewSubmitResult {
+  return false;
+}
+
+export const PR_REVIEW_REGISTER_REFUSAL_REASONS = [
+  "invalid_pr_number",
+  "repo_not_allowed",
+  "pr_not_found",
+  "pr_closed",
+  "fork_head",
+  "owner_mismatch",
+  "repo_mismatch",
+  "already_reviewing",
+] as const;
+
+export type PrReviewRegisterRefusalReason =
+  (typeof PR_REVIEW_REGISTER_REFUSAL_REASONS)[number];
+
+export type PrReviewRegisterResult =
+  | {
+      readonly status: "started";
+      readonly work_item_id: number;
+      readonly flow_job_id: string;
+    }
+  | {
+      readonly status: "refused";
+      readonly reason: PrReviewRegisterRefusalReason;
+    };
+
+export function isPrReviewRegisterResult(
+  _value: unknown,
+): _value is PrReviewRegisterResult {
+  return false;
+}

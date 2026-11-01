@@ -15,6 +15,7 @@ import {
   retryWorkItem,
   stopSchedule,
   submitManualIntake,
+  submitPrReview,
   updateConfig,
 } from "./writes.ts";
 
@@ -359,6 +360,66 @@ describe("submitManualIntake", () => {
   test("does not retry after a failure", async () => {
     const { fetchFn, calls } = respondWith({ error: { message: "boom" } }, 500);
     await submitManualIntake(INPUT, { fetchFn }).catch(() => undefined);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("submitPrReview", () => {
+  const INPUT = { owner: "octo-owner", repo: "widgets", prNumber: 7 } as const;
+  const STARTED = { refused: false, flow_job_id: JOB } as const;
+
+  test("calls pr_review_submit", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    await submitPrReview(INPUT, { fetchFn });
+    expect(calls[0]?.url).toBe(
+      "/api/w/factory/jobs/run_wait_result/p/f/factory/pr_review_submit",
+    );
+  });
+
+  test("sends exactly the inputs of the script", async () => {
+    const { fetchFn, calls } = respondWith(STARTED);
+    await submitPrReview(INPUT, { fetchFn });
+    expect(calls[0]?.body).toEqual({
+      owner: "octo-owner",
+      repo: "widgets",
+      pr_number: 7,
+    });
+  });
+
+  test("returns the started flow", async () => {
+    const { fetchFn } = respondWith(STARTED);
+    expect(await submitPrReview(INPUT, { fetchFn })).toEqual(STARTED);
+  });
+
+  test("returns a refusal as a result, not as a failure", async () => {
+    const { fetchFn } = respondWith({
+      refused: true,
+      reason: "already_reviewing",
+    });
+    expect(await submitPrReview(INPUT, { fetchFn })).toEqual({
+      refused: true,
+      reason: "already_reviewing",
+    });
+  });
+
+  test("fails with invalid_response when the result has the wrong shape", async () => {
+    const { fetchFn } = respondWith({ refused: true, reason: "unknown" });
+    expect(await failureOf(submitPrReview(INPUT, { fetchFn }))).toEqual({
+      kind: "invalid_response",
+    });
+  });
+
+  test("fails with the classified error when the job fails", async () => {
+    const { fetchFn } = respondWith({ error: { message: "boom" } }, 500);
+    expect(await failureOf(submitPrReview(INPUT, { fetchFn }))).toEqual({
+      kind: "job_failed",
+      message: "boom",
+    });
+  });
+
+  test("does not retry after a failure", async () => {
+    const { fetchFn, calls } = respondWith({ error: { message: "boom" } }, 500);
+    await submitPrReview(INPUT, { fetchFn }).catch(() => undefined);
     expect(calls).toHaveLength(1);
   });
 });

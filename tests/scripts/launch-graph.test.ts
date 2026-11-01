@@ -32,7 +32,9 @@ const FLOW_REFERENCES: ReadonlyArray<readonly [RegExp, readonly string[]]> = [
   [/\bPR_REVIEW_FLOW_PATH\b/, ["pr_review"]],
   [/\bPR_FIX_FLOW_PATH\b/, ["pr_fix"]],
   [/\bMANUAL_INTAKE_FLOW_PATH\b/, ["manual_intake"]],
+  [/\bPR_REVIEW_INTAKE_FLOW_PATH\b/, ["pr_review_intake"]],
   [/\blaunchPrFixFlow\b/, ["pr_fix"]],
+  [/\bstartPrReview\b/, ["pr_review"]],
   [/\bstartImplement\b/, ["implement"]],
   [/\bstartDesign\b/, ["design"]],
   [/\brerouteRequirementsGap\b/, ["pipeline"]],
@@ -270,6 +272,34 @@ describe("describeOrigin", () => {
       to: "design",
       kind: "script",
     });
+  });
+
+  test("lists the intake flow of the pull request review among the flows that the Console submit starts", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "pr_review_submit",
+      to: "pr_review_intake",
+      kind: "script",
+    });
+  });
+
+  test("lists the review flow among the flows that the intake step starts", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "steps/pr_review_intake_register",
+      to: "pr_review",
+      kind: "script",
+    });
+  });
+
+  test("lists the form of the pull request review intake as a human origin", () => {
+    expect(LAUNCH_EDGES).toContainEqual({
+      from: "form",
+      to: "pr_review_intake",
+      kind: "human",
+    });
+  });
+
+  test("names the Console submit of the pull request review as an entry of a person", () => {
+    expect(Object.keys(HUMAN_ENTRY_SCRIPTS)).toContain("pr_review_submit");
   });
 
   test("lists no edge as one that is not wired", () => {

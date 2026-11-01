@@ -1,0 +1,26 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pr_review_intake_register.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    _owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    _pr_number:
+      type: number
+      description: ''
+      default: null
+    _repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - _owner
+    - _repo
+    - _pr_number

@@ -34,6 +34,7 @@ import {
   type JobRerunResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
+  type PrReviewSubmitResult,
   type RetryWorkItemResult,
   type ScheduleStopResult,
 } from "./guards/writeResults.ts";
@@ -189,6 +190,19 @@ export function submitManualIntake(
     isManualIntakeSubmitResult,
     options,
   );
+}
+
+export type PrReviewSubmitInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+};
+
+export function submitPrReview(
+  _input: PrReviewSubmitInput,
+  _options: RunScriptOptions = {},
+): Promise<PrReviewSubmitResult> {
+  return Promise.reject(new Error("not implemented"));
 }
 
 /**

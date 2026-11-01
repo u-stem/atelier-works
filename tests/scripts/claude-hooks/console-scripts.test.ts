@@ -60,6 +60,7 @@ describe("the classification of the console scripts", () => {
       "hold_release",
       "manual_intake_submit",
       "notice_resolve",
+      "pr_review_submit",
       "retry_work_item",
     ]);
   });

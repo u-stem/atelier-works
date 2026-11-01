@@ -26,6 +26,8 @@ import {
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
+  isPrReviewRegisterResult,
+  isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
   JOB_CANCEL_REFUSAL_REASONS,
@@ -36,6 +38,12 @@ import {
   type ManualIntakeRefusalReason,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
+  PR_REVIEW_REGISTER_REFUSAL_REASONS,
+  PR_REVIEW_SUBMIT_REFUSAL_REASONS,
+  type PrReviewRegisterRefusalReason,
+  type PrReviewRegisterResult,
+  type PrReviewSubmitRefusalReason,
+  type PrReviewSubmitResult,
   type RetryWorkItemResult,
   SCHEDULE_STOP_REFUSAL_REASONS,
   type ScheduleStopResult,
@@ -66,13 +74,16 @@ import * as manualIntakeSupport from "../../f/factory/lib/manual_intake_support.
 import type { Notice } from "../../f/factory/lib/types.ts";
 import * as manualIntakeSubmit from "../../f/factory/manual_intake_submit.ts";
 import * as noticeResolve from "../../f/factory/notice_resolve.ts";
+import * as prReviewSubmit from "../../f/factory/pr_review_submit.ts";
 import * as retryScript from "../../f/factory/retry_work_item.ts";
+import * as prReviewRegister from "../../f/factory/steps/pr_review_intake_register.ts";
 
 type WriteScript =
   | "approval_decide"
   | "retry_work_item"
   | "audit_kickoff"
   | "manual_intake_submit"
+  | "pr_review_submit"
   | "notice_resolve"
   | "hold_release"
   | "freeze_release"
@@ -87,6 +98,7 @@ const WRITE_SCRIPTS: WriteScript[] = [
   "retry_work_item",
   "audit_kickoff",
   "manual_intake_submit",
+  "pr_review_submit",
   "notice_resolve",
   "hold_release",
   "freeze_release",
@@ -121,6 +133,9 @@ function freezeBase() {
   };
 }
 function intakeBase() {
+  return { refused: false, flow_job_id: JOB };
+}
+function reviewIntakeBase() {
   return { refused: false, flow_job_id: JOB };
 }
 function cancelBase() {
@@ -239,6 +254,11 @@ const WRAPPER_CALLS: Readonly<
       },
       { fetchFn },
     ),
+  pr_review_submit: (fetchFn) =>
+    consoleWrites.submitPrReview(
+      { owner: "octo-owner", repo: "widgets", prNumber: 7 },
+      { fetchFn },
+    ),
   notice_resolve: (fetchFn) => consoleWrites.resolveNotice(4, { fetchFn }),
   hold_release: (fetchFn) => consoleWrites.releaseHold(12, { fetchFn }),
   freeze_release: (fetchFn) =>
@@ -265,7 +285,7 @@ const WRAPPER_CALLS: Readonly<
 };
 
 describe("allowlist", () => {
-  test("holds the five read scripts and the twelve write scripts", () => {
+  test("holds the five read scripts and the thirteen write scripts", () => {
     expect(Object.keys(SCRIPT_PATHS).sort()).toEqual(
       [
         "console_query",
@@ -500,6 +520,34 @@ describe("what the typed calls send", () => {
     expect(validation).toEqual({ ok: true, title: "Fix the save" });
   });
 
+  test("pr_review_submit takes the pull request and no operator", async () => {
+    const { properties } = await schemaOf(SCRIPT_PATHS.pr_review_submit);
+    expect([...properties].sort()).toEqual(["owner", "pr_number", "repo"]);
+  });
+
+  test("pr_review_submit requires all three inputs", async () => {
+    const { required } = await schemaOf(SCRIPT_PATHS.pr_review_submit);
+    expect([...required].sort()).toEqual(["owner", "pr_number", "repo"]);
+  });
+
+  test("pr_review_submit sends the pull request number as a number", async () => {
+    const sent = await sentBy(WRAPPER_CALLS.pr_review_submit);
+    expect(sent.body.pr_number).toBe(7);
+  });
+
+  test("the pr_review_intake flow takes the same pull request as the submit script", async () => {
+    const flow: unknown = Bun.YAML.parse(
+      await Bun.file("f/factory/pr_review_intake__flow/flow.yaml").text(),
+    );
+    const properties =
+      isRecord(flow) &&
+      isRecord(flow.schema) &&
+      isRecord(flow.schema.properties)
+        ? Object.keys(flow.schema.properties)
+        : [];
+    expect(properties.sort()).toEqual(["owner", "pr_number", "repo"]);
+  });
+
   test("manual_intake_submit requires the inputs the flow requires", async () => {
     const { required } = await schemaOf(SCRIPT_PATHS.manual_intake_submit);
     expect([...required].sort()).toEqual(["body", "owner", "repo", "title"]);
@@ -627,6 +675,103 @@ describe("what the scripts return", () => {
       expect(describeIntakeRefusal(reason)).toMatch(/[ぁ-んァ-ヶ一-龠]/);
     },
   );
+
+  test("the console review refusal reasons are the backend ones", () => {
+    expect([...PR_REVIEW_SUBMIT_REFUSAL_REASONS]).toEqual([
+      ...prReviewSubmit.PR_REVIEW_SUBMIT_REFUSAL_REASONS,
+    ]);
+  });
+
+  test("the console register refusal reasons are the backend ones", () => {
+    expect([...PR_REVIEW_REGISTER_REFUSAL_REASONS]).toEqual([
+      ...prReviewRegister.PR_REVIEW_REGISTER_REFUSAL_REASONS,
+    ]);
+  });
+
+  test.each([...prReviewSubmit.PR_REVIEW_SUBMIT_REFUSAL_REASONS])(
+    "the review refusal %s passes the guard",
+    (reason) => {
+      expect(isPrReviewSubmitResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("a review refusal with a reason it does not know fails the guard", () => {
+    expect(isPrReviewSubmitResult({ refused: true, reason: "pr_closed" })).toBe(
+      false,
+    );
+  });
+
+  test("a started review passes the guard", () => {
+    expect(isPrReviewSubmitResult(reviewIntakeBase())).toBe(true);
+  });
+
+  test("a started review without a job id fails the guard", () => {
+    expect(isPrReviewSubmitResult({ refused: false })).toBe(false);
+  });
+
+  test("a refusal from the real review check passes the guard", async () => {
+    const result = await prReviewSubmit.submitPrReview(
+      { owner: "stranger", repo: "widgets", pr_number: 7 },
+      {
+        loadConfig: () =>
+          Promise.resolve({
+            owners: [],
+            repo_allowlist: [],
+            factory_repo: "https://github.com/octo-owner/atelier-works",
+          }),
+        deriveActor: () => "alice",
+        hasActiveReview: () => Promise.resolve(false),
+        runFlow: () => Promise.resolve(JOB),
+        log: { info: () => undefined },
+      },
+    );
+    expect(isPrReviewSubmitResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
+
+  test.each([...prReviewRegister.PR_REVIEW_REGISTER_REFUSAL_REASONS])(
+    "the register refusal %s passes the guard",
+    (reason) => {
+      expect(isPrReviewRegisterResult({ status: "refused", reason })).toBe(
+        true,
+      );
+    },
+  );
+
+  test("a started register result passes the guard", () => {
+    expect(
+      isPrReviewRegisterResult({
+        status: "started",
+        work_item_id: 11,
+        flow_job_id: JOB,
+      }),
+    ).toBe(true);
+  });
+
+  test("a register result with a status it does not know fails the guard", () => {
+    expect(isPrReviewRegisterResult({ status: "queued" })).toBe(false);
+  });
+
+  test("a refusal from the real register check passes the guard", async () => {
+    const result = await prReviewRegister.registerPrReviewIntake(
+      { owner: "stranger", repo: "widgets", prNumber: 0 },
+      {
+        isRepoAllowed: () => false,
+        getPr: () => Promise.reject(new Error("not reached")),
+        verifyRepoOwner: () => Promise.resolve({ ok: true }),
+        recordForkHeadDenied: () => Promise.resolve(),
+        viewerLogin: "factory-bot",
+        readObserved: () =>
+          Promise.resolve({ reviewId: 0, reviewCommentId: 0 }),
+        findLinkedParent: () => Promise.resolve(null),
+        start: () => Promise.resolve({ status: "already_active" }),
+      },
+    );
+    expect(isPrReviewRegisterResult(JSON.parse(JSON.stringify(result)))).toBe(
+      true,
+    );
+  });
 
   test("a refusal from the real validation passes the guard", async () => {
     const result = await manualIntakeSubmit.submitManualIntake(
@@ -1234,6 +1379,7 @@ describe("what the scripts return", () => {
     ["hold_release", isHoldReleaseResult, holdBase()],
     ["freeze_release", isFreezeReleaseResult, freezeBase()],
     ["manual_intake_submit", isManualIntakeSubmitResult, intakeBase()],
+    ["pr_review_submit", isPrReviewSubmitResult, reviewIntakeBase()],
     ["console_job_cancel", isJobCancelResult, cancelBase()],
     ["console_job_rerun", isJobRerunResult, rerunBase()],
     ["console_config_update", isConfigUpdateResult, configBase()],
@@ -1251,6 +1397,7 @@ describe("what the scripts return", () => {
     ["hold_release", isHoldReleaseResult, holdBase()],
     ["freeze_release", isFreezeReleaseResult, freezeBase()],
     ["manual_intake_submit", isManualIntakeSubmitResult, intakeBase()],
+    ["pr_review_submit", isPrReviewSubmitResult, reviewIntakeBase()],
     ["console_job_cancel", isJobCancelResult, cancelBase()],
     ["console_job_rerun", isJobRerunResult, rerunBase()],
     ["console_config_update", isConfigUpdateResult, configBase()],
@@ -1293,6 +1440,38 @@ describe("types", () => {
     const equal: Equal<
       ManualIntakeRefusalReason,
       manualIntakeSupport.ManualIntakeRefusalReason
+    > = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console review refusal reasons are the backend ones as types", () => {
+    const equal: Equal<
+      PrReviewSubmitRefusalReason,
+      prReviewSubmit.PrReviewSubmitRefusalReason
+    > = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console review submit result is the backend result", () => {
+    const equal: Equal<
+      PrReviewSubmitResult,
+      prReviewSubmit.PrReviewSubmitResult
+    > = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console register refusal reasons are the backend ones as types", () => {
+    const equal: Equal<
+      PrReviewRegisterRefusalReason,
+      prReviewRegister.PrReviewRegisterRefusalReason
+    > = true;
+    expect(equal).toBe(true);
+  });
+
+  test("the console register result is the backend result", () => {
+    const equal: Equal<
+      PrReviewRegisterResult,
+      prReviewRegister.PrReviewRegisterResult
     > = true;
     expect(equal).toBe(true);
   });
@@ -1443,7 +1622,7 @@ describe("api boundary", () => {
 // 画面や部品に名前が出ると、許可リストを通らない呼び出しの足場になる。
 describe("console release script names", () => {
   const NAME =
-    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop)(?![A-Za-z0-9_])/;
+    /(?<![A-Za-z0-9_])(?:hold_release|freeze_release|pr_review_submit|console_job_cancel|console_job_rerun|console_config_update|console_hold_place|console_schedule_stop)(?![A-Za-z0-9_])/;
   const MAY_NAME_THEM = [
     "console/src/api/windmill.ts",
     "console/src/api/writes.ts",

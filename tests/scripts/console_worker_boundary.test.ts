@@ -31,7 +31,7 @@ import {
 // 境界を保つため、tag: consoleのscriptがどのsecret変数を読むかを、importをたどって数える。
 // - github_tokenを読んでよいのは、approval_decideとretry_work_itemだけ。
 // - その2つも、github_token以外のsecret変数は読まない。
-// - audit_kickoff、notice_resolve、manual_intake_submit、console_holds、hold_release、freeze_release、
+// - audit_kickoff、notice_resolve、manual_intake_submit、pr_review_submit、console_holds、hold_release、freeze_release、
 //   console_jobs、console_schedules、console_config、console_job_cancel、console_job_rerun、console_config_update、
 //   console_hold_place、console_schedule_stopは、どのsecret変数も読まない。
 //   Consoleから押せる操作に、外向きの資格情報を持たせないためである。
@@ -67,6 +67,7 @@ const READS_NO_SECRET = [
   "f/factory/audit_kickoff",
   "f/factory/notice_resolve",
   "f/factory/manual_intake_submit",
+  "f/factory/pr_review_submit",
   "f/factory/console_holds",
   "f/factory/hold_release",
   "f/factory/freeze_release",

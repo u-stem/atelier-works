@@ -12,11 +12,15 @@ import {
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
+  isPrReviewRegisterResult,
+  isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
   JOB_CANCEL_REFUSAL_REASONS,
   JOB_RERUN_REFUSAL_REASONS,
   MANUAL_INTAKE_REFUSAL_REASONS,
+  PR_REVIEW_REGISTER_REFUSAL_REASONS,
+  PR_REVIEW_SUBMIT_REFUSAL_REASONS,
   SCHEDULE_STOP_REFUSAL_REASONS,
 } from "./writeResults.ts";
 
@@ -198,6 +202,108 @@ describe("isManualIntakeSubmitResult", () => {
 
   test("rejects null", () => {
     expect(isManualIntakeSubmitResult(null)).toBe(false);
+  });
+});
+
+describe("isPrReviewSubmitResult", () => {
+  test("accepts a started flow", () => {
+    expect(isPrReviewSubmitResult({ refused: false, flow_job_id: JOB })).toBe(
+      true,
+    );
+  });
+
+  test("accepts a started flow with a recorded audit", () => {
+    expect(
+      isPrReviewSubmitResult({
+        refused: false,
+        flow_job_id: JOB,
+        action_audit: "recorded",
+      }),
+    ).toBe(true);
+  });
+
+  test.each([...PR_REVIEW_SUBMIT_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isPrReviewSubmitResult({ refused: true, reason })).toBe(true);
+    },
+  );
+
+  test("lists the six refusal reasons", () => {
+    expect(PR_REVIEW_SUBMIT_REFUSAL_REASONS).toHaveLength(6);
+  });
+
+  test("rejects a reason of the register step", () => {
+    expect(isPrReviewSubmitResult({ refused: true, reason: "pr_closed" })).toBe(
+      false,
+    );
+  });
+
+  test("rejects a refusal without a reason", () => {
+    expect(isPrReviewSubmitResult({ refused: true })).toBe(false);
+  });
+
+  test("rejects a started flow without a job id", () => {
+    expect(isPrReviewSubmitResult({ refused: false })).toBe(false);
+  });
+
+  test("rejects an audit it does not know", () => {
+    expect(
+      isPrReviewSubmitResult({
+        refused: false,
+        flow_job_id: JOB,
+        action_audit: "maybe",
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects null", () => {
+    expect(isPrReviewSubmitResult(null)).toBe(false);
+  });
+});
+
+describe("isPrReviewRegisterResult", () => {
+  test("accepts a started review", () => {
+    expect(
+      isPrReviewRegisterResult({
+        status: "started",
+        work_item_id: 11,
+        flow_job_id: JOB,
+      }),
+    ).toBe(true);
+  });
+
+  test.each([...PR_REVIEW_REGISTER_REFUSAL_REASONS])(
+    "accepts the refusal %s",
+    (reason) => {
+      expect(isPrReviewRegisterResult({ status: "refused", reason })).toBe(
+        true,
+      );
+    },
+  );
+
+  test("lists the eight refusal reasons", () => {
+    expect(PR_REVIEW_REGISTER_REFUSAL_REASONS).toHaveLength(8);
+  });
+
+  test("rejects a reason of the submit script", () => {
+    expect(
+      isPrReviewRegisterResult({ status: "refused", reason: "actor_unknown" }),
+    ).toBe(false);
+  });
+
+  test("rejects a started review without a work item", () => {
+    expect(
+      isPrReviewRegisterResult({ status: "started", flow_job_id: JOB }),
+    ).toBe(false);
+  });
+
+  test("rejects a status it does not know", () => {
+    expect(isPrReviewRegisterResult({ status: "queued" })).toBe(false);
+  });
+
+  test("rejects null", () => {
+    expect(isPrReviewRegisterResult(null)).toBe(false);
   });
 });
 
