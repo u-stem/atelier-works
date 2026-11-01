@@ -1007,6 +1007,7 @@ export async function hasNonTerminalPrWorkItem(
 
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
 const ACTIVE_PR_FIX_INDEX_NAME = "work_items_active_pr_fix_key";
+const ACTIVE_PR_REVIEW_INDEX_NAME = "work_items_active_pr_review_key";
 
 /** 例外が、名前が`indexName`の一意インデックスへの違反かを返す。 */
 function isUniqueViolationOf(err: unknown, indexName: string): boolean {
@@ -1037,24 +1038,87 @@ export function isActivePrFixUniqueViolation(err: unknown): boolean {
   return isUniqueViolationOf(err, ACTIVE_PR_FIX_INDEX_NAME);
 }
 
-export function isActivePrReviewUniqueViolation(_err: unknown): boolean {
-  return false;
+/**
+ * 例外が、部分一意インデックス`work_items_active_pr_review_key`への違反かを返す。
+ * 終端の`pr_review`を稼働中の状態へ戻す更新(手動の再開と自動の再開)が、
+ * 同じPRの別の稼働中の`pr_review`に阻まれたときに起きる。
+ * 判定の仕方は`isActiveIssueUniqueViolation`と同じである。
+ */
+export function isActivePrReviewUniqueViolation(err: unknown): boolean {
+  return isUniqueViolationOf(err, ACTIVE_PR_REVIEW_INDEX_NAME);
 }
 
+/**
+ * `pr_review`の作業項目を挿入し、そのIDを返す。
+ * 同じPRに終端でない`pr_review`が既にあるときは、挿入せずに`null`を返す。
+ * 同じPRかは、ownerとrepoを小文字にして比べる。`pr_review`の行の綴りは書き手によって揺れるためである。
+ * 二重の防壁を重ねる。`WHERE NOT EXISTS`が、インデックスを作る前の順次の二重投入を防ぎ、
+ * 一意インデックス`work_items_active_pr_review_key`が、並行する挿入を防ぐ。
+ * `ON CONFLICT DO NOTHING`は対象を指定しないので、インデックスへの違反も例外にならず、`null`になる。
+ * 種類が`pr_review`でないとき、PR番号が正の整数でないときは、DBに触れる前に例外を投げる。
+ */
 export async function insertPrReviewWorkItemUnlessActive(
-  _item: NewWorkItem,
-  _sql: SqlClient = defaultSqlClient,
+  item: NewWorkItem,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number | null> {
-  return null;
+  if (item.kind !== "pr_review") {
+    throw new Error(`expected a pr_review work item, got ${item.kind}`);
+  }
+  if (item.pr_number === null) {
+    throw new Error("invalid pull request number: null");
+  }
+  assertPrNumber(item.pr_number);
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id, ci_check_id,
+      conflict_check_id, conflict_episode, profile
+    )
+    SELECT
+      ${item.cycle}::integer, ${item.source}::text, ${item.kind}::text, ${item.owner}::text, ${item.repo}::text,
+      ${item.issue_number}::integer, ${item.issue_url}::text, ${item.pr_number}::integer, ${item.title}::text,
+      ${item.body}::text, ${item.status}::text, ${item.attempt}::integer, ${item.claimed_by}::text,
+      ${item.flow_job_id}::text, ${item.resume_url}::text, ${item.cancel_url}::text, ${item.head_sha}::text,
+      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer,
+      ${item.profile ?? "standard"}::text
+    WHERE NOT EXISTS (
+      SELECT 1 FROM factory.work_items active
+      WHERE active.kind = 'pr_review'
+        AND lower(active.owner) = lower(${item.owner}::text)
+        AND lower(active.repo) = lower(${item.repo}::text)
+        AND active.pr_number = ${item.pr_number}::integer
+        AND active.status != ALL(${terminal})
+    )
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return parseId(row.id, "id");
 }
 
+/**
+ * (owner, repo, prNumber)に、終端でない`pr_review`の作業項目があるかを返す。読み取りだけを行う。
+ * ownerとrepoは小文字で照合する。`insertPrReviewWorkItemUnlessActive`と同じ比べ方である。
+ */
 export async function hasActivePrReviewWorkItem(
-  _owner: string,
-  _repo: string,
-  _prNumber: number,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE kind = 'pr_review'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer AND status != ALL(${terminal})
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 /**
@@ -1672,7 +1736,7 @@ export async function restartTransientPrReview(
 ): Promise<boolean> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const delays = [...params.delaysSeconds];
-  const rows = await sql`
+  const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
       SET status = 'reviewing', flow_job_id = NULL, updated_at = now()
@@ -1713,8 +1777,15 @@ export async function restartTransientPrReview(
     SELECT updated.id, 'failed', 'reviewing', ${params.note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
-  `.fetch();
-  return rows.length > 0;
+  `;
+  try {
+    const rows = await statement.fetch();
+    return rows.length > 0;
+  } catch (err) {
+    // 条件を確かめた後に、綴りの違う行を含む別の実行が、同じPRで`pr_review`を稼働中にした競合。再開しない。
+    if (isActivePrReviewUniqueViolation(err)) return false;
+    throw err;
+  }
 }
 
 /**

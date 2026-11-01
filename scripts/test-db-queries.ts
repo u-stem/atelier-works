@@ -43,6 +43,7 @@ import {
   getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
+  hasActivePrReviewWorkItem,
   hasDependabotItemForHead,
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
@@ -61,10 +62,12 @@ import {
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertGhCollectRuns,
+  insertPrReviewWorkItemUnlessActive,
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
+  isActivePrReviewUniqueViolation,
   isLatestMainCiRunFailed,
   lastApprovalRedispatchAt,
   latestApprovalRequest,
@@ -4368,6 +4371,90 @@ check(
     false,
 );
 
+// 同じPRの終端でないpr_reviewは1件までである(`work_items_active_pr_review_key`)。
+// 挿入の関数が、綴りの違うownerとrepoを同じPRとして数えて挿入せず、終端になれば挿入し直せること、
+// 直接の挿入は一意インデックスが拒み、その違反を`isActivePrReviewUniqueViolation`が見分けられることを確かめる。
+function reviewCandidate(owner: string, repo: string, pr: number) {
+  return {
+    cycle: 1,
+    source: "issue" as const,
+    kind: "pr_review" as const,
+    owner,
+    repo,
+    issue_number: null,
+    issue_url: null,
+    pr_number: pr,
+    title: "qdb active review",
+    body: null,
+    status: "reviewing" as const,
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  };
+}
+const reviewFirst = await insertPrReviewWorkItemUnlessActive(
+  reviewCandidate(OWNER, "r", 9251),
+  sql,
+);
+check(
+  "active pr_review: the first insert for a pull request returns the id",
+  reviewFirst !== null && reviewFirst > 0,
+  reviewFirst,
+);
+check(
+  "active pr_review: an insert with another case of the owner and repo returns null",
+  (await insertPrReviewWorkItemUnlessActive(
+    reviewCandidate(OWNER.toUpperCase(), "R", 9251),
+    sql,
+  )) === null,
+);
+check(
+  "active pr_review: an insert for another pull request returns the id",
+  (await insertPrReviewWorkItemUnlessActive(
+    reviewCandidate(OWNER, "r", 9252),
+    sql,
+  )) !== null,
+);
+check(
+  "active pr_review: the read finds the active row whatever the case",
+  (await hasActivePrReviewWorkItem(OWNER.toUpperCase(), "R", 9251, sql)) ===
+    true,
+);
+check(
+  "active pr_review: the read finds nothing for another pull request",
+  (await hasActivePrReviewWorkItem(OWNER, "r", 9259, sql)) === false,
+);
+let activeReviewInsertError: unknown = null;
+try {
+  await prWorkItem("pr_review", 9251, "reviewing", "qdb direct second review");
+} catch (err) {
+  activeReviewInsertError = err;
+}
+check(
+  "active pr_review: a direct second insert is rejected by the index",
+  isActivePrReviewUniqueViolation(activeReviewInsertError),
+  activeReviewInsertError,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'reviewed' WHERE id = ${String(reviewFirst)}`,
+);
+check(
+  "active pr_review: a finished review does not count",
+  (await hasActivePrReviewWorkItem(OWNER, "r", 9251, sql)) === false,
+);
+check(
+  "active pr_review: an insert after the review finished returns the id",
+  (await insertPrReviewWorkItemUnlessActive(
+    reviewCandidate(OWNER, "r", 9251),
+    sql,
+  )) !== null,
+);
+
 // 同じPRの終端でないpr_fixは1件までである(`work_items_active_pr_fix_key`)。
 // 一意インデックスへの違反を`isActivePrFixUniqueViolation`が見分けられること、稼働中のpr_fixの一覧、
 // 自動の再開の候補の一覧と比較交換が、同じPRの別の稼働中のpr_fixを避けることを確かめる。
@@ -7151,6 +7238,11 @@ check(
         includeExhausted: true,
       })
     ).includes(transientExhausted),
+);
+// 同じPRの稼働中のpr_reviewは1件までなので(`work_items_active_pr_review_key`)、再開した古い行を失敗に戻してから、新しい行を入れる。
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'failed' WHERE id = ${String(transientOld)}`,
 );
 const transientNewer = await prWorkItem(
   "pr_review",
