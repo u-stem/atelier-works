@@ -391,6 +391,7 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 - Issueを作るステップ(`steps/manual_intake_create_issue.ts`)
 - 承認を省く進め方の登録(`steps/manual_intake_register.ts`)の読み取り
 - `cleanup_db`の削除
+
 表を落とすdown migrationを当てる前に、この読み書きも外す。
 表が無いと、Issueの作成と`cleanup_db`が毎回失敗し、承認を省く進め方の登録が断られるためである。
 承認を省く進め方は、キーを必須にする。キーが無い投入は、Issueを作る前に断る。
@@ -404,7 +405,8 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 2. 衝突したときは、行を読む。
    - 内容のハッシュが違えば、`intake_key_conflict`で失敗する。
    - 番号があれば、Issueを作らず、行のリポジトリと番号を再利用として返す。
-     再利用のとき、登録のステップは、通常の進め方では何もしない。承認を省く進め方では、そのIssueに作業項目が1件も無いときだけ登録する。
+     再利用のとき、登録のステップは、通常の進め方では何もしない。
+     承認を省く進め方では、そのIssueに作業項目が1件も無いときだけ登録する。
    - 番号が無く、予約から10分以内なら、`intake_key_in_flight`で失敗する。
    - 番号が無く、10分を過ぎていれば、1つの`UPDATE`で持ち主を自分に替えて予約を取り直す。
      取れなければ、`intake_key_in_flight`で失敗する。

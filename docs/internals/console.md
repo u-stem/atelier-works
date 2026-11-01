@@ -2973,7 +2973,7 @@ DBは読まない。
 
 | 項目 | 内容 |
 | --- | --- |
-| 引数 | `owner`、`repo`、`title`、`body`(目的)、`acceptance_criteria`(省略時は空)、`profile`(進め方。省略時は`standard`)、`intake_key`(冪等キー。省略可) |
+| 引数 | `owner`、`repo`、`title`、`body`(目的)、`acceptance_criteria`(省略時は空)、`profile`(進め方。省略時は`standard`)、`intake_key`(冪等キー。承認を省く進め方では必須) |
 | 戻り値 | 断ったときは`{ refused: true, reason }`、起動したときは`{ refused: false, flow_job_id }` |
 
 画面は、送信ごとに`intake_key`を付ける。
