@@ -809,9 +809,10 @@ export async function newestNewerIssueCycle(
 /**
  * 同じPRで、同じ種類(`pr_review`か`pr_fix`)の作業項目のうち、`id`が`id`より大きいものの中で
  * `id`が最大のものを返す。無ければ`null`。
- * `listActionableWorkItems`が引き継ぎ済みとみなす行と同じ条件で、
  * `retry_work_item`が取り消された古い行を、並んで動く新しい行があるときに再開しないために使う。
- * ownerとrepoは小文字で照合する。行の綴りは書き手ごとに違うので、綴りの違う新しい行も引く。
+ * `listActionableWorkItems`が引き継ぎ済みとみなす条件に近いが、同じではない。
+ * こちらはownerとrepoを小文字で照合し、綴りの違う新しい行も引く。
+ * `listActionableWorkItems`は綴りを区別したままである。
  */
 export async function newestNewerPrWorkItem(
   kind: "pr_review" | "pr_fix",
