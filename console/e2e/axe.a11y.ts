@@ -1,6 +1,8 @@
 // 画面とダイアログを、axe-coreで検査する。WCAG 2.0と2.1のAとAAの規則だけを見る。
 // 検査は、ビルド済みのConsoleを、テーマ(ライト、ダーク)と、データの有る無しの組み合わせで開いて行う。
 // 規則の無効化、検査の対象からの除外、既知の違反の許容リストは持たない。
+// 検査が何も測らずに通る事態を防ぐため、違反を埋めたページで違反が出ること、
+// 規則が1つ以上通ること、テーマの属性が意図どおりであることも、画面ごとに確かめる。
 
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
@@ -39,16 +41,46 @@ const SCREEN_PATHS: readonly string[] = [
   "jobs?tab=schedules",
 ];
 
-/** 違反を、規則、影響、要素の数と最初の要素で1行にする。差分で原因を辿れるようにする。 */
-async function violationsOf(page: Page): Promise<string[]> {
+type Audit = {
+  /** 違反を、規則、影響、要素の数と最初の要素で1行にしたもの。差分で原因を辿れるようにする。 */
+  readonly violations: readonly string[];
+  /** 通った規則が1つ以上あるか。偽なら、検査が何も測れていない。 */
+  readonly checked: boolean;
+  /** htmlの`data-theme`。配色を決める。 */
+  readonly theme: string | null;
+  /** htmlの`data-theme-preference`。保存した選択。 */
+  readonly preference: string | null;
+};
+
+/** 画面をaxeにかけ、結果を要約する。「要確認」のコントラストの件数は、出力とレポートに残す。 */
+async function auditOf(page: Page): Promise<Audit> {
   const results = await new AxeBuilder({ page })
     .withTags([...WCAG_TAGS])
     .analyze();
-  return results.violations.map((violation) => {
-    const first = violation.nodes[0];
-    const target = first === undefined ? "" : first.target.join(" ");
-    return `${violation.id} (${violation.impact ?? "n/a"}) x${violation.nodes.length}: ${target}`;
-  });
+  const pending = results.incomplete
+    .filter((item) => item.id === "color-contrast")
+    .reduce((sum, item) => sum + item.nodes.length, 0);
+  if (pending > 0) {
+    const note = `color-contrast incomplete: ${pending} node(s) at ${page.url()}`;
+    test.info().annotations.push({ type: "incomplete", description: note });
+    console.log(note);
+  }
+  const attribute = (name: string) => page.locator("html").getAttribute(name);
+  return {
+    violations: results.violations.map((violation) => {
+      const first = violation.nodes[0];
+      const target = first === undefined ? "" : first.target.join(" ");
+      return `${violation.id} (${violation.impact ?? "n/a"}) x${violation.nodes.length}: ${target}`;
+    }),
+    checked: results.passes.length > 0,
+    theme: await attribute("data-theme"),
+    preference: await attribute("data-theme-preference"),
+  };
+}
+
+/** 違反が0件で、検査が測れていて、テーマが意図どおりの状態。 */
+function clean(theme: Theme): Audit {
+  return { violations: [], checked: true, theme, preference: theme };
 }
 
 for (const theme of THEMES) {
@@ -59,7 +91,7 @@ for (const theme of THEMES) {
         test(`/console/${path} has no violations`, async ({ page }) => {
           await openScreen(page, path);
 
-          expect(await violationsOf(page)).toEqual([]);
+          expect(await auditOf(page)).toEqual(clean(theme));
         });
       }
     });
@@ -75,7 +107,7 @@ for (const theme of THEMES) {
         page.locator("dialog[data-command-palette][open]"),
       ).toBeVisible();
 
-      expect(await violationsOf(page)).toEqual([]);
+      expect(await auditOf(page)).toEqual(clean(theme));
     });
 
     test("the shortcut help has no violations", async ({ page }) => {
@@ -83,7 +115,7 @@ for (const theme of THEMES) {
       await page.getByRole("button", { name: "ショートカット" }).click();
       await expect(page.locator("dialog[open]")).toBeVisible();
 
-      expect(await violationsOf(page)).toEqual([]);
+      expect(await auditOf(page)).toEqual(clean(theme));
     });
 
     test("the retry confirmation has no violations", async ({ page }) => {
@@ -92,7 +124,36 @@ for (const theme of THEMES) {
       await expect(page.locator("dialog[open]")).toBeVisible();
       await settle(page);
 
-      expect(await violationsOf(page)).toEqual([]);
+      expect(await auditOf(page)).toEqual(clean(theme));
     });
   });
 }
+
+// 検査自身の確認。違反を埋めた固定のページで、画面の検査と同じ設定のaxeが違反を返す。
+// ここが通らないとき、画面の「違反なし」は何も意味しない。
+test.describe("the axe check itself", () => {
+  const PAGE_HEAD =
+    '<!doctype html><html lang="ja"><head><title>canary</title></head>';
+
+  test("reports an image without alternative text", async ({ page }) => {
+    await page.setContent(
+      `${PAGE_HEAD}<body><main><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></main></body></html>`,
+    );
+
+    const { violations } = await auditOf(page);
+
+    expect(violations.some((line) => line.startsWith("image-alt"))).toBe(true);
+  });
+
+  test("reports text with low contrast", async ({ page }) => {
+    await page.setContent(
+      `${PAGE_HEAD}<body><main><p style="color:#777777;background:#888888">low contrast</p></main></body></html>`,
+    );
+
+    const { violations } = await auditOf(page);
+
+    expect(violations.some((line) => line.startsWith("color-contrast"))).toBe(
+      true,
+    );
+  });
+});
