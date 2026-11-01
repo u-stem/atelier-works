@@ -21,6 +21,7 @@ import {
   restoreFields,
 } from "../../lib/intakeFields.ts";
 import {
+  blocksImplicitSubmit,
   buildIntakeInput,
   defaultRepoText,
   describeIntakeProblem,
@@ -84,7 +85,8 @@ function Field({
 
 /**
  * 進め方の選択。ネイティブのラジオを`fieldset`でまとめ、矢印キーで選べるようにする。
- * ラジオでEnterを押すとフォームが送信されるので、選んだ進め方は送信ボタンの文言にも出る。
+ * ラジオでのEnterは暗黙の送信になるので、止める。矢印キーで切り替えた直後に、確認なしで送らないためである。
+ * 題名などの欄のEnterは従来どおり送信し、そのときも送信ボタンの文言が進め方を示す。
  */
 function ProfileChoice({
   name,
@@ -117,6 +119,11 @@ function ProfileChoice({
             checked={value === option.value}
             disabled={disabled}
             className="mt-1 size-4 accent-primary"
+            onKeyDown={(event) => {
+              if (blocksImplicitSubmit(event.key)) {
+                event.preventDefault();
+              }
+            }}
             onChange={() => {
               onChange(option.value);
             }}

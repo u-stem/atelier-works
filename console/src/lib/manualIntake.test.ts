@@ -362,7 +362,7 @@ describe("what the profile changes on the screen", () => {
     expect(
       PROFILE_OPTIONS.find((option) => option.value === "docs")?.description,
     ).toBe(
-      "文書の変更として承認なしで実装する(文書以外を変えたら PRで警告する)",
+      "文書の変更として承認なしで実装する(文書以外を変えたらPRで警告する)",
     );
   });
 

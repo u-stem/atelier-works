@@ -202,18 +202,18 @@ export const PROFILE_OPTIONS: readonly ProfileOption[] = [
   {
     value: "direct",
     label: "直接",
-    description: "承認なしで実装して PR を作る",
+    description: "承認なしで実装してPRを作る",
   },
   {
     value: "bugfix",
     label: "不具合の修正",
-    description: "再現手順つきで、承認なしで実装して PR を作る",
+    description: "再現手順つきで、承認なしで実装してPRを作る",
   },
   {
     value: "docs",
     label: "文書の変更",
     description:
-      "文書の変更として承認なしで実装する(文書以外を変えたら PR で警告する)",
+      "文書の変更として承認なしで実装する(文書以外を変えたらPRで警告する)",
   },
 ];
 
@@ -231,12 +231,17 @@ export function skipsApproval(profile: IntakeProfile): boolean {
 /** 承認を省くときに、欄の下へ出す注記。`standard`では出さない。 */
 export function profileNotice(profile: IntakeProfile): string | null {
   return skipsApproval(profile)
-    ? "PR は人がレビューしてからマージしてください(強制はされません)"
+    ? "PRは人がレビューしてからマージしてください(強制はされません)"
     : null;
 }
 
-export function blocksImplicitSubmit(_key: string): boolean {
-  return false;
+/**
+ * 進め方のラジオで、既定の動作(フォームの暗黙の送信)を止めるキーか。
+ * 矢印キーで承認を省く進め方に切り替えた直後のEnterが、確認なしに投入を送るのを防ぐ。
+ * 矢印キー、スペース、Tabは、ラジオの選択と移動に使うので止めない。
+ */
+export function blocksImplicitSubmit(key: string): boolean {
+  return key === "Enter";
 }
 
 /** 送信ボタンの文言。承認を省くときは、押す場所でそれを示す。 */
