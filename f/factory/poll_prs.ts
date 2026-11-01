@@ -95,6 +95,7 @@ import {
   recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
+import type { PrReviewStartResult } from "./lib/pr_review_start.ts";
 import {
   hasLabel,
   isRecord,
@@ -141,7 +142,9 @@ async function recordFailureSafe(
   }
 }
 
-function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
+export function activeItemsByPr(
+  active: readonly WorkItem[],
+): Map<string, WorkItem[]> {
   const byPr = new Map<string, WorkItem[]>();
   for (const item of active) {
     if (item.pr_number === null) continue;
@@ -165,6 +168,20 @@ function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
 // の列コメントを参照。これらは`PrCandidate`を広げず、並べた別の構造で持つ。
 // `PrCandidate`を受け取る`decidePrActions`はこれらを使わないため。
 // ---------------------------------------------------------------------------
+
+export function activeReviewItemsByLowerPr(
+  _active: readonly WorkItem[],
+): Map<string, WorkItem[]> {
+  return new Map();
+}
+
+export function activeItemsForPr(
+  _byPr: ReadonlyMap<string, WorkItem[]>,
+  _reviewsByLowerPr: ReadonlyMap<string, WorkItem[]>,
+  _found: { owner: string; repo: string; number: number },
+): WorkItem[] {
+  return [];
+}
 
 /**
  * 新しいpr_fixの行の`last_*`の3列に引き継ぐ値。
@@ -838,7 +855,7 @@ async function startReview(
   observed: ObservedSeed,
   linkedParentWorkItemId: number | null,
   reason: "label" | "assignment",
-): Promise<void> {
+): Promise<PrReviewStartResult> {
   const workItemId = await insertWorkItem({
     cycle: 1,
     source: "issue",
@@ -878,6 +895,7 @@ async function startReview(
     "runFlowAsync",
   );
   await setFlowJobId(workItemId, flowJobId);
+  return { status: "already_active" };
 }
 
 async function startFix(
@@ -962,7 +980,7 @@ export type PrDecisionHandlers = {
     candidate: PrCandidate,
     context: PrCandidateContext,
     reason: "label" | "assignment",
-  ) => Promise<void>;
+  ) => Promise<PrReviewStartResult>;
   readonly startFix: (
     candidate: PrCandidate,
     context: PrCandidateContext,

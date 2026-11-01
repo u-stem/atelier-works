@@ -143,6 +143,58 @@ describe("decidePrActions — review", () => {
     expect(decision?.review.kind).toBe("trigger_review");
   });
 
+  test("does not trigger the label review while a review is already active", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          labels: [REVIEW_LABEL],
+          reviewLabelerLogin: "octo-owner",
+          hasActiveReviewingItem: true,
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review).toEqual({ kind: "none" });
+  });
+
+  test("still denies a review label that an unallowed person added while a review is active", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          labels: [REVIEW_LABEL],
+          reviewLabelerLogin: "mallory",
+          hasActiveReviewingItem: true,
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("triggers the label review once no review is active", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          labels: [REVIEW_LABEL],
+          reviewLabelerLogin: "octo-owner",
+          hasActiveReviewingItem: false,
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review).toEqual({
+      kind: "trigger_review",
+      reason: "label",
+      removeLabel: true,
+    });
+  });
+
   test("does not trigger review when an item is already reviewing", () => {
     const [decision] = decidePrActions(
       [
