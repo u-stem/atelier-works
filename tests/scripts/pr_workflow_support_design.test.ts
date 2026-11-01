@@ -856,6 +856,18 @@ describe("the mark of a review a person asked for by the label", () => {
     expect(isReviewRequestedByLabel(reviewRowBody("label"))).toBe(true);
   });
 
+  test("is written to the body of a review a person asked for through the Console", () => {
+    expect(reviewRowBody("request")).not.toBeNull();
+  });
+
+  test("differs between the label and the Console request", () => {
+    expect(reviewRowBody("request")).not.toBe(reviewRowBody("label"));
+  });
+
+  test("is read back from the body the Console request wrote", () => {
+    expect(isReviewRequestedByLabel(reviewRowBody("request"))).toBe(true);
+  });
+
   test("is not read from an empty body", () => {
     expect(isReviewRequestedByLabel(null)).toBe(false);
   });

@@ -1316,7 +1316,9 @@ export const REVIEW_DESIGN_STAGE_REASON =
 const REVIEW_BY_LABEL_BODY = "review requested by a person through the label";
 
 /** 新しい`pr_review`の行の`body`。ラベルが頼んだレビューにだけ印を書く。 */
-export function reviewRowBody(reason: "label" | "assignment"): string | null {
+export function reviewRowBody(
+  reason: "label" | "assignment" | "request",
+): string | null {
   return reason === "label" ? REVIEW_BY_LABEL_BODY : null;
 }
 
