@@ -46,6 +46,8 @@ type Audit = {
   readonly violations: readonly string[];
   /** 通った規則が1つ以上あるか。偽なら、検査が何も測れていない。 */
   readonly checked: boolean;
+  /** 文字のコントラストが測られたか。偽なら、色の検査が何も測れていない。 */
+  readonly contrastMeasured: boolean;
   /** htmlの`data-theme`。配色を決める。 */
   readonly theme: string | null;
   /** htmlの`data-theme-preference`。保存した選択。 */
@@ -73,6 +75,7 @@ async function auditOf(page: Page): Promise<Audit> {
       return `${violation.id} (${violation.impact ?? "n/a"}) x${violation.nodes.length}: ${target}`;
     }),
     checked: results.passes.length > 0,
+    contrastMeasured: false,
     theme: await attribute("data-theme"),
     preference: await attribute("data-theme-preference"),
   };
@@ -80,7 +83,13 @@ async function auditOf(page: Page): Promise<Audit> {
 
 /** 違反が0件で、検査が測れていて、テーマが意図どおりの状態。 */
 function clean(theme: Theme): Audit {
-  return { violations: [], checked: true, theme, preference: theme };
+  return {
+    violations: [],
+    checked: true,
+    contrastMeasured: true,
+    theme,
+    preference: theme,
+  };
 }
 
 for (const theme of THEMES) {
@@ -135,6 +144,10 @@ test.describe("the axe check itself", () => {
   const PAGE_HEAD =
     '<!doctype html><html lang="ja"><head><title>canary</title></head>';
 
+  /** 背景に画像があり、axeが色を決められない(要確認になる)段落を、count個並べたページ。 */
+  const pendingPage = (count: number): string =>
+    `${PAGE_HEAD}<body><main>${'<p style="background-image:linear-gradient(#ffffff,#000000);color:#888888">gradient</p>'.repeat(count)}</main></body></html>`;
+
   test("reports an image without alternative text", async ({ page }) => {
     await page.setContent(
       `${PAGE_HEAD}<body><main><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></main></body></html>`,
@@ -155,5 +168,45 @@ test.describe("the axe check itself", () => {
     expect(violations.some((line) => line.startsWith("color-contrast"))).toBe(
       true,
     );
+  });
+
+  test("measures text with low contrast", async ({ page }) => {
+    await page.setContent(
+      `${PAGE_HEAD}<body><main><p style="color:#777777;background:#888888">low contrast</p></main></body></html>`,
+    );
+
+    const { contrastMeasured } = await auditOf(page);
+
+    expect(contrastMeasured).toBe(true);
+  });
+
+  test("does not count a page without text as measured", async ({ page }) => {
+    await page.setContent(
+      `${PAGE_HEAD}<body><main><div></div></main></body></html>`,
+    );
+
+    const { contrastMeasured } = await auditOf(page);
+
+    expect(contrastMeasured).toBe(false);
+  });
+
+  test("accepts a page whose text is only pending, within the limit", async ({
+    page,
+  }) => {
+    await page.setContent(pendingPage(4));
+
+    const { contrastMeasured } = await auditOf(page);
+
+    expect(contrastMeasured).toBe(true);
+  });
+
+  test("rejects a page whose text is only pending, over the limit", async ({
+    page,
+  }) => {
+    await page.setContent(pendingPage(5));
+
+    const { contrastMeasured } = await auditOf(page);
+
+    expect(contrastMeasured).toBe(false);
   });
 });
