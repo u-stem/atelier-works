@@ -69,6 +69,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 | `mise run console:build` | Consoleを`console/dist`に組み立てる |
+| `mise run console:a11y` | Consoleを組み立て、Chromiumで開いてアクセシビリティを検査する。axe-coreの規則と、TabとEscapeの実操作を見る。初回は`bun run --cwd console playwright install chromium`でブラウザを入れる。CIの`console-a11y`ジョブも同じ検査を動かす([ブラウザでのa11y検査](docs/internals/console.md#ブラウザでのa11y検査)) |
 | `mise run console:branch` | 組み立てたブランチ版のConsoleを`127.0.0.1:5174`の`/console/`で配信し、読み取りだけをローカルのWindmillへ中継し、書き込みは`-- --allow-writes`を付けたときだけ通す([ブランチ版の確認](docs/setup.md#ブランチ版のconsoleを確かめる)) |
 | `mise run bootstrap` | ワークスペースの作成、secret変数の投入、インスタンスのカスタムtagの設定、sync push、migrationを行う。何度実行してもよい |
 | `mise run instance:tags` | インスタンスのカスタムtagに`console`と`periodic`を足す。`bootstrap`済みのインスタンス向けで、何度実行してもよい |

@@ -178,7 +178,7 @@ registryの事実は、対象ごとに順に読む。
 
 | 扱い | 条件 | 必須チェック | 準備と終了 |
 | --- | --- | --- | --- |
-| `primary` | `factory_repo`。`dependabot_other_repos`に載せても変わらない | 固定の`REQUIRED_CHECKS`(7件)。GitHubを読まない | 今までどおり |
+| `primary` | `factory_repo`。`dependabot_other_repos`に載せても変わらない | 固定の`REQUIRED_CHECKS`(8件)。GitHubを読まない | 今までどおり |
 | `other` | `dependabot_other_repos`の項目と、大文字小文字を除いて完全に一致する | baseのブランチに効くルールセットの必須チェック | cloneもインストールもせずに人に回す |
 | `off` | 上のどれでもない | なし | 収集が人に回す。pollは対象に入れない |
 

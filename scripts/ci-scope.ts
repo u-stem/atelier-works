@@ -198,6 +198,8 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
     matches: (path) => path.startsWith("scripts/") && path.endsWith(".sh"),
     flags: FLAGS,
   },
+  // 検査用の配信に使うscript(console-a11yジョブが、ビルドしたConsoleをこれで配信する)。
+  { matches: exact("scripts/console-branch-server.ts"), flags: ["console"] },
   // lockfileの検査は、consoleジョブが組み立ての前提にする(console-dist.ymlも同じ検査を動かす)。
   { matches: exact("scripts/check-console-lockfile.ts"), flags: ["console"] },
   // 依存、型検査、ツール、Windmillの設定は、どのジョブの結果も変えうる。

@@ -3445,7 +3445,7 @@ dependabotの対象は、baseが`main`のPRに限る。
 新しいheadのたびに通知が出るので、確かめた後は一覧から外す。
 そのリポジトリのコマンド(インストールを含む)を、workerで動かさないためである。
 この間は、ゲートまで通ったことを、人に回った理由(`dependabot prepare:`)で確かめるために使う。
-`factory_repo`の必須チェックは、今までどおり固定の7件で、設定に左右されない。
+`factory_repo`の必須チェックは、今までどおり固定の8件で、設定に左右されない。
 
 マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
 

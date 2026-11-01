@@ -414,6 +414,73 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         run: bun run --cwd console write-manifest dist "$SOURCE_SHA"
 
+  console-a11y:
+    # ビルドしたConsoleをChromiumで開き、アクセシビリティを自動で検査する。
+    # axe-coreでWCAG 2.0と2.1のAとAAの規則を、テーマ(ライト、ダーク)と画面の状態ごとに見る。
+    # TabとEscapeの実操作で、スキップのリンク、Tabの順序、ダイアログ、遷移後のフォーカスも確かめる。
+    # 配信物は上げない。CheckoutからBuildまでの手順は`console`ジョブと同じで、テストが一致を確かめる。
+    # draw.ioのビューアは取得しないので、検査するdistには含まれない(図を埋め込む画面は実物の形で見ない)。
+    # APIは検査が固定の値で受けるので、WindmillにもGitHubにも繋がない。
+    # PRの実行だけで動かす。ACTIONS_RUNTIME_TOKENはpermissionsと関係なく全ジョブに渡るので、
+    # mainのpushで照合しないブラウザを動かすと、mainの範囲のキャッシュへ書ける経路ができるため。
+    # スキップは、必須チェックとhost_applyで通過として扱う。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.console != 'false' && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # このジョブは`mise run` / `mise exec`を使わずbunを直接呼ぶ。
+      # 入れていない[tools](windmill-cliなど)を、後からmiseが自動で入れないようにする。
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # 成果物の組み立てに要るbunと、viteとPlaywrightを動かすnodeだけを入れる。
+          # 他の[tools]のinstall scriptや固定していない依存を、このジョブで動かさないため。
+          install_args: bun node
+          # 他のジョブが書いたキャッシュを読まず、このジョブからも書かない。
+          cache: false
+
+      - name: Install root dependencies
+        # ルートの依存のinstall scriptも実行しない。
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Check the console lockfile policy
+        # 依存を入れる前に、取得元がregistryとintegrityに限られることを確かめる。
+        # `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
+        run: bun ./scripts/check-console-lockfile.ts console/bun.lock
+
+      - name: Install console dependencies
+        run: bun install --cwd console --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        run: bun run --cwd console build
+
+      - name: Install the Playwright browser
+        # ブラウザはPlaywrightの取得元(cdn.playwright.dev)から毎回取る。headless shellだけを入れる。
+        # 取得物をハッシュで照合しないので、キャッシュには置かない。mainの実行が書いたものをPRが読む経路を作らないためである。
+        run: bun run --cwd console playwright install --with-deps --only-shell chromium
+
+      - name: Run the accessibility checks
+        run: bun run --cwd console test:a11y
+
+      - name: Upload the Playwright report
+        # 失敗の原因を辿れるよう、失敗したときだけレポートを残す。保持は短くする。
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: console/playwright-report/
+          retention-days: 3
+          if-no-files-found: ignore
+
   caddyfile:
     # Caddyfileを、composeで使うのと同じイメージで検証し、実際に起動して拒否の規則を確かめる。
     needs: scope

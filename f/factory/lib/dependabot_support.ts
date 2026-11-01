@@ -18,6 +18,7 @@ export const REQUIRED_CHECKS: readonly string[] = Object.freeze([
   "test-db",
   "metadata",
   "console",
+  "console-a11y",
   "caddyfile",
   "console-fetcher-image",
 ]);
