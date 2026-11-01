@@ -3042,7 +3042,7 @@ DBは読まない。
 
 | 項目 | 内容 |
 | --- | --- |
-| 引数 | `owner`、`repo`、`title`、`body`(目的)、`acceptance_criteria`(省略時は空)、`profile`(進め方。省略時は`standard`)、`intake_key`(冪等キー。省略可) |
+| 引数 | `owner`、`repo`、`title`、`body`(目的)、`acceptance_criteria`(省略時は空)、`profile`(進め方。省略時は`standard`)、`intake_key`(冪等キー。承認を省く進め方では必須) |
 | 戻り値 | 断ったときは`{ refused: true, reason }`、起動したときは`{ refused: false, flow_job_id }` |
 
 画面は、送信ごとに`intake_key`を付ける。
@@ -3052,9 +3052,10 @@ DBは読まない。
 キーの扱いは、[手動投入の冪等キー](work-items.md#手動投入の冪等キー)にある。
 
 画面は`profile`を送らない。
-受け付ける進め方は`standard`だけで、それ以外は`profile_not_allowed`で断る。
+受け付ける進め方は`standard`、`direct`、`bugfix`、`docs`で、それ以外は`profile_not_allowed`で断る。
+承認を省く進め方は、`intake_key`が無いと`intake_key_required`で、実装が止まっていると`implement_disabled`で断る。
 断りはフローを起動する前に起き、フローのステップも、Issueの作成と登録の前に同じ一覧で断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
-画面は`profile`を送らないので、この断りの文は画面に出ない。
+画面は`profile`を送らないので、これらの断りの文は画面に出ない。
 符号の表を網羅するために置いていて、描画されない。
 
 断りは、失敗ではなく結果として返す。

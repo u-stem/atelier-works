@@ -18,7 +18,7 @@ schema:
       originalType: string
     intake_key:
       type: string
-      description: 投入の再送を止める冪等キー(小文字のUUID)。省くと、再送を止めない従来の投入になります。形が違うと、起動せずに理由を返します。
+      description: 投入の再送を止める冪等キー(小文字のUUID)。省くと、再送を止めない従来の投入になります。形が違うと、起動せずに理由を返します。承認を省く進め方では必須です。
       default: null
       originalType: string
     owner:
@@ -28,7 +28,7 @@ schema:
       originalType: string
     profile:
       type: string
-      description: 作業の進め方。省くと通常の進め方(standard)になります。受け付けない値は、起動せずに理由を返します。
+      description: 作業の進め方。省くと通常の進め方(standard)になります。受け付けない値は、起動せずに理由を返します。承認を省く進め方は、冪等キーが無いか、実装が止まっているときも、起動せずに理由を返します。
       default: standard
       originalType: string
     repo:

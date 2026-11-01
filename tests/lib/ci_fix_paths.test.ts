@@ -819,8 +819,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
   "f/factory/lib/console_support.ts":
     "通知の重要度と対象の定数。通知の種類を足す変更が日常的に触れる。競合の通知の種類を読むだけで、判断には使わない",
-  "f/factory/lib/manual_intake_support.ts":
-    "手動投入の入力の検証と、断りの理由の定数。入力の規則を直す変更が日常的に触れる。断りの理由は、Consoleの契約テストが型と突き合わせる",
+  "f/factory/lib/claim_support.ts":
+    "Issueの取得の後処理(noticeの本文と記録)の共有モジュール。poll_issuesと手動投入の登録が使う。取得の修正が日常的に触れ、判断を持たず、反映はマージ後で、レビューが受け皿になる",
   "f/factory/lib/intake_refresh.ts":
     "Issueの取り込み内容を更新する共有モジュール。取り込みの修正が日常的に触れる",
   "f/factory/lib/design_launch_support.ts":

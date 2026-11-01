@@ -21,14 +21,19 @@ import { parseJobId } from "../lib/job_ids.ts";
 import { type Logger, logger } from "../lib/log.ts";
 import {
   assertAcceptedProfile,
+  assertImplementEnabledForProfile,
   assertIntakeKey,
+  assertIntakeKeyForProfile,
   buildManualIntakeIssueBody,
+  buildPostedIssueBody,
   computeIntakeContentHash,
+  endsWithIntakeMarker,
   intakeMarkerText,
+  issueHtmlUrl,
   type ManualIntakeFields,
   type ManualIntakeIssueInput,
   normalizeIntakeKey,
-  withIntakeMarker,
+  skipsApprovals,
 } from "../lib/manual_intake_support.ts";
 import {
   repoOwnerGateDeps,
@@ -54,18 +59,29 @@ export type ManualIntakeCreateIssueResult = {
   readonly owner: string;
   readonly repo: string;
   readonly number: number;
-  /** 最初の投入のIssueを返す`reused`のときは無い。登録は飛ばされるので、使われない。 */
-  readonly htmlUrl?: string;
+  /** `reused`のときは、キーの表の所有者・リポジトリ・番号から組み立てる。登録のステップが使う。 */
+  readonly htmlUrl: string;
   readonly title: string;
+  /** GitHubに投稿した本文そのもの(区切りの行と、キーがあれば目印を含む)。作業項目の本文になる。 */
   readonly body: string;
   /** 同じ冪等キーの最初の投入が作ったIssueを返したか。 */
   readonly reused: boolean;
+  /**
+   * 検証済みの進め方。登録のステップは、フローの入力ではなく、この値を受ける。
+   * 承認を省く進め方は、ここで受け付けた値だけが登録に届く。
+   */
+  readonly profile: string;
+  /** 検証済みの冪等キー。キー無しの投入には無い。登録のステップが、キーの表の行と照合する。 */
+  readonly intake_key?: string;
 };
 
 export type CreatedIssue = {
   readonly number: number;
   readonly htmlUrl: string;
 };
+
+/** 目印の探索が見つけたIssue。本文は、目印の前の区切りの行を確かめるために持つ。 */
+export type FoundIssue = CreatedIssue & { readonly body: string };
 
 export type ManualIntakeIssueDeps = {
   readonly store: IntakeKeyStore;
@@ -76,7 +92,7 @@ export type ManualIntakeIssueDeps = {
   readonly findIssue: (
     markerText: string,
     since: Date,
-  ) => Promise<CreatedIssue | null>;
+  ) => Promise<FoundIssue | null>;
   readonly createIssue: (title: string, body: string) => Promise<CreatedIssue>;
   readonly log: Pick<Logger, "warn">;
 };
@@ -89,7 +105,7 @@ export const INTAKE_KEY_IN_FLIGHT_MESSAGE =
 /**
  * Issueを作る。冪等キーがあるときは、同じキーの再送がIssueを増やさないよう、作る前に表で調べる。
  *
- * - キーが無い: 表にも探索にも触れず、従来どおり作る。
+ * - キーが無い: 表にも探索にも触れず、本文の最後に区切りの行を足して作る。
  * - 予約できた: 作る。
  * - 予約が衝突した: 内容のハッシュが違えば`intake_key_conflict`を投げる。
  *   番号が書かれていれば、Issueを作らず、その番号を`reused`で返す。
@@ -98,6 +114,8 @@ export const INTAKE_KEY_IN_FLIGHT_MESSAGE =
  *   10分を過ぎていれば、予約を取り直して作る。
  * - 予約の後、作る前に、目印の行で終わる既存のIssueを探す。見つかれば、その番号を使って作らない。
  *   前の試行が、GitHubに届いたのに番号を書けずに終わった場合の二重を避ける。
+ *   見つけたIssueの本文が、区切りの行、空行、目印の順に終わらないときは、作成済みと信じない。
+ *   区切りの行を足す前に作ったIssueと、利用者の入力が目印の形で終わるIssueを、取り違えないためである。
  * - 作るのに失敗しても予約は消さない。GitHubに届いたか分からず、次の試行が目印で見つけるためである。
  *
  * 番号を書けなかったとき(自分の予約が取り直された)も、作ったIssueは返す。
@@ -107,7 +125,8 @@ export async function createManualIntakeIssue(
   input: ManualIntakeFields,
   deps: ManualIntakeIssueDeps,
 ): Promise<ManualIntakeCreateIssueResult> {
-  const issueBody = buildManualIntakeIssueBody(input);
+  // 投稿する本文そのものを、作業項目の本文として返す。承認の前の確認が、現在のIssueの本文と比べるためである。
+  const issueBody = buildPostedIssueBody(input, input.intake_key);
   const outcome = (issue: CreatedIssue): ManualIntakeCreateIssueResult => ({
     owner: input.owner,
     repo: input.repo,
@@ -116,6 +135,8 @@ export async function createManualIntakeIssue(
     title: input.title,
     body: issueBody,
     reused: false,
+    profile: input.profile,
+    ...(input.intake_key === undefined ? {} : { intake_key: input.intake_key }),
   });
 
   const key = input.intake_key;
@@ -152,9 +173,12 @@ export async function createManualIntakeIssue(
         owner: row.owner,
         repo: row.repo,
         number: row.issue_number,
+        htmlUrl: issueHtmlUrl(row.owner, row.repo, row.issue_number),
         title: input.title,
         body: issueBody,
         reused: true,
+        profile: input.profile,
+        intake_key: key,
       };
     }
     if (!(await store.takeOver(key, holder))) {
@@ -163,10 +187,12 @@ export async function createManualIntakeIssue(
     since = row.reserved_at;
   }
 
-  const existing = await deps.findIssue(intakeMarkerText(key), since);
-  const issue =
-    existing ??
-    (await deps.createIssue(input.title, withIntakeMarker(issueBody, key)));
+  const found = await deps.findIssue(intakeMarkerText(key), since);
+  const existing =
+    found !== null && endsWithIntakeMarker(found.body, key)
+      ? { number: found.number, htmlUrl: found.htmlUrl }
+      : null;
+  const issue = existing ?? (await deps.createIssue(input.title, issueBody));
   const recorded = await store.recordIssue(key, holder, issue.number);
   if (!recorded) {
     deps.log.warn("manual intake could not record the issue number", {
@@ -177,7 +203,9 @@ export async function createManualIntakeIssue(
 }
 
 /**
- * `owner/repo`にトリガーラベル付きのIssueを作り、作ったIssueの情報を返す。
+ * `owner/repo`にIssueを作り、作ったIssueの情報を返す。
+ * 要件定義の承認を要する進め方は、トリガーラベル付きで作る。承認を省く進め方は、ラベルなしで作る。
+ * ラベルが残ると、`poll_issues`が通常の進め方として拾い直し、承認を省いた作業項目と二重に始まるためである。
  * リポジトリ名が不正なとき、進め方が受け付けるものでないとき、`factory_config`で許可されていないとき、
  * リポジトリのオーナーの数値IDが`owners`の`id`と食い違うとき(`verifyRepoOwnerId`)は、
  * Issueを作らずに例外を投げる。
@@ -185,6 +213,8 @@ export async function createManualIntakeIssue(
  * `intake_key`は、投入の再送を止める冪等キーである。省くか`null`か空文字にすると、再送を止めない従来の投入になる。
  * Windmillのフォームが空欄を空文字で送りうるためである。
  * 形が違うキーは、表に触れる前に例外を投げる。
+ * 承認を省く進め方は、冪等キーが無いとき(`intake_key_required`)と、実装が止まっているとき(`implement_disabled`)も、
+ * Issueを作る前に例外を投げる。
  */
 export async function main(
   owner: string,
@@ -202,6 +232,7 @@ export async function main(
   if (key !== undefined) {
     assertIntakeKey(key);
   }
+  assertIntakeKeyForProfile(profile, key);
 
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -211,6 +242,7 @@ export async function main(
       `manual_intake: ${owner}/${repo} is not allowed by factory_config (owners / repo_allowlist)`,
     );
   }
+  assertImplementEnabledForProfile(profile, config.implement_enabled);
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
@@ -254,13 +286,17 @@ export async function main(
         });
         return found === null
           ? null
-          : { number: found.number, htmlUrl: found.htmlUrl };
+          : {
+              number: found.number,
+              htmlUrl: found.htmlUrl,
+              body: found.body,
+            };
       },
       createIssue: async (issueTitle, issueBody) =>
         await createIssue(client, owner, repo, {
           title: issueTitle,
           body: issueBody,
-          labels: [config.trigger_label],
+          labels: skipsApprovals(profile) ? [] : [config.trigger_label],
         }),
       log: logger("manual_intake_create_issue"),
     },

@@ -143,6 +143,8 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "invalid_body_chars",
   "body_too_long",
   "invalid_intake_key",
+  "intake_key_required",
+  "implement_disabled",
   "actor_unknown",
 ] as const;
 

@@ -1,14 +1,29 @@
-summary: '[OP-1-1/2] 作業項目を登録して工程2を起動'
-description: 作成されたIssueの担当を確定し、作業項目として登録します。GitHubにはコメントを投稿せず、Discordに通知したうえで、要件定義の生成を開始します。
+summary: '[OP-1-1/2] 作業項目を登録して工程2または実装を起動'
+description: 作成されたIssueを作業項目として登録します。通常の進め方は、担当を確定し、Discordに通知したうえで、要件定義の生成を開始します。承認を省く進め方は、キーの表の行と許可を確かめ、承認の行を作らずに実装を開始します。GitHubにはコメントを投稿しません。
 lock: '!inline f/factory/steps/manual_intake_register.script.lock'
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
+    acceptance_criteria:
+      type: string
+      description: 投入された受入基準の入力。承認を省く進め方が、キーの表の行を照合するために使います。
+      default: null
+      originalType: string
     body:
       type: string
-      description: 作成されたIssueの本文。
+      description: Issueを作るステップが投稿した本文。作業項目の本文になる。
+      default: null
+      originalType: string
+    intake_body:
+      type: string
+      description: 投入された目的の入力。承認を省く進め方が、キーの表の行を照合するために使います。
+      default: null
+      originalType: string
+    intake_key:
+      type: string
+      description: 検証済みの冪等キー。承認を省く進め方では必須です。
       default: null
       originalType: string
     issue_number:
@@ -27,7 +42,7 @@ schema:
       originalType: string
     profile:
       type: string
-      description: 作業の進め方。受け付けない値は、登録せずに断ります。
+      description: Issueを作ったステップが検証した作業の進め方。受け付けない値は、登録せずに断ります。
       default: standard
       originalType: string
     repo:
@@ -35,6 +50,10 @@ schema:
       description: 対象リポジトリ名。
       default: null
       originalType: string
+    reused:
+      type: boolean
+      description: 同じ冪等キーの最初の投入が作ったIssueを返されたか。
+      default: null
     title:
       type: string
       description: 作成されたIssueのタイトル。
