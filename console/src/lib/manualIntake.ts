@@ -7,6 +7,16 @@ import type { IntakeTarget } from "../api/guards/intakeTargets.ts";
 /** 題名の上限(コードポイント)。GitHubのIssueの題名の上限に合わせ、scriptの検証と同じ値にする。 */
 export const INTAKE_TITLE_MAX_CHARS = 256;
 
+/** 投入の進め方。`standard`は承認を経て実装し、ほかの3つは承認を省いて実装する。 */
+export const INTAKE_PROFILES = [
+  "standard",
+  "direct",
+  "bugfix",
+  "docs",
+] as const;
+
+export type IntakeProfile = (typeof INTAKE_PROFILES)[number];
+
 export type IntakeForm = {
   /** `owner/repo`の形。候補から選ぶか、自由に入力する。 */
   readonly repo: string;
@@ -14,13 +24,21 @@ export type IntakeForm = {
   readonly body: string;
   /** 1行に1項目。空でもよい。 */
   readonly acceptanceCriteria: string;
+  readonly profile: IntakeProfile;
+  /** 不具合の修正のときだけ送る欄。 */
+  readonly reproduction: string;
+  readonly expectedBehavior: string;
+  readonly actualBehavior: string;
 };
 
 export type IntakeProblem =
   | "repo_invalid"
   | "title_empty"
   | "title_too_long"
-  | "body_empty";
+  | "body_empty"
+  | "reproduction_empty"
+  | "expected_empty"
+  | "actual_empty";
 
 export type IntakeBuild =
   | {
@@ -31,6 +49,7 @@ export type IntakeBuild =
         readonly title: string;
         readonly body: string;
         readonly acceptanceCriteria: string;
+        readonly profile: IntakeProfile;
       };
     }
   | { readonly ok: false; readonly problems: readonly IntakeProblem[] };
@@ -103,12 +122,43 @@ export function buildIntakeInput(form: IntakeForm): IntakeBuild {
   };
 }
 
+export type ProfileOption = {
+  readonly value: IntakeProfile;
+  readonly label: string;
+  readonly description: string;
+};
+
+export const PROFILE_OPTIONS: readonly ProfileOption[] = [];
+
+export function profileLabel(_profile: IntakeProfile): string {
+  return "";
+}
+
+export function skipsApproval(_profile: IntakeProfile): boolean {
+  return false;
+}
+
+export function profileNotice(_profile: IntakeProfile): string | null {
+  return null;
+}
+
+export function submitLabel(_profile: IntakeProfile): string {
+  return "";
+}
+
+export function sameSentValues(_left: IntakeForm, _right: IntakeForm): boolean {
+  return false;
+}
+
 const PROBLEM_MESSAGES: Readonly<Record<IntakeProblem, string>> = {
   repo_invalid:
     "リポジトリは「オーナー名/リポジトリ名」の形で入力してください。",
   title_empty: "題名を入力してください。",
   title_too_long: `題名は${INTAKE_TITLE_MAX_CHARS}字までにしてください。`,
   body_empty: "目的を入力してください。",
+  reproduction_empty: "",
+  expected_empty: "",
+  actual_empty: "",
 };
 
 export function describeIntakeProblem(problem: IntakeProblem): string {

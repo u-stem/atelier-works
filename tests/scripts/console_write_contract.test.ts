@@ -47,6 +47,7 @@ import {
 } from "../../console/src/api/windmill.ts";
 import * as consoleWrites from "../../console/src/api/writes.ts";
 import { describeIntakeRefusal } from "../../console/src/lib/intakeRefusal.ts";
+import { buildIntakeInput } from "../../console/src/lib/manualIntake.ts";
 import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import * as configUpdate from "../../f/factory/console_config_update.ts";
@@ -233,6 +234,7 @@ const WRAPPER_CALLS: Readonly<
         title: "Add a widget",
         body: "Add a widget.",
         acceptanceCriteria: "",
+        profile: "direct",
         intakeKey: SEND_ID,
       },
       { fetchFn },
@@ -458,6 +460,44 @@ describe("what the typed calls send", () => {
   test("manual_intake_submit receives the intake key under the name of the script", async () => {
     const sent = await sentBy(WRAPPER_CALLS.manual_intake_submit);
     expect(sent.body.intake_key).toBe(SEND_ID);
+  });
+
+  test("manual_intake_submit receives the profile as the input has it", async () => {
+    const sent = await sentBy(WRAPPER_CALLS.manual_intake_submit);
+    expect(sent.body.profile).toBe("direct");
+  });
+
+  test("a bugfix that the console built passes the real validation", () => {
+    const built = buildIntakeInput({
+      repo: "octo-owner/widgets",
+      title: "Fix the save",
+      body: "Saving fails.",
+      acceptanceCriteria: "It is covered by a test.",
+      profile: "bugfix",
+      reproduction: "1. Open the page.\n2. Press save.",
+      expectedBehavior: "The widget is saved.",
+      actualBehavior: "An error is shown.",
+    });
+    const validation = built.ok
+      ? manualIntakeSupport.validateManualIntake(
+          {
+            owner: built.input.owner,
+            repo: built.input.repo,
+            title: built.input.title,
+            body: built.input.body,
+            acceptance_criteria: built.input.acceptanceCriteria,
+            profile: built.input.profile,
+            intake_key: SEND_ID,
+          },
+          {
+            owners: [{ name: "octo-owner", kind: "user" }],
+            repo_allowlist: [],
+            factory_repo: "https://github.com/octo-owner/atelier-works",
+            implement_enabled: true,
+          },
+        )
+      : null;
+    expect(validation).toEqual({ ok: true, title: "Fix the save" });
   });
 
   test("manual_intake_submit requires the inputs the flow requires", async () => {

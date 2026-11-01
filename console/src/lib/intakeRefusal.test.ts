@@ -29,8 +29,34 @@ describe("describeIntakeRefusal", () => {
     );
   });
 
-  test("says that the way of proceeding is not accepted", () => {
-    expect(describeIntakeRefusal("profile_not_allowed")).toContain("進め方");
+  test("says that the way of proceeding is not accepted now", () => {
+    expect(describeIntakeRefusal("profile_not_allowed")).toContain(
+      "この進め方はいま受け付けていません",
+    );
+  });
+
+  test("says that the approval-free profiles wait for the operator to enable the implementation", () => {
+    expect(describeIntakeRefusal("implement_disabled")).toContain(
+      "運用者が実装を有効にするまで、承認を省く進め方は使えません",
+    );
+  });
+
+  test("says that the implementation is stopped", () => {
+    expect(describeIntakeRefusal("implement_disabled")).toContain(
+      "実装が止められています",
+    );
+  });
+
+  test("names the fields of the bugfix for the characters that cannot be used", () => {
+    expect(describeIntakeRefusal("invalid_body_chars")).toContain(
+      "目的、受入基準、不具合の欄に使えない文字があります",
+    );
+  });
+
+  test("names the fields of the bugfix for the body that is too long", () => {
+    expect(describeIntakeRefusal("body_too_long")).toContain(
+      "目的、受入基準、不具合の欄を組み立てた後で、65,536字までにしてください",
+    );
   });
 
   test("says that the intake key is not in the expected form", () => {

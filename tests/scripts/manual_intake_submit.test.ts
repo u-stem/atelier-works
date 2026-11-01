@@ -31,6 +31,9 @@ const INPUT = {
   profile: "standard",
 };
 
+/** 承認を省く進め方に要る冪等キー。 */
+const PROFILE_SEND_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d";
+
 type Run = { path: string; args: Record<string, unknown> };
 type Logged = { message: string; fields: LogFields | undefined };
 
@@ -207,6 +210,36 @@ describe("the profile", () => {
     const { deps, runs } = harness();
     await submitManualIntake(INPUT, deps);
     expect(runs[0]?.args.profile).toBe("standard");
+  });
+
+  test("is logged when the request is made, after the validation", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake(
+      { ...INPUT, profile: "docs", intake_key: PROFILE_SEND_ID },
+      deps,
+    );
+    expect(
+      logs.find((entry) => entry.message === "manual intake requested")?.fields
+        ?.profile,
+    ).toBe("docs");
+  });
+
+  test("is logged when the flow has started", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake(
+      { ...INPUT, profile: "bugfix", intake_key: PROFILE_SEND_ID },
+      deps,
+    );
+    expect(
+      logs.find((entry) => entry.message === "manual intake started")?.fields
+        ?.profile,
+    ).toBe("bugfix");
+  });
+
+  test("is not logged for a refusal, because nothing started", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake({ ...INPUT, profile: "unknown" }, deps);
+    expect(logs).toEqual([]);
   });
 
   test("defaults to standard when the script is called without it", () => {
