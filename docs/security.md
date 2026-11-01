@@ -65,12 +65,23 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 更新は、マージの後にClaudeが行う。次の順に進める。
 
 1. `gh api repos/<owner>/<repo>/rulesets`で、名前が`protect-main`のrulesetの`id`を読む。
-2. `gh api repos/<owner>/<repo>/rulesets/<id>`で全体を読み、`required_status_checks`の`context`に足すチェック名を加える。他の規則と迂回の設定は変えない。
-3. 加えた内容を、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。
+2. `gh api repos/<owner>/<repo>/rulesets/<id>`で全体を読み、`required_status_checks`に足すチェックを、既存の項目と同じ形で加える。既存の項目に`integration_id`があれば同じ値を付け、`context`だけなら`context`だけを足す。形が違うと、別のアプリが出したチェックだけを受け付ける項目になり、待ち続けることがある。他の規則と迂回の設定は変えない。
+3. 加えた内容を、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。`<file>`には、読んだ応答から書き込めるフィールドだけを残して渡す。`id`、`source`、`_links`、`created_at`、`updated_at`、`current_user_can_bypass`などは読み取り専用なので外す。書き戻すと、拒否されるか意図しない変更になる。
 4. `gh api repos/<owner>/<repo>/rules/branches/main`を読み、一覧にチェック名が載ったことを確かめる。
+
+手順3の`<file>`は、次の`jq`で作る。
+
+```sh
+jq '{name, target, enforcement, bypass_actors, conditions, rules}' <応答のファイル> > <file>
+```
 
 一覧を更新したら、更新の前に分かれたPRは、`main`を取り込むまで新しいチェックが出ずに待つ。
 更新の後に開く新しいPRと、`main`を取り込んだPRには、新しいチェックが出る。
+
+マージの後に開いているdependabotのPRがあれば、`@dependabot rebase`とコメントして、新しいチェックを出させる。
+Factory自身のリポジトリのPRは、rulesetでなく、Factory内部の固定の一覧で必須チェックを判定する。
+この一覧は、マージの後に`self_update`が反映すると増える。
+マージの前にCIが走ったPRは、新しいチェックが出ないので、待ちになる。
 
 タグはrulesetの`protect-tags`で保護する。
 対象はすべてのタグで、作成、更新、削除を禁止する。
