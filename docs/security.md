@@ -66,10 +66,10 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 
 1. `gh api repos/<owner>/<repo>/rulesets`で、名前が`protect-main`のrulesetの`id`を読む。
 2. `gh api repos/<owner>/<repo>/rulesets/<id>`で全体を読み、`required_status_checks`に足すチェックを、既存の項目と同じ形で加える。既存の項目に`integration_id`があれば同じ値を付け、`context`だけなら`context`だけを足す。形が違うと、別のアプリが出したチェックだけを受け付ける項目になり、待ち続けることがある。他の規則と迂回の設定は変えない。
-3. 加えた内容を、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。`<file>`には、読んだ応答から書き込めるフィールドだけを残して渡す。`id`、`source`、`_links`、`created_at`、`updated_at`、`current_user_can_bypass`などは読み取り専用なので外す。書き戻すと、拒否されるか意図しない変更になる。
+3. 手順2で加えた後のファイルを、`gh api --method PUT repos/<owner>/<repo>/rulesets/<id> --input <file>`で書き戻す。`<file>`には、読んだ応答から書き込めるフィールドだけを残して渡す。`id`、`source`、`_links`、`created_at`、`updated_at`、`current_user_can_bypass`などは読み取り専用なので外す。書き戻すと、拒否されるか意図しない変更になる。
 4. `gh api repos/<owner>/<repo>/rules/branches/main`を読み、一覧にチェック名が載ったことを確かめる。
 
-手順3の`<file>`は、次の`jq`で作る。
+手順3の`<file>`は、手順2で加えた後のファイルを入力にして、次の`jq`で作る。
 
 ```sh
 jq '{name, target, enforcement, bypass_actors, conditions, rules}' <応答のファイル> > <file>
