@@ -12150,7 +12150,10 @@ for (const [name, move] of PROFILE_MOVES) {
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
-execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);
+execPsql(
+  target,
+  `DELETE FROM factory.work_items WHERE lower(owner) = '${OWNER}'`,
+);
 
 if (failures.length > 0) {
   console.error(`[test-db-queries] ${String(failures.length)} check(s) failed`);
