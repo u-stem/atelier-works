@@ -459,24 +459,9 @@ jobs:
       - name: Build
         run: bun run --cwd console build
 
-      - name: Read the Playwright version
-        id: playwright
-        # キャッシュのキーに使う前に、`x.y.z`の形であることを確かめる。形が違えば失敗させる。
-        run: |
-          set -o pipefail
-          version="$(jq -r '.devDependencies["@playwright/test"]' console/package.json | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+')"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore the Playwright browser cache
-        # ブラウザは取得に時間がかかるので、Playwrightの版をキーにして使い回す。
-        # システムのパッケージ(`--with-deps`)はキャッシュに入らず、毎回入れる。
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-
       - name: Install the Playwright browser
-        # ブラウザはPlaywrightの取得元(cdn.playwright.dev)から取る。headless shellだけを入れる。
+        # ブラウザはPlaywrightの取得元(cdn.playwright.dev)から毎回取る。headless shellだけを入れる。
+        # 取得物をハッシュで照合しないので、キャッシュには置かない。mainの実行が書いたものをPRが読む経路を作らないためである。
         run: bun run --cwd console playwright install --with-deps --only-shell chromium
 
       - name: Run the accessibility checks
