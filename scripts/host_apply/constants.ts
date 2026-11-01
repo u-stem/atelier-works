@@ -13,6 +13,7 @@ export const REQUIRED_CHECKS: readonly string[] = [
   "test-db",
   "metadata",
   "console",
+  "console-a11y",
   "caddyfile",
   "console-fetcher-image",
 ];
