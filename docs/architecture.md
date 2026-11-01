@@ -468,7 +468,8 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
 終端でない`pr_review`の作業項目も、部分一意インデックス`work_items_active_pr_review_key`により、同時に1つしか持てない。
 組は、小文字にした`owner`と`repo`、PRの番号である。
-`pr_review`の行の綴りは書き手によって揺れるので、このインデックスだけが大文字小文字を区別しない。
+`pr_review`の行の綴りは書き手によって揺れるので、同じPRを指す`pr_review`の検索は大文字小文字を区別しない。
+`pr_fix`とIssueのインデックスは、綴りを区別したままである。
 これらのインデックスの述語は、終端でない状態を列挙する。
 設計工程の2状態は、Issueの`work_items_active_issue_key`と、PR修正の`work_items_active_pr_fix_key`の述語に含める。
 dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕様](internals/dependabot.md))の述語にも含める。
