@@ -241,7 +241,7 @@ describe("the metadata job", () => {
 });
 
 describe("the artifacts of ci.yml", () => {
-  test("uploads only the metadata patch", () => {
+  test("uploads only the metadata patch and the Playwright report", () => {
     const names: unknown[] = [];
     for (const job of Object.values(recordAt(ci, "jobs"))) {
       if (!isRecord(job)) {
@@ -257,6 +257,6 @@ describe("the artifacts of ci.yml", () => {
       }
     }
 
-    expect(names).toEqual(["metadata-patch"]);
+    expect(names.sort()).toEqual(["metadata-patch", "playwright-report"]);
   });
 });
