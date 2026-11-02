@@ -644,8 +644,9 @@ describe("design stage gate files", () => {
   });
 });
 
-// 調査のClaudeの隔離(引数を固定する包み関数、読み出しを塞ぐ一覧、入口の門、worktreeの置き場)と、それを固定するテストは、
-// 書き換えられると、調査のClaudeがworkerの秘密に届いたり、調査の入口が人の確認なしに開いたりする。
+// 調査のClaudeの隔離(引数を固定する包み関数、読み出しを塞ぐ一覧、入口の門、worktreeの置き場、隔離の定数、合格の証拠の型、合格の関門)と、
+// それを固定するテストは、書き換えられると、調査のClaudeがworkerの秘密に届いたり、調査の入口が人の確認なしに開いたり、
+// 測定に合格していない隔離でClaudeが起動したりする。
 // グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
 describe("investigate isolation files", () => {
   const PATHS = [
@@ -661,6 +662,15 @@ describe("investigate isolation files", () => {
     "f/factory/lib/investigate_workspace.ts",
     "f/factory/lib/investigate_workspace.script.yaml",
     "tests/lib/investigate_workspace.test.ts",
+    "f/factory/lib/investigate_isolation.ts",
+    "f/factory/lib/investigate_isolation.script.yaml",
+    "f/factory/lib/isolation_proof.ts",
+    "f/factory/lib/isolation_proof.script.yaml",
+    "f/factory/lib/investigate_isolation_gate.ts",
+    "f/factory/lib/investigate_isolation_gate.script.yaml",
+    "tests/lib/investigate_isolation.test.ts",
+    "tests/lib/isolation_proof.test.ts",
+    "tests/lib/investigate_isolation_gate.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {

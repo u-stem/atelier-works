@@ -1,0 +1,9 @@
+summary: '[LIB] 隔離の合格の関門'
+description: 内部ライブラリです。直接実行するものではありません。隔離の測定の結果を読み、調査のClaudeを起動してよいかを決める関門です。
+lock: '!inline f/factory/lib/investigate_isolation_gate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -407,7 +407,11 @@ export type RunClaudeResult<T> =
       readonly retried: boolean;
     };
 
-type ClaudeEnvInputs = {
+/**
+ * `buildClaudeEnv`の入力。`tmpDir`・`claudeConfigDir`・`home`・`path`をすべて明示すれば、
+ * ジョブの一時領域と`process.env`を読まない。
+ */
+export type ClaudeEnvInputs = {
   readonly oauthToken: string;
   readonly claudeConfigDir?: string;
   readonly home?: string;
@@ -415,7 +419,7 @@ type ClaudeEnvInputs = {
   readonly tmpDir?: string;
 };
 
-function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
+export function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
   const env: Record<string, string> = {
     CLAUDE_CODE_OAUTH_TOKEN: opts.oauthToken,
     DISABLE_AUTOUPDATER: "1",
@@ -477,7 +481,7 @@ function buildAddDirsArgs<T>(opts: RunClaudeOptions<T>): string[] {
   return addDirs.flatMap((dir) => ["--add-dir", dir]);
 }
 
-function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
+export function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
   return [
     "claude",
     "-p",

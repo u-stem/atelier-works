@@ -3,6 +3,7 @@ import { access, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildClaudeEnv,
   buildSystemPrompt,
   CLAUDE_NOT_STARTED_DETAIL,
   dailyBudgetStatus,
@@ -1406,6 +1407,50 @@ function successResult(
     ...(discardedAgentRun === undefined ? {} : { discardedAgentRun }),
   };
 }
+
+describe("buildClaudeEnv", () => {
+  const EXPLICIT = {
+    oauthToken: "explicit-token",
+    claudeConfigDir: "/explicit/config",
+    home: "/explicit/home",
+    path: "/explicit/bin",
+    tmpDir: "/explicit/tmp",
+  };
+
+  test("reads neither the job temporary directory nor process.env when every input is explicit", () => {
+    const saved = {
+      WM_JOB_ID: process.env.WM_JOB_ID,
+      HOME: process.env.HOME,
+      PATH: process.env.PATH,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      TMPDIR: process.env.TMPDIR,
+    };
+    process.env.WM_JOB_ID = "11111111-2222-4333-8444-555555555555";
+    process.env.HOME = "/ambient/home";
+    process.env.PATH = "/ambient/bin";
+    process.env.CLAUDE_CONFIG_DIR = "/ambient/config";
+    process.env.TMPDIR = "/ambient/tmp";
+    let env: Record<string, string>;
+    try {
+      env = buildClaudeEnv(EXPLICIT);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+    }
+    expect(env).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: "explicit-token",
+      DISABLE_AUTOUPDATER: "1",
+      CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+      CLAUDE_CONFIG_DIR: "/explicit/config",
+      HOME: "/explicit/home",
+      PATH: "/explicit/bin",
+      TMPDIR: "/explicit/tmp",
+      CLAUDE_CODE_TMPDIR: "/explicit/tmp",
+    });
+  });
+});
 
 describe("recordClaudeRuns", () => {
   test("records the discarded attempt before the final attempt", async () => {

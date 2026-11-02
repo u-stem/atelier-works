@@ -1,0 +1,9 @@
+summary: '[LIB] 調査のClaudeの隔離の定数'
+description: 内部ライブラリです。直接実行するものではありません。調査のClaudeの隔離の引数と、隔離した実行の引数を組む処理です。
+lock: '!inline f/factory/lib/investigate_isolation.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
