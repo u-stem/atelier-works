@@ -174,20 +174,68 @@ describe("checkIsolationProofWithDeps", () => {
       expect(resultIds).toEqual([]);
     });
 
-    const NOT_THE_PROBE: readonly [string, Record<string, unknown>][] = [
+    // pathが一致するのに採れない形のジョブは、古い合格を使わず、読めないものとして閉じる。
+    const UNUSABLE_PROBE: readonly [string, Record<string, unknown>][] = [
       ["a preview", { job_kind: "preview" }],
       ["a flow", { job_kind: "flow" }],
       ["a step of a flow", { is_flow_step: true }],
       ["a job with a parent", { parent_job: "job-parent" }],
-      ["a job of another script", { script_path: "f/factory/other" }],
       ["a job with another tag", { tag: "console" }],
       ["a job without a start time", { started_at: undefined }],
+      ["a job with a start time that is not a date", { started_at: "soon" }],
       ["a job without an id", { id: undefined }],
     ];
 
-    test.each(NOT_THE_PROBE)("does not take %s", async (_name, overrides) => {
+    test.each(UNUSABLE_PROBE)(
+      "closes with proof_unreadable on %s",
+      async (_name, overrides) => {
+        const verdict = await verdictOf({
+          probeJobs: [probeJob(overrides)],
+        });
+        expect(verdict).toEqual({ ok: false, code: "proof_unreadable" });
+      },
+    );
+
+    test.each(UNUSABLE_PROBE)(
+      "does not use an older pass behind %s",
+      async (_name, overrides) => {
+        const verdict = await verdictOf({
+          probeJobs: [
+            probeJob({ started_at: "2026-11-02T00:00:00.000Z", ...overrides }),
+            probeJob({ id: "job-old", started_at: "2026-11-01T00:00:00.000Z" }),
+          ],
+          results: { "job-old": probeResult() },
+        });
+        expect(verdict).toEqual({ ok: false, code: "proof_unreadable" });
+      },
+    );
+
+    test("fetches no result when the newest job has an unusable shape", async () => {
+      const { deps, resultIds } = setup({
+        probeJobs: [
+          probeJob({ tag: "console", started_at: "2026-11-02T00:00:00.000Z" }),
+          probeJob({ id: "job-old", started_at: "2026-11-01T00:00:00.000Z" }),
+        ],
+        results: { "job-old": probeResult() },
+      });
+      await checkIsolationProofWithDeps(deps);
+      expect(resultIds).toEqual([]);
+    });
+
+    test("treats a job without a start time as the newest whatever its place in the list", async () => {
       const verdict = await verdictOf({
-        probeJobs: [probeJob(overrides)],
+        probeJobs: [
+          probeJob({ id: "job-old", started_at: "2026-11-01T00:00:00.000Z" }),
+          probeJob({ started_at: undefined }),
+        ],
+        results: { "job-old": probeResult() },
+      });
+      expect(verdict).toEqual({ ok: false, code: "proof_unreadable" });
+    });
+
+    test("does not take a job of another script", async () => {
+      const verdict = await verdictOf({
+        probeJobs: [probeJob({ script_path: "f/factory/other" })],
       });
       expect(verdict).toEqual({ ok: false, code: "proof_missing" });
     });
@@ -197,11 +245,11 @@ describe("checkIsolationProofWithDeps", () => {
       expect(verdict).toEqual({ ok: false, code: "proof_missing" });
     });
 
-    test("skips a job that is not the probe and takes an older one that is", async () => {
+    test("skips a newer job of another script and takes an older probe job", async () => {
       const verdict = await verdictOf({
         probeJobs: [
           probeJob({
-            job_kind: "preview",
+            script_path: "f/factory/other",
             started_at: "2026-11-02T00:00:00.000Z",
           }),
           probeJob({ id: "job-old", started_at: "2026-11-01T00:00:00.000Z" }),

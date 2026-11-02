@@ -34,6 +34,7 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       "infra/console_fetcher/",
       "f/factory/dependabot__flow/",
       "f/factory/pr_review_intake__flow/",
+      "f/factory/investigate_isolation_probe.",
       "scripts/host_apply/",
       "infra/worker/",
       "mise/",
@@ -691,6 +692,42 @@ describe("investigate isolation files", () => {
 
   test("does not protect lib/config.ts, which changes often", () => {
     expect(matchesForbiddenPath("f/factory/lib/config.ts")).toBe(false);
+  });
+});
+
+// 関門が信頼する根は、隔離の測定のscript(`investigate_isolation_probe`)の完了ジョブである。
+// そのscriptのパスを、保護の外のPRが先に置くと、関門を通る偽の結果を返せる。
+// 測定のscriptはまだ無い予約なので、拡張子を問わない前方一致で、.ts、.script.yaml、.script.lock、.schedule.yamlをまとめて塞ぐ。
+describe("investigate isolation probe path", () => {
+  const PREFIX = "f/factory/investigate_isolation_probe.";
+
+  test("FORBIDDEN_PATH_PREFIXES lists the prefix", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(PREFIX);
+  });
+
+  test("IMPLEMENT_PROTECTED_PATH_PREFIXES lists the prefix", () => {
+    expect(IMPLEMENT_PROTECTED_PATH_PREFIXES).toContain(PREFIX);
+  });
+
+  const FILES = [
+    "f/factory/investigate_isolation_probe.ts",
+    "f/factory/investigate_isolation_probe.script.yaml",
+    "f/factory/investigate_isolation_probe.script.lock",
+    "f/factory/investigate_isolation_probe.schedule.yaml",
+  ];
+
+  test.each(FILES)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(FILES)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not match a longer name that only shares the stem", () => {
+    expect(
+      matchesForbiddenPath("f/factory/investigate_isolation_probe_helper.ts"),
+    ).toBe(false);
   });
 });
 
