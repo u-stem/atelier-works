@@ -132,6 +132,8 @@ export type InvestigateClaudeResult<T> =
       readonly agentRunId: number | null;
     };
 
+export const runInvestigateClaudeWithDeps = runInvestigateClaude;
+
 /** 捨てた最初の試行の記録に付ける符号。最初の試行の理由は、記録からは分からない。 */
 const DISCARDED_ATTEMPT_CODE = "discarded_attempt";
 /** 成功した試行の記録に`error`が付いていたときの符号。通常は付かない。 */
