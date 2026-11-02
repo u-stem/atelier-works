@@ -64,6 +64,19 @@ export function rejectProblem(reason: string): string | null {
   return null;
 }
 
+type ReasonFieldMessages = {
+  readonly hint: string | undefined;
+  readonly problem: string | undefined;
+};
+
+/**
+ * 却下の理由の入力欄に出す補足と誤り。
+ * 空のときの案内は誤りではないので補足に、上限の超過だけを誤りにする。入力しただけで不正と読み上げさせないためである。
+ */
+export function reasonFieldMessages(_reason: string): ReasonFieldMessages {
+  return { hint: undefined, problem: undefined };
+}
+
 /**
  * 取り込み時点のIssueを承認者が見られる状態か。
  * 読み込み中と取得の失敗では、承認者が内容を確かめられないので`ready`にしない。
