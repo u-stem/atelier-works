@@ -3725,6 +3725,21 @@ dependabotの作業項目は再実行できない。
 修正をpushしたPRは、自動ではマージされないので、レビューを確かめて人がマージする。
 新しいcommitが積まれると、Factoryは新しいheadを改めて評価する。
 
+## 調査の入口を開ける設定
+
+調査(進め方`investigate`)の入口は、`f/factory/factory_config`の`investigate_enabled`で開ける。
+既定は`false`で、真偽値の`true`と書いたときだけ開く。
+文字列の`"true"`や参照(`$var:`)など、`true`でない値は、例外にならず閉じたものとして読む。
+書くのは運用者で、WindmillのResourcesの編集画面か`wmill resource push`で行う。
+Consoleの設定タブには出ない。
+
+調査のClaudeの読み出しの拒否が実際に効くことは、実機で確かめていない。
+確かめる手順を足すまで、`investigate_enabled`を`true`にしない。
+確かめていない隔離のまま始めると、対象リポジトリの内容を読むClaudeが、workerの秘密に届きうるためである。
+今は、この設定を読んで調査を始める入口が無いので、`true`にしても何も起きない。
+
+隔離の層と読み出しの固定の一覧は[セキュリティ](security.md#調査の隔離)にある。
+
 ## モデルを使い分ける
 
 Factoryは、工程によってClaudeのモデルを使い分ける。

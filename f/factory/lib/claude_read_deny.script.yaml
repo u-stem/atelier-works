@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 調査のClaudeの読み出しを塞ぐ設定'
+description: 内部ライブラリです。直接実行するものではありません。調査のClaudeが読めない場所の固定の一覧と、ジョブ専用の設定へ拒否の規則を書く共通処理です。
 lock: '!inline f/factory/lib/claude_read_deny.script.lock'
 kind: script
 schema:

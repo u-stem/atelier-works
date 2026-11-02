@@ -8,7 +8,10 @@
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ReadDenyContext } from "./claude_read_deny.ts";
+import {
+  prepareReadDenySettings,
+  type ReadDenyContext,
+} from "./claude_read_deny.ts";
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
@@ -702,6 +705,16 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
 ): Promise<RunClaudeResult<T>> {
+  if (opts.readDenyPaths !== undefined) {
+    await prepareReadDenySettings({
+      readDenyPaths: opts.readDenyPaths,
+      configDir: buildClaudeEnv(opts).CLAUDE_CONFIG_DIR,
+      cwd: opts.cwd,
+      ...(opts.readDenyContext === undefined
+        ? {}
+        : { context: opts.readDenyContext }),
+    });
+  }
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return {
       outcome: "failure",

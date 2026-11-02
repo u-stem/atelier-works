@@ -44,6 +44,7 @@ declare namespace RT {
     implement_flow_timeout_sec: number,
     implement_max_changed_files: number,
     implement_max_diff_lines: number,
+    investigate_enabled: boolean,
     design_enabled: boolean,
     max_design_attempts: number,
     dependabot_enabled: boolean,

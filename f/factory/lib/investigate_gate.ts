@@ -1,6 +1,13 @@
 // 調査の入口を開ける門。
-// 設定の値が真のときだけ開く。
+// 設定の値が真のときだけ開く。値が無いとき、真偽値でないとき、参照のままの文字列のときは閉じる。
+// `lib/config.ts`が、この関数の結果だけから`investigate_enabled`を導く。設定を読む全てのscriptが同じ結果を得るためである。
+// 保護パスに置く。門の条件を書き換えると、調査の入口が人の確認なしに開くため。
+// importを持たない。門が別のファイルの挙動に左右されないようにする。
+//
+// 真偽値でない値で例外にしない。例外にすると、設定を読む全てのscriptが止まり、
+// 自己更新も、止まったことを知らせる通知も動かなくなるため。
 
-export function isInvestigateEnabled(_value: unknown): boolean {
-  return false;
+/** 調査の入口を開けるか。真偽値の`true`だけが開く。 */
+export function isInvestigateEnabled(value: unknown): boolean {
+  return value === true;
 }
