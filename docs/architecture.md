@@ -638,11 +638,14 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/claude_read_deny` | script | [LIB] 調査のClaudeの読み出しを塞ぐ設定 |
+| `f/factory/lib/investigate_isolation` | script | [LIB] 調査のClaudeの隔離の定数 |
 | `f/factory/lib/investigate_claude` | script | [LIB] 調査のClaudeを隔離して起動する |
 | `f/factory/lib/investigate_workspace` | script | [LIB] 調査のworktreeの置き場 |
 | `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
+| `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
+| `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |
@@ -1025,6 +1028,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示と、調査のClaudeを隔離して起動する共通処理、入口を開ける設定の門、worktreeの置き場の検査・作成・掃除だけがある([調査の隔離](security.md#調査の隔離))
+- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示と、Claudeの隔離の起動、合格の証拠と関門、入口を開ける設定の門、worktreeの置き場だけがある([調査の隔離](security.md#調査の隔離))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

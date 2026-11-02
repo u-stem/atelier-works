@@ -250,10 +250,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  * 調査のClaudeの隔離も守る。隔離の引数を定数で持つ包み関数(`lib/investigate_claude.ts`)、読み出しを塞ぐ固定の一覧と設定の書き出し
  * (`lib/claude_read_deny.ts`)、調査の入口を開ける門(`lib/investigate_gate.ts`)、調査のworktreeの置き場の検査と作成と掃除(`lib/investigate_workspace.ts`)、
- * それぞれの`.script.yaml`、4つを固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、
- * `tests/scripts/investigate_gate.test.ts`、`tests/lib/investigate_workspace.test.ts`)である。
+ * 隔離の定数と隔離した実行の引数の組み立て(`lib/investigate_isolation.ts`)、合格の証拠の型(`lib/isolation_proof.ts`)、
+ * 隔離の測定の結果を読む関門(`lib/investigate_isolation_gate.ts`)、
+ * それぞれの`.script.yaml`、7つを固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、
+ * `tests/scripts/investigate_gate.test.ts`、`tests/lib/investigate_workspace.test.ts`、`tests/lib/investigate_isolation.test.ts`、
+ * `tests/lib/isolation_proof.test.ts`、`tests/lib/investigate_isolation_gate.test.ts`)である。
  * 書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたり、
- * 置き場の差し替えやsymlinkを含むリポジトリのworktreeが読まれたりする。
+ * 置き場の差し替えやsymlinkを含むリポジトリのworktreeが読まれたり、測定に合格していない隔離でClaudeが起動したりする。
  * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
  * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
  * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
@@ -375,6 +378,15 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "tests/lib/claude_read_deny.test.ts",
   "tests/scripts/investigate_gate.test.ts",
   "tests/lib/investigate_workspace.test.ts",
+  "f/factory/lib/investigate_isolation.ts",
+  "f/factory/lib/investigate_isolation.script.yaml",
+  "f/factory/lib/isolation_proof.ts",
+  "f/factory/lib/isolation_proof.script.yaml",
+  "f/factory/lib/investigate_isolation_gate.ts",
+  "f/factory/lib/investigate_isolation_gate.script.yaml",
+  "tests/lib/investigate_isolation.test.ts",
+  "tests/lib/isolation_proof.test.ts",
+  "tests/lib/investigate_isolation_gate.test.ts",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",

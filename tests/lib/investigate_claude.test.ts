@@ -615,7 +615,8 @@ describe("runInvestigateClaude", () => {
       run: InvestigateClaudeOptions<OkPayload>["run"],
       proof: unknown,
     ): InvestigateClaudeOptions<OkPayload> {
-      return { ...options(run), proof: Reflect.get({ proof }, "proof") };
+      const holder: object = { proof };
+      return { ...options(run), proof: Reflect.get(holder, "proof") };
     }
 
     test("does not start claude without a proof", async () => {

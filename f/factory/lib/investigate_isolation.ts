@@ -2,9 +2,14 @@
 // 保護パスに置く。ここを緩めると、調査のClaudeがworkerの秘密に届くため。
 
 import { createHash } from "node:crypto";
-import type { RunClaudeOptions } from "./claude.ts";
+import {
+  buildClaudeArgv,
+  buildClaudeEnv,
+  type RunClaudeOptions,
+} from "./claude.ts";
 import {
   buildReadDenyPaths,
+  buildReadDenySettings,
   READ_DENY_BASE_PATHS,
 } from "./claude_read_deny.ts";
 import type { CommandRunner } from "./workspace.ts";
@@ -101,11 +106,19 @@ export type IsolatedRunVariable<T> = {
   readonly home: string;
 };
 
+/** `runClaude`へそのまま渡す引数。塞ぐ一覧と`$HOME`を含む。 */
 export type IsolatedRunOptions<T> = RunClaudeOptions<T> & {
   readonly home: string;
   readonly readDenyPaths: readonly string[];
 };
 
+/**
+ * 隔離した実行の`runClaude`の引数を組む。
+ * 隔離に効く項目(ツール、権限、設定の層、許可、追加ディレクトリ、塞ぐ一覧)は、入力ではなく、このファイルの定数から埋める。
+ * 入力にこれらの名前の項目があっても読まない。
+ * ジョブの一時領域と設定の置き場は含めない。`runClaude`がジョブの実際の値から決めるためである。
+ * 呼び出し側は、戻り値の隔離に効く項目を上書きせずに`runClaude`へ渡す。
+ */
 export function buildIsolatedRunOptions<T>(
   variable: IsolatedRunVariable<T>,
 ): IsolatedRunOptions<T> {
@@ -119,18 +132,18 @@ export function buildIsolatedRunOptions<T>(
     appendSystemPromptFile: variable.appendSystemPromptFile,
     jsonSchema: variable.jsonSchema,
     isStructuredOutput: variable.isStructuredOutput,
-    tools: [],
-    permissionMode: "default",
-    settingSources: ["project"],
-    allowedTools: [],
-    addDirs: [],
+    tools: ISOLATION_ARGS.tools,
+    permissionMode: ISOLATION_ARGS.permissionMode,
+    settingSources: ISOLATION_ARGS.settingSources,
+    allowedTools: ISOLATION_ARGS.allowedTools,
+    addDirs: ISOLATION_ARGS.addDirs,
     maxTurns: variable.maxTurns,
     maxBudgetUsd: variable.maxBudgetUsd,
     cwd: variable.cwd,
     oauthToken: variable.oauthToken,
     timeoutMs: variable.timeoutMs,
     home: variable.home,
-    readDenyPaths: buildReadDenyPaths(variable.home).slice(0, 0),
+    readDenyPaths: buildReadDenyPaths(variable.home),
   };
 }
 
@@ -139,20 +152,93 @@ export type ArgvShape = {
   readonly argv: readonly string[];
   /** 固定の値はその値、呼び出しごとに変わる値は`null`。 */
   readonly env: Readonly<Record<string, string | null>>;
+  /** 塞ぐ規則を書いた`settings.json`の本文。規則の書式の変更を拾う。 */
   readonly settings: string;
 };
 
-/** `collectArgvShape`が使う固定の`$HOME`。 */
+/** `collectArgvShape`が使う固定の`$HOME`。実行時の`$HOME`には依らない。 */
 export const ARGV_SHAPE_HOME = "/home/shape";
 
+/** 環境を組む入力。2組を作って比べ、組で値が変わるキーを呼び出しごとの値とみなす。 */
+type ShapeEnvInputs = {
+  readonly oauthToken: string;
+  readonly home: string;
+  readonly path: string;
+  readonly tmpDir: string;
+};
+
+const SHAPE_ENV_INPUTS: readonly [ShapeEnvInputs, ShapeEnvInputs] = [
+  {
+    oauthToken: "shape-token-a",
+    home: ARGV_SHAPE_HOME,
+    path: "/shape/bin-a",
+    tmpDir: "/shape/tmp-a",
+  },
+  {
+    oauthToken: "shape-token-b",
+    home: "/home/shape-other",
+    path: "/shape/bin-b",
+    tmpDir: "/shape/tmp-b",
+  },
+];
+
+/**
+ * Claudeの起動の形を、固定のダミーの値で求める。
+ * 入力はすべて明示し、ジョブの一時領域と`process.env`は読まない。
+ * argvはダミーの値で組んだ全体、環境は、2組の入力で値が変わらないキーだけ値を残し、変わるキーはキーだけを残す。
+ * 塞ぐ規則は、固定の`$HOME`で書いた本文を残す。
+ */
 export function collectArgvShape(): ArgvShape {
-  return { argv: [], env: {}, settings: "" };
+  const options = buildIsolatedRunOptions({
+    run: async () => {
+      throw new Error("the shape of the invocation is not run");
+    },
+    oauthToken: SHAPE_ENV_INPUTS[0].oauthToken,
+    model: "shape-model",
+    prompt: "shape-prompt",
+    appendSystemPromptFile: "/shape/system-prompt.md",
+    jsonSchema: { type: "object" },
+    isStructuredOutput: (_value): _value is unknown => true,
+    maxTurns: 1,
+    maxBudgetUsd: 1,
+    timeoutMs: 1000,
+    cwd: "/shape/cwd",
+    workItemId: 1,
+    stage: "shape",
+    attempt: 1,
+    home: ARGV_SHAPE_HOME,
+  });
+  const first = buildClaudeEnv(SHAPE_ENV_INPUTS[0]);
+  const second = buildClaudeEnv(SHAPE_ENV_INPUTS[1]);
+  const keys = [
+    ...new Set([...Object.keys(first), ...Object.keys(second)]),
+  ].sort();
+  const env: Record<string, string | null> = {};
+  for (const key of keys) {
+    const value = first[key];
+    env[key] = value !== undefined && value === second[key] ? value : null;
+  }
+  return {
+    argv: buildClaudeArgv(options),
+    env,
+    settings: buildReadDenySettings(options.readDenyPaths),
+  };
 }
 
-export function hashArgvShape(_shape: ArgvShape): string {
-  return "";
+/** 起動の形のハッシュ。環境のキーの順には依らない。 */
+export function hashArgvShape(shape: ArgvShape): string {
+  const env = Object.keys(shape.env)
+    .sort()
+    .map((key) => [key, shape.env[key]]);
+  return createHash("sha256")
+    .update(JSON.stringify({ argv: shape.argv, env, settings: shape.settings }))
+    .digest("hex");
 }
 
+/**
+ * 今のコードが組むClaudeの起動の形のハッシュ。純関数で、`process.env`を読まない。
+ * 測定した時点と今で一致しなければ、起動の形が変わったので測り直す。
+ */
 export function computeArgvShapeHash(): string {
   return hashArgvShape(collectArgvShape());
 }

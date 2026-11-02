@@ -6279,12 +6279,16 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 内容は信頼できない入力で、Claudeはrootで動くworkerの中で動く。
 そのため、Claudeが読める範囲を、次の層で狭める。
 調査のClaudeを起動する共通処理(`lib/investigate_claude.ts`の`runInvestigateClaude`)はあるが、呼び出す入口は無い。
+起動には、隔離の測定に合格した証拠が要る([合格の証拠と関門](#合格の証拠と関門))。
 入口を開ける設定`investigate_enabled`は、偽のままである。
 
 ### 起動の引数の固定
 
-`runInvestigateClaude`は、隔離に効く引数をファイルの定数で持つ。
-呼び出し側が渡せるのは、プロンプト、スキーマ、モデル、予算、ターン数、タイムアウト、作業ディレクトリ、作業項目のID、実行記録の扱いだけである。
+`runInvestigateClaude`は、隔離に効く引数を`lib/investigate_isolation.ts`の定数で持つ。
+`runClaude`の引数を組む関数`buildIsolatedRunOptions`は、可変の値だけを受け、隔離に効く引数を定数から埋める。
+戻り値は上書きせずに`runClaude`へ渡す。
+この関数を参照できるのは、調査の入口と定数のモジュールだけで、保護されたテストがファイルの走査で固定する。
+呼び出し側が渡せるのは、プロンプト、スキーマ、モデル、予算、ターン数、タイムアウト、作業ディレクトリ、作業項目のID、実行記録の扱い、隔離の合格の証拠だけである。
 型で受けない項目を、型を通さずに渡しても無視する。
 ジョブの一時領域と環境を差し替える入口`runInvestigateClaudeWithDeps`は、テスト専用である。
 本番のファイルが参照しないことは、保護されたテストがファイルの走査で固定する。
@@ -6302,7 +6306,18 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 
 隔離の引数と読み出しの固定の一覧のハッシュは、定数`ISOLATION_FINGERPRINT`として公開する。
 引数か一覧が変わると、ハッシュも変わる。
-後続の記録が、測った隔離と今の隔離を突き合わせる鍵に使う。
+関門が、測った隔離と今の隔離を突き合わせる鍵に使う。
+
+起動の形のハッシュ`computeArgvShapeHash`は、`ISOLATION_FINGERPRINT`が見ない部分を見る。
+`lib/claude.ts`の`buildClaudeArgv`と`buildClaudeEnv`を、固定のダミーの値で呼び、次のものを正規化してsha256にする。
+
+- argvの全体
+- 環境変数のキーの集合(値が固定のキーは値も)
+- 読み出しを塞ぐ規則を書いた`settings.json`の本文(固定の`$HOME`で書く)
+
+ジョブの一時領域と`process.env`は読まない純関数なので、どこで実行しても同じ値になる。
+プロンプトやモデルなど、呼び出しごとに変わる値では変わらない。
+`lib/claude.ts`がargvや環境や規則の書式を変えると変わり、測り直しが要る。
 
 ### 読み出しの拒否の固定の一覧
 
@@ -6388,6 +6403,74 @@ symlinkはたどらずリンク自体を消し、`.git`を持たない項目や�
 
 この2つの関数を呼ぶ入口は、まだ無い。
 
+### 合格の証拠と関門
+
+調査のClaudeは、隔離の測定に合格した証拠が無ければ起動しない。
+`runInvestigateClaude`と`runInvestigateClaudeWithDeps`は、最初に証拠を検査する。
+作業ディレクトリの検査より前なので、証拠が無いときは、ほかの検査にも進まない。
+
+証拠の型は`lib/isolation_proof.ts`にある。
+証拠は、モジュールの中のクラスのインスタンスで、クラスは型としてだけ公開する。
+外のモジュールは`new`で作れず、形が同じだけの物を型の上で代入できない。
+インスタンスは、証拠を作る関数`mintIsolationProof`の中で、モジュールの内側の集合に登録される。
+検査`assertIsolationProof`は、この集合に入っている物だけを受ける。
+次の物は断る。
+
+- `new`や`Reflect.construct`で作った物
+- 形だけが同じ物
+- JSONを通した物と、構造化複製した物
+- プロキシで包んだ物
+
+証拠は同じプロセスの中でだけ有効である。
+flowの段をまたげないので、呼び出し側は、同じプロセスの中で`checkIsolationProof`を呼び、戻り値をそのまま渡す。
+
+証拠を作れるのは関門だけである。
+`mintIsolationProof`を参照できるのは関門だけで、証拠のモジュールをimportできるのは、関門と調査の入口だけである。
+テスト用の差し替え口`checkIsolationProofWithDeps`は、判定の結果(合格か、閉じた理由の符号)だけを返し、証拠を返さない。
+偽の入力から本物の証拠を作る関数は無い。
+これらの参照は、保護されたテストがファイルの走査で固定する。
+指定子の照合で、名前空間のimport、再エクスポート、文字列の動的なimport、`require`も拾う。
+
+関門は`lib/investigate_isolation_gate.ts`の`checkIsolationProof`である。
+引数は取らない。
+本物のWindmillのクライアント、worker imageのClaude Codeの版(`CLAUDE_VERSION`)、今の隔離の指紋と起動の形のハッシュ、判定の版を、中で固定して使う。
+合格のときだけ証拠を作って返し、閉じているときは、符号を持つ`IsolationGateError`を投げる。
+例外は、読んだ結果の本文を持たない。
+
+判定は、隔離の測定(`investigate_isolation_probe`)の最新の完了ジョブの結果を読んで行う。
+測定のscriptは、後続の変更で足す。
+足すまでは測定のジョブが無いので、関門は常に閉じる。
+
+1. 測定のscriptの完了ジョブを、pathの完全一致、種別がscript、親なし、新しい順、少ない件数で一覧する。
+2. 一覧の各要素を、サーバーが絞りを無視しても通さないよう、判定側でも確かめる。
+   条件は次のとおりである。
+   - 種別がscriptで、親が無く、flowの1段でない。
+   - pathが一致する。
+   - tagが既定のworkerのtag(`bun`)である。
+   - 開始時刻を読める。
+3. 採れたジョブのうち、開始時刻が最も新しい1件を、成否を問わず使う。
+4. そのジョブが失敗なら、古い合格を使わずに閉じる。
+5. 成功なら結果を取り、判定が合格であること、Claude Codeの版、判定の版、隔離の指紋、起動の形のハッシュが、今の値と一致することを確かめる。Claude Codeの版は、両側が空でない文字列でなければ一致とみなさない。
+
+閉じる理由は、次の符号で表す。
+
+| 符号 | 理由 | 次の操作 |
+| --- | --- | --- |
+| `proof_missing` | 測定のジョブが無い | 測定を実行する。実行済みなら、実行した主体の権限を確かめる |
+| `proof_unreadable` | ジョブの記録を読めない。結果の形が違う | 関門を呼ぶ主体の権限と、Windmillの応答を確かめる |
+| `proof_failed` | 最新の測定が失敗したか、判定が合格でない | 測定の結果を見て、隔離を直すか、範囲を狭めるかを決める |
+| `version_changed` | Claude Codeの版が測定のときと違う | 測定を実行し直す |
+| `isolation_changed` | 判定の版、隔離の指紋、起動の形のハッシュのどれかが測定のときと違う | 測定を実行し直す |
+
+権限が足りないと、一覧は黙って空になる。
+そこで、測定のジョブが1件も採れなかったときは、pathを絞らない根の完了ジョブが1件でも見えるかを確かめる。
+1件も見えなければ`proof_unreadable`、見えているのに測定のジョブが無ければ`proof_missing`にする。
+稼働中のworkspaceには、scheduleのジョブが必ずあるので、見えていれば根のジョブは0件にならない。
+
+判定の版`PROBE_JUDGE_VERSION`は、測定が結果に記録し、関門が一致を求める。
+測定の判定を変えたときに上げる。
+上げると、既存の測定の結果は一致せず、測り直しになる。
+
 ### 出力の本文を記録に残さない
 
 失敗の詳細と実行記録の`error`には、Claudeの出力や標準エラーが入りうる。
@@ -6418,33 +6501,55 @@ Consoleの設定タブには出ない。
 - 出力の本文が記録に残る。
 - 調査の入口が人の確認なしに開く。
 - 差し替えられた置き場や、symlinkを含むリポジトリが読まれる。
+- 測定に合格していない隔離で、Claudeが起動する。
 
 保護するファイルは次のとおりである。
 
-- 4つのモジュールと、それぞれの`.script.yaml`
+- 7つのモジュールと、それぞれの`.script.yaml`
   - `lib/investigate_claude.ts`
   - `lib/claude_read_deny.ts`
   - `lib/investigate_gate.ts`
   - `lib/investigate_workspace.ts`
-- 4つを固定するテスト
+  - `lib/investigate_isolation.ts`
+  - `lib/isolation_proof.ts`
+  - `lib/investigate_isolation_gate.ts`
+- 7つを固定するテスト
   - `tests/lib/investigate_claude.test.ts`
   - `tests/lib/claude_read_deny.test.ts`
   - `tests/scripts/investigate_gate.test.ts`
   - `tests/lib/investigate_workspace.test.ts`
+  - `tests/lib/investigate_isolation.test.ts`
+  - `tests/lib/isolation_proof.test.ts`
+  - `tests/lib/investigate_isolation_gate.test.ts`
 
 置き場を作るworker imageの記述(`infra/worker/Dockerfile`)は、`infra/worker/`の前方一致で既に保護されている。
 `lib/workspace.ts`は保護しない。
 置き場の作成が使うロックのパスの関数を公開する差分だけを、このために入れている。
 
 `lib/claude.ts`は保護しない。
-ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
+ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行と、`buildClaudeArgv`と`buildClaudeEnv`のexportに限るためである。
 `runClaude`が起動の前に設定を書くこと、起動の呼び出しの引数と環境と実行の条件は、保護されたテスト(`tests/lib/investigate_claude.test.ts`)が丸ごと固定する。
+`lib/claude.ts`がargvや環境を変えると、起動の形のハッシュが変わり、関門が閉じる。
+保護の外の変更が隔離を黙って変えても、測り直すまでClaudeは起動しない。
 
 ### 残るリスク
 
 - 読み出しの拒否が実際に効くことを、実機で確かめていない。
-  確かめる手順と、合格を記録して実行時に照合する関門は、まだ無い。
-  足すまで、`investigate_enabled`は偽のままにする。
+  確かめる手順(測定のscript)は、まだ無い。
+  実行時に測定の結果を照合する関門はあるが、測定のジョブが無い間は常に閉じる。
+  測定を足し、実機で合格を記録するまで、`investigate_enabled`は偽のままにする。
+- 測定は1時点の結果である。
+  Claude Codeの版か起動の形が変われば、関門が閉じ、測り直しになる。
+  worker imageと、マウントの変更は、証拠に入らないので、測り直しにならない。
+- 古い版の測定のscriptをハッシュで実行すれば、合格のジョブの記録を作れる。
+  デプロイできる者と、rootで動くジョブ(superuserのDB接続を持つ)も、ジョブの記録を作れる。
+  uidを分けるまでは、デプロイ済みのコード全体と同じ信頼の範囲に含める。
+  scriptのハッシュの照合は入れない。
+- 測定を動かす主体と、関門を呼ぶ主体が、同じ範囲のジョブの記録を読めることを前提にする。
+  見える範囲が違うと、閉じる理由が`proof_unreadable`か`proof_missing`になる。
+- ジョブの記録の保持期間が切れると、測定のジョブが見えなくなり、関門が閉じる。閉じるのは安全な側である。
+- 証拠の参照元の走査は、識別子を連結や別名で組み立てる動的な参照を数えられない。
+  そうした参照は、PRのレビューで見る。
 - 拒否の規則は、`Read`、`Glob`、`Grep`の組み込みのツールに効く設定である。
   対象リポジトリの設定を読まないこと(設定の層を`user`だけにしたこと)が、実際に文脈へ入らないことも、実機で確かめていない。
 - `lib/claude.ts`の分岐のうち、テストと本番で振る舞いが変わるものは、保護されたテストでは見つからない。

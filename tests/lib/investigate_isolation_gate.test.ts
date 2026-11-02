@@ -394,7 +394,8 @@ describe("checkIsolationProofWithDeps", () => {
 
   describe("the codes", () => {
     test("names the five reasons the gate closes", () => {
-      expect([...ISOLATION_GATE_CODES].sort()).toEqual(
+      const codes: string[] = [...ISOLATION_GATE_CODES];
+      expect(codes.sort()).toEqual(
         [
           "isolation_changed",
           "proof_failed",
@@ -434,12 +435,39 @@ describe("checkIsolationProof", () => {
 });
 
 describe("checkIsolationProof against a fake Windmill client", () => {
+  const SPECIFIER = "windmill-client@1.817.0";
   let savedVersion: string | undefined;
   let savedWorkspace: string | undefined;
+  let real: Awaited<typeof import("windmill-client@1.817.0")>;
+  let gate: typeof import("../../f/factory/lib/investigate_isolation_gate.ts");
+  let stored: unknown;
 
-  beforeAll(() => {
+  function matchingResult(overrides: Record<string, unknown> = {}) {
+    return probeResult({
+      isolationFingerprint: ISOLATION_FINGERPRINT,
+      argvShapeHash: computeArgvShapeHash(),
+      ...overrides,
+    });
+  }
+
+  beforeAll(async () => {
     savedVersion = process.env.CLAUDE_VERSION;
     savedWorkspace = process.env.WM_WORKSPACE;
+    process.env.CLAUDE_VERSION = VERSION;
+    process.env.WM_WORKSPACE = WORKSPACE;
+    real = await import(SPECIFIER);
+    mock.module(SPECIFIER, () => ({
+      ...real,
+      default: { ...real.default, getWorkspace: () => WORKSPACE },
+      JobService: {
+        listCompletedJobs: async () => [probeJob()],
+        getCompletedJobResult: async () => stored,
+      },
+    }));
+    // 偽のclientを束縛した、関門の別のインスタンスを読む。
+    gate = await import(
+      `../../f/factory/lib/investigate_isolation_gate.ts?fake=${Date.now()}`
+    );
   });
 
   afterAll(() => {
@@ -449,30 +477,27 @@ describe("checkIsolationProof against a fake Windmill client", () => {
     if (savedWorkspace === undefined)
       Reflect.deleteProperty(process.env, "WM_WORKSPACE");
     else process.env.WM_WORKSPACE = savedWorkspace;
-    mock.restore();
+    mock.module(SPECIFIER, () => real);
   });
 
   test("returns a proof that the entry accepts, when the stored result matches the current isolation", async () => {
-    process.env.CLAUDE_VERSION = VERSION;
-    process.env.WM_WORKSPACE = WORKSPACE;
-    const stored = probeResult({
-      isolationFingerprint: ISOLATION_FINGERPRINT,
-      argvShapeHash: computeArgvShapeHash(),
-    });
-    const real = await import("windmill-client@1.817.0");
-    mock.module("windmill-client@1.817.0", () => ({
-      ...real,
-      default: { ...real.default, getWorkspace: () => WORKSPACE },
-      JobService: {
-        listCompletedJobs: async () => [probeJob()],
-        getCompletedJobResult: async () => stored,
-      },
-    }));
-    const gate = await import(
-      `../../f/factory/lib/investigate_isolation_gate.ts?fake=${Date.now()}`
-    );
+    stored = matchingResult();
     const proof: unknown = await gate.checkIsolationProof();
     expect(() => assertIsolationProof(proof)).not.toThrow();
+  });
+
+  test("closes with version_changed when the stored version of claude differs", async () => {
+    stored = matchingResult({ claudeVersion: "0.0.1" });
+    await expect(gate.checkIsolationProof()).rejects.toMatchObject({
+      code: "version_changed",
+    });
+  });
+
+  test("closes with an error of the gate when the stored judgement is not a pass", async () => {
+    stored = matchingResult({ passed: false });
+    await expect(gate.checkIsolationProof()).rejects.toBeInstanceOf(
+      gate.IsolationGateError,
+    );
   });
 });
 
