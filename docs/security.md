@@ -6314,13 +6314,17 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 | パス | 塞ぐ理由 |
 | --- | --- |
 | `/proc`、`/dev/fd`、`/dev/stdin` | 他のプロセスや自分の環境変数とファイル記述子に、workerの秘密値がある |
-| `/run` | ジョブごとの一時領域(`/run/factory-tmp`)がある |
+| `/dev/shm` | 誰でも書ける共有メモリで、他のプロセスの一時ファイルがありうる |
+| `/run`、`/var/run`、`/var/lock` | ジョブごとの一時領域(`/run/factory-tmp`)がある。`/var/run`と`/var/lock`は`/run`の下への別名で、綴りを変えて塞いだ場所に届かせないために塞ぐ |
 | `/var/lib/factory` | Factoryの状態の置き場である |
 | `/root` | rootのホームである |
 | `/tmp`、`/var/tmp`、`/tmp/windmill` | 他のジョブの一時ファイルがある |
 | `/etc` | システムの設定と資格情報がある |
 | `/workspaces` | 他のリポジトリのworktreeがある |
 | `$HOME` | 実行時に解決した値を足す。すでに一覧にあれば足さない |
+
+別名の`/var/run`と`/var/lock`、記述子の`/dev/fd`と`/dev/stdin`は、一覧に載せるだけで、拒否が効くかを確かめる手順には含めない。
+一覧を変えると`ISOLATION_FINGERPRINT`が変わるので、保護されたテストの固定値も同じ変更で直す。
 
 規則に使うパスは、正規化した絶対パスだけを受ける。
 `..`、重なったスラッシュ、規則の書式に紛れる文字を含む綴りと、ルートは、例外にする。
@@ -6338,6 +6342,51 @@ Factoryがブランチを引き継ぐ作業項目の状態を決める`branch_ho
 人が手で使う永続の設定や、他のジョブの設定に、規則を書かないためである。
 置き場を指定しなかった場合に落ちる環境変数や既定の場所も、このジョブ専用でないので断られる。
 設定の置き場がsymlinkのとき、`settings.json`がsymlinkのとき、実際の位置がジョブのディレクトリの外のときも、例外にする。
+
+### worktreeの置き場
+
+調査のworktreeは、`/var/lib/factory-investigate`(`INVESTIGATE_ROOT`)の下に、作業項目のIDを名前にして作る。
+作成と掃除は`lib/investigate_workspace.ts`にある。
+置き場の親は、worker imageがrootの所有・モード0700で作る。
+コンテナの中のディレクトリなので、コンテナの再作成で空に戻ってよい。
+
+置き場は、`/run`、`/var/lib/factory`、`/tmp`、`/var/tmp`、`/workspaces`の外に置く。
+拒否の一覧の下に置くと、拒否が自分のworktreeまで塞ぐためである。
+一覧の`/var/lib/factory`は、区切りの`/`まで一致を見るので、名前が前方一致するだけの`/var/lib/factory-investigate`は塞がれない。
+
+置き場は、使うたびに`lstat`で確かめる。
+所有者がroot(uid 0)で、モードが0700ちょうどで、symlinkでなく、ディレクトリであることが条件である。
+満たさないときと、存在しないときは、例外にする。
+実行時には作らない。
+他のユーザーが差し替えた置き場や、権限の違う置き場を、黙って使わないためである。
+存在しないときは、worker imageの再ビルドを促す。
+
+worktreeのパスを求める関数は`investigateWorktreeDir`の1つで、作成、後始末、掃除が共有する。
+作業項目のIDは、正の安全な整数だけを受ける。
+隔離の測定のために、実在のIDと重ならない大きな固定のID(`PROBE_RESERVED_ID`)を持つ。
+
+worktreeの作成(`createInvestigateWorktree`)は、解決済みの40桁の小文字のsha1つだけを受ける。
+リポジトリのロックを1度だけ取り、その中で次の順に実行する。
+
+1. shaをfetchする。clone済みのリポジトリが持たないshaでも取れる。
+2. `git worktree prune`で、ディスクから消えたworktreeの登録を消す。同じIDで作り直せる。
+3. `git ls-tree -r`で、モード120000(symlink)か160000(submodule)が1つでもあれば例外にする。読めない行があるときも例外にする。
+4. `git worktree add --detach`で、`core.symlinks=false`のままcheckoutする。
+5. checkoutしたファイルにsymlinkが無いことを、ファイルシステムで確かめ直す。あれば、worktreeを消して例外にする。
+
+対象リポジトリの内容は信頼できない入力で、symlinkはworkerの秘密を指しうる。
+そのため、checkoutの前後の2か所で止める。
+入れ子のロックでの待ちを避けるため、ロックを取る既存の`addDetachedWorktree`は呼ばない。
+
+掃除(`purgeInvestigateRoot`)は、置き場の下の項目を、残すIDの作業項目を除いてすべて消す。
+symlinkはたどらずリンク自体を消し、`.git`を持たない項目やファイルも消す。
+残すIDの項目も、ディレクトリでなければ消す。
+消した後に、呼び出し側が渡した主リポジトリで`git worktree prune`を実行する。
+主リポジトリは、残った項目の`.git`ファイルからは求めない。信頼できない入力から求めないためである。
+掃除も置き場の検査を満たさなければ何も消さない。
+差し替えられた置き場の先を消さないためである。
+
+この2つの関数を呼ぶ入口は、まだ無い。
 
 ### 出力の本文を記録に残さない
 
@@ -6363,13 +6412,29 @@ Consoleの設定タブには出ない。
 ### 保護パス
 
 次のファイルを保護パスに入れる。
-書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたりするためである。
+書き換えられると、次のことが起こるためである。
 
-- `lib/investigate_claude.ts`、`lib/claude_read_deny.ts`、`lib/investigate_gate.ts`と、それぞれの`.script.yaml`
-- 3つを固定するテスト
+- 調査のClaudeがworkerの秘密に届く。
+- 出力の本文が記録に残る。
+- 調査の入口が人の確認なしに開く。
+- 差し替えられた置き場や、symlinkを含むリポジトリが読まれる。
+
+保護するファイルは次のとおりである。
+
+- 4つのモジュールと、それぞれの`.script.yaml`
+  - `lib/investigate_claude.ts`
+  - `lib/claude_read_deny.ts`
+  - `lib/investigate_gate.ts`
+  - `lib/investigate_workspace.ts`
+- 4つを固定するテスト
   - `tests/lib/investigate_claude.test.ts`
   - `tests/lib/claude_read_deny.test.ts`
   - `tests/scripts/investigate_gate.test.ts`
+  - `tests/lib/investigate_workspace.test.ts`
+
+置き場を作るworker imageの記述(`infra/worker/Dockerfile`)は、`infra/worker/`の前方一致で既に保護されている。
+`lib/workspace.ts`は保護しない。
+置き場の作成が使うロックのパスの関数を公開する差分だけを、このために入れている。
 
 `lib/claude.ts`は保護しない。
 ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
@@ -6385,7 +6450,13 @@ Consoleの設定タブには出ない。
 - `lib/claude.ts`の分岐のうち、テストと本番で振る舞いが変わるものは、保護されたテストでは見つからない。
   PRのレビューで見る。
 - 作業ディレクトリの検査は、起動の前の1回である。起動の後にsymlinkを差し替える操作は、検出しない。
-- 作業ディレクトリの置き場は、まだ決めていない。一覧の外で、workerが書ける場所を選ぶ。
+- 置き場をworker imageが作ること、置き場の検査、`git worktree add`が置き場の下に作れることは、実機で確かめていない。
+  image(`mise run up`)の反映の後でないと確かめられない。
+- 掃除は、置き場の下の自分以外の項目をすべて消す。
+  workerが調査を1件ずつ動かす前提(`replicas`が1)に立つ。
+  workerを増やす変更や、調査を並行させる変更で見直す。
+- 別名の`/var/run`、`/var/lock`と、`/dev/fd`、`/dev/stdin`の拒否は、効くことを確かめない。
+  効かないと、綴りを変えて塞いだ場所に届く。
 - 作業ディレクトリの中(対象リポジトリの内容)は、読めるので、信頼できない入力のままである。
   プロンプトのデータの区切りと、出力の検査で抑える。どちらも、呼び出し側が担う。
 

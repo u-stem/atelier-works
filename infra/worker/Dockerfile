@@ -59,6 +59,12 @@ RUN set -eux; \
 # workerはrootで動くので、書き込みに困らない。
 RUN chmod -R go-w /usr/src/app /tmp/.cache
 
+# 調査のClaudeが読むworktreeを置く親。rootの所有で0700にし、他のユーザーが書けないようにする。
+# `/run`、`/var/lib/factory`、`/tmp`、`/var/tmp`、`/workspaces`の外に置く。
+# `f/factory/lib/investigate_workspace.ts`が使うたびに所有者とモードを確かめ、実行時には作らない。
+# コンテナの中のディレクトリなので、再作成で空に戻ってよい。
+RUN mkdir -p -m 0700 /var/lib/factory-investigate
+
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
 # ビルドを失敗させるため。

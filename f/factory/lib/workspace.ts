@@ -738,7 +738,7 @@ async function persistNoSymlinksConfig(
  * `addDetachedWorktree`、`createGtrWorktree`、`removeWorktree`、
  * `commitAndPush`で共有する。
  */
-function repoLockPath(repoDir: string): string {
+export function repoLockPath(repoDir: string): string {
   return `${dirname(repoDir)}/main.lock`;
 }
 

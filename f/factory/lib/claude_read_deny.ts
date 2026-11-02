@@ -24,12 +24,18 @@ export class ReadDenyError extends Error {
  * workerはrootで動き、`--restricted`が作業ディレクトリの外の読み出しを閉じるかを確かめていないため、
  * 環境変数(`/proc`)、ジョブの一時領域(`/run`、`/tmp`、`/var/tmp`)、設定と他のリポジトリ(`/etc`、`/workspaces`、`/root`)を、
  * 一覧で塞ぐ。
+ * `/dev/shm`(誰でも書ける共有メモリ)と、`/run`の別名の`/var/run`、`/var/lock`も塞ぐ。
+ * 綴りを変えるだけで、塞いだ場所に届かせないためである。
+ * 別名と`/dev/fd`、`/dev/stdin`は、一覧に載せるだけで、塞げているかを測っていない。
  */
 export const READ_DENY_BASE_PATHS: readonly string[] = [
   "/proc",
   "/dev/fd",
   "/dev/stdin",
+  "/dev/shm",
   "/run",
+  "/var/run",
+  "/var/lock",
   "/var/lib/factory",
   "/root",
   "/tmp",
