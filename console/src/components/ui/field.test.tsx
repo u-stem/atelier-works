@@ -92,6 +92,55 @@ describe("Field", () => {
     ).toBe("t-hint t-problem");
   });
 
+  test("renders the counter under its own id", () => {
+    expect(markup({ id: "t", counter: "0 / 5文字" })).toMatch(
+      /<p id="t-counter"[^>]*>0 \/ 5文字<\/p>/,
+    );
+  });
+
+  test("describes the control by the counter", () => {
+    expect(
+      attr(
+        markup({ id: "t", counter: "0 / 5文字" }),
+        "input",
+        "aria-describedby",
+      ),
+    ).toBe("t-counter");
+  });
+
+  test("describes the control by the hint, the counter, then the problem", () => {
+    expect(
+      attr(
+        markup({
+          id: "t",
+          hint: "40字まで",
+          counter: "0 / 5文字",
+          problem: "必須です",
+        }),
+        "input",
+        "aria-describedby",
+      ),
+    ).toBe("t-hint t-counter t-problem");
+  });
+
+  test("does not mark the control invalid by the counter alone", () => {
+    expect(
+      attr(markup({ id: "t", counter: "0 / 5文字" }), "input", "aria-invalid"),
+    ).toBeNull();
+  });
+
+  test("renders no counter element without a counter", () => {
+    expect(markup({ id: "t", hint: "40字まで" })).not.toContain("t-counter");
+  });
+
+  test("keeps the hint, the problem and the counter in one row", () => {
+    expect(
+      markup({ id: "t", problem: "必須です", counter: "0 / 5文字" }),
+    ).toContain(
+      '<div class="flex flex-wrap items-baseline justify-between gap-2">',
+    );
+  });
+
   test("sizes the form label as body text in medium weight", () => {
     expect(attr(markup(), "label", "class")).toBe("text-body font-medium");
   });

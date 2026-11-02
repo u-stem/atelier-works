@@ -31,6 +31,8 @@ type FieldProps = {
   hint?: string | undefined;
   /** 入力の誤り。入力欄を不正と示し、説明として読み上げに結ぶ。 */
   problem?: string | undefined;
+  /** 字数などの追加の説明。入力欄の説明として読み上げに結ぶ。 */
+  counter?: string | undefined;
   tone?: "form" | "filter";
   /** 入力欄の`id`。省くと自動で決める。 */
   id?: string;
