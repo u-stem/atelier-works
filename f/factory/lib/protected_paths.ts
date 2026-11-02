@@ -249,9 +249,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、許可されていないリポジトリや閉じたPRのレビューが投入で通ったり、同じPRのレビューが重なったりする。
  * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  * 調査のClaudeの隔離も守る。隔離の引数を定数で持つ包み関数(`lib/investigate_claude.ts`)、読み出しを塞ぐ固定の一覧と設定の書き出し
- * (`lib/claude_read_deny.ts`)、調査の入口を開ける門(`lib/investigate_gate.ts`)、それぞれの`.script.yaml`、
- * 3つを固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、`tests/scripts/investigate_gate.test.ts`)である。
- * 書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたりする。
+ * (`lib/claude_read_deny.ts`)、調査の入口を開ける門(`lib/investigate_gate.ts`)、調査のworktreeの置き場の検査と作成と掃除(`lib/investigate_workspace.ts`)、
+ * それぞれの`.script.yaml`、4つを固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、
+ * `tests/scripts/investigate_gate.test.ts`、`tests/lib/investigate_workspace.test.ts`)である。
+ * 書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたり、
+ * 置き場の差し替えやsymlinkを含むリポジトリのworktreeが読まれたりする。
  * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
  * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
  * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
@@ -367,9 +369,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/claude_read_deny.script.yaml",
   "f/factory/lib/investigate_gate.ts",
   "f/factory/lib/investigate_gate.script.yaml",
+  "f/factory/lib/investigate_workspace.ts",
+  "f/factory/lib/investigate_workspace.script.yaml",
   "tests/lib/investigate_claude.test.ts",
   "tests/lib/claude_read_deny.test.ts",
   "tests/scripts/investigate_gate.test.ts",
+  "tests/lib/investigate_workspace.test.ts",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",

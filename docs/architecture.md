@@ -639,6 +639,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/claude_read_deny` | script | [LIB] 調査のClaudeの読み出しを塞ぐ設定 |
 | `f/factory/lib/investigate_claude` | script | [LIB] 調査のClaudeを隔離して起動する |
+| `f/factory/lib/investigate_workspace` | script | [LIB] 調査のworktreeの置き場 |
 | `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
@@ -1024,6 +1025,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示と、調査のClaudeを隔離して起動する共通処理、入口を開ける設定の門だけがある([調査の隔離](security.md#調査の隔離))
+- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示と、調査のClaudeを隔離して起動する共通処理、入口を開ける設定の門、worktreeの置き場の検査・作成・掃除だけがある([調査の隔離](security.md#調査の隔離))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。
