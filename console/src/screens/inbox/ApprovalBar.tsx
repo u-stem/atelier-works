@@ -1,8 +1,10 @@
 import { TriangleAlert } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useState } from "react";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import {
   approvalConfirmation,
@@ -11,12 +13,14 @@ import {
   EXPIRED_MESSAGE,
   isDecidable,
   reasonCounter,
+  reasonFieldMessages,
   rejectConfirmation,
   rejectProblem,
   waitingMessage,
   withFactoryLabelArg,
 } from "../../lib/approvalDecision.ts";
 import { cn } from "../../lib/cn.ts";
+import { CHECKBOX_CLASS } from "../../lib/controlClasses.ts";
 import { IssueRedoBar } from "./IssueRedoBar.tsx";
 import { RefusalNotice } from "./RefusalNotice.tsx";
 import {
@@ -47,9 +51,9 @@ type BarProps = {
 
 function Note({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
+    <Card tag="p" variant="empty">
       {children}
-    </p>
+    </Card>
   );
 }
 
@@ -100,7 +104,6 @@ function DecideBar({
     null,
   );
   const [stopped, setStopped] = useState<string | null>(null);
-  const reasonId = useId();
   const decision = useApprovalDecision("decide");
 
   const withFactoryLabel = withFactoryLabelArg(
@@ -119,6 +122,7 @@ function DecideBar({
   const locked = decision.isLocked(input("approve"));
   const counter = reasonCounter(reason);
   const problem = rejectProblem(reason);
+  const fieldMessages = reasonFieldMessages(reason);
   const gate = (nowMs: number): string | null =>
     approveGateProblem({
       approval,
@@ -179,9 +183,11 @@ function DecideBar({
         };
 
   return (
-    <section
+    <Card
       aria-label="承認バー"
-      className="flex flex-col gap-4 rounded-xl border border-border bg-card px-5 py-4"
+      tag="section"
+      padding="default"
+      className="flex flex-col gap-4"
     >
       <h3 className="text-lead font-semibold">承認と却下</h3>
       {refreshed ? (
@@ -197,7 +203,7 @@ function DecideBar({
         <label className="flex items-start gap-2 text-body">
           <input
             type="checkbox"
-            className="mt-1 size-4 accent-primary"
+            className={cn(CHECKBOX_CLASS, "mt-1")}
             checked={fullChecked}
             disabled={locked}
             onChange={(event) => {
@@ -211,7 +217,7 @@ function DecideBar({
         <label className="flex items-center gap-2 text-body">
           <input
             type="checkbox"
-            className="size-4 accent-primary"
+            className={CHECKBOX_CLASS}
             checked={labelChecked}
             disabled={locked}
             onChange={(event) => {
@@ -225,36 +231,24 @@ function DecideBar({
           factoryラベルを付けられないため、起票のみ行います。
         </p>
       )}
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={reasonId} className="text-small font-medium">
-          却下の理由(却下するときは必須)
-        </label>
-        <Textarea
-          id={reasonId}
-          rows={3}
-          value={reason}
-          disabled={locked}
-          aria-invalid={counter.over}
-          onChange={(event) => {
-            setReason(event.target.value);
-          }}
-        />
-        <div className="flex flex-wrap items-baseline justify-between gap-2 text-caption">
-          <span
-            className={counter.over ? "text-failure" : "text-muted-foreground"}
-          >
-            {problem ?? ""}
-          </span>
-          <span
-            className={cn(
-              "tabular-nums",
-              counter.over ? "font-medium text-failure" : "text-subtle",
-            )}
-          >
-            {counter.label}
-          </span>
-        </div>
-      </div>
+      <Field
+        label="却下の理由(却下するときは必須)"
+        hint={fieldMessages.hint}
+        problem={fieldMessages.problem}
+        counter={counter.label}
+      >
+        {(control) => (
+          <Textarea
+            {...control}
+            rows={3}
+            value={reason}
+            disabled={locked}
+            onChange={(event) => {
+              setReason(event.target.value);
+            }}
+          />
+        )}
+      </Field>
       {approveProblem === null ? null : (
         <p className="text-small text-warning">{approveProblem}</p>
       )}
@@ -327,6 +321,6 @@ function DecideBar({
         <p className="text-small text-muted-foreground">{dialog.idLabel}</p>
         {dialog.body}
       </ConfirmDialog>
-    </section>
+    </Card>
   );
 }

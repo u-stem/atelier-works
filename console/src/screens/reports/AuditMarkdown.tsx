@@ -12,6 +12,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { linkNote } from "../../lib/auditMarkdown.ts";
 import { cn } from "../../lib/cn.ts";
+import { TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 
 // 監査レポートの本文を描く薄い部品。
@@ -128,12 +129,19 @@ const COMPONENTS: Components = {
     </div>
   ),
   th: ({ children }) => (
-    <th className="border border-border bg-muted px-3 py-2 text-left font-semibold">
+    <th
+      className={cn(
+        TABLE_CELL_CLASS,
+        "border border-border bg-muted text-left font-semibold",
+      )}
+    >
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td className="border border-border px-3 py-2 align-top">{children}</td>
+    <td className={cn(TABLE_CELL_CLASS, "border border-border align-top")}>
+      {children}
+    </td>
   ),
 };
 

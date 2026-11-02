@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { isBannerError } from "../../api/errors.ts";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import {
   LoadingGate,
   type LoadingShape,
@@ -134,9 +135,7 @@ export function AnalyticsSection<T>({
               />
             ) : null}
             {rows.length === 0 ? (
-              <p className="max-w-3xl rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-                {emptyMessage}
-              </p>
+              <EmptyNote className="max-w-3xl">{emptyMessage}</EmptyNote>
             ) : (
               children(rows)
             )}

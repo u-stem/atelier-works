@@ -1,16 +1,20 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { ToggleChip, ToggleChipGroup } from "../../components/ToggleChip.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import { itemsBackState } from "../../lib/breadcrumbs.ts";
 import { cn } from "../../lib/cn.ts";
+import { TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import { pageSlice } from "../../lib/pagination.ts";
 import {
@@ -126,7 +130,7 @@ function SortableHeader({
     <th
       scope="col"
       aria-sort={ariaSort(sort, sortKey)}
-      className={cn("px-3 py-2 text-left font-medium", className)}
+      className={cn(TABLE_CELL_CLASS, "text-left font-medium", className)}
     >
       <button
         type="button"
@@ -154,7 +158,8 @@ function PlainHeader({
     <th
       scope="col"
       className={cn(
-        "whitespace-nowrap px-3 py-2 text-left font-medium",
+        TABLE_CELL_CLASS,
+        "whitespace-nowrap text-left font-medium",
         className,
       )}
     >
@@ -208,79 +213,71 @@ function FilterBar({
   filter: PipelineFilter;
   onChange: (next: PipelineFilter) => void;
 }) {
-  // 自作の部品を包む`label`は、静的検査が入力欄と結べないと見なすので、`htmlFor`でも結ぶ。
-  const id = useId();
   return (
     <div className="flex flex-wrap items-end gap-4">
       <ScopeSwitch
         scope={filter.scope}
         onChange={(scope) => onChange({ ...filter, scope })}
       />
-      <label
-        htmlFor={`${id}-status`}
-        className="flex flex-col gap-1 text-small text-muted-foreground"
-      >
-        状態
-        <Select
-          id={`${id}-status`}
-          value={filter.status ?? ""}
-          onChange={(event) =>
-            onChange(
-              selectPipelineStatus(
-                filter,
-                event.target.value === "" ? null : event.target.value,
-              ),
-            )
-          }
-        >
-          <option value="">すべて</option>
-          {statusOptions(scopedRows).map((status) => (
-            <option key={status} value={status}>
-              {pipelineStatusLabel(status)}
-            </option>
-          ))}
-        </Select>
-      </label>
-      {showRepo ? (
-        <label
-          htmlFor={`${id}-repo`}
-          className="flex flex-col gap-1 text-small text-muted-foreground"
-        >
-          リポジトリ
+      <Field tone="filter" label="状態">
+        {(control) => (
           <Select
-            id={`${id}-repo`}
-            value={filter.repo ?? ""}
+            id={control.id}
+            value={filter.status ?? ""}
             onChange={(event) =>
-              onChange({
-                ...filter,
-                repo: event.target.value === "" ? null : event.target.value,
-              })
+              onChange(
+                selectPipelineStatus(
+                  filter,
+                  event.target.value === "" ? null : event.target.value,
+                ),
+              )
             }
           >
             <option value="">すべて</option>
-            {repoOptions(rows).map((repo) => (
-              <option key={repo} value={repo}>
-                {repo}
+            {statusOptions(scopedRows).map((status) => (
+              <option key={status} value={status}>
+                {pipelineStatusLabel(status)}
               </option>
             ))}
           </Select>
-        </label>
+        )}
+      </Field>
+      {showRepo ? (
+        <Field tone="filter" label="リポジトリ">
+          {(control) => (
+            <Select
+              id={control.id}
+              value={filter.repo ?? ""}
+              onChange={(event) =>
+                onChange({
+                  ...filter,
+                  repo: event.target.value === "" ? null : event.target.value,
+                })
+              }
+            >
+              <option value="">すべて</option>
+              {repoOptions(rows).map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
       ) : null}
-      <label
-        htmlFor={`${id}-text`}
-        className="flex min-w-56 flex-1 flex-col gap-1 text-small text-muted-foreground"
-      >
-        検索
-        <Input
-          id={`${id}-text`}
-          type="search"
-          placeholder="題名、ブランチ、番号など"
-          value={filter.text}
-          onChange={(event) =>
-            onChange({ ...filter, text: event.target.value })
-          }
-        />
-      </label>
+      <Field tone="filter" label="検索" className="min-w-56 flex-1">
+        {(control) => (
+          <Input
+            {...control}
+            type="search"
+            placeholder="題名、ブランチ、番号など"
+            value={filter.text}
+            onChange={(event) =>
+              onChange({ ...filter, text: event.target.value })
+            }
+          />
+        )}
+      </Field>
       {isPipelineFilterActive(filter) ? (
         <Button
           variant="ghost"
@@ -307,7 +304,7 @@ function PipelineRowView({
 }) {
   return (
     <tr className="border-t border-border align-top">
-      <td className="px-3 py-2 tabular-nums">
+      <td className={cn(TABLE_CELL_CLASS, "tabular-nums")}>
         <Link
           to={itemDetailPath(row.work_item_id)}
           state={backState}
@@ -316,42 +313,49 @@ function PipelineRowView({
           #{row.work_item_id}
         </Link>
       </td>
-      <td className="px-3 py-2">
+      <td className={TABLE_CELL_CLASS}>
         <div className={cn("max-w-lg break-words", TITLE_MIN_WIDTH)}>
           <PlainText value={row.title} />
         </div>
       </td>
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
         {workItemKindLabel(row.kind)}
       </td>
-      <td className="px-3 py-2">
+      <td className={TABLE_CELL_CLASS}>
         <Badge variant={pipelineStatusVariant(row.status)}>
           {pipelineStatusLabel(row.status)}
         </Badge>
       </td>
       {showRepo ? (
-        <td className="whitespace-nowrap px-3 py-2">
+        <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
           {row.owner}/{row.repo}
         </td>
       ) : null}
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
         <ExternalLinks links={relatedLinks(row)} />
       </td>
-      <td className={cn("px-3 py-2 font-mono text-small", NARROW_HIDDEN)}>
+      <td
+        className={cn(TABLE_CELL_CLASS, "font-mono text-small", NARROW_HIDDEN)}
+      >
         <div className="max-w-64 min-w-40 break-all">
           <PlainText value={row.branch} />
         </div>
       </td>
-      <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
+      <td className={cn(TABLE_CELL_CLASS, "tabular-nums", NARROW_HIDDEN)}>
         {row.attempt}
       </td>
-      <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
+      <td className={cn(TABLE_CELL_CLASS, "tabular-nums", NARROW_HIDDEN)}>
         {row.fix_round}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
+      <td
+        className={cn(
+          TABLE_CELL_CLASS,
+          "whitespace-nowrap text-muted-foreground",
+        )}
+      >
         <TimeText iso={row.updated_at} now={now} />
       </td>
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
         {showsRequirementsLink(row) ? (
           <Link
             to={itemRequirementsPath(row.work_item_id)}
@@ -384,14 +388,17 @@ export function NoMatchNotice({
   onShowAll: () => void;
 }) {
   return (
-    <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+    <Card
+      padding="default"
+      className="flex flex-col items-start gap-3 text-small text-muted-foreground"
+    >
       <p>条件に合う作業項目はありません</p>
       {hiddenMatches > 0 ? (
         <Button variant="outline" size="sm" onClick={onShowAll}>
           すべてで探す({hiddenMatches}件)
         </Button>
       ) : null}
-    </div>
+    </Card>
   );
 }
 
@@ -482,11 +489,7 @@ export function PipelineTable({
   };
 
   if (rows.length === 0) {
-    return (
-      <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-        作業項目はまだありません
-      </p>
-    );
+    return <EmptyNote>作業項目はまだありません</EmptyNote>;
   }
 
   return (
@@ -507,7 +510,10 @@ export function PipelineTable({
         <p className="text-small text-muted-foreground">{PR_OPEN_NOTE}</p>
       ) : null}
       {scopedRows.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+        <Card
+          padding="default"
+          className="flex flex-col items-start gap-3 text-small text-muted-foreground"
+        >
           <p>{scopeEmptyMessage(filter.scope)}</p>
           {scopeEmptyNote(filter.scope, limitReached) === null ? null : (
             <p>{scopeEmptyNote(filter.scope, limitReached)}</p>
@@ -521,7 +527,7 @@ export function PipelineTable({
               すべて({rows.length}件)を表示
             </Button>
           )}
-        </div>
+        </Card>
       ) : filtered.length === 0 ? (
         <NoMatchNotice
           hiddenMatches={outOfScopeMatchCount(rows, filter)}
@@ -538,7 +544,7 @@ export function PipelineTable({
                 backState={backState}
               />
             </div>
-            <div className="@container hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
+            <Card className="@container hidden overflow-x-auto @4xl:block">
               <table className="w-full border-collapse text-body">
                 <thead className="text-small text-muted-foreground">
                   <tr>
@@ -606,7 +612,7 @@ export function PipelineTable({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </Card>
           </div>
           <Pagination
             page={pager.page}

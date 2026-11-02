@@ -3,10 +3,12 @@ import type {
   DeploymentEntry,
   DeploymentPullRequest,
 } from "../../api/guards/deployments.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   deploymentResultLabel,
   hasPullRequestOrigin,
@@ -92,7 +94,7 @@ function DeploymentItem({
 }) {
   const reason = failureReasonText(entry);
   return (
-    <li className="rounded-xl border border-border bg-card p-5">
+    <Card tag="li" padding="default">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span className="text-small text-muted-foreground">
           <TimeText iso={entry.occurred_at} now={now} />
@@ -129,7 +131,7 @@ function DeploymentItem({
           {pullRequestTruncationNote()}
         </p>
       ) : null}
-    </li>
+    </Card>
   );
 }
 
@@ -161,11 +163,7 @@ export function UpdateHistory({
   const pager = usePagination(entries.length, PAGE_SIZE, initialPage);
   const baseId = useId();
   if (entries.length === 0) {
-    return (
-      <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-        反映の記録はまだありません
-      </p>
-    );
+    return <EmptyNote>反映の記録はまだありません</EmptyNote>;
   }
   const canExpand = entries.length > HISTORY_PREVIEW_COUNT;
   const listId = `${baseId}-list`;

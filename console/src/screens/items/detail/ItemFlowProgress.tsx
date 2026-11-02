@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { EmptyNote } from "../../../components/EmptyNote.tsx";
 import { JobLink } from "../../../components/JobLink.tsx";
 import {
   flowDiagramModel,
@@ -18,7 +19,7 @@ import type { FlowProgressView } from "../../../lib/workItemFlowProgress.ts";
 import { FlowDiagramFrame } from "../../jobs/FlowDiagram.tsx";
 import { StepList } from "../../jobs/JobDetailParts.tsx";
 import { JobStateBadge } from "../../jobs/JobRows.tsx";
-import { EmptyNote, Panel } from "./DetailParts.tsx";
+import { Panel } from "./DetailParts.tsx";
 
 /** 最新の取得に失敗して、前の値を出していることの印。 */
 const STALE_MARK = "前の値(取得に失敗)";

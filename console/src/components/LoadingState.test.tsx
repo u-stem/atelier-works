@@ -246,7 +246,7 @@ describe("SkeletonListCard", () => {
 
   test("draws a bordered card", () => {
     expect(html).toContain(
-      "overflow-hidden rounded-xl border border-border bg-card",
+      "rounded-xl border border-border bg-card overflow-hidden",
     );
   });
 

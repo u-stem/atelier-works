@@ -6,6 +6,7 @@ import { prReviewConfig } from "../../api/prReviewConfig.ts";
 import type { PrReviewSubmitInput } from "../../api/writes.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { repoOptionLabel } from "../../lib/manualIntake.ts";
 import {
@@ -24,7 +25,7 @@ import {
   submitControl,
 } from "../../lib/prReviewOutcome.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
-import { BackLink, Field } from "./NewItemScreen.tsx";
+import { BackLink } from "./NewItemScreen.tsx";
 import { PrReviewAttemptNotice, PrReviewResult } from "./PrReviewResult.tsx";
 
 /** 共有のロックの状態を引くための入力。キーは入力によらず固定なので、値は使われない。 */
@@ -108,21 +109,18 @@ export function NewPrReviewScreen() {
           }}
         >
           <Field
-            id={`${ids}-repo`}
             label="リポジトリ"
             hint="「オーナー名/リポジトリ名」の形で入力します。PRのURLを入力するときは、空のままでも構いません。候補に無いリポジトリも入力できますが、許可されていなければ断られます。"
             problem={repoProblem}
           >
-            {(describedBy) => (
+            {(control) => (
               <>
                 <Input
-                  id={`${ids}-repo`}
+                  {...control}
                   list={`${ids}-targets`}
                   value={form.repo}
                   autoComplete="off"
                   spellCheck={false}
-                  aria-invalid={repoProblem !== undefined}
-                  aria-describedby={describedBy}
                   onChange={(event) => {
                     setForm({ ...form, repo: event.target.value });
                   }}
@@ -143,15 +141,13 @@ export function NewPrReviewScreen() {
               </>
             )}
           </Field>
-          <Field id={`${ids}-pr`} label="PRの番号またはURL" problem={prProblem}>
-            {(describedBy) => (
+          <Field label="PRの番号またはURL" problem={prProblem}>
+            {(control) => (
               <Input
-                id={`${ids}-pr`}
+                {...control}
                 value={form.pr}
                 autoComplete="off"
                 spellCheck={false}
-                aria-invalid={prProblem !== undefined}
-                aria-describedby={describedBy}
                 onChange={(event) => {
                   setForm({ ...form, pr: event.target.value });
                 }}

@@ -113,17 +113,20 @@ export function DrawioFrame({ xml, title }: DrawioFrameProps) {
         className="overflow-hidden rounded-md border border-border"
         hidden={stopped}
       >
-        <iframe
-          key={state.generation}
-          ref={frameRef}
-          title={title}
-          src={stopped ? "about:blank" : DRAWIO_FRAME_SRC}
-          sandbox="allow-scripts"
-          referrerPolicy="no-referrer"
-          className="block w-full border-0"
-          style={{ height: state.height }}
-          onLoad={onLoad}
-        />
+        {/* ダークのときだけ、図の明暗を反転し、色相を半周戻す。白い地が暗くなり、青、緑、橙、赤の色の意味は保たれる。枠線は反転させないので、内側に掛ける。 */}
+        <div className="in-data-[theme=dark]:invert in-data-[theme=dark]:hue-rotate-180">
+          <iframe
+            key={state.generation}
+            ref={frameRef}
+            title={title}
+            src={stopped ? "about:blank" : DRAWIO_FRAME_SRC}
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+            className="block w-full border-0"
+            style={{ height: state.height }}
+            onLoad={onLoad}
+          />
+        </div>
       </div>
       {stopped ? (
         <p role="alert" className="text-body text-destructive">

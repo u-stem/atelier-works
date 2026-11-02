@@ -5,7 +5,10 @@ import type {
   DesignStageView,
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
 import {
@@ -16,7 +19,7 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
-import { EmptyNote, SystemSection } from "./SystemSection.tsx";
+import { SystemSection } from "./SystemSection.tsx";
 import { useConfigChange } from "./useConfigChange.ts";
 
 function ConfigValue({ item }: { item: ConfigItemView }) {
@@ -81,7 +84,7 @@ export function ConfigList({
     return <EmptyNote>該当する項目はありません。</EmptyNote>;
   }
   return (
-    <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="dl" variant="list">
       {items.map((item) => {
         const offer = onChoose === undefined ? null : changeOfferOf(item);
         return (
@@ -105,7 +108,7 @@ export function ConfigList({
           </div>
         );
       })}
-    </dl>
+    </Card>
   );
 }
 
@@ -116,7 +119,7 @@ export function ConfigList({
 function DesignStageStatus({ stage }: { stage: DesignStageView }) {
   const text = describeDesignStage(stage);
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-border bg-card px-4 py-2.5 text-small">
+    <Card padding="compact" className="flex flex-col gap-1 text-small">
       <p>
         <span className="text-muted-foreground">設計工程: </span>
         <span className="font-medium">{safeText(text.state)}</span>
@@ -124,7 +127,7 @@ function DesignStageStatus({ stage }: { stage: DesignStageView }) {
       {text.note === null ? null : (
         <p className="text-muted-foreground">{safeText(text.note)}</p>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -142,23 +145,19 @@ function ConfigBody({
       {designStage === undefined ? null : (
         <DesignStageStatus stage={designStage} />
       )}
-      <div className="flex max-w-sm flex-col gap-1">
-        <label
-          htmlFor="config-search"
-          className="text-small text-muted-foreground"
-        >
-          キー名で絞り込む
-        </label>
-        <Input
-          id="config-search"
-          type="search"
-          value={query}
-          autoComplete="off"
-          onChange={(event) => {
-            setQuery(event.target.value);
-          }}
-        />
-      </div>
+      <Field tone="filter" label="キー名で絞り込む" className="max-w-sm">
+        {(control) => (
+          <Input
+            {...control}
+            type="search"
+            value={query}
+            autoComplete="off"
+            onChange={(event) => {
+              setQuery(event.target.value);
+            }}
+          />
+        )}
+      </Field>
       <ConfigList
         items={filterConfigItems(items, query)}
         onChoose={change.choose}

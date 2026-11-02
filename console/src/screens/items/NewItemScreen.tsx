@@ -1,5 +1,5 @@
 import { ArrowLeft } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import { useIntakeTargets } from "../../api/intakeQueries.ts";
@@ -11,8 +11,11 @@ import {
   AlertTitle,
 } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
+import { cn } from "../../lib/cn.ts";
+import { CHECKBOX_CLASS } from "../../lib/controlClasses.ts";
 import { describeIntakeAttempt } from "../../lib/intakeAttempt.ts";
 import {
   draftForm,
@@ -51,51 +54,6 @@ export function BackLink() {
 }
 
 /**
- * 入力欄の組(ラベル、入力、補足、誤りの文)。2つの投入の画面が共有する。
- * 補足と誤りの文は`id`から作ったidを持ち、入力の`aria-describedby`に結ぶと、入力に着いた読み上げが読む。
- * 結ぶidは、`children`に関数を渡すと受け取れる。
- */
-export function Field({
-  id,
-  label,
-  hint,
-  problem,
-  children,
-}: {
-  id: string;
-  label: string;
-  hint?: string | undefined;
-  problem?: string | undefined;
-  children: ReactNode | ((describedBy: string | undefined) => ReactNode);
-}) {
-  const describedBy =
-    [
-      hint === undefined ? null : `${id}-hint`,
-      problem === undefined ? null : `${id}-problem`,
-    ]
-      .filter((value) => value !== null)
-      .join(" ") || undefined;
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-body font-medium">
-        {label}
-      </label>
-      {typeof children === "function" ? children(describedBy) : children}
-      {hint === undefined ? null : (
-        <p id={`${id}-hint`} className="text-small text-muted-foreground">
-          {hint}
-        </p>
-      )}
-      {problem === undefined ? null : (
-        <p id={`${id}-problem`} className="text-small text-destructive">
-          {problem}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
  * 進め方の選択。ネイティブのラジオを`fieldset`でまとめ、矢印キーで選べるようにする。
  * ラジオでのEnterは暗黙の送信になるので、止める。矢印キーで切り替えた直後に、確認なしで送らないためである。
  * 題名などの欄のEnterは従来どおり送信し、そのときも送信ボタンの文言が進め方を示す。
@@ -130,7 +88,7 @@ function ProfileChoice({
             value={option.value}
             checked={value === option.value}
             disabled={disabled}
-            className="mt-1 size-4 accent-primary"
+            className={cn(CHECKBOX_CLASS, "mt-1")}
             onKeyDown={(event) => {
               if (blocksImplicitSubmit(event.key)) {
                 event.preventDefault();
@@ -245,24 +203,19 @@ export function NewItemScreen() {
           }}
         >
           <Field
-            id={`${ids}-repo`}
             label="リポジトリ"
             hint="「オーナー名/リポジトリ名」の形で入力します。候補に無いリポジトリも入力できますが、許可されていなければ断られます。"
             problem={problemOf(problems, "repo_invalid")}
           >
-            {(describedBy) => (
+            {(control) => (
               <>
                 <Input
-                  aria-describedby={describedBy}
-                  id={`${ids}-repo`}
+                  {...control}
                   list={`${ids}-targets`}
                   value={repoText}
                   disabled={intake.locked}
                   autoComplete="off"
                   spellCheck={false}
-                  aria-invalid={
-                    problemOf(problems, "repo_invalid") !== undefined
-                  }
                   onChange={(event) => {
                     setField({ repo: event.target.value });
                   }}
@@ -301,21 +254,15 @@ export function NewItemScreen() {
             </p>
           )}
           <Field
-            id={`${ids}-title`}
             label="題名"
             hint={`${titleLength(title)} / ${INTAKE_TITLE_MAX_CHARS}字`}
             problem={problemOf(problems, "title_empty", "title_too_long")}
           >
-            {(describedBy) => (
+            {(control) => (
               <Input
-                aria-describedby={describedBy}
-                id={`${ids}-title`}
+                {...control}
                 value={title}
                 disabled={intake.locked}
-                aria-invalid={
-                  problemOf(problems, "title_empty", "title_too_long") !==
-                  undefined
-                }
                 onChange={(event) => {
                   setField({ title: event.target.value });
                 }}
@@ -323,19 +270,16 @@ export function NewItemScreen() {
             )}
           </Field>
           <Field
-            id={`${ids}-body`}
             label="目的"
             hint="何を実現したいかを書きます。Issueの本文になります。"
             problem={problemOf(problems, "body_empty")}
           >
-            {(describedBy) => (
+            {(control) => (
               <Textarea
-                aria-describedby={describedBy}
-                id={`${ids}-body`}
+                {...control}
                 rows={6}
                 value={body}
                 disabled={intake.locked}
-                aria-invalid={problemOf(problems, "body_empty") !== undefined}
                 onChange={(event) => {
                   setField({ body: event.target.value });
                 }}
@@ -345,21 +289,16 @@ export function NewItemScreen() {
           {profile === "bugfix" ? (
             <>
               <Field
-                id={`${ids}-reproduction`}
                 label="再現手順"
                 hint="不具合が起きるまでの手順を書きます。Issueの本文になります。"
                 problem={problemOf(problems, "reproduction_empty")}
               >
-                {(describedBy) => (
+                {(control) => (
                   <Textarea
-                    aria-describedby={describedBy}
-                    id={`${ids}-reproduction`}
+                    {...control}
                     rows={4}
                     value={reproduction}
                     disabled={intake.locked}
-                    aria-invalid={
-                      problemOf(problems, "reproduction_empty") !== undefined
-                    }
                     onChange={(event) => {
                       setField({ reproduction: event.target.value });
                     }}
@@ -367,21 +306,16 @@ export function NewItemScreen() {
                 )}
               </Field>
               <Field
-                id={`${ids}-expected`}
                 label="期待する動作"
                 hint="本来どう動くべきかを書きます。受入基準の先頭になります。"
                 problem={problemOf(problems, "expected_empty")}
               >
-                {(describedBy) => (
+                {(control) => (
                   <Textarea
-                    aria-describedby={describedBy}
-                    id={`${ids}-expected`}
+                    {...control}
                     rows={3}
                     value={expectedBehavior}
                     disabled={intake.locked}
-                    aria-invalid={
-                      problemOf(problems, "expected_empty") !== undefined
-                    }
                     onChange={(event) => {
                       setField({ expectedBehavior: event.target.value });
                     }}
@@ -389,21 +323,16 @@ export function NewItemScreen() {
                 )}
               </Field>
               <Field
-                id={`${ids}-actual`}
                 label="実際の動作"
                 hint="いま実際にどう動くかを書きます。Issueの本文になります。"
                 problem={problemOf(problems, "actual_empty")}
               >
-                {(describedBy) => (
+                {(control) => (
                   <Textarea
-                    aria-describedby={describedBy}
-                    id={`${ids}-actual`}
+                    {...control}
                     rows={3}
                     value={actualBehavior}
                     disabled={intake.locked}
-                    aria-invalid={
-                      problemOf(problems, "actual_empty") !== undefined
-                    }
                     onChange={(event) => {
                       setField({ actualBehavior: event.target.value });
                     }}
@@ -412,15 +341,10 @@ export function NewItemScreen() {
               </Field>
             </>
           ) : null}
-          <Field
-            id={`${ids}-acceptance`}
-            label="受入基準(任意)"
-            hint="1行に1項目で書きます。"
-          >
-            {(describedBy) => (
+          <Field label="受入基準(任意)" hint="1行に1項目で書きます。">
+            {(control) => (
               <Textarea
-                aria-describedby={describedBy}
-                id={`${ids}-acceptance`}
+                {...control}
                 rows={4}
                 value={acceptance}
                 disabled={intake.locked}

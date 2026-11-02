@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CHECKBOX_CLASS,
   ROW_LINK_CLASS,
   ROW_TARGET_CLASS,
   SIDEBAR_ICON_BUTTON_CLASS,
+  TABLE_CELL_CLASS,
+  TABLE_CELL_COMPACT_CLASS,
 } from "./controlClasses.ts";
 
 function tokens(value: string): string[] {
@@ -55,5 +58,25 @@ describe("controlClasses", () => {
     ["SIDEBAR_ICON_BUTTON_CLASS", SIDEBAR_ICON_BUTTON_CLASS],
   ])("%s changes colors with the shared transition", (_name, value) => {
     expect(value).toContain("duration-(--duration-fast)");
+  });
+});
+
+describe("table cell classes", () => {
+  test("TABLE_CELL_CLASS pads the cell with px-3 and py-2", () => {
+    expect(tokens(TABLE_CELL_CLASS)).toEqual(["px-3", "py-2"]);
+  });
+
+  test("TABLE_CELL_COMPACT_CLASS pads the cell with px-3 and py-1.5", () => {
+    expect(tokens(TABLE_CELL_COMPACT_CLASS)).toEqual(["px-3", "py-1.5"]);
+  });
+});
+
+describe("CHECKBOX_CLASS", () => {
+  test("sizes the box at size-4", () => {
+    expect(tokens(CHECKBOX_CLASS)).toContain("size-4");
+  });
+
+  test("tints the checked box with the primary color", () => {
+    expect(tokens(CHECKBOX_CLASS)).toContain("accent-primary");
   });
 });

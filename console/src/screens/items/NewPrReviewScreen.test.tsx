@@ -51,9 +51,7 @@ describe("the initial state of the PR review intake screen", () => {
   });
 
   test("ties the hint to the repository field", () => {
-    expect(repoInput(draw(TARGETS))).toMatch(
-      /aria-describedby="[^"]*-repo-hint"/,
-    );
+    expect(repoInput(draw(TARGETS))).toMatch(/aria-describedby="[^"]*-hint"/);
   });
 
   test("labels the pull request field", () => {

@@ -1,5 +1,5 @@
-// 行のリンクとアイコンボタンが共有するclass。
-// 行は`Link`と`button`で要素が違うので、部品にせず、classだけを共有する。
+// 行のリンク、アイコンボタン、表のセル、チェックボックスが共有するclass。
+// 行は`Link`と`button`で要素が違い、表のセルは`th`と`td`で違うので、部品にせず、classだけを共有する。
 // アイコンボタンはサイドバーだけが使うので、色もサイドバーの面に合わせる。
 // 大きさと文字の色は、使う側が足す。
 
@@ -23,3 +23,12 @@ export const SIDEBAR_ICON_BUTTON_CLASS = cn(
   "inline-flex items-center justify-center rounded-lg outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
   TRANSITION_COLORS,
 );
+
+/** 表のセルの余白(標準)。 */
+export const TABLE_CELL_CLASS = "px-3 py-2";
+
+/** 表のセルの余白(詰めた表)。 */
+export const TABLE_CELL_COMPACT_CLASS = "px-3 py-1.5";
+
+/** チェックボックスとラジオの大きさと色。 */
+export const CHECKBOX_CLASS = "size-4 accent-primary";

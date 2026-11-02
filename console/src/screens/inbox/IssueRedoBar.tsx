@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from "react";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { redoConfirmation } from "../../lib/approvalDecision.ts";
 import { redoCooldownMessage, redoCooldowns } from "../../lib/redoCooldown.ts";
 import { RefusalNotice } from "./RefusalNotice.tsx";
@@ -41,9 +42,11 @@ export function IssueRedoBar({
   });
 
   return (
-    <section
+    <Card
       aria-label="Issue作成のやり直し"
-      className="flex flex-col gap-4 rounded-xl border border-border bg-card px-5 py-4"
+      tag="section"
+      padding="default"
+      className="flex flex-col gap-4"
     >
       <h3 className="text-lead font-semibold">Issueの作成をやり直す</h3>
       <p className="text-small text-muted-foreground">
@@ -97,6 +100,6 @@ export function IssueRedoBar({
           </p>
         ))}
       </ConfirmDialog>
-    </section>
+    </Card>
   );
 }
