@@ -712,6 +712,19 @@ describe("approval-free manual intake files", () => {
   });
 });
 
+// 調査の作業項目を足すmigrationは、稼働中のpr_reviewを含む一意インデックスを作り直す。
+// 書き換えられると、新しいDBで同じPRのレビューが重なる仕組みが外れる。
+describe("investigate work item migration files", () => {
+  const EXACT = [
+    "migrations/datatable/main/20261102120000_investigate_work_items.up.sql",
+    "migrations/datatable/main/20261102120000_investigate_work_items.down.sql",
+  ];
+
+  test.each(EXACT)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+});
+
 // ConsoleからのPRレビューの投入を通すファイルと、稼働中のpr_reviewの一意インデックスのmigrationは、
 // 書き換えられると、許可の検査やオーナーIDの照合、fork headの断りが外れたり、同じPRのレビューが重なったりする。
 // 投入のフロー(`pr_review_intake__flow/`)は前方一致で守る。

@@ -13,6 +13,7 @@ import {
   isImplementDiffStat,
   isImplementRoundMode,
   isImplementRoundOutcome,
+  isIssueTargetKind,
   parseImplementBranchWorkItemId,
   TERMINAL_WORK_ITEM_STATUSES,
   WORK_ITEM_KINDS,
@@ -225,6 +226,44 @@ describe("audit work item vocabulary", () => {
   test("audited is terminal", () => {
     expect(TERMINAL_WORK_ITEM_STATUSES).toContain("audited");
   });
+});
+
+describe("investigate work item vocabulary", () => {
+  test("investigate is a work item kind", () => {
+    expect(WORK_ITEM_KINDS).toContain("investigate");
+  });
+
+  test("investigating is a status", () => {
+    expect(WORK_ITEM_STATUSES).toContain("investigating");
+  });
+
+  test("investigated is a status", () => {
+    expect(WORK_ITEM_STATUSES).toContain("investigated");
+  });
+
+  test("investigating is not terminal, so the reconcile and the unique index cover it", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).not.toContain("investigating");
+  });
+
+  test("investigated is terminal", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).toContain("investigated");
+  });
+});
+
+describe("isIssueTargetKind", () => {
+  test.each(["issue", "investigate"] as const)(
+    "is true for %s, which keeps the Issue number in issue_number",
+    (kind) => {
+      expect(isIssueTargetKind(kind)).toBe(true);
+    },
+  );
+
+  test.each(["pr_review", "pr_fix", "dependabot", "audit"] as const)(
+    "is false for %s, which has no Issue as its target",
+    (kind) => {
+      expect(isIssueTargetKind(kind)).toBe(false);
+    },
+  );
 });
 
 describe("implement work item vocabulary (工程3)", () => {

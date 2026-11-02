@@ -9,6 +9,11 @@ const UP =
 const DOWN =
   "migrations/datatable/main/20261012120000_work_items_kind_dependabot.down.sql";
 
+/** このmigrationの時点で、アプリが知っていた種別。調査(`investigate`)は後のmigrationが足す。 */
+const KINDS_AT_THIS_MIGRATION = WORK_ITEM_KINDS.filter(
+  (kind) => kind !== "investigate",
+);
+
 function kindsInCheck(sql: string, constraint: string): string[] {
   const match = sql.match(
     new RegExp(
@@ -20,12 +25,12 @@ function kindsInCheck(sql: string, constraint: string): string[] {
 }
 
 describe("20261012120000_work_items_kind_dependabot.up.sql", () => {
-  test("lists exactly the work item kinds of the application", async () => {
+  test("lists exactly the work item kinds of the application, apart from investigate", async () => {
     const kinds = kindsInCheck(
       await Bun.file(UP).text(),
       "work_items_kind_check",
     );
-    expect([...kinds].sort()).toEqual([...WORK_ITEM_KINDS].sort());
+    expect([...kinds].sort()).toEqual([...KINDS_AT_THIS_MIGRATION].sort());
   });
 
   test("replaces the old kind check", async () => {
@@ -54,7 +59,9 @@ describe("20261012120000_work_items_kind_dependabot.down.sql", () => {
       "work_items_kind_check",
     );
     expect([...kinds].sort()).toEqual(
-      [...WORK_ITEM_KINDS].filter((kind) => kind !== "dependabot").sort(),
+      [...KINDS_AT_THIS_MIGRATION]
+        .filter((kind) => kind !== "dependabot")
+        .sort(),
     );
   });
 

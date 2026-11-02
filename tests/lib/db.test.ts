@@ -1836,6 +1836,14 @@ describe("listActionableWorkItems", () => {
     expect(calls[0]?.text).toContain("n.id > wi.id");
   });
 
+  test("leaves out an investigate item that has a newer investigate row for the same issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toMatch(
+      /wi\.kind = 'investigate' AND EXISTS \(.*n\.issue_number = wi\.issue_number AND n\.id > wi\.id/,
+    );
+  });
+
   test("orders by id so the rotation is stable", async () => {
     const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
     await listActionableWorkItems(sql);

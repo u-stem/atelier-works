@@ -32,6 +32,14 @@ describe("workItemStatusLabel", () => {
     );
   });
 
+  test("translates the status of an investigation in progress", () => {
+    expect(workItemStatusLabel("investigating")).toBe("調査中");
+  });
+
+  test("translates the status of an investigation that is done", () => {
+    expect(workItemStatusLabel("investigated")).toBe("調査完了");
+  });
+
   test("does not leak an unknown status code", () => {
     expect(workItemStatusLabel("brand_new_state")).toBe(UNKNOWN_STATUS_LABEL);
   });
@@ -44,6 +52,10 @@ describe("workItemStatusLabel", () => {
 describe("workItemKindLabel", () => {
   test("translates pr_review", () => {
     expect(workItemKindLabel("pr_review")).toBe("PRレビュー");
+  });
+
+  test("translates investigate", () => {
+    expect(workItemKindLabel("investigate")).toBe("調査");
   });
 
   test("does not leak an unknown kind code", () => {

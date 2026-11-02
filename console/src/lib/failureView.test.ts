@@ -141,6 +141,18 @@ describe("describeFailure target", () => {
     ).toBeNull();
   });
 
+  test("labels the Issue of an investigate work item", () => {
+    expect(describeFailure(failure({ kind: "investigate" })).targetLabel).toBe(
+      "Issue #9",
+    );
+  });
+
+  test("links the Issue of an investigate work item", () => {
+    expect(describeFailure(failure({ kind: "investigate" })).targetUrl).toBe(
+      "https://github.com/o/r/issues/9",
+    );
+  });
+
   test("has no target for an audit", () => {
     expect(
       describeFailure(
@@ -456,6 +468,14 @@ describe("describeRetryPlan", () => {
       describeRetryPlan(failure({ kind: "dependabot" })).blockedReason,
     ).toBe(
       "dependabotの作業項目は再実行できません。PRを確認して手でマージするか閉じてください。",
+    );
+  });
+
+  test("refuses a retry of an investigate work item and points to a new submission", () => {
+    expect(
+      describeRetryPlan(failure({ kind: "investigate" })).blockedReason,
+    ).toBe(
+      "調査の作業項目は再実行できません。依頼を新規投入し直してください。",
     );
   });
 

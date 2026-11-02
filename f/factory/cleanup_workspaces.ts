@@ -142,6 +142,8 @@ async function removeStaleWorktreesForRepo(
   for (const item of items) {
     try {
       let targetDirs: string[] = [];
+      // investigateの作業項目は、今は作業ツリーを作らない。
+      // 作る変更で、持ち主と掃除の対象に足す。
       if (item.kind === "issue") {
         targetDirs = issueWorktreePaths(owner, repo, item, worktrees);
       } else if (item.kind === "pr_fix" && item.pr_number !== null) {
@@ -315,6 +317,8 @@ async function activeWorktreeHolders(
   const holders: WorktreeHolder[] = [];
   const unresolved: WorkItem[] = [];
   for (const item of await listActive()) {
+    // investigateの作業項目は、今は作業ツリーを作らない。
+    // 作る変更で、持ち主と掃除の対象に足す。
     if (item.kind === "issue") {
       holders.push({
         owner: item.owner,

@@ -237,20 +237,35 @@ export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
   "schedule",
 ];
 
-/** 作業項目のサイクルが扱うGitHubの対象の種類。 */
+/**
+ * 作業項目のサイクルが扱うGitHubの対象の種類。
+ * `investigate`は、実装せずに調べて答えるIssueの作業項目である。
+ */
 export type WorkItemKind =
   | "issue"
   | "pr_review"
   | "pr_fix"
   | "audit"
-  | "dependabot";
+  | "dependabot"
+  | "investigate";
 export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "issue",
   "pr_review",
   "pr_fix",
   "audit",
   "dependabot",
+  "investigate",
 ];
+
+/**
+ * 対象のIssueの番号を`issue_number`に持つ種別か。
+ * `issue`と`investigate`が当たる。ほかの種別は、`audit`を除いてPRを対象にし、番号を`pr_number`に持つ。
+ * `kind`で番号の列を選ぶ処理は、これを通す。通さないと、`investigate`の行の`pr_number`(null)を読み、
+ * 対象の無い行として黙って飛ばしてしまう。
+ */
+export function isIssueTargetKind(kind: WorkItemKind): boolean {
+  return kind === "issue" || kind === "investigate";
+}
 
 /**
  * 作業項目の進め方として`factory.work_items.profile`のCHECK制約が許す値。
@@ -289,7 +304,9 @@ export type WorkItemStatus =
   | "auditing"
   | "audited"
   | "designing"
-  | "awaiting_design_approval";
+  | "awaiting_design_approval"
+  | "investigating"
+  | "investigated";
 
 export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "picked",
@@ -312,6 +329,8 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "audited",
   "designing",
   "awaiting_design_approval",
+  "investigating",
+  "investigated",
 ];
 
 /**
@@ -322,6 +341,7 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
  * ここに入れないと、`poll_issues`の照合が完了したpr_fixの行を孤児とみなし、
  * 猶予期間を過ぎると失敗にしてしまう。
  * 同じ理由で、implement(工程3)の成功の終端である`pr_open`も入れる。
+ * 同じ理由で、調査(`investigate`)の成功の終端である`investigated`も入れる。
  * `done`という状態は無く、マージの追跡は工程4で扱う。
  */
 export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
@@ -336,6 +356,7 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "blocked",
   "audited",
   "pr_open",
+  "investigated",
 ];
 
 /**
@@ -343,6 +364,7 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
  * `pr_review` / `pr_fix`種別の作業項目はIssueに基づかず、
  * 代わりに`pr_number` / `title`を持つ。
  * そのため`issue_number` / `issue_url` / `title` / `body`はnullを取りうる。
+ * `investigate`種別はIssueに基づき、`issue_number`を持つ(`isIssueTargetKind`)。
  */
 export type WorkItem = {
   id: number;

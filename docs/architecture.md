@@ -135,8 +135,9 @@ flowchart TD
 
 ### 状態の一覧
 
-作業項目の種別(`kind`)は5つある。
-Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は`audit`、dependabotのセキュリティ更新PRは`dependabot`である。
+作業項目の種別(`kind`)は6つある。
+Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は`audit`である。
+dependabotのセキュリティ更新PRは`dependabot`、実装せずに調べるIssueの調査は`investigate`である。
 
 | status | 意味 | 種別 | 終端 |
 | --- | --- | --- | --- |
@@ -160,6 +161,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `cancelled` | IssueかPRが閉じられた。または、承認済みの要件定義が、同じIssueの新しいサイクルに置き換えられた。dependabotでは、フローがheadを判断せずに止めた | すべて | 終端 |
 | `auditing` | 監査している | audit | |
 | `audited` | 監査を終えた | audit | 終端 |
+| `investigating` | 調べている | investigate | |
+| `investigated` | 調べ終えた | investigate | 終端 |
 
 pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
 
@@ -256,7 +259,7 @@ Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取
 許されるのは、PRがマージされたとき、作者以外の人が閉じたとき、作者が閉じて作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
 Botが閉じたときは取り消さない。
 
-終端の作業項目は、Consoleからの再実行で再び動き出す。監査とdependabotの作業項目は再実行できない。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
+終端の作業項目は、Consoleからの再実行で再び動き出す。監査とdependabotと調査の作業項目は再実行できない。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 
 ## データモデル
 
@@ -468,11 +471,14 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
 終端でない`pr_review`の作業項目も、部分一意インデックス`work_items_active_pr_review_key`により、同時に1つしか持てない。
 組は、小文字にした`owner`と`repo`、PRの番号である。
-`pr_review`の行の綴りは、GitHub側の改名や前の行の綴りの引き継ぎで、書き手によって違いうる。
+終端でない`investigate`の作業項目も、部分一意インデックス`work_items_active_investigate_key`により、同時に1つしか持てない。
+組は、小文字にした`owner`と`repo`、Issueの番号である。
+`pr_review`と`investigate`の行の綴りは、GitHub側の改名や前の行の綴りの引き継ぎで、書き手によって違いうる。
 そのため、同じPRを指す`pr_review`の検索は大文字小文字を区別しない。
 `pr_fix`とIssueのインデックスは、綴りを区別したままである。
 これらのインデックスの述語は、終端でない状態を列挙する。
-設計工程の2状態は、Issueの`work_items_active_issue_key`と、PR修正の`work_items_active_pr_fix_key`の述語に含める。
+設計工程の2状態と調査の`investigating`は、Issueの`work_items_active_issue_key`の述語に含める。
+PR修正の`work_items_active_pr_fix_key`と、`pr_review`の`work_items_active_pr_review_key`の述語にも含める。
 dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕様](internals/dependabot.md))の述語にも含める。
 その状態の間も、同じIssueやPRの作業項目を重ねて作らせないためである。
 これらはDBを共有するインスタンスの間で働き、DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
@@ -1015,5 +1021,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示だけがある
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

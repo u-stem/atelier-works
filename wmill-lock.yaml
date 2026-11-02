@@ -11,7 +11,7 @@ locks:
   f/factory/auto_retry_pr_review: c6108817e2ef3dec835aa0a9b1c3e259e95aa07018f9781c05c119de9facc4f4
   f/factory/auto_retry_stale_image: 856fc35302eda37d94011fffdca74b3e5631aff039c9b27aa488ec6bcddc0b80
   f/factory/cleanup_db: 030fa55a3b720183acaccdc52309d96f14f14646ed439a327b3de4a94a6d2785
-  f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
+  f/factory/cleanup_workspaces: b79f417fb56ccf37d36a786086cad23001b112012501685f0afbf6cd1f31f07f
   f/factory/collect_github: 150e44bca16d65aec9a05b899337db653f12622632d3c3b56f50bae83877f81d
   f/factory/console_config: 04cf6df01d9d389fbf27cbc114da7fc5f45711b8414d689d26462e6aa423bd19
   f/factory/console_config_update: 3f6b21e43f673c00d75d9f7498a7f6b41b5d1fd1833a327ac42e8cc31ca93aae
@@ -67,7 +67,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 98ef3087ac821a587800abc79cdbde75f1f37bdd1cfea25830e8c7743bf23176
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
-  f/factory/lib/db: c61fd68f0183b1fcd0c4838731f0386053a736073d8a6fb139e3b483f84645a5
+  f/factory/lib/db: c1220402f43b35919cc0567a02fddcb8ef125a349402a8b7f2931c7e5048c7f1
   f/factory/lib/default_worker: ab8270d93068492370b50f598e0d9bd0a7e57681cf2bb1293b35f8fcc6944f12
   f/factory/lib/dependabot_collect: 8c8b8afeed58b14fc77e7600d06c7053dfe3103f90b9d1bd0b602bc9e9694f3b
   f/factory/lib/dependabot_flow_support: 10a3c7c2f004a56977737db98eb9d5152223d307961f68b319e7b2ba6a586905
@@ -129,7 +129,7 @@ locks:
   f/factory/lib/periodic_worker: 5babda25b9b699d5d66fac8fe4ab312645b72a686040e0816264004be145e378
   f/factory/lib/pipeline_lease: f1bc3033cac5de04674703ebd422683e4f60a94f12d4b26f863a2f35c69efe6f
   f/factory/lib/poll_source: 7eeea6ab24974ab76fcb6b10ae84b09fb79a0e4515ae2ba76f20896a09e895ec
-  f/factory/lib/poll_support: 40fc8de19f50f9f678edd6a6403743ad9ced219168676230adb8d555bc12b641
+  f/factory/lib/poll_support: 3871feae50df0d7987e9c9e3a2191c90d482d01b96a4fa920320ca0fae06cae1
   f/factory/lib/pr_ci_fix_claim: 3ec219b198e2d8c54c8e181fd0c7316d1e743f6543bfdff0eeb3a5ed7ee550d2
   f/factory/lib/pr_ci_fix_recovery: 09dac8905b094bd2e07b1ce79ad8d6888f5b78df2893093713c25544ad76e980
   f/factory/lib/pr_ci_human_support: 2157ef0625e623c028617b316415c4739d3b50be99ce77a64bf76a5c410ea94a
@@ -150,7 +150,7 @@ locks:
   f/factory/lib/profile_upgrade: 25c6854e8bfef10f6042c3db54442adefc1062d836398a44b2f0feec27979d6c
   f/factory/lib/prompts: 1a87b663780e1f2fa5ea8199e5f32594749a0e77d882e69321dc72f8aaf77e5f
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 76579e4a0def3660f75172db471aa5dba70e343dc1a2f463ea00065b925bdc7b
+  f/factory/lib/protected_paths: 83de1df2bea03cbf094ee7b1b57325e57c170a415a3c2d464c70479ca38d465b
   f/factory/lib/repo_owner_gate: 0640933a6a7fe3ff33e3172b5eccbd085e4c8d25f5e30d29650a0746c8a49090
   f/factory/lib/requirements_doc: c175acfaa2af360877513464eb2204289018739f267ab983ad991a5939242d62
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
@@ -163,7 +163,7 @@ locks:
   f/factory/lib/self_update_support: a98f74af2080996ec7191a8126563f4012795a4e39bdeb750401c1cfcb16c816
   f/factory/lib/summary_support: f04c8bd8ca44a82c8b53a7799cf65b22f9b1fe13b1f33271e71586e460d53029
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: b84743f421316554265723175e9e7669cbd4bf39c9587b4740e7d33f86878412
+  f/factory/lib/types: 7fc0fe5bac1a5760bb061bbbbe5ea4e9b1864b56e75f691c41a2fcfafdf4e6e6
   f/factory/lib/worker_load_support: b68337109b6233aacd50be93bf977391910fcaf328a7a7ae6ba01be1269fe00c
   f/factory/lib/workspace: 4586bbeb2ef59260d2cac673043b58ecc9918231931a37be886f1f76c6090006
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -173,18 +173,18 @@ locks:
   f/factory/on_error_flow: 28901aa230f2e7cd3df69528e19ded45a4861b37b5f69f43c9f0291976cacb2c
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_dependabot: 5fc165c01f8ce38bbac2c5d2e9a4a1a9f4b371a43de8eeb6aea82b0b314c3668
-  f/factory/poll_issues: 29468d96cb44a4407b50e687bb72fae37236047a83b0a66bebe8af1484c99f5f
+  f/factory/poll_issues: c7a865769fa37d68cab206ba56fb9ec40a88c186f483e5a40dfd9ffe2329e435
   f/factory/poll_prs: 93715626024360def9c09c50128ffc830ee65e3e287b23a7e26cf73ac81adfa1
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review_submit: 4927355ebb6ec18d5ddb0fdc8f1bf784b6a050f1be8dd83a89dc9936c4a7a237
-  f/factory/retry_work_item: d7be12fad51cdee0a5a3187440e0b2e9e94f8e2f461a7e77db6d38366da7e2a7
+  f/factory/retry_work_item: 1ba50eaa155e060cb28d6a95b34ecc5f9884ef4665efe3f878da4d78fe683e0d
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
   f/factory/self_update: d5da784cee9c7f86d3dcf93c9b3218a126a50077a446a0d38b8e75fe8126716a
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
-  f/factory/steps/console_query: f61dd32f79ef8619e88ef5dd6dd9864e737b393f46a00fde066b95fae5390590
+  f/factory/steps/console_query: f694fe527591673e814a5932a1855e1f4ed8cb649e6d76367aaaf5935b6d3f34
   f/factory/steps/dependabot_assess: 15c82461f3f283e89e953107be209c1b77e85311033966261245dbb0cfd9c7f6
   f/factory/steps/dependabot_finish: 4af9847578aa1e1b501e73efaf85318244b988100e0d375ef04284319e641391
   f/factory/steps/dependabot_prepare: c7f1d8acb7f22c04ec4103a39bcf6e977a0592d7e0d535ee261c9eba17a486e9

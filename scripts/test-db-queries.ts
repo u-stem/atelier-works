@@ -81,6 +81,7 @@ import {
   latestRequirementsApproval,
   latestStatusEvent,
   latestStatusTransition,
+  listActionableWorkItems,
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
   listClaimablePrCiChecks,
@@ -287,6 +288,38 @@ async function prWorkItem(
   );
 }
 
+/** 調査の作業項目。Issueの番号を`issue_number`に持ち、`pr_number`は持たない。 */
+async function investigateWorkItem(
+  issue: number,
+  cycle: number,
+  status: WorkItemStatus,
+  title: string,
+): Promise<number> {
+  return insertWorkItem(
+    {
+      cycle,
+      source: "manual",
+      kind: "investigate",
+      owner: OWNER,
+      repo: "r",
+      issue_number: issue,
+      issue_url: `https://github.com/${OWNER}/r/issues/${String(issue)}`,
+      pr_number: null,
+      title,
+      body: "",
+      status,
+      attempt: 1,
+      claimed_by: null,
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: null,
+      parent_work_item_id: null,
+    },
+    sql,
+  );
+}
+
 function event(workItemId: number, toStatus: string, note: string): void {
   execPsql(
     target,
@@ -325,6 +358,19 @@ const reviewLone = await prWorkItem(
 const fixOld = await prWorkItem("pr_fix", 803, "needs_human", "qdb-fix-old");
 await prWorkItem("pr_fix", 803, "reviewed", "qdb-fix-new");
 const fixOtherKind = await prWorkItem("pr_fix", 801, "failed", "qdb-fix-other");
+const investigateOld = await investigateWorkItem(
+  906,
+  1,
+  "failed",
+  "qdb-investigate-old",
+);
+await investigateWorkItem(906, 2, "investigated", "qdb-investigate-new");
+const investigateLone = await investigateWorkItem(
+  907,
+  1,
+  "failed",
+  "qdb-investigate-lone",
+);
 event(failedA, "failed", "boom-a");
 await recordFailure(
   {
@@ -392,6 +438,28 @@ check(
   "summary: a newer row of another kind does not hide a pr item",
   failureIds.includes(fixOtherKind),
   failureIds,
+);
+check(
+  "summary: an investigate item with a newer investigate row for the same issue is left out",
+  !failureIds.includes(investigateOld),
+);
+check(
+  "summary: an investigate item without a newer row is listed",
+  failureIds.includes(investigateLone),
+  failureIds,
+);
+const actionableIds = (await listActionableWorkItems(sql)).map(
+  (item) => item.id,
+);
+check(
+  "actionable: an investigate item with a newer investigate row for the same issue is left out",
+  !actionableIds.includes(investigateOld),
+  actionableIds,
+);
+check(
+  "actionable: an investigate item without a newer row is listed",
+  actionableIds.includes(investigateLone),
+  actionableIds,
 );
 check("summary: a blocked item is left out", !failureIds.includes(blocked));
 const failedRow = wide.failures.find((row) => row.work_item_id === failedA);

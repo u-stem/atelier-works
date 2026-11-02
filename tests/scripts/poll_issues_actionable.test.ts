@@ -121,6 +121,23 @@ describe("groupActionableTargets", () => {
     expect(targets.map((target) => target.id)).toEqual([2, 9]);
   });
 
+  test("uses the issue number for an investigate item", () => {
+    const targets = groupActionableTargets([
+      workItem({ id: 3, kind: "investigate", status: "failed" }),
+    ]);
+    expect(targets.map((target) => target.key)).toEqual([
+      "octo-owner/atelier-works#10",
+    ]);
+  });
+
+  test("merges an issue item and an investigate item of the same issue into one target", () => {
+    const targets = groupActionableTargets([
+      workItem({ id: 5 }),
+      workItem({ id: 7, kind: "investigate" }),
+    ]);
+    expect(targets.map((target) => target.items.length)).toEqual([2]);
+  });
+
   test("skips an audit item", () => {
     const targets = groupActionableTargets([
       workItem({ id: 4, kind: "audit", issue_number: null }),
@@ -494,6 +511,40 @@ describe("reconcileClosedActionableItems", () => {
       closed: [20],
       activePr: true,
     });
+    await run(deps);
+    expect(worktrees).toEqual([]);
+  });
+
+  test("cancels a failed investigate item whose issue is closed with the issue note", async () => {
+    const { deps, updates } = harness(
+      [workItem({ id: 1, kind: "investigate", flow_job_id: "j1" })],
+      { closed: [10] },
+    );
+    await run(deps);
+    expect(updates).toEqual([
+      {
+        id: 1,
+        from: "failed",
+        to: "cancelled",
+        flowJobId: "j1",
+        note: "reconcile: closed (actionable)",
+      },
+    ]);
+  });
+
+  test("asks GitHub about the issue number of an investigate item", async () => {
+    const { deps, fetched } = harness([
+      workItem({ id: 1, kind: "investigate" }),
+    ]);
+    await run(deps);
+    expect(fetched).toEqual([10]);
+  });
+
+  test("does not remove worktrees for the closed issue of an investigate item", async () => {
+    const { deps, worktrees } = harness(
+      [workItem({ id: 1, kind: "investigate" })],
+      { closed: [10] },
+    );
     await run(deps);
     expect(worktrees).toEqual([]);
   });

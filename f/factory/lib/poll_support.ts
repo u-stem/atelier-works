@@ -16,6 +16,7 @@ import {
   type FactoryConfig,
   type FactoryOwner,
   hasLabel,
+  isIssueTargetKind,
   isNumber,
   isOneOf,
   isRecord,
@@ -954,6 +955,45 @@ export type ReconcileGithubState =
    */
   | { readonly kind: "audit" };
 
+/** 照合が確かめる、作業項目のGitHub上の対象。 */
+export type ReconcileTarget =
+  | { readonly kind: "audit" }
+  | { readonly kind: "issue" | "pr"; readonly number: number };
+
+/**
+ * 照合が確かめる対象を返す。対象の番号が無いときは`null`を返す。
+ * `issue`と`investigate`はIssue(`issue_number`)、PRの種別はPR(`pr_number`)を指す。
+ * `audit`はGitHubのオブジェクトを持たない。
+ */
+export function reconcileTargetOf(
+  item: Pick<WorkItem, "kind" | "issue_number" | "pr_number">,
+): ReconcileTarget | null {
+  if (item.kind === "audit") return { kind: "audit" };
+  if (isIssueTargetKind(item.kind)) {
+    return item.issue_number === null
+      ? null
+      : { kind: "issue", number: item.issue_number };
+  }
+  return item.pr_number === null
+    ? null
+    : { kind: "pr", number: item.pr_number };
+}
+
+/** 照合のログと失敗の記録に使う、作業項目の名前を返す。 */
+export function reconcileLabel(
+  item: Pick<
+    WorkItem,
+    "id" | "kind" | "owner" | "repo" | "issue_number" | "pr_number"
+  >,
+): string {
+  const repo = `${item.owner}/${item.repo}`;
+  if (item.kind === "audit") return `${repo} audit#${String(item.id)}`;
+  const number = isIssueTargetKind(item.kind)
+    ? item.issue_number
+    : item.pr_number;
+  return `${repo}#${number ?? "?"}`;
+}
+
 export type ReconcileDecision =
   | { readonly action: "none" }
   | {
@@ -1121,7 +1161,8 @@ export type ActionableTarget<T> = {
 
 /**
  * 要対応の作業項目を、GitHubのIssueまたはPRごとに束ねて、`id`の昇順で返す。
- * 同じPRのレビューと修正の行は、1回の問い合わせで足りるので1つにする。
+ * 同じPRのレビューと修正の行、同じIssueの`issue`と`investigate`の行は、
+ * 1回の問い合わせで足りるので1つにする。
  * GitHubのオブジェクトが無い`audit`と、番号の無い行は含めない。
  */
 export function groupActionableTargets<
@@ -1142,7 +1183,9 @@ export function groupActionableTargets<
   >();
   for (const item of items) {
     if (item.kind === "audit") continue;
-    const number = item.kind === "issue" ? item.issue_number : item.pr_number;
+    const number = isIssueTargetKind(item.kind)
+      ? item.issue_number
+      : item.pr_number;
     if (number === null) continue;
     const key = `${item.owner}/${item.repo}#${String(number)}`;
     const group = byKey.get(key);

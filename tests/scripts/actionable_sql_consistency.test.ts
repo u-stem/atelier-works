@@ -58,6 +58,11 @@ describe("the actionable work item queries", () => {
     expect(mine).toBe(console);
   });
 
+  test("exclude an investigate row that a newer row of the same issue takes over", async () => {
+    const mine = supersededConditions(await actionableText());
+    expect(mine).toContain("wi.kind = 'investigate'");
+  });
+
   test("extract a non-empty condition from both queries", async () => {
     expect(supersededConditions(await actionableText())).not.toBeNull();
   });

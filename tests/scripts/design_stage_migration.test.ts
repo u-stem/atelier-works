@@ -18,6 +18,12 @@ const KIND_UP = `${DIR}/20261026120100_design_stage_approval_kind.up.sql`;
 const KIND_DOWN = `${DIR}/20261026120100_design_stage_approval_kind.down.sql`;
 
 const DESIGN_STATUSES = ["designing", "awaiting_design_approval"];
+// 調査の状態は、後のmigration(`20261102120000_investigate_work_items`)が足す。
+const INVESTIGATE_STATUSES = ["investigating", "investigated"];
+/** この設計工程のmigrationの時点で、アプリが知っていた状態。 */
+const STATUSES_AT_DESIGN_STAGE = WORK_ITEM_STATUSES.filter(
+  (status) => !INVESTIGATE_STATUSES.includes(status),
+);
 const ACTIVE_INDEXES = [
   "work_items_active_issue_key",
   "work_items_active_pr_fix_key",
@@ -90,18 +96,18 @@ describe("20261026120000_design_stage_work_items.up.sql", () => {
     );
   });
 
-  test("accepts exactly the work item statuses the code knows", async () => {
+  test("accepts exactly the work item statuses the code knows, apart from the investigate statuses", async () => {
     const values = checkValues(
       await Bun.file(ITEMS_UP).text(),
       "work_items_status_check",
     );
-    expect([...values].sort()).toEqual([...WORK_ITEM_STATUSES].sort());
+    expect([...values].sort()).toEqual([...STATUSES_AT_DESIGN_STAGE].sort());
   });
 
   test.each(ACTIVE_INDEXES)(
     "lists the non-terminal statuses in %s",
     async (indexName) => {
-      const nonTerminal = WORK_ITEM_STATUSES.filter(
+      const nonTerminal = STATUSES_AT_DESIGN_STAGE.filter(
         (status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status),
       );
       expect(
@@ -192,7 +198,7 @@ describe("20261026120000_design_stage_work_items.down.sql", () => {
       "work_items_status_check",
     );
     expect([...values].sort()).toEqual(
-      withoutDesignStatuses(WORK_ITEM_STATUSES).sort(),
+      withoutDesignStatuses(STATUSES_AT_DESIGN_STAGE).sort(),
     );
   });
 
@@ -205,7 +211,7 @@ describe("20261026120000_design_stage_work_items.down.sql", () => {
   test.each(ACTIVE_INDEXES)(
     "lists the statuses of %s without the design statuses",
     async (indexName) => {
-      const nonTerminal = WORK_ITEM_STATUSES.filter(
+      const nonTerminal = STATUSES_AT_DESIGN_STAGE.filter(
         (status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status),
       );
       expect(
