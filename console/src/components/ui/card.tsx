@@ -12,6 +12,7 @@ const cardVariants = cva("rounded-xl border", {
       empty: "border-dashed border-border text-small text-muted-foreground",
     },
     // 面の横の余白は`px-5`に固定し、段は縦の余白で分ける。隣り合う面の中身の左端をそろえるためである。
+    // 文書を読ませる面(監査レポートの本文`AuditReportScreen`)だけは例外で、仕様は`docs/internals/console.md`にある。
     padding: {
       none: "",
       // 図や表を縁に近づけて収める枠。
@@ -48,6 +49,7 @@ type CardProps = HTMLAttributes<HTMLElement> &
 
 /**
  * 角丸の枠と面を持つ入れ物。余白は`padding`の段で決め、個別の余白は足さない。
+ * 文書を読ませる面(監査レポートの本文`AuditReportScreen`)だけは例外で、仕様は`docs/internals/console.md`にある。
  * 空の知らせ(`variant="empty"`)は、余白を指定しなければ`compact`にする。
  */
 function Card({
