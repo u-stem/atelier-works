@@ -50,7 +50,7 @@ export function BackLink() {
   );
 }
 
-function Field({
+export function Field({
   id,
   label,
   hint,
@@ -59,16 +59,16 @@ function Field({
 }: {
   id: string;
   label: string;
-  hint?: string;
+  hint?: string | undefined;
   problem?: string | undefined;
-  children: ReactNode;
+  children: ReactNode | ((describedBy: string | undefined) => ReactNode);
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className="text-body font-medium">
         {label}
       </label>
-      {children}
+      {typeof children === "function" ? null : children}
       {hint === undefined ? null : (
         <p id={`${id}-hint`} className="text-small text-muted-foreground">
           {hint}

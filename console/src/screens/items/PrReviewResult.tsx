@@ -138,7 +138,11 @@ export function PrReviewResult({
       updatedAt: output.dataUpdatedAt,
       isError: output.isError,
     },
-    status: { data: status.data, updatedAt: status.dataUpdatedAt },
+    status: {
+      data: status.data,
+      updatedAt: status.dataUpdatedAt,
+      isError: status.isError,
+    },
   });
 
   const waiting = state.kind === "waiting";

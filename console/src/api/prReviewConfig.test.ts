@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import {
+  attemptFromOutcome,
+  startsWaiting,
+  submitControl,
+} from "../lib/prReviewOutcome.ts";
 import { ApiFailure } from "./errors.ts";
 import type { WriteOutcome } from "./executeWrite.ts";
 import type { PrReviewSubmitResult } from "./guards/writeResults.ts";
@@ -131,6 +136,28 @@ describe("prReviewConfig", () => {
     );
     await runner(INPUT).catch(() => undefined);
     expect(locks.isLocked("pr_review")).toBe(false);
+  });
+
+  test("holds the next submit from the moment the outcome of a started flow arrives", async () => {
+    const { runner, outcomes } = setup(() => Promise.resolve(STARTED));
+    await runner(INPUT);
+    const [outcome] = outcomes;
+    expect(
+      outcome !== undefined &&
+        startsWaiting(attemptFromOutcome(outcome)) &&
+        submitControl({ locked: false, waiting: true }).disabled,
+    ).toBe(true);
+  });
+
+  test("does not hold the next submit after a result that is not known", async () => {
+    const { runner, outcomes } = setup(() =>
+      Promise.reject(new ApiFailure({ kind: "network" })),
+    );
+    await runner(INPUT).catch(() => undefined);
+    const [outcome] = outcomes;
+    expect(
+      outcome === undefined || startsWaiting(attemptFromOutcome(outcome)),
+    ).toBe(false);
   });
 
   test("has a stale handler that does nothing, as it reads nothing again", () => {

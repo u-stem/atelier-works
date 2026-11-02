@@ -65,6 +65,7 @@ type Reads = {
   data?: JobDetailView | undefined;
   isError?: boolean;
   statusData?: JobDetailView | undefined;
+  statusError?: boolean;
   /** 状態の取得を、結果つきの取得より新しい読み取りにするか。 */
   statusNewer?: boolean;
 };
@@ -79,6 +80,7 @@ function stateOf(reads: Reads): PrReviewResultState {
     status: {
       data: reads.statusData,
       updatedAt: reads.statusNewer === true ? 2000 : 0,
+      isError: reads.statusError ?? false,
     },
   });
 }
@@ -195,17 +197,50 @@ describe("row 3: the result cannot be understood", () => {
   });
 });
 
-describe("row 4: the result is not there yet", () => {
+describe("row 4: the status read cannot go on", () => {
+  test("says the result is unavailable when the status read failed", () => {
+    expect(kindOf({ data: detail("running"), statusError: true })).toBe(
+      "unavailable",
+    );
+  });
+
+  test("says the result is unavailable when the status read finds no job", () => {
+    expect(
+      kindOf({ data: detail("running"), statusData: { found: false } }),
+    ).toBe("unavailable");
+  });
+
+  test.each(["scheduled", "waiting_for_something_new"])(
+    "says the result is unavailable while the job is %s, which is not read again",
+    (state) => {
+      expect(kindOf({ data: detail(state) })).toBe("unavailable");
+    },
+  );
+
+  test("keeps a finished job's result when the status read failed after it", () => {
+    expect(
+      kindOf({
+        data: detail("success", { result: output(STARTED) }),
+        statusError: true,
+      }),
+    ).toBe("started");
+  });
+
+  test("puts a failed job before a failed status read", () => {
+    expect(kindOf({ data: detail("failure"), statusError: true })).toBe(
+      "unreadable",
+    );
+  });
+});
+
+describe("row 5: the result is not there yet", () => {
   test("waits for the first read", () => {
     expect(kindOf({})).toBe("waiting");
   });
 
-  test.each(["queued", "running", "scheduled", "waiting_for_something_new"])(
-    "waits while the job is %s",
-    (state) => {
-      expect(kindOf({ data: detail(state) })).toBe("waiting");
-    },
-  );
+  test.each(["queued", "running"])("waits while the job is %s", (state) => {
+    expect(kindOf({ data: detail(state) })).toBe("waiting");
+  });
 
   test("waits for the output to be read again after the status saw the job finish", () => {
     expect(
@@ -228,7 +263,7 @@ describe("row 4: the result is not there yet", () => {
   });
 });
 
-describe("row 5: the review started", () => {
+describe("row 6: the review started", () => {
   test("shows the review as started", () => {
     expect(
       stateOf({ data: detail("success", { result: output(STARTED) }) }),
@@ -236,7 +271,7 @@ describe("row 5: the review started", () => {
   });
 });
 
-describe("row 6: the review was refused", () => {
+describe("row 7: the review was refused", () => {
   test("shows the refusal reason", () => {
     expect(
       stateOf({ data: detail("success", { result: output(REFUSED) }) }),
@@ -267,6 +302,10 @@ describe("the wording", () => {
     expect(describePrReviewResult({ kind: "unavailable" }).headline).toBe(
       "結果を取得できません",
     );
+  });
+
+  test("leaves the actions to the buttons, with no line that restates the heading", () => {
+    expect(describePrReviewResult({ kind: "unavailable" }).lines).toEqual([]);
   });
 
   test("says the result cannot be read and points to the job", () => {

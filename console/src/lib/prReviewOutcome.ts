@@ -8,6 +8,7 @@
 import { isResultUnknown, type WriteOutcome } from "../api/executeWrite.ts";
 import type { PrReviewSubmitResult } from "../api/guards/writeResults.ts";
 import { describePrReviewSubmitRefusal } from "./prReviewRefusal.ts";
+import type { PrReviewResultState } from "./prReviewResult.ts";
 import { ACTION_AUDIT_FAILED_NOTE } from "./writeNotices.ts";
 
 export type PrReviewAttempt =
@@ -87,6 +88,28 @@ export function auditFailedNote(attempt: PrReviewAttempt): string | null {
   return attempt.kind === "submitted" && attempt.auditFailed
     ? ACTION_AUDIT_FAILED_NOTE
     : null;
+}
+
+/** 結果を待ち始めるかの最小のスタブ。 */
+export function startsWaiting(_attempt: PrReviewAttempt): boolean {
+  return false;
+}
+
+/** 前の結果を残すかの最小のスタブ。 */
+export function attemptAfterSubmit(
+  _started: boolean,
+  previous: PrReviewAttempt | null,
+): PrReviewAttempt | null {
+  return previous;
+}
+
+/** 読み直すかの最小のスタブ。 */
+export function shouldRefreshPipeline(
+  _state: PrReviewResultState,
+  _refreshedFor: string | null,
+  _flowJobId: string,
+): boolean {
+  return false;
 }
 
 export type SubmitControl = {

@@ -3,9 +3,13 @@ import type { ApiError } from "../api/errors.ts";
 import type { WriteOutcome } from "../api/executeWrite.ts";
 import type { PrReviewSubmitResult } from "../api/guards/writeResults.ts";
 import {
+  attemptAfterSubmit,
   attemptFromOutcome,
   auditFailedNote,
   describePrReviewAttempt,
+  type PrReviewAttempt,
+  shouldRefreshPipeline,
+  startsWaiting,
   submitControl,
 } from "./prReviewOutcome.ts";
 import { describePrReviewSubmitRefusal } from "./prReviewRefusal.ts";
@@ -202,5 +206,98 @@ describe("the submit button", () => {
     expect(submitControl({ locked: true, waiting: true }).label).toBe(
       "投入しています",
     );
+  });
+
+  test("stays disabled from the moment the outcome arrives, until the result is read", () => {
+    const attempt = attemptFromOutcome(
+      done({ refused: false, flow_job_id: JOB }),
+    );
+    expect(
+      submitControl({ locked: false, waiting: startsWaiting(attempt) })
+        .disabled,
+    ).toBe(true);
+  });
+
+  test("is enabled again after a refusal", () => {
+    const attempt = attemptFromOutcome(
+      done({ refused: true, reason: "already_reviewing" }),
+    );
+    expect(
+      submitControl({ locked: false, waiting: startsWaiting(attempt) })
+        .disabled,
+    ).toBe(false);
+  });
+
+  test("is enabled again after a result that is not known, so a resend is not held back", () => {
+    const attempt = attemptFromOutcome(failed({ kind: "network" }));
+    expect(
+      submitControl({ locked: false, waiting: startsWaiting(attempt) })
+        .disabled,
+    ).toBe(false);
+  });
+});
+
+describe("waiting for the result of a started flow", () => {
+  test("starts to wait when the flow started", () => {
+    expect(
+      startsWaiting({ kind: "submitted", flowJobId: JOB, auditFailed: false }),
+    ).toBe(true);
+  });
+
+  test.each([
+    { kind: "refused", message: "m" },
+    { kind: "failed", message: "m" },
+    { kind: "unknown", message: "m" },
+  ] as const)("does not wait after %j", (attempt) => {
+    expect(startsWaiting(attempt)).toBe(false);
+  });
+});
+
+describe("clearing the previous result", () => {
+  const PREVIOUS: PrReviewAttempt = { kind: "refused", message: "before" };
+
+  test("clears the previous result when the submit started", () => {
+    expect(attemptAfterSubmit(true, PREVIOUS)).toBeNull();
+  });
+
+  test("keeps the previous result when the submit could not start", () => {
+    expect(attemptAfterSubmit(false, PREVIOUS)).toEqual(PREVIOUS);
+  });
+
+  test("keeps no result when there was none", () => {
+    expect(attemptAfterSubmit(false, null)).toBeNull();
+  });
+});
+
+describe("reading the list of work items again", () => {
+  test("reads again the first time the review is seen to have started", () => {
+    expect(
+      shouldRefreshPipeline({ kind: "started", workItemId: 41 }, null, JOB),
+    ).toBe(true);
+  });
+
+  test("does not read again for the same flow job", () => {
+    expect(
+      shouldRefreshPipeline({ kind: "started", workItemId: 41 }, JOB, JOB),
+    ).toBe(false);
+  });
+
+  test("reads again for another flow job", () => {
+    expect(
+      shouldRefreshPipeline(
+        { kind: "started", workItemId: 41 },
+        "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+        JOB,
+      ),
+    ).toBe(true);
+  });
+
+  test.each([
+    { kind: "waiting" },
+    { kind: "unavailable" },
+    { kind: "unreadable" },
+    { kind: "refused", reason: "pr_closed" },
+  ] as const)("does not read again for %j", (state) => {
+    expect(shouldRefreshPipeline(state, null, JOB)).toBe(false);
   });
 });

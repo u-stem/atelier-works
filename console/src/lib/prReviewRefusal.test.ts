@@ -8,7 +8,6 @@ import {
   describePrReviewSubmitRefusal,
 } from "./prReviewRefusal.ts";
 
-const NOT_SUBMITTED = "投入していません。";
 const NOT_STARTED = "フローは動きましたが、レビューは始まっていません。";
 
 describe("the submit refusals", () => {
@@ -20,11 +19,11 @@ describe("the submit refusals", () => {
   );
 
   test.each(PR_REVIEW_SUBMIT_REFUSAL_REASONS)(
-    "says that %s submitted nothing",
+    "does not restate the heading of the notice in %s",
     (reason) => {
-      expect(
-        describePrReviewSubmitRefusal(reason).endsWith(NOT_SUBMITTED),
-      ).toBe(true);
+      expect(describePrReviewSubmitRefusal(reason)).not.toContain(
+        "投入していません",
+      );
     },
   );
 
@@ -45,18 +44,22 @@ describe("the submit refusals", () => {
 
   test("points an active review to the list of work items", () => {
     expect(describePrReviewSubmitRefusal("already_reviewing")).toBe(
-      `このPRのレビューは進行中です。作業項目の一覧から確認してください。${NOT_SUBMITTED}`,
+      "このPRのレビューは進行中です。作業項目の一覧から確認してください。",
     );
   });
 
   test("words a repository that is not allowed as the one that was typed", () => {
     expect(describePrReviewSubmitRefusal("repo_not_allowed")).toBe(
-      `このリポジトリは許可されていません。候補から選ぶか、許可の設定を確かめてください。${NOT_SUBMITTED}`,
+      "このリポジトリは許可されていません。候補から選ぶか、許可の設定を確かめてください。",
     );
   });
 });
 
 describe("the register refusals", () => {
+  const STARTED_NO_REVIEW = PR_REVIEW_REGISTER_REFUSAL_REASONS.filter(
+    (reason) => reason !== "already_reviewing",
+  );
+
   test.each(PR_REVIEW_REGISTER_REFUSAL_REASONS)(
     "words %s in Japanese",
     (reason) => {
@@ -64,14 +67,11 @@ describe("the register refusals", () => {
     },
   );
 
-  test.each(PR_REVIEW_REGISTER_REFUSAL_REASONS)(
-    "says that %s started no review",
-    (reason) => {
-      expect(
-        describePrReviewRegisterRefusal(reason).endsWith(NOT_STARTED),
-      ).toBe(true);
-    },
-  );
+  test.each(STARTED_NO_REVIEW)("says that %s started no review", (reason) => {
+    expect(describePrReviewRegisterRefusal(reason).endsWith(NOT_STARTED)).toBe(
+      true,
+    );
+  });
 
   test.each(PR_REVIEW_REGISTER_REFUSAL_REASONS)(
     "does not repeat the code of %s",
@@ -94,21 +94,15 @@ describe("the register refusals", () => {
     );
   });
 
-  test("shares the sentence of an active review with the submit refusal", () => {
-    expect(
-      describePrReviewRegisterRefusal("already_reviewing").startsWith(
-        "このPRのレビューは進行中です。作業項目の一覧から確認してください。",
-      ),
-    ).toBe(true);
+  test("says that an active review stays and no new one started, without contradiction", () => {
+    expect(describePrReviewRegisterRefusal("already_reviewing")).toBe(
+      "このPRのレビューは進行中です。新しいレビューは始めていません。作業項目の一覧から確認してください。",
+    );
   });
 
   test("shares the sentence of an invalid number with the submit refusal", () => {
-    const base = describePrReviewSubmitRefusal("invalid_pr_number").replace(
-      NOT_SUBMITTED,
-      "",
-    );
     expect(describePrReviewRegisterRefusal("invalid_pr_number")).toBe(
-      `${base}${NOT_STARTED}`,
+      `${describePrReviewSubmitRefusal("invalid_pr_number")}${NOT_STARTED}`,
     );
   });
 

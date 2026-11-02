@@ -137,6 +137,34 @@ describe("the result panel", () => {
   test.each(STATES)("draws %j without a11y violations", (state) => {
     expect(checkA11y(panel(state), { headingStart: 1 })).toEqual([]);
   });
+
+  test.each([
+    { kind: "waiting" },
+    { kind: "started", workItemId: 41 },
+  ] as const)("announces %j politely as a status", (state) => {
+    expect(panel(state)).toContain('role="status"');
+  });
+
+  test.each([
+    { kind: "waiting" },
+    { kind: "started", workItemId: 41 },
+  ] as const)("does not announce %j as an alert", (state) => {
+    expect(panel(state)).not.toContain('role="alert"');
+  });
+
+  test.each([
+    { kind: "unavailable" },
+    { kind: "unreadable" },
+    { kind: "refused", reason: "pr_closed" },
+  ] as const)("keeps %j an alert", (state) => {
+    expect(panel(state)).toContain('role="alert"');
+  });
+
+  test("has no line under the heading of an unavailable result", () => {
+    expect(panel({ kind: "unavailable" })).not.toContain(
+      "ジョブの結果を読み込めませんでした",
+    );
+  });
 });
 
 describe("the result of a started flow", () => {

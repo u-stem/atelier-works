@@ -26,8 +26,8 @@ export type PrReviewResultState =
 export type PrReviewResultInput = {
   /** ログと結果を含む取得。`isError`は、最初の取得と取り直しのどちらの失敗でも真になる。 */
   readonly output: DetailSnapshot & { readonly isError: boolean };
-  /** 状態の取得。 */
-  readonly status: DetailSnapshot;
+  /** 状態の取得。`isError`は、直近の取得が失敗したままなら真になる。 */
+  readonly status: DetailSnapshot & { readonly isError: boolean };
 };
 
 /** 結果の文字列をJSONとして読む。読めなければ`undefined`を返す。 */
