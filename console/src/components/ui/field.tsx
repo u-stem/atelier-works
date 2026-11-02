@@ -37,18 +37,19 @@ type FieldProps = {
   /** 入力欄の`id`。省くと自動で決める。 */
   id?: string;
   className?: string;
-  /** 入力欄を描く。受け取った`control`を入力欄に展開すると、ラベルと補足とエラーが結ばれる。 */
+  /** 入力欄を描く。受け取った`control`を入力欄に展開すると、ラベルと補足と字数とエラーが結ばれる。 */
   children: (control: FieldControl) => ReactNode;
 };
 
 /**
  * ラベルと入力欄と補足とエラーの組。
- * ラベルを入力欄に結び、補足とエラーを`aria-describedby`で入力欄に結ぶ。結線は入力欄ごとに書かない。
+ * ラベルを入力欄に結び、補足、字数、エラーを`aria-describedby`で入力欄に結ぶ。結線は入力欄ごとに書かない。
  */
 function Field({
   label,
   hint,
   problem,
+  counter,
   tone = "form",
   id,
   className,
@@ -57,11 +58,26 @@ function Field({
   const generatedId = useId();
   const controlId = id ?? generatedId;
   const hintId = `${controlId}-hint`;
+  const counterId = `${controlId}-counter`;
   const problemId = `${controlId}-problem`;
+  // 読み上げの順は、補足、字数、誤りである。
   const described = [
     hint === undefined ? null : hintId,
+    counter === undefined ? null : counterId,
     problem === undefined ? null : problemId,
   ].filter((value) => value !== null);
+  const hintNode =
+    hint === undefined ? null : (
+      <p id={hintId} className="text-small text-muted-foreground">
+        {hint}
+      </p>
+    );
+  const problemNode =
+    problem === undefined ? null : (
+      <p id={problemId} className="text-small text-destructive">
+        {problem}
+      </p>
+    );
   return (
     <div data-slot="field" className={cn(fieldVariants({ tone }), className)}>
       <label htmlFor={controlId} className={LABEL_CLASSES[tone]}>
@@ -73,15 +89,30 @@ function Field({
           described.length === 0 ? undefined : described.join(" "),
         "aria-invalid": problem === undefined ? undefined : true,
       })}
-      {hint === undefined ? null : (
-        <p id={hintId} className="text-small text-muted-foreground">
-          {hint}
-        </p>
-      )}
-      {problem === undefined ? null : (
-        <p id={problemId} className="text-small text-destructive">
-          {problem}
-        </p>
+      {counter === undefined ? (
+        <>
+          {hintNode}
+          {problemNode}
+        </>
+      ) : (
+        // 補足と誤りを左に、字数を右に1行で置く。誤りのときは字数も誤りの色にする。
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            {hintNode}
+            {problemNode}
+          </div>
+          <p
+            id={counterId}
+            className={cn(
+              "ml-auto text-small tabular-nums",
+              problem === undefined
+                ? "text-muted-foreground"
+                : "font-medium text-destructive",
+            )}
+          >
+            {counter}
+          </p>
+        </div>
       )}
     </div>
   );

@@ -106,9 +106,9 @@ shadcn/uiの部品を写したものと、同じ作りの自前の部品(`Card`�
 | --- | --- |
 | `Card` | 角丸の枠と面。`variant`は、中身のある面(`default`)、行を線で区切る面(`list`)、空であることを伝える破線の面(`empty`)の3つである。余白は`padding`の段(`none`、`frame`、`compact`、`default`、`spacious`)で選び、個別の余白は足さない。面の横の余白は`px-5`に固定し、段は縦の余白で分ける。文書を読ませる面(監査レポートの本文)だけは、長い本文を読みやすくするため、画面の幅に応じて横の余白を変える例外である。描く要素は`tag`で選ぶ |
 | `Dialog` | ブラウザ標準の`<dialog>`の外枠と、開閉の同期(`useDialogSync`)。位置は、中央(`center`)と上寄せ(`top`)の2つである。`ConfirmDialog`、ショートカットの一覧、コマンドパレットが使う |
-| `Field` | ラベル、入力欄、補足、エラーの組。ラベルを入力欄に結び、補足とエラーを`aria-describedby`で入力欄に結ぶ。ラベルの段は、縦に並ぶ入力の`form`(`text-body font-medium`)と、絞り込みの行やダイアログの小さな入力の`filter`(`text-small text-muted-foreground`)の2つである |
+| `Field` | ラベル、入力欄、補足、字数、エラーの組。ラベルを入力欄に結び、補足、字数、エラーを`aria-describedby`で入力欄に結ぶ。字数は、補足とエラーと同じ行の右に置く。ラベルの段は、縦に並ぶ入力の`form`(`text-body font-medium`)と、絞り込みの行やダイアログの小さな入力の`filter`(`text-small text-muted-foreground`)の2つである |
 
-結線を入力欄ごとに書くと、補足とエラーが読み上げに結ばれない入力欄が残る。
+結線を入力欄ごとに書くと、補足、字数、エラーが読み上げに結ばれない入力欄が残る。
 `Field`は、入力欄を描く関数を子に取り、渡した`id`、`aria-describedby`、`aria-invalid`を入力欄に展開させる。
 
 空であることを伝える面(`Card`の`empty`)は、余白が広い版(`spacious`)と標準の版(`compact`)の2つである。

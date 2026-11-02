@@ -229,37 +229,23 @@ function DecideBar({
           factoryラベルを付けられないため、起票のみ行います。
         </p>
       )}
-      <Field label="却下の理由(却下するときは必須)">
+      {/* 空のときの案内は誤りではないので補足に、上限の超過だけを誤りにする。入力しただけで不正と読み上げさせないためである。 */}
+      <Field
+        label="却下の理由(却下するときは必須)"
+        hint={counter.over ? undefined : (problem ?? undefined)}
+        problem={counter.over ? (problem ?? undefined) : undefined}
+        counter={counter.label}
+      >
         {(control) => (
-          <>
-            <Textarea
-              id={control.id}
-              rows={3}
-              value={reason}
-              disabled={locked}
-              aria-invalid={counter.over}
-              onChange={(event) => {
-                setReason(event.target.value);
-              }}
-            />
-            <div className="flex flex-wrap items-baseline justify-between gap-2 text-caption">
-              <span
-                className={
-                  counter.over ? "text-failure" : "text-muted-foreground"
-                }
-              >
-                {problem ?? ""}
-              </span>
-              <span
-                className={cn(
-                  "tabular-nums",
-                  counter.over ? "font-medium text-failure" : "text-subtle",
-                )}
-              >
-                {counter.label}
-              </span>
-            </div>
-          </>
+          <Textarea
+            {...control}
+            rows={3}
+            value={reason}
+            disabled={locked}
+            onChange={(event) => {
+              setReason(event.target.value);
+            }}
+          />
         )}
       </Field>
       {approveProblem === null ? null : (
