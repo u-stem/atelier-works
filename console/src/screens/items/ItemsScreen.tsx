@@ -66,9 +66,14 @@ export function ItemsScreen() {
         title="作業項目"
         refresh={refresh}
         actions={
-          <Button asChild>
-            <Link to="/items/new">新規投入</Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link to="/items/new-pr-review">PRレビューの投入</Link>
+            </Button>
+            <Button asChild>
+              <Link to="/items/new">新規投入</Link>
+            </Button>
+          </>
         }
       />
       <Tabs
