@@ -7,6 +7,7 @@ import type {
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { type ChangeOffer, changeOfferOf } from "../../lib/configChange.ts";
 import {
@@ -143,23 +144,19 @@ function ConfigBody({
       {designStage === undefined ? null : (
         <DesignStageStatus stage={designStage} />
       )}
-      <div className="flex max-w-sm flex-col gap-1">
-        <label
-          htmlFor="config-search"
-          className="text-small text-muted-foreground"
-        >
-          キー名で絞り込む
-        </label>
-        <Input
-          id="config-search"
-          type="search"
-          value={query}
-          autoComplete="off"
-          onChange={(event) => {
-            setQuery(event.target.value);
-          }}
-        />
-      </div>
+      <Field tone="filter" label="キー名で絞り込む" className="max-w-sm">
+        {(control) => (
+          <Input
+            {...control}
+            type="search"
+            value={query}
+            autoComplete="off"
+            onChange={(event) => {
+              setQuery(event.target.value);
+            }}
+          />
+        )}
+      </Field>
       <ConfigList
         items={filterConfigItems(items, query)}
         onChoose={change.choose}

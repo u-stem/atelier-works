@@ -1,10 +1,11 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { cn } from "../../lib/cn.ts";
 import { ROW_LINK_CLASS } from "../../lib/controlClasses.ts";
@@ -68,29 +69,31 @@ export function RequirementsIndexList({
   initialPage?: number | undefined;
 }) {
   const [filter, setFilter] = useState("");
-  const inputId = useId();
   const visible = filterRequirementsRows(rows, filter);
   const pager = usePagination(visible.length, PAGE_SIZE, initialPage);
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex items-center gap-3">
-        <label htmlFor={inputId} className="text-small text-muted-foreground">
-          作業項目の番号で絞り込む
-        </label>
-        <Input
-          id={inputId}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          placeholder="空欄で全件"
-          value={filter}
-          onChange={(event) => {
-            setFilter(event.target.value);
-            pager.reset();
-          }}
-          className="w-40"
-        />
-      </div>
+      <Field
+        tone="filter"
+        label="作業項目の番号で絞り込む"
+        className="flex-row items-center gap-3"
+      >
+        {(control) => (
+          <Input
+            {...control}
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="空欄で全件"
+            value={filter}
+            onChange={(event) => {
+              setFilter(event.target.value);
+              pager.reset();
+            }}
+            className="w-40"
+          />
+        )}
+      </Field>
       {rows.length === 0 ? (
         <Card
           tag="p"

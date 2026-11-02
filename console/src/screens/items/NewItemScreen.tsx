@@ -1,5 +1,5 @@
 import { ArrowLeft } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import { useIntakeTargets } from "../../api/intakeQueries.ts";
@@ -11,6 +11,7 @@ import {
   AlertTitle,
 } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { describeIntakeAttempt } from "../../lib/intakeAttempt.ts";
@@ -47,39 +48,6 @@ export function BackLink() {
       <ArrowLeft aria-hidden="true" className="size-3.5" />
       作業項目の一覧
     </Link>
-  );
-}
-
-function Field({
-  id,
-  label,
-  hint,
-  problem,
-  children,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  problem?: string | undefined;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-body font-medium">
-        {label}
-      </label>
-      {children}
-      {hint === undefined ? null : (
-        <p id={`${id}-hint`} className="text-small text-muted-foreground">
-          {hint}
-        </p>
-      )}
-      {problem === undefined ? null : (
-        <p id={`${id}-problem`} className="text-small text-destructive">
-          {problem}
-        </p>
-      )}
-    </div>
   );
 }
 
@@ -233,36 +201,38 @@ export function NewItemScreen() {
           }}
         >
           <Field
-            id={`${ids}-repo`}
             label="リポジトリ"
             hint="「オーナー名/リポジトリ名」の形で入力します。候補に無いリポジトリも入力できますが、許可されていなければ断られます。"
             problem={problemOf(problems, "repo_invalid")}
           >
-            <Input
-              id={`${ids}-repo`}
-              list={`${ids}-targets`}
-              value={repoText}
-              disabled={intake.locked}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={problemOf(problems, "repo_invalid") !== undefined}
-              onChange={(event) => {
-                setField({ repo: event.target.value });
-              }}
-            />
-            <datalist id={`${ids}-targets`}>
-              {candidates.map((target) => (
-                <option
-                  key={repoOptionLabel(target)}
-                  value={repoOptionLabel(target)}
+            {(control) => (
+              <>
+                <Input
+                  {...control}
+                  list={`${ids}-targets`}
+                  value={repoText}
+                  disabled={intake.locked}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setField({ repo: event.target.value });
+                  }}
                 />
-              ))}
-            </datalist>
-            {targetsFailed ? (
-              <p className="text-small text-muted-foreground">
-                候補を取得できませんでした。リポジトリを直接入力してください。
-              </p>
-            ) : null}
+                <datalist id={`${ids}-targets`}>
+                  {candidates.map((target) => (
+                    <option
+                      key={repoOptionLabel(target)}
+                      value={repoOptionLabel(target)}
+                    />
+                  ))}
+                </datalist>
+                {targetsFailed ? (
+                  <p className="text-small text-muted-foreground">
+                    候補を取得できませんでした。リポジトリを直接入力してください。
+                  </p>
+                ) : null}
+              </>
+            )}
           </Field>
           <ProfileChoice
             name={`${ids}-profile`}
@@ -282,116 +252,105 @@ export function NewItemScreen() {
             </p>
           )}
           <Field
-            id={`${ids}-title`}
             label="題名"
             hint={`${titleLength(title)} / ${INTAKE_TITLE_MAX_CHARS}字`}
             problem={problemOf(problems, "title_empty", "title_too_long")}
           >
-            <Input
-              id={`${ids}-title`}
-              value={title}
-              disabled={intake.locked}
-              aria-invalid={
-                problemOf(problems, "title_empty", "title_too_long") !==
-                undefined
-              }
-              onChange={(event) => {
-                setField({ title: event.target.value });
-              }}
-            />
+            {(control) => (
+              <Input
+                {...control}
+                value={title}
+                disabled={intake.locked}
+                onChange={(event) => {
+                  setField({ title: event.target.value });
+                }}
+              />
+            )}
           </Field>
           <Field
-            id={`${ids}-body`}
             label="目的"
             hint="何を実現したいかを書きます。Issueの本文になります。"
             problem={problemOf(problems, "body_empty")}
           >
-            <Textarea
-              id={`${ids}-body`}
-              rows={6}
-              value={body}
-              disabled={intake.locked}
-              aria-invalid={problemOf(problems, "body_empty") !== undefined}
-              onChange={(event) => {
-                setField({ body: event.target.value });
-              }}
-            />
+            {(control) => (
+              <Textarea
+                {...control}
+                rows={6}
+                value={body}
+                disabled={intake.locked}
+                onChange={(event) => {
+                  setField({ body: event.target.value });
+                }}
+              />
+            )}
           </Field>
           {profile === "bugfix" ? (
             <>
               <Field
-                id={`${ids}-reproduction`}
                 label="再現手順"
                 hint="不具合が起きるまでの手順を書きます。Issueの本文になります。"
                 problem={problemOf(problems, "reproduction_empty")}
               >
-                <Textarea
-                  id={`${ids}-reproduction`}
-                  rows={4}
-                  value={reproduction}
-                  disabled={intake.locked}
-                  aria-invalid={
-                    problemOf(problems, "reproduction_empty") !== undefined
-                  }
-                  onChange={(event) => {
-                    setField({ reproduction: event.target.value });
-                  }}
-                />
+                {(control) => (
+                  <Textarea
+                    {...control}
+                    rows={4}
+                    value={reproduction}
+                    disabled={intake.locked}
+                    onChange={(event) => {
+                      setField({ reproduction: event.target.value });
+                    }}
+                  />
+                )}
               </Field>
               <Field
-                id={`${ids}-expected`}
                 label="期待する動作"
                 hint="本来どう動くべきかを書きます。受入基準の先頭になります。"
                 problem={problemOf(problems, "expected_empty")}
               >
-                <Textarea
-                  id={`${ids}-expected`}
-                  rows={3}
-                  value={expectedBehavior}
-                  disabled={intake.locked}
-                  aria-invalid={
-                    problemOf(problems, "expected_empty") !== undefined
-                  }
-                  onChange={(event) => {
-                    setField({ expectedBehavior: event.target.value });
-                  }}
-                />
+                {(control) => (
+                  <Textarea
+                    {...control}
+                    rows={3}
+                    value={expectedBehavior}
+                    disabled={intake.locked}
+                    onChange={(event) => {
+                      setField({ expectedBehavior: event.target.value });
+                    }}
+                  />
+                )}
               </Field>
               <Field
-                id={`${ids}-actual`}
                 label="実際の動作"
                 hint="いま実際にどう動くかを書きます。Issueの本文になります。"
                 problem={problemOf(problems, "actual_empty")}
               >
-                <Textarea
-                  id={`${ids}-actual`}
-                  rows={3}
-                  value={actualBehavior}
-                  disabled={intake.locked}
-                  aria-invalid={
-                    problemOf(problems, "actual_empty") !== undefined
-                  }
-                  onChange={(event) => {
-                    setField({ actualBehavior: event.target.value });
-                  }}
-                />
+                {(control) => (
+                  <Textarea
+                    {...control}
+                    rows={3}
+                    value={actualBehavior}
+                    disabled={intake.locked}
+                    onChange={(event) => {
+                      setField({ actualBehavior: event.target.value });
+                    }}
+                  />
+                )}
               </Field>
             </>
           ) : null}
-          <Field
-            id={`${ids}-acceptance`}
-            label="受入基準(任意)"
-            hint="1行に1項目で書きます。"
-          >
-            <Textarea
-              id={`${ids}-acceptance`}
-              rows={4}
-              value={acceptance}
-              disabled={intake.locked}
-              onChange={(event) => {
-                setField({ acceptanceCriteria: event.target.value });
-              }}
-            />
+          <Field label="受入基準(任意)" hint="1行に1項目で書きます。">
+            {(control) => (
+              <Textarea
+                {...control}
+                rows={4}
+                value={acceptance}
+                disabled={intake.locked}
+                onChange={(event) => {
+                  setField({ acceptanceCriteria: event.target.value });
+                }}
+              />
+            )}
           </Field>
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" disabled={intake.blocked}>

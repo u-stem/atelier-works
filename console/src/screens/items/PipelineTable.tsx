@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { Pagination } from "../../components/Pagination.tsx";
@@ -8,6 +8,7 @@ import { ToggleChip, ToggleChipGroup } from "../../components/ToggleChip.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import { itemsBackState } from "../../lib/breadcrumbs.ts";
@@ -209,79 +210,71 @@ function FilterBar({
   filter: PipelineFilter;
   onChange: (next: PipelineFilter) => void;
 }) {
-  // 自作の部品を包む`label`は、静的検査が入力欄と結べないと見なすので、`htmlFor`でも結ぶ。
-  const id = useId();
   return (
     <div className="flex flex-wrap items-end gap-4">
       <ScopeSwitch
         scope={filter.scope}
         onChange={(scope) => onChange({ ...filter, scope })}
       />
-      <label
-        htmlFor={`${id}-status`}
-        className="flex flex-col gap-1 text-small text-muted-foreground"
-      >
-        状態
-        <Select
-          id={`${id}-status`}
-          value={filter.status ?? ""}
-          onChange={(event) =>
-            onChange(
-              selectPipelineStatus(
-                filter,
-                event.target.value === "" ? null : event.target.value,
-              ),
-            )
-          }
-        >
-          <option value="">すべて</option>
-          {statusOptions(scopedRows).map((status) => (
-            <option key={status} value={status}>
-              {pipelineStatusLabel(status)}
-            </option>
-          ))}
-        </Select>
-      </label>
-      {showRepo ? (
-        <label
-          htmlFor={`${id}-repo`}
-          className="flex flex-col gap-1 text-small text-muted-foreground"
-        >
-          リポジトリ
+      <Field tone="filter" label="状態">
+        {(control) => (
           <Select
-            id={`${id}-repo`}
-            value={filter.repo ?? ""}
+            id={control.id}
+            value={filter.status ?? ""}
             onChange={(event) =>
-              onChange({
-                ...filter,
-                repo: event.target.value === "" ? null : event.target.value,
-              })
+              onChange(
+                selectPipelineStatus(
+                  filter,
+                  event.target.value === "" ? null : event.target.value,
+                ),
+              )
             }
           >
             <option value="">すべて</option>
-            {repoOptions(rows).map((repo) => (
-              <option key={repo} value={repo}>
-                {repo}
+            {statusOptions(scopedRows).map((status) => (
+              <option key={status} value={status}>
+                {pipelineStatusLabel(status)}
               </option>
             ))}
           </Select>
-        </label>
+        )}
+      </Field>
+      {showRepo ? (
+        <Field tone="filter" label="リポジトリ">
+          {(control) => (
+            <Select
+              id={control.id}
+              value={filter.repo ?? ""}
+              onChange={(event) =>
+                onChange({
+                  ...filter,
+                  repo: event.target.value === "" ? null : event.target.value,
+                })
+              }
+            >
+              <option value="">すべて</option>
+              {repoOptions(rows).map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
       ) : null}
-      <label
-        htmlFor={`${id}-text`}
-        className="flex min-w-56 flex-1 flex-col gap-1 text-small text-muted-foreground"
-      >
-        検索
-        <Input
-          id={`${id}-text`}
-          type="search"
-          placeholder="題名、ブランチ、番号など"
-          value={filter.text}
-          onChange={(event) =>
-            onChange({ ...filter, text: event.target.value })
-          }
-        />
-      </label>
+      <Field tone="filter" label="検索" className="min-w-56 flex-1">
+        {(control) => (
+          <Input
+            {...control}
+            type="search"
+            placeholder="題名、ブランチ、番号など"
+            value={filter.text}
+            onChange={(event) =>
+              onChange({ ...filter, text: event.target.value })
+            }
+          />
+        )}
+      </Field>
       {isPipelineFilterActive(filter) ? (
         <Button
           variant="ghost"

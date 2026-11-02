@@ -1,9 +1,10 @@
 import { TriangleAlert } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useState } from "react";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import {
   approvalConfirmation,
@@ -101,7 +102,6 @@ function DecideBar({
     null,
   );
   const [stopped, setStopped] = useState<string | null>(null);
-  const reasonId = useId();
   const decision = useApprovalDecision("decide");
 
   const withFactoryLabel = withFactoryLabelArg(
@@ -228,36 +228,39 @@ function DecideBar({
           factoryラベルを付けられないため、起票のみ行います。
         </p>
       )}
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={reasonId} className="text-small font-medium">
-          却下の理由(却下するときは必須)
-        </label>
-        <Textarea
-          id={reasonId}
-          rows={3}
-          value={reason}
-          disabled={locked}
-          aria-invalid={counter.over}
-          onChange={(event) => {
-            setReason(event.target.value);
-          }}
-        />
-        <div className="flex flex-wrap items-baseline justify-between gap-2 text-caption">
-          <span
-            className={counter.over ? "text-failure" : "text-muted-foreground"}
-          >
-            {problem ?? ""}
-          </span>
-          <span
-            className={cn(
-              "tabular-nums",
-              counter.over ? "font-medium text-failure" : "text-subtle",
-            )}
-          >
-            {counter.label}
-          </span>
-        </div>
-      </div>
+      <Field label="却下の理由(却下するときは必須)">
+        {(control) => (
+          <>
+            <Textarea
+              id={control.id}
+              rows={3}
+              value={reason}
+              disabled={locked}
+              aria-invalid={counter.over}
+              onChange={(event) => {
+                setReason(event.target.value);
+              }}
+            />
+            <div className="flex flex-wrap items-baseline justify-between gap-2 text-caption">
+              <span
+                className={
+                  counter.over ? "text-failure" : "text-muted-foreground"
+                }
+              >
+                {problem ?? ""}
+              </span>
+              <span
+                className={cn(
+                  "tabular-nums",
+                  counter.over ? "font-medium text-failure" : "text-subtle",
+                )}
+              >
+                {counter.label}
+              </span>
+            </div>
+          </>
+        )}
+      </Field>
       {approveProblem === null ? null : (
         <p className="text-small text-warning">{approveProblem}</p>
       )}
