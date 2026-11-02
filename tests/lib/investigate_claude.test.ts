@@ -11,14 +11,20 @@ import {
   READ_DENY_BASE_PATHS,
 } from "../../f/factory/lib/claude_read_deny.ts";
 import {
-  computeIsolationFingerprint,
   type InvestigateClaudeDeps,
   type InvestigateClaudeOptions,
-  ISOLATION_ARGS,
-  ISOLATION_FINGERPRINT,
   runInvestigateClaude,
   runInvestigateClaudeWithDeps,
 } from "../../f/factory/lib/investigate_claude.ts";
+import {
+  computeIsolationFingerprint,
+  ISOLATION_ARGS,
+  ISOLATION_FINGERPRINT,
+} from "../../f/factory/lib/investigate_isolation.ts";
+import {
+  IsolationProofError,
+  mintIsolationProof,
+} from "../../f/factory/lib/isolation_proof.ts";
 import type { AgentRunRecord } from "../../f/factory/lib/types.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, fail, timeout } from "./testSupport.ts";
@@ -115,6 +121,7 @@ describe("runInvestigateClaude", () => {
       oauthToken: "oauth-token-value",
       timeoutMs: 60_000,
       recording: { mode: "skip" },
+      proof: mintIsolationProof(),
       ...overrides,
     };
   }
@@ -154,7 +161,7 @@ describe("runInvestigateClaude", () => {
   }
 
   describe("the options it accepts", () => {
-    test("accepts only the prompt, schema, model, budget, timeout, cwd, work item and recording", () => {
+    test("accepts only the prompt, schema, model, budget, timeout, cwd, work item, recording and proof", () => {
       const keys: Record<keyof InvestigateClaudeOptions<unknown>, true> = {
         run: true,
         workItemId: true,
@@ -171,6 +178,7 @@ describe("runInvestigateClaude", () => {
         oauthToken: true,
         timeoutMs: true,
         recording: true,
+        proof: true,
       };
       expect(Object.keys(keys).sort()).toEqual(
         [
@@ -184,6 +192,7 @@ describe("runInvestigateClaude", () => {
           "model",
           "oauthToken",
           "prompt",
+          "proof",
           "recording",
           "run",
           "stage",
@@ -597,6 +606,75 @@ describe("runInvestigateClaude", () => {
         readDenyContext: { env: {}, root },
       }).catch(() => undefined);
       expect(fake.calls).toHaveLength(0);
+    });
+  });
+
+  describe("the proof of the isolation", () => {
+    /** 型を通さずに、証拠の位置へ偽物を渡す。`Reflect.get`は`any`を返す。 */
+    function withProof(
+      run: InvestigateClaudeOptions<OkPayload>["run"],
+      proof: unknown,
+    ): InvestigateClaudeOptions<OkPayload> {
+      const holder: object = { proof };
+      return { ...options(run), proof: Reflect.get(holder, "proof") };
+    }
+
+    test("does not start claude without a proof", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      await runInvestigateClaudeWithDeps(
+        withProof(fake.run, undefined),
+        deps(),
+      ).catch(() => undefined);
+      expect(fake.calls).toHaveLength(0);
+    });
+
+    test("rejects an object that only has the shape of a proof", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      await expect(
+        runInvestigateClaudeWithDeps(withProof(fake.run, {}), deps()),
+      ).rejects.toBeInstanceOf(IsolationProofError);
+    });
+
+    test("rejects a proof that went through JSON", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      const copy: unknown = JSON.parse(JSON.stringify(mintIsolationProof()));
+      await expect(
+        runInvestigateClaudeWithDeps(withProof(fake.run, copy), deps()),
+      ).rejects.toBeInstanceOf(IsolationProofError);
+    });
+
+    test("checks the proof before the working directory", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      await expect(
+        runInvestigateClaudeWithDeps(
+          {
+            ...withProof(fake.run, undefined),
+            cwd: "/workspaces/repo/investigate-7",
+          },
+          deps(),
+        ),
+      ).rejects.toBeInstanceOf(IsolationProofError);
+    });
+
+    test("checks the proof in the public function too", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      await runInvestigateClaude(withProof(fake.run, undefined)).catch(
+        () => undefined,
+      );
+      expect(fake.calls).toHaveLength(0);
+    });
+
+    test("rejects in the public function with the error of the proof", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      await expect(
+        runInvestigateClaude(withProof(fake.run, undefined)),
+      ).rejects.toBeInstanceOf(IsolationProofError);
+    });
+
+    test("starts claude with a proof that was minted", async () => {
+      const fake = createFakeCommandRunner([OK]);
+      await runInvestigateClaudeWithDeps(options(fake.run), deps());
+      expect(fake.calls).toHaveLength(1);
     });
   });
 

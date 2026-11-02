@@ -1,12 +1,12 @@
 // 調査のClaudeを、隔離の引数を固定して起動する。
 // 調査は信頼できない入力(対象リポジトリの内容)を読むので、読み出し専用のツールだけを渡し、
-// workerの秘密に届く場所を固定の一覧で塞ぐ。呼び出し側がこれらを変えられないよう、引数をこのファイルの定数で持つ。
+// workerの秘密に届く場所を固定の一覧で塞ぐ。呼び出し側がこれらを変えられないよう、引数は`investigate_isolation.ts`の定数から組む。
+// 隔離の測定に合格した証拠が無ければ起動しない。
 // 保護パスに置く。引数や失敗の扱いを緩めると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったりするため。
 //
 // 失敗の記録には、出力の本文を残さない。`detail`と実行記録の`error`には、Claudeの出力や標準エラーが入りうる。
 // 秘密値の形をしていない本文は`maskSecrets`では消えないので、理由に関わらず「理由の符号と長さ」に置き換えてから返し、記録する。
 
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import {
   type RunClaudeFailureReason,
@@ -16,55 +16,15 @@ import {
 } from "./claude.ts";
 import {
   assertCwdOutsideDeny,
-  buildReadDenyPaths,
-  READ_DENY_BASE_PATHS,
   type ReadDenyContext,
 } from "./claude_read_deny.ts";
+import { buildIsolatedRunOptions } from "./investigate_isolation.ts";
+import {
+  assertIsolationProof,
+  type IsolationProof,
+} from "./isolation_proof.ts";
 import type { AgentRunRecord } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
-
-/** 隔離に効くClaudeの引数。呼び出し側は変えられない。 */
-export type IsolationArgs = {
-  /** 使えるツール。読み出し専用で、Bashと書き込みを含まない。 */
-  readonly tools: readonly string[];
-  readonly permissionMode: string;
-  /** 読む設定の層。対象リポジトリの設定を読まない。 */
-  readonly settingSources: readonly string[];
-  /** `--restricted`を付けるか。`runClaude`が常に付けるので渡さず、この値は指紋に隔離の前提を含めるための記録である。 */
-  readonly restricted: boolean;
-  /** 確認なしに使ってよいツール。空で、`--allowedTools`を付けない。 */
-  readonly allowedTools: readonly string[];
-  /** 追加で読めるディレクトリ。空で、`--add-dir`を付けない。 */
-  readonly addDirs: readonly string[];
-};
-
-export const ISOLATION_ARGS: IsolationArgs = {
-  tools: ["Read", "Glob", "Grep"],
-  permissionMode: "dontAsk",
-  settingSources: ["user"],
-  restricted: true,
-  allowedTools: [],
-  addDirs: [],
-};
-
-/**
- * 隔離の引数と、塞ぐ固定の一覧のハッシュ。
- * 実行時に解決する`$HOME`は値に依らないので、「実行時に足す」ことだけを鍵に含める。
- */
-export function computeIsolationFingerprint(
-  args: IsolationArgs,
-  denyPaths: readonly string[],
-): string {
-  return createHash("sha256")
-    .update(JSON.stringify({ args, denyPaths, home: "runtime" }))
-    .digest("hex");
-}
-
-/** 隔離の引数と固定の一覧が変わると変わる。後続の記録が、測った隔離と今の隔離を突き合わせる鍵に使う。 */
-export const ISOLATION_FINGERPRINT: string = computeIsolationFingerprint(
-  ISOLATION_ARGS,
-  READ_DENY_BASE_PATHS,
-);
 
 /**
  * 実行記録(`agent_runs`)の扱い。呼び出し側が選ぶ。
@@ -79,6 +39,7 @@ export type InvestigateRecording =
 
 /**
  * 呼び出し側が渡せる項目。隔離に効く項目(ツール、権限、設定の層、許可、追加ディレクトリ、環境、設定の置き場)は含めない。
+ * 証拠を必須にし、測定に合格していない隔離では起動しない。
  */
 export type InvestigateClaudeOptions<T> = {
   readonly run: CommandRunner;
@@ -98,6 +59,8 @@ export type InvestigateClaudeOptions<T> = {
   readonly oauthToken: string;
   readonly timeoutMs: number;
   readonly recording: InvestigateRecording;
+  /** 隔離の測定に合格した証拠。関門(`checkIsolationProof`)が同じプロセスの中で作ったものだけを受ける。 */
+  readonly proof: IsolationProof;
 };
 
 /**
@@ -182,7 +145,8 @@ function resolveHome(): string {
 
 /**
  * 調査のClaudeを起動する。本番の呼び出しは、この関数だけを使う。
- * 起動の前に、作業ディレクトリが塞ぐ一覧の下にないことと、設定の置き場がこのジョブ専用であることを確かめる。
+ * 起動の前に、証拠が本物であることを確かめ、続いて、作業ディレクトリが塞ぐ一覧の下にないことと、
+ * 設定の置き場がこのジョブ専用であることを確かめる。
  * 満たさなければ、Claudeを起動せずに例外を投げる。
  * 引数はオプションだけで、ジョブの一時領域と環境はジョブの実際の値から決まる。
  */
@@ -201,33 +165,30 @@ export async function runInvestigateClaudeWithDeps<T>(
   opts: InvestigateClaudeOptions<T>,
   deps: InvestigateClaudeDeps,
 ): Promise<InvestigateClaudeResult<T>> {
-  const home = resolveHome();
-  const denyPaths = buildReadDenyPaths(home);
-  assertCwdOutsideDeny(opts.cwd, denyPaths);
+  assertIsolationProof(opts.proof);
+  const isolated = buildIsolatedRunOptions<T>({
+    run: opts.run,
+    workItemId: opts.workItemId,
+    stage: opts.stage,
+    attempt: opts.attempt,
+    model: opts.model,
+    prompt: opts.prompt,
+    appendSystemPromptFile: opts.appendSystemPromptFile,
+    jsonSchema: opts.jsonSchema,
+    isStructuredOutput: opts.isStructuredOutput,
+    maxTurns: opts.maxTurns,
+    maxBudgetUsd: opts.maxBudgetUsd,
+    cwd: opts.cwd,
+    oauthToken: opts.oauthToken,
+    timeoutMs: opts.timeoutMs,
+    home: resolveHome(),
+  });
+  assertCwdOutsideDeny(opts.cwd, isolated.readDenyPaths);
 
+  // 組み立てた引数は上書きせず、テスト用の2項目だけを足す。
   const result = redactResult(
     await runClaude<T>({
-      run: opts.run,
-      workItemId: opts.workItemId,
-      stage: opts.stage,
-      attempt: opts.attempt,
-      model: opts.model,
-      prompt: opts.prompt,
-      appendSystemPromptFile: opts.appendSystemPromptFile,
-      jsonSchema: opts.jsonSchema,
-      isStructuredOutput: opts.isStructuredOutput,
-      tools: ISOLATION_ARGS.tools,
-      permissionMode: ISOLATION_ARGS.permissionMode,
-      settingSources: ISOLATION_ARGS.settingSources,
-      allowedTools: ISOLATION_ARGS.allowedTools,
-      addDirs: ISOLATION_ARGS.addDirs,
-      maxTurns: opts.maxTurns,
-      maxBudgetUsd: opts.maxBudgetUsd,
-      cwd: opts.cwd,
-      oauthToken: opts.oauthToken,
-      timeoutMs: opts.timeoutMs,
-      home,
-      readDenyPaths: denyPaths,
+      ...isolated,
       ...(deps.tmpDir === undefined ? {} : { tmpDir: deps.tmpDir }),
       ...(deps.readDenyContext === undefined
         ? {}
