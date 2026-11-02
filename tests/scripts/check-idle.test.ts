@@ -762,6 +762,14 @@ describe("SQL", () => {
     expect(runningWorkItemsSql()).toContain("'designing'");
   });
 
+  test("the work item query names the investigating status", () => {
+    expect(runningWorkItemsSql()).toContain("'investigating'");
+  });
+
+  test("investigating is a guarded status, since a Claude job runs while it lasts", () => {
+    expect(RUNNING_WORK_ITEM_STATUSES).toContain("investigating");
+  });
+
   test("designing is a guarded status", () => {
     expect(RUNNING_WORK_ITEM_STATUSES).toContain("designing");
   });
@@ -783,6 +791,7 @@ describe("SQL", () => {
     "reviewing",
     "auditing",
     "designing",
+    "investigating",
   ]) {
     test(`${status} is a status the migrations define`, () => {
       expect(migrations).toContain(`'${status}'`);

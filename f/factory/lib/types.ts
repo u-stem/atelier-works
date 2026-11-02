@@ -252,6 +252,11 @@ export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "dependabot",
 ];
 
+/** 対象のIssueの番号を`issue_number`に持つ種別か。 */
+export function isIssueTargetKind(_kind: WorkItemKind): boolean {
+  return false;
+}
+
 /**
  * 作業項目の進め方として`factory.work_items.profile`のCHECK制約が許す値。
  * `WorkItem.profile`の型にはしない。未知の値の行があっても、行の読みを止めないためである。

@@ -475,6 +475,14 @@ describe("pipelineStatusVariant", () => {
     expect(pipelineStatusVariant("pr_open")).toBe("success");
   });
 
+  test("marks a finished investigation as a success", () => {
+    expect(pipelineStatusVariant("investigated")).toBe("success");
+  });
+
+  test("leaves an investigation in progress muted", () => {
+    expect(pipelineStatusVariant("investigating")).toBe("muted");
+  });
+
   test.each(["failed", "blocked", "needs_human"])(
     "marks %s as a failure",
     (status) => {
@@ -643,6 +651,7 @@ const ACTIVE_STATUSES = [
   "reviewing",
   "fixing",
   "auditing",
+  "investigating",
   "blocked",
   "approved",
 ];
@@ -656,6 +665,7 @@ const SETTLED_STATUSES = [
   "reviewed",
   "rereview_requested",
   "audited",
+  "investigated",
   "pr_open",
 ];
 

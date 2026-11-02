@@ -954,6 +954,28 @@ export type ReconcileGithubState =
    */
   | { readonly kind: "audit" };
 
+/** 照合が確かめる、作業項目のGitHub上の対象。 */
+export type ReconcileTarget =
+  | { readonly kind: "audit" }
+  | { readonly kind: "issue" | "pr"; readonly number: number };
+
+/** 照合が確かめる対象を返す。対象の番号が無いときは`null`を返す。 */
+export function reconcileTargetOf(
+  _item: Pick<WorkItem, "kind" | "issue_number" | "pr_number">,
+): ReconcileTarget | null {
+  return null;
+}
+
+/** 照合のログと失敗の記録に使う、作業項目の名前を返す。 */
+export function reconcileLabel(
+  _item: Pick<
+    WorkItem,
+    "id" | "kind" | "owner" | "repo" | "issue_number" | "pr_number"
+  >,
+): string {
+  return "";
+}
+
 export type ReconcileDecision =
   | { readonly action: "none" }
   | {

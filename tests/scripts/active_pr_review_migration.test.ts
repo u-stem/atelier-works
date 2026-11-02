@@ -2,7 +2,9 @@
 // 部分一意インデックスの述語は、終端でない状態の一覧をSQLに書き写したものである。
 // `TERMINAL_WORK_ITEM_STATUSES`を変えたのにmigrationを足さないと、
 // 新しく稼働中になる状態がインデックスの対象から漏れる。
-// 後のmigrationがこのインデックスをまた作り直したときは、読む対象を最後に作り直したmigrationに合わせて更新すること。
+// 述語の検査は、インデックスを最後に作り直した`20261102120000_investigate_work_items`のmigrationを読む。
+// 後のmigrationがこのインデックスをまた作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
+// 述語以外の検査は、最初に作ったmigrationのファイルを読む。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -14,6 +16,8 @@ const UP =
   "migrations/datatable/main/20261102100000_active_pr_review_key.up.sql";
 const DOWN =
   "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql";
+const INDEXES_UP =
+  "migrations/datatable/main/20261102120000_investigate_work_items.up.sql";
 
 /** コメントを除いたSQL。 */
 async function codeOf(path: string): Promise<string> {
@@ -45,7 +49,7 @@ describe("20261102100000_active_pr_review_key.up.sql", () => {
     const nonTerminal = WORK_ITEM_STATUSES.filter(
       (status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status),
     );
-    expect(indexPredicateStatuses(await codeOf(UP)).sort()).toEqual(
+    expect(indexPredicateStatuses(await codeOf(INDEXES_UP)).sort()).toEqual(
       [...nonTerminal].sort(),
     );
   });
