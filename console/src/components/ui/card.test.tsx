@@ -63,7 +63,7 @@ describe("Card", () => {
 
   test("pads the empty variant by default", () => {
     expect(classesOf(<Card variant="empty">x</Card>)).toEqual(
-      expect.arrayContaining(["px-4", "py-3"]),
+      expect.arrayContaining(["px-5", "py-3"]),
     );
   });
 
@@ -75,6 +75,10 @@ describe("Card", () => {
         </Card>,
       ),
     ).toContain("py-8");
+  });
+
+  test("pads the spacious step with px-5", () => {
+    expect(classesOf(<Card padding="spacious">x</Card>)).toContain("px-5");
   });
 
   test("leaves the default variant unpadded", () => {
@@ -89,10 +93,21 @@ describe("Card", () => {
     );
   });
 
-  test("pads the compact step with px-4 and py-3", () => {
+  test("pads the compact step with px-5 and py-3", () => {
     expect(classesOf(<Card padding="compact">x</Card>)).toEqual(
-      expect.arrayContaining(["px-4", "py-3"]),
+      expect.arrayContaining(["px-5", "py-3"]),
     );
+  });
+
+  test("keeps the horizontal padding of every step with a horizontal inset at px-5", () => {
+    const steps = ["compact", "default", "spacious"] as const;
+    expect(
+      steps.map((padding) =>
+        classesOf(<Card padding={padding}>x</Card>).filter((c) =>
+          c.startsWith("px-"),
+        ),
+      ),
+    ).toEqual([["px-5"], ["px-5"], ["px-5"]]);
   });
 
   test("pads the frame step with p-2", () => {
