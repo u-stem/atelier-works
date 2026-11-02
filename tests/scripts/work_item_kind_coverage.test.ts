@@ -14,6 +14,7 @@ import {
 } from "../../f/factory/lib/poll_support.ts";
 import {
   isIssueTargetKind,
+  TERMINAL_WORK_ITEM_STATUSES,
   WORK_ITEM_KINDS,
   type WorkItem,
   type WorkItemKind,
@@ -171,14 +172,24 @@ describe("every work item kind", () => {
   });
 });
 
-describe("the investigating status", () => {
-  const NOW = new Date("2026-11-02T12:00:00.000Z");
-
-  test("is not a state in which a person is waited for", () => {
+describe("the investigation statuses", () => {
+  test("investigating is not a state in which a person is waited for", () => {
     expect(isWaitingForHuman("investigating")).toBe(false);
   });
 
-  test("is cancelled by the reconcile when the Issue is closed", () => {
+  test("investigating is not a terminal status", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).not.toContain("investigating");
+  });
+
+  test("investigated is a terminal status", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).toContain("investigated");
+  });
+});
+
+describe("the reconcile of an Issue target", () => {
+  const NOW = new Date("2026-11-02T12:00:00.000Z");
+
+  test("cancels the item when the Issue is closed while its job runs", () => {
     expect(
       decideReconcileAction(
         { updated_at: NOW },
@@ -189,7 +200,7 @@ describe("the investigating status", () => {
     ).toEqual({ action: "cancel", reason: "closed" });
   });
 
-  test("is left alone while its job runs and the Issue is open", () => {
+  test("leaves the item alone when the Issue is open while its job runs", () => {
     expect(
       decideReconcileAction(
         { updated_at: NOW },
