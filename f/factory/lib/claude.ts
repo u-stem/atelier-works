@@ -8,6 +8,10 @@
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  prepareReadDenySettings,
+  type ReadDenyContext,
+} from "./claude_read_deny.ts";
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
@@ -314,6 +318,14 @@ export type RunClaudeOptions<T> = {
    * このコメントではなく、最初のE2Eの実行で確かめる。
    */
   readonly addDirs?: readonly string[];
+  /**
+   * claudeが読めないパスの固定の一覧(絶対パス)。省略すると何も書かず、既存の呼び出しの挙動は変わらない。
+   * 渡すと、起動の前に`claude_read_deny.ts`が、ジョブ専用の`CLAUDE_CONFIG_DIR`の`settings.json`へ
+   * 読み出しの拒否の規則を書く。使う設定の置き場がジョブ専用でないとき、`cwd`が一覧の下にあるときは例外を投げる。
+   */
+  readonly readDenyPaths?: readonly string[];
+  /** `readDenyPaths`の検査が見るジョブの環境と親のディレクトリ。テストで差し替える。 */
+  readonly readDenyContext?: ReadDenyContext;
   readonly oauthToken: string;
   readonly claudeConfigDir?: string;
   readonly home?: string;
@@ -693,6 +705,16 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
 ): Promise<RunClaudeResult<T>> {
+  if (opts.readDenyPaths !== undefined) {
+    await prepareReadDenySettings({
+      readDenyPaths: opts.readDenyPaths,
+      configDir: buildClaudeEnv(opts).CLAUDE_CONFIG_DIR,
+      cwd: opts.cwd,
+      ...(opts.readDenyContext === undefined
+        ? {}
+        : { context: opts.readDenyContext }),
+    });
+  }
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return {
       outcome: "failure",

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { access } from "node:fs/promises";
+import { access, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildSystemPrompt,
   CLAUDE_NOT_STARTED_DETAIL,
@@ -1535,5 +1537,128 @@ describe("runClaude failure details", () => {
       detail:
         'structured_output does not match the expected schema: {"wrong":"x, implement time settings do not fit the flow step timeout: y"}',
     });
+  });
+});
+
+describe("runClaude readDenyPaths", () => {
+  const JOB_ID = "11111111-2222-4333-8444-555555555555";
+  const DENY_PATHS = ["/proc", "/workspaces"];
+  let root: string;
+  let configDir: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "run-claude-deny-"));
+    configDir = join(root, `fj-${JOB_ID}`, "claude-config");
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function denyOptions(
+    run: ReturnType<typeof createFakeCommandRunner>["run"],
+    overrides: Partial<RunClaudeOptions<OkPayload>> = {},
+  ): RunClaudeOptions<OkPayload> {
+    return {
+      ...baseOptions(run),
+      cwd: "/srv/investigate/1",
+      claudeConfigDir: configDir,
+      readDenyPaths: DENY_PATHS,
+      readDenyContext: { env: { WM_JOB_ID: JOB_ID }, root },
+      ...overrides,
+    };
+  }
+
+  const okResponse = {
+    stdout: claudeJsonStdout(),
+    stderr: "",
+    exitCode: 0,
+    timedOut: false,
+  };
+
+  test("writes the deny rules to settings.json of the job config directory", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    await runClaude(denyOptions(fake.run));
+    expect(await readFile(join(configDir, "settings.json"), "utf8")).toContain(
+      "Read(//workspaces/**)",
+    );
+  });
+
+  test("writes settings.json before it starts claude", async () => {
+    let existedAtRun = false;
+    const run: RunClaudeOptions<OkPayload>["run"] = async () => {
+      existedAtRun = await lstat(join(configDir, "settings.json"))
+        .then(() => true)
+        .catch(() => false);
+      return okResponse;
+    };
+    await runClaude(denyOptions(run));
+    expect(existedAtRun).toBe(true);
+  });
+
+  test("writes no settings.json when readDenyPaths is not given", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    const { readDenyPaths: _omitted, ...withoutDeny } = denyOptions(fake.run);
+    await runClaude(withoutDeny);
+    expect(
+      await lstat(join(configDir, "settings.json")).catch(() => null),
+    ).toBe(null);
+  });
+
+  test("does not check the config directory when readDenyPaths is not given", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    const { readDenyPaths: _omitted, ...withoutDeny } = denyOptions(fake.run);
+    const result = await runClaude({
+      ...withoutDeny,
+      claudeConfigDir: "/home/person/.claude",
+    });
+    expect(result.outcome).toBe("success");
+  });
+
+  test("throws before it starts claude when the config directory is not of this job", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    await expect(
+      runClaude(
+        denyOptions(fake.run, { claudeConfigDir: "/home/person/.claude" }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  test("does not start claude when the config directory is not of this job", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    await runClaude(
+      denyOptions(fake.run, { claudeConfigDir: "/home/person/.claude" }),
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  test("throws when the config directory falls back to the environment variable", async () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = "/home/person/.claude";
+    try {
+      const fake = createFakeCommandRunner([okResponse]);
+      const { claudeConfigDir: _omitted, ...withoutDir } = denyOptions(
+        fake.run,
+      );
+      await expect(runClaude(withoutDir)).rejects.toThrow();
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+    }
+  });
+
+  test("throws when the working directory is below a denied path", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    await expect(
+      runClaude(denyOptions(fake.run, { cwd: "/workspaces/repo" })),
+    ).rejects.toThrow();
+  });
+
+  test("does not start claude when the working directory is below a denied path", async () => {
+    const fake = createFakeCommandRunner([okResponse]);
+    await runClaude(denyOptions(fake.run, { cwd: "/workspaces/repo" })).catch(
+      () => undefined,
+    );
+    expect(fake.calls).toHaveLength(0);
   });
 });

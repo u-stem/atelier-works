@@ -47,6 +47,7 @@ schema:
     - implement_flow_timeout_sec
     - implement_max_changed_files
     - implement_max_diff_lines
+    - investigate_enabled
     - design_enabled
     - design_enabled_since
     - max_design_attempts
@@ -239,6 +240,11 @@ schema:
       type: integer
       description: 実装(工程3)におけるClaude Codeの1回の実行を打ち切るまでの制限時間(秒)。
       default: 3600
+    investigate_enabled:
+      type: boolean
+      description: >-
+        調査(進め方investigate)の入口を開けるかどうかです。trueと書いたときだけ開き、ほかの値は閉じたものとして読みます。この項目は、人がWindmillの画面かwmillのコマンドで書きます。調査の隔離を実機で確かめるまでは、trueにしません。
+      default: false
     instance_name:
       type: string
       description: >-
