@@ -5,6 +5,7 @@ import type {
   DesignStageView,
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Field } from "../../components/ui/field.tsx";
@@ -18,7 +19,7 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { ConfigChangeDialog } from "./ConfigChangeDialog.tsx";
-import { EmptyNote, SystemSection } from "./SystemSection.tsx";
+import { SystemSection } from "./SystemSection.tsx";
 import { useConfigChange } from "./useConfigChange.ts";
 
 function ConfigValue({ item }: { item: ConfigItemView }) {

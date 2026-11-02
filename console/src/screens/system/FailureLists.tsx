@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import type { SummaryFailure } from "../../api/guards/summary.ts";
 import type { SystemOrphanFailure } from "../../api/guards/systemStatus.ts";
 import { Disclosure } from "../../components/Disclosure.tsx";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { JobLink } from "../../components/JobLink.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
@@ -19,7 +20,6 @@ import {
   type OrphanFailureGroup,
 } from "../../lib/systemView.ts";
 import { usePagination } from "../../lib/usePagination.ts";
-import { EmptyNote } from "./SystemSection.tsx";
 
 /** 1ページに出す失敗の数。 */
 const PAGE_SIZE = 10;

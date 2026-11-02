@@ -3,6 +3,7 @@ import type {
   DeploymentEntry,
   DeploymentPullRequest,
 } from "../../api/guards/deployments.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
@@ -162,15 +163,7 @@ export function UpdateHistory({
   const pager = usePagination(entries.length, PAGE_SIZE, initialPage);
   const baseId = useId();
   if (entries.length === 0) {
-    return (
-      <Card
-        tag="p"
-        padding="default"
-        className="text-small text-muted-foreground"
-      >
-        反映の記録はまだありません
-      </Card>
-    );
+    return <EmptyNote>反映の記録はまだありません</EmptyNote>;
   }
   const canExpand = entries.length > HISTORY_PREVIEW_COUNT;
   const listId = `${baseId}-list`;

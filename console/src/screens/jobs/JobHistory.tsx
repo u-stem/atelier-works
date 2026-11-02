@@ -8,6 +8,7 @@ import {
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field } from "../../components/ui/field.tsx";
@@ -21,7 +22,6 @@ import {
   parseHistoryStatus,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
-import { EmptyNote } from "../system/SystemSection.tsx";
 import { JOB_LIST_LOADING_SHAPE, JobList, JobsQueryGate } from "./JobRows.tsx";
 
 /** 履歴の読み込み済みのページと、その取得の状態。 */

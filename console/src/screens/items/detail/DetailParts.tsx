@@ -1,7 +1,6 @@
 import { ExternalLink } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { JobLink } from "../../../components/JobLink.tsx";
-import { Card } from "../../../components/ui/card.tsx";
 import { splitCodeSpans } from "../../../lib/codeSpans.ts";
 import type { JobLinkView, TargetLink } from "../../../lib/itemDetailView.ts";
 import { formatAbsoluteWithRelative } from "../../../lib/relativeTime.ts";
@@ -70,18 +69,6 @@ export function Row({
         {children}
       </dd>
     </div>
-  );
-}
-
-export function EmptyNote({ children }: { children: ReactNode }) {
-  return (
-    <Card
-      tag="p"
-      padding="default"
-      className="text-small text-muted-foreground"
-    >
-      {children}
-    </Card>
   );
 }
 

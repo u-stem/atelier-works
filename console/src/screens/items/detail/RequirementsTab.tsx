@@ -1,17 +1,12 @@
 import { FileText } from "lucide-react";
 import { Link } from "react-router";
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
+import { EmptyNote } from "../../../components/EmptyNote.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { Card } from "../../../components/ui/card.tsx";
 import { describeAttempt } from "../../../lib/itemDetailView.ts";
 import { showsRequirementsLink } from "../../../lib/pipelineView.ts";
-import {
-  EmptyNote,
-  LINK_CLASS,
-  Panel,
-  PlainBlock,
-  TimeLabel,
-} from "./DetailParts.tsx";
+import { LINK_CLASS, Panel, PlainBlock, TimeLabel } from "./DetailParts.tsx";
 
 /**
  * 要件定義のタブ。試行ごとに、要約と承認の状態と、要件定義書の画面へのリンクを出す。

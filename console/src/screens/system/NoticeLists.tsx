@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import type { NoticeRow } from "../../api/guards/notices.ts";
 import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
 import { Disclosure } from "../../components/Disclosure.tsx";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Card } from "../../components/ui/card.tsx";
@@ -12,7 +13,6 @@ import {
   describeResolvedNotice,
 } from "../../lib/systemView.ts";
 import { usePagination } from "../../lib/usePagination.ts";
-import { EmptyNote } from "./SystemSection.tsx";
 
 /** 1ページに出す通知の数。 */
 const PAGE_SIZE = 10;

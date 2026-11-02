@@ -18,6 +18,7 @@ import type {
 } from "../../api/jobsQueries.ts";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import {
   LoadingGate,
   type LoadingShape,
@@ -50,7 +51,6 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
-import { EmptyNote } from "../system/SystemSection.tsx";
 
 /** 状態の記号と色。記号の形でも状態を見分けられるようにし、色だけに頼らない。 */
 const STATE_STYLE: Readonly<

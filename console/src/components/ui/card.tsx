@@ -8,7 +8,7 @@ const cardVariants = cva("rounded-xl border", {
       default: "border-border bg-card",
       // 行の区切りは線で引く。行の余白は行が持つので、`padding`は`none`のまま使う。
       list: "divide-y divide-border border-border bg-card",
-      // 一覧や節が空であることを伝える。面を塗らず、破線にして、中身のある面と見分ける。
+      // あるはずの面が無いことを伝える。面を塗らず、破線にして、中身のある面と見分ける。空の一覧の標準は、実線の`EmptyNote`である。
       empty: "border-dashed border-border text-small text-muted-foreground",
     },
     // 面の横の余白は`px-5`に固定し、段は縦の余白で分ける。隣り合う面の中身の左端をそろえるためである。

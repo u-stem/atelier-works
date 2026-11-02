@@ -1,11 +1,11 @@
 import { isWorkerLoad } from "../../api/guards/workerLoad.ts";
 import { Disclosure } from "../../components/Disclosure.tsx";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import {
   describeWorkerLoad,
   describeWorkerLoadHeadline,
 } from "../../lib/workerLoadView.ts";
-import { EmptyNote } from "./SystemSection.tsx";
 
 /**
  * defaultのworkerの負荷。先頭に結論の1行を出し、直近24時間の枠の使用、queueの待ち、メモリの内訳は開いて読む。

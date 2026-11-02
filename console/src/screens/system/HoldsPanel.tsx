@@ -1,5 +1,6 @@
 import { TriangleAlert } from "lucide-react";
 import type { HoldsSnapshot } from "../../api/guards/holds.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
@@ -17,7 +18,6 @@ import {
 } from "../../lib/holdsView.ts";
 import { HOLDS_TEXT } from "../../lib/labels.ts";
 import { formatAbsoluteIso } from "../../lib/relativeTime.ts";
-import { EmptyNote } from "./SystemSection.tsx";
 
 type PanelProps = {
   readonly data: HoldsSnapshot;

@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { ToggleChip, ToggleChipGroup } from "../../components/ToggleChip.tsx";
@@ -488,15 +489,7 @@ export function PipelineTable({
   };
 
   if (rows.length === 0) {
-    return (
-      <Card
-        tag="p"
-        padding="default"
-        className="text-small text-muted-foreground"
-      >
-        作業項目はまだありません
-      </Card>
-    );
+    return <EmptyNote>作業項目はまだありません</EmptyNote>;
   }
 
   return (

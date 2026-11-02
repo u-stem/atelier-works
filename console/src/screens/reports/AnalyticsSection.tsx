@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 import { isBannerError } from "../../api/errors.ts";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import {
   LoadingGate,
   type LoadingShape,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
-import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
@@ -135,13 +135,7 @@ export function AnalyticsSection<T>({
               />
             ) : null}
             {rows.length === 0 ? (
-              <Card
-                tag="p"
-                padding="default"
-                className="max-w-3xl text-small text-muted-foreground"
-              >
-                {emptyMessage}
-              </Card>
+              <EmptyNote className="max-w-3xl">{emptyMessage}</EmptyNote>
             ) : (
               children(rows)
             )}

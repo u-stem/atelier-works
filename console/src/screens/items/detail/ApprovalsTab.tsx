@@ -1,17 +1,12 @@
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
+import { EmptyNote } from "../../../components/EmptyNote.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { Card } from "../../../components/ui/card.tsx";
 import {
   describeApproval,
   sortApprovalsNewestFirst,
 } from "../../../lib/itemDetailView.ts";
-import {
-  EmptyNote,
-  Panel,
-  PlainBlock,
-  Row,
-  TimeLabel,
-} from "./DetailParts.tsx";
+import { Panel, PlainBlock, Row, TimeLabel } from "./DetailParts.tsx";
 
 /**
  * 承認の履歴のタブ。承認依頼を新しい順に並べ、状態、決定者、決定の時刻、理由を出す。

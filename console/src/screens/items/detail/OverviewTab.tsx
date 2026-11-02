@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
+import { EmptyNote } from "../../../components/EmptyNote.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { Card } from "../../../components/ui/card.tsx";
 import {
@@ -13,7 +14,6 @@ import {
 import { OVERVIEW_BODY_CLASS } from "../../../lib/layoutClasses.ts";
 import type { FlowProgressView } from "../../../lib/workItemFlowProgress.ts";
 import {
-  EmptyNote,
   JobLinks,
   LINK_CLASS,
   Panel,
