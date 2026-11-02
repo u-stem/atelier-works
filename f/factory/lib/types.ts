@@ -1847,6 +1847,11 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
+  /**
+   * 調査の入口を開けるか。既定は`false`。
+   * 読み込みの結果であり、書かれた値ではない。真と書かれたときだけ真になり、ほかの値は偽として読む。
+   */
+  investigate_enabled: boolean;
   // 設計工程。リソース型ではどちらも省略可能で、既定値がある。
   /**
    * 設計工程を有効にするか。既定は`false`。

@@ -644,6 +644,43 @@ describe("design stage gate files", () => {
   });
 });
 
+// 調査のClaudeの隔離(引数を固定する包み関数、読み出しを塞ぐ一覧、入口の門)と、それを固定するテストは、
+// 書き換えられると、調査のClaudeがworkerの秘密に届いたり、調査の入口が人の確認なしに開いたりする。
+// グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
+describe("investigate isolation files", () => {
+  const PATHS = [
+    "f/factory/lib/investigate_claude.ts",
+    "f/factory/lib/investigate_claude.script.yaml",
+    "f/factory/lib/claude_read_deny.ts",
+    "f/factory/lib/claude_read_deny.script.yaml",
+    "f/factory/lib/investigate_gate.ts",
+    "f/factory/lib/investigate_gate.script.yaml",
+    "tests/lib/investigate_claude.test.ts",
+    "tests/lib/claude_read_deny.test.ts",
+    "tests/scripts/investigate_gate.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect lib/claude.ts, whose diff stays small and which other flows change", () => {
+    expect(matchesForbiddenPath("f/factory/lib/claude.ts")).toBe(false);
+  });
+
+  test("does not protect lib/config.ts, which changes often", () => {
+    expect(matchesForbiddenPath("f/factory/lib/config.ts")).toBe(false);
+  });
+});
+
 // 進め方ごとの承認の要否の表(`profile.ts`とその定義)と、それを固定するテストは、書き換えられると、
 // 承認を省く進め方が黙って通るようになる。
 // グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。

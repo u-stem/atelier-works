@@ -1017,6 +1017,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
     ),
+    investigate_enabled: false,
     design_enabled: designGate.enabled,
     design_enabled_ignored: designGate.ignored,
     design_enabled_since: readDesignSince(designEnabledSince),
