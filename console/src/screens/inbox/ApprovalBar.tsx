@@ -19,6 +19,7 @@ import {
   withFactoryLabelArg,
 } from "../../lib/approvalDecision.ts";
 import { cn } from "../../lib/cn.ts";
+import { CHECKBOX_CLASS } from "../../lib/controlClasses.ts";
 import { IssueRedoBar } from "./IssueRedoBar.tsx";
 import { RefusalNotice } from "./RefusalNotice.tsx";
 import {
@@ -200,7 +201,7 @@ function DecideBar({
         <label className="flex items-start gap-2 text-body">
           <input
             type="checkbox"
-            className="mt-1 size-4 accent-primary"
+            className={cn(CHECKBOX_CLASS, "mt-1")}
             checked={fullChecked}
             disabled={locked}
             onChange={(event) => {
@@ -214,7 +215,7 @@ function DecideBar({
         <label className="flex items-center gap-2 text-body">
           <input
             type="checkbox"
-            className="size-4 accent-primary"
+            className={CHECKBOX_CLASS}
             checked={labelChecked}
             disabled={locked}
             onChange={(event) => {

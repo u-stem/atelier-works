@@ -13,6 +13,7 @@ import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import { itemsBackState } from "../../lib/breadcrumbs.ts";
 import { cn } from "../../lib/cn.ts";
+import { TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import { pageSlice } from "../../lib/pagination.ts";
 import {
@@ -128,7 +129,7 @@ function SortableHeader({
     <th
       scope="col"
       aria-sort={ariaSort(sort, sortKey)}
-      className={cn("px-3 py-2 text-left font-medium", className)}
+      className={cn(TABLE_CELL_CLASS, "text-left font-medium", className)}
     >
       <button
         type="button"
@@ -156,7 +157,8 @@ function PlainHeader({
     <th
       scope="col"
       className={cn(
-        "whitespace-nowrap px-3 py-2 text-left font-medium",
+        TABLE_CELL_CLASS,
+        "whitespace-nowrap text-left font-medium",
         className,
       )}
     >
@@ -301,7 +303,7 @@ function PipelineRowView({
 }) {
   return (
     <tr className="border-t border-border align-top">
-      <td className="px-3 py-2 tabular-nums">
+      <td className={cn(TABLE_CELL_CLASS, "tabular-nums")}>
         <Link
           to={itemDetailPath(row.work_item_id)}
           state={backState}
@@ -310,42 +312,49 @@ function PipelineRowView({
           #{row.work_item_id}
         </Link>
       </td>
-      <td className="px-3 py-2">
+      <td className={TABLE_CELL_CLASS}>
         <div className={cn("max-w-lg break-words", TITLE_MIN_WIDTH)}>
           <PlainText value={row.title} />
         </div>
       </td>
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
         {workItemKindLabel(row.kind)}
       </td>
-      <td className="px-3 py-2">
+      <td className={TABLE_CELL_CLASS}>
         <Badge variant={pipelineStatusVariant(row.status)}>
           {pipelineStatusLabel(row.status)}
         </Badge>
       </td>
       {showRepo ? (
-        <td className="whitespace-nowrap px-3 py-2">
+        <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
           {row.owner}/{row.repo}
         </td>
       ) : null}
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
         <ExternalLinks links={relatedLinks(row)} />
       </td>
-      <td className={cn("px-3 py-2 font-mono text-small", NARROW_HIDDEN)}>
+      <td
+        className={cn(TABLE_CELL_CLASS, "font-mono text-small", NARROW_HIDDEN)}
+      >
         <div className="max-w-64 min-w-40 break-all">
           <PlainText value={row.branch} />
         </div>
       </td>
-      <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
+      <td className={cn(TABLE_CELL_CLASS, "tabular-nums", NARROW_HIDDEN)}>
         {row.attempt}
       </td>
-      <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
+      <td className={cn(TABLE_CELL_CLASS, "tabular-nums", NARROW_HIDDEN)}>
         {row.fix_round}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
+      <td
+        className={cn(
+          TABLE_CELL_CLASS,
+          "whitespace-nowrap text-muted-foreground",
+        )}
+      >
         <TimeText iso={row.updated_at} now={now} />
       </td>
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className={cn(TABLE_CELL_CLASS, "whitespace-nowrap")}>
         {showsRequirementsLink(row) ? (
           <Link
             to={itemRequirementsPath(row.work_item_id)}

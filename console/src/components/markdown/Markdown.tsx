@@ -32,6 +32,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { RequirementsDiagram } from "../../api/guards/requirements.ts";
 import { cn } from "../../lib/cn.ts";
+import { TABLE_CELL_COMPACT_CLASS } from "../../lib/controlClasses.ts";
 import { ALERT_LABELS, stripAlertMarker } from "../../lib/markdownAlerts.ts";
 import { type Heading, headingIdAtLine } from "../../lib/markdownHeadings.ts";
 import { type RepoRef, resolveMarkdownLink } from "../../lib/markdownLink.ts";
@@ -332,12 +333,19 @@ const components: Components = {
     </div>
   ),
   th: ({ children }) => (
-    <th className="border border-border bg-muted px-3 py-1.5 text-left align-top font-semibold">
+    <th
+      className={cn(
+        TABLE_CELL_COMPACT_CLASS,
+        "border border-border bg-muted text-left align-top font-semibold",
+      )}
+    >
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td className="border border-border px-3 py-1.5 align-top">
+    <td
+      className={cn(TABLE_CELL_COMPACT_CLASS, "border border-border align-top")}
+    >
       {Children.map(children, keepIdsTogether)}
     </td>
   ),

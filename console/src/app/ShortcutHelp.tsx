@@ -1,6 +1,7 @@
 import { Fragment, useId, useRef } from "react";
 import { Button } from "../components/ui/button.tsx";
 import { Dialog } from "../components/ui/dialog.tsx";
+import { CHECKBOX_CLASS } from "../lib/controlClasses.ts";
 import { type Platform, shortcutRows } from "../lib/shortcutKeys.ts";
 import { SCREENS } from "./screens.ts";
 
@@ -70,7 +71,7 @@ export function ShortcutHelp({
             onChange={(event) => {
               onEnabledChange(event.target.checked);
             }}
-            className="size-4 accent-primary"
+            className={CHECKBOX_CLASS}
           />
           <span>ショートカットを有効にする</span>
         </label>

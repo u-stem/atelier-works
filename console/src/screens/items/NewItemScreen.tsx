@@ -14,6 +14,8 @@ import { Button } from "../../components/ui/button.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
+import { cn } from "../../lib/cn.ts";
+import { CHECKBOX_CLASS } from "../../lib/controlClasses.ts";
 import { describeIntakeAttempt } from "../../lib/intakeAttempt.ts";
 import {
   draftForm,
@@ -86,7 +88,7 @@ function ProfileChoice({
             value={option.value}
             checked={value === option.value}
             disabled={disabled}
-            className="mt-1 size-4 accent-primary"
+            className={cn(CHECKBOX_CLASS, "mt-1")}
             onKeyDown={(event) => {
               if (blocksImplicitSubmit(event.key)) {
                 event.preventDefault();
