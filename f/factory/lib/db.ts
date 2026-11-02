@@ -2045,7 +2045,9 @@ export async function listActive(
  * Consoleの要対応の一覧(`ACTIONABLE_WORK_ITEM_STATUSES`の作業項目)に出ている行を、
  * `id`の昇順で返す。閉じたIssueやPRの行を`cancelled`にして一覧から外すための入力である。
  * 一覧と同じく、`audit`(GitHubのオブジェクトが無い)と、新しい行が引き継ぐ行は含めない。
- * 新しい行とは、同じIssueの新しいcycleと、同じ種類・同じPRで`id`が大きい行である。
+ * 新しい行とは、同じIssueの新しいcycleと、同じ種類・同じPRで`id`が大きい行と、
+ * 同じIssueの`investigate`で`id`が大きい行である。
+ * `investigate`は、稼働中の一意インデックスと同じく、ownerとrepoの綴りの大文字小文字を区別せずに比べる。
  * 一覧に出ない行を調べても一覧は変わらず、GitHubへの問い合わせが増えるだけである。
  * 引き継いだ側の行は、`listActive`の照合が閉じたIssueやPRを扱う。
  */
@@ -2071,6 +2073,15 @@ export async function listActionableWorkItems(
           SELECT 1 FROM factory.work_items n
           WHERE n.kind = wi.kind AND n.owner = wi.owner AND n.repo = wi.repo
             AND n.pr_number = wi.pr_number AND n.id > wi.id
+        )
+      )
+      AND NOT (
+        wi.kind = 'investigate'
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = 'investigate'
+            AND lower(n.owner) = lower(wi.owner) AND lower(n.repo) = lower(wi.repo)
+            AND n.issue_number = wi.issue_number AND n.id > wi.id
         )
       )
     ORDER BY wi.id ASC

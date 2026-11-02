@@ -26,6 +26,8 @@ const STATUS_LABELS: ReadonlyMap<string, string> = new Map([
   ["audited", "監査完了"],
   ["designing", "設計の生成中"],
   ["awaiting_design_approval", "設計の承認待ち"],
+  ["investigating", "調査中"],
+  ["investigated", "調査完了"],
 ]);
 
 const WORK_ITEM_KIND_LABELS: ReadonlyMap<string, string> = new Map([
@@ -34,6 +36,7 @@ const WORK_ITEM_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["pr_fix", "PRの修正"],
   ["audit", "監査"],
   ["dependabot", "dependabotの更新"],
+  ["investigate", "調査"],
 ]);
 
 const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([

@@ -121,10 +121,10 @@ function withoutInvestigate(values: readonly string[]): string[] {
 
 describe("the work item vocabulary the migration is written against", () => {
   test("has the ten active statuses", () => {
-    const nonTerminal = WORK_ITEM_STATUSES.filter(
+    const nonTerminal: string[] = WORK_ITEM_STATUSES.filter(
       (status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status),
     );
-    expect([...nonTerminal].sort()).toEqual([...ACTIVE_STATUSES].sort());
+    expect(nonTerminal.sort()).toEqual([...ACTIVE_STATUSES].sort());
   });
 });
 

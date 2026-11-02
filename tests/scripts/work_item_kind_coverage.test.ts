@@ -86,7 +86,8 @@ function restartPlanOf(kind: WorkItemKind) {
 
 describe("every work item kind", () => {
   test("is listed in the table of targets", () => {
-    expect([...WORK_ITEM_KINDS].sort()).toEqual(Object.keys(TARGET_OF).sort());
+    const kinds: string[] = [...WORK_ITEM_KINDS];
+    expect(kinds.sort()).toEqual(Object.keys(TARGET_OF).sort());
   });
 
   test.each([...WORK_ITEM_KINDS])(

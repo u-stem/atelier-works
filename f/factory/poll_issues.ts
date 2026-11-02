@@ -101,7 +101,9 @@ import {
   type ReconcileDecision,
   type ReconcileGithubState,
   readJobState,
+  reconcileLabel,
   reconcileNotifies,
+  reconcileTargetOf,
   reconcileTransition,
   recordLabelerCheckLimit,
   rotateTargets,
@@ -109,10 +111,11 @@ import {
 } from "./lib/poll_support.ts";
 import { withCallTimeout } from "./lib/self_update_support.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
-import type {
-  FactoryConfig,
-  LabelerAssociation,
-  WorkItem,
+import {
+  type FactoryConfig,
+  isIssueTargetKind,
+  type LabelerAssociation,
+  type WorkItem,
 } from "./lib/types.ts";
 import {
   type CommandRunner,
@@ -397,37 +400,32 @@ async function reconcileActiveItems(
   );
 
   for (const item of active) {
-    const label =
-      item.kind === "audit"
-        ? `${item.owner}/${item.repo} audit#${String(item.id)}`
-        : item.kind === "issue"
-          ? `${item.owner}/${item.repo}#${item.issue_number ?? "?"}`
-          : `${item.owner}/${item.repo}#${item.pr_number ?? "?"}`;
+    const label = reconcileLabel(item);
     try {
+      const target = reconcileTargetOf(item);
+      if (target === null) continue;
       let github: ReconcileGithubState;
-      if (item.kind === "audit") {
+      if (target.kind === "audit") {
         // 監査の作業項目には、確かめるGitHubのオブジェクトが無い。
         github = { kind: "audit" };
-      } else if (item.kind === "issue") {
-        if (item.issue_number === null) continue;
+      } else if (target.kind === "issue") {
         const issue = await getIssue(
           client,
           item.owner,
           item.repo,
-          item.issue_number,
+          target.number,
         );
         github = {
           kind: "issue",
           open: issue.state === "open",
         };
       } else {
-        if (item.pr_number === null) continue;
         // PRの番号もissues APIで引け、ラベルや状態の形も同じ。
         const asIssue = await getIssue(
           client,
           item.owner,
           item.repo,
-          item.pr_number,
+          target.number,
         );
         github = {
           kind: "pr",
@@ -647,7 +645,7 @@ export async function reconcileClosedActionableItems(
       let worktreesHandled = false;
       for (const item of target.items) {
         const decision = decideClosureOnly(
-          item.kind === "issue"
+          isIssueTargetKind(item.kind)
             ? { kind: "issue", open: false }
             : { kind: "pr", open: false, merged: false },
         );

@@ -237,6 +237,15 @@ export function describeRetryPlan(failure: SummaryFailure): RetryPlan {
         blockedReason:
           "dependabotの作業項目は再実行できません。PRを確認して手でマージするか閉じてください。",
       };
+    // scriptが断るので、再実行のボタンを出さない。
+    case "investigate":
+      return {
+        fromLabel,
+        toLabel: "",
+        note: null,
+        blockedReason:
+          "調査の作業項目は再実行できません。依頼を新規投入し直してください。",
+      };
     default:
       return {
         fromLabel,

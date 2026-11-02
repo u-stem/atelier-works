@@ -30,6 +30,8 @@ export const STATUS_ORDER: readonly string[] = [
   "rereview_requested",
   "auditing",
   "audited",
+  "investigating",
+  "investigated",
   "blocked",
   "needs_human",
   "failed",
@@ -152,6 +154,7 @@ export const TERMINAL_PIPELINE_STATUSES: readonly string[] = [
   "blocked",
   "audited",
   "pr_open",
+  "investigated",
 ];
 
 /** 範囲の切り替えに並べる選択肢。 */
@@ -428,6 +431,7 @@ const SUCCESS_STATUSES: ReadonlySet<string> = new Set([
   "reviewed",
   "audited",
   "pr_open",
+  "investigated",
 ]);
 const FAILURE_STATUSES: ReadonlySet<string> = new Set([
   "failed",

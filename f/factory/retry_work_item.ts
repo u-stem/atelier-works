@@ -96,6 +96,7 @@ import { requiredApprovals } from "./lib/profile.ts";
 import { automatedFeedback } from "./lib/prompts.ts";
 import {
   type DesignApprovalRef,
+  isIssueTargetKind,
   isOneOf,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
@@ -824,8 +825,9 @@ export async function closedTargetRefusal(
   >,
   getState: (owner: string, repo: string, number: number) => Promise<string>,
 ): Promise<string | null> {
-  const number =
-    workItem.kind === "issue" ? workItem.issue_number : workItem.pr_number;
+  const number = isIssueTargetKind(workItem.kind)
+    ? workItem.issue_number
+    : workItem.pr_number;
   const head = `retry_work_item: work item ${String(workItem.id)} was cancelled when its target was closed`;
   if (number === null) {
     return `${head}, and the target has no number to check, so it was not restarted`;
@@ -884,6 +886,7 @@ function requirementsRestartPlan(
  * - `approved`のissueの最新の要件承認が`attempt`と合わない。
  * - auditである(監査は再開しない)。
  * - dependabotである(dependabotの作業項目は再開しない)。
+ * - investigateである(調査の作業項目は再開せず、依頼を投入し直す)。
  */
 export function computeRestartPlan(
   workItem: Pick<
@@ -955,6 +958,10 @@ export function computeRestartPlan(
     case "dependabot":
       throw new Error(
         `retry_work_item: work item ${workItem.id} is a dependabot work item; dependabot work items are not restartable`,
+      );
+    case "investigate":
+      throw new Error(
+        `retry_work_item: work item ${workItem.id} is an investigate work item; investigate work items are not restartable (submit the request again)`,
       );
   }
 }

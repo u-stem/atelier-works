@@ -462,6 +462,53 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 `poll_issues`のreconcileは終端の作業項目を照合の対象から外す(`listActive`)。片方だけを更新すると、完了した作業項目が孤児と判定されて失敗にされる。
 例外は、要対応の終端の作業項目を取り消す専用の照合だけである。詳しくは「要対応の終端の取り消し」に書く。
 
+### 調査の作業項目
+
+調査(`investigate`)の作業項目は、対象のIssueの番号を`issue_number`に持ち、`pr_number`を持たない。
+`kind`で番号の列を選ぶ処理は、`isIssueTargetKind`(`f/factory/lib/types.ts`)を通す。
+通さないと、`pr_number`のnullを読み、対象の無い行として黙って飛ばすためである。
+状態は、調べている間の`investigating`(終端でない)と、調べ終えた`investigated`(終端)の2つである。
+
+| 処理 | 調査の扱い |
+| --- | --- |
+| 稼働中の照合(`poll_issues`) | `issue`と同じく、Issueが閉じていれば取り消す。人の判断を待つ状態(`isWaitingForHuman`)には含めない |
+| 要対応の終端の取り消し | `issue`と同じく、Issueの番号で束ねて照合する。同じIssueの`issue`の行と`investigate`の行は、1回の問い合わせで足りる |
+| 要対応の一覧の「より新しい行」 | 同じIssueで`id`が大きい`investigate`の行があれば、古い行を除く。ownerとrepoは、稼働中の一意インデックスと同じく、小文字にして比べる |
+| 再実行(`retry_work_item`) | 再開せず断る。依頼を新規投入し直す |
+| workerを作り直す前の確認 | `investigating`を実行中の状態として数える |
+| 作業ツリーの掃除 | 調査の作業項目は作業ツリーを持たない |
+
+照合の分岐が`WorkItemKind`の全値を扱うことは、`tests/scripts/work_item_kind_coverage.test.ts`が確かめる。
+種別を足すと、このテストの表が型エラーになるので、対象の番号の置き場を決めてから進める。
+
+同じIssueで終端でない`investigate`は1件までである(部分一意インデックス`work_items_active_investigate_key`)。
+ownerとrepoは小文字にして比べる。
+`(owner, repo, issue_number, cycle)`の一意制約は種別を問わないので、同じIssueの`investigate`の行と`issue`の行は、`cycle`を変えて挿入する。
+
+#### migrationを戻すとき
+
+調査の種別と状態を足すmigration(`20261102120000_investigate_work_items`)のdownは、先に`investigate`の作業項目を削除する。
+行が残っていると、種別と状態の制約を戻す文が失敗して、戻せなくなるためである。
+削除は調査の記録を失う。調査の答えはIssueのコメントに残る。
+
+作業項目の削除は、外部キーの`ON DELETE CASCADE`で、次の表の行も消す。
+
+| 表 | 内容 |
+| --- | --- |
+| `work_item_events` | 状態遷移の履歴 |
+| `requirement_drafts`、`design_drafts` | 要件定義と設計の下書き(`design_drafts`は`requirement_drafts`を経由して消える) |
+| `approvals`、`approval_requests`、`issue_proposals` | 承認の履歴と依頼、Issue化の提案 |
+| `agent_runs` | Claudeの実行の記録 |
+| `reviews`、`fix_rounds`、`implement_rounds`、`audit_reports` | レビューと修正と実装のラウンド、監査のレポート |
+
+`ON DELETE SET NULL`の参照は、行を残して参照を空にする。
+`job_failures.work_item_id`と、子の作業項目の`parent_work_item_id`が当たる。
+
+`agent_runs`は日次予算の元データである。
+日次予算の検査は、今日の`agent_runs`の費用を合計するので、戻した日は、調査に使った費用の分だけ少なく数える。
+`tests/scripts/investigate_work_items_migration.test.ts`が、`ON DELETE CASCADE`で`work_items`を参照する表を確かめる。
+参照する表がdownの説明に挙がっていなければ、このテストが失敗する。
+
 ## ジョブの記録
 
 状態の遷移と失敗は、動いたWindmillのジョブに結び付ける。
