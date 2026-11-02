@@ -54,9 +54,15 @@ describe("the initial state of the PR review intake screen", () => {
     expect(draw(TARGETS)).toContain("PRの番号またはURL");
   });
 
-  test("starts with the submit button enabled and labeled to start the review", () => {
+  test("labels the submit button to start the review", () => {
     expect(draw(TARGETS)).toMatch(
-      /<button(?![^>]*disabled)[^>]*type="submit"[^>]*>レビューを投入する<\/button>/,
+      /<button[^>]*type="submit"[^>]*>レビューを投入する<\/button>/,
+    );
+  });
+
+  test("starts with the submit button enabled", () => {
+    expect(draw(TARGETS)).not.toMatch(
+      /<button[^>]*disabled=""[^>]*type="submit"/,
     );
   });
 

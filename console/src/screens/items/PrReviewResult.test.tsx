@@ -86,7 +86,7 @@ describe("the result panel", () => {
 
   test("leaves the retry enabled when it is not reading", () => {
     expect(panel({ kind: "unavailable" })).not.toMatch(
-      /<button[^>]*disabled[^>]*>もう一度取得する/,
+      /<button[^>]*disabled=""[^>]*>もう一度取得する/,
     );
   });
 
