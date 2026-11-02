@@ -309,6 +309,12 @@ describe("a11y: the states reach the screens", () => {
     expect(await renderCase("items", "normal")).toContain("example item");
   });
 
+  test("the normal state links the PR review intake from the work item list", async () => {
+    expect(await renderCase("items", "normal")).toContain(
+      'href="/items/new-pr-review"',
+    );
+  });
+
   test("the normal state draws the approval of the inbox", async () => {
     expect(await renderCase("inbox", "normal")).toContain("example item");
   });

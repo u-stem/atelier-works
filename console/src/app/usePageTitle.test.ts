@@ -83,6 +83,7 @@ describe("screen names of the real table", () => {
     ["", {}, "要対応"],
     ["items", {}, "作業項目"],
     ["items/new", {}, "新規投入"],
+    ["items/new-pr-review", {}, "PRレビューの投入"],
     ["items/:id", { id: "12" }, "作業項目 #12"],
     ["items/:id/requirements", { id: "12" }, "作業項目 #12の要件定義"],
     ["reports", {}, "レポート"],

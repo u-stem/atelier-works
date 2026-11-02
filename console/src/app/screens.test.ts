@@ -37,7 +37,7 @@ describe("the header marks", () => {
       SCREENS.flatMap((screen) => screen.children)
         .filter((child) => child.refresh === false)
         .map((child) => child.path),
-    ).toEqual(["items/new"]);
+    ).toEqual(["items/new", "items/new-pr-review"]);
   });
 
   test("lists the routes whose page header carries a breadcrumb or a back link", () => {
@@ -47,6 +47,7 @@ describe("the header marks", () => {
         .map((child) => [child.path, child.trail]),
     ).toEqual([
       ["items/new", "back"],
+      ["items/new-pr-review", "back"],
       ["items/:id/requirements", "breadcrumb"],
       ["items/:id", "breadcrumb"],
       ["reports/audit/:id", "breadcrumb"],
@@ -128,6 +129,7 @@ describe("SCREENS", () => {
       ),
     ).toEqual([
       ["作業項目 › 新規投入", "/items/new"],
+      ["作業項目 › PRレビューの投入", "/items/new-pr-review"],
       ["作業項目 › 要件定義", "/items?tab=requirements"],
       ["ジョブ › 履歴", "/jobs?tab=history"],
       ["ジョブ › スケジュール", "/jobs?tab=schedules"],
