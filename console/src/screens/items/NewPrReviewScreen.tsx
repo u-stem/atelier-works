@@ -14,6 +14,7 @@ import {
   EMPTY_PR_REVIEW_FORM,
   type PrReviewForm,
   type PrReviewProblem,
+  problemField,
 } from "../../lib/prReviewInput.ts";
 import {
   attemptFromOutcome,
@@ -64,11 +65,7 @@ function problemFor(
   problem: PrReviewProblem | null,
   field: "repo" | "pr",
 ): string | undefined {
-  if (problem === null) {
-    return undefined;
-  }
-  const isRepoProblem = problem === "repo_invalid";
-  return isRepoProblem === (field === "repo")
+  return problem !== null && problemField(problem) === field
     ? describePrReviewProblem(problem)
     : undefined;
 }

@@ -122,9 +122,12 @@ export function buildPrReviewInput(form: PrReviewForm): PrReviewBuild {
     : { ok: false, problem: "pr_url_repo_mismatch" };
 }
 
-/** 誤りを示す欄の最小のスタブ。 */
-export function problemField(_problem: PrReviewProblem): "repo" | "pr" {
-  return "pr";
+/**
+ * 誤りを示す欄。リポジトリ欄の誤りだけがリポジトリ欄に出て、ほかはPR欄に出る。
+ * URLとリポジトリ欄の食い違いも、PR欄に出す。URLが指す先を、PR欄で確かめられるためである。
+ */
+export function problemField(problem: PrReviewProblem): "repo" | "pr" {
+  return problem === "repo_invalid" ? "repo" : "pr";
 }
 
 const PROBLEM_MESSAGES: Readonly<Record<PrReviewProblem, string>> = {
