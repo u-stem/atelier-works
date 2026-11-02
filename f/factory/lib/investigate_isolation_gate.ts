@@ -75,40 +75,51 @@ function closed(code: IsolationGateCode): IsolationGateVerdict {
 type ProbeJob = {
   readonly id: string;
   readonly success: boolean;
-  readonly startedAtMs: number;
 };
 
-/**
- * 一覧の要素が測定のジョブなら取り出す。サーバーが絞りを無視しても通さないよう、ここでも確かめる。
- * previewや、flowの1段や、親を持つジョブ、他のscriptやtagのジョブは採らない。
- */
-function asProbeJob(value: unknown): ProbeJob | null {
-  if (!isRecord(value)) return null;
-  if (value.job_kind !== "script") return null;
-  if (value.parent_job !== undefined && value.parent_job !== null) return null;
-  if (value.is_flow_step === true) return null;
-  if (value.script_path !== PROBE_SCRIPT_PATH) return null;
-  if (value.tag !== PROBE_JOB_TAG) return null;
-  if (!isString(value.id) || value.id === "") return null;
-  if (!isString(value.started_at)) return null;
-  const startedAtMs = Date.parse(value.started_at);
-  if (Number.isNaN(startedAtMs)) return null;
-  return { id: value.id, success: value.success === true, startedAtMs };
+/** 開始時刻をミリ秒で読む。無いときと日時として読めないときは`null`。 */
+function startedAtMsOf(record: Record<string, unknown>): number | null {
+  if (!isString(record.started_at)) return null;
+  const ms = Date.parse(record.started_at);
+  return Number.isNaN(ms) ? null : ms;
 }
 
-/** 開始時刻が最も新しい測定のジョブ。同じ時刻は一覧の先のもの。無ければ`null`。 */
-function newestProbeJob(jobs: readonly unknown[]): ProbeJob | null {
-  let newest: ProbeJob | null = null;
+/**
+ * 測定のscriptのpathを持つ要素のうち、最新のもの。
+ * 開始時刻を読めない要素は、新しさを比べられないので、最新として扱う。同じ新しさは一覧の先のもの。
+ * 形の検査はここでしない。最新のものが採れない形なら、古い合格を使わせないため、呼び出し側が閉じる。
+ */
+function newestProbePathEntry(
+  jobs: readonly unknown[],
+): Record<string, unknown> | null {
+  let newest: Record<string, unknown> | null = null;
+  let newestRank = Number.NEGATIVE_INFINITY;
   for (const entry of jobs) {
-    const job = asProbeJob(entry);
-    if (
-      job !== null &&
-      (newest === null || job.startedAtMs > newest.startedAtMs)
-    ) {
-      newest = job;
+    if (!isRecord(entry) || entry.script_path !== PROBE_SCRIPT_PATH) continue;
+    const rank = startedAtMsOf(entry) ?? Number.POSITIVE_INFINITY;
+    if (newest === null || rank > newestRank) {
+      newest = entry;
+      newestRank = rank;
     }
   }
   return newest;
+}
+
+/**
+ * 測定のscriptのpathを持つ要素が、測定のジョブとして採れる形なら取り出す。
+ * サーバーが絞りを無視しても通さないよう、ここでも確かめる。
+ * previewや、flowの1段や、親を持つジョブ、他のtagのジョブは採らない。
+ */
+function asProbeJob(record: Record<string, unknown>): ProbeJob | null {
+  if (record.job_kind !== "script") return null;
+  if (record.parent_job !== undefined && record.parent_job !== null) {
+    return null;
+  }
+  if (record.is_flow_step === true) return null;
+  if (record.tag !== PROBE_JOB_TAG) return null;
+  if (!isString(record.id) || record.id === "") return null;
+  if (startedAtMsOf(record) === null) return null;
+  return { id: record.id, success: record.success === true };
 }
 
 /**
@@ -140,6 +151,7 @@ function isNonEmptyString(value: unknown): value is string {
 /**
  * 測定の最新の完了ジョブの結果が、今の隔離と一致するかを判定する。証拠は返さない。
  * 外部の呼び出しが失敗したときと、形が違うときは、本文を残さず`proof_unreadable`にする。
+ * 最新のジョブが採れない形のときも、古い合格を使わず`proof_unreadable`にする。
  * 最新のジョブが失敗なら、古い合格を使わず`proof_failed`にする。
  */
 export async function checkIsolationProofWithDeps(
@@ -160,8 +172,10 @@ export async function checkIsolationProofWithDeps(
   }
   if (!Array.isArray(jobs)) return closed("proof_unreadable");
 
-  const latest = newestProbeJob(jobs);
-  if (latest === null) return closed(await codeForNoProbeJob(deps));
+  const newest = newestProbePathEntry(jobs);
+  if (newest === null) return closed(await codeForNoProbeJob(deps));
+  const latest = asProbeJob(newest);
+  if (latest === null) return closed("proof_unreadable");
   if (!latest.success) return closed("proof_failed");
 
   let result: unknown;

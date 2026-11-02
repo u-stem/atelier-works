@@ -29,6 +29,9 @@ export type ChangedPath = {
  * 検証をすり抜けた内容が運用者のブラウザに配信される。
  * `f/factory/dependabot__flow/`も含める。dependabotの更新を自動でマージするフローで、
  * `flow.yaml`に加えて、フローに埋め込むモジュールも書き換えられると、許可していない更新をマージできる。
+ * `f/factory/investigate_isolation_probe.`も含める。調査のClaudeの隔離の測定のscriptで、関門はこのscriptの完了ジョブの結果を信頼する。
+ * 拡張子を問わない前方一致にして、`.ts`、`.script.yaml`、`.script.lock`、`.schedule.yaml`をまとめて塞ぐ。
+ * 書き換えられると、隔離に合格していない測定が合格の結果を返せる。まだ存在しなくても、名前を先に押さえる。
  * ホストの実行役が実行する道具のディレクトリも含める。
  * `scripts/host_apply/`は実行役の実装、`infra/worker/`は実行役がビルドするworkerのイメージ、
  * `mise/`はmiseの設定ディレクトリで、どれもホストのユーザーの権限で動くか、動く道具の入力になる。
@@ -51,6 +54,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   "infra/console_fetcher/",
   "f/factory/dependabot__flow/",
   "f/factory/pr_review_intake__flow/",
+  "f/factory/investigate_isolation_probe.",
   "scripts/host_apply/",
   "infra/worker/",
   "mise/",
