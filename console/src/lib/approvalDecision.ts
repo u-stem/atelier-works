@@ -53,13 +53,13 @@ export function reasonCounter(reason: string): ReasonCounter {
   };
 }
 
-/** 却下できない理由の文。却下してよければ`null`。理由は、空白だけでも上限を超えても断る。 */
+/** 却下できない理由の文。却下してよければ`null`。理由は、空白だけでも上限を超えても断る。超過は空白だけでも超過の文にする。 */
 export function rejectProblem(reason: string): string | null {
-  if (reason.trim().length === 0) {
-    return "却下する理由を入力してください。";
-  }
   if (reasonLength(reason) > MAX_REASON_LENGTH) {
     return `理由は${String(MAX_REASON_LENGTH)}文字までです。`;
+  }
+  if (reason.trim().length === 0) {
+    return "却下する理由を入力してください。";
   }
   return null;
 }
@@ -73,8 +73,11 @@ type ReasonFieldMessages = {
  * 却下の理由の入力欄に出す補足と誤り。
  * 空のときの案内は誤りではないので補足に、上限の超過だけを誤りにする。入力しただけで不正と読み上げさせないためである。
  */
-export function reasonFieldMessages(_reason: string): ReasonFieldMessages {
-  return { hint: undefined, problem: undefined };
+export function reasonFieldMessages(reason: string): ReasonFieldMessages {
+  const message = rejectProblem(reason) ?? undefined;
+  return reasonCounter(reason).over
+    ? { hint: undefined, problem: message }
+    : { hint: message, problem: undefined };
 }
 
 /**

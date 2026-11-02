@@ -13,6 +13,7 @@ import {
   EXPIRED_MESSAGE,
   isDecidable,
   reasonCounter,
+  reasonFieldMessages,
   rejectConfirmation,
   rejectProblem,
   waitingMessage,
@@ -121,6 +122,7 @@ function DecideBar({
   const locked = decision.isLocked(input("approve"));
   const counter = reasonCounter(reason);
   const problem = rejectProblem(reason);
+  const fieldMessages = reasonFieldMessages(reason);
   const gate = (nowMs: number): string | null =>
     approveGateProblem({
       approval,
@@ -229,11 +231,10 @@ function DecideBar({
           factoryラベルを付けられないため、起票のみ行います。
         </p>
       )}
-      {/* 空のときの案内は誤りではないので補足に、上限の超過だけを誤りにする。入力しただけで不正と読み上げさせないためである。 */}
       <Field
         label="却下の理由(却下するときは必須)"
-        hint={counter.over ? undefined : (problem ?? undefined)}
-        problem={counter.over ? (problem ?? undefined) : undefined}
+        hint={fieldMessages.hint}
+        problem={fieldMessages.problem}
         counter={counter.label}
       >
         {(control) => (
