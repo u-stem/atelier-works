@@ -11,14 +11,15 @@ const cardVariants = cva("rounded-xl border", {
       // 一覧や節が空であることを伝える。面を塗らず、破線にして、中身のある面と見分ける。
       empty: "border-dashed border-border text-small text-muted-foreground",
     },
+    // 面の横の余白は`px-5`に固定し、段は縦の余白で分ける。隣り合う面の中身の左端をそろえるためである。
     padding: {
       none: "",
       // 図や表を縁に近づけて収める枠。
       frame: "p-2",
-      compact: "px-4 py-3",
+      compact: "px-5 py-3",
       default: "px-5 py-4",
       // 空の知らせを、一覧が入るはずの高さまで広げる。
-      spacious: "px-4 py-8",
+      spacious: "px-5 py-8",
     },
   },
   defaultVariants: {

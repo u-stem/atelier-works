@@ -104,7 +104,7 @@ shadcn/uiの部品を写したものと、同じ作りの自前の部品(`Card`�
 
 | 部品 | 決めること |
 | --- | --- |
-| `Card` | 角丸の枠と面。`variant`は、中身のある面(`default`)、行を線で区切る面(`list`)、空であることを伝える破線の面(`empty`)の3つである。余白は`padding`の段(`none`、`frame`、`compact`、`default`、`spacious`)で選び、個別の余白は足さない。描く要素は`tag`で選ぶ |
+| `Card` | 角丸の枠と面。`variant`は、中身のある面(`default`)、行を線で区切る面(`list`)、空であることを伝える破線の面(`empty`)の3つである。余白は`padding`の段(`none`、`frame`、`compact`、`default`、`spacious`)で選び、個別の余白は足さない。面の横の余白は`px-5`に固定し、段は縦の余白で分ける。文書を読ませる面(監査レポートの本文)だけは、長い本文を読みやすくするため、画面の幅に応じて横の余白を変える例外である。描く要素は`tag`で選ぶ |
 | `Dialog` | ブラウザ標準の`<dialog>`の外枠と、開閉の同期(`useDialogSync`)。位置は、中央(`center`)と上寄せ(`top`)の2つである。`ConfirmDialog`、ショートカットの一覧、コマンドパレットが使う |
 | `Field` | ラベル、入力欄、補足、エラーの組。ラベルを入力欄に結び、補足とエラーを`aria-describedby`で入力欄に結ぶ。ラベルの段は、縦に並ぶ入力の`form`(`text-body font-medium`)と、絞り込みの行やダイアログの小さな入力の`filter`(`text-small text-muted-foreground`)の2つである |
 

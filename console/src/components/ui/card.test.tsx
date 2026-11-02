@@ -99,7 +99,7 @@ describe("Card", () => {
     );
   });
 
-  test("keeps the horizontal padding of every step with a horizontal inset at px-5", () => {
+  test("gives every padded step the same horizontal padding", () => {
     const steps = ["compact", "default", "spacious"] as const;
     expect(
       steps.map((padding) =>
