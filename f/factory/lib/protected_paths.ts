@@ -352,6 +352,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/pr_review_start.script.yaml",
   "migrations/datatable/main/20261102100000_active_pr_review_key.up.sql",
   "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql",
+  "migrations/datatable/main/20261102120000_investigate_work_items.up.sql",
+  "migrations/datatable/main/20261102120000_investigate_work_items.down.sql",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",
