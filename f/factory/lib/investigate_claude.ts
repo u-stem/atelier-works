@@ -30,7 +30,7 @@ export type IsolationArgs = {
   readonly permissionMode: string;
   /** 読む設定の層。対象リポジトリの設定を読まない。 */
   readonly settingSources: readonly string[];
-  /** `--restricted`を付けるか。`runClaude`は常に付ける。 */
+  /** `--restricted`を付けるか。`runClaude`が常に付けるので渡さず、この値は指紋に隔離の前提を含めるための記録である。 */
   readonly restricted: boolean;
   /** 確認なしに使ってよいツール。空で、`--allowedTools`を付けない。 */
   readonly allowedTools: readonly string[];
@@ -101,8 +101,8 @@ export type InvestigateClaudeOptions<T> = {
 };
 
 /**
- * テストが、ジョブの一時領域の場所を差し替えるための引数。本番の呼び出しは渡さない。
- * 渡しても、設定の置き場は、そのジョブ専用のディレクトリの下であることを検査される。
+ * テストが、ジョブの一時領域の場所を差し替えるための引数。`runInvestigateClaudeWithDeps`だけが受ける。
+ * 差し替えても、設定の置き場は、そのジョブ専用のディレクトリの下であることを検査される。
  */
 export type InvestigateClaudeDeps = {
   readonly tmpDir?: string;
@@ -131,8 +131,6 @@ export type InvestigateClaudeResult<T> =
       readonly retried: boolean;
       readonly agentRunId: number | null;
     };
-
-export const runInvestigateClaudeWithDeps = runInvestigateClaude;
 
 /** 捨てた最初の試行の記録に付ける符号。最初の試行の理由は、記録からは分からない。 */
 const DISCARDED_ATTEMPT_CODE = "discarded_attempt";
@@ -183,13 +181,25 @@ function resolveHome(): string {
 }
 
 /**
- * 調査のClaudeを起動する。
+ * 調査のClaudeを起動する。本番の呼び出しは、この関数だけを使う。
  * 起動の前に、作業ディレクトリが塞ぐ一覧の下にないことと、設定の置き場がこのジョブ専用であることを確かめる。
  * 満たさなければ、Claudeを起動せずに例外を投げる。
+ * 引数はオプションだけで、ジョブの一時領域と環境はジョブの実際の値から決まる。
  */
-export async function runInvestigateClaude<T>(
+export function runInvestigateClaude<T>(
   opts: InvestigateClaudeOptions<T>,
-  deps: InvestigateClaudeDeps = {},
+): Promise<InvestigateClaudeResult<T>> {
+  return runInvestigateClaudeWithDeps(opts, {});
+}
+
+/**
+ * ジョブの一時領域と環境を差し替えられる入口。テスト専用で、本番のファイルは参照しない。
+ * 差し替え口を公開の入口に持たせると、呼び出し側が設定の置き場の検査の前提を差し替えられるため、別の名前に分ける。
+ * 参照しないことは、保護されたテスト(`tests/lib/investigate_claude.test.ts`)が、ファイルを走査して固定する。
+ */
+export async function runInvestigateClaudeWithDeps<T>(
+  opts: InvestigateClaudeOptions<T>,
+  deps: InvestigateClaudeDeps,
 ): Promise<InvestigateClaudeResult<T>> {
   const home = resolveHome();
   const denyPaths = buildReadDenyPaths(home);
@@ -209,6 +219,8 @@ export async function runInvestigateClaude<T>(
       tools: ISOLATION_ARGS.tools,
       permissionMode: ISOLATION_ARGS.permissionMode,
       settingSources: ISOLATION_ARGS.settingSources,
+      allowedTools: ISOLATION_ARGS.allowedTools,
+      addDirs: ISOLATION_ARGS.addDirs,
       maxTurns: opts.maxTurns,
       maxBudgetUsd: opts.maxBudgetUsd,
       cwd: opts.cwd,
