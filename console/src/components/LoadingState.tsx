@@ -7,6 +7,7 @@ import {
   useDelayedVisible,
 } from "../lib/delayedVisible.ts";
 import { SECTION_HEADING_ROW_CLASS } from "../lib/layoutClasses.ts";
+import { Card } from "./ui/card.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 
 /** 同じ高さの行を並べる形。 */
@@ -153,12 +154,7 @@ export function SkeletonListCard({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-xl border border-border bg-card",
-        className,
-      )}
-    >
+    <Card className={cn("overflow-hidden", className)}>
       {rowIndexes(rows).map((row) => (
         <div
           key={row}
@@ -171,7 +167,7 @@ export function SkeletonListCard({
           <Skeleton className="h-3 w-3/5" />
         </div>
       ))}
-    </div>
+    </Card>
   );
 }
 

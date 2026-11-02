@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import {
   DEFAULT_PIPELINE_SORT,
@@ -102,7 +103,7 @@ export function PipelineCards({
   backState?: { itemsBack: string } | undefined;
 }) {
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="ul" variant="list">
       {sortPipelineRows(rows, DEFAULT_PIPELINE_SORT).map((row) => (
         <PipelineCard
           key={row.work_item_id}
@@ -112,6 +113,6 @@ export function PipelineCards({
           backState={backState}
         />
       ))}
-    </ul>
+    </Card>
   );
 }

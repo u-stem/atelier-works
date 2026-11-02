@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { SystemStatus } from "../../api/guards/systemStatus.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   describeFetcher,
   describeHostAction,
@@ -49,7 +50,7 @@ export function ReleaseStatus({
     status.deployment?.needs_host_action === true,
   );
   return (
-    <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="dl" variant="list">
       <Row label="反映した版">
         {status.deployed_sha === null ? (
           <span className="text-muted-foreground">不明</span>
@@ -104,6 +105,6 @@ export function ReleaseStatus({
           </div>
         </Row>
       )}
-    </dl>
+    </Card>
   );
 }

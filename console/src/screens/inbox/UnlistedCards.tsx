@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { KindDot } from "../../components/KindDot.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { cn } from "../../lib/cn.ts";
 import { ROW_TARGET_CLASS } from "../../lib/controlClasses.ts";
 import {
@@ -80,9 +81,10 @@ export function UnlistedCards({
             </CardBody>
           </li>
         ) : (
-          <li
+          <Card
             key={`${entry.type}:${entry.cause ?? ""}`}
-            className="overflow-hidden rounded-xl border border-border bg-card"
+            tag="li"
+            className="overflow-hidden"
           >
             <CardBody entry={entry} className="flex items-start px-4 py-3">
               <div className="min-w-0">
@@ -101,7 +103,7 @@ export function UnlistedCards({
                 </p>
               </div>
             </CardBody>
-          </li>
+          </Card>
         ),
       )}
     </ul>

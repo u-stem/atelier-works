@@ -18,6 +18,7 @@ import type {
 } from "../../api/jobsQueries.ts";
 import { loadPhaseOf, type SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import {
   LoadingGate,
   type LoadingShape,
@@ -27,6 +28,7 @@ import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge, type BadgeProps } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   preferDetailState,
   type StepDetails,
@@ -49,7 +51,6 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
-import { EmptyNote } from "../system/SystemSection.tsx";
 
 /** 状態の記号と色。記号の形でも状態を見分けられるようにし、色だけに頼らない。 */
 const STATE_STYLE: Readonly<
@@ -239,7 +240,7 @@ export function JobList({
   stepLines?: ReadonlyMap<string, StepLine>;
 }) {
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+    <Card tag="ul" variant="list">
       {jobs.map((job) => (
         <JobRow
           key={job.id}
@@ -252,7 +253,7 @@ export function JobList({
           }
         />
       ))}
-    </ul>
+    </Card>
   );
 }
 

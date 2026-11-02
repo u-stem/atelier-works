@@ -1,6 +1,6 @@
-import { useId } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
@@ -40,14 +40,6 @@ function visibleProblem(
   return checked.problem;
 }
 
-function Problem({ id, text }: { id: string; text: string }) {
-  return (
-    <p id={id} className="text-small text-destructive">
-      {text}
-    </p>
-  );
-}
-
 function FixedField({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid grid-cols-[6rem_1fr] gap-x-3">
@@ -73,18 +65,12 @@ function Fields({
   problem: PlaceProblem | null;
   onChange: (next: PlaceForm) => void;
 }) {
-  const id = useId();
-  const kindId = `${id}-kind`;
-  const targetId = `${id}-target`;
-  const minutesId = `${id}-minutes`;
-  const reasonId = `${id}-reason`;
-  const problemId = `${id}-problem`;
   const failing = problem === null ? null : fieldOf(problem);
   const message =
-    problem === null ? null : placeProblemMessage(problem, form.kind);
+    problem === null ? undefined : placeProblemMessage(problem, form.kind);
+  const problemOf = (field: FieldName) =>
+    failing === field ? message : undefined;
   const showTarget = variant === "any" && form.kind !== "deploy";
-  const describedBy = (field: FieldName) =>
-    failing === field ? problemId : undefined;
 
   return (
     <div className="flex flex-col gap-3">
@@ -93,93 +79,76 @@ function Fields({
           <FixedField label="対象" value={safeText(form.target)} />
         </dl>
       ) : (
-        <div className="flex flex-col gap-1">
-          <label htmlFor={kindId} className="text-small text-subtle">
-            種類
-          </label>
-          <Select
-            id={kindId}
-            value={form.kind}
-            onChange={(event) => {
-              const next = PLACE_KINDS.find(
-                (kind) => kind === event.target.value,
-              );
-              if (next !== undefined) onChange({ ...form, kind: next });
-            }}
-          >
-            {PLACE_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {PLACE_KIND_LABELS[kind]}
-              </option>
-            ))}
-          </Select>
-        </div>
+        <Field tone="filter" label="種類">
+          {(control) => (
+            <Select
+              id={control.id}
+              value={form.kind}
+              onChange={(event) => {
+                const next = PLACE_KINDS.find(
+                  (kind) => kind === event.target.value,
+                );
+                if (next !== undefined) onChange({ ...form, kind: next });
+              }}
+            >
+              {PLACE_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {PLACE_KIND_LABELS[kind]}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
       )}
       {showTarget ? (
-        <div className="flex flex-col gap-1">
-          <label htmlFor={targetId} className="text-small text-subtle">
-            対象
-          </label>
+        <Field tone="filter" label="対象" problem={problemOf("target")}>
+          {(control) => (
+            <Input
+              {...control}
+              type="text"
+              autoComplete="off"
+              placeholder={
+                form.kind === "merge" ? "owner/repo" : "f/factory/名前"
+              }
+              value={form.target}
+              onChange={(event) => {
+                onChange({ ...form, target: event.target.value });
+              }}
+            />
+          )}
+        </Field>
+      ) : null}
+      <Field
+        tone="filter"
+        label="期限(分)"
+        hint={minutesRangeText(form.kind, variant)}
+        problem={problemOf("minutes")}
+      >
+        {(control) => (
           <Input
-            id={targetId}
+            {...control}
             type="text"
+            inputMode="numeric"
             autoComplete="off"
-            placeholder={
-              form.kind === "merge" ? "owner/repo" : "f/factory/名前"
-            }
-            value={form.target}
-            aria-invalid={failing === "target"}
-            aria-describedby={describedBy("target")}
+            value={form.minutesText}
             onChange={(event) => {
-              onChange({ ...form, target: event.target.value });
+              onChange({ ...form, minutesText: event.target.value });
             }}
           />
-          {failing === "target" && message !== null ? (
-            <Problem id={problemId} text={message} />
-          ) : null}
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-1">
-        <label htmlFor={minutesId} className="text-small text-subtle">
-          期限(分)
-        </label>
-        <Input
-          id={minutesId}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          value={form.minutesText}
-          aria-invalid={failing === "minutes"}
-          aria-describedby={describedBy("minutes")}
-          onChange={(event) => {
-            onChange({ ...form, minutesText: event.target.value });
-          }}
-        />
-        <p className="text-small text-subtle">
-          {minutesRangeText(form.kind, variant)}
-        </p>
-        {failing === "minutes" && message !== null ? (
-          <Problem id={problemId} text={message} />
-        ) : null}
-      </div>
-      <div className="flex flex-col gap-1">
-        <label htmlFor={reasonId} className="text-small text-subtle">
-          理由
-        </label>
-        <Textarea
-          id={reasonId}
-          maxLength={REASON_MAX_LENGTH}
-          value={form.reason}
-          aria-invalid={failing === "reason"}
-          aria-describedby={describedBy("reason")}
-          onChange={(event) => {
-            onChange({ ...form, reason: event.target.value });
-          }}
-        />
-        {failing === "reason" && message !== null ? (
-          <Problem id={problemId} text={message} />
-        ) : null}
-      </div>
+        )}
+      </Field>
+      <Field tone="filter" label="理由" problem={problemOf("reason")}>
+        {(control) => (
+          <Textarea
+            {...control}
+            maxLength={REASON_MAX_LENGTH}
+            value={form.reason}
+            onChange={(event) => {
+              onChange({ ...form, reason: event.target.value });
+            }}
+          />
+        )}
+      </Field>
     </div>
   );
 }

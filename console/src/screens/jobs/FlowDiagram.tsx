@@ -1,6 +1,7 @@
 import { type ReactNode, useId, useLayoutEffect, useMemo, useRef } from "react";
 import { Link } from "react-router";
 import { JobLink } from "../../components/JobLink.tsx";
+import { Card, cardVariants } from "../../components/ui/card.tsx";
 import { cn } from "../../lib/cn.ts";
 import {
   activeScrollLeft,
@@ -388,7 +389,7 @@ function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
   const grouped = groupEntriesForList(flow);
   const name = safeText(flow.name);
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 text-small">
+    <Card padding="compact" className="flex flex-col gap-3 text-small">
       <p className={SECTION_LABEL}>入口</p>
       <ul aria-label="入口" className="flex flex-col gap-1">
         {grouped.entries.map((entry) => (
@@ -463,7 +464,7 @@ function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
           </ul>
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -534,7 +535,10 @@ function ScrollFrame({
       // biome-ignore lint/a11y/noNoninteractiveTabindex: 同上。
       tabIndex={0}
       aria-label={`${label}(横にスクロールできます)`}
-      className="overflow-x-auto rounded-xl border border-border bg-card p-2 focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        cardVariants({ padding: "frame" }),
+        "overflow-x-auto focus-visible:ring-2 focus-visible:ring-ring",
+      )}
     >
       {children}
     </div>
@@ -568,9 +572,9 @@ export function FlowDiagramFrame({
     presentation === "list" ? (
       <FlowDiagramList model={model} />
     ) : presentation === "fit" ? (
-      <div className="rounded-xl border border-border bg-card p-2">
+      <Card padding="frame">
         <FlowDiagram layout={layout} label={label} overlay={model.overlay} />
-      </div>
+      </Card>
     ) : (
       <ScrollFrame layout={layout} label={label}>
         <FlowDiagram layout={layout} label={label} overlay={model.overlay} />

@@ -10,6 +10,7 @@ import { writeTargetKey } from "../../api/writeLocks.ts";
 import { resolveNotice } from "../../api/writes.ts";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { describeNotice } from "../../lib/noticeView.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import {
@@ -104,7 +105,7 @@ export function NoticeDetail({
           {description.title}
         </h2>
       </header>
-      <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="dl" variant="list">
         <Row label="本文">
           {description.messageReplaced ? (
             <p className="mb-2 text-small text-warning">
@@ -151,10 +152,12 @@ export function NoticeDetail({
             {formatAbsoluteWithRelative(notice.created_at, now)}
           </time>
         </Row>
-      </dl>
-      <section
+      </Card>
+      <Card
         aria-label="起きたことと次の操作"
-        className="flex flex-col gap-4 rounded-xl border border-border bg-card px-5 py-4"
+        tag="section"
+        padding="default"
+        className="flex flex-col gap-4"
       >
         <div className="flex flex-col gap-1">
           <h3 className="text-small font-medium text-subtle">起きたこと</h3>
@@ -180,7 +183,7 @@ export function NoticeDetail({
             </p>
           )}
         </div>
-      </section>
+      </Card>
       {description.resolved ? (
         <p className="flex items-center gap-2 text-small text-muted-foreground">
           <CircleCheck
@@ -208,7 +211,7 @@ export function NoticeDetail({
           </p>
         </div>
       ) : (
-        <div className="flex items-start gap-3 rounded-xl border border-border bg-card px-5 py-4">
+        <Card padding="default" className="flex items-start gap-3">
           <TriangleAlert
             aria-hidden="true"
             className="mt-0.5 size-4 shrink-0 text-subtle"
@@ -221,7 +224,7 @@ export function NoticeDetail({
               {description.unresolvableReason}
             </p>
           </div>
-        </div>
+        </Card>
       )}
     </article>
   );

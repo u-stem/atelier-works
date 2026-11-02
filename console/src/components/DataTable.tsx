@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { cn } from "../lib/cn.ts";
+import { TABLE_CELL_COMPACT_CLASS } from "../lib/controlClasses.ts";
 
 export type DataTableRow = {
   /** 行を見分けるキー。同じ表の中で重ならない値にする。 */
@@ -35,11 +37,11 @@ export function DataTable({
               <th
                 key={column}
                 scope="col"
-                className={
-                  index === 0
-                    ? "px-3 py-1.5 font-medium"
-                    : "px-3 py-1.5 text-right font-medium"
-                }
+                className={cn(
+                  TABLE_CELL_COMPACT_CLASS,
+                  "font-medium",
+                  index === 0 ? "" : "text-right",
+                )}
               >
                 {column}
               </th>
@@ -52,9 +54,10 @@ export function DataTable({
               {row.cells.map((cell, index) => (
                 <td
                   key={columns[index]}
-                  className={
-                    index === 0 ? "px-3 py-1.5" : "px-3 py-1.5 text-right"
-                  }
+                  className={cn(
+                    TABLE_CELL_COMPACT_CLASS,
+                    index === 0 ? "" : "text-right",
+                  )}
                 >
                   {cell}
                 </td>

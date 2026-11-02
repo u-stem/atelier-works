@@ -15,6 +15,7 @@ import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   auditProposalBreakdown,
@@ -166,10 +167,7 @@ export function AuditReports({
   const kickoff = useAuditKickoff();
 
   return (
-    <section
-      aria-labelledby="audit-reports-heading"
-      className="rounded-xl border border-border bg-card"
-    >
+    <Card aria-labelledby="audit-reports-heading" tag="section">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
         <h2 id="audit-reports-heading" className="sr-only">
           監査
@@ -214,6 +212,6 @@ export function AuditReports({
           kickoff.start();
         }}
       />
-    </section>
+    </Card>
   );
 }

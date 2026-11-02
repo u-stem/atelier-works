@@ -8,8 +8,10 @@ import {
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import {
   type HistoryStatus,
@@ -20,7 +22,6 @@ import {
   parseHistoryStatus,
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
-import { EmptyNote } from "../system/SystemSection.tsx";
 import { JOB_LIST_LOADING_SHAPE, JobList, JobsQueryGate } from "./JobRows.tsx";
 
 /** 履歴の読み込み済みのページと、その取得の状態。 */
@@ -134,50 +135,42 @@ function Filters({
 }) {
   return (
     <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-      <div className="flex flex-col gap-1">
-        <label
-          htmlFor="jobs-history-status"
-          className="text-small text-muted-foreground"
-        >
-          状態
-        </label>
-        <Select
-          id="jobs-history-status"
-          value={status ?? ""}
-          onChange={(event) => {
-            onStatusChange(parseHistoryStatus(event.target.value));
-          }}
-        >
-          {STATUS_OPTIONS.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <div className="flex min-w-0 flex-col gap-1">
-        <label
-          htmlFor="jobs-history-script"
-          className="text-small text-muted-foreground"
-        >
-          script
-        </label>
-        <Select
-          id="jobs-history-script"
-          className="max-w-full"
-          value={script ?? ""}
-          onChange={(event) => {
-            onScriptChange(parseHistoryScript(event.target.value, scripts));
-          }}
-        >
-          <option value="">すべてのscript</option>
-          {scripts.map((path) => (
-            <option key={path} value={path}>
-              {safeText(jobScriptName(path))}
-            </option>
-          ))}
-        </Select>
-      </div>
+      <Field tone="filter" label="状態">
+        {(control) => (
+          <Select
+            id={control.id}
+            value={status ?? ""}
+            onChange={(event) => {
+              onStatusChange(parseHistoryStatus(event.target.value));
+            }}
+          >
+            {STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
+      <Field tone="filter" label="script" className="min-w-0">
+        {(control) => (
+          <Select
+            id={control.id}
+            className="max-w-full"
+            value={script ?? ""}
+            onChange={(event) => {
+              onScriptChange(parseHistoryScript(event.target.value, scripts));
+            }}
+          >
+            <option value="">すべてのscript</option>
+            {scripts.map((path) => (
+              <option key={path} value={path}>
+                {safeText(jobScriptName(path))}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Field>
     </div>
   );
 }
