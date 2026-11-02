@@ -204,7 +204,7 @@ describe("the notice of a submit", () => {
 
   test("tells that a resend does not start a second review", () => {
     expect(notice({ kind: "unknown", message: "不明の文" })).toContain(
-      "再送しても、同じPRのレビューが二重に始まることはありません。",
+      "前の投入が進行中の間は、再送しても二重には始まりません。",
     );
   });
 

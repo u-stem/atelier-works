@@ -159,7 +159,7 @@ describe("the notice of a submit", () => {
       describePrReviewAttempt({ kind: "unknown", message: "sentence" })
         ?.lines[1],
     ).toBe(
-      "再送しても、同じPRのレビューが二重に始まることはありません。投入されたかは、作業項目の一覧かジョブの一覧で確かめられます。",
+      "前の投入が進行中の間は、再送しても二重には始まりません。作業項目の一覧かジョブの一覧で投入されたかを確かめてから、再送してください。",
     );
   });
 
