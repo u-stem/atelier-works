@@ -778,8 +778,14 @@ type GitFixture = {
   readonly seed: string;
   readonly commit: (
     files: Readonly<Record<string, string>>,
-    extra?: () => Promise<void>,
+    hooks?: CommitHooks,
   ) => Promise<string>;
+};
+
+/** コミットの作り方の差し込み口。`afterAdd`は、作業ツリーに無い項目(gitlink)をindexに足すために使う。 */
+type CommitHooks = {
+  readonly beforeAdd?: () => Promise<void>;
+  readonly afterAdd?: () => Promise<void>;
 };
 
 async function gitFixture(): Promise<GitFixture> {
@@ -824,15 +830,16 @@ async function gitFixture(): Promise<GitFixture> {
   await git(seed, ["remote", "add", "origin", origin]);
   const commit = async (
     files: Readonly<Record<string, string>>,
-    extra?: () => Promise<void>,
+    hooks: CommitHooks = {},
   ): Promise<string> => {
     for (const [path, content] of Object.entries(files)) {
       const full = join(seed, path);
       mkdirSync(join(full, ".."), { recursive: true });
       writeFileSync(full, content);
     }
-    if (extra !== undefined) await extra();
+    await hooks.beforeAdd?.();
     await git(seed, ["add", "-A"]);
+    await hooks.afterAdd?.();
     await git(seed, ["commit", "-q", "--allow-empty", "-m", "commit"]);
     await git(seed, ["push", "-q", "origin", "main"]);
     return git(seed, ["rev-parse", "HEAD"]);
@@ -889,9 +896,14 @@ describe("createInvestigateWorktree with a real git", () => {
 
   test("refuses a sha whose tree has a committed symlink", async () => {
     const fixture = await gitFixture();
-    const sha = await fixture.commit({}, async () => {
-      symlinkSync("/proc/self/environ", join(fixture.seed, "env"));
-    });
+    const sha = await fixture.commit(
+      {},
+      {
+        beforeAdd: async () => {
+          symlinkSync("/proc/self/environ", join(fixture.seed, "env"));
+        },
+      },
+    );
     const investigateRoot = tempDir("investigate-root-");
     await expect(create(fixture, investigateRoot, 1, sha)).rejects.toThrow(
       /symlink or submodule/,
@@ -900,9 +912,14 @@ describe("createInvestigateWorktree with a real git", () => {
 
   test("creates no directory for a sha whose tree has a committed symlink", async () => {
     const fixture = await gitFixture();
-    const sha = await fixture.commit({}, async () => {
-      symlinkSync("/proc/self/environ", join(fixture.seed, "env"));
-    });
+    const sha = await fixture.commit(
+      {},
+      {
+        beforeAdd: async () => {
+          symlinkSync("/proc/self/environ", join(fixture.seed, "env"));
+        },
+      },
+    );
     const investigateRoot = tempDir("investigate-root-");
     await create(fixture, investigateRoot, 1, sha).catch(() => {});
     expect(existsSync(join(investigateRoot, "1"))).toBe(false);
@@ -910,14 +927,19 @@ describe("createInvestigateWorktree with a real git", () => {
 
   test("refuses a sha whose tree has a submodule entry", async () => {
     const fixture = await gitFixture();
-    const sha = await fixture.commit({}, async () => {
-      await fixture.git(fixture.seed, [
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        `160000,${"c".repeat(40)},sub`,
-      ]);
-    });
+    const sha = await fixture.commit(
+      {},
+      {
+        afterAdd: async () => {
+          await fixture.git(fixture.seed, [
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            `160000,${"c".repeat(40)},sub`,
+          ]);
+        },
+      },
+    );
     const investigateRoot = tempDir("investigate-root-");
     await expect(create(fixture, investigateRoot, 1, sha)).rejects.toThrow(
       /symlink or submodule/,
