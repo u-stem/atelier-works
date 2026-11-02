@@ -66,6 +66,7 @@ test.describe("Dialog open and close notifications", () => {
   }) => {
     await openPaletteWithQuery(page, "設定");
     // 開いたままのパレットでのショートカットは、親の`open`を偽にする。
+    // 閉じたことの確認は、後始末を待つ同期も兼ねる。閉じなければ、後始末の確認まで進まない。
     await page.keyboard.press("ControlOrMeta+K");
     await expect(page.locator("dialog[open]")).toHaveCount(0);
     await afterRender(page);
@@ -73,13 +74,5 @@ test.describe("Dialog open and close notifications", () => {
     await page.keyboard.press("ControlOrMeta+K");
 
     await expect(page.getByRole("combobox")).toHaveValue("");
-  });
-
-  test("closes when the parent sets open to false", async ({ page }) => {
-    await openPaletteWithQuery(page, "");
-
-    await page.keyboard.press("ControlOrMeta+K");
-
-    await expect(page.locator("dialog[open]")).toHaveCount(0);
   });
 });
