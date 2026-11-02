@@ -644,7 +644,7 @@ describe("design stage gate files", () => {
   });
 });
 
-// 調査のClaudeの隔離(引数を固定する包み関数、読み出しを塞ぐ一覧、入口の門)と、それを固定するテストは、
+// 調査のClaudeの隔離(引数を固定する包み関数、読み出しを塞ぐ一覧、入口の門、worktreeの置き場)と、それを固定するテストは、
 // 書き換えられると、調査のClaudeがworkerの秘密に届いたり、調査の入口が人の確認なしに開いたりする。
 // グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
 describe("investigate isolation files", () => {
@@ -658,6 +658,9 @@ describe("investigate isolation files", () => {
     "tests/lib/investigate_claude.test.ts",
     "tests/lib/claude_read_deny.test.ts",
     "tests/scripts/investigate_gate.test.ts",
+    "f/factory/lib/investigate_workspace.ts",
+    "f/factory/lib/investigate_workspace.script.yaml",
+    "tests/lib/investigate_workspace.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {

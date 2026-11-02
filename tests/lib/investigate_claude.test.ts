@@ -885,7 +885,7 @@ describe("ISOLATION_FINGERPRINT", () => {
 
   test("is pinned, so that a change of the isolation shows up in this test", () => {
     expect(ISOLATION_FINGERPRINT).toBe(
-      "26d8b4c5cb012956eff03e06e3d9b9d9b034e34189339f14cebd31c5db2e9b57",
+      "131397caa8b7a15699bc0d9e67b034a69dc04d235b18bb0e7d4b392dcab98d85",
     );
   });
 

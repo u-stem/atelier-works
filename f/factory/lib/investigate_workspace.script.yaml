@@ -1,0 +1,9 @@
+summary: '[LIB] 調査のworktreeの置き場'
+description: 内部ライブラリです。直接実行するものではありません。調査のClaudeが読むworktreeの置き場の検査、作成、掃除をする共通処理です。
+lock: '!inline f/factory/lib/investigate_workspace.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
