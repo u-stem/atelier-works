@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as screensTable from "../app/screens.ts";
 import {
   type ChooseEnv,
   chooseItem,
@@ -73,6 +74,14 @@ describe("palette", () => {
       "ジョブ",
       "ジョブ › 履歴",
     ]);
+  });
+
+  test("lists the PR review intake among the destinations of the real table", () => {
+    expect(
+      paletteItems(screensTable.SCREENS).find(
+        (item) => item.label === "作業項目 › PRレビューの投入",
+      )?.target,
+    ).toEqual({ kind: "screen", path: "/items/new-pr-review" });
   });
 
   test("moves to the screen's path", () => {

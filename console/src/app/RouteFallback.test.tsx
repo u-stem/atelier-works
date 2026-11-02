@@ -232,6 +232,12 @@ describe("the first paint of a screen", () => {
     );
   });
 
+  test("the PR review intake screen draws the fallback with a back link and no refresh controls", () => {
+    expect(routeAt("items/new-pr-review")?.HydrateFallback).toBe(
+      routeFallbackFor({ trail: "back", refresh: false }),
+    );
+  });
+
   test("the not found screen draws no refresh controls, as its header has none", () => {
     expect(routeAt("*")?.HydrateFallback).toBe(
       routeFallbackFor({ refresh: false }),

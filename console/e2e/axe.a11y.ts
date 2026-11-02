@@ -42,6 +42,7 @@ const SCREEN_PATHS: readonly string[] = [
   "?notice=1",
   "items",
   "items?tab=requirements",
+  "items/new-pr-review",
   "items/7",
   "system",
   "jobs",

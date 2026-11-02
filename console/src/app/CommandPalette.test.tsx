@@ -39,8 +39,8 @@ describe("CommandPalette", () => {
     ).toBe("コマンドパレット");
   });
 
-  test("lists the five screens, their four fixed destinations and the help as options", () => {
-    expect(optionTags(render()).length).toBe(10);
+  test("lists the five screens, their five fixed destinations and the help as options", () => {
+    expect(optionTags(render()).length).toBe(11);
   });
 
   test("names a fixed destination that the side bar does not reach in one click", () => {
@@ -90,12 +90,12 @@ describe("CommandPalette", () => {
   test("selects only the first option", () => {
     expect(
       optionTags(render()).map((tag) => attributeOf(tag, "aria-selected")),
-    ).toEqual(["true", ...Array.from({ length: 9 }, () => "false")]);
+    ).toEqual(["true", ...Array.from({ length: 10 }, () => "false")]);
   });
 
   test("gives every option its own id", () => {
     const ids = optionTags(render()).map((tag) => attributeOf(tag, "id"));
-    expect(new Set(ids).size).toBe(10);
+    expect(new Set(ids).size).toBe(11);
   });
 
   test("names the input", () => {
@@ -109,7 +109,7 @@ describe("CommandPalette", () => {
   });
 
   test("reads the count of the results", () => {
-    expect(render()).toMatch(/role="status"[^>]*>10件の候補</);
+    expect(render()).toMatch(/role="status"[^>]*>11件の候補</);
   });
 
   test("draws no key hint, because the shortcuts are off by default", () => {

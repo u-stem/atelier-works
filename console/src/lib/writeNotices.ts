@@ -53,7 +53,8 @@ export const STALE_LIST_NOTICE: WriteNotice = {
     "一覧を読み直せませんでした。一覧が更新されるまで、この対象は操作できません。",
 };
 
-const ACTION_AUDIT_FAILED_NOTE =
+/** 操作の記録を書けなかったときに、成功の文へ添える注意。結果を別の部品で出す画面も、同じ文を使う。 */
+export const ACTION_AUDIT_FAILED_NOTE =
   "ただし、操作の記録を残せませんでした。誰が操作したかは、ジョブのログで確かめてください。";
 
 /**
