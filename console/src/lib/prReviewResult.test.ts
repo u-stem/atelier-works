@@ -64,8 +64,6 @@ const REFUSED = JSON.stringify({ status: "refused", reason: "pr_closed" });
 type Reads = {
   data?: JobDetailView | undefined;
   isError?: boolean;
-  isPending?: boolean;
-  isFetching?: boolean;
   statusData?: JobDetailView | undefined;
   /** 状態の取得を、結果つきの取得より新しい読み取りにするか。 */
   statusNewer?: boolean;
@@ -77,8 +75,6 @@ function stateOf(reads: Reads): PrReviewResultState {
       data: reads.data,
       updatedAt: 1000,
       isError: reads.isError ?? false,
-      isPending: reads.isPending ?? reads.data === undefined,
-      isFetching: reads.isFetching ?? false,
     },
     status: {
       data: reads.statusData,
@@ -93,17 +89,13 @@ function kindOf(reads: Reads): string {
 
 describe("row 1: the read failed", () => {
   test("says the result is unavailable when the first read failed", () => {
-    expect(kindOf({ isError: true, isPending: false })).toBe("unavailable");
+    expect(kindOf({ isError: true })).toBe("unavailable");
   });
 
   test("says the result is unavailable when a re-read failed and old data remains", () => {
-    expect(
-      kindOf({
-        data: detail("running"),
-        isError: true,
-        isPending: false,
-      }),
-    ).toBe("unavailable");
+    expect(kindOf({ data: detail("running"), isError: true })).toBe(
+      "unavailable",
+    );
   });
 
   test("puts the failed read before a result that would otherwise be shown", () => {
@@ -111,7 +103,6 @@ describe("row 1: the read failed", () => {
       kindOf({
         data: detail("success", { result: output(STARTED) }),
         isError: true,
-        isPending: false,
       }),
     ).toBe("unavailable");
   });
@@ -206,7 +197,7 @@ describe("row 3: the result cannot be understood", () => {
 
 describe("row 4: the result is not there yet", () => {
   test("waits for the first read", () => {
-    expect(kindOf({ isPending: true })).toBe("waiting");
+    expect(kindOf({})).toBe("waiting");
   });
 
   test.each(["queued", "running", "scheduled", "waiting_for_something_new"])(
@@ -216,24 +207,12 @@ describe("row 4: the result is not there yet", () => {
     },
   );
 
-  test("waits while the output is re-read after the status saw the job finish", () => {
+  test("waits for the output to be read again after the status saw the job finish", () => {
     expect(
       kindOf({
         data: detail("running"),
         statusData: detail("success"),
         statusNewer: true,
-        isFetching: true,
-      }),
-    ).toBe("waiting");
-  });
-
-  test("waits before the output is re-read after the status saw the job finish", () => {
-    expect(
-      kindOf({
-        data: detail("running"),
-        statusData: detail("success"),
-        statusNewer: true,
-        isFetching: false,
       }),
     ).toBe("waiting");
   });
