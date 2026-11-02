@@ -23,3 +23,12 @@ export const SIDEBAR_ICON_BUTTON_CLASS = cn(
   "inline-flex items-center justify-center rounded-lg outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
   TRANSITION_COLORS,
 );
+
+/** 表のセルの余白(標準)。 */
+export const TABLE_CELL_CLASS = "";
+
+/** 表のセルの余白(詰めた表)。 */
+export const TABLE_CELL_COMPACT_CLASS = "";
+
+/** チェックボックスとラジオの大きさと色。 */
+export const CHECKBOX_CLASS = "";
