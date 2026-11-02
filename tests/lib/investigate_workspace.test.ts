@@ -460,6 +460,79 @@ describe("createInvestigateWorktree with a fake runner", () => {
     await createInvestigateWorktree(baseOptions(fake.run, fs)).catch(() => {});
     expect(fake.calls).toHaveLength(0);
   });
+
+  describe("when the recheck of the checked-out files cannot finish", () => {
+    const WORKTREE = "/var/lib/factory-investigate/42";
+
+    /** 置き場は信頼できるが、worktreeの中を読むと失敗するファイル操作。 */
+    function unreadableFs() {
+      return {
+        ...trustedFs(),
+        readdir: async (): Promise<string[]> => {
+          throw new Error("EACCES: permission denied");
+        },
+      };
+    }
+
+    /** 名前の読めない項目があるファイル操作。lstatが`null`を返す。 */
+    function unreadableEntryFs() {
+      return fakeFs({ [INVESTIGATE_ROOT]: ROOT_OK }, { [WORKTREE]: ["�"] });
+    }
+
+    const withPrune = () =>
+      createFakeCommandRunner([ok(), ok(), ok(CLEAN_TREE), ok(), ok()]);
+
+    test("rethrows the error of the directory read", async () => {
+      const fake = withPrune();
+      await expect(
+        createInvestigateWorktree(baseOptions(fake.run, unreadableFs())),
+      ).rejects.toThrow(/EACCES/);
+    });
+
+    test("removes the worktree directory when the directory read fails", async () => {
+      const fs = unreadableFs();
+      await createInvestigateWorktree(baseOptions(withPrune().run, fs)).catch(
+        () => {},
+      );
+      expect(fs.removed).toEqual([WORKTREE]);
+    });
+
+    test("prunes the registration when the directory read fails", async () => {
+      const fake = withPrune();
+      await createInvestigateWorktree(
+        baseOptions(fake.run, unreadableFs()),
+      ).catch(() => {});
+      expect(gitSubcommand(fake.calls.at(-1)?.argv ?? [])).toEqual([
+        "worktree",
+        "prune",
+      ]);
+    });
+
+    test("releases the repository lock when the directory read fails", async () => {
+      const lockFs = createRecordingLockFs();
+      await createInvestigateWorktree({
+        ...baseOptions(withPrune().run, unreadableFs()),
+        lockFs,
+      }).catch(() => {});
+      expect(lockFs.held()).toBe(false);
+    });
+
+    test("throws when an entry cannot be inspected, instead of passing it", async () => {
+      await expect(
+        createInvestigateWorktree(
+          baseOptions(withPrune().run, unreadableEntryFs()),
+        ),
+      ).rejects.toThrow(InvestigateWorkspaceError);
+    });
+
+    test("removes the worktree directory when an entry cannot be inspected", async () => {
+      const fs = unreadableEntryFs();
+      await createInvestigateWorktree(baseOptions(withPrune().run, fs)).catch(
+        () => {},
+      );
+      expect(fs.removed).toEqual([WORKTREE]);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
