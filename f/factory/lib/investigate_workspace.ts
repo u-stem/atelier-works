@@ -207,7 +207,11 @@ function assertNoLinkEntries(stdout: string): void {
   }
 }
 
-/** `dir`の下で最初に見つかったsymlinkのパスを返す。無ければ`null`。worktreeの`.git`ファイルは見ない。 */
+/**
+ * `dir`の下で最初に見つかったsymlinkのパスを返す。無ければ`null`。worktreeの`.git`ファイルは見ない。
+ * 読めない項目があれば例外を投げる。名前がUTF-8でない項目はlstatが`null`を返すので、通さずに断る。
+ * 検査できないものを通すと、その下の木まで検査されないためである。
+ */
 async function findSymlink(
   fs: InvestigateFs,
   dir: string,
@@ -222,7 +226,11 @@ async function findSymlink(
       if (current === dir && name === ".git") continue;
       const path = join(current, name);
       const stat = await fs.lstat(path);
-      if (stat === null) continue;
+      if (stat === null) {
+        throw new InvestigateWorkspaceError(
+          `an entry in the checked-out files could not be inspected: ${JSON.stringify(path.slice(0, 300))}`,
+        );
+      }
       if (stat.isSymbolicLink) return path;
       if (stat.isDirectory) pending.push(path);
     }
@@ -253,7 +261,8 @@ async function discardWorktree(
  * 3. `git ls-tree -r`で、symlink(120000)かsubmodule(160000)が1つでもあれば例外を投げる。
  *    対象リポジトリの中身は信頼できない入力で、symlinkはworkerの秘密を指しうる。
  * 4. `git worktree add --detach`で、`core.symlinks=false`のままcheckoutする。
- * 5. checkoutしたファイルにsymlinkが無いことを、ファイルシステムで確かめ直す。あれば、worktreeを消して例外を投げる。
+ * 5. checkoutしたファイルにsymlinkが無いことを、ファイルシステムで確かめ直す。
+ *    あるときと、読めない項目があって確かめ終えられないときは、worktreeを消して例外を投げる。
  * `sha`とIDの形、置き場の検査(`ensureInvestigateRoot`)を満たさなければ、何も実行せずに例外を投げる。
  */
 export async function createInvestigateWorktree(
@@ -303,7 +312,13 @@ export async function createInvestigateWorktree(
         "git worktree add --detach",
       );
 
-      const link = await findSymlink(fs, dir);
+      let link: string | null;
+      try {
+        link = await findSymlink(fs, dir);
+      } catch (error) {
+        await discardWorktree(opts, fs, dir);
+        throw error;
+      }
       if (link !== null) {
         await discardWorktree(opts, fs, dir);
         throw new InvestigateWorkspaceError(
@@ -329,6 +344,7 @@ export type PurgeInvestigateRootOptions = InvestigateWorkspaceOptions & {
  * 1件が消せなくても残りを続け、pruneの後に、消せなかった項目を挙げて例外を投げる。
  * 置き場の検査を満たさなければ、何も消さずに例外を投げる。
  * リポジトリのロックの下で実行するので、同じリポジトリの`createInvestigateWorktree`とは重ならない。
+ * 置き場は全リポジトリで共有し、ロックは`mainRepoDir`の1つだけなので、他のリポジトリの項目はロックなしで消す。
  */
 export async function purgeInvestigateRoot(
   opts: PurgeInvestigateRootOptions,
