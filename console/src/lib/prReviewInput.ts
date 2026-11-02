@@ -122,6 +122,11 @@ export function buildPrReviewInput(form: PrReviewForm): PrReviewBuild {
     : { ok: false, problem: "pr_url_repo_mismatch" };
 }
 
+/** 誤りを示す欄の最小のスタブ。 */
+export function problemField(_problem: PrReviewProblem): "repo" | "pr" {
+  return "pr";
+}
+
 const PROBLEM_MESSAGES: Readonly<Record<PrReviewProblem, string>> = {
   repo_invalid:
     "リポジトリは「オーナー名/リポジトリ名」の形で入力してください。",

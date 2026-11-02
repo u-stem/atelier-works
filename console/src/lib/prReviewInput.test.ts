@@ -4,6 +4,7 @@ import {
   describePrReviewProblem,
   EMPTY_PR_REVIEW_FORM,
   type PrReviewProblem,
+  problemField,
 } from "./prReviewInput.ts";
 
 const REPO = "octo-owner/widgets";
@@ -200,6 +201,17 @@ describe("the priority of the problems", () => {
 
   test("reports an invalid number before asking for the repository", () => {
     expect(problemOf("", "0")).toBe("pr_invalid");
+  });
+});
+
+describe("the field of a problem", () => {
+  test.each([
+    ["repo_invalid", "repo"],
+    ["pr_empty", "pr"],
+    ["pr_invalid", "pr"],
+    ["pr_url_repo_mismatch", "pr"],
+  ] as const)("shows %s at the %s field", (problem, field) => {
+    expect(problemField(problem)).toBe(field);
   });
 });
 
