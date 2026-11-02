@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import { useJobDetail } from "../../api/jobsQueries.ts";
+import { failedDetailReads, useJobDetail } from "../../api/jobsQueries.ts";
 import { pipelineQueryKey } from "../../api/queries.ts";
 import { JobLink } from "../../components/JobLink.tsx";
 import {
@@ -16,6 +16,7 @@ import {
   auditFailedNote,
   describePrReviewAttempt,
   type PrReviewAttempt,
+  shouldRefreshPipeline,
 } from "../../lib/prReviewOutcome.ts";
 import {
   describePrReviewResult,
@@ -89,7 +90,14 @@ export function PrReviewResultPanel({
     state.kind === "unavailable" ||
     state.kind === "unreadable";
   return (
-    <Alert variant={variantOf(view.tone)}>
+    <Alert
+      variant={variantOf(view.tone)}
+      role={
+        state.kind === "waiting" || state.kind === "started"
+          ? "status"
+          : "alert"
+      }
+    >
       <AlertTitle className="line-clamp-none">{view.headline}</AlertTitle>
       <AlertDescription>
         {view.lines.map((line) => (
@@ -153,22 +161,35 @@ export function PrReviewResult({
     };
   }, [waiting, onWaitingChange]);
 
-  const started = state.kind === "started";
   const refreshedFor = useRef<string | null>(null);
+  const refresh = shouldRefreshPipeline(state, refreshedFor.current, flowJobId);
   useEffect(() => {
-    if (started && refreshedFor.current !== flowJobId) {
+    if (refresh) {
       refreshedFor.current = flowJobId;
       void client.invalidateQueries({ queryKey: pipelineQueryKey });
     }
-  }, [started, flowJobId, client]);
+  }, [refresh, flowJobId, client]);
+
+  // 失敗した取得を、結果つきを先にして1つずつ取り直す。2つを同時に走らせない。
+  // どちらも失敗していないのに取得できない状態(予定のジョブなど)は、状態の取得を取り直す。
+  const retry = async (): Promise<void> => {
+    const reads = failedDetailReads(output.isError, status.isError);
+    if (reads.length === 0) {
+      await status.refetch();
+      return;
+    }
+    for (const read of reads) {
+      await (read === "output" ? output.refetch() : status.refetch());
+    }
+  };
 
   return (
     <PrReviewResultPanel
       state={state}
       flowJobId={flowJobId}
-      retrying={output.isFetching}
+      retrying={output.isFetching || status.isFetching}
       onRetry={() => {
-        void output.refetch();
+        void retry();
       }}
     />
   );

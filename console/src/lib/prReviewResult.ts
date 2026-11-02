@@ -8,7 +8,7 @@ import {
   type PrReviewRegisterRefusalReason,
 } from "../api/guards/writeResults.ts";
 import { currentJob, type DetailSnapshot } from "../api/jobsQueries.ts";
-import { isFinishedJobState } from "./jobsView.ts";
+import { isActiveJobState, isFinishedJobState } from "./jobsView.ts";
 import { describePrReviewRegisterRefusal } from "./prReviewRefusal.ts";
 
 export type PrReviewResultState =
@@ -41,14 +41,32 @@ function parseJson(text: string): unknown {
 }
 
 /**
+ * 待ち続けても結果が出ない状態か。
+ * 状態の取得は、ジョブが実行中か待ちの間だけ繰り返す。取得が失敗したままのとき、ジョブが見つからないとき、
+ * ジョブが予定か知らない状態のときは、繰り返しが止まっており、待っても終わりを検知できない。
+ */
+function stuck(
+  status: PrReviewResultInput["status"],
+  jobState: string,
+): boolean {
+  return (
+    status.isError ||
+    status.data?.found === false ||
+    (!isActiveJobState(jobState) && !isFinishedJobState(jobState))
+  );
+}
+
+/**
  * 結果を、上の行から順に評価した最初の状態にする。
  * 1. 取得に失敗した。
  * 2. 結果の取得にサーバーが失敗を付けた。
  * 3. ジョブが見つからない、失敗か取り消しか飛ばされた、終わっているのに結果が無い、
  *    切り詰められたか伏せられた、JSONでない、登録の結果の形でない。
- * 4. 最初の取得が終わっていない、ジョブが実行中か待ちか知らない状態、
+ * 4. 結果が出る前で、状態の取得が失敗したか、ジョブが見つからないか、ジョブが予定か知らない状態である。
+ *    繰り返しが止まっているので、待っても終わらない。
+ * 5. 最初の取得が終わっていない、ジョブが実行中か待ちである、
  *    状態の取得は終わりを見たが結果つきの取得が古い。
- * 5. 成功して`started`、6. 成功して`refused`。
+ * 6. 成功して`started`、7. 成功して`refused`。
  */
 export function prReviewResultState(
   input: PrReviewResultInput,
@@ -77,7 +95,9 @@ export function prReviewResultState(
   }
   // 結果つきの取得が、終わる前の読み取りのままなら、結果はまだ読めていない。
   if (job.state !== "success" || !isFinishedJobState(data.job.state)) {
-    return { kind: "waiting" };
+    return stuck(status, job.state)
+      ? { kind: "unavailable" }
+      : { kind: "waiting" };
   }
   const result = data.result;
   if (result === null || result.truncated || result.masked) {
@@ -115,9 +135,7 @@ export function describePrReviewResult(
       return {
         tone: "error",
         headline: "結果を取得できません",
-        lines: [
-          "ジョブの結果を読み込めませんでした。もう一度取得するか、ジョブを開いて確認してください。",
-        ],
+        lines: [],
       };
     case "unreadable":
       return {

@@ -50,6 +50,11 @@ export function BackLink() {
   );
 }
 
+/**
+ * 入力欄の組(ラベル、入力、補足、誤りの文)。2つの投入の画面が共有する。
+ * 補足と誤りの文は`id`から作ったidを持ち、入力の`aria-describedby`に結ぶと、入力に着いた読み上げが読む。
+ * 結ぶidは、`children`に関数を渡すと受け取れる。
+ */
 export function Field({
   id,
   label,
@@ -63,12 +68,19 @@ export function Field({
   problem?: string | undefined;
   children: ReactNode | ((describedBy: string | undefined) => ReactNode);
 }) {
+  const describedBy =
+    [
+      hint === undefined ? null : `${id}-hint`,
+      problem === undefined ? null : `${id}-problem`,
+    ]
+      .filter((value) => value !== null)
+      .join(" ") || undefined;
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className="text-body font-medium">
         {label}
       </label>
-      {typeof children === "function" ? null : children}
+      {typeof children === "function" ? children(describedBy) : children}
       {hint === undefined ? null : (
         <p id={`${id}-hint`} className="text-small text-muted-foreground">
           {hint}
@@ -238,31 +250,38 @@ export function NewItemScreen() {
             hint="「オーナー名/リポジトリ名」の形で入力します。候補に無いリポジトリも入力できますが、許可されていなければ断られます。"
             problem={problemOf(problems, "repo_invalid")}
           >
-            <Input
-              id={`${ids}-repo`}
-              list={`${ids}-targets`}
-              value={repoText}
-              disabled={intake.locked}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={problemOf(problems, "repo_invalid") !== undefined}
-              onChange={(event) => {
-                setField({ repo: event.target.value });
-              }}
-            />
-            <datalist id={`${ids}-targets`}>
-              {candidates.map((target) => (
-                <option
-                  key={repoOptionLabel(target)}
-                  value={repoOptionLabel(target)}
+            {(describedBy) => (
+              <>
+                <Input
+                  aria-describedby={describedBy}
+                  id={`${ids}-repo`}
+                  list={`${ids}-targets`}
+                  value={repoText}
+                  disabled={intake.locked}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={
+                    problemOf(problems, "repo_invalid") !== undefined
+                  }
+                  onChange={(event) => {
+                    setField({ repo: event.target.value });
+                  }}
                 />
-              ))}
-            </datalist>
-            {targetsFailed ? (
-              <p className="text-small text-muted-foreground">
-                候補を取得できませんでした。リポジトリを直接入力してください。
-              </p>
-            ) : null}
+                <datalist id={`${ids}-targets`}>
+                  {candidates.map((target) => (
+                    <option
+                      key={repoOptionLabel(target)}
+                      value={repoOptionLabel(target)}
+                    />
+                  ))}
+                </datalist>
+                {targetsFailed ? (
+                  <p className="text-small text-muted-foreground">
+                    候補を取得できませんでした。リポジトリを直接入力してください。
+                  </p>
+                ) : null}
+              </>
+            )}
           </Field>
           <ProfileChoice
             name={`${ids}-profile`}
@@ -287,18 +306,21 @@ export function NewItemScreen() {
             hint={`${titleLength(title)} / ${INTAKE_TITLE_MAX_CHARS}字`}
             problem={problemOf(problems, "title_empty", "title_too_long")}
           >
-            <Input
-              id={`${ids}-title`}
-              value={title}
-              disabled={intake.locked}
-              aria-invalid={
-                problemOf(problems, "title_empty", "title_too_long") !==
-                undefined
-              }
-              onChange={(event) => {
-                setField({ title: event.target.value });
-              }}
-            />
+            {(describedBy) => (
+              <Input
+                aria-describedby={describedBy}
+                id={`${ids}-title`}
+                value={title}
+                disabled={intake.locked}
+                aria-invalid={
+                  problemOf(problems, "title_empty", "title_too_long") !==
+                  undefined
+                }
+                onChange={(event) => {
+                  setField({ title: event.target.value });
+                }}
+              />
+            )}
           </Field>
           <Field
             id={`${ids}-body`}
@@ -306,16 +328,19 @@ export function NewItemScreen() {
             hint="何を実現したいかを書きます。Issueの本文になります。"
             problem={problemOf(problems, "body_empty")}
           >
-            <Textarea
-              id={`${ids}-body`}
-              rows={6}
-              value={body}
-              disabled={intake.locked}
-              aria-invalid={problemOf(problems, "body_empty") !== undefined}
-              onChange={(event) => {
-                setField({ body: event.target.value });
-              }}
-            />
+            {(describedBy) => (
+              <Textarea
+                aria-describedby={describedBy}
+                id={`${ids}-body`}
+                rows={6}
+                value={body}
+                disabled={intake.locked}
+                aria-invalid={problemOf(problems, "body_empty") !== undefined}
+                onChange={(event) => {
+                  setField({ body: event.target.value });
+                }}
+              />
+            )}
           </Field>
           {profile === "bugfix" ? (
             <>
@@ -325,18 +350,21 @@ export function NewItemScreen() {
                 hint="不具合が起きるまでの手順を書きます。Issueの本文になります。"
                 problem={problemOf(problems, "reproduction_empty")}
               >
-                <Textarea
-                  id={`${ids}-reproduction`}
-                  rows={4}
-                  value={reproduction}
-                  disabled={intake.locked}
-                  aria-invalid={
-                    problemOf(problems, "reproduction_empty") !== undefined
-                  }
-                  onChange={(event) => {
-                    setField({ reproduction: event.target.value });
-                  }}
-                />
+                {(describedBy) => (
+                  <Textarea
+                    aria-describedby={describedBy}
+                    id={`${ids}-reproduction`}
+                    rows={4}
+                    value={reproduction}
+                    disabled={intake.locked}
+                    aria-invalid={
+                      problemOf(problems, "reproduction_empty") !== undefined
+                    }
+                    onChange={(event) => {
+                      setField({ reproduction: event.target.value });
+                    }}
+                  />
+                )}
               </Field>
               <Field
                 id={`${ids}-expected`}
@@ -344,18 +372,21 @@ export function NewItemScreen() {
                 hint="本来どう動くべきかを書きます。受入基準の先頭になります。"
                 problem={problemOf(problems, "expected_empty")}
               >
-                <Textarea
-                  id={`${ids}-expected`}
-                  rows={3}
-                  value={expectedBehavior}
-                  disabled={intake.locked}
-                  aria-invalid={
-                    problemOf(problems, "expected_empty") !== undefined
-                  }
-                  onChange={(event) => {
-                    setField({ expectedBehavior: event.target.value });
-                  }}
-                />
+                {(describedBy) => (
+                  <Textarea
+                    aria-describedby={describedBy}
+                    id={`${ids}-expected`}
+                    rows={3}
+                    value={expectedBehavior}
+                    disabled={intake.locked}
+                    aria-invalid={
+                      problemOf(problems, "expected_empty") !== undefined
+                    }
+                    onChange={(event) => {
+                      setField({ expectedBehavior: event.target.value });
+                    }}
+                  />
+                )}
               </Field>
               <Field
                 id={`${ids}-actual`}
@@ -363,18 +394,21 @@ export function NewItemScreen() {
                 hint="いま実際にどう動くかを書きます。Issueの本文になります。"
                 problem={problemOf(problems, "actual_empty")}
               >
-                <Textarea
-                  id={`${ids}-actual`}
-                  rows={3}
-                  value={actualBehavior}
-                  disabled={intake.locked}
-                  aria-invalid={
-                    problemOf(problems, "actual_empty") !== undefined
-                  }
-                  onChange={(event) => {
-                    setField({ actualBehavior: event.target.value });
-                  }}
-                />
+                {(describedBy) => (
+                  <Textarea
+                    aria-describedby={describedBy}
+                    id={`${ids}-actual`}
+                    rows={3}
+                    value={actualBehavior}
+                    disabled={intake.locked}
+                    aria-invalid={
+                      problemOf(problems, "actual_empty") !== undefined
+                    }
+                    onChange={(event) => {
+                      setField({ actualBehavior: event.target.value });
+                    }}
+                  />
+                )}
               </Field>
             </>
           ) : null}
@@ -383,15 +417,18 @@ export function NewItemScreen() {
             label="受入基準(任意)"
             hint="1行に1項目で書きます。"
           >
-            <Textarea
-              id={`${ids}-acceptance`}
-              rows={4}
-              value={acceptance}
-              disabled={intake.locked}
-              onChange={(event) => {
-                setField({ acceptanceCriteria: event.target.value });
-              }}
-            />
+            {(describedBy) => (
+              <Textarea
+                aria-describedby={describedBy}
+                id={`${ids}-acceptance`}
+                rows={4}
+                value={acceptance}
+                disabled={intake.locked}
+                onChange={(event) => {
+                  setField({ acceptanceCriteria: event.target.value });
+                }}
+              />
+            )}
           </Field>
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" disabled={intake.blocked}>

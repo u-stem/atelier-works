@@ -90,26 +90,35 @@ export function auditFailedNote(attempt: PrReviewAttempt): string | null {
     : null;
 }
 
-/** 結果を待ち始めるかの最小のスタブ。 */
-export function startsWaiting(_attempt: PrReviewAttempt): boolean {
-  return false;
+/**
+ * 結果を受け取った時点で、投入したフローの結果を待ち始めるか。起動できたときだけ待つ。
+ * 結果の部品が描かれてから待ちを知らせると、その間に次の投入を送れてしまうので、受け取った時点で真にする。
+ */
+export function startsWaiting(attempt: PrReviewAttempt): boolean {
+  return attempt.kind === "submitted";
 }
 
-/** 前の結果を残すかの最小のスタブ。 */
+/**
+ * 送信を始めた後に残す、前の結果。始められたときだけ消す。
+ * ロック中で始められなかったときは、前の結果をそのまま見せる。
+ */
 export function attemptAfterSubmit(
-  _started: boolean,
+  started: boolean,
   previous: PrReviewAttempt | null,
 ): PrReviewAttempt | null {
-  return previous;
+  return started ? null : previous;
 }
 
-/** 読み直すかの最小のスタブ。 */
+/**
+ * 作業項目の一覧を読み直すか。レビューが始まったと分かったとき、投入したフローのジョブごとに1回だけ読み直す。
+ * 一覧が最大30秒古いままにならないためである。
+ */
 export function shouldRefreshPipeline(
-  _state: PrReviewResultState,
-  _refreshedFor: string | null,
-  _flowJobId: string,
+  state: PrReviewResultState,
+  refreshedFor: string | null,
+  flowJobId: string,
 ): boolean {
-  return false;
+  return state.kind === "started" && refreshedFor !== flowJobId;
 }
 
 export type SubmitControl = {

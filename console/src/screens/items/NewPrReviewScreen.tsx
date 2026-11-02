@@ -1,4 +1,4 @@
-import { type ReactNode, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { isBannerError } from "../../api/errors.ts";
 import { useIntakeTargets } from "../../api/intakeQueries.ts";
 import { useWriteMutation } from "../../api/mutations.ts";
@@ -17,49 +17,18 @@ import {
   problemField,
 } from "../../lib/prReviewInput.ts";
 import {
+  attemptAfterSubmit,
   attemptFromOutcome,
   type PrReviewAttempt,
+  startsWaiting,
   submitControl,
 } from "../../lib/prReviewOutcome.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
-import { BackLink } from "./NewItemScreen.tsx";
+import { BackLink, Field } from "./NewItemScreen.tsx";
 import { PrReviewAttemptNotice, PrReviewResult } from "./PrReviewResult.tsx";
 
 /** 共有のロックの状態を引くための入力。キーは入力によらず固定なので、値は使われない。 */
 const NO_INPUT: PrReviewSubmitInput = { owner: "", repo: "", prNumber: 0 };
-
-function Field({
-  id,
-  label,
-  hint,
-  problem,
-  children,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  problem?: string | undefined;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-body font-medium">
-        {label}
-      </label>
-      {children}
-      {hint === undefined ? null : (
-        <p id={`${id}-hint`} className="text-small text-muted-foreground">
-          {hint}
-        </p>
-      )}
-      {problem === undefined ? null : (
-        <p id={`${id}-problem`} className="text-small text-destructive">
-          {problem}
-        </p>
-      )}
-    </div>
-  );
-}
 
 function problemFor(
   problem: PrReviewProblem | null,
@@ -88,7 +57,10 @@ export function NewPrReviewScreen() {
     () =>
       prReviewConfig({
         onOutcome: (outcome) => {
-          setAttempt(attemptFromOutcome(outcome));
+          // 結果の部品が描かれる前から待ち始める。その間に次の投入を送らせないためである。
+          const next = attemptFromOutcome(outcome);
+          setAttempt(next);
+          setWaiting(startsWaiting(next));
         },
       }),
     [],
@@ -114,9 +86,8 @@ export function NewPrReviewScreen() {
       return;
     }
     // 始められたときだけ、前の結果を消す。
-    if (mutation.submit(built.input)) {
-      setAttempt(null);
-    }
+    const started = mutation.submit(built.input);
+    setAttempt((previous) => attemptAfterSubmit(started, previous));
   };
 
   return (
@@ -142,42 +113,50 @@ export function NewPrReviewScreen() {
             hint="「オーナー名/リポジトリ名」の形で入力します。PRのURLを入力するときは、空のままでも構いません。候補に無いリポジトリも入力できますが、許可されていなければ断られます。"
             problem={repoProblem}
           >
-            <Input
-              id={`${ids}-repo`}
-              list={`${ids}-targets`}
-              value={form.repo}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={repoProblem !== undefined}
-              onChange={(event) => {
-                setForm({ ...form, repo: event.target.value });
-              }}
-            />
-            <datalist id={`${ids}-targets`}>
-              {candidates.map((target) => (
-                <option
-                  key={repoOptionLabel(target)}
-                  value={repoOptionLabel(target)}
+            {(describedBy) => (
+              <>
+                <Input
+                  id={`${ids}-repo`}
+                  list={`${ids}-targets`}
+                  value={form.repo}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={repoProblem !== undefined}
+                  aria-describedby={describedBy}
+                  onChange={(event) => {
+                    setForm({ ...form, repo: event.target.value });
+                  }}
                 />
-              ))}
-            </datalist>
-            {targetsFailed ? (
-              <p className="text-small text-muted-foreground">
-                候補を取得できませんでした。リポジトリを直接入力してください。
-              </p>
-            ) : null}
+                <datalist id={`${ids}-targets`}>
+                  {candidates.map((target) => (
+                    <option
+                      key={repoOptionLabel(target)}
+                      value={repoOptionLabel(target)}
+                    />
+                  ))}
+                </datalist>
+                {targetsFailed ? (
+                  <p className="text-small text-muted-foreground">
+                    候補を取得できませんでした。リポジトリを直接入力してください。
+                  </p>
+                ) : null}
+              </>
+            )}
           </Field>
           <Field id={`${ids}-pr`} label="PRの番号またはURL" problem={prProblem}>
-            <Input
-              id={`${ids}-pr`}
-              value={form.pr}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={prProblem !== undefined}
-              onChange={(event) => {
-                setForm({ ...form, pr: event.target.value });
-              }}
-            />
+            {(describedBy) => (
+              <Input
+                id={`${ids}-pr`}
+                value={form.pr}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={prProblem !== undefined}
+                aria-describedby={describedBy}
+                onChange={(event) => {
+                  setForm({ ...form, pr: event.target.value });
+                }}
+              />
+            )}
           </Field>
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" disabled={control.disabled}>
