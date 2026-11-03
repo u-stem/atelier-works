@@ -282,3 +282,16 @@ export function prepareDoc(doc: PreparableDoc): PreparedDoc {
       questions.some((question) => question.replaced),
   };
 }
+
+/** 本文の表示の形式。プレビューか、Markdownの文字か。 */
+export type ViewMode = "preview" | "text";
+
+/**
+ * 目次の強調に使う見出しの`id`の並び。
+ */
+export function tocIdsFor(
+  _headings: readonly Heading[],
+  _options: { readonly embedded: boolean; readonly mode: ViewMode },
+): string[] {
+  return [];
+}
