@@ -423,10 +423,11 @@ export type DisableInvestigateInstructionsOptions = Omit<
 
 /**
  * `dir`の下で、指示や設定の名前に当たる項目の、`dir`からの相対パスを返す。
- * 当たった項目の下には入らない。項目ごと改名するので、中は読まれないためである。
- * 名前に`.disabled`が付いた無効済みの項目も、同じ理由で下には入らない。
- * 作業ディレクトリ直下の`.git`ファイルは見ない。読めない項目があれば例外を投げる。
- * 検査できないものを通すと、その下の木まで検査されないためである。
+ * 結果は、深い方から先に並べる。
+ * 当たった項目の中にも入る。`.claude`の中の`CLAUDE.md`や、`CLAUDE.md`という名前のディレクトリの中の`CLAUDE.md`も、
+ * Claude Codeが読みうるためである。名前が`.disabled`で終わるディレクトリの中も飛ばさない。
+ * 作業ディレクトリ直下の`.git`ファイルだけを見ない。シンボリックリンクはたどらない。
+ * 読めない項目があれば例外を投げる。検査できないものを通すと、その下の木まで検査されないためである。
  */
 async function findInstructionEntries(
   fs: DisableInstructionsFs,
@@ -452,29 +453,21 @@ async function findInstructionEntries(
           `an entry in the checked-out files could not be inspected: ${JSON.stringify(path.slice(0, 300))}`,
         );
       }
-      const key = name.toLowerCase();
-      if (INSTRUCTION_NAME_KEYS.has(key)) {
-        found.push(relative);
-        continue;
-      }
-      // 無効にした項目の中は、Claude Codeが読まない。確かめ直しで、中の`CLAUDE.md`を拾わない。
-      if (
-        key.endsWith(DISABLED_SUFFIX) &&
-        INSTRUCTION_NAME_KEYS.has(key.slice(0, -DISABLED_SUFFIX.length))
-      ) {
-        continue;
-      }
+      if (INSTRUCTION_NAME_KEYS.has(name.toLowerCase())) found.push(relative);
       if (stat.isDirectory && !stat.isSymbolicLink) {
         pending.push({ path, relative });
       }
     }
   }
-  return found;
+  const depth = (relative: string): number => relative.split("/").length;
+  return found.sort((a, b) => depth(b) - depth(a));
 }
 
 /**
  * 作業項目のworktreeの中で、指示や設定の名前(`INSTRUCTION_ENTRY_NAMES`)の項目を、入れ子の下まで`.disabled`を付けた名前に改名する。
  * 対象リポジトリの`CLAUDE.md`は信頼できない入力で、`@`の取り込みで`/proc/self/environ`などを読ませられうるためである。
+ * 改名は深い方から先に行うので、`.claude`の中の`CLAUDE.md`は、`.claude`より先に改名される。
+ * 改名の後に、`.git`ファイル以外の全体をもう一度調べ、対象の名前が1つでも残っていれば失敗として扱う。
  * 内容は変えない。改名の前後でworktreeの他のファイルは変わらない。
  * `createInvestigateWorktree`の中には入れず、調査の入口が作成の後に別に呼ぶ。
  * 隔離の測定のworktreeを作る共有の関数に入れると、測定の前提が変わり、判定の版を上げる測り直しになるためである。

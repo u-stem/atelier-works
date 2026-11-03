@@ -6395,7 +6395,11 @@ export type NewInvestigateWorkItem = {
   /** 依頼文。以後の調査は、Issueの本文ではなく、ここに保存した文だけを使う。 */
   body: string;
   claimed_by: string | null;
-  flow_job_id: string | null;
+  /**
+   * フローのルートジョブのID。必須。
+   * 調査のフローの失敗処理は、このIDが一致する行だけを`failed`にするので、無い行は失敗にも孤児の扱いにも載らず、`investigating`のまま残る。
+   */
+  flow_job_id: string;
 };
 
 /**
@@ -6410,7 +6414,7 @@ export type NewInvestigateWorkItem = {
  * 並行する登録が同じcycleを読むと、この制約への違反が例外になる。
  * 稼働中の調査の衝突が先に判定されるので、通常は`null`になり、終端の直後の競合だけが例外になる。
  * 依頼文は`body`に保存する。以後の調査は、Issueの本文を読み直さず、ここに保存した文だけを使う。
- * ownerとrepoがGitHubの名前の形でないとき、Issueの番号が正の整数でないときは、DBに触れる前に例外を投げる。
+ * ownerとrepoがGitHubの名前の形でないとき、Issueの番号が正の整数でないとき、`flow_job_id`が空のときは、DBに触れる前に例外を投げる。
  */
 export async function insertInvestigateWorkItemUnlessActive(
   item: NewInvestigateWorkItem,
@@ -6420,6 +6424,9 @@ export async function insertInvestigateWorkItemUnlessActive(
   assertGitHubName(item.repo);
   if (!Number.isSafeInteger(item.issue_number) || item.issue_number <= 0) {
     throw new Error(`invalid issue number: ${String(item.issue_number)}`);
+  }
+  if (typeof item.flow_job_id !== "string" || item.flow_job_id === "") {
+    throw new Error("invalid flow job id: it must be a non-empty string");
   }
   const rows = await sql`
     INSERT INTO factory.work_items (
