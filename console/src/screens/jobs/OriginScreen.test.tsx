@@ -123,9 +123,7 @@ describe("OriginScreenView: a known schedule", () => {
   });
 
   test("opens the only flow in the list too", () => {
-    expect(render({ name: "audit_kickoff", width: 400 })).toContain(
-      "<details open",
-    );
+    expect(render({ name: "audit_kickoff", width: 400 })).toContain(' open=""');
   });
 });
 

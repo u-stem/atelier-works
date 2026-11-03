@@ -100,7 +100,8 @@ export function originDiagramCrumbs(
   name: string,
   back: string | null,
 ): Crumb[] {
-  void name;
-  void back;
-  return [];
+  return [
+    { label: "ジョブ", to: back ?? JOBS_PATH },
+    { label: `${name}の起動の図` },
+  ];
 }

@@ -301,7 +301,9 @@ describe("OriginDiagramView: the presentation by width", () => {
   });
 
   test("draws a list instead of a diagram in a narrow width", () => {
-    expect(render("poll_issues", { width: LIST })).not.toContain("<svg");
+    expect(render("poll_issues", { width: LIST })).not.toContain(
+      'role="group"',
+    );
   });
 
   test("draws the list as disclosures", () => {
@@ -328,15 +330,13 @@ describe("OriginDiagramView: the presentation by width", () => {
     expect(
       countOf(
         render("poll_prs", { width: LIST, expanded: ["pr_fix"] }),
-        "<details open",
+        ' open=""',
       ),
     ).toBe(1);
   });
 
   test("opens in the list no flow that is closed", () => {
-    expect(countOf(render("poll_prs", { width: LIST }), "<details open")).toBe(
-      0,
-    );
+    expect(countOf(render("poll_prs", { width: LIST }), ' open=""')).toBe(0);
   });
 
   test("writes the steps in the list when the flow is open", () => {

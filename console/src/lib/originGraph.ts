@@ -10,6 +10,8 @@ import {
   type FlowsData,
   findSchedule,
 } from "./flowsData.ts";
+import { describeSchedule } from "./jobsView.ts";
+import { apiErrorOf } from "./queryFailureView.ts";
 
 /** flowの出口1つ。同じ経路と行き先の出口は1つにまとめる。 */
 export type OriginExit = {
@@ -55,6 +57,11 @@ export type OriginGraphModel = {
   /** 承認の線か、戻りの注記があり、設定や試行の上限で起動しないことがある。 */
   readonly conditional: boolean;
 };
+
+const FACTORY_PREFIX = "f/factory/";
+
+/** scheduleがエラーを持つときの印の文言。エラーの文は、スケジュールのタブが出す。 */
+const ERROR_MARK = "エラーあり";
 
 /** そのflow自身へ戻る出口に書く文。 */
 const SELF_TEXT = "やり直し";
@@ -228,7 +235,7 @@ export function initialExpanded(model: OriginGraphModel): ReadonlySet<string> {
 }
 
 export const ORIGIN_WIDTH = 180;
-export const ORIGIN_HEIGHT = 112;
+export const ORIGIN_HEIGHT = 128;
 export const NODE_WIDTH = 200;
 export const COLUMN_GAP = 96;
 /** 箱の上端から、見出し(flow名、説明、ステップ数、開閉の印)の下端まで。 */
@@ -450,8 +457,7 @@ export type OriginRunView =
 
 /** 起動の図の読み上げの名前。 */
 export function originDiagramLabel(scheduleName: string): string {
-  void scheduleName;
-  return "";
+  return `${scheduleName}の起動の図`;
 }
 
 /**
@@ -467,8 +473,27 @@ export function originRunView(
   scheduleName: string,
   nowMs: number,
 ): OriginRunView {
-  void query;
-  void scheduleName;
-  void nowMs;
-  return { kind: "loading" };
+  const { data } = query;
+  if (data === undefined) {
+    if (!query.isError) return { kind: "loading" };
+    return apiErrorOf(query.error)?.kind === "unauthorized"
+      ? { kind: "login" }
+      : { kind: "failed" };
+  }
+  const path = `${FACTORY_PREFIX}${scheduleName}`;
+  const found = data.schedules.find((item) => item.path === path);
+  if (found === undefined || data.missing_in_workspace.includes(path)) {
+    return { kind: "missing" };
+  }
+  const row = describeSchedule(found, null, nowMs);
+  const last = row.recentRuns[0];
+  return {
+    kind: "ready",
+    lastRun: last === undefined ? "none" : last.success ? "success" : "failure",
+    marks: [
+      ...(row.enabled ? [] : [row.enabledLabel]),
+      ...(row.pausedLabel === null ? [] : [row.pausedLabel]),
+      ...(row.error === null ? [] : [ERROR_MARK]),
+    ],
+  };
 }
