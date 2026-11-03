@@ -11,7 +11,7 @@ import { Disclosure } from "../../components/Disclosure.tsx";
 import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { Card, cardVariants } from "../../components/ui/card.tsx";
 import { cn } from "../../lib/cn.ts";
-import { CONDITIONAL_EDGES_NOTE } from "../../lib/flowDiagram.ts";
+import { CONDITIONAL_EDGES_NOTE, exitWord } from "../../lib/flowDiagram.ts";
 import { graphPresentation, wrapLines } from "../../lib/flowGraphFit.ts";
 import { flowDiagramPath } from "../../lib/flowsData.ts";
 import {
@@ -37,7 +37,7 @@ const LEGEND_TEXT =
 
 /** PRを介した線を持つ図の凡例。破線の意味は、この図の中で決める。 */
 const LEGEND_WITH_PR_TEXT =
-  "実線は起動の流れ、破線はPRを介した関係(別の定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+  "実線は起動の流れ、破線はPRを介した関係(この起点を含む定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
 /** PRを介した線の破線の模様。 */
 const PR_DASH = "6 4";
@@ -696,7 +696,7 @@ function ListFlow({
 /**
  * 図が読めない狭い幅の代わりの一覧。起点の箱、段ごとのflowの順に並べる。
  * 開閉は、図と共有する集合の値で決め、開閉の変化を呼び出し側へ返す。幅が変わって図と一覧が入れ替わっても、開閉が保たれる。
- * 出口の行は、図の線と注記の代わりに、各flowの下に並べる。
+ * 出口の行は、図の線と注記の代わりに、起点のカードと各flowの下に並べる。
  */
 function OriginList({
   model,
@@ -713,6 +713,10 @@ function OriginList({
     { length: Math.max(0, model.columns - 1) },
     (_, index) => index + 1,
   );
+  // 段を飛ぶ起動も含め、起点からの線をすべて並べる。1段目のflowの並びだけでは、段を飛ぶ起動が落ちる。
+  const launched = model.edges
+    .filter((edge) => edge.from === null)
+    .map((edge) => edge.to);
   return (
     <div className="flex flex-col gap-3">
       <Card padding="compact" className="flex flex-col gap-1 text-small">
@@ -721,6 +725,16 @@ function OriginList({
           {safeText(model.origin.name)}
         </p>
         <RunRows run={run} />
+        {launched.length === 0 ? null : (
+          <ul
+            aria-label={`${safeText(model.origin.name)}の出口`}
+            className="flex flex-col gap-0.5 text-muted-foreground"
+          >
+            {launched.map((flow) => (
+              <li key={flow}>{safeText(`${exitWord("launch")}: ${flow}`)}</li>
+            ))}
+          </ul>
+        )}
       </Card>
       {columns.map((column) => (
         <section

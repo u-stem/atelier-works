@@ -155,7 +155,7 @@ export const REWORK_LAUNCH_EDGES: readonly ReworkEdge[] = [
 export type PrRelationDirection = "forward" | "return";
 
 /**
- * PRを介して続く1本の関係。flowの起動の辺ではなく、PRのラベルやCIの結果を別の定期ジョブが見て起動するものである。
+ * PRを介して続く1本の関係。flowの起動の辺ではなく、PRのラベルやCIの結果を定期ジョブが見て起動するものである。
  * - `from`: `f/factory`からの相対パスで拡張子の無いscript名。flowのステップのscriptでなければならない。
  * - `to`: 続くflowの名前。
  * - `trigger`: 経由の短い説明。表のソースとテストだけで使い、画面のデータには出さない。

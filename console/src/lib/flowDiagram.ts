@@ -92,7 +92,7 @@ export function entryText(entry: FlowEntry): string {
         : `script ${entry.name}(${entry.caller}から起動)`;
     case "flow":
       if (entry.via === "pr") return `${entry.flow}からPR経由`;
-      if (entry.via === "pr_return") return `${entry.flow}からPR経由の戻り`;
+      if (entry.via === "pr_return") return `${entry.flow}からCI修正後の戻り`;
       return `${entry.flow}の${FLOW_ENTRY_WORDS[entry.via]}`;
   }
 }

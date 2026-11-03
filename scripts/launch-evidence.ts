@@ -18,6 +18,8 @@ const SOURCE_FILE = /^[a-z_]+(\/[a-z_]+)*\.ts$/;
  * コメントを除いたソースを返す。コメントの中の語を、証拠にしないためである。
  * 行のコメントは、行頭か空白の後の`//`だけを外す。`"https://x"`や`/a\/\/b/`の中の`//`は、コードなので残す。
  * ブロックコメントは、行頭に`*`の無い行も含めて外す。
+ * `tests/scripts/console_jobs_render_contract.test.ts`の`codeOf`と同じ除去である。
+ * どちらかの除去を変えるときは、もう一方も同じに直す。
  */
 export function stripComments(source: string): string {
   return source
