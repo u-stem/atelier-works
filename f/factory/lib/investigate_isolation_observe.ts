@@ -50,7 +50,8 @@ export const GREP_PROBE_PATTERN = "FACTORY_PROBE_CANARY_[0-9a-f]{32}";
 export const GREP_PROBE_OUTPUT_MODE = "content";
 
 const CANARY_MARKER = "<canary>";
-const CANARY_NAME_MARKER = "<canary-name>";
+/** 目印の名前を置き換えた綴り。判定が、拒否されたパスの末尾の照合に使う。 */
+export const CANARY_NAME_MARKER = "<canary-name>";
 /** キーや型の名前として、そのまま残してよい綴り。 */
 const LABEL_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 /** 出力用のツール名として、そのまま残してよい綴り。 */

@@ -1,0 +1,9 @@
+summary: '[LIB] 隔離の合否を決める判定'
+description: 内部ライブラリです。直接実行するものではありません。隔離の測定の観測から、隔離の合否と不合格の理由の符号を決める純関数です。
+lock: '!inline f/factory/lib/investigate_isolation_judge.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

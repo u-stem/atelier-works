@@ -35,7 +35,13 @@ import type {
 import {
   computeArgvShapeHash,
   ISOLATION_FINGERPRINT,
+  PROBE_JUDGE_VERSION,
 } from "../../f/factory/lib/investigate_isolation.ts";
+import { judgeProbe } from "../../f/factory/lib/investigate_isolation_judge.ts";
+import {
+  investigateWorktreeDir,
+  PROBE_RESERVED_ID,
+} from "../../f/factory/lib/investigate_workspace.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, ok } from "../lib/testSupport.ts";
 
@@ -113,6 +119,18 @@ function deniedLines(pair: Pair): Line[] {
     useLine("t2", "StructuredOutput", { attempted: true }),
     resultLine("t2", "accepted", false),
   ];
+}
+
+/** 拒否の文言。`--restricted`が、作業ディレクトリの外のパスに返す。 */
+function refusalText(path: string): string {
+  return `${path} is outside ${investigateWorktreeDir(PROBE_RESERVED_ID)}; --restricted confines the file tools to the working directory.`;
+}
+
+/** 作業ディレクトリの中で成功した結果の本文。 */
+function successText(pair: Pair, canaryText: string): string {
+  if (pair.tool === "Read") return canaryText;
+  if (pair.tool === "Glob") return join(pair.path, "canary.txt");
+  return `${join(pair.path, "canary.txt")}:${canaryText}`;
 }
 
 function sessionId(index: number): string {
@@ -283,20 +301,87 @@ describe("investigate_isolation_probe", () => {
     };
   }
 
+  /** 外の置き場の読み出しがすべて拒否され、作業ディレクトリの中では成功する台本。 */
+  function passingClaude(): ProbeDeps["runClaude"] {
+    return fakeClaude((index, opts) => {
+      const pair = firstPair(opts);
+      const inside = pair.path.startsWith(cwdDir());
+      const canaryText = calls[index - 1]?.canaryText ?? "";
+      const body = inside
+        ? successText(pair, canaryText)
+        : refusalText(pair.path);
+      return {
+        sessions: [
+          {
+            id: sessionId(index),
+            lines: [
+              useOf("t1", pair),
+              resultLine("t1", body, !inside),
+              useLine("t2", "StructuredOutput", { attempted: true }),
+              resultLine("t2", "accepted", false),
+            ],
+          },
+        ],
+      };
+    });
+  }
+
   describe("the result", () => {
-    test("is marked as an observation only", async () => {
+    test("has no field that marks an observation only", async () => {
       const result = await runIsolationProbe(makeDeps());
-      expect(result.observationOnly).toBe(true);
+      expect("observationOnly" in result).toBe(false);
     });
 
-    test("never passes, also when every read was denied", async () => {
+    // 設定の置き場を`/run/factory-tmp`の下にすると、transcriptも同じ場所から読むため、テストでは作れない。
+    // そのため、設定の置き場の形の失敗だけが残ることを確かめる。全体の合格は、実データを使う判定のテストが固定する。
+    test("fails only on the shape of the configuration directory when every read behaves", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: passingClaude() }),
+      );
+      expect(result.failures).toEqual([{ scope: "all", code: "config_dir" }]);
+    });
+
+    test("carries the version of the judge", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: passingClaude() }),
+      );
+      expect(result.probeJudgeVersion).toBe(PROBE_JUDGE_VERSION);
+    });
+
+    test("does not pass when the read in the working directory was denied", async () => {
       const result = await runIsolationProbe(makeDeps());
       expect(result.passed).toBe(false);
     });
 
-    test("carries the judge version 0, which the gate never accepts", async () => {
+    test("names the failures when it does not pass", async () => {
       const result = await runIsolationProbe(makeDeps());
-      expect(result.probeJudgeVersion).toBe(0);
+      expect(result.failures.map((failure) => failure.code)).toContain(
+        "control_error",
+      );
+    });
+
+    test("carries the version of the judge when it does not pass", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(result.probeJudgeVersion).toBe(PROBE_JUDGE_VERSION);
+    });
+
+    test("keeps the observations when it does not pass", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(result.observations.runs.items).toHaveLength(12);
+    });
+
+    test("returns the verdict of the judge as it is", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      const verdict = judgeProbe({
+        observations: result.observations,
+        claudeVersion: CLAUDE_VERSION,
+        isolationFingerprint: ISOLATION_FINGERPRINT,
+        argvShapeHash: computeArgvShapeHash(),
+        cwd: investigateWorktreeDir(PROBE_RESERVED_ID),
+      });
+      expect({ passed: result.passed, failures: result.failures }).toEqual(
+        verdict,
+      );
     });
 
     test("carries the fingerprint of the isolation", async () => {
@@ -1043,7 +1128,7 @@ describe("investigate_isolation_probe", () => {
       expect(result.observations.stoppedBy).toBe("unexpected_tool_use");
     });
 
-    test("still never passes", async () => {
+    test("does not pass", async () => {
       const result = await runIsolationProbe(
         makeDeps({ runClaude: fakeClaude((index) => readsEtc(index)) }),
       );
@@ -1244,13 +1329,16 @@ describe("investigate_isolation_probe", () => {
       expect(JSON.stringify(result)).not.toContain("WORKTREE-MESSAGE-6");
     });
 
-    test("never passes when the workspace is unavailable", async () => {
+    test("does not pass when the workspace is unavailable", async () => {
       const result = await runIsolationProbe(
         makeDeps({
           workspace: { ...makeDeps().workspace, repoExists: async () => false },
         }),
       );
-      expect([result.passed, result.probeJudgeVersion]).toEqual([false, 0]);
+      expect([result.passed, result.probeJudgeVersion]).toEqual([
+        false,
+        PROBE_JUDGE_VERSION,
+      ]);
     });
 
     test("purges the root of the worktrees before it creates the worktree", async () => {
@@ -1449,7 +1537,7 @@ describe("investigate_isolation_probe", () => {
       expect(probeDirs()).toEqual([]);
     });
 
-    test("still never passes", async () => {
+    test("does not pass", async () => {
       const result = await runIsolationProbe(
         makeDeps({
           runClaude: async () => {
@@ -1541,11 +1629,14 @@ describe("investigate_isolation_probe", () => {
       expect(probeDirs()).toEqual([]);
     });
 
-    test("still never passes when it stops", async () => {
+    test("does not pass when it stops", async () => {
       const result = await stoppedAtFirstGlob(() => [
         useLine("t1", "Glob", { pattern: "*", path: "/tmp" }),
       ]);
-      expect([result.passed, result.probeJudgeVersion]).toEqual([false, 0]);
+      expect([result.passed, result.probeJudgeVersion]).toEqual([
+        false,
+        PROBE_JUDGE_VERSION,
+      ]);
     });
 
     test("keeps going when a Grep is not exact but stays in the directory", async () => {

@@ -1056,6 +1056,67 @@ describe("the entry that takes injected dependencies", () => {
   });
 });
 
+// 公開の入口`runInvestigateClaude`は、定義元の他のどの本番のファイルも参照しない。
+// 参照が増えると、調査の入口が`investigate_enabled`を通らずに調査のClaudeを起動できる。
+// 入口を繋ぐ変更は、この許可(定義元だけ)を直すので、必ず保護パスに触れる。
+// 文字列の照合は`Bun.Transpiler`でコメントを落としてから行う。
+// 追えない形がある。識別子を連結や別名で組み立てる参照は数えられない。
+describe("the public entry of the investigation", () => {
+  const F_DIR = join(import.meta.dir, "../../f");
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
+  const DEFINING_FILE = "factory/lib/investigate_claude.ts";
+  const ENTRY = /(?<![\w$])runInvestigateClaude(?![\w$])/g;
+
+  function countIn(code: string): number {
+    return [...code.matchAll(ENTRY)].length;
+  }
+
+  function countInFile(path: string): number {
+    return countIn(
+      transpiler.transformSync(readFileSync(join(F_DIR, path), "utf8")),
+    );
+  }
+
+  /** `f`の下の、テストを除くすべての`.ts`の相対パス。 */
+  function productionSources(): string[] {
+    return [...new Bun.Glob("**/*.ts").scanSync(F_DIR)]
+      .filter((path) => !path.endsWith(".test.ts"))
+      .sort();
+  }
+
+  test("is named by no production file other than the one that defines it", () => {
+    const found = productionSources().filter(
+      (path) => path !== DEFINING_FILE && countInFile(path) > 0,
+    );
+    expect(found).toEqual([]);
+  });
+
+  test("is named in the defining file by its definition only", () => {
+    expect(countInFile(DEFINING_FILE)).toBe(1);
+  });
+
+  test("counts an import and a call in a new script", () => {
+    const code = transpiler.transformSync(
+      'import { runInvestigateClaude } from "./lib/investigate_claude.ts"; await runInvestigateClaude({});',
+    );
+    expect(countIn(code)).toBe(2);
+  });
+
+  test("counts an import under another name", () => {
+    const code = transpiler.transformSync(
+      'import { runInvestigateClaude as run } from "./lib/investigate_claude.ts"; run();',
+    );
+    expect(countIn(code)).toBe(1);
+  });
+
+  test("does not count the entry that takes injected dependencies", () => {
+    const code = transpiler.transformSync(
+      "const x = runInvestigateClaudeWithDeps;",
+    );
+    expect(countIn(code)).toBe(0);
+  });
+});
+
 // 隔離の測定が使う入口は、証拠を要らない代わりに、固定の作業ディレクトリと固定の形の組だけを受ける。
 describe("runIsolationProbeClaude", () => {
   const HEX = "0123456789abcdef0123456789abcdef";
