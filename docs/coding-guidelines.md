@@ -99,19 +99,13 @@ if (!isClaudeResult(parsed)) {
   手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「テスト先行の確認」にある。
 - 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
   手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「前提の検証」にある。
-- 1テストにつきアサーションは1つ。Arrange-Act-Assertの構成にする。
+- テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
 - 外部プロセス起動や`fetch`は引数として注入し、テストではダミー実装に差し替える(実プロセス・実HTTPを叩くテストは書かない)。
 - ただし、判定がgit自身の出力の形(パスの引用、未追跡ディレクトリのまとめ方、pathspecの解釈など)で決まるときは、一時ディレクトリに作ったリポジトリで実際のgitを実行するテストを書いてよい。`HOME`を一時ディレクトリに向けるなどして利用者の設定を読ませず、終わったらディレクトリを消す(`runCommand`で`echo`を実行するテストや、実際のflockを使うテストと同じ扱い)。
 
 ## テストの分類
 
-このリポジトリのテストは、Googleのテストサイズの分類(small、medium、large)で分ける。
-
-| サイズ | 対象 | 実行 |
-| --- | --- | --- |
-| small | DB、ネットワーク、コンテナを使わない単体テスト。`f/factory/lib/**`の大半がここに入り、外部プロセスの起動や`fetch`は注入したダミーに差し替える | `mise run test`(`bun test --parallel`) |
-| medium | composeのPostgresを使うSQLのスモークテストや、workerのイメージの使い捨てのコンテナで実際のsetpriv・flock・chownを使う検査コマンドの境界のテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db`、`mise run test:check-sandbox` |
-| large | 実際にIssueを起票して確かめるE2E | `factory-dev`スキルの「E2Eの動作確認」の手順 |
+テストの区分(small、medium、large)、層ごとの強度、観点の区分、書かないテスト、カバレッジの計測は、[テストの基準](testing-guidelines.md)が定める。
 
 ## Windmill scriptの作法
 
@@ -149,7 +143,7 @@ PRを出す前に必ず通す。
 gitのpre-pushは全体の`check`を実行しない。理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
-- `test`は`bun test --parallel`で、`console/`を除く。
+- `test`は`bun test --parallel`で、`console/`を除く。カバレッジを`coverage/lcov.info`に出す。`check`は、その後に`bun ./scripts/check-coverage.ts`で全体の行カバレッジの下限を確かめる。
 - `test:changed`は`origin/main`との差分が影響するテストだけを実行する。importの解析で選ぶので、コードから読まない設定や資産の変更は拾えない。全件の確認はCIが行う。
 - `check:changed`は、`scripts/check-changed.ts`が差分のパスから実行する検査を決める。重いのは`lint:docs`(全件で約77秒)なので、差分のMarkdownだけを検査する。絞り方を変えるときは`tests/scripts/check-changed.test.ts`を直す。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。

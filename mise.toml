@@ -188,7 +188,7 @@ run = "bunx --bun tsc --noEmit"
 
 [tasks.test]
 description = "Run the test suite (the console has its own suite in console:check)"
-run = "bun test --parallel --timeout 30000 --path-ignore-patterns 'console/**'"
+run = "bun test --parallel --timeout 30000 --path-ignore-patterns 'console/**' --coverage --coverage-reporter=lcov --coverage-dir=coverage"
 
 [tasks."test:changed"]
 description = "Run only the tests affected by the diff against origin/main (CI still runs the full suite)"
@@ -209,6 +209,7 @@ mise run lint
 mise run lint:docs
 mise run typecheck
 mise run test
+bun ./scripts/check-coverage.ts
 mise run console:check
 """
 

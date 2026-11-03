@@ -5254,7 +5254,10 @@ GitHubは、そのレビューを強制していない。
 
 YAMLの解釈は、テストが使うBunとwmillで違いうる。
 そのため、script定義では`lock`の行を完全に一致させ、解釈の違いに頼らない。
-CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
+CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。
+書き換えられると、検査のジョブを飛ばされるためである。
+カバレッジの下限を検査する`scripts/check-coverage.ts`と`tests/scripts/check_coverage.test.ts`も止める。
+下限の定数と対象の定義を、自動の修正が書き換えて検査を緩めるのを防ぐためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
 それぞれの`.script.yaml`も止める。
@@ -5267,6 +5270,9 @@ lockは、`metadata_patch_manifest.script.lock`だけを止める。新しいscr
 
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
+implementのClaudeは保護パスの変更を記録するだけで止まらない。
+カバレッジの下限での影響は、[テストの基準](testing-guidelines.md#残るリスク)にある。
+保護していないテストの削除による母数の変化と、lcovが改ざんを防がないことも、そこに書く。
 
 #### libのlockを保護しない理由
 

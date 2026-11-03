@@ -1533,6 +1533,7 @@ CIの失敗を直す回では、監視がこの理由を保留`fix_stopped`に�
 - scriptの定義の`lock`の参照先を固定する契約テスト: `tests/lib/script_yaml_lock_contract.test.ts`
 - テストの実行環境: `tests/preload.ts`。`bunfig.toml`の`preload`が全テストの前に読み込み、書き換えられるとテストの前にコードが走るため
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
+- カバレッジの下限の検査と、そのテスト: `scripts/check-coverage.ts`、`tests/scripts/check_coverage.test.ts`。下限の定数と対象の定義を、自動の修正が書き換えて検査を緩めるのを防ぐため
 - CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`。lockは`metadata_patch_manifest.script.lock`だけ(空のlockの参照)
 - hashの再計算の側
   - 部品: `lib/metadata_{hash,precheck,signature,git_ports}`の`.ts`と`.script.yaml`

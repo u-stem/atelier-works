@@ -270,6 +270,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
  * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
  * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+ * 全体のカバレッジの下限を縛る検査(`scripts/check-coverage.ts`)とそのテスト(`tests/scripts/check_coverage.test.ts`)も守る。
+ * 下限の定数と対象の定義がこの1か所にあり、書き換えられると、カバレッジが下がっても検査を通せる。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -290,6 +292,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/scripts/write-manifest.ts",
   "scripts/check-console-lockfile.ts",
   "scripts/ci-scope.ts",
+  "scripts/check-coverage.ts",
+  "tests/scripts/check_coverage.test.ts",
   "console/scripts/asset-name.ts",
   "console/vite.config.ts",
   "infra/Caddyfile",

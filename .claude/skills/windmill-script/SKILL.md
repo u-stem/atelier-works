@@ -106,7 +106,7 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 
 - `f/factory/lib/**`は、`bun test`でTDDする(Red → Green → Refactor)。
 - 外部プロセスの起動(`child_process.spawn`など)と`fetch`は関数の引数として注入し、テストではダミーの実装に差し替える。実プロセスや実HTTPを叩くテストは書かない。
-- 1テスト1アサーション、Arrange-Act-Assertの構成にする。
+- 1テスト1振る舞い、Arrange-Act-Assertの構成にする。基準は[テストの基準](../../../docs/testing-guidelines.md)に従う。
 
 ## メタデータとデプロイ
 
