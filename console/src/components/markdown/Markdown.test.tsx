@@ -230,3 +230,19 @@ describe("Markdown table appearance", () => {
     expect(render(TABLE)).toMatch(/<section aria-label="表"/);
   });
 });
+
+describe("Markdown without a repository", () => {
+  test("renders an issue url as text when the repository is unknown", () => {
+    expect(
+      renderToStaticMarkup(
+        <Markdown
+          markdown="[see](https://github.com/o/r/issues/3)"
+          headings={[]}
+          diagrams={[]}
+          rejectedDiagrams={[]}
+          repo={null}
+        />,
+      ),
+    ).not.toContain("<a ");
+  });
+});

@@ -17,9 +17,18 @@ import {
 } from "../../lib/approvalDecision.ts";
 import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
+import type { RepoRef } from "../../lib/markdownLink.ts";
+import type { ViewMode } from "../../lib/requirementsView.ts";
 import { ApprovalBar } from "./ApprovalBar.tsx";
 
-export function ProposalBody({ proposal }: { proposal: InboxProposal }) {
+export function ProposalBody({
+  proposal,
+}: {
+  proposal: InboxProposal;
+  repo?: RepoRef | null;
+  mode?: ViewMode;
+  modeSwitch?: ReactNode;
+}) {
   const title = displayableIssueText(proposal.proposal_title);
   const body = displayableIssueText(proposal.proposal_body);
   const origin = proposalOrigin(proposal);
@@ -88,6 +97,7 @@ export function ProposalReview({
   approval: SummaryApproval;
   title: string;
   now: number;
+  initialMode?: ViewMode;
 }) {
   const proposals = useInboxProposals();
   // 承認の可否は取得の状態だけで決まる。内容と食い違わないよう、取得が済んだら骨組みを残さず内容を出す。

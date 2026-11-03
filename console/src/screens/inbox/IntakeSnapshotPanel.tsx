@@ -1,4 +1,5 @@
 import { TriangleAlert } from "lucide-react";
+import type { ReactNode } from "react";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import { useIntakeSnapshot } from "../../api/queries.ts";
 import {
@@ -15,6 +16,7 @@ import {
 import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { displayableIssueText } from "../../lib/intakeText.ts";
+import type { ViewMode } from "../../lib/requirementsView.ts";
 
 /** 描画する状態。取得の結果を、描画に要る形だけにしたもの。 */
 export type IntakeSnapshotViewState =
@@ -121,6 +123,8 @@ export function IntakeSnapshotView({
   state,
 }: {
   state: IntakeSnapshotViewState;
+  mode?: ViewMode;
+  modeSwitch?: ReactNode;
 }) {
   return (
     <Card aria-labelledby="intake-snapshot-heading" tag="section">

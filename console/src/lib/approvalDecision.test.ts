@@ -11,6 +11,9 @@ import {
   FULL_CHECK_MESSAGE,
   factoryLabelChoice,
   isDecidable,
+  PREVIEW_CHECK_PROBLEM,
+  previewBlockedReason,
+  previewCheckMessage,
   proposalOrigin,
   reasonCounter,
   reasonFieldMessages,
@@ -405,6 +408,8 @@ describe("approveGateProblem", () => {
     blockedReason: null,
     fullCheckRequired: false,
     fullChecked: false,
+    previewCheckRequired: false,
+    previewChecked: false,
   };
 
   test("lets an open request through", () => {
@@ -440,6 +445,99 @@ describe("approveGateProblem", () => {
         fullChecked: true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("the preview check in approveGateProblem", () => {
+  const PREVIEWED = {
+    approval: { status: "pending", expires_at: null },
+    nowMs: NOW,
+    blockedReason: null,
+    fullCheckRequired: false,
+    fullChecked: false,
+    previewCheckRequired: true,
+    previewChecked: false,
+  };
+
+  test("requires the preview check after the preview", () => {
+    expect(approveGateProblem(PREVIEWED)).toBe(PREVIEW_CHECK_PROBLEM);
+  });
+
+  test("lets the approval through once the preview check is done", () => {
+    expect(
+      approveGateProblem({ ...PREVIEWED, previewChecked: true }),
+    ).toBeNull();
+  });
+
+  test("requires both checks when the body is truncated", () => {
+    expect(
+      approveGateProblem({
+        ...PREVIEWED,
+        fullCheckRequired: true,
+        previewChecked: true,
+      }),
+    ).toBe(FULL_CHECK_MESSAGE);
+  });
+
+  test("asks for the truncation check before the preview check", () => {
+    expect(approveGateProblem({ ...PREVIEWED, fullCheckRequired: true })).toBe(
+      FULL_CHECK_MESSAGE,
+    );
+  });
+
+  test("does not carry the truncation check to the preview check", () => {
+    expect(
+      approveGateProblem({
+        ...PREVIEWED,
+        fullCheckRequired: true,
+        fullChecked: true,
+      }),
+    ).toBe(PREVIEW_CHECK_PROBLEM);
+  });
+
+  test("puts the blocked reason before the preview check", () => {
+    expect(approveGateProblem({ ...PREVIEWED, blockedReason: "blocked" })).toBe(
+      "blocked",
+    );
+  });
+
+  test("puts the deadline before the preview check", () => {
+    expect(
+      approveGateProblem({
+        ...PREVIEWED,
+        approval: { status: "pending", expires_at: "2026-10-10T00:00:00.000Z" },
+      }),
+    ).toBe(EXPIRED_MESSAGE);
+  });
+
+  test("keeps reject independent of the preview", () => {
+    expect(rejectProblem("理由")).toBeNull();
+  });
+});
+
+describe("previewBlockedReason", () => {
+  test("names the target and asks to switch to the source", () => {
+    expect(previewBlockedReason("取り込み時点のIssue")).toBe(
+      "取り込み時点のIssueをプレビューで表示中は承認できません。原文に切り替えて確かめてください。",
+    );
+  });
+});
+
+describe("previewCheckMessage", () => {
+  test("names the target and says the source was checked", () => {
+    expect(previewCheckMessage("提案の本文")).toBe(
+      "提案の本文のプレビューを表示しました。プレビューは、生のHTML(コメントを含む)、リンク参照定義、画像を描かず、見えない文字を置き換えずに描くことがあります。原文で確かめました",
+    );
+  });
+
+  test("does not point at GitHub", () => {
+    expect(previewCheckMessage("提案の本文")).not.toContain("GitHub");
+  });
+});
+
+describe("PREVIEW_CHECK_PROBLEM", () => {
+  test("says that the source must be checked", () => {
+    expect(PREVIEW_CHECK_PROBLEM).toBe("原文で確かめるまで承認できません。");
   });
 });
 
@@ -773,6 +871,8 @@ describe("designBlockedReason", () => {
         }),
         fullCheckRequired: false,
         fullChecked: false,
+        previewCheckRequired: false,
+        previewChecked: false,
       }),
     ).toContain("作業項目の状態");
   });

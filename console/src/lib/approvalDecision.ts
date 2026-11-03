@@ -191,6 +191,19 @@ export const EXPIRED_MESSAGE = "期限を過ぎているため、承認も却下
 export const FULL_CHECK_MESSAGE =
   "本文が長いため、GitHubで全文を確かめるまで承認できません。";
 
+/** プレビューを表示中に承認を止める理由。対象名を入れる。 */
+export function previewBlockedReason(_target: string): string {
+  return "";
+}
+
+/** プレビューを選んだ承認で、原文を確かめたかを問うチェックの文。 */
+export function previewCheckMessage(_target: string): string {
+  return "";
+}
+
+/** プレビューの確認が済んでいないときに、承認を止める理由。 */
+export const PREVIEW_CHECK_PROBLEM = "";
+
 type DecisionSurface = "decide" | "expired" | "redo_issue" | "waiting" | "none";
 
 /**
@@ -237,6 +250,8 @@ export function approveGateProblem(input: {
   readonly blockedReason: string | null;
   readonly fullCheckRequired: boolean;
   readonly fullChecked: boolean;
+  readonly previewCheckRequired?: boolean;
+  readonly previewChecked?: boolean;
 }): string | null {
   if (input.blockedReason !== null) {
     return input.blockedReason;

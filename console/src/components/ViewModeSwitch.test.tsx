@@ -39,6 +39,30 @@ function clickHandlers(onChange: (mode: ViewMode) => void): (() => void)[] {
 }
 
 describe("ViewModeSwitch", () => {
+  test("names the text choice with the given label", () => {
+    const markup = renderToStaticMarkup(
+      <ViewModeSwitch
+        target="取り込み時点のIssue"
+        textLabel="原文"
+        mode="text"
+        onChange={() => undefined}
+      />,
+    );
+    expect(markup).toMatch(/プレビュー[\s\S]*原文/);
+  });
+
+  test("does not use the default text label when a label is given", () => {
+    const markup = renderToStaticMarkup(
+      <ViewModeSwitch
+        target="取り込み時点のIssue"
+        textLabel="原文"
+        mode="text"
+        onChange={() => undefined}
+      />,
+    );
+    expect(markup).not.toContain("Markdownの文字");
+  });
+
   test("renders the two choices with aria-pressed", () => {
     expect(pressedOf(html("preview"))).toEqual(["true", "false"]);
   });

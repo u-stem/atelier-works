@@ -17,6 +17,7 @@ export function ViewModeSwitch({
   mode,
   onChange,
 }: {
+  textLabel?: string;
   target: string;
   mode: ViewMode;
   onChange: (mode: ViewMode) => void;

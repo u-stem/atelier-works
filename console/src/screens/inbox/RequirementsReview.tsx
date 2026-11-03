@@ -18,7 +18,7 @@ import {
 import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { attemptRef } from "../../lib/labels.ts";
-import { prepareDoc } from "../../lib/requirementsView.ts";
+import { prepareDoc, type ViewMode } from "../../lib/requirementsView.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 import { RequirementsDocumentView } from "../items/RequirementsDocumentView.tsx";
 import { ApprovalBar } from "./ApprovalBar.tsx";
@@ -127,6 +127,7 @@ export function RequirementsReview({
   approval: SummaryApproval;
   title: string;
   now: number;
+  initialMode?: ViewMode;
 }) {
   return approval.draft_attempt === null ? (
     <ReviewBody

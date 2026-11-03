@@ -47,6 +47,7 @@ type BarProps = {
   refreshed: boolean;
   /** 本文が長く、GitHubで全文を確かめるまで承認を止めるか。 */
   fullCheckRequired: boolean;
+  previewCheckMessage?: string | null;
 };
 
 function Note({ children }: { children: ReactNode }) {
