@@ -13,6 +13,9 @@ export default defineConfig({
   // `bun test`が拾わないよう、検査の名前は`*.a11y.ts`にする。
   testMatch: "**/*.a11y.ts",
   fullyParallel: true,
+  // 検査はaxeの解析でCPUを使うので、CIでは論理コアの数だけ並列にする。
+  // ローカルはPlaywrightの既定(論理コアの半分)のままにする。
+  workers: inCi ? "100%" : "50%",
   forbidOnly: inCi,
   retries: 0,
   reporter: inCi
