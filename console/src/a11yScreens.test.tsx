@@ -383,6 +383,8 @@ type IntakeScene = {
   readonly arrange: () => void;
   /** 状態が画面に届いたことを示す文字列。 */
   readonly shows: string;
+  /** サーバー側の結果を、読み上げに通知する部品(`role="alert"`)で出すか。 */
+  readonly announces: boolean;
 };
 
 const KEY = MANUAL_INTAKE_WRITE_KEY;
@@ -402,6 +404,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       });
     },
     shows: "投入できませんでした",
+    announces: true,
   },
   {
     name: "a rejection before the job ran",
@@ -413,6 +416,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       });
     },
     shows: "権限がありません。",
+    announces: true,
   },
   {
     name: "a submit that may have been made",
@@ -425,6 +429,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       });
     },
     shows: "確かめたので再送する",
+    announces: true,
   },
   {
     name: "a submit that may have been made, with the resend confirmed",
@@ -437,6 +442,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       });
     },
     shows: "投入されていないことを確かめた状態です",
+    announces: true,
   },
   {
     name: "a submit that may have been made, with a profile that skips approval",
@@ -449,6 +455,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       });
     },
     shows: "送った進め方",
+    announces: true,
   },
   {
     name: "a submit that was made",
@@ -457,6 +464,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       intakeSessions.record(KEY, { kind: "submitted", flowJobId: JOB.id });
     },
     shows: "投入のジョブを開く",
+    announces: true,
   },
   {
     name: "a submit in progress",
@@ -465,6 +473,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       writeLocks.tryAcquire(KEY);
     },
     shows: "送信しています",
+    announces: false,
   },
   {
     name: "a submit in progress while the list is stale",
@@ -474,6 +483,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       writeLocks.tryAcquire(KEY);
     },
     shows: "作業項目の一覧を読み直せませんでした",
+    announces: true,
   },
   {
     name: "a draft of a profile that skips approval",
@@ -481,6 +491,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       intakeSessions.draft(KEY, { ...INTAKE_FORM, profile: "direct" });
     },
     shows: "PRは人がレビューしてからマージしてください",
+    announces: false,
   },
   {
     name: "a draft of a bug fix",
@@ -488,6 +499,7 @@ const INTAKE_SCENES: readonly IntakeScene[] = [
       intakeSessions.draft(KEY, { ...INTAKE_FORM, profile: "bugfix" });
     },
     shows: "再現手順",
+    announces: false,
   },
 ];
 
@@ -499,6 +511,14 @@ describe("a11y: the new item screen in the states of a submit", () => {
       scene.arrange();
 
       expect(await renderChild("items/new", "normal")).toContain(scene.shows);
+    });
+
+    test(`${scene.announces ? "announces" : "does not announce"} ${scene.name} as an alert`, async () => {
+      scene.arrange();
+
+      expect(
+        (await renderChild("items/new", "normal")).includes('role="alert"'),
+      ).toBe(scene.announces);
     });
 
     test(`has no violations with ${scene.name}`, async () => {

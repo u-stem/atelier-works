@@ -440,6 +440,79 @@ test.describe("new item form by keyboard", () => {
         "0 / 256字",
       );
     });
+
+    test("moves the focus to the first empty field when the submit button is clicked", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "投入する" }).click();
+
+      await expect(field(page, "題名")).toBeFocused();
+    });
+
+    test("moves the focus to the first empty field when Enter is pressed on the submit button", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "投入する" }).focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "題名")).toBeFocused();
+    });
+
+    test("moves the focus to the purpose when only the purpose is empty", async ({
+      page,
+    }) => {
+      await field(page, "題名").fill("example title");
+
+      await page.getByRole("button", { name: "投入する" }).click();
+
+      await expect(field(page, "目的")).toBeFocused();
+    });
+
+    test("moves the focus to the repository when it is invalid and the title is empty", async ({
+      page,
+    }) => {
+      await field(page, "リポジトリ").fill("invalid");
+
+      await page.getByRole("button", { name: "投入する" }).click();
+
+      await expect(field(page, "リポジトリ")).toBeFocused();
+    });
+
+    test("moves the focus to the first of the fields of a bug fix", async ({
+      page,
+    }) => {
+      await page.getByRole("radio", { name: /^不具合の修正/ }).check();
+      await field(page, "題名").fill("example title");
+      await field(page, "目的").fill("example purpose");
+
+      await page.getByRole("button", { name: "承認なしで投入する" }).click();
+
+      await expect(field(page, "再現手順")).toBeFocused();
+    });
+
+    test("moves the focus again on each submit with a problem", async ({
+      page,
+    }) => {
+      const submit = page.getByRole("button", { name: "投入する" });
+      await submit.click();
+      await submit.focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "題名")).toBeFocused();
+    });
+
+    test("leaves the focus where the user moves it after a problem is shown", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "投入する" }).click();
+      await field(page, "題名").fill("example title");
+
+      await page.keyboard.press("Tab");
+
+      await expect(field(page, "目的")).toBeFocused();
+    });
   });
 
   test("describes the repository by its hint", async ({ page }) => {
@@ -535,6 +608,48 @@ test.describe("PR review form by keyboard", () => {
       await expect(field(page, "リポジトリ")).toHaveAccessibleDescription(
         /PRのURLを入力するときは、空のままでも構いません。.*入力してください。/,
       );
+    });
+
+    test("moves the focus to the pull request when the submit button is clicked", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "レビューを投入する" }).click();
+
+      await expect(field(page, "PRの番号またはURL")).toBeFocused();
+    });
+
+    test("moves the focus to the pull request when Enter is pressed on the submit button", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "レビューを投入する" }).focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "PRの番号またはURL")).toBeFocused();
+    });
+
+    test("moves the focus to the repository when it is invalid", async ({
+      page,
+    }) => {
+      await field(page, "リポジトリ").fill("invalid");
+      await field(page, "PRの番号またはURL").fill("1");
+
+      await page.getByRole("button", { name: "レビューを投入する" }).click();
+
+      await expect(field(page, "リポジトリ")).toBeFocused();
+    });
+
+    test("leaves the focus where the user moves it after a problem is shown", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "レビューを投入する" }).click();
+      await field(page, "PRの番号またはURL").fill("1");
+
+      await page.keyboard.press("Tab");
+
+      await expect(
+        page.getByRole("button", { name: "レビューを投入する" }),
+      ).toBeFocused();
     });
   });
 });
