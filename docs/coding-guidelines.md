@@ -99,7 +99,7 @@ if (!isClaudeResult(parsed)) {
   手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「テスト先行の確認」にある。
 - 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
   手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「前提の検証」にある。
-- 1つのテストで確かめる振る舞いは1つ。同じ振る舞いを確かめるexpectは複数あってよい。Arrange-Act-Assertの構成にする。
+- テストの書き方は[テストの基準](testing-guidelines.md#テストの書き方)に従う。
 - 外部プロセス起動や`fetch`は引数として注入し、テストではダミー実装に差し替える(実プロセス・実HTTPを叩くテストは書かない)。
 - ただし、判定がgit自身の出力の形(パスの引用、未追跡ディレクトリのまとめ方、pathspecの解釈など)で決まるときは、一時ディレクトリに作ったリポジトリで実際のgitを実行するテストを書いてよい。`HOME`を一時ディレクトリに向けるなどして利用者の設定を読ませず、終わったらディレクトリを消す(`runCommand`で`echo`を実行するテストや、実際のflockを使うテストと同じ扱い)。
 

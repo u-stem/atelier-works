@@ -5209,6 +5209,8 @@ GitHubは、そのレビューを強制していない。
 YAMLの解釈は、テストが使うBunとwmillで違いうる。
 そのため、script定義では`lock`の行を完全に一致させ、解釈の違いに頼らない。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
+カバレッジの下限を検査する`scripts/check-coverage.ts`と`tests/scripts/check_coverage.test.ts`も止める。下限の定数と対象の定義を、自動の修正が書き換えて検査を緩めるのを防ぐためである。
+implementのClaudeは保護パスの変更を記録するだけで止まらないので、人のレビューが最後の関門になる。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
 それぞれの`.script.yaml`も止める。
