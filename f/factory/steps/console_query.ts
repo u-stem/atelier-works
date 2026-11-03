@@ -1033,9 +1033,10 @@ export type DesignDocRow = {
 
 /**
  * 設計書の行を返す形にする。
- * 図は、同じ組(要件定義の下書きと設計の試行)で最新の行のときだけ読む。
- * 同じ組の行は同じ`doc_dir`を指すので、古い行が読むと、新しい行の図を自分の図として返してしまう。
- * 最新でない行の図は、読まずに空にする。
+ * 図は、同じ`doc_dir`を指す行の中で最新の行のときだけ読む。
+ * 同じ`doc_dir`を指す行(要件定義の下書きと設計の試行が同じ組の行)は同じ図のファイルを読むので、
+ * 古い行が読むと、新しい行の図を自分の図として返してしまう。
+ * 最新でない行の図は、読まずに空にする。`doc_dir`が無い行は、図を読まない。
  */
 async function toDesignDocRow(
   row: SqlRow,
@@ -2763,10 +2764,11 @@ export async function runConsoleQuery(
           'console_query: "work_item_id" is required for view "design_doc"',
         );
       }
-      // 渡された設計書の番号が正の整数でなければ、無指定(最新)にせず空を返す。
-      // 不正な値を最新として扱うと、別の設計書を読んでいるのに気づけないため。
+      // 無指定(`undefined`と`null`)は最新を返す。渡された設計書の番号が正の整数でなければ、
+      // 最新にせず空を返す。不正な値を最新として扱うと、別の設計書を読んでいるのに気づけないため。
       if (
         designDraftId !== undefined &&
+        designDraftId !== null &&
         !(Number.isInteger(designDraftId) && designDraftId > 0)
       ) {
         return [];
@@ -2774,7 +2776,7 @@ export async function runConsoleQuery(
       const draftId = designDraftId ?? null;
       // 設計の試行の番号は作業項目の中で一意でない(要件定義へ戻ると重なる)ので、番号ではなく
       // `design_drafts.id`で引く。無指定は`id`が最大の行である。別の作業項目の番号は結ばない。
-      // `is_newest_of_pair`は、同じ組(要件定義の下書きと設計の試行)で最新の行かを示し、図を読んでよいかを決める。
+      // `is_newest_of_pair`は、同じ`doc_dir`を指す行の中で最新かを示し、図を読んでよいかを決める。
       const rows = await sql`
         SELECT
           dd.id, dd.work_item_id, dd.requirement_draft_id, wi.owner, wi.repo,
@@ -2783,9 +2785,7 @@ export async function runConsoleQuery(
           ar.approval_request_id, ar.approval_status,
           NOT EXISTS (
             SELECT 1 FROM factory.design_drafts newer
-            WHERE newer.work_item_id = dd.work_item_id
-              AND newer.requirement_draft_id = dd.requirement_draft_id
-              AND newer.design_attempt = dd.design_attempt
+            WHERE newer.doc_dir = dd.doc_dir
               AND newer.id > dd.id
           ) AS is_newest_of_pair
         FROM factory.design_drafts dd
@@ -2960,7 +2960,7 @@ export type ConsoleQueryResult =
  * `view`が既知のビューでなければ例外を投げる。
  * "work_item_detail"では`work_item_id`が必須で、無ければ例外を投げる。
  * "approval_design_doc"では`approval_request_id`が必須で、無いか不正なら例外を投げる。
- * "design_doc"では`work_item_id`が必須で、`draft_id`(設計書の番号)は、渡されて不正なら空を返し、無指定なら最新を返す。
+ * "design_doc"では`work_item_id`が必須で、`draft_id`(設計書の番号)は、渡されて不正なら空を返し、無指定(`null`を含む)なら最新を返す。
  */
 export async function main(
   view: string,
