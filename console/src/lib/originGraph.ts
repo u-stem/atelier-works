@@ -368,19 +368,17 @@ export function layoutOriginGraph(
   const edges = model.edges.flatMap((edge): OriginEdgeLayout[] => {
     const target = byName.get(edge.to);
     if (target === undefined) return [];
-    const source = edge.from === null ? origin : byName.get(edge.from);
-    if (source === undefined) return [];
-    const row =
-      edge.from !== null && edge.step !== null && "steps" in source
-        ? source.steps.find((step) => step.id === edge.step)
-        : undefined;
+    const node = edge.from === null ? undefined : byName.get(edge.from);
+    if (edge.from !== null && node === undefined) return [];
+    const source: Box = node ?? origin;
+    const row = node?.steps.find((step) => step.id === edge.step);
     const start: Point = {
       x: source.x + source.width,
       y:
         row !== undefined
           ? row.y + row.height / 2
-          : "headerHeight" in source
-            ? source.y + source.headerHeight / 2
+          : node !== undefined
+            ? node.y + node.headerHeight / 2
             : source.y + source.height / 2,
     };
     const end: Point = {
