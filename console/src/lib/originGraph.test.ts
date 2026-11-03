@@ -791,6 +791,108 @@ describe("layoutOriginGraph", () => {
   });
 });
 
+/** 終点の矢じりを、線の終点で止まる12x12の矩形として扱う。 */
+const ARROWHEAD = 12;
+
+function arrowheadOf(points: readonly Point[]): Box {
+  const end = points[points.length - 1] ?? { x: 0, y: 0 };
+  return {
+    x: end.x - ARROWHEAD,
+    y: end.y - ARROWHEAD / 2,
+    width: ARROWHEAD,
+    height: ARROWHEAD,
+  };
+}
+
+/** 線分が、矩形の内側(縁を含まない)を通るか。 */
+function passesThrough(segment: Segment, box: Box): boolean {
+  const [from, to] = segment;
+  const steps = Math.max(
+    1,
+    Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) * 4),
+  );
+  for (let index = 0; index <= steps; index += 1) {
+    const x = from.x + ((to.x - from.x) * index) / steps;
+    const y = from.y + ((to.y - from.y) * index) / steps;
+    if (
+      x > box.x &&
+      x < box.x + box.width &&
+      y > box.y &&
+      y < box.y + box.height
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 開閉の全組み合わせと、初めの状態。 */
+function expansions(model: OriginGraphModel): ReadonlySet<string>[] {
+  const names = model.nodes.map((node) => node.flow.name);
+  const all: ReadonlySet<string>[] = [];
+  for (let mask = 0; mask < 2 ** names.length; mask += 1) {
+    all.push(new Set(names.filter((_, index) => (mask >> index) & 1)));
+  }
+  return [...all, initialExpanded(model)];
+}
+
+describe("layoutOriginGraph arrowheads", () => {
+  test.each(SCHEDULE_NAMES)(
+    "keeps the arrowhead of a line that skips a column of %s clear of the other lines",
+    (name) => {
+      const model = realModel(name);
+      const clashes = expansions(model).flatMap((expanded) => {
+        const layout = layoutOriginGraph(model, expanded);
+        return layout.edges.flatMap((item) => {
+          if (item.edge.span <= 1) return [];
+          const head = arrowheadOf(item.points);
+          return layout.edges.flatMap((other) => {
+            if (other === item) return [];
+            const otherHead = arrowheadOf(other.points);
+            const headsOverlap = overlaps(head, otherHead);
+            const headMeetsLine = segmentsOf(other.points).some((segment) =>
+              passesThrough(segment, head),
+            );
+            const lineMeetsHead = segmentsOf(item.points).some((segment) =>
+              passesThrough(segment, otherHead),
+            );
+            return headsOverlap || headMeetsLine || lineMeetsHead
+              ? [
+                  `${[...expanded].join(",") || "closed"}: ${item.edge.from}->${item.edge.to} and ${other.edge.from}->${other.edge.to}`,
+                ]
+              : [];
+          });
+        });
+      });
+
+      expect(clashes).toEqual([]);
+    },
+  );
+
+  test.each(SCHEDULE_NAMES)(
+    "ends every line of %s within the header of its target",
+    (name) => {
+      const model = realModel(name);
+      const outside = expansions(model).flatMap((expanded) => {
+        const layout = layoutOriginGraph(model, expanded);
+        return layout.edges.flatMap((item) => {
+          const target = layout.nodes.find(
+            (node) => node.flow === item.edge.to,
+          );
+          const end = item.points[item.points.length - 1];
+          return target === undefined ||
+            end === undefined ||
+            (end.y >= target.y && end.y <= target.y + target.headerHeight)
+            ? []
+            : [`${item.edge.from}->${item.edge.to}`];
+        });
+      });
+
+      expect(outside).toEqual([]);
+    },
+  );
+});
+
 describe("originDiagramLabel", () => {
   test("names the diagram after the schedule", () => {
     expect(originDiagramLabel("poll_prs")).toBe("poll_prsの起動の図");

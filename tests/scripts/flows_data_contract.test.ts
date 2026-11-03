@@ -467,7 +467,9 @@ describe("the rework exits", () => {
         edge.kind === "script" &&
         edge.from.startsWith("steps/") &&
         edge.to === "design" &&
-        !REWORK_LAUNCH_EDGES.some((other) => other.from === edge.from),
+        !REWORK_LAUNCH_EDGES.some(
+          (other) => other.from === edge.from && other.to === "design",
+        ),
     ).filter((edge) => sourceOf(edge.from).includes("design_gap"));
 
     expect(plain).toEqual([]);
