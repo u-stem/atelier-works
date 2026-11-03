@@ -740,7 +740,7 @@ describe("the PR relation in the coverage", () => {
 
   test("draws the entry from a PR return in the flow diagram", () => {
     expect(plain(draw("the flow diagram with a PR relation"))).toContain(
-      "pr_fixからPR経由の戻り",
+      "pr_fixからCI修正後の戻り",
     );
   });
 

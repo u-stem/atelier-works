@@ -184,7 +184,7 @@ describe("FlowDiagramFrame: the exits", () => {
     ["pr_fix", "pr_reviewからPR経由"],
     ["pr_fix", "dependabotからPR経由"],
     ["pr_review", "implementからPR経由"],
-    ["pr_review", "pr_fixからPR経由の戻り"],
+    ["pr_review", "pr_fixからCI修正後の戻り"],
   ])("writes the entry of %s from the PR relation: %s", (name, text) => {
     expect(plain(render(name))).toContain(text);
   });

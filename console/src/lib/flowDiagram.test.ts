@@ -347,9 +347,9 @@ describe("entryText", () => {
     );
   });
 
-  test("words a PR return entry as a return from the flow", () => {
+  test("words a PR return entry as the return after the CI fix", () => {
     expect(entryText({ kind: "flow", flow: "pr_fix", via: "pr_return" })).toBe(
-      "pr_fixからPR経由の戻り",
+      "pr_fixからCI修正後の戻り",
     );
   });
 });
@@ -755,6 +755,7 @@ describe("activeScrollLeft", () => {
   });
 
   test("moves a running step on the right edge into view", () => {
+    // 出口が右へ広がると、図の幅が出口で決まり、右端のステップが図の右端に来ない。出口を空にして、右端に来る図にする。
     const withoutExits = { ...realFlow("pr_fix"), exits: [] };
     const last = withoutExits.steps[4];
     const layout = layoutFlowDiagram(

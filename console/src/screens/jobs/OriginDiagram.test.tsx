@@ -42,6 +42,28 @@ function countOf(html: string, word: string): number {
   return html.split(word).length - 1;
 }
 
+/** 起点が起動するflowの名前。 */
+function launchedBy(name: string): string[] {
+  if (FLOWS_DATA === null) throw new Error("flows.json is unreadable");
+  const model = originGraphModel(FLOWS_DATA, name);
+  if (model === null) throw new Error(`no schedule ${name}`);
+  return model.edges
+    .filter((edge) => edge.from === null)
+    .map((edge) => edge.to);
+}
+
+/** 一覧の、起点のカードの出口の行の文字。出口の一覧が無ければ空にする。 */
+function originExitsOf(html: string, name: string): string {
+  const match = new RegExp(
+    `<ul[^>]*aria-label="${name}の出口"[^>]*>(.*?)</ul>`,
+  ).exec(html);
+  return match === null ? "" : plain(match[1] ?? "");
+}
+
+const SCHEDULES_WITH_FLOWS = (FLOWS_DATA?.schedules ?? [])
+  .map((schedule) => schedule.name)
+  .filter((name) => launchedBy(name).length > 0);
+
 const FIT = 1200;
 const SCROLL = 900;
 const LIST = 500;
@@ -52,7 +74,7 @@ const LEGEND =
 
 /** PRを介した線を持つ図の凡例。 */
 const LEGEND_WITH_PR =
-  "実線は起動の流れ、破線はPRを介した関係(別の定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+  "実線は起動の流れ、破線はPRを介した関係(この起点を含む定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
 describe("OriginDiagramView: the diagram", () => {
   test("is a labeled group named after the schedule", () => {
@@ -407,6 +429,28 @@ describe("OriginDiagramView: the presentation by width", () => {
       "差し戻し: design",
     );
   });
+
+  test.each(["self_update", "poll_prs"])(
+    "lists the launch of pr_fix from the origin of %s, which skips a column",
+    (name) => {
+      expect(originExitsOf(render(name, { width: LIST }), name)).toContain(
+        "次に起動: pr_fix",
+      );
+    },
+  );
+
+  test.each(SCHEDULES_WITH_FLOWS)(
+    "lists every line from the origin of %s in the list",
+    (name) => {
+      const html = render(name, { width: LIST });
+
+      expect(
+        launchedBy(name).filter(
+          (flow) => !originExitsOf(html, name).includes(`次に起動: ${flow}`),
+        ),
+      ).toEqual([]);
+    },
+  );
 
   test("writes the launch that a line draws in the diagram as an exit in the list", () => {
     expect(plain(render("poll_issues", { width: LIST }))).toContain(
