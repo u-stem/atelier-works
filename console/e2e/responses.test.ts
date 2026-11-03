@@ -22,7 +22,10 @@ import {
   isJobList,
   isSchedulesSnapshot,
 } from "../src/api/jobsQueries.ts";
-import { APPROVAL_DESIGN_DOC_NORMAL } from "./fixtures.ts";
+import {
+  APPROVAL_DESIGN_DOC_NORMAL,
+  APPROVAL_DESIGN_DOC_TRUNCATED_ITEM,
+} from "./fixtures.ts";
 import { type Mode, replyFor, scriptOfPath } from "./responses.ts";
 
 const QUERY = "f/factory/steps/console_query";
@@ -121,6 +124,10 @@ describe("the design of an approval request", () => {
 
   test("returns the design by approval request id", () => {
     expect(designBody(3)).toEqual([APPROVAL_DESIGN_DOC_NORMAL]);
+  });
+
+  test("returns the design of another approval request by its id", () => {
+    expect(designBody(9)).toEqual([APPROVAL_DESIGN_DOC_TRUNCATED_ITEM]);
   });
 
   test("returns no design for an id that the table does not have", () => {

@@ -414,6 +414,17 @@ export const APPROVAL_DESIGN_DOC_NORMAL = {
   approval_status: "pending",
 };
 
+/**
+ * 取り込み時点のIssueが切り詰められた、設計の承認(作業項目9)の設計書。
+ * 設計書自体は切り詰めていない。別の依頼の設計書と見分けられるよう、見出しを変える。
+ */
+export const APPROVAL_DESIGN_DOC_TRUNCATED_ITEM = {
+  ...APPROVAL_DESIGN_DOC_NORMAL,
+  approval_request_id: 9,
+  work_item_id: TRUNCATED_WORK_ITEM_ID,
+  text: `# 切り詰めた依頼の設計\n\n${APPROVAL_BODY_MARKDOWN}\n`,
+};
+
 export const INTAKE_SNAPSHOT_NORMAL = {
   work_item_id: 1,
   owner: "o",

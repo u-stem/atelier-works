@@ -1058,7 +1058,7 @@ test.describe("view mode switch by keyboard", () => {
 
 // 承認画面の本文の切り替え(取り込み時点のIssue、提案の本文、設計書)。原文が既定で、プレビューは参考の表示である。
 // プレビューを表示している間は承認を止める。
-// 取り込み時点のIssueと提案の本文は、原文に戻すと、原文を確かめたかのチェックを求める(設計書は求めない)。
+// 取り込み時点のIssue、提案の本文、設計書は、プレビューを選んで原文に戻すと、原文を確かめたかのチェックを求める。
 // チェックを入れると承認できる。却下の理由の欄は、切り替えで変わらない。
 test.describe("approval body preview by keyboard", () => {
   const SCREENS: readonly {
@@ -1084,7 +1084,7 @@ test.describe("approval body preview by keyboard", () => {
       path: "?approval=3",
       group: "設計書の表示の形式",
       reason: "設計書をプレビューで表示中は承認できません。",
-      check: null,
+      check: "設計書のプレビューを表示しました。",
     },
   ];
 
@@ -1256,26 +1256,87 @@ test.describe("design approval preview and source by keyboard", () => {
     await expect(page.locator('bdo[dir="ltr"]').first()).toBeVisible();
     await expect(page.locator("[data-preview]")).toHaveCount(0);
   });
-
-  test("lets the approval through when the source is shown again", async ({
-    page,
-  }) => {
-    await openScreen(page, PATH);
-    await choose(page, "プレビュー");
-
-    await choose(page, "原文");
-
-    await expect(page.getByRole("button", { name: "承認する" })).toBeEnabled();
-  });
 });
 
 // 本文が切り詰められた承認では、切り詰めの確認とプレビューの確認が別のチェックである。
 // 切り詰めの確認を済ませても、プレビューを選んだ後は、プレビューの確認を済ませるまで承認できない。
+// 要件定義の承認は取り込み時点のIssueの、設計の承認は設計書の切り替えで確かめる。
 test.describe("truncated approval body after the preview", () => {
-  const PATH = "?approval=5";
-  const GROUP = "取り込み時点のIssueの表示の形式";
   const TRUNCATION_CHECK = /^本文が長く、上には先頭だけを表示しています。/;
-  const PREVIEW_CHECK = /^取り込み時点のIssueのプレビューを表示しました。/;
+  const CASES: readonly {
+    path: string;
+    group: string;
+    previewCheck: RegExp;
+  }[] = [
+    {
+      path: "?approval=5",
+      group: "取り込み時点のIssueの表示の形式",
+      previewCheck: /^取り込み時点のIssueのプレビューを表示しました。/,
+    },
+    {
+      path: "?approval=9",
+      group: "設計書の表示の形式",
+      previewCheck: /^設計書のプレビューを表示しました。/,
+    },
+  ];
+
+  for (const { path, group, previewCheck } of CASES) {
+    test.describe(`/console/${path}`, () => {
+      async function choose(page: Page, label: string) {
+        await page
+          .getByRole("group", { name: group })
+          .getByRole("button", { name: label })
+          .focus();
+        await page.keyboard.press("Enter");
+      }
+
+      test("stops the approval until the truncation check is done", async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+
+        await expect(
+          page.getByRole("button", { name: "承認する" }),
+        ).toBeDisabled();
+      });
+
+      test("does not carry the truncation check to the preview check", async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        await page.getByLabel(TRUNCATION_CHECK).check();
+        await choose(page, "プレビュー");
+
+        await choose(page, "原文");
+
+        await expect(
+          page.getByRole("button", { name: "承認する" }),
+        ).toBeDisabled();
+      });
+
+      test("lets the approval through once both checks are done", async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        await page.getByLabel(TRUNCATION_CHECK).check();
+        await choose(page, "プレビュー");
+        await choose(page, "原文");
+
+        await page.getByLabel(previewCheck).check();
+
+        await expect(
+          page.getByRole("button", { name: "承認する" }),
+        ).toBeEnabled();
+      });
+    });
+  }
+});
+
+// 設計の承認で、プレビューを選んだ記録は、別の承認へ移ると持ち越さない。
+// 一覧の行を選んで移る(ページを読み込み直さない)。
+test.describe("design approval check across approvals", () => {
+  const GROUP = "設計書の表示の形式";
+  const PREVIEW_CHECK = /^設計書のプレビューを表示しました。/;
 
   async function choose(page: Page, label: string) {
     await page
@@ -1285,37 +1346,20 @@ test.describe("truncated approval body after the preview", () => {
     await page.keyboard.press("Enter");
   }
 
-  test("stops the approval until the truncation check is done", async ({
-    page,
-  }) => {
-    await openScreen(page, PATH);
-
-    await expect(page.getByRole("button", { name: "承認する" })).toBeDisabled();
-  });
-
-  test("does not carry the truncation check to the preview check", async ({
-    page,
-  }) => {
-    await openScreen(page, PATH);
-    await page.getByLabel(TRUNCATION_CHECK).check();
-    await choose(page, "プレビュー");
-
-    await choose(page, "原文");
-
-    await expect(page.getByRole("button", { name: "承認する" })).toBeDisabled();
-  });
-
-  test("lets the approval through once both checks are done", async ({
-    page,
-  }) => {
-    await openScreen(page, PATH);
-    await page.getByLabel(TRUNCATION_CHECK).check();
+  test("does not carry the check to another approval", async ({ page }) => {
+    await openScreen(page, "?approval=3");
     await choose(page, "プレビュー");
     await choose(page, "原文");
+    // 移る前に、確認のチェックが出ていることを見る。出ていなければ、移った後の0件に意味が無い。
+    await expect(page.getByLabel(PREVIEW_CHECK)).toBeVisible();
 
-    await page.getByLabel(PREVIEW_CHECK).check();
+    await page.locator('[data-row="approval:9"]').click();
+    // 移った先の設計書が描かれるまで待ってから、確認のチェックが無いことを見る。
+    await expect(
+      page.locator('bdo[dir="ltr"]', { hasText: "切り詰めた依頼の設計" }),
+    ).toBeVisible();
 
-    await expect(page.getByRole("button", { name: "承認する" })).toBeEnabled();
+    await expect(page.getByLabel(PREVIEW_CHECK)).toHaveCount(0);
   });
 });
 
