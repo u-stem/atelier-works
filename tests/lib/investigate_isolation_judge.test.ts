@@ -1422,6 +1422,16 @@ const JUDGE_HASHES: readonly JudgeHashRow[] = [
     probeSha256:
       "084406b1db55a8987af11d70d8775408d01854c40e4aa6ead3a925befc13db93",
   },
+  {
+    // 測定の開始時に、稼働中の調査を断る確認を足した。判定と観測は変えていない。
+    version: 2,
+    judgeSha256:
+      "32dc0a5e73bc503fbe76b17da24f17afdcb5169954c51154b471f3d5816b3042",
+    observeSha256:
+      "de119960c2682f77eee9864e04735ba3f50976f791fe0c4fc401d4c1d7bed60c",
+    probeSha256:
+      "0000000000000000000000000000000000000000000000000000000000000000",
+  },
 ];
 
 function sha256Of(path: string): string {

@@ -112,6 +112,8 @@ export type ProbeDeps = {
       readonly ghToken: string;
     }) => Promise<{ readonly dir: string }>;
   };
+  /** 稼働中の調査があるかを返す。 */
+  readonly hasActiveInvestigation: () => Promise<boolean>;
   readonly runClaude: (
     opts: IsolationProbeClaudeOptions,
   ) => Promise<IsolationProbeRunResult>;
@@ -688,6 +690,7 @@ export async function main(): Promise<ProbeResult> {
           ghToken: input.ghToken,
         }),
     },
+    hasActiveInvestigation: async () => false,
     runClaude: runIsolationProbeClaude,
     rm: (path) => rm(path, { recursive: true, force: true }),
     log: (message) => log.info(message),
