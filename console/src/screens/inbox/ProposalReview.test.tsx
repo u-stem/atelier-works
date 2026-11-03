@@ -119,7 +119,7 @@ describe("ProposalBody in the source mode", () => {
   });
 
   test("does not make the body bold in the source", () => {
-    expect(render({ proposal_body: "**b**" })).not.toContain("<strong>");
+    expect(render({ proposal_body: "**b**" })).not.toContain("<strong");
   });
 
   test("shows the switch that the screen passes", () => {
@@ -144,7 +144,7 @@ describe("ProposalBody in the preview mode", () => {
   });
 
   test("draws the body as markdown", () => {
-    expect(preview({ proposal_body: "**b**" })).toContain("<strong>b</strong>");
+    expect(preview({ proposal_body: "**b**" })).toContain(">b</strong>");
   });
 
   test("does not draw the pre in the preview", () => {

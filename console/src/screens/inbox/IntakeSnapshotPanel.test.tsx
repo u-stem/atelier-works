@@ -186,7 +186,7 @@ describe("IntakeSnapshotView in the source mode", () => {
   });
 
   test("does not make the body bold in the source", () => {
-    expect(loaded({ body: "**b**" })).not.toContain("<strong>");
+    expect(loaded({ body: "**b**" })).not.toContain("<strong");
   });
 
   test("shows the switch that the screen passes", () => {
@@ -220,7 +220,7 @@ describe("IntakeSnapshotView in the preview mode", () => {
   });
 
   test("draws the body as markdown", () => {
-    expect(preview({ body: "**b**" })).toContain("<strong>b</strong>");
+    expect(preview({ body: "**b**" })).toContain(">b</strong>");
   });
 
   test("does not draw the pre in the preview", () => {

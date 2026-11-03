@@ -1,5 +1,5 @@
 import { TriangleAlert } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useMemo } from "react";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import { useIntakeSnapshot } from "../../api/queries.ts";
 import {
@@ -7,6 +7,7 @@ import {
   type LoadingDisplay,
   type LoadingShape,
 } from "../../components/LoadingState.tsx";
+import { Markdown } from "../../components/markdown/Markdown.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import {
   Alert,
@@ -16,6 +17,7 @@ import {
 import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { displayableIssueText } from "../../lib/intakeText.ts";
+import type { RepoRef } from "../../lib/markdownLink.ts";
 import type { ViewMode } from "../../lib/requirementsView.ts";
 
 /** 描画する状態。取得の結果を、描画に要る形だけにしたもの。 */
@@ -52,15 +54,92 @@ export function tailWarning(snapshot: IntakeSnapshot): string | null {
   return `表示していない後ろの部分に、${parts.join("と")}あります。`;
 }
 
+/** プレビューの本文の目次。プレビューは見出しの`id`を持たないので、空にする。 */
+const NO_HEADINGS: readonly never[] = [];
+
+/** プレビューは図を描かない。`.drawio`の参照は、図の名前を文字で出す。 */
+const NO_DIAGRAMS: readonly never[] = [];
+
+/** プレビューの本文の下に、承認の対象が原文であることを伝える注記。 */
+export const PREVIEW_NOTICE =
+  "プレビューは、生のHTML(コメントを含む)、リンク参照定義、画像を描かず、見えない文字を置き換えずに描くことがあります。承認の対象は原文です。";
+
+/** 本文が空のときに出す固定の文。`Markdown`には渡さない。 */
+const EMPTY_BODY_NOTE = "(本文は空です)";
+
+const BODY_BOX_CLASS =
+  "max-h-96 overflow-auto rounded-lg px-4 py-3 text-small break-words text-foreground [unicode-bidi:isolate]";
+
+/**
+ * Issueの本文を、原文かプレビューで出す。承認の対象は原文で、プレビューは参考の表示である。
+ * 原文(`text`)は、Markdownにもhtmlにも解釈せず、文字列のまま`<pre>`に描く。
+ * Reactが文字列をエスケープするので、タグやリンクは文字として見える。
+ * プレビューは、見えない文字を置き換えた本文を`Markdown`に渡す。
+ * `Markdown`は生のHTMLを描かず、リンクは`repo`のIssueとPRに絞り、画像は文字で出す。
+ * `repo`が`null`のときは、リンクを作らない。
+ * 本文が空のときは、どちらのモードでも固定の文を`<pre>`に出す。
+ * `repo`は、呼び出し側が同じ参照を渡し続ける(`Markdown`が参照で描き直しを判断するため)。
+ */
+export function IssueBody({
+  source,
+  mode,
+  repo,
+}: {
+  source: string;
+  mode: ViewMode;
+  repo: RepoRef | null;
+}) {
+  const body = displayableIssueText(source);
+  if (source === "" || mode === "text") {
+    return (
+      <pre
+        dir="ltr"
+        className={`${BODY_BOX_CLASS} bg-muted font-mono whitespace-pre-wrap`}
+      >
+        {source === "" ? EMPTY_BODY_NOTE : body.text}
+      </pre>
+    );
+  }
+  return (
+    <>
+      <p className="text-small text-muted-foreground">{PREVIEW_NOTICE}</p>
+      <div
+        data-preview
+        dir="ltr"
+        className={`${BODY_BOX_CLASS} border border-border`}
+      >
+        <Markdown
+          markdown={body.text}
+          headings={NO_HEADINGS}
+          diagrams={NO_DIAGRAMS}
+          rejectedDiagrams={NO_DIAGRAMS}
+          repo={repo}
+        />
+      </div>
+    </>
+  );
+}
+
 /**
  * 取り込み時点のIssueの題名と本文を出す。
- * 起票者が書いた信頼できない入力なので、Markdownにもhtmlにも解釈せず、文字列のまま描く。
- * Reactが文字列をエスケープするので、タグやリンクは文字として見える。
+ * 起票者が書いた信頼できない入力なので、題名は文字列のまま描く。
+ * 本文は、既定の原文では解釈せずに描き、`mode`がプレビューのときだけ`Markdown`で参考に描く。
+ * `modeSwitch`は、画面が持つ切り替え。本文の上に置く。
  */
-function SnapshotBody({ snapshot }: { snapshot: IntakeSnapshot }) {
+function SnapshotBody({
+  snapshot,
+  mode,
+  modeSwitch,
+}: {
+  snapshot: IntakeSnapshot;
+  mode: ViewMode;
+  modeSwitch: ReactNode;
+}) {
   const title = displayableIssueText(snapshot.title);
   const body = displayableIssueText(snapshot.body);
   const tail = tailWarning(snapshot);
+  const { owner, repo } = snapshot;
+  const repoRef = useMemo(() => ({ owner, repo }), [owner, repo]);
   return (
     <div className="flex flex-col gap-3 px-5 py-4">
       {snapshot.refreshed ? (
@@ -85,12 +164,8 @@ function SnapshotBody({ snapshot }: { snapshot: IntakeSnapshot }) {
       >
         {title.text}
       </p>
-      <pre
-        dir="ltr"
-        className="max-h-96 overflow-auto rounded-lg bg-muted px-4 py-3 font-mono text-small break-words whitespace-pre-wrap text-foreground [unicode-bidi:isolate]"
-      >
-        {snapshot.body === "" ? "(本文は空です)" : body.text}
-      </pre>
+      {modeSwitch}
+      <IssueBody source={snapshot.body} mode={mode} repo={repoRef} />
       {snapshot.body_truncated ? (
         <p className="text-small text-warning">
           本文が長いため、先頭だけを表示しています。GitHubの画面では見えない内容(HTMLのコメントや不可視の文字)がありうるので、表示していない部分は確かめきれません。
@@ -121,9 +196,13 @@ const LOADING_SHAPE: LoadingShape = {
  */
 export function IntakeSnapshotView({
   state,
+  mode = "text",
+  modeSwitch = null,
 }: {
   state: IntakeSnapshotViewState;
+  /** 本文の表示の形式。省略すると原文になる。 */
   mode?: ViewMode;
+  /** 本文の上に置く切り替え。表示の形式を持つ画面が渡す。 */
   modeSwitch?: ReactNode;
 }) {
   return (
@@ -151,7 +230,11 @@ export function IntakeSnapshotView({
           この作業項目に、取り込み時点のIssueはありません。
         </p>
       ) : (
-        <SnapshotBody snapshot={state.snapshot} />
+        <SnapshotBody
+          snapshot={state.snapshot}
+          mode={mode}
+          modeSwitch={modeSwitch}
+        />
       )}
     </Card>
   );
@@ -162,11 +245,17 @@ export function IntakeSnapshotPanel({
   workItemId,
   approvalRequestId,
   display,
+  mode = "text",
+  modeSwitch = null,
 }: {
   workItemId: number;
   approvalRequestId: number;
   /** 読み込み中の表示。承認バーの判定と同じ状態を使うため、呼び出し側が決める。 */
   display: LoadingDisplay;
+  /** 本文の表示の形式。省略すると原文になる。 */
+  mode?: ViewMode;
+  /** 本文の上に置く切り替え。表示の形式を持つ画面が渡す。 */
+  modeSwitch?: ReactNode;
 }) {
   const snapshot = useIntakeSnapshot(workItemId, approvalRequestId);
   // 値が揃った後も、スケルトンを残す時間の間は、読み込み中の表示を続ける。
@@ -193,6 +282,10 @@ export function IntakeSnapshotPanel({
     return <IntakeSnapshotView state={{ status: "empty" }} />;
   }
   return (
-    <IntakeSnapshotView state={{ status: "loaded", snapshot: snapshot.data }} />
+    <IntakeSnapshotView
+      state={{ status: "loaded", snapshot: snapshot.data }}
+      mode={mode}
+      modeSwitch={modeSwitch}
+    />
   );
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import type { InboxProposal } from "../../api/guards/inboxProposals.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useInboxProposals } from "../../api/inboxQueries.ts";
@@ -11,8 +11,11 @@ import {
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import { ViewModeSwitch } from "../../components/ViewModeSwitch.tsx";
 import {
   factoryLabelChoice,
+  previewBlockedReason,
+  previewCheckMessage,
   proposalOrigin,
 } from "../../lib/approvalDecision.ts";
 import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
@@ -20,12 +23,27 @@ import { displayableIssueText } from "../../lib/intakeText.ts";
 import type { RepoRef } from "../../lib/markdownLink.ts";
 import type { ViewMode } from "../../lib/requirementsView.ts";
 import { ApprovalBar } from "./ApprovalBar.tsx";
+import { IssueBody } from "./IntakeSnapshotPanel.tsx";
 
+/** 切り替えと承認の停止に出す、提案の本文の名前。 */
+const PROPOSAL_BODY_TARGET = "提案の本文";
+
+/**
+ * 提案の題名と本文を出す。
+ * `repo`は、作られるIssueのリポジトリ。プレビューのリンクをこのリポジトリのIssueとPRに絞る。
+ * 分からないときは`null`にし、リンクを作らない。
+ * 本文は、既定の原文では解釈せずに描き、`mode`がプレビューのときだけ参考に描く。
+ * `modeSwitch`は、画面が持つ切り替え。本文の上に置く。
+ */
 export function ProposalBody({
   proposal,
+  repo,
+  mode = "text",
+  modeSwitch = null,
 }: {
   proposal: InboxProposal;
-  repo?: RepoRef | null;
+  repo: RepoRef | null;
+  /** 本文の表示の形式。省略すると原文になる。 */
   mode?: ViewMode;
   modeSwitch?: ReactNode;
 }) {
@@ -54,12 +72,8 @@ export function ProposalBody({
         >
           {title.text}
         </p>
-        <pre
-          dir="ltr"
-          className="max-h-96 overflow-auto rounded-lg bg-muted px-4 py-3 font-mono text-small break-words whitespace-pre-wrap text-foreground [unicode-bidi:isolate]"
-        >
-          {proposal.proposal_body === "" ? "(本文は空です)" : body.text}
-        </pre>
+        {modeSwitch}
+        <IssueBody source={proposal.proposal_body} mode={mode} repo={repo} />
       </div>
     </Card>
   );
@@ -88,17 +102,28 @@ const LOADING_SHAPE: LoadingShape = {
  * Issue提案の承認。提案の本文を出し、その下に承認バーを置く。
  * 本文とラベルの選択肢は"inbox"ビューから読む。読めないあいだは承認の操作を出さない。
  * 提案が未決の一覧に無いときも、本文が分からないまま承認させないので、操作を出さない。
+ * 本文は原文が既定で、プレビューは参考に切り替えて読める。
+ * プレビューを表示している間は承認を止め、一度でも表示した承認は、原文を確かめたかのチェックを求める。
+ * `initialMode`は最初の表示の形式で、省略すると原文になる。
  */
 export function ProposalReview({
   approval,
   title,
   now,
+  initialMode = "text",
 }: {
   approval: SummaryApproval;
   title: string;
   now: number;
   initialMode?: ViewMode;
 }) {
+  const [mode, setMode] = useState<ViewMode>(initialMode);
+  const [previewed, setPreviewed] = useState<boolean>(
+    initialMode === "preview",
+  );
+  const { owner, repo } = approval;
+  // 提案のIssueは、承認依頼と同じ作業項目のリポジトリに作られる。
+  const repoRef = useMemo(() => ({ owner, repo }), [owner, repo]);
   const proposals = useInboxProposals();
   // 承認の可否は取得の状態だけで決まる。内容と食い違わないよう、取得が済んだら骨組みを残さず内容を出す。
   const display = useLoadingDisplay(loadPhaseOf(proposals), NO_LINGER_OPTIONS);
@@ -130,15 +155,35 @@ export function ProposalReview({
   }
   return (
     <>
-      <ProposalBody proposal={proposal} />
+      <ProposalBody
+        proposal={proposal}
+        repo={repoRef}
+        mode={mode}
+        modeSwitch={
+          <ViewModeSwitch
+            target={PROPOSAL_BODY_TARGET}
+            textLabel="原文"
+            mode={mode}
+            onChange={(next) => {
+              setMode(next);
+              setPreviewed(true);
+            }}
+          />
+        }
+      />
       <ApprovalBar
         approval={approval}
         now={now}
         subject={displayableIssueText(title).text}
         factoryLabel={factoryLabelChoice(proposal)}
-        approveBlockedReason={null}
+        approveBlockedReason={
+          mode === "preview" ? previewBlockedReason(PROPOSAL_BODY_TARGET) : null
+        }
         refreshed={false}
         fullCheckRequired={false}
+        previewCheckMessage={
+          previewed ? previewCheckMessage(PROPOSAL_BODY_TARGET) : null
+        }
       />
     </>
   );
