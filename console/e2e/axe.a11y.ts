@@ -321,6 +321,41 @@ for (const theme of THEMES) {
     }
   });
 
+  // 最初の縞の行にあるリンクとコード表記の色を測る。画面の外の文字は色が測られないので、
+  // 表の全体が収まる高さにして、縞の行の要素が「通った」になり、「要確認」が残らないことを確かめる。
+  test.describe(`text on the table stripes (${theme})`, () => {
+    test.use({
+      theme,
+      mode: "normal",
+      viewport: { width: 1280, height: 2400 },
+    });
+    for (const path of TEXT_MODE_PATHS) {
+      for (const element of ["a", "code"]) {
+        test(`/console/${path} measures ${element} on a striped row`, async ({
+          page,
+        }) => {
+          const selector = `${TABLE_FRAME} tbody tr:nth-child(2) ${element}`;
+          await openScreen(page, path);
+          // 承認画面は、本文が画面の中でスクロールする。測る要素を枠の中へ入れる。
+          await page
+            .locator(selector)
+            .first()
+            .evaluate((target) => target.scrollIntoView({ block: "center" }));
+          const results = await new AxeBuilder({ page })
+            .withRules(["color-contrast"])
+            .include(selector)
+            .analyze();
+
+          expect({
+            violations: results.violations.length,
+            incomplete: results.incomplete.length,
+            measured: results.passes.length > 0,
+          }).toEqual({ violations: 0, incomplete: 0, measured: true });
+        });
+      }
+    }
+  });
+
   test.describe(`dialogs (${theme})`, () => {
     test.use({ theme, mode: "normal" });
 
