@@ -69,6 +69,8 @@ export type InvestigateClaudeOptions<T> = {
  */
 export type InvestigateClaudeDeps = {
   readonly tmpDir?: string;
+  /** 塞ぐ一覧に足す`$HOME`。既定は実行時の`$HOME`。 */
+  readonly home?: string;
   readonly readDenyContext?: ReadDenyContext;
 };
 
@@ -225,4 +227,49 @@ export async function runInvestigateClaudeWithDeps<T>(
       ? {}
       : { discardedAgentRun: result.discardedAgentRun }),
   };
+}
+
+/** 隔離の測定が渡す1組。 */
+export type IsolationProbePair = {
+  readonly tool: "Read";
+  readonly path: string;
+};
+
+export type IsolationProbeClaudeOptions = {
+  readonly run: CommandRunner;
+  readonly oauthToken: string;
+  readonly model: string;
+  readonly cwd: string;
+  readonly pairs: readonly IsolationProbePair[];
+};
+
+export type IsolationProbeRunResult = {
+  readonly outcome: "success" | "failure";
+  readonly reason: RunClaudeFailureReason | null;
+  readonly retried: boolean;
+  readonly sessionIds: readonly (string | null)[];
+  readonly numTurns: number | null;
+  readonly durationMs: number | null;
+  readonly topLevelKeys: readonly string[] | null;
+};
+
+export async function runIsolationProbeClaudeWithDeps(
+  _opts: IsolationProbeClaudeOptions,
+  _deps: InvestigateClaudeDeps,
+): Promise<IsolationProbeRunResult> {
+  return {
+    outcome: "failure",
+    reason: null,
+    retried: false,
+    sessionIds: [],
+    numTurns: null,
+    durationMs: null,
+    topLevelKeys: null,
+  };
+}
+
+export function runIsolationProbeClaude(
+  opts: IsolationProbeClaudeOptions,
+): Promise<IsolationProbeRunResult> {
+  return runIsolationProbeClaudeWithDeps(opts, {});
 }

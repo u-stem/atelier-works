@@ -35,6 +35,12 @@ describe("model assignment", () => {
     expect(CLAUDE_CALLERS.length).toBeGreaterThanOrEqual(6);
   });
 
+  test("finds the isolation probe, which calls its own entry", () => {
+    expect(CLAUDE_CALLERS.map(({ path }) => path)).toContain(
+      "investigate_isolation_probe.ts",
+    );
+  });
+
   test("no caller passes config.model to the model option directly", () => {
     const direct = CLAUDE_CALLERS.filter(({ text }) =>
       /model:\s*(input\.)?config\.model\b/.test(text),

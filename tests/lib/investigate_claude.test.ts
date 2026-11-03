@@ -13,14 +13,22 @@ import {
 import {
   type InvestigateClaudeDeps,
   type InvestigateClaudeOptions,
+  type IsolationProbeClaudeOptions,
   runInvestigateClaude,
   runInvestigateClaudeWithDeps,
+  runIsolationProbeClaude,
+  runIsolationProbeClaudeWithDeps,
 } from "../../f/factory/lib/investigate_claude.ts";
 import {
   computeIsolationFingerprint,
   ISOLATION_ARGS,
   ISOLATION_FINGERPRINT,
 } from "../../f/factory/lib/investigate_isolation.ts";
+import {
+  INVESTIGATE_ROOT,
+  investigateWorktreeDir,
+  PROBE_RESERVED_ID,
+} from "../../f/factory/lib/investigate_workspace.ts";
 import {
   IsolationProofError,
   mintIsolationProof,
@@ -1045,5 +1053,600 @@ describe("the entry that takes injected dependencies", () => {
       "const x = runInvestigateClaudeWithDepsX;",
     );
     expect(countIn(code)).toBe(0);
+  });
+});
+
+// 隔離の測定が使う入口は、証拠を要らない代わりに、固定の作業ディレクトリと固定の形の組だけを受ける。
+describe("runIsolationProbeClaude", () => {
+  const HEX = "0123456789abcdef0123456789abcdef";
+  const PROBE_CWD = investigateWorktreeDir(PROBE_RESERVED_ID);
+  const PROBE_OK = {
+    stdout: claudeJsonStdout({ structured_output: { attempted: true } }),
+    stderr: "",
+    exitCode: 0,
+    timedOut: false,
+  };
+  const FIRST_SESSION = "11111111-1111-4111-8111-111111111111";
+  const LAST_SESSION = "22222222-2222-4222-8222-222222222222";
+
+  let root: string;
+  let tmpDir: string;
+  let home: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "isolation-probe-"));
+    tmpDir = join(root, `fj-${JOB_ID}`);
+    home = join(root, "home");
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function deps() {
+    return {
+      tmpDir,
+      home,
+      readDenyContext: { env: { WM_JOB_ID: JOB_ID }, root },
+    };
+  }
+
+  function tmpPath(file = "canary.txt"): string {
+    return `/tmp/.factory-probe-${HEX}/${file}`;
+  }
+
+  function probeOptions(
+    run: IsolationProbeClaudeOptions["run"],
+    overrides: Partial<IsolationProbeClaudeOptions> = {},
+  ): IsolationProbeClaudeOptions {
+    return {
+      run,
+      oauthToken: "oauth-token-value",
+      model: "claude-sonnet-5-5",
+      cwd: PROBE_CWD,
+      pairs: [{ tool: "Read", path: tmpPath() }],
+      ...overrides,
+    };
+  }
+
+  /** 型の上で受けない値を、型を通さずに渡す。 */
+  function pairWith(
+    tool: string,
+    path: string,
+  ): IsolationProbeClaudeOptions["pairs"] {
+    return JSON.parse(JSON.stringify([{ tool, path }]));
+  }
+
+  function argvOf(fake: ReturnType<typeof createFakeCommandRunner>): string[] {
+    return [...(fake.calls[0]?.argv ?? [])];
+  }
+
+  /** 呼び出しごとに変わってよい値を伏せる。 */
+  function maskVariable(argv: readonly string[]): string[] {
+    const variable = new Set([
+      "--append-system-prompt-file",
+      "--json-schema",
+      "--max-turns",
+      "--max-budget-usd",
+      "--model",
+    ]);
+    return argv.map((value, index) =>
+      variable.has(argv[index - 1] ?? "") ? "<variable>" : value,
+    );
+  }
+
+  /** 調査の入口で、同じ形の呼び出しを1回行う。 */
+  async function runProduction() {
+    const production = createFakeCommandRunner([OK]);
+    await runInvestigateClaudeWithDeps(
+      {
+        run: production.run,
+        workItemId: 7,
+        stage: "investigate",
+        attempt: 1,
+        model: "claude-sonnet-5-5",
+        prompt: "p",
+        appendSystemPromptFile: "/run/prompt.md",
+        jsonSchema: { type: "object" },
+        isStructuredOutput: isOkPayload,
+        maxTurns: 10,
+        maxBudgetUsd: 2,
+        cwd: "/srv/investigate/7",
+        oauthToken: "oauth-token-value",
+        timeoutMs: 60_000,
+        recording: { mode: "skip" },
+        proof: mintIsolationProof(),
+      },
+      deps(),
+    );
+    return production;
+  }
+
+  describe("the options it accepts", () => {
+    test("accepts only the runner, token, model, working directory and pairs", () => {
+      const keys: Record<keyof IsolationProbeClaudeOptions, true> = {
+        run: true,
+        oauthToken: true,
+        model: true,
+        cwd: true,
+        pairs: true,
+      };
+      expect(Object.keys(keys).sort()).toEqual([
+        "cwd",
+        "model",
+        "oauthToken",
+        "pairs",
+        "run",
+      ]);
+    });
+  });
+
+  describe("the public function", () => {
+    test("ignores a second argument that points the settings elsewhere", async () => {
+      const withExtra: (
+        opts: IsolationProbeClaudeOptions,
+        extra: InvestigateClaudeDeps,
+      ) => Promise<unknown> = runIsolationProbeClaude;
+      const savedJobId = process.env.WM_JOB_ID;
+      Reflect.deleteProperty(process.env, "WM_JOB_ID");
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      try {
+        await withExtra(probeOptions(fake.run), deps()).catch(() => undefined);
+      } finally {
+        if (savedJobId !== undefined) process.env.WM_JOB_ID = savedJobId;
+      }
+      expect(fake.calls).toHaveLength(0);
+    });
+  });
+
+  describe("the working directory", () => {
+    test("starts claude in the reserved directory of the probe", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
+      expect(fake.calls[0]?.options?.cwd).toBe(
+        `${INVESTIGATE_ROOT}/${PROBE_RESERVED_ID}`,
+      );
+    });
+
+    test("rejects the directory of a work item", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await expect(
+        runIsolationProbeClaudeWithDeps(
+          probeOptions(fake.run, { cwd: investigateWorktreeDir(7) }),
+          deps(),
+        ),
+      ).rejects.toThrow("working directory");
+    });
+
+    test("does not start claude in the directory of a work item", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run, { cwd: investigateWorktreeDir(7) }),
+        deps(),
+      ).catch(() => undefined);
+      expect(fake.calls).toHaveLength(0);
+    });
+
+    test("rejects a directory below the reserved one", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await expect(
+        runIsolationProbeClaudeWithDeps(
+          probeOptions(fake.run, { cwd: `${PROBE_CWD}/sub` }),
+          deps(),
+        ),
+      ).rejects.toThrow("working directory");
+    });
+  });
+
+  describe("the pairs", () => {
+    test("accepts a canary under /tmp", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("accepts a canary under /run/factory-tmp", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run, {
+          pairs: [
+            {
+              tool: "Read",
+              path: `/run/factory-tmp/fj-${JOB_ID}/.factory-probe-${HEX}/canary.txt`,
+            },
+          ],
+        }),
+        deps(),
+      );
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("accepts a canary under the home directory", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run, {
+          pairs: [
+            { tool: "Read", path: `${home}/.factory-probe-${HEX}/canary.txt` },
+          ],
+        }),
+        deps(),
+      );
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("accepts three pairs", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run, {
+          pairs: [
+            { tool: "Read", path: tmpPath("a.txt") },
+            { tool: "Read", path: tmpPath("b.txt") },
+            { tool: "Read", path: tmpPath("c.txt") },
+          ],
+        }),
+        deps(),
+      );
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    const REJECTED: [string, IsolationProbeClaudeOptions["pairs"]][] = [
+      ["no pair", []],
+      [
+        "four pairs",
+        [
+          { tool: "Read", path: tmpPath("a.txt") },
+          { tool: "Read", path: tmpPath("b.txt") },
+          { tool: "Read", path: tmpPath("c.txt") },
+          { tool: "Read", path: tmpPath("d.txt") },
+        ],
+      ],
+      ["a tool other than Read", pairWith("Bash", tmpPath())],
+      ["a Glob pair", pairWith("Glob", tmpPath())],
+      ["a path outside the canary form", pairWith("Read", "/etc/passwd")],
+      ["a relative path", pairWith("Read", `.factory-probe-${HEX}/canary.txt`)],
+      [
+        "a parent segment",
+        pairWith("Read", `/tmp/.factory-probe-${HEX}/../../etc/passwd`),
+      ],
+      [
+        "a name of the wrong form",
+        pairWith("Read", "/tmp/.factory-probe-xyz/canary.txt"),
+      ],
+      [
+        "an uppercase hex name",
+        pairWith("Read", `/tmp/.factory-probe-${HEX.toUpperCase()}/canary.txt`),
+      ],
+      [
+        "a prefix that is not allowed",
+        pairWith("Read", `/var/tmp/.factory-probe-${HEX}/canary.txt`),
+      ],
+      [
+        "a file below another directory",
+        pairWith("Read", `/tmp/.factory-probe-${HEX}/sub/canary.txt`),
+      ],
+      ["a file named with two dots", pairWith("Read", tmpPath(".."))],
+      [
+        "a job directory that is not a job id",
+        pairWith(
+          "Read",
+          `/run/factory-tmp/fj-x/.factory-probe-${HEX}/canary.txt`,
+        ),
+      ],
+      [
+        "a trailing slash",
+        pairWith("Read", `/tmp/.factory-probe-${HEX}/canary.txt/`),
+      ],
+    ];
+
+    test.each(REJECTED)("rejects %s", async (_name, pairs) => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await expect(
+        runIsolationProbeClaudeWithDeps(
+          probeOptions(fake.run, { pairs }),
+          deps(),
+        ),
+      ).rejects.toThrow();
+    });
+
+    test.each(REJECTED)(
+      "does not start claude for %s",
+      async (_name, pairs) => {
+        const fake = createFakeCommandRunner([PROBE_OK]);
+        await runIsolationProbeClaudeWithDeps(
+          probeOptions(fake.run, { pairs }),
+          deps(),
+        ).catch(() => undefined);
+        expect(fake.calls).toHaveLength(0);
+      },
+    );
+  });
+
+  describe("the call to claude", () => {
+    test("passes the same argv as the entry of an investigation, except the variable values", async () => {
+      const probe = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(probe.run), deps());
+      const production = await runProduction();
+      expect(maskVariable(argvOf(probe))).toEqual(
+        maskVariable(argvOf(production)),
+      );
+    });
+
+    test("passes the same environment keys as the entry of an investigation", async () => {
+      const probe = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(probe.run), deps());
+      const production = await runProduction();
+      expect(Object.keys(probe.calls[0]?.options?.env ?? {}).sort()).toEqual(
+        Object.keys(production.calls[0]?.options?.env ?? {}).sort(),
+      );
+    });
+
+    test("passes the given model", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run, { model: "claude-test-model" }),
+        deps(),
+      );
+      const argv = argvOf(fake);
+      expect(argv[argv.indexOf("--model") + 1]).toBe("claude-test-model");
+    });
+
+    test("allows two turns per pair and ten more", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
+      const argv = argvOf(fake);
+      expect(argv[argv.indexOf("--max-turns") + 1]).toBe("12");
+    });
+
+    test("names every pair in the prompt on the standard input", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
+      expect(fake.calls[0]?.options?.stdin).toContain(tmpPath());
+    });
+
+    test("passes the oauth token as the token of the environment", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
+      expect(fake.calls[0]?.options?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
+        "oauth-token-value",
+      );
+    });
+
+    test("writes the fixed deny rules to the settings of the job", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      await runIsolationProbeClaudeWithDeps(probeOptions(fake.run), deps());
+      const text = await readFile(
+        join(tmpDir, "claude-config", "settings.json"),
+        "utf8",
+      );
+      const parsed: unknown = JSON.parse(text);
+      const expected = buildReadDenyPaths(home).flatMap((path) => [
+        `Read(/${path})`,
+        `Read(/${path}/**)`,
+      ]);
+      expect(parsed).toEqual({ permissions: { deny: expected } });
+    });
+  });
+
+  describe("the result", () => {
+    test("has only the outcome, reason, retry flag, sessions, turns, duration and top-level keys", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(Object.keys(result).sort()).toEqual([
+        "durationMs",
+        "numTurns",
+        "outcome",
+        "reason",
+        "retried",
+        "sessionIds",
+        "topLevelKeys",
+      ]);
+    });
+
+    test("reports a success", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.outcome).toBe("success");
+    });
+
+    test("returns the session id of the run", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          ...PROBE_OK,
+          stdout: claudeJsonStdout({
+            structured_output: { attempted: true },
+            session_id: LAST_SESSION,
+          }),
+        },
+      ]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.sessionIds).toEqual([LAST_SESSION]);
+    });
+
+    test("returns the turns and the duration", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect([result.numTurns, result.durationMs]).toEqual([2, 100]);
+    });
+
+    test("returns the top-level keys of the standard output", async () => {
+      const fake = createFakeCommandRunner([PROBE_OK]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.topLevelKeys).toEqual([
+        "duration_ms",
+        "is_error",
+        "num_turns",
+        "result",
+        "session_id",
+        "structured_output",
+        "subtype",
+        "total_cost_usd",
+        "type",
+        "usage",
+      ]);
+    });
+
+    test("does not return the structured output or the text of the result", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          ...PROBE_OK,
+          stdout: claudeJsonStdout({
+            structured_output: { attempted: true },
+            result: LEAK,
+          }),
+        },
+      ]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(JSON.stringify(result)).not.toContain(LEAK);
+    });
+
+    test("returns both sessions after a retry, the discarded one first", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          ...PROBE_OK,
+          stdout: claudeJsonStdout({
+            structured_output: { wrong: LEAK },
+            session_id: FIRST_SESSION,
+          }),
+        },
+        {
+          ...PROBE_OK,
+          stdout: claudeJsonStdout({
+            structured_output: { attempted: true },
+            session_id: LAST_SESSION,
+          }),
+        },
+      ]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.sessionIds).toEqual([FIRST_SESSION, LAST_SESSION]);
+    });
+
+    test("reports a retry", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          ...PROBE_OK,
+          stdout: claudeJsonStdout({ structured_output: { wrong: LEAK } }),
+        },
+        PROBE_OK,
+      ]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.retried).toBe(true);
+    });
+
+    test("names a failure by its code", async () => {
+      const fake = createFakeCommandRunner([fail(LEAK)]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.reason).toBe("non_zero_exit");
+    });
+
+    test("keeps the standard error of a failure out of the result", async () => {
+      const fake = createFakeCommandRunner([fail(LEAK)]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(JSON.stringify(result)).not.toContain(LEAK);
+    });
+
+    test("returns a null session id for a run that produced none", async () => {
+      const fake = createFakeCommandRunner([fail("boom")]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.sessionIds).toEqual([null]);
+    });
+
+    test("returns null top-level keys for a failure", async () => {
+      const fake = createFakeCommandRunner([fail("boom")]);
+      const result = await runIsolationProbeClaudeWithDeps(
+        probeOptions(fake.run),
+        deps(),
+      );
+      expect(result.topLevelKeys).toBeNull();
+    });
+  });
+});
+
+// 証拠の要らない入口と、その差し替え口は、隔離の測定だけが使う。
+// 調査の入口がこれを呼ぶと、証拠なしに調査のClaudeが起動する。
+describe("the entries of the isolation probe", () => {
+  const FACTORY_DIR = join(import.meta.dir, "../../f/factory");
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
+  const DEFINING_FILE = "lib/investigate_claude.ts";
+  const PROBE_FILE = "investigate_isolation_probe.ts";
+
+  function nameRegex(name: string): RegExp {
+    return new RegExp(`(?<![\\w$])${name}(?![\\w$])`, "g");
+  }
+
+  function countInFile(path: string, name: string): number {
+    const code = transpiler.transformSync(
+      readFileSync(join(FACTORY_DIR, path), "utf8"),
+    );
+    return [...code.matchAll(nameRegex(name))].length;
+  }
+
+  function productionSources(): string[] {
+    return [...new Bun.Glob("**/*.ts").scanSync(FACTORY_DIR)]
+      .filter((path) => !path.endsWith(".test.ts"))
+      .sort();
+  }
+
+  test("runIsolationProbeClaude is named by no file other than the defining file and the probe", () => {
+    const found = productionSources().filter(
+      (path) =>
+        path !== DEFINING_FILE &&
+        path !== PROBE_FILE &&
+        countInFile(path, "runIsolationProbeClaude") > 0,
+    );
+    expect(found).toEqual([]);
+  });
+
+  test("runIsolationProbeClaudeWithDeps is named by no file other than the defining file", () => {
+    const found = productionSources().filter(
+      (path) =>
+        path !== DEFINING_FILE &&
+        countInFile(path, "runIsolationProbeClaudeWithDeps") > 0,
+    );
+    expect(found).toEqual([]);
+  });
+
+  test("runIsolationProbeClaudeWithDeps is named in the defining file by its definition and by the public function only", () => {
+    expect(countInFile(DEFINING_FILE, "runIsolationProbeClaudeWithDeps")).toBe(
+      2,
+    );
+  });
+
+  test("the probe names runIsolationProbeClaude", () => {
+    expect(countInFile(PROBE_FILE, "runIsolationProbeClaude")).toBeGreaterThan(
+      0,
+    );
   });
 });

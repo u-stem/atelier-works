@@ -672,6 +672,10 @@ describe("investigate isolation files", () => {
     "tests/lib/investigate_isolation.test.ts",
     "tests/lib/isolation_proof.test.ts",
     "tests/lib/investigate_isolation_gate.test.ts",
+    "f/factory/lib/investigate_isolation_observe.ts",
+    "f/factory/lib/investigate_isolation_observe.script.yaml",
+    "tests/lib/investigate_isolation_observe.test.ts",
+    "tests/scripts/investigate_isolation_probe.test.ts",
   ];
 
   test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {

@@ -31,6 +31,7 @@ locks:
   f/factory/freeze_release: 1f0e0ac82a0c1b30afcabd15c7ba337a91971ef1f16614bc00de4e7a67e4667b
   f/factory/hold_release: cc2424cc77d630c89d77153b159ddd206ed34cb1af1050b1274bfdd36d27a5be
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+  f/factory/investigate_isolation_probe: e0ca751ddc1ddd5e2731ab11752dbcd97b03d88852dd7ce41cb4c997ff378dd1
   f/factory/lib/approval_gate: 85a483e12195bc9246b8b506f411762f4d6e18cb5d665f4c9769a085c759c625
   f/factory/lib/approval_support: 64164c1da6c48c9a9c5c5d25dfc4cccba945af743d2855513153ef5913aa1d34
   f/factory/lib/approval_sweep: 6288835c845246838ce1085188a77e62bea64e3bdd43a79609850c3c6ce43a09
@@ -52,7 +53,7 @@ locks:
   f/factory/lib/ci_log_support: 82bfb98e03c1afb71b08c3b95d72fd95d8016f853373268b5c3fbbdd416d8a9e
   f/factory/lib/ci_metadata_rehash: 990a7c9511d17bfe01682e83716b065765d1cf7eaad98e3682737c613d18a4e3
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
-  f/factory/lib/claude: e30094fd28249cb5e4fb4de01ffd2bc07df907823a86ada78ef6f99a46df0208
+  f/factory/lib/claude: ae7660d03f05fd0424dd4502d8b02119a98b54630104f9cb4bc9562b5e89564c
   f/factory/lib/claude_read_deny: 0a76ecd3ebd4872b0fc837467906bb679a6e42c50f64b996cfe5d97286a82200
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 3b97f5ee699012babd490ff9a070aa573aeabb45577923723b55760b12af1545
@@ -107,10 +108,11 @@ locks:
   f/factory/lib/implement_loop: b8ecad76c7036225b5dce3f7c87f601a884c909d6923ea0d39292c7b2d9c48e0
   f/factory/lib/implement_support: ac9f435958239ad503dc1178a441d2b5033e676d0a1bc455e5b068467f43a426
   f/factory/lib/intake_refresh: 10bf958e6d3a3a18d0b3e867f271b7974b66aad6e621bf193f735a30c6e88cf3
-  f/factory/lib/investigate_claude: 3a45afa0205fe36375fa7eed16d55100aeedabb1b525a821f1aae9bc8c3b75e3
+  f/factory/lib/investigate_claude: df782fec6ce389f58238609d4ac837e6b521b64c757c4f4f12863d6037e9f2a3
   f/factory/lib/investigate_gate: 9f8b58b5448bd0f759278c1cdbb1d75dd7b007d4e4f1a5617397e88b853385a2
-  f/factory/lib/investigate_isolation: 77d16e7a004e85f98c2ebedd5bf7fb64296cd386adec73127791dc4bac81f55c
+  f/factory/lib/investigate_isolation: 6ab151c3c9e4be426e28ebef5a59f8317d7ebdade4b8607e85d353970862e801
   f/factory/lib/investigate_isolation_gate: ab78b0efd4cc28cb455704114ae7a67cdadbe60c21db19d9c99af97dab959262
+  f/factory/lib/investigate_isolation_observe: 13196a8900056259f9c588ec6b821f0aa4a35dc0dea8d75d4b408738c36d2994
   f/factory/lib/investigate_workspace: f2370c873625ce7e4054493e055a3ad60f2c309dc0d87de291fb444ac0cf2f9f
   f/factory/lib/isolation_proof: f71420884fe5b2ad349f1eb8ad1e91b2def1768f7f965de7d89b54a68248d766
   f/factory/lib/job_ids: f11c9a38be9492f5776fdf950f87c51f0162028142640a2017f0f2dafba49432
