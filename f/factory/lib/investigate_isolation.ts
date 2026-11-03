@@ -69,7 +69,7 @@ export const PROBE_SCRIPT_PATH = "f/factory/investigate_isolation_probe";
 export const PROBE_JOB_TAG = "bun";
 
 /** 判定の版。判定の挙動を変えたら上げる。上げると既存の測定の結果は合格として受けられず、測り直しになる。 */
-export const PROBE_JUDGE_VERSION = 1;
+export const PROBE_JUDGE_VERSION = 2;
 
 /** 判定が不合格にした理由の符号。本文は含まない。 */
 export const PROBE_FAILURE_CODES = [

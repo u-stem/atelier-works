@@ -12,7 +12,10 @@ import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_r
 import { DEPENDABOT_FLOW_PATH } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
-import { DESIGN_FLOW_PATH } from "../../f/factory/lib/pipeline_lease.ts";
+import {
+  DESIGN_FLOW_PATH,
+  INVESTIGATE_FLOW_PATH,
+} from "../../f/factory/lib/pipeline_lease.ts";
 import type { FailureRecord, WorkItem } from "../../f/factory/lib/types.ts";
 import {
   type FlowFailureDeps,
@@ -526,6 +529,144 @@ describe("handleFlowFailure for the design flow", () => {
     });
     await handleFlowFailure(fake.deps, designInput());
     expect(jobFailed(fake.events)?.flow_path).toBe(DESIGN_FLOW_PATH);
+  });
+});
+
+describe("shouldMarkFailed for the investigate flow", () => {
+  test("marks an investigation failed when flow_job_id matches the root job id", () => {
+    expect(shouldMarkFailed("job-a", "job-a", INVESTIGATE_FLOW_PATH)).toBe(
+      true,
+    );
+  });
+
+  test("does not mark an investigation failed while no flow_job_id is recorded", () => {
+    expect(shouldMarkFailed(null, "job-a", INVESTIGATE_FLOW_PATH)).toBe(false);
+  });
+
+  test("does not mark an investigation failed when the root job id is unavailable", () => {
+    expect(shouldMarkFailed("job-a", null, INVESTIGATE_FLOW_PATH)).toBe(false);
+  });
+
+  test("marks an investigation failed when the root job id differs only in letter case", () => {
+    expect(shouldMarkFailed("job-a", "JOB-A", INVESTIGATE_FLOW_PATH)).toBe(
+      true,
+    );
+  });
+
+  test("does not mark an investigation failed when another run's job id is recorded", () => {
+    expect(shouldMarkFailed("job-b", "job-a", INVESTIGATE_FLOW_PATH)).toBe(
+      false,
+    );
+  });
+});
+
+describe("handleFlowFailure for the investigate flow", () => {
+  function investigateItem(overrides: Partial<WorkItem> = {}): WorkItem {
+    return workItem({
+      kind: "investigate",
+      source: "manual",
+      issue_number: 5,
+      pr_number: null,
+      status: "investigating",
+      ...overrides,
+    });
+  }
+
+  function investigateInput(): FlowFailureInput {
+    return failureInput({
+      path: INVESTIGATE_FLOW_PATH,
+      error: { message: "investigate failed", step_id: "investigate_generate" },
+    });
+  }
+
+  test("uses the path of the investigate flow", () => {
+    expect(INVESTIGATE_FLOW_PATH).toBe("f/factory/investigate");
+  });
+
+  test("marks an investigating work item failed under this run's lease", async () => {
+    const fake = fakeFailureDeps({ item: investigateItem() });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toEqual([
+      {
+        id: 7,
+        from: "investigating",
+        to: "failed",
+        flowJobId: ROOT_JOB,
+        note: "investigate failed",
+      },
+    ]);
+  });
+
+  test("does not touch an investigation that a step already finished", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ status: "investigated" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not touch an investigation that is already failed", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ status: "failed" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not mark a work item of another kind failed", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ kind: "issue", status: "implementing" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not mark an investigation failed from a status other than investigating", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ status: "picked" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not fail a work item whose lease belongs to another run", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not fail a work item whose flow_job_id is not recorded", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ flow_job_id: null }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("still records the failure of a run that did not mark the item", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(fake.failures.map((record) => record.flow_path)).toEqual([
+      INVESTIGATE_FLOW_PATH,
+    ]);
+  });
+
+  test("still notifies the failure of a run that did not mark the item", async () => {
+    const fake = fakeFailureDeps({
+      item: investigateItem({ flow_job_id: "another-job" }),
+    });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(jobFailed(fake.events)?.flow_path).toBe(INVESTIGATE_FLOW_PATH);
+  });
+
+  test("names no pull request in the notification", async () => {
+    const fake = fakeFailureDeps({ item: investigateItem() });
+    await handleFlowFailure(fake.deps, investigateInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
   });
 });
 

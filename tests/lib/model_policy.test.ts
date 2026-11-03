@@ -47,6 +47,28 @@ describe("modelFor", () => {
   });
 });
 
+describe("modelFor for investigate", () => {
+  test("uses model with no failures", () => {
+    expect(modelFor(CONFIG, "investigate", 0)).toBe("light-model");
+  });
+
+  test("uses model after one failure", () => {
+    expect(modelFor(CONFIG, "investigate", 1)).toBe("light-model");
+  });
+
+  test("keeps model after two failures", () => {
+    expect(modelFor(CONFIG, "investigate", 2)).toBe("light-model");
+  });
+
+  test("keeps model after many failures", () => {
+    expect(modelFor(CONFIG, "investigate", 5)).toBe("light-model");
+  });
+
+  test("does not change the model after a failure", () => {
+    expect(modelChangesAfterFailure(CONFIG, "investigate", 1)).toBe(false);
+  });
+});
+
 describe("modelFor for dependabot", () => {
   test("keeps heavy_model after many failures", () => {
     expect(modelFor(CONFIG, "dependabot", 5)).toBe("heavy-model");

@@ -242,8 +242,8 @@ describe("the constants of the probe", () => {
   });
 
   // 判定の版を上げるときは、`tests/lib/investigate_isolation_judge.test.ts`のハッシュの表にも行を足す。
-  test("sets the judge at version 1", () => {
-    expect(PROBE_JUDGE_VERSION).toBe(1);
+  test("sets the judge at version 2", () => {
+    expect(PROBE_JUDGE_VERSION).toBe(2);
   });
 
   test("lists each failure code once", () => {

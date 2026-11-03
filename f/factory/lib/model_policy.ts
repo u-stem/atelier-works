@@ -3,6 +3,7 @@
 // 実装とPR修正は既定の`model`(Sonnet)で始め、同じ作業でSonnetが続けて2回失敗したら、
 // `heavy_model`に上げる。失敗の数は、成功が入ると数え直す。
 // 数え方は`db.ts`の`countImplementFailedRounds`と`countPrFixFailures`が決める。
+// Issueの調査は失敗の数を数えず、渡された回数にかかわらず、常に既定の`model`を使う。
 
 import type { FactoryConfig } from "./types.ts";
 
@@ -14,7 +15,8 @@ export type ModelStage =
   | "audit"
   | "implement"
   | "pr_fix"
-  | "dependabot";
+  | "dependabot"
+  | "investigate";
 
 /** 試行の回数にかかわらず`heavy_model`を使う工程。やり直しが高くつく判断を含むため。 */
 const ALWAYS_HEAVY_STAGES: readonly ModelStage[] = [
@@ -33,6 +35,8 @@ const SONNET_FAILURES_BEFORE_ESCALATION = 2;
  * `sonnetFailures`は、同じ作業で直近に`model`が続けて失敗した回数である。
  * 要件定義の生成、設計書の生成、PRのレビュー、監査、dependabotの更新の影響調査は、回数にかかわらず`heavy_model`を使う。
  * この5工程の呼び出しは、回数が使われないことを示すために0を渡す。
+ * Issueの調査(`investigate`)は、回数にかかわらず既定の`model`を使う。結果は人が読むコメントで、取り返しにくい判断に使わないためである。
+ * 失敗の数も数えないので、呼び出しは回数が使われないことを示すために0を渡す。
  * dependabotの影響調査は、結果が自動のマージの判断に使われ、見落としが取り返しにくいため、常に重いモデルで行う。
  */
 export function modelFor(
@@ -41,6 +45,7 @@ export function modelFor(
   sonnetFailures: number,
 ): string {
   if (ALWAYS_HEAVY_STAGES.includes(stage)) return config.heavy_model;
+  if (stage === "investigate") return config.model;
   return sonnetFailures >= SONNET_FAILURES_BEFORE_ESCALATION
     ? config.heavy_model
     : config.model;

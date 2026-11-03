@@ -292,6 +292,7 @@ describe("investigate_isolation_probe", () => {
           return { dir: cwdDir() };
         },
       },
+      hasActiveInvestigation: async () => false,
       runClaude: fakeClaude(),
       rm: (path) => rm(path, { recursive: true, force: true }),
       log: (message) => {
@@ -1833,7 +1834,107 @@ describe("investigate_isolation_probe", () => {
     });
   });
 
+  describe("the exclusion with a running investigation", () => {
+    const running = async () => true;
+
+    test("refuses to run while an investigation is running", async () => {
+      await expect(
+        runIsolationProbe(makeDeps({ hasActiveInvestigation: running })),
+      ).rejects.toThrow("investigation");
+    });
+
+    test("does not start claude while an investigation is running", async () => {
+      await runIsolationProbe(
+        makeDeps({ hasActiveInvestigation: running }),
+      ).catch(() => {});
+      expect(calls).toHaveLength(0);
+    });
+
+    test("does not clear the place of the worktrees while an investigation is running", async () => {
+      await runIsolationProbe(
+        makeDeps({ hasActiveInvestigation: running }),
+      ).catch(() => {});
+      expect(worktree.purged).toBe(0);
+    });
+
+    test("does not create a worktree while an investigation is running", async () => {
+      await runIsolationProbe(
+        makeDeps({ hasActiveInvestigation: running }),
+      ).catch(() => {});
+      expect(worktree.created).toBe(0);
+    });
+
+    test("does not touch the place of the worktrees while an investigation is running", async () => {
+      let touched = 0;
+      const deps = makeDeps({ hasActiveInvestigation: running });
+      await runIsolationProbe({
+        ...deps,
+        workspace: {
+          ...deps.workspace,
+          ensureRoot: async () => {
+            touched += 1;
+          },
+        },
+      }).catch(() => {});
+      expect(touched).toBe(0);
+    });
+
+    test("refuses when the check itself fails", async () => {
+      await expect(
+        runIsolationProbe(
+          makeDeps({
+            hasActiveInvestigation: async () => {
+              throw new Error("db down");
+            },
+          }),
+        ),
+      ).rejects.toThrow();
+    });
+
+    test("does not clear the place of the worktrees when the check itself fails", async () => {
+      await runIsolationProbe(
+        makeDeps({
+          hasActiveInvestigation: async () => {
+            throw new Error("db down");
+          },
+        }),
+      ).catch(() => {});
+      expect(worktree.purged).toBe(0);
+    });
+
+    test("checks before it touches the place of the worktrees", async () => {
+      const order: string[] = [];
+      const deps = makeDeps({
+        hasActiveInvestigation: async () => {
+          order.push("check");
+          return false;
+        },
+      });
+      await runIsolationProbe({
+        ...deps,
+        workspace: {
+          ...deps.workspace,
+          ensureRoot: async () => {
+            order.push("ensureRoot");
+          },
+        },
+      });
+      expect(order.slice(0, 2)).toEqual(["check", "ensureRoot"]);
+    });
+
+    test("runs the twelve reads when no investigation is running", async () => {
+      await runIsolationProbe(makeDeps());
+      expect(calls).toHaveLength(12);
+    });
+  });
+
   describe("the source", () => {
+    test("reads the running investigation from the database in main", () => {
+      expect(readFileSync(SOURCE, "utf8")).toContain(
+        "hasActiveInvestigation: () => hasInvestigatingWorkItem()",
+      );
+    });
+
     test("creates the worktree of the reserved id of the probe", () => {
       expect(readFileSync(SOURCE, "utf8")).toContain(
         "workItemId: PROBE_RESERVED_ID",

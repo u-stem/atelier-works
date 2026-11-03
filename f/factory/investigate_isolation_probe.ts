@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeEnv } from "./lib/claude.ts";
 import { loadConfig } from "./lib/config.ts";
+import { hasInvestigatingWorkItem } from "./lib/db.ts";
 import {
   type IsolationProbeClaudeOptions,
   type IsolationProbeRunResult,
@@ -112,6 +113,11 @@ export type ProbeDeps = {
       readonly ghToken: string;
     }) => Promise<{ readonly dir: string }>;
   };
+  /**
+   * 稼働中の調査があるかを返す。
+   * 測定は調査のworktreeの置き場の中身をすべて消すので、調査が動いている間は始めない。
+   */
+  readonly hasActiveInvestigation: () => Promise<boolean>;
   readonly runClaude: (
     opts: IsolationProbeClaudeOptions,
   ) => Promise<IsolationProbeRunResult>;
@@ -601,8 +607,15 @@ function buildObservations(
  * 隔離を測定して判定する。結果の`passed`と`failures`は、判定の結果をそのまま入れる。
  * 途中の失敗は例外にせず、止めた理由の符号を結果に残す。後始末の失敗は、観測の結果を変えない。
  * 不合格でも、観測は結果に残す。
+ * 稼働中の調査があるとき、確認に失敗したときは、置き場にも調査にも触れずに例外を投げる。
+ * 判定の対象外で、観測の結果は残らない。確認できないまま掃除すると、動いている調査のworktreeを消すためである。
  */
 export async function runIsolationProbe(deps: ProbeDeps): Promise<ProbeResult> {
+  if (await deps.hasActiveInvestigation()) {
+    throw new Error(
+      "an investigation is running: the isolation probe clears the worktree place, so run it after the investigation finishes",
+    );
+  }
   const at = deps.now().toISOString();
   const ctx = newContext();
   try {
@@ -688,6 +701,7 @@ export async function main(): Promise<ProbeResult> {
           ghToken: input.ghToken,
         }),
     },
+    hasActiveInvestigation: () => hasInvestigatingWorkItem(),
     runClaude: runIsolationProbeClaude,
     rm: (path) => rm(path, { recursive: true, force: true }),
     log: (message) => log.info(message),
