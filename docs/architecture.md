@@ -645,6 +645,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
+| `f/factory/lib/investigate_isolation_judge` | script | [LIB] 隔離の合否を決める判定 |
 | `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
 | `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
 | `f/factory/lib/investigate_isolation_observe` | script | [LIB] 隔離の観測でtranscriptから残す項目を取り出す |
@@ -662,7 +663,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
-| `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で観測 |
+| `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を、読み出しと探索で測定して判定 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |
