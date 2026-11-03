@@ -1034,9 +1034,9 @@ export type DesignDocRow = {
 /**
  * 設計書の行を返す形にする。
  * 図は、同じ`doc_dir`を指す行の中で最新の行のときだけ読む。
- * 同じ`doc_dir`を指す行(要件定義の下書きと設計の試行が同じ組の行)は同じ図のファイルを読むので、
- * 古い行が読むと、新しい行の図を自分の図として返してしまう。
- * 最新でない行の図は、読まずに空にする。`doc_dir`が無い行は、図を読まない。
+ * `doc_dir`は`req-<要件定義の試行>/attempt-<設計の試行>`で決まり、生成は同じ`doc_dir`の再利用を止める。
+ * それでも行が重なった場合に、古い行が読むと、新しい行の図を自分の図として返してしまう。
+ * その防御として、最新の行以外は図を読まずに空にする。`doc_dir`が無い行は、図を読まない。
  */
 async function toDesignDocRow(
   row: SqlRow,
@@ -1044,7 +1044,8 @@ async function toDesignDocRow(
 ): Promise<DesignDocRow> {
   const docDir = asNullableStr(row.doc_dir, "doc_dir");
   const dir =
-    docDir === null || !asBool(row.is_newest_of_pair, "is_newest_of_pair")
+    docDir === null ||
+    !asBool(row.is_newest_for_doc_dir, "is_newest_for_doc_dir")
       ? null
       : resolveDocDirUnderBase(docDir);
   const declared = parseDiagrams(row.diagrams, "diagrams");
@@ -2776,7 +2777,8 @@ export async function runConsoleQuery(
       const draftId = designDraftId ?? null;
       // 設計の試行の番号は作業項目の中で一意でない(要件定義へ戻ると重なる)ので、番号ではなく
       // `design_drafts.id`で引く。無指定は`id`が最大の行である。別の作業項目の番号は結ばない。
-      // `is_newest_of_pair`は、同じ`doc_dir`を指す行の中で最新かを示し、図を読んでよいかを決める。
+      // `is_newest_for_doc_dir`は、同じ`doc_dir`を指す行の中で最新かを示し、図を読んでよいかを決める。
+      // 副問い合わせは`work_item_id`でも絞り、(work_item_id, id DESC)の索引で引く。
       const rows = await sql`
         SELECT
           dd.id, dd.work_item_id, dd.requirement_draft_id, wi.owner, wi.repo,
@@ -2785,9 +2787,10 @@ export async function runConsoleQuery(
           ar.approval_request_id, ar.approval_status,
           NOT EXISTS (
             SELECT 1 FROM factory.design_drafts newer
-            WHERE newer.doc_dir = dd.doc_dir
+            WHERE newer.work_item_id = dd.work_item_id
+              AND newer.doc_dir = dd.doc_dir
               AND newer.id > dd.id
-          ) AS is_newest_of_pair
+          ) AS is_newest_for_doc_dir
         FROM factory.design_drafts dd
         JOIN factory.work_items wi ON wi.id = dd.work_item_id
         JOIN factory.requirement_drafts rd
