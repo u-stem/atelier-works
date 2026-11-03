@@ -1,4 +1,5 @@
-// `metadata`ジョブだけが落ちたCI回を、Claudeを起動せずに直す決定的な経路。
+// `metadata`ジョブだけが落ちたCI回と、`check`ジョブがロックの整合のテストだけで落ちたCI回を、
+// Claudeを起動せずに直す決定的な経路。
 // PRのheadの木から`wmill-lock.yaml`のhashを再計算し(`planMetadataRehash`)、worktreeのファイルを書き換える。
 // 依存や`schema`が変わるPRなど、事前検査が通らないものは、人の手に回す理由を返す。
 // 書き換えたファイルは、検証と完了のステップが、同じ再計算でもう一度照合する(`confirmRehash`)。
@@ -38,7 +39,7 @@ export const METADATA_REHASH_COMMIT_SUBJECT =
 
 /** 再計算のcommitの本文。1文を1行に書く。 */
 export const METADATA_REHASH_COMMIT_BODY = [
-  "CIのmetadataジョブが、scriptの変更に対してlockのhashが古いと報告したため、再計算した。",
+  "CIが、scriptの変更に対してlockのhashが古いと報告したため、再計算した。",
   "依存と入力のschemaは変わらないことを、事前検査で確かめている。",
 ].join("\n");
 
@@ -168,8 +169,11 @@ export type MetadataRoundResult =
   | { readonly kind: "manual"; readonly reason: string };
 
 /**
- * `metadata`ジョブだけが失敗している分類か。この回だけが、Claudeを使わない再計算の回になる。
- * `check`などが同時に落ちている回と、`metadata`が落ちていない回は、Claudeの回である。
+ * 再計算で直す失敗だけの分類か。この回だけが、Claudeを使わない再計算の回になる。
+ * 次のどちらかを満たすと、`metadataFailed`が立ち、読むジョブが残らない。
+ * - `metadata`ジョブだけが失敗している。
+ * - 失敗したジョブが`check`などの1つで、そのログがロックの整合のテストだけの失敗を示す(`readCiFailure`)。
+ * 整合のテスト以外の失敗が混ざる回と、`metadata`も整合のテストも落ちていない回は、Claudeの回である。
  */
 export function isMetadataOnlyFailure(failure: CiFailureRead): boolean {
   return (
@@ -182,7 +186,7 @@ export function isMetadataOnlyFailure(failure: CiFailureRead): boolean {
 /**
  * 今の回が再計算の回か(`isMetadataOnlyFailure`)を、PRのheadのCIの実行から読み直して答える関数を作る。
  * 検証と完了のステップが、修正のステップの出力を信用せずに、回の種類を決めるために使う。
- * 呼ぶたびにGitHubを読むので、必要なときだけ呼ぶ。
+ * 呼ぶたびにGitHubを読むので、必要なときだけ呼ぶ。失敗したジョブが1つのときは、そのログも読む。
  */
 export function rehashRoundProbe(input: {
   readonly client: GhClient;
@@ -208,9 +212,10 @@ export function rehashRoundProbe(input: {
 }
 
 /**
- * `metadata`ジョブが失敗しているときだけ、再計算を行う。失敗していなければ`null`を返し、呼び出し側が通常の流れを続ける。
- * `check`などの直せる失敗と同時のときは、再計算せず`null`を返す。Claudeが先にそのジョブを直す。
- * Claudeが`f/`を触るとhashが再び古くなるので、再計算は、`metadata`だけが落ちた次の回に行う。
+ * `metadata`ジョブが失敗しているか、`check`などがロックの整合のテストだけで失敗しているときだけ、再計算を行う。
+ * そうでなければ`null`を返し、呼び出し側が通常の流れを続ける。
+ * `check`などの直せる失敗が整合のテスト以外にも及ぶときは、再計算せず`null`を返す。Claudeが先にそのジョブを直す。
+ * Claudeが`f/`を触るとhashが再び古くなるので、再計算は、再計算で直す失敗だけが残った次の回に行う。
  * PRを読めないときなど、直せる失敗として分類できなければ`null`を返す。理由は通常の流れが同じ検査で出す。
  * 再計算しても本文が変わらないときは、`metadata`ジョブが、hash以外の原因(Windmillの起動やログインなど)で落ちている。
  * 再計算では直せないので、固定の理由(`lock_up_to_date`)で人の手に回す。

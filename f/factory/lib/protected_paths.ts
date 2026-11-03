@@ -136,6 +136,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 変更の形を判定する`isLockOnlyChange`と、それを呼ぶ`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、
  * 回の分類を読む`readCiFailure`(いずれも`lib/ci_fix_round.ts`)、失敗したジョブを分類する`classifyCiFailure`(`lib/ci_fix_classify.ts`)である。
  * `classifyCiFailure`の結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断の免除(予算とマーカーの確認)を決める。
+ * ロックの整合のテストだけが落ちた回は、`readCiFailure`が、ログを読み、`isLockIntegrityOnlyLog`(`lib/ci_fix_classify.ts`)で決める。
  * 再計算が読むgitの動き方を決める、`lib/workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)も入れない。
  * ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
  * これらを書き換えて例外の条件を緩める変更は、マージ前の人のレビューで差分を確かめて止める。

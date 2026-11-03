@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { classifyCiFailure } from "../../f/factory/lib/ci_fix_classify.ts";
+import { readFileSync } from "node:fs";
+import {
+  classifyCiFailure,
+  isLockIntegrityOnlyLog,
+  LOCK_INTEGRITY_TEST_FILE,
+  LOCK_INTEGRITY_TEST_NAMES,
+} from "../../f/factory/lib/ci_fix_classify.ts";
 
 const job = (name: string, conclusion: string | null, id = 1) => ({
   id,
@@ -184,5 +190,159 @@ describe("classifyCiFailure", () => {
       job("check", "failure"),
     ]);
     expect(result.kind === "fixable" && result.metadataFailed).toBe(false);
+  });
+});
+
+const INTEGRITY_NAME = LOCK_INTEGRITY_TEST_NAMES[0] ?? "";
+
+function bunLog(lines: readonly string[]): string {
+  return lines.join("\n");
+}
+
+function integrityLog(extra: readonly string[] = []): string {
+  return bunLog([
+    "bun test v1.3.0",
+    "",
+    `${LOCK_INTEGRITY_TEST_FILE}:`,
+    "error: expect(received).toEqual(expected)",
+    `(fail) ${INTEGRITY_NAME} [4.10ms]`,
+    "",
+    " 1200 pass",
+    " 1 fail",
+    "Ran 1201 tests across 90 files. [9.00s]",
+    ...extra,
+  ]);
+}
+
+describe("isLockIntegrityOnlyLog", () => {
+  test("accepts a log whose only failure is the lock integrity test", () => {
+    expect(isLockIntegrityOnlyLog(integrityLog(), false)).toBe(true);
+  });
+
+  test("accepts the failure when the summary lists it again", () => {
+    const log = bunLog([
+      `${LOCK_INTEGRITY_TEST_FILE}:`,
+      `(fail) ${INTEGRITY_NAME} [4.10ms]`,
+      "tests/lib/zzz.test.ts:",
+      "",
+      "1 tests failed:",
+      `(fail) ${INTEGRITY_NAME} [4.10ms]`,
+      " 1 fail",
+    ]);
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(true);
+  });
+
+  test("accepts a log with timestamp prefixes and terminal sequences", () => {
+    const log = integrityLog()
+      .split("\n")
+      .map((line) => `2026-10-13T00:00:00.1234567Z \u001b[31m${line}\u001b[0m`)
+      .join("\n");
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(true);
+  });
+
+  test("accepts a log that reports zero errors", () => {
+    expect(isLockIntegrityOnlyLog(integrityLog([" 0 errors"]), false)).toBe(
+      true,
+    );
+  });
+
+  test("rejects a log that the fetch truncated", () => {
+    expect(isLockIntegrityOnlyLog(integrityLog(), true)).toBe(false);
+  });
+
+  test("rejects a log with another failing test in the same file", () => {
+    const log = bunLog([
+      `${LOCK_INTEGRITY_TEST_FILE}:`,
+      `(fail) ${INTEGRITY_NAME} [4.10ms]`,
+      "(fail) the repository's wmill-lock.yaml > covers the scripts [1.00ms]",
+      " 2 fail",
+    ]);
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
+  test("rejects a log with a failing test in another file", () => {
+    const log = bunLog([
+      `${LOCK_INTEGRITY_TEST_FILE}:`,
+      `(fail) ${INTEGRITY_NAME} [4.10ms]`,
+      "tests/lib/other.test.ts:",
+      "(fail) other > fails [1.00ms]",
+      " 2 fail",
+    ]);
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
+  test("rejects a failure of the same name under another file", () => {
+    const log = bunLog([
+      "tests/lib/other.test.ts:",
+      `(fail) ${INTEGRITY_NAME} [4.10ms]`,
+      " 1 fail",
+    ]);
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
+  test("rejects a failure that has no file header above it", () => {
+    const log = bunLog([`(fail) ${INTEGRITY_NAME} [4.10ms]`, " 1 fail"]);
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
+  test("rejects a log whose summary counts more failures than it lists", () => {
+    const log = integrityLog().replace(" 1 fail", " 2 fail");
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
+  test("rejects a log without a summary of failures", () => {
+    const log = integrityLog().replace(" 1 fail", "");
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
+  test("rejects a log with two summaries of failures", () => {
+    expect(isLockIntegrityOnlyLog(integrityLog([" 1 fail"]), false)).toBe(
+      false,
+    );
+  });
+
+  test("rejects a log that reports errors between tests", () => {
+    expect(isLockIntegrityOnlyLog(integrityLog([" 1 error"]), false)).toBe(
+      false,
+    );
+  });
+
+  test("rejects a log with no failing test", () => {
+    expect(isLockIntegrityOnlyLog("##[error]lint failed in a.ts", false)).toBe(
+      false,
+    );
+  });
+
+  test("rejects an empty log", () => {
+    expect(isLockIntegrityOnlyLog("", false)).toBe(false);
+  });
+
+  test("rejects a failing test of the file under another name", () => {
+    const log = integrityLog().replace(INTEGRITY_NAME, "something else");
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+});
+
+describe("the lock integrity test names", () => {
+  const source = readFileSync(
+    new URL("./metadata_hash.test.ts", import.meta.url),
+    "utf8",
+  );
+
+  test("name a test of the file the log header points at", () => {
+    expect(LOCK_INTEGRITY_TEST_FILE.endsWith("lib/metadata_hash.test.ts")).toBe(
+      true,
+    );
+  });
+
+  test("each match a describe and a test in that file", () => {
+    const missing = LOCK_INTEGRITY_TEST_NAMES.filter((name) => {
+      const [suite, title] = name.split(" > ");
+      return !(
+        source.includes(`describe("${suite}"`) &&
+        source.includes(`test("${title}"`)
+      );
+    });
+    expect(missing).toEqual([]);
   });
 });

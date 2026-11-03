@@ -389,7 +389,9 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
    `Generated-By: Software Factory (<instance_name>)`
    250件に達したときも保留する。
    トレーラーの無いcommitを含むPRは、自動で直さない。commitのauthorは、人が同じアカウントでpushしても同じになるので使わない。
-6. 失敗したジョブを分類する。
+6. 失敗したジョブを、名前と結論だけで分類する。ログは読まない。
+   `check`などが、ロックの整合のテストだけで落ちた回かは、この時点では決めない。修正のステップがログを読んで決める([ci-fix.md](ci-fix.md#metadataジョブの失敗を直す経路))。
+   そのため、整合のテストだけで落ちた回も、この時点では通常の失敗として、次の7と10の保留を受ける。
 7. `metadata`だけの失敗でなく、factory-fixスキルがCI回のマーカーを持たなければ、`marker_missing`で保留する。
    `metadata`だけの失敗は、Claudeを使わないので、マーカーを確かめない。
    マーカーは、Factoryのリポジトリの`factory_branch`にあるファイルをGitHubのAPIで読んで確かめる。`pr_fix`の準備は、毎回`factory_branch`をfetchしてhard resetするので、cloneのスキルは準備の時点の`factory_branch`と同じになる。

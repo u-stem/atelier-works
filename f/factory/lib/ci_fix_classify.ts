@@ -1,8 +1,76 @@
 // CIの失敗が、CI回のClaudeにソースを編集させて直せる種類かを、ジョブの名前と結論から決める純関数。
 // ジョブ名は外部由来の文字列なので、判定には正規化した名前を使い、表示には無害化して長さを制限した名前を使う。
 // 判断できないものは「直せない」側に倒す。
+// テストのログが、ロックの整合のテストだけの失敗かを決める純関数(`isLockIntegrityOnlyLog`)も置く。
 
-import { sanitizeExternalName } from "./ci_log_support.ts";
+import { cleanLogText, sanitizeExternalName } from "./ci_log_support.ts";
+
+/** ロックの整合を調べるテストのファイル。bunのログでは、ファイルの見出しの行(`<パス>:`)に現れる。 */
+export const LOCK_INTEGRITY_TEST_FILE = "tests/lib/metadata_hash.test.ts";
+
+/**
+ * ロックの整合を調べるテストの、bunのログでの名前(`<describe> > <test>`)。
+ * `wmill-lock.yaml`のすべての項目のhashを、ファイルの内容から求めたhashと比べるテストである。
+ * 名前が変わると、この経路は使われなくなり、従来の経路に戻る。
+ * 名前が合うことは、テストで固定している。
+ */
+export const LOCK_INTEGRITY_TEST_NAMES: readonly string[] = [
+  "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
+];
+
+const TEST_FILE_HEADER = /^([^\s:]+\.test\.[cm]?[jt]sx?):$/;
+const FAIL_SUFFIX = /\s\[[\d.]+m?s\]$/;
+const FAIL_SUMMARY = /^(\d+) fail$/;
+const ERROR_SUMMARY = /^(\d+) errors?$/;
+const FAIL_PREFIX = "(fail) ";
+
+/**
+ * CIのテストのログが、ロックの整合を調べるテストだけの失敗を示すか。
+ * 次をすべて満たすときだけ`true`にする。判断できないものは`false`で、従来の経路に戻す。
+ * - ログが上限で切られていない。
+ * - `(fail)`の行がある。すべて、整合のテストのファイルの見出しの下にあり、名前が整合のテストと合う。
+ * - 集計の`N fail`の行が1つあり、`N`が`(fail)`の行の数(重複を除く)と等しい。
+ * - 集計の`N error`の行が無いか、`N`が0である。
+ * ログは外部由来の文字列なので、ここでは成否の判断にだけ使い、どこにも残さない。
+ */
+export function isLockIntegrityOnlyLog(
+  rawLog: string,
+  truncated: boolean,
+): boolean {
+  if (truncated) return false;
+  let file: string | null = null;
+  const failedFileByName = new Map<string, string | null>();
+  const declared: number[] = [];
+  for (const line of cleanLogText(rawLog).split("\n")) {
+    const text = line.trim();
+    const header = TEST_FILE_HEADER.exec(text);
+    if (header !== null) {
+      file = header[1] ?? null;
+      continue;
+    }
+    if (text.startsWith(FAIL_PREFIX)) {
+      const name = text.slice(FAIL_PREFIX.length).replace(FAIL_SUFFIX, "");
+      if (!failedFileByName.has(name)) failedFileByName.set(name, file);
+      continue;
+    }
+    const summary = FAIL_SUMMARY.exec(text);
+    if (summary !== null) {
+      declared.push(Number(summary[1]));
+      continue;
+    }
+    const errors = ERROR_SUMMARY.exec(text);
+    if (errors !== null && Number(errors[1]) > 0) return false;
+  }
+  if (failedFileByName.size === 0) return false;
+  if (declared.length !== 1 || declared[0] !== failedFileByName.size) {
+    return false;
+  }
+  for (const [name, failedFile] of failedFileByName) {
+    if (failedFile !== LOCK_INTEGRITY_TEST_FILE) return false;
+    if (!LOCK_INTEGRITY_TEST_NAMES.includes(name)) return false;
+  }
+  return true;
+}
 
 /** `sanitizeRunName`が、空の名前に代わりに返す文字列。 */
 const UNNAMED_DISPLAY_NAME = "(unnamed)";
