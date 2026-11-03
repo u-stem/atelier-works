@@ -42,19 +42,19 @@ db_id="$(compose ps -q db 2>/dev/null || true)"
 psql_exec() {
   local db="$1"
   shift
-  compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d "${db}" "$@"
+  docker exec -i "${db_id}" psql -v ON_ERROR_STOP=1 -U postgres -d "${db}" "$@"
 }
 
 cleanup() {
-  compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d windmill \
+  docker exec -i "${db_id}" psql -v ON_ERROR_STOP=1 -U postgres -d windmill \
     -c "DROP DATABASE IF EXISTS ${SCRATCH_DB};" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 log "creating scratch database '${SCRATCH_DB}'"
-compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d windmill \
+docker exec -i "${db_id}" psql -v ON_ERROR_STOP=1 -U postgres -d windmill \
   -c "DROP DATABASE IF EXISTS ${SCRATCH_DB};" >/dev/null
-compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d windmill \
+docker exec -i "${db_id}" psql -v ON_ERROR_STOP=1 -U postgres -d windmill \
   -c "CREATE DATABASE ${SCRATCH_DB};" >/dev/null
 
 shopt -s nullglob
