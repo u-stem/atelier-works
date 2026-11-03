@@ -257,6 +257,12 @@ const LANE_GAP = 14;
 /** 段を飛ぶ線が、箱の右辺と左辺から出入りする水平の長さと、線ごとのずらし。 */
 const BEND = 16;
 const BEND_STEP = 6;
+/**
+ * 段を飛ぶ線の終点を、見出しの中心から下へずらす距離と、同じ行き先へ入る線ごとのずらし。
+ * 隣り合う段を結ぶ線は見出しの中心へ水平に入るので、同じ高さで入ると最後の区間が重なる。
+ */
+const SKIP_ENTRY_SHIFT = 10;
+const SKIP_ENTRY_STEP = 6;
 
 export type OriginStepRow = {
   readonly id: string;
@@ -340,6 +346,7 @@ function layoutNode(
  * ノードの幅は開閉で変えない。変えると、図の幅が変わって見せ方が入れ替わり、押したボタンが消えてフォーカスを失うためである。
  * 隣り合う段を結ぶ線は、右辺から左辺へ直線で引く。段を飛ぶ線は、箱の下端の下に引いた通り道を回し、間の段の箱の上を通さない。
  * 線の出る位置は、たたんだノードでは見出しの高さ、開いたノードでは出口のつくステップの行の高さとする。
+ * 段を飛ぶ線は、見出しの中心から少し下へずらして入る。隣り合う段から水平に入る線と、最後の区間を共有しないためである。
  */
 export function layoutOriginGraph(
   model: OriginGraphModel,
@@ -376,6 +383,7 @@ export function layoutOriginGraph(
   const byName = new Map(nodes.map((node) => [node.flow, node]));
 
   let lanes = 0;
+  const skipsInto = new Map<string, number>();
   const edges = model.edges.flatMap((edge): OriginEdgeLayout[] => {
     const target = byName.get(edge.to);
     if (target === undefined) return [];
@@ -411,6 +419,12 @@ export function layoutOriginGraph(
     const lane = bottom + LANE_FIRST + lanes * LANE_GAP;
     const out = start.x + BEND + lanes * BEND_STEP;
     const into = end.x - BEND - lanes * BEND_STEP;
+    const entered = skipsInto.get(edge.to) ?? 0;
+    skipsInto.set(edge.to, entered + 1);
+    const arrival: Point = {
+      x: end.x,
+      y: end.y + SKIP_ENTRY_SHIFT + entered * SKIP_ENTRY_STEP,
+    };
     lanes += 1;
     return [
       {
@@ -420,8 +434,8 @@ export function layoutOriginGraph(
           { x: out, y: start.y },
           { x: out, y: lane },
           { x: into, y: lane },
-          { x: into, y: end.y },
-          end,
+          { x: into, y: arrival.y },
+          arrival,
         ],
         label: word ? { x: (out + into) / 2, y: lane - 4 } : null,
       },
