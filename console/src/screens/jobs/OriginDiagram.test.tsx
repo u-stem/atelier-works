@@ -60,6 +60,36 @@ const SCHEDULES_WITH_FLOWS = (FLOWS_DATA?.schedules ?? [])
   .map((schedule) => schedule.name)
   .filter((name) => launchedBy(name).length > 0);
 
+/**
+ * 起点から前進の辺(起動、承認、PR経由)でたどれるflowの出口に、PR経由があるか。
+ * 描画から独立に、データの`schedules`と`flows[].exits`から作る。
+ */
+function hasPrExit(name: string): boolean {
+  const seen = new Set<string>();
+  const queue = [...launchedBy(name)];
+  while (queue.length > 0) {
+    const flowName = queue.pop();
+    if (flowName === undefined || seen.has(flowName)) continue;
+    seen.add(flowName);
+    const flow = FLOWS_DATA?.flows.find((item) => item.name === flowName);
+    for (const exit of flow?.exits ?? []) {
+      if (exit.via === "pr") return true;
+      if (exit.via === "launch" || exit.via === "approve") {
+        queue.push(exit.flow);
+      }
+    }
+  }
+  return false;
+}
+
+const ALL_SCHEDULES = (FLOWS_DATA?.schedules ?? []).map(
+  (schedule) => schedule.name,
+);
+const SCHEDULES_WITH_PR_EXIT = ALL_SCHEDULES.filter(hasPrExit);
+const SCHEDULES_WITHOUT_PR_EXIT = ALL_SCHEDULES.filter(
+  (name) => !hasPrExit(name),
+);
+
 const FIT = 1200;
 const SCROLL = 900;
 const LIST = 500;
@@ -70,11 +100,11 @@ const LEGEND =
 
 /** PRを介した出口を持つ一覧に添える、PR経由の行の説明。 */
 const LIST_PR_NOTE =
-  "PR経由の行は、定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む関係です。";
+  "PR経由の行は、定期ジョブがPRのラベルやCIの結果を見て起動する関係で、人のラベルを含みます。";
 
 /** PRを介した線を持つ図の凡例。 */
 const LEGEND_WITH_PR =
-  "実線は起動の流れ、破線はPRを介した関係(定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+  "実線は起動の流れ、破線はPRを介した関係です。破線は、定期ジョブがPRのラベルやCIの結果を見て起動する関係で、人のラベルを含みます。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
 describe("OriginDiagramView: the diagram", () => {
   test("is a labeled group named after the schedule", () => {
@@ -493,11 +523,14 @@ describe("OriginDiagramView: the presentation by width", () => {
     expect(plain(render("poll_issues", { width: LIST }))).not.toContain("実線");
   });
 
-  test("explains the PR rows in the list of a diagram with a PR relation", () => {
-    expect(plain(render("poll_prs", { width: LIST }))).toContain(LIST_PR_NOTE);
-  });
+  test.each(SCHEDULES_WITH_PR_EXIT)(
+    "explains the PR rows in the list of %s, which has a PR relation",
+    (name) => {
+      expect(plain(render(name, { width: LIST }))).toContain(LIST_PR_NOTE);
+    },
+  );
 
-  test.each(["audit_kickoff", "watch_pr_ci"])(
+  test.each(SCHEDULES_WITHOUT_PR_EXIT)(
     "does not explain the PR rows in the list of %s, which has no PR relation",
     (name) => {
       expect(plain(render(name, { width: LIST }))).not.toContain(
