@@ -299,10 +299,11 @@ describe("required check names", () => {
 
   test("matches the checks that docs/security.md says main requires", () => {
     const doc = readFileSync(join(REPO_ROOT, "docs/security.md"), "utf8");
-    const line = doc.split("\n").find((l) => l.startsWith("- 必須チェックは"));
-    const names = [...(line ?? "").matchAll(/`([a-z0-9-]+)`/g)].map(
-      (m) => m[1],
-    );
+    const lines = doc.split("\n");
+    const start = lines.findIndex((l) => l.startsWith("- 必須チェックは"));
+    const next = lines.findIndex((l, i) => i > start && l.startsWith("- "));
+    const block = lines.slice(start, next).join("\n");
+    const names = [...block.matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]);
     expect(names).toEqual([...REQUIRED_CHECKS]);
   });
 
