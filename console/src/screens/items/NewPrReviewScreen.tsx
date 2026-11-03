@@ -177,6 +177,7 @@ export function NewPrReviewScreen() {
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="submit"
+              className="aria-disabled:cursor-not-allowed"
               aria-disabled={control.disabled ? true : undefined}
             >
               {control.label}
