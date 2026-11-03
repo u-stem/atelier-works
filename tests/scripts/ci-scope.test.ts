@@ -1509,6 +1509,18 @@ describe("ci.yml wiring", () => {
     );
   });
 
+  for (const stepName of [
+    "Build worker image",
+    "Test the process lock in the worker image",
+    "Test the check sandbox in the worker image",
+  ]) {
+    test(`"${stepName}" runs the same command in check and check-worker`, () => {
+      expect(String(stepNamed("check", stepName).run)).toBe(
+        String(stepNamed("check-worker", stepName).run),
+      );
+    });
+  }
+
   test("the worker image build runs unless scope says worker is false", () => {
     expect(stepNamed("check", "Build worker image").if).toBe(
       "needs.scope.outputs.worker != 'false'",

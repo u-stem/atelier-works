@@ -307,6 +307,18 @@ describe("required check names", () => {
     expect(names).toEqual([...REQUIRED_CHECKS]);
   });
 
+  test("matches the count that the verdict table of docs/security.md gives", () => {
+    const doc = readFileSync(join(REPO_ROOT, "docs/security.md"), "utf8");
+    const match = /^\| (\d+)個がすべて成功かスキップ \|/m.exec(doc);
+    expect(Number(match?.[1])).toBe(REQUIRED_CHECKS.length);
+  });
+
+  test("matches the count that the CI section of docs/security.md gives", () => {
+    const doc = readFileSync(join(REPO_ROOT, "docs/security.md"), "utf8");
+    const match = /^必須チェックは、.*の(\d+)個と同じである。$/m.exec(doc);
+    expect(Number(match?.[1])).toBe(REQUIRED_CHECKS.length);
+  });
+
   test("matches the jobs that ci.yml defines", () => {
     const parsed: unknown = Bun.YAML.parse(
       readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8"),
