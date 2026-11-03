@@ -225,14 +225,21 @@ export function findFlow(
   return data?.flows.find((flow) => flow.name === name) ?? null;
 }
 
+/** 名前のscheduleを返す。無ければnull。名前は一覧から探し、オブジェクトの継承したキーを拾わない。 */
+export function findSchedule(
+  data: FlowsData | null,
+  name: string,
+): FlowSchedule | null {
+  return data?.schedules.find((item) => item.name === name) ?? null;
+}
+
 /** schedule(`f/factory/<name>`)の説明と起動するflowを返す。無ければnull。 */
 export function scheduleFlowsOf(
   data: FlowsData | null,
   schedulePath: string,
 ): FlowSchedule | null {
   if (!schedulePath.startsWith(FACTORY_PREFIX)) return null;
-  const name = schedulePath.slice(FACTORY_PREFIX.length);
-  return data?.schedules.find((item) => item.name === name) ?? null;
+  return findSchedule(data, schedulePath.slice(FACTORY_PREFIX.length));
 }
 
 /** ジョブの画面のパス。ルーターの基準(`/console`)からの絶対パスで書く。 */
@@ -278,24 +285,15 @@ export function flowHistoryPath(name: string): string {
   return `${JOBS}?${query.toString()}`;
 }
 
-/** 名前のscheduleを返す。無ければnull。名前は一覧から探し、オブジェクトの継承したキーを拾わない。 */
-export function findSchedule(
-  data: FlowsData | null,
-  name: string,
-): FlowSchedule | null {
-  void data;
-  void name;
-  return null;
-}
-
 /** 起動の図の画面のパス。データに無い名前と、安全でない名前はnullにする。 */
 export function originDiagramPath(
   name: string,
   data: FlowsData | null = FLOWS_DATA,
 ): string | null {
-  void name;
-  void data;
-  return null;
+  if (!NAME_PATTERN.test(name) || findSchedule(data, name) === null) {
+    return null;
+  }
+  return `${JOBS}/origins/${name}`;
 }
 
 /** 起動の図の画面が、経路の引数から決める状態。 */
@@ -305,12 +303,18 @@ export type OriginRouteState =
   | { readonly kind: "not_found" }
   | { readonly kind: "found"; readonly schedule: FlowSchedule };
 
-/** 経路の`:name`から、起動の図の画面の状態を決める。決め方は`flowRouteState`と同じ。 */
+/**
+ * 経路の`:name`から、起動の図の画面の状態を決める。決め方は`flowRouteState`と同じで、
+ * 名前が無ければ一覧へ戻し、データを読めなければ読めなかったと伝え、データに無い名前と安全でない名前は見つからないとする。
+ */
 export function originRouteState(
   name: string | undefined,
   data: FlowsData | null,
 ): OriginRouteState {
-  void name;
-  void data;
-  return { kind: "unreadable" };
+  if (name === undefined) return { kind: "redirect" };
+  if (data === null) return { kind: "unreadable" };
+  const schedule = NAME_PATTERN.test(name) ? findSchedule(data, name) : null;
+  return schedule === null
+    ? { kind: "not_found" }
+    : { kind: "found", schedule };
 }
