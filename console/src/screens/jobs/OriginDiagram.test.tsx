@@ -42,14 +42,10 @@ function countOf(html: string, word: string): number {
   return html.split(word).length - 1;
 }
 
-/** 起点が起動するflowの名前。 */
+/** 起点が起動するflowの名前。描画から独立に、データの`schedules[].flows`から重複を除いて作る。 */
 function launchedBy(name: string): string[] {
-  if (FLOWS_DATA === null) throw new Error("flows.json is unreadable");
-  const model = originGraphModel(FLOWS_DATA, name);
-  if (model === null) throw new Error(`no schedule ${name}`);
-  return model.edges
-    .filter((edge) => edge.from === null)
-    .map((edge) => edge.to);
+  const schedule = FLOWS_DATA?.schedules.find((item) => item.name === name);
+  return schedule === undefined ? [] : [...new Set(schedule.flows)];
 }
 
 /** 一覧の、起点のカードの出口の行の文字。出口の一覧が無ければ空にする。 */
@@ -72,9 +68,13 @@ const LIST = 500;
 const LEGEND =
   "実線は起動の流れです。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
+/** PRを介した出口を持つ一覧に添える、PR経由の行の説明。 */
+const LIST_PR_NOTE =
+  "PR経由の行は、定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む関係です。";
+
 /** PRを介した線を持つ図の凡例。 */
 const LEGEND_WITH_PR =
-  "実線は起動の流れ、破線はPRを介した関係(この起点を含む定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+  "実線は起動の流れ、破線はPRを介した関係(定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
 describe("OriginDiagramView: the diagram", () => {
   test("is a labeled group named after the schedule", () => {
@@ -491,6 +491,23 @@ describe("OriginDiagramView: the presentation by width", () => {
 
   test("does not explain the lines in the list, which draws none", () => {
     expect(plain(render("poll_issues", { width: LIST }))).not.toContain("実線");
+  });
+
+  test("explains the PR rows in the list of a diagram with a PR relation", () => {
+    expect(plain(render("poll_prs", { width: LIST }))).toContain(LIST_PR_NOTE);
+  });
+
+  test.each(["audit_kickoff", "watch_pr_ci"])(
+    "does not explain the PR rows in the list of %s, which has no PR relation",
+    (name) => {
+      expect(plain(render(name, { width: LIST }))).not.toContain(
+        "PR経由の行は",
+      );
+    },
+  );
+
+  test("does not explain the PR rows in the diagram, which has the legend", () => {
+    expect(plain(render("poll_prs"))).not.toContain("PR経由の行は");
   });
 
   test("still says a flow may not start in the list", () => {
