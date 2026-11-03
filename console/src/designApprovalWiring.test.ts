@@ -559,17 +559,26 @@ describe("design approval preview wiring", () => {
     });
 
     // 走査が何も拾わないと、許可リストの検査は空振りで通る。
-    // 実際のソースが使うものを全体で照合し、一部だけ拾う走査も見逃さない。
+    // 今のソースの名前の全体と照合し、一部だけ拾う走査も見逃さない。
     test("finds every name imported from react in the real source", () => {
-      expect([...reactImportedNames(review)].sort()).toEqual(
-        [...ALLOWED_IMPORTS].sort(),
-      );
+      expect(reactImportedNames(review)).toEqual([
+        "Fragment",
+        "ReactNode",
+        "useMemo",
+        "useState",
+      ]);
     });
 
-    test("finds every hook called in the real source", () => {
-      expect([...new Set(hookCalls(review))].sort()).toEqual(
-        [...ALLOWED_HOOKS].sort(),
-      );
+    test("finds every hook called in the real source in order", () => {
+      expect(hookCalls(review)).toEqual([
+        "useMemo",
+        "useState",
+        "useMemo",
+        "useApprovalDesignDoc",
+        "useLoadingDisplay",
+        "useIntakeSnapshot",
+        "useLoadingDisplay",
+      ]);
     });
 
     test("changes the mode in one place", () => {
