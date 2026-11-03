@@ -3797,7 +3797,7 @@ Claudeを目印ごとに1回、計3回起動するので、数分かかる。
 | --- | --- | --- |
 | `workspace_unavailable` | cloneか置き場かworktreeを用意できない | ジョブのログの符号を見て、cloneと置き場(`/var/lib/factory-investigate`)を確かめる。置き場が無いときは`mise run up`で反映する |
 | `canary_placement_failed` | 目印を置けない | 置き場所(`/tmp`、`$HOME`)の権限と、残骸の有無を確かめる |
-| `unexpected_tool_use` | モデルが目印以外に触れた | 結果の`notice`に従い、[秘密の入れ替え](security.md#秘密の入れ替え)を行う |
+| `unexpected_tool_use` | モデルが目印以外に触れた | 結果の`notice`に従い、[秘密の入れ替え](security.md#秘密の入れ替え)を行う。実機の出力用のツールの入力の形が違うと、偽の警報が続きうる。予定外が`other`だけで実行が`success`のときは、出力用のツールの形の違いを疑う |
 | `transcript_unavailable` | transcriptを特定または解析できない | 同上 |
 | `probe_error` | 想定外の例外。`errorName`に名前だけが残る | ジョブのログを確かめる。例外のメッセージは結果にもログにも残らない |
 
