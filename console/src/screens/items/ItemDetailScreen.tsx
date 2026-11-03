@@ -27,6 +27,7 @@ import {
 } from "../../lib/layoutClasses.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
 import { ApprovalsTab } from "./detail/ApprovalsTab.tsx";
+import { DesignTab } from "./detail/DesignTab.tsx";
 import {
   ITEM_DETAIL_PANEL_ID,
   ItemDetailTabs,
@@ -60,6 +61,7 @@ export const ITEM_DETAIL_LOADING_SHAPE: LoadingShape = {
       <div className="flex h-[2.6rem] items-center gap-6 border-b border-border px-4 md:px-8">
         <Skeleton className="h-4 w-10" />
         <Skeleton className="h-4 w-16" />
+        <Skeleton className="h-4 w-14" />
         <Skeleton className="h-4 w-14" />
         <Skeleton className="h-4 w-20" />
       </div>
@@ -163,6 +165,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         {tab === "requirements" ? (
           <RequirementsTab detail={detail} now={now} />
         ) : null}
+        {tab === "design" ? <DesignTab detail={detail} now={now} /> : null}
         {tab === "rounds" ? <RoundsTab detail={detail} now={now} /> : null}
         {tab === "approvals" ? (
           <ApprovalsTab detail={detail} now={now} />
@@ -173,7 +176,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
 }
 
 /**
- * 作業項目の詳細の画面。概要、要件定義、ラウンド、承認の履歴のタブを持つ。
+ * 作業項目の詳細の画面。概要、要件定義、設計、ラウンド、承認の履歴のタブを持つ。
  * 開くタブはURLの`?tab=`に持つ。読み取り専用で、再実行や承認などの書き込みは要対応の画面で行う。
  * 作業項目の番号が正しくないときは取得せず、存在しない番号のときは「見つかりませんでした」を出す。
  */

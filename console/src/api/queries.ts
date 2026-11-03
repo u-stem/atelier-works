@@ -10,7 +10,7 @@ import {
   type DeploymentEntry,
   isDeploymentHistory,
 } from "./guards/deployments.ts";
-import type { DesignDoc } from "./guards/design.ts";
+import { type DesignDoc, isDesignDocRows } from "./guards/design.ts";
 import {
   type IntakeSnapshot,
   isIntakeSnapshotRows,
@@ -353,7 +353,13 @@ export function useApprovalDesignDoc(
   });
 }
 
-/** 設計書のキャッシュのキー。`draftId`が`null`のときは最新である。 */
+/** 設計書を取り直さない間隔。承認や再生成で変わるが、開いている間の変化は小さい。 */
+const DESIGN_DOC_STALE_MS = 30_000;
+
+/**
+ * 設計書のキャッシュのキー。`draftId`が`null`のときは最新の設計書である。
+ * 最新と、番号で指した設計書は、別のキャッシュにする。
+ */
 export function designDocQueryKey(
   workItemId: number,
   draftId: number | null,
@@ -361,11 +367,40 @@ export function designDocQueryKey(
   return ["console", "design_doc", workItemId, draftId];
 }
 
-/** 作業項目の設計書1件を取る。 */
+/**
+ * 作業項目の設計書1件を取り、型ガードを通してから返す。`draftId`が`null`なら最新の設計書を取る。
+ * 設計書の番号は、作業項目の中の設計の試行の番号ではなく、設計書の行の番号である。
+ * 作業項目か設計書が無いときは`null`を返す。失敗は`ApiFailure`で投げる。
+ */
 export async function fetchDesignDoc(
-  _workItemId: number,
-  _draftId: number | null,
-  _options: RunScriptOptions = {},
+  workItemId: number,
+  draftId: number | null,
+  options: RunScriptOptions = {},
 ): Promise<DesignDoc | null> {
-  return null;
+  const result = await runScript(
+    "console_query",
+    draftId === null
+      ? { view: "design_doc", work_item_id: workItemId }
+      : { view: "design_doc", work_item_id: workItemId, draft_id: draftId },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isDesignDocRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value[0] ?? null;
+}
+
+/** 設計書を取る。取得から30秒を過ぎていれば、画面を開くたびに取り直す。 */
+export function useDesignDoc(
+  workItemId: number,
+  draftId: number | null,
+): UseQueryResult<DesignDoc | null, Error> {
+  return useQuery({
+    queryKey: designDocQueryKey(workItemId, draftId),
+    queryFn: ({ signal }) => fetchDesignDoc(workItemId, draftId, { signal }),
+    staleTime: DESIGN_DOC_STALE_MS,
+  });
 }

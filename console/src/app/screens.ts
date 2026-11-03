@@ -193,6 +193,15 @@ export const SCREENS: readonly Screen[] = [
           ),
       },
       {
+        path: "items/:id/design",
+        trail: "breadcrumb",
+        title: workItemTitle("の設計書", "設計書"),
+        lazy: () =>
+          import("../screens/items/ItemDesignScreen.tsx").then((module) => ({
+            Component: module.ItemDesignScreen,
+          })),
+      },
+      {
         path: "items/:id",
         trail: "breadcrumb",
         title: workItemTitle("", "作業項目"),

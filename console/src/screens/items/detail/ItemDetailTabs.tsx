@@ -21,7 +21,7 @@ export function panelLabelledBy(selected: ItemDetailTabId): string {
   return tabDomId(ID_PREFIX, selected);
 }
 
-/** 作業項目の詳細のタブ。共通の`Tabs`に、4つのタブと1つの本体を渡す。 */
+/** 作業項目の詳細のタブ。共通の`Tabs`に、5つのタブと1つの本体を渡す。 */
 export function ItemDetailTabs({
   selected,
   onSelect,

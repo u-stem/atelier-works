@@ -130,7 +130,7 @@ describe("DesignDocumentView", () => {
   });
 
   test("shows when the draft was created", () => {
-    expect(render()).toContain('datetime="2026-11-01T00:00:00.000Z"');
+    expect(render()).toContain('dateTime="2026-11-01T00:00:00.000Z"');
   });
 });
 
