@@ -239,4 +239,10 @@ describe("DesignReview", () => {
       /data-preview|取り込み時点のIssueの表示の形式/,
     );
   });
+
+  // 否定の検査だけだと、パネルが読み込み中の骨組みのままでも通る。
+  // 取り込み時点のIssueの原文の`<pre>`と本文が出ていることで、パネルが描かれたことを固定する。
+  test("shows the body of the issue at intake in a pre", () => {
+    expect(renderReview()).toMatch(/<pre[^>]*>[^<]*Body &lt;!-- c --&gt;/);
+  });
 });
