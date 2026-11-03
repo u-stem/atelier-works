@@ -44,6 +44,9 @@ function IndexRow({ row, now }: { row: RequirementsIndexRow; now: number }) {
           <Badge variant={toneBadgeVariant(requirementsStatusTone(row.status))}>
             {summary.statusLabel}
           </Badge>
+          {row.has_design === true ? (
+            <Badge variant="muted">設計あり</Badge>
+          ) : null}
         </span>
       </Link>
     </li>
@@ -56,6 +59,8 @@ const PAGE_SIZE = 10;
 /**
  * 要件定義がある作業項目の一覧。作業項目の番号で絞り込める。
  * 行を選ぶと、その作業項目の最新の要件定義書へ移る。
+ * 設計書のある行には、「設計あり」のバッジを出す。バッジは行のリンクの中にあり、リンクを入れ子にしない。
+ * 設計書へは、作業項目の詳細の設計タブから行く。
  * 絞り込んだ行を10件ずつのページに分け、番号の絞り込みを変えると先頭のページへ戻る。
  */
 export function RequirementsIndexList({

@@ -21,8 +21,8 @@ describe("ItemDetailTabs", () => {
     expect(render()).toContain('aria-label="作業項目の詳細"');
   });
 
-  test("draws the four tabs", () => {
-    expect(tabTags(render())).toHaveLength(4);
+  test("draws the five tabs", () => {
+    expect(tabTags(render())).toHaveLength(5);
   });
 
   test("selects the chosen tab only", () => {
@@ -30,7 +30,7 @@ describe("ItemDetailTabs", () => {
       tabTags(render("requirements")).map((tag) =>
         tag.includes('aria-selected="true"'),
       ),
-    ).toEqual([false, true, false, false]);
+    ).toEqual([false, true, false, false, false]);
   });
 
   test("points every tab at the single panel", () => {

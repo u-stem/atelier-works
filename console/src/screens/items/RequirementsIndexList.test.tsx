@@ -65,3 +65,39 @@ describe("RequirementsIndexList pagination", () => {
     expect(render(0)).toContain("要件定義はまだありません。");
   });
 });
+
+describe("RequirementsIndexList design mark", () => {
+  function renderRows(rows: RequirementsIndexRow[]): string {
+    return renderToStaticMarkup(
+      <MemoryRouter>
+        <TooltipProvider>
+          <RequirementsIndexList rows={rows} now={NOW} />
+        </TooltipProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  test("marks a row that has a design with a badge", () => {
+    const [row] = manyRows(1);
+    expect(renderRows(row ? [{ ...row, has_design: true }] : [])).toContain(
+      "設計あり",
+    );
+  });
+
+  test("does not nest a link in the row link", () => {
+    const [row] = manyRows(1);
+    const html = renderRows(row ? [{ ...row, has_design: true }] : []);
+    expect(html.match(/<a /g)).toHaveLength(1);
+  });
+
+  test("shows no mark without a design", () => {
+    expect(renderRows(manyRows(1))).not.toContain("設計あり");
+  });
+
+  test("shows no mark for a row whose has_design is false", () => {
+    const [row] = manyRows(1);
+    expect(
+      renderRows(row ? [{ ...row, has_design: false }] : []),
+    ).not.toContain("設計あり");
+  });
+});

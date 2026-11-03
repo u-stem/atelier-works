@@ -69,6 +69,23 @@ export function itemRequirementsCrumbs(workItemId: number | null): Crumb[] {
   ];
 }
 
+/**
+ * 設計書。戻り先は、作業項目の詳細の設計タブである。
+ * 番号が正しくないときは、詳細へ戻る手がかりが無いので、一覧への戻りだけにする。
+ */
+export function itemDesignCrumbs(workItemId: number | null): Crumb[] {
+  return workItemId === null
+    ? [ITEMS_CRUMB, { label: "設計書" }]
+    : [
+        ITEMS_CRUMB,
+        {
+          label: workItemRef(workItemId),
+          to: `/items/${workItemId}?tab=design`,
+        },
+        { label: "設計書" },
+      ];
+}
+
 /** 監査レポート。 */
 export function auditReportCrumbs(workItemId: number | null): Crumb[] {
   return [

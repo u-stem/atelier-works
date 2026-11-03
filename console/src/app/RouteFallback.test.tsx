@@ -218,6 +218,7 @@ describe("the first paint of a screen", () => {
   test.each([
     "items/:id",
     "items/:id/requirements",
+    "items/:id/design",
     "reports/audit/:id",
     "jobs/:id",
   ])("the %s screen draws the fallback with a breadcrumb", (path) => {

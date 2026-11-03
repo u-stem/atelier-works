@@ -2,9 +2,11 @@
 // 画面は生のコードや英語のフィールド名を出さず、この結果だけを描く。
 // Issueの起票者や実行ログに由来する文字は、見えない文字を置き換えてから文字として出す。
 
+import type { DesignDoc } from "../api/guards/design.ts";
 import type {
   WorkItemApproval,
   WorkItemAttempt,
+  WorkItemDesignAttempt,
   WorkItemDiffStat,
   WorkItemFixRound,
   WorkItemOverview,
@@ -28,7 +30,12 @@ import {
   pipelineStatusVariant,
   prLink,
 } from "./pipelineView.ts";
-import { requirementsPath } from "./requirementsView.ts";
+import {
+  type PreparedDoc,
+  prepareDoc,
+  requirementsPath,
+} from "./requirementsView.ts";
+import { parseIdParam } from "./routeParams.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
 function plain(text: string): string {
@@ -48,6 +55,7 @@ function plainOrNull(text: string | null): string | null {
 export type ItemDetailTabId =
   | "overview"
   | "requirements"
+  | "design"
   | "rounds"
   | "approvals";
 
@@ -57,6 +65,7 @@ export const ITEM_DETAIL_TABS: readonly {
 }[] = [
   { id: "overview", label: "概要" },
   { id: "requirements", label: "要件定義" },
+  { id: "design", label: "設計" },
   { id: "rounds", label: "ラウンド" },
   { id: "approvals", label: "承認の履歴" },
 ];
@@ -278,6 +287,16 @@ function approvalSubject(approval: WorkItemApproval): string | null {
     return approval.draft_attempt === null
       ? null
       : attemptRef(approval.draft_attempt);
+  }
+  if (approval.kind === "design") {
+    const requirement = approval.design_requirement_attempt;
+    const design = approval.design_attempt;
+    return requirement === null ||
+      requirement === undefined ||
+      design === null ||
+      design === undefined
+      ? null
+      : designName(requirement, design);
   }
   return plainOrNull(approval.proposal_title);
 }
@@ -611,4 +630,102 @@ export function describeFailureRecord(
     occurredAt: failure.occurred_at,
     jobs: jobLinks(failure.job_id, failure.root_job_id, FAILURE_JOB_LABELS),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 設計書
+// ---------------------------------------------------------------------------
+
+/**
+ * 設計書の名前。設計の試行の番号は、要件定義へ戻ると重なるので、元の要件定義の試行と並べて名乗る。
+ */
+export function designName(requirement: number, design: number): string {
+  return `要件定義 ${attemptRef(requirement)}・設計 ${attemptRef(design)}`;
+}
+
+/**
+ * 設計書の画面のパス(routerの基準からの絶対パス)。
+ * `draftId`が`null`なら最新の設計書を指し、番号は付けない。
+ */
+export function designPath(workItemId: number, draftId: number | null): string {
+  const path = `/items/${workItemId}/design`;
+  return draftId === null ? path : `${path}?draft=${draftId}`;
+}
+
+export type DraftParam =
+  | { readonly kind: "latest" }
+  | { readonly kind: "draft"; readonly id: number }
+  | { readonly kind: "invalid" };
+
+/**
+ * URLの`draft`の値を読む。無ければ最新を指す。
+ * あって、先頭が0でない正の整数でないときは不正とする。
+ * 不正な値を最新として扱うと、別の設計書を読んでいるのに気づけないためである。
+ */
+export function parseDraftParam(raw: string | null): DraftParam {
+  if (raw === null) {
+    return { kind: "latest" };
+  }
+  const id = parseIdParam(raw);
+  return id === null ? { kind: "invalid" } : { kind: "draft", id };
+}
+
+/**
+ * 設計書の試行を、設計書の番号が大きい順に並べた新しい配列を返す。
+ * 設計の試行の番号は重なりうるので、番号ではなく設計書の番号で決める。
+ * 画面の順序がbackendの問い合わせの並びに左右されないよう、画面側でも並べる。
+ */
+export function sortDesignAttempts(
+  attempts: readonly WorkItemDesignAttempt[],
+): WorkItemDesignAttempt[] {
+  return [...attempts].sort((a, b) => b.id - a.id);
+}
+
+export type DesignAttemptView = {
+  readonly key: number;
+  /** 「要件定義 試行 N・設計 試行 M」。 */
+  readonly name: string;
+  readonly summary: string;
+  readonly createdAt: string;
+  /** 承認依頼があるときの状態の名前。無ければ`null`。 */
+  readonly approvalLabel: string | null;
+  readonly approvalVariant: PipelineStatusVariant;
+  /** 設計書の画面への経路。設計書の番号で指す。 */
+  readonly path: string;
+  readonly linkLabel: string;
+};
+
+export function describeDesignAttempt(
+  workItemId: number,
+  attempt: WorkItemDesignAttempt,
+): DesignAttemptView {
+  const name = designName(attempt.requirement_attempt, attempt.design_attempt);
+  return {
+    key: attempt.id,
+    name,
+    summary: plain(attempt.summary),
+    createdAt: attempt.created_at,
+    approvalLabel:
+      attempt.approval_status === null
+        ? null
+        : approvalStatusLabel(attempt.approval_status, "design"),
+    approvalVariant: approvalVariant(attempt.approval_status),
+    path: designPath(workItemId, attempt.id),
+    linkLabel: `設計書を開く(${name})`,
+  };
+}
+
+/**
+ * 設計書の文字を、画面に出せる形にする。
+ * 本文、要約、未確定事項は、信頼できない入力を読んだ出力なので、見えない文字を置き換える。
+ * 目次と見出しの行は、置き換えた後の本文から取る。
+ * 題名は本文の最初の`# `の行、無ければ「(無題)」にする。
+ */
+export function prepareDesignDoc(doc: DesignDoc): PreparedDoc {
+  return prepareDoc({
+    title: null,
+    summary: doc.summary,
+    markdown: doc.markdown,
+    open_questions: doc.open_questions,
+  });
 }

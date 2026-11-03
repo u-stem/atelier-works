@@ -312,3 +312,91 @@ describe("isWorkItemDetail", () => {
     ).toBe(false);
   });
 });
+
+const DESIGN_ATTEMPT = {
+  id: 21,
+  requirement_attempt: 2,
+  design_attempt: 1,
+  summary: "Design summary",
+  created_at: T0,
+  approval_request_id: 31,
+  approval_status: "pending",
+};
+
+describe("workItemDetail design_attempts", () => {
+  test("accepts a detail with design_attempts", () => {
+    expect(
+      isWorkItemDetail({ ...DETAIL, design_attempts: [DESIGN_ATTEMPT] }),
+    ).toBe(true);
+  });
+
+  test("accepts a detail without design_attempts", () => {
+    expect(isWorkItemDetail(DETAIL)).toBe(true);
+  });
+
+  test("accepts a design attempt without an approval request", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        design_attempts: [
+          {
+            ...DESIGN_ATTEMPT,
+            approval_request_id: null,
+            approval_status: null,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects a design attempt whose id is zero", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        design_attempts: [{ ...DESIGN_ATTEMPT, id: 0 }],
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects a design attempt without a summary", () => {
+    const { summary: _omitted, ...rest } = DESIGN_ATTEMPT;
+    expect(isWorkItemDetail({ ...DETAIL, design_attempts: [rest] })).toBe(
+      false,
+    );
+  });
+
+  test("rejects design_attempts that is not a list", () => {
+    expect(
+      isWorkItemDetail({ ...DETAIL, design_attempts: DESIGN_ATTEMPT }),
+    ).toBe(false);
+  });
+
+  test("accepts an approval that names a design", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        approvals: [
+          {
+            ...APPROVAL,
+            kind: "design",
+            design_requirement_attempt: 2,
+            design_attempt: 1,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("accepts an approval without the design fields", () => {
+    expect(isWorkItemDetail({ ...DETAIL, approvals: [APPROVAL] })).toBe(true);
+  });
+
+  test("rejects an approval whose design attempt is a string", () => {
+    expect(
+      isWorkItemDetail({
+        ...DETAIL,
+        approvals: [{ ...APPROVAL, design_attempt: "1" }],
+      }),
+    ).toBe(false);
+  });
+});

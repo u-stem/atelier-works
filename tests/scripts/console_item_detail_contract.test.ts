@@ -298,3 +298,148 @@ describe("work_item_detail contract", () => {
     expect(texts[0]).toContain("wi.flow_job_id");
   });
 });
+
+const DESIGN_ATTEMPT_ROWS: SqlRow[] = [
+  {
+    id: "22",
+    requirement_attempt: 2,
+    design_attempt: 1,
+    summary: "Design summary",
+    created_at: new Date(T0),
+    approval_request_id: "31",
+    approval_status: "pending",
+  },
+  {
+    id: "21",
+    requirement_attempt: 1,
+    design_attempt: 1,
+    summary: "Earlier design",
+    created_at: new Date(T0),
+    approval_request_id: null,
+    approval_status: null,
+  },
+];
+
+const DESIGN_APPROVAL_ROW: SqlRow = {
+  approval_request_id: "31",
+  kind: "design",
+  status: "pending",
+  requested_at: new Date(T0),
+  expires_at: null,
+  decided_at: null,
+  decided_by: null,
+  reason: null,
+  draft_attempt: null,
+  proposal_title: null,
+  design_requirement_attempt: 2,
+  design_attempt: 1,
+};
+
+/** 設計の試行の問い合わせは、最後に発行される。 */
+const RESPONSES_WITH_DESIGN: SqlRow[][] = [
+  ...FULL_RESPONSES,
+  DESIGN_ATTEMPT_ROWS,
+];
+
+describe("work_item_detail contract", () => {
+  test("lists the design attempts without the body", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(RESPONSES_WITH_DESIGN));
+    expect(detail.design_attempts[0]).toEqual({
+      id: 22,
+      requirement_attempt: 2,
+      design_attempt: 1,
+      summary: "Design summary",
+      created_at: new Date(T0).toISOString(),
+      approval_request_id: 31,
+      approval_status: "pending",
+    });
+  });
+
+  test("keeps two design attempts with the same number apart by id", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(RESPONSES_WITH_DESIGN));
+    expect(detail.design_attempts.map((attempt) => attempt.id)).toEqual([
+      22, 21,
+    ]);
+  });
+
+  test("returns no design attempts when the work item has no design", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(FULL_RESPONSES));
+    expect(detail.design_attempts).toEqual([]);
+  });
+
+  test("a detail with design attempts passes the Console type guard", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(RESPONSES_WITH_DESIGN));
+    expect(isWorkItemDetail(detail)).toBe(true);
+  });
+
+  test("names the subject of a design approval", async () => {
+    const detail = await runWorkItemDetail(
+      7,
+      detailSql([
+        [OVERVIEW_ROW],
+        [],
+        [DESIGN_APPROVAL_ROW],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+      ]),
+    );
+    expect(detail.approvals[0]).toMatchObject({
+      design_requirement_attempt: 2,
+      design_attempt: 1,
+    });
+  });
+
+  test("a design approval row passes the Console type guard", async () => {
+    const detail = await runWorkItemDetail(
+      7,
+      detailSql([
+        [OVERVIEW_ROW],
+        [],
+        [DESIGN_APPROVAL_ROW],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+      ]),
+    );
+    expect(isWorkItemDetail(detail)).toBe(true);
+  });
+
+  test("an approval of another kind has no design subject", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(FULL_RESPONSES));
+    expect(detail.approvals[0]).toMatchObject({
+      design_requirement_attempt: null,
+      design_attempt: null,
+    });
+  });
+
+  test("the design attempts query reads design_drafts of the work item", async () => {
+    const { sql, texts } = recordingSql(RESPONSES_WITH_DESIGN);
+    await runWorkItemDetail(7, sql);
+    expect(texts[8]).toContain("FROM factory.design_drafts dd");
+  });
+
+  test("the design attempts query does not select the body", async () => {
+    const { sql, texts } = recordingSql(RESPONSES_WITH_DESIGN);
+    await runWorkItemDetail(7, sql);
+    expect(texts[8]).not.toMatch(/dd\.markdown|dd\.diagrams|dd\.doc_dir/);
+  });
+
+  test("the design attempts query joins the approval request of the design", async () => {
+    const { sql, texts } = recordingSql(RESPONSES_WITH_DESIGN);
+    await runWorkItemDetail(7, sql);
+    expect(texts[8]).toContain("ar.kind = 'design'");
+  });
+
+  test("the approvals query joins a design approval on the same work item", async () => {
+    const { sql, texts } = recordingSql(RESPONSES_WITH_DESIGN);
+    await runWorkItemDetail(7, sql);
+    expect(texts[2]).toContain("dd.work_item_id = ar.work_item_id");
+  });
+});

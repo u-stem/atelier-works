@@ -665,16 +665,17 @@ function detailResponses(): SqlRow[][] {
 }
 
 describe("runWorkItemDetail queries", () => {
-  test("runs eight queries", async () => {
+  test("runs nine queries", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
-    expect(calls.length).toBe(8);
+    expect(calls.length).toBe(9);
   });
 
   test("binds the work item id to every query", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
     expect(calls.map((call) => call.values.includes(7))).toEqual([
+      true,
       true,
       true,
       true,
@@ -846,8 +847,16 @@ describe("runWorkItemDetail result", () => {
         reason: "ok",
         draft_attempt: 2,
         proposal_title: null,
+        design_requirement_attempt: null,
+        design_attempt: null,
       },
     ]);
+  });
+
+  test("joins a design approval on the same work item", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[2]?.text).toContain("dd.work_item_id = ar.work_item_id");
   });
 
   test("parses an implement round without check_output", async () => {

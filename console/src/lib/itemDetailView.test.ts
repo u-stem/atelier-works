@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type {
   WorkItemApproval,
   WorkItemAttempt,
+  WorkItemDesignAttempt,
   WorkItemFixRound,
   WorkItemOverview,
   WorkItemReview,
@@ -12,12 +13,15 @@ import type { WorkItemTransition } from "../api/guards/workItemTransitions.ts";
 import {
   describeApproval,
   describeAttempt,
+  describeDesignAttempt,
   describeFailureRecord,
   describeFixRound,
   describeOverview,
   describeReview,
   describeRound,
   describeTransition,
+  designName,
+  designPath,
   detailLimitNote,
   formatCostUsd,
   formatDiffStat,
@@ -26,7 +30,10 @@ import {
   ITEM_DETAIL_TABS,
   nextTabIndex,
   parseDetailTab,
+  parseDraftParam,
+  prepareDesignDoc,
   sortApprovalsNewestFirst,
+  sortDesignAttempts,
 } from "./itemDetailView.ts";
 
 const T0 = "2026-10-08T00:00:00.000Z";
@@ -149,16 +156,27 @@ describe("parseDetailTab", () => {
   test("does not read a property inherited from Object", () => {
     expect(parseDetailTab("constructor")).toBe("overview");
   });
+
+  test("accepts design", () => {
+    expect(parseDetailTab("design")).toBe("design");
+  });
 });
 
 describe("ITEM_DETAIL_TABS", () => {
-  test("lists the four tabs in order", () => {
+  test("lists the five tabs in order", () => {
     expect(ITEM_DETAIL_TABS.map((tab) => tab.id)).toEqual([
       "overview",
       "requirements",
+      "design",
       "rounds",
       "approvals",
     ]);
+  });
+
+  test("labels the design tab", () => {
+    expect(ITEM_DETAIL_TABS.find((tab) => tab.id === "design")?.label).toBe(
+      "設計",
+    );
   });
 });
 
@@ -487,6 +505,26 @@ describe("describeApproval", () => {
         }),
       ).subject,
     ).toBe("Add a cache");
+  });
+
+  test("names the subject of a design approval", () => {
+    expect(
+      describeApproval(
+        approval({
+          kind: "design",
+          draft_attempt: null,
+          design_requirement_attempt: 2,
+          design_attempt: 1,
+        }),
+      ).subject,
+    ).toBe("要件定義 試行 2・設計 試行 1");
+  });
+
+  test("has no subject for a design approval without the design fields", () => {
+    expect(
+      describeApproval(approval({ kind: "design", draft_attempt: null }))
+        .subject,
+    ).toBeNull();
   });
 
   test("has no subject without an attempt and a title", () => {
@@ -910,5 +948,148 @@ describe("hasModifierKey", () => {
     expect(
       hasModifierKey({ altKey: false, ctrlKey: false, metaKey: false }),
     ).toBe(false);
+  });
+});
+
+function designAttempt(
+  overrides: Partial<WorkItemDesignAttempt> = {},
+): WorkItemDesignAttempt {
+  return {
+    id: 21,
+    requirement_attempt: 2,
+    design_attempt: 1,
+    summary: "Design summary",
+    created_at: T0,
+    approval_request_id: 31,
+    approval_status: "pending",
+    ...overrides,
+  };
+}
+
+describe("designName", () => {
+  test("names the requirements attempt and the design attempt", () => {
+    expect(designName(2, 1)).toBe("要件定義 試行 2・設計 試行 1");
+  });
+});
+
+describe("designPath", () => {
+  test("points at the draft by id", () => {
+    expect(designPath(7, 21)).toBe("/items/7/design?draft=21");
+  });
+
+  test("points at the latest draft without an id", () => {
+    expect(designPath(7, null)).toBe("/items/7/design");
+  });
+});
+
+describe("parseDraftParam", () => {
+  test("reads the latest without a value", () => {
+    expect(parseDraftParam(null)).toEqual({ kind: "latest" });
+  });
+
+  test("reads a positive integer as a draft", () => {
+    expect(parseDraftParam("21")).toEqual({ kind: "draft", id: 21 });
+  });
+
+  test("treats a value that is not a number as invalid", () => {
+    expect(parseDraftParam("abc")).toEqual({ kind: "invalid" });
+  });
+
+  test("treats zero as invalid", () => {
+    expect(parseDraftParam("0")).toEqual({ kind: "invalid" });
+  });
+
+  test("treats an empty value as invalid", () => {
+    expect(parseDraftParam("")).toEqual({ kind: "invalid" });
+  });
+});
+
+describe("sortDesignAttempts", () => {
+  test("puts the larger id first even when the attempt numbers are the same", () => {
+    expect(
+      sortDesignAttempts([
+        designAttempt({ id: 21 }),
+        designAttempt({ id: 22, requirement_attempt: 3 }),
+      ]).map((attempt) => attempt.id),
+    ).toEqual([22, 21]);
+  });
+});
+
+describe("describeDesignAttempt", () => {
+  test("names the draft by its requirements and design attempts", () => {
+    expect(describeDesignAttempt(7, designAttempt()).name).toBe(
+      "要件定義 試行 2・設計 試行 1",
+    );
+  });
+
+  test("points the link at the draft by id", () => {
+    expect(describeDesignAttempt(7, designAttempt()).path).toBe(
+      "/items/7/design?draft=21",
+    );
+  });
+
+  test("labels the pending request", () => {
+    expect(describeDesignAttempt(7, designAttempt()).approvalLabel).toBe(
+      "承認待ち",
+    );
+  });
+
+  test("has no approval label without a request", () => {
+    expect(
+      describeDesignAttempt(
+        7,
+        designAttempt({ approval_request_id: null, approval_status: null }),
+      ).approvalLabel,
+    ).toBeNull();
+  });
+
+  test("replaces hidden characters in the summary", () => {
+    expect(
+      describeDesignAttempt(7, designAttempt({ summary: "a‮b" })).summary,
+    ).toBe("a�b");
+  });
+});
+
+describe("prepareDesignDoc", () => {
+  const doc = {
+    id: 21,
+    work_item_id: 7,
+    requirement_draft_id: 11,
+    owner: "o",
+    repo: "r",
+    requirement_attempt: 2,
+    design_attempt: 1,
+    summary: "a‮b",
+    markdown: "# Design title\n\n## Section\n\nBody\n",
+    diagrams: [],
+    rejected_diagrams: [],
+    open_questions: ["c‮d"],
+    created_at: T0,
+    approval_request_id: null,
+    approval_status: null,
+  };
+
+  test("takes the title from the first heading", () => {
+    expect(prepareDesignDoc(doc).title).toBe("Design title");
+  });
+
+  test("lists the headings for the table of contents", () => {
+    expect(
+      prepareDesignDoc(doc).headings.map((heading) => heading.text),
+    ).toEqual(["Section"]);
+  });
+
+  test("replaces hidden characters in the summary", () => {
+    expect(prepareDesignDoc(doc).summary).toBe("a�b");
+  });
+
+  test("replaces hidden characters in the open questions", () => {
+    expect(prepareDesignDoc(doc).openQuestions).toEqual(["c�d"]);
+  });
+
+  test("falls back to an untitled name without a heading", () => {
+    expect(prepareDesignDoc({ ...doc, markdown: "Body only\n" }).title).toBe(
+      "(無題)",
+    );
   });
 });

@@ -27,6 +27,7 @@ const INDEX_ROW: SqlRow = {
   status: "awaiting_approval",
   latest_attempt: 2,
   updated_at: new Date("2026-10-08T00:00:00Z"),
+  has_design: false,
 };
 
 const VALID_DIAGRAM_XML =
@@ -55,6 +56,36 @@ describe("requirements_index contract", () => {
       500,
       3650,
       sqlReturning([INDEX_ROW]),
+    );
+    expect(isRequirementsIndexRows(rows)).toBe(true);
+  });
+
+  test("marks a work item that has a design", async () => {
+    const rows = await runConsoleQuery(
+      "requirements_index",
+      500,
+      3650,
+      sqlReturning([{ ...INDEX_ROW, has_design: true }]),
+    );
+    expect(rows).toMatchObject([{ has_design: true }]);
+  });
+
+  test("marks a work item without a design as having none", async () => {
+    const rows = await runConsoleQuery(
+      "requirements_index",
+      500,
+      3650,
+      sqlReturning([{ ...INDEX_ROW, has_design: false }]),
+    );
+    expect(rows).toMatchObject([{ has_design: false }]);
+  });
+
+  test("a row marked as having a design passes the Console type guard", async () => {
+    const rows = await runConsoleQuery(
+      "requirements_index",
+      500,
+      3650,
+      sqlReturning([{ ...INDEX_ROW, has_design: true }]),
     );
     expect(isRequirementsIndexRows(rows)).toBe(true);
   });

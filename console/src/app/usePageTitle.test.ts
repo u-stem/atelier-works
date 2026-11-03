@@ -86,6 +86,7 @@ describe("screen names of the real table", () => {
     ["items/new-pr-review", {}, "PRレビューの投入"],
     ["items/:id", { id: "12" }, "作業項目 #12"],
     ["items/:id/requirements", { id: "12" }, "作業項目 #12の要件定義"],
+    ["items/:id/design", { id: "12" }, "作業項目 #12の設計書"],
     ["reports", {}, "レポート"],
     ["reports/audit/:id", { id: "5" }, "作業項目 #5の監査レポート"],
     ["jobs", {}, "ジョブ"],
@@ -102,6 +103,7 @@ describe("screen names of the real table", () => {
   test.each([
     ["items/:id", "作業項目"],
     ["items/:id/requirements", "要件定義"],
+    ["items/:id/design", "設計書"],
     ["reports/audit/:id", "監査レポート"],
   ] as const)(
     "falls back to the screen name for a bad id at %s",

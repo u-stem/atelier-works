@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   auditReportCrumbs,
   flowDiagramCrumbs,
+  itemDesignCrumbs,
   itemDetailCrumbs,
   itemRequirementsCrumbs,
   itemsBackState,
@@ -172,6 +173,23 @@ describe("originDiagramCrumbs", () => {
     expect(originDiagramCrumbs("self_update", "/jobs?tab=schedules")).toEqual([
       { label: "ジョブ", to: "/jobs?tab=schedules" },
       { label: "self_updateの起動の図" },
+    ]);
+  });
+});
+
+describe("itemDesignCrumbs", () => {
+  test("goes back to the design tab of the work item", () => {
+    expect(itemDesignCrumbs(7)).toEqual([
+      { label: "作業項目", to: "/items" },
+      { label: "作業項目 #7", to: "/items/7?tab=design" },
+      { label: "設計書" },
+    ]);
+  });
+
+  test("names the page without a number for an invalid number", () => {
+    expect(itemDesignCrumbs(null)).toEqual([
+      { label: "作業項目", to: "/items" },
+      { label: "設計書" },
     ]);
   });
 });

@@ -49,6 +49,7 @@ describe("the header marks", () => {
       ["items/new", "back"],
       ["items/new-pr-review", "back"],
       ["items/:id/requirements", "breadcrumb"],
+      ["items/:id/design", "breadcrumb"],
       ["items/:id", "breadcrumb"],
       ["reports/audit/:id", "breadcrumb"],
       ["jobs/:id", "breadcrumb"],

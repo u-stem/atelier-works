@@ -800,6 +800,7 @@ describe("runConsoleQuery", () => {
       status: "awaiting_approval",
       updated_at: NOW.toISOString(),
       latest_attempt: 2,
+      has_design: false,
     };
     const { sql, calls } = createFakeSqlClient([[row]]);
 
@@ -818,8 +819,17 @@ describe("runConsoleQuery", () => {
         status: "awaiting_approval",
         latest_attempt: 2,
         updated_at: NOW.toISOString(),
+        has_design: false,
       },
     ]);
+  });
+
+  test("requirements_index: marks only a design of the latest requirement draft", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("requirements_index", 200, 30, sql);
+
+    expect(calls[0]?.text).toContain("dd.requirement_draft_id = rd.id");
   });
 
   test("requirements_doc: requires a work_item_id", async () => {

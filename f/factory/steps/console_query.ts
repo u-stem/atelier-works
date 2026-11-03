@@ -43,6 +43,7 @@ import { logger, maskSecrets } from "../lib/log.ts";
 import {
   DESIGN_FOR_IMPLEMENT_MAX_CHARS,
   normalizeDesignForImplement,
+  sanitizeModelTextDetailed,
 } from "../lib/model_text.ts";
 import {
   DIAGRAM_NAME_PATTERN,
@@ -89,6 +90,7 @@ const CONSOLE_ROW_VIEWS = [
   "fix_rounds",
   "requirements_index",
   "requirements_doc",
+  "design_doc",
   "approval_design_doc",
   "intake_snapshot",
   "audit_index",
@@ -783,6 +785,8 @@ export type RequirementsIndexRow = {
   readonly status: string;
   readonly latest_attempt: number;
   readonly updated_at: string;
+  /** 最新の要件定義の下書きに結ばれた設計書があるか。古い試行の設計書は数えない。 */
+  readonly has_design: boolean;
 };
 
 function toRequirementsIndexRow(row: SqlRow): RequirementsIndexRow {
@@ -796,6 +800,7 @@ function toRequirementsIndexRow(row: SqlRow): RequirementsIndexRow {
     status: asStr(row.status, "status"),
     latest_attempt: asNumeric(row.latest_attempt, "latest_attempt"),
     updated_at: asIsoDate(row.updated_at, "updated_at"),
+    has_design: asBool(row.has_design, "has_design"),
   };
 }
 
@@ -876,13 +881,8 @@ export async function readDocFromDisk(
   readonly diagrams: RequirementsDiagramContent[];
   readonly rejected_diagrams: string[];
 } | null> {
-  if (!isAbsolute(docDir)) {
-    return null;
-  }
-  // `..`を解決してから判定する。接頭辞の比較だけでは、
-  // `<base>/../claude/x`のような値が基準の外を指していても通ってしまう。
-  const dir = resolve(docDir);
-  if (!dir.startsWith(`${REQUIREMENTS_BASE_DIR}/`)) {
+  const dir = resolveDocDirUnderBase(docDir);
+  if (dir === null) {
     return null;
   }
   let markdown: string;
@@ -891,6 +891,43 @@ export async function readDocFromDisk(
   } catch {
     return null;
   }
+  const read = await readDiagramFiles(dir, diagrams, readFile, validate);
+  return {
+    markdown,
+    diagrams: read.diagrams,
+    rejected_diagrams: read.rejected_diagrams,
+  };
+}
+
+/**
+ * `docDir`を、絶対パスで、`..`を字面で解決した後に`REQUIREMENTS_BASE_DIR`の下にあるときだけ返す。
+ * 解決はシンボリックリンクをたどらない。相対パスと基準の外はnullを返す。
+ * 接頭辞の比較だけでは、`<base>/../claude/x`のような値が基準の外を指していても通ってしまうので、
+ * `..`を解決してから判定する。
+ */
+function resolveDocDirUnderBase(docDir: string): string | null {
+  if (!isAbsolute(docDir)) {
+    return null;
+  }
+  const dir = resolve(docDir);
+  return dir.startsWith(`${REQUIREMENTS_BASE_DIR}/`) ? dir : null;
+}
+
+/**
+ * 宣言された図のファイルを`dir`から読み、安全の検査を通った図と、通らなかった図の名前を返す。
+ * 図のファイルが1つ読めなくても全体は失敗させず、その図だけを黙って落とす。
+ * `name`/`file`が規則に合わない図は、`file`を`dir`に連結する前に、警告をログに残して落とす。
+ * 検査が例外で終わった図は、安全と確かめられないので拒否した図として扱う。
+ */
+async function readDiagramFiles(
+  dir: string,
+  diagrams: readonly Diagram[],
+  readFile: ReadTextFile,
+  validate: (xml: string) => DrawioValidationResult,
+): Promise<{
+  readonly diagrams: RequirementsDiagramContent[];
+  readonly rejected_diagrams: string[];
+}> {
   const resolvedDiagrams: RequirementsDiagramContent[] = [];
   const rejectedDiagrams: string[] = [];
   const log = logger("console_query");
@@ -916,7 +953,6 @@ export async function readDocFromDisk(
     try {
       validation = validate(xml);
     } catch (error) {
-      // 検査が例外で終わった図は、安全と確かめられないので拒否した図として扱う。
       log.warn("skipping diagram because validation threw", {
         name: diagram.name,
         error: error instanceof Error ? error.message : String(error),
@@ -934,11 +970,7 @@ export async function readDocFromDisk(
     }
     resolvedDiagrams.push({ name: diagram.name, xml });
   }
-  return {
-    markdown,
-    diagrams: resolvedDiagrams,
-    rejected_diagrams: rejectedDiagrams,
-  };
+  return { diagrams: resolvedDiagrams, rejected_diagrams: rejectedDiagrams };
 }
 
 async function toRequirementsDocRow(
@@ -965,6 +997,90 @@ async function toRequirementsDocRow(
     rejected_diagrams: fromDisk?.rejected_diagrams ?? [],
     open_questions: parseStringArray(row.open_questions, "open_questions"),
     doc_dir_source: fromDisk === null ? "db_fallback" : "file",
+  };
+}
+
+/**
+ * "design_doc"ビューの1行。設計書の本文の画面が使う。
+ * `markdown`は、承認画面と同じ整形(`sanitizeModelTextDetailed`: 制御文字と書式文字の除去と秘密値のマスク)を通す。
+ * 長さでは切らない。承認画面は実装が受け取る先頭の8000字までに切るので、
+ * 人が承認の判断に使う文字は承認画面の全文であり、この行の本文ではない。
+ * `summary`と`open_questions`は、保存の前に整えてあるので、そのまま返す。
+ * 図のXMLは、秘密値のマスクを通さない。文字参照などで秘密の形を分けられ、どちらのマスクも合わないため。
+ * 図は、DBに参照だけがあり、XMLをディスクの`doc_dir`から読み戻す。
+ * 読めない図と基準の外の図は`diagrams`から落とし、安全の検査に通らなかった図の名前を`rejected_diagrams`に返す。
+ * `approval_request_id`と`approval_status`は、設計の承認依頼が無ければnullである。
+ */
+export type DesignDocRow = {
+  readonly id: number;
+  readonly work_item_id: number;
+  /** 設計書の元にした、承認済みの要件定義の下書きの`id`。 */
+  readonly requirement_draft_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  /** 設計書の元にした要件定義の試行。 */
+  readonly requirement_attempt: number;
+  readonly design_attempt: number;
+  readonly summary: string;
+  readonly markdown: string;
+  readonly diagrams: RequirementsDiagramContent[];
+  readonly rejected_diagrams: string[];
+  readonly open_questions: string[];
+  readonly created_at: string;
+  readonly approval_request_id: number | null;
+  readonly approval_status: ApprovalRequestStatus | null;
+};
+
+/**
+ * 設計書の行を返す形にする。
+ * 図は、同じ`doc_dir`を指す行の中で最新の行のときだけ読む。
+ * `doc_dir`は`req-<要件定義の試行>/attempt-<設計の試行>`で決まり、生成は同じ`doc_dir`の再利用を止める。
+ * それでも行が重なった場合に、古い行が読むと、新しい行の図を自分の図として返してしまう。
+ * その防御として、最新の行以外は図を読まずに空にする。`doc_dir`が無い行は、図を読まない。
+ */
+async function toDesignDocRow(
+  row: SqlRow,
+  readFile: ReadTextFile,
+): Promise<DesignDocRow> {
+  const docDir = asNullableStr(row.doc_dir, "doc_dir");
+  const dir =
+    docDir === null ||
+    !asBool(row.is_newest_for_doc_dir, "is_newest_for_doc_dir")
+      ? null
+      : resolveDocDirUnderBase(docDir);
+  const declared = parseDiagrams(row.diagrams, "diagrams");
+  const read =
+    dir === null
+      ? { diagrams: [], rejected_diagrams: [] }
+      : await readDiagramFiles(dir, declared, readFile, validateDrawioXml);
+  return {
+    id: asId(row.id, "id"),
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    requirement_draft_id: asId(
+      row.requirement_draft_id,
+      "requirement_draft_id",
+    ),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    requirement_attempt: asNumeric(
+      row.requirement_attempt,
+      "requirement_attempt",
+    ),
+    design_attempt: asNumeric(row.design_attempt, "design_attempt"),
+    summary: asStr(row.summary, "summary"),
+    markdown: sanitizeModelTextDetailed(asStr(row.markdown, "markdown")).text,
+    diagrams: read.diagrams,
+    rejected_diagrams: read.rejected_diagrams,
+    open_questions: parseStringArray(row.open_questions, "open_questions"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+    approval_request_id: asNullableId(
+      row.approval_request_id,
+      "approval_request_id",
+    ),
+    approval_status:
+      row.approval_status === null || row.approval_status === undefined
+        ? null
+        : asApprovalRequestStatus(row.approval_status),
   };
 }
 
@@ -1487,6 +1603,41 @@ function toWorkItemAttemptRow(row: SqlRow): WorkItemAttemptRow {
   };
 }
 
+/**
+ * 設計書の試行1回分。本文と図は持たない。
+ * 同じ作業項目で、要件定義へ戻ると設計の試行の番号が重なるので、行は`id`で見分ける。
+ */
+export type WorkItemDesignAttemptRow = {
+  readonly id: number;
+  readonly requirement_attempt: number;
+  readonly design_attempt: number;
+  readonly summary: string;
+  readonly created_at: string;
+  readonly approval_request_id: number | null;
+  readonly approval_status: ApprovalRequestStatus | null;
+};
+
+function toWorkItemDesignAttemptRow(row: SqlRow): WorkItemDesignAttemptRow {
+  return {
+    id: asId(row.id, "id"),
+    requirement_attempt: asNumeric(
+      row.requirement_attempt,
+      "requirement_attempt",
+    ),
+    design_attempt: asNumeric(row.design_attempt, "design_attempt"),
+    summary: asStr(row.summary, "summary"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+    approval_request_id: asNullableId(
+      row.approval_request_id,
+      "approval_request_id",
+    ),
+    approval_status:
+      row.approval_status === null || row.approval_status === undefined
+        ? null
+        : asApprovalRequestStatus(row.approval_status),
+  };
+}
+
 /** 作業項目の承認依頼1件の履歴。 */
 export type WorkItemApprovalRow = {
   readonly approval_request_id: number;
@@ -1499,6 +1650,10 @@ export type WorkItemApprovalRow = {
   readonly reason: string | null;
   readonly draft_attempt: number | null;
   readonly proposal_title: string | null;
+  /** 設計の承認依頼が指す設計書の、元の要件定義の試行。設計の依頼でなければnull。 */
+  readonly design_requirement_attempt: number | null;
+  /** 設計の承認依頼が指す設計書の、設計の試行。設計の依頼でなければnull。 */
+  readonly design_attempt: number | null;
 };
 
 function toWorkItemApprovalRow(row: SqlRow): WorkItemApprovalRow {
@@ -1513,6 +1668,11 @@ function toWorkItemApprovalRow(row: SqlRow): WorkItemApprovalRow {
     reason: asNullableStr(row.reason, "reason"),
     draft_attempt: asNullableNumeric(row.draft_attempt, "draft_attempt"),
     proposal_title: asNullableStr(row.proposal_title, "proposal_title"),
+    design_requirement_attempt: asNullableNumeric(
+      row.design_requirement_attempt,
+      "design_requirement_attempt",
+    ),
+    design_attempt: asNullableNumeric(row.design_attempt, "design_attempt"),
   };
 }
 
@@ -1726,11 +1886,13 @@ export type WorkItemDetail = {
   readonly reviews: WorkItemReviewRow[];
   /** PRの作業項目の修正。Issueの作業項目では空。 */
   readonly fix_rounds: WorkItemFixRoundRow[];
+  /** 設計書の試行。新しい行(`id`が大きい方)が先。設計書が無ければ空。 */
+  readonly design_attempts: WorkItemDesignAttemptRow[];
 };
 
 /**
  * 作業項目`workItemId`の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、
- * 状態の遷移とそのジョブID、PRのレビューと修正の一覧(件数だけ)を返す。
+ * 状態の遷移とそのジョブID、PRのレビューと修正の一覧(件数だけ)、設計書の試行(本文なし)を返す。
  * 作業項目が無ければ例外を投げる。実装のラウンドに`check_output`は含めない。
  */
 export async function runWorkItemDetail(
@@ -1785,12 +1947,18 @@ export async function runWorkItemDetail(
     SELECT
       ar.id AS approval_request_id, ar.kind, ar.status, ar.requested_at,
       ar.expires_at, ar.decided_at, ar.decided_by, ar.reason,
-      rd.attempt AS draft_attempt, ip.title AS proposal_title
+      rd.attempt AS draft_attempt, ip.title AS proposal_title,
+      ddr.attempt AS design_requirement_attempt, dd.design_attempt
     FROM factory.approval_requests ar
     LEFT JOIN factory.requirement_drafts rd
       ON ar.kind = 'requirements' AND rd.id = ar.subject_id
     LEFT JOIN factory.issue_proposals ip
       ON ar.kind = 'issue_proposal' AND ip.id = ar.subject_id
+    LEFT JOIN factory.design_drafts dd
+      ON ar.kind = 'design' AND dd.id = ar.subject_id
+        AND dd.work_item_id = ar.work_item_id
+    LEFT JOIN factory.requirement_drafts ddr
+      ON ddr.id = dd.requirement_draft_id AND ddr.work_item_id = dd.work_item_id
     WHERE ar.work_item_id = ${workItemId}::bigint
     ORDER BY ar.requested_at DESC, ar.id DESC
   `.fetch();
@@ -1849,6 +2017,22 @@ export async function runWorkItemDetail(
     LIMIT ${DETAIL_TRANSITION_LIMIT}::integer
   `.fetch();
 
+  // 設計書の問い合わせは末尾に置く。発行の順に応答を返す偽のSQLを使うテストが、
+  // 新しい問い合わせを足しても前の応答の対応を崩さないようにするため。
+  const designRows = await sql`
+    SELECT
+      dd.id, rd.attempt AS requirement_attempt, dd.design_attempt, dd.summary,
+      dd.created_at, ar.id AS approval_request_id, ar.status AS approval_status
+    FROM factory.design_drafts dd
+    JOIN factory.requirement_drafts rd
+      ON rd.id = dd.requirement_draft_id AND rd.work_item_id = dd.work_item_id
+    LEFT JOIN factory.approval_requests ar
+      ON ar.kind = 'design' AND ar.subject_id = dd.id
+        AND ar.work_item_id = dd.work_item_id
+    WHERE dd.work_item_id = ${workItemId}::bigint
+    ORDER BY dd.id DESC
+  `.fetch();
+
   return {
     work_item: toWorkItemOverview(overview),
     attempts: attemptRows.map(toWorkItemAttemptRow),
@@ -1858,6 +2042,7 @@ export async function runWorkItemDetail(
     transitions: transitionRows.map(toWorkItemTransitionRow),
     reviews: reviewRows.map(toWorkItemReviewRow),
     fix_rounds: fixRoundRows.map(toWorkItemFixRoundRow),
+    design_attempts: designRows.map(toWorkItemDesignAttemptRow),
   };
 }
 
@@ -2370,6 +2555,7 @@ export type ConsoleQueryRow =
   | FixRoundRow
   | RequirementsIndexRow
   | RequirementsDocRow
+  | DesignDocRow
   | ApprovalDesignDocRow
   | IntakeSnapshotRow
   | AuditIndexRow
@@ -2388,6 +2574,8 @@ export type ConsoleQueryRow =
  * 古い未決の承認依頼や未解決のnoticeが、それを見せる画面から黙って消えてはならないため。
  *
  * "requirements_doc"と"intake_snapshot"と"audit_doc"で`workItemId`が無ければ例外を投げる。
+ * "design_doc"で`workItemId`が無ければ例外を投げる。`designDraftId`は、渡されて正の整数でなければ空を返し、
+ * 渡されなければ最新の設計書を返す。
  * "approval_design_doc"で`approvalRequestId`が無ければ例外を投げる。
  * テストで偽の`SqlClient`を渡し、実際のDBなしでクエリ文と行の解析を確かめられるよう、
  * `main`に畳み込まずにexportしている。
@@ -2401,6 +2589,7 @@ export async function runConsoleQuery(
   attempt: number | null = null,
   readFile: ReadTextFile = readTextFile,
   approvalRequestId: number | null = null,
+  designDraftId: number | null | undefined = undefined,
 ): Promise<ConsoleQueryRow[]> {
   const since = sinceIso(days, new Date());
 
@@ -2527,10 +2716,14 @@ export async function runConsoleQuery(
         SELECT
           wi.id AS work_item_id, wi.owner, wi.repo, wi.issue_number,
           wi.issue_url, wi.title, wi.status, wi.updated_at,
-          rd.attempt AS latest_attempt
+          rd.attempt AS latest_attempt,
+          EXISTS (
+            SELECT 1 FROM factory.design_drafts dd
+            WHERE dd.work_item_id = wi.id AND dd.requirement_draft_id = rd.id
+          ) AS has_design
         FROM factory.work_items wi
         JOIN LATERAL (
-          SELECT attempt
+          SELECT id, attempt
           FROM factory.requirement_drafts rd2
           WHERE rd2.work_item_id = wi.id
           ORDER BY rd2.attempt DESC
@@ -2565,6 +2758,60 @@ export async function runConsoleQuery(
         return [];
       }
       return [await toRequirementsDocRow(rows[0], readFile)];
+    }
+    case "design_doc": {
+      if (workItemId === null) {
+        throw new Error(
+          'console_query: "work_item_id" is required for view "design_doc"',
+        );
+      }
+      // 無指定(`undefined`と`null`)は最新を返す。渡された設計書の番号が正の整数でなければ、
+      // 最新にせず空を返す。不正な値を最新として扱うと、別の設計書を読んでいるのに気づけないため。
+      if (
+        designDraftId !== undefined &&
+        designDraftId !== null &&
+        !(Number.isInteger(designDraftId) && designDraftId > 0)
+      ) {
+        return [];
+      }
+      const draftId = designDraftId ?? null;
+      // 設計の試行の番号は作業項目の中で一意でない(要件定義へ戻ると重なる)ので、番号ではなく
+      // `design_drafts.id`で引く。無指定は`id`が最大の行である。別の作業項目の番号は結ばない。
+      // `is_newest_for_doc_dir`は、同じ`doc_dir`を指す行の中で最新かを示し、図を読んでよいかを決める。
+      // 副問い合わせは`work_item_id`でも絞り、(work_item_id, id DESC)の索引で引く。
+      const rows = await sql`
+        SELECT
+          dd.id, dd.work_item_id, dd.requirement_draft_id, wi.owner, wi.repo,
+          rd.attempt AS requirement_attempt, dd.design_attempt, dd.summary,
+          dd.markdown, dd.diagrams, dd.open_questions, dd.doc_dir, dd.created_at,
+          ar.approval_request_id, ar.approval_status,
+          NOT EXISTS (
+            SELECT 1 FROM factory.design_drafts newer
+            WHERE newer.work_item_id = dd.work_item_id
+              AND newer.doc_dir = dd.doc_dir
+              AND newer.id > dd.id
+          ) AS is_newest_for_doc_dir
+        FROM factory.design_drafts dd
+        JOIN factory.work_items wi ON wi.id = dd.work_item_id
+        JOIN factory.requirement_drafts rd
+          ON rd.id = dd.requirement_draft_id AND rd.work_item_id = dd.work_item_id
+        LEFT JOIN LATERAL (
+          SELECT a.id AS approval_request_id, a.status AS approval_status
+          FROM factory.approval_requests a
+          WHERE a.kind = 'design' AND a.subject_id = dd.id
+            AND a.work_item_id = dd.work_item_id
+          ORDER BY a.id DESC
+          LIMIT 1
+        ) ar ON true
+        WHERE dd.work_item_id = ${workItemId}::bigint
+          AND (${draftId}::bigint IS NULL OR dd.id = ${draftId}::bigint)
+        ORDER BY dd.id DESC
+        LIMIT 1
+      `.fetch();
+      if (rows.length === 0 || rows[0] === undefined) {
+        return [];
+      }
+      return [await toDesignDocRow(rows[0], readFile)];
     }
     case "approval_design_doc": {
       if (approvalRequestId === null) {
@@ -2716,6 +2963,7 @@ export type ConsoleQueryResult =
  * `view`が既知のビューでなければ例外を投げる。
  * "work_item_detail"では`work_item_id`が必須で、無ければ例外を投げる。
  * "approval_design_doc"では`approval_request_id`が必須で、無いか不正なら例外を投げる。
+ * "design_doc"では`work_item_id`が必須で、`draft_id`(設計書の番号)は、渡されて不正なら空を返し、無指定(`null`を含む)なら最新を返す。
  */
 export async function main(
   view: string,
@@ -2724,6 +2972,7 @@ export async function main(
   work_item_id?: number,
   attempt?: number,
   approval_request_id?: number,
+  draft_id?: number,
 ): Promise<ConsoleQueryResult> {
   const resolvedLimit = resolveIntArg(
     limit,
@@ -2769,5 +3018,6 @@ export async function main(
     resolvePositiveIntArg(attempt),
     readTextFile,
     resolvePositiveIntArg(approval_request_id),
+    draft_id,
   );
 }

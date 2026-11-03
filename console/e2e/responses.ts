@@ -7,6 +7,7 @@ import {
   APPROVAL_DESIGN_DOC_NORMAL,
   CONFIG_EMPTY,
   CONFIG_NORMAL,
+  DESIGN_DOC_NORMAL,
   HOLDS_SNAPSHOT,
   INTAKE_SNAPSHOT_NORMAL,
   INTAKE_TARGETS,
@@ -71,6 +72,8 @@ function queryReply(view: unknown, mode: Mode): Reply | null {
       return pick(mode, [INTAKE_SNAPSHOT_NORMAL], []);
     case "requirements_doc":
       return pick(mode, [REQUIREMENTS_DOC_NORMAL], []);
+    case "design_doc":
+      return pick(mode, [DESIGN_DOC_NORMAL], []);
     case "approval_design_doc":
       return pick(mode, [APPROVAL_DESIGN_DOC_NORMAL], []);
     case "intake_targets":

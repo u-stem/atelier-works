@@ -342,6 +342,7 @@ Consoleの一覧と集計は次のviewを読む。
 
 要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`design_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
 設計の承認依頼が指す設計書は、`approval_design_doc`viewが`approval_requests`と`design_drafts`を結合して読み、実装に渡すのと同じ整形を通して返す。
+設計書の本文の画面は、`design_doc`viewが`design_drafts`と`approval_requests`を読み、本文を承認画面と同じ整形に通して返し、図だけをディスクから読む。
 
 更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPR、失敗の理由で、変更したパスの一覧は選ばない。
 
