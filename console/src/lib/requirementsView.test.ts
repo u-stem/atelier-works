@@ -4,6 +4,7 @@ import type {
   RequirementsDoc,
   RequirementsIndexRow,
 } from "../api/guards/requirements.ts";
+import type { Heading } from "./markdownHeadings.ts";
 import {
   attemptChoices,
   confirmedLatestAttempt,
@@ -19,6 +20,7 @@ import {
   requirementsRowSummary,
   requirementsRowTitle,
   requirementsStatusTone,
+  tocIdsFor,
   toneBadgeVariant,
 } from "./requirementsView.ts";
 
@@ -443,5 +445,36 @@ describe("prepareDoc", () => {
     expect(
       prepareDoc(doc({ open_questions: ["a\u200Bb"] })).openQuestions,
     ).toEqual(["a\uFFFDb"]);
+  });
+});
+
+describe("tocIdsFor", () => {
+  const HEADINGS: Heading[] = [
+    { id: "h-background", level: 2, text: "Background", line: 3 },
+    { id: "h-scope", level: 2, text: "Scope", line: 7 },
+  ];
+
+  test("returns the heading ids in the preview", () => {
+    expect(tocIdsFor(HEADINGS, { embedded: false, mode: "preview" })).toEqual([
+      "h-background",
+      "h-scope",
+    ]);
+  });
+
+  test("hides the table of contents in the text mode", () => {
+    expect(tocIdsFor(HEADINGS, { embedded: false, mode: "text" })).toEqual([]);
+  });
+
+  test("returns the heading ids again after the text mode", () => {
+    const texts = tocIdsFor(HEADINGS, { embedded: false, mode: "text" });
+    const previews = tocIdsFor(HEADINGS, { embedded: false, mode: "preview" });
+
+    expect([texts, previews]).toEqual([[], ["h-background", "h-scope"]]);
+  });
+
+  test("returns no ids when embedded", () => {
+    expect(tocIdsFor(HEADINGS, { embedded: true, mode: "preview" })).toEqual(
+      [],
+    );
   });
 });

@@ -32,7 +32,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { RequirementsDiagram } from "../../api/guards/requirements.ts";
 import { cn } from "../../lib/cn.ts";
-import { TABLE_CELL_COMPACT_CLASS } from "../../lib/controlClasses.ts";
+import { TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
 import { ALERT_LABELS, stripAlertMarker } from "../../lib/markdownAlerts.ts";
 import { type Heading, headingIdAtLine } from "../../lib/markdownHeadings.ts";
 import { type RepoRef, resolveMarkdownLink } from "../../lib/markdownLink.ts";
@@ -328,24 +328,35 @@ const components: Components = {
     </pre>
   ),
   table: ({ children }) => (
-    <div className="my-4 overflow-x-auto">
+    // 横にはみ出す表は、枠をキーボードで焦点に当てて読み進められるようにする。
+    <section
+      aria-label="表"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: スクロールできる領域は、キーボードで焦点を当てないと横を読み進められない。
+      tabIndex={0}
+      className="my-4 overflow-x-auto rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+    >
       <table className="w-full border-collapse text-small">{children}</table>
-    </div>
+    </section>
+  ),
+  // 縞とヘッダーは、文字色の半透明の重ね塗りにする。下地(ページの背景、Card)の色が違っても、
+  // 縞は下地と輝度比で1.05以上、ヘッダーは縞と1.05以上離れる。`bg-muted`は下地によって差が1.02〜1.06に落ちる。
+  tbody: ({ children }) => (
+    <tbody className="[&>tr:nth-child(even)]:bg-foreground/[0.03]">
+      {children}
+    </tbody>
   ),
   th: ({ children }) => (
     <th
       className={cn(
-        TABLE_CELL_COMPACT_CLASS,
-        "border border-border bg-muted text-left align-top font-semibold",
+        TABLE_CELL_CLASS,
+        "border border-border bg-foreground/[0.08] text-left align-top font-semibold",
       )}
     >
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td
-      className={cn(TABLE_CELL_COMPACT_CLASS, "border border-border align-top")}
-    >
+    <td className={cn(TABLE_CELL_CLASS, "border border-border align-top")}>
       {Children.map(children, keepIdsTogether)}
     </td>
   ),

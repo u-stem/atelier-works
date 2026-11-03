@@ -375,6 +375,38 @@ export const SCHEDULES_EMPTY: SchedulesSnapshotView = {
 
 export const CONFIG_EMPTY = { path: "f/factory/config", items: [] };
 
+/**
+ * 本文の表の検査に使うMarkdown。
+ * 8列で、折り返せない長い文字列を含むので、本文の幅から横にはみ出す。
+ * 偶数行の縞の上に、リンクとコード表記を置き、縞の背景での文字のコントラストを測れるようにする。
+ * 2つ目の表は、リンクを含まない。軸の規則は、枠の中に焦点を当てられる要素があれば通すので、
+ * 枠そのものにフォーカスが要ることは、リンクの無い表で確かめる。
+ * 最後の段落は、折り返す余地のない長い行で、Markdownの文字の表示が横に広がらないことを確かめる。
+ */
+const WIDE_TABLE_MARKDOWN = [
+  "",
+  "## 要件の一覧",
+  "",
+  "| ID | 区分 | 参照 | 内容 | 検証の方法 | 備考 | 担当 | 状態 |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- |",
+  `| FR-001 | 機能 | \`${"a".repeat(120)}\` | 利用者がサインインできる | 画面の操作で確かめる | 備考のない行 | 開発 | 済 |`,
+  `| FR-002 | 機能 | [#1](https://github.com/o/r/issues/1) | 利用者がサインアウトできる | \`${"b".repeat(120)}\` | 備考のある行 | 開発 | 未 |`,
+  `| FR-003 | 非機能 | \`${"c".repeat(120)}\` | 応答が速い | 計測する | 備考のない行 | 運用 | 済 |`,
+  `| FR-004 | 非機能 | [#1](https://github.com/o/r/issues/1) | 障害から復旧できる | \`${"d".repeat(120)}\` | 備考のある行 | 運用 | 未 |`,
+  "",
+  "| ID | 参照 |",
+  "| --- | --- |",
+  `| NF-001 | \`${"e".repeat(120)}\` |`,
+  `| NF-002 | \`${"f".repeat(120)}\` |`,
+  "",
+  "<!-- 表の後ろのHTMLのコメント -->",
+  "",
+  "[ref]: https://example.com/reference",
+  "",
+  "x".repeat(400),
+  "",
+].join("\n");
+
 export const REQUIREMENTS_DOC_NORMAL: RequirementsDoc = {
   work_item_id: 1,
   owner: "o",
@@ -385,7 +417,7 @@ export const REQUIREMENTS_DOC_NORMAL: RequirementsDoc = {
   work_item_status: "awaiting_requirements_approval",
   attempt: 1,
   summary: "example summary",
-  markdown: "# 要件\n\n本文です。\n\n- 項目1\n- 項目2\n",
+  markdown: `# 要件\n\n本文です。\n\n- 項目1\n- 項目2\n${WIDE_TABLE_MARKDOWN}`,
   diagrams: [],
   rejected_diagrams: [],
   open_questions: ["example question"],
@@ -401,7 +433,7 @@ export const DESIGN_DOC_NORMAL: DesignDoc = {
   requirement_attempt: 1,
   design_attempt: 1,
   summary: "example design summary",
-  markdown: "# 設計\n\n## 方針\n\n本文です。\n\n- 項目1\n- 項目2\n",
+  markdown: `# 設計\n\n## 方針\n\n本文です。\n\n- 項目1\n- 項目2\n${WIDE_TABLE_MARKDOWN}`,
   diagrams: [],
   rejected_diagrams: [],
   open_questions: ["example design question"],

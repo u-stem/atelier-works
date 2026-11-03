@@ -199,3 +199,34 @@ describe("Markdown table cells", () => {
     expect(render(TABLE)).toContain(">Users can sign in</td>");
   });
 });
+
+describe("Markdown table appearance", () => {
+  const TABLE =
+    "| ID | Body |\n| --- | --- |\n| FR-001 | one |\n| FR-002 | two |\n";
+
+  test("stripes the body rows of a table", () => {
+    expect(render(TABLE)).toMatch(
+      /<tbody class="[^"]*nth-child\(even\)\]:bg-foreground\/\[0\.03\]/,
+    );
+  });
+
+  test("shades a header cell darker than the stripe", () => {
+    expect(render(TABLE)).toMatch(/<th class="[^"]*bg-foreground\/\[0\.08\]/);
+  });
+
+  test("uses the standard cell padding in a body cell", () => {
+    expect(render(TABLE)).toContain('<td class="px-3 py-2 ');
+  });
+
+  test("uses the standard cell padding in a header cell", () => {
+    expect(render(TABLE)).toContain('<th class="px-3 py-2 ');
+  });
+
+  test("makes the scrolling frame of a table focusable", () => {
+    expect(render(TABLE)).toContain('tabindex="0"');
+  });
+
+  test("names the scrolling frame of a table", () => {
+    expect(render(TABLE)).toMatch(/<section aria-label="表"/);
+  });
+});

@@ -186,6 +186,7 @@ const WALKED_PATHS: readonly string[] = [
   "items/7",
   "items/7?tab=design",
   "items/7/design",
+  "items/7/requirements",
   "system",
   "jobs",
   "jobs?tab=history",
@@ -980,4 +981,98 @@ test.describe("navigation by keyboard", () => {
       });
     });
   }
+});
+
+// 本文の表示の形式の切り替え。Tab、Enter、Spaceだけで操作でき、押した選択肢が`aria-pressed`で示される。
+test.describe("view mode switch by keyboard", () => {
+  const SWITCH_PATHS: readonly string[] = [
+    "items/7/requirements",
+    "?approval=1",
+    "items/7/design",
+  ];
+
+  for (const path of SWITCH_PATHS) {
+    test.describe(`/console/${path}`, () => {
+      test.beforeEach(async ({ page }) => {
+        await openScreen(page, path);
+        for (let count = 0; count < MAX_TABS; count += 1) {
+          await page.keyboard.press("Tab");
+          if (
+            await page
+              .getByRole("button", { name: "プレビュー" })
+              .evaluate((element) => element === document.activeElement)
+          ) {
+            return;
+          }
+        }
+        throw new Error("the preview choice is not reachable by Tab");
+      });
+
+      test("starts as the preview", async ({ page }) => {
+        await expect(
+          page.getByRole("button", { name: "プレビュー" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      test("chooses the text on Enter", async ({ page }) => {
+        await page.keyboard.press("Tab");
+
+        await page.keyboard.press("Enter");
+
+        await expect(
+          page.getByRole("button", { name: "Markdownの文字" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      test("returns to the preview on Space", async ({ page }) => {
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Enter");
+        await page.keyboard.press("Shift+Tab");
+
+        await page.keyboard.press("Space");
+
+        await expect(
+          page.getByRole("button", { name: "プレビュー" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      test("keeps the focus on the choice that was chosen", async ({
+        page,
+      }) => {
+        await page.keyboard.press("Tab");
+
+        await page.keyboard.press("Enter");
+
+        await expect(
+          page.getByRole("button", { name: "Markdownの文字" }),
+        ).toBeFocused();
+      });
+    });
+  }
+});
+
+// 形式を往復した後も、目次が出て、選んだ節を強調する。
+// 「Markdownの文字」では見出しの要素が消えるので、プレビューへ戻ったときに取り直せていることを確かめる。
+// 古い要素を測ると、どの見出しも位置が0になり、最後の節が強調される。
+// 設計書の固定データは節が2つあるので、最初の節を選んで、強調が選んだ節に付くことを見る。
+test.describe("table of contents after the text mode", () => {
+  test("highlights the chosen section after returning to the preview", async ({
+    page,
+  }) => {
+    await openScreen(page, "items/7/design");
+    await page.getByRole("button", { name: "Markdownの文字" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("navigation", { name: "目次" })).toHaveCount(0);
+    await page.getByRole("button", { name: "プレビュー" }).focus();
+    await page.keyboard.press("Enter");
+    const first = page
+      .getByRole("navigation", { name: "目次" })
+      .getByRole("link")
+      .first();
+    await first.focus();
+
+    await page.keyboard.press("Enter");
+
+    await expect(first).toHaveAttribute("aria-current", "location");
+  });
 });
