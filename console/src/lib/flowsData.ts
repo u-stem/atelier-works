@@ -17,7 +17,7 @@ export type FlowStep = {
 
 /**
  * 出口がflowを起動する経路。承認を介するときは、承認と却下を分ける。
- * 差し戻し(rework)は、要件定義の不足を見つけたときだけ、前のflowへ戻す起動である。
+ * 差し戻し(rework)は、要件定義か設計の不足を見つけたときだけ、前のflowへ戻す起動である。
  */
 export type ExitVia = "launch" | "approve" | "reject" | "rework";
 

@@ -3877,12 +3877,15 @@ flow自身からの入口(却下の作り直し)は、同じ戻りを出口が�
 
 ### 差し戻し
 
-`implement`、`pr_fix`、`design`のステップは、要件定義の不足(`requirements_gap`)を見つけたときだけ、`pipeline`へ戻して起動する。
-通常の起動と分けて、出口に「差し戻し」、`pipeline`の入口に「implementの差し戻し」のように示す。
+`implement`、`pr_fix`、`design`のステップは、前のflowの不足を見つけたときだけ、そのflowへ戻して起動する。
+要件定義の不足(`requirements_gap`)は`pipeline`へ、設計の不足(`design_gap`)は`design`へ戻す。
+通常の起動と分けて、出口に「差し戻し」、戻された側の入口に「implementの差し戻し」のように示す。
 どの辺が差し戻しかは、`scripts/launch-graph.ts`の`REWORK_LAUNCH_EDGES`が持つ。
-契約テストが、各ステップのソースの`requirements_gap`と照合する。
-設計の不足を`design`へ戻す辺は、`REWORK_LAUNCH_EDGES`に載せず、通常の起動の辺として描く。
-差し戻しの辺は、行き先を`pipeline`に限るためである。
+契約テストが、辺の行き先ごとに、各ステップのソースの`requirements_gap`か`design_gap`と照合する。
+設計の不足を`design`へ戻す辺も差し戻しに含める。
+通常の起動の辺にすると、`design`から`implement`への承認の辺と合わせて、前進の辺が循環する。
+起動の図は前進の辺だけで段を決めるので、循環があると最長の経路が決まらない。
+契約テストが、前進の辺に循環が無いことと、定期ジョブから見た段の数が4以下であることを確かめる。
 
 ### 設定と上限で決まる辺
 
