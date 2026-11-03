@@ -1055,9 +1055,92 @@ describe("disableInvestigateInstructions", () => {
       workItemId: 42,
       root,
       lockFs: createRecordingLockFs(),
-      ...(options.fs === undefined ? {} : { fs: options.fs }),
+      fs: trustingRoot(options.fs ?? realDisableInstructionsFs, root),
     });
   }
+
+  /** 置き場の所有者とモードだけを信頼できる値に見せる。テストは一般ユーザーで動くため。 */
+  function trustingRoot(
+    fs: DisableInstructionsFs,
+    root: string,
+  ): DisableInstructionsFs {
+    return {
+      ...fs,
+      lstat: async (path) => {
+        const stat = await fs.lstat(path);
+        if (stat === null || path !== root) return stat;
+        return { ...stat, uid: 0, mode: 0o700 };
+      },
+    };
+  }
+
+  test("throws when the place of the worktrees is owned by another user", async () => {
+    const { root } = setup();
+    const fs: DisableInstructionsFs = {
+      ...realDisableInstructionsFs,
+      lstat: async (path) => {
+        const stat = await realInvestigateFs.lstat(path);
+        return stat === null || path !== root
+          ? stat
+          : { ...stat, uid: 1000, mode: 0o700 };
+      },
+    };
+    await expect(
+      disableInvestigateInstructions({
+        run: createFakeCommandRunner([]).run,
+        mainRepoDir: MAIN_REPO,
+        workItemId: 42,
+        root,
+        lockFs: createRecordingLockFs(),
+        fs,
+      }),
+    ).rejects.toBeInstanceOf(InvestigateWorkspaceError);
+  });
+
+  test("renames nothing when the place of the worktrees is not trusted", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    const fs: DisableInstructionsFs = {
+      ...realDisableInstructionsFs,
+      lstat: async (path) => {
+        const stat = await realInvestigateFs.lstat(path);
+        return stat === null || path !== root
+          ? stat
+          : { ...stat, uid: 1000, mode: 0o700 };
+      },
+    };
+    await disableInvestigateInstructions({
+      run: createFakeCommandRunner([]).run,
+      mainRepoDir: MAIN_REPO,
+      workItemId: 42,
+      root,
+      lockFs: createRecordingLockFs(),
+      fs,
+    }).catch(() => {});
+    expect(existsSync(join(dir, "CLAUDE.md"))).toBe(true);
+  });
+
+  test("does not remove the worktree under a place that is not trusted", async () => {
+    const { root, dir } = setup();
+    const fs: DisableInstructionsFs = {
+      ...realDisableInstructionsFs,
+      lstat: async (path) => {
+        const stat = await realInvestigateFs.lstat(path);
+        return stat === null || path !== root
+          ? stat
+          : { ...stat, uid: 1000, mode: 0o700 };
+      },
+    };
+    await disableInvestigateInstructions({
+      run: createFakeCommandRunner([]).run,
+      mainRepoDir: MAIN_REPO,
+      workItemId: 42,
+      root,
+      lockFs: createRecordingLockFs(),
+      fs,
+    }).catch(() => {});
+    expect(existsSync(dir)).toBe(true);
+  });
 
   function put(dir: string, path: string, content = "x\n"): void {
     const full = join(dir, path);

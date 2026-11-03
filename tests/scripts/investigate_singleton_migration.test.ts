@@ -83,13 +83,17 @@ describe(`${NAME}.up.sql`, () => {
  * コメントや関数の外の文字列にある述語では、一致しない。見つからなければ空文字列を返す。
  */
 function sqlTemplateOf(source: string, name: string): string {
+  const template = /sql`([\s\S]*?)`/.exec(functionOf(source, name));
+  return (template?.[1] ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** コメントを落とした`source`から、`name`の関数の宣言から閉じまでを返す。見つからなければ空文字列を返す。 */
+function functionOf(source: string, name: string): string {
   const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
   const start = code.indexOf(`function ${name}(`);
   if (start < 0) return "";
   const end = code.indexOf("\n}\n", start);
-  const body = code.slice(start, end < 0 ? undefined : end);
-  const template = /sql`([\s\S]*?)`/.exec(body);
-  return (template?.[1] ?? "").replace(/\s+/g, " ").trim();
+  return code.slice(start, end < 0 ? undefined : end);
 }
 
 describe("the SQL of the application", () => {
@@ -106,6 +110,23 @@ describe("the SQL of the application", () => {
     expect(sqlTemplateOf(await Bun.file(DB_SOURCE).text(), READ)).toContain(
       `WHERE ${PREDICATE}`,
     );
+  });
+
+  test("reads exactly the rows of the index predicate, one at most", async () => {
+    expect(sqlTemplateOf(await Bun.file(DB_SOURCE).text(), READ)).toBe(
+      "SELECT id FROM factory.work_items WHERE kind = 'investigate' AND status = 'investigating' LIMIT 1",
+    );
+  });
+
+  test("answers true exactly when the read found a row", async () => {
+    expect(functionOf(await Bun.file(DB_SOURCE).text(), READ)).toContain(
+      "return rows.length > 0;",
+    );
+  });
+
+  test("returns the answer of the read only once", async () => {
+    const body = functionOf(await Bun.file(DB_SOURCE).text(), READ);
+    expect(body.match(/\breturn\b/g)).toHaveLength(1);
   });
 
   test("finds the template of a function by its name", () => {
