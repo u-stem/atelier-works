@@ -244,12 +244,23 @@ export type PreparedDoc = {
 };
 
 /**
+ * `prepareDoc`が読む項目。要件定義書と設計書のどちらも、この項目だけを渡せる。
+ * `title`は、本文に題の行が無いときの題名の元で、無ければ「(無題)」にする。
+ */
+export type PreparableDoc = Pick<
+  RequirementsDoc,
+  "markdown" | "summary" | "open_questions"
+> & {
+  readonly title?: string | null;
+};
+
+/**
  * 要件定義書の文字を、画面に出せる形にする。
  * 本文、要約、未確定事項、題名はIssueの内容に由来するので、見えない文字を置き換える。
  * 目次と見出しの行は、置き換えた後の本文から取る。
  * 題名は本文の最初の`# `の行、無ければIssueの題名、それも無ければ「(無題)」にする。
  */
-export function prepareDoc(doc: RequirementsDoc): PreparedDoc {
+export function prepareDoc(doc: PreparableDoc): PreparedDoc {
   const markdown = displayableIssueText(doc.markdown);
   const summary = displayableIssueText(doc.summary);
   const questions = doc.open_questions.map(displayableIssueText);

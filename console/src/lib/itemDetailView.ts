@@ -723,19 +723,8 @@ export function describeDesignAttempt(
  */
 export function prepareDesignDoc(doc: DesignDoc): PreparedDoc {
   return prepareDoc({
-    work_item_id: doc.work_item_id,
-    owner: doc.owner,
-    repo: doc.repo,
-    issue_number: null,
-    issue_url: null,
-    title: null,
-    work_item_status: "",
-    attempt: doc.design_attempt,
     summary: doc.summary,
     markdown: doc.markdown,
-    diagrams: doc.diagrams,
-    rejected_diagrams: doc.rejected_diagrams,
     open_questions: doc.open_questions,
-    doc_dir_source: "file",
   });
 }
