@@ -12,8 +12,9 @@
 // 使い方: bun run scripts/lint-docs.ts [file...]
 // 引数があれば、そのうち対象のファイルだけを検査する(pre-commitで使う)。
 
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { availableParallelism } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
 
@@ -99,6 +100,84 @@ function listCandidateDocs(): string[] {
     .toString()
     .split("\0")
     .filter((path) => path !== "");
+}
+
+export const MARKDOWNLINT_BIN = "node_modules/.bin/markdownlint-cli2";
+export const TEXTLINT_BIN = "node_modules/.bin/textlint";
+
+/** 起動した子プロセスのうち、検査が使う部分。`Bun.spawn`の戻り値が満たす。 */
+export type Spawned = {
+  readonly stdout: ReadableStream<Uint8Array>;
+  readonly stderr: ReadableStream<Uint8Array>;
+  readonly exited: Promise<number>;
+  readonly exitCode: number | null;
+  readonly signalCode: string | number | null;
+  kill(): void;
+};
+
+/** `lintWithTools`が外の世界に触れる口。テストでは差し替える。 */
+export type LintDeps = {
+  spawn(argv: readonly string[]): Spawned;
+  readonly cpuCount: number;
+  sizeOf(path: string): number;
+  write(text: string): void;
+  buildPlan?: (
+    targets: readonly string[],
+    shards: readonly (readonly string[])[],
+  ) => string[][];
+};
+
+export function shardCount(_fileCount: number, _cpuCount: number): number {
+  return 0;
+}
+
+export function splitIntoShards(
+  _paths: readonly string[],
+  _sizes: readonly number[],
+  _count: number,
+): string[][] {
+  return [];
+}
+
+export function buildPlan(
+  _targets: readonly string[],
+  _shards: readonly (readonly string[])[],
+): string[][] {
+  return [];
+}
+
+export function coversTargets(
+  _targets: readonly string[],
+  _plan: readonly (readonly string[])[],
+): boolean {
+  return true;
+}
+
+export async function lintWithTools(
+  _targets: readonly string[],
+  _deps: LintDeps,
+): Promise<boolean> {
+  return true;
+}
+
+/** 本番の`deps`。子プロセスはリポジトリの根で、環境変数を引き継いで起動する。 */
+export function createProductionDeps(): LintDeps {
+  const root = join(import.meta.dir, "..");
+  return {
+    spawn: (argv) =>
+      Bun.spawn([...argv], {
+        cwd: root,
+        env: process.env,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    cpuCount: availableParallelism(),
+    sizeOf: (path) => statSync(path).size,
+    write: (text) => {
+      process.stderr.write(text);
+    },
+  };
 }
 
 /** 外部の検査コマンドを実行し、成功したかを返す。出力はそのまま端末に流す。 */
