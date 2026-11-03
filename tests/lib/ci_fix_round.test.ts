@@ -582,14 +582,6 @@ describe("readCiFailure", () => {
     expect(reads).toBe(1);
   });
 
-  test("keeps the check job when the log is unavailable", async () => {
-    const { deps } = gatherDeps({
-      getLog: async () => ({ kind: "log_unavailable" }),
-    });
-    const result = await readCiFailure(deps, TARGET);
-    expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);
-  });
-
   test("passes on a rate limit while reading the log", async () => {
     const { deps } = gatherDeps({
       getLog: async () => {

@@ -18,13 +18,6 @@ const PRECHECK_REPO_SUITE =
   "planMetadataRehash on the files of this repository";
 
 /**
- * `wmill-lock.yaml`のhashが古いときに落ちるテスト。
- * リポジトリのロックをそのまま基準にするため、ロックが古いと、これらがまとめて落ちる。
- * 落ちたテストがこれらだけの回は、ソースを直さずhashを再計算すれば直る。
- * 名前が変わると、その1件を含む回は従来の経路に戻る。
- * 名前とファイルが合うことは、テストで固定している。
- */
-/**
  * ロックが古いことを直接示すテスト。全項目のhashを、ファイルの内容から求めたhashと比べる。
  * 残りの10件は、リポジトリの成長や、hashの計算そのものの変更でも単独で落ちる。
  * そのため、このテストが落ちていない回は、再計算では直せるとみなさない。
@@ -34,6 +27,13 @@ export const LOCK_INTEGRITY_ANCHOR: LockIntegrityTest = {
   name: "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
 };
 
+/**
+ * `wmill-lock.yaml`のhashが古いときに落ちるテスト。
+ * リポジトリのロックをそのまま基準にするため、ロックが古いと、これらがまとめて落ちる。
+ * 落ちたテストがこれらだけで、`LOCK_INTEGRITY_ANCHOR`を含む回は、ソースを直さずhashを再計算すれば直る。
+ * 名前が変わると、その1件を含む回は従来の経路に戻る。
+ * 名前とファイルが合うことは、テストで固定している。
+ */
 export const LOCK_INTEGRITY_TESTS: readonly LockIntegrityTest[] = [
   LOCK_INTEGRITY_ANCHOR,
   {
@@ -76,7 +76,8 @@ const FAIL_PREFIX = "(fail) ";
  * CIのテストのログが、ロックの整合を調べるテストだけの失敗を示すか。
  * 次をすべて満たすときだけ`true`にする。判断できないものは`false`で、従来の経路に戻す。
  * - ログが上限で切られていない。
- * - `(fail)`の行がある。すべて、`LOCK_INTEGRITY_TESTS`のどれかと合う。ファイルの見出しが分かるときは、ファイルと名前の組で、分からないときは名前で合わせる。
+ * - `(fail)`の行がある。すべて、`LOCK_INTEGRITY_TESTS`のどれかと合う。
+ *   落ちたテストに、`LOCK_INTEGRITY_ANCHOR`が含まれる。ほかの10件は、ロックが古い以外の原因でも単独で落ちるためである。ファイルの見出しが分かるときは、ファイルと名前の組で、分からないときは名前で合わせる。
  * - 集計の`N fail`の行が1つあり、`N`が`(fail)`の行の数(重複を除く)と等しい。
  * - 集計の`N error`の行が無いか、`N`が0である。
  * ログは外部由来の文字列なので、ここでは成否の判断にだけ使い、どこにも残さない。
