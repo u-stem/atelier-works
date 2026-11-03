@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import * as dependabotSupport from "../../f/factory/lib/dependabot_support.ts";
 import {
   extractItems,
   judgeCi,
@@ -15,7 +16,7 @@ import {
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 // mainの先端で実測した応答の形(認証あり、読み取り)。
-// 必須の8つはci.ymlのcheck suite、`build`はconsole-dist.ymlの別のsuiteにある。
+// 必須の10個はci.ymlのcheck suite、`build`はconsole-dist.ymlの別のsuiteにある。
 // 条件付きのconsole-a11yは、他の条件付きのジョブと同じ形でskippedに置く。
 const CI_SUITE = 105533738648;
 const DIST_SUITE = 105533738632;
@@ -43,6 +44,8 @@ function measuredCheckRuns(): Record<string, unknown>[] {
     checkRun("console-a11y", "skipped"),
     checkRun("caddyfile", "skipped"),
     checkRun("check", "success"),
+    checkRun("check-docs", "success"),
+    checkRun("check-worker", "success"),
     checkRun("test-db", "success"),
     checkRun("metadata", "success"),
     checkRun("scope", "success"),
@@ -279,10 +282,12 @@ describe("readAllPages", () => {
 });
 
 describe("required check names", () => {
-  test("lists the eight required checks", () => {
+  test("lists the ten required checks", () => {
     expect([...REQUIRED_CHECKS]).toEqual([
       "scope",
       "check",
+      "check-docs",
+      "check-worker",
       "test-db",
       "metadata",
       "console",
@@ -302,13 +307,22 @@ describe("required check names", () => {
   });
 
   test("matches the jobs that ci.yml defines", () => {
-    const workflow = readFileSync(
-      join(REPO_ROOT, ".github/workflows/ci.yml"),
-      "utf8",
+    const parsed: unknown = Bun.YAML.parse(
+      readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8"),
     );
-    const missing = REQUIRED_CHECKS.filter(
-      (name) => !new RegExp(`^  ${name}:`, "m").test(workflow),
-    );
-    expect(missing).toEqual([]);
+    const jobs =
+      typeof parsed === "object" && parsed !== null && "jobs" in parsed
+        ? parsed.jobs
+        : null;
+    if (typeof jobs !== "object" || jobs === null) {
+      throw new Error("ci.yml has no jobs");
+    }
+    expect(Object.keys(jobs).sort()).toEqual([...REQUIRED_CHECKS].sort());
+  });
+
+  test("is the same list as the one the dependabot gate uses", () => {
+    expect([...REQUIRED_CHECKS]).toEqual([
+      ...dependabotSupport.REQUIRED_CHECKS,
+    ]);
   });
 });

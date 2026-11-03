@@ -1297,6 +1297,14 @@ function job(name: string): Record<string, unknown> {
   return recordAt(recordAt(workflow(), "jobs"), name);
 }
 
+function stepsOf(jobName: string): Record<string, unknown>[] {
+  const steps = job(jobName).steps;
+  if (!Array.isArray(steps)) {
+    throw new Error(`${jobName} has no steps`);
+  }
+  return steps.filter(isRecord);
+}
+
 function stepNamed(jobName: string, stepName: string): Record<string, unknown> {
   const steps = job(jobName).steps;
   if (!Array.isArray(steps)) {
@@ -1316,6 +1324,7 @@ function expression(body: string): string {
 }
 
 const FLAG_JOBS: readonly (readonly [string, string])[] = [
+  ["check-worker", "worker"],
   ["test-db", "db"],
   ["metadata", "metadata"],
   ["console", "console"],
@@ -1422,6 +1431,82 @@ describe("ci.yml wiring", () => {
 
   test("check runs unless the run is cancelled", () => {
     expect(job("check").if).toBe(expression("!cancelled()"));
+  });
+
+  test("check-docs runs unless the run is cancelled", () => {
+    expect(job("check-docs").if).toBe(expression("!cancelled()"));
+  });
+
+  test("check-docs runs the docs lint", () => {
+    const runs = stepsOf("check-docs").map((step) => step.run);
+
+    expect(runs).toContain("mise run lint:docs");
+  });
+
+  test("no step of check-worker has its own condition", () => {
+    const conditioned = stepsOf("check-worker").filter((step) => "if" in step);
+
+    expect(conditioned).toEqual([]);
+  });
+
+  for (const jobName of ["check", "check-docs", "check-worker"]) {
+    test(`${jobName} installs without install scripts from the lockfile`, () => {
+      const install = stepNamed(jobName, "Install dependencies");
+
+      expect(String(install.run)).toContain(
+        "bun install --frozen-lockfile --ignore-scripts",
+      );
+    });
+
+    test(`${jobName} checks out without keeping the git credentials`, () => {
+      const checkout = stepsOf(jobName).find((step) =>
+        String(step.uses).startsWith("actions/checkout@"),
+      );
+
+      expect(recordAt(checkout, "with")["persist-credentials"]).toBe(false);
+    });
+  }
+
+  test("check keeps the step that decides the gitleaks scan range", () => {
+    expect(stepNamed("check", "Determine gitleaks scan range").id).toBe(
+      "gitleaks-range",
+    );
+  });
+
+  test("the gitleaks scan in check has no condition of its own", () => {
+    expect("if" in stepNamed("check", "Scan for leaked secrets")).toBe(false);
+  });
+
+  test("the gitleaks scan in check limits the log to the scan range", () => {
+    expect(String(stepNamed("check", "Scan for leaked secrets").run)).toContain(
+      '--log-opts "$SCAN_RANGE"',
+    );
+  });
+
+  test("check-worker passes the check uid to the worker image build", () => {
+    expect(
+      String(stepNamed("check-worker", "Build worker image").run),
+    ).toContain("--build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID");
+  });
+
+  test("check-worker runs the process lock test in the worker image", () => {
+    const step = stepNamed(
+      "check-worker",
+      "Test the process lock in the worker image",
+    );
+
+    expect(String(step.run)).toContain("tests/lib/process_lock.test.ts");
+  });
+
+  test("check-worker runs the check sandbox test in the worker image", () => {
+    const step = stepNamed(
+      "check-worker",
+      "Test the check sandbox in the worker image",
+    );
+
+    expect(String(step.run)).toContain(
+      "scripts/verify-check-sandbox.sh factory-worker-ci",
+    );
   });
 
   test("the worker image build runs unless scope says worker is false", () => {
