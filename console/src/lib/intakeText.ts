@@ -20,7 +20,8 @@ export type DisplayableText = {
  * `text`を画面に出せる形にする。改行コードを`\n`に揃え、
  * 見えない文字や見た目をずらす文字(改行とタブを除く)を代替文字(U+FFFD)に置き換える。
  * ゼロ幅接合子(U+200D)も置き換えるので、絵文字の組み合わせは分かれて見える。
- * 内容は解釈しない。HTMLやMarkdownとしては描かず、呼び出し側はReactの文字列として出す。
+ * この関数は内容を解釈しない。呼び出し側は、原文をReactの文字列として出し、
+ * プレビューでは、この結果を`Markdown`に渡す。
  */
 export function displayableIssueText(text: string): DisplayableText {
   let replaced = false;

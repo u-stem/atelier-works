@@ -230,3 +230,41 @@ describe("Markdown table appearance", () => {
     expect(render(TABLE)).toMatch(/<section aria-label="表"/);
   });
 });
+
+describe("Markdown without a repository", () => {
+  test("renders an issue url as text when the repository is unknown", () => {
+    expect(
+      renderToStaticMarkup(
+        <Markdown
+          markdown="[see](https://github.com/o/r/issues/3)"
+          headings={[]}
+          diagrams={[]}
+          rejectedDiagrams={[]}
+          repo={null}
+        />,
+      ),
+    ).not.toContain("<a ");
+  });
+});
+
+describe("Markdown task lists", () => {
+  test("names the checkbox of a done item", () => {
+    expect(render("- [x] item")).toContain('aria-label="完了"');
+  });
+
+  test("names the checkbox of an open item", () => {
+    expect(render("- [ ] item")).toContain('aria-label="未完了"');
+  });
+
+  test("keeps the checkbox of an item disabled", () => {
+    expect(render("- [x] item")).toMatch(/<input[^>]*disabled/);
+  });
+
+  test("does not draw a bullet next to the checkbox", () => {
+    expect(render("- [x] item")).toMatch(/<li class="[^"]*list-none/);
+  });
+
+  test("keeps the bullet of a plain list item", () => {
+    expect(render("- item")).not.toMatch(/<li class="[^"]*list-none/);
+  });
+});

@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useIntakeSnapshot, useRequirementsDoc } from "../../api/queries.ts";
@@ -8,17 +8,20 @@ import {
   type LoadingDisplay,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { ViewModeSwitch } from "../../components/ViewModeSwitch.tsx";
 import {
   approvalLinks,
   type DocReadiness,
   docReadiness,
+  previewBlockedReason,
+  previewCheckFor,
   requirementsBlockedReason,
   snapshotReadiness,
 } from "../../lib/approvalDecision.ts";
 import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { attemptRef } from "../../lib/labels.ts";
-import { prepareDoc } from "../../lib/requirementsView.ts";
+import { prepareDoc, type ViewMode } from "../../lib/requirementsView.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 import { RequirementsDocumentView } from "../items/RequirementsDocumentView.tsx";
 import { ApprovalBar } from "./ApprovalBar.tsx";
@@ -112,27 +115,37 @@ function DocPanel({
   );
 }
 
+/** 切り替えと承認の停止に出す、取り込み時点のIssueの名前。 */
+const SNAPSHOT_TARGET = "取り込み時点のIssue";
+
 /**
  * 要件定義の承認。取り込み時点のIssueと、承認する試行の要件定義書を並べ、その直下に承認バーを置く。
  * 実装のClaudeが受け取る入力と、承認の対象の本体の両方を、承認者が見られる状態でだけ承認を押せる。
  * 却下は、内容を見られなくても押せる。
  * 本文が長く切られているときは、GitHubで全文を確かめるまで承認を止める。
  * 承認の試行(`draft_attempt`)が分からないときは、最新の試行で代えず、承認を止める。
+ * 取り込み時点のIssueの本文は原文が既定で、プレビューは参考に切り替えて読める。
+ * プレビューを表示している間は承認を止め、一度でも表示した承認は、原文を表示したときに、原文を確かめたかのチェックを求める。
+ * 要件定義書の表示の形式の切り替えは別で、承認の判定に渡さない。
+ * `initialMode`は取り込み時点のIssueの最初の表示の形式で、省略すると原文になる。
  */
 export function RequirementsReview({
   approval,
   title,
   now,
+  initialMode = "text",
 }: {
   approval: SummaryApproval;
   title: string;
   now: number;
+  initialMode?: ViewMode;
 }) {
   return approval.draft_attempt === null ? (
     <ReviewBody
       approval={approval}
       title={title}
       now={now}
+      initialMode={initialMode}
       docState="unidentified"
       docPanel={<UnidentifiedPanel />}
     />
@@ -142,6 +155,7 @@ export function RequirementsReview({
       attempt={approval.draft_attempt}
       title={title}
       now={now}
+      initialMode={initialMode}
     />
   );
 }
@@ -151,11 +165,13 @@ function ReviewWithDoc({
   attempt,
   title,
   now,
+  initialMode,
 }: {
   approval: SummaryApproval;
   attempt: number;
   title: string;
   now: number;
+  initialMode: ViewMode;
 }) {
   const query = useRequirementsDoc(approval.work_item_id, attempt);
   const state = docReadiness({ expectedAttempt: attempt, query });
@@ -165,6 +181,7 @@ function ReviewWithDoc({
       approval={approval}
       title={title}
       now={now}
+      initialMode={initialMode}
       docState={state}
       docPanel={
         <DocPanel
@@ -183,15 +200,21 @@ function ReviewBody({
   approval,
   title,
   now,
+  initialMode,
   docState,
   docPanel,
 }: {
   approval: SummaryApproval;
   title: string;
   now: number;
+  initialMode: ViewMode;
   docState: DocReadiness;
   docPanel: ReactNode;
 }) {
+  const [mode, setMode] = useState<ViewMode>(initialMode);
+  const [previewed, setPreviewed] = useState<boolean>(
+    initialMode === "preview",
+  );
   // パネルと同じ取得(キーが同じ)を読むので、取得は1回で済む。
   const snapshot = useIntakeSnapshot(
     approval.work_item_id,
@@ -208,6 +231,18 @@ function ReviewBody({
         workItemId={approval.work_item_id}
         approvalRequestId={approval.approval_request_id}
         display={snapshotDisplay}
+        mode={mode}
+        modeSwitch={
+          <ViewModeSwitch
+            target={SNAPSHOT_TARGET}
+            textLabel="原文"
+            mode={mode}
+            onChange={(next) => {
+              setMode(next);
+              setPreviewed(true);
+            }}
+          />
+        }
       />
       {docPanel}
       <ApprovalBar
@@ -215,12 +250,17 @@ function ReviewBody({
         now={now}
         subject={displayableIssueText(title).text}
         factoryLabel={null}
-        approveBlockedReason={requirementsBlockedReason(
-          snapshotReadiness(snapshot),
-          docState,
-        )}
+        approveBlockedReason={
+          requirementsBlockedReason(snapshotReadiness(snapshot), docState) ??
+          (mode === "preview" ? previewBlockedReason(SNAPSHOT_TARGET) : null)
+        }
         refreshed={snapshot.data?.refreshed === true}
         fullCheckRequired={snapshot.data?.body_truncated === true}
+        previewCheckMessage={previewCheckFor({
+          target: SNAPSHOT_TARGET,
+          mode,
+          previewed,
+        })}
       />
     </>
   );

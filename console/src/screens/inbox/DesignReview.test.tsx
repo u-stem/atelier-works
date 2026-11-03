@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import type { ApprovalDesignDoc } from "../../api/guards/approvalDesignDoc.ts";
-import { DesignDocBody, DesignTextView } from "./DesignReview.tsx";
+import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
+import type { SummaryApproval } from "../../api/guards/summary.ts";
+import {
+  approvalDesignDocQueryKey,
+  intakeSnapshotQueryKey,
+} from "../../api/queries.ts";
+import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import {
+  DesignDocBody,
+  DesignReview,
+  DesignTextView,
+} from "./DesignReview.tsx";
 
 // 不可視文字をソースに直接書くと読めないので、コードポイントから作る。
 const LS = String.fromCodePoint(0x2028);
@@ -159,5 +172,77 @@ describe("DesignDocBody", () => {
     expect(renderBody({ approval_status: "zzz-status" })).not.toContain(
       "zzz-status",
     );
+  });
+});
+
+const REVIEW_APPROVAL: SummaryApproval = {
+  approval_request_id: 9,
+  kind: "design",
+  status: "pending",
+  work_item_id: 1,
+  owner: "o",
+  repo: "r",
+  title: "example item",
+  issue_number: 1,
+  issue_url: null,
+  pr_number: null,
+  requested_at: "2026-10-29T00:00:00.000Z",
+  expires_at: null,
+  draft_attempt: null,
+  summary: null,
+  proposal_title: null,
+  created_issue_number: null,
+  origin: null,
+  work_item_status: "awaiting_design_approval",
+};
+
+const REVIEW_SNAPSHOT: IntakeSnapshot = {
+  work_item_id: 1,
+  owner: "o",
+  repo: "r",
+  issue_number: 1,
+  issue_url: "https://github.com/o/r/issues/1",
+  title: "example item",
+  body: "Body <!-- c --> **b**",
+  body_truncated: false,
+  body_tail_html_comments: 0,
+  body_tail_hidden_chars: 0,
+  refreshed: false,
+};
+
+function renderReview(): string {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryOnMount: false } },
+  });
+  client.setQueryData(approvalDesignDocQueryKey(9), DOC);
+  client.setQueryData(intakeSnapshotQueryKey(1, 9), REVIEW_SNAPSHOT);
+  return renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <MemoryRouter>
+          <DesignReview
+            approval={REVIEW_APPROVAL}
+            title="example item"
+            now={Date.parse("2026-10-30T00:00:00.000Z")}
+          />
+        </MemoryRouter>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
+describe("DesignReview", () => {
+  // 取り込み時点のIssueのパネルは、プレビューを選べる共有の部品である。
+  // 設計の承認画面は切り替えを渡さないので、原文のままで、切り替えもプレビューも出ない。
+  test("shows neither the preview nor the switch of the issue at intake", () => {
+    expect(renderReview()).not.toMatch(
+      /data-preview|取り込み時点のIssueの表示の形式/,
+    );
+  });
+
+  // 否定の検査だけだと、パネルが読み込み中の骨組みのままでも通る。
+  // 取り込み時点のIssueの原文の`<pre>`と本文が出ていることで、パネルが描かれたことを固定する。
+  test("shows the body of the issue at intake in a pre", () => {
+    expect(renderReview()).toMatch(/<pre[^>]*>[^<]*Body &lt;!-- c --&gt;/);
   });
 });
