@@ -135,12 +135,20 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 ### yomiyasuでの推敲
 
 `yomiyasu`スキルの検査は、ルートの`.yomiyasu-words/allow.txt`の語を見直しの候補から外す。
-このリポジトリで定着した用語(「版」「正本」「ゲート」「〜側に倒す」など)を、そのつど言い換えないためである。
-定着した用語を足すときは、1行に1語ずつこの一覧へ書く。
+足す語は、2つ以上の文書で同じ意味の技術用語として使っているものに限る。
+警告を消すためだけには足さない。
+1行に1語で書く。
 
-検査の記録には原文と最終稿の写しが入る。
-既定の置き場所はgitの最上位の`.yomiyasu/`で、worktreeに残ると`mise run worktree:prune`がそのworktreeを片付けない。
-このため`mise.toml`の`[env]`の`YOMIYASU_STATE_DIR`で、worktreeの外の`~/.cache/yomiyasu`に置く。
+原文の写しと最終稿は、worktreeの外(セッションのscratchpadなど)に置く。
+worktreeに置くと未追跡のファイルが残り、コミットに入ったり、片付けを止めたりするためである。
+
+検査の記録は、原文と最終稿の写しを含めて、gitの最上位の`.yomiyasu/`に入る。
+中の`.gitignore`で、記録はコミットに入らない。
+`--state-dir`は指定しない。
+既存のフォルダに向けると`.gitignore`が置かれず、写しが`git status`に出るためである。
+`.yomiyasu/`には、yomiyasuのスクリプト以外は書かない。
+
+`.yomiyasu/`が残ったworktreeは、`mise run worktree:prune`では`ignored files`として残る。
 
 ## エージェント向けの文書
 

@@ -27,9 +27,6 @@ WMILL_VERSION = "1.817.0"
 # workerのscriptは、ユーザーのuidを`/etc/passwd`から読む。数は、workerの同時実行数(1)に、片付けられず飛ばす枠の分を足した数以上にする。
 FACTORY_CHECK_UID = "10001"
 FACTORY_CHECK_POOL_SIZE = "8"
-# yomiyasuの検査の記録(原文と最終稿の写しを含む)の置き場所。既定はgitの最上位の`.yomiyasu/`で、
-# worktreeに無視されたファイルが残り、`worktree:prune`が片付けなくなるため、worktreeの外に置く。
-YOMIYASU_STATE_DIR = "~/.cache/yomiyasu"
 LOG_MAX_SIZE = "20m"
 LOG_MAX_FILE = "10"
 
