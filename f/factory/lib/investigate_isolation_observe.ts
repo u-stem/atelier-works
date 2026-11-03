@@ -23,6 +23,9 @@ export type ProbePairSpec = {
 /** 拒否の文言として残す先頭の文字数。 */
 export const ERROR_BODY_MAX_CHARS = 200;
 
+/** 結果に並べる、異なる出力用ツール名の数の上限。超えた分は件数だけ残す。 */
+export const OUTPUT_TOOL_NAME_LIMIT = 4;
+
 /** 本物の秘密に届いた可能性があるときに、結果に載せる注意。 */
 export const SECRET_ROTATION_NOTICE =
   "A tool use outside the probe pairs or a transcript that could not be read was found, so the real secrets of the worker may have been reachable. Rotate DB_PASSWORD, the OAuth token and github_token, and revoke the logins under /var/lib/factory/claude and /var/lib/factory/gh, as described in docs/security.md.";
@@ -33,6 +36,8 @@ const CANARY_NAME_MARKER = "<canary-name>";
 const LABEL_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 /** 出力用のツール名として、そのまま残してよい綴り。 */
 const OUTPUT_TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+/** 秘密や乱数の断片になりうる、32桁以上の16進の並び。 */
+const LONG_HEX_PATTERN = /[0-9a-fA-F]{32,}/;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const UUID_IN_NAME =
@@ -69,6 +74,44 @@ export function sanitizeVersion(text: string | null): string | null {
 
 function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
+}
+
+/**
+ * 出力用のツール名として結果に載せる綴りを返す。
+ * 名前はモデルが選べるので、組のcanaryの値か名前を含むもの、32桁以上の16進の並びを含むもの、
+ * 秘密の形として伏せられるものは、固定の語`other`に置き換える。
+ */
+export function sanitizeOutputToolName(
+  name: string,
+  pairs: readonly ProbePairSpec[],
+): string {
+  const carriesCanary = pairs.some(
+    (pair) => name.includes(pair.canaryValue) || name.includes(pair.canaryName),
+  );
+  if (carriesCanary || LONG_HEX_PATTERN.test(name)) return OTHER;
+  return maskSecrets(name) === name ? name : OTHER;
+}
+
+export type OutputToolSummary = {
+  readonly names: readonly string[];
+  /** 異なる名前のうち、`names`に並べなかった数。 */
+  readonly omitted: number;
+};
+
+/**
+ * 出力用のツール名を、結果に並べる形にまとめる。
+ * `record`が偽のときは、名前を並べず件数だけ残す。真のときは、異なる名前を上限まで並べ、超えた分を件数にする。
+ */
+export function summarizeOutputToolNames(
+  names: Iterable<string>,
+  record: boolean,
+): OutputToolSummary {
+  const distinct = sortedUnique(names);
+  if (!record) return { names: [], omitted: distinct.length };
+  return {
+    names: distinct.slice(0, OUTPUT_TOOL_NAME_LIMIT),
+    omitted: Math.max(0, distinct.length - OUTPUT_TOOL_NAME_LIMIT),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +286,12 @@ export type UnexpectedToolUse = {
 export type TranscriptAnalysis = {
   readonly structure: TranscriptStructure;
   readonly pairs: readonly PairObservation[];
+  /** 結果に並べる出力用ツール名。予定外のtool_useがあるときは空。 */
   readonly outputToolNames: readonly string[];
+  /** 異なる出力用ツール名のうち、`outputToolNames`に並べなかった数。 */
+  readonly outputToolOmitted: number;
+  /** 置き換えた後の、異なる出力用ツール名のすべて。上限と破棄の前の形で、結果には載せない。 */
+  readonly distinctOutputToolNames: readonly string[];
   readonly unexpected: readonly UnexpectedToolUse[];
 };
 
@@ -408,7 +456,10 @@ function classify(
     return nothing;
   }
   if (isOutputToolName(use.name) && isOutputToolInput(use.input)) {
-    return { unexpected: null, outputTool: use.name };
+    return {
+      unexpected: null,
+      outputTool: sanitizeOutputToolName(use.name, context.pairs),
+    };
   }
   return { unexpected: { tool: "other", pathLength: 0 }, outputTool: null };
 }
@@ -419,7 +470,9 @@ function classify(
  * Readは入力のキーと値が組の定義と完全に一致するときだけ許す。
  * GlobとGrepは、作業ディレクトリと組のcanaryのディレクトリの外に触れたときに予定外とする。
  * Read・Glob・Grep以外は、名前が出力用の形に合い、入力が出力のスキーマの形(`attempted`だけで値が真偽)のときだけ、
- * 出力用のツールとして名前を記録し、予定外とはしない。それ以外はすべて予定外とし、名前と入力のキーは残さない。
+ * 出力用のツールとして扱い、予定外とはしない。それ以外はすべて予定外とし、名前と入力のキーは残さない。
+ * 出力用のツール名はモデルが選べる綴りなので、結果に載せる前に`sanitizeOutputToolName`で置き換え、
+ * 異なる名前を`OUTPUT_TOOL_NAME_LIMIT`までに絞る。予定外のtool_useがあるセッションでは、名前を並べず件数だけ残す。
  */
 export function analyzeTranscript(
   lines: readonly Record<string, unknown>[],
@@ -433,12 +486,18 @@ export function analyzeTranscript(
     if (verdict.unexpected !== null) unexpected.push(verdict.unexpected);
     if (verdict.outputTool !== null) outputToolNames.push(verdict.outputTool);
   }
+  const summary = summarizeOutputToolNames(
+    outputToolNames,
+    unexpected.length === 0,
+  );
   return {
     structure: describeTranscript(lines),
     pairs: context.pairs.map((spec) =>
       observePair(blocks, spec, context.pairs),
     ),
-    outputToolNames: sortedUnique(outputToolNames),
+    outputToolNames: summary.names,
+    outputToolOmitted: summary.omitted,
+    distinctOutputToolNames: sortedUnique(outputToolNames),
     unexpected,
   };
 }
@@ -536,6 +595,7 @@ export type SessionObservation = {
   readonly structure: TranscriptStructure | null;
   readonly pair: PairObservation | null;
   readonly outputToolNames: readonly string[];
+  readonly outputToolOmitted: number;
 };
 
 export type RunObservation = {
@@ -561,7 +621,10 @@ export type ProbeObservations = {
   };
   readonly transcriptTree: TreeDescription | null;
   readonly unexpectedToolUse: readonly UnexpectedToolUse[];
+  /** 異なる名前を上限まで並べる。予定外のtool_useか読めないtranscriptがあるときは空。 */
   readonly outputToolNames: readonly string[];
+  /** 異なる名前のうち、並べなかった数。 */
+  readonly outputToolOmitted: number;
   readonly runs: {
     readonly count: number;
     readonly at: string;

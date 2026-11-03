@@ -48,6 +48,7 @@ import {
   type SessionObservation,
   safeLabel,
   sanitizeVersion,
+  summarizeOutputToolNames,
   type TreeEntry,
   type UnexpectedToolUse,
 } from "./lib/investigate_isolation_observe.ts";
@@ -317,6 +318,7 @@ function unidentified(sessionIdState: "null" | "invalid"): SessionObservation {
     structure: null,
     pair: null,
     outputToolNames: [],
+    outputToolOmitted: 0,
   };
 }
 
@@ -332,7 +334,12 @@ async function observeSession(
   if (sessionId === null) return unidentified("null");
   if (!isSessionId(sessionId)) return unidentified("invalid");
   const state = { sessionIdState: "uuid" as const };
-  const empty = { structure: null, pair: null, outputToolNames: [] };
+  const empty = {
+    structure: null,
+    pair: null,
+    outputToolNames: [],
+    outputToolOmitted: 0,
+  };
   const relative = findTranscriptPath(tree, sessionId);
   if (relative === null) return { ...state, transcript: "missing", ...empty };
 
@@ -352,13 +359,16 @@ async function observeSession(
 
   const analysis = analyzeTranscript(parsed.lines, { pairs: [spec], cwd });
   ctx.unexpected.push(...analysis.unexpected);
-  for (const name of analysis.outputToolNames) ctx.outputToolNames.add(name);
+  for (const name of analysis.distinctOutputToolNames) {
+    ctx.outputToolNames.add(name);
+  }
   return {
     ...state,
     transcript: "analyzed",
     structure: analysis.structure,
     pair: analysis.pairs[0] ?? null,
     outputToolNames: analysis.outputToolNames,
+    outputToolOmitted: analysis.outputToolOmitted,
   };
 }
 
@@ -481,11 +491,38 @@ async function cleanup(deps: ProbeDeps, ctx: Context): Promise<void> {
   }
 }
 
+/**
+ * 予定外のtool_useがあったとき、またはtranscriptを読めなかったとき、結果に出力用のツール名を並べず件数だけ残す。
+ * 名前はモデルが選べる綴りで、本物の秘密に届いた可能性があるときは、断片を載せる経路を閉じるため。
+ */
+function shouldRecordOutputToolNames(ctx: Context): boolean {
+  return (
+    ctx.unexpected.length === 0 && ctx.stoppedBy !== "transcript_unavailable"
+  );
+}
+
+function withoutOutputToolNames(item: RunObservation): RunObservation {
+  return {
+    ...item,
+    sessions: item.sessions.map((session) => ({
+      ...session,
+      outputToolNames: [],
+      outputToolOmitted:
+        session.outputToolOmitted + session.outputToolNames.length,
+    })),
+  };
+}
+
 function buildObservations(
   deps: ProbeDeps,
   ctx: Context,
   at: string,
 ): ProbeObservations {
+  const record = shouldRecordOutputToolNames(ctx);
+  const outputTools = summarizeOutputToolNames(ctx.outputToolNames, record);
+  const items = record
+    ? ctx.runItems
+    : ctx.runItems.map(withoutOutputToolNames);
   return {
     stoppedBy: ctx.stoppedBy,
     errorName: ctx.errorName,
@@ -501,8 +538,9 @@ function buildObservations(
     },
     transcriptTree: ctx.transcriptTree,
     unexpectedToolUse: ctx.unexpected,
-    outputToolNames: [...ctx.outputToolNames].sort(),
-    runs: { count: ctx.runItems.length, at, items: ctx.runItems },
+    outputToolNames: outputTools.names,
+    outputToolOmitted: outputTools.omitted,
+    runs: { count: ctx.runItems.length, at, items },
     cleanup: { failed: [...ctx.cleanupFailed].sort() },
   };
 }
