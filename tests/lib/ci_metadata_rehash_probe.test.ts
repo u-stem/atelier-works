@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  LOCK_INTEGRITY_TEST_FILE,
-  LOCK_INTEGRITY_TEST_NAMES,
-} from "../../f/factory/lib/ci_fix_classify.ts";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
+
 import { rehashRoundProbe } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { ghApiOk, ok } from "./testSupport.ts";
@@ -18,15 +19,15 @@ type World = {
 };
 
 const INTEGRITY_LOG = [
-  `${LOCK_INTEGRITY_TEST_FILE}:`,
-  `(fail) ${LOCK_INTEGRITY_TEST_NAMES[0] ?? ""} [1.20ms]`,
+  `${FIRST_TEST_FILE}:`,
+  `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
   " 10 pass",
   " 1 fail",
 ].join("\n");
 
 const MIXED_LOG = [
-  `${LOCK_INTEGRITY_TEST_FILE}:`,
-  `(fail) ${LOCK_INTEGRITY_TEST_NAMES[0] ?? ""} [1.20ms]`,
+  `${FIRST_TEST_FILE}:`,
+  `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
   "tests/lib/other.test.ts:",
   "(fail) other > fails [1.20ms]",
   " 10 pass",

@@ -11,10 +11,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  LOCK_INTEGRITY_TEST_FILE,
-  LOCK_INTEGRITY_TEST_NAMES,
-} from "../../f/factory/lib/ci_fix_classify.ts";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
+
 import {
   type CiFailureRead,
   type CiGatherDeps,
@@ -329,14 +330,14 @@ describe("runMetadataRound for a check job that failed only the lock integrity t
   const SHA = "a".repeat(40);
   const TARGET = { owner: "acme", repo: "widgets", prNumber: 12, headSha: SHA };
   const INTEGRITY_LOG = [
-    `${LOCK_INTEGRITY_TEST_FILE}:`,
-    `(fail) ${LOCK_INTEGRITY_TEST_NAMES[0] ?? ""} [1.20ms]`,
+    `${FIRST_TEST_FILE}:`,
+    `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
     " 10 pass",
     " 1 fail",
   ].join("\n");
   const MIXED_LOG = [
-    `${LOCK_INTEGRITY_TEST_FILE}:`,
-    `(fail) ${LOCK_INTEGRITY_TEST_NAMES[0] ?? ""} [1.20ms]`,
+    `${FIRST_TEST_FILE}:`,
+    `(fail) ${FIRST_TEST_NAME} [1.20ms]`,
     "tests/lib/other.test.ts:",
     "(fail) other > fails [1.20ms]",
     " 10 pass",

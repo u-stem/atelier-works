@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import {
   classifyCiFailure,
   isLockIntegrityOnlyLog,
-  LOCK_INTEGRITY_TEST_FILE,
-  LOCK_INTEGRITY_TEST_NAMES,
+  LOCK_INTEGRITY_TESTS,
 } from "../../f/factory/lib/ci_fix_classify.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const job = (name: string, conclusion: string | null, id = 1) => ({
   id,
@@ -193,7 +195,7 @@ describe("classifyCiFailure", () => {
   });
 });
 
-const INTEGRITY_NAME = LOCK_INTEGRITY_TEST_NAMES[0] ?? "";
+const INTEGRITY_NAME = FIRST_TEST_NAME;
 
 function bunLog(lines: readonly string[]): string {
   return lines.join("\n");
@@ -203,7 +205,7 @@ function integrityLog(extra: readonly string[] = []): string {
   return bunLog([
     "bun test v1.3.0",
     "",
-    `${LOCK_INTEGRITY_TEST_FILE}:`,
+    `${FIRST_TEST_FILE}:`,
     "error: expect(received).toEqual(expected)",
     `(fail) ${INTEGRITY_NAME} [4.10ms]`,
     "",
@@ -215,13 +217,32 @@ function integrityLog(extra: readonly string[] = []): string {
 }
 
 describe("isLockIntegrityOnlyLog", () => {
+  test("accepts a log in which every known test failed", () => {
+    const lines: string[] = ["bun test v1.3.0"];
+    for (const entry of LOCK_INTEGRITY_TESTS) {
+      lines.push(`${entry.file}:`, `(fail) ${entry.name} [4.10ms]`);
+    }
+    lines.push(` ${String(LOCK_INTEGRITY_TESTS.length)} fail`);
+    expect(isLockIntegrityOnlyLog(lines.join("\n"), false)).toBe(true);
+  });
+
+  test("rejects a known name under another file", () => {
+    const entry = LOCK_INTEGRITY_TESTS[1];
+    const log = [
+      "tests/lib/other.test.ts:",
+      `(fail) ${entry?.name ?? ""} [4.10ms]`,
+      " 1 fail",
+    ].join("\n");
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
+  });
+
   test("accepts a log whose only failure is the lock integrity test", () => {
     expect(isLockIntegrityOnlyLog(integrityLog(), false)).toBe(true);
   });
 
   test("accepts the failure when the summary lists it again", () => {
     const log = bunLog([
-      `${LOCK_INTEGRITY_TEST_FILE}:`,
+      `${FIRST_TEST_FILE}:`,
       `(fail) ${INTEGRITY_NAME} [4.10ms]`,
       "tests/lib/zzz.test.ts:",
       "",
@@ -252,7 +273,7 @@ describe("isLockIntegrityOnlyLog", () => {
 
   test("rejects a log with another failing test in the same file", () => {
     const log = bunLog([
-      `${LOCK_INTEGRITY_TEST_FILE}:`,
+      `${FIRST_TEST_FILE}:`,
       `(fail) ${INTEGRITY_NAME} [4.10ms]`,
       "(fail) the repository's wmill-lock.yaml > covers the scripts [1.00ms]",
       " 2 fail",
@@ -262,7 +283,7 @@ describe("isLockIntegrityOnlyLog", () => {
 
   test("rejects a log with a failing test in another file", () => {
     const log = bunLog([
-      `${LOCK_INTEGRITY_TEST_FILE}:`,
+      `${FIRST_TEST_FILE}:`,
       `(fail) ${INTEGRITY_NAME} [4.10ms]`,
       "tests/lib/other.test.ts:",
       "(fail) other > fails [1.00ms]",
@@ -323,26 +344,36 @@ describe("isLockIntegrityOnlyLog", () => {
   });
 });
 
-describe("the lock integrity test names", () => {
-  const source = readFileSync(
-    new URL("./metadata_hash.test.ts", import.meta.url),
-    "utf8",
-  );
+describe("the lock integrity tests", () => {
+  const sourceOf = (file: string) =>
+    readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
 
-  test("name a test of the file the log header points at", () => {
-    expect(LOCK_INTEGRITY_TEST_FILE.endsWith("lib/metadata_hash.test.ts")).toBe(
-      true,
-    );
+  test("name a test file that exists", () => {
+    const missing = LOCK_INTEGRITY_TESTS.filter((entry) => {
+      try {
+        sourceOf(entry.file);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(missing).toEqual([]);
   });
 
-  test("each match a describe and a test in that file", () => {
-    const missing = LOCK_INTEGRITY_TEST_NAMES.filter((name) => {
+  test("each match a describe and a test in its file", () => {
+    const missing = LOCK_INTEGRITY_TESTS.filter(({ file, name }) => {
       const [suite, title] = name.split(" > ");
+      const source = sourceOf(file);
       return !(
         source.includes(`describe("${suite}"`) &&
         source.includes(`test("${title}"`)
       );
     });
     expect(missing).toEqual([]);
+  });
+
+  test("have no name twice in the same file", () => {
+    const keys = LOCK_INTEGRITY_TESTS.map((e) => `${e.file}\n${e.name}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

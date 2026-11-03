@@ -5,17 +5,54 @@
 
 import { cleanLogText, sanitizeExternalName } from "./ci_log_support.ts";
 
-/** ロックの整合を調べるテストのファイル。bunのログでは、ファイルの見出しの行(`<パス>:`)に現れる。 */
-export const LOCK_INTEGRITY_TEST_FILE = "tests/lib/metadata_hash.test.ts";
+/** ロックの整合を調べるテスト1件。`file`はbunのログのファイルの見出し(`<パス>:`)に現れるパスで、`name`は`<describe> > <test>`である。 */
+export type LockIntegrityTest = {
+  readonly file: string;
+  readonly name: string;
+};
+
+const HASH_TEST = "tests/lib/metadata_hash.test.ts";
+const GIT_PORTS_TEST = "tests/lib/metadata_git_ports.test.ts";
+const PRECHECK_REPO_TEST = "tests/lib/metadata_precheck_repo.test.ts";
+const PRECHECK_REPO_SUITE =
+  "planMetadataRehash on the files of this repository";
 
 /**
- * ロックの整合を調べるテストの、bunのログでの名前(`<describe> > <test>`)。
- * `wmill-lock.yaml`のすべての項目のhashを、ファイルの内容から求めたhashと比べるテストである。
- * 名前が変わると、この経路は使われなくなり、従来の経路に戻る。
- * 名前が合うことは、テストで固定している。
+ * `wmill-lock.yaml`のhashが古いときに落ちるテスト。
+ * リポジトリのロックをそのまま基準にするため、ロックが古いと、これらがまとめて落ちる。
+ * 落ちたテストがこれらだけの回は、ソースを直さずhashを再計算すれば直る。
+ * 名前が変わると、その1件を含む回は従来の経路に戻る。
+ * 名前とファイルが合うことは、テストで固定している。
  */
-export const LOCK_INTEGRITY_TEST_NAMES: readonly string[] = [
-  "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
+export const LOCK_INTEGRITY_TESTS: readonly LockIntegrityTest[] = [
+  {
+    file: HASH_TEST,
+    name: "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
+  },
+  {
+    file: HASH_TEST,
+    name: "a perturbed repository > patches exactly one line of the lock for a changed script",
+  },
+  {
+    file: HASH_TEST,
+    name: "a perturbed repository > leaves the lock untouched when nothing changed",
+  },
+  {
+    file: GIT_PORTS_TEST,
+    name: "createGitPrecheckPorts with planMetadataRehash on this repository > plans no change for a head that equals the base tip",
+  },
+  ...[
+    "accepts a head that equals the base tip",
+    "recomputes only the library that gained a line",
+    "recomputes only the script whose body gained a line",
+    "returns a lock that parseWmillLock reads for a changed library",
+    "keeps the number of lines of wmill-lock.yaml",
+    "finishes within the ceiling of visits and resolutions",
+    "needs at most nine tenths of the ceiling of visits and resolutions",
+  ].map((title) => ({
+    file: PRECHECK_REPO_TEST,
+    name: `${PRECHECK_REPO_SUITE} > ${title}`,
+  })),
 ];
 
 const TEST_FILE_HEADER = /^([^\s:]+\.test\.[cm]?[jt]sx?):$/;
@@ -28,7 +65,7 @@ const FAIL_PREFIX = "(fail) ";
  * CIのテストのログが、ロックの整合を調べるテストだけの失敗を示すか。
  * 次をすべて満たすときだけ`true`にする。判断できないものは`false`で、従来の経路に戻す。
  * - ログが上限で切られていない。
- * - `(fail)`の行がある。すべて、整合のテストのファイルの見出しの下にあり、名前が整合のテストと合う。
+ * - `(fail)`の行がある。すべて、ファイルの見出しと名前の組が、`LOCK_INTEGRITY_TESTS`のどれかと合う。
  * - 集計の`N fail`の行が1つあり、`N`が`(fail)`の行の数(重複を除く)と等しい。
  * - 集計の`N error`の行が無いか、`N`が0である。
  * ログは外部由来の文字列なので、ここでは成否の判断にだけ使い、どこにも残さない。
@@ -66,8 +103,10 @@ export function isLockIntegrityOnlyLog(
     return false;
   }
   for (const [name, failedFile] of failedFileByName) {
-    if (failedFile !== LOCK_INTEGRITY_TEST_FILE) return false;
-    if (!LOCK_INTEGRITY_TEST_NAMES.includes(name)) return false;
+    const known = LOCK_INTEGRITY_TESTS.some(
+      (test) => test.file === failedFile && test.name === name,
+    );
+    if (!known) return false;
   }
   return true;
 }

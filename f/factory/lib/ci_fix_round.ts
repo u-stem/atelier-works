@@ -656,9 +656,21 @@ export async function gatherCiFailureInput(
   target: CiGatherTarget,
   extraJobs: readonly CiLogJobInput[] = [],
 ): Promise<CiGatherOutcome> {
-  const failure = await readCiFailure(deps, target);
+  // 整合の判定で読んだログを、収集でもう一度読まないよう、ジョブごとに読み取りを使い回す。
+  const reads = new Map<number, ReturnType<CiGatherDeps["getLog"]>>();
+  const memoized: CiGatherDeps = {
+    ...deps,
+    getLog: (jobId) => {
+      const cached = reads.get(jobId);
+      if (cached !== undefined) return cached;
+      const read = deps.getLog(jobId);
+      reads.set(jobId, read);
+      return read;
+    },
+  };
+  const failure = await readCiFailure(memoized, target);
   if (failure.kind === "blocked") return failure;
-  return gatherCiLogs(deps, target, failure, extraJobs);
+  return gatherCiLogs(memoized, target, failure, extraJobs);
 }
 
 /**

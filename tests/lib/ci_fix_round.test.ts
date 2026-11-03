@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  LOCK_INTEGRITY_TEST_FILE,
-  LOCK_INTEGRITY_TEST_NAMES,
-} from "../../f/factory/lib/ci_fix_classify.ts";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
+
 import {
   CI_FIX_SKILL_MARKER,
   CI_ROUND_MAX_RUNS,
@@ -448,7 +449,7 @@ describe("classifyFailedRuns", () => {
   });
 });
 
-const INTEGRITY_TEST_NAME = LOCK_INTEGRITY_TEST_NAMES[0] ?? "";
+const INTEGRITY_TEST_NAME = FIRST_TEST_NAME;
 
 function bunFailureLog(failures: readonly [file: string, name: string][]) {
   const lines: string[] = [];
@@ -459,9 +460,7 @@ function bunFailureLog(failures: readonly [file: string, name: string][]) {
   return lines.join("\n");
 }
 
-const INTEGRITY_LOG = bunFailureLog([
-  [LOCK_INTEGRITY_TEST_FILE, INTEGRITY_TEST_NAME],
-]);
+const INTEGRITY_LOG = bunFailureLog([[FIRST_TEST_FILE, INTEGRITY_TEST_NAME]]);
 
 describe("readCiFailure", () => {
   test("treats a check job that failed only the lock integrity test as a rehash round", async () => {
@@ -514,7 +513,7 @@ describe("readCiFailure", () => {
       getLog: async () =>
         okLog(
           bunFailureLog([
-            [LOCK_INTEGRITY_TEST_FILE, INTEGRITY_TEST_NAME],
+            [FIRST_TEST_FILE, INTEGRITY_TEST_NAME],
             ["tests/lib/other.test.ts", "other > fails"],
           ]),
         ),
@@ -548,7 +547,9 @@ describe("readCiFailure", () => {
   });
 
   test("keeps the check job when the token cannot read the log", async () => {
-    const { deps } = gatherDeps({ getLog: async () => ({ kind: "forbidden" }) });
+    const { deps } = gatherDeps({
+      getLog: async () => ({ kind: "forbidden" }),
+    });
     const result = await readCiFailure(deps, TARGET);
     expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);
   });
