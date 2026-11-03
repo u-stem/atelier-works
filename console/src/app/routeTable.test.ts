@@ -39,6 +39,7 @@ describe("flattenRoutePaths", () => {
       "reports/audit/:id",
       "jobs",
       "jobs/flows/:name?",
+      "jobs/origins/:name?",
       "jobs/:id",
       "system",
     ]);
