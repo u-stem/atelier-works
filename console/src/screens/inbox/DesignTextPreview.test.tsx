@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DesignTextPreview } from "./DesignTextPreview.tsx";
 
+// 不可視文字をソースに直接書くと読めないので、コードポイントから作る。
+const ZWSP = String.fromCodePoint(0x200b);
+const REPLACEMENT = String.fromCodePoint(0xfffd);
+
 const REPO = { owner: "o", repo: "r" };
 
 function preview(text: string): string {
@@ -58,12 +62,12 @@ describe("DesignTextPreview", () => {
   });
 
   test("replaces hidden characters", () => {
-    expect(preview("a​b")).toContain("a�b");
+    expect(preview(`a${ZWSP}b`)).toContain(`a${REPLACEMENT}b`);
   });
 
   // 文字参照で書いた見えない文字は、Markdownが解釈した後の文字になるので、置き換えられない。
   // 原文だけが、書かれた文字を見せる。プレビューの注記が、この限界を伝える。
   test("shows the preview as the limit for character references", () => {
-    expect(preview("a&#x200B;b")).toContain("a​b");
+    expect(preview("a&#x200B;b")).toContain(`a${ZWSP}b`);
   });
 });

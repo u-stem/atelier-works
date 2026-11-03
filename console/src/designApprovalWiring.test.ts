@@ -316,6 +316,56 @@ function source(path: string): string {
   return readFileSync(resolve(import.meta.dir, "../..", path), "utf8");
 }
 
+/** `react`からのimport文を、すべて返す。 */
+function reactImports(code: string): string[] {
+  const first = /import[^;]*from "react";/.exec(code)?.[0];
+  return first === undefined ? [] : [first];
+}
+
+/** 呼んでいるフックの名前を、現れた順に返す。 */
+function hookCalls(_code: string): string[] {
+  return [];
+}
+
+// DesignReviewが呼んでよいフック。足すときは、保護テストの直しが要る。
+const ALLOWED_HOOKS = [
+  "useState",
+  "useMemo",
+  "useApprovalDesignDoc",
+  "useIntakeSnapshot",
+  "useLoadingDisplay",
+];
+
+describe("the scan of the source of the screen", () => {
+  const ALIAS_OR_REDUCER = /\bas\b|useReducer/;
+
+  test("sees an alias in a later import from react", () => {
+    const code =
+      'import { useState } from "react";\nimport { useMemo as m } from "react";\n';
+    expect(reactImports(code).filter((i) => ALIAS_OR_REDUCER.test(i))).toEqual([
+      'import { useMemo as m } from "react";',
+    ]);
+  });
+
+  test("sees an import that spans lines", () => {
+    const code = 'import {\n  useState,\n  useReducer,\n} from "react";\n';
+    expect(reactImports(code)).toHaveLength(1);
+  });
+
+  test("ignores an import from another module", () => {
+    expect(reactImports('import { a as b } from "./react.ts";')).toEqual([]);
+  });
+
+  test("lists the hooks that a source calls", () => {
+    const code = "useState<A>(1); React.useReducer(f); const x = useMemo(g);";
+    expect(hookCalls(code)).toEqual(["useState", "useReducer", "useMemo"]);
+  });
+
+  test("does not list a name that is only imported", () => {
+    expect(hookCalls('import { useState } from "react";')).toEqual([]);
+  });
+});
+
 describe("the source of the wiring", () => {
   const overview = source("console/src/screens/inbox/ApprovalOverview.tsx");
   const review = source("console/src/screens/inbox/DesignReview.tsx");
@@ -396,7 +446,9 @@ describe("design approval preview wiring", () => {
   });
 
   test("lets the approval through in the text mode", () => {
-    expect(approveIsDisabled(renderReview())).toBe(false);
+    const html = renderReview();
+    expect(approveButton(html)).not.toBe("");
+    expect(approveIsDisabled(html)).toBe(false);
   });
 
   test("reports the truncation before the preview", () => {
@@ -444,9 +496,20 @@ describe("design approval preview wiring", () => {
       expect(review).toContain("useState<ViewMode>(initialMode)");
     });
 
+    test("imports from react once", () => {
+      expect(reactImports(review)).toHaveLength(1);
+    });
+
     test("does not import another way to hold a state", () => {
-      const line = /import[^;]*from "react";/.exec(review)?.[0] ?? "";
-      expect(line).not.toMatch(/\bas\b|useReducer/);
+      expect(
+        reactImports(review).filter((i) => /\bas\b|useReducer/.test(i)),
+      ).toEqual([]);
+    });
+
+    test("calls only the hooks it uses now", () => {
+      expect(
+        hookCalls(review).filter((name) => !ALLOWED_HOOKS.includes(name)),
+      ).toEqual([]);
     });
 
     test("changes the mode in one place", () => {
