@@ -465,13 +465,11 @@ describe("tocIdsFor", () => {
     expect(tocIdsFor(HEADINGS, { embedded: false, mode: "text" })).toEqual([]);
   });
 
-  test("restores the heading ids after returning to the preview", () => {
-    tocIdsFor(HEADINGS, { embedded: false, mode: "text" });
+  test("returns the heading ids again after the text mode", () => {
+    const texts = tocIdsFor(HEADINGS, { embedded: false, mode: "text" });
+    const previews = tocIdsFor(HEADINGS, { embedded: false, mode: "preview" });
 
-    expect(tocIdsFor(HEADINGS, { embedded: false, mode: "preview" })).toEqual([
-      "h-background",
-      "h-scope",
-    ]);
+    expect([texts, previews]).toEqual([[], ["h-background", "h-scope"]]);
   });
 
   test("returns no ids when embedded", () => {

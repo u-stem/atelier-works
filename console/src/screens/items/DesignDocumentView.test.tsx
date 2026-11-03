@@ -136,6 +136,12 @@ describe("DesignDocumentView", () => {
     ).toBe(2);
   });
 
+  test("has no approval bar", () => {
+    expect(
+      render({ approval_request_id: 31, approval_status: "pending" }),
+    ).not.toMatch(/承認バー|承認と却下|承認する|却下する/);
+  });
+
   test("shows neither the approval status nor the draft switcher", () => {
     expect(
       render({ approval_request_id: 31, approval_status: "approved" }),
