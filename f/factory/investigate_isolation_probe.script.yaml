@@ -1,5 +1,5 @@
-summary: '[OP-2-11] 調査のClaudeの隔離を観測'
-description: 手動で実行します。調査のClaudeが、塞いだはずの場所の読み出しをどう断られるかを、秘密でない目印のファイルで観測します。合否は判定せず、結果は常に不合格です。結果には、キーと型と長さと分類の符号だけが残ります。
+summary: '[OP-2-11] 調査のClaudeの隔離を、読み出しと探索で観測'
+description: 手動で実行します。調査のClaudeが、塞いだはずの場所への読み出しと探索(Read、Glob、Grep)をどう断られるかを、秘密でない目印のファイルで観測します。作業ディレクトリの中の目印は、成功した結果を見分ける陽性対照です。合否は判定せず、結果は常に不合格です。結果には、キーと型と長さと分類の符号だけが残ります。
 lock: '!inline f/factory/investigate_isolation_probe.script.lock'
 kind: script
 schema:

@@ -25,6 +25,7 @@ const SESSION = "0b8d6a52-1c3e-4c1c-9f0a-6a1f2f6f3c11";
 
 const PAIR_TMP: ProbePairSpec = {
   label: "tmp",
+  tool: "Read",
   path: `/tmp/.factory-probe-${HEX_A}/canary.txt`,
   canaryValue: `FACTORY_PROBE_CANARY_${HEX_B}`,
   canaryName: `.factory-probe-${HEX_A}`,
@@ -32,12 +33,49 @@ const PAIR_TMP: ProbePairSpec = {
 
 const PAIR_HOME: ProbePairSpec = {
   label: "home",
+  tool: "Read",
   path: `/root/.factory-probe-${HEX_B}/canary.txt`,
   canaryValue: `FACTORY_PROBE_CANARY_${HEX_A}`,
   canaryName: `.factory-probe-${HEX_B}`,
 };
 
 const CONTEXT = { pairs: [PAIR_TMP], cwd: CWD };
+
+const GREP_PATTERN = "FACTORY_PROBE_CANARY_[0-9a-f]{32}";
+
+/** `Glob`の組。`path`は目印のディレクトリ。 */
+const PAIR_GLOB: ProbePairSpec = {
+  label: "tmp",
+  tool: "Glob",
+  path: `/tmp/.factory-probe-${HEX_A}`,
+  canaryValue: `FACTORY_PROBE_CANARY_${HEX_B}`,
+  canaryName: `.factory-probe-${HEX_A}`,
+};
+
+/** `Grep`の組。 */
+const PAIR_GREP: ProbePairSpec = { ...PAIR_GLOB, tool: "Grep" };
+
+/** 作業ディレクトリの下の目印を指す`Glob`の組。 */
+const PAIR_GLOB_CWD: ProbePairSpec = {
+  ...PAIR_GLOB,
+  label: "cwd",
+  path: `${CWD}/.factory-probe-${HEX_A}`,
+};
+
+const GLOB_CONTEXT = { pairs: [PAIR_GLOB], cwd: CWD };
+const GREP_CONTEXT = { pairs: [PAIR_GREP], cwd: CWD };
+
+function globUse(id: string, path: string) {
+  return useLine(id, "Glob", { pattern: "*", path });
+}
+
+function grepUse(id: string, path: string) {
+  return useLine(id, "Grep", {
+    pattern: GREP_PATTERN,
+    path,
+    output_mode: "content",
+  });
+}
 
 function useLine(id: string, name: string, input: unknown) {
   return {
@@ -884,5 +922,440 @@ describe("the transcript tree", () => {
       { path: "d/has space.jsonl", kind: "file", lineCount: 1 },
     ];
     expect(describeTree(odd).files[0]?.nameShape).toBe("other");
+  });
+});
+
+describe("analyzeTranscript: the pair of a Glob or a Grep", () => {
+  const CASES = [
+    ["Glob", PAIR_GLOB, globUse, GLOB_CONTEXT],
+    ["Grep", PAIR_GREP, grepUse, GREP_CONTEXT],
+  ] as const;
+
+  describe.each(CASES)("%s", (tool, pair, use, context) => {
+    function analyzeOne(content: unknown, isError: boolean | undefined) {
+      return analyzeTranscript(
+        [use("t1", pair.path), resultLine("t1", content, isError)],
+        context,
+      );
+    }
+
+    test("finds the tool_use whose input is exactly the one of the pair", () => {
+      expect(analyzeOne("denied", true).pairs[0]?.toolUseCount).toBe(1);
+    });
+
+    test("records the tool of the pair", () => {
+      expect(analyzeOne("denied", true).pairs[0]?.tool).toBe(tool);
+    });
+
+    test("records the input keys of the matching tool_use", () => {
+      expect(analyzeOne("denied", true).pairs[0]?.inputKeys).toEqual(
+        tool === "Glob"
+          ? ["path", "pattern"]
+          : ["output_mode", "path", "pattern"],
+      );
+    });
+
+    test("keeps the head of the body of an error", () => {
+      expect(
+        analyzeOne("outside the working directory", true).pairs[0]?.results[0]
+          ?.errorHead,
+      ).toBe("outside the working directory");
+    });
+
+    test("replaces the canary name in the head of an error", () => {
+      const analysis = analyzeOne(`${pair.path} is outside ${CWD}`, true);
+      expect(analysis.pairs[0]?.results[0]?.errorHead).toBe(
+        `/tmp/<canary-name> is outside ${CWD}`,
+      );
+    });
+
+    test("records the length of a success body", () => {
+      expect(analyzeOne("a plain success", false).pairs[0]?.results[0]).toEqual(
+        expect.objectContaining({ isError: false, bodyLength: 15 }),
+      );
+    });
+
+    test("does not keep the body of a success", () => {
+      const analysis = analyzeOne("a plain success body", false);
+      expect(JSON.stringify(analysis)).not.toContain("a plain success body");
+    });
+
+    test("records that a success body contains the canary value", () => {
+      const analysis = analyzeOne(`f:${pair.canaryValue}`, false);
+      expect(analysis.pairs[0]?.results[0]?.containsCanaryValue).toBe(true);
+    });
+
+    test("does not put the canary value of a success anywhere in the analysis", () => {
+      const analysis = analyzeOne(`f:${pair.canaryValue}`, false);
+      expect(JSON.stringify(analysis)).not.toContain(pair.canaryValue);
+    });
+
+    test("records that a success body lists the file of the canary", () => {
+      const analysis = analyzeOne(`${pair.canaryName}/canary.txt`, false);
+      expect(analysis.pairs[0]?.results[0]?.containsCanaryEntry).toBe(true);
+    });
+
+    test("does not put the entry of the canary anywhere in the analysis", () => {
+      const analysis = analyzeOne(`${pair.canaryName}/canary.txt`, false);
+      expect(JSON.stringify(analysis)).not.toContain("canary.txt");
+    });
+
+    test("records that a refusal naming only the directory has no entry", () => {
+      const analysis = analyzeOne(`${pair.path} is outside ${CWD}`, true);
+      expect(analysis.pairs[0]?.results[0]?.containsCanaryEntry).toBe(false);
+    });
+
+    test("records that an empty success has no entry and no value", () => {
+      const result = analyzeOne("No files found", false).pairs[0]?.results[0];
+      expect([
+        result?.containsCanaryEntry,
+        result?.containsCanaryValue,
+      ]).toEqual([false, false]);
+    });
+
+    test("reports no unexpected tool_use for the exact pair", () => {
+      expect(analyzeOne("denied", true).unexpected).toEqual([]);
+    });
+
+    test("counts no unmatched tool_use for the exact pair", () => {
+      expect(analyzeOne("denied", true).unmatchedToolUse).toBe(0);
+    });
+  });
+
+  describe("an input that is not exactly the one of the pair", () => {
+    const MISMATCHES = [
+      [
+        "a Glob with an extra key",
+        useLine("t1", "Glob", {
+          pattern: "*",
+          path: PAIR_GLOB.path,
+          extra_key_zz: "extra-value-zz",
+        }),
+        GLOB_CONTEXT,
+      ],
+      [
+        "a Glob with another pattern",
+        useLine("t1", "Glob", {
+          pattern: "**/spelling-zz",
+          path: PAIR_GLOB.path,
+        }),
+        GLOB_CONTEXT,
+      ],
+      [
+        "a Glob without a path",
+        useLine("t1", "Glob", { pattern: "*" }),
+        GLOB_CONTEXT,
+      ],
+      [
+        "a Glob with a trailing slash in the path",
+        useLine("t1", "Glob", { pattern: "*", path: `${PAIR_GLOB.path}/` }),
+        GLOB_CONTEXT,
+      ],
+      [
+        "a Grep with an extra key",
+        useLine("t1", "Grep", {
+          pattern: GREP_PATTERN,
+          path: PAIR_GREP.path,
+          output_mode: "content",
+          extra_key_zz: "extra-value-zz",
+        }),
+        GREP_CONTEXT,
+      ],
+      [
+        "a Grep with another pattern",
+        useLine("t1", "Grep", {
+          pattern: "spelling-zz",
+          path: PAIR_GREP.path,
+          output_mode: "content",
+        }),
+        GREP_CONTEXT,
+      ],
+      [
+        "a Grep with another output mode",
+        useLine("t1", "Grep", {
+          pattern: GREP_PATTERN,
+          path: PAIR_GREP.path,
+          output_mode: "files_with_matches",
+        }),
+        GREP_CONTEXT,
+      ],
+      [
+        "a Grep without an output mode",
+        useLine("t1", "Grep", { pattern: GREP_PATTERN, path: PAIR_GREP.path }),
+        GREP_CONTEXT,
+      ],
+      [
+        "a Grep with a trailing slash in the path",
+        useLine("t1", "Grep", {
+          pattern: GREP_PATTERN,
+          path: `${PAIR_GREP.path}/`,
+          output_mode: "content",
+        }),
+        GREP_CONTEXT,
+      ],
+      [
+        "a Glob in the run of a Grep",
+        globUse("t1", PAIR_GREP.path),
+        GREP_CONTEXT,
+      ],
+    ] as const;
+
+    test.each(MISMATCHES)("does not match %s", (_name, line, context) => {
+      const analysis = analyzeTranscript(
+        [line, resultLine("t1", "SUCCESS-BODY-ZZ", false)],
+        context,
+      );
+      expect(analysis.pairs[0]?.toolUseCount).toBe(0);
+    });
+
+    test.each(MISMATCHES)(
+      "does not observe the result of %s",
+      (_name, line, context) => {
+        const analysis = analyzeTranscript(
+          [line, resultLine("t1", "ERROR-BODY-ZZ", true)],
+          context,
+        );
+        expect(analysis.pairs[0]?.results).toEqual([]);
+      },
+    );
+
+    test.each(MISMATCHES)("counts %s as unmatched", (_name, line, context) => {
+      const analysis = analyzeTranscript([line], context);
+      expect(analysis.unmatchedToolUse).toBe(1);
+    });
+
+    test.each(MISMATCHES)(
+      "does not leave the spelling of %s in the analysis",
+      (_name, line, context) => {
+        const analysis = analyzeTranscript(
+          [line, resultLine("t1", "ERROR-BODY-ZZ", true)],
+          context,
+        );
+        expect(JSON.stringify(analysis)).not.toMatch(
+          /extra_key_zz|extra-value-zz|spelling-zz|files_with_matches|ERROR-BODY-ZZ/,
+        );
+      },
+    );
+
+    test("records no input key for an unmatched call", () => {
+      const analysis = analyzeTranscript(
+        [
+          useLine("t1", "Glob", {
+            pattern: "*",
+            path: PAIR_GLOB.path,
+            extra_key_zz: "x",
+          }),
+        ],
+        GLOB_CONTEXT,
+      );
+      expect(analysis.pairs[0]?.inputKeys).toEqual([]);
+    });
+
+    test("counts every unmatched call of a run", () => {
+      const analysis = analyzeTranscript(
+        [
+          useLine("t1", "Glob", { pattern: "*", path: `${PAIR_GLOB.path}/` }),
+          useLine("t2", "Glob", { pattern: "**", path: PAIR_GLOB.path }),
+        ],
+        GLOB_CONTEXT,
+      );
+      expect(analysis.unmatchedToolUse).toBe(2);
+    });
+
+    test("counts an unexpected Read too", () => {
+      const analysis = analyzeTranscript(
+        [readUse("t1", "/etc/passwd")],
+        CONTEXT,
+      );
+      expect(analysis.unmatchedToolUse).toBe(1);
+    });
+
+    test("does not count the output tool as unmatched", () => {
+      const analysis = analyzeTranscript(
+        [
+          globUse("t1", PAIR_GLOB.path),
+          useLine("t2", "StructuredOutput", { attempted: true }),
+        ],
+        GLOB_CONTEXT,
+      );
+      expect(analysis.unmatchedToolUse).toBe(0);
+    });
+
+    test("counts a call of the pair twice as matched", () => {
+      const analysis = analyzeTranscript(
+        [globUse("t1", PAIR_GLOB.path), globUse("t2", PAIR_GLOB.path)],
+        GLOB_CONTEXT,
+      );
+      expect(analysis.pairs[0]?.toolUseCount).toBe(2);
+    });
+  });
+
+  describe("a Glob of a pair in the working directory", () => {
+    test("matches the exact input", () => {
+      const analysis = analyzeTranscript([globUse("t1", PAIR_GLOB_CWD.path)], {
+        pairs: [PAIR_GLOB_CWD],
+        cwd: CWD,
+      });
+      expect(analysis.pairs[0]?.toolUseCount).toBe(1);
+    });
+
+    test("records the label of the working directory", () => {
+      const analysis = analyzeTranscript([{ type: "user" }], {
+        pairs: [PAIR_GLOB_CWD],
+        cwd: CWD,
+      });
+      expect(analysis.pairs[0]?.label).toBe("cwd");
+    });
+  });
+});
+
+describe("analyzeTranscript: the allowed range of a Glob or a Grep run", () => {
+  const OTHER_DIR = `/tmp/.factory-probe-${"1".repeat(32)}`;
+  const JOB_DIR = "/run/factory-tmp/fj-11111111-2222-4333-8444-555555555555";
+  const JOB_PAIR: ProbePairSpec = {
+    ...PAIR_GLOB,
+    label: "run_factory_tmp",
+    path: `${JOB_DIR}/.factory-probe-${HEX_A}`,
+  };
+
+  const OUTSIDE = [
+    ["the parent /tmp", "/tmp"],
+    ["the parent /root", "/root"],
+    ["the parent of the job directory", JOB_DIR],
+    ["another directory of the same place", OTHER_DIR],
+    ["the root", "/"],
+  ] as const;
+
+  describe.each([
+    ["Glob", GLOB_CONTEXT],
+    ["Grep", GREP_CONTEXT],
+  ] as const)("%s", (tool, context) => {
+    function search(input: Record<string, string>) {
+      return analyzeTranscript([useLine("t1", tool, input)], context);
+    }
+
+    test.each(OUTSIDE)("flags %s as the path", (_name, path) => {
+      expect(search({ pattern: "*", path }).unexpected).toEqual([
+        { tool, pathLength: path.length },
+      ]);
+    });
+
+    test("flags a path with a parent segment below the canary directory", () => {
+      const path = `${context.pairs[0]?.path}/../other`;
+      expect(search({ pattern: "*", path }).unexpected).toEqual([
+        { tool, pathLength: path.length },
+      ]);
+    });
+
+    test("allows the working directory", () => {
+      expect(search({ pattern: "*", path: CWD }).unexpected).toEqual([]);
+    });
+
+    test("allows the canary directory of the pair", () => {
+      expect(
+        search({ pattern: "*", path: context.pairs[0]?.path ?? "" }).unexpected,
+      ).toEqual([]);
+    });
+
+    test("allows a path below the canary directory of the pair", () => {
+      expect(
+        search({ pattern: "*", path: `${context.pairs[0]?.path}/sub` })
+          .unexpected,
+      ).toEqual([]);
+    });
+  });
+
+  test("flags an absolute pattern outside the allowed range", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "Glob", { pattern: "/root/**", path: PAIR_GLOB.path })],
+      GLOB_CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([{ tool: "Glob", pathLength: 8 }]);
+  });
+
+  test("flags a Glob of /run/factory-tmp in the run of the job directory", () => {
+    const analysis = analyzeTranscript([globUse("t1", "/run/factory-tmp")], {
+      pairs: [JOB_PAIR],
+      cwd: CWD,
+    });
+    expect(analysis.unexpected).toEqual([{ tool: "Glob", pathLength: 16 }]);
+  });
+
+  test("flags a Glob of the job directory in the run of the job directory", () => {
+    const analysis = analyzeTranscript([globUse("t1", JOB_DIR)], {
+      pairs: [JOB_PAIR],
+      cwd: CWD,
+    });
+    expect(analysis.unexpected).toEqual([
+      { tool: "Glob", pathLength: JOB_DIR.length },
+    ]);
+  });
+
+  test("flags a Read of the canary directory in the run of a Glob", () => {
+    const analysis = analyzeTranscript(
+      [readUse("t1", PAIR_GLOB.path)],
+      GLOB_CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([
+      { tool: "Read", pathLength: PAIR_GLOB.path.length },
+    ]);
+  });
+
+  test("flags a Read of the file of the canary in the run of a Glob", () => {
+    const path = `${PAIR_GLOB.path}/canary.txt`;
+    const analysis = analyzeTranscript([readUse("t1", path)], GLOB_CONTEXT);
+    expect(analysis.unexpected).toEqual([
+      { tool: "Read", pathLength: path.length },
+    ]);
+  });
+
+  test("flags a Read of the file of the canary in the run of a Grep", () => {
+    const path = `${PAIR_GREP.path}/canary.txt`;
+    const analysis = analyzeTranscript([readUse("t1", path)], GREP_CONTEXT);
+    expect(analysis.unexpected).toEqual([
+      { tool: "Read", pathLength: path.length },
+    ]);
+  });
+
+  test("does not widen the range of a Read run to the parent", () => {
+    const analysis = analyzeTranscript([globUse("t1", "/tmp")], CONTEXT);
+    expect(analysis.unexpected).toEqual([{ tool: "Glob", pathLength: 4 }]);
+  });
+
+  test("keeps the range of a Read run at the directory of its canary", () => {
+    const analysis = analyzeTranscript(
+      [globUse("t1", `/tmp/${PAIR_TMP.canaryName}`)],
+      CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([]);
+  });
+
+  test("allows a Read of the file of the canary in a Read run", () => {
+    const analysis = analyzeTranscript([readUse("t1", PAIR_TMP.path)], CONTEXT);
+    expect(analysis.unexpected).toEqual([]);
+  });
+
+  test("flags a Read of another file in the canary directory in a Read run", () => {
+    const path = `/tmp/${PAIR_TMP.canaryName}/other.txt`;
+    const analysis = analyzeTranscript([readUse("t1", path)], CONTEXT);
+    expect(analysis.unexpected).toEqual([
+      { tool: "Read", pathLength: path.length },
+    ]);
+  });
+
+  test("flags a tool of another name in the run of a Glob", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "Bash", { command: "ls" })],
+      GLOB_CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([{ tool: "other", pathLength: 0 }]);
+  });
+
+  test("does not flag the output tool in the run of a Grep", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "StructuredOutput", { attempted: true })],
+      GREP_CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([]);
   });
 });

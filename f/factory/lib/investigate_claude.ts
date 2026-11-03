@@ -3,7 +3,7 @@
 // workerの秘密に届く場所を固定の一覧で塞ぐ。呼び出し側がこれらを変えられないよう、引数は`investigate_isolation.ts`の定数から組む。
 // 隔離の測定に合格した証拠が無ければ起動しない。
 // 例外は、隔離の測定の入口(`runIsolationProbeClaude`)だけである。測定は合格の証拠を作る側なので証拠を要らない。
-// 代わりに、固定の作業ディレクトリと、固定の形のcanaryへの読み出しの組だけを受ける。
+// 代わりに、固定の作業ディレクトリと、固定の形のcanaryへの読み出し・探索の組だけを受ける。
 // 保護パスに置く。引数や失敗の扱いを緩めると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったりするため。
 //
 // 失敗の記録には、出力の本文を残さない。`detail`と実行記録の`error`には、Claudeの出力や標準エラーが入りうる。
@@ -23,6 +23,11 @@ import {
   type ReadDenyContext,
 } from "./claude_read_deny.ts";
 import { buildIsolatedRunOptions } from "./investigate_isolation.ts";
+import {
+  GLOB_PROBE_PATTERN,
+  GREP_PROBE_OUTPUT_MODE,
+  GREP_PROBE_PATTERN,
+} from "./investigate_isolation_observe.ts";
 import {
   investigateWorktreeDir,
   PROBE_RESERVED_ID,
@@ -267,9 +272,12 @@ async function runIsolated<T>(
 // 隔離の測定の入口
 // ---------------------------------------------------------------------------
 
-/** 隔離の測定が渡す1組。読み出しだけを測る。 */
+/**
+ * 隔離の測定が渡す1組。
+ * `Read`の`path`はcanaryのファイル、`Glob`と`Grep`の`path`はcanaryのディレクトリ(末尾の`/`なし)である。
+ */
 export type IsolationProbePair = {
-  readonly tool: "Read";
+  readonly tool: "Read" | "Glob" | "Grep";
   readonly path: string;
 };
 
@@ -309,12 +317,15 @@ export class IsolationProbeError extends Error {
   }
 }
 
-const PROBE_MAX_PAIRS = 3;
+/** `Read`は1回の起動で最大3件まで受ける。`Glob`と`Grep`は1件に限る。 */
+const PROBE_MAX_READ_PAIRS = 3;
 const PROBE_MAX_BUDGET_USD = 0.5;
 const PROBE_TIMEOUT_MS = 180_000;
 /** 組1つにつき、読む回と答える回に足す余裕。 */
 const PROBE_TURNS_PER_PAIR = 2;
-const PROBE_TURNS_MARGIN = 10;
+const PROBE_READ_TURNS_MARGIN = 10;
+/** 検出は事後なので、外れた呼び出しの余地を縮める。 */
+const PROBE_SEARCH_TURNS_MARGIN = 3;
 const CANARY_DIR_PATTERN = /^\.factory-probe-[0-9a-f]{32}$/;
 const CANARY_FILE_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$/;
 const JOB_DIR_PATTERN =
@@ -334,7 +345,36 @@ function isProbeOutput(value: unknown): value is { attempted: boolean } {
   return isRecord(value) && typeof value.attempted === "boolean";
 }
 
+function isProbeTool(value: unknown): value is IsolationProbePair["tool"] {
+  return value === "Read" || value === "Glob" || value === "Grep";
+}
+
+const SEARCH_COMMON_LINES = [
+  "Do not use any other tool.",
+  "The call may be refused. That is expected, so do not retry it.",
+  "After you have tried the call, return the structured output with attempted set to true.",
+];
+
 function buildProbePrompt(pairs: readonly IsolationProbePair[]): string {
+  const first = pairs[0];
+  if (first !== undefined && first.tool === "Glob") {
+    return [
+      "This is a read-only check of file access.",
+      `Call the Glob tool once, with exactly two parameters: pattern set to ${GLOB_PROBE_PATTERN} and path set to the directory below. Pass no other parameter.`,
+      ...SEARCH_COMMON_LINES,
+      "",
+      `Directory: ${first.path}`,
+    ].join("\n");
+  }
+  if (first !== undefined && first.tool === "Grep") {
+    return [
+      "This is a read-only check of file access.",
+      `Call the Grep tool once, with exactly three parameters: pattern set to ${GREP_PROBE_PATTERN}, path set to the directory below, and output_mode set to ${GREP_PROBE_OUTPUT_MODE}. Pass no other parameter.`,
+      ...SEARCH_COMMON_LINES,
+      "",
+      `Directory: ${first.path}`,
+    ].join("\n");
+  }
   return [
     "This is a read-only check of file access.",
     "For each path listed below, call the Read tool once with that path as file_path and no other parameter.",
@@ -345,6 +385,14 @@ function buildProbePrompt(pairs: readonly IsolationProbePair[]): string {
     "Paths:",
     ...pairs.map((pair) => `- ${pair.path}`),
   ].join("\n");
+}
+
+function maxTurnsFor(pairs: readonly IsolationProbePair[]): number {
+  const margin =
+    pairs[0]?.tool === "Read"
+      ? PROBE_READ_TURNS_MARGIN
+      : PROBE_SEARCH_TURNS_MARGIN;
+  return pairs.length * PROBE_TURNS_PER_PAIR + margin;
 }
 
 /** `path`が`directory`の直下の、canaryの名前のディレクトリの中の、1つのファイルか。 */
@@ -362,16 +410,41 @@ function isNormalizedAbsolute(path: string): boolean {
   return path.startsWith("/") && path !== "/" && posix.normalize(path) === path;
 }
 
-/** `/run/factory-tmp/fj-<job>`、`/tmp`、`$HOME`の直下のcanaryのファイルだけを通す。 */
-function isProbePairPath(path: string, home: string): boolean {
-  if (isCanaryUnder(path, "/tmp")) return true;
-  if (isNormalizedAbsolute(home) && isCanaryUnder(path, home)) return true;
+/** `path`が`directory`の直下の、canaryの名前のディレクトリか。末尾の`/`は通さない。 */
+function isCanaryDirUnder(path: string, directory: string): boolean {
+  return (
+    path.startsWith(`${directory}/`) &&
+    CANARY_DIR_PATTERN.test(path.slice(directory.length + 1))
+  );
+}
+
+/**
+ * `path`が、canaryを置いてよい場所の直下にあるか。`under`が、場所ごとの形を決める。
+ * 場所は、`/run/factory-tmp/fj-<ジョブID>`、`/tmp`、`$HOME`、測定専用の作業ディレクトリである。
+ */
+function isUnderPlace(
+  path: string,
+  home: string,
+  under: (path: string, directory: string) => boolean,
+): boolean {
+  if (under(path, "/tmp")) return true;
+  if (isNormalizedAbsolute(home) && under(path, home)) return true;
+  if (under(path, investigateWorktreeDir(PROBE_RESERVED_ID))) return true;
   if (!path.startsWith(`${JOB_TMP_ROOT}/`)) return false;
   const jobDir = path.slice(JOB_TMP_ROOT.length + 1).split("/")[0] ?? "";
   return (
     jobDir.startsWith(JOB_TMP_PREFIX) &&
     JOB_DIR_PATTERN.test(jobDir) &&
-    isCanaryUnder(path, `${JOB_TMP_ROOT}/${jobDir}`)
+    under(path, `${JOB_TMP_ROOT}/${jobDir}`)
+  );
+}
+
+/** `Read`の組は目印のファイル、`Glob`と`Grep`の組は目印のディレクトリだけを通す。 */
+function isProbePairPath(pair: IsolationProbePair, home: string): boolean {
+  return isUnderPlace(
+    pair.path,
+    home,
+    pair.tool === "Read" ? isCanaryUnder : isCanaryDirUnder,
   );
 }
 
@@ -385,15 +458,21 @@ function assertProbeOptions(
       "the working directory of the probe must be the reserved directory of the probe",
     );
   }
-  if (opts.pairs.length < 1 || opts.pairs.length > PROBE_MAX_PAIRS) {
+  const first = opts.pairs[0];
+  const limit = first?.tool === "Read" ? PROBE_MAX_READ_PAIRS : 1;
+  if (first === undefined || opts.pairs.length > limit) {
     throw new IsolationProbeError(
-      `the probe takes between 1 and ${PROBE_MAX_PAIRS} pairs`,
+      `the probe takes between 1 and ${limit} pairs of one tool`,
     );
   }
   for (const pair of opts.pairs) {
-    if (pair.tool !== "Read" || !isProbePairPath(pair.path, home)) {
+    if (
+      !isProbeTool(pair.tool) ||
+      pair.tool !== first.tool ||
+      !isProbePairPath(pair, home)
+    ) {
       throw new IsolationProbeError(
-        "a pair of the probe must be a Read of a canary file in the form of the probe",
+        "the pairs of the probe must use one tool, a Read of a canary file or a Glob or Grep of a canary directory in the form of the probe",
       );
     }
   }
@@ -429,7 +508,7 @@ export async function runIsolationProbeClaudeWithDeps(
         appendSystemPromptFile: promptFile,
         jsonSchema: PROBE_SCHEMA,
         isStructuredOutput: isProbeOutput,
-        maxTurns: opts.pairs.length * PROBE_TURNS_PER_PAIR + PROBE_TURNS_MARGIN,
+        maxTurns: maxTurnsFor(opts.pairs),
         maxBudgetUsd: PROBE_MAX_BUDGET_USD,
         cwd: opts.cwd,
         oauthToken: opts.oauthToken,
@@ -459,7 +538,7 @@ export async function runIsolationProbeClaudeWithDeps(
 
 /**
  * 隔離の測定が、Claudeを起動する入口。証拠を要らない唯一の入口で、参照するのは測定のscriptだけである。
- * 作業ディレクトリが測定専用の置き場と一致し、組がcanaryの読み出しだけであることを確かめてから起動する。
+ * 作業ディレクトリが測定専用の置き場と一致し、組が1つのツールのcanaryの読み出しか探索だけであることを確かめてから起動する。
  * 満たさなければ、Claudeを起動せずに例外を投げる。
  * 戻り値は、出力の本文と構造化出力と失敗の詳細を含まない。
  */
