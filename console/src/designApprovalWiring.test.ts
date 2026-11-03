@@ -592,6 +592,13 @@ describe("design approval check wiring", () => {
       });
     });
 
+    test("stops in the preview that was never chosen and shows no check", () => {
+      expect(designPreviewGate({ mode: "preview", previewed: false })).toEqual({
+        reason: PREVIEW_REASON,
+        check: null,
+      });
+    });
+
     test("stops in a mode that it does not know", () => {
       expect(designPreviewGate({ mode: "unknown", previewed: true })).toEqual({
         reason: PREVIEW_REASON,

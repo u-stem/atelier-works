@@ -1127,6 +1127,8 @@ test.describe("approval body preview by keyboard", () => {
           await openScreen(page, path);
 
           await choose(page, group, "プレビュー");
+          // 切り替えが済むまで待つ。済む前の描画では、チェックが無いのは当たり前である。
+          await expect(page.getByText(reason)).toBeVisible();
 
           await expect(page.getByLabel(new RegExp(`^${check}`))).toHaveCount(0);
         });
