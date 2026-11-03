@@ -428,12 +428,26 @@ describe("the rework exits", () => {
     ).toEqual([]);
   });
 
-  test.each(REWORK_LAUNCH_EDGES.map((edge) => edge.from))(
-    "%s sends work back because of a requirements gap",
-    (from) => {
-      expect(sourceOf(from)).toContain("requirements_gap");
+  /** 差し戻しの行き先ごとの、ステップのソースが書く差し戻しの理由。 */
+  const GAP_OF: Readonly<Record<string, string>> = {
+    pipeline: "requirements_gap",
+    design: "design_gap",
+  };
+
+  test.each(REWORK_LAUNCH_EDGES.map((edge) => [edge.from, edge.to]))(
+    "%s sends work back to %s because of the gap named for that flow",
+    (from, to) => {
+      expect(sourceOf(from ?? "")).toContain(GAP_OF[to ?? ""] ?? "no gap");
     },
   );
+
+  test("sends work back to the design flow from implement_finish and pr_fix_finish", () => {
+    expect(
+      REWORK_LAUNCH_EDGES.filter((edge) => edge.to === "design").map(
+        (edge) => edge.from,
+      ),
+    ).toEqual(["steps/implement_finish", "steps/pr_fix_finish"]);
+  });
 
   test("a step that starts pipeline without a rework edge reports no requirements gap", () => {
     const plain = LAUNCH_EDGES.filter(
@@ -500,6 +514,48 @@ describe("the rework exits", () => {
     );
 
     expect([...flows].sort()).toEqual([...entries].sort());
+  });
+});
+
+describe("the forward launch edges", () => {
+  /** 前進の辺(起動と承認)。flow自身へ戻る辺は含まない。 */
+  const forward = new Map<string, string[]>();
+  for (const flow of data.flows) {
+    forward.set(
+      flow.name,
+      flow.exits
+        .filter((exit) => exit.via === "launch" || exit.via === "approve")
+        .filter((exit) => exit.flow !== flow.name)
+        .map((exit) => exit.flow),
+    );
+  }
+
+  /** 前進の辺だけをたどった、flowからの最長の経路のflowの数。循環があれば例外を投げる。 */
+  function longest(name: string, visiting: readonly string[]): number {
+    if (visiting.includes(name)) {
+      throw new Error(
+        `forward edges cycle: ${[...visiting, name].join(" > ")}`,
+      );
+    }
+    const next = (forward.get(name) ?? []).map((flow) =>
+      longest(flow, [...visiting, name]),
+    );
+    return 1 + Math.max(0, ...next);
+  }
+
+  test("form no cycle", () => {
+    expect(() => {
+      for (const flow of data.flows) longest(flow.name, []);
+    }).not.toThrow();
+  });
+
+  test("keep every schedule within four columns counting the schedule itself", () => {
+    const tooDeep = data.schedules.filter(
+      (schedule) =>
+        1 + Math.max(0, ...schedule.flows.map((flow) => longest(flow, []))) > 4,
+    );
+
+    expect(tooDeep.map((schedule) => schedule.name)).toEqual([]);
   });
 });
 
