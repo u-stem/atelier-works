@@ -49,6 +49,7 @@ import {
   type PullRequest,
   parseGitHubRepoUrl,
   type Viewer,
+  type WorkflowJobLogResult,
   type WorkflowRunJob,
   WorkflowRunsIncompleteError,
 } from "./github.ts";
@@ -375,6 +376,12 @@ export type PrCiClaimDeps = {
     runId: number,
     headSha: string,
   ) => Promise<readonly WorkflowRunJob[]>;
+  /** ジョブのログを読む。失敗したジョブが1つのとき、ロックの整合のテストだけの失敗かを決めるために使う。 */
+  readonly getJobLog: (
+    owner: string,
+    repo: string,
+    jobId: number,
+  ) => Promise<WorkflowJobLogResult>;
   /**
    * 検査を動かすworkerの環境が前提を満たさない問題。満たすとき、検査コマンドが無いときは`null`。
    * 実行の中で1回だけ読む。
@@ -2617,8 +2624,10 @@ function claimReaders(
         pr.headRef,
         { baseRepoId: pr.baseRepoId, prNumber: row.pr_number },
       );
-      return classifyHeadFailure(found.runs, (runId) =>
-        claim.listJobs(row.owner, row.repo, runId, row.head_sha),
+      return classifyHeadFailure(
+        found.runs,
+        (runId) => claim.listJobs(row.owner, row.repo, runId, row.head_sha),
+        (jobId) => claim.getJobLog(row.owner, row.repo, jobId),
       );
     },
     workerEnv: () => readWorkerEnv(context, claim),

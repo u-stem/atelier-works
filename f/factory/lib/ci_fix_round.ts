@@ -525,7 +525,7 @@ export type CiFailureRead =
  * ログを読めないとき(権限、保存期間、上限による省略、読み取りの失敗)は、`false`を返し、従来の経路に任せる。
  * 読み取りのレート制限は、再試行で解けるので、そのまま投げる。
  */
-async function isLockIntegrityOnlyFailure(
+export async function isLockIntegrityOnlyFailure(
   getLog: CiGatherDeps["getLog"],
   jobs: readonly WorkflowRunJob[],
 ): Promise<boolean> {

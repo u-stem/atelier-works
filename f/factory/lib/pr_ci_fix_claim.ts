@@ -4,7 +4,11 @@
 // 事実はすべて`FixClaimReaders`で渡し、必要になるまで読まない。テストで差し替える。
 
 import { isBranchHeldForFixRounds } from "./branch_hold.ts";
-import { classifyFailedRuns } from "./ci_fix_round.ts";
+import {
+  type CiGatherDeps,
+  classifyFailedRuns,
+  isLockIntegrityOnlyFailure,
+} from "./ci_fix_round.ts";
 import type {
   PrCommitMessages,
   PullRequest,
@@ -18,7 +22,8 @@ import { generatedByTrailer } from "./workspace.ts";
 /**
  * 起動前の分類の結果。
  * `fixable`は、Claudeが直すジョブだけが失敗している。
- * `metadata_only`は、`metadata`だけが失敗している。Claudeを起動せず、hashの再計算で直す。
+ * `metadata_only`は、hashの再計算で直す失敗だけが落ちている。Claudeを起動しない。
+ * `metadata`ジョブだけが失敗した回と、失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示す回である。
  * Claudeが直すジョブと`metadata`が同時に失敗しているときも`fixable`である。Claudeが先にそのジョブを直し、
  * `metadata`は、次の回で`metadata_only`になったときに再計算で直す。
  */
@@ -34,14 +39,25 @@ export type HeadFailureClass =
 /**
  * そのheadの実行から、失敗したジョブの種類を分類する。
  * CI回の収集(`gatherCiFailureInput`)と同じ関数(`classifyFailedRuns`)で、同じ範囲の実行とジョブを読む。
+ * `getLog`を渡すと、`metadata`以外で失敗したジョブが1つのときに限り、そのログを読み、
+ * ロックの整合のテストだけの失敗なら`metadata_only`にする。Claudeを使わない回を、予算とマーカーの確認から外すためである。
+ * ログを読めないときは分類を変えない。読み取りのrate limitだけは、そのまま投げる。
  */
 export async function classifyHeadFailure(
   runs: readonly WorkflowRun[],
   listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
+  getLog?: CiGatherDeps["getLog"],
 ): Promise<HeadFailureClass> {
   const { verdict } = await classifyFailedRuns(runs, listJobs);
   if (verdict === null) return "no_failure";
   if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
+    return "metadata_only";
+  }
+  if (
+    verdict.kind === "fixable" &&
+    getLog !== undefined &&
+    (await isLockIntegrityOnlyFailure(getLog, verdict.jobs))
+  ) {
     return "metadata_only";
   }
   return verdict.kind;

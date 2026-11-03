@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
+import { VolatileCiLog } from "../../f/factory/lib/ci_log_support.ts";
 import type {
   PrCommitMessages,
   PullRequest,
+  WorkflowJobLogResult,
 } from "../../f/factory/lib/github.ts";
 import type { WorkflowRun } from "../../f/factory/lib/main_ci_support.ts";
 import {
@@ -726,6 +729,79 @@ describe("classifyHeadFailure", () => {
       job("check", "failure"),
     ]);
     expect(verdict).toBe("fixable");
+  });
+
+  describe("with a log reader", () => {
+    const first = LOCK_INTEGRITY_TESTS[0];
+    const integrityLog = [
+      `${first?.file ?? ""}:`,
+      `(fail) ${first?.name ?? ""} [1.00ms]`,
+      " 1 fail",
+    ].join("\n");
+    const otherLog = [
+      "tests/lib/other.test.ts:",
+      "(fail) other > fails [1.00ms]",
+      " 1 fail",
+    ].join("\n");
+    const logOf =
+      (text: string) => async (): Promise<WorkflowJobLogResult> => ({
+        kind: "ok",
+        log: VolatileCiLog.of(text),
+        truncated: false,
+      });
+
+    test("reports a metadata-only failure for a check job that failed only the lock integrity tests", async () => {
+      const verdict = await classifyHeadFailure(
+        [run()],
+        async () => [job("check", "failure")],
+        logOf(integrityLog),
+      );
+      expect(verdict).toBe("metadata_only");
+    });
+
+    test("reports a fixable failure for a check job that failed another test", async () => {
+      const verdict = await classifyHeadFailure(
+        [run()],
+        async () => [job("check", "failure")],
+        logOf(otherLog),
+      );
+      expect(verdict).toBe("fixable");
+    });
+
+    test("reports a fixable failure when the log is unavailable", async () => {
+      const verdict = await classifyHeadFailure(
+        [run()],
+        async () => [job("check", "failure")],
+        async () => ({ kind: "log_unavailable" }),
+      );
+      expect(verdict).toBe("fixable");
+    });
+
+    test("does not read the log of two failed jobs", async () => {
+      let reads = 0;
+      await classifyHeadFailure(
+        [run()],
+        async () => [job("check", "failure"), job("lint", "failure")],
+        async () => {
+          reads += 1;
+          return { kind: "log_unavailable" };
+        },
+      );
+      expect(reads).toBe(0);
+    });
+
+    test("does not read the log of a metadata job", async () => {
+      let reads = 0;
+      await classifyHeadFailure(
+        [run()],
+        async () => [job("metadata", "failure")],
+        async () => {
+          reads += 1;
+          return { kind: "log_unavailable" };
+        },
+      );
+      expect(reads).toBe(0);
+    });
   });
 
   test("reports an unfixable job for a failed job without a name", async () => {
