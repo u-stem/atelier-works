@@ -7855,13 +7855,15 @@ describe("a server error that persists after the retry", () => {
       expect(h.notices).toEqual([]);
     });
 
-    test("stops on any status from 500 to 599", async () => {
-      const h = harness(
-        threeItemSetup({ prs: { [PR_KEY]: serverError(599) } }),
-      );
-      await runPrCiWatch(h.deps);
-      expect(h.prCalls).toEqual([PR_KEY]);
-    });
+    for (const status of [500, 599]) {
+      test(`stops on a status of ${String(status)}`, async () => {
+        const h = harness(
+          threeItemSetup({ prs: { [PR_KEY]: serverError(status) } }),
+        );
+        await runPrCiWatch(h.deps);
+        expect(h.prCalls).toEqual([PR_KEY]);
+      });
+    }
 
     test("does not stop on a status of 0", async () => {
       const h = harness(
