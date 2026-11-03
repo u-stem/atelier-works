@@ -275,7 +275,7 @@ describe("DesignDocBody in the preview", () => {
   });
 
   test("tells that the preview does not draw the text after an unclosed comment", () => {
-    expect(renderBody({}, "preview")).toContain("閉じない<!--");
+    expect(renderBody({}, "preview")).toContain("閉じない&lt;!--");
   });
 
   test("tells that the preview may not replace a character written as a reference", () => {

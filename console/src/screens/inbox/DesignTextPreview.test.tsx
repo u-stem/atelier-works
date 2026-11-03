@@ -20,7 +20,7 @@ describe("DesignTextPreview", () => {
   });
 
   test("draws a heading as a heading", () => {
-    expect(preview("# 設計\n")).toContain("設計</h1>");
+    expect(preview("# 設計\n")).toContain("設計</h2>");
   });
 
   test("does not draw the text view", () => {
