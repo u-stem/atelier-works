@@ -160,7 +160,7 @@ jobs:
     needs: scope
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # 通常は5分前後で終わる。検査が戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
+    # 通常は2〜3分で終わる(textlintを最大4個のプロセスに分けて実行する)。検査が戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
     timeout-minutes: 15
     steps:
       - name: Checkout
