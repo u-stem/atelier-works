@@ -7172,9 +7172,20 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
   測定は、判定と観測のモジュールを相対のimportで読む。
   Windmillがこのimportを実行のときに解決するかは、確かめていない。
   解決するなら、判定と観測のモジュールのpathも、同じ理由で書き換えの対象になる。
-- 測定の実行の経路に、保護されていない`lib/claude.ts`(`runClaude`)、`lib/log.ts`(`maskSecrets`)、`lib/types.ts`が入っている。
+- 測定の実行の経路に、保護されていないモジュールが入っている。
+  対象は次の4つである。
+  `lib/claude.ts`(`runClaude`)、`lib/log.ts`(`maskSecrets`)、`lib/types.ts`、`lib/db.ts`(`hasInvestigatingWorkItem`)。
   `lib/claude.ts`を保護しない理由は、argvが変われば関門が閉じることである。
   この理由は、測定が正直に測ることを前提にしている。
+  `lib/db.ts`は日常的に直すので保護しない。
+  稼働中の調査を読むSQLの全文と戻り値の式は、保護されたテスト(`tests/scripts/investigate_singleton_migration.test.ts`)が固定する。
+  `lib/db.ts`の他の部分や、`defaultSqlClient`の差し替えは、固定しない。
+- 指示ファイルの再走査は、worktreeの項目数に上限が無い。
+  大きなリポジトリでは、stepのタイムアウトで失敗しうる。
+  失敗は調査を止める側に倒れるので、受け入れる。
+- Claude Codeの版が上がると、作業ディレクトリから読む指示や設定の名前が増えうる。
+  版を上げるときは、その名前を確かめ、`INSTRUCTION_ENTRY_NAMES`(`lib/investigate_workspace.ts`)を直す。
+  確かめない間は、新しい名前の項目が改名されずに残る。受け入れる。
 - 関門が見るのは、最新の完了ジョブ1件だけである。
   不合格の後に再実行して通ると、前の不合格は見えなくなる。
 - 判定は、後始末の失敗(`cleanup.failed`)を条件にしない。目印が秘密でなく、後始末の失敗が秘密に関わらないためである。

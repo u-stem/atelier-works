@@ -473,13 +473,17 @@ async function findInstructionEntries(
  * 隔離の測定のworktreeを作る共有の関数に入れると、測定の前提が変わり、判定の版を上げる測り直しになるためである。
  * 改名先の名前が既にあるとき、改名に失敗したとき、改名の後にも対象が残るとき、検査できない項目があるときは、
  * リポジトリのロックの下でworktreeを消して、例外を投げる。例外の文に、失敗の原因のメッセージは載せない。
- * 作業項目のIDの形は、`investigateWorktreeDir`が確かめる。
+ * 作業項目のIDの形は、`investigateWorktreeDir`が確かめ、置き場の所有者とモードは、改名の前に`ensureInvestigateRoot`が確かめる。
+ * 置き場を信頼できないときは、改名もworktreeの削除もせずに例外を投げる。
  */
 export async function disableInvestigateInstructions(
   opts: DisableInvestigateInstructionsOptions,
 ): Promise<{ readonly dir: string; readonly renamed: readonly string[] }> {
   const fs = opts.fs ?? realDisableInstructionsFs;
   const dir = investigateWorktreeDir(opts.workItemId, opts.root);
+  // 置き場を信頼できないときは、何も改名せず、worktreeも消さずに例外を投げる。
+  // 差し替えられた置き場の先を、改名や削除でたどらないためである。
+  await ensureInvestigateRoot({ fs, root: opts.root ?? INVESTIGATE_ROOT });
   try {
     const stat = await fs.lstat(dir);
     if (stat === null || !stat.isDirectory || stat.isSymbolicLink) {

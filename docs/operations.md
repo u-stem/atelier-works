@@ -3824,6 +3824,8 @@ Claudeを、ツール(`Read`、`Glob`、`Grep`)と置き場(3つの置き場と�
 
 4. `passed`を見る。`true`なら、合格が記録されている。`probeJudgeVersion`が今の判定の版で、`failures`が空であることも確かめる。
    判定の版が上がった後は、古い版の合格を関門が受けない(`isolation_changed`)ので、この手順で測り直す。
+   Claude Codeの版を上げたときは、作業ディレクトリから読む指示や設定の名前を確かめる。
+   増えていれば、`INSTRUCTION_ENTRY_NAMES`(`lib/investigate_workspace.ts`)を直す。
 5. `false`なら、`failures`の符号を読む。「不合格のときの扱い」で、再実行するか諮るかを選ぶ。
    `observations.stoppedBy`に値があれば、次の表で次の操作を選ぶ。
 
