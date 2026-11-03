@@ -38,6 +38,7 @@ import {
   titleLength,
 } from "../../lib/manualIntake.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
+import { useFocusFirstInvalid } from "../../lib/useFocusFirstInvalid.ts";
 import { useManualIntake } from "./useManualIntake.ts";
 
 /** 見出しの題の下に置く、一覧への戻りのリンク。 */
@@ -125,11 +126,13 @@ function problemOf(
  * 候補は設定で許可されたリポジトリで、一覧に無いリポジトリも入力できる。許可の判定はscriptが行う。
  * 投入できなかったときと、投入されたか分からないときは、入力を残す。
  * 投入されたか分からないときは、確かめたと明示するまで再送のボタンを止める。
+ * 入力の誤りで送信が止まったときは、最初の誤りの入力欄へフォーカスを移す。
  */
 export function NewItemScreen() {
   const ids = useId();
   const targets = useIntakeTargets();
   const intake = useManualIntake();
+  const focusInvalid = useFocusFirstInvalid();
   const { session } = intake;
   // 一覧へ移って戻っても、投入できた後を除いて、入力中か直近に送った入力欄の値を復元する。
   const [typed, setTyped] = useState<IntakeFields>(() =>
@@ -183,7 +186,11 @@ export function NewItemScreen() {
 
   const send = () => {
     setChecked(true);
-    if (built.ok && !intake.blocked) {
+    if (!built.ok) {
+      focusInvalid.request();
+      return;
+    }
+    if (!intake.blocked) {
       intake.submit(form, built.input);
     }
   };
@@ -195,6 +202,7 @@ export function NewItemScreen() {
       </PageHeader>
       <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 py-6 md:px-8">
         <form
+          ref={focusInvalid.formRef}
           className="flex w-full max-w-[47.5rem] flex-col gap-5"
           noValidate
           onSubmit={(event) => {
