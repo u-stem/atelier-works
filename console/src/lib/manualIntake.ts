@@ -244,6 +244,22 @@ export function blocksImplicitSubmit(key: string): boolean {
   return key === "Enter";
 }
 
+/** 進め方のラジオへの操作。 */
+export type RadioInput =
+  | { readonly kind: "click" }
+  | { readonly kind: "key"; readonly key: string };
+
+/**
+ * 進め方のラジオで、既定の動作を止める操作か。
+ * 送信中は、選択を動かす操作をすべて止める。`disabled`にしないので、止めないと矢印キーとクリックで選択が動く。
+ */
+export function blocksRadioInput(
+  _input: RadioInput,
+  _locked: boolean,
+): boolean {
+  return false;
+}
+
 /** 送信ボタンの文言。承認を省くときは、押す場所でそれを示す。 */
 export function submitLabel(profile: IntakeProfile): string {
   return skipsApproval(profile) ? "承認なしで投入する" : "投入する";

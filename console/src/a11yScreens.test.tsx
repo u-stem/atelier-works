@@ -48,7 +48,7 @@ import { LoadingStateView } from "./components/LoadingState.tsx";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { type A11yViolation, checkA11y } from "./lib/a11yRules.ts";
 import { describeIntakeRefusal } from "./lib/intakeRefusal.ts";
-import type { IntakeForm } from "./lib/manualIntake.ts";
+import { type IntakeForm, PROFILE_OPTIONS } from "./lib/manualIntake.ts";
 
 type Variant = "pending" | "normal" | "empty" | "failed";
 
@@ -535,6 +535,12 @@ describe("a11y: the new item screen in the states of a submit", () => {
   }
 });
 
+/** フォームの中の要素の開始タグを、文書の順にすべて返す。サイドバーの入力欄は含めない。 */
+function startTagsOf(html: string, name: string): readonly string[] {
+  const form = html.slice(html.indexOf("<form"), html.indexOf("</form>"));
+  return form.match(new RegExp(`<${name}\\b[^>]*>`, "g")) ?? [];
+}
+
 /** 送信ボタンの開始タグ。 */
 function submitButtonTag(html: string): string {
   return /<button[^>]*type="submit"[^>]*>/.exec(html)?.[0] ?? "";
@@ -572,12 +578,40 @@ describe("a11y: the intake screens keep the focus while a submit is in progress"
     });
   }
 
-  test("makes the text fields of the new item screen read only", async () => {
+  /** 送信中の新規投入の画面を描く。 */
+  const drawSending = async () => {
     intakeSessions.begin(KEY, INTAKE_FORM);
     writeLocks.tryAcquire(KEY);
+    return renderChild("items/new", "normal");
+  };
 
-    expect(await renderChild("items/new", "normal")).toMatch(
-      /<textarea[^>]*readOnly=""/,
+  test("makes the repository and title inputs of the new item screen read only", async () => {
+    const tags = startTagsOf(await drawSending(), "input").filter(
+      (tag) => !tag.includes('type="radio"'),
+    );
+
+    expect(tags.map((tag) => tag.includes('readOnly=""'))).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  test("makes every textarea of the new item screen read only", async () => {
+    const tags = startTagsOf(await drawSending(), "textarea");
+
+    expect(tags.map((tag) => tag.includes('readOnly=""'))).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  test("marks every profile radio of the new item screen aria-disabled", async () => {
+    const tags = startTagsOf(await drawSending(), "input").filter((tag) =>
+      tag.includes('type="radio"'),
+    );
+
+    expect(tags.map((tag) => tag.includes('aria-disabled="true"'))).toEqual(
+      PROFILE_OPTIONS.map(() => true),
     );
   });
 });

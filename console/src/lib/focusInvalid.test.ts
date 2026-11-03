@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  clearedStatus,
   focusFirstInvalid,
   type InvalidCounter,
   type InvalidSource,
@@ -107,5 +108,25 @@ describe("invalidAnnouncement", () => {
     const { source } = formWith(0);
 
     expect(invalidAnnouncement(source, null)).toBe("");
+  });
+});
+
+describe("clearedStatus", () => {
+  test("empties the text of a status that announced the problems", () => {
+    expect(
+      clearedStatus({ text: "入力に誤りがあります(2件)", serial: 3 }).text,
+    ).toBe("");
+  });
+
+  test("keeps the serial, so that the next announcement is read again", () => {
+    expect(
+      clearedStatus({ text: "入力に誤りがあります(2件)", serial: 3 }).serial,
+    ).toBe(3);
+  });
+
+  test("returns the same value for an empty status, so that nothing is drawn again", () => {
+    const empty = { text: "", serial: 2 };
+
+    expect(clearedStatus(empty)).toBe(empty);
   });
 });

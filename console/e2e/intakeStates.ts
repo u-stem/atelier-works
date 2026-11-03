@@ -1,7 +1,8 @@
 // 投入の2画面(新規投入、PRレビューの投入)を、入力の操作だけで出せる状態にする部品。
 // 送信は、入力に誤りがあるときだけ押す。誤りが無い入力を送ると、書き込みのscriptが呼ばれ、
 // 検査用の受け口が中断して検査を失敗にする。
-// そのため、送信中、断られた理由、投入できた結果の表示は、ブラウザでは出さない。それらは静的な描画の検査が見る。
+// そのため、断られた理由と投入できた結果の表示は、ブラウザでは出さない。それらは静的な描画の検査が見る。
+// 送信中の入力欄の見た目だけは、読み取り専用を直接付けて、色のコントラストを測るために模す。
 
 import type { Page } from "@playwright/test";
 import { expect } from "./support.ts";
@@ -36,6 +37,27 @@ async function fillBugfix(page: Page): Promise<void> {
   await field(page, "再現手順").fill("example steps");
   await field(page, "期待する動作").fill("example expected");
   await field(page, "実際の動作").fill("example actual");
+}
+
+/**
+ * 送信中の入力欄を模す。文字を入れる入力欄(ラジオを除く)と複数行の入力欄を読み取り専用にする。
+ * 画面は送信中にこの属性を付ける。フォームの外の入力欄は触らない。送信は書き込みなので、実際の送信ではブラウザに出せない。
+ */
+async function makeTextFieldsReadOnly(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const form = document.querySelector("form");
+    if (form === null) {
+      return;
+    }
+    for (const element of form.querySelectorAll("input, textarea")) {
+      if (
+        (element instanceof HTMLInputElement && element.type === "text") ||
+        element instanceof HTMLTextAreaElement
+      ) {
+        element.readOnly = true;
+      }
+    }
+  });
 }
 
 export const INTAKE_STATES: readonly IntakeState[] = [
@@ -113,6 +135,19 @@ export const INTAKE_STATES: readonly IntakeState[] = [
       await fillNewItem(page);
       await fillBugfix(page);
       await expect(field(page, "実際の動作")).toHaveValue("example actual");
+    },
+  },
+  {
+    name: "new item: read only text fields while sending",
+    path: NEW_ITEM_PATH,
+    prepare: async (page) => {
+      await choose(page, /^不具合の修正/);
+      await fillNewItem(page);
+      await fillBugfix(page);
+      await makeTextFieldsReadOnly(page);
+      // リポジトリと題名の入力欄、目的と3欄と受入基準の複数行の入力欄。
+      await expect(page.locator("form input[readonly]")).toHaveCount(2);
+      await expect(page.locator("form textarea[readonly]")).toHaveCount(5);
     },
   },
   {

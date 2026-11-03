@@ -43,3 +43,19 @@ export function invalidAnnouncement(
   }
   return `入力に誤りがあります(${source.querySelectorAll(INVALID_CONTROL).length}件)`;
 }
+
+/** 読み上げ専用の領域に渡す文。`serial`が変わるたびに、同じ文でも読み直される。 */
+export type InvalidStatusMessage = {
+  readonly text: string;
+  readonly serial: number;
+};
+
+/**
+ * 読み上げ専用の領域を空に戻す。誤りの無い送信に進むとき、前の誤りの件数を残さないために使う。
+ * すでに空なら同じ値を返し、描き直しを起こさない。
+ */
+export function clearedStatus(
+  status: InvalidStatusMessage,
+): InvalidStatusMessage {
+  return status;
+}
