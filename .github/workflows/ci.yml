@@ -197,7 +197,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
-        # `tests/lib/process_lock.test.ts`と検査用のscriptを、`check`と同じ依存の状態で動かす。
+        # `tests/lib/process_lock.test.ts`と検査用のscriptを動かすため、ルートの依存を、`check`と同じ固定のlockfileから入れる。
         # 依存のinstall scriptは実行しない。
         run: bun install --frozen-lockfile --ignore-scripts
 

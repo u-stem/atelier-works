@@ -420,7 +420,8 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 
 `mise run test`は、全体のカバレッジを`coverage/lcov.info`に出す。
 `bun ./scripts/check-coverage.ts`は、そのlcovから行カバレッジを求め、下限を割っていれば終了コード1で止まる。
-`mise run check`は、`test`の後にこの検査を呼ぶ。CIの`check`ジョブも、`test`の後に同じ検査をステップとして呼ぶので、ローカルでもCIでも同じ検査が走る。
+`mise run check`は、`test`の後にこの検査を呼ぶ。
+CIの`check`ジョブも、`test`の後に同じ検査をステップとして呼ぶので、ローカルでもCIでも同じ検査が走る。
 測った値はOS(macOSとubuntu)で変わりうる。
 OSやrootの有無で、動くテストが分かれるためである。
 下限の置き方は[テストの基準](testing-guidelines.md#下限の置き方)にある。
