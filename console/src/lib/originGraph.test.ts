@@ -17,6 +17,7 @@ import {
   layoutOriginGraph,
   NODE_WIDTH,
   type OriginGraphModel,
+  type OriginLayout,
   originDiagramLabel,
   originGraphModel,
   originRunView,
@@ -426,6 +427,56 @@ function crosses(from: Point, to: Point, box: Box): boolean {
   return false;
 }
 
+type Segment = readonly [Point, Point];
+
+function segmentsOf(points: readonly Point[]): Segment[] {
+  return points.slice(1).flatMap((point, index): Segment[] => {
+    const from = points[index];
+    return from === undefined ? [] : [[from, point]];
+  });
+}
+
+/** 2つの線分が、同じ直線の上で長さのある区間を共有するか。 */
+function sharesRun(a: Segment, b: Segment): boolean {
+  const [a0, a1] = a;
+  const [b0, b1] = b;
+  const dx = a1.x - a0.x;
+  const dy = a1.y - a0.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return false;
+  const distance = (p: Point): number =>
+    Math.abs(dx * (p.y - a0.y) - dy * (p.x - a0.x)) / length;
+  if (distance(b0) > 0.5 || distance(b1) > 0.5) return false;
+  const along = (p: Point): number =>
+    ((p.x - a0.x) * dx + (p.y - a0.y) * dy) / length;
+  const lo = Math.max(0, Math.min(along(b0), along(b1)));
+  const hi = Math.min(length, Math.max(along(b0), along(b1)));
+  return hi - lo > 0.5;
+}
+
+/**
+ * 別々の線が共有する線分の組。同じ点から出る線の分かれ道(出口のステップが同じ)は、
+ * 共通の出発点から始まる区間なので数えない。
+ */
+function sharedSegments(layout: OriginLayout): string[] {
+  const found: string[] = [];
+  layout.edges.forEach((a, index) => {
+    for (const b of layout.edges.slice(index + 1)) {
+      for (const sa of segmentsOf(a.points)) {
+        for (const sb of segmentsOf(b.points)) {
+          const branch = sa[0].x === sb[0].x && sa[0].y === sb[0].y;
+          if (!branch && sharesRun(sa, sb)) {
+            found.push(
+              `${a.edge.from}->${a.edge.to} and ${b.edge.from}->${b.edge.to}`,
+            );
+          }
+        }
+      }
+    }
+  });
+  return found;
+}
+
 const SCHEDULE_NAMES = [
   "poll_issues",
   "poll_prs",
@@ -571,6 +622,35 @@ describe("layoutOriginGraph", () => {
       );
 
       expect(through).toEqual([]);
+    },
+  );
+
+  test.each(SCHEDULE_NAMES)(
+    "keeps the lines of %s from sharing a run when every node is closed",
+    (name) => {
+      const layout = layoutOriginGraph(realModel(name), new Set());
+
+      expect(sharedSegments(layout)).toEqual([]);
+    },
+  );
+
+  test.each(SCHEDULE_NAMES)(
+    "keeps the lines of %s from sharing a run when every node is open",
+    (name) => {
+      const model = realModel(name);
+      const layout = layoutOriginGraph(model, allFlowNames(model));
+
+      expect(sharedSegments(layout)).toEqual([]);
+    },
+  );
+
+  test.each(SCHEDULE_NAMES)(
+    "keeps the lines of %s from sharing a run in the initial state",
+    (name) => {
+      const model = realModel(name);
+      const layout = layoutOriginGraph(model, initialExpanded(model));
+
+      expect(sharedSegments(layout)).toEqual([]);
     },
   );
 
