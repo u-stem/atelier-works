@@ -6,6 +6,7 @@
 
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
+import { INTAKE_STATES } from "./intakeStates.ts";
 import {
   expect,
   type Mode,
@@ -42,6 +43,7 @@ const SCREEN_PATHS: readonly string[] = [
   "?notice=1",
   "items",
   "items?tab=requirements",
+  "items/new",
   "items/new-pr-review",
   "items/7",
   "system",
@@ -175,6 +177,21 @@ for (const theme of THEMES) {
           expect(audits).toEqual(
             Array.from({ length: audits.length }, () => clean(theme)),
           );
+        });
+      }
+    });
+
+    // 投入の2画面は、入力の誤りや進め方の選択で見た目が変わる。操作で出せる状態も検査する。
+    test.describe(`intake forms (${theme}, ${mode})`, () => {
+      // 本文は画面の中でスクロールする。画面の外の文字は、axe-coreが背景を決められず、色が測られない。
+      // フォームの全体が収まる高さにして、すべての文字の色を測る。
+      test.use({ theme, mode, viewport: { width: 1280, height: 2400 } });
+      for (const state of INTAKE_STATES) {
+        test(`${state.name} has no violations`, async ({ page }) => {
+          await openScreen(page, state.path);
+          await state.prepare(page);
+
+          expect(await auditOf(page)).toEqual(clean(theme));
         });
       }
     });

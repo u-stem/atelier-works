@@ -244,6 +244,34 @@ export function blocksImplicitSubmit(key: string): boolean {
   return key === "Enter";
 }
 
+/** ラジオの選択を動かすキー。矢印キーは隣へ、スペースは今の欄を選ぶ。 */
+const LOCKED_RADIO_KEYS: readonly string[] = [
+  "ArrowDown",
+  "ArrowUp",
+  "ArrowLeft",
+  "ArrowRight",
+  " ",
+];
+
+/** 進め方のラジオへの操作。 */
+export type RadioInput =
+  | { readonly kind: "click" }
+  | { readonly kind: "key"; readonly key: string };
+
+/**
+ * 進め方のラジオで、既定の動作を止める操作か。
+ * 送信中は、選択を動かす操作をすべて止める。`disabled`にしないので、止めないと矢印キーとクリックで選択が動く。
+ */
+export function blocksRadioInput(input: RadioInput, locked: boolean): boolean {
+  if (input.kind === "key" && blocksImplicitSubmit(input.key)) {
+    return true;
+  }
+  if (!locked) {
+    return false;
+  }
+  return input.kind === "click" || LOCKED_RADIO_KEYS.includes(input.key);
+}
+
 /** 送信ボタンの文言。承認を省くときは、押す場所でそれを示す。 */
 export function submitLabel(profile: IntakeProfile): string {
   return skipsApproval(profile) ? "承認なしで投入する" : "投入する";

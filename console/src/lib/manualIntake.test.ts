@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   blocksImplicitSubmit,
+  blocksRadioInput,
   buildIntakeInput,
   defaultRepoText,
   describeIntakeProblem,
@@ -325,6 +326,38 @@ describe("blocksImplicitSubmit", () => {
       expect(blocksImplicitSubmit(key)).toBe(false);
     },
   );
+});
+
+describe("blocksRadioInput", () => {
+  test.each(["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", " "])(
+    "blocks %p while sending, so that the choice does not move",
+    (key) => {
+      expect(blocksRadioInput({ kind: "key", key }, true)).toBe(true);
+    },
+  );
+
+  test("blocks a click while sending, including the click of its label", () => {
+    expect(blocksRadioInput({ kind: "click" }, true)).toBe(true);
+  });
+
+  test.each(["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", " "])(
+    "does not block %p when not sending",
+    (key) => {
+      expect(blocksRadioInput({ kind: "key", key }, false)).toBe(false);
+    },
+  );
+
+  test("does not block a click when not sending", () => {
+    expect(blocksRadioInput({ kind: "click" }, false)).toBe(false);
+  });
+
+  test("blocks Enter whether or not it is sending", () => {
+    expect(blocksRadioInput({ kind: "key", key: "Enter" }, false)).toBe(true);
+  });
+
+  test("does not block Tab while sending, so that the focus can move on", () => {
+    expect(blocksRadioInput({ kind: "key", key: "Tab" }, true)).toBe(false);
+  });
 });
 
 describe("what the profile changes on the screen", () => {
