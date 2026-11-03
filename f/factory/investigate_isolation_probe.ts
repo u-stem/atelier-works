@@ -1,9 +1,9 @@
-// 調査のClaudeの隔離を観測する。手動で実行し、`main()`は引数を取らない。
-// 合否は判定せず、常に`passed: false`と`probeJudgeVersion: 0`を返すので、合格の関門は閉じたままになる。
+// 調査のClaudeの隔離を測定し、合否を判定する。手動で実行し、`main()`は引数を取らない。
+// 合格は、ツールを通る`Read`・`Glob`・`Grep`の読み出しが、3つの置き場で`--restricted`の閉じ込めに拒否され、作業ディレクトリの中では成功したことを指す。
+// それ以上は保証しない。判定は`lib/investigate_isolation_judge.ts`が決め、probeは結果をそのまま返す。
 // 本物の秘密は読ませない。ジョブごとに作る秘密でないcanaryのファイルを、`/run/factory-tmp`、`/tmp`、`$HOME`と作業ディレクトリの下に置き、
 // `Read`・`Glob`・`Grep`がそれぞれの場所に届くかを、transcriptの構造から観測する。
 // 作業ディレクトリの下の目印は、成功した結果と、閉じ込めで落とした結果を読み分ける陽性対照である。
-// 後続の判定の設計が、この観測の実データから始まる。
 // 保護パスに置く。観測の結果に本文を載せたり、後始末を省いたりすると、秘密や残骸が残るため。
 //
 // 結果にもログにも、canaryの値、読み出した本文、モデルの出力、例外のメッセージを載せない。
@@ -32,8 +32,10 @@ import {
 import {
   computeArgvShapeHash,
   ISOLATION_FINGERPRINT,
-  type ProbeObservationResult,
+  PROBE_JUDGE_VERSION,
+  type ProbeResult,
 } from "./lib/investigate_isolation.ts";
+import { judgeProbe } from "./lib/investigate_isolation_judge.ts";
 import {
   analyzeTranscript,
   CANARY_FILE_NAME,
@@ -58,6 +60,7 @@ import {
 import {
   createInvestigateWorktree,
   ensureInvestigateRoot,
+  investigateWorktreeDir,
   PROBE_RESERVED_ID,
   purgeInvestigateRoot,
 } from "./lib/investigate_workspace.ts";
@@ -595,12 +598,11 @@ function buildObservations(
 }
 
 /**
- * 隔離を観測する。結果は常に`passed: false`で、判定は後続の設計が実データから作る。
+ * 隔離を測定して判定する。結果の`passed`と`failures`は、判定の結果をそのまま入れる。
  * 途中の失敗は例外にせず、止めた理由の符号を結果に残す。後始末の失敗は、観測の結果を変えない。
+ * 不合格でも、観測は結果に残す。
  */
-export async function runIsolationProbe(
-  deps: ProbeDeps,
-): Promise<ProbeObservationResult> {
+export async function runIsolationProbe(deps: ProbeDeps): Promise<ProbeResult> {
   const at = deps.now().toISOString();
   const ctx = newContext();
   try {
@@ -612,14 +614,24 @@ export async function runIsolationProbe(
   } finally {
     await cleanup(deps, ctx);
   }
-  return {
-    observationOnly: true,
-    passed: false,
-    claudeVersion: deps.claudeVersion ?? "",
+  const observations = buildObservations(deps, ctx, at);
+  const claudeVersion = deps.claudeVersion ?? "";
+  const argvShapeHash = computeArgvShapeHash();
+  const verdict = judgeProbe({
+    observations,
+    claudeVersion,
     isolationFingerprint: ISOLATION_FINGERPRINT,
-    argvShapeHash: computeArgvShapeHash(),
-    probeJudgeVersion: 0,
-    observations: buildObservations(deps, ctx, at),
+    argvShapeHash,
+    cwd: investigateWorktreeDir(PROBE_RESERVED_ID),
+  });
+  return {
+    passed: verdict.passed,
+    claudeVersion,
+    isolationFingerprint: ISOLATION_FINGERPRINT,
+    argvShapeHash,
+    probeJudgeVersion: PROBE_JUDGE_VERSION,
+    failures: verdict.failures,
+    observations,
   };
 }
 
@@ -632,7 +644,7 @@ function resolveHome(): string {
  * Windmillから手動で実行する入口。本物の依存を組み立てて`runIsolationProbe`を呼ぶ。
  * ジョブの一時ディレクトリが無いとき(ジョブの外)は、設定の置き場を決められないので例外を投げる。
  */
-export async function main(): Promise<ProbeObservationResult> {
+export async function main(): Promise<ProbeResult> {
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );

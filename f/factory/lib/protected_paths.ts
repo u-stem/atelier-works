@@ -260,13 +260,15 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * (`lib/claude_read_deny.ts`)、調査の入口を開ける門(`lib/investigate_gate.ts`)、調査のworktreeの置き場の検査と作成と掃除(`lib/investigate_workspace.ts`)、
  * 隔離の定数と隔離した実行の引数の組み立て(`lib/investigate_isolation.ts`)、合格の証拠の型(`lib/isolation_proof.ts`)、
  * 隔離の測定の結果を読む関門(`lib/investigate_isolation_gate.ts`)、隔離の観測でtranscriptから残す項目を取り出す純関数(`lib/investigate_isolation_observe.ts`)、
- * それぞれの`.script.yaml`、9つを固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、
+ * 隔離の合否を決める純関数(`lib/investigate_isolation_judge.ts`)、
+ * それぞれの`.script.yaml`、10個を固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、
  * `tests/scripts/investigate_gate.test.ts`、`tests/lib/investigate_workspace.test.ts`、`tests/lib/investigate_isolation.test.ts`、
  * `tests/lib/isolation_proof.test.ts`、`tests/lib/investigate_isolation_gate.test.ts`、`tests/lib/investigate_isolation_observe.test.ts`、
- * `tests/scripts/investigate_isolation_probe.test.ts`)である。
+ * `tests/lib/investigate_isolation_judge.test.ts`、`tests/scripts/investigate_isolation_probe.test.ts`)である。
+ * 判定のテストは、判定と観測と測定のscriptのsha256を、判定の版と対にして固定する。
  * 書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたり、
  * 置き場の差し替えやsymlinkを含むリポジトリのworktreeが読まれたり、測定に合格していない隔離でClaudeが起動したり、
- * 観測の結果に読み出した本文や秘密が載ったりする。
+ * 観測の結果に読み出した本文や秘密が載ったり、隔離を破った測定が合格として記録されたりする。
  * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
  * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
  * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
@@ -404,6 +406,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/investigate_isolation_observe.ts",
   "f/factory/lib/investigate_isolation_observe.script.yaml",
   "tests/lib/investigate_isolation_observe.test.ts",
+  "f/factory/lib/investigate_isolation_judge.ts",
+  "f/factory/lib/investigate_isolation_judge.script.yaml",
+  "tests/lib/investigate_isolation_judge.test.ts",
   "tests/scripts/investigate_isolation_probe.test.ts",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
