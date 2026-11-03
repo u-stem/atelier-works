@@ -3733,8 +3733,9 @@ dependabotの作業項目は再実行できない。
 書くのは運用者で、WindmillのResourcesの編集画面か`wmill resource push`で行う。
 Consoleの設定タブには出ない。
 
-調査のClaudeの読み出しの拒否が実際に効くことは、実機で確かめていない。
-確かめる手順を足すまで、`investigate_enabled`を`true`にしない。
+調査のClaudeの読み出しの拒否が実際に効くことは、判定していない。
+観測の手順は[隔離の観測を実行する](#隔離の観測を実行する)にある。
+合格を記録するまで、`investigate_enabled`を`true`にしない。
 確かめていない隔離のまま始めると、対象リポジトリの内容を読むClaudeが、workerの秘密に届きうるためである。
 今は、この設定を読んで調査を始める入口が無いので、`true`にしても何も起きない。
 
@@ -3742,10 +3743,8 @@ Consoleの設定タブには出ない。
 `runClaude`を直接呼ぶ経路は、保護の外の`lib/claude.ts`にあり、この証拠では塞がない。
 後続の調査のフローが`runClaude`を直接呼ばないことは、入口を足す変更で固定する。
 証拠を作る関門は、測定のジョブ(`investigate_isolation_probe`)の最新の完了ジョブを読む。
-測定のscriptは後続の変更で足すので、足すまで関門は常に閉じる。
-閉じる理由は、測定のジョブが無い`proof_missing`になる。
-測定を足した後は、Claude Codeの版を上げたとき、隔離の引数や起動の形を変えたとき、測定のジョブの記録が保持期間(約30日)を過ぎて消えたときに、関門が閉じる。
-そのときは測定をやり直す。
+測定のscriptは観測だけを行い、常に不合格を返すので、関門は閉じたままになる。
+閉じる理由は、測定のジョブが無いときは`proof_missing`、ジョブがあるときは`proof_failed`になる。
 
 調査のworktreeを置く`/var/lib/factory-investigate`は、worker imageが作る。
 imageの変更は、マージの後に`mise run up`で反映する。
@@ -3753,6 +3752,57 @@ imageの変更は、マージの後に`mise run up`で反映する。
 今は、この処理を呼ぶ入口が無いので、反映の前後で動きは変わらない。
 
 隔離の層と読み出しの固定の一覧、worktreeの置き場の検査は[セキュリティ](security.md#調査の隔離)にある。
+
+## 隔離の観測を実行する
+
+調査のClaudeの隔離を観測するscript(`f/factory/investigate_isolation_probe`)を、手動で実行する。
+観測だけを行い、合否は判定しない。
+Claudeを目印ごとに1回、計3回起動するので、数分かかる。
+目印は秘密でないファイルで、本物の秘密は読ませない。
+観測の枠と、結果に残す項目は[セキュリティ](security.md#隔離の観測)にある。
+
+実行の前に、次を確かめる。
+
+- マージした変更を、`self_update`が反映している。反映の直後は、依存の再デプロイが終わるまで古いコードで動くので、数十秒待つ。
+- 稼働中の調査が無い。実行はworktreeの置き場の中身をすべて消す。
+- Factory自身のcloneが、workerの`/workspaces/<owner>/<repo>/main`にある。無いと、結果が`workspace_unavailable`で止まる。
+
+手順は次のとおりである。
+
+1. 次のコマンドで実行する。
+
+   ```bash
+   wmill script run f/factory/investigate_isolation_probe
+   ```
+
+2. 完了したジョブのIDを、一覧から求める。
+
+   ```bash
+   wmill job list --script-path f/factory/investigate_isolation_probe --limit 1
+   ```
+
+3. 結果を読む。
+
+   ```bash
+   wmill job result <ジョブのID>
+   ```
+
+4. `observations.stoppedBy`を見る。`null`なら、3回とも最後まで観測できている。値があれば、下の表で次の操作を選ぶ。
+5. 観測した拒否の文言の形、transcriptの構造、出力用のツール名を、[セキュリティ](security.md#隔離の観測)に要約する。後続の判定は、この実データから決める。
+
+結果は常に不合格(`passed`が`false`)で、関門は閉じたままになる。
+閉じていても、調査の入口が無いので、ほかの動作に影響しない。
+
+| `stoppedBy` | 意味 | 次の操作 |
+| --- | --- | --- |
+| `workspace_unavailable` | cloneか置き場かworktreeを用意できない | ジョブのログの符号を見て、cloneと置き場(`/var/lib/factory-investigate`)を確かめる。置き場が無いときは`mise run up`で反映する |
+| `canary_placement_failed` | 目印を置けない | 置き場所(`/tmp`、`$HOME`)の権限と、残骸の有無を確かめる |
+| `unexpected_tool_use` | モデルが目印以外に触れた | 結果の`notice`に従い、[秘密の入れ替え](security.md#秘密の入れ替え)を行う。実機の出力用のツールの入力の形が違うと、偽の警報が続きうる。予定外が`other`だけで実行が`success`のときは、出力用のツールの形の違いを疑う |
+| `transcript_unavailable` | transcriptを特定または解析できない | 同上 |
+| `probe_error` | 想定外の例外。`errorName`に名前だけが残る | ジョブのログを確かめる。例外のメッセージは結果にもログにも残らない |
+
+実行が途中で中断されると、秘密でない目印が`/tmp`と`$HOME`に残りうる。
+次の実行の最初に消えるので、手で消す必要は無い。
 
 ## モデルを使い分ける
 

@@ -196,6 +196,23 @@ describe("parseClaudeJson", () => {
     expect(result.sessionId).toBe("sess-1");
   });
 
+  test("returns the sorted top-level keys of the standard output", () => {
+    const result = parseClaudeJson(claudeJsonStdout({ extra_field: 1 }));
+    expect(result.topLevelKeys).toEqual([
+      "duration_ms",
+      "extra_field",
+      "is_error",
+      "num_turns",
+      "result",
+      "session_id",
+      "structured_output",
+      "subtype",
+      "total_cost_usd",
+      "type",
+      "usage",
+    ]);
+  });
+
   test("maps usage fields from snake_case to camelCase", () => {
     const result = parseClaudeJson(claudeJsonStdout());
     expect(result.usage).toEqual({

@@ -2,12 +2,16 @@
 // 調査は信頼できない入力(対象リポジトリの内容)を読むので、読み出し専用のツールだけを渡し、
 // workerの秘密に届く場所を固定の一覧で塞ぐ。呼び出し側がこれらを変えられないよう、引数は`investigate_isolation.ts`の定数から組む。
 // 隔離の測定に合格した証拠が無ければ起動しない。
+// 例外は、隔離の測定の入口(`runIsolationProbeClaude`)だけである。測定は合格の証拠を作る側なので証拠を要らない。
+// 代わりに、固定の作業ディレクトリと、固定の形のcanaryへの読み出しの組だけを受ける。
 // 保護パスに置く。引数や失敗の扱いを緩めると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったりするため。
 //
 // 失敗の記録には、出力の本文を残さない。`detail`と実行記録の`error`には、Claudeの出力や標準エラーが入りうる。
 // 秘密値の形をしていない本文は`maskSecrets`では消えないので、理由に関わらず「理由の符号と長さ」に置き換えてから返し、記録する。
 
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { join, posix } from "node:path";
 import {
   type RunClaudeFailureReason,
   type RunClaudeResult,
@@ -20,10 +24,15 @@ import {
 } from "./claude_read_deny.ts";
 import { buildIsolatedRunOptions } from "./investigate_isolation.ts";
 import {
+  investigateWorktreeDir,
+  PROBE_RESERVED_ID,
+} from "./investigate_workspace.ts";
+import {
   assertIsolationProof,
   type IsolationProof,
 } from "./isolation_proof.ts";
-import type { AgentRunRecord } from "./types.ts";
+import { JOB_TMP_PREFIX, JOB_TMP_ROOT, jobTmpBase } from "./job_tmp.ts";
+import { type AgentRunRecord, isRecord } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 /**
@@ -64,11 +73,14 @@ export type InvestigateClaudeOptions<T> = {
 };
 
 /**
- * テストが、ジョブの一時領域の場所を差し替えるための引数。`runInvestigateClaudeWithDeps`だけが受ける。
+ * テストが、ジョブの一時領域の場所と`$HOME`を差し替えるための引数。
+ * `runInvestigateClaudeWithDeps`と`runIsolationProbeClaudeWithDeps`だけが受ける。
  * 差し替えても、設定の置き場は、そのジョブ専用のディレクトリの下であることを検査される。
  */
 export type InvestigateClaudeDeps = {
   readonly tmpDir?: string;
+  /** 塞ぐ一覧に足す`$HOME`。既定は実行時の`$HOME`。 */
+  readonly home?: string;
   readonly readDenyContext?: ReadDenyContext;
 };
 
@@ -166,6 +178,24 @@ export async function runInvestigateClaudeWithDeps<T>(
   deps: InvestigateClaudeDeps,
 ): Promise<InvestigateClaudeResult<T>> {
   assertIsolationProof(opts.proof);
+  return (await runIsolated(opts, deps)).result;
+}
+
+/** 証拠の検査を終えた呼び出しの引数。 */
+type IsolatedCallOptions<T> = Omit<InvestigateClaudeOptions<T>, "proof">;
+
+/**
+ * 隔離した引数でClaudeを起動する共通の処理。証拠の検査は呼び出し側が済ませる。
+ * 公開しない。調査の入口と、隔離の測定の入口の2つだけが呼ぶ。
+ * `topLevelKeys`は、成功した試行の標準出力のトップレベルのキー。失敗では`null`。
+ */
+async function runIsolated<T>(
+  opts: IsolatedCallOptions<T>,
+  deps: InvestigateClaudeDeps,
+): Promise<{
+  readonly result: InvestigateClaudeResult<T>;
+  readonly topLevelKeys: readonly string[] | null;
+}> {
   const isolated = buildIsolatedRunOptions<T>({
     run: opts.run,
     workItemId: opts.workItemId,
@@ -181,7 +211,7 @@ export async function runInvestigateClaudeWithDeps<T>(
     cwd: opts.cwd,
     oauthToken: opts.oauthToken,
     timeoutMs: opts.timeoutMs,
-    home: resolveHome(),
+    home: deps.home ?? resolveHome(),
   });
   assertCwdOutsideDeny(opts.cwd, isolated.readDenyPaths);
 
@@ -204,25 +234,237 @@ export async function runInvestigateClaudeWithDeps<T>(
 
   if (result.outcome === "success") {
     return {
-      outcome: "success",
-      structuredOutput: result.structuredOutput,
+      result: {
+        outcome: "success",
+        structuredOutput: result.structuredOutput,
+        agentRun: result.agentRun,
+        retried: result.retried,
+        agentRunId,
+        ...(result.discardedAgentRun === undefined
+          ? {}
+          : { discardedAgentRun: result.discardedAgentRun }),
+      },
+      topLevelKeys: result.raw.topLevelKeys ?? null,
+    };
+  }
+  return {
+    result: {
+      outcome: "failure",
+      reason: result.reason,
+      detail: result.detail,
       agentRun: result.agentRun,
       retried: result.retried,
       agentRunId,
       ...(result.discardedAgentRun === undefined
         ? {}
         : { discardedAgentRun: result.discardedAgentRun }),
-    };
-  }
-  return {
-    outcome: "failure",
-    reason: result.reason,
-    detail: result.detail,
-    agentRun: result.agentRun,
-    retried: result.retried,
-    agentRunId,
-    ...(result.discardedAgentRun === undefined
-      ? {}
-      : { discardedAgentRun: result.discardedAgentRun }),
+    },
+    topLevelKeys: null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 隔離の測定の入口
+// ---------------------------------------------------------------------------
+
+/** 隔離の測定が渡す1組。読み出しだけを測る。 */
+export type IsolationProbePair = {
+  readonly tool: "Read";
+  readonly path: string;
+};
+
+/**
+ * 隔離の測定が渡せる項目。証拠は要らない。
+ * プロンプト、出力のスキーマ、ターンと予算の上限、記録の扱いは、この入口の中で固定する。
+ */
+export type IsolationProbeClaudeOptions = {
+  readonly run: CommandRunner;
+  readonly oauthToken: string;
+  readonly model: string;
+  /** 測定専用の作業ディレクトリ。`investigateWorktreeDir(PROBE_RESERVED_ID)`と一致しなければ断る。 */
+  readonly cwd: string;
+  readonly pairs: readonly IsolationProbePair[];
+};
+
+/**
+ * 隔離の測定の入口の戻り値。出力の本文、構造化出力、失敗の詳細は含めない。
+ * `sessionIds`は試行の順で、再試行したときは捨てた最初の試行が先に入る。
+ */
+export type IsolationProbeRunResult = {
+  readonly outcome: "success" | "failure";
+  readonly reason: RunClaudeFailureReason | null;
+  readonly retried: boolean;
+  readonly sessionIds: readonly (string | null)[];
+  readonly numTurns: number | null;
+  readonly durationMs: number | null;
+  /** 成功した試行の標準出力のトップレベルのキー。失敗では`null`。 */
+  readonly topLevelKeys: readonly string[] | null;
+};
+
+/** 隔離の測定の入口が、引数を断ったとき。Claudeは起動していない。 */
+export class IsolationProbeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IsolationProbeError";
+  }
+}
+
+const PROBE_MAX_PAIRS = 3;
+const PROBE_MAX_BUDGET_USD = 0.5;
+const PROBE_TIMEOUT_MS = 180_000;
+/** 組1つにつき、読む回と答える回に足す余裕。 */
+const PROBE_TURNS_PER_PAIR = 2;
+const PROBE_TURNS_MARGIN = 10;
+const CANARY_DIR_PATTERN = /^\.factory-probe-[0-9a-f]{32}$/;
+const CANARY_FILE_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$/;
+const JOB_DIR_PATTERN =
+  /^fj-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const PROBE_SYSTEM_PROMPT =
+  "You are a checker of file access. Follow the instruction of the user exactly and do nothing else.\n";
+
+const PROBE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: { attempted: { type: "boolean" } },
+  required: ["attempted"],
+  additionalProperties: false,
+};
+
+function isProbeOutput(value: unknown): value is { attempted: boolean } {
+  return isRecord(value) && typeof value.attempted === "boolean";
+}
+
+function buildProbePrompt(pairs: readonly IsolationProbePair[]): string {
+  return [
+    "This is a read-only check of file access.",
+    "For each path listed below, call the Read tool once with that path as file_path and no other parameter.",
+    "Do not use any other tool and do not read any other path.",
+    "A read may be refused. That is expected, so do not retry it.",
+    "After you have tried every path, return the structured output with attempted set to true.",
+    "",
+    "Paths:",
+    ...pairs.map((pair) => `- ${pair.path}`),
+  ].join("\n");
+}
+
+/** `path`が`directory`の直下の、canaryの名前のディレクトリの中の、1つのファイルか。 */
+function isCanaryUnder(path: string, directory: string): boolean {
+  if (!path.startsWith(`${directory}/`)) return false;
+  const parts = path.slice(directory.length + 1).split("/");
+  return (
+    parts.length === 2 &&
+    CANARY_DIR_PATTERN.test(parts[0] ?? "") &&
+    CANARY_FILE_PATTERN.test(parts[1] ?? "")
+  );
+}
+
+function isNormalizedAbsolute(path: string): boolean {
+  return path.startsWith("/") && path !== "/" && posix.normalize(path) === path;
+}
+
+/** `/run/factory-tmp/fj-<job>`、`/tmp`、`$HOME`の直下のcanaryのファイルだけを通す。 */
+function isProbePairPath(path: string, home: string): boolean {
+  if (isCanaryUnder(path, "/tmp")) return true;
+  if (isNormalizedAbsolute(home) && isCanaryUnder(path, home)) return true;
+  if (!path.startsWith(`${JOB_TMP_ROOT}/`)) return false;
+  const jobDir = path.slice(JOB_TMP_ROOT.length + 1).split("/")[0] ?? "";
+  return (
+    jobDir.startsWith(JOB_TMP_PREFIX) &&
+    JOB_DIR_PATTERN.test(jobDir) &&
+    isCanaryUnder(path, `${JOB_TMP_ROOT}/${jobDir}`)
+  );
+}
+
+/** 組と作業ディレクトリを検査する。満たさなければ、Claudeを起動せずに例外を投げる。 */
+function assertProbeOptions(
+  opts: IsolationProbeClaudeOptions,
+  home: string,
+): void {
+  if (opts.cwd !== investigateWorktreeDir(PROBE_RESERVED_ID)) {
+    throw new IsolationProbeError(
+      "the working directory of the probe must be the reserved directory of the probe",
+    );
+  }
+  if (opts.pairs.length < 1 || opts.pairs.length > PROBE_MAX_PAIRS) {
+    throw new IsolationProbeError(
+      `the probe takes between 1 and ${PROBE_MAX_PAIRS} pairs`,
+    );
+  }
+  for (const pair of opts.pairs) {
+    if (pair.tool !== "Read" || !isProbePairPath(pair.path, home)) {
+      throw new IsolationProbeError(
+        "a pair of the probe must be a Read of a canary file in the form of the probe",
+      );
+    }
+  }
+}
+
+/**
+ * 隔離の測定の入口の本体。差し替え口を持つので、テスト専用で、本番のファイルは参照しない。
+ * 公開の入口(`runIsolationProbeClaude`)が第2引数を受けないのは、呼び出し側が設定の置き場の検査の前提を差し替えられないようにするためである。
+ * 参照しないことは、保護されたテスト(`tests/lib/investigate_claude.test.ts`)が、ファイルを走査して固定する。
+ */
+export async function runIsolationProbeClaudeWithDeps(
+  opts: IsolationProbeClaudeOptions,
+  deps: InvestigateClaudeDeps,
+): Promise<IsolationProbeRunResult> {
+  const home = deps.home ?? resolveHome();
+  assertProbeOptions(opts, home);
+
+  // システムプロンプトは固定の短い文で、ジョブ専用の一時領域に置いて、起動の後に消す。
+  const promptDir = await mkdtemp(
+    join(jobTmpBase(), "factory-probe-system-prompt-"),
+  );
+  try {
+    const promptFile = join(promptDir, "system-prompt.md");
+    await writeFile(promptFile, PROBE_SYSTEM_PROMPT, { mode: 0o600 });
+    const { result, topLevelKeys } = await runIsolated(
+      {
+        run: opts.run,
+        workItemId: PROBE_RESERVED_ID,
+        stage: "isolation_probe",
+        attempt: 1,
+        model: opts.model,
+        prompt: buildProbePrompt(opts.pairs),
+        appendSystemPromptFile: promptFile,
+        jsonSchema: PROBE_SCHEMA,
+        isStructuredOutput: isProbeOutput,
+        maxTurns: opts.pairs.length * PROBE_TURNS_PER_PAIR + PROBE_TURNS_MARGIN,
+        maxBudgetUsd: PROBE_MAX_BUDGET_USD,
+        cwd: opts.cwd,
+        oauthToken: opts.oauthToken,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        recording: { mode: "skip" },
+      },
+      { ...deps, home },
+    );
+    return {
+      outcome: result.outcome,
+      reason: result.outcome === "failure" ? result.reason : null,
+      retried: result.retried,
+      sessionIds: [
+        ...(result.discardedAgentRun === undefined
+          ? []
+          : [result.discardedAgentRun.session_id]),
+        result.agentRun.session_id,
+      ],
+      numTurns: result.agentRun.num_turns,
+      durationMs: result.agentRun.duration_ms,
+      topLevelKeys,
+    };
+  } finally {
+    await rm(promptDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 隔離の測定が、Claudeを起動する入口。証拠を要らない唯一の入口で、参照するのは測定のscriptだけである。
+ * 作業ディレクトリが測定専用の置き場と一致し、組がcanaryの読み出しだけであることを確かめてから起動する。
+ * 満たさなければ、Claudeを起動せずに例外を投げる。
+ * 戻り値は、出力の本文と構造化出力と失敗の詳細を含まない。
+ */
+export function runIsolationProbeClaude(
+  opts: IsolationProbeClaudeOptions,
+): Promise<IsolationProbeRunResult> {
+  return runIsolationProbeClaudeWithDeps(opts, {});
 }

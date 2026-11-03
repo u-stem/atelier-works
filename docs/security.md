@@ -6440,8 +6440,8 @@ flowの段をまたげないので、呼び出し側は、同じプロセスの�
 例外は、読んだ結果の本文を持たない。
 
 判定は、隔離の測定(`investigate_isolation_probe`)の最新の完了ジョブの結果を読んで行う。
-測定のscriptは、後続の変更で足す。
-足すまでは測定のジョブが無いので、関門は常に閉じる。
+測定のscriptは観測だけを行い、結果は常に不合格(`passed`が`false`)である。
+そのため、関門は常に閉じる([隔離の観測](#隔離の観測))。
 
 1. 測定のscriptの完了ジョブを、pathの完全一致、種別がscript、親なし、新しい順、少ない件数で一覧する。
 2. 一覧の要素のうち、pathが一致するものから、開始時刻が最も新しい1件を選ぶ。
@@ -6475,6 +6475,145 @@ flowの段をまたげないので、呼び出し側は、同じプロセスの�
 判定の版`PROBE_JUDGE_VERSION`は、測定が結果に記録し、関門が一致を求める。
 測定の判定を変えたときに上げる。
 上げると、既存の測定の結果は一致せず、測り直しになる。
+
+### 隔離の観測
+
+隔離の測定のscript(`f/factory/investigate_isolation_probe`)は、観測だけを行う。
+結果は常に不合格で、`passed`は`false`、判定の版(`probeJudgeVersion`)は0になる。
+読み出しの拒否が効いたと見なす条件は、観測の実データから決めるため、判定はまだ持たない。
+実行の手順は[運用](operations.md#隔離の観測を実行する)にある。
+
+#### 観測の枠
+
+試すのは、`Read`ツールによる3つの目印の読み出しだけである。
+目印はジョブごとに作る秘密でないファイルで、本物の秘密は読ませない。
+目印の置き場は、次の3つである。
+
+- `/run/factory-tmp/fj-<ジョブID>`
+- `/tmp`
+- `$HOME`
+
+置き場ごとに、名前が`.factory-probe-`と32桁の16進のディレクトリを作り、中に`canary.txt`を置く。
+ファイルの本文は、名前とは別の乱数から作る値である。
+ディレクトリは排他的に作る。
+同じ名前が既にあれば断り、既にあるものは消さない。
+作った直後に、symlinkでないこと、所有者がこのプロセスのユーザーであること、モードが0700であることを確かめる。
+他のユーザーが先に用意した場所を、黙って使わないためである。
+
+モデルには、各目印を`Read`で1回読むよう頼む。
+拒否は想定内なので、再試行は頼まない。
+Claudeは目印ごとに1回、計3回起動する。
+実行のたびに、transcriptを読んで観測を取り、すぐに消す。
+
+起動の入口は`runIsolationProbeClaude`(`lib/investigate_claude.ts`)である。
+証拠を要らない唯一の入口で、参照できるのは測定のscriptだけである。
+保護されたテストがファイルの走査で固定する。
+入口は、次の条件を満たさなければ、Claudeを起動せずに例外を投げる。
+
+- 作業ディレクトリが、測定専用の`investigateWorktreeDir(PROBE_RESERVED_ID)`と一致する。
+- 組が1件から3件で、どれも`Read`である。
+- パスが、`/run/factory-tmp/fj-<ジョブID>`、`/tmp`、`$HOME`のどれかの直下にある目印の形のファイルである。
+  `..`を含む綴りは断る。
+
+隔離の引数は、調査の入口と同じ定数から組む。
+プロンプト、出力のスキーマ、ターンと予算の上限、記録しないことは、入口の中で固定する。
+戻り値は、成否、失敗の符号、再試行の有無、両試行のセッションID、ターン数、所要時間、標準出力のトップレベルのキーだけである。
+構造化出力と失敗の詳細は返さない。
+モデルは、実装の区分と同じ`modelFor`の選択(既定は`model`)を使う。
+
+#### 結果に残すもの
+
+結果の`observations`に残すのは、キーの名前、型、長さ、分類の符号である。
+観測する項目は次のとおりである。
+
+- 環境: `claude --version`の出力と環境変数`CLAUDE_VERSION`の値(版の形をしていなければ`unparsed`)、設定の置き場がジョブ専用の一時領域の下か。
+- transcriptの構造: `projects`の下の深さ、ファイル名の形、行数、行の`type`の集合、`tool_use`と`tool_result`のフィールド名の集合、`tool_use_id`の対応。
+- 目印ごとの組: `tool_use`の有無と入力のキー、結果の`is_error`、本文の長さ、目印の値を含むかの真偽、打ち切りの語を含むか、`tool_result`のフィールド名。
+- 出力用のツール名: `Read`、`Glob`、`Grep`以外のツールのうち、名前の形(英字で始まる64字以内の英数字と`_`)に合い、入力のキーが`attempted`だけで値が真偽のものを記録する。止める条件にはしない。記録する条件は、下に書く。
+- 実行: 回数、時刻、成否、ターン数、所要時間。
+
+本文を残す例外は1つだけである。
+組と完全に一致する`tool_use`の結果のうち、`is_error`が`true`のものを、先頭200文字まで残す。
+拒否の文言の形を知るためである。
+目印の値と名前を置き換え、秘密の形を伏せてから切る。
+「一致」は、入力のキーと値の完全一致で、`Read`は`file_path`だけを持つ。
+成功した結果の本文は残さない。
+
+出力用のツール名も、モデルが選べる綴りである。
+名前に断片を載せられると、結果が漏れの経路になるため、名前は次の条件でだけ記録する。
+
+1. 名前の形と入力の形が、上の項目に合う。
+2. 予定外の`tool_use`があるセッションと、`transcript_unavailable`で止めた実行では、名前を並べない。
+   結果の上位とセッションごとの一覧を空にして、異なる名前の数だけを`outputToolOmitted`に残す。
+3. 目印の値か名前を含む名前、32桁以上の16進の並びを含む名前、`maskSecrets`で形が変わる名前は、固定の語`other`に置き換える。
+4. 異なる名前は4つまで並べ、超えた分は数だけを`outputToolOmitted`に残す。
+
+結果とログには、目印の値、読んだ本文、モデルの出力、プロンプト、例外のメッセージを残さない。
+失敗は符号だけで残す。
+
+#### 止める条件
+
+次のときは、残りの実行を止めて後始末に進み、結果の`stoppedBy`に符号、`notice`に注意を載せる。
+モデルが指示に反して目印以外を読もうとした可能性があるためである。
+
+| 符号 | 条件 |
+| --- | --- |
+| `unexpected_tool_use` | `Read`の入力が組の定義と違う。`Glob`か`Grep`が、作業ディレクトリと目印のディレクトリの外に触れる。`Read`、`Glob`、`Grep`以外のツールが、出力用のツールの形(名前の形に合い、入力のキーが`attempted`だけで値が真偽)でない |
+| `transcript_unavailable` | セッションIDが無いかUUIDでない。transcriptが無いか複数ある。行が解析できない。再試行で生まれた2つ目のセッションも同じ |
+
+外に触れるかの判定では、区切り(`/`、`{`、`}`、`,`)で分けた部分が`..`に等しい綴りと、`~`で始まる綴りと、絶対パスを外とみなす。
+`Glob`のパターンは、括弧の選択肢が`/`か`~`で始まるものも外とみなす。
+`src`や`**/*.ts`のような相対の綴りは許す。
+見るのはこの形だけで、ほかのglobの記法(拡張glob、文字クラス)は相対として扱う。
+予定外の`tool_use`は、内容を残さず、ツール名の分類と入力の長さだけを`unexpectedToolUse`に残す。
+出力用のツールの形に合わない`tool_use`は、ツール名と入力のキーの名前も残さない。
+どちらもモデルが自由に選べる綴りで、結果に載せると漏れの経路になるためである。
+transcriptは、`CLAUDE_CONFIG_DIR/projects`の下の、symlinkでない通常のファイルだけを読む。
+止める符号は、このほかに3つある。
+
+| 符号 | 条件 |
+| --- | --- |
+| `workspace_unavailable` | cloneか置き場かworktreeを用意できない |
+| `canary_placement_failed` | 目印を置けない |
+| `probe_error` | 想定外の例外。例外の名前だけを`errorName`に残す |
+
+#### 後始末
+
+transcriptと設定の置き場は、実行のたびに消す。
+終了時に、作った目印のディレクトリと、調査のworktreeの置き場の中身を消す。
+消せなくても例外にせず、観測の結果は変えない。
+消せなかった対象は、結果の`cleanup.failed`に符号で残す。
+
+中断すると、秘密でない目印が`/tmp`と`$HOME`に残りうる。
+次の実行の最初に、残りを消す。
+消すのは、`/tmp`と`$HOME`の直下にあるディレクトリのうち、名前の形が合い、symlinkでなく、所有者とモード(0700)が合うものである。
+調査のworktreeの置き場の掃除は、置き場の中身をすべて消す。
+稼働中の調査があるときに観測を動かさないのは、運用者の役目である。コードは、稼働中の調査を確かめない。
+
+#### 秘密の入れ替え
+
+結果の`notice`が出たときは、本物の秘密に届いた可能性があるので、次を入れ替える。
+読めたかどうかは、結果から分からない。
+
+1. Claude CodeのOAuthトークンを、[Claude CodeのOAuthトークン](#claude-codeのoauthトークン)の手順で発行し直し、[運用](operations.md#秘密をローテーションする)の手順で反映する。旧いトークンは、発行元のアカウントの設定で取り消す。
+2. GitHubのPAT(`github_token`)を、[GitHubのPAT](#githubのpat)の手順で発行し直し、同じ手順で反映する。旧いPATは、GitHubの**Fine-grained tokens**の画面で削除する。
+3. `DB_PASSWORD`を、次の順に変える。
+   1. 次のコマンドでpsqlを開き、プロンプトで`\password postgres`と打って新しい値を入れる。
+      値はコマンドの引数に載らず、履歴にも残らない。
+
+      ```bash
+      mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
+      ```
+
+   2. 新しい値を、[セットアップ](setup.md#秘密値を投入する)の手順で`DB_PASSWORD`として投入する。
+   3. `mise run up`を実行する。コンテナの`DATABASE_URL`が新しい値で作り直される。
+   Postgresのパスワードを変えてから`mise run up`で反映するまでの間、Windmillはデータベースに接続できない。
+4. workerの`/var/lib/factory/claude`と`/var/lib/factory/gh`に、ログインの記録があれば、発行元で失効させてから消す。
+   中身は、次のコマンドで確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ls -A /var/lib/factory/claude /var/lib/factory/gh
+   ```
 
 ### 出力の本文を記録に残さない
 
@@ -6511,7 +6650,7 @@ Consoleの設定タブには出ない。
 
 保護するファイルは次のとおりである。
 
-- 7つのモジュールと、それぞれの`.script.yaml`
+- 8つのモジュールと、それぞれの`.script.yaml`
   - `lib/investigate_claude.ts`
   - `lib/claude_read_deny.ts`
   - `lib/investigate_gate.ts`
@@ -6519,7 +6658,8 @@ Consoleの設定タブには出ない。
   - `lib/investigate_isolation.ts`
   - `lib/isolation_proof.ts`
   - `lib/investigate_isolation_gate.ts`
-- 7つを固定するテスト
+  - `lib/investigate_isolation_observe.ts`
+- 9つを固定するテスト
   - `tests/lib/investigate_claude.test.ts`
   - `tests/lib/claude_read_deny.test.ts`
   - `tests/scripts/investigate_gate.test.ts`
@@ -6527,28 +6667,41 @@ Consoleの設定タブには出ない。
   - `tests/lib/investigate_isolation.test.ts`
   - `tests/lib/isolation_proof.test.ts`
   - `tests/lib/investigate_isolation_gate.test.ts`
+  - `tests/lib/investigate_isolation_observe.test.ts`
+  - `tests/scripts/investigate_isolation_probe.test.ts`
 
 関門が信頼する根は、測定のscript(`f/factory/investigate_isolation_probe`)の完了ジョブである。
 そのため、`f/factory/investigate_isolation_probe.`の前方一致も保護する。
 `.ts`、`.script.yaml`、`.script.lock`、`.schedule.yaml`をまとめて塞ぐ。
-測定のscriptはまだ無く、名前を先に押さえている。
+測定のscriptの書き換えで、観測の結果に本文や秘密が載ることも防ぐ。
 
 置き場を作るworker imageの記述(`infra/worker/Dockerfile`)は、`infra/worker/`の前方一致で既に保護されている。
 `lib/workspace.ts`は保護しない。
 置き場の作成が使うロックのパスの関数を公開する差分だけを、このために入れている。
 
 `lib/claude.ts`は保護しない。
-ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行と、`buildClaudeArgv`と`buildClaudeEnv`のexportに限るためである。
+ほかのフローも日常的に直し、調査のための差分が小さいためである。
+差分は、設定の書き出しを呼ぶ数行、`buildClaudeArgv`と`buildClaudeEnv`のexport、標準出力のトップレベルのキーを返す1項目に限る。
 `runClaude`が起動の前に設定を書くこと、起動の呼び出しの引数と環境と実行の条件は、保護されたテスト(`tests/lib/investigate_claude.test.ts`)が丸ごと固定する。
 `lib/claude.ts`がargvや環境を変えると、起動の形のハッシュが変わり、関門が閉じる。
 保護の外の変更が隔離を黙って変えても、測り直すまでClaudeは起動しない。
 
 ### 残るリスク
 
-- 読み出しの拒否が実際に効くことを、実機で確かめていない。
-  確かめる手順(測定のscript)は、まだ無い。
-  実行時に測定の結果を照合する関門はあるが、測定のジョブが無い間は常に閉じる。
-  測定を足し、実機で合格を記録するまで、`investigate_enabled`は偽のままにする。
+- 読み出しの拒否が実際に効くことを、判定していない。
+  測定のscriptは観測だけを行い、結果は常に不合格なので、関門は常に閉じる。
+  観測した拒否の文言の形と、transcriptの構造は、実機で最初に実行した結果を待って確定する。
+  合格を記録するまで、`investigate_enabled`は偽のままにする。
+- 観測の中の予定外の読み出しは、実行が終わってから、transcriptで見つける。
+  1回の実行の途中で止める手段は無い。
+  本物の秘密を読ませない保証は、次の3つに頼る。
+  固定のプロンプト、読み出しを塞ぐ一覧、実行の後に止める検査である。
+- 出力用のツール名の綴りに、秘密の断片が載りうる。
+  目印の値と名前、32桁以上の16進の並び、既知の秘密の形は置き換えるが、それ以外の短い断片は、名前の形に合えば残る。
+  断片を載せるには、モデルが先に予定外の`tool_use`で秘密を読む必要がある。
+  その場合は、名前を結果に並べないので、断片は残らない。
+  外に触れる判定を抜けた読み出しがあると、この前提が崩れる。
+- 観測は、`Glob`と`Grep`が祖先のディレクトリから目印を見つけるか、設定の層が読まれないか、指示文書の`@`の取り込みが起きないかを測らない。
 - 測定は1時点の結果である。
   Claude Codeの版か起動の形が変われば、関門が閉じ、測り直しになる。
   worker imageと、マウントの変更は、証拠に入らないので、測り直しにならない。

@@ -1,0 +1,9 @@
+summary: '[LIB] 隔離の観測でtranscriptから残す項目を取り出す'
+description: 内部ライブラリです。直接実行するものではありません。隔離の観測で、transcriptの構造と、組ごとの結果と、予定外のtool_useを取り出す処理です。
+lock: '!inline f/factory/lib/investigate_isolation_observe.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
