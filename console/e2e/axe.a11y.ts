@@ -48,7 +48,21 @@ const SCREEN_PATHS: readonly string[] = [
   "jobs",
   "jobs?tab=history",
   "jobs?tab=schedules",
+  // 起動の図。poll_issuesは起動するflowが1つなので、初めから開いた状態で検査する。
+  "jobs/origins/poll_prs",
+  "jobs/origins/poll_issues",
+  "jobs/origins/poll_dependabot",
+  "jobs/flows/implement",
 ];
+
+/** 見出しを1つずつ開いて検査する、起動の図の経路。開いたときだけ描かれる要素を検査するため。 */
+const ORIGIN_PATHS: readonly string[] = [
+  "jobs/origins/poll_prs",
+  "jobs/origins/poll_issues",
+];
+
+/** 起動の図が、図でなく一覧で出る幅(px)。 */
+const LIST_WIDTH = 500;
 
 type Audit = {
   /** 違反を、規則、影響、要素の数と最初の要素で1行にしたもの。差分で原因を辿れるようにする。 */
@@ -118,6 +132,49 @@ for (const theme of THEMES) {
           await openScreen(page, path);
 
           expect(await auditOf(page)).toEqual(clean(theme));
+        });
+      }
+
+      for (const path of ORIGIN_PATHS) {
+        test(`/console/${path} has no violations while each flow is opened in turn`, async ({
+          page,
+        }) => {
+          await openScreen(page, path);
+          const headings = page.getByRole("button", { name: /のステップ$/ });
+          const audits: Audit[] = [];
+          for (let index = 0; index < (await headings.count()); index += 1) {
+            const heading = headings.nth(index);
+            if ((await heading.getAttribute("aria-expanded")) === "false") {
+              await heading.click();
+            }
+            await expect(heading).toHaveAttribute("aria-expanded", "true");
+            audits.push(await auditOf(page));
+          }
+
+          expect(audits).toEqual(
+            Array.from({ length: audits.length }, () => clean(theme)),
+          );
+        });
+
+        test(`/console/${path} has no violations in the list while each flow is opened in turn`, async ({
+          page,
+        }) => {
+          await page.setViewportSize({ width: LIST_WIDTH, height: 800 });
+          await openScreen(page, path);
+          const summaries = page.locator("details > summary");
+          const audits: Audit[] = [await auditOf(page)];
+          for (let index = 0; index < (await summaries.count()); index += 1) {
+            const details = summaries.nth(index).locator("..");
+            if ((await details.getAttribute("open")) === null) {
+              await summaries.nth(index).click();
+            }
+            await expect(details).toHaveAttribute("open", "");
+            audits.push(await auditOf(page));
+          }
+
+          expect(audits).toEqual(
+            Array.from({ length: audits.length }, () => clean(theme)),
+          );
         });
       }
     });

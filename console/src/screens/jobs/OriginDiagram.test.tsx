@@ -173,6 +173,26 @@ describe("OriginDiagramView: the diagram", () => {
     expect(render("poll_prs")).not.toContain("/jobs/flows/");
   });
 
+  test("names the link by its visible text and the flow", () => {
+    expect(render("audit_kickoff", { expanded: ["audit"] })).toContain(
+      'aria-label="flowの図: audit"',
+    );
+  });
+
+  test("names the link of the list by its visible text and the flow", () => {
+    expect(
+      render("audit_kickoff", { width: LIST, expanded: ["audit"] }),
+    ).toContain('aria-label="flowの図: audit"');
+  });
+
+  test("keeps the visible text of the heading button to the name that its label contains", () => {
+    const button = /<g[^>]*role="button"[^>]*>((?:(?!<\/g>)[\s\S])*)<\/g>/.exec(
+      render("poll_prs"),
+    );
+
+    expect(countOf(button?.[1] ?? "", "<text")).toBe(1);
+  });
+
   test("keeps the link out of the heading button", () => {
     expect(render("audit_kickoff", { expanded: ["audit"] })).not.toMatch(
       /<g[^>]*role="button"[^>]*>(?:(?!<\/g>)[\s\S])*<a\b/,
