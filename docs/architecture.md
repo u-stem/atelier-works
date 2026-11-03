@@ -646,6 +646,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
 | `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
 | `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
+| `f/factory/lib/investigate_isolation_observe` | script | [LIB] 隔離の観測でtranscriptから残す項目を取り出す |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |
@@ -660,6 +661,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
+| `f/factory/investigate_isolation_probe` | script | [OP-2-11] 調査のClaudeの隔離を観測 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/hold_release` | script | [OP-2-4] 保留を解除 |

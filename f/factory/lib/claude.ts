@@ -271,7 +271,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
     },
     modelUsage: parseModelUsage(Reflect.get(parsed, "modelUsage")),
     structuredOutput: parsed.structured_output,
-    topLevelKeys: [],
+    topLevelKeys: Object.keys(parsed).sort(),
   };
 }
 
