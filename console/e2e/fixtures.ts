@@ -2,6 +2,7 @@
 // jsdomを使わない静的な描画の検査(`src/a11yScreens.test.tsx`)と、ブラウザの検査(`e2e/*.a11y.ts`)が共有する。
 // ブラウザの検査では、`mockApi.ts`が同じ値をAPIの応答として返す。
 
+import type { IntakeTarget } from "../src/api/guards/intakeTargets.ts";
 import type { PipelineRow } from "../src/api/guards/pipeline.ts";
 import type {
   RequirementsDoc,
@@ -368,3 +369,9 @@ export const REQUIREMENTS_DOC_NORMAL: RequirementsDoc = {
   open_questions: ["example question"],
   doc_dir_source: "default",
 };
+
+/** 手動投入で選べるリポジトリ。先頭が、新規投入のリポジトリ欄の既定になる。 */
+export const INTAKE_TARGETS: readonly IntakeTarget[] = [
+  { owner: "o", repo: "r" },
+  { owner: "o", repo: "widgets" },
+];

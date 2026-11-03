@@ -3,6 +3,11 @@
 // サイドバーの後に本文、ダイアログの内側に留まる、閉じたら元へ戻る)だけを見る。
 
 import type { Page } from "@playwright/test";
+import {
+  fillNewItem,
+  NEW_ITEM_PATH,
+  NEW_PR_REVIEW_PATH,
+} from "./intakeStates.ts";
 import { expect, openScreen, test } from "./support.ts";
 
 /** Tabを押す回数の上限。画面の操作の数より十分に大きい値で、閉じ込めを見つける。 */
@@ -176,6 +181,8 @@ const WALKED_PATHS: readonly string[] = [
   "?approval=1",
   "?failure=2",
   "items",
+  "items/new",
+  "items/new-pr-review",
   "items/7",
   "system",
   "jobs",
@@ -245,6 +252,290 @@ test.describe("skip link", () => {
     await page.keyboard.press("Enter");
 
     await expect(page).toHaveURL(/^[^#]*$/);
+  });
+});
+
+/** フォームの先頭に置く、一覧へ戻るリンク。ここから先のTabの順が、フォームの順になる。 */
+const BACK_LINK = "作業項目の一覧";
+
+const field = (page: Page, label: string) =>
+  page.getByLabel(label, { exact: true });
+
+/** フォームの先頭から、Tabを`presses`回押した位置を、順番の検査のために用意する。 */
+async function tabFromBackLink(page: Page, presses: number): Promise<void> {
+  await page.getByRole("link", { name: BACK_LINK }).focus();
+  for (let count = 0; count < presses; count += 1) {
+    await page.keyboard.press("Tab");
+  }
+}
+
+type TabStep = { readonly name: string | RegExp };
+
+/** 先頭のリンクの次から順に、Tabで止まる入力欄とボタンの名前。ラベルが入力欄に結ばれていることも示す。 */
+const NEW_ITEM_ORDER: readonly TabStep[] = [
+  { name: "リポジトリ" },
+  // 進め方のラジオは1つの組で、選んでいる1つにだけ止まる。
+  { name: /^通常/ },
+  { name: "題名" },
+  { name: "目的" },
+  { name: "受入基準(任意)" },
+  { name: "投入する" },
+];
+
+const NEW_ITEM_BUGFIX_ORDER: readonly TabStep[] = [
+  { name: "リポジトリ" },
+  { name: /^不具合の修正/ },
+  { name: "題名" },
+  { name: "目的" },
+  { name: "再現手順" },
+  { name: "期待する動作" },
+  { name: "実際の動作" },
+  { name: "受入基準(任意)" },
+  { name: "承認なしで投入する" },
+];
+
+const NEW_PR_REVIEW_ORDER: readonly TabStep[] = [
+  { name: "リポジトリ" },
+  { name: "PRの番号またはURL" },
+  { name: "レビューを投入する" },
+];
+
+/** 送信が起きたら、少なくとも1つの要求が出るまでに足りる、ネガティブの確認のための待ち。 */
+const NO_SUBMIT_WAIT_MS = 400;
+
+test.describe("new item form by keyboard", () => {
+  test.describe("the order of the stops", () => {
+    for (const [index, step] of NEW_ITEM_ORDER.entries()) {
+      test(`Tab ${index + 1} from the back link stops at ${String(step.name)}`, async ({
+        page,
+      }) => {
+        await openScreen(page, NEW_ITEM_PATH);
+
+        await tabFromBackLink(page, index + 1);
+
+        await expect(page.locator(":focus")).toHaveAccessibleName(step.name);
+      });
+    }
+
+    for (const [index, step] of NEW_ITEM_BUGFIX_ORDER.entries()) {
+      test(`Tab ${index + 1} from the back link stops at ${String(step.name)} for a bug fix`, async ({
+        page,
+      }) => {
+        await openScreen(page, NEW_ITEM_PATH);
+        await page.getByRole("radio", { name: /^不具合の修正/ }).check();
+
+        await tabFromBackLink(page, index + 1);
+
+        await expect(page.locator(":focus")).toHaveAccessibleName(step.name);
+      });
+    }
+
+    test("the choice of a profile is one named group", async ({ page }) => {
+      await openScreen(page, NEW_ITEM_PATH);
+
+      await expect(page.getByRole("group", { name: "進め方" })).toBeVisible();
+    });
+  });
+
+  test.describe("the profile choice", () => {
+    test("moves to the next profile with the arrow key", async ({ page }) => {
+      await openScreen(page, NEW_ITEM_PATH);
+      await page.getByRole("radio", { name: /^通常/ }).focus();
+
+      await page.keyboard.press("ArrowDown");
+
+      await expect(page.getByRole("radio", { name: /^直接/ })).toBeChecked();
+    });
+
+    test("shows the profile on the submit button after the arrow key", async ({
+      page,
+    }) => {
+      await openScreen(page, NEW_ITEM_PATH);
+      await page.getByRole("radio", { name: /^通常/ }).focus();
+
+      await page.keyboard.press("ArrowDown");
+
+      await expect(
+        page.getByRole("button", { name: "承認なしで投入する" }),
+      ).toBeVisible();
+    });
+
+    test("does not submit a valid form on Enter", async ({ page, mock }) => {
+      await openScreen(page, NEW_ITEM_PATH);
+      await fillNewItem(page);
+      await page.getByRole("radio", { name: /^通常/ }).focus();
+      await page.keyboard.press("ArrowDown");
+
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(NO_SUBMIT_WAIT_MS);
+
+      // 送ると書き込みのscriptが呼ばれ、受け口が中断して記録する。
+      expect(mock.problems).toEqual([]);
+    });
+  });
+
+  test.describe("the problems of the form", () => {
+    test.beforeEach(async ({ page }) => {
+      await openScreen(page, NEW_ITEM_PATH);
+    });
+
+    test("marks no field invalid before anything is sent", async ({ page }) => {
+      await expect(field(page, "題名")).not.toHaveAttribute("aria-invalid");
+    });
+
+    test("shows the problems when Enter is pressed in a field", async ({
+      page,
+    }) => {
+      await field(page, "題名").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(page.getByText("題名を入力してください。")).toBeVisible();
+    });
+
+    test("marks the empty title invalid", async ({ page }) => {
+      await field(page, "題名").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "題名")).toHaveAttribute("aria-invalid", "true");
+    });
+
+    test("describes the empty title by its problem", async ({ page }) => {
+      await field(page, "題名").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "題名")).toHaveAccessibleDescription(
+        /題名を入力してください。/,
+      );
+    });
+
+    test("describes the empty purpose by its problem", async ({ page }) => {
+      await field(page, "題名").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "目的")).toHaveAccessibleDescription(
+        /目的を入力してください。/,
+      );
+    });
+
+    test("keeps the hint in the description next to the problem", async ({
+      page,
+    }) => {
+      await field(page, "目的").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "目的")).toHaveAccessibleDescription(
+        /Issueの本文になります。/,
+      );
+    });
+
+    test("describes the title by its length before anything is sent", async ({
+      page,
+    }) => {
+      await expect(field(page, "題名")).toHaveAccessibleDescription(
+        "0 / 256字",
+      );
+    });
+  });
+
+  test("describes the repository by its hint", async ({ page }) => {
+    await openScreen(page, NEW_ITEM_PATH);
+
+    await expect(field(page, "リポジトリ")).toHaveAccessibleDescription(
+      /「オーナー名\/リポジトリ名」の形で入力します。/,
+    );
+  });
+});
+
+test.describe("PR review form by keyboard", () => {
+  test.describe("the order of the stops", () => {
+    for (const [index, step] of NEW_PR_REVIEW_ORDER.entries()) {
+      test(`Tab ${index + 1} from the back link stops at ${String(step.name)}`, async ({
+        page,
+      }) => {
+        await openScreen(page, NEW_PR_REVIEW_PATH);
+
+        await tabFromBackLink(page, index + 1);
+
+        await expect(page.locator(":focus")).toHaveAccessibleName(step.name);
+      });
+    }
+  });
+
+  test.describe("the problems of the form", () => {
+    test.beforeEach(async ({ page }) => {
+      await openScreen(page, NEW_PR_REVIEW_PATH);
+    });
+
+    test("marks no field invalid before anything is sent", async ({ page }) => {
+      await expect(field(page, "PRの番号またはURL")).not.toHaveAttribute(
+        "aria-invalid",
+      );
+    });
+
+    test("shows the problem when Enter is pressed in the empty field", async ({
+      page,
+    }) => {
+      await field(page, "PRの番号またはURL").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(
+        page.getByText("PRの番号またはURLを入力してください。"),
+      ).toBeVisible();
+    });
+
+    test("marks the empty pull request invalid", async ({ page }) => {
+      await field(page, "PRの番号またはURL").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "PRの番号またはURL")).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+    });
+
+    test("describes the empty pull request by its problem", async ({
+      page,
+    }) => {
+      await field(page, "PRの番号またはURL").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(
+        field(page, "PRの番号またはURL"),
+      ).toHaveAccessibleDescription(/PRの番号またはURLを入力してください。/);
+    });
+
+    test("marks an invalid repository invalid", async ({ page }) => {
+      await field(page, "リポジトリ").fill("invalid");
+      await field(page, "PRの番号またはURL").fill("1");
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "リポジトリ")).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+    });
+
+    test("describes the repository by its hint next to the problem", async ({
+      page,
+    }) => {
+      await field(page, "リポジトリ").fill("invalid");
+      await field(page, "PRの番号またはURL").fill("1");
+
+      await page.keyboard.press("Enter");
+
+      await expect(field(page, "リポジトリ")).toHaveAccessibleDescription(
+        /PRのURLを入力するときは、空のままでも構いません。.*入力してください。/,
+      );
+    });
   });
 });
 

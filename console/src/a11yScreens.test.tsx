@@ -2,7 +2,7 @@
 // 見えるのは描画した時点のHTMLだけである。動的な属性、フォーカスの移動、ポータルの中身(Tooltip)は、
 // 実機で確かめる(docs/internals/console.md の「キーボード操作」)。
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   type Query,
   QueryClient,
@@ -17,6 +17,7 @@ import {
   CONFIG_NORMAL,
   HOLDS_SNAPSHOT,
   INTAKE_SNAPSHOT_NORMAL,
+  INTAKE_TARGETS,
   JOB,
   JOB_DETAIL_NORMAL,
   jobList,
@@ -31,6 +32,8 @@ import {
   WORK_ITEM_DETAIL_NORMAL,
 } from "../e2e/fixtures.ts";
 import { ApiFailure } from "./api/errors.ts";
+import { type IntakeSession, intakeSessions } from "./api/intakeSession.ts";
+import { MANUAL_INTAKE_WRITE_KEY, writeLocks } from "./api/writeLocks.ts";
 import { AppMain } from "./app/AppShell.tsx";
 import { CommandPalette } from "./app/CommandPalette.tsx";
 import { ShortcutHelp } from "./app/ShortcutHelp.tsx";
@@ -40,6 +43,8 @@ import { SCREENS, type ScreenId, type ScreenRoute } from "./app/screens.ts";
 import { LoadingStateView } from "./components/LoadingState.tsx";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { type A11yViolation, checkA11y } from "./lib/a11yRules.ts";
+import { describeIntakeRefusal } from "./lib/intakeRefusal.ts";
+import type { IntakeForm } from "./lib/manualIntake.ts";
 
 type Variant = "pending" | "normal" | "empty" | "failed";
 
@@ -50,6 +55,7 @@ const FIXTURES: Readonly<
   summary: { normal: SUMMARY_NORMAL, empty: SUMMARY_EMPTY },
   approval_design_doc: { normal: APPROVAL_DESIGN_DOC_NORMAL, empty: null },
   intake_snapshot: { normal: INTAKE_SNAPSHOT_NORMAL, empty: null },
+  intake_targets: { normal: INTAKE_TARGETS, empty: [] },
   "jobs/detail": { normal: JOB_DETAIL_NORMAL, empty: { found: false } },
   work_item_detail: { normal: WORK_ITEM_DETAIL_NORMAL, empty: null },
   pipeline: { normal: [PIPELINE_ROW], empty: [] },
@@ -190,6 +196,8 @@ const DETAIL_VARIANTS: readonly Variant[] = ["pending", "failed"];
 const DETAILS_WITH_DATA: ReadonlySet<string> = new Set([
   "items/:id",
   "jobs/:id",
+  "items/new",
+  "items/new-pr-review",
 ]);
 
 /** 経路の`:id`に入れる値。ジョブの番号は、形の合うUUIDにする。 */
@@ -302,6 +310,205 @@ describe("a11y: the detail screens reach their data", () => {
   test("the job detail draws the not-found state for an empty result", async () => {
     expect(await renderChild("jobs/:id", "empty")).not.toContain("log line");
   });
+});
+
+describe("a11y: the intake screens reach their candidates", () => {
+  test("the new item screen offers the candidates in the datalist", async () => {
+    expect(await renderChild("items/new", "normal")).toContain(
+      '<option value="o/widgets"',
+    );
+  });
+
+  test("the new item screen offers no candidate for an empty result", async () => {
+    expect(await renderChild("items/new", "empty")).not.toContain("<option ");
+  });
+
+  test("the PR review screen offers the candidates in the datalist", async () => {
+    expect(await renderChild("items/new-pr-review", "normal")).toContain(
+      '<option value="o/widgets"',
+    );
+  });
+
+  test("the PR review screen offers no candidate for an empty result", async () => {
+    expect(await renderChild("items/new-pr-review", "empty")).not.toContain(
+      "<option ",
+    );
+  });
+
+  test("the failed state of the new item screen says the candidates failed", async () => {
+    expect(await renderChild("items/new", "failed")).toContain(
+      "候補を取得できませんでした",
+    );
+  });
+
+  test("the failed state of the PR review screen says the candidates failed", async () => {
+    expect(await renderChild("items/new-pr-review", "failed")).toContain(
+      "候補を取得できませんでした",
+    );
+  });
+});
+
+const INTAKE_FORM: IntakeForm = {
+  repo: "o/r",
+  title: "example title",
+  body: "example purpose",
+  acceptanceCriteria: "",
+  profile: "standard",
+  reproduction: "",
+  expectedBehavior: "",
+  actualBehavior: "",
+};
+
+const UNKNOWN_MESSAGE =
+  "結果が分かりません。一覧を読み直して確かめてください。";
+
+/** タブ全体で持つ状態を、画面を開く前の空の状態へ戻す。ほかの検査へ状態を持ち越さないためである。 */
+function resetIntake(): void {
+  writeLocks.release(MANUAL_INTAKE_WRITE_KEY);
+  intakeSessions.begin(MANUAL_INTAKE_WRITE_KEY, INTAKE_FORM);
+  intakeSessions.record(MANUAL_INTAKE_WRITE_KEY, {
+    kind: "submitted",
+    flowJobId: JOB.id,
+  });
+  const { resultId }: IntakeSession = intakeSessions.get(
+    MANUAL_INTAKE_WRITE_KEY,
+  );
+  intakeSessions.markShown(MANUAL_INTAKE_WRITE_KEY, resultId);
+  intakeSessions.dismiss(MANUAL_INTAKE_WRITE_KEY);
+}
+
+type IntakeScene = {
+  readonly name: string;
+  /** 画面を描く前に、送信の状態を作る。 */
+  readonly arrange: () => void;
+  /** 状態が画面に届いたことを示す文字列。 */
+  readonly shows: string;
+};
+
+const KEY = MANUAL_INTAKE_WRITE_KEY;
+
+/**
+ * 新規投入の、書き込みの結果によって出る状態。ブラウザの検査は書き込みのscriptを呼ばせないので、ここで見る。
+ * 描画の途中の入力と誤りの表示は、入力の操作が要るので、ブラウザの検査が見る。
+ */
+const INTAKE_SCENES: readonly IntakeScene[] = [
+  {
+    name: "a refusal of the script",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      intakeSessions.record(KEY, {
+        kind: "refused",
+        message: describeIntakeRefusal("repo_not_allowed"),
+      });
+    },
+    shows: "投入できませんでした",
+  },
+  {
+    name: "a rejection before the job ran",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      intakeSessions.record(KEY, {
+        kind: "rejected",
+        message: "権限がありません。",
+      });
+    },
+    shows: "権限がありません。",
+  },
+  {
+    name: "a submit that may have been made",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      intakeSessions.record(KEY, {
+        kind: "unknown",
+        message: UNKNOWN_MESSAGE,
+        resendConfirmed: false,
+      });
+    },
+    shows: "確かめたので再送する",
+  },
+  {
+    name: "a submit that may have been made, with the resend confirmed",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      intakeSessions.record(KEY, {
+        kind: "unknown",
+        message: UNKNOWN_MESSAGE,
+        resendConfirmed: true,
+      });
+    },
+    shows: "投入されていないことを確かめた状態です",
+  },
+  {
+    name: "a submit that may have been made, with a profile that skips approval",
+    arrange: () => {
+      intakeSessions.begin(KEY, { ...INTAKE_FORM, profile: "direct" });
+      intakeSessions.record(KEY, {
+        kind: "unknown",
+        message: UNKNOWN_MESSAGE,
+        resendConfirmed: false,
+      });
+    },
+    shows: "送った進め方",
+  },
+  {
+    name: "a submit that was made",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      intakeSessions.record(KEY, { kind: "submitted", flowJobId: JOB.id });
+    },
+    shows: "投入のジョブを開く",
+  },
+  {
+    name: "a submit in progress",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      writeLocks.tryAcquire(KEY);
+    },
+    shows: "送信しています",
+  },
+  {
+    name: "a submit in progress while the list is stale",
+    arrange: () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      intakeSessions.markStale(KEY);
+      writeLocks.tryAcquire(KEY);
+    },
+    shows: "作業項目の一覧を読み直せませんでした",
+  },
+  {
+    name: "a draft of a profile that skips approval",
+    arrange: () => {
+      intakeSessions.draft(KEY, { ...INTAKE_FORM, profile: "direct" });
+    },
+    shows: "PRは人がレビューしてからマージしてください",
+  },
+  {
+    name: "a draft of a bug fix",
+    arrange: () => {
+      intakeSessions.draft(KEY, { ...INTAKE_FORM, profile: "bugfix" });
+    },
+    shows: "再現手順",
+  },
+];
+
+describe("a11y: the new item screen in the states of a submit", () => {
+  afterEach(resetIntake);
+
+  for (const scene of INTAKE_SCENES) {
+    test(`draws ${scene.name}`, async () => {
+      scene.arrange();
+
+      expect(await renderChild("items/new", "normal")).toContain(scene.shows);
+    });
+
+    test(`has no violations with ${scene.name}`, async () => {
+      scene.arrange();
+
+      expect(
+        messages(checkA11y(await renderChild("items/new", "normal"))),
+      ).toEqual([]);
+    });
+  }
 });
 
 describe("a11y: the states reach the screens", () => {
