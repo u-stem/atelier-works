@@ -22,8 +22,9 @@ import { generatedByTrailer } from "./workspace.ts";
 /**
  * 起動前の分類の結果。
  * `fixable`は、Claudeが直すジョブだけが失敗している。
- * `metadata_only`は、hashの再計算で直す失敗だけが落ちている。Claudeを起動しない。
- * `metadata`ジョブだけが失敗した回と、失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示す回である。
+ * `metadata_only`は、`metadata`だけが失敗している。Claudeを起動せず、hashの再計算で直す。
+ * `fixable`のうち、失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示す回も、
+ * 同じ再計算で直せる。ログは高くつくので、`FixClaimReaders.lockIntegrityOnly`が、保留の直前にだけ確かめる。
  * Claudeが直すジョブと`metadata`が同時に失敗しているときも`fixable`である。Claudeが先にそのジョブを直し、
  * `metadata`は、次の回で`metadata_only`になったときに再計算で直す。
  */
@@ -36,31 +37,48 @@ export type HeadFailureClass =
   /** 実行を読むのに要る値(ベースのリポジトリのID)が無く、分類できない。 */
   | "unreadable";
 
+/** 分類の結果と、`metadata`以外で失敗したジョブ。ジョブは、分類が`fixable`のときだけ入る。 */
+export type HeadFailure = {
+  readonly kind: HeadFailureClass;
+  readonly jobs: readonly WorkflowRunJob[];
+};
+
 /**
- * そのheadの実行から、失敗したジョブの種類を分類する。
+ * そのheadの実行から、失敗したジョブの種類を分類する。ログは読まない。
  * CI回の収集(`gatherCiFailureInput`)と同じ関数(`classifyFailedRuns`)で、同じ範囲の実行とジョブを読む。
- * `getLog`を渡すと、`metadata`以外で失敗したジョブが1つのときに限り、そのログを読み、
- * ロックの整合のテストだけの失敗なら`metadata_only`にする。Claudeを使わない回を、予算とマーカーの確認から外すためである。
- * ログを読めないときは分類を変えない。読み取りのrate limitだけは、そのまま投げる。
  */
+export async function readHeadFailure(
+  runs: readonly WorkflowRun[],
+  listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
+): Promise<HeadFailure> {
+  const { verdict } = await classifyFailedRuns(runs, listJobs);
+  if (verdict === null) return { kind: "no_failure", jobs: [] };
+  if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
+    return { kind: "metadata_only", jobs: [] };
+  }
+  return {
+    kind: verdict.kind,
+    jobs: verdict.kind === "fixable" ? verdict.jobs : [],
+  };
+}
+
+/** `readHeadFailure`の分類だけを返す。 */
 export async function classifyHeadFailure(
   runs: readonly WorkflowRun[],
   listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
-  getLog?: CiGatherDeps["getLog"],
 ): Promise<HeadFailureClass> {
-  const { verdict } = await classifyFailedRuns(runs, listJobs);
-  if (verdict === null) return "no_failure";
-  if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
-    return "metadata_only";
-  }
-  if (
-    verdict.kind === "fixable" &&
-    getLog !== undefined &&
-    (await isLockIntegrityOnlyFailure(getLog, verdict.jobs))
-  ) {
-    return "metadata_only";
-  }
-  return verdict.kind;
+  return (await readHeadFailure(runs, listJobs)).kind;
+}
+
+/**
+ * 失敗したジョブが1つで、そのログがロックの整合のテストだけの失敗を示すか。
+ * ログを読めないときは`false`で、読み取りのrate limitだけは、そのまま投げる。
+ */
+export function readLockIntegrityOnly(
+  getLog: CiGatherDeps["getLog"],
+  jobs: readonly WorkflowRunJob[],
+): Promise<boolean> {
+  return isLockIntegrityOnlyFailure(getLog, jobs);
 }
 
 /**
@@ -136,6 +154,11 @@ export type FixClaimReaders = {
   /** factory-fixスキルが、CI回の節のマーカーを持つか。 */
   readonly hasSkillMarker: () => Promise<boolean>;
   readonly classify: (pr: PullRequest) => Promise<HeadFailureClass>;
+  /**
+   * `classify`が`fixable`を返した失敗が、ロックの整合のテストだけの失敗か。ジョブのログを読むので高くつく。
+   * 判定は、スキルのマーカーか予算で保留する直前にだけ呼ぶ。1つの行で最大1回しか読まない。
+   */
+  readonly lockIntegrityOnly: () => Promise<boolean>;
   /**
    * 検査を動かすworkerの環境が前提を満たさない保留の理由。満たすとき、検査コマンドが無いときは`null`。
    * 読み取りに費用がかかるので、安い判定を通った後に、判定がここに届いたときだけ読む。
@@ -240,9 +263,24 @@ export async function decideFixClaim(
     return hold("not_factory_head");
   }
 
-  const failure = await readers.classify(pr);
+  let failure = await readers.classify(pr);
+  // 整合のテストだけの失敗は、`metadata_only`と同じに、Claudeを使わず再計算で直す。
+  // ログは、保留の直前にだけ読み、1つの行で1回に限る。
+  let lockChecked = false;
+  const upgradeToRehash = async (): Promise<boolean> => {
+    if (failure === "metadata_only") return true;
+    if (failure !== "fixable" || lockChecked) return false;
+    lockChecked = true;
+    if (!(await readers.lockIntegrityOnly())) return false;
+    failure = "metadata_only";
+    return true;
+  };
   // `metadata_only`の回はClaudeを使わないので、スキルのマーカーを確かめない。
-  if (failure !== "metadata_only" && !(await readers.hasSkillMarker())) {
+  if (
+    failure !== "metadata_only" &&
+    !(await readers.hasSkillMarker()) &&
+    !(await upgradeToRehash())
+  ) {
     return hold("marker_missing");
   }
   if (failure === "unfixable_job") return hold("unfixable_job");
@@ -251,7 +289,11 @@ export async function decideFixClaim(
   if (failure === "unreadable") return { kind: "skip", why: "unreadable" };
 
   if (input.configMisfit !== null) return hold("config_misfit");
-  if (failure !== "metadata_only" && (await readers.budgetExceeded())) {
+  if (
+    failure !== "metadata_only" &&
+    (await readers.budgetExceeded()) &&
+    !(await upgradeToRehash())
+  ) {
     return hold("budget_exceeded");
   }
   if (await readers.mainCiFailed()) return hold("main_ci_failed");

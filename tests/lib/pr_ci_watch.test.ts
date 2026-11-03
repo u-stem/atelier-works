@@ -3852,11 +3852,20 @@ describe("holding a row", () => {
     await runPrCiWatch(h.deps);
     expect({
       claims: c.claims.length,
-      budgetRead: c.reads.budget ?? 0,
+      logReads: c.reads.job_log ?? 0,
     }).toEqual({
       claims: 1,
-      budgetRead: 0,
+      logReads: 1,
     });
+  });
+
+  test("does not read the job log while the daily budget and the skill marker allow the launch", async () => {
+    const c = claimHarness({
+      jobLog: "(fail) other > fails [1.00ms]\n 1 fail",
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.reads.job_log ?? 0).toBe(0);
   });
 
   test("holds a failure with another failed test as budget_exceeded when the daily budget is used up", async () => {

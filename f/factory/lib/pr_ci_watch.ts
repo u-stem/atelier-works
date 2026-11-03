@@ -57,9 +57,10 @@ import type { Logger } from "./log.ts";
 import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
-  classifyHeadFailure,
   decideFixClaim,
   type FixClaimReaders,
+  readHeadFailure,
+  readLockIntegrityOnly,
   type WorkerEnvHoldReason,
   type WorkerEnvProblem,
 } from "./pr_ci_fix_claim.ts";
@@ -2605,6 +2606,8 @@ function claimReaders(
 ): FixClaimReaders {
   const { deps } = context;
   const repo = repoKey(ref);
+  // `classify`が読んだ、`metadata`以外で失敗したジョブ。`lockIntegrityOnly`がログを読むジョブである。
+  let failedJobs: readonly WorkflowRunJob[] = [];
   return {
     hasActiveFix: () =>
       claim.hasActiveFix(names.owner, names.repo, row.pr_number),
@@ -2616,6 +2619,7 @@ function claimReaders(
     readCommits: () => claim.listCommits(row.owner, row.repo, row.pr_number),
     hasSkillMarker: () => readSkillMarker(context, claim),
     classify: async (pr) => {
+      failedJobs = [];
       if (pr.baseRepoId === null) return "unreadable";
       const found = await deps.listRuns(
         row.owner,
@@ -2624,12 +2628,17 @@ function claimReaders(
         pr.headRef,
         { baseRepoId: pr.baseRepoId, prNumber: row.pr_number },
       );
-      return classifyHeadFailure(
-        found.runs,
-        (runId) => claim.listJobs(row.owner, row.repo, runId, row.head_sha),
-        (jobId) => claim.getJobLog(row.owner, row.repo, jobId),
+      const head = await readHeadFailure(found.runs, (runId) =>
+        claim.listJobs(row.owner, row.repo, runId, row.head_sha),
       );
+      failedJobs = head.jobs;
+      return head.kind;
     },
+    lockIntegrityOnly: () =>
+      readLockIntegrityOnly(
+        (jobId) => claim.getJobLog(row.owner, row.repo, jobId),
+        failedJobs,
+      ),
     workerEnv: () => readWorkerEnv(context, claim),
     budgetExceeded: () => readFactOnce(context, "budget", claim.budgetExceeded),
     mainCiFailed: () =>
