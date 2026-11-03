@@ -114,7 +114,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   scriptが`child_process`と`fs`を使うためである。
 - `as`を使わない。
   外から来た値は型ガードでパースしてから使う。
-- 1つのテストのアサーションは1つにし、Arrange-Act-Assertで書く。
+- 1つのテストで確かめる振る舞いは1つにし、Arrange-Act-Assertで書く。
+  基準は[テストの基準](../../docs/testing-guidelines.md)に従う。
 - 存在を確かめていないパッケージやAPIを使わない。
 - 秘密値を読まず、書かない。
 - pushしない。
