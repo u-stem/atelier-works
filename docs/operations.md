@@ -3795,7 +3795,7 @@ Claudeを、ツール(`Read`、`Glob`、`Grep`)と置き場(3つの置き場と�
 実行の前に、次を確かめる。
 
 - マージした変更を、`self_update`が反映している。反映の直後は、依存の再デプロイが終わるまで古いコードで動くので、数十秒待つ。
-- 稼働中(`investigating`)の調査の作業項目が無い。実行はworktreeの置き場の中身をすべて消す。測定は、稼働中の調査を確かめない。
+- 稼働中(`investigating`)の調査の作業項目が無い。実行はworktreeの置き場の中身をすべて消す。あるときは、測定が置き場を触る前に例外を投げて止まり、結果は残らない。調査が終わってから実行し直す。
 - Factory自身のcloneが、workerの`/workspaces/<owner>/<repo>/main`にある。無いと、結果が`workspace_unavailable`で止まる。
 
 手順は次のとおりである。
@@ -3819,6 +3819,7 @@ Claudeを、ツール(`Read`、`Glob`、`Grep`)と置き場(3つの置き場と�
    ```
 
 4. `passed`を見る。`true`なら、合格が記録されている。`probeJudgeVersion`が今の判定の版で、`failures`が空であることも確かめる。
+   判定の版が上がった後は、古い版の合格を関門が受けない(`isolation_changed`)ので、この手順で測り直す。
 5. `false`なら、`failures`の符号を読む。「不合格のときの扱い」で、再実行するか諮るかを選ぶ。
    `observations.stoppedBy`に値があれば、次の表で次の操作を選ぶ。
 
