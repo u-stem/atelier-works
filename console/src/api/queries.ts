@@ -10,6 +10,7 @@ import {
   type DeploymentEntry,
   isDeploymentHistory,
 } from "./guards/deployments.ts";
+import type { DesignDoc } from "./guards/design.ts";
 import {
   type IntakeSnapshot,
   isIntakeSnapshotRows,
@@ -350,4 +351,21 @@ export function useApprovalDesignDoc(
     staleTime: APPROVAL_DESIGN_DOC_STALE_MS,
     refetchOnMount: "always",
   });
+}
+
+/** 設計書のキャッシュのキー。`draftId`が`null`のときは最新である。 */
+export function designDocQueryKey(
+  workItemId: number,
+  draftId: number | null,
+): readonly ["console", "design_doc", number, number | null] {
+  return ["console", "design_doc", workItemId, draftId];
+}
+
+/** 作業項目の設計書1件を取る。 */
+export async function fetchDesignDoc(
+  _workItemId: number,
+  _draftId: number | null,
+  _options: RunScriptOptions = {},
+): Promise<DesignDoc | null> {
+  return null;
 }

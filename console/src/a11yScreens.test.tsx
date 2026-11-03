@@ -15,6 +15,7 @@ import {
   APPROVAL_DESIGN_DOC_NORMAL,
   CONFIG_EMPTY,
   CONFIG_NORMAL,
+  DESIGN_DOC_NORMAL,
   HOLDS_SNAPSHOT,
   INTAKE_SNAPSHOT_NORMAL,
   INTAKE_TARGETS,
@@ -58,6 +59,7 @@ const FIXTURES: Readonly<
 > = {
   summary: { normal: SUMMARY_NORMAL, empty: SUMMARY_EMPTY },
   approval_design_doc: { normal: APPROVAL_DESIGN_DOC_NORMAL, empty: null },
+  design_doc: { normal: DESIGN_DOC_NORMAL, empty: null },
   intake_snapshot: { normal: INTAKE_SNAPSHOT_NORMAL, empty: null },
   intake_targets: { normal: INTAKE_TARGETS, empty: [] },
   "jobs/detail": { normal: JOB_DETAIL_NORMAL, empty: { found: false } },
@@ -199,6 +201,7 @@ const DETAIL_VARIANTS: readonly Variant[] = ["pending", "failed"];
 /** 固定のデータで通常と空の状態も描く詳細の経路。 */
 const DETAILS_WITH_DATA: ReadonlySet<string> = new Set([
   "items/:id",
+  "items/:id/design",
   "jobs/:id",
   "items/new",
   "items/new-pr-review",
@@ -209,16 +212,32 @@ function idFor(path: string): string {
   return path.startsWith("jobs/") ? JOB.id : "7";
 }
 
+/** 詳細の画面が、`?tab=`で開くタブ。 */
+const CHILD_TAB_ENTRIES: Readonly<Record<string, readonly string[]>> = {
+  "items/:id": ["/items/7?tab=design"],
+};
+
 function childCases(children: readonly ScreenRoute[]): Case[] {
-  return children.map((child) => ({
-    name: child.path,
-    routePath: `/${child.path}`,
-    entry: `/${child.path.replace(":id", idFor(child.path))}`,
-    load: child.lazy,
-    variants: DETAILS_WITH_DATA.has(child.path)
-      ? ALL_VARIANTS
-      : DETAIL_VARIANTS,
-  }));
+  return children.flatMap((child) => [
+    {
+      name: child.path,
+      routePath: `/${child.path}`,
+      entry: `/${child.path.replace(":id", idFor(child.path))}`,
+      load: child.lazy,
+      variants: DETAILS_WITH_DATA.has(child.path)
+        ? ALL_VARIANTS
+        : DETAIL_VARIANTS,
+    },
+    ...(CHILD_TAB_ENTRIES[child.path] ?? []).map(
+      (entry): Case => ({
+        name: entry,
+        routePath: `/${child.path}`,
+        entry,
+        load: child.lazy,
+        variants: ALL_VARIANTS,
+      }),
+    ),
+  ]);
 }
 
 const TAB_ENTRIES: Readonly<Record<string, readonly string[]>> = {
@@ -280,6 +299,21 @@ async function renderCase(
   return renderScreen(Component, screen.path, entry ?? screen.path, variant);
 }
 
+async function renderScreenAt(
+  path: string,
+  entry: string,
+  variant: Variant,
+): Promise<string> {
+  const child = SCREENS.flatMap((screen) => screen.children).find(
+    (candidate) => candidate.path === path,
+  );
+  if (child === undefined) {
+    throw new Error(`no child route: ${path}`);
+  }
+  const { Component } = await child.lazy();
+  return renderScreen(Component, `/${child.path}`, entry, variant);
+}
+
 async function renderChild(path: string, variant: Variant): Promise<string> {
   const child = SCREENS.flatMap((screen) => screen.children).find(
     (candidate) => candidate.path === path,
@@ -313,6 +347,24 @@ describe("a11y: the detail screens reach their data", () => {
 
   test("the job detail draws the not-found state for an empty result", async () => {
     expect(await renderChild("jobs/:id", "empty")).not.toContain("log line");
+  });
+});
+
+describe("a11y: the design screens reach their data", () => {
+  test("the design document draws the title of the fixture", async () => {
+    expect(await renderChild("items/:id/design", "normal")).toContain("設計");
+  });
+
+  test("the design document draws the not-found sentence for an empty result", async () => {
+    expect(await renderChild("items/:id/design", "empty")).toContain(
+      "この設計書は見つかりません",
+    );
+  });
+
+  test("the design tab draws the summary of the fixture", async () => {
+    expect(
+      await renderScreenAt("items/:id", "/items/7?tab=design", "normal"),
+    ).toContain("example design summary");
   });
 });
 

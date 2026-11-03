@@ -3,6 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { isApprovalDesignDocRows } from "../src/api/guards/approvalDesignDoc.ts";
+import { isDesignDocRows } from "../src/api/guards/design.ts";
 import { isHoldsSnapshot } from "../src/api/guards/holds.ts";
 import { isIntakeSnapshotRows } from "../src/api/guards/intakeSnapshot.ts";
 import { isIntakeTargets } from "../src/api/guards/intakeTargets.ts";
@@ -62,6 +63,11 @@ const CASES: readonly Case[] = [
     script: QUERY,
     args: { view: "requirements_doc" },
     guard: isRequirementsDocRows,
+  },
+  {
+    script: QUERY,
+    args: { view: "design_doc" },
+    guard: isDesignDocRows,
   },
   { script: "f/factory/console_holds", args: {}, guard: isHoldsSnapshot },
   { script: JOBS, args: { view: "active" }, guard: isJobList },

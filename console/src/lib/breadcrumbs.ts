@@ -69,6 +69,11 @@ export function itemRequirementsCrumbs(workItemId: number | null): Crumb[] {
   ];
 }
 
+/** 設計書。 */
+export function itemDesignCrumbs(_workItemId: number | null): Crumb[] {
+  return [];
+}
+
 /** 監査レポート。 */
 export function auditReportCrumbs(workItemId: number | null): Crumb[] {
   return [

@@ -7,6 +7,7 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
+import { ItemDesignScreen } from "./items/ItemDesignScreen.tsx";
 import { ItemDetailScreen } from "./items/ItemDetailScreen.tsx";
 import { ItemRequirementsScreen } from "./items/ItemRequirementsScreen.tsx";
 import { BackLink } from "./items/NewItemScreen.tsx";
@@ -48,6 +49,12 @@ describe("the header before the first read", () => {
     ).toContain(PENDING);
   });
 
+  test("the design document keeps a subtitle row", () => {
+    expect(
+      render("/items/:id/design", "/items/12/design", <ItemDesignScreen />),
+    ).toContain(PENDING);
+  });
+
   test("the audit report keeps a subtitle row", () => {
     expect(
       render("/reports/audit/:id", "/reports/audit/50", <AuditReportScreen />),
@@ -82,6 +89,12 @@ describe("the header in the first moment of the loading", () => {
     ).toMatch(EMPTY_PENDING_ROW);
   });
 
+  test("the design document keeps the subtitle row empty", () => {
+    expect(
+      render("/items/:id/design", "/items/12/design", <ItemDesignScreen />),
+    ).toMatch(EMPTY_PENDING_ROW);
+  });
+
   test("the audit report keeps the subtitle row empty", () => {
     expect(
       render("/reports/audit/:id", "/reports/audit/50", <AuditReportScreen />),
@@ -106,6 +119,12 @@ describe("the header before the first read draws what the loaded header draws", 
         "/items/12/requirements",
         <ItemRequirementsScreen />,
       ),
+    ).toContain(CRUMB);
+  });
+
+  test("the design document draws the breadcrumb", () => {
+    expect(
+      render("/items/:id/design", "/items/12/design", <ItemDesignScreen />),
     ).toContain(CRUMB);
   });
 

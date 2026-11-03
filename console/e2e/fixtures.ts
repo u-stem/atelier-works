@@ -2,6 +2,7 @@
 // jsdomを使わない静的な描画の検査(`src/a11yScreens.test.tsx`)と、ブラウザの検査(`e2e/*.a11y.ts`)が共有する。
 // ブラウザの検査では、`mockApi.ts`が同じ値をAPIの応答として返す。
 
+import type { DesignDoc } from "../src/api/guards/design.ts";
 import type { IntakeTarget } from "../src/api/guards/intakeTargets.ts";
 import type { PipelineRow } from "../src/api/guards/pipeline.ts";
 import type {
@@ -77,6 +78,7 @@ export const REQUIREMENTS_ROW: RequirementsIndexRow = {
   status: "approved",
   latest_attempt: 1,
   updated_at: STAMP,
+  has_design: true,
 };
 
 export const SUMMARY_NORMAL: ConsoleSummary = {
@@ -314,6 +316,26 @@ export const WORK_ITEM_DETAIL_NORMAL: WorkItemDetail = {
       created_at: STAMP,
     },
   ],
+  design_attempts: [
+    {
+      id: 2,
+      requirement_attempt: 1,
+      design_attempt: 1,
+      summary: "example design summary",
+      created_at: STAMP,
+      approval_request_id: 3,
+      approval_status: "pending",
+    },
+    {
+      id: 1,
+      requirement_attempt: 1,
+      design_attempt: 1,
+      summary: "example earlier design summary",
+      created_at: STAMP,
+      approval_request_id: null,
+      approval_status: null,
+    },
+  ],
 };
 
 export const APPROVAL_DESIGN_DOC_NORMAL = {
@@ -368,6 +390,24 @@ export const REQUIREMENTS_DOC_NORMAL: RequirementsDoc = {
   rejected_diagrams: [],
   open_questions: ["example question"],
   doc_dir_source: "default",
+};
+
+export const DESIGN_DOC_NORMAL: DesignDoc = {
+  id: 2,
+  work_item_id: 7,
+  requirement_draft_id: 1,
+  owner: "o",
+  repo: "r",
+  requirement_attempt: 1,
+  design_attempt: 1,
+  summary: "example design summary",
+  markdown: "# 設計\n\n## 方針\n\n本文です。\n\n- 項目1\n- 項目2\n",
+  diagrams: [],
+  rejected_diagrams: [],
+  open_questions: ["example design question"],
+  created_at: STAMP,
+  approval_request_id: 3,
+  approval_status: "pending",
 };
 
 /** 手動投入で選べるリポジトリ。先頭が、新規投入のリポジトリ欄の既定になる。 */

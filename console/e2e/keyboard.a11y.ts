@@ -184,6 +184,8 @@ const WALKED_PATHS: readonly string[] = [
   "items/new",
   "items/new-pr-review",
   "items/7",
+  "items/7?tab=design",
+  "items/7/design",
   "system",
   "jobs",
   "jobs?tab=history",

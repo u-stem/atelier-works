@@ -2,9 +2,11 @@
 // 画面は生のコードや英語のフィールド名を出さず、この結果だけを描く。
 // Issueの起票者や実行ログに由来する文字は、見えない文字を置き換えてから文字として出す。
 
+import type { DesignDoc } from "../api/guards/design.ts";
 import type {
   WorkItemApproval,
   WorkItemAttempt,
+  WorkItemDesignAttempt,
   WorkItemDiffStat,
   WorkItemFixRound,
   WorkItemOverview,
@@ -28,7 +30,7 @@ import {
   pipelineStatusVariant,
   prLink,
 } from "./pipelineView.ts";
-import { requirementsPath } from "./requirementsView.ts";
+import { type PreparedDoc, requirementsPath } from "./requirementsView.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
 function plain(text: string): string {
@@ -48,6 +50,7 @@ function plainOrNull(text: string | null): string | null {
 export type ItemDetailTabId =
   | "overview"
   | "requirements"
+  | "design"
   | "rounds"
   | "approvals";
 
@@ -610,5 +613,74 @@ export function describeFailureRecord(
     },
     occurredAt: failure.occurred_at,
     jobs: jobLinks(failure.job_id, failure.root_job_id, FAILURE_JOB_LABELS),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 設計書
+// ---------------------------------------------------------------------------
+
+export function designName(_requirement: number, _design: number): string {
+  return "";
+}
+
+export function designPath(
+  _workItemId: number,
+  _draftId: number | null,
+): string {
+  return "";
+}
+
+export type DraftParam =
+  | { readonly kind: "latest" }
+  | { readonly kind: "draft"; readonly id: number }
+  | { readonly kind: "invalid" };
+
+export function parseDraftParam(_raw: string | null): DraftParam {
+  return { kind: "latest" };
+}
+
+export function sortDesignAttempts(
+  _attempts: readonly WorkItemDesignAttempt[],
+): WorkItemDesignAttempt[] {
+  return [];
+}
+
+export type DesignAttemptView = {
+  readonly key: number;
+  readonly name: string;
+  readonly summary: string;
+  readonly createdAt: string;
+  readonly approvalLabel: string | null;
+  readonly approvalVariant: PipelineStatusVariant;
+  readonly path: string;
+  readonly linkLabel: string;
+};
+
+export function describeDesignAttempt(
+  _workItemId: number,
+  _attempt: WorkItemDesignAttempt,
+): DesignAttemptView {
+  return {
+    key: 0,
+    name: "",
+    summary: "",
+    createdAt: "",
+    approvalLabel: null,
+    approvalVariant: "muted",
+    path: "",
+    linkLabel: "",
+  };
+}
+
+export function prepareDesignDoc(_doc: DesignDoc): PreparedDoc {
+  return {
+    title: "",
+    titleLine: null,
+    summary: "",
+    markdown: "",
+    headings: [],
+    openQuestions: [],
+    replaced: false,
   };
 }
