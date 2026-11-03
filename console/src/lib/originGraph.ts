@@ -237,6 +237,8 @@ export function initialExpanded(model: OriginGraphModel): ReadonlySet<string> {
   return only !== undefined && rest.length === 0 ? new Set([only]) : new Set();
 }
 
+/** 足の注記を1行に収める文字数(em)。 */
+export const NOTE_EM = 16;
 export const ORIGIN_WIDTH = 180;
 export const ORIGIN_HEIGHT = 128;
 export const NODE_WIDTH = 200;
@@ -290,7 +292,9 @@ export type OriginNodeLayout = Box & {
 export type OriginEdgeLayout = {
   readonly edge: OriginEdge;
   readonly points: readonly Point[];
-  /** 語「承認」を置く位置。承認の線だけが持つ。 */
+  /** 線に添える語。承認の線と、PRを介した線だけが持つ。 */
+  readonly word: string | null;
+  /** `word`を置く位置。`word`が`null`なら`null`。 */
   readonly label: Point | null;
 };
 
@@ -412,6 +416,7 @@ export function layoutOriginGraph(
         {
           edge,
           points: [start, end],
+          word: null,
           label: word
             ? { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 4 }
             : null,
@@ -431,6 +436,7 @@ export function layoutOriginGraph(
     return [
       {
         edge,
+        word: null,
         points: [
           start,
           { x: out, y: start.y },

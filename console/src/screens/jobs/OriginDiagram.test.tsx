@@ -46,6 +46,14 @@ const FIT = 1200;
 const SCROLL = 900;
 const LIST = 500;
 
+/** PRを介した線を持たない図の凡例。 */
+const LEGEND =
+  "実線は起動の流れです。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+
+/** PRを介した線を持つ図の凡例。 */
+const LEGEND_WITH_PR =
+  "実線は起動の流れ、破線はPRを介した関係(別の定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+
 describe("OriginDiagramView: the diagram", () => {
   test("is a labeled group named after the schedule", () => {
     expect(render("poll_issues")).toContain(
@@ -54,11 +62,41 @@ describe("OriginDiagramView: the diagram", () => {
   });
 
   test("draws a line for each forward edge", () => {
-    expect(countOf(render("poll_issues"), "<polyline")).toBe(4);
+    expect(countOf(render("poll_issues"), "<polyline")).toBe(6);
   });
 
-  test("puts the word on each approval line", () => {
+  test("keeps the approval word for each approval line", () => {
     expect(countOf(render("poll_issues"), ">承認<")).toBe(3);
+  });
+
+  test("draws a dashed line with the word for a PR relation", () => {
+    expect(
+      render("self_update").match(
+        /<polyline[^>]*stroke-dasharray="[^"]+"[^>]*>/g,
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("puts the word on each PR line", () => {
+    expect(countOf(render("poll_issues"), ">PR経由<")).toBe(2);
+  });
+
+  test("draws the line of a launch and an approval without a dash", () => {
+    expect(
+      render("poll_issues").match(/<polyline(?![^>]*stroke-dasharray)[^>]*>/g),
+    ).toHaveLength(4);
+  });
+
+  test("puts no PR word on a diagram without a PR relation", () => {
+    expect(render("audit_kickoff")).not.toContain(">PR経由<");
+  });
+
+  test("puts no PR word on the diagram that only notes the return", () => {
+    expect(render("watch_pr_ci")).not.toContain(">PR経由<");
+  });
+
+  test("notes the return to pr_review under pr_fix", () => {
+    expect(plain(render("watch_pr_ci"))).toContain("CI修正後の戻り: pr_review");
   });
 
   test("puts no word on the line that launches a flow", () => {
@@ -69,8 +107,8 @@ describe("OriginDiagramView: the diagram", () => {
     expect(plain(render("self_update"))).toContain("差し戻し: design");
   });
 
-  test("draws only the lines of the origin for self_update", () => {
-    expect(countOf(render("self_update"), "<polyline")).toBe(2);
+  test("draws the two lines of the origin and the two PR lines for self_update", () => {
+    expect(countOf(render("self_update"), "<polyline")).toBe(4);
   });
 
   test("writes the rework that remakes the same flow", () => {
@@ -90,6 +128,24 @@ describe("OriginDiagramView: the diagram", () => {
   test("explains the lines in one legend", () => {
     expect(countOf(plain(render("poll_issues")), "実線")).toBe(1);
   });
+
+  test("uses the legend with the dashed line for a diagram that has a PR line", () => {
+    expect(plain(render("poll_issues"))).toContain(LEGEND_WITH_PR);
+  });
+
+  test.each(["audit_kickoff", "watch_pr_ci"])(
+    "keeps the legend without the dashed line for %s",
+    (name) => {
+      expect(plain(render(name))).toContain(LEGEND);
+    },
+  );
+
+  test.each(["audit_kickoff", "watch_pr_ci"])(
+    "does not mention the dashed line in the diagram of %s",
+    (name) => {
+      expect(plain(render(name))).not.toContain("破線");
+    },
+  );
 
   test("writes the schedule in the origin box", () => {
     expect(plain(render("poll_prs"))).toContain("スケジュール");
@@ -305,8 +361,14 @@ describe("OriginDiagramView: the run of the origin box", () => {
 
 describe("OriginDiagramView: the presentation by width", () => {
   test("draws the diagram as it is when it fits", () => {
-    expect(render("poll_issues", { width: FIT })).not.toContain(
+    expect(render("self_update", { width: FIT })).not.toContain(
       'role="region"',
+    );
+  });
+
+  test("puts the diagram of poll_issues in a scrollable region even in the widest body", () => {
+    expect(render("poll_issues", { width: FIT })).toContain(
+      "横にスクロールできます",
     );
   });
 
@@ -331,7 +393,13 @@ describe("OriginDiagramView: the presentation by width", () => {
   });
 
   test("groups the list by column", () => {
-    expect(plain(render("poll_issues", { width: LIST }))).toContain("3段目");
+    expect(plain(render("poll_issues", { width: LIST }))).toContain("5段目");
+  });
+
+  test("writes the PR relation as an exit in the list", () => {
+    expect(plain(render("poll_issues", { width: LIST }))).toContain(
+      "PR経由: pr_review",
+    );
   });
 
   test("writes the exits of each flow in the list", () => {

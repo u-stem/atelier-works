@@ -5,6 +5,7 @@ import type {
   ScheduleViewData,
 } from "../api/jobsQueries.ts";
 import type { Box, Point } from "./flowDiagram.ts";
+import { wrapLines } from "./flowGraphFit.ts";
 import {
   FLOWS_DATA,
   type FlowDefinition,
@@ -16,6 +17,7 @@ import {
   initialExpanded,
   layoutOriginGraph,
   NODE_WIDTH,
+  NOTE_EM,
   type OriginGraphModel,
   type OriginLayout,
   originDiagramLabel,
@@ -90,6 +92,13 @@ function edgesOf(model: OriginGraphModel) {
   );
 }
 
+/** pr_fixの足の注記。どの起点の図でも同じ3行になる。 */
+const PR_FIX_NOTES = [
+  "差し戻し: design",
+  "差し戻し: pipeline",
+  "CI修正後の戻り: pr_review",
+];
+
 function notesOf(model: OriginGraphModel, name: string): string[] {
   const node = model.nodes.find((candidate) => candidate.flow.name === name);
   return node === undefined ? [] : footNotes(node).map((note) => note.text);
@@ -100,24 +109,28 @@ describe("originGraphModel with the real data", () => {
     expect(originGraphModel(realData(), "missing")).toBeNull();
   });
 
-  test("puts poll_issues in three flow columns after the origin", () => {
+  test("puts poll_issues in five flow columns after the origin", () => {
     expect(columnsOf(realModel("poll_issues"))).toEqual({
       pipeline: 1,
       design: 2,
       implement: 3,
+      pr_review: 4,
+      pr_fix: 5,
     });
   });
 
-  test("counts the origin among the columns", () => {
-    expect(realModel("poll_issues").columns).toBe(4);
+  test("has six columns counting the origin for poll_issues", () => {
+    expect(realModel("poll_issues").columns).toBe(6);
   });
 
-  test("draws the approval that skips a column of poll_issues as a line", () => {
+  test("draws the approvals and the PR relations of poll_issues as lines", () => {
     expect(edgesOf(realModel("poll_issues"))).toEqual([
       "origin>pipeline launch 1",
       "pipeline>design approve 1",
       "pipeline>implement approve 2",
       "design>implement approve 1",
+      "implement>pr_review pr 1",
+      "pr_review>pr_fix pr 1",
     ]);
   });
 
@@ -125,26 +138,65 @@ describe("originGraphModel with the real data", () => {
     expect(realModel("poll_issues").origin.name).toBe("poll_issues");
   });
 
-  test("puts the two flows of self_update side by side", () => {
+  test("chains implement, pr_review and pr_fix for self_update", () => {
     expect(columnsOf(realModel("self_update"))).toEqual({
       implement: 1,
-      pr_fix: 1,
+      pr_review: 2,
+      pr_fix: 3,
     });
   });
 
-  test("launches both flows of self_update from the origin", () => {
+  test("draws the launches and the PR relations of self_update as lines", () => {
     expect(edgesOf(realModel("self_update"))).toEqual([
       "origin>implement launch 1",
-      "origin>pr_fix launch 1",
+      "origin>pr_fix launch 3",
+      "implement>pr_review pr 1",
+      "pr_review>pr_fix pr 1",
     ]);
   });
 
-  test("puts the two flows of poll_prs side by side", () => {
+  test("puts pr_fix after pr_review for poll_prs", () => {
     expect(columnsOf(realModel("poll_prs"))).toEqual({
-      pr_fix: 1,
       pr_review: 1,
+      pr_fix: 2,
     });
   });
+
+  test("draws the launches and the PR relation of poll_prs as lines", () => {
+    expect(edgesOf(realModel("poll_prs"))).toEqual([
+      "origin>pr_fix launch 2",
+      "origin>pr_review launch 1",
+      "pr_review>pr_fix pr 1",
+    ]);
+  });
+
+  test("adds pr_fix after pr_review for auto_retry_pr_review", () => {
+    expect(edgesOf(realModel("auto_retry_pr_review"))).toEqual([
+      "origin>pr_review launch 1",
+      "pr_review>pr_fix pr 1",
+    ]);
+  });
+
+  test("adds pr_fix after dependabot for poll_dependabot", () => {
+    expect(edgesOf(realModel("poll_dependabot"))).toEqual([
+      "origin>dependabot launch 1",
+      "dependabot>pr_fix pr 1",
+    ]);
+  });
+
+  test.each(["watch_pr_ci", "watch_pr_conflicts"])(
+    "launches only pr_fix for %s and draws no pr_review box",
+    (name) => {
+      expect(edgesOf(realModel(name))).toEqual(["origin>pr_fix launch 1"]);
+    },
+  );
+
+  test.each(["watch_pr_ci", "watch_pr_conflicts"])(
+    "notes the return to pr_review for %s",
+    (name) => {
+      expect(notesOf(realModel(name), "pr_fix")).toEqual(PR_FIX_NOTES);
+    },
+  );
 
   test("launches a single flow of audit_kickoff", () => {
     expect(edgesOf(realModel("audit_kickoff"))).toEqual([
@@ -167,11 +219,22 @@ describe("originGraphModel with the real data", () => {
     ]);
   });
 
-  test("notes the return of pr_fix to design and to pipeline", () => {
-    expect(notesOf(realModel("self_update"), "pr_fix")).toEqual([
-      "差し戻し: design",
-      "差し戻し: pipeline",
-    ]);
+  test.each([
+    "poll_issues",
+    "poll_prs",
+    "self_update",
+    "auto_retry_pr_review",
+    "poll_dependabot",
+  ])("notes every way back of pr_fix in the diagram of %s", (name) => {
+    expect(notesOf(realModel(name), "pr_fix")).toEqual(PR_FIX_NOTES);
+  });
+
+  test("gives pr_review no note when the diagram draws its exit as a line", () => {
+    expect(notesOf(realModel("self_update"), "pr_review")).toEqual([]);
+  });
+
+  test("gives dependabot no note", () => {
+    expect(notesOf(realModel("poll_dependabot"), "dependabot")).toEqual([]);
   });
 
   test("gives one note per way back to the same flow", () => {
@@ -200,19 +263,67 @@ describe("originGraphModel with the real data", () => {
     expect(realModel("audit_kickoff").conditional).toBe(false);
   });
 
-  test("keeps every schedule within four columns", () => {
+  test.each(["auto_retry_pr_review", "poll_dependabot"])(
+    "marks the diagram of %s, which gains the returns of pr_fix",
+    (name) => {
+      expect(realModel(name).conditional).toBe(true);
+    },
+  );
+
+  test.each(["pr", "pr_return"] as const)(
+    "does not count a PR relation of the way %s as a condition",
+    (via) => {
+      const model = syntheticModel(
+        [flow("a", [exit("b", via)]), flow("b")],
+        ["a"],
+      );
+
+      expect(model.conditional).toBe(false);
+    },
+  );
+
+  test("keeps every schedule within six columns counting the origin", () => {
     const wide = realData().schedules.filter(
-      (schedule) => (realModel(schedule.name)?.columns ?? 0) > 4,
+      (schedule) => (realModel(schedule.name)?.columns ?? 0) > 6,
     );
 
     expect(wide).toEqual([]);
+  });
+
+  test("has at most one line that skips a column into the same flow", () => {
+    const crowded = realData().schedules.flatMap((schedule) => {
+      const into = new Map<string, number>();
+      for (const edge of realModel(schedule.name).edges) {
+        if (edge.span > 1) into.set(edge.to, (into.get(edge.to) ?? 0) + 1);
+      }
+      return [...into]
+        .filter(([, count]) => count > 1)
+        .map(([to]) => `${schedule.name}>${to}`);
+    });
+
+    expect(crowded).toEqual([]);
+  });
+
+  test("fits every foot note of every schedule in one line without the ellipsis", () => {
+    const cut = realData().schedules.flatMap((schedule) =>
+      realModel(schedule.name).nodes.flatMap((node) =>
+        footNotes(node)
+          .map((note) => note.text)
+          .filter((text) => wrapLines(text, NOTE_EM, 1).join("") !== text),
+      ),
+    );
+
+    expect(cut).toEqual([]);
   });
 
   test("never writes a drawn exit as a note", () => {
     const wrong = realData().schedules.flatMap((schedule) =>
       realModel(schedule.name).nodes.flatMap((node) =>
         footNotes(node).filter(
-          (note) => note.via === "launch" || note.via === "approve",
+          (note) =>
+            note.via === "launch" ||
+            note.via === "approve" ||
+            note.via === "pr",
         ),
       ),
     );
@@ -220,12 +331,17 @@ describe("originGraphModel with the real data", () => {
     expect(wrong.filter((note) => !note.self)).toEqual([]);
   });
 
-  test("draws every launch and approval of a flow on the diagram as a line", () => {
+  test("draws every launch, approval and PR relation of a flow on the diagram as a line", () => {
     const missing = realData().schedules.flatMap((schedule) => {
       const model = realModel(schedule.name);
       return model.nodes.flatMap((node) =>
         node.flow.exits
-          .filter((item) => item.via === "launch" || item.via === "approve")
+          .filter(
+            (item) =>
+              item.via === "launch" ||
+              item.via === "approve" ||
+              item.via === "pr",
+          )
           .filter((item) => item.flow !== node.flow.name)
           .filter(
             (item) =>
@@ -477,15 +593,8 @@ function sharedSegments(layout: OriginLayout): string[] {
   return found;
 }
 
-const SCHEDULE_NAMES = [
-  "poll_issues",
-  "poll_prs",
-  "self_update",
-  "audit_kickoff",
-  "poll_dependabot",
-  "watch_pr_ci",
-  "cleanup_db",
-];
+/** データの全schedule。起動の図を持たないものも含める。 */
+const SCHEDULE_NAMES = realData().schedules.map((schedule) => schedule.name);
 
 describe("layoutOriginGraph", () => {
   test.each(SCHEDULE_NAMES)(
@@ -553,8 +662,16 @@ describe("layoutOriginGraph", () => {
   });
 
   test("stacks the nodes of a column from top to bottom without a gap that overlaps", () => {
-    const model = realModel("poll_prs");
-    const [first, second] = layoutOriginGraph(model, new Set()).nodes;
+    const model = syntheticModel(
+      [
+        flow("a", [exit("b", "launch"), exit("c", "launch")]),
+        flow("b"),
+        flow("c"),
+      ],
+      ["a"],
+    );
+    const layout = layoutOriginGraph(model, new Set(["b"]));
+    const [, first, second] = layout.nodes;
 
     expect((second?.y ?? 0) >= (first?.y ?? 0) + (first?.height ?? 0)).toBe(
       true,
@@ -737,12 +854,29 @@ describe("layoutOriginGraph", () => {
     expect(start?.y).toBe((node?.y ?? 0) + (node?.headerHeight ?? 0) / 2);
   });
 
-  test("puts the word on the approval lines and on no other", () => {
+  test("puts the word on the approval lines and the PR lines only", () => {
+    const layout = layoutOriginGraph(realModel("poll_issues"), new Set());
+
+    expect(layout.edges.map((item) => `${item.edge.via} ${item.word}`)).toEqual(
+      [
+        "launch null",
+        "approve 承認",
+        "approve 承認",
+        "approve 承認",
+        "pr PR経由",
+        "pr PR経由",
+      ],
+    );
+  });
+
+  test("places a label for every line that has a word", () => {
     const layout = layoutOriginGraph(realModel("poll_issues"), new Set());
 
     expect(
-      layout.edges.map((item) => `${item.edge.via} ${item.label !== null}`),
-    ).toEqual(["launch false", "approve true", "approve true", "approve true"]);
+      layout.edges.map(
+        (item) => (item.word !== null) === (item.label !== null),
+      ),
+    ).toEqual([true, true, true, true, true, true]);
   });
 
   test("places the columns from left to right in order", () => {
@@ -889,6 +1023,72 @@ describe("layoutOriginGraph arrowheads", () => {
       });
 
       expect(outside).toEqual([]);
+    },
+  );
+});
+
+/** 語の矩形。語は11pxで、中央に寄せて、基線の上に描く。幅は「PR経由」が収まる約40pxで見積もる。 */
+function wordBoxOf(label: Point): Box {
+  return { x: label.x - 20, y: label.y - 12, width: 40, height: 16 };
+}
+
+/** 語を持つ線と、その語の矩形。 */
+function wordBoxes(layout: OriginLayout) {
+  return layout.edges.flatMap((item) =>
+    item.label === null ? [] : [{ item, box: wordBoxOf(item.label) }],
+  );
+}
+
+describe("layoutOriginGraph words", () => {
+  test.each(SCHEDULE_NAMES)(
+    "keeps the words of the lines of %s clear of the boxes",
+    (name) => {
+      const model = realModel(name);
+      const clashes = expansions(model).flatMap((expanded) => {
+        const layout = layoutOriginGraph(model, expanded);
+        const boxes: Box[] = [layout.origin, ...layout.nodes];
+        return wordBoxes(layout).flatMap(({ item, box }) =>
+          boxes
+            .filter((other) => overlaps(box, other))
+            .map(
+              () =>
+                `${[...expanded].join(",") || "closed"}: ${item.edge.from}->${item.edge.to}`,
+            ),
+        );
+      });
+
+      expect(clashes).toEqual([]);
+    },
+  );
+
+  test.each(SCHEDULE_NAMES)(
+    "keeps the words of the lines of %s clear of the other lines and words",
+    (name) => {
+      const model = realModel(name);
+      const clashes = expansions(model).flatMap((expanded) => {
+        const layout = layoutOriginGraph(model, expanded);
+        const words = wordBoxes(layout);
+        return words.flatMap(({ item, box }) =>
+          layout.edges.flatMap((other) => {
+            const onLine =
+              other !== item &&
+              segmentsOf(other.points).some((segment) =>
+                passesThrough(segment, box),
+              );
+            const onWord = words.some(
+              (candidate) =>
+                candidate.item !== item && overlaps(box, candidate.box),
+            );
+            return onLine || onWord
+              ? [
+                  `${[...expanded].join(",") || "closed"}: ${item.edge.from}->${item.edge.to}`,
+                ]
+              : [];
+          }),
+        );
+      });
+
+      expect(clashes).toEqual([]);
     },
   );
 });

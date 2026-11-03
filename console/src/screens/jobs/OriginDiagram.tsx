@@ -17,6 +17,7 @@ import { flowDiagramPath } from "../../lib/flowsData.ts";
 import {
   footNotes,
   layoutOriginGraph,
+  NOTE_EM,
   type OriginEdgeLayout,
   type OriginFlowNode,
   type OriginGraphModel,
@@ -42,7 +43,6 @@ const PAD_X = 10;
 const NAME_EM = 13;
 const DESCRIPTION_EM = 16;
 const STEP_TEXT_EM = 14;
-const NOTE_EM = 16;
 const ORIGIN_TEXT_EM = 14;
 
 const LINK_CLASS =

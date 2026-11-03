@@ -142,7 +142,11 @@ export type ListEntries = {
   readonly launchFlows: readonly string[];
   /** 差し戻しで戻してくる他のflow。 */
   readonly reworkFlows: readonly string[];
-  /** 上の2つとflow自身からの入口を除いた入口。 */
+  /** PRを介して続く元のflow。 */
+  readonly prFlows: readonly string[];
+  /** CIの修正の後に戻ってくる元のflow。 */
+  readonly prReturnFlows: readonly string[];
+  /** 上の4つとflow自身からの入口を除いた入口。 */
   readonly entries: readonly FlowEntry[];
 };
 
@@ -166,7 +170,7 @@ export function groupEntriesForList(flow: FlowDefinition): ListEntries {
       entries.push(entry);
     }
   }
-  return { launchFlows, reworkFlows, entries };
+  return { launchFlows, reworkFlows, prFlows: [], prReturnFlows: [], entries };
 }
 
 /** flow自身からの入口か。却下の作り直しがあたり、同じ戻りを出口が示す。 */

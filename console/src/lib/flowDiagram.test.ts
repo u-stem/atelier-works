@@ -8,6 +8,7 @@ import {
   type DiagramLayout,
   drawnEntries,
   entryText,
+  exitLinkLabel,
   exitOriginText,
   exitText,
   exitWord,
@@ -189,6 +190,30 @@ describe("hasConditionalEdges", () => {
     },
   );
 
+  test.each(["pr", "pr_return"] as const)(
+    "does not count a PR relation of the way %s on an exit",
+    (via) => {
+      expect(
+        hasConditionalEdges({
+          ...FLOW,
+          exits: [{ flow: "pr_review", step: "a", via }],
+        }),
+      ).toBe(false);
+    },
+  );
+
+  test.each(["pr", "pr_return"] as const)(
+    "does not count a PR relation of the way %s on an entry",
+    (via) => {
+      expect(
+        hasConditionalEdges({
+          ...FLOW,
+          entries: [{ kind: "flow", flow: "pr_review", via }],
+        }),
+      ).toBe(false);
+    },
+  );
+
   test("writes the note", () => {
     expect(CONDITIONAL_EDGES_NOTE).toBe(
       "設定や試行の上限により、起動しない場合があります。",
@@ -229,6 +254,43 @@ describe("groupEntriesForList", () => {
       flow: "pipeline",
       via: "approve",
     });
+  });
+});
+
+describe("groupEntriesForList: the PR relations", () => {
+  test("gathers the flows that lead into the flow through a pull request", () => {
+    expect(groupEntriesForList(realFlow("pr_fix")).prFlows).toEqual([
+      "dependabot",
+      "pr_review",
+    ]);
+  });
+
+  test("gathers the flows that return to the flow after a CI fix", () => {
+    expect(groupEntriesForList(realFlow("pr_review")).prReturnFlows).toEqual([
+      "pr_fix",
+    ]);
+  });
+
+  test("keeps the PR entry out of the flows whose step starts the flow", () => {
+    expect(groupEntriesForList(realFlow("pr_review")).launchFlows).toEqual([
+      "pr_review_intake",
+    ]);
+  });
+
+  test("keeps the PR return out of the flows that send work back", () => {
+    expect(groupEntriesForList(realFlow("pr_review")).reworkFlows).toEqual([]);
+  });
+
+  test("keeps the PR entries out of the other entries", () => {
+    expect(
+      groupEntriesForList(realFlow("pr_fix")).entries.filter(
+        (entry) => entry.kind === "flow",
+      ),
+    ).toEqual([]);
+  });
+
+  test("leaves no PR flow for a flow without a PR relation", () => {
+    expect(groupEntriesForList(realFlow("pipeline")).prFlows).toEqual([]);
   });
 });
 
@@ -275,6 +337,42 @@ describe("isSelfExit", () => {
         via: "approve",
       }),
     ).toBe(false);
+  });
+});
+
+describe("entryText", () => {
+  test("words a PR relation entry as from the flow", () => {
+    expect(entryText({ kind: "flow", flow: "pr_review", via: "pr" })).toBe(
+      "pr_reviewからPR経由",
+    );
+  });
+
+  test("words a PR return entry as a return from the flow", () => {
+    expect(entryText({ kind: "flow", flow: "pr_fix", via: "pr_return" })).toBe(
+      "pr_fixからPR経由の戻り",
+    );
+  });
+});
+
+describe("exitText", () => {
+  test("words a PR relation exit", () => {
+    expect(exitText({ flow: "pr_fix", step: "x", via: "pr" })).toBe(
+      "PR経由: pr_fix",
+    );
+  });
+
+  test("words a PR return exit with the CI fix", () => {
+    expect(exitText({ flow: "pr_review", step: "x", via: "pr_return" })).toBe(
+      "CI修正後の戻り: pr_review",
+    );
+  });
+});
+
+describe("exitLinkLabel", () => {
+  test("reads the exit of a PR return with its words", () => {
+    expect(
+      exitLinkLabel({ flow: "pr_review", step: "x", via: "pr_return" }),
+    ).toBe("CI修正後の戻り: pr_reviewの図を開く");
   });
 });
 
@@ -328,6 +426,8 @@ describe("the words", () => {
     ["approve", "承認の後"],
     ["reject", "却下の後"],
     ["rework", "差し戻し"],
+    ["pr", "PR経由"],
+    ["pr_return", "CI修正後の戻り"],
   ] as const)("names the way %s of an exit", (via, word) => {
     expect(exitWord(via)).toBe(word);
   });
@@ -529,7 +629,7 @@ describe("layoutFlowDiagram", () => {
   });
 
   test("draws no exit row for a flow without exits", () => {
-    expect(boxesOf(layoutOf("pr_review"), "exit")).toEqual([]);
+    expect(boxesOf(layoutOf("audit"), "exit")).toEqual([]);
   });
 
   test("draws the same boxes whether or not a state overlays", () => {

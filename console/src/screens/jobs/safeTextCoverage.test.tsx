@@ -226,6 +226,49 @@ const ORIGIN_SNAPSHOT: SchedulesSnapshotView = {
 
 const EVERY_FLOW_OPEN: ReadonlySet<string> = new Set(["pipeline", "design"]);
 
+/**
+ * PRを介した関係の材料。名前は安全な形にし、そのほかの文字列にすべて`BAD`を入れる。
+ * `pr_review`はPR経由で`pr_fix`へ続き、`pr_fix`はCIの修正の後に`pr_review`へ戻る。
+ */
+const PR_REVIEW_FLOW: FlowDefinition = {
+  ...FLOW,
+  name: "pr_review",
+  entries: [
+    { kind: "flow", flow: "implement", via: "pr" },
+    { kind: "flow", flow: "pr_fix", via: "pr_return" },
+  ],
+  exits: [{ flow: "pr_fix", step: BAD, via: "pr" }],
+  unwiredEntries: [],
+};
+
+const PR_FIX_FLOW: FlowDefinition = {
+  ...FLOW,
+  name: "pr_fix",
+  entries: [{ kind: "flow", flow: "pr_review", via: "pr" }],
+  exits: [{ flow: "pr_review", step: BAD, via: "pr_return" }],
+  unwiredEntries: [],
+};
+
+const PR_FLOWS: FlowsData = {
+  flows: [PR_REVIEW_FLOW, PR_FIX_FLOW],
+  schedules: [{ name: "pr_schedule", summary: BAD, flows: ["pr_review"] }],
+};
+
+/** PRを介した関係を持つ起動の図のすべての文字列に`BAD`を入れ、すべてのflowを開いて描く。 */
+function prOriginDiagram(width: number): ReactElement {
+  const model = originGraphModel(PR_FLOWS, "pr_schedule");
+  if (model === null) throw new Error("no schedule pr_schedule");
+  return (
+    <OriginDiagramView
+      model={model}
+      run={{ kind: "ready", lastRun: "failure", marks: [BAD] }}
+      width={width}
+      expanded={new Set(["pr_review", "pr_fix"])}
+      onToggle={() => {}}
+    />
+  );
+}
+
 function originModelOf(name: string) {
   const model = originGraphModel(ORIGIN_FLOWS, name);
   if (model === null) throw new Error(`no schedule ${name}`);
@@ -482,6 +525,47 @@ const CASES: readonly (readonly [string, () => ReactElement])[] = [
     "the origin diagram in the list with every flow open",
     () => originDiagram(500),
   ],
+  ["the origin diagram with a PR relation", () => prOriginDiagram(1200)],
+  [
+    "the origin diagram with a PR relation in the list",
+    () => prOriginDiagram(500),
+  ],
+  [
+    "the flow diagram with a PR relation",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(PR_REVIEW_FLOW, FLOW_STEPS)}
+        presentation="fit"
+      />
+    ),
+  ],
+  [
+    "the flow diagram with a PR relation in the list",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(PR_REVIEW_FLOW, FLOW_STEPS)}
+        presentation="list"
+      />
+    ),
+  ],
+  [
+    "the flow diagram with a PR return",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(PR_FIX_FLOW, FLOW_STEPS)}
+        presentation="fit"
+      />
+    ),
+  ],
+  [
+    "the flow diagram with a PR return in the list",
+    () => (
+      <FlowDiagramFrame
+        model={flowDiagramModel(PR_FIX_FLOW, FLOW_STEPS)}
+        presentation="list"
+      />
+    ),
+  ],
   [
     "the origin screen of a schedule that launches one flow",
     () => originScreen("single_schedule", ORIGIN_FLOWS),
@@ -610,6 +694,78 @@ describe("the flow diagram in the coverage", () => {
 
   test("draws the link of a step that has a job, so the label of the link is checked", () => {
     expect(draw("the flow diagram")).toContain(`href="/jobs/${DETAIL_ID}"`);
+  });
+});
+
+describe("the PR relation in the coverage", () => {
+  const draw = (name: string): string => {
+    const found = CASES.find(([label]) => label === name);
+    return found === undefined ? "" : render(found[1]());
+  };
+  const plain = (html: string): string => html.replace(/<[^>]+>/g, "");
+
+  test("draws the line of a PR relation dashed in the origin diagram", () => {
+    expect(draw("the origin diagram with a PR relation")).toMatch(
+      /<polyline[^>]*stroke-dasharray="[^"]+"/,
+    );
+  });
+
+  test("draws the word of the PR line in the origin diagram", () => {
+    expect(draw("the origin diagram with a PR relation")).toContain(">PR経由<");
+  });
+
+  test("draws the foot note of the return in the origin diagram", () => {
+    expect(plain(draw("the origin diagram with a PR relation"))).toContain(
+      "CI修正後の戻り: pr_review",
+    );
+  });
+
+  test("draws the legend of the dashed line in the origin diagram", () => {
+    expect(plain(draw("the origin diagram with a PR relation"))).toContain(
+      "破線はPRを介した関係",
+    );
+  });
+
+  test("draws the exit of the PR relation in the list of the origin diagram", () => {
+    expect(
+      plain(draw("the origin diagram with a PR relation in the list")),
+    ).toContain("PR経由: pr_fix");
+  });
+
+  test("draws the entry from a PR relation in the flow diagram", () => {
+    expect(plain(draw("the flow diagram with a PR relation"))).toContain(
+      "implementからPR経由",
+    );
+  });
+
+  test("draws the entry from a PR return in the flow diagram", () => {
+    expect(plain(draw("the flow diagram with a PR relation"))).toContain(
+      "pr_fixからPR経由の戻り",
+    );
+  });
+
+  test("draws the exit of a PR relation in the flow diagram", () => {
+    expect(plain(draw("the flow diagram with a PR relation"))).toContain(
+      "PR経由: pr_fix",
+    );
+  });
+
+  test("draws the exit of a PR return in the flow diagram", () => {
+    expect(plain(draw("the flow diagram with a PR return"))).toContain(
+      "CI修正後の戻り: pr_review",
+    );
+  });
+
+  test("draws the groups of the PR entries in the list of the flow diagram", () => {
+    expect(
+      plain(draw("the flow diagram with a PR relation in the list")),
+    ).toContain("CI修正後に戻る元のflow: pr_fix");
+  });
+
+  test("draws the exit of a PR return in the list of the flow diagram", () => {
+    expect(
+      plain(draw("the flow diagram with a PR return in the list")),
+    ).toContain("CI修正後の戻り: pr_review");
   });
 });
 
