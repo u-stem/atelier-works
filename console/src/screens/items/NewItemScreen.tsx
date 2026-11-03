@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import { useIntakeTargets } from "../../api/intakeQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
+import { InvalidStatus } from "../../components/InvalidStatus.tsx";
 import { JobLink } from "../../components/JobLink.tsx";
 import {
   Alert,
@@ -38,6 +39,7 @@ import {
   titleLength,
 } from "../../lib/manualIntake.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
+import { decideSend } from "../../lib/sendDecision.ts";
 import { useFocusFirstInvalid } from "../../lib/useFocusFirstInvalid.ts";
 import { useManualIntake } from "./useManualIntake.ts";
 
@@ -58,17 +60,18 @@ export function BackLink() {
  * 進め方の選択。ネイティブのラジオを`fieldset`でまとめ、矢印キーで選べるようにする。
  * ラジオでのEnterは暗黙の送信になるので、止める。矢印キーで切り替えた直後に、確認なしで送らないためである。
  * 題名などの欄のEnterは従来どおり送信し、そのときも送信ボタンの文言が進め方を示す。
+ * 送信中は、`disabled`にするとフォーカスが外れるので、`aria-disabled`にして選べなくする。
  */
 function ProfileChoice({
   name,
   value,
-  disabled,
+  locked,
   describedBy,
   onChange,
 }: {
   name: string;
   value: IntakeProfile;
-  disabled: boolean;
+  locked: boolean;
   describedBy: string | undefined;
   onChange: (profile: IntakeProfile) => void;
 }) {
@@ -88,15 +91,17 @@ function ProfileChoice({
             name={name}
             value={option.value}
             checked={value === option.value}
-            disabled={disabled}
-            className={cn(CHECKBOX_CLASS, "mt-1")}
+            aria-disabled={locked ? true : undefined}
+            className={cn(CHECKBOX_CLASS, "mt-1", locked && "opacity-60")}
             onKeyDown={(event) => {
               if (blocksImplicitSubmit(event.key)) {
                 event.preventDefault();
               }
             }}
             onChange={() => {
-              onChange(option.value);
+              if (!locked) {
+                onChange(option.value);
+              }
             }}
           />
           <span className="flex flex-col">
@@ -127,6 +132,8 @@ function problemOf(
  * 投入できなかったときと、投入されたか分からないときは、入力を残す。
  * 投入されたか分からないときは、確かめたと明示するまで再送のボタンを止める。
  * 入力の誤りで送信が止まったときは、最初の誤りの入力欄へフォーカスを移す。
+ * 送信中と、再送を確かめるまでは、ボタンを`disabled`にせず`aria-disabled`にし、入力欄は読み取り専用にする。
+ * フォーカスが外れず、結果の通知を押した位置のまま受けるためである。止める判定は`send`が持つ。
  */
 export function NewItemScreen() {
   const ids = useId();
@@ -185,14 +192,16 @@ export function NewItemScreen() {
     targets.isError && !(targetsError !== null && isBannerError(targetsError));
 
   const send = () => {
+    const decision = decideSend({ valid: built.ok, blocked: intake.blocked });
+    if (decision === "blocked") {
+      return;
+    }
     setChecked(true);
     if (!built.ok) {
       focusInvalid.request();
       return;
     }
-    if (!intake.blocked) {
-      intake.submit(form, built.input);
-    }
+    intake.submit(form, built.input);
   };
 
   return (
@@ -221,7 +230,7 @@ export function NewItemScreen() {
                   {...control}
                   list={`${ids}-targets`}
                   value={repoText}
-                  disabled={intake.locked}
+                  readOnly={intake.locked}
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(event) => {
@@ -247,7 +256,7 @@ export function NewItemScreen() {
           <ProfileChoice
             name={`${ids}-profile`}
             value={profile}
-            disabled={intake.locked}
+            locked={intake.locked}
             describedBy={notice === null ? undefined : `${ids}-profile-notice`}
             onChange={(next) => {
               setField({ profile: next });
@@ -270,7 +279,7 @@ export function NewItemScreen() {
               <Input
                 {...control}
                 value={title}
-                disabled={intake.locked}
+                readOnly={intake.locked}
                 onChange={(event) => {
                   setField({ title: event.target.value });
                 }}
@@ -287,7 +296,7 @@ export function NewItemScreen() {
                 {...control}
                 rows={6}
                 value={body}
-                disabled={intake.locked}
+                readOnly={intake.locked}
                 onChange={(event) => {
                   setField({ body: event.target.value });
                 }}
@@ -306,7 +315,7 @@ export function NewItemScreen() {
                     {...control}
                     rows={4}
                     value={reproduction}
-                    disabled={intake.locked}
+                    readOnly={intake.locked}
                     onChange={(event) => {
                       setField({ reproduction: event.target.value });
                     }}
@@ -323,7 +332,7 @@ export function NewItemScreen() {
                     {...control}
                     rows={3}
                     value={expectedBehavior}
-                    disabled={intake.locked}
+                    readOnly={intake.locked}
                     onChange={(event) => {
                       setField({ expectedBehavior: event.target.value });
                     }}
@@ -340,7 +349,7 @@ export function NewItemScreen() {
                     {...control}
                     rows={3}
                     value={actualBehavior}
-                    disabled={intake.locked}
+                    readOnly={intake.locked}
                     onChange={(event) => {
                       setField({ actualBehavior: event.target.value });
                     }}
@@ -355,7 +364,7 @@ export function NewItemScreen() {
                 {...control}
                 rows={4}
                 value={acceptance}
-                disabled={intake.locked}
+                readOnly={intake.locked}
                 onChange={(event) => {
                   setField({ acceptanceCriteria: event.target.value });
                 }}
@@ -363,7 +372,10 @@ export function NewItemScreen() {
             )}
           </Field>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={intake.blocked}>
+            <Button
+              type="submit"
+              aria-disabled={intake.blocked ? true : undefined}
+            >
               {intake.locked ? "送信しています" : submitLabel(profile)}
             </Button>
             {session.attempt.kind === "unknown" &&
@@ -371,8 +383,12 @@ export function NewItemScreen() {
               <Button
                 type="button"
                 variant="outline"
-                disabled={intake.locked}
-                onClick={intake.confirmResend}
+                aria-disabled={intake.locked ? true : undefined}
+                onClick={() => {
+                  if (!intake.locked) {
+                    intake.confirmResend();
+                  }
+                }}
               >
                 確かめたので再送する
               </Button>
@@ -381,8 +397,12 @@ export function NewItemScreen() {
               <Button
                 type="button"
                 variant="outline"
-                disabled={intake.locked}
-                onClick={intake.discard}
+                aria-disabled={intake.locked ? true : undefined}
+                onClick={() => {
+                  if (!intake.locked) {
+                    intake.discard();
+                  }
+                }}
               >
                 投入されていたので入力を破棄する
               </Button>
@@ -397,6 +417,7 @@ export function NewItemScreen() {
               </AlertDescription>
             </Alert>
           ) : null}
+          <InvalidStatus {...focusInvalid.status} />
           {view === null ? null : (
             <Alert
               variant={

@@ -34,8 +34,12 @@ export type InvalidCounter = InvalidSource & {
  * フォーカスが移るときは、移った欄の説明が誤りを伝えるので、この文は要らない。
  */
 export function invalidAnnouncement(
-  _source: InvalidCounter,
-  _active: unknown,
+  source: InvalidCounter,
+  active: unknown,
 ): string {
-  return "";
+  const first = source.querySelector(INVALID_CONTROL);
+  if (first === null || first !== active) {
+    return "";
+  }
+  return `入力に誤りがあります(${source.querySelectorAll(INVALID_CONTROL).length}件)`;
 }

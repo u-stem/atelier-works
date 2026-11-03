@@ -5,6 +5,7 @@ import { useWriteMutation } from "../../api/mutations.ts";
 import { prReviewConfig } from "../../api/prReviewConfig.ts";
 import type { PrReviewSubmitInput } from "../../api/writes.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
+import { InvalidStatus } from "../../components/InvalidStatus.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -25,6 +26,7 @@ import {
   submitControl,
 } from "../../lib/prReviewOutcome.ts";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
+import { decideSend } from "../../lib/sendDecision.ts";
 import { useFocusFirstInvalid } from "../../lib/useFocusFirstInvalid.ts";
 import { BackLink } from "./NewItemScreen.tsx";
 import { PrReviewAttemptNotice, PrReviewResult } from "./PrReviewResult.tsx";
@@ -48,6 +50,8 @@ function problemFor(
  * 結果と入力はこの画面の中だけに持つ。画面を離れると失うが、同じPRのレビューは重複して始まらない。
  * 投入できても、レビューが始まったかは、投入したフローのジョブの結果で分かる。結果を待つ間は、次の投入を止める。
  * 入力の誤りで送信が止まったときは、最初の誤りの入力欄へフォーカスを移す。
+ * 送信中と結果を待つ間は、ボタンを`disabled`にせず`aria-disabled`にする。フォーカスが外れず、
+ * 結果の通知を押した位置のまま受けるためである。止める判定は`send`が持つ。
  */
 export function NewPrReviewScreen() {
   const ids = useId();
@@ -85,12 +89,13 @@ export function NewPrReviewScreen() {
     targets.isError && !(targetsError !== null && isBannerError(targetsError));
 
   const send = () => {
+    const decision = decideSend({ valid: built.ok, blocked: control.disabled });
+    if (decision === "blocked") {
+      return;
+    }
     setChecked(true);
     if (!built.ok) {
       focusInvalid.request();
-      return;
-    }
-    if (control.disabled) {
       return;
     }
     // 始められたときだけ、前の結果を消す。
@@ -163,10 +168,14 @@ export function NewPrReviewScreen() {
             )}
           </Field>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={control.disabled}>
+            <Button
+              type="submit"
+              aria-disabled={control.disabled ? true : undefined}
+            >
               {control.label}
             </Button>
           </div>
+          <InvalidStatus {...focusInvalid.status} />
           {attempt !== null && attempt.kind === "submitted" ? (
             <PrReviewResult
               key={attempt.flowJobId}
