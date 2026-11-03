@@ -60,6 +60,9 @@ export type OriginGraphModel = {
 
 const FACTORY_PREFIX = "f/factory/";
 
+/** 一時停止中の印の文言。期限は、箱の幅に収まらないので書かない。スケジュールのタブが出す。 */
+const PAUSED_MARK = "一時停止中";
+
 /** scheduleがエラーを持つときの印の文言。エラーの文は、スケジュールのタブが出す。 */
 const ERROR_MARK = "エラーあり";
 
@@ -492,7 +495,7 @@ export function originRunView(
     lastRun: last === undefined ? "none" : last.success ? "success" : "failure",
     marks: [
       ...(row.enabled ? [] : [row.enabledLabel]),
-      ...(row.pausedLabel === null ? [] : [row.pausedLabel]),
+      ...(row.pausedLabel === null ? [] : [PAUSED_MARK]),
       ...(row.error === null ? [] : [ERROR_MARK]),
     ],
   };
