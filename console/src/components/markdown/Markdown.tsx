@@ -413,8 +413,11 @@ type MarkdownProps = {
   readonly diagrams: readonly RequirementsDiagram[];
   /** 安全の検査を通らず、表示しない図の名前。 */
   readonly rejectedDiagrams: readonly string[];
-  /** 本文が属する作業項目のリポジトリ。このリポジトリのIssueとPRのURLだけをリンクにする。 */
-  readonly repo: RepoRef;
+  /**
+   * 本文が属する作業項目のリポジトリ。このリポジトリのIssueとPRのURLだけをリンクにする。
+   * `null`のときは、リポジトリが分からないので、URLをリンクにせず文字で出す。
+   */
+  readonly repo: RepoRef | null;
 };
 
 /**
