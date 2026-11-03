@@ -142,3 +142,21 @@ describe("isRequirementsDocRows", () => {
     expect(isRequirementsDocRows([rest])).toBe(false);
   });
 });
+
+describe("isRequirementsIndexRows has_design", () => {
+  test("accepts a row without has_design", () => {
+    expect(isRequirementsIndexRows([INDEX_ROW])).toBe(true);
+  });
+
+  test("accepts a row with has_design", () => {
+    expect(isRequirementsIndexRows([{ ...INDEX_ROW, has_design: true }])).toBe(
+      true,
+    );
+  });
+
+  test("rejects a row whose has_design is a string", () => {
+    expect(isRequirementsIndexRows([{ ...INDEX_ROW, has_design: "yes" }])).toBe(
+      false,
+    );
+  });
+});
