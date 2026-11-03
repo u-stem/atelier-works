@@ -94,3 +94,13 @@ export function jobDetailCrumbs(back: string | null): Crumb[] {
 export function flowDiagramCrumbs(name: string, back: string | null): Crumb[] {
   return [{ label: "ジョブ", to: back ?? JOBS_PATH }, { label: `${name}の図` }];
 }
+
+/** 起動の図。`back`は一覧へ戻る経路(タブと絞り込みを含む)で、無ければ`/jobs`にする。 */
+export function originDiagramCrumbs(
+  name: string,
+  back: string | null,
+): Crumb[] {
+  void name;
+  void back;
+  return [];
+}

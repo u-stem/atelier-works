@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { ApiFailure } from "../api/errors.ts";
+import type {
+  SchedulesSnapshotView,
+  ScheduleViewData,
+} from "../api/jobsQueries.ts";
 import type { Box, Point } from "./flowDiagram.ts";
 import {
   FLOWS_DATA,
@@ -12,7 +17,9 @@ import {
   layoutOriginGraph,
   NODE_WIDTH,
   type OriginGraphModel,
+  originDiagramLabel,
   originGraphModel,
+  originRunView,
 } from "./originGraph.ts";
 
 function realData(): FlowsData {
@@ -701,5 +708,176 @@ describe("layoutOriginGraph", () => {
     const layout = layoutOriginGraph(realModel("cleanup_db"), new Set());
 
     expect(layout.nodes).toEqual([]);
+  });
+});
+
+describe("originDiagramLabel", () => {
+  test("names the diagram after the schedule", () => {
+    expect(originDiagramLabel("poll_prs")).toBe("poll_prsの起動の図");
+  });
+});
+
+const PATH = "f/factory/poll_prs";
+const NOW = Date.parse("2026-10-26T05:10:00.000Z");
+
+function row(overrides: Partial<ScheduleViewData> = {}): ScheduleViewData {
+  return {
+    path: PATH,
+    script_path: PATH,
+    is_flow: false,
+    schedule: "0 * * * *",
+    timezone: "Asia/Tokyo",
+    enabled: true,
+    summary: null,
+    paused_until: null,
+    edited_at: null,
+    error: null,
+    next_run_at: null,
+    recent_runs: [{ job_id: "job-1", success: true, duration_ms: 1000 }],
+    definition: "matches",
+    differences: [],
+    ...overrides,
+  };
+}
+
+function snapshot(
+  schedules: readonly ScheduleViewData[],
+  missing: readonly string[] = [],
+): SchedulesSnapshotView {
+  return { schedules, missing_in_workspace: missing, truncated: false };
+}
+
+function runOf(
+  data: SchedulesSnapshotView | undefined,
+  options: { isError?: boolean; error?: unknown } = {},
+) {
+  return originRunView(
+    { data, isError: options.isError ?? false, error: options.error ?? null },
+    "poll_prs",
+    NOW,
+  );
+}
+
+describe("originRunView", () => {
+  test("says loading while there is no value and no failure", () => {
+    expect(runOf(undefined)).toEqual({ kind: "loading" });
+  });
+
+  test("says the login is needed when the request was unauthorized", () => {
+    expect(
+      runOf(undefined, {
+        isError: true,
+        error: new ApiFailure({ kind: "unauthorized" }),
+      }),
+    ).toEqual({ kind: "login" });
+  });
+
+  test("says it failed when the request failed for another reason", () => {
+    expect(
+      runOf(undefined, {
+        isError: true,
+        error: new ApiFailure({ kind: "network" }),
+      }),
+    ).toEqual({ kind: "failed" });
+  });
+
+  test("says it failed for a failure that is not classified", () => {
+    expect(
+      runOf(undefined, { isError: true, error: new Error("boom") }),
+    ).toEqual({ kind: "failed" });
+  });
+
+  test("says the schedule is missing when the workspace lacks the one the repository defines", () => {
+    expect(runOf(snapshot([], [PATH]))).toEqual({ kind: "missing" });
+  });
+
+  test("says the schedule is missing when the snapshot has no row for it", () => {
+    expect(runOf(snapshot([row({ path: "f/factory/other" })]))).toEqual({
+      kind: "missing",
+    });
+  });
+
+  test("does not take a row whose path only starts with the name", () => {
+    expect(runOf(snapshot([row({ path: `${PATH}_x` })]))).toEqual({
+      kind: "missing",
+    });
+  });
+
+  test("reports a successful last run with no mark", () => {
+    expect(runOf(snapshot([row()]))).toEqual({
+      kind: "ready",
+      lastRun: "success",
+      marks: [],
+    });
+  });
+
+  test("reports a failed last run", () => {
+    expect(
+      runOf(
+        snapshot([
+          row({
+            recent_runs: [{ job_id: "j", success: false, duration_ms: 1 }],
+          }),
+        ]),
+      ),
+    ).toMatchObject({ lastRun: "failure" });
+  });
+
+  test("takes the first of the recent runs as the last one", () => {
+    expect(
+      runOf(
+        snapshot([
+          row({
+            recent_runs: [
+              { job_id: "a", success: false, duration_ms: 1 },
+              { job_id: "b", success: true, duration_ms: 1 },
+            ],
+          }),
+        ]),
+      ),
+    ).toMatchObject({ lastRun: "failure" });
+  });
+
+  test("reports no record when the schedule has not run", () => {
+    expect(runOf(snapshot([row({ recent_runs: [] })]))).toMatchObject({
+      lastRun: "none",
+    });
+  });
+
+  test("marks a disabled schedule, so a success is not read as normal", () => {
+    expect(runOf(snapshot([row({ enabled: false })]))).toMatchObject({
+      marks: ["無効"],
+    });
+  });
+
+  test("marks a schedule that is paused", () => {
+    const view = runOf(
+      snapshot([row({ paused_until: "2026-10-27T00:00:00.000Z" })]),
+    );
+
+    expect(view.kind === "ready" ? view.marks[0] : "").toStartWith(
+      "一時停止中",
+    );
+  });
+
+  test("does not mark a pause that has ended", () => {
+    expect(
+      runOf(snapshot([row({ paused_until: "2026-10-20T00:00:00.000Z" })])),
+    ).toMatchObject({ marks: [] });
+  });
+
+  test("marks a schedule with an error", () => {
+    expect(runOf(snapshot([row({ error: "bad cron" })]))).toMatchObject({
+      marks: ["エラーあり"],
+    });
+  });
+
+  test("keeps the value when the refetch failed", () => {
+    expect(
+      runOf(snapshot([row()]), {
+        isError: true,
+        error: new ApiFailure({ kind: "network" }),
+      }).kind,
+    ).toBe("ready");
   });
 });

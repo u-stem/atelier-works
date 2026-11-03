@@ -1,6 +1,7 @@
 // 起動の図の組み立て。定期ジョブから前進の辺(起動と承認)でたどれるflowを段に並べ、箱と線の座標を決める純関数。
 // 語は`screens/jobs/OriginDiagram.tsx`が表示する。
 
+import type { SchedulesSnapshotView } from "../api/jobsQueries.ts";
 import { type Box, exitText, MARGIN, type Point } from "./flowDiagram.ts";
 import {
   type ExitVia,
@@ -431,4 +432,43 @@ export function layoutOriginGraph(
       (lanes === 0 ? bottom : bottom + LANE_FIRST + (lanes - 1) * LANE_GAP) +
       MARGIN,
   };
+}
+
+/** 起点の箱の「実行」の欄が決める表示。 */
+export type OriginRunView =
+  | { readonly kind: "loading" }
+  | { readonly kind: "login" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "missing" }
+  | {
+      readonly kind: "ready";
+      /** 直近の実行の成否。実行の記録が無ければ`none`。 */
+      readonly lastRun: "success" | "failure" | "none";
+      /** 止まっているか、エラーのときの印の文言。 */
+      readonly marks: readonly string[];
+    };
+
+/** 起動の図の読み上げの名前。 */
+export function originDiagramLabel(scheduleName: string): string {
+  void scheduleName;
+  return "";
+}
+
+/**
+ * scheduleの取得の状態から、起点の箱の実行の欄を決める。
+ * 値があれば、取り直しに失敗していても値から決める。値が無いときは、取得中、ログインが必要、取得できなかったのどれかにする。
+ */
+export function originRunView(
+  query: {
+    readonly data: SchedulesSnapshotView | undefined;
+    readonly isError: boolean;
+    readonly error: unknown;
+  },
+  scheduleName: string,
+  nowMs: number,
+): OriginRunView {
+  void query;
+  void scheduleName;
+  void nowMs;
+  return { kind: "loading" };
 }
