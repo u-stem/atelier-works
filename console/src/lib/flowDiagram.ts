@@ -74,6 +74,8 @@ const FLOW_ENTRY_WORDS: Readonly<Record<ExitVia, string>> = {
   approve: "承認",
   reject: "却下",
   rework: "差し戻し",
+  pr: "",
+  pr_return: "",
 };
 
 /** 入口に書く文。 */
@@ -97,6 +99,8 @@ const EXIT_WORDS: Readonly<Record<ExitVia, string>> = {
   approve: "承認の後",
   reject: "却下の後",
   rework: "差し戻し",
+  pr: "",
+  pr_return: "",
 };
 
 /** 出口に書く、経路の語。 */

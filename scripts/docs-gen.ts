@@ -37,6 +37,7 @@ import {
   HUMAN_OPERATIONS,
   LAUNCH_EDGES,
   type LaunchEdge,
+  PR_RELATION_EDGES,
   REWORK_LAUNCH_EDGES,
   SCRIPT_CALLERS,
   UNWIRED_LAUNCH_EDGES,
@@ -338,6 +339,7 @@ export function renderFlowsFile(): string {
       unwiredEdges: UNWIRED_LAUNCH_EDGES,
       reworkEdges: REWORK_LAUNCH_EDGES,
       scriptCallers: SCRIPT_CALLERS,
+      prRelationEdges: PR_RELATION_EDGES,
     }),
   );
 }

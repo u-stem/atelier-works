@@ -143,6 +143,7 @@ const FLOWS_INPUT: FlowsInput = {
     { from: "steps/pr_fix_finish", to: "pipeline" },
   ],
   scriptCallers: {},
+  prRelationEdges: [],
   unwiredEdges: [
     { from: "steps/requirements_apply", to: "design", kind: "script" },
   ],
@@ -449,6 +450,134 @@ describe("buildFlowsData: exits", () => {
     expect(() => buildFlowsData(input)).toThrow(
       "launch edge targets an unknown flow: missing",
     );
+  });
+});
+
+/** PRを介した関係を持つ入力。pr_reviewが追加のflowで、pr_fixが戻りの行き先になる。 */
+const PR_INPUT: FlowsInput = {
+  ...FLOWS_INPUT,
+  flows: [
+    ...FLOWS_INPUT.flows,
+    {
+      name: "pr_review",
+      summary: "[SF-3-1] PRの自動レビュー",
+      description: "",
+      steps: [stepInput("post", "steps/pr_review_post")],
+    },
+  ],
+  prRelationEdges: [
+    { from: "steps/pr_review_post", to: "pr_fix", direction: "forward" },
+    { from: "steps/pr_fix_finish", to: "pr_review", direction: "return" },
+  ],
+};
+
+describe("buildFlowsData: PR relation edges", () => {
+  test("resolves a PR relation edge to the step and the entry", () => {
+    const review = flowOf(PR_INPUT, "pr_review");
+    const fix = flowOf(PR_INPUT, "pr_fix");
+
+    expect({
+      exit: review?.exits,
+      entry: fix?.entries.filter(
+        (entry) => entry.kind === "flow" && entry.via === "pr",
+      ),
+    }).toEqual({
+      exit: [{ flow: "pr_fix", step: "post", via: "pr" }],
+      entry: [{ kind: "flow", flow: "pr_review", via: "pr" }],
+    });
+  });
+
+  test("marks a return edge as an exit and an entry of the way pr_return", () => {
+    const fix = flowOf(PR_INPUT, "pr_fix");
+    const review = flowOf(PR_INPUT, "pr_review");
+
+    expect({
+      exit: fix?.exits.filter((exit) => exit.via === "pr_return"),
+      entry: review?.entries.filter(
+        (entry) => entry.kind === "flow" && entry.via === "pr_return",
+      ),
+    }).toEqual({
+      exit: [{ flow: "pr_review", step: "pr_fix_finish", via: "pr_return" }],
+      entry: [{ kind: "flow", flow: "pr_fix", via: "pr_return" }],
+    });
+  });
+
+  test("puts the PR exit after the other exits of the same step", () => {
+    expect(flowOf(PR_INPUT, "pr_fix")?.exits.map((exit) => exit.via)).toEqual([
+      "rework",
+      "pr_return",
+    ]);
+  });
+
+  test("keeps the entries in the order of the way", () => {
+    expect(
+      flowOf(PR_INPUT, "pr_fix")?.entries.map((entry) =>
+        entry.kind === "flow" ? entry.via : entry.kind,
+      ),
+    ).toEqual(["schedule", "pr"]);
+  });
+
+  test("leaves the exits of a flow without a PR relation as they are", () => {
+    expect(flowOf(PR_INPUT, "manual_intake")?.exits).toEqual(
+      flowOf(FLOWS_INPUT, "manual_intake")?.exits,
+    );
+  });
+
+  test("does not add a PR relation to the flows of a schedule", () => {
+    expect(buildFlowsData(PR_INPUT).schedules).toEqual(
+      buildFlowsData(FLOWS_INPUT).schedules,
+    );
+  });
+
+  test("names a flow that two steps lead into once for each way", () => {
+    const input: FlowsInput = {
+      ...PR_INPUT,
+      prRelationEdges: [
+        ...PR_INPUT.prRelationEdges,
+        { from: "steps/pr_review_post", to: "pr_fix", direction: "forward" },
+      ],
+    };
+
+    expect(
+      flowOf(input, "pr_fix")?.entries.filter(
+        (entry) => entry.kind === "flow" && entry.via === "pr",
+      ),
+    ).toEqual([{ kind: "flow", flow: "pr_review", via: "pr" }]);
+  });
+
+  test("throws when a PR relation edge targets an unknown flow", () => {
+    const input: FlowsInput = {
+      ...PR_INPUT,
+      prRelationEdges: [
+        { from: "steps/pr_review_post", to: "missing", direction: "forward" },
+      ],
+    };
+
+    expect(() => buildFlowsData(input)).toThrow(
+      "PR relation edge targets an unknown flow: missing",
+    );
+  });
+
+  test("throws when a PR relation edge starts at a script no flow runs", () => {
+    const input: FlowsInput = {
+      ...PR_INPUT,
+      prRelationEdges: [
+        { from: "steps/nowhere", to: "pr_fix", direction: "forward" },
+      ],
+    };
+
+    expect(() => buildFlowsData(input)).toThrow(
+      "PR relation edge starts at a script no flow runs: steps/nowhere",
+    );
+  });
+
+  test("does not depend on the order of the PR relation edges", () => {
+    const reversed: FlowsInput = {
+      ...PR_INPUT,
+      prRelationEdges: [...PR_INPUT.prRelationEdges].reverse(),
+    };
+
+    expect(buildFlowsData(reversed)).toEqual(buildFlowsData(PR_INPUT));
   });
 });
 

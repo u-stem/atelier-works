@@ -225,6 +225,37 @@ describe("parseFlowsData: the rework and the entries that are not drawn", () => 
     ).not.toBeNull();
   });
 
+  test.each(["pr", "pr_return"])("accepts an exit with the way %s", (via) => {
+    expect(
+      parseFlowsData(
+        valid({
+          flows: [
+            flow("pipeline", {
+              exits: [{ flow: "pipeline", step: "finish", via }],
+            }),
+          ],
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  test.each(["pr", "pr_return"])(
+    "accepts an entry from a flow with the way %s",
+    (via) => {
+      expect(
+        parseFlowsData(
+          valid({
+            flows: [
+              flow("pipeline", {
+                entries: [{ kind: "flow", flow: "pipeline", via }],
+              }),
+            ],
+          }),
+        ),
+      ).not.toBeNull();
+    },
+  );
+
   test("reads the caller of a script entry", () => {
     const data = parseFlowsData(
       valid({

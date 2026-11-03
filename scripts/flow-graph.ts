@@ -13,6 +13,7 @@ import type {
 import type {
   ApprovalOutcome,
   LaunchEdge,
+  PrRelationEdge,
   ReworkEdge,
 } from "./launch-graph.ts";
 
@@ -84,6 +85,11 @@ export type FlowsInput = {
   readonly reworkEdges: readonly ReworkEdge[];
   /** flowを起動するscriptを呼ぶscript(呼ばれるscript → 呼ぶscript)。 */
   readonly scriptCallers: Readonly<Record<string, string>>;
+  /** PRを介して続く関係。 */
+  readonly prRelationEdges: readonly Pick<
+    PrRelationEdge,
+    "from" | "to" | "direction"
+  >[];
 };
 
 const ENTRY_ORDER: Readonly<Record<FlowEntry["kind"], number>> = {
@@ -98,6 +104,8 @@ const VIA_ORDER: Readonly<Record<ExitVia, number>> = {
   approve: 1,
   reject: 2,
   rework: 3,
+  pr: 4,
+  pr_return: 5,
 };
 
 function entryKey(entry: FlowEntry): string {
