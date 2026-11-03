@@ -318,14 +318,27 @@ function source(path: string): string {
 
 /** `react`からのimport文を、すべて返す。 */
 function reactImports(code: string): string[] {
-  const first = /import[^;]*from "react";/.exec(code)?.[0];
-  return first === undefined ? [] : [first];
+  return Array.from(code.matchAll(/import[^;]*from "react";/g), (m) => m[0]);
 }
 
-/** 呼んでいるフックの名前を、現れた順に返す。 */
-function hookCalls(_code: string): string[] {
+/**
+ * `react`から持ち込む名前を、importの書かれたまま返す。
+ * 別名は`A as B`の形で、既定とnamespaceのimportは、その書き方のまま返す。
+ */
+function reactImportedNames(_code: string): string[] {
   return [];
 }
+
+/** 呼んでいるフックの名前を、現れた順に返す。ジェネリクスの呼び出しも含む。 */
+function hookCalls(code: string): string[] {
+  return Array.from(
+    code.matchAll(/\b(use[A-Z]\w*)\s*[(<]/g),
+    (m) => m[1] ?? "",
+  );
+}
+
+// DesignReviewが`react`から持ち込んでよい名前。足すときは、保護テストの直しが要る。
+const ALLOWED_IMPORTS = ["Fragment", "ReactNode", "useMemo", "useState"];
 
 // DesignReviewが呼んでよいフック。足すときは、保護テストの直しが要る。
 const ALLOWED_HOOKS = [
@@ -341,9 +354,9 @@ describe("the scan of the source of the screen", () => {
 
   test("sees an alias in a later import from react", () => {
     const code =
-      'import { useState } from "react";\nimport { useMemo as m } from "react";\n';
+      'import { useState } from "react";\nimport { useReducer as useBox } from "react";\n';
     expect(reactImports(code).filter((i) => ALIAS_OR_REDUCER.test(i))).toEqual([
-      'import { useMemo as m } from "react";',
+      'import { useReducer as useBox } from "react";',
     ]);
   });
 
@@ -354,6 +367,23 @@ describe("the scan of the source of the screen", () => {
 
   test("ignores an import from another module", () => {
     expect(reactImports('import { a as b } from "./react.ts";')).toEqual([]);
+  });
+
+  test("lists the names that the imports from react bring in", () => {
+    const code =
+      'import { Fragment, type ReactNode, useMemo } from "react";\nimport { useReducer as useBox } from "react";\n';
+    expect(reactImportedNames(code)).toEqual([
+      "Fragment",
+      "ReactNode",
+      "useMemo",
+      "useReducer as useBox",
+    ]);
+  });
+
+  test("lists a default import and a namespace import as written", () => {
+    const code =
+      'import React, { useState } from "react";\nimport * as R from "react";\n';
+    expect(reactImportedNames(code)).toEqual(["React", "useState", "* as R"]);
   });
 
   test("lists the hooks that a source calls", () => {
@@ -503,6 +533,14 @@ describe("design approval preview wiring", () => {
     test("does not import another way to hold a state", () => {
       expect(
         reactImports(review).filter((i) => /\bas\b|useReducer/.test(i)),
+      ).toEqual([]);
+    });
+
+    test("imports only the names it uses now from react", () => {
+      expect(
+        reactImportedNames(review).filter(
+          (name) => !ALLOWED_IMPORTS.includes(name),
+        ),
       ).toEqual([]);
     });
 
