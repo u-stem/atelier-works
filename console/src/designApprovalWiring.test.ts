@@ -530,7 +530,7 @@ describe("design approval preview wiring", () => {
     });
 
     test("keeps one state of the mode", () => {
-      expect(review.match(/useState[<(]/g)?.length).toBe(1);
+      expect(review.match(/\buseState\s*[<(]/g)?.length).toBe(1);
       expect(review).toContain("useState<ViewMode>(initialMode)");
     });
 
@@ -558,13 +558,18 @@ describe("design approval preview wiring", () => {
       ).toEqual([]);
     });
 
-    // 走査が何も拾わないと、許可リストの検査は空振りで通る。実際のソースで拾えることを固定する。
-    test("finds the state hook in the real source", () => {
-      expect(hookCalls(review)).toContain("useState");
+    // 走査が何も拾わないと、許可リストの検査は空振りで通る。
+    // 実際のソースが使うものを全体で照合し、一部だけ拾う走査も見逃さない。
+    test("finds every name imported from react in the real source", () => {
+      expect([...reactImportedNames(review)].sort()).toEqual(
+        [...ALLOWED_IMPORTS].sort(),
+      );
     });
 
-    test("finds the names imported from react in the real source", () => {
-      expect(reactImportedNames(review)).not.toHaveLength(0);
+    test("finds every hook called in the real source", () => {
+      expect([...new Set(hookCalls(review))].sort()).toEqual(
+        [...ALLOWED_HOOKS].sort(),
+      );
     });
 
     test("changes the mode in one place", () => {
