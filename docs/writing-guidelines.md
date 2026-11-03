@@ -132,6 +132,24 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 - 前置き、言い訳、締めのあいさつを書かない。
 - 絵文字を使わない。
 
+### yomiyasuでの推敲
+
+`yomiyasu`スキルの検査は、ルートの`.yomiyasu-words/allow.txt`の語を見直しの候補から外す。
+足す語は、2つ以上の文書で同じ意味の技術用語として使っているものに限る。
+警告を消すためだけには足さない。
+1行に1語で書く。
+
+原文の写しと最終稿は、worktreeの外(セッションのscratchpadなど)に置く。
+worktreeに置くと未追跡のファイルが残り、コミットに入ったり、片付けを止めたりするためである。
+
+検査の記録は、原文と最終稿の写しを含めて、gitの最上位の`.yomiyasu/`に入る。
+中の`.gitignore`で、記録はコミットに入らない。
+`--state-dir`は指定しない。
+既存のフォルダに向けると`.gitignore`が置かれず、写しが`git status`に出るためである。
+`.yomiyasu/`には、yomiyasuのスクリプト以外は書かない。
+
+`.yomiyasu/`が残ったworktreeは、`mise run worktree:prune`では`ignored files`として残る。
+
 ## エージェント向けの文書
 
 AGENTS.mdとスキル、subagentの定義はClaudeが読む。Claudeは書かれていることをすべて今のルールとして扱うので、人向けの文書より短く書く。
