@@ -653,6 +653,182 @@ describe("investigate_isolation_probe", () => {
     });
   });
 
+  describe("the names of the output tools", () => {
+    function withOutputTools(names: readonly string[]) {
+      return (index: number, opts: IsolationProbeClaudeOptions): Script => ({
+        sessions: [
+          {
+            id: sessionId(index),
+            lines: [
+              useLine("t1", "Read", { file_path: opts.pairs[0]?.path }),
+              resultLine("t1", "denied", true),
+              ...names.map((name, position) =>
+                useLine(`o${position}`, name, { attempted: true }),
+              ),
+            ],
+          },
+        ],
+      });
+    }
+
+    function withUnexpected(index: number, opts: IsolationProbeClaudeOptions) {
+      const base = withOutputTools(["StructuredOutput"])(index, opts);
+      const lines = base.sessions?.[0]?.lines;
+      return {
+        sessions: [
+          {
+            id: sessionId(index),
+            lines: [
+              ...(Array.isArray(lines) ? lines : []),
+              useLine("t9", "Read", { file_path: "/etc/secret-name-9" }),
+            ],
+          },
+        ],
+      };
+    }
+
+    /** 1回目は予定どおり、2回目の再試行で生まれたセッションにはファイルが無い。 */
+    function withMissingSecondSession(
+      _index: number,
+      opts: IsolationProbeClaudeOptions,
+    ): Script {
+      const first = withOutputTools(["StructuredOutput"])(20, opts);
+      return {
+        result: { retried: true, sessionIds: [sessionId(20), sessionId(21)] },
+        sessions: first.sessions ?? [],
+      };
+    }
+
+    test("records no name in the result when a tool_use was unexpected", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withUnexpected) }),
+      );
+      expect(result.observations.outputToolNames).toEqual([]);
+    });
+
+    test("records no name in the session when a tool_use was unexpected", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withUnexpected) }),
+      );
+      expect(
+        result.observations.runs.items[0]?.sessions[0]?.outputToolNames,
+      ).toEqual([]);
+    });
+
+    test("keeps the count in the result when a tool_use was unexpected", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withUnexpected) }),
+      );
+      expect(result.observations.outputToolOmitted).toBe(1);
+    });
+
+    test("keeps the count in the session when a tool_use was unexpected", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withUnexpected) }),
+      );
+      expect(
+        result.observations.runs.items[0]?.sessions[0]?.outputToolOmitted,
+      ).toBe(1);
+    });
+
+    test("records no name in the result when a transcript was unavailable", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withMissingSecondSession) }),
+      );
+      expect(result.observations.outputToolNames).toEqual([]);
+    });
+
+    test("records no name in an analyzed session when a transcript was unavailable", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withMissingSecondSession) }),
+      );
+      expect(
+        result.observations.runs.items[0]?.sessions[0]?.outputToolNames,
+      ).toEqual([]);
+    });
+
+    test("keeps the count in the result when a transcript was unavailable", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(withMissingSecondSession) }),
+      );
+      expect(result.observations.outputToolOmitted).toBe(1);
+    });
+
+    test("replaces a name that contains the value of a canary", async () => {
+      const handler = (index: number, opts: IsolationProbeClaudeOptions) => {
+        const value = readFileSync(opts.pairs[0]?.path ?? "", "utf8");
+        return withOutputTools([`Out_${value}`])(index, opts);
+      };
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(handler) }),
+      );
+      expect(result.observations.outputToolNames).toEqual(["other"]);
+    });
+
+    test("keeps the value of a canary out of the result", async () => {
+      const handler = (index: number, opts: IsolationProbeClaudeOptions) => {
+        const value = readFileSync(opts.pairs[0]?.path ?? "", "utf8");
+        return withOutputTools([`Out_${value}`])(index, opts);
+      };
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(handler) }),
+      );
+      expect(JSON.stringify(result)).not.toContain("FACTORY_PROBE_CANARY_");
+    });
+
+    test("replaces a name that contains 32 hexadecimal digits", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude(
+            withOutputTools([`Tool_${"0123456789abcdef".repeat(2)}`]),
+          ),
+        }),
+      );
+      expect(result.observations.outputToolNames).toEqual(["other"]);
+    });
+
+    test("replaces a name that the mask of secrets would change", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude(withOutputTools([`ghp_${"A".repeat(30)}`])),
+        }),
+      );
+      expect(result.observations.outputToolNames).toEqual(["other"]);
+    });
+
+    test("lists at most four distinct names in the result", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude(
+            withOutputTools(["ToolA", "ToolB", "ToolC", "ToolD", "ToolE"]),
+          ),
+        }),
+      );
+      expect(result.observations.outputToolNames).toEqual([
+        "ToolA",
+        "ToolB",
+        "ToolC",
+        "ToolD",
+      ]);
+    });
+
+    test("keeps the count of the names beyond the limit across the runs", async () => {
+      const result = await runIsolationProbe(
+        makeDeps({
+          runClaude: fakeClaude(
+            withOutputTools(["ToolA", "ToolB", "ToolC", "ToolD", "ToolE"]),
+          ),
+        }),
+      );
+      expect(result.observations.outputToolOmitted).toBe(1);
+    });
+
+    test("omits nothing for the usual output tool", async () => {
+      const result = await runIsolationProbe(makeDeps());
+      expect(result.observations.outputToolOmitted).toBe(0);
+    });
+  });
+
   describe("an unexpected tool_use", () => {
     function readsEtc(index: number): Script {
       return {

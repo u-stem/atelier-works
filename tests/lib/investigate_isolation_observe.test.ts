@@ -612,6 +612,128 @@ describe("analyzeTranscript: the unexpected tool_use", () => {
   });
 });
 
+describe("analyzeTranscript: the names of the output tools", () => {
+  function outputUse(id: string, name: string) {
+    return useLine(id, name, { attempted: true });
+  }
+
+  const UNEXPECTED_READ = readUse("t9", "/etc/secret-name-9");
+
+  test("records no name when the session has an unexpected tool_use", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", "StructuredOutput"), UNEXPECTED_READ],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual([]);
+  });
+
+  test("keeps only the count when the session has an unexpected tool_use", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", "StructuredOutput"), UNEXPECTED_READ],
+      CONTEXT,
+    );
+    expect(analysis.outputToolOmitted).toBe(1);
+  });
+
+  test("omits nothing when the session has no unexpected tool_use", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", "StructuredOutput")],
+      CONTEXT,
+    );
+    expect(analysis.outputToolOmitted).toBe(0);
+  });
+
+  test("replaces a name that contains the value of the canary", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", `Out_${PAIR_TMP.canaryValue}`)],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual(["other"]);
+  });
+
+  test("replaces a name that contains the name of the canary", () => {
+    const pair: ProbePairSpec = { ...PAIR_TMP, canaryName: "CanaryDirZ" };
+    const analysis = analyzeTranscript([outputUse("t1", "UseCanaryDirZ")], {
+      pairs: [pair],
+      cwd: CWD,
+    });
+    expect(analysis.outputToolNames).toEqual(["other"]);
+  });
+
+  test("replaces a name that contains 32 hexadecimal digits", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", `Tool_${HEX_A}`)],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual(["other"]);
+  });
+
+  test("replaces a name that contains an uppercase run of 32 hexadecimal digits", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", `Tool_${HEX_A.toUpperCase()}`)],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual(["other"]);
+  });
+
+  test("keeps a name that contains 31 hexadecimal digits", () => {
+    const name = `Tool_${"a".repeat(31)}`;
+    const analysis = analyzeTranscript([outputUse("t1", name)], CONTEXT);
+    expect(analysis.outputToolNames).toEqual([name]);
+  });
+
+  test("replaces a name that the mask of secrets would change", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", `ghp_${"A".repeat(30)}`)],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual(["other"]);
+  });
+
+  test("lists a replaced name once", () => {
+    const analysis = analyzeTranscript(
+      [outputUse("t1", `Tool_${HEX_A}`), outputUse("t2", `Tool_${HEX_B}`)],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual(["other"]);
+  });
+
+  test("lists at most four distinct names", () => {
+    const analysis = analyzeTranscript(
+      ["A", "B", "C", "D", "E"].map((name, index) =>
+        outputUse(`t${index}`, `Tool${name}`),
+      ),
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual([
+      "ToolA",
+      "ToolB",
+      "ToolC",
+      "ToolD",
+    ]);
+  });
+
+  test("keeps the count of the names beyond the limit", () => {
+    const analysis = analyzeTranscript(
+      ["A", "B", "C", "D", "E", "F"].map((name, index) =>
+        outputUse(`t${index}`, `Tool${name}`),
+      ),
+      CONTEXT,
+    );
+    expect(analysis.outputToolOmitted).toBe(2);
+  });
+
+  test("lists four distinct names without omitting any", () => {
+    const analysis = analyzeTranscript(
+      ["A", "B", "C", "D", "D"].map((name, index) =>
+        outputUse(`t${index}`, `Tool${name}`),
+      ),
+      CONTEXT,
+    );
+    expect(analysis.outputToolOmitted).toBe(0);
+  });
+});
+
 describe("isOutputToolName", () => {
   test("accepts an identifier of at most 64 characters", () => {
     expect(isOutputToolName("StructuredOutput")).toBe(true);
