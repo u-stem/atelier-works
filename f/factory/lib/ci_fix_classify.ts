@@ -24,11 +24,18 @@ const PRECHECK_REPO_SUITE =
  * 名前が変わると、その1件を含む回は従来の経路に戻る。
  * 名前とファイルが合うことは、テストで固定している。
  */
+/**
+ * ロックが古いことを直接示すテスト。全項目のhashを、ファイルの内容から求めたhashと比べる。
+ * 残りの10件は、リポジトリの成長や、hashの計算そのものの変更でも単独で落ちる。
+ * そのため、このテストが落ちていない回は、再計算では直せるとみなさない。
+ */
+export const LOCK_INTEGRITY_ANCHOR: LockIntegrityTest = {
+  file: HASH_TEST,
+  name: "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
+};
+
 export const LOCK_INTEGRITY_TESTS: readonly LockIntegrityTest[] = [
-  {
-    file: HASH_TEST,
-    name: "the repository's wmill-lock.yaml > has a computed hash equal to every entry the files determine",
-  },
+  LOCK_INTEGRITY_ANCHOR,
   {
     file: HASH_TEST,
     name: "a perturbed repository > patches exactly one line of the lock for a changed script",
@@ -58,6 +65,8 @@ export const LOCK_INTEGRITY_TESTS: readonly LockIntegrityTest[] = [
 // 並列で実行したCIのログでは、見出しが`##[group]<パス>:`の形で、ファイルごとに`##[endgroup]`で閉じる。
 const TEST_FILE_HEADER = /^(?:##\[group\])?([^\s:]+\.test\.[cm]?[jt]sx?):$/;
 const GROUP_END = "##[endgroup]";
+// `cleanLogText`が、大きなログの中間を捨てた位置に入れる目印。捨てた範囲の見出しは分からない。
+const LOG_OMITTED = "[... log middle omitted ...]";
 const FAIL_SUFFIX = /\s\[[\d.]+m?s\]$/;
 const FAIL_SUMMARY = /^(\d+) fail$/;
 const ERROR_SUMMARY = /^(\d+) errors?$/;
@@ -82,7 +91,7 @@ export function isLockIntegrityOnlyLog(
   const declared: number[] = [];
   for (const line of cleanLogText(rawLog).split("\n")) {
     const text = line.trim();
-    if (text === GROUP_END) {
+    if (text === GROUP_END || text === LOG_OMITTED) {
       file = null;
       continue;
     }
@@ -108,6 +117,12 @@ export function isLockIntegrityOnlyLog(
   if (declared.length !== 1 || declared[0] !== failedFileByName.size) {
     return false;
   }
+  const anchorFailed = [...failedFileByName].some(
+    ([name, failedFile]) =>
+      name === LOCK_INTEGRITY_ANCHOR.name &&
+      (failedFile === null || failedFile === LOCK_INTEGRITY_ANCHOR.file),
+  );
+  if (!anchorFailed) return false;
   for (const [name, failedFile] of failedFileByName) {
     // ファイルが分からない失敗は、名前だけで照合する。
     // 大きなログは中間が省かれ、並列の実行の末尾の一覧には、ファイルの見出しが無い。

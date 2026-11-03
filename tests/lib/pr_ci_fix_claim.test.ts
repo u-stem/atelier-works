@@ -833,6 +833,14 @@ describe("readLockIntegrityOnly", () => {
     ).toBe(false);
   });
 
+  test("is false when reading the log fails", async () => {
+    expect(
+      await readLockIntegrityOnly(async () => {
+        throw new Error("HTTP 500");
+      }, [job("check", "failure")]),
+    ).toBe(false);
+  });
+
   test("does not read the log of two failed jobs", async () => {
     let reads = 0;
     await readLockIntegrityOnly(async () => {

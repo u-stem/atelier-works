@@ -224,6 +224,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 4. commitがすべてFactoryのものでなければ`not_factory_head`で保留する。
  * 5. 失敗したジョブを分類する。`metadata_only`でなければ、スキルがマーカーを持たないとき`marker_missing`で保留する。
  *    `metadata_only`はClaudeを使わないので、この確認を飛ばす。
+ *    `fixable`で失敗したジョブが1つのときは、保留の直前に、そのログを読む(`lockIntegrityOnly`、1つの行で最大1回)。
+ *    ロックの整合のテストだけの失敗なら、`metadata_only`に切り替えて保留しない。
  *    マーカーの確認の後に、直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
  *    失敗したジョブが無ければskipする。
  * 6. 時間設定が修正・検証ステップのtimeoutに収まらなければ`config_misfit`で保留する。準備のステップが同じ理由で止めるので、
@@ -232,7 +234,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 7. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
- *    日次の予算は、`metadata`だけが失敗しているときには確かめない。Claudeを起動せず、費用がかからないためである。
+ *    日次の予算は、`metadata`だけが失敗しているときと、整合のテストだけの失敗のときには確かめない。Claudeを起動せず、費用がかからないためである。
+ *    整合のテストだけの失敗かは、予算を使い切っていた場合に限り、保留の直前にログを読んで決める(5と同じ読み取り)。
  *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
  * 8. 検査を動かすworkerの環境が前提を満たさなければ、イメージが古いとき`worker_image_stale`、
  *    稼働中のworkerが安全でないとき`worker_runtime_unsafe`で保留する。

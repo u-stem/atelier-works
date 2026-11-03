@@ -581,9 +581,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: true,
     nextAction:
-      "metadataジョブの失敗を、再計算では直せない。原因は、再計算の事前検査が通らない、再計算しても本文が変わらない、lockを書き込めない、再計算の途中でbaseが動いた、のどれかである。理由は作業項目に記録した。metadataジョブがWindmillの起動やログインで落ちたときは、実行をやり直す。それ以外は、必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
+      "metadataジョブの失敗を、再計算では直せない。原因は、再計算の事前検査が通らない、再計算しても本文が変わらない、lockを書き込めない、再計算の途中でbaseが動いた、のどれかである。理由は作業項目に記録した。metadataジョブがWindmillの起動やログインで落ちたときは、実行をやり直す。checkジョブがロックの整合のテストだけで落ちた回は、やり直しても直らない。それ以外は、必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
     stopAction:
-      "metadataジョブの失敗を、再計算では直せません。原因は、再計算の事前検査が通らない、再計算しても本文が変わらない、lockを書き込めない、再計算の途中でbaseが動いた、のどれかです。理由は作業項目に記録しました。metadataジョブがWindmillの起動やログインで落ちたときは、実行をやり直してください。それ以外は、必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
+      "metadataジョブの失敗を、再計算では直せません。原因は、再計算の事前検査が通らない、再計算しても本文が変わらない、lockを書き込めない、再計算の途中でbaseが動いた、のどれかです。理由は作業項目に記録しました。metadataジョブがWindmillの起動やログインで落ちたときは、実行をやり直してください。checkジョブがロックの整合のテストだけで落ちた回は、やり直しても直りません。それ以外は、必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
   },
   other_conclusion: {
     temporary: false,

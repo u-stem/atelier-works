@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   classifyCiFailure,
   isLockIntegrityOnlyLog,
+  LOCK_INTEGRITY_ANCHOR,
   LOCK_INTEGRITY_TESTS,
 } from "../../f/factory/lib/ci_fix_classify.ts";
 
@@ -282,6 +283,30 @@ describe("isLockIntegrityOnlyLog", () => {
     });
   });
 
+  test("rejects a log in which only the other known tests failed", () => {
+    const others = LOCK_INTEGRITY_TESTS.filter(
+      (entry) => entry.name !== LOCK_INTEGRITY_ANCHOR.name,
+    );
+    const lines: string[] = [];
+    for (const entry of others) {
+      lines.push(`${entry.file}:`, `(fail) ${entry.name} [4.10ms]`);
+    }
+    lines.push(` ${String(others.length)} fail`);
+    expect(isLockIntegrityOnlyLog(lines.join("\n"), false)).toBe(false);
+  });
+
+  test("does not attribute a failure after an omitted part of the log to the file before it", () => {
+    const entry = LOCK_INTEGRITY_TESTS[3];
+    const log = [
+      `##[group]${LOCK_INTEGRITY_ANCHOR.file}:`,
+      `(fail) ${LOCK_INTEGRITY_ANCHOR.name} [4.10ms]`,
+      "[... log middle omitted ...]",
+      `(fail) ${entry?.name ?? ""} [4.10ms]`,
+      " 2 fail",
+    ].join("\n");
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(true);
+  });
+
   test("rejects a known name under another file", () => {
     const entry = LOCK_INTEGRITY_TESTS[1];
     const log = [
@@ -431,6 +456,11 @@ describe("the lock integrity tests", () => {
       );
     });
     expect(missing).toEqual([]);
+  });
+
+  test("count eleven, as the documents say", () => {
+    // 件数を変えるときは、`docs/internals/ci-fix.md`と`docs/operations.md`の「11件」も直す。
+    expect(LOCK_INTEGRITY_TESTS.length).toBe(11);
   });
 
   test("have no name twice in the same file", () => {

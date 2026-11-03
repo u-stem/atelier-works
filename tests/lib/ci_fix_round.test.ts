@@ -561,11 +561,30 @@ describe("readCiFailure", () => {
     expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);
   });
 
-  test("keeps the check job when reading the log fails", async () => {
+  test("throws when reading the log fails, so the flow retries", async () => {
     const { deps } = gatherDeps({
       getLog: async () => {
         throw new Error("GET workflow job log failed with HTTP 500");
       },
+    });
+    await expect(readCiFailure(deps, TARGET)).rejects.toThrow("HTTP 500");
+  });
+
+  test("reads the log of a failed check job once when the gather follows the read", async () => {
+    let reads = 0;
+    const { deps } = gatherDeps({
+      getLog: async () => {
+        reads += 1;
+        return okLog("##[error]lint failed in a.ts");
+      },
+    });
+    await gatherCiFailureInput(deps, TARGET);
+    expect(reads).toBe(1);
+  });
+
+  test("keeps the check job when the log is unavailable", async () => {
+    const { deps } = gatherDeps({
+      getLog: async () => ({ kind: "log_unavailable" }),
     });
     const result = await readCiFailure(deps, TARGET);
     expect(result.kind === "fixable" ? result.jobs.length : null).toBe(1);

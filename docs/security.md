@@ -483,8 +483,10 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
 `metadata`ジョブだけが落ちたCI回の再計算の経路は、次で守る。
 流れは[metadataジョブの失敗を直す経路](internals/ci-fix.md#metadataジョブの失敗を直す経路)にある。
 
-- Claudeを起動しない。失敗のログは読まず、通知にも載せない。
-  外部入力で動くのは、事前検査の字句の読み取りだけである。
+- Claudeを起動しない。失敗のログは、通知にも載せない。
+  外部入力で動くのは、事前検査の字句の読み取りと、整合のテストだけの失敗かを決めるためのログの読み取りである。
+  ログは、成否の判断にだけ使い、どこにも残さない。判断は、形を照合する純関数(`isLockIntegrityOnlyLog`)で行う。
+  ログの内容を実行や解釈に使わない。
 - 書き込む先は、worktreeの根の`wmill-lock.yaml`だけで、パスはコードが決める。
   `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。通常のファイルでないとき、ほかにhard linkがあるときは書かない。無いファイルは作らない。
 - 検証と完了のステップは、修正のステップの出力を信用しない。
@@ -493,7 +495,8 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   次のものは、保護パスの一覧に入れない。日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
   - 例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)。
   - `ci_fix_round.ts`の`isLockOnlyChange`、`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、`readCiFailure`。
-  - `ci_fix_classify.ts`の`classifyCiFailure`。この結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
+  - `ci_fix_classify.ts`の`classifyCiFailure`と`isLockIntegrityOnlyLog`。この結果が、再計算で直す回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
+    `isLockIntegrityOnlyLog`は、外部由来のCIのログで免除を決めるので、判定の誤りは、予算を使わない再計算の回に入る誤りになる。
   - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。再計算が読むgitの動き方を決める。
 
   これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。CI回のClaudeには、CI回の拒否が別に止める。

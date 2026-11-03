@@ -522,12 +522,15 @@ export type CiFailureRead =
 
 /**
  * 失敗したジョブが1つだけのとき、そのログを読み、ロックの整合のテストだけの失敗かを答える。
- * ログを読めないとき(権限、保存期間、上限による省略、読み取りの失敗)は、`false`を返し、従来の経路に任せる。
+ * ログを読めないとき(権限、保存期間、上限による省略)は、`false`を返し、従来の経路に任せる。
  * 読み取りのレート制限は、再試行で解けるので、そのまま投げる。
+ * ほかの読み取りの失敗は、`failOnReadError`が偽なら`false`にし、真ならそのまま投げる。
+ * 起動の判断は保留へ倒せるので偽にする。修正のステップは、起動の判断と食い違わないよう、真にしてflowの再試行に任せる。
  */
 export async function isLockIntegrityOnlyFailure(
   getLog: CiGatherDeps["getLog"],
   jobs: readonly WorkflowRunJob[],
+  failOnReadError = false,
 ): Promise<boolean> {
   const [only] = jobs;
   if (jobs.length !== 1 || only === undefined) return false;
@@ -538,7 +541,7 @@ export async function isLockIntegrityOnlyFailure(
       isLockIntegrityOnlyLog(log.log.reveal(), log.truncated)
     );
   } catch (error) {
-    if (error instanceof GitHubRateLimitError) throw error;
+    if (error instanceof GitHubRateLimitError || failOnReadError) throw error;
     return false;
   }
 }
@@ -580,7 +583,7 @@ export async function readCiFailure(
   if (verdict.kind === "no_failure") {
     return blocked("no failed job in the failed runs");
   }
-  if (await isLockIntegrityOnlyFailure(deps.getLog, verdict.jobs)) {
+  if (await isLockIntegrityOnlyFailure(deps.getLog, verdict.jobs, true)) {
     return { kind: "fixable", runs, jobs: [], metadataFailed: true };
   }
   return {
