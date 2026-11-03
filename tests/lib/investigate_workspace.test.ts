@@ -1224,11 +1224,78 @@ describe("disableInvestigateInstructions", () => {
     ]);
   });
 
-  test("does not rename inside a directory it renamed", async () => {
+  test("renames the inner entry before the directory that holds it", async () => {
     const { root, dir } = setup();
     put(dir, ".claude/CLAUDE.md");
     const result = await disable(root);
-    expect(result.renamed).toEqual([".claude"]);
+    expect(result.renamed).toEqual([".claude/CLAUDE.md", ".claude"]);
+  });
+
+  test("renames a CLAUDE.md inside a .claude directory", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude/CLAUDE.md", "@/proc/self/environ\n");
+    await disable(root);
+    expect(
+      readFileSync(join(dir, ".claude.disabled", "CLAUDE.md.disabled"), "utf8"),
+    ).toBe("@/proc/self/environ\n");
+  });
+
+  test("renames a CLAUDE.md inside a directory that is named CLAUDE.md", async () => {
+    const { root, dir } = setup();
+    put(dir, "docs/CLAUDE.md/CLAUDE.md");
+    await disable(root);
+    expect(
+      existsSync(join(dir, "docs/CLAUDE.md.disabled/CLAUDE.md.disabled")),
+    ).toBe(true);
+  });
+
+  test("renames a CLAUDE.md inside a directory whose name ends with .disabled", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md.disabled/CLAUDE.md");
+    await disable(root);
+    expect(existsSync(join(dir, "CLAUDE.md.disabled/CLAUDE.md.disabled"))).toBe(
+      true,
+    );
+  });
+
+  test("leaves no CLAUDE.md inside a directory whose name ends with .disabled", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude.disabled/CLAUDE.md");
+    await disable(root);
+    expect(existsSync(join(dir, ".claude.disabled/CLAUDE.md"))).toBe(false);
+  });
+
+  test("renames an instruction entry nested two levels inside .claude", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude/commands/.claude.json");
+    await disable(root);
+    expect(
+      existsSync(join(dir, ".claude.disabled/commands/.claude.json.disabled")),
+    ).toBe(true);
+  });
+
+  test("throws when the disabled name inside a directory is already taken", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude/CLAUDE.md");
+    put(dir, ".claude/CLAUDE.md.disabled");
+    await expect(disable(root)).rejects.toBeInstanceOf(
+      InvestigateWorkspaceError,
+    );
+  });
+
+  test("throws when a rename did not take effect inside a directory", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md.disabled/CLAUDE.md");
+    await expect(
+      disable(root, { fs: ineffectiveRename() }),
+    ).rejects.toBeInstanceOf(InvestigateWorkspaceError);
+  });
+
+  test("removes the worktree when a rename did not take effect inside a directory", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md.disabled/CLAUDE.md");
+    await disable(root, { fs: ineffectiveRename() }).catch(() => {});
+    expect(existsSync(dir)).toBe(false);
   });
 
   test("returns the worktree directory", async () => {

@@ -56,12 +56,16 @@ describe("modelFor for investigate", () => {
     expect(modelFor(CONFIG, "investigate", 1)).toBe("light-model");
   });
 
-  test("uses heavy_model after two failures", () => {
-    expect(modelFor(CONFIG, "investigate", 2)).toBe("heavy-model");
+  test("keeps model after two failures", () => {
+    expect(modelFor(CONFIG, "investigate", 2)).toBe("light-model");
   });
 
-  test("is not one of the stages that always use heavy_model", () => {
-    expect(modelChangesAfterFailure(CONFIG, "investigate", 1)).toBe(true);
+  test("keeps model after many failures", () => {
+    expect(modelFor(CONFIG, "investigate", 5)).toBe("light-model");
+  });
+
+  test("does not change the model after a failure", () => {
+    expect(modelChangesAfterFailure(CONFIG, "investigate", 1)).toBe(false);
   });
 });
 

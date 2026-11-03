@@ -76,11 +76,55 @@ describe(`${NAME}.up.sql`, () => {
   test("names a status that is not terminal", () => {
     expect(TERMINAL_WORK_ITEM_STATUSES).not.toContain("investigating");
   });
+});
 
-  test("is the predicate that the insert names in ON CONFLICT", async () => {
-    expect(await Bun.file(DB_SOURCE).text()).toContain(
+/**
+ * コメントを落とした`source`から、`name`の関数の本体にある最初のSQLテンプレートを、空白を1つにまとめて返す。
+ * コメントや関数の外の文字列にある述語では、一致しない。見つからなければ空文字列を返す。
+ */
+function sqlTemplateOf(source: string, name: string): string {
+  const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+  const start = code.indexOf(`function ${name}(`);
+  if (start < 0) return "";
+  const end = code.indexOf("\n}\n", start);
+  const body = code.slice(start, end < 0 ? undefined : end);
+  const template = /sql`([\s\S]*?)`/.exec(body);
+  return (template?.[1] ?? "").replace(/\s+/g, " ").trim();
+}
+
+describe("the SQL of the application", () => {
+  const INSERT = "insertInvestigateWorkItemUnlessActive";
+  const READ = "hasInvestigatingWorkItem";
+
+  test("names the index predicate in the ON CONFLICT clause of the insert", async () => {
+    expect(sqlTemplateOf(await Bun.file(DB_SOURCE).text(), INSERT)).toContain(
       `ON CONFLICT (kind) WHERE ${PREDICATE} DO NOTHING`,
     );
+  });
+
+  test("reads the rows of the index predicate in the read", async () => {
+    expect(sqlTemplateOf(await Bun.file(DB_SOURCE).text(), READ)).toContain(
+      `WHERE ${PREDICATE}`,
+    );
+  });
+
+  test("finds the template of a function by its name", () => {
+    const source = "function f(sql) { return sql`SELECT 1`; }\n";
+    expect(sqlTemplateOf(source, "f")).toBe("SELECT 1");
+  });
+
+  test("does not take the predicate from a comment", () => {
+    const source = `function f(sql) {\n  // WHERE ${PREDICATE}\n  return sql\`SELECT 1\`;\n}\n`;
+    expect(sqlTemplateOf(source, "f")).not.toContain(PREDICATE);
+  });
+
+  test("does not take the predicate from a string outside the template", () => {
+    const source = `function f(sql) {\n  const note = "WHERE ${PREDICATE}";\n  return sql\`SELECT 1\`;\n}\n`;
+    expect(sqlTemplateOf(source, "f")).not.toContain(PREDICATE);
+  });
+
+  test("returns nothing for a function that does not exist", () => {
+    expect(sqlTemplateOf("function g() {}\n", "f")).toBe("");
   });
 });
 

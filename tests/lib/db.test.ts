@@ -3998,6 +3998,26 @@ describe("insertInvestigateWorkItemUnlessActive", () => {
       ),
     ).rejects.toThrow();
   });
+
+  test("refuses an empty flow job id", async () => {
+    const { sql } = createFakeSqlClient();
+    await expect(
+      insertInvestigateWorkItemUnlessActive(
+        { ...INVESTIGATE_ITEM, flow_job_id: "" },
+        sql,
+      ),
+    ).rejects.toThrow("flow job id");
+  });
+
+  test("refuses a missing flow job id at run time and in the type", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertInvestigateWorkItemUnlessActive(
+      // @ts-expect-error flow_job_id is a string: the exclusion with the failure handler relies on it
+      { ...INVESTIGATE_ITEM, flow_job_id: null },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("hasInvestigatingWorkItem", () => {
