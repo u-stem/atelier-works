@@ -14,8 +14,8 @@ export default defineConfig({
   testMatch: "**/*.a11y.ts",
   fullyParallel: true,
   // 検査はaxeの解析でCPUを使うので、CIでは論理コアの数だけ並列にする。
-  // 指定しないと論理コアの半分になり、4 vCPUのランナーでは2つしか並列にならない。
-  workers: inCi ? "100%" : undefined,
+  // ローカルはPlaywrightの既定(論理コアの半分)のままにする。
+  workers: inCi ? "100%" : "50%",
   forbidOnly: inCi,
   retries: 0,
   reporter: inCi
