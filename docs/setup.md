@@ -418,7 +418,8 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 `bun ./scripts/check-coverage.ts`は、そのlcovから行カバレッジを求め、下限を割っていれば終了コード1で止まる。
 `mise run check`は、`test`の後にこの検査を呼ぶので、ローカルでもCIでも同じ検査が走る。
 測った値はOS(macOSとubuntu)で変わりうる。
-下限は、ローカル(macOS)の実測値の2ポイント下に置いている。CIでの値を見てから詰める。
+OSやrootの有無で、動くテストが分かれるためである。
+下限の置き方は[テストの基準](testing-guidelines.md#下限の置き方)にある。
 下限を割ったときは、失敗の出力が示す未実行の行が多いファイルにテストを足す。
 `main`で割ったときも同じである。下限の定数は、割った原因を直すまで下げない。
 下限を上げるときは、`mise run test`の実測を見て、`scripts/check-coverage.ts`の`COVERAGE_FLOOR_PERCENT`を実測より低い値に変える。
