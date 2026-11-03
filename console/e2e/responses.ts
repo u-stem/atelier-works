@@ -87,7 +87,16 @@ function queryReply(args: unknown, mode: Mode): Reply | null {
     case "design_doc":
       return pick(mode, [DESIGN_DOC_NORMAL], []);
     case "approval_design_doc":
-      return pick(mode, [APPROVAL_DESIGN_DOC_NORMAL], []);
+      // 表に無い承認依頼の設計書は、backendが「設計書が無い」と返す空の配列にする。
+      return pick(
+        mode,
+        isRecord(args) &&
+          args.approval_request_id ===
+            APPROVAL_DESIGN_DOC_NORMAL.approval_request_id
+          ? [APPROVAL_DESIGN_DOC_NORMAL]
+          : [],
+        [],
+      );
     case "intake_targets":
       return pick(mode, INTAKE_TARGETS, []);
     case "inbox":

@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useMemo } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import type { ApprovalDesignDoc } from "../../api/guards/approvalDesignDoc.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useApprovalDesignDoc, useIntakeSnapshot } from "../../api/queries.ts";
@@ -8,12 +8,15 @@ import {
   type LoadingDisplay,
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
+import { ViewModeSwitch } from "../../components/ViewModeSwitch.tsx";
 import {
   designBlockedReason,
   snapshotReadiness,
 } from "../../lib/approvalDecision.ts";
 import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
+import type { RepoRef } from "../../lib/markdownLink.ts";
+import type { ViewMode } from "../../lib/requirementsView.ts";
 import {
   blankRunMark,
   countDesignAnomalies,
@@ -25,6 +28,7 @@ import {
 } from "../../lib/visibleText.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 import { ApprovalBar } from "./ApprovalBar.tsx";
+import { DesignTextPreview } from "./DesignTextPreview.tsx";
 import { IntakeSnapshotPanel } from "./IntakeSnapshotPanel.tsx";
 import { LOADING_SHAPE, PanelNote, PanelShell } from "./ReviewPanel.tsx";
 
@@ -175,23 +179,69 @@ function AnomalySummary({ text }: { text: string }) {
   );
 }
 
+/** 原文を表示しているときの注記。 */
+const TEXT_NOTICE =
+  "承認の対象は、この全文です。承認すると、ここに出ている文字がそのまま実装に渡ります。図、要約、未確定事項は実装に渡りません。";
+
+/** プレビューを表示しているときの注記。プレビューが描かないものを、ここで1度だけ挙げる。 */
+const PREVIEW_NOTICE =
+  "承認の対象は、原文の全文です。このプレビューは、生のHTML(コメントを含む)、リンク参照定義、画像を描きません。閉じない<!--より後ろの本文も、描かないことがあります。文字参照で書いた見えない文字や向きの制御文字は、置き換えずに描くことがあります。原文に切り替えて確かめてください。図、要約、未確定事項は実装に渡りません。";
+
+/** プレビュー中に承認を止める理由。注記の文と重ならないようにする。 */
+const PREVIEW_BLOCKED_REASON =
+  "設計書をプレビューで表示中は承認できません。承認するには、原文を表示してください。";
+
+/**
+ * 設計書の表示の形式から、承認を止める理由を決める。
+ * 承認できる表示は`"text"`(原文)だけで、プレビューも、知らない値も止める。
+ * 原文で確かめられる表示でだけ承認を押せるようにするため、条件を画面のソースの中に置く。
+ */
+export function designPreviewGate(input: { mode: string }): {
+  reason: string | null;
+} {
+  return { reason: input.mode === "text" ? null : PREVIEW_BLOCKED_REASON };
+}
+
 /**
  * 設計書の全文と、承認の判断に要る注記。
  * 行数とコードポイント数は全文の外にも出し、全文の終わりの印も全文の外に置く。
  * 本文が同じ文言を書いても、本物の印と紛れないためである。
+ * 全文は、既定の原文では実装に渡る文字のまま描き、`mode`がプレビューのときだけ、参考の描画に替える。
+ * 異常の内訳、行数、終わりの印は、どちらの形式でも出す。
+ * `repo`は、プレビューがリンクを許すリポジトリ。
  */
-export function DesignDocBody({ doc }: { doc: ApprovalDesignDoc }) {
+export function DesignDocBody({
+  doc,
+  mode,
+  onChange,
+  repo,
+}: {
+  doc: ApprovalDesignDoc;
+  mode: ViewMode;
+  onChange: (mode: ViewMode) => void;
+  repo: RepoRef | null;
+}) {
   const stats = textStats(doc.text);
   return (
     <div className="flex flex-col gap-3 px-5 py-4">
+      <ViewModeSwitch
+        target="設計書"
+        textLabel="原文"
+        mode={mode}
+        onChange={onChange}
+      />
       <p className="text-small text-muted-foreground">
-        承認の対象は、この全文です。承認すると、ここに出ている文字がそのまま実装に渡ります。図、要約、未確定事項は実装に渡りません。
+        {mode === "preview" ? PREVIEW_NOTICE : TEXT_NOTICE}
       </p>
       <AnomalySummary text={doc.text} />
       <p className="text-small tabular-nums text-muted-foreground">
         {`全文: ${String(stats.lines)} 行、${String(stats.codePoints)} コードポイント`}
       </p>
-      <DesignTextView text={doc.text} />
+      {mode === "preview" ? (
+        <DesignTextPreview text={doc.text} repo={repo} />
+      ) : (
+        <DesignTextView text={doc.text} />
+      )}
       <p className="text-small tabular-nums text-muted-foreground">
         {endMark(stats.lines, stats.codePoints)}
       </p>
@@ -199,17 +249,14 @@ export function DesignDocBody({ doc }: { doc: ApprovalDesignDoc }) {
   );
 }
 
-export function designPreviewGate(_input: { mode: string }): {
-  reason: string | null;
-} {
-  return { reason: null };
-}
-
 /** 承認する依頼が指す設計書を出す面。取得の状態ごとに、承認者へ伝える文を変える。 */
 function DocPanel({
   approvalRequestId,
   query,
   display,
+  mode,
+  onChange,
+  repo,
 }: {
   approvalRequestId: number;
   query: {
@@ -219,6 +266,9 @@ function DocPanel({
     readonly refetch: () => unknown;
   };
   display: LoadingDisplay;
+  mode: ViewMode;
+  onChange: (mode: ViewMode) => void;
+  repo: RepoRef | null;
 }) {
   const doc = query.data;
   let body: ReactNode;
@@ -247,7 +297,9 @@ function DocPanel({
       </PanelNote>
     );
   } else {
-    body = <DesignDocBody doc={doc} />;
+    body = (
+      <DesignDocBody doc={doc} mode={mode} onChange={onChange} repo={repo} />
+    );
   }
   return (
     <PanelShell heading="承認対象の設計書" link={null}>
@@ -258,18 +310,30 @@ function DocPanel({
 
 /**
  * 設計の承認。取り込み時点のIssueと、承認する依頼の設計書の全文を並べ、その直下に承認バーを置く。
- * 承認を押せるかは`designBlockedReason`だけで決め、この画面は結果を承認バーに渡す。
+ * 承認を押せるかは、取得の状態などの`designBlockedReason`と、設計書の表示の形式の判定で決め、この画面は結果を承認バーに渡す。
+ * 設計書は原文が既定で、プレビューは参考に切り替えて読める。プレビューを表示している間は承認を止める。
+ * 取り込み時点のIssueは、切り替えの対象にせず、常に原文で出す。
+ * 承認バーは承認依頼ごとに作り直し、チェックなどの状態を別の依頼に持ち越さない。
  * 却下は、設計書を読めなくても押せる。
+ * `initialMode`は設計書の最初の表示の形式で、省略すると原文になる。
  */
 export function DesignReview({
   approval,
   title,
   now,
+  initialMode = "text",
 }: {
   approval: SummaryApproval;
   title: string;
   now: number;
+  initialMode?: ViewMode;
 }) {
+  const [mode, setMode] = useState<ViewMode>(initialMode);
+  const onChange = (next: ViewMode) => {
+    setMode(next);
+  };
+  const { owner, repo } = approval;
+  const repoRef = useMemo(() => ({ owner, repo }), [owner, repo]);
   const doc = useApprovalDesignDoc(approval.approval_request_id);
   const docDisplay = useLoadingDisplay(loadPhaseOf(doc), NO_LINGER_OPTIONS);
   // パネルと同じ取得(キーが同じ)を読むので、取得は1回で済む。
@@ -288,6 +352,7 @@ export function DesignReview({
     doc: { isPending: doc.isPending, isError: doc.isError, data: doc.data },
     workItemStatus: approval.work_item_status,
   });
+  const gate = designPreviewGate({ mode });
   return (
     <>
       <IntakeSnapshotPanel
@@ -299,13 +364,17 @@ export function DesignReview({
         approvalRequestId={approval.approval_request_id}
         query={doc}
         display={docDisplay}
+        mode={mode}
+        onChange={onChange}
+        repo={repoRef}
       />
       <ApprovalBar
+        key={approval.approval_request_id}
         approval={approval}
         now={now}
         subject={displayableIssueText(title).text}
         factoryLabel={null}
-        approveBlockedReason={blocked}
+        approveBlockedReason={blocked ?? gate.reason}
         refreshed={snapshot.data?.refreshed === true}
         fullCheckRequired={snapshot.data?.body_truncated === true}
       />
