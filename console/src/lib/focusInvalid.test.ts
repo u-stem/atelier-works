@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { focusFirstInvalid, type InvalidSource } from "./focusInvalid.ts";
+import {
+  focusFirstInvalid,
+  type InvalidCounter,
+  type InvalidSource,
+  invalidAnnouncement,
+} from "./focusInvalid.ts";
 
 /** 見つかる要素と、フォーカスされた回数を持つ入れ物。 */
 function sourceWith(found: boolean): {
@@ -59,5 +64,48 @@ describe("focusFirstInvalid", () => {
     focusFirstInvalid(source);
 
     expect(selectors).toEqual(['[aria-invalid="true"]']);
+  });
+});
+
+/** 誤りのある入力欄の並びを持つフォームの代わり。先頭が最初の誤りになる。 */
+function formWith(count: number): {
+  readonly source: InvalidCounter;
+  readonly controls: readonly { readonly focus: () => void }[];
+} {
+  const controls = Array.from({ length: count }, () => ({ focus: () => {} }));
+  return {
+    controls,
+    source: {
+      querySelector: () => controls[0] ?? null,
+      querySelectorAll: () => controls,
+    },
+  };
+}
+
+describe("invalidAnnouncement", () => {
+  test("says how many controls are invalid when the focus is already on the first", () => {
+    const { source, controls } = formWith(3);
+
+    expect(invalidAnnouncement(source, controls[0])).toBe(
+      "入力に誤りがあります(3件)",
+    );
+  });
+
+  test("says nothing when the focus is on another control", () => {
+    const { source } = formWith(2);
+
+    expect(invalidAnnouncement(source, {})).toBe("");
+  });
+
+  test("says nothing when the focus is on the second invalid control", () => {
+    const { source, controls } = formWith(2);
+
+    expect(invalidAnnouncement(source, controls[1])).toBe("");
+  });
+
+  test("says nothing when no control is invalid", () => {
+    const { source } = formWith(0);
+
+    expect(invalidAnnouncement(source, null)).toBe("");
   });
 });

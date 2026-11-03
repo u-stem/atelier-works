@@ -22,3 +22,20 @@ export function focusFirstInvalid(source: InvalidSource): boolean {
   control.focus();
   return true;
 }
+
+/** 誤りのある入力欄を数えられるもの。フォームの要素が当てはまる。 */
+export type InvalidCounter = InvalidSource & {
+  readonly querySelectorAll: (selector: string) => { readonly length: number };
+};
+
+/**
+ * 最初の誤りの入力欄に、すでにフォーカスがあるときの読み上げ用の文。そうでなければ空の文字列を返す。
+ * すでにフォーカスがある欄へ`focus()`しても、イベントが起きず、読み上げは何も伝えない。
+ * フォーカスが移るときは、移った欄の説明が誤りを伝えるので、この文は要らない。
+ */
+export function invalidAnnouncement(
+  _source: InvalidCounter,
+  _active: unknown,
+): string {
+  return "";
+}

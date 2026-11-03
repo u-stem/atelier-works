@@ -33,7 +33,11 @@ import {
 } from "../e2e/fixtures.ts";
 import { ApiFailure } from "./api/errors.ts";
 import { type IntakeSession, intakeSessions } from "./api/intakeSession.ts";
-import { MANUAL_INTAKE_WRITE_KEY, writeLocks } from "./api/writeLocks.ts";
+import {
+  MANUAL_INTAKE_WRITE_KEY,
+  PR_REVIEW_WRITE_KEY,
+  writeLocks,
+} from "./api/writeLocks.ts";
 import { AppMain } from "./app/AppShell.tsx";
 import { CommandPalette } from "./app/CommandPalette.tsx";
 import { ShortcutHelp } from "./app/ShortcutHelp.tsx";
@@ -529,6 +533,67 @@ describe("a11y: the new item screen in the states of a submit", () => {
       ).toEqual([]);
     });
   }
+});
+
+/** 送信ボタンの開始タグ。 */
+function submitButtonTag(html: string): string {
+  return /<button[^>]*type="submit"[^>]*>/.exec(html)?.[0] ?? "";
+}
+
+describe("a11y: the intake screens keep the focus while a submit is in progress", () => {
+  afterEach(() => {
+    resetIntake();
+    writeLocks.release(PR_REVIEW_WRITE_KEY);
+  });
+
+  const inProgress = {
+    "new item": async () => {
+      intakeSessions.begin(KEY, INTAKE_FORM);
+      writeLocks.tryAcquire(KEY);
+      return renderChild("items/new", "normal");
+    },
+    "PR review": async () => {
+      writeLocks.tryAcquire(PR_REVIEW_WRITE_KEY);
+      return renderChild("items/new-pr-review", "normal");
+    },
+  };
+
+  for (const [name, draw] of Object.entries(inProgress)) {
+    test(`marks the submit button of the ${name} screen aria-disabled`, async () => {
+      expect(submitButtonTag(await draw())).toContain('aria-disabled="true"');
+    });
+
+    test(`does not disable the submit button of the ${name} screen`, async () => {
+      expect(submitButtonTag(await draw())).not.toContain(' disabled=""');
+    });
+
+    test(`disables nothing in the ${name} screen`, async () => {
+      expect(await draw()).not.toContain(' disabled=""');
+    });
+  }
+
+  test("makes the text fields of the new item screen read only", async () => {
+    intakeSessions.begin(KEY, INTAKE_FORM);
+    writeLocks.tryAcquire(KEY);
+
+    expect(await renderChild("items/new", "normal")).toMatch(
+      /<textarea[^>]*readOnly=""/,
+    );
+  });
+});
+
+describe("a11y: the intake screens carry a status region for the problems", () => {
+  const EMPTY_STATUS = /<p[^>]*role="status"[^>]*><\/p>/;
+
+  test("the new item screen draws an empty status region from the first render", async () => {
+    expect(await renderChild("items/new", "normal")).toMatch(EMPTY_STATUS);
+  });
+
+  test("the PR review screen draws an empty status region from the first render", async () => {
+    expect(await renderChild("items/new-pr-review", "normal")).toMatch(
+      EMPTY_STATUS,
+    );
+  });
 });
 
 describe("a11y: the states reach the screens", () => {

@@ -261,6 +261,9 @@ const BACK_LINK = "作業項目の一覧";
 const field = (page: Page, label: string) =>
   page.getByLabel(label, { exact: true });
 
+/** 誤りの件数を読み上げるための、視覚的に隠した領域。 */
+const problemStatus = (page: Page) => page.locator('form [role="status"]');
+
 /** フォームの先頭から、Tabを`presses`回押した位置を、順番の検査のために用意する。 */
 async function tabFromBackLink(page: Page, presses: number): Promise<void> {
   await page.getByRole("link", { name: BACK_LINK }).focus();
@@ -300,8 +303,22 @@ const NEW_PR_REVIEW_ORDER: readonly TabStep[] = [
   { name: "レビューを投入する" },
 ];
 
-/** 送信が起きたら、少なくとも1つの要求が出るまでに足りる、ネガティブの確認のための待ち。 */
-const NO_SUBMIT_WAIT_MS = 400;
+/**
+ * フォームのsubmitイベントを数え始める。暗黙の送信は、キーの押下と同じ処理の中でsubmitイベントを起こす。
+ * 押下が返った後に数を読めば、時間で待たずに、送信が起きたかを確定できる。
+ */
+async function countSubmitEvents(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    let count = 0;
+    document.querySelector("form")?.addEventListener("submit", () => {
+      count += 1;
+    });
+    Object.defineProperty(window, "submitEvents", { get: () => count });
+  });
+}
+
+const submitEvents = (page: Page) =>
+  page.evaluate(() => Reflect.get(window, "submitEvents"));
 
 test.describe("new item form by keyboard", () => {
   test.describe("the order of the stops", () => {
@@ -360,17 +377,16 @@ test.describe("new item form by keyboard", () => {
       ).toBeVisible();
     });
 
-    test("does not submit a valid form on Enter", async ({ page, mock }) => {
+    test("does not submit a valid form on Enter", async ({ page }) => {
       await openScreen(page, NEW_ITEM_PATH);
       await fillNewItem(page);
       await page.getByRole("radio", { name: /^通常/ }).focus();
       await page.keyboard.press("ArrowDown");
+      await countSubmitEvents(page);
 
       await page.keyboard.press("Enter");
-      await page.waitForTimeout(NO_SUBMIT_WAIT_MS);
 
-      // 送ると書き込みのscriptが呼ばれ、受け口が中断して記録する。
-      expect(mock.problems).toEqual([]);
+      expect(await submitEvents(page)).toBe(0);
     });
   });
 
@@ -421,15 +437,15 @@ test.describe("new item form by keyboard", () => {
       );
     });
 
-    test("keeps the hint in the description next to the problem", async ({
+    test("lists the hint and the problem together in the description of the purpose", async ({
       page,
     }) => {
-      await field(page, "目的").focus();
+      await field(page, "題名").focus();
 
       await page.keyboard.press("Enter");
 
       await expect(field(page, "目的")).toHaveAccessibleDescription(
-        /Issueの本文になります。/,
+        /Issueの本文になります。.*目的を入力してください。/,
       );
     });
 
@@ -439,6 +455,25 @@ test.describe("new item form by keyboard", () => {
       await expect(field(page, "題名")).toHaveAccessibleDescription(
         "0 / 256字",
       );
+    });
+
+    test("announces the number of problems when Enter is pressed in the first invalid field", async ({
+      page,
+    }) => {
+      await field(page, "題名").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(problemStatus(page)).toHaveText("入力に誤りがあります(2件)");
+    });
+
+    test("announces nothing by the status region when the focus moves to the first invalid field", async ({
+      page,
+    }) => {
+      await page.getByRole("button", { name: "投入する" }).click();
+      await expect(field(page, "題名")).toBeFocused();
+
+      await expect(problemStatus(page)).toHaveText("");
     });
 
     test("moves the focus to the first empty field when the submit button is clicked", async ({
@@ -610,6 +645,16 @@ test.describe("PR review form by keyboard", () => {
       );
     });
 
+    test("announces the number of problems when Enter is pressed in the invalid field", async ({
+      page,
+    }) => {
+      await field(page, "PRの番号またはURL").focus();
+
+      await page.keyboard.press("Enter");
+
+      await expect(problemStatus(page)).toHaveText("入力に誤りがあります(1件)");
+    });
+
     test("moves the focus to the pull request when the submit button is clicked", async ({
       page,
     }) => {
@@ -639,11 +684,16 @@ test.describe("PR review form by keyboard", () => {
       await expect(field(page, "リポジトリ")).toBeFocused();
     });
 
-    test("leaves the focus where the user moves it after a problem is shown", async ({
+    test("leaves the focus where the user moves it while another problem remains", async ({
       page,
     }) => {
       await page.getByRole("button", { name: "レビューを投入する" }).click();
+      // 番号だけではリポジトリが要るので、PR欄を直しても、リポジトリ欄の誤りが残る。
       await field(page, "PRの番号またはURL").fill("1");
+      await field(page, "リポジトリ")
+        .and(page.locator('[aria-invalid="true"]'))
+        .waitFor();
+      await field(page, "PRの番号またはURL").focus();
 
       await page.keyboard.press("Tab");
 
