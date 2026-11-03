@@ -51,7 +51,7 @@ locks:
   f/factory/lib/ci_fix_prompt: 4bc2dfa11c0cbfdec024509e6def41312cc5ddccd3747d6ab1f2c4f9065e91db
   f/factory/lib/ci_fix_round: f102ff2d0f75384af30a85abbaad3165bc6b316967893fea796c9b56357e46d9
   f/factory/lib/ci_log_support: 82bfb98e03c1afb71b08c3b95d72fd95d8016f853373268b5c3fbbdd416d8a9e
-  f/factory/lib/ci_metadata_rehash: 8d23851e5d0c50339da0333db17b794f856a34028d7515a5319c6f170d585619
+  f/factory/lib/ci_metadata_rehash: fe02965a116e2f2767808f1265c8efb646ea60c8531b85c710576a32b5bb7309
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 0d2dc5e39e8d5ed91939c45d446fd21bbc562c6fedecca6de11cd34952e54886
   f/factory/lib/claude_read_deny: 0a76ecd3ebd4872b0fc837467906bb679a6e42c50f64b996cfe5d97286a82200

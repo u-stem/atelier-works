@@ -541,9 +541,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/poll_source` | script | [LIB] IssueとPRを見つける経路 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
+| `f/factory/lib/ci_metadata_rehash` | script | [LIB] lockのhashの失敗を、hashの再計算で直す |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
 | `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
-| `f/factory/lib/ci_metadata_rehash` | script | [LIB] metadataジョブの失敗をhashの再計算で直す |
 | `f/factory/lib/owner_id_notice` | script | [LIB] owner_idの照合のnotice |
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_review_start` | script | [LIB] pr_reviewの作業項目の作成とフローの起動 |
