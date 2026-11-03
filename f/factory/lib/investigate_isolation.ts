@@ -12,7 +12,11 @@ import {
   buildReadDenySettings,
   READ_DENY_BASE_PATHS,
 } from "./claude_read_deny.ts";
-import type { ProbeObservations } from "./investigate_isolation_observe.ts";
+import type {
+  PairLabel,
+  ProbeObservations,
+  ProbeTool,
+} from "./investigate_isolation_observe.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 /** 隔離に効くClaudeの引数。呼び出し側は変えられない。 */
@@ -67,37 +71,55 @@ export const PROBE_JOB_TAG = "bun";
 /** 判定の版。判定の挙動を変えたら上げる。上げると既存の測定の結果は合格として受けられず、測り直しになる。 */
 export const PROBE_JUDGE_VERSION = 1;
 
-/** 測った組の記録。 */
-export type ProbePair = {
-  readonly kind: "A" | "B" | "C";
-  readonly tool: string;
-  readonly path: string;
-  readonly ok: boolean;
-  readonly code?: string;
+/** 判定が不合格にした理由の符号。本文は含まない。 */
+export const PROBE_FAILURE_CODES = [
+  // 全体
+  "stopped",
+  "notice",
+  "error_name",
+  "run_count",
+  "run_missing",
+  "run_duplicate",
+  "version_missing",
+  "version_command",
+  "hash_malformed",
+  "config_dir",
+  "unexpected_tool_use",
+  // 12件に共通
+  "outcome",
+  "retried",
+  "session",
+  "tool_use_count",
+  "unmatched_tool_use",
+  "result_count",
+  // 外の置き場
+  "not_refused",
+  "canary_leaked",
+  "refusal_text",
+  // 作業ディレクトリ
+  "control_error",
+  "control_missing",
+] as const;
+
+export type ProbeFailureCode = (typeof PROBE_FAILURE_CODES)[number];
+
+/** 不合格の理由1件。`scope`は、全体か、ツールと置き場の組。 */
+export type ProbeFailure = {
+  readonly scope:
+    | "all"
+    | { readonly tool: ProbeTool; readonly pair: PairLabel };
+  readonly code: ProbeFailureCode;
 };
 
-/** 測定のジョブの結果。関門が読む項目と、後続の測定が足す項目をここで共有する。 */
+/** 測定のジョブの結果。関門が読む項目と、不合格の理由と、観測をここで共有する。 */
 export type ProbeResult = {
   readonly passed: boolean;
   readonly claudeVersion: string;
   readonly isolationFingerprint: string;
   readonly argvShapeHash: string;
   readonly probeJudgeVersion: number;
-  readonly pairs: readonly ProbePair[];
-  readonly availability?: "full" | "degraded";
-};
-
-/**
- * 観測だけを行う測定のジョブ結果。`ProbeResult`とは別の型で、`pairs`を持たない。
- * `passed`は常に`false`、`probeJudgeVersion`は常に0で、関門は必ず閉じたままになる。
- */
-export type ProbeObservationResult = {
-  readonly observationOnly: true;
-  readonly passed: false;
-  readonly claudeVersion: string;
-  readonly isolationFingerprint: string;
-  readonly argvShapeHash: string;
-  readonly probeJudgeVersion: 0;
+  /** 合格のときは空。 */
+  readonly failures: readonly ProbeFailure[];
   readonly observations: ProbeObservations;
 };
 

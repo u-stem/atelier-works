@@ -21,6 +21,7 @@ import {
   ISOLATION_FINGERPRINT,
   type IsolatedRunOptions,
   type IsolatedRunVariable,
+  PROBE_FAILURE_CODES,
   PROBE_JOB_TAG,
   PROBE_JUDGE_VERSION,
   PROBE_SCRIPT_PATH,
@@ -240,8 +241,13 @@ describe("the constants of the probe", () => {
     expect(PROBE_JOB_TAG).toBe("bun");
   });
 
-  test("starts the judge at version 1", () => {
+  // 判定の版を上げるときは、`tests/lib/investigate_isolation_judge.test.ts`のハッシュの表にも行を足す。
+  test("sets the judge at version 1", () => {
     expect(PROBE_JUDGE_VERSION).toBe(1);
+  });
+
+  test("lists each failure code once", () => {
+    expect(new Set(PROBE_FAILURE_CODES).size).toBe(PROBE_FAILURE_CODES.length);
   });
 });
 
