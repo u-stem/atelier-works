@@ -851,13 +851,9 @@ describe("originRunView", () => {
   });
 
   test("marks a schedule that is paused", () => {
-    const view = runOf(
-      snapshot([row({ paused_until: "2026-10-27T00:00:00.000Z" })]),
-    );
-
-    expect(view.kind === "ready" ? view.marks[0] : "").toStartWith(
-      "一時停止中",
-    );
+    expect(
+      runOf(snapshot([row({ paused_until: "2026-10-27T00:00:00.000Z" })])),
+    ).toMatchObject({ marks: ["一時停止中"] });
   });
 
   test("does not mark a pause that has ended", () => {
