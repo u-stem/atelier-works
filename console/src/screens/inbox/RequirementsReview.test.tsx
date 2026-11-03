@@ -152,9 +152,9 @@ describe("RequirementsReview", () => {
     );
   });
 
-  test("shows the preview check after starting in the preview", () => {
-    expect(render({ initialMode: "preview" })).toContain(
-      "取り込み時点のIssueのプレビューを表示しました。",
+  test("does not show the preview check while the preview is shown", () => {
+    expect(render({ initialMode: "preview" })).not.toContain(
+      "プレビューを表示しました。",
     );
   });
 

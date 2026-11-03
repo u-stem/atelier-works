@@ -81,8 +81,11 @@ export const REQUIREMENTS_ROW: RequirementsIndexRow = {
   has_design: true,
 };
 
+/** 取り込み時点のIssueの本文が切り詰められている承認の作業項目。 */
+export const TRUNCATED_WORK_ITEM_ID = 9;
+
 export const SUMMARY_NORMAL: ConsoleSummary = {
-  counts: { approvals: 3, failures: 1, notices: 1 },
+  counts: { approvals: 4, failures: 1, notices: 1 },
   approvals: [
     {
       approval_request_id: 3,
@@ -141,6 +144,25 @@ export const SUMMARY_NORMAL: ConsoleSummary = {
       proposal_title: "example proposal",
       created_issue_number: null,
       origin: "pr_fix",
+    },
+    {
+      approval_request_id: 5,
+      kind: "requirements",
+      status: "pending",
+      work_item_id: TRUNCATED_WORK_ITEM_ID,
+      owner: "o",
+      repo: "r",
+      title: "example truncated item",
+      issue_number: 9,
+      issue_url: null,
+      pr_number: null,
+      requested_at: STAMP,
+      expires_at: null,
+      draft_attempt: 1,
+      summary: null,
+      proposal_title: null,
+      created_issue_number: null,
+      origin: null,
     },
   ],
   failures: [
@@ -368,7 +390,7 @@ export const APPROVAL_DESIGN_DOC_NORMAL = {
 };
 
 /**
- * 承認画面の本文に使うMarkdown。表と、プレビューが描かないHTMLのコメントを含む。
+ * 承認画面の本文に使うMarkdown。表、GFMのタスクリストと脚注、プレビューが描かないHTMLのコメントを含む。
  * 取り込み時点のIssueと提案の本文が、同じ形で、原文とプレビューの違いを検査できるようにする。
  */
 const APPROVAL_BODY_MARKDOWN = [
@@ -378,6 +400,13 @@ const APPROVAL_BODY_MARKDOWN = [
   "| --- | --- |",
   "| A-1 | 表の1行目 |",
   "| A-2 | 表の2行目 |",
+  "",
+  "- [x] done",
+  "- [ ] todo",
+  "",
+  "脚注の例です[^1]。",
+  "",
+  "[^1]: 脚注の本文です。",
   "",
   "<!-- 承認者に見せたくないHTMLのコメント -->",
   "",
@@ -396,6 +425,16 @@ export const INTAKE_SNAPSHOT_NORMAL = {
   body_tail_html_comments: 0,
   body_tail_hidden_chars: 0,
   refreshed: false,
+};
+
+/** 本文が切り詰められている、取り込み時点のIssue。切り詰めの確認と、プレビューの確認が両方要る。 */
+export const INTAKE_SNAPSHOT_TRUNCATED = {
+  ...INTAKE_SNAPSHOT_NORMAL,
+  work_item_id: TRUNCATED_WORK_ITEM_ID,
+  issue_number: 9,
+  issue_url: "https://github.com/o/r/issues/9",
+  title: "example truncated item",
+  body_truncated: true,
 };
 
 /** Issue提案の承認画面が読む、提案の本文。 */

@@ -13,6 +13,7 @@ import {
   isDecidable,
   PREVIEW_CHECK_PROBLEM,
   previewBlockedReason,
+  previewCheckFor,
   previewCheckMessage,
   proposalOrigin,
   reasonCounter,
@@ -532,6 +533,30 @@ describe("previewCheckMessage", () => {
 
   test("does not point at GitHub", () => {
     expect(previewCheckMessage("提案の本文")).not.toContain("GitHub");
+  });
+});
+
+describe("previewCheckFor", () => {
+  test("asks for the check in the source after the preview", () => {
+    expect(
+      previewCheckFor({ target: "提案の本文", mode: "text", previewed: true }),
+    ).toBe(previewCheckMessage("提案の本文"));
+  });
+
+  test("does not ask for the check while the preview is shown", () => {
+    expect(
+      previewCheckFor({
+        target: "提案の本文",
+        mode: "preview",
+        previewed: true,
+      }),
+    ).toBeNull();
+  });
+
+  test("does not ask for the check before the preview is shown", () => {
+    expect(
+      previewCheckFor({ target: "提案の本文", mode: "text", previewed: false }),
+    ).toBeNull();
   });
 });
 

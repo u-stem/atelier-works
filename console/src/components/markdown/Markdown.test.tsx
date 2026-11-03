@@ -246,3 +246,21 @@ describe("Markdown without a repository", () => {
     ).not.toContain("<a ");
   });
 });
+
+describe("Markdown task lists", () => {
+  test("names the checkbox of a done item", () => {
+    expect(render("- [x] item")).toContain('aria-label="完了"');
+  });
+
+  test("names the checkbox of an open item", () => {
+    expect(render("- [ ] item")).toContain('aria-label="未完了"');
+  });
+
+  test("keeps the checkbox of an item disabled", () => {
+    expect(render("- [x] item")).toMatch(/<input[^>]*disabled/);
+  });
+
+  test("does not draw a bullet next to the checkbox", () => {
+    expect(render("- [x] item")).toMatch(/<li class="[^"]*list-none/);
+  });
+});

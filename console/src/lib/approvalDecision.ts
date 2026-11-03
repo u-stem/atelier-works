@@ -5,7 +5,7 @@ import type { SummaryApproval } from "../api/guards/summary.ts";
 import { MAX_REASON_LENGTH } from "../api/writes.ts";
 import { auditReportPath } from "./auditView.ts";
 import { displayableIssueText } from "./intakeText.ts";
-import { requirementsPath } from "./requirementsView.ts";
+import { requirementsPath, type ViewMode } from "./requirementsView.ts";
 import {
   type DesignApprovalInput,
   designApprovalBlock,
@@ -207,6 +207,19 @@ export function previewBlockedReason(target: string): string {
  */
 export function previewCheckMessage(target: string): string {
   return `${target}のプレビューを表示しました。プレビューは、生のHTML(コメントを含む)、リンク参照定義、画像を描かず、見えない文字を置き換えずに描くことがあります。原文で確かめました`;
+}
+
+/**
+ * 承認バーに渡す、プレビューの確認のチェックの文。出さないときは`null`。
+ * プレビューを表示している間は、承認そのものを止めるのでチェックを出さない。
+ * 原文を表示していて、かつプレビューを一度でも表示したときだけ、チェックを出す。
+ */
+export function previewCheckFor(_input: {
+  readonly target: string;
+  readonly mode: ViewMode;
+  readonly previewed: boolean;
+}): string | null {
+  return null;
 }
 
 /** プレビューの確認が済んでいないときに、承認を止める理由。 */

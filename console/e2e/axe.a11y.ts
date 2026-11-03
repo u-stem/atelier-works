@@ -332,6 +332,13 @@ for (const theme of THEMES) {
         await choice.click();
         await expect(choice).toHaveAttribute("aria-pressed", "true");
         await expect(page.locator("[data-preview]")).toBeVisible();
+        // 検査が、GFMのタスクリストと脚注を含む本文に対して行われていることを確かめる。
+        await expect(
+          page.locator("[data-preview] input[type=checkbox]"),
+        ).toHaveCount(2);
+        await expect(
+          page.locator("[data-preview] [data-footnotes]"),
+        ).toHaveCount(1);
 
         expect(await auditOf(page)).toEqual(clean(theme));
       });

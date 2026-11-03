@@ -1112,6 +1112,27 @@ test.describe("approval body preview by keyboard", () => {
         await expect(approve(page)).toBeDisabled();
       });
 
+      test("does not show the check of the source while the preview is shown", async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+
+        await choose(page, group, "プレビュー");
+
+        await expect(page.getByLabel(new RegExp(`^${check}`))).toHaveCount(0);
+      });
+
+      test("shows the check of the source when the source is shown again", async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        await choose(page, group, "プレビュー");
+
+        await choose(page, group, "原文");
+
+        await expect(page.getByLabel(new RegExp(`^${check}`))).toBeVisible();
+      });
+
       test("asks for the check of the source after the preview", async ({
         page,
       }) => {
@@ -1160,6 +1181,56 @@ test.describe("approval body preview by keyboard", () => {
       });
     });
   }
+});
+
+// 本文が切り詰められた承認では、切り詰めの確認とプレビューの確認が別のチェックである。
+// 切り詰めの確認を済ませても、プレビューを選んだ後は、プレビューの確認を済ませるまで承認できない。
+test.describe("truncated approval body after the preview", () => {
+  const PATH = "?approval=5";
+  const GROUP = "取り込み時点のIssueの表示の形式";
+  const TRUNCATION_CHECK = /^本文が長く、上には先頭だけを表示しています。/;
+  const PREVIEW_CHECK = /^取り込み時点のIssueのプレビューを表示しました。/;
+
+  async function choose(page: Page, label: string) {
+    await page
+      .getByRole("group", { name: GROUP })
+      .getByRole("button", { name: label })
+      .focus();
+    await page.keyboard.press("Enter");
+  }
+
+  test("stops the approval until the truncation check is done", async ({
+    page,
+  }) => {
+    await openScreen(page, PATH);
+
+    await expect(page.getByRole("button", { name: "承認する" })).toBeDisabled();
+  });
+
+  test("does not carry the truncation check to the preview check", async ({
+    page,
+  }) => {
+    await openScreen(page, PATH);
+    await page.getByLabel(TRUNCATION_CHECK).check();
+    await choose(page, "プレビュー");
+
+    await choose(page, "原文");
+
+    await expect(page.getByRole("button", { name: "承認する" })).toBeDisabled();
+  });
+
+  test("lets the approval through once both checks are done", async ({
+    page,
+  }) => {
+    await openScreen(page, PATH);
+    await page.getByLabel(TRUNCATION_CHECK).check();
+    await choose(page, "プレビュー");
+    await choose(page, "原文");
+
+    await page.getByLabel(PREVIEW_CHECK).check();
+
+    await expect(page.getByRole("button", { name: "承認する" })).toBeEnabled();
+  });
 });
 
 // 形式を往復した後も、目次が出て、選んだ節を強調する。

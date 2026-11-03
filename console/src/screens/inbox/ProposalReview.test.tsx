@@ -297,9 +297,9 @@ describe("ProposalReview", () => {
     );
   });
 
-  test("shows the preview check after starting in the preview", () => {
-    expect(renderScreen({ initialMode: "preview" })).toContain(
-      "提案の本文のプレビューを表示しました。",
+  test("does not show the preview check while the preview is shown", () => {
+    expect(renderScreen({ initialMode: "preview" })).not.toContain(
+      "プレビューを表示しました。",
     );
   });
 
