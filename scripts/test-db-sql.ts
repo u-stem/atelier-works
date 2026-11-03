@@ -71,12 +71,60 @@ export function psqlArgv(
   database: string,
   format: "plain" | "csv",
 ): string[] {
-  return [];
+  return [
+    "docker",
+    "exec",
+    "-i",
+    containerId,
+    "psql",
+    "-X",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-U",
+    "postgres",
+    "-d",
+    database,
+    "-q",
+    // 列名つきで読むときは、見出しの行を出すCSVにする。
+    ...(format === "csv" ? ["--csv"] : ["-t", "-A"]),
+  ];
 }
 
-/** `docker compose ps -q db`の出力から、コンテナIDを取り出す。 */
+const CONTAINER_ID_PATTERN = /^[0-9a-f]{12,64}$/;
+
+/**
+ * `docker compose ps -q db`の出力から、コンテナIDを取り出す。
+ * 末尾の改行は取り除く。複数行や16進以外は、引数に渡す値として不正なので例外にする。
+ */
 export function parseContainerId(output: string): string {
-  return "";
+  const id = output.trim();
+  if (!CONTAINER_ID_PATTERN.test(id)) {
+    throw new Error(
+      `test-db-sql: unexpected container id: ${JSON.stringify(output)}`,
+    );
+  }
+  return id;
+}
+
+// composeのCLIを文ごとに起動すると遅いので、コンテナIDは1回だけ引いて使い回す。
+const containerIds = new Map<string, string>();
+
+function dbContainerId(composeFile: string): string {
+  const cached = containerIds.get(composeFile);
+  if (cached !== undefined) return cached;
+  const result = Bun.spawnSync({
+    cmd: ["docker", "compose", "-f", composeFile, "ps", "-q", "db"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `docker compose ps failed (exit ${String(result.exitCode)}): ${result.stderr.toString().trim()}`,
+    );
+  }
+  const id = parseContainerId(result.stdout.toString());
+  containerIds.set(composeFile, id);
+  return id;
 }
 
 function runPsql(
@@ -85,26 +133,7 @@ function runPsql(
   format: "plain" | "csv" = "plain",
 ): string {
   const result = Bun.spawnSync({
-    cmd: [
-      "docker",
-      "compose",
-      "-f",
-      target.composeFile,
-      "exec",
-      "-T",
-      "db",
-      "psql",
-      "-X",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-U",
-      "postgres",
-      "-d",
-      target.database,
-      "-q",
-      // 列名つきで読むときは、見出しの行を出すCSVにする。
-      ...(format === "csv" ? ["--csv"] : ["-t", "-A"]),
-    ],
+    cmd: psqlArgv(dbContainerId(target.composeFile), target.database, format),
     stdin: new TextEncoder().encode(sql),
     stdout: "pipe",
     stderr: "pipe",
