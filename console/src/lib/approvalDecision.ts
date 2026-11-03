@@ -214,12 +214,14 @@ export function previewCheckMessage(target: string): string {
  * プレビューを表示している間は、承認そのものを止めるのでチェックを出さない。
  * 原文を表示していて、かつプレビューを一度でも表示したときだけ、チェックを出す。
  */
-export function previewCheckFor(_input: {
+export function previewCheckFor(input: {
   readonly target: string;
   readonly mode: ViewMode;
   readonly previewed: boolean;
 }): string | null {
-  return null;
+  return input.previewed && input.mode === "text"
+    ? previewCheckMessage(input.target)
+    : null;
 }
 
 /** プレビューの確認が済んでいないときに、承認を止める理由。 */

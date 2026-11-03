@@ -14,7 +14,7 @@ import {
   type DocReadiness,
   docReadiness,
   previewBlockedReason,
-  previewCheckMessage,
+  previewCheckFor,
   requirementsBlockedReason,
   snapshotReadiness,
 } from "../../lib/approvalDecision.ts";
@@ -125,7 +125,7 @@ const SNAPSHOT_TARGET = "取り込み時点のIssue";
  * 本文が長く切られているときは、GitHubで全文を確かめるまで承認を止める。
  * 承認の試行(`draft_attempt`)が分からないときは、最新の試行で代えず、承認を止める。
  * 取り込み時点のIssueの本文は原文が既定で、プレビューは参考に切り替えて読める。
- * プレビューを表示している間は承認を止め、一度でも表示した承認は、原文を確かめたかのチェックを求める。
+ * プレビューを表示している間は承認を止め、一度でも表示した承認は、原文を表示したときに、原文を確かめたかのチェックを求める。
  * 要件定義書の表示の形式の切り替えは別で、承認の判定に渡さない。
  * `initialMode`は取り込み時点のIssueの最初の表示の形式で、省略すると原文になる。
  */
@@ -256,9 +256,11 @@ function ReviewBody({
         }
         refreshed={snapshot.data?.refreshed === true}
         fullCheckRequired={snapshot.data?.body_truncated === true}
-        previewCheckMessage={
-          previewed ? previewCheckMessage(SNAPSHOT_TARGET) : null
-        }
+        previewCheckMessage={previewCheckFor({
+          target: SNAPSHOT_TARGET,
+          mode,
+          previewed,
+        })}
       />
     </>
   );

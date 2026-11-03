@@ -15,7 +15,7 @@ import { ViewModeSwitch } from "../../components/ViewModeSwitch.tsx";
 import {
   factoryLabelChoice,
   previewBlockedReason,
-  previewCheckMessage,
+  previewCheckFor,
   proposalOrigin,
 } from "../../lib/approvalDecision.ts";
 import { NO_LINGER_OPTIONS } from "../../lib/delayedVisible.ts";
@@ -103,7 +103,7 @@ const LOADING_SHAPE: LoadingShape = {
  * 本文とラベルの選択肢は"inbox"ビューから読む。読めないあいだは承認の操作を出さない。
  * 提案が未決の一覧に無いときも、本文が分からないまま承認させないので、操作を出さない。
  * 本文は原文が既定で、プレビューは参考に切り替えて読める。
- * プレビューを表示している間は承認を止め、一度でも表示した承認は、原文を確かめたかのチェックを求める。
+ * プレビューを表示している間は承認を止め、一度でも表示した承認は、原文を表示したときに、原文を確かめたかのチェックを求める。
  * `initialMode`は最初の表示の形式で、省略すると原文になる。
  */
 export function ProposalReview({
@@ -181,9 +181,11 @@ export function ProposalReview({
         }
         refreshed={false}
         fullCheckRequired={false}
-        previewCheckMessage={
-          previewed ? previewCheckMessage(PROPOSAL_BODY_TARGET) : null
-        }
+        previewCheckMessage={previewCheckFor({
+          target: PROPOSAL_BODY_TARGET,
+          mode,
+          previewed,
+        })}
       />
     </>
   );
