@@ -23,11 +23,12 @@ import {
   intakeSnapshotQueryKey,
 } from "./api/queries.ts";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
-import type { ViewMode } from "./lib/requirementsView.ts";
 import { ApprovalOverview } from "./screens/inbox/ApprovalOverview.tsx";
 import {
   DesignReview,
+  type DesignView,
   designPreviewGate,
+  nextDesignView,
 } from "./screens/inbox/DesignReview.tsx";
 
 // 不可視文字をソースに直接書くと読めないので、コードポイントから作る。
@@ -134,8 +135,8 @@ function render(seed: Seed = {}): string {
   );
 }
 
-/** 設計の承認画面だけを描く。承認の画面は`initialMode`を渡さないので、プレビューの描画はここで確かめる。 */
-function renderReview(seed: Seed = {}, initialMode?: ViewMode): string {
+/** 設計の承認画面だけを描く。承認の画面は`initialView`を渡さないので、プレビューの描画はここで確かめる。 */
+function renderReview(seed: Seed = {}, initialView?: DesignView): string {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, retryOnMount: false } },
   });
@@ -160,7 +161,7 @@ function renderReview(seed: Seed = {}, initialMode?: ViewMode): string {
           null,
           createElement(
             DesignReview,
-            initialMode === undefined ? props : { ...props, initialMode },
+            initialView === undefined ? props : { ...props, initialView },
           ),
         ),
       ),
@@ -449,12 +450,20 @@ describe("the source of the wiring", () => {
 const PREVIEW_REASON =
   "設計書をプレビューで表示中は承認できません。承認するには、原文を表示してください。";
 
+// プレビューを選んだ承認に出す、原文の確認のチェックの文と、承認を止める理由の文。
+// 保護の外から期待値を取らず、ここで直接書いて照合する。
+const PREVIEW_CHECK = "設計書のプレビューを表示しました。原文で確かめました";
+const PREVIEW_CHECK_REASON = "原文で確かめるまで承認できません。";
+
+const IN_PREVIEW: DesignView = { mode: "preview", previewed: false };
+const TEXT_AFTER_PREVIEW: DesignView = { mode: "text", previewed: true };
+
 /** 承認画面が描いた設計書のパネルから先。取り込み時点のIssueのパネルを除く。 */
 function designPanelOf(html: string): string {
   return html.slice(html.indexOf("承認対象の設計書"));
 }
 
-describe("design approval preview wiring", () => {
+describe("design approval check wiring", () => {
   test("shows the design in text mode at first", () => {
     expect(designPanelOf(renderReview())).not.toContain("data-preview");
   });
@@ -464,23 +473,23 @@ describe("design approval preview wiring", () => {
   });
 
   test("renders the design as a preview without the text view", () => {
-    const panel = designPanelOf(renderReview({}, "preview"));
+    const panel = designPanelOf(renderReview({}, IN_PREVIEW));
     expect(panel).toContain("data-preview");
     expect(panel).not.toContain('<bdo dir="ltr">');
   });
 
   test("keeps the issue at intake in text", () => {
-    const html = renderReview({}, "preview");
+    const html = renderReview({}, IN_PREVIEW);
     const before = html.slice(0, html.indexOf("承認対象の設計書"));
     expect(before).not.toContain("data-preview");
   });
 
   test("disables the approval in the preview", () => {
-    expect(approveIsDisabled(renderReview({}, "preview"))).toBe(true);
+    expect(approveIsDisabled(renderReview({}, IN_PREVIEW))).toBe(true);
   });
 
   test("says why the approval is stopped in the preview", () => {
-    expect(renderReview({}, "preview")).toContain(PREVIEW_REASON);
+    expect(renderReview({}, IN_PREVIEW)).toContain(PREVIEW_REASON);
   });
 
   test("lets the approval through in the text mode", () => {
@@ -490,38 +499,134 @@ describe("design approval preview wiring", () => {
   });
 
   test("reports the truncation before the preview", () => {
-    const html = renderReview({ doc: { truncated: true } }, "preview");
+    const html = renderReview({ doc: { truncated: true } }, IN_PREVIEW);
     expect(html).toContain("設計書が長さの上限で切られていて");
     expect(html).not.toContain(PREVIEW_REASON);
   });
 
-  describe("gates by mode", () => {
-    test("stops in the preview", () => {
-      expect(designPreviewGate({ mode: "preview" }).reason).toBe(
-        PREVIEW_REASON,
+  test("shows no preview check at first", () => {
+    expect(renderReview()).not.toContain(PREVIEW_CHECK);
+  });
+
+  test("asks for the preview check after the preview", () => {
+    const html = renderReview({}, TEXT_AFTER_PREVIEW);
+    expect(html).toContain(PREVIEW_CHECK);
+    expect(approveIsDisabled(html)).toBe(true);
+  });
+
+  test("says why the approval waits for the preview check", () => {
+    expect(renderReview({}, TEXT_AFTER_PREVIEW)).toContain(
+      PREVIEW_CHECK_REASON,
+    );
+  });
+
+  test("stops the approval in a preview that starts unchecked", () => {
+    const html = renderReview({}, IN_PREVIEW);
+    expect(approveIsDisabled(html)).toBe(true);
+    expect(html).toContain(PREVIEW_REASON);
+  });
+
+  test("shows no preview check while the preview is shown", () => {
+    expect(
+      renderReview({}, { mode: "preview", previewed: true }),
+    ).not.toContain(PREVIEW_CHECK);
+  });
+
+  describe("moves the view", () => {
+    test("remembers the preview when it is chosen", () => {
+      expect(
+        nextDesignView({ mode: "text", previewed: false }, "preview"),
+      ).toEqual({ mode: "preview", previewed: true });
+    });
+
+    test("remembers the preview when it starts in the preview", () => {
+      expect(
+        nextDesignView({ mode: "preview", previewed: false }, "text"),
+      ).toEqual({ mode: "text", previewed: true });
+    });
+
+    test("keeps the preview remembered in the text mode", () => {
+      expect(nextDesignView({ mode: "text", previewed: true }, "text")).toEqual(
+        { mode: "text", previewed: true },
       );
     });
 
-    test("stops in a mode that it does not know", () => {
-      expect(designPreviewGate({ mode: "unknown" }).reason).toBe(
-        PREVIEW_REASON,
-      );
+    test("does not remember the preview when it was never chosen", () => {
+      expect(
+        nextDesignView({ mode: "text", previewed: false }, "text"),
+      ).toEqual({ mode: "text", previewed: false });
     });
 
-    test("lets the text mode through", () => {
-      expect(designPreviewGate({ mode: "text" }).reason).toBeNull();
+    test("keeps the preview remembered when it returns to the text", () => {
+      expect(
+        nextDesignView({ mode: "preview", previewed: true }, "text"),
+      ).toEqual({ mode: "text", previewed: true });
+    });
+
+    test("treats an unknown mode as the preview", () => {
+      expect(
+        nextDesignView({ mode: "text", previewed: false }, "unknown"),
+      ).toEqual({ mode: "preview", previewed: true });
     });
   });
 
-  describe("wires the gate by shape", () => {
+  describe("gates by mode and previewed", () => {
+    test("lets the text mode through without a check", () => {
+      expect(designPreviewGate({ mode: "text", previewed: false })).toEqual({
+        reason: null,
+        check: null,
+      });
+    });
+
+    test("asks for the check after the preview in the text mode", () => {
+      expect(designPreviewGate({ mode: "text", previewed: true })).toEqual({
+        reason: null,
+        check: PREVIEW_CHECK,
+      });
+    });
+
+    test("stops in the preview and shows no check", () => {
+      expect(designPreviewGate({ mode: "preview", previewed: true })).toEqual({
+        reason: PREVIEW_REASON,
+        check: null,
+      });
+    });
+
+    test("stops in a mode that it does not know", () => {
+      expect(designPreviewGate({ mode: "unknown", previewed: true })).toEqual({
+        reason: PREVIEW_REASON,
+        check: null,
+      });
+    });
+  });
+
+  describe("wires the check by shape", () => {
     const review = source("console/src/screens/inbox/DesignReview.tsx");
     const overview = source("console/src/screens/inbox/ApprovalOverview.tsx");
+    const bar = source("console/src/screens/inbox/ApprovalBar.tsx");
 
-    test("calls the gate once with the mode", () => {
+    test("calls the gate once with the mode and the memory of the preview", () => {
       // 定義を除いた呼び出しが、画面の1か所だけである。
       const calls = review.replace("function designPreviewGate(", "");
       expect(calls.match(/designPreviewGate\(/g)?.length).toBe(1);
-      expect(calls).toContain("const gate = designPreviewGate({ mode });");
+      expect(calls).toContain(
+        "const gate = designPreviewGate({ mode, previewed });",
+      );
+    });
+
+    test("takes the mode and the memory from the one view", () => {
+      expect(review).toContain("const { mode, previewed } = view;");
+    });
+
+    test("gives only the check of the gate to the approval bar", () => {
+      expect(review.match(/previewCheckMessage=\{/g)?.length).toBe(1);
+      expect(review).toContain("previewCheckMessage={gate.check}");
+    });
+
+    test("makes the approval bar ask for the check when it has a message", () => {
+      expect(bar).toContain(
+        "previewCheckRequired: previewCheckMessage !== null",
+      );
     });
 
     test("gives only the reason of the gate to the approval bar", () => {
@@ -529,9 +634,11 @@ describe("design approval preview wiring", () => {
       expect(review).toContain("approveBlockedReason={blocked ?? gate.reason}");
     });
 
-    test("keeps one state of the mode", () => {
+    test("keeps one state of the view", () => {
       expect(review.match(/\buseState\s*[<(]/g)?.length).toBe(1);
-      expect(review).toContain("useState<ViewMode>(initialMode)");
+      expect(review).toContain(
+        "const [view, setView] = useState<DesignView>(initialView);",
+      );
     });
 
     test("imports from react once", () => {
@@ -581,10 +688,10 @@ describe("design approval preview wiring", () => {
       ]);
     });
 
-    test("changes the mode in one place", () => {
-      expect(review.match(/\bsetMode\b/g)?.length).toBe(2);
+    test("changes the view in one place", () => {
+      expect(review.match(/\bsetView\b/g)?.length).toBe(2);
       expect(review).toMatch(
-        /const onChange = \(next: ViewMode\) => \{\s*setMode\(next\);\s*\};/,
+        /const onChange = \(next: ViewMode\) => \{\s*setView\(\(view\) => nextDesignView\(view, next\)\);\s*\};/,
       );
     });
 
@@ -633,8 +740,8 @@ describe("design approval preview wiring", () => {
       );
     });
 
-    test("does not pass the initial mode from the overview", () => {
-      expect(overview).not.toContain("initialMode");
+    test("does not pass the initial view from the overview", () => {
+      expect(overview).not.toMatch(/initialView|initialMode/);
     });
   });
 

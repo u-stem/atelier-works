@@ -196,10 +196,25 @@ const PREVIEW_BLOCKED_REASON =
  * 承認できる表示は`"text"`(原文)だけで、プレビューも、知らない値も止める。
  * 原文で確かめられる表示でだけ承認を押せるようにするため、条件を画面のソースの中に置く。
  */
-export function designPreviewGate(input: { mode: string }): {
+export function designPreviewGate(input: {
+  mode: string;
+  previewed: boolean;
+}): {
   reason: string | null;
+  check: string | null;
 } {
-  return { reason: input.mode === "text" ? null : PREVIEW_BLOCKED_REASON };
+  return {
+    reason: input.mode === "text" ? null : PREVIEW_BLOCKED_REASON,
+    check: null,
+  };
+}
+
+/** 設計書の表示の状態。`previewed`は、プレビューを一度でも選んだかである。 */
+export type DesignView = { mode: ViewMode; previewed: boolean };
+
+/** 表示の形式を切り替えた後の状態を返す。 */
+export function nextDesignView(_view: DesignView, _next: string): DesignView {
+  return { mode: "text", previewed: false };
 }
 
 /**
@@ -315,20 +330,20 @@ function DocPanel({
  * 取り込み時点のIssueは、切り替えの対象にせず、常に原文で出す。
  * 承認バーは承認依頼ごとに作り直し、チェックなどの状態を別の依頼に持ち越さない。
  * 却下は、設計書を読めなくても押せる。
- * `initialMode`は設計書の最初の表示の形式で、省略すると原文になる。
+ * `initialView`は設計書の最初の表示の状態で、省略すると原文になる。
  */
 export function DesignReview({
   approval,
   title,
   now,
-  initialMode = "text",
+  initialView = { mode: "text", previewed: false },
 }: {
   approval: SummaryApproval;
   title: string;
   now: number;
-  initialMode?: ViewMode;
+  initialView?: DesignView;
 }) {
-  const [mode, setMode] = useState<ViewMode>(initialMode);
+  const [mode, setMode] = useState<ViewMode>(initialView.mode);
   const onChange = (next: ViewMode) => {
     setMode(next);
   };
@@ -352,7 +367,7 @@ export function DesignReview({
     doc: { isPending: doc.isPending, isError: doc.isError, data: doc.data },
     workItemStatus: approval.work_item_status,
   });
-  const gate = designPreviewGate({ mode });
+  const gate = designPreviewGate({ mode, previewed: false });
   return (
     <>
       <IntakeSnapshotPanel
