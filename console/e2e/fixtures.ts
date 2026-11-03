@@ -85,7 +85,7 @@ export const REQUIREMENTS_ROW: RequirementsIndexRow = {
 export const TRUNCATED_WORK_ITEM_ID = 9;
 
 export const SUMMARY_NORMAL: ConsoleSummary = {
-  counts: { approvals: 4, failures: 1, notices: 1 },
+  counts: { approvals: 5, failures: 1, notices: 1 },
   approvals: [
     {
       approval_request_id: 3,
@@ -163,6 +163,26 @@ export const SUMMARY_NORMAL: ConsoleSummary = {
       proposal_title: null,
       created_issue_number: null,
       origin: null,
+    },
+    {
+      approval_request_id: 9,
+      kind: "design",
+      status: "pending",
+      work_item_id: TRUNCATED_WORK_ITEM_ID,
+      owner: "o",
+      repo: "r",
+      title: "example truncated design item",
+      issue_number: 9,
+      issue_url: null,
+      pr_number: null,
+      requested_at: STAMP,
+      expires_at: null,
+      draft_attempt: null,
+      summary: null,
+      proposal_title: null,
+      created_issue_number: null,
+      origin: null,
+      work_item_status: "awaiting_design_approval",
     },
   ],
   failures: [

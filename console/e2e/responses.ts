@@ -5,6 +5,7 @@
 import { isRecord } from "../src/api/guards/primitives.ts";
 import {
   APPROVAL_DESIGN_DOC_NORMAL,
+  APPROVAL_DESIGN_DOC_TRUNCATED_ITEM,
   CONFIG_EMPTY,
   CONFIG_NORMAL,
   DESIGN_DOC_NORMAL,
@@ -33,6 +34,12 @@ import {
 export type Mode = "normal" | "empty";
 
 export type Reply = { readonly status: number; readonly body: unknown };
+
+/** 承認依頼のidごとの設計書。表に無い依頼は、設計書が無いものとして扱う。 */
+const APPROVAL_DESIGN_DOCS = [
+  APPROVAL_DESIGN_DOC_NORMAL,
+  APPROVAL_DESIGN_DOC_TRUNCATED_ITEM,
+];
 
 const RUN_PREFIX = "/api/w/factory/jobs/run_wait_result/p/";
 
@@ -90,11 +97,11 @@ function queryReply(args: unknown, mode: Mode): Reply | null {
       // 表に無い承認依頼の設計書は、backendが「設計書が無い」と返す空の配列にする。
       return pick(
         mode,
-        isRecord(args) &&
-          args.approval_request_id ===
-            APPROVAL_DESIGN_DOC_NORMAL.approval_request_id
-          ? [APPROVAL_DESIGN_DOC_NORMAL]
-          : [],
+        APPROVAL_DESIGN_DOCS.filter(
+          (doc) =>
+            isRecord(args) &&
+            args.approval_request_id === doc.approval_request_id,
+        ),
         [],
       );
     case "intake_targets":
