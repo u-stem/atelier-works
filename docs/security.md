@@ -2253,7 +2253,9 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
 - `designPreviewGate`は、保護テストが直接呼び、戻り値の全体を文字列で照合する。
   原文で未選択は理由も確認の文も無く、原文で選択済みは確認の文だけ、プレビュー(未選択と選択済みの両方)と知らない形式(選択済み)は理由だけを返す。
 - `DesignReview.tsx`のソースで、判定の関数の呼び出しが1つで、`const gate = designPreviewGate({ mode, previewed });`の形であること。
-  承認バーに渡す止める理由が`blocked ?? gate.reason`の1か所で、確認の文が`previewCheckMessage={gate.check}`の1か所であること。
+  承認バーに渡す止める理由が`blocked ?? gate.reason`の1か所であること。
+  `previewCheckMessage={`(属性名と`=`と`{`の間に空白を挟まない形)の出現が1つで、`previewCheckMessage={gate.check}`の文字列を含むこと。
+  空白を挟んだ書き方は、検査の外にある。
   `const { mode, previewed } = view;`を含むこと(数えない)。
   名前の後ろに`(`か`<`を書いた`useState`の呼び出し(`useState(`と`useState<`の形。名前と記号の間の空白は許す)が1つであること。
   `import`から`from "react";`までの間に`;`を含まない形のimportで持ち込む名前は、現在使う`Fragment`、`ReactNode`、`useMemo`、`useState`だけであること。
@@ -2291,13 +2293,13 @@ U+3000は字下げや全角の区切りに普通に使うので、続けても�
   祖先の部品がmountし直させる変更も、配線の検査を通る。
   承認依頼のidごとの記録は、状態の置き場所が増え、保護テストが固定しにくいので、持たない。
   要件定義の承認画面と同じ水準で受け入れる。
-- mountの後は、確認のチェックを求めるか、出すか、付けた後に強制するか。
-  このすべてが、保護の外の`ApprovalBar.tsx`と`approvalDecision.ts`にある。
+- mountの後の確認のチェックの扱いは、すべて保護の外の`ApprovalBar.tsx`と`approvalDecision.ts`にある。
+  求めるか、出すか、付けた後に強制するかを決める処理である。
   `previewChecked`の持ち越しと、`approveGateProblem`の判定の順もここである。
   保護テストが固定するのは、最初の描画で承認が無効で、理由が確認の理由の文であるところまでである。
   mountの後の変更は、保護パスを通らず、人のレビューを経ない。
   たとえば、`ApprovalBar.tsx`に、`previewCheckMessage`が非nullになったら`setPreviewChecked(true)`する効果を足す変更が当たる。
-  `ApprovalBar.tsx`の`previewChecked`の初期値を変えて、最初から付いた状態で出す変更も当たる。
+  `approveGateProblem`の判定の順を入れ替えて、プレビューの確認を後回しにする変更も当たる。
   チェックを付けた後の挙動を確かめるのは、保護の外のe2eだけである。
   この経路は、要件定義とIssue提案の承認画面と同じ水準で受け入れる。
 - `ViewModeSwitch`と`ToggleChip`は、原文の表示中も設計書のパネルの中に描かれる。
