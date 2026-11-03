@@ -263,4 +263,8 @@ describe("Markdown task lists", () => {
   test("does not draw a bullet next to the checkbox", () => {
     expect(render("- [x] item")).toMatch(/<li class="[^"]*list-none/);
   });
+
+  test("keeps the bullet of a plain list item", () => {
+    expect(render("- item")).not.toMatch(/<li class="[^"]*list-none/);
+  });
 });
