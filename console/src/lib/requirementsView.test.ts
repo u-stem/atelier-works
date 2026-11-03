@@ -4,6 +4,7 @@ import type {
   RequirementsDoc,
   RequirementsIndexRow,
 } from "../api/guards/requirements.ts";
+import type { Heading } from "./markdownHeadings.ts";
 import {
   attemptChoices,
   confirmedLatestAttempt,
@@ -448,7 +449,7 @@ describe("prepareDoc", () => {
 });
 
 describe("tocIdsFor", () => {
-  const HEADINGS = [
+  const HEADINGS: Heading[] = [
     { id: "h-background", level: 2, text: "Background", line: 3 },
     { id: "h-scope", level: 2, text: "Scope", line: 7 },
   ];

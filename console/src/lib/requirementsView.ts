@@ -288,10 +288,14 @@ export type ViewMode = "preview" | "text";
 
 /**
  * 目次の強調に使う見出しの`id`の並び。
+ * Markdownの文字のときは、本文に見出しの`id`が無く、リンクが飛ばないので空にする。
+ * 承認画面に埋め込むときも、目次を出さないので空にする。
  */
 export function tocIdsFor(
-  _headings: readonly Heading[],
-  _options: { readonly embedded: boolean; readonly mode: ViewMode },
+  headings: readonly Heading[],
+  options: { readonly embedded: boolean; readonly mode: ViewMode },
 ): string[] {
-  return [];
+  return options.embedded || options.mode === "text"
+    ? []
+    : headings.map((heading) => heading.id);
 }

@@ -1,17 +1,21 @@
 import { ExternalLink, Info } from "lucide-react";
-import { type ReactNode, useMemo, useRef } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import { Markdown } from "../../components/markdown/Markdown.tsx";
+import { MarkdownText } from "../../components/markdown/MarkdownText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { ViewModeSwitch } from "../../components/ViewModeSwitch.tsx";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
 import { REQUIREMENTS_FRAME_CLASS } from "../../lib/layoutClasses.ts";
 import {
   docSourceNotice,
   type PreparedDoc,
   requirementsStatusTone,
+  tocIdsFor,
   toneBadgeVariant,
+  type ViewMode,
 } from "../../lib/requirementsView.ts";
 import { safeGitHubUrl } from "../../lib/safeUrl.ts";
 import { AttemptSwitcher } from "./AttemptSwitcher.tsx";
@@ -55,17 +59,22 @@ function IssueLink({ doc }: { doc: RequirementsDoc }) {
  * 本文と要約と未確定事項はIssueの内容に由来するので、`prepared`(見えない文字を置き換え済み)だけを描く。
  * `embedded`のときは、承認の画面の中に置くため、メタ情報、試行の切り替え、目次を省き、幅も親に合わせる。
  * 承認の画面は、承認する試行を固定して出すので、試行を切り替えさせない。
+ * 本文は、プレビューとMarkdownの文字を切り替えられる。承認の画面でも出す。
+ * Markdownの文字では、`prepared.markdown`の全文を解釈せずに出し、図を描かず、目次を出さない。
+ * `initialMode`は最初の形式で、省くとプレビューになる。
  */
 export function RequirementsDocumentView({
   doc,
   prepared,
   latestAttempt,
+  initialMode = "preview",
   embedded = false,
 }: {
   doc: RequirementsDoc;
   prepared: PreparedDoc;
   /** 最新の試行の番号。確かめられていないときは`null`。 */
   latestAttempt: number | null;
+  initialMode?: ViewMode;
   embedded?: boolean;
 }) {
   const repo = useMemo(
@@ -75,10 +84,12 @@ export function RequirementsDocumentView({
   const sourceNotice = docSourceNotice(doc.doc_dir_source);
   // 目次は2か所(畳んだ目次と右の目次)に出すので、強調する節は1か所で決める。
   const anchor = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<ViewMode>(initialMode);
   const tocIds = useMemo(
-    () => (embedded ? [] : prepared.headings.map((heading) => heading.id)),
-    [embedded, prepared.headings],
+    () => tocIdsFor(prepared.headings, { embedded, mode }),
+    [embedded, mode, prepared.headings],
   );
+  const showToc = tocIds.length > 0;
   const activeId = useActiveHeading(tocIds, anchor);
   return (
     <div
@@ -135,7 +146,7 @@ export function RequirementsDocumentView({
           </p>
         ) : null}
         {/* 目次は、狭い幅では本文の前に畳んで置く。 */}
-        {embedded || prepared.headings.length === 0 ? null : (
+        {showToc ? (
           <Card tag="details" padding="compact" className="min-[1100px]:hidden">
             <summary className="cursor-pointer text-small font-semibold text-muted-foreground">
               目次
@@ -147,21 +158,26 @@ export function RequirementsDocumentView({
               />
             </div>
           </Card>
-        )}
+        ) : null}
         <p
           dir="ltr"
           className="border-l-4 border-border pl-4 text-lead text-muted-foreground [unicode-bidi:isolate]"
         >
           {prepared.summary}
         </p>
-        <Markdown
-          markdown={prepared.markdown}
-          headings={prepared.headings}
-          hiddenTitleLine={prepared.titleLine}
-          diagrams={doc.diagrams}
-          rejectedDiagrams={doc.rejected_diagrams}
-          repo={repo}
-        />
+        <ViewModeSwitch target="要件定義書" mode={mode} onChange={setMode} />
+        {mode === "text" ? (
+          <MarkdownText markdown={prepared.markdown} />
+        ) : (
+          <Markdown
+            markdown={prepared.markdown}
+            headings={prepared.headings}
+            hiddenTitleLine={prepared.titleLine}
+            diagrams={doc.diagrams}
+            rejectedDiagrams={doc.rejected_diagrams}
+            repo={repo}
+          />
+        )}
         {prepared.openQuestions.length === 0 ? null : (
           <section aria-labelledby="open-questions-heading">
             <h2
@@ -182,11 +198,11 @@ export function RequirementsDocumentView({
           </section>
         )}
       </article>
-      {embedded || prepared.headings.length === 0 ? null : (
+      {showToc ? (
         <aside className="sticky top-6 hidden w-56 shrink-0 min-[1100px]:block">
           <RequirementsToc headings={prepared.headings} activeId={activeId} />
         </aside>
-      )}
+      ) : null}
     </div>
   );
 }

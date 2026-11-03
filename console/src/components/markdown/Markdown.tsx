@@ -32,7 +32,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { RequirementsDiagram } from "../../api/guards/requirements.ts";
 import { cn } from "../../lib/cn.ts";
-import { TABLE_CELL_COMPACT_CLASS } from "../../lib/controlClasses.ts";
+import { TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
 import { ALERT_LABELS, stripAlertMarker } from "../../lib/markdownAlerts.ts";
 import { type Heading, headingIdAtLine } from "../../lib/markdownHeadings.ts";
 import { type RepoRef, resolveMarkdownLink } from "../../lib/markdownLink.ts";
@@ -328,14 +328,23 @@ const components: Components = {
     </pre>
   ),
   table: ({ children }) => (
-    <div className="my-4 overflow-x-auto">
+    // 横にはみ出す表は、枠をキーボードで焦点に当てて読み進められるようにする。
+    <section
+      aria-label="表"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: スクロールできる領域は、キーボードで焦点を当てないと横を読み進められない。
+      tabIndex={0}
+      className="my-4 overflow-x-auto rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+    >
       <table className="w-full border-collapse text-small">{children}</table>
-    </div>
+    </section>
+  ),
+  tbody: ({ children }) => (
+    <tbody className="[&>tr:nth-child(even)]:bg-muted/40">{children}</tbody>
   ),
   th: ({ children }) => (
     <th
       className={cn(
-        TABLE_CELL_COMPACT_CLASS,
+        TABLE_CELL_CLASS,
         "border border-border bg-muted text-left align-top font-semibold",
       )}
     >
@@ -343,9 +352,7 @@ const components: Components = {
     </th>
   ),
   td: ({ children }) => (
-    <td
-      className={cn(TABLE_CELL_COMPACT_CLASS, "border border-border align-top")}
-    >
+    <td className={cn(TABLE_CELL_CLASS, "border border-border align-top")}>
       {Children.map(children, keepIdsTogether)}
     </td>
   ),

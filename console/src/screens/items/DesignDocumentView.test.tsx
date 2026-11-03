@@ -128,10 +128,12 @@ describe("DesignDocumentView", () => {
     expect(render()).not.toContain("approval=");
   });
 
-  test("has no approval bar", () => {
+  test("has no button but the two of the view mode switch", () => {
     expect(
-      render({ approval_request_id: 31, approval_status: "pending" }),
-    ).not.toContain("<button");
+      render({ approval_request_id: 31, approval_status: "pending" }).split(
+        "<button",
+      ).length - 1,
+    ).toBe(2);
   });
 
   test("shows neither the approval status nor the draft switcher", () => {

@@ -1,36 +1,49 @@
 import { Info } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { DesignDoc } from "../../api/guards/design.ts";
 import { Markdown } from "../../components/markdown/Markdown.tsx";
+import { MarkdownText } from "../../components/markdown/MarkdownText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Card } from "../../components/ui/card.tsx";
+import { ViewModeSwitch } from "../../components/ViewModeSwitch.tsx";
 import { REQUIREMENTS_FRAME_CLASS } from "../../lib/layoutClasses.ts";
 import { formatAbsoluteIso } from "../../lib/relativeTime.ts";
-import type { PreparedDoc } from "../../lib/requirementsView.ts";
+import {
+  type PreparedDoc,
+  tocIdsFor,
+  type ViewMode,
+} from "../../lib/requirementsView.ts";
 import { LINK_CLASS } from "./detail/DetailParts.tsx";
 import { RequirementsToc } from "./RequirementsToc.tsx";
 import { useActiveHeading } from "./useActiveHeading.ts";
 
 /**
- * 本文の先頭に出す固定の注記。
+ * 本文の先頭に出す固定の注記。形式ごとに事実に合わせた文言にする。
  * この画面の描画は、承認と実装が受け取る文字と違うので、承認の判断を承認画面の全文へ戻す。
  */
-const FIXED_NOTICE =
-  "承認と実装が受け取る文字は、承認画面の全文です。この画面は読みやすく描いたもので、生のHTML(コメントを含む)、リンク参照定義、見えない文字、長さの扱いが違います。";
+const FIXED_NOTICES: Readonly<Record<ViewMode, string>> = {
+  preview:
+    "承認と実装が受け取る文字は、承認画面の全文です。この画面は読みやすく描いたもので、生のHTML(コメントを含む)、リンク参照定義、見えない文字、長さの扱いが違います。",
+  text: "承認と実装が受け取る文字は、承認画面の全文です。この画面の文字は、見えない文字の表し方、改行と空白の扱い、長さが違います。",
+};
 
 /**
  * 設計書1件の本文。固定の注記、作成の時刻、要約、本文、未確定事項を左に、目次を右に置く。
  * 承認の操作は置かない。承認待ちの設計書には、承認画面へのリンクだけを注記に添える。
  * 承認の状態の表示と、設計書の切り替えは置かず、詳細の設計タブへ戻って行う。
+ * 本文は、プレビューとMarkdownの文字を切り替えられる。Markdownの文字では、全文を解釈せずに出し、図を描かず、目次を出さない。
  * 本文と要約と未確定事項は、信頼できない入力を読んだ出力なので、`prepared`(見えない文字を置き換え済み)だけを描く。
+ * `initialMode`は最初の形式で、省くとプレビューになる。
  */
 export function DesignDocumentView({
   doc,
   prepared,
+  initialMode = "preview",
 }: {
   doc: DesignDoc;
   prepared: PreparedDoc;
+  initialMode?: ViewMode;
 }) {
   const repo = useMemo(
     () => ({ owner: doc.owner, repo: doc.repo }),
@@ -38,10 +51,12 @@ export function DesignDocumentView({
   );
   // 目次は2か所(畳んだ目次と右の目次)に出すので、強調する節は1か所で決める。
   const anchor = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<ViewMode>(initialMode);
   const tocIds = useMemo(
-    () => prepared.headings.map((heading) => heading.id),
-    [prepared.headings],
+    () => tocIdsFor(prepared.headings, { embedded: false, mode }),
+    [mode, prepared.headings],
   );
+  const showToc = tocIds.length > 0;
   const activeId = useActiveHeading(tocIds, anchor);
   const approvalLink =
     doc.approval_status === "pending" && doc.approval_request_id !== null
@@ -53,7 +68,7 @@ export function DesignDocumentView({
         <Alert variant="warning">
           <Info aria-hidden="true" />
           <AlertDescription>
-            <p>{FIXED_NOTICE}</p>
+            <p>{FIXED_NOTICES[mode]}</p>
             {approvalLink === null ? null : (
               <p>
                 <Link to={approvalLink} className={LINK_CLASS}>
@@ -75,7 +90,7 @@ export function DesignDocumentView({
           </p>
         ) : null}
         {/* 目次は、狭い幅では本文の前に畳んで置く。 */}
-        {prepared.headings.length === 0 ? null : (
+        {showToc ? (
           <Card tag="details" padding="compact" className="min-[1100px]:hidden">
             <summary className="cursor-pointer text-small font-semibold text-muted-foreground">
               目次
@@ -87,21 +102,26 @@ export function DesignDocumentView({
               />
             </div>
           </Card>
-        )}
+        ) : null}
         <p
           dir="ltr"
           className="border-l-4 border-border pl-4 text-lead text-muted-foreground [unicode-bidi:isolate]"
         >
           {prepared.summary}
         </p>
-        <Markdown
-          markdown={prepared.markdown}
-          headings={prepared.headings}
-          hiddenTitleLine={prepared.titleLine}
-          diagrams={doc.diagrams}
-          rejectedDiagrams={doc.rejected_diagrams}
-          repo={repo}
-        />
+        <ViewModeSwitch target="設計書" mode={mode} onChange={setMode} />
+        {mode === "text" ? (
+          <MarkdownText markdown={prepared.markdown} />
+        ) : (
+          <Markdown
+            markdown={prepared.markdown}
+            headings={prepared.headings}
+            hiddenTitleLine={prepared.titleLine}
+            diagrams={doc.diagrams}
+            rejectedDiagrams={doc.rejected_diagrams}
+            repo={repo}
+          />
+        )}
         {prepared.openQuestions.length === 0 ? null : (
           <section aria-labelledby="design-open-questions-heading">
             <h2
@@ -122,11 +142,11 @@ export function DesignDocumentView({
           </section>
         )}
       </article>
-      {prepared.headings.length === 0 ? null : (
+      {showToc ? (
         <aside className="sticky top-6 hidden w-56 shrink-0 min-[1100px]:block">
           <RequirementsToc headings={prepared.headings} activeId={activeId} />
         </aside>
-      )}
+      ) : null}
     </div>
   );
 }
