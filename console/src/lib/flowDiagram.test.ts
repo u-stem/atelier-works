@@ -647,7 +647,7 @@ describe("layoutFlowDiagram", () => {
       .map((flow) => flow.name)
       .sort();
 
-    expect(scrolled).toEqual(["design", "pipeline", "pr_fix"]);
+    expect(scrolled).toEqual(["design", "implement", "pipeline", "pr_fix"]);
   });
 
   test("scrolls the widest flow in a narrower body", () => {
@@ -755,11 +755,10 @@ describe("activeScrollLeft", () => {
   });
 
   test("moves a running step on the right edge into view", () => {
-    const last = realFlow("pr_fix").steps[4];
+    const withoutExits = { ...realFlow("pr_fix"), exits: [] };
+    const last = withoutExits.steps[4];
     const layout = layoutFlowDiagram(
-      flowDiagramModel(realFlow("pr_fix"), [
-        stepData(last?.id ?? "", "running"),
-      ]),
+      flowDiagramModel(withoutExits, [stepData(last?.id ?? "", "running")]),
       { entries: false },
     );
 

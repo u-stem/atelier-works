@@ -381,7 +381,7 @@ function FlowNameLinks({ names }: { names: readonly string[] }) {
 
 /**
  * 図が読めない狭い幅の代わりの一覧。入口、ステップ、出口の順に並べる。
- * 他のflowのステップから起動される入口と差し戻しは、起動元のflowとして1行にまとめ、図へのリンクにする。
+ * 他のflowのステップから起動される入口、差し戻し、PRを介して続く入口、CI修正後に戻る入口は、元のflowとして1行ずつにまとめ、図へのリンクにする。
  * flow自身へ戻る出口は、同じ図なのでリンクにしない。出口には、つくステップを添える。
  */
 function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
@@ -402,10 +402,21 @@ function FlowDiagramList({ model }: { model: FlowDiagramModel }) {
             他のflowのステップ: <FlowNameLinks names={grouped.launchFlows} />
           </li>
         )}
+        {grouped.prFlows.length === 0 ? null : (
+          <li>
+            PRを介して続く元のflow: <FlowNameLinks names={grouped.prFlows} />
+          </li>
+        )}
         {grouped.reworkFlows.length === 0 ? null : (
           <li>
             他のflowからの差し戻し:{" "}
             <FlowNameLinks names={grouped.reworkFlows} />
+          </li>
+        )}
+        {grouped.prReturnFlows.length === 0 ? null : (
+          <li>
+            CI修正後に戻る元のflow:{" "}
+            <FlowNameLinks names={grouped.prReturnFlows} />
           </li>
         )}
       </ul>

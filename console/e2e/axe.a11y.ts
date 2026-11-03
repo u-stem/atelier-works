@@ -54,13 +54,18 @@ const SCREEN_PATHS: readonly string[] = [
   "jobs/origins/poll_prs",
   "jobs/origins/poll_issues",
   "jobs/origins/poll_dependabot",
+  // self_updateは、implement、pr_review、pr_fixがPR経由の破線でつながる図。
+  "jobs/origins/self_update",
   "jobs/flows/implement",
+  "jobs/flows/pr_review",
+  "jobs/flows/pr_fix",
 ];
 
 /** 見出しを1つずつ開いて検査する、起動の図の経路。開いたときだけ描かれる要素を検査するため。 */
 const ORIGIN_PATHS: readonly string[] = [
   "jobs/origins/poll_prs",
   "jobs/origins/poll_issues",
+  "jobs/origins/self_update",
 ];
 
 /** 起動の図が、図でなく一覧で出る幅(px)。 */

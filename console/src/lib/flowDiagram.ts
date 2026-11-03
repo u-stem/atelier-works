@@ -69,13 +69,14 @@ export function flowDiagramModel(
   };
 }
 
-const FLOW_ENTRY_WORDS: Readonly<Record<ExitVia, string>> = {
+/** 「<flow>の<語>」の形で書く入口の語。PRを介した入口は形が違うので含めない。 */
+const FLOW_ENTRY_WORDS: Readonly<
+  Record<Exclude<ExitVia, "pr" | "pr_return">, string>
+> = {
   launch: "ステップ",
   approve: "承認",
   reject: "却下",
   rework: "差し戻し",
-  pr: "",
-  pr_return: "",
 };
 
 /** 入口に書く文。 */
@@ -90,6 +91,8 @@ export function entryText(entry: FlowEntry): string {
         ? `script ${entry.name}`
         : `script ${entry.name}(${entry.caller}から起動)`;
     case "flow":
+      if (entry.via === "pr") return `${entry.flow}からPR経由`;
+      if (entry.via === "pr_return") return `${entry.flow}からPR経由の戻り`;
       return `${entry.flow}の${FLOW_ENTRY_WORDS[entry.via]}`;
   }
 }
@@ -99,8 +102,8 @@ const EXIT_WORDS: Readonly<Record<ExitVia, string>> = {
   approve: "承認の後",
   reject: "却下の後",
   rework: "差し戻し",
-  pr: "",
-  pr_return: "",
+  pr: "PR経由",
+  pr_return: "CI修正後の戻り",
 };
 
 /** 出口に書く、経路の語。 */
@@ -122,16 +125,22 @@ export function diagramLabel(flowName: string): string {
 export const CONDITIONAL_EDGES_NOTE =
   "設定や試行の上限により、起動しない場合があります。";
 
+/** 設定や試行の上限が起動を決める経路か。PRを介した関係は、人のラベルとCIの結果で決まるので含めない。 */
+function isConditionalVia(via: ExitVia): boolean {
+  return via !== "launch" && via !== "pr" && via !== "pr_return";
+}
+
 /**
  * 設定や試行の上限で起動が決まる辺を、入口か出口に持つか。
  * 承認(implement_enabledが偽だと起動しない)、却下と差し戻し(試行の上限を超えると起動しない)が当たる。
+ * PRを介した関係は、起動しない理由が人のラベルとCIの結果なので、当たらない。
  * 辺ごとの印は出さない。図は設定の値を読まないためである。
  */
 export function hasConditionalEdges(flow: FlowDefinition): boolean {
   return (
-    flow.exits.some((exit) => exit.via !== "launch") ||
+    flow.exits.some((exit) => isConditionalVia(exit.via)) ||
     flow.entries.some(
-      (entry) => entry.kind === "flow" && entry.via !== "launch",
+      (entry) => entry.kind === "flow" && isConditionalVia(entry.via),
     )
   );
 }
@@ -152,12 +161,14 @@ export type ListEntries = {
 
 /**
  * 狭い幅の一覧に出す入口を分ける。
- * 他のflowのステップから起動される入口と差し戻しは、起動元のflowとして1行にまとめる。
+ * 他のflowのステップから起動される入口、差し戻し、PRを介して続く入口、CIの修正の後に戻る入口は、元のflowとして1行ずつにまとめる。
  * flow自身からの入口(却下の作り直し)は、同じ戻りを出口が示すので、入口には出さない。
  */
 export function groupEntriesForList(flow: FlowDefinition): ListEntries {
   const launchFlows: string[] = [];
   const reworkFlows: string[] = [];
+  const prFlows: string[] = [];
+  const prReturnFlows: string[] = [];
   const entries: FlowEntry[] = [];
   for (const entry of drawnEntries(flow)) {
     if (entry.kind !== "flow") {
@@ -166,11 +177,15 @@ export function groupEntriesForList(flow: FlowDefinition): ListEntries {
       launchFlows.push(entry.flow);
     } else if (entry.via === "rework") {
       reworkFlows.push(entry.flow);
+    } else if (entry.via === "pr") {
+      prFlows.push(entry.flow);
+    } else if (entry.via === "pr_return") {
+      prReturnFlows.push(entry.flow);
     } else {
       entries.push(entry);
     }
   }
-  return { launchFlows, reworkFlows, prFlows: [], prReturnFlows: [], entries };
+  return { launchFlows, reworkFlows, prFlows, prReturnFlows, entries };
 }
 
 /** flow自身からの入口か。却下の作り直しがあたり、同じ戻りを出口が示す。 */

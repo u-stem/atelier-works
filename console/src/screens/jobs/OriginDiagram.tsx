@@ -35,7 +35,12 @@ const EMPTY_TEXT = "この定期ジョブはflowを起動しません。";
 const LEGEND_TEXT =
   "実線は起動の流れです。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
-const APPROVE_WORD = "承認";
+/** PRを介した線を持つ図の凡例。破線の意味は、この図の中で決める。 */
+const LEGEND_WITH_PR_TEXT =
+  "実線は起動の流れ、破線はPRを介した関係(別の定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+
+/** PRを介した線の破線の模様。 */
+const PR_DASH = "6 4";
 
 /** 箱の左右の余白(px)。 */
 const PAD_X = 10;
@@ -460,8 +465,9 @@ function EdgeView({
         strokeWidth={1.5}
         strokeLinejoin="round"
         markerEnd={`url(#${markerId})`}
+        {...(item.edge.via === "pr" ? { strokeDasharray: PR_DASH } : {})}
       />
-      {item.label === null ? null : (
+      {item.label === null || item.word === null ? null : (
         <text
           x={item.label.x}
           y={item.label.y}
@@ -469,7 +475,7 @@ function EdgeView({
           className="fill-foreground stroke-card text-[11px] font-semibold [paint-order:stroke]"
           strokeWidth={4}
         >
-          {APPROVE_WORD}
+          {safeText(item.word)}
         </text>
       )}
     </>
@@ -785,7 +791,11 @@ export function OriginDiagramView({
         <ScrollFrame label={label}>{svg}</ScrollFrame>
       )}
       {presentation === "list" ? null : (
-        <p className="text-small text-muted-foreground">{LEGEND_TEXT}</p>
+        <p className="text-small text-muted-foreground">
+          {model.edges.some((edge) => edge.via === "pr")
+            ? LEGEND_WITH_PR_TEXT
+            : LEGEND_TEXT}
+        </p>
       )}
       {model.conditional ? (
         <p className="text-small text-muted-foreground">
