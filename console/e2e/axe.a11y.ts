@@ -143,6 +143,9 @@ function clean(theme: Theme): Audit {
 /** 縞を見分けられる輝度比の下限。GitHubの表の縞はおよそ1.06である。 */
 const MIN_STRIPE_RATIO = 1.05;
 
+/** 通常の大きさの文字に求める輝度比の下限(WCAG AA)。 */
+const MIN_TEXT_RATIO = 4.5;
+
 /** 表の枠の中の要素。 */
 const TABLE_FRAME = "section[aria-label='表']";
 
@@ -193,6 +196,28 @@ async function paintedColor(page: Page, selector: string): Promise<number[]> {
     },
     { shot, x: Math.round(box.x + 4), y: Math.round(box.y + 4) },
   );
+}
+
+/**
+ * 要素の文字色を、sRGBの成分で読む。
+ * 計算された色はoklchなどで返ることがあるので、canvasに塗って画素を読み、形式をそろえる。
+ */
+async function textColor(page: Page, selector: string): Promise<number[]> {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((element) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d");
+      if (context === null) {
+        throw new Error("no 2d context");
+      }
+      context.fillStyle = getComputedStyle(element).color;
+      context.fillRect(0, 0, 1, 1);
+      return Array.from(context.getImageData(0, 0, 1, 1).data);
+    });
 }
 
 for (const theme of THEMES) {
@@ -321,7 +346,7 @@ for (const theme of THEMES) {
     }
   });
 
-  // 最初の縞の行にあるリンクとコード表記の色を測る。画面の外の文字は色が測られないので、
+  // 最初の縞の行にあるリンクとコード表記と、ヘッダーの文字の色を測る。画面の外の文字は色が測られないので、
   // 表の全体が収まる高さにして、縞の行の要素が「通った」になり、「要確認」が残らないことを確かめる。
   test.describe(`text on the table stripes (${theme})`, () => {
     test.use({
@@ -330,11 +355,18 @@ for (const theme of THEMES) {
       viewport: { width: 1280, height: 2400 },
     });
     for (const path of TEXT_MODE_PATHS) {
-      for (const element of ["a", "code"]) {
-        test(`/console/${path} measures ${element} on a striped row`, async ({
-          page,
-        }) => {
-          const selector = `${TABLE_FRAME} tbody tr:nth-child(2) ${element}`;
+      const measured = [
+        {
+          name: "a on a striped row",
+          selector: `${TABLE_FRAME} tbody tr:nth-child(2) a`,
+        },
+        {
+          name: "code on a striped row",
+          selector: `${TABLE_FRAME} tbody tr:nth-child(2) code`,
+        },
+      ];
+      for (const { name, selector } of measured) {
+        test(`/console/${path} measures ${name}`, async ({ page }) => {
           await openScreen(page, path);
           // 承認画面は、本文が画面の中でスクロールする。測る要素を枠の中へ入れる。
           await page
@@ -353,6 +385,20 @@ for (const theme of THEMES) {
           }).toEqual({ violations: 0, incomplete: 0, measured: true });
         });
       }
+
+      // 罫線を畳んだ表の見出しは、axe-coreが背景を決められず、「要確認」になる。
+      // 描かれた背景の色と、文字色の輝度比で測る。
+      test(`/console/${path} keeps the header text readable`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const background = await paintedColor(page, `${TABLE_FRAME} th`);
+        const text = await textColor(page, `${TABLE_FRAME} th`);
+
+        expect(luminanceRatio(text, background)).toBeGreaterThanOrEqual(
+          MIN_TEXT_RATIO,
+        );
+      });
     }
   });
 
