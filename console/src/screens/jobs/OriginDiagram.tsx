@@ -35,9 +35,18 @@ const EMPTY_TEXT = "この定期ジョブはflowを起動しません。";
 const LEGEND_TEXT =
   "実線は起動の流れです。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
 
+/**
+ * PRを介した関係の意味。凡例と、凡例を出さない狭い幅の一覧が同じ句を使う。
+ * PRのラベルを見て起動するのは、起点とは限らない別の定期ジョブなので、起点を限る語は入れない。
+ */
+const PR_RELATION_MEANING =
+  "定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む";
+
 /** PRを介した線を持つ図の凡例。破線の意味は、この図の中で決める。 */
-const LEGEND_WITH_PR_TEXT =
-  "実線は起動の流れ、破線はPRを介した関係(この起点を含む定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む)です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。";
+const LEGEND_WITH_PR_TEXT = `実線は起動の流れ、破線はPRを介した関係(${PR_RELATION_MEANING})です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。`;
+
+/** PRを介した出口を持つ一覧に添える文。一覧には凡例が出ないので、PR経由の行の意味をここで伝える。 */
+const LIST_PR_TEXT = `PR経由の行は、${PR_RELATION_MEANING}関係です。`;
 
 /** PRを介した線の破線の模様。 */
 const PR_DASH = "6 4";
@@ -713,10 +722,8 @@ function OriginList({
     { length: Math.max(0, model.columns - 1) },
     (_, index) => index + 1,
   );
-  // 段を飛ぶ起動も含め、起点からの線をすべて並べる。1段目のflowの並びだけでは、段を飛ぶ起動が落ちる。
-  const launched = model.edges
-    .filter((edge) => edge.from === null)
-    .map((edge) => edge.to);
+  // 段を飛ぶ起動も含め、起点が起動するflowをすべて並べる。1段目のflowの並びだけでは、段を飛ぶ起動が落ちる。
+  const { launched } = model;
   return (
     <div className="flex flex-col gap-3">
       <Card padding="compact" className="flex flex-col gap-1 text-small">
@@ -786,6 +793,7 @@ export function OriginDiagramView({
     return <EmptyNote>{EMPTY_TEXT}</EmptyNote>;
   }
   const presentation = graphPresentation(width, layout.width);
+  const hasPrLine = model.edges.some((edge) => edge.via === "pr");
   const svg = (
     <OriginSvg layout={layout} model={model} run={run} onToggle={onToggle} />
   );
@@ -804,11 +812,13 @@ export function OriginDiagramView({
       ) : (
         <ScrollFrame label={label}>{svg}</ScrollFrame>
       )}
-      {presentation === "list" ? null : (
+      {presentation === "list" ? (
+        hasPrLine ? (
+          <p className="text-small text-muted-foreground">{LIST_PR_TEXT}</p>
+        ) : null
+      ) : (
         <p className="text-small text-muted-foreground">
-          {model.edges.some((edge) => edge.via === "pr")
-            ? LEGEND_WITH_PR_TEXT
-            : LEGEND_TEXT}
+          {hasPrLine ? LEGEND_WITH_PR_TEXT : LEGEND_TEXT}
         </p>
       )}
       {model.conditional ? (
