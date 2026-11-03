@@ -6560,6 +6560,37 @@ symlinkはたどらずリンク自体を消し、`.git`を持たない項目や�
 
 この2つの関数を呼ぶ入口は、まだ無い。
 
+### 指示ファイルの無効化
+
+対象リポジトリの`CLAUDE.md`は信頼できない入力である。
+`@`の取り込みで`/proc/self/environ`などを指されると、workerのトークンがモデルに渡りうる。
+そのため、worktreeを作った後に、`disableInvestigateInstructions`(`lib/investigate_workspace.ts`)が次の名前の項目を改名する。
+改名後の名前は、元の名前に`.disabled`を付けたものである。
+
+| 名前 | Claude Codeが読むもの |
+| --- | --- |
+| `CLAUDE.md`、`CLAUDE.local.md` | 指示と、`@`による他のファイルの取り込み |
+| `.claude` | 設定、コマンド、スキル、subagentの定義 |
+| `.mcp.json` | MCPサーバーの定義 |
+| `.claude.json` | 設定 |
+
+改名は、worktreeの入れ子の下まで行う。
+大文字小文字は区別せず、項目の内容は変えない。
+改名した項目と、`.disabled`の付いた無効済みの項目は、下には入らない。
+読まれない項目の中を調べると、確かめ直しが誤って失敗するためである。
+
+次のときは、リポジトリのロックの下でworktreeを消して、例外にする。
+読み出しを許すworktreeに、読ませたくない項目を残さないためである。
+
+- 改名先の名前が既にある。
+- 改名に失敗した。
+- 改名の後にも対象の名前が残る。
+- 検査できない項目がある。
+
+例外の文に、失敗の原因のメッセージは載せない。
+この関数は`createInvestigateWorktree`の外にあり、調査の入口が作成の後に呼ぶ。
+作成の関数に入れると、隔離の測定のworktreeも変わり、測定の前提が変わるためである。
+
 ### 合格の証拠と関門
 
 `runInvestigateClaude`を通る起動は、隔離の測定に合格した証拠が無ければ起動しない。
@@ -7045,6 +7076,7 @@ Consoleの設定タブには出ない。
 - 測定に合格していない隔離で、Claudeが起動する。
 - 測定のscriptの置き換えで、合格の結果が偽造される。
 - 判定が緩められ、隔離を破った測定が合格として記録される。
+- 稼働中の調査を全体で1件にする索引が外れ、調査が並行して互いのworktreeを消し合う。
 
 保護するファイルは次のとおりである。
 
@@ -7069,6 +7101,10 @@ Consoleの設定タブには出ない。
   - `tests/lib/investigate_isolation_observe.test.ts`
   - `tests/lib/investigate_isolation_judge.test.ts`
   - `tests/scripts/investigate_isolation_probe.test.ts`
+- 稼働中の調査を全体で1件にする索引のmigration2本と、それを固定するテスト
+  - `migrations/datatable/main/20261104100000_investigate_singleton.up.sql`
+  - `migrations/datatable/main/20261104100000_investigate_singleton.down.sql`
+  - `tests/scripts/investigate_singleton_migration.test.ts`
 
 判定のテストは、判定、観測、測定のscriptのsha256を、判定の版と対にして固定する。
 判定を緩める変更は、保護パスの変更なので、マージの前に人が読む。
@@ -7078,6 +7114,9 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
 そのため、`f/factory/investigate_isolation_probe.`の前方一致も保護する。
 `.ts`、`.script.yaml`、`.script.lock`、`.schedule.yaml`をまとめて塞ぐ。
 測定のscriptの書き換えで、観測の結果に本文や秘密が載ることも防ぐ。
+
+登録の挿入文(`lib/db.ts`の`insertInvestigateWorkItemUnlessActive`)は保護しない。
+日常的に直すファイルの中にあり、挿入文の述語が索引の述語と一致することを、索引のテストが固定するためである。
 
 置き場を作るworker imageの記述(`infra/worker/Dockerfile`)は、`infra/worker/`の前方一致で既に保護されている。
 `lib/workspace.ts`は保護しない。
@@ -7097,7 +7136,8 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
   ほかのパス(`/etc`、別のユーザーの`$HOME`など)、symlink経由、`--add-dir`、ほかのツールは測っていない。
 - `deny`の規則が効くかは、測っていない。
   拒否は、`--restricted`の閉じ込め1枚に頼る。
-- ツールを通らない経路(設定の層、`CLAUDE.md`の`@`による取り込み、hook)は、測っていない。
+- ツールを通らない経路(設定の層、hook)は、測っていない。
+  `CLAUDE.md`の`@`による取り込みは測らずに、[指示ファイルの無効化](#指示ファイルの無効化)で塞ぐ。
 - 判定の根拠は、1回の実行(ジョブ01a1a0b1-cd69-6017-20f8-26b7407b6f3b)で、Claude Code 2.1.282に限る。
   版が上がると、関門が`version_changed`で閉じる。
   そのとき拒否の文言が変わっていれば、判定の版を上げて測り直す。
@@ -7164,9 +7204,12 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
   image(`mise run up`)の反映の後でないと確かめられない。
 - 掃除は、置き場の下の自分以外の項目をすべて消す。
   workerが調査を1件ずつ動かす前提(`replicas`が1)に立つ。
-  ただし、flowの段と段の間には別の調査のジョブが入りうる。
-  入口を足す変更で、調査を1件ずつに直列化する(稼働中の調査があれば断る)ことを前提にする。
-  workerを増やす変更や、調査を並行させる変更でも見直す。
+  flowの段と段の間には別の調査のジョブが入りうる。
+  そのため、稼働中(`investigating`)の調査は、部分一意インデックス`work_items_active_investigate_singleton`で全体1件に直列化する。
+  登録(`insertInvestigateWorkItemUnlessActive`)は、稼働中の調査があれば断る。
+  隔離の測定も同じ置き場を掃除するが、索引は測定を止めない。
+  測定は稼働中の調査を確かめないので、測定と調査の排他は、運用者が測定の前に確かめる。
+  workerを増やす変更や、調査を並行させる変更では、この前提を見直す。
 - 掃除が取るロックは、引数の主リポジトリのものだけである。
   置き場は全リポジトリで共有するので、他のリポジトリの項目はロックなしで消す。
   他のリポジトリのworktreeの登録(`.git/worktrees/<id>`)は、そのリポジトリの次の作成の`git worktree prune`で消える。
@@ -7182,7 +7225,6 @@ sha256の表は人が更新できるので、表の更新だけでは緩めて�
 入口を繋ぐ変更は、公開の`checkIsolationProof`と`runInvestigateClaude`の参照を固定する走査の許可の一覧を直す。
 入口を繋ぐと、次の穴が実際の起動に効く。
 
-- `CLAUDE.md`の`@`による取り込みを測るか、塞ぐ。対象リポジトリの内容は信頼できない。`/proc/self/environ`などを取り込まれると、トークンがモデルに渡りうる。
 - 関門が完了ジョブの`script_hash`を照らすか、`lib/claude.ts`などの経路を保護する。測定のscriptだけでなく、判定と観測のモジュールのpathも対象に含めるかを決める。
 - 関門が最新の1件でなく、直近の不合格の履歴を見る。
 - 関門が、保存された観測から判定を計算し直すか(測定の自己申告の`passed`を信じない)。判定を厳しくしたとき、測り直さずに既存の結果へ効く。

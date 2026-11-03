@@ -485,11 +485,23 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 ownerとrepoは小文字にして比べる。
 `(owner, repo, issue_number, cycle)`の一意制約は種別を問わないので、同じIssueの`investigate`の行と`issue`の行は、`cycle`を変えて挿入する。
 
+稼働中(`investigating`)の`investigate`は、リポジトリやIssueを問わず、全体で1件までである。
+排他は、部分一意インデックス`work_items_active_investigate_singleton`が受け持つ。
+調査は、worktreeの置き場の自分以外の項目をすべて消してから自分のworktreeを作るので、並行すると互いのworktreeを消し合うためである。
+登録の関数`insertInvestigateWorkItemUnlessActive`(`lib/db.ts`)は、状態を`investigating`、種別を`investigate`に固定して挿入する。
+稼働中の調査が既にあるときは、例外にせず、挿入しないで`null`を返す。
+挿入文の`ON CONFLICT (kind) WHERE ...`の述語は、索引の述語と一致させる。
+`cycle`は、同じ文の中で、そのIssueの既存の行(種別を問わない)の最大に1を足して決める。
+依頼文は`body`に保存し、以後の調査はIssueの本文を読み直さない。
+稼働中の調査があるかの確認は、`hasInvestigatingWorkItem`で読む。
+
 #### migrationを戻すとき
 
 調査の種別と状態を足すmigration(`20261102120000_investigate_work_items`)のdownは、先に`investigate`の作業項目を削除する。
 行が残っていると、種別と状態の制約を戻す文が失敗して、戻せなくなるためである。
 削除は調査の記録を失う。調査の答えはIssueのコメントに残る。
+全体で1件にする索引のmigration(`20261104100000_investigate_singleton`)は、このmigrationより新しい。
+そのdownは索引を落とすだけで、行は変えない。
 
 作業項目の削除は、外部キーの`ON DELETE CASCADE`で、次の表の行も消す。
 

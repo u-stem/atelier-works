@@ -6398,17 +6398,65 @@ export type NewInvestigateWorkItem = {
   flow_job_id: string | null;
 };
 
+/**
+ * 調査の作業項目を挿入し、そのIDを返す。
+ * 稼働中(`investigating`)の調査が、どのリポジトリやIssueにも既にあるときは、挿入せずに`null`を返す。
+ * 調査は置き場の自分以外の項目を消すので、並行させない。排他は部分一意インデックス
+ * `work_items_active_investigate_singleton`が受け持ち、`ON CONFLICT (kind) WHERE ...`の述語はその索引と一致させる。
+ * 衝突は例外にならない。索引を作るmigrationが無いDBでは、`ON CONFLICT`の推論が失敗して例外になる。
+ * 状態は`investigating`、種別は`investigate`、進め方は列の既定に固定し、呼び出し側は選べない。
+ * `cycle`は同じ文の中で、そのIssueの既存の作業項目(種別を問わない)の最大に1を足して決める。
+ * `(owner, repo, issue_number, cycle)`の一意制約は種別をまたぐためである。
+ * 並行する登録が同じcycleを読むと、この制約への違反が例外になる。
+ * 稼働中の調査の衝突が先に判定されるので、通常は`null`になり、終端の直後の競合だけが例外になる。
+ * 依頼文は`body`に保存する。以後の調査は、Issueの本文を読み直さず、ここに保存した文だけを使う。
+ * ownerとrepoがGitHubの名前の形でないとき、Issueの番号が正の整数でないときは、DBに触れる前に例外を投げる。
+ */
 export async function insertInvestigateWorkItemUnlessActive(
-  _item: NewInvestigateWorkItem,
-  _sql: SqlClient = defaultSqlClient,
+  item: NewInvestigateWorkItem,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number | null> {
-  return null;
+  assertGitHubName(item.owner);
+  assertGitHubName(item.repo);
+  if (!Number.isSafeInteger(item.issue_number) || item.issue_number <= 0) {
+    throw new Error(`invalid issue number: ${String(item.issue_number)}`);
+  }
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url,
+      title, body, status, attempt, claimed_by, flow_job_id
+    )
+    SELECT
+      (
+        SELECT COALESCE(MAX(cycle), 0) + 1 FROM factory.work_items
+        WHERE owner = ${item.owner}::text AND repo = ${item.repo}::text
+          AND issue_number = ${item.issue_number}::integer
+      ),
+      'manual', 'investigate', ${item.owner}::text, ${item.repo}::text,
+      ${item.issue_number}::integer, ${item.issue_url}::text,
+      ${item.title}::text, ${item.body}::text, 'investigating', 1,
+      ${item.claimed_by}::text, ${item.flow_job_id}::text
+    ON CONFLICT (kind) WHERE kind = 'investigate' AND status = 'investigating' DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return parseId(row.id, "id");
 }
 
+/**
+ * 稼働中(`investigating`)の調査が、どこかにあるかを返す。読み取りだけを行う。
+ * 調査の置き場を掃除する処理が、調査が動いていないことを前もって確かめるために使う。
+ */
 export async function hasInvestigatingWorkItem(
-  _sql: SqlClient = defaultSqlClient,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE kind = 'investigate' AND status = 'investigating'
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

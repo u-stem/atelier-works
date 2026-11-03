@@ -1,6 +1,6 @@
 // 工程ごとに使うClaudeのモデルを決める。
 // 判断が重い工程は`heavy_model`を使う。
-// 実装とPR修正は既定の`model`(Sonnet)で始め、同じ作業でSonnetが続けて2回失敗したら、
+// 実装とPR修正とIssueの調査は既定の`model`(Sonnet)で始め、同じ作業でSonnetが続けて2回失敗したら、
 // `heavy_model`に上げる。失敗の数は、成功が入ると数え直す。
 // 数え方は`db.ts`の`countImplementFailedRounds`と`countPrFixFailures`が決める。
 
@@ -14,7 +14,8 @@ export type ModelStage =
   | "audit"
   | "implement"
   | "pr_fix"
-  | "dependabot";
+  | "dependabot"
+  | "investigate";
 
 /** 試行の回数にかかわらず`heavy_model`を使う工程。やり直しが高くつく判断を含むため。 */
 const ALWAYS_HEAVY_STAGES: readonly ModelStage[] = [
@@ -33,6 +34,7 @@ const SONNET_FAILURES_BEFORE_ESCALATION = 2;
  * `sonnetFailures`は、同じ作業で直近に`model`が続けて失敗した回数である。
  * 要件定義の生成、設計書の生成、PRのレビュー、監査、dependabotの更新の影響調査は、回数にかかわらず`heavy_model`を使う。
  * この5工程の呼び出しは、回数が使われないことを示すために0を渡す。
+ * Issueの調査(`investigate`)は、実装やPR修正と同じく既定の`model`で始める。結果は人が読むコメントで、取り返しにくい判断に使わないためである。
  * dependabotの影響調査は、結果が自動のマージの判断に使われ、見落としが取り返しにくいため、常に重いモデルで行う。
  */
 export function modelFor(

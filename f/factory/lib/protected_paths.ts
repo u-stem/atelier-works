@@ -272,6 +272,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
  * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
  * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+ * 稼働中の調査を全体で1件にする部分一意インデックスのmigration2本と、それを固定するテスト(`tests/scripts/investigate_singleton_migration.test.ts`)も守る。
+ * 調査は置き場の自分以外の項目をすべて消すので、索引が外れると、調査が並行して互いのworktreeを消し合う。
+ * 登録の挿入文(`lib/db.ts`)は守らない。日常的に直すファイルの中にあり、述語の一致をこのテストが固定するためである。
  * 全体のカバレッジの下限を縛る検査(`scripts/check-coverage.ts`)とそのテスト(`tests/scripts/check_coverage.test.ts`)も守る。
  * 下限の定数と対象の定義がこの1か所にあり、書き換えられると、カバレッジが下がっても検査を通せる。
  */
@@ -382,6 +385,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql",
   "migrations/datatable/main/20261102120000_investigate_work_items.up.sql",
   "migrations/datatable/main/20261102120000_investigate_work_items.down.sql",
+  "migrations/datatable/main/20261104100000_investigate_singleton.up.sql",
+  "migrations/datatable/main/20261104100000_investigate_singleton.down.sql",
+  "tests/scripts/investigate_singleton_migration.test.ts",
   "f/factory/lib/investigate_claude.ts",
   "f/factory/lib/investigate_claude.script.yaml",
   "f/factory/lib/claude_read_deny.ts",

@@ -1,7 +1,7 @@
 // 調査のClaudeが読むworktreeの置き場と、その作成・掃除。
 // 保護パスに置く。置き場の検査やsymlink・submoduleの断りを緩めると、調査のClaudeがworkerの秘密に届くため。
 
-import { lstat, readdir, rm } from "node:fs/promises";
+import { lstat, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { maskSecrets } from "./log.ts";
 import {
@@ -384,17 +384,33 @@ export async function purgeInvestigateRoot(
   });
 }
 
-/** `disableInvestigateInstructions`が`.disabled`を付けて無効にする名前。 */
-export const INSTRUCTION_ENTRY_NAMES: readonly string[] = [];
+/**
+ * `disableInvestigateInstructions`が`.disabled`を付けて無効にする名前。
+ * Claude Codeが、指示(`CLAUDE.md`とその`@`の取り込み)、設定、MCPの定義として作業ディレクトリから読む。
+ * 照合は、大文字小文字を区別しない。
+ */
+export const INSTRUCTION_ENTRY_NAMES: readonly string[] = [
+  "CLAUDE.md",
+  "CLAUDE.local.md",
+  ".claude",
+  ".mcp.json",
+  ".claude.json",
+];
 
-/** 無効化に使うファイル操作。 */
+const INSTRUCTION_NAME_KEYS: ReadonlySet<string> = new Set(
+  INSTRUCTION_ENTRY_NAMES.map((name) => name.toLowerCase()),
+);
+const DISABLED_SUFFIX = ".disabled";
+
+/** 無効化に使うファイル操作。検査と一覧と削除は`InvestigateFs`と同じで、改名を足す。 */
 export type DisableInstructionsFs = InvestigateFs & {
+  /** 同じ親の中で改名する。シンボリックリンクはたどらず、リンク自体を改名する。 */
   readonly rename: (from: string, to: string) => Promise<void>;
 };
 
 export const realDisableInstructionsFs: DisableInstructionsFs = {
   ...realInvestigateFs,
-  rename: async () => {},
+  rename: (from, to) => rename(from, to),
 };
 
 export type DisableInvestigateInstructionsOptions = Omit<
@@ -405,8 +421,126 @@ export type DisableInvestigateInstructionsOptions = Omit<
   readonly fs?: DisableInstructionsFs;
 };
 
+/**
+ * `dir`の下で、指示や設定の名前に当たる項目の、`dir`からの相対パスを返す。
+ * 当たった項目の下には入らない。項目ごと改名するので、中は読まれないためである。
+ * 名前に`.disabled`が付いた無効済みの項目も、同じ理由で下には入らない。
+ * 作業ディレクトリ直下の`.git`ファイルは見ない。読めない項目があれば例外を投げる。
+ * 検査できないものを通すと、その下の木まで検査されないためである。
+ */
+async function findInstructionEntries(
+  fs: DisableInstructionsFs,
+  dir: string,
+): Promise<string[]> {
+  const found: string[] = [];
+  const pending: { readonly path: string; readonly relative: string }[] = [
+    { path: dir, relative: "" },
+  ];
+  for (
+    let current = pending.pop();
+    current !== undefined;
+    current = pending.pop()
+  ) {
+    for (const name of await fs.readdir(current.path)) {
+      if (current.relative === "" && name === ".git") continue;
+      const path = join(current.path, name);
+      const relative =
+        current.relative === "" ? name : `${current.relative}/${name}`;
+      const stat = await fs.lstat(path);
+      if (stat === null) {
+        throw new InvestigateWorkspaceError(
+          `an entry in the checked-out files could not be inspected: ${JSON.stringify(path.slice(0, 300))}`,
+        );
+      }
+      const key = name.toLowerCase();
+      if (INSTRUCTION_NAME_KEYS.has(key)) {
+        found.push(relative);
+        continue;
+      }
+      // 無効にした項目の中は、Claude Codeが読まない。確かめ直しで、中の`CLAUDE.md`を拾わない。
+      if (
+        key.endsWith(DISABLED_SUFFIX) &&
+        INSTRUCTION_NAME_KEYS.has(key.slice(0, -DISABLED_SUFFIX.length))
+      ) {
+        continue;
+      }
+      if (stat.isDirectory && !stat.isSymbolicLink) {
+        pending.push({ path, relative });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * 作業項目のworktreeの中で、指示や設定の名前(`INSTRUCTION_ENTRY_NAMES`)の項目を、入れ子の下まで`.disabled`を付けた名前に改名する。
+ * 対象リポジトリの`CLAUDE.md`は信頼できない入力で、`@`の取り込みで`/proc/self/environ`などを読ませられうるためである。
+ * 内容は変えない。改名の前後でworktreeの他のファイルは変わらない。
+ * `createInvestigateWorktree`の中には入れず、調査の入口が作成の後に別に呼ぶ。
+ * 隔離の測定のworktreeを作る共有の関数に入れると、測定の前提が変わり、判定の版を上げる測り直しになるためである。
+ * 改名先の名前が既にあるとき、改名に失敗したとき、改名の後にも対象が残るとき、検査できない項目があるときは、
+ * リポジトリのロックの下でworktreeを消して、例外を投げる。例外の文に、失敗の原因のメッセージは載せない。
+ * 作業項目のIDの形は、`investigateWorktreeDir`が確かめる。
+ */
 export async function disableInvestigateInstructions(
-  _opts: DisableInvestigateInstructionsOptions,
+  opts: DisableInvestigateInstructionsOptions,
 ): Promise<{ readonly dir: string; readonly renamed: readonly string[] }> {
-  return { dir: "", renamed: [] };
+  const fs = opts.fs ?? realDisableInstructionsFs;
+  const dir = investigateWorktreeDir(opts.workItemId, opts.root);
+  try {
+    const stat = await fs.lstat(dir);
+    if (stat === null || !stat.isDirectory || stat.isSymbolicLink) {
+      throw new InvestigateWorkspaceError(
+        `the worktree is not a directory: ${JSON.stringify(dir.slice(0, 300))}`,
+      );
+    }
+    const renamed: string[] = [];
+    for (const relative of await findInstructionEntries(fs, dir)) {
+      const from = join(dir, relative);
+      const to = `${from}${DISABLED_SUFFIX}`;
+      if ((await fs.lstat(to)) !== null) {
+        throw new InvestigateWorkspaceError(
+          `the name for the disabled entry is already taken: ${JSON.stringify(to.slice(0, 300))}`,
+        );
+      }
+      try {
+        await fs.rename(from, to);
+      } catch {
+        throw new InvestigateWorkspaceError(
+          `could not rename an instruction entry: ${JSON.stringify(from.slice(0, 300))}`,
+        );
+      }
+      renamed.push(relative);
+    }
+    const remaining = await findInstructionEntries(fs, dir);
+    if (remaining.length > 0) {
+      throw new InvestigateWorkspaceError(
+        `an instruction entry remains after the rename: ${JSON.stringify((remaining[0] ?? "").slice(0, 300))}`,
+      );
+    }
+    return { dir, renamed };
+  } catch (error) {
+    await discardUnderLock(opts, fs, dir);
+    throw error instanceof InvestigateWorkspaceError
+      ? error
+      : new InvestigateWorkspaceError(
+          "could not disable the instruction entries of the worktree",
+        );
+  }
+}
+
+/** リポジトリのロックの下で、worktreeを消して登録も消す。ロックを取れなくても握りつぶす。残りは次の掃除が消す。 */
+async function discardUnderLock(
+  opts: InvestigateWorkspaceOptions,
+  fs: InvestigateFs,
+  dir: string,
+): Promise<void> {
+  try {
+    await withRepoLock({
+      ...lockOptions(opts),
+      fn: () => discardWorktree(opts, fs, dir),
+    });
+  } catch {
+    // 消せなかった残りは、次の掃除(`purgeInvestigateRoot`)が消す。
+  }
 }
