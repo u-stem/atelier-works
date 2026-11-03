@@ -65,6 +65,20 @@ export type PsqlTarget = {
   readonly database: string;
 };
 
+/** `docker exec`で直接動かす`psql`の引数列を作る。 */
+export function psqlArgv(
+  containerId: string,
+  database: string,
+  format: "plain" | "csv",
+): string[] {
+  return [];
+}
+
+/** `docker compose ps -q db`の出力から、コンテナIDを取り出す。 */
+export function parseContainerId(output: string): string {
+  return "";
+}
+
 function runPsql(
   target: PsqlTarget,
   sql: string,

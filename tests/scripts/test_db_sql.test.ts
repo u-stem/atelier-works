@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  parseContainerId,
   parseCsvRows,
+  psqlArgv,
   renderLiteral,
   renderSql,
 } from "../../scripts/test-db-sql.ts";
@@ -117,5 +119,92 @@ describe("parseCsvRows", () => {
 
   test("reads two quotes inside quotes as one quote", () => {
     expect(parseCsvRows('a\n"say ""hi"""')).toEqual([{ a: 'say "hi"' }]);
+  });
+});
+
+describe("psqlArgv", () => {
+  const id = "0123456789ab";
+
+  test("runs psql inside the container with the plain output options", () => {
+    expect(psqlArgv(id, "scratch", "plain")).toEqual([
+      "docker",
+      "exec",
+      "-i",
+      id,
+      "psql",
+      "-X",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      "scratch",
+      "-q",
+      "-t",
+      "-A",
+    ]);
+  });
+
+  test("runs psql with --csv for the csv format", () => {
+    expect(psqlArgv(id, "scratch", "csv")).toEqual([
+      "docker",
+      "exec",
+      "-i",
+      id,
+      "psql",
+      "-X",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      "scratch",
+      "-q",
+      "--csv",
+    ]);
+  });
+});
+
+describe("parseContainerId", () => {
+  const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+  test("accepts a 64 character id", () => {
+    expect(parseContainerId(id)).toBe(id);
+  });
+
+  test("accepts a 12 character id", () => {
+    expect(parseContainerId("0123456789ab")).toBe("0123456789ab");
+  });
+
+  test("drops the trailing newline of the command output", () => {
+    expect(parseContainerId(`${id}\n`)).toBe(id);
+  });
+
+  test("rejects an empty output", () => {
+    expect(() => parseContainerId("")).toThrow("container id");
+  });
+
+  test("rejects an output of only a newline", () => {
+    expect(() => parseContainerId("\n")).toThrow("container id");
+  });
+
+  test("rejects two ids on separate lines", () => {
+    expect(() => parseContainerId(`${id}\n${id}\n`)).toThrow("container id");
+  });
+
+  test("rejects a character that is not lowercase hex", () => {
+    expect(() => parseContainerId("0123456789az")).toThrow("container id");
+  });
+
+  test("rejects an uppercase hex id", () => {
+    expect(() => parseContainerId("0123456789AB")).toThrow("container id");
+  });
+
+  test("rejects an id shorter than 12 characters", () => {
+    expect(() => parseContainerId("0123456789a")).toThrow("container id");
+  });
+
+  test("rejects an id longer than 64 characters", () => {
+    expect(() => parseContainerId(`${id}0`)).toThrow("container id");
   });
 });
