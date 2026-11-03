@@ -317,6 +317,13 @@ CIの失敗を直す回の再実行は、作業項目だけを再開すると失
 回が終わると、`watch_pr_ci`が失敗の行を戻す([PRワークフロー](pr-workflow.md)の「CIの失敗を直す回」)。
 競合を直す回の再実行も拒否する。競合の行が、直している作業項目を結んだままになるためである。
 
+終端の`pr_review`を稼働中へ戻す更新が、同じPRの別の稼働中の`pr_review`に阻まれたときは、再実行を断る。
+阻むのは、部分一意インデックス`work_items_active_pr_review_key`である。
+ownerとrepoは、小文字にして比べる。
+再実行は、生のエラーでなく、稼働中の作業項目のidを示す断りの文を返す。
+自動の再開(`restartTransientPrReview`)は、同じ違反を、再開しなかったものとして`false`で返す。
+稼働中のレビューが同じPRを進めているので、断っても、PRのレビューは止まらない。
+
 競合を直す回は、止まっていても、自動の再開の候補に入れず、比較交換でも再開しない。
 指摘への対応の失敗の数(モデルを`heavy_model`に上げる判定)にも数えない。
 CIの失敗を直す回と同じ扱いである。
@@ -371,7 +378,8 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 他の移り先では、現在の値のままにする。
 どちらの更新も、保護されたテスト`tests/scripts/profile_gate.test.ts`が`lib/db.ts`の走査で固定する。
 登録の`INSERT`は`profile`を名指しせず、新しい行は、すべて既定の`standard`になる。
-受け付ける進め方は`standard`だけで、入口は他の値を断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
+受け付ける進め方は`standard`と、承認を省く3つ(`direct`、`bugfix`、`docs`)で、入口は他の値を断る([進め方ごとの承認](../security.md#進め方ごとの承認))。
+`profile`を書いて挿入するのは、手動投入の登録だけである。他の挿入は、`profile`を省いて既定の`standard`にする。
 
 値で挙動を変えるのは、承認の要否を引く関門だけである([実装フロー](implement.md)の「進め方と承認の要否」)。
 `profile`を名指しして読む問い合わせは、再開の候補の問い合わせ(`listAutoRetryCandidates`)だけである。
@@ -385,8 +393,15 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 
 表`manual_intake_keys`は、手動投入の1回を表すキー、投入の内容のハッシュ、作ったIssueの所有者とリポジトリと番号、キーを予約したジョブのID、予約した時刻を持つ。
 キーは小文字のUUIDだけを受け、作業項目とは外部キーを持たない。
-表に触れるのは、Issueを作るステップ(`steps/manual_intake_create_issue.ts`)と、`cleanup_db`の削除である。
-表を落とすdown migrationを当てる前に、この2つの読み書きも外す。表が無いと、Issueの作成と`cleanup_db`が毎回失敗するためである。
+表に触れるのは、次の3つである。
+
+- Issueを作るステップ(`steps/manual_intake_create_issue.ts`)
+- 承認を省く進め方の登録(`steps/manual_intake_register.ts`)の読み取り
+- `cleanup_db`の削除
+
+表を落とすdown migrationを当てる前に、この読み書きも外す。
+表が無いと、Issueの作成と`cleanup_db`が毎回失敗し、承認を省く進め方の登録が断られるためである。
+承認を省く進め方は、キーを必須にする。キーが無い投入は、Issueを作る前に断る。
 
 #### 予約の手順
 
@@ -397,13 +412,17 @@ Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: f
 2. 衝突したときは、行を読む。
    - 内容のハッシュが違えば、`intake_key_conflict`で失敗する。
    - 番号があれば、Issueを作らず、行のリポジトリと番号を再利用として返す。
-     フローは、再利用のとき登録のステップを飛ばす。
+     再利用のとき、登録のステップは、通常の進め方では何もしない。
+     承認を省く進め方では、そのIssueに作業項目が1件も無いときだけ登録する。
    - 番号が無く、予約から10分以内なら、`intake_key_in_flight`で失敗する。
    - 番号が無く、10分を過ぎていれば、1つの`UPDATE`で持ち主を自分に替えて予約を取り直す。
      取れなければ、`intake_key_in_flight`で失敗する。
 3. 予約の後、Issueを作る前に、本文の末尾が目印の行である既存のIssueを探す。
    見つかれば、その番号を使い、作らない。
    目印は`<!-- factory:intake:<キー> -->`で、作るIssueの本文の末尾に付ける。
+   目印の前に、区切りの行(`<!-- factory:intake:end -->`)と空行を置く。
+   見つけたIssueの本文が、区切りの行、空行、目印の順に終わらないときは、作成済みと信じない。
+   キーが無い投入も、本文の最後に区切りの行を足す。利用者の入力の最後の行に目印を書かれても、目印の探索に拾われない。
 4. 作れたら、持ち主が自分である行に番号を書く。
    書けなくても、作ったIssueは返す。取り直したジョブが、目印で見つける。
 5. 作るのに失敗しても、予約は消さない。
@@ -442,6 +461,53 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 終端の状態を増やすときは、migrationで`v_lead_time`を`CREATE OR REPLACE`し、同じPRで`TERMINAL_WORK_ITEM_STATUSES`を更新する。
 `poll_issues`のreconcileは終端の作業項目を照合の対象から外す(`listActive`)。片方だけを更新すると、完了した作業項目が孤児と判定されて失敗にされる。
 例外は、要対応の終端の作業項目を取り消す専用の照合だけである。詳しくは「要対応の終端の取り消し」に書く。
+
+### 調査の作業項目
+
+調査(`investigate`)の作業項目は、対象のIssueの番号を`issue_number`に持ち、`pr_number`を持たない。
+`kind`で番号の列を選ぶ処理は、`isIssueTargetKind`(`f/factory/lib/types.ts`)を通す。
+通さないと、`pr_number`のnullを読み、対象の無い行として黙って飛ばすためである。
+状態は、調べている間の`investigating`(終端でない)と、調べ終えた`investigated`(終端)の2つである。
+
+| 処理 | 調査の扱い |
+| --- | --- |
+| 稼働中の照合(`poll_issues`) | `issue`と同じく、Issueが閉じていれば取り消す。人の判断を待つ状態(`isWaitingForHuman`)には含めない |
+| 要対応の終端の取り消し | `issue`と同じく、Issueの番号で束ねて照合する。同じIssueの`issue`の行と`investigate`の行は、1回の問い合わせで足りる |
+| 要対応の一覧の「より新しい行」 | 同じIssueで`id`が大きい`investigate`の行があれば、古い行を除く。ownerとrepoは、稼働中の一意インデックスと同じく、小文字にして比べる |
+| 再実行(`retry_work_item`) | 再開せず断る。依頼を新規投入し直す |
+| workerを作り直す前の確認 | `investigating`を実行中の状態として数える |
+| 作業ツリーの掃除 | 調査の作業項目は、今は作業ツリーを作らない。作る変更で、持ち主と掃除の対象に足す |
+
+照合の分岐が`WorkItemKind`の全値を扱うことは、`tests/scripts/work_item_kind_coverage.test.ts`が確かめる。
+種別を足すと、このテストの表が型エラーになるので、対象の番号の置き場を決めてから進める。
+
+同じIssueで終端でない`investigate`は1件までである(部分一意インデックス`work_items_active_investigate_key`)。
+ownerとrepoは小文字にして比べる。
+`(owner, repo, issue_number, cycle)`の一意制約は種別を問わないので、同じIssueの`investigate`の行と`issue`の行は、`cycle`を変えて挿入する。
+
+#### migrationを戻すとき
+
+調査の種別と状態を足すmigration(`20261102120000_investigate_work_items`)のdownは、先に`investigate`の作業項目を削除する。
+行が残っていると、種別と状態の制約を戻す文が失敗して、戻せなくなるためである。
+削除は調査の記録を失う。調査の答えはIssueのコメントに残る。
+
+作業項目の削除は、外部キーの`ON DELETE CASCADE`で、次の表の行も消す。
+
+| 表 | 内容 |
+| --- | --- |
+| `work_item_events` | 状態遷移の履歴 |
+| `requirement_drafts`、`design_drafts` | 要件定義と設計の下書き(`design_drafts`は`requirement_drafts`を経由して消える) |
+| `approvals`、`approval_requests`、`issue_proposals` | 承認の履歴と依頼、Issue化の提案 |
+| `agent_runs` | Claudeの実行の記録 |
+| `reviews`、`fix_rounds`、`implement_rounds`、`audit_reports` | レビューと修正と実装のラウンド、監査のレポート |
+
+`ON DELETE SET NULL`の参照は、行を残して参照を空にする。
+`job_failures.work_item_id`と、子の作業項目の`parent_work_item_id`が当たる。
+
+`agent_runs`は日次予算の元データである。
+日次予算の検査は、今日の`agent_runs`の費用を合計するので、戻した日は、調査に使った費用の分だけ少なく数える。
+`tests/scripts/investigate_work_items_migration.test.ts`が、`ON DELETE CASCADE`で`work_items`を参照する表を確かめる。
+参照する表がdownの説明に挙がっていなければ、このテストが失敗する。
 
 ## ジョブの記録
 

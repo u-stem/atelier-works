@@ -4,6 +4,7 @@
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
 import { readDesignSince, resolveDesignGate } from "./design_gate.ts";
+import { isInvestigateEnabled } from "./investigate_gate.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -1017,6 +1018,8 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
     ),
+    // 調査の入口は、門の結果だけから導く。真偽値でない値は、例外にせず閉じる。
+    investigate_enabled: isInvestigateEnabled(raw.investigate_enabled),
     design_enabled: designGate.enabled,
     design_enabled_ignored: designGate.ignored,
     design_enabled_since: readDesignSince(designEnabledSince),

@@ -202,13 +202,14 @@ describe("requiredChecksFromRules", () => {
 });
 
 describe("REQUIRED_CHECKS for the primary repository", () => {
-  test("stays the seven literal check names", () => {
+  test("stays the eight literal check names", () => {
     expect([...REQUIRED_CHECKS]).toEqual([
       "scope",
       "check",
       "test-db",
       "metadata",
       "console",
+      "console-a11y",
       "caddyfile",
       "console-fetcher-image",
     ]);

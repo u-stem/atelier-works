@@ -22,6 +22,7 @@ const INPUT: ManualIntakeInput = {
   title: "Add a widget",
   body: "Add a widget to the page.",
   acceptanceCriteria: "",
+  profile: "standard",
 };
 
 const FORM: IntakeForm = {
@@ -29,6 +30,10 @@ const FORM: IntakeForm = {
   title: "Add a widget",
   body: "Add a widget to the page.",
   acceptanceCriteria: "",
+  profile: "standard",
+  reproduction: "",
+  expectedBehavior: "",
+  actualBehavior: "",
 };
 
 const STARTED: ManualIntakeSubmitResult = {

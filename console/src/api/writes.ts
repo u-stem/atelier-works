@@ -8,6 +8,7 @@
 // 失敗は`ApiFailure`で投げ、戻りは型ガードを通してから返す。
 // 結果が分からない失敗でも再試行しない。再試行するかは呼び出し側が決める。
 
+import type { IntakeProfile } from "../lib/manualIntake.ts";
 import { ApiFailure } from "./errors.ts";
 import type { Guard } from "./guards/primitives.ts";
 import {
@@ -27,12 +28,14 @@ import {
   isJobRerunResult,
   isManualIntakeSubmitResult,
   isNoticeResolveResult,
+  isPrReviewSubmitResult,
   isRetryWorkItemResult,
   isScheduleStopResult,
   type JobCancelResult,
   type JobRerunResult,
   type ManualIntakeSubmitResult,
   type NoticeResolveResult,
+  type PrReviewSubmitResult,
   type RetryWorkItemResult,
   type ScheduleStopResult,
 } from "./guards/writeResults.ts";
@@ -156,6 +159,8 @@ export type ManualIntakeInput = {
   readonly body: string;
   /** 受入基準。1行に1項目で書く。空でもよい。 */
   readonly acceptanceCriteria: string;
+  /** 進め方。`standard`以外は承認を省くので、scriptが許可と停止スイッチと冪等キーを確かめる。 */
+  readonly profile: IntakeProfile;
   /** 再送を止める冪等キー。 */
   readonly intakeKey?: string;
 };
@@ -165,6 +170,7 @@ export type ManualIntakeInput = {
  * 断りは失敗ではなく結果として返す。投入した人は引数に取らない。scriptがジョブの実行文脈から導く。
  * 入力の検証と、Issueの作成、作業項目の登録は、scriptとフローが行う。
  * `intakeKey`は、同じ送信の再送を止める冪等キーである。同じキーの再送は、最初の投入のIssueを返す。
+ * `profile`は入力の値をそのまま送る。承認を省く進め方を受け付けるかは、scriptが決める。
  */
 export function submitManualIntake(
   input: ManualIntakeInput,
@@ -178,10 +184,36 @@ export function submitManualIntake(
       title: input.title,
       body: input.body,
       acceptance_criteria: input.acceptanceCriteria,
+      profile: input.profile,
       // キーが無い呼び出しには、引数を足さない。
       ...(input.intakeKey === undefined ? {} : { intake_key: input.intakeKey }),
     },
     isManualIntakeSubmitResult,
+    options,
+  );
+}
+
+export type PrReviewSubmitInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+};
+
+/**
+ * PRのレビューを投入する。許可されていないリポジトリ、不正な入力、同じPRで稼働中のレビューがあるときは、
+ * フローを起動せず、理由つきの断りで返る。断りは失敗ではなく結果として返す。
+ * 投入した人は引数に取らない。scriptがジョブの実行文脈から導く。
+ * PRの存在や状態の確認と、作業項目の登録は、起動したフローのステップが行う。
+ * そのため、閉じたPRなどの断りは、この戻りではなく、起動したフローのジョブの結果に現れる。
+ */
+export function submitPrReview(
+  input: PrReviewSubmitInput,
+  options: RunScriptOptions = {},
+): Promise<PrReviewSubmitResult> {
+  return callWrite(
+    "pr_review_submit",
+    { owner: input.owner, repo: input.repo, pr_number: input.prNumber },
+    isPrReviewSubmitResult,
     options,
   );
 }

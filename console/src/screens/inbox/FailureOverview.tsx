@@ -6,6 +6,7 @@ import type { SummaryFailure } from "../../api/guards/summary.ts";
 import { JobLink } from "../../components/JobLink.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   describeFailure,
   describeRetryPlan,
@@ -77,9 +78,11 @@ function RetrySection({
   );
 
   return (
-    <section
+    <Card
       aria-label="再実行"
-      className="flex flex-col gap-3 rounded-xl border border-border bg-card px-5 py-4"
+      tag="section"
+      padding="default"
+      className="flex flex-col gap-3"
     >
       <h3 className="text-lead font-semibold">再実行</h3>
       {plan.blockedReason === null ? (
@@ -125,7 +128,7 @@ function RetrySection({
       ) : (
         <p className="text-small text-muted-foreground">{plan.blockedReason}</p>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -158,7 +161,7 @@ export function FailureOverview({
           {description.title}
         </h2>
       </header>
-      <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="dl" variant="list">
         <Row label="作業項目">
           <Link to={workItemPath(failure.work_item_id)} className={LINK_CLASS}>
             {description.workItemLabel}
@@ -204,11 +207,8 @@ export function FailureOverview({
             <JobLink jobId={description.jobId} label="ジョブを開く" />
           </Row>
         )}
-      </dl>
-      <section
-        aria-label="失敗の内容"
-        className="rounded-xl border border-border bg-card"
-      >
+      </Card>
+      <Card aria-label="失敗の内容" tag="section">
         <h3 className="border-b border-border px-5 py-3 text-lead font-semibold">
           失敗の内容
         </h3>
@@ -247,7 +247,7 @@ export function FailureOverview({
             </div>
           )}
         </div>
-      </section>
+      </Card>
       <RetrySection failure={failure} now={now} />
     </article>
   );

@@ -1,0 +1,9 @@
+summary: '[LIB] 隔離の合格の証拠の型'
+description: 内部ライブラリです。直接実行するものではありません。調査のClaudeの隔離が測定に合格したことを表す証拠の型と、その検査です。
+lock: '!inline f/factory/lib/isolation_proof.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

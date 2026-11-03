@@ -43,6 +43,7 @@ import {
   hasRequirementDraftAfter,
   isActiveIssueUniqueViolation,
   isActivePrFixUniqueViolation,
+  isActivePrReviewUniqueViolation,
   latestDesignApproval,
   latestDesignEntryEvent,
   latestRequirementsApproval,
@@ -50,6 +51,7 @@ import {
   latestStatusTransition,
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
+  listActivePrReviewWorkItems,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   type RequirementsApprovalRef,
@@ -94,6 +96,7 @@ import { requiredApprovals } from "./lib/profile.ts";
 import { automatedFeedback } from "./lib/prompts.ts";
 import {
   type DesignApprovalRef,
+  isIssueTargetKind,
   isOneOf,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
@@ -700,6 +703,97 @@ export async function activePrFixConflictErrorFrom(
 }
 
 /**
+ * 終端の`pr_review`を稼働中の状態へ戻す更新が、同じPRの別の稼働中の`pr_review`に阻まれたときの
+ * 例外を作る。その稼働中の`pr_review`が同じPRのレビューを進めているので、
+ * この作業項目は再開できず、稼働中のものに従う。稼働中の作業項目が見つかれば、そのIDを文に含める。
+ * ownerとrepoは大文字小文字を無視して比べる。インデックスが同じ比べ方をするためである。
+ */
+export function activePrReviewConflictError(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  active: readonly Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "pr_number" | "kind"
+  >[],
+): Error {
+  const other = active.find(
+    (item) =>
+      item.kind === "pr_review" &&
+      item.id !== workItem.id &&
+      item.owner.toLowerCase() === workItem.owner.toLowerCase() &&
+      item.repo.toLowerCase() === workItem.repo.toLowerCase() &&
+      item.pr_number === workItem.pr_number,
+  );
+  const id = String(workItem.id);
+  if (other === undefined) {
+    return new Error(
+      `retry_work_item: another work item is already reviewing the same pull request, work item ${id} will not be resumed`,
+    );
+  }
+  const otherId = String(other.id);
+  return new Error(
+    `retry_work_item: work item ${otherId} (active) is already reviewing the same pull request, work item ${id} will not be resumed, follow work item ${otherId}`,
+  );
+}
+
+/**
+ * `activePrReviewConflictError`を、稼働中の作業項目の検索(`lookup`)の結果から作る。
+ * 検索が失敗しても、再実行の失敗の理由を隠さないよう、IDなしの文にして返す。
+ */
+export async function activePrReviewConflictErrorFrom(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  lookup: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >,
+): Promise<Error> {
+  try {
+    return activePrReviewConflictError(workItem, await lookup());
+  } catch {
+    return activePrReviewConflictError(workItem, []);
+  }
+}
+
+/**
+ * 終端の作業項目を稼働中の状態へ戻す更新が失敗したとき、投げる例外を返す。
+ * 同じPRの稼働中の`pr_fix`と`pr_review`、同じIssueの稼働中の作業項目に阻まれた一意違反は、
+ * 生のエラーでなく、稼働中の作業項目を示す断りの文にする。それ以外の失敗は、そのまま返す。
+ */
+export async function restartConflictError(
+  err: unknown,
+  workItem: Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "pr_number" | "issue_number"
+  >,
+  lookups: RestartConflictLookups,
+): Promise<unknown> {
+  if (isActivePrFixUniqueViolation(err)) {
+    return await activePrFixConflictErrorFrom(workItem, lookups.activePrFix);
+  }
+  if (isActivePrReviewUniqueViolation(err)) {
+    return await activePrReviewConflictErrorFrom(
+      workItem,
+      lookups.activePrReview,
+    );
+  }
+  if (isActiveIssueUniqueViolation(err)) {
+    return await activeIssueConflictErrorFrom(workItem, lookups.activeIssue);
+  }
+  return err;
+}
+
+/** `restartConflictError`が、稼働中の作業項目を引く検索。 */
+export type RestartConflictLookups = {
+  readonly activePrFix: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >;
+  readonly activePrReview: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >;
+  readonly activeIssue: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "issue_number" | "kind">[]
+  >;
+};
+
+/**
  * 取り消された作業項目を、取り消す前の状態の作業項目として扱うために、状態を置き換えて返す。
  * 対象は、`poll_issues`の要対応の照合が、要対応の状態(失敗、人の対応待ち、期限切れ)から
  * 取り消した作業項目だけである。照合は対象のIssueやPRが閉じられたときに取り消すので、
@@ -731,8 +825,9 @@ export async function closedTargetRefusal(
   >,
   getState: (owner: string, repo: string, number: number) => Promise<string>,
 ): Promise<string | null> {
-  const number =
-    workItem.kind === "issue" ? workItem.issue_number : workItem.pr_number;
+  const number = isIssueTargetKind(workItem.kind)
+    ? workItem.issue_number
+    : workItem.pr_number;
   const head = `retry_work_item: work item ${String(workItem.id)} was cancelled when its target was closed`;
   if (number === null) {
     return `${head}, and the target has no number to check, so it was not restarted`;
@@ -791,6 +886,7 @@ function requirementsRestartPlan(
  * - `approved`のissueの最新の要件承認が`attempt`と合わない。
  * - auditである(監査は再開しない)。
  * - dependabotである(dependabotの作業項目は再開しない)。
+ * - investigateである(調査の作業項目は再開せず、依頼を投入し直す)。
  */
 export function computeRestartPlan(
   workItem: Pick<
@@ -862,6 +958,10 @@ export function computeRestartPlan(
     case "dependabot":
       throw new Error(
         `retry_work_item: work item ${workItem.id} is a dependabot work item; dependabot work items are not restartable`,
+      );
+    case "investigate":
+      throw new Error(
+        `retry_work_item: work item ${workItem.id} is an investigate work item; investigate work items are not restartable (submit the request again)`,
       );
   }
 }
@@ -1153,21 +1253,30 @@ async function restartWorkItem(
               note,
             );
   } catch (err) {
-    if (isActivePrFixUniqueViolation(err)) {
-      const prNumber = workItem.pr_number;
-      throw await activePrFixConflictErrorFrom(workItem, async () =>
+    const prNumber = workItem.pr_number;
+    const issueNumber = workItem.issue_number;
+    throw await restartConflictError(err, workItem, {
+      activePrFix: async () =>
         prNumber === null
           ? []
           : listActivePrFixWorkItems(workItem.owner, workItem.repo, prNumber),
-      );
-    }
-    if (!isActiveIssueUniqueViolation(err)) throw err;
-    const issueNumber = workItem.issue_number;
-    throw await activeIssueConflictErrorFrom(workItem, async () =>
-      issueNumber === null
-        ? []
-        : listActiveIssueWorkItems(workItem.owner, workItem.repo, issueNumber),
-    );
+      activePrReview: async () =>
+        prNumber === null
+          ? []
+          : listActivePrReviewWorkItems(
+              workItem.owner,
+              workItem.repo,
+              prNumber,
+            ),
+      activeIssue: async () =>
+        issueNumber === null
+          ? []
+          : listActiveIssueWorkItems(
+              workItem.owner,
+              workItem.repo,
+              issueNumber,
+            ),
+    });
   }
   if (!moved) {
     throw new Error(

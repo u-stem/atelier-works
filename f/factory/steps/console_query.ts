@@ -1284,6 +1284,7 @@ function totalCount(rows: readonly SqlRow[]): number {
  *   同じIssueに新しいcycleがある作業項目は、そのcycleが引き継ぐので除く。
  *   PRのレビューと修正は、ラベルの付け直しで同じPRに新しい行(cycleは1から)ができるので、
  *   同じ種類・リポジトリ・PR番号で`id`が大きい行がある作業項目を除く。
+   調査(`investigate`)は、同じIssueで`id`が大きい調査の行がある作業項目を除く。
  *   監査の失敗は一覧から除かず、後の監査で報告済みのものに`superseded`の印を付ける。
  *   `audit_failures_open`は印が偽の件数である。
  * - 通知: 未解決で、重要度が`action`のもの。
@@ -1365,6 +1366,15 @@ export async function runConsoleSummary(
           SELECT 1 FROM factory.work_items n
           WHERE n.kind = wi.kind AND n.owner = wi.owner AND n.repo = wi.repo
             AND n.pr_number = wi.pr_number AND n.id > wi.id
+        )
+      )
+      AND NOT (
+        wi.kind = 'investigate'
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = 'investigate'
+            AND lower(n.owner) = lower(wi.owner) AND lower(n.repo) = lower(wi.repo)
+            AND n.issue_number = wi.issue_number AND n.id > wi.id
         )
       )
     ORDER BY wi.updated_at DESC

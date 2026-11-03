@@ -95,6 +95,7 @@ export type Verdict = {
  * `approved`は終端の状態で、実装を無効にしている間はそのまま残るので、入れると確認が永久に止まる。
  * `designing`は設計書を生成するジョブが動いている間の状態なので入れる。
  * `awaiting_design_approval`は人の承認を待つ状態なので入れない。
+ * `investigating`は調査のジョブ(Claudeの実行)が動いている間の状態なので入れる。
  */
 export const RUNNING_WORK_ITEM_STATUSES: readonly string[] = [
   "requirements_generating",
@@ -103,6 +104,7 @@ export const RUNNING_WORK_ITEM_STATUSES: readonly string[] = [
   "fixing",
   "auditing",
   "designing",
+  "investigating",
 ];
 
 /** defaultのworkerの枠を使わないと分かっているtag。Console用、定期ジョブ用、nativeのworkerが受ける。 */

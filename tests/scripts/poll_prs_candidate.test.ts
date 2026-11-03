@@ -5,6 +5,11 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  latestPrWorkItem,
+  type SqlClient,
+  type SqlRow,
+} from "../../f/factory/lib/db.ts";
+import {
   LabelerCheckLimitError,
   type PrSearchItem,
 } from "../../f/factory/lib/github.ts";
@@ -815,5 +820,93 @@ describe("buildPrCandidate with a review held at the design stage", () => {
       { viewerLogin: "octo-owner", allowedLogins: [], allowedIds: {} },
     );
     expect(decision?.review.kind).toBe("trigger_review");
+  });
+});
+
+// Consoleの登録のstepは、PRの正規の綴りで`pr_review`の行を書く。
+// 自動の検出が検索で得た別の綴りでも、その行を同じPRの最新の行として引き、同じheadのレビューを始めない。
+describe("buildPrCandidate with a review row written under another spelling", () => {
+  const HEAD_OF_WORLD = "aaaaaaa";
+  const SEARCHED = { ...FOUND, owner: "Octo-Owner", repo: "Atelier-Works" };
+  const REGISTERED_ROW: SqlRow = {
+    id: 80,
+    cycle: 1,
+    source: "manual",
+    kind: "pr_review",
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: null,
+    issue_url: null,
+    pr_number: FOUND.number,
+    title: "Fix the thing",
+    body: null,
+    status: "reviewed",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: HEAD_OF_WORLD,
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 0,
+    parent_work_item_id: null,
+    design_attempt: 0,
+    created_at: "2026-10-12T00:00:00.000Z",
+    updated_at: "2026-10-12T00:00:00.000Z",
+  };
+
+  /** 小文字どうしの比較で引く文だけが、登録された行を返す偽のDB。 */
+  const caseBlindSql: SqlClient = (strings) => {
+    const text = strings.join(" ? ");
+    const matches =
+      text.includes("lower(owner) = lower(") &&
+      text.includes("lower(repo) = lower(");
+    return {
+      fetch: () => Promise.resolve(matches ? [REGISTERED_ROW] : []),
+      execute: () => Promise.resolve(),
+    };
+  };
+
+  async function build() {
+    const fake = world({
+      labels: [],
+      headRepo: "octo-owner/atelier-works",
+      baseRepo: "octo-owner/atelier-works",
+      events: labelEventsOk([]),
+    });
+    return buildPrCandidate(
+      { run: fake.run, ghToken: "tok" },
+      SEARCHED,
+      "octo-owner",
+      [],
+      LABELS,
+      {
+        latestPrWorkItem: (owner, repo, number, opts) =>
+          latestPrWorkItem(owner, repo, number, opts, caseBlindSql),
+        findApprovedWorkItemForIssue: async () => null,
+        readBranchStatus: async () => null,
+        hasStatusEventWithNote: async () => false,
+      },
+    );
+  }
+
+  test("reads the head of the registered row as the last known head", async () => {
+    expect((await build()).candidate.lastKnownHeadSha).toBe(HEAD_OF_WORLD);
+  });
+
+  test("does not detect a review at the head the registered row already reviewed", async () => {
+    const { candidate } = await build();
+    const [decision] = decidePrActions(
+      [candidate],
+      LABELS.reviewLabel,
+      LABELS.fixLabel,
+      { viewerLogin: "octo-owner", allowedLogins: [], allowedIds: {} },
+    );
+    expect(decision?.review.kind).toBe("none");
   });
 });

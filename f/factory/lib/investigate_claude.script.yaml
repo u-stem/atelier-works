@@ -1,0 +1,9 @@
+summary: '[LIB] 調査のClaudeを隔離して起動する'
+description: 内部ライブラリです。直接実行するものではありません。隔離の引数を固定して調査のClaudeを起動し、失敗の記録から出力の本文を除く共通処理です。
+lock: '!inline f/factory/lib/investigate_claude.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

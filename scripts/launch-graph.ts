@@ -35,6 +35,7 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "auto_retry_stale_image", to: "implement", kind: "script" },
   { from: "auto_retry_stale_image", to: "pr_fix", kind: "script" },
   { from: "manual_intake_submit", to: "manual_intake", kind: "script" },
+  { from: "pr_review_submit", to: "pr_review_intake", kind: "script" },
   { from: "retry_work_item", to: "pipeline", kind: "script" },
   { from: "retry_work_item", to: "implement", kind: "script" },
   { from: "retry_work_item", to: "design", kind: "script" },
@@ -48,11 +49,14 @@ export const LAUNCH_EDGES: readonly LaunchEdge[] = [
   { from: "steps/design_apply", to: "design", kind: "script" },
   { from: "steps/design_generate", to: "pipeline", kind: "script" },
   { from: "steps/manual_intake_register", to: "pipeline", kind: "script" },
+  { from: "steps/manual_intake_register", to: "implement", kind: "script" },
+  { from: "steps/pr_review_intake_register", to: "pr_review", kind: "script" },
   { from: "steps/pr_fix_finish", to: "pipeline", kind: "script" },
   { from: "steps/implement_finish", to: "pipeline", kind: "script" },
   { from: "steps/implement_finish", to: "design", kind: "script" },
   { from: "steps/pr_fix_finish", to: "design", kind: "script" },
   { from: "form", to: "manual_intake", kind: "human" },
+  { from: "form", to: "pr_review_intake", kind: "human" },
 ];
 
 /** コードを介さず、人がflowを起動する操作と、その表示名。 */
@@ -68,6 +72,7 @@ export const HUMAN_ENTRY_SCRIPTS: Readonly<Record<string, string>> = {
   retry_work_item: "Consoleの再実行",
   audit_kickoff: "Consoleの今すぐ監査",
   manual_intake_submit: "Consoleの新規投入",
+  pr_review_submit: "ConsoleのPRレビューの投入",
   "steps/requirements_apply": "Consoleの承認と却下",
   "steps/design_apply": "Consoleの承認と却下",
 };

@@ -29,6 +29,9 @@ export type ChangedPath = {
  * 検証をすり抜けた内容が運用者のブラウザに配信される。
  * `f/factory/dependabot__flow/`も含める。dependabotの更新を自動でマージするフローで、
  * `flow.yaml`に加えて、フローに埋め込むモジュールも書き換えられると、許可していない更新をマージできる。
+ * `f/factory/investigate_isolation_probe.`も含める。調査のClaudeの隔離の測定のscriptで、関門はこのscriptの完了ジョブの結果を信頼する。
+ * 拡張子を問わない前方一致にして、`.ts`、`.script.yaml`、`.script.lock`、`.schedule.yaml`をまとめて塞ぐ。
+ * 書き換えられると、隔離に合格していない測定が合格の結果を返せる。まだ存在しなくても、名前を先に押さえる。
  * ホストの実行役が実行する道具のディレクトリも含める。
  * `scripts/host_apply/`は実行役の実装、`infra/worker/`は実行役がビルドするworkerのイメージ、
  * `mise/`はmiseの設定ディレクトリで、どれもホストのユーザーの権限で動くか、動く道具の入力になる。
@@ -50,6 +53,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   "console/public/",
   "infra/console_fetcher/",
   "f/factory/dependabot__flow/",
+  "f/factory/pr_review_intake__flow/",
+  "f/factory/investigate_isolation_probe.",
   "scripts/host_apply/",
   "infra/worker/",
   "mise/",
@@ -236,6 +241,29 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 進め方ごとの承認の要否の表(`lib/profile.ts`とその`.script.yaml`)は守る。受け付ける進め方の一覧と、承認を省く進め方の表が
  * この1か所にあり、書き換えられると、要件定義や設計の承認を、人の確認なしに省ける。
  * 表と、実装の関門が表を通すことを固定するテスト(`tests/scripts/profile_gate.test.ts`)も守る。
+ * 承認を省く進め方の手動投入を通す3つのファイル(`steps/manual_intake_create_issue.ts`、`steps/manual_intake_register.ts`、
+ * `lib/manual_intake_support.ts`)と、それぞれの`.script.yaml`、冪等キーの表を作るmigration2本も守る。
+ * キー必須と実装の停止スイッチの断り、キーの表の行との照合、ラベルなしのIssueの作成、`picked`から`implementing`への起動が、この3つにある。
+ * 書き換えられると、キー無しの投入や、キーの表と食い違う登録が通り、承認の行の無い作業項目が、人の確認なしにできる。
+ * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+ * ConsoleからPRのレビューを投入する入口も守る。Console用workerの入口(`pr_review_submit.ts`)、GitHubを読んで作業項目を作る登録のステップ
+ * (`steps/pr_review_intake_register.ts`)、投入のフロー(`pr_review_intake__flow/`、前方一致)、作業項目の作り方を`poll_prs`と共有する
+ * `lib/pr_review_start.ts`、それぞれの`.script.yaml`、稼働中の`pr_review`をPRごとに1件にする一意インデックスのmigration2本である。
+ * リポジトリの許可、オーナーIDの照合、fork headの断り、PRが開いていることの確認、同じPRの重なりの防止が、この中にある。
+ * 書き換えられると、許可されていないリポジトリや閉じたPRのレビューが投入で通ったり、同じPRのレビューが重なったりする。
+ * 一方、3つの`.script.lock`は守らない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
+ * 調査のClaudeの隔離も守る。隔離の引数を定数で持つ包み関数(`lib/investigate_claude.ts`)、読み出しを塞ぐ固定の一覧と設定の書き出し
+ * (`lib/claude_read_deny.ts`)、調査の入口を開ける門(`lib/investigate_gate.ts`)、調査のworktreeの置き場の検査と作成と掃除(`lib/investigate_workspace.ts`)、
+ * 隔離の定数と隔離した実行の引数の組み立て(`lib/investigate_isolation.ts`)、合格の証拠の型(`lib/isolation_proof.ts`)、
+ * 隔離の測定の結果を読む関門(`lib/investigate_isolation_gate.ts`)、
+ * それぞれの`.script.yaml`、7つを固定するテスト(`tests/lib/investigate_claude.test.ts`、`tests/lib/claude_read_deny.test.ts`、
+ * `tests/scripts/investigate_gate.test.ts`、`tests/lib/investigate_workspace.test.ts`、`tests/lib/investigate_isolation.test.ts`、
+ * `tests/lib/isolation_proof.test.ts`、`tests/lib/investigate_isolation_gate.test.ts`)である。
+ * 書き換えられると、調査のClaudeがworkerの秘密に届いたり、出力の本文が記録に残ったり、調査の入口が人の確認なしに開いたり、
+ * 置き場の差し替えやsymlinkを含むリポジトリのworktreeが読まれたり、測定に合格していない隔離でClaudeが起動したりする。
+ * 一方、`lib/claude.ts`は守らない。ほかのフローも日常的に直し、調査のための差分は、設定の書き出しを呼ぶ数行に限るためである。
+ * 隔離の引数と一覧は包み関数と専用のモジュールにあり、起動の呼び出し(argv、環境、実行の条件、起動の時点の設定)も、保護されたテストが固定する。
+ * 3つの`.script.lock`は守らない。`windmill-client`を含みうるlockは、その版を上げる変更で全scriptのlockと一緒に書き換わるためである。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "wmill.yaml",
@@ -324,6 +352,45 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/profile.ts",
   "f/factory/lib/profile.script.yaml",
   "tests/scripts/profile_gate.test.ts",
+  "f/factory/steps/manual_intake_create_issue.ts",
+  "f/factory/steps/manual_intake_create_issue.script.yaml",
+  "f/factory/steps/manual_intake_register.ts",
+  "f/factory/steps/manual_intake_register.script.yaml",
+  "f/factory/lib/manual_intake_support.ts",
+  "f/factory/lib/manual_intake_support.script.yaml",
+  "migrations/datatable/main/20261031110000_manual_intake_keys.up.sql",
+  "migrations/datatable/main/20261031110000_manual_intake_keys.down.sql",
+  "f/factory/pr_review_submit.ts",
+  "f/factory/pr_review_submit.script.yaml",
+  "f/factory/steps/pr_review_intake_register.ts",
+  "f/factory/steps/pr_review_intake_register.script.yaml",
+  "f/factory/lib/pr_review_start.ts",
+  "f/factory/lib/pr_review_start.script.yaml",
+  "migrations/datatable/main/20261102100000_active_pr_review_key.up.sql",
+  "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql",
+  "migrations/datatable/main/20261102120000_investigate_work_items.up.sql",
+  "migrations/datatable/main/20261102120000_investigate_work_items.down.sql",
+  "f/factory/lib/investigate_claude.ts",
+  "f/factory/lib/investigate_claude.script.yaml",
+  "f/factory/lib/claude_read_deny.ts",
+  "f/factory/lib/claude_read_deny.script.yaml",
+  "f/factory/lib/investigate_gate.ts",
+  "f/factory/lib/investigate_gate.script.yaml",
+  "f/factory/lib/investigate_workspace.ts",
+  "f/factory/lib/investigate_workspace.script.yaml",
+  "tests/lib/investigate_claude.test.ts",
+  "tests/lib/claude_read_deny.test.ts",
+  "tests/scripts/investigate_gate.test.ts",
+  "tests/lib/investigate_workspace.test.ts",
+  "f/factory/lib/investigate_isolation.ts",
+  "f/factory/lib/investigate_isolation.script.yaml",
+  "f/factory/lib/isolation_proof.ts",
+  "f/factory/lib/isolation_proof.script.yaml",
+  "f/factory/lib/investigate_isolation_gate.ts",
+  "f/factory/lib/investigate_isolation_gate.script.yaml",
+  "tests/lib/investigate_isolation.test.ts",
+  "tests/lib/isolation_proof.test.ts",
+  "tests/lib/investigate_isolation_gate.test.ts",
   "scripts/test-db-holds.ts",
   "scripts/hold.ts",
   "scripts/hold_psql.ts",

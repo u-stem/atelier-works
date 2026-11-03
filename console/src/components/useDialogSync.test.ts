@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type DialogLike, focusElement, syncDialog } from "./useDialogSync.ts";
+import {
+  type DialogLike,
+  focusElement,
+  notifyDialogClosed,
+  syncDialog,
+} from "./useDialogSync.ts";
 
 function fakeDialog(initiallyOpen: boolean): {
   dialog: DialogLike;
@@ -99,5 +104,37 @@ describe("focusElement", () => {
       focusElement(cancel);
     });
     expect(calls).toEqual(["showModal", "focusCancel"]);
+  });
+});
+
+describe("notifyDialogClosed", () => {
+  function run(wasOpen: boolean): string[] {
+    const calls: string[] = [];
+    notifyDialogClosed(
+      wasOpen,
+      () => {
+        calls.push("onClose");
+      },
+      () => {
+        calls.push("onClosed");
+      },
+    );
+    return calls;
+  }
+
+  test("tells both when the user closed an open dialog", () => {
+    expect(run(true)).toEqual(["onClosed", "onClose"]);
+  });
+
+  test("tells only onClosed when the parent closed it", () => {
+    expect(run(false)).toEqual(["onClosed"]);
+  });
+
+  test("accepts a missing onClosed", () => {
+    const calls: string[] = [];
+    notifyDialogClosed(true, () => {
+      calls.push("onClose");
+    });
+    expect(calls).toEqual(["onClose"]);
   });
 });

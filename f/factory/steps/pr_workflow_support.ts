@@ -1315,14 +1315,31 @@ export const REVIEW_DESIGN_STAGE_REASON =
  */
 const REVIEW_BY_LABEL_BODY = "review requested by a person through the label";
 
-/** 新しい`pr_review`の行の`body`。ラベルが頼んだレビューにだけ印を書く。 */
-export function reviewRowBody(reason: "label" | "assignment"): string | null {
-  return reason === "label" ? REVIEW_BY_LABEL_BODY : null;
+/**
+ * 人がConsoleの投入で頼んだレビューの行の`body`に書く印。
+ * ラベルで頼んだレビューと同じく、人が頼んだレビューなので、準備が設計の段階で止めるときに人へ知らせる。
+ */
+const REVIEW_BY_REQUEST_BODY =
+  "review requested by a person through the intake";
+
+/**
+ * 新しい`pr_review`の行の`body`。人が頼んだレビュー(ラベルとConsoleの投入)にだけ印を書く。
+ * 検出が始めたレビュー(`assignment`)には書かない。
+ */
+export function reviewRowBody(
+  reason: "label" | "assignment" | "request",
+): string | null {
+  if (reason === "label") return REVIEW_BY_LABEL_BODY;
+  if (reason === "request") return REVIEW_BY_REQUEST_BODY;
+  return null;
 }
 
-/** `pr_review`の行の`body`が、人がラベルで頼んだレビューの印か。 */
+/**
+ * `pr_review`の行の`body`が、人が頼んだレビュー(ラベルかConsoleの投入)の印か。
+ * 名前に`ByLabel`とあっても、Consoleの投入の印も真にする。
+ */
 export function isReviewRequestedByLabel(body: string | null): boolean {
-  return body === REVIEW_BY_LABEL_BODY;
+  return body === REVIEW_BY_LABEL_BODY || body === REVIEW_BY_REQUEST_BODY;
 }
 
 /** ブランチのガードが止めた種別。競合回の注記を選ぶのに使う。 */

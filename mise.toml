@@ -76,6 +76,11 @@ description = "Serve this branch's console build on 127.0.0.1:5174 and relay rea
 depends = ["console:build"]
 run = "bun run scripts/console-branch-server.ts --dist console/dist"
 
+[tasks."console:a11y"]
+description = "Build the console, then check its accessibility in Chromium (first run: bun run --cwd console playwright install chromium)"
+depends = ["console:build"]
+run = "bun run --cwd console test:a11y"
+
 [tasks.setup]
 description = "Install mise-managed tools, project dependencies, and git hooks"
 run = """

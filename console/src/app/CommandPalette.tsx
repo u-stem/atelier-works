@@ -8,7 +8,8 @@ import {
   useState,
 } from "react";
 import { useNavigate } from "react-router";
-import { focusElement, useDialogSync } from "../components/useDialogSync.ts";
+import { Dialog } from "../components/ui/dialog.tsx";
+import { focusElement } from "../components/useDialogSync.ts";
 import { cn } from "../lib/cn.ts";
 import {
   chooseItem,
@@ -53,7 +54,7 @@ export function CommandPalette({
   const focusInput = useCallback(() => {
     focusElement(inputRef.current);
   }, []);
-  const { ref, openRef } = useDialogSync(open, focusInput);
+  const ref = useRef<HTMLDialogElement>(null);
 
   const items = useMemo(() => paletteItems(SCREENS), []);
   const shown = filterPaletteItems(items, query);
@@ -103,22 +104,22 @@ export function CommandPalette({
   };
 
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: 背景の押下で閉じる操作は補助である。キーボードではEscで同じことができる。
-    <dialog
+    <Dialog
       ref={ref}
+      open={open}
+      onOpened={focusInput}
+      placement="top"
       data-command-palette=""
       aria-label="コマンドパレット"
-      onClose={() => {
+      onClose={onClose}
+      onClosed={() => {
         // 次に開いたとき、前の入力と選択を見せない。
         setQuery("");
         setActive(0);
-        // 親が`open`を偽にして閉じたときは、親がすでに知っているので知らせない。
-        if (openRef.current) {
-          onClose();
-        }
       }}
       onClick={(event) => {
-        // 背景(::backdrop)の押下は、dialog自身が対象になり、座標がdialogの外になる。
+        // 背景(::backdrop)の押下で閉じる操作は補助で、キーボードではEscで同じことができる。
+        // 背景の押下は、dialog自身が対象になり、座標がdialogの外になる。
         if (event.target !== event.currentTarget) {
           return;
         }
@@ -127,7 +128,6 @@ export function CommandPalette({
           ref.current?.close();
         }
       }}
-      className="mx-auto mt-[12vh] mb-auto w-[min(36rem,calc(100vw-1rem))] overflow-hidden rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-raised backdrop:bg-black/50"
     >
       <input
         ref={inputRef}
@@ -214,6 +214,6 @@ export function CommandPalette({
           該当する項目はありません
         </p>
       ) : null}
-    </dialog>
+    </Dialog>
   );
 }

@@ -4,6 +4,7 @@ import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import { Markdown } from "../../components/markdown/Markdown.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
 import { REQUIREMENTS_FRAME_CLASS } from "../../lib/layoutClasses.ts";
 import {
@@ -135,7 +136,7 @@ export function RequirementsDocumentView({
         ) : null}
         {/* 目次は、狭い幅では本文の前に畳んで置く。 */}
         {embedded || prepared.headings.length === 0 ? null : (
-          <details className="rounded-xl border border-border bg-card px-5 py-3 min-[1100px]:hidden">
+          <Card tag="details" padding="compact" className="min-[1100px]:hidden">
             <summary className="cursor-pointer text-small font-semibold text-muted-foreground">
               目次
             </summary>
@@ -145,7 +146,7 @@ export function RequirementsDocumentView({
                 activeId={activeId}
               />
             </div>
-          </details>
+          </Card>
         )}
         <p
           dir="ltr"

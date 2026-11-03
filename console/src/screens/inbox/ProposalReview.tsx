@@ -9,6 +9,7 @@ import {
   useLoadingDisplay,
 } from "../../components/LoadingState.tsx";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   factoryLabelChoice,
@@ -23,10 +24,7 @@ export function ProposalBody({ proposal }: { proposal: InboxProposal }) {
   const body = displayableIssueText(proposal.proposal_body);
   const origin = proposalOrigin(proposal);
   return (
-    <section
-      aria-labelledby="proposal-heading"
-      className="rounded-xl border border-border bg-card"
-    >
+    <Card aria-labelledby="proposal-heading" tag="section">
       <header className="flex flex-col gap-1 border-b border-border px-5 py-3">
         <h3 id="proposal-heading" className="text-lead font-semibold">
           提案内容
@@ -54,15 +52,15 @@ export function ProposalBody({ proposal }: { proposal: InboxProposal }) {
           {proposal.proposal_body === "" ? "(本文は空です)" : body.text}
         </pre>
       </div>
-    </section>
+    </Card>
   );
 }
 
 function Notice({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
+    <Card tag="p" variant="empty">
       {children}
-    </p>
+    </Card>
   );
 }
 

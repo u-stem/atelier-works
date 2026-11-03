@@ -13,6 +13,7 @@ import {
   isDecidable,
   proposalOrigin,
   reasonCounter,
+  reasonFieldMessages,
   redoConfirmation,
   rejectConfirmation,
   rejectProblem,
@@ -118,6 +119,36 @@ describe("rejectProblem", () => {
     expect(rejectProblem("a".repeat(MAX_REASON_LENGTH + 1))).toBe(
       `理由は${String(MAX_REASON_LENGTH)}文字までです。`,
     );
+  });
+});
+
+describe("reasonFieldMessages", () => {
+  test("guides with a hint and no problem when the reason is empty", () => {
+    expect(reasonFieldMessages("")).toEqual({
+      hint: "却下する理由を入力してください。",
+      problem: undefined,
+    });
+  });
+
+  test("shows neither a hint nor a problem within the limit", () => {
+    expect(reasonFieldMessages("a".repeat(MAX_REASON_LENGTH))).toEqual({
+      hint: undefined,
+      problem: undefined,
+    });
+  });
+
+  test("reports a problem and no hint over the limit", () => {
+    expect(reasonFieldMessages("a".repeat(MAX_REASON_LENGTH + 1))).toEqual({
+      hint: undefined,
+      problem: `理由は${String(MAX_REASON_LENGTH)}文字までです。`,
+    });
+  });
+
+  test("reports the overflow for a whitespace-only reason over the limit", () => {
+    expect(reasonFieldMessages(" ".repeat(MAX_REASON_LENGTH + 1))).toEqual({
+      hint: undefined,
+      problem: `理由は${String(MAX_REASON_LENGTH)}文字までです。`,
+    });
   });
 });
 

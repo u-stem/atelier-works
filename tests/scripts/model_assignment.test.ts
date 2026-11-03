@@ -8,9 +8,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const FACTORY_DIR = join(import.meta.dir, "../../f/factory");
-const DEFINITION_FILE = "lib/claude.ts";
-// `runClaude(`と`runClaude<T>(`の呼び出し。
-const RUN_CLAUDE_CALL = /\brunClaude\s*(<[^>(]*>)?\(/;
+// `runClaude`と、それを固定した引数で包む`runInvestigateClaude`の定義。
+// 包む側は、モデルを呼び出し側から受け取るので、呼び出し側が`modelFor`で選ぶことを確かめる。
+const DEFINITION_FILES = ["lib/claude.ts", "lib/investigate_claude.ts"];
+// `runClaude(`と`runClaude<T>(`、`runInvestigateClaude(`と`runInvestigateClaude<T>(`の呼び出し。
+const RUN_CLAUDE_CALL = /\brun(Investigate)?Claude\s*(<[^>(]*>)?\(/;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { recursive: true })
@@ -24,7 +26,8 @@ const CLAUDE_CALLERS = sourceFiles(FACTORY_DIR)
     text: readFileSync(path, "utf8"),
   }))
   .filter(
-    ({ path, text }) => path !== DEFINITION_FILE && RUN_CLAUDE_CALL.test(text),
+    ({ path, text }) =>
+      !DEFINITION_FILES.includes(path) && RUN_CLAUDE_CALL.test(text),
   );
 
 describe("model assignment", () => {

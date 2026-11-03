@@ -7,9 +7,11 @@ import type {
 } from "../../api/jobsQueries.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
 import { JobLink } from "../../components/JobLink.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   FLOWS_DATA,
   type FlowsData,
@@ -30,7 +32,6 @@ import {
 } from "../../lib/jobsView.ts";
 import { safeText } from "../../lib/safeText.ts";
 import { HoldPlaceDialog } from "../system/HoldPlaceDialog.tsx";
-import { EmptyNote } from "../system/SystemSection.tsx";
 import {
   initialPlaceForm,
   usePlaceHold,
@@ -252,7 +253,7 @@ export function ScheduleList({
             {data.schedules.length === 0 ? (
               <EmptyNote>scheduleはありません。</EmptyNote>
             ) : (
-              <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+              <Card tag="ul" variant="list">
                 {data.schedules.map((schedule) => {
                   const state = scheduleStopState(
                     schedule.path,
@@ -282,7 +283,7 @@ export function ScheduleList({
                     />
                   );
                 })}
-              </ul>
+              </Card>
             )}
           </>
         )}

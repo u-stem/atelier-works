@@ -32,6 +32,7 @@ describe("flattenRoutePaths", () => {
       "",
       "items",
       "items/new",
+      "items/new-pr-review",
       "items/:id/requirements",
       "items/:id",
       "reports",

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import { approvalLinks } from "../../lib/approvalDecision.ts";
 import { cn } from "../../lib/cn.ts";
 import { describeApproval, describeExpiry } from "../../lib/inboxView.ts";
@@ -60,7 +61,7 @@ export function ApprovalOverview({
           {title}
         </h2>
       </header>
-      <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+      <Card tag="dl" variant="list">
         <Row label="作業項目">
           {description.workItemLabel}
           {description.attemptLabel === null
@@ -116,7 +117,7 @@ export function ApprovalOverview({
             {formatAbsoluteWithRelative(approval.requested_at, now)}
           </time>
         </Row>
-      </dl>
+      </Card>
       {approval.kind === "requirements" ? (
         <RequirementsReview approval={approval} title={title} now={now} />
       ) : approval.kind === "issue_proposal" ? (
@@ -124,9 +125,9 @@ export function ApprovalOverview({
       ) : approval.kind === "design" ? (
         <DesignReview approval={approval} title={title} now={now} />
       ) : (
-        <p className="rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
+        <Card tag="p" variant="empty">
           この種類の承認は、この画面では操作できません。
-        </p>
+        </Card>
       )}
     </article>
   );

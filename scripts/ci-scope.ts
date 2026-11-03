@@ -86,6 +86,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/ci_fix_paths.ts",
   "f/factory/lib/ci_log_support.ts",
   "f/factory/lib/claude.ts",
+  "f/factory/lib/claude_read_deny.ts",
   "f/factory/lib/cleanup_db_support.ts",
   "f/factory/lib/config.ts",
   "f/factory/lib/conflict_fix_round.ts",
@@ -98,6 +99,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/drawio_viewer_observations.ts",
   "f/factory/lib/gated_review_support.ts",
   "f/factory/lib/holds.ts",
+  "f/factory/lib/investigate_gate.ts",
   "f/factory/lib/job_ids.ts",
   "f/factory/lib/job_tmp.ts",
   "f/factory/lib/log.ts",
@@ -198,6 +200,8 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
     matches: (path) => path.startsWith("scripts/") && path.endsWith(".sh"),
     flags: FLAGS,
   },
+  // 検査用の配信に使うscript(console-a11yジョブが、ビルドしたConsoleをこれで配信する)。
+  { matches: exact("scripts/console-branch-server.ts"), flags: ["console"] },
   // lockfileの検査は、consoleジョブが組み立ての前提にする(console-dist.ymlも同じ検査を動かす)。
   { matches: exact("scripts/check-console-lockfile.ts"), flags: ["console"] },
   // 依存、型検査、ツール、Windmillの設定は、どのジョブの結果も変えうる。

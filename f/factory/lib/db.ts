@@ -437,6 +437,11 @@ export type NewWorkItem = {
   conflict_check_id?: number | null;
   /** 直している競合のepisode。`conflict_check_id`と同時に指定する。省略するとNULL。 */
   conflict_episode?: number | null;
+  /**
+   * 進め方。省略すると通常の進め方(`standard`)。
+   * 手動投入の登録だけが、承認を省く進め方を渡す(`tests/scripts/profile_gate.test.ts`が固定する)。
+   */
+  profile?: string;
 };
 
 /** `factory.work_items`に新しい行を挿入し、そのIDを返す。 */
@@ -449,14 +454,15 @@ export async function insertWorkItem(
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
       cancel_url, head_sha, parent_work_item_id, ci_check_id,
-      conflict_check_id, conflict_episode
+      conflict_check_id, conflict_episode, profile
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
       ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
-      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer,
+      ${item.profile ?? "standard"}
     )
     RETURNING id
   `;
@@ -556,14 +562,15 @@ export async function insertIssueWorkItemUnlessActive(
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
       cancel_url, head_sha, parent_work_item_id, ci_check_id,
-      conflict_check_id, conflict_episode
+      conflict_check_id, conflict_episode, profile
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
       ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
-      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer,
+      ${item.profile ?? "standard"}
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -802,8 +809,10 @@ export async function newestNewerIssueCycle(
 /**
  * 同じPRで、同じ種類(`pr_review`か`pr_fix`)の作業項目のうち、`id`が`id`より大きいものの中で
  * `id`が最大のものを返す。無ければ`null`。
- * `listActionableWorkItems`が引き継ぎ済みとみなす行と同じ条件で、
  * `retry_work_item`が取り消された古い行を、並んで動く新しい行があるときに再開しないために使う。
+ * `listActionableWorkItems`が引き継ぎ済みとみなす条件に近いが、同じではない。
+ * こちらはownerとrepoを小文字で照合し、綴りの違う新しい行も引く。
+ * `listActionableWorkItems`は綴りを区別したままである。
  */
 export async function newestNewerPrWorkItem(
   kind: "pr_review" | "pr_fix",
@@ -815,7 +824,8 @@ export async function newestNewerPrWorkItem(
 ): Promise<{ readonly id: number; readonly status: WorkItemStatus } | null> {
   const rows = await sql`
     SELECT id, status FROM factory.work_items
-    WHERE kind = ${kind} AND owner = ${owner} AND repo = ${repo}
+    WHERE kind = ${kind}
+      AND lower(owner) = lower(${owner}) AND lower(repo) = lower(${repo})
       AND pr_number = ${prNumber}::integer AND id > ${id}::bigint
     ORDER BY id DESC
     LIMIT 1
@@ -1000,6 +1010,7 @@ export async function hasNonTerminalPrWorkItem(
 
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
 const ACTIVE_PR_FIX_INDEX_NAME = "work_items_active_pr_fix_key";
+const ACTIVE_PR_REVIEW_INDEX_NAME = "work_items_active_pr_review_key";
 
 /** 例外が、名前が`indexName`の一意インデックスへの違反かを返す。 */
 function isUniqueViolationOf(err: unknown, indexName: string): boolean {
@@ -1031,6 +1042,87 @@ export function isActivePrFixUniqueViolation(err: unknown): boolean {
 }
 
 /**
+ * 例外が、部分一意インデックス`work_items_active_pr_review_key`への違反かを返す。
+ * 終端の`pr_review`を稼働中の状態へ戻す更新(手動の再開と自動の再開)が、
+ * 同じPRの別の稼働中の`pr_review`に阻まれたときに起きる。
+ * 判定の仕方は`isActiveIssueUniqueViolation`と同じである。
+ */
+export function isActivePrReviewUniqueViolation(err: unknown): boolean {
+  return isUniqueViolationOf(err, ACTIVE_PR_REVIEW_INDEX_NAME);
+}
+
+/**
+ * `pr_review`の作業項目を挿入し、そのIDを返す。
+ * 同じPRに終端でない`pr_review`が既にあるときは、挿入せずに`null`を返す。
+ * 同じPRかは、ownerとrepoを小文字にして比べる。`pr_review`の行の綴りは書き手によって揺れるためである。
+ * 二重の防壁を重ねる。`WHERE NOT EXISTS`が、インデックスを作る前の順次の二重投入を防ぎ、
+ * 一意インデックス`work_items_active_pr_review_key`が、並行する挿入を防ぐ。
+ * `ON CONFLICT DO NOTHING`は対象を指定しないので、インデックスへの違反も例外にならず、`null`になる。
+ * 種類が`pr_review`でないとき、PR番号が正の整数でないときは、DBに触れる前に例外を投げる。
+ * 進め方、CIの判定、競合の列は書かない。`pr_review`には要らず、進め方は列の既定(通常の進め方)になる。
+ */
+export async function insertPrReviewWorkItemUnlessActive(
+  item: NewWorkItem,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  if (item.kind !== "pr_review") {
+    throw new Error(`expected a pr_review work item, got ${item.kind}`);
+  }
+  if (item.pr_number === null) {
+    throw new Error("invalid pull request number: null");
+  }
+  assertPrNumber(item.pr_number);
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id
+    )
+    SELECT
+      ${item.cycle}::integer, ${item.source}::text, ${item.kind}::text, ${item.owner}::text, ${item.repo}::text,
+      ${item.issue_number}::integer, ${item.issue_url}::text, ${item.pr_number}::integer, ${item.title}::text,
+      ${item.body}::text, ${item.status}::text, ${item.attempt}::integer, ${item.claimed_by}::text,
+      ${item.flow_job_id}::text, ${item.resume_url}::text, ${item.cancel_url}::text, ${item.head_sha}::text,
+      ${item.parent_work_item_id}::bigint
+    WHERE NOT EXISTS (
+      SELECT 1 FROM factory.work_items active
+      WHERE active.kind = 'pr_review'
+        AND lower(active.owner) = lower(${item.owner}::text)
+        AND lower(active.repo) = lower(${item.repo}::text)
+        AND active.pr_number = ${item.pr_number}::integer
+        AND active.status != ALL(${terminal})
+    )
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return parseId(row.id, "id");
+}
+
+/**
+ * (owner, repo, prNumber)に、終端でない`pr_review`の作業項目があるかを返す。読み取りだけを行う。
+ * ownerとrepoは小文字で照合する。`insertPrReviewWorkItemUnlessActive`と同じ比べ方である。
+ */
+export async function hasActivePrReviewWorkItem(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE kind = 'pr_review'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer AND status != ALL(${terminal})
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * (owner, repo, prNumber)の、終端でない`pr_fix`の作業項目を返す。
  * ownerとrepoは小文字で照合する。`claimPrConflictForFix`と同じく、綴りの違いで引き漏らさないためである。
  * 一意インデックス`work_items_active_pr_fix_key`により、通常は多くても1件である。
@@ -1045,6 +1137,28 @@ export async function listActivePrFixWorkItems(
   const rows = await sql`
     SELECT * FROM factory.work_items
     WHERE kind = 'pr_fix'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer AND status != ALL(${terminal})
+    ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
+/**
+ * (owner, repo, prNumber)の、終端でない`pr_review`の作業項目を返す。
+ * ownerとrepoは小文字で照合する。`insertPrReviewWorkItemUnlessActive`と同じ比べ方である。
+ * 一意インデックス`work_items_active_pr_review_key`により、通常は多くても1件である。
+ */
+export async function listActivePrReviewWorkItems(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'pr_review'
       AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
       AND pr_number = ${prNumber}::integer AND status != ALL(${terminal})
     ORDER BY updated_at DESC
@@ -1609,7 +1723,7 @@ export async function listTransientReviewCandidates(
       AND NOT EXISTS (
         SELECT 1 FROM factory.work_items other
         WHERE other.kind = 'pr_review'
-          AND other.owner = w.owner AND other.repo = w.repo
+          AND lower(other.owner) = lower(w.owner) AND lower(other.repo) = lower(w.repo)
           AND other.pr_number = w.pr_number AND other.id <> w.id
           AND (other.id > w.id OR other.status != ALL(${terminal}))
       )
@@ -1645,7 +1759,7 @@ export async function restartTransientPrReview(
 ): Promise<boolean> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const delays = [...params.delaysSeconds];
-  const rows = await sql`
+  const statement = sql`
     WITH updated AS (
       UPDATE factory.work_items
       SET status = 'reviewing', flow_job_id = NULL, updated_at = now()
@@ -1675,7 +1789,8 @@ export async function restartTransientPrReview(
         AND NOT EXISTS (
           SELECT 1 FROM factory.work_items other
           WHERE other.kind = 'pr_review'
-            AND other.owner = factory.work_items.owner AND other.repo = factory.work_items.repo
+            AND lower(other.owner) = lower(factory.work_items.owner)
+            AND lower(other.repo) = lower(factory.work_items.repo)
             AND other.pr_number = factory.work_items.pr_number
             AND other.id <> factory.work_items.id
             AND (other.id > factory.work_items.id OR other.status != ALL(${terminal}))
@@ -1686,8 +1801,15 @@ export async function restartTransientPrReview(
     SELECT updated.id, 'failed', 'reviewing', ${params.note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
-  `.fetch();
-  return rows.length > 0;
+  `;
+  try {
+    const rows = await statement.fetch();
+    return rows.length > 0;
+  } catch (err) {
+    // 条件を確かめた後に、綴りの違う行を含む別の実行が、同じPRで`pr_review`を稼働中にした競合。再開しない。
+    if (isActivePrReviewUniqueViolation(err)) return false;
+    throw err;
+  }
 }
 
 /**
@@ -1707,7 +1829,7 @@ export async function hasSupersedingPrReview(
       FROM factory.work_items w
       JOIN factory.work_items other
         ON other.kind = 'pr_review'
-        AND other.owner = w.owner AND other.repo = w.repo
+        AND lower(other.owner) = lower(w.owner) AND lower(other.repo) = lower(w.repo)
         AND other.pr_number = w.pr_number AND other.id <> w.id
       WHERE w.id = ${id}::bigint
         AND (other.id > w.id OR other.status != ALL(${terminal}))
@@ -1923,7 +2045,9 @@ export async function listActive(
  * Consoleの要対応の一覧(`ACTIONABLE_WORK_ITEM_STATUSES`の作業項目)に出ている行を、
  * `id`の昇順で返す。閉じたIssueやPRの行を`cancelled`にして一覧から外すための入力である。
  * 一覧と同じく、`audit`(GitHubのオブジェクトが無い)と、新しい行が引き継ぐ行は含めない。
- * 新しい行とは、同じIssueの新しいcycleと、同じ種類・同じPRで`id`が大きい行である。
+ * 新しい行とは、同じIssueの新しいcycleと、同じ種類・同じPRで`id`が大きい行と、
+ * 同じIssueの`investigate`で`id`が大きい行である。
+ * `investigate`は、稼働中の一意インデックスと同じく、ownerとrepoの綴りの大文字小文字を区別せずに比べる。
  * 一覧に出ない行を調べても一覧は変わらず、GitHubへの問い合わせが増えるだけである。
  * 引き継いだ側の行は、`listActive`の照合が閉じたIssueやPRを扱う。
  */
@@ -1949,6 +2073,15 @@ export async function listActionableWorkItems(
           SELECT 1 FROM factory.work_items n
           WHERE n.kind = wi.kind AND n.owner = wi.owner AND n.repo = wi.repo
             AND n.pr_number = wi.pr_number AND n.id > wi.id
+        )
+      )
+      AND NOT (
+        wi.kind = 'investigate'
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = 'investigate'
+            AND lower(n.owner) = lower(wi.owner) AND lower(n.repo) = lower(wi.repo)
+            AND n.issue_number = wi.issue_number AND n.id > wi.id
         )
       )
     ORDER BY wi.id ASC
@@ -2802,6 +2935,7 @@ export function toReviewRecord(row: SqlRow): ReviewRecord {
  * このPRについて、この作業項目より前にFactoryのレビューが記録されているかを返す。
  * `factory.reviews`を`work_item_id`で`factory.work_items`に結合し、
  * 同じ(owner, repo, pr_number)で`work_item_id`が異なる行に絞る。
+ * ownerとrepoは小文字で照合する。
  * そのため、実行中のpr_review自身のまだ挿入していない行(または同じ呼び出しの中で
  * まだcommitしていない先の挿入)は「前の」レビューに数えない。
  * 投稿したレビューも、投稿を見送って記録だけしたレビューも、
@@ -2820,8 +2954,8 @@ export async function hasPriorReview(
     SELECT 1
     FROM factory.reviews
     JOIN factory.work_items ON factory.work_items.id = factory.reviews.work_item_id
-    WHERE factory.work_items.owner = ${owner}
-      AND factory.work_items.repo = ${repo}
+    WHERE lower(factory.work_items.owner) = lower(${owner})
+      AND lower(factory.work_items.repo) = lower(${repo})
       AND factory.work_items.pr_number = ${prNumber}::integer
       AND factory.reviews.work_item_id != ${excludingWorkItemId}::bigint
     LIMIT 1
@@ -3585,6 +3719,7 @@ export type LatestPrWorkItemOpts = {
  * このPRの`work_items`の行のうち、最新のもの(`created_at`の順、
  * 同じ秒に挿入された行はIDの順)を返す。無ければ`null`。
  * `opts.kind`を省略すれば種類を問わず、指定すればその種類に絞る。
+ * ownerとrepoは小文字で照合する。登録のstepが書く行の綴りと、検索で得た綴りが違っても同じPRとして引く。
  * 呼び出し側が`observed_comment_id`や`last_review_id`などを読むために
  * もう一度`getWorkItem`を呼ばずに済むよう、行全体を返す。
  * レビューの経路の「未処理のhead_sha」の確認と、修正の経路での
@@ -3602,13 +3737,15 @@ export async function latestPrWorkItem(
     kind === undefined
       ? await sql`
           SELECT * FROM factory.work_items
-          WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}
+          WHERE lower(owner) = lower(${owner}) AND lower(repo) = lower(${repo})
+            AND pr_number = ${prNumber}
           ORDER BY created_at DESC, id DESC
           LIMIT 1
         `.fetch()
       : await sql`
           SELECT * FROM factory.work_items
-          WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber} AND kind = ${kind}
+          WHERE lower(owner) = lower(${owner}) AND lower(repo) = lower(${repo})
+            AND pr_number = ${prNumber} AND kind = ${kind}
           ORDER BY created_at DESC, id DESC
           LIMIT 1
         `.fetch();

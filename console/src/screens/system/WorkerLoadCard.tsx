@@ -1,10 +1,11 @@
 import { isWorkerLoad } from "../../api/guards/workerLoad.ts";
 import { Disclosure } from "../../components/Disclosure.tsx";
+import { EmptyNote } from "../../components/EmptyNote.tsx";
+import { Card } from "../../components/ui/card.tsx";
 import {
   describeWorkerLoad,
   describeWorkerLoadHeadline,
 } from "../../lib/workerLoadView.ts";
-import { EmptyNote } from "./SystemSection.tsx";
 
 /**
  * defaultのworkerの負荷。先頭に結論の1行を出し、直近24時間の枠の使用、queueの待ち、メモリの内訳は開いて読む。
@@ -30,13 +31,17 @@ export function WorkerLoadCard({ load }: { load: unknown }) {
   const view = describeWorkerLoad(load);
   return (
     <div className="flex flex-col gap-3">
-      <p className="rounded-xl border border-border bg-card px-5 py-3 text-body break-words tabular-nums">
+      <Card
+        tag="p"
+        padding="compact"
+        className="text-body break-words tabular-nums"
+      >
         {describeWorkerLoadHeadline(load)}
-      </p>
+      </Card>
       <Disclosure summary="内訳を表示">
         <div className="flex flex-col gap-2">
           <p className="text-small text-muted-foreground">{view.coverage}</p>
-          <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+          <Card tag="dl" variant="list">
             {view.rows.map((row) => (
               <div
                 key={row.label}
@@ -48,7 +53,7 @@ export function WorkerLoadCard({ load }: { load: unknown }) {
                 </dd>
               </div>
             ))}
-          </dl>
+          </Card>
         </div>
       </Disclosure>
     </div>

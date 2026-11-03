@@ -336,7 +336,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | `f/factory/lib/check_sandbox`と`f/factory/lib/check_runner`で始まるファイル、`tests/lib/check_sandbox_integration`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
 | `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
 | `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh`、`scripts/ci-metadata-wait-worker.sh` | `metadata` |
-| `console/`、`scripts/check-console-lockfile.ts` | `console` |
+| `console/`、`scripts/check-console-lockfile.ts`、`scripts/console-branch-server.ts` | `console`と`console-a11y` |
 
 許可リストは、次のパスである。
 どれも、読むのは`check`のステップだけで、他のジョブは読まない。
@@ -355,6 +355,11 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 `check`ジョブの`mise run check`がConsoleの検査(`console:check`)を含むためである。
 `console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの書き出しだけをする。
 成果物は上げない。
+
+`console-a11y`ジョブは、`console`と同じフラグで、PRの実行だけで動き、ビルドしたConsoleをブラウザで検査する。
+`main`のpushでは飛ばし、必須チェックでは通過として扱う。
+詳細は[Consoleの仕様](internals/console.md#ブラウザでのa11y検査)にある。
+この検査は、ブラウザの取得が要るので、`mise run check`に含めない。
 
 差分の基点は、イベントで決める。
 

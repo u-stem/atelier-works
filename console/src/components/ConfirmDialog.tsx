@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useId, useRef } from "react";
 import { Button } from "./ui/button.tsx";
-import { focusElement, useDialogSync } from "./useDialogSync.ts";
+import { Dialog } from "./ui/dialog.tsx";
+import { focusElement } from "./useDialogSync.ts";
 
 /**
  * 取り消せない操作の確認ダイアログ。ブラウザ標準の`<dialog>`をモーダルで開く。
@@ -44,20 +45,14 @@ export function ConfirmDialog({
   const focusCancel = useCallback(() => {
     focusElement(cancelRef.current);
   }, []);
-  const { ref, openRef } = useDialogSync(open, focusCancel);
-
   return (
-    <dialog
-      ref={ref}
+    // 確定や親からの閉じ込みでは、取り消しを呼ばない。取り消しの副作用を二重に走らせないためである。
+    <Dialog
+      open={open}
+      onOpened={focusCancel}
+      onClose={onCancel}
       aria-labelledby={headingId}
       aria-describedby={describedBy}
-      onClose={() => {
-        // 確定や親からの閉じ込みでは、すでに開いていない。取り消しの副作用を二重に走らせない。
-        if (openRef.current) {
-          onCancel();
-        }
-      }}
-      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-border bg-popover p-0 text-popover-foreground shadow-raised backdrop:bg-black/50"
     >
       <div className="flex flex-col gap-4 p-6">
         <h2 id={headingId} className="text-lead font-semibold">
@@ -77,6 +72,6 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </dialog>
+    </Dialog>
   );
 }

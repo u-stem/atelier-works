@@ -155,12 +155,3 @@ export function SystemSection<T>({
     </section>
   );
 }
-
-/** 節の本文が空のときの表示。 */
-export function EmptyNote({ children }: { children: string }) {
-  return (
-    <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-      {children}
-    </p>
-  );
-}

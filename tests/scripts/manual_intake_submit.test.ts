@@ -10,14 +10,16 @@ import {
 } from "../../f/factory/manual_intake_submit.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const ANOTHER_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
 
 const CONFIG: Pick<
   FactoryConfig,
-  "owners" | "repo_allowlist" | "factory_repo"
+  "owners" | "repo_allowlist" | "factory_repo" | "implement_enabled"
 > = {
   owners: [{ name: "octo-owner", kind: "user" }],
   repo_allowlist: [],
   factory_repo: "https://github.com/octo-owner/atelier-works",
+  implement_enabled: true,
 };
 
 const INPUT = {
@@ -28,6 +30,9 @@ const INPUT = {
   acceptance_criteria: "It renders.",
   profile: "standard",
 };
+
+/** 承認を省く進め方に要る冪等キー。 */
+const PROFILE_SEND_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d";
 
 type Run = { path: string; args: Record<string, unknown> };
 type Logged = { message: string; fields: LogFields | undefined };
@@ -127,7 +132,8 @@ describe("a refusal", () => {
     ["invalid_owner", { owner: "bad owner" }],
     ["invalid_repo", { repo: "a/b" }],
     ["repo_not_allowed", { owner: "stranger" }],
-    ["profile_not_allowed", { profile: "direct" }],
+    ["profile_not_allowed", { profile: "unknown" }],
+    ["intake_key_required", { profile: "direct" }],
     ["empty_title", { title: "  " }],
     ["title_too_long", { title: "a".repeat(257) }],
     ["invalid_title_chars", { title: "a\u0000b" }],
@@ -150,8 +156,44 @@ describe("a refusal", () => {
 
   test("does not start the flow for a profile that is not accepted", async () => {
     const { deps, runs } = harness();
-    await submitManualIntake({ ...INPUT, profile: "direct" }, deps);
+    await submitManualIntake({ ...INPUT, profile: "unknown" }, deps);
     expect(runs).toEqual([]);
+  });
+
+  test("does not start the flow for an approval-free profile without a key", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake({ ...INPUT, profile: "docs" }, deps);
+    expect(runs).toEqual([]);
+  });
+
+  test("refuses an approval-free profile while the implementation is off", async () => {
+    const { deps } = harness({
+      loadConfig: () =>
+        Promise.resolve({ ...CONFIG, implement_enabled: false }),
+    });
+    expect(
+      await submitManualIntake(
+        {
+          ...INPUT,
+          profile: "docs",
+          intake_key: ANOTHER_ID,
+        },
+        deps,
+      ),
+    ).toEqual({ refused: true, reason: "implement_disabled" });
+  });
+
+  test("starts the flow for an approval-free profile with a key", async () => {
+    const { deps, runs } = harness();
+    await submitManualIntake(
+      {
+        ...INPUT,
+        profile: "bugfix",
+        intake_key: ANOTHER_ID,
+      },
+      deps,
+    );
+    expect(runs.map((run) => run.args.profile)).toEqual(["bugfix"]);
   });
 
   test("refuses an empty profile", async () => {
@@ -168,6 +210,36 @@ describe("the profile", () => {
     const { deps, runs } = harness();
     await submitManualIntake(INPUT, deps);
     expect(runs[0]?.args.profile).toBe("standard");
+  });
+
+  test("is logged when the request is made, after the validation", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake(
+      { ...INPUT, profile: "docs", intake_key: PROFILE_SEND_ID },
+      deps,
+    );
+    expect(
+      logs.find((entry) => entry.message === "manual intake requested")?.fields
+        ?.profile,
+    ).toBe("docs");
+  });
+
+  test("is logged when the flow has started", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake(
+      { ...INPUT, profile: "bugfix", intake_key: PROFILE_SEND_ID },
+      deps,
+    );
+    expect(
+      logs.find((entry) => entry.message === "manual intake started")?.fields
+        ?.profile,
+    ).toBe("bugfix");
+  });
+
+  test("is not logged for a refusal, because nothing started", async () => {
+    const { deps, logs } = harness();
+    await submitManualIntake({ ...INPUT, profile: "unknown" }, deps);
+    expect(logs).toEqual([]);
   });
 
   test("defaults to standard when the script is called without it", () => {

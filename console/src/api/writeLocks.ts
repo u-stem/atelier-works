@@ -16,6 +16,12 @@ export const AUDIT_WRITE_KEY = "audit";
 export const MANUAL_INTAKE_WRITE_KEY = "manual_intake";
 
 /**
+ * PRレビューの投入は対象を持たないので、キーを1つに固定する。
+ * 結果の表示が画面に1つだけなので、PRごとにキーを変えて並べて送ると、結果が上書きされる。
+ */
+export const PR_REVIEW_WRITE_KEY = "pr_review";
+
+/**
  * 対象の種類とIDから、ロックのキーを作る。承認の承認と却下は同じキーで止める。
  * 凍結のIDは文字列で、保留のIDは数値である。
  */

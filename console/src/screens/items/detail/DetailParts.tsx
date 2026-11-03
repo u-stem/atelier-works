@@ -72,14 +72,6 @@ export function Row({
   );
 }
 
-export function EmptyNote({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-      {children}
-    </p>
-  );
-}
-
 /** 信頼できない文字を描く段落。書字方向を左から右に固定し、改行を保つ。 */
 function TextParagraph({ children }: { children: ReactNode }) {
   return (

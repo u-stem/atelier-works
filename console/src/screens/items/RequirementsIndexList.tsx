@@ -1,9 +1,11 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
 import { Pagination } from "../../components/Pagination.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card } from "../../components/ui/card.tsx";
+import { Field } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { cn } from "../../lib/cn.ts";
 import { ROW_LINK_CLASS } from "../../lib/controlClasses.ts";
@@ -67,47 +69,61 @@ export function RequirementsIndexList({
   initialPage?: number | undefined;
 }) {
   const [filter, setFilter] = useState("");
-  const inputId = useId();
   const visible = filterRequirementsRows(rows, filter);
   const pager = usePagination(visible.length, PAGE_SIZE, initialPage);
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex items-center gap-3">
-        <label htmlFor={inputId} className="text-small text-muted-foreground">
-          作業項目の番号で絞り込む
-        </label>
-        <Input
-          id={inputId}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          placeholder="空欄で全件"
-          value={filter}
-          onChange={(event) => {
-            setFilter(event.target.value);
-            pager.reset();
-          }}
-          className="w-40"
-        />
-      </div>
+      <Field
+        tone="filter"
+        label="作業項目の番号で絞り込む"
+        className="flex-row items-center gap-3"
+      >
+        {(control) => (
+          <Input
+            {...control}
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="空欄で全件"
+            value={filter}
+            onChange={(event) => {
+              setFilter(event.target.value);
+              pager.reset();
+            }}
+            className="w-40"
+          />
+        )}
+      </Field>
       {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-small text-muted-foreground">
+        <Card
+          tag="p"
+          variant="empty"
+          padding="spacious"
+          className="text-center"
+        >
           要件定義はまだありません。
-        </p>
+        </Card>
       ) : visible.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-small text-muted-foreground">
+        <Card
+          tag="p"
+          variant="empty"
+          padding="spacious"
+          className="text-center"
+        >
           {emptyFilterMessage(filter)}
-        </p>
+        </Card>
       ) : (
         <div ref={pager.anchorRef} className="flex flex-col gap-3">
-          <ul
+          <Card
             aria-label="要件定義の一覧"
-            className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
+            tag="ul"
+            variant="list"
+            className="overflow-hidden"
           >
             {pageSlice(visible, pager.page, PAGE_SIZE).map((row) => (
               <IndexRow key={row.work_item_id} row={row} now={now} />
             ))}
-          </ul>
+          </Card>
           <Pagination
             page={pager.page}
             total={visible.length}

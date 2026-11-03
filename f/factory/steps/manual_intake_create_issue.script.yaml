@@ -1,5 +1,6 @@
 summary: '[OP-1-1/1] Issueを作成'
-description: 投入されたタイトル・目的・受入基準をもとにGitHub Issueを作成します。作成したIssueの情報を次のステップに渡します。
+description: 投入されたタイトル・目的・受入基準をもとにGitHub
+  Issueを作成します。通常の進め方はトリガーラベル付き、承認を省く進め方はラベルなしで作ります。作成したIssueの情報を次のステップに渡します。
 lock: '!inline f/factory/steps/manual_intake_create_issue.script.lock'
 kind: script
 schema:
@@ -18,7 +19,7 @@ schema:
       originalType: string
     intake_key:
       type: string
-      description: 投入の再送を止める冪等キー(小文字のUUID)。省くと、再送を止めない従来の投入になります。
+      description: 投入の再送を止める冪等キー(小文字のUUID)。省くと、再送を止めない従来の投入になります。承認を省く進め方では必須です。
       default: null
       originalType: string
     owner:
@@ -28,7 +29,7 @@ schema:
       originalType: string
     profile:
       type: string
-      description: 作業の進め方。受け付けない値は、Issueを作らずに断ります。
+      description: 作業の進め方。受け付けない値は、Issueを作らずに断ります。承認を省く進め方は、冪等キーが無いか、実装が止まっているときも断ります。
       default: standard
       originalType: string
     repo:

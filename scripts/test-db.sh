@@ -75,6 +75,8 @@ DESIGN_DRAFTS_MIGRATION="20261026130000_design_drafts.up.sql"
 DOC_HASH_MIGRATION="20261026150000_requirement_drafts_doc_hash.up.sql"
 IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION="20261028100000_implement_rounds_design_gap.up.sql"
 FIX_ROUNDS_DESIGN_GAP_MIGRATION="20261028110000_fix_rounds_design_gap.up.sql"
+ACTIVE_PR_REVIEW_MIGRATION="20261102100000_active_pr_review_key.up.sql"
+INVESTIGATE_MIGRATION="20261102120000_investigate_work_items.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -466,6 +468,241 @@ verify_active_pr_fix_index() {
   log "pr_fix work items are limited to one active row per pull request"
 }
 
+# 稼働中のpr_reviewの一意索引を足す前に、同じPRの稼働中のpr_reviewを、綴りの違う行を含めて入れておく。
+# migrationが、id が最大の行だけを残して古い行を取り消し、events に残してから索引を作れることを確かめるため。
+seed_active_pr_review_duplicates() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES
+  (1, 'issue', 'pr_review', 'Reviewprobe', 'Widgets', 7, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 8, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 9, 't', 'failed'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', 9, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', NULL, 't', 'reviewing'),
+  (1, 'issue', 'pr_review', 'reviewprobe', 'widgets', NULL, 't', 'reviewing');
+SQL
+}
+
+# migrationが、同じPRの古い稼働中の行(綴りの違う行を含む)だけを取り消し、events を1件残し、
+# 終端の行、重複の無いPR、pr_number が NULL の行には触れないことを確かめる。
+# そのうえで、索引が小文字にそろえた2件目の稼働中の行を拒み(拒否の文に制約名が含まれること。
+# `isActivePrReviewUniqueViolation`が頼る形)、ON CONFLICT DO NOTHING では挿入せず、
+# 終端の行、ほかのPR、ほかの種類の行は拒まないことを確かめる。このmigrationの適用直後に呼ぶ。
+verify_active_pr_review_index() {
+  local migrated
+  migrated="$(printf "SELECT string_agg(pr_number || ':' || status, ',' ORDER BY pr_number, id) FROM factory.work_items WHERE lower(owner) = 'reviewprobe' AND pr_number IS NOT NULL;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the migrated pr_review rows"
+  [ "${migrated}" = "7:cancelled,7:reviewing,8:reviewing,9:failed,9:reviewing" ] \
+    || die "unexpected pr_review rows after the migration: ${migrated}"
+  local kept
+  kept="$(printf "SELECT owner FROM factory.work_items WHERE lower(owner) = 'reviewprobe' AND pr_number = 7 AND status = 'reviewing';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the kept pr_review row"
+  [ "${kept}" = "reviewprobe" ] \
+    || die "expected the row with the highest id to be kept, got '${kept}'"
+  local events
+  events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE from_status = 'reviewing' AND to_status = 'cancelled' AND note LIKE 'duplicate active pr_review work item%%';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the events of the cancelled duplicate"
+  [ "$(printf '%s' "${events}" | tr -d '[:space:]')" = "1" ] \
+    || die "expected one work_item_events row for the cancelled duplicate, got '${events}'"
+  local untouched
+  untouched="$(printf "SELECT count(*) FROM factory.work_items WHERE lower(owner) = 'reviewprobe' AND pr_number IS NULL AND status = 'reviewing';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the rows without a pull request number"
+  [ "$(printf '%s' "${untouched}" | tr -d '[:space:]')" = "2" ] \
+    || die "expected the rows without a pull request number to be left alone, got '${untouched}'"
+
+  local insert_prefix="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue',"
+  expect_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  expect_rejected() {
+    local statement="$1" constraint="work_items_active_pr_review_key" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  expect_rejected "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewing')"
+  expect_rejected "${insert_prefix} 'pr_review', 'REVIEWPROBE', 'WIDGETS', 7, 't', 'picked')"
+  local skipped
+  skipped="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue', 'pr_review', 'Reviewprobe', 'Widgets', 7, 't', 'reviewing') ON CONFLICT DO NOTHING RETURNING id;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "ON CONFLICT DO NOTHING failed instead of skipping the pr_review insert"
+  [ -z "$(printf '%s' "${skipped}" | tr -d '[:space:]')" ] \
+    || die "ON CONFLICT DO NOTHING inserted a second active pr_review for the pull request"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewed')"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 10, 't', 'reviewing')"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'other', 7, 't', 'reviewing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'reviewprobe', 'widgets', 7, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'dependabot', 'reviewprobe', 'widgets', 7, 't', 'picked')"
+  # 終端の行を稼働中へ戻す更新(retry_work_itemの再開)も、同じPRの稼働中の行に拒まれる。
+  expect_rejected "UPDATE factory.work_items SET status = 'reviewing' WHERE owner = 'reviewprobe' AND repo = 'widgets' AND pr_number = 7 AND kind = 'pr_review' AND status = 'reviewed'"
+  # 稼働中の行が終端になれば、同じPRに新しい稼働中の行を入れられる。
+  expect_accepted "UPDATE factory.work_items SET status = 'failed' WHERE owner = 'reviewprobe' AND repo = 'widgets' AND pr_number = 7 AND kind = 'pr_review' AND status = 'reviewing'"
+  expect_accepted "${insert_prefix} 'pr_review', 'reviewprobe', 'widgets', 7, 't', 'reviewing')"
+  printf "DELETE FROM factory.work_items WHERE lower(owner) = 'reviewprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "pr_review work items are limited to one active row per pull request, whatever the case of the name"
+}
+
+# 調査(investigate)の土台のmigrationが、種別と状態を受け付け、稼働中の一意インデックスを5本そろえることを確かめる。
+# 同じIssueの2件目の稼働中のinvestigateは、綴りが違っても拒まれる(拒否の文に制約名が含まれること)。
+# ON CONFLICT DO NOTHING では挿入されず、終端の行、別のIssue、別のリポジトリ、別の種類の行は拒まれない。
+# 終端の行を稼働中へ戻す更新(retry_work_itemの再開)は、同じIssueの稼働中の行に拒まれる。
+# 作り直した既存のインデックスの述語にも、investigatingが入っている。
+# `v_lead_time`は終端のinvestigatedを含み、investigatingを含まない。このmigrationの適用直後に呼ぶ。
+# (owner, repo, issue_number, cycle)の一意制約に当たらないよう、同じIssueの行はcycleを変えて入れる。
+verify_investigate_work_items() {
+  # cycle, kind, owner, repo, issue_number, statusから、行を入れる文を作る。
+  investigate_row() {
+    printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (%s, 'manual', '%s', '%s', '%s', %s, 'https://github.com/investigateprobe/r/issues/%s', 't', '%s')" "$1" "$2" "$3" "$4" "$5" "$5" "$6"
+  }
+  investigate_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  investigate_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  investigate_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+
+  local key="work_items_active_investigate_key"
+  investigate_accepted "$(investigate_row 1 investigate investigateprobe r 1 investigating)"
+  investigate_rejected "$(investigate_row 2 investigate investigateprobe r 1 investigating)" "${key}"
+  investigate_rejected "$(investigate_row 3 investigate investigateprobe r 1 picked)" "${key}"
+  investigate_rejected "$(investigate_row 4 investigate INVESTIGATEPROBE R 1 investigating)" "${key}"
+  local skipped
+  skipped="$(printf '%s ON CONFLICT DO NOTHING RETURNING id;\n' "$(investigate_row 5 investigate Investigateprobe R 1 investigating)" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "ON CONFLICT DO NOTHING failed instead of skipping the investigate insert"
+  [ -z "$(printf '%s' "${skipped}" | tr -d '[:space:]')" ] \
+    || die "ON CONFLICT DO NOTHING inserted a second active investigate for the Issue"
+  investigate_accepted "$(investigate_row 6 investigate investigateprobe r 1 investigated)"
+  investigate_accepted "$(investigate_row 7 investigate investigateprobe r 1 failed)"
+  investigate_accepted "$(investigate_row 1 investigate investigateprobe r 2 investigating)"
+  investigate_accepted "$(investigate_row 1 investigate investigateprobe other 1 investigating)"
+  investigate_accepted "$(investigate_row 9 issue investigateprobe r 1 picked)"
+  investigate_rejected "$(investigate_row 1 bogus investigateprobe r 4 picked)" work_items_kind_check
+  investigate_rejected "$(investigate_row 1 investigate investigateprobe r 4 bogus)" work_items_status_check
+
+  # 作り直した既存のインデックスの述語にも、investigatingが入っている。
+  investigate_accepted "$(investigate_row 1 issue investigateprobe r 3 investigating)"
+  investigate_rejected "$(investigate_row 2 issue investigateprobe r 3 investigating)" work_items_active_issue_key
+
+  # 終端の行を稼働中へ戻す更新も、同じIssueの稼働中の行に拒まれる。
+  investigate_rejected "UPDATE factory.work_items SET status = 'investigating' WHERE kind = 'investigate' AND owner = 'investigateprobe' AND repo = 'r' AND issue_number = 1 AND status = 'investigated'" "${key}"
+  # 稼働中の行が終端になれば、同じIssueに新しい稼働中の行を入れられる。
+  investigate_accepted "UPDATE factory.work_items SET status = 'investigated' WHERE kind = 'investigate' AND owner = 'investigateprobe' AND repo = 'r' AND issue_number = 1 AND status = 'investigating'"
+  investigate_accepted "$(investigate_row 10 investigate investigateprobe r 1 investigating)"
+
+  # 終端のinvestigatedはリードタイムのビューに出て、稼働中のinvestigatingは出ない。
+  [ "$(investigate_scalar "SELECT count(*) FROM factory.v_lead_time WHERE owner = 'investigateprobe' AND status = 'investigated'")" = "2" ] \
+    || die "expected the two investigated rows in v_lead_time"
+  [ "$(investigate_scalar "SELECT count(*) FROM factory.v_lead_time WHERE owner = 'investigateprobe' AND status = 'investigating'")" = "0" ] \
+    || die "expected no investigating row in v_lead_time"
+  printf "DELETE FROM factory.work_items WHERE lower(owner) = 'investigateprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "investigate work items are limited to one active row per Issue, whatever the case of the name"
+}
+
+# 調査の土台のmigrationを戻す検査。investigateの行と、その子の行を入れてから、downを当てる。
+# 戻すと、investigateの行が消え、連鎖して子の行(作業項目の履歴と実行の記録)も消える。
+# 参照を空にする表(失敗の記録と、子の作業項目の親の参照)の行は残る。ほかの種別の行と履歴は残る。
+# 旧い制約は種別investigateと状態investigatingを拒み、稼働中の一意インデックスは5本から4本になり、
+# 述語からinvestigatingが消える。最後にupを当て直して、investigateの行を受け付けることを確かめる。
+# 全downを当てる検査の前に呼ぶ。
+verify_investigate_rollback() {
+  local up="${MIGRATIONS_DIR}/${INVESTIGATE_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${INVESTIGATE_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  rollback_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  rollback_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+  # 稼働中の一意インデックスの述語に、investigatingが入っている数を返す。
+  rollback_indexed() {
+    rollback_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_active_issue_key', 'work_items_active_pr_fix_key', 'work_items_active_dependabot_key', 'work_items_active_pr_review_key', 'work_items_active_investigate_key') AND indexdef LIKE '%investigating%'"
+  }
+
+  psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the investigate rows"
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
+  (1, 'manual', 'investigate', 'rollbackprobe', 'r', 1, 'https://github.com/rollbackprobe/r/issues/1', 't', 'investigating'),
+  (1, 'issue', 'issue', 'rollbackprobe', 'r', 2, 'https://github.com/rollbackprobe/r/issues/2', 't', 'implementing');
+INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status, parent_work_item_id)
+  SELECT 1, 'issue', 'pr_fix', 'rollbackprobe', 'r', 3, 't', 'fixing', id
+  FROM factory.work_items WHERE owner = 'rollbackprobe' AND kind = 'investigate';
+INSERT INTO factory.work_item_events (work_item_id, from_status, to_status)
+  SELECT id, 'picked', status FROM factory.work_items WHERE owner = 'rollbackprobe' AND kind IN ('investigate', 'issue');
+INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model)
+  SELECT id, 'investigate', 1, 'probe-model' FROM factory.work_items WHERE owner = 'rollbackprobe' AND kind = 'investigate';
+INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, error)
+  SELECT id, 'f/factory/investigate', 'rollbackprobe-job', 'boom' FROM factory.work_items WHERE owner = 'rollbackprobe' AND kind = 'investigate';
+SQL
+  [ "$(rollback_indexed)" = "5" ] || die "expected investigating in the five active indexes, found $(rollback_indexed)"
+
+  log "rolling back investigate_work_items"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back investigate_work_items"
+  [ "$(rollback_scalar "SELECT count(*) FROM factory.work_items WHERE owner = 'rollbackprobe' AND kind = 'investigate'")" = "0" ] \
+    || die "expected the rollback to delete the investigate rows"
+  [ "$(rollback_scalar "SELECT string_agg(kind, ',' ORDER BY kind) FROM factory.work_items WHERE owner = 'rollbackprobe'")" = "issue,pr_fix" ] \
+    || die "expected the rollback to keep the rows of the other kinds"
+  [ "$(rollback_scalar "SELECT count(*) FROM factory.work_item_events e JOIN factory.work_items w ON w.id = e.work_item_id WHERE w.owner = 'rollbackprobe'")" = "1" ] \
+    || die "expected the rollback to delete only the events of the investigate rows"
+  [ "$(rollback_scalar "SELECT count(*) FROM factory.agent_runs WHERE stage = 'investigate' AND model = 'probe-model'")" = "0" ] \
+    || die "expected the rollback to delete the agent runs of the investigate rows"
+  [ "$(rollback_scalar "SELECT count(*) FROM factory.job_failures WHERE job_id = 'rollbackprobe-job' AND work_item_id IS NULL")" = "1" ] \
+    || die "expected the rollback to keep the failure record with an empty reference"
+  [ "$(rollback_scalar "SELECT count(*) FROM factory.work_items WHERE owner = 'rollbackprobe' AND kind = 'pr_fix' AND parent_work_item_id IS NULL")" = "1" ] \
+    || die "expected the rollback to keep the child work item with an empty parent"
+  rollback_rejected "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'manual', 'investigate', 'rollbackprobe', 'r', 4, 'https://github.com/rollbackprobe/r/issues/4', 't', 'picked')" work_items_kind_check
+  rollback_rejected "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'rollbackprobe', 'r', 5, 'https://github.com/rollbackprobe/r/issues/5', 't', 'investigating')" work_items_status_check
+  [ "$(rollback_indexed)" = "0" ] || die "expected investigating to leave the active indexes after the rollback"
+  [ "$(rollback_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_active_investigate_key'")" = "0" ] \
+    || die "expected the investigate index to be dropped by the rollback"
+  [ "$(rollback_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_active_issue_key', 'work_items_active_pr_fix_key', 'work_items_active_dependabot_key', 'work_items_active_pr_review_key')")" = "4" ] \
+    || die "expected the four active indexes to remain after the rollback"
+  [ "$(rollback_scalar "SELECT position('investigated' in pg_get_viewdef('factory.v_lead_time'::regclass))")" = "0" ] \
+    || die "expected investigated to leave v_lead_time after the rollback"
+
+  log "re-applying investigate_work_items"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply investigate_work_items"
+  [ "$(rollback_indexed)" = "5" ] || die "expected investigating in the five active indexes after re-applying, found $(rollback_indexed)"
+  printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'manual', 'investigate', 'rollbackprobe', 'r', 4, 'https://github.com/rollbackprobe/r/issues/4', 't', 'investigating');\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "an investigate row was rejected after re-applying"
+  printf "DELETE FROM factory.work_items WHERE owner = 'rollbackprobe'; DELETE FROM factory.job_failures WHERE job_id = 'rollbackprobe-job';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "investigate_work_items deletes the investigate rows with their children, narrows the checks and the indexes, and round-trips"
+}
+
 # 競合を直す仕組みの土台のmigrationが、列の既定値と制約を効かせ、部分索引を作り、
 # 戻したときに列、制約、索引を落とし、既存の行を壊さずにもう一度適用できることを確かめる。
 # このmigrationの適用直後に呼ぶので、後のmigrationの影響を受けない。もう一度適用し直す。
@@ -612,7 +849,7 @@ verify_gh_collect_detail() {
   log "gh_collect_detail applies over existing rows and leaves the new columns at their defaults"
 }
 
-# 稼働中の一意インデックス3本の述語が、アプリの終端でない状態の一覧と一致することを確かめる。
+# 稼働中の一意インデックス5本の述語が、アプリの終端でない状態の一覧と一致することを確かめる。
 # 一覧は`f/factory/lib/types.ts`から読む。migrationの文面の検査(`tests/scripts/active_*_migration.test.ts`)と違い、
 # PostgreSQLが実際に持つインデックスの定義を読む。全migrationの適用後に呼ぶ。
 verify_active_index_predicates() {
@@ -621,7 +858,7 @@ verify_active_index_predicates() {
     || die "could not read the non-terminal statuses from types.ts"
   [ -n "${expected}" ] || die "the non-terminal statuses read from types.ts are empty"
   local index actual
-  for index in work_items_active_issue_key work_items_active_pr_fix_key work_items_active_dependabot_key; do
+  for index in work_items_active_issue_key work_items_active_pr_fix_key work_items_active_dependabot_key work_items_active_pr_review_key work_items_active_investigate_key; do
     actual="$(psql_exec "${SCRATCH_DB}" -q -t -A -v index="${index}" <<'SQL' | tr -d '[:space:]'
 SELECT string_agg(m[1], ',' ORDER BY m[1] COLLATE "C")
 FROM (
@@ -678,6 +915,13 @@ verify_design_stage_rollback() {
     design_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_active_issue_key', 'work_items_active_pr_fix_key', 'work_items_active_dependabot_key') AND indexdef LIKE '%designing%' AND indexdef LIKE '%awaiting_design_approval%'"
   }
 
+  # 調査の土台のmigrationは設計工程より新しく、同じ制約とインデックスを作り直している。
+  # 新しい順に当てるため、先に戻し、検査の最後に当て直す。
+  local investigate_up="${MIGRATIONS_DIR}/${INVESTIGATE_MIGRATION}"
+  local investigate_down="${MIGRATIONS_DIR}/${INVESTIGATE_MIGRATION%.up.sql}.down.sql"
+  log "rolling back investigate_work_items before the design stage"
+  psql_exec "${SCRATCH_DB}" -q <"${investigate_down}" >/dev/null || die "could not roll back investigate_work_items"
+
   psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the design stage rows"
 INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
   (1, 'issue', 'issue', 'designprobe', 'r', 1, 'https://github.com/designprobe/r/issues/1', 't', 'designing'),
@@ -733,6 +977,8 @@ SQL
   printf "INSERT INTO factory.approval_requests (kind, work_item_id, subject_id) SELECT 'design', id, 9003 FROM factory.work_items WHERE owner = 'designprobe' AND issue_number = 3;\n" \
     | psql_exec "${SCRATCH_DB}" >/dev/null || die "a design approval request was rejected after re-applying"
   printf "DELETE FROM factory.work_items WHERE owner = 'designprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "re-applying investigate_work_items after the design stage"
+  psql_exec "${SCRATCH_DB}" -q <"${investigate_up}" >/dev/null || die "could not re-apply investigate_work_items"
   log "design_stage refuses to roll back over a design request without touching work items, moves design work items to needs_human, and round-trips"
 }
 
@@ -1007,6 +1253,9 @@ for up_file in "${up_files[@]}"; do
   if [ "${up_name}" = "${FIX_ROUNDS_DESIGN_GAP_MIGRATION}" ]; then
     seed_fix_rounds_rows
   fi
+  if [ "${up_name}" = "${ACTIVE_PR_REVIEW_MIGRATION}" ]; then
+    seed_active_pr_review_duplicates
+  fi
   log "applying ${up_name}"
   psql_exec "${SCRATCH_DB}" <"${up_file}"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -1032,6 +1281,12 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${FIX_ROUNDS_DESIGN_GAP_MIGRATION}" ]; then
     verify_fix_rounds_rows_survive
+  fi
+  if [ "${up_name}" = "${ACTIVE_PR_REVIEW_MIGRATION}" ]; then
+    verify_active_pr_review_index
+  fi
+  if [ "${up_name}" = "${INVESTIGATE_MIGRATION}" ]; then
+    verify_investigate_work_items
   fi
 done
 
@@ -1128,6 +1383,7 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-console-actions.ts" \
   || die "the console actions checks failed against the real PostgreSQL"
 
+verify_investigate_rollback
 verify_design_stage_rollback
 verify_design_drafts_rollback
 verify_doc_hash_rollback

@@ -21,6 +21,7 @@ export const SCRIPT_PATHS = {
   retry_work_item: "f/factory/retry_work_item",
   audit_kickoff: "f/factory/audit_kickoff",
   manual_intake_submit: "f/factory/manual_intake_submit",
+  pr_review_submit: "f/factory/pr_review_submit",
   notice_resolve: "f/factory/notice_resolve",
   hold_release: "f/factory/hold_release",
   freeze_release: "f/factory/freeze_release",

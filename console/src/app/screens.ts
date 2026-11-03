@@ -148,6 +148,10 @@ export const SCREENS: readonly Screen[] = [
     shortcut: "2",
     destinations: [
       { label: "作業項目 › 新規投入", path: "/items/new" },
+      {
+        label: "作業項目 › PRレビューの投入",
+        path: "/items/new-pr-review",
+      },
       { label: "作業項目 › 要件定義", path: "/items?tab=requirements" },
     ],
     icon: ListChecks,
@@ -167,6 +171,16 @@ export const SCREENS: readonly Screen[] = [
         lazy: () =>
           import("../screens/items/NewItemScreen.tsx").then((module) => ({
             Component: module.NewItemScreen,
+          })),
+      },
+      {
+        path: "items/new-pr-review",
+        trail: "back",
+        refresh: false,
+        title: "PRレビューの投入",
+        lazy: () =>
+          import("../screens/items/NewPrReviewScreen.tsx").then((module) => ({
+            Component: module.NewPrReviewScreen,
           })),
       },
       {

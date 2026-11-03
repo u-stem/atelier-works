@@ -1,6 +1,6 @@
 // 書き込みのscriptの戻りの型と型ガード。
 // 型は`f/factory/approval_decide.ts`、`retry_work_item.ts`、`audit_kickoff.ts`、
-// `manual_intake_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscriptの戻りに合わせる。
+// `manual_intake_submit.ts`、`pr_review_submit.ts`、`notice_resolve.ts`と、保留と凍結を解除する2つのscript、ジョブを中止するscript、定期ジョブを再実行するscript、設定を変更するscript、保留と凍結を置くscript、scheduleを止めるscriptの戻りに合わせる。
 // 操作の記録を書けたかを示す`action_audit`は、記録を足した書き込みの戻りが持つ。
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_write_contract.test.ts`が落ちる。
@@ -143,6 +143,8 @@ export const MANUAL_INTAKE_REFUSAL_REASONS = [
   "invalid_body_chars",
   "body_too_long",
   "invalid_intake_key",
+  "intake_key_required",
+  "implement_disabled",
   "actor_unknown",
 ] as const;
 
@@ -604,5 +606,104 @@ export function isScheduleStopResult(
     isBoolean(value.verified) &&
     isBoolean(value.freeze_held) &&
     isActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * PRのレビューの投入を断った理由。`f/factory/pr_review_submit.ts`の
+ * `PR_REVIEW_SUBMIT_REFUSAL_REASONS`と同じ並びで、契約テストが突き合わせる。
+ * 理由に入力の文字列は含まれない。`already_reviewing`は、同じPRの稼働中のレビューがあることを、同期に操作者へ届ける。
+ */
+export const PR_REVIEW_SUBMIT_REFUSAL_REASONS = [
+  "invalid_owner",
+  "invalid_repo",
+  "invalid_pr_number",
+  "repo_not_allowed",
+  "actor_unknown",
+  "already_reviewing",
+] as const;
+
+export type PrReviewSubmitRefusalReason =
+  (typeof PR_REVIEW_SUBMIT_REFUSAL_REASONS)[number];
+
+export type PrReviewSubmitResult =
+  | {
+      readonly refused: true;
+      readonly reason: PrReviewSubmitRefusalReason;
+    }
+  | {
+      readonly refused: false;
+      readonly flow_job_id: string;
+      readonly action_audit?: ActionAudit;
+    };
+
+const isPrReviewSubmitRefusalReason: Guard<PrReviewSubmitRefusalReason> =
+  isOneOf(PR_REVIEW_SUBMIT_REFUSAL_REASONS);
+
+export function isPrReviewSubmitResult(
+  value: unknown,
+): value is PrReviewSubmitResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.refused === true) {
+    return isPrReviewSubmitRefusalReason(value.reason);
+  }
+  return (
+    value.refused === false &&
+    isString(value.flow_job_id) &&
+    isOptionalActionAudit(value.action_audit)
+  );
+}
+
+/**
+ * PRのレビューの登録のステップが断った理由。`f/factory/steps/pr_review_intake_register.ts`の
+ * `PR_REVIEW_REGISTER_REFUSAL_REASONS`と同じ並びで、契約テストが突き合わせる。
+ * 投入の入口は起動だけを返すので、この理由は、投入したフローのジョブの結果に現れる。
+ */
+export const PR_REVIEW_REGISTER_REFUSAL_REASONS = [
+  "invalid_pr_number",
+  "repo_not_allowed",
+  "pr_not_found",
+  "pr_closed",
+  "fork_head",
+  "owner_mismatch",
+  "repo_mismatch",
+  "already_reviewing",
+] as const;
+
+export type PrReviewRegisterRefusalReason =
+  (typeof PR_REVIEW_REGISTER_REFUSAL_REASONS)[number];
+
+export type PrReviewRegisterResult =
+  | {
+      readonly status: "started";
+      readonly work_item_id: number;
+      readonly flow_job_id: string;
+    }
+  | {
+      readonly status: "refused";
+      readonly reason: PrReviewRegisterRefusalReason;
+    };
+
+const isPrReviewRegisterRefusalReason: Guard<PrReviewRegisterRefusalReason> =
+  isOneOf(PR_REVIEW_REGISTER_REFUSAL_REASONS);
+
+/**
+ * 登録のステップのジョブの結果。4bの画面が、投入したフローのジョブの結果を読むときに使う。
+ */
+export function isPrReviewRegisterResult(
+  value: unknown,
+): value is PrReviewRegisterResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.status === "refused") {
+    return isPrReviewRegisterRefusalReason(value.reason);
+  }
+  return (
+    value.status === "started" &&
+    isPositiveInteger(value.work_item_id) &&
+    isString(value.flow_job_id)
   );
 }

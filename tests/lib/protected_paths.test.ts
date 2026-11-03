@@ -33,6 +33,8 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       "console/public/",
       "infra/console_fetcher/",
       "f/factory/dependabot__flow/",
+      "f/factory/pr_review_intake__flow/",
+      "f/factory/investigate_isolation_probe.",
       "scripts/host_apply/",
       "infra/worker/",
       "mise/",
@@ -643,6 +645,92 @@ describe("design stage gate files", () => {
   });
 });
 
+// 調査のClaudeの隔離(引数を固定する包み関数、読み出しを塞ぐ一覧、入口の門、worktreeの置き場、隔離の定数、合格の証拠の型、合格の関門)と、
+// それを固定するテストは、書き換えられると、調査のClaudeがworkerの秘密に届いたり、調査の入口が人の確認なしに開いたり、
+// 測定に合格していない隔離でClaudeが起動したりする。
+// グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
+describe("investigate isolation files", () => {
+  const PATHS = [
+    "f/factory/lib/investigate_claude.ts",
+    "f/factory/lib/investigate_claude.script.yaml",
+    "f/factory/lib/claude_read_deny.ts",
+    "f/factory/lib/claude_read_deny.script.yaml",
+    "f/factory/lib/investigate_gate.ts",
+    "f/factory/lib/investigate_gate.script.yaml",
+    "tests/lib/investigate_claude.test.ts",
+    "tests/lib/claude_read_deny.test.ts",
+    "tests/scripts/investigate_gate.test.ts",
+    "f/factory/lib/investigate_workspace.ts",
+    "f/factory/lib/investigate_workspace.script.yaml",
+    "tests/lib/investigate_workspace.test.ts",
+    "f/factory/lib/investigate_isolation.ts",
+    "f/factory/lib/investigate_isolation.script.yaml",
+    "f/factory/lib/isolation_proof.ts",
+    "f/factory/lib/isolation_proof.script.yaml",
+    "f/factory/lib/investigate_isolation_gate.ts",
+    "f/factory/lib/investigate_isolation_gate.script.yaml",
+    "tests/lib/investigate_isolation.test.ts",
+    "tests/lib/isolation_proof.test.ts",
+    "tests/lib/investigate_isolation_gate.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not protect lib/claude.ts, whose diff stays small and which other flows change", () => {
+    expect(matchesForbiddenPath("f/factory/lib/claude.ts")).toBe(false);
+  });
+
+  test("does not protect lib/config.ts, which changes often", () => {
+    expect(matchesForbiddenPath("f/factory/lib/config.ts")).toBe(false);
+  });
+});
+
+// 関門が信頼する根は、隔離の測定のscript(`investigate_isolation_probe`)の完了ジョブである。
+// そのscriptのパスを、保護の外のPRが先に置くと、関門を通る偽の結果を返せる。
+// 測定のscriptはまだ無い予約なので、拡張子を問わない前方一致で、.ts、.script.yaml、.script.lock、.schedule.yamlをまとめて塞ぐ。
+describe("investigate isolation probe path", () => {
+  const PREFIX = "f/factory/investigate_isolation_probe.";
+
+  test("FORBIDDEN_PATH_PREFIXES lists the prefix", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(PREFIX);
+  });
+
+  test("IMPLEMENT_PROTECTED_PATH_PREFIXES lists the prefix", () => {
+    expect(IMPLEMENT_PROTECTED_PATH_PREFIXES).toContain(PREFIX);
+  });
+
+  const FILES = [
+    "f/factory/investigate_isolation_probe.ts",
+    "f/factory/investigate_isolation_probe.script.yaml",
+    "f/factory/investigate_isolation_probe.script.lock",
+    "f/factory/investigate_isolation_probe.schedule.yaml",
+  ];
+
+  test.each(FILES)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(FILES)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not match a longer name that only shares the stem", () => {
+    expect(
+      matchesForbiddenPath("f/factory/investigate_isolation_probe_helper.ts"),
+    ).toBe(false);
+  });
+});
+
 // 進め方ごとの承認の要否の表(`profile.ts`とその定義)と、それを固定するテストは、書き換えられると、
 // 承認を省く進め方が黙って通るようになる。
 // グロブではなくファイル名で列挙するので、保護が完全一致の一覧から来ていることを確かめる。
@@ -669,6 +757,116 @@ describe("profile gate files", () => {
     expect(matchesForbiddenPath("f/factory/lib/profile.script.lock")).toBe(
       false,
     );
+  });
+});
+
+// 承認を省く進め方の手動投入を通す3つのファイルと冪等キーの表のmigrationは、書き換えられると、
+// キー無しの投入や、キーの表と食い違う登録が通り、承認の行の無い作業項目が人の確認なしにできる。
+describe("approval-free manual intake files", () => {
+  const PATHS = [
+    "f/factory/steps/manual_intake_create_issue.ts",
+    "f/factory/steps/manual_intake_create_issue.script.yaml",
+    "f/factory/steps/manual_intake_register.ts",
+    "f/factory/steps/manual_intake_register.script.yaml",
+    "f/factory/lib/manual_intake_support.ts",
+    "f/factory/lib/manual_intake_support.script.yaml",
+    "migrations/datatable/main/20261031110000_manual_intake_keys.up.sql",
+    "migrations/datatable/main/20261031110000_manual_intake_keys.down.sql",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test.each([
+    "f/factory/steps/manual_intake_create_issue.script.lock",
+    "f/factory/steps/manual_intake_register.script.lock",
+    "f/factory/lib/manual_intake_support.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
+// 調査の作業項目を足すmigrationは、稼働中のpr_reviewを含む一意インデックスを作り直す。
+// 書き換えられると、新しいDBで同じPRのレビューが重なる仕組みが外れる。
+describe("investigate work item migration files", () => {
+  const EXACT = [
+    "migrations/datatable/main/20261102120000_investigate_work_items.up.sql",
+    "migrations/datatable/main/20261102120000_investigate_work_items.down.sql",
+  ];
+
+  test.each(EXACT)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+});
+
+// ConsoleからのPRレビューの投入を通すファイルと、稼働中のpr_reviewの一意インデックスのmigrationは、
+// 書き換えられると、許可の検査やオーナーIDの照合、fork headの断りが外れたり、同じPRのレビューが重なったりする。
+// 投入のフロー(`pr_review_intake__flow/`)は前方一致で守る。
+describe("pull request review intake files", () => {
+  const EXACT = [
+    "f/factory/pr_review_submit.ts",
+    "f/factory/pr_review_submit.script.yaml",
+    "f/factory/steps/pr_review_intake_register.ts",
+    "f/factory/steps/pr_review_intake_register.script.yaml",
+    "f/factory/lib/pr_review_start.ts",
+    "f/factory/lib/pr_review_start.script.yaml",
+    "migrations/datatable/main/20261102100000_active_pr_review_key.up.sql",
+    "migrations/datatable/main/20261102100000_active_pr_review_key.down.sql",
+  ];
+
+  test.each(EXACT)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test("FORBIDDEN_PATH_PREFIXES lists the intake flow directory", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(
+      "f/factory/pr_review_intake__flow/",
+    );
+  });
+
+  test.each([...EXACT, "f/factory/pr_review_intake__flow/flow.yaml"])(
+    "matchesForbiddenPath matches %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([...EXACT, "f/factory/pr_review_intake__flow/flow.yaml"])(
+    "matchesImplementProtectedPath matches %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(true);
+    },
+  );
+
+  test.each(EXACT)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  test("the intake flow exists", async () => {
+    expect(
+      await Bun.file("f/factory/pr_review_intake__flow/flow.yaml").exists(),
+    ).toBe(true);
+  });
+
+  test.each([
+    "f/factory/pr_review_submit.script.lock",
+    "f/factory/steps/pr_review_intake_register.script.lock",
+    "f/factory/lib/pr_review_start.script.lock",
+  ])("matchesForbiddenPath does not match the lock %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
   });
 });
 

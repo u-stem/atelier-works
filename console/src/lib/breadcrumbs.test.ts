@@ -90,6 +90,7 @@ describe("parseItemsBack", () => {
     "//evil.example/items",
     "https://evil.example/items",
     "/items/new",
+    "/items/new-pr-review",
     "/itemsx",
     "/items#frag",
     "/reports",

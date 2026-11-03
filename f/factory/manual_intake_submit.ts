@@ -4,7 +4,8 @@
 //
 // Console用workerで動くので、どのsecret変数も読まない。DBに書くのは、操作の記録(`factory.console_actions`)だけである。
 // 記録は、フローを起動する前に`attempted`の行を入れ、起動した後に結果を更新する。書けなくても投入は通し、
-// 戻りの`action_audit`を`failed`にする。記録にはリポジトリだけを入れ、題名と本文は入れない。
+// 戻りの`action_audit`を`failed`にする。記録には、リポジトリと検証後の進め方だけを入れ、
+// 題名、本文、不具合の欄は入れない。
 // フローは呼び出した主体の権限で起動する(`on_behalf_of_email`を置かない)。
 // このため、投入できる主体はWindmillのUIから同じフローを実行できる主体と同じになる。
 // 実行者はジョブの実行文脈から導き、ログに残す。導けなければ断る。
@@ -22,11 +23,11 @@ import { defaultSqlClient } from "./lib/db.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import {
+  type ManualIntakeConfig,
   type ManualIntakeFields,
   type ManualIntakeRefusalReason,
   validateManualIntake,
 } from "./lib/manual_intake_support.ts";
-import type { FactoryConfig } from "./lib/types.ts";
 
 const MANUAL_INTAKE_FLOW_PATH = "f/factory/manual_intake";
 
@@ -44,9 +45,7 @@ export type ManualIntakeSubmitResult =
 
 /** `submitManualIntake`が使う外部の操作。テストでは差し替える。 */
 export type ManualIntakeSubmitDeps = {
-  readonly loadConfig: () => Promise<
-    Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">
-  >;
+  readonly loadConfig: () => Promise<ManualIntakeConfig>;
   /** 実行者を返す。導けないときは例外を投げる。 */
   readonly deriveActor: () => string;
   /** フローを起動して、応答の文字列をそのまま返す。 */
@@ -86,6 +85,7 @@ export async function submitManualIntake(
     actor,
     owner: input.owner,
     repo: input.repo,
+    profile: input.profile,
   });
   const flowJobId = parseFlowJobId(
     await deps.runFlow(MANUAL_INTAKE_FLOW_PATH, {
@@ -104,6 +104,7 @@ export async function submitManualIntake(
   );
   deps.log.info("manual intake started", {
     actor,
+    profile: input.profile,
     flow_job_id: flowJobId,
   });
   return { refused: false, flow_job_id: flowJobId };
@@ -114,7 +115,8 @@ export async function submitManualIntake(
  * 検証で断った投入は、何も起動しないので記録しない。
  * 操作の前に`attempted`の行を入れ、フローを起動した後に結果を更新する。
  * 記録を書けなくても投入は通し、戻りの`action_audit`を`failed`にする。
- * 記録には、リポジトリ(`owner/repo`)だけを入れ、題名と本文は入れない。
+ * 記録には、リポジトリ(`owner/repo`)と検証後の進め方だけを入れ、題名、本文、不具合の欄は入れない。
+ * 進め方は、検証を通った値である。承認を省く進め方の投入を、誰がいつ起動したかを後から追えるようにする。
  */
 export async function submitManualIntakeRecorded(
   input: ManualIntakeFields,
@@ -130,7 +132,11 @@ export async function submitManualIntakeRecorded(
         {
           action: "manual_intake_submit",
           target: `${input.owner}/${input.repo}`,
-          changes: { owner: input.owner, repo: input.repo },
+          changes: {
+            owner: input.owner,
+            repo: input.repo,
+            profile: input.profile,
+          },
         },
         async () => ({
           outcome: "succeeded" as const,
@@ -154,6 +160,7 @@ export async function submitManualIntakeRecorded(
  * `profile`は進め方で、省くと通常の進め方になる。受け付けない値は、検証で断る。
  * `intake_key`は投入の再送を止める冪等キー(小文字のUUID)で、省くと再送を止めない従来の投入になる。
  * 形が違うキーは、検証で断る。
+ * 承認を省く進め方は、キーが無いとき(`intake_key_required`)と、実装が止まっているとき(`implement_disabled`)も、検証で断る。
  */
 export async function main(
   owner: string,

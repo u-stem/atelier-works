@@ -135,8 +135,9 @@ flowchart TD
 
 ### 状態の一覧
 
-作業項目の種別(`kind`)は5つある。
-Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は`audit`、dependabotのセキュリティ更新PRは`dependabot`である。
+作業項目の種別(`kind`)は6つある。
+Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は`audit`である。
+dependabotのセキュリティ更新PRは`dependabot`、実装せずに調べるIssueの調査は`investigate`である。
 
 | status | 意味 | 種別 | 終端 |
 | --- | --- | --- | --- |
@@ -160,6 +161,8 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `cancelled` | IssueかPRが閉じられた。または、承認済みの要件定義が、同じIssueの新しいサイクルに置き換えられた。dependabotでは、フローがheadを判断せずに止めた | すべて | 終端 |
 | `auditing` | 監査している | audit | |
 | `audited` | 監査を終えた | audit | 終端 |
+| `investigating` | 調べている | investigate | |
+| `investigated` | 調べ終えた | investigate | 終端 |
 
 pr_fixの作業項目は、Issue化の提案がある間は人の対応待ち(`needs_human`)で待つ。提案がすべて決定すると、レビュー済み(`reviewed`)か再レビュー依頼(`rereview_requested`)へ移る。監査の作業項目は、承認待ち(`awaiting_approval`)で提案の決定を待つ。
 
@@ -256,7 +259,7 @@ Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取
 許されるのは、PRがマージされたとき、作者以外の人が閉じたとき、作者が閉じて作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
 Botが閉じたときは取り消さない。
 
-終端の作業項目は、Consoleからの再実行で再び動き出す。監査とdependabotの作業項目は再実行できない。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
+終端の作業項目は、Consoleからの再実行で再び動き出す。監査とdependabotと調査の作業項目は再実行できない。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 
 ## データモデル
 
@@ -350,7 +353,7 @@ Consoleの一覧と集計は次のviewを読む。
 | `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。概要には、いま進めているflowのジョブのidも含む。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知、defaultのworkerの直近24時間の負荷 |
 
-次の18本のscriptは、tag `console`を付け、Console用のworkerで動かす。
+次の19本のscriptは、tag `console`を付け、Console用のworkerで動かす。
 
 - `console_query`
 - `approval_decide`
@@ -358,6 +361,7 @@ Consoleの一覧と集計は次のviewを読む。
 - `audit_kickoff`
 - `notice_resolve`
 - `manual_intake_submit`
+- `pr_review_submit`
 - `console_fetch_watch`
 - `console_holds`
 - `hold_release`
@@ -381,11 +385,12 @@ Consoleの一覧と集計は次のviewを読む。
 | フロー | 起動元 | 内容 |
 | --- | --- | --- |
 | `manual_intake` | `manual_intake_submit`(Consoleの新規投入)、人がフォームから実行 | 手動投入フォーム(Issueを作成して工程に乗せる) |
+| `pr_review_intake` | `pr_review_submit`(ConsoleのPRレビューの投入)、人がフォームから実行 | PRレビューの投入フォーム(PRを確かめてレビューを始める) |
 | `pipeline` | `design_apply`(Consoleの承認と却下)、`design_generate`、`implement_finish`、`manual_intake_register`、`poll_issues`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 要件定義の生成と承認 |
 | `design` | `design_apply`(Consoleの承認と却下)、`implement_finish`、`pr_fix_finish`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 設計書の生成と承認 |
-| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
+| `pr_review` | `auto_retry_pr_review`、`poll_prs`、`pr_review_intake_register`、`retry_work_item`(Consoleの再実行) | PRの自動レビュー |
 | `pr_fix` | `auto_retry_stale_image`、`poll_prs`、`retry_work_item`(Consoleの再実行)、`watch_pr_ci`、`watch_pr_conflicts` | レビュー指摘の修正と再レビュー依頼 |
-| `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
+| `implement` | `auto_retry_stale_image`、`design_apply`(Consoleの承認と却下)、`manual_intake_register`、`requirements_apply`(Consoleの承認と却下)、`retry_work_item`(Consoleの再実行) | 実装とPR作成 |
 | `dependabot` | `poll_dependabot` | 依存の更新PRの検査と自動マージ |
 | `audit` | `audit_kickoff`(Consoleの今すぐ監査) | 運用記録の監査と改善提案 |
 <!-- /generated:flows -->
@@ -402,7 +407,7 @@ Consoleの一覧と集計は次のviewを読む。
 別名の変数で呼ぶ起動、`wmill.`を付けない呼び出し、包みの関数だけでflowを起動するscriptは、見落とす。
 そのような起動を足したときは、人が表を確かめる。
 
-- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの要件定義を始める。冪等キーで最初の投入のIssueを再利用したときは、フローがこのステップを飛ばす。
+- `manual_intake_register`は、manual_intakeの最後のステップで、登録したIssueの工程を始める。通常の進め方は要件定義を始め、承認を省く進め方は承認の行を作らずに実装を始める。冪等キーで最初の投入のIssueを再利用したときは、通常の進め方では何もせず、承認を省く進め方ではそのIssueに作業項目が無いときだけ登録する。
 - `pr_fix_finish`と`implement_finish`は、pr_fixとimplementの最後のステップで、要件の不足を見つけたときに要件定義へ差し戻す。`implement_finish`と`pr_fix_finish`は、設計書が渡された実行の設計の不足も設計へ戻す。設計書が渡されるのは設計工程が有効なときだけなので、設計工程が無効の間は設計へ戻さない。
 - `auto_retry_stale_image`は、`self_update`が起動する。
 - `requirements_apply`と`design_apply`は、`approval_decide`が承認か却下を記録した後に起動する。`design_apply`は、`design_request_approval`と承認待ちの走査も、反映されなかった決定に対して起動する。
@@ -456,15 +461,24 @@ PRも同じくトリガーラベルの削除で所有を決め、削除が404な
 外せた後は取り直して残っていないかを確かめる。
 取り直しが数回とも失敗したときは、トリガーラベルを付け直して引く。
 取り直せないまま始めると、同じPRのサイクルが重なりうるためである。
-レビューのラベルは、稼働中のレビューがあっても止まらない。
+レビューのラベルは、終端でない`pr_review`がある間だけ止まる。
+そのレビューが終わった後に、1回だけ新しいレビューが始まる。
 修正のラベルは、終端でないPR修正がある間だけ止まる。
 その修正が終わった後に、1回だけ新しいラウンドが始まる。
 この排他はベストエフォートである。
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
 終端でないPR修正の作業項目も、部分一意インデックス`work_items_active_pr_fix_key`により、`owner`、`repo`、PRの番号の組ごとに同時に1つしか持てない。
+終端でない`pr_review`の作業項目も、部分一意インデックス`work_items_active_pr_review_key`により、同時に1つしか持てない。
+組は、小文字にした`owner`と`repo`、PRの番号である。
+終端でない`investigate`の作業項目も、部分一意インデックス`work_items_active_investigate_key`により、同時に1つしか持てない。
+組は、小文字にした`owner`と`repo`、Issueの番号である。
+`pr_review`と`investigate`の行の綴りは、GitHub側の改名や前の行の綴りの引き継ぎで、書き手によって違いうる。
+そのため、同じPRを指す`pr_review`の検索は大文字小文字を区別しない。
+`pr_fix`とIssueのインデックスは、綴りを区別したままである。
 これらのインデックスの述語は、終端でない状態を列挙する。
-設計工程の2状態は、Issueの`work_items_active_issue_key`と、PR修正の`work_items_active_pr_fix_key`の述語に含める。
+設計工程の2状態と調査の`investigating`は、Issueの`work_items_active_issue_key`の述語に含める。
+PR修正の`work_items_active_pr_fix_key`と、`pr_review`の`work_items_active_pr_review_key`の述語にも含める。
 dependabotの`work_items_active_dependabot_key`([dependabotの更新の内部仕様](internals/dependabot.md))の述語にも含める。
 その状態の間も、同じIssueやPRの作業項目を重ねて作らせないためである。
 これらはDBを共有するインスタンスの間で働き、DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
@@ -532,6 +546,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/ci_metadata_rehash` | script | [LIB] metadataジョブの失敗をhashの再計算で直す |
 | `f/factory/lib/owner_id_notice` | script | [LIB] owner_idの照合のnotice |
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
+| `f/factory/lib/pr_review_start` | script | [LIB] pr_reviewの作業項目の作成とフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
 | `f/factory/lib/pr_fix_design` | script | [LIB] PRの修正に渡す設計書の判定 |
@@ -622,8 +637,15 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/design_template` | script | [LIB] 設計書テンプレートの定義 |
 | `f/factory/lib/design_doc` | script | [LIB] 設計書ファイルの検査 |
 | `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
+| `f/factory/lib/claude_read_deny` | script | [LIB] 調査のClaudeの読み出しを塞ぐ設定 |
+| `f/factory/lib/investigate_isolation` | script | [LIB] 調査のClaudeの隔離の定数 |
+| `f/factory/lib/investigate_claude` | script | [LIB] 調査のClaudeを隔離して起動する |
+| `f/factory/lib/investigate_workspace` | script | [LIB] 調査のworktreeの置き場 |
+| `f/factory/lib/investigate_gate` | script | [LIB] 調査の入口を開ける門 |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/lib/profile_upgrade` | script | [LIB] 進め方を通常に戻したことのIssueへのコメント |
+| `f/factory/lib/isolation_proof` | script | [LIB] 隔離の合格の証拠の型 |
+| `f/factory/lib/investigate_isolation_gate` | script | [LIB] 隔離の合格の関門 |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/console_holds` | script | [OP-0-2] 保留と凍結を取得 |
 | `f/factory/console_jobs` | script | [OP-0-3] ジョブの一覧と詳細を取得 |
@@ -631,8 +653,11 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/console_config` | script | [OP-0-5] factory_configを取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
-| `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
+| `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2または実装を起動 |
 | `f/factory/manual_intake_submit` | script | [OP-1-2] 手動投入をConsoleから受け付ける |
+| `f/factory/pr_review_intake` | flow | [OP-1-3] PRレビューの投入フォーム(PRを確かめてレビューを始める) |
+| `f/factory/steps/pr_review_intake_register` | script | [OP-1-3/1] PRを確かめてレビューを登録 |
+| `f/factory/pr_review_submit` | script | [OP-1-4] PRのレビューをConsoleから受け付ける |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/console_schedule_stop` | script | [OP-2-10] スケジュールを止める |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
@@ -1003,5 +1028,6 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`と、人が変更を承認する`approve`だけがあり、排水、収束、定期実行、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- 調査(`investigate`)の作業項目を作る入口と、調べて答えを返す実行。種別、状態、一意インデックス、照合の分岐、Consoleの表示と、Claudeの隔離の起動、合格の証拠と関門、入口を開ける設定の門、worktreeの置き場だけがある([調査の隔離](security.md#調査の隔離))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

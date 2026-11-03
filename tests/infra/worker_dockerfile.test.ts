@@ -5,6 +5,7 @@ import {
   BASE_IMAGE_OPEN_PATHS,
   SHARED_TMP_DIRS,
 } from "../../f/factory/lib/check_sandbox.ts";
+import { INVESTIGATE_ROOT } from "../../f/factory/lib/investigate_workspace.ts";
 
 // workerのイメージの構成を静的に確かめる。
 // workerのPATHにrootのホームを入れないこと、検査コマンド用の非特権ユーザーを
@@ -73,6 +74,14 @@ describe("infra/worker/Dockerfile PATH", () => {
       ),
     );
     expect(linked).toBe(true);
+  });
+});
+
+describe("infra/worker/Dockerfile investigate root", () => {
+  test("creates the investigate root as 0700 at the path the code expects", () => {
+    expect(startingWith("RUN")).toContain(
+      `RUN mkdir -p -m 0700 ${INVESTIGATE_ROOT}`,
+    );
   });
 });
 
