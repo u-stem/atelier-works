@@ -39,14 +39,13 @@ const LEGEND_TEXT =
  * PRを介した関係の意味。凡例と、凡例を出さない狭い幅の一覧が同じ句を使う。
  * PRのラベルを見て起動するのは、起点とは限らない別の定期ジョブなので、起点を限る語は入れない。
  */
-const PR_RELATION_MEANING =
-  "定期ジョブがPRのラベルやCIの結果を見て起動するもので、人のラベルを含む";
+const PR_RELATION_MEANING = "定期ジョブがPRのラベルやCIの結果を見て起動する";
 
 /** PRを介した線を持つ図の凡例。破線の意味は、この図の中で決める。 */
-const LEGEND_WITH_PR_TEXT = `実線は起動の流れ、破線はPRを介した関係(${PR_RELATION_MEANING})です。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。`;
+const LEGEND_WITH_PR_TEXT = `実線は起動の流れ、破線はPRを介した関係です。破線は、${PR_RELATION_MEANING}関係で、人のラベルを含みます。「承認」の線は承認の後の起動で、戻りは各flowの下に注記します。`;
 
-/** PRを介した出口を持つ一覧に添える文。一覧には凡例が出ないので、PR経由の行の意味をここで伝える。 */
-const LIST_PR_TEXT = `PR経由の行は、${PR_RELATION_MEANING}関係です。`;
+/** PR経由の線を持つ図の一覧に添える文。一覧には凡例が出ないので、PR経由の行の意味をここで伝える。 */
+const LIST_PR_TEXT = `PR経由の行は、${PR_RELATION_MEANING}関係で、人のラベルを含みます。`;
 
 /** PRを介した線の破線の模様。 */
 const PR_DASH = "6 4";
