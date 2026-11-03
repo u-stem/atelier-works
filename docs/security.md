@@ -495,7 +495,11 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   次のものは、保護パスの一覧に入れない。日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
   - 例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)。
   - `ci_fix_round.ts`の`isLockOnlyChange`、`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、`readCiFailure`。
-  - `ci_fix_classify.ts`の`classifyCiFailure`と`isLockIntegrityOnlyLog`。この結果が、再計算で直す回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
+  - `ci_fix_round.ts`の`isLockIntegrityOnlyFailure`。
+  - `pr_ci_fix_claim.ts`の`decideFixClaim`で、整合のテストだけの失敗を切り替える分岐(`upgradeToRehash`)。
+  - `ci_fix_classify.ts`の`classifyCiFailure`と`isLockIntegrityOnlyLog`。
+    判定に使う`LOCK_INTEGRITY_TESTS`と`LOCK_INTEGRITY_ANCHOR`も同じである。
+    この結果が、再計算で直す回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
     `isLockIntegrityOnlyLog`は、外部由来のCIのログで免除を決めるので、判定の誤りは、予算を使わない再計算の回に入る誤りになる。
   - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。再計算が読むgitの動き方を決める。
 
