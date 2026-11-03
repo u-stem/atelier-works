@@ -204,7 +204,9 @@ function OriginBox({
  * flowの見出し。押すか、キーボードで開閉する。
  * Enterはkeydownで、Spaceはkeyupで切り替える(ネイティブのボタンと同じ)。
  * Spaceの押し始めがこの要素のときだけ切り替える。ほかの要素で押し始め、押している間に焦点が移ったときに、切り替えないためである。
- * 子には矩形と文字だけを置く。リンクと注記は、ボタンの外の兄弟として描く。ボタンの子は読み上げの対象にならず、リンクを入れると入れ子の操作になるためである。
+ * 子には矩形と、名前の文字と、開閉の印だけを置く。説明、ステップ数、リンク、注記は、ボタンの外の兄弟として描く。
+ * ボタンの子は読み上げの対象にならず、リンクを入れると入れ子の操作になるためである。
+ * 見える文字がボタンの名前(`aria-label`)に含まれないと、名前と見える文字が食い違うので、見える文字は名前だけにする。
  */
 function HeadingButton({
   label,
@@ -293,7 +295,7 @@ function FlowNodeView({
   ).join("");
   const stepCount = `${node.flow.steps.length}ステップ`;
   const to = flowDiagramPath(flowName);
-  const linkName = `${safeText(flowName)}の図を開く`;
+  const linkName = `flowの図: ${safeText(flowName)}`;
   const headingName = `${safeText(flowName)}のステップ`;
   const notes = footNotes(node);
   const firstNote = layout.notes[0];
@@ -331,26 +333,26 @@ function FlowNodeView({
         >
           {name}
         </text>
-        <text
-          x={x}
-          y={layout.y + 37}
-          className="fill-muted-foreground text-[11px]"
-        >
-          {description}
-        </text>
-        <text
-          x={x}
-          y={layout.y + 54}
-          className="fill-muted-foreground text-[11px]"
-        >
-          {stepCount}
-        </text>
         <Chevron
           x={layout.x + layout.width - PAD_X - 10}
           y={layout.y + 12}
           open={layout.expanded}
         />
       </HeadingButton>
+      <text
+        x={x}
+        y={layout.y + 37}
+        className="pointer-events-none fill-muted-foreground text-[11px]"
+      >
+        {description}
+      </text>
+      <text
+        x={x}
+        y={layout.y + 54}
+        className="pointer-events-none fill-muted-foreground text-[11px]"
+      >
+        {stepCount}
+      </text>
       {layout.steps.map((row, index) => {
         const step = node.flow.steps[index];
         if (step === undefined) return null;
@@ -662,7 +664,7 @@ function ListFlow({
             <p>
               <Link
                 to={to}
-                aria-label={`${safeText(flowName)}の図を開く`}
+                aria-label={`flowの図: ${safeText(flowName)}`}
                 className={LIST_LINK_CLASS}
               >
                 flowの図

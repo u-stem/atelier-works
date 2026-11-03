@@ -358,7 +358,7 @@ test.describe("origin diagram", () => {
     await page.keyboard.press("Tab");
 
     await expect(
-      page.getByRole("link", { name: "pr_fixの図を開く" }),
+      page.getByRole("link", { name: "flowの図: pr_fix" }),
     ).toBeFocused();
   });
 
