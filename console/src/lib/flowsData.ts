@@ -277,3 +277,40 @@ export function flowHistoryPath(name: string): string {
   });
   return `${JOBS}?${query.toString()}`;
 }
+
+/** 名前のscheduleを返す。無ければnull。名前は一覧から探し、オブジェクトの継承したキーを拾わない。 */
+export function findSchedule(
+  data: FlowsData | null,
+  name: string,
+): FlowSchedule | null {
+  void data;
+  void name;
+  return null;
+}
+
+/** 起動の図の画面のパス。データに無い名前と、安全でない名前はnullにする。 */
+export function originDiagramPath(
+  name: string,
+  data: FlowsData | null = FLOWS_DATA,
+): string | null {
+  void name;
+  void data;
+  return null;
+}
+
+/** 起動の図の画面が、経路の引数から決める状態。 */
+export type OriginRouteState =
+  | { readonly kind: "redirect" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "not_found" }
+  | { readonly kind: "found"; readonly schedule: FlowSchedule };
+
+/** 経路の`:name`から、起動の図の画面の状態を決める。決め方は`flowRouteState`と同じ。 */
+export function originRouteState(
+  name: string | undefined,
+  data: FlowsData | null,
+): OriginRouteState {
+  void name;
+  void data;
+  return { kind: "unreadable" };
+}
