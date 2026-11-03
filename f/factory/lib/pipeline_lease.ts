@@ -9,6 +9,9 @@ export const PIPELINE_FLOW_PATH = "f/factory/pipeline";
 /** 設計のフローのパス。起動側と、フローごとに扱いを変える`on_error_flow`が使う。 */
 export const DESIGN_FLOW_PATH = "f/factory/design";
 
+/** 調査のフローのパス。`on_error_flow`が、フローごとに扱いを変えるために使う。 */
+export const INVESTIGATE_FLOW_PATH = "f/factory/investigate";
+
 /** pipelineのステップがリースを持っていないときの理由。ステップは何も変えずに終わるので、人への通知には使わない。 */
 export const PIPELINE_LEASE_LOST_REASON =
   "another pipeline run holds the flow_job_id lease";

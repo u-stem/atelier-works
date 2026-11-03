@@ -841,6 +841,32 @@ describe("investigate work item migration files", () => {
   });
 });
 
+// 稼働中の調査を全体で1件にする索引のmigrationと、それを固定するテストは、書き換えられると、
+// 調査が並行して、互いのworktreeを消し合う。
+describe("investigate singleton migration files", () => {
+  const PATHS = [
+    "migrations/datatable/main/20261104100000_investigate_singleton.up.sql",
+    "migrations/datatable/main/20261104100000_investigate_singleton.down.sql",
+    "tests/scripts/investigate_singleton_migration.test.ts",
+  ];
+
+  test.each(PATHS)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PATHS)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PATHS)("%s exists", async (path) => {
+    expect(await Bun.file(path).exists()).toBe(true);
+  });
+});
+
 // ConsoleからのPRレビューの投入を通すファイルと、稼働中のpr_reviewの一意インデックスのmigrationは、
 // 書き換えられると、許可の検査やオーナーIDの照合、fork headの断りが外れたり、同じPRのレビューが重なったりする。
 // 投入のフロー(`pr_review_intake__flow/`)は前方一致で守る。

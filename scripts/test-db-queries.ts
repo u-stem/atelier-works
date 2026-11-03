@@ -47,6 +47,7 @@ import {
   hasDependabotItemForHead,
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
+  hasInvestigatingWorkItem,
   hasMainCiRuns,
   hasNewerIssueCycle,
   hasNewerMainCiRun,
@@ -63,6 +64,7 @@ import {
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertGhCollectRuns,
+  insertInvestigateWorkItemUnlessActive,
   insertPrReviewWorkItemUnlessActive,
   insertWorkerSample,
   insertWorkItem,
@@ -113,6 +115,7 @@ import {
   markGhRepoDetailIncomplete,
   markPrCiNotified,
   markPrConflictNotified,
+  type NewInvestigateWorkItem,
   type NewWorkerSample,
   newestNewerPrWorkItem,
   readGhOwnerOpenIssues,
@@ -12215,6 +12218,82 @@ for (const [name, move] of PROFILE_MOVES) {
     (await profileAfterMove("direct", "needs_human", move)) === "direct",
   );
 }
+
+// 稼働中の調査を全体で1件にする登録。挿入の文と、稼働中の調査を読む文を、実DBで確かめる。
+// 先に用意した終端の調査(Issue 906のcycle 1と2)があるIssueには、次のcycleで入る。
+function investigateCandidate(issue: number): NewInvestigateWorkItem {
+  return {
+    owner: OWNER,
+    repo: "r",
+    issue_number: issue,
+    issue_url: `https://github.com/${OWNER}/r/issues/${String(issue)}`,
+    title: "qdb investigate request",
+    body: "qdb request text",
+    claimed_by: null,
+    flow_job_id: "qdb-investigate-job",
+  };
+}
+check(
+  "investigate singleton: nothing is investigating before the first insert",
+  (await hasInvestigatingWorkItem(sql)) === false,
+);
+const investigateFirst = await insertInvestigateWorkItemUnlessActive(
+  investigateCandidate(906),
+  sql,
+);
+check(
+  "investigate singleton: the first insert returns the id",
+  investigateFirst !== null && investigateFirst > 0,
+  investigateFirst,
+);
+const investigateStored =
+  investigateFirst === null ? null : await getWorkItem(investigateFirst, sql);
+check(
+  "investigate singleton: the row is an investigating investigate of the next cycle",
+  investigateStored?.kind === "investigate" &&
+    investigateStored.status === "investigating" &&
+    investigateStored.cycle === 3,
+  investigateStored,
+);
+check(
+  "investigate singleton: the row keeps the request text and the flow job id",
+  investigateStored?.body === "qdb request text" &&
+    investigateStored.flow_job_id === "qdb-investigate-job",
+  investigateStored,
+);
+check(
+  "investigate singleton: the read finds the investigating row",
+  (await hasInvestigatingWorkItem(sql)) === true,
+);
+check(
+  "investigate singleton: an insert for another Issue returns null",
+  (await insertInvestigateWorkItemUnlessActive(
+    investigateCandidate(9301),
+    sql,
+  )) === null,
+);
+check(
+  "investigate singleton: an insert for the same Issue returns null",
+  (await insertInvestigateWorkItemUnlessActive(
+    investigateCandidate(906),
+    sql,
+  )) === null,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'investigated' WHERE id = ${String(investigateFirst)}`,
+);
+check(
+  "investigate singleton: the read finds nothing once the investigation finished",
+  (await hasInvestigatingWorkItem(sql)) === false,
+);
+check(
+  "investigate singleton: an insert after the investigation finished returns the id",
+  (await insertInvestigateWorkItemUnlessActive(
+    investigateCandidate(9301),
+    sql,
+  )) !== null,
+);
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

@@ -18,7 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createInvestigateWorktree,
+  type DisableInstructionsFs,
+  disableInvestigateInstructions,
   ensureInvestigateRoot,
+  INSTRUCTION_ENTRY_NAMES,
   INVESTIGATE_ROOT,
   type InvestigateFs,
   type InvestigateStat,
@@ -26,6 +29,7 @@ import {
   investigateWorktreeDir,
   PROBE_RESERVED_ID,
   purgeInvestigateRoot,
+  realDisableInstructionsFs,
   realInvestigateFs,
 } from "../../f/factory/lib/investigate_workspace.ts";
 import {
@@ -1017,5 +1021,356 @@ describe("createInvestigateWorktree with a real git", () => {
     await expect(create(fixture, investigateRoot, 1, sha)).rejects.toThrow(
       /symlink or submodule/,
     );
+  });
+});
+
+describe("disableInvestigateInstructions", () => {
+  const INSTRUCTION_NAMES = [
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    ".claude",
+    ".mcp.json",
+    ".claude.json",
+  ];
+
+  function setup() {
+    const root = tempDir("investigate-disable-");
+    const dir = join(root, "42");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".git"), "gitdir: /x\n");
+    writeFileSync(join(dir, "README.md"), "readme\n");
+    return { root, dir };
+  }
+
+  function disable(
+    root: string,
+    options: {
+      readonly fs?: DisableInstructionsFs;
+      readonly run?: CommandRunner;
+    } = {},
+  ) {
+    return disableInvestigateInstructions({
+      run: options.run ?? createFakeCommandRunner([]).run,
+      mainRepoDir: MAIN_REPO,
+      workItemId: 42,
+      root,
+      lockFs: createRecordingLockFs(),
+      ...(options.fs === undefined ? {} : { fs: options.fs }),
+    });
+  }
+
+  function put(dir: string, path: string, content = "x\n"): void {
+    const full = join(dir, path);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, content);
+  }
+
+  /** どの改名も失敗する偽のファイル操作。 */
+  function failingRename(): DisableInstructionsFs {
+    return {
+      ...realDisableInstructionsFs,
+      rename: async () => {
+        throw new Error("secret-token-in-cause");
+      },
+    };
+  }
+
+  /** 改名の呼び出しが何も起こさない偽のファイル操作。 */
+  function ineffectiveRename(): DisableInstructionsFs {
+    return { ...realDisableInstructionsFs, rename: async () => {} };
+  }
+
+  /** READMEを検査できない偽のファイル操作。 */
+  function uninspectable(): DisableInstructionsFs {
+    return {
+      ...realDisableInstructionsFs,
+      lstat: async (path) =>
+        path.endsWith("README.md") ? null : realInvestigateFs.lstat(path),
+    };
+  }
+
+  test("names the five entries that Claude Code reads as instructions or settings", () => {
+    expect([...INSTRUCTION_ENTRY_NAMES].sort()).toEqual(
+      [...INSTRUCTION_NAMES].sort(),
+    );
+  });
+
+  test("renames CLAUDE.md at the top", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root);
+    expect(existsSync(join(dir, "CLAUDE.md.disabled"))).toBe(true);
+  });
+
+  test("leaves no CLAUDE.md at the top", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root);
+    expect(existsSync(join(dir, "CLAUDE.md"))).toBe(false);
+  });
+
+  test("renames CLAUDE.local.md", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.local.md");
+    await disable(root);
+    expect(existsSync(join(dir, "CLAUDE.local.md.disabled"))).toBe(true);
+  });
+
+  test("renames the .claude directory with its contents", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude/settings.json", "{}\n");
+    await disable(root);
+    expect(
+      readFileSync(join(dir, ".claude.disabled", "settings.json"), "utf8"),
+    ).toBe("{}\n");
+  });
+
+  test("renames .mcp.json", async () => {
+    const { root, dir } = setup();
+    put(dir, ".mcp.json");
+    await disable(root);
+    expect(existsSync(join(dir, ".mcp.json.disabled"))).toBe(true);
+  });
+
+  test("renames .claude.json", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude.json");
+    await disable(root);
+    expect(existsSync(join(dir, ".claude.json.disabled"))).toBe(true);
+  });
+
+  test("renames a CLAUDE.md in a nested directory", async () => {
+    const { root, dir } = setup();
+    put(dir, "packages/app/CLAUDE.md");
+    await disable(root);
+    expect(existsSync(join(dir, "packages/app/CLAUDE.md.disabled"))).toBe(true);
+  });
+
+  test("renames a .claude directory in a nested directory", async () => {
+    const { root, dir } = setup();
+    put(dir, "packages/app/.claude/commands/x.md");
+    await disable(root);
+    expect(
+      existsSync(join(dir, "packages/app/.claude.disabled/commands/x.md")),
+    ).toBe(true);
+  });
+
+  test("renames a name that differs only in letter case", async () => {
+    const { root, dir } = setup();
+    put(dir, "claude.MD");
+    await disable(root);
+    expect(existsSync(join(dir, "claude.MD"))).toBe(false);
+  });
+
+  test("keeps the content of a renamed file", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md", "@/proc/self/environ\n");
+    await disable(root);
+    expect(readFileSync(join(dir, "CLAUDE.md.disabled"), "utf8")).toBe(
+      "@/proc/self/environ\n",
+    );
+  });
+
+  test("renames a symlink by name without following it", async () => {
+    const { root, dir } = setup();
+    symlinkSync("/etc/passwd", join(dir, "CLAUDE.md"));
+    await disable(root);
+    expect(lstatSync(join(dir, "CLAUDE.md.disabled")).isSymbolicLink()).toBe(
+      true,
+    );
+  });
+
+  test("leaves other files alone", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    put(dir, "src/index.ts", "code\n");
+    await disable(root);
+    expect(readFileSync(join(dir, "src/index.ts"), "utf8")).toBe("code\n");
+  });
+
+  test("leaves the .git file alone", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root);
+    expect(readFileSync(join(dir, ".git"), "utf8")).toBe("gitdir: /x\n");
+  });
+
+  test.each(["NOT-CLAUDE.md", "CLAUDE.mdx", "my.claude", "CLAUDE.md.bak"])(
+    "leaves %s, whose name only contains an instruction name",
+    async (name) => {
+      const { root, dir } = setup();
+      put(dir, name);
+      await disable(root);
+      expect(existsSync(join(dir, name))).toBe(true);
+    },
+  );
+
+  test("leaves the files of another work item alone", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    put(root, "43/CLAUDE.md");
+    await disable(root);
+    expect(existsSync(join(root, "43", "CLAUDE.md"))).toBe(true);
+  });
+
+  test("returns the renamed paths relative to the worktree", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    put(dir, "packages/app/.claude/x.md");
+    const result = await disable(root);
+    expect([...result.renamed].sort()).toEqual([
+      "CLAUDE.md",
+      "packages/app/.claude",
+    ]);
+  });
+
+  test("does not rename inside a directory it renamed", async () => {
+    const { root, dir } = setup();
+    put(dir, ".claude/CLAUDE.md");
+    const result = await disable(root);
+    expect(result.renamed).toEqual([".claude"]);
+  });
+
+  test("returns the worktree directory", async () => {
+    const { root, dir } = setup();
+    expect((await disable(root)).dir).toBe(dir);
+  });
+
+  test("renames nothing the second time", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root);
+    expect((await disable(root)).renamed).toEqual([]);
+  });
+
+  test("throws when the disabled name is already taken", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    put(dir, "CLAUDE.md.disabled");
+    await expect(disable(root)).rejects.toBeInstanceOf(
+      InvestigateWorkspaceError,
+    );
+  });
+
+  test("removes the worktree when the disabled name is already taken", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    put(dir, "CLAUDE.md.disabled");
+    await disable(root).catch(() => {});
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("throws when a rename fails", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await expect(disable(root, { fs: failingRename() })).rejects.toBeInstanceOf(
+      InvestigateWorkspaceError,
+    );
+  });
+
+  test("removes the worktree when a rename fails", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root, { fs: failingRename() }).catch(() => {});
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("prunes the registration of the removed worktree when a rename fails", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    const argvs: string[][] = [];
+    const run: CommandRunner = async (argv) => {
+      argvs.push(gitSubcommand(argv));
+      return ok();
+    };
+    await disable(root, { fs: failingRename(), run }).catch(() => {});
+    expect(argvs).toEqual([["worktree", "prune"]]);
+  });
+
+  test("does not put the cause of a failed rename into the message", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    const error = await disable(root, { fs: failingRename() }).catch(
+      (e: unknown) => e,
+    );
+    expect(String(error)).not.toContain("secret-token-in-cause");
+  });
+
+  test("throws when a rename did not take effect", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await expect(
+      disable(root, { fs: ineffectiveRename() }),
+    ).rejects.toBeInstanceOf(InvestigateWorkspaceError);
+  });
+
+  test("removes the worktree when a rename did not take effect", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root, { fs: ineffectiveRename() }).catch(() => {});
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("throws when an entry cannot be inspected", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await expect(disable(root, { fs: uninspectable() })).rejects.toBeInstanceOf(
+      InvestigateWorkspaceError,
+    );
+  });
+
+  test("removes the worktree when an entry cannot be inspected", async () => {
+    const { root, dir } = setup();
+    put(dir, "CLAUDE.md");
+    await disable(root, { fs: uninspectable() }).catch(() => {});
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("throws when the worktree directory does not exist", async () => {
+    const root = tempDir("investigate-disable-");
+    await expect(disable(root)).rejects.toBeInstanceOf(
+      InvestigateWorkspaceError,
+    );
+  });
+
+  test("throws for a work item id that is not a positive integer", async () => {
+    const { root } = setup();
+    await expect(
+      disableInvestigateInstructions({
+        run: createFakeCommandRunner([]).run,
+        mainRepoDir: MAIN_REPO,
+        workItemId: 0,
+        root,
+        lockFs: createRecordingLockFs(),
+      }),
+    ).rejects.toBeInstanceOf(InvestigateWorkspaceError);
+  });
+});
+
+describe("createInvestigateWorktree and the instruction files", () => {
+  test("leaves the CLAUDE.md of the checked-out files, so the measurement worktree is unchanged", async () => {
+    const root = tempDir("investigate-root-");
+    const dir = join(root, "42");
+    const run: CommandRunner = async (argv) => {
+      const sub = gitSubcommand(argv);
+      if (sub[0] === "ls-tree") return ok(CLEAN_TREE);
+      if (sub[0] === "worktree" && sub[1] === "add") {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, ".git"), "gitdir: /x\n");
+        writeFileSync(join(dir, "CLAUDE.md"), "x\n");
+      }
+      return ok();
+    };
+    await createInvestigateWorktree({
+      run,
+      mainRepoDir: MAIN_REPO,
+      workItemId: 42,
+      sha: SHA,
+      ghToken: "t",
+      root,
+      fs: realFsTrusting(root),
+      lockFs: createRecordingLockFs(),
+    });
+    expect(existsSync(join(dir, "CLAUDE.md"))).toBe(true);
   });
 });

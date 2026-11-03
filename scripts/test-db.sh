@@ -77,6 +77,7 @@ IMPLEMENT_ROUNDS_DESIGN_GAP_MIGRATION="20261028100000_implement_rounds_design_ga
 FIX_ROUNDS_DESIGN_GAP_MIGRATION="20261028110000_fix_rounds_design_gap.up.sql"
 ACTIVE_PR_REVIEW_MIGRATION="20261102100000_active_pr_review_key.up.sql"
 INVESTIGATE_MIGRATION="20261102120000_investigate_work_items.up.sql"
+INVESTIGATE_SINGLETON_MIGRATION="20261104100000_investigate_singleton.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -618,6 +619,103 @@ verify_investigate_work_items() {
     || die "expected no investigating row in v_lead_time"
   printf "DELETE FROM factory.work_items WHERE lower(owner) = 'investigateprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
   log "investigate work items are limited to one active row per Issue, whatever the case of the name"
+}
+
+# 稼働中の調査を全体で1件にする索引の検査。
+# 稼働中(investigating)のinvestigateは、Issueやリポジトリ、ownerの綴りが違っても2件目が拒まれる(拒否の文に制約名が含まれること)。
+# ON CONFLICT (kind) WHERE ... DO NOTHING では挿入されず、終端の行と、種別の違う行は拒まれない。
+# 終端の行を稼働中へ戻す更新も拒まれ、稼働中の行が終端になれば、次の稼働中の行を入れられる。
+# 同じIssueの索引が先に拒まないよう、2件目は別のIssueで入れる。このmigrationの適用直後に呼ぶ。
+verify_investigate_singleton() {
+  # cycle, kind, owner, repo, issue_number, statusから、行を入れる文を作る。
+  singleton_row() {
+    printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (%s, 'manual', '%s', '%s', '%s', %s, 'https://github.com/singletonprobe/r/issues/%s', 't', '%s')" "$1" "$2" "$3" "$4" "$5" "$5" "$6"
+  }
+  singleton_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  singleton_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  local key="work_items_active_investigate_singleton"
+  singleton_accepted "$(singleton_row 1 investigate singletonprobe r 1 investigating)"
+  singleton_rejected "$(singleton_row 1 investigate singletonprobe r 2 investigating)" "${key}"
+  singleton_rejected "$(singleton_row 1 investigate singletonprobe other 1 investigating)" "${key}"
+  singleton_rejected "$(singleton_row 1 investigate SINGLETONPROBE R 3 investigating)" "${key}"
+  local skipped
+  skipped="$(printf '%s ON CONFLICT (kind) WHERE kind = '"'"'investigate'"'"' AND status = '"'"'investigating'"'"' DO NOTHING RETURNING id;\n' "$(singleton_row 1 investigate singletonprobe r 4 investigating)" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "ON CONFLICT (kind) WHERE ... DO NOTHING failed instead of skipping the investigate insert"
+  [ -z "$(printf '%s' "${skipped}" | tr -d '[:space:]')" ] \
+    || die "ON CONFLICT (kind) WHERE ... DO NOTHING inserted a second investigating investigate row"
+
+  # 終端の行と、種別の違う行は拒まれない。
+  singleton_accepted "$(singleton_row 1 investigate singletonprobe r 5 investigated)"
+  singleton_accepted "$(singleton_row 1 investigate singletonprobe r 6 failed)"
+  singleton_accepted "$(singleton_row 1 investigate singletonprobe r 7 needs_human)"
+  singleton_accepted "$(singleton_row 1 issue singletonprobe r 8 investigating)"
+
+  # 終端の行を稼働中へ戻す更新も拒まれる。
+  singleton_rejected "UPDATE factory.work_items SET status = 'investigating' WHERE kind = 'investigate' AND owner = 'singletonprobe' AND issue_number = 5 AND status = 'investigated'" "${key}"
+  # 稼働中の行が終端になれば、次の稼働中の行を入れられる。
+  singleton_accepted "UPDATE factory.work_items SET status = 'investigated' WHERE kind = 'investigate' AND owner = 'singletonprobe' AND issue_number = 1 AND status = 'investigating'"
+  singleton_accepted "$(singleton_row 2 investigate singletonprobe r 1 investigating)"
+  printf "DELETE FROM factory.work_items WHERE lower(owner) = 'singletonprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "investigate work items are limited to one investigating row overall"
+}
+
+# 稼働中の調査を全体で1件にする索引のmigrationを戻す検査。戻すと索引が消えて2件目が入り、
+# 重複が残るうちはupが索引を作れずに失敗し、重複を消せばupし直せて、また2件目を拒む。
+# 全downを当てる検査の前に呼ぶ。
+verify_investigate_singleton_rollback() {
+  local up="${MIGRATIONS_DIR}/${INVESTIGATE_SINGLETON_MIGRATION}"
+  local down="${MIGRATIONS_DIR}/${INVESTIGATE_SINGLETON_MIGRATION%.up.sql}.down.sql"
+  local file
+  for file in "${up}" "${down}"; do
+    [ -f "${file}" ] || die "missing migration: ${file}"
+  done
+  singleton_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  local insert_prefix="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'manual', 'investigate', 'singletonback', 'r',"
+  local indexes="SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_active_investigate_singleton'"
+
+  [ "$(singleton_scalar "${indexes}")" = "1" ] || die "expected the singleton index before the rollback"
+  log "rolling back investigate_singleton"
+  psql_exec "${SCRATCH_DB}" -q <"${down}" >/dev/null || die "could not roll back investigate_singleton"
+  [ "$(singleton_scalar "${indexes}")" = "0" ] || die "expected the singleton index to be dropped by the rollback"
+  printf "%s 1, 'https://github.com/singletonback/r/issues/1', 't', 'investigating'), (1, 'manual', 'investigate', 'singletonback', 'r', 2, 'https://github.com/singletonback/r/issues/2', 't', 'investigating');\n" "${insert_prefix}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "two investigating rows were rejected after the rollback"
+
+  local refused
+  if refused="$(psql_exec "${SCRATCH_DB}" -q <"${up}" 2>&1)"; then
+    die "investigate_singleton was applied over two investigating rows"
+  fi
+  case "${refused}" in
+    *work_items_active_investigate_singleton*) ;;
+    *) die "investigate_singleton was refused, but not for the singleton index: ${refused}" ;;
+  esac
+  [ "$(singleton_scalar "${indexes}")" = "0" ] || die "the refused migration left the singleton index"
+
+  printf "DELETE FROM factory.work_items WHERE owner = 'singletonback' AND issue_number = 2;\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "re-applying investigate_singleton"
+  psql_exec "${SCRATCH_DB}" -q <"${up}" >/dev/null || die "could not re-apply investigate_singleton"
+  [ "$(singleton_scalar "${indexes}")" = "1" ] || die "expected the singleton index after re-applying"
+  if printf "%s 3, 'https://github.com/singletonback/r/issues/3', 't', 'investigating');\n" "${insert_prefix}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null 2>&1; then
+    die "a second investigating row was accepted after re-applying"
+  fi
+  printf "DELETE FROM factory.work_items WHERE owner = 'singletonback';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "investigate_singleton drops its index, refuses to apply over duplicates, and round-trips"
 }
 
 # 調査の土台のmigrationを戻す検査。investigateの行と、その子の行を入れてから、downを当てる。
@@ -1288,6 +1386,9 @@ for up_file in "${up_files[@]}"; do
   if [ "${up_name}" = "${INVESTIGATE_MIGRATION}" ]; then
     verify_investigate_work_items
   fi
+  if [ "${up_name}" = "${INVESTIGATE_SINGLETON_MIGRATION}" ]; then
+    verify_investigate_singleton
+  fi
 done
 
 verify_issue_intake
@@ -1383,6 +1484,7 @@ COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-console-actions.ts" \
   || die "the console actions checks failed against the real PostgreSQL"
 
+verify_investigate_singleton_rollback
 verify_investigate_rollback
 verify_design_stage_rollback
 verify_design_drafts_rollback

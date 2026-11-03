@@ -6385,6 +6385,32 @@ export async function insertAuditWorkItem(
   return row === undefined ? null : parseId(row.id, "id");
 }
 
+/** `insertInvestigateWorkItemUnlessActive`に渡す、調査の作業項目の値。 */
+export type NewInvestigateWorkItem = {
+  owner: string;
+  repo: string;
+  issue_number: number;
+  issue_url: string;
+  title: string | null;
+  /** 依頼文。以後の調査は、Issueの本文ではなく、ここに保存した文だけを使う。 */
+  body: string;
+  claimed_by: string | null;
+  flow_job_id: string | null;
+};
+
+export async function insertInvestigateWorkItemUnlessActive(
+  _item: NewInvestigateWorkItem,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  return null;
+}
+
+export async function hasInvestigatingWorkItem(
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // implement_rounds(`migrations/datatable/main/20260928120000_implement.up.sql`)
 // ---------------------------------------------------------------------------

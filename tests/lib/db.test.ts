@@ -46,6 +46,7 @@ import {
   hasDependabotItemForHead,
   hasDesignDraftForDocDir,
   hasIntakeRefreshEvent,
+  hasInvestigatingWorkItem,
   hasMainCiRuns,
   hasNewerIssueCycle,
   hasNewerMainCiRun,
@@ -65,6 +66,7 @@ import {
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertImplementRound,
+  insertInvestigateWorkItemUnlessActive,
   insertIssueProposal,
   insertIssueWorkItemUnlessActive,
   insertPrReviewWorkItemUnlessActive,
@@ -3886,6 +3888,141 @@ describe("insertAuditWorkItem", () => {
     expect(calls[0]?.text).toContain(
       "ON CONFLICT (kind) WHERE kind = 'audit' AND status IN ('picked', 'auditing') DO NOTHING",
     );
+  });
+});
+
+describe("insertInvestigateWorkItemUnlessActive", () => {
+  const INVESTIGATE_ITEM = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 42,
+    issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+    title: "Investigate the slow build",
+    body: "Why is the build slow?",
+    claimed_by: "factory-local",
+    flow_job_id: "0191f1a2-0000-7000-8000-000000000001",
+  };
+
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("pins the ON CONFLICT clause to the singleton index predicate", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (kind) WHERE kind = 'investigate' AND status = 'investigating' DO NOTHING",
+    );
+  });
+
+  test("writes the kind as investigate", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.text).toContain("'investigate'");
+  });
+
+  test("writes the status as investigating, whatever the caller holds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.text).toContain("'investigating'");
+  });
+
+  test("does not let the caller choose the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(
+      Object.assign({}, INVESTIGATE_ITEM, { status: "failed" }),
+      sql,
+    );
+    expect(calls[0]?.values).not.toContain("failed");
+  });
+
+  test("takes the next cycle of the Issue in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.text).toContain("COALESCE(MAX(cycle), 0) + 1");
+  });
+
+  test("stores the request text in body", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.values).toContain("Why is the build slow?");
+  });
+
+  test("records the flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql);
+    expect(calls[0]?.values).toContain("0191f1a2-0000-7000-8000-000000000001");
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "5" }]]);
+    expect(
+      await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql),
+    ).toBe(5);
+  });
+
+  test("returns null, not an exception, when another investigation is running", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await insertInvestigateWorkItemUnlessActive(INVESTIGATE_ITEM, sql),
+    ).toBeNull();
+  });
+
+  test("refuses an Issue number that is not a positive integer", async () => {
+    const { sql } = createFakeSqlClient();
+    await expect(
+      insertInvestigateWorkItemUnlessActive(
+        { ...INVESTIGATE_ITEM, issue_number: 0 },
+        sql,
+      ),
+    ).rejects.toThrow("issue number");
+  });
+
+  test("does not query for an Issue number that is not a positive integer", async () => {
+    const { sql, calls } = createFakeSqlClient();
+    await insertInvestigateWorkItemUnlessActive(
+      { ...INVESTIGATE_ITEM, issue_number: 1.5 },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses an owner that is not a GitHub name", async () => {
+    const { sql } = createFakeSqlClient();
+    await expect(
+      insertInvestigateWorkItemUnlessActive(
+        { ...INVESTIGATE_ITEM, owner: "../x" },
+        sql,
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("hasInvestigatingWorkItem", () => {
+  test("is true when an investigation is running", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await hasInvestigatingWorkItem(sql)).toBe(true);
+  });
+
+  test("is false when none is running", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasInvestigatingWorkItem(sql)).toBe(false);
+  });
+
+  test("reads only the investigate kind in the investigating status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasInvestigatingWorkItem(sql);
+    expect(calls[0]?.text).toContain(
+      "kind = 'investigate' AND status = 'investigating'",
+    );
+  });
+
+  test("does not write", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasInvestigatingWorkItem(sql);
+    expect(calls[0]?.text).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
   });
 });
 

@@ -383,3 +383,30 @@ export async function purgeInvestigateRoot(
     },
   });
 }
+
+/** `disableInvestigateInstructions`が`.disabled`を付けて無効にする名前。 */
+export const INSTRUCTION_ENTRY_NAMES: readonly string[] = [];
+
+/** 無効化に使うファイル操作。 */
+export type DisableInstructionsFs = InvestigateFs & {
+  readonly rename: (from: string, to: string) => Promise<void>;
+};
+
+export const realDisableInstructionsFs: DisableInstructionsFs = {
+  ...realInvestigateFs,
+  rename: async () => {},
+};
+
+export type DisableInvestigateInstructionsOptions = Omit<
+  InvestigateWorkspaceOptions,
+  "fs"
+> & {
+  readonly workItemId: number;
+  readonly fs?: DisableInstructionsFs;
+};
+
+export async function disableInvestigateInstructions(
+  _opts: DisableInvestigateInstructionsOptions,
+): Promise<{ readonly dir: string; readonly renamed: readonly string[] }> {
+  return { dir: "", renamed: [] };
+}

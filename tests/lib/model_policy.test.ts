@@ -47,6 +47,24 @@ describe("modelFor", () => {
   });
 });
 
+describe("modelFor for investigate", () => {
+  test("uses model with no failures", () => {
+    expect(modelFor(CONFIG, "investigate", 0)).toBe("light-model");
+  });
+
+  test("uses model after one failure", () => {
+    expect(modelFor(CONFIG, "investigate", 1)).toBe("light-model");
+  });
+
+  test("uses heavy_model after two failures", () => {
+    expect(modelFor(CONFIG, "investigate", 2)).toBe("heavy-model");
+  });
+
+  test("is not one of the stages that always use heavy_model", () => {
+    expect(modelChangesAfterFailure(CONFIG, "investigate", 1)).toBe(true);
+  });
+});
+
 describe("modelFor for dependabot", () => {
   test("keeps heavy_model after many failures", () => {
     expect(modelFor(CONFIG, "dependabot", 5)).toBe("heavy-model");
