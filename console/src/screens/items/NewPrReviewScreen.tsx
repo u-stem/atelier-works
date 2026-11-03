@@ -90,17 +90,24 @@ export function NewPrReviewScreen() {
 
   const send = () => {
     const decision = decideSend({ valid: built.ok, blocked: control.disabled });
-    if (decision === "blocked") {
-      return;
+    switch (decision) {
+      case "blocked":
+        return;
+      case "show-problems":
+        setChecked(true);
+        focusInvalid.request();
+        return;
+      case "send": {
+        setChecked(true);
+        focusInvalid.clear();
+        if (built.ok) {
+          // 始められたときだけ、前の結果を消す。
+          const started = mutation.submit(built.input);
+          setAttempt((previous) => attemptAfterSubmit(started, previous));
+        }
+        return;
+      }
     }
-    setChecked(true);
-    if (!built.ok) {
-      focusInvalid.request();
-      return;
-    }
-    // 始められたときだけ、前の結果を消す。
-    const started = mutation.submit(built.input);
-    setAttempt((previous) => attemptAfterSubmit(started, previous));
   };
 
   return (

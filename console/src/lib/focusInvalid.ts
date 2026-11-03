@@ -57,5 +57,5 @@ export type InvalidStatusMessage = {
 export function clearedStatus(
   status: InvalidStatusMessage,
 ): InvalidStatusMessage {
-  return status;
+  return status.text === "" ? status : { text: "", serial: status.serial };
 }

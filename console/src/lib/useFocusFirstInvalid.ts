@@ -1,17 +1,18 @@
 import { type RefObject, useEffect, useRef, useState } from "react";
-import { focusFirstInvalid, invalidAnnouncement } from "./focusInvalid.ts";
-
-/** 読み上げ専用の領域に渡す文。`serial`が変わるたびに、同じ文でも読み直される。 */
-type InvalidStatusMessage = {
-  readonly text: string;
-  readonly serial: number;
-};
+import {
+  clearedStatus,
+  focusFirstInvalid,
+  type InvalidStatusMessage,
+  invalidAnnouncement,
+} from "./focusInvalid.ts";
 
 type FocusFirstInvalid = {
   /** フォームに付ける。誤りのある入力欄をこの中から探す。 */
   readonly formRef: RefObject<HTMLFormElement | null>;
   /** 送信が誤りで止まったときに呼ぶ。誤りの表示を描いた後に、最初の誤りの入力欄へフォーカスを移す。 */
   readonly request: () => void;
+  /** 誤りの無い送信に進むときに呼ぶ。前の誤りの件数の文を、読み上げ専用の領域から消す。 */
+  readonly clear: () => void;
   /** 読み上げ専用の領域に渡す文。フォーカスがすでに最初の誤りの欄にあるときだけ、中身がある。 */
   readonly status: InvalidStatusMessage;
 };
@@ -42,6 +43,9 @@ export function useFocusFirstInvalid(): FocusFirstInvalid {
     formRef,
     request: () => {
       setRequests((count) => count + 1);
+    },
+    clear: () => {
+      setStatus(clearedStatus);
     },
     status,
   };
