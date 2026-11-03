@@ -325,8 +325,16 @@ function reactImports(code: string): string[] {
  * `react`から持ち込む名前を、importの書かれたまま返す。
  * 別名は`A as B`の形で、既定とnamespaceのimportは、その書き方のまま返す。
  */
-function reactImportedNames(_code: string): string[] {
-  return [];
+function reactImportedNames(code: string): string[] {
+  return reactImports(code).flatMap((statement) =>
+    statement
+      .replace(/^import\s+(?:type\s+)?/, "")
+      .replace(/\s+from "react";$/, "")
+      .replace(/[{}]/g, ",")
+      .split(",")
+      .map((name) => name.trim().replace(/^type\s+/, ""))
+      .filter((name) => name !== ""),
+  );
 }
 
 /** 呼んでいるフックの名前を、現れた順に返す。ジェネリクスの呼び出しも含む。 */
