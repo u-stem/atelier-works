@@ -23,7 +23,12 @@ import {
   intakeSnapshotQueryKey,
 } from "./api/queries.ts";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
+import type { ViewMode } from "./lib/requirementsView.ts";
 import { ApprovalOverview } from "./screens/inbox/ApprovalOverview.tsx";
+import {
+  DesignReview,
+  designPreviewGate,
+} from "./screens/inbox/DesignReview.tsx";
 
 // 不可視文字をソースに直接書くと読めないので、コードポイントから作る。
 const ZWSP = String.fromCodePoint(0x200b);
@@ -123,6 +128,40 @@ function render(seed: Seed = {}): string {
             approval,
             now: NOW,
           }),
+        ),
+      ),
+    ),
+  );
+}
+
+/** 設計の承認画面だけを描く。承認の画面は`initialMode`を渡さないので、プレビューの描画はここで確かめる。 */
+function renderReview(seed: Seed = {}, initialMode?: ViewMode): string {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryOnMount: false } },
+  });
+  client.setQueryData(approvalDesignDocQueryKey(REQUEST_ID), {
+    ...DOC,
+    ...seed.doc,
+  });
+  client.setQueryData(intakeSnapshotQueryKey(WORK_ITEM_ID, REQUEST_ID), {
+    ...SNAPSHOT,
+    body: "Body <!-- c --> **b**",
+  });
+  const props = { approval: APPROVAL, title: "example item", now: NOW };
+  return renderToStaticMarkup(
+    createElement(
+      QueryClientProvider,
+      { client },
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          MemoryRouter,
+          null,
+          createElement(
+            DesignReview,
+            initialMode === undefined ? props : { ...props, initialMode },
+          ),
         ),
       ),
     ),
@@ -313,5 +352,173 @@ describe("the source of the wiring", () => {
 
   test("the approval bar judges the rejection without the reason to stop", () => {
     expect(bar).toMatch(/rejectProblem\(reason\)/);
+  });
+});
+
+// プレビューは参考の表示で、承認の対象は原文である。
+// プレビューを表示している間は承認を止め、その配線を画面のソースと描画の両方で固定する。
+// 判定の関数と文は、このテストが文字列で直接書いて照合する。保護の外から期待値を取らない。
+const PREVIEW_REASON =
+  "設計書をプレビューで表示中は承認できません。承認するには、原文を表示してください。";
+
+/** 承認画面が描いた設計書のパネルから先。取り込み時点のIssueのパネルを除く。 */
+function designPanelOf(html: string): string {
+  return html.slice(html.indexOf("承認対象の設計書"));
+}
+
+describe("design approval preview wiring", () => {
+  test("shows the design in text mode at first", () => {
+    expect(designPanelOf(renderReview())).not.toContain("data-preview");
+  });
+
+  test("shows the text view in text mode at first", () => {
+    expect(designPanelOf(renderReview())).toContain('<bdo dir="ltr">');
+  });
+
+  test("renders the design as a preview without the text view", () => {
+    const panel = designPanelOf(renderReview({}, "preview"));
+    expect(panel).toContain("data-preview");
+    expect(panel).not.toContain('<bdo dir="ltr">');
+  });
+
+  test("keeps the issue at intake in text", () => {
+    const html = renderReview({}, "preview");
+    const before = html.slice(0, html.indexOf("承認対象の設計書"));
+    expect(before).not.toContain("data-preview");
+  });
+
+  test("disables the approval in the preview", () => {
+    expect(approveIsDisabled(renderReview({}, "preview"))).toBe(true);
+  });
+
+  test("says why the approval is stopped in the preview", () => {
+    expect(renderReview({}, "preview")).toContain(PREVIEW_REASON);
+  });
+
+  test("lets the approval through in the text mode", () => {
+    expect(approveIsDisabled(renderReview())).toBe(false);
+  });
+
+  test("reports the truncation before the preview", () => {
+    const html = renderReview({ doc: { truncated: true } }, "preview");
+    expect(html).toContain("設計書が長さの上限で切られていて");
+    expect(html).not.toContain(PREVIEW_REASON);
+  });
+
+  describe("gates by mode", () => {
+    test("stops in the preview", () => {
+      expect(designPreviewGate({ mode: "preview" }).reason).toBe(
+        PREVIEW_REASON,
+      );
+    });
+
+    test("stops in a mode that it does not know", () => {
+      expect(designPreviewGate({ mode: "unknown" }).reason).toBe(
+        PREVIEW_REASON,
+      );
+    });
+
+    test("lets the text mode through", () => {
+      expect(designPreviewGate({ mode: "text" }).reason).toBeNull();
+    });
+  });
+
+  describe("wires the gate by shape", () => {
+    const review = source("console/src/screens/inbox/DesignReview.tsx");
+    const overview = source("console/src/screens/inbox/ApprovalOverview.tsx");
+
+    test("calls the gate once with the mode", () => {
+      // 定義を除いた呼び出しが、画面の1か所だけである。
+      const calls = review.replace("function designPreviewGate(", "");
+      expect(calls.match(/designPreviewGate\(/g)?.length).toBe(1);
+      expect(calls).toContain("const gate = designPreviewGate({ mode });");
+    });
+
+    test("gives only the reason of the gate to the approval bar", () => {
+      expect(review.match(/approveBlockedReason=\{/g)?.length).toBe(1);
+      expect(review).toContain("approveBlockedReason={blocked ?? gate.reason}");
+    });
+
+    test("keeps one state of the mode", () => {
+      expect(review.match(/useState[<(]/g)?.length).toBe(1);
+      expect(review).toContain("useState<ViewMode>(initialMode)");
+    });
+
+    test("does not import another way to hold a state", () => {
+      const line = /import[^;]*from "react";/.exec(review)?.[0] ?? "";
+      expect(line).not.toMatch(/\bas\b|useReducer/);
+    });
+
+    test("changes the mode in one place", () => {
+      expect(review.match(/\bsetMode\b/g)?.length).toBe(2);
+      expect(review).toMatch(
+        /const onChange = \(next: ViewMode\) => \{\s*setMode\(next\);\s*\};/,
+      );
+    });
+
+    test("passes the mode to the three parts by name", () => {
+      expect(review.match(/\bmode=\{/g)?.length).toBe(3);
+      expect(review).toMatch(/<DocPanel\b[^<>]*\bmode=\{mode\}/);
+      expect(review).toMatch(/<DesignDocBody\b[^<>]*\bmode=\{mode\}/);
+      expect(review).toMatch(/<ViewModeSwitch\b[^<>]*\bmode=\{mode\}/);
+    });
+
+    test("passes the same change handler to the switch and the body", () => {
+      expect(review).toMatch(
+        /<DesignDocBody\b[^<>]*\bmode=\{mode\}[^<>]*\bonChange=\{onChange\}/,
+      );
+      expect(review).toMatch(
+        /<ViewModeSwitch\b[^<>]*\bmode=\{mode\}[^<>]*\bonChange=\{onChange\}/,
+      );
+    });
+
+    test("spreads no attributes into a part", () => {
+      expect(review).not.toMatch(/<[A-Z][A-Za-z]*[^<>]*\{\.\.\./);
+    });
+
+    test("draws one switch", () => {
+      expect(review.match(/<ViewModeSwitch\b/g)?.length).toBe(1);
+    });
+
+    test("does not pass the mode to the issue at intake", () => {
+      expect(review).not.toMatch(/<IntakeSnapshotPanel\b[^<>]*\bmode=/);
+    });
+
+    test("renders the preview only in the preview branch", () => {
+      expect(review.match(/<DesignTextPreview\b/g)?.length).toBe(1);
+      expect(review).toMatch(
+        /mode === "preview" \? \(\s*<DesignTextPreview text=\{doc\.text\} repo=\{repo\} \/>\s*\) : \(\s*<DesignTextView/,
+      );
+    });
+
+    test("does not set inner html", () => {
+      expect(review).not.toContain("dangerouslySetInnerHTML");
+    });
+
+    test("keys the approval bar by the request", () => {
+      expect(review).toMatch(
+        /<ApprovalBar\s+key=\{approval\.approval_request_id\}/,
+      );
+    });
+
+    test("does not pass the initial mode from the overview", () => {
+      expect(overview).not.toContain("initialMode");
+    });
+  });
+
+  describe("renders the preview through Markdown only", () => {
+    const preview = source("console/src/screens/inbox/DesignTextPreview.tsx");
+
+    test("draws with Markdown", () => {
+      expect(preview).toContain("<Markdown");
+    });
+
+    test("does not set inner html", () => {
+      expect(preview).not.toContain("dangerouslySetInnerHTML");
+    });
+
+    test("does not parse raw html", () => {
+      expect(preview).not.toContain("rehype-raw");
+    });
   });
 });

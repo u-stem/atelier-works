@@ -10,6 +10,7 @@ import {
   intakeSnapshotQueryKey,
 } from "../../api/queries.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import type { ViewMode } from "../../lib/requirementsView.ts";
 import {
   DesignDocBody,
   DesignReview,
@@ -38,8 +39,20 @@ function renderText(text: string): string {
   return renderToStaticMarkup(<DesignTextView text={text} />);
 }
 
-function renderBody(overrides: Partial<ApprovalDesignDoc> = {}): string {
-  return renderToStaticMarkup(<DesignDocBody doc={{ ...DOC, ...overrides }} />);
+const REPO = { owner: "o", repo: "r" };
+
+function renderBody(
+  overrides: Partial<ApprovalDesignDoc> = {},
+  mode: ViewMode = "text",
+): string {
+  return renderToStaticMarkup(
+    <DesignDocBody
+      doc={{ ...DOC, ...overrides }}
+      mode={mode}
+      onChange={() => {}}
+      repo={REPO}
+    />,
+  );
 }
 
 const ENTITIES: Readonly<Record<string, string>> = {
@@ -210,28 +223,143 @@ const REVIEW_SNAPSHOT: IntakeSnapshot = {
   refreshed: false,
 };
 
-function renderReview(): string {
+function renderReview(
+  initialMode?: ViewMode,
+  doc: Partial<ApprovalDesignDoc> = {},
+): string {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, retryOnMount: false } },
   });
-  client.setQueryData(approvalDesignDocQueryKey(9), DOC);
+  client.setQueryData(approvalDesignDocQueryKey(9), { ...DOC, ...doc });
   client.setQueryData(intakeSnapshotQueryKey(1, 9), REVIEW_SNAPSHOT);
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <MemoryRouter>
-          <DesignReview
-            approval={REVIEW_APPROVAL}
-            title="example item"
-            now={Date.parse("2026-10-30T00:00:00.000Z")}
-          />
+          {initialMode === undefined ? (
+            <DesignReview
+              approval={REVIEW_APPROVAL}
+              title="example item"
+              now={Date.parse("2026-10-30T00:00:00.000Z")}
+            />
+          ) : (
+            <DesignReview
+              approval={REVIEW_APPROVAL}
+              title="example item"
+              now={Date.parse("2026-10-30T00:00:00.000Z")}
+              initialMode={initialMode}
+            />
+          )}
         </MemoryRouter>
       </TooltipProvider>
     </QueryClientProvider>,
   );
 }
 
+/** 設計書のパネルから先。取り込み時点のIssueのパネルを除く。 */
+function designPanel(html: string): string {
+  return html.slice(html.indexOf("承認対象の設計書"));
+}
+
+describe("DesignDocBody in the preview", () => {
+  test("draws the design as a preview without the text view", () => {
+    const html = renderBody({}, "preview");
+    expect(html).toContain("data-preview");
+    expect(html).not.toContain('<bdo dir="ltr">');
+  });
+
+  test("shows the notice of the preview", () => {
+    expect(renderBody({}, "preview")).toContain(
+      "原文に切り替えて確かめてください",
+    );
+  });
+
+  test("tells that the preview does not draw the text after an unclosed comment", () => {
+    expect(renderBody({}, "preview")).toContain("閉じない<!--");
+  });
+
+  test("tells that the preview may not replace a character written as a reference", () => {
+    expect(renderBody({}, "preview")).toContain("文字参照");
+  });
+
+  test("does not show the notice of the source in the preview", () => {
+    expect(renderBody({}, "preview")).not.toContain(
+      "承認の対象は、この全文です",
+    );
+  });
+
+  test("does not show the notice of the preview in the source", () => {
+    expect(renderBody()).not.toContain("原文に切り替えて確かめてください");
+  });
+
+  test("keeps the anomaly summary in the preview", () => {
+    expect(renderBody({ text: `a${ZWSP}b\n` }, "preview")).toContain(
+      "見えない文字: 1 件",
+    );
+  });
+
+  test("keeps the line count in the preview", () => {
+    expect(renderBody({}, "preview")).toContain("全文: 2 行");
+  });
+
+  test("shows the end mark in the preview", () => {
+    expect(renderBody({}, "preview")).toContain("全文の終わり(2 行、");
+  });
+});
+
+describe("DesignDocBody switch", () => {
+  test("shows one switch of the view mode", () => {
+    expect(renderBody().split("設計書の表示の形式").length - 1).toBe(1);
+  });
+
+  test("names the choice of the source as the source", () => {
+    expect(renderBody()).toContain(">原文</button>");
+  });
+});
+
 describe("DesignReview", () => {
+  test("shows the design in text mode at first", () => {
+    const html = designPanel(renderReview());
+    expect(html).not.toContain("data-preview");
+    expect(html).toContain('<bdo dir="ltr">');
+  });
+
+  test("renders the design as a preview without the text view", () => {
+    const html = designPanel(renderReview("preview"));
+    expect(html).toContain("data-preview");
+    expect(html).not.toContain('<bdo dir="ltr">');
+  });
+
+  test("keeps the issue at intake in text", () => {
+    const html = renderReview("preview");
+    expect(html.slice(0, html.indexOf("承認対象の設計書"))).not.toContain(
+      "data-preview",
+    );
+  });
+
+  test("keeps the body of the issue at intake as the source in the preview", () => {
+    const html = renderReview("preview");
+    expect(html.slice(0, html.indexOf("承認対象の設計書"))).toMatch(
+      /<pre[^>]*>[^<]*Body &lt;!-- c --&gt;/,
+    );
+  });
+
+  test("says why the approval is stopped in the preview", () => {
+    expect(renderReview("preview")).toContain(
+      "設計書をプレビューで表示中は承認できません。",
+    );
+  });
+
+  test("does not give the reason of the preview in the source", () => {
+    expect(renderReview()).not.toContain("設計書をプレビューで表示中");
+  });
+
+  test("reports the truncation before the preview", () => {
+    const html = renderReview("preview", { truncated: true });
+    expect(html).toContain("長さの上限で切られていて");
+    expect(html).not.toContain("設計書をプレビューで表示中");
+  });
+
   // 取り込み時点のIssueのパネルは、プレビューを選べる共有の部品である。
   // 設計の承認画面は切り替えを渡さないので、原文のままで、切り替えもプレビューも出ない。
   test("shows neither the preview nor the switch of the issue at intake", () => {

@@ -1056,15 +1056,17 @@ test.describe("view mode switch by keyboard", () => {
   }
 });
 
-// 承認画面の本文の切り替え(取り込み時点のIssueと提案の本文)。原文が既定で、プレビューは参考の表示である。
-// プレビューを表示している間は承認を止め、原文に戻すと、原文を確かめたかのチェックを求める。
+// 承認画面の本文の切り替え(取り込み時点のIssue、提案の本文、設計書)。原文が既定で、プレビューは参考の表示である。
+// プレビューを表示している間は承認を止める。
+// 取り込み時点のIssueと提案の本文は、原文に戻すと、原文を確かめたかのチェックを求める(設計書は求めない)。
 // チェックを入れると承認できる。却下の理由の欄は、切り替えで変わらない。
 test.describe("approval body preview by keyboard", () => {
   const SCREENS: readonly {
     path: string;
     group: string;
     reason: string;
-    check: string;
+    /** プレビューを選んだ承認で、原文を確かめたかを問うチェックの文頭。問わない画面は`null`。 */
+    check: string | null;
   }[] = [
     {
       path: "?approval=1",
@@ -1077,6 +1079,12 @@ test.describe("approval body preview by keyboard", () => {
       group: "提案の本文の表示の形式",
       reason: "提案の本文をプレビューで表示中は承認できません。",
       check: "提案の本文のプレビューを表示しました。",
+    },
+    {
+      path: "?approval=3",
+      group: "設計書の表示の形式",
+      reason: "設計書をプレビューで表示中は承認できません。",
+      check: null,
     },
   ];
 
@@ -1112,77 +1120,79 @@ test.describe("approval body preview by keyboard", () => {
         await expect(approve(page)).toBeDisabled();
       });
 
-      test("does not show the check of the source while the preview is shown", async ({
-        page,
-      }) => {
-        await openScreen(page, path);
+      if (check !== null) {
+        test("does not show the check of the source while the preview is shown", async ({
+          page,
+        }) => {
+          await openScreen(page, path);
 
-        await choose(page, group, "プレビュー");
+          await choose(page, group, "プレビュー");
 
-        await expect(page.getByLabel(new RegExp(`^${check}`))).toHaveCount(0);
-      });
+          await expect(page.getByLabel(new RegExp(`^${check}`))).toHaveCount(0);
+        });
 
-      test("shows the check of the source when the source is shown again", async ({
-        page,
-      }) => {
-        await openScreen(page, path);
-        await choose(page, group, "プレビュー");
+        test("shows the check of the source when the source is shown again", async ({
+          page,
+        }) => {
+          await openScreen(page, path);
+          await choose(page, group, "プレビュー");
 
-        await choose(page, group, "原文");
+          await choose(page, group, "原文");
 
-        await expect(page.getByLabel(new RegExp(`^${check}`))).toBeVisible();
-      });
+          await expect(page.getByLabel(new RegExp(`^${check}`))).toBeVisible();
+        });
 
-      test("asks for the check of the source after the preview", async ({
-        page,
-      }) => {
-        await openScreen(page, path);
-        await choose(page, group, "プレビュー");
+        test("asks for the check of the source after the preview", async ({
+          page,
+        }) => {
+          await openScreen(page, path);
+          await choose(page, group, "プレビュー");
 
-        await choose(page, group, "原文");
+          await choose(page, group, "原文");
 
-        await expect(page.getByText(reason)).toHaveCount(0);
-        await expect(approve(page)).toBeDisabled();
-      });
+          await expect(page.getByText(reason)).toHaveCount(0);
+          await expect(approve(page)).toBeDisabled();
+        });
 
-      test("lets the approval through once the check is done", async ({
-        page,
-      }) => {
-        await openScreen(page, path);
-        await choose(page, group, "プレビュー");
-        await choose(page, group, "原文");
+        test("lets the approval through once the check is done", async ({
+          page,
+        }) => {
+          await openScreen(page, path);
+          await choose(page, group, "プレビュー");
+          await choose(page, group, "原文");
 
-        await page.getByLabel(new RegExp(`^${check}`)).check();
+          await page.getByLabel(new RegExp(`^${check}`)).check();
 
-        await expect(approve(page)).toBeEnabled();
-      });
+          await expect(approve(page)).toBeEnabled();
+        });
 
-      test("stops the approval again when the preview is chosen after the check", async ({
-        page,
-      }) => {
-        await openScreen(page, path);
-        await choose(page, group, "プレビュー");
-        await choose(page, group, "原文");
-        await page.getByLabel(new RegExp(`^${check}`)).check();
+        test("stops the approval again when the preview is chosen after the check", async ({
+          page,
+        }) => {
+          await openScreen(page, path);
+          await choose(page, group, "プレビュー");
+          await choose(page, group, "原文");
+          await page.getByLabel(new RegExp(`^${check}`)).check();
 
-        await choose(page, group, "プレビュー");
+          await choose(page, group, "プレビュー");
 
-        await expect(approve(page)).toBeDisabled();
-      });
+          await expect(approve(page)).toBeDisabled();
+        });
 
-      test("keeps the check of the source through the preview", async ({
-        page,
-      }) => {
-        await openScreen(page, path);
-        await choose(page, group, "プレビュー");
-        await choose(page, group, "原文");
-        await page.getByLabel(new RegExp(`^${check}`)).check();
-        await choose(page, group, "プレビュー");
+        test("keeps the check of the source through the preview", async ({
+          page,
+        }) => {
+          await openScreen(page, path);
+          await choose(page, group, "プレビュー");
+          await choose(page, group, "原文");
+          await page.getByLabel(new RegExp(`^${check}`)).check();
+          await choose(page, group, "プレビュー");
 
-        await choose(page, group, "原文");
+          await choose(page, group, "原文");
 
-        await expect(approve(page)).toBeEnabled();
-      });
+          await expect(approve(page)).toBeEnabled();
+        });
+      }
 
       test("keeps the rejection reason as it was", async ({ page }) => {
         await openScreen(page, path);
@@ -1195,6 +1205,68 @@ test.describe("approval body preview by keyboard", () => {
       });
     });
   }
+});
+
+// 設計の承認画面は、設計書を原文(行ごとの`<bdo>`)で既定に出し、プレビューは参考に切り替えて読む。
+// 原文に戻すと、プレビューは消え、原文が戻る。
+test.describe("design approval preview and source by keyboard", () => {
+  const PATH = "?approval=3";
+  const GROUP = "設計書の表示の形式";
+
+  async function choose(page: Page, label: string) {
+    await page
+      .getByRole("group", { name: GROUP })
+      .getByRole("button", { name: label })
+      .focus();
+    await page.keyboard.press("Enter");
+  }
+
+  test("draws the source of the design at first", async ({ page }) => {
+    await openScreen(page, PATH);
+
+    await expect(page.locator('bdo[dir="ltr"]').first()).toBeVisible();
+    await expect(page.locator("[data-preview]")).toHaveCount(0);
+  });
+
+  test("draws the preview of the design instead of the source", async ({
+    page,
+  }) => {
+    await openScreen(page, PATH);
+
+    await choose(page, "プレビュー");
+
+    await expect(page.locator("[data-preview]")).toBeVisible();
+    await expect(page.locator('bdo[dir="ltr"]')).toHaveCount(0);
+  });
+
+  test("draws the table of the design in the preview", async ({ page }) => {
+    await openScreen(page, PATH);
+
+    await choose(page, "プレビュー");
+
+    await expect(page.locator("[data-preview] table")).toBeVisible();
+  });
+
+  test("brings the source back and removes the preview", async ({ page }) => {
+    await openScreen(page, PATH);
+    await choose(page, "プレビュー");
+
+    await choose(page, "原文");
+
+    await expect(page.locator('bdo[dir="ltr"]').first()).toBeVisible();
+    await expect(page.locator("[data-preview]")).toHaveCount(0);
+  });
+
+  test("lets the approval through when the source is shown again", async ({
+    page,
+  }) => {
+    await openScreen(page, PATH);
+    await choose(page, "プレビュー");
+
+    await choose(page, "原文");
+
+    await expect(page.getByRole("button", { name: "承認する" })).toBeEnabled();
+  });
 });
 
 // 本文が切り詰められた承認では、切り詰めの確認とプレビューの確認が別のチェックである。

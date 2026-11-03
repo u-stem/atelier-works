@@ -199,6 +199,12 @@ export function DesignDocBody({ doc }: { doc: ApprovalDesignDoc }) {
   );
 }
 
+export function designPreviewGate(_input: { mode: string }): {
+  reason: string | null;
+} {
+  return { reason: null };
+}
+
 /** 承認する依頼が指す設計書を出す面。取得の状態ごとに、承認者へ伝える文を変える。 */
 function DocPanel({
   approvalRequestId,

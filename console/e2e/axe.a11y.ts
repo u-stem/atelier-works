@@ -79,6 +79,7 @@ const TEXT_MODE_PATHS: readonly string[] = [
 const PREVIEW_PATHS: readonly { path: string; group: string }[] = [
   { path: "?approval=1", group: "取り込み時点のIssueの表示の形式" },
   { path: "?approval=4", group: "提案の本文の表示の形式" },
+  { path: "?approval=3", group: "設計書の表示の形式" },
 ];
 
 /** 見出しを1つずつ開いて検査する、起動の図の経路。開いたときだけ描かれる要素を検査するため。 */
@@ -318,7 +319,8 @@ for (const theme of THEMES) {
   });
 
   // 承認画面のプレビューは、原文が既定の画面で選んだときだけ描かれる。本文がある状態(normal)だけで検査する。
-  // プレビューを選ぶと、原文の確認のチェックも出るので、それも検査に含まれる。
+  // 取り込み時点のIssueと提案は、プレビューを選ぶと原文の確認のチェックも出るので、それも検査に含まれる。
+  // 設計書の本文も、GFMのタスクリストと脚注を含む固定データで検査する。
   test.describe(`preview of an approval (${theme})`, () => {
     test.use({ theme, mode: "normal" });
     for (const { path, group } of PREVIEW_PATHS) {
