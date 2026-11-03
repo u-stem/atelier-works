@@ -62,7 +62,13 @@
         }
       ],
       "unwiredEntries": [],
-      "exits": []
+      "exits": [
+        {
+          "flow": "pr_fix",
+          "step": "dependabot_finish",
+          "via": "pr"
+        }
+      ]
     },
     {
       "name": "design",
@@ -205,6 +211,11 @@
           "flow": "pipeline",
           "step": "implement_finish",
           "via": "rework"
+        },
+        {
+          "flow": "pr_review",
+          "step": "implement_finish",
+          "via": "pr"
         }
       ]
     },
@@ -390,6 +401,16 @@
           "kind": "script",
           "name": "auto_retry_stale_image",
           "caller": "self_update"
+        },
+        {
+          "kind": "flow",
+          "flow": "dependabot",
+          "via": "pr"
+        },
+        {
+          "kind": "flow",
+          "flow": "pr_review",
+          "via": "pr"
         }
       ],
       "unwiredEntries": [],
@@ -403,6 +424,11 @@
           "flow": "pipeline",
           "step": "pr_fix_finish",
           "via": "rework"
+        },
+        {
+          "flow": "pr_review",
+          "step": "pr_fix_finish",
+          "via": "pr_return"
         }
       ]
     },
@@ -445,12 +471,28 @@
         },
         {
           "kind": "flow",
+          "flow": "implement",
+          "via": "pr"
+        },
+        {
+          "kind": "flow",
+          "flow": "pr_fix",
+          "via": "pr_return"
+        },
+        {
+          "kind": "flow",
           "flow": "pr_review_intake",
           "via": "launch"
         }
       ],
       "unwiredEntries": [],
-      "exits": []
+      "exits": [
+        {
+          "flow": "pr_fix",
+          "step": "pr_review_post",
+          "via": "pr"
+        }
+      ]
     },
     {
       "name": "pr_review_intake",

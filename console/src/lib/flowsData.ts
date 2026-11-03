@@ -18,6 +18,8 @@ export type FlowStep = {
 /**
  * 出口がflowを起動する経路。承認を介するときは、承認と却下を分ける。
  * 差し戻し(rework)は、要件定義か設計の不足を見つけたときだけ、前のflowへ戻す起動である。
+ * `pr`と`pr_return`は、コードがflowを起動するのではなく、PRを介して続く関係である。
+ * 別の定期ジョブがPRのラベルやCIの結果を見て起動する。`pr_return`は、CIの修正の後にレビューへ戻るものに限る。
  */
 export type ExitVia =
   | "launch"
@@ -88,7 +90,9 @@ function isVia(value: unknown): value is ExitVia {
     value === "launch" ||
     value === "approve" ||
     value === "reject" ||
-    value === "rework"
+    value === "rework" ||
+    value === "pr" ||
+    value === "pr_return"
   );
 }
 
