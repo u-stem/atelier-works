@@ -487,6 +487,63 @@ describe("analyzeTranscript: the unexpected tool_use", () => {
     expect(analysis.unexpected).toEqual([{ tool: "other", pathLength: 0 }]);
   });
 
+  test.each([
+    "Bash",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "Agent",
+    "TodoWrite",
+    "KillShell",
+    "BashOutput",
+    "ExitPlanMode",
+    "SlashCommand",
+    "Skill",
+    "mcp__server__tool",
+  ])("flags the built-in or mcp tool %s as unexpected", (name) => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", name, { command: "x" })],
+      CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([{ tool: "other", pathLength: 0 }]);
+  });
+
+  test("does not record a built-in tool as the output tool", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "Bash", { command: "x" })],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual([]);
+  });
+
+  test.each([
+    ["Grep", { pattern: "x", path: "~" }],
+    ["Glob", { pattern: "*", path: "~/.claude" }],
+    ["Glob", { pattern: "~/.ssh/*" }],
+    ["Glob", { pattern: "{/etc,/root}/*" }],
+    ["Glob", { pattern: "{a,~/.ssh}/*" }],
+    ["Glob", { pattern: "src/{a,/etc}/*" }],
+    ["Glob", { pattern: "{../x,a}/*" }],
+  ])("flags the %s input %p that can reach outside", (name, input) => {
+    const analysis = analyzeTranscript([useLine("t1", name, input)], CONTEXT);
+    expect(analysis.unexpected).toHaveLength(1);
+  });
+
+  test.each([
+    ["Glob", { pattern: "**/*.ts" }],
+    ["Glob", { pattern: "{a,b}/*.ts" }],
+    ["Glob", { pattern: "src/{a,b}.ts" }],
+    ["Grep", { pattern: "x", path: "src" }],
+    ["Grep", { pattern: "x", path: "./src" }],
+  ])("allows the relative %s input %p", (name, input) => {
+    const analysis = analyzeTranscript([useLine("t1", name, input)], CONTEXT);
+    expect(analysis.unexpected).toEqual([]);
+  });
+
   test("does not stop for the name of the output tool", () => {
     const analysis = analyzeTranscript(
       [useLine("t1", "StructuredOutput", { attempted: true })],

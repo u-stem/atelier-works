@@ -27,6 +27,7 @@ import {
   type ProbeDeps,
   runIsolationProbe,
 } from "../../f/factory/investigate_isolation_probe.ts";
+import { mainRepoDir } from "../../f/factory/lib/cleanup_support.ts";
 import type {
   IsolationProbeClaudeOptions,
   IsolationProbeRunResult,
@@ -851,6 +852,22 @@ describe("investigate_isolation_probe", () => {
         }),
       );
       expect(result.observations.stoppedBy).toBe("workspace_unavailable");
+    });
+
+    test("looks for the clone at the same directory as the cleanup", async () => {
+      const seen: string[] = [];
+      await runIsolationProbe(
+        makeDeps({
+          workspace: {
+            ...makeDeps().workspace,
+            repoExists: async (dir) => {
+              seen.push(dir);
+              return true;
+            },
+          },
+        }),
+      );
+      expect(seen).toEqual([mainRepoDir("example-owner", "example-repo")]);
     });
 
     test("does not start claude when the clone does not exist", async () => {
