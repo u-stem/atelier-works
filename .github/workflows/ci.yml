@@ -71,12 +71,13 @@ jobs:
         run: bun ./scripts/ci-scope.ts
 
   check:
-    # 常に動かす。lint、型検査、テスト、秘密情報の走査は、どの変更にも要る。
-    # `scope`が失敗しても動かす。workerイメージに関わるステップだけを、`scope`の判定で絞る。
+    # 常に動かす。lint、型検査、テスト、カバレッジ、Consoleの検査、秘密情報の走査は、どの変更にも要る。
+    # 文書の検査は`check-docs`、workerイメージの検査は`check-worker`が実行する。
+    # `scope`が失敗しても動かす。
     needs: scope
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # 通常は6〜9分で終わる。テストが戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
+    # 通常は3分前後で終わる。テストが戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
     # 時間切れの結論は`cancelled`か`timed_out`になりうるが、どちらもPRのチェックを緑にしない。
     timeout-minutes: 20
     steps:
@@ -92,14 +93,29 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
-        # `mise run check`はConsoleの検査(console:check)も含むので、Consoleの依存も入れる。
+        # `mise run console:check`が使うので、Consoleの依存も入れる。
         # ルートとConsoleのどちらも、依存のinstall scriptは実行しない。
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun install --cwd console --frozen-lockfile --ignore-scripts
 
-      - name: Lint, typecheck, and test
-        run: mise run check
+      # `mise run check`の検査を、文書の検査(`check-docs`が実行する)を除いて、ステップに分けて実行する。
+      # 先のステップが落ちると後続は止まるので、失敗したステップの名前が、落ちた検査を表す。
+      # どのステップにも`if`と`continue-on-error`を付けない。付けると、検査が気づかないうちに外れる。
+      - name: Lint
+        run: mise run lint
+
+      - name: Typecheck
+        run: mise run typecheck
+
+      - name: Test
+        run: mise run test
+
+      - name: Check coverage
+        run: bun ./scripts/check-coverage.ts
+
+      - name: Check console
+        run: mise run console:check
 
       - name: Determine gitleaks scan range
         # 走査範囲を、PRではbaseの先頭からの変更、`main`へのpushでは直前の先頭からの変更に絞る
@@ -137,53 +153,14 @@ jobs:
             mise exec -- gitleaks detect --redact --no-banner --source .
           fi
 
-      - name: Build worker image
-        if: needs.scope.outputs.worker != 'false'
-        # `.env`は無く、workerのビルド入力は`mise.toml`の`[env]`にある。
-        # `mise exec -c '...'`は`[env]`を適用したシェルでコマンドを実行するので、
-        # `$WM_VERSION`などはこのステップのシェル(値を持たない)ではなく、
-        # miseのサブシェルで展開される。
-        # ビルド引数は`infra/docker-compose.yml`がworkerイメージに渡すものと同じ。
-        # 次のステップで使うので、タグを付ける。
-        run: |
-          mise exec -c '
-            docker build infra/worker \
-              --tag factory-worker-ci \
-              --build-arg WM_VERSION=$WM_VERSION \
-              --build-arg CLAUDE_VERSION=$CLAUDE_VERSION \
-              --build-arg GH_VERSION=$GH_VERSION \
-              --build-arg GITLEAKS_VERSION=$GITLEAKS_VERSION \
-              --build-arg GTR_REF=$GTR_REF \
-              --build-arg GTR_COMMIT=$GTR_COMMIT \
-              --build-arg WMILL_VERSION=$WMILL_VERSION \
-              --build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID \
-              --build-arg FACTORY_CHECK_POOL_SIZE=$FACTORY_CHECK_POOL_SIZE
-          '
-
-      - name: Test the process lock in the worker image
-        if: needs.scope.outputs.worker != 'false'
-        # /procを全件走査するプロセスロックのテストは、rootでないと`mise run check`では飛ばされる。
-        # workerと同じ条件で走らせる。同じイメージを使い、自分のPID名前空間の中でrootとして動かす。
-        # `--init`はworkerの`init: true`に合わせる。PID 1のtiniが、止めた保持者の孤児を回収するため。
-        # bunがPID 1だと孤児がゾンビのまま残り、保持者を止める処理がその終了を待ち続ける。
-        # このテストファイルは外部パッケージを使わないので、`node_modules`は要らない。
-        run: docker run --rm --init --entrypoint bun -v "$PWD:/src" -w /src factory-worker-ci test tests/lib/process_lock.test.ts
-
-      - name: Test the check sandbox in the worker image
-        if: needs.scope.outputs.worker != 'false'
-        # 検査コマンドの境界(別のuidへの切り替え、秘密に届かないこと、書き込める場所、
-        # 所有権の受け渡し、残ったプロセスの後始末)を、本物のsetpriv・flock・chown・/procで確かめる。
-        # workerと同じ制限のコンテナを使い捨てで起動する。`/tmp/windmill`の権限を書き換えるテストなので、
-        # このスクリプトの使い捨てのコンテナの中でだけ走らせる。
-        run: scripts/verify-check-sandbox.sh factory-worker-ci
-
   check-docs:
-    # 文書の検査(`mise run lint:docs`)を、`check`と並列に動かす。`check`も同じ検査を実行する。
+    # 文書の検査(`mise run lint:docs`)を、`check`と並列に動かす。
+    # `docs:gen --check`は`lint:docs`の中にあるので、生成ブロックの照合もここが担う。
     # `scope`が失敗しても動かす。
     needs: scope
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # 通常は3〜4分で終わる。検査が戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
+    # 通常は5分前後で終わる。検査が戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -204,7 +181,6 @@ jobs:
 
   check-worker:
     # workerイメージのビルドと、イメージの中で動かす2つの検査を、`check`と並列に動かす。
-    # `check`も同じ検査を実行する。
     # `scope`が失敗すると出力が空になり、`!= 'false'`が真になるので、検査は動く。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.worker != 'false' }}
@@ -221,7 +197,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
-        # `tests/lib/process_lock.test.ts`と検査用のscriptを、`check`と同じ依存の状態で動かす。
+        # `tests/lib/process_lock.test.ts`と検査用のscriptを動かすため、ルートの依存を、`check`と同じ固定のlockfileから入れる。
         # 依存のinstall scriptは実行しない。
         run: bun install --frozen-lockfile --ignore-scripts
 
@@ -263,8 +239,8 @@ jobs:
         run: scripts/verify-check-sandbox.sh factory-worker-ci
 
   test-db:
-    # `check`ジョブ(とworkerイメージのビルド)から独立させる。
-    # Postgresの起動が遅い・不安定なときに、イメージのビルドと互いに待たせないため。
+    # `check`ジョブと`check-worker`ジョブから独立させる。
+    # Postgresの起動が遅い・不安定なときに、互いに待たせないため。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.db != 'false' }}
     runs-on: ubuntu-latest
@@ -431,7 +407,7 @@ jobs:
     # Consoleを組み立てられることを、PRで確かめる。配布物は上げない。
     # 配布物を上げるのは`console-dist.yml`だけである。
     # 手順は`console-dist.yml`と同じ(一致はテストが確かめる)ので、draw.ioのビューアの取得も組み立てと同じに確かめる。
-    # 型検査、lint、テストは`check`ジョブの`mise run check`(console:check)が担う。
+    # 型検査、lint、テストは`check`ジョブの`Check console`ステップ(`mise run console:check`)が担う。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.console != 'false' }}
     runs-on: ubuntu-latest

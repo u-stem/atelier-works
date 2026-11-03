@@ -5142,7 +5142,7 @@ workerと同じ制限の使い捨てのコンテナで、実際のsetpriv、floc
 保護パスを変更したら、修正を止める。保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`package.json`のscripts、新しい`*.sh`などである。
 CIのワークフローとcomposite action(`.github/workflows/`と`.github/actions/`)も含む。
 これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
-markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
+markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`check-docs`ジョブの`mise run lint:docs`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を書き換えるPRを作る側も止める。
@@ -5247,7 +5247,7 @@ Factoryが扱う他のリポジトリのサブディレクトリの`wmill.yaml`�
 `bunfig.toml`の`preload`が全テストの前に読み込むファイルで、書き換えられるとテストの前にコードが走る。
 保護したテストは、どれも保護していないコードと同じ実行の中で走る。
 契約テストと`tests/lib/drawio_frame_isolation.test.ts`は、その例である。
-`mise run check`が走らせる検査のうち、保護していないものがある。
+CIの`check`ジョブと`check-docs`ジョブが走らせる検査のうち、保護していないものがある。
 例は、`scripts/lint-*.ts`、`lint-docs.ts`、ほかのテスト、`tsconfig.json`、`biome.json`、`wmill lint f`の設定である。
 このツリーに`mise-tasks/`は無いが、置かれればmiseが読むので、同じ経路になる。
 保護していないコードの変更で、これらの検査を無効にしたまま、CIを緑にできる。

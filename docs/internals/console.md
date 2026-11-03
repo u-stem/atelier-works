@@ -4085,7 +4085,7 @@ flowをまたぐ起動は、定期ジョブを起点にした[起動の図](#起
 ### データ
 
 `mise run docs:gen`が`console/src/generated/flows.json`を作る。
-`scripts/docs-gen.ts --check`が古さを検出するので、CIの`check`が、データを更新し忘れたPRを止める。
+`scripts/docs-gen.ts --check`が古さを検出するので、CIの`check-docs`が、データを更新し忘れたPRを止める。
 元は次の3つである。
 
 | 元 | 取るもの |
@@ -4546,7 +4546,7 @@ composite action(`.github/actions/`)は書けるので、分けると配布物�
 2つの手順が食い違わないことは、テストが確かめる。
 成果物は上げない。
 `scope`ジョブの`console`のフラグが偽のとき、このジョブを飛ばす。
-型検査、lint、テストは`check`ジョブの`mise run check`(`console:check`)が担い、どちらのワークフローも重ねて実行しない。
+型検査、lint、テストは`check`ジョブの`Check console`ステップ(`console:check`)が担い、どちらのワークフローも重ねて実行しない。
 判定の詳細は[セットアップ](../setup.md)の「CIの実行の範囲」にある。
 
 - miseで入れるツールは、bunと、viteとtscを動かすnodeだけにする。ほかの`[tools]`とそのinstall scriptを動かさない。
