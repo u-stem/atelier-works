@@ -169,7 +169,80 @@ export type PrRelationEdge = {
   readonly evidence: readonly Evidence[];
 };
 
-export const PR_RELATION_EDGES: readonly PrRelationEdge[] = [];
+/**
+ * PRを介した関係の表。`LAUNCH_EDGES`には混ぜない(コードがflowを起動する辺ではないため)。
+ * `evidence`は、ソースのコード(コメントを除く)にちょうど1か所で現れる式で、契約テストが照合する。
+ * 照合が落ちたら、表か文字列を直す。
+ */
+export const PR_RELATION_EDGES: readonly PrRelationEdge[] = [
+  {
+    from: "steps/implement_finish",
+    to: "pr_review",
+    direction: "forward",
+    trigger:
+      "implement_finish labels the PR for review and poll_prs starts pr_review",
+    evidence: [
+      { file: "steps/implement_finish.ts", includes: "[config.review_label]" },
+      {
+        file: "lib/poll_support.ts",
+        includes: '{ kind: "trigger_review", reason: "label"',
+      },
+    ],
+  },
+  {
+    from: "steps/pr_review_post",
+    to: "pr_fix",
+    direction: "forward",
+    trigger:
+      "pr_review_post records the review, then a person labels the PR or the CI watch starts pr_fix",
+    evidence: [
+      {
+        file: "steps/pr_review_post.ts",
+        includes: "await insertReview(record);",
+      },
+      { file: "lib/pr_ci_fix_claim.ts", includes: 'hold("not_reviewed")' },
+      {
+        file: "lib/poll_support.ts",
+        includes: '{ kind: "trigger_fix", removeLabel: true }',
+      },
+    ],
+  },
+  {
+    from: "steps/dependabot_finish",
+    to: "pr_fix",
+    direction: "forward",
+    trigger:
+      "dependabot_finish asks a person to label the PR, and poll_prs starts pr_fix",
+    evidence: [
+      {
+        file: "steps/dependabot_finish.ts",
+        includes: "fixByHumanNextAction(run.fixLabel)",
+      },
+      {
+        file: "lib/poll_support.ts",
+        includes: '{ kind: "trigger_fix", removeLabel: true }',
+      },
+    ],
+  },
+  {
+    from: "steps/pr_fix_finish",
+    to: "pr_review",
+    direction: "return",
+    trigger:
+      "after a CI fix pr_fix_finish leaves the head unrecorded, and poll_prs sees the new head and starts pr_review",
+    evidence: [
+      {
+        file: "steps/pr_fix_finish.ts",
+        includes: "await runPostPushBookkeeping(ciRound, {",
+      },
+      { file: "lib/ci_fix_round.ts", includes: "if (ciRound) return;" },
+      {
+        file: "lib/poll_support.ts",
+        includes: "candidate.lastKnownHeadSha !== candidate.headSha",
+      },
+    ],
+  },
+];
 
 /**
  * flowを起動するscriptを、別のscriptが呼ぶ関係(呼ばれるscript → 呼ぶscript)。
