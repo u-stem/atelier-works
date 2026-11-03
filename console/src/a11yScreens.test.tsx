@@ -605,6 +605,40 @@ describe("a11y: the intake screens keep the focus while a submit is in progress"
     ]);
   });
 
+  /** aria-disabledの`button`の開始タグ。 */
+  const disabledButtonTags = (html: string) =>
+    startTagsOf(html, "button").filter((tag) =>
+      tag.includes('aria-disabled="true"'),
+    );
+
+  test("shows the not-allowed cursor on every aria-disabled button of the new item screen", async () => {
+    intakeSessions.begin(KEY, INTAKE_FORM);
+    intakeSessions.record(KEY, {
+      kind: "unknown",
+      message: UNKNOWN_MESSAGE,
+      resendConfirmed: false,
+    });
+    writeLocks.tryAcquire(KEY);
+
+    const tags = disabledButtonTags(await renderChild("items/new", "normal"));
+
+    expect(
+      tags.map((tag) => tag.includes("aria-disabled:cursor-not-allowed")),
+    ).toEqual([true, true, true]);
+  });
+
+  test("shows the not-allowed cursor on the aria-disabled button of the PR review screen", async () => {
+    writeLocks.tryAcquire(PR_REVIEW_WRITE_KEY);
+
+    const tags = disabledButtonTags(
+      await renderChild("items/new-pr-review", "normal"),
+    );
+
+    expect(
+      tags.map((tag) => tag.includes("aria-disabled:cursor-not-allowed")),
+    ).toEqual([true]);
+  });
+
   test("marks every profile radio of the new item screen aria-disabled", async () => {
     const tags = startTagsOf(await drawSending(), "input").filter((tag) =>
       tag.includes('type="radio"'),
