@@ -162,9 +162,9 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
   },
   // ワークフローの定義。どのジョブの動作も変わりうる。
   { matches: under(".github/workflows/"), flags: FLAGS },
-  // Issueのテンプレートは文書の検査(checkとcheck-docs)だけが読む。
+  // Issueのテンプレートは文書の検査(check-docs)だけが読む。
   { matches: under(".github/ISSUE_TEMPLATE/"), flags: [] },
-  // PRのテンプレートは文書の検査(checkとcheck-docs)だけが読む。
+  // PRのテンプレートは文書の検査(check-docs)だけが読む。
   { matches: exact(".github/PULL_REQUEST_TEMPLATE.md"), flags: [] },
   // 上以外の.github/(actionsなど)は、ワークフローが使いうるので全ジョブを動かす。
   { matches: under(".github/"), flags: FLAGS },
@@ -172,7 +172,7 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
   { matches: exact("infra/Caddyfile"), flags: ["caddy"] },
   // console_fetcherのイメージを組み立てるのはfetcherジョブだけ。
   { matches: under("infra/console_fetcher/"), flags: ["fetcher"] },
-  // workerのイメージを組み立てるのは、checkの中のworkerのステップとcheck-workerジョブだけ。
+  // workerのイメージを組み立てるのは、check-workerジョブだけ。
   { matches: under("infra/worker/"), flags: ["worker"] },
   // docker-compose*.ymlと他のinfra/は、複数のジョブが読む(imageの取得、Postgres、Windmillの起動)。
   { matches: under("infra/"), flags: FLAGS },
@@ -246,7 +246,7 @@ const ADDITIVE_RULES: readonly Rule[] = [
 // 個別の規則と加算の規則に当たらなかったときだけ見る。ここに無いパスは、全ジョブを動かす。
 // 迷うパスは入れない。入れ忘れは余分な実行で済むが、入れすぎは検査の見逃しになるため。
 const NO_JOB_RULES: readonly Rule[] = [
-  // 文書。lint:docsはcheckとcheck-docsが、docs:gen --checkはcheckが担う。
+  // 文書。lint:docsとdocs:gen --checkは、check-docsが担う。
   { matches: under("docs/"), flags: [] },
   // ルートやその他の場所のMarkdown。
   { matches: (path) => path.endsWith(".md"), flags: [] },
@@ -261,7 +261,7 @@ const NO_JOB_RULES: readonly Rule[] = [
     matches: exact("rt.d.ts", "c_factory_config.resource-type.yaml"),
     flags: [],
   },
-  // lintとフックと走査の設定。読むのはcheckのステップだけ(.textlintrc.jsonと.markdownlint-cli2.jsoncはcheck-docsも読む)。
+  // lintとフックと走査の設定。読むのはcheckとcheck-docsのステップだけ(.textlintrc.jsonと.markdownlint-cli2.jsoncはcheck-docsだけが読む)。
   {
     matches: exact(
       "biome.json",

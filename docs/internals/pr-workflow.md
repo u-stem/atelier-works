@@ -1574,7 +1574,7 @@ sandboxを外したり、別のページをiframeに読ませたりしても、�
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。
-どちらもpre-commitの文書の検査と`mise run check`が読むので、書き換えられると、人の手元とCIでコードを実行される。
+どちらもpre-commitの文書の検査と`mise run lint:docs`が読むので、書き換えられると、人の手元とCIでコードを実行される。
 
 ### 変更パスの取得
 

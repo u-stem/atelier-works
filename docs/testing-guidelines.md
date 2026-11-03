@@ -81,7 +81,7 @@ bunのlcovに分岐の記録が無く、差分の行を切り出す検査も持�
 
 `mise run test`は、`coverage/lcov.info`を作る。
 `mise run check`は、`test`の後に`bun ./scripts/check-coverage.ts`で全体の行カバレッジの下限を確かめる。
-CIは`mise run check`を呼ぶので、ローカルとCIは同じ検査を通る。
+CIの`check`ジョブも、`test`の後に同じ検査をステップとして呼ぶので、ローカルとCIは同じ検査を通る。
 測った値はOS(macOSとubuntu)で変わりうる。
 OSやrootの有無で、動くテストが分かれるためである。
 

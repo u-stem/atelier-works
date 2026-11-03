@@ -178,7 +178,7 @@ mise run instance:tags
 | pre-push | pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があるときだけ、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
 
 pre-pushは、全体の`mise run check`を実行しない。
-同じ検査をCIの`check`ジョブが行い、管理者の迂回を使わない限り、`main`の必須チェックとしてマージの前に止めるためである。
+CIの`check`ジョブと`check-docs`ジョブが同じ検査を動かし、管理者の迂回を使わない限り、`main`の必須チェックとしてマージの前に止めるためである。
 必須チェックと迂回は[セキュリティ](security.md#mainの保護とリポジトリの公開)に書く。
 クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)に従い、pushの前に`mise run check`を実行する。
 
@@ -298,10 +298,11 @@ Consoleの配布物は`ci.yml`ではなく、`console-dist.yml`が`main`へのpu
 飛ばしたジョブは課金されない。
 関係しないジョブを飛ばすと、GitHub Actionsの無料枠の消費が減る。
 `check`ジョブと`check-docs`ジョブは常に動かす。
+`check`ジョブは、lint、型検査、テスト、カバレッジの下限、Consoleの検査、秘密情報の走査を、ステップに分けて動かす。
+`check-docs`ジョブは、文書の検査(`mise run lint:docs`)を動かす。
 `check-worker`ジョブは、workerイメージをビルドし、イメージの中で2つの検査を動かす。`worker`が偽のときは飛ばす。
-`check`ジョブの中のworkerのステップも、`worker`が偽のときに飛ばす。
-`check`ジョブも、`check-docs`と`check-worker`と同じ検査を動かす。
 3つのジョブは並列に動き、どれも必須チェックである。
+検査のステップには、`if`と`continue-on-error`を付けない。付けると、検査が気づかないうちに外れるためである。
 
 変更したパスは、次の順に規則を当てて、動かすジョブを決める。
 
@@ -332,11 +333,11 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | --- | --- |
 | `infra/Caddyfile` | `caddyfile` |
 | `infra/console_fetcher/` | `console-fetcher-image` |
-| `infra/worker/` | `check`の中のworkerのステップと`check-worker` |
+| `infra/worker/` | `check-worker` |
 | `migrations/`、`scripts/test-db`で始まるファイル | `test-db` |
 | `test:db`が読み込む`f/factory/`の下のファイル | `test-db`と`metadata` |
-| `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップと`check-worker` |
-| `f/factory/lib/check_sandbox`と`f/factory/lib/check_runner`で始まるファイル、`tests/lib/check_sandbox_integration`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップと`check-worker` |
+| `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check-worker` |
+| `f/factory/lib/check_sandbox`と`f/factory/lib/check_runner`で始まるファイル、`tests/lib/check_sandbox_integration`で始まるファイル、そのテストが読み込むファイル | `check-worker` |
 | `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
 | `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh`、`scripts/ci-metadata-wait-worker.sh` | `metadata` |
 | `console/`、`scripts/check-console-lockfile.ts`、`scripts/console-branch-server.ts` | `console`と`console-a11y` |
@@ -350,12 +351,12 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | `tests/` | テストは`check`だけが実行する(プロセスロックとCIの判定のテストは、上の規則が先に当たる) |
 | `.claude/`、`.agents/`、`templates/` | CIのジョブは読まない |
 | `rt.d.ts`、ルートの`c_factory_config.resource-type.yaml` | `wmill.yaml`の同期の対象(`f/**`)の外で、メタデータの入力ではない |
-| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む(`.textlintrc.json`と`.markdownlint`で始まるファイルは`check-docs`も読む) |
+| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む(`.textlintrc.json`と`.markdownlint`で始まるファイルは`check-docs`だけが読む) |
 | `scripts/`の下の`.ts`ファイル | 上の規則に当たらないものは、`check`のテストが担う |
-| IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | `check`の文書の検査とテストが担う |
+| IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | `check-docs`の文書の検査と`check`のテストが担う |
 
 `console`ジョブは、型検査、lint、テストをしない。
-`check`ジョブの`mise run check`がConsoleの検査(`console:check`)を含むためである。
+`check`ジョブの`Check console`ステップがConsoleの検査(`console:check`)を動かすためである。
 `console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの書き出しだけをする。
 成果物は上げない。
 
@@ -419,7 +420,7 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 
 `mise run test`は、全体のカバレッジを`coverage/lcov.info`に出す。
 `bun ./scripts/check-coverage.ts`は、そのlcovから行カバレッジを求め、下限を割っていれば終了コード1で止まる。
-`mise run check`は、`test`の後にこの検査を呼ぶので、ローカルでもCIでも同じ検査が走る。
+`mise run check`は、`test`の後にこの検査を呼ぶ。CIの`check`ジョブも、`test`の後に同じ検査をステップとして呼ぶので、ローカルでもCIでも同じ検査が走る。
 測った値はOS(macOSとubuntu)で変わりうる。
 OSやrootの有無で、動くテストが分かれるためである。
 下限の置き方は[テストの基準](testing-guidelines.md#下限の置き方)にある。

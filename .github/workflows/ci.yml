@@ -101,7 +101,7 @@ jobs:
 
       # `mise run check`の検査を、文書の検査(`check-docs`が実行する)を除いて、ステップに分けて実行する。
       # 先のステップが落ちると後続は止まるので、失敗したステップの名前が、落ちた検査を表す。
-      # どのステップにも`if`と`continue-on-error`を付けない。付けると、検査が黙って外れる。
+      # どのステップにも`if`と`continue-on-error`を付けない。付けると、検査が気づかないうちに外れる。
       - name: Lint
         run: mise run lint
 
