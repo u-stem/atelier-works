@@ -39,6 +39,8 @@ const SAFE_TEXT_USERS = [
   "console/src/screens/jobs/JobDetailScreen.tsx",
   "console/src/screens/jobs/JobHistory.tsx",
   "console/src/screens/jobs/JobRows.tsx",
+  "console/src/screens/jobs/OriginDiagram.tsx",
+  "console/src/screens/jobs/OriginScreen.tsx",
   "console/src/screens/jobs/ScheduleList.tsx",
   "console/src/screens/items/detail/ItemFlowProgress.tsx",
   "console/src/screens/system/ConfigSection.tsx",
@@ -187,6 +189,15 @@ describe("the renderers of the job screens", () => {
     ]);
   });
 
+  test("include the diagram and the screen of an origin", () => {
+    expect(
+      RENDERERS.filter((file) => /\/Origin(Diagram|Screen)\.tsx$/.test(file)),
+    ).toEqual([
+      "console/src/screens/jobs/OriginDiagram.tsx",
+      "console/src/screens/jobs/OriginScreen.tsx",
+    ]);
+  });
+
   test("include the flow progress of a work item", () => {
     expect(RENDERERS).toContain(
       "console/src/screens/items/detail/ItemFlowProgress.tsx",
@@ -231,6 +242,8 @@ describe("the sanitizing part", () => {
   test.each([
     "console/src/screens/jobs/FlowDiagram.tsx",
     "console/src/screens/jobs/FlowScreen.tsx",
+    "console/src/screens/jobs/OriginDiagram.tsx",
+    "console/src/screens/jobs/OriginScreen.tsx",
     "console/src/screens/items/detail/ItemFlowProgress.tsx",
   ])("is checked for the flow view part %s", (file) => {
     expect(SAFE_TEXT_USERS).toContain(file);
