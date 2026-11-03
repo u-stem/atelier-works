@@ -27,6 +27,7 @@ const INDEX_ROW: SqlRow = {
   status: "awaiting_approval",
   latest_attempt: 2,
   updated_at: new Date("2026-10-08T00:00:00Z"),
+  has_design: false,
 };
 
 const VALID_DIAGRAM_XML =

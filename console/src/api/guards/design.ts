@@ -3,6 +3,16 @@
 // 形がずれたときは`invalid_response`になるので、backendの型を変えたら
 // `tests/scripts/console_design_doc_contract.test.ts`が落ちる。
 
+import {
+  isArrayOf,
+  isIsoTimestamp,
+  isNullableInteger,
+  isNullableString,
+  isPositiveInteger,
+  isRecord,
+  isString,
+} from "./primitives.ts";
+
 /** ディスクから読み戻した、安全の検査を通った設計の図。 */
 export type DesignDiagram = {
   readonly name: string;
@@ -17,6 +27,8 @@ export type DesignDiagram = {
 export type DesignDoc = {
   readonly id: number;
   readonly work_item_id: number;
+  /** 設計書の元にした、承認済みの要件定義の下書きの`id`。 */
+  readonly requirement_draft_id: number;
   readonly owner: string;
   readonly repo: string;
   readonly requirement_attempt: number;
@@ -32,9 +44,35 @@ export type DesignDoc = {
   readonly approval_status: string | null;
 };
 
+function isDesignDiagram(value: unknown): value is DesignDiagram {
+  return isRecord(value) && isString(value.name) && isString(value.xml);
+}
+
+const isDiagrams = isArrayOf(isDesignDiagram);
+const isStrings = isArrayOf(isString);
+
+function isDesignDoc(value: unknown): value is DesignDoc {
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.id) &&
+    isPositiveInteger(value.work_item_id) &&
+    isPositiveInteger(value.requirement_draft_id) &&
+    isString(value.owner) &&
+    isString(value.repo) &&
+    isPositiveInteger(value.requirement_attempt) &&
+    isPositiveInteger(value.design_attempt) &&
+    isString(value.summary) &&
+    isString(value.markdown) &&
+    isDiagrams(value.diagrams) &&
+    isStrings(value.rejected_diagrams) &&
+    isStrings(value.open_questions) &&
+    isIsoTimestamp(value.created_at) &&
+    isNullableInteger(value.approval_request_id) &&
+    isNullableString(value.approval_status)
+  );
+}
+
 /** 0件か1件の行。作業項目か設計書が無いときは0件になる。 */
-export function isDesignDocRows(
-  _value: unknown,
-): _value is readonly DesignDoc[] {
-  return false;
+export function isDesignDocRows(value: unknown): value is readonly DesignDoc[] {
+  return Array.isArray(value) && value.length <= 1 && value.every(isDesignDoc);
 }

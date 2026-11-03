@@ -4,6 +4,7 @@ import { isDesignDocRows } from "./design.ts";
 const DOC_ROW = {
   id: 21,
   work_item_id: 7,
+  requirement_draft_id: 11,
   owner: "o",
   repo: "r",
   requirement_attempt: 2,

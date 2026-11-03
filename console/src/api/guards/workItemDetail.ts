@@ -109,6 +109,35 @@ function isWorkItemAttempt(value: unknown): value is WorkItemAttempt {
 }
 
 /**
+ * 設計書の試行1回分。本文と図は持たない。
+ * 設計の試行の番号は、要件定義へ戻ると重なるので、行は`id`で見分ける。
+ */
+export type WorkItemDesignAttempt = {
+  readonly id: number;
+  readonly requirement_attempt: number;
+  readonly design_attempt: number;
+  readonly summary: string;
+  readonly created_at: string;
+  readonly approval_request_id: number | null;
+  readonly approval_status: string | null;
+};
+
+function isWorkItemDesignAttempt(
+  value: unknown,
+): value is WorkItemDesignAttempt {
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.id) &&
+    isPositiveInteger(value.requirement_attempt) &&
+    isPositiveInteger(value.design_attempt) &&
+    isString(value.summary) &&
+    isIsoTimestamp(value.created_at) &&
+    isNullableInteger(value.approval_request_id) &&
+    isNullableString(value.approval_status)
+  );
+}
+
+/**
  * 承認依頼1件の履歴。`reason`は却下の理由、`decided_by`は決めた人、
  * `draft_attempt`は要件定義の承認依頼が指す試行である。
  */
@@ -123,6 +152,13 @@ export type WorkItemApproval = {
   readonly reason: string | null;
   readonly draft_attempt: number | null;
   readonly proposal_title: string | null;
+  /**
+   * 設計の承認依頼が指す設計書の、元の要件定義の試行。
+   * この項目を返す前のbackendの応答では欠け、記録なしとして扱う。
+   */
+  readonly design_requirement_attempt?: number | null;
+  /** 設計の承認依頼が指す設計書の、設計の試行。欠けたときの扱いは上と同じ。 */
+  readonly design_attempt?: number | null;
 };
 
 function isWorkItemApproval(value: unknown): value is WorkItemApproval {
@@ -137,7 +173,11 @@ function isWorkItemApproval(value: unknown): value is WorkItemApproval {
     isNullableString(value.decided_by) &&
     isNullableString(value.reason) &&
     isNullableInteger(value.draft_attempt) &&
-    isNullableString(value.proposal_title)
+    isNullableString(value.proposal_title) &&
+    (value.design_requirement_attempt === undefined ||
+      isNullableInteger(value.design_requirement_attempt)) &&
+    (value.design_attempt === undefined ||
+      isNullableInteger(value.design_attempt))
   );
 }
 
@@ -252,6 +292,11 @@ export type WorkItemDetail = {
   readonly transitions: WorkItemTransition[];
   readonly reviews: WorkItemReview[];
   readonly fix_rounds: WorkItemFixRound[];
+  /**
+   * 設計書の試行。新しい行が先。この項目を返す前のbackendの応答では欠け、設計書が無いものとして扱う。
+   * 配信と反映の順序が入れ替わっても、詳細の画面を壊さないためである。
+   */
+  readonly design_attempts?: WorkItemDesignAttempt[];
 };
 
 const isAttemptList = isArrayOf(isWorkItemAttempt);
@@ -259,6 +304,7 @@ const isApprovalList = isArrayOf(isWorkItemApproval);
 const isRoundList = isArrayOf(isWorkItemRound);
 const isReviewList = isArrayOf(isWorkItemReview);
 const isFixRoundList = isArrayOf(isWorkItemFixRound);
+const isDesignAttemptList = isArrayOf(isWorkItemDesignAttempt);
 
 export function isWorkItemDetail(value: unknown): value is WorkItemDetail {
   return (
@@ -270,6 +316,8 @@ export function isWorkItemDetail(value: unknown): value is WorkItemDetail {
     isWorkItemFailureList(value.failures) &&
     isWorkItemTransitionList(value.transitions) &&
     isReviewList(value.reviews) &&
-    isFixRoundList(value.fix_rounds)
+    isFixRoundList(value.fix_rounds) &&
+    (value.design_attempts === undefined ||
+      isDesignAttemptList(value.design_attempts))
   );
 }

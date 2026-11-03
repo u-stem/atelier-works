@@ -16,6 +16,7 @@ const DOC_DIR = `${REQUIREMENTS_BASE_DIR}/o/r/issue-42/wi-7/design/req-2/attempt
 const DRAFT_ROW: SqlRow = {
   id: "21",
   work_item_id: "7",
+  requirement_draft_id: "11",
   owner: "o",
   repo: "r",
   requirement_attempt: 2,

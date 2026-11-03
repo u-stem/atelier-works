@@ -5,6 +5,7 @@
 
 import {
   isArrayOf,
+  isBoolean,
   isIsoTimestamp,
   isNullableInteger,
   isNullableString,
@@ -27,6 +28,11 @@ export type RequirementsIndexRow = {
   readonly status: string;
   readonly latest_attempt: number;
   readonly updated_at: string;
+  /**
+   * 最新の要件定義の下書きに結ばれた設計書があるか。
+   * この項目を返す前のbackendの応答では欠け、設計書が無いものとして扱う。
+   */
+  readonly has_design?: boolean;
 };
 
 function isRequirementsIndexRow(value: unknown): value is RequirementsIndexRow {
@@ -40,7 +46,8 @@ function isRequirementsIndexRow(value: unknown): value is RequirementsIndexRow {
     isNullableString(value.title) &&
     isString(value.status) &&
     isPositiveInteger(value.latest_attempt) &&
-    isIsoTimestamp(value.updated_at)
+    isIsoTimestamp(value.updated_at) &&
+    (value.has_design === undefined || isBoolean(value.has_design))
   );
 }
 
