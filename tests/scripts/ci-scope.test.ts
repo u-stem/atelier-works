@@ -1437,12 +1437,6 @@ describe("ci.yml wiring", () => {
     expect(job("check-docs").if).toBe(expression("!cancelled()"));
   });
 
-  test("check-docs runs the docs lint", () => {
-    const runs = stepsOf("check-docs").map((step) => step.run);
-
-    expect(runs).toContain("mise run lint:docs");
-  });
-
   test("no step of check-worker has its own condition", () => {
     const conditioned = stepsOf("check-worker").filter((step) => "if" in step);
 
@@ -1509,41 +1503,138 @@ describe("ci.yml wiring", () => {
     );
   });
 
-  for (const stepName of [
+  // `docker build`に渡す引数の1つが落ちても、イメージのビルドは通ることがある。
+  // composeが渡す引数と一致させ、片方だけの変更を検出する。
+  test("check-worker passes the same build args as the compose worker service", () => {
+    const run = String(stepNamed("check-worker", "Build worker image").run);
+    const passed = [...run.matchAll(/--build-arg\s+([A-Z_]+)=/g)].flatMap(
+      (match) => (match[1] === undefined ? [] : [match[1]]),
+    );
+    const compose: unknown = Bun.YAML.parse(
+      readFileSync(join(ROOT, "infra", "docker-compose.yml"), "utf8"),
+    );
+    const declared = Object.keys(
+      recordAt(
+        recordAt(
+          recordAt(recordAt(compose, "services"), "windmill_worker"),
+          "build",
+        ),
+        "args",
+      ),
+    );
+
+    expect(passed.sort()).toEqual(declared.sort());
+  });
+});
+
+// 検査の実行を担う3つのジョブ。どの検査も、ここに並ぶステップのどれかが実行する。
+describe("ci.yml check jobs cover every check", () => {
+  const CHECK_JOB_STEPS = [
+    "Install dependencies",
+    "Lint",
+    "Typecheck",
+    "Test",
+    "Check coverage",
+    "Check console",
+    "Determine gitleaks scan range",
+    "Scan for leaked secrets",
+  ];
+  const CHECK_SUITE_STEPS = CHECK_JOB_STEPS.slice(1, 6);
+  const WORKER_JOB_STEPS = [
     "Build worker image",
     "Test the process lock in the worker image",
     "Test the check sandbox in the worker image",
-  ]) {
-    test(`"${stepName}" runs the same command in check and check-worker`, () => {
-      expect(String(stepNamed("check", stepName).run)).toBe(
-        String(stepNamed("check-worker", stepName).run),
-      );
+  ];
+
+  function runStepNames(jobName: string): unknown[] {
+    return stepsOf(jobName)
+      .filter((step) => "run" in step)
+      .map((step) => step.name);
+  }
+
+  function runsOf(jobName: string, stepNames: readonly string[]): string[] {
+    return stepNames.map((name) => String(stepNamed(jobName, name).run));
+  }
+
+  // `mise run check`の`run`を、空行を除いた行の並びで返す。
+  // 形が想定と違うときは、空の配列で比較が通らないよう例外を投げる。
+  function miseCheckLines(): string[] {
+    const parsed: unknown = Bun.TOML.parse(
+      readFileSync(join(ROOT, "mise.toml"), "utf8"),
+    );
+    const run = recordAt(recordAt(parsed, "tasks"), "check").run;
+    if (typeof run !== "string") {
+      throw new Error("tasks.check.run in mise.toml is not a string");
+    }
+    const lines = run
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    if (lines.length === 0) {
+      throw new Error("tasks.check.run in mise.toml has no commands");
+    }
+    return lines;
+  }
+
+  test("check runs exactly the install, the five checks, and the gitleaks scan", () => {
+    expect(runStepNames("check")).toEqual(CHECK_JOB_STEPS);
+  });
+
+  test("check-docs runs exactly the install and the docs lint", () => {
+    expect(runStepNames("check-docs")).toEqual([
+      "Install dependencies",
+      "Lint docs",
+    ]);
+  });
+
+  test("check-worker runs exactly the install and the three worker steps", () => {
+    expect(runStepNames("check-worker")).toEqual([
+      "Install dependencies",
+      ...WORKER_JOB_STEPS,
+    ]);
+  });
+
+  test("check-docs runs the docs lint through mise", () => {
+    expect(stepNamed("check-docs", "Lint docs").run).toBe("mise run lint:docs");
+  });
+
+  test("the five checks in check match mise.toml check without the docs lint", () => {
+    expect(runsOf("check", CHECK_SUITE_STEPS)).toEqual(
+      miseCheckLines().filter((line) => line !== "mise run lint:docs"),
+    );
+  });
+
+  test("check and check-docs together run every command of mise.toml check", () => {
+    const run = [
+      ...runsOf("check", CHECK_SUITE_STEPS),
+      ...runsOf("check-docs", ["Lint docs"]),
+    ];
+
+    expect(run.sort()).toEqual([...miseCheckLines()].sort());
+  });
+
+  for (const jobName of ["check", "check-docs", "check-worker"]) {
+    test(`${jobName} does not continue on error`, () => {
+      expect("continue-on-error" in job(jobName)).toBe(false);
     });
   }
 
-  test("the worker image build runs unless scope says worker is false", () => {
-    expect(stepNamed("check", "Build worker image").if).toBe(
-      "needs.scope.outputs.worker != 'false'",
-    );
-  });
+  const CHECK_STEPS_BY_JOB: readonly (readonly [string, readonly string[]])[] =
+    [
+      ["check", CHECK_SUITE_STEPS],
+      ["check-docs", ["Lint docs"]],
+      ["check-worker", WORKER_JOB_STEPS],
+    ];
+  for (const [jobName, stepNames] of CHECK_STEPS_BY_JOB) {
+    test(`no check step of ${jobName} is skipped or allowed to fail`, () => {
+      const loosened = stepNames.filter((name) => {
+        const step = stepNamed(jobName, name);
+        return "if" in step || "continue-on-error" in step;
+      });
 
-  test("the check sandbox test runs unless scope says worker is false", () => {
-    expect(
-      stepNamed("check", "Test the check sandbox in the worker image").if,
-    ).toBe("needs.scope.outputs.worker != 'false'");
-  });
-
-  test("the worker image build passes the check uid", () => {
-    expect(String(stepNamed("check", "Build worker image").run)).toContain(
-      "--build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID",
-    );
-  });
-
-  test("the process lock test runs unless scope says worker is false", () => {
-    expect(
-      stepNamed("check", "Test the process lock in the worker image").if,
-    ).toBe("needs.scope.outputs.worker != 'false'");
-  });
+      expect(loosened).toEqual([]);
+    });
+  }
 });
 
 describe("running the script", () => {
