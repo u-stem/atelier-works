@@ -379,16 +379,6 @@ export const WORK_ITEM_DETAIL_NORMAL: WorkItemDetail = {
   ],
 };
 
-export const APPROVAL_DESIGN_DOC_NORMAL = {
-  approval_request_id: 3,
-  work_item_id: 1,
-  design_attempt: 1,
-  requirement_draft_id: 1,
-  text: "# 設計\n\n本文です。\n",
-  truncated: false,
-  approval_status: "pending",
-};
-
 /**
  * 承認画面の本文に使うMarkdown。表、GFMのタスクリストと脚注、プレビューが描かないHTMLのコメントを含む。
  * 取り込み時点のIssueと提案の本文が、同じ形で、原文とプレビューの違いを検査できるようにする。
@@ -412,6 +402,17 @@ const APPROVAL_BODY_MARKDOWN = [
   "",
   "本文の終わりです。",
 ].join("\n");
+
+/** 設計の承認画面が読む設計書。表、GFMのタスクリストと脚注、プレビューが描かないHTMLのコメントを含む。 */
+export const APPROVAL_DESIGN_DOC_NORMAL = {
+  approval_request_id: 3,
+  work_item_id: 1,
+  design_attempt: 1,
+  requirement_draft_id: 1,
+  text: `# 設計\n\n${APPROVAL_BODY_MARKDOWN}\n`,
+  truncated: false,
+  approval_status: "pending",
+};
 
 export const INTAKE_SNAPSHOT_NORMAL = {
   work_item_id: 1,

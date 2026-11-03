@@ -22,6 +22,7 @@ import {
   isJobList,
   isSchedulesSnapshot,
 } from "../src/api/jobsQueries.ts";
+import { APPROVAL_DESIGN_DOC_NORMAL } from "./fixtures.ts";
 import { type Mode, replyFor, scriptOfPath } from "./responses.ts";
 
 const QUERY = "f/factory/steps/console_query";
@@ -58,7 +59,7 @@ const CASES: readonly Case[] = [
   },
   {
     script: QUERY,
-    args: { view: "approval_design_doc" },
+    args: { view: "approval_design_doc", approval_request_id: 3 },
     guard: isApprovalDesignDocRows,
   },
   {
@@ -106,6 +107,24 @@ describe("the replies of the browser checks pass the guards of the console", () 
     const reply = replyFor(JOBS, { view: "detail" }, "normal");
 
     expect(reply !== null && isJobDetail(reply.body)).toBe(true);
+  });
+});
+
+describe("the design of an approval request", () => {
+  function designBody(id: number): unknown {
+    return replyFor(
+      QUERY,
+      { view: "approval_design_doc", approval_request_id: id },
+      "normal",
+    )?.body;
+  }
+
+  test("returns the design by approval request id", () => {
+    expect(designBody(3)).toEqual([APPROVAL_DESIGN_DOC_NORMAL]);
+  });
+
+  test("returns no design for an id that the table does not have", () => {
+    expect(designBody(99)).toEqual([]);
   });
 });
 

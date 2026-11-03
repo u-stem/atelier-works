@@ -23,7 +23,12 @@ import {
   intakeSnapshotQueryKey,
 } from "./api/queries.ts";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
+import type { ViewMode } from "./lib/requirementsView.ts";
 import { ApprovalOverview } from "./screens/inbox/ApprovalOverview.tsx";
+import {
+  DesignReview,
+  designPreviewGate,
+} from "./screens/inbox/DesignReview.tsx";
 
 // 不可視文字をソースに直接書くと読めないので、コードポイントから作る。
 const ZWSP = String.fromCodePoint(0x200b);
@@ -123,6 +128,40 @@ function render(seed: Seed = {}): string {
             approval,
             now: NOW,
           }),
+        ),
+      ),
+    ),
+  );
+}
+
+/** 設計の承認画面だけを描く。承認の画面は`initialMode`を渡さないので、プレビューの描画はここで確かめる。 */
+function renderReview(seed: Seed = {}, initialMode?: ViewMode): string {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryOnMount: false } },
+  });
+  client.setQueryData(approvalDesignDocQueryKey(REQUEST_ID), {
+    ...DOC,
+    ...seed.doc,
+  });
+  client.setQueryData(intakeSnapshotQueryKey(WORK_ITEM_ID, REQUEST_ID), {
+    ...SNAPSHOT,
+    body: "Body <!-- c --> **b**",
+  });
+  const props = { approval: APPROVAL, title: "example item", now: NOW };
+  return renderToStaticMarkup(
+    createElement(
+      QueryClientProvider,
+      { client },
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          MemoryRouter,
+          null,
+          createElement(
+            DesignReview,
+            initialMode === undefined ? props : { ...props, initialMode },
+          ),
         ),
       ),
     ),
@@ -277,6 +316,94 @@ function source(path: string): string {
   return readFileSync(resolve(import.meta.dir, "../..", path), "utf8");
 }
 
+/** `react`からのimport文を、すべて返す。 */
+function reactImports(code: string): string[] {
+  return Array.from(code.matchAll(/import[^;]*from "react";/g), (m) => m[0]);
+}
+
+/**
+ * `react`から持ち込む名前を、importの書かれたまま返す。
+ * 別名は`A as B`の形で、既定とnamespaceのimportは、その書き方のまま返す。
+ */
+function reactImportedNames(code: string): string[] {
+  return reactImports(code).flatMap((statement) =>
+    statement
+      .replace(/^import\s+(?:type\s+)?/, "")
+      .replace(/\s+from "react";$/, "")
+      .replace(/[{}]/g, ",")
+      .split(",")
+      .map((name) => name.trim().replace(/^type\s+/, ""))
+      .filter((name) => name !== ""),
+  );
+}
+
+/** 呼んでいるフックの名前を、現れた順に返す。ジェネリクスの呼び出しも含む。 */
+function hookCalls(code: string): string[] {
+  return Array.from(
+    code.matchAll(/\b(use[A-Z]\w*)\s*[(<]/g),
+    (m) => m[1] ?? "",
+  );
+}
+
+// DesignReviewが`react`から持ち込んでよい名前。足すときは、保護テストの直しが要る。
+const ALLOWED_IMPORTS = ["Fragment", "ReactNode", "useMemo", "useState"];
+
+// DesignReviewが呼んでよいフック。足すときは、保護テストの直しが要る。
+const ALLOWED_HOOKS = [
+  "useState",
+  "useMemo",
+  "useApprovalDesignDoc",
+  "useIntakeSnapshot",
+  "useLoadingDisplay",
+];
+
+describe("the scan of the source of the screen", () => {
+  const ALIAS_OR_REDUCER = /\bas\b|useReducer/;
+
+  test("sees an alias in a later import from react", () => {
+    const code =
+      'import { useState } from "react";\nimport { useReducer as useBox } from "react";\n';
+    expect(reactImports(code).filter((i) => ALIAS_OR_REDUCER.test(i))).toEqual([
+      'import { useReducer as useBox } from "react";',
+    ]);
+  });
+
+  test("sees an import that spans lines", () => {
+    const code = 'import {\n  useState,\n  useReducer,\n} from "react";\n';
+    expect(reactImports(code)).toHaveLength(1);
+  });
+
+  test("ignores an import from another module", () => {
+    expect(reactImports('import { a as b } from "./react.ts";')).toEqual([]);
+  });
+
+  test("lists the names that the imports from react bring in", () => {
+    const code =
+      'import { Fragment, type ReactNode, useMemo } from "react";\nimport { useReducer as useBox } from "react";\n';
+    expect(reactImportedNames(code)).toEqual([
+      "Fragment",
+      "ReactNode",
+      "useMemo",
+      "useReducer as useBox",
+    ]);
+  });
+
+  test("lists a default import and a namespace import as written", () => {
+    const code =
+      'import React, { useState } from "react";\nimport * as R from "react";\n';
+    expect(reactImportedNames(code)).toEqual(["React", "useState", "* as R"]);
+  });
+
+  test("lists the hooks that a source calls", () => {
+    const code = "useState<A>(1); React.useReducer(f); const x = useMemo(g);";
+    expect(hookCalls(code)).toEqual(["useState", "useReducer", "useMemo"]);
+  });
+
+  test("does not list a name that is only imported", () => {
+    expect(hookCalls('import { useState } from "react";')).toEqual([]);
+  });
+});
+
 describe("the source of the wiring", () => {
   const overview = source("console/src/screens/inbox/ApprovalOverview.tsx");
   const review = source("console/src/screens/inbox/DesignReview.tsx");
@@ -313,5 +440,217 @@ describe("the source of the wiring", () => {
 
   test("the approval bar judges the rejection without the reason to stop", () => {
     expect(bar).toMatch(/rejectProblem\(reason\)/);
+  });
+});
+
+// プレビューは参考の表示で、承認の対象は原文である。
+// プレビューを表示している間は承認を止め、その配線を画面のソースと描画の両方で固定する。
+// 判定の関数と文は、このテストが文字列で直接書いて照合する。保護の外から期待値を取らない。
+const PREVIEW_REASON =
+  "設計書をプレビューで表示中は承認できません。承認するには、原文を表示してください。";
+
+/** 承認画面が描いた設計書のパネルから先。取り込み時点のIssueのパネルを除く。 */
+function designPanelOf(html: string): string {
+  return html.slice(html.indexOf("承認対象の設計書"));
+}
+
+describe("design approval preview wiring", () => {
+  test("shows the design in text mode at first", () => {
+    expect(designPanelOf(renderReview())).not.toContain("data-preview");
+  });
+
+  test("shows the text view in text mode at first", () => {
+    expect(designPanelOf(renderReview())).toContain('<bdo dir="ltr">');
+  });
+
+  test("renders the design as a preview without the text view", () => {
+    const panel = designPanelOf(renderReview({}, "preview"));
+    expect(panel).toContain("data-preview");
+    expect(panel).not.toContain('<bdo dir="ltr">');
+  });
+
+  test("keeps the issue at intake in text", () => {
+    const html = renderReview({}, "preview");
+    const before = html.slice(0, html.indexOf("承認対象の設計書"));
+    expect(before).not.toContain("data-preview");
+  });
+
+  test("disables the approval in the preview", () => {
+    expect(approveIsDisabled(renderReview({}, "preview"))).toBe(true);
+  });
+
+  test("says why the approval is stopped in the preview", () => {
+    expect(renderReview({}, "preview")).toContain(PREVIEW_REASON);
+  });
+
+  test("lets the approval through in the text mode", () => {
+    const html = renderReview();
+    expect(approveButton(html)).not.toBe("");
+    expect(approveIsDisabled(html)).toBe(false);
+  });
+
+  test("reports the truncation before the preview", () => {
+    const html = renderReview({ doc: { truncated: true } }, "preview");
+    expect(html).toContain("設計書が長さの上限で切られていて");
+    expect(html).not.toContain(PREVIEW_REASON);
+  });
+
+  describe("gates by mode", () => {
+    test("stops in the preview", () => {
+      expect(designPreviewGate({ mode: "preview" }).reason).toBe(
+        PREVIEW_REASON,
+      );
+    });
+
+    test("stops in a mode that it does not know", () => {
+      expect(designPreviewGate({ mode: "unknown" }).reason).toBe(
+        PREVIEW_REASON,
+      );
+    });
+
+    test("lets the text mode through", () => {
+      expect(designPreviewGate({ mode: "text" }).reason).toBeNull();
+    });
+  });
+
+  describe("wires the gate by shape", () => {
+    const review = source("console/src/screens/inbox/DesignReview.tsx");
+    const overview = source("console/src/screens/inbox/ApprovalOverview.tsx");
+
+    test("calls the gate once with the mode", () => {
+      // 定義を除いた呼び出しが、画面の1か所だけである。
+      const calls = review.replace("function designPreviewGate(", "");
+      expect(calls.match(/designPreviewGate\(/g)?.length).toBe(1);
+      expect(calls).toContain("const gate = designPreviewGate({ mode });");
+    });
+
+    test("gives only the reason of the gate to the approval bar", () => {
+      expect(review.match(/approveBlockedReason=\{/g)?.length).toBe(1);
+      expect(review).toContain("approveBlockedReason={blocked ?? gate.reason}");
+    });
+
+    test("keeps one state of the mode", () => {
+      expect(review.match(/\buseState\s*[<(]/g)?.length).toBe(1);
+      expect(review).toContain("useState<ViewMode>(initialMode)");
+    });
+
+    test("imports from react once", () => {
+      expect(reactImports(review)).toHaveLength(1);
+    });
+
+    test("does not import another way to hold a state", () => {
+      expect(
+        reactImports(review).filter((i) => /\bas\b|useReducer/.test(i)),
+      ).toEqual([]);
+    });
+
+    test("imports only the names it uses now from react", () => {
+      expect(
+        reactImportedNames(review).filter(
+          (name) => !ALLOWED_IMPORTS.includes(name),
+        ),
+      ).toEqual([]);
+    });
+
+    test("calls only the hooks it uses now", () => {
+      expect(
+        hookCalls(review).filter((name) => !ALLOWED_HOOKS.includes(name)),
+      ).toEqual([]);
+    });
+
+    // 走査が何も拾わないと、許可リストの検査は空振りで通る。
+    // 今のソースの名前の全体と照合し、一部だけ拾う走査も見逃さない。
+    test("finds every name imported from react in the real source", () => {
+      expect(reactImportedNames(review)).toEqual([
+        "Fragment",
+        "ReactNode",
+        "useMemo",
+        "useState",
+      ]);
+    });
+
+    test("finds every hook called in the real source in order", () => {
+      expect(hookCalls(review)).toEqual([
+        "useMemo",
+        "useState",
+        "useMemo",
+        "useApprovalDesignDoc",
+        "useLoadingDisplay",
+        "useIntakeSnapshot",
+        "useLoadingDisplay",
+      ]);
+    });
+
+    test("changes the mode in one place", () => {
+      expect(review.match(/\bsetMode\b/g)?.length).toBe(2);
+      expect(review).toMatch(
+        /const onChange = \(next: ViewMode\) => \{\s*setMode\(next\);\s*\};/,
+      );
+    });
+
+    test("passes the mode to the three parts by name", () => {
+      expect(review.match(/\bmode=\{/g)?.length).toBe(3);
+      expect(review).toMatch(/<DocPanel\b[^<>]*\bmode=\{mode\}/);
+      expect(review).toMatch(/<DesignDocBody\b[^<>]*\bmode=\{mode\}/);
+      expect(review).toMatch(/<ViewModeSwitch\b[^<>]*\bmode=\{mode\}/);
+    });
+
+    test("passes the same change handler to the switch and the body", () => {
+      expect(review).toMatch(
+        /<DesignDocBody\b[^<>]*\bmode=\{mode\}[^<>]*\bonChange=\{onChange\}/,
+      );
+      expect(review).toMatch(
+        /<ViewModeSwitch\b[^<>]*\bmode=\{mode\}[^<>]*\bonChange=\{onChange\}/,
+      );
+    });
+
+    test("spreads no attributes into a part", () => {
+      expect(review).not.toMatch(/<[A-Z][A-Za-z]*[^<>]*\{\.\.\./);
+    });
+
+    test("draws one switch", () => {
+      expect(review.match(/<ViewModeSwitch\b/g)?.length).toBe(1);
+    });
+
+    test("does not pass the mode to the issue at intake", () => {
+      expect(review).not.toMatch(/<IntakeSnapshotPanel\b[^<>]*\bmode=/);
+    });
+
+    test("renders the preview only in the preview branch", () => {
+      expect(review.match(/<DesignTextPreview\b/g)?.length).toBe(1);
+      expect(review).toMatch(
+        /mode === "preview" \? \(\s*<DesignTextPreview text=\{doc\.text\} repo=\{repo\} \/>\s*\) : \(\s*<DesignTextView/,
+      );
+    });
+
+    test("does not set inner html", () => {
+      expect(review).not.toContain("dangerouslySetInnerHTML");
+    });
+
+    test("keys the approval bar by the request", () => {
+      expect(review).toMatch(
+        /<ApprovalBar\s+key=\{approval\.approval_request_id\}/,
+      );
+    });
+
+    test("does not pass the initial mode from the overview", () => {
+      expect(overview).not.toContain("initialMode");
+    });
+  });
+
+  describe("renders the preview through Markdown only", () => {
+    const preview = source("console/src/screens/inbox/DesignTextPreview.tsx");
+
+    test("draws with Markdown", () => {
+      expect(preview).toContain("<Markdown");
+    });
+
+    test("does not set inner html", () => {
+      expect(preview).not.toContain("dangerouslySetInnerHTML");
+    });
+
+    test("does not parse raw html", () => {
+      expect(preview).not.toContain("rehype-raw");
+    });
   });
 });
