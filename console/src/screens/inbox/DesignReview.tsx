@@ -191,15 +191,48 @@ const PREVIEW_NOTICE =
 const PREVIEW_BLOCKED_REASON =
   "設計書をプレビューで表示中は承認できません。承認するには、原文を表示してください。";
 
+/** プレビューを選んだ承認に出す、原文の確認のチェックの文。プレビューが描かないものは、注記で1度だけ挙げる。 */
+const PREVIEW_CHECK_MESSAGE =
+  "設計書のプレビューを表示しました。原文で確かめました";
+
 /**
- * 設計書の表示の形式から、承認を止める理由を決める。
+ * 設計書の表示の状態。
+ * `previewed`は、プレビューを一度でも選んだかで、原文に戻しても残る。
+ */
+export type DesignView = { mode: ViewMode; previewed: boolean };
+
+/**
+ * 表示の形式を切り替えた後の状態を返す。
+ * 知らない値は、承認を止める側のプレビューに倒す。
+ * 今の形式か次の形式がプレビューなら`previewed`を立てるので、プレビューから出る遷移で必ず立つ。
+ * 一度立った`previewed`は下ろさない。
+ */
+export function nextDesignView(view: DesignView, next: string): DesignView {
+  const mode = next === "text" ? "text" : "preview";
+  return {
+    mode,
+    previewed: view.previewed || view.mode !== "text" || next !== "text",
+  };
+}
+
+/**
+ * 設計書の表示の状態から、承認を止める理由と、原文の確認のチェックの文を決める。
  * 承認できる表示は`"text"`(原文)だけで、プレビューも、知らない値も止める。
+ * 原文を表示していて、プレビューを一度でも選んだときだけ、原文で確かめたかを問うチェックを出す。
  * 原文で確かめられる表示でだけ承認を押せるようにするため、条件を画面のソースの中に置く。
  */
-export function designPreviewGate(input: { mode: string }): {
+export function designPreviewGate(input: {
+  mode: string;
+  previewed: boolean;
+}): {
   reason: string | null;
+  check: string | null;
 } {
-  return { reason: input.mode === "text" ? null : PREVIEW_BLOCKED_REASON };
+  return {
+    reason: input.mode === "text" ? null : PREVIEW_BLOCKED_REASON,
+    check:
+      input.mode === "text" && input.previewed ? PREVIEW_CHECK_MESSAGE : null,
+  };
 }
 
 /**
@@ -312,26 +345,30 @@ function DocPanel({
  * 設計の承認。取り込み時点のIssueと、承認する依頼の設計書の全文を並べ、その直下に承認バーを置く。
  * 承認を押せるかは、取得の状態などの`designBlockedReason`と、設計書の表示の形式の判定で決め、この画面は結果を承認バーに渡す。
  * 設計書は原文が既定で、プレビューは参考に切り替えて読める。プレビューを表示している間は承認を止める。
+ * プレビューを一度でも選んだ承認は、原文に戻したときに、原文で確かめたことを申告するチェックを求める。
+ * このチェックは自己申告で、読んだことは保証しない。切り詰めの確認とは別の状態である。
  * 取り込み時点のIssueは、切り替えの対象にせず、常に原文で出す。
  * 承認バーは承認依頼ごとに作り直し、チェックなどの状態を別の依頼に持ち越さない。
+ * プレビューを選んだ記録は、この画面の状態にだけあり、画面を離れて戻ると消える。
  * 却下は、設計書を読めなくても押せる。
- * `initialMode`は設計書の最初の表示の形式で、省略すると原文になる。
+ * `initialView`は設計書の最初の表示の状態で、省略すると原文になる。
  */
 export function DesignReview({
   approval,
   title,
   now,
-  initialMode = "text",
+  initialView = { mode: "text", previewed: false },
 }: {
   approval: SummaryApproval;
   title: string;
   now: number;
-  initialMode?: ViewMode;
+  initialView?: DesignView;
 }) {
-  const [mode, setMode] = useState<ViewMode>(initialMode);
+  const [view, setView] = useState<DesignView>(initialView);
   const onChange = (next: ViewMode) => {
-    setMode(next);
+    setView((view) => nextDesignView(view, next));
   };
+  const { mode, previewed } = view;
   const { owner, repo } = approval;
   const repoRef = useMemo(() => ({ owner, repo }), [owner, repo]);
   const doc = useApprovalDesignDoc(approval.approval_request_id);
@@ -352,7 +389,7 @@ export function DesignReview({
     doc: { isPending: doc.isPending, isError: doc.isError, data: doc.data },
     workItemStatus: approval.work_item_status,
   });
-  const gate = designPreviewGate({ mode });
+  const gate = designPreviewGate({ mode, previewed });
   return (
     <>
       <IntakeSnapshotPanel
@@ -375,6 +412,7 @@ export function DesignReview({
         subject={displayableIssueText(title).text}
         factoryLabel={null}
         approveBlockedReason={blocked ?? gate.reason}
+        previewCheckMessage={gate.check}
         refreshed={snapshot.data?.refreshed === true}
         fullCheckRequired={snapshot.data?.body_truncated === true}
       />

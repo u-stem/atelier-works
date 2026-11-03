@@ -40,6 +40,7 @@ const SCREEN_PATHS: readonly string[] = [
   "?approval=1",
   "?approval=3",
   "?approval=4",
+  "?approval=9",
   "?failure=2",
   "?notice=1",
   "items",

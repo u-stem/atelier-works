@@ -15,6 +15,7 @@ import {
   DesignDocBody,
   DesignReview,
   DesignTextView,
+  type DesignView,
 } from "./DesignReview.tsx";
 
 // 不可視文字をソースに直接書くと読めないので、コードポイントから作る。
@@ -223,8 +224,10 @@ const REVIEW_SNAPSHOT: IntakeSnapshot = {
   refreshed: false,
 };
 
+const IN_PREVIEW: DesignView = { mode: "preview", previewed: false };
+
 function renderReview(
-  initialMode?: ViewMode,
+  initialView?: DesignView,
   doc: Partial<ApprovalDesignDoc> = {},
 ): string {
   const client = new QueryClient({
@@ -236,7 +239,7 @@ function renderReview(
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <MemoryRouter>
-          {initialMode === undefined ? (
+          {initialView === undefined ? (
             <DesignReview
               approval={REVIEW_APPROVAL}
               title="example item"
@@ -247,7 +250,7 @@ function renderReview(
               approval={REVIEW_APPROVAL}
               title="example item"
               now={Date.parse("2026-10-30T00:00:00.000Z")}
-              initialMode={initialMode}
+              initialView={initialView}
             />
           )}
         </MemoryRouter>
@@ -325,27 +328,27 @@ describe("DesignReview", () => {
   });
 
   test("renders the design as a preview without the text view", () => {
-    const html = designPanel(renderReview("preview"));
+    const html = designPanel(renderReview(IN_PREVIEW));
     expect(html).toContain("data-preview");
     expect(html).not.toContain('<bdo dir="ltr">');
   });
 
   test("keeps the issue at intake in text", () => {
-    const html = renderReview("preview");
+    const html = renderReview(IN_PREVIEW);
     expect(html.slice(0, html.indexOf("承認対象の設計書"))).not.toContain(
       "data-preview",
     );
   });
 
   test("keeps the body of the issue at intake as the source in the preview", () => {
-    const html = renderReview("preview");
+    const html = renderReview(IN_PREVIEW);
     expect(html.slice(0, html.indexOf("承認対象の設計書"))).toMatch(
       /<pre[^>]*>[^<]*Body &lt;!-- c --&gt;/,
     );
   });
 
   test("says why the approval is stopped in the preview", () => {
-    expect(renderReview("preview")).toContain(
+    expect(renderReview(IN_PREVIEW)).toContain(
       "設計書をプレビューで表示中は承認できません。",
     );
   });
@@ -355,7 +358,7 @@ describe("DesignReview", () => {
   });
 
   test("reports the truncation before the preview", () => {
-    const html = renderReview("preview", { truncated: true });
+    const html = renderReview(IN_PREVIEW, { truncated: true });
     expect(html).toContain("長さの上限で切られていて");
     expect(html).not.toContain("設計書をプレビューで表示中");
   });
