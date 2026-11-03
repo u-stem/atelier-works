@@ -7,6 +7,7 @@ import {
   test,
 } from "bun:test";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -37,6 +38,8 @@ function cleanEnv(): Record<string, string> {
   }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_NOSYSTEM = "1";
+  // 開発機のユーザーの除外の設定(`$XDG_CONFIG_HOME/git/ignore`)を読ませない。
+  env.XDG_CONFIG_HOME = "/nonexistent/xdg-config-home";
   env.GIT_AUTHOR_NAME = "test";
   env.GIT_AUTHOR_EMAIL = "test@example.com";
   env.GIT_COMMITTER_NAME = "test";
@@ -716,6 +719,165 @@ describe("worktree-prune.sh", () => {
       const result = run();
 
       expect(result.stdout).toContain(`kept: ${path} (docs/untr): dirty`);
+    });
+  });
+
+  describe("yomiyasu check records", () => {
+    // yomiyasu_checkが置く`.gitignore`と同じ内容。置いたものは中身を問わず無視される。
+    const RECORD_GITIGNORE = "# yomiyasu records\n*\n";
+
+    function writeFileIn(path: string, file: string, content: string): void {
+      mkdirSync(join(path, file, ".."), { recursive: true });
+      writeFileSync(join(path, file), content);
+    }
+
+    function writeRecordsIn(path: string, dir: string): void {
+      writeFileIn(path, join(dir, ".gitignore"), RECORD_GITIGNORE);
+      writeFileIn(path, join(dir, "state.json"), "{}\n");
+    }
+
+    // メインの`.git/info/exclude`は、すべてのworktreeに効く。
+    function excludeYomiyasu(): void {
+      mkdirSync(join(mainDir, ".git", "info"), { recursive: true });
+      appendFileSync(join(mainDir, ".git", "info", "exclude"), ".yomiyasu\n");
+    }
+
+    test("removes a worktree that holds only yomiyasu check records", () => {
+      const path = addMergedWorktree("docs-yrec", "docs/yrec");
+      writeFileIn(path, ".yomiyasu/.gitignore", RECORD_GITIGNORE);
+      writeFileIn(path, ".yomiyasu/state.json", "{}\n");
+      writeFileIn(path, ".yomiyasu/runs/r1/attempt-1.json", "{}\n");
+      writeFileIn(path, ".yomiyasu/inputs/abc.bin", "b\n");
+      writeFileIn(path, ".yomiyasu/exports/r1/attempt-1-abc.md", "m\n");
+      ageFiles(path, 180);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("keeps a nested repository under .yomiyasu as ignored files", () => {
+      const path = addMergedWorktree("docs-ynest", "docs/ynest");
+      writeFileIn(path, ".yomiyasu/.gitignore", RECORD_GITIGNORE);
+      writeFileIn(path, ".yomiyasu/upstream/a.txt", "a\n");
+      git(join(path, ".yomiyasu", "upstream"), ["init", "--quiet"]);
+      ageFiles(path, 180);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/ynest): ignored files`,
+      );
+    });
+
+    test("keeps a nested repository named node_modules under .yomiyasu as ignored files", () => {
+      const path = addMergedWorktree("docs-ynm", "docs/ynm");
+      writeFileIn(path, ".yomiyasu/.gitignore", RECORD_GITIGNORE);
+      writeFileIn(path, ".yomiyasu/node_modules/a.txt", "a\n");
+      git(join(path, ".yomiyasu", "node_modules"), ["init", "--quiet"]);
+      ageFiles(path, 180);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/ynm): ignored files`,
+      );
+    });
+
+    test("keeps a .yomiyasu.local.toml file as ignored files", () => {
+      const path = addMergedWorktree("docs-ylocal", "docs/ylocal");
+      writeFileIn(path, ".yomiyasu.local.toml", "x = 1\n");
+      ageFiles(path, 180);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/ylocal): ignored files`,
+      );
+    });
+
+    test("keeps an ignored .yomiyasu directory below the top level", () => {
+      const path = addMergedWorktree("docs-ydeep", "docs/ydeep");
+      writeRecordsIn(path, "console/.yomiyasu");
+      ageFiles(path, 180);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/ydeep): ignored files`,
+      );
+    });
+
+    test("keeps a .yomiyasu symlink as dirty", () => {
+      const path = addMergedWorktree("docs-ylink", "docs/ylink");
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      symlinkSync(outside, join(path, ".yomiyasu"));
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/ylink): dirty`);
+    });
+
+    test("keeps an excluded .yomiyasu symlink as ignored files", () => {
+      excludeYomiyasu();
+      const path = addMergedWorktree("docs-yxlink", "docs/yxlink");
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      symlinkSync(outside, join(path, ".yomiyasu"));
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/yxlink): ignored files`,
+      );
+    });
+
+    test("keeps a .yomiyasu directory without its .gitignore as dirty", () => {
+      const path = addMergedWorktree("docs-ybare", "docs/ybare");
+      writeFileIn(path, ".yomiyasu/state.json", "{}\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/ybare): dirty`);
+    });
+
+    test("keeps an excluded repository at .yomiyasu as ignored files", () => {
+      excludeYomiyasu();
+      const path = addMergedWorktree("docs-yrepo", "docs/yrepo");
+      writeFileIn(path, ".yomiyasu/a.txt", "a\n");
+      git(join(path, ".yomiyasu"), ["init", "--quiet"]);
+      ageFiles(path, 180);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/yrepo): ignored files`,
+      );
+    });
+
+    test("keeps a quoted path under .yomiyasu as ignored files", () => {
+      const path = addMergedWorktree("docs-yquote", "docs/yquote");
+      writeFileIn(path, ".yomiyasu/.gitignore", RECORD_GITIGNORE);
+      writeFileIn(path, ".yomiyasu/あ.md", "m\n");
+      ageFiles(path, 180);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/yquote): ignored files`,
+      );
+    });
+
+    test("removes an excluded .yomiyasu directory without its .gitignore", () => {
+      excludeYomiyasu();
+      const path = addMergedWorktree("docs-yxdir", "docs/yxdir");
+      writeFileIn(path, ".yomiyasu/state.json", "{}\n");
+      ageFiles(path, 180);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
     });
   });
 
