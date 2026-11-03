@@ -48,6 +48,7 @@ const SCREEN_PATHS: readonly string[] = [
   "items/7",
   "items/7?tab=design",
   "items/7/design",
+  "items/7/requirements",
   "system",
   "jobs",
   "jobs?tab=history",
@@ -61,6 +62,13 @@ const SCREEN_PATHS: readonly string[] = [
   "jobs/flows/implement",
   "jobs/flows/pr_review",
   "jobs/flows/pr_fix",
+];
+
+/** 本文を「Markdownの文字」に切り替えて検査する経路。承認画面の要件定義を含む。 */
+const TEXT_MODE_PATHS: readonly string[] = [
+  "items/7/requirements",
+  "?approval=1",
+  "items/7/design",
 ];
 
 /** 見出しを1つずつ開いて検査する、起動の図の経路。開いたときだけ描かれる要素を検査するため。 */
@@ -130,6 +138,86 @@ function clean(theme: Theme): Audit {
     theme,
     preference: theme,
   };
+}
+
+/** 縞を見分けられる輝度比の下限。GitHubの表の縞はおよそ1.06である。 */
+const MIN_STRIPE_RATIO = 1.05;
+
+/** 通常の大きさの文字に求める輝度比の下限(WCAG AA)。 */
+const MIN_TEXT_RATIO = 4.5;
+
+/** 表の枠の中の要素。 */
+const TABLE_FRAME = "section[aria-label='表']";
+
+/** sRGBの1成分を、輝度の計算のために線形にする。 */
+function linearChannel(value: number): number {
+  const scaled = value / 255;
+  return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+}
+
+/** 2色の輝度比(WCAGの相対輝度)。1以上で、色が近いほど1に近い。 */
+function luminanceRatio(a: readonly number[], b: readonly number[]): number {
+  const luminance = ([red = 0, green = 0, blue = 0]: readonly number[]) =>
+    0.2126 * linearChannel(red) +
+    0.7152 * linearChannel(green) +
+    0.0722 * linearChannel(blue);
+  const [x, y] = [luminance(a), luminance(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+/**
+ * 要素の左上の少し内側の、画面に描かれた色を読む。
+ * 縞は半透明の重ね塗りなので、計算された背景色ではなく、描かれた画素を測る。
+ */
+async function paintedColor(page: Page, selector: string): Promise<number[]> {
+  const target = page.locator(selector).first();
+  await target.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
+  const box = await target.boundingBox();
+  if (box === null) {
+    throw new Error(`no box for ${selector}`);
+  }
+  const shot = (await page.screenshot()).toString("base64");
+  return page.evaluate(
+    async ({ shot, x, y }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${shot}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      if (context === null) {
+        throw new Error("no 2d context");
+      }
+      context.drawImage(image, 0, 0);
+      return Array.from(context.getImageData(x, y, 1, 1).data);
+    },
+    { shot, x: Math.round(box.x + 4), y: Math.round(box.y + 4) },
+  );
+}
+
+/**
+ * 要素の文字色を、sRGBの成分で読む。
+ * 計算された色はoklchなどで返ることがあるので、canvasに塗って画素を読み、形式をそろえる。
+ */
+async function textColor(page: Page, selector: string): Promise<number[]> {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((element) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d");
+      if (context === null) {
+        throw new Error("no 2d context");
+      }
+      context.fillStyle = getComputedStyle(element).color;
+      context.fillRect(0, 0, 1, 1);
+      return Array.from(context.getImageData(0, 0, 1, 1).data);
+    });
 }
 
 for (const theme of THEMES) {
@@ -203,6 +291,116 @@ for (const theme of THEMES) {
       }
     });
   }
+
+  // 「Markdownの文字」は、本文がある状態(normal)だけで検査する。
+  test.describe(`text mode (${theme})`, () => {
+    test.use({ theme, mode: "normal" });
+    for (const path of TEXT_MODE_PATHS) {
+      test(`/console/${path} has no violations`, async ({ page }) => {
+        await openScreen(page, path);
+        const choice = page.getByRole("button", { name: "Markdownの文字" });
+        await choice.click();
+        await expect(choice).toHaveAttribute("aria-pressed", "true");
+
+        expect(await auditOf(page)).toEqual(clean(theme));
+      });
+    }
+  });
+
+  // 表の縞は、見分けられる濃さで、ヘッダーの背景とも同化しない。
+  test.describe(`table stripes (${theme})`, () => {
+    test.use({ theme, mode: "normal" });
+    for (const path of TEXT_MODE_PATHS) {
+      test(`/console/${path} shows the stripe of the second row`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const first = await paintedColor(
+          page,
+          `${TABLE_FRAME} tbody tr:nth-child(1) td`,
+        );
+        const second = await paintedColor(
+          page,
+          `${TABLE_FRAME} tbody tr:nth-child(2) td`,
+        );
+
+        expect(luminanceRatio(first, second)).toBeGreaterThanOrEqual(
+          MIN_STRIPE_RATIO,
+        );
+      });
+
+      test(`/console/${path} tells the header from the stripe`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const header = await paintedColor(page, `${TABLE_FRAME} th`);
+        const second = await paintedColor(
+          page,
+          `${TABLE_FRAME} tbody tr:nth-child(2) td`,
+        );
+
+        expect(luminanceRatio(header, second)).toBeGreaterThanOrEqual(
+          MIN_STRIPE_RATIO,
+        );
+      });
+    }
+  });
+
+  // 最初の縞の行にあるリンクとコード表記と、ヘッダーの文字の色を測る。画面の外の文字は色が測られないので、
+  // 表の全体が収まる高さにして、縞の行の要素が「通った」になり、「要確認」が残らないことを確かめる。
+  test.describe(`text on the table stripes (${theme})`, () => {
+    test.use({
+      theme,
+      mode: "normal",
+      viewport: { width: 1280, height: 2400 },
+    });
+    for (const path of TEXT_MODE_PATHS) {
+      const measured = [
+        {
+          name: "a on a striped row",
+          selector: `${TABLE_FRAME} tbody tr:nth-child(2) a`,
+        },
+        {
+          name: "code on a striped row",
+          selector: `${TABLE_FRAME} tbody tr:nth-child(2) code`,
+        },
+      ];
+      for (const { name, selector } of measured) {
+        test(`/console/${path} measures ${name}`, async ({ page }) => {
+          await openScreen(page, path);
+          // 承認画面は、本文が画面の中でスクロールする。測る要素を枠の中へ入れる。
+          await page
+            .locator(selector)
+            .first()
+            .evaluate((target) => target.scrollIntoView({ block: "center" }));
+          const results = await new AxeBuilder({ page })
+            .withRules(["color-contrast"])
+            .include(selector)
+            .analyze();
+
+          expect({
+            violations: results.violations.length,
+            incomplete: results.incomplete.length,
+            measured: results.passes.length > 0,
+          }).toEqual({ violations: 0, incomplete: 0, measured: true });
+        });
+      }
+
+      // 罫線を畳んだ表の見出しは、axe-coreが背景を決められず、「要確認」になる。
+      // 描かれた背景の色と、文字色の輝度比で測る。
+      test(`/console/${path} keeps the header text readable`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const background = await paintedColor(page, `${TABLE_FRAME} th`);
+        const text = await textColor(page, `${TABLE_FRAME} th`);
+
+        expect(luminanceRatio(text, background)).toBeGreaterThanOrEqual(
+          MIN_TEXT_RATIO,
+        );
+      });
+    }
+  });
 
   test.describe(`dialogs (${theme})`, () => {
     test.use({ theme, mode: "normal" });

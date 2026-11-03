@@ -1027,6 +1027,8 @@ describe("REQUIRED_CHECKS", () => {
     expect([...REQUIRED_CHECKS]).toEqual([
       "scope",
       "check",
+      "check-docs",
+      "check-worker",
       "test-db",
       "metadata",
       "console",

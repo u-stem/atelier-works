@@ -2,8 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
-import { prepareDoc } from "../../lib/requirementsView.ts";
+import { prepareDoc, type ViewMode } from "../../lib/requirementsView.ts";
 import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
+
+const DIAGRAM_XML =
+  '<mxfile><diagram id="d1"><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram></mxfile>';
+
+/** 見えない文字(U+202E)を含む文字列。描画の前に置き換わる。 */
+const BAD = "a‮b";
+const REPLACED = "a�b";
 
 const DOC: RequirementsDoc = {
   work_item_id: 10,
@@ -22,19 +29,26 @@ const DOC: RequirementsDoc = {
   doc_dir_source: "disk",
 };
 
-function renderEmbedded(overrides: Partial<RequirementsDoc> = {}): string {
+function renderEmbedded(
+  overrides: Partial<RequirementsDoc> = {},
+  initialMode: ViewMode = "preview",
+): string {
   const doc = { ...DOC, ...overrides };
   return renderToStaticMarkup(
     <RequirementsDocumentView
       doc={doc}
       prepared={prepareDoc(doc)}
       latestAttempt={null}
+      initialMode={initialMode}
       embedded
     />,
   );
 }
 
-function renderPage(overrides: Partial<RequirementsDoc> = {}): string {
+function renderPage(
+  overrides: Partial<RequirementsDoc> = {},
+  initialMode: ViewMode = "preview",
+): string {
   const doc = { ...DOC, ...overrides };
   return renderToStaticMarkup(
     <MemoryRouter>
@@ -42,6 +56,7 @@ function renderPage(overrides: Partial<RequirementsDoc> = {}): string {
         doc={doc}
         prepared={prepareDoc(doc)}
         latestAttempt={2}
+        initialMode={initialMode}
       />
     </MemoryRouter>,
   );
@@ -118,5 +133,118 @@ describe("RequirementsDocumentView embedded", () => {
     expect(renderEmbedded({ doc_dir_source: "db_fallback" })).toContain(
       "データベース",
     );
+  });
+});
+
+describe("RequirementsDocumentView view mode", () => {
+  test("starts as the preview", () => {
+    expect(renderPage()).toMatch(/aria-pressed="true"[^>]*>プレビュー</);
+  });
+
+  test("draws no markdown text in the preview", () => {
+    expect(renderPage()).not.toContain('<pre dir="ltr"');
+  });
+
+  test("draws the headings in the preview", () => {
+    expect(renderPage()).toContain('id="h-background"');
+  });
+
+  test("shows the markdown as text in the text mode", () => {
+    expect(renderPage({}, "text")).toContain(
+      '<pre dir="ltr" class="whitespace-pre-wrap break-words',
+    );
+  });
+
+  test("shows the whole markdown including the title line in the text mode", () => {
+    expect(renderPage({}, "text")).toContain(
+      "# Add feature\n\n## Background\n\nBody paragraph.\n",
+    );
+  });
+
+  test("draws no heading of the body in the text mode", () => {
+    expect(renderPage({}, "text")).not.toContain('id="h-background"');
+  });
+
+  test("wraps the text in the text mode", () => {
+    expect(renderPage({}, "text")).toMatch(
+      /<pre dir="ltr" class="[^"]*whitespace-pre-wrap[^"]*break-words/,
+    );
+  });
+
+  test("hides the table of contents in the text mode", () => {
+    expect(renderPage({}, "text")).not.toContain("目次");
+  });
+
+  test("keeps the summary in the text mode", () => {
+    expect(renderPage({}, "text")).toContain("Summary line");
+  });
+
+  test("keeps the open questions in the text mode", () => {
+    expect(renderPage({}, "text")).toContain("Which API?");
+  });
+
+  test("draws no diagram in the text mode", () => {
+    expect(
+      renderPage(
+        {
+          markdown: "# T\n\n![flow](flow.drawio)\n",
+          diagrams: [{ name: "flow", xml: DIAGRAM_XML }],
+        },
+        "text",
+      ),
+    ).not.toContain('sandbox="allow-scripts"');
+  });
+
+  test("shows the reference of a diagram as text in the text mode", () => {
+    expect(
+      renderPage(
+        {
+          markdown: "# T\n\n![flow](flow.drawio)\n",
+          diagrams: [{ name: "flow", xml: DIAGRAM_XML }],
+        },
+        "text",
+      ),
+    ).toContain("![flow](flow.drawio)");
+  });
+
+  test("shows html comments and link reference definitions in the text mode", () => {
+    expect(
+      renderPage(
+        {
+          markdown: "# T\n\n<!-- hidden -->\n\n[ref]: https://example.com/x\n",
+        },
+        "text",
+      ),
+    ).toContain("&lt;!-- hidden --&gt;\n\n[ref]: https://example.com/x");
+  });
+
+  test("replaces hidden characters in the text mode", () => {
+    expect(renderPage({ markdown: `# T\n\n${BAD}\n` }, "text")).toContain(
+      REPLACED,
+    );
+  });
+
+  test("draws no hidden character in the text mode", () => {
+    expect(renderPage({ markdown: `# T\n\n${BAD}\n` }, "text")).not.toContain(
+      "‮",
+    );
+  });
+
+  test("puts the switch after the summary", () => {
+    expect(renderPage()).toMatch(/Summary line[\s\S]*要件定義書の表示の形式/);
+  });
+
+  test("puts the switch before the body", () => {
+    expect(renderPage()).toMatch(
+      /要件定義書の表示の形式[\s\S]*Body paragraph\./,
+    );
+  });
+
+  test("shows the switch in the embedded mode", () => {
+    expect(renderEmbedded()).toContain("要件定義書の表示の形式");
+  });
+
+  test("shows the markdown as text in the embedded text mode", () => {
+    expect(renderEmbedded({}, "text")).toContain("## Background");
   });
 });

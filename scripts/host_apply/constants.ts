@@ -10,6 +10,8 @@ const HOUR = 60 * MINUTE;
 export const REQUIRED_CHECKS: readonly string[] = [
   "scope",
   "check",
+  "check-docs",
+  "check-worker",
   "test-db",
   "metadata",
   "console",

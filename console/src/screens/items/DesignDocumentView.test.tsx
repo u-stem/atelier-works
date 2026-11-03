@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { DesignDoc } from "../../api/guards/design.ts";
 import { prepareDesignDoc } from "../../lib/itemDetailView.ts";
+import type { ViewMode } from "../../lib/requirementsView.ts";
 import { DesignDocumentView } from "./DesignDocumentView.tsx";
 
 const DIAGRAM_XML =
@@ -14,6 +15,9 @@ const REPLACED = "a�b";
 
 const NOTICE =
   "承認と実装が受け取る文字は、承認画面の全文です。この画面は読みやすく描いたもので、生のHTML(コメントを含む)、リンク参照定義、見えない文字、長さの扱いが違います。";
+
+const TEXT_NOTICE =
+  "承認と実装が受け取る文字は、承認画面の全文です。この画面の文字は、見えない文字の表し方、改行と空白の扱い、長さが違います。";
 
 const DOC: DesignDoc = {
   id: 21,
@@ -33,11 +37,18 @@ const DOC: DesignDoc = {
   approval_status: null,
 };
 
-function render(overrides: Partial<DesignDoc> = {}): string {
+function render(
+  overrides: Partial<DesignDoc> = {},
+  initialMode: ViewMode = "preview",
+): string {
   const doc = { ...DOC, ...overrides };
   return renderToStaticMarkup(
     <MemoryRouter>
-      <DesignDocumentView doc={doc} prepared={prepareDesignDoc(doc)} />
+      <DesignDocumentView
+        doc={doc}
+        prepared={prepareDesignDoc(doc)}
+        initialMode={initialMode}
+      />
     </MemoryRouter>,
   );
 }
@@ -117,10 +128,18 @@ describe("DesignDocumentView", () => {
     expect(render()).not.toContain("approval=");
   });
 
+  test("has no button but the two of the view mode switch", () => {
+    expect(
+      render({ approval_request_id: 31, approval_status: "pending" }).split(
+        "<button",
+      ).length - 1,
+    ).toBe(2);
+  });
+
   test("has no approval bar", () => {
     expect(
       render({ approval_request_id: 31, approval_status: "pending" }),
-    ).not.toContain("<button");
+    ).not.toMatch(/承認バー|承認と却下|承認する|却下する/);
   });
 
   test("shows neither the approval status nor the draft switcher", () => {
@@ -167,5 +186,102 @@ describe("DesignDocumentView sanitizing", () => {
     expect(
       render({ markdown: "# T\n\n<script>alert(1)</script>\n" }),
     ).not.toContain("<script>");
+  });
+});
+
+describe("DesignDocumentView view mode", () => {
+  test("starts as the preview", () => {
+    expect(render()).toMatch(/aria-pressed="true"[^>]*>プレビュー</);
+  });
+
+  test("draws no markdown text in the preview", () => {
+    expect(render()).not.toContain('<pre dir="ltr"');
+  });
+
+  test("shows the notice of the preview in the preview", () => {
+    expect(render()).toContain(NOTICE);
+  });
+
+  test("shows the markdown as text in the text mode", () => {
+    expect(render({}, "text")).toContain(
+      "# Design title\n\n## Background\n\nBody paragraph.\n",
+    );
+  });
+
+  test("wraps the text in the text mode", () => {
+    expect(render({}, "text")).toMatch(
+      /<pre dir="ltr" class="[^"]*whitespace-pre-wrap[^"]*break-words/,
+    );
+  });
+
+  test("hides the table of contents in the text mode", () => {
+    expect(render({}, "text")).not.toContain("目次");
+  });
+
+  test("shows the notice of the text mode", () => {
+    expect(render({}, "text")).toContain(TEXT_NOTICE);
+  });
+
+  test("drops the notice of the preview in the text mode", () => {
+    expect(render({}, "text")).not.toContain(NOTICE);
+  });
+
+  test("shows the fixed notice at the top in the text mode", () => {
+    expect(render({}, "text")).toMatch(
+      new RegExp(`${TEXT_NOTICE}[\\s\\S]*Summary line`),
+    );
+  });
+
+  test("keeps the summary in the text mode", () => {
+    expect(render({}, "text")).toContain("Summary line");
+  });
+
+  test("keeps the open questions in the text mode", () => {
+    expect(render({}, "text")).toContain("Which API?");
+  });
+
+  test("draws no diagram in the text mode", () => {
+    expect(
+      render(
+        {
+          markdown: "# T\n\n![flow](flow.drawio)\n",
+          diagrams: [{ name: "flow", xml: DIAGRAM_XML }],
+        },
+        "text",
+      ),
+    ).not.toContain('sandbox="allow-scripts"');
+  });
+
+  test("shows html comments and link reference definitions in the text mode", () => {
+    expect(
+      render(
+        {
+          markdown: "# T\n\n<!-- hidden -->\n\n[ref]: https://example.com/x\n",
+        },
+        "text",
+      ),
+    ).toContain("&lt;!-- hidden --&gt;\n\n[ref]: https://example.com/x");
+  });
+
+  test("keeps the approval link in the text mode", () => {
+    expect(
+      render({ approval_request_id: 31, approval_status: "pending" }, "text"),
+    ).toContain('href="/?approval=31"');
+  });
+
+  test("replaces hidden characters in the text mode", () => {
+    expect(render({ markdown: `# T\n\n${BAD}\n` }, "text")).toContain(REPLACED);
+  });
+
+  test("draws no hidden character in the text mode", () => {
+    expect(render({ markdown: `# T\n\n${BAD}\n` }, "text")).not.toContain("‮");
+  });
+
+  test("puts the switch after the summary", () => {
+    expect(render()).toMatch(/Summary line[\s\S]*設計書の表示の形式/);
+  });
+
+  test("puts the switch before the body", () => {
+    expect(render()).toMatch(/設計書の表示の形式[\s\S]*Body paragraph\./);
   });
 });
