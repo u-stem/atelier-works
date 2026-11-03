@@ -186,6 +186,7 @@ const WALKED_PATHS: readonly string[] = [
   "items/7",
   "items/7?tab=design",
   "items/7/design",
+  "items/7/requirements",
   "system",
   "jobs",
   "jobs?tab=history",
@@ -977,6 +978,74 @@ test.describe("navigation by keyboard", () => {
 
       test("updates the document title", async ({ page }) => {
         await expect(page).toHaveTitle(destination.title);
+      });
+    });
+  }
+});
+
+// 本文の表示の形式の切り替え。Tab、Enter、Spaceだけで操作でき、押した選択肢が`aria-pressed`で示される。
+test.describe("view mode switch by keyboard", () => {
+  const SWITCH_PATHS: readonly string[] = [
+    "items/7/requirements",
+    "?approval=1",
+    "items/7/design",
+  ];
+
+  for (const path of SWITCH_PATHS) {
+    test.describe(`/console/${path}`, () => {
+      test.beforeEach(async ({ page }) => {
+        await openScreen(page, path);
+        for (let count = 0; count < MAX_TABS; count += 1) {
+          await page.keyboard.press("Tab");
+          if (
+            await page
+              .getByRole("button", { name: "プレビュー" })
+              .evaluate((element) => element === document.activeElement)
+          ) {
+            return;
+          }
+        }
+        throw new Error("the preview choice is not reachable by Tab");
+      });
+
+      test("starts as the preview", async ({ page }) => {
+        await expect(
+          page.getByRole("button", { name: "プレビュー" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      test("chooses the text on Enter", async ({ page }) => {
+        await page.keyboard.press("Tab");
+
+        await page.keyboard.press("Enter");
+
+        await expect(
+          page.getByRole("button", { name: "Markdownの文字" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      test("returns to the preview on Space", async ({ page }) => {
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Enter");
+        await page.keyboard.press("Shift+Tab");
+
+        await page.keyboard.press("Space");
+
+        await expect(
+          page.getByRole("button", { name: "プレビュー" }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      test("keeps the focus on the choice that was chosen", async ({
+        page,
+      }) => {
+        await page.keyboard.press("Tab");
+
+        await page.keyboard.press("Enter");
+
+        await expect(
+          page.getByRole("button", { name: "Markdownの文字" }),
+        ).toBeFocused();
       });
     });
   }

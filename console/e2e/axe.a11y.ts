@@ -48,6 +48,7 @@ const SCREEN_PATHS: readonly string[] = [
   "items/7",
   "items/7?tab=design",
   "items/7/design",
+  "items/7/requirements",
   "system",
   "jobs",
   "jobs?tab=history",
@@ -61,6 +62,13 @@ const SCREEN_PATHS: readonly string[] = [
   "jobs/flows/implement",
   "jobs/flows/pr_review",
   "jobs/flows/pr_fix",
+];
+
+/** 本文を「Markdownの文字」に切り替えて検査する経路。承認画面の要件定義を含む。 */
+const TEXT_MODE_PATHS: readonly string[] = [
+  "items/7/requirements",
+  "?approval=1",
+  "items/7/design",
 ];
 
 /** 見出しを1つずつ開いて検査する、起動の図の経路。開いたときだけ描かれる要素を検査するため。 */
@@ -203,6 +211,21 @@ for (const theme of THEMES) {
       }
     });
   }
+
+  // 「Markdownの文字」は、本文がある状態(normal)だけで検査する。
+  test.describe(`text mode (${theme})`, () => {
+    test.use({ theme, mode: "normal" });
+    for (const path of TEXT_MODE_PATHS) {
+      test(`/console/${path} has no violations`, async ({ page }) => {
+        await openScreen(page, path);
+        const choice = page.getByRole("button", { name: "Markdownの文字" });
+        await choice.click();
+        await expect(choice).toHaveAttribute("aria-pressed", "true");
+
+        expect(await auditOf(page)).toEqual(clean(theme));
+      });
+    }
+  });
 
   test.describe(`dialogs (${theme})`, () => {
     test.use({ theme, mode: "normal" });
