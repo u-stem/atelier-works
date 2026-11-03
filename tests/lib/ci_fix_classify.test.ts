@@ -226,6 +226,62 @@ describe("isLockIntegrityOnlyLog", () => {
     expect(isLockIntegrityOnlyLog(lines.join("\n"), false)).toBe(true);
   });
 
+  describe("with the log of a parallel run on CI", () => {
+    function parallelLog(summaryOnly: readonly string[] = []): string {
+      const lines: string[] = [
+        "##[group]tests/lib/other.test.ts:",
+        "(pass) a > b [1.00ms]",
+        "##[endgroup]",
+      ];
+      for (const entry of LOCK_INTEGRITY_TESTS) {
+        lines.push(
+          `##[group]${entry.file}:`,
+          "error: expect(received).toEqual(expected)",
+          `(fail) ${entry.name} [4.10ms]`,
+          "##[endgroup]",
+          "##[group]tests/lib/other.test.ts:",
+          "(skip) c > d",
+          "##[endgroup]",
+        );
+      }
+      lines.push(
+        `${String(LOCK_INTEGRITY_TESTS.length + summaryOnly.length)} tests failed:`,
+      );
+      for (const entry of LOCK_INTEGRITY_TESTS) {
+        lines.push(`(fail) ${entry.name} [4.10ms]`);
+      }
+      for (const name of summaryOnly) lines.push(`(fail) ${name} [4.10ms]`);
+      lines.push(
+        "",
+        " 100 pass",
+        ` ${String(LOCK_INTEGRITY_TESTS.length + summaryOnly.length)} fail`,
+      );
+      return lines.join("\n");
+    }
+
+    test("accepts the failures, which the summary lists again without headers", () => {
+      expect(isLockIntegrityOnlyLog(parallelLog(), false)).toBe(true);
+    });
+
+    test("rejects a failure that only the summary lists", () => {
+      expect(
+        isLockIntegrityOnlyLog(parallelLog(["other > fails"]), false),
+      ).toBe(false);
+    });
+
+    test("accepts a known name that only the summary lists", () => {
+      const first = LOCK_INTEGRITY_TESTS[0];
+      const log = [
+        "##[group]tests/lib/other.test.ts:",
+        "##[endgroup]",
+        "1 tests failed:",
+        `(fail) ${first?.name ?? ""} [4.10ms]`,
+        " 1 fail",
+      ].join("\n");
+      expect(isLockIntegrityOnlyLog(log, false)).toBe(true);
+    });
+  });
+
   test("rejects a known name under another file", () => {
     const entry = LOCK_INTEGRITY_TESTS[1];
     const log = [
@@ -301,8 +357,13 @@ describe("isLockIntegrityOnlyLog", () => {
     expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
   });
 
-  test("rejects a failure that has no file header above it", () => {
+  test("accepts a known name that has no file header above it", () => {
     const log = bunLog([`(fail) ${INTEGRITY_NAME} [4.10ms]`, " 1 fail"]);
+    expect(isLockIntegrityOnlyLog(log, false)).toBe(true);
+  });
+
+  test("rejects an unknown name that has no file header above it", () => {
+    const log = bunLog(["(fail) other > fails [4.10ms]", " 1 fail"]);
     expect(isLockIntegrityOnlyLog(log, false)).toBe(false);
   });
 

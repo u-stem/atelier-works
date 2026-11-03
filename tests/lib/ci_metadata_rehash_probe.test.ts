@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
-
-const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
-const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
-
 import { rehashRoundProbe } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { ghApiOk, ok } from "./testSupport.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const SHA = "a".repeat(40);
 const REF = "factory/issue-3-wi-7";

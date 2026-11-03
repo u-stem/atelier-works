@@ -12,10 +12,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
-
-const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
-const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
-
 import {
   type CiFailureRead,
   type CiGatherDeps,
@@ -49,6 +45,9 @@ import {
 } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { BytesRunner } from "../../f/factory/lib/metadata_git_ports.ts";
 import type { PlanResult } from "../../f/factory/lib/metadata_precheck.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const ENC = new TextEncoder();
 

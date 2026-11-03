@@ -55,7 +55,9 @@ export const LOCK_INTEGRITY_TESTS: readonly LockIntegrityTest[] = [
   })),
 ];
 
-const TEST_FILE_HEADER = /^([^\s:]+\.test\.[cm]?[jt]sx?):$/;
+// 並列で実行したCIのログでは、見出しが`##[group]<パス>:`の形で、ファイルごとに`##[endgroup]`で閉じる。
+const TEST_FILE_HEADER = /^(?:##\[group\])?([^\s:]+\.test\.[cm]?[jt]sx?):$/;
+const GROUP_END = "##[endgroup]";
 const FAIL_SUFFIX = /\s\[[\d.]+m?s\]$/;
 const FAIL_SUMMARY = /^(\d+) fail$/;
 const ERROR_SUMMARY = /^(\d+) errors?$/;
@@ -65,7 +67,7 @@ const FAIL_PREFIX = "(fail) ";
  * CIのテストのログが、ロックの整合を調べるテストだけの失敗を示すか。
  * 次をすべて満たすときだけ`true`にする。判断できないものは`false`で、従来の経路に戻す。
  * - ログが上限で切られていない。
- * - `(fail)`の行がある。すべて、ファイルの見出しと名前の組が、`LOCK_INTEGRITY_TESTS`のどれかと合う。
+ * - `(fail)`の行がある。すべて、`LOCK_INTEGRITY_TESTS`のどれかと合う。ファイルの見出しが分かるときは、ファイルと名前の組で、分からないときは名前で合わせる。
  * - 集計の`N fail`の行が1つあり、`N`が`(fail)`の行の数(重複を除く)と等しい。
  * - 集計の`N error`の行が無いか、`N`が0である。
  * ログは外部由来の文字列なので、ここでは成否の判断にだけ使い、どこにも残さない。
@@ -80,6 +82,10 @@ export function isLockIntegrityOnlyLog(
   const declared: number[] = [];
   for (const line of cleanLogText(rawLog).split("\n")) {
     const text = line.trim();
+    if (text === GROUP_END) {
+      file = null;
+      continue;
+    }
     const header = TEST_FILE_HEADER.exec(text);
     if (header !== null) {
       file = header[1] ?? null;
@@ -103,8 +109,11 @@ export function isLockIntegrityOnlyLog(
     return false;
   }
   for (const [name, failedFile] of failedFileByName) {
+    // ファイルが分からない失敗は、名前だけで照合する。
+    // 大きなログは中間が省かれ、並列の実行の末尾の一覧には、ファイルの見出しが無い。
     const known = LOCK_INTEGRITY_TESTS.some(
-      (test) => test.file === failedFile && test.name === name,
+      (test) =>
+        test.name === name && (failedFile === null || failedFile === test.file),
     );
     if (!known) return false;
   }

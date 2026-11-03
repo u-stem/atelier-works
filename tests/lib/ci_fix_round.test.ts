@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { LOCK_INTEGRITY_TESTS } from "../../f/factory/lib/ci_fix_classify.ts";
-
-const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
-const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
-
 import {
   CI_FIX_SKILL_MARKER,
   CI_ROUND_MAX_RUNS,
@@ -48,6 +44,9 @@ import {
 } from "../../f/factory/lib/github.ts";
 import type { WorkflowRun } from "../../f/factory/lib/main_ci_support.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
+
+const FIRST_TEST_FILE = LOCK_INTEGRITY_TESTS[0]?.file ?? "";
+const FIRST_TEST_NAME = LOCK_INTEGRITY_TESTS[0]?.name ?? "";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
