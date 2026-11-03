@@ -29,7 +29,7 @@ const DRAFT_ROW: SqlRow = {
   created_at: new Date("2026-11-01T00:00:00Z"),
   approval_request_id: "31",
   approval_status: "pending",
-  is_newest_of_pair: true,
+  is_newest_for_doc_dir: true,
 };
 
 /**
@@ -142,17 +142,20 @@ describe("design_doc", () => {
     expect(rows).toMatchObject([{ requirement_attempt: 1, design_attempt: 1 }]);
   });
 
-  test("returns the draft of the pair that is not the newest without its diagrams", async () => {
+  test("returns the draft that is not the newest of its doc dir without its diagrams", async () => {
     const disk = diskWith({ [`${DOC_DIR}/flow.drawio`]: VALID_DIAGRAM_XML });
-    const rows = await designDoc([{ ...DRAFT_ROW, is_newest_of_pair: false }], {
-      disk,
-    });
+    const rows = await designDoc(
+      [{ ...DRAFT_ROW, is_newest_for_doc_dir: false }],
+      {
+        disk,
+      },
+    );
     expect(rows).toMatchObject([{ diagrams: [], rejected_diagrams: [] }]);
   });
 
-  test("does not read the diagrams of a draft with a newer draft of the same pair", async () => {
+  test("does not read the diagrams of a draft with a newer draft of the same doc dir", async () => {
     const disk = diskWith({ [`${DOC_DIR}/flow.drawio`]: VALID_DIAGRAM_XML });
-    await designDoc([{ ...DRAFT_ROW, is_newest_of_pair: false }], { disk });
+    await designDoc([{ ...DRAFT_ROW, is_newest_for_doc_dir: false }], { disk });
     expect(disk.paths).toEqual([]);
   });
 
@@ -277,10 +280,22 @@ describe("design_doc", () => {
     expect(statements[0]).toContain("a.work_item_id = dd.work_item_id");
   });
 
-  test("decides the newest of a pair by the doc dir", async () => {
+  test("decides the newest by the doc dir", async () => {
     const statements: string[] = [];
     await designDoc([DRAFT_ROW], { statements });
     expect(statements[0]).toContain("newer.doc_dir = dd.doc_dir");
+  });
+
+  test("compares newer drafts of the same work item to use the work item index", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("newer.work_item_id = dd.work_item_id");
+  });
+
+  test("names the newest column after the doc dir", async () => {
+    const statements: string[] = [];
+    await designDoc([DRAFT_ROW], { statements });
+    expect(statements[0]).toContain("AS is_newest_for_doc_dir");
   });
 
   test("compares newer drafts by id", async () => {
