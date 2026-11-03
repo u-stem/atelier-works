@@ -13,6 +13,9 @@ export default defineConfig({
   // `bun test`が拾わないよう、検査の名前は`*.a11y.ts`にする。
   testMatch: "**/*.a11y.ts",
   fullyParallel: true,
+  // 検査はaxeの解析でCPUを使うので、CIでは論理コアの数だけ並列にする。
+  // 指定しないと論理コアの半分になり、4 vCPUのランナーでは2つしか並列にならない。
+  workers: inCi ? "100%" : undefined,
   forbidOnly: inCi,
   retries: 0,
   reporter: inCi
