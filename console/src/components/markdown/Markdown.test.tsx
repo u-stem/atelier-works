@@ -206,8 +206,12 @@ describe("Markdown table appearance", () => {
 
   test("stripes the body rows of a table", () => {
     expect(render(TABLE)).toMatch(
-      /<tbody class="[^"]*nth-child\(even\)\]:bg-muted\/40/,
+      /<tbody class="[^"]*nth-child\(even\)\]:bg-foreground\/\[0\.03\]/,
     );
+  });
+
+  test("shades a header cell darker than the stripe", () => {
+    expect(render(TABLE)).toMatch(/<th class="[^"]*bg-foreground\/\[0\.08\]/);
   });
 
   test("uses the standard cell padding in a body cell", () => {

@@ -140,6 +140,61 @@ function clean(theme: Theme): Audit {
   };
 }
 
+/** 縞を見分けられる輝度比の下限。GitHubの表の縞はおよそ1.06である。 */
+const MIN_STRIPE_RATIO = 1.05;
+
+/** 表の枠の中の要素。 */
+const TABLE_FRAME = "section[aria-label='表']";
+
+/** sRGBの1成分を、輝度の計算のために線形にする。 */
+function linearChannel(value: number): number {
+  const scaled = value / 255;
+  return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+}
+
+/** 2色の輝度比(WCAGの相対輝度)。1以上で、色が近いほど1に近い。 */
+function luminanceRatio(a: readonly number[], b: readonly number[]): number {
+  const luminance = ([red = 0, green = 0, blue = 0]: readonly number[]) =>
+    0.2126 * linearChannel(red) +
+    0.7152 * linearChannel(green) +
+    0.0722 * linearChannel(blue);
+  const [x, y] = [luminance(a), luminance(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+/**
+ * 要素の左上の少し内側の、画面に描かれた色を読む。
+ * 縞は半透明の重ね塗りなので、計算された背景色ではなく、描かれた画素を測る。
+ */
+async function paintedColor(page: Page, selector: string): Promise<number[]> {
+  const target = page.locator(selector).first();
+  await target.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
+  const box = await target.boundingBox();
+  if (box === null) {
+    throw new Error(`no box for ${selector}`);
+  }
+  const shot = (await page.screenshot()).toString("base64");
+  return page.evaluate(
+    async ({ shot, x, y }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${shot}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      if (context === null) {
+        throw new Error("no 2d context");
+      }
+      context.drawImage(image, 0, 0);
+      return Array.from(context.getImageData(x, y, 1, 1).data);
+    },
+    { shot, x: Math.round(box.x + 4), y: Math.round(box.y + 4) },
+  );
+}
+
 for (const theme of THEMES) {
   for (const mode of MODES) {
     test.describe(`screens (${theme}, ${mode})`, () => {
@@ -223,6 +278,45 @@ for (const theme of THEMES) {
         await expect(choice).toHaveAttribute("aria-pressed", "true");
 
         expect(await auditOf(page)).toEqual(clean(theme));
+      });
+    }
+  });
+
+  // 表の縞は、見分けられる濃さで、ヘッダーの背景とも同化しない。
+  test.describe(`table stripes (${theme})`, () => {
+    test.use({ theme, mode: "normal" });
+    for (const path of TEXT_MODE_PATHS) {
+      test(`/console/${path} shows the stripe of the second row`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const first = await paintedColor(
+          page,
+          `${TABLE_FRAME} tbody tr:nth-child(1) td`,
+        );
+        const second = await paintedColor(
+          page,
+          `${TABLE_FRAME} tbody tr:nth-child(2) td`,
+        );
+
+        expect(luminanceRatio(first, second)).toBeGreaterThanOrEqual(
+          MIN_STRIPE_RATIO,
+        );
+      });
+
+      test(`/console/${path} tells the header from the stripe`, async ({
+        page,
+      }) => {
+        await openScreen(page, path);
+        const header = await paintedColor(page, `${TABLE_FRAME} th`);
+        const second = await paintedColor(
+          page,
+          `${TABLE_FRAME} tbody tr:nth-child(2) td`,
+        );
+
+        expect(luminanceRatio(header, second)).toBeGreaterThanOrEqual(
+          MIN_STRIPE_RATIO,
+        );
       });
     }
   });
