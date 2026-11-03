@@ -3,6 +3,7 @@
 // 表が実物と合っているかは、tests/scripts/launch-graph.test.tsが確かめる。
 
 import type { ApprovalRequestKind } from "../f/factory/lib/types.ts";
+import type { Evidence } from "./launch-evidence.ts";
 
 /** 辺の種類。scriptがコードで起動するか、人がコードを介さずに起動するか。 */
 export type LaunchKind = "script" | "human";
@@ -149,6 +150,26 @@ export const REWORK_LAUNCH_EDGES: readonly ReworkEdge[] = [
   { from: "steps/implement_finish", to: "design" },
   { from: "steps/pr_fix_finish", to: "design" },
 ];
+
+/** PRを介した関係の向き。前進は次の段へ、戻りは前のflowへ戻る。 */
+export type PrRelationDirection = "forward" | "return";
+
+/**
+ * PRを介して続く1本の関係。flowの起動の辺ではなく、PRのラベルやCIの結果を別の定期ジョブが見て起動するものである。
+ * - `from`: `f/factory`からの相対パスで拡張子の無いscript名。flowのステップのscriptでなければならない。
+ * - `to`: 続くflowの名前。
+ * - `trigger`: 経由の短い説明。表のソースとテストだけで使い、画面のデータには出さない。
+ * - `evidence`: 関係の根拠になるソースの文字列。1つ目は`from`のscript自身にする。
+ */
+export type PrRelationEdge = {
+  readonly from: string;
+  readonly to: string;
+  readonly direction: PrRelationDirection;
+  readonly trigger: string;
+  readonly evidence: readonly Evidence[];
+};
+
+export const PR_RELATION_EDGES: readonly PrRelationEdge[] = [];
 
 /**
  * flowを起動するscriptを、別のscriptが呼ぶ関係(呼ばれるscript → 呼ぶscript)。
