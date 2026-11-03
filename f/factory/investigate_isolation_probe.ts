@@ -1,7 +1,8 @@
 // 調査のClaudeの隔離を観測する。手動で実行し、`main()`は引数を取らない。
 // 合否は判定せず、常に`passed: false`と`probeJudgeVersion: 0`を返すので、合格の関門は閉じたままになる。
-// 本物の秘密は読ませない。ジョブごとに作る秘密でないcanaryのファイルを、`/run/factory-tmp`、`/tmp`、`$HOME`の下に置き、
-// 塞いだはずの場所への読み出しがどう記録されるかを、transcriptの構造から観測する。
+// 本物の秘密は読ませない。ジョブごとに作る秘密でないcanaryのファイルを、`/run/factory-tmp`、`/tmp`、`$HOME`と作業ディレクトリの下に置き、
+// `Read`・`Glob`・`Grep`がそれぞれの場所に届くかを、transcriptの構造から観測する。
+// 作業ディレクトリの下の目印は、成功した結果と、閉じ込めで落とした結果を読み分ける陽性対照である。
 // 後続の判定の設計が、この観測の実データから始まる。
 // 保護パスに置く。観測の結果に本文を載せたり、後始末を省いたりすると、秘密や残骸が残るため。
 //
@@ -35,6 +36,7 @@ import {
 } from "./lib/investigate_isolation.ts";
 import {
   analyzeTranscript,
+  CANARY_FILE_NAME,
   describeTree,
   findTranscriptPath,
   isSessionId,
@@ -42,6 +44,7 @@ import {
   type ProbeObservations,
   type ProbePairSpec,
   type ProbeStopCode,
+  type ProbeTool,
   parseTranscript,
   type RunObservation,
   SECRET_ROTATION_NOTICE,
@@ -87,8 +90,8 @@ export type ProbeDeps = {
   readonly claudeVersion: string | undefined;
   readonly path: string | undefined;
   readonly home: string;
-  /** canaryのディレクトリを作る親。 */
-  readonly prefixes: Readonly<Record<PairLabel, string>>;
+  /** canaryのディレクトリを作る親。作業ディレクトリの下は、作ったworktreeの場所を使う。 */
+  readonly prefixes: Readonly<Record<Exclude<PairLabel, "cwd">, string>>;
   readonly claudeConfigDir: string;
   /** 作ったディレクトリの所有者として期待するuid。 */
   readonly expectedUid: number;
@@ -122,8 +125,14 @@ function mainRepoDir(owner: string, repo: string): string {
   return `/workspaces/${owner}/${repo}/main`;
 }
 
-const PAIR_LABELS: readonly PairLabel[] = ["run_factory_tmp", "tmp", "home"];
-const CANARY_FILE_NAME = "canary.txt";
+const PAIR_LABELS: readonly PairLabel[] = [
+  "run_factory_tmp",
+  "tmp",
+  "home",
+  "cwd",
+];
+/** 実行の順。ツールごとに、4か所を`PAIR_LABELS`の順に試す。 */
+const PROBE_TOOLS: readonly ProbeTool[] = ["Read", "Glob", "Grep"];
 const CANARY_NAME_PREFIX = ".factory-probe-";
 const CANARY_VALUE_PREFIX = "FACTORY_PROBE_CANARY_";
 const STALE_CANARY_NAME = /^\.factory-probe-[0-9a-f]{32}$/;
@@ -210,19 +219,42 @@ async function removeStaleCanaries(
   }
 }
 
+/** 置いたcanary。`Read`はファイル、`Glob`と`Grep`はディレクトリを指す。 */
+type PlacedCanary = {
+  readonly label: PairLabel;
+  readonly dir: string;
+  readonly file: string;
+  readonly canaryValue: string;
+  readonly canaryName: string;
+};
+
+/** 置いたcanaryから、ツールごとの組を作る。 */
+function specFor(placed: PlacedCanary, tool: ProbeTool): ProbePairSpec {
+  return {
+    label: placed.label,
+    tool,
+    path: tool === "Read" ? placed.file : placed.dir,
+    canaryValue: placed.canaryValue,
+    canaryName: placed.canaryName,
+  };
+}
+
 /**
  * 各親の下に、このジョブ専用の0700のディレクトリを排他的に作り、canaryのファイルを置く。
+ * 親は、3つの置き場と、作ったworktreeの作業ディレクトリである。
  * 既にある名前、symlink、期待する所有者でないもの、0700でないものは断る。
  * 作ったディレクトリだけを`ctx`に控え、後始末の対象にする。
  */
 async function placeCanaries(
   deps: ProbeDeps,
   ctx: Context,
-): Promise<ProbePairSpec[]> {
-  const specs: ProbePairSpec[] = [];
+  cwd: string,
+): Promise<PlacedCanary[]> {
+  const placedList: PlacedCanary[] = [];
   for (const label of PAIR_LABELS) {
     const canaryName = `${CANARY_NAME_PREFIX}${deps.randomHex()}`;
-    const dir = join(deps.prefixes[label], canaryName);
+    const parent = label === "cwd" ? cwd : deps.prefixes[label];
+    const dir = join(parent, canaryName);
     await mkdir(dir, { mode: PRIVATE_DIR_MODE });
     ctx.createdCanaryDirs.push(dir);
     await chmod(dir, PRIVATE_DIR_MODE);
@@ -241,9 +273,9 @@ async function placeCanaries(
       flag: "wx",
       mode: PRIVATE_FILE_MODE,
     });
-    specs.push({ label, path, canaryValue, canaryName });
+    placedList.push({ label, dir, file: path, canaryValue, canaryName });
   }
-  return specs;
+  return placedList;
 }
 
 /** `claude --version`を、最小の環境で、配列のargvで実行する。失敗しても観測は続ける。 */
@@ -317,6 +349,7 @@ function unidentified(sessionIdState: "null" | "invalid"): SessionObservation {
     transcript: "unidentified",
     structure: null,
     pair: null,
+    unmatchedToolUse: null,
     outputToolNames: [],
     outputToolOmitted: 0,
   };
@@ -337,6 +370,7 @@ async function observeSession(
   const empty = {
     structure: null,
     pair: null,
+    unmatchedToolUse: null,
     outputToolNames: [],
     outputToolOmitted: 0,
   };
@@ -367,6 +401,7 @@ async function observeSession(
     transcript: "analyzed",
     structure: analysis.structure,
     pair: analysis.pairs[0] ?? null,
+    unmatchedToolUse: analysis.unmatchedToolUse,
     outputToolNames: analysis.outputToolNames,
     outputToolOmitted: analysis.outputToolOmitted,
   };
@@ -389,7 +424,7 @@ async function runOne(
     oauthToken: deps.oauthToken,
     model,
     cwd,
-    pairs: [{ tool: "Read", path: spec.path }],
+    pairs: [{ tool: spec.tool, path: spec.path }],
   });
 
   const tree = await readTree(join(deps.claudeConfigDir, "projects"));
@@ -399,6 +434,7 @@ async function runOne(
     sessions.push(await observeSession(deps, ctx, sessionId, tree, spec, cwd));
   }
   ctx.runItems.push({
+    tool: spec.tool,
     pair: spec.label,
     outcome: result.outcome,
     reason: result.reason,
@@ -453,6 +489,21 @@ async function prepareWorkspace(
   }
 }
 
+/** ツールごとに、置き場を順に試す。止める条件に当たったら、残りを実行しない。 */
+async function runAll(
+  deps: ProbeDeps,
+  ctx: Context,
+  placedList: readonly PlacedCanary[],
+  cwd: string,
+  model: string,
+): Promise<void> {
+  for (const tool of PROBE_TOOLS) {
+    for (const placed of placedList) {
+      if (!(await runOne(deps, ctx, specFor(placed, tool), cwd, model))) return;
+    }
+  }
+}
+
 async function observe(deps: ProbeDeps, ctx: Context): Promise<void> {
   const cwd = await prepareWorkspace(deps, ctx);
   if (cwd === null) return;
@@ -460,9 +511,9 @@ async function observe(deps: ProbeDeps, ctx: Context): Promise<void> {
   ctx.claudeVersionCommand = await readClaudeVersion(deps);
   await removeQuietly(deps, ctx, deps.claudeConfigDir, "claude_config");
 
-  let specs: ProbePairSpec[];
+  let placedList: PlacedCanary[];
   try {
-    specs = await placeCanaries(deps, ctx);
+    placedList = await placeCanaries(deps, ctx, cwd);
   } catch {
     ctx.stoppedBy = "canary_placement_failed";
     deps.log("canary_placement_failed");
@@ -470,9 +521,7 @@ async function observe(deps: ProbeDeps, ctx: Context): Promise<void> {
   }
 
   const model = modelFor(deps.config, "implement", 0);
-  for (const spec of specs) {
-    if (!(await runOne(deps, ctx, spec, cwd, model))) break;
-  }
+  await runAll(deps, ctx, placedList, cwd, model);
   if (ctx.stoppedBy !== null) deps.log(ctx.stoppedBy);
 }
 

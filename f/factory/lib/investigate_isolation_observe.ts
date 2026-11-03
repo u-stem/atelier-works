@@ -3,18 +3,26 @@
 //
 // 残すのはキー、型、長さ、分類の符号が中心で、本文は残さない。
 // 例外は、組と完全に一致するtool_useの結果のうち、`is_error: true`のものの先頭200文字だけである。
+// 組と一致しないtool_useは、入力の綴りを残さず、件数だけを数える。
 // 拒否の文言の形を知るために残し、canaryの値と名前を置き換え、秘密の形を伏せてから切る。
 
 import { dirname } from "node:path";
 import { maskSecrets } from "./log.ts";
 import { isRecord, isString } from "./types.ts";
 
-/** 観測の対象にする組の置き場の区分。 */
-export type PairLabel = "run_factory_tmp" | "tmp" | "home";
+/** 観測の対象にする組の置き場の区分。`cwd`は作業ディレクトリの中で、陽性対照にあたる。 */
+export type PairLabel = "run_factory_tmp" | "tmp" | "home" | "cwd";
 
-/** 観測する1組。canaryの値と名前は、本文から取り除くために持つ。 */
+/** 組のツール。 */
+export type ProbeTool = "Read" | "Glob" | "Grep";
+
+/**
+ * 観測する1組。canaryの値と名前は、本文から取り除くために持つ。
+ * `Read`の`path`はcanaryのファイル、`Glob`と`Grep`の`path`はcanaryのディレクトリである。
+ */
 export type ProbePairSpec = {
   readonly label: PairLabel;
+  readonly tool: ProbeTool;
   readonly path: string;
   readonly canaryValue: string;
   readonly canaryName: string;
@@ -29,6 +37,17 @@ export const OUTPUT_TOOL_NAME_LIMIT = 4;
 /** 本物の秘密に届いた可能性があるときに、結果に載せる注意。 */
 export const SECRET_ROTATION_NOTICE =
   "A tool use outside the probe pairs or a transcript that could not be read was found, so the real secrets of the worker may have been reachable. Rotate DB_PASSWORD, the OAuth token and github_token, and revoke the logins under /var/lib/factory/claude and /var/lib/factory/gh, as described in docs/security.md.";
+
+/** canaryのファイルの名前。目録に載ったかを、`<canaryの名前>/canary.txt`の綴りで見分ける。 */
+export const CANARY_FILE_NAME = "canary.txt";
+
+/**
+ * 探索の組の入力に使う固定の値。プロンプトの文(`lib/investigate_claude.ts`)と入力の完全一致の両方が、ここを参照する。
+ * `Grep`の探す文字列は、canaryの値そのものを含まない形である。
+ */
+export const GLOB_PROBE_PATTERN = "*";
+export const GREP_PROBE_PATTERN = "FACTORY_PROBE_CANARY_[0-9a-f]{32}";
+export const GREP_PROBE_OUTPUT_MODE = "content";
 
 const CANARY_MARKER = "<canary>";
 const CANARY_NAME_MARKER = "<canary-name>";
@@ -264,6 +283,8 @@ export type PairResultObservation = {
   readonly isError: boolean | null;
   readonly bodyLength: number;
   readonly containsCanaryValue: boolean;
+  /** 本文が`<canaryの名前>/canary.txt`の綴りを含むか。拒否の文言はディレクトリのパスだけを含むので、成功と区別できる。 */
+  readonly containsCanaryEntry: boolean;
   readonly mentionsTruncation: boolean;
   readonly blockKeys: readonly string[];
   /** `is_error: true`の結果だけに付く、置き換えた本文の先頭。 */
@@ -272,6 +293,7 @@ export type PairResultObservation = {
 
 export type PairObservation = {
   readonly label: PairLabel;
+  readonly tool: ProbeTool;
   readonly toolUseCount: number;
   readonly inputKeys: readonly string[];
   readonly results: readonly PairResultObservation[];
@@ -286,6 +308,8 @@ export type UnexpectedToolUse = {
 export type TranscriptAnalysis = {
   readonly structure: TranscriptStructure;
   readonly pairs: readonly PairObservation[];
+  /** `Read`、`Glob`、`Grep`のtool_useのうち、どの組とも入力が完全には一致しないものの数。入力の綴りは残さない。 */
+  readonly unmatchedToolUse: number;
   /** 結果に並べる出力用ツール名。予定外のtool_useがあるときは空。 */
   readonly outputToolNames: readonly string[];
   /** 異なる出力用ツール名のうち、`outputToolNames`に並べなかった数。 */
@@ -301,12 +325,30 @@ export type AnalyzeContext = {
   readonly cwd: string;
 };
 
-/** 入力が、`file_path`だけを持ち、その値が`path`と等しいか。キーと値の完全一致である。 */
-function isExactRead(input: unknown, path: string): boolean {
-  if (!isRecord(input)) return false;
+/** 組と完全に一致する入力。キーの集合と各キーの値が、すべて等しくなければ一致としない。 */
+function exactInputOf(spec: ProbePairSpec): Readonly<Record<string, string>> {
+  if (spec.tool === "Read") return { file_path: spec.path };
+  if (spec.tool === "Glob") {
+    return { pattern: GLOB_PROBE_PATTERN, path: spec.path };
+  }
+  return {
+    pattern: GREP_PROBE_PATTERN,
+    path: spec.path,
+    output_mode: GREP_PROBE_OUTPUT_MODE,
+  };
+}
+
+/** ツール名が組のツールと等しく、入力が組の定義と完全に一致するか。正規化はしない。 */
+function matchesPair(use: ToolUseBlock, spec: ProbePairSpec): boolean {
+  const input = use.input;
+  if (use.name !== spec.tool || !isRecord(input)) return false;
+  const expected = exactInputOf(spec);
   const keys = Object.keys(input);
   return (
-    keys.length === 1 && keys[0] === "file_path" && input.file_path === path
+    keys.length === Object.keys(expected).length &&
+    Object.entries(expected).every(
+      ([key, value]) => keys.includes(key) && input[key] === value,
+    )
   );
 }
 
@@ -315,12 +357,11 @@ function observePair(
   spec: ProbePairSpec,
   specs: readonly ProbePairSpec[],
 ): PairObservation {
-  const matched = blocks.toolUses.filter(
-    (use) => use.name === "Read" && isExactRead(use.input, spec.path),
-  );
+  const matched = blocks.toolUses.filter((use) => matchesPair(use, spec));
   const ids = new Set(
     matched.flatMap((use) => (use.id === null ? [] : [use.id])),
   );
+  const entry = `${spec.canaryName}/${CANARY_FILE_NAME}`;
   const results = blocks.toolResults
     .filter((result) => result.toolUseId !== null && ids.has(result.toolUseId))
     .map(
@@ -328,6 +369,7 @@ function observePair(
         isError: result.isError,
         bodyLength: result.body.length,
         containsCanaryValue: result.body.includes(spec.canaryValue),
+        containsCanaryEntry: result.body.includes(entry),
         mentionsTruncation: /truncat/i.test(result.body),
         blockKeys: sortedUnique(result.keys.map(safeLabel)),
         errorHead:
@@ -338,6 +380,7 @@ function observePair(
     );
   return {
     label: spec.label,
+    tool: spec.tool,
     toolUseCount: matched.length,
     inputKeys: sortedUnique(
       matched.flatMap((use) =>
@@ -408,8 +451,26 @@ function touchesOutside(
   return !roots.some((root) => isWithin(target, root));
 }
 
+function isProbeToolName(name: string | null): boolean {
+  return name === "Read" || name === "Glob" || name === "Grep";
+}
+
 function stringField(input: unknown, key: string): string | null {
   return isRecord(input) && isString(input[key]) ? input[key] : null;
+}
+
+/**
+ * GlobとGrepに許す範囲の根。作業ディレクトリと、組ごとの目印の場所である。
+ * `Read`の組は目印のファイルのディレクトリ、`Glob`と`Grep`の組は目印のディレクトリそのものに限る。
+ * 後者は親まで広げると、置き場の別のディレクトリまで探せてしまうため。
+ */
+function searchRoots(context: AnalyzeContext): readonly string[] {
+  return [
+    context.cwd,
+    ...context.pairs.map((pair) =>
+      pair.tool === "Read" ? dirname(pair.path) : pair.path,
+    ),
+  ];
 }
 
 function classify(
@@ -419,14 +480,12 @@ function classify(
   readonly unexpected: UnexpectedToolUse | null;
   readonly outputTool: string | null;
 } {
-  const roots = [
-    context.cwd,
-    ...context.pairs.map((pair) => dirname(pair.path)),
-  ];
+  const roots = searchRoots(context);
   const nothing = { unexpected: null, outputTool: null };
   if (use.name === "Read") {
-    const allowed = context.pairs.some((pair) =>
-      isExactRead(use.input, pair.path),
+    // 組が`Read`のものに限る。`Glob`と`Grep`の実行で、目印のファイルの`Read`を予定内にしない。
+    const allowed = context.pairs.some(
+      (pair) => pair.tool === "Read" && matchesPair(use, pair),
     );
     if (allowed) return nothing;
     return {
@@ -466,9 +525,10 @@ function classify(
 
 /**
  * transcriptから、組ごとの観測と、構造と、予定外のtool_useを取り出す。
- * 組と完全に一致するtool_useの結果だけを数える。
- * Readは入力のキーと値が組の定義と完全に一致するときだけ許す。
- * GlobとGrepは、作業ディレクトリと組のcanaryのディレクトリの外に触れたときに予定外とする。
+ * 組と完全に一致するtool_useの結果だけを数える。一致は、ツール名と、入力のキーと値の完全一致である。
+ * 組と一致しないRead・Glob・Grepのtool_useは、綴りを残さず`unmatchedToolUse`に数える。
+ * Readは入力のキーと値が、`Read`の組の定義と完全に一致するときだけ許す。
+ * GlobとGrepは、作業ディレクトリと組のcanaryの場所(`Read`の組はファイルのディレクトリ、`Glob`と`Grep`の組はそのディレクトリ)の外に触れたときに予定外とする。
  * Read・Glob・Grep以外は、名前が出力用の形に合い、入力が出力のスキーマの形(`attempted`だけで値が真偽)のときだけ、
  * 出力用のツールとして扱い、予定外とはしない。それ以外はすべて予定外とし、名前と入力のキーは残さない。
  * 出力用のツール名はモデルが選べる綴りなので、結果に載せる前に`sanitizeOutputToolName`で置き換え、
@@ -481,7 +541,14 @@ export function analyzeTranscript(
   const blocks = extractBlocks(lines);
   const unexpected: UnexpectedToolUse[] = [];
   const outputToolNames: string[] = [];
+  let unmatchedToolUse = 0;
   for (const use of blocks.toolUses) {
+    if (
+      isProbeToolName(use.name) &&
+      !context.pairs.some((pair) => matchesPair(use, pair))
+    ) {
+      unmatchedToolUse += 1;
+    }
     const verdict = classify(use, context);
     if (verdict.unexpected !== null) unexpected.push(verdict.unexpected);
     if (verdict.outputTool !== null) outputToolNames.push(verdict.outputTool);
@@ -495,6 +562,7 @@ export function analyzeTranscript(
     pairs: context.pairs.map((spec) =>
       observePair(blocks, spec, context.pairs),
     ),
+    unmatchedToolUse,
     outputToolNames: summary.names,
     outputToolOmitted: summary.omitted,
     distinctOutputToolNames: sortedUnique(outputToolNames),
@@ -594,11 +662,14 @@ export type SessionObservation = {
     | "unidentified";
   readonly structure: TranscriptStructure | null;
   readonly pair: PairObservation | null;
+  /** 組と一致しない`Read`・`Glob`・`Grep`の数。解析できなかったときは`null`。 */
+  readonly unmatchedToolUse: number | null;
   readonly outputToolNames: readonly string[];
   readonly outputToolOmitted: number;
 };
 
 export type RunObservation = {
+  readonly tool: ProbeTool;
   readonly pair: PairLabel;
   readonly outcome: "success" | "failure";
   readonly reason: string | null;
