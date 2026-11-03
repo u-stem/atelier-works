@@ -5226,6 +5226,7 @@ lockは、`metadata_patch_manifest.script.lock`だけを止める。新しいscr
 一覧は`f/factory/lib/protected_paths.ts`にある。
 implementのClaudeは保護パスの変更を記録するだけで止まらない。
 カバレッジの下限での影響は、[テストの基準](testing-guidelines.md#残るリスク)にある。
+保護していないテストの削除による母数の変化と、lcovが改ざんを防がないことも、そこに書く。
 
 #### libのlockを保護しない理由
 
