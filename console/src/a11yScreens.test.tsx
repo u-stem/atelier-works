@@ -17,6 +17,7 @@ import {
   CONFIG_NORMAL,
   DESIGN_DOC_NORMAL,
   HOLDS_SNAPSHOT,
+  INBOX_PROPOSAL,
   INTAKE_SNAPSHOT_NORMAL,
   INTAKE_TARGETS,
   JOB,
@@ -60,6 +61,7 @@ const FIXTURES: Readonly<
   summary: { normal: SUMMARY_NORMAL, empty: SUMMARY_EMPTY },
   approval_design_doc: { normal: APPROVAL_DESIGN_DOC_NORMAL, empty: null },
   design_doc: { normal: DESIGN_DOC_NORMAL, empty: null },
+  inbox_proposals: { normal: [INBOX_PROPOSAL], empty: [] },
   intake_snapshot: { normal: INTAKE_SNAPSHOT_NORMAL, empty: null },
   intake_targets: { normal: INTAKE_TARGETS, empty: [] },
   "jobs/detail": { normal: JOB_DETAIL_NORMAL, empty: { found: false } },
@@ -247,7 +249,13 @@ const TAB_ENTRIES: Readonly<Record<string, readonly string[]>> = {
 
 /** 一覧で選んだ項目の詳細。承認、再実行の確認ダイアログを持つ。 */
 const SELECTION_ENTRIES: Readonly<Record<string, readonly string[]>> = {
-  inbox: ["/?approval=1", "/?approval=3", "/?failure=2", "/?notice=1"],
+  inbox: [
+    "/?approval=1",
+    "/?approval=3",
+    "/?approval=4",
+    "/?failure=2",
+    "/?notice=1",
+  ],
 };
 
 const CASES: readonly Case[] = SCREENS.flatMap((screen) => [

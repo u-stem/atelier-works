@@ -47,6 +47,11 @@ type BarProps = {
   refreshed: boolean;
   /** 本文が長く、GitHubで全文を確かめるまで承認を止めるか。 */
   fullCheckRequired: boolean;
+  /**
+   * プレビューを選んだ承認で、原文を確かめたかを問うチェックの文。`null`なら出さない。
+   * 切り詰めの確認とは別のチェックで、両方が要るときは両方を済ませるまで承認を止める。
+   */
+  previewCheckMessage?: string | null;
 };
 
 function Note({ children }: { children: ReactNode }) {
@@ -94,12 +99,14 @@ function DecideBar({
   approveBlockedReason,
   refreshed,
   fullCheckRequired,
+  previewCheckMessage = null,
 }: BarProps) {
   const [reason, setReason] = useState("");
   const [labelChecked, setLabelChecked] = useState(
     factoryLabel?.initial ?? false,
   );
   const [fullChecked, setFullChecked] = useState(false);
+  const [previewChecked, setPreviewChecked] = useState(false);
   const [confirming, setConfirming] = useState<"approve" | "reject" | null>(
     null,
   );
@@ -130,6 +137,8 @@ function DecideBar({
       blockedReason: approveBlockedReason,
       fullCheckRequired,
       fullChecked,
+      previewCheckRequired: previewCheckMessage !== null,
+      previewChecked,
     });
   const approveProblem = gate(now);
   const approveConfirmation = approvalConfirmation({
@@ -213,6 +222,20 @@ function DecideBar({
           本文が長く、上には先頭だけを表示しています。GitHubで全文を確かめました
         </label>
       ) : null}
+      {previewCheckMessage === null ? null : (
+        <label className="flex items-start gap-2 text-body">
+          <input
+            type="checkbox"
+            className={cn(CHECKBOX_CLASS, "mt-1")}
+            checked={previewChecked}
+            disabled={locked}
+            onChange={(event) => {
+              setPreviewChecked(event.target.checked);
+            }}
+          />
+          {previewCheckMessage}
+        </label>
+      )}
       {factoryLabel === null ? null : factoryLabel.offered ? (
         <label className="flex items-center gap-2 text-body">
           <input

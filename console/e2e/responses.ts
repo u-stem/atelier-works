@@ -9,7 +9,9 @@ import {
   CONFIG_NORMAL,
   DESIGN_DOC_NORMAL,
   HOLDS_SNAPSHOT,
+  INBOX_PROPOSAL,
   INTAKE_SNAPSHOT_NORMAL,
+  INTAKE_SNAPSHOT_TRUNCATED,
   INTAKE_TARGETS,
   JOB,
   JOB_DETAIL_NORMAL,
@@ -23,6 +25,7 @@ import {
   SUMMARY_NORMAL,
   SYSTEM_EMPTY,
   SYSTEM_NORMAL,
+  TRUNCATED_WORK_ITEM_ID,
   WORK_ITEM_DETAIL_NORMAL,
 } from "./fixtures.ts";
 
@@ -54,7 +57,8 @@ const WORK_ITEM_NOT_FOUND: Reply = {
   body: { error: { message: "console_query: no work item with id 7" } },
 };
 
-function queryReply(view: unknown, mode: Mode): Reply | null {
+function queryReply(args: unknown, mode: Mode): Reply | null {
+  const view = isRecord(args) ? args.view : undefined;
   switch (view) {
     case "summary":
       return pick(mode, SUMMARY_NORMAL, SUMMARY_EMPTY);
@@ -69,7 +73,15 @@ function queryReply(view: unknown, mode: Mode): Reply | null {
         ? ok(WORK_ITEM_DETAIL_NORMAL)
         : WORK_ITEM_NOT_FOUND;
     case "intake_snapshot":
-      return pick(mode, [INTAKE_SNAPSHOT_NORMAL], []);
+      return pick(
+        mode,
+        [
+          isRecord(args) && args.work_item_id === TRUNCATED_WORK_ITEM_ID
+            ? INTAKE_SNAPSHOT_TRUNCATED
+            : INTAKE_SNAPSHOT_NORMAL,
+        ],
+        [],
+      );
     case "requirements_doc":
       return pick(mode, [REQUIREMENTS_DOC_NORMAL], []);
     case "design_doc":
@@ -79,6 +91,7 @@ function queryReply(view: unknown, mode: Mode): Reply | null {
     case "intake_targets":
       return pick(mode, INTAKE_TARGETS, []);
     case "inbox":
+      return pick(mode, [INBOX_PROPOSAL], []);
     case "deployments":
     case "notices":
     case "audit_index":
@@ -120,7 +133,7 @@ export function replyFor(
   const view = isRecord(args) ? args.view : undefined;
   switch (script) {
     case "f/factory/steps/console_query":
-      return queryReply(view, mode);
+      return queryReply(args, mode);
     case "f/factory/console_holds":
       return ok(HOLDS_SNAPSHOT);
     case "f/factory/console_jobs":

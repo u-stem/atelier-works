@@ -32,7 +32,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { RequirementsDiagram } from "../../api/guards/requirements.ts";
 import { cn } from "../../lib/cn.ts";
-import { TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
+import { CHECKBOX_CLASS, TABLE_CELL_CLASS } from "../../lib/controlClasses.ts";
 import { ALERT_LABELS, stripAlertMarker } from "../../lib/markdownAlerts.ts";
 import { type Heading, headingIdAtLine } from "../../lib/markdownHeadings.ts";
 import { type RepoRef, resolveMarkdownLink } from "../../lib/markdownLink.ts";
@@ -312,7 +312,32 @@ const components: Components = {
   ol: ({ children }) => (
     <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-1">{children}</li>,
+  // GFMのタスクリストの項目は、チェックボックスが印を兼ねるので、箇条書きの点を出さない。
+  li: ({ className, children }) => (
+    <li
+      className={cn(
+        "pl-1",
+        className?.split(" ").includes("task-list-item") === true &&
+          "list-none",
+      )}
+    >
+      {children}
+    </li>
+  ),
+  // タスクリストのチェックボックスは、読むだけの表示である。入力欄としての名前が要る。
+  // 項目の文は隣にあるが、名前を項目の文に結ぶには要素ごとのidが要るので、状態を名前にする。
+  // チェック状態も読み上げられるので、状態が重なって聞こえるが、読むだけの表示なので許す。
+  input: ({ type, checked }) =>
+    type === "checkbox" ? (
+      <input
+        type="checkbox"
+        checked={checked === true}
+        readOnly
+        disabled
+        aria-label={checked === true ? "完了" : "未完了"}
+        className={cn(CHECKBOX_CLASS, "mr-2 align-middle")}
+      />
+    ) : null,
   hr: () => <hr className="my-6 border-border" />,
   strong: ({ children }) => (
     <strong className="font-semibold">{children}</strong>
@@ -413,8 +438,11 @@ type MarkdownProps = {
   readonly diagrams: readonly RequirementsDiagram[];
   /** 安全の検査を通らず、表示しない図の名前。 */
   readonly rejectedDiagrams: readonly string[];
-  /** 本文が属する作業項目のリポジトリ。このリポジトリのIssueとPRのURLだけをリンクにする。 */
-  readonly repo: RepoRef;
+  /**
+   * 本文が属する作業項目のリポジトリ。このリポジトリのIssueとPRのURLだけをリンクにする。
+   * `null`のときは、リポジトリが分からないので、URLをリンクにせず文字で出す。
+   */
+  readonly repo: RepoRef | null;
 };
 
 /**
