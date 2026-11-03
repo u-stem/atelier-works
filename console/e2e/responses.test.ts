@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { isApprovalDesignDocRows } from "../src/api/guards/approvalDesignDoc.ts";
 import { isHoldsSnapshot } from "../src/api/guards/holds.ts";
 import { isIntakeSnapshotRows } from "../src/api/guards/intakeSnapshot.ts";
+import { isIntakeTargets } from "../src/api/guards/intakeTargets.ts";
 import { isPipelineRows } from "../src/api/guards/pipeline.ts";
 import {
   isRequirementsDocRows,
@@ -46,6 +47,11 @@ const CASES: readonly Case[] = [
     script: QUERY,
     args: { view: "intake_snapshot" },
     guard: isIntakeSnapshotRows,
+  },
+  {
+    script: QUERY,
+    args: { view: "intake_targets" },
+    guard: isIntakeTargets,
   },
   {
     script: QUERY,
