@@ -307,7 +307,7 @@ Consoleの配布物は`ci.yml`ではなく、`console-dist.yml`が`main`へのpu
 
 1. 個別の規則: 先に当たった規則だけを使う。
 2. 入力が決まっているパスの規則: 当たった規則のジョブをすべて動かす。
-3. 許可リスト: `check`の検査だけで足りるパス。どのジョブも動かさない。
+3. 許可リスト: `check`と`check-docs`の検査だけで足りるパス。どのジョブも動かさない。
 4. どれにも当たらないパス: すべてのフラグを真にする。
 
 どれにも当たらないパスは、読むジョブが分からない。
@@ -350,7 +350,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | `tests/` | テストは`check`だけが実行する(プロセスロックとCIの判定のテストは、上の規則が先に当たる) |
 | `.claude/`、`.agents/`、`templates/` | CIのジョブは読まない |
 | `rt.d.ts`、ルートの`c_factory_config.resource-type.yaml` | `wmill.yaml`の同期の対象(`f/**`)の外で、メタデータの入力ではない |
-| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む |
+| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む(`.textlintrc.json`と`.markdownlint`で始まるファイルは`check-docs`も読む) |
 | `scripts/`の下の`.ts`ファイル | 上の規則に当たらないものは、`check`のテストが担う |
 | IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | `check`の文書の検査とテストが担う |
 

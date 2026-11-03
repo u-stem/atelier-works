@@ -261,7 +261,7 @@ const NO_JOB_RULES: readonly Rule[] = [
     matches: exact("rt.d.ts", "c_factory_config.resource-type.yaml"),
     flags: [],
   },
-  // lintとフックと走査の設定。読むのはcheckのステップだけ(.textlintrc.jsonはcheck-docsも読む)。
+  // lintとフックと走査の設定。読むのはcheckのステップだけ(.textlintrc.jsonと.markdownlint-cli2.jsoncはcheck-docsも読む)。
   {
     matches: exact(
       "biome.json",
