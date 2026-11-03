@@ -700,6 +700,24 @@ describe("investigate_isolation_probe", () => {
       );
     });
 
+    test("stops for a tool it does not know whose input is a command", async () => {
+      const handler = (index: number): Script => ({
+        sessions: [
+          {
+            id: sessionId(index),
+            lines: [
+              useLine("t1", "Monitor", { command: "echo x" }),
+              resultLine("t1", "BODY-OF-COMMAND", false),
+            ],
+          },
+        ],
+      });
+      const result = await runIsolationProbe(
+        makeDeps({ runClaude: fakeClaude(handler) }),
+      );
+      expect(result.observations.stoppedBy).toBe("unexpected_tool_use");
+    });
+
     test("points to the steps that replace the secrets", async () => {
       const result = await runIsolationProbe(
         makeDeps({ runClaude: fakeClaude((index) => readsEtc(index)) }),

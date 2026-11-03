@@ -490,21 +490,12 @@ describe("analyzeTranscript: the unexpected tool_use", () => {
   test.each([
     "Bash",
     "Write",
-    "Edit",
-    "MultiEdit",
-    "NotebookEdit",
     "WebFetch",
-    "WebSearch",
-    "Task",
-    "Agent",
-    "TodoWrite",
-    "KillShell",
-    "BashOutput",
-    "ExitPlanMode",
-    "SlashCommand",
-    "Skill",
+    "Monitor",
+    "PowerShell",
+    "SomeUnknownTool",
     "mcp__server__tool",
-  ])("flags the built-in or mcp tool %s as unexpected", (name) => {
+  ])("flags the tool %s whose input is a command as unexpected", (name) => {
     const analysis = analyzeTranscript(
       [useLine("t1", name, { command: "x" })],
       CONTEXT,
@@ -512,12 +503,51 @@ describe("analyzeTranscript: the unexpected tool_use", () => {
     expect(analysis.unexpected).toEqual([{ tool: "other", pathLength: 0 }]);
   });
 
-  test("does not record a built-in tool as the output tool", () => {
+  test("does not record a tool whose input is a command as the output tool", () => {
     const analysis = analyzeTranscript(
-      [useLine("t1", "Bash", { command: "x" })],
+      [useLine("t1", "Monitor", { command: "x" })],
       CONTEXT,
     );
     expect(analysis.outputToolNames).toEqual([]);
+  });
+
+  test.each([
+    ["an extra key", { attempted: true, command: "x" }],
+    ["another key", { command: "x" }],
+    ["no key", {}],
+    ["a string value", { attempted: "true" }],
+    ["a number value", { attempted: 1 }],
+    ["a null value", { attempted: null }],
+    ["an array", [true]],
+    ["null", null],
+    ["a string", "attempted"],
+  ])(
+    "flags a tool with the shape of a name and the input of %s",
+    (_label, input) => {
+      const analysis = analyzeTranscript(
+        [useLine("t1", "StructuredOutput", input)],
+        CONTEXT,
+      );
+      expect(analysis.unexpected).toEqual([{ tool: "other", pathLength: 0 }]);
+    },
+  );
+
+  test("does not put the name or the input key of an unexpected tool into the analysis", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "SecretToolName9", { secret_key_name_7: "x" })],
+      CONTEXT,
+    );
+    expect(JSON.stringify(analysis)).not.toMatch(
+      /SecretToolName9|secret_key_name_7/,
+    );
+  });
+
+  test("does not put the name of a tool whose input has an extra key into the analysis", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "SecretToolName9", { attempted: true, leak_key_3: 1 })],
+      CONTEXT,
+    );
+    expect(JSON.stringify(analysis)).not.toMatch(/SecretToolName9|leak_key_3/);
   });
 
   test.each([
@@ -558,6 +588,22 @@ describe("analyzeTranscript: the unexpected tool_use", () => {
       CONTEXT,
     );
     expect(analysis.outputToolNames).toEqual(["StructuredOutput"]);
+  });
+
+  test("does not stop for an output tool whose value is false", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "ReturnResult", { attempted: false })],
+      CONTEXT,
+    );
+    expect(analysis.unexpected).toEqual([]);
+  });
+
+  test("records the name of an output tool with another name that has the shape of a name", () => {
+    const analysis = analyzeTranscript(
+      [useLine("t1", "ReturnResult", { attempted: true })],
+      CONTEXT,
+    );
+    expect(analysis.outputToolNames).toEqual(["ReturnResult"]);
   });
 
   test("does not record Read, Glob or Grep as the output tool", () => {
