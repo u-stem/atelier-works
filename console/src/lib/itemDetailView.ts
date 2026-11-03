@@ -723,6 +723,7 @@ export function describeDesignAttempt(
  */
 export function prepareDesignDoc(doc: DesignDoc): PreparedDoc {
   return prepareDoc({
+    title: null,
     summary: doc.summary,
     markdown: doc.markdown,
     open_questions: doc.open_questions,

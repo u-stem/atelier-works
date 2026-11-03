@@ -245,13 +245,14 @@ export type PreparedDoc = {
 
 /**
  * `prepareDoc`が読む項目。要件定義書と設計書のどちらも、この項目だけを渡せる。
- * `title`は、本文に題の行が無いときの題名の元で、無ければ「(無題)」にする。
+ * `title`は、本文に題の行が無いときの題名の元で、無ければ(`null`)「(無題)」にする。
+ * 渡し忘れを型で防ぐため、省略できない。
  */
 export type PreparableDoc = Pick<
   RequirementsDoc,
   "markdown" | "summary" | "open_questions"
 > & {
-  readonly title?: string | null;
+  readonly title: string | null;
 };
 
 /**
