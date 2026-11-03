@@ -192,8 +192,8 @@ export const NO_CI_RECHECK_INTERVAL_MS = 60 * 60_000;
  * - 実行の多さ(`WorkflowRunsIncompleteError`)で、実行を読み切れない。
  * - 実行かPRを読む権限が無い(403、404)。
  * - リポジトリが対象から外れた(設定から外れた場合と、オーナーの照合に失敗した場合)。
- * - 読み取りの段階で、分類できない例外(サーバーの5xxを含む)が出た。
- * rate limitは、以降の読み取りを止めるだけで数えない。
+ * - 読み取りの段階で、分類できない例外が出た。
+ * rate limitと、再送後のサーバーの5xxは、以降の読み取りを止めるだけで数えない。
  * 読めないまま判定を待ち続けても、人に知らせる手段が無いので、行を終わらせる。
  * 失敗の行と実行なしの行は、期限切れにしない。失敗の通知は、読めなくなっても残す。
  * 設定から外れたリポジトリの失敗と実行なしの行だけは、`superseded`にする。
@@ -631,6 +631,8 @@ type Counters = Omit<
 type WatchState = {
   /** rate limitに当たったら、今回はそれ以上GitHubを読まない。 */
   rateLimited: boolean;
+  /** 再送後もGitHubの5xxが返ったら、今回はそれ以上GitHubを読まない。警告は1回の実行で1件だけ残す。 */
+  serverErrorStopped: boolean;
   /** この回で、失敗の確定を始めた数。最初の1件は、予算を見ずに確定する。 */
   failedStarted: number;
   /** この回で、行を`fixing`に移して作業項目を作った数。フローの起動に失敗した分も数える。 */
@@ -710,6 +712,18 @@ function isDenied(err: unknown): boolean {
   return (
     err instanceof GitHubHttpError && (err.status === 403 || err.status === 404)
   );
+}
+
+/** 再送後もGitHubが返したサーバー側の失敗(500から599)か。応答の無い通信断(ステータス0)は含まない。 */
+function isServerError(err: unknown): err is GitHubHttpError {
+  return (
+    err instanceof GitHubHttpError && err.status >= 500 && err.status <= 599
+  );
+}
+
+/** rate limitか5xxで、この回の新しいGitHubの読み取りを止めているか。 */
+function readingStopped(state: WatchState): boolean {
+  return state.rateLimited || state.serverErrorStopped;
 }
 
 function errorMessage(err: unknown): string {
@@ -801,6 +815,7 @@ function newContext(deps: PrCiWatchDeps): Context {
     },
     state: {
       rateLimited: false,
+      serverErrorStopped: false,
       failedStarted: 0,
       claimsStarted: 0,
       snapshots: new Map(),
@@ -825,11 +840,30 @@ function newContext(deps: PrCiWatchDeps): Context {
 // ---------------------------------------------------------------------------
 
 /** 読み取りの失敗のうち、行の扱いが決まっているもの。 */
-type ReadFailure = "rate_limited" | "denied" | "incomplete";
+type ReadFailure = "rate_limited" | "server_error" | "denied" | "incomplete";
+
+/**
+ * 再送後もGitHubが5xxを返したことを、以降のGitHubの読み取りを止める印にする。
+ * 警告は1回の実行で1件だけ残す。ログには、最初に5xxを返したリポジトリとステータスだけを載せる。
+ * 応答の本文を含むエラーメッセージは載せない。
+ */
+function stopByServerError(
+  context: Context,
+  repo: string,
+  err: GitHubHttpError,
+): void {
+  const { state, deps } = context;
+  if (state.serverErrorStopped) return;
+  state.serverErrorStopped = true;
+  deps.log.warn("pr ci reading stopped by a GitHub server error", {
+    repo,
+    status: err.status,
+  });
+}
 
 /**
  * GitHubの読み取りの失敗を、扱いが決まっているものに分ける。決まっていない失敗は`null`を返す。
- * rate limitは、以降のGitHubの読み取りを止める。
+ * rate limitと、再送後の5xxは、以降のGitHubの読み取りを止める。
  * 権限の不足(403、404)は、リポジトリごとに1回だけnoticeにする。
  */
 async function absorbReadError(
@@ -845,6 +879,10 @@ async function absorbReadError(
       error: errorMessage(err),
     });
     return "rate_limited";
+  }
+  if (isServerError(err)) {
+    stopByServerError(context, repoKey(ref), err);
+    return "server_error";
   }
   if (isDenied(err)) {
     await noteDenied(context, ref, err);
@@ -943,7 +981,7 @@ async function discover(context: Context): Promise<void> {
     if (ref !== null) trackedPrKeys.add(prKey(ref));
   }
   for (const item of items) {
-    if (state.rateLimited || overBudget(context)) break;
+    if (readingStopped(state) || overBudget(context)) break;
     const ref = item.prUrl === null ? null : parsePullRequestUrl(item.prUrl);
     if (ref === null || !deps.isRepoAllowed(ref.owner, ref.repo)) continue;
     counters.tracked += 1;
@@ -1249,7 +1287,7 @@ async function listHumanRepo(
   reason: string,
 ): Promise<void> {
   const { deps, counters } = context;
-  if (!run.listOpen) {
+  if (!run.listOpen || context.state.serverErrorStopped) {
     counters.human_deferred += 1;
     return;
   }
@@ -1268,6 +1306,16 @@ async function listHumanRepo(
       deps.log.warn("pr ci human list stopped by the rate limit", {
         error: errorMessage(err),
       });
+      run.listOpen = false;
+      counters.human_deferred += 1;
+      return;
+    }
+    if (isServerError(err)) {
+      stopByServerError(
+        context,
+        `${entry.owner}/${entry.repo}`.toLowerCase(),
+        err,
+      );
       run.listOpen = false;
       counters.human_deferred += 1;
       return;
@@ -1342,7 +1390,7 @@ async function discoverHuman(context: Context): Promise<void> {
   const human = deps.humanDiscovery;
   const trackedPrKeys = state.trackedPrKeys;
   if (human === undefined || trackedPrKeys === null) return;
-  if (state.rateLimited || overBudget(context)) return;
+  if (readingStopped(state) || overBudget(context)) return;
   context.counters.human_collect_disabled = !human.useTable;
   const startedAt = deps.now().getTime();
   const outOfTime = (): boolean =>
@@ -1405,6 +1453,10 @@ async function discoverHuman(context: Context): Promise<void> {
   };
   for (const [index, hit] of ordered.entries()) {
     if (added >= HUMAN_PR_LIMIT || reads >= HUMAN_PR_READ_LIMIT) break;
+    if (state.serverErrorStopped) {
+      leftUnread(index);
+      break;
+    }
     if (state.rateLimited || outOfTime()) {
       warnStoppedByTime(context, "read_prs");
       leftUnread(index);
@@ -1459,6 +1511,12 @@ async function discoverHuman(context: Context): Promise<void> {
           error: errorMessage(err),
         });
         // 読もうとして拒まれた候補も、読み残した数に入れる。
+        seen.delete(key);
+        leftUnread(index);
+        break;
+      }
+      if (isServerError(err)) {
+        stopByServerError(context, repoKey(ref), err);
         seen.delete(key);
         leftUnread(index);
         break;
@@ -1672,7 +1730,7 @@ async function readFixingHead(
   if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
     return deps.isRepoConfigured(ref.owner, ref.repo) ? "unread" : "same";
   }
-  if (state.rateLimited) return "unread";
+  if (readingStopped(state)) return "unread";
   try {
     const pr = await readPr(context, ref);
     if (pr.state === "closed") return "closed";
@@ -1805,7 +1863,7 @@ async function judgeRow(context: Context, row: PrCiCheck): Promise<void> {
     );
     return;
   }
-  if (state.rateLimited) return;
+  if (readingStopped(state)) return;
   let read: RowRead;
   try {
     read = await readRow(context, row, ref);
@@ -1883,7 +1941,7 @@ async function readRow(
   } catch (err) {
     const failure = await absorbReadError(context, ref, err);
     if (failure === null) throw err;
-    return failure === "rate_limited"
+    return failure === "rate_limited" || failure === "server_error"
       ? { kind: "skip" }
       : { kind: "unreadable" };
   }
@@ -2425,7 +2483,7 @@ async function claimFixes(context: Context): Promise<void> {
     return;
   }
   for (const [index, row] of rows.entries()) {
-    if (state.rateLimited) break;
+    if (readingStopped(state)) break;
     if (state.claimsStarted >= CLAIMS_PER_RUN_LIMIT) break;
     if (overBudget(context)) {
       deps.log.warn("pr ci claim stopped by the time budget", {
@@ -2464,7 +2522,7 @@ async function absorbClaimError(
 ): Promise<void> {
   const { state } = context;
   if (err instanceof SkillMarkerReadError) {
-    if (err.cause instanceof GitHubRateLimitError) {
+    if (err.cause instanceof GitHubRateLimitError || isServerError(err.cause)) {
       await absorbReadError(context, ref, err.cause);
       return;
     }

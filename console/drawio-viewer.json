@@ -1,6 +1,6 @@
 {
-  "version": "32.4.1",
-  "commit": "9034053fba80a435e27d68d374bc564b83917ae9",
-  "url": "https://raw.githubusercontent.com/jgraph/drawio/9034053fba80a435e27d68d374bc564b83917ae9/src/main/webapp/js/viewer-static.min.js",
-  "sha256": "bc7586cb62eec98018c13b78619078d3a7179cc7bfc711c566dda19527520a30"
+  "version": "32.5.5",
+  "commit": "17b367b91dbab91804f852645788d7ffb46dcb79",
+  "url": "https://raw.githubusercontent.com/jgraph/drawio/17b367b91dbab91804f852645788d7ffb46dcb79/src/main/webapp/js/viewer-static.min.js",
+  "sha256": "15777571ef7c042b2a4a6c6d29052f416fbaaaae5dcf868521c4a3a75f2147d8"
 }
