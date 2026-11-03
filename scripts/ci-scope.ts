@@ -172,7 +172,7 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
   { matches: exact("infra/Caddyfile"), flags: ["caddy"] },
   // console_fetcherのイメージを組み立てるのはfetcherジョブだけ。
   { matches: under("infra/console_fetcher/"), flags: ["fetcher"] },
-  // workerのイメージを組み立てるのはcheckの中のworkerのステップだけ。
+  // workerのイメージを組み立てるのは、checkの中のworkerのステップとcheck-workerジョブだけ。
   { matches: under("infra/worker/"), flags: ["worker"] },
   // docker-compose*.ymlと他のinfra/は、複数のジョブが読む(imageの取得、Postgres、Windmillの起動)。
   { matches: under("infra/"), flags: FLAGS },

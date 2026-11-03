@@ -15,6 +15,8 @@ import { parseGitHubRepoUrl } from "./types.ts";
 export const REQUIRED_CHECKS: readonly string[] = Object.freeze([
   "scope",
   "check",
+  "check-docs",
+  "check-worker",
   "test-db",
   "metadata",
   "console",

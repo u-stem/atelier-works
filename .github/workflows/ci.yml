@@ -177,6 +177,91 @@ jobs:
         # このスクリプトの使い捨てのコンテナの中でだけ走らせる。
         run: scripts/verify-check-sandbox.sh factory-worker-ci
 
+  check-docs:
+    # 文書の検査(`mise run lint:docs`)を、`check`と並列に動かす。`check`も同じ検査を実行する。
+    # `scope`が失敗しても動かす。
+    needs: scope
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # 通常は3〜4分で終わる。検査が戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `lint:docs`が使うのは追跡しているファイルの一覧だけなので、履歴は既定の深さでよい。
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Install dependencies
+        # 依存のinstall scriptは実行しない。
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Lint docs
+        run: mise run lint:docs
+
+  check-worker:
+    # workerイメージのビルドと、イメージの中で動かす2つの検査を、`check`と並列に動かす。
+    # `check`も同じ検査を実行する。
+    # `scope`が失敗すると出力が空になり、`!= 'false'`が真になるので、検査は動く。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.worker != 'false' }}
+    runs-on: ubuntu-latest
+    # 通常は3〜4分で終わる。ビルドや検査が戻らなくなったとき、既定の6時間まで待たず早く失敗させる。
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Install dependencies
+        # `tests/lib/process_lock.test.ts`と検査用のscriptを、`check`と同じ依存の状態で動かす。
+        # 依存のinstall scriptは実行しない。
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build worker image
+        # `.env`は無く、workerのビルド入力は`mise.toml`の`[env]`にある。
+        # `mise exec -c '...'`は`[env]`を適用したシェルでコマンドを実行するので、
+        # `$WM_VERSION`などはこのステップのシェル(値を持たない)ではなく、
+        # miseのサブシェルで展開される。
+        # ビルド引数は`infra/docker-compose.yml`がworkerイメージに渡すものと同じ。
+        # 次のステップで使うので、タグを付ける。
+        run: |
+          mise exec -c '
+            docker build infra/worker \
+              --tag factory-worker-ci \
+              --build-arg WM_VERSION=$WM_VERSION \
+              --build-arg CLAUDE_VERSION=$CLAUDE_VERSION \
+              --build-arg GH_VERSION=$GH_VERSION \
+              --build-arg GITLEAKS_VERSION=$GITLEAKS_VERSION \
+              --build-arg GTR_REF=$GTR_REF \
+              --build-arg GTR_COMMIT=$GTR_COMMIT \
+              --build-arg WMILL_VERSION=$WMILL_VERSION \
+              --build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID \
+              --build-arg FACTORY_CHECK_POOL_SIZE=$FACTORY_CHECK_POOL_SIZE
+          '
+
+      - name: Test the process lock in the worker image
+        # /procを全件走査するプロセスロックのテストは、rootでないと`mise run check`では飛ばされる。
+        # workerと同じ条件で走らせる。同じイメージを使い、自分のPID名前空間の中でrootとして動かす。
+        # `--init`はworkerの`init: true`に合わせる。PID 1のtiniが、止めた保持者の孤児を回収するため。
+        # bunがPID 1だと孤児がゾンビのまま残り、保持者を止める処理がその終了を待ち続ける。
+        # このテストファイルは外部パッケージを使わないので、`node_modules`は要らない。
+        run: docker run --rm --init --entrypoint bun -v "$PWD:/src" -w /src factory-worker-ci test tests/lib/process_lock.test.ts
+
+      - name: Test the check sandbox in the worker image
+        # 検査コマンドの境界(別のuidへの切り替え、秘密に届かないこと、書き込める場所、
+        # 所有権の受け渡し、残ったプロセスの後始末)を、本物のsetpriv・flock・chown・/procで確かめる。
+        # workerと同じ制限のコンテナを使い捨てで起動する。`/tmp/windmill`の権限を書き換えるテストなので、
+        # このスクリプトの使い捨てのコンテナの中でだけ走らせる。
+        run: scripts/verify-check-sandbox.sh factory-worker-ci
+
   test-db:
     # `check`ジョブ(とworkerイメージのビルド)から独立させる。
     # Postgresの起動が遅い・不安定なときに、イメージのビルドと互いに待たせないため。
